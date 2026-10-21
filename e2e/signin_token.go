@@ -247,6 +247,12 @@ type SessionRequest struct {
 // FreshAdminAPIStatus signs in.
 const freshAdminSubject = "fresh-admin@example.com"
 
+// HasSignIn reports whether the env comes from NewEnvWithSignIn or one of its
+// variants, so a step can make a change with a fresh console session.
+func (e *Env) HasSignIn() bool {
+	return e.signIn != nil
+}
+
 // FreshAdminAPIStatus sends one installation API request as a site
 // administrator with a console session that has a fresh sign-in, and returns
 // the status and the body of the answer. An access token never gives the

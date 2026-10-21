@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"slices"
 
+	"opendustpan.org/opendustpan/internal/sessionauth"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/workspace"
@@ -43,6 +44,10 @@ const (
 	// minted it for a caller who held the declared action. The Authorizer does
 	// not run. Only the registry file route may use it.
 	ScopeSigned
+	// ScopeConsole is ScopeAuthorized for a route that the console calls: it
+	// also takes the console session cookie when the request has no
+	// Authorization header. Only the reveal route may use it.
+	ScopeConsole
 )
 
 // ObjectResolver returns the authorization object for a request: the unit
@@ -551,7 +556,7 @@ func (h *Handler) enforce(route Route) http.HandlerFunc {
 	switch route.Scope {
 	case ScopePublic, ScopeUpload:
 		return h.enforcePublic(route)
-	case ScopeAuthorized:
+	case ScopeAuthorized, ScopeConsole:
 		return h.enforceAuthorized(route)
 	case ScopeRegistry:
 		return h.enforceRegistry(route)
@@ -584,11 +589,19 @@ func (h *Handler) enforceAuthorized(route Route) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
 
-		p, err := h.authenticate(r)
+		p, caller, err := h.authenticateRoute(r, route.Scope == ScopeConsole)
 		if err != nil {
 			h.writeError(ctx, w, err)
 
 			return
+		}
+
+		if caller != nil {
+			ctx = sessionauth.WithSession(ctx)
+			ctx = sessionauth.WithSignIn(ctx, sessionauth.SignIn{
+				At: caller.Match.Session.AuthTime, Provider: caller.Match.Session.Provider,
+			})
+			r = r.WithContext(ctx)
 		}
 
 		obj, err := route.Resolve(w, r)

@@ -8331,30 +8331,41 @@ func revealRequestBody(t *testing.T, path string) string {
 	return string(raw)
 }
 
-// checkTFEReveal proves the reveal call answers the secret of the second
-// apply with no-store, and the audit list holds the reveal entry.
+// checkTFEReveal proves an access token never gives the fresh authentication
+// that the reveal call needs, the reveal call answers the secret of the second
+// apply to a console session with a recent sign-in, and the audit list holds
+// the reveal entry.
 func checkTFEReveal(ctx context.Context, t *testing.T, env *e2e.Env, base, path string) {
 	t.Helper()
 
-	resp, err := env.TFEStatusHeaders(
+	refused, err := env.TFEStatusHeaders(
 		ctx, env.TokenA(), http.MethodPost, base+"/actions/reveal", revealRequestBody(t, path),
 	)
 	if err != nil {
-		t.Fatalf("reveal the masked input: %v", err)
+		t.Fatalf("reveal the masked input with a token: %v", err)
 	}
 
-	if resp.Status != http.StatusOK {
-		t.Fatalf("reveal answers %d, want %d (%s)", resp.Status, http.StatusOK, resp.Body)
+	if refused.Status != http.StatusForbidden || !strings.Contains(refused.Body, "mfa.fresh-step-required") ||
+		strings.Contains(refused.Body, maskedSecretV2) || refused.Header.Get("Cache-Control") != "no-store" {
+		t.Fatalf("reveal with a token answers %d %s, want 403 with mfa.fresh-step-required and no-store",
+			refused.Status, refused.Body)
+	}
+
+	status, body := env.FreshAdminAPIStatus(ctx, t, e2e.SessionRequest{
+		Method: http.MethodPost, Path: base + "/actions/reveal", Body: revealRequestBody(t, path),
+	})
+	if status != http.StatusOK {
+		t.Fatalf("reveal answers %d, want %d (%s)", status, http.StatusOK, body)
 	}
 
 	var answer revealedTFEDoc
 
-	if decodeErr := json.Unmarshal([]byte(resp.Body), &answer); decodeErr != nil {
-		t.Fatalf("decode reveal body: %v (%s)", decodeErr, resp.Body)
+	if decodeErr := json.Unmarshal([]byte(body), &answer); decodeErr != nil {
+		t.Fatalf("decode reveal body: %v (%s)", decodeErr, body)
 	}
 
 	if answer.Data.Type != "state-version-reveals" || answer.Data.Attributes.Path != path {
-		t.Fatalf("reveal = %s, want the path in a reveals document", resp.Body)
+		t.Fatalf("reveal = %s, want the path in a reveals document", body)
 	}
 
 	raw, encodeErr := json.Marshal(answer.Data.Attributes.Value)
@@ -8364,10 +8375,6 @@ func checkTFEReveal(ctx context.Context, t *testing.T, env *e2e.Env, base, path 
 
 	if !strings.Contains(string(raw), maskedSecretV2) {
 		t.Fatalf("reveal value = %s, want the secret of the second apply", raw)
-	}
-
-	if got := resp.Header.Get("Cache-Control"); got != "no-store" {
-		t.Fatalf("reveal Cache-Control = %q, want no-store", got)
 	}
 
 	object := "opentofu:" + e2e.Namespace + "/masked"
@@ -8383,11 +8390,9 @@ func checkTFERevealProbe(ctx context.Context, t *testing.T, env *e2e.Env, base s
 
 	probe := "/resources/0/instances/0/attributes/no-such-attr"
 
-	status, body, err := env.TFEStatusA(ctx, http.MethodPost, base+"/actions/reveal", revealRequestBody(t, probe))
-	if err != nil {
-		t.Fatalf("reveal a path outside the masked set: %v", err)
-	}
-
+	status, body := env.FreshAdminAPIStatus(ctx, t, e2e.SessionRequest{
+		Method: http.MethodPost, Path: base + "/actions/reveal", Body: revealRequestBody(t, probe),
+	})
 	if status != http.StatusNotFound {
 		t.Fatalf(
 			"reveal of a path outside the masked set answers %d, want %d (%s)",

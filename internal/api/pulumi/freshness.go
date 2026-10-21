@@ -18,19 +18,9 @@ type SessionPolicy interface {
 	Policy(ctx context.Context) (session.Policy, error)
 }
 
-// freshStepRequiredCode is the errorCode of a change that has no fresh
-// authentication. It is the same value as in the installation API.
-const freshStepRequiredCode = "mfa.fresh-step-required"
-
-// signInStartPrefix starts the path of the start of a sign-in, before the
-// provider.
-const signInStartPrefix = "/api/server/sign-in/"
-
 // errFreshStepRequired reports a request with no console session, for example
 // one with an access token, on a route that needs a fresh authentication.
-var errFreshStepRequired = errors.New(
-	"a change needs a console session with a recent sign-in; sign in to the console again",
-)
+var errFreshStepRequired = errors.New(sessionauth.FreshStepRequiredMessage)
 
 // errReauthenticate reports a console session whose sign-in is older than the
 // token freshness window.
@@ -76,7 +66,7 @@ func (h *Handler) checkFresh(r *http.Request) (string, error) {
 		return "", nil
 	}
 
-	return signInStartPrefix + url.PathEscape(in.Provider) + "?fresh=1", errReauthenticate
+	return sessionauth.SignInStartPrefix + url.PathEscape(in.Provider) + "?fresh=1", errReauthenticate
 }
 
 // freshReveal wraps a route that needs a fresh authentication: an access token
@@ -106,11 +96,14 @@ func (h *Handler) freshReveal(serve RouteHandler) RouteHandler {
 		switch {
 		case errors.Is(err, errFreshStepRequired):
 			h.writeJSON(ctx, w, http.StatusForbidden, freshRefusalResponse{
-				Message: err.Error(), Reauthenticate: "", ErrorCode: freshStepRequiredCode, Code: http.StatusForbidden,
+				Message:        err.Error(),
+				Reauthenticate: "",
+				ErrorCode:      sessionauth.FreshStepRequiredCode,
+				Code:           http.StatusForbidden,
 			})
 		case errors.Is(err, errReauthenticate):
 			h.writeJSON(ctx, w, http.StatusUnauthorized, freshRefusalResponse{
-				Message: err.Error(), Reauthenticate: path, ErrorCode: freshStepRequiredCode,
+				Message: err.Error(), Reauthenticate: path, ErrorCode: sessionauth.FreshStepRequiredCode,
 				Code: http.StatusUnauthorized,
 			})
 		default:

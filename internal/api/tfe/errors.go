@@ -9,6 +9,7 @@ import (
 	"strconv"
 
 	"opendustpan.org/opendustpan/internal/bodygate"
+	"opendustpan.org/opendustpan/internal/sessionauth"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/maintenance"
@@ -47,6 +48,15 @@ type jsonAPIError struct {
 	Code   string `json:"code,omitempty"`
 	Title  string `json:"title"`
 	Detail string `json:"detail"`
+	// Meta holds the path that starts a new sign-in, for the refusal of an
+	// old sign-in. It is omitted for the other errors.
+	Meta *jsonAPIErrorMeta `json:"meta,omitempty"`
+}
+
+// jsonAPIErrorMeta is the meta member of an error that asks for a new
+// sign-in.
+type jsonAPIErrorMeta struct {
+	Reauthenticate string `json:"reauthenticate"`
 }
 
 // jsonAPIDocument is the error shape the TFE client reads: an errors array
@@ -148,14 +158,17 @@ func (h *Handler) writeJSONAPIError(
 // writeClassError writes one JSON:API error document for a classified error,
 // with the machine code of the error. An empty code leaves the member out.
 func (h *Handler) writeClassError(ctx context.Context, w http.ResponseWriter, class errorClass, code string) {
+	h.writeJSONAPIDocument(ctx, w, class.status, jsonAPIError{
+		Status: strconv.Itoa(class.status), Code: code, Title: class.title, Detail: class.detail, Meta: nil,
+	})
+}
+
+// writeJSONAPIDocument writes a JSON:API error document with the one error e.
+func (h *Handler) writeJSONAPIDocument(ctx context.Context, w http.ResponseWriter, status int, e jsonAPIError) {
 	w.Header().Set("Content-Type", jsonAPIMediaType)
-	w.WriteHeader(class.status)
+	w.WriteHeader(status)
 
-	doc := jsonAPIDocument{Errors: []jsonAPIError{{
-		Status: strconv.Itoa(class.status), Code: code, Title: class.title, Detail: class.detail,
-	}}}
-
-	if err := json.NewEncoder(w).Encode(doc); err != nil {
+	if err := json.NewEncoder(w).Encode(jsonAPIDocument{Errors: []jsonAPIError{e}}); err != nil {
 		h.logger.WarnContext(ctx, "write response failed", slog.String("error", err.Error()))
 	}
 }
@@ -255,6 +268,11 @@ func classify(err error) errorClass {
 
 	if class, ok := classifyNamespace(err); ok {
 		return class
+	}
+
+	if errors.Is(err, sessionauth.ErrCSRF) || errors.Is(err, sessionauth.ErrOtherSite) {
+		// A console session request from another site, or with no CSRF value.
+		return errorClass{status: http.StatusForbidden, title: titleForbidden, detail: err.Error()}
 	}
 
 	if class, ok := classifyConflict(err); ok {
