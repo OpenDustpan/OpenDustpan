@@ -164,7 +164,8 @@ func (s *Service) Create(ctx context.Context, c *Caller, ns namespace.Name, in N
 	out := Created{Sink: sink, SigningKey: ""}
 	out.Sink.Version = 1
 
-	if sink.Kind == notify.SinkWebhook {
+	// A webhook sink has its URL first and its signing key second.
+	if sink.Kind == notify.SinkWebhook && len(secrets) == 2 {
 		out.SigningKey = string(secrets[1].Value)
 	}
 
