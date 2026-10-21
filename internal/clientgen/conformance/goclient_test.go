@@ -17,7 +17,7 @@ import (
 // envRun turns on the tests that build the server and run it. The make target
 // clients-conformance sets it. Without it, the tests skip, because they build
 // two programs and need a few minutes.
-const envRun = "DUSTPAN_CLIENTGEN_CONFORMANCE"
+const envRun = "DUSTPAN_TEST_CLIENTGEN_CONFORMANCE"
 
 // goOperations are the operations that the Go client covers in this slice:
 // five reads and two writes, across the caller, namespace and server areas.

@@ -143,7 +143,7 @@ e2e: ## Drive real Pulumi CLI and OpenTofu versions against the server (download
 	go test -tags e2e -race -count=1 -parallel 16 -timeout 60m ./e2e/...
 
 clients-conformance: ## Build the server, generate the Go client from the description that the server serves, and run the client conformance suite on it. Not part of check.
-	DUSTPAN_CLIENTGEN_CONFORMANCE=1 go test -race -count=1 -timeout 15m -run TestGoClientConformance ./internal/clientgen/conformance/
+	DUSTPAN_TEST_CLIENTGEN_CONFORMANCE=1 go test -race -count=1 -timeout 15m -run TestGoClientConformance ./internal/clientgen/conformance/
 
 checks-agent: ## Sync the branch with main, then run generate, check, e2e and a TruffleHog scan of the branch commits with cleanup (SYNC=merge|rebase|none, SKIP="steps", CLEAN_CACHE=1 also deletes the e2e CLI cache).
 	./scripts/checks-agent.sh
