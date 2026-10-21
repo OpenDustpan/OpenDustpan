@@ -1,7 +1,9 @@
 package registrytest_test
 
 import (
+	"bytes"
 	"context"
+	"fmt"
 	"slices"
 	"strings"
 	"sync"
@@ -21,6 +23,7 @@ type key struct {
 // mem is the reference adapter of Store. It runs the suite before any SQL
 // adapter exists.
 type mem struct {
+	trust    *memKeys
 	fences   map[namespace.Name]int64
 	releases map[key]registry.Release
 	entries  map[namespace.Name][]audit.Entry
@@ -37,6 +40,10 @@ func (m *mem) Publish(_ context.Context, r registry.Release, fence namespace.Fen
 
 	if fence.Namespace != r.Address.Namespace || m.fences[fence.Namespace] != fence.FailoverVersion {
 		return namespace.ErrFenced
+	}
+
+	if r.KeyFingerprint != "" && !m.trust.holds(r.Address.Namespace, r.KeyFingerprint) {
+		return registry.ErrKeyNotFound
 	}
 
 	k := key{r.Address, r.Version}
@@ -141,7 +148,14 @@ func TestMemStore(t *testing.T) {
 	t.Parallel()
 
 	registrytest.RunStore(t, func(*testing.T) registrytest.Harness {
+		trust := &memKeys{
+			fences:  map[namespace.Name]int64{},
+			keys:    map[namespace.Name]map[string]registry.KeyRecord{},
+			entries: map[namespace.Name][]audit.Entry{},
+			mu:      sync.Mutex{},
+		}
 		m := &mem{
+			trust:    trust,
 			fences:   map[namespace.Name]int64{},
 			releases: map[key]registry.Release{},
 			entries:  map[namespace.Name][]audit.Entry{},
@@ -149,6 +163,170 @@ func TestMemStore(t *testing.T) {
 		}
 
 		return registrytest.Harness{
+			Store: m,
+			Keys:  trust,
+			Namespace: func(_ *testing.T, name namespace.Name) namespace.Fence {
+				m.mu.Lock()
+				defer m.mu.Unlock()
+
+				m.fences[name] = 1
+
+				trust.mu.Lock()
+				trust.fences[name] = 1
+				trust.mu.Unlock()
+
+				return namespace.Fence{Namespace: name, FailoverVersion: 1}
+			},
+			Entries: func(_ *testing.T, name namespace.Name) []audit.Entry {
+				m.mu.Lock()
+				defer m.mu.Unlock()
+
+				trust.mu.Lock()
+				defer trust.mu.Unlock()
+
+				return append(slices.Clone(trust.entries[name]), m.entries[name]...)
+			},
+		}
+	})
+}
+
+func TestVerifierSkeletonSkips(t *testing.T) {
+	t.Parallel()
+
+	registrytest.RunVerifier(t, func(*testing.T) registrytest.VerifierHarness {
+		return registrytest.VerifierHarness{
+			Verifier: nil, Key: registry.TrustedKey{Fingerprint: "", Armored: nil}, Sums: nil, Signature: nil,
+			OtherKey: registry.TrustedKey{Fingerprint: "", Armored: nil},
+		}
+	})
+}
+
+// memKeys is the reference adapter of KeyStore.
+type memKeys struct {
+	fences  map[namespace.Name]int64
+	keys    map[namespace.Name]map[string]registry.KeyRecord
+	entries map[namespace.Name][]audit.Entry
+	mu      sync.Mutex
+}
+
+func (m *memKeys) AddKey(_ context.Context, k registry.KeyRecord, fence namespace.Fence, e audit.Entry) error {
+	if err := k.Validate(); err != nil {
+		return err
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if fence.Namespace != k.Namespace {
+		return namespace.ErrFenced
+	}
+
+	if err := m.fenced(fence); err != nil {
+		return err
+	}
+
+	held := m.keys[k.Namespace]
+	if old, ok := held[k.Key.Fingerprint]; ok {
+		if bytes.Equal(old.Key.Armored, k.Key.Armored) {
+			return nil
+		}
+
+		return registry.ErrKeyExists
+	}
+
+	if len(held) >= registry.MaxKeysPerNamespace {
+		return registry.ErrKeyLimit
+	}
+
+	if held == nil {
+		held = map[string]registry.KeyRecord{}
+		m.keys[k.Namespace] = held
+	}
+
+	k.Key.Armored = slices.Clone(k.Key.Armored)
+	held[k.Key.Fingerprint] = k
+	m.entries[k.Namespace] = append(m.entries[k.Namespace], e)
+
+	return nil
+}
+
+func (m *memKeys) RemoveKey(
+	_ context.Context, ns namespace.Name, fingerprint string, fence namespace.Fence, e audit.Entry,
+) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if fence.Namespace != ns {
+		return namespace.ErrFenced
+	}
+
+	if err := m.fenced(fence); err != nil {
+		return err
+	}
+
+	if _, ok := m.keys[ns][fingerprint]; !ok {
+		return registry.ErrKeyNotFound
+	}
+
+	delete(m.keys[ns], fingerprint)
+	m.entries[ns] = append(m.entries[ns], e)
+
+	return nil
+}
+
+func (m *memKeys) Keys(_ context.Context, ns namespace.Name) ([]registry.KeyRecord, error) {
+	if _, err := namespace.ParseName(ns.String()); err != nil {
+		return nil, fmt.Errorf("%w: %w", registry.ErrInvalid, err)
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	out := make([]registry.KeyRecord, 0, len(m.keys[ns]))
+
+	for _, k := range m.keys[ns] {
+		k.Key.Armored = slices.Clone(k.Key.Armored)
+		out = append(out, k)
+	}
+
+	slices.SortFunc(
+		out,
+		func(a, b registry.KeyRecord) int { return strings.Compare(a.Key.Fingerprint, b.Key.Fingerprint) },
+	)
+
+	return out, nil
+}
+
+// holds reports whether ns trusts the key with fingerprint.
+func (m *memKeys) holds(ns namespace.Name, fingerprint string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	_, ok := m.keys[ns][fingerprint]
+
+	return ok
+}
+
+func (m *memKeys) fenced(f namespace.Fence) error {
+	if m.fences[f.Namespace] != f.FailoverVersion {
+		return namespace.ErrFenced
+	}
+
+	return nil
+}
+
+func TestMemKeyStore(t *testing.T) {
+	t.Parallel()
+
+	registrytest.RunKeyStore(t, func(*testing.T) registrytest.KeyHarness {
+		m := &memKeys{
+			fences:  map[namespace.Name]int64{},
+			keys:    map[namespace.Name]map[string]registry.KeyRecord{},
+			entries: map[namespace.Name][]audit.Entry{},
+			mu:      sync.Mutex{},
+		}
+
+		return registrytest.KeyHarness{
 			Store: m,
 			Namespace: func(_ *testing.T, name namespace.Name) namespace.Fence {
 				m.mu.Lock()
@@ -164,17 +342,6 @@ func TestMemStore(t *testing.T) {
 
 				return slices.Clone(m.entries[name])
 			},
-		}
-	})
-}
-
-func TestVerifierSkeletonSkips(t *testing.T) {
-	t.Parallel()
-
-	registrytest.RunVerifier(t, func(*testing.T) registrytest.VerifierHarness {
-		return registrytest.VerifierHarness{
-			Verifier: nil, Key: registry.TrustedKey{Fingerprint: "", Armored: nil}, Sums: nil, Signature: nil,
-			OtherKey: registry.TrustedKey{Fingerprint: "", Armored: nil},
 		}
 	})
 }

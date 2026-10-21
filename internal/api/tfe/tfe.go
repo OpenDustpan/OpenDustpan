@@ -242,6 +242,9 @@ type Config struct {
 	// MaxStateBytes bounds one OpenTofu state version. Zero means
 	// workspace.DefaultMaxStateBytes.
 	MaxStateBytes int64
+	// Registry holds the settings of the provider registry protocol. A zero
+	// value serves no registry route.
+	Registry *RegistryConfig
 	// StateGuard checks each write of state against the access limits and
 	// the gates of state.write. Nil means the server keeps no gates: no
 	// write is checked.
@@ -265,6 +268,8 @@ type Handler struct {
 	guard    *refusal.Recorder
 	gate     *bodygate.Gate
 	maxState int64
+	// registry is nil when the handler serves no provider registry protocol.
+	registry *registryState
 	// stateGuard is nil when the server keeps no gates.
 	stateGuard StateGuard
 	mux        *patternMux
@@ -286,7 +291,13 @@ func NewHandler(cfg Config) (*Handler, error) {
 		return nil, fmt.Errorf("%w: workspace service", ErrMissingDependency)
 	}
 
+	reg, err := newRegistryState(cfg.Registry)
+	if err != nil {
+		return nil, err
+	}
+
 	h := &Handler{
+		registry:       reg,
 		authn:          cfg.Authenticator,
 		authz:          cfg.Authorizer,
 		addressGate:    cfg.AddressGate,
@@ -394,6 +405,9 @@ func (h *Handler) discovery(w http.ResponseWriter, r *http.Request, _ identity.P
 	w.WriteHeader(http.StatusOK)
 
 	doc := map[string]string{"tfe.v2": "/api/v2/", "tfe.v2.1": "/api/v2/"}
+	if h.registry != nil {
+		doc["providers.v1"] = registryPrefix
+	}
 
 	if err := json.NewEncoder(w).Encode(doc); err != nil {
 		h.logger.WarnContext(r.Context(), "write response failed", slog.String("error", err.Error()))

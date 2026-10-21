@@ -36,6 +36,7 @@ func (a adapters) allHandlers() []namedHandler {
 		{"profiles", a.profiles},
 		{"sinks", a.sinks},
 		{"jobs", a.jobs},
+		{"registry", a.registry},
 		{"pulumi", a.pulumi},
 		{"tfe", a.tfe},
 		{"tofuhttp", a.tofuHTTP},
