@@ -138,6 +138,7 @@ func newRevealFixtureWithSessions(
 	}
 
 	handler, err := pulumi.NewHandler(pulumi.Config{
+		SessionPolicy:           nil,
 		DisablePulumiJournaling: false,
 		Stacks:                  stacks,
 		Updates:                 updates,
@@ -256,13 +257,13 @@ func reveal(t *testing.T, f revealFixture, body string) (int, http.Header, strin
 func revealTo(t *testing.T, f revealFixture, target, body string) (int, http.Header, string) {
 	t.Helper()
 
-	secret, err := session.NewSecret()
+	sessionSecret, err := session.NewSecret()
 	if err != nil {
 		t.Fatalf("secret: %v", err)
 	}
 
 	// A reveal needs a console session with a recent sign-in.
-	req := sessionPost(t, target, secret, body)
+	req := sessionPost(t, target, sessionSecret, body)
 	req = req.WithContext(requestid.WithContext(req.Context(), "req-reveal"))
 
 	rec := httptest.NewRecorder()
@@ -824,12 +825,12 @@ func checkRevealFresh(t *testing.T, tc revealFresh) {
 		)
 		req.Header.Set("Authorization", "token test-token")
 	} else {
-		secret, err := session.NewSecret()
+		sessionSecret, err := session.NewSecret()
 		if err != nil {
 			t.Fatalf("secret: %v", err)
 		}
 
-		req = sessionPost(t, revealTarget, secret, revealBody(t, path))
+		req = sessionPost(t, revealTarget, sessionSecret, revealBody(t, path))
 	}
 
 	rec := serve(f.handler, req)
@@ -852,6 +853,19 @@ func checkRevealFresh(t *testing.T, tc revealFresh) {
 		return
 	}
 
+	checkRevealRefusal(t, tc, rec)
+
+	if len(entries.entries) != 1 || entries.entries[0].Outcome != audit.OutcomeFailure ||
+		entries.entries[0].Kind != audit.KindReveal {
+		t.Fatalf("entries = %+v, want one failure entry of the kind reveal", entries.entries)
+	}
+}
+
+// checkRevealRefusal proves the body of a refused reveal: the error code, the
+// path of a new sign-in, and no secret value.
+func checkRevealRefusal(t *testing.T, tc revealFresh, rec *httptest.ResponseRecorder) {
+	t.Helper()
+
 	var body struct {
 		ErrorCode      string `json:"errorCode"`
 		Reauthenticate string `json:"reauthenticate"`
@@ -869,10 +883,5 @@ func checkRevealFresh(t *testing.T, tc revealFresh) {
 
 	if strings.Contains(rec.Body.String(), revealSecretValue) {
 		t.Fatalf("refusal holds the secret value: %s", rec.Body.String())
-	}
-
-	if len(entries.entries) != 1 || entries.entries[0].Outcome != audit.OutcomeFailure ||
-		entries.entries[0].Kind != audit.KindReveal {
-		t.Fatalf("entries = %+v, want one failure entry of the kind reveal", entries.entries)
 	}
 }

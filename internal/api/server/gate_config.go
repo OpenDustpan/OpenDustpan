@@ -224,12 +224,32 @@ func (h *Handler) gateConfigRoutes() []Route {
 
 	return []Route{
 		row(http.MethodGet, approvalDefaultPath, read, h.readApprovalDefault),
-		row(http.MethodPut, approvalDefaultPath, manage, h.fresh(identity.ActionNamespaceManageGates, h.writeApprovalDefault)),
-		row(http.MethodDelete, approvalDefaultPath, manage, h.fresh(identity.ActionNamespaceManageGates, h.removeApprovalDefault)),
+		row(
+			http.MethodPut,
+			approvalDefaultPath,
+			manage,
+			h.fresh(identity.ActionNamespaceManageGates, h.writeApprovalDefault),
+		),
+		row(
+			http.MethodDelete,
+			approvalDefaultPath,
+			manage,
+			h.fresh(identity.ActionNamespaceManageGates, h.removeApprovalDefault),
+		),
 		row(http.MethodGet, approvalRulesPath, read, h.listApprovalRules),
 		row(http.MethodGet, approvalRuleItemPath, read, h.readApprovalRule),
-		row(http.MethodPut, approvalRuleItemPath, manage, h.fresh(identity.ActionNamespaceManageGates, h.writeApprovalRule)),
-		row(http.MethodDelete, approvalRuleItemPath, manage, h.fresh(identity.ActionNamespaceManageGates, h.removeApprovalRule)),
+		row(
+			http.MethodPut,
+			approvalRuleItemPath,
+			manage,
+			h.fresh(identity.ActionNamespaceManageGates, h.writeApprovalRule),
+		),
+		row(
+			http.MethodDelete,
+			approvalRuleItemPath,
+			manage,
+			h.fresh(identity.ActionNamespaceManageGates, h.removeApprovalRule),
+		),
 	}
 }
 

@@ -160,6 +160,18 @@ func (c *Checker) Authenticate(r *http.Request) (identity.Principal, Caller, err
 	return p, Caller{Match: m, Secret: secret}, nil
 }
 
+// Now returns the time of the clock of the session service, or the system
+// time when the service has no clock of its own.
+func (c *Checker) Now() time.Time {
+	if c != nil {
+		if clock, ok := c.sessions.(interface{ Now() time.Time }); ok {
+			return clock.Now()
+		}
+	}
+
+	return time.Now().UTC()
+}
+
 // sameSite reports whether a request with the session cookie may come from
 // where it comes from: its Origin header, when present, must be an allowed
 // origin; without one, the browser must not mark it as cross-site.
@@ -232,18 +244,6 @@ func SignInFrom(ctx context.Context) (SignIn, bool) {
 	in, ok := ctx.Value(signInKey{}).(SignIn)
 
 	return in, ok
-}
-
-// Now returns the time of the clock of the session service, or the system
-// time when the service has no clock of its own.
-func (c *Checker) Now() time.Time {
-	if c != nil {
-		if clock, ok := c.sessions.(interface{ Now() time.Time }); ok {
-			return clock.Now()
-		}
-	}
-
-	return time.Now().UTC()
 }
 
 // Fresh reports whether a sign-in at authTime is recent enough at now: its

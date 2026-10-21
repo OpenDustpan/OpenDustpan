@@ -19,7 +19,6 @@ import (
 	"opendustpan.org/opendustpan/pkg/ipallow"
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
-	"opendustpan.org/opendustpan/pkg/session"
 	"opendustpan.org/opendustpan/pkg/store/sqlite"
 )
 
@@ -170,14 +169,6 @@ func (call ipCall) fresh() ipCall {
 	return call
 }
 
-// stale returns call as a console session whose sign-in is older than the
-// token freshness window.
-func (call ipCall) stale() ipCall {
-	call.token, call.session, call.signInAge = "", true, session.DefaultTokenFreshness+time.Minute
-
-	return call
-}
-
 // ipGet returns the GET call of ns with the test token.
 func ipGet(ns string) ipCall {
 	return ipCall{method: http.MethodGet, ns: ns, token: "test-token", body: "", signInAge: 0, session: false}
@@ -192,10 +183,17 @@ func ipPut(ns, body string) ipCall {
 // ipDelete returns the DELETE call of ns from a console session that signed
 // in just now.
 func ipDelete(ns string) ipCall {
-	return ipCall{method: http.MethodDelete, ns: ns, token: "test-token", body: "", signInAge: 0, session: false}.fresh()
+	return ipCall{
+		method:    http.MethodDelete,
+		ns:        ns,
+		token:     "test-token",
+		body:      "",
+		signInAge: 0,
+		session:   false,
+	}.fresh()
 }
 
-// withToken returns call with the access token token in place of a session.
+// withToken returns call with the given access token in place of a session.
 func (call ipCall) withToken(token string) ipCall {
 	call.token, call.session = token, false
 

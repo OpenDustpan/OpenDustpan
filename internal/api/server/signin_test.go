@@ -214,25 +214,7 @@ func newSignInEnvWith(t *testing.T, opts signInEnvOptions) signInEnv {
 		t.Fatalf("gate config service: %v", err)
 	}
 
-	grantAuthz, err := access.NewAuthorizer(
-		access.AuthorizerConfig{Store: st, Callers: st, Collections: stubCollections{}, Units: st, Principals: st},
-	)
-	if err != nil {
-		t.Fatalf("authorizer: %v", err)
-	}
-
-	grants, err := access.NewService(access.ServiceConfig{
-		Store: st, Directory: st, Namespaces: st, Authorizer: grantAuthz, Now: clock.Now, NewID: nil,
-		BootstrapAdmins: nil,
-	})
-	if err != nil {
-		t.Fatalf("access service: %v", err)
-	}
-
-	allowlists, err := ipallow.NewService(ipallow.Config{Store: st, Namespaces: namespaces, Now: clock.Now, Enabled: true})
-	if err != nil {
-		t.Fatalf("ip allowlist service: %v", err)
-	}
+	grants, allowlists := newSignInAccess(t, st, namespaces, clock)
 
 	handler, err := apiserver.NewHandler(apiserver.Config{
 		Preferences:      nil,
@@ -1543,4 +1525,36 @@ func (e signInEnv) makeSiteAdministrator(t *testing.T) {
 	if err := e.store.CreateGrant(t.Context(), grt, fence, entry, nil); err != nil {
 		t.Fatalf("make the person a site administrator: %v", err)
 	}
+}
+
+// newSignInAccess returns the grant service and the IP allowlist service of
+// a sign-in env, over st.
+func newSignInAccess(
+	t *testing.T, st *sqlite.Store, namespaces *namespace.Service, clock *envClock,
+) (*access.Service, *ipallow.Service) {
+	t.Helper()
+
+	grantAuthz, err := access.NewAuthorizer(
+		access.AuthorizerConfig{Store: st, Callers: st, Collections: stubCollections{}, Units: st, Principals: st},
+	)
+	if err != nil {
+		t.Fatalf("authorizer: %v", err)
+	}
+
+	grants, err := access.NewService(access.ServiceConfig{
+		Store: st, Directory: st, Namespaces: st, Authorizer: grantAuthz, Now: clock.Now, NewID: nil,
+		BootstrapAdmins: nil,
+	})
+	if err != nil {
+		t.Fatalf("access service: %v", err)
+	}
+
+	allowlists, err := ipallow.NewService(ipallow.Config{
+		Store: st, Namespaces: namespaces, Now: clock.Now, Enabled: true,
+	})
+	if err != nil {
+		t.Fatalf("ip allowlist service: %v", err)
+	}
+
+	return grants, allowlists
 }

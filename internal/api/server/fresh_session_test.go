@@ -41,12 +41,18 @@ func (f accessFixture) sessionOf(t *testing.T, subject string, authTime time.Tim
 		t.Fatalf("start the session of %s: %v", subject, err)
 	}
 
-	cookie := &http.Cookie{Name: apiserver.SessionCookie, Value: secret.Reveal()}
+	//nolint:gosec // G124: a request cookie of a test.
+	cookie := &http.Cookie{
+		Name:  apiserver.SessionCookie,
+		Value: secret.Reveal(),
+	}
 
 	return cookie, session.CSRFValue(secret)
 }
 
 // adminSeeded holds the stores in which the person "admin" exists.
+//
+//nolint:gochecknoglobals // A test-only registry of the stores that already hold the person "admin".
 var adminSeeded sync.Map
 
 // seedSessionAdmin makes the person "admin" with the site administrator role
@@ -190,11 +196,15 @@ func (s storeSessions) start(t *testing.T, req *http.Request, age time.Duration)
 		t.Fatalf("start the session of tester: %v", err)
 	}
 
-	req.AddCookie(&http.Cookie{Name: apiserver.SessionCookie, Value: secret.Reveal()})
+	//nolint:gosec // G124: a request cookie of a test.
+	cookie := &http.Cookie{Name: apiserver.SessionCookie, Value: secret.Reveal()}
+	req.AddCookie(cookie)
 	req.Header.Set(apiserver.CSRFHeader, session.CSRFValue(secret))
 }
 
 // handlerSessions maps a Handler of a test to the sessions of its store.
+//
+//nolint:gochecknoglobals // A test-only registry: the handler has no field for its sessions.
 var handlerSessions sync.Map
 
 // signInOf returns the sign-in configuration that reads the sessions over st,
@@ -223,6 +233,10 @@ func startSession(t *testing.T, h *apiserver.Handler, req *http.Request, age tim
 		t.Fatal("the handler has no sessions: build it with signInOf and rememberSessions")
 	}
 
-	sessions, _ := s.(storeSessions)
+	sessions, ok := s.(storeSessions)
+	if !ok {
+		t.Fatalf("the sessions of the handler have the type %T", s)
+	}
+
 	sessions.start(t, req, age)
 }

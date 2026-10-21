@@ -95,7 +95,12 @@ func freshRoutes() []freshRoute {
 
 		e.makeSiteAdministrator(t)
 
-		rec := e.postWithSession(t, e.freshSignIn(t), "/api/server/roles", `{"name":"deployer","actions":["unit:read"]}`)
+		rec := e.postWithSession(
+			t,
+			e.freshSignIn(t),
+			"/api/server/roles",
+			`{"name":"deployer","actions":["unit:read"]}`,
+		)
 		if rec.Code != http.StatusCreated {
 			t.Fatalf("make the role = %d %s, want 201", rec.Code, rec.Body.String())
 		}
@@ -146,8 +151,12 @@ func freshAccessRoutes(administrator, makeRole func(*testing.T, providerEnv) str
 			`{"subject":"principal:` + testPrincipalID + `","role":"installation-operator"}`, http.StatusCreated,
 		},
 		{
-			administrator, "grant on a namespace", http.MethodPost, "/api/server/namespaces/" + testNamespace + "/grants",
-			grantBody, http.StatusCreated,
+			administrator,
+			"grant on a namespace",
+			http.MethodPost,
+			"/api/server/namespaces/" + testNamespace + "/grants",
+			grantBody,
+			http.StatusCreated,
 		},
 		{
 			administrator, "grant on a collection", http.MethodPost,
@@ -167,7 +176,14 @@ func freshAccessRoutes(administrator, makeRole func(*testing.T, providerEnv) str
 // list first.
 func freshOtherRoutes(seedAllowlist func(*testing.T, providerEnv) string) []freshRoute {
 	return []freshRoute{
-		{nil, "change token policy", http.MethodPatch, "/api/server/token-policy", `{"inactivitySeconds":0}`, http.StatusOK},
+		{
+			nil,
+			"change token policy",
+			http.MethodPatch,
+			"/api/server/token-policy",
+			`{"inactivitySeconds":0}`,
+			http.StatusOK,
+		},
 		{nil, "approve audit chain", http.MethodPost, "/api/server/audit/chain", "", http.StatusAccepted},
 		{nil, "set IP allowlist", http.MethodPut, ipAllowlistTarget, ipAllowlistBody, http.StatusOK},
 		{seedAllowlist, "remove IP allowlist", http.MethodDelete, ipAllowlistTarget, "", http.StatusNoContent},
@@ -383,8 +399,8 @@ func failureEntries(t *testing.T, e providerEnv, scope namespace.Name, action id
 
 	count := 0
 
-	for _, entry := range listing.Entries {
-		if entry.Outcome == audit.OutcomeFailure && entry.Action == string(action) {
+	for i := range listing.Entries {
+		if entry := &listing.Entries[i]; entry.Outcome == audit.OutcomeFailure && entry.Action == string(action) {
 			count++
 		}
 	}
@@ -407,7 +423,11 @@ func TestFreshAuthRefusalWritesAFailureEntry(t *testing.T) {
 		scope: audit.ServerScope, action: identity.ActionServerManageRoles,
 	}
 
-	for _, w := range []freshWrite{gateWrite, roleWrite} {
+	writes := []freshWrite{gateWrite, roleWrite}
+
+	for i := range writes {
+		w := &writes[i]
+
 		t.Run(string(w.action), func(t *testing.T) {
 			t.Parallel()
 

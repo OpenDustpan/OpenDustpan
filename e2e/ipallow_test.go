@@ -97,10 +97,10 @@ func ipAllowlistCall(ctx context.Context, t *testing.T, env *e2e.Env, s ipAllowl
 }
 
 // ipAllowlistCallFrom sends one installation API request from source and
-// fails unless it answers s.want. It answers the body.
+// fails unless it answers s.want.
 func ipAllowlistCallFrom(
 	ctx context.Context, t *testing.T, env *e2e.Env, source string, s ipAllowlistStep,
-) string {
+) {
 	t.Helper()
 
 	var (
@@ -125,8 +125,6 @@ func ipAllowlistCallFrom(
 		t.Fatalf("%s: %s %s from %s answers %d, want %d (%s)",
 			s.step, s.method, s.path, source, status, s.want, resp)
 	}
-
-	return resp
 }
 
 // checkIPAllowlistCreateLocked creates the namespace that the later steps lock.

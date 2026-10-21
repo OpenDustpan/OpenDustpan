@@ -365,39 +365,56 @@ func checkPrincipalChanges(ctx context.Context, t *testing.T, env *e2e.Env, fx p
 	}
 }
 
-// freshAuthPath matches the writes that need a fresh authentication: the
+// freshAuthRule is a write that needs a fresh authentication: the paths
+// that match path, with one of the methods.
+type freshAuthRule struct {
+	path    *regexp.Regexp
+	methods []string
+}
+
+// freshAuthRules lists the writes that need a fresh authentication: the
 // creation and the rotation of an access token, a change of the session
 // policy, the token policy, the roles and the grants, a change of a sign-in
 // provider, a change of a gate object, the approval of the audit chain and a
 // change of an IP allowlist.
-var freshAuthPath = regexp.MustCompile(`^(?:/api/server/(?:caller/tokens|service-tokens|principals/[^/]+/tokens)` +
-	`(?:/[^/]+/rotate)?|/api/server/session-policy|/api/server/token-policy|/api/server/sign-in-providers(?:/[^/]+)?` +
-	`|/api/server/roles(?:/[^/]+)?|/api/server/audit/chain` +
-	`|/api/server/(?:namespaces/[^/]+(?:/collections/[^/]+)?|principals/[^/]+)?/?grants` +
-	`|/api/server/namespaces/[^/]+/ip-allowlist` +
-	`|/api/dustpan/v1/namespaces/[^/]+/approval-(?:default|rules/[^/]+))$`)
+//
+//nolint:gochecknoglobals // A constant table of routes.
+var freshAuthRules = []freshAuthRule{
+	{
+		regexp.MustCompile(`^/api/server/(?:caller/tokens|service-tokens|principals/[^/]+/tokens)(?:/[^/]+/rotate)?$`),
+		[]string{http.MethodPost},
+	},
+	{regexp.MustCompile(`^/api/server/(?:session|token)-policy$`), []string{http.MethodPatch}},
+	{
+		regexp.MustCompile(`^/api/server/sign-in-providers(?:/[^/]+)?$`),
+		[]string{http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete},
+	},
+	{regexp.MustCompile(`^/api/server/roles(?:/[^/]+)?$`), []string{http.MethodPost, http.MethodPatch}},
+	{regexp.MustCompile(`^/api/server/audit/chain$`), []string{http.MethodPost}},
+	{
+		regexp.MustCompile(`^/api/server/(?:namespaces/[^/]+(?:/collections/[^/]+)?/|principals/[^/]+/)?grants$`),
+		[]string{http.MethodPost},
+	},
+	{
+		regexp.MustCompile(`^/api/server/namespaces/[^/]+/ip-allowlist$`),
+		[]string{http.MethodPut, http.MethodDelete},
+	},
+	{
+		regexp.MustCompile(`^/api/dustpan/v1/namespaces/[^/]+/approval-(?:default|rules/[^/]+)$`),
+		[]string{http.MethodPut, http.MethodDelete},
+	},
+}
 
 // needsFreshAuth reports whether method on path is a write that needs a
 // fresh authentication. An access token never gives one.
 func needsFreshAuth(method, path string) bool {
-	if !freshAuthPath.MatchString(path) {
-		return false
+	for _, rule := range freshAuthRules {
+		if rule.path.MatchString(path) {
+			return slices.Contains(rule.methods, method)
+		}
 	}
 
-	switch {
-	case strings.HasSuffix(path, "/rotate") || strings.HasSuffix(path, "/tokens") || strings.HasSuffix(path, "service-tokens"):
-		return method == http.MethodPost
-	case strings.Contains(path, "/approval-") || strings.HasSuffix(path, "/ip-allowlist"):
-		return method == http.MethodPut || method == http.MethodDelete
-	case strings.Contains(path, "/sign-in-providers"):
-		return method != http.MethodGet
-	case strings.HasSuffix(path, "/grants") || strings.HasSuffix(path, "/audit/chain"):
-		return method == http.MethodPost
-	case strings.Contains(path, "/roles"):
-		return method == http.MethodPost || method == http.MethodPatch
-	default:
-		return method == http.MethodPatch
-	}
+	return false
 }
 
 // freshServerCall sends one installation API request and answers its status and

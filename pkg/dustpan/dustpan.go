@@ -1110,7 +1110,7 @@ func newAdapters(
 		return adapters{}, err
 	}
 
-	api, err := newPulumiHandler(svc, cfg, base, observed, gate, sessionPolicies)
+	api, err := newPulumiHandler(svc, cfg, observed, pulumiDeps{base: base, gate: gate, policies: sessionPolicies})
 	if err != nil {
 		return adapters{}, err
 	}
@@ -2219,14 +2219,24 @@ func isLoopbackListenAddr(addr string) bool {
 	return ip.IsLoopback()
 }
 
+// pulumiDeps are the shared parts that the Pulumi CLI API takes besides the
+// domain services: the base URL resolver, the body gate and the session
+// policy service. The policy service is nil for a store with no sessions.
+type pulumiDeps struct {
+	base     baseurl.Resolver
+	gate     *bodygate.Gate
+	policies *session.Policies
+}
+
 // newPulumiHandler builds the Pulumi CLI API from the domain services.
 // observed counts failed audit appends: the decrypt audit routes still
 // answer 204 when the append fails, so the counter is the alert for lost
 // entries.
 func newPulumiHandler(
-	svc services, cfg *settings, base baseurl.Resolver, observed *metrics.ServerMetrics, gate *bodygate.Gate,
-	policies *session.Policies,
+	svc services, cfg *settings, observed *metrics.ServerMetrics, deps pulumiDeps,
 ) (http.Handler, error) {
+	base, gate, policies := deps.base, deps.gate, deps.policies
+
 	var entries audit.Store
 	if s, ok := cfg.namespaceStore.(audit.Store); ok {
 		entries = s

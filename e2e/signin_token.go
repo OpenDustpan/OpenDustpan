@@ -58,7 +58,7 @@ func (e *Env) PersonalToken(ctx context.Context, tb testing.TB, principalID, nam
 
 	status, answer := e.browserDo(ctx, tb, browser, browserRequest{
 		method: http.MethodPost, target: e.URL + "/api/server/caller/tokens", body: string(body),
-		header: http.Header{"X-Dustpan-Csrf": {csrf}, "Content-Type": {"application/json"}},
+		header: sessionHeader(csrf),
 	})
 	if status != http.StatusCreated {
 		tb.Fatalf("make the personal token of %s with its session = %d: %s", principalID, status, answer)
@@ -233,7 +233,7 @@ func (e *Env) FreshSession(ctx context.Context, tb testing.TB, principalID strin
 
 		return e.browserDo(ctx, tb, browser, browserRequest{
 			method: req.Method, target: e.URL + req.Path, body: req.Body,
-			header: http.Header{"X-Dustpan-Csrf": {csrf}, "Content-Type": {"application/json"}},
+			header: sessionHeader(csrf),
 		})
 	}
 }
@@ -294,7 +294,7 @@ func (e *Env) FreshAdminAPIStatusFrom(
 
 	return e.browserDo(ctx, tb, browser, browserRequest{
 		method: req.Method, target: e.URL + req.Path, body: req.Body,
-		header: http.Header{"X-Dustpan-Csrf": {csrf}, "Content-Type": {"application/json"}},
+		header: sessionHeader(csrf),
 	})
 }
 
@@ -313,6 +313,9 @@ func (e *Env) FreshAdminSession(ctx context.Context, tb testing.TB) func(Session
 
 // freshAdminID is the ID of the person that freshAdmin makes.
 const freshAdminID = "prn-e2e-fresh-admin"
+
+// freshAdminActor is the actor of the writes that make the fresh administrator.
+const freshAdminActor = "e2e-fresh-admin"
 
 // freshAdmin returns the ID of the site administrator person of
 // FreshAdminAPIStatus and makes it on the first call. The person and its
@@ -376,11 +379,18 @@ func seedFreshAdmin(ctx context.Context, st namespace.Store) error {
 	obj := identity.ServerObject()
 	grant := access.Grant{
 		CreatedAt: at, Condition: nil, Object: obj, ID: "grt-e2e-fresh-admin", Role: access.RoleSiteAdministrator,
-		CreatedBy: "e2e", Subject: access.Subject{Kind: access.SubjectPrincipal, ID: person.ID},
+		CreatedBy: freshAdminActor, Subject: access.Subject{Kind: access.SubjectPrincipal, ID: person.ID},
 	}
 
 	// The grant is on the installation, so the fence is the zero fence.
-	if err := rows.CreateGrant(ctx, grant, namespace.Fence{}, freshAdminEntry(at, access.GrantRef(grant)), nil); err != nil {
+	err := rows.CreateGrant(
+		ctx,
+		grant,
+		namespace.Fence{Namespace: "", FailoverVersion: 0},
+		freshAdminEntry(at, access.GrantRef(grant)),
+		nil,
+	)
+	if err != nil {
 		return fmt.Errorf("grant the site administrator role: %w", err)
 	}
 
@@ -391,10 +401,36 @@ func seedFreshAdmin(ctx context.Context, st namespace.Store) error {
 // record object at the time at.
 func freshAdminEntry(at time.Time, object string) audit.Entry {
 	return audit.Entry{
-		At: at, Namespace: audit.ServerScope, Subject: "e2e", IDPSubject: "", TokenID: "",
-		Action: "server:manage-principals", Object: object, Version: "", ValuePath: "", ValueCount: nil,
-		Changes: nil, SourceIP: "192.0.2.1", UserAgent: "e2e", Channel: audit.ChannelAPI, Kind: audit.KindChange,
-		Outcome: audit.OutcomeSuccess, RequestID: "", ObjectID: "", PrevHash: "", Hash: "", Sequence: 0,
-		FenceVersion: 0, Reason: "", PrincipalKind: "", JobID: "",
+		At:            at,
+		Namespace:     audit.ServerScope,
+		Subject:       freshAdminActor,
+		IDPSubject:    "",
+		TokenID:       "",
+		Action:        "server:manage-principals",
+		Object:        object,
+		Version:       "",
+		ValuePath:     "",
+		ValueCount:    nil,
+		Changes:       nil,
+		SourceIP:      "192.0.2.1",
+		UserAgent:     freshAdminActor,
+		Channel:       audit.ChannelAPI,
+		Kind:          audit.KindChange,
+		Outcome:       audit.OutcomeSuccess,
+		RequestID:     "",
+		ObjectID:      "",
+		PrevHash:      "",
+		Hash:          "",
+		Sequence:      0,
+		FenceVersion:  0,
+		Reason:        "",
+		PrincipalKind: "",
+		JobID:         "",
 	}
+}
+
+// sessionHeader returns the headers of an installation API request from a
+// console session with the CSRF value csrf.
+func sessionHeader(csrf string) http.Header {
+	return http.Header{"X-Dustpan-Csrf": {csrf}, "Content-Type": {"application/json"}}
 }

@@ -2072,6 +2072,8 @@ type revealedDoc struct {
 func checkMaskedReveal(
 	ctx context.Context, tb testing.TB, env *e2e.Env, org, secret string,
 ) func(e2e.Result) error {
+	tb.Helper()
+
 	return func(e2e.Result) error {
 		base := fmt.Sprintf("/api/stacks/%s/%s/masked", org, e2e.Project)
 
@@ -2080,7 +2082,7 @@ func checkMaskedReveal(
 			return err
 		}
 
-		if err := checkPulumiReveal(ctx, tb, env, org, path, secret); err != nil {
+		if err := checkPulumiReveal(ctx, tb, env, revealCheck{org: org, path: path, secret: secret}); err != nil {
 			return err
 		}
 
@@ -2111,7 +2113,16 @@ func maskedOutputPath(ctx context.Context, env *e2e.Env, base string) (string, e
 
 // checkPulumiReveal proves the reveal call answers the secret value with
 // no-store, and the audit list holds the reveal entry with the path.
-func checkPulumiReveal(ctx context.Context, tb testing.TB, env *e2e.Env, org, path, secret string) error {
+// revealCheck names the stack of the organization org, the masked value path
+// and the secret value that the reveal must answer.
+type revealCheck struct {
+	org, path, secret string
+}
+
+func checkPulumiReveal(ctx context.Context, tb testing.TB, env *e2e.Env, rc revealCheck) error {
+	tb.Helper()
+
+	org, path, secret := rc.org, rc.path, rc.secret
 	base := fmt.Sprintf("/api/stacks/%s/%s/masked", org, e2e.Project)
 
 	body := `{"path":` + strconv.Quote(path) + `}`
@@ -2155,6 +2166,8 @@ func checkPulumiReveal(ctx context.Context, tb testing.TB, env *e2e.Env, org, pa
 // checkPulumiRevealProbe proves a path outside the masked set answers 404
 // with no value.
 func checkPulumiRevealProbe(ctx context.Context, tb testing.TB, env *e2e.Env, base, secret string) error {
+	tb.Helper()
+
 	status, body := env.FreshAdminAPIStatus(ctx, tb, e2e.SessionRequest{
 		Method: http.MethodPost, Path: base + "/state/latest/reveal",
 		Body: `{"path":"/resources/0/outputs/no-such-secret"}`,
