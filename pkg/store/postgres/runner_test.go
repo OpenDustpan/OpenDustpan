@@ -75,6 +75,7 @@ func (d *runnerDomain) ClaimLease(
 
 	op, err := ops.Claim(ctx, durable.ClaimRequest{
 		Owner: owner, Kinds: []durable.Kind{kind}, MaxVersions: nil, Lease: lease,
+		TakeCanceled: false,
 	})
 	if err != nil {
 		return durable.Claim{}, fmt.Errorf("claim operation: %w", err)
@@ -97,6 +98,7 @@ func (d *runnerDomain) Takeover(ctx context.Context, c durable.Claim) (durable.C
 
 	taken, err := ops.Claim(ctx, durable.ClaimRequest{
 		Owner: c.Owner, Kinds: []durable.Kind{op.Kind}, MaxVersions: nil, Lease: time.Hour,
+		TakeCanceled: false,
 	})
 	if err != nil {
 		return durable.Claim{}, fmt.Errorf("claim operation again: %w", err)

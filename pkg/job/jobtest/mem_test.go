@@ -412,6 +412,10 @@ func (m *memDB) Apply(ctx context.Context, c job.Change, fence namespace.Fence, 
 		return job.Job{}, err
 	}
 
+	if err := c.ValidateClaim(); err != nil {
+		return job.Job{}, err
+	}
+
 	if cur.Version != c.Version {
 		return job.Job{}, job.ErrConflict
 	}
@@ -424,10 +428,6 @@ func (m *memDB) Apply(ctx context.Context, c job.Change, fence namespace.Fence, 
 	next := copyJob(cur)
 	now := time.Now().UTC()
 
-	if err := m.endOperation(ctx, cur, &c); err != nil {
-		return job.Job{}, err
-	}
-
 	if err := m.change(ctx, &next, &c, now); err != nil {
 		return job.Job{}, err
 	}
@@ -435,6 +435,14 @@ func (m *memDB) Apply(ctx context.Context, c job.Change, fence namespace.Fence, 
 	settle(&next, to, &c, cur.Version, now)
 
 	if err := m.closeLate(ctx, &next, c.Event); err != nil {
+		return job.Job{}, err
+	}
+
+	if err := m.endOperation(ctx, cur, &c); err != nil {
+		return job.Job{}, err
+	}
+
+	if err := m.bindClaim(ctx, cur, &c); err != nil {
 		return job.Job{}, err
 	}
 
@@ -1054,11 +1062,29 @@ func checkEnd(c *job.Change) error {
 	return c.End.Validate()
 }
 
+// bindClaim binds the event of c.Claim to its claim, with the checks of
+// jobstore.bindClaim. It changes nothing.
+func (m *memDB) bindClaim(ctx context.Context, cur *job.Job, c *job.Change) error {
+	if c.Claim == nil {
+		return nil
+	}
+
+	if cur.Current >= len(cur.Phases) || cur.Phases[cur.Current].Operation != string(c.Claim.Operation) {
+		return fmt.Errorf("%w: %w: job %s is not at the phase of operation %s", job.ErrClaimLost,
+			durable.ErrClaimLost, cur.ID, c.Claim.Operation)
+	}
+
+	if err := m.checkClaim(ctx, *c.Claim); err != nil {
+		return fmt.Errorf("claim of operation %s: %w: %w", c.Claim.Operation, job.ErrClaimLost, err)
+	}
+
+	return nil
+}
+
 // endOperation ends the durable operation of c.End, in the one step of the
-// change of cur. It runs after the version and the state checks, and the
-// checks of the events that carry an end cannot fail later, so a refused
-// change ends nothing. It checks that the job is at the phase of
-// the operation, so the event binds to its claim.
+// change of cur. It runs last, after the checks of the event (as the SQL
+// adapters run it), so a refused change ends nothing. It checks that the
+// job is at the phase of the operation, so the event binds to its claim.
 func (m *memDB) endOperation(ctx context.Context, cur *job.Job, c *job.Change) error {
 	if c.End == nil {
 		return nil

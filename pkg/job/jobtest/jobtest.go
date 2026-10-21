@@ -163,7 +163,7 @@ func Run(t *testing.T, newHarness Factory) {
 		{"freezes list, end once, and validate", testFreezes},
 	}
 
-	for _, tc := range slices.Concat(cases, claimerCases(), endClaimCases()) {
+	for _, tc := range slices.Concat(cases, claimerCases(), endClaimCases(), claimBoundCases()) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			tc.run(t, newHarness(t))
@@ -316,7 +316,7 @@ func apply(t *testing.T, h Harness, f fixture, c job.Change) job.Job {
 func change(j *job.Job, ev job.Event) job.Change {
 	return job.Change{
 		Job: j.ID, Version: j.Version, Event: ev, Wait: job.WaitNone, Reason: "", Dispatch: nil,
-		PlanNotBefore: time.Time{}, Executor: "", Delivery: nil, MergedAt: time.Time{}, Approval: nil,
+		PlanNotBefore: time.Time{}, Executor: "", Claim: nil, Delivery: nil, MergedAt: time.Time{}, Approval: nil,
 		End: nil,
 	}
 }
@@ -336,6 +336,7 @@ func claimOp(t *testing.T, h Harness, owner string, k durable.Kind, lease time.D
 
 	op, err := h.Durable.Claim(t.Context(), durable.ClaimRequest{
 		Owner: owner, Kinds: []durable.Kind{k}, MaxVersions: nil, Lease: lease,
+		TakeCanceled: false,
 	})
 	if err != nil {
 		t.Fatalf("durable Claim = %v", err)

@@ -514,7 +514,8 @@ WITH c AS MATERIALIZED (
   WHERE o.kind = ANY($3::text[])
     AND o.version <= ($4::bigint[])[array_position($3::text[], o.kind)] AND (
     (o.state = 'pending' AND o.not_before_ms <= c.now_ms)
-    OR (o.state = 'running' AND o.claim_expires_at_ms <= c.now_ms AND NOT o.cancel_requested)
+    OR (o.state = 'running' AND o.claim_expires_at_ms <= c.now_ms
+      AND (NOT o.cancel_requested OR $5::boolean))
   )
   ORDER BY o.created_at_ms, o.id
   LIMIT 1
@@ -532,16 +533,17 @@ RETURNING o.id, o.start_key, o.kind, o.input, o.version, o.state, o.attempt, o.e
 `
 
 type ClaimDurableOperationParams struct {
-	Owner       string
-	LeaseMs     int64
-	Kinds       []string
-	MaxVersions []int64
+	Owner        string
+	LeaseMs      int64
+	Kinds        []string
+	MaxVersions  []int64
+	TakeCanceled bool
 }
 
 // Claims the oldest operation of the kinds, up to the version limit of its
 // kind, that can run now: a pending one
 // whose not_before_ms passed, or a running one whose claim expired without a
-// cancel request. A row that another claim holds is skipped, so of several
+// cancel request, unless take_canceled is true. A row that another claim holds is skipped, so of several
 // concurrent claims of one operation at most one gets it. The expiry is the
 // database clock plus the lease. A claim that takes over an expired claim
 // counts one more expiry.
@@ -551,6 +553,7 @@ func (q *Queries) ClaimDurableOperation(ctx context.Context, arg ClaimDurableOpe
 		arg.LeaseMs,
 		arg.Kinds,
 		arg.MaxVersions,
+		arg.TakeCanceled,
 	)
 	var i DurableOperation
 	err := row.Scan(

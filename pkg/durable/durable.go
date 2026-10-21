@@ -174,6 +174,14 @@ type ClaimRequest struct {
 	// kind. A kind with no entry has no limit, so a nil map limits nothing.
 	MaxVersions map[Kind]int
 	Lease       time.Duration
+	// TakeCanceled lets the claim take a running operation whose claim
+	// expired after a cancel request, as it takes any expired operation: the
+	// operation stays running with a new claim, and its CancelRequested is
+	// true. The new holder ends it, and Release then ends it canceled.
+	// Without it, Claim ends such an operation canceled and the claimer
+	// never sees it. A caller whose domain has to react to the end of the
+	// operation, so that it does not leave a state behind, sets it.
+	TakeCanceled bool
 }
 
 // Failure ends one attempt of an operation that failed. When Final is true,

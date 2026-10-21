@@ -22,6 +22,10 @@ func (s *Store) Apply(ctx context.Context, c job.Change, fence namespace.Fence, 
 		return job.Job{}, err
 	}
 
+	if err := c.ValidateClaim(); err != nil {
+		return job.Job{}, err
+	}
+
 	var out job.Job
 
 	err := s.run.Write(ctx, fence, func(tx Tx) error {
@@ -80,6 +84,10 @@ func applyIn(ctx context.Context, tx Tx, c *job.Change, ns namespace.Name) (job.
 		return job.Job{}, err
 	}
 
+	if err := bindClaim(ctx, tx, &cur, c); err != nil {
+		return job.Job{}, err
+	}
+
 	if err := afterChange(ctx, tx, &cur, &next, c.Event); err != nil {
 		return job.Job{}, err
 	}
@@ -129,6 +137,41 @@ func endOperation(ctx context.Context, tx Tx, cur *job.Job, c *job.Change) error
 
 	if err != nil {
 		return fmt.Errorf("end operation %s: %w", c.End.Claim.Operation, err)
+	}
+
+	return nil
+}
+
+// bindClaim binds the event of c.Claim to its claim, in the transaction tx of
+// the change of cur. It does nothing when c has no claim. The job must be at
+// the phase whose operation the claim names, and the durable store must hold
+// the claim as the live claim of that operation. A failed check rolls the
+// whole change back, so no executor, claim count or audit entry of a claim
+// that was lost is stored.
+func bindClaim(ctx context.Context, tx Tx, cur *job.Job, c *job.Change) error {
+	if c.Claim == nil {
+		return nil
+	}
+
+	// Defense in depth: Apply checks the claim before it opens the
+	// transaction, and this check stays so that a new caller of applyIn
+	// cannot bind an event to a claim that names nothing.
+	if err := c.ValidateClaim(); err != nil {
+		return err
+	}
+
+	if cur.Current >= len(cur.Phases) || cur.Phases[cur.Current].Operation != string(c.Claim.Operation) {
+		return fmt.Errorf("%w: %w: job %s is not at the phase of operation %s", job.ErrClaimLost,
+			durable.ErrClaimLost, cur.ID, c.Claim.Operation)
+	}
+
+	err := tx.CheckClaim(ctx, *c.Claim)
+	if errors.Is(err, durable.ErrClaimLost) {
+		return fmt.Errorf("claim of operation %s: %w: %w", c.Claim.Operation, job.ErrClaimLost, err)
+	}
+
+	if err != nil {
+		return fmt.Errorf("check claim of operation %s: %w", c.Claim.Operation, err)
 	}
 
 	return nil

@@ -259,7 +259,7 @@ func (o *DurableOperations) Claim(ctx context.Context, req durable.ClaimRequest)
 // claimNext claims the oldest operation that req allows and that can run
 // now, in the transaction of tx, and reports false when no operation is due.
 // It ends canceled each expired operation with a requested cancel that it
-// finds first.
+// finds first, unless req.TakeCanceled is true.
 func claimNext(
 	ctx context.Context,
 	tx *sql.Tx,
@@ -287,9 +287,9 @@ func claimNext(
 
 		row := rows[0]
 
-		if row.State == string(durable.StateRunning) && row.CancelRequested {
+		if row.State == string(durable.StateRunning) && row.CancelRequested && !req.TakeCanceled {
 			// The holder of a canceled operation stopped before its end:
-			// the claim ends the operation canceled.
+			// the claim ends the operation canceled, unless req takes it.
 			if writeErr := writeDurable(ctx, q, endCanceled(row, now)); writeErr != nil {
 				return durable.Operation{}, false, writeErr
 			}

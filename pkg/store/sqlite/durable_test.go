@@ -207,6 +207,7 @@ func claimOne(t *testing.T, s durable.Store) durable.Operation {
 
 	held, err := s.Claim(t.Context(), durable.ClaimRequest{
 		Owner: "instance-a", Kinds: []durable.Kind{stallKind}, MaxVersions: nil, Lease: time.Minute,
+		TakeCanceled: false,
 	})
 	if err != nil {
 		t.Fatalf("claim: %v", err)
@@ -268,6 +269,7 @@ func TestDurableStepWaitsBehindWriteLock(t *testing.T) {
 
 	held, err := holder.Claim(t.Context(), durable.ClaimRequest{
 		Owner: "instance-a", Kinds: []durable.Kind{stallKind}, MaxVersions: nil, Lease: lease,
+		TakeCanceled: false,
 	})
 	if err != nil {
 		t.Fatalf("claim: %v", err)

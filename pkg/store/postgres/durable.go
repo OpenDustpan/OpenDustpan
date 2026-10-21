@@ -178,7 +178,8 @@ func (d *DurableOperations) List(ctx context.Context, f durable.Filter) ([]durab
 }
 
 // Claim implements durable.Store. One short transaction first ends the
-// expired operations of the kinds that have a cancel request, then claims
+// expired operations of the kinds that have a cancel request (unless
+// req.TakeCanceled is true), then claims
 // the oldest operation that can run. It commits before Claim returns. A
 // row that a concurrent claim holds is skipped, so the loser of a race gets
 // ErrNoWork.
@@ -197,13 +198,16 @@ func (d *DurableOperations) Claim(ctx context.Context, req durable.ClaimRequest)
 	// No work is not an error of the transaction: the end of the canceled
 	// operations commits also when no operation can run.
 	err := d.store.inControlTx(ctx, func(q *db.Queries) error {
-		ended := db.EndExpiredCanceledDurableOperationsParams{Kinds: kinds, MaxVersions: maxVersions}
-		if err := q.EndExpiredCanceledDurableOperations(ctx, ended); err != nil {
-			return fmt.Errorf("end canceled operations: %w", err)
+		if !req.TakeCanceled {
+			ended := db.EndExpiredCanceledDurableOperationsParams{Kinds: kinds, MaxVersions: maxVersions}
+			if err := q.EndExpiredCanceledDurableOperations(ctx, ended); err != nil {
+				return fmt.Errorf("end canceled operations: %w", err)
+			}
 		}
 
 		row, err := q.ClaimDurableOperation(ctx, db.ClaimDurableOperationParams{
 			Kinds: kinds, MaxVersions: maxVersions, Owner: req.Owner, LeaseMs: req.Lease.Milliseconds(),
+			TakeCanceled: req.TakeCanceled,
 		})
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil

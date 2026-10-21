@@ -348,7 +348,7 @@ func (s memStore) Claim(_ context.Context, req durable.ClaimRequest) (durable.Op
 
 		switch {
 		case due == notDue:
-		case due == dueTakeover && op.CancelRequested:
+		case due == dueTakeover && op.CancelRequested && !req.TakeCanceled:
 			s.db.endCanceled(op, now)
 		default:
 			if due == dueTakeover && s.db.broken == breakTakeoverSteps {

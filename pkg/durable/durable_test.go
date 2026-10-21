@@ -37,30 +37,32 @@ func TestClaimRequestValidate(t *testing.T) {
 		req  durable.ClaimRequest
 		want error
 	}{
-		{durable.ClaimRequest{Owner: "a", Kinds: kinds, MaxVersions: nil, Lease: time.Second}, nil},
-		{durable.ClaimRequest{Owner: "", Kinds: kinds, MaxVersions: nil, Lease: time.Second}, durable.ErrInvalid},
-		{durable.ClaimRequest{Owner: "a", Kinds: nil, MaxVersions: nil, Lease: time.Second}, durable.ErrInvalid},
+		{durable.ClaimRequest{Owner: "a", Kinds: kinds, MaxVersions: nil, Lease: time.Second, TakeCanceled: false}, nil},
+		{durable.ClaimRequest{Owner: "", Kinds: kinds, MaxVersions: nil, Lease: time.Second, TakeCanceled: false}, durable.ErrInvalid},
+		{durable.ClaimRequest{Owner: "a", Kinds: nil, MaxVersions: nil, Lease: time.Second, TakeCanceled: false}, durable.ErrInvalid},
 		{
-			durable.ClaimRequest{Owner: "a", Kinds: []durable.Kind{"backup", ""}, MaxVersions: nil, Lease: time.Second},
+			durable.ClaimRequest{Owner: "a", Kinds: []durable.Kind{"backup", ""}, MaxVersions: nil, Lease: time.Second, TakeCanceled: false},
 			durable.ErrInvalid,
 		},
-		{durable.ClaimRequest{Owner: "a", Kinds: kinds, MaxVersions: nil, Lease: 0}, durable.ErrInvalid},
-		{durable.ClaimRequest{Owner: "a", Kinds: kinds, MaxVersions: nil, Lease: -time.Second}, durable.ErrInvalid},
+		{durable.ClaimRequest{Owner: "a", Kinds: kinds, MaxVersions: nil, Lease: 0, TakeCanceled: false}, durable.ErrInvalid},
+		{durable.ClaimRequest{Owner: "a", Kinds: kinds, MaxVersions: nil, Lease: -time.Second, TakeCanceled: false}, durable.ErrInvalid},
 		{
 			durable.ClaimRequest{
-				Owner:       "a",
-				Kinds:       kinds,
-				MaxVersions: map[durable.Kind]int{"backup": -1},
-				Lease:       time.Second,
+				Owner:        "a",
+				Kinds:        kinds,
+				MaxVersions:  map[durable.Kind]int{"backup": -1},
+				Lease:        time.Second,
+				TakeCanceled: false,
 			},
 			durable.ErrInvalid,
 		},
 		{
 			durable.ClaimRequest{
-				Owner:       "a",
-				Kinds:       kinds,
-				MaxVersions: map[durable.Kind]int{"backup": 0},
-				Lease:       time.Second,
+				Owner:        "a",
+				Kinds:        kinds,
+				MaxVersions:  map[durable.Kind]int{"backup": 0},
+				Lease:        time.Second,
+				TakeCanceled: false,
 			},
 			nil,
 		},
@@ -121,6 +123,7 @@ func TestClaimRequestAllows(t *testing.T) {
 	req := durable.ClaimRequest{
 		Owner: "a", Kinds: []durable.Kind{"backup", "restore"},
 		MaxVersions: map[durable.Kind]int{"backup": 2}, Lease: time.Second,
+		TakeCanceled: false,
 	}
 
 	cases := []struct {

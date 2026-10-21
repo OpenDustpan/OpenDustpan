@@ -29,6 +29,16 @@ type Change struct {
 	PlanNotBefore time.Time
 	// Executor names the runner or the instance, on EventClaim.
 	Executor string
+	// Claim is set on EventClaim of a phase that a runner claimed as a
+	// durable operation. The store checks it in the transaction of the
+	// change, before it applies the event: the job must be at the phase of
+	// the operation of Claim, and Claim must be the live claim of that
+	// operation (its token current, its lease not expired on the clock of
+	// the store). Else the change fails with ErrClaimLost and changes
+	// nothing, so a holder that lost its claim to a takeover leaves neither
+	// the executor, the claim count nor the audit entry of the claim in the
+	// job. It is nil for an executor that holds no durable claim.
+	Claim *durable.Claim
 	// Delivery is set on EventDelivered: the store keeps it in the job.
 	Delivery *DeliveryResult
 	// MergedAt is set on EventMerged: the time of the merge, as the forge
@@ -52,7 +62,10 @@ type EndKind string
 // The kinds of OperationEnd.
 const (
 	// EndComplete ends the operation succeeded. While a cancel is requested
-	// it ends the operation canceled, as EndRelease does.
+	// it ends the operation canceled, as EndRelease does. So for the last
+	// phase of a job during a cancel, the event (EventLastPhaseDone) ends the
+	// job succeeded, because the change happened, and the durable record of
+	// the operation says canceled.
 	EndComplete EndKind = "complete"
 	// EndFail ends the attempt with OperationEnd.Failure, as
 	// durable.Store.Fail does.
@@ -80,6 +93,22 @@ func (e *OperationEnd) Validate() error {
 			ErrInvalid)
 	case e.Kind != EndComplete && e.Kind != EndFail && e.Kind != EndRelease:
 		return fmt.Errorf("%w: unknown end %q of operation %s", ErrInvalid, e.Kind, e.Claim.Operation)
+	default:
+		return nil
+	}
+}
+
+// ValidateClaim returns ErrInvalid for a change that carries a claim on
+// another event than EventClaim, or a claim that names no operation, no owner
+// or no token. A change with no claim is valid.
+func (c *Change) ValidateClaim() error {
+	switch {
+	case c.Claim == nil:
+		return nil
+	case c.Event != EventClaim:
+		return fmt.Errorf("%w: event %s cannot carry a claim", ErrInvalid, c.Event)
+	case c.Claim.Operation == "" || c.Claim.Owner == "" || c.Claim.Token <= 0:
+		return fmt.Errorf("%w: the claim of an event needs an operation, an owner and a token", ErrInvalid)
 	default:
 		return nil
 	}
@@ -195,6 +224,9 @@ type Store interface {
 	//     takeover changes neither the operation nor the job, and nobody can
 	//     see the end without the event. c.End on another event is
 	//     ErrInvalid.
+	//   - EventClaim with c.Claim: it checks the claim in the same transaction,
+	//     before it applies the event (see Change.Claim). A claim that is not
+	//     live is ErrClaimLost, with durable.ErrClaimLost.
 	//   - EventCancel of a job with a live durable operation: it applies
 	//     durable.Store.Cancel to the operation.
 	//   - EventMerged and EventDelivered: when the last final state version
@@ -232,11 +264,12 @@ type Store interface {
 	SetVerification(ctx context.Context, id ID, v Verification, fence namespace.Fence, e []audit.Entry) error
 	// Orphans returns at most limit jobs that are dispatched, running or
 	// canceling, but whose durable operation does not exist or ended with
-	// no Finish. A restore makes the first kind. A claim that expires
-	// during a cancel, or a durable failure at the limit of expired
-	// claims, makes the second. The claimer never leaves a job with an operation
-	// that ended and no event, because it ends the operation and applies the
-	// event in one transaction (Change.End). A later change adds a reconcile
+	// no Finish. A restore makes the first kind. A durable failure at the
+	// limit of expired claims makes the second. A claim that expires during
+	// a cancel does not: the claimer takes such an operation and ends the
+	// phase (durable.ClaimRequest.TakeCanceled). The claimer never leaves a
+	// job with an operation that ended and no event, because it ends the
+	// operation and applies the event in one transaction (Change.End). A later change adds a reconcile
 	// schedule that applies the event of AfterOperationEnded to each job that
 	// this method returns: a change that began fails the job,
 	// and a canceling job with no change ends canceled.
