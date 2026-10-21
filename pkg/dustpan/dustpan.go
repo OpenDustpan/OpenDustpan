@@ -690,8 +690,6 @@ type services struct {
 }
 
 // defaultSettings answers the settings of a server before its options.
-//
-//nolint:funlen // One literal that names every field of settings (exhaustruct); its length is the field count.
 func defaultSettings() *settings {
 	return &settings{
 		denialLimiter:           defaultDenialLimiter(),

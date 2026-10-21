@@ -654,11 +654,8 @@ func checkRestoreFile(ctx context.Context, path string, want backup.Summary) (ba
 		return backup.Summary{}, fmt.Errorf("check staged backup: %w", viewsErr)
 	}
 
-	if hostErr := checkStagedGitHost(ctx, conn); hostErr != nil {
-		return backup.Summary{}, fmt.Errorf("check staged backup: %w", hostErr)
-	}
-	if sinksErr := checkStagedSinks(ctx, conn); sinksErr != nil {
-		return backup.Summary{}, fmt.Errorf("check staged backup: %w", sinksErr)
+	if featuresErr := checkStagedFeatures(ctx, conn); featuresErr != nil {
+		return backup.Summary{}, fmt.Errorf("check staged backup: %w", featuresErr)
 	}
 
 	sum, err := summarizeConn(ctx, conn)

@@ -67,6 +67,16 @@ func sqliteGitHostBackupTables() []sqliteBackupTable {
 	}
 }
 
+// checkStagedFeatures checks the rows of the staged features that have rules of
+// their own: the Git host connections and the notification sinks.
+func checkStagedFeatures(ctx context.Context, conn *sql.DB) error {
+	if err := checkStagedGitHost(ctx, conn); err != nil {
+		return err
+	}
+
+	return checkStagedSinks(ctx, conn)
+}
+
 // checkStagedGitHost checks each Git host row of a staged backup with the rules
 // of a new row. A row that fails makes the backup corrupt, so a restore never
 // brings in a registration, an assignment or a connection that the server would

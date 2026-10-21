@@ -883,6 +883,16 @@ type stagingInput struct {
 	staging string
 }
 
+// checkStagedFeatures checks the rows of the staged features that have rules of
+// their own: the Git host connections and the notification sinks.
+func checkStagedFeatures(ctx context.Context, pool *pgxpool.Pool, staging string) error {
+	if err := checkStagedGitHost(ctx, pool, staging); err != nil {
+		return err
+	}
+
+	return checkStagedSinks(ctx, pool, staging)
+}
+
 // buildStaging creates the staging schema, loads and checks the dump, and keeps
 // the schema as the staging area. A failure drops the schema: the live tables
 // stay unchanged.
@@ -916,11 +926,8 @@ func (s *Store) buildStaging(ctx context.Context, in stagingInput) (backup.Summa
 		return backup.Summary{}, viewsErr
 	}
 
-	if hostErr := checkStagedGitHost(ctx, s.pool, in.staging); hostErr != nil {
-		return backup.Summary{}, hostErr
-	}
-	if sinksErr := checkStagedSinks(ctx, s.pool, in.staging); sinksErr != nil {
-		return backup.Summary{}, sinksErr
+	if featuresErr := checkStagedFeatures(ctx, s.pool, in.staging); featuresErr != nil {
+		return backup.Summary{}, featuresErr
 	}
 
 	sum, err := s.summarizeStaging(ctx, in.staging, in.want)
