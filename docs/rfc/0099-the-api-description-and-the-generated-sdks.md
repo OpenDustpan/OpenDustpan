@@ -13,8 +13,12 @@ fails on drift, SDKs for Go, TypeScript and Python are generated from it with
 a version pinned to the server, and the CLI and the providers are generated
 from it with a version pin before 1.0. This RFC holds the rest. Questions 1
 to 5 have an answer from the product manager (see "Questions"). On
-acceptance, those answers go into an ADR. Question 6 is open. The only code
-is the types and the comparison in `internal/api/apidesc`.
+acceptance, those answers go into an ADR. The owner answered question 6 on
+2026-10-20: OpenDustpan owns its client generator. Amendment 1 records that
+answer, the design that follows from it, and four open questions (A1 to A4).
+The first slice of the description is in `internal/api/apidesc`. The ports
+of the generator and of the conformance suite are in `internal/clientgen`,
+with no implementation.
 
 ## Problem
 
@@ -68,6 +72,9 @@ decision. The version stays open.
 
 ### 3. The generators
 
+Amendment 1 replaces this option: OpenDustpan owns its client generator
+(owner decision, 2026-10-20).
+
 The SDKs must pass the license rule (`make licenses`, `make trivy`), and no
 dependency enters the module without the approval of the project owner. A
 generator runs in the build or in CI, not inside the server binary. Check
@@ -82,6 +89,9 @@ decision:
   release path. This RFC does not recommend them.
 
 ### 4. Where the SDKs live
+
+Amendment 1 replaces this option: one repository for each language (owner
+decision, 2026-10-20).
 
 | Option | Gives | Costs |
 | --- | --- | --- |
@@ -146,10 +156,10 @@ decision:
    pinned to the version of the server (ADR 264 decision 4). A release builds
    and publishes the description and the SDKs together. Before 1.0, a client
    pins the exact version (ADR 264 decision 5).
-8. **Generators.** Pick them after a trial (question 6). The trial generates a
+8. **Generators.** Replaced by amendment 1. Pick them after a trial (question 6). The trial generates a
    client from the first-slice document and checks the licenses. Do not pick
    a generator before the first slice exists.
-9. **Places.** Option 4A while the API changes before 1.0. `sdk/go` is its
+9. **Places.** Replaced by amendment 1. Option 4A while the API changes before 1.0. `sdk/go` is its
    own Go module, so that the server `go.mod` does not hold its dependencies.
    Review the place again at 1.0.
 10. **Docs.** The user documentation has a page when a person can use the
@@ -200,7 +210,9 @@ has a benchmark.
 
 ### Open
 
-6. **Which generator for each language?** Not decided. Each generator
+6. **Which generator for each language?** Answered by the owner on
+   2026-10-20: OpenDustpan owns its generator (amendment 1). The text below
+   is the question as it was before that answer. Not decided then. Each generator
    dependency needs the approval of the owner after a trial (issue 1195).
    The trial criteria:
    - The generator makes the client with no hand edit of the generated files.
@@ -223,6 +235,366 @@ has a benchmark.
    The route declares an action and the object it applies to. Recommendation:
    yes, as an extension field of the operation, so that a generated CLI can
    say what a caller needs. The cost: each route declares the object kind.
+
+## Amendment 1: OpenDustpan owns its client generator (2026-10-21)
+
+On 2026-10-20 the project owner answered question 6 with a different
+approach: OpenDustpan writes its own client generator, and it uses no
+third-party OpenAPI generator. The owner's decisions are in issue 966 and
+issue 1281. This amendment records them, describes the design that follows
+from them, and lists the questions that stay open. The trial of third-party
+generators is on the branch `trial/sdk-generators`
+(`docs/research/2026-10-20-sdk-generator-trial.md`). Its findings about the
+description and about client behavior still apply. Its choice of tools does
+not.
+
+This amendment uses "client" for a generated client library, as the owner's
+decisions do. ADR 35 uses "SDK" for the server SDK in `pkg/`, and the two
+are different things. The earlier sections of this RFC say "SDK" for a
+client, and they keep that word.
+
+### What the amendment changes in this RFC
+
+- **Question 6** has an answer: the owner decisions below. The trial
+  criteria of question 6 for third-party generators do not apply.
+- **Option 3 and proposal 8** no longer apply. The project picks no
+  third-party generator, so no generator needs approval. The generator is code of this
+  project under its own license.
+- **Option 4 and proposal 9** no longer apply. Each client has its own
+  repository (decision O7). No client lives in `sdk/` of this repository.
+- **Proposal 7** stays, with the versioning rule of question A4 below.
+- **Question 4 of the decided questions** (the transport layer) stays. The
+  generator does not write the transport. A person writes it once for each
+  language, and the conformance suite tests it.
+- ADR 264 decision 4 asks that "the license of each generator must pass the
+  license policy of the project". The generator uses the Go standard library
+  only, and it is under the license of this project, so it passes.
+
+### Owner decisions
+
+These decisions are final. This amendment does not open them again.
+
+**O1. One generator of our own (owner decision, 2026-10-20).** One
+deterministic program, written in Go, generates every client. It has three
+parts:
+
+- A shared parser. It reads only the subset of OpenAPI that the description
+  uses. That subset is OpenAPI 3.1, limited to the constructs that map one to
+  one to OpenAPI 3.0.3. It also holds open enums, the `ErrorResponse` schema,
+  the shared `Idempotency-Key` and `If-Match` parameters and the `ETag`
+  response header.
+- One template set for each language.
+- Golden-file tests. The same description always gives the same bytes.
+
+**O2. The templates come from good clients with permissive licenses (owner
+decision, 2026-10-20).** An agent writes the template set of each language
+one time. The templates follow the patterns of well-known clients with
+permissive licenses, for example go-github, the Stripe libraries and Octokit.
+Code that is copied keeps its license notice. No code comes from a GPL
+project.
+
+**O3. One shared conformance suite (owner decision, 2026-10-20).** One suite
+runs every client against a real server in CI. It covers each operation, the
+error shape, pagination, `Idempotency-Key`, `If-Match` and `ETag`, and
+unknown fields and unknown enum values. A client release needs a pass.
+
+**O4. Each client uses what is standard for its language (owner decision,
+2026-10-20).** Each client uses the usual build tool, the usual package
+layout and the usual HTTP and JSON libraries of its language. The goal is
+that a team that adopts a client has no problem with it. When the standard
+choice makes the work of this project harder (for example Gradle), the
+client still uses it. Dependencies that are standard for a language are
+approved in advance. The license gate of this repository does not apply in a
+client repository, because the project does not distribute the dependencies
+of a client.
+
+**O5. The standard library comes first (owner decision, 2026-10-20).** Where
+the standard library of a language has HTTP and JSON, the client uses only
+the standard library. A client adds a dependency only where the language has
+no standard HTTP or no standard JSON. Its README says why.
+
+**O6. The languages and their order (owner decision, 2026-10-20).**
+
+| Language | HTTP | JSON | Build and release | When |
+| --- | --- | --- | --- | --- |
+| Go | `net/http` | `encoding/json` | Go modules, Git tags | first |
+| Python | `urllib.request`, with an optional `[httpx]` extra | `json` | `pyproject.toml`, PyPI | second |
+| TypeScript | global `fetch` (Node 18 and later, browsers, Deno, Bun) | `JSON` | npm | third |
+| C# | `HttpClient` | `System.Text.Json` | `dotnet pack`, `dotnet nuget push` | later |
+| Java | `HttpURLConnection`, no `java.net.http` | `jackson-core` streaming API, with explicit generated code for each model | Maven | deferred until enough users ask |
+| Swift | `URLSession` | `Codable` | Swift Package Manager, Git tags | after the API is stable |
+| Rust | `ureq` | `serde`, `serde_json` | crates.io | after the API is stable |
+| Zig | `std.http.Client` | `std.json` | Git tags | after the API is stable |
+| C | not decided | not decided | not decided | when C has an official package registry |
+
+- **Python.** `pip install opendustpan` has no dependencies and uses the
+  synchronous `urllib.request`. `pip install opendustpan[httpx]` adds httpx,
+  which gives an async client and connection pooling. The hand-written
+  transport selects the transport. The generated code is the same for both.
+  The conformance suite runs on both transports. The extra keeps a wide
+  httpx version range, so that it does not conflict with the pins of other
+  libraries. This is the pattern of the Stripe Python library.
+- **Java.** The generated code reads and writes JSON with the streaming API
+  of `jackson-core`, with no `jackson-databind` and no reflection. The JAR
+  works on Android, so the transport does not use `java.net.http`. The rest
+  of the Java plan in issue 1281 stays as the plan for when the work starts.
+- **Zig.** The owner said that Zig comes only if a generator path exists.
+  With the generator of this project, a Zig client is one more template set,
+  so the generator meets that condition. Zig still waits until the API is stable.
+
+**O7. One repository for each language (owner decision, 2026-10-20).** The
+first repository is `client-go`, with the module path
+`opendustpan.org/client`. Then come `client-python` and `client-node`. The
+npm packages go in the npm organization `opendustpan`. The project claims
+the PyPI name at the first real release.
+
+### The design of the generator
+
+```text
+openapi.json --> parser --> model --> template set of a language --> files --> writer
+                                         (one per language)
+```
+
+The Go sketch of the ports is in `internal/clientgen` (package
+`clientgen`), with the model in `internal/clientgen/model`. It has types and
+interfaces only, and no implementation. Its place in the repository depends
+on question A1. A depguard rule keeps both packages away from the server
+code, so a later move is a move of files.
+
+**The input.** The generator reads only the bytes of the published
+description: `internal/api/apidesc/openapi.json`, which the server serves at
+`GET /api/dustpan/v1/openapi.json`. It does not import `internal/api/apidesc`
+or any other server package. A team that downloads the description from a
+server gets the same client as the project.
+
+**The subset.** The parser reads the constructs below and nothing else. A
+construct that is not in the list is an error (`ErrUnsupported`), with the
+JSON pointer of the construct. The parser never skips a construct and never
+guesses its meaning.
+
+| Part | Constructs that the parser reads |
+| --- | --- |
+| Document | `openapi: 3.1.0`, `info` (`title`, `version`, `description`), `servers`, `tags`, `paths`, `components`, top-level `security` |
+| Operation | `operationId`, `tags`, `summary`, `description`, `parameters`, `requestBody`, `responses`, `security` (empty for a public route), `x-dustpan-actions` |
+| Parameter | `in: path`, `in: query`, `in: header`. A `$ref` to `#/components/parameters/IdempotencyKey`, `IfMatch` or `IfMatchRequired`. A scalar schema, or an array of a scalar schema. |
+| Request body | `application/json` and `application/merge-patch+json`, each with one schema |
+| Response | one success answer (a status code or `2XX`), `default` with a `$ref` to the error schema, the `ETag` header as a `$ref` to `#/components/headers/ETag` |
+| Schema | `type` `object`, `string`, `integer`, `number`, `boolean`, `array`. `properties`, `required`, `additionalProperties`, `items`, `enum`, `format`, `description`, `minLength`, `maxLength`. A local `$ref` to `#/components/schemas/...`. |
+| Nullable | `type: [X, "null"]`, and `oneOf: [{$ref}, {type: "null"}]` for a reference. No other multi-type schema. |
+| Open enum | `anyOf: [{$ref: <enum>}, {type: string}]`. A client keeps a value that it does not know, and does not fail. |
+| Error | `#/components/schemas/ErrorResponse` with `code`, `message`, `errorCode`, `errorArgs` |
+
+The subset grows only in a pull request that adds the construct to the
+parser, to the golden files and, where the construct changes behavior on the
+wire, to the conformance suite. A discriminated `oneOf`, for example, is not
+in the subset until the description needs it.
+
+**Pagination.** A list operation pages with the names of ADR 210 decision 10:
+`pageSize` and `pageToken` in the query, and `nextPageToken` in the answer.
+The parser marks an operation as a list (`model.Page`) only when it finds all
+three, and the items field is the one array field of the answer. When it
+finds only a part of the names, the description is not valid. This needs the
+typed bodies of issue 1189.
+
+**The model.** The model holds what a template needs and no OpenAPI syntax.
+Every list in it has a fixed order: operations by ID, schemas by name,
+fields by wire name, parameters by the order of the path and then by name.
+The model holds no Go map, so a template that ranges over the model gives
+the same bytes on each run.
+
+**Names.** A name from the description becomes an identifier only when it
+matches an allowlist: lowerCamelCase for an operation ID, UpperCamelCase for
+a schema, and camelCase for a field. Each template set has a table of the
+reserved words of its language and one fixed rule that changes such a name,
+for example an added underscore. A name that the rule cannot make valid is an
+error (`ErrInvalidName`). The wire name of each field stays in the generated
+code, so the identifier and the wire name can differ.
+
+**The templates.** The template sets use `text/template` from the Go
+standard library. `text/template` does not encode a value by itself, so each
+template set gives functions that encode for its language: a string literal,
+a comment line, an identifier. A template writes a value from the
+description only through one of these functions. A golden-file test with
+hostile names and texts checks each function.
+
+**Generated and hand-written code.** The generator writes the models, the
+operations and the adapter of the conformance suite. A person writes the
+transport once for each language: the base URL, the token, the
+`Idempotency-Key` that a mutating call gets when the caller gives none, the
+retries with the same key, the cursor of a list, and the translation of
+errors. Each generated file starts with a header that names the generator
+version and the description version. In Go, the header follows the standard
+form `// Code generated ... DO NOT EDIT.`. The writer changes no file that
+has no such header, so it never overwrites the transport.
+
+**Determinism.** The generator does not read the clock, the environment,
+the host name or the order of a Go map. It writes no time stamp and no
+absolute path. A test runs the generator two times on the same input and
+compares the bytes. The golden files of each language are in this
+repository, and a test fails when the output differs from them.
+
+### The design of the conformance suite
+
+The Go sketch of the contract is in `internal/clientgen/conformance`: the
+protocol messages, the ports of the harness and the list of cases. The cases
+have names and no body. A case with no body fails a release (decision O3).
+
+```text
+harness (Go) --stdin/stdout, JSON-RPC 2.0--> adapter of one client
+     |                                              |
+     |                                              v
+     +--- controls ---> recording proxy <--HTTP-- generated client + transport
+                              |
+                              v
+                     real server (opendustpan dev)
+```
+
+- **The server.** The harness starts `opendustpan dev` of the release that
+  the client was generated from, with an empty database, on a port of the
+  loopback address. It makes one access token for the run.
+- **The proxy.** A recording proxy sits between the client and the server.
+  It records each request (the method, the path, the query, the headers that
+  the suite checks, and the body). It can also change one exchange: answer a
+  503, drop an answer after the server ran the operation, add a field that
+  the description does not declare, or put an enum value that the
+  description does not list. The real server never sends an unknown field or
+  value, so the proxy is the only way to test them against a real server.
+- **The adapter.** A small program for each client. The generator writes the
+  table that maps an operation ID to a call of the client. A person writes
+  the loop that reads and writes the messages. The adapter has four methods:
+  `initialize`, `call`, `paginate` and `shutdown`. Each message is one line
+  of JSON, at most 1 MiB long.
+- **The cases.** Seven groups: operations, errors, pagination, idempotency,
+  concurrency, compatibility and version. The case
+  `every-operation-is-called` calls each operation of the description at
+  least one time, so a new operation with no call fails the suite.
+- **Transports.** A client with more than one transport (Python) runs the
+  full suite on each transport.
+
+### Threat notes for the generator and the suite
+
+The generator reads a document and writes source code, and the harness
+starts processes and opens connections, so both are security code. The steps
+are those of ADR 250. Each step needs its own test.
+
+| Step | The generator | The harness |
+| --- | --- | --- |
+| 1. Check the input | The parser is an allowlist of constructs and names. It refuses a document larger than a fixed size, an unknown key, an external `$ref` and a name that is not on the allowlist. | The harness refuses a message that is not valid JSON, that is longer than 1 MiB, or that has an unknown ID. |
+| 2. Encode or contain | A value goes into source only through the encoder of the language. The writer writes files through `os.Root` in the output directory. | The harness starts the adapter with `exec.Command` and an argument list, never a shell. |
+| 3. Limit the effect | The generator uses no network. It writes only in the output directory. | Each call has a time-out. The proxy and the server listen on the loopback address only. The token belongs to a throwaway database. |
+| 4. Check authorization | A generated client sends the token only to its base URL. A case checks that a redirect to another host gets no token. | The token is a test token of the run. It is never written to a log or to a report. |
+| 5. Fail closed | An unknown construct or a bad name stops the run with no partial output. | A protocol error, a case with no body, or an adapter that exits early fails the run. A release workflow refuses to publish without a pass. |
+
+### Open questions
+
+Each question has options and a recommendation for the product manager.
+
+#### A1. Where does the generator live?
+
+| Option | Gives | Costs |
+| --- | --- | --- |
+| A. This repository, in the server module: packages under `internal/clientgen`, and a `main` package under `cmd/` | One pull request changes a route, the description, the generator and the golden files. `make check` covers the generator with no new setup. A depguard rule keeps it away from server code. | A client repository that runs the harness downloads the server module, or uses a binary that the release attaches. |
+| B. This repository, in a Go module of its own (for example `tools/clientgen/go.mod`) | The same single pull request. The module boundary blocks each import of server code. `go run ...@version` does not download the dependencies of the server. | `make check` must cover a second module: lint, nilaway, govulncheck and tests. A nested module needs tags with a path prefix. |
+| C. A repository of its own (`opendustpan/client-generator`) | Its own tags and release page. | A change of the description that needs a generator change is two pull requests in two repositories. The golden test of the generator reads a description from another repository. The owner must create the repository. |
+
+**Recommendation: A.** Most changes of the generator come from a change of
+the description, and A keeps both in one pull request and under one gate. The
+depguard rule makes a later move to B or C a move of files, as it does for
+the Pulumi journal today. The release attaches the harness binary, so a
+client repository does not download the server module.
+
+Benchmark: Kubernetes keeps its client generators (`code-generator`) apart
+from `client-go`, and it publishes both from the main repository. Pulumi
+keeps its SDK code generators in the main `pulumi/pulumi` repository. Check
+both again at the time of the decision.
+
+#### A2. How does each language repository run the conformance suite?
+
+| Option | Gives | Costs |
+| --- | --- | --- |
+| A. One Go harness that drives a small adapter for each language over JSON-RPC 2.0 on stdin and stdout | A person writes each case one time. A new case covers every language on the day it lands. The harness controls the proxy, so faults are the same for each language. One report format. | Each language has an adapter program. The protocol is a contract with a version. The adapter tests the client through a fixed shape, not through the idioms of the language (an iterator, an async call). |
+| B. A port of the suite in each language | Each repository uses its own test tools. The tests read like the code of a user. | One suite for each language, which can drift. A new case needs a pull request in each repository. A pass in two languages does not mean the same thing. |
+| C. Case files in JSON that a runner in each language reads | One source of cases. Native test tools. | Retries, faults and pagination need logic in each runner. That is a part of the harness written again in each language. |
+
+**Recommendation: A**, with a short native smoke test in each client
+repository for the idioms that the adapter does not reach (for example the
+async client of Python). The generator writes the operation table of each
+adapter, so the hand-written part of an adapter is the message loop only.
+`initialize` carries a protocol version, and the harness refuses an adapter
+with another version. The release of this repository attaches the harness
+binary and the server binary, and a client repository pins both by version.
+
+Benchmark: the language conformance tests of Pulumi run one Go harness
+against the language host of each SDK over gRPC. The integration tests of
+Apache Arrow drive each implementation from one harness. The Language Server
+Protocol uses JSON-RPC 2.0 over stdin and stdout. Smithy protocol tests are
+option C. Check each again at the time of the decision.
+
+#### A3. How does a change of the description reach the client repositories?
+
+| Option | Gives | Costs |
+| --- | --- | --- |
+| A. A bot pull request in each client repository for each server release | The release workflow of this repository generates each client from the released description and opens a pull request in each client repository. The CI of the client runs the suite against that server release. A person merges and releases. | A break shows in a client only at a release. Needs a credential that can open pull requests in the client repositories. |
+| B. A bot pull request for each change of the description on `main` | Early signal. | Many pull requests before 1.0. A client follows a description that no release shipped. |
+| C. Each client repository checks for a new release on a schedule | No credential in this repository. | A delay. Each repository needs the same scheduled workflow. |
+
+**Recommendation: A, plus a check before the merge in this repository.** A
+pull request in this repository that changes the description, the generator
+or a template runs the golden tests, builds the Go client and runs the suite
+for Go against the build of that pull request. So most breaks show before
+the merge, and the bot opens pull requests only for releases. The credential
+is a GitHub App with write access to the client repositories only. The owner
+creates it.
+
+Benchmark: the client repositories of Twilio and Stripe get commits of
+regenerated code from an automated process when the API description
+changes. Check this again at the time of the decision.
+
+#### A4. How do client versions relate to the description version?
+
+| Option | Gives | Costs |
+| --- | --- | --- |
+| A. The client version is the description version | One number. | A fix of the transport needs a new description version. A description patch with no change for one client still forces a release. |
+| B. The client takes the major and minor version of the description, and the patch version is its own | The pin of ADR 270 decision 9 (`>=0.12.0 <0.13.0`) maps to the client version. A transport fix is a client patch. The version is valid SemVer and PEP 440. | The patch numbers of two clients differ. The client must carry the exact description version in its metadata. |
+| C. The client version is the server version | It reads as ADR 264 decision 4 says. | A server release with no change of the API forces a client release. A client fix waits for a server release. |
+| D. A version of its own, with a compatibility table | Each client is free. | A table to keep. A user cannot see the API version in the client version. |
+
+**Recommendation: B.** Each client carries, in its metadata and in its user
+agent, the exact description version and the server release that it was
+generated from. That meets ADR 264 decision 4 (a version pinned to the
+server) and ADR 270 decision 9 (a pin on the description). The ADR that
+accepts this amendment states that reading. Before 1.0, each description
+minor version can break a client, so the client minor version follows it.
+
+Benchmark: the major version of the Kubernetes Python client follows the
+minor version of Kubernetes (client 31 for Kubernetes 1.31). go-github has its own major version and
+gives the API version in its README. Check both again at the time of the
+decision.
+
+### Changes to the description before the first client
+
+From the trial (section 6 of the trial notes). The first slice already gives
+a stable `operationId`, `tags`, a valid `info.version`, `ErrorResponse`, the
+shared parameters, the `ETag` header and `security: []` on public routes.
+Still to do:
+
+- Typed bodies (issue 1189). Without them, every client has untyped bodies.
+- Open enums: each enum that can grow (a tool, a state, a status) is an open
+  enum of the subset.
+- One spelling for IDs in field names (`unitId`, not `unitID`).
+
+### Follow-up work for the amendment
+
+Each item is a separate issue with the label `needs-triage`:
+
+- The conformance suite: the harness, the proxy, the case bodies and the Go
+  adapter. This is the first slice, as the owner said.
+- The parser and the model, with golden files of the model.
+- The Go template set and `client-go`.
+- The Python template set, both transports and `client-python`.
+- The TypeScript template set and `client-node`.
+- The bot pull requests and the release steps (question A3).
+- An ADR that records decisions O1 to O7 and the answers to A1 to A4.
 
 ## Follow-up work
 
