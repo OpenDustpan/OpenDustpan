@@ -368,20 +368,27 @@ At start, the server compares its setting with the stored state.
 When they agree, the server starts normally.
 
 When they differ, the server enters maintenance mode and changes nothing yet.
-A person approves the change:
-
-```sh
-opendustpan audit-chain status --server https://dustpan.example
-opendustpan audit-chain approve --server https://dustpan.example
-```
-
-The commands call `GET` and `POST` `/api/server/audit/chain`, the same routes as the console.
+A person approves the change in the console.
+The console calls `POST /api/server/audit/chain`.
 The approval sets the chain to the setting of the server that receives it.
+
+Sign in to the console before maintenance mode starts.
+Maintenance mode starts when the server restarts with a different `--audit-chain`, and it refuses a new sign-in.
+So sign in first, restart the server with the new setting, and approve the change before the sign-in is older than the token freshness window of the session policy (15 minutes by default).
+See [Console sign-in](console-sign-in.md) for the window.
+
+The approval needs a console session with a recent sign-in, in both directions.
+An access token answers 403 with the error code `mfa.fresh-step-required`.
+A session with an old sign-in answers 401 with the same error code.
+The CLI cannot give a fresh authentication.
+`opendustpan audit-chain approve` sends no request.
+It prints where to approve and ends with an error.
+
+`opendustpan audit-chain status --server https://dustpan.example` shows the state of the chain and whether a change waits.
 
 - Turning the chain on needs the action `server:set-audit-chain` (operator family).
 - Turning the chain off needs `server:set-audit-chain` (operator family) and `server:disable-audit-chain` (administration family).
   A service principal cannot approve it: a person must approve turning the chain off.
-  It also needs a fresh MFA step when the server asks for MFA.
 
 The approval writes an entry in `@server` with the kind `change`, the action `server:set-audit-chain` and the value path `/audit/chain/on` or `/audit/chain/off`.
 Then the server migrates the log in the background.
@@ -401,7 +408,7 @@ Then the server stores the new state, waits 4 seconds so every instance can see 
 A migration that stops before it ends keeps the old state, so the change waits for an approval again.
 A restart with the stored setting cancels a waiting change.
 The installation then leaves maintenance mode.
-Run `opendustpan audit-chain approve --server <url>` to approve a waiting change.
+Approve a waiting change in the console.
 
 While a change waits or migrates, every instance answers 503 on most routes.
 The probes, GET of the metrics route, GET and POST of the audit chain route, the maintenance routes and the console files stay available.

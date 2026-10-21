@@ -303,9 +303,13 @@ The same rule holds for these changes:
 - the roles (`POST` and `PATCH`)
 - the grants on the installation, on a namespace, on a collection and on a
   principal (`POST`)
-- the approval of a change of the audit chain
+- the members of a group (`POST` and `DELETE`) and the delete of a group,
+  because a grant to a group applies to each member
+- the approval of a change of the audit chain. Sign in before the server
+  restarts with the new setting: maintenance mode refuses a new sign-in
 - the IP allowlist of a namespace (`PUT` and `DELETE`)
-- the reveal of a secret value in the console
+- the reveal of a secret value in the console, for a Pulumi stack, for an
+  OpenTofu state version and for a profile (`showSecrets=true`)
 
 An access token answers 403 with `mfa.fresh-step-required`. A session with an
 old sign-in answers 401 with `reauthenticate` and the same error code. A

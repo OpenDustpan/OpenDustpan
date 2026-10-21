@@ -42,7 +42,7 @@ the same list.
 | `--max-secret-batch-bytes` | `DUSTPAN_MAX_SECRET_BATCH_BYTES` | `max-secret-batch-bytes` | `0`: 32 MiB, the largest batch of Pulumi secrets |
 | `--max-state-bytes` | `DUSTPAN_MAX_STATE_BYTES` | `max-state-bytes` | `0`: 32 MiB, the largest OpenTofu state |
 | `--max-body-bytes-in-flight` | `DUSTPAN_MAX_BODY_BYTES_IN_FLIGHT` | `max-body-bytes-in-flight` | `0`: 128 MiB of large request bodies of the Pulumi CLI and OpenTofu at the same time. The budget covers OpenTofu state uploads as well. An upload whose OpenTofu state has a large outputs document asks for more budget as the document grows. One encrypted state with 16 MiB of outputs takes about 72 MiB of the budget. Installations with large outputs should raise this value. An upload that can never fit answers 413. |
-| `--audit-chain` | `DUSTPAN_AUDIT_CHAIN` | `audit-chain` | `on`. `off` turns the chain off. A change starts the server in maintenance mode until a person runs `opendustpan audit-chain approve` |
+| `--audit-chain` | `DUSTPAN_AUDIT_CHAIN` | `audit-chain` | `on`. `off` turns the chain off. A change starts the server in maintenance mode until a person approves it in the console |
 | `--audit-checkpoints` | `DUSTPAN_AUDIT_CHECKPOINTS` | `audit-checkpoints` | (none: off). Set `true` to sign checkpoints. Needs `--audit-chain=on` and a signing key file |
 | `--audit-signing-key-file` | `DUSTPAN_AUDIT_SIGNING_KEY_FILE` | `audit-signing-key-file` | (none) |
 | `--audit-verify-keys-file` | `DUSTPAN_AUDIT_VERIFY_KEYS_FILE` | `audit-verify-keys-file` | (none) |
@@ -220,7 +220,7 @@ Each client command takes only the flags in its row:
 | `opendustpan restore --backup <id>` | `--server`, `--ca-file`, `--backup`, `--check-only`, `--force` |
 | `opendustpan upgrade check` | `--server`, `--ca-file` |
 | `opendustpan audit-chain status` | `--server`, `--ca-file` |
-| `opendustpan audit-chain approve` | `--server`, `--ca-file` |
+| `opendustpan audit-chain approve` | (none) |
 | `opendustpan health` | `--listen`, `--tls-cert` |
 
 `opendustpan health` reads `--listen`, `--tls-cert` and their variables, as

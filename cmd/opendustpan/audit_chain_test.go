@@ -2,11 +2,14 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync/atomic"
 	"testing"
+
+	"opendustpan.org/opendustpan/internal/cli/client"
 )
 
 // auditChainFake answers the audit chain route with a waiting change to
@@ -101,30 +104,32 @@ func TestAuditChainStatusCommand(t *testing.T) {
 	}
 }
 
-//nolint:paralleltest // The command reads process environment, so this test sets it and runs in order.
-func TestAuditChainApproveCommand(t *testing.T) {
+// TestAuditChainApproveCommandPointsToTheConsole proves the approve command
+// sends no request, prints the console path, and fails: the CLI cannot give
+// the fresh authentication that the approval needs.
+func TestAuditChainApproveCommandPointsToTheConsole(t *testing.T) {
 	fake := newAuditChainFake(t, "test-token", http.StatusAccepted)
+	t.Setenv(adminTokenEnvVar, "test-token")
 
-	out, err := runAuditChain(t, "approve", fake.server.URL)
-	if err != nil {
-		t.Fatalf("approve: %v", err)
+	var stdout, stderr bytes.Buffer
+
+	err := run(t.Context(), []string{"audit-chain", "approve", "--server", fake.server.URL}, &stdout, &stderr)
+	if !errors.Is(err, client.ErrAuditChainApproveInConsole) {
+		t.Fatalf("approve: error = %v, want ErrAuditChainApproveInConsole", err)
 	}
 
-	if !strings.Contains(out, "approved the change of the audit chain to off") {
-		t.Fatalf("approve output = %q, want the approved change", out)
+	const want = "Approve the audit chain change in the console. The CLI cannot give a fresh authentication.\n"
+	if stderr.String() != want || stdout.Len() != 0 {
+		t.Fatalf(
+			"approve printed stdout %q and stderr %q, want only %q on stderr",
+			stdout.String(),
+			stderr.String(),
+			want,
+		)
 	}
 
-	if fake.posts.Load() != 1 {
-		t.Fatalf("POST requests = %d, want 1", fake.posts.Load())
-	}
-}
-
-//nolint:paralleltest // The command reads process environment, so this test sets it and runs in order.
-func TestAuditChainApproveCommandReportsARefusal(t *testing.T) {
-	fake := newAuditChainFake(t, "test-token", http.StatusConflict)
-
-	_, err := runAuditChain(t, "approve", fake.server.URL)
-	if err == nil || !strings.Contains(err.Error(), "no audit chain change waits") {
-		t.Fatalf("approve with nothing waiting: %v, want the server message", err)
+	if fake.posts.Load() != 0 || fake.gets.Load() != 0 || fake.refused.Load() != 0 {
+		t.Fatalf("requests: %d GET, %d POST, %d refused; want none", fake.gets.Load(), fake.posts.Load(),
+			fake.refused.Load())
 	}
 }
