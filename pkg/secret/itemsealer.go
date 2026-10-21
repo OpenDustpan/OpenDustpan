@@ -165,8 +165,8 @@ func (s *ItemKeySealer) OpenContent(
 
 // openItemKey returns the raw item key of ref. The caller clears it. It reads
 // the record first and returns ErrShredded for a shredded record and
-// ErrKeyNotFound for no record or no blob. A key that does not unwrap for ref
-// gives ErrDecrypt.
+// ErrKeyNotFound for no record or no blob. It reads only the blob version that
+// the record names. A key that does not unwrap for ref gives ErrDecrypt.
 func (s *ItemKeySealer) openItemKey(ctx context.Context, ref ItemRef) ([]byte, error) {
 	if err := checkRef(ref); err != nil {
 		return nil, err
@@ -198,16 +198,14 @@ func (s *ItemKeySealer) openItemKey(ctx context.Context, ref ItemRef) ([]byte, e
 		return nil, fmt.Errorf("item key of %s: %w", ref, err)
 	}
 
-	keys, err := s.blobs.Versions(ctx, ns.ID, rec.ID)
+	// The record names the blob version. A blob of another version, for
+	// example a stray or planted later version, is never read.
+	blobKey, err := s.blobs.Key(ns.ID, rec.ID, rec.Blob.Version)
 	if err != nil {
-		return nil, fmt.Errorf("item key blobs of %s: %w", ref, err)
+		return nil, fmt.Errorf("item key blob of %s: %w", ref, err)
 	}
 
-	if len(keys) == 0 {
-		return nil, fmt.Errorf("item key blob of %s: %w", ref, ErrKeyNotFound)
-	}
-
-	wrapped, err := s.blobs.Get(ctx, ns.ID, keys[len(keys)-1])
+	wrapped, err := s.blobs.Get(ctx, ns.ID, blobKey)
 	if err != nil {
 		return nil, fmt.Errorf("item key blob of %s: %w", ref, err)
 	}

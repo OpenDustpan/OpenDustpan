@@ -604,6 +604,18 @@ func logOfRow(j *job.Job, row *LogRow) *job.LogRef {
 	return nil
 }
 
+// CheckChunkRow returns an error that wraps ErrDamaged unless a stored chunk
+// row of the log logID has the rules of a reserve: a number below
+// job.MaxLogChunks, a size from 0 to job.MaxLogChunk and a SHA-256. A restore
+// uses it on the rows of a staged backup.
+func CheckChunkRow(logID string, seq, size int64, sha string) error {
+	if seq < 0 || seq >= job.MaxLogChunks || size < 0 || size > job.MaxLogChunk || !job.ValidHash(sha) {
+		return fmt.Errorf("%w: chunk %d of log %s is not valid", ErrDamaged, seq, logID)
+	}
+
+	return nil
+}
+
 // CheckPlanBody returns an error that wraps ErrDamaged unless body is the JSON
 // of a plan with the ID id and valid parts. A restore uses it on the rows of
 // a staged backup, so that a row that the server would not have written never
@@ -615,16 +627,19 @@ func CheckPlanBody(id, body string) error {
 	}
 
 	p := decodePlan(&b)
-	if p == nil || p.ID != id || len(p.Parts) > 2 {
+	if p == nil || p.ID != id {
 		return fmt.Errorf("%w: plan %s does not match its row", ErrDamaged, id)
 	}
 
-	for i := range p.Parts {
-		part := &p.Parts[i]
-		if (part.Kind != job.OutputPlanDisplay && part.Kind != job.OutputPlanApply) || part.Size < 0 ||
-			!job.ValidHash(part.SHA256) {
-			return fmt.Errorf("%w: plan %s has a part that is not valid", ErrDamaged, id)
-		}
+	// A reserved plan has no part yet. A filled plan has the parts that PutPlan
+	// accepts, with the same rules: no kind twice and no part above the size
+	// limit.
+	if len(p.Parts) == 0 {
+		return nil
+	}
+
+	if err := job.CheckPlanParts(p.Parts); err != nil {
+		return fmt.Errorf("%w: plan %s has parts that are not valid: %w", ErrDamaged, id, err)
 	}
 
 	return nil

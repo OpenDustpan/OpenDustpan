@@ -8012,6 +8012,7 @@ type InsertJobLogParams struct {
 	CreatedAtMs int64
 }
 
+// The caller checks the fence and the claim in the same transaction.
 func (q *Queries) InsertJobLog(ctx context.Context, arg InsertJobLogParams) error {
 	_, err := q.db.ExecContext(ctx, insertJobLog,
 		arg.ID,

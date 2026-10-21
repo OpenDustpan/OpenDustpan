@@ -5,8 +5,11 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"opendustpan.org/opendustpan/pkg/backup"
+	"opendustpan.org/opendustpan/pkg/job"
+	"opendustpan.org/opendustpan/pkg/namespace"
 )
 
 // planBodyJSON returns the stored body of a plan with the given parts.
@@ -38,6 +41,10 @@ func stagedPlanCases() []struct{ name, body string } {
 			planBodyJSON("pln-1", part("plan-display", strings.ToUpper(artifactHash), 1)),
 		},
 		{"a part with a negative size", planBodyJSON("pln-1", part("plan-display", artifactHash, -1))},
+		{"a part above the size limit", planBodyJSON("pln-1", part("plan-display", artifactHash, job.MaxPlanPart+1))},
+		{"a plan with one kind twice", planBodyJSON("pln-1", `[`+
+			`{"kind":"plan-display","size":1,"sha256":"`+artifactHash+`","secret":false},`+
+			`{"kind":"plan-display","size":1,"sha256":"`+artifactHash+`","secret":false}]`)},
 	}
 }
 
@@ -128,5 +135,137 @@ VALUES ('jlv-1', 0, 'ns-gone', 'x', 1, 0)`,
 				t.Fatalf("check = %v, want ErrCorrupt", err)
 			}
 		})
+	}
+}
+
+// TestStagedChecksRefuseHostileSchema sends schema names that are not valid
+// identifiers directly to the staged-row checks. Each check must refuse the
+// name before it builds a query.
+func TestStagedChecksRefuseHostileSchema(t *testing.T) {
+	t.Parallel()
+
+	s := openForSavedViews(t)
+
+	checks := []struct {
+		check func(s *Store, staging string) error
+		name  string
+	}{
+		{name: "item keys", check: func(s *Store, staging string) error {
+			return checkStagedItemKeys(t.Context(), s.pool, staging)
+		}},
+		{name: "job artifacts", check: func(s *Store, staging string) error {
+			return checkStagedJobArtifacts(t.Context(), s.pool, staging)
+		}},
+	}
+
+	names := []string{
+		"",
+		`public"; DROP TABLE namespaces; --`,
+		`public".namespaces --`,
+		"Public",
+		"public.namespaces",
+		"1schema",
+		"schema name",
+		"schema\x00",
+		strings.Repeat("a", 64),
+	}
+
+	for _, c := range checks {
+		for _, name := range names {
+			t.Run(c.name+"/"+fmt.Sprintf("%q", name), func(t *testing.T) {
+				t.Parallel()
+
+				if err := c.check(s, name); !errors.Is(err, backup.ErrCorrupt) {
+					t.Errorf("check(%q) = %v, want ErrCorrupt", name, err)
+				}
+			})
+		}
+	}
+}
+
+// TestPgIdentQuotes proves that a quote in an identifier stays inside it.
+func TestPgIdentQuotes(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct{ in, want string }{
+		{in: "item_keys", want: `"item_keys"`},
+		{in: `a"b`, want: `"a""b"`},
+		{in: `x"; DROP TABLE namespaces; --`, want: `"x""; DROP TABLE namespaces; --"`},
+	}
+
+	for _, tc := range cases {
+		if got := pgIdent(tc.in); got != tc.want {
+			t.Errorf("pgIdent(%q) = %s, want %s", tc.in, got, tc.want)
+		}
+	}
+}
+
+// TestCheckStagedLogChunks proves the restore check of the log chunk rows: a
+// chunk row must name a log version of its own namespace and have the rules
+// of a reserve.
+func TestCheckStagedLogChunks(t *testing.T) {
+	t.Parallel()
+
+	chunk := func(logID, ns string, seq, size int64, sha string) string {
+		return fmt.Sprintf(`INSERT INTO job_log_chunks (log_id, seq, namespace_id, sha256, size, confirmed)
+VALUES ('%s', %d, (SELECT id FROM namespaces WHERE name = '%s'), '%s', %d, 1)`, logID, seq, ns, sha, size)
+	}
+
+	cases := []struct {
+		name, insert string
+		ok           bool
+	}{
+		{name: "a chunk that the store wrote", insert: chunk("jlv-1", "acme", 0, 1, artifactHash), ok: true},
+		{name: "a chunk at the limits", insert: chunk("jlv-1", "acme", job.MaxLogChunks-1, job.MaxLogChunk, artifactHash), ok: true},
+		{name: "a hash that is not a SHA-256", insert: chunk("jlv-1", "acme", 0, 1, "xyz")},
+		{name: "an upper case hash", insert: chunk("jlv-1", "acme", 0, 1, strings.ToUpper(artifactHash))},
+		{name: "a size above the chunk limit", insert: chunk("jlv-1", "acme", 0, job.MaxLogChunk+1, artifactHash)},
+		{name: "a number at the chunk count limit", insert: chunk("jlv-1", "acme", job.MaxLogChunks, 1, artifactHash)},
+		{name: "a log version that does not exist", insert: chunk("jlv-gone", "acme", 0, 1, artifactHash)},
+		{name: "a log version of another namespace", insert: chunk("jlv-1", "other", 0, 1, artifactHash)},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			s := openForSavedViews(t)
+			seedItemKey(t, s)
+			createOtherNamespace(t, s)
+			mustExec(t, s, `INSERT INTO job_logs (id, namespace_id, job_id, phase, step, token, created_at_ms)
+VALUES ('jlv-1', (SELECT id FROM namespaces WHERE name = 'acme'), 'job-1', 0, 'plan', 1, 1)`)
+			mustExec(t, s, tc.insert)
+
+			err := checkStagedJobArtifacts(t.Context(), s.pool, currentSchema(t, s))
+			if tc.ok && err != nil {
+				t.Fatalf("check = %v, want nil", err)
+			}
+
+			if !tc.ok && !errors.Is(err, backup.ErrCorrupt) {
+				t.Fatalf("check = %v, want ErrCorrupt", err)
+			}
+		})
+	}
+}
+
+// createOtherNamespace creates the namespace "other".
+func createOtherNamespace(t *testing.T, s *Store) {
+	t.Helper()
+
+	ns := namespace.Namespace{
+		ID: namespace.NewID(), CreatedAt: time.UnixMilli(1_700_000_000_000).UTC(), Name: "other", HomeRegion: "eu-west",
+		FailoverVersion: 1, Overrides: namespace.Overrides{Forced: false, Unlocked: false},
+	}
+	if err := s.CreateNamespace(t.Context(), ns); err != nil {
+		t.Fatalf("create namespace: %v", err)
+	}
+}
+
+// mustExec runs one statement on the store.
+func mustExec(t *testing.T, s *Store, stmt string) {
+	t.Helper()
+
+	if _, err := s.pool.Exec(t.Context(), stmt); err != nil {
+		t.Fatalf("%s: %v", stmt, err)
 	}
 }

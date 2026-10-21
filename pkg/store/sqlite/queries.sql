@@ -3817,6 +3817,7 @@ JOIN namespaces AS n ON n.id = p.namespace_id
 WHERE n.name = sqlc.arg(namespace) AND p.id = sqlc.arg(id);
 
 -- name: InsertJobLog :exec
+-- The caller checks the fence and the claim in the same transaction.
 INSERT INTO job_logs (id, namespace_id, job_id, phase, step, token, created_at_ms)
 VALUES (
     sqlc.arg(id), (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace)), sqlc.arg(job_id),

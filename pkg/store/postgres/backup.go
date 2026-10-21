@@ -762,7 +762,7 @@ func (s *Store) liveColumns(ctx context.Context, table string) ([]string, error)
 // pgIdent quotes one identifier. Table and column names come from the
 // constant spec above, never from the network.
 func pgIdent(name string) string {
-	return `"` + name + `"`
+	return pgx.Identifier{name}.Sanitize()
 }
 
 // inBackupTx runs fn in one transaction with opts, committing on success and
