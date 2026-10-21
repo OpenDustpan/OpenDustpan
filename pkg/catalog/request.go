@@ -244,6 +244,7 @@ func StartRequestFor(req *Request, rev *Revision, v *Version, reason string) (jo
 		IdempotencyKey: rev.Key(),
 		Reason:         reason,
 		BreakGlass:     rev.BreakGlass,
+		Trigger:        nil,
 		Channel:        audit.ChannelAPI,
 		SourceIP:       "",
 		UserAgent:      "",
