@@ -198,10 +198,15 @@ func gitHostOptions(tb testing.TB, st serverStore) []dustpan.Option {
 		return nil
 	}
 
-	if fake, ok := gitHostFakes.Load(tb); ok && fake != nil {
+	v, found := gitHostFakes.Load(tb)
+	if !found {
+		return opts
+	}
+
+	if fake := fakeOf(v); fake != nil {
 		opts = append(opts,
 			dustpan.WithGitHostAllowedRanges(netip.MustParsePrefix("127.0.0.0/8")),
-			dustpan.WithGitHostRootCAs(fakeOf(fake).certPool()),
+			dustpan.WithGitHostRootCAs(fake.certPool()),
 		)
 	}
 
