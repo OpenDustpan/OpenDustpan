@@ -68,6 +68,19 @@ type Route struct {
 	// Reads lists the read actions that the route needs on the unit of the
 	// job.
 	Reads []identity.Action
+	// Writes lists the actions that the job service checks on the unit that
+	// the request body names, before it does anything. The wrapper cannot
+	// check them: the body names the unit, and the action depends on the
+	// operation and the executor. The service checks them for its caller,
+	// and the handler writes the audit entry of a refusal.
+	Writes []identity.Action
+	// IdempotencyKey says that the route takes the Idempotency-Key header.
+	// A request with the header to a route that does not take it answers
+	// 400, so the server never ignores a key without an error.
+	IdempotencyKey bool
+	// ETag says that the answer holds the ETag header: the version of the
+	// job, in quotes.
+	ETag bool
 	// Resolve finds the object of the request.
 	Resolve TargetResolver
 	// Serve handles the request after the wrapper has enforced the row.
@@ -78,14 +91,31 @@ type Route struct {
 // patterns that NewHandler registers and of what each pattern enforces. The
 // path holds the namespace and the job ID, and no tool.
 func (h *Handler) buildRoutes() []Route {
-	return []Route{
+	routes := []Route{
 		{
-			Method: http.MethodGet, Path: "/api/dustpan/v1/namespaces/{namespace}/jobs/{job_id}",
-			Scope: ScopeAuthorized, Reads: []identity.Action{identity.ActionJobRead},
-			Resolve: h.resolveJob, Serve: h.getJob,
+			Method: http.MethodGet, Path: jobPath,
+			Scope: ScopeAuthorized, Reads: []identity.Action{identity.ActionJobRead}, Writes: nil,
+			IdempotencyKey: false, ETag: true, Resolve: h.resolveJob, Serve: h.getJob,
 		},
 	}
+
+	// Without a job service the server starts no job, so it serves no route
+	// that would only answer an error.
+	if h.starter != nil {
+		routes = append(routes, Route{
+			Method: http.MethodPost, Path: jobsPath, Scope: ScopeAuthorized, Reads: nil,
+			Writes:         []identity.Action{identity.ActionUnitRunPlan},
+			IdempotencyKey: true, ETag: true, Resolve: h.resolveNamespace, Serve: h.startJob,
+		})
+	}
+
+	return routes
 }
+
+const (
+	jobsPath = "/api/dustpan/v1/namespaces/{namespace}/jobs"
+	jobPath  = jobsPath + "/{job_id}"
+)
 
 // Routes returns a copy of the route table. The action lists are copied too,
 // so callers cannot mutate handler state through the result.
@@ -94,6 +124,7 @@ func (h *Handler) Routes() []Route {
 	for i, route := range h.routes {
 		out[i] = route
 		out[i].Reads = append([]identity.Action(nil), route.Reads...)
+		out[i].Writes = append([]identity.Action(nil), route.Writes...)
 	}
 
 	return out
@@ -133,6 +164,28 @@ func (m *patternMux) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // Patterns returns a copy of the recorded patterns.
 func (m *patternMux) Patterns() []string {
 	return append([]string(nil), m.patterns...)
+}
+
+// resolveNamespace finds the namespace of the path. The object of the request
+// is the namespace until the handler finds the unit of the body.
+func (h *Handler) resolveNamespace(r *http.Request) (target, error) {
+	name, err := namespace.ParseName(r.PathValue("namespace"))
+	if err != nil {
+		return target{}, errNotFound
+	}
+
+	ns, err := h.namespaces.Get(r.Context(), name)
+	if errors.Is(err, namespace.ErrNotFound) {
+		return target{}, errNotFound
+	}
+
+	if err != nil {
+		return target{}, fmt.Errorf("get namespace: %w", err)
+	}
+
+	var noJob job.Job
+
+	return target{ns: ns, job: noJob, obj: identity.NamespaceObject(ns.Name)}, nil
 }
 
 // resolveJob finds the namespace of the path and the job of the path in it.

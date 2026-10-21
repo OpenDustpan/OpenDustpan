@@ -288,11 +288,23 @@ func classifySink(err error) problem {
 			status: http.StatusTooManyRequests, code: "sink.test-rate-limited",
 			message: "too many tests of this notification destination or namespace: try again later",
 		}
+	case errors.Is(err, sinks.ErrPlatformHost):
+		return problem{status: http.StatusBadRequest, code: "sink.platform-host", message: platformHostText(err)}
 	case errors.Is(err, notify.ErrInvalid):
 		return problem{status: http.StatusBadRequest, code: "sink.invalid", message: invalidText(err)}
 	default:
 		return problem{status: http.StatusInternalServerError, code: "", message: "internal error"}
 	}
+}
+
+// platformHostText returns the host rule of the platform. The rule is a fixed
+// sentence and never holds the host or the URL of the request.
+func platformHostText(err error) string {
+	if rule := sinks.PlatformHostRule(err); rule != "" {
+		return rule
+	}
+
+	return "The URL is not a webhook URL of this platform: copy the incoming webhook URL from the platform."
 }
 
 // invalidText returns the text for a sink that the service refused. A URL

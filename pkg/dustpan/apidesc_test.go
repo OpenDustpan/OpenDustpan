@@ -565,11 +565,13 @@ func hostileOperation(change func(o *apidesc.Operation)) apidesc.Operation {
 		Actions: []string{
 			"thing:read",
 		},
+		ActionObjects:   map[string]string{"thing:read": apidesc.KindNamespace},
 		Public:          false,
 		IdempotencyKey:  false,
 		IfMatch:         false,
 		IfMatchRequired: false,
 		ETag:            false,
+		Bodies:          &apidesc.Bodies{Request: apidesc.NoBody, Response: apidesc.NoBody},
 	}
 	change(&o)
 

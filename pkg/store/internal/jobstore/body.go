@@ -179,12 +179,14 @@ type jobBody struct {
 	Reason       string            `json:"reason"`
 	Phases       []phaseBody       `json:"phases"`
 	StartedBy    string            `json:"startedBy"`
+	Source       string            `json:"source"`
 	Agent        string            `json:"agent"`
 	AgentMode    string            `json:"agentMode"`
 	BreakGlass   *breakGlassBody   `json:"breakGlass"`
 	Delivery     *deliveryBody     `json:"delivery"`
 	Closed       *stateVersionBody `json:"closed"`
 	Verification string            `json:"verification"`
+	RequestHash  string            `json:"requestHash"`
 }
 
 func encodeUnit(o identity.Object) unitBody {
@@ -446,9 +448,18 @@ func decodeStateVersion(b *stateVersionBody) (*job.StateVersion, error) {
 // encodeBody returns the JSON body of j.
 func encodeBody(j *job.Job) (string, error) {
 	b := jobBody{
-		Spec: encodeSpec(&j.Spec), Reason: j.Reason, Phases: nil, StartedBy: j.StartedBy, Agent: j.Agent,
-		AgentMode: string(j.AgentMode), BreakGlass: nil, Delivery: nil, Closed: encodeStateVersion(j.Closed),
+		Spec:         encodeSpec(&j.Spec),
+		Reason:       j.Reason,
+		Phases:       nil,
+		StartedBy:    j.StartedBy,
+		Source:       string(j.Source),
+		Agent:        j.Agent,
+		AgentMode:    string(j.AgentMode),
+		BreakGlass:   nil,
+		Delivery:     nil,
+		Closed:       encodeStateVersion(j.Closed),
 		Verification: string(j.Verification),
+		RequestHash:  j.RequestHash,
 	}
 
 	for i := range j.Phases {
@@ -495,7 +506,9 @@ func decodeBody(body string, j *job.Job) error {
 	j.Spec, j.Reason, j.StartedBy, j.Agent, j.AgentMode = spec, b.Reason, b.StartedBy, b.Agent, job.AgentMode(
 		b.AgentMode,
 	)
+	j.Source = job.SourceKind(b.Source)
 	j.Closed, j.Verification = closed, job.Verification(b.Verification)
+	j.RequestHash = b.RequestHash
 	j.Phases = make([]job.Phase, len(b.Phases))
 
 	for i := range b.Phases {

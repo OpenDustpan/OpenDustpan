@@ -143,7 +143,7 @@ func (s *Service) Create(ctx context.Context, c *Caller, ns namespace.Name, in N
 	// the body. This check stays so that a refused sink costs no read of the
 	// namespace and no sealing, and so that a store that skips its check cannot
 	// take an invalid sink from this service.
-	if err = sink.Validate(); err != nil {
+	if err = sink.ValidateWrite(); err != nil {
 		return Created{}, fmt.Errorf("create sink: %w", err)
 	}
 
@@ -221,7 +221,7 @@ func (s *Service) Replace(
 	// Defense in depth: the store validates the sink again. This check stays so
 	// that a refused sink costs no sealing, and so that a store that skips its
 	// check cannot take an invalid sink from this service.
-	if err = next.Validate(); err != nil {
+	if err = next.ValidateWrite(); err != nil {
 		return notify.Sink{}, fmt.Errorf("replace sink: %w", err)
 	}
 
@@ -351,7 +351,7 @@ func (s *Service) withNewURL(
 // and its refs. A chat sink has its URL. A webhook sink has its URL, then a
 // new signing key. An email sink has none. The caller owns the bytes of the
 // values.
-func (*Service) newSecrets(sink *notify.Sink, in New) ([]notify.SinkSecret, error) {
+func (s *Service) newSecrets(sink *notify.Sink, in New) ([]notify.SinkSecret, error) {
 	// Each kind takes the fields it needs and refuses the others, so a field
 	// that a kind ignores never hides a mistake of the caller.
 	if sink.Kind != notify.SinkChat && in.URL != "" {
@@ -384,7 +384,15 @@ func (*Service) newSecrets(sink *notify.Sink, in New) ([]notify.SinkSecret, erro
 	case notify.SinkChat:
 		host, err := notify.ChatHost(in.URL)
 		if err != nil {
-			return nil, fmt.Errorf("%w: %w", notify.ErrInvalid, err)
+			if !errors.Is(err, notify.ErrInvalid) {
+				err = fmt.Errorf("%w: %w", notify.ErrInvalid, err)
+			}
+
+			return nil, err
+		}
+
+		if hostErr := s.checkPlatformHost(*sink, host); hostErr != nil {
+			return nil, hostErr
 		}
 
 		sink.Target = host
@@ -396,6 +404,60 @@ func (*Service) newSecrets(sink *notify.Sink, in New) ([]notify.SinkSecret, erro
 	default:
 		return nil, fmt.Errorf("%w: unknown sink kind %q", notify.ErrInvalid, sink.Kind)
 	}
+}
+
+// ErrPlatformHost reports a chat URL whose host the platform of the sink does
+// not use for its webhooks. It also matches notify.ErrInvalid.
+var ErrPlatformHost = errors.New("the URL host is not a webhook host of the platform")
+
+// platformHostError is the error of a refused host. It matches
+// notify.ErrInvalid and ErrPlatformHost through Is, so that ErrInvalid is in
+// the chain and in the text only once.
+type platformHostError struct{ rule string }
+
+func (e platformHostError) Error() string {
+	return notify.ErrInvalid.Error() + ": " + ErrPlatformHost.Error()
+}
+
+func (platformHostError) Is(target error) bool {
+	return target == ErrPlatformHost || target == notify.ErrInvalid
+}
+
+// PlatformHostRule returns the host rule that err carries when err matches
+// ErrPlatformHost, and an empty string otherwise. The rule is a fixed
+// sentence of the platform and never holds the host of the URL.
+func PlatformHostRule(err error) string {
+	if pe, ok := errors.AsType[platformHostError](err); ok {
+		return pe.rule
+	}
+
+	return ""
+}
+
+// checkPlatformHost returns ErrPlatformHost, which matches notify.ErrInvalid, when the sender of chat sinks
+// says that host is not a webhook host of the platform of sink, so a person
+// who pastes the wrong URL learns it when the sink is saved and not at the
+// first message. A sender that has no such check, or no adapter for the
+// platform, accepts the host. Defense in depth: the sender checks the host
+// again before each send.
+func (s *Service) checkPlatformHost(sink notify.Sink, host string) error {
+	checker, ok := s.senders[notify.SinkChat].(interface {
+		CheckHost(platform, host string) error
+	})
+	if !ok {
+		return nil
+	}
+
+	if err := checker.CheckHost(sink.Platform, host); err != nil {
+		var rule interface{ HostRule() string }
+		if !errors.As(err, &rule) {
+			return platformHostError{rule: ""}
+		}
+
+		return platformHostError{rule: rule.HostRule()}
+	}
+
+	return nil
 }
 
 // checkPort returns notify.ErrInvalid when the sink would send to a port that

@@ -96,7 +96,7 @@ func input(t *testing.T, executor job.ExecutorKind, op job.Operation) job.Decisi
 			TemporaryAdministrator: false, TemporaryExpiresAt: zeroTime(), Subject: "bo", DisplayName: "Bo",
 			Admin: false, TokenID: "", TokenExpiresAt: zeroTime(), Kind: "", Credential: "", JobID: "",
 		},
-		Agent: "", AgentMode: "", Keys: nil,
+		Agent: "", AgentMode: "", Source: job.SourceAPI, Keys: nil,
 		Spec: job.Spec{
 			Unit: unit(t), Operation: op, Executor: executor, Location: job.Location{
 				Connection: "", Repository: "", Ref: "", Directory: "", Revision: "",

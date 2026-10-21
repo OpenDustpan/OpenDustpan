@@ -786,6 +786,7 @@ func coverageJobRoutes(tb testing.TB, namespaces *namespace.Service) []RouteRef 
 	handler, err := jobsapi.NewHandler(jobsapi.Config{
 		Namespaces:     namespaces,
 		Jobs:           struct{ job.Store }{nil},
+		Starter:        struct{ job.Starter }{nil},
 		Authenticator:  coverageAuthenticator{},
 		Authorizer:     coverageAuthorizer{},
 		Audit:          nil,
@@ -2419,17 +2420,24 @@ func manualLockAllowEntries() []AllowEntry {
 	}
 }
 
-// jobAllowEntries covers the route that reads a job. No CLI reads a job: the
-// console and the clients of the API do. The harness steps of TestJobsAPI
-// read a job, a job that the caller may not read and a job that does not
-// exist through the API.
+// jobAllowEntries covers the routes that start and read a job. No CLI calls
+// them: the console and the clients of the API do. The harness steps of
+// TestJobsAPI start a plan job, start it again with the same key, refuse
+// starts that are not valid, and read a job, a job that the caller may not
+// read and a job that does not exist through the API.
 func jobAllowEntries() []AllowEntry {
-	return []AllowEntry{{
-		Method: http.MethodGet, Path: "/api/dustpan/v1/namespaces/{namespace}/jobs/{job_id}",
-		CoveringTest: "TestJobsAPI",
-		Reason: "Console and client route: no CLI reads a job. The harness steps of TestJobsAPI read a job " +
-			"through the API.",
-	}}
+	const (
+		test = "TestJobsAPI"
+		why  = "Console and client route: no CLI calls it. The harness steps of TestJobsAPI call it through the API."
+	)
+
+	return []AllowEntry{
+		{Method: http.MethodPost, Path: "/api/dustpan/v1/namespaces/{namespace}/jobs", CoveringTest: test, Reason: why},
+		{
+			Method: http.MethodGet, Path: "/api/dustpan/v1/namespaces/{namespace}/jobs/{job_id}",
+			CoveringTest: test, Reason: why,
+		},
+	}
 }
 
 // savedViewAllowEntries covers the routes of the saved views. No CLI calls

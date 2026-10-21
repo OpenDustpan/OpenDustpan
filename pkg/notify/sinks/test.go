@@ -63,7 +63,7 @@ func (s *Service) SendTest(ctx context.Context, c *Caller, ns namespace.Name, id
 	}
 
 	sender, ok := s.senders[sink.Kind]
-	if !ok {
+	if !ok || !serves(sender, sink) {
 		return TestResult{}, fmt.Errorf("test sink %s: %w: %s", id, ErrNoSender, sink.Kind)
 	}
 
@@ -107,6 +107,16 @@ func (s *Service) SendTest(ctx context.Context, c *Caller, ns namespace.Name, id
 	}
 
 	return s.send(ctx, sender, sink, to, dest.Keys), nil
+}
+
+// serves reports whether sender sends to sink. A sender that serves some
+// platforms of its kind says which, with a method Serves. A sink of another
+// platform has no sender, as a sink of a kind with no sender has. Any other
+// sender serves each sink of its kind.
+func serves(sender notify.Sender, sink notify.Sink) bool {
+	p, ok := sender.(interface{ Serves(sink notify.Sink) bool })
+
+	return !ok || p.Serves(sink)
 }
 
 // RecordTest appends the audit entry with the result of the test of the sink
@@ -195,11 +205,18 @@ func (s *Service) checkAddress(sink notify.Sink, to string) error {
 		return fmt.Errorf("check the address: %w", err)
 	}
 
+	// The test is a write-side check: it applies the host allowlist that a
+	// stored sink from before the allowlist does not pass.
 	if sink.Kind == notify.SinkEmail {
 		return nil
 	}
 
-	host, err := notify.ChatHost(to)
+	hostOf := notify.ChatHost
+	if sink.Kind == notify.SinkWebhook {
+		hostOf = notify.WebhookHost
+	}
+
+	host, err := hostOf(to)
 	if err != nil {
 		return fmt.Errorf("check the address: %w", err)
 	}

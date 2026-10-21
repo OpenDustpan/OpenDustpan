@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/mail"
+	"net/netip"
 	"net/url"
 	"slices"
 	"strconv"
@@ -101,6 +102,11 @@ type Sink struct {
 // not fit the kind. The host of a webhook sink or of a chat sink must pass
 // egress.CheckURL for https only: the error then also matches
 // egress.ErrRefused.
+//
+// Validate is the check for a sink that is already stored: the read of a
+// row and the restore of a backup. It does not apply the host allowlist of
+// ValidateWrite, so that a stored sink whose host was valid before the
+// allowlist still lists, sends and restores.
 func (s Sink) Validate() error {
 	switch {
 	case !strings.HasPrefix(s.ID, SinkIDPrefix):
@@ -126,6 +132,52 @@ func (s Sink) Validate() error {
 	default:
 		return fmt.Errorf("%w: unknown sink kind %q", ErrInvalid, s.Kind)
 	}
+}
+
+// ValidateWrite is Validate plus the host allowlist of WebhookHost and
+// ChatHost. The write of a sink (create, replace and the store of a sink)
+// and the test of a sink use it. It returns ErrInvalid for a host that is
+// not an ASCII DNS name or an IP literal with an optional numeric port.
+func (s Sink) ValidateWrite() error {
+	if err := s.Validate(); err != nil {
+		return err
+	}
+
+	return s.validAllowedHost()
+}
+
+// HostNeedsUpdate reports whether s is a webhook or chat sink that Validate
+// accepts but whose host fails the allowlist of ValidateWrite. The sink still
+// sends, and a replace of it needs a host that passes the allowlist.
+func (s Sink) HostNeedsUpdate() bool {
+	return s.validAllowedHost() != nil
+}
+
+// errHostForm says which hosts the allowlist accepts.
+const errHostForm = "the host must be an ASCII DNS name or an IP address, with an optional numeric port"
+
+// asInvalid returns err when it matches ErrInvalid, and else err wrapped in
+// ErrInvalid, so that an error holds the sentinel once.
+func asInvalid(err error) error {
+	if errors.Is(err, ErrInvalid) {
+		return err
+	}
+
+	return fmt.Errorf("%w: %w", ErrInvalid, err)
+}
+
+// validAllowedHost applies the host allowlist to the target of a webhook or
+// chat sink. Any other kind has no host.
+func (s Sink) validAllowedHost() error {
+	if s.Kind != SinkChat && s.Kind != SinkWebhook {
+		return nil
+	}
+
+	if _, err := hostOf("https://"+s.Target+"/", "target"); err != nil {
+		return fmt.Errorf("a %s sink: %w", s.Kind, asInvalid(err))
+	}
+
+	return nil
 }
 
 // badRef reports whether ref is not a valid secret ref of a sink.
@@ -181,7 +233,8 @@ func (s Sink) validPlatform() error {
 
 // validWebhook returns ErrInvalid for a webhook sink whose target is not a
 // host that the egress rules accept, and for a webhook sink that has not
-// exactly a URL item and one or two signing keys.
+// exactly a URL item and one or two signing keys. It does not apply the
+// host allowlist: see ValidateWrite.
 func (s Sink) validWebhook() error {
 	if n := len(s.SecretRefs); n < 2 || n > MaxSinkSecrets {
 		return fmt.Errorf("%w: a webhook sink has a URL item and one or two signing keys", ErrInvalid)
@@ -192,7 +245,8 @@ func (s Sink) validWebhook() error {
 
 // validChat returns ErrInvalid for a chat sink whose target is not a host
 // that the egress rules accept, or that has not exactly one secret item,
-// which holds the URL of the webhook.
+// which holds the URL of the webhook. It does not apply the host allowlist:
+// see ValidateWrite.
 func (s Sink) validChat() error {
 	if len(s.SecretRefs) != 1 {
 		return fmt.Errorf("%w: a chat sink has one secret item, which holds the URL of the webhook", ErrInvalid)
@@ -202,11 +256,19 @@ func (s Sink) validChat() error {
 }
 
 // validHost returns ErrInvalid for a target that is not a bare host, in
-// lower case, that egress.CheckURL accepts for https only.
+// lower case, that egress.CheckURL accepts for https only. It does not
+// apply the host allowlist: see ValidateWrite.
 func (s Sink) validHost() error {
-	host, err := hostOf("https://"+s.Target+"/", "target")
-	if err != nil {
+	// A stored target passes when the egress rules accept it as the host of
+	// an https URL and it is the host that the URL has: the check that the
+	// server made before the host allowlist.
+	if err := egress.CheckURL("https://"+s.Target+"/", egress.HTTPSOnly); err != nil {
 		return fmt.Errorf("%w: a %s sink: %w", ErrInvalid, s.Kind, err)
+	}
+
+	var host string
+	if u, err := url.Parse("https://" + s.Target + "/"); err == nil && u != nil {
+		host = strings.ToLower(u.Host)
 	}
 
 	if host != s.Target {
@@ -218,21 +280,26 @@ func (s Sink) validHost() error {
 
 // ChatHost returns the host of the URL of a chat webhook, in lower case,
 // with its port when the URL has one. It returns an error that matches
-// egress.ErrRefused for a URL that egress.CheckURL refuses for https only.
-// The API stores the URL as the secret item of the sink and the host as
-// its Target. The chat adapter sends only when the host of the URL in the
-// item is the Target.
+// egress.ErrRefused for a URL that egress.CheckURL refuses for https only,
+// and an error that matches ErrInvalid for a host that is not an ASCII DNS
+// name or an IP literal, with an optional numeric port. The API stores the
+// URL as the secret item of the sink and the host as its Target. The chat
+// adapter sends only when the host of the URL in the item is the Target.
 func ChatHost(raw string) (string, error) { return hostOf(raw, "chat webhook") }
 
 // WebhookHost returns the host of the URL of a webhook, in the shape that
 // ChatHost gives for a chat webhook. The API stores the URL as the first
 // secret item of the sink and the host as its Target. It returns an error
 // that matches egress.ErrRefused for a URL that egress.CheckURL refuses for
-// https only. The error never holds the URL.
+// https only, and an error that matches ErrInvalid for a host that is not
+// an ASCII DNS name or an IP literal. The error never holds the URL.
 func WebhookHost(raw string) (string, error) { return hostOf(raw, "webhook") }
 
 // hostOf returns the lowercase host of raw, with its port when raw has one.
-// what names the URL in an error.
+// what names the URL in an error. The host must pass egress.CheckURL for
+// https only and validHostPort. Raw Unicode hosts are refused, not
+// converted: only the punycode form of a name passes, because the function
+// must not change an input to make it valid.
 func hostOf(raw, what string) (string, error) {
 	if err := egress.CheckURL(raw, egress.HTTPSOnly); err != nil {
 		return "", fmt.Errorf("%s: %w", what, err)
@@ -243,7 +310,120 @@ func hostOf(raw, what string) (string, error) {
 		return "", fmt.Errorf("%s: %w: the URL does not parse", what, egress.ErrRefused)
 	}
 
-	return strings.ToLower(u.Host), nil
+	host := strings.ToLower(u.Host)
+	if !validHostPort(host) {
+		return "", fmt.Errorf("%s: %w: %s", what, ErrInvalid, errHostForm)
+	}
+
+	return host, nil
+}
+
+// maxPortDigits is the length of the largest port, 65535.
+const maxPortDigits = 5
+
+const (
+	maxDNSNameLen = 253
+	maxLabelLen   = 63
+)
+
+// validHostPort reports whether h, in lower case, is an ASCII DNS name (LDH
+// labels) or an IP literal, with an optional port of 1 to 5 digits, with no
+// leading zero, that is at most 65535. It is an allowlist: it refuses everything it does not name,
+// for example ";", sub-delimiters, "%", control and bidi characters, raw
+// Unicode, and an empty port.
+func validHostPort(h string) bool {
+	hp := splitHostPort(h)
+	if hp.host == "" || (hp.hasPort && !validPort(hp.port)) {
+		return false
+	}
+
+	host := hp.host
+
+	if strings.HasPrefix(host, "[") {
+		addr, err := netip.ParseAddr(strings.Trim(host, "[]"))
+
+		return err == nil && addr.Is6() && addr.Zone() == "" && strings.HasSuffix(host, "]")
+	}
+
+	return validDNSName(host)
+}
+
+// hostPort is a host and the port after it. hasPort is true when a colon
+// starts a port, also when the port is empty.
+type hostPort struct {
+	host, port string
+	hasPort    bool
+}
+
+// splitHostPort splits h at the colon that starts the port. An IPv6 literal
+// in brackets keeps its colons. A text after "]" that is not a colon gives an
+// empty host.
+func splitHostPort(h string) hostPort {
+	if !strings.HasPrefix(h, "[") {
+		host, port, hasPort := strings.Cut(h, ":")
+
+		return hostPort{host: host, port: port, hasPort: hasPort}
+	}
+
+	end := strings.IndexByte(h, ']')
+	if end < 0 {
+		return hostPort{host: "", port: "", hasPort: false}
+	}
+
+	rest := h[end+1:]
+
+	switch {
+	case rest == "":
+		return hostPort{host: h, port: "", hasPort: false}
+	case rest[0] != ':':
+		return hostPort{host: "", port: "", hasPort: false}
+	default:
+		return hostPort{host: h[:end+1], port: rest[1:], hasPort: true}
+	}
+}
+
+// validPort reports whether p is 1 to 5 digits, with no leading zero, in the
+// range 1 to 65535.
+func validPort(p string) bool {
+	if p == "" || len(p) > maxPortDigits || p[0] == '0' || strings.ContainsAny(p, "+-") {
+		return false
+	}
+
+	n, err := strconv.ParseUint(p, 10, 16)
+
+	return err == nil && n >= 1
+}
+
+// validDNSName reports whether name is made of 1 to 63 byte labels of
+// letters, digits and hyphens, none of which starts or ends with a hyphen,
+// in at most 253 bytes. A dotted IPv4 address passes as a name.
+func validDNSName(name string) bool {
+	if name == "" || len(name) > maxDNSNameLen {
+		return false
+	}
+
+	for label := range strings.SplitSeq(name, ".") {
+		if !validLabel(label) {
+			return false
+		}
+	}
+
+	return true
+}
+
+func validLabel(label string) bool {
+	if label == "" || len(label) > maxLabelLen || label[0] == '-' || label[len(label)-1] == '-' {
+		return false
+	}
+
+	for i := range len(label) {
+		c := label[i]
+		if (c < 'a' || c > 'z') && (c < '0' || c > '9') && c != '-' {
+			return false
+		}
+	}
+
+	return true
 }
 
 // validAddress returns ErrInvalid for a target of an email sink that is

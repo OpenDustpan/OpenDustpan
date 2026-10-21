@@ -51,17 +51,39 @@ Each operation has these members:
 | --- | --- |
 | `operationId` | A stable name in lowerCamelCase, for example `listUnits`. A generator names an SDK method from it. A change of a path does not change it. No two operations share one. |
 | `tags` | One to three tags. The first tag names the group of the operation. |
-| `x-dustpan-actions` | The actions that the route declares, for example `unit:read`. The list is empty for a route that needs no sign-in. |
+| `x-dustpan-actions` | The actions that the route declares, each with the kind of the object that it applies to, for example `{"action": "unit:lock", "object": "collection"}`. The kind is `namespace`, `unit`, `collection`, `caller` or `server`. The list is empty for a route that needs no sign-in. |
 | `parameters` | One path parameter for each wildcard of the path, and a reference to a shared header parameter when the route takes the header |
-| `requestBody` | A generic JSON object, for a route that reads a body. A `PATCH` takes `application/merge-patch+json`. |
-| `responses` | `2XX` for success and `default` for an error |
+| `requestBody` | A reference to the schema of the body, for a route that reads a JSON body. A `PATCH` takes `application/merge-patch+json`. A route that reads no body has no `requestBody`. |
+| `responses` | `2XX` for success, with a reference to the schema of the answer when the answer has a body, and `default` for an error |
 | `security` | `[]` for a route that needs no sign-in. A route that needs sign-in has no `security` member and uses the default. |
 
 The actions are those that the route declares. A handler can check more, for
 example an action on an object that it finds from the request.
 
-A request body and a success answer are generic JSON objects in this version.
-They name no field. A later version of the description adds the fields.
+A route that takes a file as raw bytes, for example the upload of a provider
+file to the registry, has no `requestBody`, because the description holds JSON
+bodies only.
+
+## Schemas
+
+Each request body and each success answer has a schema in `components.schemas`.
+The server makes the schema from the Go type that the route reads or writes, so
+the description follows the code:
+
+- A schema name is in UpperCamelCase, for example `CreateCollectionRequest`.
+  The route names the schema, so a rename of a Go type does not rename the
+  schema.
+- A member name is the JSON name of the field, in camelCase.
+- A member is required when the server always writes it, or when the server
+  needs it in a request. A member that the server can leave out is not required.
+- A member that can be null has `type: [X, "null"]`. A reference that can be
+  null is `oneOf: [ref, null]`.
+- A time is a string with `format: date-time`.
+- A map has `additionalProperties` with the schema of its values. A member
+  with any JSON value has a schema with a description only.
+
+Two members break the camelCase rule today: `unitID` and `versionID`. A client
+reads them as they are. They are renamed in a later version of the API.
 
 ## Shared parts
 
@@ -76,10 +98,12 @@ They name no field. A later version of the description adds the fields.
 
 ## Values that can grow
 
-When the description has an enum, a list of values that can get a new value,
-such as a kind or a state, is open in the description:
-`anyOf: [{type: string, enum: [...]}, {type: string}]`. A
-client keeps a value that it does not know. A new value is an additive change.
+A list of values that can get a new value, such as a kind or a state, is open
+in the description. The list is a schema of its own in `components.schemas`,
+for example `ContextStatus`, with `type: string` and `enum`. A member that holds
+one of these values is `anyOf: [{$ref: the schema}, {type: string}]`. A member
+that can also be null has a third branch, `{type: "null"}`. A client keeps a
+value that it does not know. A new value is an additive change.
 
 ## Routes that are not in the description
 
@@ -97,7 +121,8 @@ A test builds the server with each module on and compares its operations with
 the checked-in description. The test fails when a route has no entry, when an
 entry has no route, and when a path, an `operationId`, a tag, an action, a
 public flag or a header differs. The server does not start when a route under
-`/api/dustpan/v1` has no valid `operationId`.
+`/api/dustpan/v1` has no valid `operationId`, when an action has no object
+kind, or when a route names no body type and does not say that it has no body.
 
 To write the checked-in file again after a change of the routes, run:
 

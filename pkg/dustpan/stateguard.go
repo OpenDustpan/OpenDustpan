@@ -52,14 +52,7 @@ func newGateService(cfg *settings, namespaces *namespace.Service) (*gate.Service
 		return nil, nil //nolint:nilnil // A store without gates is a valid setup: no write is checked.
 	}
 
-	facts := inventoryFacts{reader: cfg.inventoryReader, ids: nil, deleted: nil}
-	if deleted, hasDeleted := cfg.namespaceStore.(inventory.DeletedFactsReader); hasDeleted {
-		facts.deleted = deleted
-	}
-
-	if ids, hasIDs := cfg.namespaceStore.(unitIDs); hasIDs {
-		facts.ids = ids
-	}
+	facts := newInventoryFacts(cfg)
 
 	var actions []string
 	for _, family := range []access.Family{

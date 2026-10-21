@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -14,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/api/apidesc"
 	jobsapi "opendustpan.org/opendustpan/internal/api/jobs"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/durable"
@@ -216,14 +218,23 @@ func (a *recordingAuthorizer) seen() []string {
 func newHandler(t *testing.T, authz identity.Authorizer, jobs job.Store) *jobsapi.Handler {
 	t.Helper()
 
+	return newStartHandler(t, authz, jobs, nil, nil)
+}
+
+// newStartHandler is newHandler with a job service and an audit store.
+func newStartHandler(
+	t *testing.T, authz identity.Authorizer, jobs job.Store, starter job.Starter, entries audit.Store,
+) *jobsapi.Handler {
+	t.Helper()
+
 	namespaces, err := namespace.NewService(namespace.Config{Store: fakeNamespaces{}, Now: nil, Region: "test-region"})
 	if err != nil {
 		t.Fatalf("namespace service: %v", err)
 	}
 
 	handler, err := jobsapi.NewHandler(jobsapi.Config{
-		Namespaces: namespaces, Jobs: jobs, Authenticator: tokenAuthenticator{}, Authorizer: authz,
-		Audit: nil, OnAuditFailure: nil, DenialLimiter: nil, Sessions: nil, Logger: slog.New(slog.DiscardHandler),
+		Namespaces: namespaces, Jobs: jobs, Starter: starter, Authenticator: tokenAuthenticator{}, Authorizer: authz,
+		Audit: entries, OnAuditFailure: nil, DenialLimiter: nil, Sessions: nil, Logger: slog.New(slog.DiscardHandler),
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -275,9 +286,23 @@ func runningJob(t *testing.T, id job.ID) job.Job {
 			},
 			Pool: "pool-1", Profile: "prf-secret-profile", Edits: nil, Delivery: "",
 		},
-		State: job.StateRunning, Wait: job.WaitNone, Reason: "", Current: 1, StartedBy: "ada", Agent: "", AgentMode: "",
-		BreakGlass: nil, Delivery: nil, Closed: nil, Verification: job.VerificationNone, IdempotencyKey: "key-1",
-		Version: 3, CreatedAt: at, UpdatedAt: at.Add(time.Minute),
+		State:          job.StateRunning,
+		Wait:           job.WaitNone,
+		Reason:         "",
+		Current:        1,
+		StartedBy:      "ada",
+		Source:         job.SourceSchedule,
+		Agent:          "",
+		AgentMode:      "",
+		BreakGlass:     nil,
+		Delivery:       nil,
+		Closed:         nil,
+		Verification:   job.VerificationNone,
+		IdempotencyKey: "key-1",
+		RequestHash:    "",
+		Version:        3,
+		CreatedAt:      at,
+		UpdatedAt:      at.Add(time.Minute),
 		Phases: []job.Phase{
 			{
 				Kind: job.PhasePlan, Operation: "dop-internal-operation", Claims: 1, Executor: "runner-1",
@@ -570,7 +595,7 @@ func TestJobDocument(t *testing.T) {
 	for _, want := range []string{
 		`"id":"` + testJob + `"`, `"namespace":"acme"`, `"tool":"OpenTofu"`, `"id":"` + testUnit + `"`,
 		`"operation":"apply"`, `"executor":"runner"`, `"state":"running"`, `"current":1`, `"startedBy":"ada"`,
-		`"version":3`, `"kind":"plan"`, `"kind":"apply"`, `"stateVersion":"sv-1"`, `"pool":"pool-1"`,
+		`"version":3`, `"source":"schedule"`, `"kind":"plan"`, `"kind":"apply"`, `"stateVersion":"sv-1"`, `"pool":"pool-1"`,
 		`"repository":"acme/infra"`, `"exitCode":0`, `"subject":"bo"`, `"verdict":"approve"`,
 		`"name":"plan","role":"tool","phase":"plan","changesResources":false`,
 	} {
@@ -618,10 +643,72 @@ func TestNewHandlerNeedsItsDependencies(t *testing.T) {
 	t.Parallel()
 
 	_, err := jobsapi.NewHandler(jobsapi.Config{
-		Namespaces: nil, Jobs: nil, Authenticator: nil, Authorizer: nil, Audit: nil, OnAuditFailure: nil,
+		Namespaces: nil, Jobs: nil, Starter: nil, Authenticator: nil, Authorizer: nil, Audit: nil, OnAuditFailure: nil,
 		DenialLimiter: nil, Sessions: nil, Logger: nil,
 	})
 	if !errors.Is(err, jobsapi.ErrMissingDependency) {
 		t.Fatalf("NewHandler with no dependency = %v, want ErrMissingDependency", err)
+	}
+}
+
+// kindsOf returns the kind that the description gives to the object of each
+// check, by action. A check is written as "<action> <object>".
+func kindsOf(t *testing.T, checks []string) map[string]string {
+	t.Helper()
+
+	out := map[string]string{}
+
+	for _, check := range checks {
+		action, text, _ := strings.Cut(check, " ")
+
+		obj, err := identity.ParseObject(text)
+		if err != nil {
+			t.Fatalf("object of check %q: %v", check, err)
+		}
+
+		switch {
+		case obj.IsUnit():
+			out[action] = apidesc.KindUnit
+		case obj.IsNamespace():
+			out[action] = apidesc.KindNamespace
+		case obj.IsCollection():
+			out[action] = apidesc.KindCollection
+		case obj.IsCaller():
+			out[action] = apidesc.KindCaller
+		case obj.IsServer():
+			out[action] = apidesc.KindServer
+		default:
+			t.Fatalf("check %q has an object of no kind in the description", check)
+		}
+	}
+
+	return out
+}
+
+// TestDescriptionHoldsTheChecksOfTheRoute sends a request that passes every
+// check, and compares the checks that the authorizer saw with the actions and
+// the objects of the description. A check that the description leaves out, a
+// check on another kind of object, and an action that no check makes all fail
+// the test.
+func TestDescriptionHoldsTheChecksOfTheRoute(t *testing.T) {
+	t.Parallel()
+
+	authz := newAuthorizer(holdsBoth()...)
+	handler := newHandler(t, authz, newFakeJobs(runningJob(t, testJob)))
+
+	rec := serve(t, handler, request{method: http.MethodGet, path: jobPath("acme", testJob), token: testToken})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d %s, want 200", rec.Code, rec.Body.String())
+	}
+
+	got := kindsOf(t, authz.seen())
+
+	ops := handler.Operations()
+	if len(ops) != 1 {
+		t.Fatalf("Operations() = %d operations, want 1", len(ops))
+	}
+
+	if !maps.Equal(got, ops[0].ActionObjects) {
+		t.Errorf("the route checks %v, and the description lists %v", got, ops[0].ActionObjects)
 	}
 }

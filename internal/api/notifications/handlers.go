@@ -32,6 +32,9 @@ const maxBodyBytes = 64 << 10
 // URLSet says only that a chat sink has a webhook URL. Target is the address
 // of an email sink, or the host of a webhook or of a chat webhook. The URL of
 // a webhook is a secret: it goes in on create and never comes out.
+// HostNeedsUpdate is true for a stored sink whose host fails the allowlist of
+// a new write. The sink still sends. A webhook sink of this kind shows an
+// empty target. A replace of it needs a host that passes the allowlist.
 //
 // Contract: never remove or rename these fields.
 type sinkDocument struct {
@@ -44,6 +47,8 @@ type sinkDocument struct {
 	URLSet    bool   `json:"urlSet"`
 	CreatedBy string `json:"createdBy"`
 	Version   int64  `json:"version"`
+
+	HostNeedsUpdate bool `json:"hostNeedsUpdate,omitempty"`
 }
 
 // createdDocument is the answer of a create. SigningKey is set for a webhook
@@ -69,7 +74,7 @@ func toDocument(s *notify.Sink) sinkDocument {
 	return sinkDocument{
 		ID: s.ID, Namespace: s.Scope.String(), Kind: string(s.Kind), Platform: s.Platform, Name: s.Name,
 		Target: s.Target, URLSet: s.Kind != notify.SinkEmail && len(s.SecretRefs) > 0, CreatedBy: s.CreatedBy,
-		Version: s.Version,
+		Version: s.Version, HostNeedsUpdate: s.HostNeedsUpdate(),
 	}
 }
 
@@ -254,11 +259,11 @@ func (h *Handler) get(w http.ResponseWriter, r *http.Request, _ identity.Princip
 // createBody is the body of a create. The fields are pointers so that a
 // missing field differs from an empty one.
 type createBody struct {
-	Kind     *string `json:"kind"`
-	Platform *string `json:"platform"`
-	Name     *string `json:"name"`
-	Target   *string `json:"target"`
-	URL      *string `json:"url"`
+	Kind     *string `dustpan:"required" json:"kind"`
+	Platform *string `dustpan:"optional" json:"platform"`
+	Name     *string `dustpan:"required" json:"name"`
+	Target   *string `dustpan:"optional" json:"target"`
+	URL      *string `dustpan:"optional" json:"url"`
 }
 
 func orEmpty(s *string) string {
@@ -305,10 +310,10 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request, p identity.Prin
 
 // replaceBody is the body of a replace.
 type replaceBody struct {
-	Version *int64  `json:"version"`
-	Name    *string `json:"name"`
-	Target  *string `json:"target"`
-	URL     *string `json:"url"`
+	Version *int64  `dustpan:"required" json:"version"`
+	Name    *string `dustpan:"required" json:"name"`
+	Target  *string `dustpan:"optional" json:"target"`
+	URL     *string `dustpan:"optional" json:"url"`
 }
 
 // replace serves PUT /sinks/{sink_id}.
