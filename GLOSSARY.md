@@ -666,6 +666,19 @@ An output adapter of the port `pkg/logsink` that delivers structured records to 
 _Avoid_: Log target, log destination, exporter
 _Copy says_: "log output", with the target: a file, syslog or a webhook. Never write "sink" in copy.
 
+**Notification sink**:
+A destination of the notifications of a namespace: an email address, a chat webhook or a signed webhook. The code type is `notify.Sink`, and the API path is `/sinks`. A sink has a kind (`email`, `chat` or `webhook`), a name and a target. Its secrets are secret items of the namespace. They are the signing key of a webhook and the URL of a chat webhook. A sink keeps its kind and its platform. A change of either is a new sink.
+_Avoid_: Notification target, notification channel
+_Copy says_: "notification destination", and for a chat webhook "Slack channel" or the same pattern for another platform. Never write "sink" in copy.
+
+**Signing key**:
+The secret of a webhook sink. The server makes it when a person creates the sink: 32 random bytes, written as 64 hex digits. The server answers it once, in the answer of the create. It signs each request to the webhook with the key (HMAC-SHA256). The receiver checks the signature with the same key. No route answers the key again.
+_Avoid_: Webhook secret, signing secret (the code uses "signing secret" for the value of a key)
+
+**Test message**:
+The one fixed message that the test route of a sink sends to the sink. It has the notification type `sink.test` and says that no event happened. The answer of the route gives the class of the result and a fixed text. It never gives the URL or the answer of the receiver.
+_Avoid_: Ping, health check
+
 **Chat platform**:
 A chat service that OpenDustpan posts messages to: Slack, Microsoft Teams, Mattermost or Matrix (ADR 262). The code type is `chat.Platform`, and the wire value is the lower-case name in the field `platform`. `chatops.Request.Platform` takes this type later.
 _Avoid_: Tool (for a chat service, because a tool is an infrastructure-as-code CLI), provider, integration

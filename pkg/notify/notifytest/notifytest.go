@@ -185,8 +185,15 @@ func sample(id string, scope namespace.Name) notify.Notification {
 
 func sink(id string, scope namespace.Name) notify.Sink {
 	return notify.Sink{
-		ID: id, Scope: scope, Kind: notify.SinkWebhook, Name: "Ops", Target: "https://hooks.example.com/ops",
-		SecretRefs: []string{"itm-" + id}, CreatedBy: "alice", Version: 0,
+		ID:         id,
+		Scope:      scope,
+		Kind:       notify.SinkWebhook,
+		Name:       "Ops",
+		Platform:   "",
+		Target:     "https://hooks.example.com/ops",
+		SecretRefs: []string{"itm-" + id},
+		CreatedBy:  "alice",
+		Version:    0,
 	}
 }
 

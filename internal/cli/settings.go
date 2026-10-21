@@ -360,6 +360,13 @@ var Settings = []*Setting{
 		referenceNone,
 	).WithFile("audit-verify-keys-file"),
 	stringSetting(
+		"destination-ports", "DUSTPAN_DESTINATION_PORTS", "",
+		"comma-separated ports, besides 443, that a notification destination may use; a webhook or chat "+
+			"destination on any other port is refused when a person saves it and again before each send "+
+			"(DUSTPAN_DESTINATION_PORTS)",
+		"(none: port 443 only). For example `8443,9443`",
+	).WithFile("destination-ports"),
+	stringSetting(
 		"oidc-issuer", "DUSTPAN_OIDC_ISSUER", "",
 		"issuer URL of the OpenID Connect provider of the console sign-in, with https; the sign-in also needs "+
 			"--oidc-provider, --oidc-client-id, the client secret and --public-url. To use another issuer, "+

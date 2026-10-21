@@ -72,6 +72,7 @@ import (
 	blobcache "opendustpan.org/opendustpan/pkg/blob/cache"
 	"opendustpan.org/opendustpan/pkg/collection"
 	"opendustpan.org/opendustpan/pkg/durable"
+	"opendustpan.org/opendustpan/pkg/egress"
 	"opendustpan.org/opendustpan/pkg/idempotency"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/installation"
@@ -174,6 +175,7 @@ type settings struct {
 	workspaceBlobs       blob.Store
 	inventoryReader      inventory.Reader
 	profileStore         profile.Store
+	sinks                sinkSettings
 	jobStore             job.Store
 	savedViewStore       savedview.Store
 	idempotencyStore     idempotency.Store
@@ -687,6 +689,8 @@ type services struct {
 }
 
 // defaultSettings answers the settings of a server before its options.
+//
+//nolint:funlen // One literal that names every field of settings (exhaustruct); its length is the field count.
 func defaultSettings() *settings {
 	return &settings{
 		denialLimiter: denylimit.New(denylimit.Config{
@@ -709,6 +713,7 @@ func defaultSettings() *settings {
 		workspaceBlobs:          nil,
 		inventoryReader:         nil,
 		profileStore:            nil,
+		sinks:                   sinkSettings{store: nil, senders: nil, ports: egress.Ports{}},
 		jobStore:                nil,
 		savedViewStore:          nil,
 		idempotencyStore:        nil,
@@ -1166,6 +1171,8 @@ type neutralHandlers struct {
 	runners http.Handler
 	// profiles is nil when no profile store is set.
 	profiles http.Handler
+	// sinks is nil when no sink store is set.
+	sinks http.Handler
 	// jobs is nil when no job store is set.
 	jobs http.Handler
 }
@@ -1199,13 +1206,19 @@ func newNeutralHandlers(svc services, cfg *settings, observed *metrics.ServerMet
 		return neutralHandlers{}, err
 	}
 
+	sinks, err := newSinksHandler(svc, cfg, onFailure)
+	if err != nil {
+		return neutralHandlers{}, err
+	}
+
 	jobs, err := newJobsHandler(svc, cfg, onFailure)
 	if err != nil {
 		return neutralHandlers{}, err
 	}
 
 	return neutralHandlers{
-		inventory: units, audit: entries, context: contexts, runners: runners, profiles: profiles, jobs: jobs,
+		inventory: units, audit: entries, context: contexts, runners: runners, profiles: profiles, sinks: sinks,
+		jobs: jobs,
 	}, nil
 }
 
@@ -3680,6 +3693,9 @@ func mountAPI(mux *rootMux, a adapters, cfg *settings) error {
 		return withCORS(withMaintenance(h, a.maintenance, shapeInventory, cfg.logger), cfg.allowedOrigins)
 	})
 	mountV1(mux, a.profiles, func(h http.Handler) http.Handler {
+		return withCORS(withMaintenance(h, a.maintenance, shapeInventory, cfg.logger), cfg.allowedOrigins)
+	})
+	mountV1(mux, a.sinks, func(h http.Handler) http.Handler {
 		return withCORS(withMaintenance(h, a.maintenance, shapeInventory, cfg.logger), cfg.allowedOrigins)
 	})
 	mountV1(mux, a.jobs, func(h http.Handler) http.Handler {
