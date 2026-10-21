@@ -136,7 +136,7 @@ func gitHostCheckOf(res *forge.CheckResult) gitHostCheckDocument {
 // a connection. The answer holds the values that the registration gave when the
 // request began, so the stored answer and the sent answer are one. status is
 // the status of the answer.
-func connectionAnswerOf(reg forge.RegistrationView, found bool, status int) func(any) (idempotency.Answer, error) {
+func connectionAnswerOf(reg *forge.RegistrationView, status int) func(any) (idempotency.Answer, error) {
 	return func(result any) (idempotency.Answer, error) {
 		rec, ok := result.(forge.ConnectionRecord)
 		if !ok {
@@ -144,7 +144,7 @@ func connectionAnswerOf(reg forge.RegistrationView, found bool, status int) func
 		}
 
 		view := forge.ConnectionView{Record: rec, AppID: "", BaseURL: "", HookID: ""}
-		if found && reg.Kind == rec.Kind {
+		if reg != nil && reg.Kind == rec.Kind {
 			view.AppID, view.BaseURL, view.HookID = reg.AppID, reg.BaseURL, reg.HookID
 		}
 
@@ -159,13 +159,13 @@ func connectionAnswerOf(reg forge.RegistrationView, found bool, status int) func
 
 // registrationForAnswer reads the registration that a connection answer shows.
 // A missing registration shows empty values: the create fails then.
-func (h *Handler) registrationForAnswer(r *http.Request) (forge.RegistrationView, bool) {
+func (h *Handler) registrationForAnswer(r *http.Request) *forge.RegistrationView {
 	reg, err := h.gitHost.GetRegistration(r.Context(), forge.KindGitHub)
 	if err != nil {
-		return forge.RegistrationView{}, false
+		return nil
 	}
 
-	return reg, true
+	return &reg
 }
 
 // listGitHostConnections serves GET .../git-host-connections.
@@ -240,8 +240,8 @@ func (h *Handler) readGitHostConnection(
 func (h *Handler) createGitHostConnection(
 	w http.ResponseWriter, r *http.Request, p identity.Principal, obj identity.Object,
 ) {
-	reg, found := h.registrationForAnswer(r)
-	build := connectionAnswerOf(reg, found, http.StatusCreated)
+	reg := h.registrationForAnswer(r)
+	build := connectionAnswerOf(reg, http.StatusCreated)
 
 	h.keyed(w, r, p, keyedCall{
 		build: build,
@@ -257,7 +257,7 @@ func (h *Handler) makeGitHostConnection(
 ) {
 	view, err := h.createConnection(w, r, p, ns)
 	if err != nil {
-		h.failGitHostConnection(w, r, p, ns, "create", err)
+		h.failGitHostConnection(w, r, p, connectionChange{ns: ns, verb: "create"}, err)
 
 		return
 	}
@@ -286,7 +286,7 @@ func (h *Handler) writeBuilt(
 func (h *Handler) createConnection(
 	w http.ResponseWriter, r *http.Request, p identity.Principal, ns namespace.Name,
 ) (forge.ConnectionView, error) {
-	none := forge.ConnectionView{}
+	var none forge.ConnectionView
 
 	var req gitHostConnectionRequest
 	if err := readGitHostBody(w, r, &req, errGitHostConnectionBody); err != nil {
@@ -345,7 +345,7 @@ func (h *Handler) removeGitHostConnection(
 	}
 
 	if err != nil {
-		h.failGitHostConnection(w, r, p, ns, "delete", err)
+		h.failGitHostConnection(w, r, p, connectionChange{ns: ns, verb: "delete"}, err)
 
 		return
 	}
@@ -358,8 +358,8 @@ func (h *Handler) removeGitHostConnection(
 func (h *Handler) makeGitHostDefault(
 	w http.ResponseWriter, r *http.Request, p identity.Principal, obj identity.Object,
 ) {
-	reg, found := h.registrationForAnswer(r)
-	build := connectionAnswerOf(reg, found, http.StatusOK)
+	reg := h.registrationForAnswer(r)
+	build := connectionAnswerOf(reg, http.StatusOK)
 
 	h.keyed(w, r, p, keyedCall{
 		build: build,
@@ -373,7 +373,7 @@ func (h *Handler) setGitHostDefault(
 ) {
 	version, _, err := ifMatch(r)
 	if err != nil {
-		h.failGitHostConnection(w, r, p, ns, "make-default", err)
+		h.failGitHostConnection(w, r, p, connectionChange{ns: ns, verb: "make-default"}, err)
 
 		return
 	}
@@ -383,7 +383,7 @@ func (h *Handler) setGitHostDefault(
 		version,
 	)
 	if err != nil {
-		h.failGitHostConnection(w, r, p, ns, "make-default", err)
+		h.failGitHostConnection(w, r, p, connectionChange{ns: ns, verb: "make-default"}, err)
 
 		return
 	}
@@ -425,15 +425,22 @@ func (h *Handler) checkGitHostConnection(
 	h.writeJSON(ctx, w, http.StatusOK, gitHostCheckOf(&res))
 }
 
+// connectionChange names a change of a connection that a failure entry records:
+// the namespace and the verb.
+type connectionChange struct {
+	ns   namespace.Name
+	verb string
+}
+
 // failGitHostConnection writes the failure entry of a refused change of a
 // connection, and answers err. The entry names the connection by a fixed
 // object of the namespace.
 func (h *Handler) failGitHostConnection(
-	w http.ResponseWriter, r *http.Request, p identity.Principal, ns namespace.Name, verb string, err error,
+	w http.ResponseWriter, r *http.Request, p identity.Principal, c connectionChange, err error,
 ) {
-	h.appendObjectChange(r, p, identity.NamespaceObject(ns), serverChange{
+	h.appendObjectChange(r, p, identity.NamespaceObject(c.ns), serverChange{
 		at: h.now(), action: identity.ActionNamespaceManageGitHostConnections,
-		object: "git-host-connection:" + verb, outcome: audit.OutcomeFailure,
+		object: "git-host-connection:" + c.verb, outcome: audit.OutcomeFailure,
 	})
 	h.writeGitHostError(r, w, err)
 }

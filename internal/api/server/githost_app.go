@@ -53,10 +53,19 @@ type gitHostAppRequest struct {
 
 func gitHostAppOf(v forge.RegistrationView) gitHostAppDocument {
 	return gitHostAppDocument{
-		Kind: string(v.Kind), AppID: v.AppID, APIAddress: v.BaseURL, HookID: v.HookID,
-		PrivateKey:  credentialSetDocument{SetID: v.Key.ID, CreatedAt: wireTime(v.Key.CreatedAt), Set: true},
-		EventSecret: credentialSetDocument{SetID: v.EventSecret.ID, CreatedAt: wireTime(v.EventSecret.CreatedAt), Set: true},
-		CreatedAt:   wireTime(v.CreatedAt), UpdatedAt: wireTime(v.UpdatedAt), Version: v.Version,
+		Kind:       string(v.Kind),
+		AppID:      v.AppID,
+		APIAddress: v.BaseURL,
+		HookID:     v.HookID,
+		PrivateKey: credentialSetDocument{SetID: v.Key.ID, CreatedAt: wireTime(v.Key.CreatedAt), Set: true},
+		EventSecret: credentialSetDocument{
+			SetID:     v.EventSecret.ID,
+			CreatedAt: wireTime(v.EventSecret.CreatedAt),
+			Set:       true,
+		},
+		CreatedAt: wireTime(v.CreatedAt),
+		UpdatedAt: wireTime(v.UpdatedAt),
+		Version:   v.Version,
 	}
 }
 
@@ -196,7 +205,7 @@ func (h *Handler) writeGitHostApp(w http.ResponseWriter, r *http.Request, p iden
 func (h *Handler) registerGitHostApp(
 	w http.ResponseWriter, r *http.Request, p identity.Principal,
 ) (forge.RegistrationView, error) {
-	none := forge.RegistrationView{}
+	var none forge.RegistrationView
 
 	if err := h.checkTokenFreshness(r); err != nil {
 		return none, err
@@ -412,7 +421,12 @@ func (h *Handler) assignGitHostInstallation(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	answer, err := jsonAnswer(statusOfVersion(a.Version), a.Version, gitHostInstallationOf(a), gitHostInstallationLocation(a))
+	answer, err := jsonAnswer(
+		statusOfVersion(a.Version),
+		a.Version,
+		gitHostInstallationOf(a),
+		gitHostInstallationLocation(a),
+	)
 	if err != nil {
 		h.writeError(ctx, w, err)
 
@@ -425,7 +439,7 @@ func (h *Handler) assignGitHostInstallation(w http.ResponseWriter, r *http.Reque
 func (h *Handler) assign(
 	w http.ResponseWriter, r *http.Request, p identity.Principal, id string,
 ) (forge.Assignment, error) {
-	none := forge.Assignment{}
+	var none forge.Assignment
 
 	if err := h.checkTokenFreshness(r); err != nil {
 		return none, err

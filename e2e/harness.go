@@ -636,6 +636,16 @@ func ipAllowlistOptions(st serverStore, args serverArgs, opts []dustpan.Option) 
 	)
 }
 
+// featureStoreOptions returns the options that give the in-process server the
+// stores of the features that the store of the test keeps.
+func featureStoreOptions(tb testing.TB, st serverStore, wrapper secret.Wrapper) []dustpan.Option {
+	tb.Helper()
+
+	return slices.Concat(
+		profileStoreOptions(st, wrapper), jobStoreOptions(st), savedViewStoreOptions(st), gitHostOptions(tb, st),
+	)
+}
+
 func newServer(ctx context.Context, tb testing.TB, args serverArgs) serverBuild {
 	tb.Helper()
 
@@ -682,9 +692,7 @@ func newServer(ctx context.Context, tb testing.TB, args serverArgs) serverBuild 
 		st,
 		args,
 		append(
-			slices.Concat(
-				profileStoreOptions(st, wrapper), jobStoreOptions(st), savedViewStoreOptions(st), gitHostOptions(tb, st),
-			),
+			featureStoreOptions(tb, st, wrapper),
 			[]dustpan.Option{
 				dustpan.WithRegion(region),
 				dustpan.WithNamespaceStore(st),

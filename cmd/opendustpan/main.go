@@ -1173,12 +1173,6 @@ func (f *serveFlags) serverOptions(
 		return nil, fmt.Errorf("invalid --trusted-proxies %q: %w", f.trustedProxies, parseErr)
 	}
 
-	// check refused a bad value, so the parse fails only on a bug.
-	gitHostRanges, rangesErr := egress.ParseRanges(splitList(f.gitHostAllowedRanges))
-	if rangesErr != nil {
-		return nil, fmt.Errorf("invalid --git-host-allowed-ranges %q: %w", f.gitHostAllowedRanges, rangesErr)
-	}
-
 	signIn, signInErr := f.signInOptions()
 	if signInErr != nil {
 		return nil, signInErr
@@ -1229,7 +1223,6 @@ func (f *serveFlags) serverOptions(
 		dustpan.WithSoftDeleteRetention(f.retention),
 		dustpan.WithIPAllowlists(f.ipAllowlists),
 		dustpan.WithIPAllowlistsIncludeBootstrap(f.ipAllowlistsIncludeBootstrap),
-		dustpan.WithGitHostAllowedRanges(gitHostRanges...),
 		dustpan.WithIPAllowlistStore(st),
 		dustpan.WithInstanceID(f.instanceID),
 	}, append(signIn, checkpoints...)...)
@@ -1237,6 +1230,18 @@ func (f *serveFlags) serverOptions(
 	tail, tailErr := f.storeOptions(st, wrapper)
 
 	return append(opts, tail...), tailErr
+}
+
+// gitHostOptions returns the option of the address ranges that a connection to
+// a Git host may reach. check refused a bad value, so the parse fails only on a
+// bug.
+func (f *serveFlags) gitHostOptions() ([]dustpan.Option, error) {
+	ranges, err := egress.ParseRanges(splitList(f.gitHostAllowedRanges))
+	if err != nil {
+		return nil, fmt.Errorf("invalid --git-host-allowed-ranges %q: %w", f.gitHostAllowedRanges, err)
+	}
+
+	return []dustpan.Option{dustpan.WithGitHostAllowedRanges(ranges...)}, nil
 }
 
 // storeOptions returns the options of the components and of the stores that
@@ -1248,7 +1253,12 @@ func (f *serveFlags) storeOptions(st store, wrapper secret.Wrapper) ([]dustpan.O
 		return nil, fmt.Errorf("--components: %w", err)
 	}
 
-	opts := []dustpan.Option{dustpan.WithComponents(set)}
+	gitHostOpts, err := f.gitHostOptions()
+	if err != nil {
+		return nil, err
+	}
+
+	opts := append([]dustpan.Option{dustpan.WithComponents(set)}, gitHostOpts...)
 	opts = append(opts, durableStoreOption(st)...)
 	opts = append(opts, runnerStoreOption(st)...)
 	opts = append(opts, jobStoreOption(st)...)

@@ -27,11 +27,16 @@ import (
 
 // GitHostAppID and GitHostInstallationID are the app and the installation that
 // the fake GitHub API knows.
+// jwtParts is the number of parts of a JWT: the header, the claims and the signature.
+const jwtParts = 3
+
 // rsaBits is the size of the key of the fake app.
 const rsaBits = 2048
 
 const (
-	GitHostAppID          = "4242"
+	// GitHostAppID is the ID of the app that the fake knows.
+	GitHostAppID = "4242"
+	// GitHostInstallationID is the ID of the installation that the fake knows.
 	GitHostInstallationID = "9001"
 )
 
@@ -92,7 +97,7 @@ func (g *GitHostFake) certPool() *x509.CertPool {
 // verify checks the RS256 signature and the issuer of an app JWT.
 func (g *GitHostFake) verify(token string) bool {
 	parts := strings.Split(token, ".")
-	if len(parts) != 3 {
+	if len(parts) != jwtParts {
 		return false
 	}
 
@@ -118,6 +123,12 @@ func (g *GitHostFake) verify(token string) bool {
 	return json.Unmarshal(raw, &claims) == nil && claims.Iss == GitHostAppID
 }
 
+// writeBody writes the body of an answer.
+func writeBody(w http.ResponseWriter, body string) {
+	//nolint:errcheck // The client closed the connection: nothing to do.
+	_, _ = w.Write([]byte(body))
+}
+
 func (g *GitHostFake) serve(w http.ResponseWriter, r *http.Request) {
 	g.mu.Lock()
 	g.calls++
@@ -136,10 +147,10 @@ func (g *GitHostFake) serve(w http.ResponseWriter, r *http.Request) {
 
 	switch {
 	case r.Method == http.MethodGet && r.URL.Path == path:
-		_, _ = w.Write([]byte(`{"account":{"id":99,"login":"acme-org"},"permissions":{"contents":"read","metadata":"read"}}`))
+		writeBody(w, `{"account":{"id":99,"login":"acme-org"},"permissions":{"contents":"read","metadata":"read"}}`)
 	case r.Method == http.MethodPost && r.URL.Path == path+"/access_tokens":
 		w.WriteHeader(http.StatusCreated)
-		_, _ = w.Write([]byte(`{"token":"fake","expires_at":"2099-01-01T00:00:00Z"}`))
+		writeBody(w, `{"token":"fake","expires_at":"2099-01-01T00:00:00Z"}`)
 	default:
 		w.WriteHeader(http.StatusNotFound)
 	}
@@ -148,6 +159,16 @@ func (g *GitHostFake) serve(w http.ResponseWriter, r *http.Request) {
 // gitHostFakes maps a test to its fake, so that the in-process server of that
 // test trusts the fake and may reach the loopback.
 var gitHostFakes sync.Map //nolint:gochecknoglobals // Test registry, keyed by the test.
+
+// fakeOf returns the fake that the registry holds. The registry holds nothing else.
+func fakeOf(v any) *GitHostFake {
+	fake, ok := v.(*GitHostFake)
+	if !ok {
+		return nil
+	}
+
+	return fake
+}
 
 // NewEnvWithGitHost starts a server as NewEnv does, with the Git host routes
 // on, the loopback allowed for Git host connections, and the certificate of
@@ -164,6 +185,8 @@ func NewEnvWithGitHost(ctx context.Context, tb testing.TB, store Store, fake *Gi
 // gitHostOptions returns the options that give the in-process server of tb the
 // Git host store of st, and the fake of tb when it has one.
 func gitHostOptions(tb testing.TB, st serverStore) []dustpan.Option {
+	tb.Helper()
+
 	var opts []dustpan.Option
 
 	switch s := st.(type) {
@@ -175,11 +198,10 @@ func gitHostOptions(tb testing.TB, st serverStore) []dustpan.Option {
 		return nil
 	}
 
-	if v, ok := gitHostFakes.Load(tb); ok {
-		fake, _ := v.(*GitHostFake)
+	if fake, ok := gitHostFakes.Load(tb); ok && fake != nil {
 		opts = append(opts,
 			dustpan.WithGitHostAllowedRanges(netip.MustParsePrefix("127.0.0.0/8")),
-			dustpan.WithGitHostRootCAs(fake.certPool()),
+			dustpan.WithGitHostRootCAs(fakeOf(fake).certPool()),
 		)
 	}
 

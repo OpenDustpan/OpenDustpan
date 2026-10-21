@@ -202,8 +202,11 @@ func classifyGitHostRequest(err error) (int, string, bool) {
 	case errors.Is(err, forge.ErrConnectionNotFound), errors.Is(err, forge.ErrAssignmentNotFound),
 		errors.Is(err, forge.ErrNoRegistration):
 		return http.StatusNotFound, rootText(err), true
-	case errors.Is(err, forge.ErrInvalid), errors.Is(err, errGitHostAppBody), errors.Is(err, errGitHostInstallationBody),
-		errors.Is(err, errGitHostConnectionBody), errors.Is(err, errGitHostOperatorOwns),
+	case errors.Is(err, forge.ErrInvalid),
+		errors.Is(err, errGitHostAppBody),
+		errors.Is(err, errGitHostInstallationBody),
+		errors.Is(err, errGitHostConnectionBody),
+		errors.Is(err, errGitHostOperatorOwns),
 		errors.Is(err, errGitHostKind):
 		return http.StatusBadRequest, err.Error(), true
 	case errors.Is(err, errGitHostBodyTooLarge):

@@ -214,7 +214,7 @@ type Registration struct {
 // Digest returns the address digest of the values of r. The server stores it
 // with the sealed key, and Open recomputes it from the values that the row
 // holds now.
-func (r Registration) Digest() string {
+func (r *Registration) Digest() string {
 	return AddressDigest(r.Kind, r.BaseURL, r.AppID)
 }
 
@@ -234,7 +234,7 @@ func AddressDigest(kind Kind, baseURL, appID string) string {
 
 // Validate returns an error that wraps ErrInvalid for a registration that a
 // store must not keep.
-func (r Registration) Validate() error {
+func (r *Registration) Validate() error {
 	switch {
 	case r.Kind != KindGitHub:
 		return fmt.Errorf("%w: the registration kind %q is not supported", ErrInvalid, r.Kind)

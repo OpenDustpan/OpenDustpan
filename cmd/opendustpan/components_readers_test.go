@@ -25,7 +25,7 @@ var settingFields = map[string]string{ //nolint:gochecknoglobals // A fixed decl
 	"trusted-proxy-header":            "proxies",
 	"ip-allowlists":                   "ipAllowlists",
 	"ip-allowlists-include-bootstrap": "ipAllowlists",
-	"git-host-allowed-ranges":         "gitHostAllow",
+	"git-host-allowed-ranges":         "gitHost",
 	"oidc-issuer":                     "oidcProviders",
 	"oidc-provider":                   "oidcProviders",
 	"oidc-display-name":               "oidcProviders",
@@ -70,7 +70,7 @@ var readerComponent = map[string]map[string]string{ //nolint:gochecknoglobals //
 		"newTFEHandler": "api", "wireTokens": "api",
 	},
 	// The ranges apply to the connections that the routes of a namespace make.
-	"gitHostAllow": {"newGitHostService": "api"},
+	"gitHost": {"newGitHostService": "api"},
 	"oidcProviders": {
 		"bindingOf": "api", "hasStaticSignIn": "api", "newProviderAdmin": "api", "staticSignInProviders": "api",
 	},

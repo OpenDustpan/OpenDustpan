@@ -12,6 +12,12 @@ import (
 
 func hostAllowAll() hostAuthorizer { return hostAuthorizer{deny: nil} }
 
+// isFirstApp reports whether a is the registration that the first put makes.
+func isFirstApp(a *appDoc) bool {
+	return a.Kind == "github" && a.AppID == hostAppID && a.APIAddress == hostAPIAddress && a.Version == 1 &&
+		a.HookID != "" && a.PrivateKey.Set && a.EventSecret.Set && a.PrivateKey.SetID != ""
+}
+
 func TestGitHostAppLifecycle(t *testing.T) {
 	t.Parallel()
 
@@ -21,8 +27,7 @@ func TestGitHostAppLifecycle(t *testing.T) {
 	wantHost(t, created, http.StatusCreated)
 
 	first := decodeHost[appDoc](t, created)
-	if first.Kind != "github" || first.AppID != hostAppID || first.APIAddress != hostAPIAddress || first.Version != 1 ||
-		first.HookID == "" || !first.PrivateKey.Set || !first.EventSecret.Set || first.PrivateKey.SetID == "" {
+	if !isFirstApp(&first) {
 		t.Fatalf("created = %+v", first)
 	}
 
@@ -37,10 +42,20 @@ func TestGitHostAppLifecycle(t *testing.T) {
 		t.Fatalf("read = %+v, want %+v", got, first)
 	}
 
+	replaceAndDeleteApp(t, e, &first)
+}
+
+// replaceAndDeleteApp replaces the registration with the version that it read,
+// proves that the old version is stale, and deletes it.
+func replaceAndDeleteApp(t *testing.T, e *hostEnv, first *appDoc) {
+	t.Helper()
+
 	// A replacement keeps the hook ID, and the set IDs change.
-	replaced := e.do(t, hostCall{
+	put := hostCall{
 		headers: map[string]string{"If-Match": `"1"`}, method: http.MethodPut, target: hostAppPath, body: hostAppBody(),
-	})
+	}
+
+	replaced := e.do(t, put)
 	wantHost(t, replaced, http.StatusOK)
 
 	second := decodeHost[appDoc](t, replaced)
@@ -48,11 +63,7 @@ func TestGitHostAppLifecycle(t *testing.T) {
 		t.Fatalf("replaced = %+v, want the hook ID %s at version 2 and a new set ID", second, first.HookID)
 	}
 
-	stale := e.do(t, hostCall{
-		headers: map[string]string{"If-Match": `"1"`}, method: http.MethodPut, target: hostAppPath, body: hostAppBody(),
-	})
-	wantHost(t, stale, http.StatusPreconditionFailed)
-
+	wantHost(t, e.do(t, put), http.StatusPreconditionFailed)
 	wantHost(t, e.send(t, http.MethodDelete, hostAppPath, ""), http.StatusNoContent)
 	wantHost(t, e.send(t, http.MethodGet, hostAppPath, ""), http.StatusNotFound)
 }
@@ -94,7 +105,11 @@ func TestGitHostAppRefusesInputThatIsNotValid(t *testing.T) {
 
 		e := newHostEnv(t, hostAllowAll())
 
-		wantHost(t, e.send(t, http.MethodPut, "/api/dustpan/v1/git-host-apps/gitlab", hostAppBody()), http.StatusBadRequest)
+		wantHost(
+			t,
+			e.send(t, http.MethodPut, "/api/dustpan/v1/git-host-apps/gitlab", hostAppBody()),
+			http.StatusBadRequest,
+		)
 	})
 
 	t.Run("a body over the limit", func(t *testing.T) {
@@ -171,7 +186,8 @@ func TestGitHostInstallationAssignments(t *testing.T) {
 	created := e.send(t, http.MethodPut, hostInstallationsPath+"/100", `{"namespace":"acme"}`)
 	wantHost(t, created, http.StatusCreated)
 
-	if got := decodeHost[installationDoc](t, created); got.InstallationID != "100" || got.Namespace != "acme" || got.Version != 1 {
+	got := decodeHost[installationDoc](t, created)
+	if got.InstallationID != "100" || got.Namespace != "acme" || got.Version != 1 {
 		t.Fatalf("created = %+v", got)
 	}
 
@@ -234,6 +250,19 @@ func TestGitHostRegistrationInUseCannotBeDeleted(t *testing.T) {
 	wantHost(t, e.send(t, http.MethodDelete, hostAppPath, ""), http.StatusNoContent)
 }
 
+// hasRegistrationValues reports whether c shows the values of the registration.
+func (c *connectionDoc) hasRegistrationValues() bool {
+	return c.AppID == hostAppID && c.APIAddress == hostAPIAddress && c.HookID != ""
+}
+
+// isFirstConnection reports whether c is the connection that the first create
+// makes for installation 101.
+func isFirstConnection(c *connectionDoc) bool {
+	return c.Default && c.Kind == "github" && c.Auth == "app" && c.AppScope == "installation" &&
+		c.InstallationID == "101" && c.Version == 1 && c.Push && c.Namespace == "acme" && c.CredentialSets != nil &&
+		len(c.CredentialSets) == 0 && c.hasRegistrationValues()
+}
+
 func TestGitHostConnectionLifecycle(t *testing.T) {
 	t.Parallel()
 
@@ -244,10 +273,7 @@ func TestGitHostConnectionLifecycle(t *testing.T) {
 	wantHost(t, created, http.StatusCreated)
 
 	conn := decodeHost[connectionDoc](t, created)
-	if !conn.Default || conn.Kind != "github" || conn.Auth != "app" || conn.AppScope != "installation" ||
-		conn.InstallationID != "101" || conn.AppID != hostAppID || conn.APIAddress != hostAPIAddress ||
-		conn.HookID == "" || conn.Version != 1 || !conn.Push || conn.Namespace != "acme" || conn.CredentialSets == nil ||
-		len(conn.CredentialSets) != 0 {
+	if !isFirstConnection(&conn) {
 		t.Fatalf("created = %+v", conn)
 	}
 
@@ -336,6 +362,7 @@ func TestGitHostConnectionTakesNothingThatTheOperatorOwns(t *testing.T) {
 	e := newHostEnv(t, hostAllowAll())
 	e.register(t)
 
+	//nolint:gosec // The strings are fields of a request that the route refuses, not credentials.
 	for name, field := range map[string]string{
 		"an API address":     `"apiAddress":"https://evil.example.com"`,
 		"an app ID":          `"appID":"777"`,
@@ -367,7 +394,7 @@ func TestGitHostConnectionRefusesInputThatIsNotValid(t *testing.T) {
 	e := newHostEnv(t, hostAllowAll())
 	e.register(t)
 
-	for name, body := range map[string]string{
+	for name, body := range map[string]string{ //nolint:gosec // The strings are bodies of requests, not credentials.
 		"the token auth kind": `{"kind":"github","auth":"token","installationID":"101"}`,
 		"another kind":        `{"kind":"gitlab","auth":"app","installationID":"101"}`,
 		"no installation":     `{"kind":"github","auth":"app"}`,
@@ -507,9 +534,10 @@ func TestGitHostWritesWriteOneAuditEntryWithNoSecret(t *testing.T) {
 	wantHost(t, e.send(t, http.MethodPost, hostConnectionsPath+"/"+id+"/check", ""), http.StatusOK)
 	wantHost(t, e.send(t, http.MethodDelete, hostConnectionsPath+"/"+id, ""), http.StatusNoContent)
 
-	actions := []string{}
+	entries := e.auditEntries(t, "acme")
+	actions := make([]string, 0, len(entries))
 
-	for _, entry := range e.auditEntries(t, "acme") {
+	for _, entry := range entries {
 		actions = append(actions, entry.Action)
 
 		if entry.Subject != "tester" || entry.ObjectID != id {
@@ -522,8 +550,10 @@ func TestGitHostWritesWriteOneAuditEntryWithNoSecret(t *testing.T) {
 		t.Fatalf("actions = %s, want %s", got, want)
 	}
 
-	server := []string{}
-	for _, entry := range e.auditEntries(t, audit.ServerScope) {
+	serverEntries := e.auditEntries(t, audit.ServerScope)
+	server := make([]string, 0, len(serverEntries))
+
+	for _, entry := range serverEntries {
 		server = append(server, entry.Action)
 	}
 

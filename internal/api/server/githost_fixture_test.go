@@ -49,6 +49,7 @@ func (a hostAuthorizer) Authorize(
 		return identity.ErrDenied
 	}
 
+	//nolint:exhaustive // The authorizer allows four actions and refuses every other one.
 	switch action {
 	case identity.ActionServerReadGitHost, identity.ActionServerManageGitHost:
 		if obj.IsServer() {
@@ -171,12 +172,20 @@ type hostCall struct {
 func newHostEnv(t *testing.T, authz identity.Authorizer) *hostEnv {
 	t.Helper()
 
-	return newHostEnvWith(t, authz, true)
+	return newHostEnvWith(t, authz, withKeys)
 }
+
+// keyMode says whether the handler of a test has the Idempotency-Key middleware.
+type keyMode int
+
+const (
+	withKeys keyMode = iota
+	withoutKeys
+)
 
 // newHostEnvWith builds the environment of newHostEnv. With keys false the
 // handler has no Idempotency-Key middleware.
-func newHostEnvWith(t *testing.T, authz identity.Authorizer, keys bool) *hostEnv {
+func newHostEnvWith(t *testing.T, authz identity.Authorizer, keys keyMode) *hostEnv {
 	t.Helper()
 
 	st, nss := openIPAllowFixture(t)
@@ -195,11 +204,11 @@ func newHostEnvWith(t *testing.T, authz identity.Authorizer, keys bool) *hostEnv
 
 	var mw *idempotent.Middleware
 
-	if keys {
+	if keys == withKeys {
 		mw = newHostMiddleware(t, st)
 	}
 
-	return buildHostEnv(t, st, nss, svc, mw, authz, opener)
+	return buildHostEnv(t, hostParts{st: st, nss: nss, svc: svc, mw: mw, opener: opener}, authz)
 }
 
 func newHostMiddleware(t *testing.T, st *sqlite.Store) *idempotent.Middleware {
@@ -216,11 +225,19 @@ func newHostMiddleware(t *testing.T, st *sqlite.Store) *idempotent.Middleware {
 	return mw
 }
 
-func buildHostEnv(
-	t *testing.T, st *sqlite.Store, nss *namespace.Service, svc *forge.Service, mw *idempotent.Middleware,
-	authz identity.Authorizer, opener *hostOpener,
-) *hostEnv {
+// hostParts are the parts that buildHostEnv puts in a handler.
+type hostParts struct {
+	st     *sqlite.Store
+	nss    *namespace.Service
+	svc    *forge.Service
+	mw     *idempotent.Middleware
+	opener *hostOpener
+}
+
+func buildHostEnv(t *testing.T, parts hostParts, authz identity.Authorizer) *hostEnv {
 	t.Helper()
+
+	st, nss, svc, mw, opener := parts.st, parts.nss, parts.svc, parts.mw, parts.opener
 
 	handler, err := apiserver.NewHandler(apiserver.Config{
 		Preferences: nil, GitHost: svc, Idempotency: mw, Workers: nil, InstallationKind: "", Now: nil,
@@ -359,13 +376,15 @@ type connectionsDoc struct {
 	Connections []connectionDoc `json:"connections"`
 }
 
+type accountDoc struct {
+	ID       string   `json:"id"`
+	Login    string   `json:"login"`
+	Scopes   []string `json:"scopes"`
+	NoExpiry bool     `json:"noExpiry"`
+}
+
 type checkDoc struct {
-	Account struct {
-		ID       string   `json:"id"`
-		Login    string   `json:"login"`
-		Scopes   []string `json:"scopes"`
-		NoExpiry bool     `json:"noExpiry"`
-	} `json:"account"`
+	Account      accountDoc          `json:"account"`
 	Capabilities []string            `json:"capabilities"`
 	Missing      map[string][]string `json:"missing"`
 }

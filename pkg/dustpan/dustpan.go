@@ -33,7 +33,6 @@ package dustpan
 import (
 	"context"
 	"crypto/tls"
-	"crypto/x509"
 	"errors"
 	"fmt"
 	"io"
@@ -73,7 +72,6 @@ import (
 	blobcache "opendustpan.org/opendustpan/pkg/blob/cache"
 	"opendustpan.org/opendustpan/pkg/collection"
 	"opendustpan.org/opendustpan/pkg/durable"
-	"opendustpan.org/opendustpan/pkg/forge"
 	"opendustpan.org/opendustpan/pkg/idempotency"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/installation"
@@ -174,9 +172,7 @@ type settings struct {
 	profileStore         profile.Store
 	jobStore             job.Store
 	savedViewStore       savedview.Store
-	gitHostStore         forge.Store
-	gitHostAllow         []netip.Prefix
-	gitHostCAs           *x509.CertPool
+	gitHost              gitHostSettings
 	idempotencyStore     idempotency.Store
 	authenticator        identity.Authenticator
 	authorizer           identity.Authorizer
@@ -700,9 +696,7 @@ func defaultSettings() *settings {
 		profileStore:            nil,
 		jobStore:                nil,
 		savedViewStore:          nil,
-		gitHostStore:            nil,
-		gitHostAllow:            nil,
-		gitHostCAs:              nil,
+		gitHost:                 gitHostSettings{store: nil, allow: nil, cas: nil},
 		idempotencyStore:        nil,
 		authenticator:           nil,
 		authorizer:              nil,
@@ -2607,17 +2601,7 @@ func newServerHandler(
 		return nil, err
 	}
 
-	var sinks serverapi.AuditSinkSource
-	if cfg.auditShipper != nil {
-		sinks = cfg.auditShipper
-	}
-
-	gitHost, err := newGitHostService(cfg, deps)
-	if err != nil {
-		return nil, err
-	}
-
-	idem, err := idempotencyMiddleware(cfg)
+	gitHost, idem, err := newGitHostParts(cfg, deps)
 	if err != nil {
 		return nil, err
 	}
@@ -2652,7 +2636,7 @@ func newServerHandler(
 		TempAdmins:    tempReaderOf(cfg.namespaceStore),
 		Now:           cfg.now,
 		AuditChain:    auditChainPort(deps.chain),
-		AuditSinks:    sinks,
+		AuditSinks:    auditSinksOf(cfg),
 		Workers:       cfg.watch,
 		SignIn:        deps.signIn,
 		Preferences:   newPreferencesService(cfg),
@@ -2664,6 +2648,18 @@ func newServerHandler(
 	}
 
 	return handler, nil
+}
+
+// auditSinksOf returns the source of the audit sink list, or nil when no audit
+// shipper is set.
+//
+//nolint:ireturn // The route reads the list through its own port.
+func auditSinksOf(cfg *settings) serverapi.AuditSinkSource {
+	if cfg.auditShipper == nil {
+		return nil
+	}
+
+	return cfg.auditShipper
 }
 
 // newPreferencesService builds the preferences service from the namespace

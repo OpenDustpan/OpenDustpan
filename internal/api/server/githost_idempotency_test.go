@@ -16,7 +16,12 @@ func TestGitHostCreateReplaysTheFirstAnswerAndMakesOneConnection(t *testing.T) {
 	e := newHostEnv(t, hostAllowAll())
 	e.register(t)
 
-	call := hostCall{headers: keyed("create-1"), method: http.MethodPost, target: hostConnectionsPath, body: createBody("101")}
+	call := hostCall{
+		headers: keyed("create-1"),
+		method:  http.MethodPost,
+		target:  hostConnectionsPath,
+		body:    createBody("101"),
+	}
 
 	first := e.do(t, call)
 	wantHost(t, first, http.StatusCreated)
@@ -52,7 +57,12 @@ func TestGitHostKeyWithAnotherBodyIsRefused(t *testing.T) {
 	e := newHostEnv(t, hostAllowAll())
 	e.register(t)
 
-	first := hostCall{headers: keyed("create-2"), method: http.MethodPost, target: hostConnectionsPath, body: createBody("101")}
+	first := hostCall{
+		headers: keyed("create-2"),
+		method:  http.MethodPost,
+		target:  hostConnectionsPath,
+		body:    createBody("101"),
+	}
 	wantHost(t, e.do(t, first), http.StatusCreated)
 
 	other := first
@@ -102,7 +112,12 @@ func TestGitHostDeleteReplays(t *testing.T) {
 	e.register(t)
 
 	id := e.connect(t, "101")
-	call := hostCall{headers: keyed("delete-1"), method: http.MethodDelete, target: hostConnectionsPath + "/" + id, body: ""}
+	call := hostCall{
+		headers: keyed("delete-1"),
+		method:  http.MethodDelete,
+		target:  hostConnectionsPath + "/" + id,
+		body:    "",
+	}
 
 	wantHost(t, e.do(t, call), http.StatusNoContent)
 
@@ -136,8 +151,10 @@ func TestGitHostKeyThatIsNotValidIsRefused(t *testing.T) {
 	e.register(t)
 
 	for _, key := range []string{"", "has space\x00", strings.Repeat("k", 300)} {
-		call := hostCall{headers: map[string]string{"Idempotency-Key": key}, method: http.MethodPost,
-			target: hostConnectionsPath, body: createBody("101")}
+		call := hostCall{
+			headers: map[string]string{"Idempotency-Key": key}, method: http.MethodPost,
+			target: hostConnectionsPath, body: createBody("101"),
+		}
 
 		r := e.do(t, call)
 		if r.status != http.StatusBadRequest {
@@ -154,7 +171,7 @@ func TestGitHostKeyThatIsNotValidIsRefused(t *testing.T) {
 func TestGitHostKeyWithNoMiddlewareIsRefused(t *testing.T) {
 	t.Parallel()
 
-	e := newHostEnvWith(t, hostAllowAll(), false)
+	e := newHostEnvWith(t, hostAllowAll(), withoutKeys)
 	call := hostCall{headers: keyed("k"), method: http.MethodPut, target: hostAppPath, body: hostAppBody()}
 
 	r := e.do(t, call)
