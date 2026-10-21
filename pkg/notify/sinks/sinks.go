@@ -297,8 +297,6 @@ func (s *Service) changed(old notify.Sink, ch Change) (notify.Sink, []notify.Sin
 
 	next.SecretRefs = slices.Clone(old.SecretRefs)
 
-	var secrets []notify.SinkSecret
-
 	switch {
 	case ch.Target != nil && old.Kind == notify.SinkChat:
 		return notify.Sink{}, nil, fmt.Errorf(
@@ -308,36 +306,41 @@ func (s *Service) changed(old notify.Sink, ch Change) (notify.Sink, []notify.Sin
 	case ch.URL != nil && old.Kind != notify.SinkChat:
 		return notify.Sink{}, nil, fmt.Errorf("%w: only a chat sink takes a url", notify.ErrInvalid)
 	case ch.Target != nil && old.Kind == notify.SinkWebhook:
-		host, err := notify.WebhookHost(*ch.Target)
-		if err != nil {
-			return notify.Sink{}, nil, fmt.Errorf("%w: %w", notify.ErrInvalid, err)
-		}
-
-		// The new URL item goes first. The signing keys keep their refs, so
-		// a receiver keeps its key when the URL changes.
-		ref := ident.NewID("itm-")
-		next.Target = host
-		next.SecretRefs = slices.Concat([]string{ref}, old.SecretRefs[min(1, len(old.SecretRefs)):])
-		secrets = []notify.SinkSecret{{Ref: ref, Value: []byte(*ch.Target)}}
+		return s.withNewURL(next, *ch.Target, notify.WebhookHost, old.SecretRefs[min(1, len(old.SecretRefs)):])
 	case ch.Target != nil:
 		next.Target = *ch.Target
-	case ch.URL == nil:
-		// A change of the name keeps the destination.
+	case ch.URL != nil:
+		return s.withNewURL(next, *ch.URL, notify.ChatHost, nil)
 	default:
-		host, err := notify.ChatHost(*ch.URL)
-		if err != nil {
-			return notify.Sink{}, nil, fmt.Errorf("%w: %w", notify.ErrInvalid, err)
-		}
-
-		ref := ident.NewID("itm-")
-		next.Target, next.SecretRefs = host, []string{ref}
-		secrets = []notify.SinkSecret{{Ref: ref, Value: []byte(*ch.URL)}}
+		// A change of the name has no new URL.
 	}
 
-	// A change of the name keeps the address that the owner approved, so only a
-	// new address meets the port rule.
-	if err := s.checkPort(&next, secrets); err != nil {
-		return notify.Sink{}, nil, err
+	// A change of the name or of an email address has no new URL, so no new
+	// item meets the port rule: the address that the owner approved stays.
+	return next, nil, nil
+}
+
+// withNewURL returns next with the URL raw as its new first secret item, then
+// the refs keys of the items that stay, and the host of the URL as the target.
+// hostOf reads the host. A webhook sink keeps its signing keys, so a receiver
+// keeps its key when the URL changes. A chat sink keeps no other item. It
+// returns the new item, and notify.ErrInvalid when the port rule or hostOf
+// refuses the URL.
+func (s *Service) withNewURL(
+	next notify.Sink, raw string, hostOf func(string) (string, error), keys []string,
+) (notify.Sink, []notify.SinkSecret, error) {
+	host, err := hostOf(raw)
+	if err != nil {
+		return notify.Sink{}, nil, fmt.Errorf("%w: %w", notify.ErrInvalid, err)
+	}
+
+	ref := ident.NewID("itm-")
+	next.Target, next.SecretRefs = host, slices.Concat([]string{ref}, keys)
+
+	secrets := []notify.SinkSecret{{Ref: ref, Value: []byte(raw)}}
+
+	if portErr := s.checkPort(&next, secrets); portErr != nil {
+		return notify.Sink{}, nil, portErr
 	}
 
 	return next, secrets, nil
