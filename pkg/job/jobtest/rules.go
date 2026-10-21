@@ -220,6 +220,7 @@ func waitEnded(t *testing.T, h Harness, k durable.Kind, id durable.ID) {
 	for {
 		_, err := h.Durable.Claim(ctx, durable.ClaimRequest{
 			Owner: "runner-2", Kinds: []durable.Kind{k}, MaxVersions: nil, Lease: time.Minute,
+			TakeCanceled: false,
 		})
 		if err != nil && !errors.Is(err, durable.ErrNoWork) {
 			t.Fatalf("durable Claim = %v", err)

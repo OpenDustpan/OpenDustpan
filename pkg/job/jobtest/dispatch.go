@@ -264,6 +264,7 @@ func claimAfterExpiry(t *testing.T, h Harness, owner string, k durable.Kind) dur
 	for {
 		op, err := h.Durable.Claim(ctx, durable.ClaimRequest{
 			Owner: owner, Kinds: []durable.Kind{k}, MaxVersions: nil, Lease: time.Minute,
+			TakeCanceled: false,
 		})
 		if err == nil {
 			return op

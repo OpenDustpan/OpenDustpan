@@ -557,6 +557,7 @@ func (h *Handler) claimSweep(
 
 	s, err := h.sweeps.Claim(ctx, durable.ClaimRequest{
 		Owner: rn.ID, Kinds: kinds, MaxVersions: maxVersions, Lease: lease,
+		TakeCanceled: false,
 	})
 	if errors.Is(err, durable.ErrNoWork) {
 		return none, false, nil

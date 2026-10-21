@@ -184,6 +184,7 @@ func mustClaimDurable(t *testing.T, s durable.Store) durable.Operation {
 
 	op, err := s.Claim(t.Context(), durable.ClaimRequest{
 		Owner: "instance-a", Kinds: []durable.Kind{durableRestoreKind}, MaxVersions: nil, Lease: time.Hour,
+		TakeCanceled: false,
 	})
 	if errors.Is(err, durable.ErrNoWork) || err != nil {
 		t.Fatalf("claim durable operation: %v", err)

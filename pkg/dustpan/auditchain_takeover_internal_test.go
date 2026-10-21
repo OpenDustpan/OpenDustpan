@@ -125,6 +125,7 @@ func claimAndRecordTakeoverStep(
 
 	claimed, claimErr := chain.durableOps.Claim(t.Context(), durable.ClaimRequest{
 		Owner: "old", Kinds: []durable.Kind{auditChainKind}, MaxVersions: nil, Lease: takeoverLease,
+		TakeCanceled: false,
 	})
 	if claimErr != nil {
 		t.Fatalf("claim: %v", claimErr)

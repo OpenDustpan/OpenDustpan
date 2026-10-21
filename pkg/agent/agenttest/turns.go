@@ -58,6 +58,7 @@ func claimOp(t *testing.T, ops durable.Store) durable.Operation {
 
 	op, err := ops.Claim(t.Context(), durable.ClaimRequest{
 		Owner: "agenttest", Kinds: []durable.Kind{agent.KindTurn}, MaxVersions: nil, Lease: testLease,
+		TakeCanceled: false,
 	})
 	if err != nil {
 		t.Fatalf("Claim() = %v", err)

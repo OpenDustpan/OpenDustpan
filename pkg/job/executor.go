@@ -161,7 +161,10 @@ type Claimer interface {
 	// arrived: the executor then stops the phase and calls Finish.
 	Renew(ctx context.Context, c PhaseClaim, d time.Duration) (PhaseClaim, error)
 	// Release gives the phase back before it ends, with the rule of
-	// AfterLostClaim. With no recorded start of a step that changes
+	// AfterLostClaim. The end of the operation and the event of the job commit
+	// in one transaction (Change.End), bound to the claim c: a holder whose
+	// claim a takeover replaced changes nothing and gets ErrClaimLost. The
+	// call does not stop when the context of the request ends. With no recorded start of a step that changes
 	// resources under any claim of the phase, the operation waits for the
 	// next claim. Else the phase fails, also when the change ended. During
 	// a cancel, the job ends canceled when no change began, and failed when
@@ -169,8 +172,14 @@ type Claimer interface {
 	Release(ctx context.Context, c PhaseClaim) error
 	// Finish ends the phase with o, and moves the job by the state machine:
 	// to the next phase, to succeeded or to failed. A phase that fails
-	// during a cancel ends the job failed, never canceled. Finish of a
-	// deliver phase needs a Recorder.Delivered first.
+	// during a cancel ends the job failed, never canceled. The end of the
+	// operation and the event of the job commit in one transaction
+	// (Change.End), bound to the claim c, and the call does not stop when the
+	// context of the request ends. A successful Finish of a deliver phase
+	// needs a Recorder.Delivered first, and returns ErrInvalid before it, with
+	// the claim still live: the write-back executor must call Delivered
+	// before Finish and must not depend on this error. Finish with a failed
+	// outcome and Release still work.
 	Finish(ctx context.Context, c PhaseClaim, o Outcome) error
 }
 
