@@ -65,16 +65,10 @@ func (h *Handler) appendReadAudit(
 // change, so the change and its entry commit together or not at all (fail
 // closed). The service stamps the time of the change on it.
 func changeEntry(r *http.Request, p identity.Principal, obj identity.Object, action identity.Action) audit.Entry {
-	entry := tofuunit.Entry(r, p, obj, tofuunit.Detail{
+	return tofuunit.Entry(r, p, obj, tofuunit.Detail{
 		At: time.Time{}, Action: action, Version: "", ValuePath: "",
 		Kind: audit.KindChange, Outcome: audit.OutcomeSuccess, Reason: "",
 	})
-
-	// The change entry of this adapter has always named no access token,
-	// unlike its other entries. It stays so until a decision changes it.
-	entry.TokenID = ""
-
-	return entry
 }
 
 // failAudit records a lost audit entry: one log line with no secret and no
