@@ -20,6 +20,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -442,6 +443,7 @@ func startInprocessServer(
 		disableJournaling: in.disableJournaling,
 		ipAllowlists:      in.ipAllowlists,
 		signIn:            signIn,
+		publicURL:         inprocessPublicURL(in, ts),
 	})
 
 	handler = cappedHandler(faultedHandler(build.handler, in.journalRefuser), in.journalCap)
@@ -599,6 +601,9 @@ type serverArgs struct {
 	// signIn turns on the console sign-in of the in-process server, or is
 	// nil.
 	signIn *signInSetup
+	// publicURL is the external URL of the in-process server, or empty. The
+	// provider registry protocol compares each request with its host.
+	publicURL string
 }
 
 // profileStoreOptions returns the option that gives the in-process server the
@@ -632,6 +637,15 @@ func ipAllowlistOptions(st serverStore, args serverArgs, opts []dustpan.Option) 
 		dustpan.WithIPAllowlists(true),
 		dustpan.WithIPAllowlistsIncludeBootstrap(true),
 		dustpan.WithIPAllowlistStore(st),
+	)
+}
+
+// storeOptions returns the options that give the in-process server the optional
+// stores of st and the public URL.
+func storeOptions(st serverStore, wrapper secret.Wrapper, args serverArgs) []dustpan.Option {
+	return slices.Concat(
+		profileStoreOptions(st, wrapper), jobStoreOptions(st), savedViewStoreOptions(st),
+		registryStoreOptions(st), sinkStoreOptions(st), publicURLOptions(args.publicURL),
 	)
 }
 
@@ -681,7 +695,7 @@ func newServer(ctx context.Context, tb testing.TB, args serverArgs) serverBuild 
 		st,
 		args,
 		append(
-			storeOptions(st, wrapper),
+			storeOptions(st, wrapper, args),
 			[]dustpan.Option{
 				dustpan.WithRegion(region),
 				dustpan.WithNamespaceStore(st),

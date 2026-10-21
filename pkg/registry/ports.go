@@ -29,6 +29,10 @@ type Store interface {
 	//   - namespace.ErrFenced when the fence is stale or belongs to another
 	//     namespace than r.Address.
 	//   - ErrVersionExists when the version exists and r.SameContent is false.
+	//   - ErrKeyNotFound when r has a signing key and the namespace does not
+	//     trust it at the time of the transaction. The key check is in the same
+	//     transaction as the write, so a key removed after the checks of the
+	//     caller refuses the publish. A release with no key is a module.
 	//
 	// A publish of a version that exists with the same content returns nil and
 	// changes nothing, so a repeat after a timeout is safe. A repeat writes no
@@ -59,6 +63,20 @@ type TrustedKey struct {
 	Fingerprint string
 	// Armored is the public key in ASCII armor.
 	Armored []byte
+}
+
+// KeyInspector reads a public key that a namespace wants to trust. The
+// verifier adapter implements it, so the same library and the same policy
+// parse every key.
+type KeyInspector interface {
+	// Inspect parses armored. It returns the key in the canonical armored form
+	// that the registry stores, with the fingerprint of the primary key in
+	// uppercase hex. The server never takes a fingerprint from the caller. It
+	// returns ErrBadKey when armored does not hold exactly one public key, holds
+	// private key material, is expired or revoked now, has no key that can sign,
+	// uses SHA-1, DSA or ElGamal, or uses an RSA key of less than 2048 bits. The
+	// error text holds no byte of the key.
+	Inspect(ctx context.Context, armored []byte) (TrustedKey, error)
 }
 
 // SignatureVerifier checks the detached signature of a checksums file. An
