@@ -59,36 +59,19 @@ func newManagerRig(t *testing.T) *managerRig {
 	return r
 }
 
-func ref(t *testing.T, id string) identity.Object {
-	t.Helper()
-
-	obj, err := identity.UnitObject("opentofu", acme, id)
-	if err != nil {
-		t.Fatalf("UnitObject = %v", err)
-	}
-
-	return obj
-}
-
 var info = trigger.RequestInfo{Channel: audit.ChannelConsole, SourceIP: "192.0.2.1", UserAgent: "test", RequestID: "req-1"}
 
-func scheduleInput(t *testing.T, unitID string) trigger.SaveInput {
-	t.Helper()
-
+func scheduleInput(unitID string) trigger.SaveInput {
 	return trigger.SaveInput{
-		Unit: ref(t, unitID), Kind: trigger.KindSchedule, Frequency: trigger.Frequency{Preset: cron.PresetDaily, Cron: ""},
-		Source: nil, Enabled: true,
+		Namespace: acme, UnitID: unitID, Kind: trigger.KindSchedule,
+		Frequency: trigger.Frequency{Preset: cron.PresetDaily, Cron: ""}, SourceID: "", Enabled: true,
 	}
 }
 
-func followsInput(t *testing.T, unitID, sourceID string) trigger.SaveInput {
-	t.Helper()
-
-	src := ref(t, sourceID)
-
+func followsInput(unitID, sourceID string) trigger.SaveInput {
 	return trigger.SaveInput{
-		Unit: ref(t, unitID), Kind: trigger.KindFollows, Frequency: trigger.Frequency{Preset: "", Cron: ""},
-		Source: &src, Enabled: true,
+		Namespace: acme, UnitID: unitID, Kind: trigger.KindFollows, Frequency: trigger.Frequency{Preset: "", Cron: ""},
+		SourceID: sourceID, Enabled: true,
 	}
 }
 
@@ -124,7 +107,7 @@ func TestManagerCreate(t *testing.T) {
 
 	r := newManagerRig(t)
 
-	got, err := r.m.Create(t.Context(), person(ada), info, scheduleInput(t, "b"))
+	got, err := r.m.Create(t.Context(), person(ada), info, scheduleInput("b"))
 	if err != nil {
 		t.Fatalf("Create = %v", err)
 	}
@@ -182,63 +165,63 @@ func TestManagerCreateRefusals(t *testing.T) {
 		action identity.Action
 	}{
 		{
-			name: "no settings action", caller: person(ada), in: func(t *testing.T) trigger.SaveInput { return scheduleInput(t, "b") },
+			name: "no settings action", caller: person(ada), in: func(*testing.T) trigger.SaveInput { return scheduleInput("b") },
 			setup:  func(r *managerRig) { delete(r.authz.allow, ada+" "+string(trigger.SettingsAction)+" b") },
 			want:   identity.ErrDenied,
 			action: trigger.SettingsAction,
 		},
 		{
-			name: "no start action", caller: person(ada), in: func(t *testing.T) trigger.SaveInput { return scheduleInput(t, "b") },
+			name: "no start action", caller: person(ada), in: func(*testing.T) trigger.SaveInput { return scheduleInput("b") },
 			setup:  func(r *managerRig) { delete(r.authz.allow, ada+" "+string(trigger.StartAction)+" b") },
 			want:   identity.ErrDenied,
 			action: trigger.StartAction,
 		},
 		{
-			name: "no read on the source", caller: person(ada), in: func(t *testing.T) trigger.SaveInput { return followsInput(t, "b", "a") },
+			name: "no read on the source", caller: person(ada), in: func(*testing.T) trigger.SaveInput { return followsInput("b", "a") },
 			setup:  func(r *managerRig) { delete(r.authz.allow, ada+" "+string(identity.ActionUnitRead)+" a") },
 			want:   identity.ErrDenied,
 			action: identity.ActionUnitRead,
 		},
 		{
-			name: "a person who holds nothing", caller: person(grace), in: func(t *testing.T) trigger.SaveInput { return scheduleInput(t, "b") },
+			name: "a person who holds nothing", caller: person(grace), in: func(*testing.T) trigger.SaveInput { return scheduleInput("b") },
 			setup: nil, want: identity.ErrDenied, action: trigger.SettingsAction,
 		},
 		{
 			name: "a unit that does not exist is a denial too", caller: person(ada),
-			in:     func(t *testing.T) trigger.SaveInput { return scheduleInput(t, "b") },
+			in:     func(*testing.T) trigger.SaveInput { return scheduleInput("b") },
 			setup:  func(r *managerRig) { r.units.gone["b"] = true },
 			want:   identity.ErrDenied,
 			action: trigger.SettingsAction,
 		},
 		{
 			name: "a source that does not exist is a denial too", caller: person(ada),
-			in:     func(t *testing.T) trigger.SaveInput { return followsInput(t, "b", "a") },
+			in:     func(*testing.T) trigger.SaveInput { return followsInput("b", "a") },
 			setup:  func(r *managerRig) { r.units.gone["a"] = true },
 			want:   identity.ErrDenied,
 			action: trigger.SettingsAction,
 		},
 		{
-			name: "a job token", caller: jobToken, in: func(t *testing.T) trigger.SaveInput { return scheduleInput(t, "b") },
+			name: "a job token", caller: jobToken, in: func(*testing.T) trigger.SaveInput { return scheduleInput("b") },
 			setup: nil, want: identity.ErrDenied, action: "",
 		},
 		{
-			name: "the namespace service principal", caller: service, in: func(t *testing.T) trigger.SaveInput { return scheduleInput(t, "b") },
+			name: "the namespace service principal", caller: service, in: func(*testing.T) trigger.SaveInput { return scheduleInput("b") },
 			setup: nil, want: identity.ErrDenied, action: "",
 		},
 		{
-			name: "no principal", caller: identity.Principal{}, in: func(t *testing.T) trigger.SaveInput { return scheduleInput(t, "b") },
+			name: "no principal", caller: identity.Principal{}, in: func(*testing.T) trigger.SaveInput { return scheduleInput("b") },
 			setup: nil, want: trigger.ErrInvalid, action: "",
 		},
 		{
 			name: "a saver that a start would refuse", caller: person(ada),
-			in:    func(t *testing.T) trigger.SaveInput { return scheduleInput(t, "b") },
+			in:    func(*testing.T) trigger.SaveInput { return scheduleInput("b") },
 			setup: func(r *managerRig) { r.savers.err = trigger.ErrSaverDenied }, want: trigger.ErrSaverDenied, action: "",
 		},
 		{
 			name: "a follows trigger with no source", caller: person(ada),
-			in: func(t *testing.T) trigger.SaveInput {
-				in := followsInput(t, "b", "a")
-				in.Source = nil
+			in: func(*testing.T) trigger.SaveInput {
+				in := followsInput("b", "a")
+				in.SourceID = ""
 
 				return in
 			},
@@ -246,10 +229,9 @@ func TestManagerCreateRefusals(t *testing.T) {
 		},
 		{
 			name: "a schedule trigger with a source", caller: person(ada),
-			in: func(t *testing.T) trigger.SaveInput {
-				in := scheduleInput(t, "b")
-				src := ref(t, "a")
-				in.Source = &src
+			in: func(*testing.T) trigger.SaveInput {
+				in := scheduleInput("b")
+				in.SourceID = "a"
 
 				return in
 			},
@@ -257,8 +239,8 @@ func TestManagerCreateRefusals(t *testing.T) {
 		},
 		{
 			name: "a schedule that runs too fast", caller: person(ada),
-			in: func(t *testing.T) trigger.SaveInput {
-				in := scheduleInput(t, "b")
+			in: func(*testing.T) trigger.SaveInput {
+				in := scheduleInput("b")
 				in.Frequency = trigger.Frequency{Preset: "", Cron: "* * * * *"}
 
 				return in
@@ -266,21 +248,20 @@ func TestManagerCreateRefusals(t *testing.T) {
 			setup: nil, want: trigger.ErrInvalid, action: "",
 		},
 		{
-			name: "a reference that is not a unit", caller: person(ada),
+			name: "a body with no unit", caller: person(ada),
 			in: func(*testing.T) trigger.SaveInput {
-				return trigger.SaveInput{
-					Unit: identity.NamespaceObject(acme), Kind: trigger.KindReviewRequestPush,
-					Frequency: trigger.Frequency{Preset: "", Cron: ""}, Source: nil, Enabled: true,
-				}
+				in := scheduleInput("")
+
+				return in
 			},
 			setup: nil, want: trigger.ErrInvalid, action: "",
 		},
 		{
-			name: "a store that fails", caller: person(ada), in: func(t *testing.T) trigger.SaveInput { return scheduleInput(t, "b") },
+			name: "a store that fails", caller: person(ada), in: func(*testing.T) trigger.SaveInput { return scheduleInput("b") },
 			setup: func(r *managerRig) { r.store.putErr = namespace.ErrFenced }, want: namespace.ErrFenced, action: "",
 		},
 		{
-			name: "a fence that fails", caller: person(ada), in: func(t *testing.T) trigger.SaveInput { return scheduleInput(t, "b") },
+			name: "a fence that fails", caller: person(ada), in: func(*testing.T) trigger.SaveInput { return scheduleInput("b") },
 			setup: func(r *managerRig) { r.fences.err = namespace.ErrNotFound }, want: namespace.ErrNotFound, action: "",
 		},
 	}
@@ -316,11 +297,11 @@ func TestManagerCreateCycle(t *testing.T) {
 
 	r := newManagerRig(t)
 
-	if _, err := r.m.Create(t.Context(), person(ada), info, followsInput(t, "b", "a")); err != nil {
+	if _, err := r.m.Create(t.Context(), person(ada), info, followsInput("b", "a")); err != nil {
 		t.Fatalf("Create b follows a = %v", err)
 	}
 
-	_, err := r.m.Create(t.Context(), person(ada), info, followsInput(t, "a", "b"))
+	_, err := r.m.Create(t.Context(), person(ada), info, followsInput("a", "b"))
 	wantErr(t, "a follows b", err, trigger.ErrCycle)
 
 	var cycle *trigger.CycleError
@@ -342,14 +323,14 @@ func TestManagerReplace(t *testing.T) {
 
 	r := newManagerRig(t)
 
-	first, err := r.m.Create(t.Context(), person(ada), info, scheduleInput(t, "b"))
+	first, err := r.m.Create(t.Context(), person(ada), info, scheduleInput("b"))
 	if err != nil {
 		t.Fatalf("Create = %v", err)
 	}
 
 	r.resolveGrace()
 
-	in := scheduleInput(t, "b")
+	in := scheduleInput("b")
 	in.Enabled = false
 
 	got, err := r.m.Replace(t.Context(), person(grace), info, acme, first.ID, in)
@@ -362,21 +343,27 @@ func TestManagerReplace(t *testing.T) {
 	}
 
 	// The unit and the kind do not change.
-	_, err = r.m.Replace(t.Context(), person(ada), info, acme, first.ID, scheduleInput(t, "c"))
+	_, err = r.m.Replace(t.Context(), person(ada), info, acme, first.ID, scheduleInput("c"))
 	wantErr(t, "another unit", err, trigger.ErrInvalid)
 
-	_, err = r.m.Replace(t.Context(), person(ada), info, acme, first.ID, followsInput(t, "b", "a"))
+	_, err = r.m.Replace(t.Context(), person(ada), info, acme, first.ID, followsInput("b", "a"))
 	wantErr(t, "another kind", err, trigger.ErrInvalid)
 
-	_, err = r.m.Replace(t.Context(), person(ada), info, acme, "trg-nope", scheduleInput(t, "b"))
+	_, err = r.m.Replace(t.Context(), person(ada), info, acme, "trg-nope", scheduleInput("b"))
 	wantErr(t, "an unknown trigger", err, trigger.ErrNotFound)
+
+	other := scheduleInput("b")
+	other.Namespace = "other"
+
+	_, err = r.m.Replace(t.Context(), person(ada), info, acme, first.ID, other)
+	wantErr(t, "a body for another namespace", err, trigger.ErrInvalid)
 
 	// A person without the actions on the unit of the trigger cannot replace it,
 	// whatever unit the body names.
 	r.authz.grant(grace, "c", trigger.SettingsAction, trigger.StartAction)
 	delete(r.authz.allow, grace+" "+string(trigger.SettingsAction)+" b")
 
-	_, err = r.m.Replace(t.Context(), person(grace), info, acme, first.ID, scheduleInput(t, "c"))
+	_, err = r.m.Replace(t.Context(), person(grace), info, acme, first.ID, scheduleInput("c"))
 	wantErr(t, "a body for a unit the caller may change", err, identity.ErrDenied)
 }
 
@@ -390,7 +377,7 @@ func TestManagerReads(t *testing.T) {
 
 	r := newManagerRig(t)
 
-	created, err := r.m.Create(t.Context(), person(ada), info, scheduleInput(t, "b"))
+	created, err := r.m.Create(t.Context(), person(ada), info, scheduleInput("b"))
 	if err != nil {
 		t.Fatalf("Create = %v", err)
 	}
@@ -400,7 +387,7 @@ func TestManagerReads(t *testing.T) {
 		t.Errorf("Get = %+v, %v, %v; want the trigger and its unit", got, obj, err)
 	}
 
-	list, err := r.m.List(t.Context(), person(ada), ref(t, "b"))
+	list, err := r.m.List(t.Context(), person(ada), acme, "b")
 	if err != nil || len(list) != 1 || list[0] != created {
 		t.Errorf("List = %+v, %v; want the trigger", list, err)
 	}
@@ -410,7 +397,7 @@ func TestManagerReads(t *testing.T) {
 	_, _, err = r.m.Get(t.Context(), person(grace), acme, created.ID)
 	wantErr(t, "Get without read", err, trigger.ErrNotFound)
 
-	_, err = r.m.List(t.Context(), person(grace), ref(t, "b"))
+	_, err = r.m.List(t.Context(), person(grace), acme, "b")
 	wantErr(t, "List without read", err, trigger.ErrNotFound)
 
 	_, _, err = r.m.Get(t.Context(), person(ada), acme, "trg-nope")
@@ -421,7 +408,7 @@ func TestManagerReads(t *testing.T) {
 	_, _, err = r.m.Get(t.Context(), person(ada), acme, created.ID)
 	wantErr(t, "Get of a trigger of a deleted unit", err, trigger.ErrNotFound)
 
-	_, err = r.m.List(t.Context(), person(ada), ref(t, "b"))
+	_, err = r.m.List(t.Context(), person(ada), acme, "b")
 	wantErr(t, "List of a deleted unit", err, trigger.ErrNotFound)
 }
 
@@ -430,7 +417,7 @@ func TestManagerDelete(t *testing.T) {
 
 	r := newManagerRig(t)
 
-	created, err := r.m.Create(t.Context(), person(ada), info, scheduleInput(t, "b"))
+	created, err := r.m.Create(t.Context(), person(ada), info, scheduleInput("b"))
 	if err != nil {
 		t.Fatalf("Create = %v", err)
 	}
@@ -470,7 +457,7 @@ func TestManagerFire(t *testing.T) {
 
 	r := newManagerRig(t)
 
-	created, err := r.m.Create(t.Context(), person(ada), info, scheduleInput(t, "b"))
+	created, err := r.m.Create(t.Context(), person(ada), info, scheduleInput("b"))
 	if err != nil {
 		t.Fatalf("Create = %v", err)
 	}

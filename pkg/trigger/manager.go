@@ -58,16 +58,16 @@ type RequestInfo struct {
 }
 
 // SaveInput is what a caller gives to save a trigger. The unit and the source
-// are references by name, as a person gives them. The server finds their
-// stable IDs.
+// are stable unit IDs in Namespace.
 type SaveInput struct {
-	Unit      identity.Object
+	Namespace namespace.Name
+	UnitID    string
 	Kind      Kind
 	Frequency Frequency
-	// Source is the unit that a follows trigger follows, and nil for any
+	// SourceID is the unit that a follows trigger follows, and empty for any
 	// other kind.
-	Source  *identity.Object
-	Enabled bool
+	SourceID string
+	Enabled  bool
 }
 
 // ManagerConfig holds the ports of a Manager.
@@ -140,6 +140,13 @@ func (m *Manager) Create(ctx context.Context, caller identity.Principal, info Re
 	return m.save(ctx, caller, info, m.newID(), in, false)
 }
 
+// SaverOK reports whether the last saver of t still holds the actions of a
+// start now. A trigger whose saver does not needs a new save, and the console
+// says so.
+func (m *Manager) SaverOK(ctx context.Context, t *Trigger) bool {
+	return m.savers.CheckStart(ctx, *t) == nil
+}
+
 // Replace saves the trigger id of the namespace ns again. The unit and the kind
 // do not change. The caller becomes the last saver, and so takes over the
 // trigger. It returns the errors of Create, and ErrNotFound for an unknown
@@ -147,6 +154,10 @@ func (m *Manager) Create(ctx context.Context, caller identity.Principal, info Re
 func (m *Manager) Replace(
 	ctx context.Context, caller identity.Principal, info RequestInfo, ns namespace.Name, id ID, in SaveInput,
 ) (Trigger, error) {
+	if in.Namespace != ns {
+		return Trigger{}, fmt.Errorf("%w: the body names another namespace than the path", ErrInvalid)
+	}
+
 	old, err := m.store.Get(ctx, ns, id)
 	if err != nil {
 		return Trigger{}, fmt.Errorf("trigger %s: %w", quote(string(id)), err)
@@ -169,7 +180,7 @@ func (m *Manager) save(
 		return Trigger{}, err
 	}
 
-	unit, obj, err := m.findUnit(ctx, in.Unit)
+	unit, obj, err := m.findUnit(ctx, in.Namespace, in.UnitID)
 	if err != nil {
 		return Trigger{}, err
 	}
@@ -183,8 +194,8 @@ func (m *Manager) save(
 		Source: graph.Unit{Namespace: "", Tool: "", ID: ""}, Enabled: in.Enabled, LastSaver: caller.Subject,
 	}
 
-	if in.Source != nil {
-		source, srcObj, err := m.findUnit(ctx, *in.Source)
+	if in.SourceID != "" {
+		source, srcObj, err := m.findUnit(ctx, in.Namespace, in.SourceID)
 		if err != nil {
 			return Trigger{}, err
 		}
@@ -239,10 +250,12 @@ func (m *Manager) Get(ctx context.Context, caller identity.Principal, ns namespa
 	return t, obj, nil
 }
 
-// List returns the triggers of the unit ref, ordered by ID. A caller without
-// unit:read on the unit, and a unit that does not exist, give ErrNotFound.
-func (m *Manager) List(ctx context.Context, caller identity.Principal, ref identity.Object) ([]Trigger, error) {
-	unit, err := m.units.Unit(ctx, ref)
+// List returns the triggers of the unit unitID of the namespace ns, ordered by
+// ID. A caller without unit:read on the unit, and a unit that does not exist,
+// give ErrNotFound.
+func (m *Manager) List(ctx context.Context, caller identity.Principal, ns namespace.Name, unitID string,
+) ([]Trigger, error) {
+	unit, err := m.units.Find(ctx, ns, unitID)
 	if err != nil {
 		return nil, notFound(err)
 	}
@@ -363,20 +376,21 @@ func checkCaller(caller identity.Principal) error {
 	return nil
 }
 
-// findUnit finds the unit that ref names and its reference with the unit ID.
-func (m *Manager) findUnit(ctx context.Context, ref identity.Object) (graph.Unit, identity.Object, error) {
-	if !ref.IsUnit() {
-		return graph.Unit{}, identity.Object{}, fmt.Errorf("%w: the reference is not a unit", ErrInvalid)
+// findUnit finds the unit with the stable ID unitID in ns and its current
+// reference.
+func (m *Manager) findUnit(ctx context.Context, ns namespace.Name, unitID string) (graph.Unit, identity.Object, error) {
+	if _, err := namespace.ParseName(ns.String()); err != nil || unitID == "" {
+		return graph.Unit{}, identity.Object{}, fmt.Errorf("%w: a unit is a namespace and a unit ID", ErrInvalid)
 	}
 
-	unit, err := m.units.Unit(ctx, ref)
+	unit, err := m.units.Find(ctx, ns, unitID)
 	if err != nil {
-		return graph.Unit{}, identity.Object{}, m.unitError(ref, err)
+		return graph.Unit{}, identity.Object{}, m.unitError(ns, err)
 	}
 
 	obj, err := m.units.Object(ctx, unit)
 	if err != nil {
-		return graph.Unit{}, identity.Object{}, m.unitError(ref, err)
+		return graph.Unit{}, identity.Object{}, m.unitError(ns, err)
 	}
 
 	return unit, obj, nil
@@ -384,12 +398,12 @@ func (m *Manager) findUnit(ctx context.Context, ref identity.Object) (graph.Unit
 
 // unitError maps a failed lookup of a unit. A unit that does not exist gets the
 // same refusal as a unit that the caller may not change.
-func (m *Manager) unitError(ref identity.Object, err error) error {
+func (m *Manager) unitError(ns namespace.Name, err error) error {
 	if errors.Is(err, ErrUnitGone) {
-		return &DeniedError{Action: SettingsAction, Object: ref, Cause: nil}
+		return &DeniedError{Action: SettingsAction, Object: identity.NamespaceObject(ns), Cause: nil}
 	}
 
-	return fmt.Errorf("find unit %s: %w", ref, err)
+	return fmt.Errorf("find unit: %w", err)
 }
 
 // authorize checks that caller holds each of actions on obj.
@@ -417,7 +431,7 @@ func (m *Manager) authorizeUnit(ctx context.Context, caller identity.Principal, 
 ) (identity.Object, error) {
 	obj, err := m.units.Object(ctx, unit)
 	if err != nil {
-		return identity.Object{}, m.unitError(identity.Object{}, err)
+		return identity.Object{}, m.unitError(unit.Namespace, err)
 	}
 
 	if err := m.authorize(ctx, caller, obj, actions...); err != nil {

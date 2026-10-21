@@ -118,12 +118,12 @@ func (u *fakeUnits) Object(_ context.Context, unit graph.Unit) (identity.Object,
 	return obj.WithUnitID(unit.ID), nil
 }
 
-func (u *fakeUnits) Unit(_ context.Context, ref identity.Object) (graph.Unit, error) {
-	if u.gone[ref.UnitName()] {
+func (u *fakeUnits) Find(_ context.Context, ns namespace.Name, unitID string) (graph.Unit, error) {
+	if u.gone[unitID] {
 		return graph.Unit{}, trigger.ErrUnitGone
 	}
 
-	return graph.Unit{Namespace: ref.Namespace(), Tool: ref.Tool(), ID: ref.UnitName()}, nil
+	return graph.Unit{Namespace: ns, Tool: "opentofu", ID: unitID}, nil
 }
 
 // fakeFences answers one fence for every namespace.

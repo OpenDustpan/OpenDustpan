@@ -8,6 +8,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/graph"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/job"
+	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/trigger"
 	"opendustpan.org/opendustpan/pkg/trigger/jobstarter"
 )
@@ -45,7 +46,7 @@ func (u fakeUnits) Object(_ context.Context, unit graph.Unit) (identity.Object, 
 	return obj.WithUnitID(unit.ID), nil
 }
 
-func (fakeUnits) Unit(context.Context, identity.Object) (graph.Unit, error) {
+func (fakeUnits) Find(context.Context, namespace.Name, string) (graph.Unit, error) {
 	return graph.Unit{}, errors.New("not used")
 }
 

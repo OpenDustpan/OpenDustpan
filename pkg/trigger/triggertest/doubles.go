@@ -129,9 +129,9 @@ func (*Doubles) Object(_ context.Context, u graph.Unit) (identity.Object, error)
 	return obj.WithUnitID(u.ID), nil
 }
 
-// Unit implements trigger.Units.
-func (*Doubles) Unit(_ context.Context, ref identity.Object) (graph.Unit, error) {
-	return graph.Unit{Namespace: ref.Namespace(), Tool: ref.Tool(), ID: ref.UnitName()}, nil
+// Find implements trigger.Units.
+func (*Doubles) Find(_ context.Context, ns namespace.Name, unitID string) (graph.Unit, error) {
+	return graph.Unit{Namespace: ns, Tool: "opentofu", ID: unitID}, nil
 }
 
 // Append implements trigger.AuditAppender.

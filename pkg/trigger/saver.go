@@ -7,6 +7,7 @@ import (
 
 	"opendustpan.org/opendustpan/pkg/graph"
 	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/namespace"
 )
 
 // Errors of the checks on the last saver of a trigger.
@@ -40,10 +41,10 @@ type Units interface {
 	// set. It returns ErrUnitGone for a unit that does not exist or is deleted,
 	// and for a unit whose namespace or tool differs from those of u.
 	Object(ctx context.Context, u graph.Unit) (identity.Object, error)
-	// Unit returns the unit that the reference ref names, with its stable
-	// ID. ref carries no unit ID that the call trusts. It returns ErrUnitGone
-	// for a unit that does not exist or is deleted.
-	Unit(ctx context.Context, ref identity.Object) (graph.Unit, error)
+	// Find returns the live unit of the namespace ns with the stable ID
+	// unitID. It returns ErrUnitGone for a unit that does not exist, that is
+	// deleted, or that belongs to another namespace.
+	Find(ctx context.Context, ns namespace.Name, unitID string) (graph.Unit, error)
 }
 
 // SaverResolver turns the subject of a saver into the current principal. The
