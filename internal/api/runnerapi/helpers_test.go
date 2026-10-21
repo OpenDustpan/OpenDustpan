@@ -25,11 +25,13 @@ import (
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/durable"
 	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/job"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/runner"
 	"opendustpan.org/opendustpan/pkg/runner/protocol"
 	"opendustpan.org/opendustpan/pkg/store/sqlite"
+	"opendustpan.org/opendustpan/pkg/workspace"
 )
 
 // phaseKey is the key of the phase that the tests start.
@@ -141,10 +143,18 @@ type runnerStores interface {
 type stores struct {
 	namespaces namespace.Store
 	operations durable.Store
+	jobs       job.Store
+	units      unitStore
 	runners    runnerStores
 	audit      interface {
 		List(ctx context.Context, ns namespace.Name, page audit.Page) (audit.Listing, error)
 	}
+}
+
+// unitStore makes the units that a job names. Both SQL stores implement it.
+type unitStore interface {
+	CreateWorkspace(ctx context.Context, w workspace.Workspace, fence namespace.Fence) error
+	ListUnits(ctx context.Context, ns namespace.Name) ([]inventory.Entry, error)
 }
 
 // backend opens an empty store of one SQL dialect.
@@ -178,7 +188,9 @@ func openSQLite(t *testing.T) stores {
 		}
 	})
 
-	return stores{namespaces: s, operations: s.DurableOperations(), runners: s.Runners(), audit: s}
+	return stores{
+		namespaces: s, operations: s.DurableOperations(), jobs: s.Jobs(), units: s, runners: s.Runners(), audit: s,
+	}
 }
 
 // newEnv opens a SQLite store, creates the namespace acme, and serves the
@@ -194,6 +206,20 @@ func newEnv(t *testing.T) *env {
 func newEnvOn(t *testing.T, lease time.Duration, open func(t *testing.T) stores) *env {
 	t.Helper()
 
+	return newEnvWith(t, lease, open, nil)
+}
+
+// newEnvWith is newEnvOn with the claimer that phases returns for the
+// stores. A nil phases keeps the claimer of the other tests, which has no
+// jobs.
+func newEnvWith(
+	t *testing.T,
+	lease time.Duration,
+	open func(t *testing.T) stores,
+	phases func(stores) job.Claimer,
+) *env {
+	t.Helper()
+
 	s := open(t)
 
 	ns := namespace.Namespace{
@@ -204,10 +230,19 @@ func newEnvOn(t *testing.T, lease time.Duration, open func(t *testing.T) stores)
 		t.Fatalf("create namespace: %v", err)
 	}
 
-	clock := &skewClock{offset: atomic.Int64{}}
-	h, srv, claimer := serve(t, s, serveOptions{lease: lease, now: clock.now, authz: identity.AdminOnly{}})
+	var claimer job.Claimer
+	if phases != nil {
+		claimer = phases(s)
+	}
 
-	return &env{t: t, store: s, server: srv, handler: h, claimer: claimer, fence: ns.Fence(), clock: clock}
+	clock := &skewClock{offset: atomic.Int64{}}
+	h, srv, ops := serve(
+		t,
+		s,
+		serveOptions{lease: lease, now: clock.now, authz: identity.AdminOnly{}, claimer: claimer},
+	)
+
+	return &env{t: t, store: s, server: srv, handler: h, claimer: ops, fence: ns.Fence(), clock: clock}
 }
 
 // skewClock is the clock of the server in a test: the real time plus an
@@ -229,6 +264,8 @@ type serveOptions struct {
 	lease time.Duration
 	now   func() time.Time
 	authz identity.Authorizer
+	// claimer replaces the claimer of the test, which has no jobs.
+	claimer job.Claimer
 }
 
 // serve returns a handler over s on a test server. Two calls with the stores
@@ -243,9 +280,14 @@ func serve(t *testing.T, s stores, opts serveOptions) (*runnerapi.Handler, *http
 
 	claimer := &opsClaimer{ops: s.operations, lease: opts.lease, released: atomic.Int64{}}
 
+	var phases job.Claimer = claimer
+	if opts.claimer != nil {
+		phases = opts.claimer
+	}
+
 	h, err := runnerapi.NewHandler(runnerapi.Config{
 		Audit: nil, OnAuditFailure: nil,
-		Namespaces: service, Pools: s.runners, Members: s.runners, Handoffs: s.runners, Claimer: claimer, Sweeps: nil,
+		Namespaces: service, Pools: s.runners, Members: s.runners, Handoffs: s.runners, Claimer: phases, Sweeps: nil,
 		Operations: s.operations, Authenticator: adminAuthenticator{}, Authorizer: opts.authz,
 		Sessions: nil, Logger: slog.New(slog.DiscardHandler), Release: serverRelease(), ServerURL: serverURL,
 		Now: opts.now, PollInterval: 20 * time.Millisecond,

@@ -13,6 +13,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/collection"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/inventory"
+	"opendustpan.org/opendustpan/pkg/job"
 	"opendustpan.org/opendustpan/pkg/job/jobtest"
 	"opendustpan.org/opendustpan/pkg/manuallock"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -197,6 +198,23 @@ func lockEntry(ns namespace.Name, target manuallock.Target) audit.Entry {
 	}
 }
 
+// stepAppender is what the job store of both adapters adds to job.Store: the
+// write of a step record, which the recorder of a running phase uses.
+type stepAppender interface {
+	AppendStepRecord(ctx context.Context, fence namespace.Fence, id job.ID, phase int, r job.StepRecord) error
+}
+
+func (d *jobDomain) RecordStepBegin(
+	ctx context.Context, fence namespace.Fence, id job.ID, phase int, r job.StepRecord,
+) error {
+	a, ok := d.s.Jobs().(stepAppender)
+	if !ok {
+		return fmt.Errorf("the job store has no step record write: %w", job.ErrUnsupported)
+	}
+
+	return a.AppendStepRecord(ctx, fence, id, phase, r)
+}
+
 func (d *jobDomain) AuditEntries(ctx context.Context, ns namespace.Name) ([]audit.Entry, error) {
 	var out []audit.Entry
 
@@ -227,6 +245,10 @@ func TestJobConformance(t *testing.T) {
 		s := open(t)
 		j := s.Jobs()
 
-		return jobtest.Harness{Jobs: j, Durable: s.DurableOperationsPort(), Freezes: j, Domain: &jobDomain{s: s}}
+		ops := s.DurableOperationsPort()
+
+		return jobtest.Harness{
+			Jobs: j, Durable: ops, Freezes: j, Claimer: job.NewClaimer(j, ops, s), Domain: &jobDomain{s: s},
+		}
 	})
 }

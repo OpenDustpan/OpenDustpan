@@ -255,3 +255,34 @@ func setVerificationIn(
 
 	return true, update(ctx, tx, &j, prev)
 }
+
+// AppendStepRecord appends r to the step records of the phase at index phase
+// of the job id, and raises the version of the job. The recorder of a
+// running phase writes its step records through it, and the conformance
+// suite uses it to set up a takeover. It returns job.ErrNotFound for an
+// unknown job, and job.ErrInvalid for a phase that the job does not have.
+func (s *Store) AppendStepRecord(ctx context.Context, fence namespace.Fence, id job.ID, phase int,
+	r job.StepRecord,
+) error {
+	return s.run.Write(ctx, fence, func(tx Tx) error {
+		j, err := loadJob(ctx, tx, id, fence.Namespace)
+		if err != nil {
+			return err
+		}
+
+		if phase < 0 || phase >= len(j.Phases) {
+			return fmt.Errorf("%w: job %s has no phase %d", job.ErrInvalid, id, phase)
+		}
+
+		now, err := tx.Now(ctx)
+		if err != nil {
+			return err
+		}
+
+		prev := j.Version
+		j.Phases[phase].Steps = append(j.Phases[phase].Steps, r)
+		j.Version, j.UpdatedAt = prev+1, now
+
+		return update(ctx, tx, &j, prev)
+	})
+}

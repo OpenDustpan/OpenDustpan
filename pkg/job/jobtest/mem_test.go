@@ -30,7 +30,9 @@ func TestMemConformance(t *testing.T) {
 	jobtest.Run(t, func(*testing.T) jobtest.Harness {
 		db := newMemDB()
 
-		return jobtest.Harness{Jobs: db, Durable: db.durable, Freezes: db, Domain: db}
+		return jobtest.Harness{
+			Jobs: db, Durable: db.durable, Freezes: db, Claimer: job.NewClaimer(db, db.durable, db), Domain: db,
+		}
 	})
 }
 
@@ -209,6 +211,45 @@ func (m *memDB) SetStateVersion(_ context.Context, fence namespace.Fence, unit i
 	}
 
 	m.states[unit.UnitID()] = v
+
+	return nil
+}
+
+// GetNamespace implements job.NamespaceReader: it answers the name and the
+// failover version, which is all that the claimer reads.
+func (m *memDB) GetNamespace(_ context.Context, name namespace.Name) (namespace.Namespace, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	v, ok := m.fences[name]
+	if !ok {
+		return namespace.Namespace{}, namespace.ErrNotFound
+	}
+
+	return namespace.Namespace{
+		ID: "", CreatedAt: time.Time{}, Name: name, HomeRegion: "", FailoverVersion: v,
+		Overrides: namespace.Overrides{Forced: false, Unlocked: false},
+	}, nil
+}
+
+// RecordStepBegin implements jobtest.Domain.
+func (m *memDB) RecordStepBegin(
+	_ context.Context, fence namespace.Fence, id job.ID, phase int, r job.StepRecord,
+) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if err := m.checkFence(fence); err != nil {
+		return err
+	}
+
+	j, ok := m.lookup(id)
+	if !ok || phase < 0 || phase >= len(j.Phases) {
+		return job.ErrNotFound
+	}
+
+	j.Phases[phase].Steps = append(j.Phases[phase].Steps, r)
+	j.Version++
 
 	return nil
 }

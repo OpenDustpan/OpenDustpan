@@ -8,12 +8,15 @@
 //
 // The cases state the rules of the ports. A reference adapter in memory, in
 // the tests of this package, runs them, and so does each SQL adapter. The
-// cases of job.Claimer, job.Recorder and job.ArtifactStore come with their
-// first implementation, because they need the blob store and the item keys.
+// cases of job.Claimer are here too: each adapter builds the claimer over
+// its own job store, durable store and namespaces. The cases of job.Recorder
+// and job.ArtifactStore come with their first implementation, because they
+// need the blob store and the item keys.
 package jobtest
 
 import (
 	"context"
+	"slices"
 	"testing"
 	"time"
 
@@ -32,6 +35,9 @@ type Harness struct {
 	Jobs    job.Store
 	Durable durable.Store
 	Freezes job.FreezeStore
+	// Claimer is the job.Claimer over Jobs, Durable and the namespaces of
+	// the database.
+	Claimer job.Claimer
 	Domain  Domain
 }
 
@@ -73,6 +79,12 @@ type Domain interface {
 	PutManualLock(ctx context.Context, fence namespace.Fence, target manuallock.Target, holder, reason string) error
 	// RemoveManualLock removes the manual lock of target.
 	RemoveManualLock(ctx context.Context, fence namespace.Fence, target manuallock.Target) error
+	// RecordStepBegin appends r to the step records of the phase at index
+	// phase of the job id, as the recorder of a running phase does when a
+	// step begins. It checks the fence like any write. The suite uses it to
+	// show what a takeover does after a begin that an earlier claim
+	// recorded.
+	RecordStepBegin(ctx context.Context, fence namespace.Fence, id job.ID, phase int, r job.StepRecord) error
 	// AuditEntries returns the audit entries of the namespace ns, in the
 	// order of their append.
 	AuditEntries(ctx context.Context, ns namespace.Name) ([]audit.Entry, error)
@@ -85,10 +97,7 @@ type Factory func(t *testing.T) Harness
 func Run(t *testing.T, newHarness Factory) {
 	t.Helper()
 
-	cases := []struct {
-		name string
-		run  func(t *testing.T, h Harness)
-	}{
+	cases := []suiteCase{
 		{"create stores a queued job and get returns it", testCreateGet},
 		{"get of an unknown ID is ErrNotFound", testGetUnknown},
 		{"two creates with one key and one spec give one job", testCreateKeyOnce},
@@ -145,12 +154,18 @@ func Run(t *testing.T, newHarness Factory) {
 		{"freezes list, end once, and validate", testFreezes},
 	}
 
-	for _, tc := range cases {
+	for _, tc := range slices.Concat(cases, claimerCases()) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			tc.run(t, newHarness(t))
 		})
 	}
+}
+
+// suiteCase is one named case of the suite.
+type suiteCase struct {
+	name string
+	run  func(t *testing.T, h Harness)
 }
 
 // Values that several cases share: the ref of the code location, and two
