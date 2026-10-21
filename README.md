@@ -318,6 +318,8 @@ How-to guides:
 - [Connect a webhook and send a test message](docs/guides/notification-destinations.md):
   make a notification destination, check its signature, and send a test
   message.
+- [Send messages to a Slack channel](docs/guides/slack-notifications.md):
+  connect a Slack incoming webhook to a namespace and send a test message.
 - [Architecture and sizing](docs/guides/architecture-and-sizing.md): the
   layout of an installation, and how to measure its size.
 - [Install with Helm](docs/guides/kubernetes.md): the Helm chart, its Secrets, storage, upgrade and rollback steps.
