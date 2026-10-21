@@ -77,7 +77,7 @@ func handlerAuthorizing(t *testing.T, authz identity.Authorizer) http.Handler {
 	members := s.Runners()
 
 	h, err := runnerapi.NewHandler(runnerapi.Config{
-		Audit: &testAudit{}, OnAuditFailure: nil,
+		Audit: newTestAudit(), OnAuditFailure: nil,
 		Namespaces: service, Pools: members, Members: members, Handoffs: members, Claimer: nil, Sweeps: nil,
 		Operations: nil, Authenticator: adminAuthenticator{}, Authorizer: authz, Sessions: nil,
 		Logger: slog.New(slog.DiscardHandler), Release: serverRelease(), ServerURL: serverURL, Now: nil,

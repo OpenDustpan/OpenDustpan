@@ -18,7 +18,7 @@ func TestRoutesReturnsACopy(t *testing.T) {
 		Logger:         slog.New(slog.DiscardHandler),
 		Workspaces:     newFakeUnits(true),
 		Namespaces:     fakeNamespaces{},
-		Audit:          &testAudit{},
+		Audit:          newTestAudit(),
 		Gate:           nil,
 		OnAuditFailure: nil,
 		DenialLimiter:  nil,

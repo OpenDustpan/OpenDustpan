@@ -982,28 +982,10 @@ func newServerMetrics(cfg *settings, svc services) (*metrics.ServerMetrics, erro
 // the installation backup service, or nil when no backup target is
 // configured.
 func assemble(cfg *settings, base baseurl.Resolver, svc services, backups *backup.Service) (*Server, error) {
-	// One registry holds every family: the request, runtime and build
-	// families, and the readiness failure counter of the probe.
-	observed, err := newServerMetrics(cfg, svc)
+	observed, shipper, err := prepareBackground(cfg, &svc)
 	if err != nil {
 		return nil, err
 	}
-
-	cfg.watch = newWorkerWatch(cfg)
-
-	deleted, err := newDeletedSweeper(svc, cfg, observed)
-	if err != nil {
-		return nil, err
-	}
-
-	svc.deleted = deleted
-
-	shipper, err := newAuditShipper(cfg, observed)
-	if err != nil {
-		return nil, err
-	}
-
-	cfg.auditShipper = shipper
 
 	mount, err := newAdapters(svc, cfg, base, backups, observed)
 	if err != nil {
@@ -1045,7 +1027,7 @@ func assemble(cfg *settings, base baseurl.Resolver, svc services, backups *backu
 		tempAdmins:       svc.tempAdmins,
 		shipper:          shipper,
 		beforeServe:      cfg.beforeServe,
-		deleted:          deleted,
+		deleted:          svc.deleted,
 		signInRequests:   mount.signInSessions(),
 		signInPruneEvery: signInRequestPruneEvery,
 		signInProviders:  bindingOf(cfg, mount.signIn),
@@ -1061,6 +1043,35 @@ func assemble(cfg *settings, base baseurl.Resolver, svc services, backups *backu
 	cfg.watch.attach(srv, observed.Registry())
 
 	return srv, nil
+}
+
+// prepareBackground builds the metrics, the worker watch, the sweeper of
+// deleted units and the audit shipper, and sets them in cfg and svc. One
+// registry holds every metric family: the request, runtime and build families,
+// and the readiness failure counter of the probe.
+func prepareBackground(cfg *settings, svc *services) (*metrics.ServerMetrics, *audit.Shipper, error) {
+	observed, err := newServerMetrics(cfg, *svc)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	cfg.watch = newWorkerWatch(cfg)
+
+	deleted, err := newDeletedSweeper(*svc, cfg, observed)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	svc.deleted = deleted
+
+	shipper, err := newAuditShipper(cfg, observed)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	cfg.auditShipper = shipper
+
+	return observed, shipper, nil
 }
 
 // restoreRegistryOf returns the restore registry that the namespace store
@@ -2773,18 +2784,16 @@ func newServerHandler(
 		SessionPolicy:    deps.policies,
 		Audit:            serverAudit,
 		CheckpointEpochs: checkpointEpochsOf(deps.chain),
-		OnAuditFailure: func() {
-			deps.observed.IncAuditAppendFailure()
-		},
-		DenialLimiter: cfg.denialLimiter,
-		DeletedUnits:  deps.services.deleted,
-		TempAdmins:    tempReaderOf(cfg.namespaceStore),
-		Now:           cfg.now,
-		AuditChain:    auditChainPort(deps.chain),
-		AuditSinks:    auditSinksOf(cfg),
-		Workers:       cfg.watch,
-		SignIn:        deps.signIn,
-		Preferences:   newPreferencesService(cfg),
+		OnAuditFailure:   deps.observed.IncAuditAppendFailure,
+		DenialLimiter:    cfg.denialLimiter,
+		DeletedUnits:     deps.services.deleted,
+		TempAdmins:       tempReaderOf(cfg.namespaceStore),
+		Now:              cfg.now,
+		AuditChain:       auditChainPort(deps.chain),
+		AuditSinks:       auditSinksOf(cfg),
+		Workers:          cfg.watch,
+		SignIn:           deps.signIn,
+		Preferences:      newPreferencesService(cfg),
 
 		InstallationKind: cfg.installationKind,
 	})

@@ -161,27 +161,36 @@ type Handler struct {
 	supportedJournal int
 }
 
-// NewHandler returns a Handler. Every Config field but Sessions is required.
-func NewHandler(cfg Config) (*Handler, error) {
+// validate returns ErrMissingDependency when cfg lacks a required dependency.
+func (cfg Config) validate() error {
 	switch {
 	case cfg.Audit == nil:
-		return nil, fmt.Errorf("%w: audit store", ErrMissingDependency)
+		return fmt.Errorf("%w: audit store", ErrMissingDependency)
 	case cfg.Stacks == nil:
-		return nil, fmt.Errorf("%w: stack service", ErrMissingDependency)
+		return fmt.Errorf("%w: stack service", ErrMissingDependency)
 	case cfg.Updates == nil:
-		return nil, fmt.Errorf("%w: update service", ErrMissingDependency)
+		return fmt.Errorf("%w: update service", ErrMissingDependency)
 	case cfg.Secrets == nil:
-		return nil, fmt.Errorf("%w: secret service", ErrMissingDependency)
+		return fmt.Errorf("%w: secret service", ErrMissingDependency)
 	case cfg.Namespaces == nil:
-		return nil, fmt.Errorf("%w: namespace service", ErrMissingDependency)
+		return fmt.Errorf("%w: namespace service", ErrMissingDependency)
 	case cfg.Authenticator == nil:
-		return nil, fmt.Errorf("%w: authenticator", ErrMissingDependency)
+		return fmt.Errorf("%w: authenticator", ErrMissingDependency)
 	case cfg.Authorizer == nil:
-		return nil, fmt.Errorf("%w: authorizer", ErrMissingDependency)
+		return fmt.Errorf("%w: authorizer", ErrMissingDependency)
 	case cfg.Logger == nil:
-		return nil, fmt.Errorf("%w: logger", ErrMissingDependency)
+		return fmt.Errorf("%w: logger", ErrMissingDependency)
 	case cfg.CheckpointDeltaCutoff < 0:
-		return nil, fmt.Errorf("%w: %d", ErrInvalidCutoff, cfg.CheckpointDeltaCutoff)
+		return fmt.Errorf("%w: %d", ErrInvalidCutoff, cfg.CheckpointDeltaCutoff)
+	}
+
+	return nil
+}
+
+// NewHandler returns a Handler. Every Config field but Sessions is required.
+func NewHandler(cfg Config) (*Handler, error) {
+	if err := cfg.validate(); err != nil {
+		return nil, err
 	}
 
 	recorder, err := refusal.New(cfg.Authorizer, cfg.Audit, cfg.Namespaces, cfg.Logger, cfg.OnAuditFailure)

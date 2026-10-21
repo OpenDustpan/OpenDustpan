@@ -231,7 +231,7 @@ func buildFixtureWith(
 	idem := middleware(t, store, clock)
 
 	hcfg := apiprofile.Config{
-		Audit:          &testAudit{},
+		Audit:          newTestAudit(),
 		Namespaces:     nil,
 		OnAuditFailure: nil,
 		Profiles:       svc,
@@ -927,7 +927,7 @@ func TestNewHandlerNeedsItsDependencies(t *testing.T) {
 	t.Parallel()
 
 	_, err := apiprofile.NewHandler(apiprofile.Config{
-		Audit:          &testAudit{},
+		Audit:          newTestAudit(),
 		Namespaces:     nil,
 		OnAuditFailure: nil,
 		Profiles:       nil,

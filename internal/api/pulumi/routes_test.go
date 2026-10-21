@@ -441,7 +441,7 @@ func newTestHandlerWithBaseURL(t *testing.T, base baseurl.Resolver) *pulumi.Hand
 		BaseURL:                 base,
 		MaxBodyBytesInFlight:    0,
 		Gate:                    nil,
-		Audit:                   &testAudit{},
+		Audit:                   newTestAudit(),
 		OnAuditFailure:          nil,
 		CheckpointDeltaCutoff:   0,
 		DenialLimiter:           nil,

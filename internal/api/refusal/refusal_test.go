@@ -226,7 +226,7 @@ func TestNoStoreIsRefused(t *testing.T) {
 	}
 
 	if rec != nil {
-		t.Fatalf("New answers a recorder with no store")
+		t.Fatal("New answers a recorder with no store")
 	}
 }
 

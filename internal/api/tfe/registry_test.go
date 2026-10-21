@@ -636,7 +636,7 @@ func TestNewHandlerRefusesAShortRegistryKey(t *testing.T) {
 		),
 		Workspaces:     stubWorkspaces{},
 		BaseURL:        baseurl.Resolver{},
-		Audit:          &testAudit{},
+		Audit:          newTestAudit(),
 		Gate:           nil,
 		MaxStateBytes:  0,
 		OnAuditFailure: nil,

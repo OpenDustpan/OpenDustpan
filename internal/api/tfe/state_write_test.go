@@ -65,7 +65,7 @@ func newWriteHandler(t *testing.T, ws tfe.WorkspaceService, base baseurl.Resolve
 		Namespaces:     newTestNamespaces(t),
 		Workspaces:     ws,
 		BaseURL:        base,
-		Audit:          &testAudit{},
+		Audit:          newTestAudit(),
 		Gate:           nil,
 		MaxStateBytes:  0,
 		OnAuditFailure: nil,

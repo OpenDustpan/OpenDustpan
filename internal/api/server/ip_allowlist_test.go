@@ -118,7 +118,7 @@ func newIPAllowHandler(
 		Principals:       sessions.principals,
 		Access:           nil,
 		Tokens:           nil,
-		Audit:            &testAudit{},
+		Audit:            newTestAudit(),
 		OnAuditFailure:   nil,
 		IPAllowlists:     svc,
 		Gates:            nil,

@@ -811,7 +811,7 @@ func TestPreferencesUnavailable(t *testing.T) {
 		Workers:     nil, InstallationKind: "", Now: nil, TempAdmins: nil, Authenticator: prefsCallerSet(),
 		Authorizer: allowAll{}, Logger: slog.New(slog.DiscardHandler), Namespaces: namespaces, Backups: nil,
 		Restores: nil, Maintenance: newFakeMaintenance(maintenance.StateNormal), Metrics: stubMetrics{},
-		Version: "test", Schema: nil, Journal: nil, Principals: nil, Access: nil, Tokens: nil, Audit: &testAudit{},
+		Version: "test", Schema: nil, Journal: nil, Principals: nil, Access: nil, Tokens: nil, Audit: newTestAudit(),
 		OnAuditFailure: nil, DeletedUnits: nil, AuditChain: nil, AuditSinks: nil, IPAllowlists: nil, Gates: nil,
 		SessionPolicy: nil, SignIn: nil, CheckpointEpochs: nil, DenialLimiter: nil,
 	})

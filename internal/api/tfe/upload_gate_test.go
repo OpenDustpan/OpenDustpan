@@ -101,7 +101,7 @@ func newCheckGateHandler(t *testing.T, ws tfe.WorkspaceService, gate *bodygate.G
 		Namespaces:     newTestNamespaces(t),
 		Workspaces:     ws,
 		BaseURL:        baseurl.Resolver{},
-		Audit:          &testAudit{},
+		Audit:          newTestAudit(),
 		Gate:           gate,
 		MaxStateBytes:  0,
 		OnAuditFailure: nil,

@@ -93,7 +93,7 @@ func newAuditChainHandler(
 		Principals:       sessions.principals,
 		Access:           nil,
 		Tokens:           nil,
-		Audit:            &testAudit{},
+		Audit:            newTestAudit(),
 		OnAuditFailure:   nil,
 		DeletedUnits:     nil,
 		SessionPolicy:    nil,

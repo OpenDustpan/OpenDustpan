@@ -231,7 +231,10 @@ func NewHandler(cfg Config) (*Handler, error) {
 	// gives no handler: a refusal must never go without an entry.
 	denialStore, ok := cfg.Audit.(audit.Store)
 	if !ok {
-		return nil, fmt.Errorf("%w: an audit store with namespace entries, for the refused requests", ErrMissingDependency)
+		return nil, fmt.Errorf(
+			"%w: an audit store with namespace entries, for the refused requests",
+			ErrMissingDependency,
+		)
 	}
 
 	recorder, err := denials.New(cfg.Authorizer, denialStore, cfg.Namespaces, cfg.Logger, cfg.OnAuditFailure)

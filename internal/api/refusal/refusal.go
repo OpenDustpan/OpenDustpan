@@ -23,12 +23,12 @@ import (
 // channelHeader names the request header that tells the channel of a request.
 const channelHeader = "Dustpan-Channel"
 
-// errNoServerStore reports that the audit store cannot write the scope of the
-// installation.
 // ErrNoStore reports that New got no audit store. A recorder with no store
 // would let a refusal pass with no entry, so New fails closed.
 var ErrNoStore = errors.New("refusal recorder needs an audit store")
 
+// errNoServerStore reports that the audit store cannot write the scope of the
+// installation.
 var errNoServerStore = errors.New("audit store has no installation scope")
 
 // errNoNamespaces reports a Recorder that has no namespace reader and an entry

@@ -431,7 +431,8 @@ func TestDevRefusalFlushesNamespaceKey(t *testing.T) {
 
 	failures := 0
 
-	if err := w.cfg.devRefusal.bind(w.cfg, namespaces, func() { failures++ }); err != nil {
+	err = w.cfg.devRefusal.bind(w.cfg, namespaces, func() { failures++ })
+	if err != nil {
 		t.Fatalf("bind: %v", err)
 	}
 

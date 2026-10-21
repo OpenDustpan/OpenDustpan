@@ -87,7 +87,7 @@ func newMetricsHandler(
 		Principals:       nil,
 		Access:           nil,
 		Tokens:           nil,
-		Audit:            &testAudit{},
+		Audit:            newTestAudit(),
 		OnAuditFailure:   nil,
 		DeletedUnits:     nil,
 		AuditChain:       nil,

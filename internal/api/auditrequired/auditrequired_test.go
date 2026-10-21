@@ -26,6 +26,8 @@ import (
 // Each NewHandler must answer its ErrMissingDependency and name the audit
 // store. The Config is empty on purpose: the audit store is the first thing
 // that each adapter checks, so nothing else can hide the missing store.
+//
+//nolint:exhaustruct // The empty Config is the case under test.
 func TestEveryAdapterNeedsAnAuditStore(t *testing.T) {
 	t.Parallel()
 
@@ -34,18 +36,62 @@ func TestEveryAdapterNeedsAnAuditStore(t *testing.T) {
 		build func() error
 		want  error
 	}{
-		{"audit", func() error { _, err := apiaudit.NewHandler(apiaudit.Config{}); return err }, apiaudit.ErrMissingDependency},
-		{"inventory", func() error { _, err := apiinventory.NewHandler(apiinventory.Config{}); return err }, apiinventory.ErrMissingDependency},
-		{"jobs", func() error { _, err := apijobs.NewHandler(apijobs.Config{}); return err }, apijobs.ErrMissingDependency},
-		{"notifications", func() error { _, err := apinotifications.NewHandler(apinotifications.Config{}); return err }, apinotifications.ErrMissingDependency},
-		{"context", func() error { _, err := apicontext.NewHandler(apicontext.Config{}); return err }, apicontext.ErrMissingDependency},
-		{"profile", func() error { _, err := apiprofile.NewHandler(apiprofile.Config{}); return err }, apiprofile.ErrMissingDependency},
-		{"pulumi", func() error { _, err := apipulumi.NewHandler(apipulumi.Config{}); return err }, apipulumi.ErrMissingDependency},
-		{"registry", func() error { _, err := apiregistry.NewHandler(apiregistry.Config{}); return err }, apiregistry.ErrMissingDependency},
-		{"runner", func() error { _, err := apirunner.NewHandler(apirunner.Config{}); return err }, apirunner.ErrMissingDependency},
-		{"server", func() error { _, err := apiserver.NewHandler(apiserver.Config{}); return err }, apiserver.ErrMissingDependency},
+		{
+			"audit",
+			func() error { _, err := apiaudit.NewHandler(apiaudit.Config{}); return err },
+			apiaudit.ErrMissingDependency,
+		},
+		{
+			"inventory",
+			func() error { _, err := apiinventory.NewHandler(apiinventory.Config{}); return err },
+			apiinventory.ErrMissingDependency,
+		},
+		{
+			"jobs",
+			func() error { _, err := apijobs.NewHandler(apijobs.Config{}); return err },
+			apijobs.ErrMissingDependency,
+		},
+		{
+			"notifications",
+			func() error { _, err := apinotifications.NewHandler(apinotifications.Config{}); return err },
+			apinotifications.ErrMissingDependency,
+		},
+		{
+			"context",
+			func() error { _, err := apicontext.NewHandler(apicontext.Config{}); return err },
+			apicontext.ErrMissingDependency,
+		},
+		{
+			"profile",
+			func() error { _, err := apiprofile.NewHandler(apiprofile.Config{}); return err },
+			apiprofile.ErrMissingDependency,
+		},
+		{
+			"pulumi",
+			func() error { _, err := apipulumi.NewHandler(apipulumi.Config{}); return err },
+			apipulumi.ErrMissingDependency,
+		},
+		{
+			"registry",
+			func() error { _, err := apiregistry.NewHandler(apiregistry.Config{}); return err },
+			apiregistry.ErrMissingDependency,
+		},
+		{
+			"runner",
+			func() error { _, err := apirunner.NewHandler(apirunner.Config{}); return err },
+			apirunner.ErrMissingDependency,
+		},
+		{
+			"server",
+			func() error { _, err := apiserver.NewHandler(apiserver.Config{}); return err },
+			apiserver.ErrMissingDependency,
+		},
 		{"tfe", func() error { _, err := apitfe.NewHandler(apitfe.Config{}); return err }, apitfe.ErrMissingDependency},
-		{"tofu http", func() error { _, err := apitofuhttp.NewHandler(apitofuhttp.Config{}); return err }, apitofuhttp.ErrMissingDependency},
+		{
+			"tofu http",
+			func() error { _, err := apitofuhttp.NewHandler(apitofuhttp.Config{}); return err },
+			apitofuhttp.ErrMissingDependency,
+		},
 	}
 
 	for _, tt := range tests {

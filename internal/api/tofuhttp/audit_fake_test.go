@@ -11,6 +11,10 @@ import (
 // testAudit keeps the entries of a handler in memory, for the tests that do
 // not read them. It checks each entry with audit.Entry.Validate, as the
 // stores do.
+func newTestAudit() *testAudit {
+	return &testAudit{mu: sync.Mutex{}, entries: nil}
+}
+
 type testAudit struct {
 	mu      sync.Mutex
 	entries []audit.Entry
@@ -41,16 +45,6 @@ func (a *testAudit) AppendServer(_ context.Context, e audit.Entry) (audit.Entry,
 	return a.keep(e), nil
 }
 
-func (a *testAudit) keep(e audit.Entry) audit.Entry {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-
-	e.Sequence = int64(len(a.entries)) + 1
-	a.entries = append(a.entries, e)
-
-	return e
-}
-
 func (a *testAudit) List(context.Context, namespace.Name, audit.Page) (audit.Listing, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -59,15 +53,15 @@ func (a *testAudit) List(context.Context, namespace.Name, audit.Page) (audit.Lis
 }
 
 func (a *testAudit) Check(context.Context, namespace.Name) (audit.CheckResult, error) {
-	return audit.CheckResult{}, nil
+	return audit.CheckResult{Checked: 0, BadSequence: 0, Unchained: 0, Valid: true}, nil
 }
 
-// orTestAudit answers s, or a fresh testAudit when s is nil: a handler never
-// runs without an audit store.
-func orTestAudit(s audit.Store) audit.Store {
-	if s == nil {
-		return &testAudit{}
-	}
+func (a *testAudit) keep(e audit.Entry) audit.Entry {
+	a.mu.Lock()
+	defer a.mu.Unlock()
 
-	return s
+	e.Sequence = int64(len(a.entries)) + 1
+	a.entries = append(a.entries, e)
+
+	return e
 }

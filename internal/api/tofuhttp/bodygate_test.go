@@ -28,7 +28,7 @@ func newGateHandler(t *testing.T, units tofuhttp.WorkspaceService, gate *bodygat
 		Logger:         slog.New(slog.DiscardHandler),
 		Workspaces:     units,
 		Namespaces:     fakeNamespaces{},
-		Audit:          &testAudit{},
+		Audit:          newTestAudit(),
 		Gate:           gate,
 		OnAuditFailure: nil,
 		DenialLimiter:  nil,

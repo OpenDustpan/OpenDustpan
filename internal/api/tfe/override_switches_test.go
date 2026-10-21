@@ -115,7 +115,7 @@ func newSwitchedHandler(
 		Namespaces:     svc,
 		Workspaces:     ws,
 		BaseURL:        baseurl.Resolver{},
-		Audit:          &testAudit{},
+		Audit:          newTestAudit(),
 		Gate:           nil,
 		MaxStateBytes:  0,
 		OnAuditFailure: nil,

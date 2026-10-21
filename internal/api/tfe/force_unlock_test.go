@@ -85,7 +85,7 @@ func newWriteHandlerWithAuthz(t *testing.T, ws tfe.WorkspaceService, authz ident
 		Namespaces:     newTestNamespaces(t),
 		Workspaces:     ws,
 		BaseURL:        baseurl.Resolver{},
-		Audit:          &testAudit{},
+		Audit:          newTestAudit(),
 		Gate:           nil,
 		MaxStateBytes:  0,
 		OnAuditFailure: nil,

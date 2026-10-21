@@ -292,7 +292,7 @@ func serve(t *testing.T, s stores, opts serveOptions) (*runnerapi.Handler, *http
 	}
 
 	h, err := runnerapi.NewHandler(runnerapi.Config{
-		Audit: &testAudit{}, OnAuditFailure: nil,
+		Audit: newTestAudit(), OnAuditFailure: nil,
 		Namespaces: service, Pools: s.runners, Members: s.runners, Handoffs: s.runners, Claimer: phases, Sweeps: nil,
 		Operations: s.operations, Authenticator: adminAuthenticator{}, Authorizer: opts.authz,
 		Sessions: nil, Logger: slog.New(slog.DiscardHandler), Release: serverRelease(), ServerURL: serverURL,
