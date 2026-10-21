@@ -21,6 +21,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/secret"
 	"opendustpan.org/opendustpan/pkg/stack"
+	"opendustpan.org/opendustpan/pkg/stack/stacktest"
 )
 
 const (
@@ -107,6 +108,7 @@ func newRevealFixtureWithSessions(
 		Namespaces:         namespaces,
 		Stacks:             stacks,
 		Blobs:              newMemBlob(),
+		Refusals:           stacktest.NewRefusals(),
 		Now:                nil,
 		Logger:             nil,
 		MaxCheckpointBytes: 0,

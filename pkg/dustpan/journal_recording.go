@@ -18,7 +18,9 @@ func journalWriter(cfg *settings) (*stack.JournalEntries, error) {
 		return nil, fmt.Errorf("%w: journal rows", stack.ErrMissingDependency)
 	}
 
-	journal, err := stack.NewJournalEntries(cfg.blobStore, rows, pulumijournal.Verifier{}, cfg.maxCheckpointBytes)
+	journal, err := stack.NewJournalEntries(
+		cfg.blobStore, rows, pulumijournal.Verifier{}, cfg.maxCheckpointBytes, cfg.stackRefusals,
+	)
 	if err != nil {
 		return nil, fmt.Errorf("journal writer: %w", err)
 	}

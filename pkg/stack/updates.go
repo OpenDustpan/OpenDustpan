@@ -23,6 +23,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/manuallock"
 	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/scopeaudit"
 )
 
 const (
@@ -146,9 +147,14 @@ type UpdatesConfig struct {
 	// blob keys.
 	Stacks CheckpointStacks
 	// Blobs holds checkpoint content under
-	// "pulumi/<stack ID>/<update ID>/<sequence>", gzipped.
+	// "namespaces/<namespace ID>/pulumi/<stack ID>/<update ID>/<sequence>",
+	// gzipped. The service reads and writes it through a scoped view of the
+	// namespace of each call.
 	Blobs blob.Store
-	Now   func() time.Time
+	// Refusals records each refusal of a blob key outside the scope of the
+	// namespace of a call.
+	Refusals scopeaudit.Recorder
+	Now      func() time.Time
 	// Logger receives sweep failures; nil discards them.
 	Logger *slog.Logger
 	// MaxCheckpointBytes bounds one checkpoint; zero means DefaultMaxCheckpointBytes.
@@ -194,7 +200,7 @@ type Updates struct {
 	events         EventStore
 	namespaces     *namespace.Service
 	stacks         CheckpointStacks
-	blobs          blob.Store
+	blobs          blobAccess
 	tokens         TokenChecker
 	logger         *slog.Logger
 	now            func() time.Time
@@ -227,8 +233,11 @@ func NewUpdates(cfg UpdatesConfig) (*Updates, error) {
 		return nil, fmt.Errorf("%w: namespace service", ErrMissingDependency)
 	case cfg.Stacks == nil:
 		return nil, fmt.Errorf("%w: stack resolver", ErrMissingDependency)
-	case cfg.Blobs == nil:
-		return nil, fmt.Errorf("%w: blob store", ErrMissingDependency)
+	}
+
+	access, err := newBlobAccess(cfg.Blobs, cfg.Refusals)
+	if err != nil {
+		return nil, err
 	}
 
 	s := &Updates{
@@ -237,7 +246,7 @@ func NewUpdates(cfg UpdatesConfig) (*Updates, error) {
 		events:         cfg.Events,
 		namespaces:     cfg.Namespaces,
 		stacks:         cfg.Stacks,
-		blobs:          cfg.Blobs,
+		blobs:          access,
 		tokens:         cfg.Tokens,
 		logger:         cfg.Logger,
 		now:            cfg.Now,
@@ -354,10 +363,12 @@ type StartedBy struct {
 func (s *Updates) StartBy(
 	ctx context.Context, ref Ref, id UpdateID, by StartedBy, journalVersion int64,
 ) (Started, error) {
-	fence, err := s.fence(ctx, ref)
+	ns, err := s.writable(ctx, ref)
 	if err != nil {
 		return Started{}, err
 	}
+
+	fence := ns.Fence()
 
 	u, err := s.Get(ctx, ref, id)
 	if err != nil {
@@ -394,7 +405,7 @@ func (s *Updates) StartBy(
 		return Started{}, fmt.Errorf("start update %s of %s: %w", id, ref, err)
 	}
 
-	s.sweepStackOnStart(ctx, ref)
+	s.sweepStackOnStart(ctx, ns.ID, ref)
 
 	return Started{Token: tok, Update: u}, nil
 }
@@ -442,13 +453,15 @@ type checkpointSave struct {
 	digest  [sha256.Size]byte
 	prev    *Checkpoint
 	key     blob.Key
+	// blobs is the scoped blob access of the namespace of this save.
+	blobs *scopedBlobs
 }
 
 // SaveCheckpoint stores the stack's state as of now in the update. Previews
 // do not save state.
 //
 // The content goes to the blob store first, gzipped, under
-// pulumi/<stack ID>/<update ID>/<sequence>; then the fenced SQL row names it.
+// namespaces/<namespace ID>/pulumi/<stack ID>/<update ID>/<sequence>; then the fenced SQL row names it.
 // A row never names a missing blob: a crash between the blob write and the
 // commit leaves only an unreferenced blob, which the sweep below collects.
 // After the commit, the blob of the previous save of the same update is
@@ -462,7 +475,7 @@ func (s *Updates) SaveCheckpoint(
 		return err
 	}
 
-	u, fence, err := s.authorized(ctx, ref, id, tok)
+	u, ns, err := s.authorizedIn(ctx, ref, id, tok)
 	if err != nil {
 		return err
 	}
@@ -472,6 +485,11 @@ func (s *Updates) SaveCheckpoint(
 	}
 
 	st, err := s.stacks.GetStack(ctx, ref)
+	if err != nil {
+		return fmt.Errorf("save checkpoint of update %s: %w", id, err)
+	}
+
+	bl, err := s.blobs.scope(ns.ID, st.ID)
 	if err != nil {
 		return fmt.Errorf("save checkpoint of update %s: %w", id, err)
 	}
@@ -491,29 +509,37 @@ func (s *Updates) SaveCheckpoint(
 	if known {
 		// A retried save of the same content: nothing to write. The sweep
 		// still runs, so a retry also collects orphans of the update.
-		s.sweepUpdateBlobs(ctx, ref, st.ID, id)
+		s.sweepUpdateBlobs(ctx, bl, ref, st.ID, id)
 
 		return nil
 	}
 
-	key, err := checkpointBlobKey(st.ID, id, in.Sequence, prev)
+	key, err := checkpointBlobKey(bl, st.ID, id, in.Sequence, prev)
 	if err != nil {
 		return fmt.Errorf("save checkpoint of update %s: %w", id, err)
 	}
 
 	return s.storeNewCheckpoint(ctx, checkpointSave{
-		ref: ref, id: id, stackID: st.ID, fence: fence, lease: u.Lease.Digest,
-		in: in, digest: digest, prev: prev, key: key,
+		ref: ref, id: id, stackID: st.ID, fence: ns.Fence(), lease: u.Lease.Digest,
+		in: in, digest: digest, prev: prev, key: key, blobs: bl,
 	})
 }
 
-// DeleteStackBlobs removes every checkpoint blob of the purged stack, with
-// a retry for each blob (ADR 47). The purge runs it after the rows are gone,
-// so no save can still commit a row naming these blobs. It returns an error
-// when a blob may remain, so the caller keeps the blob purge record for the
-// sweep. No log line and no error names a blob key.
-func (s *Updates) DeleteStackBlobs(ctx context.Context, stackID ID) error {
-	listed, err := s.blobs.List(ctx, "pulumi/"+stackID.String()+"/")
+// DeleteStackBlobs removes every checkpoint blob of the purged stack stackID
+// of the namespace with the ID ns, with a retry for each blob (ADR 47).
+// Journal batches of the stack are under the same stack directory, so they go
+// too. The caller takes ns from the namespace row of the purge, never from a
+// request field. The purge runs it after the rows are gone, so no save can
+// still commit a row naming these blobs. It returns an error when a blob may
+// remain, so the caller keeps the blob purge record for the sweep. No log
+// line and no error names a blob key.
+func (s *Updates) DeleteStackBlobs(ctx context.Context, ns namespace.ID, stackID ID) error {
+	bl, err := s.blobs.scope(ns, stackID)
+	if err != nil {
+		return fmt.Errorf("delete checkpoint blobs of stack %s: %w", stackID, err)
+	}
+
+	listed, err := bl.List(ctx, bl.stackPrefix(stackID))
 	if err != nil {
 		return fmt.Errorf("list checkpoint blobs of stack %s: %w", stackID, err)
 	}
@@ -521,7 +547,7 @@ func (s *Updates) DeleteStackBlobs(ctx context.Context, stackID ID) error {
 	failed := 0
 
 	for _, obj := range listed {
-		if blobErr := s.deleteBlobRetried(ctx, obj.Key); blobErr != nil {
+		if blobErr := s.deleteBlobRetried(ctx, bl, obj.Key); blobErr != nil {
 			failed++
 		}
 	}
@@ -587,7 +613,7 @@ func (notJournaledError) Is(target error) bool {
 // holds one entry and fits MaxCheckpointBytes, because the CLI cannot split
 // one entry.
 func (s *Updates) AppendJournal(ctx context.Context, ref Ref, id UpdateID, tok token.Token, content []byte) error {
-	u, fence, err := s.authorized(ctx, ref, id, tok)
+	u, ns, err := s.authorizedIn(ctx, ref, id, tok)
 	if err != nil {
 		return err
 	}
@@ -618,15 +644,16 @@ func (s *Updates) AppendJournal(ctx context.Context, ref Ref, id UpdateID, tok t
 	}
 
 	batch := JournalBatch{
-		Ref:     ref,
-		StackID: st.ID,
-		Update:  id,
-		Lease:   u.Lease.Digest,
-		Content: content,
-		Version: int(u.JournalVersion),
+		Ref:       ref,
+		Namespace: ns.ID,
+		StackID:   st.ID,
+		Update:    id,
+		Lease:     u.Lease.Digest,
+		Content:   content,
+		Version:   int(u.JournalVersion),
 	}
 
-	if err := s.journal.Append(ctx, batch, fence); err != nil {
+	if err := s.journal.Append(ctx, batch, ns.Fence()); err != nil {
 		return fmt.Errorf("append journal to update %s: %w", id, err)
 	}
 
@@ -736,7 +763,12 @@ func (s *Updates) Export(ctx context.Context, ref Ref) (Checkpoint, error) {
 		return Checkpoint{}, fmt.Errorf("export %s: %w", ref, err)
 	}
 
-	resolved, err := s.resolveCheckpoint(ctx, cp)
+	bl, err := s.blobs.scope(cp.NamespaceID, cp.StackID)
+	if err != nil {
+		return cp, fmt.Errorf("export %s: %w", ref, err)
+	}
+
+	resolved, err := s.resolveCheckpoint(ctx, bl, cp)
 	if err != nil {
 		return cp, fmt.Errorf("export %s: %w", ref, err)
 	}
@@ -764,7 +796,12 @@ func (s *Updates) ExportVersion(ctx context.Context, ref Ref, version int64) (Ch
 		return Checkpoint{}, fmt.Errorf("export %s version %d: %w", ref, version, err)
 	}
 
-	resolved, err := s.resolveCheckpoint(ctx, cp)
+	bl, err := s.blobs.scope(cp.NamespaceID, cp.StackID)
+	if err != nil {
+		return Checkpoint{}, fmt.Errorf("export %s version %d: %w", ref, version, err)
+	}
+
+	resolved, err := s.resolveCheckpoint(ctx, bl, cp)
 	if err != nil {
 		return Checkpoint{}, fmt.Errorf("export %s version %d: %w", ref, version, err)
 	}
@@ -916,7 +953,7 @@ func (s *Updates) leaseGet(ctx context.Context, ref Ref, id UpdateID) (Update, e
 // already there belongs to a first attempt whose commit never landed: the
 // retry adopts it when it holds the same content.
 func (s *Updates) storeNewCheckpoint(ctx context.Context, save checkpointSave) error {
-	size, sum, err := s.putCheckpointBlob(ctx, save.key, save.in.Deployment)
+	size, sum, err := s.putCheckpointBlob(ctx, save.blobs, save.key, save.in.Deployment)
 	if err != nil {
 		if errors.Is(err, blob.ErrExists) {
 			return s.adoptCheckpointBlob(ctx, save, size, sum)
@@ -960,7 +997,7 @@ func (s *Updates) storeNewCheckpoint(ctx context.Context, save checkpointSave) e
 // can then get ErrConcurrentModification instead of an adopt. A retried save
 // without a sequence number mints the next key and succeeds.
 func (s *Updates) adoptCheckpointBlob(ctx context.Context, save checkpointSave, size int64, sum [md5.Size]byte) error {
-	raw, err := s.blobs.Get(ctx, save.key)
+	raw, err := save.blobs.Get(ctx, save.key)
 	if err != nil {
 		if cerr := ctx.Err(); cerr != nil {
 			return fmt.Errorf("save checkpoint of update %s: %w", save.id, cerr)
@@ -1027,14 +1064,14 @@ func (s *Updates) checkpointCollision(ctx context.Context, save checkpointSave) 
 // without a sequence number whose derived key holds other content. The
 // orphan keeps its key for the sweep.
 func (s *Updates) storeMintedKey(ctx context.Context, save checkpointSave) error {
-	prefix := "pulumi/" + save.stackID.String() + "/" + save.id.String() + "/"
+	prefix := save.blobs.updatePrefix(save.stackID, save.id)
 
 	next, err := nextBlobKey(prefix, save.key)
 	if err != nil {
 		return fmt.Errorf("save checkpoint of update %s: %w", save.id, ErrConcurrentModification)
 	}
 
-	size, sum, err := s.putCheckpointBlob(ctx, next, save.in.Deployment)
+	size, sum, err := s.putCheckpointBlob(ctx, save.blobs, next, save.in.Deployment)
 	if err != nil {
 		if cerr := ctx.Err(); cerr != nil {
 			return fmt.Errorf("save checkpoint of update %s: %w", save.id, cerr)
@@ -1063,6 +1100,7 @@ func (s *Updates) commitCheckpointRow(
 	ctx context.Context, save checkpointSave, size int64, sum [md5.Size]byte,
 ) error {
 	cp := Checkpoint{
+		NamespaceID: "", StackID: "",
 		SavedAt:       s.clock(),
 		Features:      slices.Clone(save.in.Features),
 		Deployment:    save.in.Deployment,
@@ -1087,7 +1125,11 @@ func (s *Updates) commitCheckpointRow(
 // line names a blob key.
 func (s *Updates) afterCheckpointSave(ctx context.Context, save checkpointSave) {
 	if save.prev != nil && save.prev.BlobKey != save.key {
-		if err := s.deleteBlobRetried(ctx, save.prev.BlobKey); err != nil {
+		// The key comes from a row. It must name a save of this update in this
+		// stack, so the access is narrowed to the directory of the update.
+		own := save.blobs.narrow(save.blobs.updatePrefix(save.stackID, save.id))
+
+		if err := s.deleteBlobRetried(ctx, own, save.prev.BlobKey); err != nil {
 			s.logger.WarnContext(
 				ctx,
 				"delete superseded checkpoint blob",
@@ -1097,7 +1139,7 @@ func (s *Updates) afterCheckpointSave(ctx context.Context, save checkpointSave) 
 		}
 	}
 
-	s.sweepUpdateBlobs(ctx, save.ref, save.stackID, save.id)
+	s.sweepUpdateBlobs(ctx, save.blobs, save.ref, save.stackID, save.id)
 }
 
 // previousCheckpoint returns the checkpoint the update saved before, or nil
@@ -1125,7 +1167,7 @@ func (s *Updates) previousCheckpoint(ctx context.Context, ref Ref, id UpdateID) 
 // compressed copy (the gzip buffer). No error text names the key: callers
 // match ErrExists and redact the rest.
 func (s *Updates) putCheckpointBlob(
-	ctx context.Context, key blob.Key, deployment []byte,
+	ctx context.Context, bl *scopedBlobs, key blob.Key, deployment []byte,
 ) (int64, [md5.Size]byte, error) {
 	var zipped bytes.Buffer
 
@@ -1146,7 +1188,7 @@ func (s *Updates) putCheckpointBlob(
 
 	size, sum := storedAttrs(gave)
 
-	if err := s.blobs.Put(ctx, key, bytes.NewReader(gave)); err != nil {
+	if err := bl.Put(ctx, key, bytes.NewReader(gave)); err != nil {
 		if errors.Is(err, blob.ErrExists) {
 			// The retry compares these against the stored bytes without
 			// decompressing anything; other errors carry no attributes.
@@ -1168,8 +1210,8 @@ func (s *Updates) storedLimit() int64 {
 // deleteBlobRetried removes the object under key, retrying a transient
 // failure after a short backoff (blob.DeleteRetried). Deleting a missing key
 // is not an error.
-func (s *Updates) deleteBlobRetried(ctx context.Context, key blob.Key) error {
-	if err := blob.DeleteRetried(ctx, s.blobs, key); err != nil {
+func (s *Updates) deleteBlobRetried(ctx context.Context, bl *scopedBlobs, key blob.Key) error {
+	if err := blob.DeleteRetried(ctx, bl, key); err != nil {
 		return fmt.Errorf("delete blob: %w", err)
 	}
 
@@ -1182,8 +1224,8 @@ func (s *Updates) deleteBlobRetried(ctx context.Context, key blob.Key) error {
 // covers one update prefix, so it stays small no matter how many updates the
 // stack holds. It is best effort: a cleanup failure never fails the save,
 // and the rows stay for the next sweep. No log line names a blob key.
-func (s *Updates) sweepUpdateBlobs(ctx context.Context, ref Ref, stackID ID, id UpdateID) {
-	listed, err := s.blobs.List(ctx, "pulumi/"+stackID.String()+"/"+id.String()+"/")
+func (s *Updates) sweepUpdateBlobs(ctx context.Context, bl *scopedBlobs, ref Ref, stackID ID, id UpdateID) {
+	listed, err := bl.List(ctx, bl.updatePrefix(stackID, id))
 	if err != nil {
 		s.logger.WarnContext(ctx, "sweep checkpoint blobs", slog.String("stack", ref.String()))
 
@@ -1208,13 +1250,15 @@ func (s *Updates) sweepUpdateBlobs(ctx context.Context, ref Ref, stackID ID, id 
 		return
 	}
 
-	s.sweepCandidates(ctx, ref, id, candidates)
+	s.sweepCandidates(ctx, bl, ref, id, candidates)
 }
 
 // sweepCandidates deletes the candidate blobs of one update except the one
 // its checkpoint names. A missing checkpoint keeps none: without a row every
 // blob of the update is an orphan.
-func (s *Updates) sweepCandidates(ctx context.Context, ref Ref, id UpdateID, candidates []blob.Object) {
+func (s *Updates) sweepCandidates(
+	ctx context.Context, bl *scopedBlobs, ref Ref, id UpdateID, candidates []blob.Object,
+) {
 	var current Checkpoint
 
 	stored, err := s.checkpoints.CheckpointByUpdate(ctx, ref, id)
@@ -1233,7 +1277,7 @@ func (s *Updates) sweepCandidates(ctx context.Context, ref Ref, id UpdateID, can
 			continue
 		}
 
-		if blobErr := s.deleteBlobRetried(ctx, obj.Key); blobErr != nil {
+		if blobErr := s.deleteBlobRetried(ctx, bl, obj.Key); blobErr != nil {
 			failed++
 		}
 	}
@@ -1252,7 +1296,7 @@ func (s *Updates) sweepCandidates(ctx context.Context, ref Ref, id UpdateID, can
 // sweepStackOnStart resolves the stack ID and sweeps its orphan blobs. It is
 // best effort: a cleanup failure never fails the start, and the blobs stay
 // for the next sweep. No log line names a blob key.
-func (s *Updates) sweepStackOnStart(ctx context.Context, ref Ref) {
+func (s *Updates) sweepStackOnStart(ctx context.Context, ns namespace.ID, ref Ref) {
 	st, err := s.stacks.GetStack(ctx, ref)
 	if err != nil {
 		s.logger.WarnContext(ctx, "sweep checkpoint blobs", slog.String("stack", ref.String()))
@@ -1260,7 +1304,14 @@ func (s *Updates) sweepStackOnStart(ctx context.Context, ref Ref) {
 		return
 	}
 
-	s.sweepStackBlobs(ctx, ref, st.ID)
+	bl, err := s.blobs.scope(ns, st.ID)
+	if err != nil {
+		s.logger.WarnContext(ctx, "sweep checkpoint blobs", slog.String("stack", ref.String()))
+
+		return
+	}
+
+	s.sweepStackBlobs(ctx, bl, ref, st.ID)
 }
 
 // sweepStackBlobs deletes the checkpoint blobs of one stack that no
@@ -1274,8 +1325,8 @@ func (s *Updates) sweepStackOnStart(ctx context.Context, ref Ref) {
 // blobs pays for one listing and no checkpoint read. It is best effort: a
 // cleanup failure never fails the start, and the blobs stay for the next
 // sweep. No log line names a blob key.
-func (s *Updates) sweepStackBlobs(ctx context.Context, ref Ref, stackID ID) {
-	listed, err := s.blobs.List(ctx, "pulumi/"+stackID.String()+"/")
+func (s *Updates) sweepStackBlobs(ctx context.Context, bl *scopedBlobs, ref Ref, stackID ID) {
+	listed, err := bl.List(ctx, bl.stackPrefix(stackID))
 	if err != nil {
 		s.logger.WarnContext(ctx, "sweep checkpoint blobs", slog.String("stack", ref.String()))
 
@@ -1320,7 +1371,7 @@ func (s *Updates) sweepStackBlobs(ctx context.Context, ref Ref, stackID ID) {
 			continue
 		}
 
-		if blobErr := s.deleteBlobRetried(ctx, obj.Key); blobErr != nil {
+		if blobErr := s.deleteBlobRetried(ctx, bl, obj.Key); blobErr != nil {
 			failed++
 		}
 	}
@@ -1339,11 +1390,20 @@ func (s *Updates) sweepStackBlobs(ctx context.Context, ref Ref, stackID ID) {
 // decompresses the blob of the row. The bytes match the stored digest, so a
 // blob with other content fails instead of serving foreign state. The read
 // holds one decompressed copy.
-func (s *Updates) resolveCheckpoint(ctx context.Context, cp Checkpoint) (Checkpoint, error) {
-	raw, err := s.blobs.Get(ctx, cp.BlobKey)
+func (s *Updates) resolveCheckpoint(ctx context.Context, bl *scopedBlobs, cp Checkpoint) (Checkpoint, error) {
+	// The key comes from a row. It must name a save of the update of the row
+	// in the stack of bl, so the read is narrowed to that directory.
+	raw, err := bl.narrow(bl.updatePrefix(bl.stack, cp.Update)).Get(ctx, cp.BlobKey)
 	if err != nil {
 		if cerr := ctx.Err(); cerr != nil {
 			return Checkpoint{}, fmt.Errorf("resolve checkpoint: %w", cerr)
+		}
+
+		// A row that names a blob outside the scope of its namespace shows a
+		// fault or an attack. The caller sees the refusal itself, and the
+		// view wrote the security entry.
+		if errors.Is(err, blob.ErrOutOfScope) {
+			return Checkpoint{}, blob.ErrOutOfScope
 		}
 
 		return Checkpoint{}, ErrCheckpointUnavailable
@@ -1399,7 +1459,12 @@ func (s *Updates) restoreInput(ctx context.Context, ref Ref, version int64) (Che
 		return CheckpointInput{}, fmt.Errorf("restore %s version %d: %w", ref, version, err)
 	}
 
-	resolved, err := s.resolveCheckpoint(ctx, src)
+	bl, err := s.blobs.scope(src.NamespaceID, src.StackID)
+	if err != nil {
+		return CheckpointInput{}, fmt.Errorf("restore %s version %d: %w", ref, version, err)
+	}
+
+	resolved, err := s.resolveCheckpoint(ctx, bl, src)
 	if err != nil {
 		return CheckpointInput{}, fmt.Errorf("restore %s version %d: %w", ref, version, err)
 	}
@@ -1488,28 +1553,52 @@ func (s *Updates) applyOnce(
 func (s *Updates) authorized(
 	ctx context.Context, ref Ref, id UpdateID, tok token.Token,
 ) (Update, namespace.Fence, error) {
-	fence, err := s.fence(ctx, ref)
+	u, ns, err := s.authorizedIn(ctx, ref, id, tok)
 	if err != nil {
 		return Update{}, namespace.Fence{}, err
+	}
+
+	return u, ns.Fence(), nil
+}
+
+// authorizedIn is authorized, and it also returns the namespace row that it
+// resolved. A call that touches blobs takes the namespace ID from that row for
+// the scoped blob view.
+func (s *Updates) authorizedIn(
+	ctx context.Context, ref Ref, id UpdateID, tok token.Token,
+) (Update, namespace.Namespace, error) {
+	ns, err := s.writable(ctx, ref)
+	if err != nil {
+		return Update{}, namespace.Namespace{}, err
 	}
 
 	u, err := s.leaseGet(ctx, ref, id)
 	if err != nil {
-		return Update{}, namespace.Fence{}, err
+		return Update{}, namespace.Namespace{}, err
 	}
 
 	if err := u.authorize(tok, s.clock()); err != nil {
-		return Update{}, namespace.Fence{}, fmt.Errorf("update %s of %s: %w", id, ref, err)
+		return Update{}, namespace.Namespace{}, fmt.Errorf("update %s of %s: %w", id, ref, err)
 	}
 
-	return u, fence, nil
+	return u, ns, nil
+}
+
+// writable returns the namespace row of ref, which must be homed here.
+func (s *Updates) writable(ctx context.Context, ref Ref) (namespace.Namespace, error) {
+	ns, err := s.namespaces.WritableHere(ctx, ref.Namespace)
+	if err != nil {
+		return namespace.Namespace{}, fmt.Errorf("write to %s: %w", ref, err)
+	}
+
+	return ns, nil
 }
 
 // fence returns the fence for writes to ref's namespace, which must be homed here.
 func (s *Updates) fence(ctx context.Context, ref Ref) (namespace.Fence, error) {
-	ns, err := s.namespaces.WritableHere(ctx, ref.Namespace)
+	ns, err := s.writable(ctx, ref)
 	if err != nil {
-		return namespace.Fence{}, fmt.Errorf("write to %s: %w", ref, err)
+		return namespace.Fence{}, err
 	}
 
 	return ns.Fence(), nil
@@ -1544,12 +1633,12 @@ func checkpointKnown(prev *Checkpoint, seq int64, digest [sha256.Size]byte) (boo
 	return digest == prev.Digest, nil
 }
 
-// checkpointBlobKey returns the blob key of one save:
-// pulumi/<stack ID>/<update ID>/<sequence>. A save without a sequence number
+// checkpointBlobKey returns the blob key of one save in the scope of bl:
+// namespaces/<namespace ID>/pulumi/<stack ID>/<update ID>/<sequence>. A save without a sequence number
 // mints the next key of its update after the previous one, so every save
 // writes a new key while the row keeps sequence 0. No error text names a key.
-func checkpointBlobKey(stackID ID, id UpdateID, seq int64, prev *Checkpoint) (blob.Key, error) {
-	prefix := "pulumi/" + stackID.String() + "/" + id.String() + "/"
+func checkpointBlobKey(bl *scopedBlobs, stackID ID, id UpdateID, seq int64, prev *Checkpoint) (blob.Key, error) {
+	prefix := bl.updatePrefix(stackID, id)
 
 	if seq > 0 || prev == nil {
 		key, err := blob.ParseKey(prefix + strconv.FormatInt(seq, 10))

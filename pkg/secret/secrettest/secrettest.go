@@ -125,12 +125,13 @@ func newNamespace(t *testing.T, s Store) namespace.Namespace {
 
 func newStack(ns namespace.Name, name string) stack.Stack {
 	return stack.Stack{
-		CreatedAt: now(),
-		UpdatedAt: now(),
-		Tags:      map[string]string{},
-		Ref:       stack.Ref{Namespace: ns, Project: "web", Stack: stack.Name(name)},
-		ID:        stack.ID(ident.NewID("stk-")),
-		Version:   0,
+		NamespaceID: "",
+		CreatedAt:   now(),
+		UpdatedAt:   now(),
+		Tags:        map[string]string{},
+		Ref:         stack.Ref{Namespace: ns, Project: "web", Stack: stack.Name(name)},
+		ID:          stack.ID(ident.NewID("stk-")),
+		Version:     0,
 	}
 }
 

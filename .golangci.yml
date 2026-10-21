@@ -140,6 +140,7 @@ linters:
             - "**/pkg/launcher/**"
             - "**/pkg/source/**"
             - "**/pkg/forge/**"
+            - "**/pkg/scopeaudit/**"
             - "**/pkg/calendar/**"
             - "**/pkg/freeze/**"
             - "**/pkg/breakglass/**"

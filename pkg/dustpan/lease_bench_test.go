@@ -24,6 +24,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/secret"
 	"opendustpan.org/opendustpan/pkg/stack"
+	"opendustpan.org/opendustpan/pkg/stack/stacktest"
 	"opendustpan.org/opendustpan/pkg/store/postgres"
 	"opendustpan.org/opendustpan/pkg/store/sqlite"
 	"opendustpan.org/opendustpan/pkg/workspace"
@@ -129,7 +130,7 @@ func benchLeaseCheck(b *testing.B, s leaseStores) {
 		ManualLocks: nil,
 		Updates:     s.updates, Checkpoints: s.checkpoints, Events: s.events, Namespaces: nsSvc,
 		Stacks: stacks, Blobs: blobs, Tokens: nil, Now: now, Logger: nil, MaxCheckpointBytes: 0, Journal: nil,
-		Replayer: nil,
+		Replayer: nil, Refusals: stacktest.NewRefusals(),
 	})
 	if err != nil {
 		b.Fatalf("updates service: %v", err)

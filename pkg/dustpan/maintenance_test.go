@@ -359,6 +359,13 @@ type namespaceOnlyStore struct {
 	}
 }
 
+// AppendServer serves the audit log of the server scope, which the workspace
+// service needs to record a refused blob key, so the maintenance check stays
+// the first to refuse.
+func (s namespaceOnlyStore) AppendServer(ctx context.Context, e audit.Entry) (audit.Entry, error) {
+	return s.store.AppendServer(ctx, e)
+}
+
 func (s namespaceOnlyStore) CreateNamespace(ctx context.Context, ns namespace.Namespace) error {
 	return s.store.CreateNamespace(ctx, ns)
 }
@@ -373,13 +380,6 @@ func (s namespaceOnlyStore) ListNamespaces(ctx context.Context) ([]namespace.Nam
 
 func (s namespaceOnlyStore) Ping(ctx context.Context) error {
 	return s.store.Ping(ctx)
-}
-
-// AppendServer serves the audit log of the server scope, which the workspace
-// service needs to record a refused blob key, so the maintenance check stays
-// the first to refuse.
-func (s namespaceOnlyStore) AppendServer(ctx context.Context, e audit.Entry) (audit.Entry, error) {
-	return s.store.AppendServer(ctx, e)
 }
 
 // TestNewServerRequiresMaintenanceStore proves NewServer refuses a namespace

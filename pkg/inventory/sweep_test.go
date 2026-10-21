@@ -49,8 +49,8 @@ type sweepTool struct {
 	entries  []audit.Entry
 	dueBys   []time.Time
 	deleted  []string
-	// deletedIn holds the namespace of each blob delete, in the order of deleted.
-	deletedIn []namespace.Name
+	// deletedIn holds the namespace ID of each blob delete.
+	deletedIn []namespace.ID
 }
 
 func newSweepTool() *sweepTool {
@@ -76,7 +76,7 @@ func (l *sweepTool) PurgeExpired(
 	return nil
 }
 
-func (l *sweepTool) DeletePurgedBlobs(_ context.Context, ns namespace.Name, unitID string) error {
+func (l *sweepTool) DeletePurgedBlobs(_ context.Context, ns namespace.ID, unitID string) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
@@ -280,9 +280,12 @@ func TestSweepFinishesOnlyOldRecords(t *testing.T) {
 
 	old := sweepNow().Add(-inventory.BlobPurgeGrace - time.Minute)
 	records := []inventory.BlobPurge{
-		{PurgedAt: old, Namespace: "acme", Tool: "pulumi", UnitID: "stk-gone"},
-		{PurgedAt: old, Namespace: "acme", Tool: "pulumi", UnitID: "stk-stuck"},
-		{PurgedAt: sweepNow().Add(-time.Hour), Namespace: "acme", Tool: "pulumi", UnitID: "stk-young"},
+		{PurgedAt: old, Namespace: "acme", NamespaceID: "ns-acme", Tool: "pulumi", UnitID: "stk-gone"},
+		{PurgedAt: old, Namespace: "acme", NamespaceID: "ns-acme", Tool: "pulumi", UnitID: "stk-stuck"},
+		{
+			PurgedAt: sweepNow().Add(-time.Hour), Namespace: "acme", NamespaceID: "ns-acme", Tool: "pulumi",
+			UnitID: "stk-young",
+		},
 	}
 	f := newSweepFixture(t, nil, records)
 	f.tool.blobErrs["stk-stuck"] = fmt.Errorf("delete: %w", errDriver)
@@ -301,17 +304,17 @@ func TestSweepFinishesOnlyOldRecords(t *testing.T) {
 		t.Fatalf("finished = %v, want pulumi/stk-gone", f.records.finished)
 	}
 
-	for i, id := range f.tool.deleted {
+	for _, id := range f.tool.deleted {
 		if id == "stk-young" {
 			t.Fatal("sweep deleted the blobs of a record inside its grace period")
 		}
+	}
 
-		if f.tool.deletedIn[i] != "acme" {
-			t.Fatalf(
-				"blob delete of %s ran in namespace %q, want the namespace of its record, acme",
-				id,
-				f.tool.deletedIn[i],
-			)
+	// The sweep gives the tool the ID of the namespace row that the record
+	// carries, not the name.
+	for _, ns := range f.tool.deletedIn {
+		if ns != "ns-acme" {
+			t.Fatalf("sweep deleted blobs in the namespace %q, want ns-acme", ns)
 		}
 	}
 
@@ -329,7 +332,9 @@ func TestSweepCountsAFailedFinish(t *testing.T) {
 	f := newSweepFixture(
 		t,
 		nil,
-		[]inventory.BlobPurge{{PurgedAt: old, Namespace: "acme", Tool: "pulumi", UnitID: "stk-1"}},
+		[]inventory.BlobPurge{
+			{PurgedAt: old, Namespace: "acme", NamespaceID: "ns-acme", Tool: "pulumi", UnitID: "stk-1"},
+		},
 	)
 	f.records.finishErr = fmt.Errorf("finish: %w", namespace.ErrUnavailable)
 
@@ -359,7 +364,7 @@ func TestSweepUnknownTool(t *testing.T) {
 	f := newSweepFixture(
 		t,
 		units,
-		[]inventory.BlobPurge{{PurgedAt: old, Namespace: "acme", Tool: "other", UnitID: "x"}},
+		[]inventory.BlobPurge{{PurgedAt: old, Namespace: "acme", NamespaceID: "ns-acme", Tool: "other", UnitID: "x"}},
 	)
 
 	res, err := f.sweeper.Sweep(t.Context(), sweepEntry())
@@ -369,6 +374,39 @@ func TestSweepUnknownTool(t *testing.T) {
 
 	if res.Failed != 2 || res.PendingBlobPurges != 1 || len(res.Purged) != 0 {
 		t.Fatalf("sweep = %+v, want two failures and one pending record", res)
+	}
+}
+
+// TestSweepRecordWithoutNamespaceHasItsOwnKind proves that a blob purge record
+// whose namespace row is gone (an empty namespace ID) never reaches the tool,
+// stays pending, counts as a failure, and logs the kind "namespace_missing"
+// instead of "store".
+func TestSweepRecordWithoutNamespaceHasItsOwnKind(t *testing.T) {
+	t.Parallel()
+
+	old := sweepNow().Add(-inventory.BlobPurgeGrace - time.Minute)
+	f := newSweepFixture(
+		t,
+		nil,
+		[]inventory.BlobPurge{{PurgedAt: old, Namespace: "gone", NamespaceID: "", Tool: "pulumi", UnitID: "x"}},
+	)
+
+	res, err := f.sweeper.Sweep(t.Context(), sweepEntry())
+	if err != nil {
+		t.Fatalf("sweep: %v", err)
+	}
+
+	if res.Failed != 1 || res.PendingBlobPurges != 1 || res.FinishedBlobPurges != 0 {
+		t.Fatalf("sweep = %+v, want one failure and one pending record", res)
+	}
+
+	if len(f.tool.deleted) != 0 {
+		t.Fatalf("the tool deleted %v, want no call", f.tool.deleted)
+	}
+
+	log := f.log.String()
+	if !strings.Contains(log, "error_kind=namespace_missing") || strings.Contains(log, "error_kind=store") {
+		t.Fatalf("log = %q, want error_kind=namespace_missing", log)
 	}
 }
 
@@ -617,8 +655,13 @@ func TestSweepPagesTheRecords(t *testing.T) {
 
 	for i := range 250 {
 		records = append(records, inventory.BlobPurge{
-			PurgedAt: old.Add(time.Duration(i) * time.Second), Namespace: "acme", Tool: "pulumi",
-			UnitID: fmt.Sprintf("stk-%03d", i),
+			PurgedAt: old.Add(
+				time.Duration(i) * time.Second,
+			),
+			Namespace:   "acme",
+			NamespaceID: "ns-acme",
+			Tool:        "pulumi",
+			UnitID:      fmt.Sprintf("stk-%03d", i),
 		})
 	}
 

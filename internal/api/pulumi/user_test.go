@@ -270,12 +270,13 @@ func seedStack(t *testing.T, stStore *memStackStore, ns, project, name string) {
 	}
 
 	stStore.stacks[ref] = stack.Stack{
-		CreatedAt: time.Now(),
-		UpdatedAt: time.Now(),
-		Tags:      map[string]string{},
-		Ref:       ref,
-		ID:        "stk-test",
-		Version:   0,
+		NamespaceID: "",
+		CreatedAt:   time.Now(),
+		UpdatedAt:   time.Now(),
+		Tags:        map[string]string{},
+		Ref:         ref,
+		ID:          "stk-test",
+		Version:     0,
 	}
 }
 
