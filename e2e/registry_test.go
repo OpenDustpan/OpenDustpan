@@ -273,7 +273,8 @@ func (sc *registryScenario) publishGood(ctx context.Context, t *testing.T) {
 	sc.checkProviders(ctx, t, `"name":"`+good.name+`"`)
 
 	// A page token that is not a provider name is refused.
-	if bad := sc.api.call(ctx, t, http.MethodGet, "/providers?pageToken=../x", ""); bad.Status != http.StatusBadRequest {
+	bad := sc.api.call(ctx, t, http.MethodGet, "/providers?pageToken=../x", "")
+	if bad.Status != http.StatusBadRequest {
 		t.Fatalf("list providers with a hostile page token = %d %s", bad.Status, bad.Body)
 	}
 
