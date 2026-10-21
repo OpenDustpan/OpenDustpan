@@ -161,6 +161,7 @@ var Tables = []string{
 	"notification_sinks",
 	"notification_sink_secrets",
 	"notification_sink_refs",
+	"item_keys",
 }
 
 // TablesCopy returns a copy of Tables. Callers that sort or filter the list

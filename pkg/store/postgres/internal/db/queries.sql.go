@@ -248,6 +248,11 @@ FROM checkpoints
 UNION ALL
 SELECT blob_key AS content_key, size AS size, md5 AS md5, FALSE AS sealed
 FROM update_journal
+UNION ALL
+SELECT 'namespaces/' || k.namespace_id || '/item-keys/' || k.id || '/v' || k.blob_version::text AS content_key,
+       k.blob_size AS size, k.blob_md5 AS md5, FALSE AS sealed
+FROM item_keys AS k
+WHERE k.shredded_at_ms = 0
 ORDER BY content_key
 `
 
@@ -258,7 +263,8 @@ type BackupBlobsRow struct {
 	Sealed     bool
 }
 
-// Every blob key the finalized state versions and the checkpoints name, with the size
+// Every blob key the finalized state versions, the checkpoints, the journal
+// batches and the item keys that are not shredded name, with the size
 // and MD5 of the plain bytes and the sealed flag, ordered by key. Sealed
 // state blobs are stored sealed: the backup opens them to check and stores
 // the sealed bytes. A pending version has no committed content, so the backup
@@ -5315,6 +5321,60 @@ func (q *Queries) GetInventoryUnit(ctx context.Context, arg GetInventoryUnitPara
 	return unit_id, err
 }
 
+const getItemKey = `-- name: GetItemKey :one
+SELECT k.id, n.name AS namespace, k.scope_id, k.kind, k.item, k.wrapper_id, k.created_at_ms, k.shredded_at_ms,
+       k.blob_version, k.blob_size, k.blob_md5
+FROM item_keys AS k
+JOIN namespaces AS n ON n.id = k.namespace_id
+WHERE n.name = $1 AND k.scope_id = $2 AND k.kind = $3
+  AND k.item = $4
+`
+
+type GetItemKeyParams struct {
+	Namespace string
+	ScopeID   string
+	Kind      string
+	Item      string
+}
+
+type GetItemKeyRow struct {
+	ID           string
+	Namespace    string
+	ScopeID      string
+	Kind         string
+	Item         string
+	WrapperID    string
+	CreatedAtMs  int64
+	ShreddedAtMs int64
+	BlobVersion  int64
+	BlobSize     int64
+	BlobMd5      []byte
+}
+
+func (q *Queries) GetItemKey(ctx context.Context, arg GetItemKeyParams) (GetItemKeyRow, error) {
+	row := q.db.QueryRow(ctx, getItemKey,
+		arg.Namespace,
+		arg.ScopeID,
+		arg.Kind,
+		arg.Item,
+	)
+	var i GetItemKeyRow
+	err := row.Scan(
+		&i.ID,
+		&i.Namespace,
+		&i.ScopeID,
+		&i.Kind,
+		&i.Item,
+		&i.WrapperID,
+		&i.CreatedAtMs,
+		&i.ShreddedAtMs,
+		&i.BlobVersion,
+		&i.BlobSize,
+		&i.BlobMd5,
+	)
+	return i, err
+}
+
 const getJob = `-- name: GetJob :one
 SELECT j.id, n.name AS namespace, j.unit_id, j.seq, j.state, j.wait, j.current_phase, j.current_changes,
        j.current_operation, j.idempotency_key, j.version, j.body, j.created_at_ms, j.updated_at_ms
@@ -8033,6 +8093,52 @@ func (q *Queries) InsertInventoryChange(ctx context.Context, arg InsertInventory
 		arg.ResourceCount,
 	)
 	return err
+}
+
+const insertItemKey = `-- name: InsertItemKey :execrows
+INSERT INTO item_keys (
+    id, namespace_id, scope_id, kind, item, wrapper_id, created_at_ms, shredded_at_ms, blob_version, blob_size, blob_md5
+)
+VALUES (
+    $1, (SELECT n.id FROM namespaces AS n WHERE n.name = $2),
+    $3, $4, $5, $6, $7, 0,
+    $8, $9, $10
+)
+ON CONFLICT (namespace_id, scope_id, kind, item) DO NOTHING
+`
+
+type InsertItemKeyParams struct {
+	ID          string
+	Namespace   string
+	ScopeID     string
+	Kind        string
+	Item        string
+	WrapperID   string
+	CreatedAtMs int64
+	BlobVersion int64
+	BlobSize    int64
+	BlobMd5     []byte
+}
+
+// The caller checks the fence in the same transaction. A record for the same
+// item is not written: the caller reads the stored record.
+func (q *Queries) InsertItemKey(ctx context.Context, arg InsertItemKeyParams) (int64, error) {
+	result, err := q.db.Exec(ctx, insertItemKey,
+		arg.ID,
+		arg.Namespace,
+		arg.ScopeID,
+		arg.Kind,
+		arg.Item,
+		arg.WrapperID,
+		arg.CreatedAtMs,
+		arg.BlobVersion,
+		arg.BlobSize,
+		arg.BlobMd5,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const insertJob = `-- name: InsertJob :exec
@@ -10967,6 +11073,101 @@ func (q *Queries) ListInventoryUnitLabels(ctx context.Context, unitID string) ([
 	for rows.Next() {
 		var i ListInventoryUnitLabelsRow
 		if err := rows.Scan(&i.LabelKey, &i.LabelValue); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listItemKeyWrapperIDs = `-- name: ListItemKeyWrapperIDs :many
+SELECT DISTINCT wrapper_id
+FROM item_keys
+WHERE shredded_at_ms = 0
+ORDER BY wrapper_id
+`
+
+func (q *Queries) ListItemKeyWrapperIDs(ctx context.Context) ([]string, error) {
+	rows, err := q.db.Query(ctx, listItemKeyWrapperIDs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []string
+	for rows.Next() {
+		var wrapper_id string
+		if err := rows.Scan(&wrapper_id); err != nil {
+			return nil, err
+		}
+		items = append(items, wrapper_id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listItemKeys = `-- name: ListItemKeys :many
+SELECT k.id, n.name AS namespace, k.scope_id, k.kind, k.item, k.wrapper_id, k.created_at_ms, k.shredded_at_ms,
+       k.blob_version, k.blob_size, k.blob_md5
+FROM item_keys AS k
+JOIN namespaces AS n ON n.id = k.namespace_id
+WHERE n.name = $1 AND k.scope_id = $2 AND k.id > $3
+ORDER BY k.id
+LIMIT $4::bigint
+`
+
+type ListItemKeysParams struct {
+	Namespace string
+	ScopeID   string
+	After     string
+	MaxRows   int64
+}
+
+type ListItemKeysRow struct {
+	ID           string
+	Namespace    string
+	ScopeID      string
+	Kind         string
+	Item         string
+	WrapperID    string
+	CreatedAtMs  int64
+	ShreddedAtMs int64
+	BlobVersion  int64
+	BlobSize     int64
+	BlobMd5      []byte
+}
+
+func (q *Queries) ListItemKeys(ctx context.Context, arg ListItemKeysParams) ([]ListItemKeysRow, error) {
+	rows, err := q.db.Query(ctx, listItemKeys,
+		arg.Namespace,
+		arg.ScopeID,
+		arg.After,
+		arg.MaxRows,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListItemKeysRow
+	for rows.Next() {
+		var i ListItemKeysRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Namespace,
+			&i.ScopeID,
+			&i.Kind,
+			&i.Item,
+			&i.WrapperID,
+			&i.CreatedAtMs,
+			&i.ShreddedAtMs,
+			&i.BlobVersion,
+			&i.BlobSize,
+			&i.BlobMd5,
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -15226,6 +15427,38 @@ type SetWorkspaceCurrentParams struct {
 func (q *Queries) SetWorkspaceCurrent(ctx context.Context, arg SetWorkspaceCurrentParams) error {
 	_, err := q.db.Exec(ctx, setWorkspaceCurrent, arg.CurrentStateVersionID, arg.UpdatedAtMs, arg.ID)
 	return err
+}
+
+const shredItemKey = `-- name: ShredItemKey :execrows
+UPDATE item_keys
+SET shredded_at_ms = $1
+WHERE item_keys.shredded_at_ms = 0 AND item_keys.scope_id = $2 AND item_keys.kind = $3
+  AND item_keys.item = $4
+  AND item_keys.namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = $5)
+`
+
+type ShredItemKeyParams struct {
+	ShreddedAtMs int64
+	ScopeID      string
+	Kind         string
+	Item         string
+	Namespace    string
+}
+
+// Only a record that is not shredded changes, so a second shred keeps the
+// first shred time.
+func (q *Queries) ShredItemKey(ctx context.Context, arg ShredItemKeyParams) (int64, error) {
+	result, err := q.db.Exec(ctx, shredItemKey,
+		arg.ShreddedAtMs,
+		arg.ScopeID,
+		arg.Kind,
+		arg.Item,
+		arg.Namespace,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const softDeleteStack = `-- name: SoftDeleteStack :execrows

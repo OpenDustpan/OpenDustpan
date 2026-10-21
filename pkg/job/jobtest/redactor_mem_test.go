@@ -186,6 +186,7 @@ func (m *memArtifacts) Seed(
 
 	_, err = m.CreateItemKey(t.Context(), secret.ItemKey{
 		CreatedAt: at, ShreddedAt: time.Time{}, Ref: ref, ID: keyID, WrapperID: "builtin-1",
+		Blob: secret.ItemKeyBlobInfo{MD5: [16]byte{}, Size: 0, Version: 0},
 	}, f)
 	if err != nil {
 		t.Fatalf("create item key: %v", err)
