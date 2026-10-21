@@ -122,7 +122,7 @@ func ifMatchIsSent(ctx context.Context, env Env) error {
 
 	env.Proxy.Reset()
 
-	res, err := env.Adapter.Call(ctx, reviseCall(env, "", etag))
+	res, err := env.Adapter.Call(ctx, reviseCall(env, etag))
 	if err != nil {
 		return err
 	}
@@ -152,7 +152,7 @@ func staleIfMatchGives412(ctx context.Context, env Env) error {
 		return err
 	}
 
-	res, err := env.Adapter.Call(ctx, reviseCall(env, "", staleVersionETag))
+	res, err := env.Adapter.Call(ctx, reviseCall(env, staleVersionETag))
 	if err != nil {
 		return err
 	}
@@ -169,7 +169,7 @@ func missingIfMatchGives428(ctx context.Context, env Env) error {
 		return err
 	}
 
-	res, err := env.Adapter.Call(ctx, reviseCall(env, "", ""))
+	res, err := env.Adapter.Call(ctx, reviseCall(env, ""))
 	if err != nil {
 		return err
 	}

@@ -8,11 +8,14 @@ import (
 	"opendustpan.org/opendustpan/internal/clientgen/model"
 )
 
+// keyDescription is the key of the description in the nodes of a schema.
+const keyDescription = "description"
+
 // schemaKeys returns the keys that a schema holds in the subset.
 func schemaKeys() []string {
 	return []string{
 		"$ref", "type", "properties", "required", "additionalProperties", "items", "enum", "format",
-		"description", "minLength", "maxLength", "anyOf", "oneOf",
+		keyDescription, "minLength", "maxLength", "anyOf", "oneOf",
 	}
 }
 
@@ -80,7 +83,7 @@ func (st *parseState) namedSchema(name string) error {
 
 // schemaOfKind reads a named schema as an object or as an enum.
 func (st *parseState) schemaOfKind(ptr, name string, o object) (*model.Schema, error) {
-	description, err := optionalString(o, ptr, "description")
+	description, err := optionalString(o, ptr, keyDescription)
 	if err != nil {
 		return nil, err
 	}
@@ -186,7 +189,7 @@ func (st *parseState) field(ptr, name string, node any) (model.Field, error) {
 	f.Type = t
 
 	if o, ok := node.(object); ok {
-		f.Description, err = optionalString(o, ptr, "description")
+		f.Description, err = optionalString(o, ptr, keyDescription)
 	}
 
 	return f, err
@@ -490,7 +493,7 @@ func isAnyValue(o object) bool {
 	}
 
 	for k := range o {
-		if k != "description" {
+		if k != keyDescription {
 			return false
 		}
 	}

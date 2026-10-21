@@ -15,7 +15,7 @@ const pathPrefix = "/api/dustpan/v1/"
 // operationKeys returns the keys that an operation holds in the subset.
 func operationKeys() []string {
 	return []string{
-		"operationId", "tags", "summary", "description", "parameters", "requestBody", "responses",
+		"operationId", "tags", "summary", keyDescription, "parameters", "requestBody", "responses",
 		"security", "x-dustpan-actions",
 	}
 }
@@ -142,7 +142,7 @@ func (st *parseState) operation(ptr, path, method, id string, o object) (model.O
 		return op, err
 	}
 
-	if op.Description, err = optionalString(o, ptr, "description"); err != nil {
+	if op.Description, err = optionalString(o, ptr, keyDescription); err != nil {
 		return op, err
 	}
 
@@ -362,7 +362,7 @@ func (st *parseState) parameter(ptr string, item any, op *model.Operation) (mode
 		return p, true, sharedFlag(ptr, o, ref, op)
 	}
 
-	if err := checkKeys(ptr, o, "name", "in", "required", "description", "schema"); err != nil {
+	if err := checkKeys(ptr, o, "name", "in", "required", keyDescription, "schema"); err != nil {
 		return p, false, err
 	}
 
@@ -419,7 +419,7 @@ func (st *parseState) ownParameter(ptr string, o object) (model.Parameter, bool,
 		return p, false, err
 	}
 
-	if p.Description, err = optionalString(o, ptr, "description"); err != nil {
+	if p.Description, err = optionalString(o, ptr, keyDescription); err != nil {
 		return p, false, err
 	}
 

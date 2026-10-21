@@ -441,10 +441,18 @@ type publishedCheck struct {
 }
 
 func publishedChecks() []publishedCheck {
-	return []publishedCheck{
+	return append([]publishedCheck{
 		{"getCapabilities", "is public with no action", func(o model.Operation) bool {
 			return o.Public && len(o.Actions) == 0
 		}},
+		{"getNotificationSink", "has its path parameters in the order of the path", func(o model.Operation) bool {
+			return len(o.Parameters) == 2 && o.Parameters[0].Name == "namespace" && o.Parameters[1].Name == "sink_id"
+		}},
+	}, profileChecks()...)
+}
+
+func profileChecks() []publishedCheck {
+	return []publishedCheck{
 		{"getProfile", "answers with an ETag", func(o model.Operation) bool {
 			return o.Result.ETag && !o.IdempotencyKey
 		}},
@@ -455,9 +463,6 @@ func publishedChecks() []publishedCheck {
 		{"createProfileRevision", "takes Idempotency-Key and a required If-Match", func(o model.Operation) bool {
 			return o.IdempotencyKey && o.IfMatch == model.IfMatchRequired && o.Body != nil && o.Body.Required &&
 				o.Result.ETag
-		}},
-		{"getNotificationSink", "has its path parameters in the order of the path", func(o model.Operation) bool {
-			return len(o.Parameters) == 2 && o.Parameters[0].Name == "namespace" && o.Parameters[1].Name == "sink_id"
 		}},
 	}
 }

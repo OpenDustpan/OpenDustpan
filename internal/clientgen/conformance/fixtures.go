@@ -28,6 +28,9 @@ const (
 	opRevise       = "createProfileRevision"
 )
 
+// pathNamespace is the name of the namespace parameter in the paths.
+const pathNamespace = "namespace"
+
 // The paths that the harness reads directly.
 const (
 	sinksPath    = "/api/dustpan/v1/namespaces/" + Namespace + "/sinks"
@@ -57,24 +60,24 @@ func callOf(op string, path map[string]string) CallParams {
 
 // sinksCall makes the call of listNotificationSinks.
 func sinksCall() CallParams {
-	return callOf(opListSinks, map[string]string{"namespace": Namespace})
+	return callOf(opListSinks, map[string]string{pathNamespace: Namespace})
 }
 
 // sinkCall makes the call of getNotificationSink.
 func sinkCall(id string) CallParams {
-	return callOf(opGetSink, map[string]string{"namespace": Namespace, "sink_id": id})
+	return callOf(opGetSink, map[string]string{pathNamespace: Namespace, "sink_id": id})
 }
 
 // profileCall makes a call whose only path parameter, besides the namespace, is
 // the profile.
 func profileCall(op, profile string) CallParams {
-	return callOf(op, map[string]string{"namespace": Namespace, "profile": profile})
+	return callOf(op, map[string]string{pathNamespace: Namespace, "profile": profile})
 }
 
 // createCall makes the call of createProfile with a profile that no earlier
 // call made.
 func createCall(env Env, key string) CallParams {
-	p := callOf(opCreate, map[string]string{"namespace": Namespace})
+	p := callOf(opCreate, map[string]string{pathNamespace: Namespace})
 	p.Body, p.IdempotencyKey = env.profileBody(env.seed.next("conformance-new-"), "schemaVersion: 1\n"), key
 
 	return p
@@ -82,10 +85,10 @@ func createCall(env Env, key string) CallParams {
 
 // reviseCall makes the call of createProfileRevision. The document differs from
 // the document of each earlier call.
-func reviseCall(env Env, key, ifMatch string) CallParams {
+func reviseCall(env Env, ifMatch string) CallParams {
 	doc := "schemaVersion: 1\nvalues:\n  region: " + env.seed.next("eu-west-")
 	p := profileCall(opRevise, seedProfile)
-	p.Body, p.IdempotencyKey, p.IfMatch = env.reviseBody(doc), key, ifMatch
+	p.Body, p.IfMatch = env.reviseBody(doc), ifMatch
 
 	return p
 }
@@ -311,7 +314,7 @@ func fixtures(ctx context.Context, env Env) (map[string]fixture, error) {
 			profileCall(opGetProfile, seedProfile), http.StatusOK, profilesPath+"/"+seedProfile,
 		),
 		opCreate: answerFixture(createCall(env, ""), 0, ""),
-		opRevise: answerFixture(reviseCall(env, "", etag), 0, ""),
+		opRevise: answerFixture(reviseCall(env, etag), 0, ""),
 	}, nil
 }
 
