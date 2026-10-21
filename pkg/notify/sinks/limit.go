@@ -86,7 +86,11 @@ func (l *testLimiter) take(ns namespace.Name, id string, now time.Time) time.Dur
 
 // recent returns the times of the tests of ns in the last TestNamespaceWindow.
 func (l *testLimiter) recent(ns namespace.Name, now time.Time) []time.Time {
-	times := l.spaces[ns]
+	times, ok := l.spaces[ns]
+	if !ok || len(times) == 0 {
+		return nil
+	}
+
 	cut := 0
 
 	for cut < len(times) && !times[cut].After(now.Add(-TestNamespaceWindow)) {
