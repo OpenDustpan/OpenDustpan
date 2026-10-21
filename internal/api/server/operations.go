@@ -1,6 +1,7 @@
 package server
 
 import (
+	"maps"
 	"net/http"
 
 	"opendustpan.org/opendustpan/internal/api/apidesc"
@@ -60,7 +61,10 @@ func (h *Handler) Operations() []apidesc.Operation {
 		})
 	}
 
-	return apidesc.Collect(rows, operationLabels)
+	labels := maps.Clone(operationLabels)
+	maps.Copy(labels, gitHostOperationLabels)
+
+	return apidesc.Collect(rows, labels)
 }
 
 // actionNames returns the actions as text.

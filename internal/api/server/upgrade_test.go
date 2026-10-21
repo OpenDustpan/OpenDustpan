@@ -156,6 +156,8 @@ func TestUpgradeCheckEmptyVersionDefaultsDev(t *testing.T) {
 
 	handler, err := apiserver.NewHandler(apiserver.Config{
 		Preferences:      nil,
+		GitHost:          nil,
+		Idempotency:      nil,
 		Workers:          nil,
 		Now:              nil,
 		TempAdmins:       nil,
@@ -217,6 +219,8 @@ func TestUpgradeCheckAnswersSchemaMinimum(t *testing.T) {
 
 	handler, err := apiserver.NewHandler(apiserver.Config{
 		Preferences:      nil,
+		GitHost:          nil,
+		Idempotency:      nil,
 		Workers:          nil,
 		TempAdmins:       nil,
 		Now:              nil,
@@ -272,6 +276,8 @@ func TestUpgradeCheckWithoutSchema(t *testing.T) {
 
 	handler, err := apiserver.NewHandler(apiserver.Config{
 		Preferences:      nil,
+		GitHost:          nil,
+		Idempotency:      nil,
 		Workers:          nil,
 		InstallationKind: "",
 		Now:              nil,
@@ -352,6 +358,8 @@ func TestUpgradeCheckAnswersKeyEncryptionKey(t *testing.T) {
 
 	handler, err := apiserver.NewHandler(apiserver.Config{
 		Preferences:      nil,
+		GitHost:          nil,
+		Idempotency:      nil,
 		Workers:          nil,
 		Now:              nil,
 		TempAdmins:       nil,
@@ -415,6 +423,8 @@ func newJournalHandler(t *testing.T, journaled int64) *apiserver.Handler {
 
 	cfg := apiserver.Config{
 		Preferences:      nil,
+		GitHost:          nil,
+		Idempotency:      nil,
 		Workers:          nil,
 		TempAdmins:       nil,
 		Now:              nil,

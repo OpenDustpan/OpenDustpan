@@ -150,6 +150,8 @@ func newAccessFixtureWith(t *testing.T, entries func(st *sqlite.Store) auditStor
 
 	handler, err := apiserver.NewHandler(apiserver.Config{
 		Preferences:      nil,
+		GitHost:          nil,
+		Idempotency:      nil,
 		Workers:          nil,
 		InstallationKind: "",
 		Now:              nil,
