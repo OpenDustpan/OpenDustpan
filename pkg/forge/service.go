@@ -30,6 +30,12 @@ const (
 	// ReasonNoRegistration is a connection of the installation-level app while
 	// the installation has no registration, or one that fails its checks.
 	ReasonNoRegistration = "no-registration"
+	// ReasonKeyNotOpened is a stored key that does not open with the binding of
+	// the address that the registration holds now.
+	ReasonKeyNotOpened = "key-not-opened"
+	// ReasonAddressRefused is an API address that the outbound address rules
+	// refuse.
+	ReasonAddressRefused = "address-refused"
 )
 
 // Namespaces reads the namespace that a write fences. namespace.Store
@@ -129,6 +135,10 @@ func NewService(cfg Config) (*Service, error) {
 	limits := DefaultCheckLimits()
 	if cfg.CheckLimits != nil {
 		limits = *cfg.CheckLimits
+	}
+
+	if err := limits.Validate(); err != nil {
+		return nil, fmt.Errorf("check limits: %w", err)
 	}
 
 	return &Service{
@@ -356,7 +366,7 @@ func (s *Service) Open(ctx context.Context, e audit.Entry, ns namespace.Name, id
 		return nil, fmt.Errorf("%w: %w", ErrAuth, ErrAddressChanged)
 	}
 
-	return s.openWith(ctx, rec, &reg)
+	return s.openWith(ctx, e, rec, &reg)
 }
 
 // Check opens the connection id of ns, calls the Git host and returns the
@@ -465,7 +475,9 @@ func (s *Service) connectionRecord(ctx context.Context, ns namespace.Name, id st
 // and the app ID of reg.
 //
 //nolint:ireturn // The port is the interface: the adapter type stays hidden.
-func (s *Service) openWith(ctx context.Context, rec ConnectionRecord, reg *Registration) (Forge, error) {
+func (s *Service) openWith(
+	ctx context.Context, e audit.Entry, rec ConnectionRecord, reg *Registration,
+) (Forge, error) {
 	opener, ok := s.openers[rec.Kind]
 	if !ok {
 		return nil, fmt.Errorf("%w: the connection kind %q is not supported", ErrInvalid, rec.Kind)
@@ -475,7 +487,9 @@ func (s *Service) openWith(ctx context.Context, rec ConnectionRecord, reg *Regis
 	// connection again. This check stays so that an address that the rules
 	// refuse never reaches an adapter, whatever the adapter does.
 	if err := s.checkURL(reg.BaseURL); err != nil {
-		return nil, fmt.Errorf("%w: the API address: %w", ErrInvalid, err)
+		s.refuse(ctx, e, rec, ReasonAddressRefused)
+
+		return nil, fmt.Errorf("%w: %w: %w", ErrAuth, ErrAddressRefused, err)
 	}
 
 	// The key opens only with the digest of the address that it was sealed for.
@@ -486,7 +500,9 @@ func (s *Service) openWith(ctx context.Context, rec ConnectionRecord, reg *Regis
 		ctx, KeyScope(reg.Kind), []byte(AddressDigest(reg.Kind, reg.BaseURL, reg.AppID)), reg.SealedKey,
 	)
 	if err != nil {
-		return nil, fmt.Errorf("%w: open the key of the GitHub App: %w", ErrAuth, err)
+		s.refuse(ctx, e, rec, ReasonKeyNotOpened)
+
+		return nil, fmt.Errorf("%w: %w: %w", ErrAuth, ErrKeyNotOpened, err)
 	}
 
 	conn := Connection{

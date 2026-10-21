@@ -51,6 +51,13 @@ var (
 	// from the address and the parameters now. The server never sends such a
 	// credential.
 	ErrAddressChanged = errors.New("the address of the GitHub App changed after the credential was stored")
+	// ErrKeyNotOpened reports a stored key that does not open with the binding
+	// of the address that the registration holds now: the stored bytes or the
+	// address changed after the key was sealed.
+	ErrKeyNotOpened = errors.New("the stored key of the GitHub App does not open")
+	// ErrAddressRefused reports an API address that the outbound address rules
+	// refuse when the connection opens.
+	ErrAddressRefused = errors.New("the outbound address rules refuse the API address of the GitHub App")
 )
 
 // Limits of the connections of a namespace.

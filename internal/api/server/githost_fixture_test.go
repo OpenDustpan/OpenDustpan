@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -41,6 +42,9 @@ const (
 // actions on a namespace only on acme. An action in deny is refused everywhere.
 type hostAuthorizer struct {
 	deny map[identity.Action]bool
+	// anyNamespace lets the namespace actions pass on every namespace, so that a
+	// test reaches the handler with the ID of a connection of another one.
+	anyNamespace bool
 }
 
 func (a hostAuthorizer) Authorize(
@@ -57,7 +61,7 @@ func (a hostAuthorizer) Authorize(
 			return nil
 		}
 	case identity.ActionNamespaceReadGitHostConnections, identity.ActionNamespaceManageGitHostConnections:
-		if obj.Namespace() == "acme" {
+		if obj.Namespace() == "acme" || a.anyNamespace {
 			return nil
 		}
 	default:
@@ -69,6 +73,9 @@ func (a hostAuthorizer) Authorize(
 func (hostAuthorizer) ListObjects(_ context.Context, p identity.Principal, _ identity.Action) (identity.Scope, error) {
 	return identity.AdminScope(p), nil
 }
+
+// errHostAddress is the error of an address that the rules refuse.
+var errHostAddress = errors.New("the address rules refuse the address")
 
 // errHostBinding is the error of a value that does not open with its binding.
 var errHostBinding = errors.New("the value does not open with this binding")
@@ -120,6 +127,13 @@ func (o *hostOpener) Open(context.Context, forge.Connection, forge.Credential) (
 	return hostForge{Forge: nil, o: o}, nil
 }
 
+func (o *hostOpener) openedCount() int {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+
+	return o.opened
+}
+
 func (o *hostOpener) setOpenErr(err error) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
@@ -160,6 +174,18 @@ type hostEnv struct {
 	handler *apiserver.Handler
 	store   *sqlite.Store
 	opener  *hostOpener
+	// refuseAddress makes the address rules of the service refuse every address.
+	refuseAddress *atomic.Bool
+	mu            sync.Mutex
+	refused       []string
+}
+
+// refusals returns the reasons that the service counted, in order.
+func (e *hostEnv) refusals() []string {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	return slices.Clone(e.refused)
 }
 
 // hostResponse is the answer of one request.
@@ -198,7 +224,7 @@ func newHostEnvWith(t *testing.T, authz identity.Authorizer, keys keyMode) *host
 
 	// The limits are wide, so that a test can check a connection many times.
 	// The tests of the limit set their own.
-	limits := forge.CheckLimits{PerConnection: 0, PerInstallation: 1000, Window: time.Minute}
+	limits := forge.CheckLimits{PerConnection: time.Nanosecond, PerInstallation: 1000, Window: time.Minute}
 
 	return newHostEnvLimited(t, authz, keys, &limits)
 }
@@ -208,15 +234,42 @@ func newHostEnvWith(t *testing.T, authz identity.Authorizer, keys keyMode) *host
 func newHostEnvLimited(t *testing.T, authz identity.Authorizer, keys keyMode, limits *forge.CheckLimits) *hostEnv {
 	t.Helper()
 
+	return newHostEnvWrapped(t, authz, keys, limits, func(s forge.Store) forge.Store { return s })
+}
+
+// newHostEnvWrapped builds the environment of newHostEnvLimited over the store
+// that wrap returns for the store of the Git host.
+func newHostEnvWrapped(
+	t *testing.T, authz identity.Authorizer, keys keyMode, limits *forge.CheckLimits,
+	wrap func(forge.Store) forge.Store,
+) *hostEnv {
+	t.Helper()
+
 	st, nss := openIPAllowFixture(t)
+	env := &hostEnv{
+		handler: nil, store: st, opener: nil, refuseAddress: &atomic.Bool{}, mu: sync.Mutex{}, refused: nil,
+	}
 	opener := &hostOpener{mu: sync.Mutex{}, opened: 0, checkErr: nil, openErr: nil}
 
 	rules := egress.Rules{Allow: nil, Loopback: false}
 
 	svc, err := forge.NewService(forge.Config{
-		Store: st.GitHost(), Namespaces: st, Secrets: hostSealer{}, Audit: st, Openers: []forge.Opener{opener},
-		CheckURL: func(raw string) error { return rules.CheckURL(raw, egress.HTTPSOnly) }, OnAuditFailure: nil,
-		OnRefused: nil, CheckLimits: limits, Now: nil,
+		Store: wrap(st.GitHost()), Namespaces: st, Secrets: hostSealer{}, Audit: st, Openers: []forge.Opener{opener},
+		CheckURL: func(raw string) error {
+			if env.refuseAddress.Load() {
+				return errHostAddress
+			}
+
+			return rules.CheckURL(raw, egress.HTTPSOnly)
+		},
+		OnAuditFailure: nil,
+		OnRefused: func(reason string) {
+			env.mu.Lock()
+			defer env.mu.Unlock()
+
+			env.refused = append(env.refused, reason)
+		},
+		CheckLimits: limits, Now: nil,
 	})
 	if err != nil {
 		t.Fatalf("git host service: %v", err)
@@ -228,7 +281,10 @@ func newHostEnvLimited(t *testing.T, authz identity.Authorizer, keys keyMode, li
 		mw = newHostMiddleware(t, st)
 	}
 
-	return buildHostEnv(t, hostParts{st: st, nss: nss, svc: svc, mw: mw, opener: opener}, authz)
+	built := buildHostEnv(t, hostParts{st: st, nss: nss, svc: svc, mw: mw, opener: opener}, authz)
+	env.handler, env.opener = built.handler, built.opener
+
+	return env
 }
 
 func newHostMiddleware(t *testing.T, st *sqlite.Store) *idempotent.Middleware {

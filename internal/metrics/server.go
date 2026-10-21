@@ -636,13 +636,19 @@ const (
 	// GitHostRefusedNoRegistration counts a connection of the
 	// installation-level app while the installation has no valid registration.
 	GitHostRefusedNoRegistration = "no-registration"
+	// GitHostRefusedKeyNotOpened counts a stored key that does not open with
+	// the binding of the address that the registration holds now.
+	GitHostRefusedKeyNotOpened = "key-not-opened"
+	// GitHostRefusedAddressRefused counts an API address that the outbound
+	// address rules refuse.
+	GitHostRefusedAddressRefused = "address-refused"
 	// GitHostRefusedOther counts any other reason, so the label set stays
 	// fixed.
 	GitHostRefusedOther = "other"
 )
 
 // maxGitHostRefusedReasons holds one series for each reason.
-const maxGitHostRefusedReasons = 4
+const maxGitHostRefusedReasons = 6
 
 // newGitHostRefusedCounter creates dustpan_git_host_connection_refused_total
 // in reg.
@@ -662,7 +668,8 @@ func newGitHostRefusedCounter(reg *Registry) *Counter {
 // registration that changed stops the connections that it names.
 func (m *ServerMetrics) ObserveGitHostRefused(reason string) {
 	switch reason {
-	case GitHostRefusedNotAssigned, GitHostRefusedAddressChanged, GitHostRefusedNoRegistration:
+	case GitHostRefusedNotAssigned, GitHostRefusedAddressChanged, GitHostRefusedNoRegistration,
+		GitHostRefusedKeyNotOpened, GitHostRefusedAddressRefused:
 	default:
 		reason = GitHostRefusedOther
 	}

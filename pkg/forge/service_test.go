@@ -159,12 +159,30 @@ func TestOpenRefusesAKeyForAnAddressItWasNotSealedFor(t *testing.T) {
 	r.store.setRegistration(reg)
 
 	_, err := r.svc.Open(t.Context(), callerEntry(), "acme", conn.Record.ID)
-	if !errors.Is(err, forge.ErrAuth) {
-		t.Fatalf("open with a changed address and digest = %v, want ErrAuth", err)
+	if !errors.Is(err, forge.ErrAuth) || !errors.Is(err, forge.ErrKeyNotOpened) {
+		t.Fatalf("open with a changed address and digest = %v, want ErrAuth and ErrKeyNotOpened", err)
 	}
 
 	if len(r.opener.calls()) != before {
 		t.Fatal("the adapter opened with a key for an address it was not sealed for")
+	}
+
+	wantDeniedOpen(t, r, forge.ReasonKeyNotOpened)
+}
+
+// wantDeniedOpen checks that the rig counted one refusal with reason and wrote
+// one denied security entry for it.
+func wantDeniedOpen(t *testing.T, r *rig, reason string) {
+	t.Helper()
+
+	if got := r.refusals(); len(got) != 1 || got[0] != reason {
+		t.Fatalf("refusals = %v, want one %q", got, reason)
+	}
+
+	entries := r.audit.all()
+	if len(entries) != 1 || entries[0].Outcome != audit.OutcomeDenied || entries[0].Kind != audit.KindSecurity ||
+		entries[0].Action != "git-host-connection:open" || !strings.HasSuffix(entries[0].Reason, reason) {
+		t.Fatalf("audit entries = %+v, want one denied security entry with the reason %q", entries, reason)
 	}
 }
 
@@ -183,13 +201,15 @@ func TestOpenAppliesTheAddressRulesAtEachCall(t *testing.T) {
 	r.store.setRegistration(reg)
 
 	_, err := r.svc.Open(t.Context(), callerEntry(), "acme", conn.Record.ID)
-	if !errors.Is(err, forge.ErrInvalid) {
-		t.Fatalf("open with an address that the rules refuse = %v, want ErrInvalid", err)
+	if !errors.Is(err, forge.ErrAuth) || !errors.Is(err, forge.ErrAddressRefused) {
+		t.Fatalf("open with an address that the rules refuse = %v, want ErrAuth and ErrAddressRefused", err)
 	}
 
 	if len(r.opener.calls()) != before || r.sealer.opens != opensBefore {
 		t.Fatal("the key was unsealed or the adapter opened for an address that the rules refuse")
 	}
+
+	wantDeniedOpen(t, r, forge.ReasonAddressRefused)
 }
 
 func TestOpenRefusesAnUnknownOrForeignConnection(t *testing.T) {

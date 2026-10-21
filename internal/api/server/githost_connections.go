@@ -399,15 +399,16 @@ func (h *Handler) checkGitHostConnection(
 	w http.ResponseWriter, r *http.Request, p identity.Principal, obj identity.Object,
 ) {
 	ctx := r.Context()
+	change := connectionChange{ns: obj.Namespace(), verb: "check"}
 
 	if idempotent.Present(r) {
-		h.writeError(ctx, w, errGitHostIdempotencyKey)
+		h.failGitHostConnection(w, r, p, change, errGitHostIdempotencyKey)
 
 		return
 	}
 
 	if _, err := h.namespaces.Get(ctx, obj.Namespace()); err != nil {
-		h.writeError(ctx, w, err)
+		h.failGitHostConnection(w, r, p, change, err)
 
 		return
 	}
@@ -419,6 +420,15 @@ func (h *Handler) checkGitHostConnection(
 		if errors.Is(err, forge.ErrInstallationNotAssigned) {
 			// The same code and status as the create route.
 			err = errGitHostNotAssigned
+		}
+
+		// The service audits a refused open and the outcome of a call to GitHub.
+		// The refusals that it does not audit are written here, so that a caller
+		// who hits the limit or asks for IDs that do not exist leaves a trace.
+		if errors.Is(err, forge.ErrRateLimited) || errors.Is(err, forge.ErrConnectionNotFound) {
+			h.failGitHostConnection(w, r, p, change, err)
+
+			return
 		}
 
 		h.writeGitHostError(r, w, err)

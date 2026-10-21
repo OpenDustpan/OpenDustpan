@@ -187,6 +187,12 @@ func classifyGitHostConflict(err error) (int, string, bool) {
 	case errors.Is(err, forge.ErrAddressChanged):
 		return http.StatusConflict, "the address of the GitHub App changed after its key was stored: " +
 			"ask the operator to register the app again", true
+	case errors.Is(err, forge.ErrKeyNotOpened):
+		return http.StatusConflict, "the server cannot open the stored key of the GitHub App: " +
+			"ask the operator to register the app again", true
+	case errors.Is(err, forge.ErrAddressRefused):
+		return http.StatusConflict, "the address rules of the server refuse the API address of the GitHub App: " +
+			"ask the operator to change the address or the allowed ranges", true
 	case errors.Is(err, forge.ErrConnectionExists), errors.Is(err, forge.ErrConnectionLimit),
 		errors.Is(err, forge.ErrDefaultConnection), errors.Is(err, forge.ErrRegistrationInUse):
 		return http.StatusConflict, rootText(err), true

@@ -2,6 +2,7 @@ package forge
 
 import (
 	"errors"
+	"fmt"
 	"sync"
 	"time"
 )
@@ -50,6 +51,22 @@ type CheckLimits struct {
 	Window time.Duration
 }
 
+// Validate returns an error that wraps ErrInvalid unless each limit is
+// positive. A zero or negative value would turn the limiter off, or make the
+// first Check read an empty list.
+func (l CheckLimits) Validate() error {
+	switch {
+	case l.PerConnection <= 0:
+		return fmt.Errorf("%w: the check interval of a connection must be positive", ErrInvalid)
+	case l.PerInstallation <= 0:
+		return fmt.Errorf("%w: the number of checks of an installation must be positive", ErrInvalid)
+	case l.Window <= 0:
+		return fmt.Errorf("%w: the window of the checks of an installation must be positive", ErrInvalid)
+	default:
+		return nil
+	}
+}
+
 // Default limits of Check: one for each connection in 10 seconds, and 30 for
 // each installation in one minute.
 const (
@@ -91,6 +108,13 @@ func newCheckLimiter(limits CheckLimits) *checkLimiter {
 func (l *checkLimiter) admit(connection, installation string, now time.Time) (time.Duration, bool) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+
+	// Defense in depth: NewService refuses limits that are not positive. This
+	// check stays so that a limiter built another way fails closed: it never
+	// reads an empty list and never runs with a limit that is off.
+	if l.limits.Validate() != nil {
+		return time.Second, false
+	}
 
 	l.prune(now)
 
