@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/url"
 	"slices"
 	"strings"
 
@@ -178,6 +179,88 @@ func (b SinkSealer) Open(ctx context.Context, s Sink, sealed []SealedSecret) ([]
 	}
 
 	return out, nil
+}
+
+// Destination is what a send to a sink needs from its secret items, opened
+// for that one send: the URL of a chat sink or of a webhook sink, and the
+// signing keys of a webhook sink. URL is empty for an email sink. Only the
+// dispatcher and the test of a sink hold one, in memory, and never log it.
+type Destination struct {
+	URL  string
+	Keys [][]byte
+}
+
+// Clear overwrites the signing keys. The caller calls it after the send.
+func (d *Destination) Clear() {
+	for _, k := range d.Keys {
+		clear(k)
+	}
+}
+
+// OpenDestination opens the sealed secret items of s, for a send. A chat
+// sink gives its URL, and a webhook sink its URL and its signing keys. The
+// URL must have the host s.Target: the host is what a person approved. An email sink has no secret item and gives an
+// empty
+// Destination.
+//
+// It fails closed. It returns an error that matches ErrNoURL, and also
+// secret.ErrDecrypt when the sealer refused a value, for an item that is
+// missing, an item that does not open, an empty URL, and a URL that has
+// another host than the target. The error never holds a value.
+func (b SinkSealer) OpenDestination(ctx context.Context, s Sink, sealed []SealedSecret) (Destination, error) {
+	if s.Kind == SinkEmail {
+		return Destination{URL: "", Keys: nil}, nil
+	}
+
+	values, err := b.Open(ctx, s, sealed)
+	if err != nil {
+		return Destination{URL: "", Keys: nil}, fmt.Errorf("%w: %w", ErrNoURL, err)
+	}
+
+	// Defense in depth: Sink.Validate keeps one URL item and, for a webhook, at
+	// least one key. This check stays so that a sink that skipped it never
+	// makes an index panic here.
+	if len(values) == 0 || s.Kind == SinkWebhook && len(values) < 2 {
+		for _, v := range values {
+			clear(v)
+		}
+
+		return Destination{URL: "", Keys: nil}, fmt.Errorf("%w: sink %s lacks a secret item", ErrNoURL, s.ID)
+	}
+
+	d := Destination{URL: string(values[0]), Keys: values[1:]}
+	clear(values[0])
+
+	if s.Kind == SinkChat {
+		d.Keys = nil
+	}
+
+	if err = checkDestination(s, d.URL); err != nil {
+		d.Clear()
+
+		return Destination{URL: "", Keys: nil}, err
+	}
+
+	return d, nil
+}
+
+// checkDestination returns an error that matches ErrNoURL when the URL of an
+// opened item does not parse, or has another host than the target of the
+// sink. It checks the host and nothing else: the outbound rules for the
+// scheme, the address and the port are the job of the sender and of the
+// check before a send, and a URL they refuse is a refusal, not a missing URL.
+//
+// Defense in depth: the API checked the host when it sealed the value, and
+// the sender checks the address again. This check stays so that a value that
+// a restore or another version of the server left behind never leaves for a
+// host that nobody approved.
+func checkDestination(s Sink, raw string) error {
+	u, err := url.Parse(raw)
+	if err != nil || u == nil || !strings.EqualFold(u.Host, s.Target) {
+		return fmt.Errorf("%w: the URL is not on the host of sink %s", ErrNoURL, s.ID)
+	}
+
+	return nil
 }
 
 // checkSinkID returns ErrInvalid for a sink ID that does not start with

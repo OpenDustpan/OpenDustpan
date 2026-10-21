@@ -1,9 +1,11 @@
 package sinks_test
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -13,6 +15,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/egress"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/notify"
+	"opendustpan.org/opendustpan/pkg/notify/notifytest"
 	"opendustpan.org/opendustpan/pkg/notify/sinks"
 )
 
@@ -62,7 +65,11 @@ func checkTestMessage(t *testing.T, m notify.Message, created sinks.Created) {
 	t.Helper()
 
 	if m.To != "https://hooks.example.com/ops" || len(m.Secrets) != 1 || string(m.Secrets[0]) != created.SigningKey {
-		t.Fatalf("message to %q with %d secrets, want the target and the signing key", m.To, len(m.Secrets))
+		t.Fatalf("message to %q with %d secrets, want the opened URL and the signing key only", m.To, len(m.Secrets))
+	}
+
+	if m.Sink.Target != "hooks.example.com" {
+		t.Fatalf("message sink target = %q, want the host only", m.Sink.Target)
 	}
 
 	n := m.Notification
@@ -272,12 +279,13 @@ func TestTestChecksTheAddressAgain(t *testing.T) {
 	t.Parallel()
 
 	cases := []struct {
-		name   string
-		target string
+		name string
+		host string
+		url  string
 	}{
-		{"a webhook on loopback", "https://127.0.0.1/hook"},
-		{"a webhook on the metadata address", "https://169.254.169.254/"},
-		{"a webhook over http", "http://hooks.example.com/"},
+		{"a webhook on loopback", "127.0.0.1", "https://127.0.0.1/hook"},
+		{"a webhook on the metadata address", "169.254.169.254", "https://169.254.169.254/"},
+		{"a webhook over http", "hooks.example.com", "http://hooks.example.com/"},
 	}
 
 	for _, tc := range cases {
@@ -288,8 +296,9 @@ func TestTestChecksTheAddressAgain(t *testing.T) {
 			created := makeHook(t, f)
 
 			s := f.store.sinks[created.Sink.ID]
-			s.Target = tc.target
+			s.Target = tc.host
 			f.store.sinks[s.ID] = s
+			f.store.secrets[s.ID] = sealWebhook(t, s, tc.url)
 
 			res, err := runTest(t.Context(), f, shop, s.ID)
 			if err != nil || res.Delivered || res.Class != notify.ClassRefused || res.Message != sinks.TextRefused {
@@ -316,12 +325,91 @@ func TestTestChatHostMustBeTheTarget(t *testing.T) {
 	f.store.sinks[s.ID] = s
 
 	res, err := runTest(t.Context(), f, shop, chat.ID)
-	if err != nil || res.Class != notify.ClassRefused {
-		t.Fatalf("Test = %+v, %v, want the class refused", res, err)
+	if !errors.Is(err, notify.ErrNoURL) {
+		t.Fatalf("Test = %+v, %v, want ErrNoURL: the URL is not on the host of the target", res, err)
 	}
 
 	if len(chatSender.got) != 0 {
 		t.Fatalf("sender got %d messages, want none", len(chatSender.got))
+	}
+}
+
+// sealWebhook returns the sealed items of the webhook sink s with the URL url
+// and a signing key.
+func sealWebhook(t *testing.T, s notify.Sink, url string) []notify.SealedSecret {
+	t.Helper()
+
+	sealed, err := notifytest.Sealer().Seal(t.Context(), s, []notify.SinkSecret{
+		{Ref: s.SecretRefs[0], Value: []byte(url)},
+		{Ref: s.SecretRefs[1], Value: []byte("a key")},
+	})
+	if err != nil {
+		t.Fatalf("Seal: %v", err)
+	}
+
+	return sealed
+}
+
+// TestTestFailsClosedWithoutAUsableURL proves that a webhook sink whose URL item
+// is missing, empty, sealed for another sink or garbled sends nothing, writes no
+// entry and answers notify.ErrNoURL, which holds no part of the URL.
+func TestTestFailsClosedWithoutAUsableURL(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name   string
+		mutate func(t *testing.T, f fixture, s notify.Sink) []notify.SealedSecret
+	}{
+		{"no URL item", func(t *testing.T, f fixture, s notify.Sink) []notify.SealedSecret {
+			t.Helper()
+
+			return f.store.secrets[s.ID][1:]
+		}},
+		{
+			"an empty URL item, as the upgrade leaves it",
+			func(t *testing.T, f fixture, s notify.Sink) []notify.SealedSecret {
+				t.Helper()
+
+				items := slices.Clone(f.store.secrets[s.ID])
+				items[0] = notify.StoredSecret(s.Scope, s.ID, s.SecretRefs[0], nil)
+
+				return items
+			},
+		},
+		{"a garbled URL item", func(t *testing.T, f fixture, s notify.Sink) []notify.SealedSecret {
+			t.Helper()
+
+			items := slices.Clone(f.store.secrets[s.ID])
+			items[0] = notify.StoredSecret(s.Scope, s.ID, s.SecretRefs[0], bytes.Repeat([]byte{9}, 64))
+
+			return items
+		}},
+		{"a URL on another host", func(t *testing.T, _ fixture, s notify.Sink) []notify.SealedSecret {
+			t.Helper()
+
+			return sealWebhook(t, s, "https://other.example.com/"+canary)
+		}},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			f := newFixture(t, nil)
+			created := makeHook(t, f)
+			f.store.secrets[created.Sink.ID] = tc.mutate(t, f, created.Sink)
+			before := len(f.store.entries)
+
+			res, err := runTest(t.Context(), f, shop, created.Sink.ID)
+			if !errors.Is(err, notify.ErrNoURL) || strings.Contains(fmt.Sprint(err), canary) {
+				t.Fatalf("Test = %+v, %v, want ErrNoURL without the URL", res, err)
+			}
+
+			if len(f.hook.got) != 0 || len(f.store.entries) != before {
+				t.Fatalf("sender got %d messages and %d entries were written, want none",
+					len(f.hook.got), len(f.store.entries)-before)
+			}
+		})
 	}
 }
 
