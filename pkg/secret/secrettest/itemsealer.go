@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/rand"
 	"errors"
+	"fmt"
 	"io"
 	"strings"
 	"sync"
@@ -50,10 +51,8 @@ func (noRefusals) RecordOutOfScope(context.Context, namespace.ID, string, scopea
 func NewSealerRig(t *testing.T, index ItemKeyStore, blobs blob.Store) *SealerRig {
 	t.Helper()
 
-	rig := &SealerRig{
-		Sealer: nil, Foreign: nil, Unkeyed: nil, Index: index, Blobs: blobs,
-		Acme: namespace.Namespace{}, Other: namespace.Namespace{},
-	}
+	rig := new(SealerRig)
+	rig.Index, rig.Blobs = index, blobs
 
 	for _, name := range []namespace.Name{"acme", "other"} {
 		ns := namespace.Namespace{
@@ -190,7 +189,7 @@ func sealItem(t *testing.T, r *SealerRig, ref secret.ItemRef, binding, plain []b
 	return out
 }
 
-// openAll opens sealed with s and reads it to the end.
+// openSealed opens sealed with s and reads it to the end.
 func openSealed(ctx context.Context, s secret.ItemSealer, ref secret.ItemRef, binding, sealed []byte) ([]byte, error) {
 	rd, err := s.OpenContent(ctx, ref, binding, bytes.NewReader(sealed))
 	if err != nil {
@@ -199,7 +198,7 @@ func openSealed(ctx context.Context, s secret.ItemSealer, ref secret.ItemRef, bi
 
 	out, err := io.ReadAll(rd)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("read opened content: %w", err)
 	}
 
 	return out, nil
@@ -360,14 +359,9 @@ func testSealerConcurrentNewKey(t *testing.T, r *SealerRig) {
 	}
 
 	sealed := sealItem(t, r, ref, sealerBinding(), []byte("after the race"))
-	if got, err := openSealed(
-		t.Context(),
-		r.Sealer,
-		ref,
-		sealerBinding(),
-		sealed,
-	); err != nil ||
-		string(got) != "after the race" {
+
+	got, err := openSealed(t.Context(), r.Sealer, ref, sealerBinding(), sealed)
+	if err != nil || string(got) != "after the race" {
 		t.Errorf("open after the race = %q, %v", got, err)
 	}
 }
@@ -468,16 +462,8 @@ func testSealerOtherItem(t *testing.T, r *SealerRig) {
 	for _, other := range others {
 		mustNewKey(t, r, other)
 
-		if _, err := openSealed(
-			t.Context(),
-			r.Sealer,
-			other,
-			sealerBinding(),
-			sealed,
-		); !errors.Is(
-			err,
-			secret.ErrDecrypt,
-		) {
+		_, err := openSealed(t.Context(), r.Sealer, other, sealerBinding(), sealed)
+		if !errors.Is(err, secret.ErrDecrypt) {
 			t.Errorf("content of %s opened as %s: err = %v, want ErrDecrypt", ref, other, err)
 		}
 	}
@@ -513,16 +499,8 @@ func testSealerTamper(t *testing.T, r *SealerRig) {
 	}
 
 	for _, tc := range cases {
-		if _, err := openSealed(
-			t.Context(),
-			r.Sealer,
-			ref,
-			sealerBinding(),
-			tc.sealed,
-		); !errors.Is(
-			err,
-			secret.ErrDecrypt,
-		) {
+		_, err := openSealed(t.Context(), r.Sealer, ref, sealerBinding(), tc.sealed)
+		if !errors.Is(err, secret.ErrDecrypt) {
 			t.Errorf("%s: err = %v, want ErrDecrypt", tc.name, err)
 		}
 	}
