@@ -313,8 +313,8 @@ type Env struct {
 	// Info is the answer of the adapter to initialize.
 	Info InitializeResult
 
-	// app makes the body of the Git host app once for a run. Run sets it.
-	app *appFixture
+	// seed holds what the cases of a run share. Run sets it.
+	seed *seedState
 }
 
 // Group is a group of cases.

@@ -42,7 +42,7 @@ func DirectGet(ctx context.Context, url, path string) (int, []byte, error) {
 
 	env := Env{
 		Server: stubServer{Server: nil, url: url}, Proxy: nil, Adapter: nil, Transport: "", Operations: nil,
-		Info: info, app: nil,
+		Info: info, seed: nil,
 	}
 
 	out, err := direct(ctx, env, directRequest{

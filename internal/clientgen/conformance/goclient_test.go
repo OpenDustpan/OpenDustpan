@@ -20,11 +20,11 @@ import (
 const envRun = "DUSTPAN_CLIENTGEN_CONFORMANCE"
 
 // goOperations are the operations that the Go client covers in this slice:
-// five reads and one write, across the caller, namespace and server areas.
+// five reads and two writes, across the caller, namespace and server areas.
 func goOperations() []string {
 	return []string{
-		"getCapabilities", "getGitHostApp", "getNotificationSink", "getPreferences",
-		"listNotificationSinks", "putGitHostApp",
+		"createProfile", "createProfileRevision", "getCapabilities", "getNotificationSink",
+		"getPreferences", "getProfile", "listNotificationSinks",
 	}
 }
 

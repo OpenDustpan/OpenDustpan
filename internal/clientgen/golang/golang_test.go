@@ -29,8 +29,8 @@ const descriptionPath = "../../api/apidesc/openapi.json"
 
 func coveredOperations() []string {
 	return []string{
-		"getCapabilities", "getGitHostApp", "getNotificationSink", "getPreferences",
-		"listNotificationSinks", "putGitHostApp",
+		"createProfile", "createProfileRevision", "getCapabilities", "getNotificationSink",
+		"getPreferences", "getProfile", "listNotificationSinks",
 	}
 }
 

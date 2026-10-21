@@ -53,6 +53,41 @@ func (v *Capabilities) UnmarshalJSON(data []byte) error {
 	return json.Unmarshal(data, (*plain)(v))
 }
 
+// CreateProfileRequest is a schema of the API description.
+type CreateProfileRequest struct {
+	Document string  `json:"document"`
+	Name     string  `json:"name"`
+	Reason   *string `json:"reason,omitempty"`
+}
+
+// UnmarshalJSON checks that the required members are there.
+func (v *CreateProfileRequest) UnmarshalJSON(data []byte) error {
+	if err := requireFields(data, []string{"document", "name"}, []string{"document", "name"}); err != nil {
+		return fmt.Errorf("CreateProfileRequest: %w", err)
+	}
+
+	type plain CreateProfileRequest
+
+	return json.Unmarshal(data, (*plain)(v))
+}
+
+// CreateProfileRevisionRequest is a schema of the API description.
+type CreateProfileRevisionRequest struct {
+	Document string  `json:"document"`
+	Reason   *string `json:"reason,omitempty"`
+}
+
+// UnmarshalJSON checks that the required members are there.
+func (v *CreateProfileRevisionRequest) UnmarshalJSON(data []byte) error {
+	if err := requireFields(data, []string{"document"}, []string{"document"}); err != nil {
+		return fmt.Errorf("CreateProfileRevisionRequest: %w", err)
+	}
+
+	type plain CreateProfileRevisionRequest
+
+	return json.Unmarshal(data, (*plain)(v))
+}
+
 // ErrorResponse is a schema of the API description.
 type ErrorResponse struct {
 	// The HTTP status.
@@ -76,48 +111,6 @@ func (v *ErrorResponse) UnmarshalJSON(data []byte) error {
 	return json.Unmarshal(data, (*plain)(v))
 }
 
-// GitHostApp is a schema of the API description.
-type GitHostApp struct {
-	ApiAddress  string               `json:"apiAddress"`
-	AppID       string               `json:"appID"`
-	CreatedAt   string               `json:"createdAt"`
-	EventSecret GitHostCredentialSet `json:"eventSecret"`
-	HookID      string               `json:"hookID"`
-	Kind        string               `json:"kind"`
-	PrivateKey  GitHostCredentialSet `json:"privateKey"`
-	UpdatedAt   string               `json:"updatedAt"`
-	Version     int64                `json:"version"`
-}
-
-// UnmarshalJSON checks that the required members are there.
-func (v *GitHostApp) UnmarshalJSON(data []byte) error {
-	if err := requireFields(data, []string{"apiAddress", "appID", "createdAt", "eventSecret", "hookID", "kind", "privateKey", "updatedAt", "version"}, []string{"apiAddress", "appID", "createdAt", "eventSecret", "hookID", "kind", "privateKey", "updatedAt", "version"}); err != nil {
-		return fmt.Errorf("GitHostApp: %w", err)
-	}
-
-	type plain GitHostApp
-
-	return json.Unmarshal(data, (*plain)(v))
-}
-
-// GitHostCredentialSet is a schema of the API description.
-type GitHostCredentialSet struct {
-	CreatedAt string `json:"createdAt"`
-	Set       bool   `json:"set"`
-	SetID     string `json:"setID"`
-}
-
-// UnmarshalJSON checks that the required members are there.
-func (v *GitHostCredentialSet) UnmarshalJSON(data []byte) error {
-	if err := requireFields(data, []string{"createdAt", "set", "setID"}, []string{"createdAt", "set", "setID"}); err != nil {
-		return fmt.Errorf("GitHostCredentialSet: %w", err)
-	}
-
-	type plain GitHostCredentialSet
-
-	return json.Unmarshal(data, (*plain)(v))
-}
-
 // ListNotificationSinksResponse is a schema of the API description.
 type ListNotificationSinksResponse struct {
 	Sinks []NotificationSink `json:"sinks"`
@@ -136,15 +129,16 @@ func (v *ListNotificationSinksResponse) UnmarshalJSON(data []byte) error {
 
 // NotificationSink is a schema of the API description.
 type NotificationSink struct {
-	CreatedBy string  `json:"createdBy"`
-	Id        string  `json:"id"`
-	Kind      string  `json:"kind"`
-	Name      string  `json:"name"`
-	Namespace string  `json:"namespace"`
-	Platform  *string `json:"platform,omitempty"`
-	Target    string  `json:"target"`
-	UrlSet    bool    `json:"urlSet"`
-	Version   int64   `json:"version"`
+	CreatedBy       string  `json:"createdBy"`
+	HostNeedsUpdate *bool   `json:"hostNeedsUpdate,omitempty"`
+	Id              string  `json:"id"`
+	Kind            string  `json:"kind"`
+	Name            string  `json:"name"`
+	Namespace       string  `json:"namespace"`
+	Platform        *string `json:"platform,omitempty"`
+	Target          string  `json:"target"`
+	UrlSet          bool    `json:"urlSet"`
+	Version         int64   `json:"version"`
 }
 
 // UnmarshalJSON checks that the required members are there.
@@ -188,21 +182,73 @@ func (v *Preferences) UnmarshalJSON(data []byte) error {
 	return json.Unmarshal(data, (*plain)(v))
 }
 
-// PutGitHostAppRequest is a schema of the API description.
-type PutGitHostAppRequest struct {
-	ApiAddress  *string `json:"apiAddress"`
-	AppID       *string `json:"appID"`
-	EventSecret *string `json:"eventSecret"`
-	PrivateKey  *string `json:"privateKey"`
+// Profile is a schema of the API description.
+type Profile struct {
+	CreatedAt      string           `json:"createdAt"`
+	CreatedBy      string           `json:"createdBy"`
+	Etag           string           `json:"etag"`
+	Folder         *string          `json:"folder,omitempty"`
+	Id             string           `json:"id"`
+	LatestRevision *ProfileRevision `json:"latestRevision,omitempty"`
+	Name           string           `json:"name"`
+	Namespace      string           `json:"namespace"`
+	Revision       int64            `json:"revision"`
+	UpdatedAt      string           `json:"updatedAt"`
 }
 
 // UnmarshalJSON checks that the required members are there.
-func (v *PutGitHostAppRequest) UnmarshalJSON(data []byte) error {
-	if err := requireFields(data, []string{"apiAddress", "appID", "eventSecret", "privateKey"}, []string{}); err != nil {
-		return fmt.Errorf("PutGitHostAppRequest: %w", err)
+func (v *Profile) UnmarshalJSON(data []byte) error {
+	if err := requireFields(data, []string{"createdAt", "createdBy", "etag", "id", "name", "namespace", "revision", "updatedAt"}, []string{"createdAt", "createdBy", "etag", "id", "name", "namespace", "revision", "updatedAt"}); err != nil {
+		return fmt.Errorf("Profile: %w", err)
 	}
 
-	type plain PutGitHostAppRequest
+	type plain Profile
+
+	return json.Unmarshal(data, (*plain)(v))
+}
+
+// ProfileEntry is a schema of the API description.
+type ProfileEntry struct {
+	Description *string `json:"description,omitempty"`
+	Final       *bool   `json:"final,omitempty"`
+	Kind        *string `json:"kind,omitempty"`
+	NeverStore  *bool   `json:"neverStore,omitempty"`
+	Path        string  `json:"path"`
+	Secret      bool    `json:"secret"`
+	// Any JSON value.
+	Value json.RawMessage `json:"value,omitempty"`
+}
+
+// UnmarshalJSON checks that the required members are there.
+func (v *ProfileEntry) UnmarshalJSON(data []byte) error {
+	if err := requireFields(data, []string{"path", "secret"}, []string{"path", "secret"}); err != nil {
+		return fmt.Errorf("ProfileEntry: %w", err)
+	}
+
+	type plain ProfileEntry
+
+	return json.Unmarshal(data, (*plain)(v))
+}
+
+// ProfileRevision is a schema of the API description.
+type ProfileRevision struct {
+	Author    string         `json:"author"`
+	CreatedAt string         `json:"createdAt"`
+	Document  *string        `json:"document,omitempty"`
+	Entries   []ProfileEntry `json:"entries,omitempty"`
+	Profile   string         `json:"profile"`
+	Reason    *string        `json:"reason,omitempty"`
+	Revision  int64          `json:"revision"`
+	Sha256    string         `json:"sha256"`
+}
+
+// UnmarshalJSON checks that the required members are there.
+func (v *ProfileRevision) UnmarshalJSON(data []byte) error {
+	if err := requireFields(data, []string{"author", "createdAt", "profile", "revision", "sha256"}, []string{"author", "createdAt", "profile", "revision", "sha256"}); err != nil {
+		return fmt.Errorf("ProfileRevision: %w", err)
+	}
+
+	type plain ProfileRevision
 
 	return json.Unmarshal(data, (*plain)(v))
 }

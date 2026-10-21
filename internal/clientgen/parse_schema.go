@@ -447,6 +447,10 @@ func (st *parseState) nullableRefType(ptr string, o object) (model.Type, error) 
 func (st *parseState) plainType(ptr string, o object) (model.Type, error) {
 	var zero model.Type
 
+	if isAnyValue(o) {
+		return anyType(), nil
+	}
+
 	base, nullable, err := baseType(ptr, o)
 	if err != nil {
 		return zero, err
@@ -475,6 +479,23 @@ func (st *parseState) plainType(ptr string, o object) (model.Type, error) {
 	}
 
 	return t, err
+}
+
+// isAnyValue says that a schema holds any JSON value: it has no type and no
+// key but a description. The document size limit bounds such a schema, and the
+// client keeps the value as raw JSON.
+func isAnyValue(o object) bool {
+	if o["type"] != nil {
+		return false
+	}
+
+	for k := range o {
+		if k != "description" {
+			return false
+		}
+	}
+
+	return true
 }
 
 // scalarKind maps the JSON type of a scalar to its kind.

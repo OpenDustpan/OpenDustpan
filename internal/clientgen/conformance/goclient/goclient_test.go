@@ -21,7 +21,7 @@ func TestGenerateIsDeterministic(t *testing.T) {
 
 	opts := goclient.Options{
 		Description: raw, ServerRelease: "test", Dir: "",
-		Operations: []string{"getCapabilities", "putGitHostApp", "getNotificationSink"},
+		Operations: []string{"getCapabilities", "createProfile", "getNotificationSink"},
 	}
 
 	first, err := goclient.Generate(opts)
@@ -29,7 +29,7 @@ func TestGenerateIsDeterministic(t *testing.T) {
 		t.Fatalf("generate: %v", err)
 	}
 
-	opts.Operations = []string{"putGitHostApp", "getNotificationSink", "getCapabilities", "getCapabilities"}
+	opts.Operations = []string{"createProfile", "getNotificationSink", "getCapabilities", "getCapabilities"}
 
 	second, err := goclient.Generate(opts)
 	if err != nil {

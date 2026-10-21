@@ -45,6 +45,8 @@ const typesDocument = `{
     "tags": {"type": "array", "items": {"type": "string"}},
     "labels": {"type": "object", "additionalProperties": {"type": "string"}},
     "anything": {"type": "object", "additionalProperties": true},
+    "value": {"description": "Any JSON value."},
+    "bare": {},
     "status": {"anyOf": [{"$ref": "#/components/schemas/Status"}, {"type": "string"}]},
     "maybeStatus": {"anyOf": [{"$ref": "#/components/schemas/Status"}, {"type": "string"}, {"type": "null"}]},
     "state": {"$ref": "#/components/schemas/State"},
@@ -84,6 +86,12 @@ func refTo(name string, nullable bool) model.Type {
 	return t
 }
 
+func described(f model.Field, description string) model.Field {
+	f.Description = description
+
+	return f
+}
+
 func fieldOf(name string, t model.Type, required bool) model.Field {
 	return model.Field{Name: name, Type: t, Required: required, Description: ""}
 }
@@ -105,6 +113,8 @@ func wantWidgetFields() map[string]model.Field {
 		"tags":        fieldOf("tags", listOf(model.TypeArray, str), false),
 		"labels":      fieldOf("labels", listOf(model.TypeMap, str), false),
 		"anything":    fieldOf("anything", listOf(model.TypeMap, typ(model.TypeAny)), false),
+		"value":       described(fieldOf("value", typ(model.TypeAny), false), "Any JSON value."),
+		"bare":        fieldOf("bare", typ(model.TypeAny), false),
 		"status":      fieldOf("status", refTo("Status", false), false),
 		"maybeStatus": fieldOf("maybeStatus", refTo("Status", true), false),
 		"state":       fieldOf("state", refTo("State", false), true),

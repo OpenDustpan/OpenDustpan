@@ -24,7 +24,7 @@ func checkOperation(ctx context.Context, env Env, op string) error {
 		return err
 	}
 
-	table, err := fixtures(env)
+	table, err := fixtures(ctx, env)
 	if err != nil {
 		return err
 	}

@@ -20,12 +20,8 @@ func operationCases() map[string]caseFunc {
 // everyOperationIsCalled calls each operation of the client once and checks
 // the status, the error code and the body.
 func everyOperationIsCalled(ctx context.Context, env Env) error {
-	table, err := fixtures(env)
+	table, err := fixtures(ctx, env)
 	if err != nil {
-		return err
-	}
-
-	if _, err = ensureApp(ctx, env); err != nil {
 		return err
 	}
 

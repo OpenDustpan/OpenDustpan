@@ -60,7 +60,7 @@ func Run(ctx context.Context, env Env, cases []Case, timeout time.Duration) []Re
 		timeout = DefaultCaseTimeout
 	}
 
-	env.app = new(appFixture)
+	env.seed = new(seedState)
 
 	results := make([]Result, 0, len(cases))
 

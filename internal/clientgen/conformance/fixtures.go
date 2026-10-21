@@ -3,18 +3,15 @@ package conformance
 import (
 	"bytes"
 	"context"
-	"crypto/rand"
-	"crypto/rsa"
-	"crypto/x509"
 	"encoding/json"
-	"encoding/pem"
 	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
 	"reflect"
-	"strings"
+	"strconv"
 	"sync"
+	"sync/atomic"
 )
 
 // Namespace is the namespace that `opendustpan dev` makes. The cases use it.
@@ -26,25 +23,24 @@ const (
 	opListSinks    = "listNotificationSinks"
 	opGetSink      = "getNotificationSink"
 	opPreferences  = "getPreferences"
-	opGetApp       = "getGitHostApp"
-	opPutApp       = "putGitHostApp"
+	opGetProfile   = "getProfile"
+	opCreate       = "createProfile"
+	opRevise       = "createProfileRevision"
 )
 
 // The paths that the harness reads directly.
 const (
-	sinksPath = "/api/dustpan/v1/namespaces/" + Namespace + "/sinks"
-	appPath   = "/api/dustpan/v1/git-host-apps/" + gitHostKind
+	sinksPath    = "/api/dustpan/v1/namespaces/" + Namespace + "/sinks"
+	profilesPath = "/api/dustpan/v1/namespaces/" + Namespace + "/profiles"
 )
 
-// gitHostKind is the kind of Git host app that the cases write.
-const gitHostKind = "github"
+// seedProfile is the name of the profile that the harness writes, so that the
+// cases that read or revise a profile find one.
+const seedProfile = "conformance-seed"
 
-// Sizes of the Git host app that the cases write.
-const (
-	appKeyBits       = 2048
-	appSecretLength  = 40
-	staleVersionETag = `"999999"`
-)
+// staleVersionETag is an ETag that no profile has: a profile has one version
+// for each write, so a version far ahead of it is never current.
+const staleVersionETag = `"999999"`
 
 // ErrExpectation means that a client did not do what the case expects.
 var ErrExpectation = errors.New("conformance: the client did not do what the case expects")
@@ -69,9 +65,29 @@ func sinkCall(id string) CallParams {
 	return callOf(opGetSink, map[string]string{"namespace": Namespace, "sink_id": id})
 }
 
-// appCall makes a call whose only path parameter is the kind of the app.
-func appCall(op string) CallParams {
-	return callOf(op, map[string]string{"kind": gitHostKind})
+// profileCall makes a call whose only path parameter, besides the namespace, is
+// the profile.
+func profileCall(op, profile string) CallParams {
+	return callOf(op, map[string]string{"namespace": Namespace, "profile": profile})
+}
+
+// createCall makes the call of createProfile with a profile that no earlier
+// call made.
+func createCall(env Env, key string) CallParams {
+	p := callOf(opCreate, map[string]string{"namespace": Namespace})
+	p.Body, p.IdempotencyKey = env.profileBody(env.seed.next("conformance-new-"), "schemaVersion: 1\n"), key
+
+	return p
+}
+
+// reviseCall makes the call of createProfileRevision. The document differs from
+// the document of each earlier call.
+func reviseCall(env Env, key, ifMatch string) CallParams {
+	doc := "schemaVersion: 1\nvalues:\n  region: " + env.seed.next("eu-west-")
+	p := profileCall(opRevise, seedProfile)
+	p.Body, p.IdempotencyKey, p.IfMatch = env.reviseBody(doc), key, ifMatch
+
+	return p
 }
 
 // faultOf makes a fault with no setting but its kind and its operation.
@@ -81,43 +97,46 @@ func faultOf(kind FaultKind, op string) Fault {
 	}
 }
 
-// appFixture makes the body of putGitHostApp. The key takes a moment to make,
-// so a run makes it once.
-type appFixture struct {
+// seedState holds what one run of the harness shares: the profile that the
+// harness writes once, and a counter that makes names and documents.
+type seedState struct {
 	once sync.Once
-	body json.RawMessage
 	err  error
+	n    atomic.Int64
 }
 
-// appBody returns the body of putGitHostApp.
-func (e Env) appBody() (json.RawMessage, error) {
-	app := e.app
-	if app == nil {
-		app = new(appFixture)
+// fallbackSeed counts for an Env that no run made.
+//
+//nolint:gochecknoglobals // One shared counter, so that two such Envs never make the same name.
+var fallbackSeed seedState
+
+// next returns prefix and a number that no earlier call of next returned.
+func (s *seedState) next(prefix string) string {
+	if s == nil {
+		s = &fallbackSeed
 	}
 
-	app.once.Do(func() { app.body, app.err = makeAppBody() })
-
-	return app.body, app.err
+	return prefix + strconv.FormatInt(s.n.Add(1), 10)
 }
 
-func makeAppBody() (json.RawMessage, error) {
-	key, err := rsa.GenerateKey(rand.Reader, appKeyBits)
+// profileBody returns the body of createProfile.
+func (Env) profileBody(name, doc string) json.RawMessage {
+	return mustJSON(map[string]string{"name": name, "document": doc})
+}
+
+// reviseBody returns the body of createProfileRevision.
+func (Env) reviseBody(doc string) json.RawMessage {
+	return mustJSON(map[string]string{"document": doc, "reason": "conformance"})
+}
+
+// mustJSON encodes a map of strings. Such a map always encodes.
+func mustJSON(v map[string]string) json.RawMessage {
+	b, err := json.Marshal(v)
 	if err != nil {
-		return nil, fmt.Errorf("make a key: %w", err)
+		panic(fmt.Sprintf("conformance: encode a map of strings: %v", err))
 	}
 
-	block := &pem.Block{Type: "RSA PRIVATE KEY", Headers: nil, Bytes: x509.MarshalPKCS1PrivateKey(key)}
-
-	body, err := json.Marshal(map[string]any{
-		"apiAddress": "https://api.github.com", "appID": "123",
-		"eventSecret": strings.Repeat("s", appSecretLength), "privateKey": string(pem.EncodeToMemory(block)),
-	})
-	if err != nil {
-		return nil, fmt.Errorf("encode the body: %w", err)
-	}
-
-	return body, nil
+	return b
 }
 
 // answer is what the harness reads from the server.
@@ -188,32 +207,52 @@ func direct(ctx context.Context, env Env, dr directRequest) (answer, error) {
 	return out, nil
 }
 
-// ensureApp writes the Git host app with the harness, so that the cases that
-// read it find one. It returns the ETag of the app.
-func ensureApp(ctx context.Context, env Env) (string, error) {
-	body, err := env.appBody()
+// ensureProfile writes the seed profile with the harness, so that the cases
+// that read or revise it find one. It returns the current ETag of the profile.
+func ensureProfile(ctx context.Context, env Env) (string, error) {
+	seed := env.seed
+	if seed == nil {
+		seed = new(seedState)
+	}
+
+	seed.once.Do(func() { seed.err = writeSeed(ctx, env) })
+
+	if seed.err != nil {
+		return "", seed.err
+	}
+
+	got, err := get(ctx, env, profilesPath+"/"+seedProfile, withToken)
 	if err != nil {
 		return "", err
 	}
 
-	put := directRequest{
-		method:      http.MethodPut,
-		path:        appPath,
-		auth:        withToken,
-		contentType: "application/json",
-		body:        body,
-	}
-
-	got, err := direct(ctx, env, put)
-	if err != nil {
-		return "", err
-	}
-
-	if got.status != http.StatusOK && got.status != http.StatusCreated {
-		return "", failf("the harness could not write the Git host app: %d %s", got.status, got.body)
+	if got.status != http.StatusOK || got.header.Get("ETag") == "" {
+		return "", failf("the harness could not read the seed profile: %d %s", got.status, got.body)
 	}
 
 	return got.header.Get("ETag"), nil
+}
+
+// writeSeed makes the seed profile.
+func writeSeed(ctx context.Context, env Env) error {
+	post := directRequest{
+		method:      http.MethodPost,
+		path:        profilesPath,
+		auth:        withToken,
+		contentType: "application/json",
+		body:        env.profileBody(seedProfile, "schemaVersion: 1\n"),
+	}
+
+	got, err := direct(ctx, env, post)
+	if err != nil {
+		return err
+	}
+
+	if got.status != http.StatusOK && got.status != http.StatusCreated {
+		return failf("the harness could not write the seed profile: %d %s", got.status, got.body)
+	}
+
+	return nil
 }
 
 // sameJSON says that two JSON documents have the same value.
@@ -253,14 +292,11 @@ func errorFixture(params CallParams, status int, errorCode string) fixture {
 }
 
 // fixtures returns the call of each operation that the suite knows.
-func fixtures(env Env) (map[string]fixture, error) {
-	body, err := env.appBody()
+func fixtures(ctx context.Context, env Env) (map[string]fixture, error) {
+	etag, err := ensureProfile(ctx, env)
 	if err != nil {
 		return nil, err
 	}
-
-	put := appCall(opPutApp)
-	put.Body = body
 
 	public := answerFixture(callOf(opCapabilities, nil), http.StatusOK, capabilitiesPath)
 	public.anonymous = true
@@ -271,8 +307,11 @@ func fixtures(env Env) (map[string]fixture, error) {
 		opGetSink:      errorFixture(sinkCall("missing"), http.StatusNotFound, "sink.not-found"),
 		// The token of the dev server is not a person, so the server refuses.
 		opPreferences: errorFixture(callOf(opPreferences, nil), http.StatusForbidden, "preferences.person-required"),
-		opGetApp:      answerFixture(appCall(opGetApp), http.StatusOK, appPath),
-		opPutApp:      answerFixture(put, 0, ""),
+		opGetProfile: answerFixture(
+			profileCall(opGetProfile, seedProfile), http.StatusOK, profilesPath+"/"+seedProfile,
+		),
+		opCreate: answerFixture(createCall(env, ""), 0, ""),
+		opRevise: answerFixture(reviseCall(env, "", etag), 0, ""),
 	}, nil
 }
 

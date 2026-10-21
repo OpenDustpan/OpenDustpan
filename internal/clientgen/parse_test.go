@@ -142,7 +142,21 @@ func TestParseRefuses(t *testing.T) {
 		{
 			"schema with no type",
 			`"name": {"type": "string"}}}`,
-			`"name": {"description": "any"}}}`,
+			`"name": {"format": "any"}}}`,
+			clientgen.ErrUnsupported,
+			"properties/name",
+		},
+		{
+			"schema with no type and an enum",
+			`"name": {"type": "string"}}}`,
+			`"name": {"description": "any", "enum": ["a"]}}}`,
+			clientgen.ErrUnsupported,
+			"properties/name",
+		},
+		{
+			"schema with no type and fields",
+			`"name": {"type": "string"}}}`,
+			`"name": {"properties": {"a": {"type": "string"}}}}}`,
 			clientgen.ErrUnsupported,
 			"properties/name",
 		},
@@ -381,8 +395,8 @@ func TestParseIsDeterministic(t *testing.T) {
 // coveredOperations are the operations of the first slice of the Go client.
 func coveredOperations() []string {
 	return []string{
-		"getCapabilities", "getGitHostApp", "getNotificationSink", "getPreferences",
-		"listNotificationSinks", "putGitHostApp",
+		"createProfile", "createProfileRevision", "getCapabilities", "getNotificationSink",
+		"getPreferences", "getProfile", "listNotificationSinks",
 	}
 }
 
@@ -431,11 +445,15 @@ func publishedChecks() []publishedCheck {
 		{"getCapabilities", "is public with no action", func(o model.Operation) bool {
 			return o.Public && len(o.Actions) == 0
 		}},
-		{"getGitHostApp", "answers with an ETag", func(o model.Operation) bool {
+		{"getProfile", "answers with an ETag", func(o model.Operation) bool {
 			return o.Result.ETag && !o.IdempotencyKey
 		}},
-		{"putGitHostApp", "takes Idempotency-Key and If-Match and has a required body", func(o model.Operation) bool {
-			return o.IdempotencyKey && o.IfMatch == model.IfMatchOptional && o.Body != nil && o.Body.Required &&
+		{"createProfile", "takes Idempotency-Key, no If-Match, and has a required body", func(o model.Operation) bool {
+			return o.IdempotencyKey && o.IfMatch == model.IfMatchNone && o.Body != nil && o.Body.Required &&
+				o.Result.ETag
+		}},
+		{"createProfileRevision", "takes Idempotency-Key and a required If-Match", func(o model.Operation) bool {
+			return o.IdempotencyKey && o.IfMatch == model.IfMatchRequired && o.Body != nil && o.Body.Required &&
 				o.Result.ETag
 		}},
 		{"getNotificationSink", "has its path parameters in the order of the path", func(o model.Operation) bool {

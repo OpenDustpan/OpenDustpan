@@ -8,6 +8,58 @@ import (
 	"net/url"
 )
 
+// CreateProfile calls the operation createProfile.
+func (c *Client) CreateProfile(ctx context.Context, namespace string, body *CreateProfileRequest, opts ...CallOption) (*Profile, *Response, error) {
+	req := &request{
+		operation:    "createProfile",
+		method:       http.MethodPost,
+		path:         "/api/dustpan/v1/namespaces/" + url.PathEscape(namespace) + "/profiles",
+		body:         body,
+		bodySet:      body != nil,
+		bodyRequired: true,
+		mediaType:    "application/json",
+		public:       false,
+		idempotent:   true,
+		ifMatch:      ifMatchNone,
+		etag:         true,
+	}
+
+	var out Profile
+
+	resp, err := c.do(ctx, req, opts, &out)
+	if err != nil {
+		return nil, resp, err
+	}
+
+	return &out, resp, nil
+}
+
+// CreateProfileRevision calls the operation createProfileRevision.
+func (c *Client) CreateProfileRevision(ctx context.Context, namespace string, profile string, body *CreateProfileRevisionRequest, opts ...CallOption) (*Profile, *Response, error) {
+	req := &request{
+		operation:    "createProfileRevision",
+		method:       http.MethodPost,
+		path:         "/api/dustpan/v1/namespaces/" + url.PathEscape(namespace) + "/profiles/" + url.PathEscape(profile) + "/revisions",
+		body:         body,
+		bodySet:      body != nil,
+		bodyRequired: true,
+		mediaType:    "application/json",
+		public:       false,
+		idempotent:   true,
+		ifMatch:      ifMatchRequired,
+		etag:         true,
+	}
+
+	var out Profile
+
+	resp, err := c.do(ctx, req, opts, &out)
+	if err != nil {
+		return nil, resp, err
+	}
+
+	return &out, resp, nil
+}
+
 // GetCapabilities calls the operation getCapabilities.
 func (c *Client) GetCapabilities(ctx context.Context, opts ...CallOption) (*Capabilities, *Response, error) {
 	req := &request{
@@ -21,28 +73,6 @@ func (c *Client) GetCapabilities(ctx context.Context, opts ...CallOption) (*Capa
 	}
 
 	var out Capabilities
-
-	resp, err := c.do(ctx, req, opts, &out)
-	if err != nil {
-		return nil, resp, err
-	}
-
-	return &out, resp, nil
-}
-
-// GetGitHostApp calls the operation getGitHostApp.
-func (c *Client) GetGitHostApp(ctx context.Context, kind string, opts ...CallOption) (*GitHostApp, *Response, error) {
-	req := &request{
-		operation:  "getGitHostApp",
-		method:     http.MethodGet,
-		path:       "/api/dustpan/v1/git-host-apps/" + url.PathEscape(kind),
-		public:     false,
-		idempotent: false,
-		ifMatch:    ifMatchNone,
-		etag:       true,
-	}
-
-	var out GitHostApp
 
 	resp, err := c.do(ctx, req, opts, &out)
 	if err != nil {
@@ -96,6 +126,28 @@ func (c *Client) GetPreferences(ctx context.Context, opts ...CallOption) (*Prefe
 	return &out, resp, nil
 }
 
+// GetProfile calls the operation getProfile.
+func (c *Client) GetProfile(ctx context.Context, namespace string, profile string, opts ...CallOption) (*Profile, *Response, error) {
+	req := &request{
+		operation:  "getProfile",
+		method:     http.MethodGet,
+		path:       "/api/dustpan/v1/namespaces/" + url.PathEscape(namespace) + "/profiles/" + url.PathEscape(profile),
+		public:     false,
+		idempotent: false,
+		ifMatch:    ifMatchNone,
+		etag:       true,
+	}
+
+	var out Profile
+
+	resp, err := c.do(ctx, req, opts, &out)
+	if err != nil {
+		return nil, resp, err
+	}
+
+	return &out, resp, nil
+}
+
 // ListNotificationSinks calls the operation listNotificationSinks.
 func (c *Client) ListNotificationSinks(ctx context.Context, namespace string, opts ...CallOption) (*ListNotificationSinksResponse, *Response, error) {
 	req := &request{
@@ -109,32 +161,6 @@ func (c *Client) ListNotificationSinks(ctx context.Context, namespace string, op
 	}
 
 	var out ListNotificationSinksResponse
-
-	resp, err := c.do(ctx, req, opts, &out)
-	if err != nil {
-		return nil, resp, err
-	}
-
-	return &out, resp, nil
-}
-
-// PutGitHostApp calls the operation putGitHostApp.
-func (c *Client) PutGitHostApp(ctx context.Context, kind string, body *PutGitHostAppRequest, opts ...CallOption) (*GitHostApp, *Response, error) {
-	req := &request{
-		operation:    "putGitHostApp",
-		method:       http.MethodPut,
-		path:         "/api/dustpan/v1/git-host-apps/" + url.PathEscape(kind),
-		body:         body,
-		bodySet:      body != nil,
-		bodyRequired: true,
-		mediaType:    "application/json",
-		public:       false,
-		idempotent:   true,
-		ifMatch:      ifMatchOptional,
-		etag:         true,
-	}
-
-	var out GitHostApp
 
 	resp, err := c.do(ctx, req, opts, &out)
 	if err != nil {

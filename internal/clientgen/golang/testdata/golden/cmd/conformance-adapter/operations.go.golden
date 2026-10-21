@@ -12,17 +12,41 @@ import (
 // from an operation ID to a call of the client.
 func callOperation(ctx context.Context, c *client.Client, p *callParams) (*callResult, error) {
 	switch p.Operation {
-	case "getCapabilities":
-		out, resp, err := c.GetCapabilities(ctx, p.options()...)
-
-		return finish(out, resp, err)
-	case "getGitHostApp":
-		kind, err := p.pathParam("kind")
+	case "createProfile":
+		namespace, err := p.pathParam("namespace")
 		if err != nil {
 			return nil, err
 		}
 
-		out, resp, err := c.GetGitHostApp(ctx, kind, p.options()...)
+		var body client.CreateProfileRequest
+		if err := p.decodeBody(&body); err != nil {
+			return nil, err
+		}
+
+		out, resp, err := c.CreateProfile(ctx, namespace, &body, p.options()...)
+
+		return finish(out, resp, err)
+	case "createProfileRevision":
+		namespace, err := p.pathParam("namespace")
+		if err != nil {
+			return nil, err
+		}
+
+		profile, err := p.pathParam("profile")
+		if err != nil {
+			return nil, err
+		}
+
+		var body client.CreateProfileRevisionRequest
+		if err := p.decodeBody(&body); err != nil {
+			return nil, err
+		}
+
+		out, resp, err := c.CreateProfileRevision(ctx, namespace, profile, &body, p.options()...)
+
+		return finish(out, resp, err)
+	case "getCapabilities":
+		out, resp, err := c.GetCapabilities(ctx, p.options()...)
 
 		return finish(out, resp, err)
 	case "getNotificationSink":
@@ -43,6 +67,20 @@ func callOperation(ctx context.Context, c *client.Client, p *callParams) (*callR
 		out, resp, err := c.GetPreferences(ctx, p.options()...)
 
 		return finish(out, resp, err)
+	case "getProfile":
+		namespace, err := p.pathParam("namespace")
+		if err != nil {
+			return nil, err
+		}
+
+		profile, err := p.pathParam("profile")
+		if err != nil {
+			return nil, err
+		}
+
+		out, resp, err := c.GetProfile(ctx, namespace, profile, p.options()...)
+
+		return finish(out, resp, err)
 	case "listNotificationSinks":
 		namespace, err := p.pathParam("namespace")
 		if err != nil {
@@ -50,20 +88,6 @@ func callOperation(ctx context.Context, c *client.Client, p *callParams) (*callR
 		}
 
 		out, resp, err := c.ListNotificationSinks(ctx, namespace, p.options()...)
-
-		return finish(out, resp, err)
-	case "putGitHostApp":
-		kind, err := p.pathParam("kind")
-		if err != nil {
-			return nil, err
-		}
-
-		var body client.PutGitHostAppRequest
-		if err := p.decodeBody(&body); err != nil {
-			return nil, err
-		}
-
-		out, resp, err := c.PutGitHostApp(ctx, kind, &body, p.options()...)
 
 		return finish(out, resp, err)
 	default:

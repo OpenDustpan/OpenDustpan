@@ -21,43 +21,24 @@ func stateCases() map[string]caseFunc {
 		"concurrency/etag-is-returned":                                  etagIsReturned,
 		"concurrency/if-match-is-sent":                                  ifMatchIsSent,
 		"concurrency/stale-if-match-gives-412":                          staleIfMatchGives412,
+		"concurrency/missing-required-if-match-gives-428":               missingIfMatchGives428,
 		"compatibility/unknown-field-is-ignored":                        unknownFieldIsIgnored,
 		"version/description-version-matches-the-server":                descriptionVersionMatches,
 		"version/metadata-names-description-version-and-server-release": metadataNamesVersions,
 	}
 }
 
-// putApp calls putGitHostApp through the adapter.
-func putApp(ctx context.Context, env Env, key, ifMatch string) (CallResult, error) {
-	var none CallResult
-
-	body, err := env.appBody()
-	if err != nil {
-		return none, err
-	}
-
-	p := appCall(opPutApp)
-	p.Body, p.IdempotencyKey, p.IfMatch = body, key, ifMatch
-
-	return env.Adapter.Call(ctx, p)
-}
-
-// putAppOnce calls putGitHostApp after the app exists, and returns the one
-// exchange of the call.
-func putAppOnce(ctx context.Context, env Env, key string) (Exchange, error) {
+// createOnce calls createProfile, and returns the one exchange of the call.
+func createOnce(ctx context.Context, env Env, key string) (Exchange, error) {
 	var none Exchange
 
-	if err := need(env, opPutApp); err != nil {
-		return none, err
-	}
-
-	if _, err := ensureApp(ctx, env); err != nil {
+	if err := need(env, opCreate); err != nil {
 		return none, err
 	}
 
 	env.Proxy.Reset()
 
-	if _, err := putApp(ctx, env, key, ""); err != nil {
+	if _, err := env.Adapter.Call(ctx, createCall(env, key)); err != nil {
 		return none, err
 	}
 
@@ -65,7 +46,7 @@ func putAppOnce(ctx context.Context, env Env, key string) (Exchange, error) {
 }
 
 func mutatingSendsKey(ctx context.Context, env Env) error {
-	ex, err := putAppOnce(ctx, env, "")
+	ex, err := createOnce(ctx, env, "")
 	if err != nil {
 		return err
 	}
@@ -78,7 +59,7 @@ func mutatingSendsKey(ctx context.Context, env Env) error {
 }
 
 func callerKeyUnchanged(ctx context.Context, env Env) error {
-	ex, err := putAppOnce(ctx, env, "key-from-the-caller-1")
+	ex, err := createOnce(ctx, env, "key-from-the-caller-1")
 	if err != nil {
 		return err
 	}
@@ -108,16 +89,16 @@ func readSendsNoKey(ctx context.Context, env Env) error {
 }
 
 func etagIsReturned(ctx context.Context, env Env) error {
-	if err := need(env, opGetApp); err != nil {
+	if err := need(env, opGetProfile); err != nil {
 		return err
 	}
 
-	want, err := ensureApp(ctx, env)
+	want, err := ensureProfile(ctx, env)
 	if err != nil {
 		return err
 	}
 
-	res, err := env.Adapter.Call(ctx, appCall(opGetApp))
+	res, err := env.Adapter.Call(ctx, profileCall(opGetProfile, seedProfile))
 	if err != nil {
 		return err
 	}
@@ -130,18 +111,18 @@ func etagIsReturned(ctx context.Context, env Env) error {
 }
 
 func ifMatchIsSent(ctx context.Context, env Env) error {
-	if err := need(env, opPutApp); err != nil {
+	if err := need(env, opRevise); err != nil {
 		return err
 	}
 
-	etag, err := ensureApp(ctx, env)
+	etag, err := ensureProfile(ctx, env)
 	if err != nil {
 		return err
 	}
 
 	env.Proxy.Reset()
 
-	res, err := putApp(ctx, env, "", etag)
+	res, err := env.Adapter.Call(ctx, reviseCall(env, "", etag))
 	if err != nil {
 		return err
 	}
@@ -163,24 +144,43 @@ func ifMatchIsSent(ctx context.Context, env Env) error {
 }
 
 func staleIfMatchGives412(ctx context.Context, env Env) error {
-	if err := need(env, opPutApp); err != nil {
+	if err := need(env, opRevise); err != nil {
 		return err
 	}
 
-	if _, err := ensureApp(ctx, env); err != nil {
+	if _, err := ensureProfile(ctx, env); err != nil {
 		return err
 	}
 
-	// The version of an app grows by one for each write, so a version far
-	// ahead of it is never current.
-	res, err := putApp(ctx, env, "", staleVersionETag)
+	res, err := env.Adapter.Call(ctx, reviseCall(env, "", staleVersionETag))
 	if err != nil {
 		return err
 	}
 
-	if res.Status != http.StatusPreconditionFailed || res.Error == nil ||
-		res.Error.Code != http.StatusPreconditionFailed {
-		return failf("want a 412 error, got %d %+v", res.Status, res.Error)
+	return wantStatus(res, http.StatusPreconditionFailed)
+}
+
+func missingIfMatchGives428(ctx context.Context, env Env) error {
+	if err := need(env, opRevise); err != nil {
+		return err
+	}
+
+	if _, err := ensureProfile(ctx, env); err != nil {
+		return err
+	}
+
+	res, err := env.Adapter.Call(ctx, reviseCall(env, "", ""))
+	if err != nil {
+		return err
+	}
+
+	return wantStatus(res, http.StatusPreconditionRequired)
+}
+
+// wantStatus checks that a call ended with an error of the given status.
+func wantStatus(res CallResult, status int) error {
+	if res.Status != status || res.Error == nil || res.Error.Code != status {
+		return failf("want a %d error, got %d %+v", status, res.Status, res.Error)
 	}
 
 	return nil
