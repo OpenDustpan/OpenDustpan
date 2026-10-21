@@ -452,6 +452,15 @@ func testRestoreRoundTrip(t *testing.T, newStore RestoreFactory) {
 		t.Fatalf("restored summary rows = %v, want %v", sum2.RowCounts, wantRows)
 	}
 
+	requireTablesRestored(t, sink, again)
+}
+
+// requireTablesRestored proves that every table of the second export holds the
+// rows of the first export. The namespaces table and the sink cursors differ by
+// design.
+func requireTablesRestored(t *testing.T, sink, again *portableSink) {
+	t.Helper()
+
 	for _, table := range backup.Tables {
 		path := backup.PortablePath(table)
 
