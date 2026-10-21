@@ -68,7 +68,7 @@ func TestRefusalKeepsTheDeniedText(t *testing.T) {
 	err := errcode.Refusal("sign-in refused")
 
 	if !errors.Is(err, identity.ErrDenied) {
-		t.Fatalf("Refusal does not match identity.ErrDenied")
+		t.Fatal("Refusal does not match identity.ErrDenied")
 	}
 
 	if got, want := err.Error(), "permission denied: sign-in refused"; got != want {
