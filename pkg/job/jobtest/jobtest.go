@@ -14,6 +14,7 @@ package jobtest
 
 import (
 	"context"
+	"slices"
 	"testing"
 	"time"
 
@@ -81,19 +82,31 @@ type Domain interface {
 // Factory returns a fresh harness for one case.
 type Factory func(t *testing.T) Harness
 
+// conformanceCase is one case of the suite.
+type conformanceCase struct {
+	name string
+	run  func(t *testing.T, h Harness)
+}
+
+// createRuleCases returns the cases of the rules of a create for the request
+// hash and for the first state.
+func createRuleCases() []conformanceCase {
+	return []conformanceCase{
+		{"a key with another request hash conflicts", testCreateKeyHashConflict},
+		{"a job that waits for approval is stored awaiting-approval", testCreateAwaitingApproval},
+		{"a job in another first state is refused", testCreateBadState},
+	}
+}
+
 // Run executes the conformance suite against harnesses from newHarness.
 func Run(t *testing.T, newHarness Factory) {
 	t.Helper()
 
-	cases := []struct {
-		name string
-		run  func(t *testing.T, h Harness)
-	}{
+	cases := slices.Concat([]conformanceCase{
 		{"create stores a queued job and get returns it", testCreateGet},
 		{"get of an unknown ID is ErrNotFound", testGetUnknown},
 		{"two creates with one key and one spec give one job", testCreateKeyOnce},
 		{"a key with another spec conflicts", testCreateKeyConflict},
-		{"the request hash and the first state of a create", testCreateRequestRules},
 		{"create with a dispatch starts the durable operation", testCreateDispatch},
 		{"create with a dispatch obeys the one-change rule", testCreateUnitBusy},
 		{"after ErrUnitBusy, a create with no dispatch waits with unit-busy", testCreateWaits},
@@ -144,7 +157,7 @@ func Run(t *testing.T, newHarness Factory) {
 		{"a dispatch of a unit that left the inventory is refused", testUnitGone},
 		{"parallel creates in several namespaces, then paging returns every job", testParallelNamespaces},
 		{"freezes list, end once, and validate", testFreezes},
-	}
+	}, createRuleCases())
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

@@ -74,18 +74,6 @@ const (
 	hashB = "hash-b"
 )
 
-// testCreateRequestRules runs the rules of the request hash and of the first
-// state of a create.
-func testCreateRequestRules(t *testing.T, h Harness) {
-	t.Helper()
-
-	t.Run("a key with another request hash conflicts", func(t *testing.T) { testCreateKeyHashConflict(t, h) })
-	t.Run("a job that waits for approval is stored awaiting-approval", func(t *testing.T) {
-		testCreateAwaitingApproval(t, h)
-	})
-	t.Run("a job in another first state is refused", func(t *testing.T) { testCreateBadState(t, h) })
-}
-
 func testCreateKeyHashConflict(t *testing.T, h Harness) {
 	t.Helper()
 

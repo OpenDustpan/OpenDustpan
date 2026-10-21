@@ -208,8 +208,10 @@ func (s *service) Start(ctx context.Context, a Actor, req StartRequest) (Job, er
 // The order of the checks is the order of what a caller may learn. A request
 // that is not valid fails before any read. Then the unit, then the actions of
 // the caller on it: a caller without them learns nothing about the settings of
-// the unit. Then the spec, the agent mode, the executor, the policy and
-// last the store, which holds the freezes, the manual locks and the limits.
+// the unit. Then the extra actions of the pool and the location that the
+// request names. Then the spec, the gates that this version cannot evaluate,
+// the agent mode, the executor, the policy and last the store, which holds the
+// freezes, the manual locks and the limits.
 func (s *service) StartOnce(ctx context.Context, a Actor, req StartRequest) (Job, bool, error) {
 	err := ctx.Err()
 	if err != nil {
