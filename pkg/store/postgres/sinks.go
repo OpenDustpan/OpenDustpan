@@ -53,7 +53,7 @@ func checkSinkScope(scope namespace.Name, fence namespace.Fence, e audit.Entry) 
 func (k sinks) PutSink(
 	ctx context.Context, s notify.Sink, secrets []notify.SealedSecret, fence namespace.Fence, e audit.Entry,
 ) error {
-	if err := s.Validate(); err != nil {
+	if err := s.ValidateWrite(); err != nil {
 		return fmt.Errorf("put sink: %w", err)
 	}
 
