@@ -113,7 +113,7 @@ func unitName(i int) string { return fmt.Sprintf("unit-%d", i) }
 func changeSteps() []job.Step {
 	return []job.Step{
 		{
-			Name: "prepare", Role: job.RoleTool, Phase: job.PhaseApply, Args: []string{toolTofu, "init"}, Env: nil,
+			Name: stepPrepare, Role: job.RoleTool, Phase: job.PhaseApply, Args: []string{toolTofu, "init"}, Env: nil,
 			Dir: "", Timeout: 0, AllowFailure: false, ChangesResources: false, Outputs: nil,
 		},
 		{
@@ -660,7 +660,7 @@ func testRelease(t *testing.T, h Harness) {
 	first := claim(t, h, runnerOne, time.Minute, runnerKind(&j))
 
 	// A begin of a step that changes nothing does not stop the next claim.
-	record(t, h, &first, ended(&first, "prepare"))
+	record(t, h, &first, ended(&first, stepPrepare))
 
 	if err := h.Claimer.Release(t.Context(), first.Claim); err != nil {
 		t.Fatalf("Release = %v", err)
@@ -1104,7 +1104,7 @@ func testTakeoverNoChange(t *testing.T, h Harness) {
 
 	other := dispatched(t, h, f, plannedJob{unit: "unit-1", op: job.OperationRefresh, steps: changeSteps()})
 	b := claim(t, h, runnerOne, shortLease, runnerKind(&other))
-	record(t, h, &b, ended(&b, "prepare"))
+	record(t, h, &b, ended(&b, stepPrepare))
 
 	expired(t, a.Claim)
 	expired(t, b.Claim)

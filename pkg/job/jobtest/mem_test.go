@@ -53,6 +53,12 @@ type memDB struct {
 	mu      sync.Mutex
 	durable durable.Store
 	fences  map[namespace.Name]int64
+	// nsIDs maps a namespace to its ID, which names its blob scope.
+	nsIDs map[namespace.Name]namespace.ID
+	// records holds the rows that the recorder adds to the jobs.
+	records memRecords
+	// itemKeys holds the item keys that the recorder makes in a write.
+	itemKeys *memKeyIndex
 	// states maps a unit ID to its current state version.
 	states map[string]string
 	// finals maps a unit ID to its last final state version, as
@@ -71,18 +77,21 @@ type memDB struct {
 
 func newMemDB() *memDB {
 	return &memDB{
-		mu:      sync.Mutex{},
-		durable: durabletest.NewMem().Store(),
-		fences:  map[namespace.Name]int64{},
-		states:  map[string]string{},
-		finals:  map[string]job.StateVersion{},
-		jobs:    map[job.ID]*job.Job{},
-		order:   nil,
-		keys:    map[string]job.ID{},
-		freezes: map[string]*job.Freeze{},
-		audit:   map[namespace.Name][]audit.Entry{},
-		locks:   map[string]manuallock.Lock{},
-		units:   map[string]collection.UnitRef{},
+		mu:       sync.Mutex{},
+		durable:  durabletest.NewMem().Store(),
+		fences:   map[namespace.Name]int64{},
+		itemKeys: nil,
+		nsIDs:    map[namespace.Name]namespace.ID{},
+		records:  newMemRecords(),
+		states:   map[string]string{},
+		finals:   map[string]job.StateVersion{},
+		jobs:     map[job.ID]*job.Job{},
+		order:    nil,
+		keys:     map[string]job.ID{},
+		freezes:  map[string]*job.Freeze{},
+		audit:    map[namespace.Name][]audit.Entry{},
+		locks:    map[string]manuallock.Lock{},
+		units:    map[string]collection.UnitRef{},
 	}
 }
 
@@ -92,6 +101,7 @@ func (m *memDB) CreateNamespace(_ context.Context, name namespace.Name) (namespa
 	defer m.mu.Unlock()
 
 	m.fences[name] = 1
+	m.nsIDs[name] = namespace.NewID()
 
 	return namespace.Fence{Namespace: name, FailoverVersion: 1}, nil
 }
@@ -222,15 +232,7 @@ func (m *memDB) GetNamespace(_ context.Context, name namespace.Name) (namespace.
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	v, ok := m.fences[name]
-	if !ok {
-		return namespace.Namespace{}, namespace.ErrNotFound
-	}
-
-	return namespace.Namespace{
-		ID: "", CreatedAt: time.Time{}, Name: name, HomeRegion: "", FailoverVersion: v,
-		Overrides: namespace.Overrides{Forced: false, Unlocked: false},
-	}, nil
+	return m.namespaceLocked(name)
 }
 
 // RecordStepBegin implements jobtest.Domain. It checks the claim as the SQL
@@ -625,6 +627,19 @@ func (m *memDB) ListFreezes(_ context.Context, ns namespace.Name, since time.Tim
 	return out, nil
 }
 
+// namespaceLocked returns the namespace name. The caller holds m.mu.
+func (m *memDB) namespaceLocked(name namespace.Name) (namespace.Namespace, error) {
+	v, ok := m.fences[name]
+	if !ok {
+		return namespace.Namespace{}, namespace.ErrNotFound
+	}
+
+	return namespace.Namespace{
+		ID: m.nsIDs[name], CreatedAt: time.Time{}, Name: name, HomeRegion: "", FailoverVersion: v,
+		Overrides: namespace.Overrides{Forced: false, Unlocked: false},
+	}, nil
+}
+
 // lookup returns the job id, and false when the store does not know it.
 func (m *memDB) lookup(id job.ID) (*job.Job, bool) {
 	j, ok := m.jobs[id]
@@ -974,6 +989,20 @@ func copyJob(j *job.Job) job.Job {
 
 	for i := range out.Phases {
 		out.Phases[i].Steps = slices.Clone(out.Phases[i].Steps)
+
+		for k := range out.Phases[i].Steps {
+			if l := out.Phases[i].Steps[k].Log; l != nil {
+				c := *l
+				out.Phases[i].Steps[k].Log = &c
+			}
+		}
+
+		if p := out.Phases[i].Plan; p != nil {
+			c := *p
+			c.Parts = slices.Clone(p.Parts)
+			out.Phases[i].Plan = &c
+		}
+
 		out.Phases[i].Gates = slices.Clone(out.Phases[i].Gates)
 		out.Phases[i].Approvals = slices.Clone(out.Phases[i].Approvals)
 	}
