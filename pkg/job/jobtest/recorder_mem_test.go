@@ -391,6 +391,10 @@ func (m *memDB) ReserveLogChunk(
 	now := time.Now().UTC()
 
 	if plan.CreateLog {
+		if newLog == nil {
+			return job.ChunkPlan{}, fmt.Errorf("reserve log chunk: %w: no new log for a first chunk", job.ErrInvalid)
+		}
+
 		log := newLog.Log
 
 		key, keyErr := m.newKey(
