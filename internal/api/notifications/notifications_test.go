@@ -100,6 +100,90 @@ func TestWebhookURLIsWriteOnly(t *testing.T) {
 	}
 }
 
+// TestRefusedWebhookWritesShowNoURL proves that a create and a replace that the
+// server refuses answer with a 400 that holds no part of the URL, and that no
+// audit entry and no log line holds it.
+func TestRefusedWebhookWritesShowNoURL(t *testing.T) {
+	t.Parallel()
+
+	tail := "/ops/" + canary + "?token=" + canary
+	targets := map[string]string{
+		"a scheme that is not https":  "http://hooks.example.com" + tail,
+		"a port the operator refuses": "https://hooks.example.com:8443" + tail,
+		"a metadata address":          "https://169.254.169.254" + tail,
+		"a sub-delimiter in the host": "https://hooks.example.com;" + canary + tail,
+		"an empty port":               "https://hooks.example.com:" + tail,
+		"raw Unicode in the host":     "https://h\u00f6\u00f6ks.example.com" + tail,
+	}
+
+	for name, target := range targets {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			f := newFixture(t)
+
+			created := f.do(t, send("admin", http.MethodPost, base,
+				jsonString(t, map[string]string{"kind": "webhook", "name": "Ops", "target": target})))
+			wantCode(t, "refused create", created, http.StatusBadRequest)
+
+			ok := f.do(t, send("admin", http.MethodPost, base, webhookBody(t, "Ops")))
+			wantCode(t, "create", ok, http.StatusCreated)
+
+			one := base + "/" + decode[sinkWire](t, ok).ID
+			moved := f.do(t, send("admin", http.MethodPut, one,
+				jsonString(t, map[string]any{"version": 1, "name": "Ops", "target": target})))
+			wantCode(t, "refused replace", moved, http.StatusBadRequest)
+
+			texts := []string{
+				created.body, moved.body, f.logs.String(), fmt.Sprintf("%+v", f.sinkEntries(t)),
+				f.do(t, get("reader", one)).body,
+			}
+			for _, text := range texts {
+				for _, hidden := range []string{canary, "/ops", "token="} {
+					if strings.Contains(text, hidden) {
+						t.Errorf("a refused write shows %q: %s", hidden, text)
+					}
+				}
+			}
+		})
+	}
+}
+
+// TestReplayedReplaceShowsOnlyTheHost proves that the replay of a replace with
+// the same Idempotency-Key answers the host, and that the stored replay holds
+// no part of the URL.
+func TestReplayedReplaceShowsOnlyTheHost(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+
+	created := f.do(t, send("admin", http.MethodPost, base, webhookBody(t, "Ops")))
+	wantCode(t, "create", created, http.StatusCreated)
+
+	one := base + "/" + decode[sinkWire](t, created).ID
+	body := `{"version":1,"name":"Ops","target":"https://new.example.com/path/` + canary + `?k=` + canary + `"}`
+
+	first := f.do(t, keyed(send("admin", http.MethodPut, one, body), "r1"))
+	wantCode(t, "replace", first, http.StatusOK)
+
+	again := f.do(t, keyed(send("admin", http.MethodPut, one, body), "r1"))
+	wantCode(t, "replay", again, http.StatusOK)
+
+	if again.body != first.body {
+		t.Errorf("replay = %s, want %s", again.body, first.body)
+	}
+
+	for _, text := range []string{first.body, again.body, f.logs.String(), fmt.Sprintf("%+v", f.sinkEntries(t))} {
+		if strings.Contains(text, canary) || strings.Contains(text, "/path") {
+			t.Errorf("a replace or its replay shows the URL: %s", text)
+		}
+	}
+
+	if !strings.Contains(again.body, `"target":"new.example.com"`) {
+		t.Errorf("replay = %s, want the host as target", again.body)
+	}
+}
+
 // checkKeyNotAnsweredAgain checks that no later read holds the signing key.
 func checkKeyNotAnsweredAgain(t *testing.T, f fixture, s sinkWire) {
 	t.Helper()

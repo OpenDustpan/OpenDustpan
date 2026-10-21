@@ -49,7 +49,7 @@ The body has at most 64 KiB.
 
 | Kind | Fields |
 | --- | --- |
-| `webhook` | `kind`, `name`, `target` (an `https` URL on port 443, or on a port that the operator allows). The URL is a secret: it is write-only. |
+| `webhook` | `kind`, `name`, `target` (an `https` URL on port 443, or on a port that the operator allows). The host is an ASCII DNS name or an IP address, with an optional numeric port. The URL is a secret: it is write-only. |
 | `chat` | `kind`, `platform`, `name`, `url` (the incoming webhook URL, on the same ports) |
 | `email` | `kind`, `name`, `target` (one address) |
 

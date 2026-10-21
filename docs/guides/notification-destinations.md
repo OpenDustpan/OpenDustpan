@@ -72,7 +72,13 @@ of the destination shows no key.
 The URL of the webhook is a secret, because its path or its query can hold a
 token. The server accepts it when you make or change the destination. No
 answer shows it again: `target` holds only the host. To see the URL, read it
-from your own records.
+from your own records. The server does not seal the URL of a webhook yet: the
+database and each backup hold it as plain text. Protect them the same way as
+other secrets.
+
+The host of the URL must be an ASCII DNS name or an IP address, with an
+optional port of 1 to 65535. The server refuses any other host with 400. For
+a name with non-ASCII letters, write its punycode form.
 
 ## Check the signature in your receiver
 

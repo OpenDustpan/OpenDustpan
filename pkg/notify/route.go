@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/mail"
+	"net/netip"
 	"net/url"
 	"slices"
 	"strconv"
@@ -180,6 +181,15 @@ func (s Sink) validURL() error {
 		return fmt.Errorf("%w: a %s sink: %w", ErrInvalid, s.Kind, err)
 	}
 
+	// Defense in depth: egress.CheckURL does not restrict the characters of
+	// the host. This check stays so that no host with a sub-delimiter, a
+	// control or bidi character, percent-encoding, raw Unicode or an empty
+	// port is stored, and the answer of the API needs no other layer to be
+	// free of them.
+	if WebhookHost(s.Target) == "" {
+		return fmt.Errorf("%w: a %s sink: the host must be an ASCII DNS name or an IP address, with an optional numeric port", ErrInvalid, s.Kind)
+	}
+
 	if len(s.SecretRefs) == 0 {
 		return fmt.Errorf("%w: a webhook sink needs a signing secret", ErrInvalid)
 	}
@@ -209,8 +219,9 @@ func (s Sink) validChat() error {
 
 // ChatHost returns the host of the URL of a chat webhook, in lower case,
 // with its port when the URL has one. It returns an error that matches
-// egress.ErrRefused for a URL that egress.CheckURL refuses for https only.
-// The API stores the URL as the secret item of the sink and the host as
+// egress.ErrRefused for a URL that egress.CheckURL refuses for https only,
+// and an error that matches ErrInvalid for a host that is not an ASCII DNS
+// name or an IP literal, with an optional numeric port. The API stores the URL as the secret item of the sink and the host as
 // its Target. The chat adapter sends only when the host of the URL in the
 // item is the Target.
 func ChatHost(raw string) (string, error) {
@@ -223,20 +234,123 @@ func ChatHost(raw string) (string, error) {
 		return "", fmt.Errorf("chat webhook: %w: the URL does not parse", egress.ErrRefused)
 	}
 
-	return strings.ToLower(u.Host), nil
+	host := strings.ToLower(u.Host)
+	if !validHostPort(host) {
+		return "", fmt.Errorf("chat webhook: %w: the host must be an ASCII DNS name or an IP address, with an optional numeric port", ErrInvalid)
+	}
+
+	return host, nil
 }
 
-// WebhookHost returns the lowercase host of the URL of a webhook sink, in the
-// shape that ChatHost gives for a chat sink. The path, the query and any user
-// information of the URL can hold a secret, so none of them is returned. It
-// returns an empty string when the URL does not parse: the answer fails closed.
+// WebhookHost returns the lowercase host of the URL of a webhook sink, with
+// its port when the URL has one. The path, the query and any user
+// information of the URL can hold a secret, so none of them is returned.
+// It checks that the scheme is https and that the host passes validHostPort:
+// an ASCII DNS name or an IP literal, with an optional numeric port. It does
+// not apply the egress rules: egress.CheckURL does. It returns an empty
+// string for any other URL, so the answer fails closed. Raw Unicode hosts are
+// refused, not converted: only the punycode form of a name passes, because
+// the function must not change an input to make it valid.
 func WebhookHost(raw string) string {
 	u, err := url.Parse(raw)
-	if err != nil || u == nil {
+	if err != nil || u == nil || u.Scheme != "https" {
 		return ""
 	}
 
-	return strings.ToLower(u.Host)
+	host := strings.ToLower(u.Host)
+	if !validHostPort(host) {
+		return ""
+	}
+
+	return host
+}
+
+// validHostPort reports whether h, in lower case, is an ASCII DNS name (LDH
+// labels) or an IP literal, with an optional port of 1 to 5 digits that is at
+// most 65535. It is an allowlist: it refuses everything it does not name,
+// for example ";", sub-delimiters, "%", control and bidi characters, raw
+// Unicode, and an empty port.
+func validHostPort(h string) bool {
+	host, port := h, ""
+
+	if strings.HasPrefix(h, "[") {
+		end := strings.IndexByte(h, ']')
+		if end < 0 {
+			return false
+		}
+
+		addr, err := netip.ParseAddr(h[1:end])
+		if err != nil || !addr.Is6() || addr.Zone() != "" {
+			return false
+		}
+
+		host, port = "", h[end+1:]
+		if port != "" {
+			if port[0] != ':' {
+				return false
+			}
+
+			port = port[1:]
+			if port == "" {
+				return false
+			}
+		}
+	} else if i := strings.IndexByte(h, ':'); i >= 0 {
+		host, port = h[:i], h[i+1:]
+		if port == "" {
+			return false
+		}
+	}
+
+	if port != "" {
+		if len(port) > 5 {
+			return false
+		}
+
+		n := 0
+
+		for _, c := range port {
+			if c < '0' || c > '9' {
+				return false
+			}
+
+			n = n*10 + int(c-'0')
+		}
+
+		if n < 1 || n > 65535 {
+			return false
+		}
+	}
+
+	if h[0] == '[' {
+		return true
+	}
+
+	return validDNSName(host)
+}
+
+// validDNSName reports whether name is made of 1 to 63 byte labels of
+// letters, digits and hyphens, none of which starts or ends with a hyphen,
+// in at most 253 bytes. A dotted IPv4 address passes as a name.
+func validDNSName(name string) bool {
+	if name == "" || len(name) > 253 {
+		return false
+	}
+
+	for label := range strings.SplitSeq(name, ".") {
+		if label == "" || len(label) > 63 || label[0] == '-' || label[len(label)-1] == '-' {
+			return false
+		}
+
+		for i := 0; i < len(label); i++ {
+			c := label[i]
+			if (c < 'a' || c > 'z') && (c < '0' || c > '9') && c != '-' {
+				return false
+			}
+		}
+	}
+
+	return true
 }
 
 // validAddress returns ErrInvalid for a target of an email sink that is

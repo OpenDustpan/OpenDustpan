@@ -589,6 +589,13 @@ func TestChatHost(t *testing.T) {
 		{"http://hooks.example.com/x", "", egress.ErrRefused},
 		{"https://user:pw@hooks.example.com/x", "", egress.ErrRefused},
 		{"https://169.254.169.254/x", "", egress.ErrRefused},
+		{"https://[2606:4700::1111]:8443/x", "[2606:4700::1111]:8443", nil},
+		{"https://hooks%2eexample.com/x", "", egress.ErrRefused},
+		{"https://h\u00f6\u00f6ks.example.com/x", "", notify.ErrInvalid},
+		{"https://hooks.example.com\u202e/x", "", notify.ErrInvalid},
+		{"https://hooks.example.com;secret/x", "", notify.ErrInvalid},
+		{"https://hooks.example.com:/x", "", notify.ErrInvalid},
+		{"https://a_b!$&'()*+,=.example.com/x", "", notify.ErrInvalid},
 	}
 
 	for _, tc := range cases {
@@ -949,6 +956,29 @@ func TestWebhookHost(t *testing.T) {
 		{"no path", "https://hooks.example.com", "hooks.example.com"},
 		{"a URL that does not parse", "https://hooks.example.com/%zz SECRET", ""},
 		{"an empty value", "", ""},
+		{"an IPv6 literal", "https://[2001:DB8::1]/SECRET", "[2001:db8::1]"},
+		{"an IPv6 literal and a port", "https://[2001:db8::1]:8443/SECRET", "[2001:db8::1]:8443"},
+		{"an IPv4 address", "https://192.0.2.1:443/SECRET", "192.0.2.1:443"},
+		{"a zone in an IPv6 literal", "https://[fe80::1%25eth0]/SECRET", ""},
+		{"an IPv6 literal with text after it", "https://[2001:db8::1]x/SECRET", ""},
+		{"an IPv4 address in brackets", "https://[192.0.2.1]/SECRET", ""},
+		{"percent-encoding in the host", "https://hooks%2eexample.com/SECRET", ""},
+		{"a Unicode host", "https://h\u00f6\u00f6ks.example.com/SECRET", ""},
+		{"the punycode form of a Unicode host", "https://xn--hks-pka.example.com/SECRET", "xn--hks-pka.example.com"},
+		{"a right-to-left override", "https://hooks.example.com\u202e/SECRET", ""},
+		{"a control character", "https://hooks.example.com\x00/SECRET", ""},
+		{"a semicolon", "https://hooks.example.com;SECRET/x", ""},
+		{"sub-delimiters", "https://a_b!$&'()*+,=.example.com/x", ""},
+		{"an empty port", "https://hooks.example.com:/x", ""},
+		{"a port that is not a number", "https://hooks.example.com:80a/x", ""},
+		{"a port over 65535", "https://hooks.example.com:65536/x", ""},
+		{"a port of 6 digits", "https://hooks.example.com:000080/x", ""},
+		{"a port of zero", "https://hooks.example.com:0/x", ""},
+		{"a label that starts with a hyphen", "https://-hooks.example.com/x", ""},
+		{"an empty label", "https://hooks..example.com/x", ""},
+		{"a trailing dot", "https://hooks.example.com./x", ""},
+		{"no scheme", "//hooks.example.com/SECRET", ""},
+		{"a scheme that is not https", "http://hooks.example.com/SECRET", ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
