@@ -32,6 +32,7 @@ type jobResponse struct {
 	Agent        string            `json:"agent,omitempty"`
 	AgentMode    string            `json:"agentMode,omitempty"`
 	BreakGlass   *breakGlassBody   `json:"breakGlass,omitempty"`
+	Trigger      *triggerResponse  `json:"trigger,omitempty"`
 	Delivery     *deliveryResponse `json:"delivery,omitempty"`
 	Closed       *closedResponse   `json:"closed,omitempty"`
 	Verification string            `json:"verification,omitempty"`
@@ -123,6 +124,13 @@ type approvalResponse struct {
 	At      time.Time `json:"at"`
 }
 
+// triggerResponse names the run trigger that started the job, and the subject
+// of its last saver at the start.
+type triggerResponse struct {
+	ID    string `json:"id"`
+	Saver string `json:"saver"`
+}
+
 type breakGlassBody struct {
 	Reason string `json:"reason"`
 	Freeze string `json:"freeze"`
@@ -202,6 +210,10 @@ func toJobResponse(j *job.Job) jobResponse {
 	if j.BreakGlass != nil {
 		bg := breakGlassBody(*j.BreakGlass)
 		out.BreakGlass = &bg
+	}
+
+	if j.Trigger != nil {
+		out.Trigger = &triggerResponse{ID: j.Trigger.ID, Saver: j.Trigger.Saver}
 	}
 
 	if d := j.Delivery; d != nil {

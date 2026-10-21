@@ -139,6 +139,7 @@ The `errorCode` is a stable code for a program.
 | `startedBy`, `agent`, `agentMode` | Who started the job, and the agent that acted for them |
 | `source` | Where the start came from: `api`, `agent`, `catalog`, `forge`, `schedule` or `trigger` |
 | `breakGlass` | `reason` and `freeze`, when the job started through an active change freeze |
+| `trigger` | `id` of the trigger that started the job, and `saver`, the subject of its last saver at the start. The field is not there when no trigger started the job. See the [triggers guide](../guides/run-triggers.md). |
 | `delivery` | The result of the deliver phase of a write-back job |
 | `closed` | The state version that ended a write-back job |
 | `verification` | `pending`, `verified` or `unverified`, after the job closed |
