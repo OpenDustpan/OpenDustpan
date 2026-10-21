@@ -104,6 +104,7 @@ func newConflictHandler(t *testing.T) *tfe.Handler {
 	t.Helper()
 
 	handler, err := tfe.NewHandler(tfe.Config{
+		Registry:       nil,
 		Authenticator:  tokenAuthenticator{},
 		Authorizer:     allowAll(),
 		AddressGate:    nil,
@@ -384,6 +385,7 @@ func TestConcurrentLocksReportHeldLock(t *testing.T) {
 	stores := &raceWorkspaces{stubWorkspaces: stubWorkspaces{}, mu: sync.Mutex{}, holder: ""}
 
 	handler, err := tfe.NewHandler(tfe.Config{
+		Registry:       nil,
 		Authenticator:  concurrentAuthenticator{},
 		Authorizer:     allowAll(),
 		AddressGate:    nil,

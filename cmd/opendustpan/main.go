@@ -56,6 +56,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/installation"
 	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/ipallow"
+	"opendustpan.org/opendustpan/pkg/job"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/secret"
@@ -1245,13 +1246,13 @@ func (f *serveFlags) storeOptions(st store, wrapper secret.Wrapper) ([]dustpan.O
 	opts = append(opts, runnerStoreOption(st)...)
 	opts = append(opts, jobStoreOption(st)...)
 	opts = append(opts, savedViewStoreOption(st)...)
+	opts = append(opts, registryStoreOption(st)...)
 	opts = append(opts, sinkStoreOption(st)...)
 
 	ports, err := f.sinkPorts()
 	if err != nil {
 		return nil, err
 	}
-
 	opts = append(opts, dustpan.WithSinkPorts(ports), dustpan.WithInstallationKind(f.kind()),
 		dustpan.WithInstallationKindStore(st))
 
@@ -1315,14 +1316,22 @@ func runnerStoreOption(st store) []dustpan.Option {
 	}
 }
 
-// jobStoreOption returns the option of the job store for st, or nil when st
-// keeps no jobs.
+// jobStoreOption returns the options of the job store and of the job claimer
+// for st, or nil when st keeps no jobs. The claimer takes the phases of the
+// jobs as durable operations, so a poll of a runner of a pool for jobs finds
+// work.
 func jobStoreOption(st store) []dustpan.Option {
 	switch s := st.(type) {
 	case sqliteStore:
-		return []dustpan.Option{dustpan.WithJobStore(s.Jobs())}
+		return []dustpan.Option{
+			dustpan.WithJobStore(s.Jobs()),
+			dustpan.WithJobClaimer(job.NewClaimer(s.Jobs(), s.DurableOperationsPort(), s.Store)),
+		}
 	case postgresStore:
-		return []dustpan.Option{dustpan.WithJobStore(s.Jobs())}
+		return []dustpan.Option{
+			dustpan.WithJobStore(s.Jobs()),
+			dustpan.WithJobClaimer(job.NewClaimer(s.Jobs(), s.DurableOperationsPort(), s.Store)),
+		}
 	default:
 		return nil
 	}
@@ -1336,6 +1345,19 @@ func savedViewStoreOption(st store) []dustpan.Option {
 		return []dustpan.Option{dustpan.WithSavedViewStore(s.SavedViews())}
 	case postgresStore:
 		return []dustpan.Option{dustpan.WithSavedViewStore(s.SavedViews())}
+	default:
+		return nil
+	}
+}
+
+// registryStoreOption returns the option of the registry stores for st, or nil
+// when st keeps no registry.
+func registryStoreOption(st store) []dustpan.Option {
+	switch s := st.(type) {
+	case sqliteStore:
+		return []dustpan.Option{dustpan.WithRegistry(s.Registry(), s.RegistryKeys())}
+	case postgresStore:
+		return []dustpan.Option{dustpan.WithRegistry(s.Registry(), s.RegistryKeys())}
 	default:
 		return nil
 	}

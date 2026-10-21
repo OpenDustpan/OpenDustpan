@@ -107,6 +107,7 @@ func newSwitchedHandler(
 	}
 
 	handler, err := tfe.NewHandler(tfe.Config{
+		Registry:       nil,
 		Authenticator:  tokenAuthenticator{},
 		Authorizer:     authz,
 		AddressGate:    nil,

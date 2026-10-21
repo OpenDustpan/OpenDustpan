@@ -82,6 +82,22 @@ linters:
               desc: Use math/rand/v2 or crypto/rand.
             - pkg: io/ioutil
               desc: Deprecated; use io and os.
+        clientgen:
+          # The client generator and the client conformance suite read only
+          # the published API description and talk to a server over HTTP.
+          # They import no part of the server, so a later move to another
+          # module or repository is a move of files. The rule denies the whole
+          # server module and allows only the generator itself, so a new
+          # server package is fenced off with no change to this rule.
+          list-mode: lax
+          files:
+            - "**/internal/clientgen/**"
+            - "**/cmd/clientgen/**"
+          allow:
+            - opendustpan.org/opendustpan/internal/clientgen
+          deny:
+            - pkg: opendustpan.org/opendustpan
+              desc: The client generator reads the published description; it never imports server code.
         journal:
           # The journal takes bytes and gives bytes (ADR 43, decision 3.3). It
           # imports no part of the server, so a later move to a separate module
@@ -135,6 +151,7 @@ linters:
             - "**/pkg/trigger/**"
             - "**/pkg/savedview/**"
             - "**/pkg/preferences/**"
+            - "**/pkg/stepup/**"
             - "**/pkg/registry/**"
             - "**/pkg/runner/**"
             - "**/pkg/launcher/**"
