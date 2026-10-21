@@ -15,11 +15,6 @@ import (
 	"opendustpan.org/opendustpan/pkg/store/postgres/internal/db"
 )
 
-// errRegistryRepeat ends the transaction of a publish of a version that exists
-// with the same content. The transaction changes nothing and writes no audit
-// entry, and Publish returns nil.
-var errRegistryRepeat = errors.New("registry release repeat")
-
 // Registry returns the store of registry releases. Each write checks the
 // installation state and the fence of its namespace, and appends its audit
 // entry in its own transaction.
@@ -57,20 +52,41 @@ func (r registryStore) Publish(ctx context.Context, rel registry.Release, fence 
 	}
 
 
-	err = r.s.inFencedAuditedTx(ctx, fence, &e, func(q *db.Queries) error {
-		return publishRegistryRelease(ctx, q, rel, archives)
-	})
-	if errors.Is(err, errRegistryRepeat) {
-		return nil
+	// The entry is checked first, as the audited transactions of the other
+	// stores do, so that an invalid entry answers the same error whatever the
+	// fence or the content says.
+	if err = e.Validate(); err != nil {
+		return fmt.Errorf("audit entry: %w", err)
 	}
 
-	return err
+	if e.Namespace != fence.Namespace {
+		return fmt.Errorf("%w: entry names %q, fence names %q", audit.ErrInvalidEntry, e.Namespace, fence.Namespace)
+	}
+
+	return r.s.inFencedUpdateTx(ctx, fence, func(q *db.Queries) error {
+		repeat, pubErr := publishRegistryRelease(ctx, q, rel, archives)
+		if pubErr != nil {
+			return pubErr
+		}
+
+		// A repeat of a published version changes nothing and writes no audit
+		// entry. It still finishes the idempotency record of its request.
+		if !repeat {
+			if _, auditErr := appendAuditEntry(ctx, q, e); auditErr != nil {
+				return fmt.Errorf("append audit entry: %w", auditErr)
+			}
+		}
+
+		return finishCompletion(ctx, q, rel)
+	})
 }
 
 // publishRegistryRelease writes rel in the open transaction. The transaction
 // holds the namespace row FOR UPDATE, so no other publish in the namespace
 // runs between the read and the insert.
-func publishRegistryRelease(ctx context.Context, q *db.Queries, rel registry.Release, archives string) error {
+func publishRegistryRelease(
+	ctx context.Context, q *db.Queries, rel registry.Release, archives string,
+) (bool, error) {
 	row, err := q.GetRegistryRelease(ctx, db.GetRegistryReleaseParams{
 		Namespace: rel.Address.Namespace.String(), Kind: string(rel.Address.Kind), Name: rel.Address.Name,
 		System: rel.Address.System, Version: rel.Version,
@@ -87,12 +103,12 @@ func publishRegistryRelease(ctx context.Context, q *db.Queries, rel registry.Rel
 		// A stored row that fails its checks is never the same content: the
 		// publish does not claim it.
 		if relErr == nil && stored.SameContent(rel) {
-			return errRegistryRepeat
+			return true, nil
 		}
 
-		return registry.ErrVersionExists
+		return false, registry.ErrVersionExists
 	case !errors.Is(err, sql.ErrNoRows):
-		return fmt.Errorf("select registry release: %w", err)
+		return false, fmt.Errorf("select registry release: %w", err)
 	}
 
 	n, err := q.InsertRegistryRelease(ctx, db.InsertRegistryReleaseParams{
@@ -102,14 +118,14 @@ func publishRegistryRelease(ctx context.Context, q *db.Queries, rel registry.Rel
 		PublishedBy: rel.PublishedBy, ArchivesJson: archives, PublishedAtMs: codec.Millis(rel.PublishedAt),
 	})
 	if err != nil {
-		return fmt.Errorf("insert registry release: %w", err)
+		return false, fmt.Errorf("insert registry release: %w", err)
 	}
 
 	if n == 0 {
-		return registry.ErrVersionExists
+		return false, registry.ErrVersionExists
 	}
 
-	return nil
+	return false, nil
 }
 
 // Get implements registry.Store.
