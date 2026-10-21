@@ -10,6 +10,7 @@ import (
 	"io"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ProtonMail/go-crypto/openpgp"
 	"github.com/ProtonMail/go-crypto/openpgp/armor"
@@ -22,6 +23,9 @@ import (
 type Signer struct {
 	Entity *openpgp.Entity
 	Key    registry.TrustedKey
+	// at is the time of the key and of each signature that it makes, or zero
+	// for the current time.
+	at time.Time
 }
 
 // KeySpec says how to make a key. The zero value makes an Ed25519 key that does
@@ -31,6 +35,10 @@ type KeySpec struct {
 	RSABits int
 	// LifetimeSecs is the lifetime of the key in seconds, or zero for none.
 	LifetimeSecs uint32
+	// CreatedAt is the creation time of the key, and the time of each
+	// signature that the key makes, or zero for the current time. A test with
+	// a fixed clock sets it, so that the key is never newer than the clock.
+	CreatedAt time.Time
 }
 
 // config returns the packet configuration of spec.
@@ -41,7 +49,19 @@ func (k KeySpec) config() *packet.Config {
 		cfg.Algorithm, cfg.RSABits = packet.PubKeyAlgoRSA, k.RSABits
 	}
 
+	cfg.Time = timeFunc(k.CreatedAt)
+
 	return cfg
+}
+
+// timeFunc returns the clock of the library for at. A zero at gives nil, which
+// is the current time.
+func timeFunc(at time.Time) func() time.Time {
+	if at.IsZero() {
+		return nil
+	}
+
+	return func() time.Time { return at }
 }
 
 // New makes a key pair as spec says.
@@ -53,7 +73,7 @@ func New(tb testing.TB, spec KeySpec) Signer {
 		tb.Fatalf("make the signing key: %v", err)
 	}
 
-	s := Signer{Entity: entity, Key: registry.TrustedKey{Fingerprint: "", Armored: nil}}
+	s := Signer{Entity: entity, Key: registry.TrustedKey{Fingerprint: "", Armored: nil}, at: spec.CreatedAt}
 	s.Refresh(tb)
 
 	return s
@@ -63,7 +83,15 @@ func New(tb testing.TB, spec KeySpec) Signer {
 func NewSigner(tb testing.TB) Signer {
 	tb.Helper()
 
-	return New(tb, KeySpec{RSABits: 0, LifetimeSecs: 0})
+	return New(tb, KeySpec{RSABits: 0, LifetimeSecs: 0, CreatedAt: time.Time{}})
+}
+
+// NewSignerAt makes an Ed25519 key pair that does not expire, with the creation
+// time at. Its signatures carry the time at too.
+func NewSignerAt(tb testing.TB, at time.Time) Signer {
+	tb.Helper()
+
+	return New(tb, KeySpec{RSABits: 0, LifetimeSecs: 0, CreatedAt: at})
 }
 
 // Refresh makes the public key again from the entity, for example after a
@@ -96,7 +124,7 @@ func (s *Signer) PrivateArmor(tb testing.TB) []byte {
 func (s *Signer) Revoke(tb testing.TB) {
 	tb.Helper()
 
-	if err := s.Entity.RevokeKey(packet.KeyCompromised, "leaked", nil); err != nil {
+	if err := s.Entity.RevokeKey(packet.KeyCompromised, "leaked", s.signConfig()); err != nil {
 		tb.Fatalf("revoke the key: %v", err)
 	}
 
@@ -108,7 +136,7 @@ func (s *Signer) Revoke(tb testing.TB) {
 func (s *Signer) AddSigningSubkey(tb testing.TB) {
 	tb.Helper()
 
-	if err := s.Entity.AddSigningSubkey(KeySpec{RSABits: 0, LifetimeSecs: 0}.config()); err != nil {
+	if err := s.Entity.AddSigningSubkey(KeySpec{RSABits: 0, LifetimeSecs: 0, CreatedAt: s.at}.config()); err != nil {
 		tb.Fatalf("add a signing subkey: %v", err)
 	}
 
@@ -120,7 +148,7 @@ func (s *Signer) Detach(tb testing.TB, data []byte) []byte {
 	tb.Helper()
 
 	var sig bytes.Buffer
-	if err := openpgp.DetachSign(&sig, s.Entity, bytes.NewReader(data), nil); err != nil {
+	if err := openpgp.DetachSign(&sig, s.Entity, bytes.NewReader(data), s.signConfig()); err != nil {
 		tb.Fatalf("sign: %v", err)
 	}
 
@@ -132,11 +160,22 @@ func (s *Signer) DetachArmored(tb testing.TB, data []byte) []byte {
 	tb.Helper()
 
 	var sig bytes.Buffer
-	if err := openpgp.ArmoredDetachSign(&sig, s.Entity, bytes.NewReader(data), nil); err != nil {
+	if err := openpgp.ArmoredDetachSign(&sig, s.Entity, bytes.NewReader(data), s.signConfig()); err != nil {
 		tb.Fatalf("sign: %v", err)
 	}
 
 	return sig.Bytes()
+}
+
+// signConfig returns the packet configuration for a signature or a revocation
+// of the key.
+func (s *Signer) signConfig() *packet.Config {
+	if s.at.IsZero() {
+		return nil
+	}
+
+	//nolint:exhaustruct_v5 // The library takes its default for every field that is left out.
+	return &packet.Config{Time: timeFunc(s.at)}
 }
 
 // armorOf writes a key packet set in ASCII armor of kind.

@@ -35,7 +35,7 @@ func TestPublishThenRead(t *testing.T) {
 	t.Parallel()
 
 	e := newEnv(t, false)
-	sg := pgpfixture.NewSigner(t)
+	sg := newSigner(t)
 	e.trust(t, acme, sg)
 
 	s := buildSet(t, sg, "payments", "1.0.0", "linux_amd64", "darwin_arm64")
@@ -98,7 +98,7 @@ func TestPublishRepeat(t *testing.T) {
 	t.Parallel()
 
 	e := newEnv(t, false)
-	sg := pgpfixture.NewSigner(t)
+	sg := newSigner(t)
 	e.trust(t, acme, sg)
 
 	s := buildSet(t, sg, "payments", "1.0.0", "linux_amd64")
@@ -179,7 +179,7 @@ func refusals() []refusal {
 			build: func(t *testing.T, e *env, _ pgpfixture.Signer) error {
 				t.Helper()
 
-				_, err := e.publish(t, acme, buildSet(t, pgpfixture.NewSigner(t), "payments", "1.0.0", "linux_amd64"))
+				_, err := e.publish(t, acme, buildSet(t, newSigner(t), "payments", "1.0.0", "linux_amd64"))
 
 				return err
 			},
@@ -190,7 +190,7 @@ func refusals() []refusal {
 			build: func(t *testing.T, e *env, _ pgpfixture.Signer) error {
 				t.Helper()
 
-				other := pgpfixture.NewSigner(t)
+				other := newSigner(t)
 				e.trust(t, beta, other)
 
 				_, err := e.publish(t, acme, buildSet(t, other, "payments", "1.0.0", "linux_amd64"))
@@ -301,7 +301,7 @@ func checkRefusal(t *testing.T, tc refusal) {
 	t.Helper()
 
 	e := newEnv(t, false)
-	sg := pgpfixture.NewSigner(t)
+	sg := newSigner(t)
 	e.trust(t, acme, sg)
 
 	err := tc.build(t, e, sg)
@@ -344,7 +344,7 @@ func TestPublishRefusesBytesThatChange(t *testing.T) {
 	t.Parallel()
 
 	e := newEnv(t, true)
-	sg := pgpfixture.NewSigner(t)
+	sg := newSigner(t)
 	e.trust(t, acme, sg)
 
 	// The wrapper flips the first byte of a staged file on its second read: the
@@ -377,7 +377,7 @@ func TestPublishRefusesAKeyRemovedBeforeTheCommit(t *testing.T) {
 	t.Parallel()
 
 	e := newEnv(t, false)
-	sg := pgpfixture.NewSigner(t)
+	sg := newSigner(t)
 	e.trust(t, acme, sg)
 
 	req := e.stage(t, acme, buildSet(t, sg, "payments", "1.0.0", "linux_amd64"))
