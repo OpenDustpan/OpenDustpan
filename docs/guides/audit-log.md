@@ -374,7 +374,8 @@ The approval sets the chain to the setting of the server that receives it.
 
 Sign in to the console before maintenance mode starts.
 Maintenance mode starts when the server restarts with a different `--audit-chain`, and it refuses a new sign-in.
-So sign in first, restart the server with the new setting, and approve the change before the sign-in is older than the token freshness window of the session policy (15 minutes by default).
+So sign in first and restart the server with the new setting.
+Then approve the change before the sign-in is older than the token freshness window of the session policy (15 minutes by default).
 See [Console sign-in](console-sign-in.md) for the window.
 
 The approval needs a console session with a recent sign-in, in both directions.
