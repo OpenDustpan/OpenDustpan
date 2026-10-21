@@ -15,6 +15,7 @@ import (
 
 	"opendustpan.org/opendustpan/internal/api/refusal"
 	"opendustpan.org/opendustpan/internal/denylimit"
+	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/internal/sessionauth"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/idempotency"
@@ -200,9 +201,9 @@ func classify(err error) errorResponse {
 	case errors.Is(err, identity.ErrUnauthenticated):
 		return errorResponse{Code: http.StatusUnauthorized, ErrorCode: "", Message: "unauthenticated"}
 	case errors.Is(err, sessionauth.ErrCSRF), errors.Is(err, sessionauth.ErrOtherSite):
-		return errorResponse{Code: http.StatusForbidden, ErrorCode: "", Message: err.Error()}
+		return errorResponse{Code: http.StatusForbidden, ErrorCode: errcode.Forbidden(err), Message: err.Error()}
 	case errors.Is(err, identity.ErrDenied):
-		return errorResponse{Code: http.StatusForbidden, ErrorCode: "", Message: unitCannotBeStated}
+		return errorResponse{Code: http.StatusForbidden, ErrorCode: errcode.Forbidden(err), Message: unitCannotBeStated}
 	case errors.Is(err, errNotFound), errors.Is(err, namespace.ErrNotFound), errors.Is(err, job.ErrNotFound):
 		return errorResponse{Code: http.StatusNotFound, ErrorCode: "", Message: errNotFound.Error()}
 	case errors.Is(err, namespace.ErrNotHome):

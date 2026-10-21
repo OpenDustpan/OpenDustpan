@@ -140,13 +140,32 @@ func (g Gate) rulesList(ctx context.Context, ns namespace.Name) (List, error) {
 	return List{prefixes: nil}, fmt.Errorf("check IP allowlist of namespace %q: %w", ns, err)
 }
 
+// ErrAddressNotAllowed marks the refusal of a client address that is outside
+// the allowlist of a namespace. The refusal also matches identity.ErrDenied, so
+// a caller that does not know this error still answers 403. An adapter tests
+// this error first to tell the allowlist from a missing permission.
+var ErrAddressNotAllowed = errors.New("the client address is not allowed")
+
+// addressError is the refusal that checkAddr returns. It keeps the text of an
+// identity.ErrDenied wrap and matches both identity.ErrDenied and
+// ErrAddressNotAllowed.
+type addressError struct{ text string }
+
+func (e addressError) Error() string { return e.text }
+
+func (e addressError) Is(target error) bool {
+	return target == identity.ErrDenied || target == ErrAddressNotAllowed
+}
+
 // checkAddr refuses the request when the client address in ctx is outside
 // list. An unknown address is denied. The text names the scope and never the
 // list or the address.
 func checkAddr(ctx context.Context, ns namespace.Name, list List) error {
 	addr := clientip.FromContext(ctx)
 	if !list.Contains(addr) {
-		return fmt.Errorf("%w: the client address is not allowed for namespace %s", identity.ErrDenied, ns)
+		return addressError{
+			text: fmt.Errorf("%w: the client address is not allowed for namespace %s", identity.ErrDenied, ns).Error(),
+		}
 	}
 
 	return nil
