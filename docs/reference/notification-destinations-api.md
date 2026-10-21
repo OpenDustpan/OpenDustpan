@@ -38,7 +38,7 @@ A write carries the fence of the namespace. A stale fence answers 409
 | `name` | 1 to 100 bytes |
 | `hostNeedsUpdate` | `true` when the stored host of a `webhook` or `chat` destination fails the host check of a write. The destination still sends. A change of it needs a host that passes. Absent otherwise. |
 | `target` | The address of an `email` destination, or the host of a `webhook` or of a `chat` webhook. The answer never holds the path or the query of a URL. |
-| `urlSet` | `true` for a `webhook` or a `chat` destination. It says that a sealed URL item exists. It does not say that the server can open it. |
+| `urlSet` | `true` for a `webhook` or a `chat` destination that has a sealed URL item. `false` for a destination that has no URL item, and for a `webhook` that an upgrade left with no URL. It does not say that the server can open the URL. |
 | `createdBy` | The subject that made the destination |
 | `version` | Starts at 1 and grows by 1 with each change |
 | `signingKey` | Only in the answer of the create of a `webhook`. 64 hex digits. |

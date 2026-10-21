@@ -191,8 +191,9 @@ server cannot seal it during the upgrade, so it does not keep it. After the
 upgrade, a webhook that you made with an older version has its host as the
 target and no URL:
 
-- `urlSet` is `true`, but the server cannot open the URL. A test answers 422
-  `sink.no-url`, and the server sends nothing to the destination.
+- `urlSet` is `false`. A test answers 422 `sink.no-url`, and the server sends
+  nothing to the destination. Each webhook with `urlSet` `false` needs its URL
+  again.
 - The signing key does not change.
 
 To set the URL, send a `PUT` with the `version` that you read and the whole
