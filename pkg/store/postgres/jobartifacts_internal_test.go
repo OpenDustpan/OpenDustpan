@@ -216,13 +216,23 @@ VALUES ('%s', %d, (SELECT id FROM namespaces WHERE name = '%s'), '%s', %d, 1)`, 
 		ok           bool
 	}{
 		{name: "a chunk that the store wrote", insert: chunk("jlv-1", "acme", 0, 1, artifactHash), ok: true},
-		{name: "a chunk at the limits", insert: chunk("jlv-1", "acme", job.MaxLogChunks-1, job.MaxLogChunk, artifactHash), ok: true},
-		{name: "a hash that is not a SHA-256", insert: chunk("jlv-1", "acme", 0, 1, "xyz")},
-		{name: "an upper case hash", insert: chunk("jlv-1", "acme", 0, 1, strings.ToUpper(artifactHash))},
-		{name: "a size above the chunk limit", insert: chunk("jlv-1", "acme", 0, job.MaxLogChunk+1, artifactHash)},
-		{name: "a number at the chunk count limit", insert: chunk("jlv-1", "acme", job.MaxLogChunks, 1, artifactHash)},
-		{name: "a log version that does not exist", insert: chunk("jlv-gone", "acme", 0, 1, artifactHash)},
-		{name: "a log version of another namespace", insert: chunk("jlv-1", "other", 0, 1, artifactHash)},
+		{
+			name:   "a chunk at the limits",
+			insert: chunk("jlv-1", "acme", job.MaxLogChunks-1, job.MaxLogChunk, artifactHash), ok: true,
+		},
+		{name: "a hash that is not a SHA-256", insert: chunk("jlv-1", "acme", 0, 1, "xyz"), ok: false},
+		{name: "an upper case hash", insert: chunk("jlv-1", "acme", 0, 1, strings.ToUpper(artifactHash)), ok: false},
+		{
+			name:   "a size above the chunk limit",
+			insert: chunk("jlv-1", "acme", 0, job.MaxLogChunk+1, artifactHash), ok: false,
+		},
+		{
+			name:   "a number at the chunk count limit",
+			insert: chunk("jlv-1", "acme", job.MaxLogChunks, 1, artifactHash),
+			ok:     false,
+		},
+		{name: "a log version that does not exist", insert: chunk("jlv-gone", "acme", 0, 1, artifactHash), ok: false},
+		{name: "a log version of another namespace", insert: chunk("jlv-1", "other", 0, 1, artifactHash), ok: false},
 	}
 
 	for _, tc := range cases {

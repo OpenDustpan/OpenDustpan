@@ -139,18 +139,8 @@ func checkStagedJobArtifacts(ctx context.Context, pool *pgxpool.Pool, staging st
 		return err
 	}
 
-	for _, table := range []string{"job_logs", "job_log_chunks"} {
-		var orphans int64
-
-		query := "SELECT COUNT(*) FROM " + stagingTable(staging, table) + " AS t LEFT JOIN " +
-			stagingTable(staging, "namespaces") + " AS n ON n.id = t.namespace_id WHERE n.id IS NULL"
-		if err := pool.QueryRow(ctx, query).Scan(&orphans); err != nil {
-			return fmt.Errorf("read staged %s: %w", table, backup.ErrExportRead)
-		}
-
-		if orphans > 0 {
-			return fmt.Errorf("staged %s has %d rows with no namespace: %w", table, orphans, backup.ErrCorrupt)
-		}
+	if err := checkStagedLogNamespaces(ctx, pool, staging); err != nil {
+		return err
 	}
 
 	if err := checkStagedLogChunks(ctx, pool, staging); err != nil {
@@ -237,6 +227,30 @@ func checkStagedLogChunks(ctx context.Context, pool *pgxpool.Pool, staging strin
 
 	if rowsErr := rows.Err(); rowsErr != nil {
 		return fmt.Errorf("read staged log chunks: %w", backup.ErrExportRead)
+	}
+
+	return nil
+}
+
+// checkStagedLogNamespaces refuses a staged log version or log chunk row of a
+// namespace that the backup does not hold. It returns backup.ErrCorrupt.
+func checkStagedLogNamespaces(ctx context.Context, pool *pgxpool.Pool, staging string) error {
+	if err := checkStagingIdent(staging); err != nil {
+		return err
+	}
+
+	for _, table := range []string{"job_logs", "job_log_chunks"} {
+		var orphans int64
+
+		query := "SELECT COUNT(*) FROM " + stagingTable(staging, table) + " AS t LEFT JOIN " +
+			stagingTable(staging, "namespaces") + " AS n ON n.id = t.namespace_id WHERE n.id IS NULL"
+		if err := pool.QueryRow(ctx, query).Scan(&orphans); err != nil {
+			return fmt.Errorf("read staged %s: %w", table, backup.ErrExportRead)
+		}
+
+		if orphans > 0 {
+			return fmt.Errorf("staged %s has %d rows with no namespace: %w", table, orphans, backup.ErrCorrupt)
+		}
 	}
 
 	return nil

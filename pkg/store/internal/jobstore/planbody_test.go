@@ -48,12 +48,15 @@ func TestCheckPlanBodyPartRules(t *testing.T) {
 		ok          bool
 	}{
 		{name: "one display part", parts: "[" + part("plan-display", 1) + "]", ok: true},
-		{name: "a display and an apply part", parts: "[" + part("plan-display", 1) + "," + part("plan-apply", 1) + "]", ok: true},
+		{
+			name:  "a display and an apply part",
+			parts: "[" + part("plan-display", 1) + "," + part("plan-apply", 1) + "]", ok: true,
+		},
 		{name: "a part at the size limit", parts: "[" + part("plan-apply", job.MaxPlanPart) + "]", ok: true},
-		{name: "one kind twice", parts: "[" + part("plan-display", 1) + "," + part("plan-display", 1) + "]"},
-		{name: "a part above the size limit", parts: "[" + part("plan-apply", job.MaxPlanPart+1) + "]"},
-		{name: "a negative size", parts: "[" + part("plan-apply", -1) + "]"},
-		{name: "an unknown kind", parts: "[" + part("other", 1) + "]"},
+		{name: "one kind twice", parts: "[" + part("plan-display", 1) + "," + part("plan-display", 1) + "]", ok: false},
+		{name: "a part above the size limit", parts: "[" + part("plan-apply", job.MaxPlanPart+1) + "]", ok: false},
+		{name: "a negative size", parts: "[" + part("plan-apply", -1) + "]", ok: false},
+		{name: "an unknown kind", parts: "[" + part("other", 1) + "]", ok: false},
 	}
 
 	for _, tc := range cases {
