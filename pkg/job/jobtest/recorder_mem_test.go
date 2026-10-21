@@ -411,7 +411,13 @@ func (m *memDB) ReserveLogChunk(
 	}
 
 	if plan.Insert {
-		m.records.chunks[plan.Version][c.Seq] = job.ChunkRow{SHA256: c.SHA256, Size: c.Size, Confirmed: false}
+		rows := m.records.chunks[plan.Version]
+		if rows == nil {
+			rows = map[int]job.ChunkRow{}
+			m.records.chunks[plan.Version] = rows
+		}
+
+		rows[c.Seq] = job.ChunkRow{SHA256: c.SHA256, Size: c.Size, Confirmed: false}
 	}
 
 	return plan, nil
