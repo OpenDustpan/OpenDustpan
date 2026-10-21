@@ -1,0 +1,157 @@
+package apidesc
+
+import (
+	"maps"
+	"slices"
+	"strings"
+)
+
+// Label names one operation and states what its route does with the headers
+// of the description. An adapter keeps a table of labels, keyed by Pattern,
+// next to its route table. The name is explicit, so a change of a path never
+// renames an SDK method.
+type Label struct {
+	// ID is the operationId.
+	ID string
+	// Tags are the tags of the operation.
+	Tags []string
+	// IdempotencyKey is true when the route takes the Idempotency-Key header
+	// and its route table has no field that says so. A route table that has
+	// such a field gives it in Row, and its label leaves this flag off.
+	IdempotencyKey bool
+	// IfMatch is true when the route takes the If-Match header and works
+	// without it.
+	IfMatch bool
+	// IfMatchRequired is true when the route takes the If-Match header and
+	// answers 428 without it.
+	IfMatchRequired bool
+	// ETag is true when the answer of the route holds the ETag header.
+	ETag bool
+}
+
+// Name returns the label of an operation that sets no header: the operationId
+// and the tags.
+func Name(id string, tags ...string) Label {
+	return Label{ID: id, Tags: tags, IdempotencyKey: false, IfMatch: false, IfMatchRequired: false, ETag: false}
+}
+
+// WithKey returns the label for a route that takes the Idempotency-Key header
+// and whose route table has no field for it.
+func (l Label) WithKey() Label {
+	l.IdempotencyKey = true
+
+	return l
+}
+
+// WithIfMatch returns the label for a route that takes the If-Match header
+// and works without it.
+func (l Label) WithIfMatch() Label {
+	l.IfMatch = true
+
+	return l
+}
+
+// WithIfMatchRequired returns the label for a route that takes the If-Match
+// header and answers 428 without it.
+func (l Label) WithIfMatchRequired() Label {
+	l.IfMatchRequired = true
+
+	return l
+}
+
+// WithETag returns the label for a route whose answer holds the ETag header.
+func (l Label) WithETag() Label {
+	l.ETag = true
+
+	return l
+}
+
+// Row is what an adapter knows of one route: the fields that every adapter
+// has in its own Route type.
+type Row struct {
+	Method string
+	Path   string
+	// Actions lists the actions that the route can need, as text.
+	Actions []string
+	// Public is true for a route that needs no sign-in.
+	Public bool
+	// IdempotencyKey is true when the route table says that the route takes
+	// the Idempotency-Key header.
+	IdempotencyKey bool
+}
+
+// undescribed lists the routes under Prefix that no adapter describes, keyed
+// by their exact pattern, with the reason for each. It is the one list: Collect
+// skips these routes, and the class test of the server reads the list, so a
+// route under Prefix that is not on it and not described fails the test.
+//
+//nolint:gochecknoglobals // A fixed table; Go has no constant maps.
+var undescribed = map[string]string{
+	Pattern("GET", Prefix+"namespaces/-/units/{unitID}"): "The wildcard unitID breaks the grammar of " +
+		"wildcard names. The route joins the description when it is renamed to unit_id.",
+	Pattern("POST", Prefix+"sign-in/dev-code"): "Only the installation kind dev serves it, " +
+		"and a client never calls it.",
+}
+
+// Undescribed returns a copy of the list of routes under Prefix that no
+// adapter describes: the exact pattern and the reason.
+func Undescribed() map[string]string { return maps.Clone(undescribed) }
+
+// Pattern returns the key of a label in a table: the method, one space and
+// the path, as net/http writes a pattern.
+func Pattern(method, path string) string {
+	return method + " " + path
+}
+
+// Collect turns the rows of a route table into operations. It skips a row
+// whose path is outside Prefix, because the description covers Prefix only,
+// and a row whose exact pattern is on the list Undescribed.
+//
+// A row under Prefix that has no label still gives an operation, with no ID.
+// Validate refuses such an operation, so a new route cannot enter the server
+// without a name.
+func Collect(rows []Row, labels map[string]Label) []Operation {
+	var out []Operation
+
+	for _, row := range rows {
+		if !strings.HasPrefix(row.Path, Prefix) {
+			continue
+		}
+
+		if _, skip := undescribed[Pattern(row.Method, row.Path)]; skip {
+			continue
+		}
+
+		label := labels[Pattern(row.Method, row.Path)]
+
+		out = append(out, Operation{
+			ID:              label.ID,
+			Method:          row.Method,
+			Path:            row.Path,
+			Tags:            append([]string(nil), label.Tags...),
+			Actions:         uniqueActions(row.Actions),
+			Public:          row.Public,
+			IdempotencyKey:  row.IdempotencyKey || label.IdempotencyKey,
+			IfMatch:         label.IfMatch,
+			IfMatchRequired: label.IfMatchRequired,
+			ETag:            label.ETag,
+		})
+	}
+
+	return out
+}
+
+// uniqueActions returns the actions in their order, with each action once. A
+// route can list an action in two of its lists, and Validate refuses a
+// repeated action.
+func uniqueActions(actions []string) []string {
+	out := make([]string, 0, len(actions))
+
+	for _, action := range actions {
+		if !slices.Contains(out, action) {
+			out = append(out, action)
+		}
+	}
+
+	return out
+}
