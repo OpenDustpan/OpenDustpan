@@ -30,8 +30,10 @@ package job
 
 import (
 	"errors"
+	"fmt"
 	"time"
 
+	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
 )
 
@@ -403,6 +405,63 @@ type DeliveryResult struct {
 	// forge reports it. After a takeover that finds the commit by its
 	// trailer, it is the time of that commit, not the time of the record.
 	DeliveredAt time.Time
+}
+
+// Limits of the text fields of a DeliveryResult that an executor gives.
+const (
+	maxCommitLen = 128
+	maxBranchLen = 255
+	maxReviewLen = 2048
+)
+
+// Validate returns an error that wraps ErrInvalid for a result that an
+// executor must not record: an unknown delivery kind, no commit or branch,
+// a review request URL on a direct push or none on a review request, a text
+// that is too long or holds a control character, no delivery time, or a merge
+// time (the merge comes later, as EventMerged). The result goes to the audit
+// entry of the delivery, so the text rules are those of an audit reason.
+func (d *DeliveryResult) Validate() error {
+	switch {
+	case d.Delivery != DeliveryReviewRequest && d.Delivery != DeliveryDirectPush:
+		return fmt.Errorf("%w: unknown delivery %q", ErrInvalid, d.Delivery)
+	case d.Commit == "" || len(d.Commit) > maxCommitLen:
+		return fmt.Errorf("%w: a delivery needs a commit of 1 to %d bytes", ErrInvalid, maxCommitLen)
+	case d.Branch == "" || len(d.Branch) > maxBranchLen:
+		return fmt.Errorf("%w: a delivery needs a branch of 1 to %d bytes", ErrInvalid, maxBranchLen)
+	case d.Delivery == DeliveryDirectPush && d.ReviewRequest != "":
+		return fmt.Errorf("%w: a direct push has no review request", ErrInvalid)
+	case d.Delivery == DeliveryReviewRequest && (d.ReviewRequest == "" || len(d.ReviewRequest) > maxReviewLen):
+		return fmt.Errorf("%w: a review request delivery needs a URL of 1 to %d bytes", ErrInvalid, maxReviewLen)
+	case !d.MergedAt.IsZero():
+		return fmt.Errorf("%w: a delivery has no merge time yet", ErrInvalid)
+	case d.DeliveredAt.IsZero():
+		return fmt.Errorf("%w: a delivery needs the time of the commit", ErrInvalid)
+	}
+
+	if audit.ValidateReason(d.AuditReason()) != nil {
+		return fmt.Errorf("%w: the commit, the branch and the review request are too long or hold a control character",
+			ErrInvalid)
+	}
+
+	return nil
+}
+
+// AuditReason returns the reason of the audit entry of the delivery: the
+// commit, the branch and the review request.
+func (d *DeliveryResult) AuditReason() string {
+	reason := "commit " + d.Commit + " on branch " + d.Branch
+	if d.ReviewRequest != "" {
+		reason += ", review request " + d.ReviewRequest
+	}
+
+	return reason
+}
+
+// Same reports whether d and o hold the same result, with the times compared
+// as instants.
+func (d *DeliveryResult) Same(o *DeliveryResult) bool {
+	return d.Delivery == o.Delivery && d.Commit == o.Commit && d.Branch == o.Branch &&
+		d.ReviewRequest == o.ReviewRequest && d.MergedAt.Equal(o.MergedAt) && d.DeliveredAt.Equal(o.DeliveredAt)
 }
 
 // CloseAfter returns the time after which a final state version closes

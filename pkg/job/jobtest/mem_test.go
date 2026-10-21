@@ -53,6 +53,10 @@ type memDB struct {
 	mu      sync.Mutex
 	durable durable.Store
 	fences  map[namespace.Name]int64
+	// nsIDs maps a namespace to its ID, which names its blob scope.
+	nsIDs map[namespace.Name]namespace.ID
+	// records holds the rows that the recorder adds to the jobs.
+	records memRecords
 	// states maps a unit ID to its current state version.
 	states map[string]string
 	// finals maps a unit ID to its last final state version, as
@@ -74,6 +78,8 @@ func newMemDB() *memDB {
 		mu:      sync.Mutex{},
 		durable: durabletest.NewMem().Store(),
 		fences:  map[namespace.Name]int64{},
+		nsIDs:   map[namespace.Name]namespace.ID{},
+		records: newMemRecords(),
 		states:  map[string]string{},
 		finals:  map[string]job.StateVersion{},
 		jobs:    map[job.ID]*job.Job{},
@@ -92,6 +98,7 @@ func (m *memDB) CreateNamespace(_ context.Context, name namespace.Name) (namespa
 	defer m.mu.Unlock()
 
 	m.fences[name] = 1
+	m.nsIDs[name] = namespace.NewID()
 
 	return namespace.Fence{Namespace: name, FailoverVersion: 1}, nil
 }
@@ -228,7 +235,7 @@ func (m *memDB) GetNamespace(_ context.Context, name namespace.Name) (namespace.
 	}
 
 	return namespace.Namespace{
-		ID: "", CreatedAt: time.Time{}, Name: name, HomeRegion: "", FailoverVersion: v,
+		ID: m.nsIDs[name], CreatedAt: time.Time{}, Name: name, HomeRegion: "", FailoverVersion: v,
 		Overrides: namespace.Overrides{Forced: false, Unlocked: false},
 	}, nil
 }
@@ -974,6 +981,20 @@ func copyJob(j *job.Job) job.Job {
 
 	for i := range out.Phases {
 		out.Phases[i].Steps = slices.Clone(out.Phases[i].Steps)
+
+		for k := range out.Phases[i].Steps {
+			if l := out.Phases[i].Steps[k].Log; l != nil {
+				c := *l
+				out.Phases[i].Steps[k].Log = &c
+			}
+		}
+
+		if p := out.Phases[i].Plan; p != nil {
+			c := *p
+			c.Parts = slices.Clone(p.Parts)
+			out.Phases[i].Plan = &c
+		}
+
 		out.Phases[i].Gates = slices.Clone(out.Phases[i].Gates)
 		out.Phases[i].Approvals = slices.Clone(out.Phases[i].Approvals)
 	}
