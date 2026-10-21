@@ -119,15 +119,19 @@ docs-lint: ## ASD-STE100 structural rules and banned words for README, CLAUDE.md
 chart-lint: ## Lint and render the Helm chart (helm lint, helm template, kubeconform). Needs helm and kubeconform; not part of check.
 	./scripts/chart-lint.sh
 
+# The store packages run for more than 10 minutes, the default limit of go test,
+# on a CI runner with 4 cores. GO_TEST_TIMEOUT is the limit for each package.
+GO_TEST_TIMEOUT := 20m
+
 test: ## Go tests; the PostgreSQL suite is skipped unless DUSTPAN_TEST_POSTGRES_URL is set. A package whose code, files and environment did not change gives its cached result.
-	go test -race ./...
+	go test -race -timeout $(GO_TEST_TIMEOUT) ./...
 
 test-nocache: ## Go tests as in test, but every package runs again. CI runs this on main every 2 hours to find flaky tests.
-	go test -race -count=1 ./...
+	go test -race -count=1 -timeout $(GO_TEST_TIMEOUT) ./...
 
 test-postgres: ## Go tests including PostgreSQL (needs DUSTPAN_TEST_POSTGRES_URL).
 	@test -n "$$DUSTPAN_TEST_POSTGRES_URL" || (echo "set DUSTPAN_TEST_POSTGRES_URL" && exit 1)
-	go test -race -count=1 ./pkg/store/postgres/...
+	go test -race -count=1 -timeout $(GO_TEST_TIMEOUT) ./pkg/store/postgres/...
 
 bench: ## Fast benchmarks (delta apply, gzip, checkpoint store) with one iteration each; proves they compile and run.
 	go test -run '^$$' -bench . -benchtime 1x ./pkg/stack/ ./pkg/store/sqlite/
