@@ -34,15 +34,9 @@ type TriggerRef struct {
 // stays so that a caller of the job service cannot put a value into the audit
 // entry or the record of a job that the trigger rules refuse.
 func (r *TriggerRef) Validate() error {
-	if r.ID == "" || len(r.ID) > MaxTriggerIDBytes {
-		return fmt.Errorf("%w: a trigger ID has 1 to %d characters", ErrInvalid, MaxTriggerIDBytes)
-	}
-
-	for i := range len(r.ID) {
-		c := r.ID[i]
-		if (c < 'a' || c > 'z') && (c < '0' || c > '9') && c != '-' && c != '_' {
-			return fmt.Errorf("%w: a trigger ID has a byte that is not in a-z, 0-9, \"-\" or \"_\"", ErrInvalid)
-		}
+	err := r.validateID()
+	if err != nil {
+		return err
 	}
 
 	switch {
@@ -55,6 +49,22 @@ func (r *TriggerRef) Validate() error {
 	default:
 		return nil
 	}
+}
+
+// validateID checks the trigger ID of r.
+func (r *TriggerRef) validateID() error {
+	if r.ID == "" || len(r.ID) > MaxTriggerIDBytes {
+		return fmt.Errorf("%w: a trigger ID has 1 to %d characters", ErrInvalid, MaxTriggerIDBytes)
+	}
+
+	for i := range len(r.ID) {
+		c := r.ID[i]
+		if (c < 'a' || c > 'z') && (c < '0' || c > '9') && c != '-' && c != '_' {
+			return fmt.Errorf("%w: a trigger ID has a byte that is not in a-z, 0-9, \"-\" or \"_\"", ErrInvalid)
+		}
+	}
+
+	return nil
 }
 
 // checkTrigger checks the trigger of a start request against the actor and the
@@ -74,23 +84,42 @@ func checkTrigger(a Actor, source SourceKind, ref *TriggerRef) error {
 		return fmt.Errorf("%w: the subject is reserved for the namespace service principal", identity.ErrDenied)
 	}
 
-	switch {
-	case ref == nil && service:
-		return fmt.Errorf("%w: the namespace service principal starts jobs for triggers only", ErrInvalid)
-	case ref == nil:
+	if ref == nil {
+		if service {
+			return fmt.Errorf("%w: the namespace service principal starts jobs for triggers only", ErrInvalid)
+		}
+
 		return nil
 	}
 
-	if err := ref.Validate(); err != nil {
+	err := ref.Validate()
+	if err != nil {
 		return err
 	}
 
+	if service {
+		return checkServiceSource(source)
+	}
+
+	return checkManualSource(a, source)
+}
+
+// checkServiceSource checks the source kind of a start by the namespace
+// service principal.
+func checkServiceSource(source SourceKind) error {
+	if source == SourceSchedule || source == SourceForge || source == SourceTrigger {
+		return nil
+	}
+
+	return fmt.Errorf("%w: a start by a trigger has the source schedule, forge or trigger", ErrInvalid)
+}
+
+// checkManualSource checks the source kind and the agent of a manual fire.
+func checkManualSource(a Actor, source SourceKind) error {
 	switch {
-	case service && (source != SourceSchedule && source != SourceForge && source != SourceTrigger):
-		return fmt.Errorf("%w: a start by a trigger has the source schedule, forge or trigger", ErrInvalid)
-	case !service && source != SourceAPI:
+	case source != SourceAPI:
 		return fmt.Errorf("%w: a manual start by a trigger has the source api", ErrInvalid)
-	case !service && a.Agent != "":
+	case a.Agent != "":
 		return fmt.Errorf("%w: an agent cannot fire a trigger", ErrAgentDenied)
 	default:
 		return nil

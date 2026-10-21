@@ -39,6 +39,8 @@ func NewDoubles() *Doubles {
 
 // Dispatcher returns a trigger.Dispatcher over store, starter, fences and the
 // doubles.
+//
+//nolint:ireturn // The port is the contract of the result.
 func (d *Doubles) Dispatcher(store trigger.Store, starter trigger.Starter, fences trigger.Fences,
 ) (trigger.Dispatcher, error) {
 	disp, err := trigger.NewDispatcher(trigger.DispatcherConfig{
@@ -88,12 +90,6 @@ func (d *Doubles) Intermediate(_ *testing.T, _ graph.Unit) string {
 	return d.write()
 }
 
-func (d *Doubles) write() string {
-	d.next++
-
-	return fmt.Sprintf("version-%d", d.next)
-}
-
 // Refusals returns the audit entries that the dispatcher appended for ns.
 func (d *Doubles) Refusals(ns namespace.Name) []audit.Entry {
 	d.mu.Lock()
@@ -108,17 +104,6 @@ func (d *Doubles) CheckSave(_ context.Context, t trigger.Trigger) error { return
 // CheckStart implements trigger.SaverCheck.
 func (d *Doubles) CheckStart(_ context.Context, t trigger.Trigger) error { return d.check(t) }
 
-func (d *Doubles) check(t trigger.Trigger) error {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-
-	if d.revoked[t.LastSaver] {
-		return fmt.Errorf("%w: trigger %s: the saver lost access", trigger.ErrSaverDenied, t.ID)
-	}
-
-	return nil
-}
-
 // Object implements trigger.Units. The name of a unit is its ID.
 func (*Doubles) Object(_ context.Context, u graph.Unit) (identity.Object, error) {
 	obj, err := identity.UnitObject(u.Tool, u.Namespace, u.ID)
@@ -131,7 +116,7 @@ func (*Doubles) Object(_ context.Context, u graph.Unit) (identity.Object, error)
 
 // Find implements trigger.Units.
 func (*Doubles) Find(_ context.Context, ns namespace.Name, unitID string) (graph.Unit, error) {
-	return graph.Unit{Namespace: ns, Tool: "opentofu", ID: unitID}, nil
+	return graph.Unit{Namespace: ns, Tool: toolOpenTofu, ID: unitID}, nil
 }
 
 // Append implements trigger.AuditAppender.
@@ -160,4 +145,21 @@ func (d *Doubles) LastFinal(_ context.Context, unit graph.Unit) (string, bool, e
 	id, ok := d.last[unit]
 
 	return id, ok, nil
+}
+
+func (d *Doubles) write() string {
+	d.next++
+
+	return fmt.Sprintf("version-%d", d.next)
+}
+
+func (d *Doubles) check(t trigger.Trigger) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	if d.revoked[t.LastSaver] {
+		return fmt.Errorf("%w: trigger %s: the saver lost access", trigger.ErrSaverDenied, t.ID)
+	}
+
+	return nil
 }

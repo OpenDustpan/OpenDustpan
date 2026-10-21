@@ -76,7 +76,9 @@ func TestNewNeedsPorts(t *testing.T) {
 func TestStartPlanRequest(t *testing.T) {
 	t.Parallel()
 
-	actor := job.Actor{Principal: identity.Principal{Subject: "system:namespace-service:acme"}} //nolint:exhaustruct // A test value.
+	actor := job.Actor{
+		Principal: identity.Principal{Subject: "system:namespace-service:acme"},
+	} //nolint:exhaustruct // A test value.
 
 	for _, source := range []job.SourceKind{"", job.SourceSchedule, job.SourceForge, job.SourceTrigger} {
 		jobs := &fakeJobs{}
@@ -94,7 +96,12 @@ func TestStartPlanRequest(t *testing.T) {
 		req := jobs.req
 
 		if req.Operation != job.OperationPlan || req.Executor != job.ExecutorRunner {
-			t.Errorf("source %q: operation %q on executor %q, want a plan on a runner", source, req.Operation, req.Executor)
+			t.Errorf(
+				"source %q: operation %q on executor %q, want a plan on a runner",
+				source,
+				req.Operation,
+				req.Executor,
+			)
 		}
 
 		if req.Unit.UnitID() != "u1" || req.Unit.UnitName() != "name-of-u1" || req.Source != source ||
@@ -132,9 +139,19 @@ func TestStartPlanErrors(t *testing.T) {
 		{"a unit that is gone", &fakeJobs{}, fakeUnits{err: trigger.ErrUnitGone}, plan(""), job.ErrNotFound, 0},
 		{"a lookup that fails", &fakeJobs{}, fakeUnits{err: errors.New("down")}, plan(""), nil, 0},
 		{
-			"a trigger ID that is not valid", &fakeJobs{}, fakeUnits{},
-			trigger.PlanRequest{Trigger: "No Way", Kind: trigger.KindSchedule, Reason: "x", Source: "", Saver: "s", IdempotencyKey: ""},
-			trigger.ErrInvalid, 0,
+			"a trigger ID that is not valid",
+			&fakeJobs{},
+			fakeUnits{},
+			trigger.PlanRequest{
+				Trigger:        "No Way",
+				Kind:           trigger.KindSchedule,
+				Reason:         "x",
+				Source:         "",
+				Saver:          "s",
+				IdempotencyKey: "",
+			},
+			trigger.ErrInvalid,
+			0,
 		},
 		{"a freeze", &fakeJobs{err: job.ErrFrozen}, fakeUnits{}, plan(""), job.ErrFrozen, 1},
 		{"a policy", &fakeJobs{err: job.ErrPolicyDenied}, fakeUnits{}, plan(""), job.ErrPolicyDenied, 1},

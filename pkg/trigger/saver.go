@@ -87,9 +87,9 @@ type saverCheck struct {
 
 // NewSaverCheck returns the SaverCheck over the ports of cfg. It returns an
 // error that wraps ErrInvalid when a port is nil.
-func NewSaverCheck(
-	cfg SaverCheckConfig,
-) (SaverCheck, error) { //nolint:ireturn // The port is the contract of the result.
+//
+//nolint:ireturn // The port is the contract of the result.
+func NewSaverCheck(cfg SaverCheckConfig) (SaverCheck, error) {
 	if cfg.Resolver == nil || cfg.Authorizer == nil || cfg.Units == nil {
 		return nil, fmt.Errorf("%w: a saver check needs a resolver, an authorizer and units", ErrInvalid)
 	}
@@ -97,24 +97,52 @@ func NewSaverCheck(
 	return &saverCheck{resolver: cfg.Resolver, authorizer: cfg.Authorizer, units: cfg.Units}, nil
 }
 
+// errOtherSubject reports a resolver that answered a principal with another
+// subject than the one it was asked for.
+var errOtherSubject = errors.New("the resolver answered another subject")
+
 // CheckSave implements SaverCheck.
 func (c *saverCheck) CheckSave(ctx context.Context, t Trigger) error {
-	return c.check(ctx, t, true)
+	saver, err := c.checkUnitActions(ctx, t)
+	if err != nil {
+		return err
+	}
+
+	if t.Kind != KindFollows {
+		return nil
+	}
+
+	source, err := c.units.Object(ctx, t.Source)
+	if err != nil {
+		return refusal(t, err)
+	}
+
+	err = c.authorizer.Authorize(ctx, saver, identity.ActionUnitRead, source)
+	if err != nil {
+		return refusal(t, err)
+	}
+
+	return nil
 }
 
 // CheckStart implements SaverCheck.
 func (c *saverCheck) CheckStart(ctx context.Context, t Trigger) error {
-	return c.check(ctx, t, false)
+	_, err := c.checkUnitActions(ctx, t)
+
+	return err
 }
 
-func (c *saverCheck) check(ctx context.Context, t Trigger, withSource bool) error {
-	if err := t.Validate(); err != nil {
-		return err
+// checkUnitActions resolves the last saver of t and checks the settings action
+// and the start action on the unit of t. It returns the resolved saver.
+func (c *saverCheck) checkUnitActions(ctx context.Context, t Trigger) (identity.Principal, error) {
+	err := t.Validate()
+	if err != nil {
+		return identity.Principal{}, err
 	}
 
 	saver, err := c.resolver.Saver(ctx, t.LastSaver)
 	if err != nil {
-		return refusal(t, err)
+		return identity.Principal{}, refusal(t, err)
 	}
 
 	// Defense in depth: the resolver returns a principal with the Admin flag
@@ -124,34 +152,22 @@ func (c *saverCheck) check(ctx context.Context, t Trigger, withSource bool) erro
 	saver.Admin = false
 
 	if saver.Subject != t.LastSaver {
-		return refusal(t, fmt.Errorf("the resolver answered the subject %q", saver.Subject))
+		return identity.Principal{}, refusal(t, errOtherSubject)
 	}
 
 	unit, err := c.units.Object(ctx, t.Unit)
 	if err != nil {
-		return refusal(t, err)
+		return identity.Principal{}, refusal(t, err)
 	}
 
 	for _, action := range []identity.Action{SettingsAction, StartAction} {
-		if err := c.authorizer.Authorize(ctx, saver, action, unit); err != nil {
-			return refusal(t, err)
+		err = c.authorizer.Authorize(ctx, saver, action, unit)
+		if err != nil {
+			return identity.Principal{}, refusal(t, err)
 		}
 	}
 
-	if !withSource || t.Kind != KindFollows {
-		return nil
-	}
-
-	source, err := c.units.Object(ctx, t.Source)
-	if err != nil {
-		return refusal(t, err)
-	}
-
-	if err := c.authorizer.Authorize(ctx, saver, identity.ActionUnitRead, source); err != nil {
-		return refusal(t, err)
-	}
-
-	return nil
+	return saver, nil
 }
 
 // refusal wraps the cause of a failed check. Every cause denies, a failure of

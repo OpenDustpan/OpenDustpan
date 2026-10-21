@@ -19,7 +19,11 @@ func TestJobDocumentNamesTheTrigger(t *testing.T) {
 		trigger *job.TriggerRef
 		want    string
 	}{
-		{"a job that a trigger started", &job.TriggerRef{ID: "trg-1", Saver: "user:ada"}, `"trigger":{"id":"trg-1","saver":"user:ada"}`},
+		{
+			"a job that a trigger started",
+			&job.TriggerRef{ID: "trg-1", Saver: "user:ada"},
+			`"trigger":{"id":"trg-1","saver":"user:ada"}`,
+		},
 		{"a job that no trigger started", nil, ""},
 	}
 

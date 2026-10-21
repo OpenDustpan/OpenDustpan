@@ -188,6 +188,7 @@ func toJobResponse(j *job.Job) jobResponse {
 		Agent:        j.Agent,
 		AgentMode:    string(j.AgentMode),
 		BreakGlass:   nil,
+		Trigger:      nil,
 		Delivery:     nil,
 		Closed:       nil,
 		Verification: string(j.Verification),

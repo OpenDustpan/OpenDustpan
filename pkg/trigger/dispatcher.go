@@ -63,9 +63,9 @@ type dispatcher struct {
 
 // NewDispatcher returns the Dispatcher over the ports of cfg. It returns an
 // error that wraps ErrInvalid when a required port is nil.
-func NewDispatcher(
-	cfg DispatcherConfig,
-) (Dispatcher, error) { //nolint:ireturn // The port is the contract of the result.
+//
+//nolint:ireturn // The port is the contract of the result.
+func NewDispatcher(cfg DispatcherConfig) (Dispatcher, error) {
 	if cfg.Store == nil || cfg.Starter == nil || cfg.Savers == nil || cfg.Units == nil || cfg.Audit == nil ||
 		cfg.Fences == nil {
 		return nil, fmt.Errorf("%w: a dispatcher needs a store, a starter, a saver check, units, an audit store "+
@@ -202,7 +202,8 @@ func (d *dispatcher) start(ctx context.Context, t *Trigger, p startPlan) (job.ID
 	// Defense in depth: load and the store validated t. A caller of start with
 	// a trigger that it built itself gets no start for a value that the rules
 	// refuse.
-	if err := t.Validate(); err != nil {
+	err := t.Validate()
+	if err != nil {
 		return "", fmt.Errorf("trigger %s: %w", t.ID, err)
 	}
 
@@ -211,7 +212,8 @@ func (d *dispatcher) start(ctx context.Context, t *Trigger, p startPlan) (job.ID
 		return "", err
 	}
 
-	if err := d.savers.CheckStart(ctx, *t); err != nil {
+	err = d.savers.CheckStart(ctx, *t)
+	if err != nil {
 		return "", d.refuse(ctx, t, &actor, err)
 	}
 
@@ -269,7 +271,9 @@ func (d *dispatcher) recordDenial(ctx context.Context, t *Trigger, actor *job.Ac
 	}
 
 	object := t.Unit.String()
-	if obj, err := d.units.Object(ctx, t.Unit); err == nil {
+
+	obj, lookup := d.units.Object(ctx, t.Unit)
+	if lookup == nil {
 		object = obj.String()
 	}
 
@@ -278,7 +282,7 @@ func (d *dispatcher) recordDenial(ctx context.Context, t *Trigger, actor *job.Ac
 		TokenID: actor.Principal.TokenID, Action: string(StartAction), Object: object, Version: "", ValuePath: "",
 		ValueCount: nil,
 		Changes: []audit.Change{
-			{Key: "trigger", Old: nil, New: string(t.ID), Layer: "", TakesEffect: ""},
+			{Key: changeTrigger, Old: nil, New: string(t.ID), Layer: "", TakesEffect: ""},
 			{Key: "trigger-saver", Old: nil, New: t.LastSaver, Layer: "", TakesEffect: ""},
 		},
 		SourceIP: "", UserAgent: "", Channel: audit.ChannelAPI, Kind: audit.KindChange,

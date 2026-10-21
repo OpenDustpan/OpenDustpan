@@ -139,7 +139,9 @@ func TestDispatcherRefusalIsAuditedAndFailsClosed(t *testing.T) {
 
 type onlyVersion struct{ id string }
 
-func (v onlyVersion) LastFinal(context.Context, graph.Unit) (string, bool, error) { return v.id, v.id != "", nil }
+func (v onlyVersion) LastFinal(context.Context, graph.Unit) (string, bool, error) {
+	return v.id, v.id != "", nil
+}
 
 func TestDispatcherUpstreamUsesTheLastFinalVersion(t *testing.T) {
 	t.Parallel()

@@ -32,6 +32,12 @@ type OutputRead struct {
 	Caller *identity.Principal
 }
 
+// Causes of a refused read. The error text of a refusal repeats one of them.
+var (
+	errSourceNotUnit = errors.New("the source is not a unit")
+	errOtherUnit     = errors.New("the trigger does not start the unit of the job")
+)
+
 // OutputReadCheck decides check 2 of the read of an output for a job that a
 // trigger started. The namespace service principal that started the job
 // holds no read action, so the grants of the last saver of the trigger decide,
@@ -63,7 +69,7 @@ func (c *OutputReadCheck) Allow(ctx context.Context, in OutputRead) error {
 	}
 
 	if !in.Source.IsUnit() {
-		return denyRead(in, errors.New("the source is not a unit"))
+		return denyRead(in, errSourceNotUnit)
 	}
 
 	t, err := c.store.Get(ctx, in.Namespace, in.Trigger)
@@ -75,7 +81,7 @@ func (c *OutputReadCheck) Allow(ctx context.Context, in OutputRead) error {
 	// not let a job borrow the grants of another trigger. The trigger must
 	// start the unit of the job, in the namespace of the job.
 	if t.Unit != in.Unit || t.Unit.Namespace != in.Namespace || in.Source.Namespace() != in.Namespace {
-		return denyRead(in, errors.New("the trigger does not start the unit of the job"))
+		return denyRead(in, errOtherUnit)
 	}
 
 	saver, err := c.resolver.Saver(ctx, t.LastSaver)
@@ -89,7 +95,7 @@ func (c *OutputReadCheck) Allow(ctx context.Context, in OutputRead) error {
 	saver.Admin = false
 
 	if saver.Subject != t.LastSaver {
-		return denyRead(in, errors.New("the resolver answered another subject"))
+		return denyRead(in, errOtherSubject)
 	}
 
 	if err := c.authorize(ctx, saver, in); err != nil {
@@ -120,7 +126,7 @@ func (c *OutputReadCheck) authorize(ctx context.Context, p identity.Principal, i
 }
 
 // denyRead returns the error of a refused read. It wraps identity.ErrDenied
-// and the cause, and its text holds no subject.
+// and the cause.
 func denyRead(in OutputRead, cause error) error {
 	return fmt.Errorf("%w: trigger %s: the read of the outputs of %s is refused: %w",
 		identity.ErrDenied, quote(string(in.Trigger)), in.Source.String(), cause)

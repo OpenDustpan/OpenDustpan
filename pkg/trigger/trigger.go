@@ -203,6 +203,11 @@ func (t Trigger) Validate() error {
 		return err
 	}
 
+	return t.validateKind()
+}
+
+// validateKind checks the kind of t and the fields that the kind allows.
+func (t Trigger) validateKind() error {
 	if !t.Kind.Valid() {
 		return fmt.Errorf("%w: kind %s", ErrInvalid, quote(string(t.Kind)))
 	}

@@ -103,7 +103,7 @@ type fireResponse struct {
 
 // listTriggers answers GET .../units/{unit_id}/triggers with the triggers of the
 // unit. The route wrapper allowed namespace:read and unit:read.
-func (h *Handler) listTriggers(w http.ResponseWriter, r *http.Request, p identity.Principal, t target) {
+func (h *Handler) listTriggers(w http.ResponseWriter, r *http.Request, p identity.Principal, t *target) {
 	ctx := r.Context()
 
 	list, err := h.manager.List(ctx, p, t.ns.Name, t.unit.UnitID)
@@ -122,7 +122,7 @@ func (h *Handler) listTriggers(w http.ResponseWriter, r *http.Request, p identit
 }
 
 // getTrigger answers GET .../triggers/{trigger_id} with the trigger.
-func (h *Handler) getTrigger(w http.ResponseWriter, r *http.Request, p identity.Principal, t target) {
+func (h *Handler) getTrigger(w http.ResponseWriter, r *http.Request, p identity.Principal, t *target) {
 	ctx := r.Context()
 
 	got, _, err := h.manager.Get(ctx, p, t.ns.Name, t.trigger.ID)
@@ -137,7 +137,7 @@ func (h *Handler) getTrigger(w http.ResponseWriter, r *http.Request, p identity.
 
 // createTrigger answers POST .../units/{unit_id}/triggers with the trigger that
 // the request saves. The caller becomes its last saver.
-func (h *Handler) createTrigger(w http.ResponseWriter, r *http.Request, p identity.Principal, t target) {
+func (h *Handler) createTrigger(w http.ResponseWriter, r *http.Request, p identity.Principal, t *target) {
 	ctx := r.Context()
 
 	in, err := h.saveInput(w, r, t)
@@ -161,7 +161,7 @@ func (h *Handler) createTrigger(w http.ResponseWriter, r *http.Request, p identi
 
 // replaceTrigger answers PUT .../triggers/{trigger_id} with the trigger that the
 // request saves in place of the old one. The caller becomes its last saver.
-func (h *Handler) replaceTrigger(w http.ResponseWriter, r *http.Request, p identity.Principal, t target) {
+func (h *Handler) replaceTrigger(w http.ResponseWriter, r *http.Request, p identity.Principal, t *target) {
 	ctx := r.Context()
 
 	in, err := h.saveInput(w, r, t)
@@ -171,7 +171,7 @@ func (h *Handler) replaceTrigger(w http.ResponseWriter, r *http.Request, p ident
 		return
 	}
 
-	got, err := h.manager.Replace(ctx, p, requestInfo(r), t.ns.Name, t.trigger.ID, in)
+	got, err := h.manager.Replace(ctx, p, requestInfo(r), t.trigger.ID, in)
 	if err != nil {
 		h.manageError(r, p, err)
 		h.writeError(ctx, w, err)
@@ -183,7 +183,7 @@ func (h *Handler) replaceTrigger(w http.ResponseWriter, r *http.Request, p ident
 }
 
 // deleteTrigger answers DELETE .../triggers/{trigger_id} with 204.
-func (h *Handler) deleteTrigger(w http.ResponseWriter, r *http.Request, p identity.Principal, t target) {
+func (h *Handler) deleteTrigger(w http.ResponseWriter, r *http.Request, p identity.Principal, t *target) {
 	ctx := r.Context()
 
 	if err := h.manager.Delete(ctx, p, requestInfo(r), t.ns.Name, t.trigger.ID); err != nil {
@@ -200,7 +200,7 @@ func (h *Handler) deleteTrigger(w http.ResponseWriter, r *http.Request, p identi
 // the fire starts. The job service checks the start action of the caller and
 // applies the gates, the approval rules, the freezes and the manual locks. A
 // double click of one person within one minute gives the same job.
-func (h *Handler) fireTrigger(w http.ResponseWriter, r *http.Request, p identity.Principal, t target) {
+func (h *Handler) fireTrigger(w http.ResponseWriter, r *http.Request, p identity.Principal, t *target) {
 	ctx := r.Context()
 
 	in, err := readFireInput(w, r)
@@ -248,7 +248,7 @@ func requestInfo(r *http.Request) trigger.RequestInfo {
 }
 
 // triggerLocation returns the path of the trigger id on the unit of t.
-func triggerLocation(t target, id trigger.ID) string {
+func triggerLocation(t *target, id trigger.ID) string {
 	return "/api/dustpan/v1/namespaces/" + url.PathEscape(t.ns.Name.String()) + "/units/" +
 		url.PathEscape(t.unit.UnitID) + "/triggers/" + url.PathEscape(string(id))
 }
@@ -314,7 +314,7 @@ func readFireInput(w http.ResponseWriter, r *http.Request) (trigger.FireInput, e
 
 // saveInput builds the input of the manager from the body. It checks each field
 // against an allowlist and refuses a value without changing it.
-func (h *Handler) saveInput(w http.ResponseWriter, r *http.Request, t target) (trigger.SaveInput, error) {
+func (h *Handler) saveInput(w http.ResponseWriter, r *http.Request, t *target) (trigger.SaveInput, error) {
 	raw, err := readRaw(w, r)
 	if err != nil {
 		return trigger.SaveInput{}, err
@@ -357,7 +357,7 @@ func (h *Handler) saveInput(w http.ResponseWriter, r *http.Request, t target) (t
 
 // toResponse maps a trigger to its wire shape. t is the target of the request:
 // its unit is the unit of the trigger.
-func (h *Handler) toResponse(r *http.Request, got *trigger.Trigger, t target) triggerResponse {
+func (h *Handler) toResponse(r *http.Request, got *trigger.Trigger, t *target) triggerResponse {
 	out := triggerResponse{
 		ID: string(got.ID), Namespace: got.Unit.Namespace.String(),
 		Unit: unitResponse{ID: t.unit.UnitID, Tool: toolLabel(t.unit.Tool), Name: t.unit.Name},

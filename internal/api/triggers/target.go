@@ -6,6 +6,7 @@ import (
 	"net/http"
 
 	"opendustpan.org/opendustpan/internal/ident"
+	"opendustpan.org/opendustpan/pkg/graph"
 	"opendustpan.org/opendustpan/pkg/identity"
 	coreinventory "opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -81,7 +82,7 @@ func (h *Handler) resolveUnit(r *http.Request) (target, error) {
 		return target{}, errNotFound
 	}
 
-	return target{ns: ns, unit: e, obj: obj.WithUnitID(e.UnitID), trigger: trigger.Trigger{}}, nil
+	return target{ns: ns, unit: e, obj: obj.WithUnitID(e.UnitID), trigger: noTrigger()}, nil
 }
 
 // resolveTrigger finds the unit of the path and the trigger of the path on it.
@@ -116,4 +117,13 @@ func (h *Handler) resolveTrigger(r *http.Request) (target, error) {
 	t.trigger = got
 
 	return t, nil
+}
+
+// noTrigger is the trigger of a target that has none.
+func noTrigger() trigger.Trigger {
+	return trigger.Trigger{
+		ID: "", Unit: graph.Unit{Namespace: "", Tool: "", ID: ""}, Kind: "",
+		Frequency: trigger.Frequency{Preset: "", Cron: ""}, Source: graph.Unit{Namespace: "", Tool: "", ID: ""},
+		Enabled: false, LastSaver: "",
+	}
 }

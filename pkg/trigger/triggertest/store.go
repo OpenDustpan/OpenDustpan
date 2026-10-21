@@ -242,7 +242,7 @@ func caseCycleAcrossTools(t *testing.T, h Harness, _ *Recorder) {
 	t.Helper()
 
 	fence := h.Namespace(t, string(acme))
-	tofu := graph.Unit{Namespace: acme, Tool: "opentofu", ID: "net"}
+	tofu := graph.Unit{Namespace: acme, Tool: toolOpenTofu, ID: "net"}
 	other := graph.Unit{Namespace: acme, Tool: "pulumi", ID: "app"}
 
 	must(
@@ -632,8 +632,14 @@ func casePutAuditEntry(t *testing.T, h Harness, _ *Recorder) {
 	noSubject := auditOf("trigger:put")
 	noSubject.Subject = ""
 
-	for name, e := range map[string]audit.Entry{"an entry of another namespace": foreign, "an entry with no subject": noSubject} {
-		wantErr(t, name, h.Store.Put(t.Context(), scheduleTrigger("s1", a), fence, e), audit.ErrInvalidEntry)
+	entries := []struct {
+		name  string
+		entry *audit.Entry
+	}{{"an entry of another namespace", &foreign}, {"an entry with no subject", &noSubject}}
+
+	for i := range entries {
+		wantErr(t, entries[i].name,
+			h.Store.Put(t.Context(), scheduleTrigger("s1", a), fence, *entries[i].entry), audit.ErrInvalidEntry)
 	}
 
 	wantErr(t, "delete with an entry of another namespace", h.Store.Delete(t.Context(), acme, "s1", fence, foreign),

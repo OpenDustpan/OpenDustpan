@@ -269,8 +269,10 @@ func classifyRule(err error) errorResponse {
 		}
 	case errors.Is(err, errBody):
 		return errorResponse{
-			Code: http.StatusBadRequest, ErrorCode: codeBodyInvalid, Message: refusal.Clean(err.Error(), maxMessageBytes),
-			Units: nil,
+			Code:      http.StatusBadRequest,
+			ErrorCode: codeBodyInvalid,
+			Message:   refusal.Clean(err.Error(), maxMessageBytes),
+			Units:     nil,
 		}
 	case errors.Is(err, trigger.ErrInvalid):
 		return errorResponse{
@@ -289,7 +291,12 @@ func classifyRule(err error) errorResponse {
 	}
 
 	if status, code, ok := classifyJob(err); ok {
-		return errorResponse{Code: status, ErrorCode: code, Message: refusal.Clean(err.Error(), maxMessageBytes), Units: nil}
+		return errorResponse{
+			Code:      status,
+			ErrorCode: code,
+			Message:   refusal.Clean(err.Error(), maxMessageBytes),
+			Units:     nil,
+		}
 	}
 
 	return errorResponse{Code: http.StatusInternalServerError, Message: "internal error", ErrorCode: "", Units: nil}

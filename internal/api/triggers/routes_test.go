@@ -49,7 +49,8 @@ func casesOf(t *testing.T) []routeCase {
 		}
 
 		body := ""
-		if (route.Method == http.MethodPost && !strings.HasSuffix(route.Path, "/fire")) || route.Method == http.MethodPut {
+		if (route.Method == http.MethodPost && !strings.HasSuffix(route.Path, "/fire")) ||
+			route.Method == http.MethodPut {
 			body = scheduleDoc
 		}
 
@@ -275,7 +276,8 @@ func TestKeyedWritesAreRefused(t *testing.T) {
 			header: map[string]string{"Idempotency-Key": "k-1"},
 		})
 
-		if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "request.idempotency-key-unsupported") {
+		if rec.Code != http.StatusBadRequest ||
+			!strings.Contains(rec.Body.String(), "request.idempotency-key-unsupported") {
 			t.Errorf("%s %s with a key = %d %s, want 400", rc.route.Method, rc.route.Path, rec.Code, rec.Body.String())
 		}
 

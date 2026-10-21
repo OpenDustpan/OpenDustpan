@@ -196,12 +196,12 @@ func (s *fakeStore) all() []trigger.Trigger {
 	return out
 }
 
-func (s *fakeStore) Get(_ context.Context, _ namespace.Name, id trigger.ID) (trigger.Trigger, error) {
+func (s *fakeStore) Get(_ context.Context, ns namespace.Name, id trigger.ID) (trigger.Trigger, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	t, ok := s.triggers[id]
-	if !ok {
+	if !ok || t.Unit.Namespace != ns {
 		return trigger.Trigger{}, trigger.ErrNotFound
 	}
 

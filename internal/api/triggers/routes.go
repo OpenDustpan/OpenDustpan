@@ -32,7 +32,7 @@ type TargetResolver func(r *http.Request) (target, error)
 
 // RouteHandler serves a route after the registration wrapper has authenticated
 // and authorized it.
-type RouteHandler func(w http.ResponseWriter, r *http.Request, p identity.Principal, t target)
+type RouteHandler func(w http.ResponseWriter, r *http.Request, p identity.Principal, t *target)
 
 // Route declares one endpoint: its ServeMux pattern, how it is protected, the
 // actions it needs, how to find its object, and how to serve it. NewHandler
@@ -189,13 +189,13 @@ func (h *Handler) enforce(route Route) http.HandlerFunc {
 			return
 		}
 
-		if err := h.authorizeRoute(ctx, r, route, p, t); err != nil {
+		if err := h.authorizeRoute(ctx, r, route, p, &t); err != nil {
 			h.writeError(ctx, w, err)
 
 			return
 		}
 
-		route.Serve(w, r, p, t)
+		route.Serve(w, r, p, &t)
 	}
 }
 
@@ -203,7 +203,7 @@ func (h *Handler) enforce(route Route) http.HandlerFunc {
 // a refused read check and an error that wraps identity.ErrDenied for a refused
 // action.
 func (h *Handler) authorizeRoute(
-	ctx context.Context, r *http.Request, route Route, p identity.Principal, t target,
+	ctx context.Context, r *http.Request, route Route, p identity.Principal, t *target,
 ) error {
 	nsRead := identity.ActionNamespaceRead
 

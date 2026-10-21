@@ -144,7 +144,7 @@ func TestSaverCheck(t *testing.T) {
 			name: "a trigger with no saver",
 			setup: func(*fakeResolver, *fakeAuthz, *fakeUnits) {
 			},
-			trigger: func() trigger.Trigger { tr := savedFollows(); tr.LastSaver = ""; return tr }(),
+			trigger:  func() trigger.Trigger { tr := savedFollows(); tr.LastSaver = ""; return tr }(),
 			wantSave: trigger.ErrInvalid, wantStart: trigger.ErrInvalid,
 		},
 	}

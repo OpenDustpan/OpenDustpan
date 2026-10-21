@@ -450,13 +450,13 @@ func caseStartLocation(t *testing.T, h Harness, rec *Recorder) {
 	must(t, "manual", err)
 
 	starts := rec.Starts()
-	if len(starts) != threeStarts {
-		t.Fatalf("starts = %+v, want %d", starts, threeStarts)
+	if len(starts) != three {
+		t.Fatalf("starts = %+v, want %d", starts, three)
 	}
 
 	for i := range starts {
 		want := noLocation()
-		if i == threeStarts-1 {
+		if i == len(starts)-1 {
 			want = loc
 		}
 
@@ -499,8 +499,8 @@ func caseSaverRevoked(t *testing.T, h Harness, rec *Recorder) {
 	}
 
 	refusals := h.Doubles.Refusals(acme)
-	if len(refusals) != 3 {
-		t.Fatalf("audit entries of refusals = %d, want 3", len(refusals))
+	if len(refusals) != three {
+		t.Fatalf("audit entries of refusals = %d, want %d", len(refusals), three)
 	}
 
 	subjects := []string{identity.NamespaceServiceSubject(acme), "user:grace", identity.NamespaceServiceSubject(acme)}
@@ -512,7 +512,8 @@ func caseSaverRevoked(t *testing.T, h Harness, rec *Recorder) {
 			changes[ch.Key] = ch.New
 		}
 
-		if e.Outcome != audit.OutcomeDenied || e.Subject != subjects[i] || e.Action != string(identity.ActionUnitRunPlan) ||
+		if e.Outcome != audit.OutcomeDenied || e.Subject != subjects[i] ||
+			e.Action != string(identity.ActionUnitRunPlan) ||
 			changes["trigger-saver"] != ada ||
 			changes["trigger"] == "" {
 			t.Errorf(

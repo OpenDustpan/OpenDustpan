@@ -548,8 +548,26 @@ func emptySpec() job.Spec {
 // noJob returns the job that a lookup answers when it finds none.
 func noJob() job.Job {
 	return job.Job{
-		ID: "", Spec: emptySpec(), State: "", Wait: "", Reason: "", Phases: nil, Current: 0, StartedBy: "", Source: "",
-		Agent: "", AgentMode: "", BreakGlass: nil, Trigger: nil, Delivery: nil, Closed: nil,
-		Verification: job.VerificationNone, IdempotencyKey: "", RequestHash: "", Version: 0, CreatedAt: time.Time{}, UpdatedAt: time.Time{},
+		ID:             "",
+		Spec:           emptySpec(),
+		State:          "",
+		Wait:           "",
+		Reason:         "",
+		Phases:         nil,
+		Current:        0,
+		StartedBy:      "",
+		Source:         "",
+		Agent:          "",
+		AgentMode:      "",
+		BreakGlass:     nil,
+		Trigger:        nil,
+		Delivery:       nil,
+		Closed:         nil,
+		Verification:   job.VerificationNone,
+		IdempotencyKey: "",
+		RequestHash:    "",
+		Version:        0,
+		CreatedAt:      time.Time{},
+		UpdatedAt:      time.Time{},
 	}
 }

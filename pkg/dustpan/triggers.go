@@ -12,6 +12,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/graph"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/inventory"
+	"opendustpan.org/opendustpan/pkg/job"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/trigger"
@@ -27,16 +28,32 @@ func WithTriggerStore(st trigger.Store) Option {
 	return func(o *settings) { o.triggerStore = st }
 }
 
-// newTriggersHandler builds the trigger API, or returns nil when the server
-// has no trigger store or lacks a port that the triggers need: the job service,
-// the inventory, the principal records and the audit store. Fail closed: a
-// server without them saves no trigger that could never start.
-func newTriggersHandler(svc services, cfg *settings, onFailure func()) (http.Handler, error) {
+// triggerPorts are the ports of the server that the triggers need besides the
+// trigger store.
+type triggerPorts struct {
+	records principal.RecordStore
+	entries audit.Store
+}
+
+// triggerPortsOf returns the ports that the triggers need, and false when the
+// server lacks one. Fail closed: a server without them saves no trigger that
+// could never start.
+func triggerPortsOf(svc services, cfg *settings) (triggerPorts, bool) {
 	records, hasRecords := cfg.namespaceStore.(principal.RecordStore)
 	entries, hasAudit := cfg.namespaceStore.(audit.Store)
 
-	if cfg.triggerStore == nil || !hasRecords || !hasAudit || cfg.inventoryReader == nil || svc.namespaces == nil ||
-		cfg.authorizer == nil {
+	ok := cfg.triggerStore != nil && hasRecords && hasAudit && cfg.inventoryReader != nil &&
+		svc.namespaces != nil && cfg.authorizer != nil
+
+	return triggerPorts{records: records, entries: entries}, ok
+}
+
+// newTriggersHandler builds the trigger API, or returns nil when the server
+// has no trigger store or lacks a port that the triggers need: the job service,
+// the inventory, the principal records and the audit store.
+func newTriggersHandler(svc services, cfg *settings, onFailure func()) (http.Handler, error) {
+	ports, ok := triggerPortsOf(svc, cfg)
+	if !ok {
 		return nil, nil //nolint:nilnil // No trigger API: the server lacks a port that it needs.
 	}
 
@@ -49,6 +66,35 @@ func newTriggersHandler(svc services, cfg *settings, onFailure func()) (http.Han
 		return nil, nil //nolint:nilnil // No trigger API: there is no job service to start a plan.
 	}
 
+	manager, err := newTriggerManager(svc, cfg, &ports, jobs)
+	if err != nil {
+		return nil, err
+	}
+
+	handler, err := triggersapi.NewHandler(triggersapi.Config{
+		Namespaces:     svc.namespaces,
+		Units:          cfg.inventoryReader,
+		Store:          cfg.triggerStore,
+		Manager:        manager,
+		Authenticator:  cfg.authenticator,
+		Authorizer:     cfg.authorizer,
+		Audit:          ports.entries,
+		OnAuditFailure: onFailure,
+		DenialLimiter:  cfg.denialLimiter,
+		Sessions:       cfg.sessionCookies,
+		Logger:         cfg.logger,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("triggers api: %w", err)
+	}
+
+	return handler, nil
+}
+
+// newTriggerManager builds the manager of triggers over the ports of the
+// server and the job service.
+func newTriggerManager(svc services, cfg *settings, ports *triggerPorts, jobs job.Starter,
+) (*trigger.Manager, error) {
 	units := triggerUnits{reader: cfg.inventoryReader}
 
 	starter, err := jobstarter.New(jobs, units)
@@ -57,7 +103,7 @@ func newTriggersHandler(svc services, cfg *settings, onFailure func()) (http.Han
 	}
 
 	savers, err := trigger.NewSaverCheck(trigger.SaverCheckConfig{
-		Resolver: saverRecords{records: records}, Authorizer: cfg.authorizer, Units: units,
+		Resolver: saverRecords{records: ports.records}, Authorizer: cfg.authorizer, Units: units,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("trigger saver check: %w", err)
@@ -66,8 +112,8 @@ func newTriggersHandler(svc services, cfg *settings, onFailure func()) (http.Han
 	fences := jobFences{namespaces: svc.namespaces}
 
 	dispatcher, err := trigger.NewDispatcher(trigger.DispatcherConfig{
-		Store: cfg.triggerStore, Starter: starter, Savers: savers, Units: units, Audit: entries, Fences: fences,
-		Versions: nil, Now: cfg.now,
+		Store: cfg.triggerStore, Starter: starter, Savers: savers, Units: units, Audit: ports.entries,
+		Fences: fences, Versions: nil, Now: cfg.now,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("trigger dispatcher: %w", err)
@@ -81,24 +127,7 @@ func newTriggersHandler(svc services, cfg *settings, onFailure func()) (http.Han
 		return nil, fmt.Errorf("trigger manager: %w", err)
 	}
 
-	handler, err := triggersapi.NewHandler(triggersapi.Config{
-		Namespaces:     svc.namespaces,
-		Units:          cfg.inventoryReader,
-		Store:          cfg.triggerStore,
-		Manager:        manager,
-		Authenticator:  cfg.authenticator,
-		Authorizer:     cfg.authorizer,
-		Audit:          entries,
-		OnAuditFailure: onFailure,
-		DenialLimiter:  cfg.denialLimiter,
-		Sessions:       cfg.sessionCookies,
-		Logger:         cfg.logger,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("triggers api: %w", err)
-	}
-
-	return handler, nil
+	return manager, nil
 }
 
 // triggerUnits is the trigger.Units over the inventory.

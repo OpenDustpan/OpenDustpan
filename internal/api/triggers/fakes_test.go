@@ -196,7 +196,9 @@ func (s *fakeStore) List(_ context.Context, unit graph.Unit) ([]trigger.Trigger,
 	return out, nil
 }
 
-func (s *fakeStore) Followers(context.Context, graph.Unit) ([]trigger.Trigger, error) { return nil, nil }
+func (s *fakeStore) Followers(context.Context, graph.Unit) ([]trigger.Trigger, error) {
+	return nil, nil
+}
 
 func (s *fakeStore) Delete(_ context.Context, _ namespace.Name, id trigger.ID, _ namespace.Fence, _ audit.Entry,
 ) error {

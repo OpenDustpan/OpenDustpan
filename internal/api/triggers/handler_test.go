@@ -79,13 +79,15 @@ func TestCreateEachKind(t *testing.T) {
 			func(t *testing.T, a answer) {
 				t.Helper()
 
-				if a.Kind != "schedule" || a.Frequency == nil || a.Frequency.Preset != "every-6-hours" || a.Source != nil {
+				if a.Kind != "schedule" || a.Frequency == nil || a.Frequency.Preset != "every-6-hours" ||
+					a.Source != nil {
 					t.Errorf("answer = %+v", a)
 				}
 			},
 		},
 		{
-			"a schedule trigger with a cron expression", `{"kind":"schedule","frequency":{"cron":"30 4 * * 1-5"},"enabled":false}`,
+			"a schedule trigger with a cron expression",
+			`{"kind":"schedule","frequency":{"cron":"30 4 * * 1-5"},"enabled":false}`,
 			func(t *testing.T, a answer) {
 				t.Helper()
 
@@ -162,25 +164,115 @@ func TestCreateRefusals(t *testing.T) {
 		{"a body that is not JSON", `kind=schedule`, nil, http.StatusBadRequest, "request.body-invalid"},
 		{"an array", `[]`, nil, http.StatusBadRequest, "request.body-invalid"},
 		{"data after the document", scheduleDoc + ` {}`, nil, http.StatusBadRequest, "request.body-invalid"},
-		{"a body above the limit", `{"kind":"schedule","x":"` + strings.Repeat("a", 17<<10) + `"}`, nil, http.StatusBadRequest, "request.body-invalid"},
-		{"the last saver in the body", `{"kind":"schedule","frequency":{"preset":"daily"},"lastSaver":"user:root"}`, nil, http.StatusBadRequest, "request.body-invalid"},
-		{"the unit in the body", `{"kind":"schedule","frequency":{"preset":"daily"},"unit":{"id":"` + appID + `"}}`, nil, http.StatusBadRequest, "request.body-invalid"},
-		{"an unknown field of the frequency", `{"kind":"schedule","frequency":{"preset":"daily","zone":"x"}}`, nil, http.StatusBadRequest, "request.body-invalid"},
-		{"an enabled flag that is not a flag", `{"kind":"schedule","frequency":{"preset":"daily"},"enabled":"yes"}`, nil, http.StatusBadRequest, "request.body-invalid"},
+		{
+			"a body above the limit",
+			`{"kind":"schedule","x":"` + strings.Repeat("a", 17<<10) + `"}`,
+			nil,
+			http.StatusBadRequest,
+			"request.body-invalid",
+		},
+		{
+			"the last saver in the body",
+			`{"kind":"schedule","frequency":{"preset":"daily"},"lastSaver":"user:root"}`,
+			nil,
+			http.StatusBadRequest,
+			"request.body-invalid",
+		},
+		{
+			"the unit in the body",
+			`{"kind":"schedule","frequency":{"preset":"daily"},"unit":{"id":"` + appID + `"}}`,
+			nil,
+			http.StatusBadRequest,
+			"request.body-invalid",
+		},
+		{
+			"an unknown field of the frequency",
+			`{"kind":"schedule","frequency":{"preset":"daily","zone":"x"}}`,
+			nil,
+			http.StatusBadRequest,
+			"request.body-invalid",
+		},
+		{
+			"an enabled flag that is not a flag",
+			`{"kind":"schedule","frequency":{"preset":"daily"},"enabled":"yes"}`,
+			nil,
+			http.StatusBadRequest,
+			"request.body-invalid",
+		},
 		{"no kind", `{"frequency":{"preset":"daily"}}`, nil, http.StatusBadRequest, "trigger.invalid"},
 		{"an unknown kind", `{"kind":"manual"}`, nil, http.StatusBadRequest, "trigger.invalid"},
-		{"a kind in other case", `{"kind":"Schedule","frequency":{"preset":"daily"}}`, nil, http.StatusBadRequest, "trigger.invalid"},
+		{
+			"a kind in other case",
+			`{"kind":"Schedule","frequency":{"preset":"daily"}}`,
+			nil,
+			http.StatusBadRequest,
+			"trigger.invalid",
+		},
 		{"a schedule with no frequency", `{"kind":"schedule"}`, nil, http.StatusBadRequest, "trigger.invalid"},
-		{"a schedule with a preset and a cron", `{"kind":"schedule","frequency":{"preset":"daily","cron":"0 0 * * *"}}`, nil, http.StatusBadRequest, "trigger.invalid"},
-		{"a schedule with an unknown preset", `{"kind":"schedule","frequency":{"preset":"yearly"}}`, nil, http.StatusBadRequest, "trigger.invalid"},
-		{"a schedule that runs every minute", `{"kind":"schedule","frequency":{"cron":"* * * * *"}}`, nil, http.StatusBadRequest, "trigger.invalid"},
-		{"a cron with a line break", "{\"kind\":\"schedule\",\"frequency\":{\"cron\":\"0 0 * * *\\n\"}}", nil, http.StatusBadRequest, "trigger.invalid"},
+		{
+			"a schedule with a preset and a cron",
+			`{"kind":"schedule","frequency":{"preset":"daily","cron":"0 0 * * *"}}`,
+			nil,
+			http.StatusBadRequest,
+			"trigger.invalid",
+		},
+		{
+			"a schedule with an unknown preset",
+			`{"kind":"schedule","frequency":{"preset":"yearly"}}`,
+			nil,
+			http.StatusBadRequest,
+			"trigger.invalid",
+		},
+		{
+			"a schedule that runs every minute",
+			`{"kind":"schedule","frequency":{"cron":"* * * * *"}}`,
+			nil,
+			http.StatusBadRequest,
+			"trigger.invalid",
+		},
+		{
+			"a cron with a line break",
+			"{\"kind\":\"schedule\",\"frequency\":{\"cron\":\"0 0 * * *\\n\"}}",
+			nil,
+			http.StatusBadRequest,
+			"trigger.invalid",
+		},
 		{"a follows trigger with no source", `{"kind":"follows"}`, nil, http.StatusBadRequest, "trigger.invalid"},
-		{"a follows trigger with an empty source", `{"kind":"follows","source":{"id":""}}`, nil, http.StatusBadRequest, "trigger.invalid"},
-		{"a schedule trigger with a source", `{"kind":"schedule","frequency":{"preset":"daily"},"source":{"id":"` + appID + `"}}`, nil, http.StatusBadRequest, "trigger.invalid"},
-		{"a review trigger with a frequency", `{"kind":"review-request-push","frequency":{"preset":"daily"}}`, nil, http.StatusBadRequest, "trigger.invalid"},
-		{"a unit that follows itself", `{"kind":"follows","source":{"id":"` + netID + `"}}`, nil, http.StatusConflict, "trigger.cycle"},
-		{"a source in another namespace", `{"kind":"follows","source":{"id":"` + otherID + `"}}`, nil, http.StatusForbidden, ""},
+		{
+			"a follows trigger with an empty source",
+			`{"kind":"follows","source":{"id":""}}`,
+			nil,
+			http.StatusBadRequest,
+			"trigger.invalid",
+		},
+		{
+			"a schedule trigger with a source",
+			`{"kind":"schedule","frequency":{"preset":"daily"},"source":{"id":"` + appID + `"}}`,
+			nil,
+			http.StatusBadRequest,
+			"trigger.invalid",
+		},
+		{
+			"a review trigger with a frequency",
+			`{"kind":"review-request-push","frequency":{"preset":"daily"}}`,
+			nil,
+			http.StatusBadRequest,
+			"trigger.invalid",
+		},
+		{
+			"a unit that follows itself",
+			`{"kind":"follows","source":{"id":"` + netID + `"}}`,
+			nil,
+			http.StatusConflict,
+			"trigger.cycle",
+		},
+		{
+			"a source in another namespace",
+			`{"kind":"follows","source":{"id":"` + otherID + `"}}`,
+			nil,
+			http.StatusForbidden,
+			"",
+		},
 		{"a source that does not exist", `{"kind":"follows","source":{"id":"ws-none"}}`, nil, http.StatusForbidden, ""},
 		{
 			"a last saver that a start would refuse", scheduleDoc,
@@ -202,7 +294,11 @@ func TestCreateRefusals(t *testing.T) {
 				t.Fatalf("status = %d %s, want %d", code, body, tt.status)
 			}
 
-			if got := decode[errAnswer](t, body); got.ErrorCode != tt.errorCode || got.Code != tt.status || got.Message == "" {
+			if got := decode[errAnswer](
+				t,
+				body,
+			); got.ErrorCode != tt.errorCode || got.Code != tt.status ||
+				got.Message == "" {
 				t.Errorf("answer = %+v, want code %q", got, tt.errorCode)
 			}
 
@@ -261,8 +357,18 @@ func TestReplaceGetListDelete(t *testing.T) {
 	path := basePath + "/trg-1"
 
 	// Replace.
-	code, body, _ := do(t, r, http.MethodPut, path, `{"kind":"schedule","frequency":{"cron":"0 6 * * *"},"enabled":false}`)
-	if a := decode[answer](t, body); code != http.StatusOK || a.Enabled || a.Frequency == nil || a.Frequency.Cron != "0 6 * * *" {
+	code, body, _ := do(
+		t,
+		r,
+		http.MethodPut,
+		path,
+		`{"kind":"schedule","frequency":{"cron":"0 6 * * *"},"enabled":false}`,
+	)
+	if a := decode[answer](
+		t,
+		body,
+	); code != http.StatusOK || a.Enabled || a.Frequency == nil ||
+		a.Frequency.Cron != "0 6 * * *" {
 		t.Fatalf("replace = %d %s", code, body)
 	}
 
@@ -358,11 +464,39 @@ func TestFire(t *testing.T) {
 			`{"location":{"repository":"acme/infra","ref":"main","directory":"../net"}}`, nil, http.StatusBadRequest,
 			"trigger.invalid", "",
 		},
-		{"an unknown field of the location", `{"location":{"repository":"a","ref":"b","path":"c"}}`, nil, http.StatusBadRequest, "request.body-invalid", ""},
-		{"a second fire with another request", ``, func(r *rig) { r.disp.err = job.ErrKeyConflict }, http.StatusConflict, "trigger.fire-conflict", ""},
-		{"an unknown field", `{"reason":"x","executor":"write-back"}`, nil, http.StatusBadRequest, "request.body-invalid", ""},
+		{
+			"an unknown field of the location",
+			`{"location":{"repository":"a","ref":"b","path":"c"}}`,
+			nil,
+			http.StatusBadRequest,
+			"request.body-invalid",
+			"",
+		},
+		{
+			"a second fire with another request",
+			``,
+			func(r *rig) { r.disp.err = job.ErrKeyConflict },
+			http.StatusConflict,
+			"trigger.fire-conflict",
+			"",
+		},
+		{
+			"an unknown field",
+			`{"reason":"x","executor":"write-back"}`,
+			nil,
+			http.StatusBadRequest,
+			"request.body-invalid",
+			"",
+		},
 		{"data after the document", `{} {}`, nil, http.StatusBadRequest, "request.body-invalid", ""},
-		{"a reason that is too long", `{"reason":"` + strings.Repeat("x", 201) + `"}`, nil, http.StatusBadRequest, "trigger.invalid", ""},
+		{
+			"a reason that is too long",
+			`{"reason":"` + strings.Repeat("x", 201) + `"}`,
+			nil,
+			http.StatusBadRequest,
+			"trigger.invalid",
+			"",
+		},
 		{
 			"a trigger that is off", ``, func(r *rig) { r.disp.err = trigger.ErrDisabled }, http.StatusConflict,
 			"trigger.disabled", "",
@@ -373,11 +507,39 @@ func TestFire(t *testing.T) {
 		},
 		{"a freeze", ``, func(r *rig) { r.disp.err = job.ErrFrozen }, http.StatusConflict, "job.frozen", ""},
 		{"a limit", ``, func(r *rig) { r.disp.err = job.ErrLimit }, http.StatusTooManyRequests, "job.limit", ""},
-		{"a policy", ``, func(r *rig) { r.disp.err = job.ErrPolicyDenied }, http.StatusForbidden, "job.policy-denied", ""},
-		{"an enforced gate", ``, func(r *rig) { r.disp.err = job.ErrGateEnforced }, http.StatusForbidden, "job.gate-enforced", ""},
-		{"an unsupported operation", ``, func(r *rig) { r.disp.err = job.ErrUnsupported }, http.StatusUnprocessableEntity, "job.unsupported", ""},
+		{
+			"a policy",
+			``,
+			func(r *rig) { r.disp.err = job.ErrPolicyDenied },
+			http.StatusForbidden,
+			"job.policy-denied",
+			"",
+		},
+		{
+			"an enforced gate",
+			``,
+			func(r *rig) { r.disp.err = job.ErrGateEnforced },
+			http.StatusForbidden,
+			"job.gate-enforced",
+			"",
+		},
+		{
+			"an unsupported operation",
+			``,
+			func(r *rig) { r.disp.err = job.ErrUnsupported },
+			http.StatusUnprocessableEntity,
+			"job.unsupported",
+			"",
+		},
 		{"a denied action", ``, func(r *rig) { r.disp.err = identity.ErrDenied }, http.StatusForbidden, "", ""},
-		{"a failure of the server", ``, func(r *rig) { r.disp.err = errors.New("database is down: password=x") }, http.StatusInternalServerError, "", ""},
+		{
+			"a failure of the server",
+			``,
+			func(r *rig) { r.disp.err = errors.New("database is down: password=x") },
+			http.StatusInternalServerError,
+			"",
+			"",
+		},
 	}
 
 	for _, tt := range tests {
@@ -428,7 +590,10 @@ func TestFire(t *testing.T) {
 				t.Errorf("dispatcher calls = %+v by %v", r.disp.reqs, r.disp.subjs)
 			}
 
-			if hasLocation := strings.Contains(tt.body, `"repository"`); hasLocation != !r.disp.reqs[0].Location.IsZero() {
+			if hasLocation := strings.Contains(
+				tt.body,
+				`"repository"`,
+			); hasLocation != !r.disp.reqs[0].Location.IsZero() {
 				t.Errorf("location = %+v for the body %q", r.disp.reqs[0].Location, tt.body)
 			}
 		})

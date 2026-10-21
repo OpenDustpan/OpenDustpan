@@ -166,11 +166,14 @@ const (
 	otherZoneOffset = 3600
 	// concurrentRounds is the number of rounds of the case with two saves at once.
 	concurrentRounds = 50
-	// threeStarts is the number of starts in the cases with three.
-	threeStarts = 3
+	// three is the count in the cases with three starts or three refusals.
+	three = 3
 	// oneDay is the distance of two slots of a daily schedule.
 	oneDay = 24 * time.Hour
 )
+
+// toolOpenTofu is the tool of the units of the fixtures.
+const toolOpenTofu = "opentofu"
 
 // The namespace of the fixtures, and the epoch of at.
 const (
@@ -189,7 +192,7 @@ func at(n int) time.Time {
 
 // unit returns a valid unit of namespace ns with ID id.
 func unit(ns namespace.Name, id string) graph.Unit {
-	return graph.Unit{Namespace: ns, Tool: "opentofu", ID: id}
+	return graph.Unit{Namespace: ns, Tool: toolOpenTofu, ID: id}
 }
 
 // stale returns a fence that does not match the one the store holds.

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"time"
 	"unicode/utf8"
 
@@ -20,6 +21,10 @@ const IDPrefix = "trg-"
 
 // MaxFireReasonLen is the most characters in the reason of a manual fire.
 const MaxFireReasonLen = 200
+
+// changeTrigger is the key of the change that names the trigger in an audit
+// entry.
+const changeTrigger = "trigger"
 
 // errNoUnit is the one text for a unit that does not exist and a unit that the
 // caller may not change, so that the answer is no oracle for the names of units.
@@ -137,7 +142,7 @@ func NewManager(cfg ManagerConfig) (*Manager, error) {
 //   - the errors of Store.Put.
 func (m *Manager) Create(ctx context.Context, caller identity.Principal, info RequestInfo, in SaveInput,
 ) (Trigger, error) {
-	return m.save(ctx, caller, info, m.newID(), in, false)
+	return m.save(ctx, &saveCall{caller: caller, info: info, id: m.newID(), in: in, reason: "save trigger"})
 }
 
 // SaverOK reports whether the last saver of t still holds the actions of a
@@ -147,89 +152,26 @@ func (m *Manager) SaverOK(ctx context.Context, t *Trigger) bool {
 	return m.savers.CheckStart(ctx, *t) == nil
 }
 
-// Replace saves the trigger id of the namespace ns again. The unit and the kind
-// do not change. The caller becomes the last saver, and so takes over the
-// trigger. It returns the errors of Create, and ErrNotFound for an unknown
-// trigger.
+// Replace saves the trigger id of the namespace in.Namespace again. The unit
+// and the kind do not change. The caller becomes the last saver, and so takes
+// over the trigger. It returns the errors of Create, and ErrNotFound for an
+// unknown trigger.
 func (m *Manager) Replace(
-	ctx context.Context, caller identity.Principal, info RequestInfo, ns namespace.Name, id ID, in SaveInput,
+	ctx context.Context, caller identity.Principal, info RequestInfo, id ID, in SaveInput,
 ) (Trigger, error) {
-	if in.Namespace != ns {
-		return Trigger{}, fmt.Errorf("%w: the body names another namespace than the path", ErrInvalid)
-	}
-
-	old, err := m.store.Get(ctx, ns, id)
+	old, err := m.store.Get(ctx, in.Namespace, id)
 	if err != nil {
 		return Trigger{}, fmt.Errorf("trigger %s: %w", quote(string(id)), err)
 	}
 
 	// The caller needs the actions on the unit that the trigger has, whatever
 	// the body names. A body for another unit or kind fails below.
-	if _, err := m.authorizeUnit(ctx, caller, old.Unit, SettingsAction, StartAction); err != nil {
-		return Trigger{}, err
-	}
-
-	return m.save(ctx, caller, info, id, in, true)
-}
-
-// save is Create and Replace.
-func (m *Manager) save(
-	ctx context.Context, caller identity.Principal, info RequestInfo, id ID, in SaveInput, replace bool,
-) (Trigger, error) {
-	if err := checkCaller(caller); err != nil {
-		return Trigger{}, err
-	}
-
-	unit, obj, err := m.findUnit(ctx, in.Namespace, in.UnitID)
+	_, err = m.authorizeUnit(ctx, caller, old.Unit, SettingsAction, StartAction)
 	if err != nil {
 		return Trigger{}, err
 	}
 
-	if err := m.authorize(ctx, caller, obj, SettingsAction, StartAction); err != nil {
-		return Trigger{}, err
-	}
-
-	t := Trigger{
-		ID: id, Unit: unit, Kind: in.Kind, Frequency: in.Frequency,
-		Source: graph.Unit{Namespace: "", Tool: "", ID: ""}, Enabled: in.Enabled, LastSaver: caller.Subject,
-	}
-
-	if in.SourceID != "" {
-		source, srcObj, err := m.findUnit(ctx, in.Namespace, in.SourceID)
-		if err != nil {
-			return Trigger{}, err
-		}
-
-		// A person learns when a unit applies only with the right to read it.
-		if err := m.authorize(ctx, caller, srcObj, identity.ActionUnitRead); err != nil {
-			return Trigger{}, err
-		}
-
-		t.Source = source
-	}
-
-	if err := t.Validate(); err != nil {
-		return Trigger{}, m.named(ctx, err)
-	}
-
-	// The saver must be able to start the trigger later: a principal with
-	// a stored record that holds the actions now. A caller that fails this, for
-	// example a bootstrap token with no record, would save a trigger that
-	// never starts.
-	if err := m.savers.CheckSave(ctx, t); err != nil {
-		return Trigger{}, err
-	}
-
-	fence, err := m.fences.Fence(ctx, unit.Namespace)
-	if err != nil {
-		return Trigger{}, fmt.Errorf("fence of %s: %w", unit.Namespace, err)
-	}
-
-	if err := m.store.Put(ctx, t, fence, m.entry(caller, info, &t, obj, replace)); err != nil {
-		return Trigger{}, m.named(ctx, fmt.Errorf("save trigger %s: %w", t.ID, err))
-	}
-
-	return t, nil
+	return m.save(ctx, &saveCall{caller: caller, info: info, id: id, in: in, reason: "replace trigger"})
 }
 
 // Get returns the trigger id of the namespace ns, and the reference of its
@@ -260,7 +202,8 @@ func (m *Manager) List(ctx context.Context, caller identity.Principal, ns namesp
 		return nil, notFound(err)
 	}
 
-	if _, err := m.readable(ctx, caller, unit); err != nil {
+	_, err = m.readable(ctx, caller, unit)
+	if err != nil {
 		return nil, err
 	}
 
@@ -296,11 +239,10 @@ func (m *Manager) Delete(
 		return fmt.Errorf("fence of %s: %w", ns, err)
 	}
 
-	e := m.entry(caller, info, &t, obj, false)
-	e.Reason = "delete trigger"
+	e := m.entry(caller, info, &t, obj, "delete trigger")
 	e.Changes = []audit.Change{
-		{Key: "trigger", Old: ptr(string(t.ID)), New: "", Layer: "", TakesEffect: ""},
-		{Key: "kind", Old: ptr(string(t.Kind)), New: "", Layer: "", TakesEffect: ""},
+		{Key: changeTrigger, Old: new(string(t.ID)), New: "", Layer: "", TakesEffect: ""},
+		{Key: "kind", Old: new(string(t.Kind)), New: "", Layer: "", TakesEffect: ""},
 	}
 
 	if err := m.store.Delete(ctx, ns, id, fence, e); err != nil {
@@ -355,7 +297,8 @@ func (m *Manager) Fire(
 		return "", fmt.Errorf("trigger %s: %w", quote(string(id)), err)
 	}
 
-	if _, err := m.readable(ctx, caller, t.Unit); err != nil {
+	_, err = m.readable(ctx, caller, t.Unit)
+	if err != nil {
 		return "", err
 	}
 
@@ -365,10 +308,97 @@ func (m *Manager) Fire(
 		Namespace: ns, Trigger: id, Now: m.now(), Reason: reason, Location: in.Location,
 	})
 	if err != nil {
-		return "", err //nolint:wrapcheck // The dispatcher wraps its errors with the trigger.
+		return "", err
 	}
 
 	return jobID, nil
+}
+
+// saveCall is what Create and Replace give to save.
+type saveCall struct {
+	caller identity.Principal
+	info   RequestInfo
+	id     ID
+	in     SaveInput
+	reason string
+}
+
+// save is Create and Replace.
+func (m *Manager) save(ctx context.Context, c *saveCall) (Trigger, error) {
+	err := checkCaller(c.caller)
+	if err != nil {
+		return Trigger{}, err
+	}
+
+	t, obj, err := m.build(ctx, c)
+	if err != nil {
+		return Trigger{}, err
+	}
+
+	err = t.Validate()
+	if err != nil {
+		return Trigger{}, m.named(ctx, err)
+	}
+
+	// The saver must be able to start the trigger later: a principal with
+	// a stored record that holds the actions now. A caller that fails this, for
+	// example a bootstrap token with no record, would save a trigger that
+	// never starts.
+	err = m.savers.CheckSave(ctx, t)
+	if err != nil {
+		return Trigger{}, err
+	}
+
+	fence, err := m.fences.Fence(ctx, t.Unit.Namespace)
+	if err != nil {
+		return Trigger{}, fmt.Errorf("fence of %s: %w", t.Unit.Namespace, err)
+	}
+
+	err = m.store.Put(ctx, t, fence, m.entry(c.caller, c.info, &t, obj, c.reason))
+	if err != nil {
+		return Trigger{}, m.named(ctx, fmt.Errorf("save trigger %s: %w", t.ID, err))
+	}
+
+	return t, nil
+}
+
+// build finds the units of c and checks the actions of the caller on them. It
+// returns the trigger that the call saves, not yet validated, and the reference
+// of its unit.
+func (m *Manager) build(ctx context.Context, c *saveCall) (Trigger, identity.Object, error) {
+	unit, obj, err := m.findUnit(ctx, c.in.Namespace, c.in.UnitID)
+	if err != nil {
+		return Trigger{}, identity.Object{}, err
+	}
+
+	err = m.authorize(ctx, c.caller, obj, SettingsAction, StartAction)
+	if err != nil {
+		return Trigger{}, identity.Object{}, err
+	}
+
+	t := Trigger{
+		ID: c.id, Unit: unit, Kind: c.in.Kind, Frequency: c.in.Frequency,
+		Source: graph.Unit{Namespace: "", Tool: "", ID: ""}, Enabled: c.in.Enabled, LastSaver: c.caller.Subject,
+	}
+
+	if c.in.SourceID == "" {
+		return t, obj, nil
+	}
+
+	source, srcObj, err := m.findUnit(ctx, c.in.Namespace, c.in.SourceID)
+	if err != nil {
+		return Trigger{}, identity.Object{}, err
+	}
+
+	// A person learns when a unit applies only with the right to read it.
+	err = m.authorize(ctx, c.caller, srcObj, identity.ActionUnitRead)
+	if err != nil {
+		return Trigger{}, identity.Object{}, err
+	}
+
+	t.Source = source
+
+	return t, obj, nil
 }
 
 // checkCaller refuses a caller that cannot change or fire a trigger by kind of
@@ -512,12 +542,12 @@ func (m *Manager) named(ctx context.Context, err error) error {
 
 // entry returns the audit entry of a save of t by caller.
 func (m *Manager) entry(
-	caller identity.Principal, info RequestInfo, t *Trigger, obj identity.Object, replace bool,
+	caller identity.Principal, info RequestInfo, t *Trigger, obj identity.Object, reason string,
 ) audit.Entry {
 	changes := []audit.Change{
-		{Key: "trigger", Old: nil, New: string(t.ID), Layer: "", TakesEffect: ""},
+		{Key: changeTrigger, Old: nil, New: string(t.ID), Layer: "", TakesEffect: ""},
 		{Key: "kind", Old: nil, New: string(t.Kind), Layer: "", TakesEffect: ""},
-		{Key: "enabled", Old: nil, New: fmt.Sprint(t.Enabled), Layer: "", TakesEffect: ""},
+		{Key: "enabled", Old: nil, New: strconv.FormatBool(t.Enabled), Layer: "", TakesEffect: ""},
 	}
 
 	if t.Kind == KindSchedule {
@@ -531,11 +561,6 @@ func (m *Manager) entry(
 
 	if t.Kind == KindFollows {
 		changes = append(changes, audit.Change{Key: "source", Old: nil, New: t.Source.ID, Layer: "", TakesEffect: ""})
-	}
-
-	reason := "save trigger"
-	if replace {
-		reason = "replace trigger"
 	}
 
 	channel := info.Channel
@@ -552,5 +577,3 @@ func (m *Manager) entry(
 		Reason: reason,
 	}
 }
-
-func ptr[T any](v T) *T { return &v }

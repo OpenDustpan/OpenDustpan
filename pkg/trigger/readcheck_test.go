@@ -98,7 +98,9 @@ func TestOutputReadCheck(t *testing.T) {
 		},
 		{
 			"the authorizer fails",
-			func(_ *fakeResolver, a *fakeAuthz, _ *fakeStore) { a.fail[ada+" "+string(read)+" a"] = errors.New("down") },
+			func(_ *fakeResolver, a *fakeAuthz, _ *fakeStore) {
+				a.fail[ada+" "+string(read)+" a"] = errors.New("down")
+			},
 			base, false,
 		},
 		{
