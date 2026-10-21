@@ -1,0 +1,270 @@
+package postgres
+
+import (
+	"errors"
+	"fmt"
+	"strings"
+	"testing"
+	"time"
+
+	"opendustpan.org/opendustpan/pkg/backup"
+	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/secret"
+)
+
+// seedItemKey makes the namespace acme and one item key in it, and returns the
+// reference of the key.
+func seedItemKey(t *testing.T, s *Store) secret.ItemRef {
+	t.Helper()
+
+	ns := namespace.Namespace{
+		ID: namespace.NewID(), CreatedAt: time.UnixMilli(1_700_000_000_000).UTC(), Name: "acme", HomeRegion: "eu-west",
+		FailoverVersion: 1, Overrides: namespace.Overrides{Forced: false, Unlocked: false},
+	}
+	if err := s.CreateNamespace(t.Context(), ns); err != nil {
+		t.Fatalf("create namespace: %v", err)
+	}
+
+	scope, err := secret.NewScope("acme", "unit-1")
+	if err != nil {
+		t.Fatalf("scope: %v", err)
+	}
+
+	ref, err := secret.NewItemRef(scope, secret.ItemKindPlan, "pln-1")
+	if err != nil {
+		t.Fatalf("item ref: %v", err)
+	}
+
+	k := secret.ItemKey{
+		CreatedAt: time.UnixMilli(1_700_000_000_000).UTC(), ShreddedAt: time.Time{}, Ref: ref,
+		ID: secret.NewItemKeyID(), WrapperID: "builtin-1",
+	}
+	if _, err = s.CreateItemKey(t.Context(), k, ns.Fence()); err != nil {
+		t.Fatalf("create item key: %v", err)
+	}
+
+	return ref
+}
+
+// tamperedItemKeyRows lists changes of the only item key row that a record of
+// the store never has.
+func tamperedItemKeyRows() []struct{ name, update string } {
+	return []struct{ name, update string }{
+		{"an ID that is not an item key ID", `UPDATE item_keys SET id = 'x-1'`},
+		{"an ID with a slash", `UPDATE item_keys SET id = 'ik-a/b'`},
+		{"an empty scope", `UPDATE item_keys SET scope_id = ''`},
+		{"a scope with a slash", `UPDATE item_keys SET scope_id = 'a/b'`},
+		{"a scope with a space", `UPDATE item_keys SET scope_id = 'a b'`},
+		{"an empty item", `UPDATE item_keys SET item = ''`},
+		{"an item with a slash", `UPDATE item_keys SET item = 'a/b'`},
+		{"an item with a parent segment", `UPDATE item_keys SET item = '..'`},
+		{"an empty wrapper ID", `UPDATE item_keys SET wrapper_id = ''`},
+	}
+}
+
+// TestCheckStagedItemKeys proves the restore check: it accepts the rows that
+// the store wrote, and it refuses each row that a new record would not pass.
+func TestCheckStagedItemKeys(t *testing.T) {
+	t.Parallel()
+
+	t.Run("a row that the store wrote passes", func(t *testing.T) {
+		t.Parallel()
+
+		s := openForSavedViews(t)
+		seedItemKey(t, s)
+
+		if err := checkStagedItemKeys(t.Context(), s.pool, currentSchema(t, s)); err != nil {
+			t.Fatalf("check = %v, want nil", err)
+		}
+	})
+
+	for _, tc := range tamperedItemKeyRows() {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			s := openForSavedViews(t)
+			ref := seedItemKey(t, s)
+
+			if _, err := s.pool.Exec(t.Context(), tc.update); err != nil {
+				t.Fatalf("change the row: %v", err)
+			}
+
+			err := checkStagedItemKeys(t.Context(), s.pool, currentSchema(t, s))
+			if !errors.Is(err, backup.ErrCorrupt) {
+				t.Fatalf("check = %v, want ErrCorrupt", err)
+			}
+
+			// The read path checks the row again, so a bad row is not served.
+			if k, getErr := s.GetItemKey(t.Context(), ref); getErr == nil {
+				t.Fatalf("get of a bad row = %+v, want an error", k)
+			}
+		})
+	}
+}
+
+// TestCheckStagedItemKeysRefusesAMissingNamespace proves that a record whose
+// namespace the backup does not hold is corrupt. An inner join would skip such
+// a row, and the restore would bring it in.
+func TestCheckStagedItemKeysRefusesAMissingNamespace(t *testing.T) {
+	t.Parallel()
+
+	s := openForSavedViews(t)
+	seedItemKey(t, s)
+
+	// The foreign key refuses this change, so the test drops the key in its
+	// own schema first.
+	for _, stmt := range []string{
+		`ALTER TABLE item_keys DROP CONSTRAINT item_keys_namespace_id_fkey`,
+		`UPDATE item_keys SET namespace_id = 'ns-gone'`,
+	} {
+		if _, execErr := s.pool.Exec(t.Context(), stmt); execErr != nil {
+			t.Fatalf("%s: %v", stmt, execErr)
+		}
+	}
+
+	err := checkStagedItemKeys(t.Context(), s.pool, currentSchema(t, s))
+	if !errors.Is(err, backup.ErrCorrupt) || !strings.Contains(fmt.Sprint(err), "has no namespace") {
+		t.Fatalf("check = %v, want the refusal of a record with no namespace", err)
+	}
+}
+
+// seedTwoNamespaces makes the namespace acme with one item key, and the
+// namespace other. It returns the key of acme and a reference in other.
+func seedTwoNamespaces(t *testing.T, s *Store) (secret.ItemKey, secret.ItemRef) {
+	t.Helper()
+
+	ref := seedItemKey(t, s)
+
+	other := namespace.Namespace{
+		ID: namespace.NewID(), CreatedAt: time.UnixMilli(1_700_000_000_000).UTC(), Name: "other", HomeRegion: "eu-west",
+		FailoverVersion: 1, Overrides: namespace.Overrides{Forced: false, Unlocked: false},
+	}
+	if err := s.CreateNamespace(t.Context(), other); err != nil {
+		t.Fatalf("create namespace: %v", err)
+	}
+
+	scope, err := secret.NewScope("other", "unit-1")
+	if err != nil {
+		t.Fatalf("scope: %v", err)
+	}
+
+	otherRef, err := secret.NewItemRef(scope, secret.ItemKindPlan, "pln-9")
+	if err != nil {
+		t.Fatalf("item ref: %v", err)
+	}
+
+	stored, err := s.GetItemKey(t.Context(), ref)
+	if err != nil {
+		t.Fatalf("get item key: %v", err)
+	}
+
+	return stored, otherRef
+}
+
+// TestItemKeyStoreRefusesHostileCreate proves the checks of the store, which
+// hold when a caller skipped its own: a record of another namespace than the
+// fence, an invalid record, and a record created shredded.
+func TestItemKeyStoreRefusesHostileCreate(t *testing.T) {
+	t.Parallel()
+
+	s := openForSavedViews(t)
+	stored, otherRef := seedTwoNamespaces(t, s)
+
+	acme := namespace.Fence{Namespace: "acme", FailoverVersion: 1}
+	good := secret.ItemKey{
+		CreatedAt: stored.CreatedAt, ShreddedAt: time.Time{}, Ref: stored.Ref, ID: secret.NewItemKeyID(),
+		WrapperID: "builtin-2",
+	}
+
+	for _, tc := range refusedItemKeys(otherRef, acme) {
+		_, err := s.CreateItemKey(t.Context(), tc.key(good), tc.fence)
+		if !errors.Is(err, tc.wanted) {
+			t.Errorf("%s: create = %v, want %v", tc.name, err, tc.wanted)
+		}
+	}
+
+	// None of the refused calls changed the record that the store wrote.
+	got, err := s.GetItemKey(t.Context(), stored.Ref)
+	if err != nil || got.Shredded() || got.ID != stored.ID || got.WrapperID != stored.WrapperID {
+		t.Fatalf("record after the refused creates = %+v, %v; want the first record, live", got, err)
+	}
+}
+
+// TestItemKeyStoreRefusesHostileShredAndList proves that a shred names the
+// namespace of its fence, needs a time, and that a page of a list is bounded.
+func TestItemKeyStoreRefusesHostileShredAndList(t *testing.T) {
+	t.Parallel()
+
+	s := openForSavedViews(t)
+	stored, otherRef := seedTwoNamespaces(t, s)
+	acme := namespace.Fence{Namespace: "acme", FailoverVersion: 1}
+
+	_, err := s.ShredItemKey(t.Context(), otherRef, time.UnixMilli(5), acme)
+	if !errors.Is(err, namespace.ErrFenced) {
+		t.Errorf("shred of a record of another namespace under the fence of acme = %v, want ErrFenced", err)
+	}
+
+	_, err = s.ShredItemKey(t.Context(), stored.Ref, time.Time{}, acme)
+	if !errors.Is(err, secret.ErrInvalidItemRef) {
+		t.Errorf("shred with no time = %v, want ErrInvalidItemRef", err)
+	}
+
+	for _, limit := range []int{0, -1, 1001} {
+		_, err = s.ListItemKeys(t.Context(), stored.Ref.Scope, "", limit)
+		if !errors.Is(err, secret.ErrInvalidItemRef) {
+			t.Errorf("list with limit %d = %v, want ErrInvalidItemRef", limit, err)
+		}
+	}
+
+	got, err := s.GetItemKey(t.Context(), stored.Ref)
+	if err != nil || got.Shredded() {
+		t.Fatalf("record after the refused calls = %+v, %v; want it live", got, err)
+	}
+}
+
+// refusedItemKey is a create of an item key that the store refuses.
+type refusedItemKey struct {
+	name   string
+	key    func(k secret.ItemKey) secret.ItemKey
+	fence  namespace.Fence
+	wanted error
+}
+
+// refusedItemKeys lists the creates that the store refuses: a record of other
+// as the reference, and the records that are not valid, under the fence acme.
+func refusedItemKeys(other secret.ItemRef, acme namespace.Fence) []refusedItemKey {
+	change := func(fn func(k *secret.ItemKey)) func(k secret.ItemKey) secret.ItemKey {
+		return func(k secret.ItemKey) secret.ItemKey {
+			fn(&k)
+
+			return k
+		}
+	}
+
+	return []refusedItemKey{
+		{
+			"a record of another namespace than the fence", change(func(k *secret.ItemKey) { k.Ref = other }), acme,
+			namespace.ErrFenced,
+		},
+		{
+			"a record with an ID that is not a key ID", change(func(k *secret.ItemKey) { k.ID = "x" }), acme,
+			secret.ErrInvalidItemRef,
+		},
+		{
+			"a record with no wrapper", change(func(k *secret.ItemKey) { k.WrapperID = "" }), acme,
+			secret.ErrInvalidItemRef,
+		},
+		{
+			"a record created shredded", change(func(k *secret.ItemKey) { k.ShreddedAt = time.UnixMilli(1) }), acme,
+			secret.ErrInvalidItemRef,
+		},
+		{
+			"a record with no creation time", change(func(k *secret.ItemKey) { k.CreatedAt = time.Time{} }), acme,
+			secret.ErrInvalidItemRef,
+		},
+		{
+			"a record of an unknown kind", change(func(k *secret.ItemKey) { k.Ref.Kind = "other" }), acme,
+			secret.ErrInvalidItemRef,
+		},
+	}
+}
