@@ -92,6 +92,8 @@ func planSchemaURL(t *testing.T, base string) string {
 		t.Fatalf("create schema: %v", execErr)
 	}
 
+	dropSchemaAtCleanup(t, base, name)
+
 	u, err := url.Parse(base)
 	if err != nil {
 		t.Fatalf("parse test URL: %v", err)

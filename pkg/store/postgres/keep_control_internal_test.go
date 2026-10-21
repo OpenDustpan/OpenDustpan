@@ -61,6 +61,8 @@ func durableSchema(t *testing.T, conn *pgx.Conn, key string, token int64) string
 		stmts = append(stmts, m.SQL)
 	}
 
+	dropSchemaAtCleanup(t, testPostgresURL(t), name)
+
 	for _, stmt := range stmts {
 		if _, execErr := conn.Exec(ctx, stmt); execErr != nil {
 			t.Fatalf("create durable schema: %v", execErr)

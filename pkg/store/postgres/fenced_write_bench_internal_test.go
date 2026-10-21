@@ -71,6 +71,8 @@ func benchStore(b *testing.B) *Store {
 		b.Fatalf("create schema: %v", execErr)
 	}
 
+	dropSchemaAtCleanup(b, base, name)
+
 	u, err := url.Parse(base)
 	if err != nil {
 		b.Fatalf("parse URL: %v", err)

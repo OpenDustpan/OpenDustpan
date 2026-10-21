@@ -226,6 +226,8 @@ func membershipURL(t *testing.T) string {
 		t.Fatalf("create schema: %v", execErr)
 	}
 
+	dropSchemaAtCleanup(t, base, name)
+
 	u, parseErr := url.Parse(base)
 	if parseErr != nil {
 		t.Fatalf("parse %s: %v", membershipURLEnv, parseErr)
