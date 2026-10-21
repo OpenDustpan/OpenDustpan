@@ -403,11 +403,18 @@ func boundMillis(t time.Time) int64 {
 func (s *Store) BindProvider(ctx context.Context, id, issuer string, at time.Time) (string, error) {
 	// A recorded provider needs no write, so a start in maintenance mode, which
 	// refuses writes, still finds the issuer of its first binding.
-	if recorded, err := s.queries.GetOIDCProviderIssuer(ctx, id); err == nil {
+	recorded, err := s.queries.GetOIDCProviderIssuer(ctx, id)
+	if err == nil {
 		return recorded, nil
 	}
 
-	err := s.inTx(ctx, func(q *db.Queries) error {
+	// Any error other than a missing record is a failed read, not a miss: the
+	// write path must not hide it.
+	if !errors.Is(err, pgx.ErrNoRows) {
+		return "", fmt.Errorf("select sign-in provider: %w", err)
+	}
+
+	err = s.inTx(ctx, func(q *db.Queries) error {
 		return q.InsertOIDCProvider(ctx, db.InsertOIDCProviderParams{
 			ProviderID: id, Issuer: issuer, CreatedAtMs: codec.Millis(at),
 		})
@@ -416,7 +423,7 @@ func (s *Store) BindProvider(ctx context.Context, id, issuer string, at time.Tim
 		return "", fmt.Errorf("insert sign-in provider: %w", err)
 	}
 
-	recorded, err := s.queries.GetOIDCProviderIssuer(ctx, id)
+	recorded, err = s.queries.GetOIDCProviderIssuer(ctx, id)
 	if err != nil {
 		return "", fmt.Errorf("select sign-in provider: %w", err)
 	}
