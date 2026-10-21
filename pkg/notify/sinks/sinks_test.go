@@ -101,9 +101,9 @@ func (f *fakeStore) Sinks(_ context.Context, scope namespace.Name) ([]notify.Sin
 
 	var out []notify.Sink
 
-	for _, s := range f.sinks {
-		if s.Scope == scope {
-			out = append(out, s)
+	for id := range f.sinks {
+		if f.sinks[id].Scope == scope {
+			out = append(out, f.sinks[id])
 		}
 	}
 
@@ -181,8 +181,21 @@ type fixture struct {
 	caller *sinks.Caller
 }
 
-// svcSealer returns the sealer that the fixture uses.
-func (fixture) svcSealer() notify.SinkSealer { return notifytest.Sealer() }
+// person returns a principal of the kind kind.
+func person(kind identity.Kind) identity.Principal {
+	return identity.Principal{
+		Subject: "alice", DisplayName: "", Admin: false, TokenID: "", TokenExpiresAt: time.Time{},
+		TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{}, Kind: kind, Credential: "", JobID: "",
+	}
+}
+
+// config returns a service config over store, with the senders.
+func config(store notify.SinkStore, ns sinks.Namespaces, senders ...notify.Sender) sinks.Config {
+	return sinks.Config{
+		Store: store, Sealer: notifytest.Sealer(), Namespaces: ns, Senders: senders,
+		Now: func() time.Time { return time.Date(2026, 10, 21, 9, 0, 0, 0, time.UTC) },
+	}
+}
 
 func newFixture(t *testing.T, hookErr error) fixture {
 	t.Helper()
@@ -190,10 +203,7 @@ func newFixture(t *testing.T, hookErr error) fixture {
 	store := newFakeStore()
 	hook := &fakeSender{kind: notify.SinkWebhook, err: hookErr, mu: sync.Mutex{}, got: nil, left: 0}
 
-	svc, err := sinks.NewService(sinks.Config{
-		Store: store, Sealer: notifytest.Sealer(), Namespaces: fakeNamespaces{}, Senders: []notify.Sender{hook},
-		Now: func() time.Time { return time.Date(2026, 10, 21, 9, 0, 0, 0, time.UTC) },
-	})
+	svc, err := sinks.NewService(config(store, fakeNamespaces{}, hook))
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}
@@ -207,20 +217,25 @@ func newFixture(t *testing.T, hookErr error) fixture {
 
 	return fixture{
 		svc: svc, store: store, hook: hook,
-		caller: &sinks.Caller{Principal: identity.Principal{Subject: "alice", Kind: identity.KindPerson}, By: by},
+		caller: &sinks.Caller{Principal: person(identity.KindPerson), By: by},
 	}
 }
 
 func TestNewServiceNeedsPorts(t *testing.T) {
 	t.Parallel()
 
+	noStore := config(nil, fakeNamespaces{})
+	noNamespaces := config(newFakeStore(), nil)
+	noSealer := config(newFakeStore(), fakeNamespaces{})
+	noSealer.Sealer = notify.SinkSealer{Namespaces: nil, Installation: nil}
+
 	cases := []struct {
 		name string
 		cfg  sinks.Config
 	}{
-		{"no store", sinks.Config{Store: nil, Sealer: notifytest.Sealer(), Namespaces: fakeNamespaces{}}},
-		{"no namespaces", sinks.Config{Store: newFakeStore(), Sealer: notifytest.Sealer(), Namespaces: nil}},
-		{"no sealer", sinks.Config{Store: newFakeStore(), Sealer: notify.SinkSealer{}, Namespaces: fakeNamespaces{}}},
+		{"no store", noStore},
+		{"no namespaces", noNamespaces},
+		{"no sealer", noSealer},
 	}
 
 	for _, tc := range cases {
@@ -234,39 +249,47 @@ func TestNewServiceNeedsPorts(t *testing.T) {
 	}
 }
 
+// createCase is a successful create: the input, the target that the sink gets,
+// and whether the create answers a signing key and stores a secret item.
+type createCase struct {
+	name       string
+	in         sinks.New
+	wantTarget string
+	wantKey    bool
+	wantSecret bool
+}
+
 func TestCreate(t *testing.T) {
 	t.Parallel()
 
 	chatURL := "https://hooks.slack.com/services/T000/B000/" + canary
 
-	cases := []struct {
-		name       string
-		in         sinks.New
-		wantTarget string
-		wantKey    bool
-		wantSecret bool
-	}{
+	cases := []createCase{
 		{
-			"a webhook", sinks.New{
+			"a webhook",
+			sinks.New{
 				Kind: notify.SinkWebhook, Platform: "", Name: "Ops", Target: "https://hooks.example.com/ops", URL: "",
 			},
 			"https://hooks.example.com/ops", true, true,
 		},
 		{
-			"a chat webhook", sinks.New{
+			"a chat webhook",
+			sinks.New{
 				Kind: notify.SinkChat, Platform: "slack", Name: "Ops chat", Target: "", URL: chatURL,
 			},
 			"hooks.slack.com", false, true,
 		},
 		{
-			"a chat webhook in upper case", sinks.New{
+			"a chat webhook in upper case",
+			sinks.New{
 				Kind: notify.SinkChat, Platform: "mattermost", Name: "Ops chat", Target: "",
 				URL: "https://Chat.Example.com:8443/hooks/" + canary,
 			},
 			"chat.example.com:8443", false, true,
 		},
 		{
-			"an email sink", sinks.New{
+			"an email sink",
+			sinks.New{
 				Kind: notify.SinkEmail, Platform: "", Name: "Mail", Target: "ops@example.com", URL: "",
 			},
 			"ops@example.com", false, false,
@@ -284,48 +307,64 @@ func TestCreate(t *testing.T) {
 				t.Fatalf("Create = %v, want nil", err)
 			}
 
-			checkCreated(t, f, got, tc.wantTarget, tc.wantKey, tc.wantSecret)
+			checkCreated(t, f, got, &tc)
 		})
 	}
 }
 
-func checkCreated(t *testing.T, f fixture, got sinks.Created, target string, wantKey, wantSecret bool) {
+func checkCreated(t *testing.T, f fixture, got sinks.Created, want *createCase) {
 	t.Helper()
 
 	s := got.Sink
-	if !strings.HasPrefix(s.ID, notify.SinkIDPrefix) || s.Version != 1 || s.Target != target ||
+	if !strings.HasPrefix(s.ID, notify.SinkIDPrefix) || s.Version != 1 || s.Target != want.wantTarget ||
 		s.CreatedBy != "alice" || s.Scope != shop {
-		t.Fatalf("sink = %+v, want an snk- ID, version 1, target %q, creator alice", s, target)
+		t.Fatalf("sink = %+v, want an snk- ID, version 1, target %q, creator alice", s, want.wantTarget)
 	}
 
-	if (got.SigningKey != "") != wantKey || (wantKey && len(got.SigningKey) != 64) {
-		t.Fatalf("signing key = %q, want a key of 64 hex digits: %t", got.SigningKey, wantKey)
+	if (got.SigningKey != "") != want.wantKey || (want.wantKey && len(got.SigningKey) != 64) {
+		t.Fatalf("signing key = %q, want a key of 64 hex digits: %t", got.SigningKey, want.wantKey)
 	}
 
-	sealed, err := f.store.SinkSecrets(t.Context(), shop, s.ID)
-	if err != nil || (len(sealed) == 1) != wantSecret {
-		t.Fatalf("stored secrets = %d (%v), want one: %t", len(sealed), err, wantSecret)
+	checkStoredSecret(t, f, got, want)
+	checkCreateEntry(t, f, got)
+}
+
+// checkStoredSecret checks that the store holds one sealed secret item when
+// the case wants one, and that no plaintext reached the store.
+func checkStoredSecret(t *testing.T, f fixture, got sinks.Created, want *createCase) {
+	t.Helper()
+
+	sealed, err := f.store.SinkSecrets(t.Context(), shop, got.Sink.ID)
+	if err != nil || (len(sealed) == 1) != want.wantSecret {
+		t.Fatalf("stored secrets = %d (%v), want one: %t", len(sealed), err, want.wantSecret)
 	}
 
 	for _, item := range sealed {
-		if bytes.Contains(item.Ciphertext(), []byte(canary)) || (got.SigningKey != "" &&
-			bytes.Contains(item.Ciphertext(), []byte(got.SigningKey))) {
+		plain := bytes.Contains(item.Ciphertext(), []byte(canary)) ||
+			(got.SigningKey != "" && bytes.Contains(item.Ciphertext(), []byte(got.SigningKey)))
+		if plain {
 			t.Fatal("the store got a plaintext value")
 		}
 	}
+}
+
+// checkCreateEntry checks the one audit entry of a create, and that it holds no
+// secret.
+func checkCreateEntry(t *testing.T, f fixture, got sinks.Created) {
+	t.Helper()
 
 	if len(f.store.entries) != 1 {
 		t.Fatalf("audit entries = %d, want 1", len(f.store.entries))
 	}
 
 	e := f.store.entries[0]
-	if e.Action != "sink:create" || e.ObjectID != s.ID || e.Namespace != shop || e.Subject != "alice" ||
+	if e.Action != "sink:create" || e.ObjectID != got.Sink.ID || e.Namespace != shop || e.Subject != "alice" ||
 		e.PrincipalKind != audit.PrincipalKindPerson || e.Kind != audit.KindChange || e.RequestID != "req-1" {
-		t.Fatalf("audit entry = %+v, want sink:create of %s by alice", e, s.ID)
+		t.Fatalf("audit entry = %+v, want sink:create of %s by alice", e, got.Sink.ID)
 	}
 
-	if fmt.Sprintf("%+v", e) != strings.ReplaceAll(fmt.Sprintf("%+v", e), canary, "") ||
-		(got.SigningKey != "" && strings.Contains(fmt.Sprintf("%+v", e), got.SigningKey)) {
+	shown := fmt.Sprintf("%+v", e)
+	if strings.Contains(shown, canary) || (got.SigningKey != "" && strings.Contains(shown, got.SigningKey)) {
 		t.Fatal("the audit entry holds a secret")
 	}
 }
@@ -367,9 +406,17 @@ func TestCreateRefused(t *testing.T) {
 		{"a chat sink with an unknown platform", sinks.New{
 			Kind: notify.SinkChat, Platform: "irc", Name: "Chat", Target: "", URL: "https://hooks.slack.com/x",
 		}, false},
-		{"a webhook with a url", sinks.New{
-			Kind: notify.SinkWebhook, Platform: "", Name: "Hook", Target: "https://hooks.example.com/", URL: "https://x.example.com",
-		}, false},
+		{
+			"a webhook with a url",
+			sinks.New{
+				Kind:     notify.SinkWebhook,
+				Platform: "",
+				Name:     "Hook",
+				Target:   "https://hooks.example.com/",
+				URL:      "https://x.example.com",
+			},
+			false,
+		},
 		{"a webhook with a platform", sinks.New{
 			Kind: notify.SinkWebhook, Platform: "slack", Name: "Hook", Target: "https://hooks.example.com/", URL: "",
 		}, false},
@@ -379,9 +426,17 @@ func TestCreateRefused(t *testing.T) {
 		{"a webhook on IPv6 loopback", hook("https://[::1]/" + canary), true},
 		{"a webhook with user information", hook("https://u:p@hooks.example.com/" + canary), true},
 		{"a webhook with no target", hook(""), true},
-		{"an email sink with a url", sinks.New{
-			Kind: notify.SinkEmail, Platform: "", Name: "Mail", Target: "ops@example.com", URL: "https://hooks.example.com",
-		}, false},
+		{
+			"an email sink with a url",
+			sinks.New{
+				Kind:     notify.SinkEmail,
+				Platform: "",
+				Name:     "Mail",
+				Target:   "ops@example.com",
+				URL:      "https://hooks.example.com",
+			},
+			false,
+		},
 		{"an email sink with a name in the address", sinks.New{
 			Kind: notify.SinkEmail, Platform: "", Name: "Mail", Target: "Ops <ops@example.com>", URL: "",
 		}, false},
@@ -476,25 +531,51 @@ func makeHook(t *testing.T, f fixture) sinks.Created {
 	return got
 }
 
-func ptr[T any](v T) *T { return &v }
+// replaced is a successful replace: the change to make and the check of the
+// stored sink after it.
+type replaced struct {
+	name   string
+	seed   func(t *testing.T, f fixture) notify.Sink
+	change func(version int64) sinks.Change
+	check  func(t *testing.T, f fixture, before, after notify.Sink)
+}
+
+// refusedReplace is a replace that the service refuses with want.
+type refusedReplace struct {
+	name   string
+	seed   func(t *testing.T, f fixture) notify.Sink
+	change func(version int64) sinks.Change
+	want   error
+}
+
+// change returns a Change with the version, the name and no other field.
+func change(version int64, name string) sinks.Change {
+	return sinks.Change{Version: version, Name: name, Target: nil, URL: nil}
+}
+
+// seedChat makes a chat sink.
+func seedChat(t *testing.T, f fixture) notify.Sink {
+	t.Helper()
+
+	return makeChat(t, f)
+}
+
+// seedHook makes a webhook sink.
+func seedHook(t *testing.T, f fixture) notify.Sink {
+	t.Helper()
+
+	return makeHook(t, f).Sink
+}
 
 func TestReplace(t *testing.T) {
 	t.Parallel()
 
 	newURL := "https://hooks.slack.com/services/T0/B0/other-" + canary
 
-	cases := []struct {
-		name    string
-		chat    bool
-		change  func(version int64) sinks.Change
-		wantErr error
-		check   func(t *testing.T, f fixture, before, after notify.Sink)
-	}{
+	cases := []replaced{
 		{
-			name: "a new name of a webhook", chat: false,
-			change: func(v int64) sinks.Change {
-				return sinks.Change{Version: v, Name: "Ops team", Target: nil, URL: nil}
-			},
+			name: "a new name of a webhook", seed: seedHook,
+			change: func(v int64) sinks.Change { return change(v, "Ops team") },
 			check: func(t *testing.T, _ fixture, before, after notify.Sink) {
 				t.Helper()
 
@@ -505,9 +586,12 @@ func TestReplace(t *testing.T) {
 			},
 		},
 		{
-			name: "a new target of a webhook", chat: false,
+			name: "a new target of a webhook", seed: seedHook,
 			change: func(v int64) sinks.Change {
-				return sinks.Change{Version: v, Name: "Hook", Target: ptr("https://new.example.com/"), URL: nil}
+				c := change(v, "Hook")
+				c.Target = new("https://new.example.com/")
+
+				return c
 			},
 			check: func(t *testing.T, _ fixture, _, after notify.Sink) {
 				t.Helper()
@@ -518,69 +602,14 @@ func TestReplace(t *testing.T) {
 			},
 		},
 		{
-			name: "a new URL of a chat sink", chat: true,
+			name: "a new URL of a chat sink", seed: seedChat,
 			change: func(v int64) sinks.Change {
-				return sinks.Change{Version: v, Name: "Chat", Target: nil, URL: &newURL}
-			},
-			check: func(t *testing.T, f fixture, before, after notify.Sink) {
-				t.Helper()
+				c := change(v, "Chat")
+				c.URL = &newURL
 
-				if len(after.SecretRefs) != 1 || after.SecretRefs[0] == before.SecretRefs[0] {
-					t.Fatalf("refs = %v, want a new ref: a value never replaces the value of a ref", after.SecretRefs)
-				}
-
-				sealed, err := f.store.SinkSecrets(t.Context(), shop, after.ID)
-				if err != nil || len(sealed) != 1 {
-					t.Fatalf("stored secrets = %d (%v), want 1", len(sealed), err)
-				}
-
-				values, err := notifytest.Sealer().Open(t.Context(), after, sealed)
-				if err != nil || string(values[0]) != newURL {
-					t.Fatalf("stored value opens to %q (%v), want the new URL", values, err)
-				}
+				return c
 			},
-		},
-		{
-			name: "a stale version", chat: false,
-			change: func(v int64) sinks.Change {
-				return sinks.Change{Version: v - 1, Name: "Hook", Target: nil, URL: nil}
-			},
-			wantErr: notify.ErrConflict,
-		},
-		{
-			name: "a target for a chat sink", chat: true,
-			change: func(v int64) sinks.Change {
-				return sinks.Change{Version: v, Name: "Chat", Target: ptr("chat.example.com"), URL: nil}
-			},
-			wantErr: notify.ErrInvalid,
-		},
-		{
-			name: "a url for a webhook", chat: false,
-			change: func(v int64) sinks.Change {
-				return sinks.Change{Version: v, Name: "Hook", Target: nil, URL: ptr("https://hooks.slack.com/x")}
-			},
-			wantErr: notify.ErrInvalid,
-		},
-		{
-			name: "a loopback target", chat: false,
-			change: func(v int64) sinks.Change {
-				return sinks.Change{Version: v, Name: "Hook", Target: ptr("https://127.0.0.1/"), URL: nil}
-			},
-			wantErr: egress.ErrRefused,
-		},
-		{
-			name: "a chat URL on a private address", chat: true,
-			change: func(v int64) sinks.Change {
-				return sinks.Change{Version: v, Name: "Chat", Target: nil, URL: ptr("https://10.1.2.3/hook")}
-			},
-			wantErr: egress.ErrRefused,
-		},
-		{
-			name: "an empty name", chat: false,
-			change: func(v int64) sinks.Change {
-				return sinks.Change{Version: v, Name: "", Target: nil, URL: nil}
-			},
-			wantErr: notify.ErrInvalid,
+			check: checkNewChatURL(newURL),
 		},
 	}
 
@@ -589,37 +618,92 @@ func TestReplace(t *testing.T) {
 			t.Parallel()
 
 			f := newFixture(t, nil)
-
-			var before notify.Sink
-			if tc.chat {
-				before = makeChat(t, f)
-			} else {
-				before = makeHook(t, f).Sink
-			}
-
-			entries := len(f.store.entries)
+			before := tc.seed(t, f)
 
 			after, err := f.svc.Replace(t.Context(), f.caller, shop, before.ID, tc.change(before.Version))
-			if tc.wantErr != nil {
-				if !errors.Is(err, tc.wantErr) {
-					t.Fatalf("Replace = %v, want %v", err, tc.wantErr)
-				}
-
-				if len(f.store.entries) != entries {
-					t.Fatal("a refused replace wrote an audit entry")
-				}
-
-				return
-			}
-
 			if err != nil {
 				t.Fatalf("Replace = %v, want nil", err)
 			}
 
 			tc.check(t, f, before, after)
 
-			if got := f.store.entries[len(f.store.entries)-1]; got.Action != "sink:update" || got.ObjectID != before.ID {
+			if got := f.store.entries[len(f.store.entries)-1]; got.Action != "sink:update" ||
+				got.ObjectID != before.ID {
 				t.Fatalf("audit entry = %+v, want sink:update of %s", got, before.ID)
+			}
+		})
+	}
+}
+
+// checkNewChatURL returns the check of a replace of the URL of a chat sink: a
+// new ref, and a stored value that opens to the new URL.
+func checkNewChatURL(newURL string) func(t *testing.T, f fixture, before, after notify.Sink) {
+	return func(t *testing.T, f fixture, before, after notify.Sink) {
+		t.Helper()
+
+		if len(after.SecretRefs) != 1 || after.SecretRefs[0] == before.SecretRefs[0] {
+			t.Fatalf("refs = %v, want a new ref: a value never replaces the value of a ref", after.SecretRefs)
+		}
+
+		sealed, err := f.store.SinkSecrets(t.Context(), shop, after.ID)
+		if err != nil || len(sealed) != 1 {
+			t.Fatalf("stored secrets = %d (%v), want 1", len(sealed), err)
+		}
+
+		values, err := notifytest.Sealer().Open(t.Context(), after, sealed)
+		if err != nil || string(values[0]) != newURL {
+			t.Fatalf("stored value opens to %q (%v), want the new URL", values, err)
+		}
+	}
+}
+
+func TestReplaceRefusals(t *testing.T) {
+	t.Parallel()
+
+	cases := []refusedReplace{
+		{"a stale version", seedHook, func(v int64) sinks.Change { return change(v-1, "Hook") }, notify.ErrConflict},
+		{"a target for a chat sink", seedChat, func(v int64) sinks.Change {
+			c := change(v, "Chat")
+			c.Target = new("chat.example.com")
+
+			return c
+		}, notify.ErrInvalid},
+		{"a url for a webhook", seedHook, func(v int64) sinks.Change {
+			c := change(v, "Hook")
+			c.URL = new("https://hooks.slack.com/x")
+
+			return c
+		}, notify.ErrInvalid},
+		{"a loopback target", seedHook, func(v int64) sinks.Change {
+			c := change(v, "Hook")
+			c.Target = new("https://127.0.0.1/")
+
+			return c
+		}, egress.ErrRefused},
+		{"a chat URL on a private address", seedChat, func(v int64) sinks.Change {
+			c := change(v, "Chat")
+			c.URL = new("https://10.1.2.3/hook")
+
+			return c
+		}, egress.ErrRefused},
+		{"an empty name", seedHook, func(v int64) sinks.Change { return change(v, "") }, notify.ErrInvalid},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			f := newFixture(t, nil)
+			before := tc.seed(t, f)
+			entries := len(f.store.entries)
+
+			_, err := f.svc.Replace(t.Context(), f.caller, shop, before.ID, tc.change(before.Version))
+			if !errors.Is(err, tc.want) {
+				t.Fatalf("Replace = %v, want %v", err, tc.want)
+			}
+
+			if len(f.store.entries) != entries {
+				t.Fatal("a refused replace wrote an audit entry")
 			}
 		})
 	}
@@ -630,9 +714,7 @@ func TestReplaceAndDeleteUnknownSink(t *testing.T) {
 
 	f := newFixture(t, nil)
 
-	_, err := f.svc.Replace(t.Context(), f.caller, shop, "snk-nothing", sinks.Change{
-		Version: 1, Name: "x", Target: nil, URL: nil,
-	})
+	_, err := f.svc.Replace(t.Context(), f.caller, shop, "snk-nothing", change(1, "x"))
 	if !errors.Is(err, notify.ErrNotFound) {
 		t.Fatalf("Replace = %v, want ErrNotFound", err)
 	}
@@ -677,8 +759,9 @@ func TestDeleteAndList(t *testing.T) {
 		t.Fatalf("audit entry = %+v, want sink:delete of %s", e, hook.ID)
 	}
 
-	if left, _ := f.svc.List(t.Context(), shop); len(left) != 1 || left[0].ID != chat.ID {
-		t.Fatalf("List after the delete = %+v, want only the chat sink", left)
+	left, err := f.svc.List(t.Context(), shop)
+	if err != nil || len(left) != 1 || left[0].ID != chat.ID {
+		t.Fatalf("List after the delete = %+v, %v, want only the chat sink", left, err)
 	}
 }
 

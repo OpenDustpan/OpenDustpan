@@ -81,7 +81,14 @@ func Plan(s notify.Sink, stored, fresh []string) (Change, error) {
 		case slices.Contains(fresh, ref):
 			c.Claim = append(c.Claim, ref)
 		case !slices.Contains(stored, ref):
-			return Change{}, fmt.Errorf("%w: sink %s names the secret %s, which has no value", notify.ErrInvalid, s.ID, ref)
+			return Change{}, fmt.Errorf(
+				"%w: sink %s names the secret %s, which has no value",
+				notify.ErrInvalid,
+				s.ID,
+				ref,
+			)
+		default:
+			// The ref is stored for the sink and the write adds no new value.
 		}
 	}
 
@@ -139,4 +146,42 @@ func CheckStaged(sinks []Row, secrets []Secret, held map[string]bool) error {
 	}
 
 	return nil
+}
+
+// CheckWrite decides a write of the sink s against the stored row prev, which
+// is nil for a sink that the store does not hold. It returns the sink as the
+// store keeps it after the write: one version above the stored version, and
+// with the creator of the stored row. It returns notify.ErrNotFound when the
+// stored sink belongs to another scope, notify.ErrConflict when s.Version is
+// not the stored version (0 for a new sink), and notify.ErrInvalid for a
+// change of the kind or the platform.
+func CheckWrite(prev *Row, s notify.Sink) (notify.Sink, error) {
+	var version int64
+
+	stored := s
+
+	if prev != nil {
+		if prev.Namespace != s.Scope.String() {
+			return notify.Sink{}, fmt.Errorf("put sink %s: %w", s.ID, notify.ErrNotFound)
+		}
+
+		version = prev.Version
+		stored.CreatedBy = prev.CreatedBy
+	}
+
+	if s.Version != version {
+		return notify.Sink{}, fmt.Errorf("put sink %s: %w", s.ID, notify.ErrConflict)
+	}
+
+	if prev != nil && (prev.Kind != string(s.Kind) || prev.Platform != s.Platform) {
+		return notify.Sink{}, fmt.Errorf(
+			"put sink %s: %w: a new kind or platform is a new sink",
+			s.ID,
+			notify.ErrInvalid,
+		)
+	}
+
+	stored.Version = version + 1
+
+	return stored, nil
 }

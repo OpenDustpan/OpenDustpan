@@ -147,7 +147,12 @@ func (l *logBuffer) Write(p []byte) (int, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
-	return l.buf.Write(p)
+	n, err := l.buf.Write(p)
+	if err != nil {
+		return n, fmt.Errorf("write log: %w", err)
+	}
+
+	return n, nil
 }
 
 func (l *logBuffer) String() string {
@@ -159,6 +164,7 @@ func (l *logBuffer) String() string {
 
 type fixture struct {
 	handler *apinotifications.Handler
+	config  apinotifications.Config
 	store   *sqlite.Store
 	hook    *recordingSender
 	logs    *logBuffer
@@ -186,17 +192,37 @@ func (c *testClock) Now() time.Time {
 func newFixture(t *testing.T, deny ...identity.Action) fixture {
 	t.Helper()
 
-	return buildFixture(t, true, deny...)
+	return buildFixture(t, keyMiddleware, deny...)
 }
 
 // newFixtureWithoutKeys returns a handler with no store of replay records.
 func newFixtureWithoutKeys(t *testing.T) fixture {
 	t.Helper()
 
-	return buildFixture(t, false)
+	return buildFixture(t, noMiddleware)
 }
 
-func buildFixture(t *testing.T, withKeys bool, deny ...identity.Action) fixture {
+// keyMiddleware returns the Idempotency-Key middleware over the store.
+func keyMiddleware(t *testing.T, store *sqlite.Store, clock *testClock) *idempotent.Middleware {
+	t.Helper()
+
+	idem, err := idempotent.New(idempotent.Config{
+		Store:  store.Idempotency(idempotencytest.TestWrapper(t, 1)),
+		Logger: slog.New(slog.DiscardHandler), Now: clock.Now, MaxBodyBytes: 1 << 20,
+	})
+	if err != nil {
+		t.Fatalf("idempotency middleware: %v", err)
+	}
+
+	return idem
+}
+
+// noMiddleware returns no middleware: the handler refuses the header.
+func noMiddleware(*testing.T, *sqlite.Store, *testClock) *idempotent.Middleware { return nil }
+
+// openStore returns a SQLite store with the namespaces acme and other, and the
+// secret service over it.
+func openStore(t *testing.T) (*sqlite.Store, *secret.Service) {
 	t.Helper()
 
 	store, err := sqlite.Open(t.Context(), filepath.Join(t.TempDir(), "dustpan.db"))
@@ -233,6 +259,16 @@ func buildFixture(t *testing.T, withKeys bool, deny ...identity.Action) fixture 
 		t.Fatalf("secret service: %v", err)
 	}
 
+	return store, secrets
+}
+
+func buildFixture(
+	t *testing.T, middleware func(*testing.T, *sqlite.Store, *testClock) *idempotent.Middleware,
+	deny ...identity.Action,
+) fixture {
+	t.Helper()
+
+	store, secrets := openStore(t)
 	hook := &recordingSender{kind: notify.SinkWebhook, mu: sync.Mutex{}, err: nil, sent: nil}
 
 	svc, err := sinks.NewService(sinks.Config{
@@ -249,30 +285,20 @@ func buildFixture(t *testing.T, withKeys bool, deny ...identity.Action) fixture 
 	}
 
 	clock := &testClock{mu: sync.Mutex{}, now: time.Now()}
-
-	var idem *idempotent.Middleware
-
-	if withKeys {
-		idem, err = idempotent.New(idempotent.Config{
-			Store:  store.Idempotency(idempotencytest.TestWrapper(t, 1)),
-			Logger: slog.New(slog.DiscardHandler), Now: clock.Now, MaxBodyBytes: 1 << 20,
-		})
-		if err != nil {
-			t.Fatalf("idempotency middleware: %v", err)
-		}
-	}
-
 	logs := &logBuffer{mu: sync.Mutex{}, buf: bytes.Buffer{}}
 
-	handler, err := apinotifications.NewHandler(apinotifications.Config{
+	cfg := apinotifications.Config{
 		Sinks: svc, Authenticator: testAuthn{}, Authorizer: testAuthz{deny: denied}, Audit: store, Namespaces: nil,
-		OnAuditFailure: nil, DenialLimiter: nil, Sessions: nil, Idempotency: idem, Logger: slog.New(slog.NewTextHandler(logs, nil)),
-	})
+		OnAuditFailure: nil, DenialLimiter: nil, Sessions: nil, Idempotency: middleware(t, store, clock),
+		Logger: slog.New(slog.NewTextHandler(logs, nil)),
+	}
+
+	handler, err := apinotifications.NewHandler(cfg)
 	if err != nil {
 		t.Fatalf("handler: %v", err)
 	}
 
-	return fixture{handler: handler, store: store, hook: hook, logs: logs, denied: denied, clock: clock}
+	return fixture{handler: handler, config: cfg, store: store, hook: hook, logs: logs, denied: denied, clock: clock}
 }
 
 // request is one call of a test.
@@ -399,10 +425,10 @@ func chatBody(t *testing.T, name string) string {
 }
 
 // makeWebhook creates a webhook sink as admin.
-func (f fixture) makeWebhook(t *testing.T, name string) sinkWire {
+func (f fixture) makeWebhook(t *testing.T) sinkWire {
 	t.Helper()
 
-	got := f.do(t, send("admin", http.MethodPost, base, webhookBody(t, name)))
+	got := f.do(t, send("admin", http.MethodPost, base, webhookBody(t, "Ops")))
 	wantCode(t, "create webhook", got, http.StatusCreated)
 
 	return decode[sinkWire](t, got)

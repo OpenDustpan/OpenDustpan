@@ -80,7 +80,6 @@ import (
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/manuallock"
 	"opendustpan.org/opendustpan/pkg/namespace"
-	"opendustpan.org/opendustpan/pkg/notify"
 	"opendustpan.org/opendustpan/pkg/objectcontext"
 	"opendustpan.org/opendustpan/pkg/preferences"
 	"opendustpan.org/opendustpan/pkg/principal"
@@ -170,8 +169,7 @@ type settings struct {
 	workspaceBlobs       blob.Store
 	inventoryReader      inventory.Reader
 	profileStore         profile.Store
-	sinkStore            notify.SinkStore
-	sinkSenders          []notify.Sender
+	sinks                sinkSettings
 	jobStore             job.Store
 	savedViewStore       savedview.Store
 	idempotencyStore     idempotency.Store
@@ -692,8 +690,7 @@ func defaultSettings() *settings {
 		workspaceBlobs:          nil,
 		inventoryReader:         nil,
 		profileStore:            nil,
-		sinkStore:               nil,
-		sinkSenders:             nil,
+		sinks:                   sinkSettings{store: nil, senders: nil},
 		jobStore:                nil,
 		savedViewStore:          nil,
 		idempotencyStore:        nil,

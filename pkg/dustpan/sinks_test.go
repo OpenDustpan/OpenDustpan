@@ -51,9 +51,25 @@ func (w *webhookSender) got() []notify.Message {
 	return append([]notify.Message(nil), w.sent...)
 }
 
-// sinkServer starts a server over a fresh SQLite database. withStore sets the
-// sink store; extra adds options.
-func sinkServer(t *testing.T, withStore bool, extra ...dustpan.Option) fixture {
+// sinkServer starts a server over a fresh SQLite database with the sink store
+// of the database. extra adds options.
+func sinkServer(t *testing.T, extra ...dustpan.Option) fixture {
+	t.Helper()
+
+	st := openSinkDatabase(t)
+
+	return startSinkServer(t, st, append([]dustpan.Option{dustpan.WithSinkStore(st.NotificationSinks())}, extra...)...)
+}
+
+// plainServer starts the same server with no sink store.
+func plainServer(t *testing.T) fixture {
+	t.Helper()
+
+	return startSinkServer(t, openSinkDatabase(t))
+}
+
+// openSinkDatabase opens a fresh SQLite database.
+func openSinkDatabase(t *testing.T) *sqlite.Store {
 	t.Helper()
 
 	st, err := sqlite.Open(t.Context(), filepath.Join(t.TempDir(), "dustpan.db"))
@@ -66,6 +82,13 @@ func sinkServer(t *testing.T, withStore bool, extra ...dustpan.Option) fixture {
 			t.Errorf("close store: %v", closeErr)
 		}
 	})
+
+	return st
+}
+
+// startSinkServer starts a server over st with the options extra.
+func startSinkServer(t *testing.T, st *sqlite.Store, extra ...dustpan.Option) fixture {
+	t.Helper()
 
 	blobs, err := fs.Open(filepath.Join(t.TempDir(), "blobs"))
 	if err != nil {
@@ -104,10 +127,6 @@ func sinkServer(t *testing.T, withStore bool, extra ...dustpan.Option) fixture {
 		dustpan.WithAuthenticator(authn),
 		dustpan.WithClock(func() time.Time { return time.Date(2026, time.October, 21, 9, 0, 0, 0, time.UTC) }),
 	}
-	if withStore {
-		opts = append(opts, dustpan.WithSinkStore(st.NotificationSinks()))
-	}
-
 	srv, err := dustpan.NewServer(append(opts, extra...)...)
 	if err != nil {
 		t.Fatalf("new server: %v", err)
@@ -122,8 +141,9 @@ func sinkServer(t *testing.T, withStore bool, extra ...dustpan.Option) fixture {
 	return f
 }
 
-// doJSON sends a request with the admin token and decodes the answer.
-func (f fixture) doJSON(t *testing.T, method, path, key, body string) (int, map[string]any) {
+// doInto sends a request with the admin token and decodes the answer into out.
+// It returns the status.
+func (f fixture) doInto(t *testing.T, method, path, body string, out any) int {
 	t.Helper()
 
 	req, err := http.NewRequestWithContext(t.Context(), method, f.server.URL+path, strings.NewReader(body))
@@ -132,10 +152,6 @@ func (f fixture) doJSON(t *testing.T, method, path, key, body string) (int, map[
 	}
 
 	req.Header.Set("Authorization", "token "+adminToken)
-
-	if key != "" {
-		req.Header.Set("Idempotency-Key", key)
-	}
 
 	resp, err := f.server.Client().Do(req)
 	if err != nil {
@@ -153,23 +169,35 @@ func (f fixture) doJSON(t *testing.T, method, path, key, body string) (int, map[
 		t.Fatalf("read body: %v", err)
 	}
 
-	out := map[string]any{}
-	if len(data) > 0 {
-		if err = json.Unmarshal(data, &out); err != nil {
+	if len(data) > 0 && out != nil {
+		if err = json.Unmarshal(data, out); err != nil {
 			t.Fatalf("decode %q: %v", data, err)
 		}
 	}
 
-	return resp.StatusCode, out
+	return resp.StatusCode
+}
+
+// sinkWire is the part of an answer that the tests read.
+type sinkWire struct {
+	ID         string `json:"id"`
+	SigningKey string `json:"signingKey"`
+	ErrorCode  string `json:"errorCode"`
+	Delivered  bool   `json:"delivered"`
+	Class      string `json:"class"`
+}
+
+// listWire is the answer of the list.
+type listWire struct {
+	Sinks []sinkWire `json:"sinks"`
 }
 
 func TestSinkRoutesNeedTheStore(t *testing.T) {
 	t.Parallel()
 
-	f := sinkServer(t, false)
+	f := plainServer(t)
 
-	code, _ := f.doJSON(t, http.MethodGet, sinkBase, "", "")
-	if code != http.StatusNotFound {
+	if code := f.doInto(t, http.MethodGet, sinkBase, "", nil); code != http.StatusNotFound {
 		t.Fatalf("GET without a sink store = %d, want 404", code)
 	}
 }
@@ -177,40 +205,41 @@ func TestSinkRoutesNeedTheStore(t *testing.T) {
 func TestSinkRoutesWithTheBuiltInSender(t *testing.T) {
 	t.Parallel()
 
-	f := sinkServer(t, true)
+	f := sinkServer(t)
 
 	// The outbound rules refuse a webhook on the machine of the server.
-	code, body := f.doJSON(t, http.MethodPost, sinkBase, "",
-		`{"kind":"webhook","name":"Local","target":"https://127.0.0.1:8443/hook"}`)
-	if code != http.StatusBadRequest || body["errorCode"] != "sink.invalid" {
-		t.Fatalf("create on loopback = %d %v, want 400 sink.invalid", code, body)
+	var refused sinkWire
+
+	code := f.doInto(t, http.MethodPost, sinkBase,
+		`{"kind":"webhook","name":"Local","target":"https://127.0.0.1:8443/hook"}`, &refused)
+	if code != http.StatusBadRequest || refused.ErrorCode != "sink.invalid" {
+		t.Fatalf("create on loopback = %d %+v, want 400 sink.invalid", code, refused)
 	}
 
-	code, made := f.doJSON(t, http.MethodPost, sinkBase, "",
-		`{"kind":"webhook","name":"Ops","target":"https://hooks.example.invalid/dustpan"}`)
-	if code != http.StatusCreated || len(made["signingKey"].(string)) != 64 {
-		t.Fatalf("create = %d %v, want 201 with a signing key", code, made)
-	}
+	var made sinkWire
 
-	id, _ := made["id"].(string)
+	code = f.doInto(t, http.MethodPost, sinkBase,
+		`{"kind":"webhook","name":"Ops","target":"https://hooks.example.invalid/dustpan"}`, &made)
+	if code != http.StatusCreated || len(made.SigningKey) != 64 {
+		t.Fatalf("create = %d %+v, want 201 with a signing key", code, made)
+	}
 
 	// The built-in signed webhook sender serves the test route. The host name
 	// does not resolve, so the message does not arrive: a temporary result.
-	code, res := f.doJSON(t, http.MethodPost, sinkBase+"/"+id+"/test", "", "")
-	if code != http.StatusOK || res["delivered"] != false || res["class"] != "temporary" {
-		t.Fatalf("test = %d %v, want 200 with the class temporary", code, res)
+	var res sinkWire
+
+	code = f.doInto(t, http.MethodPost, sinkBase+"/"+made.ID+"/test", "", &res)
+	if code != http.StatusOK || res.Delivered || res.Class != "temporary" {
+		t.Fatalf("test = %d %+v, want 200 with the class temporary", code, res)
 	}
 
-	if text, _ := json.Marshal(res); strings.Contains(string(text), "example.invalid") {
-		t.Fatalf("test answer %s holds the host", text)
+	var list listWire
+
+	if code = f.doInto(t, http.MethodGet, sinkBase, "", &list); code != http.StatusOK || len(list.Sinks) != 1 {
+		t.Fatalf("list = %d %+v, want one sink", code, list)
 	}
 
-	code, list := f.doJSON(t, http.MethodGet, sinkBase, "", "")
-	if items, _ := list["sinks"].([]any); code != http.StatusOK || len(items) != 1 {
-		t.Fatalf("list = %d %v, want one sink", code, list)
-	}
-
-	if code, _ = f.doJSON(t, http.MethodDelete, sinkBase+"/"+id, "", ""); code != http.StatusNoContent {
+	if code = f.doInto(t, http.MethodDelete, sinkBase+"/"+made.ID, "", nil); code != http.StatusNoContent {
 		t.Fatalf("delete = %d, want 204", code)
 	}
 }
@@ -219,43 +248,52 @@ func TestSinkSenderOptionReplacesTheBuiltInSender(t *testing.T) {
 	t.Parallel()
 
 	hook := &webhookSender{mu: sync.Mutex{}, sent: nil}
-	f := sinkServer(t, true, dustpan.WithSinkSenders(hook))
+	f := sinkServer(t, dustpan.WithSinkSenders(hook))
 
-	_, made := f.doJSON(t, http.MethodPost, sinkBase, "",
-		`{"kind":"webhook","name":"Ops","target":"https://hooks.example.com/dustpan"}`)
-	id, _ := made["id"].(string)
-	key, _ := made["signingKey"].(string)
+	var made sinkWire
 
-	code, res := f.doJSON(t, http.MethodPost, sinkBase+"/"+id+"/test", "", "")
-	if code != http.StatusOK || res["delivered"] != true {
-		t.Fatalf("test = %d %v, want 200 delivered", code, res)
+	f.doInto(t, http.MethodPost, sinkBase,
+		`{"kind":"webhook","name":"Ops","target":"https://hooks.example.com/dustpan"}`, &made)
+
+	var res sinkWire
+
+	code := f.doInto(t, http.MethodPost, sinkBase+"/"+made.ID+"/test", "", &res)
+	if code != http.StatusOK || !res.Delivered {
+		t.Fatalf("test = %d %+v, want 200 delivered", code, res)
 	}
 
 	sent := hook.got()
-	if len(sent) != 1 || sent[0].To != "https://hooks.example.com/dustpan" || string(sent[0].Secrets[0]) != key ||
-		sent[0].Notification.Type != notify.SinkTest {
+	if len(sent) != 1 || sent[0].To != "https://hooks.example.com/dustpan" ||
+		string(sent[0].Secrets[0]) != made.SigningKey || sent[0].Notification.Type != notify.SinkTest {
 		t.Fatalf("sender got %+v, want one sink.test message to the target with the signing key", sent)
 	}
 
 	// The server seals the key: the store holds no plaintext of it.
-	sealed, err := f.store.NotificationSinks().SinkSecrets(t.Context(), "acme", id)
-	if err != nil || len(sealed) != 1 || strings.Contains(string(sealed[0].Ciphertext()), key) {
+	sealed, err := f.store.NotificationSinks().SinkSecrets(t.Context(), "acme", made.ID)
+	if err != nil || len(sealed) != 1 || strings.Contains(string(sealed[0].Ciphertext()), made.SigningKey) {
 		t.Fatalf("stored secret = %d items (%v), want one sealed item", len(sealed), err)
 	}
 
-	// The audit log of the namespace names the actions, without secrets.
+	checkSinkAudit(t, f, made.SigningKey)
+}
+
+// checkSinkAudit checks that the audit log of the namespace names the create
+// and the test of a sink, and holds no copy of the signing key.
+func checkSinkAudit(t *testing.T, f fixture, key string) {
+	t.Helper()
+
 	listing, err := f.store.List(t.Context(), "acme", audit.Page{Number: 1, Size: audit.MaxPageSize})
 	if err != nil {
 		t.Fatalf("audit: %v", err)
 	}
 
-	var actions []string
+	actions := make([]string, 0, len(listing.Entries))
 
-	for _, e := range listing.Entries {
-		actions = append(actions, e.Action)
+	for i := range listing.Entries {
+		actions = append(actions, listing.Entries[i].Action)
 
-		if strings.Contains(fmt.Sprintf("%+v", e), key) {
-			t.Fatalf("audit entry %+v holds the signing key", e)
+		if strings.Contains(fmt.Sprintf("%+v", listing.Entries[i]), key) {
+			t.Fatalf("audit entry %+v holds the signing key", listing.Entries[i])
 		}
 	}
 

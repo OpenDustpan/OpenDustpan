@@ -9,6 +9,12 @@ import (
 	"opendustpan.org/opendustpan/pkg/store/internal/sinkstore"
 )
 
+// Column names of the sink tables that other tables share.
+const (
+	sinkColRef        = "ref"
+	sinkColCiphertext = "ciphertext"
+)
+
 // sqliteSinkBackupTables holds the backup columns of the notification sink
 // tables, in the order of backup.Tables.
 func sqliteSinkBackupTables() []sqliteBackupTable {
@@ -22,11 +28,11 @@ func sqliteSinkBackupTables() []sqliteBackupTable {
 		},
 		{
 			table:   "notification_sink_secrets",
-			columns: []string{backupColNamespaceID, "ref", "sink_id", "position", "ciphertext"},
+			columns: []string{backupColNamespaceID, sinkColRef, "sink_id", "position", sinkColCiphertext},
 		},
 		{
 			table:   "notification_sink_refs",
-			columns: []string{backupColNamespaceID, "ref"},
+			columns: []string{backupColNamespaceID, sinkColRef},
 		},
 	}
 }
@@ -78,8 +84,9 @@ FROM notification_sinks AS k LEFT JOIN namespaces AS n ON n.id = k.namespace_id 
 			namespace sql.NullString
 		)
 
-		if scanErr := rows.Scan(&row.ID, &namespace, &row.Kind, &row.Name, &row.Platform, &row.Target, &row.CreatedBy,
-			&row.Version); scanErr != nil {
+		scanErr := rows.Scan(&row.ID, &namespace, &row.Kind, &row.Name, &row.Platform, &row.Target, &row.CreatedBy,
+			&row.Version)
+		if scanErr != nil {
 			return nil, fmt.Errorf("read staged sinks: %w", backup.ErrExportRead)
 		}
 

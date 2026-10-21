@@ -65,7 +65,8 @@ func ChatPlatforms() []string {
 // Sink is a destination of notifications in a scope. Target is an email
 // address, the https URL of a webhook, or the host of the URL of a chat
 // webhook. Platform names the chat platform of a chat sink and is empty for
-// any other kind. A change of the platform is a new sink. SecretRefs name the stored secrets of the sink: the one or two
+// any other kind. A change of the platform is a new sink. SecretRefs name the stored secrets of the sink: the one or
+// two
 // active signing keys of a webhook, or the URL of a chat webhook. The API
 // never answers a secret, and the dispatcher reads them only to deliver.
 // A ref names one value for good: the API stores each new secret value
@@ -121,20 +122,6 @@ func (s Sink) Validate() error {
 	}
 }
 
-// validPlatform returns ErrInvalid for a chat sink with no platform or with a
-// platform that ChatPlatforms does not list, and for a sink of another kind
-// that has a platform.
-func (s Sink) validPlatform() error {
-	switch {
-	case s.Kind == SinkChat && !slices.Contains(ChatPlatforms(), s.Platform):
-		return fmt.Errorf("%w: a chat sink needs a platform: %s", ErrInvalid, strings.Join(ChatPlatforms(), ", "))
-	case s.Kind != SinkChat && s.Platform != "":
-		return fmt.Errorf("%w: only a chat sink has a platform", ErrInvalid)
-	default:
-		return nil
-	}
-}
-
 // badRef reports whether ref is not a valid secret ref of a sink.
 func badRef(ref string) bool {
 	return !ident.Valid(ref, MaxRefLen)
@@ -170,6 +157,20 @@ func (s Sink) ValidateSecrets(secrets []SinkSecret) error {
 	}
 
 	return nil
+}
+
+// validPlatform returns ErrInvalid for a chat sink with no platform or with a
+// platform that ChatPlatforms does not list, and for a sink of another kind
+// that has a platform.
+func (s Sink) validPlatform() error {
+	switch {
+	case s.Kind == SinkChat && !slices.Contains(ChatPlatforms(), s.Platform):
+		return fmt.Errorf("%w: a chat sink needs a platform: %s", ErrInvalid, strings.Join(ChatPlatforms(), ", "))
+	case s.Kind != SinkChat && s.Platform != "":
+		return fmt.Errorf("%w: only a chat sink has a platform", ErrInvalid)
+	default:
+		return nil
+	}
 }
 
 // validURL returns ErrInvalid for a webhook sink whose target the egress

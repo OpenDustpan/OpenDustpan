@@ -85,7 +85,7 @@ func TestIdempotentReplaceDeleteAndTest(t *testing.T) {
 	t.Parallel()
 
 	f := newFixture(t)
-	s := f.makeWebhook(t, "Ops")
+	s := f.makeWebhook(t)
 	path := base + "/" + s.ID
 
 	put := keyed(send("admin", http.MethodPut, path, `{"version":1,"name":"Ops team"}`), "put-1")
@@ -151,7 +151,7 @@ func TestIdempotentReplayChecksAuthorizationAgain(t *testing.T) {
 	t.Parallel()
 
 	f := newFixture(t)
-	s := f.makeWebhook(t, "Ops")
+	s := f.makeWebhook(t)
 	test := keyed(send("admin", http.MethodPost, base+"/"+s.ID+"/test", ""), "k1")
 
 	wantCode(t, "first test", f.do(t, test), http.StatusOK)
@@ -179,7 +179,7 @@ func TestIdempotentErrorsAreNotStored(t *testing.T) {
 	wantCode(t, "delete of an unknown sink",
 		f.do(t, keyed(send("admin", http.MethodDelete, base+"/snk-x", ""), "k2")), http.StatusNotFound)
 
-	s := f.makeWebhook(t, "Ops")
+	s := f.makeWebhook(t)
 	wantCode(t, "delete with the same key", f.do(t, keyed(send("admin", http.MethodDelete, base+"/"+s.ID, ""), "k3")),
 		http.StatusNoContent)
 }

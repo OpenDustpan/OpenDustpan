@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"slices"
 
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -73,8 +72,8 @@ func (k sinks) PutSink(
 			return err
 		}
 
-		if err = putSinkSecrets(ctx, q, s, secrets); err != nil {
-			return err
+		if secretsErr := putSinkSecrets(ctx, q, s, secrets); secretsErr != nil {
+			return secretsErr
 		}
 
 		return finishCompletion(ctx, q, stored)
@@ -84,72 +83,77 @@ func (k sinks) PutSink(
 // putSinkRow checks the version and the scope of the stored sink, and writes
 // the row of s. It returns the sink as stored.
 func putSinkRow(ctx context.Context, q *db.Queries, s notify.Sink) (notify.Sink, error) {
+	var prev *sinkstore.Row
+
 	old, err := q.GetNotificationSink(ctx, s.ID)
-	found := err == nil
 
-	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+	switch {
+	case err == nil:
+		prev = &sinkstore.Row{
+			ID: old.ID, Namespace: old.Namespace, Kind: old.Kind, Name: old.Name, Platform: old.Platform,
+			Target: old.Target, CreatedBy: old.CreatedBy, Version: old.Version,
+		}
+	case !errors.Is(err, sql.ErrNoRows):
 		return notify.Sink{}, fmt.Errorf("select sink: %w", err)
+	default:
+		// The sink is new.
 	}
 
-	var version int64
-
-	if found {
-		if old.Namespace != s.Scope.String() {
-			return notify.Sink{}, fmt.Errorf("put sink %s: %w", s.ID, notify.ErrNotFound)
-		}
-
-		version = old.Version
+	stored, err := sinkstore.CheckWrite(prev, s)
+	if err != nil {
+		return notify.Sink{}, fmt.Errorf("put sink: %w", err)
 	}
 
-	if s.Version != version {
-		return notify.Sink{}, fmt.Errorf("put sink %s: %w", s.ID, notify.ErrConflict)
+	if prev != nil {
+		return stored, updateSinkRow(ctx, q, s)
 	}
 
-	if found && (old.Kind != string(s.Kind) || old.Platform != s.Platform) {
-		return notify.Sink{}, fmt.Errorf("put sink %s: %w: a new kind or platform is a new sink", s.ID, notify.ErrInvalid)
-	}
+	return stored, insertSinkRow(ctx, q, s)
+}
 
-	stored := s
-	stored.Version = version + 1
-
-	if found {
-		stored.CreatedBy = old.CreatedBy
-
-		n, updErr := q.UpdateNotificationSink(ctx, db.UpdateNotificationSinkParams{
-			Name: s.Name, Target: s.Target, ID: s.ID, Version: s.Version, Namespace: s.Scope.String(),
-		})
-		if updErr != nil {
-			return notify.Sink{}, fmt.Errorf("update sink: %w", updErr)
-		}
-
-		if n == 0 {
-			return notify.Sink{}, fmt.Errorf("put sink %s: %w", s.ID, notify.ErrConflict)
-		}
-
-		return stored, nil
-	}
-
-	n, insErr := q.InsertNotificationSink(ctx, db.InsertNotificationSinkParams{
-		ID: s.ID, Namespace: s.Scope.String(), Kind: string(s.Kind), Name: s.Name, Platform: s.Platform,
-		Target: s.Target, CreatedBy: s.CreatedBy,
+// updateSinkRow changes the name and the target of the stored sink at the
+// version of s. It returns notify.ErrConflict when another write changed the
+// sink since.
+func updateSinkRow(ctx context.Context, q *db.Queries, s notify.Sink) error {
+	n, err := q.UpdateNotificationSink(ctx, db.UpdateNotificationSinkParams{
+		Name: s.Name, Target: s.Target, ID: s.ID, Version: s.Version, Namespace: s.Scope.String(),
 	})
-	if insErr != nil {
-		return notify.Sink{}, fmt.Errorf("insert sink: %w", insErr)
+	if err != nil {
+		return fmt.Errorf("update sink: %w", err)
 	}
 
 	if n == 0 {
-		return notify.Sink{}, fmt.Errorf("put sink %s: %w", s.ID, notify.ErrConflict)
+		return fmt.Errorf("put sink %s: %w", s.ID, notify.ErrConflict)
 	}
 
-	return stored, nil
+	return nil
+}
+
+// insertSinkRow writes a new sink. It returns notify.ErrConflict when another
+// write made the sink since.
+func insertSinkRow(ctx context.Context, q *db.Queries, s notify.Sink) error {
+	n, err := q.InsertNotificationSink(ctx, db.InsertNotificationSinkParams{
+		ID: s.ID, Namespace: s.Scope.String(), Kind: string(s.Kind), Name: s.Name, Platform: s.Platform,
+		Target: s.Target, CreatedBy: s.CreatedBy,
+	})
+	if err != nil {
+		return fmt.Errorf("insert sink: %w", err)
+	}
+
+	if n == 0 {
+		return fmt.Errorf("put sink %s: %w", s.ID, notify.ErrConflict)
+	}
+
+	return nil
 }
 
 // putSinkSecrets writes the secret items of s: the new items, the order of the
 // refs, and the drop of the items that s no longer names.
 func putSinkSecrets(ctx context.Context, q *db.Queries, s notify.Sink, secrets []notify.SealedSecret) error {
-	scope := s.Scope.String()
-
-	rows, err := q.ListNotificationSinkSecrets(ctx, db.ListNotificationSinkSecretsParams{Namespace: scope, SinkID: s.ID})
+	rows, err := q.ListNotificationSinkSecrets(
+		ctx,
+		db.ListNotificationSinkSecretsParams{Namespace: s.Scope.String(), SinkID: s.ID},
+	)
 	if err != nil {
 		return fmt.Errorf("select sink secrets: %w", err)
 	}
@@ -169,56 +173,95 @@ func putSinkSecrets(ctx context.Context, q *db.Queries, s notify.Sink, secrets [
 		return fmt.Errorf("put sink: %w", err)
 	}
 
+	if applyErr := applySecretChange(ctx, q, s, change); applyErr != nil {
+		return applyErr
+	}
+
+	return writeSinkSecrets(ctx, q, s, secrets)
+}
+
+// applySecretChange deletes the items that the sink no longer names, and
+// records each new ref as held. A ref names one value for good, so a ref that
+// the namespace held before is notify.ErrInvalid.
+func applySecretChange(ctx context.Context, q *db.Queries, s notify.Sink, change sinkstore.Change) error {
+	scope := s.Scope.String()
+
 	for _, ref := range change.Drop {
-		if err = q.DeleteNotificationSinkSecret(ctx, db.DeleteNotificationSinkSecretParams{
+		err := q.DeleteNotificationSinkSecret(ctx, db.DeleteNotificationSinkSecretParams{
 			Ref: ref, SinkID: s.ID, Namespace: scope,
-		}); err != nil {
+		})
+		if err != nil {
 			return fmt.Errorf("delete sink secret: %w", err)
 		}
 	}
 
 	for _, ref := range change.Claim {
-		n, claimErr := q.ClaimNotificationSinkRef(ctx, db.ClaimNotificationSinkRefParams{Namespace: scope, Ref: ref})
-		if claimErr != nil {
-			return fmt.Errorf("claim sink secret ref: %w", claimErr)
+		n, err := q.ClaimNotificationSinkRef(ctx, db.ClaimNotificationSinkRefParams{Namespace: scope, Ref: ref})
+		if err != nil {
+			return fmt.Errorf("claim sink secret ref: %w", err)
 		}
 
-		// A ref names one value for good: the namespace held this ref before.
+		// The namespace held this ref before.
 		if n == 0 {
 			return fmt.Errorf("%w: the secret ref %s of sink %s was used before", notify.ErrInvalid, ref, s.ID)
-		}
-	}
-
-	for i, ref := range s.SecretRefs {
-		if err = writeSinkSecret(ctx, q, s, i, ref, secrets); err != nil {
-			return err
 		}
 	}
 
 	return nil
 }
 
-// writeSinkSecret stores the new item of ref, or moves the stored item of ref
-// to position i.
-func writeSinkSecret(
-	ctx context.Context, q *db.Queries, s notify.Sink, i int, ref string, secrets []notify.SealedSecret,
-) error {
-	scope := s.Scope.String()
+// writeSinkSecrets stores the new items of the write and sets the position of
+// each ref of s.
+func writeSinkSecrets(ctx context.Context, q *db.Queries, s notify.Sink, secrets []notify.SealedSecret) error {
+	byRef := make(map[string]notify.SealedSecret, len(secrets))
+	for _, sec := range secrets {
+		byRef[sec.Ref()] = sec
+	}
 
-	at := slices.IndexFunc(secrets, func(sec notify.SealedSecret) bool { return sec.Ref() == ref })
-	if at < 0 {
-		if err := q.MoveNotificationSinkSecret(ctx, db.MoveNotificationSinkSecretParams{
-			Position: int64(i), Ref: ref, SinkID: s.ID, Namespace: scope,
-		}); err != nil {
+	for i, ref := range s.SecretRefs {
+		place := secretPlace{sink: s, position: i, ref: ref, fresh: nil}
+
+		if sec, isNew := byRef[ref]; isNew {
+			place.fresh = &sec
+		}
+
+		if writeErr := writeSinkSecret(ctx, q, place); writeErr != nil {
+			return writeErr
+		}
+	}
+
+	return nil
+}
+
+// secretPlace is where one secret item of a sink goes: its position among the
+// refs of the sink, and its new sealed value, which is nil for a stored item.
+type secretPlace struct {
+	sink     notify.Sink
+	position int
+	ref      string
+	fresh    *notify.SealedSecret
+}
+
+// writeSinkSecret stores the new item of the place, or moves the stored item
+// to the position of the place.
+func writeSinkSecret(ctx context.Context, q *db.Queries, p secretPlace) error {
+	scope := p.sink.Scope.String()
+
+	if p.fresh == nil {
+		err := q.MoveNotificationSinkSecret(ctx, db.MoveNotificationSinkSecretParams{
+			Position: int64(p.position), Ref: p.ref, SinkID: p.sink.ID, Namespace: scope,
+		})
+		if err != nil {
 			return fmt.Errorf("move sink secret: %w", err)
 		}
 
 		return nil
 	}
 
-	if err := q.InsertNotificationSinkSecret(ctx, db.InsertNotificationSinkSecretParams{
-		Namespace: scope, Ref: ref, SinkID: s.ID, Position: int64(i), Ciphertext: secrets[at].Ciphertext(),
-	}); err != nil {
+	err := q.InsertNotificationSinkSecret(ctx, db.InsertNotificationSinkSecretParams{
+		Namespace: scope, Ref: p.ref, SinkID: p.sink.ID, Position: int64(p.position), Ciphertext: p.fresh.Ciphertext(),
+	})
+	if err != nil {
 		return fmt.Errorf("insert sink secret: %w", err)
 	}
 
@@ -281,13 +324,18 @@ func (k sinks) DeleteSink(ctx context.Context, id string, fence namespace.Fence,
 			return fmt.Errorf("select sink: %w", err)
 		}
 
-		if err = q.DeleteNotificationSinkSecrets(ctx, db.DeleteNotificationSinkSecretsParams{
+		err = q.DeleteNotificationSinkSecrets(ctx, db.DeleteNotificationSinkSecretsParams{
 			SinkID: id, Namespace: scope.String(),
-		}); err != nil {
+		})
+		if err != nil {
 			return fmt.Errorf("delete sink secrets: %w", err)
 		}
 
-		if _, err = q.DeleteNotificationSink(ctx, db.DeleteNotificationSinkParams{ID: id, Namespace: scope.String()}); err != nil {
+		_, err = q.DeleteNotificationSink(
+			ctx,
+			db.DeleteNotificationSinkParams{ID: id, Namespace: scope.String()},
+		)
+		if err != nil {
 			return fmt.Errorf("delete sink: %w", err)
 		}
 

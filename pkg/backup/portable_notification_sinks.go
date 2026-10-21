@@ -1,5 +1,11 @@
 package backup
 
+// Column names of the sink tables that other tables share.
+const (
+	portColRef        = "ref"
+	portColCiphertext = "ciphertext"
+)
+
 // portableSinkTables is the portable description of the notification sink
 // tables, in the order of Tables. The secret items are sealed values: the
 // backup holds the ciphertext, never a plaintext value.
@@ -21,21 +27,21 @@ func portableSinkTables() []PortableTable {
 		},
 		{
 			Table:   "notification_sink_secrets",
-			OrderBy: []string{portColNamespaceID, "ref"},
+			OrderBy: []string{portColNamespaceID, portColRef},
 			Columns: []Column{
 				{Name: portColNamespaceID, Kind: KindText},
-				{Name: "ref", Kind: KindText},
+				{Name: portColRef, Kind: KindText},
 				{Name: "sink_id", Kind: KindText},
 				{Name: "position", Kind: KindInteger},
-				{Name: "ciphertext", Kind: KindBytes},
+				{Name: portColCiphertext, Kind: KindBytes},
 			},
 		},
 		{
 			Table:   "notification_sink_refs",
-			OrderBy: []string{portColNamespaceID, "ref"},
+			OrderBy: []string{portColNamespaceID, portColRef},
 			Columns: []Column{
 				{Name: portColNamespaceID, Kind: KindText},
-				{Name: "ref", Kind: KindText},
+				{Name: portColRef, Kind: KindText},
 			},
 		},
 	}

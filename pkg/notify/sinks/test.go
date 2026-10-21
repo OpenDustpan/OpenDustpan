@@ -57,8 +57,8 @@ func (s *Service) Test(ctx context.Context, c *Caller, ns namespace.Name, id str
 		return TestResult{}, err
 	}
 
-	if err = s.RecordTest(ctx, c, ns, id, result); err != nil {
-		return TestResult{}, err
+	if recordErr := s.RecordTest(ctx, c, ns, id, result); recordErr != nil {
+		return TestResult{}, recordErr
 	}
 
 	return result, nil
@@ -173,11 +173,10 @@ func secretsOf(sink notify.Sink, values [][]byte) [][]byte {
 // checkAddress returns an error that matches egress.ErrRefused when the
 // outbound rules refuse the address that the sink sends to.
 func checkAddress(sink notify.Sink, to string) error {
-	switch sink.Kind {
-	case notify.SinkChat:
+	if sink.Kind == notify.SinkChat {
 		host, err := notify.ChatHost(to)
 		if err != nil {
-			return err //nolint:wrapcheck // The error already matches egress.ErrRefused.
+			return fmt.Errorf("check the address: %w", err)
 		}
 
 		if host != sink.Target {
@@ -185,11 +184,11 @@ func checkAddress(sink notify.Sink, to string) error {
 		}
 
 		return nil
-	default:
-		if err := egress.CheckURL(to, egress.HTTPSOnly); err != nil {
-			return err //nolint:wrapcheck // The error already matches egress.ErrRefused.
-		}
-
-		return nil
 	}
+
+	if err := egress.CheckURL(to, egress.HTTPSOnly); err != nil {
+		return fmt.Errorf("check the address: %w", err)
+	}
+
+	return nil
 }

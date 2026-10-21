@@ -20,9 +20,9 @@ const sinksAgent = "opendustpan-e2e-sinks"
 // sinksBase is the sink route of the scenario namespace.
 const sinksBase = "/api/dustpan/v1/namespaces/" + e2e.Namespace + "/sinks"
 
-// sinkChatToken stands for the token in the URL of a chat webhook. No answer
+// sinkChatMarker stands for the token in the URL of a chat webhook. No answer
 // and no audit entry may hold it.
-const sinkChatToken = "e2e-chat-token-4711"
+const sinkChatMarker = "e2e-chat-token-4711"
 
 var errSinkAnswer = errors.New("the sink answer is not the expected one")
 
@@ -64,17 +64,55 @@ func TestNotificationSinksAPI(t *testing.T) {
 	}
 }
 
+// sinkCall is one request of a step. The builder methods set the optional
+// fields.
+type sinkCall struct {
+	name   string
+	method string
+	path   string
+	body   string
+	key    string
+	want   int
+	check  func(string) error
+}
+
+// sinkRequest returns a request with no body, no key and no check.
+func sinkCase(name, method, path string, want int) sinkCall {
+	return sinkCall{name: name, method: method, path: path, body: "", key: "", want: want, check: nil}
+}
+
+// withBody returns c with a body.
+func (c sinkCall) withBody(body string) sinkCall {
+	c.body = body
+
+	return c
+}
+
+// withKey returns c with the Idempotency-Key header.
+func (c sinkCall) withKey(key string) sinkCall {
+	c.key = key
+
+	return c
+}
+
+// checking returns c with a check of the answer.
+func (c sinkCall) checking(check func(string) error) sinkCall {
+	c.check = check
+
+	return c
+}
+
 // sinkStep runs one sink request as principal A.
-func sinkStep(t *testing.T, env *e2e.Env, name, method, path, body, key string, want int, check func(string) error) {
+func sinkStep(t *testing.T, env *e2e.Env, c sinkCall) {
 	t.Helper()
 
 	headers := map[string]string{}
-	if key != "" {
-		headers["Idempotency-Key"] = key
+	if c.key != "" {
+		headers["Idempotency-Key"] = c.key
 	}
 
 	env.APIStepWithHeaders(t.Context(), t, e2e.APIStepSpec{
-		UserAgent: sinksAgent, Name: name, Method: method, Path: path, Body: body, Want: want, Check: check,
+		UserAgent: sinksAgent, Name: c.name, Method: c.method, Path: c.path, Body: c.body, Want: c.want, Check: c.check,
 		Scheme: "token",
 	}, headers)
 }
@@ -86,68 +124,77 @@ func sinksScenario(t *testing.T, env *e2e.Env) {
 
 	var key string
 
-	remember := func(into *sinkDoc, keyInto *string) func(string) error {
-		return func(body string) error {
-			if err := json.Unmarshal([]byte(body), into); err != nil {
-				return fmt.Errorf("decode sink: %w", err)
-			}
-
-			if keyInto != nil {
-				m := sinkKeyPattern.FindStringSubmatch(body)
-				if m == nil {
-					return fmt.Errorf("%w: no signing key in %s", errSinkAnswer, body)
-				}
-
-				*keyInto = m[1]
-			}
-
-			return nil
-		}
-	}
-
 	hookBody := `{"kind":"webhook","name":"Operations","target":"https://hooks.example.invalid/dustpan"}`
 	chatBody := `{"kind":"chat","platform":"slack","name":"Ops channel",` +
-		`"url":"https://hooks.slack.com/services/T000/B000/` + sinkChatToken + `"}`
+		`"url":"https://hooks.slack.com/services/T000/B000/` + sinkChatMarker + `"}`
 
-	sinkStep(t, env, "a webhook on the machine of the server is refused", http.MethodPost, sinksBase,
-		`{"kind":"webhook","name":"Local","target":"https://127.0.0.1:9443/hook-`+sinkChatToken+`"}`, "",
-		http.StatusBadRequest, sinkNeverContains(sinkChatToken, "127.0.0.1"))
-	sinkStep(t, env, "a webhook on the metadata address is refused", http.MethodPost, sinksBase,
-		`{"kind":"webhook","name":"Meta","target":"https://169.254.169.254/latest"}`, "", http.StatusBadRequest, nil)
-	sinkStep(t, env, "make a signed webhook", http.MethodPost, sinksBase, hookBody, "", http.StatusCreated,
-		remember(&hook, &key))
-	sinkStep(t, env, "make a chat webhook", http.MethodPost, sinksBase, chatBody, "", http.StatusCreated,
-		remember(&chat, nil))
+	sinkStep(t, env, sinkCase("a webhook on the machine of the server is refused", http.MethodPost, sinksBase,
+		http.StatusBadRequest).
+		withBody(`{"kind":"webhook","name":"Local","target":"https://127.0.0.1:9443/hook-`+sinkChatMarker+`"}`).
+		checking(sinkNeverContains(sinkChatMarker, "127.0.0.1")))
+	sinkStep(t, env, sinkCase("a webhook on the metadata address is refused", http.MethodPost, sinksBase,
+		http.StatusBadRequest).withBody(`{"kind":"webhook","name":"Meta","target":"https://169.254.169.254/latest"}`))
+	sinkStep(t, env, sinkCase("make a signed webhook", http.MethodPost, sinksBase, http.StatusCreated).
+		withBody(hookBody).checking(func(body string) error { return rememberSink(body, &hook, &key) }))
+	sinkStep(t, env, sinkCase("make a chat webhook", http.MethodPost, sinksBase, http.StatusCreated).
+		withBody(chatBody).checking(func(body string) error { return rememberSink(body, &chat, nil) }))
 
 	if hook.ID == "" || chat.ID == "" || !chat.URLSet || chat.Target != "hooks.slack.com" {
 		t.Fatalf("sinks = %+v, %+v, want a webhook and a chat sink with the host as target", hook, chat)
 	}
 
-	sinkStep(t, env, "the list holds both and no secret", http.MethodGet, sinksBase, "", "", http.StatusOK,
-		func(body string) error {
-			if !strings.Contains(body, hook.ID) || !strings.Contains(body, chat.ID) {
-				return fmt.Errorf("%w: both sinks are not in %s", errSinkAnswer, body)
-			}
-
-			return sinkNeverContains(sinkChatToken, key, "signingKey")(body)
-		})
-	sinkStep(t, env, "read the chat sink", http.MethodGet, sinksBase+"/"+chat.ID, "", "", http.StatusOK,
-		sinkNeverContains(sinkChatToken, "/services/"))
-
-	sinkStep(t, env, "rename the webhook", http.MethodPut, sinksBase+"/"+hook.ID,
-		`{"version":1,"name":"Operations team"}`, "", http.StatusOK, remember(&hook, nil))
-	sinkStep(t, env, "a stale version is refused", http.MethodPut, sinksBase+"/"+hook.ID,
-		`{"version":1,"name":"Again"}`, "", http.StatusConflict, nil)
-
+	sinkReadSteps(t, env, hook, chat, key)
 	sinkTestSteps(t, env, hook, chat, key)
 	sinkKeyedSteps(t, env)
 	sinkAuditStep(t, env, key)
 	sinkMemberStep(t, env, hook)
 
-	sinkStep(t, env, "delete the webhook", http.MethodDelete, sinksBase+"/"+hook.ID, "", "", http.StatusNoContent, nil)
-	sinkStep(t, env, "the deleted webhook is gone", http.MethodGet, sinksBase+"/"+hook.ID, "", "",
-		http.StatusNotFound, nil)
-	sinkStep(t, env, "delete the chat sink", http.MethodDelete, sinksBase+"/"+chat.ID, "", "", http.StatusNoContent, nil)
+	sinkStep(t, env, sinkCase("delete the webhook", http.MethodDelete, sinksBase+"/"+hook.ID, http.StatusNoContent))
+	sinkStep(t, env, sinkCase("the deleted webhook is gone", http.MethodGet, sinksBase+"/"+hook.ID,
+		http.StatusNotFound))
+	sinkStep(t, env, sinkCase("delete the chat sink", http.MethodDelete, sinksBase+"/"+chat.ID,
+		http.StatusNoContent))
+}
+
+// rememberSink decodes a sink answer into into, and the signing key into
+// keyInto when it is set.
+func rememberSink(body string, into *sinkDoc, keyInto *string) error {
+	if err := json.Unmarshal([]byte(body), into); err != nil {
+		return fmt.Errorf("decode sink: %w", err)
+	}
+
+	if keyInto == nil {
+		return nil
+	}
+
+	m := sinkKeyPattern.FindStringSubmatch(body)
+	if m == nil {
+		return fmt.Errorf("%w: no signing key in %s", errSinkAnswer, body)
+	}
+
+	*keyInto = m[1]
+
+	return nil
+}
+
+// sinkReadSteps lists, reads and changes the sinks.
+func sinkReadSteps(t *testing.T, env *e2e.Env, hook, chat sinkDoc, key string) {
+	t.Helper()
+
+	sinkStep(t, env, sinkCase("the list holds both and no secret", http.MethodGet, sinksBase, http.StatusOK).
+		checking(func(body string) error {
+			if !strings.Contains(body, hook.ID) || !strings.Contains(body, chat.ID) {
+				return fmt.Errorf("%w: both sinks are not in %s", errSinkAnswer, body)
+			}
+
+			return sinkNeverContains(sinkChatMarker, key, "signingKey")(body)
+		}))
+	sinkStep(t, env, sinkCase("read the chat sink", http.MethodGet, sinksBase+"/"+chat.ID, http.StatusOK).
+		checking(sinkNeverContains(sinkChatMarker, "/services/")))
+	sinkStep(t, env, sinkCase("rename the webhook", http.MethodPut, sinksBase+"/"+hook.ID, http.StatusOK).
+		withBody(`{"version":1,"name":"Operations team"}`))
+	sinkStep(t, env, sinkCase("a stale version is refused", http.MethodPut, sinksBase+"/"+hook.ID,
+		http.StatusConflict).withBody(`{"version":1,"name":"Again"}`))
 }
 
 // sinkNeverContains returns a check that the answer holds none of the texts.
@@ -167,35 +214,35 @@ func sinkNeverContains(texts ...string) func(string) error {
 func sinkTestSteps(t *testing.T, env *e2e.Env, hook, chat sinkDoc, key string) {
 	t.Helper()
 
-	sinkStep(t, env, "send the test message of the webhook", http.MethodPost, sinksBase+"/"+hook.ID+"/test", "", "",
-		http.StatusOK, func(body string) error {
-			var res struct {
-				Delivered bool   `json:"delivered"`
-				Class     string `json:"class"`
-				Message   string `json:"message"`
-			}
+	sinkStep(t, env, sinkCase("send the test message of the webhook", http.MethodPost,
+		sinksBase+"/"+hook.ID+"/test", http.StatusOK).checking(func(body string) error {
+		var res struct {
+			Delivered bool   `json:"delivered"`
+			Class     string `json:"class"`
+			Message   string `json:"message"`
+		}
 
-			if err := json.Unmarshal([]byte(body), &res); err != nil {
-				return fmt.Errorf("decode test result: %w", err)
-			}
+		if err := json.Unmarshal([]byte(body), &res); err != nil {
+			return fmt.Errorf("decode test result: %w", err)
+		}
 
-			// The host name does not resolve, so the message does not arrive.
-			if res.Delivered || res.Class != "temporary" || res.Message == "" {
-				return fmt.Errorf("%w: test result %s, want the class temporary", errSinkAnswer, body)
-			}
+		// The host name does not resolve, so the message does not arrive.
+		if res.Delivered || res.Class != "temporary" || res.Message == "" {
+			return fmt.Errorf("%w: test result %s, want the class temporary", errSinkAnswer, body)
+		}
 
-			return sinkNeverContains("example.invalid", key, "hooks")(body)
-		})
-	sinkStep(t, env, "the chat sink has no sender yet", http.MethodPost, sinksBase+"/"+chat.ID+"/test", "", "",
-		http.StatusUnprocessableEntity, func(body string) error {
-			if !strings.Contains(body, "sink.no-sender") {
-				return fmt.Errorf("%w: want sink.no-sender in %s", errSinkAnswer, body)
-			}
+		return sinkNeverContains("example.invalid", key, "hooks")(body)
+	}))
+	sinkStep(t, env, sinkCase("the chat sink has no sender yet", http.MethodPost, sinksBase+"/"+chat.ID+"/test",
+		http.StatusUnprocessableEntity).checking(func(body string) error {
+		if !strings.Contains(body, "sink.no-sender") {
+			return fmt.Errorf("%w: want sink.no-sender in %s", errSinkAnswer, body)
+		}
 
-			return sinkNeverContains(sinkChatToken)(body)
-		})
-	sinkStep(t, env, "the test of an unknown sink", http.MethodPost, sinksBase+"/snk-doesnotexist/test", "", "",
-		http.StatusNotFound, nil)
+		return sinkNeverContains(sinkChatMarker)(body)
+	}))
+	sinkStep(t, env, sinkCase("the test of an unknown sink", http.MethodPost, sinksBase+"/snk-doesnotexist/test",
+		http.StatusNotFound))
 }
 
 // sinkKeyedSteps proves that a key makes one sink, and that a replay of a
@@ -207,26 +254,28 @@ func sinkKeyedSteps(t *testing.T, env *e2e.Env) {
 
 	var made sinkDoc
 
-	sinkStep(t, env, "make a webhook with an idempotency key", http.MethodPost, sinksBase, body, "e2e-sink-key",
-		http.StatusCreated, func(answer string) error { return json.Unmarshal([]byte(answer), &made) })
-	sinkStep(t, env, "the same create with the same key names the sink and not the key", http.MethodPost, sinksBase,
-		body, "e2e-sink-key", http.StatusConflict, func(answer string) error {
-			if !strings.Contains(answer, "request.idempotency-key-replayed-secret") ||
-				!strings.Contains(answer, made.ID) || sinkKeyPattern.MatchString(answer) {
-				return fmt.Errorf("%w: replay %s", errSinkAnswer, answer)
-			}
+	sinkStep(t, env, sinkCase("make a webhook with an idempotency key", http.MethodPost, sinksBase,
+		http.StatusCreated).withBody(body).withKey("e2e-sink-key").
+		checking(func(answer string) error { return json.Unmarshal([]byte(answer), &made) }))
+	sinkStep(t, env, sinkCase("the same create with the same key names the sink and not the key", http.MethodPost,
+		sinksBase, http.StatusConflict).withBody(body).withKey("e2e-sink-key").checking(func(answer string) error {
+		if !strings.Contains(answer, "request.idempotency-key-replayed-secret") ||
+			!strings.Contains(answer, made.ID) || sinkKeyPattern.MatchString(answer) {
+			return fmt.Errorf("%w: replay %s", errSinkAnswer, answer)
+		}
 
-			return nil
-		})
-	sinkStep(t, env, "the same key with another body is refused", http.MethodPost, sinksBase,
-		`{"kind":"webhook","name":"Other","target":"https://other.example.invalid/hook"}`, "e2e-sink-key",
-		http.StatusUnprocessableEntity, nil)
-	sinkStep(t, env, "delete the keyed webhook", http.MethodDelete, sinksBase+"/"+made.ID, "", "e2e-sink-delete",
-		http.StatusNoContent, nil)
+		return nil
+	}))
+	sinkStep(t, env, sinkCase("the same key with another body is refused", http.MethodPost, sinksBase,
+		http.StatusUnprocessableEntity).
+		withBody(`{"kind":"webhook","name":"Other","target":"https://other.example.invalid/hook"}`).
+		withKey("e2e-sink-key"))
+	sinkStep(t, env, sinkCase("delete the keyed webhook", http.MethodDelete, sinksBase+"/"+made.ID,
+		http.StatusNoContent).withKey("e2e-sink-delete"))
 }
 
 // sinkAuditStep reads the audit log of the namespace and proves that it holds
-// the four sink actions and no secret.
+// the sink actions and no secret.
 func sinkAuditStep(t *testing.T, env *e2e.Env, key string) {
 	t.Helper()
 
@@ -242,7 +291,7 @@ func sinkAuditStep(t *testing.T, env *e2e.Env, key string) {
 		}
 	}
 
-	for _, secret := range []string{sinkChatToken, key, "example.invalid", "hooks.slack.com"} {
+	for _, secret := range []string{sinkChatMarker, key, "example.invalid", "hooks.slack.com"} {
 		if strings.Contains(body, secret) {
 			t.Errorf("audit log holds %q", secret)
 		}

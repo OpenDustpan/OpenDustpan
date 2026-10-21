@@ -58,9 +58,9 @@ func RunSinks(t *testing.T, newHarness SinkFactory) {
 }
 
 // chatSink returns a valid chat sink of the platform Slack.
-func chatSink(id string, scope namespace.Name) notify.Sink {
+func chatSink(id string) notify.Sink {
 	return notify.Sink{
-		ID: id, Scope: scope, Kind: notify.SinkChat, Name: "Ops chat", Platform: "slack", Target: "hooks.slack.com",
+		ID: id, Scope: shop, Kind: notify.SinkChat, Name: "Ops chat", Platform: "slack", Target: "hooks.slack.com",
 		SecretRefs: []string{"itm-" + id}, CreatedBy: "alice", Version: 0,
 	}
 }
@@ -104,7 +104,7 @@ func testSinksList(t *testing.T, h SinkHarness) {
 		t.Fatalf("Sinks of an empty scope = %+v, want none", got)
 	}
 
-	putNew(t, h, fence, chatSink("snk-2", shop))
+	putNew(t, h, fence, chatSink("snk-2"))
 	putNew(t, h, fence, sink("snk-1", shop))
 
 	got := sinksOf(t, h, shop)
@@ -112,7 +112,7 @@ func testSinksList(t *testing.T, h SinkHarness) {
 		t.Fatalf("Sinks = %+v, want snk-1 and snk-2 in the order of their IDs", got)
 	}
 
-	want := chatSink("snk-2", shop)
+	want := chatSink("snk-2")
 	want.Version = 1
 
 	if fmt.Sprintf("%+v", got[1]) != fmt.Sprintf("%+v", want) {
@@ -131,7 +131,14 @@ func testSinksVersion(t *testing.T, h SinkHarness) {
 	s := sink("snk-1", shop)
 	putNew(t, h, fence, s)
 
-	if err := h.Sinks.PutSink(t.Context(), s, fresh(t.Context(), s), fence, manage()); !errors.Is(err, notify.ErrConflict) {
+	err := h.Sinks.PutSink(
+		t.Context(),
+		s,
+		fresh(t.Context(), s),
+		fence,
+		manage(),
+	)
+	if !errors.Is(err, notify.ErrConflict) {
 		t.Fatalf("create of a sink that exists: err = %v, want ErrConflict", err)
 	}
 
@@ -155,9 +162,9 @@ func testSinksPlatformFixed(t *testing.T, h SinkHarness) {
 	t.Helper()
 
 	fence := sinkSetup(t, h)
-	putNew(t, h, fence, chatSink("snk-1", shop))
+	putNew(t, h, fence, chatSink("snk-1"))
 
-	teams := chatSink("snk-1", shop)
+	teams := chatSink("snk-1")
 	teams.Version, teams.Platform = 1, "teams"
 
 	hook := sink("snk-1", shop)
@@ -192,10 +199,10 @@ func testSinksValidate(t *testing.T, h SinkHarness) {
 
 	fence := sinkSetup(t, h)
 
-	noPlatform := chatSink("snk-1", shop)
+	noPlatform := chatSink("snk-1")
 	noPlatform.Platform = ""
 
-	badPlatform := chatSink("snk-1", shop)
+	badPlatform := chatSink("snk-1")
 	badPlatform.Platform = "irc"
 
 	hookPlatform := sink("snk-1", shop)
@@ -205,13 +212,15 @@ func testSinksValidate(t *testing.T, h SinkHarness) {
 
 	secrets := fresh(t.Context(), sink("snk-1", shop))
 
-	for name, s := range map[string]notify.Sink{
+	refused := map[string]notify.Sink{
 		"a chat sink with no platform":      noPlatform,
 		"a chat sink with an unknown one":   badPlatform,
 		"a webhook sink with a platform":    hookPlatform,
 		"a sink ID without the prefix snk-": badID,
-	} {
-		err := h.Sinks.PutSink(t.Context(), s, secrets, fence, manage())
+	}
+
+	for name := range refused {
+		err := h.Sinks.PutSink(t.Context(), refused[name], secrets, fence, manage())
 		if !errors.Is(err, notify.ErrInvalid) {
 			t.Fatalf("PutSink of %s: err = %v, want ErrInvalid", name, err)
 		}
@@ -289,8 +298,9 @@ func checkRefRules(t *testing.T, h SinkHarness, fence namespace.Fence) {
 	}
 
 	rotated := withRefs(base, "itm-snk-1-c")
-	if err := h.Sinks.PutSink(t.Context(), rotated, []notify.SealedSecret{secret(t.Context(), rotated, "itm-snk-1-c")},
-		fence, manage()); err != nil {
+	err := h.Sinks.PutSink(t.Context(), rotated, []notify.SealedSecret{secret(t.Context(), rotated, "itm-snk-1-c")},
+		fence, manage())
+	if err != nil {
 		t.Fatalf("PutSink with a new ref: %v", err)
 	}
 
@@ -302,8 +312,9 @@ func checkRefRules(t *testing.T, h SinkHarness, fence namespace.Fence) {
 	back := withRefs(base, "itm-snk-1")
 	back.Version = 2
 
-	if err = h.Sinks.PutSink(t.Context(), back, []notify.SealedSecret{secret(t.Context(), back, "itm-snk-1")}, fence,
-		manage()); !errors.Is(err, notify.ErrInvalid) {
+	err = h.Sinks.PutSink(t.Context(), back, []notify.SealedSecret{secret(t.Context(), back, "itm-snk-1")}, fence,
+		manage())
+	if !errors.Is(err, notify.ErrInvalid) {
 		t.Fatalf("PutSink back to a dropped ref: err = %v, want ErrInvalid", err)
 	}
 }
@@ -364,7 +375,14 @@ func testSinksDelete(t *testing.T, h SinkHarness) {
 	}
 
 	again := sink("snk-1", shop)
-	if err := h.Sinks.PutSink(t.Context(), again, fresh(t.Context(), again), fence, manage()); !errors.Is(err, notify.ErrInvalid) {
+	err := h.Sinks.PutSink(
+		t.Context(),
+		again,
+		fresh(t.Context(), again),
+		fence,
+		manage(),
+	)
+	if !errors.Is(err, notify.ErrInvalid) {
 		t.Fatalf("PutSink of a sink with the ref of a deleted sink: err = %v, want ErrInvalid", err)
 	}
 }
@@ -441,8 +459,15 @@ func testSinksAudit(t *testing.T, h SinkHarness) {
 		}
 	}
 
-	foreign := entry(other)
-	if err = h.Sinks.PutSink(t.Context(), s, fresh(t.Context(), s), fence, foreign); err == nil {
+	refuseForeignEntry(t, h, fence, s)
+}
+
+// refuseForeignEntry checks that a write with an audit entry of another scope
+// changes nothing and appends nothing.
+func refuseForeignEntry(t *testing.T, h SinkHarness, fence namespace.Fence, s notify.Sink) {
+	t.Helper()
+
+	if err := h.Sinks.PutSink(t.Context(), s, fresh(t.Context(), s), fence, entry(other)); err == nil {
 		t.Fatal("PutSink with an audit entry of another scope: err = nil, want an error")
 	}
 
@@ -450,8 +475,8 @@ func testSinksAudit(t *testing.T, h SinkHarness) {
 		t.Fatalf("Sinks after the refused put = %+v, want none", got)
 	}
 
-	if after, aerr := h.Domain.AuditEntries(t.Context(), shop); aerr != nil || len(after) != 3 {
-		t.Fatalf("audit entries after the refused put = %d (%v), want 3", len(after), aerr)
+	if after, err := h.Domain.AuditEntries(t.Context(), shop); err != nil || len(after) != 3 {
+		t.Fatalf("audit entries after the refused put = %d (%v), want 3", len(after), err)
 	}
 }
 
@@ -594,7 +619,13 @@ func testSinksRecordTest(t *testing.T, h SinkHarness) {
 	}
 
 	for name, id := range map[string]string{"an unknown sink": "snk-9", "a sink of another scope": "snk-1"} {
-		if err = h.Sinks.RecordSinkTest(t.Context(), id, otherFence, entry(other)); !errors.Is(err, notify.ErrNotFound) {
+		err = h.Sinks.RecordSinkTest(
+			t.Context(),
+			id,
+			otherFence,
+			entry(other),
+		)
+		if !errors.Is(err, notify.ErrNotFound) {
 			t.Fatalf("RecordSinkTest of %s: err = %v, want ErrNotFound", name, err)
 		}
 	}

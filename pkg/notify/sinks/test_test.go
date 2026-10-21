@@ -15,6 +15,10 @@ import (
 	"opendustpan.org/opendustpan/pkg/notify/sinks"
 )
 
+// errNetwork stands for an error of the network that the sender returns. The
+// tests wrap it with the address and the canary that the result must hide.
+var errNetwork = errors.New("network error")
+
 func TestTestSendsOneFixedMessage(t *testing.T) {
 	t.Parallel()
 
@@ -30,17 +34,15 @@ func TestTestSendsOneFixedMessage(t *testing.T) {
 		t.Fatalf("sender got %d messages, want 1", len(f.hook.got))
 	}
 
-	m := f.hook.got[0]
+	checkTestMessage(t, f.hook.got[0], created)
 
-	if m.To != "https://hooks.example.com/ops" || len(m.Secrets) != 1 || string(m.Secrets[0]) != created.SigningKey {
-		t.Fatalf("message to %q with %d secrets, want the target and the signing key", m.To, len(m.Secrets))
-	}
+	checkTestEntry(t, f, created)
+}
 
-	n := m.Notification
-	if n.Type != notify.SinkTest || n.Scope != shop || n.ObjectID != created.Sink.ID || n.Severity != notify.SeverityInfo ||
-		!strings.Contains(n.Summary, "test") || n.Validate() != nil {
-		t.Fatalf("notification = %+v, want a valid sink.test notification that says it is a test", n)
-	}
+// checkTestEntry checks the deadline of the send and the audit entry of a
+// delivered test.
+func checkTestEntry(t *testing.T, f fixture, created sinks.Created) {
+	t.Helper()
 
 	if f.hook.left <= 0 || f.hook.left > sinks.SendTimeout {
 		t.Fatalf("time left on the send = %s, want a deadline of at most %s", f.hook.left, sinks.SendTimeout)
@@ -53,24 +55,48 @@ func TestTestSendsOneFixedMessage(t *testing.T) {
 	}
 }
 
-func TestTestChatSendsToTheURL(t *testing.T) {
-	t.Parallel()
+// checkTestMessage checks the message that the sender got for a test of the
+// webhook sink created.
+func checkTestMessage(t *testing.T, m notify.Message, created sinks.Created) {
+	t.Helper()
+
+	if m.To != "https://hooks.example.com/ops" || len(m.Secrets) != 1 || string(m.Secrets[0]) != created.SigningKey {
+		t.Fatalf("message to %q with %d secrets, want the target and the signing key", m.To, len(m.Secrets))
+	}
+
+	n := m.Notification
+	if n.Type != notify.SinkTest || n.Scope != shop || n.ObjectID != created.Sink.ID ||
+		n.Severity != notify.SeverityInfo ||
+		!strings.Contains(n.Summary, "test") ||
+		n.Validate() != nil {
+		t.Fatalf("notification = %+v, want a valid sink.test notification that says it is a test", n)
+	}
+}
+
+// chatFixture returns a fixture whose service has a sender for chat sinks.
+func chatFixture(t *testing.T) (fixture, *fakeSender) {
+	t.Helper()
 
 	f := newFixture(t, nil)
 	chatSender := &fakeSender{kind: notify.SinkChat, err: nil, mu: sync.Mutex{}, got: nil, left: 0}
 
-	svc, err := sinks.NewService(sinks.Config{
-		Store: f.store, Sealer: f.svcSealer(), Namespaces: fakeNamespaces{}, Senders: []notify.Sender{chatSender},
-		Now: func() time.Time { return time.Date(2026, 10, 21, 9, 0, 0, 0, time.UTC) },
-	})
+	svc, err := sinks.NewService(config(f.store, fakeNamespaces{}, chatSender))
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}
 
 	f.svc = svc
+
+	return f, chatSender
+}
+
+func TestTestChatSendsToTheURL(t *testing.T) {
+	t.Parallel()
+
+	f, chatSender := chatFixture(t)
 	chat := makeChat(t, f)
 
-	res, err := svc.Test(t.Context(), f.caller, shop, chat.ID)
+	res, err := f.svc.Test(t.Context(), f.caller, shop, chat.ID)
 	if err != nil || !res.Delivered {
 		t.Fatalf("Test = %+v, %v, want delivered", res, err)
 	}
@@ -81,44 +107,49 @@ func TestTestChatSendsToTheURL(t *testing.T) {
 	}
 }
 
-func TestTestResultClasses(t *testing.T) {
-	t.Parallel()
+// classCase is one error of the sender and the result that it must give.
+type classCase struct {
+	name      string
+	err       error
+	delivered bool
+	class     string
+	message   string
+}
 
+func classCases() []classCase {
 	leaky := "dial tcp 203.0.113.9:443 " + canary
+	network := fmt.Errorf("%w: %s", errNetwork, leaky)
 
-	cases := []struct {
-		name      string
-		err       error
-		delivered bool
-		class     string
-		message   string
-		outcome   audit.Outcome
-	}{
-		{"an accepted message", nil, true, "", sinks.TextDelivered, audit.OutcomeSuccess},
+	return []classCase{
+		{"an accepted message", nil, true, "", sinks.TextDelivered},
 		{
 			"an address that the rules refuse", fmt.Errorf("%w: %s", egress.ErrRefused, leaky), false,
-			notify.ClassRefused, sinks.TextRefused, audit.OutcomeFailure,
+			notify.ClassRefused, sinks.TextRefused,
 		},
 		{
 			"an answer for good", fmt.Errorf("%w: status 404 %s", notify.ErrPermanent, leaky), false,
-			notify.ClassPermanent, sinks.TextRejected, audit.OutcomeFailure,
+			notify.ClassPermanent, sinks.TextRejected,
 		},
 		{
 			"an answer for now", fmt.Errorf("%w: %s", notify.ErrTemporary, leaky), false,
-			notify.ClassTemporary, sinks.TextFailed, audit.OutcomeFailure,
+			notify.ClassTemporary, sinks.TextFailed,
 		},
 		{
 			"an answer with Retry-After", &notify.RetryAfterError{Wait: time.Hour}, false,
-			notify.ClassTemporary, sinks.TextFailed, audit.OutcomeFailure,
+			notify.ClassTemporary, sinks.TextFailed,
 		},
-		{"an error of the network", errors.New(leaky), false, notify.ClassTemporary, sinks.TextFailed, audit.OutcomeFailure},
+		{"an error of the network", network, false, notify.ClassTemporary, sinks.TextFailed},
 		{
 			"a timeout", fmt.Errorf("post: %w %s", context.DeadlineExceeded, leaky), false,
-			notify.ClassTemporary, sinks.TextFailed, audit.OutcomeFailure,
+			notify.ClassTemporary, sinks.TextFailed,
 		},
 	}
+}
 
-	for _, tc := range cases {
+func TestTestResultClasses(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range classCases() {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -135,20 +166,28 @@ func TestTestResultClasses(t *testing.T) {
 			}
 
 			e := f.store.entries[len(f.store.entries)-1]
-			if e.Outcome != tc.outcome || e.Action != "sink:test" || e.Validate() != nil {
-				t.Fatalf("audit entry = %+v, want a valid sink:test entry with the outcome %s", e, tc.outcome)
+			if e.Action != "sink:test" || e.Validate() != nil || (e.Outcome == audit.OutcomeSuccess) != tc.delivered {
+				t.Fatalf("audit entry = %+v, want a valid sink:test entry for delivered %t", e, tc.delivered)
 			}
 
 			// The error of the sender holds the address and a canary. Neither
 			// reaches the result or the audit entry.
-			for _, shown := range []string{fmt.Sprintf("%+v", res), fmt.Sprintf("%+v", e)} {
-				for _, secret := range []string{"203.0.113.9", canary, created.SigningKey} {
-					if strings.Contains(shown, secret) {
-						t.Fatalf("%q holds %q", shown, secret)
-					}
-				}
-			}
+			assertHidden(t, created.SigningKey, fmt.Sprintf("%+v", res), fmt.Sprintf("%+v", e))
 		})
+	}
+}
+
+// assertHidden fails when one of the texts holds the address or the canary of
+// the error of the sender, or the signing key.
+func assertHidden(t *testing.T, key string, shown ...string) {
+	t.Helper()
+
+	for _, text := range shown {
+		for _, secret := range []string{"203.0.113.9", canary, key} {
+			if strings.Contains(text, secret) {
+				t.Fatalf("%q holds %q", text, secret)
+			}
+		}
 	}
 }
 
@@ -170,8 +209,7 @@ func TestTestRefusals(t *testing.T) {
 		{"a chat sink with no chat sender", func(t *testing.T, f fixture) error {
 			t.Helper()
 
-			s := makeChat(t, f)
-			_, err := f.svc.Test(t.Context(), f.caller, shop, s.ID)
+			_, err := f.svc.Test(t.Context(), f.caller, shop, makeChat(t, f).ID)
 
 			return err
 		}, sinks.ErrNoSender},
@@ -189,13 +227,6 @@ func TestTestRefusals(t *testing.T) {
 
 			return err
 		}, sinks.ErrNoSender},
-		{"an unknown namespace", func(t *testing.T, f fixture) error {
-			t.Helper()
-
-			_, err := f.svc.Test(t.Context(), f.caller, "nowhere", "snk-1")
-
-			return err
-		}, notify.ErrNotFound},
 	}
 
 	for _, tc := range cases {
@@ -205,13 +236,8 @@ func TestTestRefusals(t *testing.T) {
 			f := newFixture(t, nil)
 			before := len(f.store.entries)
 
-			err := tc.run(t, f)
-			if tc.name != "an unknown namespace" && !errors.Is(err, tc.want) {
+			if err := tc.run(t, f); !errors.Is(err, tc.want) {
 				t.Fatalf("Test = %v, want %v", err, tc.want)
-			}
-
-			if tc.name == "an unknown namespace" && err == nil {
-				t.Fatal("Test = nil, want an error")
 			}
 
 			if len(f.hook.got) != 0 {
@@ -225,6 +251,20 @@ func TestTestRefusals(t *testing.T) {
 	}
 }
 
+func TestTestInAnUnknownNamespace(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t, nil)
+
+	if _, err := f.svc.Test(t.Context(), f.caller, "nowhere", "snk-1"); err == nil {
+		t.Fatal("Test = nil, want an error")
+	}
+
+	if len(f.hook.got) != 0 || len(f.store.entries) != 0 {
+		t.Fatalf("sender got %d messages and %d entries were written, want none", len(f.hook.got), len(f.store.entries))
+	}
+}
+
 // TestTestChecksTheAddressAgain proves that a sink that the store holds with
 // an address the rules refuse now never reaches the sender.
 func TestTestChecksTheAddressAgain(t *testing.T) {
@@ -232,11 +272,11 @@ func TestTestChecksTheAddressAgain(t *testing.T) {
 
 	cases := []struct {
 		name   string
-		change func(s *notify.Sink)
+		target string
 	}{
-		{"a webhook on loopback", func(s *notify.Sink) { s.Target = "https://127.0.0.1/hook" }},
-		{"a webhook on the metadata address", func(s *notify.Sink) { s.Target = "https://169.254.169.254/" }},
-		{"a webhook over http", func(s *notify.Sink) { s.Target = "http://hooks.example.com/" }},
+		{"a webhook on loopback", "https://127.0.0.1/hook"},
+		{"a webhook on the metadata address", "https://169.254.169.254/"},
+		{"a webhook over http", "http://hooks.example.com/"},
 	}
 
 	for _, tc := range cases {
@@ -247,7 +287,7 @@ func TestTestChecksTheAddressAgain(t *testing.T) {
 			created := makeHook(t, f)
 
 			s := f.store.sinks[created.Sink.ID]
-			tc.change(&s)
+			s.Target = tc.target
 			f.store.sinks[s.ID] = s
 
 			res, err := f.svc.Test(t.Context(), f.caller, shop, s.ID)
@@ -267,24 +307,14 @@ func TestTestChecksTheAddressAgain(t *testing.T) {
 func TestTestChatHostMustBeTheTarget(t *testing.T) {
 	t.Parallel()
 
-	f := newFixture(t, nil)
-	chatSender := &fakeSender{kind: notify.SinkChat, err: nil, mu: sync.Mutex{}, got: nil, left: 0}
-
-	svc, err := sinks.NewService(sinks.Config{
-		Store: f.store, Sealer: f.svcSealer(), Namespaces: fakeNamespaces{}, Senders: []notify.Sender{chatSender}, Now: nil,
-	})
-	if err != nil {
-		t.Fatalf("NewService: %v", err)
-	}
-
-	f.svc = svc
+	f, chatSender := chatFixture(t)
 	chat := makeChat(t, f)
 
 	s := f.store.sinks[chat.ID]
 	s.Target = "other.example.com"
 	f.store.sinks[s.ID] = s
 
-	res, err := svc.Test(t.Context(), f.caller, shop, chat.ID)
+	res, err := f.svc.Test(t.Context(), f.caller, shop, chat.ID)
 	if err != nil || res.Class != notify.ClassRefused {
 		t.Fatalf("Test = %+v, %v, want the class refused", res, err)
 	}
@@ -312,7 +342,8 @@ func TestTestSecretOfAnotherSink(t *testing.T) {
 	}
 
 	if len(f.hook.got) != 0 || len(f.store.entries) != before {
-		t.Fatalf("sender got %d messages and %d entries were written, want none", len(f.hook.got), len(f.store.entries)-before)
+		t.Fatalf("sender got %d messages and %d entries were written, want none", len(f.hook.got),
+			len(f.store.entries)-before)
 	}
 
 	if strings.Contains(err.Error(), one.SigningKey) || strings.Contains(err.Error(), two.SigningKey) {
@@ -340,9 +371,7 @@ func TestTestClearsThePlaintext(t *testing.T) {
 	f := newFixture(t, nil)
 	k := &keeper{secrets: nil}
 
-	svc, err := sinks.NewService(sinks.Config{
-		Store: f.store, Sealer: f.svcSealer(), Namespaces: fakeNamespaces{}, Senders: []notify.Sender{k}, Now: nil,
-	})
+	svc, err := sinks.NewService(config(f.store, fakeNamespaces{}, k))
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}

@@ -248,7 +248,12 @@ func TestSinkValidate(t *testing.T) {
 		{"a chat webhook with no platform", withPlatform(chat, ""), false, false},
 		{"a chat webhook with an unknown platform", withPlatform(chat, "irc"), false, false},
 		{"a chat platform in upper case", withPlatform(chat, "Slack"), false, false},
-		{"a webhook with a platform", withPlatform(webhook("https://hooks.example.com/ops", "itm-1"), "slack"), false, false},
+		{
+			"a webhook with a platform",
+			withPlatform(webhook("https://hooks.example.com/ops", "itm-1"), "slack"),
+			false,
+			false,
+		},
 		{"an email sink with a platform", withPlatform(email, "slack"), false, false},
 		{"an email address", email, true, false},
 		{"an email address with a name", func() notify.Sink {
@@ -834,8 +839,15 @@ func TestValidateSecrets(t *testing.T) {
 	t.Parallel()
 
 	s := notify.Sink{
-		ID: "snk-1", Scope: "shop", Kind: notify.SinkWebhook, Name: "Ops", Platform: "", Target: "https://hooks.example.com/ops",
-		SecretRefs: []string{"itm-1", "itm-2"}, CreatedBy: "alice", Version: 0,
+		ID:         "snk-1",
+		Scope:      "shop",
+		Kind:       notify.SinkWebhook,
+		Name:       "Ops",
+		Platform:   "",
+		Target:     "https://hooks.example.com/ops",
+		SecretRefs: []string{"itm-1", "itm-2"},
+		CreatedBy:  "alice",
+		Version:    0,
 	}
 	key := func(ref string, n int) notify.SinkSecret {
 		return notify.SinkSecret{Ref: ref, Value: []byte(strings.Repeat("k", n))}

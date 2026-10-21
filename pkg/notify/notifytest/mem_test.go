@@ -207,16 +207,8 @@ func (m *memStore) PutSink(
 
 	return scoped(m.writeEntry(fence, opsmem.Scope(s.Scope), e, func() error {
 		old, ok := m.sinks[s.ID]
-		if ok && old.Scope != s.Scope {
-			return fmt.Errorf("put sink %s: %w", s.ID, notify.ErrNotFound)
-		}
-
-		if old.Version != s.Version {
-			return fmt.Errorf("put sink %s: %w", s.ID, notify.ErrConflict)
-		}
-
-		if ok && (old.Kind != s.Kind || old.Platform != s.Platform) {
-			return fmt.Errorf("put sink %s: %w: a new kind or platform is a new sink", s.ID, notify.ErrInvalid)
+		if err := checkSinkWrite(old, ok, s); err != nil {
+			return err
 		}
 
 		if err := m.checkSecrets(s, secrets); err != nil {
@@ -235,6 +227,21 @@ func (m *memStore) PutSink(
 
 		return nil
 	}), notify.ErrInvalid)
+}
+
+// checkSinkWrite checks the write of s against the stored sink old, which is
+// the zero sink when ok is false.
+func checkSinkWrite(old notify.Sink, ok bool, s notify.Sink) error {
+	switch {
+	case ok && old.Scope != s.Scope:
+		return fmt.Errorf("put sink %s: %w", s.ID, notify.ErrNotFound)
+	case old.Version != s.Version:
+		return fmt.Errorf("put sink %s: %w", s.ID, notify.ErrConflict)
+	case ok && (old.Kind != s.Kind || old.Platform != s.Platform):
+		return fmt.Errorf("put sink %s: %w: a new kind or platform is a new sink", s.ID, notify.ErrInvalid)
+	default:
+		return nil
+	}
 }
 
 func (m *memStore) SinkSecrets(_ context.Context, scope namespace.Name, id string) ([]notify.SealedSecret, error) {

@@ -73,11 +73,23 @@ func (h *Handler) buildRoutes() []Route {
 
 	return []Route{
 		h.readRoute(sinksPath, read, h.list),
-		h.keyedRoute(http.MethodPost, sinksPath, manage, h.create, createdAnswer, sinkID),
+		keyedRoute(keyedSpec{
+			method: http.MethodPost, path: sinksPath, actions: manage, serve: h.create, answer: createdAnswer,
+			secret: sinkID,
+		}),
 		h.readRoute(sinkPath, read, h.get),
-		h.keyedRoute(http.MethodPut, sinkPath, manage, h.replace, replacedAnswer, nil),
-		h.keyedRoute(http.MethodDelete, sinkPath, manage, h.delete, deletedAnswer, nil),
-		h.keyedRoute(http.MethodPost, testPath, manage, h.test, testedAnswer, nil),
+		keyedRoute(keyedSpec{
+			method: http.MethodPut, path: sinkPath, actions: manage, serve: h.replace, answer: replacedAnswer,
+			secret: nil,
+		}),
+		keyedRoute(keyedSpec{
+			method: http.MethodDelete, path: sinkPath, actions: manage, serve: h.delete, answer: deletedAnswer,
+			secret: nil,
+		}),
+		keyedRoute(keyedSpec{
+			method: http.MethodPost, path: testPath, actions: manage, serve: h.test, answer: testedAnswer,
+			secret: nil,
+		}),
 	}
 }
 
@@ -90,14 +102,22 @@ func (*Handler) readRoute(path string, actions []identity.Action, serve RouteHan
 	}
 }
 
+// keyedSpec describes a route that takes the Idempotency-Key header. secret
+// is set for a route whose answer holds a secret.
+type keyedSpec struct {
+	method  string
+	path    string
+	actions []identity.Action
+	serve   RouteHandler
+	answer  func(*requestState) answerFunc
+	secret  func(any) string
+}
+
 // keyedRoute makes one authorized row that takes the Idempotency-Key header.
-func (*Handler) keyedRoute(
-	method, path string, actions []identity.Action, serve RouteHandler, answer func(*requestState) answerFunc,
-	secret func(any) string,
-) Route {
+func keyedRoute(spec keyedSpec) Route {
 	return Route{
-		Method: method, Path: path, Scope: ScopeAuthorized, Actions: actions, Resolve: resolveNamespace,
-		IdempotencyKey: true, Answer: answer, SecretAnswer: secret, Serve: serve,
+		Method: spec.method, Path: spec.path, Scope: ScopeAuthorized, Actions: spec.actions, Resolve: resolveNamespace,
+		IdempotencyKey: true, Answer: spec.answer, SecretAnswer: spec.secret, Serve: spec.serve,
 	}
 }
 
@@ -167,6 +187,11 @@ type requestState struct {
 	test       sinks.TestResult
 }
 
+// newState returns an empty state of a request.
+func newState() *requestState {
+	return &requestState{signingKey: "", test: sinks.TestResult{Delivered: false, Class: "", Message: ""}}
+}
+
 type stateKey struct{}
 
 func withState(ctx context.Context, st *requestState) context.Context {
@@ -180,7 +205,7 @@ func stateOf(ctx context.Context) *requestState {
 		return st
 	}
 
-	return &requestState{}
+	return newState()
 }
 
 // enforce wraps one route table row. It authenticates, resolves the object,
@@ -200,7 +225,7 @@ func (h *Handler) enforce(route Route) http.HandlerFunc {
 			ctx = sessionauth.WithSession(ctx)
 		}
 
-		r = r.WithContext(withState(ctx, &requestState{}))
+		r = r.WithContext(withState(ctx, newState()))
 
 		obj, err := route.Resolve(w, r)
 		if err != nil {

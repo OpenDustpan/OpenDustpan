@@ -3,7 +3,9 @@ package sqlite_test
 import (
 	"context"
 	"fmt"
+	"slices"
 	"testing"
+	"time"
 
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -14,14 +16,25 @@ import (
 // sinkDomain makes the namespaces that sinks need and reads the audit entries
 // that the store appends.
 type sinkDomain struct {
-	t *testing.T
 	s *sqlite.Store
 }
 
-var _ notifytest.Domain = sinkDomain{t: nil, s: nil}
+var _ notifytest.Domain = sinkDomain{s: nil}
 
-func (d sinkDomain) CreateNamespace(_ context.Context, name namespace.Name) (namespace.Fence, error) {
-	return ensureNamespace(d.t, d.s, name), nil
+func (d sinkDomain) CreateNamespace(ctx context.Context, name namespace.Name) (namespace.Fence, error) {
+	if existing, err := d.s.GetNamespace(ctx, name); err == nil {
+		return existing.Fence(), nil
+	}
+
+	ns := namespace.Namespace{
+		ID: namespace.NewID(), CreatedAt: time.UnixMilli(1_700_000_000_000).UTC(), Name: name, HomeRegion: "eu-west",
+		FailoverVersion: 1, Overrides: namespace.Overrides{Forced: false, Unlocked: false},
+	}
+	if err := d.s.CreateNamespace(ctx, ns); err != nil {
+		return namespace.Fence{}, fmt.Errorf("create namespace %s: %w", name, err)
+	}
+
+	return ns.Fence(), nil
 }
 
 func (d sinkDomain) BumpFence(ctx context.Context, fence namespace.Fence) (namespace.Fence, error) {
@@ -37,8 +50,25 @@ func (d sinkDomain) BumpFence(ctx context.Context, fence namespace.Fence) (names
 	return ns.Fence(), nil
 }
 
-func (d sinkDomain) AuditEntries(_ context.Context, scope namespace.Name) ([]audit.Entry, error) {
-	return allAuditEntries(d.t, d.s, scope), nil
+func (d sinkDomain) AuditEntries(ctx context.Context, scope namespace.Name) ([]audit.Entry, error) {
+	var out []audit.Entry
+
+	for page := 1; ; page++ {
+		listing, err := d.s.List(ctx, scope, audit.Page{Number: page, Size: audit.MaxPageSize})
+		if err != nil {
+			return nil, fmt.Errorf("list audit of %s: %w", scope, err)
+		}
+
+		out = append(out, listing.Entries...)
+
+		if len(listing.Entries) < audit.MaxPageSize {
+			break
+		}
+	}
+
+	slices.SortFunc(out, func(a, b audit.Entry) int { return int(a.Sequence - b.Sequence) })
+
+	return out, nil
 }
 
 func TestSinkStoreConformance(t *testing.T) {
@@ -49,6 +79,6 @@ func TestSinkStoreConformance(t *testing.T) {
 
 		s := open(t)
 
-		return notifytest.SinkHarness{Sinks: s.NotificationSinks(), Domain: sinkDomain{t: t, s: s}}
+		return notifytest.SinkHarness{Sinks: s.NotificationSinks(), Domain: sinkDomain{s: s}}
 	})
 }

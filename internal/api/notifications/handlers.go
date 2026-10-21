@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"net/url"
 	"time"
@@ -63,7 +64,7 @@ type testDocument struct {
 	Message   string `json:"message"`
 }
 
-func toDocument(s notify.Sink) sinkDocument {
+func toDocument(s *notify.Sink) sinkDocument {
 	return sinkDocument{
 		ID: s.ID, Namespace: s.Scope.String(), Kind: string(s.Kind), Platform: s.Platform, Name: s.Name,
 		Target: s.Target, URLSet: s.Kind == notify.SinkChat && len(s.SecretRefs) == 1, CreatedBy: s.CreatedBy,
@@ -129,9 +130,7 @@ func jsonAnswer(status int, body any, headers map[string]string) (idempotency.An
 	}
 
 	h := map[string]string{"Content-Type": "application/json", "Cache-Control": "no-store"}
-	for k, v := range headers {
-		h[k] = v
-	}
+	maps.Copy(h, headers)
 
 	return idempotency.Answer{Headers: h, Body: buf.Bytes(), Status: status}, nil
 }
@@ -169,7 +168,7 @@ func createdAnswer(st *requestState) answerFunc {
 
 		return jsonAnswer(
 			http.StatusCreated,
-			createdDocument{sinkDocument: toDocument(s), SigningKey: st.signingKey},
+			createdDocument{sinkDocument: toDocument(&s), SigningKey: st.signingKey},
 			map[string]string{"Location": location(s.Scope, s.ID)},
 		)
 	}
@@ -183,7 +182,7 @@ func replacedAnswer(*requestState) answerFunc {
 			return idempotency.Answer{}, err
 		}
 
-		return jsonAnswer(http.StatusOK, toDocument(s), nil)
+		return jsonAnswer(http.StatusOK, toDocument(&s), nil)
 	}
 }
 
@@ -228,8 +227,8 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request, _ identity.Princi
 	}
 
 	resp := listResponse{Sinks: make([]sinkDocument, 0, len(all))}
-	for _, s := range all {
-		resp.Sinks = append(resp.Sinks, toDocument(s))
+	for i := range all {
+		resp.Sinks = append(resp.Sinks, toDocument(&all[i]))
 	}
 
 	w.Header().Set("Cache-Control", "no-store")
@@ -248,7 +247,7 @@ func (h *Handler) get(w http.ResponseWriter, r *http.Request, _ identity.Princip
 	}
 
 	w.Header().Set("Cache-Control", "no-store")
-	h.writeJSON(ctx, w, http.StatusOK, toDocument(s))
+	h.writeJSON(ctx, w, http.StatusOK, toDocument(&s))
 }
 
 // createBody is the body of a create. The fields are pointers so that a

@@ -24,8 +24,10 @@ The paths in this guide are under `/api/dustpan/v1/`. See
 | Make, change, delete or test a destination | `namespace:manage-notifications` | the namespace |
 | List or read a destination | `namespace:read` | the namespace |
 
-The built-in role `admin` holds `namespace:manage-notifications` on its
-namespace. No other built-in role holds it.
+The built-in roles `admin`, `account-administrator` and `site-administrator`
+hold `namespace:manage-notifications`. The roles `viewer`, `auditor`,
+`secret-viewer`, `writer` and `maintainer` do not hold it. Each role that holds
+`namespace:read` can list and read the destinations of its namespace.
 
 Your receiver needs an `https` URL with a public host name. The server
 refuses a URL that points to your own machine or to a private network. See

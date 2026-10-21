@@ -20,7 +20,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -681,9 +680,7 @@ func newServer(ctx context.Context, tb testing.TB, args serverArgs) serverBuild 
 		st,
 		args,
 		append(
-			slices.Concat(
-				profileStoreOptions(st, wrapper), jobStoreOptions(st), savedViewStoreOptions(st), sinkStoreOptions(st),
-			),
+			storeOptions(st, wrapper),
 			[]dustpan.Option{
 				dustpan.WithRegion(region),
 				dustpan.WithNamespaceStore(st),

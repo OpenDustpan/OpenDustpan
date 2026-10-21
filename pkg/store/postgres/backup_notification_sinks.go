@@ -10,6 +10,12 @@ import (
 	"opendustpan.org/opendustpan/pkg/store/internal/sinkstore"
 )
 
+// Column names of the sink tables that other tables share.
+const (
+	sinkColRef        = "ref"
+	sinkColCiphertext = "ciphertext"
+)
+
 // pgCopySinkTables holds the COPY columns of the notification sink tables, in
 // the order of backup.Tables.
 func pgCopySinkTables() []pgCopyTable {
@@ -23,13 +29,13 @@ func pgCopySinkTables() []pgCopyTable {
 		},
 		{
 			table:   "notification_sink_secrets",
-			columns: []string{pgColNamespaceID, "ref", "sink_id", "position", "ciphertext"},
-			orderBy: []string{pgColNamespaceID, "ref"},
+			columns: []string{pgColNamespaceID, sinkColRef, "sink_id", "position", sinkColCiphertext},
+			orderBy: []string{pgColNamespaceID, sinkColRef},
 		},
 		{
 			table:   "notification_sink_refs",
-			columns: []string{pgColNamespaceID, "ref"},
-			orderBy: []string{pgColNamespaceID, "ref"},
+			columns: []string{pgColNamespaceID, sinkColRef},
+			orderBy: []string{pgColNamespaceID, sinkColRef},
 		},
 	}
 }
@@ -80,8 +86,9 @@ func stagedSinkRows(ctx context.Context, pool *pgxpool.Pool, staging string) ([]
 			namespace *string
 		)
 
-		if scanErr := rows.Scan(&row.ID, &namespace, &row.Kind, &row.Name, &row.Platform, &row.Target, &row.CreatedBy,
-			&row.Version); scanErr != nil {
+		scanErr := rows.Scan(&row.ID, &namespace, &row.Kind, &row.Name, &row.Platform, &row.Target, &row.CreatedBy,
+			&row.Version)
+		if scanErr != nil {
 			return nil, fmt.Errorf("read staged sinks: %w", backup.ErrExportRead)
 		}
 

@@ -1,9 +1,10 @@
 package notifications_test
 
 import (
+	"errors"
 	"fmt"
-	"log/slog"
 	"net/http"
+	"slices"
 	"strings"
 	"testing"
 
@@ -32,29 +33,15 @@ func TestRoutesDeclareActions(t *testing.T) {
 
 		byPattern[pattern] = route
 
-		if route.Scope != apinotifications.ScopeAuthorized || len(route.Actions) == 0 || route.Resolve == nil {
-			t.Fatalf("route %q must be authorized with actions and a resolver", pattern)
-		}
-
-		mutating := route.Method != http.MethodGet
-		if route.IdempotencyKey != mutating || (route.Answer != nil) != mutating {
-			t.Errorf("route %q: takes the key = %t, has an answer = %t, want both %t",
-				pattern, route.IdempotencyKey, route.Answer != nil, mutating)
-		}
-
-		wantManage := mutating
-		if has := containsAction(route.Actions, identity.ActionNamespaceManageNotifications); has != wantManage {
-			t.Errorf("route %q: manage-notifications = %t, want %t", pattern, has, wantManage)
-		}
+		checkRouteDeclaration(t, pattern, route)
 	}
 
-	// The routes of ADR 145: the list and the get, the create, the replace,
+	// The routes of the design: the list and the get, the create, the replace,
 	// the delete and the test.
-	want := []string{
+	want := replaceNamespace([]string{
 		"GET " + base, "POST " + base, "GET " + base + "/{sink_id}", "PUT " + base + "/{sink_id}",
 		"DELETE " + base + "/{sink_id}", "POST " + base + "/{sink_id}/test",
-	}
-	want = replaceNamespace(want)
+	})
 
 	if len(byPattern) != len(want) {
 		t.Fatalf("routes = %d, want %d", len(byPattern), len(want))
@@ -66,19 +53,53 @@ func TestRoutesDeclareActions(t *testing.T) {
 		}
 	}
 
-	for _, pattern := range f.handler.RegisteredPatterns() {
+	checkServedPatterns(t, f, byPattern)
+	checkNoTokenFailsClosed(t, f, byPattern)
+}
+
+// checkRouteDeclaration checks one row of the route table.
+func checkRouteDeclaration(t *testing.T, pattern string, route apinotifications.Route) {
+	t.Helper()
+
+	if route.Scope != apinotifications.ScopeAuthorized || len(route.Actions) == 0 || route.Resolve == nil {
+		t.Fatalf("route %q must be authorized with actions and a resolver", pattern)
+	}
+
+	mutating := route.Method != http.MethodGet
+	if route.IdempotencyKey != mutating || (route.Answer != nil) != mutating {
+		t.Errorf("route %q: takes the key = %t, has an answer = %t, want both %t",
+			pattern, route.IdempotencyKey, route.Answer != nil, mutating)
+	}
+
+	if has := slices.Contains(route.Actions, identity.ActionNamespaceManageNotifications); has != mutating {
+		t.Errorf("route %q: manage-notifications = %t, want %t", pattern, has, mutating)
+	}
+}
+
+// checkServedPatterns checks that the server serves the declared patterns and
+// no other.
+func checkServedPatterns(t *testing.T, f fixture, byPattern map[string]apinotifications.Route) {
+	t.Helper()
+
+	served := f.handler.RegisteredPatterns()
+
+	for _, pattern := range served {
 		if _, ok := byPattern[pattern]; !ok {
 			t.Fatalf("served route %q has no declared action", pattern)
 		}
 	}
 
-	if len(f.handler.RegisteredPatterns()) != len(byPattern) {
-		t.Fatalf("served %d patterns, declared %d", len(f.handler.RegisteredPatterns()), len(byPattern))
+	if len(served) != len(byPattern) {
+		t.Fatalf("served %d patterns, declared %d", len(served), len(byPattern))
 	}
+}
+
+// checkNoTokenFailsClosed checks that a request without a token answers 401,
+// never 404 and never the handler.
+func checkNoTokenFailsClosed(t *testing.T, f fixture, byPattern map[string]apinotifications.Route) {
+	t.Helper()
 
 	for pattern, route := range byPattern {
-		// A request without a token fails closed with 401, never 404 and never
-		// the handler.
 		got := f.do(t, send("", route.Method, routeTarget(route), ""))
 		wantCode(t, "route "+pattern+" without a token", got, http.StatusUnauthorized)
 	}
@@ -86,16 +107,6 @@ func TestRoutesDeclareActions(t *testing.T) {
 	if f.hook.count() != 0 {
 		t.Errorf("sender got %d messages without a token, want none", f.hook.count())
 	}
-}
-
-func containsAction(list []identity.Action, a identity.Action) bool {
-	for _, x := range list {
-		if x == a {
-			return true
-		}
-	}
-
-	return false
 }
 
 // replaceNamespace puts the namespace acme into the patterns of the table.
@@ -162,24 +173,27 @@ func TestNoMuxBypass(t *testing.T) {
 func TestNewHandlerNeedsItsDependencies(t *testing.T) {
 	t.Parallel()
 
-	f := newFixture(t)
-	_ = f
+	full := newFixture(t).config
 
 	cases := []struct {
-		name string
-		cfg  apinotifications.Config
+		name   string
+		change func(cfg *apinotifications.Config)
 	}{
-		{"no service", apinotifications.Config{
-			Sinks: nil, Authenticator: testAuthn{}, Authorizer: testAuthz{deny: nil}, Logger: slog.New(slog.DiscardHandler),
-		}},
+		{"no service", func(cfg *apinotifications.Config) { cfg.Sinks = nil }},
+		{"no authenticator", func(cfg *apinotifications.Config) { cfg.Authenticator = nil }},
+		{"no authorizer", func(cfg *apinotifications.Config) { cfg.Authorizer = nil }},
+		{"no logger", func(cfg *apinotifications.Config) { cfg.Logger = nil }},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			if _, err := apinotifications.NewHandler(tc.cfg); err == nil {
-				t.Fatal("NewHandler = nil, want an error")
+			cfg := full
+			tc.change(&cfg)
+
+			if _, err := apinotifications.NewHandler(cfg); !errors.Is(err, apinotifications.ErrMissingDependency) {
+				t.Fatalf("NewHandler = %v, want ErrMissingDependency", err)
 			}
 		})
 	}

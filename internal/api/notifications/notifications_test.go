@@ -18,6 +18,10 @@ import (
 
 var hex64 = regexp.MustCompile(`^[0-9a-f]{64}$`)
 
+// errNetwork stands for an error of the network. The tests wrap it with an
+// address and a canary that no answer may show.
+var errNetwork = errors.New("network error")
+
 func TestCreateWebhookAnswersTheKeyOnce(t *testing.T) {
 	t.Parallel()
 
@@ -27,8 +31,12 @@ func TestCreateWebhookAnswersTheKeyOnce(t *testing.T) {
 	wantCode(t, "create", got, http.StatusCreated)
 
 	s := decode[sinkWire](t, got)
-	if !strings.HasPrefix(s.ID, notify.SinkIDPrefix) || s.Kind != "webhook" || s.Name != "Ops" || s.Namespace != "acme" ||
-		s.Target != "https://hooks.example.com/ops" || s.Version != 1 || s.CreatedBy != "admin" || s.URLSet ||
+	if !strings.HasPrefix(s.ID, notify.SinkIDPrefix) || s.Kind != "webhook" || s.Name != "Ops" ||
+		s.Namespace != "acme" ||
+		s.Target != "https://hooks.example.com/ops" ||
+		s.Version != 1 ||
+		s.CreatedBy != "admin" ||
+		s.URLSet ||
 		!hex64.MatchString(s.SigningKey) {
 		t.Fatalf("created = %+v, want a webhook at version 1 with a signing key of 64 hex digits", s)
 	}
@@ -41,7 +49,14 @@ func TestCreateWebhookAnswersTheKeyOnce(t *testing.T) {
 		t.Errorf("Cache-Control = %q, want no-store", cc)
 	}
 
-	// No later answer holds the key.
+	checkKeyNotAnsweredAgain(t, f, s)
+	checkKeyNotStored(t, f, s)
+}
+
+// checkKeyNotAnsweredAgain checks that no later read holds the signing key.
+func checkKeyNotAnsweredAgain(t *testing.T, f fixture, s sinkWire) {
+	t.Helper()
+
 	for _, target := range []string{base, base + "/" + s.ID} {
 		again := f.do(t, get("reader", target))
 		wantCode(t, "read", again, http.StatusOK)
@@ -50,6 +65,12 @@ func TestCreateWebhookAnswersTheKeyOnce(t *testing.T) {
 			t.Errorf("read of %s answers the key: %s", target, again.body)
 		}
 	}
+}
+
+// checkKeyNotStored checks that the store holds the signing key sealed, and
+// that the audit entry and the log hold neither the key nor the plaintext.
+func checkKeyNotStored(t *testing.T, f fixture, s sinkWire) {
+	t.Helper()
 
 	sealed, err := f.store.NotificationSinks().SinkSecrets(t.Context(), "acme", s.ID)
 	if err != nil || len(sealed) != 1 {
@@ -66,7 +87,8 @@ func TestCreateWebhookAnswersTheKeyOnce(t *testing.T) {
 		t.Fatalf("audit entries = %+v, want one sink:create entry of %s", entries, s.ID)
 	}
 
-	if strings.Contains(fmt.Sprintf("%+v", entries[0]), s.SigningKey) || strings.Contains(f.logs.String(), s.SigningKey) {
+	if strings.Contains(fmt.Sprintf("%+v", entries[0]), s.SigningKey) ||
+		strings.Contains(f.logs.String(), s.SigningKey) {
 		t.Error("an audit entry or a log line holds the signing key")
 	}
 }
@@ -87,30 +109,36 @@ func TestCreateChatKeepsTheURLSecret(t *testing.T) {
 
 	// The URL and its token appear nowhere: not in an answer, not in an audit
 	// entry, not in a log line, not in the store in plaintext.
-	shown := []string{got.body}
+	for _, text := range shownTexts(t, f, got, s) {
+		if strings.Contains(text, canary) || strings.Contains(text, "/services/T0") {
+			t.Errorf("the URL of the webhook shows in %q", text)
+		}
+	}
+}
+
+// shownTexts returns every text that the server shows about the chat sink s:
+// the answer of the create, the reads, the audit entries, the log and the
+// stored secret item.
+func shownTexts(t *testing.T, f fixture, created response, s sinkWire) []string {
+	t.Helper()
+
+	shown := []string{created.body, f.logs.String()}
 
 	for _, target := range []string{base, base + "/" + s.ID} {
 		shown = append(shown, f.do(t, get("reader", target)).body)
 	}
 
-	for _, e := range f.entries(t) {
-		shown = append(shown, fmt.Sprintf("%+v", e))
+	entries := f.entries(t)
+	for i := range entries {
+		shown = append(shown, fmt.Sprintf("%+v", entries[i]))
 	}
-
-	shown = append(shown, f.logs.String())
 
 	sealed, err := f.store.NotificationSinks().SinkSecrets(t.Context(), "acme", s.ID)
 	if err != nil || len(sealed) != 1 {
 		t.Fatalf("stored secrets = %d (%v), want 1", len(sealed), err)
 	}
 
-	shown = append(shown, string(sealed[0].Ciphertext()))
-
-	for _, text := range shown {
-		if strings.Contains(text, canary) || strings.Contains(text, "/services/T0") {
-			t.Errorf("the URL of the webhook shows in %q", text)
-		}
-	}
+	return append(shown, string(sealed[0].Ciphertext()))
 }
 
 func TestCreateRefusals(t *testing.T) {
@@ -135,7 +163,13 @@ func TestCreateRefusals(t *testing.T) {
 		{"a chat URL on localhost", "admin", chat("https://localhost/" + canary), 400, "sink.invalid"},
 		{"a chat URL on the metadata address", "admin", chat("https://169.254.169.254/" + canary), 400, "sink.invalid"},
 		{"a chat URL on a private address", "admin", chat("https://192.168.1.10/" + canary), 400, "sink.invalid"},
-		{"a chat URL with user information", "admin", chat("https://u:p@hooks.slack.com/" + canary), 400, "sink.invalid"},
+		{
+			"a chat URL with user information",
+			"admin",
+			chat("https://u:p@hooks.slack.com/" + canary),
+			400,
+			"sink.invalid",
+		},
 		{"a webhook over http", "admin", hook("http://hooks.example.com/" + canary), 400, "sink.invalid"},
 		{"a webhook on loopback", "admin", hook("https://127.0.0.1:8443/" + canary), 400, "sink.invalid"},
 		{"a webhook on IPv6 loopback", "admin", hook("https://[::1]/" + canary), 400, "sink.invalid"},
@@ -143,12 +177,19 @@ func TestCreateRefusals(t *testing.T) {
 		{"no kind", "admin", `{"name":"x"}`, 400, "sink.invalid"},
 		{"no name", "admin", `{"kind":"webhook"}`, 400, "sink.invalid"},
 		{"an unknown kind", "admin", `{"kind":"pager","name":"x","target":"x"}`, 400, "sink.invalid"},
-		{"an unknown field", "admin", `{"kind":"webhook","name":"x","target":"https://a.example.com/","extra":1}`, 400,
-			"request.body-invalid"},
+		{
+			"an unknown field",
+			"admin",
+			`{"kind":"webhook","name":"x","target":"https://a.example.com/","extra":1}`,
+			400,
+			"request.body-invalid",
+		},
 		{"two documents", "admin", webhookBody(t, "a") + webhookBody(t, "b"), 400, "request.body-invalid"},
 		{"a body that is not JSON", "admin", "kind=webhook", 400, "request.body-invalid"},
-		{"a body over the limit", "admin", `{"kind":"webhook","name":"` + strings.Repeat("n", 70<<10) + `"}`, 400,
-			"request.body-invalid"},
+		{
+			"a body over the limit", "admin", `{"kind":"webhook","name":"` + strings.Repeat("n", 70<<10) + `"}`, 400,
+			"request.body-invalid",
+		},
 		{"a reader", "reader", webhookBody(t, "a"), 403, "auth.forbidden"},
 		{"no token", "", webhookBody(t, "a"), 401, "auth.unauthenticated"},
 	}
@@ -204,7 +245,7 @@ func TestReplace(t *testing.T) {
 	t.Parallel()
 
 	f := newFixture(t)
-	s := f.makeWebhook(t, "Ops")
+	s := f.makeWebhook(t)
 	path := base + "/" + s.ID
 
 	renamed := f.do(t, send("admin", http.MethodPut, path, `{"version":1,"name":"Ops team"}`))
@@ -229,25 +270,8 @@ func TestReplace(t *testing.T) {
 		t.Errorf("read after the change = %+v, want the new target at version 3", got)
 	}
 
-	refused := []struct{ name, body string }{
-		{"no version", `{"name":"x"}`},
-		{"no name", `{"version":3}`},
-		{"a loopback target", `{"version":3,"name":"x","target":"https://127.0.0.1/"}`},
-		{"a url for a webhook", `{"version":3,"name":"x","url":"https://hooks.slack.com/x"}`},
-		{"an unknown field", `{"version":3,"name":"x","kind":"chat"}`},
-	}
-
-	for _, tc := range refused {
-		got := f.do(t, send("admin", http.MethodPut, path, tc.body))
-		if got.code != http.StatusBadRequest {
-			t.Errorf("replace with %s: %d %s, want 400", tc.name, got.code, got.body)
-		}
-	}
-
-	entries := f.sinkEntries(t)
-
-	actions := make([]string, 0, len(entries))
-	for _, e := range entries {
+	actions := make([]string, 0, 3)
+	for _, e := range f.sinkEntries(t) {
 		actions = append(actions, e.Action)
 	}
 
@@ -257,6 +281,38 @@ func TestReplace(t *testing.T) {
 
 	wantCode(t, "unknown sink", f.do(t, send("admin", http.MethodPut, base+"/snk-nothing",
 		`{"version":1,"name":"x"}`)), http.StatusNotFound)
+}
+
+func TestReplaceRefusals(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct{ name, body string }{
+		{"no version", `{"name":"x"}`},
+		{"no name", `{"version":1}`},
+		{"a loopback target", `{"version":1,"name":"x","target":"https://127.0.0.1/"}`},
+		{"a url for a webhook", `{"version":1,"name":"x","url":"https://hooks.slack.com/x"}`},
+		{"an unknown field", `{"version":1,"name":"x","kind":"chat"}`},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			f := newFixture(t)
+			s := f.makeWebhook(t)
+
+			wantCode(
+				t,
+				"replace",
+				f.do(t, send("admin", http.MethodPut, base+"/"+s.ID, tc.body)),
+				http.StatusBadRequest,
+			)
+
+			if n := len(f.sinkEntries(t)); n != 1 {
+				t.Errorf("audit entries = %d, want only the create", n)
+			}
+		})
+	}
 }
 
 func TestReplaceChatURLIsANewSecret(t *testing.T) {
@@ -279,29 +335,39 @@ func TestReplaceChatURLIsANewSecret(t *testing.T) {
 	wantCode(t, "new URL", got, http.StatusOK)
 
 	after, err := f.store.NotificationSinks().Sinks(t.Context(), "acme")
-	if err != nil || len(after) != 1 || len(after[0].SecretRefs) != 1 || after[0].SecretRefs[0] == before[0].SecretRefs[0] {
+	if err != nil || len(after) != 1 || len(after[0].SecretRefs) != 1 ||
+		after[0].SecretRefs[0] == before[0].SecretRefs[0] {
 		t.Fatalf("Sinks after the change = %+v (%v), want a new secret ref", after, err)
 	}
 
 	if strings.Contains(got.body, canary) || strings.Contains(f.logs.String(), canary) {
 		t.Error("the answer or a log line holds the new URL")
 	}
+}
+
+func TestReplaceChatRefusals(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	s := f.makeChat(t, "Chat")
+	path := base + "/" + s.ID
 
 	// A target is not a field of a chat sink.
-	refused := f.do(t, send("admin", http.MethodPut, path, `{"version":2,"name":"Chat","target":"evil.example.com"}`))
+	refused := f.do(t, send("admin", http.MethodPut, path, `{"version":1,"name":"Chat","target":"evil.example.com"}`))
 	wantCode(t, "target of a chat sink", refused, http.StatusBadRequest)
 
 	// A URL on a private address leaves the sink as it was.
 	private := f.do(t, send("admin", http.MethodPut, path,
-		jsonString(t, map[string]any{"version": 2, "name": "Chat", "url": "https://10.0.0.7/" + canary})))
+		jsonString(t, map[string]any{"version": 1, "name": "Chat", "url": "https://10.0.0.7/" + canary})))
 	wantCode(t, "private URL", private, http.StatusBadRequest)
 
 	if strings.Contains(private.body, canary) {
 		t.Error("the refusal echoes the URL")
 	}
 
-	if again, _ := f.store.NotificationSinks().Sinks(t.Context(), "acme"); len(again) != 1 || again[0].Version != 2 {
-		t.Errorf("sink after the refusals = %+v, want version 2", again)
+	again, err := f.store.NotificationSinks().Sinks(t.Context(), "acme")
+	if err != nil || len(again) != 1 || again[0].Version != 1 {
+		t.Errorf("sink after the refusals = %+v, %v, want version 1", again, err)
 	}
 }
 
@@ -309,7 +375,7 @@ func TestDeleteAndRead(t *testing.T) {
 	t.Parallel()
 
 	f := newFixture(t)
-	s := f.makeWebhook(t, "Ops")
+	s := f.makeWebhook(t)
 	path := base + "/" + s.ID
 
 	wantCode(t, "read", f.do(t, get("reader", path)), http.StatusOK)
@@ -331,7 +397,7 @@ func TestSinksBelongToTheirNamespace(t *testing.T) {
 	t.Parallel()
 
 	f := newFixture(t)
-	s := f.makeWebhook(t, "Ops")
+	s := f.makeWebhook(t)
 	other := "/api/dustpan/v1/namespaces/other/sinks"
 
 	wantCode(t, "read in another namespace", f.do(t, get("reader", other+"/"+s.ID)), http.StatusNotFound)
@@ -355,7 +421,7 @@ func TestReaderCannotManage(t *testing.T) {
 	t.Parallel()
 
 	f := newFixture(t)
-	s := f.makeWebhook(t, "Ops")
+	s := f.makeWebhook(t)
 
 	for _, r := range []request{
 		send("reader", http.MethodPost, base, webhookBody(t, "x")),
@@ -403,7 +469,7 @@ func TestTestRouteSendsAndNeverEchoes(t *testing.T) {
 		{"an address that the rules refuse", fmt.Errorf("%w: %s", egress.ErrRefused, leaky), false, "refused"},
 		{"an answer for good", fmt.Errorf("%w: %s", notify.ErrPermanent, leaky), false, "permanent"},
 		{"an answer for now", fmt.Errorf("%w: %s", notify.ErrTemporary, leaky), false, "temporary"},
-		{"an unknown error", errors.New(leaky), false, "temporary"},
+		{"an unknown error", fmt.Errorf("%w: %s", errNetwork, leaky), false, "temporary"},
 	}
 
 	for _, tc := range cases {
@@ -411,45 +477,65 @@ func TestTestRouteSendsAndNeverEchoes(t *testing.T) {
 			t.Parallel()
 
 			f := newFixture(t)
-			s := f.makeWebhook(t, "Ops")
+			s := f.makeWebhook(t)
 			f.hook.fail(tc.err)
 
 			got := f.do(t, send("admin", http.MethodPost, base+"/"+s.ID+"/test", ""))
 			wantCode(t, "test", got, http.StatusOK)
 
-			res := decode[struct {
-				Delivered bool   `json:"delivered"`
-				Class     string `json:"class"`
-				Message   string `json:"message"`
-			}](t, got)
+			res := decode[testWire](t, got)
 			if res.Delivered != tc.delivered || res.Class != tc.class || res.Message == "" {
 				t.Fatalf("test = %+v, want delivered %t, class %q and a fixed text", res, tc.delivered, tc.class)
 			}
 
-			for _, secret := range []string{canary, "203.0.113.9", "hooks.example.com", s.SigningKey} {
-				for _, shown := range []string{got.body, f.logs.String(), fmt.Sprintf("%+v", f.sinkEntries(t))} {
-					if strings.Contains(shown, secret) {
-						t.Errorf("%q shows %q", shown, secret)
-					}
-				}
-			}
-
-			if f.hook.count() != 1 {
-				t.Fatalf("sender got %d messages, want 1", f.hook.count())
-			}
-
-			m := f.hook.sent[0]
-			if m.To != "https://hooks.example.com/ops" || len(m.Secrets) != 1 || string(m.Secrets[0]) != s.SigningKey ||
-				m.Notification.Type != notify.SinkTest {
-				t.Errorf("message = to %q, %d secrets, type %q, want the target, the signing key and sink.test",
-					m.To, len(m.Secrets), m.Notification.Type)
-			}
-
-			entries := f.sinkEntries(t)
-			if last := entries[len(entries)-1]; last.Action != "sink:test" || last.ObjectID != s.ID {
-				t.Errorf("last audit entry = %+v, want sink:test of %s", last, s.ID)
-			}
+			assertNoLeak(t, f, got, s)
+			checkTestMessageSent(t, f, s)
 		})
+	}
+}
+
+// testWire is the answer of a test.
+type testWire struct {
+	Delivered bool   `json:"delivered"`
+	Class     string `json:"class"`
+	Message   string `json:"message"`
+}
+
+// assertNoLeak checks that the answer, the log and the audit entries of a test
+// hold neither the canary, nor the address, nor the host, nor the key.
+func assertNoLeak(t *testing.T, f fixture, got response, s sinkWire) {
+	t.Helper()
+
+	shown := []string{got.body, f.logs.String(), fmt.Sprintf("%+v", f.sinkEntries(t))}
+
+	for _, secret := range []string{canary, "203.0.113.9", "hooks.example.com", s.SigningKey} {
+		for _, text := range shown {
+			if strings.Contains(text, secret) {
+				t.Errorf("%q shows %q", text, secret)
+			}
+		}
+	}
+}
+
+// checkTestMessageSent checks the one message that the sender got, and the
+// last audit entry.
+func checkTestMessageSent(t *testing.T, f fixture, s sinkWire) {
+	t.Helper()
+
+	if f.hook.count() != 1 {
+		t.Fatalf("sender got %d messages, want 1", f.hook.count())
+	}
+
+	m := f.hook.sent[0]
+	if m.To != "https://hooks.example.com/ops" || len(m.Secrets) != 1 || string(m.Secrets[0]) != s.SigningKey ||
+		m.Notification.Type != notify.SinkTest {
+		t.Errorf("message = to %q, %d secrets, type %q, want the target, the signing key and sink.test",
+			m.To, len(m.Secrets), m.Notification.Type)
+	}
+
+	entries := f.sinkEntries(t)
+	if last := entries[len(entries)-1]; last.Action != "sink:test" || last.ObjectID != s.ID {
+		t.Errorf("last audit entry = %+v, want sink:test of %s", last, s.ID)
 	}
 }
 
@@ -483,7 +569,7 @@ func TestErrorsAreFixedText(t *testing.T) {
 		{"invalid", fmt.Errorf("%w: https://hooks.slack.com/%s", notify.ErrInvalid, canary)},
 		{"not found", fmt.Errorf("%w: %s", notify.ErrNotFound, canary)},
 		{"conflict", fmt.Errorf("%w: %s", notify.ErrConflict, canary)},
-		{"unknown", errors.New(canary)},
+		{"unknown", fmt.Errorf("%w: %s", errNetwork, canary)},
 		{"fenced", fmt.Errorf("%s: %w", canary, namespace.ErrFenced)},
 	} {
 		got := apinotifications.ClassifyText(pr.err)

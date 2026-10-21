@@ -12,7 +12,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"slices"
 	"time"
 
 	"opendustpan.org/opendustpan/internal/ident"
@@ -133,6 +132,10 @@ func (s *Service) Create(ctx context.Context, c *Caller, ns namespace.Name, in N
 		secrets = []notify.SinkSecret{{Ref: ref, Value: value}}
 	}
 
+	// Defense in depth: the store validates the sink again, and the handler checks
+	// the body. This check stays so that a refused sink costs no read of the
+	// namespace and no sealing, and so that a store that skips its check cannot
+	// take an invalid sink from this service.
 	if err = sink.Validate(); err != nil {
 		return Created{}, fmt.Errorf("create sink: %w", err)
 	}
@@ -159,40 +162,6 @@ func (s *Service) Create(ctx context.Context, c *Caller, ns namespace.Name, in N
 	}
 
 	return out, nil
-}
-
-// secretValue returns the plaintext secret of a new sink: a signing key for a
-// webhook, the URL for a chat webhook, and nil for an email sink. For a chat
-// sink it also sets the target to the host of the URL. The caller owns the
-// returned bytes.
-func (*Service) secretValue(sink *notify.Sink, url string) ([]byte, error) {
-	// Each kind takes the fields it needs and refuses the others, so a field
-	// that a kind ignores never hides a mistake of the caller.
-	if sink.Kind != notify.SinkChat && url != "" {
-		return nil, fmt.Errorf("%w: only a chat sink takes a url", notify.ErrInvalid)
-	}
-
-	if sink.Kind == notify.SinkChat && sink.Target != "" {
-		return nil, fmt.Errorf("%w: a chat sink takes a url, not a target", notify.ErrInvalid)
-	}
-
-	switch sink.Kind {
-	case notify.SinkWebhook:
-		return NewSigningKey()
-	case notify.SinkChat:
-		host, err := notify.ChatHost(url)
-		if err != nil {
-			return nil, fmt.Errorf("%w: %w", notify.ErrInvalid, err)
-		}
-
-		sink.Target = host
-
-		return []byte(url), nil
-	case notify.SinkEmail:
-		return nil, nil
-	default:
-		return nil, fmt.Errorf("%w: unknown sink kind %q", notify.ErrInvalid, sink.Kind)
-	}
 }
 
 // NewSigningKey returns a new signing key for a webhook sink: 32 bytes from
@@ -222,7 +191,13 @@ type Change struct {
 // Replace changes the sink id in ns. It returns notify.ErrNotFound,
 // notify.ErrInvalid, notify.ErrConflict, namespace.ErrNotFound or
 // namespace.ErrFenced.
-func (s *Service) Replace(ctx context.Context, c *Caller, ns namespace.Name, id string, ch Change) (notify.Sink, error) {
+func (s *Service) Replace(
+	ctx context.Context,
+	c *Caller,
+	ns namespace.Name,
+	id string,
+	ch Change,
+) (notify.Sink, error) {
 	old, err := s.Get(ctx, ns, id)
 	if err != nil {
 		return notify.Sink{}, err
@@ -233,7 +208,10 @@ func (s *Service) Replace(ctx context.Context, c *Caller, ns namespace.Name, id 
 
 	if ch.Target != nil {
 		if old.Kind == notify.SinkChat {
-			return notify.Sink{}, fmt.Errorf("%w: the target of a chat sink follows its URL: send the url", notify.ErrInvalid)
+			return notify.Sink{}, fmt.Errorf(
+				"%w: the target of a chat sink follows its URL: send the url",
+				notify.ErrInvalid,
+			)
 		}
 
 		next.Target = *ch.Target
@@ -259,6 +237,9 @@ func (s *Service) Replace(ctx context.Context, c *Caller, ns namespace.Name, id 
 		secrets = []notify.SinkSecret{{Ref: ref, Value: value}}
 	}
 
+	// Defense in depth: the store validates the sink again. This check stays so
+	// that a refused sink costs no sealing, and so that a store that skips its
+	// check cannot take an invalid sink from this service.
 	if err = next.Validate(); err != nil {
 		return notify.Sink{}, fmt.Errorf("replace sink: %w", err)
 	}
@@ -317,12 +298,47 @@ func (s *Service) Get(ctx context.Context, ns namespace.Name, id string) (notify
 		return notify.Sink{}, err
 	}
 
-	i := slices.IndexFunc(sinks, func(k notify.Sink) bool { return k.ID == id })
-	if i < 0 {
-		return notify.Sink{}, fmt.Errorf("get sink %s: %w", id, notify.ErrNotFound)
+	for i := range sinks {
+		if sinks[i].ID == id {
+			return sinks[i], nil
+		}
 	}
 
-	return sinks[i], nil
+	return notify.Sink{}, fmt.Errorf("get sink %s: %w", id, notify.ErrNotFound)
+}
+
+// secretValue returns the plaintext secret of a new sink: a signing key for a
+// webhook, the URL for a chat webhook, and nil for an email sink. For a chat
+// sink it also sets the target to the host of the URL. The caller owns the
+// returned bytes.
+func (*Service) secretValue(sink *notify.Sink, url string) ([]byte, error) {
+	// Each kind takes the fields it needs and refuses the others, so a field
+	// that a kind ignores never hides a mistake of the caller.
+	if sink.Kind != notify.SinkChat && url != "" {
+		return nil, fmt.Errorf("%w: only a chat sink takes a url", notify.ErrInvalid)
+	}
+
+	if sink.Kind == notify.SinkChat && sink.Target != "" {
+		return nil, fmt.Errorf("%w: a chat sink takes a url, not a target", notify.ErrInvalid)
+	}
+
+	switch sink.Kind {
+	case notify.SinkWebhook:
+		return NewSigningKey()
+	case notify.SinkChat:
+		host, err := notify.ChatHost(url)
+		if err != nil {
+			return nil, fmt.Errorf("%w: %w", notify.ErrInvalid, err)
+		}
+
+		sink.Target = host
+
+		return []byte(url), nil
+	case notify.SinkEmail:
+		return nil, nil
+	default:
+		return nil, fmt.Errorf("%w: unknown sink kind %q", notify.ErrInvalid, sink.Kind)
+	}
 }
 
 func (s *Service) fence(ctx context.Context, ns namespace.Name) (namespace.Fence, error) {

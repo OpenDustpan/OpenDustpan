@@ -1625,3 +1625,43 @@ func TestBuiltInRolesHoldTheGateActions(t *testing.T) {
 		}
 	}
 }
+
+// TestBuiltInRolesHoldTheNotificationAction proves that only the roles of the
+// data family and above manage the notification sinks of a namespace, and that
+// the action is in the data family.
+func TestBuiltInRolesHoldTheNotificationAction(t *testing.T) {
+	t.Parallel()
+
+	manage := identity.ActionNamespaceManageNotifications
+
+	if family, ok := access.FamilyOf(manage); !ok || family != access.FamilyData {
+		t.Fatalf("family of %s = %q, %t, want the data family", manage, family, ok)
+	}
+
+	tests := []struct {
+		role string
+		want bool
+	}{
+		{access.RoleViewer, false},
+		{access.RoleSecretViewer, false},
+		{access.RoleAuditor, false},
+		{access.RoleWriter, false},
+		{access.RoleMaintainer, false},
+		{access.RoleAdmin, true},
+		{access.RoleAccountAdministrator, true},
+		{access.RoleSiteAdministrator, true},
+		{access.RoleTokenManager, false},
+		{access.RoleInstallationOperator, false},
+	}
+
+	for _, tt := range tests {
+		r, ok := access.BuiltInRole(tt.role)
+		if !ok {
+			t.Fatalf("no built-in role %q", tt.role)
+		}
+
+		if got := slices.Contains(r.Actions, manage); got != tt.want {
+			t.Errorf("%s holds %s = %t, want %t", tt.role, manage, got, tt.want)
+		}
+	}
+}
