@@ -347,7 +347,7 @@ func (s *Service) changed(old notify.Sink, ch Change) (notify.Sink, []notify.Sin
 // webhook, the URL for a chat webhook, and nil for an email sink. For a chat
 // sink it also sets the target to the host of the URL. The caller owns the
 // returned bytes.
-func (*Service) secretValue(sink *notify.Sink, url string) ([]byte, error) {
+func (s *Service) secretValue(sink *notify.Sink, url string) ([]byte, error) {
 	// Each kind takes the fields it needs and refuses the others, so a field
 	// that a kind ignores never hides a mistake of the caller.
 	if sink.Kind != notify.SinkChat && url != "" {
@@ -367,6 +367,10 @@ func (*Service) secretValue(sink *notify.Sink, url string) ([]byte, error) {
 			return nil, fmt.Errorf("%w: %w", notify.ErrInvalid, err)
 		}
 
+		if hostErr := s.checkPlatformHost(*sink, host); hostErr != nil {
+			return nil, hostErr
+		}
+
 		sink.Target = host
 
 		return []byte(url), nil
@@ -375,6 +379,27 @@ func (*Service) secretValue(sink *notify.Sink, url string) ([]byte, error) {
 	default:
 		return nil, fmt.Errorf("%w: unknown sink kind %q", notify.ErrInvalid, sink.Kind)
 	}
+}
+
+// checkPlatformHost returns notify.ErrInvalid when the sender of chat sinks
+// says that host is not a webhook host of the platform of sink, so a person
+// who pastes the wrong URL learns it when the sink is saved and not at the
+// first message. A sender that has no such check, or no adapter for the
+// platform, accepts the host. Defense in depth: the sender checks the host
+// again before each send.
+func (s *Service) checkPlatformHost(sink notify.Sink, host string) error {
+	checker, ok := s.senders[notify.SinkChat].(interface {
+		CheckHost(platform, host string) error
+	})
+	if !ok {
+		return nil
+	}
+
+	if err := checker.CheckHost(sink.Platform, host); err != nil {
+		return fmt.Errorf("%w: %w", notify.ErrInvalid, err)
+	}
+
+	return nil
 }
 
 // checkPort returns notify.ErrInvalid when the sink would send to a port that

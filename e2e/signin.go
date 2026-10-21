@@ -233,6 +233,7 @@ func startSignInEnv(ctx context.Context, tb testing.TB, cli Install, store Store
 
 	in := envInput{
 		deltaCutoff:       0,
+		sinkSenders:       nil,
 		disableJournaling: false,
 		ipAllowlists:      false,
 		signIn:            true,

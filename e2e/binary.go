@@ -32,6 +32,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/blob"
+	"opendustpan.org/opendustpan/pkg/notify"
 )
 
 const (
@@ -114,6 +115,9 @@ type envInput struct {
 	// test can drive version 1 with a CLI that offers version 2. Nil answers
 	// the negotiated version.
 	journalCap *JournalVersionCap
+	// sinkSenders replace the built-in notification sink senders of the
+	// in-process server. The server binary has no such seam.
+	sinkSenders []notify.Sender
 }
 
 // backendConfig groups the settings of one backend process.

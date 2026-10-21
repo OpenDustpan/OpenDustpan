@@ -144,7 +144,7 @@ func sinksScenario(t *testing.T, env *e2e.Env) {
 	}
 
 	sinkReadSteps(t, env, hook, chat, key)
-	sinkTestSteps(t, env, hook, chat, key)
+	sinkTestSteps(t, env, hook, key)
 	sinkKeyedSteps(t, env)
 	sinkAuditStep(t, env, key)
 	sinkMemberStep(t, env, hook)
@@ -211,7 +211,7 @@ func sinkNeverContains(texts ...string) func(string) error {
 }
 
 // sinkTestSteps sends the test message of both sinks.
-func sinkTestSteps(t *testing.T, env *e2e.Env, hook, chat sinkDoc, key string) {
+func sinkTestSteps(t *testing.T, env *e2e.Env, hook sinkDoc, key string) {
 	t.Helper()
 
 	sinkStep(t, env, sinkCase("send the test message of the webhook", http.MethodPost,
@@ -233,14 +233,25 @@ func sinkTestSteps(t *testing.T, env *e2e.Env, hook, chat sinkDoc, key string) {
 
 		return sinkNeverContains("example.invalid", key, "hooks")(body)
 	}))
-	sinkStep(t, env, sinkCase("the chat sink has no sender yet", http.MethodPost, sinksBase+"/"+chat.ID+"/test",
-		http.StatusUnprocessableEntity).checking(func(body string) error {
+	// A Slack sink has a sender, and its test goes to the real host of Slack,
+	// so the steps here use a Teams sink, which has no adapter yet. The test of
+	// a Slack sink is in TestSlackSink, with a receiver on the machine of the
+	// test.
+	var teams sinkDoc
+
+	sinkStep(t, env, sinkCase("make a Teams sink", http.MethodPost, sinksBase, http.StatusCreated).
+		withBody(`{"kind":"chat","platform":"teams","name":"Teams","url":"https://teams.example.invalid/`+sinkChatMarker+`"}`).
+		checking(func(body string) error { return rememberSink(body, &teams, nil) }))
+	sinkStep(t, env, sinkCase("a platform with no adapter has no sender yet", http.MethodPost,
+		sinksBase+"/"+teams.ID+"/test", http.StatusUnprocessableEntity).checking(func(body string) error {
 		if !strings.Contains(body, "sink.no-sender") {
 			return fmt.Errorf("%w: want sink.no-sender in %s", errSinkAnswer, body)
 		}
 
 		return sinkNeverContains(sinkChatMarker)(body)
 	}))
+	sinkStep(t, env, sinkCase("delete the Teams sink", http.MethodDelete, sinksBase+"/"+teams.ID,
+		http.StatusNoContent))
 	sinkStep(t, env, sinkCase("the test of an unknown sink", http.MethodPost, sinksBase+"/snk-doesnotexist/test",
 		http.StatusNotFound))
 }
