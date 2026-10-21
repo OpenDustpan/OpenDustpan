@@ -116,6 +116,8 @@ type Handler struct {
 // Operations, Sessions, Now and PollInterval is required.
 func NewHandler(cfg Config) (*Handler, error) {
 	switch {
+	case cfg.Audit == nil:
+		return nil, fmt.Errorf("%w: audit store", ErrMissingDependency)
 	case cfg.Namespaces == nil:
 		return nil, fmt.Errorf("%w: namespace service", ErrMissingDependency)
 	case cfg.Pools == nil:
@@ -144,6 +146,11 @@ func NewHandler(cfg Config) (*Handler, error) {
 		interval = defaultPollInterval
 	}
 
+	recorder, err := refusal.New(cfg.Authorizer, cfg.Audit, cfg.Namespaces, cfg.Logger, cfg.OnAuditFailure)
+	if err != nil {
+		return nil, fmt.Errorf("denial recorder: %w", err)
+	}
+
 	h := &Handler{
 		namespaces: cfg.Namespaces,
 		pools:      cfg.Pools,
@@ -156,16 +163,14 @@ func NewHandler(cfg Config) (*Handler, error) {
 		authz:      cfg.Authorizer,
 		sessions:   cfg.Sessions,
 		logger:     cfg.Logger,
-		guard: refusal.New(cfg.Authorizer, cfg.Audit, cfg.Namespaces, cfg.Logger, cfg.OnAuditFailure).
-			WithLimiter(cfg.DenialLimiter).
-			WithSurface("runner"),
-		release:   cfg.Release,
-		serverURL: cfg.ServerURL,
-		now:       now,
-		interval:  interval,
-		polls:     sync.Map{},
-		mux:       newPatternMux(),
-		routes:    nil,
+		guard:      recorder.WithLimiter(cfg.DenialLimiter).WithSurface("runner"),
+		release:    cfg.Release,
+		serverURL:  cfg.ServerURL,
+		now:        now,
+		interval:   interval,
+		polls:      sync.Map{},
+		mux:        newPatternMux(),
+		routes:     nil,
 	}
 
 	h.routes = h.buildRoutes()

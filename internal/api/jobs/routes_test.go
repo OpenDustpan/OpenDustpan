@@ -227,6 +227,11 @@ func newStartHandler(
 ) *jobsapi.Handler {
 	t.Helper()
 
+	// The handler needs an audit store; a test that reads the entries passes its own.
+	if entries == nil {
+		entries = &testAudit{}
+	}
+
 	namespaces, err := namespace.NewService(namespace.Config{Store: fakeNamespaces{}, Now: nil, Region: "test-region"})
 	if err != nil {
 		t.Fatalf("namespace service: %v", err)
@@ -643,7 +648,7 @@ func TestNewHandlerNeedsItsDependencies(t *testing.T) {
 	t.Parallel()
 
 	_, err := jobsapi.NewHandler(jobsapi.Config{
-		Namespaces: nil, Jobs: nil, Starter: nil, Authenticator: nil, Authorizer: nil, Audit: nil, OnAuditFailure: nil,
+		Namespaces: nil, Jobs: nil, Starter: nil, Authenticator: nil, Authorizer: nil, Audit: &testAudit{}, OnAuditFailure: nil,
 		DenialLimiter: nil, Sessions: nil, Logger: nil,
 	})
 	if !errors.Is(err, jobsapi.ErrMissingDependency) {

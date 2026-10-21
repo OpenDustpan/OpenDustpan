@@ -226,20 +226,23 @@ func NewHandler(cfg Config) (*Handler, error) {
 		return nil, err
 	}
 
-	// The audit store keeps the entries of refused requests when it also keeps
-	// the entries of each namespace. Otherwise denialStore stays nil and a
-	// refusal writes no entry.
-	var denialStore audit.Store
-	if st, ok := cfg.Audit.(audit.Store); ok {
-		denialStore = st
+	// The audit store must keep the entries of refused requests too, so it
+	// must also keep the entries of each namespace. A store that does not
+	// gives no handler: a refusal must never go without an entry.
+	denialStore, ok := cfg.Audit.(audit.Store)
+	if !ok {
+		return nil, fmt.Errorf("%w: an audit store with namespace entries, for the refused requests", ErrMissingDependency)
+	}
+
+	recorder, err := denials.New(cfg.Authorizer, denialStore, cfg.Namespaces, cfg.Logger, cfg.OnAuditFailure)
+	if err != nil {
+		return nil, fmt.Errorf("denial recorder: %w", err)
 	}
 
 	h := &Handler{
-		authn: cfg.Authenticator,
-		authz: cfg.Authorizer,
-		guard: denials.New(cfg.Authorizer, denialStore, cfg.Namespaces, cfg.Logger, cfg.OnAuditFailure).
-			WithLimiter(cfg.DenialLimiter).
-			WithSurface("installation"),
+		authn:          cfg.Authenticator,
+		authz:          cfg.Authorizer,
+		guard:          recorder.WithLimiter(cfg.DenialLimiter).WithSurface("installation"),
 		logger:         cfg.Logger,
 		namespaces:     cfg.Namespaces,
 		backups:        cfg.Backups,
@@ -289,6 +292,8 @@ func NewHandler(cfg Config) (*Handler, error) {
 // dependency.
 func (cfg Config) validate() error {
 	switch {
+	case cfg.Audit == nil:
+		return fmt.Errorf("%w: audit store", ErrMissingDependency)
 	case cfg.Authenticator == nil:
 		return fmt.Errorf("%w: authenticator", ErrMissingDependency)
 	case cfg.Authorizer == nil:

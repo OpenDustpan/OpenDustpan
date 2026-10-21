@@ -607,7 +607,7 @@ func newUpdateFixtureWithAuthenticator(
 		BaseURL:                 baseurl.Resolver{},
 		MaxBodyBytesInFlight:    0,
 		Gate:                    nil,
-		Audit:                   nil,
+		Audit:                   &testAudit{},
 		OnAuditFailure:          nil,
 		CheckpointDeltaCutoff:   cutoff,
 		DenialLimiter:           nil,
@@ -2833,7 +2833,7 @@ func TestNegativeDeltaCutoffFails(t *testing.T) {
 		MaxBodyBytesInFlight:    0,
 		Gate:                    nil,
 		CheckpointDeltaCutoff:   -1,
-		Audit:                   nil,
+		Audit:                   &testAudit{},
 		OnAuditFailure:          nil,
 		DenialLimiter:           nil,
 	})

@@ -128,6 +128,8 @@ type Handler struct {
 // and Sessions is required.
 func NewHandler(cfg Config) (*Handler, error) {
 	switch {
+	case cfg.Audit == nil:
+		return nil, fmt.Errorf("%w: audit store", ErrMissingDependency)
 	case cfg.Namespaces == nil:
 		return nil, fmt.Errorf("%w: namespace service", ErrMissingDependency)
 	case cfg.Units == nil:
@@ -156,6 +158,11 @@ func NewHandler(cfg Config) (*Handler, error) {
 		return nil, err
 	}
 
+	recorder, err := refusal.New(cfg.Authorizer, cfg.Audit, cfg.Namespaces, cfg.Logger, cfg.OnAuditFailure)
+	if err != nil {
+		return nil, fmt.Errorf("denial recorder: %w", err)
+	}
+
 	h := &Handler{
 		views:       viewState,
 		namespaces:  cfg.Namespaces,
@@ -170,15 +177,13 @@ func NewHandler(cfg Config) (*Handler, error) {
 		authn:       cfg.Authenticator,
 		sessions:    cfg.Sessions,
 		authz:       cfg.Authorizer,
-		guard: refusal.New(cfg.Authorizer, cfg.Audit, cfg.Namespaces, cfg.Logger, cfg.OnAuditFailure).
-			WithLimiter(cfg.DenialLimiter).
-			WithSurface("inventory"),
-		publicURL:  publicURL,
-		logger:     cfg.Logger,
-		now:        clockOf(cfg.Now),
-		stateGuard: cfg.StateGuard,
-		mux:        newPatternMux(),
-		routes:     nil,
+		guard:       recorder.WithLimiter(cfg.DenialLimiter).WithSurface("inventory"),
+		publicURL:   publicURL,
+		logger:      cfg.Logger,
+		now:         clockOf(cfg.Now),
+		stateGuard:  cfg.StateGuard,
+		mux:         newPatternMux(),
+		routes:      nil,
 	}
 
 	h.routes = h.buildRoutes()

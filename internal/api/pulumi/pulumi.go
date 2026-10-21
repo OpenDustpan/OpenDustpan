@@ -164,6 +164,8 @@ type Handler struct {
 // NewHandler returns a Handler. Every Config field but Sessions is required.
 func NewHandler(cfg Config) (*Handler, error) {
 	switch {
+	case cfg.Audit == nil:
+		return nil, fmt.Errorf("%w: audit store", ErrMissingDependency)
 	case cfg.Stacks == nil:
 		return nil, fmt.Errorf("%w: stack service", ErrMissingDependency)
 	case cfg.Updates == nil:
@@ -182,6 +184,11 @@ func NewHandler(cfg Config) (*Handler, error) {
 		return nil, fmt.Errorf("%w: %d", ErrInvalidCutoff, cfg.CheckpointDeltaCutoff)
 	}
 
+	recorder, err := refusal.New(cfg.Authorizer, cfg.Audit, cfg.Namespaces, cfg.Logger, cfg.OnAuditFailure)
+	if err != nil {
+		return nil, fmt.Errorf("denial recorder: %w", err)
+	}
+
 	h := &Handler{
 		stacks:         cfg.Stacks,
 		updates:        cfg.Updates,
@@ -197,12 +204,10 @@ func NewHandler(cfg Config) (*Handler, error) {
 		gate:           cfg.Gate,
 		audit:          cfg.Audit,
 		onAuditFailure: cfg.OnAuditFailure,
-		guard: refusal.New(cfg.Authorizer, cfg.Audit, cfg.Namespaces, cfg.Logger,
-			cfg.OnAuditFailure).WithLimiter(cfg.DenialLimiter).
-			WithSurface("pulumi"),
-		mux:         newPatternMux(),
-		routes:      nil,
-		deltaCutoff: cfg.CheckpointDeltaCutoff,
+		guard:          recorder.WithLimiter(cfg.DenialLimiter).WithSurface("pulumi"),
+		mux:            newPatternMux(),
+		routes:         nil,
+		deltaCutoff:    cfg.CheckpointDeltaCutoff,
 
 		disablePulumiJournaling: cfg.DisablePulumiJournaling,
 		supportedJournal:        maxSupportedJournalVersion,

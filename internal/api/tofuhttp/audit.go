@@ -76,15 +76,11 @@ func (h *Handler) recordOverrideRefusal(
 // appendDownloadAudit writes the audit entry of a state read: the action
 // unit:read-secrets, with the kind reveal for a person and tool-operation for
 // any other caller. The principal decides, and the channel header never does.
-// A nil audit store writes no entry. It returns the append error, so the read
-// answers no content when the entry is lost.
+// It returns the append error, so the read answers no content when the entry
+// is lost.
 func (h *Handler) appendDownloadAudit(
 	r *http.Request, p identity.Principal, obj identity.Object, version string,
 ) error {
-	if h.audit == nil {
-		return nil
-	}
-
 	ctx := r.Context()
 
 	kind := audit.KindToolOperation
@@ -147,15 +143,11 @@ func (h *Handler) recordOverride(
 }
 
 // appendOverrideAudit writes the audit entry of one allowed override: the
-// action and the unit (ADR 44, decision 7). A nil audit store writes no entry.
+// action and the unit (ADR 44, decision 7).
 // It returns the append error, so the write is refused when the entry is lost.
 func (h *Handler) appendOverrideAudit(
 	r *http.Request, p identity.Principal, obj identity.Object, action identity.Action, version string,
 ) error {
-	if h.audit == nil {
-		return nil
-	}
-
 	ctx := r.Context()
 
 	entry := audit.Entry{

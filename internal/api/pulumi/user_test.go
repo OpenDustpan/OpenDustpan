@@ -220,7 +220,7 @@ func newUserHandlerWithSessions(
 		BaseURL:                 baseurl.Resolver{},
 		MaxBodyBytesInFlight:    0,
 		Gate:                    nil,
-		Audit:                   nil,
+		Audit:                   &testAudit{},
 		OnAuditFailure:          nil,
 		CheckpointDeltaCutoff:   0,
 		DenialLimiter:           nil,

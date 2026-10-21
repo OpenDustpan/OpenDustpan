@@ -870,9 +870,9 @@ func wireTempAdmins(cfg *settings) error {
 		return nil
 	}
 
-	entries := serverAuditOf(cfg.namespaceStore)
-	if entries == nil {
-		return nil
+	entries, err := serverAuditOf(cfg.namespaceStore)
+	if err != nil {
+		return err
 	}
 
 	dec, err := tempadmin.NewDecorator(tempadmin.DecoratorConfig{
@@ -967,11 +967,15 @@ func allowlistAddressGate(allow *ipAllowlistSettings) interface {
 
 // newServerMetrics returns the metrics of the server, and gives the recorder of
 // the refused dev sign-ins the namespace reader and the failure counter.
-func newServerMetrics(cfg *settings, svc services) *metrics.ServerMetrics {
+func newServerMetrics(cfg *settings, svc services) (*metrics.ServerMetrics, error) {
 	observed := metrics.NewServerMetrics(cfg.version, cfg.now())
-	cfg.devRefusal.bind(svc.namespaces, func() { observed.IncAuditAppendFailure() })
 
-	return observed
+	err := cfg.devRefusal.bind(cfg, svc.namespaces, func() { observed.IncAuditAppendFailure() })
+	if err != nil {
+		return nil, err
+	}
+
+	return observed, nil
 }
 
 // assemble mounts the adapters and routes around the services. backups is
@@ -980,7 +984,10 @@ func newServerMetrics(cfg *settings, svc services) *metrics.ServerMetrics {
 func assemble(cfg *settings, base baseurl.Resolver, svc services, backups *backup.Service) (*Server, error) {
 	// One registry holds every family: the request, runtime and build
 	// families, and the readiness failure counter of the probe.
-	observed := newServerMetrics(cfg, svc)
+	observed, err := newServerMetrics(cfg, svc)
+	if err != nil {
+		return nil, err
+	}
 
 	cfg.watch = newWorkerWatch(cfg)
 
@@ -1010,8 +1017,13 @@ func assemble(cfg *settings, base baseurl.Resolver, svc services, backups *backu
 
 	restoreRegistry := restoreRegistryOf(cfg.namespaceStore)
 
+	flushDenials, err := denialFlusher(cfg, svc, observed)
+	if err != nil {
+		return nil, err
+	}
+
 	srv := &Server{
-		flushDenials: denialFlusher(cfg, svc, observed),
+		flushDenials: flushDenials,
 		handler:      handlers.served, ungated: handlers.ungated, mounted: &mount, root: handlers.root,
 		logger:           cfg.logger,
 		listenAddr:       cfg.listenAddr,
@@ -1267,9 +1279,9 @@ func newReadiness(cfg *settings, observed *metrics.ServerMetrics, chain *auditCh
 func newTofuHTTPHandler(
 	cfg *settings, svc services, observed *metrics.ServerMetrics, gate *bodygate.Gate,
 ) (*tofuhttp.Handler, error) {
-	var entries audit.Store
-	if s, ok := cfg.namespaceStore.(audit.Store); ok {
-		entries = s
+	entries, err := auditStoreOf(cfg)
+	if err != nil {
+		return nil, err
 	}
 
 	handler, err := tofuhttp.NewHandler(tofuhttp.Config{
@@ -1347,9 +1359,9 @@ func newTFEHandler(
 ) (*tfe.Handler, error) {
 	base, gate, policies := deps.base, deps.gate, deps.policies
 
-	var entries audit.Store
-	if s, ok := cfg.namespaceStore.(audit.Store); ok {
-		entries = s
+	entries, err := auditStoreOf(cfg)
+	if err != nil {
+		return nil, err
 	}
 
 	registryProtocol, err := newRegistryProtocol(cfg, base.String())
@@ -1454,8 +1466,27 @@ func checkStoreOptions(cfg *settings) error {
 	case cfg.inventoryReader == nil:
 		return fmt.Errorf("%w: WithInventoryReader", ErrMissingOption)
 	default:
-		return nil
+		return checkAuditStores(cfg)
 	}
+}
+
+// checkAuditStores refuses a namespace store that keeps no audit entries. A
+// refusal, a force-unlock override and a state read each write an entry, so
+// the server never runs without the stores for them.
+//
+// Defense in depth: each adapter, each recorder and each builder below checks
+// its store too. This check stays so that the server fails at the start, with
+// one clear error, before any of them is built.
+func checkAuditStores(cfg *settings) error {
+	if _, err := auditStoreOf(cfg); err != nil {
+		return err
+	}
+
+	if _, err := serverAuditOf(cfg.namespaceStore); err != nil {
+		return err
+	}
+
+	return nil
 }
 
 // newWorkspaceService builds the OpenTofu workspace service, which seals
@@ -1851,16 +1882,20 @@ func (s *Server) flushDenialCounts(ctx context.Context) {
 // denialFlusher returns the function that writes the counts that the shared
 // limiter still holds. It uses the audit store of the namespace store, like the
 // adapters.
-func denialFlusher(cfg *settings, svc services, observed *metrics.ServerMetrics) func(context.Context) {
-	var entries audit.Store
-	if st, ok := cfg.namespaceStore.(audit.Store); ok {
-		entries = st
+func denialFlusher(
+	cfg *settings, svc services, observed *metrics.ServerMetrics,
+) (func(context.Context), error) {
+	entries, err := auditStoreOf(cfg)
+	if err != nil {
+		return nil, err
 	}
 
-	rec := refusal.New(nil, entries, svc.namespaces, cfg.logger, func() { observed.IncAuditAppendFailure() }).
-		WithLimiter(cfg.denialLimiter)
+	rec, err := refusal.New(nil, entries, svc.namespaces, cfg.logger, func() { observed.IncAuditAppendFailure() })
+	if err != nil {
+		return nil, fmt.Errorf("denial flusher: %w", err)
+	}
 
-	return rec.Flush
+	return rec.WithLimiter(cfg.denialLimiter).Flush, nil
 }
 
 // flushTimeout bounds the write of the counts of refused requests at shutdown.
@@ -2281,9 +2316,9 @@ func newPulumiHandler(
 ) (http.Handler, error) {
 	base, gate, policies := deps.base, deps.gate, deps.policies
 
-	var entries audit.Store
-	if s, ok := cfg.namespaceStore.(audit.Store); ok {
-		entries = s
+	entries, err := auditStoreOf(cfg)
+	if err != nil {
+		return nil, err
 	}
 
 	// A nil *session.Policies must not become a non-nil interface.
@@ -2362,11 +2397,9 @@ func newAuditHandler(svc services, cfg *settings, onFailure func()) (http.Handle
 // context API: its routes are not served and the rest of the API works as
 // before.
 func newContextHandler(svc services, cfg *settings, onFailure func()) (http.Handler, error) {
-	// A namespace store that keeps no audit entries gives a nil store, and a
-	// refusal then writes no entry.
-	var neutralAudit audit.Store
-	if st, ok := cfg.namespaceStore.(audit.Store); ok {
-		neutralAudit = st
+	neutralAudit, err := auditStoreOf(cfg)
+	if err != nil {
+		return nil, err
 	}
 
 	store, ok := cfg.namespaceStore.(objectcontext.Store)
@@ -2564,11 +2597,9 @@ func checkRetention(d time.Duration) error {
 // inventory reader. A custom reader that keeps no deleted units fails here
 // with a clear error.
 func newInventoryHandler(svc services, cfg *settings, onFailure func()) (http.Handler, error) {
-	// A namespace store that keeps no audit entries gives a nil store, and a
-	// refusal then writes no entry.
-	var neutralAudit audit.Store
-	if st, ok := cfg.namespaceStore.(audit.Store); ok {
-		neutralAudit = st
+	neutralAudit, err := auditStoreOf(cfg)
+	if err != nil {
+		return nil, err
 	}
 
 	deleted, ok := cfg.inventoryReader.(inventory.DeletedReader)
@@ -2715,6 +2746,11 @@ func newServerHandler(
 		return nil, err
 	}
 
+	serverAudit, err := serverAuditOf(cfg.namespaceStore)
+	if err != nil {
+		return nil, err
+	}
+
 	handler, err := serverapi.NewHandler(serverapi.Config{
 		GitHost:          gitHost,
 		Idempotency:      idem,
@@ -2735,7 +2771,7 @@ func newServerHandler(
 		IPAllowlists:     allow,
 		Gates:            gatesPort(gates),
 		SessionPolicy:    deps.policies,
-		Audit:            serverAuditOf(cfg.namespaceStore),
+		Audit:            serverAudit,
 		CheckpointEpochs: checkpointEpochsOf(deps.chain),
 		OnAuditFailure: func() {
 			deps.observed.IncAuditAppendFailure()
@@ -2788,17 +2824,35 @@ func newPreferencesService(cfg *settings) *preferences.Service {
 	return preferences.NewService(store, people, cfg.now)
 }
 
-// serverAuditOf returns the audit store of the scope @server, or nil when the
-// namespace store keeps none. Both SQL adapters keep it.
+// auditStoreOf returns the audit store of the namespace store. It answers
+// ErrMissingOption when the store keeps none, so that no adapter and no
+// recorder runs without an audit store. Every refusal and every override
+// writes an entry, so the server does not start without this store.
 //
 //nolint:ireturn // The two SQL adapters share no concrete store type, so the caller keeps the port.
-func serverAuditOf(store namespace.Store) audit.ServerStore {
-	entries, ok := store.(audit.ServerStore)
+func auditStoreOf(cfg *settings) (audit.Store, error) {
+	entries, ok := cfg.namespaceStore.(audit.Store)
 	if !ok {
-		return nil
+		return nil, fmt.Errorf("%w: WithNamespaceStore store must also implement audit.Store, "+
+			"for the entries of refusals and overrides", ErrMissingOption)
 	}
 
-	return entries
+	return entries, nil
+}
+
+// serverAuditOf returns the audit store of the scope @server. It answers
+// ErrMissingOption when the namespace store keeps none. Both SQL adapters keep
+// it.
+//
+//nolint:ireturn // The two SQL adapters share no concrete store type, so the caller keeps the port.
+func serverAuditOf(store namespace.Store) (audit.ServerStore, error) {
+	entries, ok := store.(audit.ServerStore)
+	if !ok {
+		return nil, fmt.Errorf("%w: WithNamespaceStore store must also implement audit.ServerStore, "+
+			"for the entries of the installation scope", ErrMissingOption)
+	}
+
+	return entries, nil
 }
 
 // adminSubjects is met by an authenticator that signs in bootstrap
@@ -3284,9 +3338,12 @@ func newRestoreService(
 		steps = append(steps, deps.chain.afterRestore)
 
 		if deps.chain.checkpoints != nil {
-			steps = append(steps, newEpochAfterRestore(
-				deps.chain.checkpoints, serverAuditOf(cfg.namespaceStore), cfg.now,
-			))
+			serverAudit, err := serverAuditOf(cfg.namespaceStore)
+			if err != nil {
+				return nil, err
+			}
+
+			steps = append(steps, newEpochAfterRestore(deps.chain.checkpoints, serverAudit, cfg.now))
 		}
 	}
 

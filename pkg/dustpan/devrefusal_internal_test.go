@@ -62,7 +62,24 @@ func newDevRefusalWorld(t *testing.T, kind installation.Kind) *devRefusalWorld {
 		Window: time.Minute, MaxKeys: 0, MaxFlush: 0, MaxKeysPerPrincipal: 0, Now: func() time.Time { return w.now },
 	})
 
+	w.bind(t)
+
 	return w
+}
+
+// bind builds the recorder from the current settings of the world. A test that
+// replaces the limiter calls it again.
+func (w *devRefusalWorld) bind(t *testing.T) {
+	t.Helper()
+
+	namespaces, err := namespace.NewService(namespace.Config{Store: w.st, Now: nil, Region: "local"})
+	if err != nil {
+		t.Fatalf("namespace service: %v", err)
+	}
+
+	if err := w.cfg.devRefusal.bind(w.cfg, namespaces, nil); err != nil {
+		t.Fatalf("bind: %v", err)
+	}
 }
 
 // refuse authenticates a token of a dev person and checks the refusal.
@@ -111,7 +128,7 @@ func (w *devRefusalWorld) entries(t *testing.T, subject string) []audit.Entry {
 func (w *devRefusalWorld) flush(t *testing.T) {
 	t.Helper()
 
-	w.cfg.devRefusal.recorder(w.cfg).Flush(t.Context())
+	w.cfg.devRefusal.recorder().Flush(t.Context())
 }
 
 // TestDevRefusalFirstWritesEntry proves that the first refusal of a dev person writes an entry that holds no token.
@@ -370,6 +387,7 @@ func TestDevRefusalFloodBounds(t *testing.T) {
 			MaxKeysPerPrincipal: 0,
 			Now:                 func() time.Time { return w.now },
 		})
+		w.bind(t)
 
 		for i := range 200 {
 			w.refuse(t, fmt.Sprintf("dev:p%d", i))
@@ -413,10 +431,17 @@ func TestDevRefusalFlushesNamespaceKey(t *testing.T) {
 
 	failures := 0
 
-	w.cfg.devRefusal.bind(namespaces, func() { failures++ })
+	if err := w.cfg.devRefusal.bind(w.cfg, namespaces, func() { failures++ }); err != nil {
+		t.Fatalf("bind: %v", err)
+	}
 
 	// Another adapter holds the count of a key in the namespace.
-	other := refusal.New(nil, w.st, namespaces, w.cfg.logger, nil).WithLimiter(w.cfg.denialLimiter)
+	otherRec, err := refusal.New(nil, w.st, namespaces, w.cfg.logger, nil)
+	if err != nil {
+		t.Fatalf("refusal.New: %v", err)
+	}
+
+	other := otherRec.WithLimiter(w.cfg.denialLimiter)
 	bo := identity.Principal{
 		TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{}, Subject: "bo@example.com",
 		DisplayName: "", Admin: false, TokenID: "", TokenExpiresAt: time.Time{},

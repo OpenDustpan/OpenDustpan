@@ -86,7 +86,7 @@ func TestLockRefusedByAManualLock(t *testing.T) {
 					lock:               lock,
 				},
 				BaseURL:        baseurl.Resolver{},
-				Audit:          nil,
+				Audit:          &testAudit{},
 				Gate:           nil,
 				MaxStateBytes:  0,
 				OnAuditFailure: nil,

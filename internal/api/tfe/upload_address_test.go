@@ -48,7 +48,7 @@ func newUploadAddressHandler(
 		Namespaces:     newTestNamespaces(t),
 		Workspaces:     ws,
 		BaseURL:        baseurl.Resolver{},
-		Audit:          nil,
+		Audit:          &testAudit{},
 		Gate:           gate,
 		MaxStateBytes:  0,
 		OnAuditFailure: nil,

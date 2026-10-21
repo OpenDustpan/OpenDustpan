@@ -58,7 +58,7 @@ func TestForcedDeclareWithoutOverrideIsRefused(t *testing.T) {
 		Namespaces:     newTestNamespaces(t),
 		Workspaces:     forcedDeclareWorkspaces{stubWorkspaces: stubWorkspaces{}, seen: &seen},
 		BaseURL:        baseurl.Resolver{},
-		Audit:          nil,
+		Audit:          &testAudit{},
 		Gate:           nil,
 		MaxStateBytes:  0,
 		OnAuditFailure: nil,

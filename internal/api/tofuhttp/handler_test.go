@@ -341,7 +341,7 @@ func newTestHandler(t *testing.T, units *fakeUnits) http.Handler {
 		Logger:         slog.New(slog.DiscardHandler),
 		Workspaces:     units,
 		Namespaces:     fakeNamespaces{},
-		Audit:          nil,
+		Audit:          &testAudit{},
 		Gate:           nil,
 		OnAuditFailure: nil,
 		DenialLimiter:  nil,

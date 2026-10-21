@@ -372,10 +372,6 @@ type auditDetail struct {
 // a log line with no secret and no value and counts the failure, and the
 // route still answers 204.
 func (h *Handler) appendRevealAudit(r *http.Request, p identity.Principal, obj identity.Object) {
-	if h.audit == nil {
-		return
-	}
-
 	ctx := r.Context()
 
 	entry := h.newAuditEntry(r, p, obj, auditDetail{
@@ -397,14 +393,10 @@ func (h *Handler) appendRevealAudit(r *http.Request, p identity.Principal, obj i
 // with a person who asked to see a secret value. Version stays empty: it
 // names a state version. It returns the append error,
 // so the route answers 500 with no secret value when it cannot record the
-// entry (ADR 41 decision 5). A nil audit store writes no entry.
+// entry (ADR 41 decision 5).
 func (h *Handler) appendToolOperationAudit(
 	r *http.Request, p identity.Principal, obj identity.Object, count int,
 ) error {
-	if h.audit == nil {
-		return nil
-	}
-
 	valueCount := int64(count)
 
 	entry := h.newAuditEntry(r, p, obj, auditDetail{

@@ -109,6 +109,10 @@ func newAuditedPrincipalHandler(
 ) *apiserver.Handler {
 	t.Helper()
 
+	if entries == nil {
+		entries = &testAudit{}
+	}
+
 	var signIn *apiserver.SignIn
 
 	sessions, hasSessions := principalSessions.Load(principals)
@@ -999,7 +1003,7 @@ func TestPrincipalListFailsWhenTempAdminReadFails(t *testing.T) {
 		Journal:          nil,
 		Access:           nil,
 		Tokens:           nil,
-		Audit:            nil,
+		Audit:            &testAudit{},
 		IPAllowlists:     nil,
 		Gates:            nil,
 		SessionPolicy:    nil,
@@ -1088,7 +1092,7 @@ func TestTempAdminFlagFollowsThePrincipalID(t *testing.T) {
 		Journal:          nil,
 		Access:           nil,
 		Tokens:           nil,
-		Audit:            nil,
+		Audit:            &testAudit{},
 		IPAllowlists:     nil,
 		Gates:            nil,
 		SessionPolicy:    nil,

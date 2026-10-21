@@ -594,18 +594,16 @@ func (h *Handler) refuseSignIn(w http.ResponseWriter, r *http.Request, rf refusa
 		outcome = audit.OutcomeDenied
 	}
 
-	if h.audit != nil {
-		e := signInEntry(r, subject, idpSubject, session.ActionSignIn)
-		e.At = h.signIn.sessions.Now()
-		e.Namespace = audit.ServerScope
-		e.Kind = audit.KindChange
-		e.Outcome = outcome
-		e.Object = "sign-in-provider:" + providerID
-		e.Changes = []audit.Change{{Key: "reason", Old: nil, New: reason, Layer: "", TakesEffect: ""}}
+	e := signInEntry(r, subject, idpSubject, session.ActionSignIn)
+	e.At = h.signIn.sessions.Now()
+	e.Namespace = audit.ServerScope
+	e.Kind = audit.KindChange
+	e.Outcome = outcome
+	e.Object = "sign-in-provider:" + providerID
+	e.Changes = []audit.Change{{Key: "reason", Old: nil, New: reason, Layer: "", TakesEffect: ""}}
 
-		if _, appendErr := h.audit.AppendServer(ctx, e); appendErr != nil {
-			h.failAudit(ctx)
-		}
+	if _, appendErr := h.audit.AppendServer(ctx, e); appendErr != nil {
+		h.failAudit(ctx)
 	}
 
 	if errors.Is(err, errSignInRefused) {

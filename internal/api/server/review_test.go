@@ -901,6 +901,14 @@ func (failingAudit) Append(context.Context, namespace.Fence, audit.Entry) (audit
 	return audit.Entry{}, errAuditDown
 }
 
+func (failingAudit) List(context.Context, namespace.Name, audit.Page) (audit.Listing, error) {
+	return audit.Listing{}, errAuditDown
+}
+
+func (failingAudit) Check(context.Context, namespace.Name) (audit.CheckResult, error) {
+	return audit.CheckResult{}, errAuditDown
+}
+
 // errAuditDown is the error of failingAudit.
 var errAuditDown = errors.New("audit store down")
 
