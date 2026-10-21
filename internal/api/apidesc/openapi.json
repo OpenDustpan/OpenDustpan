@@ -3218,6 +3218,10 @@
         ],
         "x-dustpan-actions": [
           {
+            "action": "namespace:read",
+            "object": "namespace"
+          },
+          {
             "action": "job:read",
             "object": "unit"
           }
@@ -4614,6 +4618,10 @@
         ],
         "x-dustpan-actions": [
           {
+            "action": "namespace:read",
+            "object": "namespace"
+          },
+          {
             "action": "unit:read",
             "object": "unit"
           },
@@ -4669,6 +4677,10 @@
           "context"
         ],
         "x-dustpan-actions": [
+          {
+            "action": "namespace:read",
+            "object": "namespace"
+          },
           {
             "action": "unit:read",
             "object": "unit"
@@ -4731,6 +4743,10 @@
           "context"
         ],
         "x-dustpan-actions": [
+          {
+            "action": "namespace:read",
+            "object": "namespace"
+          },
           {
             "action": "unit:read",
             "object": "unit"

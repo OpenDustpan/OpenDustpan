@@ -175,6 +175,199 @@ type shout struct {
 	UnitID string `json:"unitID"`
 }
 
+// The types of the probes below. Each has a shape where encoding/json decides
+// what the wire holds, and the schema has to agree.
+
+type diamondD struct {
+	Shared string `json:"shared"`
+}
+
+type diamondB struct{ diamondD }
+
+type diamondC struct{ diamondD }
+
+type diamond struct {
+	diamondB
+	diamondC
+
+	Other string `json:"other"`
+}
+
+// diamondShallow reaches the shared type twice, but it has a field of that name
+// at a lesser depth, which wins.
+type diamondShallow struct {
+	diamondB
+	diamondC
+
+	Shared string `json:"shared"`
+}
+
+// diamondTriple reaches the shared type three times.
+type diamondTriple struct {
+	diamondB
+	diamondC
+	diamondA
+}
+
+type diamondA struct{ diamondD }
+
+// diamondDeep reaches the shared type twice through two levels of embedding.
+type diamondDeep struct {
+	diamondUp
+	diamondDown
+}
+
+type diamondUp struct{ diamondB }
+
+type diamondDown struct{ diamondC }
+
+type pointerInner struct {
+	Inner string  `json:"inner"`
+	Opt   *string `json:"opt"`
+}
+
+type nilEmbed struct {
+	*pointerInner
+
+	Own string `json:"own"`
+}
+
+type pointerHolder struct{ *pointerInner }
+
+// nilEmbedNested has the pointer one level below the embedded struct.
+type nilEmbedNested struct {
+	pointerHolder
+
+	Own string `json:"own"`
+}
+
+// wireProbe proves a schema against encoding/json. The sparse value is the
+// zero value, which has each pointer nil, and the full value has each pointer
+// set. The schema has to require only members that the sparse value writes,
+// and it has to list exactly the members that the full value writes.
+func wireProbe[T any](t *testing.T, name string, full T) {
+	t.Helper()
+
+	var sparse T
+
+	schemas, err := schemasOf(t, apidesc.Typed[T](name))
+	if err != nil {
+		t.Fatalf("Build() = %v", err)
+	}
+
+	schema := asMap(t, schemas[name])
+	properties, _ := optional[map[string]any](schema, "properties")
+	required, _ := optional[[]any](schema, "required")
+
+	sparseKeys := wireKeys(t, sparse)
+	fullKeys := wireKeys(t, full)
+
+	for _, item := range required {
+		member, isString := item.(string)
+		if !isString {
+			t.Fatalf("%s: %v in required is not a string", name, item)
+		}
+
+		if _, ok := sparseKeys[member]; !ok {
+			t.Errorf("%s: %q is required, but json.Marshal(%+v) leaves it out", name, member, sparse)
+		}
+	}
+
+	for key := range fullKeys {
+		if _, ok := properties[key]; !ok {
+			t.Errorf("%s: json.Marshal writes %q, and the schema has no such property", name, key)
+		}
+	}
+
+	for key := range properties {
+		if _, ok := fullKeys[key]; !ok {
+			t.Errorf("%s: the schema lists %q, and json.Marshal never writes it", name, key)
+		}
+	}
+}
+
+// wireKeys returns the members of the JSON object that json.Marshal writes.
+func wireKeys(t *testing.T, v any) map[string]json.RawMessage {
+	t.Helper()
+
+	raw, err := json.Marshal(v)
+	if err != nil {
+		t.Fatalf("json.Marshal(%+v) = %v", v, err)
+	}
+
+	var keys map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &keys); err != nil {
+		t.Fatalf("%s is not an object: %v", raw, err)
+	}
+
+	return keys
+}
+
+// TestReflectorAgreesWithTheEncoder compares the schema of the embedding
+// shapes with the JSON that encoding/json writes for them.
+func TestReflectorAgreesWithTheEncoder(t *testing.T) {
+	t.Parallel()
+
+	text := "text"
+	d := diamondD{Shared: "x"}
+
+	t.Run("a diamond writes nothing of the shared type", func(t *testing.T) {
+		t.Parallel()
+
+		full := diamond{diamondB: diamondB{d}, diamondC: diamondC{d}, Other: "x"}
+		if _, leaked := wireKeys(t, full)["shared"]; leaked {
+			t.Fatal("the probe is wrong: json.Marshal writes the shared member of a diamond")
+		}
+
+		wireProbe(t, "Diamond", full)
+	})
+
+	t.Run("a shallow field wins over a diamond", func(t *testing.T) {
+		t.Parallel()
+
+		wireProbe(t, "DiamondShallow", diamondShallow{diamondB: diamondB{d}, diamondC: diamondC{d}, Shared: "x"})
+	})
+
+	t.Run("three embeddings of one type write nothing of it", func(t *testing.T) {
+		t.Parallel()
+
+		wireProbe(t, "DiamondTriple", diamondTriple{
+			diamondB: diamondB{d},
+			diamondC: diamondC{d},
+			diamondA: diamondA{d},
+		})
+	})
+
+	t.Run("two levels of embedding on both sides", func(t *testing.T) {
+		t.Parallel()
+
+		wireProbe(t, "DiamondDeep", diamondDeep{
+			diamondUp:   diamondUp{diamondB{d}},
+			diamondDown: diamondDown{diamondC{d}},
+		})
+	})
+
+	t.Run("a nil embedded pointer writes none of its fields", func(t *testing.T) {
+		t.Parallel()
+
+		var sparse nilEmbed
+		if len(wireKeys(t, sparse)) != 1 {
+			t.Fatal("the probe is wrong: json.Marshal writes the fields of a nil embedded pointer")
+		}
+
+		wireProbe(t, "NilEmbed", nilEmbed{pointerInner: &pointerInner{Inner: "x", Opt: &text}, Own: "x"})
+	})
+
+	t.Run("a nil pointer below an embedded struct", func(t *testing.T) {
+		t.Parallel()
+
+		wireProbe(t, "NilEmbedNested", nilEmbedNested{
+			pointerHolder: pointerHolder{&pointerInner{Inner: "x", Opt: &text}},
+			Own:           "x",
+		})
+	})
+}
+
 func TestReflectorShapes(t *testing.T) {
 	t.Parallel()
 
@@ -242,9 +435,9 @@ func TestReflectorShapes(t *testing.T) {
 			"id":{"type":"string"},"shown":{"type":"string"},"own":{"type":"string"}}}}`,
 		},
 		{
-			"an embedded pointer to a struct is flat",
+			"an embedded pointer to a struct is flat, and its fields are optional",
 			apidesc.Typed[embeddingPointer]("EmbeddingPointer"),
-			`{"EmbeddingPointer":{"type":"object","required":["id","own","shown"],"properties":{
+			`{"EmbeddingPointer":{"type":"object","required":["own"],"properties":{
 			"id":{"type":"string"},"shown":{"type":"string"},"own":{"type":"string"}}}}`,
 		},
 		{
@@ -265,6 +458,11 @@ func TestReflectorShapes(t *testing.T) {
 			"two fields of one name at one depth are both dropped",
 			apidesc.Typed[bothSides]("BothSides"),
 			`{"BothSides":{"type":"object","required":["other"],"properties":{"other":{"type":"string"}}}}`,
+		},
+		{
+			"a type that two embeddings reach at one depth is dropped",
+			apidesc.Typed[diamond]("Diamond"),
+			`{"Diamond":{"type":"object","required":["other"],"properties":{"other":{"type":"string"}}}}`,
 		},
 		{
 			"a recursive type ends",
@@ -442,6 +640,128 @@ func TestReflectorRefusesWhatItCannotTell(t *testing.T) {
 				t.Fatalf("Build() = %v, want ErrInvalidBody", err)
 			}
 		})
+	}
+}
+
+type choice string
+
+type holdsChoice struct {
+	Choice choice `json:"choice"`
+}
+
+type holdsChoicePointer struct {
+	Choice *choice `json:"choice"`
+}
+
+type holdsChoiceList struct {
+	Choices []*choice `json:"choices"`
+}
+
+type holdsUntyped struct {
+	Value *own `json:"value"`
+}
+
+type doublePointers struct {
+	Deep *map[string]string `json:"deep"`
+	Ref  **inner            `json:"ref"`
+	Kind **kindName         `json:"kind"`
+}
+
+// TestBuildRefusesFormsOutsideTheSubset proves that the only anyOf and oneOf
+// in a description are the open enum and the nullable reference. A declaration
+// cannot write another form, and a pointer cannot make a declared schema
+// nullable in another form.
+func TestBuildRefusesFormsOutsideTheSubset(t *testing.T) {
+	t.Parallel()
+
+	str := map[string]any{"type": "string"}
+	integer := map[string]any{"type": "integer"}
+	null := map[string]any{"type": "null"}
+	ref := map[string]any{"$ref": "#/components/schemas/Inner"}
+
+	declare := func(schema map[string]any) apidesc.Body {
+		return apidesc.Typed[holdsChoice]("HoldsChoice", apidesc.Declare[choice](schema))
+	}
+
+	tests := []struct {
+		name string
+		body apidesc.Body
+	}{
+		{"a declared oneOf of two types", declare(map[string]any{"oneOf": []any{str, integer}})},
+		{"a declared oneOf with a null", declare(map[string]any{"oneOf": []any{str, null}})},
+		{"a declared oneOf of a reference and null", declare(map[string]any{"oneOf": []any{ref, null}})},
+		{"a declared anyOf of two types", declare(map[string]any{"anyOf": []any{str, integer}})},
+		{"a declared open enum form", declare(map[string]any{"anyOf": []any{ref, str}})},
+		{"a declared anyOf with a type", declare(map[string]any{"type": "string", "anyOf": []any{str}})},
+		{"a declared oneOf in a property", declare(map[string]any{
+			"type":       "object",
+			"properties": map[string]any{"a": map[string]any{"oneOf": []any{str, integer}}},
+		})},
+		{"a declared oneOf in the items", declare(map[string]any{
+			"type": "array", "items": map[string]any{"oneOf": []any{str, integer}},
+		})},
+		{"a declared oneOf in the values of a map", declare(map[string]any{
+			"type": "object", "additionalProperties": map[string]any{"anyOf": []any{str, integer}},
+		})},
+		{"a declared oneOf that is not a list", declare(map[string]any{"oneOf": "string"})},
+		{
+			"a pointer to a declared oneOf",
+			apidesc.Typed[holdsChoicePointer]("HoldsChoicePointer", apidesc.Declare[choice](map[string]any{
+				"oneOf": []any{str, integer},
+			})),
+		},
+		{
+			"a pointer to a declared schema with no type",
+			apidesc.Typed[holdsChoicePointer]("HoldsChoicePointer", apidesc.Declare[choice](map[string]any{
+				"description": "any value",
+			})),
+		},
+		{
+			"a list of pointers to a declared schema with no type",
+			apidesc.Typed[holdsChoiceList]("HoldsChoiceList", apidesc.Declare[choice](map[string]any{
+				"description": "any value",
+			})),
+		},
+		{
+			"a pointer to a type that declares no type",
+			apidesc.Typed[holdsUntyped]("HoldsUntyped", apidesc.Declare[own](map[string]any{"description": "text"})),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			if _, err := schemasOf(t, tt.body); !errors.Is(err, apidesc.ErrInvalidBody) {
+				t.Fatalf("Build() = %v, want ErrInvalidBody", err)
+			}
+		})
+	}
+}
+
+// TestNullableKeepsNull proves that a pointer to a pointer is as nullable as a
+// pointer: the second pointer never drops the null branch of a reference, of an
+// open enum or of a type list.
+func TestNullableKeepsNull(t *testing.T) {
+	t.Parallel()
+
+	got, err := schemasOf(t, apidesc.Typed[doublePointers](
+		"DoublePointers", apidesc.DeclareOpenEnum[kindName]("KindName", "onCall"),
+	))
+	if err != nil {
+		t.Fatalf("Build() = %v", err)
+	}
+
+	want := wantSchemas(t, `{
+	"KindName":{"type":"string","enum":["onCall"]},
+	"Inner":{"type":"object","required":["name"],"properties":{"name":{"type":"string"}}},
+	"DoublePointers":{"type":"object","required":["deep","kind","ref"],"properties":{
+	"deep":{"type":["object","null"],"additionalProperties":{"type":"string"}},
+	"ref":{"oneOf":[{"$ref":"#/components/schemas/Inner"},{"type":"null"}]},
+	"kind":{"anyOf":[{"$ref":"#/components/schemas/KindName"},{"type":"string"},{"type":"null"}]}}}}`)
+
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("schemas =\n%s\nwant\n%s", jsonOf(got), jsonOf(want))
 	}
 }
 

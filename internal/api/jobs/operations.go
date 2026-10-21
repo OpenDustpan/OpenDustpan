@@ -4,6 +4,7 @@ import (
 	"net/http"
 
 	"opendustpan.org/opendustpan/internal/api/apidesc"
+	"opendustpan.org/opendustpan/pkg/identity"
 )
 
 // operationLabels names the routes of this adapter. The key is the pattern of
@@ -38,7 +39,17 @@ func (h *Handler) Operations() []apidesc.Operation {
 	rows := make([]apidesc.Row, 0, len(h.routes))
 
 	for _, route := range h.routes {
-		actions := make([]string, 0, len(route.Reads))
+		// The wrapper reads the namespace of the path before the reads on
+		// the unit, for each route that is not public.
+		var namespaceActions []string
+
+		actions := make([]string, 0, len(route.Reads)+1)
+
+		if route.Scope != ScopePublic {
+			namespaceActions = []string{string(identity.ActionNamespaceRead)}
+			actions = append(actions, namespaceActions...)
+		}
+
 		for _, action := range route.Reads {
 			actions = append(actions, string(action))
 		}
@@ -47,7 +58,7 @@ func (h *Handler) Operations() []apidesc.Operation {
 			Method:           route.Method,
 			Path:             route.Path,
 			Actions:          actions,
-			NamespaceActions: nil,
+			NamespaceActions: namespaceActions,
 			Public:           route.Scope == ScopePublic,
 			IdempotencyKey:   false,
 		})

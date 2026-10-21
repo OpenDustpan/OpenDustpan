@@ -20,6 +20,9 @@ type field struct {
 	presence string
 	tagged   bool
 	index    []int
+	// viaPointer is true when the field is promoted through an embedded
+	// pointer. The encoder writes none of its fields when that pointer is nil.
+	viaPointer bool
 }
 
 // valueType returns the type whose schema the field holds. A pointer that the
@@ -44,8 +47,14 @@ func (f field) valueType() reflect.Type {
 	}
 }
 
-// isRequired reports whether the member is in the list of required members.
+// isRequired reports whether the member is in the list of required members. A
+// field promoted through an embedded pointer is never required: a nil pointer
+// leaves it out.
 func (f field) isRequired() bool {
+	if f.viaPointer {
+		return false
+	}
+
 	switch f.presence {
 	case presenceRequired:
 		return true
@@ -118,6 +127,8 @@ func parseDustpanTag(tag string) (string, error) {
 type scan struct {
 	typ   reflect.Type
 	index []int
+	// viaPointer is true when an embedded pointer is on the way to the type.
+	viaPointer bool
 }
 
 // structFields returns the fields that encoding/json writes for the struct
@@ -128,32 +139,67 @@ type scan struct {
 func structFields(t reflect.Type) ([]field, error) {
 	var (
 		all     []field
-		current []scan
-		next    = []scan{{typ: t, index: nil}}
+		next    = []scan{{typ: t, index: nil, viaPointer: false}}
 		visited = map[reflect.Type]bool{}
+		// count holds how many times each struct type is reached at the
+		// current depth.
+		count = map[reflect.Type]int{t: 1}
 	)
 
 	for len(next) > 0 {
-		current, next = next, current[:0]
-
-		for _, sc := range current {
-			if visited[sc.typ] {
-				continue
-			}
-
-			visited[sc.typ] = true
-
-			fields, deeper, err := scanStruct(sc)
-			if err != nil {
-				return nil, err
-			}
-
-			all = append(all, fields...)
-			next = append(next, deeper...)
+		lv, err := scanLevel(next, count, visited)
+		if err != nil {
+			return nil, err
 		}
+
+		all = append(all, lv.fields...)
+		next, count = lv.next, lv.nextCount
 	}
 
 	return dominant(all), nil
+}
+
+// level is what the read of one depth of embedded structs finds.
+type level struct {
+	fields []field
+	// next lists the structs of the next depth, and nextCount says how many
+	// times each is reached.
+	next      []scan
+	nextCount map[reflect.Type]int
+}
+
+// scanLevel reads the structs of one depth.
+func scanLevel(current []scan, count map[reflect.Type]int, visited map[reflect.Type]bool) (level, error) {
+	lv := level{fields: nil, next: nil, nextCount: map[reflect.Type]int{}}
+
+	for _, sc := range current {
+		if visited[sc.typ] {
+			continue
+		}
+
+		visited[sc.typ] = true
+
+		fields, deeper, err := scanStruct(sc)
+		if err != nil {
+			return level{fields: nil, next: nil, nextCount: nil}, err
+		}
+
+		lv.fields = append(lv.fields, fields...)
+		// A type that two embeddings reach at one depth is listed twice, so
+		// that its fields cancel out, as in encoding/json.
+		if count[sc.typ] > 1 {
+			lv.fields = append(lv.fields, fields...)
+		}
+
+		for _, d := range deeper {
+			lv.nextCount[d.typ]++
+			if lv.nextCount[d.typ] == 1 {
+				lv.next = append(lv.next, d)
+			}
+		}
+	}
+
+	return lv, nil
 }
 
 // scanStruct reads the fields of one struct on the queue.
@@ -166,7 +212,7 @@ func scanStruct(sc scan) ([]field, []scan, error) {
 	for i := range sc.typ.NumField() {
 		sf := sc.typ.Field(i)
 
-		found, embedded, err := scanField(sf, append(slices.Clone(sc.index), i))
+		found, embedded, err := scanField(sf, append(slices.Clone(sc.index), i), sc.viaPointer)
 		if err != nil {
 			return nil, nil, fmt.Errorf("%s.%s: %w", sc.typ, sf.Name, err)
 		}
@@ -180,16 +226,16 @@ func scanStruct(sc scan) ([]field, []scan, error) {
 
 // scanField reads one struct field. It returns the field to write, or the
 // embedded struct to search, or neither.
-func scanField(sf reflect.StructField, index []int) ([]field, []scan, error) {
-	embedded, isEmbedded := embeddedStruct(sf)
+func scanField(sf reflect.StructField, index []int, viaPointer bool) ([]field, []scan, error) {
+	emb := embeddedStruct(sf)
 
 	parsed, skip, err := readJSONTag(sf)
 	if err != nil || skip {
 		return nil, nil, err
 	}
 
-	if parsed.name == "" && isEmbedded {
-		return nil, []scan{{typ: embedded, index: index}}, nil
+	if parsed.name == "" && emb.isStruct {
+		return nil, []scan{{typ: emb.typ, index: index, viaPointer: viaPointer || emb.isPointer}}, nil
 	}
 
 	extra, err := parseDustpanTag(sf.Tag.Get("dustpan"))
@@ -199,20 +245,31 @@ func scanField(sf reflect.StructField, index []int) ([]field, []scan, error) {
 
 	return []field{{
 		name: cmp.Or(parsed.name, sf.Name), typ: sf.Type, omit: parsed.omitempty || parsed.omitzero,
-		presence: extra, tagged: parsed.name != "", index: index,
+		presence: extra, tagged: parsed.name != "", index: index, viaPointer: viaPointer,
 	}}, nil, nil
 }
 
-// embeddedStruct returns the struct type that an embedded field holds, and
-// false for a field that is not an embedded struct. A pointer to a struct
-// counts as the struct.
-func embeddedStruct(sf reflect.StructField) (reflect.Type, bool) {
+// embedded is the struct that an embedded field holds.
+type embedded struct {
+	typ reflect.Type
+	// isStruct is true when the field is an embedded struct or an embedded
+	// pointer to a struct.
+	isStruct bool
+	// isPointer is true when the field is a pointer.
+	isPointer bool
+}
+
+// embeddedStruct returns the struct type that an embedded field holds. A
+// pointer to a struct counts as the struct.
+func embeddedStruct(sf reflect.StructField) embedded {
 	ft := sf.Type
-	if ft.Kind() == reflect.Pointer && ft.Name() == "" {
+
+	isPointer := ft.Kind() == reflect.Pointer && ft.Name() == ""
+	if isPointer {
 		ft = ft.Elem()
 	}
 
-	return ft, sf.Anonymous && ft.Kind() == reflect.Struct
+	return embedded{typ: ft, isStruct: sf.Anonymous && ft.Kind() == reflect.Struct, isPointer: isPointer}
 }
 
 // readJSONTag reads the json tag of a field. The bool is true for a field that
@@ -221,8 +278,7 @@ func embeddedStruct(sf reflect.StructField) (reflect.Type, bool) {
 func readJSONTag(sf reflect.StructField) (jsonTag, bool, error) {
 	raw, hasTag := sf.Tag.Lookup("json")
 
-	_, embedded := embeddedStruct(sf)
-	if raw == "-" || (!sf.IsExported() && !embedded) {
+	if raw == "-" || (!sf.IsExported() && !embeddedStruct(sf).isStruct) {
 		return jsonTag{name: "", omitempty: false, omitzero: false, asString: false}, true, nil
 	}
 
@@ -303,12 +359,13 @@ func winnerOf(group []field) (field, bool) {
 
 	if len(top) != 1 {
 		return field{
-			name:     "",
-			typ:      nil,
-			omit:     false,
-			presence: "",
-			tagged:   false,
-			index:    nil,
+			name:       "",
+			typ:        nil,
+			omit:       false,
+			presence:   "",
+			tagged:     false,
+			index:      nil,
+			viaPointer: false,
 		}, false
 	}
 

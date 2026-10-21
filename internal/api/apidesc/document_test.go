@@ -410,19 +410,31 @@ func TestSubsetCheckSeesTheForbiddenForms(t *testing.T) {
 	t.Parallel()
 
 	bad := map[string]string{
-		"multi type":           `{"type":["string","integer"]}`,
-		"null type alone":      `{"type":["null"]}`,
-		"closed enum":          `{"type":"string","enum":["a","b"]}`,
-		"const":                `{"const":"a"}`,
-		"oneOf of three":       `{"oneOf":[{"$ref":"#/a"},{"$ref":"#/b"},{"type":"null"}]}`,
-		"oneOf with no null":   `{"oneOf":[{"$ref":"#/a"},{"$ref":"#/b"}]}`,
-		"anyOf with no string": `{"anyOf":[{"enum":["a"]},{"type":"integer"}]}`,
+		"multi type":                `{"type":["string","integer"]}`,
+		"null type alone":           `{"type":["null"]}`,
+		"closed enum":               `{"type":"string","enum":["a","b"]}`,
+		"const":                     `{"const":"a"}`,
+		"oneOf of three":            `{"oneOf":[{"$ref":"#/components/schemas/a"},{"$ref":"#/components/schemas/b"},{"type":"null"}]}`,
+		"oneOf with no null":        `{"oneOf":[{"$ref":"#/components/schemas/a"},{"$ref":"#/components/schemas/b"}]}`,
+		"anyOf with no string":      `{"anyOf":[{"enum":["a"]},{"type":"integer"}]}`,
+		"oneOf of two types":        `{"oneOf":[{"type":"string"},{"type":"integer"}]}`,
+		"oneOf inline and null":     `{"oneOf":[{"type":"object"},{"type":"null"}]}`,
+		"oneOf with null first":     `{"oneOf":[{"type":"null"},{"$ref":"#/components/schemas/a"}]}`,
+		"oneOf with a sibling":      `{"oneOf":[{"$ref":"#/components/schemas/a"},{"type":"null"}],"description":"x"}`,
+		"anyOf of two types":        `{"anyOf":[{"type":"string"},{"type":"integer"}]}`,
+		"anyOf with inline enum":    `{"anyOf":[{"type":"string","enum":["a","b"]},{"type":"string"}]}`,
+		"anyOf with string first":   `{"anyOf":[{"type":"string"},{"$ref":"#/components/schemas/a"}]}`,
+		"anyOf with a third type":   `{"anyOf":[{"$ref":"#/components/schemas/a"},{"type":"string"},{"type":"integer"}]}`,
+		"anyOf with two nulls":      `{"anyOf":[{"$ref":"#/components/schemas/a"},{"type":"string"},{"type":"null"},{"type":"null"}]}`,
+		"anyOf with a sibling":      `{"anyOf":[{"$ref":"#/components/schemas/a"},{"type":"string"}],"description":"x"}`,
+		"anyOf with a typed string": `{"anyOf":[{"$ref":"#/components/schemas/a"},{"type":"string","format":"uuid"}]}`,
 	}
 
 	good := map[string]string{
 		"nullable":             `{"type":["string","null"]}`,
-		"nullable ref":         `{"oneOf":[{"$ref":"#/a"},{"type":"null"}]}`,
-		"open enum":            `{"anyOf":[{"type":"string","enum":["a","b"]},{"type":"string"}]}`,
+		"nullable ref":         `{"oneOf":[{"$ref":"#/components/schemas/a"},{"type":"null"}]}`,
+		"open enum":            `{"anyOf":[{"$ref":"#/components/schemas/a"},{"type":"string"}]}`,
+		"open enum or null":    `{"anyOf":[{"$ref":"#/components/schemas/a"},{"type":"string"},{"type":"null"}]}`,
 		"property named const": `{"properties":{"const":{"type":"string"}}}`,
 	}
 
@@ -524,7 +536,7 @@ func schemaProblems(where string, obj map[string]any, state walkState) []string 
 		out = append(out, where+` has a type list that is not [X, "null"]`)
 	}
 
-	if one, ok := obj["oneOf"].([]any); ok && !isRefOrNull(one) {
+	if one, ok := obj["oneOf"].([]any); ok && (!isRefOrNull(one) || len(obj) != 1) {
 		out = append(out, where+" has a oneOf that is not [ref, null]")
 	}
 
@@ -532,25 +544,46 @@ func schemaProblems(where string, obj map[string]any, state walkState) []string 
 		out = append(out, where+" has a closed enum: an enum that can grow is anyOf [enum, string]")
 	}
 
-	if anyOf, ok := obj["anyOf"].([]any); ok && !hasPlainString(anyOf) {
-		out = append(out, where+" has an anyOf with no plain string: it is not an open enum")
+	if anyOf, ok := obj["anyOf"].([]any); ok && (!isOpenEnum(anyOf) || len(obj) != 1) {
+		out = append(out, where+" has an anyOf that is not [ref, string] with an optional null: it is not an open enum")
 	}
 
 	return out
 }
 
-// isRefOrNull reports whether a oneOf list has two members and one of them is
-// the null type.
+// isRefOrNull reports whether a oneOf list is [{$ref}, {type: null}]. Another
+// order, another number of members and any other member are not the form.
 func isRefOrNull(alts []any) bool {
-	nulls := 0
+	return len(alts) == 2 && isOnlyRef(alts[0]) && isOnlyType(alts[1], "null")
+}
 
-	for _, alt := range alts {
-		if m, ok := alt.(map[string]any); ok && m["type"] == "null" {
-			nulls++
-		}
+// isOpenEnum reports whether an anyOf list is [{$ref}, {type: string}], with
+// {type: null} after them.
+func isOpenEnum(alts []any) bool {
+	if len(alts) == 3 && !isOnlyType(alts[2], "null") {
+		return false
 	}
 
-	return len(alts) == 2 && nulls == 1
+	return (len(alts) == 2 || len(alts) == 3) && isOnlyRef(alts[0]) && isOnlyType(alts[1], "string")
+}
+
+// isOnlyRef reports whether the schema holds a reference and nothing else.
+func isOnlyRef(alt any) bool {
+	m, ok := alt.(map[string]any)
+	if !ok || len(m) != 1 {
+		return false
+	}
+
+	ref, isString := m["$ref"].(string)
+
+	return isString && strings.HasPrefix(ref, "#/components/schemas/")
+}
+
+// isOnlyType reports whether the schema holds the one type and nothing else.
+func isOnlyType(alt any, typ string) bool {
+	m, ok := alt.(map[string]any)
+
+	return ok && len(m) == 1 && m["type"] == typ
 }
 
 func TestDocumentReturnsACopy(t *testing.T) {

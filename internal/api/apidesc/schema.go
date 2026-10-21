@@ -190,7 +190,17 @@ func (r *reflector) reflectBodies(bodies []Body) error {
 		return fmt.Errorf("%w: these fields are not camelCase: %s", ErrInvalidBody, strings.Join(r.badNames, ", "))
 	}
 
-	return r.checkRefs()
+	return r.checkFinished()
+}
+
+// checkFinished checks the schemas when all of them are written: every
+// reference has a schema, and every anyOf and oneOf has an allowed form.
+func (r *reflector) checkFinished() error {
+	if err := r.checkRefs(); err != nil {
+		return err
+	}
+
+	return r.checkForms()
 }
 
 // ref returns the reference to the schema of the body.
@@ -205,7 +215,12 @@ func (r *reflector) schemaFor(t reflect.Type) (object, error) {
 			return nil, err
 		}
 
-		return nullable(inner), nil
+		out, err := nullable(inner)
+		if err != nil {
+			return nil, fmt.Errorf("%w: %s: %w", ErrInvalidBody, t, err)
+		}
+
+		return out, nil
 	}
 
 	if d, ok := r.declared[t]; ok {
@@ -416,33 +431,54 @@ func (r *reflector) mapSchema(t reflect.Type) (object, error) {
 
 // nullable returns the schema of a value that can also be null. A reference
 // becomes oneOf, an open enum gets a third branch, and any other schema takes
-// the type list [X, "null"].
-func nullable(s object) object {
+// the type list [X, "null"]. It refuses a schema that none of these forms can
+// make null without leaving the subset: a declared oneOf, and a declared schema
+// with no type.
+func nullable(s object) (object, error) {
 	null := object{keyType: typeNull}
 
 	if s[keyRef] != nil {
-		return object{keyOneOf: []any{s, null}}
+		return object{keyOneOf: []any{s, null}}, nil
 	}
 
 	if branches, ok := s[keyAnyOf].([]any); ok {
-		return object{keyAnyOf: append(slices.Clone(branches), null)}
+		if endsWithNull(branches) {
+			return s, nil
+		}
+
+		return object{keyAnyOf: append(slices.Clone(branches), null)}, nil
 	}
 
-	if s[keyOneOf] != nil {
-		return s
+	if branches, ok := s[keyOneOf].([]any); ok {
+		// Only the nullable reference has a oneOf, and it holds null already.
+		if endsWithNull(branches) {
+			return s, nil
+		}
+
+		return nil, fmt.Errorf("%w: a oneOf with no null branch cannot be made nullable", errDeclared)
 	}
 
 	out := cloneSchema(s)
 
 	typ, ok := out[keyType].(string)
 	if !ok {
-		// A declared schema with no type: wrap it.
-		return object{keyOneOf: []any{s, null}}
+		return nil, fmt.Errorf("%w: a schema with no type cannot be made nullable", errDeclared)
 	}
 
 	out[keyType] = []any{typ, typeNull}
 
-	return out
+	return out, nil
+}
+
+// endsWithNull reports whether the last branch of a list is the null type.
+func endsWithNull(branches []any) bool {
+	if len(branches) == 0 {
+		return false
+	}
+
+	last, ok := branches[len(branches)-1].(object)
+
+	return ok && len(last) == 1 && last[keyType] == typeNull
 }
 
 // structSchema returns the schema of a struct.
