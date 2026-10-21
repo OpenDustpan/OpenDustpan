@@ -1370,6 +1370,7 @@ func claimBackupOperation(
 
 	op, err := s.DurableOperationsPort().Claim(t.Context(), durable.ClaimRequest{
 		Owner: owner, Kinds: []durable.Kind{backup.OperationKind}, MaxVersions: nil, Lease: lease,
+		TakeCanceled: false,
 	})
 	if err != nil {
 		t.Fatalf("claim the operation of backup %s: %v", id, err)
@@ -1394,6 +1395,7 @@ func claimBackupWhenExpired(t *testing.T, s BackupStore, id backup.ID, owner str
 	for {
 		op, err := s.DurableOperationsPort().Claim(ctx, durable.ClaimRequest{
 			Owner: owner, Kinds: []durable.Kind{backup.OperationKind}, MaxVersions: nil, Lease: backupLongLease,
+			TakeCanceled: false,
 		})
 		if err == nil {
 			if op.Key != backup.OperationKey(id) {
@@ -1967,6 +1969,7 @@ func testBackupFinishForeignFence(t *testing.T, newStore BackupFactory) {
 
 	otherOp, err := s.DurableOperationsPort().Claim(t.Context(), durable.ClaimRequest{
 		Owner: "other", Kinds: []durable.Kind{other.Kind}, MaxVersions: nil, Lease: backupLongLease,
+		TakeCanceled: false,
 	})
 	if err != nil {
 		t.Fatalf("claim the other operation: %v", err)

@@ -574,6 +574,7 @@ func orphanWithExpiredReveal(t *testing.T, ops durable.Store, runs *fakeRuns) ag
 
 	op, err := ops.Claim(t.Context(), durable.ClaimRequest{
 		Owner: "test", Kinds: []durable.Kind{agent.KindTurn}, MaxVersions: nil, Lease: time.Minute,
+		TakeCanceled: false,
 	})
 	if err != nil {
 		t.Fatalf("Claim() = %v", err)

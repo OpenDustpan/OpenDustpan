@@ -45,6 +45,7 @@ func claimAttempt(t *testing.T, tracked trackingStore) {
 
 	_, err := tracked.Claim(t.Context(), durable.ClaimRequest{
 		Owner: "worker-1", Kinds: []durable.Kind{"none"}, Lease: beatLease, MaxVersions: nil,
+		TakeCanceled: false,
 	})
 	if !errors.Is(err, durable.ErrNoWork) {
 		t.Fatalf("claim = %v, want ErrNoWork", err)
@@ -113,6 +114,7 @@ func TestBusyWorkerGivesNoRefusal(t *testing.T) {
 
 	claim, err := tracked.Claim(t.Context(), durable.ClaimRequest{
 		Owner: "worker-1", Kinds: []durable.Kind{"any"}, Lease: beatLease, MaxVersions: map[durable.Kind]int{"any": 0},
+		TakeCanceled: false,
 	})
 	if err != nil {
 		t.Fatalf("claim: %v", err)

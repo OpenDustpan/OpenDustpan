@@ -118,10 +118,11 @@ func claimTurn(t *testing.T, h RunHarness) durable.Operation {
 	t.Helper()
 
 	op, err := h.Ops.Claim(t.Context(), durable.ClaimRequest{
-		Owner:       "agenttest",
-		Kinds:       []durable.Kind{agent.KindTurn},
-		MaxVersions: nil,
-		Lease:       testLease,
+		Owner:        "agenttest",
+		Kinds:        []durable.Kind{agent.KindTurn},
+		MaxVersions:  nil,
+		Lease:        testLease,
+		TakeCanceled: false,
 	})
 	if err != nil {
 		t.Fatalf("Claim() = %v", err)
