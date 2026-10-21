@@ -22,7 +22,11 @@ func TestChannelContext(t *testing.T) {
 		{"no channel gives api", context.Background(), ChannelAPI},
 		{"an unknown channel is stored as api", WithChannel(context.Background(), Channel("sso")), ChannelAPI},
 		{"an empty channel is stored as api", WithChannel(context.Background(), Channel("")), ChannelAPI},
-		{"a value of the wrong type gives api", context.WithValue(context.Background(), channelKey{}, "console"), ChannelAPI},
+		{
+			"a value of the wrong type gives api",
+			context.WithValue(context.Background(), channelKey{}, "console"),
+			ChannelAPI,
+		},
 		{
 			"the inner channel wins over an outer one",
 			WithChannel(WithChannel(context.Background(), ChannelConsole), ChannelAPI),

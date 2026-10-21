@@ -404,7 +404,8 @@ func TestSweepRecordWithoutNamespaceHasItsOwnKind(t *testing.T) {
 		t.Fatalf("the tool deleted %v, want no call", f.tool.deleted)
 	}
 
-	if log := f.log.String(); !strings.Contains(log, "error_kind=namespace_missing") || strings.Contains(log, "error_kind=store") {
+	log := f.log.String()
+	if !strings.Contains(log, "error_kind=namespace_missing") || strings.Contains(log, "error_kind=store") {
 		t.Fatalf("log = %q, want error_kind=namespace_missing", log)
 	}
 }

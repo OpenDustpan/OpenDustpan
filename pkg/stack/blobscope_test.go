@@ -613,7 +613,7 @@ type hostileBase struct {
 func (h hostileBase) CheckpointByVersion(ctx context.Context, ref stack.Ref, version int64) (stack.Checkpoint, error) {
 	cp, err := h.CheckpointStore.CheckpointByVersion(ctx, ref, version)
 	if err != nil {
-		return cp, err //nolint:wrapcheck // a test double passes the error of the store on
+		return cp, err
 	}
 
 	cp.BlobKey = *h.key
@@ -625,7 +625,7 @@ func (h hostileBase) CheckpointByVersion(ctx context.Context, ref stack.Ref, ver
 func (h hostileBase) LatestCheckpoint(ctx context.Context, ref stack.Ref) (stack.Checkpoint, error) {
 	cp, err := h.CheckpointStore.LatestCheckpoint(ctx, ref)
 	if err != nil {
-		return cp, err //nolint:wrapcheck // a test double passes the error of the store on
+		return cp, err
 	}
 
 	cp.BlobKey = *h.key
