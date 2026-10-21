@@ -117,6 +117,7 @@ func (h *Handler) stateRoutes() []Route {
 			Actions: []identity.Action{identity.ActionUnitRead},
 			Resolve: resolveGetStack,
 			Serve:   h.listStateResources,
+			Lease:   nil,
 		},
 		{
 			Method:  http.MethodGet,
@@ -125,6 +126,7 @@ func (h *Handler) stateRoutes() []Route {
 			Actions: []identity.Action{identity.ActionUnitRead},
 			Resolve: resolveGetStack,
 			Serve:   h.getStateResource,
+			Lease:   nil,
 		},
 		{
 			Method:  http.MethodGet,
@@ -133,6 +135,7 @@ func (h *Handler) stateRoutes() []Route {
 			Actions: []identity.Action{identity.ActionUnitRead},
 			Resolve: resolveGetStack,
 			Serve:   h.getStateOutputs,
+			Lease:   nil,
 		},
 	}
 
@@ -146,6 +149,7 @@ func (h *Handler) stateRoutes() []Route {
 		Actions: []identity.Action{identity.ActionUnitRead},
 		Resolve: resolveGetStack,
 		Serve:   h.diffState,
+		Lease:   nil,
 	}
 
 	at := Route{
@@ -155,6 +159,7 @@ func (h *Handler) stateRoutes() []Route {
 		Actions: []identity.Action{identity.ActionUnitRead},
 		Resolve: resolveGetStack,
 		Serve:   h.listStateAtResources,
+		Lease:   nil,
 	}
 
 	return []Route{versioned[0], versioned[1], versioned[2], diff, at, h.revealRoute()}
