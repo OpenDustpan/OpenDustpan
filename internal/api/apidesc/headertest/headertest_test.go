@@ -12,8 +12,9 @@ import (
 // sets.
 func operation(id, method string, ifMatchRequired, etag bool) apidesc.Operation {
 	return apidesc.Operation{
-		ID: id, Method: method, Path: "/api/dustpan/v1/things", Tags: nil, Actions: nil, Public: false,
-		IdempotencyKey: false, IfMatch: false, IfMatchRequired: ifMatchRequired, ETag: etag,
+		ID: id, Method: method, Path: "/api/dustpan/v1/things", Tags: nil, Actions: nil, ActionObjects: nil,
+		Public: false, IdempotencyKey: false, IfMatch: false, IfMatchRequired: ifMatchRequired, ETag: etag,
+		Bodies: nil,
 	}
 }
 

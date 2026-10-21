@@ -253,11 +253,11 @@ func (h *Handler) get(w http.ResponseWriter, r *http.Request, _ identity.Princip
 // createBody is the body of a create. The fields are pointers so that a
 // missing field differs from an empty one.
 type createBody struct {
-	Kind     *string `json:"kind"`
-	Platform *string `json:"platform"`
-	Name     *string `json:"name"`
-	Target   *string `json:"target"`
-	URL      *string `json:"url"`
+	Kind     *string `dustpan:"required" json:"kind"`
+	Platform *string `dustpan:"optional" json:"platform"`
+	Name     *string `dustpan:"required" json:"name"`
+	Target   *string `dustpan:"optional" json:"target"`
+	URL      *string `dustpan:"optional" json:"url"`
 }
 
 func orEmpty(s *string) string {
@@ -304,10 +304,10 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request, p identity.Prin
 
 // replaceBody is the body of a replace.
 type replaceBody struct {
-	Version *int64  `json:"version"`
-	Name    *string `json:"name"`
-	Target  *string `json:"target"`
-	URL     *string `json:"url"`
+	Version *int64  `dustpan:"required" json:"version"`
+	Name    *string `dustpan:"required" json:"name"`
+	Target  *string `dustpan:"optional" json:"target"`
+	URL     *string `dustpan:"optional" json:"url"`
 }
 
 // replace serves PUT /sinks/{sink_id}.

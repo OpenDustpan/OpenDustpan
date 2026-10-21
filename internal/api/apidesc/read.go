@@ -32,10 +32,16 @@ type infoShape struct {
 type operationShape struct {
 	OperationID string                   `json:"operationId"`
 	Tags        []string                 `json:"tags"`
-	Actions     []string                 `json:"x-dustpan-actions"`
+	Actions     []actionShape            `json:"x-dustpan-actions"`
 	Security    *[]map[string][]string   `json:"security"`
 	Parameters  []parameterShape         `json:"parameters"`
 	Responses   map[string]responseShape `json:"responses"`
+}
+
+// actionShape is one action with the kind of its object.
+type actionShape struct {
+	Action string `json:"action"`
+	Object string `json:"object"`
 }
 
 // responseShape is the part of a response object that Read needs.
@@ -114,9 +120,12 @@ func readOperation(path, method string, raw json.RawMessage) (Operation, error) 
 	}
 
 	op := Operation{
-		ID: shape.OperationID, Method: upper, Path: path, Tags: shape.Tags, Actions: shape.Actions,
+		ID: shape.OperationID, Method: upper, Path: path, Tags: shape.Tags, Actions: nil, ActionObjects: nil,
 		Public: false, IdempotencyKey: false, IfMatch: false, IfMatchRequired: false, ETag: false,
+		Bodies: nil,
 	}
+
+	readActions(&op, shape.Actions)
 
 	if err := readSecurity(&op, shape.Security); err != nil {
 		return Operation{}, err
@@ -129,6 +138,17 @@ func readOperation(path, method string, raw json.RawMessage) (Operation, error) 
 	op.ETag = shape.Responses["2XX"].Headers["ETag"].Ref == "#/components/headers/"+etagName
 
 	return op, nil
+}
+
+// readActions sets the actions and their object kinds, in the order of the
+// document. A public operation has an empty list and an empty map.
+func readActions(op *Operation, actions []actionShape) {
+	op.ActionObjects = make(map[string]string, len(actions))
+
+	for _, a := range actions {
+		op.Actions = append(op.Actions, a.Action)
+		op.ActionObjects[a.Action] = a.Object
+	}
 }
 
 // readSecurity sets the public flag. No security member means the default of
