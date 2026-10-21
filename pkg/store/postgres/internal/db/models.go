@@ -426,6 +426,20 @@ type InventoryLabel struct {
 	LabelValue string
 }
 
+type ItemKey struct {
+	ID           string
+	NamespaceID  string
+	ScopeID      string
+	Kind         string
+	Item         string
+	WrapperID    string
+	CreatedAtMs  int64
+	ShreddedAtMs int64
+	BlobVersion  int64
+	BlobSize     int64
+	BlobMd5      []byte
+}
+
 type Job struct {
 	ID               string
 	NamespaceID      string
@@ -451,6 +465,33 @@ type JobFreeze struct {
 	EndsAtMs    int64
 	CreatedBy   string
 	EndedBy     string
+}
+
+type JobLog struct {
+	ID          string
+	NamespaceID string
+	JobID       string
+	Phase       int64
+	Step        string
+	Token       int64
+	CreatedAtMs int64
+}
+
+type JobLogChunk struct {
+	LogID       string
+	Seq         int64
+	NamespaceID string
+	Sha256      string
+	Size        int64
+	Confirmed   int64
+}
+
+type JobPlan struct {
+	ID          string
+	NamespaceID string
+	JobID       string
+	Body        string
+	CreatedAtMs int64
 }
 
 type MaintenanceRevocation struct {

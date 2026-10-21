@@ -41,6 +41,7 @@ func RunSinks(t *testing.T, newHarness SinkFactory) {
 		{"put refuses a sink that fails Validate and stores nothing", testSinksValidate},
 		{"the store keeps the sealed values and a ref names one value for good", testSinksSecrets},
 		{"the store refuses a value sealed for another sink or scope", testSinksForeignSeals},
+		{"a webhook sink keeps its URL as a sealed item and fails closed without it", testSinksWebhookURL},
 		{"a delete removes the sink and its values", testSinksDelete},
 		{"a sink of one scope is invisible in another", testSinksScopes},
 		{"each write appends one audit entry in the scope of the sink", testSinksAudit},
@@ -169,7 +170,7 @@ func testSinksPlatformFixed(t *testing.T, h SinkHarness) {
 
 	hook := sink("snk-1", shop)
 	hook.Version = 1
-	hook.SecretRefs = []string{"itm-snk-1-b"}
+	hook.SecretRefs = []string{"itm-snk-1-b-url", "itm-snk-1-b"}
 
 	cases := []struct {
 		name    string
@@ -286,7 +287,11 @@ func checkRefRules(t *testing.T, h SinkHarness, fence namespace.Fence) {
 		{"a new value under a stored ref", base, []notify.SealedSecret{sealed(t.Context(), base, "itm-snk-1", "new")}},
 		{"a ref with no value", withRefs(base, "itm-snk-1", "itm-x"), nil},
 		{"a new sink with no value", sink("snk-2", shop), nil},
-		{"a new sink that names the ref of another sink", withRefs(sink("snk-2", shop), "itm-snk-1"), nil},
+		{
+			"a new sink that names the ref of another sink",
+			withRefs(sink("snk-2", shop), "itm-snk-1", "itm-snk-1-b"),
+			nil,
+		},
 	}
 
 	for i := range refused {
@@ -297,7 +302,7 @@ func checkRefRules(t *testing.T, h SinkHarness, fence namespace.Fence) {
 		}
 	}
 
-	rotated := withRefs(base, "itm-snk-1-c")
+	rotated := withRefs(base, "itm-snk-1", "itm-snk-1-c")
 	err := h.Sinks.PutSink(t.Context(), rotated, []notify.SealedSecret{secret(t.Context(), rotated, "itm-snk-1-c")},
 		fence, manage())
 	if err != nil {
@@ -305,14 +310,14 @@ func checkRefRules(t *testing.T, h SinkHarness, fence namespace.Fence) {
 	}
 
 	got, err := h.Sinks.SinkSecrets(t.Context(), shop, "snk-1")
-	if err != nil || len(got) != 1 || got[0].Ref() != "itm-snk-1-c" {
-		t.Fatalf("SinkSecrets after the rotation = %d items (%v), want only itm-snk-1-c", len(got), err)
+	if err != nil || len(got) != 2 || got[1].Ref() != "itm-snk-1-c" {
+		t.Fatalf("SinkSecrets after the rotation = %d items (%v), want itm-snk-1 and itm-snk-1-c", len(got), err)
 	}
 
-	back := withRefs(base, "itm-snk-1")
+	back := withRefs(base, "itm-snk-1", "itm-snk-1-b")
 	back.Version = 2
 
-	err = h.Sinks.PutSink(t.Context(), back, []notify.SealedSecret{secret(t.Context(), back, "itm-snk-1")}, fence,
+	err = h.Sinks.PutSink(t.Context(), back, []notify.SealedSecret{secret(t.Context(), back, "itm-snk-1-b")}, fence,
 		manage())
 	if !errors.Is(err, notify.ErrInvalid) {
 		t.Fatalf("PutSink back to a dropped ref: err = %v, want ErrInvalid", err)

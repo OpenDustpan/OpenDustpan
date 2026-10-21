@@ -14,8 +14,9 @@ func legacyHook(t *testing.T, f fixture) notify.Sink {
 	t.Helper()
 
 	s := f.store.sinks[makeHook(t, f).Sink.ID]
-	s.Target = "https://hk_1.example.com/ops"
+	s.Target = "hk_1.example.com"
 	f.store.sinks[s.ID] = s
+	f.store.secrets[s.ID] = sealWebhook(t, s, "https://hk_1.example.com/ops")
 
 	return s
 }

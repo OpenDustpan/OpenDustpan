@@ -65,7 +65,7 @@ const (
 
 // streamAAD binds one chunk of a legacy stream to its scope, stream,
 // position and end.
-func streamAAD(scope Scope, streamNonce []byte, counter uint64, last streamLast) []byte {
+func streamAAD(scope aadSource, streamNonce []byte, counter uint64, last streamLast) []byte {
 	aad := make([]byte, 0, len(scope.aad())+1+len(streamNonce)+8+1)
 	aad = append(aad, scope.aad()...)
 	aad = append(aad, streamAADSep, streamAADKind)
@@ -80,7 +80,7 @@ func streamAAD(scope Scope, streamNonce []byte, counter uint64, last streamLast)
 
 // streamAADv3 binds one chunk to its scope, the stream header, the binding,
 // its position and its end. The binding is length-prefixed.
-func streamAADv3(scope Scope, header, binding []byte, counter uint64, last streamLast) []byte {
+func streamAADv3(scope aadSource, header, binding []byte, counter uint64, last streamLast) []byte {
 	aad := make([]byte, 0, len(scope.aad())+2+len(header)+1+len(binding)+8+1)
 	aad = append(aad, scope.aad()...)
 	aad = append(aad, streamAADSep, streamAADKind)
@@ -121,7 +121,7 @@ func streamNonce(counter uint64) []byte {
 
 // deriveStreamKey returns the key of one stream: HKDF-SHA-256 over the data
 // key, with the stream salt and the scope label.
-func deriveStreamKey(dek, salt []byte, scope Scope) ([]byte, error) {
+func deriveStreamKey(dek, salt []byte, scope aadSource) ([]byte, error) {
 	key, err := hkdf.Key(sha256.New, dek, salt, string(scope.aad()), dataKeyBytes)
 	if err != nil {
 		return nil, fmt.Errorf("derive stream key: %w", err)
@@ -156,8 +156,16 @@ func (s *Service) SealStream(ctx context.Context, scope Scope, binding []byte, r
 
 	defer clear(dek)
 
+	return sealStreamWith(dek, scope, binding, r)
+}
+
+// sealStreamWith seals r with a stream key that it derives from the key dek
+// and a random salt. The associated data of every chunk holds the data of
+// scope and the binding. The caller owns dek and clears it. The binding must
+// pass checkBinding.
+func sealStreamWith(dek []byte, scope aadSource, binding []byte, r io.Reader) (io.Reader, error) {
 	salt := make([]byte, streamSaltSize)
-	if _, err = rand.Read(salt); err != nil {
+	if _, err := rand.Read(salt); err != nil {
 		return nil, fmt.Errorf("generate stream salt: %w", err)
 	}
 
@@ -199,11 +207,18 @@ func (s *Service) OpenStream(ctx context.Context, scope Scope, binding []byte, r
 		return nil, err
 	}
 
+	return openStreamWith(dek, scope, binding, r, false), nil
+}
+
+// openStreamWith opens a stream with the key dek. The reader takes dek and
+// clears it after the header. When current is true, only the current stream
+// format opens: the legacy format has no binding, and an item never had it.
+func openStreamWith(dek []byte, scope aadSource, binding []byte, r io.Reader, current bool) io.Reader {
 	return &openReader{
-		dek: dek, scope: scope, binding: bytes.Clone(binding), src: r,
+		dek: dek, scope: scope, binding: bytes.Clone(binding), src: r, currentOnly: current,
 		aead: nil, version: 0, nonce: nil, header: nil, counter: 0,
 		pending: nil, final: false, sealedBuf: nil, plainBuf: nil,
-	}, nil
+	}
 }
 
 // bindingOf returns the stream binding of a state version ID. The ID must
@@ -314,7 +329,7 @@ func (s *Service) OpenOutputs(
 // sealReader seals one stream chunk at a time.
 type sealReader struct {
 	aead    cipher.AEAD
-	scope   Scope
+	scope   aadSource
 	header  []byte
 	binding []byte
 	src     io.Reader
@@ -423,11 +438,13 @@ func (r *sealReader) sealNext() error {
 
 // openReader opens one sealed stream chunk at a time.
 type openReader struct {
-	dek     []byte
-	aead    cipher.AEAD
-	scope   Scope
-	binding []byte
-	src     io.Reader
+	// currentOnly refuses the legacy stream format.
+	currentOnly bool
+	dek         []byte
+	aead        cipher.AEAD
+	scope       aadSource
+	binding     []byte
+	src         io.Reader
 
 	// version is the format byte of the stream, set by its header.
 	version byte
@@ -536,6 +553,10 @@ func (r *openReader) readHeader() error {
 		r.aead = aead
 		r.header = append([]byte{streamVersion}, salt...)
 	case streamLegacyVersion:
+		if r.currentOnly {
+			return fmt.Errorf("%w: sealed stream header", ErrDecrypt)
+		}
+
 		nonce := make([]byte, streamLegacyNonceSize)
 		if _, err := io.ReadFull(r.src, nonce); err != nil {
 			return fmt.Errorf("%w: sealed stream header", ErrDecrypt)
