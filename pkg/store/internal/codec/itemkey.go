@@ -1,6 +1,7 @@
 package codec
 
 import (
+	"crypto/md5" //nolint:gosec // Length of the integrity checksum of the manifest only.
 	"fmt"
 	"time"
 
@@ -19,6 +20,9 @@ type ItemKeyRow struct {
 	WrapperID    string
 	CreatedAtMs  int64
 	ShreddedAtMs int64
+	BlobVersion  int64
+	BlobSize     int64
+	BlobMd5      []byte
 }
 
 // ToItemKeyRow converts a record into a row. ShreddedAtMs is 0 for a record
@@ -28,6 +32,7 @@ func ToItemKeyRow(k secret.ItemKey) ItemKeyRow {
 		ID: string(k.ID), Namespace: k.Ref.Scope.Namespace.String(), ScopeID: k.Ref.Scope.ID,
 		Kind: string(k.Ref.Kind), Item: k.Ref.Item, WrapperID: k.WrapperID,
 		CreatedAtMs: Millis(k.CreatedAt), ShreddedAtMs: OptionalMillis(k.ShreddedAt),
+		BlobVersion: int64(k.Blob.Version), BlobSize: k.Blob.Size, BlobMd5: k.Blob.MD5[:],
 	}
 }
 
@@ -63,10 +68,42 @@ func FromItemKeyRow(r ItemKeyRow) (secret.ItemKey, error) {
 		return secret.ItemKey{}, fmt.Errorf("%w: item key %q has no wrapper ID", secret.ErrInvalidItemRef, r.ID)
 	}
 
+	blobInfo, err := itemKeyBlobInfo(r)
+	if err != nil {
+		return secret.ItemKey{}, err
+	}
+
 	return secret.ItemKey{
 		CreatedAt: FromMillis(r.CreatedAtMs), ShreddedAt: FromOptionalMillis(r.ShreddedAtMs),
-		Ref: ref, ID: id, WrapperID: r.WrapperID,
+		Ref: ref, ID: id, WrapperID: r.WrapperID, Blob: blobInfo,
 	}, nil
+}
+
+// itemKeyBlobInfo reads and checks the blob columns of a row: a version in
+// 1 to secret.MaxItemKeyVersion, a size in 1 to secret.MaxWrappedItemKeyBytes
+// and an MD5 of 16 bytes. It returns an error that wraps
+// secret.ErrInvalidItemRef for a row that fails.
+func itemKeyBlobInfo(r ItemKeyRow) (secret.ItemKeyBlobInfo, error) {
+	if r.BlobVersion < 1 || r.BlobVersion > secret.MaxItemKeyVersion {
+		return secret.ItemKeyBlobInfo{}, fmt.Errorf("%w: item key %q has blob version %d",
+			secret.ErrInvalidItemRef, r.ID, r.BlobVersion)
+	}
+
+	if r.BlobSize < 1 || r.BlobSize > secret.MaxWrappedItemKeyBytes {
+		return secret.ItemKeyBlobInfo{}, fmt.Errorf("%w: item key %q has blob size %d",
+			secret.ErrInvalidItemRef, r.ID, r.BlobSize)
+	}
+
+	var sum [md5.Size]byte
+
+	if len(r.BlobMd5) != md5.Size {
+		return secret.ItemKeyBlobInfo{}, fmt.Errorf("%w: item key %q has a blob MD5 of %d bytes",
+			secret.ErrInvalidItemRef, r.ID, len(r.BlobMd5))
+	}
+
+	copy(sum[:], r.BlobMd5)
+
+	return secret.ItemKeyBlobInfo{Version: int(r.BlobVersion), Size: r.BlobSize, MD5: sum}, nil
 }
 
 // maxItemKeyPage bounds one page of ListItemKeys.
@@ -87,6 +124,10 @@ func CheckNewItemKey(k secret.ItemKey, fence namespace.Fence) error {
 	}
 
 	if _, err := secret.ParseItemKeyID(string(k.ID)); err != nil {
+		return err
+	}
+
+	if _, err := itemKeyBlobInfo(ToItemKeyRow(k)); err != nil {
 		return err
 	}
 

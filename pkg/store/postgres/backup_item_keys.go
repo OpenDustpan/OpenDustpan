@@ -18,7 +18,7 @@ func pgCopyItemKeyTables() []pgCopyTable {
 			table: "item_keys",
 			columns: []string{
 				"id", pgColNamespaceID, pgColScopeID, pgColKind, "item", pgColWrapperID, pgColCreatedAtMs,
-				"shredded_at_ms",
+				"shredded_at_ms", "blob_version", "blob_size", "blob_md5",
 			},
 			orderBy: []string{"id"},
 		},
@@ -43,7 +43,7 @@ func checkStagedOwnedRows(ctx context.Context, pool *pgxpool.Pool, staging strin
 // Defense in depth: the store checks a row again when it reads it. This check
 // stays so that a bad row fails the restore and does not wait for a reader.
 func checkStagedItemKeys(ctx context.Context, pool *pgxpool.Pool, staging string) error {
-	query := "SELECT k.id, n.name, k.scope_id, k.kind, k.item, k.wrapper_id, k.created_at_ms, k.shredded_at_ms FROM " +
+	query := "SELECT k.id, n.name, k.scope_id, k.kind, k.item, k.wrapper_id, k.created_at_ms, k.shredded_at_ms, k.blob_version, k.blob_size, k.blob_md5 FROM " +
 		stagingTable(staging, "item_keys") + " AS k LEFT JOIN " + stagingTable(staging, "namespaces") +
 		" AS n ON n.id = k.namespace_id"
 
@@ -61,7 +61,7 @@ func checkStagedItemKeys(ctx context.Context, pool *pgxpool.Pool, staging string
 		)
 
 		scanErr := rows.Scan(&row.ID, &namespace, &row.ScopeID, &row.Kind, &row.Item, &row.WrapperID,
-			&row.CreatedAtMs, &row.ShreddedAtMs)
+			&row.CreatedAtMs, &row.ShreddedAtMs, &row.BlobVersion, &row.BlobSize, &row.BlobMd5)
 		if scanErr != nil {
 			return fmt.Errorf("read staged item keys: %w", backup.ErrExportRead)
 		}

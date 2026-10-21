@@ -24,6 +24,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/audit/audittest"
 	"opendustpan.org/opendustpan/pkg/backup"
+	"opendustpan.org/opendustpan/pkg/blob"
 	blobfs "opendustpan.org/opendustpan/pkg/blob/fs"
 	"opendustpan.org/opendustpan/pkg/idempotency"
 	"opendustpan.org/opendustpan/pkg/idempotency/idempotencytest"
@@ -34,6 +35,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/principal/principaltest"
 	"opendustpan.org/opendustpan/pkg/runner"
+	"opendustpan.org/opendustpan/pkg/secret"
 	"opendustpan.org/opendustpan/pkg/secret/secrettest"
 	"opendustpan.org/opendustpan/pkg/session/sessiontest"
 	"opendustpan.org/opendustpan/pkg/stack"
@@ -874,6 +876,32 @@ func TestRestoreConformance(t *testing.T) {
 	})
 }
 
+// TestItemKeyBackupRestore proves that a backup copies the wrapped item key
+// blobs and that content opens after a restore brought back a lost blob.
+func TestItemKeyBackupRestore(t *testing.T) {
+	t.Parallel()
+
+	base := os.Getenv(envURL)
+	if base == "" {
+		t.Skipf("set %s to run the PostgreSQL restore suite", envURL)
+	}
+
+	storetest.RunItemKeyBackup(t, func(t *testing.T, in storetest.ItemKeyBackupInput) *storetest.ItemKeyBackupRig {
+		t.Helper()
+
+		st := openBackup(t, base)
+
+		if _, err := st.ClaimKind(t.Context(), installation.KindProduction); err != nil {
+			t.Fatalf("claim the installation kind: %v", err)
+		}
+
+		live, _ := openRestoreAuditBlobs(t)
+		backups, restores := newRestoreAuditServices(t, st, live, in.Target, in.Key)
+
+		return &storetest.ItemKeyBackupRig{Store: st, Backups: backups, Restores: restores, Live: live}
+	})
+}
+
 // restoreAuditMaintenance enters and leaves maintenance mode in the stored
 // installation state, as the maintenance service does for a restore: the
 // restore then runs with the real state check, and the audit entry after the
@@ -946,7 +974,7 @@ func checkRestoreAuditEntryAfterSwap(t *testing.T, keep bool, want string) {
 	}
 
 	live, target := openRestoreAuditBlobs(t)
-	backups, restores := newRestoreAuditServices(t, st, live, target)
+	backups, restores := newRestoreAuditServices(t, st, live, target, nil)
 
 	backupID := backup.ID(ident.NewID("bkp-"))
 
@@ -1009,7 +1037,7 @@ func openRestoreAuditBlobs(t *testing.T) (*blobfs.Store, *blobfs.Store) {
 // newRestoreAuditServices wires the backup and restore services of the
 // audit-entry test over st, the same services the server wires.
 func newRestoreAuditServices(
-	t *testing.T, st *backupStore, live, target *blobfs.Store,
+	t *testing.T, st *backupStore, live *blobfs.Store, target blob.Store, key secret.Wrapper,
 ) (*backup.Service, *backup.RestoreService) {
 	t.Helper()
 
@@ -1040,7 +1068,7 @@ func newRestoreAuditServices(
 		Maintenance: restoreAuditMaintenance{state: st},
 		Blobs:       live,
 		Target:      target,
-		Key:         nil,
+		Key:         key,
 		Region:      "test",
 		AfterApply:  nil,
 		Admit:       nil,

@@ -13,48 +13,104 @@ import (
 	"opendustpan.org/opendustpan/pkg/store/sqlite/internal/db"
 )
 
-var _ secret.ItemKeyIndex = (*Store)(nil)
+var _ secret.ItemKeyStore = (*Store)(nil)
 
-// CreateItemKey implements secret.ItemKeyIndex with a fenced insert. It
-// stores k unless a record for its item exists, and returns the stored
-// record either way, so two writers of the first save of one item agree on
-// one key.
-func (s *Store) CreateItemKey(ctx context.Context, k secret.ItemKey, fence namespace.Fence) (secret.ItemKey, error) {
-	if err := codec.CheckNewItemKey(k, fence); err != nil {
+// itemKeyTx is the item key part of one open fenced transaction of the store.
+// Its fence is the fence that opened the transaction.
+type itemKeyTx struct {
+	q     *db.Queries
+	fence namespace.Fence
+}
+
+var _ secret.ItemKeyTx = itemKeyTx{q: nil, fence: namespace.Fence{}}
+
+// InItemKeyTx implements secret.ItemKeyStore. The transaction checks fence
+// first, and fn writes the item row and the record in it.
+func (s *Store) InItemKeyTx(ctx context.Context, fence namespace.Fence, fn func(secret.ItemKeyTx) error) error {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	return s.inFencedTx(ctx, fence, func(q *db.Queries) error {
+		return fn(itemKeyTx{q: q, fence: fence})
+	})
+}
+
+// CreateItemKey implements secret.ItemKeyTx. It stores k unless a record for
+// its item exists, and returns the stored record either way, so two writers of
+// the first save of one item agree on one key.
+func (t itemKeyTx) CreateItemKey(ctx context.Context, k secret.ItemKey) (secret.ItemKey, error) {
+	// Defense in depth: the transaction checked the failover version of the
+	// namespace of the fence only. This check stays so that a record of one
+	// namespace never lands under the fence of another namespace.
+	if err := codec.CheckNewItemKey(k, t.fence); err != nil {
 		return secret.ItemKey{}, err
 	}
 
 	row := codec.ToItemKeyRow(k)
 
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	var stored secret.ItemKey
-
-	err := s.inFencedTx(ctx, fence, func(q *db.Queries) error {
-		_, err := q.InsertItemKey(ctx, db.InsertItemKeyParams{
-			ID: row.ID, Namespace: row.Namespace, ScopeID: row.ScopeID, Kind: row.Kind, Item: row.Item,
-			WrapperID: row.WrapperID, CreatedAtMs: row.CreatedAtMs,
-		})
-		if err != nil {
-			return fmt.Errorf("insert item key: %w", err)
-		}
-
-		got, err := s.itemKeyOf(ctx, q, k.Ref)
-		if err != nil {
-			return err
-		}
-
-		stored = got
-
-		return nil
+	_, err := t.q.InsertItemKey(ctx, db.InsertItemKeyParams{
+		ID: row.ID, Namespace: row.Namespace, ScopeID: row.ScopeID, Kind: row.Kind, Item: row.Item,
+		WrapperID: row.WrapperID, CreatedAtMs: row.CreatedAtMs, BlobVersion: row.BlobVersion,
+		BlobSize: row.BlobSize, BlobMd5: row.BlobMd5,
 	})
+	if err != nil {
+		return secret.ItemKey{}, fmt.Errorf("insert item key: %w", err)
+	}
+
+	return t.GetItemKey(ctx, k.Ref)
+}
+
+// GetNamespace implements secret.ItemKeyTx.
+func (t itemKeyTx) GetNamespace(ctx context.Context, name namespace.Name) (namespace.Namespace, error) {
+	row, err := t.q.GetNamespace(ctx, name.String())
+	if errors.Is(err, sql.ErrNoRows) {
+		return namespace.Namespace{}, namespace.ErrNotFound
+	}
+
+	if err != nil {
+		return namespace.Namespace{}, fmt.Errorf("select namespace: %w", err)
+	}
+
+	return codec.FromNamespaceRow(codec.NamespaceRow(row)), nil
+}
+
+// GetItemKey implements secret.ItemKeyTx.
+func (t itemKeyTx) GetItemKey(ctx context.Context, ref secret.ItemRef) (secret.ItemKey, error) {
+	return shreddedAsError(itemKeyOf(ctx, t.q, ref))
+}
+
+// shreddedAsError turns a shredded record into secret.ErrShredded, with the
+// record.
+func shreddedAsError(got secret.ItemKey, err error) (secret.ItemKey, error) {
 	if err != nil {
 		return secret.ItemKey{}, err
 	}
 
-	if stored.Shredded() {
-		return stored, fmt.Errorf("create item key %s: %w", k.Ref, secret.ErrShredded)
+	if got.Shredded() {
+		return got, fmt.Errorf("item key of %s: %w", got.Ref, secret.ErrShredded)
+	}
+
+	return got, nil
+}
+
+// CreateItemKey implements secret.ItemKeyIndex in a transaction of its own.
+// A caller that creates the item too uses InItemKeyTx and writes both in one
+// transaction.
+func (s *Store) CreateItemKey(ctx context.Context, k secret.ItemKey, fence namespace.Fence) (secret.ItemKey, error) {
+	var stored secret.ItemKey
+
+	err := s.InItemKeyTx(ctx, fence, func(tx secret.ItemKeyTx) error {
+		got, err := tx.CreateItemKey(ctx, k)
+		stored = got
+
+		return err
+	})
+	if err != nil {
+		if errors.Is(err, secret.ErrShredded) {
+			return stored, err
+		}
+
+		return secret.ItemKey{}, err
 	}
 
 	return stored, nil
@@ -65,21 +121,12 @@ func (s *Store) GetItemKey(ctx context.Context, ref secret.ItemRef) (secret.Item
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	got, err := s.itemKeyOf(ctx, s.queries, ref)
-	if err != nil {
-		return secret.ItemKey{}, err
-	}
-
-	if got.Shredded() {
-		return got, fmt.Errorf("item key of %s: %w", ref, secret.ErrShredded)
-	}
-
-	return got, nil
+	return itemKeyTx{q: s.queries, fence: namespace.Fence{}}.GetItemKey(ctx, ref)
 }
 
 // itemKeyOf reads the record of ref, shredded or not. It returns
 // secret.ErrKeyNotFound for no record.
-func (s *Store) itemKeyOf(ctx context.Context, q *db.Queries, ref secret.ItemRef) (secret.ItemKey, error) {
+func itemKeyOf(ctx context.Context, q *db.Queries, ref secret.ItemRef) (secret.ItemKey, error) {
 	row, err := q.GetItemKey(ctx, db.GetItemKeyParams{
 		Namespace: ref.Scope.Namespace.String(), ScopeID: ref.Scope.ID, Kind: string(ref.Kind), Item: ref.Item,
 	})
@@ -117,7 +164,7 @@ func (s *Store) ShredItemKey(
 			return fmt.Errorf("shred item key: %w", err)
 		}
 
-		got, err := s.itemKeyOf(ctx, q, ref)
+		got, err := itemKeyOf(ctx, q, ref)
 		if err != nil {
 			return err
 		}

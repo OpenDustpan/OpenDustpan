@@ -2,6 +2,7 @@ package secret
 
 import (
 	"context"
+	"crypto/md5" //nolint:gosec // Integrity checksum of the manifest, not security: the AEAD tag authenticates the blob.
 	"crypto/rand"
 	"errors"
 	"fmt"
@@ -10,6 +11,10 @@ import (
 
 	"opendustpan.org/opendustpan/pkg/namespace"
 )
+
+// itemKeyBlobVersion is the version of the blob that NewItemKey writes. The
+// key-encryption key wraps it directly.
+const itemKeyBlobVersion = 1
 
 // NamespaceReader reads a namespace for its ID, which names its blob scope.
 // namespace.Store and every SQL store adapter implement it.
@@ -80,13 +85,22 @@ func checkRef(ref ItemRef) error {
 }
 
 // NewItemKey implements ItemSealer. It writes the wrapped key blob first and
-// the record after it. A second call for the same item returns the stored
-// record, so two writers of the first save agree on one key. When another
-// writer stored its record first, the blob of this call is an orphan, and
-// NewItemKey deletes it.
-func (s *ItemKeySealer) NewItemKey(ctx context.Context, ref ItemRef, fence namespace.Fence) (ItemKey, error) {
+// the record after it, through tx, so the record commits with the item in the
+// transaction of the caller. A second call for the same item returns the
+// stored record, so two writers of the first save agree on one key. When
+// another writer stored its record first, or the record is not stored, the
+// blob of this call is an orphan, and NewItemKey deletes it. When the caller
+// rolls back after NewItemKey returns, the blob is an orphan that the orphan
+// cleanup deletes after a grace period.
+func (s *ItemKeySealer) NewItemKey(
+	ctx context.Context, tx ItemKeyTx, ref ItemRef, fence namespace.Fence,
+) (ItemKey, error) {
 	if err := checkRef(ref); err != nil {
 		return ItemKey{}, err
+	}
+
+	if tx == nil {
+		return ItemKey{}, fmt.Errorf("%w: item key transaction", ErrMissingDependency)
 	}
 
 	if s.wrapper == nil {
@@ -101,7 +115,7 @@ func (s *ItemKeySealer) NewItemKey(ctx context.Context, ref ItemRef, fence names
 			ref.Scope.Namespace, fence.Namespace)
 	}
 
-	existing, err := s.index.GetItemKey(ctx, ref)
+	existing, err := tx.GetItemKey(ctx, ref)
 
 	switch {
 	case err == nil || errors.Is(err, ErrShredded):
@@ -111,7 +125,7 @@ func (s *ItemKeySealer) NewItemKey(ctx context.Context, ref ItemRef, fence names
 	default:
 	}
 
-	return s.createItemKey(ctx, ref, fence)
+	return s.createItemKey(ctx, tx, ref)
 }
 
 // SealContent implements ItemSealer.
@@ -206,10 +220,10 @@ func (s *ItemKeySealer) openItemKey(ctx context.Context, ref ItemRef) ([]byte, e
 	return key, nil
 }
 
-// createItemKey makes a new item key for ref and stores its blob and its
-// record.
-func (s *ItemKeySealer) createItemKey(ctx context.Context, ref ItemRef, fence namespace.Fence) (ItemKey, error) {
-	ns, err := s.namespaces.GetNamespace(ctx, ref.Scope.Namespace)
+// createItemKey makes a new item key for ref and stores its blob and, through
+// tx, its record.
+func (s *ItemKeySealer) createItemKey(ctx context.Context, tx ItemKeyTx, ref ItemRef) (ItemKey, error) {
+	ns, err := tx.GetNamespace(ctx, ref.Scope.Namespace)
 	if err != nil {
 		return ItemKey{}, fmt.Errorf("new item key of %s: %w", ref, err)
 	}
@@ -228,7 +242,7 @@ func (s *ItemKeySealer) createItemKey(ctx context.Context, ref ItemRef, fence na
 
 	id := NewItemKeyID()
 
-	blobKey, err := s.blobs.Key(ns.ID, id, 1)
+	blobKey, err := s.blobs.Key(ns.ID, id, itemKeyBlobVersion)
 	if err != nil {
 		return ItemKey{}, fmt.Errorf("item key blob of %s: %w", ref, err)
 	}
@@ -237,9 +251,10 @@ func (s *ItemKeySealer) createItemKey(ctx context.Context, ref ItemRef, fence na
 		return ItemKey{}, fmt.Errorf("store item key blob of %s: %w", ref, err)
 	}
 
-	stored, err := s.index.CreateItemKey(ctx, ItemKey{
+	stored, err := tx.CreateItemKey(ctx, ItemKey{
 		CreatedAt: s.now().UTC(), ShreddedAt: time.Time{}, Ref: ref, ID: id, WrapperID: s.wrapper.ID(),
-	}, fence)
+		Blob: ItemKeyBlobInfo{Version: itemKeyBlobVersion, Size: int64(len(wrapped)), MD5: md5.Sum(wrapped)},
+	})
 	if err != nil || stored.ID != id {
 		// The record was not stored, or another writer's record won. The
 		// blob of this call is an orphan. The orphan cleanup also deletes it

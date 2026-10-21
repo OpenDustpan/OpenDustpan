@@ -17,7 +17,7 @@ func sqliteItemKeyBackupTables() []sqliteBackupTable {
 			table: "item_keys",
 			columns: []string{
 				"id", backupColNamespaceID, "scope_id", backupColKind, "item", backupColWrapperID,
-				backupColCreatedAtMs, "shredded_at_ms",
+				backupColCreatedAtMs, "shredded_at_ms", "blob_version", "blob_size", "blob_md5",
 			},
 		},
 	}
@@ -41,7 +41,8 @@ func checkStagedOwnedRows(ctx context.Context, conn *sql.DB) error {
 // Defense in depth: the store checks a row again when it reads it. This check
 // stays so that a bad row fails the restore and does not wait for a reader.
 func checkStagedItemKeys(ctx context.Context, conn *sql.DB) error {
-	const query = `SELECT k.id, n.name, k.scope_id, k.kind, k.item, k.wrapper_id, k.created_at_ms, k.shredded_at_ms
+	const query = `SELECT k.id, n.name, k.scope_id, k.kind, k.item, k.wrapper_id, k.created_at_ms, k.shredded_at_ms,
+	k.blob_version, k.blob_size, k.blob_md5
 FROM item_keys AS k LEFT JOIN namespaces AS n ON n.id = k.namespace_id`
 
 	rows, err := conn.QueryContext(ctx, query)
@@ -60,7 +61,7 @@ FROM item_keys AS k LEFT JOIN namespaces AS n ON n.id = k.namespace_id`
 		)
 
 		scanErr := rows.Scan(&row.ID, &namespace, &row.ScopeID, &row.Kind, &row.Item, &row.WrapperID,
-			&row.CreatedAtMs, &row.ShreddedAtMs)
+			&row.CreatedAtMs, &row.ShreddedAtMs, &row.BlobVersion, &row.BlobSize, &row.BlobMd5)
 		if scanErr != nil {
 			return fmt.Errorf("read staged item keys: %w", backup.ErrExportRead)
 		}
