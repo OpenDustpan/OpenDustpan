@@ -56,8 +56,11 @@ jobs:
         ports: [ "5432:5432" ]
         # The image declares a volume at /var/lib/postgresql on the disk of the
         # runner. The runner does not remove that volume after the job. The job
-        # hooks of each self-hosted runner remove it.
+        # hooks of each self-hosted runner remove it. A parallel query keeps its
+        # shared memory in /dev/shm, and the Docker default of 64 MiB is too
+        # small for the tests.
         options: >-
+          --shm-size=1g
           --health-cmd "pg_isready -U postgres"
           --health-interval 5s --health-timeout 5s --health-retries 10
     steps:
@@ -180,8 +183,11 @@ jobs:
         ports: [ "5432:5432" ]
         # The image declares a volume at /var/lib/postgresql on the disk of the
         # runner. The runner does not remove that volume after the job. The job
-        # hooks of each self-hosted runner remove it.
+        # hooks of each self-hosted runner remove it. A parallel query keeps its
+        # shared memory in /dev/shm, and the Docker default of 64 MiB is too
+        # small for the tests.
         options: >-
+          --shm-size=1g
           --health-cmd "pg_isready -U postgres"
           --health-interval 5s --health-timeout 5s --health-retries 10
       # The network fault tests (make faults) drive this Toxiproxy server.
