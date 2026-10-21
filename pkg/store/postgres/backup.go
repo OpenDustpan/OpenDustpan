@@ -113,6 +113,7 @@ func pgCopyTables() []pgCopyTable {
 	tables = append(tables, pgCopyPreferenceTables()...)
 	tables = append(tables, pgCopySavedViewTables()...)
 	tables = append(tables, pgCopyGitHostTables()...)
+	tables = append(tables, pgCopyRegistryTables()...)
 	tables = append(tables, pgCopySinkTables()...)
 
 	return tables
@@ -883,16 +884,6 @@ type stagingInput struct {
 	staging string
 }
 
-// checkStagedFeatures checks the rows of the staged features that have rules of
-// their own: the Git host connections and the notification sinks.
-func checkStagedFeatures(ctx context.Context, pool *pgxpool.Pool, staging string) error {
-	if err := checkStagedGitHost(ctx, pool, staging); err != nil {
-		return err
-	}
-
-	return checkStagedSinks(ctx, pool, staging)
-}
-
 // buildStaging creates the staging schema, loads and checks the dump, and keeps
 // the schema as the staging area. A failure drops the schema: the live tables
 // stay unchanged.
@@ -926,8 +917,8 @@ func (s *Store) buildStaging(ctx context.Context, in stagingInput) (backup.Summa
 		return backup.Summary{}, viewsErr
 	}
 
-	if featuresErr := checkStagedFeatures(ctx, s.pool, in.staging); featuresErr != nil {
-		return backup.Summary{}, featuresErr
+	if featureErr := checkStagedFeatureRows(ctx, s.pool, in.staging); featureErr != nil {
+		return backup.Summary{}, featureErr
 	}
 
 	sum, err := s.summarizeStaging(ctx, in.staging, in.want)
@@ -1692,4 +1683,19 @@ func (s *Store) createRestoreConflict(ctx context.Context, id backup.RestoreID) 
 	}
 
 	return err
+}
+
+// checkStagedFeatureRows checks the rows of the staged features that have rules
+// of their own: the registry, the Git host connections and the notification
+// sinks.
+func checkStagedFeatureRows(ctx context.Context, pool *pgxpool.Pool, staging string) error {
+	if err := checkStagedRegistry(ctx, pool, staging); err != nil {
+		return err
+	}
+
+	if err := checkStagedGitHost(ctx, pool, staging); err != nil {
+		return err
+	}
+
+	return checkStagedSinks(ctx, pool, staging)
 }

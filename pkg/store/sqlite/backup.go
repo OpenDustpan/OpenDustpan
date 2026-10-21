@@ -654,8 +654,8 @@ func checkRestoreFile(ctx context.Context, path string, want backup.Summary) (ba
 		return backup.Summary{}, fmt.Errorf("check staged backup: %w", viewsErr)
 	}
 
-	if featuresErr := checkStagedFeatures(ctx, conn); featuresErr != nil {
-		return backup.Summary{}, fmt.Errorf("check staged backup: %w", featuresErr)
+	if featureErr := checkStagedFeatureRows(ctx, conn); featureErr != nil {
+		return backup.Summary{}, fmt.Errorf("check staged backup: %w", featureErr)
 	}
 
 	sum, err := summarizeConn(ctx, conn)
@@ -1182,4 +1182,19 @@ func (s *Store) createRestoreConflict(ctx context.Context, id backup.RestoreID) 
 	}
 
 	return err
+}
+
+// checkStagedFeatureRows checks the rows of the staged features that have rules
+// of their own: the registry, the Git host connections and the notification
+// sinks.
+func checkStagedFeatureRows(ctx context.Context, conn *sql.DB) error {
+	if err := checkStagedRegistry(ctx, conn); err != nil {
+		return err
+	}
+
+	if err := checkStagedGitHost(ctx, conn); err != nil {
+		return err
+	}
+
+	return checkStagedSinks(ctx, conn)
 }

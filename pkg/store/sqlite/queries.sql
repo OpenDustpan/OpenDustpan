@@ -3103,7 +3103,6 @@ SET deleted_at_ms = sqlc.arg(deleted_at_ms)
 WHERE namespace_id = sqlc.arg(namespace_id) AND id = sqlc.arg(id) AND deleted_at_ms = 0
   AND (CAST(sqlc.arg(if_latest) AS INTEGER) = 0 OR latest = CAST(sqlc.arg(if_latest) AS INTEGER));
 
-
 -- name: InsertManualLock :execrows
 -- Records the manual lock of one object. A row that exists for the object is
 -- not written. The caller checks the fence in the same transaction.
@@ -3163,8 +3162,6 @@ LEFT JOIN manual_locks AS cl ON cl.kind = 'collection' AND cl.object_id = c.id
 LEFT JOIN namespaces AS ns ON ns.name = i.namespace
 LEFT JOIN manual_locks AS nl ON nl.kind = 'namespace' AND nl.object_id = ns.id
 WHERE i.namespace = sqlc.arg(namespace) AND i.unit_id = sqlc.arg(unit_id);
-
-
 
 -- name: DeleteExpiredIdempotencyRecord :exec
 -- Deletes the record of the name when it is past its period: a record past
@@ -3246,8 +3243,6 @@ WHERE id = 1 AND wrapped_key = sqlc.arg(old_wrapped_key);
 
 -- name: DeleteAllIdempotencyRecords :exec
 DELETE FROM idempotency_records;
-
-
 
 -- name: GetAuditChainCheck :one
 -- The stored result of the scheduled audit chain check. No row means no check
@@ -3478,6 +3473,78 @@ SELECT v.id
 FROM saved_views AS v
 WHERE v.namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace)) AND v.owner = sqlc.arg(owner)
 ORDER BY v.id;
+
+-- name: InsertRegistryRelease :execrows
+-- The caller checks the fence in the same transaction. A release of the same
+-- address and version is not written.
+INSERT INTO registry_releases (
+    namespace_id, kind, name, system, version, sums_file, sums_sha256, signature_file, signature_sha256,
+    key_fingerprint, protocols, published_by, archives_json, published_at_ms
+)
+VALUES (
+    (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace)), sqlc.arg(kind), sqlc.arg(name),
+    sqlc.arg(system), sqlc.arg(version), sqlc.arg(sums_file), sqlc.arg(sums_sha256), sqlc.arg(signature_file),
+    sqlc.arg(signature_sha256), sqlc.arg(key_fingerprint), sqlc.arg(protocols), sqlc.arg(published_by), sqlc.arg(archives_json),
+    sqlc.arg(published_at_ms)
+)
+ON CONFLICT (namespace_id, kind, name, system, version) DO NOTHING;
+
+-- name: GetRegistryRelease :one
+SELECT n.name AS namespace, r.kind, r.name, r.system, r.version, r.sums_file, r.sums_sha256, r.signature_file,
+    r.signature_sha256, r.key_fingerprint, r.protocols, r.published_by, r.archives_json, r.published_at_ms
+FROM registry_releases AS r
+JOIN namespaces AS n ON n.id = r.namespace_id
+WHERE n.name = sqlc.arg(namespace) AND r.kind = sqlc.arg(kind) AND r.name = sqlc.arg(name)
+  AND r.system = sqlc.arg(system) AND r.version = sqlc.arg(version);
+
+-- name: ListRegistryReleases :many
+-- The caller orders the rows by version precedence.
+SELECT n.name AS namespace, r.kind, r.name, r.system, r.version, r.sums_file, r.sums_sha256, r.signature_file,
+    r.signature_sha256, r.key_fingerprint, r.protocols, r.published_by, r.archives_json, r.published_at_ms
+FROM registry_releases AS r
+JOIN namespaces AS n ON n.id = r.namespace_id
+WHERE n.name = sqlc.arg(namespace) AND r.kind = sqlc.arg(kind) AND r.name = sqlc.arg(name)
+  AND r.system = sqlc.arg(system)
+ORDER BY r.version;
+
+-- name: ListRegistryAddresses :many
+SELECT DISTINCT r.name, r.system
+FROM registry_releases AS r
+JOIN namespaces AS n ON n.id = r.namespace_id
+WHERE n.name = sqlc.arg(namespace) AND r.kind = sqlc.arg(kind)
+ORDER BY r.name, r.system;
+
+-- name: InsertRegistryKey :execrows
+-- The caller checks the fence in the same transaction. A key with the same
+-- fingerprint in the namespace is not written.
+INSERT INTO registry_keys (namespace_id, fingerprint, armored_key, added_by, added_at_ms)
+VALUES (
+    (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace)), sqlc.arg(fingerprint),
+    sqlc.arg(armored_key), sqlc.arg(added_by), sqlc.arg(added_at_ms)
+)
+ON CONFLICT (namespace_id, fingerprint) DO NOTHING;
+
+-- name: GetRegistryKey :one
+SELECT n.name AS namespace, k.fingerprint, k.armored_key, k.added_by, k.added_at_ms
+FROM registry_keys AS k
+JOIN namespaces AS n ON n.id = k.namespace_id
+WHERE n.name = sqlc.arg(namespace) AND k.fingerprint = sqlc.arg(fingerprint);
+
+-- name: CountRegistryKeys :one
+SELECT COUNT(*) FROM registry_keys
+WHERE namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace));
+
+-- name: ListRegistryKeys :many
+SELECT n.name AS namespace, k.fingerprint, k.armored_key, k.added_by, k.added_at_ms
+FROM registry_keys AS k
+JOIN namespaces AS n ON n.id = k.namespace_id
+WHERE n.name = sqlc.arg(namespace)
+ORDER BY k.fingerprint;
+
+-- name: DeleteRegistryKey :execrows
+DELETE FROM registry_keys
+WHERE registry_keys.fingerprint = sqlc.arg(fingerprint)
+  AND registry_keys.namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace));
 
 -- name: GitHostNamespaceID :one
 SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace);

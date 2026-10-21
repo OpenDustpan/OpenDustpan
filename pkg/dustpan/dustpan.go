@@ -179,6 +179,7 @@ type settings struct {
 	jobStore             job.Store
 	savedViewStore       savedview.Store
 	gitHost              gitHostSettings
+	registry             *registrySettings
 	idempotencyStore     idempotency.Store
 	authenticator        identity.Authenticator
 	authorizer           identity.Authorizer
@@ -690,6 +691,8 @@ type services struct {
 }
 
 // defaultSettings answers the settings of a server before its options.
+//
+//nolint:funlen // One literal that names every field of settings (exhaustruct); its length is the field count.
 func defaultSettings() *settings {
 	return &settings{
 		denialLimiter:           defaultDenialLimiter(),
@@ -714,6 +717,7 @@ func defaultSettings() *settings {
 		jobStore:                nil,
 		savedViewStore:          nil,
 		gitHost:                 gitHostSettings{store: nil, allow: nil, cas: nil, loopback: false, checkLimits: nil},
+		registry:                nil,
 		idempotencyStore:        nil,
 		authenticator:           nil,
 		authorizer:              nil,
@@ -1180,6 +1184,8 @@ type neutralHandlers struct {
 	sinks http.Handler
 	// jobs is nil when no job store is set.
 	jobs http.Handler
+	// registry is nil when no registry store is set.
+	registry http.Handler
 }
 
 // newNeutralHandlers builds the tool-neutral inventory API, audit API and
@@ -1221,9 +1227,15 @@ func newNeutralHandlers(svc services, cfg *settings, observed *metrics.ServerMet
 		return neutralHandlers{}, err
 	}
 
+	registries, err := newRegistryHandler(svc, cfg, onFailure)
+	if err != nil {
+		return neutralHandlers{}, err
+	}
+
 	return neutralHandlers{
 		inventory: units, audit: entries, context: contexts, runners: runners, profiles: profiles, sinks: sinks,
-		jobs: jobs,
+		jobs:     jobs,
+		registry: registries,
 	}, nil
 }
 
@@ -1327,7 +1339,13 @@ func newTFEHandler(
 		entries = s
 	}
 
+	registryProtocol, err := newRegistryProtocol(cfg, base.String())
+	if err != nil {
+		return nil, err
+	}
+
 	handler, err := tfe.NewHandler(tfe.Config{
+		Registry:      registryProtocol,
 		Authenticator: cfg.authenticator,
 		Authorizer:    cfg.authorizer,
 		AddressGate:   allowlistAddressGate(cfg.ipAllowlists),
@@ -3717,6 +3735,9 @@ func mountAPI(mux *rootMux, a adapters, cfg *settings) error {
 	mountV1(mux, a.sinks, func(h http.Handler) http.Handler {
 		return withCORS(withMaintenance(h, a.maintenance, shapeInventory, cfg.logger), cfg.allowedOrigins)
 	})
+	mountV1(mux, a.registry, func(h http.Handler) http.Handler {
+		return withCORS(withMaintenance(h, a.maintenance, shapeInventory, cfg.logger), cfg.allowedOrigins)
+	})
 	mountV1(mux, a.jobs, func(h http.Handler) http.Handler {
 		return withCORS(withMaintenance(h, a.maintenance, shapeInventory, cfg.logger), cfg.allowedOrigins)
 	})
@@ -3746,6 +3767,14 @@ func mountAPI(mux *rootMux, a adapters, cfg *settings) error {
 	// version endpoints under /api/v2/ pass the maintenance gate, so the
 	// CLI still meets the 503 refusal that names maintenance.
 	mux.Handle("GET /.well-known/terraform.json", a.tfe)
+	// The provider registry protocol of OpenTofu lives outside /api/, at the
+	// path that service discovery names. The handler answers 404 for every path
+	// of it when no registry is set. It is refused in maintenance mode like the
+	// other tool routes.
+	mux.Handle(
+		"/v1/providers/",
+		withMaintenance(a.tfe, a.maintenance, shapeTFE, cfg.logger),
+	)
 
 	if cfg.consoleDir != "" {
 		console, err := consoleHandler(cfg.consoleDir)
