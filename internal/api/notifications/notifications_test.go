@@ -36,7 +36,7 @@ func TestCreateWebhookAnswersTheKeyOnce(t *testing.T) {
 	s := decode[sinkWire](t, got)
 	if !strings.HasPrefix(s.ID, notify.SinkIDPrefix) || s.Kind != "webhook" || s.Name != "Ops" ||
 		s.Namespace != "acme" ||
-		s.Target != "https://hooks.example.com/ops" ||
+		s.Target != webhookHost ||
 		s.Version != 1 ||
 		s.CreatedBy != "admin" ||
 		s.URLSet ||
@@ -54,6 +54,50 @@ func TestCreateWebhookAnswersTheKeyOnce(t *testing.T) {
 
 	checkKeyNotAnsweredAgain(t, f, s)
 	checkKeyNotStored(t, f, s)
+}
+
+func TestWebhookURLIsWriteOnly(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+
+	created := f.do(t, send("admin", http.MethodPost, base, webhookBody(t, "Ops")))
+	wantCode(t, "create", created, http.StatusCreated)
+
+	s := decode[sinkWire](t, created)
+	one := base + "/" + s.ID
+	moved := f.do(t, send("admin", http.MethodPut, one,
+		`{"version":1,"name":"Ops","target":"https://new.example.com/path/`+canary+`?k=`+canary+`"}`))
+	wantCode(t, "replace", moved, http.StatusOK)
+
+	answers := map[string]response{
+		"create":  created,
+		"list":    f.do(t, get("reader", base)),
+		"get":     f.do(t, get("reader", one)),
+		"replace": moved,
+		"test":    f.do(t, send("admin", http.MethodPost, one+"/test", "")),
+	}
+
+	for name, got := range answers {
+		for _, hidden := range []string{canary, "/ops", "/path", "token=", "?k="} {
+			if strings.Contains(got.body, hidden) {
+				t.Errorf("%s answer shows %q: %s", name, hidden, got.body)
+			}
+		}
+	}
+
+	shown := []string{f.logs.String(), fmt.Sprintf("%+v", f.sinkEntries(t))}
+	for _, text := range shown {
+		if strings.Contains(text, canary) || strings.Contains(text, "hooks.example.com/ops") {
+			t.Errorf("an audit entry or a log line shows the URL: %s", text)
+		}
+	}
+
+	for _, name := range []string{"list", "get"} {
+		if !strings.Contains(answers[name].body, `"target":"new.example.com"`) {
+			t.Errorf("%s answer = %s, want the host as target", name, answers[name].body)
+		}
+	}
 }
 
 // checkKeyNotAnsweredAgain checks that no later read holds the signing key.
@@ -273,7 +317,7 @@ func TestReplace(t *testing.T) {
 		`{"version":2,"name":"Ops team","target":"https://new.example.com/hook"}`))
 	wantCode(t, "new target", moved, http.StatusOK)
 
-	if got := decode[sinkWire](t, f.do(t, get("reader", path))); got.Target != "https://new.example.com/hook" ||
+	if got := decode[sinkWire](t, f.do(t, get("reader", path))); got.Target != "new.example.com" ||
 		got.Version != 3 {
 		t.Errorf("read after the change = %+v, want the new target at version 3", got)
 	}
@@ -535,9 +579,9 @@ func checkTestMessageSent(t *testing.T, f fixture, s sinkWire) {
 	}
 
 	m := f.hook.sent[0]
-	if m.To != "https://hooks.example.com/ops" || len(m.Secrets) != 1 || string(m.Secrets[0]) != s.SigningKey ||
+	if m.To != webhookURL || len(m.Secrets) != 1 || string(m.Secrets[0]) != s.SigningKey ||
 		m.Notification.Type != notify.SinkTest {
-		t.Errorf("message = to %q, %d secrets, type %q, want the target, the signing key and sink.test",
+		t.Errorf("message = to %q, %d secrets, type %q, want the URL, the signing key and sink.test",
 			m.To, len(m.Secrets), m.Notification.Type)
 	}
 

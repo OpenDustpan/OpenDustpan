@@ -53,7 +53,7 @@ The answer is 201. It holds the ID of the destination, its version, and the
   "namespace": "acme",
   "kind": "webhook",
   "name": "Operations",
-  "target": "https://hooks.example.com/dustpan",
+  "target": "hooks.example.com",
   "urlSet": false,
   "createdBy": "ana",
   "version": 1,
@@ -68,6 +68,11 @@ make a new destination.
 
 The server seals the key with the data key of the namespace. A list or a read
 of the destination shows no key.
+
+The URL of the webhook is a secret, because its path or its query can hold a
+token. The server accepts it when you make or change the destination. No
+answer shows it again: `target` holds only the host. To see the URL, read it
+from your own records.
 
 ## Check the signature in your receiver
 

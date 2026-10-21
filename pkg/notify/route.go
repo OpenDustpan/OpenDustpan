@@ -226,6 +226,19 @@ func ChatHost(raw string) (string, error) {
 	return strings.ToLower(u.Host), nil
 }
 
+// WebhookHost returns the lowercase host of the URL of a webhook sink, in the
+// shape that ChatHost gives for a chat sink. The path, the query and any user
+// information of the URL can hold a secret, so none of them is returned. It
+// returns an empty string when the URL does not parse: the answer fails closed.
+func WebhookHost(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil || u == nil {
+		return ""
+	}
+
+	return strings.ToLower(u.Host)
+}
+
 // validAddress returns ErrInvalid for a target of an email sink that is
 // not one bare address, or for an email sink with a secret.
 func validAddress(target string, secrets int) error {

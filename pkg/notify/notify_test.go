@@ -937,3 +937,26 @@ func checkNoticeKeys(t *testing.T, sub notify.Subscription, e audit.Entry, n not
 		t.Fatalf("a later change has the dedupe key %s, want its own key", later.DedupeKey)
 	}
 }
+
+func TestWebhookHost(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct{ name, url, want string }{
+		{"a path and a query", "https://Hooks.Example.com/a/SECRET?token=SECRET", "hooks.example.com"},
+		{"a port", "https://hooks.example.com:8443/SECRET", "hooks.example.com:8443"},
+		{"user information", "https://user:SECRET@hooks.example.com/x", "hooks.example.com"},
+		{"a fragment", "https://hooks.example.com/x#SECRET", "hooks.example.com"},
+		{"no path", "https://hooks.example.com", "hooks.example.com"},
+		{"a URL that does not parse", "https://hooks.example.com/%zz SECRET", ""},
+		{"an empty value", "", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := notify.WebhookHost(tc.url)
+			if got != tc.want || strings.Contains(got, "SECRET") {
+				t.Errorf("WebhookHost(%q) = %q, want %q", tc.url, got, tc.want)
+			}
+		})
+	}
+}
