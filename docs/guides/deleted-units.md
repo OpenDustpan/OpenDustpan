@@ -91,6 +91,12 @@ A purge cannot be undone.
   unit first.
 - 409: a live unit holds the name of the deleted unit and shares its gates.
   Delete the live unit, then restore the deleted unit under its name.
+- 403: a gate or an access limit refuses the restore or the purge. The message
+  holds the message of the gate, the error code and the ID of the decision record.
+  See [Gates and access limits on state writes](state-write-gates.md).
+- 409: a gate gave an error. The message holds the error code and the ID of the
+  decision record.
+- 503: the policy engine did not answer.
 - 421: the namespace is not homed in this region.
 
 A restore and a purge of the same unit can run at the same time. Each runs

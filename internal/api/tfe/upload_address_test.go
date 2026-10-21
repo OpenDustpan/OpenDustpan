@@ -52,6 +52,7 @@ func newUploadAddressHandler(
 		MaxStateBytes:  0,
 		OnAuditFailure: nil,
 		DenialLimiter:  nil,
+		StateGuard:     nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
