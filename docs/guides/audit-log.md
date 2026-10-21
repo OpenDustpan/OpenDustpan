@@ -182,7 +182,10 @@ another stack of the same namespace is a refusal too. The server checks this
 each time that it uses a key from a row, to read, to delete or to list.
 
 The channel of the entry is the channel of the request: `console` for a
-request from the console, and `api` for all other requests.
+request from the console, and `api` for all other requests. Only the Pulumi
+routes set the `console` channel for these entries today. A refusal that a
+request on an OpenTofu route causes has the channel `api`, also when the
+request comes from the console.
 
 A request for a Pulumi blob that meets such a refusal fails with a server
 error, and the entry is the record for the operator. The server stores the

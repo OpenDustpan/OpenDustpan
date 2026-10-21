@@ -10,7 +10,6 @@ import (
 	"opendustpan.org/opendustpan/internal/pulumijournal"
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/namespace"
-	"opendustpan.org/opendustpan/pkg/scopeaudit"
 	"opendustpan.org/opendustpan/pkg/stack"
 )
 
@@ -22,14 +21,10 @@ func blobExists(t *testing.T, store blob.Store, key string) bool {
 }
 
 // unitForeignKeys are the keys that a row of the stack stk-test must never
-// name: the keys of foreignKeys, and a key of another update of the same
-// stack. Each one is a blob that the call must leave alone.
+// name: the keys of foreignKeys, which include a key of another update of the
+// same stack. Each one is a blob that the call must leave alone.
 func unitForeignKeys() []foreignKey {
-	return append(foreignKeys(), foreignKey{
-		name:  "same stack, another update",
-		build: func(ns, _ string) string { return "namespaces/" + ns + "/pulumi/stk-test/upd-other/5" },
-		where: scopeaudit.OutsideUnitDirectory,
-	})
+	return foreignKeys()
 }
 
 // TestSupersedeDeleteStaysInTheUpdate is the hostile test of the delete after

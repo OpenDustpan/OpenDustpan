@@ -377,6 +377,38 @@ func TestSweepUnknownTool(t *testing.T) {
 	}
 }
 
+// TestSweepRecordWithoutNamespaceHasItsOwnKind proves that a blob purge record
+// whose namespace row is gone (an empty namespace ID) never reaches the tool,
+// stays pending, counts as a failure, and logs the kind "namespace_missing"
+// instead of "store".
+func TestSweepRecordWithoutNamespaceHasItsOwnKind(t *testing.T) {
+	t.Parallel()
+
+	old := sweepNow().Add(-inventory.BlobPurgeGrace - time.Minute)
+	f := newSweepFixture(
+		t,
+		nil,
+		[]inventory.BlobPurge{{PurgedAt: old, Namespace: "gone", NamespaceID: "", Tool: "pulumi", UnitID: "x"}},
+	)
+
+	res, err := f.sweeper.Sweep(t.Context(), sweepEntry())
+	if err != nil {
+		t.Fatalf("sweep: %v", err)
+	}
+
+	if res.Failed != 1 || res.PendingBlobPurges != 1 || res.FinishedBlobPurges != 0 {
+		t.Fatalf("sweep = %+v, want one failure and one pending record", res)
+	}
+
+	if len(f.tool.deleted) != 0 {
+		t.Fatalf("the tool deleted %v, want no call", f.tool.deleted)
+	}
+
+	if log := f.log.String(); !strings.Contains(log, "error_kind=namespace_missing") || strings.Contains(log, "error_kind=store") {
+		t.Fatalf("log = %q, want error_kind=namespace_missing", log)
+	}
+}
+
 // TestNewSweeperRefusesMissingPorts proves that NewSweeper names each
 // missing port with ErrMissingDependency.
 func TestNewSweeperRefusesMissingPorts(t *testing.T) {

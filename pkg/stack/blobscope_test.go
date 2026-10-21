@@ -10,6 +10,7 @@ import (
 	"sync"
 	"testing"
 
+	"opendustpan.org/opendustpan/internal/pulumijournal"
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/scopeaudit"
@@ -109,6 +110,11 @@ func foreignKeys() []foreignKey {
 		{
 			name:  "same namespace, another stack",
 			build: func(ns, tail string) string { return "namespaces/" + ns + "/pulumi/stk-other/" + tail },
+			where: scopeaudit.OutsideUnitDirectory,
+		},
+		{
+			name:  "same stack, another update",
+			build: func(ns, _ string) string { return "namespaces/" + ns + "/pulumi/stk-test/upd-other/5" },
 			where: scopeaudit.OutsideUnitDirectory,
 		},
 		{
@@ -592,5 +598,83 @@ func TestDeleteStackBlobsRefusesAnInvalidScope(t *testing.T) {
 
 	if got := blobKeysOf(t, f.blobs); len(got) != 1 {
 		t.Fatalf("blobs left = %v, want the one blob", got)
+	}
+}
+
+// hostileBase is a checkpoint store whose rows for the base of a journaled
+// update name the blob key *key, as a damaged or hostile database would.
+type hostileBase struct {
+	stack.CheckpointStore
+
+	key *blob.Key
+}
+
+// CheckpointByVersion implements stack.CheckpointStore.
+func (h hostileBase) CheckpointByVersion(ctx context.Context, ref stack.Ref, version int64) (stack.Checkpoint, error) {
+	cp, err := h.CheckpointStore.CheckpointByVersion(ctx, ref, version)
+	if err != nil {
+		return cp, err //nolint:wrapcheck // a test double passes the error of the store on
+	}
+
+	cp.BlobKey = *h.key
+
+	return cp, nil
+}
+
+// LatestCheckpoint implements stack.CheckpointStore.
+func (h hostileBase) LatestCheckpoint(ctx context.Context, ref stack.Ref) (stack.Checkpoint, error) {
+	cp, err := h.CheckpointStore.LatestCheckpoint(ctx, ref)
+	if err != nil {
+		return cp, err //nolint:wrapcheck // a test double passes the error of the store on
+	}
+
+	cp.BlobKey = *h.key
+
+	return cp, nil
+}
+
+// TestJournalBaseRefusesKeysOutsideTheScope is the blob scope test for the
+// base read of a journaled update (journalBase, then resolveCheckpoint): a
+// base checkpoint row that names a key outside the scope gives
+// blob.ErrOutOfScope and one refusal in the namespace of the call, and the
+// object at that key is never read.
+func TestJournalBaseRefusesKeysOutsideTheScope(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range foreignKeys() {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			var key blob.Key
+
+			clk := newClock()
+			f := newBuildFixtureWith(t, clk, pulumijournal.NewReplayer(clk.Now, ""),
+				func(s *journalMemStore) stack.CheckpointStore { return hostileBase{CheckpointStore: s, key: &key} })
+
+			// The cases name the stack stk-test. The fixture stack has
+			// another ID, so name that one: the cases keep their meaning.
+			built := tc.build(f.nsID.String(), "upd-x/1")
+			key = blob.Key(strings.ReplaceAll(built, "/stk-test/", "/"+f.stackID.String()+"/"))
+			if err := f.blobs.Put(t.Context(), key, strings.NewReader("planted")); err != nil &&
+				!errors.Is(err, blob.ErrOutOfScope) {
+				t.Fatalf("plant the object: %v", err)
+			}
+
+			f.startJournaled(t)
+
+			_, err := f.svc.Export(t.Context(), f.ref)
+			if !errors.Is(err, blob.ErrOutOfScope) {
+				t.Fatalf("err = %v, want blob.ErrOutOfScope", err)
+			}
+
+			if strings.Contains(err.Error(), "ns-other") {
+				t.Fatalf("error holds the other namespace: %v", err)
+			}
+
+			recs := f.refusals.Records()
+			if len(recs) != 1 || recs[0].Namespace != f.nsID || recs[0].Op != "get" || recs[0].Where != tc.where {
+				t.Fatalf("refusals = %+v, want one get in %s with the place %q", recs, f.nsID, tc.where)
+			}
+		})
 	}
 }
