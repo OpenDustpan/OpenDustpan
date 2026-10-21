@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
@@ -69,6 +70,8 @@ func newAuditChainHandler(
 		denied[action] = true
 	}
 
+	sessions := newStoreSessions(t, openRouteTestStore(t))
+
 	handler, err := apiserver.NewHandler(apiserver.Config{
 		Preferences:      nil,
 		GitHost:          nil,
@@ -87,7 +90,7 @@ func newAuditChainHandler(
 		Metrics:          stubMetrics{},
 		Version:          "",
 		Schema:           stubSchema{migrations: nil},
-		Principals:       nil,
+		Principals:       sessions.principals,
 		Access:           nil,
 		Tokens:           nil,
 		Audit:            nil,
@@ -96,7 +99,7 @@ func newAuditChainHandler(
 		SessionPolicy:    nil,
 		AuditChain:       chain,
 		AuditSinks:       nil,
-		SignIn:           nil,
+		SignIn:           sessions.signIn(),
 		Journal:          nil,
 		IPAllowlists:     nil,
 		Gates:            nil,
@@ -107,7 +110,23 @@ func newAuditChainHandler(
 		t.Fatalf("handler: %v", err)
 	}
 
+	rememberSessions(handler, sessions)
+
 	return handler
+}
+
+// approveAuditChain sends POST /api/server/audit/chain from a console session
+// that signed in just now: the change needs a fresh authentication.
+func approveAuditChain(t *testing.T, handler *apiserver.Handler) (int, string) {
+	t.Helper()
+
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/server/audit/chain", http.NoBody)
+	startSession(t, handler, req, 0)
+
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	return rec.Code, rec.Body.String()
 }
 
 func TestGetAuditChainAnswersTheState(t *testing.T) {
@@ -170,7 +189,7 @@ func TestApproveAuditChainNeedsTheActionsOfItsDirection(t *testing.T) {
 			chain := newFakeAuditChain(tc.setting)
 			handler := newAuditChainHandler(t, namespaces, chain, tc.deny)
 
-			status, body := serveMaintenance(t, handler, http.MethodPost, "/api/server/audit/chain", "")
+			status, body := approveAuditChain(t, handler)
 			if status != tc.want {
 				t.Fatalf("status = %d, want %d (%s)", status, tc.want, body)
 			}
@@ -218,7 +237,7 @@ func TestApproveAuditChainMapsItsErrors(t *testing.T) {
 			chain.approveErr = fmt.Errorf("approve: %w", tc.err)
 			handler := newAuditChainHandler(t, namespaces, chain)
 
-			status, body := serveMaintenance(t, handler, http.MethodPost, "/api/server/audit/chain", "")
+			status, body := approveAuditChain(t, handler)
 			if status != tc.want {
 				t.Fatalf("status = %d, want %d (%s)", status, tc.want, body)
 			}
@@ -232,11 +251,14 @@ func TestAuditChainRoutesWithoutAChain(t *testing.T) {
 	namespaces := newTestNamespaces(t)
 	handler := newAuditChainHandler(t, namespaces, nil)
 
-	for _, method := range []string{http.MethodGet, http.MethodPost} {
-		status, body := serveMaintenance(t, handler, method, "/api/server/audit/chain", "")
-		if status != http.StatusNotImplemented {
-			t.Fatalf("%s: status = %d, want 501 (%s)", method, status, body)
-		}
+	status, body := serveMaintenance(t, handler, http.MethodGet, "/api/server/audit/chain", "")
+	if status != http.StatusNotImplemented {
+		t.Fatalf("GET: status = %d, want 501 (%s)", status, body)
+	}
+
+	status, body = approveAuditChain(t, handler)
+	if status != http.StatusNotImplemented {
+		t.Fatalf("POST: status = %d, want 501 (%s)", status, body)
 	}
 }
 

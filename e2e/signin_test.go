@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/e2e"
+	"opendustpan.org/opendustpan/internal/oauth/oauthtest"
 )
 
 // e2eSession decodes the console session wire form.
@@ -128,6 +129,12 @@ func (b browser) do(t *testing.T, client *http.Client, method, target string, he
 // provider. It returns the callback URL that the provider answers.
 func (b browser) startAndAuthorize(t *testing.T) *url.URL {
 	t.Helper()
+
+	// A fresh session of the administrator, in the same env, signs the provider
+	// in as another person: sign the test person in again.
+	b.env.IdentityProvider(t).SetUser(oauthtest.User{
+		Subject: "248289761001", Name: "Alice Doe", PreferredUsername: "alice", Email: "alice@example.com",
+	})
 
 	start := b.do(t, b.server, http.MethodGet,
 		b.env.URL+"/api/server/sign-in/"+e2e.SignInProvider+"?return=/console", nil)
@@ -314,10 +321,11 @@ func checkTokensFromSession(t *testing.T, b browser, tofu e2e.Install) {
 
 	grant := `{"subject":"principal:` + tok.PrincipalID + `","role":"maintainer"}`
 
-	status, body, err := b.env.ServerAPIStatus(ctx, http.MethodPost, "/api/server/namespaces/"+e2e.Namespace+"/grants",
-		grant)
-	if err != nil || status != http.StatusCreated {
-		t.Fatalf("grant maintainer = %d, %v: %s", status, err, body)
+	status, body := b.env.FreshAdminAPIStatus(ctx, t, e2e.SessionRequest{
+		Method: http.MethodPost, Path: "/api/server/namespaces/" + e2e.Namespace + "/grants", Body: grant,
+	})
+	if status != http.StatusCreated {
+		t.Fatalf("grant maintainer = %d: %s", status, body)
 	}
 
 	checkPulumiWhoami(ctx, t, b.env, tok.Secret)
@@ -529,10 +537,11 @@ func (b browser) signInWith(t *testing.T, idp *http.Client, id string) answer {
 func patchStored(ctx context.Context, t *testing.T, env *e2e.Env, body string) int64 {
 	t.Helper()
 
-	status, raw, err := env.ServerAPIStatus(ctx, http.MethodPatch,
-		"/api/server/sign-in-providers/"+e2e.StoredSignInProvider, body)
-	if err != nil || status != http.StatusOK {
-		t.Fatalf("change of the stored provider %s = %d, %v: %s", body, status, err, raw)
+	status, raw := env.FreshAdminAPIStatus(ctx, t, e2e.SessionRequest{
+		Method: http.MethodPatch, Path: "/api/server/sign-in-providers/" + e2e.StoredSignInProvider, Body: body,
+	})
+	if status != http.StatusOK {
+		t.Fatalf("change of the stored provider %s = %d: %s", body, status, raw)
 	}
 
 	var p providerAnswer
@@ -557,10 +566,11 @@ func checkStoredProvider(t *testing.T, env *e2e.Env) {
 	ctx := t.Context()
 	beta := env.StoredIdentityProvider(t)
 
-	status, raw, err := env.ServerAPIStatus(ctx, http.MethodPost, "/api/server/sign-in-providers",
-		storedProviderBody(beta.Issuer()))
-	if err != nil || status != http.StatusCreated || strings.Contains(raw, e2e.StoredClientSecret) {
-		t.Fatalf("create the stored provider = %d, %v: %s", status, err, raw)
+	status, raw := env.FreshAdminAPIStatus(ctx, t, e2e.SessionRequest{
+		Method: http.MethodPost, Path: "/api/server/sign-in-providers", Body: storedProviderBody(beta.Issuer()),
+	})
+	if status != http.StatusCreated || strings.Contains(raw, e2e.StoredClientSecret) {
+		t.Fatalf("create the stored provider = %d: %s", status, raw)
 	}
 
 	idp := *beta.Client()
@@ -602,16 +612,20 @@ func checkStoredProvider(t *testing.T, env *e2e.Env) {
 func checkStoredProviderRefusals(ctx context.Context, t *testing.T, env *e2e.Env) {
 	t.Helper()
 
-	status, raw, err := env.ServerAPIStatus(ctx, http.MethodPatch,
-		"/api/server/sign-in-providers/"+e2e.SignInProvider, `{"version":0,"enabled":false}`)
-	if err != nil || status != http.StatusConflict {
-		t.Fatalf("change of the provider of the configuration = %d, %v: %s", status, err, raw)
+	status, raw := env.FreshAdminAPIStatus(ctx, t, e2e.SessionRequest{
+		Method: http.MethodPatch,
+		Path:   "/api/server/sign-in-providers/" + e2e.SignInProvider,
+		Body:   `{"version":0,"enabled":false}`,
+	})
+	if status != http.StatusConflict {
+		t.Fatalf("change of the provider of the configuration = %d: %s", status, raw)
 	}
 
-	status, raw, err = env.ServerAPIStatus(ctx, http.MethodDelete,
-		"/api/server/sign-in-providers/"+e2e.StoredSignInProvider, "")
-	if err != nil || status != http.StatusConflict || !strings.Contains(raw, "disable it") {
-		t.Fatalf("delete of a provider with principals = %d, %v: %s", status, err, raw)
+	status, raw = env.FreshAdminAPIStatus(ctx, t, e2e.SessionRequest{
+		Method: http.MethodDelete, Path: "/api/server/sign-in-providers/" + e2e.StoredSignInProvider, Body: "",
+	})
+	if status != http.StatusConflict || !strings.Contains(raw, "disable it") {
+		t.Fatalf("delete of a provider with principals = %d: %s", status, raw)
 	}
 
 	checkStoredProviderList(ctx, t, env)
@@ -657,19 +671,23 @@ func checkStoredProviderDelete(t *testing.T, env *e2e.Env) {
 	body := `{"id":"` + storedProviderGamma + `","issuer":"` + env.StoredIdentityProvider(t).Issuer() + `",` +
 		`"displayName":"Gamma","clientID":"` + e2e.StoredClientID + `","clientSecret":"` + e2e.StoredClientSecret + `"}`
 
-	status, raw, err := env.ServerAPIStatus(ctx, http.MethodPost, "/api/server/sign-in-providers", body)
-	if err != nil || status != http.StatusCreated {
-		t.Fatalf("create the provider %s = %d, %v: %s", storedProviderGamma, status, err, raw)
+	status, raw := env.FreshAdminAPIStatus(ctx, t, e2e.SessionRequest{
+		Method: http.MethodPost, Path: "/api/server/sign-in-providers", Body: body,
+	})
+	if status != http.StatusCreated {
+		t.Fatalf("create the provider %s = %d: %s", storedProviderGamma, status, raw)
 	}
 
 	target := "/api/server/sign-in-providers/" + storedProviderGamma
 
-	status, raw, err = env.ServerAPIStatus(ctx, http.MethodDelete, target, "")
-	if err != nil || status != http.StatusNoContent {
-		t.Fatalf("delete of a provider with no principal = %d, %v: %s", status, err, raw)
+	status, raw = env.FreshAdminAPIStatus(ctx, t, e2e.SessionRequest{
+		Method: http.MethodDelete, Path: target, Body: "",
+	})
+	if status != http.StatusNoContent {
+		t.Fatalf("delete of a provider with no principal = %d: %s", status, raw)
 	}
 
-	status, raw, err = env.ServerAPIStatus(ctx, http.MethodGet, target, "")
+	status, raw, err := env.ServerAPIStatus(ctx, http.MethodGet, target, "")
 	if err != nil || status != http.StatusNotFound {
 		t.Fatalf("read of a deleted provider = %d, %v: %s", status, err, raw)
 	}
@@ -736,10 +754,12 @@ func checkPlainProvider(t *testing.T, env *e2e.Env) {
 		`"authorizationURL":"` + hub.AuthorizationEndpoint() + `","tokenURL":"` + hub.TokenEndpoint() + `",` +
 		`"userinfoURL":"` + hub.UserinfoEndpoint() + `","claims":{"subject":"sub"},"autoCreate":true}`
 
-	status, raw, err := env.ServerAPIStatus(ctx, http.MethodPost, "/api/server/sign-in-providers", body)
-	if err != nil || status != http.StatusCreated || strings.Contains(raw, e2e.PlainClientSecret) ||
+	status, raw := env.FreshAdminAPIStatus(ctx, t, e2e.SessionRequest{
+		Method: http.MethodPost, Path: "/api/server/sign-in-providers", Body: body,
+	})
+	if status != http.StatusCreated || strings.Contains(raw, e2e.PlainClientSecret) ||
 		!strings.Contains(raw, `"mode":"oauth"`) {
-		t.Fatalf("create the plain OAuth provider = %d, %v: %s", status, err, raw)
+		t.Fatalf("create the plain OAuth provider = %d: %s", status, raw)
 	}
 
 	idp := *hub.Client()

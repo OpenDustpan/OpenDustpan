@@ -136,6 +136,11 @@ func getTokenPolicy(
 func changeTokenPolicy(
 	w http.ResponseWriter, r *http.Request, svc *accesstoken.Service, _ identity.Principal, e audit.Entry,
 ) (principalResult, error) {
+	// A longer lifetime is a weaker setting, so the change needs a fresh sign-in.
+	if err := requireFresh(r); err != nil {
+		return failed(accesstoken.PolicyRef), err
+	}
+
 	var req tokenPolicyRequest
 
 	empty := func() bool {

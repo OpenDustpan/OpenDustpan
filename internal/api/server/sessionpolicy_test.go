@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 
@@ -145,16 +146,22 @@ func sessionPolicyEntries(t *testing.T, st *sqlite.Store) []audit.Entry {
 func TestSessionPolicyReadAndChange(t *testing.T) {
 	t.Parallel()
 
-	st, h := newSessionPolicyHandler(t, selectiveAuthorizer{deny: map[identity.Action]bool{}})
+	// A session policy change needs a console session with a recent sign-in.
+	e := newSignInEnv(t, true)
+	sess := e.signIn(t)
 
-	defaults := decodeSessionPolicy(t, serveSessionPolicy(t, h, http.MethodGet, ""))
+	serve := func(method, body string) *httptest.ResponseRecorder {
+		return e.sendWithSession(t, method, sess, "/api/server/session-policy", body)
+	}
+
+	defaults := decodeSessionPolicy(t, serve(http.MethodGet, ""))
 	wantIdle(t, defaults, 900)
 
 	if defaults.UpdatedAt != nil {
 		t.Fatalf("default updatedAt = %s, want null", *defaults.UpdatedAt)
 	}
 
-	rec := serveSessionPolicy(t, h, http.MethodPatch, `{"idleSeconds":1800}`)
+	rec := serve(http.MethodPatch, `{"idleSeconds":1800}`)
 
 	got := decodeSessionPolicy(t, rec)
 	wantIdle(t, got, 1800)
@@ -163,7 +170,7 @@ func TestSessionPolicyReadAndChange(t *testing.T) {
 		t.Errorf("Cache-Control = %q, want no-store", cc)
 	}
 
-	again := decodeSessionPolicy(t, serveSessionPolicy(t, h, http.MethodGet, ""))
+	again := decodeSessionPolicy(t, serve(http.MethodGet, ""))
 	wantIdle(t, again, 1800)
 
 	if got.UpdatedAt == nil || again.UpdatedAt == nil || *again.UpdatedAt != *got.UpdatedAt {
@@ -171,7 +178,7 @@ func TestSessionPolicyReadAndChange(t *testing.T) {
 			again.UpdatedAt)
 	}
 
-	entries := sessionPolicyEntries(t, st)
+	entries := sessionPolicyEntries(t, e.store)
 	if len(entries) != 1 {
 		t.Fatalf("%d entries, want 1", len(entries))
 	}
@@ -189,6 +196,12 @@ func wantIdle(t *testing.T, doc sessionPolicyDoc, idle int64) {
 	}
 }
 
+// withoutSessionID returns changes without the sessionId change that the
+// entry of a console session holds.
+func withoutSessionID(changes []audit.Change) []audit.Change {
+	return slices.DeleteFunc(slices.Clone(changes), func(c audit.Change) bool { return c.Key == "sessionId" })
+}
+
 // wantIdleChangeEntry fails unless e is the success entry of a change of
 // the idle limit from 900 to 1800 seconds.
 func wantIdleChangeEntry(t *testing.T, e audit.Entry) {
@@ -198,11 +211,13 @@ func wantIdleChangeEntry(t *testing.T, e audit.Entry) {
 		t.Fatalf("entry = %+v, want a success of %s", e, identity.ActionServerManageSignIn)
 	}
 
-	if len(e.Changes) != 1 {
+	// A console session adds a sessionId change to the entry.
+	changes := withoutSessionID(e.Changes)
+	if len(changes) != 1 {
 		t.Fatalf("changes = %+v, want one", e.Changes)
 	}
 
-	c := e.Changes[0]
+	c := changes[0]
 	if c.Key != "idleSeconds" || c.Old == nil || *c.Old != "900" || c.New != "1800" {
 		t.Fatalf("change = %+v, want idleSeconds from 900 to 1800", c)
 	}
@@ -211,22 +226,29 @@ func wantIdleChangeEntry(t *testing.T, e audit.Entry) {
 func TestSessionPolicyTokenFreshness(t *testing.T) {
 	t.Parallel()
 
-	st, h := newSessionPolicyHandler(t, selectiveAuthorizer{deny: map[identity.Action]bool{}})
+	// A session policy change needs a console session with a recent sign-in.
+	e := newSignInEnv(t, true)
+	sess := e.signIn(t)
 
-	defaults := decodeSessionPolicy(t, serveSessionPolicy(t, h, http.MethodGet, ""))
+	serve := func(method, body string) *httptest.ResponseRecorder {
+		return e.sendWithSession(t, method, sess, "/api/server/session-policy", body)
+	}
+
+	defaults := decodeSessionPolicy(t, serve(http.MethodGet, ""))
 	if defaults.TokenFreshnessSeconds != 900 || !defaults.TokenFreshnessDefault {
 		t.Fatalf("default window = %d (default %t), want 900 from the server default", defaults.TokenFreshnessSeconds,
 			defaults.TokenFreshnessDefault)
 	}
 
-	got := decodeSessionPolicy(t, serveSessionPolicy(t, h, http.MethodPatch, `{"tokenFreshnessSeconds":0}`))
+	got := decodeSessionPolicy(t, serve(http.MethodPatch, `{"tokenFreshnessSeconds":0}`))
 	if got.TokenFreshnessSeconds != 0 || got.TokenFreshnessDefault || got.IdleSeconds != 900 {
 		t.Fatalf("window after a change to 0 = %+v, want 0 that an administrator set", got)
 	}
 
-	entries := sessionPolicyEntries(t, st)
-	if len(entries) != 1 || len(entries[0].Changes) != 1 || entries[0].Changes[0].Key != "tokenFreshnessSeconds" ||
-		entries[0].Changes[0].New != "0" {
+	entries := sessionPolicyEntries(t, e.store)
+	if len(entries) != 1 || len(withoutSessionID(entries[0].Changes)) != 1 ||
+		withoutSessionID(entries[0].Changes)[0].Key != "tokenFreshnessSeconds" ||
+		withoutSessionID(entries[0].Changes)[0].New != "0" {
 		t.Fatalf("entries = %+v, want one change of tokenFreshnessSeconds to 0", entries)
 	}
 }
@@ -234,7 +256,13 @@ func TestSessionPolicyTokenFreshness(t *testing.T) {
 func TestSessionPolicyRefusesBadChanges(t *testing.T) {
 	t.Parallel()
 
-	st, h := newSessionPolicyHandler(t, selectiveAuthorizer{deny: map[identity.Action]bool{}})
+	// A session policy change needs a console session with a recent sign-in.
+	e := newSignInEnv(t, true)
+	sess := e.signIn(t)
+
+	serve := func(method, body string) *httptest.ResponseRecorder {
+		return e.sendWithSession(t, method, sess, "/api/server/session-policy", body)
+	}
 
 	bodies := []string{
 		`{}`, `{"other":1}`, `{"idleSeconds":-1}`, `{"idleSeconds":60}`, `{"maxLengthSeconds":600}`,
@@ -243,26 +271,26 @@ func TestSessionPolicyRefusesBadChanges(t *testing.T) {
 	}
 
 	for _, body := range bodies {
-		rec := serveSessionPolicy(t, h, http.MethodPatch, body)
+		rec := serve(http.MethodPatch, body)
 		if rec.Code != http.StatusBadRequest {
 			t.Errorf("PATCH %s = %d, want 400: %s", body, rec.Code, rec.Body.String())
 		}
 	}
 
-	after := decodeSessionPolicy(t, serveSessionPolicy(t, h, http.MethodGet, ""))
+	after := decodeSessionPolicy(t, serve(http.MethodGet, ""))
 	wantIdle(t, after, 900)
 
 	if after.UpdatedAt != nil {
 		t.Fatalf("updatedAt after refused changes = %s, want null", *after.UpdatedAt)
 	}
 
-	for _, e := range sessionPolicyEntries(t, st) {
+	for _, e := range sessionPolicyEntries(t, e.store) {
 		if e.Outcome != audit.OutcomeFailure || e.Action != string(identity.ActionServerManageSignIn) {
 			t.Fatalf("entry = %+v, want only failures of %s", e, identity.ActionServerManageSignIn)
 		}
 	}
 
-	if n := len(sessionPolicyEntries(t, st)); n != len(bodies) {
+	if n := len(sessionPolicyEntries(t, e.store)); n != len(bodies) {
 		t.Fatalf("%d entries, want one failure for each of the %d refused changes", n, len(bodies))
 	}
 }
