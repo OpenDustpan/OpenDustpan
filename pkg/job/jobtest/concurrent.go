@@ -80,6 +80,7 @@ func testTwoClaimers(t *testing.T, h Harness) {
 	errs := race(func(i int) error {
 		_, err := h.Durable.Claim(t.Context(), durable.ClaimRequest{
 			Owner: owner(i), Kinds: []durable.Kind{kind}, MaxVersions: nil, Lease: time.Minute,
+			TakeCanceled: false,
 		})
 
 		return err

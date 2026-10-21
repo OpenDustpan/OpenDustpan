@@ -259,7 +259,7 @@ func (o *DurableOperations) Claim(ctx context.Context, req durable.ClaimRequest)
 // claimNext claims the oldest operation that req allows and that can run
 // now, in the transaction of tx, and reports false when no operation is due.
 // It ends canceled each expired operation with a requested cancel that it
-// finds first.
+// finds first, unless req.TakeCanceled is true.
 func claimNext(
 	ctx context.Context,
 	tx *sql.Tx,
@@ -287,9 +287,9 @@ func claimNext(
 
 		row := rows[0]
 
-		if row.State == string(durable.StateRunning) && row.CancelRequested {
+		if row.State == string(durable.StateRunning) && row.CancelRequested && !req.TakeCanceled {
 			// The holder of a canceled operation stopped before its end:
-			// the claim ends the operation canceled.
+			// the claim ends the operation canceled, unless req takes it.
 			if writeErr := writeDurable(ctx, q, endCanceled(row, now)); writeErr != nil {
 				return durable.Operation{}, false, writeErr
 			}
@@ -418,24 +418,37 @@ func (o *DurableOperations) RecordStep(ctx context.Context, f durable.StepFence,
 
 // Complete implements durable.Store.
 func (o *DurableOperations) Complete(ctx context.Context, c durable.Claim) error {
-	s := o.store
-
-	return s.endAttempt(ctx, c, func(row db.DurableOperation, now int64) (db.DurableOperation, error) {
-		if row.CancelRequested {
-			return row, durable.ErrCanceled
-		}
-
-		row.State = string(durable.StateSucceeded)
-
-		return clearClaim(row, now), nil
-	})
+	return o.store.endAttempt(ctx, c, completeEnd)
 }
 
 // Fail implements durable.Store.
 func (o *DurableOperations) Fail(ctx context.Context, c durable.Claim, f durable.Failure) error {
-	s := o.store
+	return o.store.endAttempt(ctx, c, failEnd(f))
+}
 
-	return s.endAttempt(ctx, c, func(row db.DurableOperation, now int64) (db.DurableOperation, error) {
+// Release implements durable.Store.
+func (o *DurableOperations) Release(ctx context.Context, c durable.Claim) error {
+	return o.store.endAttempt(ctx, c, releaseEnd)
+}
+
+// endRule returns the row of the end of a claim at now, or the error that
+// stops the end.
+type endRule func(row db.DurableOperation, now int64) (db.DurableOperation, error)
+
+// completeEnd is the rule of durable.Store.Complete.
+func completeEnd(row db.DurableOperation, now int64) (db.DurableOperation, error) {
+	if row.CancelRequested {
+		return row, durable.ErrCanceled
+	}
+
+	row.State = string(durable.StateSucceeded)
+
+	return clearClaim(row, now), nil
+}
+
+// failEnd returns the rule of durable.Store.Fail with f.
+func failEnd(f durable.Failure) endRule {
+	return func(row db.DurableOperation, now int64) (db.DurableOperation, error) {
 		if row.CancelRequested {
 			return endCanceled(row, now), nil
 		}
@@ -451,23 +464,19 @@ func (o *DurableOperations) Fail(ctx context.Context, c durable.Claim, f durable
 		}
 
 		return clearClaim(row, now), nil
-	})
+	}
 }
 
-// Release implements durable.Store.
-func (o *DurableOperations) Release(ctx context.Context, c durable.Claim) error {
-	s := o.store
+// releaseEnd is the rule of durable.Store.Release.
+func releaseEnd(row db.DurableOperation, now int64) (db.DurableOperation, error) {
+	if row.CancelRequested {
+		return endCanceled(row, now), nil
+	}
 
-	return s.endAttempt(ctx, c, func(row db.DurableOperation, now int64) (db.DurableOperation, error) {
-		if row.CancelRequested {
-			return endCanceled(row, now), nil
-		}
+	row.State = string(durable.StatePending)
+	row.NotBeforeMs = now
 
-		row.State = string(durable.StatePending)
-		row.NotBeforeMs = now
-
-		return clearClaim(row, now), nil
-	})
+	return clearClaim(row, now), nil
 }
 
 // Cancel implements durable.Store.
@@ -525,27 +534,31 @@ func cancelDurable(ctx context.Context, q *db.Queries, id durable.ID) error {
 
 // endAttempt runs the checks that Complete, Fail and Release share, then
 // writes the row that end returns. An error from end changes nothing.
-func (s *Store) endAttempt(
-	ctx context.Context,
-	c durable.Claim,
-	end func(row db.DurableOperation, now int64) (db.DurableOperation, error),
-) error {
+func (s *Store) endAttempt(ctx context.Context, c durable.Claim, end endRule) error {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
 	return s.inControlTx(ctx, func(q *db.Queries) error {
-		row, now, err := liveDurable(ctx, q, c.Operation, c.Token)
-		if err != nil {
-			return err
-		}
-
-		ended, err := end(row, now)
-		if err != nil {
-			return err
-		}
-
-		return writeDurable(ctx, q, ended)
+		return endClaim(ctx, q, c, end)
 	})
+}
+
+// endClaim checks that c is the live claim of its operation in the
+// transaction of q, then writes the row that end returns. An error from end
+// changes nothing. A domain write that ends an operation in its own
+// transaction calls it.
+func endClaim(ctx context.Context, q *db.Queries, c durable.Claim, end endRule) error {
+	row, now, err := liveDurable(ctx, q, c.Operation, c.Token)
+	if err != nil {
+		return err
+	}
+
+	ended, err := end(row, now)
+	if err != nil {
+		return err
+	}
+
+	return writeDurable(ctx, q, ended)
 }
 
 // inStepTx runs fn in an IMMEDIATE transaction with the bound of a step

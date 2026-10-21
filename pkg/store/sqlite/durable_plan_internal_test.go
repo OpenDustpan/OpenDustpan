@@ -30,10 +30,11 @@ func TestDurableClaimUsesOpenIndex(t *testing.T) {
 	})
 
 	query, args := durableClaimQuery(durable.ClaimRequest{
-		Owner:       "instance-a",
-		Kinds:       []durable.Kind{"kind-a", "kind-b"},
-		MaxVersions: map[durable.Kind]int{"kind-b": 1},
-		Lease:       time.Minute,
+		Owner:        "instance-a",
+		Kinds:        []durable.Kind{"kind-a", "kind-b"},
+		MaxVersions:  map[durable.Kind]int{"kind-b": 1},
+		Lease:        time.Minute,
+		TakeCanceled: false,
 	}, 0)
 
 	rows, err := s.conn.QueryContext(t.Context(), "EXPLAIN QUERY PLAN "+query, args...)

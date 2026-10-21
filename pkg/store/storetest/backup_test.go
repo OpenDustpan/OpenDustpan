@@ -2616,6 +2616,7 @@ func fakeOperationClaim(
 
 	op, err := s.DurableOperationsPort().Claim(t.Context(), durable.ClaimRequest{
 		Owner: owner, Kinds: []durable.Kind{backup.OperationKind}, MaxVersions: nil, Lease: lease,
+		TakeCanceled: false,
 	})
 	if err != nil {
 		t.Fatalf("claim operation: %v", err)
@@ -2821,6 +2822,7 @@ func staleFinish(t *testing.T, s *fakeBackupStore) error {
 	for {
 		_, err := s.DurableOperationsPort().Claim(t.Context(), durable.ClaimRequest{
 			Owner: "second", Kinds: []durable.Kind{backup.OperationKind}, MaxVersions: nil, Lease: time.Hour,
+			TakeCanceled: false,
 		})
 		if err == nil {
 			break

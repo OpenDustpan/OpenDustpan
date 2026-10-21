@@ -75,7 +75,9 @@ func openPostgresAt(t *testing.T, schemaURL string) stores {
 
 	t.Cleanup(s.Close)
 
-	return stores{namespaces: s, operations: s.DurableOperations(), runners: s.Runners(), audit: s}
+	return stores{
+		namespaces: s, operations: s.DurableOperations(), jobs: s.Jobs(), units: s, runners: s.Runners(), audit: s,
+	}
 }
 
 func execSQL(ctx context.Context, dbURL, statement string) error {
