@@ -396,6 +396,16 @@ var freshAuthRules = []freshAuthRule{
 		[]string{http.MethodPost},
 	},
 	{
+		// A grant to a group applies to each member, so a membership change is
+		// an act-as edge.
+		regexp.MustCompile(`^/api/server/groups/[^/]+(?:/members(?:/[^/]+)?)?$`),
+		[]string{http.MethodPost, http.MethodDelete},
+	},
+	{
+		regexp.MustCompile(`^/api/dustpan/v1/git-host-(?:apps|installations)/[^/]+$`),
+		[]string{http.MethodPut, http.MethodDelete},
+	},
+	{
 		regexp.MustCompile(`^/api/server/namespaces/[^/]+/ip-allowlist$`),
 		[]string{http.MethodPut, http.MethodDelete},
 	},
