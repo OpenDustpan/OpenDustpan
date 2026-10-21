@@ -100,6 +100,13 @@ func (s Scope) String() string {
 	return s.Namespace.String() + "/" + s.ID
 }
 
+// aadSource gives the associated data that binds a sealed stream to what it
+// seals: a Scope for a stream under a data key, an ItemRef for a stream under
+// an item key.
+type aadSource interface {
+	aad() []byte
+}
+
 // aad is the associated data that binds keys and values to the scope.
 func (s Scope) aad() []byte {
 	return []byte(aadLabel + "\x00" + s.Namespace.String() + "\x00" + s.ID)
