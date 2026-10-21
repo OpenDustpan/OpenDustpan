@@ -320,8 +320,11 @@ func listServerAuditEntries(ctx context.Context, t *testing.T, env *e2e.Env) []e
 func checkAuditChanges(t *testing.T, changes []e2eAuditChange, want map[string][2]string) {
 	t.Helper()
 
+	// A change from a console session also names the session.
+	changes = slices.DeleteFunc(slices.Clone(changes), func(c e2eAuditChange) bool { return c.Key == "sessionId" })
+
 	if len(changes) != len(want) {
-		t.Fatalf("policy changes hold %d items, want %d", len(changes), len(want))
+		t.Fatalf("policy changes hold %d items %+v, want %d", len(changes), changes, len(want))
 	}
 
 	for _, c := range changes {

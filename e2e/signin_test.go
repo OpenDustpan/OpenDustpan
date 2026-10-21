@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/e2e"
+	"opendustpan.org/opendustpan/internal/oauth/oauthtest"
 )
 
 // e2eSession decodes the console session wire form.
@@ -128,6 +129,12 @@ func (b browser) do(t *testing.T, client *http.Client, method, target string, he
 // provider. It returns the callback URL that the provider answers.
 func (b browser) startAndAuthorize(t *testing.T) *url.URL {
 	t.Helper()
+
+	// A fresh session of the administrator, in the same env, signs the provider
+	// in as another person: sign the test person in again.
+	b.env.IdentityProvider(t).SetUser(oauthtest.User{
+		Subject: "248289761001", Name: "Alice Doe", PreferredUsername: "alice", Email: "alice@example.com",
+	})
 
 	start := b.do(t, b.server, http.MethodGet,
 		b.env.URL+"/api/server/sign-in/"+e2e.SignInProvider+"?return=/console", nil)

@@ -359,11 +359,12 @@ func checkReviewScopes(ctx context.Context, t *testing.T, env *e2e.Env, f review
 			"writer@review<", "auditor@review<", "maintainer@pulumi:review/web/prod<",
 		)},
 		{"/api/server/namespaces/review/access-review", url.Values{}, sorted(
-			"account-administrator@@server<@server",
+			"account-administrator@@server<@server", "site-administrator@@server<@server",
 			"writer@review<", "auditor@review<", "maintainer@pulumi:review/web/prod<",
 		)},
 		{"/api/server/namespaces/review/unit-access-review", url.Values{"tool": {"pulumi"}, "unit": {"web/prod"}}, sorted(
-			"account-administrator@@server<@server", "writer@review<review", "auditor@review<review",
+			"account-administrator@@server<@server", "site-administrator@@server<@server",
+			"writer@review<review", "auditor@review<review",
 			"maintainer@pulumi:review/web/prod<",
 		)},
 	} {
@@ -375,6 +376,11 @@ func checkReviewScopes(ctx context.Context, t *testing.T, env *e2e.Env, f review
 
 	rows := reviewOf(ctx, t, env, "/api/server/access-review", url.Values{})
 	for i := range rows {
+		// The site administrator of the fresh sessions is not part of the seed.
+		if rows[i].GrantID == "grt-e2e-fresh-admin" {
+			continue
+		}
+
 		checkReviewRow(t, f, &rows[i])
 	}
 
@@ -491,8 +497,9 @@ func checkReviewHistory(ctx context.Context, t *testing.T, env *e2e.Env, f revie
 		http.MethodDelete, "/api/server/groups/" + f.reviewers.ID + "/members/" + f.carol.ID, "", http.StatusNoContent,
 	}, nil)
 
-	if rows := reviewOf(ctx, t, env, "/api/server/access-review", url.Values{}); len(rows) != 4 {
-		t.Fatalf("snapshot after the revoke = %q, want 4 rows", reviewRoles(rows))
+	if rows := reviewOf(ctx, t, env, "/api/server/access-review", url.Values{}); len(rows) != 5 {
+		t.Fatalf("snapshot after the revoke = %q, want 5 rows, with the site administrator of the fresh sessions",
+			reviewRoles(rows))
 	}
 
 	if rows := reviewOf(ctx, t, env, "/api/server/access-review", url.Values{"subject": {f.carolRef}}); len(rows) != 2 {
@@ -505,8 +512,8 @@ func checkReviewHistory(ctx context.Context, t *testing.T, env *e2e.Env, f revie
 	}
 
 	rows := reviewOf(ctx, t, env, "/api/server/access-review", window)
-	if len(rows) != 5 {
-		t.Fatalf("history = %q, want 5 rows", reviewRoles(rows))
+	if len(rows) != 6 {
+		t.Fatalf("history = %q, want 6 rows, with the site administrator of the fresh sessions", reviewRoles(rows))
 	}
 
 	revoked := 0
