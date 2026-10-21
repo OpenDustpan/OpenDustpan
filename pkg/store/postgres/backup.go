@@ -916,11 +916,8 @@ func (s *Store) buildStaging(ctx context.Context, in stagingInput) (backup.Summa
 		return backup.Summary{}, viewsErr
 	}
 
-	if registryErr := checkStagedRegistry(ctx, s.pool, in.staging); registryErr != nil {
-		return backup.Summary{}, registryErr
-	}
-	if sinksErr := checkStagedSinks(ctx, s.pool, in.staging); sinksErr != nil {
-		return backup.Summary{}, sinksErr
+	if featureErr := checkStagedFeatureRows(ctx, s.pool, in.staging); featureErr != nil {
+		return backup.Summary{}, featureErr
 	}
 
 	sum, err := s.summarizeStaging(ctx, in.staging, in.want)
@@ -1685,4 +1682,14 @@ func (s *Store) createRestoreConflict(ctx context.Context, id backup.RestoreID) 
 	}
 
 	return err
+}
+
+// checkStagedFeatureRows checks the rows of the registry and of the
+// notification sinks of a staged backup.
+func checkStagedFeatureRows(ctx context.Context, pool *pgxpool.Pool, staging string) error {
+	if err := checkStagedRegistry(ctx, pool, staging); err != nil {
+		return err
+	}
+
+	return checkStagedSinks(ctx, pool, staging)
 }

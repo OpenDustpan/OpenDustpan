@@ -654,11 +654,8 @@ func checkRestoreFile(ctx context.Context, path string, want backup.Summary) (ba
 		return backup.Summary{}, fmt.Errorf("check staged backup: %w", viewsErr)
 	}
 
-	if registryErr := checkStagedRegistry(ctx, conn); registryErr != nil {
-		return backup.Summary{}, fmt.Errorf("check staged backup: %w", registryErr)
-	}
-	if sinksErr := checkStagedSinks(ctx, conn); sinksErr != nil {
-		return backup.Summary{}, fmt.Errorf("check staged backup: %w", sinksErr)
+	if featureErr := checkStagedFeatureRows(ctx, conn); featureErr != nil {
+		return backup.Summary{}, fmt.Errorf("check staged backup: %w", featureErr)
 	}
 
 	sum, err := summarizeConn(ctx, conn)
@@ -1185,4 +1182,14 @@ func (s *Store) createRestoreConflict(ctx context.Context, id backup.RestoreID) 
 	}
 
 	return err
+}
+
+// checkStagedFeatureRows checks the rows of the registry and of the
+// notification sinks of a staged backup.
+func checkStagedFeatureRows(ctx context.Context, conn *sql.DB) error {
+	if err := checkStagedRegistry(ctx, conn); err != nil {
+		return err
+	}
+
+	return checkStagedSinks(ctx, conn)
 }

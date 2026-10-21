@@ -275,7 +275,9 @@ func (sc *registryScenario) publishGood(ctx context.Context, t *testing.T) {
 
 	dir := sc.env.WriteRegistryProject(t, "project-registry", fmt.Sprintf(registryConfig, sc.address, "1.0.0"))
 
-	sc.env.StepIn(ctx, t, dir, step("registry init", sc.checkInit("registry init", dir, good), "init", "-input=false", "-no-color"))
+	const name = "registry init"
+
+	sc.env.StepIn(ctx, t, dir, step(name, sc.checkInit(name, dir, good), "init", "-input=false", "-no-color"))
 }
 
 const registryConfig = `terraform {
