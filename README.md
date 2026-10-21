@@ -307,6 +307,8 @@ How-to guides:
   and what a refusal looks like.
 - [Set and read context](docs/guides/context.md): the owners, the on-call
   text and the other context of a namespace and of a unit.
+- [Run triggers](docs/guides/run-triggers.md): save a trigger on a stack or a
+  workspace, fire it by hand, and see what the server checks.
 - [Save and open a view of the unit list](docs/guides/saved-views.md): store
   the labels and references of a unit list under a name, and open the view
   again.
