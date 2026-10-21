@@ -194,7 +194,7 @@ func NewEnvWithGitHost(ctx context.Context, tb testing.TB, store Store, fake *Gi
 
 	// The writes of the registration and of an installation need a console
 	// session with a recent sign-in.
-	return NewEnvWithSignIn(ctx, tb, NoCLI(), store)
+	return NewEnvWithRealTimeSignIn(ctx, tb, NoCLI(), store)
 }
 
 // gitHostOptions returns the options that give the in-process server of tb the

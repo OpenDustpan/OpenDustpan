@@ -163,16 +163,16 @@ func checkPrincipalPaging(ctx context.Context, t *testing.T, env *e2e.Env, fx pr
 	)
 
 	if len(first.Principals) != 1 || first.Principals[0].ID != fx.alice.ID || first.NextCursor == "" ||
-		first.Total != 2 || first.Principals[0].Source != "local" || first.Principals[0].GroupCount != 1 {
-		t.Fatalf("first page = %+v, want local alice in 1 group, a cursor and a total of 2", first)
+		first.Total != 3 || first.Principals[0].Source != "local" || first.Principals[0].GroupCount != 1 {
+		t.Fatalf("first page = %+v, want local alice in 1 group, a cursor and a total of 3", first)
 	}
 
 	principalCall(ctx, t, env, principalStep{
 		http.MethodGet, "/api/server/principals?limit=1&cursor=" + first.NextCursor, "", http.StatusOK,
 	}, &second)
 
-	if len(second.Principals) != 1 || second.Principals[0].ID != fx.deploy.ID || second.NextCursor != "" {
-		t.Fatalf("second page = %+v, want ci-deploy and no cursor", second)
+	if len(second.Principals) != 1 || second.Principals[0].ID != fx.deploy.ID || second.NextCursor == "" {
+		t.Fatalf("second page = %+v, want ci-deploy and a cursor to the person of the console session", second)
 	}
 
 	var prefixed page
@@ -282,8 +282,10 @@ func checkPrincipalLists(ctx context.Context, t *testing.T, env *e2e.Env, fx pri
 	var list e2ePrincipalList
 	principalCall(ctx, t, env, principalStep{http.MethodGet, "/api/server/principals", "", http.StatusOK}, &list)
 
-	if len(list.Principals) != 2 || list.Principals[0].ID != fx.alice.ID || list.Principals[1].ID != fx.deploy.ID {
-		t.Fatalf("principals = %+v, want alice then ci-deploy", list.Principals)
+	// The third principal is the administrator of the console session that the
+	// membership changes need.
+	if len(list.Principals) != 3 || list.Principals[0].ID != fx.alice.ID || list.Principals[1].ID != fx.deploy.ID {
+		t.Fatalf("principals = %+v, want alice, ci-deploy and the session administrator", list.Principals)
 	}
 
 	var one e2ePrincipal
