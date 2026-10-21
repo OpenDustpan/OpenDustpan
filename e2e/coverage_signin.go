@@ -20,9 +20,9 @@ import (
 )
 
 // coverageSignInRoutes returns the sign-in rows of the installation route
-// table, with the routes of the sign-in providers of the API. The sign-in needs a principal store and a session store,
-// so the
-// table comes from a handler over a temporary SQLite store.
+// table, with the routes of the sign-in providers of the API. The sign-in needs
+// a principal store and a session store, so the table comes from a handler over
+// a temporary SQLite store.
 func coverageSignInRoutes(tb testing.TB) []RouteRef {
 	tb.Helper()
 
@@ -39,20 +39,7 @@ func coverageSignInRoutes(tb testing.TB) []RouteRef {
 		}
 	})
 
-	principals, err := principal.NewService(principal.Config{
-		TempAdmins: nil,
-		Store:      st, Guard: principal.AdminOnlyGuard{}, Namespaces: nil, Tokens: nil, Now: nil, NewID: nil,
-	})
-	if err != nil {
-		tb.Fatalf("principal service: %v", err)
-	}
-
-	sessions, err := session.NewSessions(session.SessionsConfig{
-		Store: st, Providers: nil, Inactivity: nil, Now: nil,
-	})
-	if err != nil {
-		tb.Fatalf("session service: %v", err)
-	}
+	principals, sessions := coverageSignInServices(tb, st)
 
 	admin := coverageProviderAdmin(tb, st)
 
@@ -104,6 +91,34 @@ func coverageSignInRoutes(tb testing.TB) []RouteRef {
 		tb.Fatalf("server handler with the sign-in: %v", err)
 	}
 
+	return signInRows(handler)
+}
+
+// coverageSignInServices returns the principal service and the session service
+// over st.
+func coverageSignInServices(tb testing.TB, st *sqlite.Store) (*principal.Service, *session.Sessions) {
+	tb.Helper()
+
+	principals, err := principal.NewService(principal.Config{
+		TempAdmins: nil,
+		Store:      st, Guard: principal.AdminOnlyGuard{}, Namespaces: nil, Tokens: nil, Now: nil, NewID: nil,
+	})
+	if err != nil {
+		tb.Fatalf("principal service: %v", err)
+	}
+
+	sessions, err := session.NewSessions(session.SessionsConfig{
+		Store: st, Providers: nil, Inactivity: nil, Now: nil,
+	})
+	if err != nil {
+		tb.Fatalf("session service: %v", err)
+	}
+
+	return principals, sessions
+}
+
+// signInRows keeps the sign-in rows of the route table of handler.
+func signInRows(handler *serverapi.Handler) []RouteRef {
 	var out []RouteRef
 
 	for _, ref := range serverRefs(handler.Routes()) {
