@@ -86,6 +86,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/profile"
 	"opendustpan.org/opendustpan/pkg/savedview"
+	"opendustpan.org/opendustpan/pkg/scopeaudit"
 	"opendustpan.org/opendustpan/pkg/secret"
 	"opendustpan.org/opendustpan/pkg/session"
 	"opendustpan.org/opendustpan/pkg/stack"
@@ -152,7 +153,10 @@ type settings struct {
 	// Every adapter gets it, so its bound on keys holds for the whole server.
 	denialLimiter *denylimit.Limiter
 	// devRefusal holds the one recorder of the refused dev sign-ins.
-	devRefusal      *devRefusalState
+	devRefusal *devRefusalState
+	// stackRefusals records the refusals of the stack blob scope. newServices
+	// builds it once.
+	stackRefusals   scopeaudit.Recorder
 	namespaceStore  namespace.Store
 	stackStore      stack.Store
 	updateStore     stack.UpdateStore
@@ -272,6 +276,12 @@ type ipAllowlistSettings struct {
 type Option func(*settings)
 
 // WithNamespaceStore sets the namespace persistence port. Required.
+//
+// The server also uses the store for the audit entries of the scope @server,
+// for example the security entry of a stack blob key that a row names outside
+// the scope of its stack. So the store must implement audit.ServerStore, as
+// the SQLite and PostgreSQL stores do. NewServer answers ErrMissingOption for
+// a store that does not.
 func WithNamespaceStore(s namespace.Store) Option {
 	return func(o *settings) { o.namespaceStore = s }
 }
@@ -684,6 +694,7 @@ func defaultSettings() *settings {
 			Window: 0, MaxKeys: 0, MaxFlush: 0, MaxKeysPerPrincipal: 0, Now: nil,
 		}),
 		devRefusal:              new(devRefusalState),
+		stackRefusals:           nil,
 		disablePulumiJournaling: false,
 		namespaceStore:          nil,
 		stackStore:              nil,
@@ -1409,9 +1420,7 @@ func newWorkspaceService(
 		blobs = cfg.blobStore
 	}
 
-	refusals, err := secret.NewAuditOutOfScope(
-		serverAuditOf(cfg.namespaceStore), audit.ChannelAPI, workspace.StateBlobFamily(), cfg.now,
-	)
+	refusals, err := blobRefusals(cfg, workspace.StateBlobFamily())
 	if err != nil {
 		return nil, fmt.Errorf("workspace service: %w", err)
 	}
@@ -1472,6 +1481,7 @@ func newUpdateService(
 		Namespaces:         namespaces,
 		Stacks:             cfg.stackStore,
 		Blobs:              cfg.blobStore,
+		Refusals:           cfg.stackRefusals,
 		Tokens:             checker,
 		Now:                cfg.now,
 		Logger:             cfg.logger,
@@ -1520,6 +1530,10 @@ func newServices(cfg *settings, tokens *accesstoken.Service) (services, error) {
 	)
 	if err != nil {
 		return services{}, fmt.Errorf("namespace service: %w", err)
+	}
+
+	if refusalsErr := attachStackRefusals(cfg); refusalsErr != nil {
+		return services{}, refusalsErr
 	}
 
 	journal, err := journalWriter(cfg)

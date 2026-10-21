@@ -328,7 +328,7 @@ func (s *Store) GetStack(ctx context.Context, ref stack.Ref) (stack.Stack, error
 		return stack.Stack{}, err
 	}
 
-	return codec.FromStackRow(codec.StackRow{
+	st := codec.FromStackRow(codec.StackRow{
 		Namespace:   row.Namespace,
 		Project:     row.Project,
 		Name:        row.Name,
@@ -336,7 +336,10 @@ func (s *Store) GetStack(ctx context.Context, ref stack.Ref) (stack.Stack, error
 		Version:     row.Version,
 		CreatedAtMs: row.CreatedAtMs,
 		UpdatedAtMs: row.UpdatedAtMs,
-	}, tags), nil
+	}, tags)
+	st.NamespaceID = namespace.ID(row.NamespaceID)
+
+	return st, nil
 }
 
 // UpdateStackTags implements stack.Store: it replaces every tag row of the

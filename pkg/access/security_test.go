@@ -412,7 +412,8 @@ func TestUnitGrantsFollowTheStableID(t *testing.T) {
 	}
 
 	again := stack.Stack{
-		CreatedAt: time.Unix(1, 0), UpdatedAt: time.Unix(1, 0), Tags: map[string]string{}, Ref: ref,
+		NamespaceID: "",
+		CreatedAt:   time.Unix(1, 0), UpdatedAt: time.Unix(1, 0), Tags: map[string]string{}, Ref: ref,
 		ID: "stk-web-prod-again", Version: 0,
 	}
 	if createErr := f.store.CreateStack(ctx, again, ns.Fence()); createErr != nil {

@@ -3882,11 +3882,13 @@ func (q *Queries) GetBackup(ctx context.Context, id string) (Backup, error) {
 }
 
 const getCheckpointByUpdate = `-- name: GetCheckpointByUpdate :one
-SELECT stack_id, update_id, lease_digest, schema_version, sequence,
-       digest, invalid, features_json, saved_at_ms,
-       blob_key, size, blob_size, blob_md5
-FROM checkpoints
-WHERE stack_id = ? AND update_id = ?
+SELECT c.stack_id, n.id AS namespace_id, c.update_id, c.lease_digest, c.schema_version, c.sequence,
+       c.digest, c.invalid, c.features_json, c.saved_at_ms,
+       c.blob_key, c.size, c.blob_size, c.blob_md5
+FROM checkpoints AS c
+JOIN stacks AS st ON st.id = c.stack_id
+JOIN namespaces AS n ON n.name = st.namespace
+WHERE c.stack_id = ? AND c.update_id = ?
 `
 
 type GetCheckpointByUpdateParams struct {
@@ -3894,11 +3896,29 @@ type GetCheckpointByUpdateParams struct {
 	UpdateID string
 }
 
-func (q *Queries) GetCheckpointByUpdate(ctx context.Context, arg GetCheckpointByUpdateParams) (Checkpoint, error) {
+type GetCheckpointByUpdateRow struct {
+	StackID       string
+	NamespaceID   string
+	UpdateID      string
+	LeaseDigest   []byte
+	SchemaVersion int64
+	Sequence      int64
+	Digest        []byte
+	Invalid       bool
+	FeaturesJson  string
+	SavedAtMs     int64
+	BlobKey       string
+	Size          sql.NullInt64
+	BlobSize      sql.NullInt64
+	BlobMd5       []byte
+}
+
+func (q *Queries) GetCheckpointByUpdate(ctx context.Context, arg GetCheckpointByUpdateParams) (GetCheckpointByUpdateRow, error) {
 	row := q.db.QueryRowContext(ctx, getCheckpointByUpdate, arg.StackID, arg.UpdateID)
-	var i Checkpoint
+	var i GetCheckpointByUpdateRow
 	err := row.Scan(
 		&i.StackID,
+		&i.NamespaceID,
 		&i.UpdateID,
 		&i.LeaseDigest,
 		&i.SchemaVersion,
@@ -3916,11 +3936,13 @@ func (q *Queries) GetCheckpointByUpdate(ctx context.Context, arg GetCheckpointBy
 }
 
 const getCheckpointByVersion = `-- name: GetCheckpointByVersion :one
-SELECT c.stack_id, c.update_id, c.lease_digest, c.schema_version, c.sequence,
+SELECT c.stack_id, n.id AS namespace_id, c.update_id, c.lease_digest, c.schema_version, c.sequence,
        c.digest, c.invalid, c.features_json, c.saved_at_ms,
        c.blob_key, c.size, c.blob_size, c.blob_md5
 FROM checkpoints AS c
 JOIN updates AS u ON c.stack_id = u.stack_id AND c.update_id = u.id
+JOIN stacks AS st ON st.id = c.stack_id
+JOIN namespaces AS n ON n.name = st.namespace
 WHERE c.stack_id = ? AND u.version = ?
 `
 
@@ -3929,11 +3951,29 @@ type GetCheckpointByVersionParams struct {
 	Version int64
 }
 
-func (q *Queries) GetCheckpointByVersion(ctx context.Context, arg GetCheckpointByVersionParams) (Checkpoint, error) {
+type GetCheckpointByVersionRow struct {
+	StackID       string
+	NamespaceID   string
+	UpdateID      string
+	LeaseDigest   []byte
+	SchemaVersion int64
+	Sequence      int64
+	Digest        []byte
+	Invalid       bool
+	FeaturesJson  string
+	SavedAtMs     int64
+	BlobKey       string
+	Size          sql.NullInt64
+	BlobSize      sql.NullInt64
+	BlobMd5       []byte
+}
+
+func (q *Queries) GetCheckpointByVersion(ctx context.Context, arg GetCheckpointByVersionParams) (GetCheckpointByVersionRow, error) {
 	row := q.db.QueryRowContext(ctx, getCheckpointByVersion, arg.StackID, arg.Version)
-	var i Checkpoint
+	var i GetCheckpointByVersionRow
 	err := row.Scan(
 		&i.StackID,
+		&i.NamespaceID,
 		&i.UpdateID,
 		&i.LeaseDigest,
 		&i.SchemaVersion,
@@ -4981,21 +5021,43 @@ func (q *Queries) GetJobHolderOfUnit(ctx context.Context, arg GetJobHolderOfUnit
 }
 
 const getLatestCheckpoint = `-- name: GetLatestCheckpoint :one
-SELECT c.stack_id, c.update_id, c.lease_digest, c.schema_version, c.sequence,
+SELECT c.stack_id, n.id AS namespace_id, c.update_id, c.lease_digest, c.schema_version, c.sequence,
        c.digest, c.invalid, c.features_json, c.saved_at_ms,
        c.blob_key, c.size, c.blob_size, c.blob_md5
 FROM checkpoints AS c
 JOIN updates AS u ON c.stack_id = u.stack_id AND c.update_id = u.id
+JOIN stacks AS st ON st.id = c.stack_id
+JOIN namespaces AS n ON n.name = st.namespace
 WHERE c.stack_id = ?
 ORDER BY u.version DESC
 LIMIT 1
 `
 
-func (q *Queries) GetLatestCheckpoint(ctx context.Context, stackID string) (Checkpoint, error) {
+type GetLatestCheckpointRow struct {
+	StackID       string
+	NamespaceID   string
+	UpdateID      string
+	LeaseDigest   []byte
+	SchemaVersion int64
+	Sequence      int64
+	Digest        []byte
+	Invalid       bool
+	FeaturesJson  string
+	SavedAtMs     int64
+	BlobKey       string
+	Size          sql.NullInt64
+	BlobSize      sql.NullInt64
+	BlobMd5       []byte
+}
+
+// The namespace ID comes from the join, so a caller reads the scope of the
+// blob of the row in the same call.
+func (q *Queries) GetLatestCheckpoint(ctx context.Context, stackID string) (GetLatestCheckpointRow, error) {
 	row := q.db.QueryRowContext(ctx, getLatestCheckpoint, stackID)
-	var i Checkpoint
+	var i GetLatestCheckpointRow
 	err := row.Scan(
 		&i.StackID,
+		&i.NamespaceID,
 		&i.UpdateID,
 		&i.LeaseDigest,
 		&i.SchemaVersion,
@@ -5923,9 +5985,10 @@ func (q *Queries) GetSignInProviderEnabled(ctx context.Context, providerID strin
 }
 
 const getStack = `-- name: GetStack :one
-SELECT namespace, project, name, id, version, created_at_ms, updated_at_ms
-FROM stacks
-WHERE namespace = ? AND project = ? AND name = ? AND deleted_at_ms IS NULL
+SELECT s.namespace, s.project, s.name, s.id, n.id AS namespace_id, s.version, s.created_at_ms, s.updated_at_ms
+FROM stacks AS s
+JOIN namespaces AS n ON n.name = s.namespace
+WHERE s.namespace = ? AND s.project = ? AND s.name = ? AND s.deleted_at_ms IS NULL
 `
 
 type GetStackParams struct {
@@ -5939,11 +6002,14 @@ type GetStackRow struct {
 	Project     string
 	Name        string
 	ID          string
+	NamespaceID string
 	Version     int64
 	CreatedAtMs int64
 	UpdatedAtMs int64
 }
 
+// The namespace ID comes from the join, so a caller that reads blobs of the
+// stack builds their scope without a second read of the namespace.
 func (q *Queries) GetStack(ctx context.Context, arg GetStackParams) (GetStackRow, error) {
 	row := q.db.QueryRowContext(ctx, getStack, arg.Namespace, arg.Project, arg.Name)
 	var i GetStackRow
@@ -5952,6 +6018,7 @@ func (q *Queries) GetStack(ctx context.Context, arg GetStackParams) (GetStackRow
 		&i.Project,
 		&i.Name,
 		&i.ID,
+		&i.NamespaceID,
 		&i.Version,
 		&i.CreatedAtMs,
 		&i.UpdatedAtMs,
@@ -8598,26 +8665,36 @@ func (q *Queries) ListBackups(ctx context.Context) ([]Backup, error) {
 }
 
 const listBlobPurges = `-- name: ListBlobPurges :many
-SELECT tool, unit_id, namespace, purged_at_ms
-FROM blob_purges
+SELECT bp.tool, bp.unit_id, bp.namespace, COALESCE(n.id, '') AS namespace_id, bp.purged_at_ms
+FROM blob_purges AS bp
+LEFT JOIN namespaces AS n ON n.name = bp.namespace
 ORDER BY purged_at_ms, tool, unit_id
 LIMIT ?
 `
 
+type ListBlobPurgesRow struct {
+	Tool        string
+	UnitID      string
+	Namespace   string
+	NamespaceID string
+	PurgedAtMs  int64
+}
+
 // The oldest rows first, so the sweep finishes the oldest purges first.
-func (q *Queries) ListBlobPurges(ctx context.Context, limit int64) ([]BlobPurge, error) {
+func (q *Queries) ListBlobPurges(ctx context.Context, limit int64) ([]ListBlobPurgesRow, error) {
 	rows, err := q.db.QueryContext(ctx, listBlobPurges, limit)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []BlobPurge
+	var items []ListBlobPurgesRow
 	for rows.Next() {
-		var i BlobPurge
+		var i ListBlobPurgesRow
 		if err := rows.Scan(
 			&i.Tool,
 			&i.UnitID,
 			&i.Namespace,
+			&i.NamespaceID,
 			&i.PurgedAtMs,
 		); err != nil {
 			return nil, err
@@ -8634,8 +8711,9 @@ func (q *Queries) ListBlobPurges(ctx context.Context, limit int64) ([]BlobPurge,
 }
 
 const listBlobPurgesAfter = `-- name: ListBlobPurgesAfter :many
-SELECT tool, unit_id, namespace, purged_at_ms
-FROM blob_purges
+SELECT bp.tool, bp.unit_id, bp.namespace, COALESCE(n.id, '') AS namespace_id, bp.purged_at_ms
+FROM blob_purges AS bp
+LEFT JOIN namespaces AS n ON n.name = bp.namespace
 WHERE purged_at_ms >= ?1
   AND (purged_at_ms > ?1
     OR (purged_at_ms = ?1 AND tool > ?2)
@@ -8651,9 +8729,17 @@ type ListBlobPurgesAfterParams struct {
 	PageLimit   int64
 }
 
+type ListBlobPurgesAfterRow struct {
+	Tool        string
+	UnitID      string
+	Namespace   string
+	NamespaceID string
+	PurgedAtMs  int64
+}
+
 // The page of ListBlobPurges after the cursor (purge time, tool, unit ID).
 // The lower bound on purged_at_ms lets the index scan start at the cursor.
-func (q *Queries) ListBlobPurgesAfter(ctx context.Context, arg ListBlobPurgesAfterParams) ([]BlobPurge, error) {
+func (q *Queries) ListBlobPurgesAfter(ctx context.Context, arg ListBlobPurgesAfterParams) ([]ListBlobPurgesAfterRow, error) {
 	rows, err := q.db.QueryContext(ctx, listBlobPurgesAfter,
 		arg.AfterMs,
 		arg.AfterTool,
@@ -8664,13 +8750,14 @@ func (q *Queries) ListBlobPurgesAfter(ctx context.Context, arg ListBlobPurgesAft
 		return nil, err
 	}
 	defer rows.Close()
-	var items []BlobPurge
+	var items []ListBlobPurgesAfterRow
 	for rows.Next() {
-		var i BlobPurge
+		var i ListBlobPurgesAfterRow
 		if err := rows.Scan(
 			&i.Tool,
 			&i.UnitID,
 			&i.Namespace,
+			&i.NamespaceID,
 			&i.PurgedAtMs,
 		); err != nil {
 			return nil, err

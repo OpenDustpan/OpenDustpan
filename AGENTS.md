@@ -62,6 +62,7 @@ pkg/                   the public SDK (ADR 35)
   workspace/           domain (OpenTofu): workspaces, locks, state versions (RFC 1)
   identity/            ports: Authenticator, Authorizer; bootstrap StaticToken, AdminOnly
   blob/                port: object storage; blob/fs and blob/s3 adapters; blob/blobtest suite
+  scopeaudit/          helper: the audit recorder for the refusals of the scoped blob views, shared by stack, workspace and secret
   backup/              domain: backup ports (export, import, registry) and the table list
   history/             domain: unit history, redaction, item keys of history items, tombstones, retention
   dependency/          domain: dependency edges between units, dependents window, safe delete

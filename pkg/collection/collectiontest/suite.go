@@ -745,12 +745,13 @@ func auditFor(fence namespace.Fence) audit.Entry {
 // newPulumiStack returns a stack of the Pulumi CLI, as storetest makes one.
 func newPulumiStack(ns namespace.Name, project, name string) stack.Stack {
 	return stack.Stack{
-		CreatedAt: now(),
-		UpdatedAt: now(),
-		Tags:      map[string]string{},
-		Ref:       stack.Ref{Namespace: ns, Project: stack.ProjectName(project), Stack: stack.Name(name)},
-		ID:        stack.ID(ident.NewID("stk-")),
-		Version:   0,
+		NamespaceID: "",
+		CreatedAt:   now(),
+		UpdatedAt:   now(),
+		Tags:        map[string]string{},
+		Ref:         stack.Ref{Namespace: ns, Project: stack.ProjectName(project), Stack: stack.Name(name)},
+		ID:          stack.ID(ident.NewID("stk-")),
+		Version:     0,
 	}
 }
 

@@ -11,7 +11,7 @@ import (
 
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/namespace"
-	"opendustpan.org/opendustpan/pkg/secret"
+	"opendustpan.org/opendustpan/pkg/scopeaudit"
 	"opendustpan.org/opendustpan/pkg/workspace"
 )
 
@@ -53,7 +53,7 @@ func TestStateBlobRefusalReachesTheServerAuditChain(t *testing.T) {
 	}
 
 	if got := entries[0]; got.Kind != "security" || got.Outcome != "denied" ||
-		got.Action != secret.ActionBlobOutOfScope || got.Object != acme.ID.String() {
+		got.Action != scopeaudit.ActionOutOfScope || got.Object != acme.ID.String() {
 		t.Errorf("entry = %+v, want a denied security entry for %s", got, acme.ID)
 	}
 

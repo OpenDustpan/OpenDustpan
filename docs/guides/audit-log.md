@@ -165,6 +165,8 @@ directory of these blobs:
 - An item key blob, in the `item-keys` directory of the namespace.
 - The content of an OpenTofu state version, in the `tofu` directory of the
   namespace.
+- A Pulumi checkpoint blob or a journal batch blob, in the `pulumi` directory
+  of the namespace.
 
 The action is `blob:out-of-scope`. The scope is `@server`, the subject is
 `server`, and the object is the ID of the namespace of the call. The reason
@@ -173,6 +175,23 @@ outside the directory of the blob in the namespace, or outside the directory of
 the unit in the blob directory, for example
 `state blob get refused: key outside the namespace`. The entry never holds the
 blob key that the call used.
+
+For a Pulumi blob, the directory of the unit is the directory of one stack:
+`namespaces/<namespace ID>/pulumi/<stack ID>/`. A key in the directory of
+another stack of the same namespace is a refusal too. The server checks this
+each time that it uses a key from a row, to read, to delete or to list.
+
+The channel of the entry is the channel of the request: `console` for a
+request from the console, and `api` for all other requests. Only the Pulumi
+routes set the `console` channel for these entries today. A refusal that a
+request on an OpenTofu route causes has the channel `api`, also when the
+request comes from the console.
+
+A request for a Pulumi blob that meets such a refusal fails with a server
+error, and the entry is the record for the operator. The server stores the
+checkpoint and the journal batches of a stack under
+`namespaces/<namespace ID>/pulumi/<stack ID>/`, so a refusal shows a damaged
+row or a fault in the server, not a mistake of the client.
 
 ## Denial entries
 

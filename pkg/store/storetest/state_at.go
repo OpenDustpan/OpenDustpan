@@ -82,7 +82,7 @@ func (f stateAtFixture) startPlanAt(t *testing.T, id string, plan stack.Plan, at
 	}
 
 	if body != "" {
-		if err := f.s.PutCheckpoint(t.Context(), newCheckpoint(got, 0, body), f.fence); err != nil {
+		if err := f.s.PutCheckpoint(t.Context(), f.checkpoint(t, got, 0, body), f.fence); err != nil {
 			t.Fatalf("put checkpoint of %s: %v", id, err)
 		}
 	}

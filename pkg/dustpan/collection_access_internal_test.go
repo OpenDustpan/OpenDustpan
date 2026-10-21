@@ -249,7 +249,8 @@ func seedStack(t *testing.T, st *sqlite.Store, ns namespace.Namespace, name, id 
 	}
 
 	s := stack.Stack{
-		CreatedAt: ns.CreatedAt, UpdatedAt: ns.CreatedAt, Tags: map[string]string{}, Ref: ref,
+		NamespaceID: "",
+		CreatedAt:   ns.CreatedAt, UpdatedAt: ns.CreatedAt, Tags: map[string]string{}, Ref: ref,
 		ID: stack.ID(id), Version: 0,
 	}
 	if createErr := st.CreateStack(t.Context(), s, ns.Fence()); createErr != nil {

@@ -12,6 +12,7 @@ import (
 
 	"opendustpan.org/opendustpan/internal/pulumijournal"
 	"opendustpan.org/opendustpan/pkg/stack"
+	"opendustpan.org/opendustpan/pkg/stack/stacktest"
 )
 
 // TestAppendJournalRefusesOversizedBatch checks that a batch over the batch
@@ -556,6 +557,7 @@ func TestJournalEntriesUsesConfiguredCheckpointBound(t *testing.T) {
 		newFakeRows(),
 		allowAll{},
 		smallBound,
+		stacktest.NewRefusals(),
 	)
 	if err != nil {
 		t.Fatalf("new journal writer with the small bound: %v", err)
@@ -570,6 +572,7 @@ func TestJournalEntriesUsesConfiguredCheckpointBound(t *testing.T) {
 		newFakeRows(),
 		allowAll{},
 		largeBound,
+		stacktest.NewRefusals(),
 	)
 	if err != nil {
 		t.Fatalf("new journal writer with the large bound: %v", err)

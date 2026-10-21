@@ -11,7 +11,7 @@ import (
 
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/namespace"
-	"opendustpan.org/opendustpan/pkg/secret"
+	"opendustpan.org/opendustpan/pkg/scopeaudit"
 	"opendustpan.org/opendustpan/pkg/workspace"
 )
 
@@ -307,14 +307,14 @@ func TestStateBlobDeleteRefusesOtherNamespaces(t *testing.T) {
 }
 
 // TestDeletePurgedBlobsStaysInTheNamespace proves that the blob delete of a
-// purged workspace reads only the directory of the namespace that the caller
-// names, and that an unknown namespace fails instead of falling back.
+// purged workspace reads only the directory of the namespace ID that the caller
+// gives, and that an empty ID fails instead of falling back.
 func TestDeletePurgedBlobsStaysInTheNamespace(t *testing.T) {
 	t.Parallel()
 
 	e := newScopeEnv(t)
 
-	if err := e.svc.DeletePurgedBlobs(t.Context(), e.other.Name, e.ws.ID); err != nil {
+	if err := e.svc.DeletePurgedBlobs(t.Context(), e.other.ID, e.ws.ID); err != nil {
 		t.Fatalf("delete purged blobs in the other namespace: %v", err)
 	}
 
@@ -322,11 +322,11 @@ func TestDeletePurgedBlobsStaysInTheNamespace(t *testing.T) {
 		t.Fatalf("content of acme after a delete in the other namespace: %v", err)
 	}
 
-	if err := e.svc.DeletePurgedBlobs(t.Context(), "ghost", e.ws.ID); !errors.Is(err, namespace.ErrNotFound) {
-		t.Fatalf("delete purged blobs in an unknown namespace: err = %v, want namespace.ErrNotFound", err)
+	if err := e.svc.DeletePurgedBlobs(t.Context(), "", e.ws.ID); !errors.Is(err, blob.ErrInvalidKey) {
+		t.Fatalf("delete purged blobs with no namespace ID: err = %v, want blob.ErrInvalidKey", err)
 	}
 
-	if err := e.svc.DeletePurgedBlobs(t.Context(), e.acme.Name, e.ws.ID); err != nil {
+	if err := e.svc.DeletePurgedBlobs(t.Context(), e.acme.ID, e.ws.ID); err != nil {
 		t.Fatalf("delete purged blobs in acme: %v", err)
 	}
 
@@ -452,7 +452,7 @@ func TestOpenStateBlobRecordsAKeyOfAnotherWorkspace(t *testing.T) {
 
 			got := e.refusals.All()
 			if len(got) != 1 || got[0].Namespace != e.acme.ID || got[0].Op != "get" ||
-				got[0].Where != secret.OutsideUnitDirectory {
+				got[0].Where != scopeaudit.OutsideUnitDirectory {
 				t.Fatalf("refusals = %+v, want one get refusal in %s outside the unit directory", got, e.acme.ID)
 			}
 		})
@@ -484,7 +484,7 @@ func checkOneRefusal(t *testing.T, e *scopeEnv, op string) {
 
 	got := e.refusals.All()
 	if len(got) != 1 || got[0].Namespace != e.acme.ID || got[0].Op != op ||
-		(got[0].Where != secret.OutsideNamespace && got[0].Where != secret.OutsideDirectory) {
+		(got[0].Where != scopeaudit.OutsideNamespace && got[0].Where != scopeaudit.OutsideDirectory) {
 		t.Fatalf("refusals = %+v, want one %s refusal in %s", got, op, e.acme.ID)
 	}
 }

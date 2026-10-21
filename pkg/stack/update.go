@@ -11,6 +11,7 @@ import (
 	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/internal/token"
 	"opendustpan.org/opendustpan/pkg/blob"
+	"opendustpan.org/opendustpan/pkg/namespace"
 )
 
 // Sentinel errors of the update cycle, returned by Updates and by the update,
@@ -54,6 +55,10 @@ var (
 	// store keeps checkpoint content only in the blob store, so it refuses
 	// such a write.
 	ErrCheckpointNoKey = errors.New("checkpoint has no blob key")
+	// ErrCheckpointKey reports a checkpoint write whose blob key does not
+	// belong to the namespace, the stack and the update of the row. The error
+	// carries no blob key.
+	ErrCheckpointKey = errors.New("checkpoint blob key does not belong to the update")
 	// ErrInvalidDelta reports a checkpoint delta the server does not apply:
 	// no checkpoint to apply it to, a sequence number that is not next, an
 	// edit outside the text, overlapping edits, a result over the size
@@ -357,6 +362,12 @@ type Checkpoint struct {
 	Deployment []byte
 	Update     UpdateID
 	Ref        Ref
+	// NamespaceID and StackID name the namespace row and the stack row of the
+	// checkpoint. A read from the store fills them from the same query as the
+	// row, so the service builds the scope of the blob of the row without a
+	// second read. A write ignores them: the store resolves the rows itself.
+	NamespaceID namespace.ID
+	StackID     ID
 	// Lease is the digest of the lease that authorized the write. The store
 	// accepts the checkpoint only while the update still runs under it.
 	Lease token.Digest
@@ -370,8 +381,8 @@ type Checkpoint struct {
 	// It is stored as sent.
 	Invalid bool
 	// BlobKey names the gzip content in the blob store:
-	// pulumi/<stack ID>/<update ID>/<sequence>. The store refuses a write
-	// without it.
+	// namespaces/<namespace ID>/pulumi/<stack ID>/<update ID>/<sequence>. The
+	// store refuses a write without it, and a write with another key.
 	BlobKey blob.Key
 	// BlobSize is the size of the stored gzip bytes.
 	BlobSize int64
