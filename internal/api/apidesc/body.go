@@ -194,6 +194,14 @@ var (
 var legacyFieldNames = map[string]string{
 	"unitID":    "The inventory, context and job APIs spell the stable ID of a unit unitID, and the console reads it.",
 	"versionID": "The jobs API spells the ID of the closing state version versionID.",
+	"appID": "The Git host API spells the ID of the GitHub App appID, because the tagliatelle goCamel " +
+		"rule of the linter demands it.",
+	"hookID": "The Git host API spells the ID of the webhook hookID, because the tagliatelle goCamel " +
+		"rule of the linter demands it.",
+	"installationID": "The Git host API spells the ID of a GitHub App installation installationID, " +
+		"because the tagliatelle goCamel rule of the linter demands it.",
+	"setID": "The Git host API spells the ID of a credential set setID, because the tagliatelle " +
+		"goCamel rule of the linter demands it.",
 }
 
 // LegacyFieldNames returns a copy of the list of wire names that break the
