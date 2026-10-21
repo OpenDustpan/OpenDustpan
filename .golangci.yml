@@ -139,7 +139,7 @@ linters:
             - "**/pkg/runner/**"
             - "**/pkg/launcher/**"
             - "**/pkg/source/**"
-            - "**/pkg/forge/**"
+            - "**/pkg/forge/*.go"
             - "**/pkg/calendar/**"
             - "**/pkg/freeze/**"
             - "**/pkg/breakglass/**"

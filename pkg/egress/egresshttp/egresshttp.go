@@ -4,6 +4,8 @@
 package egresshttp
 
 import (
+	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"io"
@@ -20,12 +22,20 @@ import (
 // after name resolution, on the address of each connection, so a DNS answer
 // that changes after a URL check cannot pass it.
 func Control(_, address string, _ syscall.RawConn) error {
-	ap, err := netip.ParseAddrPort(address)
-	if err != nil {
-		return fmt.Errorf("%w: the address does not parse", egress.ErrRefused)
-	}
+	return ControlWith(egress.Rules{Allow: nil})("", address, nil)
+}
 
-	return egress.CheckAddr(ap.Addr())
+// ControlWith returns a net.Dialer Control function that applies rules to
+// the address of each connection, as Control does with the zero rules.
+func ControlWith(rules egress.Rules) func(network, address string, c syscall.RawConn) error {
+	return func(_, address string, _ syscall.RawConn) error {
+		ap, err := netip.ParseAddrPort(address)
+		if err != nil {
+			return fmt.Errorf("%w: the address does not parse", egress.ErrRefused)
+		}
+
+		return rules.CheckAddr(ap.Addr())
+	}
 }
 
 // maxIdleConns bounds the idle connections that a client keeps.
@@ -37,9 +47,22 @@ const maxIdleConns = 16
 // proxy from the environment, the redirect policy r, and egress.Timeout
 // for each request. Read a body with ReadBody.
 func Client(r egress.Redirects, s egress.Scheme) *http.Client {
+	return ClientWith(egress.Rules{Allow: nil}, r, s, Options{RootCAs: nil})
+}
+
+// Options are the settings of ClientWith that are not egress rules.
+type Options struct {
+	// RootCAs holds the certificate authorities that the client trusts.
+	// Nil means the system roots. A test sets it for a local TLS server.
+	RootCAs *x509.CertPool
+}
+
+// ClientWith is Client with the allowed ranges of rules. The dial guard,
+// the URL check and the redirect check stay on, and they apply rules.
+func ClientWith(rules egress.Rules, r egress.Redirects, s egress.Scheme, o Options) *http.Client {
 	dialer := &net.Dialer{ //nolint:exhaustruct_v5 // the other fields keep their zero defaults; two of them are deprecated
 		Timeout: egress.Timeout,
-		Control: Control,
+		Control: ControlWith(rules),
 	}
 
 	transport := &http.Transport{
@@ -48,10 +71,14 @@ func Client(r egress.Redirects, s egress.Scheme) *http.Client {
 		TLSHandshakeTimeout: egress.Timeout,
 		MaxIdleConns:        maxIdleConns,
 		ForceAttemptHTTP2:   true,
+		TLSClientConfig: &tls.Config{
+			RootCAs:    o.RootCAs,
+			MinVersion: tls.VersionTLS12,
+		},
 	}
 
 	return &http.Client{
-		Transport: checkURL{next: transport, scheme: s},
+		Transport: checkURL{next: transport, scheme: s, rules: rules},
 		Timeout:   egress.Timeout,
 		Jar:       nil,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
@@ -59,7 +86,7 @@ func Client(r egress.Redirects, s egress.Scheme) *http.Client {
 				return fmt.Errorf("%w: more than %d redirects", egress.ErrRefused, egress.MaxRedirects)
 			}
 
-			return egress.CheckRedirect(via[len(via)-1].URL, req.URL, r, s)
+			return rules.CheckRedirect(via[len(via)-1].URL, req.URL, r, s)
 		},
 	}
 }
@@ -68,6 +95,7 @@ func Client(r egress.Redirects, s egress.Scheme) *http.Client {
 // request before next sends it.
 type checkURL struct {
 	next   http.RoundTripper
+	rules  egress.Rules
 	scheme egress.Scheme
 }
 
@@ -76,7 +104,7 @@ func (c checkURL) RoundTrip(req *http.Request) (*http.Response, error) {
 		return nil, fmt.Errorf("%w: the request has no URL", egress.ErrRefused)
 	}
 
-	err := egress.CheckURL(req.URL.String(), c.scheme)
+	err := c.rules.CheckURL(req.URL.String(), c.scheme)
 	if err != nil {
 		if req.Body != nil {
 			// A RoundTripper closes the body also on an error. The error
