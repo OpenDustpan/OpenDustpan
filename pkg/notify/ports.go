@@ -72,6 +72,63 @@ type CursorMove struct {
 	From, To int64
 }
 
+// SinkStore is the persistence port for sinks alone. It has the sink methods
+// of Subscriptions with the same signatures and the same fence, audit and
+// secret rules, and needs neither the outbox nor a subscription. So a
+// server can keep and test sinks before it has a dispatcher. A store that
+// also keeps subscriptions implements Subscriptions, which adds the steps
+// that a replace of a sink does to its subscriptions and deliveries, and
+// DeleteSink then returns ErrInUse while a subscription names the sink.
+//
+// A write is a write in the scope of the sink: it carries the fence of
+// that scope and appends the audit entry e in its transaction. When the
+// context carries an idempotency completion, the transaction also stores
+// the answer of the request, with the sink as its result for PutSink and
+// the sink ID for DeleteSink and RecordSinkTest. An adapter that keeps the
+// sinks of namespaces only returns ErrInvalid for a sink of
+// audit.ServerScope.
+type SinkStore interface {
+	// PutSink creates s, or replaces it when s.Version is the stored
+	// version. The store sets the stored version to one above the version it
+	// replaced, and to 1 for a new sink. secrets are the new secret items of
+	// the write, sealed with SinkSealer.Seal for s: the store never gets a
+	// plaintext value and keeps the sealed value under its ref in the scope
+	// of s. Each other ref of s names a secret item that the scope holds for
+	// the sink s.ID. A new secret item has a ref that the scope never held,
+	// also not after a delete, so a sink whose refs did not change sends to
+	// the place that was approved. A replace deletes the values of the refs
+	// that s no longer names, and DeleteSink deletes the values of the sink.
+	//
+	// It returns ErrInvalid for a sink that fails Validate, for secrets that
+	// fail s.ValidateSealed, for a new secret item whose ref the scope holds
+	// or held, for a ref of s with no new secret item and no stored secret
+	// item of the sink, for a replace that changes the kind or the platform
+	// of the sink, and for a fence that is not of s.Scope; ErrNotFound when
+	// the stored sink s.ID is in another scope; ErrConflict when s.Version is
+	// not the stored version, or when s.Version is 0 and the sink exists;
+	// namespace.ErrFenced and namespace.ErrNotFound.
+	PutSink(ctx context.Context, s Sink, secrets []SealedSecret, fence namespace.Fence, e audit.Entry) error
+	// SinkSecrets returns the sealed secret items of the sink id in scope,
+	// in the order of its SecretRefs, each as PutSink got it. It never
+	// returns a plaintext value. It returns ErrNotFound for an unknown sink
+	// or a sink of another scope.
+	SinkSecrets(ctx context.Context, scope namespace.Name, id string) ([]SealedSecret, error)
+	// DeleteSink deletes the sink id with its secret values. It returns
+	// ErrNotFound for an unknown sink or a sink of another scope than fence,
+	// namespace.ErrFenced and namespace.ErrNotFound.
+	DeleteSink(ctx context.Context, id string, fence namespace.Fence, e audit.Entry) error
+	// Sinks returns the sinks of scope, ordered by ID.
+	Sinks(ctx context.Context, scope namespace.Name) ([]Sink, error)
+	// RecordSinkTest appends the audit entry e of a test of the sink id, and
+	// changes nothing else. The service sends the test message first, so e
+	// can hold the outcome. It returns ErrNotFound for an unknown sink or a
+	// sink of another scope than fence, namespace.ErrFenced and
+	// namespace.ErrNotFound. When the context carries an idempotency
+	// completion, the transaction also stores the answer, with id as its
+	// result.
+	RecordSinkTest(ctx context.Context, id string, fence namespace.Fence, e audit.Entry) error
+}
+
 // Subscriptions is the persistence port for sinks and subscriptions. A
 // sink and a subscription are writes in their scope: each write carries
 // the fence of its scope and appends the audit entry e in its

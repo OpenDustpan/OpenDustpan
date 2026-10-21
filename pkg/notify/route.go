@@ -55,9 +55,17 @@ const (
 	SinkWebhook SinkKind = "webhook"
 )
 
+// ChatPlatforms returns the chat platforms that a chat sink can name, in
+// the order of their adapters. The package chat holds the same list as the
+// type chat.Platform; a test in that package keeps the two lists equal.
+func ChatPlatforms() []string {
+	return []string{"slack", "teams", "mattermost", "matrix"}
+}
+
 // Sink is a destination of notifications in a scope. Target is an email
 // address, the https URL of a webhook, or the host of the URL of a chat
-// webhook. SecretRefs name the stored secrets of the sink: the one or two
+// webhook. Platform names the chat platform of a chat sink and is empty for
+// any other kind. A change of the platform is a new sink. SecretRefs name the stored secrets of the sink: the one or two
 // active signing keys of a webhook, or the URL of a chat webhook. The API
 // never answers a secret, and the dispatcher reads them only to deliver.
 // A ref names one value for good: the API stores each new secret value
@@ -72,14 +80,16 @@ type Sink struct {
 	Scope      namespace.Name
 	Kind       SinkKind
 	Name       string
+	Platform   string
 	Target     string
 	SecretRefs []string
 	CreatedBy  string
 	Version    int64
 }
 
-// Validate returns ErrInvalid for a sink that breaks a bound, for a
-// webhook with no secret or more than MaxSigningSecrets secrets, for a
+// Validate returns ErrInvalid for a sink that breaks a bound, for a chat
+// sink with no known platform, for a sink of another kind with a platform,
+// for a webhook with no secret or more than MaxSigningSecrets secrets, for a
 // chat sink that has not exactly one secret, and for a target that does
 // not fit the kind. The URL of a webhook sink, and the host of a chat
 // sink, must pass egress.CheckURL for https only: the error then also
@@ -95,6 +105,10 @@ func (s Sink) Validate() error {
 			MaxSigningSecrets, MaxRefLen)
 	}
 
+	if err := s.validPlatform(); err != nil {
+		return err
+	}
+
 	switch s.Kind {
 	case SinkEmail:
 		return validAddress(s.Target, len(s.SecretRefs))
@@ -104,6 +118,20 @@ func (s Sink) Validate() error {
 		return s.validURL()
 	default:
 		return fmt.Errorf("%w: unknown sink kind %q", ErrInvalid, s.Kind)
+	}
+}
+
+// validPlatform returns ErrInvalid for a chat sink with no platform or with a
+// platform that ChatPlatforms does not list, and for a sink of another kind
+// that has a platform.
+func (s Sink) validPlatform() error {
+	switch {
+	case s.Kind == SinkChat && !slices.Contains(ChatPlatforms(), s.Platform):
+		return fmt.Errorf("%w: a chat sink needs a platform: %s", ErrInvalid, strings.Join(ChatPlatforms(), ", "))
+	case s.Kind != SinkChat && s.Platform != "":
+		return fmt.Errorf("%w: only a chat sink has a platform", ErrInvalid)
+	default:
+		return nil
 	}
 }
 
@@ -688,4 +716,28 @@ func Quiet(s Severity, now time.Time, next func(time.Time) (time.Time, error)) (
 	}
 
 	return at, nil
+}
+
+// SinkTestNotification returns the fixed notification of the test of the sink
+// s: id is its ID and at its time. It says that it is a test, names the sink by
+// its ID and holds no URL, secret or name. A person reads it in the chat or
+// the receiver of the sink.
+func SinkTestNotification(s Sink, id string, at time.Time) Notification {
+	return Notification{
+		ID:         id,
+		Type:       SinkTest,
+		Scope:      s.Scope,
+		Object:     NotificationsObject(s.Scope),
+		ObjectID:   s.ID,
+		Subject:    "",
+		Agent:      "",
+		Severity:   SeverityInfo,
+		Summary:    "This is a test message. No event happened. It checks the notification sink " + s.ID + ".",
+		Links:      nil,
+		Attributes: map[string]string{"sink": s.ID, "test": "true"},
+		Recipients: nil,
+		DedupeKey:  id,
+		At:         at,
+		Sequence:   0,
+	}.Fit()
 }

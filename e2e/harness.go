@@ -681,7 +681,9 @@ func newServer(ctx context.Context, tb testing.TB, args serverArgs) serverBuild 
 		st,
 		args,
 		append(
-			slices.Concat(profileStoreOptions(st, wrapper), jobStoreOptions(st), savedViewStoreOptions(st)),
+			slices.Concat(
+				profileStoreOptions(st, wrapper), jobStoreOptions(st), savedViewStoreOptions(st), sinkStoreOptions(st),
+			),
 			[]dustpan.Option{
 				dustpan.WithRegion(region),
 				dustpan.WithNamespaceStore(st),

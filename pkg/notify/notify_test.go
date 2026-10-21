@@ -190,7 +190,7 @@ func TestSinkValidate(t *testing.T) {
 
 	webhook := func(target string, refs ...string) notify.Sink {
 		return notify.Sink{
-			ID: "snk-1", Scope: "shop", Kind: notify.SinkWebhook, Name: "Ops", Target: target,
+			ID: "snk-1", Scope: "shop", Kind: notify.SinkWebhook, Name: "Ops", Platform: "", Target: target,
 			SecretRefs: refs, CreatedBy: "alice", Version: 0,
 		}
 	}
@@ -199,7 +199,13 @@ func TestSinkValidate(t *testing.T) {
 	email.Kind = notify.SinkEmail
 
 	chat := webhook("chat.example.com", "itm-1")
-	chat.Kind = notify.SinkChat
+	chat.Kind, chat.Platform = notify.SinkChat, "slack"
+
+	withPlatform := func(s notify.Sink, platform string) notify.Sink {
+		s.Platform = platform
+
+		return s
+	}
 
 	chatWith := func(target string, refs ...string) notify.Sink {
 		s := chat
@@ -238,6 +244,12 @@ func TestSinkValidate(t *testing.T) {
 		{"a chat webhook with two secret items", chatWith("chat.example.com", "itm-1", "itm-2"), false, false},
 		{"a chat host on localhost", chatWith("localhost", "itm-1"), false, true},
 		{"a chat host on a private address", chatWith("10.0.0.5", "itm-1"), false, true},
+		{"a chat webhook of each platform", withPlatform(chat, "matrix"), true, false},
+		{"a chat webhook with no platform", withPlatform(chat, ""), false, false},
+		{"a chat webhook with an unknown platform", withPlatform(chat, "irc"), false, false},
+		{"a chat platform in upper case", withPlatform(chat, "Slack"), false, false},
+		{"a webhook with a platform", withPlatform(webhook("https://hooks.example.com/ops", "itm-1"), "slack"), false, false},
+		{"an email sink with a platform", withPlatform(email, "slack"), false, false},
 		{"an email address", email, true, false},
 		{"an email address with a name", func() notify.Sink {
 			s := email
@@ -822,7 +834,7 @@ func TestValidateSecrets(t *testing.T) {
 	t.Parallel()
 
 	s := notify.Sink{
-		ID: "snk-1", Scope: "shop", Kind: notify.SinkWebhook, Name: "Ops", Target: "https://hooks.example.com/ops",
+		ID: "snk-1", Scope: "shop", Kind: notify.SinkWebhook, Name: "Ops", Platform: "", Target: "https://hooks.example.com/ops",
 		SecretRefs: []string{"itm-1", "itm-2"}, CreatedBy: "alice", Version: 0,
 	}
 	key := func(ref string, n int) notify.SinkSecret {

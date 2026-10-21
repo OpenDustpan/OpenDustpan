@@ -234,3 +234,8 @@ func checkMoved(t *testing.T, got []notify.SealedSecret) {
 		}
 	}
 }
+
+// Sealer returns the sealer of the suite, for the tests of the packages that
+// seal the secrets of sinks. It seals test values only: it is no sealer for a
+// server.
+func Sealer() notify.SinkSealer { return suiteSealer() }
