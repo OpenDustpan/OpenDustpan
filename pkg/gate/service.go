@@ -74,12 +74,24 @@ type Membership interface {
 	Collection(ctx context.Context, unit identity.Object) (collection.Name, error)
 }
 
+// FenceSource gives the fence of a namespace, for the decision records that
+// the Service writes in their own transaction.
+type FenceSource interface {
+	// Fence returns the current fence of ns. It returns ErrNotFound for a
+	// namespace that does not exist, and its store errors wrapped.
+	Fence(ctx context.Context, ns namespace.Name) (namespace.Fence, error)
+}
+
 // Change is one evaluation request of one decision point.
 type Change struct {
 	Point     DecisionPoint
 	Namespace namespace.Name
 	Ref       ChangeRef
 	Subject   Subject
+	// Source is the kind of the source of the change. At state.write it is
+	// cli for a write from the CLI of a tool, and api for a call of the
+	// tool-neutral API. The empty value counts as api.
+	Source SourceKind
 	// Author is the subject of the author, for the rules that do not let
 	// the author approve.
 	Author    string
@@ -136,6 +148,7 @@ type Service struct {
 	members   Membership
 	units     UnitSource
 	subjects  SubjectSource
+	fences    FenceSource
 	now       func() time.Time
 	log       *slog.Logger
 }
@@ -148,6 +161,7 @@ type ServiceConfig struct {
 	Members   Membership
 	Units     UnitSource
 	Subjects  SubjectSource
+	Fences    FenceSource
 	// Now is the clock, and time.Now when nil.
 	Now func() time.Time
 	Log *slog.Logger
@@ -157,7 +171,7 @@ type ServiceConfig struct {
 // logger is nil.
 func NewService(cfg ServiceConfig) (*Service, error) {
 	if cfg.Store == nil || cfg.Engine == nil || cfg.Members == nil || cfg.Units == nil || cfg.Subjects == nil ||
-		cfg.Log == nil {
+		cfg.Fences == nil || cfg.Log == nil {
 		return nil, fmt.Errorf("%w: the gate service needs each port and a logger", ErrInvalid)
 	}
 
@@ -168,7 +182,7 @@ func NewService(cfg ServiceConfig) (*Service, error) {
 
 	return &Service{
 		store: cfg.Store, engine: cfg.Engine, producers: slices.Clone(cfg.Producers), members: cfg.Members,
-		units: cfg.Units, subjects: cfg.Subjects, now: now, log: cfg.Log,
+		units: cfg.Units, subjects: cfg.Subjects, fences: cfg.Fences, now: now, log: cfg.Log,
 	}, nil
 }
 
@@ -193,8 +207,10 @@ func NewService(cfg ServiceConfig) (*Service, error) {
 // its job. Each other write with a job token returns an error that wraps
 // identity.ErrDenied, and writes no record.
 //
-// This version returns an error that wraps ErrUnavailable for each change
-// that the job token rules do not decide.
+// This version evaluates the gates of state.write for a unit. It returns an
+// error that wraps ErrUnavailable for each other decision point, and for a
+// change with a BreakGlass: no route gives a break-glass yet, so none passes
+// a gate in error.
 func (s *Service) Evaluate(ctx context.Context, c Change) (Decision, error) {
 	point, err := ParseDecisionPoint(string(c.Point))
 	if err != nil {
@@ -220,6 +236,10 @@ func (s *Service) Evaluate(ctx context.Context, c Change) (Decision, error) {
 
 	if point == PointStateWrite && c.Subject.Credential == CredentialJobToken {
 		return jobTokenWrite(c)
+	}
+
+	if point == PointStateWrite {
+		return s.evaluateStateWrite(ctx, c)
 	}
 
 	return Decision{}, errNotImplemented
@@ -259,8 +279,9 @@ func jobTokenWrite(c Change) (Decision, error) {
 // error. It writes the record of a refusal with Records.NoteRefusal and
 // AccessRefusalWindow.
 //
-// This version returns nil for a break-glass account, and an error that
-// wraps ErrUnavailable for each other call.
+// This version evaluates the limits for a call on a unit. It returns nil for
+// a break-glass account, and an error that wraps ErrUnavailable for a call
+// on any other object.
 func (s *Service) CheckAccess(ctx context.Context, call AccessCall) error {
 	subject, err := s.subjects.Subject(ctx, call.Principal)
 	if err != nil {
@@ -271,7 +292,7 @@ func (s *Service) CheckAccess(ctx context.Context, call AccessCall) error {
 		return nil
 	}
 
-	return errNotImplemented
+	return s.checkLimits(ctx, subject, call)
 }
 
 // limitedAuthorizer is the identity.Authorizer that LimitedAuthorizer gives.

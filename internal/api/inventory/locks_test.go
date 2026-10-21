@@ -250,6 +250,7 @@ func newLockFixture(t *testing.T, authz identity.Authorizer) lockFixture {
 		PublicURL:      "",
 		Logger:         slog.New(slog.DiscardHandler),
 		Now:            nil,
+		StateGuard:     nil,
 	})
 	if err != nil {
 		t.Fatalf("inventory handler: %v", err)

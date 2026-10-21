@@ -279,6 +279,7 @@ func newBehaviorHandlerWith(
 		Logger:        slog.New(slog.DiscardHandler),
 		Now:           nil,
 		DenialLimiter: nil,
+		StateGuard:    nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -971,6 +972,7 @@ func TestNewHandlerRequiresDependencies(t *testing.T) {
 		Now:           nil,
 		PublicURL:     "",
 		DenialLimiter: nil,
+		StateGuard:    nil,
 	}
 
 	cases := []struct {

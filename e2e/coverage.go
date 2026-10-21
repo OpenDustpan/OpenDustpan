@@ -417,6 +417,7 @@ func coverageTFERoutes(tb testing.TB, namespaces *namespace.Service) []RouteRef 
 	tb.Helper()
 
 	handler, err := tfeapi.NewHandler(tfeapi.Config{
+		StateGuard:     nil,
 		Authenticator:  coverageAuthenticator{},
 		Authorizer:     coverageAuthorizer{},
 		AddressGate:    nil,
@@ -712,6 +713,7 @@ func coverageInventoryRoutes(tb testing.TB, namespaces *namespace.Service) []Rou
 		Logger:        slog.New(slog.DiscardHandler),
 		Now:           nil,
 		Audit:         nil, OnAuditFailure: nil, DenialLimiter: nil,
+		StateGuard: nil,
 	})
 	if err != nil {
 		tb.Fatalf("inventory handler: %v", err)

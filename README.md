@@ -302,6 +302,9 @@ How-to guides:
   stack, a workspace or a collection, with a reason, and end the lock.
 - [Approval defaults and approval rules](docs/guides/approval-rules.md): turn on
   approval before apply for a namespace, and store named approval rules.
+- [Gates and access limits on state writes](docs/guides/state-write-gates.md):
+  what the server checks before it lets an OpenTofu lock or a restore go on,
+  and what a refusal looks like.
 - [Set and read context](docs/guides/context.md): the owners, the on-call
   text and the other context of a namespace and of a unit.
 - [Save and open a view of the unit list](docs/guides/saved-views.md): store

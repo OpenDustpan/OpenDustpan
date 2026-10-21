@@ -75,7 +75,11 @@ The server keeps remote state and locks for local execution only.
   that is not locked), `workspace.lock-mismatch` (the `lock-id` or the
   `lock-holder` of a force-unlock differs from the lock of the workspace) and
   `workspace.client-encrypted` (the server cannot do the action because the
-  client encrypted the state). All three answer 409.
+  client encrypted the state). All three answer 409. A gate or an access limit
+  that refuses a lock, a force-unlock, a restore or a workspace removal answers
+  403 with the code `gate.denied`, `gate.limited`, `gate.rule-failed` or
+  `gate.unavailable` (see
+  [Gates and access limits on state writes](guides/state-write-gates.md)).
 - A 403 for a missing action names the action in its `detail`.
 - The workspace document holds `attributes.lock-id`, the ID of the current
   lock, or an empty string when the workspace is not locked.

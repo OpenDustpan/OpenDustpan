@@ -655,6 +655,9 @@ type services struct {
 	// collections is the collection service (ADR 51), or nil when the store
 	// holds no collections. NewServer sets it after newServices.
 	collections *collection.Service
+	// gates checks the writes of state against the access limits and the
+	// gates of state.write, or is nil when the store keeps no gates.
+	gates *gateService
 	// deleted runs the retention sweep. assemble sets it, because
 	// it counts on the server metrics.
 	deleted *deletedSweeper
@@ -775,7 +778,7 @@ func NewServer(opts ...Option) (*Server, error) {
 
 	svc.tokens, svc.access = tokens, grants
 
-	svc.collections, err = newCollectionService(cfg)
+	svc.collections, svc.gates, err = newCollectionAndGateServices(cfg, svc.namespaces)
 	if err != nil {
 		return nil, err
 	}
@@ -1306,6 +1309,7 @@ func newTFEHandler(
 			observed.IncAuditAppendFailure()
 		},
 		DenialLimiter: cfg.denialLimiter,
+		StateGuard:    stateGuardOf(svc.gates),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("tfe api: %w", err)
@@ -1560,6 +1564,7 @@ func newServices(cfg *settings, tokens *accesstoken.Service) (services, error) {
 		deleted:     nil,
 		access:      nil,
 		collections: nil,
+		gates:       nil,
 	}, nil
 }
 
@@ -2485,6 +2490,7 @@ func newInventoryHandler(svc services, cfg *settings, onFailure func()) (http.Ha
 		Audit:          neutralAudit,
 		OnAuditFailure: onFailure,
 		DenialLimiter:  cfg.denialLimiter,
+		StateGuard:     inventoryGuardOf(svc.gates),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("inventory api: %w", err)
