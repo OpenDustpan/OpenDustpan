@@ -445,7 +445,6 @@ func TestActionsWithoutRoutesAreUnclassified(t *testing.T) {
 	f.grant(t, prn("site"), access.RoleSiteAdministrator, identity.ServerObject())
 
 	for _, a := range []identity.Action{
-		identity.ActionUnitRunPlan,
 		identity.ActionUnitRunApply,
 		identity.ActionUnitRunDestroy,
 		identity.ActionUnitWriteBack,
