@@ -30,8 +30,11 @@ const (
 	readBufferBytes = MaxMessageBytes + 1
 )
 
-// RPCError is an error object of a JSON-RPC 2.0 answer. It wraps ErrProtocol,
-// because a correct adapter reports a fault of the client in the result.
+// RPCError is an error object of a JSON-RPC 2.0 answer. It wraps
+// ErrRequestRefused: a correct adapter reports a fault of the client in the
+// result, so the answer is a fault of this one request. The framing is still
+// in step, so the session goes on and only the case that sent the request
+// fails.
 type RPCError struct {
 	Code    int
 	Message string
@@ -39,11 +42,11 @@ type RPCError struct {
 
 // Error implements error.
 func (e *RPCError) Error() string {
-	return fmt.Sprintf("%v: JSON-RPC error %d: %s", ErrProtocol, e.Code, e.Message)
+	return fmt.Sprintf("%v: JSON-RPC error %d: %s", ErrRequestRefused, e.Code, e.Message)
 }
 
-// Unwrap lets errors.Is find ErrProtocol.
-func (e *RPCError) Unwrap() error { return ErrProtocol }
+// Unwrap lets errors.Is find ErrRequestRefused.
+func (e *RPCError) Unwrap() error { return ErrRequestRefused }
 
 // ProcessOptions are the settings of StartAdapter.
 type ProcessOptions struct {
@@ -83,6 +86,11 @@ func StartAdapter(ctx context.Context, opts ProcessOptions) (*ProcessAdapter, er
 	cmd := exec.CommandContext(ctx, opts.Path, opts.Args...) //nolint:gosec // G204: the caller names the program.
 	cmd.Env = append([]string{}, opts.Env...)                // Never nil: nil would give the adapter our environment.
 	cmd.WaitDelay = closeTimeout
+
+	// The adapter runs in its own process group, and a stop ends the whole
+	// group. An adapter that starts through a shell, npx or uv leaves no
+	// grandchild behind.
+	prepareGroup(cmd)
 
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
@@ -238,9 +246,15 @@ func (a *ProcessAdapter) kill() {
 	a.stopOnce.Do(func() { close(a.stop) })
 
 	if a.cmd.Process != nil {
-		if err := a.cmd.Process.Kill(); err != nil {
+		if err := killGroup(a.cmd.Process); err != nil {
 			a.stderr.note(err)
 		}
+	}
+
+	// A write that waits for an adapter that does not read ends with this
+	// close. The error of a second close is of no use.
+	if err := a.stdin.Close(); err != nil && !errors.Is(err, os.ErrClosed) {
+		a.stderr.note(err)
 	}
 }
 
@@ -273,12 +287,30 @@ func (a *ProcessAdapter) roundTrip(ctx context.Context, method string, params, o
 		return fmt.Errorf("%w: the %s request is longer than %d bytes", ErrProtocol, method, MaxMessageBytes)
 	}
 
-	if _, err = a.stdin.Write(append(req, '\n')); err != nil {
-		return fmt.Errorf("%w: write %s: %w", ErrAdapterExited, method, err)
-	}
-
+	// The limit covers the write too. A pipe holds 64 KiB, so a long request
+	// blocks the write when the adapter does not read, and a write cannot be
+	// canceled: it ends when kill closes the pipe.
 	ctx, cancel := context.WithTimeout(ctx, a.timeout)
 	defer cancel()
+
+	written := make(chan error, 1)
+
+	go func() {
+		_, werr := a.stdin.Write(append(req, '\n'))
+		written <- werr
+	}()
+
+	select {
+	case werr := <-written:
+		if werr != nil {
+			return fmt.Errorf("%w: write %s: %w", ErrAdapterExited, method, werr)
+		}
+	case <-ctx.Done():
+		a.kill()
+		<-written
+
+		return fmt.Errorf("write %s: %w", method, ctx.Err())
+	}
 
 	select {
 	case line, ok := <-a.lines:

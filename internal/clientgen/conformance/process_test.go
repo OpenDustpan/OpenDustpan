@@ -24,6 +24,18 @@ const canaryEnv = "CONFORMANCE_CANARY_SECRET"
 
 // runFakeAdapter reads one request on each line, and answers as the mode says.
 func runFakeAdapter(mode string) {
+	switch mode {
+	case "noread":
+		// An adapter that never reads its input.
+		time.Sleep(time.Minute)
+
+		return
+	case "sleeper":
+		time.Sleep(time.Minute)
+
+		return
+	}
+
 	in := bufio.NewScanner(os.Stdin)
 	in.Buffer(make([]byte, 0, 1<<16), 1<<22)
 
@@ -83,8 +95,18 @@ func fakeReply(mode string, id json.RawMessage, method string) (string, bool) {
 		<-time.After(time.Minute)
 
 		return "", true
+	case "grandchild":
+		startGrandchild()
+		<-time.After(time.Minute)
+
+		return "", true
 	case "rpcerror":
-		return fmt.Sprintf(`{"jsonrpc":"2.0","id":%s,"error":{"code":-32601,"message":"no"}}`, id), false
+		// Only paginate is refused: the framing is in order, and the session goes on.
+		if method == conformance.MethodPaginate {
+			return fmt.Sprintf(`{"jsonrpc":"2.0","id":%s,"error":{"code":-32601,"message":"no"}}`, id), false
+		}
+
+		return goodReply(mode, method, ok), false
 	default:
 		return goodReply(mode, method, ok), false
 	}
@@ -112,15 +134,27 @@ func goodReply(mode, method string, ok func(string) string) string {
 func startFake(t *testing.T, mode string, timeout time.Duration) *conformance.ProcessAdapter {
 	t.Helper()
 
-	a, err := conformance.StartAdapter(
-		t.Context(),
-		fakeOptions(conformance.Environ(nil, fakeModeEnv+"="+mode), timeout),
-	)
+	a, err := startFakeWith(t, mode, timeout)
 	if err != nil {
 		t.Fatalf("start the fake adapter: %v", err)
 	}
 
 	return a
+}
+
+// startFakeWith starts the fake adapter with more variables in its environment.
+func startFakeWith(t *testing.T, mode string, timeout time.Duration, extra ...string) (*conformance.ProcessAdapter, error) {
+	t.Helper()
+
+	a, err := conformance.StartAdapter(
+		t.Context(),
+		fakeOptions(conformance.Environ(nil, append([]string{fakeModeEnv + "=" + mode}, extra...)...), timeout),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("start: %w", err)
+	}
+
+	return a, nil
 }
 
 // fakeOptions are the options to start this test binary as the fake adapter.
@@ -170,7 +204,6 @@ func TestProcessAdapterBreaks(t *testing.T) {
 		{"wrongid", 0, callOnce, conformance.ErrProtocol},
 		{"wrongversion", 0, callOnce, conformance.ErrProtocol},
 		{"toolong", 0, callOnce, conformance.ErrProtocol},
-		{"rpcerror", 0, callOnce, conformance.ErrProtocol},
 		{"badprotocol", 0, initOnce, conformance.ErrProtocolVersion},
 		{"exitearly", 0, callOnce, conformance.ErrAdapterExited},
 		{"hang", 300 * time.Millisecond, callOnce, context.DeadlineExceeded},
@@ -228,18 +261,57 @@ func initOnce(ctx context.Context, a *conformance.ProcessAdapter) error {
 	return err
 }
 
-func TestProcessAdapterRPCErrorType(t *testing.T) {
+// TestProcessAdapterRPCErrorFailsOneRequest checks that a JSON-RPC error is a
+// fault of one request: it is not a break of the protocol, and the next request
+// gets its answer.
+func TestProcessAdapterRPCErrorFailsOneRequest(t *testing.T) {
 	t.Parallel()
 
 	a := startFake(t, "rpcerror", 0)
 
 	t.Cleanup(func() { _ = a.Close() }) //nolint:errcheck // The test checks the error of the call.
 
-	err := callOnce(t.Context(), a)
+	_, err := a.Paginate(t.Context(), paginateParams("x", 2))
 
 	var rpc *conformance.RPCError
 	if !errors.As(err, &rpc) || rpc.Code != -32601 {
 		t.Fatalf("want an RPCError with code -32601, got %v", err)
+	}
+
+	if !errors.Is(err, conformance.ErrRequestRefused) || errors.Is(err, conformance.ErrProtocol) {
+		t.Errorf("an RPC error is ErrRequestRefused and not ErrProtocol: %v", err)
+	}
+
+	if res, callErr := a.Call(t.Context(), callParams()); callErr != nil || res.Status != 200 {
+		t.Fatalf("the next call: %+v %v", res, callErr)
+	}
+}
+
+// TestProcessAdapterTimeoutCoversTheWrite checks the limit of a request that
+// the adapter does not read. The request is longer than a pipe holds, so the
+// write blocks, and the limit of the call must end it.
+func TestProcessAdapterTimeoutCoversTheWrite(t *testing.T) {
+	t.Parallel()
+
+	a := startFake(t, "noread", 500*time.Millisecond)
+
+	t.Cleanup(func() { _ = a.Close() }) //nolint:errcheck // The test checks the error of the call.
+
+	p := callParams()
+	p.Body = json.RawMessage(`"` + strings.Repeat("x", conformance.MaxMessageBytes-4096) + `"`)
+
+	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Second)
+	defer cancel()
+
+	start := time.Now()
+	_, err := a.Call(ctx, p)
+
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("want DeadlineExceeded, got %v", err)
+	}
+
+	if elapsed := time.Since(start); elapsed > 5*time.Second {
+		t.Errorf("the call took %s: the limit of 500ms did not cover the write", elapsed)
 	}
 }
 

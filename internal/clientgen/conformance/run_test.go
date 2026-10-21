@@ -30,11 +30,17 @@ func TestRunClassifiesCases(t *testing.T) {
 		return fmt.Errorf("%w: gone", conformance.ErrAdapterExited)
 	}
 
+	refuse := func(context.Context, conformance.Env) error {
+		return fmt.Errorf("call: %w", &conformance.RPCError{Code: -32602, Message: "x"})
+	}
+
 	cases := []conformance.Case{
 		{Group: conformance.GroupOperations, Name: "passes", Run: pass},
 		{Group: conformance.GroupOperations, Name: "fails", Run: fail},
 		{Group: conformance.GroupOperations, Name: "has-no-body", Run: nil},
 		{Group: conformance.GroupOperations, Name: "does-not-apply", Run: skip},
+		{Group: conformance.GroupErrors, Name: "adapter-refuses-one-request", Run: refuse},
+		{Group: conformance.GroupErrors, Name: "runs-after-a-refusal", Run: pass},
 		{Group: conformance.GroupErrors, Name: "loses-the-session", Run: lose},
 		{Group: conformance.GroupErrors, Name: "runs-after-the-loss", Run: pass},
 		{Group: conformance.GroupErrors, Name: "has-no-body-after-the-loss", Run: nil},
@@ -45,8 +51,8 @@ func TestRunClassifiesCases(t *testing.T) {
 
 	want := []conformance.Status{
 		conformance.StatusPassed, conformance.StatusFailed, conformance.StatusNotImplemented,
-		conformance.StatusNotApplicable, conformance.StatusFailed, conformance.StatusFailed,
-		conformance.StatusNotImplemented,
+		conformance.StatusNotApplicable, conformance.StatusFailed, conformance.StatusPassed,
+		conformance.StatusFailed, conformance.StatusFailed, conformance.StatusNotImplemented,
 	}
 
 	if len(results) != len(want) {
@@ -59,12 +65,12 @@ func TestRunClassifiesCases(t *testing.T) {
 		}
 	}
 
-	if proxy.resets != 4 {
-		t.Errorf("the proxy resets before each case that runs: want 4, got %d", proxy.resets)
+	if proxy.resets != 6 {
+		t.Errorf("the proxy resets before each case that runs: want 6, got %d", proxy.resets)
 	}
 
-	if !errors.Is(results[5].Err, conformance.ErrAdapterExited) {
-		t.Errorf("a case after the loss of the session fails with the reason: %v", results[5].Err)
+	if !errors.Is(results[7].Err, conformance.ErrAdapterExited) {
+		t.Errorf("a case after the loss of the session fails with the reason: %v", results[7].Err)
 	}
 }
 

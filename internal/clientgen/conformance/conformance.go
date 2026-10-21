@@ -51,6 +51,14 @@ const MaxMessageBytes = 1 << 20
 // method.
 var ErrProtocol = errors.New("conformance: adapter broke the protocol")
 
+// ErrRequestRefused means that the adapter answered one request with a
+// JSON-RPC error object. The framing, the ID and the process are still in
+// order, so the session is not lost: the case that sent the request fails, and
+// the next case runs. A correct adapter reports a fault of the client in the
+// result (ErrorResult) and keeps JSON-RPC errors for a request that it cannot
+// read, for example an unknown operation or a missing path parameter.
+var ErrRequestRefused = errors.New("conformance: adapter refused the request")
+
 // ErrProtocolVersion means that the protocol version of the adapter in its
 // InitializeResult is not ProtocolVersion. The harness stops the session.
 var ErrProtocolVersion = errors.New("conformance: adapter has another protocol version")
@@ -178,7 +186,9 @@ type PaginateResult struct {
 // Adapter is the harness side of one adapter process.
 //
 // Each method returns ErrProtocol or ErrAdapterExited, wrapped, when the
-// session breaks, and the context error when the context ends first. An
+// session breaks, ErrRequestRefused, wrapped, when the adapter answers with a
+// JSON-RPC error (the session goes on), and the context error when the context
+// ends first. An
 // error of the client is not an error of the method. It is in the result.
 type Adapter interface {
 	Initialize(ctx context.Context, p InitializeParams) (InitializeResult, error)
