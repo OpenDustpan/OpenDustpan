@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -278,7 +279,7 @@ func (c chainServer) do(t *testing.T, method, path string) (int, string) {
 		t.Fatalf("request: %v", err)
 	}
 
-	req.Header.Set("Authorization", "Bearer "+adminToken)
+	authorize(t, req, adminToken)
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -391,7 +392,10 @@ func listScope(t *testing.T, st *sqlite.Store, scope namespace.Name) []audit.Ent
 		t.Fatalf("list %s: %v", scope, err)
 	}
 
-	return listing.Entries
+	// The setup of the console session of a test writes entries of its own.
+	return slices.DeleteFunc(slices.Clone(listing.Entries), func(e audit.Entry) bool {
+		return e.Subject == consoleSetupActor
+	})
 }
 
 // saveRecord stores rec as the chain record of st.
@@ -471,7 +475,9 @@ func runChainServer(
 	ln := openTestListener(t)
 	addr := ln.Addr().String()
 
-	srv, err := dustpan.NewServer(append([]dustpan.Option{
+	registerConsole(t, addr, st)
+
+	srv, err := dustpan.NewServer(append(append([]dustpan.Option{
 		dustpan.WithRegion(region),
 		dustpan.WithNamespaceStore(st),
 		dustpan.WithStackStore(st),
@@ -487,7 +493,7 @@ func runChainServer(
 		dustpan.WithAuthenticator(authn),
 		dustpan.WithListener(ln),
 		dustpan.WithAuditChain(setting),
-	}, extra...)...)
+	}, signInOptions(t, st)...), extra...)...)
 	if err != nil {
 		t.Fatalf("new server: %v", err)
 	}

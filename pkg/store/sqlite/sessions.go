@@ -435,6 +435,12 @@ func (s *Store) BindProvider(ctx context.Context, id, issuer string, at time.Tim
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
+	// A recorded provider needs no write, so a start in maintenance mode, which
+	// refuses writes, still finds the issuer of its first binding.
+	if recorded, err := s.queries.GetOIDCProviderIssuer(ctx, id); err == nil {
+		return recorded, nil
+	}
+
 	err := s.inTx(ctx, func(q *db.Queries) error {
 		return q.InsertOIDCProvider(ctx, db.InsertOIDCProviderParams{
 			ProviderID: id, Issuer: issuer, CreatedAtMs: codec.Millis(at),

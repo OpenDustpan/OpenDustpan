@@ -401,6 +401,12 @@ func boundMillis(t time.Time) int64 {
 // BindProvider implements session.ProviderStore. The insert keeps an
 // earlier record, so the read answers the issuer of the first start.
 func (s *Store) BindProvider(ctx context.Context, id, issuer string, at time.Time) (string, error) {
+	// A recorded provider needs no write, so a start in maintenance mode, which
+	// refuses writes, still finds the issuer of its first binding.
+	if recorded, err := s.queries.GetOIDCProviderIssuer(ctx, id); err == nil {
+		return recorded, nil
+	}
+
 	err := s.inTx(ctx, func(q *db.Queries) error {
 		return q.InsertOIDCProvider(ctx, db.InsertOIDCProviderParams{
 			ProviderID: id, Issuer: issuer, CreatedAtMs: codec.Millis(at),
