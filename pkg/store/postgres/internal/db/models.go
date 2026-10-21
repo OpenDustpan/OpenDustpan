@@ -444,6 +444,30 @@ type Namespace struct {
 	ID                  string
 }
 
+type NotificationSink struct {
+	ID          string
+	NamespaceID string
+	Kind        string
+	Name        string
+	Platform    string
+	Target      string
+	CreatedBy   string
+	Version     int64
+}
+
+type NotificationSinkRef struct {
+	NamespaceID string
+	Ref         string
+}
+
+type NotificationSinkSecret struct {
+	NamespaceID string
+	Ref         string
+	SinkID      string
+	Position    int64
+	Ciphertext  []byte
+}
+
 type ObjectContext struct {
 	NamespaceID         string
 	ObjectKind          string
@@ -529,6 +553,31 @@ type ProfileRevision struct {
 	Author         string
 	CreatedAtMs    int64
 	Reason         string
+}
+
+type RegistryKey struct {
+	NamespaceID string
+	Fingerprint string
+	ArmoredKey  string
+	AddedBy     string
+	AddedAtMs   int64
+}
+
+type RegistryRelease struct {
+	NamespaceID     string
+	Kind            string
+	Name            string
+	System          string
+	Version         string
+	SumsFile        string
+	SumsSha256      string
+	SignatureFile   string
+	SignatureSha256 string
+	KeyFingerprint  string
+	Protocols       string
+	PublishedBy     string
+	ArchivesJson    string
+	PublishedAtMs   int64
 }
 
 type Restore struct {

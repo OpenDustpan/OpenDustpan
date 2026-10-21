@@ -87,7 +87,16 @@ var devColumnDecisions = map[string]devDecision{
 		strip:  false,
 		reason: "ID of a principal, not a subject: a view of a missing principal matches no reader",
 	},
+	"registry_keys.added_by": {
+		strip:  false,
+		reason: "ID of a principal, not a subject: history text of who registered the key",
+	},
+	"registry_releases.published_by": {
+		strip:  false,
+		reason: "ID of a principal, not a subject: history text of who published the release",
+	},
 	"job_freezes.created_by":              {strip: false, reason: "history text of who made the freeze"},
+	"notification_sinks.created_by":       {strip: false, reason: "history text of who made the sink"},
 	"job_freezes.ended_by":                {strip: false, reason: "history text of who ended the freeze"},
 	"runner_join_tokens.created_by":       {strip: false, reason: "history text of who made the join token"},
 	"runner_join_tokens.used_by":          {strip: false, reason: "ID of a runner, not of a person"},

@@ -112,6 +112,8 @@ func pgCopyTables() []pgCopyTable {
 	tables = append(tables, pgCopyManualLockTables()...)
 	tables = append(tables, pgCopyPreferenceTables()...)
 	tables = append(tables, pgCopySavedViewTables()...)
+	tables = append(tables, pgCopyRegistryTables()...)
+	tables = append(tables, pgCopySinkTables()...)
 
 	return tables
 }
@@ -914,6 +916,10 @@ func (s *Store) buildStaging(ctx context.Context, in stagingInput) (backup.Summa
 		return backup.Summary{}, viewsErr
 	}
 
+	if featureErr := checkStagedFeatureRows(ctx, s.pool, in.staging); featureErr != nil {
+		return backup.Summary{}, featureErr
+	}
+
 	sum, err := s.summarizeStaging(ctx, in.staging, in.want)
 	if err != nil {
 		return backup.Summary{}, err
@@ -1676,4 +1682,14 @@ func (s *Store) createRestoreConflict(ctx context.Context, id backup.RestoreID) 
 	}
 
 	return err
+}
+
+// checkStagedFeatureRows checks the rows of the registry and of the
+// notification sinks of a staged backup.
+func checkStagedFeatureRows(ctx context.Context, pool *pgxpool.Pool, staging string) error {
+	if err := checkStagedRegistry(ctx, pool, staging); err != nil {
+		return err
+	}
+
+	return checkStagedSinks(ctx, pool, staging)
 }

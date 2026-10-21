@@ -503,6 +503,11 @@ const (
 	// namespace that holds the profile.
 	ActionProfileManage Action = "profile:manage"
 
+	// ActionNamespaceManageNotifications allows creating, changing, deleting
+	// and testing the notification sinks of a namespace. Its object is the
+	// namespace. The value equals notify.ActionManage.
+	ActionNamespaceManageNotifications Action = "namespace:manage-notifications"
+
 	// ActionViewCreate allows a person to make a saved view of their own.
 	// Its object is the namespace that holds the view.
 	ActionViewCreate Action = "view:create"
@@ -513,6 +518,20 @@ const (
 	// ActionViewDelete allows deleting a saved view of the caller. Its object
 	// is the namespace that holds the view.
 	ActionViewDelete Action = "view:delete"
+
+	// ActionRegistryRead allows listing the releases of the private registry
+	// of a namespace and getting their files. Its object is the namespace that
+	// holds the registry.
+	ActionRegistryRead Action = "registry:read"
+	// ActionRegistryPublish allows staging the files of a release and
+	// publishing it. A published version never changes. Its object is the
+	// namespace that holds the registry. No built-in role below the
+	// administrator holds it.
+	ActionRegistryPublish Action = "registry:publish"
+	// ActionRegistryManageKeys allows registering and removing the trusted
+	// signing keys of a namespace, and listing them. Its object is the
+	// namespace that holds the registry.
+	ActionRegistryManageKeys Action = "registry:manage-keys"
 )
 
 // Object limits for the tool and unit parts of a unit reference.

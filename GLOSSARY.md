@@ -181,8 +181,20 @@ The answer of `GET /api/dustpan/v1/capabilities`: the version of the tool-neutra
 _Avoid_: Feature list, handshake, capability (alone)
 
 **API description**:
-The machine-readable document that lists the operations of the tool-neutral REST API under `/api/dustpan/v1`. The SDKs, the CLI and the providers are generated from it (ADR 264). It does not describe the Pulumi Cloud-compatible API or the TFE-compatible API.
+The machine-readable document that lists the operations of the tool-neutral REST API under `/api/dustpan/v1`. The API clients, the CLI and the providers are generated from it (ADR 264). It does not describe the Pulumi Cloud-compatible API or the TFE-compatible API.
 _Avoid_: Swagger file, API spec, OpenAPI spec, schema file
+
+**API client**:
+A library for one language that calls the tool-neutral REST API. The client generator makes it from the API description. A person writes only its small transport and the message loop of its adapter in the client conformance suite. Each language has its own repository, for example `client-go`. A client release needs a pass of the client conformance suite. "SDK" in ADR 264 and RFC 99 means an API client.
+_Avoid_: SDK (for a client, because the SDK of ADR 35 is the server SDK in `pkg/`), binding, wrapper
+
+**Client generator**:
+The program of this project that makes each API client from the API description. It has one parser of the OpenAPI subset that the description uses and one template set for each language. The same description always gives the same bytes.
+_Avoid_: codegen (alone), SDK generator, OpenAPI generator (that is a third-party tool)
+
+**Client conformance suite**:
+The one suite that runs every API client, through a small adapter for each language, against a real server. It covers each operation, the error shape, pagination, `Idempotency-Key`, `If-Match` and `ETag`, and unknown fields and enum values. It is not the conformance suite of a port.
+_Avoid_: SDK tests, client e2e
 
 **Forge**:
 A git hosting service with an API, for example GitHub, GitLab or Forgejo. The server uses a forge only through the `Forge` port and a forge connection. Internal term. User-facing text names the service (GitHub, GitLab, Forgejo). Where a generic term is needed, it says Git host.
@@ -658,6 +670,19 @@ An output adapter of the port `pkg/logsink` that delivers structured records to 
 _Avoid_: Log target, log destination, exporter
 _Copy says_: "log output", with the target: a file, syslog or a webhook. Never write "sink" in copy.
 
+**Notification sink**:
+A destination of the notifications of a namespace: an email address, a chat webhook or a signed webhook. The code type is `notify.Sink`, and the API path is `/sinks`. A sink has a kind (`email`, `chat` or `webhook`), a name and a target. Its secrets are secret items of the namespace. They are the signing key of a webhook and the URL of a chat webhook. A sink keeps its kind and its platform. A change of either is a new sink.
+_Avoid_: Notification target, notification channel
+_Copy says_: "notification destination", and for a chat webhook "Slack channel" or the same pattern for another platform. Never write "sink" in copy.
+
+**Signing key**:
+The secret of a webhook sink. The server makes it when a person creates the sink: 32 random bytes, written as 64 hex digits. The server answers it once, in the answer of the create. It signs each request to the webhook with the key (HMAC-SHA256). The receiver checks the signature with the same key. No route answers the key again.
+_Avoid_: Webhook secret, signing secret (the code uses "signing secret" for the value of a key)
+
+**Test message**:
+The one fixed message that the test route of a sink sends to the sink. It has the notification type `sink.test` and says that no event happened. The answer of the route gives the class of the result and a fixed text. It never gives the URL or the answer of the receiver.
+_Avoid_: Ping, health check
+
 **Chat platform**:
 A chat service that OpenDustpan posts messages to: Slack, Microsoft Teams, Mattermost or Matrix (ADR 262). The code type is `chat.Platform`, and the wire value is the lower-case name in the field `platform`. `chatops.Request.Platform` takes this type later.
 _Avoid_: Tool (for a chat service, because a tool is an infrastructure-as-code CLI), provider, integration
@@ -724,6 +749,14 @@ _Avoid_: Package, artifact (that is a plan or a log of a job)
 **Registry address**:
 The name of a provider or module in a namespace: the namespace, the kind and the name, with the system for a module. The host of the address is the host of the server (RFC 101).
 _Avoid_: Source address (that is the field of OpenTofu), package name
+
+**Trusted signing key**:
+A public OpenPGP key that a namespace registers for its registry. A provider release is published only when a trusted signing key of the namespace made the signature of its checksums file. The server takes the fingerprint from the key. If a namespace deletes the key, the registry stops serving the releases that it signed.
+_Avoid_: Signing certificate, GPG key (the format is OpenPGP), trusted publisher
+
+**Staged file**:
+A file of an upload that the server holds under a staging key until a publish moves it. It is not readable through the registry. A publish measures it again, checks it, and copies it to its content key. A staged file that no publish moved is deleted after 24 hours.
+_Avoid_: Temporary file, pending upload
 
 **Catalog**:
 The self-service gateway of OpenDustpan, with its routes under `/api/dustpan/v1` (ADR 210). A principal sends a Catalog request to it, for example for a unit from a blueprint. Write it with a capital C, as a name.

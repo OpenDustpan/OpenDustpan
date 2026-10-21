@@ -409,6 +409,8 @@ func sqliteLaterBackupTables() []sqliteBackupTable {
 		sqliteManualLockBackupTables(),
 		sqlitePreferenceBackupTables(),
 		sqliteSavedViewBackupTables(),
+		sqliteRegistryBackupTables(),
+		sqliteSinkBackupTables(),
 	)
 }
 

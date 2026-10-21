@@ -16,6 +16,7 @@ import (
 	"net/netip"
 	"net/url"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -216,3 +217,60 @@ const (
 // MaxRedirects is the largest number of redirects that a use with
 // SameHost follows.
 const MaxRedirects = 3
+
+// DefaultPort is the one port that a request may use when the operator
+// allows no other: the port of https.
+const DefaultPort = 443
+
+// maxPort is the highest TCP port.
+const maxPort = 65535
+
+// Ports is the set of destination ports that an outbound request may use.
+// The zero value allows DefaultPort only. A server with a port outside this
+// set would let a principal who can save a URL scan the ports of a public
+// host through the answers of a test.
+type Ports struct {
+	extra []int
+}
+
+// NewPorts returns the set of DefaultPort and the ports extra. It returns
+// ErrRefused for a port outside 1 to 65535.
+func NewPorts(extra ...int) (Ports, error) {
+	for _, port := range extra {
+		if port < 1 || port > maxPort {
+			return Ports{extra: nil}, fmt.Errorf("%w: %d is not a port number", ErrRefused, port)
+		}
+	}
+
+	return Ports{extra: slices.Clone(extra)}, nil
+}
+
+// Allows reports whether port is in the set.
+func (p Ports) Allows(port int) bool {
+	return port == DefaultPort || slices.Contains(p.extra, port)
+}
+
+// CheckPort returns ErrRefused when the port of the URL raw is not in p. A
+// URL with no port has DefaultPort, because the rules accept the https scheme
+// only. CheckPort does not check the rest of the URL: CheckURL does.
+func CheckPort(raw string, p Ports) error {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return fmt.Errorf("%w: the URL does not parse", ErrRefused)
+	}
+
+	port := DefaultPort
+
+	if text := u.Port(); text != "" {
+		port, err = strconv.Atoi(text)
+		if err != nil {
+			return fmt.Errorf("%w: the port is not a number", ErrRefused)
+		}
+	}
+
+	if !p.Allows(port) {
+		return fmt.Errorf("%w: the port %d is not allowed", ErrRefused, port)
+	}
+
+	return nil
+}

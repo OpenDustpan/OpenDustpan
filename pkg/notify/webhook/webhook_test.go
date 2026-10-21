@@ -596,3 +596,98 @@ func TestKind(t *testing.T) {
 		t.Fatalf("Kind = %q, want %q", got, notify.SinkWebhook)
 	}
 }
+
+// TestPortIsChecked sends hostile ports straight to the sender, as if the
+// service had not checked them. A refused port sends nothing.
+func TestPortIsChecked(t *testing.T) {
+	t.Parallel()
+
+	extra, err := egress.NewPorts(8443)
+	if err != nil {
+		t.Fatalf("NewPorts = %v", err)
+	}
+
+	tests := []struct {
+		name  string
+		to    string
+		ports egress.Ports
+		ok    bool
+	}{
+		{"ssh", "https://hooks.example.com:22/ops", egress.Ports{}, false},
+		{"redis", "https://hooks.example.com:6379/ops", egress.Ports{}, false},
+		{"8443 by default", "https://hooks.example.com:8443/ops", egress.Ports{}, false},
+		{"22 when the operator allows 8443", "https://hooks.example.com:22/ops", extra, false},
+		{"8443 when the operator allows it", "https://hooks.example.com:8443/ops", extra, true},
+		{"443", "https://hooks.example.com:443/ops", egress.Ports{}, true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			r := newReceiver(t)
+			r.set(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) })
+
+			s := r.sender(t)
+			s.SetPortsForTest(tt.ports)
+
+			m := message([]byte(canary))
+			m.To = tt.to
+
+			if tt.ok {
+				if sendErr := s.Send(t.Context(), m); sendErr != nil {
+					t.Fatalf("Send = %v, want no error", sendErr)
+				}
+
+				return
+			}
+
+			checkRefused(t, s.Send(t.Context(), m))
+
+			if n := len(r.requests()); n != 0 {
+				t.Fatalf("the test server got %d requests, want 0", n)
+			}
+		})
+	}
+}
+
+// TestDialRefusalIsAFailedConnection checks that a name that resolves to an
+// address that the rules refuse gets the class of a connection that failed,
+// the same as a name that does not resolve, so that the class does not tell
+// the two apart. A URL that the rules refuse before any lookup stays refused.
+func TestDialRefusalIsAFailedConnection(t *testing.T) {
+	t.Parallel()
+
+	guarded := webhook.NewDialGuardedForTest(time.Now)
+	t.Cleanup(guarded.Close)
+
+	m := message([]byte(canary))
+	m.To = "https://db.corp.example/hook"
+
+	err := guarded.Send(t.Context(), m)
+	if got := notify.Class(err); got != notify.ClassTemporary {
+		t.Fatalf("Class of a dial refusal = %q (%v), want %q", got, err, notify.ClassTemporary)
+	}
+
+	if errors.Is(err, egress.ErrRefused) {
+		t.Fatalf("Send = %v, a dial refusal must not match egress.ErrRefused", err)
+	}
+
+	// A name that does not resolve: the reserved TLD .invalid never resolves.
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+
+	plain := webhook.New()
+	t.Cleanup(plain.Close)
+
+	m.To = "https://nothing.invalid/hook"
+
+	unresolved := plain.Send(ctx, m)
+	if got := notify.Class(unresolved); got != notify.Class(err) {
+		t.Fatalf("Class of an unresolved name = %q (%v), want %q", got, unresolved, notify.Class(err))
+	}
+
+	// The URL rules refuse a literal private address before any lookup.
+	m.To = "https://10.0.0.1/hook"
+	checkRefused(t, plain.Send(t.Context(), m))
+}

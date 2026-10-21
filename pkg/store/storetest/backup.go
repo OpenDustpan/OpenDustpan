@@ -20,6 +20,8 @@ import (
 	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/notify"
+	"opendustpan.org/opendustpan/pkg/notify/notifytest"
 	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/savedview"
 	"opendustpan.org/opendustpan/pkg/secret"
@@ -278,6 +280,7 @@ func seedBackupStore(t *testing.T, s BackupStore) backupSeed {
 	profiles := seedBackupProfiles(t, s, acme)
 	seedBackupGate(t, s, acme)
 	seedBackupSavedViews(t, s, acme)
+	seedBackupSinks(t, s, acme)
 
 	return backupSeed{
 		acme:       acme,
@@ -333,6 +336,60 @@ func seedBackupSavedViews(t *testing.T, s BackupStore, acme namespace.Namespace)
 			t.Fatalf("create saved view %d: %v", i, err)
 		}
 	}
+}
+
+// seedBackupSinks writes a chat sink and a webhook sink in the namespace acme,
+// and replaces the secret of the chat sink once, so the store holds a ref that
+// no sink names any more. A store with no sink port skips it: the fake of this
+// package's own tests is one.
+func seedBackupSinks(t *testing.T, s BackupStore, acme namespace.Namespace) {
+	t.Helper()
+
+	keeper, ok := s.(interface{ NotificationSinks() notify.SinkStore })
+	if !ok {
+		return
+	}
+
+	entry := audit.Entry{
+		At: now(), Namespace: acme.Name, Subject: "alice", IDPSubject: "", TokenID: "", Action: "sink:create",
+		Object: acme.Name.String(), Version: "", ValuePath: "", ValueCount: nil, Changes: nil, SourceIP: "192.0.2.1",
+		UserAgent: "", Channel: audit.ChannelAPI, Kind: audit.KindChange, Outcome: audit.OutcomeSuccess, RequestID: "",
+		ObjectID: "", PrevHash: "", Hash: "", Sequence: 0, FenceVersion: 0, PrincipalKind: "", JobID: "", Reason: "",
+	}
+
+	chat := notify.Sink{
+		ID: "snk-seedchat", Scope: acme.Name, Kind: notify.SinkChat, Name: "Chat", Platform: "slack",
+		Target: "hooks.slack.com", SecretRefs: []string{"itm-seedchat1"}, CreatedBy: "alice", Version: 0,
+	}
+	hook := notify.Sink{
+		ID: "snk-seedhook", Scope: acme.Name, Kind: notify.SinkWebhook, Name: "Hook", Platform: "",
+		Target: "https://hooks.example.com/seed", SecretRefs: []string{"itm-seedhook1", "itm-seedhook2"},
+		CreatedBy: "alice", Version: 0,
+	}
+
+	put := func(sink notify.Sink, values ...string) {
+		t.Helper()
+
+		secrets := make([]notify.SinkSecret, 0, len(values))
+		for i, v := range values {
+			secrets = append(secrets, notify.SinkSecret{Ref: sink.SecretRefs[i], Value: []byte(v)})
+		}
+
+		sealed, err := notifytest.Sealer().Seal(t.Context(), sink, secrets)
+		if err != nil {
+			t.Fatalf("seal sink %s: %v", sink.ID, err)
+		}
+
+		if err = keeper.NotificationSinks().PutSink(t.Context(), sink, sealed, acme.Fence(), entry); err != nil {
+			t.Fatalf("put sink %s: %v", sink.ID, err)
+		}
+	}
+
+	put(chat, "https://hooks.slack.com/services/T0/B0/seed-one")
+	put(hook, "seed-key-one", "seed-key-two")
+
+	chat.Version, chat.SecretRefs = 1, []string{"itm-seedchat2"}
+	put(chat, "https://hooks.slack.com/services/T0/B0/seed-two")
 }
 
 // seedBackupGate writes one gate that reads a path set, so the store holds a

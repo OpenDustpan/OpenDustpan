@@ -37,6 +37,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -50,6 +51,7 @@ import (
 	blobfs "opendustpan.org/opendustpan/pkg/blob/fs"
 	blobs3 "opendustpan.org/opendustpan/pkg/blob/s3"
 	"opendustpan.org/opendustpan/pkg/dustpan"
+	"opendustpan.org/opendustpan/pkg/egress"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/installation"
 	"opendustpan.org/opendustpan/pkg/inventory"
@@ -310,7 +312,10 @@ type serveFlags struct {
 	// retention is softDeleteRetention after the check.
 	retention  time.Duration
 	auditSinks []string
-	logSinks   []string
+	// destinationPorts holds the ports, besides 443, that a notification
+	// destination may use.
+	destinationPorts string
+	logSinks         []string
 	// app is the application logger and its sinks, set by run.
 	app                 appLog
 	auditSigningKeyFile string
@@ -459,6 +464,7 @@ func (f *serveFlags) registerStorage(fs *flag.FlagSet) {
 	cli.ByFlag(cli.UnsafeAllowDevBackupsFlag).Bool(fs, &f.allowDevBackups)
 	cli.ByFlag("audit-chain").String(fs, &f.auditChain)
 	cli.ByFlag("audit-sink").List(fs, &f.auditSinks)
+	cli.ByFlag("destination-ports").String(fs, &f.destinationPorts)
 	cli.ByFlag("audit-checkpoints").Bool(fs, &f.auditCheckpoints)
 	cli.ByFlag("audit-signing-key-file").String(fs, &f.auditSigningKeyFile)
 	cli.ByFlag("audit-verify-keys-file").String(fs, &f.auditVerifyKeysFile)
@@ -1239,9 +1245,48 @@ func (f *serveFlags) storeOptions(st store, wrapper secret.Wrapper) ([]dustpan.O
 	opts = append(opts, runnerStoreOption(st)...)
 	opts = append(opts, jobStoreOption(st)...)
 	opts = append(opts, savedViewStoreOption(st)...)
-	opts = append(opts, dustpan.WithInstallationKind(f.kind()), dustpan.WithInstallationKindStore(st))
+	opts = append(opts, registryStoreOption(st)...)
+	opts = append(opts, sinkStoreOption(st)...)
+
+	ports, err := f.sinkPorts()
+	if err != nil {
+		return nil, err
+	}
+	opts = append(opts, dustpan.WithSinkPorts(ports), dustpan.WithInstallationKind(f.kind()),
+		dustpan.WithInstallationKindStore(st))
 
 	return append(opts, profileStoreOption(st, wrapper)...), nil
+}
+
+// errDestinationPorts reports a --destination-ports item that is no port.
+var errDestinationPorts = errors.New("--destination-ports: each item is a port number from 1 to 65535")
+
+// sinkPorts parses --destination-ports: whole port numbers, separated by
+// commas. It returns an error that names the flag for an item that is not a
+// port, and never repeats the value.
+func (f *serveFlags) sinkPorts() (egress.Ports, error) {
+	return parseSinkPorts(f.destinationPorts)
+}
+
+// parseSinkPorts parses the value of --destination-ports.
+func parseSinkPorts(value string) (egress.Ports, error) {
+	var extra []int
+
+	for _, item := range splitList(value) {
+		port, err := strconv.Atoi(item)
+		if err != nil {
+			return egress.Ports{}, errDestinationPorts
+		}
+
+		extra = append(extra, port)
+	}
+
+	ports, err := egress.NewPorts(extra...)
+	if err != nil {
+		return egress.Ports{}, errDestinationPorts
+	}
+
+	return ports, nil
 }
 
 // durableStoreOption returns the durable schedule store option for st, or nil
@@ -1291,6 +1336,32 @@ func savedViewStoreOption(st store) []dustpan.Option {
 		return []dustpan.Option{dustpan.WithSavedViewStore(s.SavedViews())}
 	case postgresStore:
 		return []dustpan.Option{dustpan.WithSavedViewStore(s.SavedViews())}
+	default:
+		return nil
+	}
+}
+
+// registryStoreOption returns the option of the registry stores for st, or nil
+// when st keeps no registry.
+func registryStoreOption(st store) []dustpan.Option {
+	switch s := st.(type) {
+	case sqliteStore:
+		return []dustpan.Option{dustpan.WithRegistry(s.Registry(), s.RegistryKeys())}
+	case postgresStore:
+		return []dustpan.Option{dustpan.WithRegistry(s.Registry(), s.RegistryKeys())}
+	default:
+		return nil
+	}
+}
+
+// sinkStoreOption returns the option of the notification sink store for st,
+// or nil when st keeps no sinks.
+func sinkStoreOption(st store) []dustpan.Option {
+	switch s := st.(type) {
+	case sqliteStore:
+		return []dustpan.Option{dustpan.WithSinkStore(s.NotificationSinks())}
+	case postgresStore:
+		return []dustpan.Option{dustpan.WithSinkStore(s.NotificationSinks())}
 	default:
 		return nil
 	}
