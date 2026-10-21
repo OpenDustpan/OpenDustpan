@@ -310,6 +310,9 @@ How-to guides:
 - [Save and open a view of the unit list](docs/guides/saved-views.md): store
   the labels and references of a unit list under a name, and open the view
   again.
+- [Connect GitHub](docs/guides/connect-github.md): register one GitHub App for
+  the installation, give its installations to namespaces, and check a
+  connection.
 - [Publish a provider to the private registry](docs/guides/private-registry.md): register a
   signing key, publish a signed provider version, and install it with `tofu init`.
 - [Connect a webhook and send a test message](docs/guides/notification-destinations.md):

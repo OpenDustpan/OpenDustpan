@@ -15,17 +15,43 @@ const tagProfiles = "profiles"
 //
 //nolint:gochecknoglobals // A fixed table; Go has no constant maps.
 var operationLabels = map[string]apidesc.Label{
-	apidesc.Pattern(http.MethodGet, profilesPath):   apidesc.Name("listProfiles", tagProfiles),
-	apidesc.Pattern(http.MethodPost, profilesPath):  apidesc.Name("createProfile", tagProfiles).WithETag(),
-	apidesc.Pattern(http.MethodGet, profilePath):    apidesc.Name("getProfile", tagProfiles).WithETag(),
-	apidesc.Pattern(http.MethodDelete, profilePath): apidesc.Name("deleteProfile", tagProfiles).WithIfMatch(),
-	apidesc.Pattern(http.MethodGet, revisionsPath):  apidesc.Name("listProfileRevisions", tagProfiles),
+	apidesc.Pattern(http.MethodGet, profilesPath): apidesc.Name("listProfiles", tagProfiles).
+		On(apidesc.KindNamespace).
+		WithBodies(apidesc.NoBody, apidesc.Typed[listResponse]("ListProfilesResponse", profileNames...)),
+	apidesc.Pattern(http.MethodPost, profilesPath): apidesc.Name("createProfile", tagProfiles).WithETag().
+		On(apidesc.KindNamespace).
+		WithBodies(apidesc.Typed[createBody]("CreateProfileRequest"), profileBody),
+	apidesc.Pattern(http.MethodGet, profilePath): apidesc.Name("getProfile", tagProfiles).WithETag().
+		On(apidesc.KindNamespace).
+		WithBodies(apidesc.NoBody, profileBody),
+	apidesc.Pattern(http.MethodDelete, profilePath): apidesc.Name("deleteProfile", tagProfiles).WithIfMatch().
+		On(apidesc.KindNamespace).
+		WithBodies(apidesc.NoBody, apidesc.NoBody),
+	apidesc.Pattern(http.MethodGet, revisionsPath): apidesc.Name("listProfileRevisions", tagProfiles).
+		On(apidesc.KindNamespace).
+		WithBodies(apidesc.NoBody, apidesc.Typed[listRevisionsResponse]("ListProfileRevisionsResponse", profileNames...)),
 	apidesc.Pattern(http.MethodPost, revisionsPath): apidesc.Name("createProfileRevision", tagProfiles).
 		WithIfMatchRequired().
-		WithETag(),
+		WithETag().
+		On(apidesc.KindNamespace).
+		WithBodies(apidesc.Typed[saveBody]("CreateProfileRevisionRequest"), profileBody),
 	apidesc.Pattern(http.MethodGet, revisionsPath+"/{revision}"): apidesc.Name("getProfileRevision", tagProfiles).
-		WithETag(),
+		WithETag().
+		On(apidesc.KindNamespace).
+		WithBodies(apidesc.NoBody, apidesc.Typed[revisionEntry]("ProfileRevision", profileNames...)),
 }
+
+// The bodies that several routes share.
+//
+//nolint:gochecknoglobals // Fixed values; Go has no constant structs.
+var (
+	profileBody  = apidesc.Typed[profileEntry]("Profile", profileNames...)
+	profileNames = []apidesc.Declaration{
+		apidesc.Named[revisionEntry]("ProfileRevision"),
+		apidesc.Named[entryValue]("ProfileEntry"),
+		apidesc.Declare[jsonValue](map[string]any{"description": "Any JSON value."}),
+	}
+)
 
 // Operations returns the routes of this adapter that the description of the
 // tool-neutral REST API holds: the routes under apidesc.Prefix.
@@ -39,8 +65,8 @@ func (h *Handler) Operations() []apidesc.Operation {
 		}
 
 		rows = append(rows, apidesc.Row{
-			Method: route.Method, Path: route.Path, Actions: actions, Public: route.Scope == ScopePublic,
-			IdempotencyKey: route.IdempotencyKey,
+			Method: route.Method, Path: route.Path, Actions: actions, NamespaceActions: nil,
+			Public: route.Scope == ScopePublic, IdempotencyKey: route.IdempotencyKey,
 		})
 	}
 

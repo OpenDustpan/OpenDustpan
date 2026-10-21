@@ -112,6 +112,7 @@ func pgCopyTables() []pgCopyTable {
 	tables = append(tables, pgCopyManualLockTables()...)
 	tables = append(tables, pgCopyPreferenceTables()...)
 	tables = append(tables, pgCopySavedViewTables()...)
+	tables = append(tables, pgCopyGitHostTables()...)
 	tables = append(tables, pgCopyRegistryTables()...)
 	tables = append(tables, pgCopySinkTables()...)
 
@@ -1684,10 +1685,15 @@ func (s *Store) createRestoreConflict(ctx context.Context, id backup.RestoreID) 
 	return err
 }
 
-// checkStagedFeatureRows checks the rows of the registry and of the
-// notification sinks of a staged backup.
+// checkStagedFeatureRows checks the rows of the staged features that have rules
+// of their own: the registry, the Git host connections and the notification
+// sinks.
 func checkStagedFeatureRows(ctx context.Context, pool *pgxpool.Pool, staging string) error {
 	if err := checkStagedRegistry(ctx, pool, staging); err != nil {
+		return err
+	}
+
+	if err := checkStagedGitHost(ctx, pool, staging); err != nil {
 		return err
 	}
 

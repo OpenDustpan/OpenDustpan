@@ -519,6 +519,23 @@ const (
 	// is the namespace that holds the view.
 	ActionViewDelete Action = "view:delete"
 
+	// ActionNamespaceReadGitHostConnections allows listing and reading the
+	// connections of a namespace to a Git host, and answers their settings and
+	// never a credential. Its object is the namespace.
+	ActionNamespaceReadGitHostConnections Action = "namespace:read-git-host-connections"
+	// ActionNamespaceManageGitHostConnections allows making, deleting and
+	// checking a connection of a namespace to a Git host, and making one the
+	// default. Its object is the namespace.
+	ActionNamespaceManageGitHostConnections Action = "namespace:manage-git-host-connections"
+	// ActionServerReadGitHost allows reading the registration of the GitHub
+	// App of the installation, and the map from its installations to
+	// namespaces. No read answers a key or an event secret. Its object is the
+	// installation.
+	ActionServerReadGitHost Action = "server:read-git-host"
+	// ActionServerManageGitHost allows registering the GitHub App of the
+	// installation with its key and its event secret, and assigning each of its
+	// installations to a namespace. Its object is the installation.
+	ActionServerManageGitHost Action = "server:manage-git-host"
 	// ActionRegistryRead allows listing the releases of the private registry
 	// of a namespace and getting their files. Its object is the namespace that
 	// holds the registry.
