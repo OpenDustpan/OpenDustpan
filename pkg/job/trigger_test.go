@@ -7,19 +7,21 @@ import (
 
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/job"
-	"opendustpan.org/opendustpan/pkg/namespace"
 )
 
-func serviceActor(t *testing.T, ns namespace.Name) job.Actor {
+func serviceActor(t *testing.T) job.Actor {
 	t.Helper()
 
-	p, err := identity.NamespaceService(ns)
+	p, err := identity.NamespaceService("acme")
 	if err != nil {
-		t.Fatalf("NamespaceService(%q) = %v", ns, err)
+		t.Fatalf("NamespaceService(acme) = %v", err)
 	}
 
 	return job.Actor{Principal: p, Agent: "", Mode: "", ConfirmAuth: "", AuthAt: actorOf("x").AuthAt}
 }
+
+// adaActor returns the actor of a person.
+func adaActor(*testing.T) job.Actor { return actorOf("ada") }
 
 func TestTriggerRefValidate(t *testing.T) {
 	t.Parallel()
@@ -46,7 +48,7 @@ func TestTriggerRefValidate(t *testing.T) {
 		"empty saver":               {ID: "t", Saver: ""},
 		"long saver":                {ID: "t", Saver: strings.Repeat("s", job.MaxTriggerSaverBytes+1)},
 		"saver with a newline":      {ID: "t", Saver: "ada\nroot"},
-		"saver with a bidi mark":    {ID: "t", Saver: "ada‮"},
+		"saver with a bidi mark":    {ID: "t", Saver: "ada\u202e"},
 		"saver not UTF-8":           {ID: "t", Saver: "ada\xff"},
 		"saver is a service":        {ID: "t", Saver: "system:namespace-service:acme"},
 		"saver is a service, cased": {ID: "t", Saver: "System:Namespace-Service:acme"},
@@ -72,21 +74,21 @@ func TestStartTrigger(t *testing.T) {
 		wantErr error
 	}{
 		{
-			"a manual fire by a person", func(*testing.T) job.Actor { return actorOf("ada") }, "", ref, nil,
+			"a manual fire by a person", adaActor, "", ref, nil,
 		},
 		{
 			"a manual fire with the source api",
-			func(*testing.T) job.Actor { return actorOf("ada") },
+			adaActor,
 			job.SourceAPI,
 			ref,
 			nil,
 		},
 		{
-			"a person cannot claim the source trigger", func(*testing.T) job.Actor { return actorOf("ada") },
+			"a person cannot claim the source trigger", adaActor,
 			job.SourceTrigger, ref, job.ErrInvalid,
 		},
 		{
-			"a person cannot claim the source schedule", func(*testing.T) job.Actor { return actorOf("ada") },
+			"a person cannot claim the source schedule", adaActor,
 			job.SourceSchedule, ref, job.ErrInvalid,
 		},
 		{
@@ -98,57 +100,29 @@ func TestStartTrigger(t *testing.T) {
 			}, job.SourceAPI, ref, job.ErrAgentDenied,
 		},
 		{
-			"a start with a trigger that is not valid", func(*testing.T) job.Actor { return actorOf("ada") }, "",
+			"a start with a trigger that is not valid", adaActor, "",
 			&job.TriggerRef{ID: "Bad ID", Saver: "x"}, job.ErrInvalid,
 		},
 		{
-			"the service principal with the source trigger", func(t *testing.T) job.Actor {
-				t.Helper()
-
-				return serviceActor(t, "acme")
-			}, job.SourceTrigger, ref, nil,
+			"the service principal with the source trigger", serviceActor, job.SourceTrigger, ref, nil,
 		},
 		{
-			"the service principal with the source schedule", func(t *testing.T) job.Actor {
-				t.Helper()
-
-				return serviceActor(t, "acme")
-			}, job.SourceSchedule, ref, nil,
+			"the service principal with the source schedule", serviceActor, job.SourceSchedule, ref, nil,
 		},
 		{
-			"the service principal with the source forge", func(t *testing.T) job.Actor {
-				t.Helper()
-
-				return serviceActor(t, "acme")
-			}, job.SourceForge, ref, nil,
+			"the service principal with the source forge", serviceActor, job.SourceForge, ref, nil,
 		},
 		{
-			"the service principal with the source api", func(t *testing.T) job.Actor {
-				t.Helper()
-
-				return serviceActor(t, "acme")
-			}, job.SourceAPI, ref, job.ErrInvalid,
+			"the service principal with the source api", serviceActor, job.SourceAPI, ref, job.ErrInvalid,
 		},
 		{
-			"the service principal with no source", func(t *testing.T) job.Actor {
-				t.Helper()
-
-				return serviceActor(t, "acme")
-			}, "", ref, job.ErrInvalid,
+			"the service principal with no source", serviceActor, "", ref, job.ErrInvalid,
 		},
 		{
-			"the service principal with the source catalog", func(t *testing.T) job.Actor {
-				t.Helper()
-
-				return serviceActor(t, "acme")
-			}, job.SourceCatalog, ref, job.ErrInvalid,
+			"the service principal with the source catalog", serviceActor, job.SourceCatalog, ref, job.ErrInvalid,
 		},
 		{
-			"the service principal with no trigger", func(t *testing.T) job.Actor {
-				t.Helper()
-
-				return serviceActor(t, "acme")
-			}, job.SourceTrigger, nil, job.ErrInvalid,
+			"the service principal with no trigger", serviceActor, job.SourceTrigger, nil, job.ErrInvalid,
 		},
 		{
 			"a person with the service subject and no server credential", func(*testing.T) job.Actor {
@@ -191,29 +165,44 @@ func TestStartTrigger(t *testing.T) {
 			j, err := r.svc.Start(t.Context(), tt.actor(t), req)
 
 			if tt.wantErr != nil {
-				if !errors.Is(err, tt.wantErr) {
-					t.Fatalf("Start = %v, want %v", err, tt.wantErr)
-				}
-
-				if len(r.store.creates) != 0 {
-					t.Fatalf("Create calls = %d, want none for a refused start", len(r.store.creates))
-				}
+				checkTriggerStartRefused(t, r, err, tt.wantErr)
 
 				return
 			}
 
-			if err != nil {
-				t.Fatalf("Start = %v", err)
-			}
-
-			if (tt.trigger == nil) != (j.Trigger == nil) {
-				t.Fatalf("job trigger = %+v, request trigger = %+v", j.Trigger, tt.trigger)
-			}
-
-			if tt.trigger != nil && *j.Trigger != *tt.trigger {
-				t.Fatalf("job trigger = %+v, want %+v", *j.Trigger, *tt.trigger)
-			}
+			checkStartTrigger(t, err, tt.trigger, j.Trigger)
 		})
+	}
+}
+
+// checkTriggerStartRefused checks that err is wantErr and that the start wrote nothing.
+func checkTriggerStartRefused(t *testing.T, r *rig, err, wantErr error) {
+	t.Helper()
+
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("Start = %v, want %v", err, wantErr)
+	}
+
+	if len(r.store.creates) != 0 {
+		t.Fatalf("Create calls = %d, want none for a refused start", len(r.store.creates))
+	}
+}
+
+// checkStartTrigger checks that a start with the trigger ref want gave a job
+// with the trigger ref got.
+func checkStartTrigger(t *testing.T, err error, want, got *job.TriggerRef) {
+	t.Helper()
+
+	if err != nil {
+		t.Fatalf("Start = %v", err)
+	}
+
+	if (want == nil) != (got == nil) {
+		t.Fatalf("job trigger = %+v, request trigger = %+v", got, want)
+	}
+
+	if want != nil && *got != *want {
+		t.Fatalf("job trigger = %+v, want %+v", *got, *want)
 	}
 }
 
@@ -227,7 +216,7 @@ func TestStartTriggerAuditAndCopy(t *testing.T) {
 	req.Source = job.SourceTrigger
 	req.Trigger = ref
 
-	j, err := r.svc.Start(t.Context(), serviceActor(t, "acme"), req)
+	j, err := r.svc.Start(t.Context(), serviceActor(t), req)
 	if err != nil {
 		t.Fatalf("Start = %v", err)
 	}
@@ -283,12 +272,15 @@ func TestRequestHashTrigger(t *testing.T) {
 	otherID := hash("", &job.TriggerRef{ID: "trg-2", Saver: "user:ada"})
 	otherSaver := hash("", &job.TriggerRef{ID: "trg-1", Saver: "user:bo"})
 
-	switch {
-	case none == "" || one == "":
+	if none == "" || one == "" {
 		t.Fatalf("hashes are empty: %q, %q", none, one)
-	case one != same:
+	}
+
+	if one != same {
 		t.Errorf("one trigger gave two hashes: %q, %q", one, same)
-	case one == none, one == otherID, one == otherSaver:
+	}
+
+	if one == none || one == otherID || one == otherSaver {
 		t.Errorf("a request with another trigger shares a hash: %q, %q, %q, %q", none, one, otherID, otherSaver)
 	}
 }

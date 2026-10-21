@@ -3,6 +3,7 @@ package trigger_test
 import (
 	"errors"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -30,8 +31,8 @@ func newManagerRig(t *testing.T) *managerRig {
 	t.Helper()
 
 	r := &managerRig{
-		store: newStore(), authz: newAuthz(), units: newUnits(), savers: &fakeSaverCheck{},
-		disp: &fakeDispatcher{}, fences: &fakeFences{},
+		m: nil, store: newStore(), authz: newAuthz(), units: newUnits(), savers: newSaverCheck(),
+		disp: newDispatcher(), fences: newFences(),
 	}
 
 	// ada holds every action on units a and b.
@@ -47,7 +48,7 @@ func newManagerRig(t *testing.T) *managerRig {
 		NewID: func() trigger.ID {
 			n++
 
-			return trigger.ID("trg-" + string(rune('0'+n)))
+			return trigger.ID("trg-" + strconv.Itoa(n))
 		},
 	})
 	if err != nil {
@@ -59,11 +60,13 @@ func newManagerRig(t *testing.T) *managerRig {
 	return r
 }
 
-var info = trigger.RequestInfo{
-	Channel:   audit.ChannelConsole,
-	SourceIP:  "192.0.2.1",
-	UserAgent: "test",
-	RequestID: "req-1",
+func reqInfo() trigger.RequestInfo {
+	return trigger.RequestInfo{
+		Channel:   audit.ChannelConsole,
+		SourceIP:  "192.0.2.1",
+		UserAgent: "test",
+		RequestID: "req-1",
+	}
 }
 
 func scheduleInput(unitID string) trigger.SaveInput {
@@ -112,7 +115,7 @@ func TestManagerCreate(t *testing.T) {
 
 	r := newManagerRig(t)
 
-	got, err := r.m.Create(t.Context(), person(ada), info, scheduleInput("b"))
+	got, err := r.m.Create(t.Context(), person(ada), reqInfo(), scheduleInput("b"))
 	if err != nil {
 		t.Fatalf("Create = %v", err)
 	}
@@ -128,10 +131,28 @@ func TestManagerCreate(t *testing.T) {
 		t.Fatalf("store writes %d, saver checks %d; want 1 and 1", r.store.callCount(), r.savers.saves)
 	}
 
-	e := r.store.calls[0].entry
-	if e.Subject != ada || e.Namespace != acme || e.Action != string(trigger.SettingsAction) ||
-		e.Object != "opentofu:acme/b" || e.Channel != audit.ChannelConsole || e.SourceIP != "192.0.2.1" ||
-		e.RequestID != "req-1" || e.Kind != audit.KindChange || e.Outcome != audit.OutcomeSuccess || e.TokenID != "tok-"+ada {
+	checkCreateAudit(t, r.store.calls[0].entry)
+
+	// A person cannot set the last saver: it is the caller.
+	if r.store.triggers["trg-1"].LastSaver != ada {
+		t.Errorf("last saver = %q, want %q", r.store.triggers["trg-1"].LastSaver, ada)
+	}
+}
+
+// checkCreateAudit checks the audit entry of the first Create of ada.
+func checkCreateAudit(t *testing.T, e audit.Entry) {
+	t.Helper()
+
+	got := []string{
+		e.Subject, string(e.Namespace), e.Action, e.Object, string(e.Channel), e.SourceIP, e.RequestID,
+		string(e.Kind), string(e.Outcome), e.TokenID,
+	}
+	want := []string{
+		ada, string(acme), string(trigger.SettingsAction), "opentofu:acme/b", string(audit.ChannelConsole),
+		"192.0.2.1", "req-1", string(audit.KindChange), string(audit.OutcomeSuccess), "tok-" + ada,
+	}
+
+	if !slices.Equal(got, want) {
 		t.Errorf("audit entry = %+v", e)
 	}
 
@@ -143,15 +164,29 @@ func TestManagerCreate(t *testing.T) {
 	if !slices.Contains(keys, "trigger") || !slices.Contains(keys, "kind") || !slices.Contains(keys, "frequency") {
 		t.Errorf("audit changes = %v, want the trigger, the kind and the frequency", keys)
 	}
+}
 
-	// A person cannot set the last saver: it is the caller.
-	if r.store.triggers["trg-1"].LastSaver != ada {
-		t.Errorf("last saver = %q, want %q", r.store.triggers["trg-1"].LastSaver, ada)
+// noPrincipal returns the principal of a call with no sign-in.
+func noPrincipal() identity.Principal {
+	return identity.Principal{
+		Subject: "", DisplayName: "", Admin: false, TokenID: "", TokenExpiresAt: time.Time{},
+		TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{}, Kind: "", Credential: "", JobID: "",
 	}
 }
 
-func TestManagerCreateRefusals(t *testing.T) {
-	t.Parallel()
+// createRefusal is one refused Create call.
+type createRefusal struct {
+	name   string
+	setup  func(r *managerRig)
+	caller identity.Principal
+	in     func(t *testing.T) trigger.SaveInput
+	want   error
+	action identity.Action
+}
+
+// createRefusals returns the cases of TestManagerCreateRefusals.
+func createRefusals(t *testing.T) []createRefusal {
+	t.Helper()
 
 	jobToken := person(ada)
 	jobToken.Credential = identity.CredentialJobToken
@@ -161,14 +196,7 @@ func TestManagerCreateRefusals(t *testing.T) {
 		t.Fatalf("NamespaceService = %v", err)
 	}
 
-	tests := []struct {
-		name   string
-		setup  func(r *managerRig)
-		caller identity.Principal
-		in     func(t *testing.T) trigger.SaveInput
-		want   error
-		action identity.Action
-	}{
+	return []createRefusal{
 		{
 			name:   "no settings action",
 			caller: person(ada),
@@ -229,7 +257,7 @@ func TestManagerCreateRefusals(t *testing.T) {
 		},
 		{
 			name:   "no principal",
-			caller: identity.Principal{},
+			caller: noPrincipal(),
 			in:     func(*testing.T) trigger.SaveInput { return scheduleInput("b") },
 			setup:  nil,
 			want:   trigger.ErrInvalid,
@@ -299,8 +327,12 @@ func TestManagerCreateRefusals(t *testing.T) {
 			action: "",
 		},
 	}
+}
 
-	for _, tt := range tests {
+func TestManagerCreateRefusals(t *testing.T) {
+	t.Parallel()
+
+	for _, tt := range createRefusals(t) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -309,20 +341,27 @@ func TestManagerCreateRefusals(t *testing.T) {
 				tt.setup(r)
 			}
 
-			_, err := r.m.Create(t.Context(), tt.caller, info, tt.in(t))
+			_, err := r.m.Create(t.Context(), tt.caller, reqInfo(), tt.in(t))
 			wantErr(t, "Create", err, tt.want)
 
 			if r.store.callCount() != 0 {
 				t.Errorf("a refused save wrote %d times", r.store.callCount())
 			}
 
-			var denied *trigger.DeniedError
-			if tt.action != "" {
-				if !errors.As(err, &denied) || denied.Action != tt.action {
-					t.Errorf("Create = %v, want a *DeniedError for %s", err, tt.action)
-				}
-			}
+			checkDenied(t, err, tt.action)
 		})
+	}
+}
+
+// checkDenied checks that err is a *DeniedError for action, when action is set.
+func checkDenied(t *testing.T, err error, action identity.Action) {
+	t.Helper()
+
+	var denied *trigger.DeniedError
+	if action != "" {
+		if !errors.As(err, &denied) || denied.Action != action {
+			t.Errorf("Create = %v, want a *DeniedError for %s", err, action)
+		}
 	}
 }
 
@@ -331,11 +370,11 @@ func TestManagerCreateCycle(t *testing.T) {
 
 	r := newManagerRig(t)
 
-	if _, err := r.m.Create(t.Context(), person(ada), info, followsInput("b", "a")); err != nil {
+	if _, err := r.m.Create(t.Context(), person(ada), reqInfo(), followsInput("b", "a")); err != nil {
 		t.Fatalf("Create b follows a = %v", err)
 	}
 
-	_, err := r.m.Create(t.Context(), person(ada), info, followsInput("a", "b"))
+	_, err := r.m.Create(t.Context(), person(ada), reqInfo(), followsInput("a", "b"))
 	wantErr(t, "a follows b", err, trigger.ErrCycle)
 
 	var cycle *trigger.CycleError
@@ -357,7 +396,7 @@ func TestManagerReplace(t *testing.T) {
 
 	r := newManagerRig(t)
 
-	first, err := r.m.Create(t.Context(), person(ada), info, scheduleInput("b"))
+	first, err := r.m.Create(t.Context(), person(ada), reqInfo(), scheduleInput("b"))
 	if err != nil {
 		t.Fatalf("Create = %v", err)
 	}
@@ -367,7 +406,7 @@ func TestManagerReplace(t *testing.T) {
 	in := scheduleInput("b")
 	in.Enabled = false
 
-	got, err := r.m.Replace(t.Context(), person(grace), info, first.ID, in)
+	got, err := r.m.Replace(t.Context(), person(grace), reqInfo(), first.ID, in)
 	if err != nil {
 		t.Fatalf("Replace = %v", err)
 	}
@@ -377,19 +416,19 @@ func TestManagerReplace(t *testing.T) {
 	}
 
 	// The unit and the kind do not change.
-	_, err = r.m.Replace(t.Context(), person(ada), info, first.ID, scheduleInput("c"))
+	_, err = r.m.Replace(t.Context(), person(ada), reqInfo(), first.ID, scheduleInput("c"))
 	wantErr(t, "another unit", err, trigger.ErrInvalid)
 
-	_, err = r.m.Replace(t.Context(), person(ada), info, first.ID, followsInput("b", "a"))
+	_, err = r.m.Replace(t.Context(), person(ada), reqInfo(), first.ID, followsInput("b", "a"))
 	wantErr(t, "another kind", err, trigger.ErrInvalid)
 
-	_, err = r.m.Replace(t.Context(), person(ada), info, "trg-nope", scheduleInput("b"))
+	_, err = r.m.Replace(t.Context(), person(ada), reqInfo(), "trg-nope", scheduleInput("b"))
 	wantErr(t, "an unknown trigger", err, trigger.ErrNotFound)
 
 	other := scheduleInput("b")
 	other.Namespace = "other"
 
-	_, err = r.m.Replace(t.Context(), person(ada), info, first.ID, other)
+	_, err = r.m.Replace(t.Context(), person(ada), reqInfo(), first.ID, other)
 	wantErr(t, "a body for another namespace", err, trigger.ErrNotFound)
 
 	// A person without the actions on the unit of the trigger cannot replace it,
@@ -397,7 +436,7 @@ func TestManagerReplace(t *testing.T) {
 	r.authz.grant(grace, "c", trigger.SettingsAction, trigger.StartAction)
 	delete(r.authz.allow, grace+" "+string(trigger.SettingsAction)+" b")
 
-	_, err = r.m.Replace(t.Context(), person(grace), info, first.ID, scheduleInput("c"))
+	_, err = r.m.Replace(t.Context(), person(grace), reqInfo(), first.ID, scheduleInput("c"))
 	wantErr(t, "a body for a unit the caller may change", err, identity.ErrDenied)
 }
 
@@ -411,7 +450,7 @@ func TestManagerReads(t *testing.T) {
 
 	r := newManagerRig(t)
 
-	created, err := r.m.Create(t.Context(), person(ada), info, scheduleInput("b"))
+	created, err := r.m.Create(t.Context(), person(ada), reqInfo(), scheduleInput("b"))
 	if err != nil {
 		t.Fatalf("Create = %v", err)
 	}
@@ -451,7 +490,7 @@ func TestManagerDelete(t *testing.T) {
 
 	r := newManagerRig(t)
 
-	created, err := r.m.Create(t.Context(), person(ada), info, scheduleInput("b"))
+	created, err := r.m.Create(t.Context(), person(ada), reqInfo(), scheduleInput("b"))
 	if err != nil {
 		t.Fatalf("Create = %v", err)
 	}
@@ -460,16 +499,16 @@ func TestManagerDelete(t *testing.T) {
 	r.authz.grant(grace, "b", identity.ActionUnitRead)
 
 	wantErr(t, "Delete without the settings action",
-		r.m.Delete(t.Context(), person(grace), info, acme, created.ID), identity.ErrDenied)
+		r.m.Delete(t.Context(), person(grace), reqInfo(), acme, created.ID), identity.ErrDenied)
 
 	if r.store.callCount() != 1 {
 		t.Fatalf("store writes = %d, want only the create", r.store.callCount())
 	}
 
-	wantErr(t, "Delete of an unknown trigger", r.m.Delete(t.Context(), person(ada), info, acme, "trg-nope"),
+	wantErr(t, "Delete of an unknown trigger", r.m.Delete(t.Context(), person(ada), reqInfo(), acme, "trg-nope"),
 		trigger.ErrNotFound)
 
-	if err := r.m.Delete(t.Context(), person(ada), info, acme, created.ID); err != nil {
+	if err := r.m.Delete(t.Context(), person(ada), reqInfo(), acme, created.ID); err != nil {
 		t.Fatalf("Delete = %v", err)
 	}
 
@@ -484,7 +523,7 @@ func TestManagerDelete(t *testing.T) {
 		p.Credential = identity.CredentialJobToken
 
 		return p
-	}(), info, acme, created.ID), identity.ErrDenied)
+	}(), reqInfo(), acme, created.ID), identity.ErrDenied)
 }
 
 func noLocation() job.Location {
@@ -502,7 +541,7 @@ func TestManagerFireLocation(t *testing.T) {
 	} {
 		r := newManagerRig(t)
 
-		created, err := r.m.Create(t.Context(), person(ada), info, scheduleInput("b"))
+		created, err := r.m.Create(t.Context(), person(ada), reqInfo(), scheduleInput("b"))
 		if err != nil {
 			t.Fatalf("Create = %v", err)
 		}
@@ -516,12 +555,44 @@ func TestManagerFireLocation(t *testing.T) {
 	}
 }
 
+// checkFireDispatch checks that d got one manual fire of the trigger id by ada.
+func checkFireDispatch(t *testing.T, d *fakeDispatcher, id trigger.ID, loc job.Location) {
+	t.Helper()
+
+	if len(d.actors) != 1 || d.actors[0].Principal.Subject != ada || d.actors[0].Agent != "" ||
+		d.reqs[0].Trigger != id || d.reqs[0].Namespace != acme || d.reqs[0].Reason != "test run" ||
+		d.reqs[0].Now.IsZero() || d.reqs[0].Location != loc {
+		t.Errorf("dispatcher calls = %+v %+v, want the caller as the actor", d.actors, d.reqs)
+	}
+}
+
+// fireInvalidReasons checks that Fire refuses each reason that is not valid.
+func fireInvalidReasons(t *testing.T, r *managerRig, id trigger.ID) {
+	t.Helper()
+
+	for name, reason := range map[string]string{
+		"a long reason":                 strings.Repeat("x", trigger.MaxFireReasonLen+1),
+		"a reason with a line break":    "a\nb",
+		"a reason with a bidi override": "a\u202eb",
+		"a reason that is not UTF-8":    "a\xffb",
+	} {
+		_, err := r.m.Fire(
+			t.Context(),
+			person(ada),
+			acme,
+			id,
+			trigger.FireInput{Reason: reason, Location: noLocation()},
+		)
+		wantErr(t, "Fire with "+name, err, trigger.ErrInvalid)
+	}
+}
+
 func TestManagerFire(t *testing.T) {
 	t.Parallel()
 
 	r := newManagerRig(t)
 
-	created, err := r.m.Create(t.Context(), person(ada), info, scheduleInput("b"))
+	created, err := r.m.Create(t.Context(), person(ada), reqInfo(), scheduleInput("b"))
 	if err != nil {
 		t.Fatalf("Create = %v", err)
 	}
@@ -539,11 +610,7 @@ func TestManagerFire(t *testing.T) {
 		t.Fatalf("Fire = %q, %v; want job-1", id, err)
 	}
 
-	if len(r.disp.actors) != 1 || r.disp.actors[0].Principal.Subject != ada || r.disp.actors[0].Agent != "" ||
-		r.disp.reqs[0].Trigger != created.ID || r.disp.reqs[0].Namespace != acme || r.disp.reqs[0].Reason != "test run" ||
-		r.disp.reqs[0].Now.IsZero() || r.disp.reqs[0].Location != loc {
-		t.Errorf("dispatcher calls = %+v %+v, want the caller as the actor", r.disp.actors, r.disp.reqs)
-	}
+	checkFireDispatch(t, r.disp, created.ID, loc)
 
 	// A caller without unit:read gets the answer for a trigger that does not
 	// exist, and no start.
@@ -567,21 +634,7 @@ func TestManagerFire(t *testing.T) {
 	_, err = r.m.Fire(t.Context(), service, acme, created.ID, trigger.FireInput{Reason: "", Location: noLocation()})
 	wantErr(t, "Fire by the service principal", err, identity.ErrDenied)
 
-	for name, reason := range map[string]string{
-		"a long reason":                 strings.Repeat("x", trigger.MaxFireReasonLen+1),
-		"a reason with a line break":    "a\nb",
-		"a reason with a bidi override": "a\u202eb",
-		"a reason that is not UTF-8":    "a\xffb",
-	} {
-		_, err = r.m.Fire(
-			t.Context(),
-			person(ada),
-			acme,
-			created.ID,
-			trigger.FireInput{Reason: reason, Location: noLocation()},
-		)
-		wantErr(t, "Fire with "+name, err, trigger.ErrInvalid)
-	}
+	fireInvalidReasons(t, r, created.ID)
 
 	r.disp.err = job.ErrFrozen
 

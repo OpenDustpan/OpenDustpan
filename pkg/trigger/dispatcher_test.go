@@ -15,6 +15,8 @@ import (
 
 type countingStarter struct{ started int }
 
+func newStarter() *countingStarter { return &countingStarter{started: 0} }
+
 func (s *countingStarter) StartPlan(context.Context, job.Actor, graph.Unit, trigger.PlanRequest) (job.ID, error) {
 	s.started++
 
@@ -23,10 +25,18 @@ func (s *countingStarter) StartPlan(context.Context, job.Actor, graph.Unit, trig
 
 type failingAudit struct{ calls int }
 
+func newAudit() *failingAudit { return &failingAudit{calls: 0} }
+
+// errAuditDown is the error of an audit store that is down.
+var errAuditDown = errors.New("audit store is down")
+
+// errGrantDown is the error of a grant store that is down.
+var errGrantDown = errors.New("grant store is down")
+
 func (a *failingAudit) Append(context.Context, namespace.Fence, audit.Entry) (audit.Entry, error) {
 	a.calls++
 
-	return audit.Entry{}, errors.New("audit store is down")
+	return audit.Entry{}, errAuditDown
 }
 
 type dispatcherRig struct {
@@ -41,12 +51,13 @@ func newDispatcherRig(t *testing.T, versions trigger.Versions) *dispatcherRig {
 	t.Helper()
 
 	r := &dispatcherRig{
-		starter: &countingStarter{}, audit: &failingAudit{}, savers: &fakeSaverCheck{}, store: newStore(),
+		d:       nil,
+		starter: newStarter(), audit: newAudit(), savers: newSaverCheck(), store: newStore(),
 	}
 
 	d, err := trigger.NewDispatcher(trigger.DispatcherConfig{
 		Store: r.store, Starter: r.starter, Savers: r.savers, Units: newUnits(), Audit: r.audit,
-		Fences: &fakeFences{}, Versions: versions, Now: func() time.Time { return time.UnixMilli(1_800_000_000_000) },
+		Fences: newFences(), Versions: versions, Now: func() time.Time { return time.UnixMilli(1_800_000_000_000) },
 	})
 	if err != nil {
 		t.Fatalf("NewDispatcher = %v", err)
@@ -62,8 +73,8 @@ func TestNewDispatcherNeedsPorts(t *testing.T) {
 	t.Parallel()
 
 	full := trigger.DispatcherConfig{
-		Store: newStore(), Starter: &countingStarter{}, Savers: &fakeSaverCheck{}, Units: newUnits(),
-		Audit: &failingAudit{}, Fences: &fakeFences{}, Versions: nil, Now: nil,
+		Store: newStore(), Starter: newStarter(), Savers: newSaverCheck(), Units: newUnits(),
+		Audit: newAudit(), Fences: newFences(), Versions: nil, Now: nil,
 	}
 
 	for name, mutate := range map[string]func(*trigger.DispatcherConfig){
@@ -111,7 +122,7 @@ func TestDispatcherRefusalIsAuditedAndFailsClosed(t *testing.T) {
 		wantAuditIn bool
 	}{
 		{"a saver that lost access, with a failing audit store", trigger.ErrSaverDenied, 1, true, true},
-		{"a port that fails writes no denial entry", errors.New("grant store is down"), 0, false, false},
+		{"a port that fails writes no denial entry", errGrantDown, 0, false, false},
 	}
 
 	for _, tt := range tests {

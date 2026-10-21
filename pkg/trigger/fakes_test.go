@@ -17,11 +17,18 @@ import (
 	"opendustpan.org/opendustpan/pkg/trigger"
 )
 
+const acme namespace.Name = "acme"
+
 const (
-	acme  namespace.Name = "acme"
-	ada                  = "user:ada"
-	grace                = "user:grace"
+	ada   = "user:ada"
+	grace = "user:grace"
 )
+
+// errNotUsed is the error of a fake method that no test calls.
+var errNotUsed = errors.New("not used")
+
+// errDBDown is the error of a dependency that is down.
+var errDBDown = errors.New("database is down")
 
 // person returns a principal of a person with the subject s.
 func person(s string) identity.Principal {
@@ -68,13 +75,6 @@ func newAuthz() *fakeAuthz {
 	return &fakeAuthz{mu: sync.Mutex{}, allow: map[string]bool{}, fail: map[string]error{}, asked: nil}
 }
 
-// grant allows subject to do the actions on the unit with the ID id.
-func (a *fakeAuthz) grant(subject, id string, actions ...identity.Action) {
-	for _, action := range actions {
-		a.allow[subject+" "+string(action)+" "+id] = true
-	}
-}
-
 func (a *fakeAuthz) Authorize(_ context.Context, p identity.Principal, action identity.Action, obj identity.Object,
 ) error {
 	a.mu.Lock()
@@ -96,6 +96,13 @@ func (a *fakeAuthz) Authorize(_ context.Context, p identity.Principal, action id
 
 func (*fakeAuthz) ListObjects(context.Context, identity.Principal, identity.Action) (identity.Scope, error) {
 	return identity.Scope{Namespaces: nil, Collections: nil, Units: nil, Principals: nil, All: false}, nil
+}
+
+// grant allows subject to do the actions on the unit with the ID id.
+func (a *fakeAuthz) grant(subject, id string, actions ...identity.Action) {
+	for _, action := range actions {
+		a.allow[subject+" "+string(action)+" "+id] = true
+	}
 }
 
 // fakeUnits knows the units whose ID is not in gone.
@@ -128,6 +135,8 @@ func (u *fakeUnits) Find(_ context.Context, ns namespace.Name, unitID string) (g
 
 // fakeFences answers one fence for every namespace.
 type fakeFences struct{ err error }
+
+func newFences() *fakeFences { return &fakeFences{err: nil} }
 
 func (f *fakeFences) Fence(_ context.Context, ns namespace.Name) (namespace.Fence, error) {
 	if f.err != nil {
@@ -179,23 +188,6 @@ func (s *fakeStore) Put(_ context.Context, t trigger.Trigger, _ namespace.Fence,
 	return nil
 }
 
-func (s *fakeStore) all() []trigger.Trigger {
-	out := make([]trigger.Trigger, 0, len(s.triggers))
-	for _, t := range s.triggers {
-		out = append(out, t)
-	}
-
-	slices.SortFunc(out, func(a, b trigger.Trigger) int {
-		if a.ID < b.ID {
-			return -1
-		}
-
-		return 1
-	})
-
-	return out
-}
-
 func (s *fakeStore) Get(_ context.Context, ns namespace.Name, id trigger.ID) (trigger.Trigger, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -214,9 +206,10 @@ func (s *fakeStore) List(_ context.Context, unit graph.Unit) ([]trigger.Trigger,
 
 	var out []trigger.Trigger
 
-	for _, t := range s.all() {
-		if t.Unit == unit {
-			out = append(out, t)
+	all := s.all()
+	for i := range all {
+		if all[i].Unit == unit {
+			out = append(out, all[i])
 		}
 	}
 
@@ -229,9 +222,10 @@ func (s *fakeStore) Followers(_ context.Context, source graph.Unit) ([]trigger.T
 
 	var out []trigger.Trigger
 
-	for _, t := range s.all() {
-		if t.Kind == trigger.KindFollows && t.Enabled && t.Source == source {
-			out = append(out, t)
+	all := s.all()
+	for i := range all {
+		if all[i].Kind == trigger.KindFollows && all[i].Enabled && all[i].Source == source {
+			out = append(out, all[i])
 		}
 	}
 
@@ -255,6 +249,23 @@ func (s *fakeStore) Delete(_ context.Context, _ namespace.Name, id trigger.ID, _
 	return nil
 }
 
+func (s *fakeStore) all() []trigger.Trigger {
+	out := make([]trigger.Trigger, 0, len(s.triggers))
+	for id := range s.triggers {
+		out = append(out, s.triggers[id])
+	}
+
+	slices.SortFunc(out, func(a, b trigger.Trigger) int {
+		if a.ID < b.ID {
+			return -1
+		}
+
+		return 1
+	})
+
+	return out
+}
+
 func (s *fakeStore) callCount() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -268,6 +279,8 @@ type fakeSaverCheck struct {
 	saves   int
 	started int
 }
+
+func newSaverCheck() *fakeSaverCheck { return &fakeSaverCheck{err: nil, saves: 0, started: 0} }
 
 func (c *fakeSaverCheck) CheckSave(context.Context, trigger.Trigger) error {
 	c.saves++
@@ -288,12 +301,14 @@ type fakeDispatcher struct {
 	err    error
 }
 
+func newDispatcher() *fakeDispatcher { return &fakeDispatcher{actors: nil, reqs: nil, err: nil} }
+
 func (*fakeDispatcher) Scheduled(context.Context, namespace.Name, trigger.ID, time.Time) (job.ID, error) {
-	return "", errors.New("not used")
+	return "", errNotUsed
 }
 
 func (*fakeDispatcher) Upstream(context.Context, trigger.Applied) ([]trigger.Outcome, error) {
-	return nil, errors.New("not used")
+	return nil, errNotUsed
 }
 
 func (d *fakeDispatcher) Manual(_ context.Context, actor job.Actor, req trigger.ManualRequest) (job.ID, error) {

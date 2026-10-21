@@ -79,7 +79,7 @@ func TestOutputReadCheck(t *testing.T) {
 		},
 		{
 			"the resolver fails",
-			func(r *fakeResolver, _ *fakeAuthz, _ *fakeStore) { r.errs[ada] = errors.New("database is down") },
+			func(r *fakeResolver, _ *fakeAuthz, _ *fakeStore) { r.errs[ada] = errDBDown },
 			base, false,
 		},
 		{
@@ -99,7 +99,7 @@ func TestOutputReadCheck(t *testing.T) {
 		{
 			"the authorizer fails",
 			func(_ *fakeResolver, a *fakeAuthz, _ *fakeStore) {
-				a.fail[ada+" "+string(read)+" a"] = errors.New("down")
+				a.fail[ada+" "+string(read)+" a"] = errDBDown
 			},
 			base, false,
 		},
@@ -215,12 +215,29 @@ func TestOutputReadCheck(t *testing.T) {
 
 			err = c.Allow(t.Context(), tt.read())
 
-			switch {
-			case tt.want && err != nil:
-				t.Errorf("Allow = %v, want it allowed", err)
-			case !tt.want && !errors.Is(err, identity.ErrDenied):
-				t.Errorf("Allow = %v, want it to wrap identity.ErrDenied", err)
+			if tt.want {
+				checkAllowed(t, err)
+			} else {
+				checkRefused(t, err)
 			}
 		})
+	}
+}
+
+// checkAllowed checks that err is nil.
+func checkAllowed(t *testing.T, err error) {
+	t.Helper()
+
+	if err != nil {
+		t.Errorf("Allow = %v, want it allowed", err)
+	}
+}
+
+// checkRefused checks that err wraps identity.ErrDenied.
+func checkRefused(t *testing.T, err error) {
+	t.Helper()
+
+	if !errors.Is(err, identity.ErrDenied) {
+		t.Errorf("Allow = %v, want it to wrap identity.ErrDenied", err)
 	}
 }

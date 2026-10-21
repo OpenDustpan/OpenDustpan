@@ -41,6 +41,12 @@ const (
 	otherID = "ws-9"
 )
 
+// errNotUsed is the error of a fake method that no test calls.
+var errNotUsed = errors.New("not used")
+
+// errNoList is the error of a route that lists objects.
+var errNoList = errors.New("no route lists objects")
+
 // fakeNamespaces answers every namespace except "absent".
 type fakeNamespaces struct{}
 
@@ -84,9 +90,10 @@ func entries() []coreinventory.Entry {
 func (f fakeInventory) ListUnits(_ context.Context, ns namespace.Name) ([]coreinventory.Entry, error) {
 	var out []coreinventory.Entry
 
-	for _, e := range entries() {
-		if e.Namespace == ns && !f.gone[e.UnitID] {
-			out = append(out, e)
+	all := entries()
+	for i := range all {
+		if all[i].Namespace == ns && !f.gone[all[i].UnitID] {
+			out = append(out, all[i])
 		}
 	}
 
@@ -94,9 +101,10 @@ func (f fakeInventory) ListUnits(_ context.Context, ns namespace.Name) ([]corein
 }
 
 func (f fakeInventory) GetUnit(_ context.Context, unitID string) (coreinventory.Entry, error) {
-	for _, e := range entries() {
-		if e.UnitID == unitID && !f.gone[unitID] {
-			return e, nil
+	all := entries()
+	for i := range all {
+		if all[i].UnitID == unitID && !f.gone[unitID] {
+			return all[i], nil
 		}
 	}
 
@@ -158,17 +166,6 @@ func (s *fakeStore) Put(_ context.Context, t trigger.Trigger, _ namespace.Fence,
 	return nil
 }
 
-func (s *fakeStore) sorted() []trigger.Trigger {
-	out := make([]trigger.Trigger, 0, len(s.triggers))
-	for _, t := range s.triggers {
-		out = append(out, t)
-	}
-
-	slices.SortFunc(out, func(a, b trigger.Trigger) int { return strings.Compare(string(a.ID), string(b.ID)) })
-
-	return out
-}
-
 func (s *fakeStore) Get(_ context.Context, _ namespace.Name, id trigger.ID) (trigger.Trigger, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -187,9 +184,10 @@ func (s *fakeStore) List(_ context.Context, unit graph.Unit) ([]trigger.Trigger,
 
 	var out []trigger.Trigger
 
-	for _, t := range s.sorted() {
-		if t.Unit == unit {
-			out = append(out, t)
+	all := s.sorted()
+	for i := range all {
+		if all[i].Unit == unit {
+			out = append(out, all[i])
 		}
 	}
 
@@ -216,6 +214,17 @@ func (s *fakeStore) Delete(_ context.Context, _ namespace.Name, id trigger.ID, _
 	return nil
 }
 
+func (s *fakeStore) sorted() []trigger.Trigger {
+	out := make([]trigger.Trigger, 0, len(s.triggers))
+	for id := range s.triggers {
+		out = append(out, s.triggers[id])
+	}
+
+	slices.SortFunc(out, func(a, b trigger.Trigger) int { return strings.Compare(string(a.ID), string(b.ID)) })
+
+	return out
+}
+
 func (s *fakeStore) written() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -223,8 +232,8 @@ func (s *fakeStore) written() int {
 	return s.writes
 }
 
-// put stores t without any check.
-func (s *fakeStore) put(t trigger.Trigger) {
+// plant stores t without any check.
+func (s *fakeStore) plant(t trigger.Trigger) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -246,11 +255,11 @@ type dispatcher struct {
 }
 
 func (*dispatcher) Scheduled(context.Context, namespace.Name, trigger.ID, time.Time) (job.ID, error) {
-	return "", errors.New("not used")
+	return "", errNotUsed
 }
 
 func (*dispatcher) Upstream(context.Context, trigger.Applied) ([]trigger.Outcome, error) {
-	return nil, errors.New("not used")
+	return nil, errNotUsed
 }
 
 func (d *dispatcher) Manual(_ context.Context, a job.Actor, req trigger.ManualRequest) (job.ID, error) {
@@ -330,7 +339,7 @@ func (a *recordingAuthorizer) Authorize(
 }
 
 func (*recordingAuthorizer) ListObjects(context.Context, identity.Principal, identity.Action) (identity.Scope, error) {
-	return identity.Scope{}, errors.New("no route lists objects")
+	return identity.Scope{}, errNoList
 }
 
 func (a *recordingAuthorizer) seen() []string {
@@ -352,7 +361,18 @@ type rig struct {
 func newRig(t *testing.T, authz identity.Authorizer) *rig {
 	t.Helper()
 
-	r := &rig{store: newStore(), savers: &savers{}, disp: &dispatcher{}, inv: fakeInventory{gone: map[string]bool{}}}
+	r := &rig{
+		h:      nil,
+		store:  newStore(),
+		savers: &savers{err: nil},
+		disp: &dispatcher{
+			mu:    sync.Mutex{},
+			reqs:  nil,
+			subjs: nil,
+			err:   nil,
+		},
+		inv: fakeInventory{gone: map[string]bool{}},
+	}
 
 	namespaces, err := namespace.NewService(namespace.Config{Store: fakeNamespaces{}, Now: nil, Region: "test-region"})
 	if err != nil {
@@ -413,7 +433,8 @@ func serve(t *testing.T, h http.Handler, r request) *httptest.ResponseRecorder {
 // holdsAll returns the checks of a caller that holds every action on unit net
 // and unit app, and reads the namespace.
 func holdsAll() []string {
-	out := []string{"namespace:read acme"}
+	out := make([]string, 0, 7)
+	out = append(out, "namespace:read acme")
 
 	for _, obj := range []string{"opentofu:acme/net", "pulumi:acme/app"} {
 		for _, a := range []string{"unit:read", "unit:manage", "unit:run-plan"} {

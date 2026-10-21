@@ -84,7 +84,7 @@ func TestSaverCheck(t *testing.T) {
 		{
 			name: "a resolver that fails",
 			setup: func(r *fakeResolver, _ *fakeAuthz, _ *fakeUnits) {
-				r.errs[ada] = errors.New("database is down")
+				r.errs[ada] = errDBDown
 			},
 			trigger: savedFollows(), wantSave: trigger.ErrSaverDenied, wantStart: trigger.ErrSaverDenied,
 		},
@@ -122,7 +122,7 @@ func TestSaverCheck(t *testing.T) {
 		{
 			name: "an authorizer that fails",
 			setup: func(_ *fakeResolver, a *fakeAuthz, _ *fakeUnits) {
-				a.fail[ada+" "+string(trigger.StartAction)+" b"] = errors.New("grant store is down")
+				a.fail[ada+" "+string(trigger.StartAction)+" b"] = errGrantDown
 			},
 			trigger: savedFollows(), wantSave: trigger.ErrSaverDenied, wantStart: trigger.ErrSaverDenied,
 		},
@@ -171,7 +171,7 @@ func TestSaverCheck(t *testing.T) {
 			wantErr(t, "CheckStart", c.CheckStart(t.Context(), tt.trigger), tt.wantStart)
 
 			// Every refusal is a denial for the caller of the check.
-			if tt.wantStart == trigger.ErrSaverDenied {
+			if errors.Is(tt.wantStart, trigger.ErrSaverDenied) {
 				if err := c.CheckStart(t.Context(), tt.trigger); !errors.Is(err, identity.ErrDenied) {
 					t.Errorf("CheckStart = %v, want it to wrap identity.ErrDenied", err)
 				}

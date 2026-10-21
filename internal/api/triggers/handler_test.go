@@ -12,34 +12,54 @@ import (
 	"opendustpan.org/opendustpan/pkg/trigger"
 )
 
+// unitRef is the reference to a unit in an answer.
+type unitRef struct {
+	ID, Tool, Name string
+}
+
+// frequencyAnswer is the frequency of a schedule trigger in an answer.
+type frequencyAnswer struct {
+	Preset string `json:"preset"`
+	Cron   string `json:"cron"`
+}
+
 // answer is the part of a trigger document that the tests read.
 type answer struct {
-	ID        string `json:"id"`
-	Namespace string `json:"namespace"`
-	Unit      struct {
-		ID, Tool, Name string
-	} `json:"unit"`
-	Kind      string `json:"kind"`
-	Frequency *struct {
-		Preset string `json:"preset"`
-		Cron   string `json:"cron"`
-	} `json:"frequency"`
-	Source *struct {
-		ID, Tool, Name string
-	} `json:"source"`
-	Enabled      bool   `json:"enabled"`
-	LastSaver    string `json:"lastSaver"`
-	NeedsNewSave bool   `json:"needsNewSave"`
+	ID           string           `json:"id"`
+	Namespace    string           `json:"namespace"`
+	Unit         unitRef          `json:"unit"`
+	Kind         string           `json:"kind"`
+	Frequency    *frequencyAnswer `json:"frequency"`
+	Source       *unitRef         `json:"source"`
+	Enabled      bool             `json:"enabled"`
+	LastSaver    string           `json:"lastSaver"`
+	NeedsNewSave bool             `json:"needsNewSave"`
 }
 
 type errAnswer struct {
-	Message   string `json:"message"`
-	Code      int    `json:"code"`
-	ErrorCode string `json:"errorCode"`
-	Units     []struct {
-		ID, Tool, Name string
-	} `json:"units"`
+	Message   string    `json:"message"`
+	Code      int       `json:"code"`
+	ErrorCode string    `json:"errorCode"`
+	Units     []unitRef `json:"units"`
 }
+
+// triggerList is the list document of a unit.
+type triggerList struct {
+	Triggers []answer `json:"triggers"`
+}
+
+// jobRef is the reference to a job in the answer of a fire.
+type jobRef struct {
+	ID string `json:"id"`
+}
+
+// fireAnswer is the answer of a fire.
+type fireAnswer struct {
+	Job jobRef `json:"job"`
+}
+
+// errDatabaseDown is an internal error with a text that no answer may repeat.
+var errDatabaseDown = errors.New("database is down: password=x")
 
 func decode[T any](t *testing.T, body string) T {
 	t.Helper()
@@ -66,57 +86,80 @@ func do(t *testing.T, r *rig, method, path, body string) (int, string, http.Head
 	return rec.Code, rec.Body.String(), rec.Header()
 }
 
+// createKind is one kind of trigger to create, with the check of its answer.
+type createKind struct {
+	name string
+	body string
+	want func(t *testing.T, a answer)
+}
+
+func wantSchedulePreset(t *testing.T, a answer) {
+	t.Helper()
+
+	if a.Kind != "schedule" || a.Frequency == nil || a.Frequency.Preset != "every-6-hours" || a.Source != nil {
+		t.Errorf("answer = %+v", a)
+	}
+}
+
+func wantScheduleCron(t *testing.T, a answer) {
+	t.Helper()
+
+	if a.Frequency == nil || a.Frequency.Cron != "30 4 * * 1-5" || a.Enabled {
+		t.Errorf("answer = %+v", a)
+	}
+}
+
+func wantFollows(t *testing.T, a answer) {
+	t.Helper()
+
+	if a.Source == nil || a.Source.ID != appID || a.Source.Tool != "Pulumi" || a.Source.Name != "app" ||
+		a.Frequency != nil || !a.Enabled {
+		t.Errorf("answer = %+v", a)
+	}
+}
+
+func wantReviewRequestPush(t *testing.T, a answer) {
+	t.Helper()
+
+	if a.Kind != "review-request-push" || a.Frequency != nil || a.Source != nil {
+		t.Errorf("answer = %+v", a)
+	}
+}
+
+// checkCreated checks the parts of a created trigger that every kind shares.
+func checkCreated(t *testing.T, r *rig, a answer, header http.Header) {
+	t.Helper()
+
+	if a.ID != "trg-1" || a.Namespace != "acme" || a.Unit.ID != netID || a.Unit.Tool != "OpenTofu" ||
+		a.Unit.Name != "net" || a.LastSaver != ada || a.NeedsNewSave {
+		t.Errorf("answer = %+v, want trg-1 on unit net, saved by %s", a, ada)
+	}
+
+	if got := header.Get("Location"); got != basePath+"/trg-1" {
+		t.Errorf("Location = %q, want %q", got, basePath+"/trg-1")
+	}
+
+	if stored := r.store.triggers["trg-1"]; stored.LastSaver != ada || stored.Unit != unitNet() {
+		t.Errorf("stored = %+v", stored)
+	}
+}
+
 func TestCreateEachKind(t *testing.T) {
 	t.Parallel()
 
-	tests := []struct {
-		name string
-		body string
-		want func(t *testing.T, a answer)
-	}{
+	tests := []createKind{
 		{
-			"a schedule trigger with a preset", `{"kind":"schedule","frequency":{"preset":"every-6-hours"}}`,
-			func(t *testing.T, a answer) {
-				t.Helper()
-
-				if a.Kind != "schedule" || a.Frequency == nil || a.Frequency.Preset != "every-6-hours" ||
-					a.Source != nil {
-					t.Errorf("answer = %+v", a)
-				}
-			},
+			"a schedule trigger with a preset",
+			`{"kind":"schedule","frequency":{"preset":"every-6-hours"}}`,
+			wantSchedulePreset,
 		},
 		{
 			"a schedule trigger with a cron expression",
 			`{"kind":"schedule","frequency":{"cron":"30 4 * * 1-5"},"enabled":false}`,
-			func(t *testing.T, a answer) {
-				t.Helper()
-
-				if a.Frequency == nil || a.Frequency.Cron != "30 4 * * 1-5" || a.Enabled {
-					t.Errorf("answer = %+v", a)
-				}
-			},
+			wantScheduleCron,
 		},
-		{
-			"a follows trigger", `{"kind":"follows","source":{"id":"` + appID + `"}}`,
-			func(t *testing.T, a answer) {
-				t.Helper()
-
-				if a.Source == nil || a.Source.ID != appID || a.Source.Tool != "Pulumi" || a.Source.Name != "app" ||
-					a.Frequency != nil || !a.Enabled {
-					t.Errorf("answer = %+v", a)
-				}
-			},
-		},
-		{
-			"a review-request-push trigger", `{"kind":"review-request-push"}`,
-			func(t *testing.T, a answer) {
-				t.Helper()
-
-				if a.Kind != "review-request-push" || a.Frequency != nil || a.Source != nil {
-					t.Errorf("answer = %+v", a)
-				}
-			},
-		},
+		{"a follows trigger", `{"kind":"follows","source":{"id":"` + appID + `"}}`, wantFollows},
+		{"a review-request-push trigger", `{"kind":"review-request-push"}`, wantReviewRequestPush},
 	}
 
 	for _, tt := range tests {
@@ -132,20 +175,8 @@ func TestCreateEachKind(t *testing.T) {
 
 			a := decode[answer](t, body)
 
-			if a.ID != "trg-1" || a.Namespace != "acme" || a.Unit.ID != netID || a.Unit.Tool != "OpenTofu" ||
-				a.Unit.Name != "net" || a.LastSaver != ada || a.NeedsNewSave {
-				t.Errorf("answer = %+v, want trg-1 on unit net, saved by %s", a, ada)
-			}
-
+			checkCreated(t, r, a, header)
 			tt.want(t, a)
-
-			if got := header.Get("Location"); got != basePath+"/trg-1" {
-				t.Errorf("Location = %q, want %q", got, basePath+"/trg-1")
-			}
-
-			if stored := r.store.triggers["trg-1"]; stored.LastSaver != ada || stored.Unit != unitNet() {
-				t.Errorf("stored = %+v", stored)
-			}
 		})
 	}
 }
@@ -294,11 +325,8 @@ func TestCreateRefusals(t *testing.T) {
 				t.Fatalf("status = %d %s, want %d", code, body, tt.status)
 			}
 
-			if got := decode[errAnswer](
-				t,
-				body,
-			); got.ErrorCode != tt.errorCode || got.Code != tt.status ||
-				got.Message == "" {
+			got := decode[errAnswer](t, body)
+			if got.ErrorCode != tt.errorCode || got.Code != tt.status || got.Message == "" {
 				t.Errorf("answer = %+v, want code %q", got, tt.errorCode)
 			}
 
@@ -306,6 +334,18 @@ func TestCreateRefusals(t *testing.T) {
 				t.Errorf("a refused save wrote %d times", r.store.written())
 			}
 		})
+	}
+}
+
+// checkCyclePath checks that the path starts and ends with the same unit and
+// uses the names and tool labels of the tools.
+func checkCyclePath(t *testing.T, units []unitRef) {
+	t.Helper()
+
+	first, last := units[0], units[len(units)-1]
+	if first != last || first.ID != appID || first.Name != "app" || first.Tool != "Pulumi" ||
+		units[1].ID != netID || units[1].Name != "net" || units[1].Tool != "OpenTofu" {
+		t.Errorf("units = %+v", units)
 	}
 }
 
@@ -332,13 +372,7 @@ func TestCreateCycleNamesTheUnits(t *testing.T) {
 		t.Fatalf("answer = %+v, want the cycle code and three units in the path", got)
 	}
 
-	// The path starts and ends with the same unit and uses the names and tool
-	// labels of the tools.
-	first, last := got.Units[0], got.Units[len(got.Units)-1]
-	if first != last || first.ID != appID || first.Name != "app" || first.Tool != "Pulumi" ||
-		got.Units[1].ID != netID || got.Units[1].Name != "net" || got.Units[1].Tool != "OpenTofu" {
-		t.Errorf("units = %+v", got.Units)
-	}
+	checkCyclePath(t, got.Units)
 
 	if !strings.Contains(got.Message, "app -> net -> app") {
 		t.Errorf("message = %q, want the path by name", got.Message)
@@ -356,38 +390,45 @@ func TestReplaceGetListDelete(t *testing.T) {
 
 	path := basePath + "/trg-1"
 
-	// Replace.
-	code, body, _ := do(
-		t,
-		r,
-		http.MethodPut,
-		path,
-		`{"kind":"schedule","frequency":{"cron":"0 6 * * *"},"enabled":false}`,
-	)
-	if a := decode[answer](
-		t,
-		body,
-	); code != http.StatusOK || a.Enabled || a.Frequency == nil ||
-		a.Frequency.Cron != "0 6 * * *" {
+	checkReplace(t, r, path)
+	checkGetAndList(t, r, path)
+	checkDelete(t, r, path)
+}
+
+func checkReplace(t *testing.T, r *rig, path string) {
+	t.Helper()
+
+	code, body, _ := do(t, r, http.MethodPut, path,
+		`{"kind":"schedule","frequency":{"cron":"0 6 * * *"},"enabled":false}`)
+
+	a := decode[answer](t, body)
+	if code != http.StatusOK || a.Enabled || a.Frequency == nil || a.Frequency.Cron != "0 6 * * *" {
 		t.Fatalf("replace = %d %s", code, body)
 	}
 
 	// Replace with another kind.
 	code, body, _ = do(t, r, http.MethodPut, path, `{"kind":"review-request-push"}`)
-	if got := decode[errAnswer](t, body); code != http.StatusBadRequest || got.ErrorCode != "trigger.invalid" {
+
+	got := decode[errAnswer](t, body)
+	if code != http.StatusBadRequest || got.ErrorCode != "trigger.invalid" {
 		t.Fatalf("replace with another kind = %d %s, want 400", code, body)
 	}
+}
 
-	// Get and list.
-	code, body, _ = do(t, r, http.MethodGet, path, "")
-	if a := decode[answer](t, body); code != http.StatusOK || a.ID != "trg-1" || a.Enabled {
+func checkGetAndList(t *testing.T, r *rig, path string) {
+	t.Helper()
+
+	code, body, _ := do(t, r, http.MethodGet, path, "")
+
+	a := decode[answer](t, body)
+	if code != http.StatusOK || a.ID != "trg-1" || a.Enabled {
 		t.Fatalf("get = %d %s", code, body)
 	}
 
 	code, body, _ = do(t, r, http.MethodGet, basePath, "")
-	if list := decode[struct {
-		Triggers []answer `json:"triggers"`
-	}](t, body); code != http.StatusOK || len(list.Triggers) != 1 || list.Triggers[0].ID != "trg-1" {
+
+	list := decode[triggerList](t, body)
+	if code != http.StatusOK || len(list.Triggers) != 1 || list.Triggers[0].ID != "trg-1" {
 		t.Fatalf("list = %d %s", code, body)
 	}
 
@@ -396,8 +437,13 @@ func TestReplaceGetListDelete(t *testing.T) {
 	if code != http.StatusOK || !strings.Contains(body, `"triggers":[]`) {
 		t.Fatalf("list of an empty unit = %d %s, want an empty array", code, body)
 	}
+}
 
-	// Delete, then the trigger is gone.
+// checkDelete checks that a delete removes the trigger, and a second delete
+// answers 404.
+func checkDelete(t *testing.T, r *rig, path string) {
+	t.Helper()
+
 	if code, body, _ := do(t, r, http.MethodDelete, path, ""); code != http.StatusNoContent || body != "" {
 		t.Fatalf("delete = %d %q", code, body)
 	}
@@ -430,24 +476,25 @@ func TestNeedsNewSave(t *testing.T) {
 	}
 
 	_, body, _ = do(t, r, http.MethodGet, basePath, "")
-	if list := decode[struct {
-		Triggers []answer `json:"triggers"`
-	}](t, body); len(list.Triggers) != 1 || !list.Triggers[0].NeedsNewSave {
+	list := decode[triggerList](t, body)
+	if len(list.Triggers) != 1 || !list.Triggers[0].NeedsNewSave {
 		t.Fatalf("list = %s, want a trigger that needs a new save", body)
 	}
 }
 
-func TestFire(t *testing.T) {
-	t.Parallel()
+// fireCase is one fire of the trigger trg-seed.
+type fireCase struct {
+	name      string
+	body      string
+	setup     func(r *rig)
+	status    int
+	errorCode string
+	reason    string
+}
 
-	tests := []struct {
-		name      string
-		body      string
-		setup     func(r *rig)
-		status    int
-		errorCode string
-		reason    string
-	}{
+// fireCases returns the cases of TestFire.
+func fireCases() []fireCase {
+	return []fireCase{
 		{"no body", ``, nil, http.StatusCreated, "", ""},
 		{"a reason", `{"reason":"test run"}`, nil, http.StatusCreated, "", "test run"},
 		{"an empty object", `{}`, nil, http.StatusCreated, "", ""},
@@ -535,14 +582,18 @@ func TestFire(t *testing.T) {
 		{
 			"a failure of the server",
 			``,
-			func(r *rig) { r.disp.err = errors.New("database is down: password=x") },
+			func(r *rig) { r.disp.err = errDatabaseDown },
 			http.StatusInternalServerError,
 			"",
 			"",
 		},
 	}
+}
 
-	for _, tt := range tests {
+func TestFire(t *testing.T) {
+	t.Parallel()
+
+	for _, tt := range fireCases() {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -559,43 +610,51 @@ func TestFire(t *testing.T) {
 			}
 
 			if code != http.StatusCreated {
-				got := decode[errAnswer](t, body)
-				if got.ErrorCode != tt.errorCode {
-					t.Errorf("error code = %q, want %q", got.ErrorCode, tt.errorCode)
-				}
-
-				if strings.Contains(body, "password") {
-					t.Errorf("the answer repeats the text of an internal error: %s", body)
-				}
+				checkFireRefused(t, body, tt.errorCode)
 
 				return
 			}
 
-			var res struct {
-				Job struct {
-					ID string `json:"id"`
-				} `json:"job"`
-			}
-
-			if err := json.Unmarshal([]byte(body), &res); err != nil || res.Job.ID != "job-abc" {
-				t.Fatalf("answer = %s, want the job job-abc", body)
-			}
-
-			if got := header.Get("Location"); got != "/api/dustpan/v1/namespaces/acme/jobs/job-abc" {
-				t.Errorf("Location = %q", got)
-			}
-
-			if len(r.disp.reqs) != 1 || r.disp.subjs[0] != ada || r.disp.reqs[0].Trigger != "trg-seed" ||
-				r.disp.reqs[0].Namespace != "acme" || r.disp.reqs[0].Reason != tt.reason {
-				t.Errorf("dispatcher calls = %+v by %v", r.disp.reqs, r.disp.subjs)
-			}
-
-			if hasLocation := strings.Contains(
-				tt.body,
-				`"repository"`,
-			); hasLocation != !r.disp.reqs[0].Location.IsZero() {
-				t.Errorf("location = %+v for the body %q", r.disp.reqs[0].Location, tt.body)
-			}
+			checkFired(t, r, body, header, &tt)
 		})
+	}
+}
+
+// checkFireRefused checks the error answer of a fire that failed.
+func checkFireRefused(t *testing.T, body, errorCode string) {
+	t.Helper()
+
+	got := decode[errAnswer](t, body)
+	if got.ErrorCode != errorCode {
+		t.Errorf("error code = %q, want %q", got.ErrorCode, errorCode)
+	}
+
+	if strings.Contains(body, "password") {
+		t.Errorf("the answer repeats the text of an internal error: %s", body)
+	}
+}
+
+// checkFired checks the answer of a fire that started a job, and the call that
+// reached the dispatcher.
+func checkFired(t *testing.T, r *rig, body string, header http.Header, tt *fireCase) {
+	t.Helper()
+
+	var res fireAnswer
+	if err := json.Unmarshal([]byte(body), &res); err != nil || res.Job.ID != "job-abc" {
+		t.Fatalf("answer = %s, want the job job-abc", body)
+	}
+
+	if got := header.Get("Location"); got != "/api/dustpan/v1/namespaces/acme/jobs/job-abc" {
+		t.Errorf("Location = %q", got)
+	}
+
+	if len(r.disp.reqs) != 1 || r.disp.subjs[0] != ada || r.disp.reqs[0].Trigger != "trg-seed" ||
+		r.disp.reqs[0].Namespace != "acme" || r.disp.reqs[0].Reason != tt.reason {
+		t.Errorf("dispatcher calls = %+v by %v", r.disp.reqs, r.disp.subjs)
+	}
+
+	hasLocation := strings.Contains(tt.body, `"repository"`)
+	if hasLocation != !r.disp.reqs[0].Location.IsZero() {
+		t.Errorf("location = %+v for the body %q", r.disp.reqs[0].Location, tt.body)
 	}
 }

@@ -36,7 +36,8 @@ func casesOf(t *testing.T) []routeCase {
 		path := strings.NewReplacer("{namespace}", "acme", "{unit_id}", netID, "{trigger_id}", "trg-seed").
 			Replace(route.Path)
 		object := "opentofu:acme/net"
-		checks := []string{string(identity.ActionNamespaceRead) + " acme"}
+		checks := make([]string, 0, 1+len(route.Reads)+len(route.Actions))
+		checks = append(checks, string(identity.ActionNamespaceRead)+" acme")
 
 		for _, a := range route.Reads {
 			checks = append(checks, string(a)+" "+object)
@@ -62,7 +63,7 @@ func casesOf(t *testing.T) []routeCase {
 
 // seed stores the trigger trg-seed on unit net.
 func seed(r *rig) {
-	r.store.put(trigger.Trigger{
+	r.store.plant(trigger.Trigger{
 		ID: "trg-seed", Unit: unitNet(), Kind: trigger.KindSchedule,
 		Frequency: trigger.Frequency{Preset: cron.PresetDaily, Cron: ""}, Source: noUnit(), Enabled: true,
 		LastSaver: ada,
@@ -84,6 +85,40 @@ func (rc *routeCase) wantStatus(held int) int {
 	}
 }
 
+// checkNoTokenRefused checks that each route fails closed for a request with no
+// token: 401, never 404.
+func checkNoTokenRefused(t *testing.T, handler http.Handler) {
+	t.Helper()
+
+	cases := casesOf(t)
+	for i := range cases {
+		rc := &cases[i]
+
+		rec := serve(t, handler, request{method: rc.route.Method, path: rc.path, token: "", body: "", header: nil})
+		if rec.Code != http.StatusUnauthorized {
+			t.Errorf("route %q with no token = %d, want 401", rc.route.Method+" "+rc.route.Path, rec.Code)
+		}
+	}
+}
+
+// checkRouteShape fails for a route with no scope, no read action or no
+// resolver, and for a write route with no action.
+func checkRouteShape(t *testing.T, pattern string, route triggers.Route) {
+	t.Helper()
+
+	switch {
+	case route.Scope != triggers.ScopeAuthorized:
+		t.Errorf("route %q is not authorized: this API serves no public route", pattern)
+	case len(route.Reads) == 0:
+		t.Errorf("route %q declares no read action", pattern)
+	case route.Resolve == nil || route.Serve == nil:
+		t.Errorf("route %q declares no resolver or no handler", pattern)
+	case (route.Method == http.MethodGet) != (len(route.Actions) == 0):
+		t.Errorf("route %q: only a read route may declare no action", pattern)
+	default:
+	}
+}
+
 // TestRoutesDeclareActions walks every route and fails for a route with no
 // scope, no read action or no resolver, and for a write route with no action.
 // It checks both directions: every served pattern has a table row, and every
@@ -102,17 +137,7 @@ func TestRoutesDeclareActions(t *testing.T) {
 
 		byPattern[pattern] = route
 
-		switch {
-		case route.Scope != triggers.ScopeAuthorized:
-			t.Errorf("route %q is not authorized: this API serves no public route", pattern)
-		case len(route.Reads) == 0:
-			t.Errorf("route %q declares no read action", pattern)
-		case route.Resolve == nil || route.Serve == nil:
-			t.Errorf("route %q declares no resolver or no handler", pattern)
-		case (route.Method == http.MethodGet) != (len(route.Actions) == 0):
-			t.Errorf("route %q: only a read route may declare no action", pattern)
-		default:
-		}
+		checkRouteShape(t, pattern, route)
 	}
 
 	for _, pattern := range handler.RegisteredPatterns() {
@@ -125,13 +150,7 @@ func TestRoutesDeclareActions(t *testing.T) {
 		t.Errorf("the table has %d rows and the mux %d patterns", len(byPattern), len(handler.RegisteredPatterns()))
 	}
 
-	// Each route fails closed for a request with no token: 401, never 404.
-	for _, rc := range casesOf(t) {
-		rec := serve(t, handler, request{method: rc.route.Method, path: rc.path, token: "", body: "", header: nil})
-		if rec.Code != http.StatusUnauthorized {
-			t.Errorf("route %q with no token = %d, want 401", rc.route.Method+" "+rc.route.Path, rec.Code)
-		}
-	}
+	checkNoTokenRefused(t, handler)
 }
 
 // TestNoMuxBypass proves every served route goes through the recorder: it fails
@@ -177,37 +196,45 @@ func TestRoutesEnforceTheChecks(t *testing.T) {
 				func(t *testing.T) {
 					t.Parallel()
 
-					authz := newAuthorizer(rc.checks[:held]...)
-					r := newRig(t, authz)
-					seed(r)
-
-					before := r.store.written()
-					rec := serve(t, r.h, request{
-						method: rc.route.Method, path: rc.path, token: testToken, body: rc.body, header: nil,
-					})
-
-					want := rc.wantStatus(held)
-					if rec.Code != want {
-						t.Fatalf("status = %d %s, want %d", rec.Code, rec.Body.String(), want)
-					}
-
-					got := authz.seen()
-					wantChecks := rc.checks[:min(held+1, len(rc.checks))]
-
-					if len(got) < len(wantChecks) || !slices.Equal(got[:len(wantChecks)], wantChecks) {
-						t.Errorf("checks = %q, want %q first, in order", got, wantChecks)
-					}
-
-					if rc.route.Method == http.MethodGet {
-						return
-					}
-
-					wrote := r.store.written() != before || r.disp.fires() > 0
-					if wrote != (held == len(rc.checks)) {
-						t.Errorf("writes = %v for status %d", wrote, want)
-					}
+					checkRouteHolding(t, &rc, held)
 				})
 		}
+	}
+}
+
+// checkRouteHolding calls the route of rc as a caller that holds the first held
+// checks, and checks the status, the order of the checks and the writes.
+func checkRouteHolding(t *testing.T, rc *routeCase, held int) {
+	t.Helper()
+
+	authz := newAuthorizer(rc.checks[:held]...)
+	r := newRig(t, authz)
+	seed(r)
+
+	before := r.store.written()
+	rec := serve(t, r.h, request{
+		method: rc.route.Method, path: rc.path, token: testToken, body: rc.body, header: nil,
+	})
+
+	want := rc.wantStatus(held)
+	if rec.Code != want {
+		t.Fatalf("status = %d %s, want %d", rec.Code, rec.Body.String(), want)
+	}
+
+	got := authz.seen()
+	wantChecks := rc.checks[:min(held+1, len(rc.checks))]
+
+	if len(got) < len(wantChecks) || !slices.Equal(got[:len(wantChecks)], wantChecks) {
+		t.Errorf("checks = %q, want %q first, in order", got, wantChecks)
+	}
+
+	if rc.route.Method == http.MethodGet {
+		return
+	}
+
+	wrote := r.store.written() != before || r.disp.fires() > 0
+	if wrote != (held == len(rc.checks)) {
+		t.Errorf("writes = %v for status %d", wrote, want)
 	}
 }
 
@@ -220,7 +247,7 @@ func TestUnknownObjectsAnswerAlike(t *testing.T) {
 	authz := newAuthorizer(holdsAll()...)
 	r := newRig(t, authz)
 	seed(r)
-	r.store.put(trigger.Trigger{
+	r.store.plant(trigger.Trigger{
 		ID: "trg-app", Unit: graphUnit("pulumi", appID), Kind: trigger.KindSchedule,
 		Frequency: trigger.Frequency{Preset: cron.PresetDaily, Cron: ""}, Source: noUnit(), Enabled: true,
 		LastSaver: ada,
