@@ -133,7 +133,7 @@ func message(secrets ...[]byte) notify.Message {
 	return notify.Message{
 		Notification: notification(),
 		Sink: notify.Sink{
-			ID: "snk-1", Scope: "shop", Kind: notify.SinkWebhook, Name: "Ops",
+			ID: "snk-1", Scope: "shop", Kind: notify.SinkWebhook, Name: "Ops", Platform: "",
 			Target: "https://hooks.example.com/ops/" + canaryToken, SecretRefs: []string{"itm-1"},
 			CreatedBy: "alice", Version: 1,
 		},

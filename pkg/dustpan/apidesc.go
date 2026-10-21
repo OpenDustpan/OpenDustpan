@@ -23,25 +23,31 @@ type routeSource struct {
 	patterns []string
 }
 
-// handlers lists the mounted adapters by name. A module that is off has a nil
-// handler and is left out.
-func (a adapters) handlers() []namedHandler {
-	all := []namedHandler{
+// allHandlers lists every adapter field by name, nil ones included. A new
+// http.Handler field of adapters needs a row here: TestEveryHandlerFieldIsListed
+// fails without it.
+func (a adapters) allHandlers() []namedHandler {
+	return []namedHandler{
 		{"server", a.server},
 		{"inventory", a.inventory},
 		{"audit", a.audit},
 		{"context", a.context},
 		{"runners", a.runners},
 		{"profiles", a.profiles},
+		{"sinks", a.sinks},
 		{"jobs", a.jobs},
 		{"pulumi", a.pulumi},
 		{"tfe", a.tfe},
 		{"tofuhttp", a.tofuHTTP},
 	}
+}
 
+// handlers lists the mounted adapters by name. A module that is off has a nil
+// handler and is left out.
+func (a adapters) handlers() []namedHandler {
 	var out []namedHandler
 
-	for _, h := range all {
+	for _, h := range a.allHandlers() {
 		if !isNilHandler(h.handler) {
 			out = append(out, h)
 		}

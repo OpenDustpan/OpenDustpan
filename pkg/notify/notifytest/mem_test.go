@@ -40,6 +40,28 @@ func TestMemConformance(t *testing.T) {
 	})
 }
 
+// TestMemSinkConformance runs the suite of the sink store against the
+// reference adapter in memory.
+func TestMemSinkConformance(t *testing.T) {
+	t.Parallel()
+
+	notifytest.RunSinks(t, func(*testing.T) notifytest.SinkHarness {
+		db := &memStore{
+			Domain:        opsmem.New(),
+			notifications: nil,
+			sequences:     map[namespace.Name]int64{},
+			cursors:       map[cursorKey]int64{},
+			sinks:         map[string]notify.Sink{},
+			subs:          map[string]notify.Subscription{},
+			deliveries:    map[string]notify.Delivery{},
+			secrets:       map[secretKey]storedSecret{},
+			usedRefs:      map[secretKey]bool{},
+		}
+
+		return notifytest.SinkHarness{Sinks: db, Domain: db}
+	})
+}
+
 type cursorKey struct {
 	name  string
 	scope namespace.Name
@@ -185,12 +207,8 @@ func (m *memStore) PutSink(
 
 	return scoped(m.writeEntry(fence, opsmem.Scope(s.Scope), e, func() error {
 		old, ok := m.sinks[s.ID]
-		if ok && old.Scope != s.Scope {
-			return fmt.Errorf("put sink %s: %w", s.ID, notify.ErrNotFound)
-		}
-
-		if old.Version != s.Version {
-			return fmt.Errorf("put sink %s: %w", s.ID, notify.ErrConflict)
+		if err := checkSinkWrite(old, ok, s); err != nil {
+			return err
 		}
 
 		if err := m.checkSecrets(s, secrets); err != nil {
@@ -209,6 +227,21 @@ func (m *memStore) PutSink(
 
 		return nil
 	}), notify.ErrInvalid)
+}
+
+// checkSinkWrite checks the write of s against the stored sink old, which is
+// the zero sink when ok is false.
+func checkSinkWrite(old notify.Sink, ok bool, s notify.Sink) error {
+	switch {
+	case ok && old.Scope != s.Scope:
+		return fmt.Errorf("put sink %s: %w", s.ID, notify.ErrNotFound)
+	case old.Version != s.Version:
+		return fmt.Errorf("put sink %s: %w", s.ID, notify.ErrConflict)
+	case ok && (old.Kind != s.Kind || old.Platform != s.Platform):
+		return fmt.Errorf("put sink %s: %w: a new kind or platform is a new sink", s.ID, notify.ErrInvalid)
+	default:
+		return nil
+	}
 }
 
 func (m *memStore) SinkSecrets(_ context.Context, scope namespace.Name, id string) ([]notify.SealedSecret, error) {
@@ -248,6 +281,16 @@ func (m *memStore) DeleteSink(_ context.Context, id string, fence namespace.Fenc
 		scope := m.sinks[id].Scope
 		maps.DeleteFunc(m.secrets, func(k secretKey, v storedSecret) bool { return k.scope == scope && v.sink == id })
 		delete(m.sinks, id)
+
+		return nil
+	}), notify.ErrNotFound)
+}
+
+func (m *memStore) RecordSinkTest(_ context.Context, id string, fence namespace.Fence, e audit.Entry) error {
+	return scoped(m.writeEntry(fence, m.sinkScope(id), e, func() error {
+		if _, ok := m.sinks[id]; !ok {
+			return fmt.Errorf("record test of sink %s: %w", id, notify.ErrNotFound)
+		}
 
 		return nil
 	}), notify.ErrNotFound)
