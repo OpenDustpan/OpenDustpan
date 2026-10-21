@@ -105,6 +105,7 @@ func (h *Handler) buildRoutes() []Route {
 	routes = append(routes, h.openAPIRoutes()...)
 	routes = append(routes, h.signInProviderRoutes()...)
 	routes = append(routes, h.preferencesRoutes()...)
+	routes = append(routes, h.gitHostRoutes()...)
 
 	return routes
 }
