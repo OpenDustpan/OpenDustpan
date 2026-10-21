@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -96,6 +97,8 @@ type fake struct {
 	lastJWT     string
 	lastToken   string
 	minted      int
+	mintBody    string
+	revoked     int
 }
 
 func newFake(t *testing.T, key *rsa.PrivateKey, userToken string) *fake {
@@ -231,6 +234,15 @@ func (f *fake) redirect(target string) {
 	f.redirectTo = target
 }
 
+// revocation returns the body of the last token request and the number of
+// tokens that the adapter revoked.
+func (f *fake) revocation() (string, int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	return f.mintBody, f.revoked
+}
+
 func (f *fake) seen() (string, int) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -326,11 +338,18 @@ func (f *fake) route(w http.ResponseWriter, r *http.Request, bearer string) {
 	case r.Method == http.MethodPost && r.URL.Path == prefix+"/access_tokens":
 		f.minted++
 
+		body, _ := io.ReadAll(io.LimitReader(r.Body, 1<<10)) //nolint:errcheck // A test server.
+		f.mintBody = string(body)
+
 		writeJSON(
 			w,
 			http.StatusCreated,
 			map[string]any{"token": "ghs_" + strings.Repeat("x", 36), "expires_at": "2099-01-01T00:00:00Z"},
 		)
+	case r.Method == http.MethodDelete && r.URL.Path == "/installation/token":
+		f.revoked++
+
+		w.WriteHeader(http.StatusNoContent)
 	case r.Method == http.MethodGet && r.URL.Path == "/user":
 		f.lastToken = bearer
 
@@ -350,6 +369,10 @@ func (f *fake) route(w http.ResponseWriter, r *http.Request, bearer string) {
 func (f *fake) authorized(r *http.Request, bearer string) bool {
 	if r.URL.Path == "/user" {
 		return bearer == f.token
+	}
+
+	if r.URL.Path == "/installation/token" {
+		return bearer == "ghs_"+strings.Repeat("x", 36)
 	}
 
 	return verifyJWT(bearer, f.pub) == nil

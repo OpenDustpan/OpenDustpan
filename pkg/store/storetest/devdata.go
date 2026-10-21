@@ -1177,14 +1177,18 @@ func testDevKeepDropsTempAdmins(t *testing.T, newStore DevDataFactory) {
 	dst := newStore(t, installation.KindProduction)
 
 	// Give the live data a principal: a swap of a first backup brings it.
-	first := newDevExport(t, newStore).with(t, "principals", DevPrincipalRow("prn-live", "alice"))
+	// Both backups come from one export, so they name the same namespaces: the
+	// kept installation rows of the live data name a namespace that the second
+	// backup holds.
+	base := newDevExport(t, newStore)
+	first := base.with(t, "principals", DevPrincipalRow("prn-live", "alice"))
 	first.mustStage(t, dst)
 
 	if err := dst.ApplyStaging(t.Context()); err != nil {
 		t.Fatalf("apply the first backup: %v", err)
 	}
 
-	second := newDevExport(t, newStore).
+	second := base.
 		with(t, "principals", DevPrincipalRow("prn-live", "alice")).
 		with(t, "temp_admins",
 			DevTempAdminRow("prn-live", "alice"), DevTempAdminRow("prn-absent", "bob"),

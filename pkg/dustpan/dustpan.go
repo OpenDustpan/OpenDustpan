@@ -690,9 +690,7 @@ type services struct {
 // defaultSettings answers the settings of a server before its options.
 func defaultSettings() *settings {
 	return &settings{
-		denialLimiter: denylimit.New(denylimit.Config{
-			Window: 0, MaxKeys: 0, MaxFlush: 0, MaxKeysPerPrincipal: 0, Now: nil,
-		}),
+		denialLimiter:           defaultDenialLimiter(),
 		devRefusal:              new(devRefusalState),
 		stackRefusals:           nil,
 		disablePulumiJournaling: false,
@@ -712,7 +710,7 @@ func defaultSettings() *settings {
 		profileStore:            nil,
 		jobStore:                nil,
 		savedViewStore:          nil,
-		gitHost:                 gitHostSettings{store: nil, allow: nil, cas: nil},
+		gitHost:                 gitHostSettings{store: nil, allow: nil, cas: nil, loopback: false, checkLimits: nil},
 		idempotencyStore:        nil,
 		authenticator:           nil,
 		authorizer:              nil,
@@ -760,6 +758,13 @@ func defaultSettings() *settings {
 		allowDevBackups:         false,
 		allowDevHint:            "",
 	}
+}
+
+// defaultDenialLimiter returns the denial limiter with its default limits.
+func defaultDenialLimiter() *denylimit.Limiter {
+	return denylimit.New(denylimit.Config{
+		Window: 0, MaxKeys: 0, MaxFlush: 0, MaxKeysPerPrincipal: 0, Now: nil,
+	})
 }
 
 // NewServer validates the options and wires the server together.

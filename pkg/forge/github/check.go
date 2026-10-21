@@ -90,15 +90,55 @@ func (f *gitHub) checkApp(ctx context.Context) (forge.Account, error) {
 		return forge.Account{}, err
 	}
 
-	// The call proves that the key can make an installation token. The
-	// adapter reads no field of the answer and never keeps the token.
-	if _, mintErr := f.do(ctx, http.MethodPost, path+"/access_tokens", jwt, []byte("{}")); mintErr != nil {
-		return forge.Account{}, mintErr
+	if probeErr := f.probeToken(ctx, path, jwt); probeErr != nil {
+		return forge.Account{}, probeErr
 	}
 
 	acct.Scopes = scopesOf(inst.Permissions)
 
 	return acct, nil
+}
+
+// checkTokenBody asks for the smallest permission that GitHub gives a token:
+// read of the metadata. The token proves that the installation can make one,
+// and the check needs nothing more.
+const checkTokenBody = `{"permissions":{"metadata":"read"}}`
+
+// revokeTimeout is the longest time that the revoke of the check token takes.
+const revokeTimeout = 10 * time.Second
+
+// probeToken proves that the key can make an installation token. It asks for
+// the smallest permission, reads no field of the answer except the token, and
+// revokes the token at once. The adapter never keeps or logs the token.
+func (f *gitHub) probeToken(ctx context.Context, path, jwt string) error {
+	resp, err := f.do(ctx, http.MethodPost, path+"/access_tokens", jwt, []byte(checkTokenBody))
+	if err != nil {
+		return err
+	}
+
+	var minted struct {
+		Token string `json:"token"`
+	}
+
+	if decodeErr := decode(resp.body, &minted); decodeErr != nil {
+		return decodeErr
+	}
+
+	if minted.Token == "" {
+		return forge.Unavailable(0, "GitHub gave an answer with no token")
+	}
+
+	// The revoke does not depend on the context of the caller: a canceled
+	// call must not leave a live token. A failure does not change the answer,
+	// because the token expires in one hour and holds the metadata permission
+	// only.
+	revokeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), revokeTimeout)
+	defer cancel()
+
+	//nolint:errcheck // Best effort, see above.
+	_, _ = f.do(revokeCtx, http.MethodDelete, "/installation/token", minted.Token, nil)
+
+	return nil
 }
 
 func (f *gitHub) checkToken(ctx context.Context) (forge.Account, error) {

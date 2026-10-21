@@ -20,6 +20,11 @@ type gitHostSettings struct {
 	store forge.Store
 	allow []netip.Prefix
 	cas   *x509.CertPool
+	// loopback lets a connection reach the loopback interface, for the tests
+	// of the server with a fake Git host on the local host.
+	loopback bool
+	// checkLimits bounds the check calls. Nil means the default limits.
+	checkLimits *forge.CheckLimits
 }
 
 // WithGitHostStore sets the store of the Git host connections. With it, and
@@ -32,9 +37,30 @@ func WithGitHostStore(st forge.Store) Option {
 
 // WithGitHostAllowedRanges sets the address ranges that a connection to a Git
 // host may reach in addition to public addresses, for example the range of a
-// GitHub Enterprise Server on a private network.
+// GitHub Enterprise Server on a private network. A range opens private-network
+// addresses only (RFC 1918 and unique local). The server never opens loopback,
+// link-local, cloud metadata, unspecified or multicast addresses, also inside
+// a range, and NewServer refuses a range that is too wide (see
+// egress.ParseAllowedRanges).
 func WithGitHostAllowedRanges(ranges ...netip.Prefix) Option {
 	return func(o *settings) { o.gitHost.allow = append([]netip.Prefix(nil), ranges...) }
+}
+
+// WithGitHostLoopbackForTests lets the connections to a Git host reach the
+// loopback interface, so that a test can run a fake Git host on the local host.
+// A server in production does not set it: no flag or environment variable
+// reaches it.
+func WithGitHostLoopbackForTests() Option {
+	return func(o *settings) { o.gitHost.loopback = true }
+}
+
+// WithGitHostCheckLimits sets the limits of the check of a Git host connection:
+// the shortest time between two checks of one connection, and the number of
+// checks of one installation in a window. The default is one check in 10
+// seconds for each connection and 30 in a minute for each installation. The
+// server has no flag for it.
+func WithGitHostCheckLimits(limits forge.CheckLimits) Option {
+	return func(o *settings) { o.gitHost.checkLimits = &limits }
 }
 
 // WithGitHostRootCAs sets the root certificates that the connections to a Git
@@ -85,7 +111,16 @@ func newGitHostService(cfg *settings, deps installationDeps) (*forge.Service, er
 		return nil, fmt.Errorf("installation secrets: %w", err)
 	}
 
-	rules := egress.Rules{Allow: cfg.gitHost.allow}
+	// Defense in depth: the flag parser refuses a range that is too wide, and
+	// the rules never open loopback or metadata addresses. This check stays so
+	// that an embedder cannot pass a wide range.
+	for _, p := range cfg.gitHost.allow {
+		if rangeErr := egress.CheckAllowedRange(p); rangeErr != nil {
+			return nil, fmt.Errorf("git host allowed ranges: %w", rangeErr)
+		}
+	}
+
+	rules := egress.Rules{Allow: cfg.gitHost.allow, Loopback: cfg.gitHost.loopback}
 
 	opener, err := github.NewOpener(github.Config{Rules: rules, RootCAs: cfg.gitHost.cas, Now: cfg.now})
 	if err != nil {
@@ -100,6 +135,7 @@ func newGitHostService(cfg *settings, deps installationDeps) (*forge.Service, er
 		},
 		OnAuditFailure: func() { deps.observed.IncAuditAppendFailure() },
 		OnRefused:      func(reason string) { deps.observed.ObserveGitHostRefused(reason) },
+		CheckLimits:    cfg.gitHost.checkLimits,
 		Now:            cfg.now,
 	})
 	if err != nil {

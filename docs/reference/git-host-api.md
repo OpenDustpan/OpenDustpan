@@ -86,7 +86,8 @@ A check:
 | --- | --- |
 | 400 | A body or a value that is not valid, or an address that the outbound rules refuse |
 | 404 | An object that does not exist, or no registration |
-| 409 | A conflict. Examples: a second connection to one installation, the default connection, a registration in use, no registration for a new connection, an installation of another namespace |
+| 409 | A conflict. Examples: a second connection to one installation, the default connection, a registration in use, no registration for a new connection. Also the installation that the operator did not assign to the namespace, for create and for check |
 | 412 | `If-Match` does not match the version |
 | 422 | GitHub refused the credential |
-| 503 | GitHub did not answer. `Retry-After` gives the wait time when GitHub gave one |
+| 429 | `check` came more than once in 10 seconds for one connection, or more than 30 times in a minute for one installation. `Retry-After` gives the wait time, at most 60 seconds |
+| 503 | GitHub did not answer. `Retry-After` gives the wait time when GitHub gave one, at most 60 seconds |

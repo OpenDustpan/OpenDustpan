@@ -207,8 +207,10 @@ var Settings = []*Setting{
 		"comma-separated CIDRs that a connection to a Git host may reach, in addition to public addresses "+
 			"(DUSTPAN_GIT_HOST_ALLOWED_RANGES)",
 		"(none: a connection reaches public addresses only). Set the range of a GitHub Enterprise Server on a "+
-			"private network, for example `10.20.0.0/16`. The server refuses loopback, link-local, private and "+
-			"other reserved addresses outside these ranges, when a person sets an address and at each call.",
+			"private network, for example `10.20.0.0/16`. A range opens private-network addresses only. "+
+			"These are RFC 1918 and unique local addresses. An IPv4 range has at least 8 bits, and an IPv6 range "+
+			"has at least 32 bits. The server always refuses loopback, link-local, cloud metadata, unspecified and "+
+			"multicast addresses, also inside a range. It checks this when a person sets an address and at each call.",
 	).WithFile("git-host-allowed-ranges"),
 	stringSetting(
 		"log-level", "DUSTPAN_LOG_LEVEL", "info",

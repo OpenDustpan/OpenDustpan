@@ -98,12 +98,16 @@ func (s *Service) PutRegistration(
 		return RegistrationView{}, err
 	}
 
-	sealedKey, err := s.secrets.Seal(ctx, KeyScope(kind), in.PrivateKey)
+	// Both secrets are bound to the address digest: they open only for the
+	// address, the kind and the app ID that they were sealed for.
+	digest := AddressDigest(kind, baseURL, in.AppID)
+
+	sealedKey, err := s.secrets.SealBound(ctx, KeyScope(kind), []byte(digest), in.PrivateKey)
 	if err != nil {
 		return RegistrationView{}, fmt.Errorf("seal the key of the GitHub App: %w", err)
 	}
 
-	sealedEvent, err := s.secrets.Seal(ctx, EventSecretScope(kind), in.EventSecret)
+	sealedEvent, err := s.secrets.SealBound(ctx, EventSecretScope(kind), []byte(digest), in.EventSecret)
 	if err != nil {
 		return RegistrationView{}, fmt.Errorf("seal the event secret of the GitHub App: %w", err)
 	}
@@ -111,8 +115,10 @@ func (s *Service) PutRegistration(
 	at := s.now().UTC()
 	reg := Registration{
 		CreatedAt: at, UpdatedAt: at, KeyCreatedAt: at, EventSecretCreatedAt: at, Kind: kind, AppID: in.AppID,
+		// A new registration gets this hook ID. The store keeps the hook ID of an
+		// existing registration when it replaces the row, and returns the stored row.
 		BaseURL: baseURL, HookID: NewHookID(), KeySetID: NewSetID(), EventSecretSetID: NewSetID(),
-		AddressDigest: AddressDigest(kind, baseURL, in.AppID), SealedKey: sealedKey, SealedEventSecret: sealedEvent,
+		AddressDigest: digest, SealedKey: sealedKey, SealedEventSecret: sealedEvent,
 		Version: 1,
 	}
 

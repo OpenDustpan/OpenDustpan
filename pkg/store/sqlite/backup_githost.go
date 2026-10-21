@@ -39,7 +39,7 @@ func sqliteGitHostBackupTables() []sqliteBackupTable {
 			},
 		},
 		{
-			table: "git_host_installations",
+			table: backup.TableGitHostInstallations,
 			columns: []string{
 				backupColInstallationID,
 				backupColNamespaceID,

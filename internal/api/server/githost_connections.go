@@ -416,6 +416,11 @@ func (h *Handler) checkGitHostConnection(
 
 	res, err := h.gitHost.Check(ctx, entry, obj.Namespace(), r.PathValue("id"))
 	if err != nil {
+		if errors.Is(err, forge.ErrInstallationNotAssigned) {
+			// The same code and status as the create route.
+			err = errGitHostNotAssigned
+		}
+
 		h.writeGitHostError(r, w, err)
 
 		return

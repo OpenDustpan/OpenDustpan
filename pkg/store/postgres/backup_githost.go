@@ -30,7 +30,7 @@ func pgCopyGitHostTables() []pgCopyTable {
 			orderBy: []string{pgColKind},
 		},
 		{
-			table: "git_host_installations",
+			table: backup.TableGitHostInstallations,
 			columns: []string{
 				pgColInstallationID, pgColNamespaceID, pgColVersion, pgColCreatedAtMs, pgColUpdatedAtMs,
 			},
@@ -109,8 +109,8 @@ func checkStagedRegistrations(ctx context.Context, pool *pgxpool.Pool, staging s
 
 func checkStagedAssignments(ctx context.Context, pool *pgxpool.Pool, staging string) error {
 	query := "SELECT i.installation_id, n.name, i.version, i.created_at_ms, i.updated_at_ms FROM " +
-		stagingTable(staging, "git_host_installations") + " AS i LEFT JOIN " + stagingTable(staging, "namespaces") +
-		" AS n ON n.id = i.namespace_id"
+		stagingTable(staging, backup.TableGitHostInstallations) + " AS i LEFT JOIN " +
+		stagingTable(staging, "namespaces") + " AS n ON n.id = i.namespace_id"
 
 	rows, err := pool.Query(ctx, query)
 	if err != nil {

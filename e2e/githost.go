@@ -15,12 +15,13 @@ import (
 	"encoding/pem"
 	"net/http"
 	"net/http/httptest"
-	"net/netip"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"opendustpan.org/opendustpan/pkg/dustpan"
+	"opendustpan.org/opendustpan/pkg/forge"
 	"opendustpan.org/opendustpan/pkg/store/postgres"
 	"opendustpan.org/opendustpan/pkg/store/sqlite"
 )
@@ -29,6 +30,10 @@ import (
 // the fake GitHub API knows.
 // jwtParts is the number of parts of a JWT: the header, the claims and the signature.
 const jwtParts = 3
+
+// e2eCheckBudget is the number of checks for each installation in a minute
+// that the scenario can make.
+const e2eCheckBudget = 1000
 
 // rsaBits is the size of the key of the fake app.
 const rsaBits = 2048
@@ -135,6 +140,14 @@ func (g *GitHostFake) serve(w http.ResponseWriter, r *http.Request) {
 	g.mu.Unlock()
 
 	token, _ := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
+
+	// The revoke of an installation token carries the token itself, not a JWT.
+	if r.Method == http.MethodDelete && r.URL.Path == "/installation/token" && token == "fake" {
+		w.WriteHeader(http.StatusNoContent)
+
+		return
+	}
+
 	if !g.verify(token) {
 		w.WriteHeader(http.StatusUnauthorized)
 
@@ -205,7 +218,11 @@ func gitHostOptions(tb testing.TB, st serverStore) []dustpan.Option {
 
 	if fake := fakeOf(v); fake != nil {
 		opts = append(opts,
-			dustpan.WithGitHostAllowedRanges(netip.MustParsePrefix("127.0.0.0/8")),
+			dustpan.WithGitHostLoopbackForTests(),
+			// The scenario checks one connection many times in a second.
+			dustpan.WithGitHostCheckLimits(forge.CheckLimits{
+				PerConnection: 0, PerInstallation: e2eCheckBudget, Window: time.Minute,
+			}),
 			dustpan.WithGitHostRootCAs(fake.certPool()),
 		)
 	}

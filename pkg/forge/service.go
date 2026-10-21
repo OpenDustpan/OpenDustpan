@@ -38,12 +38,14 @@ type Namespaces interface {
 	GetNamespace(ctx context.Context, name namespace.Name) (namespace.Namespace, error)
 }
 
-// SecretSealer seals and opens the values of installation scopes.
-// *secret.InstallationSecrets implements it. Open returns an error for a value
-// that does not open.
+// SecretSealer seals and opens the values of installation scopes. Each value
+// is bound to the binding that the caller gives: the AEAD authenticates it as
+// associated data, so a value opens only with the binding that sealed it.
+// *secret.InstallationSecrets implements it. OpenBound returns an error for a
+// value that does not open.
 type SecretSealer interface {
-	Seal(ctx context.Context, id string, plaintext []byte) ([]byte, error)
-	Open(ctx context.Context, id string, ciphertext []byte) ([]byte, error)
+	SealBound(ctx context.Context, id string, binding, plaintext []byte) ([]byte, error)
+	OpenBound(ctx context.Context, id string, binding, ciphertext []byte) ([]byte, error)
 }
 
 // Config holds the dependencies of a Service. Store, Namespaces, Secrets,
@@ -70,6 +72,8 @@ type Config struct {
 	// OnRefused, when set, runs once for each connection that Open refuses,
 	// with one of the Reason constants. The wiring counts it on a metric.
 	OnRefused func(reason string)
+	// CheckLimits bounds the Check calls. Nil means DefaultCheckLimits.
+	CheckLimits *CheckLimits
 	// Now is the clock. Nil means time.Now.
 	Now func() time.Time
 }
@@ -90,6 +94,7 @@ type Service struct {
 	checkURL   func(raw string) error
 	onRefused  func(reason string)
 	onAuditErr func()
+	checks     *checkLimiter
 	now        func() time.Time
 }
 
@@ -121,8 +126,14 @@ func NewService(cfg Config) (*Service, error) {
 		now = time.Now
 	}
 
+	limits := DefaultCheckLimits()
+	if cfg.CheckLimits != nil {
+		limits = *cfg.CheckLimits
+	}
+
 	return &Service{
-		store: cfg.Store, namespaces: cfg.Namespaces, secrets: cfg.Secrets, audit: cfg.Audit, openers: openers,
+		checks: newCheckLimiter(limits),
+		store:  cfg.Store, namespaces: cfg.Namespaces, secrets: cfg.Secrets, audit: cfg.Audit, openers: openers,
 		checkURL: cfg.CheckURL, onRefused: cfg.OnRefused, onAuditErr: cfg.OnAuditFailure, now: now,
 	}, nil
 }
@@ -351,8 +362,19 @@ func (s *Service) Open(ctx context.Context, e audit.Entry, ns namespace.Name, id
 // Check opens the connection id of ns, calls the Git host and returns the
 // account, the capabilities and what each consumer misses. It returns the
 // errors of Open and of the adapter: ErrAuth for a credential that the Git host
-// refuses, and ErrUnavailable. The result is audited, best effort.
+// refuses, and ErrUnavailable. It returns ErrRateLimited, with no call to the
+// Git host, when the connection or its installation was checked too often. The
+// result is audited, best effort.
 func (s *Service) Check(ctx context.Context, e audit.Entry, ns namespace.Name, id string) (CheckResult, error) {
+	rec, err := s.connectionRecord(ctx, ns, id)
+	if err != nil {
+		return CheckResult{}, err
+	}
+
+	if wait, ok := s.checks.admit(ns.String()+"/"+id, string(rec.Kind)+"/"+rec.InstallationID, s.now()); !ok {
+		return CheckResult{}, &RateLimitedError{After: wait}
+	}
+
 	f, err := s.Open(ctx, e, ns, id)
 	if err != nil {
 		return CheckResult{}, err
@@ -456,7 +478,13 @@ func (s *Service) openWith(ctx context.Context, rec ConnectionRecord, reg *Regis
 		return nil, fmt.Errorf("%w: the API address: %w", ErrInvalid, err)
 	}
 
-	key, err := s.secrets.Open(ctx, KeyScope(reg.Kind), reg.SealedKey)
+	// The key opens only with the digest of the address that it was sealed for.
+	// The digest is computed from the fields of the row, not read from its
+	// digest column: a writer of the database who changes the address and the
+	// digest column still cannot open the key for the new address.
+	key, err := s.secrets.OpenBound(
+		ctx, KeyScope(reg.Kind), []byte(AddressDigest(reg.Kind, reg.BaseURL, reg.AppID)), reg.SealedKey,
+	)
 	if err != nil {
 		return nil, fmt.Errorf("%w: open the key of the GitHub App: %w", ErrAuth, err)
 	}
@@ -485,6 +513,10 @@ func (s *Service) refuse(ctx context.Context, e audit.Entry, rec ConnectionRecor
 
 	n, err := s.namespaces.GetNamespace(ctx, rec.Namespace)
 	if err != nil {
+		// Without the namespace there is no fence for the entry. The refusal
+		// stands, and the lost entry is counted like a failed append.
+		s.auditLost()
+
 		return
 	}
 
@@ -501,6 +533,8 @@ func (s *Service) refuse(ctx context.Context, e audit.Entry, rec ConnectionRecor
 func (s *Service) recordCheck(ctx context.Context, e audit.Entry, ns namespace.Name, id string, checkErr error) {
 	n, err := s.namespaces.GetNamespace(ctx, ns)
 	if err != nil {
+		s.auditLost()
+
 		return
 	}
 
@@ -518,7 +552,14 @@ func (s *Service) recordCheck(ctx context.Context, e audit.Entry, ns namespace.N
 // the call stands whether or not the entry is written, and a failure runs
 // OnAuditFailure.
 func (s *Service) appendBestEffort(ctx context.Context, fence namespace.Fence, e audit.Entry) {
-	if _, err := s.audit.Append(ctx, fence, e); err != nil && s.onAuditErr != nil {
+	if _, err := s.audit.Append(ctx, fence, e); err != nil {
+		s.auditLost()
+	}
+}
+
+// auditLost runs OnAuditFailure for an entry that the service could not write.
+func (s *Service) auditLost() {
+	if s.onAuditErr != nil {
 		s.onAuditErr()
 	}
 }

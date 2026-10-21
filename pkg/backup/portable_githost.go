@@ -31,7 +31,7 @@ func portableGitHostTables() []PortableTable {
 			},
 		},
 		{
-			Table:   "git_host_installations",
+			Table:   TableGitHostInstallations,
 			OrderBy: []string{portColInstallationID},
 			Columns: []Column{
 				{Name: portColInstallationID, Kind: KindText},

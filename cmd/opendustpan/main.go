@@ -379,7 +379,7 @@ func (f *serveFlags) check() error {
 		return err
 	}
 
-	if _, err := egress.ParseRanges(splitList(f.gitHostAllowedRanges)); err != nil {
+	if _, err := egress.ParseAllowedRanges(splitList(f.gitHostAllowedRanges)); err != nil {
 		return fmt.Errorf("invalid --git-host-allowed-ranges: %w", err)
 	}
 
@@ -1236,7 +1236,7 @@ func (f *serveFlags) serverOptions(
 // a Git host may reach. check refused a bad value, so the parse fails only on a
 // bug.
 func (f *serveFlags) gitHostOptions() ([]dustpan.Option, error) {
-	ranges, err := egress.ParseRanges(splitList(f.gitHostAllowedRanges))
+	ranges, err := egress.ParseAllowedRanges(splitList(f.gitHostAllowedRanges))
 	if err != nil {
 		return nil, fmt.Errorf("invalid --git-host-allowed-ranges %q: %w", f.gitHostAllowedRanges, err)
 	}

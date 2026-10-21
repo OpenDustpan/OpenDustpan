@@ -72,7 +72,10 @@ Rules for the registration:
   you set the address and again at each call. To allow the range of a GitHub
   Enterprise Server on a private network, set `--git-host-allowed-ranges`
   (`DUSTPAN_GIT_HOST_ALLOWED_RANGES`) to its range, for example
-  `10.20.0.0/16`.
+  `10.20.0.0/16`. A range opens private-network addresses only (RFC 1918 and
+  unique local). It must have at least 8 bits for IPv4 and 32 bits for IPv6.
+  The server refuses loopback, link-local, metadata, unspecified and multicast
+  addresses also inside a range.
 - A replacement keeps the `hookID`. To change the key, the event secret, the
   app ID or the address, send all four fields again. Send `If-Match` with the
   version that you read to make sure that no one else changed it.
@@ -97,7 +100,8 @@ installation belongs to one namespace. To move it, send the request again with
 another namespace. The connections of the old namespace stop at their next use.
 To end the assignment, send `DELETE` to the same path. The map of
 installations to namespaces is data of the installation. A backup of one
-namespace does not hold it.
+namespace does not hold it. A restore changes it only when the caller holds
+`server:restore-access`. Any other restore keeps the current map.
 
 Read the map with `GET /git-host-installations`. The list is in the order of the
 installation IDs as numbers.
@@ -120,7 +124,7 @@ default connection.
 The request has these rules:
 
 - The installation must be one that the operator gave to this namespace. If
-  not, the answer is 400.
+  not, the answer is 409.
 - The request takes no key, no event secret, no API address and no app ID.
   These belong to the operator. A request with one of them gets 400.
 - The answer is 409 when the operator has not registered the app.
@@ -148,7 +152,8 @@ curl -X POST "$SERVER/api/dustpan/v1/namespaces/acme/git-host-connections/$ID/ch
 
 The server signs a short token with the key of the app, reads the installation
 from GitHub, and asks GitHub for an installation token to prove that the
-installation works. It keeps no token. The answer shows:
+installation works. It asks for the smallest permission, read of the metadata,
+and revokes the token after the call. It keeps no token. The answer shows:
 
 - `account`: the ID and the login of the GitHub account, and the permissions of
   the installation as `scopes`.
@@ -162,7 +167,8 @@ Errors of a check:
 | --- | --- |
 | 409 | The operator did not give the installation to this namespace, or the address of the app changed after its key was stored. |
 | 422 | GitHub refused the credential. |
-| 503 | GitHub did not answer, or limited the rate. The header `Retry-After` gives the wait time when GitHub gave one. |
+| 429 | The connection was checked more than once in 10 seconds, or the installation more than 30 times in a minute. The header `Retry-After` gives the wait time, at most 60 seconds. |
+| 503 | GitHub did not answer, or limited the rate. The header `Retry-After` gives the wait time when GitHub gave one, at most 60 seconds. |
 
 The check takes no `Idempotency-Key`. A retry is safe.
 
@@ -171,8 +177,9 @@ The check takes no `Idempotency-Key`. A retry is safe.
 - No answer holds a private key, an event secret or a token.
 - An audit entry holds only that a secret is set, never its value.
 - The server sends the key only to the API address of the registration. It
-  stores a digest of that address with the key. It refuses to open a connection
-  when the address and the digest do not match.
+  seals the key together with a digest of that address, so the key opens only for
+  that address. It also refuses to open a connection when the address and the
+  stored digest do not match.
 - Each write takes the header `Idempotency-Key`, and a retry with the same key
   and the same body answers the first answer.
 

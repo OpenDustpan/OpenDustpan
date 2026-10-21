@@ -70,7 +70,7 @@ The code term is "forge". User-facing text never says "forge" (decision 11).
    - The route reads at most 2 MiB, finds the registration by the hook ID and
      checks the event against each active event secret of that registration. It
      answers 204 to each request, also for an unknown hook ID, a bad signature
-     and a body that is too large. The metric `git_host_event_rejected_total`
+     and a body that is too large. The metric `dustpan_git_host_event_rejected_total`
      counts the rejected events by reason.
    - The server drops a delivery ID that it saw for the same connection in the
      last 24 hours.
@@ -90,8 +90,10 @@ The code term is "forge". User-facing text never says "forge" (decision 11).
    `namespace:use-git-host-connection` on the object
    `namespace:<ns>/git-host-connection:<id>` is necessary, in addition to the
    action on the unit, when a code location or a Catalog request home names a
-   connection. The built-in role `maintainer` has it by default. The actions
-   `namespace:read-git-host-connections` and
+   connection. The built-in role `maintainer` has
+   `namespace:read-git-host-connections`, and it has
+   `namespace:use-git-host-connection` when that action enters the code. The
+   actions `namespace:read-git-host-connections` and
    `namespace:manage-git-host-connections` follow the pattern of
    `namespace:read-runners` and `namespace:manage-runners`. The role `admin`
    has all three.
@@ -117,8 +119,11 @@ The code term is "forge". User-facing text never says "forge" (decision 11).
    set ID and its creation time. The server refuses an event secret of fewer
    than 32 bytes with 400, and never stores an empty secret. A registration
    keeps two active event secrets during a rotation. An event is valid when it
-   matches either one. A provider of OpenDustpan for OpenTofu or Pulumi marks
-   the secret write-only and sensitive.
+   matches either one. The first release keeps one event secret for each
+   registration and replaces it in one call. The rotation with two active
+   secrets is later work, and it enters the code with the webhook route. A
+   provider of OpenDustpan for OpenTofu or Pulumi marks the secret write-only and
+   sensitive.
 9. **A replica drops an event that it cannot serve, and the poll catches the
    change.** The hook URL uses a stable hostname that each federation member
    accepts, for example with DNS failover or a global load balancer. It never
@@ -162,8 +167,8 @@ The code term is "forge". User-facing text never says "forge" (decision 11).
     service when the adapter knows its kind, for example "GitHub refused the
     credential". A sentinel of the port may say "Git host". The console label
     and the title of a documentation page name the service when the kind is
-    known. The metrics are `git_host_event_rejected_total`,
-    `git_host_connection_refused_total` and `git_host_credential_fallback_total`.
+    known. The metrics are `dustpan_git_host_event_rejected_total`,
+    `dustpan_git_host_connection_refused_total` and `dustpan_git_host_credential_fallback_total`.
     The last one replaces the name `forge_credential_fallback_total` of ADR 213
     decision 7. The wire value of the kind (`github`, `gitlab`, `forgejo`) stays.
 12. **A credential is bound to its address.** A person with
@@ -182,16 +187,20 @@ The code term is "forge". User-facing text never says "forge" (decision 11).
        server calls `Check` with the new set at the new address first, and
        refuses the whole call when `Check` fails. Then it stores the new set
        and the new values, and removes the old sets, in one transaction.
-    3. The server stores with each credential set a digest of the API address
-       and the auth parameters for which the set was checked. `Open` refuses a
-       set whose digest differs from the values of the connection now, and
+    3. The server seals each credential set with a digest of the API address
+       and the auth parameters for which the set was checked. The digest is the
+       associated data of the AEAD that seals the set. `Open` computes the digest
+       from the values that the registration holds now, and the set opens only
+       with that digest. A writer of the database who changes the address, and
+       the digest next to it, still cannot open the set for the new address.
+       `Open` also refuses a stored digest that differs from the values now, and
        fails closed.
     4. For a connection of the installation-level app, `Open` reads the map at
        each call. When the map does not assign the installation ID to the
        namespace, or the service cannot read the map, `Open` fails with an error
        that wraps `ErrAuth`. The fallback to an older set does not apply. The
        service writes an audit entry and counts
-       `git_host_connection_refused_total{reason="installation-not-assigned"}`.
+       `dustpan_git_host_connection_refused_total{reason="installation-not-assigned"}`.
        A reassignment by the operator stops the old namespace at once.
     5. The API address passes the outbound address check at set time (create,
        `PATCH` and `check`) and again at each call, with the address that the
@@ -199,9 +208,29 @@ The code term is "forge". User-facing text never says "forge" (decision 11).
        unspecified and multicast address, the unique-local range of IPv6,
        100.64.0.0/10, and the metadata addresses of the cloud providers. An
        installation setting of the operator can allow a range, for GitHub
-       Enterprise Server on a private network. The scheme is `https`. The
+       Enterprise Server on a private network. A range opens private-network
+       addresses only: RFC 1918 and the unique-local range of IPv6. It never
+       opens a loopback, link-local, metadata, unspecified or multicast address,
+       also inside a range, and it never skips another check. The server refuses
+       a range with fewer than 8 bits for IPv4 or fewer than 32 bits for IPv6,
+       and so refuses `0.0.0.0/0` and `::/0`. The scheme is `https`. The
        adapter follows no redirect to another host, and each redirect that it
        follows passes the same check.
+    6. `check` asks GitHub for an installation token with the smallest
+       permission, read of the metadata, and revokes the token after the call.
+       The server limits `check` to one call in 10 seconds for each connection
+       and 30 calls in a minute for each installation. A call over the limit
+       answers 429 with a `Retry-After` header, which is not more than 60
+       seconds, and makes no call to GitHub. The state of the limit is in the
+       memory of one server.
+    7. A request to create or to check a connection whose installation the map
+       does not assign to the namespace answers 409 with the code
+       `git-host.installation-not-assigned`.
+    A namespace can remove its only connection. A default
+    connection is needed only while a namespace has a connection, so the rule of
+    ADR 213 decision 8 ("the removal of the default connection fails until another
+    connection is the default") applies while another connection exists. This
+    ADR reads that decision this way.
 13. **Credential expiry and rotation.** The GitHub App is the recommended
     connection, because its tokens are short-lived. The server records the
     expiry of a token credential when a person adds a set, at each `Check`, and

@@ -38,7 +38,10 @@ func testRestoreKeepsAccessTables(t *testing.T, newStore RestoreFactory) {
 
 	sink, sum, files := exportPortable(t, ports.stager)
 
+	gitHost := keepGitHostStores(s, seed.acme.Name)
+
 	mutateAccessForKeepTest(t, s, ports)
+	mutateKeepGitHost(t, gitHost)
 	extra := mustCreateStack(t, s, seed.acme, "extra")
 
 	stageKeepBackup(t, ports.stager, sink, sum, files)
@@ -48,6 +51,7 @@ func testRestoreKeepsAccessTables(t *testing.T, newStore RestoreFactory) {
 	}
 
 	checkKeptAccess(t, ports, backupAccess)
+	checkKeptGitHost(t, gitHost)
 	checkKeptStacks(t, s, &seed, extra)
 
 	stageKeepBackup(t, ports.stager, sink, sum, files)
@@ -57,6 +61,7 @@ func testRestoreKeepsAccessTables(t *testing.T, newStore RestoreFactory) {
 	}
 
 	checkReplacedAccess(t, ports, backupAccess)
+	checkReplacedGitHost(t, gitHost)
 }
 
 // keepAccessPorts holds the ports that a keep-access restore needs.

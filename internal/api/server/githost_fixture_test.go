@@ -3,6 +3,7 @@ package server_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -69,19 +70,26 @@ func (hostAuthorizer) ListObjects(_ context.Context, p identity.Principal, _ ide
 	return identity.AdminScope(p), nil
 }
 
+// errHostBinding is the error of a value that does not open with its binding.
+var errHostBinding = errors.New("the value does not open with this binding")
+
 // hostSealer reverses the bytes of a value, so that a sealed value differs from
 // its plaintext.
 type hostSealer struct{}
 
-func (hostSealer) Seal(_ context.Context, _ string, plaintext []byte) ([]byte, error) {
+func (hostSealer) SealBound(_ context.Context, _ string, binding, plaintext []byte) ([]byte, error) {
 	out := slices.Clone(plaintext)
 	slices.Reverse(out)
 
-	return append([]byte("sealed:"), out...), nil
+	return append([]byte("sealed:"+string(binding)+":"), out...), nil
 }
 
-func (hostSealer) Open(_ context.Context, _ string, ciphertext []byte) ([]byte, error) {
-	rest, _ := strings.CutPrefix(string(ciphertext), "sealed:")
+func (hostSealer) OpenBound(_ context.Context, _ string, binding, ciphertext []byte) ([]byte, error) {
+	rest, ok := strings.CutPrefix(string(ciphertext), "sealed:"+string(binding)+":")
+	if !ok {
+		return nil, errHostBinding
+	}
+
 	out := []byte(rest)
 	slices.Reverse(out)
 
@@ -188,15 +196,27 @@ const (
 func newHostEnvWith(t *testing.T, authz identity.Authorizer, keys keyMode) *hostEnv {
 	t.Helper()
 
+	// The limits are wide, so that a test can check a connection many times.
+	// The tests of the limit set their own.
+	limits := forge.CheckLimits{PerConnection: 0, PerInstallation: 1000, Window: time.Minute}
+
+	return newHostEnvLimited(t, authz, keys, &limits)
+}
+
+// newHostEnvLimited builds the environment of newHostEnvWith with the limits of
+// Check that limits holds.
+func newHostEnvLimited(t *testing.T, authz identity.Authorizer, keys keyMode, limits *forge.CheckLimits) *hostEnv {
+	t.Helper()
+
 	st, nss := openIPAllowFixture(t)
 	opener := &hostOpener{mu: sync.Mutex{}, opened: 0, checkErr: nil, openErr: nil}
 
-	rules := egress.Rules{Allow: nil}
+	rules := egress.Rules{Allow: nil, Loopback: false}
 
 	svc, err := forge.NewService(forge.Config{
 		Store: st.GitHost(), Namespaces: st, Secrets: hostSealer{}, Audit: st, Openers: []forge.Opener{opener},
 		CheckURL: func(raw string) error { return rules.CheckURL(raw, egress.HTTPSOnly) }, OnAuditFailure: nil,
-		OnRefused: nil, Now: nil,
+		OnRefused: nil, CheckLimits: limits, Now: nil,
 	})
 	if err != nil {
 		t.Fatalf("git host service: %v", err)

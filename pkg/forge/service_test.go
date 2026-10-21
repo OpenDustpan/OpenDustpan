@@ -2,13 +2,17 @@ package forge_test
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/forge"
+	"opendustpan.org/opendustpan/pkg/namespace"
 )
 
 func TestOpenUsesTheAddressAndTheAppIDOfTheRegistration(t *testing.T) {
@@ -135,6 +139,32 @@ func TestOpenRefusesACredentialWhoseAddressChanged(t *testing.T) {
 
 	if got := r.refusals(); len(got) != 1 || got[0] != forge.ReasonAddressChanged {
 		t.Fatalf("refusals = %v, want one %q", got, forge.ReasonAddressChanged)
+	}
+}
+
+// TestOpenRefusesAKeyForAnAddressItWasNotSealedFor sends a registration whose
+// address and digest a writer of the database changed together, as if the digest
+// check had passed. The key is bound to the digest it was sealed for, so it does
+// not open.
+func TestOpenRefusesAKeyForAnAddressItWasNotSealedFor(t *testing.T) {
+	t.Parallel()
+
+	r := newRig(t)
+	conn := ready(t, r)
+	before := len(r.opener.calls())
+
+	reg := r.registration(t)
+	reg.BaseURL = "https://ghe.example.com/api/v3"
+	reg.AddressDigest = forge.AddressDigest(reg.Kind, reg.BaseURL, reg.AppID)
+	r.store.setRegistration(reg)
+
+	_, err := r.svc.Open(t.Context(), callerEntry(), "acme", conn.Record.ID)
+	if !errors.Is(err, forge.ErrAuth) {
+		t.Fatalf("open with a changed address and digest = %v, want ErrAuth", err)
+	}
+
+	if len(r.opener.calls()) != before {
+		t.Fatal("the adapter opened with a key for an address it was not sealed for")
 	}
 }
 
@@ -459,6 +489,7 @@ func TestCheckAuditsItsOutcome(t *testing.T) {
 	}
 
 	r.opener.checkErr = forge.ErrAuth
+	r.advance(forge.DefaultCheckInterval)
 
 	if _, err := r.svc.Check(t.Context(), callerEntry(), "acme", conn.Record.ID); !errors.Is(err, forge.ErrAuth) {
 		t.Fatalf("check with a refused credential = %v, want ErrAuth", err)
@@ -477,7 +508,8 @@ func TestNewServiceNeedsItsDependencies(t *testing.T) {
 	r := newRig(t)
 	full := forge.Config{
 		Store: r.store, Namespaces: newNamespaces("acme"), Secrets: r.sealer, Audit: r.audit,
-		Openers: []forge.Opener{r.opener}, CheckURL: testCheckURL, OnAuditFailure: nil, OnRefused: nil, Now: nil,
+		Openers: []forge.Opener{r.opener}, CheckURL: testCheckURL, OnAuditFailure: nil, OnRefused: nil,
+		CheckLimits: nil, Now: nil,
 	}
 
 	for name, edit := range map[string]func(c *forge.Config){
@@ -531,5 +563,139 @@ func TestAnIDThatIsNotValidIsNotFound(t *testing.T) {
 
 	if _, err := r.svc.GetAssignment(t.Context(), "abc"); !errors.Is(err, forge.ErrAssignmentNotFound) {
 		t.Errorf("get assignment abc = %v, want ErrAssignmentNotFound", err)
+	}
+}
+
+// failingNamespaces is a forge.Namespaces that cannot read a namespace.
+type failingNamespaces struct{}
+
+func (failingNamespaces) GetNamespace(context.Context, namespace.Name) (namespace.Namespace, error) {
+	return namespace.Namespace{}, errBoom
+}
+
+// TestAuditLossIsCountedWhenTheNamespaceCannotBeRead sends a refused Open and a
+// Check to a service that cannot read the namespace for the fence of the audit
+// entry. Each lost entry runs OnAuditFailure, and the answer does not change.
+func TestAuditLossIsCountedWhenTheNamespaceCannotBeRead(t *testing.T) {
+	t.Parallel()
+
+	r := newRig(t)
+	conn := ready(t, r)
+
+	var lost atomic.Int64
+
+	svc, err := forge.NewService(forge.Config{
+		Store: r.store, Namespaces: failingNamespaces{}, Secrets: r.sealer, Audit: r.audit,
+		Openers: []forge.Opener{r.opener}, CheckURL: testCheckURL, OnRefused: nil, CheckLimits: nil, Now: nil,
+		OnAuditFailure: func() { lost.Add(1) },
+	})
+	if err != nil {
+		t.Fatalf("new service: %v", err)
+	}
+
+	before := len(r.audit.all())
+
+	if _, checkErr := svc.Check(t.Context(), callerEntry(), "acme", conn.Record.ID); checkErr != nil {
+		t.Fatalf("check = %v, want the answer to stand", checkErr)
+	}
+
+	if lost.Load() != 1 {
+		t.Fatalf("lost entries after a check = %d, want 1", lost.Load())
+	}
+
+	reg := r.registration(t)
+	reg.BaseURL = "https://ghe.example.com/api/v3"
+	r.store.setRegistration(reg)
+
+	_, openErr := svc.Open(t.Context(), callerEntry(), "acme", conn.Record.ID)
+	if !errors.Is(openErr, forge.ErrAddressChanged) {
+		t.Fatalf("open = %v, want ErrAddressChanged", openErr)
+	}
+
+	if lost.Load() != 2 {
+		t.Fatalf("lost entries after a refused open = %d, want 2", lost.Load())
+	}
+
+	if got := len(r.audit.all()); got != before {
+		t.Fatalf("audit entries = %d, want %d: no entry can be written without the fence", got, before)
+	}
+}
+
+// TestCheckLimitsTheCallsOfOneConnection sends a second Check at once, and then
+// one after the interval, as if the route had no limit of its own.
+func TestCheckLimitsTheCallsOfOneConnection(t *testing.T) {
+	t.Parallel()
+
+	r := newRig(t)
+	conn := ready(t, r)
+
+	if _, err := r.svc.Check(t.Context(), callerEntry(), "acme", conn.Record.ID); err != nil {
+		t.Fatalf("first check: %v", err)
+	}
+
+	calls := len(r.opener.calls())
+
+	r.advance(forge.DefaultCheckInterval - time.Second)
+
+	_, err := r.svc.Check(t.Context(), callerEntry(), "acme", conn.Record.ID)
+	if !errors.Is(err, forge.ErrRateLimited) {
+		t.Fatalf("second check = %v, want ErrRateLimited", err)
+	}
+
+	if wait, ok := forge.RateLimitWait(err); !ok || wait != time.Second {
+		t.Fatalf("wait = %v, %v, want 1s", wait, ok)
+	}
+
+	if len(r.opener.calls()) != calls {
+		t.Fatal("a refused check opened the connection")
+	}
+
+	r.advance(time.Second)
+
+	if _, err := r.svc.Check(t.Context(), callerEntry(), "acme", conn.Record.ID); err != nil {
+		t.Fatalf("check after the interval: %v", err)
+	}
+}
+
+// TestCheckLimitsTheCallsOfOneInstallation uses a short interval for the
+// connection, so that only the limit of the installation can refuse the fourth
+// Check in a minute.
+func TestCheckLimitsTheCallsOfOneInstallation(t *testing.T) {
+	t.Parallel()
+
+	r := newRig(t)
+	conn := ready(t, r)
+	limits := forge.CheckLimits{PerConnection: time.Second, PerInstallation: 3, Window: time.Minute}
+
+	svc, err := forge.NewService(forge.Config{
+		Store: r.store, Namespaces: newNamespaces("acme"), Secrets: r.sealer, Audit: r.audit,
+		Openers: []forge.Opener{r.opener}, CheckURL: testCheckURL, OnAuditFailure: nil, OnRefused: nil,
+		CheckLimits: &limits, Now: func() time.Time { return time.UnixMilli(r.clock.Load()) },
+	})
+	if err != nil {
+		t.Fatalf("new service: %v", err)
+	}
+
+	for i := range 3 {
+		if _, checkErr := svc.Check(t.Context(), callerEntry(), "acme", conn.Record.ID); checkErr != nil {
+			t.Fatalf("check %d: %v", i, checkErr)
+		}
+
+		r.advance(time.Second)
+	}
+
+	_, err = svc.Check(t.Context(), callerEntry(), "acme", conn.Record.ID)
+	if !errors.Is(err, forge.ErrRateLimited) {
+		t.Fatalf("fourth check = %v, want ErrRateLimited", err)
+	}
+
+	if wait, ok := forge.RateLimitWait(err); !ok || wait != 57*time.Second {
+		t.Fatalf("wait = %v, %v, want 57s: the first check leaves the window after a minute", wait, ok)
+	}
+
+	r.advance(57 * time.Second)
+
+	if _, err := svc.Check(t.Context(), callerEntry(), "acme", conn.Record.ID); err != nil {
+		t.Fatalf("check after the window: %v", err)
 	}
 }

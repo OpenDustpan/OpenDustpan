@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -308,22 +309,24 @@ func reverse(b []byte) []byte {
 	return out
 }
 
-func (m *memSealer) Seal(_ context.Context, _ string, plaintext []byte) ([]byte, error) {
+// SealBound keeps the binding in the sealed value, as the AEAD does with its
+// associated data: OpenBound opens the value only with the same binding.
+func (m *memSealer) SealBound(_ context.Context, _ string, binding, plaintext []byte) ([]byte, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	m.seals++
 
-	return append([]byte("sealed:"), reverse(plaintext)...), nil
+	return append([]byte("sealed:"+string(binding)+":"), reverse(plaintext)...), nil
 }
 
-func (m *memSealer) Open(_ context.Context, _ string, ciphertext []byte) ([]byte, error) {
+func (m *memSealer) OpenBound(_ context.Context, _ string, binding, ciphertext []byte) ([]byte, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	m.opens++
 
-	rest, ok := cutPrefix(ciphertext, "sealed:")
+	rest, ok := cutPrefix(ciphertext, "sealed:"+string(binding)+":")
 	if !ok {
 		return nil, errBoom
 	}
@@ -420,13 +423,21 @@ type rig struct {
 	opener  *recorder
 	refused []string
 	mu      sync.Mutex
+	// clock is the time of the service, in milliseconds. Advance moves it.
+	clock atomic.Int64
+}
+
+// advance moves the clock of the service by d.
+func (r *rig) advance(d time.Duration) {
+	r.clock.Add(d.Milliseconds())
 }
 
 func newRig(t *testing.T) *rig {
 	t.Helper()
 
 	r := &rig{
-		svc: nil, store: newMemStore(), audit: &memAudit{mu: sync.Mutex{}, entries: nil},
+		clock: atomic.Int64{},
+		svc:   nil, store: newMemStore(), audit: &memAudit{mu: sync.Mutex{}, entries: nil},
 		sealer: &memSealer{mu: sync.Mutex{}, seals: 0, opens: 0},
 		opener: &recorder{
 			mu:       sync.Mutex{},
@@ -439,16 +450,18 @@ func newRig(t *testing.T) *rig {
 		refused: nil, mu: sync.Mutex{},
 	}
 
+	r.clock.Store(1_700_000_000_000)
+
 	svc, err := forge.NewService(forge.Config{
 		Store: r.store, Namespaces: newNamespaces("acme", "beta"), Secrets: r.sealer, Audit: r.audit,
-		Openers: []forge.Opener{r.opener}, CheckURL: testCheckURL, OnAuditFailure: nil,
+		Openers: []forge.Opener{r.opener}, CheckURL: testCheckURL, OnAuditFailure: nil, CheckLimits: nil,
 		OnRefused: func(reason string) {
 			r.mu.Lock()
 			defer r.mu.Unlock()
 
 			r.refused = append(r.refused, reason)
 		},
-		Now: func() time.Time { return time.UnixMilli(1_700_000_000_000) },
+		Now: func() time.Time { return time.UnixMilli(r.clock.Load()) },
 	})
 	if err != nil {
 		t.Fatalf("new service: %v", err)

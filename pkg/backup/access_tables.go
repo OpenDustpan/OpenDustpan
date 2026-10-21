@@ -34,6 +34,11 @@ const (
 	// kept the keys and took the registration of the backup would hold a
 	// sealed key that no key opens.
 	TableGitHostAppRegistrations = "git_host_app_registrations"
+	// TableGitHostInstallations maps a GitHub App installation to the
+	// namespace that may use it. Only the operator changes it. A restore
+	// without server:restore-access keeps the current rows: a backup that
+	// replaced them could give an installation to another namespace.
+	TableGitHostInstallations = "git_host_installations"
 	// TablePersonPreferences holds the preferences of each person. A row
 	// names a principal by a foreign key, so the table moves with the
 	// principals table: a restore that kept the principals and took the
@@ -59,6 +64,7 @@ var AccessTables = []string{ //nolint:gochecknoglobals // Shared frozen list, li
 	TableSignInProviders,
 	TableInstallationSecretKeys,
 	TableGitHostAppRegistrations,
+	TableGitHostInstallations,
 	TablePersonPreferences,
 }
 

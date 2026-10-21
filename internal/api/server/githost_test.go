@@ -2,8 +2,10 @@ package server_test
 
 import (
 	"net/http"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/forge"
@@ -336,9 +338,10 @@ func TestGitHostConnectionConflicts(t *testing.T) {
 
 	wantHost(t, e.send(t, http.MethodPut, hostAppPath, hostAppBody()), http.StatusCreated)
 
-	// An installation that no one assigned: a request that the namespace cannot make.
+	// An installation that no one assigned: a conflict that the operator can fix,
+	// with the same status as a check of a connection that lost its assignment.
 	r = e.send(t, http.MethodPost, hostConnectionsPath, createBody("101"))
-	wantHost(t, r, http.StatusBadRequest)
+	wantHost(t, r, http.StatusConflict)
 
 	if !strings.Contains(r.body, "git-host.installation-not-assigned") {
 		t.Fatalf("answer = %s, want the code of the missing assignment", r.body)
@@ -346,7 +349,7 @@ func TestGitHostConnectionConflicts(t *testing.T) {
 
 	// An installation of another namespace.
 	wantHost(t, e.send(t, http.MethodPut, hostInstallationsPath+"/101", `{"namespace":"beta"}`), http.StatusCreated)
-	wantHost(t, e.send(t, http.MethodPost, hostConnectionsPath, createBody("101")), http.StatusBadRequest)
+	wantHost(t, e.send(t, http.MethodPost, hostConnectionsPath, createBody("101")), http.StatusConflict)
 
 	// A second connection to one installation.
 	wantHost(t, e.send(t, http.MethodPut, hostInstallationsPath+"/101", `{"namespace":"acme"}`), http.StatusOK)
@@ -612,5 +615,48 @@ func TestGitHostRoutesNeedTheirServiceToBeMounted(t *testing.T) {
 		if strings.Contains(route.Path, "git-host-") {
 			t.Fatalf("route %s %s is mounted with no Git host service", route.Method, route.Path)
 		}
+	}
+}
+
+// TestGitHostCheckIsRateLimited sends a second check of one connection at once
+// and expects 429 with a Retry-After that is not above 60 seconds. The limit
+// is the one a server has when it sets none.
+func TestGitHostCheckIsRateLimited(t *testing.T) {
+	t.Parallel()
+
+	limits := forge.DefaultCheckLimits()
+	e := newHostEnvLimited(t, hostAllowAll(), withKeys, &limits)
+	e.register(t)
+
+	id := e.connect(t, "101")
+	target := hostConnectionsPath + "/" + id + "/check"
+
+	wantHost(t, e.send(t, http.MethodPost, target, ""), http.StatusOK)
+
+	limited := e.send(t, http.MethodPost, target, "")
+	wantHost(t, limited, http.StatusTooManyRequests)
+
+	seconds, err := strconv.Atoi(limited.header.Get("Retry-After"))
+	if err != nil || seconds < 1 || seconds > 60 {
+		t.Fatalf("Retry-After = %q, want 1 to 60 seconds", limited.header.Get("Retry-After"))
+	}
+}
+
+// TestGitHostRetryAfterIsCapped sends a Git host that asks for a wait of one
+// hour and expects the cap.
+func TestGitHostRetryAfterIsCapped(t *testing.T) {
+	t.Parallel()
+
+	e := newHostEnv(t, hostAllowAll())
+	e.register(t)
+
+	id := e.connect(t, "101")
+	e.opener.setCheckErr(forge.Unavailable(time.Hour, "rate limit"))
+
+	limited := e.send(t, http.MethodPost, hostConnectionsPath+"/"+id+"/check", "")
+	wantHost(t, limited, http.StatusServiceUnavailable)
+
+	if got := limited.header.Get("Retry-After"); got != "60" {
+		t.Fatalf("Retry-After = %q, want the cap 60", got)
 	}
 }

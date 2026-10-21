@@ -15,12 +15,7 @@ import (
 func loopbackRules(t *testing.T) egress.Rules {
 	t.Helper()
 
-	ranges, err := egress.ParseRanges([]string{"127.0.0.0/8"})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	return egress.Rules{Allow: ranges}
+	return egress.Rules{Allow: nil, Loopback: true}
 }
 
 func TestControlWith(t *testing.T) {
@@ -35,7 +30,7 @@ func TestControlWith(t *testing.T) {
 		{"127.0.0.1:443", true},
 		{"[::ffff:127.0.0.1]:443", true},
 		{"10.0.0.1:443", false},
-		{"[::1]:443", false},
+		{"[::1]:443", true},
 		{"169.254.169.254:80", false},
 		{"not-an-address", false},
 	}
@@ -97,7 +92,7 @@ func TestDialLayer(t *testing.T) {
 
 	srv, _ := tlsServer(t, func(http.ResponseWriter, *http.Request) {})
 	dialer := &net.Dialer{ //nolint:exhaustruct_v5 // the other fields keep their zero defaults
-		Control: egresshttp.ControlWith(egress.Rules{Allow: nil}),
+		Control: egresshttp.ControlWith(egress.Rules{Allow: nil, Loopback: false}),
 	}
 
 	conn, err := dialer.DialContext(t.Context(), "tcp", srv.Listener.Addr().String())
@@ -162,6 +157,27 @@ func TestClientWithURLLayer(t *testing.T) {
 
 		if !errors.Is(err, egress.ErrRefused) {
 			t.Fatalf("get %s = %v, want ErrRefused", u, err)
+		}
+	}
+}
+
+// TestControlWithAllowedRangeRefusesLoopback sends loopback and metadata
+// addresses to the dial check with an operator range that holds them.
+func TestControlWithAllowedRangeRefusesLoopback(t *testing.T) {
+	t.Parallel()
+
+	ranges, err := egress.ParseRanges([]string{"127.0.0.0/8", "169.254.0.0/16", "10.0.0.0/8"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	control := egresshttp.ControlWith(egress.Rules{Allow: ranges, Loopback: false})
+
+	for address, ok := range map[string]bool{
+		"10.0.0.1:443": true, "127.0.0.1:443": false, "169.254.169.254:80": false, "[fd00:ec2::254]:80": false,
+	} {
+		if err := control("tcp", address, nil); ok != (err == nil) {
+			t.Fatalf("control(%s) = %v, want ok %v", address, err, ok)
 		}
 	}
 }

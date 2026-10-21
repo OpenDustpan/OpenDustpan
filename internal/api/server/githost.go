@@ -74,7 +74,7 @@ var (
 		message: "the operator has not registered the GitHub App: ask the operator to register it",
 	}
 	errGitHostNotAssigned = &codedError{
-		status: http.StatusBadRequest, code: "git-host.installation-not-assigned", args: nil,
+		status: http.StatusConflict, code: "git-host.installation-not-assigned", args: nil,
 		message: "the operator did not assign this installation to this namespace: ask the operator to assign it",
 	}
 )
@@ -211,6 +211,8 @@ func classifyGitHostRequest(err error) (int, string, bool) {
 		return http.StatusBadRequest, err.Error(), true
 	case errors.Is(err, errGitHostBodyTooLarge):
 		return http.StatusRequestEntityTooLarge, errGitHostBodyTooLarge.Error(), true
+	case errors.Is(err, forge.ErrRateLimited):
+		return http.StatusTooManyRequests, "the connection was checked too often: try again later", true
 	case errors.Is(err, forge.ErrAuth):
 		return http.StatusUnprocessableEntity, "GitHub refused the credential of the connection", true
 	case errors.Is(err, forge.ErrUnavailable):
@@ -235,17 +237,27 @@ func rootText(err error) string {
 	return "request refused"
 }
 
-// retryAfterSeconds returns the Retry-After value of an ErrUnavailable that
-// holds a wait time, in whole seconds rounded up, and false when it holds none.
+// maxRetryAfterSeconds caps the Retry-After header of the Git host routes. A
+// Git host can ask for a wait of an hour, and a client must come back sooner to
+// see the state of the connection.
+const maxRetryAfterSeconds = 60
+
+// retryAfterSeconds returns the Retry-After value of an ErrUnavailable or an
+// ErrRateLimited that holds a wait time, in whole seconds rounded up and not
+// above maxRetryAfterSeconds, and false when it holds none.
 func retryAfterSeconds(err error) (string, bool) {
 	after, ok := forge.RetryAfter(err)
+	if !ok {
+		after, ok = forge.RateLimitWait(err)
+	}
+
 	if !ok {
 		return "", false
 	}
 
 	seconds := int64((after + time.Second - 1) / time.Second)
 
-	return strconv.FormatInt(max(seconds, 1), 10), true
+	return strconv.FormatInt(min(max(seconds, 1), maxRetryAfterSeconds), 10), true
 }
 
 // idempotencyArgs returns the arguments of the error code of a refusal of the

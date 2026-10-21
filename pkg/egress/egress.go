@@ -28,6 +28,10 @@ const ipv4MappedBits = 96
 // ErrRange is the error for a range that ParseRanges does not accept.
 var ErrRange = errors.New("the range is not a CIDR range such as 10.0.0.0/8")
 
+// ErrRangeTooWide is the error for a range that ParseAllowedRanges does not
+// accept because it is too wide or because it is not a private range.
+var ErrRangeTooWide = errors.New("the range is too wide or is not a private range")
+
 // ErrRefused is the error for a URL or an address that the rules refuse.
 // A status that the server stores for a principal holds this class only,
 // never the address or the text of the network error.
@@ -85,13 +89,100 @@ func blocked() []netip.Prefix {
 
 // Rules are the egress rules with the address ranges that an operator
 // allows. The zero value allows no range: it applies the rules as they
-// are. An allowed range lets an address pass the address checks, for
-// example a GitHub Enterprise Server on a private network. It never lets a
-// URL pass that fails the checks of its shape: scheme, user information,
-// fragment, and a host that is a number.
+// are. An allowed range lets a private-network address pass the address
+// checks (RFC 1918 and unique local addresses), for example a GitHub
+// Enterprise Server on a private network. It never opens loopback,
+// link-local, cloud metadata, unspecified or multicast addresses, and it
+// never lets a URL pass that fails the checks of its shape: scheme, user
+// information, fragment, and a host that is a number.
 type Rules struct {
-	// Allow lists the ranges that pass the address checks.
+	// Allow lists the ranges that pass the address checks for private-network
+	// addresses.
 	Allow []netip.Prefix
+	// Loopback lets the loopback addresses pass. It exists for the tests of an
+	// adapter that run a fake server on the local host. No flag, no
+	// environment variable and no setting of an operator reaches it.
+	Loopback bool
+}
+
+// Bounds of an allowed range. A range with fewer bits opens more of the
+// network than an operator needs to name.
+const (
+	// MinAllowedBits4 is the shortest prefix of an allowed IPv4 range.
+	MinAllowedBits4 = 8
+	// MinAllowedBits6 is the shortest prefix of an allowed IPv6 range.
+	MinAllowedBits6 = 32
+)
+
+// ParseAllowedRanges parses the ranges that an operator allows with
+// ParseRanges, and refuses a range that is too wide: an IPv4 prefix shorter
+// than MinAllowedBits4, an IPv6 prefix shorter than MinAllowedBits6 (this
+// includes 0.0.0.0/0 and ::/0), and a range that starts in the loopback,
+// link-local, unspecified or multicast addresses. A range never opens
+// those addresses: CheckAddr refuses them also inside a range.
+func ParseAllowedRanges(list []string) ([]netip.Prefix, error) {
+	ranges, err := ParseRanges(list)
+	if err != nil {
+		return nil, err
+	}
+
+	for _, p := range ranges {
+		if err := CheckAllowedRange(p); err != nil {
+			return nil, err
+		}
+	}
+
+	return ranges, nil
+}
+
+// CheckAllowedRange returns ErrRangeTooWide for a range that an operator
+// must not allow. See ParseAllowedRanges.
+func CheckAllowedRange(p netip.Prefix) error {
+	a := p.Addr().Unmap()
+	shortest := MinAllowedBits6
+
+	if a.Is4() {
+		shortest = MinAllowedBits4
+	}
+
+	switch {
+	case !p.IsValid():
+		return fmt.Errorf("%w: %v", ErrRangeTooWide, p)
+	case unmappedBits(p) < shortest:
+		return fmt.Errorf("%w: %v has fewer than %d bits", ErrRangeTooWide, p, shortest)
+	case neverOpened(a):
+		return fmt.Errorf("%w: %v starts in an address that no range opens", ErrRangeTooWide, p)
+	}
+
+	return nil
+}
+
+// neverOpened reports whether an allowed range must never open the address
+// a: loopback, link-local, unspecified, multicast, and the cloud metadata
+// addresses.
+func neverOpened(a netip.Addr) bool {
+	return !a.IsValid() ||
+		a.IsLoopback() ||
+		a.IsLinkLocalUnicast() ||
+		a.IsLinkLocalMulticast() ||
+		a.IsInterfaceLocalMulticast() ||
+		a.IsMulticast() ||
+		a.IsUnspecified() ||
+		slices.Contains(metadataAddrs(), a)
+}
+
+// metadataAddrs returns the cloud metadata addresses. Most of them are
+// outside the private ranges already. Defense in depth: fd00:ec2::254 is
+// inside the unique local range, which an allowed range may open.
+func metadataAddrs() []netip.Addr {
+	return []netip.Addr{
+		netip.MustParseAddr("169.254.169.254"),
+		netip.MustParseAddr("169.254.170.2"),
+		netip.MustParseAddr("168.63.129.16"),
+		netip.MustParseAddr("100.100.100.200"),
+		netip.MustParseAddr("192.0.0.192"),
+		netip.MustParseAddr("fd00:ec2::254"),
+	}
 }
 
 // ParseRanges parses a list of CIDR ranges, for example "10.0.0.0/8". It
@@ -123,16 +214,23 @@ func unmappedBits(p netip.Prefix) int {
 }
 
 // CheckAddr returns ErrRefused for an address that is not a public unicast
-// address and that no allowed range holds: loopback, private (RFC 1918),
-// link-local, unspecified, multicast, shared (100.64.0.0/10), unique local
-// (fc00::/7), NAT64, an address with an embedded IPv4 address, a cloud
-// metadata address, or another reserved range. It unmaps an IPv4-mapped
-// IPv6 address and checks the IPv4 address.
+// address and that no allowed range opens. A range opens private-network
+// addresses only (RFC 1918 and unique local). It never opens loopback,
+// link-local, unspecified, multicast, a cloud metadata address, shared
+// (100.64.0.0/10), NAT64, an address with an embedded IPv4 address, or
+// another reserved range. It unmaps an IPv4-mapped IPv6 address and checks
+// the IPv4 address.
 func (r Rules) CheckAddr(a netip.Addr) error {
 	a = a.Unmap()
 
-	// An invalid address never passes, also when a range is allowed.
-	if a.IsValid() && r.allowed(a) {
+	// An allowed range opens only a private-network address. Defense in
+	// depth: CheckAddr below refuses the other addresses, and neverOpened
+	// refuses its classes here too, so a change in one does not open them.
+	if a.IsValid() && a.IsPrivate() && !neverOpened(a) && r.allowed(a) {
+		return nil
+	}
+
+	if r.Loopback && a.IsLoopback() {
 		return nil
 	}
 
@@ -177,7 +275,7 @@ func CheckAddr(a netip.Addr) error {
 // address. A host name passes: the adapter checks the resolved address of
 // each connection.
 func CheckURL(raw string, s Scheme) error {
-	return Rules{Allow: nil}.CheckURL(raw, s)
+	return Rules{Allow: nil, Loopback: false}.CheckURL(raw, s)
 }
 
 // CheckURL is the package function CheckURL with the allowed ranges of r.
@@ -233,7 +331,7 @@ func numericLabel(l string) bool {
 // only to the same host and never from https to http; a use with NoRedirect
 // follows none. Every redirect target also passes CheckURL.
 func CheckRedirect(from, to *url.URL, r Redirects, s Scheme) error {
-	return Rules{Allow: nil}.CheckRedirect(from, to, r, s)
+	return Rules{Allow: nil, Loopback: false}.CheckRedirect(from, to, r, s)
 }
 
 // CheckRedirect is the package function CheckRedirect with the allowed

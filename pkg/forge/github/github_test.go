@@ -18,12 +18,7 @@ import (
 func loopbackRules(t *testing.T) egress.Rules {
 	t.Helper()
 
-	ranges, err := egress.ParseRanges([]string{"127.0.0.0/8"})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	return egress.Rules{Allow: ranges}
+	return egress.Rules{Allow: nil, Loopback: true}
 }
 
 func newOpener(t *testing.T, f *fake, rules egress.Rules) *github.Opener {
@@ -116,7 +111,7 @@ func TestConformanceToken(t *testing.T) {
 func TestKind(t *testing.T) {
 	t.Parallel()
 
-	o, err := github.NewOpener(github.Config{Rules: egress.Rules{Allow: nil}, RootCAs: nil, Now: nil})
+	o, err := github.NewOpener(github.Config{Rules: egress.Rules{Allow: nil, Loopback: false}, RootCAs: nil, Now: nil})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -191,6 +186,28 @@ func TestCheckAppSendsAValidJWT(t *testing.T) {
 	}
 
 	checkJWT(t, jwt, before)
+}
+
+// TestCheckAppAsksForTheSmallestTokenAndRevokesIt checks that Check asks for
+// the metadata read permission only, and revokes the token after the call.
+func TestCheckAppAsksForTheSmallestTokenAndRevokesIt(t *testing.T) {
+	t.Parallel()
+
+	h := harness(forge.AuthApp)(t)
+	f := fakeOf(t, h)
+
+	if _, err := h.Forge.Check(t.Context()); err != nil {
+		t.Fatalf("Check = %v", err)
+	}
+
+	body, revoked := f.revocation()
+	if body != `{"permissions":{"metadata":"read"}}` {
+		t.Errorf("token request body = %q, want the metadata read permission only", body)
+	}
+
+	if revoked != 1 {
+		t.Errorf("Check revoked %d tokens, want 1", revoked)
+	}
 }
 
 // checkJWT checks the form, the signature, the header and the claims of a
@@ -346,7 +363,7 @@ func TestDefaultRulesRefuseLoopback(t *testing.T) {
 	t.Parallel()
 
 	f := newFake(t, testKey(), "")
-	o := newOpener(t, f, egress.Rules{Allow: nil})
+	o := newOpener(t, f, egress.Rules{Allow: nil, Loopback: false})
 	cred := forge.Credential{SetID: "s", Secret: pkcs1PEM(testKey()), CreatedAt: time.Time{}}
 
 	if _, err := o.Open(t.Context(), appConnection(f), cred); !errors.Is(err, forge.ErrInvalid) {

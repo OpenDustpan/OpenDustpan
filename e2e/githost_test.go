@@ -151,7 +151,7 @@ func (s *hostScenario) operatorRegisters(t *testing.T) {
 func (s *hostScenario) makeConnection(t *testing.T) e2eHostConnection {
 	t.Helper()
 
-	s.do(t, http.MethodPost, s.conns, s.create, http.StatusBadRequest)
+	s.do(t, http.MethodPost, s.conns, s.create, http.StatusConflict)
 	s.do(t, http.MethodPut, s.assign, `{"namespace":"`+e2e.Namespace+`"}`, http.StatusCreated)
 	s.do(t, http.MethodPost, s.conns,
 		`{"kind":"github","auth":"app","installationID":"`+e2e.GitHostInstallationID+

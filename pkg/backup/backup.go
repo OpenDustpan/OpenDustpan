@@ -154,7 +154,7 @@ var Tables = []string{
 	TablePersonPreferences,
 	"saved_views",
 	TableGitHostAppRegistrations,
-	"git_host_installations",
+	TableGitHostInstallations,
 	"git_host_connections",
 }
 
