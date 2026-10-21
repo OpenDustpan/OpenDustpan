@@ -1,0 +1,42 @@
+{{.Header}}
+
+package main
+
+import (
+	"context"
+
+	client {{goString .Import}}
+)
+
+// callOperation runs the operation that the message names. It is the table
+// from an operation ID to a call of the client.
+func callOperation(ctx context.Context, c *client.Client, p *callParams) (*callResult, error) {
+	switch p.Operation {
+{{- range $op := .Operations}}
+	case {{goString $op.ID}}:
+{{- range $op.Params}}
+		{{.Ident}}, err := p.pathParam({{goString .Wire}})
+		if err != nil {
+			return nil, err
+		}
+{{end}}
+{{- if $op.QueryType}}
+		var query client.{{$op.QueryType}}
+		if err := p.decodeQuery(&query); err != nil {
+			return nil, err
+		}
+{{end}}
+{{- if $op.Body}}
+		var body {{$op.AdapterBody}}
+		if err := p.decodeBody(&body); err != nil {
+			return nil, err
+		}
+{{end}}
+		{{if ne $op.ResultKind "none"}}out, {{end}}resp, err := c.{{$op.Method}}(ctx{{range $op.Params}}, {{.Ident}}{{end}}{{if $op.QueryType}}, query{{end}}{{if $op.Body}}, {{if $op.BodyPointer}}&{{end}}body{{end}}, p.options()...)
+
+		return finish({{if ne $op.ResultKind "none"}}out{{else}}nil{{end}}, resp, err)
+{{- end}}
+	default:
+		return nil, errUnknownOperation(p.Operation)
+	}
+}

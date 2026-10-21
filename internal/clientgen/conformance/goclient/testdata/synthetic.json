@@ -1,0 +1,123 @@
+{
+ "openapi": "3.1.0",
+ "info": {"title": "Synthetic API", "version": "0.3.0"},
+ "tags": [{"name": "widgets", "description": "Widgets."}],
+ "paths": {
+  "/api/dustpan/v1/widget-names": {
+   "get": {
+    "operationId": "listWidgetNames",
+    "responses": {
+     "200": {"description": "ok", "content": {"application/json": {"schema": {"type": "array", "items": {"type": "string"}}}}},
+     "default": {"description": "err", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorResponse"}}}}
+    },
+    "x-dustpan-actions": [{"action": "unit:read", "object": "unit"}]
+   }
+  },
+  "/api/dustpan/v1/widgets": {
+   "get": {
+    "operationId": "listWidgets",
+    "summary": "List the widgets.",
+    "description": "A page of widgets.\n}\nfunc evil() {}",
+    "parameters": [
+     {"in": "query", "name": "pageSize", "schema": {"type": "integer", "format": "int64"}},
+     {"in": "query", "name": "pageToken", "schema": {"type": "string"}},
+     {"in": "query", "name": "include", "description": "Members to add.", "schema": {"type": "array", "items": {"type": "string"}}},
+     {"in": "query", "name": "kind", "required": true, "schema": {"type": "string"}},
+     {"in": "query", "name": "verbose", "schema": {"type": "boolean"}}
+    ],
+    "responses": {
+     "200": {"description": "ok", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ListWidgetsResponse"}}}},
+     "default": {"description": "err", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorResponse"}}}}
+    },
+    "x-dustpan-actions": [{"action": "unit:read", "object": "unit"}]
+   },
+   "post": {
+    "operationId": "createWidget",
+    "parameters": [{"$ref": "#/components/parameters/IdempotencyKey"}],
+    "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/CreateWidgetRequest"}}}},
+    "responses": {
+     "201": {"description": "made", "headers": {"ETag": {"$ref": "#/components/headers/ETag"}},
+      "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Widget"}}}},
+     "default": {"description": "err", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorResponse"}}}}
+    },
+    "x-dustpan-actions": [{"action": "unit:create", "object": "unit"}]
+   }
+  },
+  "/api/dustpan/v1/widgets/{widget_id}": {
+   "delete": {
+    "operationId": "deleteWidget",
+    "parameters": [
+     {"in": "path", "name": "widget_id", "required": true, "schema": {"type": "string"}},
+     {"$ref": "#/components/parameters/IfMatchRequired"}
+    ],
+    "responses": {
+     "204": {"description": "gone"},
+     "default": {"description": "err", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorResponse"}}}}
+    },
+    "x-dustpan-actions": [{"action": "unit:delete", "object": "unit"}]
+   },
+   "patch": {
+    "operationId": "patchWidget",
+    "parameters": [
+     {"in": "path", "name": "widget_id", "required": true, "schema": {"type": "string"}},
+     {"$ref": "#/components/parameters/IfMatch"}
+    ],
+    "requestBody": {"required": true, "content": {"application/merge-patch+json": {"schema": {"$ref": "#/components/schemas/PatchWidgetRequest"}}}},
+    "responses": {
+     "200": {"description": "ok", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Widget"}}}},
+     "default": {"description": "err", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorResponse"}}}}
+    },
+    "x-dustpan-actions": [{"action": "unit:manage", "object": "unit"}]
+   }
+  },
+  "/api/dustpan/v1/widgets/{widget_id}/labels": {
+   "get": {
+    "operationId": "getWidgetLabels",
+    "parameters": [{"in": "path", "name": "widget_id", "required": true, "schema": {"type": "string"}}],
+    "responses": {
+     "2XX": {"description": "ok", "content": {"application/json": {"schema": {"type": "object", "additionalProperties": {"type": "string"}}}}},
+     "default": {"description": "err", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorResponse"}}}}
+    },
+    "x-dustpan-actions": [{"action": "unit:read", "object": "unit"}]
+   }
+  }
+ },
+ "components": {
+  "headers": {"ETag": {"description": "The version.", "schema": {"type": "string"}}},
+  "parameters": {
+   "IdempotencyKey": {"in": "header", "name": "Idempotency-Key", "required": false, "schema": {"type": "string"}},
+   "IfMatch": {"in": "header", "name": "If-Match", "required": false, "schema": {"type": "string"}},
+   "IfMatchRequired": {"in": "header", "name": "If-Match", "required": true, "schema": {"type": "string"}}
+  },
+  "schemas": {
+   "ListWidgetsResponse": {"type": "object", "required": ["widgets"], "properties": {
+    "widgets": {"type": "array", "items": {"$ref": "#/components/schemas/Widget"}},
+    "nextPageToken": {"type": "string"}}},
+   "CreateWidgetRequest": {"type": "object", "required": ["name"], "properties": {
+    "name": {"type": "string"},
+    "status": {"anyOf": [{"$ref": "#/components/schemas/Status"}, {"type": "string"}]},
+    "tags": {"type": "array", "items": {"type": "string"}}}},
+   "PatchWidgetRequest": {"type": "object", "properties": {
+    "name": {"type": ["string", "null"]},
+    "note": {"type": ["string", "null"]},
+    "parent": {"oneOf": [{"$ref": "#/components/schemas/Widget"}, {"type": "null"}]}}},
+   "Widget": {"type": "object", "required": ["id", "name", "state"], "properties": {
+    "id": {"type": "string"},
+    "name": {"type": "string"},
+    "count": {"type": "integer", "format": "int64"},
+    "ratio": {"type": "number"},
+    "flag": {"type": "boolean"},
+    "labels": {"type": "object", "additionalProperties": {"type": "string"}},
+    "anything": {"type": "object", "additionalProperties": true},
+    "status": {"anyOf": [{"$ref": "#/components/schemas/Status"}, {"type": "string"}]},
+    "state": {"$ref": "#/components/schemas/State"},
+    "parent": {"oneOf": [{"$ref": "#/components/schemas/Widget"}, {"type": "null"}]},
+    "children": {"type": "array", "items": {"$ref": "#/components/schemas/Widget"}}}},
+   "Status": {"type": "string", "enum": ["onCall", "awaiting-approval", "done.ok"]},
+   "State": {"type": "string", "enum": ["open", "closed"]},
+   "ErrorResponse": {"type": "object", "required": ["code", "message"], "properties": {
+    "code": {"type": "integer"}, "message": {"type": "string"}, "errorCode": {"type": "string"},
+    "errorArgs": {"type": "object", "additionalProperties": true}}}
+  }
+ }
+}
