@@ -60,7 +60,7 @@ func TestNoInstallationActionHasNoCode(t *testing.T) {
 	}
 
 	rec := httptest.NewRecorder()
-	h.Enforce(route).ServeHTTP(rec, routeRequest(t, route, "test-token"))
+	h.ServeRoute(route).ServeHTTP(rec, routeRequest(t, route, "test-token"))
 
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("status = %d, want 403: %s", rec.Code, rec.Body.String())

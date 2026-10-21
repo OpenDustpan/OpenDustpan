@@ -1,7 +1,6 @@
-package audit
+package audit //nolint:testpackage // The route wrapper is unexported: a test gives it a row that the route table never holds.
 
 import "net/http"
 
-// Enforce exposes the enforcement wrapper, so that a test can give it a row
-// that the route table never holds.
-func (h *Handler) Enforce(route Route) http.HandlerFunc { return h.enforce(route) }
+// ServeRoute returns the enforcement wrapper of route.
+func (h *Handler) ServeRoute(route Route) http.HandlerFunc { return h.enforce(route) }

@@ -61,7 +61,11 @@ func TestForbiddenOrder(t *testing.T) {
 			errcode.AccessIPNotAllowed,
 		},
 		{"csrf before access limit", errors.Join(gate.ErrLimited, sessionauth.ErrCSRF), errcode.SessionCSRF},
-		{"refusal that is not a permission before access limit", errors.Join(errcode.Refusal("x"), gate.ErrLimited), ""},
+		{
+			"refusal that is not a permission before access limit",
+			errors.Join(errcode.Refusal("x"), gate.ErrLimited),
+			"",
+		},
 		{"no cause", errOther, ""},
 		{"unauthenticated", identity.ErrUnauthenticated, ""},
 	}
