@@ -224,48 +224,32 @@ func (h *Handler) gateConfigRoutes() []Route {
 
 	return []Route{
 		row(http.MethodGet, approvalDefaultPath, read, h.readApprovalDefault),
-		row(http.MethodPut, approvalDefaultPath, manage, h.fresh(h.writeApprovalDefault)),
-		row(http.MethodDelete, approvalDefaultPath, manage, h.fresh(h.removeApprovalDefault)),
+		row(
+			http.MethodPut,
+			approvalDefaultPath,
+			manage,
+			h.fresh(identity.ActionNamespaceManageGates, h.writeApprovalDefault),
+		),
+		row(
+			http.MethodDelete,
+			approvalDefaultPath,
+			manage,
+			h.fresh(identity.ActionNamespaceManageGates, h.removeApprovalDefault),
+		),
 		row(http.MethodGet, approvalRulesPath, read, h.listApprovalRules),
 		row(http.MethodGet, approvalRuleItemPath, read, h.readApprovalRule),
-		row(http.MethodPut, approvalRuleItemPath, manage, h.fresh(h.writeApprovalRule)),
-		row(http.MethodDelete, approvalRuleItemPath, manage, h.fresh(h.removeApprovalRule)),
-	}
-}
-
-// errFreshSession is the refusal of a gate configuration write from an
-// access token. An access token never gives fresh authentication.
-var errFreshSession = errors.New("a change needs a console session with a recent sign-in; sign in to the console again")
-
-// fresh wraps a write: a console session must have signed in recently
-// enough, and a request with an access token is refused. The refusal
-// writes one failure entry, best effort.
-func (h *Handler) fresh(serve RouteHandler) RouteHandler {
-	return func(w http.ResponseWriter, r *http.Request, p identity.Principal, obj identity.Object) {
-		ctx := context.WithValue(r.Context(), freshnessKey{}, h.checkTokenFreshness)
-
-		r = r.WithContext(ctx)
-
-		// Defense in depth: requireFresh passes a request with no session, so
-		// this check stays here and does not rely on the route table or the
-		// policy check.
-		if _, ok := sessionFromRequest(r); !ok {
-			h.appendObjectChange(r, p, obj, serverChange{
-				at: h.now(), action: identity.ActionNamespaceManageGates, object: obj.String(),
-				outcome: audit.OutcomeFailure,
-			})
-			h.writeError(ctx, w, errFreshSession)
-
-			return
-		}
-
-		if err := requireFresh(r); err != nil {
-			h.writeError(ctx, w, err)
-
-			return
-		}
-
-		serve(w, r, p, obj)
+		row(
+			http.MethodPut,
+			approvalRuleItemPath,
+			manage,
+			h.fresh(identity.ActionNamespaceManageGates, h.writeApprovalRule),
+		),
+		row(
+			http.MethodDelete,
+			approvalRuleItemPath,
+			manage,
+			h.fresh(identity.ActionNamespaceManageGates, h.removeApprovalRule),
+		),
 	}
 }
 

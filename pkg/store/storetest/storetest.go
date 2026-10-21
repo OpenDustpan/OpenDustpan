@@ -111,6 +111,13 @@ func Run(t *testing.T, newStore Factory) {
 		{name: "installation state conditional write rejects other values", test: testMaintenanceStateIfInvalid},
 		{name: "installation state on a closed store is ErrUnavailable", test: testMaintenanceStateUnavailable},
 		{name: "writes fail in maintenance mode and pass after it", test: testMaintenanceRefusesWrites},
+		{name: "a provider binds the same issuer in maintenance mode", test: testBindProviderInMaintenanceMode},
+		{
+			name: "a provider with another issuer answers the recorded issuer in maintenance mode",
+			test: testBindProviderChangedIssuerInMaintenanceMode,
+		},
+		{name: "a new provider ID is refused in maintenance mode", test: testBindProviderNewIDInMaintenanceMode},
+		{name: "concurrent starts bind one issuer for a new provider ID", test: testBindProviderConcurrentStarts},
 		{
 			name: "enter returns after the writes in flight and stops later writes",
 			test: testMaintenanceEnterStopsWrites,

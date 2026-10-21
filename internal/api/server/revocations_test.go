@@ -89,6 +89,14 @@ func TestWideningRoutesStayRefusedInMaintenanceMode(t *testing.T) {
 
 		found++
 
+		if slices.Contains(freshAuthRoutes(), key) {
+			// An access token never gives a fresh authentication, so the route
+			// refuses it before the maintenance check.
+			// TestFreshAuthTokenCreateInMaintenanceMode covers the maintenance
+			// refusal with a console session.
+			continue
+		}
+
 		t.Run(key, func(t *testing.T) {
 			t.Parallel()
 

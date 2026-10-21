@@ -315,18 +315,49 @@ func buildHostEnv(t *testing.T, parts hostParts, authz identity.Authorizer) *hos
 
 	st, nss, svc, mw, opener := parts.st, parts.nss, parts.svc, parts.mw, parts.opener
 
+	// A write of the registration or of an installation needs a console
+	// session with a recent sign-in: an access token never gives one.
+	signIn, sessions := signInOf(t, st)
+
 	handler, err := apiserver.NewHandler(apiserver.Config{
-		Preferences: nil, GitHost: svc, Idempotency: mw, Workers: nil, InstallationKind: "", Now: nil,
-		TempAdmins: nil, Authenticator: tokenAuthenticator{}, Authorizer: authz,
-		Logger: slog.New(slog.DiscardHandler), Namespaces: nss, Backups: nil, Restores: nil,
-		Maintenance: newFakeMaintenance(maintenance.StateNormal), Metrics: stubMetrics{}, Version: "test",
-		Schema: st, Journal: nil, Principals: nil, Access: nil, Tokens: nil, Audit: st, OnAuditFailure: nil,
-		IPAllowlists: nil, Gates: nil, SessionPolicy: nil, DeletedUnits: nil, AuditChain: nil, AuditSinks: nil,
-		SignIn: nil, CheckpointEpochs: nil, DenialLimiter: nil,
+		Preferences:      nil,
+		GitHost:          svc,
+		Idempotency:      mw,
+		Workers:          nil,
+		InstallationKind: "",
+		Now:              nil,
+		TempAdmins:       nil,
+		Authenticator:    tokenAuthenticator{},
+		Authorizer:       authz,
+		Logger:           slog.New(slog.DiscardHandler),
+		Namespaces:       nss,
+		Backups:          nil,
+		Restores:         nil,
+		Maintenance:      newFakeMaintenance(maintenance.StateNormal),
+		Metrics:          stubMetrics{},
+		Version:          "test",
+		Schema:           st,
+		Journal:          nil,
+		Principals:       sessions.principals,
+		Access:           nil,
+		Tokens:           nil,
+		Audit:            st,
+		OnAuditFailure:   nil,
+		IPAllowlists:     nil,
+		Gates:            nil,
+		SessionPolicy:    nil,
+		DeletedUnits:     nil,
+		AuditChain:       nil,
+		AuditSinks:       nil,
+		SignIn:           signIn,
+		CheckpointEpochs: nil,
+		DenialLimiter:    nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
 	}
+
+	rememberSessions(handler, sessions)
 
 	return &hostEnv{
 		handler: handler, store: st, opener: opener, refuseAddress: nil, mu: sync.Mutex{}, refused: nil,
@@ -343,7 +374,12 @@ func (e *hostEnv) do(t *testing.T, c hostCall) hostResponse {
 
 	req := httptest.NewRequestWithContext(t.Context(), c.method, c.target, body)
 	req.RemoteAddr = hostRemote
-	req.Header.Set("Authorization", "Bearer test-token")
+
+	if needsFreshHostSession(c.method, c.target) {
+		startSession(t, e.handler, req, 0)
+	} else {
+		req.Header.Set("Authorization", "Bearer test-token")
+	}
 
 	for k, v := range c.headers {
 		req.Header.Set(k, v)
@@ -353,6 +389,16 @@ func (e *hostEnv) do(t *testing.T, c hostCall) hostResponse {
 	e.handler.ServeHTTP(rec, req)
 
 	return hostResponse{header: rec.Header(), body: rec.Body.String(), status: rec.Code}
+}
+
+// needsFreshHostSession reports whether method and target are a write of the
+// registration of the app or of an installation, which needs a console
+// session with a recent sign-in.
+func needsFreshHostSession(method, target string) bool {
+	path, _, _ := strings.Cut(target, "?")
+
+	return (method == http.MethodPut || method == http.MethodDelete) &&
+		(strings.HasPrefix(path, "/api/dustpan/v1/git-host-apps/") || strings.HasPrefix(path, hostInstallationsPath))
 }
 
 // send makes a request with no extra header.

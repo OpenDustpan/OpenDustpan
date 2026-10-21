@@ -23,7 +23,7 @@ func TestProfilesAPI(t *testing.T) {
 		t.Run(string(store), func(t *testing.T) {
 			t.Parallel()
 
-			env := e2e.NewEnv(t.Context(), t, e2e.NoCLI(), store)
+			env := e2e.NewEnvWithSignIn(t.Context(), t, e2e.NoCLI(), store)
 
 			profileScenario(t, env, "api")
 		})

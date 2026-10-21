@@ -158,7 +158,7 @@ func sendRequest(t *testing.T, method, url string) (int, string) {
 		t.Fatalf("new request: %v", err)
 	}
 
-	req.Header.Set("Authorization", "Bearer "+adminToken)
+	authorize(t, req, adminToken)
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -474,11 +474,15 @@ func startComponentServerOn(
 		t.Fatalf("listen: %v", err)
 	}
 
+	registerConsole(t, ln.Addr().String(), p.st)
+
 	opts := append(fullServerOptions(t, p.st, p.blobs, p.authn),
 		dustpan.WithComponents(set),
 		dustpan.WithListener(ln),
 		dustpan.WithDurableStore(p.st.DurableOperations()),
 	)
+
+	opts = append(opts, signInOptions(t, p.st)...)
 
 	srv, err := dustpan.NewServer(append(opts, extra...)...)
 	if err != nil {
