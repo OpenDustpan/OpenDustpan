@@ -11,6 +11,7 @@ import (
 
 	"opendustpan.org/opendustpan/internal/clientip"
 	"opendustpan.org/opendustpan/internal/devcode"
+	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/internal/oauth"
 	"opendustpan.org/opendustpan/internal/requestid"
 	"opendustpan.org/opendustpan/internal/sessionauth"
@@ -76,7 +77,7 @@ var (
 	errProviderDown    = errors.New("identity provider is not available: try again later")
 	errReturnPath      = errors.New("return path is not a path of this server")
 	errSignInFailed    = errors.New("sign-in failed: start the sign-in again")
-	errSignInRefused   = fmt.Errorf("%w: sign-in refused", identity.ErrDenied)
+	errSignInRefused   = errcode.Refusal("sign-in refused")
 	errNoSession       = errors.New("the request has no console session")
 	errCSRF            = sessionauth.ErrCSRF
 	errOtherSite       = sessionauth.ErrOtherSite

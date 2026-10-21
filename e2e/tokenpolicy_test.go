@@ -140,10 +140,11 @@ func runTokenPolicyOnStore(t *testing.T, cli e2e.Install, store e2e.Store) {
 func checkBreakGlassRefused(ctx context.Context, t *testing.T, env *e2e.Env) {
 	t.Helper()
 
-	status, body, err := env.ServerAPIStatus(ctx, http.MethodPatch, "/api/server/token-policy",
-		`{"disableBreakGlass":true}`)
-	if err != nil || status != http.StatusBadRequest || !strings.Contains(body, "no longer supported") {
-		t.Fatalf("break-glass disable = %d, %v (%s); want 400 that says no longer supported", status, err, body)
+	status, body := freshServerCall(ctx, t, env, principalStep{
+		http.MethodPatch, "/api/server/token-policy", `{"disableBreakGlass":true}`, http.StatusBadRequest,
+	})
+	if status != http.StatusBadRequest || !strings.Contains(body, "no longer supported") {
+		t.Fatalf("break-glass disable = %d (%s); want 400 that says no longer supported", status, body)
 	}
 
 	var policy e2eTokenPolicy
@@ -319,8 +320,11 @@ func listServerAuditEntries(ctx context.Context, t *testing.T, env *e2e.Env) []e
 func checkAuditChanges(t *testing.T, changes []e2eAuditChange, want map[string][2]string) {
 	t.Helper()
 
+	// A change from a console session also names the session.
+	changes = slices.DeleteFunc(slices.Clone(changes), func(c e2eAuditChange) bool { return c.Key == "sessionId" })
+
 	if len(changes) != len(want) {
-		t.Fatalf("policy changes hold %d items, want %d", len(changes), len(want))
+		t.Fatalf("policy changes hold %d items %+v, want %d", len(changes), changes, len(want))
 	}
 
 	for _, c := range changes {

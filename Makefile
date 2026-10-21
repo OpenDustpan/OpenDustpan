@@ -8,7 +8,7 @@
 #   python3       any 3.x, standard library only (for docs-lint)
 # nilaway and govulncheck need no install: go run builds the pinned versions below.
 
-.PHONY: regenerate-baseline check fmt lint nilaway vuln semgrep trivy trivy-canary trufflehog licenses docs-lint chart-lint test test-nocache test-postgres test-s3 bench load e2e upgrade-test crash-test soak faults generate build image-smoke compose-smoke demo checks-agent
+.PHONY: regenerate-baseline check fmt lint nilaway vuln semgrep trivy trivy-canary trufflehog licenses docs-lint chart-lint test test-nocache test-postgres test-s3 bench load e2e upgrade-test crash-test soak faults generate build image-smoke compose-smoke demo checks-agent clients-conformance
 
 check: lint lint-journal-build nilaway vuln semgrep trivy trufflehog licenses docs-lint test bench journal-guard journal-test ## Everything CI checks.
 
@@ -89,7 +89,8 @@ trivy-canary: ## Trivy license canary: the gate must flag the GPL fixture in tes
 # .trufflehog-exclude-paths.txt lists files that are known false positives,
 # one regular expression per line. Each entry needs the owner's approval.
 # Today it holds one vendored agent skill, where a Markdown link that names a
-# file looks like a credential to a detector.
+# file looks like a credential to a detector, and six test files whose fake
+# URLs with a user name and a password test the masking of credentials.
 trufflehog: ## TruffleHog: verified secrets in the Git history.
 	trufflehog git file://. --results=verified,unknown --fail --no-update --exclude-paths=.trufflehog-exclude-paths.txt
 
@@ -140,6 +141,9 @@ test-s3: ## Go tests in pkg/blob/s3 against a live S3-compatible server (needs D
 
 e2e: ## Drive real Pulumi CLI and OpenTofu versions against the server (downloads CLIs; see e2e/doc.go). Not part of check; CI runs it as its own job.
 	go test -tags e2e -race -count=1 -parallel 16 -timeout 60m ./e2e/...
+
+clients-conformance: ## Build the server, generate the Go client from the description that the server serves, and run the client conformance suite on it. Not part of check.
+	DUSTPAN_TEST_CLIENTGEN_CONFORMANCE=1 go test -race -count=1 -timeout 15m -run TestGoClientConformance ./internal/clientgen/conformance/
 
 checks-agent: ## Sync the branch with main, then run generate, check, e2e and a TruffleHog scan of the branch commits with cleanup (SYNC=merge|rebase|none, SKIP="steps", CLEAN_CACHE=1 also deletes the e2e CLI cache).
 	./scripts/checks-agent.sh

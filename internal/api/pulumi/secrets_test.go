@@ -347,6 +347,7 @@ func buildSecretFixture(
 	}
 
 	handler, err := pulumi.NewHandler(pulumi.Config{
+		SessionPolicy:           nil,
 		DisablePulumiJournaling: false,
 		Stacks:                  stacks,
 		Updates:                 newEnforcingUpdates(t, namespaces),
@@ -1122,6 +1123,7 @@ func TestSecretsMissingKey(t *testing.T) {
 	}
 
 	handler, handlerErr := pulumi.NewHandler(pulumi.Config{
+		SessionPolicy:           nil,
 		DisablePulumiJournaling: false,
 		Stacks:                  stacks,
 		Updates:                 newEnforcingUpdates(t, namespaces),
@@ -1550,6 +1552,7 @@ func newKeylessSecretFixture(t *testing.T) (secretFixture, string) {
 	}
 
 	handler, handlerErr := pulumi.NewHandler(pulumi.Config{
+		SessionPolicy:           nil,
 		DisablePulumiJournaling: false,
 		Stacks:                  stacks,
 		Updates:                 newEnforcingUpdates(t, namespaces),
@@ -1760,6 +1763,7 @@ func newLoggedSecretsHandler(
 	}
 
 	handler, handlerErr := pulumi.NewHandler(pulumi.Config{
+		SessionPolicy:           nil,
 		DisablePulumiJournaling: false,
 		Stacks:                  stacks,
 		Updates:                 newEnforcingUpdates(t, namespaces),
@@ -1939,6 +1943,7 @@ func newSecretFixtureWithLogger(t *testing.T, logged *bytes.Buffer) secretFixtur
 	}
 
 	handler, err := pulumi.NewHandler(pulumi.Config{
+		SessionPolicy:           nil,
 		DisablePulumiJournaling: false,
 		Stacks:                  stacks,
 		Updates:                 newEnforcingUpdates(t, namespaces),
@@ -1991,6 +1996,7 @@ func newFailingHandler(t *testing.T, err error) *pulumi.Handler {
 	}
 
 	handler, handlerErr := pulumi.NewHandler(pulumi.Config{
+		SessionPolicy:           nil,
 		DisablePulumiJournaling: false,
 		Stacks:                  stacks,
 		Updates:                 newEnforcingUpdates(t, namespaces),

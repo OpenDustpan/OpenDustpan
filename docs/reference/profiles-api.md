@@ -83,7 +83,11 @@ audit entry.
   profile that made it. A save with a `$sealed` value of another profile
   answers 400.
 - A read of a revision with `showSecrets=true` also answers the plain text of each secret.
-  It needs `profile:open`. The answer has `Cache-Control: no-store`. The
+  It needs `profile:open` and a console session with a recent sign-in. An
+  access token answers 403 with the error code `mfa.fresh-step-required`.
+  A session with an old sign-in answers 401 with the same error code and the
+  field `reauthenticate`. Each refusal writes an audit entry of the kind
+  `reveal` with the outcome `failure`. The answer has `Cache-Control: no-store`. The
   server writes an audit entry of the kind `reveal` before it answers, and
   the entry names the number of values and never a value. If the server
   cannot write the entry, no value leaves. A read with `showSecrets=true`
@@ -172,7 +176,7 @@ errors, `errorCode`.
 | --- | --- |
 | 400 | A bad name, document, body or query value |
 | 401 | No valid token |
-| 403 | The caller lacks the action, or a routing change lacks `profile:open` |
+| 403 | The caller lacks the action (`access.denied`). The IP allowlist refuses the address (`access.ip-not-allowed`). A session check fails (`session.csrf`, `session.other-site`). A routing change lacks `profile:open` (`profile.routing-change-needs-open`). A console session has an old sign-in (`mfa.fresh-step-required`) |
 | 404 | An unknown namespace, profile or revision |
 | 409 | A name in use, or a request with a key whose first request has not ended |
 | 412 | `If-Match` does not match the newest revision |

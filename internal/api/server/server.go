@@ -19,6 +19,7 @@ import (
 	"opendustpan.org/opendustpan/internal/api/idempotent"
 	denials "opendustpan.org/opendustpan/internal/api/refusal"
 	"opendustpan.org/opendustpan/internal/denylimit"
+	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/accesstoken"
 	"opendustpan.org/opendustpan/pkg/audit"
@@ -453,9 +454,19 @@ func (h *Handler) writeError(ctx context.Context, w http.ResponseWriter, err err
 	}
 
 	if fresh, ok := errors.AsType[reauthenticateError](err); ok {
-		h.writeJSON(ctx, w, status, reauthenticateResponse{Code: status, Message: message, Reauthenticate: fresh.url})
+		h.writeJSON(ctx, w, status, reauthenticateResponse{
+			Code: status, Message: message, Reauthenticate: fresh.url, ErrorCode: freshStepRequiredCode,
+		})
 
 		return
+	}
+
+	if status == http.StatusForbidden {
+		if code := errcode.Forbidden(err); code != "" {
+			h.writeJSON(ctx, w, status, codedResponse{Code: status, Message: message, ErrorCode: code, ErrorArgs: nil})
+
+			return
+		}
 	}
 
 	h.writeJSON(ctx, w, status, errorResponse{Code: status, Message: message})
@@ -521,8 +532,6 @@ func classifyRequest(err error) (int, string, bool) {
 	switch {
 	case errors.Is(err, identity.ErrUnauthenticated):
 		return http.StatusUnauthorized, "unauthenticated", true
-	case errors.Is(err, errFreshSession):
-		return http.StatusForbidden, errFreshSession.Error(), true
 	case errors.Is(err, identity.ErrDenied):
 		return http.StatusForbidden, "forbidden", true
 	case errors.Is(err, identity.ErrInvalidObject):

@@ -281,8 +281,10 @@ one.
 ## Tokens from a console session
 
 A signed-in person can create and rotate access tokens from the console,
-on the same routes as with a token. The sign-in of the session must be
-fresh: the token freshness window of the session policy sets how old it
+on the same routes as with a token. An access token never creates or
+rotates a token: the request answers 403 with the error code
+`mfa.fresh-step-required`, and changes nothing. The sign-in of the session
+must be fresh: the token freshness window of the session policy sets how old it
 can be. The default is 15 minutes, and 0 turns the check off.
 
 When the sign-in is older than the window, a create or a rotation answers
@@ -293,6 +295,26 @@ identity provider for a new authentication (`max_age=0`), and the callback
 refuses an authentication that is older. The new session then creates the
 token. For a plain OAuth 2.0 provider, see "Plain OAuth 2.0 providers":
 the window then counts from the last sign-in round trip.
+
+The same rule holds for these changes:
+
+- the session policy and the sign-in providers
+- the token policy
+- the roles (`POST` and `PATCH`)
+- the grants on the installation, on a namespace, on a collection and on a
+  principal (`POST`)
+- the members of a group (`POST` and `DELETE`) and the delete of a group,
+  because a grant to a group applies to each member
+- the approval of a change of the audit chain. Sign in before the server
+  restarts with the new setting: maintenance mode refuses a new sign-in
+- the IP allowlist of a namespace (`PUT` and `DELETE`)
+- the reveal of a secret value in the console, for a Pulumi stack, for an
+  OpenTofu state version and for a profile (`showSecrets=true`)
+
+An access token answers 403 with `mfa.fresh-step-required`. A session with an
+old sign-in answers 401 with `reauthenticate` and the same error code. A
+session with a sign-in time after the current time is also too old. A refused
+change adds a failure entry to the audit log.
 
 Set the window with `PATCH /api/server/session-policy` and the field
 `tokenFreshnessSeconds` (action `server:manage-sign-in`): 0, or 60 to

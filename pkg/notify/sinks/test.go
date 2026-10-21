@@ -230,6 +230,12 @@ func (s *Service) checkAddress(sink notify.Sink, to string) error {
 		return fmt.Errorf("check the address: %w", err)
 	}
 
+	// The test is a write-side check: it applies the host allowlist that a
+	// stored sink from before the allowlist does not pass.
+	if sink.Kind == notify.SinkWebhook && notify.WebhookHost(to) == "" {
+		return fmt.Errorf("check the address: %w: the host of the webhook is not an allowed form", egress.ErrRefused)
+	}
+
 	if sink.Kind != notify.SinkChat {
 		return nil
 	}

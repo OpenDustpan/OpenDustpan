@@ -37,6 +37,7 @@ import (
 	"opendustpan.org/opendustpan/internal/baseurl"
 	"opendustpan.org/opendustpan/internal/bodygate"
 	"opendustpan.org/opendustpan/internal/denylimit"
+	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/internal/sessionauth"
 	"opendustpan.org/opendustpan/internal/token"
 	"opendustpan.org/opendustpan/pkg/audit"
@@ -93,9 +94,12 @@ type Config struct {
 	Authorizer    identity.Authorizer
 	// Sessions checks the console session cookie of a request with no
 	// Authorization header. Nil accepts access tokens only.
-	Sessions    *sessionauth.Checker
-	AddressGate AddressGate
-	Logger      *slog.Logger
+	Sessions *sessionauth.Checker
+	// SessionPolicy gives the token freshness window of the session policy.
+	// Nil means session.DefaultTokenFreshness.
+	SessionPolicy SessionPolicy
+	AddressGate   AddressGate
+	Logger        *slog.Logger
 	// BaseURL reports the external base URL for a request, for absolute
 	// URLs. The zero value derives it from each request.
 	BaseURL baseurl.Resolver
@@ -133,6 +137,7 @@ type Handler struct {
 	namespaces     *namespace.Service
 	authn          identity.Authenticator
 	sessions       *sessionauth.Checker
+	sessionPolicy  SessionPolicy
 	authz          identity.Authorizer
 	addressGate    AddressGate
 	logger         *slog.Logger
@@ -184,6 +189,7 @@ func NewHandler(cfg Config) (*Handler, error) {
 		namespaces:     cfg.Namespaces,
 		authn:          cfg.Authenticator,
 		sessions:       cfg.Sessions,
+		sessionPolicy:  cfg.SessionPolicy,
 		authz:          cfg.Authorizer,
 		addressGate:    cfg.AddressGate,
 		logger:         cfg.Logger,
@@ -884,28 +890,39 @@ func unitObject(ref stack.Ref) (identity.Object, error) {
 // A request with no Authorization header uses the console session cookie,
 // and the bool reports that the cookie signed it in. A request with an
 // Authorization header never uses the cookie.
-func (h *Handler) authenticate(r *http.Request) (identity.Principal, bool, error) {
+func (h *Handler) authenticate(r *http.Request) (identity.Principal, *sessionauth.Caller, error) {
 	header := r.Header.Get("Authorization")
 	if header == "" {
-		p, _, err := h.sessions.Authenticate(r)
+		p, caller, err := h.sessions.Authenticate(r)
+		if err != nil {
+			return p, nil, err
+		}
 
-		return p, err == nil, err
+		return p, &caller, nil
 	}
 
 	raw, ok := strings.CutPrefix(header, tokenScheme)
 	if !ok || raw == "" {
-		return identity.Principal{}, false, identity.ErrUnauthenticated
+		return identity.Principal{}, nil, identity.ErrUnauthenticated
 	}
 
 	p, err := h.authn.AuthenticateToken(r.Context(), raw)
 
-	return p, false, err
+	return p, nil, err
 }
 
 // errorResponse is the error body the Pulumi CLI expects.
 type errorResponse struct {
 	Message string `json:"message"`
 	Code    int    `json:"code"`
+}
+
+// codedErrorResponse is errorResponse with the stable machine code of a 403.
+// The fields of errorResponse keep their names and their meaning.
+type codedErrorResponse struct {
+	Message   string `json:"message"`
+	Code      int    `json:"code"`
+	ErrorCode string `json:"errorCode"`
 }
 
 func (h *Handler) writeError(ctx context.Context, w http.ResponseWriter, err error) {
@@ -921,6 +938,14 @@ func (h *Handler) writeError(ctx context.Context, w http.ResponseWriter, err err
 	case errors.Is(err, namespace.ErrFenced):
 		h.logger.WarnContext(ctx, "write fenced", slog.String("error", err.Error()))
 	default:
+	}
+
+	if status == http.StatusForbidden {
+		if code := errcode.Forbidden(err); code != "" {
+			h.writeJSON(ctx, w, status, codedErrorResponse{Code: status, Message: message, ErrorCode: code})
+
+			return
+		}
 	}
 
 	h.writeJSON(ctx, w, status, errorResponse{Code: status, Message: message})

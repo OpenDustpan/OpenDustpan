@@ -68,7 +68,7 @@ func newIPAllowlistAPIServer(t *testing.T) *dustpan.Server {
 		t.Fatalf("create namespace: %v", createErr)
 	}
 
-	srv, err := dustpan.NewServer(
+	srv, err := dustpan.NewServer(append(signInOptions(t, st),
 		dustpan.WithRegion(region),
 		dustpan.WithNamespaceStore(st),
 		dustpan.WithStackStore(st),
@@ -86,10 +86,12 @@ func newIPAllowlistAPIServer(t *testing.T) *dustpan.Server {
 		dustpan.WithIPAllowlistsIncludeBootstrap(true),
 		dustpan.WithIPAllowlistStore(st),
 		dustpan.WithClock(func() time.Time { return time.Date(2026, time.October, 8, 21, 0, 0, 0, time.UTC) }),
-	)
+	)...)
 	if err != nil {
 		t.Fatalf("new server: %v", err)
 	}
+
+	registerServer(srv, st, func() time.Time { return time.Date(2026, time.October, 8, 21, 0, 0, 0, time.UTC) })
 
 	return srv
 }
@@ -110,6 +112,11 @@ func serveIPAllowAPI(t *testing.T, srv *dustpan.Server, req ipAPIRequest) (int, 
 	httpReq := httptest.NewRequestWithContext(t.Context(), req.method, req.path, strings.NewReader(req.body))
 	httpReq.RemoteAddr = req.remote
 	httpReq.Header.Set("Authorization", "Bearer "+adminToken)
+
+	// A change of a list needs a console session with a recent sign-in.
+	if needsConsole(req.method, req.path) {
+		addConsole(t, srv, httpReq, consolePerson)
+	}
 
 	rec := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(rec, httpReq)

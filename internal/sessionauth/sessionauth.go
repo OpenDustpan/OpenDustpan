@@ -160,6 +160,18 @@ func (c *Checker) Authenticate(r *http.Request) (identity.Principal, Caller, err
 	return p, Caller{Match: m, Secret: secret}, nil
 }
 
+// Now returns the time of the clock of the session service, or the system
+// time when the service has no clock of its own.
+func (c *Checker) Now() time.Time {
+	if c != nil {
+		if clock, ok := c.sessions.(interface{ Now() time.Time }); ok {
+			return clock.Now()
+		}
+	}
+
+	return time.Now().UTC()
+}
+
 // sameSite reports whether a request with the session cookie may come from
 // where it comes from: its Origin header, when present, must be an allowed
 // origin; without one, the browser must not mark it as cross-site.
@@ -208,4 +220,42 @@ func AuditChannel(r *http.Request, header string) audit.Channel {
 	}
 
 	return audit.NormalizeChannel(r.Header.Get(header))
+}
+
+// SignIn is the authentication at the identity provider of the session
+// that signed a request in: the time, and the provider that a new sign-in
+// asks.
+type SignIn struct {
+	At       time.Time
+	Provider string
+}
+
+// signInKey carries the SignIn of the session of a request.
+type signInKey struct{}
+
+// WithSignIn returns ctx with the sign-in of the session of the request.
+func WithSignIn(ctx context.Context, in SignIn) context.Context {
+	return context.WithValue(ctx, signInKey{}, in)
+}
+
+// SignInFrom returns the SignIn that WithSignIn set, and false for a context
+// that has none, for example the context of a request with an access token.
+func SignInFrom(ctx context.Context) (SignIn, bool) {
+	in, ok := ctx.Value(signInKey{}).(SignIn)
+
+	return in, ok
+}
+
+// Fresh reports whether a sign-in at authTime is recent enough at now: its
+// age is at most window. A sign-in after now has a negative age, for example
+// when the clock steps back, and is never fresh. A window of 0 turns the
+// check off, so any sign-in passes.
+func Fresh(now, authTime time.Time, window time.Duration) bool {
+	if window == 0 {
+		return true
+	}
+
+	age := now.Sub(authTime)
+
+	return age >= 0 && age <= window
 }
