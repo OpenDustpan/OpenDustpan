@@ -94,7 +94,7 @@ type ErrorResponse struct {
 	Code int64 `json:"code"`
 	// The arguments of the text of the error.
 	ErrorArgs map[string]json.RawMessage `json:"errorArgs,omitempty"`
-	// A stable code for a program.
+	// A stable code for a program. A 403 for a missing permission, an address outside the IP allowlist, a missing CSRF header or a request from another site has one: access.denied, access.ip-not-allowed, session.csrf or session.other-site.
 	ErrorCode *string `json:"errorCode,omitempty"`
 	// A text for a person.
 	Message string `json:"message"`
