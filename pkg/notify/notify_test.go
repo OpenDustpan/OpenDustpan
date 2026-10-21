@@ -596,6 +596,17 @@ func TestChatHost(t *testing.T) {
 		{"https://hooks.example.com;secret/x", "", notify.ErrInvalid},
 		{"https://hooks.example.com:/x", "", notify.ErrInvalid},
 		{"https://a_b!$&'()*+,=.example.com/x", "", notify.ErrInvalid},
+		{"https://hooks.example.com:0443/x", "", notify.ErrInvalid},
+		{"https://[::ffff:8.8.8.8]/x", "[::ffff:8.8.8.8]", nil},
+		// The hosts of the chat platforms.
+		{"https://hooks.slack.com/services/T0/B0/x", "hooks.slack.com", nil},
+		{"https://hooks.slack-gov.com/services/T0/B0/x", "hooks.slack-gov.com", nil},
+		{"https://contoso.webhook.office.com/webhookb2/x", "contoso.webhook.office.com", nil},
+		{"https://prod-27.westus.logic.azure.com:443/workflows/x", "prod-27.westus.logic.azure.com:443", nil},
+		{"https://discord.com/api/webhooks/1/x", "discord.com", nil},
+		{"https://chat.googleapis.com/v1/spaces/S/messages?key=k", "chat.googleapis.com", nil},
+		{"https://mattermost.example.com/hooks/x", "mattermost.example.com", nil},
+		{"https://matrix.example.com:8448/_matrix/x", "matrix.example.com:8448", nil},
 	}
 
 	for _, tc := range cases {
@@ -974,6 +985,16 @@ func TestWebhookHost(t *testing.T) {
 		{"a port over 65535", "https://hooks.example.com:65536/x", ""},
 		{"a port of 6 digits", "https://hooks.example.com:000080/x", ""},
 		{"a port of zero", "https://hooks.example.com:0/x", ""},
+		{"a port with a leading zero", "https://hooks.example.com:0443/x", ""},
+		{"an IPv4-mapped IPv6 literal", "https://[::ffff:8.8.8.8]/x", "[::ffff:8.8.8.8]"},
+		{"Slack", "https://hooks.slack.com/services/T0/B0/SECRET", "hooks.slack.com"},
+		{"GovSlack", "https://hooks.slack-gov.com/services/T0/B0/SECRET", "hooks.slack-gov.com"},
+		{"Teams", "https://contoso.webhook.office.com/webhookb2/SECRET", "contoso.webhook.office.com"},
+		{"Teams workflow", "https://prod-27.westus.logic.azure.com:443/SECRET", "prod-27.westus.logic.azure.com:443"},
+		{"Discord", "https://discord.com/api/webhooks/1/SECRET", "discord.com"},
+		{"Google Chat", "https://chat.googleapis.com/v1/spaces/S/messages?key=SECRET", "chat.googleapis.com"},
+		{"Mattermost", "https://mattermost.example.com/hooks/SECRET", "mattermost.example.com"},
+		{"Matrix", "https://matrix.example.com:8448/_matrix/SECRET", "matrix.example.com:8448"},
 		{"a label that starts with a hyphen", "https://-hooks.example.com/x", ""},
 		{"an empty label", "https://hooks..example.com/x", ""},
 		{"a trailing dot", "https://hooks.example.com./x", ""},
@@ -988,5 +1009,83 @@ func TestWebhookHost(t *testing.T) {
 				t.Errorf("WebhookHost(%q) = %q, want %q", tc.url, got, tc.want)
 			}
 		})
+	}
+}
+
+// legacySink returns a sink whose host passed the checks before the host
+// allowlist of a write.
+func legacySink(kind notify.SinkKind, target string) notify.Sink {
+	s := notify.Sink{
+		ID: "snk-1", Scope: "acme", Kind: kind, Name: "Ops", Platform: "", Target: target,
+		SecretRefs: []string{"itm-1"}, CreatedBy: "ana", Version: 1,
+	}
+	if kind == notify.SinkChat {
+		s.Platform = "mattermost"
+	}
+
+	return s
+}
+
+func TestStoredHostFromBeforeTheAllowlist(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name string
+		sink notify.Sink
+	}{
+		{"a chat host in raw Unicode", legacySink(notify.SinkChat, "chat.müller.de")},
+		{"a chat host with a trailing dot", legacySink(notify.SinkChat, "mm.example.com.")},
+		{"a chat host with an underscore", legacySink(notify.SinkChat, "mm_chat.example.com")},
+		{"a chat host with an empty port", legacySink(notify.SinkChat, "hooks.example.com:")},
+		{"a chat host that ends a label with a hyphen", legacySink(notify.SinkChat, "a.b-.com")},
+		{"a webhook host with an underscore", legacySink(notify.SinkWebhook, "https://hk_1.example.com/x")},
+		{"a webhook host with a port of leading zeros", legacySink(notify.SinkWebhook, "https://hk.example.com:0443/x")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			if err := tc.sink.Validate(); err != nil {
+				t.Errorf("Validate = %v, want nil: a stored sink still lists, sends and restores", err)
+			}
+
+			if !tc.sink.HostNeedsUpdate() {
+				t.Error("HostNeedsUpdate = false, want true")
+			}
+
+			err := tc.sink.ValidateWrite()
+			if !errors.Is(err, notify.ErrInvalid) {
+				t.Errorf("ValidateWrite = %v, want ErrInvalid", err)
+			}
+
+			if err != nil && strings.Count(err.Error(), notify.ErrInvalid.Error()) != 1 {
+				t.Errorf("ValidateWrite = %q, want the sentinel once", err)
+			}
+		})
+	}
+}
+
+func TestStoredHostThatTheEgressRulesRefuse(t *testing.T) {
+	t.Parallel()
+
+	for _, s := range []notify.Sink{
+		legacySink(notify.SinkChat, "127.0.0.1"),
+		legacySink(notify.SinkWebhook, "http://hooks.example.com/x"),
+	} {
+		if err := s.Validate(); !errors.Is(err, notify.ErrInvalid) {
+			t.Errorf("Validate(%q) = %v, want ErrInvalid", s.Target, err)
+		}
+	}
+}
+
+func TestHostThatPassesTheAllowlist(t *testing.T) {
+	t.Parallel()
+
+	for _, s := range []notify.Sink{
+		legacySink(notify.SinkChat, "mm.example.com:8443"),
+		legacySink(notify.SinkWebhook, "https://hooks.example.com/SECRET"),
+	} {
+		if err := s.ValidateWrite(); err != nil || s.HostNeedsUpdate() {
+			t.Errorf("ValidateWrite(%q) = %v, flag = %v; want nil, false", s.Target, err, s.HostNeedsUpdate())
+		}
 	}
 }

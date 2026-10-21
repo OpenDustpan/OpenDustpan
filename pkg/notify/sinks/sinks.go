@@ -149,7 +149,7 @@ func (s *Service) Create(ctx context.Context, c *Caller, ns namespace.Name, in N
 	// the body. This check stays so that a refused sink costs no read of the
 	// namespace and no sealing, and so that a store that skips its check cannot
 	// take an invalid sink from this service.
-	if err = sink.Validate(); err != nil {
+	if err = sink.ValidateWrite(); err != nil {
 		return Created{}, fmt.Errorf("create sink: %w", err)
 	}
 
@@ -224,7 +224,7 @@ func (s *Service) Replace(
 	// Defense in depth: the store validates the sink again. This check stays so
 	// that a refused sink costs no sealing, and so that a store that skips its
 	// check cannot take an invalid sink from this service.
-	if err = next.Validate(); err != nil {
+	if err = next.ValidateWrite(); err != nil {
 		return notify.Sink{}, fmt.Errorf("replace sink: %w", err)
 	}
 
@@ -364,7 +364,11 @@ func (*Service) secretValue(sink *notify.Sink, url string) ([]byte, error) {
 	case notify.SinkChat:
 		host, err := notify.ChatHost(url)
 		if err != nil {
-			return nil, fmt.Errorf("%w: %w", notify.ErrInvalid, err)
+			if !errors.Is(err, notify.ErrInvalid) {
+				err = fmt.Errorf("%w: %w", notify.ErrInvalid, err)
+			}
+
+			return nil, err
 		}
 
 		sink.Target = host

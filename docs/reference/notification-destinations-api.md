@@ -36,6 +36,7 @@ A write carries the fence of the namespace. A stale fence answers 409
 | `kind` | `webhook`, `chat` or `email` |
 | `platform` | For `chat`: `slack`, `teams`, `mattermost` or `matrix`. Not in the answer for another kind. |
 | `name` | 1 to 100 bytes |
+| `hostNeedsUpdate` | `true` when the stored host of a `webhook` or `chat` destination fails the host check of a write. The destination still sends. A change of it needs a host that passes. Absent otherwise. |
 | `target` | The address of an `email` destination, or the host of a `webhook` or of a `chat` webhook. The answer never holds the path or the query of a URL. |
 | `urlSet` | `true` for a `chat` destination. It says that a URL exists. |
 | `createdBy` | The subject that made the destination |

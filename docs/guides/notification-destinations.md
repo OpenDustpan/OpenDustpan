@@ -77,8 +77,15 @@ database and each backup hold it as plain text. Protect them the same way as
 other secrets.
 
 The host of the URL must be an ASCII DNS name or an IP address, with an
-optional port of 1 to 65535. The server refuses any other host with 400. For
-a name with non-ASCII letters, write its punycode form.
+optional port of 1 to 65535, with no leading zero. The server refuses any other
+host with 400 when you make a destination, change one, or send a test. For a
+name with non-ASCII letters, write its punycode form.
+
+A destination that you made before this check keeps working: it is listed, it
+gets notifications, and a backup that holds it restores. When its host fails
+the check, the list shows `hostNeedsUpdate: true`, and the `target` of a
+webhook shows empty. To change such a destination, give it a host that passes
+the check.
 
 ## Check the signature in your receiver
 
