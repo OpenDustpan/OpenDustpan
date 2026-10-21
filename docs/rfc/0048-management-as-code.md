@@ -12,10 +12,11 @@ CLI and the OpenTofu and Pulumi providers come now, from the published API
 description, with a version pin before 1.0. Unit settings are not kept in the
 repository. Ownership rules are managed as code through the providers. ADR 270
 also records the answers to questions 1 and 4 to 8, which the product manager
-decided under the owner's delegation of 20 October 2026. Questions 2 and 3 stay
-open, because they need the owner: question 2 asks for a generator dependency,
-and question 3 asks for a new repository. This RFC stays `discussing` until the
-owner answers both. This change holds no client code. The section "The client
+decided under the owner's delegation of 20 October 2026. Question 2 has an
+answer now: RFC 99 amendment 1 records that OpenDustpan owns its client
+generator, so the generated layer needs no new dependency. Question 3 stays
+open, because it asks for a new repository, which needs the owner. This RFC
+stays `discussing` until the owner answers question 3. This change holds no client code. The section "The client
 port" holds the contract that the client code must meet when it lands in the
 repository that question 3 chooses.
 
@@ -62,7 +63,7 @@ Facts on `main` (checked 2026-10-20):
   token never gives a fresh authentication (ADR 227 decision 6).
 - The API description (ADR 264, RFC 99) is in design. The package
   `internal/api/apidesc` holds the types and the drift check. No description is
-  served yet, and no generator is chosen (RFC 99 question 6).
+  served yet. OpenDustpan owns its generator (RFC 99 amendment 1).
 - `GET /api/dustpan/v1/capabilities` is public and gives `apiVersion`
   (`v1`) and, for a signed-in caller, the installation kind. The server version
   is in `/api/server/upgrade-check`, which needs `server:observe` on the
@@ -119,25 +120,27 @@ each case the client library comes first and tools are thin layers over it.
 
 ### 2. A client written by hand, or generated from the description?
 
-**Open. This question needs the owner.** A generator is a new dependency. The
-project asks the owner before it adds a dependency (`CLAUDE.md`), and RFC 99
-question 6 holds the trial and the license rules. ADR 264 decision 5 says that
-the CLI and the providers are generated from the published description. This
-RFC does not choose a generator and does not decide this question.
+**Answered by the owner on 2026-10-20, in RFC 99 amendment 1.** OpenDustpan
+writes its own client generator and uses no third-party generator, so the
+generated layer adds no dependency to the project. The Go client is
+`client-go`, in its own repository. ADR 264 decision 5 says that the CLI and
+the providers are generated from the published description, and the generated
+layer of option C is that client. The text below is the question as it was
+before the answer.
 
 | Option | Gives | Costs |
 | --- | --- | --- |
 | A. Hand-written client | No generator dependency. Full control of errors, retries and `If-Match`. | A person writes each call. The client can drift from the server, which is the problem ADR 264 solves. |
-| B. Generated client from the description, behind the port | Matches the server by construction. A new route costs no call code. | Needs an approved generator and a published description (RFC 99). A generated client has awkward errors, and the port must wrap it. |
-| C. The port in the client repository, a small hand-written transport (`Idempotency-Key`, `If-Match`, cursors, error translation), and a generated typed layer behind it | The CLI and the providers depend on the port only, so a later change of the generator touches one adapter. This is the RFC 99 shape of the transport layer. | The same dependency as B. |
+| B. Generated client from the description, behind the port | Matches the server by construction. A new route costs no call code. | Needs the generator of RFC 99 amendment 1 and a published description. A generated client has awkward errors, and the port must wrap it. |
+| C. The port in the client repository, a small hand-written transport (`Idempotency-Key`, `If-Match`, cursors, error translation), and a generated typed layer behind it | The CLI and the providers depend on the port only, so a later change of the generator touches one adapter. This is the RFC 99 shape of the transport layer. | The same generator as B. |
 
-**Recommendation: C, and do not start the generated layer before the owner
-approves a generator.** Until then, the port contract in this RFC is the
-specification, and a hand-written adapter for the three first kinds is enough for
-the CLI and for the e2e tests. The hand-written adapter then follows ADR 264
-decision 5 only in part, so the owner should say whether a temporary
-hand-written adapter is acceptable. If the answer is no, the first client waits
-for RFC 99 question 6.
+**Recommendation: C.** The generated layer is the Go client of RFC 99 amendment
+1. It starts when the generator and `client-go` exist. Until then, the port
+contract in this RFC is the specification, and a hand-written adapter for the
+three first kinds is enough for the CLI and for the e2e tests. The
+hand-written adapter then follows ADR 264 decision 5 only in part. The first
+client waits for `client-go` if the owner does not accept a temporary
+hand-written adapter.
 
 Benchmark: Kubernetes `client-go` has generated clientsets and hand-written
 `rest` helpers. The AWS SDKs generate service clients from API models and keep
@@ -150,8 +153,9 @@ Facts. A provider is a client program that a workstation or a runner starts. It
 must not link the SQL drivers or the key code of the server (ADR 170 decision
 3 gives this reason for `providerkit`). `providerkit` is in its own repository
 with its own tags. Release archives for OpenTofu and for the Pulumi CLI come
-from one binary (ADR 177). RFC 99 proposes the SDKs in `sdk/` of this
-repository, with `sdk/go` as its own module.
+from one binary (ADR 177). RFC 99 amendment 1 puts the Go client in its own
+repository, `client-go`, with the module path `opendustpan.org/client`. It
+replaces the earlier proposal of `sdk/` in this repository.
 
 | Option | Gives | Costs |
 | --- | --- | --- |
@@ -159,9 +163,8 @@ repository, with `sdk/go` as its own module.
 | B. One new repository for the CLI and both providers | The CLI and the providers share the client and the release. They have a version line of their own. The module does not hold server code. | An API change needs a pull request in two repositories. |
 | C. A repository for each product | Each has its own release page and tag. A registry that expects a repository name by convention can find it. | Three repositories for one client. |
 
-Both A and B keep the client out of the `go.mod` of the server, because a
-separate Go module has its own `go.mod`. RFC 99 proposes this for `sdk/go`.
-`pkg/` is the server SDK (ADR 35), so client code does not go in `pkg/` in
+In every option the CLI and the providers use the client from `client-go`,
+so the client is outside the `go.mod` of the server. `pkg/` is the server SDK (ADR 35), so client code does not go in `pkg/` in
 either option.
 
 **Recommendation: B.** One repository, with the CLI and the provider core in
@@ -521,10 +524,10 @@ ownership rule routes sets them.
 
 1. Take ADR 270 as the decision of the owner and of the product manager.
 2. Build in this order: the server work in "Follow-up work", then the client
-   (a hand-written adapter for the three first kinds when the owner approves
-   question 2, or the generated layer when RFC 99 has a generator), the CLI,
+   (a hand-written adapter for the three first kinds when the owner accepts
+   it, or the generated layer when `client-go` exists), the CLI,
    the OpenTofu provider and the Pulumi provider.
-3. Questions 2 and 3 wait for the owner. For question 3, present the registry
+3. Question 3 waits for the owner. For question 3, present the registry
    naming check as a precondition, and the rule that a client release ships on
    the day of each server minor release.
 4. The e2e suite drives the real OpenTofu CLI and the real Pulumi CLI to

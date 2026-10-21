@@ -35,9 +35,9 @@ var ErrUnsupported = errors.New("clientgen: construct is not supported")
 var ErrInvalidDescription = errors.New("clientgen: description is not valid")
 
 // ErrInvalidName means that a name from the description, for example an
-// operation ID, a schema name, a field name or an enum value, does not match
-// the allowlist of names, or that it is a reserved word of a target language
-// with no rule to change it.
+// operation ID, a schema name, a field name, a parameter name or an enum
+// value, does not match the allowlist of names, or that it is a reserved word
+// of a target language with no rule to change it.
 var ErrInvalidName = errors.New("clientgen: name is not valid")
 
 // ErrUnsafePath means that a generated file has a path that is absolute,
@@ -59,8 +59,13 @@ type Options struct {
 	// Package is the package or module name of the client in the target
 	// language, for example opendustpan.org/client for Go.
 	Package string
-	// ClientVersion is the version of the client release.
+	// ClientVersion is the version of the client release. Its major and minor
+	// parts are those of the description version.
 	ClientVersion string
+	// ServerRelease is the release of the server that the description comes
+	// from. The client carries it in its metadata and in its user agent,
+	// next to the description version.
+	ServerRelease string
 	// GeneratorVersion is the version of the generator. It goes into the
 	// header of each generated file.
 	GeneratorVersion string
