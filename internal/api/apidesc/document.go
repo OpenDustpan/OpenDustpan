@@ -227,9 +227,12 @@ func errorSchemaObject() object {
 		keyType:     typeObject,
 		keyRequired: []any{"code", "message"},
 		"properties": object{
-			"code":      object{keyType: "integer", keyDescription: "The HTTP status."},
-			"message":   object{keyType: typeString, keyDescription: "A text for a person."},
-			"errorCode": object{keyType: typeString, keyDescription: "A stable code for a program."},
+			"code":    object{keyType: "integer", keyDescription: "The HTTP status."},
+			"message": object{keyType: typeString, keyDescription: "A text for a person."},
+			"errorCode": object{
+				keyType:        typeString,
+				keyDescription: "A stable code for a program. A 403 for a missing permission, an address outside the IP allowlist, a missing CSRF header or a request from another site has one: access.denied, access.ip-not-allowed, session.csrf or session.other-site.",
+			},
 			"errorArgs": object{
 				keyType:                typeObject,
 				keyDescription:         "The arguments of the text of the error.",
