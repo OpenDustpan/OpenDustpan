@@ -298,7 +298,7 @@ func TestProviders(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			got, err := e.svc.Providers(context.Background(), tt.ns)
+			got, err := e.svc.Providers(t.Context(), tt.ns)
 			if !errors.Is(err, tt.wantErr) {
 				t.Fatalf("Providers(%q) error = %v, want %v", tt.ns, err, tt.wantErr)
 			}

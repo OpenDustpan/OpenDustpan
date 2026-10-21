@@ -83,10 +83,10 @@ type providerDocument struct {
 }
 
 // listProvidersResponse is one page of GET .../registry/providers. Providers
-// is never null. NextCursor is empty on the last page.
+// is never null. NextPageToken is empty on the last page.
 type listProvidersResponse struct {
-	Providers  []providerDocument `json:"providers"`
-	NextCursor string             `json:"nextCursor"`
+	Providers     []providerDocument `json:"providers"`
+	NextPageToken string             `json:"nextPageToken"`
 }
 
 type keyBody struct {
@@ -271,54 +271,54 @@ func (h *Handler) publish(w http.ResponseWriter, r *http.Request, p identity.Pri
 }
 
 const (
-	// defaultProviderPage is the page size when the request has no limit.
+	// defaultProviderPage is the page size when the request has no pageSize.
 	defaultProviderPage = 100
 	// maxProviderPage is the largest page size a request may ask for.
 	maxProviderPage = 1000
 )
 
 var (
-	errProviderLimit = badRequest(
-		"request.page-invalid", "invalid page: limit is a number from 1 to 1000",
+	errProviderPageSize = badRequest(
+		"request.page-size-invalid", "invalid page size: pageSize is a number from 1 to 1000",
 	)
-	errProviderCursor = badRequest(
-		"request.cursor-invalid", "invalid cursor: provide the nextCursor of the page before",
+	errProviderPageToken = badRequest(
+		"request.page-token-invalid", "invalid page token: provide the nextPageToken of the page before",
 	)
 )
 
 // providerQuery is one validated list request: the page size and the name
 // after which the page starts. After is empty for the first page.
 type providerQuery struct {
-	limit int
-	after string
+	pageSize int
+	after    string
 }
 
-// parseProviderQuery reads the limit and the cursor. The cursor is the
+// parseProviderQuery reads the pageSize and the pageToken. The token is the
 // base64url form of a provider name. It is untrusted input: it is checked
 // against the same rules as the name of a provider, and a value that fails is
 // refused, never repaired.
 func parseProviderQuery(r *http.Request, ns namespace.Name) (providerQuery, error) {
 	q := r.URL.Query()
-	out := providerQuery{limit: defaultProviderPage, after: ""}
+	out := providerQuery{pageSize: defaultProviderPage, after: ""}
 
-	if raw := q.Get("limit"); raw != "" {
+	if raw := q.Get("pageSize"); raw != "" {
 		n, err := strconv.Atoi(raw)
 		if err != nil || n < 1 || n > maxProviderPage {
-			return providerQuery{}, errProviderLimit
+			return providerQuery{}, errProviderPageSize
 		}
 
-		out.limit = n
+		out.pageSize = n
 	}
 
-	if raw := q.Get("cursor"); raw != "" {
+	if raw := q.Get("pageToken"); raw != "" {
 		decoded, err := base64.RawURLEncoding.DecodeString(raw)
 		if err != nil {
-			return providerQuery{}, errProviderCursor
+			return providerQuery{}, errProviderPageToken
 		}
 
 		addr := registry.Address{Namespace: ns, Kind: registry.KindProvider, Name: string(decoded), System: ""}
 		if addr.Validate() != nil {
-			return providerQuery{}, errProviderCursor
+			return providerQuery{}, errProviderPageToken
 		}
 
 		out.after = addr.Name
@@ -329,7 +329,7 @@ func parseProviderQuery(r *http.Request, ns namespace.Name) (providerQuery, erro
 
 // listProviders serves GET .../registry/providers: one page of the providers
 // of the namespace that have at least one release, ordered by name. A bad
-// limit or cursor answers 400.
+// pageSize or pageToken answers 400.
 func (h *Handler) listProviders(w http.ResponseWriter, r *http.Request, _ identity.Principal, obj identity.Object) {
 	ctx := r.Context()
 
@@ -348,18 +348,18 @@ func (h *Handler) listProviders(w http.ResponseWriter, r *http.Request, _ identi
 	}
 
 	// The names are in order, so the page starts at the first name after the
-	// cursor. A cursor that names no provider still pages from where the name
+	// token. A token that names no provider still pages from where the name
 	// would be.
 	start := sort.Search(len(names), func(i int) bool { return names[i] > query.after })
-	end := min(start+query.limit, len(names))
-	page := listProvidersResponse{Providers: make([]providerDocument, 0, end-start), NextCursor: ""}
+	end := min(start+query.pageSize, len(names))
+	page := listProvidersResponse{Providers: make([]providerDocument, 0, end-start), NextPageToken: ""}
 
 	for _, name := range names[start:end] {
 		page.Providers = append(page.Providers, providerDocument{Namespace: obj.Namespace().String(), Name: name})
 	}
 
 	if end < len(names) {
-		page.NextCursor = base64.RawURLEncoding.EncodeToString([]byte(names[end-1]))
+		page.NextPageToken = base64.RawURLEncoding.EncodeToString([]byte(names[end-1]))
 	}
 
 	h.writeJSON(ctx, w, http.StatusOK, page)

@@ -44,11 +44,11 @@ of one file answers 413. An empty body answers 400.
 
 ### List providers
 
-`GET /providers` answers `{"providers": [{"namespace", "name"}], "nextCursor"}`.
-`limit` is a number from 1 to 1000, and the default is 100. When more providers
-remain, `nextCursor` holds the value to send as `cursor` in the next request.
+`GET /providers` answers `{"providers": [{"namespace", "name"}], "nextPageToken"}`.
+`pageSize` is a number from 1 to 1000, and the default is 100. When more providers
+remain, `nextPageToken` holds the value to send as `pageToken` in the next request.
 It is empty on the last page. A namespace with no provider answers an empty
-list. A `limit` or a `cursor` that is not valid answers 400.
+list. A `pageSize` or a `pageToken` that is not valid answers 400.
 
 ### Publish
 

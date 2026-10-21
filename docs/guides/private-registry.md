@@ -163,17 +163,17 @@ least one release. The list is in the order of the provider name:
 
 ```sh
 curl -sS -H "Authorization: token <token>" \
-  "https://dustpan.example.com/api/dustpan/v1/namespaces/acme/registry/providers?limit=50"
+  "https://dustpan.example.com/api/dustpan/v1/namespaces/acme/registry/providers?pageSize=50"
 ```
 
 ```json
-{"providers": [{"namespace": "acme", "name": "payments"}], "nextCursor": ""}
+{"providers": [{"namespace": "acme", "name": "payments"}], "nextPageToken": ""}
 ```
 
-`limit` is a number from 1 to 1000. The default is 100. When more providers
-remain, `nextCursor` holds a value. Send it as `cursor` in the next request.
-`nextCursor` is empty on the last page. A namespace with no provider answers
-an empty list. A `limit` or a `cursor` that is not valid answers 400.
+`pageSize` is a number from 1 to 1000. The default is 100. When more providers
+remain, `nextPageToken` holds a value. Send it as `pageToken` in the next request.
+`nextPageToken` is empty on the last page. A namespace with no provider answers
+an empty list. A `pageSize` or a `pageToken` that is not valid answers 400.
 
 ## Remove a key
 

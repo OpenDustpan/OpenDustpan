@@ -272,9 +272,9 @@ func (sc *registryScenario) publishGood(ctx context.Context, t *testing.T) {
 
 	sc.checkProviders(ctx, t, `"name":"`+good.name+`"`)
 
-	// A cursor that is not a provider name is refused.
-	if bad := sc.api.call(ctx, t, http.MethodGet, "/providers?cursor=../x", ""); bad.Status != http.StatusBadRequest {
-		t.Fatalf("list providers with a hostile cursor = %d %s", bad.Status, bad.Body)
+	// A page token that is not a provider name is refused.
+	if bad := sc.api.call(ctx, t, http.MethodGet, "/providers?pageToken=../x", ""); bad.Status != http.StatusBadRequest {
+		t.Fatalf("list providers with a hostile page token = %d %s", bad.Status, bad.Body)
 	}
 
 	// The same files again are a repeat and change nothing.
@@ -290,13 +290,13 @@ func (sc *registryScenario) publishGood(ctx context.Context, t *testing.T) {
 }
 
 // checkProviders proves that the provider list answers 200 with one page that
-// holds want and no next cursor.
+// holds want and no next page token.
 func (sc *registryScenario) checkProviders(ctx context.Context, t *testing.T, want string) {
 	t.Helper()
 
 	resp := sc.api.call(ctx, t, http.MethodGet, "/providers", "")
 	if resp.Status != http.StatusOK || !strings.Contains(resp.Body, want) ||
-		!strings.Contains(resp.Body, `"nextCursor":""`) {
+		!strings.Contains(resp.Body, `"nextPageToken":""`) {
 		t.Fatalf("list providers = %d %s, want %s", resp.Status, resp.Body, want)
 	}
 }

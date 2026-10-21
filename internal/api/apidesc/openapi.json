@@ -1614,7 +1614,7 @@
       },
       "ListRegistryProvidersResponse": {
         "properties": {
-          "nextCursor": {
+          "nextPageToken": {
             "type": "string"
           },
           "providers": {
@@ -1625,7 +1625,7 @@
           }
         },
         "required": [
-          "nextCursor",
+          "nextPageToken",
           "providers"
         ],
         "type": "object"

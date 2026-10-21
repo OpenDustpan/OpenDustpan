@@ -724,8 +724,8 @@ func TestNewHandlerNeedsItsDependencies(t *testing.T) {
 
 // providerPage is the part of a provider list that the tests read.
 type providerPage struct {
-	Providers  []providerWire `json:"providers"`
-	NextCursor string         `json:"nextCursor"`
+	Providers     []providerWire `json:"providers"`
+	NextPageToken string         `json:"nextPageToken"`
 }
 
 type providerWire struct {
@@ -757,7 +757,7 @@ func pageNames(t *testing.T, got response) ([]string, string) {
 		names = append(names, p.Name)
 	}
 
-	return names, page.NextCursor
+	return names, page.NextPageToken
 }
 
 func TestListProviders(t *testing.T) {
@@ -775,7 +775,7 @@ func TestListProviders(t *testing.T) {
 	}
 
 	providers := base + "/providers"
-	cursorOf := func(name string) string { return base64.RawURLEncoding.EncodeToString([]byte(name)) }
+	tokenOf := func(name string) string { return base64.RawURLEncoding.EncodeToString([]byte(name)) }
 
 	tests := []struct {
 		name       string
@@ -784,21 +784,21 @@ func TestListProviders(t *testing.T) {
 		wantCursor string
 	}{
 		{"all on one page", "", []string{"dns", "payments", "vault"}, ""},
-		{"first page of two", "?limit=2", []string{"dns", "payments"}, cursorOf("payments")},
-		{"second page", "?limit=2&cursor=" + cursorOf("payments"), []string{"vault"}, ""},
-		{"page of one", "?limit=1&cursor=" + cursorOf("dns"), []string{"payments"}, cursorOf("payments")},
-		{"exact fit has no cursor", "?limit=3", []string{"dns", "payments", "vault"}, ""},
-		{"cursor of a name not listed", "?cursor=" + cursorOf("e"), []string{"payments", "vault"}, ""},
-		{"cursor past the end", "?cursor=" + cursorOf("zzz"), []string{}, ""},
+		{"first page of two", "?pageSize=2", []string{"dns", "payments"}, tokenOf("payments")},
+		{"second page", "?pageSize=2&pageToken=" + tokenOf("payments"), []string{"vault"}, ""},
+		{"page of one", "?pageSize=1&pageToken=" + tokenOf("dns"), []string{"payments"}, tokenOf("payments")},
+		{"exact fit has no token", "?pageSize=3", []string{"dns", "payments", "vault"}, ""},
+		{"token of a name not listed", "?pageToken=" + tokenOf("e"), []string{"payments", "vault"}, ""},
+		{"token past the end", "?pageToken=" + tokenOf("zzz"), []string{}, ""},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			names, cursor := pageNames(t, f.call(t, "reader", http.MethodGet, providers+tt.query, nil))
-			if !slices.Equal(names, tt.wantNames) || cursor != tt.wantCursor {
-				t.Errorf("page = %v, cursor %q; want %v, cursor %q", names, cursor, tt.wantNames, tt.wantCursor)
+			names, token := pageNames(t, f.call(t, "reader", http.MethodGet, providers+tt.query, nil))
+			if !slices.Equal(names, tt.wantNames) || token != tt.wantCursor {
+				t.Errorf("page = %v, token %q; want %v, token %q", names, token, tt.wantNames, tt.wantCursor)
 			}
 		})
 	}
@@ -810,7 +810,7 @@ func TestListProviders(t *testing.T) {
 			"/api/dustpan/v1/namespaces/beta/registry/providers", nil)
 		wantCode(t, "list", got, http.StatusOK)
 
-		if !strings.Contains(got.body, `"providers":[]`) || !strings.Contains(got.body, `"nextCursor":""`) {
+		if !strings.Contains(got.body, `"providers":[]`) || !strings.Contains(got.body, `"nextPageToken":""`) {
 			t.Errorf("empty namespace answer = %s", got.body)
 		}
 	})
@@ -838,8 +838,8 @@ func TestListProviders(t *testing.T) {
 	})
 }
 
-// TestListProvidersHostileQuery sends hostile limits and cursors straight to
-// the handler. The cursor is untrusted input, so each value must answer 400
+// TestListProvidersHostileQuery sends hostile page sizes and tokens straight to
+// the handler. The token is untrusted input, so each value must answer 400
 // and none may reach the store.
 func TestListProvidersHostileQuery(t *testing.T) {
 	t.Parallel()
@@ -851,21 +851,21 @@ func TestListProvidersHostileQuery(t *testing.T) {
 		name  string
 		query string
 	}{
-		{"zero limit", "?limit=0"},
-		{"negative limit", "?limit=-1"},
-		{"limit over the maximum", "?limit=1001"},
-		{"limit that is not a number", "?limit=ten"},
-		{"huge limit", "?limit=99999999999999999999"},
-		{"cursor that is not base64", "?cursor=%25%25%25"},
-		{"padded base64", "?cursor=" + url.QueryEscape(base64.URLEncoding.EncodeToString([]byte("ab")))},
-		{"path traversal", "?cursor=" + enc([]byte("../../etc/passwd"))},
-		{"separator in the name", "?cursor=" + enc([]byte("a/b"))},
-		{"upper case name", "?cursor=" + enc([]byte("Payments"))},
-		{"control characters", "?cursor=" + enc([]byte("a\r\nb"))},
-		{"null byte", "?cursor=" + enc([]byte("a\x00b"))},
-		{"SQL text", "?cursor=" + enc([]byte("x' OR '1'='1"))},
-		{"name over the length limit", "?cursor=" + enc([]byte(strings.Repeat("a", 300)))},
-		{"cursor over the length limit", "?cursor=" + strings.Repeat("A", 100000)},
+		{"zero page size", "?pageSize=0"},
+		{"negative page size", "?pageSize=-1"},
+		{"page size over the maximum", "?pageSize=1001"},
+		{"page size that is not a number", "?pageSize=ten"},
+		{"huge page size", "?pageSize=99999999999999999999"},
+		{"token that is not base64", "?pageToken=%25%25%25"},
+		{"padded base64", "?pageToken=" + url.QueryEscape(base64.URLEncoding.EncodeToString([]byte("ab")))},
+		{"path traversal", "?pageToken=" + enc([]byte("../../etc/passwd"))},
+		{"separator in the name", "?pageToken=" + enc([]byte("a/b"))},
+		{"upper case name", "?pageToken=" + enc([]byte("Payments"))},
+		{"control characters", "?pageToken=" + enc([]byte("a\r\nb"))},
+		{"null byte", "?pageToken=" + enc([]byte("a\x00b"))},
+		{"SQL text", "?pageToken=" + enc([]byte("x' OR '1'='1"))},
+		{"name over the length limit", "?pageToken=" + enc([]byte(strings.Repeat("a", 300)))},
+		{"token over the length limit", "?pageToken=" + strings.Repeat("A", 100000)},
 	}
 
 	for _, tt := range tests {
