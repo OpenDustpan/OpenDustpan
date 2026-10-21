@@ -68,6 +68,94 @@ func testCreateKeyConflict(t *testing.T, h Harness) {
 	}
 }
 
+// hashA and hashB are two request hashes.
+const (
+	hashA = "hash-a"
+	hashB = "hash-b"
+)
+
+// testCreateRequestRules runs the rules of the request hash and of the first
+// state of a create.
+func testCreateRequestRules(t *testing.T, h Harness) {
+	t.Helper()
+
+	t.Run("a key with another request hash conflicts", func(t *testing.T) { testCreateKeyHashConflict(t, h) })
+	t.Run("a job that waits for approval is stored awaiting-approval", func(t *testing.T) {
+		testCreateAwaitingApproval(t, h)
+	})
+	t.Run("a job in another first state is refused", func(t *testing.T) { testCreateBadState(t, h) })
+}
+
+func testCreateKeyHashConflict(t *testing.T, h Harness) {
+	t.Helper()
+
+	f := setUp(t, h)
+	first := newJob(f.unit, job.OperationPlan, "start-1")
+	first.RequestHash = hashA
+	stored := create(t, h, f, first, nil)
+
+	same := newJob(f.unit, job.OperationPlan, "start-1")
+	same.RequestHash = hashA
+
+	again, created, err := h.Jobs.Create(t.Context(), *same, nil, f.fence,
+		[]audit.Entry{entry(f.unit, job.ActionUnitRunPlan)})
+	if err != nil || created || again.ID != stored.ID || again.RequestHash != hashA {
+		t.Fatalf("Create with the same hash = %s, created %v, error %v; want the first job %s", again.ID, created, err,
+			stored.ID)
+	}
+
+	other := newJob(f.unit, job.OperationPlan, "start-1")
+	other.RequestHash = hashB
+
+	_, _, err = h.Jobs.Create(t.Context(), *other, nil, f.fence, []audit.Entry{entry(f.unit, job.ActionUnitRunPlan)})
+	if !errors.Is(err, job.ErrKeyConflict) {
+		t.Fatalf("Create with the same spec and another hash = %v, want ErrKeyConflict", err)
+	}
+}
+
+func testCreateAwaitingApproval(t *testing.T, h Harness) {
+	t.Helper()
+
+	f := setUp(t, h)
+	j := newJob(f.unit, job.OperationPlan, "")
+	j.State = job.StateAwaitingApproval
+	stored := create(t, h, f, j, nil)
+
+	if stored.State != job.StateAwaitingApproval || stored.Wait != job.WaitNone {
+		t.Fatalf("Create = state %s, wait %q; want awaiting-approval with no wait", stored.State, stored.Wait)
+	}
+
+	got, err := h.Jobs.Get(t.Context(), stored.ID)
+	if err != nil || got.State != job.StateAwaitingApproval {
+		t.Fatalf("Get = state %s, error %v; want awaiting-approval", got.State, err)
+	}
+
+	// A job that waits for approval has no dispatch.
+	d := newJob(f.unit, job.OperationPlan, "")
+	d.State = job.StateAwaitingApproval
+
+	_, _, err = h.Jobs.Create(t.Context(), *d, dispatchOf(d), f.fence, nil)
+	if !errors.Is(err, job.ErrInvalid) {
+		t.Fatalf("Create awaiting-approval with a dispatch = %v, want ErrInvalid", err)
+	}
+}
+
+func testCreateBadState(t *testing.T, h Harness) {
+	t.Helper()
+
+	f := setUp(t, h)
+
+	for _, state := range []job.State{job.StateRunning, job.StateSucceeded, job.StateDispatched, ""} {
+		j := newJob(f.unit, job.OperationPlan, "")
+		j.State = state
+
+		_, _, err := h.Jobs.Create(t.Context(), *j, nil, f.fence, nil)
+		if !errors.Is(err, job.ErrInvalid) {
+			t.Errorf("Create in state %q = %v, want ErrInvalid", state, err)
+		}
+	}
+}
+
 func testCreateDispatch(t *testing.T, h Harness) {
 	t.Helper()
 

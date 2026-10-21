@@ -230,11 +230,7 @@ func (m *memDB) Create(ctx context.Context, j job.Job, d *durable.StartRequest, 
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	if err := m.checkFence(fence); err != nil {
-		return job.Job{}, false, err
-	}
-
-	if err := checkNamespace(j.Spec.Unit.Namespace(), fence, e); err != nil {
+	if err := m.admit(&j, d, fence, e); err != nil {
 		return job.Job{}, false, err
 	}
 
@@ -242,7 +238,7 @@ func (m *memDB) Create(ctx context.Context, j job.Job, d *durable.StartRequest, 
 	key := string(ns) + "/" + j.IdempotencyKey
 
 	if first, ok := m.byKey(key, &j); ok {
-		if !reflect.DeepEqual(first.Spec, j.Spec) {
+		if !reflect.DeepEqual(first.Spec, j.Spec) || first.RequestHash != j.RequestHash {
 			return job.Job{}, false, job.ErrKeyConflict
 		}
 
@@ -256,6 +252,10 @@ func (m *memDB) Create(ctx context.Context, j job.Job, d *durable.StartRequest, 
 	now := time.Now().UTC()
 	stored := copyJob(&j)
 	stored.State, stored.Version, stored.CreatedAt, stored.UpdatedAt = job.StateQueued, 1, now, now
+
+	if j.State == job.StateAwaitingApproval {
+		stored.State, stored.Wait = job.StateAwaitingApproval, job.WaitNone
+	}
 
 	if d != nil {
 		if err := m.checkDispatch(&stored, time.Time{}, now); err != nil {
@@ -573,6 +573,28 @@ func (m *memDB) lookup(id job.ID) (*job.Job, bool) {
 	}
 
 	return j, true
+}
+
+// admit returns the error of a create that the store refuses before it looks
+// at the key: a stale fence, entries of another namespace, and a first state
+// other than queued, or awaiting-approval with no dispatch.
+func (m *memDB) admit(j *job.Job, d *durable.StartRequest, fence namespace.Fence, e []audit.Entry) error {
+	if err := m.checkFence(fence); err != nil {
+		return err
+	}
+
+	if err := checkNamespace(j.Spec.Unit.Namespace(), fence, e); err != nil {
+		return err
+	}
+
+	queued := j.State == job.StateQueued
+	waits := j.State == job.StateAwaitingApproval && d == nil
+
+	if !queued && !waits {
+		return job.ErrInvalid
+	}
+
+	return nil
 }
 
 // byKey returns the job that the idempotency key of j already names, as

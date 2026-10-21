@@ -186,6 +186,7 @@ type jobBody struct {
 	Delivery     *deliveryBody     `json:"delivery"`
 	Closed       *stateVersionBody `json:"closed"`
 	Verification string            `json:"verification"`
+	RequestHash  string            `json:"requestHash"`
 }
 
 func encodeUnit(o identity.Object) unitBody {
@@ -458,6 +459,7 @@ func encodeBody(j *job.Job) (string, error) {
 		Delivery:     nil,
 		Closed:       encodeStateVersion(j.Closed),
 		Verification: string(j.Verification),
+		RequestHash:  j.RequestHash,
 	}
 
 	for i := range j.Phases {
@@ -506,6 +508,7 @@ func decodeBody(body string, j *job.Job) error {
 	)
 	j.Source = job.SourceKind(b.Source)
 	j.Closed, j.Verification = closed, job.Verification(b.Verification)
+	j.RequestHash = b.RequestHash
 	j.Phases = make([]job.Phase, len(b.Phases))
 
 	for i := range b.Phases {

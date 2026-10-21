@@ -102,9 +102,12 @@ func (h *Handler) startJob(w http.ResponseWriter, r *http.Request, p identity.Pr
 
 	j, created, err := h.starter.StartOnce(ctx, actor, req)
 	if err != nil {
-		if errors.Is(err, identity.ErrDenied) {
+		// Every refusal of the start writes an audit entry, not only the
+		// refusal of the Authorizer: a policy, an agent mode, a freeze, a
+		// limit and a gate refuse the person too.
+		if reason, ok := refusalReason(err); ok {
 			h.guard.Record(ctx, r, p, refusal.Denial{
-				Action: identity.ActionUnitRunPlan, Object: req.Unit, Reason: refusal.ReasonPolicy, Window: 0,
+				Action: identity.ActionUnitRunPlan, Object: req.Unit, Reason: reason, Window: 0,
 			})
 		}
 
@@ -131,6 +134,50 @@ func (h *Handler) startJob(w http.ResponseWriter, r *http.Request, p identity.Pr
 	}
 
 	h.writeJSON(ctx, w, http.StatusCreated, toJobResponse(&j))
+}
+
+// Reasons of the audit entries of the refusals of a start. The entry never
+// holds the text of the error.
+const (
+	reasonPolicyDenied = "policy denied the job"
+	reasonAgentDenied  = "an agent cannot do this"
+	reasonFrozen       = "a change freeze is active"
+	reasonLimit        = "too many open jobs"
+	reasonGate         = "an enforced gate covers the unit"
+	reasonUnsupported  = "the server cannot start this job"
+)
+
+// refusalReason returns the reason for the audit entry of err, and false for
+// an error that is not a refusal of the server: a request that is not valid,
+// a failure of the server and a replay conflict write no denial entry.
+func refusalReason(err error) (string, bool) {
+	var gates *job.GateError
+
+	switch {
+	case errors.Is(err, identity.ErrDenied):
+		return refusal.ReasonPolicy, true
+	case errors.As(err, &gates):
+		ids := make([]string, 0, len(gates.Gates))
+		for _, g := range gates.Gates {
+			ids = append(ids, g.ID)
+		}
+
+		return reasonGate + ": " + strings.Join(ids, ", "), true
+	case errors.Is(err, job.ErrGateEnforced):
+		return reasonGate, true
+	case errors.Is(err, job.ErrPolicyDenied):
+		return reasonPolicyDenied, true
+	case errors.Is(err, job.ErrAgentDenied):
+		return reasonAgentDenied, true
+	case errors.Is(err, job.ErrFrozen):
+		return reasonFrozen, true
+	case errors.Is(err, job.ErrLimit):
+		return reasonLimit, true
+	case errors.Is(err, job.ErrUnsupported):
+		return reasonUnsupported, true
+	default:
+		return "", false
+	}
 }
 
 // idempotencyKey returns the key of the request, or "" for a request with no
@@ -196,6 +243,11 @@ func (h *Handler) startRequest(r *http.Request, t *target, b *startBody, key str
 			job.ErrInvalid, refusal.Clean(b.Operation, maxOperationEcho))
 	}
 
+	// The pool and the code location decide which hosts run which code. The
+	// body may name them, and the service then checks the extra actions:
+	// namespace:manage-runners for a pool and unit:define-steps for a
+	// location. Without them the server takes the only job pool of the
+	// namespace, and refuses a unit with no code location.
 	var loc job.Location
 	if l := b.Location; l != nil {
 		loc = job.Location{

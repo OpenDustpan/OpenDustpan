@@ -3,6 +3,7 @@ package job_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"strings"
 	"sync"
@@ -29,8 +30,10 @@ type svcStore struct {
 	creates    []createCall
 	applies    []job.Change
 	createErrs []error
-	jobs       map[job.ID]job.Job
-	replay     bool
+	// applyErr fails every Apply.
+	applyErr error
+	jobs     map[job.ID]job.Job
+	replay   bool
 }
 
 type createCall struct {
@@ -42,7 +45,13 @@ type createCall struct {
 
 func newSvcStore() *svcStore {
 	return &svcStore{
-		mu: sync.Mutex{}, creates: nil, applies: nil, createErrs: nil, jobs: map[job.ID]job.Job{}, replay: false,
+		mu:         sync.Mutex{},
+		creates:    nil,
+		applies:    nil,
+		createErrs: nil,
+		applyErr:   nil,
+		jobs:       map[job.ID]job.Job{},
+		replay:     false,
 	}
 }
 
@@ -91,6 +100,10 @@ func (s *svcStore) Apply(_ context.Context, c job.Change, _ namespace.Fence, _ [
 	defer s.mu.Unlock()
 
 	s.applies = append(s.applies, c)
+
+	if s.applyErr != nil {
+		return job.Job{}, s.applyErr
+	}
 
 	j := s.jobs[c.Job]
 	if c.Event == job.EventNeedApproval {
@@ -227,6 +240,23 @@ func (*svcAuthorizer) ListObjects(context.Context, identity.Principal, identity.
 	return identity.Scope{Namespaces: nil, Collections: nil, Units: nil, Principals: nil, All: false}, nil
 }
 
+// svcGates is a job.GateGuard that returns the gates in enforced, or err.
+type svcGates struct {
+	mu       sync.Mutex
+	enforced []job.EnforcedGate
+	err      error
+	asked    []string
+}
+
+func (g *svcGates) Enforced(_ context.Context, unit identity.Object) ([]job.EnforcedGate, error) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+
+	g.asked = append(g.asked, unit.String())
+
+	return g.enforced, g.err
+}
+
 type svcFences struct{ err error }
 
 func (f svcFences) Fence(_ context.Context, ns namespace.Name) (namespace.Fence, error) {
@@ -261,6 +291,7 @@ type rig struct {
 	planner *svcPlanner
 	decider *svcDecider
 	authz   *svcAuthorizer
+	gates   *svcGates
 	unit    identity.Object
 	now     time.Time
 }
@@ -327,14 +358,17 @@ func newRig(t *testing.T, opts ...rigOption) *rig {
 		},
 		authz: &svcAuthorizer{
 			allow: map[string]bool{
-				string(job.ActionUnitRunPlan) + " " + unit.String():           true,
-				string(job.ActionJobRead) + " " + unit.String():               true,
-				string(job.ActionNamespaceBreakFreeze) + " " + nsObj.String(): true,
+				string(job.ActionUnitRunPlan) + " " + unit.String():             true,
+				string(job.ActionJobRead) + " " + unit.String():                 true,
+				string(job.ActionNamespaceBreakFreeze) + " " + nsObj.String():   true,
+				string(job.ActionNamespaceManageRunners) + " " + nsObj.String(): true,
+				string(job.ActionUnitDefineSteps) + " " + unit.String():         true,
 			},
 			fail: map[string]error{}, asked: nil, denied: "bob",
 		},
-		unit: unit,
-		now:  time.Date(2026, 10, 21, 12, 0, 0, 0, time.UTC),
+		gates: &svcGates{mu: sync.Mutex{}, enforced: nil, err: nil, asked: nil},
+		unit:  unit,
+		now:   time.Date(2026, 10, 21, 12, 0, 0, 0, time.UTC),
 	}
 
 	cfg := job.ServiceConfig{
@@ -342,6 +376,7 @@ func newRig(t *testing.T, opts ...rigOption) *rig {
 		Executors:  []job.Executor{svcExecutor{kind: job.ExecutorRunner, err: nil}},
 		Decider:    r.decider,
 		Authorizer: r.authz,
+		Gates:      r.gates,
 		Fences:     svcFences{err: nil},
 		Freezes:    nil, Switches: nil,
 		Now:   func() time.Time { return r.now },
@@ -376,7 +411,7 @@ func actorOf(subject string) job.Actor {
 
 func (r *rig) plan(key string) job.StartRequest {
 	return job.StartRequest{
-		Unit: r.unit, Operation: job.OperationPlan, Executor: "", Location: emptyLocation(), Pool: "ci",
+		Unit: r.unit, Operation: job.OperationPlan, Executor: "", Location: emptyLocation(), Pool: "",
 		Edits: nil, Delivery: "", Source: "", IdempotencyKey: key, Reason: "", BreakGlass: nil,
 		Channel: audit.ChannelAPI, SourceIP: "192.0.2.7", UserAgent: "test", RequestID: "req-1",
 	}
@@ -793,8 +828,10 @@ func TestStartGateOnFirstPhase(t *testing.T) {
 		t.Fatal("Create got a dispatch for a phase that waits for an approval")
 	}
 
-	if len(r.store.applies) != 1 || r.store.applies[0].Event != job.EventNeedApproval {
-		t.Fatalf("applies = %+v, want one need-approval change", r.store.applies)
+	// The first state is stored by the create itself: no second transaction.
+	if len(r.store.applies) != 0 || r.store.creates[0].job.State != job.StateAwaitingApproval {
+		t.Fatalf("applies = %+v, created state %s; want no change and awaiting-approval in the create",
+			r.store.applies, r.store.creates[0].job.State)
 	}
 
 	if j.State != job.StateAwaitingApproval || len(j.Phases[0].Gates) != 1 ||
@@ -1142,6 +1179,7 @@ func TestNewServiceRefusesAPartialConfig(t *testing.T) {
 			},
 			Decider:    r.decider,
 			Authorizer: r.authz,
+			Gates:      r.gates,
 			Fences:     svcFences{err: nil},
 			Freezes:    nil,
 			Switches:   nil,
@@ -1160,6 +1198,7 @@ func TestNewServiceRefusesAPartialConfig(t *testing.T) {
 		{name: "no planner", mutate: func(c *job.ServiceConfig) { c.Planner = nil }},
 		{name: "no decider", mutate: func(c *job.ServiceConfig) { c.Decider = nil }},
 		{name: "no authorizer", mutate: func(c *job.ServiceConfig) { c.Authorizer = nil }},
+		{name: "no gates", mutate: func(c *job.ServiceConfig) { c.Gates = nil }},
 		{name: "no fences", mutate: func(c *job.ServiceConfig) { c.Fences = nil }},
 		{name: "no logger", mutate: func(c *job.ServiceConfig) { c.Log = nil }},
 		{name: "no executor", mutate: func(c *job.ServiceConfig) { c.Executors = nil }},
@@ -1192,4 +1231,322 @@ func TestNewServiceRefusesAPartialConfig(t *testing.T) {
 // emptyBinding returns a plan binding with no field set.
 func emptyBinding() job.PlanBinding {
 	return job.PlanBinding{Plan: "", DisplaySHA256: "", ApplySHA256: "", StateVersion: ""}
+}
+
+// gateCase is one case of TestStartGateGuard.
+type gateCase struct {
+	name      string
+	enforced  []job.EnforcedGate
+	guardErr  error
+	wantErr   error
+	wantNamed []string
+}
+
+func gateCases() []gateCase {
+	stateWrite := job.EnforcedGate{Scope: "unit/acme/opentofu/web", ID: "no-plans", Point: "state.write"}
+	propose := job.EnforcedGate{Scope: "namespace/acme", ID: "review-first", Point: "change.propose"}
+
+	return []gateCase{
+		{"no gate", nil, nil, nil, nil},
+		{
+			"an enforced gate at state.write",
+			[]job.EnforcedGate{stateWrite},
+			nil, job.ErrGateEnforced,
+			[]string{"no-plans", "state.write"},
+		},
+		{
+			"an enforced gate at change.propose",
+			[]job.EnforcedGate{propose},
+			nil, job.ErrGateEnforced,
+			[]string{"review-first", "change.propose"},
+		},
+		{
+			"two enforced gates",
+			[]job.EnforcedGate{stateWrite, propose},
+			nil, job.ErrGateEnforced,
+			[]string{"no-plans", "review-first"},
+		},
+		{"the guard cannot answer", nil, errDriver, job.ErrGateEnforced, nil},
+	}
+}
+
+func TestStartGateGuard(t *testing.T) {
+	t.Parallel()
+
+	for _, tt := range gateCases() {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			r := newRig(t)
+			r.gates.enforced, r.gates.err = tt.enforced, tt.guardErr
+
+			j, err := r.svc.Start(t.Context(), actorOf("ada"), r.plan(""))
+			if tt.wantErr == nil {
+				if err != nil || j.ID == "" || len(r.store.creates) != 1 {
+					t.Fatalf("Start = %v, creates %d; want a job", err, len(r.store.creates))
+				}
+
+				return
+			}
+
+			checkGateRefusal(t, r, err, &tt)
+		})
+	}
+}
+
+// checkGateRefusal checks a start that a gate refused: the error, no job, the
+// names of the gates, and no detail of the guard.
+func checkGateRefusal(t *testing.T, r *rig, err error, tt *gateCase) {
+	t.Helper()
+
+	if !errors.Is(err, tt.wantErr) {
+		t.Fatalf("Start = %v, want %v", err, tt.wantErr)
+	}
+
+	if len(r.store.creates) != 0 {
+		t.Fatalf("Create calls = %d, want none: a covered unit starts no job", len(r.store.creates))
+	}
+
+	for _, want := range tt.wantNamed {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q does not name %q", err, want)
+		}
+	}
+
+	if tt.guardErr != nil && strings.Contains(err.Error(), "driver") {
+		t.Errorf("error %q holds the detail of the guard", err)
+	}
+}
+
+// TestStartGateGuardComesAfterTheActions proves that a caller without the
+// start action learns nothing about the gates of the unit.
+func TestStartGateGuardComesAfterTheActions(t *testing.T) {
+	t.Parallel()
+
+	r := newRig(t)
+	r.gates.enforced = []job.EnforcedGate{{Scope: "installation", ID: "secret-gate", Point: "state.write"}}
+
+	_, err := r.svc.Start(t.Context(), actorOf("bob"), r.plan(""))
+	if !errors.Is(err, identity.ErrDenied) || errors.Is(err, job.ErrGateEnforced) {
+		t.Fatalf("Start by bob = %v, want denied with no word of the gate", err)
+	}
+
+	if len(r.gates.asked) != 0 {
+		t.Fatalf("the guard was asked %d times for a caller without rights", len(r.gates.asked))
+	}
+}
+
+// TestStartIsAtomicAtTheFirstGate proves failure injection at the second
+// transaction: the create stores awaiting-approval, so a failing Apply
+// changes nothing, and a failing create leaves no job.
+func TestStartIsAtomicAtTheFirstGate(t *testing.T) {
+	t.Parallel()
+
+	gated := func(_ *job.ServiceConfig, r *rig) {
+		r.decider.decision = job.Decision{
+			Allow: true, Reason: "", PolicyVersion: "v1",
+			Gates: map[job.PhaseKind]job.Gate{
+				job.PhasePlan: {Type: "", Approvals: 1, Groups: nil, AllowSelf: false, Timeout: 0, BindPlan: false},
+			},
+		}
+	}
+
+	t.Run("a failing second transaction cannot strand the job", func(t *testing.T) {
+		t.Parallel()
+
+		r := newRig(t, gated)
+		r.store.applyErr = errDriver
+
+		j, err := r.svc.Start(t.Context(), actorOf("ada"), r.plan("k"))
+		if err != nil || j.State != job.StateAwaitingApproval {
+			t.Fatalf("Start = state %s, error %v; want awaiting-approval though Apply fails", j.State, err)
+		}
+
+		if len(r.store.applies) != 0 {
+			t.Fatalf("applies = %d, want none", len(r.store.applies))
+		}
+	})
+
+	t.Run("a failing create leaves no job, and the retry stores one", func(t *testing.T) {
+		t.Parallel()
+
+		r := newRig(t, gated)
+		r.store.createErrs = []error{errDriver}
+
+		if _, err := r.svc.Start(t.Context(), actorOf("ada"), r.plan("k")); err == nil {
+			t.Fatal("Start with a failing create = nil, want an error")
+		}
+
+		if len(r.store.jobs) != 0 {
+			t.Fatalf("stored jobs = %d, want none after a failed create", len(r.store.jobs))
+		}
+
+		j, created, err := r.svc.StartOnce(t.Context(), actorOf("ada"), r.plan("k"))
+		if err != nil || !created || j.State != job.StateAwaitingApproval {
+			t.Fatalf("retry = state %s, created %v, error %v; want a new awaiting-approval job", j.State, created, err)
+		}
+	})
+}
+
+func TestStartRequestHash(t *testing.T) {
+	t.Parallel()
+
+	hashOf := func(t *testing.T, mutate func(*job.StartRequest, *rig)) string {
+		t.Helper()
+
+		r := newRig(t)
+		req := r.plan("k")
+		req.Reason = "first reason"
+
+		if mutate != nil {
+			mutate(&req, r)
+		}
+
+		j, err := r.svc.Start(t.Context(), actorOf("ada"), req)
+		if err != nil {
+			t.Fatalf("Start = %v", err)
+		}
+
+		return j.RequestHash
+	}
+
+	base := hashOf(t, nil)
+	if !strings.HasPrefix(base, "r1:") || base != hashOf(t, nil) {
+		t.Fatalf("hash = %q, want a stable r1: hash for one request", base)
+	}
+
+	tests := []struct {
+		name   string
+		mutate func(*job.StartRequest, *rig)
+	}{
+		{"another reason", func(q *job.StartRequest, _ *rig) { q.Reason = "second reason" }},
+		{"another pool name", func(q *job.StartRequest, _ *rig) { q.Pool = "other" }},
+		{"another location", func(q *job.StartRequest, _ *rig) { q.Location.Ref = "dev" }},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := hashOf(t, tt.mutate); got == base {
+				t.Fatalf("hash with %s = hash of the base request", tt.name)
+			}
+		})
+	}
+
+	r := newRig(t)
+	if j, err := r.svc.Start(t.Context(), actorOf("ada"), r.plan("")); err != nil || j.RequestHash != "" {
+		t.Fatalf("Start with no key = hash %q, error %v; want no hash", j.RequestHash, err)
+	}
+}
+
+// fieldCase is one case of TestStartChecksTheActionsOfThePoolAndTheLocation.
+type fieldCase struct {
+	name     string
+	pool     string
+	location job.Location
+	revoke   identity.Action
+	wantErr  error
+}
+
+func fieldCases() []fieldCase {
+	repo := job.Location{Connection: "", Repository: "acme/infra", Ref: "main", Directory: "", Revision: ""}
+	none := emptyLocation()
+
+	return []fieldCase{
+		{"neither field", "", none, "", nil},
+		{"a pool with the action", "ci", none, "", nil},
+		{"a location with the action", "", repo, "", nil},
+		{"both with both actions", "ci", repo, "", nil},
+		{"a pool without namespace:manage-runners", "ci", none, job.ActionNamespaceManageRunners, identity.ErrDenied},
+		{"a location without unit:define-steps", "", repo, job.ActionUnitDefineSteps, identity.ErrDenied},
+		{"both without namespace:manage-runners", "ci", repo, job.ActionNamespaceManageRunners, identity.ErrDenied},
+		{"both without unit:define-steps", "ci", repo, job.ActionUnitDefineSteps, identity.ErrDenied},
+		{"no fields without the action of the pool", "", none, job.ActionNamespaceManageRunners, nil},
+	}
+}
+
+// TestStartChecksTheActionsOfThePoolAndTheLocation proves a request that names
+// a pool needs namespace:manage-runners, and a request that names a code
+// location needs unit:define-steps. The planner never runs for a caller
+// without them, and no job is stored.
+func TestStartChecksTheActionsOfThePoolAndTheLocation(t *testing.T) {
+	t.Parallel()
+
+	for _, tt := range fieldCases() {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			r := newRig(t)
+
+			for key := range r.authz.allow {
+				if tt.revoke != "" && strings.HasPrefix(key, string(tt.revoke)+" ") {
+					delete(r.authz.allow, key)
+				}
+			}
+
+			req := r.plan("")
+			req.Pool, req.Location = tt.pool, tt.location
+
+			_, err := r.svc.Start(t.Context(), actorOf("ada"), req)
+			checkFieldResult(t, r, err, &tt)
+		})
+	}
+}
+
+// checkFieldResult checks the error, the planner calls and the stored jobs of
+// a start that names a pool or a location.
+func checkFieldResult(t *testing.T, r *rig, err error, tt *fieldCase) {
+	t.Helper()
+
+	if tt.wantErr == nil && err != nil || tt.wantErr != nil && !errors.Is(err, tt.wantErr) {
+		t.Fatalf("Start = %v, want %v", err, tt.wantErr)
+	}
+
+	refused := tt.wantErr != nil
+	if (r.planner.calls > 0) == refused {
+		t.Fatalf("planner calls = %d for error %v: the planner runs only for a caller with the actions",
+			r.planner.calls, tt.wantErr)
+	}
+
+	if stored := len(r.store.creates); refused == (stored == 1) {
+		t.Fatalf("Create calls = %d for error %v", stored, tt.wantErr)
+	}
+}
+
+// TestStartRefusesWhenThePlannerRefuses proves a refusal of the planner
+// (zero pools, two pools, a unit with no code location, a connection of
+// another namespace) stores no job and asks for no gate.
+func TestStartRefusesWhenThePlannerRefuses(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		err  error
+		want error
+	}{
+		{"zero pools", fmt.Errorf("%w: no pool", job.ErrUnsupported), job.ErrUnsupported},
+		{"two pools", fmt.Errorf("%w: two pools", job.ErrUnsupported), job.ErrUnsupported},
+		{"no code location", fmt.Errorf("%w: no location", job.ErrUnsupported), job.ErrUnsupported},
+		{"a connection of another namespace", fmt.Errorf("%w: connection", identity.ErrDenied), identity.ErrDenied},
+		{"a pool of another namespace", fmt.Errorf("%w: no pool", job.ErrInvalid), job.ErrInvalid},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			r := newRig(t)
+			r.planner.err = tt.err
+
+			_, err := r.svc.Start(t.Context(), actorOf("ada"), r.plan(""))
+			if !errors.Is(err, tt.want) {
+				t.Fatalf("Start = %v, want %v", err, tt.want)
+			}
+
+			if len(r.store.creates) != 0 || len(r.gates.asked) != 0 {
+				t.Fatalf("creates %d, gate checks %d; want none", len(r.store.creates), len(r.gates.asked))
+			}
+		})
+	}
 }

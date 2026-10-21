@@ -13,6 +13,10 @@ import (
 	"testing"
 
 	"opendustpan.org/opendustpan/e2e"
+	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/gate"
+	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/namespace"
 )
 
 // jobsAgent is the User-Agent of the job API requests. The route coverage
@@ -116,8 +120,13 @@ func jobsScenario(t *testing.T, env *e2e.Env) {
 
 	started := startsAJob(ctx, t, env)
 	readsTheJob(ctx, t, env, started)
+	// The gate steps come before any other refusal: the limiter of denials
+	// writes the first entry of a principal, an action and a namespace in a
+	// window, and the check reads that entry.
+	gatesAndLimitsRefuseAStart(ctx, t, env)
 	aManualLockQueuesAJob(ctx, t, env)
 	refusesBadStarts(ctx, t, env)
+	defaultsAndPools(ctx, t, env)
 	missingJobsAnswerNotFound(ctx, t, env, started)
 	memberStartsNothing(ctx, t, env, started)
 }
@@ -257,7 +266,7 @@ func refusesBadStarts(ctx context.Context, t *testing.T, env *e2e.Env) {
 		want       int
 		code       string
 	}{
-		{"a start with no pool", startBody("", "plan"), http.StatusBadRequest, "job.invalid"},
+		{"a start with an invalid pool name", startBody("a b", "plan"), http.StatusBadRequest, "job.invalid"},
 		{"a start in a pool that does not exist", startBody("nowhere", "plan"), http.StatusBadRequest, "job.invalid"},
 		{"a start of an apply", startBody(jobsPool, "apply"), http.StatusUnprocessableEntity, "job.unsupported"},
 		{
@@ -282,6 +291,14 @@ func refusesBadStarts(ctx context.Context, t *testing.T, env *e2e.Env) {
 		Path: jobsRoute, Body: strings.Replace(startBody(jobsPool, "plan"), jobsUnit, "no-such", 1),
 		Want: http.StatusForbidden, Scheme: "token", Check: nil,
 	})
+
+	withUnitConflict := map[string]string{"Idempotency-Key": "jobs-e2e-key-1"}
+
+	env.APIStepWithHeaders(ctx, t, e2e.APIStepSpec{
+		UserAgent: jobsAgent, Name: "a start with the key of another request", Method: http.MethodPost,
+		Path: jobsRoute, Body: strings.Replace(startBody(jobsPool, "plan"), `"e2e"`, `"another reason"`, 1),
+		Want: http.StatusUnprocessableEntity, Scheme: "token", Check: withCode("request.idempotency-key-reused"),
+	}, withUnitConflict)
 
 	env.APIStepWithHeaders(ctx, t, e2e.APIStepSpec{
 		UserAgent: jobsAgent, Name: "a start with a bad key", Method: http.MethodPost, Path: jobsRoute,
@@ -366,4 +383,171 @@ func memberStartsNothing(ctx context.Context, t *testing.T, env *e2e.Env, starte
 	if status != http.StatusNotFound {
 		t.Fatalf("member starts a job = %d %s, want 404", status, body)
 	}
+}
+
+// noLocationBody is a start that names no code location.
+func noLocationBody(pool string) string {
+	if pool == "" {
+		return fmt.Sprintf(`{"unit":{"tool":"opentofu","name":%q},"operation":"plan","reason":"e2e"}`, jobsUnit)
+	}
+
+	return fmt.Sprintf(`{"unit":{"tool":"opentofu","name":%q},"operation":"plan","pool":%q,"reason":"e2e"}`,
+		jobsUnit, pool)
+}
+
+// noPoolBody is a start that names a code location and no pool.
+func noPoolBody() string {
+	return fmt.Sprintf(`{"unit":{"tool":"opentofu","name":%q},"operation":"plan",`+
+		`"location":{"repository":"acme/infra","ref":"main","directory":"net"},"reason":"e2e"}`, jobsUnit)
+}
+
+// codeCheck returns a check of the stable code of a refusal.
+func codeCheck(code string) func(string) error {
+	return func(body string) error {
+		if !strings.Contains(body, `"errorCode":"`+code+`"`) {
+			return fmt.Errorf("%w: body %s, want the code %s", errJobDoc, body, code)
+		}
+
+		return nil
+	}
+}
+
+// defaultsAndPools proves the default pool, the refusal of a start with no
+// code location, and the refusal of a default when the namespace has two job
+// pools. The administrator holds the actions of a pool and a location.
+func defaultsAndPools(ctx context.Context, t *testing.T, env *e2e.Env) {
+	t.Helper()
+
+	env.APIStepA(ctx, t, e2e.APIStepSpec{
+		UserAgent: jobsAgent, Name: "start on the only job pool", Method: http.MethodPost, Path: jobsRoute,
+		Body: noPoolBody(), Want: http.StatusCreated, Scheme: "token", Check: nil,
+	})
+	env.APIStepA(ctx, t, e2e.APIStepSpec{
+		UserAgent: jobsAgent, Name: "a start with no code location", Method: http.MethodPost, Path: jobsRoute,
+		Body: noLocationBody(""), Want: http.StatusUnprocessableEntity, Scheme: "token",
+		Check: codeCheck("job.unsupported"),
+	})
+	env.APIStepA(ctx, t, e2e.APIStepSpec{
+		UserAgent: jobsAgent, Name: "create a second job pool", Method: http.MethodPost,
+		Path: "/api/runners/" + e2e.Namespace + "/pools", Body: `{"name":"deploy","purpose":"jobs"}`,
+		Want: http.StatusCreated, Scheme: "token", Check: nil,
+	})
+	env.APIStepA(ctx, t, e2e.APIStepSpec{
+		UserAgent: jobsAgent, Name: "a start with two job pools and no pool", Method: http.MethodPost,
+		Path: jobsRoute, Body: noPoolBody(), Want: http.StatusUnprocessableEntity, Scheme: "token",
+		Check: codeCheck("job.unsupported"),
+	})
+	env.APIStepA(ctx, t, e2e.APIStepSpec{
+		UserAgent: jobsAgent, Name: "start on the second pool by name", Method: http.MethodPost, Path: jobsRoute,
+		Body: startBody("deploy", "plan"), Want: http.StatusCreated, Scheme: "token", Check: nil,
+	})
+	env.APIStepA(ctx, t, e2e.APIStepSpec{
+		UserAgent: jobsAgent, Name: "a start with a connection that the namespace does not hold",
+		Method: http.MethodPost, Path: jobsRoute,
+		Body: strings.Replace(startBody("deploy", "plan"), `"repository"`, `"connection":"other-conn","repository"`, 1),
+		Want: http.StatusForbidden, Scheme: "token", Check: nil,
+	})
+}
+
+// gatesAndLimitsRefuseAStart proves a start fails closed when an enforced
+// gate at state.write or change.propose covers the unit, goes on when the
+// gate is in evaluate mode, and fails when an access limit forbids the start
+// action. Each refusal writes an audit entry. The steps write gates through
+// the store: the binary server has no such step, and the scenario then skips.
+func gatesAndLimitsRefuseAStart(ctx context.Context, t *testing.T, env *e2e.Env) {
+	t.Helper()
+
+	ns := namespace.Name(e2e.Namespace)
+
+	unitScope, err := gate.UnitScope(ns, "opentofu", jobsUnit)
+	if err != nil {
+		t.Fatalf("unit scope: %v", err)
+	}
+
+	newGate := func(scope gate.Scope, id string, point gate.DecisionPoint, mode gate.Mode) gate.Gate {
+		return gate.Gate{
+			Scope:         scope,
+			ID:            gate.ID(id),
+			Version:       0,
+			DecisionPoint: point,
+			Condition:     "",
+			Unless:        "",
+			Outcome:       gate.OutcomeDeny,
+			Message:       "Plans are frozen.",
+			Mode:          mode,
+			OnError:       gate.OnErrorFail,
+			Final:         false,
+			CheckedWith:   gate.CheckedWith{Engine: "", Schema: gate.SchemaVersion{Subject: "", Major: 0, Minor: 0}},
+			State:         "",
+			Reads:         nil,
+		}
+	}
+
+	refused := func(name string, want int, code string) {
+		check := codeCheck(code)
+		if code == "" {
+			check = nil
+		}
+
+		env.APIStepA(ctx, t, e2e.APIStepSpec{
+			UserAgent: jobsAgent,
+			Name:      name,
+			Method:    http.MethodPost,
+			Path:      jobsRoute,
+			Body:      startBody(jobsPool, "plan"),
+			Want:      want,
+			Scheme:    "token",
+			Check:     check,
+		})
+	}
+
+	audited := func(reasonPrefix string) {
+		entries, auditErr := env.AuditEntries(ctx, ns)
+		if auditErr != nil {
+			t.Fatalf("audit entries: %v", auditErr)
+		}
+
+		for i := range entries {
+			e := &entries[i]
+			if e.Action == string(identity.ActionUnitRunPlan) && e.Outcome == audit.OutcomeDenied &&
+				strings.HasPrefix(e.Reason, reasonPrefix) {
+				return
+			}
+		}
+
+		t.Fatalf("no denied unit:run-plan entry with the reason %q among %d entries", reasonPrefix, len(entries))
+	}
+
+	// An enforced gate at state.write on the unit.
+	stateWrite := newGate(unitScope, "no-plans", gate.PointStateWrite, gate.ModeEnforce)
+	if err = env.PutGate(ctx, ns, stateWrite); err != nil {
+		t.Skipf("gate writes need the in-process server: %v", err)
+	}
+
+	refused("a start with an enforced gate at state.write", http.StatusForbidden, "job.gate-enforced")
+	audited("an enforced gate covers the unit: no-plans")
+	must(t, env.DeleteGate(ctx, ns, unitScope, stateWrite.ID))
+
+	// An enforced gate at change.propose in the namespace.
+	propose := newGate(gate.NamespaceScope(ns), "review-first", gate.PointChangePropose, gate.ModeEnforce)
+	must(t, env.PutGate(ctx, ns, propose))
+	refused("a start with an enforced gate at change.propose", http.StatusForbidden, "job.gate-enforced")
+	must(t, env.DeleteGate(ctx, ns, propose.Scope, propose.ID))
+
+	// A gate in evaluate mode does not stop the start.
+	watch := newGate(unitScope, "watch-plans", gate.PointStateWrite, gate.ModeEvaluate)
+	must(t, env.PutGate(ctx, ns, watch))
+	refused("a start with a gate in evaluate mode", http.StatusCreated, "")
+	must(t, env.DeleteGate(ctx, ns, unitScope, watch.ID))
+
+	// An access limit that forbids the start action of the starter.
+	limit := gate.AccessLimit{
+		Scope: unitScope, ID: "no-plan-starts", Version: 0,
+		Policy: `forbid (principal, action == OpenDustpan::Action::"unit:run-plan", resource);`,
+	}
+	must(t, env.PutAccessLimit(ctx, ns, limit))
+	refused("a start that an access limit forbids", http.StatusForbidden, "")
+	must(t, env.DeleteAccessLimit(ctx, ns, limit.Scope, limit.ID))
+
+	refused("a start after the gates and the limit are gone", http.StatusCreated, "")
 }

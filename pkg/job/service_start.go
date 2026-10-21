@@ -6,7 +6,10 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"log/slog"
+	"maps"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -20,7 +23,7 @@ import (
 // missingPort reports whether cfg lacks a required port.
 func (c *ServiceConfig) missingPort() bool {
 	return c.Store == nil || c.Units == nil || c.Planner == nil || c.Decider == nil || c.Authorizer == nil ||
-		c.Fences == nil || c.Log == nil || len(c.Executors) == 0
+		c.Gates == nil || c.Fences == nil || c.Log == nil || len(c.Executors) == 0
 }
 
 // indexExecutors returns the executors by kind. It returns ErrInvalid for a
@@ -228,19 +231,37 @@ func (s *service) preAuthorize(ctx context.Context, a Actor, unit identity.Objec
 	return denied
 }
 
+// authorizeFields checks the extra actions of the pool and the location of
+// req (see RequestRequirements). It runs before the planner: a caller without
+// them learns nothing about the pools or the code of the unit from the errors
+// of the planner.
+func (s *service) authorizeFields(ctx context.Context, a Actor, unit identity.Object, req *StartRequest) error {
+	return s.authorizeAll(ctx, a, RequestRequirements(req, unit))
+}
+
 // authorize checks the start actions of spec for the principal of a, and
 // returns an error that wraps identity.ErrDenied for the first one that the
 // authorizer refuses. It fails closed: an error of the authorizer refuses.
-func (s *service) authorize(ctx context.Context, a Actor, spec *Spec, bg *BreakGlass) error {
-	reqs, err := StartRequirements(*spec, bg)
+func (s *service) authorize(ctx context.Context, a Actor, spec *Spec, req *StartRequest) error {
+	reqs, err := StartRequirements(*spec, req.BreakGlass)
 	if err != nil {
 		return err
 	}
 
+	// Defense in depth: authorizeFields checked the actions of the pool and
+	// the location before the planner ran. This check stays so that the
+	// actions hold for the spec whatever the order of the calls.
+	reqs = append(reqs, RequestRequirements(req, spec.Unit)...)
+
+	return s.authorizeAll(ctx, a, reqs)
+}
+
+// authorizeAll asks the authorizer for each requirement, in order.
+func (s *service) authorizeAll(ctx context.Context, a Actor, reqs []Requirement) error {
 	for i := range reqs {
 		r := &reqs[i]
 
-		err = s.authorizer.Authorize(ctx, a.Principal, r.Action, r.Object)
+		err := s.authorizer.Authorize(ctx, a.Principal, r.Action, r.Object)
 
 		switch {
 		case err == nil:
@@ -249,6 +270,29 @@ func (s *service) authorize(ctx context.Context, a Actor, spec *Spec, bg *BreakG
 		default:
 			return fmt.Errorf("authorize %s: %w", r.Action, err)
 		}
+	}
+
+	return nil
+}
+
+// checkGates returns an error that wraps ErrGateEnforced when an enforced
+// gate at change.propose or state.write covers unit. Defense in depth: the
+// gate service refuses the writes of state with these gates too. This check
+// stays so that a job never starts on a unit whose gate nobody evaluates at
+// the start, and it fails closed when the guard cannot answer.
+func (s *service) checkGates(ctx context.Context, unit identity.Object) error {
+	enforced, err := s.gates.Enforced(ctx, unit)
+	if err != nil {
+		// The text of the cause may hold detail of a driver. The log keeps it
+		// and the caller reads a fixed text.
+		s.log.ErrorContext(ctx, "read the gates of a unit", slog.String("unit", unit.String()),
+			slog.String("error", err.Error()))
+
+		return fmt.Errorf("%w: the gates of the unit cannot be read, so the start is refused", ErrGateEnforced)
+	}
+
+	if len(enforced) > 0 {
+		return &GateError{Gates: enforced}
 	}
 
 	return nil
@@ -380,7 +424,7 @@ func (s *service) newJob(a Actor, c *decided) Job {
 		Phases: make([]Phase, len(c.kinds)), Current: 0, StartedBy: a.Principal.Subject, Source: c.source,
 		Agent: a.Agent, AgentMode: a.Mode, BreakGlass: c.bg, Delivery: nil, Closed: nil,
 		Verification: VerificationNone, IdempotencyKey: scopedKey(a.Principal.Subject, c.req.IdempotencyKey),
-		Version: 0, CreatedAt: time.Time{}, UpdatedAt: time.Time{},
+		RequestHash: requestHash(c.req), Version: 0, CreatedAt: time.Time{}, UpdatedAt: time.Time{},
 	}
 
 	for i, k := range c.kinds {
@@ -405,6 +449,61 @@ func scopedKey(subject, key string) string {
 	sum := sha256.Sum256([]byte(subject + "\x00" + key))
 
 	return "k1:" + hex.EncodeToString(sum[:])
+}
+
+// requestHash returns the hash of the whole request of a start, or "" for a
+// request with no idempotency key. The store compares it when a key names a
+// job that exists: the same key with another reason, another pool name or
+// another code location is another request, and fails with ErrKeyConflict.
+// The store compares the spec too. The spec alone is not enough, because it
+// holds neither the reason nor the pool name as the caller gave it.
+func requestHash(req *StartRequest) string {
+	if req.IdempotencyKey == "" {
+		return ""
+	}
+
+	var b strings.Builder
+
+	// Each field has its length in front, so that no two requests share the
+	// bytes that are hashed.
+	put := func(s string) {
+		b.WriteString(strconv.Itoa(len(s)))
+		b.WriteByte(':')
+		b.WriteString(s)
+		b.WriteByte(';')
+	}
+
+	put(req.Unit.String())
+	put(string(req.Operation))
+	put(string(req.Executor))
+	put(req.Pool)
+
+	loc := &req.Location
+	for _, f := range []string{loc.Connection, loc.Repository, loc.Ref, loc.Directory, loc.Revision} {
+		put(f)
+	}
+
+	put(string(req.Delivery))
+	put(req.Reason)
+
+	if req.BreakGlass != nil {
+		put(req.BreakGlass.Reason)
+	} else {
+		put("")
+	}
+
+	for i := range req.Edits {
+		put(req.Edits[i].Path)
+
+		for _, k := range slices.Sorted(maps.Keys(req.Edits[i].Keys)) {
+			put(k)
+			put(string(req.Edits[i].Keys[k]))
+		}
+	}
+
+	sum := sha256.Sum256([]byte(b.String()))
+
+	return "r1:" + hex.EncodeToString(sum[:])
 }
 
 // entry returns the audit entry of the start of j: the principal, the start
@@ -460,7 +559,9 @@ func startChanges(a Actor, j *Job) []audit.Change {
 // persist stores the new job. A job whose first phase has no open gate
 // starts dispatched. A unit that another change holds, or a manual lock,
 // queues the job with the wait reason instead of failing it. A gate that
-// needs approval puts the job in awaiting-approval.
+// needs approval stores the job in awaiting-approval in the same
+// transaction as the create, so a failure never leaves a queued job with a
+// closed gate, and a retry with the key finds the job as it should be.
 func (s *service) persist(ctx context.Context, j *Job, fence namespace.Fence, e audit.Entry) (Job, bool, error) {
 	entries := []audit.Entry{e}
 	open := len(j.Phases) > 0 && GatesStatus(j.Phases[0].Gates, nil, j.StartedBy) == GateOpen
@@ -468,6 +569,8 @@ func (s *service) persist(ctx context.Context, j *Job, fence namespace.Fence, e 
 	var dispatch *durable.StartRequest
 	if open {
 		dispatch = dispatchOf(j)
+	} else {
+		j.State = StateAwaitingApproval
 	}
 
 	stored, isNew, err := s.store.Create(ctx, *j, dispatch, fence, entries)
@@ -481,22 +584,7 @@ func (s *service) persist(ctx context.Context, j *Job, fence namespace.Fence, e 
 		return Job{}, false, fmt.Errorf("create job: %w", err)
 	}
 
-	if !isNew || open {
-		return stored, isNew, nil
-	}
-
-	// The first phase waits for a gate: the job leaves queued at once, in
-	// its own change with no audit entry (the start wrote it).
-	waiting, err := s.store.Apply(ctx, Change{
-		Job: stored.ID, Version: stored.Version, Event: EventNeedApproval, Wait: WaitNone, Reason: "",
-		Dispatch: nil, PlanNotBefore: time.Time{}, Executor: "", Delivery: nil, MergedAt: time.Time{},
-		Approval: nil,
-	}, fence, nil)
-	if err != nil {
-		return Job{}, false, fmt.Errorf("wait for approval: %w", err)
-	}
-
-	return waiting, true, nil
+	return stored, isNew, nil
 }
 
 // waitOf returns the wait reason for a create with a dispatch that failed

@@ -15,6 +15,11 @@ const (
 	maxRevision      = 64
 )
 
+// IsZero reports whether no field of l is set.
+func (l Location) IsZero() bool {
+	return l == Location{Connection: "", Repository: "", Ref: "", Directory: "", Revision: ""}
+}
+
 // Validate returns an error that wraps ErrInvalid for a code location that a
 // runner must not use. A runner job needs a repository and a ref. The
 // directory is relative and clean and stays in the checkout. The revision is

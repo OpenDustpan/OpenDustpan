@@ -52,7 +52,7 @@ func New(run Runner) *Store {
 func (s *Store) Create(ctx context.Context, j job.Job, d *durable.StartRequest, fence namespace.Fence,
 	e []audit.Entry,
 ) (job.Job, bool, error) {
-	if err := checkNewJob(&j, fence); err != nil {
+	if err := checkNewJob(&j, d, fence); err != nil {
 		return job.Job{}, false, err
 	}
 
@@ -91,6 +91,13 @@ func createIn(ctx context.Context, tx Tx, j *job.Job, d *durable.StartRequest, e
 	stored := *j
 	stored.Phases = clonePhases(j.Phases)
 	stored.State, stored.Version, stored.CreatedAt, stored.UpdatedAt = job.StateQueued, 1, now, now
+
+	// A job whose first gate needs approval is stored in awaiting-approval,
+	// in this transaction, so that no queued job with a closed gate is ever
+	// visible to the code that dispatches queued jobs.
+	if j.State == job.StateAwaitingApproval {
+		stored.State, stored.Wait = job.StateAwaitingApproval, job.WaitNone
+	}
 
 	if d != nil {
 		if err := startDispatch(ctx, tx, &stored, d, dispatchTimes{notBefore: time.Time{}, now: now}); err != nil {
@@ -319,7 +326,7 @@ func millisOrZero(t time.Time) int64 {
 // Defense in depth: the service checks the same fields before it calls the
 // store, and this check stays so that a new caller cannot store a job with
 // no unit ID, or a job of another namespace than its fence.
-func checkNewJob(j *job.Job, fence namespace.Fence) error {
+func checkNewJob(j *job.Job, d *durable.StartRequest, fence namespace.Fence) error {
 	switch {
 	case j.ID == "":
 		return fmt.Errorf("%w: a job needs an ID", job.ErrInvalid)
@@ -328,6 +335,11 @@ func checkNewJob(j *job.Job, fence namespace.Fence) error {
 	case j.Spec.Unit.Namespace() != fence.Namespace:
 		return fmt.Errorf("%w: job %s names namespace %q, the fence names %q", job.ErrInvalid, j.ID,
 			j.Spec.Unit.Namespace(), fence.Namespace)
+	case j.State != job.StateQueued && j.State != job.StateAwaitingApproval:
+		return fmt.Errorf("%w: job %s starts in state %q, not queued or awaiting-approval", job.ErrInvalid, j.ID,
+			j.State)
+	case j.State == job.StateAwaitingApproval && d != nil:
+		return fmt.Errorf("%w: job %s waits for approval, so it has no dispatch", job.ErrInvalid, j.ID)
 	case j.Current < 0 || j.Current > len(j.Phases):
 		return fmt.Errorf("%w: job %s has current phase %d of %d", job.ErrInvalid, j.ID, j.Current, len(j.Phases))
 	default:
@@ -375,7 +387,10 @@ func sameKey(ctx context.Context, tx Tx, j *job.Job) (job.Job, bool, error) {
 		return noJob(), false, err
 	}
 
-	if !same {
+	// The request hash covers what the spec does not hold: the reason, and
+	// the pool and location as the caller named them. A job that has a hash
+	// and a retry with another one are two requests under one key.
+	if !same || first.RequestHash != j.RequestHash {
 		return noJob(), false, job.ErrKeyConflict
 	}
 
@@ -461,7 +476,7 @@ func jobOf(r *Row) (job.Job, error) {
 	j := job.Job{
 		ID: r.ID, Spec: emptySpec(), State: r.State, Wait: r.Wait, Reason: "", Phases: nil, Current: r.Phase,
 		StartedBy: "", Source: "", Agent: "", AgentMode: "", BreakGlass: nil, Delivery: nil, Closed: nil,
-		Verification: job.VerificationNone, IdempotencyKey: r.Key, Version: r.Version,
+		Verification: job.VerificationNone, IdempotencyKey: r.Key, RequestHash: "", Version: r.Version,
 		CreatedAt: time.UnixMilli(r.CreatedMs).UTC(), UpdatedAt: time.UnixMilli(r.UpdatedMs).UTC(),
 	}
 
@@ -535,6 +550,6 @@ func noJob() job.Job {
 	return job.Job{
 		ID: "", Spec: emptySpec(), State: "", Wait: "", Reason: "", Phases: nil, Current: 0, StartedBy: "", Source: "",
 		Agent: "", AgentMode: "", BreakGlass: nil, Delivery: nil, Closed: nil, Verification: job.VerificationNone,
-		IdempotencyKey: "", Version: 0, CreatedAt: time.Time{}, UpdatedAt: time.Time{},
+		IdempotencyKey: "", RequestHash: "", Version: 0, CreatedAt: time.Time{}, UpdatedAt: time.Time{},
 	}
 }

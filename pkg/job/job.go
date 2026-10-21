@@ -41,8 +41,9 @@ var (
 	// ErrNotFound reports a job ID that the store does not know.
 	ErrNotFound = errors.New("job not found")
 	// ErrKeyConflict reports a start whose idempotency key names a job with
-	// another spec.
-	ErrKeyConflict = errors.New("idempotency key names a job with another spec")
+	// another request: another spec, or the same spec with another reason,
+	// pool or code location.
+	ErrKeyConflict = errors.New("idempotency key names a job with another request")
 	// ErrTransition reports an event that the state machine does not allow
 	// in the current state of the job.
 	ErrTransition = errors.New("job state does not allow this event")
@@ -67,6 +68,10 @@ var (
 	ErrLocked = errors.New("a manual lock covers the unit")
 	// ErrPolicyDenied reports a start that the policy decision denied.
 	ErrPolicyDenied = errors.New("policy denied the job")
+	// ErrGateEnforced reports a start on a unit that an enforced gate at
+	// change.propose or state.write covers. The server cannot evaluate such
+	// a gate for a job yet, so it refuses the start and never skips the gate.
+	ErrGateEnforced = errors.New("an enforced gate covers the unit")
 	// ErrFinished reports a cancel or an approval of a job that already
 	// ended.
 	ErrFinished = errors.New("job already ended")
@@ -334,6 +339,10 @@ type Job struct {
 	// IdempotencyKey is the key of the start. Two starts with one key give
 	// one job.
 	IdempotencyKey string
+	// RequestHash is the hash of the whole request of the start: the spec and
+	// the reason. A second start with the key of the job and another hash
+	// fails with ErrKeyConflict. It is empty for a job that has no key.
+	RequestHash string
 	// Version grows on each change of the job record. A write names the
 	// version that it read, so a write on a stale read fails with
 	// ErrConflict.

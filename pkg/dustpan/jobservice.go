@@ -24,9 +24,11 @@ import (
 //nolint:ireturn // The port is the contract of the result.
 func newJobService(svc services, cfg *settings) (job.Starter, error) {
 	gates, hasGates := cfg.namespaceStore.(gate.Store)
-	if cfg.jobStore == nil || cfg.inventoryReader == nil || cfg.runners == nil || !hasGates ||
-		svc.namespaces == nil || cfg.authorizer == nil {
-		return nil, nil //nolint:nilnil // No job service: the server lacks a store that it needs.
+
+	// Fail closed: with no gate service the start cannot check the access
+	// limits of the starter, so the server starts no job.
+	if !hasGates || svc.gates == nil || lacksJobPorts(svc, cfg) {
+		return nil, nil //nolint:nilnil // No job service: the server lacks a port that it needs.
 	}
 
 	facts := newInventoryFacts(cfg)
@@ -52,9 +54,14 @@ func newJobService(svc services, cfg *settings) (job.Starter, error) {
 	}
 
 	starter, svcErr := job.NewService(job.ServiceConfig{
-		Store: cfg.jobStore, Units: jobUnits{facts: facts}, Planner: jobPlanner{pools: cfg.runners},
-		Executors: []job.Executor{executor}, Decider: decider, Authorizer: cfg.authorizer,
-		Fences: jobFences{namespaces: svc.namespaces}, Freezes: freezes, Switches: nil, Now: cfg.now, NewID: nil,
+		Store: cfg.jobStore, Units: jobUnits{facts: facts}, Planner: jobPlanner{pools: cfg.runners, connections: nil},
+		Executors: []job.Executor{executor}, Decider: decider,
+		// The access limits of the starter hold for the start action, as for a
+		// call of any route. The limits of the lock of the plan are evaluated
+		// for the job token, so this is the only check of the person.
+		Authorizer: unitLimits{grants: cfg.authorizer, limited: gate.LimitedAuthorizer(cfg.authorizer, svc.gates)},
+		Gates:      jobGates{snapshots: gates, members: facts},
+		Fences:     jobFences{namespaces: svc.namespaces}, Freezes: freezes, Switches: nil, Now: cfg.now, NewID: nil,
 		Log: log,
 	})
 	if svcErr != nil {
@@ -62,6 +69,13 @@ func newJobService(svc services, cfg *settings) (job.Starter, error) {
 	}
 
 	return starter, nil
+}
+
+// lacksJobPorts reports whether the server lacks a port that the job service
+// needs, apart from the stores of the gates.
+func lacksJobPorts(svc services, cfg *settings) bool {
+	return cfg.jobStore == nil || cfg.inventoryReader == nil || cfg.runners == nil || svc.namespaces == nil ||
+		cfg.authorizer == nil
 }
 
 // newInventoryFacts returns the lookup of units in the inventory, with the
@@ -109,6 +123,93 @@ func (u jobUnits) Unit(ctx context.Context, ref identity.Object) (identity.Objec
 	return bare.WithUnitID(e.UnitID), nil
 }
 
+// unitLimits is the identity.Authorizer of the job service: the access limits
+// hold for an action on a unit, and the grants alone decide an action on any
+// other object. The access limits are conditions on the facts of a unit, and
+// the gate service refuses a limit check for another object with an error
+// that would deny the action on the namespace for every caller. A request
+// that names a pool needs namespace:manage-runners, and no limit can apply to
+// it yet.
+type unitLimits struct {
+	grants  identity.Authorizer
+	limited identity.Authorizer
+}
+
+// Authorize implements identity.Authorizer.
+func (a unitLimits) Authorize(ctx context.Context, p identity.Principal, action identity.Action, obj identity.Object,
+) error {
+	if obj.IsUnit() {
+		return a.limited.Authorize(ctx, p, action, obj)
+	}
+
+	return a.grants.Authorize(ctx, p, action, obj)
+}
+
+// ListObjects implements identity.Authorizer. It gives the scope of the
+// grants, as LimitedAuthorizer does.
+func (a unitLimits) ListObjects(ctx context.Context, p identity.Principal, action identity.Action,
+) (identity.Scope, error) {
+	return a.limited.ListObjects(ctx, p, action)
+}
+
+// gateSnapshots reads the configuration of a chain of scopes. gate.Store
+// implements it.
+type gateSnapshots interface {
+	Snapshot(ctx context.Context, scopes []gate.Scope) (gate.Config, error)
+}
+
+// jobGates is the job.GateGuard over the gate store.
+type jobGates struct {
+	snapshots gateSnapshots
+	members   gate.Membership
+}
+
+// Enforced implements job.GateGuard. It lists the gates at change.propose and
+// state.write on the scope chain of the unit that are not in evaluate mode.
+// A gate in error, or in a state that this code does not know, counts as
+// enforced: the answer is a refusal, never a skip.
+func (g jobGates) Enforced(ctx context.Context, unit identity.Object) ([]job.EnforcedGate, error) {
+	coll, err := g.members.Collection(ctx, unit)
+
+	switch {
+	case errors.Is(err, gate.ErrNotFound):
+		coll = ""
+	case err != nil:
+		return nil, fmt.Errorf("collection of %s: %w", unit, err)
+	default:
+	}
+
+	chain, err := gate.UnitChain(unit, coll)
+	if err != nil {
+		return nil, fmt.Errorf("scope chain of %s: %w", unit, err)
+	}
+
+	cfg, err := g.snapshots.Snapshot(ctx, chain)
+	if err != nil {
+		return nil, fmt.Errorf("gates of %s: %w", unit, err)
+	}
+
+	var enforced []job.EnforcedGate
+
+	for i := range cfg.Gates {
+		gt := &cfg.Gates[i]
+
+		if gt.DecisionPoint != gate.PointChangePropose && gt.DecisionPoint != gate.PointStateWrite {
+			continue
+		}
+
+		if gt.Mode == gate.ModeEvaluate {
+			continue
+		}
+
+		enforced = append(enforced, job.EnforcedGate{
+			Scope: gt.Scope.Key(), ID: string(gt.ID), Point: string(gt.DecisionPoint),
+		})
+	}
+
+	return enforced, nil
+}
+
 // jobFences is the job.FenceSource over the namespace service.
 type jobFences struct {
 	namespaces *namespace.Service
@@ -124,11 +225,29 @@ func (f jobFences) Fence(ctx context.Context, ns namespace.Name) (namespace.Fenc
 	return n.Fence(), nil
 }
 
+// connectionOwner tells whether a forge connection belongs to a namespace.
+type connectionOwner interface {
+	// Owns returns true when namespace ns holds the connection id. It
+	// returns false, and no error, for a connection of another namespace and
+	// for one that does not exist.
+	Owns(ctx context.Context, ns namespace.Name, id string) (bool, error)
+}
+
 // jobPlanner is the job.Planner of this version. It starts a plan on a
-// runner, with the default steps of the tool of the unit. The pool comes from
-// the request, because the server keeps no settings of a unit for jobs yet.
+// runner, with the default steps of the tool of the unit.
+//
+// The pool comes from the request, and then the service has checked
+// namespace:manage-runners, or it is the only job pool of the namespace. The
+// code location comes from the request, and then the service has checked
+// unit:define-steps. The server keeps no settings of a unit for jobs yet, so
+// a request with no location fails. The settings of a unit take the place of
+// both defaults.
 type jobPlanner struct {
 	pools runner.PoolStore
+	// connections checks the connection that a location names. Nil means the
+	// server keeps no forge connections, so a location with a connection fails
+	// closed.
+	connections connectionOwner
 }
 
 // Plan implements job.Planner.
@@ -152,9 +271,9 @@ func (p jobPlanner) Plan(ctx context.Context, unit identity.Object, req *job.Sta
 		return job.Spec{}, err
 	}
 
-	err = req.Location.Validate()
+	err = p.checkLocation(ctx, unit.Namespace(), req.Location)
 	if err != nil {
-		return job.Spec{}, fmt.Errorf("location: %w", err)
+		return job.Spec{}, err
 	}
 
 	poolID, err := p.poolID(ctx, unit.Namespace(), req.Pool)
@@ -168,20 +287,72 @@ func (p jobPlanner) Plan(ctx context.Context, unit identity.Object, req *job.Sta
 	}, nil
 }
 
-// poolID returns the ID of the pool of ns with the name name.
-func (p jobPlanner) poolID(ctx context.Context, ns namespace.Name, name string) (string, error) {
-	if name == "" {
-		return "", fmt.Errorf("%w: name the runner pool of the job", job.ErrInvalid)
+// checkLocation checks the code location of a start in the namespace ns.
+func (p jobPlanner) checkLocation(ctx context.Context, ns namespace.Name, loc job.Location) error {
+	if loc.IsZero() {
+		return fmt.Errorf("%w: the unit has no code location; name one in the request", job.ErrUnsupported)
 	}
 
+	err := loc.Validate()
+	if err != nil {
+		return fmt.Errorf("location: %w", err)
+	}
+
+	if loc.Connection == "" {
+		return nil
+	}
+
+	// Defense in depth: the connection decides which credentials fetch the
+	// code. A connection of another namespace, a connection that does not
+	// exist and a server that keeps no connections all give the answer of a
+	// refused unit, so the answer is no oracle for the connections of other
+	// namespaces. This check does not rely on the actions of the service.
+	if p.connections == nil {
+		return fmt.Errorf("%w: the connection cannot be used", identity.ErrDenied)
+	}
+
+	owns, err := p.connections.Owns(ctx, ns, loc.Connection)
+	if err != nil {
+		return fmt.Errorf("connection of %s: %w", ns, err)
+	}
+
+	if !owns {
+		return fmt.Errorf("%w: the connection cannot be used", identity.ErrDenied)
+	}
+
+	return nil
+}
+
+// poolID returns the ID of the pool of ns with the name name, or the ID of
+// the only pool of ns that runs jobs when name is empty.
+func (p jobPlanner) poolID(ctx context.Context, ns namespace.Name, name string) (string, error) {
 	pools, err := p.pools.Pools(ctx, ns)
 	if err != nil {
 		return "", fmt.Errorf("pools of %s: %w", ns, err)
 	}
 
+	// Defense in depth: the store lists the pools of ns only, and the runner
+	// executor checks the namespace of the pool too. This filter stays so
+	// that a store that lists a pool of another namespace never gives its ID.
+	pools = slices.DeleteFunc(slices.Clone(pools), func(pl runner.Pool) bool {
+		return pl.Namespace != ns || pl.Purpose != runner.PurposeJobs
+	})
+
+	if name == "" {
+		switch len(pools) {
+		case 1:
+			return pools[0].ID, nil
+		case 0:
+			return "", fmt.Errorf("%w: the namespace has no runner pool for jobs", job.ErrUnsupported)
+		default:
+			return "", fmt.Errorf("%w: the namespace has more than one runner pool for jobs, so there is no "+
+				"default pool", job.ErrUnsupported)
+		}
+	}
+
 	i := slices.IndexFunc(pools, func(pl runner.Pool) bool { return pl.Name == name })
 	if i < 0 {
-		return "", fmt.Errorf("%w: namespace %s has no runner pool %q", job.ErrInvalid, ns, name)
+		return "", fmt.Errorf("%w: namespace %s has no runner pool %q for jobs", job.ErrInvalid, ns, name)
 	}
 
 	return pools[i].ID, nil

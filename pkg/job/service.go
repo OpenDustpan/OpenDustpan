@@ -51,16 +51,68 @@ type FenceSource interface {
 	Fence(ctx context.Context, ns namespace.Name) (namespace.Fence, error)
 }
 
+// EnforcedGate names a gate that the server enforces at a decision point that
+// a job start meets.
+type EnforcedGate struct {
+	// Scope is the scope key of the gate.
+	Scope string
+	// ID is the ID of the gate in its scope.
+	ID string
+	// Point is the decision point of the gate: change.propose or state.write.
+	Point string
+}
+
+// GateError is the error of a start that an enforced gate covers. It wraps
+// ErrGateEnforced and names the gates.
+type GateError struct {
+	Gates []EnforcedGate
+}
+
+// Error implements error.
+func (e *GateError) Error() string {
+	names := make([]string, 0, len(e.Gates))
+	for _, g := range e.Gates {
+		names = append(names, fmt.Sprintf("%s at %s (%s)", g.ID, g.Point, g.Scope))
+	}
+
+	return fmt.Sprintf(
+		"%s: %s; this server cannot evaluate it for a job yet",
+		ErrGateEnforced,
+		strings.Join(names, ", "),
+	)
+}
+
+// Unwrap returns ErrGateEnforced.
+func (*GateError) Unwrap() error { return ErrGateEnforced }
+
+// GateGuard tells which enforced gates cover a unit. A start meets the gates
+// of change.propose and state.write for the unit. The gate service does not
+// evaluate change.propose yet, and the job token passes state.write with no
+// evaluation, so the start refuses when such a gate covers the unit and never
+// skips it.
+type GateGuard interface {
+	// Enforced returns the gates in enforce mode at change.propose or
+	// state.write on the scope chain of unit: the installation, the
+	// namespace, the collection of the unit and the unit. A gate in
+	// evaluate (audit) mode is not in the list. Any error refuses the start.
+	Enforced(ctx context.Context, unit identity.Object) ([]EnforcedGate, error)
+}
+
 // ServiceConfig holds the ports of a service. Every port but Freezes,
 // Switches, Now and NewID is required.
 type ServiceConfig struct {
-	Store      Store
-	Units      UnitResolver
-	Planner    Planner
-	Executors  []Executor
-	Decider    Decider
+	Store     Store
+	Units     UnitResolver
+	Planner   Planner
+	Executors []Executor
+	Decider   Decider
+	// Authorizer decides the start actions. The server gives it the access
+	// limits of the starter (gate.LimitedAuthorizer).
 	Authorizer identity.Authorizer
-	Fences     FenceSource
+	// Gates tells which enforced gates cover a unit. It is required: a
+	// service with no guard would start jobs that skip the gates.
+	Gates  GateGuard
+	Fences FenceSource
 	// Freezes names the active freeze of a break-glass start. Nil refuses
 	// every break-glass.
 	Freezes FreezeStore
@@ -84,6 +136,7 @@ type service struct {
 	executors  map[ExecutorKind]Executor
 	decider    Decider
 	authorizer identity.Authorizer
+	gates      GateGuard
 	fences     FenceSource
 	freezes    FreezeStore
 	switches   func(ctx context.Context, ns namespace.Name, user string) DirectSwitches
@@ -117,9 +170,19 @@ func NewService(cfg ServiceConfig) (Starter, error) { //nolint:ireturn // The po
 	}
 
 	s := &service{
-		store: cfg.Store, units: cfg.Units, planner: cfg.Planner, executors: executors, decider: cfg.Decider,
-		authorizer: cfg.Authorizer, fences: cfg.Fences, freezes: cfg.Freezes, switches: cfg.Switches, now: cfg.Now,
-		newID: cfg.NewID, log: cfg.Log,
+		store:      cfg.Store,
+		units:      cfg.Units,
+		planner:    cfg.Planner,
+		executors:  executors,
+		decider:    cfg.Decider,
+		authorizer: cfg.Authorizer,
+		gates:      cfg.Gates,
+		fences:     cfg.Fences,
+		freezes:    cfg.Freezes,
+		switches:   cfg.Switches,
+		now:        cfg.Now,
+		newID:      cfg.NewID,
+		log:        cfg.Log,
 	}
 
 	if s.now == nil {
@@ -173,6 +236,11 @@ func (s *service) StartOnce(ctx context.Context, a Actor, req StartRequest) (Job
 		return Job{}, false, err
 	}
 
+	err = s.authorizeFields(ctx, a, unit, &req)
+	if err != nil {
+		return Job{}, false, err
+	}
+
 	spec, err := s.planner.Plan(ctx, unit, &req)
 	if err != nil {
 		return Job{}, false, fmt.Errorf("plan job: %w", err)
@@ -186,7 +254,14 @@ func (s *service) StartOnce(ctx context.Context, a Actor, req StartRequest) (Job
 		return Job{}, false, fmt.Errorf("%w: the planner changed the unit or the operation", ErrInvalid)
 	}
 
-	err = s.authorize(ctx, a, &spec, req.BreakGlass)
+	err = s.authorize(ctx, a, &spec, &req)
+	if err != nil {
+		return Job{}, false, err
+	}
+
+	// Fail closed on the gates that this version cannot evaluate. The caller
+	// holds the start actions, so the answer names the gate.
+	err = s.checkGates(ctx, unit)
 	if err != nil {
 		return Job{}, false, err
 	}

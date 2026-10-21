@@ -373,6 +373,7 @@ func jobIn(s job.State, d *job.DeliveryResult) job.Job {
 		Closed:         nil,
 		Verification:   job.VerificationNone,
 		IdempotencyKey: "",
+		RequestHash:    "",
 		Version:        1,
 		CreatedAt:      time.Time{},
 		UpdatedAt:      time.Time{},

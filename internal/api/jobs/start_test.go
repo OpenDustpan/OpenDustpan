@@ -467,7 +467,13 @@ func TestStartMapsTheErrorsOfTheService(t *testing.T) {
 		{fmt.Errorf("%w: no agents", job.ErrAgentDenied), http.StatusForbidden, "job.agent-denied", "no agents"},
 		{job.ErrFrozen, http.StatusConflict, "job.frozen", "freeze"},
 		{job.ErrLimit, http.StatusTooManyRequests, "job.limit", "too many"},
-		{job.ErrKeyConflict, http.StatusConflict, "request.idempotency-key-reused", "key"},
+		{job.ErrKeyConflict, http.StatusUnprocessableEntity, "request.idempotency-key-reused", "key"},
+		{
+			&job.GateError{Gates: []job.EnforcedGate{
+				{Scope: "unit/acme/opentofu/net", ID: "no-plans", Point: "state.write"},
+			}},
+			http.StatusForbidden, "job.gate-enforced", "no-plans at state.write",
+		},
 		{namespace.ErrFenced, http.StatusConflict, "namespace.fenced", ""},
 		{fmt.Errorf("%w: unit and action", identity.ErrDenied), http.StatusForbidden, "", "forbidden"},
 		{job.ErrNotFound, http.StatusNotFound, "", "not found"},
@@ -510,29 +516,164 @@ func checkErrorBody(t *testing.T, body, wantCode, wantText string) {
 	}
 }
 
-// TestStartDeniedWritesTheAuditEntry proves a refusal of the start action is
-// in the audit log, with the subject and the unit, and that the answer is 403.
+// TestStartDeniedWritesTheAuditEntry proves every refusal of the start is in
+// the audit log, with the subject and the unit, and that a request that is
+// not a refusal writes no entry.
 func TestStartDeniedWritesTheAuditEntry(t *testing.T) {
 	t.Parallel()
 
-	starter := newFakeStarter(t)
-	starter.err = fmt.Errorf("%w: unit:run-plan on opentofu:acme/net", identity.ErrDenied)
-	entries := &recordingAudit{Store: nil, mu: sync.Mutex{}, entries: nil}
-	h := newStartHandler(t, newAuthorizer(readsNamespace()...), newFakeJobs(), starter, entries)
+	gate := &job.GateError{Gates: []job.EnforcedGate{
+		{Scope: "unit/acme/opentofu/net", ID: "no-plans", Point: "state.write"},
+	}}
 
-	rec := post(t, h, testToken, goodBody)
-	if rec.Code != http.StatusForbidden {
-		t.Fatalf("status = %d %s, want 403", rec.Code, rec.Body.String())
+	tests := []struct {
+		name       string
+		err        error
+		status     int
+		wantReason string
+	}{
+		{
+			"the start action", fmt.Errorf("%w: unit:run-plan on opentofu:acme/net", identity.ErrDenied),
+			http.StatusForbidden, "denied by policy",
+		},
+		{
+			"the action for a pool", fmt.Errorf("%w: namespace:manage-runners on acme", identity.ErrDenied),
+			http.StatusForbidden, "denied by policy",
+		},
+		{
+			"the action for a location", fmt.Errorf("%w: unit:define-steps on opentofu:acme/net", identity.ErrDenied),
+			http.StatusForbidden, "denied by policy",
+		},
+		{
+			"a connection of another namespace", fmt.Errorf("%w: the connection cannot be used", identity.ErrDenied),
+			http.StatusForbidden, "denied by policy",
+		},
+		{
+			"the policy", fmt.Errorf("%w: plans are off", job.ErrPolicyDenied), http.StatusForbidden,
+			"policy denied the job",
+		},
+		{
+			"the agent mode", fmt.Errorf("%w: no agents", job.ErrAgentDenied), http.StatusForbidden,
+			"an agent cannot do this",
+		},
+		{"a freeze", job.ErrFrozen, http.StatusConflict, "a change freeze is active"},
+		{"the limit", job.ErrLimit, http.StatusTooManyRequests, "too many open jobs"},
+		{"an enforced gate", gate, http.StatusForbidden, "an enforced gate covers the unit: no-plans"},
+		{
+			"a gate that cannot be read", fmt.Errorf("%w: unreadable", job.ErrGateEnforced), http.StatusForbidden,
+			"an enforced gate covers the unit",
+		},
+		{
+			"zero pools or two pools", fmt.Errorf("%w: no default pool", job.ErrUnsupported),
+			http.StatusUnprocessableEntity, "the server cannot start this job",
+		},
 	}
 
-	if len(entries.entries) != 1 {
-		t.Fatalf("audit entries = %d, want 1", len(entries.entries))
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			starter := newFakeStarter(t)
+			starter.err = tt.err
+			entries := &recordingAudit{Store: nil, mu: sync.Mutex{}, entries: nil}
+			h := newStartHandler(t, newAuthorizer(readsNamespace()...), newFakeJobs(), starter, entries)
+
+			rec := post(t, h, testToken, goodBody)
+			if rec.Code != tt.status {
+				t.Fatalf("status = %d %s, want %d", rec.Code, rec.Body.String(), tt.status)
+			}
+
+			if len(entries.entries) != 1 {
+				t.Fatalf("audit entries = %d, want 1", len(entries.entries))
+			}
+
+			e := entries.entries[0]
+			if e.Subject != "ada" || e.Action != string(identity.ActionUnitRunPlan) ||
+				e.Object != "opentofu:acme/net" ||
+				e.Outcome != audit.OutcomeDenied ||
+				!strings.HasPrefix(e.Reason, tt.wantReason+" on POST ") {
+				t.Fatalf("entry = %+v, want a refusal for ada with the reason %q", e, tt.wantReason)
+			}
+
+			if strings.Contains(e.Reason, "hunter2") || strings.Contains(e.Reason, "unreadable") {
+				t.Fatalf("reason %q holds the text of the error", e.Reason)
+			}
+		})
+	}
+}
+
+// TestStartWritesNoDenialForOtherErrors proves a request that is not valid, a
+// key that names another request, and a failure of the server write no
+// denial entry.
+func TestStartWritesNoDenialForOtherErrors(t *testing.T) {
+	t.Parallel()
+
+	for _, err := range []error{
+		fmt.Errorf("%w: no pool", job.ErrInvalid), job.ErrKeyConflict, namespace.ErrFenced, errDriver,
+	} {
+		starter := newFakeStarter(t)
+		starter.err = err
+		entries := &recordingAudit{Store: nil, mu: sync.Mutex{}, entries: nil}
+		h := newStartHandler(t, newAuthorizer(readsNamespace()...), newFakeJobs(), starter, entries)
+
+		post(t, h, testToken, goodBody)
+
+		if len(entries.entries) != 0 {
+			t.Errorf("error %v wrote %d audit entries, want none", err, len(entries.entries))
+		}
+	}
+}
+
+// TestStartPassesThePoolAndTheLocation proves the handler hands the pool and
+// the location of the body to the service as they are, and leaves them empty
+// for a body that names neither. The service checks the extra actions.
+func TestStartPassesThePoolAndTheLocation(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name         string
+		body         string
+		wantPool     string
+		wantLocation job.Location
+	}{
+		{"both", goodBody, "ci", job.Location{
+			Connection: "", Repository: "acme/infra", Ref: "main", Directory: "net", Revision: "",
+		}},
+		{"neither", `{"unit":{"tool":"opentofu","name":"net"},"operation":"plan"}`, "", job.Location{
+			Connection: "", Repository: "", Ref: "", Directory: "", Revision: "",
+		}},
+		{
+			"a pool only", `{"unit":{"tool":"opentofu","name":"net"},"operation":"plan","pool":"ci"}`, "ci",
+			job.Location{Connection: "", Repository: "", Ref: "", Directory: "", Revision: ""},
+		},
+		{
+			"a location with a connection",
+			`{"unit":{"tool":"opentofu","name":"net"},"operation":"plan",` +
+				`"location":{"connection":"other-conn","repository":"acme/infra","ref":"main"}}`,
+			"",
+			job.Location{
+				Connection: "other-conn", Repository: "acme/infra", Ref: "main", Directory: "", Revision: "",
+			},
+		},
 	}
 
-	e := entries.entries[0]
-	if e.Subject != "ada" || e.Action != string(identity.ActionUnitRunPlan) || e.Object != "opentofu:acme/net" ||
-		e.Outcome != audit.OutcomeDenied {
-		t.Fatalf("entry = %+v, want the refusal of unit:run-plan for ada", e)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			starter := newFakeStarter(t)
+			h := newStartHandler(t, newAuthorizer(readsNamespace()...), newFakeJobs(), starter, nil)
+
+			if rec := post(t, h, testToken, tt.body); rec.Code != http.StatusCreated {
+				t.Fatalf("status = %d %s, want 201", rec.Code, rec.Body.String())
+			}
+
+			got := starter.requests[0]
+			if got.Pool != tt.wantPool || got.Location != tt.wantLocation {
+				t.Fatalf("request pool %q, location %+v; want %q, %+v", got.Pool, got.Location, tt.wantPool,
+					tt.wantLocation)
+			}
+		})
 	}
 }
 

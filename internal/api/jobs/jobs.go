@@ -179,6 +179,7 @@ const (
 	codeKeyConflict    = "request.idempotency-key-reused"
 	codeKeyInvalid     = "request.idempotency-key-invalid"
 	codeBodyInvalid    = "request.body-invalid"
+	codeGateEnforced   = "job.gate-enforced"
 	codeFenced         = "namespace.fenced"
 	maxMessageBytes    = 300
 	unitCannotBeStated = "forbidden"
@@ -233,21 +234,31 @@ func classifyStart(err error) (int, string, bool) {
 	case errors.Is(err, idempotency.ErrInvalidKey):
 		return http.StatusBadRequest, codeKeyInvalid, true
 	case errors.Is(err, job.ErrKeyConflict):
-		return http.StatusConflict, codeKeyConflict, true
+		return http.StatusUnprocessableEntity, codeKeyConflict, true
+	case errors.Is(err, namespace.ErrFenced):
+		return http.StatusConflict, codeFenced, true
+	default:
+		return classifyJobRefusal(err)
+	}
+}
+
+// classifyJobRefusal maps the refusals that the rules of a job give.
+func classifyJobRefusal(err error) (int, string, bool) {
+	switch {
 	case errors.Is(err, job.ErrInvalid):
 		return http.StatusBadRequest, codeInvalid, true
 	case errors.Is(err, job.ErrUnsupported):
 		return http.StatusUnprocessableEntity, codeUnsupported, true
 	case errors.Is(err, job.ErrPolicyDenied):
 		return http.StatusForbidden, codePolicyDenied, true
+	case errors.Is(err, job.ErrGateEnforced):
+		return http.StatusForbidden, codeGateEnforced, true
 	case errors.Is(err, job.ErrAgentDenied):
 		return http.StatusForbidden, codeAgentDenied, true
 	case errors.Is(err, job.ErrFrozen):
 		return http.StatusConflict, codeFrozen, true
 	case errors.Is(err, job.ErrLimit):
 		return http.StatusTooManyRequests, codeLimit, true
-	case errors.Is(err, namespace.ErrFenced):
-		return http.StatusConflict, codeFenced, true
 	default:
 		return 0, "", false
 	}

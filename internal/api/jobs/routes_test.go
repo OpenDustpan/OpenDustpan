@@ -297,6 +297,7 @@ func runningJob(t *testing.T, id job.ID) job.Job {
 		Closed:         nil,
 		Verification:   job.VerificationNone,
 		IdempotencyKey: "key-1",
+		RequestHash:    "",
 		Version:        3,
 		CreatedAt:      at,
 		UpdatedAt:      at.Add(time.Minute),
