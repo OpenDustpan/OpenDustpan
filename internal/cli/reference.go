@@ -328,7 +328,12 @@ func clientRows() []clientRow {
 			flags = append(flags, "`--"+s.Flag+"`")
 		}
 
-		rows = append(rows, clientRow{command: spec.usage, flags: strings.Join(flags, ", ")})
+		list := strings.Join(flags, ", ")
+		if list == "" {
+			list = referenceNone
+		}
+
+		rows = append(rows, clientRow{command: spec.usage, flags: list})
 	}
 
 	return rows

@@ -17,14 +17,17 @@ import (
 	apiserver "opendustpan.org/opendustpan/internal/api/server"
 	"opendustpan.org/opendustpan/internal/oauth"
 	"opendustpan.org/opendustpan/internal/oauth/oauthtest"
+	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/gate"
 	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/ipallow"
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/session"
 	"opendustpan.org/opendustpan/pkg/store/sqlite"
+	"opendustpan.org/opendustpan/pkg/store/storetest"
 )
 
 const (
@@ -211,6 +214,8 @@ func newSignInEnvWith(t *testing.T, opts signInEnvOptions) signInEnv {
 		t.Fatalf("gate config service: %v", err)
 	}
 
+	grants, allowlists := newSignInAccess(t, st, namespaces, clock)
+
 	handler, err := apiserver.NewHandler(apiserver.Config{
 		Preferences:      nil,
 		GitHost:          nil,
@@ -231,13 +236,13 @@ func newSignInEnvWith(t *testing.T, opts signInEnvOptions) signInEnv {
 		Journal:          st,
 		Principals:       principals,
 		Tokens:           seedRouteTokens(t, st),
-		Access:           nil,
+		Access:           grants,
 		Audit:            st,
 		OnAuditFailure:   nil,
 		DeletedUnits:     stubSweeper{},
 		AuditSinks:       nil,
-		AuditChain:       nil,
-		IPAllowlists:     nil,
+		AuditChain:       newFakeAuditChain(audit.ChainOn),
+		IPAllowlists:     allowlists,
 		Gates:            gates,
 		SessionPolicy:    policyRoutes,
 		InstallationKind: "",
@@ -1503,4 +1508,63 @@ func TestSignInSubjectAtLimitPassesTheLengthCheck(t *testing.T) {
 	}
 
 	e.checkOIDCPrincipal(t, subject, "Capped Sub")
+}
+
+// makeSiteAdministrator signs the test person in once, so that the person
+// exists, and gives it the site administrator role on the installation. A
+// grant or a role change by a console session then passes the check that the
+// granter holds what the grant gives.
+func (e signInEnv) makeSiteAdministrator(t *testing.T) {
+	t.Helper()
+
+	_, body := e.readSession(t, e.freshSignIn(t))
+
+	person, err := e.store.GetPrincipalBySubject(t.Context(), body.Subject)
+	if err != nil {
+		t.Fatalf("read the signed-in person: %v", err)
+	}
+
+	at := e.clock.Now()
+	obj := identity.ServerObject()
+	grt := access.Grant{
+		CreatedAt: at, Condition: nil, Object: obj, ID: "grt-site-" + person.ID, Role: access.RoleSiteAdministrator,
+		CreatedBy: "admin", Subject: access.Subject{Kind: access.SubjectPrincipal, ID: person.ID},
+	}
+
+	fence, entry := storetest.GrantWrite(t, e.store, obj, at, "grant:"+grt.ID)
+	if err := e.store.CreateGrant(t.Context(), grt, fence, entry, nil); err != nil {
+		t.Fatalf("make the person a site administrator: %v", err)
+	}
+}
+
+// newSignInAccess returns the grant service and the IP allowlist service of
+// a sign-in env, over st.
+func newSignInAccess(
+	t *testing.T, st *sqlite.Store, namespaces *namespace.Service, clock *envClock,
+) (*access.Service, *ipallow.Service) {
+	t.Helper()
+
+	grantAuthz, err := access.NewAuthorizer(
+		access.AuthorizerConfig{Store: st, Callers: st, Collections: stubCollections{}, Units: st, Principals: st},
+	)
+	if err != nil {
+		t.Fatalf("authorizer: %v", err)
+	}
+
+	grants, err := access.NewService(access.ServiceConfig{
+		Store: st, Directory: st, Namespaces: st, Authorizer: grantAuthz, Now: clock.Now, NewID: nil,
+		BootstrapAdmins: nil,
+	})
+	if err != nil {
+		t.Fatalf("access service: %v", err)
+	}
+
+	allowlists, err := ipallow.NewService(ipallow.Config{
+		Store: st, Namespaces: namespaces, Now: clock.Now, Enabled: true,
+	})
+	if err != nil {
+		t.Fatalf("ip allowlist service: %v", err)
+	}
+
+	return grants, allowlists
 }

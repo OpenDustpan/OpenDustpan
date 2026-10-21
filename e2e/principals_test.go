@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -73,7 +74,7 @@ func runPrincipalsOnStore(t *testing.T, cli e2e.Install, store e2e.Store) {
 	}
 
 	ctx := t.Context()
-	env := e2e.NewEnv(ctx, t, cli, store)
+	env := e2e.NewEnvWithSignIn(ctx, t, cli, store)
 
 	checkReady(ctx, t, env)
 
@@ -162,16 +163,16 @@ func checkPrincipalPaging(ctx context.Context, t *testing.T, env *e2e.Env, fx pr
 	)
 
 	if len(first.Principals) != 1 || first.Principals[0].ID != fx.alice.ID || first.NextCursor == "" ||
-		first.Total != 2 || first.Principals[0].Source != "local" || first.Principals[0].GroupCount != 1 {
-		t.Fatalf("first page = %+v, want local alice in 1 group, a cursor and a total of 2", first)
+		first.Total != 3 || first.Principals[0].Source != "local" || first.Principals[0].GroupCount != 1 {
+		t.Fatalf("first page = %+v, want local alice in 1 group, a cursor and a total of 3", first)
 	}
 
 	principalCall(ctx, t, env, principalStep{
 		http.MethodGet, "/api/server/principals?limit=1&cursor=" + first.NextCursor, "", http.StatusOK,
 	}, &second)
 
-	if len(second.Principals) != 1 || second.Principals[0].ID != fx.deploy.ID || second.NextCursor != "" {
-		t.Fatalf("second page = %+v, want ci-deploy and no cursor", second)
+	if len(second.Principals) != 1 || second.Principals[0].ID != fx.deploy.ID || second.NextCursor == "" {
+		t.Fatalf("second page = %+v, want ci-deploy and a cursor to the person of the console session", second)
 	}
 
 	var prefixed page
@@ -281,8 +282,10 @@ func checkPrincipalLists(ctx context.Context, t *testing.T, env *e2e.Env, fx pri
 	var list e2ePrincipalList
 	principalCall(ctx, t, env, principalStep{http.MethodGet, "/api/server/principals", "", http.StatusOK}, &list)
 
-	if len(list.Principals) != 2 || list.Principals[0].ID != fx.alice.ID || list.Principals[1].ID != fx.deploy.ID {
-		t.Fatalf("principals = %+v, want alice then ci-deploy", list.Principals)
+	// The third principal is the administrator of the console session that the
+	// membership changes need.
+	if len(list.Principals) != 3 || list.Principals[0].ID != fx.alice.ID || list.Principals[1].ID != fx.deploy.ID {
+		t.Fatalf("principals = %+v, want alice, ci-deploy and the session administrator", list.Principals)
 	}
 
 	var one e2ePrincipal
@@ -364,16 +367,121 @@ func checkPrincipalChanges(ctx context.Context, t *testing.T, env *e2e.Env, fx p
 	}
 }
 
-// principalCall sends one installation API request with the bootstrap admin
-// token and fails unless it answers step.want. It decodes the answer into
-// out when out is not nil.
+// freshAuthRule is a write that needs a fresh authentication: the paths
+// that match path, with one of the methods.
+type freshAuthRule struct {
+	path    *regexp.Regexp
+	methods []string
+}
+
+// freshAuthRules lists the writes that need a fresh authentication: the
+// creation and the rotation of an access token, a change of the session
+// policy, the token policy, the roles and the grants, a change of a sign-in
+// provider, a change of a gate object, the approval of the audit chain and a
+// change of an IP allowlist.
+//
+//nolint:gochecknoglobals // A constant table of routes.
+var freshAuthRules = []freshAuthRule{
+	{
+		regexp.MustCompile(`^/api/server/(?:caller/tokens|service-tokens|principals/[^/]+/tokens)(?:/[^/]+/rotate)?$`),
+		[]string{http.MethodPost},
+	},
+	{regexp.MustCompile(`^/api/server/(?:session|token)-policy$`), []string{http.MethodPatch}},
+	{
+		regexp.MustCompile(`^/api/server/sign-in-providers(?:/[^/]+)?$`),
+		[]string{http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete},
+	},
+	{regexp.MustCompile(`^/api/server/roles(?:/[^/]+)?$`), []string{http.MethodPost, http.MethodPatch}},
+	{regexp.MustCompile(`^/api/server/audit/chain$`), []string{http.MethodPost}},
+	{
+		regexp.MustCompile(`^/api/server/(?:namespaces/[^/]+(?:/collections/[^/]+)?/|principals/[^/]+/)?grants$`),
+		[]string{http.MethodPost},
+	},
+	{
+		// A grant to a group applies to each member, so a membership change is
+		// an act-as edge.
+		regexp.MustCompile(`^/api/server/groups/[^/]+(?:/members(?:/[^/]+)?)?$`),
+		[]string{http.MethodPost, http.MethodDelete},
+	},
+	{
+		regexp.MustCompile(`^/api/dustpan/v1/git-host-(?:apps|installations)/[^/]+$`),
+		[]string{http.MethodPut, http.MethodDelete},
+	},
+	{
+		regexp.MustCompile(`^/api/server/namespaces/[^/]+/ip-allowlist$`),
+		[]string{http.MethodPut, http.MethodDelete},
+	},
+	{
+		regexp.MustCompile(`^/api/dustpan/v1/namespaces/[^/]+/approval-(?:default|rules/[^/]+)$`),
+		[]string{http.MethodPut, http.MethodDelete},
+	},
+}
+
+// needsFreshAuth reports whether method on path is a write that needs a
+// fresh authentication. An access token never gives one.
+func needsFreshAuth(method, path string) bool {
+	for _, rule := range freshAuthRules {
+		if rule.path.MatchString(path) {
+			return slices.Contains(rule.methods, method)
+		}
+	}
+
+	return false
+}
+
+// freshServerCall sends one installation API request and answers its status and
+// body. A write that needs a fresh authentication goes with the console
+// session of a site administrator, any other request with the bootstrap
+// admin token. The env of a fresh write must come from NewEnvWithSignIn.
+func freshServerCall(ctx context.Context, t *testing.T, env *e2e.Env, step principalStep) (int, string) {
+	t.Helper()
+
+	if needsFreshAuth(step.method, step.path) {
+		return env.FreshAdminAPIStatus(
+			ctx,
+			t,
+			e2e.SessionRequest{Method: step.method, Path: step.path, Body: step.body},
+		)
+	}
+
+	status, resp, err := env.ServerAPIStatus(ctx, step.method, step.path, step.body)
+	if err != nil {
+		t.Fatalf("%s %s: %v", step.method, step.path, err)
+	}
+
+	return status, resp
+}
+
+// principalCall sends one installation API request, as freshServerCall does, and
+// fails unless it answers step.want. It decodes the answer into out when out
+// is not nil.
 func principalCall(ctx context.Context, t *testing.T, env *e2e.Env, step principalStep, out any) {
+	t.Helper()
+
+	status, resp := freshServerCall(ctx, t, env, step)
+
+	checkPrincipalAnswer(t, step, status, resp, out)
+}
+
+// principalCallWithToken sends one installation API request with the
+// bootstrap admin token, also a write that needs a fresh authentication, and
+// fails unless it answers step.want. A step uses it to prove that an access
+// token never gives a fresh authentication.
+func principalCallWithToken(ctx context.Context, t *testing.T, env *e2e.Env, step principalStep, out any) {
 	t.Helper()
 
 	status, resp, err := env.ServerAPIStatus(ctx, step.method, step.path, step.body)
 	if err != nil {
 		t.Fatalf("%s %s: %v", step.method, step.path, err)
 	}
+
+	checkPrincipalAnswer(t, step, status, resp, out)
+}
+
+// checkPrincipalAnswer fails unless status is step.want. It decodes resp into
+// out when out is not nil.
+func checkPrincipalAnswer(t *testing.T, step principalStep, status int, resp string, out any) {
+	t.Helper()
 
 	if status != step.want {
 		t.Fatalf("%s %s answers %d, want %d (%s)", step.method, step.path, status, step.want, resp)

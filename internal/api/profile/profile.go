@@ -62,6 +62,9 @@ type Config struct {
 	// Sessions checks the console session cookie of a request with no
 	// Authorization header. Nil accepts access tokens only.
 	Sessions *sessionauth.Checker
+	// SessionPolicy gives the token freshness window of the session policy.
+	// Nil means session.DefaultTokenFreshness.
+	SessionPolicy SessionPolicy
 	// Idempotency serves the Idempotency-Key header. Nil makes every request
 	// with the header answer 400.
 	Idempotency *idempotent.Middleware
@@ -76,6 +79,7 @@ type Handler struct {
 	authz    identity.Authorizer
 	guard    *refusal.Recorder
 	sessions *sessionauth.Checker
+	policy   SessionPolicy
 	idem     *idempotent.Middleware
 	logger   *slog.Logger
 	mux      *patternMux
@@ -103,6 +107,7 @@ func NewHandler(cfg Config) (*Handler, error) {
 			WithLimiter(cfg.DenialLimiter).
 			WithSurface("profile"),
 		sessions: cfg.Sessions,
+		policy:   cfg.SessionPolicy,
 		idem:     cfg.Idempotency,
 		logger:   cfg.Logger,
 		mux:      newPatternMux(),
@@ -123,14 +128,17 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 // authenticate resolves the Authorization header to a principal. A request
-// with no header uses the console session cookie, and the bool reports that
-// the cookie signed it in.
-func (h *Handler) authenticate(r *http.Request) (identity.Principal, bool, error) {
+// with no header uses the console session cookie, and the Caller reports that
+// the cookie signed it in. It is nil for an access token.
+func (h *Handler) authenticate(r *http.Request) (identity.Principal, *sessionauth.Caller, error) {
 	header := r.Header.Get("Authorization")
 	if header == "" {
-		p, _, err := h.sessions.Authenticate(r)
+		p, caller, err := h.sessions.Authenticate(r)
+		if err != nil {
+			return p, nil, err
+		}
 
-		return p, err == nil, err
+		return p, &caller, nil
 	}
 
 	raw, ok := strings.CutPrefix(header, tokenScheme)
@@ -139,20 +147,24 @@ func (h *Handler) authenticate(r *http.Request) (identity.Principal, bool, error
 	}
 
 	if !ok || raw == "" {
-		return identity.Principal{}, false, identity.ErrUnauthenticated
+		return identity.Principal{}, nil, identity.ErrUnauthenticated
 	}
 
 	p, err := h.authn.AuthenticateToken(r.Context(), raw)
 
-	return p, false, err
+	return p, nil, err
 }
 
 // errorResponse is the error body of the tool-neutral APIs. ErrorCode is a
 // stable machine code.
 type errorResponse struct {
-	Message   string `json:"message"`
-	Code      int    `json:"code"`
+	Message string `json:"message"`
+	Code    int    `json:"code"`
+	// ErrorCode is a stable machine code.
 	ErrorCode string `json:"errorCode,omitempty"`
+	// Reauthenticate is the path that starts a new sign-in, for the refusal
+	// of an old sign-in.
+	Reauthenticate string `json:"reauthenticate,omitempty"`
 }
 
 // statusError is an error with a fixed answer.
@@ -180,7 +192,14 @@ func (h *Handler) writeError(ctx context.Context, w http.ResponseWriter, err err
 	}
 
 	w.Header().Set("Cache-Control", "no-store")
-	h.writeJSON(ctx, w, pr.status, errorResponse{Code: pr.status, Message: pr.message, ErrorCode: pr.code})
+	var reauthenticate string
+	if old, ok := errors.AsType[reauthenticateError](err); ok {
+		reauthenticate = old.path
+	}
+
+	h.writeJSON(ctx, w, pr.status, errorResponse{
+		Code: pr.status, Message: pr.message, ErrorCode: pr.code, Reauthenticate: reauthenticate,
+	})
 }
 
 // problem is the answer to an error: a status, a stable code and a message
@@ -273,6 +292,17 @@ func classifyAuth(err error) (problem, bool) {
 		return problem{status: http.StatusUnauthorized, code: "auth.unauthenticated", message: "unauthenticated"}, true
 	case errors.Is(err, sessionauth.ErrCSRF), errors.Is(err, sessionauth.ErrOtherSite):
 		return problem{status: http.StatusForbidden, code: errcode.Forbidden(err), message: err.Error()}, true
+	case errors.Is(err, errFreshStepRequired), errors.Is(err, profile.ErrFreshRequired):
+		// A request with no console session, or a reveal with no fresh
+		// authentication check: fail closed.
+		return problem{
+			status: http.StatusForbidden, code: sessionauth.FreshStepRequiredCode,
+			message: sessionauth.FreshStepRequiredMessage,
+		}, true
+	case errors.Is(err, errReauthenticate):
+		return problem{
+			status: http.StatusUnauthorized, code: sessionauth.FreshStepRequiredCode, message: err.Error(),
+		}, true
 	}
 
 	if routing, ok := errors.AsType[*profile.RoutingError](err); ok {

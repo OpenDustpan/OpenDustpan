@@ -83,7 +83,11 @@ audit entry.
   profile that made it. A save with a `$sealed` value of another profile
   answers 400.
 - A read of a revision with `showSecrets=true` also answers the plain text of each secret.
-  It needs `profile:open`. The answer has `Cache-Control: no-store`. The
+  It needs `profile:open` and a console session with a recent sign-in. An
+  access token answers 403 with the error code `mfa.fresh-step-required`.
+  A session with an old sign-in answers 401 with the same error code and the
+  field `reauthenticate`. Each refusal writes an audit entry of the kind
+  `reveal` with the outcome `failure`. The answer has `Cache-Control: no-store`. The
   server writes an audit entry of the kind `reveal` before it answers, and
   the entry names the number of values and never a value. If the server
   cannot write the entry, no value leaves. A read with `showSecrets=true`

@@ -108,7 +108,7 @@ func newWorkspaceHandler(t *testing.T, authz identity.Authorizer) *tfe.Handler {
 		MaxStateBytes:  0,
 		OnAuditFailure: nil,
 		DenialLimiter:  nil,
-		StateGuard:     nil,
+		Sessions:       nil, SessionPolicy: nil, StateGuard: nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -826,7 +826,7 @@ func newPagingHandler(t *testing.T, authz identity.Authorizer) *tfe.Handler {
 		MaxStateBytes:  0,
 		OnAuditFailure: nil,
 		DenialLimiter:  nil,
-		StateGuard:     nil,
+		Sessions:       nil, SessionPolicy: nil, StateGuard: nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)

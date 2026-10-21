@@ -553,7 +553,8 @@ func TestGitHostWritesWriteOneAuditEntryWithNoSecret(t *testing.T) {
 		t.Fatalf("actions = %s, want %s", got, want)
 	}
 
-	serverEntries := e.auditEntries(t, audit.ServerScope)
+	// The console session of the writes also makes entries: its person and its start.
+	serverEntries := withoutSessionEntries(e.auditEntries(t, audit.ServerScope))
 	server := make([]string, 0, len(serverEntries))
 
 	for _, entry := range serverEntries {
