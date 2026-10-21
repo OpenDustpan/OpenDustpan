@@ -31,6 +31,8 @@ const (
 	portColDisabledAtMs  = "disabled_at_ms"
 	portColSource        = "source"
 	portColKind          = "kind"
+	portColScopeID       = "scope_id"
+	portColWrapperID     = "wrapper_id"
 	portColSubject       = "subject"
 	portColDeletedName   = "deleted_name"
 	portColTool          = "tool"
@@ -196,7 +198,7 @@ func portableSpec() []PortableTable {
 			Columns: []Column{
 				{Name: portColNamespace, Kind: KindText},
 				{Name: portColStackID, Kind: KindText},
-				{Name: "wrapper_id", Kind: KindText},
+				{Name: portColWrapperID, Kind: KindText},
 				{Name: "ciphertext", Kind: KindBytes},
 				{Name: portColCreatedAtMs, Kind: KindTime},
 			},
@@ -587,8 +589,8 @@ func portableSpec() []PortableTable {
 			Table:   TableInstallationSecretKeys,
 			OrderBy: []string{"scope_id"},
 			Columns: []Column{
-				{Name: "scope_id", Kind: KindText},
-				{Name: "wrapper_id", Kind: KindText},
+				{Name: portColScopeID, Kind: KindText},
+				{Name: portColWrapperID, Kind: KindText},
 				{Name: "ciphertext", Kind: KindBytes},
 				{Name: portColCreatedAtMs, Kind: KindTime},
 			},
@@ -710,5 +712,6 @@ func portableSpec() []PortableTable {
 		portableGitHostTables(),
 		portableRegistryTables(),
 		portableSinkTables(),
+		portableItemKeyTables(),
 	)
 }

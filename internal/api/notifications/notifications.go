@@ -279,6 +279,11 @@ func classifySink(err error) problem {
 			status: http.StatusUnprocessableEntity, code: "sink.no-sender",
 			message: "this server cannot send to this kind of notification destination",
 		}
+	case errors.Is(err, notify.ErrNoURL):
+		return problem{
+			status: http.StatusUnprocessableEntity, code: "sink.no-url",
+			message: "the notification destination has no URL that the server can use: set the URL again",
+		}
 	case errors.Is(err, sinks.ErrRateLimited):
 		return problem{
 			status: http.StatusTooManyRequests, code: "sink.test-rate-limited",

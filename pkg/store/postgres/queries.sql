@@ -1005,7 +1005,8 @@ SELECT wrapper_id FROM installation_secret_keys
 ORDER BY wrapper_id;
 
 -- name: BackupBlobs :many
--- Every blob key the finalized state versions and the checkpoints name, with the size
+-- Every blob key the finalized state versions, the checkpoints, the journal
+-- batches and the item keys that are not shredded name, with the size
 -- and MD5 of the plain bytes and the sealed flag, ordered by key. Sealed
 -- state blobs are stored sealed: the backup opens them to check and stores
 -- the sealed bytes. A pending version has no committed content, so the backup
@@ -1019,6 +1020,11 @@ FROM checkpoints
 UNION ALL
 SELECT blob_key AS content_key, size AS size, md5 AS md5, FALSE AS sealed
 FROM update_journal
+UNION ALL
+SELECT 'namespaces/' || k.namespace_id || '/item-keys/' || k.id || '/v' || k.blob_version::text AS content_key,
+       k.blob_size AS size, k.blob_md5 AS md5, FALSE AS sealed
+FROM item_keys AS k
+WHERE k.shredded_at_ms = 0
 ORDER BY content_key;
 
 -- name: GetAuditEntry :one
@@ -3990,3 +3996,48 @@ DELETE FROM notification_sink_secrets
 WHERE notification_sink_secrets.sink_id = sqlc.arg(sink_id)
   AND notification_sink_secrets.namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace));
 
+
+-- name: InsertItemKey :execrows
+-- The caller checks the fence in the same transaction. A record for the same
+-- item is not written: the caller reads the stored record.
+INSERT INTO item_keys (
+    id, namespace_id, scope_id, kind, item, wrapper_id, created_at_ms, shredded_at_ms, blob_version, blob_size, blob_md5
+)
+VALUES (
+    sqlc.arg(id), (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace)),
+    sqlc.arg(scope_id), sqlc.arg(kind), sqlc.arg(item), sqlc.arg(wrapper_id), sqlc.arg(created_at_ms), 0,
+    sqlc.arg(blob_version), sqlc.arg(blob_size), sqlc.arg(blob_md5)
+)
+ON CONFLICT (namespace_id, scope_id, kind, item) DO NOTHING;
+
+-- name: GetItemKey :one
+SELECT k.id, n.name AS namespace, k.scope_id, k.kind, k.item, k.wrapper_id, k.created_at_ms, k.shredded_at_ms,
+       k.blob_version, k.blob_size, k.blob_md5
+FROM item_keys AS k
+JOIN namespaces AS n ON n.id = k.namespace_id
+WHERE n.name = sqlc.arg(namespace) AND k.scope_id = sqlc.arg(scope_id) AND k.kind = sqlc.arg(kind)
+  AND k.item = sqlc.arg(item);
+
+-- name: ShredItemKey :execrows
+-- Only a record that is not shredded changes, so a second shred keeps the
+-- first shred time.
+UPDATE item_keys
+SET shredded_at_ms = sqlc.arg(shredded_at_ms)
+WHERE item_keys.shredded_at_ms = 0 AND item_keys.scope_id = sqlc.arg(scope_id) AND item_keys.kind = sqlc.arg(kind)
+  AND item_keys.item = sqlc.arg(item)
+  AND item_keys.namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace));
+
+-- name: ListItemKeys :many
+SELECT k.id, n.name AS namespace, k.scope_id, k.kind, k.item, k.wrapper_id, k.created_at_ms, k.shredded_at_ms,
+       k.blob_version, k.blob_size, k.blob_md5
+FROM item_keys AS k
+JOIN namespaces AS n ON n.id = k.namespace_id
+WHERE n.name = sqlc.arg(namespace) AND k.scope_id = sqlc.arg(scope_id) AND k.id > sqlc.arg(after)
+ORDER BY k.id
+LIMIT sqlc.arg(max_rows)::bigint;
+
+-- name: ListItemKeyWrapperIDs :many
+SELECT DISTINCT wrapper_id
+FROM item_keys
+WHERE shredded_at_ms = 0
+ORDER BY wrapper_id;
