@@ -93,6 +93,10 @@ type Config struct {
 	PublicURL string
 	Logger    *slog.Logger
 	Now       func() time.Time
+	// StateGuard checks the restore and the final delete of a unit against
+	// the access limits and the gates of state.write. It is optional: nil
+	// means the server keeps no gates, and no call is checked.
+	StateGuard StateGuard
 }
 
 // Handler serves the inventory API under /api/inventory/.
@@ -114,6 +118,7 @@ type Handler struct {
 	publicURL   *url.URL
 	logger      *slog.Logger
 	now         func() time.Time
+	stateGuard  StateGuard
 	mux         *patternMux
 	routes      []Route
 }
@@ -167,11 +172,12 @@ func NewHandler(cfg Config) (*Handler, error) {
 		guard: refusal.New(cfg.Authorizer, cfg.Audit, cfg.Namespaces, cfg.Logger, cfg.OnAuditFailure).
 			WithLimiter(cfg.DenialLimiter).
 			WithSurface("inventory"),
-		publicURL: publicURL,
-		logger:    cfg.Logger,
-		now:       clockOf(cfg.Now),
-		mux:       newPatternMux(),
-		routes:    nil,
+		publicURL:  publicURL,
+		logger:     cfg.Logger,
+		now:        clockOf(cfg.Now),
+		stateGuard: cfg.StateGuard,
+		mux:        newPatternMux(),
+		routes:     nil,
 	}
 
 	h.routes = h.buildRoutes()

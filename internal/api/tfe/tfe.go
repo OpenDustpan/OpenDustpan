@@ -242,6 +242,10 @@ type Config struct {
 	// MaxStateBytes bounds one OpenTofu state version. Zero means
 	// workspace.DefaultMaxStateBytes.
 	MaxStateBytes int64
+	// StateGuard checks each write of state against the access limits and
+	// the gates of state.write. Nil means the server keeps no gates: no
+	// write is checked.
+	StateGuard StateGuard
 }
 
 // Handler serves the TFE-compatible API under /api/v2/, with service
@@ -261,8 +265,10 @@ type Handler struct {
 	guard    *refusal.Recorder
 	gate     *bodygate.Gate
 	maxState int64
-	mux      *patternMux
-	routes   []Route
+	// stateGuard is nil when the server keeps no gates.
+	stateGuard StateGuard
+	mux        *patternMux
+	routes     []Route
 }
 
 // NewHandler returns a Handler. Every Config field is required.
@@ -293,10 +299,11 @@ func NewHandler(cfg Config) (*Handler, error) {
 		guard: refusal.New(cfg.Authorizer, cfg.Audit, cfg.Namespaces, cfg.Logger,
 			cfg.OnAuditFailure).WithLimiter(cfg.DenialLimiter).
 			WithSurface("tfe"),
-		gate:     cfg.Gate,
-		maxState: cfg.MaxStateBytes,
-		mux:      newPatternMux(),
-		routes:   nil,
+		gate:       cfg.Gate,
+		maxState:   cfg.MaxStateBytes,
+		stateGuard: cfg.StateGuard,
+		mux:        newPatternMux(),
+		routes:     nil,
 	}
 
 	if h.gate == nil {
