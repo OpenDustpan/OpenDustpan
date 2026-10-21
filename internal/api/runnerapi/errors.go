@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"strconv"
 
+	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/internal/sessionauth"
 	"opendustpan.org/opendustpan/pkg/durable"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -33,6 +34,14 @@ type managementError struct {
 	Code    int    `json:"code"`
 }
 
+// codedManagementError is managementError with the stable machine code of a
+// 403. The fields of managementError keep their names and their meaning.
+type codedManagementError struct {
+	Message   string `json:"message"`
+	Code      int    `json:"code"`
+	ErrorCode string `json:"errorCode"`
+}
+
 // writeError answers err in the error shape of the scope: the protocol shape
 // for a runner request, and the shape of the tool-neutral API for the
 // management API.
@@ -42,6 +51,15 @@ func (h *Handler) writeError(ctx context.Context, w http.ResponseWriter, scope S
 		h.logFailure(ctx, status)
 		h.logFenced(ctx, err)
 		h.logRefused(ctx, err, message)
+
+		if status == http.StatusForbidden {
+			if code := errcode.Forbidden(err); code != "" {
+				h.writeJSON(ctx, w, status, codedManagementError{Message: message, Code: status, ErrorCode: code})
+
+				return
+			}
+		}
+
 		h.writeJSON(ctx, w, status, managementError{Message: message, Code: status})
 
 		return
