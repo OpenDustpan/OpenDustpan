@@ -19,6 +19,7 @@ import (
 	"opendustpan.org/opendustpan/internal/api/idempotent"
 	denials "opendustpan.org/opendustpan/internal/api/refusal"
 	"opendustpan.org/opendustpan/internal/denylimit"
+	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/accesstoken"
 	"opendustpan.org/opendustpan/pkg/audit"
@@ -456,6 +457,14 @@ func (h *Handler) writeError(ctx context.Context, w http.ResponseWriter, err err
 		h.writeJSON(ctx, w, status, reauthenticateResponse{Code: status, Message: message, Reauthenticate: fresh.url})
 
 		return
+	}
+
+	if status == http.StatusForbidden {
+		if code := errcode.Forbidden(err); code != "" {
+			h.writeJSON(ctx, w, status, codedResponse{Code: status, Message: message, ErrorCode: code, ErrorArgs: nil})
+
+			return
+		}
 	}
 
 	h.writeJSON(ctx, w, status, errorResponse{Code: status, Message: message})

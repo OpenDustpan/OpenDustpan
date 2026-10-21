@@ -108,7 +108,8 @@ The `errorCode` is a stable code for a program.
 | 400 | `request.idempotency-key-invalid` | The key is not valid, or there is more than one key |
 | 400 | `job.invalid` | The operation, the unit name, the pool or the location is not valid |
 | 401 | | The caller did not sign in |
-| 403 | | The caller lacks `unit:run-plan`, or lacks `namespace:manage-runners` for a pool or `unit:define-steps` for a location. An access limit forbids the start. The connection of the location is not usable. The job token of a job tries to start a job. |
+| 403 | `access.denied` | The caller lacks `unit:run-plan`, or lacks `namespace:manage-runners` for a pool or `unit:define-steps` for a location. An access limit forbids the start. The connection of the location is not usable. The job token of a job tries to start a job. |
+| 403 | `access.ip-not-allowed` | The client address is outside the IP allowlist of the namespace |
 | 403 | `job.policy-denied` | The policy refused the start |
 | 403 | `job.agent-denied` | The agent mode does not allow the start |
 | 403 | `job.gate-enforced` | An enforced gate at `change.propose` or `state.write` covers the workspace, or the server cannot read the gates |

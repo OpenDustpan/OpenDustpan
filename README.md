@@ -338,6 +338,9 @@ Reference:
   of a journaled update.
 - [Preferences API](docs/reference/preferences-api.md): the routes that read
   and change the preferences of a person.
+- [Error codes of a 403 answer](docs/reference/forbidden-error-codes.md): the
+  stable codes that tell a missing permission, the IP allowlist and the session
+  checks apart.
 - [Registry API](docs/reference/registry-api.md): the routes that publish a provider,
   manage signing keys, and the routes that OpenTofu reads.
 - [Notification destinations API](docs/reference/notification-destinations-api.md):

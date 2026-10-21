@@ -43,6 +43,13 @@ func (holdsOnly) ListObjects(context.Context, identity.Principal, identity.Actio
 func handlerWith(t *testing.T, actions ...identity.Action) http.Handler {
 	t.Helper()
 
+	return handlerAuthorizing(t, holdsOnly{actions: actions})
+}
+
+// handlerAuthorizing returns a handler over a fresh store that asks authz.
+func handlerAuthorizing(t *testing.T, authz identity.Authorizer) http.Handler {
+	t.Helper()
+
 	s, err := sqlite.Open(t.Context(), filepath.Join(t.TempDir(), "dustpan.db"))
 	if err != nil {
 		t.Fatalf("open store: %v", err)
@@ -72,7 +79,7 @@ func handlerWith(t *testing.T, actions ...identity.Action) http.Handler {
 	h, err := runnerapi.NewHandler(runnerapi.Config{
 		Audit: nil, OnAuditFailure: nil,
 		Namespaces: service, Pools: members, Members: members, Handoffs: members, Claimer: nil, Sweeps: nil,
-		Operations: nil, Authenticator: adminAuthenticator{}, Authorizer: holdsOnly{actions: actions}, Sessions: nil,
+		Operations: nil, Authenticator: adminAuthenticator{}, Authorizer: authz, Sessions: nil,
 		Logger: slog.New(slog.DiscardHandler), Release: serverRelease(), ServerURL: serverURL, Now: nil,
 		PollInterval:  0,
 		DenialLimiter: nil,

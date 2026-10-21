@@ -172,7 +172,7 @@ errors, `errorCode`.
 | --- | --- |
 | 400 | A bad name, document, body or query value |
 | 401 | No valid token |
-| 403 | The caller lacks the action, or a routing change lacks `profile:open` |
+| 403 | The caller lacks the action (`access.denied`), the IP allowlist refuses the address (`access.ip-not-allowed`), a session check fails (`session.csrf`, `session.other-site`), or a routing change lacks `profile:open` (`profile.routing-change-needs-open`) |
 | 404 | An unknown namespace, profile or revision |
 | 409 | A name in use, or a request with a key whose first request has not ended |
 | 412 | `If-Match` does not match the newest revision |

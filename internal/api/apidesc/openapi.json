@@ -721,7 +721,7 @@
             "type": "object"
           },
           "errorCode": {
-            "description": "A stable code for a program.",
+            "description": "A stable code for a program. A 403 for a missing permission, an address outside the IP allowlist, a missing CSRF header or a request from another site has one: access.denied, access.ip-not-allowed, session.csrf or session.other-site.",
             "type": "string"
           },
           "message": {
