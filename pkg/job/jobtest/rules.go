@@ -101,7 +101,7 @@ func testLateTrailer(t *testing.T, h Harness) {
 	// time that the forge gives.
 	found := change(&stored, job.EventDelivered)
 	found.Delivery = &job.DeliveryResult{
-		Delivery: job.DeliveryDirectPush, Commit: "def456", Branch: mainRef, ReviewRequest: "",
+		Delivery: job.DeliveryDirectPush, Commit: commitDef, Branch: mainRef, ReviewRequest: "",
 		MergedAt: time.Time{}, DeliveredAt: committedAt,
 	}
 

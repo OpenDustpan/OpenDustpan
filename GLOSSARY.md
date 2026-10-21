@@ -824,6 +824,26 @@ _Avoid_: Source (that is the backend of a unit before an import), repository (al
 The plan that one plan phase of a job keeps, with an ID that has the prefix `pln-` (ADR 102). It has two parts. `plan-display` is the readable JSON plan that the console shows. `plan-apply` is the plan that the apply phase reads, for example an OpenTofu plan file. Only the runner of the apply phase of the same job reads `plan-apply`, and no person can download it. Each part is one blob with a kind, a size, the SHA-256 of the plaintext and a flag `secret`. The plan records the one state version that it read. It does not change after `PutPlan`. Its own item key seals it, and the server keeps it 400 days from its creation by default (ADR 152). A gate can bind approvals to it. A stale plan never applies: the job goes back to its plan phase. A `pulumi preview` from a workstation is not a stored plan (ADR 152 decision 12).
 _Avoid_: Plan file (that is the `plan-apply` part for OpenTofu), preview, saved plan
 
+**Plan reserve**:
+The first of the two writes that store a plan (`job.RecordStore.ReservePlan`). In one transaction it records the plan row and the record of its item key. The plan has no part and nobody can read it. The parts seal after the reserve, because the sealer reads the committed record of the key. The second write, `PutPlan`, adds the parts. A plan reserve that nobody fills stays as a row with no part, and the retention sweep deletes it.
+_Avoid_: Draft plan, pending plan
+
+**Chunk reserve and `confirm`**:
+The two writes around the blob of a log chunk (`ReserveLogChunk` and `ConfirmLogChunk`). The reserve records the sequence number, the SHA-256 and the size of the chunk before its blob exists. The second write counts the chunk in the log after the blob is stored. A crash between the two leaves no counted chunk without a blob. A retry with the same sequence number and the same hash changes nothing. Another hash for a reserved sequence number is a conflict.
+_Avoid_: Two-phase commit (the blob store is not part of a transaction), staging
+
+**Step key**:
+The name of the record of one step under one claim (`job.StepKey`). It has three parts: the phase of the job, the token of the claim and the name of the step. A holder with another claim token has another key. So the records of two holders of one phase stay apart.
+_Avoid_: Step ID
+
+**Log version**:
+One numbered copy of the log of a step, with an ID that has the prefix `jlv-`. A step has one log version at first. A log replacement makes a new version and keeps the old one until its retention ends. One item key seals all chunks of one log version.
+_Avoid_: Revision, log copy
+
+**Log chunk**:
+One part of a log version, up to `job.MaxLogChunk` bytes, with a sequence number that starts at 0. Each chunk is one sealed blob. A reader joins the chunks in the order of their sequence numbers. A closed log version has the SHA-256 and the size of its whole plaintext, which the reader checks at the end.
+_Avoid_: Log line, log page, segment
+
 **Break-glass (job)**:
 A reason in a start request that lets a job start during an active freeze (ADR 103 decision 6). Without it, the start fails with `ErrFrozen`. It needs `namespace:break-freeze` on the namespace. That action is in another family than `namespace:manage-freezes`, so a principal that can end a freeze does not also get break-glass. The job keeps the break-glass and the freeze ID. The audit entry of the start has the kind `override`. An agent cannot ask for break-glass (ADR 103 decision 7).
 _Avoid_: Freeze override, bypass

@@ -467,6 +467,33 @@ type JobFreeze struct {
 	EndedBy     string
 }
 
+type JobLog struct {
+	ID          string
+	NamespaceID string
+	JobID       string
+	Phase       int64
+	Step        string
+	Token       int64
+	CreatedAtMs int64
+}
+
+type JobLogChunk struct {
+	LogID       string
+	Seq         int64
+	NamespaceID string
+	Sha256      string
+	Size        int64
+	Confirmed   int64
+}
+
+type JobPlan struct {
+	ID          string
+	NamespaceID string
+	JobID       string
+	Body        string
+	CreatedAtMs int64
+}
+
 type MaintenanceRevocation struct {
 	ID        int64
 	Kind      string
