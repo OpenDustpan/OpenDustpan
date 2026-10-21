@@ -254,7 +254,7 @@ type Request struct {
 type Renderer interface {
 	// Platform returns the chat platform that the renderer serves.
 	Platform() Platform
-	// CheckHost returns an error that matches notify.ErrInvalid for a host
+	// CheckHost returns a *HostRuleError, which matches notify.ErrInvalid once, for a host
 	// that the platform does not use for its webhooks. A platform with one public
 	// host accepts only that host. A platform that the operator hosts accepts any
 	// host that the egress rules accept. The sender calls it for the target
@@ -277,3 +277,21 @@ type Renderer interface {
 	// never holds the body.
 	Check(status int, body []byte) error
 }
+
+// HostRuleError is the error of Renderer.CheckHost. It matches
+// notify.ErrInvalid, and it holds the host rule of the platform as a fixed
+// sentence for a person. The sentence never holds the host that was checked.
+type HostRuleError struct {
+	// Rule is the sentence, for example "The Slack URL must use hooks.slack.com
+	// or a GovSlack host."
+	Rule string
+}
+
+// Error returns the text of notify.ErrInvalid and the rule.
+func (e *HostRuleError) Error() string { return notify.ErrInvalid.Error() + ": " + e.Rule }
+
+// Unwrap returns notify.ErrInvalid.
+func (*HostRuleError) Unwrap() error { return notify.ErrInvalid }
+
+// HostRule returns the rule.
+func (e *HostRuleError) HostRule() string { return e.Rule }
