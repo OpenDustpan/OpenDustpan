@@ -313,6 +313,8 @@ type Job struct {
 	// StartedBy is the subject of the principal that started the job. A
 	// user who starts a job through an agent is the starter.
 	StartedBy string
+	// Source tells where the start came from. Service.Start always sets it.
+	Source SourceKind
 	// Agent names the agent that started the job for StartedBy, or is
 	// empty.
 	Agent string

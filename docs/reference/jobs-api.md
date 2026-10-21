@@ -1,11 +1,11 @@
 # Jobs API
 
 A job is work that the server asks an executor to do on one stack or workspace: a plan, an
-apply, a destroy or a refresh. The jobs API lets a person or a client read a
-job, its phases and the records of its phases.
+apply, a destroy or a refresh. The jobs API lets a person or a client start a
+plan job, read a job, its phases and the records of its phases.
 
-This version of the API reads jobs only. No route starts, cancels or approves
-a job yet.
+This version starts plan jobs of OpenTofu workspaces on runners. No route
+cancels, approves or lists jobs yet.
 
 ## Paths
 
@@ -15,15 +15,90 @@ access token or a console session.
 
 | Method and path | Action | Answer |
 | --- | --- | --- |
+| `POST /namespaces/{namespace}/jobs` | `namespace:read` on the namespace, and `unit:run-plan` on the workspace that the body names | The new job, with status 201 |
 | `GET /namespaces/{namespace}/jobs/{job_id}` | `namespace:read` on the namespace, and `job:read` on the stack or workspace of the job | One job |
+
+The server serves the `POST` route only when it has the stores of runners, the
+inventory and the gates. Without them, the server serves the `GET` route only.
 
 A caller who cannot read the job gets the same 404 as for a job that does not
 exist. The answer never tells that the job exists. This holds for a job ID that
 is not valid, a job of another namespace than the one in the path, and a
 caller who lacks `namespace:read` or `job:read`.
 
-Errors have the body `{"code": 404, "message": "not found"}`. Any method other
-than `GET` on this path gets 405.
+Any method other than `GET` on the path of one job gets 405.
+
+## Start a job
+
+The body is one JSON object. A field that is not in the table fails the
+request with 400, so a client cannot send the source kind, the executor, the
+steps or the profile of a job. The server sets them.
+
+| Field | Content |
+| --- | --- |
+| `unit` | `tool` (`opentofu`) and `name`: the workspace to plan. The name has no control character. |
+| `operation` | `plan`. Any other operation fails with 422 and the code `job.unsupported`. |
+| `pool` | The name of a runner pool of the namespace. The pool runs jobs, not sweeps. |
+| `location` | Where the program and the config are in git. Give `repository` and `ref`. The fields `connection`, `directory` and `revision` are optional. The directory is relative and stays in the repository. The revision is a commit ID. |
+| `reason` | Optional text for the audit entry. It has at most 500 characters and no control character. |
+
+The job service does these checks in this order, and fails closed at each one:
+
+1. The caller holds `unit:run-plan` on the workspace. A workspace that does
+   not exist and a workspace that the caller may not use give the same 403.
+2. The pool exists, runs jobs and belongs to the namespace.
+3. The approval defaults of the namespace, the collection and the workspace.
+   A plan changes nothing, so it gets no approval gate.
+4. The change freezes, the manual locks and the limits of open jobs. A manual
+   lock or a job that holds the workspace queues the job with the wait reason
+   `locked` or `unit-busy`. An active change freeze does not stop a plan.
+
+A start writes one audit entry in the same transaction as the job. It names
+the caller, the action, the workspace, the job ID, the source kind and the
+reason. A refused start by a caller who may read the namespace writes an entry
+of the refusal.
+
+The job starts with the source kind `api`. The source kind `schedule` and the
+other kinds are for features of the server that start jobs. No request of the
+API can set them.
+
+The server does not decide the steps from the request. For an OpenTofu
+workspace, the plan steps are `tofu init -input=false` and
+`tofu plan -input=false -out=tfplan`. A job starts with no profile, so a
+runner gives it no secrets of a profile.
+
+### Retry a start
+
+Send the header `Idempotency-Key` with 1 to 255 printable ASCII characters.
+Two starts with the same key and the same body, from one caller, give one job.
+The second answer has the same status and the header `Idempotent-Replayed:
+true`. The same key with another body fails with 409 and the code
+`request.idempotency-key-reused`. A key belongs to its caller: the same string
+from another caller makes another job.
+
+### Answers
+
+The answer to a start has the header `ETag` with the version of the job, in
+quotes, and the header `Location` with the path of the job. The `GET` route
+answers the `ETag` too.
+
+Errors have the body `{"code": 400, "message": "...", "errorCode": "..."}`.
+The `errorCode` is a stable code for a program.
+
+| Status | `errorCode` | Cause |
+| --- | --- | --- |
+| 400 | `request.body-invalid` | The body is not one JSON object, has an unknown field, has no unit, or has more than 64 KiB |
+| 400 | `request.idempotency-key-invalid` | The key is not valid, or there is more than one key |
+| 400 | `job.invalid` | The operation, the unit name, the pool or the location is not valid |
+| 401 | | The caller did not sign in |
+| 403 | | The caller lacks `unit:run-plan`, or the job token of a job tries to start a job |
+| 403 | `job.policy-denied` | The policy refused the start |
+| 404 | | The namespace does not exist, or the caller cannot read it |
+| 409 | `request.idempotency-key-reused` | The key names a job with another spec |
+| 409 | `job.frozen` | A change freeze refuses the start |
+| 409 | `namespace.fenced` | The home region of the namespace changed while the request ran: send the request again |
+| 422 | `job.unsupported` | The operation or the tool is not available in this version |
+| 429 | `job.limit` | The workspace has 16 open jobs, or the namespace has 1,000 |
 
 ## The job document
 
@@ -43,6 +118,7 @@ than `GET` on this path gets 405.
 | `phases` | The phases of the job, in order (see below) |
 | `current` | The index of the phase that runs or runs next. It equals the number of phases after the last phase. |
 | `startedBy`, `agent`, `agentMode` | Who started the job, and the agent that acted for them |
+| `source` | Where the start came from: `api`, `agent`, `catalog`, `forge`, `schedule` or `trigger` |
 | `breakGlass` | `reason` and `freeze`, when the job started through an active change freeze |
 | `delivery` | The result of the deliver phase of a write-back job |
 | `closed` | The state version that ended a write-back job |

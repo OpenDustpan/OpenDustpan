@@ -365,6 +365,7 @@ func jobIn(s job.State, d *job.DeliveryResult) job.Job {
 		Phases:         nil,
 		Current:        0,
 		StartedBy:      "al",
+		Source:         job.SourceAPI,
 		Agent:          "",
 		AgentMode:      "",
 		BreakGlass:     nil,

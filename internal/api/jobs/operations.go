@@ -2,6 +2,7 @@ package jobs
 
 import (
 	"net/http"
+	"slices"
 
 	"opendustpan.org/opendustpan/internal/api/apidesc"
 )
@@ -14,7 +15,11 @@ var operationLabels = map[string]apidesc.Label{
 	apidesc.Pattern(http.MethodGet, "/api/dustpan/v1/namespaces/{namespace}/jobs/{job_id}"): apidesc.Name(
 		"getJob",
 		"jobs",
-	),
+	).WithETag(),
+	apidesc.Pattern(http.MethodPost, "/api/dustpan/v1/namespaces/{namespace}/jobs"): apidesc.Name(
+		"startJob",
+		"jobs",
+	).WithETag(),
 }
 
 // Operations returns the routes of this adapter that the description of the
@@ -23,14 +28,14 @@ func (h *Handler) Operations() []apidesc.Operation {
 	rows := make([]apidesc.Row, 0, len(h.routes))
 
 	for _, route := range h.routes {
-		actions := make([]string, 0, len(route.Reads))
-		for _, action := range route.Reads {
+		actions := make([]string, 0, len(route.Reads)+len(route.Writes))
+		for _, action := range slices.Concat(route.Reads, route.Writes) {
 			actions = append(actions, string(action))
 		}
 
 		rows = append(rows, apidesc.Row{
 			Method: route.Method, Path: route.Path, Actions: actions, Public: route.Scope == ScopePublic,
-			IdempotencyKey: false,
+			IdempotencyKey: route.IdempotencyKey,
 		})
 	}
 

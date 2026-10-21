@@ -200,6 +200,7 @@ func newJob(unit identity.Object, op job.Operation, key string) *job.Job {
 		Phases:         make([]job.Phase, len(phases)),
 		Current:        0,
 		StartedBy:      "al",
+		Source:         job.SourceAPI,
 		Agent:          "",
 		AgentMode:      "",
 		BreakGlass:     nil,

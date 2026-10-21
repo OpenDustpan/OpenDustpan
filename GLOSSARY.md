@@ -90,6 +90,10 @@ _Avoid_: Origin, legacy backend
 The protocol that a source adapter speaks: `tfe-api`, `pulumi-service`, `s3`, `opentofu-http` or `upload` (`unitimport.SourceKind`, ADR 243). A source kind names a protocol, not a product. The docs name the products that each kind works with.
 _Avoid_: Source type, provider (that is a block of a profile or a plugin of a tool)
 
+**Job source kind**:
+Where the start of a job came from: `api`, `agent`, `catalog`, `forge`, `schedule` or `trigger` (`job.SourceKind`). The server sets it from the caller of `job.Service.Start`. A request to the REST API always starts a job with `api`, and no field of the request changes it.
+_Avoid_: Job origin, source type
+
 **Upload source**:
 The source kind `upload`. A client sends each version of a unit to the import, oldest first (ADR 241 decision 3). It is the way for a source that the server cannot reach or has no adapter for.
 _Avoid_: Manual import, push

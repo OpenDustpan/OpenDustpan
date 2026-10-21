@@ -2,6 +2,7 @@ package jobs
 
 import (
 	"net/http"
+	"strconv"
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -27,6 +28,7 @@ type jobResponse struct {
 	Phases       []phaseResponse   `json:"phases"`
 	Current      int               `json:"current"`
 	StartedBy    string            `json:"startedBy,omitempty"`
+	Source       string            `json:"source,omitempty"`
 	Agent        string            `json:"agent,omitempty"`
 	AgentMode    string            `json:"agentMode,omitempty"`
 	BreakGlass   *breakGlassBody   `json:"breakGlass,omitempty"`
@@ -145,22 +147,45 @@ type closedResponse struct {
 // with the job. The route wrapper already allowed namespace:read on the
 // namespace and job:read on the unit of the job.
 func (h *Handler) getJob(w http.ResponseWriter, r *http.Request, _ identity.Principal, t *target) {
+	setETag(w, &t.job)
 	h.writeJSON(r.Context(), w, http.StatusOK, toJobResponse(&t.job))
+}
+
+// setETag sets the ETag header of j: its version, in quotes. The version grows
+// at each change of the job record.
+func setETag(w http.ResponseWriter, j *job.Job) {
+	w.Header().Set("ETag", `"v`+strconv.FormatInt(j.Version, 10)+`"`)
 }
 
 // toJobResponse maps a job to its wire shape.
 func toJobResponse(j *job.Job) jobResponse {
 	out := jobResponse{
-		ID: string(j.ID), Namespace: j.Spec.Unit.Namespace().String(),
+		ID:        string(j.ID),
+		Namespace: j.Spec.Unit.Namespace().String(),
 		Unit: unitResponse{
 			ID: j.Spec.Unit.UnitID(), Tool: toolLabel(j.Spec.Unit.Tool()), Name: j.Spec.Unit.UnitName(),
 		},
-		Operation: string(j.Spec.Operation), Executor: string(j.Spec.Executor), State: string(j.State),
-		Wait: string(j.Wait), Reason: j.Reason, Location: locationResponse(j.Spec.Location), Pool: j.Spec.Pool,
-		Steps: make([]stepResponse, 0, len(j.Spec.Steps)), Phases: make([]phaseResponse, 0, len(j.Phases)),
-		Current: j.Current, StartedBy: j.StartedBy, Agent: j.Agent, AgentMode: string(j.AgentMode),
-		BreakGlass: nil, Delivery: nil, Closed: nil, Verification: string(j.Verification), Version: j.Version,
-		CreatedAt: j.CreatedAt, UpdatedAt: j.UpdatedAt,
+		Operation:    string(j.Spec.Operation),
+		Executor:     string(j.Spec.Executor),
+		State:        string(j.State),
+		Wait:         string(j.Wait),
+		Reason:       j.Reason,
+		Location:     locationResponse(j.Spec.Location),
+		Pool:         j.Spec.Pool,
+		Steps:        make([]stepResponse, 0, len(j.Spec.Steps)),
+		Phases:       make([]phaseResponse, 0, len(j.Phases)),
+		Current:      j.Current,
+		StartedBy:    j.StartedBy,
+		Source:       string(j.Source),
+		Agent:        j.Agent,
+		AgentMode:    string(j.AgentMode),
+		BreakGlass:   nil,
+		Delivery:     nil,
+		Closed:       nil,
+		Verification: string(j.Verification),
+		Version:      j.Version,
+		CreatedAt:    j.CreatedAt,
+		UpdatedAt:    j.UpdatedAt,
 	}
 
 	for i := range j.Spec.Steps {

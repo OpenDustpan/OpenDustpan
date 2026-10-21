@@ -70,7 +70,7 @@ func fullJob(t *testing.T) job.Job {
 			}},
 			StartedAt: at, FinishedAt: at,
 		}},
-		Current: 1, StartedBy: "ada", Agent: "dusty", AgentMode: job.AgentModeDirect,
+		Current: 1, StartedBy: "ada", Source: job.SourceSchedule, Agent: "dusty", AgentMode: job.AgentModeDirect,
 		BreakGlass: &job.BreakGlass{Reason: "outage", Freeze: "frz-1"},
 		Delivery: &job.DeliveryResult{
 			Delivery: job.DeliveryReviewRequest, Commit: "c0ffee", Branch: "b", ReviewRequest: "https://x/1",

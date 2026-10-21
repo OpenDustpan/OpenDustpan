@@ -29,8 +29,8 @@ func testCreateGet(t *testing.T, h Harness) {
 	}
 
 	if got.ID != stored.ID || got.Spec.Unit.String() != f.unit.String() || len(got.Phases) != 1 ||
-		got.Spec.Steps[0].Args[0] != "tofu" || got.Spec.Profile != "prf-default" {
-		t.Fatalf("Get = %+v, want the stored job", got)
+		got.Spec.Steps[0].Args[0] != "tofu" || got.Spec.Profile != "prf-default" || got.Source != job.SourceAPI {
+		t.Fatalf("Get = %+v, want the stored job with source %s", got, job.SourceAPI)
 	}
 }
 
