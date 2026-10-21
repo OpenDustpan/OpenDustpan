@@ -50,7 +50,7 @@ the code `auth.forbidden` for all four causes. They now send the codes of the
 table.
 
 Some 403 answers have no code from this table because their cause is another
-one. Examples are a refused start of a job (the codes `job.policy-denied`,
+one. Examples are a change that needs a fresh authentication (`mfa.fresh-step-required`), a refused start of a job (the codes `job.policy-denied`,
 `job.agent-denied` and `job.gate-enforced`), a refused sign-in (the person needs no grant), a preferences request of a caller that is
 not a person (`preferences.person-required`), and an answer to a
 runner (`retired`). Those answers keep their own code or have none.
