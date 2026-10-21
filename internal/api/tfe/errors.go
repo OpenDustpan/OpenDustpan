@@ -270,11 +270,6 @@ func classify(err error) errorClass {
 		return class
 	}
 
-	if errors.Is(err, sessionauth.ErrCSRF) || errors.Is(err, sessionauth.ErrOtherSite) {
-		// A console session request from another site, or with no CSRF value.
-		return errorClass{status: http.StatusForbidden, title: titleForbidden, detail: err.Error()}
-	}
-
 	if class, ok := classifyConflict(err); ok {
 		return class
 	}
@@ -284,8 +279,10 @@ func classify(err error) errorClass {
 		return errorClass{status: http.StatusUnauthorized, title: "unauthorized", detail: "unauthenticated"}
 	case errors.Is(err, errMissingFilter):
 		return errorClass{status: http.StatusBadRequest, title: "bad request", detail: err.Error()}
-	case errors.Is(err, workspace.ErrOverrideRefused):
-		// The detail names the switch and the action that allow the override.
+	case errors.Is(err, workspace.ErrOverrideRefused), errors.Is(err, sessionauth.ErrCSRF),
+		errors.Is(err, sessionauth.ErrOtherSite):
+		// The detail names the switch and the action that allow the override,
+		// or the CSRF header that a console session request lacks.
 		return errorClass{status: http.StatusForbidden, title: titleForbidden, detail: err.Error()}
 	case errors.Is(err, identity.ErrDenied), errors.Is(err, workspace.ErrUploadDenied):
 		return errorClass{status: http.StatusForbidden, title: titleForbidden, detail: titleForbidden}

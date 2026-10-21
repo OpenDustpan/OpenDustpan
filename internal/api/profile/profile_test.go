@@ -522,6 +522,7 @@ func (c *revealCount) add(e *audit.Entry) {
 		c.denied++
 	case e.Action == "profile:open" && e.Outcome == audit.OutcomeFailure:
 		c.failed++
+	default:
 	}
 }
 

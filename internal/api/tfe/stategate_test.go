@@ -113,7 +113,7 @@ func newGuardedHandler(t *testing.T, ws tfe.WorkspaceService, guard tfe.StateGua
 		Authenticator: tokenAuthenticator{}, Authorizer: allowAll(), AddressGate: nil,
 		Logger: slog.New(slog.DiscardHandler), Namespaces: newTestNamespaces(t), Workspaces: ws,
 		BaseURL: baseurl.Resolver{}, Audit: nil, OnAuditFailure: nil, DenialLimiter: nil, Gate: nil,
-		MaxStateBytes: 0, StateGuard: guard,
+		MaxStateBytes: 0, Sessions: nil, SessionPolicy: nil, StateGuard: guard,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)

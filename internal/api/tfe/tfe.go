@@ -484,15 +484,15 @@ func (h *Handler) entitlementSet(
 }
 
 // authenticateRoute resolves the credential of a request to a principal. A
-// route that the console calls (console is true) takes the console session
-// cookie when the request has no Authorization header, and the Caller reports
+// route of ScopeConsole takes the console session cookie when the request has
+// no Authorization header, and the Caller reports
 // it. Any other request uses the access token only, so a cookie never signs in
 // a route that the console does not call. A request with an Authorization
 // header never uses the cookie.
 func (h *Handler) authenticateRoute(
-	r *http.Request, console bool,
+	r *http.Request, scope Scope,
 ) (identity.Principal, *sessionauth.Caller, error) {
-	if console && r.Header.Get("Authorization") == "" {
+	if scope == ScopeConsole && r.Header.Get("Authorization") == "" {
 		p, caller, err := h.sessions.Authenticate(r)
 		if err != nil {
 			return p, nil, err

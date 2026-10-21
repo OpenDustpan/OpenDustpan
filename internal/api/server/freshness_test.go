@@ -122,42 +122,46 @@ func freshRoutes() []freshRoute {
 	}
 	grantBody := `{"subject":"principal:` + testPrincipalID + `","role":"viewer"}`
 	return slices.Concat(
-		freshGroupRoutes(makeFreshGroup(false), makeFreshGroup(true)),
+		freshGroupRoutes(makeFreshGroup, makeFreshGroupWithMember),
 		freshOwnRoutes(createBeta, ownToken, seedDefault, seedRule, principalTokens),
 		freshAccessRoutes(administrator, makeRole, grantBody),
 		freshOtherRoutes(seedAllowlist),
 	)
 }
 
-// makeFreshGroup returns the setup of a group route: it makes the person of
-// the session a site administrator and makes a group, with a member when
-// withMember is set. A group grant applies to each member, so a membership
-// change is an act-as edge. The setup returns the path of the group.
-func makeFreshGroup(withMember bool) func(*testing.T, providerEnv) string {
-	return func(t *testing.T, e providerEnv) string {
-		t.Helper()
+// makeFreshGroup is the setup of a group route: it makes the person of the
+// session a site administrator and makes a group. A group grant applies to
+// each member, so a membership change is an act-as edge. The setup returns the
+// path of the group.
+func makeFreshGroup(t *testing.T, e providerEnv) string {
+	t.Helper()
 
-		e.makeSiteAdministrator(t)
+	e.makeSiteAdministrator(t)
 
-		var made groupDoc
+	var made groupDoc
 
-		rec := e.postWithSession(t, e.freshSignIn(t), "/api/server/groups", `{"name":"releasers"}`)
-		if rec.Code != http.StatusCreated {
-			t.Fatalf("make the group = %d %s, want 201", rec.Code, rec.Body.String())
-		}
-
-		decodeInto(t, rec.Body.String(), &made)
-
-		if withMember {
-			rec = e.postWithSession(t, e.freshSignIn(t), "/api/server/groups/"+made.ID+"/members",
-				`{"principalID":"`+testOtherPrincipalID+`"}`)
-			if rec.Code != http.StatusCreated {
-				t.Fatalf("make the member = %d %s, want 201", rec.Code, rec.Body.String())
-			}
-		}
-
-		return "/api/server/groups/" + made.ID
+	rec := e.postWithSession(t, e.freshSignIn(t), "/api/server/groups", `{"name":"releasers"}`)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("make the group = %d %s, want 201", rec.Code, rec.Body.String())
 	}
+
+	decodeInto(t, rec.Body.String(), &made)
+
+	return "/api/server/groups/" + made.ID
+}
+
+// makeFreshGroupWithMember is makeFreshGroup with a member in the group.
+func makeFreshGroupWithMember(t *testing.T, e providerEnv) string {
+	t.Helper()
+
+	path := makeFreshGroup(t, e)
+
+	rec := e.postWithSession(t, e.freshSignIn(t), path+"/members", `{"principalID":"`+testOtherPrincipalID+`"}`)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("make the member = %d %s, want 201", rec.Code, rec.Body.String())
+	}
+
+	return path
 }
 
 // freshGroupRoutes lists the writes of group membership that need a fresh

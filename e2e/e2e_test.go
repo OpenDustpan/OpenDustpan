@@ -8338,18 +8338,7 @@ func revealRequestBody(t *testing.T, path string) string {
 func checkTFEReveal(ctx context.Context, t *testing.T, env *e2e.Env, base, path string) {
 	t.Helper()
 
-	refused, err := env.TFEStatusHeaders(
-		ctx, env.TokenA(), http.MethodPost, base+"/actions/reveal", revealRequestBody(t, path),
-	)
-	if err != nil {
-		t.Fatalf("reveal the masked input with a token: %v", err)
-	}
-
-	if refused.Status != http.StatusForbidden || !strings.Contains(refused.Body, "mfa.fresh-step-required") ||
-		strings.Contains(refused.Body, maskedSecretV2) || refused.Header.Get("Cache-Control") != "no-store" {
-		t.Fatalf("reveal with a token answers %d %s, want 403 with mfa.fresh-step-required and no-store",
-			refused.Status, refused.Body)
-	}
+	checkTFERevealTokenRefused(ctx, t, env, base, path)
 
 	status, body := env.FreshAdminAPIStatus(ctx, t, e2e.SessionRequest{
 		Method: http.MethodPost, Path: base + "/actions/reveal", Body: revealRequestBody(t, path),
@@ -8380,6 +8369,26 @@ func checkTFEReveal(ctx context.Context, t *testing.T, env *e2e.Env, base, path 
 	object := "opentofu:" + e2e.Namespace + "/masked"
 	if auditErr := checkRevealAuditEntry(ctx, env, e2e.Namespace, object, path); auditErr != nil {
 		t.Fatalf("reveal audit entry: %v", auditErr)
+	}
+}
+
+// checkTFERevealTokenRefused proves an access token never gives the fresh
+// authentication that the reveal call needs: the call answers 403 with
+// mfa.fresh-step-required and no-store, and no value.
+func checkTFERevealTokenRefused(ctx context.Context, t *testing.T, env *e2e.Env, base, path string) {
+	t.Helper()
+
+	refused, err := env.TFEStatusHeaders(
+		ctx, env.TokenA(), http.MethodPost, base+"/actions/reveal", revealRequestBody(t, path),
+	)
+	if err != nil {
+		t.Fatalf("reveal the masked input with a token: %v", err)
+	}
+
+	if refused.Status != http.StatusForbidden || !strings.Contains(refused.Body, "mfa.fresh-step-required") ||
+		strings.Contains(refused.Body, maskedSecretV2) || refused.Header.Get("Cache-Control") != "no-store" {
+		t.Fatalf("reveal with a token answers %d %s, want 403 with mfa.fresh-step-required and no-store",
+			refused.Status, refused.Body)
 	}
 }
 

@@ -1958,7 +1958,7 @@ func checkRouteObject(t *testing.T, route tfe.Route) {
 		checkUploadRouteObject(t, route)
 
 		return
-	case tfe.ScopeAuthorized:
+	case tfe.ScopeAuthorized, tfe.ScopeConsole:
 		checkAuthorizedRouteObject(t, route)
 
 		return

@@ -102,17 +102,9 @@ func changeAuditChain(ctx context.Context, t *testing.T, env *e2e.Env, setting s
 		t.Fatalf("installation state while a change waits = %q, want maintenance", got)
 	}
 
-	status, body, err := env.ServerAPIStatus(ctx, http.MethodPost, "/api/server/audit/chain", "")
-	if err != nil {
-		t.Fatalf("approve the audit chain change with an access token: %v", err)
-	}
+	checkAuditChainTokenRefused(ctx, t, env)
 
-	if status != http.StatusForbidden || !strings.Contains(body, "mfa.fresh-step-required") {
-		t.Fatalf("POST /api/server/audit/chain with an access token answers %d %s, want 403 with "+
-			"mfa.fresh-step-required", status, body)
-	}
-
-	status, body = console(e2e.SessionRequest{Method: http.MethodPost, Path: "/api/server/audit/chain", Body: ""})
+	status, body := console(e2e.SessionRequest{Method: http.MethodPost, Path: "/api/server/audit/chain", Body: ""})
 	if status != http.StatusAccepted {
 		t.Fatalf("POST /api/server/audit/chain answers %d, want %d (%s)", status, http.StatusAccepted, body)
 	}
@@ -134,6 +126,22 @@ func changeAuditChain(ctx context.Context, t *testing.T, env *e2e.Env, setting s
 	}
 
 	checkServerAuditChain(ctx, t, env)
+}
+
+// checkAuditChainTokenRefused proves an access token never approves a change
+// of the audit chain: the route answers 403 with mfa.fresh-step-required.
+func checkAuditChainTokenRefused(ctx context.Context, t *testing.T, env *e2e.Env) {
+	t.Helper()
+
+	status, body, err := env.ServerAPIStatus(ctx, http.MethodPost, "/api/server/audit/chain", "")
+	if err != nil {
+		t.Fatalf("approve the audit chain change with an access token: %v", err)
+	}
+
+	if status != http.StatusForbidden || !strings.Contains(body, "mfa.fresh-step-required") {
+		t.Fatalf("POST /api/server/audit/chain with an access token answers %d %s, want 403 with "+
+			"mfa.fresh-step-required", status, body)
+	}
 }
 
 // readAuditChain answers the state of the audit chain of env.

@@ -589,7 +589,7 @@ func (h *Handler) enforceAuthorized(route Route) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
 
-		p, caller, err := h.authenticateRoute(r, route.Scope == ScopeConsole)
+		p, caller, err := h.authenticateRoute(r, route.Scope)
 		if err != nil {
 			h.writeError(ctx, w, err)
 
