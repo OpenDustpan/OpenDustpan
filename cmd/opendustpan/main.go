@@ -50,6 +50,7 @@ import (
 	blobfs "opendustpan.org/opendustpan/pkg/blob/fs"
 	blobs3 "opendustpan.org/opendustpan/pkg/blob/s3"
 	"opendustpan.org/opendustpan/pkg/dustpan"
+	"opendustpan.org/opendustpan/pkg/egress"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/installation"
 	"opendustpan.org/opendustpan/pkg/inventory"
@@ -287,6 +288,7 @@ type serveFlags struct {
 	trustedProxyHeader           string
 	ipAllowlists                 bool
 	ipAllowlistsIncludeBootstrap bool
+	gitHostAllowedRanges         string
 	blobDir                      string
 	blobStore                    string
 	s3Endpoint                   string
@@ -375,6 +377,10 @@ func (f *serveFlags) check() error {
 
 	if err := f.checkCheckpointFlags(); err != nil {
 		return err
+	}
+
+	if _, err := egress.ParseRanges(splitList(f.gitHostAllowedRanges)); err != nil {
+		return fmt.Errorf("invalid --git-host-allowed-ranges: %w", err)
 	}
 
 	return checkProxyFlags(f.trustedProxies, f.trustedProxyHeader)
@@ -477,6 +483,7 @@ func (f *serveFlags) registerNet(fs *flag.FlagSet) {
 	cli.ByFlag("trusted-proxy-header").String(fs, &f.trustedProxyHeader)
 	cli.ByFlag("ip-allowlists").Bool(fs, &f.ipAllowlists)
 	cli.ByFlag("ip-allowlists-include-bootstrap").Bool(fs, &f.ipAllowlistsIncludeBootstrap)
+	cli.ByFlag("git-host-allowed-ranges").String(fs, &f.gitHostAllowedRanges)
 	cli.ByFlag("oidc-issuer").String(fs, &f.oidcIssuer)
 	cli.ByFlag("oidc-provider").String(fs, &f.oidcProvider)
 	cli.ByFlag("oidc-display-name").String(fs, &f.oidcDisplayName)
@@ -1166,6 +1173,12 @@ func (f *serveFlags) serverOptions(
 		return nil, fmt.Errorf("invalid --trusted-proxies %q: %w", f.trustedProxies, parseErr)
 	}
 
+	// check refused a bad value, so the parse fails only on a bug.
+	gitHostRanges, rangesErr := egress.ParseRanges(splitList(f.gitHostAllowedRanges))
+	if rangesErr != nil {
+		return nil, fmt.Errorf("invalid --git-host-allowed-ranges %q: %w", f.gitHostAllowedRanges, rangesErr)
+	}
+
 	signIn, signInErr := f.signInOptions()
 	if signInErr != nil {
 		return nil, signInErr
@@ -1216,6 +1229,7 @@ func (f *serveFlags) serverOptions(
 		dustpan.WithSoftDeleteRetention(f.retention),
 		dustpan.WithIPAllowlists(f.ipAllowlists),
 		dustpan.WithIPAllowlistsIncludeBootstrap(f.ipAllowlistsIncludeBootstrap),
+		dustpan.WithGitHostAllowedRanges(gitHostRanges...),
 		dustpan.WithIPAllowlistStore(st),
 		dustpan.WithInstanceID(f.instanceID),
 	}, append(signIn, checkpoints...)...)
@@ -1239,6 +1253,7 @@ func (f *serveFlags) storeOptions(st store, wrapper secret.Wrapper) ([]dustpan.O
 	opts = append(opts, runnerStoreOption(st)...)
 	opts = append(opts, jobStoreOption(st)...)
 	opts = append(opts, savedViewStoreOption(st)...)
+	opts = append(opts, gitHostStoreOption(st)...)
 	opts = append(opts, dustpan.WithInstallationKind(f.kind()), dustpan.WithInstallationKindStore(st))
 
 	return append(opts, profileStoreOption(st, wrapper)...), nil
@@ -1291,6 +1306,19 @@ func savedViewStoreOption(st store) []dustpan.Option {
 		return []dustpan.Option{dustpan.WithSavedViewStore(s.SavedViews())}
 	case postgresStore:
 		return []dustpan.Option{dustpan.WithSavedViewStore(s.SavedViews())}
+	default:
+		return nil
+	}
+}
+
+// gitHostStoreOption returns the option of the Git host store for st, or nil
+// when st keeps no Git host connections.
+func gitHostStoreOption(st store) []dustpan.Option {
+	switch s := st.(type) {
+	case sqliteStore:
+		return []dustpan.Option{dustpan.WithGitHostStore(s.GitHost())}
+	case postgresStore:
+		return []dustpan.Option{dustpan.WithGitHostStore(s.GitHost())}
 	default:
 		return nil
 	}

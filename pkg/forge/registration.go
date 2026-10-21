@@ -54,6 +54,11 @@ type RegistrationView struct {
 	Version     int64
 }
 
+// View returns r without its sealed key and its sealed event secret.
+func (r *Registration) View() RegistrationView {
+	return registrationView(r)
+}
+
 func registrationView(r *Registration) RegistrationView {
 	return RegistrationView{
 		CreatedAt: r.CreatedAt, UpdatedAt: r.UpdatedAt, Key: SetView{ID: r.KeySetID, CreatedAt: r.KeyCreatedAt},

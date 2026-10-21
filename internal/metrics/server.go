@@ -113,6 +113,7 @@ type ServerMetrics struct {
 	sweeps   *Counter
 	deleted  *Counter
 	signin   *Counter
+	gitHost  *Counter
 }
 
 // NewServerMetrics creates the request, build, process, runtime and
@@ -172,6 +173,7 @@ func NewServerMetrics(version string, startedAt time.Time) *ServerMetrics {
 		sweeps:  newSweepCounter(reg),
 		deleted: newDeletedSweepCounter(reg),
 		signin:  newSignInCounterErrors(reg),
+		gitHost: newGitHostRefusedCounter(reg),
 	}
 
 	// The configuration that the server started with is valid, so the gauge
@@ -621,4 +623,49 @@ func (m *ServerMetrics) IncSignInCounterError(operation string) {
 	}
 
 	m.signin.Inc(operation)
+}
+
+// Reasons of dustpan_git_host_connection_refused_total.
+const (
+	// GitHostRefusedNotAssigned counts a connection whose installation the map
+	// does not assign to its namespace, or a map that the server cannot read.
+	GitHostRefusedNotAssigned = "installation-not-assigned"
+	// GitHostRefusedAddressChanged counts a credential whose address digest
+	// differs from the address that the registration holds now.
+	GitHostRefusedAddressChanged = "address-changed"
+	// GitHostRefusedNoRegistration counts a connection of the
+	// installation-level app while the installation has no valid registration.
+	GitHostRefusedNoRegistration = "no-registration"
+	// GitHostRefusedOther counts any other reason, so the label set stays
+	// fixed.
+	GitHostRefusedOther = "other"
+)
+
+// maxGitHostRefusedReasons holds one series for each reason.
+const maxGitHostRefusedReasons = 4
+
+// newGitHostRefusedCounter creates dustpan_git_host_connection_refused_total
+// in reg.
+func newGitHostRefusedCounter(reg *Registry) *Counter {
+	return reg.NewCounter(
+		"dustpan_git_host_connection_refused_total",
+		"Connections to a Git host that the server refused to open, by reason.",
+		[]string{labelReason},
+		maxGitHostRefusedReasons,
+	)
+}
+
+// ObserveGitHostRefused counts one refused open of a connection to a Git host
+// for reason: one of the GitHostRefused constants. Any other value counts as
+// GitHostRefusedOther. No label holds a namespace, a connection or an address.
+// Operators alert when the series grows: a reassignment by the operator or a
+// registration that changed stops the connections that it names.
+func (m *ServerMetrics) ObserveGitHostRefused(reason string) {
+	switch reason {
+	case GitHostRefusedNotAssigned, GitHostRefusedAddressChanged, GitHostRefusedNoRegistration:
+	default:
+		reason = GitHostRefusedOther
+	}
+
+	m.gitHost.Inc(reason)
 }

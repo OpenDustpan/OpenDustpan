@@ -32,6 +32,8 @@ func newNamespaceHandler(t *testing.T, authz identity.Authorizer) *apiserver.Han
 
 	handler, err := apiserver.NewHandler(apiserver.Config{
 		Preferences:      nil,
+		GitHost:          nil,
+		Idempotency:      nil,
 		Workers:          nil,
 		InstallationKind: "",
 		Now:              nil,

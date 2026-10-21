@@ -203,6 +203,14 @@ var Settings = []*Setting{
 			"Set `true` to apply the lists to it as well. See Recovery in docs/explanation/security-model.md for the recovery path.",
 	).WithFile("ip-allowlists-include-bootstrap"),
 	stringSetting(
+		"git-host-allowed-ranges", "DUSTPAN_GIT_HOST_ALLOWED_RANGES", "",
+		"comma-separated CIDRs that a connection to a Git host may reach, in addition to public addresses "+
+			"(DUSTPAN_GIT_HOST_ALLOWED_RANGES)",
+		"(none: a connection reaches public addresses only). Set the range of a GitHub Enterprise Server on a "+
+			"private network, for example `10.20.0.0/16`. The server refuses loopback, link-local, private and "+
+			"other reserved addresses outside these ranges, when a person sets an address and at each call.",
+	).WithFile("git-host-allowed-ranges"),
+	stringSetting(
 		"log-level", "DUSTPAN_LOG_LEVEL", "info",
 		"log level: debug, info, warn or error (DUSTPAN_LOG_LEVEL)",
 		"`info` (or `debug`, `warn`, `error`)",

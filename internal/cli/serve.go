@@ -22,6 +22,7 @@ func ServeFlags() []*Setting {
 		"trusted-proxy-header",
 		"ip-allowlists",
 		"ip-allowlists-include-bootstrap",
+		"git-host-allowed-ranges",
 		"log-level",
 		"log-format",
 		"log-sink",

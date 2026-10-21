@@ -72,6 +72,7 @@ import (
 	blobcache "opendustpan.org/opendustpan/pkg/blob/cache"
 	"opendustpan.org/opendustpan/pkg/collection"
 	"opendustpan.org/opendustpan/pkg/durable"
+	"opendustpan.org/opendustpan/pkg/forge"
 	"opendustpan.org/opendustpan/pkg/idempotency"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/installation"
@@ -172,6 +173,8 @@ type settings struct {
 	profileStore         profile.Store
 	jobStore             job.Store
 	savedViewStore       savedview.Store
+	gitHostStore         forge.Store
+	gitHostAllow         []netip.Prefix
 	idempotencyStore     idempotency.Store
 	authenticator        identity.Authenticator
 	authorizer           identity.Authorizer
@@ -695,6 +698,8 @@ func defaultSettings() *settings {
 		profileStore:            nil,
 		jobStore:                nil,
 		savedViewStore:          nil,
+		gitHostStore:            nil,
+		gitHostAllow:            nil,
 		idempotencyStore:        nil,
 		authenticator:           nil,
 		authorizer:              nil,
@@ -2604,7 +2609,19 @@ func newServerHandler(
 		sinks = cfg.auditShipper
 	}
 
+	gitHost, err := newGitHostService(cfg, deps)
+	if err != nil {
+		return nil, err
+	}
+
+	idem, err := idempotencyMiddleware(cfg)
+	if err != nil {
+		return nil, err
+	}
+
 	handler, err := serverapi.NewHandler(serverapi.Config{
+		GitHost:          gitHost,
+		Idempotency:      idem,
 		Authenticator:    cfg.authenticator,
 		Authorizer:       cfg.authorizer,
 		Logger:           cfg.logger,

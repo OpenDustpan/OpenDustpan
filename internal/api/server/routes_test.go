@@ -345,6 +345,8 @@ func newServiceBackedHandlerOf(
 		CheckpointEpochs: fakeEpochs{},
 		DenialLimiter:    nil,
 		Preferences:      preferences.NewService(st, st, nil),
+		GitHost:          nil,
+		Idempotency:      nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -1453,6 +1455,8 @@ func TestNewHandlerRequiresDependencies(t *testing.T) {
 
 	full := apiserver.Config{
 		Preferences:      nil,
+		GitHost:          nil,
+		Idempotency:      nil,
 		Workers:          nil,
 		InstallationKind: "",
 		Now:              nil,
@@ -1609,6 +1613,8 @@ func TestNewHandlerKeepsBackupService(t *testing.T) {
 
 	handler, err := apiserver.NewHandler(apiserver.Config{
 		Preferences:      nil,
+		GitHost:          nil,
+		Idempotency:      nil,
 		Workers:          nil,
 		InstallationKind: "",
 		Now:              nil,
@@ -1649,6 +1655,8 @@ func TestNewHandlerKeepsBackupService(t *testing.T) {
 
 	without, err := apiserver.NewHandler(apiserver.Config{
 		Preferences:      nil,
+		GitHost:          nil,
+		Idempotency:      nil,
 		Workers:          nil,
 		InstallationKind: "",
 		Now:              nil,
