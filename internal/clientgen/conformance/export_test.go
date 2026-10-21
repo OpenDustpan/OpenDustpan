@@ -21,6 +21,7 @@ func (p *RecordingProxy) Client() *http.Client { return p.client }
 func DevServerAt(url string) *DevServer {
 	s := newDevServer(nil, func() {}, "test")
 	s.url = url
+	close(s.done) // No process runs, so nothing will close it later.
 
 	return s
 }
@@ -50,4 +51,15 @@ func DirectGet(ctx context.Context, url, path string) (int, []byte, error) {
 	})
 
 	return out.status, out.body, err
+}
+
+// SeedProfile exports ensureProfile for an Env that no run made, with a
+// server at a URL.
+func SeedProfile(ctx context.Context, url string) (string, error) {
+	var info InitializeResult
+
+	return ensureProfile(ctx, Env{
+		Server: stubServer{Server: nil, url: url}, Proxy: nil, Adapter: nil, Transport: "", Operations: nil,
+		Info: info, seed: nil,
+	})
 }
