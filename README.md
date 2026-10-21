@@ -310,6 +310,9 @@ How-to guides:
 - [Save and open a view of the unit list](docs/guides/saved-views.md): store
   the labels and references of a unit list under a name, and open the view
   again.
+- [Connect GitHub](docs/guides/connect-github.md): register one GitHub App for
+  the installation, give its installations to namespaces, and check a
+  connection.
 - [Architecture and sizing](docs/guides/architecture-and-sizing.md): the
   layout of an installation, and how to measure its size.
 - [Install with Helm](docs/guides/kubernetes.md): the Helm chart, its Secrets, storage, upgrade and rollback steps.

@@ -33,6 +33,7 @@ package dustpan
 import (
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"io"
@@ -175,6 +176,7 @@ type settings struct {
 	savedViewStore       savedview.Store
 	gitHostStore         forge.Store
 	gitHostAllow         []netip.Prefix
+	gitHostCAs           *x509.CertPool
 	idempotencyStore     idempotency.Store
 	authenticator        identity.Authenticator
 	authorizer           identity.Authorizer
@@ -700,6 +702,7 @@ func defaultSettings() *settings {
 		savedViewStore:          nil,
 		gitHostStore:            nil,
 		gitHostAllow:            nil,
+		gitHostCAs:              nil,
 		idempotencyStore:        nil,
 		authenticator:           nil,
 		authorizer:              nil,

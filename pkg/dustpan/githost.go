@@ -1,6 +1,7 @@
 package dustpan
 
 import (
+	"crypto/x509"
 	"fmt"
 	"net/netip"
 
@@ -24,6 +25,13 @@ func WithGitHostStore(st forge.Store) Option {
 // GitHub Enterprise Server on a private network.
 func WithGitHostAllowedRanges(ranges ...netip.Prefix) Option {
 	return func(o *settings) { o.gitHostAllow = append([]netip.Prefix(nil), ranges...) }
+}
+
+// WithGitHostRootCAs sets the root certificates that the connections to a Git
+// host trust, for a GitHub Enterprise Server with a certificate of a private
+// authority. Nil, the default, uses the roots of the system.
+func WithGitHostRootCAs(pool *x509.CertPool) Option {
+	return func(o *settings) { o.gitHostCAs = pool }
 }
 
 // newGitHostService returns the Git host service, or nil when no Git host store
@@ -52,7 +60,7 @@ func newGitHostService(cfg *settings, deps installationDeps) (*forge.Service, er
 
 	rules := egress.Rules{Allow: cfg.gitHostAllow}
 
-	opener, err := github.NewOpener(github.Config{Rules: rules, RootCAs: nil, Now: cfg.now})
+	opener, err := github.NewOpener(github.Config{Rules: rules, RootCAs: cfg.gitHostCAs, Now: cfg.now})
 	if err != nil {
 		return nil, fmt.Errorf("GitHub adapter: %w", err)
 	}
