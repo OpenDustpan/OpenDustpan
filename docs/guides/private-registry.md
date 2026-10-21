@@ -176,8 +176,13 @@ its 15 minutes. After that time the registry serves no file of these releases.
 
 Always remove a revoked key. Do not update it: the registry has no route to
 replace the bytes of a key, and it refuses a key with the fingerprint of a
-key that it holds when the bytes are different. A key that is revoked now
-does not sign a new release in any case.
+key that it holds when the bytes are different. The registry checks a
+signature against the key bytes that the namespace registered. A key that is
+revoked or compromised keeps checking successfully until you remove it from
+the namespace, so remove it at once.
+
+A publish of a release that only a removed key signed is refused with 422,
+also when you published the same files before the removal.
 
 ## What the registry refuses
 

@@ -219,6 +219,8 @@ type registryScenario struct {
 	api     registryAPI
 	signer  pgpfixture.Signer
 	address string
+	// good is the release 1.0.0 that publishGood published.
+	good registryProvider
 }
 
 func runRegistryOnStore(t *testing.T, cli e2e.Install, store e2e.Store) {
@@ -235,10 +237,12 @@ func runRegistryOnStore(t *testing.T, cli e2e.Install, store e2e.Store) {
 		api:     registryAPI{env: env, base: "/api/dustpan/v1/namespaces/" + e2e.Namespace + "/registry"},
 		signer:  pgpfixture.NewSigner(t),
 		address: env.RegistryAddress(providerName),
+		good:    registryProvider{name: "", version: "", archiveName: "", archive: nil, sums: nil, signature: nil},
 	}
 
 	sc.publishGood(ctx, t)
 	sc.refuseHostileReleases(ctx, t)
+	sc.removeASecondKey(ctx, t)
 	sc.removeTheKey(ctx, t)
 }
 
@@ -257,6 +261,7 @@ func (sc *registryScenario) publishGood(ctx context.Context, t *testing.T) {
 	sc.api.addKey(ctx, t, sc.signer)
 
 	good := buildProvider(t, sc.signer, "1.0.0")
+	sc.good = good
 
 	resp = sc.api.publish(ctx, t, good, good.asBuilt())
 	if resp.Status != http.StatusOK || !strings.Contains(resp.Body, sc.signer.Key.Fingerprint) {
@@ -270,7 +275,7 @@ func (sc *registryScenario) publishGood(ctx context.Context, t *testing.T) {
 
 	dir := sc.env.WriteRegistryProject(t, "project-registry", fmt.Sprintf(registryConfig, sc.address, "1.0.0"))
 
-	sc.env.StepIn(ctx, t, dir, step("registry init", sc.checkInit(dir, good), "init", "-input=false", "-no-color"))
+	sc.env.StepIn(ctx, t, dir, step("registry init", sc.checkInit("registry init", dir, good), "init", "-input=false", "-no-color"))
 }
 
 const registryConfig = `terraform {
@@ -285,7 +290,7 @@ const registryConfig = `terraform {
 
 // checkInit proves init installed the provider from the registry, checked the
 // signature and wrote the zh: hash of the archive to the lock file.
-func (sc *registryScenario) checkInit(dir string, p registryProvider) func(e2e.Result) error {
+func (sc *registryScenario) checkInit(name, dir string, p registryProvider) func(e2e.Result) error {
 	return func(r e2e.Result) error {
 		if !strings.Contains(r.Stdout, "Installed "+sc.address+" v"+p.version+" (signed") {
 			return fmt.Errorf("%w: init did not install a signed provider: %s", errUnexpected, r.Stdout)
@@ -305,8 +310,8 @@ func (sc *registryScenario) checkInit(dir string, p registryProvider) func(e2e.R
 		versions := "/v1/providers/" + e2e.Namespace + "/payments/versions"
 		download := "/v1/providers/" + e2e.Namespace + "/payments/" + p.version + "/download/linux/amd64"
 
-		if !sc.env.Requested("registry init", http.MethodGet, versions) ||
-			!sc.env.Requested("registry init", http.MethodGet, download) {
+		if !sc.env.Requested(name, http.MethodGet, versions) ||
+			!sc.env.Requested(name, http.MethodGet, download) {
 			return fmt.Errorf("%w: init never asked for the version list and the download document", errUnexpected)
 		}
 
@@ -360,6 +365,39 @@ func (sc *registryScenario) refuseHostileReleases(ctx context.Context, t *testin
 	dir := sc.env.WriteRegistryProject(t, "project-refused", fmt.Sprintf(registryConfig, sc.address, "1.0.1"))
 	sc.env.StepIn(ctx, t, dir, failStep("registry init of a refused version",
 		outputContains("Could not resolve provider"), "init", "-input=false", "-no-color"))
+}
+
+// removeASecondKey registers a second key B, publishes 1.1.0 signed by B, and
+// removes B. The release of B stays in the record, the registry stops serving
+// it, and tofu init with a range installs 1.0.0 that the first key signed. A
+// repeat of the publish of 1.1.0 is refused, because no trusted key signed it.
+func (sc *registryScenario) removeASecondKey(ctx context.Context, t *testing.T) {
+	t.Helper()
+
+	second := pgpfixture.NewSigner(t)
+	sc.api.addKey(ctx, t, second)
+
+	newer := buildProvider(t, second, "1.1.0")
+
+	resp := sc.api.publish(ctx, t, newer, newer.asBuilt())
+	if resp.Status != http.StatusOK || !strings.Contains(resp.Body, second.Key.Fingerprint) {
+		t.Fatalf("publish 1.1.0 with the second key = %d %s", resp.Status, resp.Body)
+	}
+
+	resp = sc.api.call(ctx, t, http.MethodDelete, "/keys/"+second.Key.Fingerprint, "")
+	if resp.Status != http.StatusNoContent {
+		t.Fatalf("remove the second key = %d %s", resp.Status, resp.Body)
+	}
+
+	if again := sc.api.publish(ctx, t, newer, newer.asBuilt()); again.Status != http.StatusUnprocessableEntity {
+		t.Fatalf("repeat of the publish after the key was removed = %d %s, want 422", again.Status, again.Body)
+	}
+
+	dir := sc.env.WriteRegistryProject(t, "project-range", fmt.Sprintf(registryConfig, sc.address, ">= 1.0"))
+
+	const name = "registry init of a range after the second key was removed"
+
+	sc.env.StepIn(ctx, t, dir, step(name, sc.checkInit(name, dir, sc.good), "init", "-input=false", "-no-color"))
 }
 
 // removeTheKey removes the key of the namespace: the signed release stays
