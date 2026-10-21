@@ -43,10 +43,13 @@ type RecorderConfig struct {
 // DurableRecorder is the Recorder over a RecordStore, the blob store and the
 // item keys. Every method checks the claim in the transaction of its write
 // (RecordStore), so a holder that lost its claim to a takeover records
-// nothing. The blobs and the item key of a plan or a log version come first
-// and the record after them, as the history model requires. A write that
-// fails after its blobs leaves orphan blobs, which the orphan cleanup deletes
-// after a grace period. PutPlan also deletes them at once.
+// nothing. The item key of a plan or a log version commits in the transaction
+// that stores the plan or the log version, so the record of the key never
+// exists without its item. The sealed content comes after that, because the
+// sealer reads the committed record, and the record that counts the content
+// comes last. A write that fails after its blobs leaves orphan blobs, which the
+// orphan cleanup deletes after a grace period. PutPlan also deletes them at
+// once.
 type DurableRecorder struct {
 	store      RecordStore
 	jobs       Store
@@ -169,7 +172,7 @@ func (r *DurableRecorder) AppendLog(ctx context.Context, c PhaseClaim, step stri
 		return err
 	}
 
-	newLog, err := r.newLogVersion(ctx, c, &j, step, seq)
+	newLog, err := r.newLogVersion(&j, c, step, seq)
 	if err != nil {
 		return err
 	}
@@ -249,9 +252,21 @@ func (r *DurableRecorder) PutPlan(ctx context.Context, c PhaseClaim, parts []Pla
 		return PlanRef{}, err
 	}
 
-	key, err := r.sealer.NewItemKey(ctx, ref, c.Fence)
+	now := r.now().UTC()
+
+	// The reserve commits the plan row and the record of its item key in one
+	// transaction. The parts seal after it, because the sealer reads the
+	// committed record of the key.
+	reserved, err := r.store.ReservePlan(ctx, c, &NewPlan{
+		Plan: PlanRef{
+			ID: planID, ItemKey: "", StateVersion: "", Parts: nil, CreatedAt: now,
+			ExpiresAt: history.ExpiresAt(now, r.retention.Plan), RedactedAt: time.Time{},
+		},
+		Ref:    ref,
+		NewKey: r.sealer.NewItemKey,
+	})
 	if err != nil {
-		return PlanRef{}, fmt.Errorf("item key of plan %s: %w", planID, err)
+		return PlanRef{}, fmt.Errorf("reserve plan %s: %w", planID, err)
 	}
 
 	nsID, err := namespaceIDOf(ctx, r.namespaces, c.Fence.Namespace)
@@ -266,11 +281,8 @@ func (r *DurableRecorder) PutPlan(ctx context.Context, c PhaseClaim, parts []Pla
 		return PlanRef{}, err
 	}
 
-	now := r.now().UTC()
-	plan := PlanRef{
-		ID: planID, ItemKey: key.ID, StateVersion: "", Parts: stored, CreatedAt: now,
-		ExpiresAt: history.ExpiresAt(now, r.retention.Plan), RedactedAt: time.Time{},
-	}
+	plan := reserved
+	plan.Parts = stored
 
 	out, err := r.store.PutPlan(ctx, c, plan)
 	if err != nil {
@@ -427,11 +439,10 @@ func (r *DurableRecorder) jobOf(ctx context.Context, c PhaseClaim) (Job, error) 
 }
 
 // newLogVersion returns the log version that chunk 0 of a step with no log
-// creates, with its item key. It returns nil when the step has a log or the
-// chunk is not chunk 0: the store then decides.
-func (r *DurableRecorder) newLogVersion(
-	ctx context.Context, c PhaseClaim, j *Job, step string, seq int,
-) (*LogRef, error) {
+// creates, with the function that makes its item key in the transaction of
+// the store. It returns nil when the step has a log or the chunk is not chunk
+// 0: the store then decides.
+func (r *DurableRecorder) newLogVersion(j *Job, c PhaseClaim, step string, seq int) (*NewLog, error) {
 	rec, ok := stepRecordOf(j, c, step)
 	if !ok || rec.Log != nil || seq != 0 {
 		return nil, nil //nolint:nilnil // The store decides a chunk that is not a first chunk.
@@ -446,17 +457,16 @@ func (r *DurableRecorder) newLogVersion(
 		return nil, err
 	}
 
-	key, err := r.sealer.NewItemKey(ctx, ref, c.Fence)
-	if err != nil {
-		return nil, fmt.Errorf("item key of log %s: %w", version, err)
-	}
-
 	now := r.now().UTC()
 
-	return &LogRef{
-		ID: version, ItemKey: key.ID, Version: 1, Chunks: 0, SHA256: "", Size: 0, CreatedAt: now,
-		ClosedAt: time.Time{}, ExpiresAt: history.ExpiresAt(now, r.retention.JobLog), RedactedAt: time.Time{},
-		ReplacedBy: "", Matches: 0,
+	return &NewLog{
+		Log: LogRef{
+			ID: version, ItemKey: "", Version: 1, Chunks: 0, SHA256: "", Size: 0, CreatedAt: now,
+			ClosedAt: time.Time{}, ExpiresAt: history.ExpiresAt(now, r.retention.JobLog), RedactedAt: time.Time{},
+			ReplacedBy: "", Matches: 0,
+		},
+		Ref:    ref,
+		NewKey: r.sealer.NewItemKey,
 	}, nil
 }
 

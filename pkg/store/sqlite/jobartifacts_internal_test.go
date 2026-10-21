@@ -28,7 +28,6 @@ func stagedPlanCases() []struct{ name, body string } {
 	return []struct{ name, body string }{
 		{"a body that is not JSON", `not json`},
 		{"a body of another plan", planBodyJSON("pln-other", part("plan-display", artifactHash, 1))},
-		{"a plan with no part", planBodyJSON("pln-1", `[]`)},
 		{"a plan with three parts", planBodyJSON("pln-1", `[`+
 			strings.Repeat(`{"kind":"plan-display","size":1,"sha256":"`+artifactHash+`","secret":false},`, 2)+
 			`{"kind":"plan-apply","size":1,"sha256":"`+artifactHash+`","secret":false}]`)},

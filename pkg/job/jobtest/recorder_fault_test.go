@@ -4,7 +4,6 @@ import (
 	"errors"
 	"io"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -15,7 +14,6 @@ import (
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/job"
 	"opendustpan.org/opendustpan/pkg/job/jobtest"
-	"opendustpan.org/opendustpan/pkg/secret"
 )
 
 // errInjected is the failure that the fault tests inject into the blob store.
@@ -46,9 +44,7 @@ func newFaultyHarness(t *testing.T, faults ...blobfault.Fault) jobtest.RecorderH
 		t.Fatalf("blobfault: %v", err)
 	}
 
-	keys := &memKeyIndex{db: db, mu: sync.Mutex{}, keys: map[secret.ItemRef]secret.ItemKey{}}
-
-	return buildRecorderHarness(t, db, keys, faulty)
+	return buildRecorderHarness(t, db, newMemKeyIndex(db), faulty)
 }
 
 // planAssignment stores a plan job on a fresh unit and claims its plan phase.

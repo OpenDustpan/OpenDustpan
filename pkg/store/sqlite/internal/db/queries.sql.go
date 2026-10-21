@@ -16059,6 +16059,23 @@ func (q *Queries) UpdateJob(ctx context.Context, arg UpdateJobParams) (int64, er
 	return result.RowsAffected()
 }
 
+const updateJobPlanBody = `-- name: UpdateJobPlanBody :exec
+UPDATE job_plans SET body = ?1
+WHERE job_plans.id = ?2 AND job_plans.namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = ?3)
+`
+
+type UpdateJobPlanBodyParams struct {
+	Body      string
+	ID        string
+	Namespace string
+}
+
+// The caller checks the fence and the claim in the same transaction.
+func (q *Queries) UpdateJobPlanBody(ctx context.Context, arg UpdateJobPlanBodyParams) error {
+	_, err := q.db.ExecContext(ctx, updateJobPlanBody, arg.Body, arg.ID, arg.Namespace)
+	return err
+}
+
 const updateNotificationSink = `-- name: UpdateNotificationSink :execrows
 UPDATE notification_sinks
 SET name = ?1, target = ?2, version = notification_sinks.version + 1

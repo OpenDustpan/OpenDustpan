@@ -16,6 +16,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/job"
 	"opendustpan.org/opendustpan/pkg/manuallock"
 	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/secret"
 	"opendustpan.org/opendustpan/pkg/store/internal/jobstore"
 	"opendustpan.org/opendustpan/pkg/store/postgres/internal/db"
 )
@@ -587,6 +588,20 @@ func (t *jobTx) InsertPlan(ctx context.Context, ns namespace.Name, r jobstore.Pl
 	}
 
 	return nil
+}
+
+// UpdatePlan implements jobstore.Tx.
+func (t *jobTx) UpdatePlan(ctx context.Context, ns namespace.Name, r jobstore.PlanRow) error {
+	if err := t.q.UpdateJobPlanBody(ctx, db.UpdateJobPlanBodyParams{ID: r.ID, Namespace: ns.String(), Body: r.Body}); err != nil {
+		return jobIndexError("update plan", err)
+	}
+
+	return nil
+}
+
+// ItemKeys implements jobstore.Tx.
+func (t *jobTx) ItemKeys(fence namespace.Fence) secret.ItemKeyTx {
+	return itemKeyTx{q: t.q, fence: fence}
 }
 
 // Plan implements jobstore.Tx.

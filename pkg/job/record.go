@@ -11,6 +11,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/durable"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/secret"
 )
 
 // MaxLogChunks is the largest number of chunks in the log of one step. With
@@ -31,6 +32,32 @@ type LogClose struct {
 	Chunks  int
 	SHA256  string
 	Size    int64
+}
+
+// NewItemKeyFunc creates the item key of a new plan or log version in the
+// transaction tx of the store, under fence. secret.ItemSealer.NewItemKey has
+// this form. The store calls it in the write transaction that stores the item,
+// so the record of the key commits with the item row.
+type NewItemKeyFunc func(
+	ctx context.Context, tx secret.ItemKeyTx, ref secret.ItemRef, fence namespace.Fence,
+) (secret.ItemKey, error)
+
+// NewLog is the log version that chunk 0 of a step with no log creates. Log
+// holds its ID and times, and the store sets Log.ItemKey from the key that
+// NewKey creates for Ref in the write transaction.
+type NewLog struct {
+	Log    LogRef
+	Ref    secret.ItemRef
+	NewKey NewItemKeyFunc
+}
+
+// NewPlan is the plan that ReservePlan records before its parts exist. Plan
+// holds its ID and times, and the store sets Plan.ItemKey from the key that
+// NewKey creates for Ref in the write transaction.
+type NewPlan struct {
+	Plan   PlanRef
+	Ref    secret.ItemRef
+	NewKey NewItemKeyFunc
 }
 
 // ChunkReserve is one chunk of a log, as the store records it before the
@@ -104,21 +131,29 @@ type RecordStore interface {
 	// outcome changes nothing, and another outcome is ErrConflict.
 	EndStep(ctx context.Context, pc PhaseClaim, name string, exit int, closing *LogClose) error
 	// ReserveLogChunk records the chunk c of the log of the step called step
-	// before its blob exists, and creates the log version newLog when this is
-	// chunk 0 of a step with no log (newLog is otherwise ignored). The
+	// before its blob exists, and creates the log version newLog, with its item
+	// key, when this is chunk 0 of a step with no log (newLog is otherwise
+	// ignored). The key record commits in the same transaction. The
 	// rules are in PlanChunk. It returns the plan, which names the version.
-	ReserveLogChunk(ctx context.Context, pc PhaseClaim, step string, c ChunkReserve, newLog *LogRef) (ChunkPlan, error)
+	ReserveLogChunk(ctx context.Context, pc PhaseClaim, step string, c ChunkReserve, newLog *NewLog) (ChunkPlan, error)
 	// ConfirmLogChunk marks the chunk seq of the log version of the step as
 	// stored, and counts it in LogRef.Chunks and LogRef.Size. A chunk that is
 	// counted already changes nothing. It returns ErrInvalid for a chunk that
 	// no reserve recorded or that is not the next one.
 	ConfirmLogChunk(ctx context.Context, pc PhaseClaim, step, version string, seq int) error
-	// PutPlan stores p as the plan of the plan phase of pc, with the state
-	// version of the phase, and returns it. When the current state version of
-	// the unit is another one, it fails the phase in the same transaction (with
-	// the end of the claim) and returns ErrPlanStale. It returns ErrInvalid for
-	// a phase that is not a plan phase, and ErrConflict for a phase that has a
-	// plan.
+	// ReservePlan records the plan np before its parts exist, with its item key
+	// in the same transaction, and returns it. A reserved plan has no part and
+	// is not readable. It applies the checks of PutPlan: when the current state
+	// version of the unit is another one, it fails the phase in the same
+	// transaction (with the end of the claim) and returns ErrPlanStale. It
+	// returns ErrInvalid for a phase that is not a plan phase, and ErrConflict
+	// for a phase that has a plan.
+	ReservePlan(ctx context.Context, pc PhaseClaim, np *NewPlan) (PlanRef, error)
+	// PutPlan stores p, with its parts, as the plan of the plan phase of pc
+	// that ReservePlan recorded, with the state version of the phase, and
+	// returns it. It applies the checks of ReservePlan again, because a state
+	// write can come between the two calls. It returns ErrNotFound for a plan
+	// that no reserve recorded, and ErrConflict for a plan with parts.
 	PutPlan(ctx context.Context, pc PhaseClaim, p PlanRef) (PlanRef, error)
 	// Delivered records d as the delivery of the deliver phase of pc, and
 	// appends e in the same transaction. A second record of the same result

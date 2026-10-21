@@ -4050,6 +4050,11 @@ VALUES (
     sqlc.arg(body), sqlc.arg(created_at_ms)
 );
 
+-- name: UpdateJobPlanBody :exec
+-- The caller checks the fence and the claim in the same transaction.
+UPDATE job_plans SET body = sqlc.arg(body)
+WHERE job_plans.id = sqlc.arg(id) AND job_plans.namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace));
+
 -- name: GetJobPlan :one
 SELECT p.id, p.job_id, p.body, p.created_at_ms
 FROM job_plans AS p

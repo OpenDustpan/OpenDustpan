@@ -57,6 +57,8 @@ type memDB struct {
 	nsIDs map[namespace.Name]namespace.ID
 	// records holds the rows that the recorder adds to the jobs.
 	records memRecords
+	// itemKeys holds the item keys that the recorder makes in a write.
+	itemKeys *memKeyIndex
 	// states maps a unit ID to its current state version.
 	states map[string]string
 	// finals maps a unit ID to its last final state version, as
@@ -229,6 +231,11 @@ func (m *memDB) GetNamespace(_ context.Context, name namespace.Name) (namespace.
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
+	return m.namespaceLocked(name)
+}
+
+// namespaceLocked returns the namespace name. The caller holds m.mu.
+func (m *memDB) namespaceLocked(name namespace.Name) (namespace.Namespace, error) {
 	v, ok := m.fences[name]
 	if !ok {
 		return namespace.Namespace{}, namespace.ErrNotFound

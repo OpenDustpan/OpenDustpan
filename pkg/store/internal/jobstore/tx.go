@@ -17,6 +17,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/job"
 	"opendustpan.org/opendustpan/pkg/manuallock"
 	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/secret"
 )
 
 // ErrHolderIndex is what a Tx returns from InsertJob or UpdateJob when the
@@ -189,6 +190,11 @@ type Tx interface {
 	AppendAudit(ctx context.Context, e []audit.Entry) error
 
 	ArtifactTx
+
+	// ItemKeys returns the item key part of this transaction, under fence, so
+	// that the record of the item key of a new plan or log version commits
+	// with its row.
+	ItemKeys(fence namespace.Fence) secret.ItemKeyTx
 }
 
 // Runner opens the transactions of an adapter.
@@ -228,6 +234,8 @@ type LogRow struct {
 type ArtifactTx interface {
 	// InsertPlan stores a plan row of the namespace ns.
 	InsertPlan(ctx context.Context, ns namespace.Name, r PlanRow) error
+	// UpdatePlan replaces the body of the plan row r.ID of the namespace ns.
+	UpdatePlan(ctx context.Context, ns namespace.Name, r PlanRow) error
 	// Plan returns the plan row id of the namespace ns, and false when none
 	// exists.
 	Plan(ctx context.Context, ns namespace.Name, id string) (PlanRow, bool, error)

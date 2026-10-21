@@ -31,6 +31,9 @@ type RecorderHarness struct {
 	Recorder job.Recorder
 	// Reader is the job.ArtifactReader under test.
 	Reader job.ArtifactReader
+	// Records is the job.RecordStore under the recorder. The cases call its
+	// reserve methods with their own item key function.
+	Records job.RecordStore
 	// Blobs is the blob store that the recorder writes to. The cases read it
 	// and damage it.
 	Blobs blob.Store
@@ -114,7 +117,8 @@ func NewRecorderHarness(t *testing.T, parts RecorderParts) RecorderHarness {
 	}
 
 	return RecorderHarness{
-		Harness: parts.Harness, Recorder: rec, Reader: reader, Blobs: parts.Blobs, ItemKeys: parts.ItemKeys,
+		Harness: parts.Harness, Recorder: rec, Reader: reader, Records: parts.Records, Blobs: parts.Blobs,
+		ItemKeys:  parts.ItemKeys,
 		Retention: retention,
 	}
 }
@@ -142,7 +146,7 @@ func RunRecorder(t *testing.T, newHarness RecorderFactory) {
 	t.Helper()
 
 	cases := slices.Concat(stepCases(), claimRuleCases(), logCases(), logReadCases(), planCases(), planReadCases(),
-		deliveryCases())
+		deliveryCases(), keyTxCases())
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

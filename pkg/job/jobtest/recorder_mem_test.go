@@ -44,14 +44,14 @@ func newMemRecorderHarness(t *testing.T) jobtest.RecorderHarness {
 
 	t.Cleanup(func() { _ = blobs.Close() }) //nolint:errcheck // Test cleanup.
 
-	keys := &memKeyIndex{db: db, mu: sync.Mutex{}, keys: map[secret.ItemRef]secret.ItemKey{}}
-
-	return buildRecorderHarness(t, db, keys, blobs)
+	return buildRecorderHarness(t, db, newMemKeyIndex(db), blobs)
 }
 
 // buildRecorderHarness wires the recorder and the reader over the stores.
-func buildRecorderHarness(t *testing.T, db *memDB, keys secret.ItemKeyIndex, blobs blob.Store) jobtest.RecorderHarness {
+func buildRecorderHarness(t *testing.T, db *memDB, keys *memKeyIndex, blobs blob.Store) jobtest.RecorderHarness {
 	t.Helper()
+
+	db.itemKeys = keys
 
 	return jobtest.NewRecorderHarness(t, jobtest.RecorderParts{
 		Harness: jobtest.Harness{
@@ -72,7 +72,88 @@ type memKeyIndex struct {
 	keys map[secret.ItemRef]secret.ItemKey
 }
 
-var _ secret.ItemKeyIndex = (*memKeyIndex)(nil)
+var (
+	_ secret.ItemKeyStore = (*memKeyIndex)(nil)
+	_ secret.ItemKeyTx    = (*memKeyTx)(nil)
+)
+
+// newMemKeyIndex returns an empty item key index that checks the fences of db.
+func newMemKeyIndex(db *memDB) *memKeyIndex {
+	return &memKeyIndex{db: db, mu: sync.Mutex{}, keys: map[secret.ItemRef]secret.ItemKey{}}
+}
+
+// memKeyTx is the item key part of one transaction of a memDB. It stages the
+// records it creates, and the index applies them when the transaction commits.
+// The caller holds the lock of the memDB for the whole transaction.
+type memKeyTx struct {
+	idx    *memKeyIndex
+	fence  namespace.Fence
+	staged map[secret.ItemRef]secret.ItemKey
+}
+
+// begin starts a transaction under fence. The caller holds the lock of the
+// memDB.
+func (m *memKeyIndex) begin(fence namespace.Fence) *memKeyTx {
+	return &memKeyTx{idx: m, fence: fence, staged: map[secret.ItemRef]secret.ItemKey{}}
+}
+
+// commit stores the staged records.
+func (t *memKeyTx) commit() {
+	t.idx.mu.Lock()
+	defer t.idx.mu.Unlock()
+
+	for ref, k := range t.staged {
+		t.idx.keys[ref] = k
+	}
+}
+
+// CreateItemKey implements secret.ItemKeyTx.
+func (t *memKeyTx) CreateItemKey(_ context.Context, k secret.ItemKey) (secret.ItemKey, error) {
+	if k.Ref.Scope.Namespace != t.fence.Namespace {
+		return secret.ItemKey{}, namespace.ErrFenced
+	}
+
+	if have, err := t.GetItemKey(context.Background(), k.Ref); err == nil || errors.Is(err, secret.ErrShredded) {
+		return have, err
+	}
+
+	t.staged[k.Ref] = k
+
+	return k, nil
+}
+
+// GetItemKey implements secret.ItemKeyTx.
+func (t *memKeyTx) GetItemKey(ctx context.Context, ref secret.ItemRef) (secret.ItemKey, error) {
+	if k, ok := t.staged[ref]; ok {
+		return k, nil
+	}
+
+	return t.idx.GetItemKey(ctx, ref)
+}
+
+// GetNamespace implements secret.ItemKeyTx. The memDB is locked already.
+func (t *memKeyTx) GetNamespace(_ context.Context, name namespace.Name) (namespace.Namespace, error) {
+	return t.idx.db.namespaceLocked(name)
+}
+
+// InItemKeyTx implements secret.ItemKeyStore.
+func (m *memKeyIndex) InItemKeyTx(_ context.Context, fence namespace.Fence, fn func(secret.ItemKeyTx) error) error {
+	m.db.mu.Lock()
+	defer m.db.mu.Unlock()
+
+	if err := m.db.checkFence(fence); err != nil {
+		return err
+	}
+
+	tx := m.begin(fence)
+	if err := fn(tx); err != nil {
+		return err
+	}
+
+	tx.commit()
+
+	return nil
+}
 
 // CreateItemKey implements secret.ItemKeyIndex.
 func (m *memKeyIndex) CreateItemKey(_ context.Context, k secret.ItemKey, f namespace.Fence) (secret.ItemKey, error) {
@@ -282,7 +363,7 @@ func (m *memDB) EndStep(ctx context.Context, pc job.PhaseClaim, name string, exi
 
 // ReserveLogChunk implements job.RecordStore.
 func (m *memDB) ReserveLogChunk(
-	ctx context.Context, pc job.PhaseClaim, step string, c job.ChunkReserve, newLog *job.LogRef,
+	ctx context.Context, pc job.PhaseClaim, step string, c job.ChunkReserve, newLog *job.NewLog,
 ) (job.ChunkPlan, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -298,7 +379,12 @@ func (m *memDB) ReserveLogChunk(
 		return row, ok, nil
 	}
 
-	plan, err := job.PlanChunk(&next, memKey(&pc, step), c, newLog, lookup)
+	var template *job.LogRef
+	if newLog != nil {
+		template = &newLog.Log
+	}
+
+	plan, err := job.PlanChunk(&next, memKey(&pc, step), c, template, lookup)
 	if err != nil {
 		return job.ChunkPlan{}, fmt.Errorf("reserve log chunk: %w", err)
 	}
@@ -306,7 +392,15 @@ func (m *memDB) ReserveLogChunk(
 	now := time.Now().UTC()
 
 	if plan.CreateLog {
-		job.CreateLogRecord(&next, memKey(&pc, step), newLog)
+		log := newLog.Log
+
+		key, keyErr := m.newKey(ctx, pc.Fence, newLog.NewKey, newLog.Ref, secret.ItemKindJobLog, log.ID)
+		if keyErr != nil {
+			return job.ChunkPlan{}, fmt.Errorf("reserve log chunk: %w", keyErr)
+		}
+
+		log.ItemKey = key.ID
+		job.CreateLogRecord(&next, memKey(&pc, step), &log)
 		m.records.logs[plan.Version] = memLogEntry{job: next.ID, phase: pc.Phase, step: step, token: pc.Claim.Token}
 		m.records.chunks[plan.Version] = map[int]job.ChunkRow{}
 
@@ -350,26 +444,100 @@ func (m *memDB) ConfirmLogChunk(ctx context.Context, pc job.PhaseClaim, step, ve
 	return nil
 }
 
+// gatePlan applies the rules of a plan write. For a stale plan it fails the
+// phase and returns the stale error in stale. The caller holds m.mu.
+func (m *memDB) gatePlan(ctx context.Context, pc job.PhaseClaim) (next job.Job, stale error, err error) {
+	next, err = m.guard(ctx, pc)
+	if err != nil {
+		return job.Job{}, nil, err
+	}
+
+	current := m.states[next.Spec.Unit.UnitID()]
+
+	checkErr := job.CheckPutPlan(&next, pc.Phase, current)
+
+	switch {
+	case checkErr == nil:
+		return next, nil, nil
+	case !errors.Is(checkErr, job.ErrPlanStale):
+		return job.Job{}, nil, checkErr
+	default:
+		return job.Job{}, checkErr, m.failStalePhase(ctx, pc, checkErr)
+	}
+}
+
+// newKey makes the item key of a new item with mk in a transaction of the key
+// index, and commits the transaction when mk succeeds. The caller holds m.mu.
+func (m *memDB) newKey(
+	ctx context.Context, fence namespace.Fence, mk job.NewItemKeyFunc, ref secret.ItemRef, kind secret.ItemKind,
+	item string,
+) (secret.ItemKey, error) {
+	if mk == nil || ref.Kind != kind || ref.Item != item || ref.Scope.Namespace != fence.Namespace {
+		return secret.ItemKey{}, fmt.Errorf("%w: the item key function or reference does not fit the new item",
+			job.ErrInvalid)
+	}
+
+	keyTx := m.itemKeys.begin(fence)
+
+	key, err := mk(ctx, keyTx, ref, fence)
+	if err != nil {
+		return secret.ItemKey{}, err //nolint:wrapcheck // The caller wraps it.
+	}
+
+	keyTx.commit()
+
+	return key, nil
+}
+
+// ReservePlan implements job.RecordStore.
+func (m *memDB) ReservePlan(ctx context.Context, pc job.PhaseClaim, np *job.NewPlan) (job.PlanRef, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	next, stale, err := m.gatePlan(ctx, pc)
+	if err != nil {
+		return job.PlanRef{}, err
+	}
+
+	if stale != nil {
+		return job.PlanRef{}, fmt.Errorf("reserve plan: %w", stale)
+	}
+
+	key, err := m.newKey(ctx, pc.Fence, np.NewKey, np.Ref, secret.ItemKindPlan, np.Plan.ID)
+	if err != nil {
+		return job.PlanRef{}, fmt.Errorf("reserve plan: %w", err)
+	}
+
+	p := np.Plan
+	p.ItemKey, p.Parts, p.StateVersion = key.ID, nil, next.Phases[pc.Phase].StateVersion
+	m.records.plans[p.ID] = memPlanEntry{job: next.ID, plan: p}
+
+	return p, nil
+}
+
 // PutPlan implements job.RecordStore.
 func (m *memDB) PutPlan(ctx context.Context, pc job.PhaseClaim, p job.PlanRef) (job.PlanRef, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	next, err := m.guard(ctx, pc)
+	next, stale, err := m.gatePlan(ctx, pc)
 	if err != nil {
 		return job.PlanRef{}, err
 	}
 
-	current := m.states[next.Spec.Unit.UnitID()]
+	if stale != nil {
+		return job.PlanRef{}, fmt.Errorf("put plan: %w", stale)
+	}
 
-	if checkErr := job.CheckPutPlan(&next, pc.Phase, current); checkErr != nil {
-		if errors.Is(checkErr, job.ErrPlanStale) {
-			if failErr := m.failStalePhase(ctx, pc, checkErr); failErr != nil {
-				return job.PlanRef{}, failErr
-			}
-		}
+	e, ok := m.records.plans[p.ID]
 
-		return job.PlanRef{}, fmt.Errorf("put plan: %w", checkErr)
+	switch {
+	case !ok || e.job != next.ID:
+		return job.PlanRef{}, fmt.Errorf("%w: plan %s was not reserved", job.ErrNotFound, p.ID)
+	case len(e.plan.Parts) > 0:
+		return job.PlanRef{}, fmt.Errorf("%w: plan %s has parts", job.ErrConflict, p.ID)
+	case e.plan.ItemKey != p.ItemKey:
+		return job.PlanRef{}, fmt.Errorf("%w: plan %s has another item key", job.ErrInvalid, p.ID)
 	}
 
 	p.StateVersion = next.Phases[pc.Phase].StateVersion
@@ -447,7 +615,7 @@ func (m *memDB) Plan(_ context.Context, ns namespace.Name, plan string) (job.Art
 	defer m.mu.Unlock()
 
 	e, ok := m.records.plans[plan]
-	if !ok {
+	if !ok || len(e.plan.Parts) == 0 {
 		return job.ArtifactRecord{}, job.ErrNotFound
 	}
 

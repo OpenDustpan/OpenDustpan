@@ -11,6 +11,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/durable"
 	"opendustpan.org/opendustpan/pkg/job"
 	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/secret"
 )
 
 var _ job.RecordStore = (*Store)(nil)
@@ -106,7 +107,7 @@ func (s *Store) EndStep(
 
 // ReserveLogChunk implements job.RecordStore.
 func (s *Store) ReserveLogChunk(
-	ctx context.Context, pc job.PhaseClaim, step string, c job.ChunkReserve, newLog *job.LogRef,
+	ctx context.Context, pc job.PhaseClaim, step string, c job.ChunkReserve, newLog *job.NewLog,
 ) (job.ChunkPlan, error) {
 	var plan job.ChunkPlan
 
@@ -122,7 +123,12 @@ func (s *Store) ReserveLogChunk(
 			return tx.Chunk(ctx, ns, version, seq)
 		}
 
-		plan, err = job.PlanChunk(&j, stepKey(&pc, step), c, newLog, lookup)
+		var template *job.LogRef
+		if newLog != nil {
+			template = &newLog.Log
+		}
+
+		plan, err = job.PlanChunk(&j, stepKey(&pc, step), c, template, lookup)
 		if err != nil {
 			return err
 		}
@@ -152,18 +158,52 @@ func (s *Store) ReserveLogChunk(
 	return plan, nil
 }
 
+// newItemKey creates the item key of the new item of kind and ID item, in the
+// transaction tx, and returns the ID of its record.
+//
+// Defense in depth: the recorder builds the reference from the same item, and
+// the sealer checks the namespace against the fence. This check stays so that
+// a record never lands for another item than the row that commits with it.
+func newItemKey(
+	ctx context.Context, tx Tx, fence namespace.Fence, ref secret.ItemRef, mk job.NewItemKeyFunc,
+	kind secret.ItemKind, item string,
+) (secret.ItemKeyID, error) {
+	switch {
+	case mk == nil:
+		return "", fmt.Errorf("%w: no item key function", job.ErrInvalid)
+	case ref.Kind != kind || ref.Item != item || ref.Scope.Namespace != fence.Namespace:
+		return "", fmt.Errorf("%w: the item key reference does not name the new %s %s", job.ErrInvalid, kind, item)
+	}
+
+	key, err := mk(ctx, tx.ItemKeys(fence), ref, fence)
+	if err != nil {
+		return "", fmt.Errorf("create item key of %s %s: %w", kind, item, err)
+	}
+
+	return key.ID, nil
+}
+
 // logCreate is the creation of a log version: the claim that runs the step,
 // the step, and the new version.
 type logCreate struct {
 	pc   *job.PhaseClaim
 	step string
-	log  *job.LogRef
+	log  *job.NewLog
 }
 
 // createLog sets the new log version on the step record of j, stores its
 // lookup row and saves j.
 func createLog(ctx context.Context, tx Tx, j *job.Job, lc *logCreate) error {
-	job.CreateLogRecord(j, stepKey(lc.pc, lc.step), lc.log)
+	log := lc.log.Log
+
+	key, err := newItemKey(ctx, tx, lc.pc.Fence, lc.log.Ref, lc.log.NewKey, secret.ItemKindJobLog, log.ID)
+	if err != nil {
+		return err
+	}
+
+	log.ItemKey = key
+
+	job.CreateLogRecord(j, stepKey(lc.pc, lc.step), &log)
 
 	now, err := tx.Now(ctx)
 	if err != nil {
@@ -171,7 +211,7 @@ func createLog(ctx context.Context, tx Tx, j *job.Job, lc *logCreate) error {
 	}
 
 	row := LogRow{
-		ID:        lc.log.ID,
+		ID:        log.ID,
 		Job:       j.ID,
 		Phase:     lc.pc.Phase,
 		Step:      lc.step,
@@ -223,6 +263,85 @@ func (s *Store) ConfirmLogChunk(ctx context.Context, pc job.PhaseClaim, step, ve
 	})
 }
 
+// gatePlan loads the job of pc and applies the rules of a plan write. For a
+// plan that read a state version that is not the current one, the phase fails
+// in the transaction tx, with the end of its operation, and the commit keeps
+// that. gatePlan then returns the job and the stale error in stale, and the
+// caller returns with no further write. The caller gives the stale error to its
+// own caller after the commit.
+func gatePlan(ctx context.Context, tx Tx, pc *job.PhaseClaim) (j job.Job, stale error, err error) {
+	j, err = claimed(ctx, tx, *pc)
+	if err != nil {
+		return job.Job{}, nil, err
+	}
+
+	current, err := tx.StateVersion(ctx, pc.Fence.Namespace, j.Spec.Unit.UnitID())
+	if err != nil {
+		return job.Job{}, nil, err
+	}
+
+	checkErr := job.CheckPutPlan(&j, pc.Phase, current)
+
+	switch {
+	case checkErr == nil:
+		return j, nil, nil
+	case !errors.Is(checkErr, job.ErrPlanStale):
+		return job.Job{}, nil, checkErr
+	default:
+		return j, checkErr, failPhase(ctx, tx, &j, pc, checkErr)
+	}
+}
+
+// ReservePlan implements job.RecordStore.
+func (s *Store) ReservePlan(ctx context.Context, pc job.PhaseClaim, np *job.NewPlan) (job.PlanRef, error) {
+	var (
+		out   job.PlanRef
+		stale error
+	)
+
+	err := s.run.Write(ctx, pc.Fence, func(tx Tx) error {
+		j, staleErr, err := gatePlan(ctx, tx, &pc)
+		if err != nil {
+			return err
+		}
+
+		if staleErr != nil {
+			stale = staleErr
+
+			return nil
+		}
+
+		p := np.Plan
+
+		key, err := newItemKey(ctx, tx, pc.Fence, np.Ref, np.NewKey, secret.ItemKindPlan, p.ID)
+		if err != nil {
+			return err
+		}
+
+		p.ItemKey, p.Parts, p.StateVersion = key, nil, j.Phases[pc.Phase].StateVersion
+
+		body, err := json.Marshal(encodePlan(&p))
+		if err != nil {
+			return fmt.Errorf("encode plan %s: %w", p.ID, err)
+		}
+
+		out = p
+
+		return tx.InsertPlan(ctx, pc.Fence.Namespace, PlanRow{
+			ID: p.ID, Job: j.ID, Body: string(body), CreatedMs: p.CreatedAt.UnixMilli(),
+		})
+	})
+	if err != nil {
+		return job.PlanRef{}, err
+	}
+
+	if stale != nil {
+		return job.PlanRef{}, fmt.Errorf("reserve plan: %w", stale)
+	}
+
+	return out, nil
+}
+
 // PutPlan implements job.RecordStore.
 func (s *Store) PutPlan(ctx context.Context, pc job.PhaseClaim, p job.PlanRef) (job.PlanRef, error) {
 	var (
@@ -231,27 +350,19 @@ func (s *Store) PutPlan(ctx context.Context, pc job.PhaseClaim, p job.PlanRef) (
 	)
 
 	err := s.run.Write(ctx, pc.Fence, func(tx Tx) error {
-		j, err := claimed(ctx, tx, pc)
+		j, staleErr, err := gatePlan(ctx, tx, &pc)
 		if err != nil {
 			return err
 		}
 
-		current, err := tx.StateVersion(ctx, pc.Fence.Namespace, j.Spec.Unit.UnitID())
-		if err != nil {
-			return err
+		if staleErr != nil {
+			stale = staleErr
+
+			return nil
 		}
 
-		if checkErr := job.CheckPutPlan(&j, pc.Phase, current); checkErr != nil {
-			if !errors.Is(checkErr, job.ErrPlanStale) {
-				return checkErr
-			}
-
-			// The plan read a state that is not the current one. The phase fails
-			// in this transaction, with the end of its operation, and the commit
-			// keeps that. The caller gets ErrPlanStale after the commit.
-			stale = checkErr
-
-			return failPhase(ctx, tx, &j, &pc, checkErr)
+		if reserveErr := checkReserved(ctx, tx, &j, &pc, &p); reserveErr != nil {
+			return reserveErr
 		}
 
 		p.StateVersion = j.Phases[pc.Phase].StateVersion
@@ -263,8 +374,8 @@ func (s *Store) PutPlan(ctx context.Context, pc job.PhaseClaim, p job.PlanRef) (
 		}
 
 		row := PlanRow{ID: p.ID, Job: j.ID, Body: string(body), CreatedMs: p.CreatedAt.UnixMilli()}
-		if insertErr := tx.InsertPlan(ctx, pc.Fence.Namespace, row); insertErr != nil {
-			return insertErr
+		if updateErr := tx.UpdatePlan(ctx, pc.Fence.Namespace, row); updateErr != nil {
+			return updateErr
 		}
 
 		out = p
@@ -280,6 +391,35 @@ func (s *Store) PutPlan(ctx context.Context, pc job.PhaseClaim, p job.PlanRef) (
 	}
 
 	return out, nil
+}
+
+// checkReserved checks that p is the plan that a reserve recorded for the job
+// j: the row exists, belongs to j, has no part, and names the same item key.
+func checkReserved(ctx context.Context, tx Tx, j *job.Job, pc *job.PhaseClaim, p *job.PlanRef) error {
+	row, ok, err := tx.Plan(ctx, pc.Fence.Namespace, p.ID)
+	if err != nil {
+		return err
+	}
+
+	if !ok || row.Job != j.ID {
+		return fmt.Errorf("%w: plan %s was not reserved for job %s", job.ErrNotFound, p.ID, j.ID)
+	}
+
+	var body planBody
+	if err = json.Unmarshal([]byte(row.Body), &body); err != nil {
+		return fmt.Errorf("%w: plan %s: %w", ErrDamaged, p.ID, err)
+	}
+
+	switch reserved := decodePlan(&body); {
+	case reserved == nil:
+		return fmt.Errorf("%w: plan %s: no plan in the row", ErrDamaged, p.ID)
+	case len(reserved.Parts) > 0:
+		return fmt.Errorf("%w: plan %s has parts", job.ErrConflict, p.ID)
+	case reserved.ItemKey != p.ItemKey:
+		return fmt.Errorf("%w: plan %s has another item key than its reserve", job.ErrInvalid, p.ID)
+	}
+
+	return nil
 }
 
 // failPhase fails the current phase of j and ends the operation of the claim
@@ -355,7 +495,13 @@ func (s *Store) Plan(ctx context.Context, ns namespace.Name, id string) (job.Art
 			return fmt.Errorf("%w: plan %s: %w", ErrDamaged, id, err)
 		}
 
-		out = job.ArtifactRecord{Job: j.ID, Unit: j.Spec.Unit, Step: "", Plan: decodePlan(&body), Log: nil}
+		plan := decodePlan(&body)
+		if plan == nil || len(plan.Parts) == 0 {
+			// A plan with no part is a reserve: its parts are not stored yet.
+			return job.ErrNotFound
+		}
+
+		out = job.ArtifactRecord{Job: j.ID, Unit: j.Spec.Unit, Step: "", Plan: plan, Log: nil}
 
 		return nil
 	})
@@ -428,7 +574,7 @@ func CheckPlanBody(id, body string) error {
 	}
 
 	p := decodePlan(&b)
-	if p == nil || p.ID != id || len(p.Parts) == 0 || len(p.Parts) > 2 {
+	if p == nil || p.ID != id || len(p.Parts) > 2 {
 		return fmt.Errorf("%w: plan %s does not match its row", ErrDamaged, id)
 	}
 
