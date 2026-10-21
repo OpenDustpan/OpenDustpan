@@ -181,7 +181,7 @@ func plannerRequest(unit identity.Object) job.StartRequest {
 	return job.StartRequest{
 		Unit: unit, Operation: job.OperationPlan, Executor: "",
 		Location: job.Location{Connection: "", Repository: "acme/infra", Ref: "main", Directory: "net", Revision: ""},
-		Pool:     "", Edits: nil, Delivery: "", Source: "", IdempotencyKey: "", Reason: "", BreakGlass: nil,
+		Pool:     "", Edits: nil, Delivery: "", Source: "", IdempotencyKey: "", Reason: "", BreakGlass: nil, Trigger: nil,
 		Channel: "", SourceIP: "", UserAgent: "", RequestID: "",
 	}
 }

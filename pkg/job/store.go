@@ -318,6 +318,12 @@ type StartRequest struct {
 	// break-glass action on the namespace, and a person: an agent cannot
 	// ask for it.
 	BreakGlass *BreakGlass
+	// Trigger names the run trigger that starts the job. Only a feature of the
+	// server sets it: the REST API of jobs never does. The job keeps it.
+	// Source tells how the trigger started the job: a manual fire keeps the
+	// source of the caller, and any other start by a trigger is the start of
+	// the namespace service principal.
+	Trigger *TriggerRef
 	// Channel is where the request came from, for the audit entry.
 	Channel audit.Channel
 	// SourceIP, UserAgent and RequestID describe the request for the audit

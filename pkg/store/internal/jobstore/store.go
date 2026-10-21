@@ -475,7 +475,7 @@ func rowOf(j *job.Job) (Row, error) {
 func jobOf(r *Row) (job.Job, error) {
 	j := job.Job{
 		ID: r.ID, Spec: emptySpec(), State: r.State, Wait: r.Wait, Reason: "", Phases: nil, Current: r.Phase,
-		StartedBy: "", Source: "", Agent: "", AgentMode: "", BreakGlass: nil, Delivery: nil, Closed: nil,
+		StartedBy: "", Source: "", Agent: "", AgentMode: "", BreakGlass: nil, Trigger: nil, Delivery: nil, Closed: nil,
 		Verification: job.VerificationNone, IdempotencyKey: r.Key, RequestHash: "", Version: r.Version,
 		CreatedAt: time.UnixMilli(r.CreatedMs).UTC(), UpdatedAt: time.UnixMilli(r.UpdatedMs).UTC(),
 	}
@@ -549,7 +549,7 @@ func emptySpec() job.Spec {
 func noJob() job.Job {
 	return job.Job{
 		ID: "", Spec: emptySpec(), State: "", Wait: "", Reason: "", Phases: nil, Current: 0, StartedBy: "", Source: "",
-		Agent: "", AgentMode: "", BreakGlass: nil, Delivery: nil, Closed: nil, Verification: job.VerificationNone,
-		IdempotencyKey: "", RequestHash: "", Version: 0, CreatedAt: time.Time{}, UpdatedAt: time.Time{},
+		Agent: "", AgentMode: "", BreakGlass: nil, Trigger: nil, Delivery: nil, Closed: nil,
+		Verification: job.VerificationNone, IdempotencyKey: "", RequestHash: "", Version: 0, CreatedAt: time.Time{}, UpdatedAt: time.Time{},
 	}
 }

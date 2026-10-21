@@ -173,6 +173,11 @@ type breakGlassBody struct {
 	Freeze string `json:"freeze"`
 }
 
+type triggerBody struct {
+	ID    string `json:"id"`
+	Saver string `json:"saver"`
+}
+
 // jobBody is the part of a job that no column holds.
 type jobBody struct {
 	Spec         specBody          `json:"spec"`
@@ -183,6 +188,7 @@ type jobBody struct {
 	Agent        string            `json:"agent"`
 	AgentMode    string            `json:"agentMode"`
 	BreakGlass   *breakGlassBody   `json:"breakGlass"`
+	Trigger      *triggerBody      `json:"trigger,omitempty"`
 	Delivery     *deliveryBody     `json:"delivery"`
 	Closed       *stateVersionBody `json:"closed"`
 	Verification string            `json:"verification"`
@@ -456,6 +462,7 @@ func encodeBody(j *job.Job) (string, error) {
 		Agent:        j.Agent,
 		AgentMode:    string(j.AgentMode),
 		BreakGlass:   nil,
+		Trigger:      nil,
 		Delivery:     nil,
 		Closed:       encodeStateVersion(j.Closed),
 		Verification: string(j.Verification),
@@ -469,6 +476,10 @@ func encodeBody(j *job.Job) (string, error) {
 	if j.BreakGlass != nil {
 		bg := breakGlassBody(*j.BreakGlass)
 		b.BreakGlass = &bg
+	}
+
+	if j.Trigger != nil {
+		b.Trigger = &triggerBody{ID: j.Trigger.ID, Saver: j.Trigger.Saver}
 	}
 
 	if d := j.Delivery; d != nil {
@@ -513,6 +524,18 @@ func decodeBody(body string, j *job.Job) error {
 
 	for i := range b.Phases {
 		j.Phases[i] = decodePhase(&b.Phases[i])
+	}
+
+	if b.Trigger != nil {
+		ref := &job.TriggerRef{ID: b.Trigger.ID, Saver: b.Trigger.Saver}
+
+		// A stored row is untrusted: a restore or another version may have
+		// written it. The read handler trusts this reference to find a saver.
+		if err := ref.Validate(); err != nil {
+			return fmt.Errorf("decode job %s: trigger: %w", j.ID, err)
+		}
+
+		j.Trigger = ref
 	}
 
 	if b.BreakGlass != nil {

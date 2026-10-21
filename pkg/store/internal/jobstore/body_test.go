@@ -78,6 +78,7 @@ func fullJob(t *testing.T) job.Job {
 		Agent:      "dusty",
 		AgentMode:  job.AgentModeDirect,
 		BreakGlass: &job.BreakGlass{Reason: "outage", Freeze: "frz-1"},
+		Trigger:    &job.TriggerRef{ID: "trg-1", Saver: "user:ada"},
 		Delivery: &job.DeliveryResult{
 			Delivery: job.DeliveryReviewRequest, Commit: "c0ffee", Branch: "b", ReviewRequest: "https://x/1",
 			MergedAt: at, DeliveredAt: at,

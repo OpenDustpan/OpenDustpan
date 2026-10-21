@@ -79,7 +79,7 @@ func dispatchPlan(t *testing.T, e *env, pool string, unit identity.Object) job.J
 			Gates: nil, Approvals: nil, StartedAt: time.Time{}, FinishedAt: time.Time{},
 		}},
 		Current: 0, StartedBy: "ada", Source: job.SourceAPI, Agent: "", AgentMode: "", BreakGlass: nil,
-		Delivery: nil, Closed: nil, Verification: job.VerificationNone, IdempotencyKey: "", RequestHash: "",
+		Trigger: nil, Delivery: nil, Closed: nil, Verification: job.VerificationNone, IdempotencyKey: "", RequestHash: "",
 		Version: 0, CreatedAt: time.Time{}, UpdatedAt: time.Time{},
 	}
 
