@@ -60,7 +60,7 @@ func (h *Handler) Operations() []apidesc.Operation {
 			Path:             route.Path,
 			Actions:          actions,
 			NamespaceActions: nil,
-			Public:           route.Scope == ScopePublic,
+			Public:           false,
 			IdempotencyKey:   route.IdempotencyKey,
 		})
 	}

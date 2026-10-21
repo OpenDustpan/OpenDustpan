@@ -205,6 +205,7 @@ A request with no valid credential answers 401 and writes no entry, because it h
 - `action` and `object`: the action that the route needs, and the object that it needs it on.
 - `reason`: `denied by policy on` and the route, for example `denied by policy on GET /api/audit/entries`. The route is the matched pattern, or the method and the path. It never holds the query.
 - `kind`: `reveal` for a refused read of secret values, `override` for a refused forced write, `tool-operation` for a refused read, else `change`.
+- `channel`: `console` for a request that the console session signed in, whatever its `Dustpan-Channel` header says. For a request with an access token, the channel that the header declares, and `api` for an unknown value or no header.
 
 The check of the action can fail with an error that is not a refusal. The request then gets that error, and the server writes an entry too.
 The `reason` is then `authorization failed on` and the route. It never holds the text of the error.
@@ -310,6 +311,7 @@ old configuration and the reload fails.
 `GET /api/audit/entries?organization=<namespace>` lists one page of the
 entries of the namespace, newest first, with the total count.
 It needs the action `namespace:read-audit` on the namespace.
+Send the access token as `Authorization: token <token>` or `Authorization: Bearer <token>`.
 `page[number]` selects the page (from 1) and `page[size]` selects its size
 (up to 200). Both default when missing.
 

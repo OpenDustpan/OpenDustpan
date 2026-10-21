@@ -19,12 +19,11 @@ import (
 type Scope int
 
 const (
-	// ScopePublic serves without sign-in. Only routes on the public list may
-	// use it. This API has none.
-	ScopePublic Scope = iota + 1
 	// ScopeAuthorized needs a signed-in principal and the Authorizer to allow
 	// every declared action on the resolved object before the handler runs.
-	ScopeAuthorized
+	// It is the only scope: this API has no route that serves without
+	// sign-in, so its description marks no route public.
+	ScopeAuthorized Scope = iota + 1
 )
 
 // ObjectResolver returns the authorization object for a request.

@@ -15,6 +15,7 @@ import (
 	"opendustpan.org/opendustpan/internal/clientip"
 	"opendustpan.org/opendustpan/internal/denylimit"
 	"opendustpan.org/opendustpan/internal/requestid"
+	"opendustpan.org/opendustpan/internal/sessionauth"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -511,10 +512,12 @@ func deniedEntry(
 	action, obj := d.Action, d.Object
 
 	// A caller of Record may have no request. The entry then has no address (clientip.String accepts nil),
-	// no user agent and the default channel.
-	var userAgent, channel string
+	// no user agent and the default channel. A request that the session
+	// cookie signed in is the console, whatever its channel header says, as
+	// in every other audit entry of a request.
+	userAgent, channel := "", audit.NormalizeChannel("")
 	if req != nil {
-		userAgent, channel = req.UserAgent(), req.Header.Get(channelHeader)
+		userAgent, channel = req.UserAgent(), sessionauth.AuditChannel(req, channelHeader)
 	}
 
 	return audit.Entry{
@@ -531,7 +534,7 @@ func deniedEntry(
 		Changes:       nil,
 		SourceIP:      clientip.String(req),
 		UserAgent:     Clean(truncateUserAgent(userAgent), audit.MaxUserAgentLen),
-		Channel:       audit.NormalizeChannel(channel),
+		Channel:       channel,
 		Kind:          kindOf(action),
 		Outcome:       audit.OutcomeDenied,
 		RequestID:     requestid.FromContext(ctx),

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/sessionauth"
+	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/session"
@@ -137,6 +138,74 @@ func TestSessionCookieOnlyServesReads(t *testing.T) {
 	for _, target := range []string{"/api/audit/entries?organization=acme", "/api/audit/check?organization=acme"} {
 		if rec := serveCookie(h, cookieRequest(t, http.MethodPost, target)); rec.Code != http.StatusMethodNotAllowed {
 			t.Errorf("POST %s with the cookie = %d, want 405", target, rec.Code)
+		}
+	}
+}
+
+// TestBearerTokenSignsIn proves that the audit API takes the Bearer scheme
+// as well as the token scheme, as every tool-neutral API does.
+func TestBearerTokenSignsIn(t *testing.T) {
+	t.Parallel()
+
+	h, _ := newEnforcingHandler(t, selectiveAuthorizer{deny: map[identity.Action]bool{}})
+
+	for _, header := range []string{"token test-token", "Bearer test-token"} {
+		req := httptest.NewRequestWithContext(
+			t.Context(),
+			http.MethodGet,
+			"/api/audit/entries?organization=acme",
+			http.NoBody,
+		)
+		req.Header.Set("Authorization", header)
+
+		if rec := serveCookie(h, req); rec.Code != http.StatusOK {
+			t.Errorf("entry list with %q = %d %s, want 200", strings.Fields(header)[0], rec.Code, rec.Body.String())
+		}
+	}
+}
+
+// TestSessionRefusalNamesTheConsole proves that a request signed in by the
+// session cookie carries the session: the record of its refusal names the
+// console channel, and a refusal of a token request with no channel header
+// names the API channel.
+func TestSessionRefusalNamesTheConsole(t *testing.T) {
+	t.Parallel()
+
+	deny := selectiveAuthorizer{deny: map[identity.Action]bool{identity.ActionNamespaceReadAudit: true}}
+	h, entries := newEnforcingHandlerWithSessions(t, deny, aliceChecker(t))
+
+	cookie := cookieRequest(t, http.MethodGet, "/api/audit/entries?organization=acme")
+	if rec := serveCookie(h, cookie); rec.Code != http.StatusForbidden {
+		t.Fatalf("denied entry list with the cookie = %d, want 403", rec.Code)
+	}
+
+	token := httptest.NewRequestWithContext(
+		t.Context(),
+		http.MethodGet,
+		"/api/audit/entries?organization=acme",
+		http.NoBody,
+	)
+	token.Header.Set("Authorization", "token test-token")
+
+	if rec := serveCookie(h, token); rec.Code != http.StatusForbidden {
+		t.Fatalf("denied entry list with a token = %d, want 403", rec.Code)
+	}
+
+	got := map[string]audit.Channel{}
+
+	for _, e := range entries.entries["acme"] {
+		if e.Outcome == audit.OutcomeDenied {
+			got[e.Subject] = e.Channel
+		}
+	}
+
+	if got["corp:alice"] != audit.ChannelConsole {
+		t.Errorf("channel of the session refusal = %q, want console (entries %v)", got["corp:alice"], got)
+	}
+
+	for subject, channel := range got {
+		if subject != "corp:alice" && channel != audit.ChannelAPI {
+			t.Errorf("channel of the token refusal of %s = %q, want api", subject, channel)
 		}
 	}
 }
