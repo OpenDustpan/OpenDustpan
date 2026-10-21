@@ -5,11 +5,13 @@ import (
 	"crypto/sha256"
 	"io"
 	"strconv"
+	"sync/atomic"
 	"testing"
 
 	"opendustpan.org/opendustpan/internal/token"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/stack"
+	"opendustpan.org/opendustpan/pkg/stack/stacktest"
 )
 
 // gzipBestSpeedXFL is the gzip header XFL byte that compress/gzip writes for
@@ -78,7 +80,7 @@ func openLargeCheckpointFixture(t *testing.T) *largeCheckpointFixture {
 	}
 
 	namespaces, err := namespace.NewService(
-		namespace.Config{Store: &memNamespaces{ns: ns}, Now: clk.Now, Region: "local"},
+		namespace.Config{Store: &memNamespaces{ns: ns, reads: atomic.Int64{}}, Now: clk.Now, Region: "local"},
 	)
 	if err != nil {
 		t.Fatalf("namespace service: %v", err)
@@ -96,6 +98,7 @@ func openLargeCheckpointFixture(t *testing.T) *largeCheckpointFixture {
 		Namespaces:         namespaces,
 		Stacks:             store,
 		Blobs:              blobs,
+		Refusals:           stacktest.NewRefusals(),
 		Now:                clk.Now,
 		Logger:             nil,
 		MaxCheckpointBytes: 32 << 20,
@@ -111,6 +114,7 @@ func openLargeCheckpointFixture(t *testing.T) *largeCheckpointFixture {
 		t.Fatalf("parse ref: %v", err)
 	}
 
+	store.nsID = ns.ID
 	store.addStack(ref, "stk-test")
 
 	u, err := svc.Create(t.Context(), ref, stack.Plan{

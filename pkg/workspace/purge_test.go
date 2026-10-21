@@ -33,7 +33,7 @@ func purgedWorkspace(t *testing.T, f fixture) string {
 	purge := retentionEntry()
 	purge.Action = "unit:purge"
 
-	if err := f.svc.PurgeDeleted(t.Context(), "acme", f.ws.ID, purge); err != nil {
+	if _, err := f.svc.PurgeDeleted(t.Context(), "acme", f.ws.ID, purge); err != nil {
 		t.Fatalf("purge: %v", err)
 	}
 
@@ -59,7 +59,7 @@ func TestDeletePurgedBlobsRemovesTheState(t *testing.T) {
 
 	prefix := purgedWorkspace(t, f)
 
-	if err := f.svc.DeletePurgedBlobs(t.Context(), f.ws.Ref.Namespace, f.ws.ID); err != nil {
+	if err := f.svc.DeletePurgedBlobs(t.Context(), f.ws.NamespaceID, f.ws.ID); err != nil {
 		t.Fatalf("delete purged blobs: %v", err)
 	}
 
@@ -85,7 +85,7 @@ func TestDeletePurgedBlobsReportsARemainingBlob(t *testing.T) {
 	flaky.fails = 1000
 	flaky.mu.Unlock()
 
-	err := f.svc.DeletePurgedBlobs(t.Context(), f.ws.Ref.Namespace, f.ws.ID)
+	err := f.svc.DeletePurgedBlobs(t.Context(), f.ws.NamespaceID, f.ws.ID)
 	if !errors.Is(err, workspace.ErrBlobsRemain) {
 		t.Fatalf("delete purged blobs: err = %v, want ErrBlobsRemain", err)
 	}
@@ -94,7 +94,7 @@ func TestDeletePurgedBlobsReportsARemainingBlob(t *testing.T) {
 	flaky.fails = 0
 	flaky.mu.Unlock()
 
-	if err = f.svc.DeletePurgedBlobs(t.Context(), f.ws.Ref.Namespace, f.ws.ID); err != nil {
+	if err = f.svc.DeletePurgedBlobs(t.Context(), f.ws.NamespaceID, f.ws.ID); err != nil {
 		t.Fatalf("second delete of purged blobs: %v", err)
 	}
 

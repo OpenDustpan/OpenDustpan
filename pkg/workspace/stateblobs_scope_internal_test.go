@@ -12,7 +12,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/namespace"
-	"opendustpan.org/opendustpan/pkg/secret"
+	"opendustpan.org/opendustpan/pkg/scopeaudit"
 )
 
 const (
@@ -78,7 +78,7 @@ func newScopeService(t *testing.T) *scopeServices {
 	entries := &serverEntries{got: nil, err: nil}
 	at := time.Date(2026, time.October, 20, 12, 0, 0, 0, time.UTC)
 
-	rec, err := secret.NewAuditOutOfScope(entries, audit.ChannelAPI, StateBlobFamily(), func() time.Time { return at })
+	rec, err := scopeaudit.New(entries, StateBlobFamily(), func() time.Time { return at })
 	if err != nil {
 		t.Fatalf("new recorder: %v", err)
 	}
@@ -319,11 +319,11 @@ func TestStateBlobCallsReadNoNamespace(t *testing.T) {
 
 	before := nsStore.reads.Load()
 
-	if purgeErr := e.svc.DeletePurgedBlobs(ctx, "acme", w.ID); purgeErr != nil {
+	if purgeErr := e.svc.DeletePurgedBlobs(ctx, w.NamespaceID, w.ID); purgeErr != nil {
 		t.Fatalf("DeletePurgedBlobs: %v", purgeErr)
 	}
 
-	if n := nsStore.reads.Load() - before; n != 1 {
-		t.Errorf("DeletePurgedBlobs read the namespace %d times, want 1", n)
+	if n := nsStore.reads.Load() - before; n != 0 {
+		t.Errorf("DeletePurgedBlobs read the namespace %d times, want 0", n)
 	}
 }

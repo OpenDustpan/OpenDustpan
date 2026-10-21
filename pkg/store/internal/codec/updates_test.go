@@ -29,6 +29,7 @@ func TestToCheckpointRowBoundsMemory(t *testing.T) {
 	deployment := bigDeployment(resources)
 
 	cp := stack.Checkpoint{
+		NamespaceID: "", StackID: "",
 		SavedAt:       time.Now(),
 		Features:      []string{"verbatim"},
 		Deployment:    deployment,
@@ -39,7 +40,7 @@ func TestToCheckpointRowBoundsMemory(t *testing.T) {
 		Sequence:      3,
 		Digest:        sha256.Sum256(deployment),
 		Invalid:       false,
-		BlobKey:       mustBlobKey(t, "pulumi/stk-test/upd-test/3"),
+		BlobKey:       mustBlobKey(t, "namespaces/ns-test/pulumi/stk-test/upd-test/3"),
 		BlobSize:      0,
 		BlobMD5:       [16]byte{},
 	}
@@ -86,6 +87,7 @@ func TestToCheckpointRowRefusesNoKey(t *testing.T) {
 	t.Parallel()
 
 	cp := stack.Checkpoint{
+		NamespaceID: "", StackID: "",
 		SavedAt:       time.Now(),
 		Features:      nil,
 		Deployment:    []byte(`{}`),
@@ -113,6 +115,7 @@ func TestFromCheckpointRowRefusesNoKey(t *testing.T) {
 
 	digest := sha256.Sum256([]byte(`{}`))
 	row := codec.CheckpointRow{
+		NamespaceID:   "",
 		StackID:       "stk-test",
 		UpdateID:      "upd-test",
 		LeaseDigest:   []byte{},

@@ -16,6 +16,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/secret"
 	"opendustpan.org/opendustpan/pkg/stack"
+	"opendustpan.org/opendustpan/pkg/stack/stacktest"
 )
 
 // newUpdateFixtureWithGate builds an update fixture with checkpoints bounded
@@ -60,6 +61,7 @@ func newUpdateFixtureWithGate(
 		Namespaces:         namespaces,
 		Stacks:             stacks,
 		Blobs:              newMemBlob(),
+		Refusals:           stacktest.NewRefusals(),
 		Now:                nil,
 		Logger:             nil,
 		MaxCheckpointBytes: limit,

@@ -11,7 +11,7 @@ import (
 	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/namespace"
-	"opendustpan.org/opendustpan/pkg/secret"
+	"opendustpan.org/opendustpan/pkg/scopeaudit"
 )
 
 // stateBlobDir is the directory, inside the scope of one namespace, of the
@@ -28,8 +28,8 @@ const (
 
 // StateBlobFamily is the family of the state content blobs, as the audit entry
 // of a refusal names it.
-func StateBlobFamily() secret.OutOfScopeFamily {
-	return secret.OutOfScopeFamily{Blobs: "state blob", Dir: strings.TrimSuffix(stateBlobDir, "/")}
+func StateBlobFamily() scopeaudit.Family {
+	return scopeaudit.Family{Blobs: "state blob", Dir: strings.TrimSuffix(stateBlobDir, "/")}
 }
 
 // stateBlobs reads and writes the state content blobs. It builds a
@@ -42,10 +42,10 @@ func StateBlobFamily() secret.OutOfScopeFamily {
 // workspace, namespaces/<namespace ID>/tofu/<workspace ID>/. A key of another
 // namespace, of another kind in the namespace, or of another workspace of the
 // namespace returns blob.ErrOutOfScope before any call to the store, and
-// writes one refusal to the secret.OutOfScopeRecorder.
+// writes one refusal to the scopeaudit.Recorder.
 type stateBlobs struct {
 	store    blob.Store
-	refusals secret.OutOfScopeRecorder
+	refusals scopeaudit.Recorder
 }
 
 // view returns the view of the store for the namespace with ID ns.
@@ -84,7 +84,7 @@ func (b *stateBlobs) put(ctx context.Context, ns namespace.ID, ws ID, key blob.K
 		return err
 	}
 
-	return b.refuse(ctx, ns, opPut, v.Put(ctx, key, r), secret.OutOfScopePlace(v, key))
+	return b.refuse(ctx, ns, opPut, v.Put(ctx, key, r), scopeaudit.PlaceOf(v, key))
 }
 
 // get opens the blob under key, for the workspace ws of the namespace with ID
@@ -98,7 +98,7 @@ func (b *stateBlobs) get(ctx context.Context, ns namespace.ID, ws ID, key blob.K
 
 	r, err := v.Get(ctx, key)
 	if err != nil {
-		return nil, b.refuse(ctx, ns, opGet, err, secret.OutOfScopePlace(v, key))
+		return nil, b.refuse(ctx, ns, opGet, err, scopeaudit.PlaceOf(v, key))
 	}
 
 	return r, nil
@@ -113,7 +113,7 @@ func (b *stateBlobs) delete(ctx context.Context, ns namespace.ID, ws ID, key blo
 		return err
 	}
 
-	return b.refuse(ctx, ns, opDelete, v.Delete(ctx, key), secret.OutOfScopePlace(v, key))
+	return b.refuse(ctx, ns, opDelete, v.Delete(ctx, key), scopeaudit.PlaceOf(v, key))
 }
 
 // deleteRetried is delete with a retry of a transient failure after a short
@@ -124,7 +124,7 @@ func (b *stateBlobs) deleteRetried(ctx context.Context, ns namespace.ID, ws ID, 
 		return err
 	}
 
-	return b.refuse(ctx, ns, opDelete, blob.DeleteRetried(ctx, v, key), secret.OutOfScopePlace(v, key))
+	return b.refuse(ctx, ns, opDelete, blob.DeleteRetried(ctx, v, key), scopeaudit.PlaceOf(v, key))
 }
 
 // list returns the blobs of the workspace ws, in the namespace with ID ns.
@@ -136,7 +136,7 @@ func (b *stateBlobs) list(ctx context.Context, ns namespace.ID, ws ID) ([]blob.O
 
 	objects, err := v.List(ctx, workspaceDir(v, ws))
 	if err != nil {
-		return nil, b.refuse(ctx, ns, opList, fmt.Errorf("list state blobs: %w", err), secret.OutsideNamespace)
+		return nil, b.refuse(ctx, ns, opList, fmt.Errorf("list state blobs: %w", err), scopeaudit.OutsideNamespace)
 	}
 
 	return objects, nil
@@ -180,11 +180,11 @@ func (b *stateBlobs) scopedKey(
 // statePlace says where a refused state key is. A valid key inside the state
 // directory of the namespace, and outside the directory of the workspace of the
 // call, is outside the unit directory. Any other key has the place that
-// secret.OutOfScopePlace gives.
-func statePlace(v *blob.Scoped, key blob.Key) secret.OutOfScopeWhere {
-	place := secret.OutOfScopePlace(v, key)
-	if place == secret.OutsideDirectory && strings.HasPrefix(key.String(), v.Prefix()+stateBlobDir) {
-		return secret.OutsideUnitDirectory
+// scopeaudit.PlaceOf gives.
+func statePlace(v *blob.Scoped, key blob.Key) scopeaudit.Where {
+	place := scopeaudit.PlaceOf(v, key)
+	if place == scopeaudit.OutsideDirectory && strings.HasPrefix(key.String(), v.Prefix()+stateBlobDir) {
+		return scopeaudit.OutsideUnitDirectory
 	}
 
 	return place
@@ -199,7 +199,7 @@ func (b *stateBlobs) refuseMismatch(ctx context.Context, ns namespace.ID) error 
 	recCtx, cancel := cleanupContext(ctx)
 	defer cancel()
 
-	if recErr := b.refusals.RecordOutOfScope(recCtx, ns, opGet, secret.OutsideUnitDirectory); recErr != nil {
+	if recErr := b.refusals.RecordOutOfScope(recCtx, ns, opGet, scopeaudit.OutsideUnitDirectory); recErr != nil {
 		return errors.Join(ErrStateVersionNotFound, fmt.Errorf("record the refusal: %w", recErr))
 	}
 
@@ -226,7 +226,7 @@ const stateKeyRestParts = 3
 // the record fails, so the caller still sees the refusal. Any other error, and
 // nil, pass through.
 func (b *stateBlobs) refuse(
-	ctx context.Context, ns namespace.ID, op string, err error, where secret.OutOfScopeWhere,
+	ctx context.Context, ns namespace.ID, op string, err error, where scopeaudit.Where,
 ) error {
 	if !errors.Is(err, blob.ErrOutOfScope) {
 		return err

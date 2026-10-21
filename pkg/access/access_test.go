@@ -197,7 +197,8 @@ func (f *fixture) unit(tb testing.TB, obj identity.Object) identity.Object {
 	}
 
 	st := stack.Stack{
-		CreatedAt: time.Unix(0, 0), UpdatedAt: time.Unix(0, 0), Tags: map[string]string{}, Ref: ref,
+		NamespaceID: "",
+		CreatedAt:   time.Unix(0, 0), UpdatedAt: time.Unix(0, 0), Tags: map[string]string{}, Ref: ref,
 		ID: stack.ID("stk-" + strings.ReplaceAll(obj.UnitName(), "/", "-")), Version: 0,
 	}
 	if err := f.store.CreateStack(ctx, st, ns.Fence()); err != nil {

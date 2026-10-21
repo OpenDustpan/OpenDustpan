@@ -57,9 +57,12 @@ type SweepTool interface {
 	// whose retention period ended by then: a restore and a new delete after
 	// the sweep read the unit gave it a new retention period.
 	PurgeExpired(ctx context.Context, ns namespace.Name, unitID string, dueBy time.Time, e audit.Entry) error
-	// DeletePurgedBlobs deletes every blob of the purged unit unitID of ns.
-	// It returns nil only when no blob of the unit remains.
-	DeletePurgedBlobs(ctx context.Context, ns namespace.Name, unitID string) error
+	// DeletePurgedBlobs deletes every blob of the purged unit unitID of the
+	// namespace with the ID ns. The blob purge record carries the ID from the
+	// join with the namespace row, and a tool that keeps the blobs of a unit
+	// under the prefix of its namespace needs it. It returns nil only when no
+	// blob of the unit remains.
+	DeletePurgedBlobs(ctx context.Context, ns namespace.ID, unitID string) error
 }
 
 // Reference returns the unit reference of e in the form
@@ -348,7 +351,21 @@ func (s *Sweeper) deletePurgedBlobs(ctx context.Context, r BlobPurge) bool {
 		return false
 	}
 
-	if err := tool.DeletePurgedBlobs(ctx, r.Namespace, r.UnitID); err != nil {
+	// A record whose namespace row is gone has no namespace ID. The delete
+	// below would fail closed on each run with the kind "store", so the record
+	// gets its own kind and the stuck record is easy to find.
+	//
+	// Defense in depth: the tool checks the namespace ID too. This check stays
+	// so that a tool that does not never gets an empty scope from a record.
+	if r.NamespaceID == "" {
+		s.cfg.Logger.WarnContext(ctx, "blobs of a purged unit remain: the record has no namespace",
+			slog.String("tool", r.Tool), slog.String("unit_id", r.UnitID),
+			slog.String("error_kind", errorKindNoNamespace))
+
+		return false
+	}
+
+	if err := tool.DeletePurgedBlobs(ctx, r.NamespaceID, r.UnitID); err != nil {
 		if !stopped(ctx) {
 			s.cfg.Logger.WarnContext(ctx, "blobs of a purged unit remain after the retention sweep",
 				slog.String("tool", r.Tool), slog.String("unit_id", r.UnitID),
@@ -360,6 +377,10 @@ func (s *Sweeper) deletePurgedBlobs(ctx context.Context, r BlobPurge) bool {
 
 	return true
 }
+
+// errorKindNoNamespace is the error kind of a blob purge record whose
+// namespace row is gone.
+const errorKindNoNamespace = "namespace_missing"
 
 // ErrorKind names the class of err for a log line, from the namespace
 // sentinels that a fenced write can return, so that the log never holds the

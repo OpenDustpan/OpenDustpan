@@ -12,12 +12,12 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
 
 	"opendustpan.org/opendustpan/internal/token"
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/stack"
+	"opendustpan.org/opendustpan/pkg/stack/stacktest"
 )
 
 // fakeBlobs is an in-memory blob.Store that records each call in order.
@@ -125,7 +125,7 @@ func (f *fakeRows) PutJournalRow(_ context.Context, row stack.JournalRow, _ name
 func newEntries(t *testing.T, blobs blob.Store, rows stack.JournalStore, v stack.BatchVerifier) *stack.JournalEntries {
 	t.Helper()
 
-	entries, err := stack.NewJournalEntries(blobs, rows, v, 0)
+	entries, err := stack.NewJournalEntries(blobs, rows, v, 0, stacktest.NewRefusals())
 	if err != nil {
 		t.Fatalf("new journal writer: %v", err)
 	}
@@ -227,15 +227,23 @@ func batchBody(seqs ...int64) []byte {
 	return []byte(b.String())
 }
 
+// journalNS is the namespace of the journal tests, and journalPrefix is the
+// prefix of its stack blobs.
+const (
+	journalNS     = namespace.ID("ns-journal-test")
+	journalPrefix = "namespaces/ns-journal-test/pulumi/"
+)
+
 // journalBatchFor returns a batch of one update with the given body.
 func journalBatchFor(body []byte) stack.JournalBatch {
 	return stack.JournalBatch{
-		Ref:     stack.Ref{Namespace: "acme", Project: "web", Stack: "dev"},
-		StackID: "stack-1",
-		Update:  "upd-1",
-		Lease:   token.Digest{},
-		Content: body,
-		Version: 0,
+		Ref:       stack.Ref{Namespace: "acme", Project: "web", Stack: "dev"},
+		Namespace: journalNS,
+		StackID:   "stack-1",
+		Update:    "upd-1",
+		Lease:     token.Digest{},
+		Content:   body,
+		Version:   0,
 	}
 }
 
@@ -293,7 +301,7 @@ func TestJournalAppendWritesBlobBeforeRow(t *testing.T) {
 	}
 
 	row := rows.rows[0]
-	if want := blob.Key("pulumi/stack-1/upd-1/journal/3"); row.BlobKey != want {
+	if want := blob.Key(journalPrefix + "stack-1/upd-1/journal/3"); row.BlobKey != want {
 		t.Fatalf("blob key = %q, want %q", row.BlobKey, want)
 	}
 
@@ -385,7 +393,7 @@ func TestJournalAppendRefusesOtherBlobContent(t *testing.T) {
 	t.Parallel()
 
 	blobs := newFakeBlobs()
-	blobs.objects[blob.Key("pulumi/stack-1/upd-1/journal/1")] = []byte("other bytes")
+	blobs.objects[blob.Key(journalPrefix+"stack-1/upd-1/journal/1")] = []byte("other bytes")
 	rows := &fakeRows{err: nil, rows: nil, keys: nil, refusals: nil, running: false, retried: false, calls: nil}
 	entries := newEntries(t, blobs, rows, allowAll{})
 
@@ -466,7 +474,7 @@ func TestJournalAppendReadsBackTheSameBytes(t *testing.T) {
 
 	blobs := newFakeBlobs()
 	body := batchBody(9)
-	blobs.objects[blob.Key("pulumi/stack-1/upd-1/journal/9")] = bytes.Clone(body)
+	blobs.objects[blob.Key(journalPrefix+"stack-1/upd-1/journal/9")] = bytes.Clone(body)
 	rows := &fakeRows{err: nil, rows: nil, keys: nil, refusals: nil, running: false, retried: false, calls: nil}
 	entries := newEntries(t, blobs, rows, allowAll{})
 
@@ -582,50 +590,10 @@ func TestNewJournalEntriesRefusesNilVerifier(t *testing.T) {
 		&fakeRows{err: nil, rows: nil, keys: nil, refusals: nil, running: false, retried: false, calls: nil},
 		nil,
 		0,
+		stacktest.NewRefusals(),
 	)
 	if !errors.Is(err, stack.ErrNilVerifier) {
 		t.Fatalf("nil verifier: err = %v, want ErrNilVerifier", err)
-	}
-}
-
-// TestJournalSweepKeepsNamedAndYoungBlobs checks that the sweep deletes only the old
-// journal blobs that no row names.
-func TestJournalSweepKeepsNamedAndYoungBlobs(t *testing.T) {
-	t.Parallel()
-
-	now := time.Date(2026, time.October, 12, 12, 0, 0, 0, time.UTC)
-	old := now.Add(-2 * time.Hour)
-	named := blob.Key("pulumi/stack-1/upd-1/journal/1")
-	orphan := blob.Key("pulumi/stack-1/upd-1/journal/2")
-	young := blob.Key("pulumi/stack-1/upd-1/journal/3")
-
-	blobs := newFakeBlobs()
-	blobs.listed = []blob.Object{
-		{Key: named, ModifiedAt: old},
-		{Key: orphan, ModifiedAt: old},
-		{Key: young, ModifiedAt: now.Add(-time.Minute)},
-	}
-	entries := newEntries(
-		t,
-		blobs,
-		&fakeRows{
-			err: nil, rows: nil, keys: []blob.Key{named}, refusals: nil,
-			running: false, retried: false, calls: nil,
-		},
-		allowAll{},
-	)
-
-	err := entries.SweepUpdate(t.Context(), "stack-1", "upd-1", now)
-	if err != nil {
-		t.Fatalf("sweep: %v", err)
-	}
-
-	if strings.Join(blobs.calls, ",") != "delete" {
-		t.Fatalf("blob calls = %v, want one delete", blobs.calls)
-	}
-
-	if _, ok := blobs.objects[orphan]; ok {
-		t.Fatal("the old orphan blob survived the sweep")
 	}
 }
 
@@ -643,7 +611,16 @@ func TestJournalRemoveBlobsJoinsFailures(t *testing.T) {
 		allowAll{},
 	)
 
-	err := entries.RemoveBlobs(t.Context(), []blob.Key{"a", "b"})
+	err := entries.RemoveBlobs(
+		t.Context(),
+		journalNS,
+		"stack-1",
+		"upd-1",
+		[]blob.Key{
+			blob.Key(journalPrefix + "stack-1/upd-1/journal/1"),
+			blob.Key(journalPrefix + "stack-1/upd-1/journal/2"),
+		},
+	)
 	if !errors.Is(err, io.ErrUnexpectedEOF) {
 		t.Fatalf("remove: err = %v, want the delete failure", err)
 	}

@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"opendustpan.org/opendustpan/internal/sessionauth"
+	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/stack"
@@ -716,8 +717,13 @@ func (h *Handler) enforceAuthorized(route Route) http.HandlerFunc {
 
 		if session {
 			ctx = sessionauth.WithSession(ctx)
-			r = r.WithContext(ctx)
 		}
+
+		// The services write the audit entries of work that a request does not
+		// ask for, such as a refused blob key. The entry names the channel of
+		// the request.
+		ctx = audit.WithChannel(ctx, sessionauth.AuditChannel(r.WithContext(ctx), channelHeader))
+		r = r.WithContext(ctx)
 
 		obj, err := route.Resolve(w, r)
 		if err != nil {

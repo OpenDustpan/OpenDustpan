@@ -278,6 +278,7 @@ func benchStack(b *testing.B, u identity.Object, id string) stack.Stack {
 	}
 
 	return stack.Stack{
-		CreatedAt: at(0), UpdatedAt: at(0), Tags: map[string]string{}, Ref: ref, ID: stack.ID(id), Version: 0,
+		NamespaceID: "",
+		CreatedAt:   at(0), UpdatedAt: at(0), Tags: map[string]string{}, Ref: ref, ID: stack.ID(id), Version: 0,
 	}
 }

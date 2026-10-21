@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 
@@ -38,10 +39,12 @@ func journalRow(t *testing.T, s UpdatesStore, u stack.Update, sha byte, seqs ...
 	ops := make([]int64, len(seqs))
 
 	return stack.JournalRow{
-		Ref:          u.Ref,
-		Update:       u.ID,
-		Lease:        u.Lease.Digest,
-		BlobKey:      blob.Key(fmt.Sprintf("pulumi/%s/%s/journal/%d", st.ID, u.ID, low)),
+		Ref:    u.Ref,
+		Update: u.ID,
+		Lease:  u.Lease.Digest,
+		BlobKey: blob.Key(
+			fmt.Sprintf("%s%s/%s/journal/%d", stackBlobPrefix(t, s, u.Ref.Namespace), st.ID, u.ID, low),
+		),
 		SHA256:       sum,
 		MD5:          [16]byte{sha},
 		Size:         1,
@@ -138,9 +141,33 @@ func testJournalRefusals(t *testing.T, f fixture) {
 	}
 
 	wrongKey := journalRow(t, f.s, u, 1, 1)
-	wrongKey.BlobKey = blob.Key("pulumi/other/" + u.ID.String() + "/journal/1")
-	if _, err := f.s.PutJournalRow(t.Context(), wrongKey, f.fence); err == nil {
-		t.Fatal("batch with a blob key of another stack: err = nil, want an error")
+	wrongKey.BlobKey = blob.Key(stackBlobPrefix(t, f.s, f.ref.Namespace) + "other/" + u.ID.String() + "/journal/1")
+	if _, err := f.s.PutJournalRow(t.Context(), wrongKey, f.fence); !errors.Is(err, stack.ErrJournalKey) {
+		t.Fatalf("batch with a blob key of another stack: err = %v, want ErrJournalKey", err)
+	}
+
+	// The key of a batch of this stack in the blob scope of another namespace,
+	// a key without a namespace directory, a key of another directory of the
+	// namespace, and a key that is deeper than a batch key are refused too.
+	st, err := f.s.GetStack(t.Context(), f.ref)
+	if err != nil {
+		t.Fatalf("get stack: %v", err)
+	}
+
+	nsID := strings.TrimSuffix(strings.TrimPrefix(stackBlobPrefix(t, f.s, f.ref.Namespace), "namespaces/"), "/pulumi/")
+
+	for name, key := range map[string]string{
+		"another namespace":            "namespaces/ns-other/pulumi/" + st.ID.String() + "/" + u.ID.String() + "/journal/1",
+		"no namespace directory":       "pulumi/" + st.ID.String() + "/" + u.ID.String() + "/journal/1",
+		"a directory of the namespace": "namespaces/" + nsID + "/tofu/" + st.ID.String() + "/" + u.ID.String() + "/journal/1",
+		"a nested key":                 stackBlobPrefix(t, f.s, f.ref.Namespace) + st.ID.String() + "/" + u.ID.String() + "/journal/1/2",
+	} {
+		row := journalRow(t, f.s, u, 1, 1)
+		row.BlobKey = blob.Key(key)
+
+		if _, err := f.s.PutJournalRow(t.Context(), row, f.fence); !errors.Is(err, stack.ErrJournalKey) {
+			t.Fatalf("batch with %s in the key: err = %v, want ErrJournalKey", name, err)
+		}
 	}
 }
 
@@ -640,7 +667,7 @@ func testJournalBuildRemovesRefusals(t *testing.T, f fixture) {
 
 	recordRefusal(t, f, journalRefusal(u, []int64{2}, 400, "unknown kind"))
 
-	if _, err := f.s.PutBuiltCheckpoint(t.Context(), newCheckpoint(u, 0, "{}"), f.fence); err != nil {
+	if _, err := f.s.PutBuiltCheckpoint(t.Context(), f.checkpoint(t, u, 0, "{}"), f.fence); err != nil {
 		t.Fatalf("build: %v", err)
 	}
 
@@ -754,7 +781,7 @@ func testJournalBuild(t *testing.T, f fixture) {
 
 	testJournalRefusedBuild(t, f, u, want)
 
-	removed, err := f.s.PutBuiltCheckpoint(t.Context(), newCheckpoint(u, 0, "{}"), f.fence)
+	removed, err := f.s.PutBuiltCheckpoint(t.Context(), f.checkpoint(t, u, 0, "{}"), f.fence)
 	if err != nil {
 		t.Fatalf("build: %v", err)
 	}
@@ -774,7 +801,7 @@ func testJournalBuild(t *testing.T, f fixture) {
 	}
 
 	// A retry of the build finds the journal closed and removes nothing more.
-	again, err := f.s.PutBuiltCheckpoint(t.Context(), newCheckpoint(u, 0, "{}"), f.fence)
+	again, err := f.s.PutBuiltCheckpoint(t.Context(), f.checkpoint(t, u, 0, "{}"), f.fence)
 	if err != nil || len(again) != 0 {
 		t.Fatalf("retry of the build: keys %v, err %v; want no keys", again, err)
 	}
@@ -787,12 +814,12 @@ func testJournalRefusedBuild(t *testing.T, f fixture, u stack.Update, want []blo
 
 	stale := namespace.Fence{Namespace: f.fence.Namespace, FailoverVersion: f.fence.FailoverVersion - 1}
 
-	_, staleErr := f.s.PutBuiltCheckpoint(t.Context(), newCheckpoint(u, 0, "{}"), stale)
+	_, staleErr := f.s.PutBuiltCheckpoint(t.Context(), f.checkpoint(t, u, 0, "{}"), stale)
 	if !errors.Is(staleErr, namespace.ErrFenced) {
 		t.Fatalf("build with a stale fence: err = %v, want namespace.ErrFenced", staleErr)
 	}
 
-	forged := newCheckpoint(u, 0, "{}")
+	forged := f.checkpoint(t, u, 0, "{}")
 	forged.Lease = sha256.Sum256([]byte("another lease"))
 
 	_, forgedErr := f.s.PutBuiltCheckpoint(t.Context(), forged, f.fence)
@@ -830,7 +857,7 @@ func testJournalBuildRace(t *testing.T, f fixture) {
 
 	wg.Go(func() {
 		<-startLine
-		removed, buildErr = f.s.PutBuiltCheckpoint(t.Context(), newCheckpoint(u, 0, "{}"), f.fence)
+		removed, buildErr = f.s.PutBuiltCheckpoint(t.Context(), f.checkpoint(t, u, 0, "{}"), f.fence)
 	})
 
 	close(startLine)
@@ -870,7 +897,7 @@ func testJournalBuildIsolation(t *testing.T, f fixture) {
 		t.Fatalf("batch of another stack: %v", err)
 	}
 
-	if _, err := f.s.PutBuiltCheckpoint(t.Context(), newCheckpoint(current, 0, "{}"), f.fence); err != nil {
+	if _, err := f.s.PutBuiltCheckpoint(t.Context(), f.checkpoint(t, current, 0, "{}"), f.fence); err != nil {
 		t.Fatalf("build of the current update: %v", err)
 	}
 
@@ -896,7 +923,7 @@ func testJournalBuildRefusals(t *testing.T, f fixture) {
 		"p1",
 		stack.Plan{Kind: stack.KindPreview, DryRun: false, CreatedBy: "", RestoredFrom: 0},
 	)
-	if _, err := f.s.PutBuiltCheckpoint(t.Context(), newCheckpoint(preview, 0, "{}"), f.fence); !errors.Is(
+	if _, err := f.s.PutBuiltCheckpoint(t.Context(), f.checkpoint(t, preview, 0, "{}"), f.fence); !errors.Is(
 		err, stack.ErrWrongUpdateState,
 	) {
 		t.Fatalf("build of a preview: err = %v, want ErrWrongUpdateState", err)
@@ -909,11 +936,11 @@ func testJournalBuildRefusals(t *testing.T, f fixture) {
 		t.Fatalf("batch: %v", err)
 	}
 
-	if err := f.s.PutCheckpoint(t.Context(), newCheckpoint(u, 5, "{}"), f.fence); err != nil {
+	if err := f.s.PutCheckpoint(t.Context(), f.checkpoint(t, u, 5, "{}"), f.fence); err != nil {
 		t.Fatalf("checkpoint at sequence 5: %v", err)
 	}
 
-	if _, err := f.s.PutBuiltCheckpoint(t.Context(), newCheckpoint(u, 3, "{}"), f.fence); !errors.Is(
+	if _, err := f.s.PutBuiltCheckpoint(t.Context(), f.checkpoint(t, u, 3, "{}"), f.fence); !errors.Is(
 		err, stack.ErrStaleCheckpoint,
 	) {
 		t.Fatalf("build at a stale sequence: err = %v, want ErrStaleCheckpoint", err)
