@@ -335,6 +335,12 @@ func (s *Service) withNewURL(
 		return notify.Sink{}, nil, fmt.Errorf("%w: %w", notify.ErrInvalid, err)
 	}
 
+	if next.Kind == notify.SinkChat {
+		if hostErr := s.checkPlatformHost(next, host); hostErr != nil {
+			return notify.Sink{}, nil, hostErr
+		}
+	}
+
 	ref := ident.NewID("itm-")
 	next.Target, next.SecretRefs = host, slices.Concat([]string{ref}, keys)
 

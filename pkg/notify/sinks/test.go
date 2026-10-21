@@ -2,6 +2,7 @@ package sinks
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"opendustpan.org/opendustpan/internal/ident"
@@ -218,6 +219,12 @@ func (s *Service) checkAddress(sink notify.Sink, to string) error {
 
 	host, err := hostOf(to)
 	if err != nil {
+		// The test is a write-side check: a host that fails the allowlist is
+		// a refused address, as one that the egress rules refuse.
+		if !errors.Is(err, egress.ErrRefused) {
+			err = fmt.Errorf("%w: %w", egress.ErrRefused, err)
+		}
+
 		return fmt.Errorf("check the address: %w", err)
 	}
 
