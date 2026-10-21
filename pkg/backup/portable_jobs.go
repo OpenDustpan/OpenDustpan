@@ -60,5 +60,41 @@ func portableJobTables() []PortableTable {
 				{Name: "at_ms", Kind: KindTime},
 			},
 		},
+		{
+			Table:   "job_plans",
+			OrderBy: []string{"id"},
+			Columns: []Column{
+				{Name: "id", Kind: KindText},
+				{Name: portColNamespaceID, Kind: KindText},
+				{Name: portColJobID, Kind: KindText},
+				{Name: portColBody, Kind: KindText},
+				{Name: portColCreatedAtMs, Kind: KindTime},
+			},
+		},
+		{
+			Table:   "job_logs",
+			OrderBy: []string{"id"},
+			Columns: []Column{
+				{Name: "id", Kind: KindText},
+				{Name: portColNamespaceID, Kind: KindText},
+				{Name: portColJobID, Kind: KindText},
+				{Name: "phase", Kind: KindInteger},
+				{Name: "step", Kind: KindText},
+				{Name: "token", Kind: KindInteger},
+				{Name: portColCreatedAtMs, Kind: KindTime},
+			},
+		},
+		{
+			Table:   "job_log_chunks",
+			OrderBy: []string{"log_id", "seq"},
+			Columns: []Column{
+				{Name: "log_id", Kind: KindText},
+				{Name: "seq", Kind: KindInteger},
+				{Name: portColNamespaceID, Kind: KindText},
+				{Name: "sha256", Kind: KindText},
+				{Name: "size", Kind: KindInteger},
+				{Name: "confirmed", Kind: KindInteger},
+			},
+		},
 	}
 }

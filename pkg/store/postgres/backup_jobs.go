@@ -42,5 +42,20 @@ func pgCopyJobTables() []pgCopyTable {
 			columns: []string{pgColUnitID, pgColNamespaceID, "version_id", "commit_id", pgColJobID, pgColAtMs},
 			orderBy: []string{pgColUnitID},
 		},
+		{
+			table:   "job_plans",
+			columns: []string{"id", pgColNamespaceID, pgColJobID, "body", pgColCreatedAtMs},
+			orderBy: []string{"id"},
+		},
+		{
+			table:   "job_logs",
+			columns: []string{"id", pgColNamespaceID, pgColJobID, "phase", "step", "token", pgColCreatedAtMs},
+			orderBy: []string{"id"},
+		},
+		{
+			table:   "job_log_chunks",
+			columns: []string{"log_id", "seq", pgColNamespaceID, "sha256", "size", "confirmed"},
+			orderBy: []string{"log_id", "seq"},
+		},
 	}
 }

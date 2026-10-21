@@ -37,6 +37,7 @@ const (
 	portColDeletedName   = "deleted_name"
 	portColTool          = "tool"
 	portColUnitID        = "unit_id"
+	portColJobID         = "job_id"
 	portColPrincipalID   = "principal_id"
 	portColDigest        = "digest"
 	portColSink          = "sink"

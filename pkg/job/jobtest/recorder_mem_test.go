@@ -4,14 +4,19 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/blob"
+	"opendustpan.org/opendustpan/pkg/blob/blobfault"
 	blobfs "opendustpan.org/opendustpan/pkg/blob/fs"
 	"opendustpan.org/opendustpan/pkg/durable"
+	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/job"
 	"opendustpan.org/opendustpan/pkg/job/jobtest"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -480,4 +485,233 @@ func (m *memDB) Log(_ context.Context, ns namespace.Name, version string) (job.A
 	}
 
 	return job.ArtifactRecord{}, job.ErrNotFound
+}
+
+// errInjected is the failure that the fault tests inject into the blob store.
+var errInjected = errors.New("injected blob failure")
+
+// newFaultyHarness is newMemRecorderHarness with faults in the blob store. The
+// first Put of a log or a plan stores the item key blob, so the call numbers of
+// the faults count that one too.
+func newFaultyHarness(t *testing.T, faults ...blobfault.Fault) (jobtest.RecorderHarness, *blobfault.Store) {
+	t.Helper()
+
+	db := newMemDB()
+
+	inner, err := blobfs.Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("open blob store: %v", err)
+	}
+
+	t.Cleanup(func() { _ = inner.Close() }) //nolint:errcheck // Test cleanup.
+
+	faulty, err := blobfault.New(inner, faults...)
+	if err != nil {
+		t.Fatalf("blobfault: %v", err)
+	}
+
+	keys := &memKeyIndex{db: db, mu: sync.Mutex{}, keys: map[secret.ItemRef]secret.ItemKey{}}
+
+	return buildRecorderHarness(t, db, keys, faulty), faulty
+}
+
+// planAssignment stores a plan job on a fresh unit and claims its plan phase.
+func planAssignment(t *testing.T, h jobtest.RecorderHarness) job.Assignment {
+	t.Helper()
+
+	fence, err := h.Domain.CreateNamespace(t.Context(), "acme")
+	if err != nil {
+		t.Fatalf("CreateNamespace = %v", err)
+	}
+
+	unit, err := h.Domain.CreateUnit(t.Context(), fence, "opentofu", "network")
+	if err != nil {
+		t.Fatalf("CreateUnit = %v", err)
+	}
+
+	j := newPlanJob(unit)
+
+	stored, created, err := h.Jobs.Create(t.Context(), *j, &durable.StartRequest{
+		Key: job.PhaseKey(j.ID, 0), Kind: job.RunnerKind(j.Spec.Pool), Version: 1, Input: nil,
+	}, fence, nil)
+	if err != nil || !created {
+		t.Fatalf("Create = %v, %v", created, err)
+	}
+
+	a, err := h.Claimer.Claim(t.Context(), job.ClaimRequest{
+		Owner: "runner-1", Kinds: []durable.Kind{job.RunnerKind(stored.Spec.Pool)}, MaxVersions: nil,
+		Lease: time.Minute,
+	})
+	if err != nil {
+		t.Fatalf("Claim = %v", err)
+	}
+
+	return a
+}
+
+// newPlanJob returns a queued plan job on unit with one step called plan.
+func newPlanJob(unit identity.Object) *job.Job {
+	phases, _ := job.DefaultPhases(job.ExecutorRunner, job.OperationPlan)
+
+	j := job.Job{
+		ID: job.ID(ident.NewID(job.IDPrefix)), State: job.StateQueued, Wait: job.WaitNone, StartedBy: "al",
+		Source: job.SourceAPI, Verification: job.VerificationNone,
+		Spec: job.Spec{
+			Unit: unit, Operation: job.OperationPlan, Executor: job.ExecutorRunner,
+			Steps: []job.Step{{
+				Name: "plan", Role: job.RoleTool, Phase: job.PhasePlan, Args: []string{"tofu", "plan"},
+			}},
+			Pool: "rpl-default", Profile: "prf-default",
+		},
+		Phases: make([]job.Phase, len(phases)),
+	}
+
+	for i, k := range phases {
+		j.Phases[i].Kind = k
+	}
+
+	return &j
+}
+
+// TestRecorderBlobFailures proves the crash windows between the blob and the
+// record: a failed write of a blob leaves no record that names it, and a retry
+// stores the blob and the record.
+func TestRecorderBlobFailures(t *testing.T) {
+	t.Parallel()
+
+	t.Run("a chunk whose blob failed is reserved, and its retry stores it", func(t *testing.T) {
+		t.Parallel()
+
+		// Put 1 is the item key blob, put 2 is the blob of chunk 0.
+		h, _ := newFaultyHarness(t, blobfault.Fault{Method: "Put", Call: 2, Kind: blobfault.KindFail, Err: errInjected})
+		a := planAssignment(t, h)
+
+		if err := h.Recorder.BeginStep(t.Context(), a.Claim, "plan"); err != nil {
+			t.Fatalf("BeginStep = %v", err)
+		}
+
+		err := h.Recorder.AppendLog(t.Context(), a.Claim, "plan", 0, strings.NewReader("line\n"))
+		if !errors.Is(err, errInjected) {
+			t.Fatalf("AppendLog with a failing blob store = %v, want the injected failure", err)
+		}
+
+		got, _ := h.Jobs.Get(t.Context(), a.Claim.Job)
+		log := got.Phases[0].Steps[0].Log
+
+		if log == nil || log.Chunks != 0 {
+			t.Fatalf("log after the failure = %+v, want a log with no counted chunk", log)
+		}
+
+		// The chunk is reserved: another content for the number is a conflict.
+		err = h.Recorder.AppendLog(t.Context(), a.Claim, "plan", 0, strings.NewReader("other\n"))
+		if !errors.Is(err, job.ErrConflict) {
+			t.Fatalf("AppendLog of another content for a reserved chunk = %v, want ErrConflict", err)
+		}
+
+		// The same content goes in.
+		if err = h.Recorder.AppendLog(t.Context(), a.Claim, "plan", 0, strings.NewReader("line\n")); err != nil {
+			t.Fatalf("retry of the chunk = %v", err)
+		}
+
+		if err = h.Recorder.EndStep(t.Context(), a.Claim, job.StepRecord{
+			Name: "plan", Token: a.Claim.Claim.Token,
+		}); err != nil {
+			t.Fatalf("EndStep = %v", err)
+		}
+
+		got, _ = h.Jobs.Get(t.Context(), a.Claim.Job)
+
+		rc, err := h.Reader.OpenLog(t.Context(), "acme", got.Phases[0].Steps[0].Log.ID)
+		if err != nil {
+			t.Fatalf("OpenLog = %v", err)
+		}
+
+		data, err := io.ReadAll(rc)
+		_ = rc.Close() //nolint:errcheck // Test read.
+
+		if err != nil || string(data) != "line\n" {
+			t.Fatalf("log = %q, %v; want the retried chunk", data, err)
+		}
+	})
+
+	t.Run("a plan whose second part failed leaves no blob and no plan", func(t *testing.T) {
+		t.Parallel()
+
+		// Put 1 is the item key blob, put 2 and 3 are the two parts.
+		h, store := newFaultyHarness(t, blobfault.Fault{Method: "Put", Call: 3, Kind: blobfault.KindFail, Err: errInjected})
+		a := planAssignment(t, h)
+
+		parts := []job.PlanUpload{
+			{Kind: job.OutputPlanDisplay, Body: strings.NewReader("display")},
+			{Kind: job.OutputPlanApply, Body: strings.NewReader("apply")},
+		}
+
+		if _, err := h.Recorder.PutPlan(t.Context(), a.Claim, parts); !errors.Is(err, errInjected) {
+			t.Fatalf("PutPlan with a failing blob store = %v, want the injected failure", err)
+		}
+
+		got, _ := h.Jobs.Get(t.Context(), a.Claim.Job)
+		if got.Phases[0].Plan != nil {
+			t.Fatalf("plan after the failure = %+v, want none", got.Phases[0].Plan)
+		}
+
+		for _, o := range listJobBlobs(t, h, store) {
+			t.Errorf("blob %s stays after a failed plan", o)
+		}
+
+		// The phase is not used up: the whole plan goes in on a retry.
+		parts = []job.PlanUpload{
+			{Kind: job.OutputPlanDisplay, Body: strings.NewReader("display")},
+			{Kind: job.OutputPlanApply, Body: strings.NewReader("apply")},
+		}
+
+		if _, err := h.Recorder.PutPlan(t.Context(), a.Claim, parts); err != nil {
+			t.Fatalf("PutPlan retry = %v", err)
+		}
+	})
+
+	t.Run("a plan whose store write failed leaves no part blob", func(t *testing.T) {
+		t.Parallel()
+
+		h, store := newFaultyHarness(t)
+		a := planAssignment(t, h)
+
+		// The claim ends before the plan, so the store refuses the plan after the
+		// parts are stored.
+		if err := h.Claimer.Release(t.Context(), a.Claim); err != nil {
+			t.Fatalf("Release = %v", err)
+		}
+
+		parts := []job.PlanUpload{{Kind: job.OutputPlanDisplay, Body: strings.NewReader("display")}}
+
+		if _, err := h.Recorder.PutPlan(t.Context(), a.Claim, parts); !errors.Is(err, job.ErrClaimLost) {
+			t.Fatalf("PutPlan after the release = %v, want ErrClaimLost", err)
+		}
+
+		for _, o := range listJobBlobs(t, h, store) {
+			t.Errorf("blob %s stays after a refused plan", o)
+		}
+	})
+}
+
+// listJobBlobs returns the keys of the plan and log blobs in the store.
+func listJobBlobs(t *testing.T, h jobtest.RecorderHarness, _ *blobfault.Store) []string {
+	t.Helper()
+
+	n, err := h.Namespaces.GetNamespace(t.Context(), "acme")
+	if err != nil {
+		t.Fatalf("GetNamespace = %v", err)
+	}
+
+	objects, err := h.Blobs.List(t.Context(), "namespaces/"+n.ID.String()+"/job/")
+	if err != nil {
+		t.Fatalf("List = %v", err)
+	}
+
+	keys := make([]string, 0, len(objects))
+	for _, o := range objects {
+		keys = append(keys, o.Key.String())
+	}
+
+	return keys
 }

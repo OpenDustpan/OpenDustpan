@@ -25,6 +25,7 @@ import (
 type JobStore interface {
 	job.Store
 	job.FreezeStore
+	job.RecordStore
 }
 
 // Jobs returns the stores of jobs and change freezes. Each write checks the
@@ -571,6 +572,107 @@ func (t *jobTx) AppendAudit(ctx context.Context, entries []audit.Entry) error {
 		if _, err := appendAuditEntry(ctx, t.q, entries[i]); err != nil {
 			return fmt.Errorf("append audit entry: %w", err)
 		}
+	}
+
+	return nil
+}
+
+// InsertPlan implements jobstore.Tx.
+func (t *jobTx) InsertPlan(ctx context.Context, ns namespace.Name, r jobstore.PlanRow) error {
+	err := t.q.InsertJobPlan(ctx, db.InsertJobPlanParams{
+		ID: r.ID, Namespace: ns.String(), JobID: string(r.Job), Body: r.Body, CreatedAtMs: r.CreatedMs,
+	})
+	if err != nil {
+		return jobIndexError("insert plan", err)
+	}
+
+	return nil
+}
+
+// Plan implements jobstore.Tx.
+func (t *jobTx) Plan(ctx context.Context, ns namespace.Name, id string) (jobstore.PlanRow, bool, error) {
+	row, err := t.q.GetJobPlan(ctx, db.GetJobPlanParams{Namespace: ns.String(), ID: id})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return jobstore.PlanRow{ID: "", Job: "", Body: "", CreatedMs: 0}, false, nil
+	}
+
+	if err != nil {
+		return jobstore.PlanRow{ID: "", Job: "", Body: "", CreatedMs: 0}, false, fmt.Errorf("select plan: %w", err)
+	}
+
+	return jobstore.PlanRow{ID: row.ID, Job: job.ID(row.JobID), Body: row.Body, CreatedMs: row.CreatedAtMs}, true, nil
+}
+
+// InsertLog implements jobstore.Tx.
+func (t *jobTx) InsertLog(ctx context.Context, ns namespace.Name, r jobstore.LogRow) error {
+	err := t.q.InsertJobLog(ctx, db.InsertJobLogParams{
+		ID: r.ID, Namespace: ns.String(), JobID: string(r.Job), Phase: int64(r.Phase), Step: r.Step, Token: r.Token,
+		CreatedAtMs: r.CreatedMs,
+	})
+	if err != nil {
+		return jobIndexError("insert log", err)
+	}
+
+	return nil
+}
+
+// Log implements jobstore.Tx.
+func (t *jobTx) Log(ctx context.Context, ns namespace.Name, id string) (jobstore.LogRow, bool, error) {
+	none := jobstore.LogRow{ID: "", Job: "", Phase: 0, Step: "", Token: 0, CreatedMs: 0}
+
+	row, err := t.q.GetJobLog(ctx, db.GetJobLogParams{Namespace: ns.String(), ID: id})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return none, false, nil
+	}
+
+	if err != nil {
+		return none, false, fmt.Errorf("select log: %w", err)
+	}
+
+	return jobstore.LogRow{
+		ID: row.ID, Job: job.ID(row.JobID), Phase: int(row.Phase), Step: row.Step, Token: row.Token,
+		CreatedMs: row.CreatedAtMs,
+	}, true, nil
+}
+
+// Chunk implements jobstore.Tx.
+func (t *jobTx) Chunk(ctx context.Context, ns namespace.Name, log string, seq int) (job.ChunkRow, bool, error) {
+	row, err := t.q.GetJobLogChunk(ctx, db.GetJobLogChunkParams{Namespace: ns.String(), LogID: log, Seq: int64(seq)})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return job.ChunkRow{SHA256: "", Size: 0, Confirmed: false}, false, nil
+	}
+
+	if err != nil {
+		return job.ChunkRow{SHA256: "", Size: 0, Confirmed: false}, false, fmt.Errorf("select log chunk: %w", err)
+	}
+
+	return job.ChunkRow{SHA256: row.Sha256, Size: row.Size, Confirmed: row.Confirmed == 1}, true, nil
+}
+
+// InsertChunk implements jobstore.Tx.
+func (t *jobTx) InsertChunk(ctx context.Context, ns namespace.Name, log string, seq int, c job.ChunkRow) error {
+	err := t.q.InsertJobLogChunk(ctx, db.InsertJobLogChunkParams{
+		LogID: log, Seq: int64(seq), Namespace: ns.String(), Sha256: c.SHA256, Size: c.Size,
+	})
+	if err != nil {
+		return fmt.Errorf("insert log chunk: %w", err)
+	}
+
+	return nil
+}
+
+// ConfirmChunk implements jobstore.Tx.
+func (t *jobTx) ConfirmChunk(ctx context.Context, ns namespace.Name, log string, seq int) error {
+	n, err := t.q.ConfirmJobLogChunk(
+		ctx,
+		db.ConfirmJobLogChunkParams{LogID: log, Seq: int64(seq), Namespace: ns.String()},
+	)
+	if err != nil {
+		return fmt.Errorf("confirm log chunk: %w", err)
+	}
+
+	if n != 1 {
+		return fmt.Errorf("%w: chunk %d of log %s is not reserved", job.ErrInvalid, seq, log)
 	}
 
 	return nil
