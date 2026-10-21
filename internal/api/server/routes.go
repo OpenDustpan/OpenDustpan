@@ -102,6 +102,7 @@ func (h *Handler) buildRoutes() []Route {
 	routes = append(routes, h.signInRoutes()...)
 	routes = append(routes, h.devSignInRoutes()...)
 	routes = append(routes, h.capabilitiesRoutes()...)
+	routes = append(routes, h.openAPIRoutes()...)
 	routes = append(routes, h.signInProviderRoutes()...)
 	routes = append(routes, h.preferencesRoutes()...)
 

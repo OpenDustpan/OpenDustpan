@@ -104,7 +104,7 @@ type Handler struct {
 	// each refusal.
 	guard  *refusal.Recorder
 	gate   *bodygate.Gate
-	mux    *http.ServeMux
+	mux    *patternMux
 	routes []Route
 	// onAuditFailure counts a download whose audit entry was lost. It may be nil.
 	onAuditFailure func()
@@ -155,7 +155,7 @@ func NewHandler(cfg Config) (*Handler, error) {
 			cfg.OnAuditFailure).WithLimiter(cfg.DenialLimiter).
 			WithSurface("tofu-http"),
 		gate:   cfg.Gate,
-		mux:    http.NewServeMux(),
+		mux:    newPatternMux(),
 		routes: nil,
 
 		onAuditFailure: cfg.OnAuditFailure,
@@ -189,6 +189,12 @@ func (h *Handler) Routes() []Route {
 	}
 
 	return out
+}
+
+// RegisteredPatterns returns a copy of every ServeMux pattern the handler
+// serves, in registration order.
+func (h *Handler) RegisteredPatterns() []string {
+	return h.mux.Patterns()
 }
 
 // buildRoutes returns the route table. It is the single source of the patterns
