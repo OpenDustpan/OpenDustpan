@@ -3751,3 +3751,60 @@ DELETE FROM notification_sink_secrets
 WHERE notification_sink_secrets.sink_id = sqlc.arg(sink_id)
   AND notification_sink_secrets.namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace));
 
+-- name: UpsertTrigger :execrows
+-- The caller checks the fence in the same transaction. A row that exists keeps
+-- its unit, its kind and its creation time.
+INSERT INTO triggers (
+    namespace_id, id, unit_tool, unit_id, kind, preset, cron, source_namespace, source_tool, source_unit_id, enabled,
+    last_saver_subject, created_at_ms, updated_at_ms
+)
+SELECT
+    n.id, sqlc.arg(id), sqlc.arg(unit_tool), sqlc.arg(unit_id), sqlc.arg(kind), sqlc.arg(preset), sqlc.arg(cron),
+    sqlc.arg(source_namespace), sqlc.arg(source_tool), sqlc.arg(source_unit_id), sqlc.arg(enabled),
+    sqlc.arg(last_saver_subject), sqlc.arg(created_at_ms), sqlc.arg(updated_at_ms)
+FROM namespaces AS n
+WHERE n.name = sqlc.arg(namespace)
+ON CONFLICT (namespace_id, id) DO UPDATE SET
+    preset = excluded.preset, cron = excluded.cron, source_namespace = excluded.source_namespace,
+    source_tool = excluded.source_tool, source_unit_id = excluded.source_unit_id, enabled = excluded.enabled,
+    last_saver_subject = excluded.last_saver_subject,
+    updated_at_ms = MAX(triggers.updated_at_ms, excluded.updated_at_ms);
+
+-- name: GetTrigger :one
+SELECT n.name AS namespace, t.id, t.unit_tool, t.unit_id, t.kind, t.preset, t.cron, t.source_namespace,
+    t.source_tool, t.source_unit_id, t.enabled, t.last_saver_subject, t.created_at_ms, t.updated_at_ms
+FROM triggers AS t
+JOIN namespaces AS n ON n.id = t.namespace_id
+WHERE n.name = sqlc.arg(namespace) AND t.id = sqlc.arg(id);
+
+-- name: ListTriggersOfUnit :many
+SELECT n.name AS namespace, t.id, t.unit_tool, t.unit_id, t.kind, t.preset, t.cron, t.source_namespace,
+    t.source_tool, t.source_unit_id, t.enabled, t.last_saver_subject, t.created_at_ms, t.updated_at_ms
+FROM triggers AS t
+JOIN namespaces AS n ON n.id = t.namespace_id
+WHERE n.name = sqlc.arg(namespace) AND t.unit_tool = sqlc.arg(unit_tool) AND t.unit_id = sqlc.arg(unit_id)
+ORDER BY t.id;
+
+-- name: ListTriggerFollowers :many
+SELECT n.name AS namespace, t.id, t.unit_tool, t.unit_id, t.kind, t.preset, t.cron, t.source_namespace,
+    t.source_tool, t.source_unit_id, t.enabled, t.last_saver_subject, t.created_at_ms, t.updated_at_ms
+FROM triggers AS t
+JOIN namespaces AS n ON n.id = t.namespace_id
+WHERE n.name = sqlc.arg(namespace) AND t.kind = 'follows' AND t.enabled = 1
+  AND t.source_namespace = sqlc.arg(source_namespace) AND t.source_tool = sqlc.arg(source_tool)
+  AND t.source_unit_id = sqlc.arg(source_unit_id)
+ORDER BY t.id;
+
+-- name: ListEnabledFollowTriggers :many
+SELECT n.name AS namespace, t.id, t.unit_tool, t.unit_id, t.kind, t.preset, t.cron, t.source_namespace,
+    t.source_tool, t.source_unit_id, t.enabled, t.last_saver_subject, t.created_at_ms, t.updated_at_ms
+FROM triggers AS t
+JOIN namespaces AS n ON n.id = t.namespace_id
+WHERE n.name = sqlc.arg(namespace) AND t.kind = 'follows' AND t.enabled = 1
+ORDER BY t.id;
+
+-- name: DeleteTrigger :execrows
+DELETE FROM triggers
+WHERE triggers.id = sqlc.arg(id)
+  AND triggers.namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace));
+

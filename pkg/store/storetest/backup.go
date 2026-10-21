@@ -283,6 +283,7 @@ func seedBackupStore(t *testing.T, s BackupStore) backupSeed {
 	seedBackupSavedViews(t, s, acme)
 	seedBackupGitHost(t, s, acme)
 	seedBackupSinks(t, s, acme)
+	seedBackupTriggers(t, s, acme)
 
 	return backupSeed{
 		acme:       acme,
