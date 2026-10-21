@@ -6,6 +6,7 @@ import (
 	"errors"
 
 	"opendustpan.org/opendustpan/internal/sessionauth"
+	"opendustpan.org/opendustpan/pkg/gate"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/ipallow"
 )
@@ -17,6 +18,11 @@ const (
 	// AccessIPNotAllowed is a request from an address outside the IP
 	// allowlist of the namespace.
 	AccessIPNotAllowed = "access.ip-not-allowed"
+	// GateLimited is a request that an access limit forbids.
+	GateLimited = "gate.limited"
+	// GateRuleFailed is a request that a gate or an access limit refused
+	// because it failed to evaluate.
+	GateRuleFailed = "gate.rule-failed"
 	// SessionCSRF is a request with the session cookie and a missing or wrong
 	// CSRF header.
 	SessionCSRF = "session.csrf"
@@ -56,6 +62,12 @@ func Forbidden(err error) string {
 		return SessionOtherSite
 	case errors.Is(err, ipallow.ErrAddressNotAllowed):
 		return AccessIPNotAllowed
+	case errors.Is(err, gate.ErrLimited):
+		// The limited authorizer wraps this refusal in identity.ErrDenied, so
+		// it comes before the missing permission.
+		return GateLimited
+	case errors.Is(err, gate.ErrRuleFailed):
+		return GateRuleFailed
 	case errors.Is(err, identity.ErrDenied):
 		return AccessDenied
 	default:
