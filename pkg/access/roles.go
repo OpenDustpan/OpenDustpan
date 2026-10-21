@@ -122,6 +122,7 @@ func maintainerActions() []identity.Action {
 		identity.ActionCollectionUpdate,
 		identity.ActionCollectionDelete,
 		identity.ActionCollectionCreateUnit,
+		identity.ActionNamespaceReadGitHostConnections,
 	)
 }
 

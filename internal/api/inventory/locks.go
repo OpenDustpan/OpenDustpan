@@ -111,6 +111,12 @@ type lockEntryDocument struct {
 	Since  string `json:"since"`
 }
 
+// lockRequest is the body of a lock. The field is a pointer so that a missing
+// reason differs from an empty one.
+type lockRequest struct {
+	Reason *string `dustpan:"required" json:"reason"`
+}
+
 // manualLockEntry is the manual lock flag of a unit in the unit list: the lock
 // that covers the unit now, with the object that holds it.
 //
@@ -302,9 +308,7 @@ func readLockReason(w http.ResponseWriter, r *http.Request) (string, error) {
 	dec := json.NewDecoder(bytes.NewReader(body))
 	dec.DisallowUnknownFields()
 
-	var in struct {
-		Reason *string `json:"reason"`
-	}
+	var in lockRequest
 
 	if err := dec.Decode(&in); err != nil {
 		return "", errLockBody

@@ -169,8 +169,8 @@ type listViewsResponse struct {
 // createViewBody is the body of a create. The fields are pointers so that a
 // missing name differs from an empty one.
 type createViewBody struct {
-	Name  *string    `json:"name"`
-	Query *viewQuery `json:"query"`
+	Name  *string    `dustpan:"required" json:"name"`
+	Query *viewQuery `dustpan:"optional" json:"query"`
 }
 
 func toViewDocument(v savedview.View) viewDocument {

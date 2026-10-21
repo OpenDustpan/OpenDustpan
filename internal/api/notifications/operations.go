@@ -15,13 +15,34 @@ const tagSinks = "notification-sinks"
 //
 //nolint:gochecknoglobals // A fixed table; Go has no constant maps.
 var operationLabels = map[string]apidesc.Label{
-	apidesc.Pattern(http.MethodGet, sinksPath):   apidesc.Name("listNotificationSinks", tagSinks),
-	apidesc.Pattern(http.MethodPost, sinksPath):  apidesc.Name("createNotificationSink", tagSinks),
-	apidesc.Pattern(http.MethodGet, sinkPath):    apidesc.Name("getNotificationSink", tagSinks),
-	apidesc.Pattern(http.MethodPut, sinkPath):    apidesc.Name("replaceNotificationSink", tagSinks),
-	apidesc.Pattern(http.MethodDelete, sinkPath): apidesc.Name("deleteNotificationSink", tagSinks),
-	apidesc.Pattern(http.MethodPost, testPath):   apidesc.Name("testNotificationSink", tagSinks),
+	apidesc.Pattern(http.MethodGet, sinksPath): apidesc.Name("listNotificationSinks", tagSinks).
+		On(apidesc.KindNamespace).
+		WithBodies(apidesc.NoBody, apidesc.Typed[listResponse](
+			"ListNotificationSinksResponse", apidesc.Named[sinkDocument]("NotificationSink"),
+		)),
+	apidesc.Pattern(http.MethodPost, sinksPath): apidesc.Name("createNotificationSink", tagSinks).
+		On(apidesc.KindNamespace).
+		WithBodies(apidesc.Typed[createBody]("CreateNotificationSinkRequest"), apidesc.Typed[createdDocument](
+			"CreatedNotificationSink",
+		)),
+	apidesc.Pattern(http.MethodGet, sinkPath): apidesc.Name("getNotificationSink", tagSinks).
+		On(apidesc.KindNamespace).
+		WithBodies(apidesc.NoBody, sinkBody),
+	apidesc.Pattern(http.MethodPut, sinkPath): apidesc.Name("replaceNotificationSink", tagSinks).
+		On(apidesc.KindNamespace).
+		WithBodies(apidesc.Typed[replaceBody]("ReplaceNotificationSinkRequest"), sinkBody),
+	apidesc.Pattern(http.MethodDelete, sinkPath): apidesc.Name("deleteNotificationSink", tagSinks).
+		On(apidesc.KindNamespace).
+		WithBodies(apidesc.NoBody, apidesc.NoBody),
+	apidesc.Pattern(http.MethodPost, testPath): apidesc.Name("testNotificationSink", tagSinks).
+		On(apidesc.KindNamespace).
+		WithBodies(apidesc.NoBody, apidesc.Typed[testDocument]("NotificationSinkTest")),
 }
+
+// sinkBody is the body that the get and the replace routes answer with.
+//
+//nolint:gochecknoglobals // A fixed value; Go has no constant structs.
+var sinkBody = apidesc.Typed[sinkDocument]("NotificationSink")
 
 // Operations returns the routes of this adapter that the description of the
 // tool-neutral REST API holds: the routes under apidesc.Prefix.
@@ -35,8 +56,12 @@ func (h *Handler) Operations() []apidesc.Operation {
 		}
 
 		rows = append(rows, apidesc.Row{
-			Method: route.Method, Path: route.Path, Actions: actions, Public: route.Scope == ScopePublic,
-			IdempotencyKey: route.IdempotencyKey,
+			Method:           route.Method,
+			Path:             route.Path,
+			Actions:          actions,
+			NamespaceActions: nil,
+			Public:           route.Scope == ScopePublic,
+			IdempotencyKey:   route.IdempotencyKey,
 		})
 	}
 

@@ -9,6 +9,8 @@ package apidesc
 import (
 	"errors"
 	"fmt"
+	"maps"
+	"net/http"
 	"regexp"
 	"slices"
 	"strings"
@@ -27,10 +29,9 @@ var ErrInvalidOperation = errors.New("apidesc: operation is not valid")
 // both reduce to a list of operations, so Diff can compare them.
 //
 // The fields of Operation are the contract of the drift check: Diff compares
-// each of them. A later field that only describes a body, for example a
-// schema, is not part of this contract. The writer holds it, and the golden
-// file of the document checks it, so Diff does not change when a body gets a
-// schema.
+// each of them, except Bodies. A body type only describes a
+// body. The writer holds it, and the golden file of the document checks it,
+// so Diff does not change when a body gets a schema.
 type Operation struct {
 	// ID is the operationId of the description, in lowerCamelCase, for
 	// example listUnits. A generator names an SDK method from it, so an ID
@@ -47,6 +48,10 @@ type Operation struct {
 	// Actions lists the actions that the route declares, for example
 	// unit:read. A public route has none.
 	Actions []string
+	// ActionObjects gives the kind of the object of each action, for example
+	// collection for unit:lock on a collection. It has one entry for each
+	// action, and each kind is one of the constants Kind...
+	ActionObjects map[string]string
 	// Public is true for a route that needs no sign-in.
 	Public bool
 	// IdempotencyKey is true for a route that takes the Idempotency-Key
@@ -61,6 +66,9 @@ type Operation struct {
 	IfMatchRequired bool
 	// ETag is true for a route whose answer holds the ETag header.
 	ETag bool
+	// Bodies names the body of the request and the body of the success
+	// answer. It is nil for a route that names none, and Build refuses that.
+	Bodies *Bodies
 }
 
 // Validate returns ErrInvalidOperation, wrapped, when the operation breaks an
@@ -96,13 +104,43 @@ func (o Operation) Validate() error {
 		return err
 	}
 
-	return validateActions(o)
+	if err := validateActions(o); err != nil {
+		return err
+	}
+
+	return validateObjects(o)
+}
+
+// validateObjects refuses an action without an object kind, an object kind
+// for something that is not an action of the route, and a kind outside the
+// allowlist.
+func validateObjects(o Operation) error {
+	for _, action := range o.Actions {
+		kind, ok := o.ActionObjects[action]
+		if !ok {
+			return fmt.Errorf(
+				"%w: action %q of %s %s names no object kind", ErrInvalidOperation, action, o.Method, o.Path,
+			)
+		}
+
+		if !validObjectKind(kind) {
+			return fmt.Errorf("%w: object kind %q of action %q is not allowed", ErrInvalidOperation, kind, action)
+		}
+	}
+
+	if len(o.ActionObjects) != len(o.Actions) {
+		return fmt.Errorf(
+			"%w: %s %s names an object kind for an action it does not declare", ErrInvalidOperation, o.Method, o.Path,
+		)
+	}
+
+	return nil
 }
 
 // allowedMethod reports whether the method is on the allowlist.
 func allowedMethod(method string) bool {
 	switch method {
-	case "GET", "HEAD", "POST", "PUT", "PATCH", "DELETE":
+	case http.MethodGet, http.MethodHead, http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete:
 		return true
 	default:
 		return false
@@ -271,8 +309,8 @@ type Drift struct {
 	// Unrouted holds the keys of the operations that no route serves.
 	Unrouted []string
 	// Mismatch holds the keys of the operations that exist in both lists but
-	// differ in their ID, their path, their tags, their actions, their public
-	// flag or their header flags.
+	// differ in their ID, their path, their tags, their actions, the object
+	// kinds of their actions, their public flag or their header flags.
 	Mismatch []string
 }
 
@@ -338,7 +376,8 @@ func sameOperation(a, b Operation) bool {
 		a.IfMatchRequired == b.IfMatchRequired &&
 		a.ETag == b.ETag &&
 		slices.Equal(a.Tags, b.Tags) &&
-		sameActions(a.Actions, b.Actions)
+		sameActions(a.Actions, b.Actions) &&
+		maps.Equal(a.ActionObjects, b.ActionObjects)
 }
 
 // index maps the key of each operation to the operation. It refuses an ID
