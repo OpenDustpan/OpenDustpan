@@ -219,6 +219,7 @@ func TestRestoreVersionOfAnotherWorkspace(t *testing.T) {
 	t.Parallel()
 
 	handler, err := tfe.NewHandler(tfe.Config{
+		Registry:       nil,
 		Authenticator:  tokenAuthenticator{},
 		Authorizer:     allowAll(),
 		AddressGate:    nil,
@@ -296,6 +297,7 @@ func TestRestoreLockedByOther(t *testing.T) {
 	t.Parallel()
 
 	handler, err := tfe.NewHandler(tfe.Config{
+		Registry:       nil,
 		Authenticator:  tokenAuthenticator{},
 		Authorizer:     allowAll(),
 		AddressGate:    nil,

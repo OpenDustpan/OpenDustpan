@@ -9,6 +9,7 @@ package registrytest
 
 import (
 	"errors"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -25,6 +26,8 @@ const (
 )
 
 const (
+	protocolV5  = "5.0"
+	protocolV6  = "6.0"
 	publisher   = "user-1"
 	v100        = "1.0.0"
 	archiveSize = 10
@@ -33,15 +36,22 @@ const (
 	sumC        = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
 	sumD        = "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
 	fingerprint = "ABABABABABABABABABABABABABABABABABABABAB"
+	// actionPublish is the action of the audit entry of a publish.
+	actionPublish = "registry:publish"
 	// fixtureT is the epoch of the fixtures, in Unix milliseconds.
 	fixtureT = 1_800_000_000_000
 )
 
 // Harness is one fresh, empty store for one subtest. Namespace makes the
 // namespace name and returns its current fence. Entries returns the audit
-// entries that the store wrote for the namespace, oldest first.
+// entries that the store wrote for the namespace, oldest first. The entries
+// of the key store are in it too: the suite counts only the publish entries.
 type Harness struct {
-	Store     registry.Store
+	Store registry.Store
+	// Keys is the key store of the same database. The suite registers the
+	// signing key of a release in it before the publish, because the store
+	// checks the key in the transaction of the publish.
+	Keys      registry.KeyStore
 	Namespace func(t *testing.T, name namespace.Name) namespace.Fence
 	Entries   func(t *testing.T, name namespace.Name) []audit.Entry
 }
@@ -76,6 +86,7 @@ func provider(name, version string) registry.Release {
 		SignatureFile:   "terraform-provider-" + name + "_" + version + "_SHA256SUMS.sig",
 		SignatureSHA256: sumB,
 		KeyFingerprint:  fingerprint,
+		Protocols:       []string{protocolV5},
 		PublishedBy:     publisher,
 		PublishedAt:     time.UnixMilli(fixtureT).UTC(),
 		Archives: []registry.Archive{{
@@ -97,25 +108,26 @@ func stale(f namespace.Fence) namespace.Fence {
 	return namespace.Fence{Namespace: f.Namespace, FailoverVersion: f.FailoverVersion + 1}
 }
 
-// entry returns the audit entry of a publish into ns.
+// entry returns the audit entry of a publish into ns. It passes the checks of
+// a real audit store: an object, a channel, a kind and an outcome.
 func entry(ns namespace.Name) audit.Entry {
 	return audit.Entry{
 		At:            time.UnixMilli(fixtureT).UTC(),
 		Namespace:     ns,
 		Subject:       "user:ada",
-		Action:        "registry:publish",
+		Action:        actionPublish,
 		IDPSubject:    "",
 		TokenID:       "",
-		Object:        "",
+		Object:        ns.String(),
 		Version:       "",
 		ValuePath:     "",
 		ValueCount:    nil,
 		Changes:       nil,
-		SourceIP:      "",
+		SourceIP:      "192.0.2.1",
 		UserAgent:     "",
-		Channel:       "",
-		Kind:          "",
-		Outcome:       "",
+		Channel:       audit.ChannelAPI,
+		Kind:          audit.KindChange,
+		Outcome:       audit.OutcomeSuccess,
 		RequestID:     "",
 		ObjectID:      "",
 		PrevHash:      "",
@@ -126,6 +138,40 @@ func entry(ns namespace.Name) audit.Entry {
 		PrincipalKind: "",
 		JobID:         "",
 	}
+}
+
+// homed makes the namespace name and registers the signing key of the fixture
+// releases in it. It returns the fence of the namespace.
+func homed(t *testing.T, h Harness, name namespace.Name) namespace.Fence {
+	t.Helper()
+
+	f := h.Namespace(t, name)
+
+	rec := keyRecord(name, keyOne)
+	rec.Key.Fingerprint = fingerprint
+
+	if err := h.Keys.AddKey(t.Context(), rec, f, keyEntry(name)); err != nil {
+		t.Fatalf("AddKey(%s): %v", fingerprint, err)
+	}
+
+	return f
+}
+
+// publishEntries returns the audit entries of the publishes in acme.
+func publishEntries(t *testing.T, h Harness) []audit.Entry {
+	t.Helper()
+
+	var out []audit.Entry
+
+	all := h.Entries(t, acme)
+
+	for i := range all {
+		if all[i].Action == actionPublish {
+			out = append(out, all[i])
+		}
+	}
+
+	return out
 }
 
 func storeCases() []storeCase {
@@ -146,17 +192,21 @@ func storeCases() []storeCase {
 		{"an identical repeat writes no audit entry", testAuditOnRepeat},
 		{"get returns a copy", testGetCopy},
 		{"a signature is kept and counts as content", testSignature},
+		{"the plugin protocols are kept and count as content", testProtocols},
+		{"a provider with bad plugin protocols is refused", testBadProtocols},
 		{"an unsigned provider is refused", testUnsignedProvider},
 		{"list orders by semantic version precedence", testListOrder},
 		{"addresses lists each address once", testAddresses},
 		{"addresses with a bad kind", testAddressesBadKind},
+		{"publish with a key that the namespace removed", testPublishRemovedKey},
+		{"publish with a key that the namespace never trusted", testPublishUnknownKey},
 	}
 }
 
 func testPublishGet(t *testing.T, h Harness) {
 	t.Helper()
 
-	f := h.Namespace(t, acme)
+	f := homed(t, h, acme)
 	r := provider("payments", v100)
 	mustPublish(t, h, r, f)
 
@@ -169,7 +219,7 @@ func testPublishGet(t *testing.T, h Harness) {
 func testGetMissing(t *testing.T, h Harness) {
 	t.Helper()
 
-	h.Namespace(t, acme)
+	homed(t, h, acme)
 
 	_, err := h.Store.Get(t.Context(), address(acme, registry.KindProvider, "payments", ""), v100)
 	if !errors.Is(err, registry.ErrNotFound) {
@@ -180,7 +230,7 @@ func testGetMissing(t *testing.T, h Harness) {
 func testGetBadVersion(t *testing.T, h Harness) {
 	t.Helper()
 
-	h.Namespace(t, acme)
+	homed(t, h, acme)
 
 	_, err := h.Store.Get(t.Context(), address(acme, registry.KindProvider, "payments", ""), "../1")
 	if !errors.Is(err, registry.ErrInvalid) {
@@ -191,7 +241,7 @@ func testGetBadVersion(t *testing.T, h Harness) {
 func testPublishInvalid(t *testing.T, h Harness) {
 	t.Helper()
 
-	f := h.Namespace(t, acme)
+	f := homed(t, h, acme)
 	r := provider("payments", v100)
 	r.Archives[0].SHA256 = "nothex"
 
@@ -206,7 +256,7 @@ func testPublishInvalid(t *testing.T, h Harness) {
 func testPublishStale(t *testing.T, h Harness) {
 	t.Helper()
 
-	f := h.Namespace(t, acme)
+	f := homed(t, h, acme)
 	r := provider("payments", v100)
 
 	err := h.Store.Publish(t.Context(), r, stale(f), entry(acme))
@@ -220,8 +270,8 @@ func testPublishStale(t *testing.T, h Harness) {
 func testPublishOtherFence(t *testing.T, h Harness) {
 	t.Helper()
 
-	h.Namespace(t, acme)
-	other := h.Namespace(t, beta)
+	homed(t, h, acme)
+	other := homed(t, h, beta)
 	r := provider("payments", v100)
 
 	err := h.Store.Publish(t.Context(), r, other, entry(acme))
@@ -235,7 +285,7 @@ func testPublishOtherFence(t *testing.T, h Harness) {
 func testPublishRepeat(t *testing.T, h Harness) {
 	t.Helper()
 
-	f := h.Namespace(t, acme)
+	f := homed(t, h, acme)
 	r := provider("payments", v100)
 	mustPublish(t, h, r, f)
 
@@ -253,7 +303,7 @@ func testPublishRepeat(t *testing.T, h Harness) {
 func testPublishConflict(t *testing.T, h Harness) {
 	t.Helper()
 
-	f := h.Namespace(t, acme)
+	f := homed(t, h, acme)
 	r := provider("payments", v100)
 	mustPublish(t, h, r, f)
 
@@ -274,8 +324,8 @@ func testPublishConflict(t *testing.T, h Harness) {
 func testIsolation(t *testing.T, h Harness) {
 	t.Helper()
 
-	fa := h.Namespace(t, acme)
-	h.Namespace(t, beta)
+	fa := homed(t, h, acme)
+	homed(t, h, beta)
 	mustPublish(t, h, provider("payments", v100), fa)
 
 	_, err := h.Store.Get(t.Context(), address(beta, registry.KindProvider, "payments", ""), v100)
@@ -287,7 +337,7 @@ func testIsolation(t *testing.T, h Harness) {
 func testKinds(t *testing.T, h Harness) {
 	t.Helper()
 
-	f := h.Namespace(t, acme)
+	f := homed(t, h, acme)
 	mustPublish(t, h, provider("vpc", v100), f)
 
 	mod := registry.Release{
@@ -298,6 +348,7 @@ func testKinds(t *testing.T, h Harness) {
 		SignatureFile:   "",
 		SignatureSHA256: "",
 		KeyFingerprint:  "",
+		Protocols:       nil,
 		PublishedBy:     publisher,
 		PublishedAt:     time.UnixMilli(fixtureT).UTC(),
 		Archives:        []registry.Archive{{Platform: "", FileName: "vpc.zip", SHA256: sumB, Size: 1}},
@@ -313,7 +364,7 @@ func testKinds(t *testing.T, h Harness) {
 func testListOrder(t *testing.T, h Harness) {
 	t.Helper()
 
-	f := h.Namespace(t, acme)
+	f := homed(t, h, acme)
 
 	want := []string{"1.0.0-rc.1", v100, "1.2.0", "1.9.0", "1.10.0"}
 	for _, v := range []string{"1.10.0", "1.2.0", v100, "1.9.0", "1.0.0-rc.1"} {
@@ -335,7 +386,7 @@ func testListOrder(t *testing.T, h Harness) {
 func testPublishConcurrent(t *testing.T, h Harness) {
 	t.Helper()
 
-	f := h.Namespace(t, acme)
+	f := homed(t, h, acme)
 	hashes := []string{sumA, sumB, sumC, sumD}
 	errs := make([]error, len(hashes))
 
@@ -368,7 +419,7 @@ func testPublishConcurrent(t *testing.T, h Harness) {
 		t.Fatalf("%d publishes won, want exactly 1", wins)
 	}
 
-	if n := len(h.Entries(t, acme)); n != 1 {
+	if n := len(publishEntries(t, h)); n != 1 {
 		t.Fatalf("%d audit entries, want 1", n)
 	}
 }
@@ -376,11 +427,11 @@ func testPublishConcurrent(t *testing.T, h Harness) {
 func testAuditOnPublish(t *testing.T, h Harness) {
 	t.Helper()
 
-	f := h.Namespace(t, acme)
+	f := homed(t, h, acme)
 	mustPublish(t, h, provider("payments", v100), f)
 
-	got := h.Entries(t, acme)
-	if len(got) != 1 || got[0].Action != "registry:publish" || got[0].Namespace != acme {
+	got := publishEntries(t, h)
+	if len(got) != 1 || got[0].Action != actionPublish || got[0].Namespace != acme {
 		t.Fatalf("entries = %+v, want one registry:publish entry", got)
 	}
 }
@@ -388,7 +439,7 @@ func testAuditOnPublish(t *testing.T, h Harness) {
 func testAuditOnRefusal(t *testing.T, h Harness) {
 	t.Helper()
 
-	f := h.Namespace(t, acme)
+	f := homed(t, h, acme)
 	mustPublish(t, h, provider("payments", v100), f)
 
 	invalid := provider("ledger", v100)
@@ -409,7 +460,7 @@ func testAuditOnRefusal(t *testing.T, h Harness) {
 		}
 	}
 
-	if n := len(h.Entries(t, acme)); n != 1 {
+	if n := len(publishEntries(t, h)); n != 1 {
 		t.Fatalf("%d audit entries after refusals, want 1", n)
 	}
 }
@@ -419,12 +470,12 @@ func testAuditOnRefusal(t *testing.T, h Harness) {
 func testAuditOnRepeat(t *testing.T, h Harness) {
 	t.Helper()
 
-	f := h.Namespace(t, acme)
+	f := homed(t, h, acme)
 	r := provider("payments", v100)
 	mustPublish(t, h, r, f)
 	mustPublish(t, h, r, f)
 
-	if n := len(h.Entries(t, acme)); n != 1 {
+	if n := len(publishEntries(t, h)); n != 1 {
 		t.Fatalf("%d audit entries after a repeat, want 1", n)
 	}
 }
@@ -432,7 +483,7 @@ func testAuditOnRepeat(t *testing.T, h Harness) {
 func testGetCopy(t *testing.T, h Harness) {
 	t.Helper()
 
-	f := h.Namespace(t, acme)
+	f := homed(t, h, acme)
 	r := provider("payments", v100)
 	mustPublish(t, h, r, f)
 
@@ -459,7 +510,7 @@ func testGetCopy(t *testing.T, h Harness) {
 func testSignature(t *testing.T, h Harness) {
 	t.Helper()
 
-	f := h.Namespace(t, acme)
+	f := homed(t, h, acme)
 	signed := provider("payments", v100)
 	mustPublish(t, h, signed, f)
 
@@ -477,10 +528,54 @@ func testSignature(t *testing.T, h Harness) {
 	}
 }
 
+func testProtocols(t *testing.T, h Harness) {
+	t.Helper()
+
+	f := homed(t, h, acme)
+	r := provider("payments", v100)
+	r.Protocols = []string{protocolV5, protocolV6}
+	mustPublish(t, h, r, f)
+
+	got, err := h.Store.Get(t.Context(), r.Address, v100)
+	if err != nil || !slices.Equal(got.Protocols, []string{protocolV5, protocolV6}) {
+		t.Fatalf("Get = %+v, %v; want the protocols 5.0 and 6.0", got, err)
+	}
+
+	other := r
+	other.Protocols = []string{protocolV5}
+
+	if err := h.Store.Publish(t.Context(), other, f, entry(acme)); !errors.Is(err, registry.ErrVersionExists) {
+		t.Fatalf("Publish with other protocols = %v, want ErrVersionExists", err)
+	}
+}
+
+func testBadProtocols(t *testing.T, h Harness) {
+	t.Helper()
+
+	f := homed(t, h, acme)
+
+	for name, protocols := range map[string][]string{
+		"none":          nil,
+		"empty text":    {""},
+		"not a version": {"five"},
+		"with a comma":  {"5.0,6.0"},
+		"repeated":      {protocolV5, protocolV5},
+		"falling":       {protocolV6, protocolV5},
+		"too many":      {"1.0", "2.0", "3.0", "4.0", protocolV5},
+	} {
+		r := provider("payments", v100)
+		r.Protocols = protocols
+
+		if err := h.Store.Publish(t.Context(), r, f, entry(acme)); !errors.Is(err, registry.ErrInvalid) {
+			t.Fatalf("%s: Publish = %v, want ErrInvalid", name, err)
+		}
+	}
+}
+
 func testUnsignedProvider(t *testing.T, h Harness) {
 	t.Helper()
 
-	f := h.Namespace(t, acme)
+	f := homed(t, h, acme)
 	r := provider("payments", v100)
 	r.SignatureFile, r.SignatureSHA256, r.KeyFingerprint = "", "", ""
 
@@ -496,8 +591,8 @@ func testUnsignedProvider(t *testing.T, h Harness) {
 func testAddresses(t *testing.T, h Harness) {
 	t.Helper()
 
-	f := h.Namespace(t, acme)
-	h.Namespace(t, beta)
+	f := homed(t, h, acme)
+	homed(t, h, beta)
 	mustPublish(t, h, provider("payments", v100), f)
 	mustPublish(t, h, provider("payments", "1.1.0"), f)
 	mustPublish(t, h, provider("ledger", v100), f)
@@ -516,7 +611,7 @@ func testAddresses(t *testing.T, h Harness) {
 func testAddressesBadKind(t *testing.T, h Harness) {
 	t.Helper()
 
-	h.Namespace(t, acme)
+	homed(t, h, acme)
 
 	if _, err := h.Store.Addresses(t.Context(), acme, "plugin"); !errors.Is(err, registry.ErrInvalid) {
 		t.Fatalf("Addresses = %v, want ErrInvalid", err)
@@ -538,4 +633,48 @@ func expectNoReleases(t *testing.T, h Harness, addr registry.Address) {
 	if err != nil || len(got) != 0 {
 		t.Fatalf("List after a refused publish = %+v, %v; want none", got, err)
 	}
+}
+
+// testPublishRemovedKey holds the rule that the store checks the signing key in
+// the transaction of the publish: a key removed after the checks of the service
+// refuses the publish, and nothing is stored or audited.
+func testPublishRemovedKey(t *testing.T, h Harness) {
+	t.Helper()
+
+	f := homed(t, h, acme)
+	r := provider("payments", v100)
+
+	if err := h.Keys.RemoveKey(t.Context(), acme, fingerprint, f, keyEntry(acme)); err != nil {
+		t.Fatalf("RemoveKey: %v", err)
+	}
+
+	err := h.Store.Publish(t.Context(), r, f, entry(acme))
+	if !errors.Is(err, registry.ErrKeyNotFound) {
+		t.Fatalf("Publish = %v, want ErrKeyNotFound", err)
+	}
+
+	expectNoReleases(t, h, r.Address)
+
+	if n := len(publishEntries(t, h)); n != 0 {
+		t.Fatalf("%d publish audit entries after a refusal, want 0", n)
+	}
+}
+
+// testPublishUnknownKey holds the same rule for a key of another namespace: a
+// key is trusted for the namespace that registered it only.
+func testPublishUnknownKey(t *testing.T, h Harness) {
+	t.Helper()
+
+	homed(t, h, acme)
+	other := h.Namespace(t, beta)
+
+	r := provider("payments", v100)
+	r.Address = address(beta, registry.KindProvider, "payments", "")
+
+	err := h.Store.Publish(t.Context(), r, other, entry(beta))
+	if !errors.Is(err, registry.ErrKeyNotFound) {
+		t.Fatalf("Publish = %v, want ErrKeyNotFound", err)
+	}
+
+	expectNoReleases(t, h, r.Address)
 }
