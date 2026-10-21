@@ -16,6 +16,15 @@ import (
 	"opendustpan.org/opendustpan/pkg/registry/releasecheck"
 )
 
+// Bounds of the work of the use cases.
+const (
+	// cleanupTimeout bounds the removal of a staged file after the request ended.
+	cleanupTimeout = 30 * time.Second
+	// maxFilesOfRequest is the most files of one publish: every archive, the
+	// checksums file and the signature file.
+	maxFilesOfRequest = registry.MaxArchives + 2
+)
+
 // Staged is a file that the server stored under a staging key. The SHA-256 and
 // the size are the values that the server computed while it wrote the file.
 type Staged struct {
@@ -87,7 +96,7 @@ func (s *Service) Stage(ctx context.Context, c *Caller, ns namespace.Name, body 
 // dropStaged removes a staged file after a failed or refused write. It uses a
 // context that outlives the request, so a canceled request still cleans up.
 func (s *Service) dropStaged(ctx context.Context, view *blob.Scoped, key blob.Key) {
-	cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+	cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), cleanupTimeout)
 	defer cancel()
 
 	// Delete of a missing key is not an error. A failed delete leaves the file to
@@ -155,6 +164,7 @@ type PublishRequest struct {
 // measured is a staged file after the server measured it again.
 type measured struct {
 	StagedFile
+
 	key   blob.Key
 	sum   string
 	size  int64
@@ -179,17 +189,7 @@ func (s *Service) Publish(ctx context.Context, c *Caller, req PublishRequest) (r
 		return registry.Release{}, err
 	}
 
-	rec, err := s.namespaces.GetNamespace(ctx, req.Namespace)
-	if err != nil {
-		return registry.Release{}, fmt.Errorf("find namespace: %w", err)
-	}
-
-	view, err := s.scope(rec)
-	if err != nil {
-		return registry.Release{}, err
-	}
-
-	files, err := stagedKeys(rec.ID, req.Files)
+	p, err := s.prepare(ctx, addr, req)
 	if err != nil {
 		return registry.Release{}, err
 	}
@@ -197,16 +197,64 @@ func (s *Service) Publish(ctx context.Context, c *Caller, req PublishRequest) (r
 	// The staged files go away whatever happens. A caller who retries uploads
 	// them again, or replays the answer through the Idempotency-Key.
 	defer func() {
-		for _, f := range files {
-			s.dropStaged(ctx, view, f.key)
+		for _, f := range p.files {
+			s.dropStaged(ctx, p.view, f.key)
 		}
 	}()
 
-	if err = s.measureAll(ctx, view, files); err != nil {
+	rel, err := s.verify(ctx, c, p)
+	if err != nil {
 		return registry.Release{}, err
 	}
 
-	rel, err := s.check(ctx, rec, addr, req, files)
+	if promoteErr := s.promote(ctx, p.view, p.rec.ID, p.files); promoteErr != nil {
+		return registry.Release{}, promoteErr
+	}
+
+	return s.record(ctx, c, p, rel)
+}
+
+// publishing holds what a publish needs after the request is checked: the
+// namespace, the scoped view of the blob store and the staged files.
+type publishing struct {
+	view  *blob.Scoped
+	req   PublishRequest
+	addr  registry.Address
+	files []measured
+	rec   namespace.Namespace
+}
+
+// prepare finds the namespace, scopes the blob store and makes the staging key
+// of each file of req.
+func (s *Service) prepare(ctx context.Context, addr registry.Address, req PublishRequest) (publishing, error) {
+	var none publishing
+
+	rec, err := s.namespaces.GetNamespace(ctx, req.Namespace)
+	if err != nil {
+		return none, fmt.Errorf("find namespace: %w", err)
+	}
+
+	view, err := s.scope(rec)
+	if err != nil {
+		return none, err
+	}
+
+	files, err := stagedKeys(rec.ID, req.Files)
+	if err != nil {
+		return none, err
+	}
+
+	return publishing{view: view, req: req, addr: addr, files: files, rec: rec}, nil
+}
+
+// verify measures the staged files, runs the checks and returns the release to
+// store. It writes nothing to a content key.
+func (s *Service) verify(ctx context.Context, c *Caller, p publishing) (registry.Release, error) {
+	if err := s.measureAll(ctx, p.view, p.files); err != nil {
+		return registry.Release{}, err
+	}
+
+	rel, err := s.check(ctx, p.rec, p.addr, p.req, p.files)
 	if err != nil {
 		return registry.Release{}, err
 	}
@@ -218,17 +266,18 @@ func (s *Service) Publish(ctx context.Context, c *Caller, req PublishRequest) (r
 		return registry.Release{}, fmt.Errorf("check the release: %w", err)
 	}
 
-	if err = s.promote(ctx, view, rec.ID, files); err != nil {
-		return registry.Release{}, err
-	}
+	return rel, nil
+}
 
-	if err = s.store.Publish(ctx, rel, rec.Fence(), s.releaseEntry(c, rel)); err != nil {
+// record stores rel with its fence and audit entry, and returns the release as
+// the store holds it. A repeat of a published version changes nothing, so the
+// answer is the first release, with the first publisher and time.
+func (s *Service) record(ctx context.Context, c *Caller, p publishing, rel registry.Release) (registry.Release, error) {
+	if err := s.store.Publish(ctx, rel, p.rec.Fence(), s.releaseEntry(c, rel)); err != nil {
 		return registry.Release{}, fmt.Errorf("publish release: %w", err)
 	}
 
-	// A repeat of a published version changes nothing, so the answer is the
-	// release as the store holds it, with the first publisher and time.
-	stored, err := s.store.Get(ctx, addr, req.Version)
+	stored, err := s.store.Get(ctx, p.addr, rel.Version)
 	if err != nil {
 		return registry.Release{}, fmt.Errorf("read the published release: %w", err)
 	}
@@ -248,37 +297,48 @@ func checkRequest(req PublishRequest) (registry.Address, error) {
 		return addr, fmt.Errorf("check the version: %w", err)
 	}
 
-	if len(req.Files) > registry.MaxArchives+2 {
-		return addr, fmt.Errorf("%w: more than %d files", ErrBadRequest, registry.MaxArchives+2)
+	if err := checkFileList(req.Files); err != nil {
+		return addr, err
+	}
+
+	return addr, nil
+}
+
+// checkFileList checks the files of a request: their number, their roles, and
+// that no token and no name repeats.
+func checkFileList(files []StagedFile) error {
+	if len(files) > maxFilesOfRequest {
+		return fmt.Errorf("%w: more than %d files", ErrBadRequest, maxFilesOfRequest)
 	}
 
 	roles := map[FileRole]int{}
 	tokens := map[string]bool{}
 	names := map[string]bool{}
 
-	for _, f := range req.Files {
+	for _, f := range files {
 		roles[f.Role]++
 
-		if tokens[f.Token] {
-			return addr, fmt.Errorf("%w: the token of file %s is used two times", ErrBadRequest, f.Name)
-		}
-
-		if names[f.Name] {
-			return addr, fmt.Errorf("%w: the file name %s is used two times", ErrBadRequest, f.Name)
+		if tokens[f.Token] || names[f.Name] {
+			return fmt.Errorf("%w: the token or the name of file %s is used two times", ErrBadRequest, f.Name)
 		}
 
 		tokens[f.Token], names[f.Name] = true, true
 
 		if f.Role != RoleSums && f.Role != RoleSignature && f.Role != RoleArchive {
-			return addr, fmt.Errorf("%w: file %s has the role %q: use sums, signature or archive", ErrBadRequest, f.Name, f.Role)
+			return fmt.Errorf(
+				"%w: file %s has the role %q: use sums, signature or archive",
+				ErrBadRequest,
+				f.Name,
+				f.Role,
+			)
 		}
 	}
 
 	if roles[RoleSums] != 1 || roles[RoleSignature] != 1 || roles[RoleArchive] == 0 {
-		return addr, fmt.Errorf("%w: send one sums file, one signature file and at least one archive", ErrBadRequest)
+		return fmt.Errorf("%w: send one sums file, one signature file and at least one archive", ErrBadRequest)
 	}
 
-	return addr, nil
+	return nil
 }
 
 // stagedKeys makes the staging key of each file. A token that is not a token of
@@ -305,52 +365,65 @@ func (s *Service) measureAll(ctx context.Context, view *blob.Scoped, files []mea
 	var total int64
 
 	for i := range files {
-		f := &files[i]
-
-		limit := s.maxFile
-
-		switch f.Role {
-		case RoleSums:
-			limit = releasecheck.MaxSumsBytes
-		case RoleSignature:
-			limit = MaxSignatureBytes
-		case RoleArchive:
+		if err := s.measureOne(ctx, view, &files[i]); err != nil {
+			return err
 		}
 
-		r, err := view.Get(ctx, f.key)
-		if errors.Is(err, blob.ErrNotFound) {
-			return fmt.Errorf("%w: %s", ErrNotStaged, f.Name)
-		}
-
-		if err != nil {
-			return fmt.Errorf("open the staged file %s: %w", f.Name, err)
-		}
-
-		m := newMeasure(r, limit)
-
-		if f.Role == RoleArchive {
-			_, err = io.Copy(io.Discard, m)
-		} else {
-			f.bytes, err = io.ReadAll(m)
-		}
-
-		closeErr := r.Close()
-
-		if errors.Is(err, ErrTooLarge) {
-			return fmt.Errorf("%w: %s", ErrTooLarge, f.Name)
-		}
-
-		if err != nil || closeErr != nil {
-			return fmt.Errorf("read the staged file %s: %w", f.Name, errors.Join(err, closeErr))
-		}
-
-		f.sum, f.size = m.sum(), m.n
-		total += m.n
+		total += files[i].size
 
 		if total > s.maxRelease {
 			return fmt.Errorf("%w: the release is larger than %d bytes", ErrTooLarge, s.maxRelease)
 		}
 	}
+
+	return nil
+}
+
+// limitOf returns the largest size of a file with the given role.
+func (s *Service) limitOf(role FileRole) int64 {
+	switch role {
+	case RoleSums:
+		return releasecheck.MaxSumsBytes
+	case RoleSignature:
+		return MaxSignatureBytes
+	case RoleArchive:
+		return s.maxFile
+	default:
+		return 0
+	}
+}
+
+// measureOne reads one staged file, computes its SHA-256 and size, and keeps
+// the bytes of a checksums file and of a signature file.
+func (s *Service) measureOne(ctx context.Context, view *blob.Scoped, f *measured) error {
+	r, err := view.Get(ctx, f.key)
+	if errors.Is(err, blob.ErrNotFound) {
+		return fmt.Errorf("%w: %s", ErrNotStaged, f.Name)
+	}
+
+	if err != nil {
+		return fmt.Errorf("open the staged file %s: %w", f.Name, err)
+	}
+
+	m := newMeasure(r, s.limitOf(f.Role))
+
+	if f.Role == RoleArchive {
+		_, err = io.Copy(io.Discard, m)
+	} else {
+		f.bytes, err = io.ReadAll(m)
+	}
+
+	closeErr := r.Close()
+
+	if errors.Is(err, ErrTooLarge) {
+		return fmt.Errorf("%w: %s", ErrTooLarge, f.Name)
+	}
+
+	if err != nil || closeErr != nil {
+		return fmt.Errorf("read the staged file %s: %w", f.Name, errors.Join(err, closeErr))
+	}
+
+	f.sum, f.size = m.sum(), m.n
 
 	return nil
 }
@@ -376,6 +449,7 @@ func (s *Service) check(
 			set.Signature, sig = file, f
 		case RoleArchive:
 			set.Archives = append(set.Archives, file)
+		default:
 		}
 	}
 
@@ -463,7 +537,7 @@ func (v *verifying) Read(p []byte) (int, error) {
 		return n, ErrIntegrity
 	}
 
-	return n, err //nolint:wrapcheck // The reader contract: callers compare io.EOF.
+	return n, err
 }
 
 // releaseEntry returns the audit entry of a publish. The object is the
@@ -472,7 +546,13 @@ func (v *verifying) Read(p []byte) (int, error) {
 func (s *Service) releaseEntry(c *Caller, rel registry.Release) audit.Entry {
 	e := s.entry(c, rel.Address.Namespace, identity.ActionRegistryPublish, rel.Address.Namespace.String())
 	e.Changes = []audit.Change{
-		{Key: "registry.release", Old: nil, New: "provider/" + rel.Address.Name + "@" + rel.Version, Layer: "", TakesEffect: ""},
+		{
+			Key:         "registry.release",
+			Old:         nil,
+			New:         "provider/" + rel.Address.Name + "@" + rel.Version,
+			Layer:       "",
+			TakesEffect: "",
+		},
 		{Key: "registry.keyFingerprint", Old: nil, New: rel.KeyFingerprint, Layer: "", TakesEffect: ""},
 		{Key: "registry.sumsSha256", Old: nil, New: rel.SumsSHA256, Layer: "", TakesEffect: ""},
 		{Key: "registry.signatureSha256", Old: nil, New: rel.SignatureSHA256, Layer: "", TakesEffect: ""},

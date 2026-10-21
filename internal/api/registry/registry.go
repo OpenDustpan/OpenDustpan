@@ -261,37 +261,44 @@ func classifyRegistry(err error) problem {
 	return problem{status: status, code: code, message: err.Error()}
 }
 
+// registryProblem maps one error of the registry to its answer.
+type registryProblem struct {
+	err    error
+	code   string
+	status int
+}
+
+// registryProblems lists the errors of the registry with their answers. The
+// first match wins, so a specific error comes before a general one.
+//
+//nolint:gochecknoglobals // A fixed table; Go has no constant slices.
+var registryProblems = []registryProblem{
+	{registry.ErrNotFound, "registry.not-found", http.StatusNotFound},
+	{registry.ErrKeyNotFound, "registry.not-found", http.StatusNotFound},
+	{service.ErrNotStaged, "registry.not-staged", http.StatusNotFound},
+	{service.ErrTooLarge, "registry.too-large", http.StatusRequestEntityTooLarge},
+	{registry.ErrVersionExists, "registry.version-exists", http.StatusConflict},
+	{registry.ErrKeyExists, "registry.key-exists", http.StatusConflict},
+	{registry.ErrBadSignature, "registry.signature-invalid", http.StatusUnprocessableEntity},
+	{registry.ErrUntrustedKey, "registry.signature-untrusted-key", http.StatusUnprocessableEntity},
+	{releasecheck.ErrRefused, "registry.archive-set-refused", http.StatusUnprocessableEntity},
+	{service.ErrNoKeys, "registry.no-keys", http.StatusUnprocessableEntity},
+	{registry.ErrKeyLimit, "registry.key-limit", http.StatusUnprocessableEntity},
+	{registry.ErrBadKey, "registry.key-invalid", http.StatusBadRequest},
+	{registry.ErrInvalid, "registry.invalid", http.StatusBadRequest},
+	{service.ErrBadRequest, "registry.invalid", http.StatusBadRequest},
+}
+
 // registryStatus returns the status and the stable code of a registry error,
 // and 500 for an error that it does not know.
 func registryStatus(err error) (int, string) {
-	switch {
-	case errors.Is(err, registry.ErrNotFound), errors.Is(err, registry.ErrKeyNotFound):
-		return http.StatusNotFound, "registry.not-found"
-	case errors.Is(err, service.ErrNotStaged):
-		return http.StatusNotFound, "registry.not-staged"
-	case errors.Is(err, service.ErrTooLarge):
-		return http.StatusRequestEntityTooLarge, "registry.too-large"
-	case errors.Is(err, registry.ErrVersionExists):
-		return http.StatusConflict, "registry.version-exists"
-	case errors.Is(err, registry.ErrKeyExists):
-		return http.StatusConflict, "registry.key-exists"
-	case errors.Is(err, registry.ErrBadSignature):
-		return http.StatusUnprocessableEntity, "registry.signature-invalid"
-	case errors.Is(err, registry.ErrUntrustedKey):
-		return http.StatusUnprocessableEntity, "registry.signature-untrusted-key"
-	case errors.Is(err, releasecheck.ErrRefused):
-		return http.StatusUnprocessableEntity, "registry.archive-set-refused"
-	case errors.Is(err, service.ErrNoKeys):
-		return http.StatusUnprocessableEntity, "registry.no-keys"
-	case errors.Is(err, registry.ErrKeyLimit):
-		return http.StatusUnprocessableEntity, "registry.key-limit"
-	case errors.Is(err, registry.ErrBadKey):
-		return http.StatusBadRequest, "registry.key-invalid"
-	case errors.Is(err, registry.ErrInvalid), errors.Is(err, service.ErrBadRequest):
-		return http.StatusBadRequest, "registry.invalid"
-	default:
-		return http.StatusInternalServerError, ""
+	for _, p := range registryProblems {
+		if errors.Is(err, p.err) {
+			return p.status, p.code
+		}
 	}
+
+	return http.StatusInternalServerError, ""
 }
 
 func classifyAuth(err error) (problem, bool) {

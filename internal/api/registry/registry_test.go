@@ -18,10 +18,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ProtonMail/go-crypto/openpgp"
-	"github.com/ProtonMail/go-crypto/openpgp/armor"
-	"github.com/ProtonMail/go-crypto/openpgp/packet"
-
 	"opendustpan.org/opendustpan/internal/api/idempotent"
 	apiregistry "opendustpan.org/opendustpan/internal/api/registry"
 	"opendustpan.org/opendustpan/pkg/audit"
@@ -29,6 +25,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/idempotency/idempotencytest"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/registry/pgpfixture"
 	"opendustpan.org/opendustpan/pkg/registry/pgpverify"
 	"opendustpan.org/opendustpan/pkg/registry/releasecheck"
 	"opendustpan.org/opendustpan/pkg/registry/service"
@@ -47,7 +44,11 @@ const (
 	manage = identity.ActionRegistryManageKeys
 )
 
-const maxUpload = 4096
+const (
+	maxUpload       = 4096
+	providerName    = "payments"
+	providerVersion = "1.0.0"
+)
 
 // grantsOf returns the actions of a subject. The token of a subject is its name.
 func grantsOf(subject string) []identity.Action {
@@ -82,7 +83,12 @@ func (testAuthn) AuthenticateToken(_ context.Context, token string) (identity.Pr
 // testAuthz allows the actions of the subject, minus the denied ones.
 type testAuthz struct{ deny map[identity.Action]bool }
 
-func (a testAuthz) Authorize(_ context.Context, p identity.Principal, action identity.Action, obj identity.Object) error {
+func (a testAuthz) Authorize(
+	_ context.Context,
+	p identity.Principal,
+	action identity.Action,
+	obj identity.Object,
+) error {
 	if slices.Contains(grantsOf(p.Subject), action) && !a.deny[action] {
 		return nil
 	}
@@ -129,7 +135,9 @@ func newFixture(t *testing.T, deny ...identity.Action) fixture {
 		t.Fatalf("open blobs: %v", err)
 	}
 
-	t.Cleanup(func() { _ = blobs.Close() })
+	t.Cleanup(func() {
+		_ = blobs.Close() //nolint:errcheck // The test directory is removed after the test.
+	})
 
 	verifier := pgpverify.Verifier{Now: nil}
 
@@ -218,52 +226,22 @@ func wantCode(t *testing.T, what string, got response, want int) {
 	}
 }
 
-// signer and the archive set follow the layout of a build tool.
-type signer struct {
-	entity *openpgp.Entity
-	armor  string
-	fpr    string
-}
-
-func newSigner(t *testing.T) signer {
-	t.Helper()
-
-	e, err := openpgp.NewEntity("Release", "", "release@example.invalid", &packet.Config{Algorithm: packet.PubKeyAlgoEdDSA})
-	if err != nil {
-		t.Fatalf("new entity: %v", err)
-	}
-
-	var buf bytes.Buffer
-
-	w, err := armor.Encode(&buf, openpgp.PublicKeyType, nil)
-	if err != nil {
-		t.Fatalf("armor: %v", err)
-	}
-
-	if err = e.Serialize(w); err != nil {
-		t.Fatalf("serialize: %v", err)
-	}
-
-	_ = w.Close()
-
-	return signer{entity: e, armor: buf.String(), fpr: strings.ToUpper(hex.EncodeToString(e.PrimaryKey.Fingerprint))}
-}
-
+// The archive set follows the layout of a build tool.
 type archiveSet struct {
 	sums, sig []byte
 	archive   map[string][]byte
 	names     []string
 }
 
-func buildSet(t *testing.T, sg signer, name, version string) archiveSet {
+func buildSet(t *testing.T, sg pgpfixture.Signer) archiveSet {
 	t.Helper()
 
-	s := archiveSet{archive: map[string][]byte{}}
+	s := archiveSet{sums: nil, sig: nil, archive: map[string][]byte{}, names: nil}
 
 	var sums strings.Builder
 
 	for _, p := range []string{"linux_amd64", "darwin_arm64"} {
-		file := fmt.Sprintf("terraform-provider-%s_%s_%s.zip", name, version, p)
+		file := fmt.Sprintf("terraform-provider-%s_%s_%s.zip", providerName, providerVersion, p)
 		data := []byte("zip bytes of " + file)
 		sum := sha256.Sum256(data)
 		fmt.Fprintf(&sums, "%s  %s\n", hex.EncodeToString(sum[:]), file)
@@ -274,12 +252,7 @@ func buildSet(t *testing.T, sg signer, name, version string) archiveSet {
 
 	s.sums = []byte(sums.String())
 
-	var sig bytes.Buffer
-	if err := openpgp.DetachSign(&sig, sg.entity, bytes.NewReader(s.sums), nil); err != nil {
-		t.Fatalf("sign: %v", err)
-	}
-
-	s.sig = sig.Bytes()
+	s.sig = sg.Detach(t, s.sums)
 
 	return s
 }
@@ -296,11 +269,11 @@ func js(t *testing.T, v any) []byte {
 }
 
 // trust registers sg in ns through the API.
-func (f fixture) trust(t *testing.T, ns string, sg signer) {
+func (f fixture) trust(t *testing.T, ns string, sg pgpfixture.Signer) {
 	t.Helper()
 
 	got := f.call(t, "admin", http.MethodPost, "/api/dustpan/v1/namespaces/"+ns+"/registry/keys",
-		js(t, map[string]string{"armoredPublicKey": sg.armor}))
+		js(t, map[string]string{"armoredPublicKey": string(sg.Key.Armored)}))
 	wantCode(t, "register the key", got, http.StatusCreated)
 }
 
@@ -332,10 +305,18 @@ func (f fixture) stage(t *testing.T, ns string, data []byte) string {
 func (f fixture) publishBody(t *testing.T, ns, name, version string, s archiveSet) []byte {
 	t.Helper()
 
-	files := []map[string]string{
-		{"role": "sums", "name": releasecheck.SumsName(name, version), "upload": f.stage(t, ns, s.sums)},
-		{"role": "signature", "name": releasecheck.SignatureName(name, version), "upload": f.stage(t, ns, s.sig)},
-	}
+	files := make([]map[string]string, 0, 2+len(s.names))
+	files = append(
+		files,
+		map[string]string{
+			"role":   "sums",
+			"name":   releasecheck.SumsName(name, version),
+			"upload": f.stage(t, ns, s.sums),
+		},
+		map[string]string{
+			"role": "signature", "name": releasecheck.SignatureName(name, version), "upload": f.stage(t, ns, s.sig),
+		},
+	)
 
 	for _, n := range s.names {
 		files = append(files, map[string]string{"role": "archive", "name": n, "upload": f.stage(t, ns, s.archive[n])})
@@ -344,40 +325,49 @@ func (f fixture) publishBody(t *testing.T, ns, name, version string, s archiveSe
 	return js(t, map[string]any{"protocols": []string{"5.0"}, "files": files})
 }
 
+// publishedWire is the part of a publish answer that the tests read.
+type publishedWire struct {
+	Version        string          `json:"version"`
+	Protocols      []string        `json:"protocols"`
+	KeyFingerprint string          `json:"keyFingerprint"`
+	PublishedBy    string          `json:"publishedBy"`
+	Files          []publishedFile `json:"files"`
+}
+
+type publishedFile struct {
+	Role     string `json:"role"`
+	Platform string `json:"platform"`
+}
+
 func TestPublishFlow(t *testing.T) {
 	t.Parallel()
 
 	f := newFixture(t)
-	sg := newSigner(t)
+	sg := pgpfixture.NewSigner(t)
 	f.trust(t, "acme", sg)
 
-	s := buildSet(t, sg, "payments", "1.0.0")
+	s := buildSet(t, sg)
 	body := f.publishBody(t, "acme", "payments", "1.0.0", s)
 	target := base + "/providers/payments/versions/1.0.0"
 
-	got := f.do(t, request{token: "publisher", method: http.MethodPut, target: target, body: body,
-		headers: map[string]string{"Idempotency-Key": "publish-1"}})
+	got := f.do(t, request{
+		token: "publisher", method: http.MethodPut, target: target, body: body,
+		headers: map[string]string{"Idempotency-Key": "publish-1"},
+	})
 	wantCode(t, "publish", got, http.StatusOK)
 
-	var doc struct {
-		Version        string   `json:"version"`
-		Protocols      []string `json:"protocols"`
-		KeyFingerprint string   `json:"keyFingerprint"`
-		PublishedBy    string   `json:"publishedBy"`
-		Files          []struct {
-			Role     string `json:"role"`
-			Platform string `json:"platform"`
-		} `json:"files"`
-	}
+	var doc publishedWire
 
 	if err := json.Unmarshal([]byte(got.body), &doc); err != nil || doc.Version != "1.0.0" ||
-		doc.KeyFingerprint != sg.fpr || doc.PublishedBy != "publisher" || len(doc.Files) != 4 {
+		doc.KeyFingerprint != sg.Key.Fingerprint || doc.PublishedBy != "publisher" || len(doc.Files) != 4 {
 		t.Fatalf("publish answer = %q, %v", got.body, err)
 	}
 
 	// The same key and the same body replay the first answer.
-	again := f.do(t, request{token: "publisher", method: http.MethodPut, target: target, body: body,
-		headers: map[string]string{"Idempotency-Key": "publish-1"}})
+	again := f.do(t, request{
+		token: "publisher", method: http.MethodPut, target: target, body: body,
+		headers: map[string]string{"Idempotency-Key": "publish-1"},
+	})
 	if again.code != http.StatusOK || again.body != got.body {
 		t.Errorf("replay = %d %s, want the first answer", again.code, again.body)
 	}
@@ -398,7 +388,7 @@ func TestPublishFlow(t *testing.T) {
 		t.Fatalf("list audit: %v", err)
 	}
 
-	var actions []string
+	actions := make([]string, 0, len(entries.Entries))
 	for i := range entries.Entries {
 		actions = append(actions, entries.Entries[i].Action)
 	}
@@ -415,17 +405,17 @@ func TestPublishRefusals(t *testing.T) {
 	t.Parallel()
 
 	f := newFixture(t)
-	sg := newSigner(t)
+	sg := pgpfixture.NewSigner(t)
 	f.trust(t, "acme", sg)
 
-	good := buildSet(t, sg, "payments", "1.0.0")
+	good := buildSet(t, sg)
 
-	tampered := buildSet(t, sg, "payments", "1.0.0")
+	tampered := buildSet(t, sg)
 	tampered.sums = append(tampered.sums, '\n') // changed after the signature
 
-	stranger := buildSet(t, newSigner(t), "payments", "1.0.0")
+	stranger := buildSet(t, pgpfixture.NewSigner(t))
 
-	swapped := buildSet(t, sg, "payments", "1.0.0")
+	swapped := buildSet(t, sg)
 	swapped.archive[swapped.names[0]] = []byte("other bytes")
 
 	tests := []struct {
@@ -436,18 +426,30 @@ func TestPublishRefusals(t *testing.T) {
 		code   string
 		text   string
 	}{
-		{"bad signature", base + "/providers/payments/versions/1.0.0", tampered, http.StatusUnprocessableEntity,
-			"registry.signature-invalid", "SHA256SUMS.sig"},
-		{"signature by an unknown key", base + "/providers/payments/versions/1.0.0", stranger,
-			http.StatusUnprocessableEntity, "registry.signature-untrusted-key", "SHA256SUMS.sig"},
-		{"archive that is not the signed archive", base + "/providers/payments/versions/1.0.0", swapped,
-			http.StatusUnprocessableEntity, "registry.archive-set-refused", "linux_amd64.zip"},
-		{"name outside the safe subset", base + "/providers/Payments/versions/1.0.0", good, http.StatusBadRequest,
-			"registry.invalid", ""},
-		{"name with an underscore", base + "/providers/pay_ments/versions/1.0.0", good, http.StatusBadRequest,
-			"registry.invalid", ""},
-		{"version that is not a version", base + "/providers/payments/versions/latest", good, http.StatusBadRequest,
-			"registry.invalid", ""},
+		{
+			"bad signature", base + "/providers/payments/versions/1.0.0", tampered, http.StatusUnprocessableEntity,
+			"registry.signature-invalid", "SHA256SUMS.sig",
+		},
+		{
+			"signature by an unknown key", base + "/providers/payments/versions/1.0.0", stranger,
+			http.StatusUnprocessableEntity, "registry.signature-untrusted-key", "SHA256SUMS.sig",
+		},
+		{
+			"archive that is not the signed archive", base + "/providers/payments/versions/1.0.0", swapped,
+			http.StatusUnprocessableEntity, "registry.archive-set-refused", "linux_amd64.zip",
+		},
+		{
+			"name outside the safe subset", base + "/providers/Payments/versions/1.0.0", good, http.StatusBadRequest,
+			"registry.invalid", "",
+		},
+		{
+			"name with an underscore", base + "/providers/pay_ments/versions/1.0.0", good, http.StatusBadRequest,
+			"registry.invalid", "",
+		},
+		{
+			"version that is not a version", base + "/providers/payments/versions/latest", good, http.StatusBadRequest,
+			"registry.invalid", "",
+		},
 	}
 
 	for _, tc := range tests {
@@ -476,11 +478,11 @@ func TestKeyOfAnotherNamespaceDoesNotSign(t *testing.T) {
 	t.Parallel()
 
 	f := newFixture(t)
-	other := newSigner(t)
+	other := pgpfixture.NewSigner(t)
 	f.trust(t, "beta", other)
-	f.trust(t, "acme", newSigner(t))
+	f.trust(t, "acme", pgpfixture.NewSigner(t))
 
-	body := f.publishBody(t, "acme", "payments", "1.0.0", buildSet(t, other, "payments", "1.0.0"))
+	body := f.publishBody(t, "acme", "payments", "1.0.0", buildSet(t, other))
 
 	got := f.call(t, "publisher", http.MethodPut, base+"/providers/payments/versions/1.0.0", body)
 	if got.code != http.StatusUnprocessableEntity || !strings.Contains(got.body, "registry.signature-untrusted-key") {
@@ -501,8 +503,10 @@ func TestStageLimitsAndKeys(t *testing.T) {
 	wantCode(t, "an empty body", got, http.StatusBadRequest)
 
 	// A route that takes no key refuses the header and does not ignore it.
-	got = f.do(t, request{token: "publisher", method: http.MethodPost, target: base + "/uploads", body: []byte("x"),
-		headers: map[string]string{"Idempotency-Key": "k"}})
+	got = f.do(t, request{
+		token: "publisher", method: http.MethodPost, target: base + "/uploads", body: []byte("x"),
+		headers: map[string]string{"Idempotency-Key": "k"},
+	})
 	if got.code != http.StatusBadRequest || !strings.Contains(got.body, "idempotency-key-unsupported") {
 		t.Errorf("upload with a key: %d %s", got.code, got.body)
 	}
@@ -515,11 +519,11 @@ func TestKeyRoutes(t *testing.T) {
 	t.Parallel()
 
 	f := newFixture(t)
-	sg := newSigner(t)
+	sg := pgpfixture.NewSigner(t)
 
 	for name, body := range map[string][]byte{
 		"garbage":          js(t, map[string]string{"armoredPublicKey": "not a key"}),
-		"an unknown field": js(t, map[string]string{"armoredPublicKey": sg.armor, "fingerprint": strings.Repeat("A", 40)}),
+		"an unknown field": js(t, map[string]string{"armoredPublicKey": string(sg.Key.Armored), "fingerprint": strings.Repeat("A", 40)}),
 		"not json":         []byte("armor"),
 	} {
 		got := f.call(t, "keyholder", http.MethodPost, base+"/keys", body)
@@ -527,18 +531,33 @@ func TestKeyRoutes(t *testing.T) {
 	}
 
 	wantCode(t, "register", f.call(t, "keyholder", http.MethodPost, base+"/keys",
-		js(t, map[string]string{"armoredPublicKey": sg.armor})), http.StatusCreated)
+		js(t, map[string]string{"armoredPublicKey": string(sg.Key.Armored)})), http.StatusCreated)
 
 	list := f.call(t, "keyholder", http.MethodGet, base+"/keys", nil)
-	if list.code != http.StatusOK || !strings.Contains(list.body, sg.fpr) {
+	if list.code != http.StatusOK || !strings.Contains(list.body, sg.Key.Fingerprint) {
 		t.Fatalf("list = %d %s", list.code, list.body)
 	}
 
-	wantCode(t, "a reader may not list keys", f.call(t, "reader", http.MethodGet, base+"/keys", nil), http.StatusForbidden)
+	wantCode(
+		t,
+		"a reader may not list keys",
+		f.call(t, "reader", http.MethodGet, base+"/keys", nil),
+		http.StatusForbidden,
+	)
 	wantCode(t, "remove a bad fingerprint", f.call(t, "keyholder", http.MethodDelete, base+"/keys/..%2F..", nil),
 		http.StatusBadRequest)
-	wantCode(t, "remove", f.call(t, "keyholder", http.MethodDelete, base+"/keys/"+sg.fpr, nil), http.StatusNoContent)
-	wantCode(t, "remove again", f.call(t, "keyholder", http.MethodDelete, base+"/keys/"+sg.fpr, nil), http.StatusNotFound)
+	wantCode(
+		t,
+		"remove",
+		f.call(t, "keyholder", http.MethodDelete, base+"/keys/"+sg.Key.Fingerprint, nil),
+		http.StatusNoContent,
+	)
+	wantCode(
+		t,
+		"remove again",
+		f.call(t, "keyholder", http.MethodDelete, base+"/keys/"+sg.Key.Fingerprint, nil),
+		http.StatusNotFound,
+	)
 }
 
 func TestAuthentication(t *testing.T) {
@@ -582,7 +601,12 @@ func TestRoutesDeclareActions(t *testing.T) {
 		}
 
 		if route.IdempotencyKey != (route.Answer != nil) {
-			t.Errorf("route %q: takes the key = %t, has an answer = %t", pattern, route.IdempotencyKey, route.Answer != nil)
+			t.Errorf(
+				"route %q: takes the key = %t, has an answer = %t",
+				pattern,
+				route.IdempotencyKey,
+				route.Answer != nil,
+			)
 		}
 
 		if route.Method == http.MethodGet && route.IdempotencyKey {

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"io"
 	"log/slog"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -36,7 +37,8 @@ type fakeRegistry struct {
 	files   map[string][]byte
 }
 
-func (f *fakeRegistry) release() registry.Release {
+// fixtureRelease is the one release of acme/payments.
+func fixtureRelease() registry.Release {
 	return registry.Release{
 		PublishedAt: time.Unix(1_800_000_000, 0).UTC(),
 		Address:     registry.Address{Namespace: "acme", Kind: registry.KindProvider, Name: "payments", System: ""},
@@ -44,7 +46,12 @@ func (f *fakeRegistry) release() registry.Release {
 		SignatureFile: "terraform-provider-payments_1.0.0_SHA256SUMS.sig", SignatureSHA256: sigHash,
 		KeyFingerprint: fingerprint, Protocols: []string{"5.0", "6.0"}, PublishedBy: "ada",
 		Archives: []registry.Archive{
-			{Platform: "linux_amd64", FileName: "terraform-provider-payments_1.0.0_linux_amd64.zip", SHA256: zipHash, Size: 3},
+			{
+				Platform: "linux_amd64",
+				FileName: "terraform-provider-payments_1.0.0_linux_amd64.zip",
+				SHA256:   zipHash,
+				Size:     3,
+			},
 		},
 	}
 }
@@ -54,7 +61,7 @@ func (f *fakeRegistry) Releases(_ context.Context, ns namespace.Name, name strin
 		return nil, registry.ErrNotFound
 	}
 
-	return []registry.Release{f.release()}, nil
+	return []registry.Release{fixtureRelease()}, nil
 }
 
 func (f *fakeRegistry) Release(_ context.Context, ns namespace.Name, name, version string) (registry.Release, error) {
@@ -62,7 +69,7 @@ func (f *fakeRegistry) Release(_ context.Context, ns namespace.Name, name, versi
 		return registry.Release{}, registry.ErrNotFound
 	}
 
-	return f.release(), nil
+	return fixtureRelease(), nil
 }
 
 func (f *fakeRegistry) SigningKey(_ context.Context, rel registry.Release) (registry.TrustedKey, error) {
@@ -73,10 +80,17 @@ func (f *fakeRegistry) SigningKey(_ context.Context, rel registry.Release) (regi
 		return registry.TrustedKey{}, registry.ErrKeyNotFound
 	}
 
-	return registry.TrustedKey{Fingerprint: rel.KeyFingerprint, Armored: []byte("-----BEGIN PGP PUBLIC KEY BLOCK-----\nkey\n-----END PGP PUBLIC KEY BLOCK-----\n")}, nil
+	return registry.TrustedKey{
+		Fingerprint: rel.KeyFingerprint,
+		Armored:     []byte("-----BEGIN PGP PUBLIC KEY BLOCK-----\nkey\n-----END PGP PUBLIC KEY BLOCK-----\n"),
+	}, nil
 }
 
-func (f *fakeRegistry) OpenFile(_ context.Context, ns namespace.Name, name, version, sum string) (int64, io.ReadCloser, error) {
+func (f *fakeRegistry) OpenFile(
+	_ context.Context,
+	ns namespace.Name,
+	name, version, sum string,
+) (int64, io.ReadCloser, error) {
 	if ns != "acme" || name != "payments" || version != "1.0.0" {
 		return 0, nil, registry.ErrNotFound
 	}
@@ -115,7 +129,7 @@ func newRegistryFixture(t *testing.T, host string, authz identity.Authorizer) re
 		Authenticator: tokenAuthenticator{}, Authorizer: authz, AddressGate: nil, Logger: slog.New(slog.DiscardHandler),
 		Namespaces: newTestNamespaces(t), Workspaces: stubWorkspaces{}, BaseURL: public, Audit: audits, Gate: nil,
 		MaxStateBytes: 0, OnAuditFailure: nil, DenialLimiter: nil,
-		Registry: tfe.RegistryConfig{
+		Registry: &tfe.RegistryConfig{
 			Service: reg, Host: host, DefaultPort: "443", URLKey: bytes.Repeat([]byte{7}, 32), URLTTL: 0,
 			Now: func() time.Time { return now },
 		},
@@ -158,8 +172,56 @@ func (f registryFixture) get(t *testing.T, target string) *httptest.ResponseReco
 	return f.serve(t, regReq{host: registryHost, target: target, token: "test-token", headers: nil})
 }
 
-const versionsPath = "/v1/providers/acme/payments/versions"
-const downloadPath = "/v1/providers/acme/payments/1.0.0/download/linux/amd64"
+const (
+	versionsPath = "/v1/providers/acme/payments/versions"
+	downloadPath = "/v1/providers/acme/payments/1.0.0/download/linux/amd64"
+)
+
+// versionsWire, downloadWire and their parts decode the answers of the
+// registry protocol.
+type versionsWire struct {
+	Versions []versionWire `json:"versions"`
+}
+
+type versionWire struct {
+	Version   string         `json:"version"`
+	Protocols []string       `json:"protocols"`
+	Platforms []platformWire `json:"platforms"`
+}
+
+type platformWire struct {
+	OS   string `json:"os"`
+	Arch string `json:"arch"`
+}
+
+//nolint:tagliatelle // OpenTofu fixes these field names.
+type downloadWire struct {
+	Protocols   []string `json:"protocols"`
+	Filename    string   `json:"filename"`
+	DownloadURL string   `json:"download_url"`
+	ShasumsURL  string   `json:"shasums_url"`
+	SigURL      string   `json:"shasums_signature_url"`
+	Shasum      string   `json:"shasum"`
+	Keys        keysWire `json:"signing_keys"`
+}
+
+//nolint:tagliatelle // OpenTofu fixes these field names.
+type keysWire struct {
+	GPG []keyWire `json:"gpg_public_keys"`
+}
+
+//nolint:tagliatelle // OpenTofu fixes these field names.
+type keyWire struct {
+	KeyID string `json:"key_id"`
+	Armor string `json:"ascii_armor"`
+}
+
+// downloadURLWire reads the file address of a download document.
+//
+//nolint:tagliatelle // OpenTofu fixes these field names.
+type downloadURLWire struct {
+	DownloadURL string `json:"download_url"`
+}
 
 func TestRegistryDiscovery(t *testing.T) {
 	t.Parallel()
@@ -169,21 +231,26 @@ func TestRegistryDiscovery(t *testing.T) {
 	rec := f.serve(t, regReq{host: registryHost, target: "/.well-known/terraform.json", token: "", headers: nil})
 
 	var doc map[string]string
-	if err := json.Unmarshal(rec.Body.Bytes(), &doc); err != nil || doc["providers.v1"] != "/v1/providers/" || doc["tfe.v2"] == "" {
+
+	err := json.Unmarshal(rec.Body.Bytes(), &doc)
+	if err != nil || doc["providers.v1"] != "/v1/providers/" || doc["tfe.v2"] == "" {
 		t.Fatalf("discovery = %q, %v", rec.Body.String(), err)
 	}
 
 	// A handler with no registry advertises none.
 	plain := newProductionHandler(t)
 	rec2 := httptest.NewRecorder()
-	plain.ServeHTTP(rec2, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/.well-known/terraform.json", http.NoBody))
+	plain.ServeHTTP(
+		rec2,
+		httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/.well-known/terraform.json", http.NoBody),
+	)
 
 	if strings.Contains(rec2.Body.String(), "providers.v1") {
 		t.Fatalf("discovery advertises providers.v1 with no registry: %s", rec2.Body.String())
 	}
 }
 
-func TestRegistryVersionsAndDownload(t *testing.T) {
+func TestRegistryVersions(t *testing.T) {
 	t.Parallel()
 
 	f := newRegistryFixture(t, registryHost, allowAll())
@@ -193,50 +260,45 @@ func TestRegistryVersionsAndDownload(t *testing.T) {
 		t.Fatalf("versions = %d %s", rec.Code, rec.Body.String())
 	}
 
-	var versions struct {
-		Versions []struct {
-			Version   string   `json:"version"`
-			Protocols []string `json:"protocols"`
-			Platforms []struct {
-				OS   string `json:"os"`
-				Arch string `json:"arch"`
-			} `json:"platforms"`
-		} `json:"versions"`
-	}
-
-	if err := json.Unmarshal(rec.Body.Bytes(), &versions); err != nil || len(versions.Versions) != 1 ||
-		versions.Versions[0].Version != "1.0.0" || len(versions.Versions[0].Protocols) != 2 ||
-		versions.Versions[0].Platforms[0].OS != "linux" || versions.Versions[0].Platforms[0].Arch != "amd64" {
+	var versions versionsWire
+	if err := json.Unmarshal(rec.Body.Bytes(), &versions); err != nil || len(versions.Versions) != 1 {
 		t.Fatalf("versions = %s, %v", rec.Body.String(), err)
 	}
 
-	rec = f.get(t, downloadPath)
+	v := versions.Versions[0]
+	if v.Version != "1.0.0" || len(v.Protocols) != 2 || v.Platforms[0].OS != "linux" || v.Platforms[0].Arch != "amd64" {
+		t.Fatalf("versions = %s", rec.Body.String())
+	}
+}
+
+func TestRegistryDownload(t *testing.T) {
+	t.Parallel()
+
+	f := newRegistryFixture(t, registryHost, allowAll())
+
+	rec := f.get(t, downloadPath)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("download = %d %s", rec.Code, rec.Body.String())
 	}
 
-	var dl struct {
-		Protocols   []string `json:"protocols"`
-		Filename    string   `json:"filename"`
-		DownloadURL string   `json:"download_url"`
-		ShasumsURL  string   `json:"shasums_url"`
-		SigURL      string   `json:"shasums_signature_url"`
-		Shasum      string   `json:"shasum"`
-		Keys        struct {
-			GPG []struct {
-				KeyID string `json:"key_id"`
-				Armor string `json:"ascii_armor"`
-			} `json:"gpg_public_keys"`
-		} `json:"signing_keys"`
-	}
-
+	var dl downloadWire
 	if err := json.Unmarshal(rec.Body.Bytes(), &dl); err != nil || dl.Shasum != zipHash ||
-		dl.Filename != "terraform-provider-payments_1.0.0_linux_amd64.zip" || len(dl.Keys.GPG) != 1 ||
-		dl.Keys.GPG[0].KeyID != "89ABCDEF01234567" || !strings.Contains(dl.Keys.GPG[0].Armor, "BEGIN PGP") {
+		dl.Filename != "terraform-provider-payments_1.0.0_linux_amd64.zip" || len(dl.Keys.GPG) != 1 {
 		t.Fatalf("download = %s, %v", rec.Body.String(), err)
 	}
 
-	// The three URLs open their files with no credential.
+	if dl.Keys.GPG[0].KeyID != "89ABCDEF01234567" || !strings.Contains(dl.Keys.GPG[0].Armor, "BEGIN PGP") {
+		t.Fatalf("signing key = %+v", dl.Keys.GPG[0])
+	}
+
+	checkDownloadFiles(t, f, dl)
+}
+
+// checkDownloadFiles opens the three file URLs of a download answer with no
+// credential.
+func checkDownloadFiles(t *testing.T, f registryFixture, dl downloadWire) {
+	t.Helper()
+
 	for name, want := range map[string]string{dl.DownloadURL: "zip", dl.ShasumsURL: "sums", dl.SigURL: "sig"} {
 		u, err := url.Parse(name)
 		if err != nil || u.Host != registryHost || u.Scheme != "https" {
@@ -271,8 +333,18 @@ func TestRegistryHostGate(t *testing.T) {
 		{"the host with a path", registryHost + "/x", nil, http.StatusNotFound},
 		{"an empty host", "", nil, http.StatusNotFound},
 		{"an address", "192.0.2.1", nil, http.StatusNotFound},
-		{"a forwarded host does not help", "evil.example.com", map[string]string{"X-Forwarded-Host": registryHost}, http.StatusNotFound},
-		{"a forwarded host does not hurt", registryHost, map[string]string{"X-Forwarded-Host": "evil.example.com"}, http.StatusOK},
+		{
+			"a forwarded host does not help",
+			"evil.example.com",
+			map[string]string{"X-Forwarded-Host": registryHost},
+			http.StatusNotFound,
+		},
+		{
+			"a forwarded host does not hurt",
+			registryHost,
+			map[string]string{"X-Forwarded-Host": "evil.example.com"},
+			http.StatusOK,
+		},
 		{"a host header with two values", registryHost + ", evil.example.com", nil, http.StatusNotFound},
 	}
 
@@ -298,9 +370,13 @@ func TestRegistryHostGateWritesAnAuditEntryAndAnswersAsMissing(t *testing.T) {
 	f := newRegistryFixture(t, registryHost, allowAll())
 
 	hostile := f.serve(t, regReq{host: "evil.example.com", target: versionsPath, token: "test-token", headers: nil})
-	missing := f.serve(t, regReq{host: registryHost, target: "/v1/providers/acme/nothing/versions", token: "test-token", headers: nil})
+	missing := f.serve(
+		t,
+		regReq{host: registryHost, target: "/v1/providers/acme/nothing/versions", token: "test-token", headers: nil},
+	)
 
-	if hostile.Code != http.StatusNotFound || missing.Code != http.StatusNotFound || hostile.Body.String() != missing.Body.String() {
+	if hostile.Code != http.StatusNotFound || missing.Code != http.StatusNotFound ||
+		hostile.Body.String() != missing.Body.String() {
 		t.Fatalf("hostile host = %d %q, missing address = %d %q: want the same answer",
 			hostile.Code, hostile.Body.String(), missing.Code, missing.Body.String())
 	}
@@ -313,7 +389,8 @@ func TestRegistryHostGateWritesAnAuditEntryAndAnswersAsMissing(t *testing.T) {
 	}
 
 	e := f.audits.entries[0]
-	if e.Outcome != "denied" || e.Action != "registry:read" || e.Namespace != "acme" || !strings.Contains(e.Reason, "another host") {
+	if e.Outcome != "denied" || e.Action != "registry:read" || e.Namespace != "acme" ||
+		!strings.Contains(e.Reason, "another host") {
 		t.Fatalf("audit entry = %+v", e)
 	}
 }
@@ -392,9 +469,7 @@ func TestRegistryFileSignature(t *testing.T) {
 
 	rec := f.get(t, downloadPath)
 
-	var dl struct {
-		DownloadURL string `json:"download_url"`
-	}
+	var dl downloadURLWire
 
 	if err := json.Unmarshal(rec.Body.Bytes(), &dl); err != nil {
 		t.Fatalf("download: %v", err)
@@ -434,7 +509,11 @@ func TestRegistryFileSignature(t *testing.T) {
 		{"the signature for another version", strings.Replace(good.RequestURI(), "/1.0.0/", "/1.0.1/", 1), 0},
 		{"the signature for another provider", strings.Replace(good.RequestURI(), "/payments/", "/ledger/", 1), 0},
 		{"the signature for another namespace", strings.Replace(good.RequestURI(), "/acme/", "/beta/", 1), 0},
-		{"a path that leaves the release", "/v1/providers/acme/payments/1.0.0/files/..%2f..%2fsecret?" + good.RawQuery, 0},
+		{
+			"a path that leaves the release",
+			"/v1/providers/acme/payments/1.0.0/files/..%2f..%2fsecret?" + good.RawQuery,
+			0,
+		},
 	}
 
 	for _, tc := range tests {
@@ -444,8 +523,9 @@ func TestRegistryFileSignature(t *testing.T) {
 			h := newRegistryFixture(t, registryHost, allowAll())
 			*h.clock = h.clock.Add(tc.advance)
 
-			if rec := h.serve(t, regReq{host: registryHost, target: tc.target, token: "", headers: nil}); rec.Code != http.StatusNotFound {
-				t.Fatalf("%s = %d %s, want 404", tc.name, rec.Code, rec.Body.String())
+			got := h.serve(t, regReq{host: registryHost, target: tc.target, token: "", headers: nil})
+			if got.Code != http.StatusNotFound {
+				t.Fatalf("%s = %d %s, want 404", tc.name, got.Code, got.Body.String())
 			}
 		})
 	}
@@ -454,7 +534,8 @@ func TestRegistryFileSignature(t *testing.T) {
 	other := newRegistryFixture(t, registryHost, allowAll())
 	other.clock = f.clock
 
-	if rec := other.serve(t, regReq{host: registryHost, target: good.RequestURI(), token: "", headers: nil}); rec.Code != http.StatusOK {
+	control := other.serve(t, regReq{host: registryHost, target: good.RequestURI(), token: "", headers: nil})
+	if control.Code != http.StatusOK {
 		// Same key in both fixtures: this is the control case.
 		t.Fatalf("control request = %d, want 200", rec.Code)
 	}
@@ -465,9 +546,7 @@ func TestRegistryFileRouteChecksTheHostFirst(t *testing.T) {
 
 	f := newRegistryFixture(t, registryHost, allowAll())
 
-	var dl struct {
-		DownloadURL string `json:"download_url"`
-	}
+	var dl downloadURLWire
 
 	if err := json.Unmarshal(f.get(t, downloadPath).Body.Bytes(), &dl); err != nil {
 		t.Fatalf("download: %v", err)
@@ -484,22 +563,33 @@ func TestRegistryFileRouteChecksTheHostFirst(t *testing.T) {
 	}
 }
 
+// registryRoutesOf returns the scopes of the registry routes of h by pattern,
+// and reports a route that declares another action than registry:read.
+func registryRoutesOf(t *testing.T, h *tfe.Handler) map[string]tfe.Scope {
+	t.Helper()
+
+	seen := map[string]tfe.Scope{}
+
+	for _, route := range h.Routes() {
+		if !strings.HasPrefix(route.Path, "/v1/providers/") {
+			continue
+		}
+
+		seen[route.Method+" "+route.Path] = route.Scope
+
+		if len(route.Actions) != 1 || route.Actions[0] != identity.ActionRegistryRead {
+			t.Errorf("route %s declares %v, want registry:read", route.Path, route.Actions)
+		}
+	}
+
+	return seen
+}
+
 func TestRegistryRoutesDeclareScopes(t *testing.T) {
 	t.Parallel()
 
 	f := newRegistryFixture(t, registryHost, allowAll())
-
-	seen := map[string]tfe.Scope{}
-
-	for _, route := range f.handler.Routes() {
-		if strings.HasPrefix(route.Path, "/v1/providers/") {
-			seen[route.Method+" "+route.Path] = route.Scope
-
-			if len(route.Actions) != 1 || route.Actions[0] != identity.ActionRegistryRead {
-				t.Errorf("route %s declares %v, want registry:read", route.Path, route.Actions)
-			}
-		}
-	}
+	seen := registryRoutesOf(t, f.handler)
 
 	want := map[string]tfe.Scope{
 		"GET /v1/providers/{namespace}/{type}/versions":                       tfe.ScopeRegistry,
@@ -507,22 +597,14 @@ func TestRegistryRoutesDeclareScopes(t *testing.T) {
 		"GET /v1/providers/{namespace}/{type}/{version}/files/{sha256}":       tfe.ScopeSigned,
 	}
 
-	if len(seen) != len(want) {
+	if !maps.Equal(seen, want) {
 		t.Fatalf("registry routes = %v, want %v", seen, want)
-	}
-
-	for k, v := range want {
-		if seen[k] != v {
-			t.Errorf("route %q has scope %d, want %d", k, seen[k], v)
-		}
 	}
 
 	// Every served pattern has a row.
 	for _, pattern := range f.handler.RegisteredPatterns() {
-		if strings.Contains(pattern, "/v1/providers/") {
-			if _, ok := want[pattern]; !ok {
-				t.Errorf("served route %q has no row", pattern)
-			}
+		if _, ok := want[pattern]; strings.Contains(pattern, "/v1/providers/") && !ok {
+			t.Errorf("served route %q has no row", pattern)
 		}
 	}
 }
@@ -531,12 +613,31 @@ func TestNewHandlerRefusesAShortRegistryKey(t *testing.T) {
 	t.Parallel()
 
 	_, err := tfe.NewHandler(tfe.Config{
-		Authenticator: tokenAuthenticator{}, Authorizer: allowAll(), AddressGate: nil, Logger: slog.New(slog.DiscardHandler),
-		Namespaces: newTestNamespaces(t), Workspaces: stubWorkspaces{}, BaseURL: baseurl.Resolver{}, Audit: nil, Gate: nil,
-		MaxStateBytes: 0, OnAuditFailure: nil, DenialLimiter: nil,
-		Registry: tfe.RegistryConfig{
-			Service: &fakeRegistry{mu: sync.Mutex{}, keyGone: false, files: nil}, Host: registryHost, DefaultPort: "443",
-			URLKey: []byte("short"), URLTTL: 0, Now: nil,
+		Authenticator: tokenAuthenticator{},
+		Authorizer:    allowAll(),
+		AddressGate:   nil,
+		Logger:        slog.New(slog.DiscardHandler),
+		Namespaces: newTestNamespaces(
+			t,
+		),
+		Workspaces:     stubWorkspaces{},
+		BaseURL:        baseurl.Resolver{},
+		Audit:          nil,
+		Gate:           nil,
+		MaxStateBytes:  0,
+		OnAuditFailure: nil,
+		DenialLimiter:  nil,
+		Registry: &tfe.RegistryConfig{
+			Service: &fakeRegistry{
+				mu:      sync.Mutex{},
+				keyGone: false,
+				files:   nil,
+			},
+			Host:        registryHost,
+			DefaultPort: "443",
+			URLKey:      []byte("short"),
+			URLTTL:      0,
+			Now:         nil,
 		},
 	})
 	if err == nil {

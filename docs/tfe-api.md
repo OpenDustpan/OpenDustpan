@@ -10,7 +10,7 @@ behavior differs from TFE. It is checked against the route table in
 
 | Method | Path | Access | What it does |
 | --- | --- | --- | --- |
-| GET | /.well-known/terraform.json | Public | Service discovery. Advertises `tfe.v2` and `tfe.v2.1` at `/api/v2/`. Lists no `login.v1`. |
+| GET | /.well-known/terraform.json | Public | Service discovery. Advertises `tfe.v2` and `tfe.v2.1` at `/api/v2/`. Lists no `login.v1`. With a registry and a public URL it also advertises `providers.v1` at `/v1/providers/`, which `docs/reference/registry-api.md` describes. |
 | GET | /api/v2/ping | Public | Liveness probe. Sets `TFP-API-Version: 2.5`. |
 | GET | /api/v2/organizations/{organization}/entitlement-set | Token, `namespace:read` | Reports `operations: false`. OpenTofu runs plans locally. |
 | GET | /api/v2/organizations/{organization}/workspaces/{workspace} | Token, `unit:read` | Reads one workspace by name. Unknown names answer 404. |

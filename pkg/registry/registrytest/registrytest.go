@@ -26,6 +26,8 @@ const (
 )
 
 const (
+	protocolV5  = "5.0"
+	protocolV6  = "6.0"
 	publisher   = "user-1"
 	v100        = "1.0.0"
 	archiveSize = 10
@@ -77,7 +79,7 @@ func provider(name, version string) registry.Release {
 		SignatureFile:   "terraform-provider-" + name + "_" + version + "_SHA256SUMS.sig",
 		SignatureSHA256: sumB,
 		KeyFingerprint:  fingerprint,
-		Protocols:       []string{"5.0"},
+		Protocols:       []string{protocolV5},
 		PublishedBy:     publisher,
 		PublishedAt:     time.UnixMilli(fixtureT).UTC(),
 		Archives: []registry.Archive{{
@@ -303,6 +305,7 @@ func testKinds(t *testing.T, h Harness) {
 		SignatureFile:   "",
 		SignatureSHA256: "",
 		KeyFingerprint:  "",
+		Protocols:       nil,
 		PublishedBy:     publisher,
 		PublishedAt:     time.UnixMilli(fixtureT).UTC(),
 		Archives:        []registry.Archive{{Platform: "", FileName: "vpc.zip", SHA256: sumB, Size: 1}},
@@ -487,16 +490,16 @@ func testProtocols(t *testing.T, h Harness) {
 
 	f := h.Namespace(t, acme)
 	r := provider("payments", v100)
-	r.Protocols = []string{"5.0", "6.0"}
+	r.Protocols = []string{protocolV5, protocolV6}
 	mustPublish(t, h, r, f)
 
 	got, err := h.Store.Get(t.Context(), r.Address, v100)
-	if err != nil || !slices.Equal(got.Protocols, []string{"5.0", "6.0"}) {
+	if err != nil || !slices.Equal(got.Protocols, []string{protocolV5, protocolV6}) {
 		t.Fatalf("Get = %+v, %v; want the protocols 5.0 and 6.0", got, err)
 	}
 
 	other := r
-	other.Protocols = []string{"5.0"}
+	other.Protocols = []string{protocolV5}
 
 	if err := h.Store.Publish(t.Context(), other, f, entry(acme)); !errors.Is(err, registry.ErrVersionExists) {
 		t.Fatalf("Publish with other protocols = %v, want ErrVersionExists", err)
@@ -513,9 +516,9 @@ func testBadProtocols(t *testing.T, h Harness) {
 		"empty text":    {""},
 		"not a version": {"five"},
 		"with a comma":  {"5.0,6.0"},
-		"repeated":      {"5.0", "5.0"},
-		"falling":       {"6.0", "5.0"},
-		"too many":      {"1.0", "2.0", "3.0", "4.0", "5.0"},
+		"repeated":      {protocolV5, protocolV5},
+		"falling":       {protocolV6, protocolV5},
+		"too many":      {"1.0", "2.0", "3.0", "4.0", protocolV5},
 	} {
 		r := provider("payments", v100)
 		r.Protocols = protocols

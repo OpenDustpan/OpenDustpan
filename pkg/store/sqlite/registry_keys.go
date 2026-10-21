@@ -91,10 +91,11 @@ func (k registryKeys) AddKey(ctx context.Context, rec registry.KeyRecord, fence 
 			return registry.ErrKeyLimit
 		}
 
-		if _, err = q.InsertRegistryKey(ctx, db.InsertRegistryKeyParams{
+		_, err = q.InsertRegistryKey(ctx, db.InsertRegistryKeyParams{
 			Namespace: rec.Namespace.String(), Fingerprint: rec.Key.Fingerprint, ArmoredKey: string(rec.Key.Armored),
 			AddedBy: rec.AddedBy, AddedAtMs: codec.Millis(rec.AddedAt),
-		}); err != nil {
+		})
+		if err != nil {
 			return fmt.Errorf("insert registry key: %w", err)
 		}
 

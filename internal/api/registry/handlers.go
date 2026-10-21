@@ -24,6 +24,10 @@ import (
 // a key is at most 1 MiB, in armor and escaped.
 const maxBodyBytes = 2 << 20
 
+// fixedFiles is the number of files of a release that are not archives: the
+// checksums file and the signature file.
+const fixedFiles = 2
+
 // Wire shapes of the registry API.
 //
 // Contract: never remove or rename these fields.
@@ -85,12 +89,22 @@ type listKeysResponse struct {
 func formatTime(t time.Time) string { return t.UTC().Format(time.RFC3339) }
 
 func toRelease(r registry.Release) releaseDocument {
-	files := []releaseFile{
-		{Role: string(service.RoleSums), Name: r.SumsFile, SHA256: r.SumsSHA256, Platform: "", Size: 0},
-		{Role: string(service.RoleSignature), Name: r.SignatureFile, SHA256: r.SignatureSHA256, Platform: "", Size: 0},
-	}
+	files := make([]releaseFile, 0, fixedFiles+len(r.Archives))
+	files = append(files,
+		releaseFile{Role: string(service.RoleSums), Name: r.SumsFile, SHA256: r.SumsSHA256, Platform: "", Size: 0},
+		releaseFile{
+			Role: string(
+				service.RoleSignature,
+			),
+			Name:     r.SignatureFile,
+			SHA256:   r.SignatureSHA256,
+			Platform: "",
+			Size:     0,
+		},
+	)
 
-	for _, a := range r.Archives {
+	for i := range r.Archives {
+		a := &r.Archives[i]
 		files = append(files, releaseFile{
 			Role: string(service.RoleArchive), Name: a.FileName, SHA256: a.SHA256, Platform: a.Platform, Size: a.Size,
 		})
@@ -174,7 +188,7 @@ func (h *Handler) stage(w http.ResponseWriter, r *http.Request, p identity.Princ
 
 	staged, err := h.service.Stage(ctx, callerOf(r, p), obj.Namespace(), body)
 	if err != nil {
-		if _, tooLarge := errors.AsType[*http.MaxBytesError](err); tooLarge {
+		if limit, isLimit := errors.AsType[*http.MaxBytesError](err); isLimit && limit != nil {
 			err = service.ErrTooLarge
 		}
 
@@ -183,7 +197,12 @@ func (h *Handler) stage(w http.ResponseWriter, r *http.Request, p identity.Princ
 		return
 	}
 
-	h.writeJSON(ctx, w, http.StatusCreated, stagedDocument{Upload: staged.Token, SHA256: staged.SHA256, Size: staged.Size})
+	h.writeJSON(
+		ctx,
+		w,
+		http.StatusCreated,
+		stagedDocument{Upload: staged.Token, SHA256: staged.SHA256, Size: staged.Size},
+	)
 }
 
 // publish serves PUT .../registry/providers/{name}/versions/{version}.
@@ -202,7 +221,8 @@ func (h *Handler) publish(w http.ResponseWriter, r *http.Request, p identity.Pri
 		Protocols: body.Protocols, Files: make([]service.StagedFile, 0, len(body.Files)),
 	}
 
-	for _, f := range body.Files {
+	for i := range body.Files {
+		f := &body.Files[i]
 		req.Files = append(req.Files, service.StagedFile{Role: service.FileRole(f.Role), Name: f.Name, Token: f.Upload})
 	}
 
@@ -228,8 +248,8 @@ func (h *Handler) listReleases(w http.ResponseWriter, r *http.Request, _ identit
 	}
 
 	out := make([]releaseDocument, 0, len(found))
-	for _, rel := range found {
-		out = append(out, toRelease(rel))
+	for i := range found {
+		out = append(out, toRelease(found[i]))
 	}
 
 	h.writeJSON(ctx, w, http.StatusOK, listReleasesResponse{Releases: out})

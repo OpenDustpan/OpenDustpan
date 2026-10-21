@@ -34,7 +34,7 @@ const (
 )
 
 var (
-	sumLineRE = regexp.MustCompile(`^([0-9a-f]{64})  ([A-Za-z0-9][A-Za-z0-9._-]*)$`)
+	sumLineRE = regexp.MustCompile(`^([0-9a-f]{64}) {2}([A-Za-z0-9][A-Za-z0-9._-]*)$`)
 	// archiveRE splits "terraform-provider-<name>_<version>_<os>_<arch>.zip".
 	// The name has no underscore, because the registry-safe subset of a name has
 	// none. The version has none either. The pattern is anchored, so the parts
@@ -138,17 +138,23 @@ func Check(addr registry.Address, version string, set Set, sums map[string]strin
 	}
 
 	if set.Signature.Name != SignatureName(addr.Name, version) {
-		return none, refuse(set.Signature.Name, "the signature file must be named %s", SignatureName(addr.Name, version))
+		return none, refuse(
+			set.Signature.Name,
+			"the signature file must be named %s",
+			SignatureName(addr.Name, version),
+		)
 	}
 
 	if err := checkLines(set, sums); err != nil {
 		return none, err
 	}
 
-	rel := registry.Release{
-		Address: addr, Version: version, SumsFile: set.Sums.Name, SumsSHA256: set.Sums.SHA256,
-		SignatureFile: set.Signature.Name, SignatureSHA256: set.Signature.SHA256,
-	}
+	// The caller fills the publisher, the time, the key and the protocols.
+	var rel registry.Release
+
+	rel.Address, rel.Version = addr, version
+	rel.SumsFile, rel.SumsSHA256 = set.Sums.Name, set.Sums.SHA256
+	rel.SignatureFile, rel.SignatureSHA256 = set.Signature.Name, set.Signature.SHA256
 
 	for _, a := range set.Archives {
 		platform, err := checkArchive(addr, version, a, sums)

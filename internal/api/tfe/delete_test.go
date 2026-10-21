@@ -68,6 +68,7 @@ func TestDeleteWorkspace(t *testing.T) {
 			var passed []audit.Entry
 
 			handler, err := tfe.NewHandler(tfe.Config{
+				Registry:       nil,
 				Authenticator:  tokenAuthenticator{},
 				Authorizer:     allowAll(),
 				AddressGate:    nil,

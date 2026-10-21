@@ -114,10 +114,22 @@ func publishRegistryRelease(
 	}
 
 	n, err := q.InsertRegistryRelease(ctx, db.InsertRegistryReleaseParams{
-		Namespace: rel.Address.Namespace.String(), Kind: string(rel.Address.Kind), Name: rel.Address.Name,
-		System: rel.Address.System, Version: rel.Version, SumsFile: rel.SumsFile, SumsSha256: rel.SumsSHA256,
-		SignatureFile: rel.SignatureFile, SignatureSha256: rel.SignatureSHA256, KeyFingerprint: rel.KeyFingerprint,
-		Protocols: registrystore.JoinProtocols(rel.Protocols), PublishedBy: rel.PublishedBy, ArchivesJson: archives, PublishedAtMs: codec.Millis(rel.PublishedAt),
+		Namespace:       rel.Address.Namespace.String(),
+		Kind:            string(rel.Address.Kind),
+		Name:            rel.Address.Name,
+		System:          rel.Address.System,
+		Version:         rel.Version,
+		SumsFile:        rel.SumsFile,
+		SumsSha256:      rel.SumsSHA256,
+		SignatureFile:   rel.SignatureFile,
+		SignatureSha256: rel.SignatureSHA256,
+		KeyFingerprint:  rel.KeyFingerprint,
+		Protocols: registrystore.JoinProtocols(
+			rel.Protocols,
+		),
+		PublishedBy:   rel.PublishedBy,
+		ArchivesJson:  archives,
+		PublishedAtMs: codec.Millis(rel.PublishedAt),
 	})
 	if err != nil {
 		return false, fmt.Errorf("insert registry release: %w", err)
@@ -192,8 +204,8 @@ func (r registryStore) List(ctx context.Context, addr registry.Address) ([]regis
 
 	out := make([]registry.Release, 0, len(rows))
 
-	for _, row := range rows {
-		rel, relErr := registrystore.Release(registryRow(db.GetRegistryReleaseRow(row)))
+	for i := range rows {
+		rel, relErr := registrystore.Release(registryRow(db.GetRegistryReleaseRow(rows[i])))
 		// Defense in depth: the query matched the address. This check stays so
 		// that a change of the query cannot list a release of another address.
 		if relErr != nil || rel.Address != addr {

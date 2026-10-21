@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -36,6 +37,9 @@ const (
 	// registryHostGateSubject is the subject of the audit entry of a request for
 	// another host: the gate runs before sign-in, so the request has no subject.
 	registryHostGateSubject = "registry-host-gate"
+	// keyIDLength is the length of the long key ID: the last 16 hex digits of a
+	// fingerprint.
+	keyIDLength = 16
 	// urlLabel separates the signature of a file URL from every other use of
 	// the key.
 	urlLabel = "opendustpan registry file url v1"
@@ -58,7 +62,8 @@ type RegistryService interface {
 }
 
 // RegistryConfig holds the registry protocol settings of a Handler. A Handler
-// with a nil Service serves no registry route and no providers.v1 entry.
+// with a nil config, or a config with a nil Service, serves no registry route
+// and no providers.v1 entry.
 type RegistryConfig struct {
 	Service RegistryService
 	// Host is the host of the server, as the clients write it in a provider
@@ -88,18 +93,26 @@ type registryState struct {
 }
 
 // newRegistryState checks cfg. A nil Service gives nil: no registry route.
-func newRegistryState(cfg RegistryConfig) (*registryState, error) {
-	if cfg.Service == nil {
+func newRegistryState(cfg *RegistryConfig) (*registryState, error) {
+	if cfg == nil || cfg.Service == nil {
 		return nil, nil //nolint:nilnil // No registry routes: the config is optional.
 	}
 
 	if len(cfg.URLKey) < MinRegistryURLKeyBytes {
-		return nil, fmt.Errorf("%w: registry URL key of at least %d bytes", ErrMissingDependency, MinRegistryURLKeyBytes)
+		return nil, fmt.Errorf(
+			"%w: registry URL key of at least %d bytes",
+			ErrMissingDependency,
+			MinRegistryURLKeyBytes,
+		)
 	}
 
 	st := &registryState{
-		service: cfg.Service, host: strings.ToLower(cfg.Host), defaultPort: cfg.DefaultPort, key: append([]byte(nil), cfg.URLKey...),
-		ttl: cfg.URLTTL, now: cfg.Now,
+		service:     cfg.Service,
+		host:        strings.ToLower(cfg.Host),
+		defaultPort: cfg.DefaultPort,
+		key:         append([]byte(nil), cfg.URLKey...),
+		ttl:         cfg.URLTTL,
+		now:         cfg.Now,
 	}
 
 	if st.ttl <= 0 {
@@ -124,11 +137,16 @@ func (s *registryState) canonicalHost(raw string) string {
 
 	host := strings.ToLower(raw)
 
-	if h, port, found := strings.Cut(host, ":"); found && port == s.defaultPort && !strings.Contains(h, ":") {
-		return h
+	name, port, err := net.SplitHostPort(host)
+	if err != nil || port != s.defaultPort {
+		return host
 	}
 
-	return host
+	if strings.Contains(name, ":") {
+		return "[" + name + "]"
+	}
+
+	return name
 }
 
 // hostAllowed reports whether the request is for the configured host. It
@@ -226,7 +244,11 @@ func (h *Handler) denyHost(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// The gate runs before sign-in, so the entry names the gate as its subject.
-	h.guard.Record(ctx, r, identity.Principal{Subject: registryHostGateSubject}, refusal.Denial{
+	var gate identity.Principal
+
+	gate.Subject = registryHostGateSubject
+
+	h.guard.Record(ctx, r, gate, refusal.Denial{
 		Action: identity.ActionRegistryRead, Object: obj, Reason: "request for another host", Window: 0,
 	})
 
@@ -249,12 +271,7 @@ func (h *Handler) enforceRegistry(route Route) http.HandlerFunc {
 
 		p, err := h.authenticate(r)
 		if err != nil {
-			status, text := http.StatusUnauthorized, "unauthenticated"
-			if errors.Is(err, identity.ErrRateLimited) {
-				status, text = http.StatusTooManyRequests, "too many failed sign-ins from this address: try again later"
-			}
-
-			h.writeRegistryError(ctx, w, status, text)
+			h.writeRegistryAuthError(ctx, w, err)
 
 			return
 		}
@@ -266,20 +283,57 @@ func (h *Handler) enforceRegistry(route Route) http.HandlerFunc {
 			return
 		}
 
-		for _, action := range route.Actions {
-			if authErr := h.guard.Authorize(ctx, r, p, action, obj); authErr != nil {
-				if errors.Is(authErr, identity.ErrDenied) {
-					h.writeRegistryError(ctx, w, http.StatusForbidden, "forbidden")
-				} else {
-					h.writeRegistryError(ctx, w, http.StatusInternalServerError, "internal error")
-				}
+		if authErr := h.registryAuthorize(ctx, r, route, p, obj); authErr != nil {
+			h.writeRegistryDenial(ctx, w, authErr)
 
-				return
-			}
+			return
 		}
 
 		route.Serve(w, r, p, obj)
 	}
+}
+
+// writeRegistryAuthError answers a request whose credentials fail.
+func (h *Handler) writeRegistryAuthError(ctx context.Context, w http.ResponseWriter, err error) {
+	if errors.Is(err, identity.ErrRateLimited) {
+		h.writeRegistryError(
+			ctx,
+			w,
+			http.StatusTooManyRequests,
+			"too many failed sign-ins from this address: try again later",
+		)
+
+		return
+	}
+
+	h.writeRegistryError(ctx, w, http.StatusUnauthorized, "unauthenticated")
+}
+
+// registryAuthorize authorizes every declared action of route on obj. It
+// returns the first error of the Authorizer.
+func (h *Handler) registryAuthorize(
+	ctx context.Context, r *http.Request, route Route, p identity.Principal, obj identity.Object,
+) error {
+	for _, action := range route.Actions {
+		if err := h.guard.Authorize(ctx, r, p, action, obj); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// writeRegistryDenial answers a request that the Authorizer refused or could
+// not decide. Any error but a denial is an internal error, so the request
+// fails closed.
+func (h *Handler) writeRegistryDenial(ctx context.Context, w http.ResponseWriter, err error) {
+	if errors.Is(err, identity.ErrDenied) {
+		h.writeRegistryError(ctx, w, http.StatusForbidden, "forbidden")
+
+		return
+	}
+
+	h.writeRegistryError(ctx, w, http.StatusInternalServerError, "internal error")
 }
 
 // enforceSigned serves the file route of the registry protocol. The host check
@@ -319,10 +373,10 @@ type registryVersions struct {
 
 // splitPlatform returns the operating system and the architecture of a
 // platform such as "linux_amd64".
-func splitPlatform(platform string) (string, string) {
-	os, arch, _ := strings.Cut(platform, "_")
+func splitPlatform(platform string) [2]string {
+	goos, goarch, _ := strings.Cut(platform, "_")
 
-	return os, arch
+	return [2]string{goos, goarch}
 }
 
 // registryVersions serves GET /v1/providers/{namespace}/{type}/versions.
@@ -338,15 +392,16 @@ func (h *Handler) registryVersions(w http.ResponseWriter, r *http.Request, _ ide
 
 	out := registryVersions{Versions: make([]registryVersion, 0, len(releases))}
 
-	for _, rel := range releases {
+	for i := range releases {
+		rel := &releases[i]
 		v := registryVersion{
 			Version: rel.Version, Protocols: append([]string{}, rel.Protocols...),
 			Platforms: make([]registryPlatform, 0, len(rel.Archives)),
 		}
 
 		for _, a := range rel.Archives {
-			os, arch := splitPlatform(a.Platform)
-			v.Platforms = append(v.Platforms, registryPlatform{OS: os, Arch: arch})
+			platform := splitPlatform(a.Platform)
+			v.Platforms = append(v.Platforms, registryPlatform{OS: platform[0], Arch: platform[1]})
 		}
 
 		out.Versions = append(out.Versions, v)
@@ -380,6 +435,8 @@ func (h *Handler) writeRegistryJSON(ctx context.Context, w http.ResponseWriter, 
 }
 
 // registryDownload is the download document of the registry protocol.
+//
+//nolint:tagliatelle // OpenTofu fixes these field names.
 type registryDownload struct {
 	Protocols           []string    `json:"protocols"`
 	OS                  string      `json:"os"`
@@ -392,10 +449,12 @@ type registryDownload struct {
 	SigningKeys         signingKeys `json:"signing_keys"`
 }
 
+//nolint:tagliatelle // OpenTofu fixes these field names.
 type signingKeys struct {
 	GPGPublicKeys []gpgPublicKey `json:"gpg_public_keys"`
 }
 
+//nolint:tagliatelle // OpenTofu fixes these field names.
 type gpgPublicKey struct {
 	KeyID      string `json:"key_id"`
 	ASCIIArmor string `json:"ascii_armor"`
@@ -432,13 +491,13 @@ func (h *Handler) registryDownload(w http.ResponseWriter, r *http.Request, _ ide
 
 	base := h.baseURL.BaseURL(r)
 	expires := h.registry.now().Add(h.registry.ttl)
-	os, arch := splitPlatform(archive.Platform)
+	platform := splitPlatform(archive.Platform)
 
 	h.writeRegistryJSON(ctx, w, registryDownload{
-		Protocols: append([]string{}, rel.Protocols...), OS: os, Arch: arch, Filename: archive.FileName,
-		DownloadURL:         h.registry.fileURL(base, ns, name, version, archive.SHA256, expires),
-		ShasumsURL:          h.registry.fileURL(base, ns, name, version, rel.SumsSHA256, expires),
-		ShasumsSignatureURL: h.registry.fileURL(base, ns, name, version, rel.SignatureSHA256, expires),
+		Protocols: append([]string{}, rel.Protocols...), OS: platform[0], Arch: platform[1], Filename: archive.FileName,
+		DownloadURL:         h.registry.fileURL(base, registryFile{ns, name, version, archive.SHA256}, expires),
+		ShasumsURL:          h.registry.fileURL(base, registryFile{ns, name, version, rel.SumsSHA256}, expires),
+		ShasumsSignatureURL: h.registry.fileURL(base, registryFile{ns, name, version, rel.SignatureSHA256}, expires),
 		Shasum:              archive.SHA256,
 		SigningKeys: signingKeys{GPGPublicKeys: []gpgPublicKey{
 			{KeyID: keyID(key.Fingerprint), ASCIIArmor: string(key.Armored)},
@@ -448,22 +507,24 @@ func (h *Handler) registryDownload(w http.ResponseWriter, r *http.Request, _ ide
 
 // archiveOf finds the archive of a platform.
 func archiveOf(rel registry.Release, platform string) (registry.Archive, bool) {
+	var none registry.Archive
+
 	for _, a := range rel.Archives {
 		if a.Platform == platform {
 			return a, true
 		}
 	}
 
-	return registry.Archive{}, false
+	return none, false
 }
 
 // keyID returns the long key ID of a fingerprint: its last 16 hex digits.
 func keyID(fingerprint string) string {
-	if len(fingerprint) < 16 {
+	if len(fingerprint) < keyIDLength {
 		return fingerprint
 	}
 
-	return fingerprint[len(fingerprint)-16:]
+	return fingerprint[len(fingerprint)-keyIDLength:]
 }
 
 // fileMAC returns the signature of one file URL: the HMAC-SHA-256, keyed with
@@ -480,13 +541,21 @@ func (s *registryState) fileMAC(ns namespace.Name, name, version, sum string, ex
 	return mac.Sum(nil)
 }
 
-// fileURL returns the signed URL of one file of a release.
-func (s *registryState) fileURL(base string, ns namespace.Name, name, version, sum string, expires time.Time) string {
-	exp := expires.Unix()
-	sig := base64.RawURLEncoding.EncodeToString(s.fileMAC(ns, name, version, sum, exp))
+// registryFile names one file of a release for a signed URL.
+type registryFile struct {
+	ns      namespace.Name
+	name    string
+	version string
+	sum     string
+}
 
-	return base + registryPrefix + url.PathEscape(ns.String()) + "/" + url.PathEscape(name) + "/" +
-		url.PathEscape(version) + "/files/" + url.PathEscape(sum) + "?expires=" + strconv.FormatInt(exp, 10) +
+// fileURL returns the signed URL of one file of a release.
+func (s *registryState) fileURL(base string, f registryFile, expires time.Time) string {
+	expSec := expires.Unix()
+	sig := base64.RawURLEncoding.EncodeToString(s.fileMAC(f.ns, f.name, f.version, f.sum, expSec))
+
+	return base + registryPrefix + url.PathEscape(f.ns.String()) + "/" + url.PathEscape(f.name) + "/" +
+		url.PathEscape(f.version) + "/files/" + url.PathEscape(f.sum) + "?expires=" + strconv.FormatInt(expSec, 10) +
 		"&sig=" + sig
 }
 

@@ -915,12 +915,8 @@ func (s *Store) buildStaging(ctx context.Context, in stagingInput) (backup.Summa
 		return backup.Summary{}, viewsErr
 	}
 
-	if registryErr := checkStagedRegistryReleases(ctx, s.pool, in.staging); registryErr != nil {
+	if registryErr := checkStagedRegistry(ctx, s.pool, in.staging); registryErr != nil {
 		return backup.Summary{}, registryErr
-	}
-
-	if keysErr := checkStagedRegistryKeys(ctx, s.pool, in.staging); keysErr != nil {
-		return backup.Summary{}, keysErr
 	}
 
 	sum, err := s.summarizeStaging(ctx, in.staging, in.want)

@@ -171,6 +171,7 @@ func newStateHandlerWithBaseURL(t *testing.T, base baseurl.Resolver) *tfe.Handle
 	t.Helper()
 
 	handler, err := tfe.NewHandler(tfe.Config{
+		Registry:       nil,
 		Authenticator:  tokenAuthenticator{},
 		Authorizer:     allowAll(),
 		AddressGate:    nil,
@@ -803,6 +804,7 @@ func newListStateHandler(t *testing.T) *tfe.Handler {
 	}
 
 	handler, err := tfe.NewHandler(tfe.Config{
+		Registry:       nil,
 		Authenticator:  tokenAuthenticator{},
 		Authorizer:     allowAll(),
 		AddressGate:    nil,
@@ -1097,6 +1099,7 @@ func newSensitiveStateHandler(t *testing.T) *tfe.Handler {
 	t.Helper()
 
 	handler, err := tfe.NewHandler(tfe.Config{
+		Registry:       nil,
 		Authenticator:  tokenAuthenticator{},
 		Authorizer:     allowAll(),
 		AddressGate:    nil,
@@ -1212,6 +1215,7 @@ func TestStateSecretsNeedReadSecrets(t *testing.T) {
 	t.Parallel()
 
 	handler, err := tfe.NewHandler(tfe.Config{
+		Registry:       nil,
 		Authenticator:  tokenAuthenticator{},
 		Authorizer:     selectiveAuthorizer{deny: map[identity.Action]bool{identity.ActionUnitReadSecrets: true}},
 		AddressGate:    nil,

@@ -639,6 +639,15 @@ func ipAllowlistOptions(st serverStore, args serverArgs, opts []dustpan.Option) 
 	)
 }
 
+// storeOptions returns the options that give the in-process server the optional
+// stores of st and the public URL.
+func storeOptions(st serverStore, wrapper secret.Wrapper, args serverArgs) []dustpan.Option {
+	return slices.Concat(
+		profileStoreOptions(st, wrapper), jobStoreOptions(st), savedViewStoreOptions(st),
+		registryStoreOptions(st), publicURLOptions(args.publicURL),
+	)
+}
+
 func newServer(ctx context.Context, tb testing.TB, args serverArgs) serverBuild {
 	tb.Helper()
 
@@ -685,10 +694,7 @@ func newServer(ctx context.Context, tb testing.TB, args serverArgs) serverBuild 
 		st,
 		args,
 		append(
-			slices.Concat(
-				profileStoreOptions(st, wrapper), jobStoreOptions(st), savedViewStoreOptions(st),
-				registryStoreOptions(st), publicURLOptions(args.publicURL),
-			),
+			storeOptions(st, wrapper, args),
 			[]dustpan.Option{
 				dustpan.WithRegion(region),
 				dustpan.WithNamespaceStore(st),

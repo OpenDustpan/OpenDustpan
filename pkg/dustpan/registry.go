@@ -23,7 +23,20 @@ import (
 // /v1/providers/ and advertises it as providers.v1 in service discovery.
 // Without them the server serves no registry route.
 func WithRegistry(releases registry.Store, keys registry.KeyStore) Option {
-	return func(o *settings) { o.registryStore, o.registryKeys = releases, keys }
+	return func(o *settings) {
+		if o.registry == nil {
+			o.registry = &registrySettings{releases: nil, keys: nil, urlKey: nil}
+		}
+
+		o.registry.releases, o.registry.keys = releases, keys
+	}
+}
+
+// registrySettings holds the options of the private registry.
+type registrySettings struct {
+	releases registry.Store
+	keys     registry.KeyStore
+	urlKey   []byte
 }
 
 // WithRegistryURLKey sets the key that signs the file URLs of the provider
@@ -31,13 +44,19 @@ func WithRegistry(releases registry.Store, keys registry.KeyStore) Option {
 // it the server makes a random key at start, so a signed URL is valid only on
 // the instance that made it: instances behind one address need one shared key.
 func WithRegistryURLKey(key []byte) Option {
-	return func(o *settings) { o.registryURLKey = append([]byte(nil), key...) }
+	return func(o *settings) {
+		if o.registry == nil {
+			o.registry = &registrySettings{releases: nil, keys: nil, urlKey: nil}
+		}
+
+		o.registry.urlKey = append([]byte(nil), key...)
+	}
 }
 
 // newRegistryService builds the registry service, or returns nil when no
 // registry store is set.
 func newRegistryService(cfg *settings) (*service.Service, error) {
-	if cfg.registryStore == nil || cfg.registryKeys == nil {
+	if cfg.registry == nil || cfg.registry.releases == nil || cfg.registry.keys == nil {
 		return nil, nil //nolint:nilnil // No registry: no registry store is set.
 	}
 
@@ -48,7 +67,7 @@ func newRegistryService(cfg *settings) (*service.Service, error) {
 	verifier := pgpverify.Verifier{Now: nil}
 
 	svc, err := service.New(service.Config{
-		Store: cfg.registryStore, Keys: cfg.registryKeys, Verifier: verifier, Inspector: verifier,
+		Store: cfg.registry.releases, Keys: cfg.registry.keys, Verifier: verifier, Inspector: verifier,
 		Blobs: cfg.blobStore, Namespaces: cfg.namespaceStore, Now: cfg.now, MaxArchiveBytes: 0, MaxReleaseBytes: 0,
 	})
 	if err != nil {
@@ -97,22 +116,22 @@ var errRegistryURL = errors.New("the public URL has no host")
 // serves no registry route, when no registry store is set or no public URL is
 // set: the host check compares each request with the host of the public URL, so
 // without one every request would fail.
-func newRegistryProtocol(cfg *settings, publicURL string) (tfe.RegistryConfig, error) {
+func newRegistryProtocol(cfg *settings, publicURL string) (*tfe.RegistryConfig, error) {
 	regSvc, err := newRegistryService(cfg)
 	if err != nil || regSvc == nil || publicURL == "" {
-		return tfe.RegistryConfig{}, err
+		return nil, err
 	}
 
 	u, err := url.Parse(publicURL)
 	if err != nil || u.Host == "" {
-		return tfe.RegistryConfig{}, errRegistryURL
+		return nil, errRegistryURL
 	}
 
-	key := cfg.registryURLKey
+	key := cfg.registry.urlKey
 	if len(key) == 0 {
 		key = make([]byte, tfe.MinRegistryURLKeyBytes)
 		if _, err = rand.Read(key); err != nil {
-			return tfe.RegistryConfig{}, fmt.Errorf("make the registry URL key: %w", err)
+			return nil, fmt.Errorf("make the registry URL key: %w", err)
 		}
 	}
 
@@ -121,7 +140,7 @@ func newRegistryProtocol(cfg *settings, publicURL string) (tfe.RegistryConfig, e
 		port = "80"
 	}
 
-	return tfe.RegistryConfig{
+	return &tfe.RegistryConfig{
 		Service: regSvc, Host: strings.ToLower(u.Host), DefaultPort: port, URLKey: key, URLTTL: 0, Now: cfg.now,
 	}, nil
 }

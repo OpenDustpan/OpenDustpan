@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"strings"
 	"time"
 
@@ -149,6 +150,7 @@ func armorBody(signature []byte) ([]byte, error) {
 // the weak hash functions and key algorithms it knows, and the check of the
 // result in checkPolicy repeats the rule.
 func policy(now func() time.Time) *packet.Config {
+	//nolint:exhaustruct_v5 // The library takes its default for every field that is left out.
 	return &packet.Config{
 		Time:       now,
 		MinRSABits: MinRSABits,
@@ -223,19 +225,18 @@ func classify(err error) error {
 	return registry.ErrBadSignature
 }
 
+// allowedHashes are the hash functions of a signature that the registry accepts.
+//
+//nolint:gochecknoglobals // A fixed list; Go has no constant slices.
+var allowedHashes = []crypto.Hash{crypto.SHA256, crypto.SHA384, crypto.SHA512}
+
 // checkPolicy applies the rules of the registry to a signature that the library
 // accepted: the hash function, and the algorithm and size of every key of the
 // signer. Defense in depth: the packet configuration states the same rules.
 // This check stays so that a library that ignores a field of its configuration
 // cannot accept a weak signature.
 func checkPolicy(sig *packet.Signature, signer *openpgp.Entity) error {
-	switch sig.Hash {
-	case crypto.SHA256, crypto.SHA384, crypto.SHA512:
-	default:
-		return registry.ErrBadSignature
-	}
-
-	if sig.IssuerKeyId == nil {
+	if !slices.Contains(allowedHashes, sig.Hash) || sig.IssuerKeyId == nil {
 		return registry.ErrBadSignature
 	}
 
@@ -256,10 +257,12 @@ func checkPolicy(sig *packet.Signature, signer *openpgp.Entity) error {
 
 // strongKey refuses a DSA or ElGamal key and an RSA key below MinRSABits.
 func strongKey(k *packet.PublicKey) error {
-	switch k.PubKeyAlgo {
-	case packet.PubKeyAlgoDSA, packet.PubKeyAlgoElGamal:
+	if k.PubKeyAlgo == packet.PubKeyAlgoDSA || k.PubKeyAlgo == packet.PubKeyAlgoElGamal {
 		return registry.ErrBadSignature
-	case packet.PubKeyAlgoRSA, packet.PubKeyAlgoRSASignOnly, packet.PubKeyAlgoRSAEncryptOnly:
+	}
+
+	if k.PubKeyAlgo == packet.PubKeyAlgoRSA || k.PubKeyAlgo == packet.PubKeyAlgoRSASignOnly ||
+		k.PubKeyAlgo == packet.PubKeyAlgoRSAEncryptOnly {
 		bits, err := k.BitLength()
 		if err != nil || bits < MinRSABits {
 			return registry.ErrBadSignature
@@ -280,32 +283,44 @@ func (v Verifier) Inspect(ctx context.Context, armored []byte) (registry.Trusted
 		return registry.TrustedKey{}, fmt.Errorf("inspect key: %w", err)
 	}
 
-	bad := func(reason string) (registry.TrustedKey, error) {
-		return registry.TrustedKey{}, fmt.Errorf("%w: %s", registry.ErrBadKey, reason)
-	}
-
 	if len(armored) == 0 || len(armored) > registry.MaxKeyBytes {
-		return bad("the key is empty or larger than the limit")
+		return registry.TrustedKey{}, badKey("the key is empty or larger than the limit")
 	}
 
 	// The library reads the first armor block only. A second block would be
 	// dropped without a word, so the call refuses it.
 	list, err := openpgp.ReadArmoredKeyRing(bytes.NewReader(armored))
 	if err != nil || len(list) != 1 || bytes.Count(armored, []byte("-----BEGIN PGP")) != 1 {
-		return bad("send one OpenPGP public key in ASCII armor")
+		return registry.TrustedKey{}, badKey("send one OpenPGP public key in ASCII armor")
 	}
 
 	entity := list[0]
 
-	// A private key in the armor is refused and never stored.
-	if entity.PrivateKey != nil {
-		return bad("the armor holds a private key: send the public key only")
+	if reason := v.refuseEntity(entity); reason != "" {
+		return registry.TrustedKey{}, badKey(reason)
 	}
 
-	for _, sub := range entity.Subkeys {
-		if sub.PrivateKey != nil {
-			return bad("the armor holds a private key: send the public key only")
-		}
+	canonical, err := armorPublic(entity)
+	if err != nil {
+		return registry.TrustedKey{}, badKey("the key cannot be written")
+	}
+
+	return registry.TrustedKey{Fingerprint: fingerprintOf(entity.PrimaryKey), Armored: canonical}, nil
+}
+
+// badKey returns the error of a key that cannot be registered.
+func badKey(reason string) error {
+	return fmt.Errorf("%w: %s", registry.ErrBadKey, reason)
+}
+
+// refuseEntity returns why the registry refuses the key of entity, or the empty
+// text when it accepts the key.
+func (v Verifier) refuseEntity(entity *openpgp.Entity) string {
+	// A private key in the armor is refused and never stored.
+	if entity.PrivateKey != nil || slices.ContainsFunc(entity.Subkeys, func(s openpgp.Subkey) bool {
+		return s.PrivateKey != nil
+	}) {
+		return "the armor holds a private key: send the public key only"
 	}
 
 	now := time.Now
@@ -314,37 +329,40 @@ func (v Verifier) Inspect(ctx context.Context, armored []byte) (registry.Trusted
 	}
 
 	if entity.Revoked(now()) {
-		return bad("the key is revoked")
+		return "the key is revoked"
 	}
 
 	if _, ok := entity.SigningKey(now()); !ok {
-		return bad("the key is expired, or no key of it can sign")
+		return "the key is expired, or no key of it can sign"
 	}
 
 	if strongKey(entity.PrimaryKey) != nil {
-		return bad("the key uses a weak algorithm or size")
+		return "the key uses a weak algorithm or size"
 	}
 
-	for _, sub := range entity.Subkeys {
-		if strongKey(sub.PublicKey) != nil {
-			return bad("a subkey uses a weak algorithm or size")
-		}
+	if slices.ContainsFunc(entity.Subkeys, func(s openpgp.Subkey) bool { return strongKey(s.PublicKey) != nil }) {
+		return "a subkey uses a weak algorithm or size"
 	}
 
+	return ""
+}
+
+// armorPublic writes the public part of entity in ASCII armor.
+func armorPublic(entity *openpgp.Entity) ([]byte, error) {
 	var buf bytes.Buffer
 
 	w, err := armor.Encode(&buf, openpgp.PublicKeyType, nil)
 	if err != nil {
-		return bad("the key cannot be written")
+		return nil, fmt.Errorf("start the armor: %w", err)
 	}
 
-	if err := entity.Serialize(w); err != nil {
-		return bad("the key cannot be written")
+	if err = entity.Serialize(w); err != nil {
+		return nil, fmt.Errorf("write the key: %w", err)
 	}
 
-	if err := w.Close(); err != nil {
-		return bad("the key cannot be written")
+	if err = w.Close(); err != nil {
+		return nil, fmt.Errorf("close the armor: %w", err)
 	}
 
-	return registry.TrustedKey{Fingerprint: fingerprintOf(entity.PrimaryKey), Armored: buf.Bytes()}, nil
+	return buf.Bytes(), nil
 }

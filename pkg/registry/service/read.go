@@ -86,6 +86,8 @@ func (s *Service) SigningKey(ctx context.Context, rel registry.Release) (registr
 // FileOf finds the file of rel with the SHA-256 sum: the checksums file, the
 // signature file or an archive. It returns false when rel has no such file.
 func FileOf(rel registry.Release, sum string) (File, bool) {
+	var none File
+
 	switch {
 	case rel.SumsSHA256 == sum && rel.SumsFile != "":
 		return File{Name: rel.SumsFile, SHA256: sum, Size: 0}, true
@@ -99,7 +101,7 @@ func FileOf(rel registry.Release, sum string) (File, bool) {
 		}
 	}
 
-	return File{}, false
+	return none, false
 }
 
 // Open opens a file of a published release. The file must be a file of the

@@ -43,7 +43,7 @@ type Row struct {
 
 type archiveDoc struct {
 	Platform string `json:"platform"`
-	FileName string `json:"file_name"`
+	FileName string `json:"fileName"`
 	SHA256   string `json:"sha256"`
 	Size     int64  `json:"size"`
 }

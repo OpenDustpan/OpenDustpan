@@ -25,6 +25,7 @@ func newGateWriteHandler(t *testing.T, ws tfe.WorkspaceService, gate *bodygate.G
 	t.Helper()
 
 	handler, err := tfe.NewHandler(tfe.Config{
+		Registry:       nil,
 		Authenticator:  tokenAuthenticator{},
 		Authorizer:     allowAll(),
 		AddressGate:    nil,

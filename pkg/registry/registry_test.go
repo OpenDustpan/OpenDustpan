@@ -309,7 +309,11 @@ func TestReleaseValidate(t *testing.T) {
 		{func(r *registry.Release) { r.Protocols = []string{"5.9", "5.10"} }, "protocols compare as numbers", true},
 		{func(r *registry.Release) { r.Protocols = []string{"5"} }, "protocol with no minor", false},
 		{func(r *registry.Release) { r.Protocols = []string{"5.0\n"} }, "protocol with a newline", false},
-		{func(r *registry.Release) { r.Protocols = []string{"1.0", "2.0", "3.0", "4.0", "5.0"} }, "five protocols", false},
+		{
+			func(r *registry.Release) { r.Protocols = []string{"1.0", "2.0", "3.0", "4.0", "5.0"} },
+			"five protocols",
+			false,
+		},
 		{func(r *registry.Release) {
 			r.Archives = make([]registry.Archive, registry.MaxArchives+1)
 		}, "too many archives", false},

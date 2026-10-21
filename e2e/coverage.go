@@ -429,9 +429,13 @@ func coverageTFERoutes(tb testing.TB, namespaces *namespace.Service) []RouteRef 
 		Audit:          nil,
 		OnAuditFailure: nil,
 		DenialLimiter:  nil,
-		Registry: tfeapi.RegistryConfig{
-			Service: coverageRegistryService{}, Host: "", DefaultPort: "", URLKey: make([]byte, tfeapi.MinRegistryURLKeyBytes),
-			URLTTL: 0, Now: nil,
+		Registry: &tfeapi.RegistryConfig{
+			Service:     coverageRegistryService{},
+			Host:        "",
+			DefaultPort: "",
+			URLKey:      make([]byte, tfeapi.MinRegistryURLKeyBytes),
+			URLTTL:      0,
+			Now:         nil,
 		},
 	})
 	if err != nil {

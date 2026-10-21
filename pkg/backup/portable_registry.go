@@ -1,18 +1,21 @@
 package backup
 
+// portColAddedAtMs is the column that holds the time a trusted key was registered.
+const portColAddedAtMs = "added_at_ms"
+
 // portableRegistryTables is the portable description of the registry release
 // table, in the order of Tables.
 func portableRegistryTables() []PortableTable {
 	return []PortableTable{
 		{
 			Table:   "registry_releases",
-			OrderBy: []string{portColNamespaceID, "kind", portColName, "system", "version"},
+			OrderBy: []string{portColNamespaceID, portColKind, portColName, "system", portColVersion},
 			Columns: []Column{
 				{Name: portColNamespaceID, Kind: KindText},
-				{Name: "kind", Kind: KindText},
+				{Name: portColKind, Kind: KindText},
 				{Name: portColName, Kind: KindText},
 				{Name: "system", Kind: KindText},
-				{Name: "version", Kind: KindText},
+				{Name: portColVersion, Kind: KindText},
 				{Name: "sums_file", Kind: KindText},
 				{Name: "sums_sha256", Kind: KindText},
 				{Name: "signature_file", Kind: KindText},
@@ -32,7 +35,7 @@ func portableRegistryTables() []PortableTable {
 				{Name: "fingerprint", Kind: KindText},
 				{Name: "armored_key", Kind: KindText},
 				{Name: "added_by", Kind: KindText},
-				{Name: "added_at_ms", Kind: KindTime},
+				{Name: portColAddedAtMs, Kind: KindTime},
 			},
 		},
 	}

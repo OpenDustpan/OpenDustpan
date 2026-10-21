@@ -127,6 +127,7 @@ func newAuditFixtureFor(t *testing.T, err error, authn identity.Authenticator) a
 	entries := &memAuditStore{entries: nil, err: err, mu: sync.Mutex{}}
 
 	handler, handlerErr := tfe.NewHandler(tfe.Config{
+		Registry:      nil,
 		Authenticator: authn,
 		Authorizer:    allowAll(),
 		AddressGate:   nil,

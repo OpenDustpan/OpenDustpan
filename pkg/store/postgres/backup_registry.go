@@ -10,6 +10,12 @@ import (
 	"opendustpan.org/opendustpan/pkg/store/internal/registrystore"
 )
 
+// Column names of the registry tables that the backup code of this file names.
+const (
+	pgColFingerprint = "fingerprint"
+	pgColAddedAtMs   = "added_at_ms"
+)
+
 // pgCopyRegistryTables holds the COPY columns of the registry release table,
 // in the order of backup.Tables.
 func pgCopyRegistryTables() []pgCopyTable {
@@ -17,16 +23,16 @@ func pgCopyRegistryTables() []pgCopyTable {
 		{
 			table: "registry_releases",
 			columns: []string{
-				pgColNamespaceID, "kind", pgColName, "system", "version", "sums_file", "sums_sha256",
+				pgColNamespaceID, pgColKind, pgColName, "system", pgColVersion, "sums_file", "sums_sha256",
 				"signature_file", "signature_sha256", "key_fingerprint", "protocols", "published_by", "archives_json",
 				"published_at_ms",
 			},
-			orderBy: []string{pgColNamespaceID, "kind", pgColName, "system", "version"},
+			orderBy: []string{pgColNamespaceID, pgColKind, pgColName, "system", pgColVersion},
 		},
 		{
 			table:   "registry_keys",
-			columns: []string{pgColNamespaceID, "fingerprint", "armored_key", "added_by", "added_at_ms"},
-			orderBy: []string{pgColNamespaceID, "fingerprint"},
+			columns: []string{pgColNamespaceID, pgColFingerprint, "armored_key", "added_by", pgColAddedAtMs},
+			orderBy: []string{pgColNamespaceID, pgColFingerprint},
 		},
 	}
 }
@@ -57,9 +63,22 @@ func checkStagedRegistryReleases(ctx context.Context, pool *pgxpool.Pool, stagin
 			namespace *string
 		)
 
-		scanErr := rows.Scan(&namespace, &row.Kind, &row.Name, &row.System, &row.Version, &row.SumsFile,
-			&row.SumsSHA256, &row.SignatureFile, &row.SignatureSHA256, &row.KeyFingerprint, &row.Protocols, &row.PublishedBy,
-			&row.ArchivesJSON, &row.PublishedAtMs)
+		scanErr := rows.Scan(
+			&namespace,
+			&row.Kind,
+			&row.Name,
+			&row.System,
+			&row.Version,
+			&row.SumsFile,
+			&row.SumsSHA256,
+			&row.SignatureFile,
+			&row.SignatureSHA256,
+			&row.KeyFingerprint,
+			&row.Protocols,
+			&row.PublishedBy,
+			&row.ArchivesJSON,
+			&row.PublishedAtMs,
+		)
 		if scanErr != nil {
 			return fmt.Errorf("read staged registry releases: %w", backup.ErrExportRead)
 		}
@@ -108,7 +127,14 @@ func checkStagedRegistryKeys(ctx context.Context, pool *pgxpool.Pool, staging st
 			namespace *string
 		)
 
-		if scanErr := rows.Scan(&namespace, &row.Fingerprint, &row.ArmoredKey, &row.AddedBy, &row.AddedAtMs); scanErr != nil {
+		scanErr := rows.Scan(
+			&namespace,
+			&row.Fingerprint,
+			&row.ArmoredKey,
+			&row.AddedBy,
+			&row.AddedAtMs,
+		)
+		if scanErr != nil {
 			return fmt.Errorf("read staged registry keys: %w", backup.ErrExportRead)
 		}
 
@@ -129,4 +155,14 @@ func checkStagedRegistryKeys(ctx context.Context, pool *pgxpool.Pool, staging st
 	}
 
 	return nil
+}
+
+// checkStagedRegistry checks the release rows and the key rows of a staged
+// backup.
+func checkStagedRegistry(ctx context.Context, pool *pgxpool.Pool, staging string) error {
+	if err := checkStagedRegistryReleases(ctx, pool, staging); err != nil {
+		return err
+	}
+
+	return checkStagedRegistryKeys(ctx, pool, staging)
 }

@@ -244,7 +244,7 @@ type Config struct {
 	MaxStateBytes int64
 	// Registry holds the settings of the provider registry protocol. A zero
 	// value serves no registry route.
-	Registry RegistryConfig
+	Registry *RegistryConfig
 }
 
 // Handler serves the TFE-compatible API under /api/v2/, with service

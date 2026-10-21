@@ -9,50 +9,66 @@ import (
 	"github.com/ProtonMail/go-crypto/openpgp/packet"
 
 	"opendustpan.org/opendustpan/pkg/registry"
+	"opendustpan.org/opendustpan/pkg/registry/pgpfixture"
 )
 
+// signatureOf returns a signature packet with the fields that checkPolicy
+// reads. The library cannot make a SHA-1 signature, so the test builds the
+// packet fields itself.
+func signatureOf(hash crypto.Hash, issuer *uint64) *packet.Signature {
+	var sig packet.Signature
+
+	sig.Hash, sig.IssuerKeyId = hash, issuer
+
+	return &sig
+}
+
+// entityWith returns an entity whose primary key has the given algorithm.
+func entityWith(algo packet.PublicKeyAlgorithm) *openpgp.Entity {
+	var key packet.PublicKey
+
+	key.PubKeyAlgo = algo
+
+	var entity openpgp.Entity
+
+	entity.PrimaryKey = &key
+
+	return &entity
+}
+
 // TestCheckPolicy sends a signature and a key that the policy refuses straight
-// to checkPolicy, as if the library had accepted them. The library cannot make
-// a SHA-1 signature, so the test builds the packet fields that the check reads.
+// to checkPolicy, as if the library had accepted them.
 func TestCheckPolicy(t *testing.T) {
 	t.Parallel()
 
 	issuer := uint64(42)
+	signer := pgpfixture.NewSigner(t)
 
-	entity, err := openpgp.NewEntity("Release signing", "", "release@example.invalid",
-		&packet.Config{Algorithm: packet.PubKeyAlgoEdDSA})
-	if err != nil {
-		t.Fatalf("new entity: %v", err)
-	}
-
-	cases := []struct {
+	//nolint:exhaustruct_v5 // Each case names only the fields that it tests.
+	tests := []struct {
 		name   string
 		sig    *packet.Signature
 		signer *openpgp.Entity
 		ok     bool
 	}{
-		{"SHA-256", &packet.Signature{Hash: crypto.SHA256, IssuerKeyId: &issuer}, entity, true},
-		{"SHA-512", &packet.Signature{Hash: crypto.SHA512, IssuerKeyId: &issuer}, entity, true},
-		{"SHA-1", &packet.Signature{Hash: crypto.SHA1, IssuerKeyId: &issuer}, entity, false},
-		{"MD5", &packet.Signature{Hash: crypto.MD5, IssuerKeyId: &issuer}, entity, false},
-		{"RIPEMD-160", &packet.Signature{Hash: crypto.RIPEMD160, IssuerKeyId: &issuer}, entity, false},
-		{"no hash", &packet.Signature{IssuerKeyId: &issuer}, entity, false},
-		{"no issuer", &packet.Signature{Hash: crypto.SHA256}, entity, false},
+		{name: "signature with SHA-256", sig: signatureOf(crypto.SHA256, &issuer), signer: signer.Entity, ok: true},
+		{name: "signature with SHA-512", sig: signatureOf(crypto.SHA512, &issuer), signer: signer.Entity, ok: true},
+		{name: "signature with SHA-1", sig: signatureOf(crypto.SHA1, &issuer), signer: signer.Entity},
+		{name: "signature with MD5", sig: signatureOf(crypto.MD5, &issuer), signer: signer.Entity},
+		{name: "signature with RIPEMD-160", sig: signatureOf(crypto.RIPEMD160, &issuer), signer: signer.Entity},
+		{name: "no hash", sig: signatureOf(0, &issuer), signer: signer.Entity},
+		{name: "no issuer", sig: signatureOf(crypto.SHA256, nil), signer: signer.Entity},
 		{
-			"DSA primary key",
-			&packet.Signature{Hash: crypto.SHA256, IssuerKeyId: &issuer},
-			&openpgp.Entity{PrimaryKey: &packet.PublicKey{PubKeyAlgo: packet.PubKeyAlgoDSA}},
-			false,
+			name: "DSA primary key", sig: signatureOf(crypto.SHA256, &issuer),
+			signer: entityWith(packet.PubKeyAlgoDSA),
 		},
 		{
-			"ElGamal primary key",
-			&packet.Signature{Hash: crypto.SHA256, IssuerKeyId: &issuer},
-			&openpgp.Entity{PrimaryKey: &packet.PublicKey{PubKeyAlgo: packet.PubKeyAlgoElGamal}},
-			false,
+			name: "ElGamal primary key", sig: signatureOf(crypto.SHA256, &issuer),
+			signer: entityWith(packet.PubKeyAlgoElGamal),
 		},
 	}
 
-	for _, tc := range cases {
+	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -68,12 +84,15 @@ func TestCheckPolicy(t *testing.T) {
 	}
 }
 
+// errNewInLibrary stands for an error that a later version of the library adds.
+var errNewInLibrary = errors.New("a new error of the library")
+
 // TestClassify holds the rule that an error the adapter does not know is a bad
 // signature and never a success or an untrusted key.
 func TestClassify(t *testing.T) {
 	t.Parallel()
 
-	if err := classify(errors.New("a new error of the library")); !errors.Is(err, registry.ErrBadSignature) {
+	if err := classify(errNewInLibrary); !errors.Is(err, registry.ErrBadSignature) {
 		t.Fatalf("classify = %v, want ErrBadSignature", err)
 	}
 }

@@ -16,8 +16,19 @@ func sqliteRegistryBackupTables() []sqliteBackupTable {
 		{
 			table: "registry_releases",
 			columns: []string{
-				backupColNamespaceID, "kind", backupColName, "system", "version", "sums_file", "sums_sha256",
-				"signature_file", "signature_sha256", "key_fingerprint", "protocols", "published_by", "archives_json",
+				backupColNamespaceID,
+				backupColKind,
+				backupColName,
+				"system",
+				backupColVersion,
+				"sums_file",
+				"sums_sha256",
+				"signature_file",
+				"signature_sha256",
+				"key_fingerprint",
+				"protocols",
+				"published_by",
+				"archives_json",
 				"published_at_ms",
 			},
 		},
@@ -55,9 +66,22 @@ FROM registry_releases AS r LEFT JOIN namespaces AS n ON n.id = r.namespace_id`
 			namespace sql.NullString
 		)
 
-		scanErr := rows.Scan(&namespace, &row.Kind, &row.Name, &row.System, &row.Version, &row.SumsFile,
-			&row.SumsSHA256, &row.SignatureFile, &row.SignatureSHA256, &row.KeyFingerprint, &row.Protocols, &row.PublishedBy,
-			&row.ArchivesJSON, &row.PublishedAtMs)
+		scanErr := rows.Scan(
+			&namespace,
+			&row.Kind,
+			&row.Name,
+			&row.System,
+			&row.Version,
+			&row.SumsFile,
+			&row.SumsSHA256,
+			&row.SignatureFile,
+			&row.SignatureSHA256,
+			&row.KeyFingerprint,
+			&row.Protocols,
+			&row.PublishedBy,
+			&row.ArchivesJSON,
+			&row.PublishedAtMs,
+		)
 		if scanErr != nil {
 			return fmt.Errorf("read staged registry releases: %w", backup.ErrExportRead)
 		}
@@ -107,7 +131,14 @@ FROM registry_keys AS k LEFT JOIN namespaces AS n ON n.id = k.namespace_id`
 			namespace sql.NullString
 		)
 
-		if scanErr := rows.Scan(&namespace, &row.Fingerprint, &row.ArmoredKey, &row.AddedBy, &row.AddedAtMs); scanErr != nil {
+		scanErr := rows.Scan(
+			&namespace,
+			&row.Fingerprint,
+			&row.ArmoredKey,
+			&row.AddedBy,
+			&row.AddedAtMs,
+		)
+		if scanErr != nil {
 			return fmt.Errorf("read staged registry keys: %w", backup.ErrExportRead)
 		}
 
@@ -128,4 +159,14 @@ FROM registry_keys AS k LEFT JOIN namespaces AS n ON n.id = k.namespace_id`
 	}
 
 	return nil
+}
+
+// checkStagedRegistry checks the release rows and the key rows of a staged
+// backup.
+func checkStagedRegistry(ctx context.Context, conn *sql.DB) error {
+	if err := checkStagedRegistryReleases(ctx, conn); err != nil {
+		return err
+	}
+
+	return checkStagedRegistryKeys(ctx, conn)
 }

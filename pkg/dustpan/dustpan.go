@@ -84,7 +84,6 @@ import (
 	"opendustpan.org/opendustpan/pkg/preferences"
 	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/profile"
-	"opendustpan.org/opendustpan/pkg/registry"
 	"opendustpan.org/opendustpan/pkg/savedview"
 	"opendustpan.org/opendustpan/pkg/secret"
 	"opendustpan.org/opendustpan/pkg/session"
@@ -172,9 +171,7 @@ type settings struct {
 	profileStore         profile.Store
 	jobStore             job.Store
 	savedViewStore       savedview.Store
-	registryStore        registry.Store
-	registryKeys         registry.KeyStore
-	registryURLKey       []byte
+	registry             *registrySettings
 	idempotencyStore     idempotency.Store
 	authenticator        identity.Authenticator
 	authorizer           identity.Authorizer
@@ -695,9 +692,7 @@ func defaultSettings() *settings {
 		profileStore:            nil,
 		jobStore:                nil,
 		savedViewStore:          nil,
-		registryStore:           nil,
-		registryKeys:            nil,
-		registryURLKey:          nil,
+		registry:                nil,
 		idempotencyStore:        nil,
 		authenticator:           nil,
 		authorizer:              nil,

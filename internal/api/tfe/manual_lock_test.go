@@ -68,6 +68,7 @@ func TestLockRefusedByAManualLock(t *testing.T) {
 			}
 
 			handler, err := tfe.NewHandler(tfe.Config{
+				Registry:      nil,
 				Authenticator: tokenAuthenticator{},
 				Authorizer:    allowAll(),
 				AddressGate:   nil,

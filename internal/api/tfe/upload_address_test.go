@@ -40,6 +40,7 @@ func newUploadAddressHandler(
 	t.Helper()
 
 	handler, err := tfe.NewHandler(tfe.Config{
+		Registry:       nil,
 		Authenticator:  tokenAuthenticator{},
 		Authorizer:     allowAll(),
 		AddressGate:    addressGate,

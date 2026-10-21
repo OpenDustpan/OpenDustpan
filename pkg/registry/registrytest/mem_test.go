@@ -1,6 +1,7 @@
 package registrytest_test
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"slices"
@@ -188,14 +189,6 @@ type memKeys struct {
 	mu      sync.Mutex
 }
 
-func (m *memKeys) fenced(f namespace.Fence) error {
-	if m.fences[f.Namespace] != f.FailoverVersion {
-		return namespace.ErrFenced
-	}
-
-	return nil
-}
-
 func (m *memKeys) AddKey(_ context.Context, k registry.KeyRecord, fence namespace.Fence, e audit.Entry) error {
 	if err := k.Validate(); err != nil {
 		return err
@@ -214,7 +207,7 @@ func (m *memKeys) AddKey(_ context.Context, k registry.KeyRecord, fence namespac
 
 	held := m.keys[k.Namespace]
 	if old, ok := held[k.Key.Fingerprint]; ok {
-		if string(old.Key.Armored) == string(k.Key.Armored) {
+		if bytes.Equal(old.Key.Armored, k.Key.Armored) {
 			return nil
 		}
 
@@ -276,9 +269,20 @@ func (m *memKeys) Keys(_ context.Context, ns namespace.Name) ([]registry.KeyReco
 		out = append(out, k)
 	}
 
-	slices.SortFunc(out, func(a, b registry.KeyRecord) int { return strings.Compare(a.Key.Fingerprint, b.Key.Fingerprint) })
+	slices.SortFunc(
+		out,
+		func(a, b registry.KeyRecord) int { return strings.Compare(a.Key.Fingerprint, b.Key.Fingerprint) },
+	)
 
 	return out, nil
+}
+
+func (m *memKeys) fenced(f namespace.Fence) error {
+	if m.fences[f.Namespace] != f.FailoverVersion {
+		return namespace.ErrFenced
+	}
+
+	return nil
 }
 
 func TestMemKeyStore(t *testing.T) {

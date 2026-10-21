@@ -89,7 +89,7 @@ var (
 	// letters and digits there.
 	systemRE      = regexp.MustCompile(`^[a-z0-9]{1,64}$`)
 	fingerprintRE = regexp.MustCompile(`^[0-9A-F]{40,64}$`)
-	protocolRE    = regexp.MustCompile(`^[0-9]{1,2}\.[0-9]{1,2}$`)
+	protocolRE    = regexp.MustCompile(`^\d{1,2}\.\d{1,2}$`)
 	uploadIDRE    = regexp.MustCompile(`^[a-z0-9]{20,64}$`)
 )
 
@@ -390,22 +390,38 @@ func validateProtocols(protocols []string) error {
 }
 
 // protocolLess reports whether the protocol version a is lower than b. Both
-// match protocolRE.
+// match protocolRE, so each part is one or two digits.
 func protocolLess(a, b string) bool {
-	am, an, _ := strings.Cut(a, ".")
-	bm, bn, _ := strings.Cut(b, ".")
+	pa, pb := protocolParts(a), protocolParts(b)
 
-	ai, _ := strconv.Atoi(am)
-	bi, _ := strconv.Atoi(bm)
-
-	if ai != bi {
-		return ai < bi
+	if pa[0] != pb[0] {
+		return pa[0] < pb[0]
 	}
 
-	ani, _ := strconv.Atoi(an)
-	bni, _ := strconv.Atoi(bn)
+	return pa[1] < pb[1]
+}
 
-	return ani < bni
+// protocolParts returns the two numbers of a protocol version that matches
+// protocolRE. A part that is not a number counts as zero, and the caller has
+// checked the form first.
+func protocolParts(p string) [2]uint64 {
+	major, minor, _ := strings.Cut(p, ".")
+
+	return [2]uint64{digits(major), digits(minor)}
+}
+
+// decimalBase is the base of the digits that digits reads.
+const decimalBase = 10
+
+// digits returns the number that the decimal digits of s spell.
+func digits(s string) uint64 {
+	var n uint64
+
+	for _, c := range []byte(s) {
+		n = n*decimalBase + uint64(c-'0')
+	}
+
+	return n
 }
 
 // validateSignature checks the signature fields of a provider. The file, its

@@ -131,11 +131,13 @@ func testVerifyEmpty(t *testing.T, h VerifierHarness) {
 
 	keys := []registry.TrustedKey{h.Key}
 
-	if got, err := h.Verifier.Verify(t.Context(), h.Sums, nil, keys); !errors.Is(err, registry.ErrBadSignature) || got != "" {
+	got, err := h.Verifier.Verify(t.Context(), h.Sums, nil, keys)
+	if !errors.Is(err, registry.ErrBadSignature) || got != "" {
 		t.Fatalf("Verify with no signature = %q, %v; want ErrBadSignature", got, err)
 	}
 
-	if got, err := h.Verifier.Verify(t.Context(), nil, h.Signature, keys); !errors.Is(err, registry.ErrBadSignature) || got != "" {
+	got, err = h.Verifier.Verify(t.Context(), nil, h.Signature, keys)
+	if !errors.Is(err, registry.ErrBadSignature) || got != "" {
 		t.Fatalf("Verify with no checksums file = %q, %v; want ErrBadSignature", got, err)
 	}
 }

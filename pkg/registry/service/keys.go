@@ -16,7 +16,12 @@ import (
 // returns the record. A key that the namespace holds already returns the
 // record as stored. It returns registry.ErrBadKey, registry.ErrKeyExists,
 // registry.ErrKeyLimit, namespace.ErrNotFound or namespace.ErrFenced.
-func (s *Service) AddKey(ctx context.Context, c *Caller, ns namespace.Name, armored []byte) (registry.KeyRecord, error) {
+func (s *Service) AddKey(
+	ctx context.Context,
+	c *Caller,
+	ns namespace.Name,
+	armored []byte,
+) (registry.KeyRecord, error) {
 	if err := c.check(); err != nil {
 		return registry.KeyRecord{}, err
 	}

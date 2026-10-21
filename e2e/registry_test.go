@@ -17,12 +17,12 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ProtonMail/go-crypto/openpgp"
-	"github.com/ProtonMail/go-crypto/openpgp/armor"
-	"github.com/ProtonMail/go-crypto/openpgp/packet"
-
 	"opendustpan.org/opendustpan/e2e"
+	"opendustpan.org/opendustpan/pkg/registry/pgpfixture"
 )
+
+// providerName is the provider that the test publishes.
+const providerName = "payments"
 
 // registryProvider is a provider release as a build tool writes it: the zip
 // archive of one platform, the checksums file and the detached signature.
@@ -34,54 +34,17 @@ type registryProvider struct {
 	signature     []byte
 }
 
-// registrySigner is an OpenPGP key pair for the signature of a release.
-type registrySigner struct {
-	entity      *openpgp.Entity
-	armored     string
-	fingerprint string
-}
-
-func newRegistrySigner(t *testing.T) registrySigner {
-	t.Helper()
-
-	entity, err := openpgp.NewEntity("Payments release", "", "release@example.invalid",
-		&packet.Config{Algorithm: packet.PubKeyAlgoEdDSA})
-	if err != nil {
-		t.Fatalf("make the signing key: %v", err)
-	}
-
-	var buf bytes.Buffer
-
-	w, err := armor.Encode(&buf, openpgp.PublicKeyType, nil)
-	if err != nil {
-		t.Fatalf("armor the key: %v", err)
-	}
-
-	if err = entity.Serialize(w); err != nil {
-		t.Fatalf("write the key: %v", err)
-	}
-
-	if err = w.Close(); err != nil {
-		t.Fatalf("close the armor: %v", err)
-	}
-
-	return registrySigner{
-		entity: entity, armored: buf.String(),
-		fingerprint: strings.ToUpper(hex.EncodeToString(entity.PrimaryKey.Fingerprint)),
-	}
-}
-
 // buildProvider makes the release of a provider for linux/amd64. OpenTofu
 // unpacks the archive and checks its hash and the signature of the checksums
 // file; it does not run the binary during init, so the binary is a script.
-func buildProvider(t *testing.T, sg registrySigner, name, version string) registryProvider {
+func buildProvider(t *testing.T, sg pgpfixture.Signer, version string) registryProvider {
 	t.Helper()
 
 	var zipped bytes.Buffer
 
 	zw := zip.NewWriter(&zipped)
 
-	f, err := zw.Create(fmt.Sprintf("terraform-provider-%s_v%s", name, version))
+	f, err := zw.Create(fmt.Sprintf("terraform-provider-%s_v%s", providerName, version))
 	if err != nil {
 		t.Fatalf("make the archive: %v", err)
 	}
@@ -94,18 +57,15 @@ func buildProvider(t *testing.T, sg registrySigner, name, version string) regist
 		t.Fatalf("close the archive: %v", err)
 	}
 
-	p := registryProvider{name: name, version: version, archive: zipped.Bytes()}
-	p.archiveName = fmt.Sprintf("terraform-provider-%s_%s_linux_amd64.zip", name, version)
+	p := registryProvider{
+		name: providerName, version: version, archiveName: "", archive: zipped.Bytes(), sums: nil, signature: nil,
+	}
+	p.archiveName = fmt.Sprintf("terraform-provider-%s_%s_linux_amd64.zip", providerName, version)
 
 	sum := sha256.Sum256(p.archive)
 	p.sums = []byte(hex.EncodeToString(sum[:]) + "  " + p.archiveName + "\n")
 
-	var sig bytes.Buffer
-	if err = openpgp.DetachSign(&sig, sg.entity, bytes.NewReader(p.sums), nil); err != nil {
-		t.Fatalf("sign the checksums file: %v", err)
-	}
-
-	p.signature = sig.Bytes()
+	p.signature = sg.Detach(t, p.sums)
 
 	return p
 }
@@ -138,10 +98,10 @@ func (r registryAPI) call(ctx context.Context, t *testing.T, method, path, body 
 	return resp
 }
 
-func (r registryAPI) addKey(ctx context.Context, t *testing.T, sg registrySigner) {
+func (r registryAPI) addKey(ctx context.Context, t *testing.T, sg pgpfixture.Signer) {
 	t.Helper()
 
-	body, err := json.Marshal(map[string]string{"armoredPublicKey": sg.armored})
+	body, err := json.Marshal(map[string]string{"armoredPublicKey": string(sg.Key.Armored)})
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
@@ -171,20 +131,28 @@ func (r registryAPI) stage(ctx context.Context, t *testing.T, data []byte) strin
 	return doc.Upload
 }
 
-// publish stages the files of p and publishes them. archive and signature are
-// the bytes that the upload sends, so a test can change them after the
-// signature.
-func (r registryAPI) publish(
-	ctx context.Context, t *testing.T, p registryProvider, archive, sums, signature []byte,
-) e2e.APIResponse {
+// uploadBytes are the bytes of the three files that an upload sends. A test
+// changes them after the signature.
+type uploadBytes struct {
+	archive, sums, signature []byte
+}
+
+// asBuilt returns the files of p as the build tool wrote them.
+func (p registryProvider) asBuilt() uploadBytes {
+	return uploadBytes{archive: p.archive, sums: p.sums, signature: p.signature}
+}
+
+// publish stages the files of p and publishes them. up holds the bytes that the
+// upload sends.
+func (r registryAPI) publish(ctx context.Context, t *testing.T, p registryProvider, up uploadBytes) e2e.APIResponse {
 	t.Helper()
 
 	body, err := json.Marshal(map[string]any{
 		"protocols": []string{"5.0"},
 		"files": []map[string]string{
-			{"role": "sums", "name": p.sumsName(), "upload": r.stage(ctx, t, sums)},
-			{"role": "signature", "name": p.sumsName() + ".sig", "upload": r.stage(ctx, t, signature)},
-			{"role": "archive", "name": p.archiveName, "upload": r.stage(ctx, t, archive)},
+			{"role": "sums", "name": p.sumsName(), "upload": r.stage(ctx, t, up.sums)},
+			{"role": "signature", "name": p.sumsName() + ".sig", "upload": r.stage(ctx, t, up.signature)},
+			{"role": "archive", "name": p.archiveName, "upload": r.stage(ctx, t, up.archive)},
 		},
 	})
 	if err != nil {
@@ -238,6 +206,14 @@ func TestRegistryTofuInit(t *testing.T) {
 	}
 }
 
+// registryScenario holds what the steps of the registry test share.
+type registryScenario struct {
+	env     *e2e.Env
+	api     registryAPI
+	signer  pgpfixture.Signer
+	address string
+}
+
 func runRegistryOnStore(t *testing.T, cli e2e.Install, store e2e.Store) {
 	t.Helper()
 
@@ -247,37 +223,47 @@ func runRegistryOnStore(t *testing.T, cli e2e.Install, store e2e.Store) {
 
 	ctx := t.Context()
 	env := e2e.NewEnv(ctx, t, cli, store)
-	api := registryAPI{env: env, base: "/api/dustpan/v1/namespaces/" + e2e.Namespace + "/registry"}
+	sc := &registryScenario{
+		env:     env,
+		api:     registryAPI{env: env, base: "/api/dustpan/v1/namespaces/" + e2e.Namespace + "/registry"},
+		signer:  pgpfixture.NewSigner(t),
+		address: env.RegistryAddress(providerName),
+	}
 
-	signer := newRegistrySigner(t)
+	sc.publishGood(ctx, t)
+	sc.refuseHostileReleases(ctx, t)
+	sc.removeTheKey(ctx, t)
+}
+
+// publishGood publishes version 1.0.0 and installs it with the real CLI.
+func (sc *registryScenario) publishGood(ctx context.Context, t *testing.T) {
+	t.Helper()
 
 	// No signing key yet: a publish is refused, and nothing is readable.
-	early := buildProvider(t, signer, "payments", "1.0.0")
-	if resp := api.publish(ctx, t, early, early.archive, early.sums, early.signature); resp.Status != http.StatusUnprocessableEntity ||
-		!strings.Contains(resp.Body, "registry.no-keys") {
+	early := buildProvider(t, sc.signer, "1.0.0")
+
+	resp := sc.api.publish(ctx, t, early, early.asBuilt())
+	if resp.Status != http.StatusUnprocessableEntity || !strings.Contains(resp.Body, "registry.no-keys") {
 		t.Fatalf("publish with no trusted key = %d %s", resp.Status, resp.Body)
 	}
 
-	api.addKey(ctx, t, signer)
+	sc.api.addKey(ctx, t, sc.signer)
 
-	good := buildProvider(t, signer, "payments", "1.0.0")
+	good := buildProvider(t, sc.signer, "1.0.0")
 
-	published := api.publish(ctx, t, good, good.archive, good.sums, good.signature)
-	if published.Status != http.StatusOK || !strings.Contains(published.Body, signer.fingerprint) {
-		t.Fatalf("publish = %d %s", published.Status, published.Body)
+	resp = sc.api.publish(ctx, t, good, good.asBuilt())
+	if resp.Status != http.StatusOK || !strings.Contains(resp.Body, sc.signer.Key.Fingerprint) {
+		t.Fatalf("publish = %d %s", resp.Status, resp.Body)
 	}
 
 	// The same files again are a repeat and change nothing.
-	if resp := api.publish(ctx, t, good, good.archive, good.sums, good.signature); resp.Status != http.StatusOK {
-		t.Fatalf("repeat of the publish = %d %s", resp.Status, resp.Body)
+	if again := sc.api.publish(ctx, t, good, good.asBuilt()); again.Status != http.StatusOK {
+		t.Fatalf("repeat of the publish = %d %s", again.Status, again.Body)
 	}
 
-	address := env.RegistryAddress("payments")
-	dir := env.WriteRegistryProject(t, "project-registry", fmt.Sprintf(registryConfig, address, "1.0.0"))
+	dir := sc.env.WriteRegistryProject(t, "project-registry", fmt.Sprintf(registryConfig, sc.address, "1.0.0"))
 
-	env.StepIn(ctx, t, dir, step("registry init", checkRegistryInit(env, dir, address, good), "init", "-input=false", "-no-color"))
-
-	checkRefusals(ctx, t, env, api, signer, address)
+	sc.env.StepIn(ctx, t, dir, step("registry init", sc.checkInit(dir, good), "init", "-input=false", "-no-color"))
 }
 
 const registryConfig = `terraform {
@@ -290,15 +276,17 @@ const registryConfig = `terraform {
 }
 `
 
-// checkRegistryInit proves init installed the provider from the registry,
-// checked the signature and wrote the zh: hash of the archive to the lock file.
-func checkRegistryInit(env *e2e.Env, dir, address string, p registryProvider) func(e2e.Result) error {
+// checkInit proves init installed the provider from the registry, checked the
+// signature and wrote the zh: hash of the archive to the lock file.
+func (sc *registryScenario) checkInit(dir string, p registryProvider) func(e2e.Result) error {
 	return func(r e2e.Result) error {
-		if !strings.Contains(r.Stdout, "Installed "+address+" v"+p.version+" (signed") {
+		if !strings.Contains(r.Stdout, "Installed "+sc.address+" v"+p.version+" (signed") {
 			return fmt.Errorf("%w: init did not install a signed provider: %s", errUnexpected, r.Stdout)
 		}
 
-		lock, err := os.ReadFile(filepath.Join(dir, ".terraform.lock.hcl"))
+		lockPath := filepath.Join(dir, ".terraform.lock.hcl")
+
+		lock, err := os.ReadFile(lockPath) //nolint:gosec // The path is in the test project.
 		if err != nil {
 			return fmt.Errorf("read the lock file: %w", err)
 		}
@@ -307,69 +295,77 @@ func checkRegistryInit(env *e2e.Env, dir, address string, p registryProvider) fu
 			return fmt.Errorf("%w: the lock file lacks zh:%s: %s", errUnexpected, p.archiveSHA(), lock)
 		}
 
-		for _, want := range []struct{ path, why string }{
-			{"/v1/providers/" + e2e.Namespace + "/payments/versions", "the version list"},
-			{"/v1/providers/" + e2e.Namespace + "/payments/" + p.version + "/download/linux/amd64", "the download document"},
-		} {
-			if !env.Requested("registry init", http.MethodGet, want.path) {
-				return fmt.Errorf("%w: init never asked for %s", errUnexpected, want.why)
-			}
+		versions := "/v1/providers/" + e2e.Namespace + "/payments/versions"
+		download := "/v1/providers/" + e2e.Namespace + "/payments/" + p.version + "/download/linux/amd64"
+
+		if !sc.env.Requested("registry init", http.MethodGet, versions) ||
+			!sc.env.Requested("registry init", http.MethodGet, download) {
+			return fmt.Errorf("%w: init never asked for the version list and the download document", errUnexpected)
 		}
 
 		return nil
 	}
 }
 
-// checkRefusals sends the hostile releases and proves that none of them
+// refuseHostileReleases sends the hostile releases and proves that none of them
 // becomes readable.
-func checkRefusals(
-	ctx context.Context, t *testing.T, env *e2e.Env, api registryAPI, signer registrySigner, address string,
-) {
+func (sc *registryScenario) refuseHostileReleases(ctx context.Context, t *testing.T) {
 	t.Helper()
 
 	// 1.0.1: signed over an archive, then the upload swaps the archive.
-	tampered := buildProvider(t, signer, "payments", "1.0.1")
-	other := bytes.Clone(tampered.archive)
-	other[len(other)-1] ^= 0xff
+	tampered := buildProvider(t, sc.signer, "1.0.1")
+	up := tampered.asBuilt()
+	up.archive = bytes.Clone(tampered.archive)
+	up.archive[len(up.archive)-1] ^= 0xff
 
-	resp := api.publish(ctx, t, tampered, other, tampered.sums, tampered.signature)
+	resp := sc.api.publish(ctx, t, tampered, up)
 	if resp.Status != http.StatusUnprocessableEntity || !strings.Contains(resp.Body, tampered.archiveName) {
 		t.Fatalf("publish of a tampered archive = %d %s, want 422 naming the archive", resp.Status, resp.Body)
 	}
 
 	// 1.0.2: signed by a key that the namespace does not trust.
-	stranger := buildProvider(t, newRegistrySigner(t), "payments", "1.0.2")
+	stranger := buildProvider(t, pgpfixture.NewSigner(t), "1.0.2")
 
-	resp = api.publish(ctx, t, stranger, stranger.archive, stranger.sums, stranger.signature)
-	if resp.Status != http.StatusUnprocessableEntity || !strings.Contains(resp.Body, "registry.signature-untrusted-key") {
+	resp = sc.api.publish(ctx, t, stranger, stranger.asBuilt())
+	if resp.Status != http.StatusUnprocessableEntity ||
+		!strings.Contains(resp.Body, "registry.signature-untrusted-key") {
 		t.Fatalf("publish by an untrusted key = %d %s", resp.Status, resp.Body)
 	}
 
 	// 1.0.3: the checksums file changed after the signature.
-	edited := buildProvider(t, signer, "payments", "1.0.3")
+	edited := buildProvider(t, sc.signer, "1.0.3")
+	up = edited.asBuilt()
+	up.sums = append(bytes.Clone(edited.sums), '\n')
 
-	resp = api.publish(ctx, t, edited, edited.archive, append(bytes.Clone(edited.sums), '\n'), edited.signature)
+	resp = sc.api.publish(ctx, t, edited, up)
 	if resp.Status != http.StatusUnprocessableEntity || !strings.Contains(resp.Body, "registry.signature-invalid") {
 		t.Fatalf("publish with edited checksums = %d %s", resp.Status, resp.Body)
 	}
 
 	// None of the three versions exists.
-	list := api.call(ctx, t, http.MethodGet, "/providers/payments/versions", "")
-	if list.Status != http.StatusOK || strings.Count(list.Body, `"version":`) != 1 || !strings.Contains(list.Body, `"version":"1.0.0"`) {
+	list := sc.api.call(ctx, t, http.MethodGet, "/providers/payments/versions", "")
+	if list.Status != http.StatusOK || strings.Count(list.Body, `"version":`) != 1 ||
+		!strings.Contains(list.Body, `"version":"1.0.0"`) {
 		t.Fatalf("version list after the refusals = %d %s, want only 1.0.0", list.Status, list.Body)
 	}
 
 	// The CLI cannot install a refused version.
-	dir := env.WriteRegistryProject(t, "project-refused", fmt.Sprintf(registryConfig, address, "1.0.1"))
-	env.StepIn(ctx, t, dir, failStep("registry init of a refused version", outputContains("Could not resolve provider"),
-		"init", "-input=false", "-no-color"))
+	dir := sc.env.WriteRegistryProject(t, "project-refused", fmt.Sprintf(registryConfig, sc.address, "1.0.1"))
+	sc.env.StepIn(ctx, t, dir, failStep("registry init of a refused version",
+		outputContains("Could not resolve provider"), "init", "-input=false", "-no-color"))
+}
 
-	// The namespace removes the key: the signed release stays published, and the
-	// registry stops serving it.
-	if resp = api.call(ctx, t, http.MethodDelete, "/keys/"+signer.fingerprint, ""); resp.Status != http.StatusNoContent {
+// removeTheKey removes the key of the namespace: the signed release stays
+// published, and the registry stops serving it.
+func (sc *registryScenario) removeTheKey(ctx context.Context, t *testing.T) {
+	t.Helper()
+
+	resp := sc.api.call(ctx, t, http.MethodDelete, "/keys/"+sc.signer.Key.Fingerprint, "")
+	if resp.Status != http.StatusNoContent {
 		t.Fatalf("remove the key = %d %s", resp.Status, resp.Body)
 	}
 
-	fresh := env.WriteRegistryProject(t, "project-removed", fmt.Sprintf(registryConfig, address, "1.0.0"))
-	env.StepIn(ctx, t, fresh, failStep("registry init after the key was removed", nil, "init", "-input=false", "-no-color"))
+	fresh := sc.env.WriteRegistryProject(t, "project-removed", fmt.Sprintf(registryConfig, sc.address, "1.0.0"))
+	sc.env.StepIn(ctx, t, fresh,
+		failStep("registry init after the key was removed", nil, "init", "-input=false", "-no-color"))
 }

@@ -50,6 +50,7 @@ func TestForcedDeclareWithoutOverrideIsRefused(t *testing.T) {
 	var seen namespace.Overrides
 
 	handler, err := tfe.NewHandler(tfe.Config{
+		Registry:       nil,
 		Authenticator:  tokenAuthenticator{},
 		Authorizer:     allowAll(),
 		AddressGate:    nil,
@@ -97,6 +98,7 @@ func TestRefusedOverrideIsAudited(t *testing.T) {
 	entries := &memAuditStore{entries: nil, err: nil, mu: sync.Mutex{}}
 
 	handler, err := tfe.NewHandler(tfe.Config{
+		Registry:       nil,
 		Authenticator:  tokenAuthenticator{},
 		Authorizer:     allowAll(),
 		AddressGate:    nil,
@@ -234,6 +236,7 @@ func declareRefused(t *testing.T, err error) (*httptest.ResponseRecorder, []audi
 	entries := &memAuditStore{entries: nil, err: nil, mu: sync.Mutex{}}
 
 	handler, newErr := tfe.NewHandler(tfe.Config{
+		Registry:       nil,
 		Authenticator:  tokenAuthenticator{},
 		Authorizer:     allowAll(),
 		AddressGate:    nil,
