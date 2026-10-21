@@ -389,24 +389,34 @@ func (s *Store) PutPlan(ctx context.Context, pc job.PhaseClaim, p job.PlanRef) (
 
 		j := g.j
 
-		if reserveErr := checkReserved(ctx, tx, &j, &pc, &p); reserveErr != nil {
+		reserved, reserveErr := checkReserved(ctx, tx, &j, &pc, &p)
+		if reserveErr != nil {
 			return reserveErr
 		}
 
-		p.StateVersion = j.Phases[pc.Phase].StateVersion
-		j.Phases[pc.Phase].Plan = &p
-
-		body, err := json.Marshal(encodePlan(&p))
-		if err != nil {
-			return fmt.Errorf("encode plan %s: %w", p.ID, err)
+		// Defense in depth: the recorder builds the parts and checks its
+		// uploads, and the plan comes from the reserved row. This check
+		// stays so that a caller of the store cannot record a plan that has
+		// other parts, times or a retention than the reserve gave.
+		if partsErr := job.CheckPlanParts(p.Parts); partsErr != nil {
+			return partsErr
 		}
 
-		row := PlanRow{ID: p.ID, Job: j.ID, Body: string(body), CreatedMs: p.CreatedAt.UnixMilli()}
+		plan := *reserved
+		plan.Parts, plan.StateVersion = p.Parts, j.Phases[pc.Phase].StateVersion
+		j.Phases[pc.Phase].Plan = &plan
+
+		body, err := json.Marshal(encodePlan(&plan))
+		if err != nil {
+			return fmt.Errorf("encode plan %s: %w", plan.ID, err)
+		}
+
+		row := PlanRow{ID: plan.ID, Job: j.ID, Body: string(body), CreatedMs: plan.CreatedAt.UnixMilli()}
 		if updateErr := tx.UpdatePlan(ctx, pc.Fence.Namespace, row); updateErr != nil {
 			return updateErr
 		}
 
-		out = p
+		out = plan
 
 		return save(ctx, tx, &j)
 	})
@@ -423,31 +433,34 @@ func (s *Store) PutPlan(ctx context.Context, pc job.PhaseClaim, p job.PlanRef) (
 
 // checkReserved checks that p is the plan that a reserve recorded for the job
 // j: the row exists, belongs to j, has no part, and names the same item key.
-func checkReserved(ctx context.Context, tx Tx, j *job.Job, pc *job.PhaseClaim, p *job.PlanRef) error {
+// It returns the plan of the row.
+func checkReserved(ctx context.Context, tx Tx, j *job.Job, pc *job.PhaseClaim, p *job.PlanRef) (*job.PlanRef, error) {
 	row, ok, err := tx.Plan(ctx, pc.Fence.Namespace, p.ID)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	if !ok || row.Job != j.ID {
-		return fmt.Errorf("%w: plan %s was not reserved for job %s", job.ErrNotFound, p.ID, j.ID)
+		return nil, fmt.Errorf("%w: plan %s was not reserved for job %s", job.ErrNotFound, p.ID, j.ID)
 	}
 
 	var body planBody
 	if err = json.Unmarshal([]byte(row.Body), &body); err != nil {
-		return fmt.Errorf("%w: plan %s: %w", ErrDamaged, p.ID, err)
+		return nil, fmt.Errorf("%w: plan %s: %w", ErrDamaged, p.ID, err)
 	}
 
-	switch reserved := decodePlan(&body); {
+	reserved := decodePlan(&body)
+
+	switch {
 	case reserved == nil:
-		return fmt.Errorf("%w: plan %s: no plan in the row", ErrDamaged, p.ID)
+		return nil, fmt.Errorf("%w: plan %s: no plan in the row", ErrDamaged, p.ID)
 	case len(reserved.Parts) > 0:
-		return fmt.Errorf("%w: plan %s has parts", job.ErrConflict, p.ID)
+		return nil, fmt.Errorf("%w: plan %s has parts", job.ErrConflict, p.ID)
 	case reserved.ItemKey != p.ItemKey:
-		return fmt.Errorf("%w: plan %s has another item key than its reserve", job.ErrInvalid, p.ID)
+		return nil, fmt.Errorf("%w: plan %s has another item key than its reserve", job.ErrInvalid, p.ID)
 	}
 
-	return nil
+	return reserved, nil
 }
 
 // failPhase fails the current phase of j and ends the operation of the claim

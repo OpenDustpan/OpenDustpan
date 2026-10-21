@@ -139,19 +139,42 @@ type keyAt struct {
 	key  blob.Key
 }
 
+// maxIDSegment is the longest part of an ID after its prefix that checkParts
+// accepts. The IDs of the server have 20 characters there.
+const maxIDSegment = 64
+
 // checkParts returns ErrInvalid unless the job ID and the artifact ID are one
-// key segment each, with the prefixes of this package.
+// key segment each, with the prefixes of this package. After its prefix, an ID
+// has 1 to maxIDSegment characters of the allowlist a-z, 0-9 and "-".
 //
 // Defense in depth: blob.ParseKey and the scoped view refuse a key that leaves
-// the namespace. This check stays so that an ID with a "/" never makes a key
-// in the directory of another job, which both of those accept.
+// the namespace. This check stays so that an ID with a "/", a "." or a control
+// character never makes a key in the directory of another job, which both of
+// those accept. It is an allowlist, so a character that nobody thought of is
+// refused too.
 func checkParts(id ID, prefix, artifact string) error {
-	if !strings.HasPrefix(string(id), IDPrefix) || strings.Contains(string(id), "/") ||
-		!strings.HasPrefix(artifact, prefix) || strings.Contains(artifact, "/") {
+	if !validIDSegment(string(id), IDPrefix) || !validIDSegment(artifact, prefix) {
 		return fmt.Errorf("%w: artifact blob key", ErrInvalid)
 	}
 
 	return nil
+}
+
+// validIDSegment reports whether id is prefix followed by 1 to maxIDSegment
+// characters of the allowlist.
+func validIDSegment(id, prefix string) bool {
+	rest, ok := strings.CutPrefix(id, prefix)
+	if !ok || rest == "" || len(rest) > maxIDSegment {
+		return false
+	}
+
+	for _, c := range []byte(rest) {
+		if (c < 'a' || c > 'z') && (c < '0' || c > '9') && c != '-' {
+			return false
+		}
+	}
+
+	return true
 }
 
 // planKey returns the key of the part ref and the view that it is in.

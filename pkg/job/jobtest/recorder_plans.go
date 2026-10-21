@@ -28,6 +28,7 @@ func planCases() []recorderCase {
 		{"plans: the item key of a plan is of the kind plan", testPlanItemKey},
 		{"plans: parallel PutPlan calls give one plan", testPlanParallel},
 		{"plans: PutPlan and a state write in parallel agree", testPlanAndStateWrite},
+		{"plans: the store refuses hostile parts and keeps the times of the reserve", testPlanHostileRef},
 	}
 }
 
@@ -603,4 +604,90 @@ func testPlanReadAfterReplan(t *testing.T, h RecorderHarness) {
 
 	// The old plan stays a history item until its retention ends.
 	assertPart(t, h, p.ID, job.OutputPlanDisplay, displayJSON)
+}
+
+// hostilePart returns a valid part of kind k, which the cases change.
+func hostilePart(k job.OutputKind) job.PlanPart {
+	return job.PlanPart{Kind: k, Size: 1, SHA256: emptySHA256, Secret: false}
+}
+
+// testPlanHostileRef sends a hostile PlanRef directly to the store, as if the
+// recorder had not checked its uploads.
+//
+// Defense in depth: the recorder checks the uploads and builds the parts
+// itself. The store checks the parts again, and takes the times from the
+// reserve, so a caller of the store cannot skip either layer.
+func testPlanHostileRef(t *testing.T, h RecorderHarness) {
+	t.Helper()
+
+	f := setUp(t, h.Harness)
+	a := openPlan(t, h, f, "")
+	np := newPlanFor(t, h, a, recordingKey(nil))
+
+	reserved, err := h.Records.ReservePlan(t.Context(), a.Claim, np)
+	if err != nil {
+		t.Fatalf("ReservePlan = %v", err)
+	}
+
+	upper := hostilePart(job.OutputPlanDisplay)
+	upper.SHA256 = strings.ToUpper(emptySHA256)
+
+	short := hostilePart(job.OutputPlanDisplay)
+	short.SHA256 = emptySHA256[:10]
+
+	negative := hostilePart(job.OutputPlanDisplay)
+	negative.Size = -1
+
+	huge := hostilePart(job.OutputPlanDisplay)
+	huge.Size = job.MaxPlanPart + 1
+
+	unknown := hostilePart(valueOther)
+
+	cases := map[string][]job.PlanPart{
+		"no part":                nil,
+		"three parts":            {hostilePart(job.OutputPlanDisplay), hostilePart(job.OutputPlanApply), hostilePart(job.OutputPlanApply)},
+		"an unknown kind":        {unknown},
+		"a kind twice":           {hostilePart(job.OutputPlanApply), hostilePart(job.OutputPlanApply)},
+		"a hash in capitals":     {upper},
+		"a short hash":           {short},
+		"a negative size":        {negative},
+		"a size above the limit": {huge},
+	}
+
+	for what, parts := range cases {
+		hostile := reserved
+		hostile.Parts = parts
+
+		if _, putErr := h.Records.PutPlan(t.Context(), a.Claim, hostile); !errors.Is(putErr, job.ErrInvalid) {
+			t.Errorf("PutPlan with %s = %v, want ErrInvalid", what, putErr)
+		}
+	}
+
+	if _, readErr := h.Records.Plan(t.Context(), f.fence.Namespace, reserved.ID); !errors.Is(readErr, job.ErrNotFound) {
+		t.Fatalf("Plan after the refused parts = %v, want ErrNotFound: it still has no part", readErr)
+	}
+
+	// Valid parts with the times of the caller: the store keeps the times of
+	// the reserve.
+	hostile := reserved
+	hostile.Parts = []job.PlanPart{hostilePart(job.OutputPlanDisplay)}
+	hostile.CreatedAt = time.Date(1999, 1, 1, 0, 0, 0, 0, time.UTC)
+	hostile.ExpiresAt = time.Date(2999, 1, 1, 0, 0, 0, 0, time.UTC)
+	hostile.RedactedAt = time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC)
+
+	out, err := h.Records.PutPlan(t.Context(), a.Claim, hostile)
+	if err != nil {
+		t.Fatalf("PutPlan with valid parts = %v", err)
+	}
+
+	if !out.CreatedAt.Equal(reserved.CreatedAt) || !out.ExpiresAt.Equal(reserved.ExpiresAt) || !out.RedactedAt.IsZero() ||
+		len(out.Parts) != 1 {
+		t.Fatalf("PutPlan = %+v, want the times of the reserve %+v and one part", out, reserved)
+	}
+
+	rec, err := h.Records.Plan(t.Context(), f.fence.Namespace, reserved.ID)
+	if err != nil || rec.Plan == nil || !rec.Plan.CreatedAt.Equal(reserved.CreatedAt) ||
+		!rec.Plan.ExpiresAt.Equal(reserved.ExpiresAt) || !rec.Plan.RedactedAt.IsZero() {
+		t.Fatalf("stored plan = %+v, %v; want the times of the reserve", rec.Plan, err)
+	}
 }

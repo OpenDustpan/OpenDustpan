@@ -1,6 +1,7 @@
 package jobtest_test
 
 import (
+	"context"
 	"errors"
 	"io"
 	"strings"
@@ -268,5 +269,80 @@ func TestRecorderPlanStoreFailure(t *testing.T) {
 
 	for _, k := range listJobBlobs(t, &h) {
 		t.Errorf("blob %s stays after a refused plan", k)
+	}
+}
+
+// errCommit is the error of a COMMIT that the server made and then did not
+// confirm to the client.
+var errCommit = errors.New("injected commit failure")
+
+// commitThenFail is a job.RecordStore whose PutPlan commits and then returns
+// errCommit, as a store does when the connection ends after the server
+// committed.
+type commitThenFail struct {
+	job.RecordStore
+}
+
+// PutPlan implements job.RecordStore.
+func (c commitThenFail) PutPlan(ctx context.Context, pc job.PhaseClaim, p job.PlanRef) (job.PlanRef, error) {
+	if _, err := c.RecordStore.PutPlan(ctx, pc, p); err != nil {
+		return job.PlanRef{}, err
+	}
+
+	return job.PlanRef{}, errCommit
+}
+
+// TestRecorderPutPlanCommitError proves that the recorder keeps the parts of a
+// plan when PutPlan fails with an error that does not prove a rollback: the
+// plan row can name them.
+func TestRecorderPutPlanCommitError(t *testing.T) {
+	t.Parallel()
+
+	db := newMemDB()
+	keys := newMemKeyIndex(db)
+	db.itemKeys = keys
+
+	inner, err := blobfs.Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("open blob store: %v", err)
+	}
+
+	t.Cleanup(func() { _ = inner.Close() }) //nolint:errcheck // Test cleanup.
+
+	h := jobtest.NewRecorderHarness(t, jobtest.RecorderParts{
+		Harness: jobtest.Harness{
+			Jobs: db, Durable: db.durable, Freezes: db, Claimer: job.NewClaimer(db, db.durable, db), Namespaces: db,
+			Domain: db,
+		},
+		Records:  commitThenFail{RecordStore: db},
+		ItemKeys: keys,
+		Blobs:    inner,
+	})
+	a := planAssignment(t, &h)
+
+	_, err = h.Recorder.PutPlan(t.Context(), a.Claim, []job.PlanUpload{
+		{Kind: job.OutputPlanDisplay, Body: strings.NewReader(`{"changes": 1}`)},
+		{Kind: job.OutputPlanApply, Body: strings.NewReader("binary")},
+	})
+	if !errors.Is(err, errCommit) {
+		t.Fatalf("PutPlan = %v, want the injected commit failure", err)
+	}
+
+	plan := mustGetJob(t, &h, a.Claim.Job).Phases[0].Plan
+	if plan == nil || len(plan.Parts) != 2 {
+		t.Fatalf("plan after the commit error = %+v, want a stored plan with two parts", plan)
+	}
+
+	for _, k := range []job.OutputKind{job.OutputPlanDisplay, job.OutputPlanApply} {
+		rc, openErr := h.Reader.OpenPlanPart(t.Context(), "acme", plan.ID, k)
+		if openErr != nil {
+			t.Fatalf("OpenPlanPart(%s) after the commit error = %v, want the part to stay", k, openErr)
+		}
+
+		if _, readErr := io.ReadAll(rc); readErr != nil {
+			t.Errorf("read of part %s = %v", k, readErr)
+		}
+
+		_ = rc.Close() //nolint:errcheck // Test cleanup.
 	}
 }

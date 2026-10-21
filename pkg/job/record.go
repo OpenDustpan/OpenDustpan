@@ -469,6 +469,37 @@ func CheckPutPlan(j *Job, phase int, current string) error {
 	}
 }
 
+// CheckPlanParts returns ErrInvalid unless parts are the parts of a plan: one
+// or two parts, each of a plan output kind, no kind twice, each with a valid
+// SHA-256 and a size from 0 to MaxPlanPart.
+func CheckPlanParts(parts []PlanPart) error {
+	if len(parts) < 1 || len(parts) > 2 {
+		return fmt.Errorf("%w: a plan has 1 or 2 parts, not %d", ErrInvalid, len(parts))
+	}
+
+	seen := make(map[OutputKind]bool, len(parts))
+
+	for i := range parts {
+		p := &parts[i]
+
+		switch {
+		case p.Kind != OutputPlanDisplay && p.Kind != OutputPlanApply:
+			return fmt.Errorf("%w: %q is not a plan output", ErrInvalid, p.Kind)
+		case seen[p.Kind]:
+			return fmt.Errorf("%w: plan part %q twice", ErrInvalid, p.Kind)
+		case !ValidHash(p.SHA256):
+			return fmt.Errorf("%w: plan part %q has no valid hash", ErrInvalid, p.Kind)
+		case p.Size < 0 || p.Size > MaxPlanPart:
+			return fmt.Errorf("%w: plan part %q has a size from 0 to %d, not %d", ErrInvalid, p.Kind, MaxPlanPart,
+				p.Size)
+		}
+
+		seen[p.Kind] = true
+	}
+
+	return nil
+}
+
 // CheckDelivered returns the error of the record of d as the delivery of the
 // phase at index phase of j, and reports whether it changes j. It returns
 // ErrInvalid for a phase that is not a deliver phase and for a result with no

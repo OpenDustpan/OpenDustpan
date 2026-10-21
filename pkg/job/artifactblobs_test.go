@@ -285,3 +285,65 @@ func TestJobBlobFamily(t *testing.T) {
 		t.Fatalf("family = %+v, want the directory job", f)
 	}
 }
+
+// TestArtifactBlobsIDAllowlist proves that each ID segment of a key is checked
+// against an allowlist, with a table of the characters that it refuses. A
+// refused ID never reaches the blob store.
+func TestArtifactBlobsIDAllowlist(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		id   string
+		ok   bool
+	}{
+		{"letters, digits and a hyphen", "x-a1-9z", true},
+		{"the longest segment", strings.Repeat("a", 64), true},
+		{"an empty segment", "", false},
+		{"a segment above the limit", strings.Repeat("a", 65), false},
+		{"a slash", "a/b", false},
+		{"a backslash", `a\b`, false},
+		{"a dot", "a.b", false},
+		{"two dots", "..", false},
+		{"a space", "a b", false},
+		{"a new line", "a\nb", false},
+		{"a carriage return", "a\rb", false},
+		{"a NUL", "a\x00b", false},
+		{"a tab", "a\tb", false},
+		{"a percent sign", "a%2fb", false},
+		{"a colon", "a:b", false},
+		{"an asterisk", "a*b", false},
+		{"a capital", "aBc", false},
+		{"an underscore", "a_b", false},
+		{"a non-ASCII letter", "aé", false},
+		{"a fullwidth slash", "a\uff0fb", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			b, store, _ := newArtifactBlobs(t)
+			ns := namespace.NewID()
+
+			_, planErr := b.OpenPlanPart(t.Context(),
+				job.PlanPartRef{Namespace: ns, Job: job.ID(job.IDPrefix + tt.id), Plan: job.PlanIDPrefix + tt.id,
+					Kind: job.OutputPlanApply})
+			_, chunkErr := b.OpenLogChunk(t.Context(),
+				job.LogChunkRef{Namespace: ns, Job: job.ID(job.IDPrefix + tt.id), Version: job.LogVersionIDPrefix + tt.id,
+					Seq: 0})
+
+			for what, err := range map[string]error{"plan part": planErr, "log chunk": chunkErr} {
+				if got := !errors.Is(err, job.ErrInvalid); got != tt.ok {
+					t.Errorf("%s with the ID segment %q: err = %v, want ok = %v", what, tt.id, err, tt.ok)
+				}
+			}
+
+			if !tt.ok {
+				if n := store.Calls("Get"); n != 0 {
+					t.Errorf("a refused ID reached the blob store %d times, want 0", n)
+				}
+			}
+		})
+	}
+}

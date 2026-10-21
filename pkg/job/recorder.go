@@ -286,12 +286,33 @@ func (r *DurableRecorder) PutPlan(ctx context.Context, c PhaseClaim, parts []Pla
 
 	out, err := r.store.PutPlan(ctx, c, plan)
 	if err != nil {
-		r.deleteParts(ctx, at, stored)
+		// An error that does not prove a rollback, such as a failed COMMIT,
+		// can follow a commit: the plan row may name the parts, so the
+		// parts stay.
+		if provesRollback(err) {
+			r.deleteParts(ctx, at, stored)
+		}
 
 		return PlanRef{}, err
 	}
 
 	return out, nil
+}
+
+// provesRollback reports whether err from the store proves that the store did
+// not commit the write. Only the errors that the store returns before it
+// commits do. Any other error, such as a failure of the COMMIT, can follow a
+// commit that the server made.
+func provesRollback(err error) bool {
+	for _, target := range []error{
+		ErrPlanStale, ErrConflict, ErrClaimLost, namespace.ErrFenced, ErrNotFound, ErrInvalid,
+	} {
+		if errors.Is(err, target) {
+			return true
+		}
+	}
+
+	return false
 }
 
 // checkPlanUploads returns ErrInvalid for no part, a kind that is not a plan

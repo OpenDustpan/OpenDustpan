@@ -571,13 +571,18 @@ func (m *memDB) PutPlan(ctx context.Context, pc job.PhaseClaim, p job.PlanRef) (
 		return job.PlanRef{}, fmt.Errorf("%w: plan %s has another item key", job.ErrInvalid, p.ID)
 	}
 
-	p.StateVersion = next.Phases[pc.Phase].StateVersion
-	next.Phases[pc.Phase].Plan = &p
+	if partsErr := job.CheckPlanParts(p.Parts); partsErr != nil {
+		return job.PlanRef{}, partsErr
+	}
 
-	m.records.plans[p.ID] = memPlanEntry{job: next.ID, plan: p}
+	plan := e.plan
+	plan.Parts, plan.StateVersion = p.Parts, next.Phases[pc.Phase].StateVersion
+	next.Phases[pc.Phase].Plan = &plan
+
+	m.records.plans[plan.ID] = memPlanEntry{job: next.ID, plan: plan}
 	m.store(&next, time.Now().UTC())
 
-	return p, nil
+	return plan, nil
 }
 
 // failStalePhase fails the phase of pc and ends its operation, as the SQL
