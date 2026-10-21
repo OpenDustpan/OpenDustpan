@@ -1,1 +1,7 @@
 ^\.agents/skills/setup-matt-pocock-skills/SKILL\.md$
+^pkg/notify/notify_test\.go$
+^cmd/opendustpan/dev_test\.go$
+^pkg/unitimport/unitimport_test\.go$
+^pkg/policy/endpoint_test\.go$
+^pkg/calendar/calendar_test\.go$
+^pkg/agent/mask_test\.go$
