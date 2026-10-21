@@ -220,21 +220,25 @@ func TestSinkValidate(t *testing.T) {
 		ok      bool
 		refused bool
 	}{
-		{"a webhook", webhook("https://hooks.example.com/ops", "itm-1"), true, false},
-		{"a webhook with two secrets", webhook("https://hooks.example.com/ops", "itm-1", "itm-2"), true, false},
-		{"a webhook with three secrets", webhook("https://hooks.example.com/ops", "a", "b", "c"), false, false},
-		{"a webhook with no secret", webhook("https://hooks.example.com/ops"), false, false},
-		{"a ref with a zero byte", webhook("https://hooks.example.com/ops", "itm-1\x00"), false, false},
-		{"a ref with a slash", webhook("https://hooks.example.com/ops", "itm/1"), false, false},
-		{"an empty ref", webhook("https://hooks.example.com/ops", ""), false, false},
-		{"a ref above the bound", webhook("https://hooks.example.com/ops", strings.Repeat("r", 101)), false, false},
-		{"a ref at the bound", webhook("https://hooks.example.com/ops", strings.Repeat("r", 100)), true, false},
-		{"an http webhook", webhook("http://hooks.example.com/ops", "itm-1"), false, true},
-		{"the metadata address", webhook("https://169.254.169.254/", "itm-1"), false, true},
-		{"IPv6 loopback", webhook("https://[::1]:8443/", "itm-1"), false, true},
-		{"a private address", webhook("https://10.0.0.5/hook", "itm-1"), false, true},
-		{"localhost", webhook("https://localhost/hook", "itm-1"), false, true},
-		{"user information", webhook("https://user:pw@hooks.example.com/", "itm-1"), false, true},
+		{"a webhook", webhook("hooks.example.com", "itm-url", "itm-1"), true, false},
+		{"a webhook with a port", webhook("hooks.example.com:8443", "itm-url", "itm-1"), true, false},
+		{"a webhook with two keys", webhook("hooks.example.com", "itm-url", "itm-1", "itm-2"), true, false},
+		{"a webhook with three keys", webhook("hooks.example.com", "u", "a", "b", "c"), false, false},
+		{"a webhook with no secret", webhook("hooks.example.com"), false, false},
+		{"a webhook with a URL item and no key", webhook("hooks.example.com", "itm-url"), false, false},
+		{"a webhook with the URL as target", webhook("https://hooks.example.com/ops", "u", "k"), false, false},
+		{"a webhook host with a path", webhook("hooks.example.com/ops", "u", "k"), false, false},
+		{"a webhook host in upper case", webhook("Hooks.example.com", "u", "k"), false, false},
+		{"a ref with a zero byte", webhook("hooks.example.com", "u", "itm-1\x00"), false, false},
+		{"a ref with a slash", webhook("hooks.example.com", "u", "itm/1"), false, false},
+		{"an empty ref", webhook("hooks.example.com", "u", ""), false, false},
+		{"a ref above the bound", webhook("hooks.example.com", "u", strings.Repeat("r", 101)), false, false},
+		{"a ref at the bound", webhook("hooks.example.com", "u", strings.Repeat("r", 100)), true, false},
+		{"the metadata address", webhook("169.254.169.254", "u", "k"), false, true},
+		{"IPv6 loopback", webhook("[::1]:8443", "u", "k"), false, true},
+		{"a private address", webhook("10.0.0.5", "u", "k"), false, true},
+		{"localhost", webhook("localhost", "u", "k"), false, true},
+		{"user information", webhook("user:pw@hooks.example.com", "u", "k"), false, true},
 		{"a chat webhook", chat, true, false},
 		{"a chat webhook with a port", chatWith("chat.example.com:8443", "itm-1"), true, false},
 		{"a chat webhook with the URL as target", chatWith("https://chat.example.com/hook/1", "itm-1"), false, false},
@@ -250,7 +254,7 @@ func TestSinkValidate(t *testing.T) {
 		{"a chat platform in upper case", withPlatform(chat, "Slack"), false, false},
 		{
 			"a webhook with a platform",
-			withPlatform(webhook("https://hooks.example.com/ops", "itm-1"), "slack"),
+			withPlatform(webhook("hooks.example.com", "u", "itm-1"), "slack"),
 			false,
 			false,
 		},
@@ -844,7 +848,7 @@ func TestValidateSecrets(t *testing.T) {
 		Kind:       notify.SinkWebhook,
 		Name:       "Ops",
 		Platform:   "",
-		Target:     "https://hooks.example.com/ops",
+		Target:     "hooks.example.com",
 		SecretRefs: []string{"itm-1", "itm-2"},
 		CreatedBy:  "alice",
 		Version:    0,
@@ -941,21 +945,26 @@ func checkNoticeKeys(t *testing.T, sub notify.Subscription, e audit.Entry, n not
 func TestWebhookHost(t *testing.T) {
 	t.Parallel()
 
-	for _, tc := range []struct{ name, url, want string }{
-		{"a path and a query", "https://Hooks.Example.com/a/SECRET?token=SECRET", "hooks.example.com"},
-		{"a port", "https://hooks.example.com:8443/SECRET", "hooks.example.com:8443"},
-		{"user information", "https://user:SECRET@hooks.example.com/x", "hooks.example.com"},
-		{"a fragment", "https://hooks.example.com/x#SECRET", "hooks.example.com"},
-		{"no path", "https://hooks.example.com", "hooks.example.com"},
-		{"a URL that does not parse", "https://hooks.example.com/%zz SECRET", ""},
-		{"an empty value", "", ""},
+	for _, tc := range []struct {
+		name, url, want string
+		err             error
+	}{
+		{"a path and a query", "https://Hooks.Example.com/a/SECRET?token=SECRET", "hooks.example.com", nil},
+		{"a port", "https://hooks.example.com:8443/SECRET", "hooks.example.com:8443", nil},
+		{"user information", "https://user:SECRET@hooks.example.com/x", "", egress.ErrRefused},
+		{"a fragment", "https://hooks.example.com/x#SECRET", "", egress.ErrRefused},
+		{"no path", "https://hooks.example.com", "hooks.example.com", nil},
+		{"http", "http://hooks.example.com/SECRET", "", egress.ErrRefused},
+		{"a URL that does not parse", "https://hooks.example.com/%zz SECRET", "", egress.ErrRefused},
+		{"an empty value", "", "", egress.ErrRefused},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			got := notify.WebhookHost(tc.url)
-			if got != tc.want || strings.Contains(got, "SECRET") {
-				t.Errorf("WebhookHost(%q) = %q, want %q", tc.url, got, tc.want)
+			got, err := notify.WebhookHost(tc.url)
+			if got != tc.want || !errors.Is(err, tc.err) || err != nil && strings.Contains(err.Error(), "SECRET") {
+				t.Errorf("WebhookHost(%q) = %q, %v, want %q, %v with no secret in the error", tc.url, got, err, tc.want,
+					tc.err)
 			}
 		})
 	}

@@ -39,7 +39,7 @@ func TestCreateWebhookAnswersTheKeyOnce(t *testing.T) {
 		s.Target != webhookHost ||
 		s.Version != 1 ||
 		s.CreatedBy != "admin" ||
-		s.URLSet ||
+		!s.URLSet ||
 		!hex64.MatchString(s.SigningKey) {
 		t.Fatalf("created = %+v, want a webhook at version 1 with a signing key of 64 hex digits", s)
 	}
@@ -120,12 +120,15 @@ func checkKeyNotStored(t *testing.T, f fixture, s sinkWire) {
 	t.Helper()
 
 	sealed, err := f.store.NotificationSinks().SinkSecrets(t.Context(), "acme", s.ID)
-	if err != nil || len(sealed) != 1 {
-		t.Fatalf("stored secrets = %d (%v), want 1", len(sealed), err)
+	if err != nil || len(sealed) != 2 {
+		t.Fatalf("stored secrets = %d (%v), want 2: the URL and the signing key", len(sealed), err)
 	}
 
-	if strings.Contains(string(sealed[0].Ciphertext()), s.SigningKey) {
-		t.Error("the store holds the signing key in plaintext")
+	for _, item := range sealed {
+		if strings.Contains(string(item.Ciphertext()), s.SigningKey) ||
+			strings.Contains(string(item.Ciphertext()), canary) {
+			t.Error("the store holds the signing key or the webhook URL in plaintext")
+		}
 	}
 
 	entries := f.sinkEntries(t)
@@ -770,5 +773,61 @@ func TestTestRouteSendsNothingToAFencedNamespace(t *testing.T) {
 
 	if n := len(f.sinkEntries(t)); n != before {
 		t.Fatalf("audit entries = %d, want %d", n, before)
+	}
+}
+
+// TestTestFailsClosedWithoutAUsableURL proves that a webhook sink whose sealed
+// URL is on another host than its target sends nothing and answers 422
+// sink.no-url, and that neither the answer nor the log shows the URL.
+func TestTestFailsClosedWithoutAUsableURL(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	got := f.do(t, send("admin", http.MethodPost, base, webhookBody(t, "Ops")))
+	wantCode(t, "create", got, http.StatusCreated)
+
+	s := decode[sinkWire](t, got)
+	f.replaceURLItem(t, s.ID, "https://other.example.com/"+canary)
+
+	got = f.do(t, send("admin", http.MethodPost, base+"/"+s.ID+"/test", ""))
+	if got.code != http.StatusUnprocessableEntity || !strings.Contains(got.body, "sink.no-url") ||
+		strings.Contains(got.body, canary) || strings.Contains(f.logs.String(), canary) {
+		t.Fatalf("test of a sink with a URL on another host: %d %s, want 422 sink.no-url and no URL", got.code, got.body)
+	}
+
+	if n := f.hook.count(); n != 0 {
+		t.Errorf("sender got %d messages, want none", n)
+	}
+}
+
+// replaceURLItem replaces the sealed URL item of the webhook sink id in acme
+// with a new item for url, as a store left by another version could hold it.
+func (f fixture) replaceURLItem(t *testing.T, id, url string) {
+	t.Helper()
+
+	sinks, err := f.store.NotificationSinks().Sinks(t.Context(), "acme")
+	if err != nil || len(sinks) != 1 {
+		t.Fatalf("Sinks = %d (%v), want 1", len(sinks), err)
+	}
+
+	next := sinks[0]
+	next.SecretRefs = []string{"itm-replaced", next.SecretRefs[1]}
+
+	sealed, err := notify.SinkSealer{Namespaces: f.secrets}.Seal(t.Context(), next,
+		[]notify.SinkSecret{{Ref: "itm-replaced", Value: []byte(url)}})
+	if err != nil {
+		t.Fatalf("Seal: %v", err)
+	}
+
+	ns, err := f.store.GetNamespace(t.Context(), "acme")
+	if err != nil {
+		t.Fatalf("GetNamespace: %v", err)
+	}
+
+	e := f.sinkEntries(t)[0]
+	e.Action, e.ObjectID, e.Hash, e.PrevHash, e.Sequence = "sink:update", id, "", "", 0
+
+	if err = f.store.NotificationSinks().PutSink(t.Context(), next, sealed, ns.Fence(), e); err != nil {
+		t.Fatalf("PutSink: %v", err)
 	}
 }

@@ -29,6 +29,9 @@ const (
 	MaxNameLen = 100
 	// MaxAddressLen caps the email address of a sink, in bytes.
 	MaxAddressLen = 254
+	// MaxSinkSecrets caps the secret items of a sink: the URL of a webhook
+	// and its active signing keys.
+	MaxSinkSecrets = MaxSigningSecrets + 1
 	// MaxSigningSecrets caps the active signing secrets of a webhook sink.
 	// Two let an operator add a new secret, move the receiver to it, and
 	// then remove the old one, with no delivery that the receiver refuses.
@@ -50,8 +53,11 @@ const (
 	// of the sink. Target holds only the host of the URL (see ChatHost), so
 	// a read of the sink shows the host and never the URL.
 	SinkChat SinkKind = "chat"
-	// SinkWebhook posts the notification as JSON to the https URL Target,
-	// signed with each active secret of the sink (see Sign).
+	// SinkWebhook posts the notification as JSON to an https URL, signed
+	// with each active signing key of the sink (see Sign). The URL can hold
+	// a token, so it is the first secret item of the sink, before the
+	// signing keys. Target holds only the host of the URL (see WebhookHost),
+	// so a read of the sink shows the host and never the URL.
 	SinkWebhook SinkKind = "webhook"
 )
 
@@ -63,17 +69,17 @@ func ChatPlatforms() []string {
 }
 
 // Sink is a destination of notifications in a scope. Target is an email
-// address, the https URL of a webhook, or the host of the URL of a chat
-// webhook. Platform names the chat platform of a chat sink and is empty for
-// any other kind. A change of the platform is a new sink. SecretRefs name the stored secrets of the sink: the one or
-// two
-// active signing keys of a webhook, or the URL of a chat webhook. The API
+// address, or the host of the URL of a chat webhook or of a webhook.
+// Platform names the chat platform of a chat sink and is empty for any
+// other kind. A change of the platform is a new sink. SecretRefs name the
+// stored secrets of the sink, in order: the URL of a chat webhook; or the
+// URL of a webhook, then its one or two active signing keys. The API
 // never answers a secret, and the dispatcher reads them only to deliver.
 // A ref names one value for good: the API stores each new secret value
 // under a new ref. It never writes a new value under an existing ref
-// (see Subscriptions.PutSink). The URL of a chat webhook is a secret
-// item, and Target holds only its host, so a new value under the same
-// ref could send to another webhook of the same host. With one value for
+// (see Subscriptions.PutSink). The URL of a chat webhook or of a webhook
+// is a secret item, and Target holds only its host, so a new value under
+// the same ref could send to another receiver of the same host. With one value for
 // each ref, a sink whose kind, target and refs did not change sends to
 // the same place.
 type Sink struct {
@@ -90,20 +96,20 @@ type Sink struct {
 
 // Validate returns ErrInvalid for a sink that breaks a bound, for a chat
 // sink with no known platform, for a sink of another kind with a platform,
-// for a webhook with no secret or more than MaxSigningSecrets secrets, for a
+// for a webhook that has not a URL item and one or two signing keys, for a
 // chat sink that has not exactly one secret, and for a target that does
-// not fit the kind. The URL of a webhook sink, and the host of a chat
-// sink, must pass egress.CheckURL for https only: the error then also
-// matches egress.ErrRefused.
+// not fit the kind. The host of a webhook sink or of a chat sink must pass
+// egress.CheckURL for https only: the error then also matches
+// egress.ErrRefused.
 func (s Sink) Validate() error {
 	switch {
 	case !strings.HasPrefix(s.ID, SinkIDPrefix):
 		return fmt.Errorf("%w: a sink ID starts with %q", ErrInvalid, SinkIDPrefix)
 	case s.Scope == "" || s.Name == "" || len(s.Name) > MaxNameLen:
 		return fmt.Errorf("%w: a sink needs a scope and a name of 1 to %d bytes", ErrInvalid, MaxNameLen)
-	case len(s.SecretRefs) > MaxSigningSecrets || slices.ContainsFunc(s.SecretRefs, badRef):
+	case len(s.SecretRefs) > MaxSinkSecrets || slices.ContainsFunc(s.SecretRefs, badRef):
 		return fmt.Errorf("%w: a sink has at most %d secrets, each an identifier of at most %d bytes", ErrInvalid,
-			MaxSigningSecrets, MaxRefLen)
+			MaxSinkSecrets, MaxRefLen)
 	}
 
 	if err := s.validPlatform(); err != nil {
@@ -116,7 +122,7 @@ func (s Sink) Validate() error {
 	case SinkChat:
 		return s.validChat()
 	case SinkWebhook:
-		return s.validURL()
+		return s.validWebhook()
 	default:
 		return fmt.Errorf("%w: unknown sink kind %q", ErrInvalid, s.Kind)
 	}
@@ -173,18 +179,15 @@ func (s Sink) validPlatform() error {
 	}
 }
 
-// validURL returns ErrInvalid for a webhook sink whose target the egress
-// rules refuse, and for a webhook sink with no signing secret.
-func (s Sink) validURL() error {
-	if err := egress.CheckURL(s.Target, egress.HTTPSOnly); err != nil {
-		return fmt.Errorf("%w: a %s sink: %w", ErrInvalid, s.Kind, err)
+// validWebhook returns ErrInvalid for a webhook sink whose target is not a
+// host that the egress rules accept, and for a webhook sink that has not
+// exactly a URL item and one or two signing keys.
+func (s Sink) validWebhook() error {
+	if n := len(s.SecretRefs); n < 2 || n > MaxSinkSecrets {
+		return fmt.Errorf("%w: a webhook sink has a URL item and one or two signing keys", ErrInvalid)
 	}
 
-	if len(s.SecretRefs) == 0 {
-		return fmt.Errorf("%w: a webhook sink needs a signing secret", ErrInvalid)
-	}
-
-	return nil
+	return s.validHost()
 }
 
 // validChat returns ErrInvalid for a chat sink whose target is not a host
@@ -195,13 +198,19 @@ func (s Sink) validChat() error {
 		return fmt.Errorf("%w: a chat sink has one secret item, which holds the URL of the webhook", ErrInvalid)
 	}
 
-	host, err := ChatHost("https://" + s.Target + "/")
+	return s.validHost()
+}
+
+// validHost returns ErrInvalid for a target that is not a bare host, in
+// lower case, that egress.CheckURL accepts for https only.
+func (s Sink) validHost() error {
+	host, err := hostOf("https://"+s.Target+"/", "target")
 	if err != nil {
-		return fmt.Errorf("%w: a chat sink: %w", ErrInvalid, err)
+		return fmt.Errorf("%w: a %s sink: %w", ErrInvalid, s.Kind, err)
 	}
 
 	if host != s.Target {
-		return fmt.Errorf("%w: the target of a chat sink is a host, not a URL", ErrInvalid)
+		return fmt.Errorf("%w: the target of a %s sink is a host, not a URL", ErrInvalid, s.Kind)
 	}
 
 	return nil
@@ -213,30 +222,28 @@ func (s Sink) validChat() error {
 // The API stores the URL as the secret item of the sink and the host as
 // its Target. The chat adapter sends only when the host of the URL in the
 // item is the Target.
-func ChatHost(raw string) (string, error) {
+func ChatHost(raw string) (string, error) { return hostOf(raw, "chat webhook") }
+
+// WebhookHost returns the host of the URL of a webhook, in the shape that
+// ChatHost gives for a chat webhook. The API stores the URL as the first
+// secret item of the sink and the host as its Target. It returns an error
+// that matches egress.ErrRefused for a URL that egress.CheckURL refuses for
+// https only. The error never holds the URL.
+func WebhookHost(raw string) (string, error) { return hostOf(raw, "webhook") }
+
+// hostOf returns the lowercase host of raw, with its port when raw has one.
+// what names the URL in an error.
+func hostOf(raw, what string) (string, error) {
 	if err := egress.CheckURL(raw, egress.HTTPSOnly); err != nil {
-		return "", fmt.Errorf("chat webhook: %w", err)
+		return "", fmt.Errorf("%s: %w", what, err)
 	}
 
 	u, err := url.Parse(raw)
 	if err != nil || u == nil {
-		return "", fmt.Errorf("chat webhook: %w: the URL does not parse", egress.ErrRefused)
+		return "", fmt.Errorf("%s: %w: the URL does not parse", what, egress.ErrRefused)
 	}
 
 	return strings.ToLower(u.Host), nil
-}
-
-// WebhookHost returns the lowercase host of the URL of a webhook sink, in the
-// shape that ChatHost gives for a chat sink. The path, the query and any user
-// information of the URL can hold a secret, so none of them is returned. It
-// returns an empty string when the URL does not parse: the answer fails closed.
-func WebhookHost(raw string) string {
-	u, err := url.Parse(raw)
-	if err != nil || u == nil {
-		return ""
-	}
-
-	return strings.ToLower(u.Host)
 }
 
 // validAddress returns ErrInvalid for a target of an email sink that is

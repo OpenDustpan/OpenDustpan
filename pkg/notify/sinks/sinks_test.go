@@ -60,10 +60,22 @@ func (f *fakeStore) PutSink(
 	s.Version++
 	f.sinks[s.ID] = s
 
-	if len(secrets) > 0 {
-		f.secrets[s.ID] = secrets
-	} else if !ok {
-		f.secrets[s.ID] = nil
+	// The items of the refs of s, in order: a new item, or the stored item of
+	// the same ref. A ref that s no longer names loses its item.
+	kept := make([]notify.SealedSecret, 0, len(s.SecretRefs))
+
+	for _, ref := range s.SecretRefs {
+		for _, item := range slices.Concat(secrets, f.secrets[s.ID]) {
+			if item.Ref() == ref {
+				kept = append(kept, item)
+
+				break
+			}
+		}
+	}
+
+	if len(secrets) > 0 || !ok {
+		f.secrets[s.ID] = kept
 	}
 
 	f.entries = append(f.entries, e)
@@ -294,9 +306,10 @@ func TestCreate(t *testing.T) {
 		{
 			"a webhook",
 			sinks.New{
-				Kind: notify.SinkWebhook, Platform: "", Name: "Ops", Target: "https://hooks.example.com/ops", URL: "",
+				Kind: notify.SinkWebhook, Platform: "", Name: "Ops",
+				Target: "https://hooks.example.com/ops/" + canary, URL: "",
 			},
-			"https://hooks.example.com/ops", true, true,
+			"hooks.example.com", true, true,
 		},
 		{
 			"a chat webhook",
@@ -360,9 +373,19 @@ func checkCreated(t *testing.T, f fixture, got sinks.Created, want *createCase) 
 func checkStoredSecret(t *testing.T, f fixture, got sinks.Created, want *createCase) {
 	t.Helper()
 
+	// A webhook sink has the URL and the signing key. A chat sink has the URL.
+	items := 0
+	if want.wantSecret {
+		items = 1
+	}
+
+	if want.wantKey {
+		items = 2
+	}
+
 	sealed, err := f.store.SinkSecrets(t.Context(), shop, got.Sink.ID)
-	if err != nil || (len(sealed) == 1) != want.wantSecret {
-		t.Fatalf("stored secrets = %d (%v), want one: %t", len(sealed), err, want.wantSecret)
+	if err != nil || len(sealed) != items {
+		t.Fatalf("stored secrets = %d (%v), want %d", len(sealed), err, items)
 	}
 
 	for _, item := range sealed {
@@ -615,17 +638,11 @@ func TestReplace(t *testing.T) {
 			name: "a new target of a webhook", seed: seedHook,
 			change: func(v int64) sinks.Change {
 				c := change(v, "Hook")
-				c.Target = new("https://new.example.com/")
+				c.Target = new("https://new.example.com/path/" + canary)
 
 				return c
 			},
-			check: func(t *testing.T, _ fixture, _, after notify.Sink) {
-				t.Helper()
-
-				if after.Target != "https://new.example.com/" {
-					t.Fatalf("target = %q, want the new target", after.Target)
-				}
-			},
+			check: checkNewWebhookURL("https://new.example.com/path/" + canary),
 		},
 		{
 			name: "a new URL of a chat sink", seed: seedChat,
@@ -822,5 +839,41 @@ func TestAuditKindOfPrincipal(t *testing.T) {
 				t.Fatalf("audit entry is not valid: %v", err)
 			}
 		})
+	}
+}
+
+// checkNewWebhookURL returns the check of a replace that gave a webhook sink
+// the new URL: the host is the target, the URL is a new sealed item first, the
+// old URL item is gone, and the signing key keeps its ref and its value.
+func checkNewWebhookURL(newURL string) func(t *testing.T, f fixture, before, after notify.Sink) {
+	return func(t *testing.T, f fixture, before, after notify.Sink) {
+		t.Helper()
+
+		if after.Target != "new.example.com" || len(after.SecretRefs) != 2 ||
+			after.SecretRefs[0] == before.SecretRefs[0] || after.SecretRefs[1] != before.SecretRefs[1] {
+			t.Fatalf("sink = %+v, want the new host, a new URL ref and the old key ref", after)
+		}
+
+		sealed, err := f.store.SinkSecrets(t.Context(), shop, after.ID)
+		if err != nil || len(sealed) != 2 {
+			t.Fatalf("stored secrets = %d (%v), want the new URL and the key", len(sealed), err)
+		}
+
+		dest, err := notifytest.Sealer().OpenDestination(t.Context(), after, sealed)
+		if err != nil {
+			t.Fatalf("OpenDestination: %v", err)
+		}
+
+		defer dest.Clear()
+
+		if dest.URL != newURL || len(dest.Keys) != 1 {
+			t.Fatalf("destination = %q with %d keys, want the new URL and the old key", dest.URL, len(dest.Keys))
+		}
+
+		for _, item := range sealed {
+			if bytes.Contains(item.Ciphertext(), []byte(canary)) {
+				t.Fatal("the store got a plaintext URL")
+			}
+		}
 	}
 }

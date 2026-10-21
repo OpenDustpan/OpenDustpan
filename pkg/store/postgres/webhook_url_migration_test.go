@@ -1,0 +1,183 @@
+package postgres_test
+
+import (
+	"net/url"
+	"os"
+	"slices"
+	"strings"
+	"testing"
+
+	"github.com/jackc/pgx/v5"
+
+	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/notify/notifytest"
+	"opendustpan.org/opendustpan/pkg/store/internal/migrate"
+)
+
+// webhookURLVersion is the version of the migration that moves the URL of a
+// webhook sink out of its target.
+const webhookURLVersion = 133
+
+// TestWebhookURLMigration applies the migrations before webhook URLs became
+// secret items, plants a webhook sink with a plain text URL as its target,
+// then opens the store, which applies the rest. No table may hold the URL
+// after that, and the sink fails closed until a person sets the URL again.
+func TestWebhookURLMigration(t *testing.T) {
+	t.Parallel()
+
+	base := os.Getenv(envURL)
+	if base == "" {
+		t.Skipf("set %s to run the PostgreSQL webhook URL migration test", envURL)
+	}
+
+	ctx := t.Context()
+
+	all, err := migrate.Load(frozenMigrations, "migrations")
+	if err != nil {
+		t.Fatalf("load embedded migrations: %v", err)
+	}
+
+	before := slices.DeleteFunc(all, func(m migrate.Migration) bool { return m.Version >= webhookURLVersion })
+	schemaURL := isolatedURL(t, base)
+
+	// The migrations after 0103 name tables of the control schema without a
+	// schema name, so the search path of the setup holds both schemas.
+	applyTagMigrations(ctx, t, withControlSchema(t, schemaURL), before)
+	plantLegacyWebhook(t, schemaURL)
+
+	s := openURL(t, schemaURL)
+
+	ns, err := s.GetNamespace(ctx, "shop")
+	if err != nil {
+		t.Fatalf("get namespace: %v", err)
+	}
+
+	notifytest.CheckMigratedWebhook(t, s.NotificationSinks(), ns.Fence())
+	checkNoPlainURL(t, schemaURL)
+}
+
+// withControlSchema returns schemaURL with the control schema of its live
+// schema added to the search path, as the store sets it.
+func withControlSchema(t *testing.T, schemaURL string) string {
+	t.Helper()
+
+	u, err := url.Parse(schemaURL)
+	if err != nil {
+		t.Fatalf("parse schema URL: %v", err)
+	}
+
+	q := u.Query()
+	live := q.Get("search_path")
+	q.Set("search_path", live+","+live+"_control")
+	u.RawQuery = q.Encode()
+
+	return u.String()
+}
+
+// plantLegacyWebhook inserts the namespace shop and a webhook sink in the
+// shape before the migration: the whole URL as the target, and the two
+// sealed signing keys.
+func plantLegacyWebhook(t *testing.T, schemaURL string) {
+	t.Helper()
+
+	ctx := t.Context()
+
+	conn, err := pgx.Connect(ctx, schemaURL)
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+
+	defer func() {
+		if closeErr := conn.Close(ctx); closeErr != nil {
+			t.Errorf("close: %v", closeErr)
+		}
+	}()
+
+	nsID, other := namespace.NewID().String(), namespace.NewID().String()
+	userinfo := "https://" + strings.Join([]string{"user", "pw"}, ":") + "@hooks.example.com/x"
+
+	stmts := []struct {
+		query string
+		args  []any
+	}{
+		{
+			`INSERT INTO namespaces (name, home_region, failover_version, created_at_ms, id)
+				VALUES ('shop', 'eu-west', 1, 0, $1)`,
+			[]any{nsID},
+		},
+		{
+			`INSERT INTO notification_sinks (id, namespace_id, kind, name, platform, target, created_by, version)
+				VALUES ($1, $2, 'webhook', 'Old hook', '', $3, 'alice', 1)`,
+			[]any{notifytest.LegacyWebhookID, nsID, notifytest.LegacyWebhookURL()},
+		},
+		{
+			`INSERT INTO namespaces (name, home_region, failover_version, created_at_ms, id)
+				VALUES ('other', 'eu-west', 1, 0, $1)`,
+			[]any{other},
+		},
+		{
+			`INSERT INTO notification_sinks (id, namespace_id, kind, name, platform, target, created_by, version)
+				VALUES ('snk-userinfo', $1, 'webhook', 'Odd hook', '', $2, 'alice', 1)`,
+			[]any{other, userinfo},
+		},
+	}
+
+	for _, st := range stmts {
+		if _, execErr := conn.Exec(ctx, st.query, st.args...); execErr != nil {
+			t.Fatalf("plant legacy rows: %v", execErr)
+		}
+	}
+
+	refs := notifytest.LegacyKeyRefs()
+
+	for i, item := range notifytest.LegacyKeyItems(ctx, "shop") {
+		_, execErr := conn.Exec(ctx,
+			`INSERT INTO notification_sink_secrets (namespace_id, ref, sink_id, position, ciphertext)
+				VALUES ($1, $2, $3, $4, $5)`, nsID, refs[i], notifytest.LegacyWebhookID, i, item.Ciphertext())
+		if execErr != nil {
+			t.Fatalf("plant legacy secret: %v", execErr)
+		}
+
+		if _, execErr = conn.Exec(ctx,
+			`INSERT INTO notification_sink_refs (namespace_id, ref) VALUES ($1, $2)`, nsID, refs[i]); execErr != nil {
+			t.Fatalf("plant legacy ref: %v", execErr)
+		}
+	}
+}
+
+// checkNoPlainURL fails if a sink target still holds a part of the URL that
+// the legacy sink had, or if the target with user information is not empty.
+func checkNoPlainURL(t *testing.T, schemaURL string) {
+	t.Helper()
+
+	ctx := t.Context()
+
+	conn, err := pgx.Connect(ctx, schemaURL)
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+
+	defer func() {
+		if closeErr := conn.Close(ctx); closeErr != nil {
+			t.Errorf("close: %v", closeErr)
+		}
+	}()
+
+	var count int
+
+	err = conn.QueryRow(ctx,
+		`SELECT count(*) FROM notification_sinks WHERE position($1 IN target) > 0 OR position('/' IN target) > 0`,
+		notifytest.LegacyToken()).Scan(&count)
+	if err != nil || count != 0 {
+		t.Fatalf("sinks that hold the URL after the migration = %d (%v), want 0", count, err)
+	}
+
+	// A target with user information never passed the egress rules, but the
+	// migration still scrubs it: the target becomes empty.
+	var target string
+
+	err = conn.QueryRow(ctx, `SELECT target FROM notification_sinks WHERE id = 'snk-userinfo'`).Scan(&target)
+	if err != nil || target != "" {
+		t.Fatalf("target of the sink with user information = %q (%v), want empty", target, err)
+	}
+}

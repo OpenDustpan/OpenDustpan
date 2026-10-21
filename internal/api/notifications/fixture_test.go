@@ -172,6 +172,7 @@ type fixture struct {
 	handler *apinotifications.Handler
 	config  apinotifications.Config
 	store   *sqlite.Store
+	secrets *secret.Service
 	hook    *recordingSender
 	logs    *logBuffer
 	// denied holds the actions that testAuthz refuses. A test can add one
@@ -320,7 +321,10 @@ func buildFixtureWith(
 		t.Fatalf("handler: %v", err)
 	}
 
-	return fixture{handler: handler, config: cfg, store: store, hook: hook, logs: logs, denied: denied, clock: clock}
+	return fixture{
+		handler: handler, config: cfg, store: store, secrets: secrets, hook: hook, logs: logs, denied: denied,
+		clock: clock,
+	}
 }
 
 // request is one call of a test.

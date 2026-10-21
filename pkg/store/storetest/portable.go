@@ -19,6 +19,7 @@ import (
 
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/installation"
+	"opendustpan.org/opendustpan/pkg/notify"
 )
 
 // PortableStore is a store that exports the portable format: the backup store
@@ -44,6 +45,7 @@ func RunPortable(t *testing.T, newStore PortableFactory) {
 		{name: "every table has one file that matches its descriptor", test: testPortableFiles},
 		{name: "an export of the same rows gives the same bytes", test: testPortableByteIdentical},
 		{name: "values take their portable forms", test: testPortableValueForms},
+		{name: "an export holds no plain webhook URL", test: testPortableNoPlainWebhookURL},
 		{name: "a portable export stages with the same rows", test: testPortableStages},
 		{name: "a table file that differs from its descriptor is refused", test: testPortableStageRefusesCorrupt},
 		{name: "a portable stage refuses another schema version", test: testPortableStageRefusesVersion},
@@ -869,4 +871,87 @@ func StageAs(t *testing.T, s any) backup.StageOptions {
 	}
 
 	return backup.StageOptions{BackupKind: installation.KindProduction, AllowDev: false}
+}
+
+// testPortableNoPlainWebhookURL checks that an export carries the webhook URL
+// in its sealed form only. It reads every row of every file of the export, and
+// fails if the URL, its path, its query or its token appears in plain text in
+// a value, or in a value that decodes from base64, which is how a byte column
+// is written. The sink file must still hold the host as the target, one
+// sealed item for the URL and the sealed signing keys, and the export must
+// stage back.
+func testPortableNoPlainWebhookURL(t *testing.T, newStore PortableFactory) {
+	t.Helper()
+
+	s := newStore(t)
+	seedBackupStore(t, s)
+
+	if _, ok := s.(interface{ NotificationSinks() notify.SinkStore }); !ok {
+		t.Skip("the store keeps no sinks")
+	}
+
+	sink, sum, files := exportPortable(t, s)
+
+	hidden := []string{seedWebhookURL(), seedWebhookToken(), "/ops/", "?k=1", "https://" + seedWebhookHost}
+	rowsOf := make(map[string][]map[string]any, len(sink.files))
+
+	for path, data := range sink.files {
+		if !strings.HasSuffix(path, ".gz") && !bytes.HasPrefix(data.Bytes(), []byte{0x1f, 0x8b}) {
+			continue
+		}
+
+		rowsOf[path] = readPortableLines(t, path, data.Bytes())
+
+		for _, row := range rowsOf[path] {
+			for column, value := range row {
+				if text, ok := value.(string); ok {
+					requireNoPlainText(t, path, column, text, hidden)
+				}
+			}
+		}
+	}
+
+	sinks := rowsOf[backup.PortablePath("notification_sinks")]
+	secrets := rowsOf[backup.PortablePath("notification_sink_secrets")]
+
+	targets := make([]string, 0, len(sinks))
+	for _, row := range sinks {
+		target, _ := row["target"].(string) //nolint:errcheck // A missing target stays empty and fails below.
+		targets = append(targets, target)
+	}
+
+	if len(sinks) != 2 || !slices.Contains(targets, seedWebhookHost) {
+		t.Fatalf("sink targets = %v, want the host %q for the webhook sink", targets, seedWebhookHost)
+	}
+
+	if len(secrets) != 4 {
+		t.Fatalf("the secret file holds %d rows, want 4: the chat URL, the webhook URL and two keys", len(secrets))
+	}
+
+	if _, err := s.StagePortable(t.Context(), sink.read, sum, files, StageAs(t, s)); err != nil {
+		t.Fatalf("stage the export of the webhook sink: %v", err)
+	}
+
+	if err := s.DiscardStaging(t.Context()); err != nil {
+		t.Fatalf("discard staging: %v", err)
+	}
+}
+
+// requireNoPlainText fails if text, or the bytes that text decodes to as
+// base64, contains one of hidden.
+func requireNoPlainText(t *testing.T, path, column, text string, hidden []string) {
+	t.Helper()
+
+	candidates := [][]byte{[]byte(text)}
+	if decoded, err := base64.StdEncoding.DecodeString(text); err == nil {
+		candidates = append(candidates, decoded)
+	}
+
+	for _, c := range candidates {
+		for _, plain := range hidden {
+			if bytes.Contains(c, []byte(plain)) {
+				t.Fatalf("column %q of %q holds the plain webhook URL text %q", column, path, plain)
+			}
+		}
+	}
 }

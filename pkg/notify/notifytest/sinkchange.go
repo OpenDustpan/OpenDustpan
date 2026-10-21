@@ -17,7 +17,7 @@ func changeTarget(t *testing.T, h Harness, fence namespace.Fence, subject string
 	t.Helper()
 
 	changed := sink("snk-1", shop)
-	changed.Version, changed.Target = 1, "https://hooks.example.net/ops"
+	changed.Version, changed.Target = 1, "hooks.example.net"
 
 	if err := h.Subscriptions.PutSink(t.Context(), changed, nil, fence, manageBy(subject)); err != nil {
 		t.Fatalf("PutSink with a new target: %v", err)
@@ -213,7 +213,7 @@ func testSinkChangeNotices(t *testing.T, h Harness) {
 	}
 
 	changed := renamed
-	changed.Version, changed.Target = 2, "https://hooks.example.net/ops"
+	changed.Version, changed.Target = 2, "hooks.example.net"
 
 	if err := h.Subscriptions.PutSink(t.Context(), changed, nil, fence, manageBy("dave")); err != nil {
 		t.Fatalf("PutSink with a new target: %v", err)
@@ -270,7 +270,7 @@ func testSinkSecretRefs(t *testing.T, h Harness) {
 
 	fence := setup(t, h)
 	putSink(t, h, fence)
-	checkSecrets(t, h, "[key of itm-snk-1]")
+	checkSecrets(t, h, "[key of itm-snk-1-url key of itm-snk-1]")
 
 	s := sink("snk-1", shop)
 	s.Version = 1
@@ -287,7 +287,7 @@ func testSinkSecretRefs(t *testing.T, h Harness) {
 			[]notify.SealedSecret{secret(t.Context(), s, "itm-x")},
 		},
 		{"a new sink with no value", sink("snk-2", shop), nil},
-		{"a new sink that names the ref of another sink", withRefs(sink("snk-2", shop), "itm-snk-1"), nil},
+		{"a new sink that names the ref of another sink", withRefs(sink("snk-2", shop), "itm-snk-1-url", "itm-snk-1"), nil},
 	}
 
 	for i := range refused {
@@ -299,24 +299,41 @@ func testSinkSecretRefs(t *testing.T, h Harness) {
 		}
 	}
 
-	checkSecrets(t, h, "[key of itm-snk-1]")
+	checkSecrets(t, h, "[key of itm-snk-1-url key of itm-snk-1]")
 
-	rotated := withRefs(s, "itm-snk-1-b")
+	// A new URL item keeps the signing key: only the first ref is new.
+	newURL := withRefs(s, "itm-snk-1-url2", "itm-snk-1")
 	err := h.Subscriptions.PutSink(
 		t.Context(),
-		rotated,
-		[]notify.SealedSecret{secret(t.Context(), s, "itm-snk-1-b")},
+		newURL,
+		[]notify.SealedSecret{secret(t.Context(), s, "itm-snk-1-url2")},
 		fence,
 		manage(),
 	)
 	if err != nil {
-		t.Fatalf("PutSink with a new ref: %v", err)
+		t.Fatalf("PutSink with a new URL item: %v", err)
 	}
 
-	checkSecrets(t, h, "[key of itm-snk-1-b]")
+	checkSecrets(t, h, "[key of itm-snk-1-url2 key of itm-snk-1]")
 
-	back := withRefs(s, "itm-snk-1")
-	back.Version = 2
+	rotated := withRefs(s, "itm-snk-1-b-url", "itm-snk-1-b")
+	rotated.Version = 2
+
+	err = h.Subscriptions.PutSink(
+		t.Context(),
+		rotated,
+		[]notify.SealedSecret{secret(t.Context(), s, "itm-snk-1-b-url"), secret(t.Context(), s, "itm-snk-1-b")},
+		fence,
+		manage(),
+	)
+	if err != nil {
+		t.Fatalf("PutSink with new refs: %v", err)
+	}
+
+	checkSecrets(t, h, "[key of itm-snk-1-b-url key of itm-snk-1-b]")
+
+	back := withRefs(s, "itm-snk-1-url", "itm-snk-1")
+	back.Version = 3
 
 	for _, secrets := range [][]notify.SealedSecret{{secret(t.Context(), s, "itm-snk-1")}, nil} {
 		err = h.Subscriptions.PutSink(t.Context(), back, secrets, fence, manage())
@@ -329,7 +346,7 @@ func testSinkSecretRefs(t *testing.T, h Harness) {
 		t.Fatalf("DeleteSink: %v", err)
 	}
 
-	again := withRefs(sink("snk-1", shop), "itm-snk-1-b")
+	again := withRefs(sink("snk-1", shop), "itm-snk-1-b-url", "itm-snk-1-b")
 	err = h.Subscriptions.PutSink(t.Context(), again, fresh(t.Context(), again), fence, manage())
 	if !errors.Is(err, notify.ErrInvalid) {
 		t.Fatalf("PutSink of a new sink with a ref of a deleted sink: err = %v, want ErrInvalid", err)

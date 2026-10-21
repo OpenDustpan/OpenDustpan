@@ -66,14 +66,9 @@ type testDocument struct {
 }
 
 func toDocument(s *notify.Sink) sinkDocument {
-	target := s.Target
-	if s.Kind == notify.SinkWebhook {
-		target = notify.WebhookHost(s.Target)
-	}
-
 	return sinkDocument{
 		ID: s.ID, Namespace: s.Scope.String(), Kind: string(s.Kind), Platform: s.Platform, Name: s.Name,
-		Target: target, URLSet: s.Kind == notify.SinkChat && len(s.SecretRefs) == 1, CreatedBy: s.CreatedBy,
+		Target: s.Target, URLSet: s.Kind != notify.SinkEmail && len(s.SecretRefs) > 0, CreatedBy: s.CreatedBy,
 		Version: s.Version,
 	}
 }
