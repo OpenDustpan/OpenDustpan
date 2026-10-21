@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 
+	"opendustpan.org/opendustpan/internal/api/problem"
 	"opendustpan.org/opendustpan/internal/api/refusal"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/collection"
@@ -327,17 +328,29 @@ func readLockReason(w http.ResponseWriter, r *http.Request) (string, error) {
 
 // classifyLock maps the errors of the lock routes to an HTTP status and a
 // message safe to show callers. ok is false for any other error.
-func classifyLock(err error) (int, string, bool) {
+func classifyLock(err error) (problem.Problem, bool) {
 	switch {
-	case errors.Is(err, manuallock.ErrTargetNotFound), errors.Is(err, manuallock.ErrNotLocked):
-		return http.StatusNotFound, err.Error(), true
-	case errors.Is(err, manuallock.ErrAlreadyLocked), errors.Is(err, manuallock.ErrNotHolder),
-		errors.Is(err, manuallock.ErrLockChanged), errors.Is(err, manuallock.ErrLocked):
-		return http.StatusConflict, err.Error(), true
-	case errors.Is(err, manuallock.ErrReasonRequired), errors.Is(err, manuallock.ErrInvalidTarget),
-		errors.Is(err, audit.ErrInvalidReason), errors.Is(err, errLockBody):
-		return http.StatusBadRequest, err.Error(), true
+	case errors.Is(err, manuallock.ErrTargetNotFound):
+		return fail(http.StatusNotFound, "lock.target-not-found", err.Error()), true
+	case errors.Is(err, manuallock.ErrNotLocked):
+		return fail(http.StatusNotFound, "lock.not-locked", err.Error()), true
+	case errors.Is(err, manuallock.ErrAlreadyLocked):
+		return fail(http.StatusConflict, "lock.already-locked", err.Error()), true
+	case errors.Is(err, manuallock.ErrNotHolder):
+		return fail(http.StatusConflict, "lock.not-holder", err.Error()), true
+	case errors.Is(err, manuallock.ErrLockChanged):
+		return fail(http.StatusConflict, "lock.changed", err.Error()), true
+	case errors.Is(err, manuallock.ErrLocked):
+		return fail(http.StatusConflict, "lock.locked", err.Error()), true
+	case errors.Is(err, manuallock.ErrReasonRequired):
+		return fail(http.StatusBadRequest, "lock.reason-required", err.Error()), true
+	case errors.Is(err, manuallock.ErrInvalidTarget):
+		return fail(http.StatusBadRequest, "lock.invalid-target", err.Error()), true
+	case errors.Is(err, audit.ErrInvalidReason):
+		return fail(http.StatusBadRequest, "audit.invalid-reason", err.Error()), true
+	case errors.Is(err, errLockBody):
+		return fail(http.StatusBadRequest, "request.body-invalid", err.Error()), true
 	default:
-		return 0, "", false
+		return problem.Pass()
 	}
 }

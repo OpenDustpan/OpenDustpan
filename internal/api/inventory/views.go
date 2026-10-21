@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/api/idempotent"
+	"opendustpan.org/opendustpan/internal/api/problem"
 	"opendustpan.org/opendustpan/internal/api/refusal"
 	"opendustpan.org/opendustpan/internal/clientip"
 	"opendustpan.org/opendustpan/internal/requestid"
@@ -66,22 +67,24 @@ func newViews(cfg *ViewsConfig) (*views, error) {
 
 // classifyView maps the errors of the saved view routes. The 403 for a caller
 // who is not a person has one text for every kind of principal.
-func classifyView(err error) (int, string, bool) {
+func classifyView(err error) (problem.Problem, bool) {
 	switch {
 	case errors.Is(err, savedview.ErrNotPerson):
-		return http.StatusForbidden, savedview.ErrNotPerson.Error(), true
+		return fail(http.StatusForbidden, "view.not-person", savedview.ErrNotPerson.Error()), true
 	case errors.Is(err, savedview.ErrNotFound):
-		return http.StatusNotFound, savedview.ErrNotFound.Error(), true
-	case errors.Is(err, savedview.ErrInvalid), errors.Is(err, errViewBody):
-		return http.StatusBadRequest, err.Error(), true
+		return fail(http.StatusNotFound, "view.not-found", savedview.ErrNotFound.Error()), true
+	case errors.Is(err, savedview.ErrInvalid):
+		return fail(http.StatusBadRequest, "view.invalid", err.Error()), true
+	case errors.Is(err, errViewBody):
+		return fail(http.StatusBadRequest, "request.body-invalid", err.Error()), true
 	case errors.Is(err, errViewIdempotencyKey):
-		return http.StatusBadRequest, err.Error(), true
-	case errors.Is(err, savedview.ErrExists), errors.Is(err, savedview.ErrLimit):
-		return http.StatusConflict, err.Error(), true
-	case errors.Is(err, idempotency.ErrLost):
-		return http.StatusConflict, "a newer request took this Idempotency-Key before this request ended: retry later", true
+		return fail(http.StatusBadRequest, "request.idempotency-key-unavailable", err.Error()), true
+	case errors.Is(err, savedview.ErrExists):
+		return fail(http.StatusConflict, "view.exists", err.Error()), true
+	case errors.Is(err, savedview.ErrLimit):
+		return fail(http.StatusConflict, "view.limit", err.Error()), true
 	default:
-		return 0, "", false
+		return problem.Pass()
 	}
 }
 

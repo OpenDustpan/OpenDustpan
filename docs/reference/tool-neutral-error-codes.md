@@ -1,0 +1,108 @@
+# Error codes of the tool-neutral APIs
+
+Each error answer of a tool-neutral API has the stable field `errorCode`. A
+program selects its action from `errorCode` and never from the text of
+`message`. A code never changes its meaning, and the server keeps every code.
+The text of `message` can change.
+
+This page lists the codes that all tool-neutral APIs share, and the codes of
+the inventory API, the context API and the audit API. The pages of the
+notification destinations API and the profiles API list their own codes.
+
+## The body
+
+```json
+{"code": 404, "message": "deleted unit not found", "errorCode": "unit.deleted-not-found"}
+```
+
+`code` is the HTTP status. It is not the machine code. Some answers have more
+fields:
+
+- `errorArgs` holds the arguments of the code. An answer with the header
+  `Retry-After` has the argument `retryAfterSeconds`, the same number of
+  seconds.
+- `reauthenticate` holds the path that starts a new sign-in, for the refusal
+  of a sign-in that is too old.
+
+Each error answer has the header `Cache-Control: no-store`.
+
+## Shared codes
+
+| Status | `errorCode` | Cause |
+| --- | --- | --- |
+| 400 | `namespace.invalid-name` | The name of the namespace is not valid |
+| 401 | `auth.unauthenticated` | The request has no valid token and no valid session |
+| 403 | `access.denied`, `access.ip-not-allowed`, `session.csrf`, `session.other-site` | See the error codes of a 403 answer |
+| 404 | `namespace.not-found` | No namespace with this name |
+| 409 | `namespace.fenced` | A failover moved the namespace during the request |
+| 409 | `request.idempotency-key-in-progress` | A request with the same `Idempotency-Key` has not ended |
+| 421 | `namespace.not-home` | The namespace has its home region in another region |
+| 429 | `auth.rate-limited` | Too many failed sign-ins from this address |
+| 500 | `server.internal` | An error that the server does not classify. The message is `internal error` |
+| 503 | `maintenance.in-maintenance` | The installation is in maintenance mode |
+
+## Inventory API
+
+| Status | `errorCode` | Cause |
+| --- | --- | --- |
+| 400 | `request.namespace-missing` | The `organization` query value is missing |
+| 400 | `request.invalid-query` | A query value is not valid, or a `pageToken` belongs to another query |
+| 400 | `request.body-invalid` | The body is not the body that the route needs |
+| 400 | `request.object-invalid` | The object of the request is not valid |
+| 400 | `request.unit-missing` | The `unit` query value of a move is missing |
+| 400 | `request.idempotency-key-unavailable` | The server cannot keep `Idempotency-Key` answers |
+| 400 | `collection.invalid-name` | The name of the collection is not valid |
+| 400 | `unit.invalid-name` | The name of the unit does not follow the name rules of its tool |
+| 400 | `view.invalid` | The saved view is not valid |
+| 400 | `lock.reason-required` | A lock needs a reason |
+| 400 | `lock.invalid-target` | The lock target is not valid |
+| 400 | `audit.invalid-reason` | The reason is not valid |
+| 403 | `view.not-person` | Only a person can have saved views |
+| 403 | `gate.denied`, `gate.limited` | A gate or an access limit refused a state write |
+| 404 | `unit.not-found` | No unit, or no unit that the caller may read |
+| 404 | `unit.deleted-not-found` | No deleted unit with this name |
+| 404 | `collection.not-found` | No collection with this name |
+| 404 | `collection.unit-not-found` | The unit is not in the collection |
+| 404 | `view.not-found` | No saved view with this name |
+| 404 | `lock.target-not-found` | The object of the lock does not exist |
+| 404 | `lock.not-locked` | The object has no lock |
+| 409 | `collection.exists` | A collection with this name exists |
+| 409 | `collection.not-empty` | The collection holds units |
+| 409 | `collection.changed` | The collection changed during the request |
+| 409 | `collection.none` | The unit is in no collection |
+| 409 | `collection.locked` | The unit cannot leave a locked collection |
+| 409 | `unit.name-taken` | A live unit holds the name: send a new name in the restore body |
+| 409 | `view.exists` | A saved view with this name exists |
+| 409 | `view.limit` | The person has the maximum number of saved views |
+| 409 | `lock.already-locked` | The object has a lock |
+| 409 | `lock.not-holder` | The caller does not hold the lock |
+| 409 | `lock.changed` | The lock changed during the request |
+| 409 | `lock.locked` | A lock refuses the change |
+| 409 | `gate.rule-failed` | A gate failed to evaluate, so the server refuses the state write |
+| 501 | `inventory.no-history` | The inventory store keeps no change log |
+| 503 | `gate.unavailable` | The gates could not decide a state write |
+
+## Context API
+
+| Status | `errorCode` | Cause |
+| --- | --- | --- |
+| 400 | `request.body-invalid` | The body has no known section |
+| 400 | `request.invalid-query` | The `include` query value is not valid |
+| 400 | `context.invalid` | The context is not valid |
+| 400 | `context.unknown-section` | The context has a section that the server does not know |
+| 404 | `context.object-not-found` | No object, or no object that the caller may read |
+| 404 | `context.not-found` | The object has no context from the API to clear |
+| 409 | `context.field-from-code` | The field comes from the code of the unit: change it in the `opendustpan` output |
+| 409 | `unit.deleted` | The unit is deleted: restore it first |
+
+## Audit API
+
+| Status | `errorCode` | Cause |
+| --- | --- | --- |
+| 400 | `request.namespace-missing` | The `organization` query value is missing |
+| 400 | `request.invalid-query` | `page[number]` or `page[size]` is not a positive number |
+| 400 | `request.invalid-path` | The sequence in the path is not a positive number |
+| 400 | `request.object-invalid` | The object of the request is not valid |
+| 404 | `namespace.not-found` | No namespace with this name |
+| 404 | `audit.entry-not-found` | No entry at this sequence |
+| 501 | `audit.no-entry-reader` | The store cannot read one entry: list the entries |

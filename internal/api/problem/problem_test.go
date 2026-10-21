@@ -268,3 +268,43 @@ func TestCredentialRefusalsComeFirst(t *testing.T) {
 		t.Fatalf("denied: answer %d, want the classifier to answer it", rec.Code)
 	}
 }
+
+// TestEveryAnswerHasACode checks that every shared class and the 500 answer
+// with a valid code.
+func TestEveryAnswerHasACode(t *testing.T) {
+	t.Parallel()
+
+	errs := []error{
+		identity.ErrRateLimited, identity.ErrUnauthenticated, sessionauth.ErrCSRF, sessionauth.ErrOtherSite,
+		identity.ErrDenied, idempotency.ErrLost, namespace.ErrInvalidName, namespace.ErrNotFound,
+		namespace.ErrFenced, namespace.ErrNotHome, maintenance.ErrInMaintenance, errDriver,
+	}
+
+	for _, err := range errs {
+		p := problem.Writer{Logger: nil, Classify: nil}.Problem(err)
+		if !problem.ValidCode(p.Code) {
+			t.Errorf("%v: code %q is not a valid code", err, p.Code)
+		}
+	}
+
+	if got := problem.Internal().Code; got != problem.CodeInternal {
+		t.Errorf("internal code = %q, want %q", got, problem.CodeInternal)
+	}
+}
+
+// TestValidCode checks the form of a code.
+func TestValidCode(t *testing.T) {
+	t.Parallel()
+
+	for _, code := range []string{"a.b", "workspace.locked", "request.body-invalid", "x1.y-2.z"} {
+		if !problem.ValidCode(code) {
+			t.Errorf("ValidCode(%q) = false, want true", code)
+		}
+	}
+
+	for _, code := range []string{"", "ab", "nodot", "Upper.case", "a..b", "a.-b", "a.b-", ".a.b", "a.b\n", strings.Repeat("a", 33) + "." + strings.Repeat("b", 31)} {
+		if problem.ValidCode(code) {
+			t.Errorf("ValidCode(%q) = true, want false", code)
+		}
+	}
+}

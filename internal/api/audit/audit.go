@@ -8,7 +8,6 @@ package audit
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -16,9 +15,9 @@ import (
 	"strconv"
 	"strings"
 
+	"opendustpan.org/opendustpan/internal/api/problem"
 	"opendustpan.org/opendustpan/internal/api/refusal"
 	"opendustpan.org/opendustpan/internal/denylimit"
-	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/internal/sessionauth"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -456,69 +455,38 @@ func (h *Handler) authenticate(r *http.Request) (identity.Principal, bool, error
 	return p, false, err
 }
 
-// errorResponse is the error body the console expects, as in the API the
-// console reads today.
-type errorResponse struct {
-	Message string `json:"message"`
-	Code    int    `json:"code"`
-}
-
-// codedErrorResponse is errorResponse with the stable machine code of a 403.
-// The fields of errorResponse keep their names and their meaning.
-type codedErrorResponse struct {
-	Message   string `json:"message"`
-	Code      int    `json:"code"`
-	ErrorCode string `json:"errorCode"`
-}
-
 func (h *Handler) writeError(ctx context.Context, w http.ResponseWriter, err error) {
-	status, message := classify(err)
-	if status == http.StatusInternalServerError {
-		// The log names the status only, never the error text: the text
-		// may hold driver detail, a token, or state (ADR 32 decision 7).
-		h.logger.ErrorContext(ctx, "request failed", slog.Int("status", status))
-	}
-
-	if status == http.StatusForbidden {
-		if code := errcode.Forbidden(err); code != "" {
-			h.writeJSON(ctx, w, status, codedErrorResponse{Code: status, Message: message, ErrorCode: code})
-
-			return
-		}
-	}
-
-	h.writeJSON(ctx, w, status, errorResponse{Code: status, Message: message})
+	problem.Writer{Logger: h.logger, Classify: classify}.Write(ctx, w, err)
 }
 
-// classify maps domain errors to an HTTP status and a message safe to show callers.
-func classify(err error) (int, string) {
+// classify maps the errors of the audit routes to an answer that is safe to
+// show callers. The shared module answers the rest.
+func classify(err error) (problem.Problem, bool) {
 	switch {
-	case errors.Is(err, identity.ErrRateLimited):
-		return http.StatusTooManyRequests, "too many failed sign-ins from this address: try again later"
-	case errors.Is(err, identity.ErrUnauthenticated):
-		return http.StatusUnauthorized, "unauthenticated"
-	case errors.Is(err, sessionauth.ErrCSRF), errors.Is(err, sessionauth.ErrOtherSite):
-		return http.StatusForbidden, err.Error()
-	case errors.Is(err, identity.ErrDenied):
-		return http.StatusForbidden, "forbidden"
-	case errors.Is(err, errMissingOrganization), errors.Is(err, errInvalidPage), errors.Is(err, errInvalidSequence):
-		return http.StatusBadRequest, err.Error()
-	case errors.Is(err, namespace.ErrInvalidName), errors.Is(err, identity.ErrInvalidObject):
-		return http.StatusBadRequest, err.Error()
-	case errors.Is(err, namespace.ErrNotFound), errors.Is(err, audit.ErrEntryNotFound):
-		return http.StatusNotFound, err.Error()
+	case errors.Is(err, errMissingOrganization):
+		return fail(http.StatusBadRequest, "request.namespace-missing", err.Error()), true
+	case errors.Is(err, errInvalidPage):
+		return fail(http.StatusBadRequest, "request.invalid-query", err.Error()), true
+	case errors.Is(err, errInvalidSequence):
+		return fail(http.StatusBadRequest, "request.invalid-path", err.Error()), true
+	case errors.Is(err, identity.ErrInvalidObject):
+		return fail(http.StatusBadRequest, "request.object-invalid", err.Error()), true
+	case errors.Is(err, namespace.ErrNotFound):
+		return fail(http.StatusNotFound, "namespace.not-found", err.Error()), true
+	case errors.Is(err, audit.ErrEntryNotFound):
+		return fail(http.StatusNotFound, "audit.entry-not-found", err.Error()), true
 	case errors.Is(err, errNoEntryReader):
-		return http.StatusNotImplemented, err.Error()
+		return fail(http.StatusNotImplemented, "audit.no-entry-reader", err.Error()), true
 	default:
-		return http.StatusInternalServerError, "internal error"
+		return problem.Pass()
 	}
+}
+
+// fail returns an answer with no arguments.
+func fail(status int, code, message string) problem.Problem {
+	return problem.Problem{Status: status, Code: code, Message: message, Args: nil, RetryAfter: 0, Reauthenticate: ""}
 }
 
 func (h *Handler) writeJSON(ctx context.Context, w http.ResponseWriter, status int, body any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-
-	if err := json.NewEncoder(w).Encode(body); err != nil {
-		h.logger.WarnContext(ctx, "write response failed", slog.String("error", err.Error()))
-	}
+	problem.WriteJSON(ctx, h.logger, w, status, body)
 }

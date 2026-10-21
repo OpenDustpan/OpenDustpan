@@ -80,9 +80,7 @@ func (h *Handler) guardStateWrite(
 	default:
 	}
 
-	h.writeJSON(ctx, w, status, errorResponse{
-		Code: status, Message: refusalMessage(refusal, code), ErrorCode: "",
-	})
+	h.problems().WriteProblem(ctx, w, fail(status, code, refusalMessage(refusal, code)))
 
 	return false
 }

@@ -16,6 +16,7 @@ import (
 	"log/slog"
 	"maps"
 	"net/http"
+	"regexp"
 	"strconv"
 	"time"
 
@@ -97,12 +98,19 @@ type Writer struct {
 // Cache-Control: no-store.
 func (wr Writer) Write(ctx context.Context, w http.ResponseWriter, err error) {
 	p := wr.Problem(err)
-	if p.Status == http.StatusInternalServerError {
-		wr.Logger.ErrorContext(ctx, "request failed", slog.Int("status", p.Status))
-	}
 
 	if errors.Is(err, namespace.ErrFenced) {
 		wr.Logger.WarnContext(ctx, "write fenced", slog.String("error", err.Error()))
+	}
+
+	wr.WriteProblem(ctx, w, p)
+}
+
+// WriteProblem writes the answer p, for a route that builds its own answer.
+// A 500 logs its status only.
+func (wr Writer) WriteProblem(ctx context.Context, w http.ResponseWriter, p Problem) {
+	if p.Status == http.StatusInternalServerError {
+		wr.Logger.ErrorContext(ctx, "request failed", slog.Int("status", p.Status))
 	}
 
 	w.Header().Set("Cache-Control", "no-store")
@@ -150,12 +158,22 @@ func (wr Writer) Problem(err error) Problem {
 	return Internal()
 }
 
+// codePattern is the form of a stable machine code: two or more segments
+// that dots join, in lower case with hyphens.
+var codePattern = regexp.MustCompile(`^[a-z][a-z0-9]*(-[a-z0-9]+)*(\.[a-z][a-z0-9]*(-[a-z0-9]+)*)+$`)
+
+// ValidCode reports whether code has the form of a stable machine code and
+// a length of 3 to 64 characters.
+func ValidCode(code string) bool {
+	return len(code) >= 3 && len(code) <= 64 && codePattern.MatchString(code)
+}
+
+// CodeInternal is the code of a 500 that no class knows.
+const CodeInternal = "server.internal"
+
 // Internal returns the answer to an error that no class knows.
 func Internal() Problem {
-	return Problem{
-		Status: http.StatusInternalServerError, Code: "", Message: "internal error",
-		Args: nil, RetryAfter: 0, Reauthenticate: "",
-	}
+	return answer(http.StatusInternalServerError, CodeInternal, "internal error")
 }
 
 // Shared returns the answer to an error of a class that every tool-neutral

@@ -11,22 +11,20 @@ package objectcontext
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
 	"strings"
 
+	"opendustpan.org/opendustpan/internal/api/problem"
 	"opendustpan.org/opendustpan/internal/api/refusal"
 	"opendustpan.org/opendustpan/internal/denylimit"
-	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/internal/sessionauth"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/collection"
 	"opendustpan.org/opendustpan/pkg/identity"
 	coreinventory "opendustpan.org/opendustpan/pkg/inventory"
-	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/objectcontext"
 )
@@ -169,20 +167,6 @@ func (h *Handler) authenticate(r *http.Request) (identity.Principal, bool, error
 	return p, false, err
 }
 
-// errorResponse is the error body of the tool-neutral APIs.
-type errorResponse struct {
-	Message string `json:"message"`
-	Code    int    `json:"code"`
-}
-
-// codedErrorResponse is errorResponse with the stable machine code of a 403.
-// The fields of errorResponse keep their names and their meaning.
-type codedErrorResponse struct {
-	Message   string `json:"message"`
-	Code      int    `json:"code"`
-	ErrorCode string `json:"errorCode"`
-}
-
 // errNotFound is the one answer for an unknown namespace, an unknown unit, a
 // unit of another namespace, a purged unit, and an object that the caller
 // cannot read. The answer never tells that the object exists.
@@ -197,93 +181,48 @@ var errBody = errors.New(
 var errInclude = errors.New("invalid include query parameter: send section names separated by commas")
 
 func (h *Handler) writeError(ctx context.Context, w http.ResponseWriter, err error) {
-	status, message := classify(err)
-	if status == http.StatusInternalServerError {
-		// The log names the status only, never the error text: the text may
-		// hold driver detail, a token, or state.
-		h.logger.ErrorContext(ctx, "request failed", slog.Int("status", status))
-	}
-
-	if errors.Is(err, namespace.ErrFenced) {
-		h.logger.WarnContext(ctx, "write fenced", slog.String("error", err.Error()))
-	}
-
-	if status == http.StatusForbidden {
-		if code := errcode.Forbidden(err); code != "" {
-			h.writeJSON(ctx, w, status, codedErrorResponse{Code: status, Message: message, ErrorCode: code})
-
-			return
-		}
-	}
-
-	h.writeJSON(ctx, w, status, errorResponse{Code: status, Message: message})
+	problem.Writer{Logger: h.logger, Classify: classify}.Write(ctx, w, err)
 }
 
-// classifyAuth maps the errors of the sign-in and the authorization of a
-// request.
-func classifyAuth(err error) (int, string, bool) {
-	switch {
-	case errors.Is(err, identity.ErrRateLimited):
-		return http.StatusTooManyRequests, "too many failed sign-ins from this address: try again later", true
-	case errors.Is(err, identity.ErrUnauthenticated):
-		return http.StatusUnauthorized, "unauthenticated", true
-	case errors.Is(err, sessionauth.ErrCSRF), errors.Is(err, sessionauth.ErrOtherSite):
-		return http.StatusForbidden, err.Error(), true
-	case errors.Is(err, identity.ErrDenied):
-		return http.StatusForbidden, "forbidden", true
-	default:
-		return 0, "", false
-	}
-}
-
-// classify maps errors to an HTTP status and a message safe to show callers.
-func classify(err error) (int, string) {
-	if status, message, ok := classifyAuth(err); ok {
-		return status, message
-	}
-
+// classify maps errors to an answer that is safe to show callers. The shared
+// module answers the rest.
+func classify(err error) (problem.Problem, bool) {
 	switch {
 	case errors.Is(err, errNotFound), errors.Is(err, namespace.ErrNotFound):
-		return http.StatusNotFound, errNotFound.Error()
+		// One answer for every object that the caller may not see, so the
+		// answer never tells that it exists.
+		return fail(http.StatusNotFound, "context.object-not-found", errNotFound.Error()), true
 	case errors.Is(err, objectcontext.ErrInvalidObject):
 		// A purge removed the unit after the route resolved it.
-		return http.StatusNotFound, errNotFound.Error()
+		return fail(http.StatusNotFound, "context.object-not-found", errNotFound.Error()), true
 	case errors.Is(err, objectcontext.ErrNotFound):
-		return http.StatusNotFound, "no API context to clear"
-	case errors.Is(err, errBody), errors.Is(err, errInclude):
-		return http.StatusBadRequest, err.Error()
-	case errors.Is(err, objectcontext.ErrInvalidContext), errors.Is(err, objectcontext.ErrUnknownSection):
-		return http.StatusBadRequest, err.Error()
+		return fail(http.StatusNotFound, "context.not-found", "no API context to clear"), true
+	case errors.Is(err, errBody):
+		return fail(http.StatusBadRequest, "request.body-invalid", err.Error()), true
+	case errors.Is(err, errInclude):
+		return fail(http.StatusBadRequest, "request.invalid-query", err.Error()), true
+	case errors.Is(err, objectcontext.ErrInvalidContext):
+		return fail(http.StatusBadRequest, "context.invalid", err.Error()), true
+	case errors.Is(err, objectcontext.ErrUnknownSection):
+		return fail(http.StatusBadRequest, "context.unknown-section", err.Error()), true
+	case errors.Is(err, objectcontext.ErrFieldFromCode):
+		return fail(http.StatusConflict, "context.field-from-code",
+			err.Error()+": change it in the opendustpan output of the unit"), true
+	case errors.Is(err, objectcontext.ErrUnitDeleted):
+		return fail(http.StatusConflict, "unit.deleted",
+			"the unit is deleted: restore it before you change its context"), true
 	default:
-		return classifyConflict(err)
+		return problem.Pass()
 	}
 }
 
-// classifyConflict maps the errors of a refused write.
-func classifyConflict(err error) (int, string) {
-	switch {
-	case errors.Is(err, objectcontext.ErrFieldFromCode):
-		return http.StatusConflict, err.Error() + ": change it in the opendustpan output of the unit"
-	case errors.Is(err, objectcontext.ErrUnitDeleted):
-		return http.StatusConflict, "the unit is deleted: restore it before you change its context"
-	case errors.Is(err, namespace.ErrFenced):
-		return http.StatusConflict, namespace.ErrFenced.Error()
-	case errors.Is(err, namespace.ErrNotHome):
-		return http.StatusMisdirectedRequest, "namespace is not homed in this region"
-	case errors.Is(err, maintenance.ErrInMaintenance):
-		return http.StatusServiceUnavailable, maintenance.ErrInMaintenance.Error() + ": try again later"
-	default:
-		return http.StatusInternalServerError, "internal error"
-	}
+// fail returns an answer with no arguments.
+func fail(status int, code, message string) problem.Problem {
+	return problem.Problem{Status: status, Code: code, Message: message, Args: nil, RetryAfter: 0, Reauthenticate: ""}
 }
 
 func (h *Handler) writeJSON(ctx context.Context, w http.ResponseWriter, status int, body any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-
-	if err := json.NewEncoder(w).Encode(body); err != nil {
-		h.logger.WarnContext(ctx, "write response failed", slog.String("error", err.Error()))
-	}
+	problem.WriteJSON(ctx, h.logger, w, status, body)
 }
 
 // truncateUserAgent caps s at audit.MaxUserAgentLen bytes, at a rune
