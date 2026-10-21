@@ -1110,7 +1110,7 @@ func newAdapters(
 		return adapters{}, err
 	}
 
-	api, err := newPulumiHandler(svc, cfg, base, observed, gate)
+	api, err := newPulumiHandler(svc, cfg, base, observed, gate, sessionPolicies)
 	if err != nil {
 		return adapters{}, err
 	}
@@ -2225,10 +2225,17 @@ func isLoopbackListenAddr(addr string) bool {
 // entries.
 func newPulumiHandler(
 	svc services, cfg *settings, base baseurl.Resolver, observed *metrics.ServerMetrics, gate *bodygate.Gate,
+	policies *session.Policies,
 ) (http.Handler, error) {
 	var entries audit.Store
 	if s, ok := cfg.namespaceStore.(audit.Store); ok {
 		entries = s
+	}
+
+	// A nil *session.Policies must not become a non-nil interface.
+	var sessionPolicy pulumi.SessionPolicy
+	if policies != nil {
+		sessionPolicy = policies
 	}
 
 	handler, err := pulumi.NewHandler(pulumi.Config{
@@ -2239,6 +2246,7 @@ func newPulumiHandler(
 		Authenticator:        cfg.authenticator,
 		Authorizer:           cfg.authorizer,
 		Sessions:             cfg.sessionCookies,
+		SessionPolicy:        sessionPolicy,
 		AddressGate:          allowlistAddressGate(cfg.ipAllowlists),
 		Logger:               cfg.logger,
 		BaseURL:              base,

@@ -296,10 +296,21 @@ refuses an authentication that is older. The new session then creates the
 token. For a plain OAuth 2.0 provider, see "Plain OAuth 2.0 providers":
 the window then counts from the last sign-in round trip.
 
-The same rule holds for a change of the session policy and for a change of a
-sign-in provider: an access token answers 403 with `mfa.fresh-step-required`,
-and a session with an old sign-in answers 401 with `reauthenticate` and the
-same error code.
+The same rule holds for these changes:
+
+- the session policy and the sign-in providers
+- the token policy
+- the roles (`POST` and `PATCH`)
+- the grants on the installation, on a namespace, on a collection and on a
+  principal (`POST`)
+- the approval of a change of the audit chain
+- the IP allowlist of a namespace (`PUT` and `DELETE`)
+- the reveal of a secret value in the console
+
+An access token answers 403 with `mfa.fresh-step-required`. A session with an
+old sign-in answers 401 with `reauthenticate` and the same error code. A
+session with a sign-in time after the current time is also too old. A refused
+change adds a failure entry to the audit log.
 
 Set the window with `PATCH /api/server/session-policy` and the field
 `tokenFreshnessSeconds` (action `server:manage-sign-in`): 0, or 60 to

@@ -20,6 +20,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/principal"
+	"opendustpan.org/opendustpan/pkg/session"
 	"opendustpan.org/opendustpan/pkg/store/sqlite"
 	"opendustpan.org/opendustpan/pkg/store/storetest"
 )
@@ -71,8 +72,9 @@ type grantListDoc struct {
 
 // accessFixture is a handler that decides with grants, over one store.
 type accessFixture struct {
-	store   *sqlite.Store
-	handler *apiserver.Handler
+	store    *sqlite.Store
+	sessions *session.Sessions
+	handler  *apiserver.Handler
 }
 
 // newAccessFixture builds a handler whose authorizer and access service
@@ -148,6 +150,11 @@ func newAccessFixtureWith(t *testing.T, entries func(st *sqlite.Store) auditStor
 		t.Fatalf("token service: %v", err)
 	}
 
+	sessions, err := session.NewSessions(session.SessionsConfig{Store: st, Providers: st, Inactivity: nil, Now: nil})
+	if err != nil {
+		t.Fatalf("sessions: %v", err)
+	}
+
 	handler, err := apiserver.NewHandler(apiserver.Config{
 		Preferences:      nil,
 		Workers:          nil,
@@ -176,7 +183,10 @@ func newAccessFixtureWith(t *testing.T, entries func(st *sqlite.Store) auditStor
 		IPAllowlists:     nil,
 		Gates:            nil,
 		SessionPolicy:    nil,
-		SignIn:           nil,
+		SignIn: &apiserver.SignIn{
+			OnDevRefused: nil, DevCode: nil, DevAdmin: noBootstrapAdmin, Sessions: sessions, Limiter: nil,
+			Stored: nil, Admin: nil, Origins: []string{signInBase}, Providers: nil,
+		},
 		CheckpointEpochs: nil,
 		DenialLimiter:    nil,
 	})
@@ -184,13 +194,12 @@ func newAccessFixtureWith(t *testing.T, entries func(st *sqlite.Store) auditStor
 		t.Fatalf("handler: %v", err)
 	}
 
-	f := accessFixture{store: st, handler: handler}
+	f := accessFixture{store: st, sessions: sessions, handler: handler}
 
 	f.seed(t, "alice", access.RoleAdmin, identity.NamespaceObject("acme"))
 	f.seed(t, "olga", access.RoleInstallationOperator, identity.ServerObject())
 	f.seed(t, "ann", access.RoleAccountAdministrator, identity.ServerObject())
 	f.seed(t, "bob", "", identity.Object{})
-
 	return f
 }
 
@@ -233,9 +242,18 @@ func (f accessFixture) seed(t *testing.T, subject, role string, obj identity.Obj
 }
 
 // as sends one request with the token of subject and fails unless it
-// answers c.want. It decodes a JSON answer into out when out is not nil.
+// answers c.want. It decodes a JSON answer into out when out is not nil. A
+// change of roles or grants that the caller may make uses a console session
+// of subject with a recent sign-in: an access token never gives the fresh
+// authentication that such a change needs.
 func (f accessFixture) as(t *testing.T, subject string, c apiCall, out any) {
 	t.Helper()
+
+	if needsFreshSession(c.method, c.path) {
+		f.asFresh(t, subject, c, out)
+
+		return
+	}
 
 	req := httptest.NewRequestWithContext(t.Context(), c.method, c.path, strings.NewReader(c.body))
 	req.Header.Set("Authorization", "Bearer "+subject)

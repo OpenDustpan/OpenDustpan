@@ -5,14 +5,22 @@ package e2e
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
 	"maps"
 	"net/http"
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 
 	"opendustpan.org/opendustpan/internal/oauth/oauthtest"
+	"opendustpan.org/opendustpan/pkg/access"
+	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/principal"
 )
 
 // SignInSubject returns the subject of the principal that a sign-in of the
@@ -244,7 +252,7 @@ const freshAdminSubject = "fresh-admin@example.com"
 // fresh authentication that a token change, a sign-in setting or a gate
 // write needs, so a step that makes such a change calls this method. The env
 // must come from NewEnvWithSignIn. The first call makes the administrator
-// with the bootstrap admin token. It fails the test when the sign-in or the
+// in the store. It fails the test when the sign-in or the
 // request cannot run.
 func (e *Env) FreshAdminAPIStatus(ctx context.Context, tb testing.TB, req SessionRequest) (int, string) {
 	tb.Helper()
@@ -269,8 +277,15 @@ func (e *Env) FreshAdminSession(ctx context.Context, tb testing.TB) func(Session
 	return e.FreshSession(ctx, tb, e.freshAdmin(ctx, tb))
 }
 
+// freshAdminID is the ID of the person that freshAdmin makes.
+const freshAdminID = "prn-e2e-fresh-admin"
+
 // freshAdmin returns the ID of the site administrator person of
-// FreshAdminAPIStatus and makes it on the first call.
+// FreshAdminAPIStatus and makes it on the first call. The person and its
+// grant go straight into the store: an access token never gives the fresh
+// authentication that a grant needs, so no route can make the first
+// administrator. The binary server owns its database, so the write runs while
+// the binary is stopped. The in-process server writes through its own store.
 func (e *Env) freshAdmin(ctx context.Context, tb testing.TB) string {
 	tb.Helper()
 
@@ -281,27 +296,71 @@ func (e *Env) freshAdmin(ctx context.Context, tb testing.TB) string {
 		return e.signIn.adminID
 	}
 
-	status, body, err := e.ServerAPIStatus(ctx, http.MethodPost, "/api/server/principals",
-		`{"subject":"`+SignInSubject(freshAdminSubject)+`","kind":"person"}`)
-	if err != nil || status != http.StatusCreated {
-		tb.Fatalf("make the fresh administrator = %d, %v: %s", status, err, body)
+	write := func(st namespace.Store) error { return seedFreshAdmin(ctx, st) }
+
+	if e.binPath == "" {
+		if err := write(e.inprocess); err != nil {
+			tb.Fatalf("make the fresh administrator: %v", err)
+		}
+	} else {
+		e.StopServer(ctx, tb)
+		e.writeStopped(ctx, tb, write)
+		e.StartServer(ctx, tb)
 	}
 
-	var made struct {
-		ID string `json:"id"`
+	e.signIn.adminID = freshAdminID
+
+	return freshAdminID
+}
+
+// errNoAccessRows reports a store that keeps no principals or grants.
+var errNoAccessRows = errors.New("the store keeps no principals or grants")
+
+// seedFreshAdmin makes the person of freshAdmin and gives it the site
+// administrator role on the installation.
+func seedFreshAdmin(ctx context.Context, st namespace.Store) error {
+	rows, ok := st.(interface {
+		principal.Store
+		access.Store
+	})
+	if !ok {
+		return errNoAccessRows
 	}
 
-	if decodeErr := json.Unmarshal([]byte(body), &made); decodeErr != nil || made.ID == "" {
-		tb.Fatalf("decode the fresh administrator: %v: %s", decodeErr, body)
+	at := time.Now().UTC().Truncate(time.Millisecond)
+
+	person := principal.Principal{
+		CreatedAt: at, UpdatedAt: at, DisabledAt: time.Time{}, ID: freshAdminID,
+		Subject: SignInSubject(freshAdminSubject), DisplayName: freshAdminSubject, Kind: principal.KindPerson,
+		Source: principal.SourceLocal, Namespace: "", GroupCount: 0, BreakGlass: false,
 	}
 
-	status, body, err = e.ServerAPIStatus(ctx, http.MethodPost, "/api/server/grants",
-		`{"subject":"principal:`+made.ID+`","role":"site-administrator"}`)
-	if err != nil || status != http.StatusCreated {
-		tb.Fatalf("grant the fresh administrator = %d, %v: %s", status, err, body)
+	if err := rows.CreatePrincipal(ctx, person, freshAdminEntry(at, principal.Ref(person.ID))); err != nil {
+		return fmt.Errorf("create the person: %w", err)
 	}
 
-	e.signIn.adminID = made.ID
+	obj := identity.ServerObject()
+	grant := access.Grant{
+		CreatedAt: at, Condition: nil, Object: obj, ID: "grt-e2e-fresh-admin", Role: access.RoleSiteAdministrator,
+		CreatedBy: "e2e", Subject: access.Subject{Kind: access.SubjectPrincipal, ID: person.ID},
+	}
 
-	return made.ID
+	// The grant is on the installation, so the fence is the zero fence.
+	if err := rows.CreateGrant(ctx, grant, namespace.Fence{}, freshAdminEntry(at, access.GrantRef(grant)), nil); err != nil {
+		return fmt.Errorf("grant the site administrator role: %w", err)
+	}
+
+	return nil
+}
+
+// freshAdminEntry returns the audit entry of a write of seedFreshAdmin to the
+// record object at the time at.
+func freshAdminEntry(at time.Time, object string) audit.Entry {
+	return audit.Entry{
+		At: at, Namespace: audit.ServerScope, Subject: "e2e", IDPSubject: "", TokenID: "",
+		Action: "server:manage-principals", Object: object, Version: "", ValuePath: "", ValueCount: nil,
+		Changes: nil, SourceIP: "192.0.2.1", UserAgent: "e2e", Channel: audit.ChannelAPI, Kind: audit.KindChange,
+		Outcome: audit.OutcomeSuccess, RequestID: "", ObjectID: "", PrevHash: "", Hash: "", Sequence: 0,
+		FenceVersion: 0, Reason: "", PrincipalKind: "", JobID: "",
+	}
 }

@@ -367,9 +367,14 @@ func checkPrincipalChanges(ctx context.Context, t *testing.T, env *e2e.Env, fx p
 
 // freshAuthPath matches the writes that need a fresh authentication: the
 // creation and the rotation of an access token, a change of the session
-// policy, a change of a sign-in provider and a change of a gate object.
+// policy, the token policy, the roles and the grants, a change of a sign-in
+// provider, a change of a gate object, the approval of the audit chain and a
+// change of an IP allowlist.
 var freshAuthPath = regexp.MustCompile(`^(?:/api/server/(?:caller/tokens|service-tokens|principals/[^/]+/tokens)` +
-	`(?:/[^/]+/rotate)?|/api/server/session-policy|/api/server/sign-in-providers(?:/[^/]+)?` +
+	`(?:/[^/]+/rotate)?|/api/server/session-policy|/api/server/token-policy|/api/server/sign-in-providers(?:/[^/]+)?` +
+	`|/api/server/roles(?:/[^/]+)?|/api/server/audit/chain` +
+	`|/api/server/(?:namespaces/[^/]+(?:/collections/[^/]+)?|principals/[^/]+)?/?grants` +
+	`|/api/server/namespaces/[^/]+/ip-allowlist` +
 	`|/api/dustpan/v1/namespaces/[^/]+/approval-(?:default|rules/[^/]+))$`)
 
 // needsFreshAuth reports whether method on path is a write that needs a
@@ -382,10 +387,14 @@ func needsFreshAuth(method, path string) bool {
 	switch {
 	case strings.HasSuffix(path, "/rotate") || strings.HasSuffix(path, "/tokens") || strings.HasSuffix(path, "service-tokens"):
 		return method == http.MethodPost
-	case strings.Contains(path, "/approval-"):
+	case strings.Contains(path, "/approval-") || strings.HasSuffix(path, "/ip-allowlist"):
 		return method == http.MethodPut || method == http.MethodDelete
 	case strings.Contains(path, "/sign-in-providers"):
 		return method != http.MethodGet
+	case strings.HasSuffix(path, "/grants") || strings.HasSuffix(path, "/audit/chain"):
+		return method == http.MethodPost
+	case strings.Contains(path, "/roles"):
+		return method == http.MethodPost || method == http.MethodPatch
 	default:
 		return method == http.MethodPatch
 	}

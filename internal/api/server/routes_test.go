@@ -1154,6 +1154,16 @@ func freshAuthRoutes() []string {
 		"POST /api/server/principals/{principal}/tokens",
 		"POST /api/server/principals/{principal}/tokens/{id}/rotate",
 		"PATCH /api/server/session-policy",
+		"POST /api/server/principals/{principal}/grants",
+		"POST /api/server/grants",
+		"POST /api/server/namespaces/{namespace}/grants",
+		"POST /api/server/namespaces/{namespace}/collections/{collection}/grants",
+		"POST /api/server/roles",
+		"PATCH /api/server/roles/{id}",
+		"PATCH /api/server/token-policy",
+		"POST /api/server/audit/chain",
+		"PUT /api/server/namespaces/{namespace}/ip-allowlist",
+		"DELETE /api/server/namespaces/{namespace}/ip-allowlist",
 	}
 }
 
@@ -1175,8 +1185,7 @@ func wantSuccessStatus(route apiserver.Route) int {
 // fresh authentication.
 func wantOtherSuccessStatus(route apiserver.Route) int {
 	if route.Method == http.MethodPost &&
-		(route.Path == "/api/server/backups" || route.Path == "/api/server/restores" ||
-			route.Path == "/api/server/audit/chain") {
+		(route.Path == "/api/server/backups" || route.Path == "/api/server/restores") {
 		return http.StatusAccepted
 	}
 

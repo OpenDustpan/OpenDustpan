@@ -4,10 +4,15 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
+	"time"
 
+	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/maintenance"
+	"opendustpan.org/opendustpan/pkg/namespace"
 )
 
 // freshErrorCode is the errorCode of a change that has no fresh authentication.
@@ -78,6 +83,102 @@ func freshRoutes() []freshRoute {
 		return ""
 	}
 
+	administrator := func(t *testing.T, e providerEnv) string {
+		t.Helper()
+
+		e.makeSiteAdministrator(t)
+
+		return ""
+	}
+	makeRole := func(t *testing.T, e providerEnv) string {
+		t.Helper()
+
+		e.makeSiteAdministrator(t)
+
+		rec := e.postWithSession(t, e.freshSignIn(t), "/api/server/roles", `{"name":"deployer","actions":["unit:read"]}`)
+		if rec.Code != http.StatusCreated {
+			t.Fatalf("make the role = %d %s, want 201", rec.Code, rec.Body.String())
+		}
+
+		var made roleDoc
+		decodeInto(t, rec.Body.String(), &made)
+
+		return "/api/server/roles/" + made.ID
+	}
+	seedAllowlist := func(t *testing.T, e providerEnv) string {
+		t.Helper()
+
+		rec := e.sendWithSession(t, http.MethodPut, e.freshSignIn(t), ipAllowlistTarget, ipAllowlistBody)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("seed the allowlist = %d %s, want 200", rec.Code, rec.Body.String())
+		}
+
+		return ""
+	}
+	grantBody := `{"subject":"principal:` + testPrincipalID + `","role":"viewer"}`
+
+	return slices.Concat(
+		freshOwnRoutes(createBeta, ownToken, seedDefault, seedRule, principalTokens),
+		freshAccessRoutes(administrator, makeRole, grantBody),
+		freshOtherRoutes(seedAllowlist),
+	)
+}
+
+// ipAllowlistTarget and ipAllowlistBody are the route and the body of the
+// allowlist writes of the fresh authentication tests.
+const (
+	ipAllowlistTarget = "/api/server/namespaces/" + testNamespace + "/ip-allowlist"
+	ipAllowlistBody   = `{"cidrs":["10.0.0.0/8"]}`
+)
+
+// freshAccessRoutes lists the writes of roles and grants that need a fresh
+// authentication. administrator makes the person of the session a site
+// administrator, and makeRole also makes a role and returns its path.
+func freshAccessRoutes(administrator, makeRole func(*testing.T, providerEnv) string, grantBody string) []freshRoute {
+	return []freshRoute{
+		{
+			administrator, "create role", http.MethodPost, "/api/server/roles",
+			`{"name":"deployer","actions":["unit:read"]}`, http.StatusCreated,
+		},
+		{makeRole, "change role", http.MethodPatch, "", `{"description":"reads units"}`, http.StatusOK},
+		{
+			administrator, "grant on the installation", http.MethodPost, "/api/server/grants",
+			`{"subject":"principal:` + testPrincipalID + `","role":"installation-operator"}`, http.StatusCreated,
+		},
+		{
+			administrator, "grant on a namespace", http.MethodPost, "/api/server/namespaces/" + testNamespace + "/grants",
+			grantBody, http.StatusCreated,
+		},
+		{
+			administrator, "grant on a collection", http.MethodPost,
+			"/api/server/namespaces/" + testNamespace + "/collections/" + testCollection + "/grants", grantBody,
+			http.StatusCreated,
+		},
+		{
+			administrator, "grant on a principal", http.MethodPost,
+			"/api/server/principals/" + testOtherPrincipalID + "/grants",
+			`{"subject":"principal:` + testPrincipalID + `","role":"token-manager"}`, http.StatusCreated,
+		},
+	}
+}
+
+// freshOtherRoutes lists the writes of the token policy, the audit chain and
+// the IP allowlists that need a fresh authentication. seedAllowlist stores a
+// list first.
+func freshOtherRoutes(seedAllowlist func(*testing.T, providerEnv) string) []freshRoute {
+	return []freshRoute{
+		{nil, "change token policy", http.MethodPatch, "/api/server/token-policy", `{"inactivitySeconds":0}`, http.StatusOK},
+		{nil, "approve audit chain", http.MethodPost, "/api/server/audit/chain", "", http.StatusAccepted},
+		{nil, "set IP allowlist", http.MethodPut, ipAllowlistTarget, ipAllowlistBody, http.StatusOK},
+		{seedAllowlist, "remove IP allowlist", http.MethodDelete, ipAllowlistTarget, "", http.StatusNoContent},
+	}
+}
+
+// freshOwnRoutes lists the token routes, the session policy, the providers
+// and the gate writes that need a fresh authentication.
+func freshOwnRoutes(
+	createBeta, ownToken, seedDefault, seedRule func(*testing.T, providerEnv) string, principalTokens string,
+) []freshRoute {
 	return []freshRoute{
 		{nil, "create own token", http.MethodPost, "/api/server/caller/tokens", ownTokenBody(), http.StatusCreated},
 		{
@@ -242,4 +343,108 @@ func TestFreshAuthTokenCreateInMaintenanceMode(t *testing.T) {
 	if rec.Code != http.StatusServiceUnavailable || !strings.Contains(rec.Body.String(), "maintenance") {
 		t.Fatalf("token create in maintenance mode = %d %s, want 503 for maintenance mode", rec.Code, rec.Body.String())
 	}
+}
+
+// TestFreshAuthRefusesASignInAfterNow proves a session whose sign-in is after
+// the clock, for example after the clock steps back, is refused like a session
+// with an old sign-in: its age is negative, and no window accepts it.
+func TestFreshAuthRefusesASignInAfterNow(t *testing.T) {
+	t.Parallel()
+
+	e := newProviderEnv(t)
+	sess := e.freshSignIn(t)
+
+	rec := e.sendWithSession(t, http.MethodPatch, sess, "/api/server/session-policy", `{"idleSeconds":1800}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("change from a fresh session = %d %s, want 200", rec.Code, rec.Body.String())
+	}
+
+	e.clock.Add(-time.Minute)
+
+	rec = e.sendWithSession(t, http.MethodPatch, sess, "/api/server/session-policy", `{"idleSeconds":900}`)
+
+	got := decodeErrorBody(t, rec)
+	if rec.Code != http.StatusUnauthorized || got.ErrorCode != freshErrorCode ||
+		!strings.HasPrefix(got.Reauthenticate, "/api/server/sign-in/corp?fresh=1") {
+		t.Fatalf("change from a sign-in after now = %d %s, want 401 with the path of a new sign-in", rec.Code,
+			rec.Body.String())
+	}
+}
+
+// failureEntries counts the audit entries of the scope with the outcome
+// failure and the action.
+func failureEntries(t *testing.T, e providerEnv, scope namespace.Name, action identity.Action) int {
+	t.Helper()
+
+	listing, err := e.store.List(t.Context(), scope, audit.Page{Number: 1, Size: audit.MaxPageSize})
+	if err != nil {
+		t.Fatalf("list audit of %s: %v", scope, err)
+	}
+
+	count := 0
+
+	for _, entry := range listing.Entries {
+		if entry.Outcome == audit.OutcomeFailure && entry.Action == string(action) {
+			count++
+		}
+	}
+
+	return count
+}
+
+// TestFreshAuthRefusalWritesAFailureEntry proves a gate write and a role
+// write that the fresh check refuses leave one failure entry each: for an
+// access token and for a session with an old sign-in.
+func TestFreshAuthRefusalWritesAFailureEntry(t *testing.T) {
+	t.Parallel()
+
+	gateWrite := freshWrite{
+		method: http.MethodPut, path: gateBase + testNamespace + gateDefault, body: platformDefault,
+		scope: testNamespace, action: identity.ActionNamespaceManageGates,
+	}
+	roleWrite := freshWrite{
+		method: http.MethodPost, path: "/api/server/roles", body: `{"name":"deployer","actions":["unit:read"]}`,
+		scope: audit.ServerScope, action: identity.ActionServerManageRoles,
+	}
+
+	for _, w := range []freshWrite{gateWrite, roleWrite} {
+		t.Run(string(w.action), func(t *testing.T) {
+			t.Parallel()
+
+			e := newProviderEnv(t)
+
+			req := httptest.NewRequestWithContext(t.Context(), w.method, w.path, strings.NewReader(w.body))
+			req.Header.Set("Authorization", "Bearer test-token")
+
+			rec := httptest.NewRecorder()
+			e.handler.ServeHTTP(rec, req)
+
+			if rec.Code != http.StatusForbidden {
+				t.Fatalf("access token = %d %s, want 403", rec.Code, rec.Body.String())
+			}
+
+			if got := failureEntries(t, e, w.scope, w.action); got != 1 {
+				t.Fatalf("failure entries after the access token = %d, want 1", got)
+			}
+
+			rec = e.sendWithSession(t, w.method, e.staleSession(t), w.path, w.body)
+			if rec.Code != http.StatusUnauthorized {
+				t.Fatalf("stale session = %d %s, want 401", rec.Code, rec.Body.String())
+			}
+
+			if got := failureEntries(t, e, w.scope, w.action); got != 2 {
+				t.Fatalf("failure entries after the stale session = %d, want 2", got)
+			}
+		})
+	}
+}
+
+// freshWrite is a write that needs a fresh authentication, with the scope and
+// the action of the audit entry of its refusal.
+type freshWrite struct {
+	method string
+	path   string
+	body   string
+	scope  namespace.Name
+	action identity.Action
 }

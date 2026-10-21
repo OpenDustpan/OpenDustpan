@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"opendustpan.org/opendustpan/internal/api/pulumi"
 	"opendustpan.org/opendustpan/internal/baseurl"
@@ -20,6 +21,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/secret"
+	"opendustpan.org/opendustpan/pkg/session"
 	"opendustpan.org/opendustpan/pkg/stack"
 	"opendustpan.org/opendustpan/pkg/stack/stacktest"
 )
@@ -63,7 +65,7 @@ type revealDoc struct {
 func newRevealFixture(t *testing.T, authz identity.Authorizer, cfg fixtureAudit) revealFixture {
 	t.Helper()
 
-	return newRevealFixtureWithSessions(t, authz, cfg, nil)
+	return newRevealFixtureWithSessions(t, authz, cfg, aliceChecker(t))
 }
 
 // newRevealFixtureWithSessions builds the reveal fixture with authz, the
@@ -241,23 +243,12 @@ func seedRevealVersion(t *testing.T, f revealFixture, provider string) (int64, s
 	return done.Version, masked[0]
 }
 
-// reveal sends one reveal request with body and returns the status, headers
-// and body.
+// reveal sends one reveal request with body from a console session that signed
+// in just now, and returns the status, headers and body.
 func reveal(t *testing.T, f revealFixture, body string) (int, http.Header, string) {
 	t.Helper()
 
-	req := httptest.NewRequestWithContext(
-		requestid.WithContext(t.Context(), "req-reveal"),
-		http.MethodPost,
-		revealTarget,
-		strings.NewReader(body),
-	)
-	req.Header.Set("Authorization", "token test-token")
-
-	rec := httptest.NewRecorder()
-	f.handler.ServeHTTP(rec, req)
-
-	return rec.Code, rec.Header(), rec.Body.String()
+	return revealTo(t, f, revealTarget, body)
 }
 
 // revealTo sends one reveal request to target with body and returns the
@@ -265,13 +256,14 @@ func reveal(t *testing.T, f revealFixture, body string) (int, http.Header, strin
 func revealTo(t *testing.T, f revealFixture, target, body string) (int, http.Header, string) {
 	t.Helper()
 
-	req := httptest.NewRequestWithContext(
-		requestid.WithContext(t.Context(), "req-reveal"),
-		http.MethodPost,
-		target,
-		strings.NewReader(body),
-	)
-	req.Header.Set("Authorization", "token test-token")
+	secret, err := session.NewSecret()
+	if err != nil {
+		t.Fatalf("secret: %v", err)
+	}
+
+	// A reveal needs a console session with a recent sign-in.
+	req := sessionPost(t, target, secret, body)
+	req = req.WithContext(requestid.WithContext(req.Context(), "req-reveal"))
 
 	rec := httptest.NewRecorder()
 	f.handler.ServeHTTP(rec, req)
@@ -766,5 +758,121 @@ func TestRevealPathOverLimitAnswers400(t *testing.T) {
 
 	if status != http.StatusNotFound {
 		t.Fatalf("path at the limit answers %d, want %d (%s)", status, http.StatusNotFound, body)
+	}
+}
+
+// revealFresh is one case of TestRevealNeedsAFreshAuthentication.
+type revealFresh struct {
+	name       string
+	token      bool
+	age        time.Duration
+	wantStatus int
+	wantCode   string
+	wantPath   string
+}
+
+// TestRevealNeedsAFreshAuthentication proves the reveal route refuses an
+// access token with 403 and mfa.fresh-step-required, a console session with
+// an old sign-in or a sign-in after now with 401 and the path of a new
+// sign-in, and answers a session with a recent sign-in. Each refusal answers
+// no value and writes one failure entry of the kind reveal.
+func TestRevealNeedsAFreshAuthentication(t *testing.T) {
+	t.Parallel()
+
+	const newSignIn = "/api/server/sign-in/corp?fresh=1"
+
+	for _, tc := range []revealFresh{
+		{name: "access token", token: true, age: 0, wantStatus: http.StatusForbidden, wantCode: freshCode, wantPath: ""},
+		{
+			name: "old sign-in", token: false, age: time.Hour, wantStatus: http.StatusUnauthorized, wantCode: freshCode,
+			wantPath: newSignIn,
+		},
+		{
+			name: "sign-in after now", token: false, age: -time.Hour, wantStatus: http.StatusUnauthorized,
+			wantCode: freshCode, wantPath: newSignIn,
+		},
+		{name: "recent sign-in", token: false, age: time.Minute, wantStatus: http.StatusOK, wantCode: "", wantPath: ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			checkRevealFresh(t, tc)
+		})
+	}
+}
+
+// freshCode is the errorCode of a change that has no fresh authentication.
+const freshCode = "mfa.fresh-step-required"
+
+func checkRevealFresh(t *testing.T, tc revealFresh) {
+	t.Helper()
+
+	entries := &memAuditStore{entries: nil, err: nil, mu: sync.Mutex{}}
+	f := newRevealFixtureWithSessions(
+		t,
+		allowAll(),
+		fixtureAudit{store: entries, onFail: nil, logger: slog.New(slog.DiscardHandler)},
+		aliceCheckerSignedIn(t, tc.age),
+	)
+
+	_, path := seedRevealVersion(t, f, "service")
+
+	var req *http.Request
+
+	if tc.token {
+		req = httptest.NewRequestWithContext(
+			t.Context(), http.MethodPost, revealTarget, strings.NewReader(revealBody(t, path)),
+		)
+		req.Header.Set("Authorization", "token test-token")
+	} else {
+		secret, err := session.NewSecret()
+		if err != nil {
+			t.Fatalf("secret: %v", err)
+		}
+
+		req = sessionPost(t, revealTarget, secret, revealBody(t, path))
+	}
+
+	rec := serve(f.handler, req)
+	if rec.Code != tc.wantStatus {
+		t.Fatalf("reveal = %d %s, want %d", rec.Code, rec.Body.String(), tc.wantStatus)
+	}
+
+	if got := rec.Header().Get("Cache-Control"); got != "no-store" {
+		t.Errorf("Cache-Control = %q, want no-store", got)
+	}
+
+	entries.mu.Lock()
+	defer entries.mu.Unlock()
+
+	if tc.wantStatus == http.StatusOK {
+		if len(entries.entries) != 1 || entries.entries[0].Outcome != audit.OutcomeSuccess {
+			t.Fatalf("entries = %+v, want one success", entries.entries)
+		}
+
+		return
+	}
+
+	var body struct {
+		ErrorCode      string `json:"errorCode"`
+		Reauthenticate string `json:"reauthenticate"`
+		Code           int    `json:"code"`
+	}
+
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode %q: %v", rec.Body.String(), err)
+	}
+
+	if body.ErrorCode != tc.wantCode || body.Reauthenticate != tc.wantPath || body.Code != tc.wantStatus {
+		t.Errorf("body = %+v, want errorCode %q, reauthenticate %q, code %d", body, tc.wantCode, tc.wantPath,
+			tc.wantStatus)
+	}
+
+	if strings.Contains(rec.Body.String(), revealSecretValue) {
+		t.Fatalf("refusal holds the secret value: %s", rec.Body.String())
+	}
+
+	if len(entries.entries) != 1 || entries.entries[0].Outcome != audit.OutcomeFailure ||
+		entries.entries[0].Kind != audit.KindReveal {
+		t.Fatalf("entries = %+v, want one failure entry of the kind reveal", entries.entries)
 	}
 }

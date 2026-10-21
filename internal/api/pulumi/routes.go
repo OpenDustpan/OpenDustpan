@@ -708,15 +708,18 @@ func (h *Handler) enforceAuthorized(route Route) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
 
-		p, session, err := h.authenticate(r)
+		p, caller, err := h.authenticate(r)
 		if err != nil {
 			h.writeError(ctx, w, err)
 
 			return
 		}
 
-		if session {
+		if caller != nil {
 			ctx = sessionauth.WithSession(ctx)
+			ctx = sessionauth.WithSignIn(ctx, sessionauth.SignIn{
+				At: caller.Match.Session.AuthTime, Provider: caller.Match.Session.Provider,
+			})
 		}
 
 		// The services write the audit entries of work that a request does not
