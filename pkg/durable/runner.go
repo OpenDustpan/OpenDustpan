@@ -358,6 +358,7 @@ func (r *Runner) RunOnce(ctx context.Context) error {
 
 	op, err := r.cfg.Store.Claim(ctx, ClaimRequest{
 		Owner: r.cfg.Owner, Kinds: r.names, MaxVersions: r.versions, Lease: r.cfg.Lease,
+		TakeCanceled: false,
 	})
 	if err != nil {
 		return fmt.Errorf("claim a durable operation: %w", err)

@@ -8,8 +8,10 @@
 //
 // The cases state the rules of the ports. A reference adapter in memory, in
 // the tests of this package, runs them, and so does each SQL adapter. The
-// cases of job.Claimer, job.Recorder and job.ArtifactStore come with their
-// first implementation, because they need the blob store and the item keys.
+// cases of job.Claimer are here too: each adapter builds the claimer over
+// its own job store, durable store and namespaces. The cases of job.Recorder
+// and job.ArtifactStore come with their first implementation, because they
+// need the blob store and the item keys.
 package jobtest
 
 import (
@@ -33,7 +35,14 @@ type Harness struct {
 	Jobs    job.Store
 	Durable durable.Store
 	Freezes job.FreezeStore
-	Domain  Domain
+	// Claimer is the job.Claimer over Jobs, Durable and the namespaces of
+	// the database.
+	Claimer job.Claimer
+	// Namespaces reads the namespaces of the database, as the claimer does.
+	// The cases that put a hook between the reads and the writes of a claimer
+	// build their own claimer from it.
+	Namespaces job.NamespaceReader
+	Domain     Domain
 }
 
 // Domain makes the rows that a job needs and that other ports own, and
@@ -74,6 +83,17 @@ type Domain interface {
 	PutManualLock(ctx context.Context, fence namespace.Fence, target manuallock.Target, holder, reason string) error
 	// RemoveManualLock removes the manual lock of target.
 	RemoveManualLock(ctx context.Context, fence namespace.Fence, target manuallock.Target) error
+	// RecordStepBegin appends r to the step records of the phase of pc, as
+	// the recorder of a running phase does when a step begins. It checks the
+	// claim like every write of the executor: the fence of pc, the job at
+	// the phase and the operation of pc, the live claim in the transaction,
+	// and the token of r. It returns job.ErrClaimLost for a claim that is
+	// not live and for a phase that the job is not at (the same error for
+	// a phase that does not exist), job.ErrInvalid for a record with another
+	// token, and namespace.ErrFenced for a stale fence. The suite uses it to
+	// show what a takeover does after a begin that an earlier claim
+	// recorded.
+	RecordStepBegin(ctx context.Context, pc job.PhaseClaim, r job.StepRecord) error
 	// AuditEntries returns the audit entries of the namespace ns, in the
 	// order of their append.
 	AuditEntries(ctx context.Context, ns namespace.Name) ([]audit.Entry, error)
@@ -82,16 +102,10 @@ type Domain interface {
 // Factory returns a fresh harness for one case.
 type Factory func(t *testing.T) Harness
 
-// conformanceCase is one case of the suite.
-type conformanceCase struct {
-	name string
-	run  func(t *testing.T, h Harness)
-}
-
 // createRuleCases returns the cases of the rules of a create for the request
 // hash and for the first state.
-func createRuleCases() []conformanceCase {
-	return []conformanceCase{
+func createRuleCases() []suiteCase {
+	return []suiteCase{
 		{"a key with another request hash conflicts", testCreateKeyHashConflict},
 		{"a job that waits for approval is stored awaiting-approval", testCreateAwaitingApproval},
 		{"a job in another first state is refused", testCreateBadState},
@@ -102,7 +116,7 @@ func createRuleCases() []conformanceCase {
 func Run(t *testing.T, newHarness Factory) {
 	t.Helper()
 
-	cases := slices.Concat([]conformanceCase{
+	cases := slices.Concat([]suiteCase{
 		{"create stores a queued job and get returns it", testCreateGet},
 		{"get of an unknown ID is ErrNotFound", testGetUnknown},
 		{"two creates with one key and one spec give one job", testCreateKeyOnce},
@@ -159,12 +173,18 @@ func Run(t *testing.T, newHarness Factory) {
 		{"freezes list, end once, and validate", testFreezes},
 	}, createRuleCases())
 
-	for _, tc := range cases {
+	for _, tc := range slices.Concat(cases, claimerCases(), endClaimCases(), claimBoundCases()) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			tc.run(t, newHarness(t))
 		})
 	}
+}
+
+// suiteCase is one named case of the suite.
+type suiteCase struct {
+	name string
+	run  func(t *testing.T, h Harness)
 }
 
 // Values that several cases share: the ref of the code location, and two
@@ -308,7 +328,8 @@ func apply(t *testing.T, h Harness, f fixture, c job.Change) job.Job {
 func change(j *job.Job, ev job.Event) job.Change {
 	return job.Change{
 		Job: j.ID, Version: j.Version, Event: ev, Wait: job.WaitNone, Reason: "", Dispatch: nil,
-		PlanNotBefore: time.Time{}, Executor: "", Delivery: nil, MergedAt: time.Time{}, Approval: nil,
+		PlanNotBefore: time.Time{}, Executor: "", Claim: nil, Delivery: nil, MergedAt: time.Time{}, Approval: nil,
+		End: nil,
 	}
 }
 
@@ -327,6 +348,7 @@ func claimOp(t *testing.T, h Harness, owner string, k durable.Kind, lease time.D
 
 	op, err := h.Durable.Claim(t.Context(), durable.ClaimRequest{
 		Owner: owner, Kinds: []durable.Kind{k}, MaxVersions: nil, Lease: lease,
+		TakeCanceled: false,
 	})
 	if err != nil {
 		t.Fatalf("durable Claim = %v", err)
