@@ -2,17 +2,42 @@ package apidesc_test
 
 import (
 	"errors"
+	"strings"
 	"testing"
+	"unicode"
 
 	"opendustpan.org/opendustpan/internal/api/apidesc"
 )
 
-func op(method, path string, actions ...string) apidesc.Operation {
-	return apidesc.Operation{Method: method, Path: path, Actions: actions, Public: false}
+// idOf builds a valid operationId from a method and a path, so that two
+// operations with different keys have different IDs.
+func idOf(method, path string) string {
+	var b strings.Builder
+
+	b.WriteString(strings.ToLower(method))
+
+	for _, r := range path {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) {
+			b.WriteRune(r)
+		}
+	}
+
+	return b.String()
 }
 
-func publicOp(method, path string, actions ...string) apidesc.Operation {
-	return apidesc.Operation{Method: method, Path: path, Actions: actions, Public: true}
+func op(method, path string, actions ...string) apidesc.Operation {
+	return apidesc.Operation{
+		ID: idOf(method, path), Method: method, Path: path, Tags: []string{"backups"}, Actions: actions,
+		Public: false, IdempotencyKey: false, IfMatch: false, IfMatchRequired: false, ETag: false,
+	}
+}
+
+// publicOp returns a public GET operation.
+func publicOp(path string, actions ...string) apidesc.Operation {
+	o := op("GET", path, actions...)
+	o.Public = true
+
+	return o
 }
 
 func TestValidateRefusesHostileInput(t *testing.T) {
@@ -48,8 +73,21 @@ func TestValidateRefusesHostileInput(t *testing.T) {
 		{"wildcard with a literal part", op("GET", "/api/dustpan/v1/backups/x{id}", "installation:backup")},
 		{"rest wildcard not last", op("GET", "/api/dustpan/v1/files/{path...}/x", "installation:backup")},
 		{"end anchor not last", op("GET", "/api/dustpan/v1/{$}/x", "installation:backup")},
+		{"file suffix not last", op("GET", "/api/dustpan/v1/openapi.json/x", "installation:backup")},
+		{"file suffix twice", op("GET", "/api/dustpan/v1/openapi.json.json", "installation:backup")},
+		{"file suffix with a capital", op("GET", "/api/dustpan/v1/openapi.JSON", "installation:backup")},
+		{"other suffix", op("GET", "/api/dustpan/v1/openapi.yaml", "installation:backup")},
+		{"both If-Match flags", func() apidesc.Operation {
+			o := op("GET", "/api/dustpan/v1/backups", "installation:backup")
+			o.IfMatch, o.IfMatchRequired = true, true
+
+			return o
+		}()},
+		{"other file name", op("GET", "/api/dustpan/v1/backups.json", "installation:backup")},
+		{"file suffix alone", op("GET", "/api/dustpan/v1/.json", "installation:backup")},
+		{"dot in the middle", op("GET", "/api/dustpan/v1/open.api.json", "installation:backup")},
 		{"no actions on a route that is not public", op("GET", "/api/dustpan/v1/backups")},
-		{"actions on a public route", publicOp("GET", "/api/dustpan/v1/capabilities", "caller:read")},
+		{"actions on a public route", publicOp("/api/dustpan/v1/capabilities", "caller:read")},
 		{"empty action", op("GET", "/api/dustpan/v1/backups", "")},
 		{"action without a colon", op("GET", "/api/dustpan/v1/backups", "backup")},
 		{"action with a capital", op("GET", "/api/dustpan/v1/backups", "Installation:backup")},
@@ -79,7 +117,8 @@ func TestValidateAllowsGoodOperations(t *testing.T) {
 		op("PATCH", "/api/dustpan/v1/namespaces/-/units", "unit:read", "namespace:read"),
 		op("GET", "/api/dustpan/v1/files/{path...}", "unit:read"),
 		op("GET", "/api/dustpan/v1/{$}", "caller:read"),
-		publicOp("GET", "/api/dustpan/v1/capabilities"),
+		publicOp("/api/dustpan/v1/capabilities"),
+		publicOp("/api/dustpan/v1/openapi.json"),
 	}
 
 	for _, o := range good {
@@ -168,13 +207,8 @@ func TestDiffPathNamesDiffer(t *testing.T) {
 func TestDiffPublicFlagDiffers(t *testing.T) {
 	t.Parallel()
 
-	public := apidesc.Operation{Method: "GET", Path: "/api/dustpan/v1/capabilities", Actions: nil, Public: true}
-	closed := apidesc.Operation{
-		Method:  "GET",
-		Path:    "/api/dustpan/v1/capabilities",
-		Actions: []string{"caller:read"},
-		Public:  false,
-	}
+	public := publicOp("/api/dustpan/v1/capabilities")
+	closed := op("GET", "/api/dustpan/v1/capabilities", "caller:read")
 
 	d, err := apidesc.Diff([]apidesc.Operation{public}, []apidesc.Operation{closed})
 	if err != nil || len(d.Mismatch) != 1 || d.Mismatch[0] != "GET /api/dustpan/v1/capabilities" {
@@ -199,5 +233,93 @@ func TestDiffFailsClosed(t *testing.T) {
 		if _, err := apidesc.Diff(routes, in); !errors.Is(err, apidesc.ErrInvalidOperation) {
 			t.Errorf("%s as description: err = %v", name, err)
 		}
+	}
+}
+
+func TestValidateRefusesBadIDAndTags(t *testing.T) {
+	t.Parallel()
+
+	good := op("GET", "/api/dustpan/v1/backups", "installation:backup")
+
+	tests := []struct {
+		name   string
+		change func(o *apidesc.Operation)
+	}{
+		{"no ID", func(o *apidesc.Operation) { o.ID = "" }},
+		{"ID with a capital first", func(o *apidesc.Operation) { o.ID = "ListBackups" }},
+		{"ID with a dash", func(o *apidesc.Operation) { o.ID = "list-backups" }},
+		{"ID with a space", func(o *apidesc.Operation) { o.ID = "list backups" }},
+		{"ID with a line feed", func(o *apidesc.Operation) { o.ID = "listBackups\nX: y" }},
+		{"ID with a path", func(o *apidesc.Operation) { o.ID = "list/backups" }},
+		{"ID too short", func(o *apidesc.Operation) { o.ID = "ab" }},
+		{"ID too long", func(o *apidesc.Operation) { o.ID = "a" + strings.Repeat("b", 64) }},
+		{"no tag", func(o *apidesc.Operation) { o.Tags = nil }},
+		{"four tags", func(o *apidesc.Operation) { o.Tags = []string{"a", "b", "c", "d"} }},
+		{"empty tag", func(o *apidesc.Operation) { o.Tags = []string{""} }},
+		{"tag with a capital", func(o *apidesc.Operation) { o.Tags = []string{"Backups"} }},
+		{"tag with a space", func(o *apidesc.Operation) { o.Tags = []string{"my backups"} }},
+		{"tag with a line feed", func(o *apidesc.Operation) { o.Tags = []string{"backups\n"} }},
+		{"tag twice", func(o *apidesc.Operation) { o.Tags = []string{"backups", "backups"} }},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			o := good
+			o.Tags = append([]string(nil), good.Tags...)
+			tt.change(&o)
+
+			if err := o.Validate(); !errors.Is(err, apidesc.ErrInvalidOperation) {
+				t.Fatalf("Validate() = %v, want ErrInvalidOperation", err)
+			}
+		})
+	}
+}
+
+func TestDiffContractFieldsDiffer(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		change func(o *apidesc.Operation)
+	}{
+		{"operationId renamed", func(o *apidesc.Operation) { o.ID = "renamedOperation" }},
+		{"tag changed", func(o *apidesc.Operation) { o.Tags = []string{"restores"} }},
+		{"tag added", func(o *apidesc.Operation) { o.Tags = []string{"backups", "restores"} }},
+		{"Idempotency-Key flag", func(o *apidesc.Operation) { o.IdempotencyKey = true }},
+		{"If-Match flag", func(o *apidesc.Operation) { o.IfMatch = true }},
+		{"required If-Match flag", func(o *apidesc.Operation) { o.IfMatchRequired = true }},
+		{"ETag flag", func(o *apidesc.Operation) { o.ETag = true }},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			changed := backupRoutes()
+			changed[0].Tags = append([]string(nil), changed[0].Tags...)
+			tt.change(&changed[0])
+
+			d, err := apidesc.Diff(backupRoutes(), changed)
+			if err != nil || len(d.Mismatch) != 1 || d.Mismatch[0] != "GET /api/dustpan/v1/backups" {
+				t.Fatalf("Diff() = %+v, %v", d, err)
+			}
+		})
+	}
+}
+
+func TestDiffRefusesRepeatedID(t *testing.T) {
+	t.Parallel()
+
+	twice := backupRoutes()
+	twice[1].ID = twice[0].ID
+
+	if _, err := apidesc.Diff(twice, backupRoutes()); !errors.Is(err, apidesc.ErrInvalidOperation) {
+		t.Fatalf("routes with a repeated ID: err = %v", err)
+	}
+
+	if _, err := apidesc.Diff(backupRoutes(), twice); !errors.Is(err, apidesc.ErrInvalidOperation) {
+		t.Fatalf("description with a repeated ID: err = %v", err)
 	}
 }

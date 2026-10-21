@@ -1307,7 +1307,20 @@ func CoverageAllowlist() []AllowEntry {
 		preferencesAllowEntries(),
 		savedViewAllowEntries(),
 		gitHostAllowEntries(),
+		apiDescriptionAllowEntries(),
 	)
+}
+
+// apiDescriptionAllowEntries covers the route of the description of the API.
+// No CLI reads it: the generators of the SDKs and the clients do. The steps
+// of TestAPIDescription read it with no credential, with a wrong credential
+// and with the token.
+func apiDescriptionAllowEntries() []AllowEntry {
+	return []AllowEntry{{
+		Method: http.MethodGet, Path: "/api/dustpan/v1/openapi.json", CoveringTest: "TestAPIDescription",
+		Reason: "Client route: no CLI reads the description of the API. The harness steps of " +
+			"TestAPIDescription read it with and without a credential and check one known path.",
+	}}
 }
 
 // devCoveringTest names the test that proves the routes of the dev command

@@ -56,7 +56,7 @@ func wantPublicStatus(route apiserver.Route) int {
 		return http.StatusFound
 	case "/api/dustpan/v1/sign-in/dev-code":
 		return http.StatusForbidden
-	case "/api/dustpan/v1/capabilities":
+	case "/api/dustpan/v1/capabilities", "/api/dustpan/v1/openapi.json":
 		return http.StatusOK
 	}
 
@@ -66,13 +66,17 @@ func wantPublicStatus(route apiserver.Route) int {
 // publicPatterns lists the routes that need no sign-in: the start and the
 // callback of a sign-in, which run before the person has a session, the
 // sign-in with the one-time code of the dev command, and the capabilities
-// document, which answers the API version to every caller.
+// document, which answers the API version to every caller, and the
+// description of the API, which a generator reads before it has a token. The
+// description names routes, actions and shapes. It holds no data of a
+// namespace and no secret, and every caller gets the same bytes.
 func publicPatterns() []string {
 	return []string{
 		"GET /api/server/sign-in/{provider}",
 		"GET /api/server/sign-in/{provider}/callback",
 		"POST /api/dustpan/v1/sign-in/dev-code",
 		"GET /api/dustpan/v1/capabilities",
+		"GET /api/dustpan/v1/openapi.json",
 	}
 }
 
