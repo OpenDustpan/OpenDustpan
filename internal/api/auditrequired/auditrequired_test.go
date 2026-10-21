@@ -26,8 +26,6 @@ import (
 // Each NewHandler must answer its ErrMissingDependency and name the audit
 // store. The Config is empty on purpose: the audit store is the first thing
 // that each adapter checks, so nothing else can hide the missing store.
-//
-//nolint:exhaustruct // The empty Config is the case under test.
 func TestEveryAdapterNeedsAnAuditStore(t *testing.T) {
 	t.Parallel()
 
@@ -38,58 +36,58 @@ func TestEveryAdapterNeedsAnAuditStore(t *testing.T) {
 	}{
 		{
 			"audit",
-			func() error { _, err := apiaudit.NewHandler(apiaudit.Config{}); return err },
+			zeroConfig(apiaudit.NewHandler),
 			apiaudit.ErrMissingDependency,
 		},
 		{
 			"inventory",
-			func() error { _, err := apiinventory.NewHandler(apiinventory.Config{}); return err },
+			zeroConfig(apiinventory.NewHandler),
 			apiinventory.ErrMissingDependency,
 		},
 		{
 			"jobs",
-			func() error { _, err := apijobs.NewHandler(apijobs.Config{}); return err },
+			zeroConfig(apijobs.NewHandler),
 			apijobs.ErrMissingDependency,
 		},
 		{
 			"notifications",
-			func() error { _, err := apinotifications.NewHandler(apinotifications.Config{}); return err },
+			zeroConfig(apinotifications.NewHandler),
 			apinotifications.ErrMissingDependency,
 		},
 		{
 			"context",
-			func() error { _, err := apicontext.NewHandler(apicontext.Config{}); return err },
+			zeroConfig(apicontext.NewHandler),
 			apicontext.ErrMissingDependency,
 		},
 		{
 			"profile",
-			func() error { _, err := apiprofile.NewHandler(apiprofile.Config{}); return err },
+			zeroConfig(apiprofile.NewHandler),
 			apiprofile.ErrMissingDependency,
 		},
 		{
 			"pulumi",
-			func() error { _, err := apipulumi.NewHandler(apipulumi.Config{}); return err },
+			zeroConfig(apipulumi.NewHandler),
 			apipulumi.ErrMissingDependency,
 		},
 		{
 			"registry",
-			func() error { _, err := apiregistry.NewHandler(apiregistry.Config{}); return err },
+			zeroConfig(apiregistry.NewHandler),
 			apiregistry.ErrMissingDependency,
 		},
 		{
 			"runner",
-			func() error { _, err := apirunner.NewHandler(apirunner.Config{}); return err },
+			zeroConfig(apirunner.NewHandler),
 			apirunner.ErrMissingDependency,
 		},
 		{
 			"server",
-			func() error { _, err := apiserver.NewHandler(apiserver.Config{}); return err },
+			zeroConfig(apiserver.NewHandler),
 			apiserver.ErrMissingDependency,
 		},
-		{"tfe", func() error { _, err := apitfe.NewHandler(apitfe.Config{}); return err }, apitfe.ErrMissingDependency},
+		{"tfe", zeroConfig(apitfe.NewHandler), apitfe.ErrMissingDependency},
 		{
 			"tofu http",
-			func() error { _, err := apitofuhttp.NewHandler(apitofuhttp.Config{}); return err },
+			zeroConfig(apitofuhttp.NewHandler),
 			apitofuhttp.ErrMissingDependency,
 		},
 	}
@@ -107,5 +105,16 @@ func TestEveryAdapterNeedsAnAuditStore(t *testing.T) {
 				t.Fatalf("error = %q, want it to name the audit store", err)
 			}
 		})
+	}
+}
+
+// zeroConfig answers the function that calls newHandler with the zero Config.
+func zeroConfig[C, H any](newHandler func(C) (H, error)) func() error {
+	return func() error {
+		var cfg C
+
+		_, err := newHandler(cfg)
+
+		return err
 	}
 }
