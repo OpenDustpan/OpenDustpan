@@ -195,7 +195,7 @@ func TestStoredSinkFromBeforeTheHostCheck(t *testing.T) {
 			s := openInternalTemplated(t)
 			seedSink(t, s)
 
-			for _, stmt := range strings.Split(tc.update, ";") {
+			for stmt := range strings.SplitSeq(tc.update, ";") {
 				if _, err := s.conn.ExecContext(t.Context(), stmt); err != nil {
 					t.Fatalf("change the rows: %v", err)
 				}
