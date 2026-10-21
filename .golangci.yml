@@ -151,6 +151,7 @@ linters:
             - "**/pkg/trigger/**"
             - "**/pkg/savedview/**"
             - "**/pkg/preferences/**"
+            - "**/pkg/stepup/**"
             - "**/pkg/registry/**"
             - "**/pkg/runner/**"
             - "**/pkg/launcher/**"
