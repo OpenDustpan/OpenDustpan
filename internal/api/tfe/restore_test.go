@@ -191,8 +191,9 @@ func (foreignRestoreWorkspaces) GetByID(
 	}
 
 	return workspace.Workspace{
-		CreatedAt: stubWorkspaceTime(),
-		UpdatedAt: stubWorkspaceTime(),
+		NamespaceID: "",
+		CreatedAt:   stubWorkspaceTime(),
+		UpdatedAt:   stubWorkspaceTime(),
 		Lock: workspace.Lock{
 			LockedAt: stubWorkspaceTime(),
 			ID:       "",
@@ -231,6 +232,7 @@ func TestRestoreVersionOfAnotherWorkspace(t *testing.T) {
 		MaxStateBytes:  0,
 		OnAuditFailure: nil,
 		DenialLimiter:  nil,
+		StateGuard:     nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -267,8 +269,9 @@ func (lockedRestoreWorkspaces) GetByID(
 	}
 
 	return workspace.Workspace{
-		CreatedAt: stubWorkspaceTime(),
-		UpdatedAt: stubWorkspaceTime(),
+		NamespaceID: "",
+		CreatedAt:   stubWorkspaceTime(),
+		UpdatedAt:   stubWorkspaceTime(),
 		Lock: workspace.Lock{
 			LockedAt: stubWorkspaceTime(),
 			ID:       "lock-alice",
@@ -307,6 +310,7 @@ func TestRestoreLockedByOther(t *testing.T) {
 		MaxStateBytes:  0,
 		OnAuditFailure: nil,
 		DenialLimiter:  nil,
+		StateGuard:     nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)

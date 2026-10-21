@@ -30,6 +30,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/store/sqlite"
 	"opendustpan.org/opendustpan/pkg/store/storetest"
 	"opendustpan.org/opendustpan/pkg/workspace"
+	"opendustpan.org/opendustpan/pkg/workspace/workspacetest"
 )
 
 // memInventoryTool names OpenTofu in inventory entries.
@@ -988,8 +989,51 @@ type fixture struct {
 	namespaces *namespace.Service
 	secrets    *secret.Service
 	blobs      blob.Store
+	refusals   *workspacetest.Refusals
 	now        *time.Time
 	ws         workspace.Workspace
+}
+
+// stateDir returns the blob directory of the state of the workspace ws in the
+// namespace "acme": namespaces/<namespace ID>/tofu/<workspace ID>/.
+func (f fixture) stateDir(t *testing.T, ws workspace.ID) string {
+	t.Helper()
+
+	return stateDirOf(t.Context(), t, f.namespaces, ws)
+}
+
+// stateDirOf is stateDir for any namespace service.
+func stateDirOf(ctx context.Context, t *testing.T, namespaces *namespace.Service, ws workspace.ID) string {
+	t.Helper()
+
+	ns, err := namespaces.Get(ctx, "acme")
+	if err != nil {
+		t.Fatalf("get namespace: %v", err)
+	}
+
+	return "namespaces/" + ns.ID.String() + "/tofu/" + ws.String() + "/"
+}
+
+// listStateBlobs returns the state blobs of the workspace id in blobs,
+// whatever the namespace of the key, so a test also sees a blob in a place
+// where it must not be.
+func listStateBlobs(t *testing.T, blobs blob.Store, id workspace.ID) []blob.Object {
+	t.Helper()
+
+	listed, err := blobs.List(t.Context(), "namespaces/")
+	if err != nil {
+		t.Fatalf("list state blobs of %s: %v", id, err)
+	}
+
+	var found []blob.Object
+
+	for _, obj := range listed {
+		if parsed, parseErr := workspace.ParseStateBlobKey(obj.Key); parseErr == nil && parsed.Workspace == id {
+			found = append(found, obj)
+		}
+	}
+
+	return found
 }
 
 func newFixture(t *testing.T) fixture {
@@ -1042,6 +1086,7 @@ func newFixtureWithBlobs(t *testing.T, blobs blob.Store) fixture {
 	}
 
 	secrets := newMemSealer(t, namespaces)
+	refusals := workspacetest.NewRefusals()
 
 	svc, err := workspace.NewService(workspace.Config{
 		ManualLocks:        nil,
@@ -1049,6 +1094,7 @@ func newFixtureWithBlobs(t *testing.T, blobs blob.Store) fixture {
 		States:             store,
 		Blobs:              blobs,
 		Namespaces:         namespaces,
+		OutOfScope:         refusals,
 		Sealer:             secrets,
 		Logger:             nil,
 		Now:                func() time.Time { return now },
@@ -1070,7 +1116,10 @@ func newFixtureWithBlobs(t *testing.T, blobs blob.Store) fixture {
 		t.Fatalf("create: %v", err)
 	}
 
-	return fixture{svc: svc, store: store, namespaces: namespaces, secrets: secrets, blobs: blobs, now: &now, ws: ws}
+	return fixture{
+		svc: svc, store: store, namespaces: namespaces, secrets: secrets, blobs: blobs, refusals: refusals,
+		now: &now, ws: ws,
+	}
 }
 
 // TestDeleteRecordsRetention proves that a delete records the end of the
@@ -1087,6 +1136,7 @@ func TestDeleteRecordsRetention(t *testing.T) {
 		States:             f.store,
 		Blobs:              f.blobs,
 		Namespaces:         f.namespaces,
+		OutOfScope:         workspacetest.NewRefusals(),
 		Sealer:             f.secrets,
 		Logger:             nil,
 		Now:                func() time.Time { return *f.now },
@@ -1199,6 +1249,7 @@ func TestDeleteSweepTreatsGoneRowAsDone(t *testing.T) {
 		States:             goneStates{StateStore: f.store},
 		Blobs:              f.blobs,
 		Namespaces:         f.namespaces,
+		OutOfScope:         workspacetest.NewRefusals(),
 		Sealer:             f.secrets,
 		Logger:             nil,
 		Now:                func() time.Time { return *f.now },
@@ -1308,6 +1359,7 @@ func newStuckBackupFixture(ctx context.Context, t *testing.T) stuckBackupFixture
 		States:             store,
 		Blobs:              blobs,
 		Namespaces:         namespaces,
+		OutOfScope:         workspacetest.NewRefusals(),
 		Sealer:             newMemSealer(t, namespaces),
 		Logger:             nil,
 		Now:                func() time.Time { return now },
@@ -1355,7 +1407,7 @@ func stageStuckPending(
 		t.Fatalf("begin: %v", err)
 	}
 
-	stuckKey := blob.Key("tofu/" + f.ws.ID.String() + "/" + pending.Version.ID.String() + "/a1")
+	stuckKey := blob.Key(stateDirOf(ctx, t, f.namespaces, f.ws.ID) + pending.Version.ID.String() + "/a1")
 
 	var writable namespace.Namespace
 
@@ -1480,6 +1532,7 @@ func (f fixture) cappedService(t *testing.T, limit int) *workspace.Service {
 		States:             f.store,
 		Blobs:              f.blobs,
 		Namespaces:         f.namespaces,
+		OutOfScope:         workspacetest.NewRefusals(),
 		Sealer:             f.secrets,
 		Logger:             nil,
 		Now:                func() time.Time { return *f.now },
@@ -2765,12 +2818,12 @@ func TestSweepDeletesUnreferencedBlobs(t *testing.T) {
 		t.Fatalf("upload: %v", err)
 	}
 
-	stray, err := blob.ParseKey("tofu/" + f.ws.ID.String() + "/sv-stray/a1")
+	stray, err := blob.ParseKey(f.stateDir(t, f.ws.ID) + "sv-stray/a1")
 	if err != nil {
 		t.Fatalf("stray key: %v", err)
 	}
 
-	fresh, err := blob.ParseKey("tofu/" + f.ws.ID.String() + "/sv-stray/a2")
+	fresh, err := blob.ParseKey(f.stateDir(t, f.ws.ID) + "sv-stray/a2")
 	if err != nil {
 		t.Fatalf("fresh key: %v", err)
 	}
@@ -3014,6 +3067,7 @@ func newGatedService(t *testing.T, f fixture, gated *gateCounter) *workspace.Ser
 		States:             gated,
 		Blobs:              f.blobs,
 		Namespaces:         f.namespaces,
+		OutOfScope:         workspacetest.NewRefusals(),
 		Sealer:             f.secrets,
 		Logger:             nil,
 		Now:                func() time.Time { return *f.now },
@@ -3198,6 +3252,7 @@ func newSecondService(t *testing.T, f fixture, blobs blob.Store) *workspace.Serv
 		States:             f.store,
 		Blobs:              blobs,
 		Namespaces:         f.namespaces,
+		OutOfScope:         workspacetest.NewRefusals(),
 		Sealer:             f.secrets,
 		Logger:             nil,
 		Now:                func() time.Time { return *f.now },
@@ -4074,6 +4129,7 @@ func TestRestoreStaleFenceWritesNothing(t *testing.T) {
 		States:             fencedStates{memStore: f.store},
 		Blobs:              blobs,
 		Namespaces:         namespaces,
+		OutOfScope:         workspacetest.NewRefusals(),
 		Sealer:             f.secrets,
 		Now:                func() time.Time { return *f.now },
 		MaxStateBytes:      64,
@@ -4235,6 +4291,7 @@ func TestRestoreLockRaceNamesHolder(t *testing.T) {
 		States:             f.store,
 		Blobs:              blobs,
 		Namespaces:         namespaces,
+		OutOfScope:         workspacetest.NewRefusals(),
 		Sealer:             f.secrets,
 		Now:                func() time.Time { return *f.now },
 		MaxStateBytes:      64,
@@ -4404,6 +4461,7 @@ func newSealedFixture(t *testing.T) fixture {
 	}
 
 	blobs := openFixtureBlobs(t)
+	refusals := workspacetest.NewRefusals()
 
 	svc, err := workspace.NewService(workspace.Config{
 		ManualLocks:        nil,
@@ -4411,6 +4469,7 @@ func newSealedFixture(t *testing.T) fixture {
 		States:             store,
 		Blobs:              blobs,
 		Namespaces:         namespaces,
+		OutOfScope:         refusals,
 		Sealer:             secrets,
 		Logger:             nil,
 		Now:                func() time.Time { return now },
@@ -4432,7 +4491,10 @@ func newSealedFixture(t *testing.T) fixture {
 		t.Fatalf("create: %v", err)
 	}
 
-	return fixture{svc: svc, store: store, namespaces: namespaces, secrets: secrets, blobs: blobs, now: &now, ws: ws}
+	return fixture{
+		svc: svc, store: store, namespaces: namespaces, secrets: secrets, blobs: blobs, refusals: refusals,
+		now: &now, ws: ws,
+	}
 }
 
 // sealedOutputsDoc is the outputs document of the sealing tests: one
@@ -4482,6 +4544,7 @@ func TestNewServiceWithoutSealerFails(t *testing.T) {
 		States:             store,
 		Blobs:              openFixtureBlobs(t),
 		Namespaces:         namespaces,
+		OutOfScope:         workspacetest.NewRefusals(),
 		Sealer:             nil,
 		Logger:             nil,
 		Now:                nil,
@@ -4829,11 +4892,11 @@ func foreignWorkspaceKey(t *testing.T, f fixture, sv workspace.StateVersion) blo
 	}
 
 	parts := strings.Split(sv.Content.String(), "/")
-	if len(parts) != 4 {
-		t.Fatalf("content key = %q, want tofu/<workspace>/<version>/<attempt>", sv.Content)
+	if len(parts) != 6 {
+		t.Fatalf("content key = %q, want namespaces/<namespace>/tofu/<workspace>/<version>/<attempt>", sv.Content)
 	}
 
-	foreign, keyErr := blob.ParseKey("tofu/" + other.ID.String() + "/" + parts[2] + "/" + parts[3])
+	foreign, keyErr := blob.ParseKey(f.stateDir(t, other.ID) + parts[4] + "/" + parts[5])
 	if keyErr != nil {
 		t.Fatalf("foreign key: %v", keyErr)
 	}

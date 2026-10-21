@@ -245,6 +245,10 @@ type Config struct {
 	// Registry holds the settings of the provider registry protocol. A zero
 	// value serves no registry route.
 	Registry *RegistryConfig
+	// StateGuard checks each write of state against the access limits and
+	// the gates of state.write. Nil means the server keeps no gates: no
+	// write is checked.
+	StateGuard StateGuard
 }
 
 // Handler serves the TFE-compatible API under /api/v2/, with service
@@ -266,8 +270,10 @@ type Handler struct {
 	maxState int64
 	// registry is nil when the handler serves no provider registry protocol.
 	registry *registryState
-	mux      *patternMux
-	routes   []Route
+	// stateGuard is nil when the server keeps no gates.
+	stateGuard StateGuard
+	mux        *patternMux
+	routes     []Route
 }
 
 // NewHandler returns a Handler. Every Config field is required.
@@ -304,10 +310,11 @@ func NewHandler(cfg Config) (*Handler, error) {
 		guard: refusal.New(cfg.Authorizer, cfg.Audit, cfg.Namespaces, cfg.Logger,
 			cfg.OnAuditFailure).WithLimiter(cfg.DenialLimiter).
 			WithSurface("tfe"),
-		gate:     cfg.Gate,
-		maxState: cfg.MaxStateBytes,
-		mux:      newPatternMux(),
-		routes:   nil,
+		gate:       cfg.Gate,
+		maxState:   cfg.MaxStateBytes,
+		stateGuard: cfg.StateGuard,
+		mux:        newPatternMux(),
+		routes:     nil,
 	}
 
 	if h.gate == nil {

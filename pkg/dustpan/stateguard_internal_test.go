@@ -1,0 +1,408 @@
+package dustpan
+
+import (
+	"context"
+	"errors"
+	"slices"
+	"testing"
+	"time"
+
+	"opendustpan.org/opendustpan/pkg/collection"
+	"opendustpan.org/opendustpan/pkg/gate"
+	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/inventory"
+	"opendustpan.org/opendustpan/pkg/namespace"
+)
+
+// errReaderDown is the error of an inventory reader that does not answer.
+var errReaderDown = errors.New("inventory down")
+
+// fakeInventory serves the entries of one namespace.
+type fakeInventory struct {
+	entries []inventory.Entry
+	err     error
+}
+
+func (f fakeInventory) ListUnits(_ context.Context, _ namespace.Name) ([]inventory.Entry, error) {
+	return f.entries, f.err
+}
+
+func (f fakeInventory) GetUnit(_ context.Context, unitID string) (inventory.Entry, error) {
+	if f.err != nil {
+		return inventory.Entry{}, f.err
+	}
+
+	for i := range f.entries {
+		if f.entries[i].UnitID == unitID {
+			return f.entries[i], nil
+		}
+	}
+
+	return inventory.Entry{}, inventory.ErrUnitNotFound
+}
+
+func gateTestEntry() inventory.Entry {
+	return inventory.Entry{
+		LastChanged: time.Time{}, Namespace: "acme", Tool: "opentofu", Name: "web", UnitID: "ws-1", DisplayName: "",
+		Status: "", ResourceCount: nil, Lock: nil, ManualLock: nil, Collection: "prod",
+		Labels: map[string]string{"team": "core", "env": "prod"},
+	}
+}
+
+// fakeUnitIDs finds the ID of the unit web, and counts the lookups.
+type fakeUnitIDs struct {
+	calls int
+}
+
+func (f *fakeUnitIDs) UnitID(_ context.Context, obj identity.Object) (string, bool, error) {
+	f.calls++
+
+	if obj.UnitName() == "web" {
+		return "ws-1", true, nil
+	}
+
+	return "", false, nil
+}
+
+// The ways that a test names the unit web.
+const (
+	byReference = iota
+	byStableID
+	byIndexedLookup
+)
+
+// gateFacts returns the facts source for the way mode names the unit.
+func gateFacts(entries []inventory.Entry, mode int) (inventoryFacts, *fakeUnitIDs) {
+	lookup := &fakeUnitIDs{calls: 0}
+	f := inventoryFacts{reader: fakeInventory{entries: entries, err: nil}, ids: nil, deleted: nil}
+
+	if mode == byIndexedLookup {
+		f.ids = lookup
+	}
+
+	return f, lookup
+}
+
+func gateTestUnit(t *testing.T, mode int) identity.Object {
+	t.Helper()
+
+	u, err := identity.UnitObject("opentofu", "acme", "web")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if mode == byStableID {
+		return u.WithUnitID("ws-1")
+	}
+
+	return u
+}
+
+// namingModes returns the three ways that a test names the unit web.
+func namingModes() []int {
+	return []int{byReference, byStableID, byIndexedLookup}
+}
+
+func gatePrincipal(subject string, kind identity.Kind, credential identity.Credential) identity.Principal {
+	return identity.Principal{
+		Subject: subject, DisplayName: "", Admin: false, TokenID: "", TokenExpiresAt: time.Time{},
+		TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{}, Kind: kind, Credential: credential,
+		JobID: "",
+	}
+}
+
+func TestInventoryFactsGiveCollectionAndSortedLabels(t *testing.T) {
+	t.Parallel()
+
+	for _, mode := range namingModes() {
+		f, lookup := gateFacts([]inventory.Entry{gateTestEntry()}, mode)
+
+		coll, err := f.Collection(t.Context(), gateTestUnit(t, mode))
+		if err != nil || coll != collection.Name("prod") {
+			t.Fatalf("Collection(mode %d) = %q, %v, want prod", mode, coll, err)
+		}
+
+		labels, err := f.Labels(t.Context(), gateTestUnit(t, mode))
+		if err != nil || !slices.Equal(labels, []string{"env=prod", "team=core"}) {
+			t.Fatalf("Labels(mode %d) = %v, %v, want the sorted labels", mode, labels, err)
+		}
+
+		if want := map[bool]int{true: 2, false: 0}[mode == byIndexedLookup]; lookup.calls != want {
+			t.Fatalf("mode %d made %d indexed lookups, want %d", mode, lookup.calls, want)
+		}
+	}
+}
+
+func TestInventoryFactsOfAnUnknownUnit(t *testing.T) {
+	t.Parallel()
+
+	for _, mode := range namingModes() {
+		f, _ := gateFacts(nil, mode)
+
+		// A reference with a stable ID names a unit that must be live or
+		// deleted, so an unknown one fails closed. A name that the store does
+		// not know is a unit that is not yet in the inventory.
+		wantNotFound := mode != byStableID
+
+		for name, read := range map[string]func() error{
+			"Collection": func() error { _, err := f.Collection(t.Context(), gateTestUnit(t, mode)); return err },
+			"Labels":     func() error { _, err := f.Labels(t.Context(), gateTestUnit(t, mode)); return err },
+		} {
+			if err := read(); errors.Is(err, gate.ErrNotFound) != wantNotFound || err == nil && !wantNotFound {
+				t.Fatalf("%s(mode %d) = %v, want gate.ErrNotFound: %v", name, mode, err, wantNotFound)
+			}
+		}
+	}
+}
+
+func TestInventoryFactsOfAUnitInNoCollection(t *testing.T) {
+	t.Parallel()
+
+	e := gateTestEntry()
+	e.Collection = ""
+	f, _ := gateFacts([]inventory.Entry{e}, byStableID)
+
+	if _, err := f.Collection(t.Context(), gateTestUnit(t, byStableID)); !errors.Is(err, gate.ErrNotFound) {
+		t.Fatalf("Collection() = %v, want gate.ErrNotFound", err)
+	}
+}
+
+func TestInventoryFactsFailClosedOnAReaderError(t *testing.T) {
+	t.Parallel()
+
+	for _, mode := range namingModes() {
+		f, _ := gateFacts(nil, mode)
+		f.reader = fakeInventory{entries: nil, err: errReaderDown}
+
+		if mode == byIndexedLookup {
+			f.ids = &fakeUnitIDs{calls: 0}
+		}
+
+		_, err := f.Labels(t.Context(), gateTestUnit(t, mode))
+		if !errors.Is(err, errReaderDown) || errors.Is(err, gate.ErrNotFound) {
+			t.Fatalf("Labels(mode %d) = %v, want the reader error and no ErrNotFound", mode, err)
+		}
+	}
+}
+
+func TestPrincipalSubjects(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name       string
+		kind       identity.Kind
+		credential identity.Credential
+		wantKind   gate.PrincipalKind
+		wantCred   gate.CredentialKind
+	}{
+		{"unknown kind counts as a person", "", "", gate.PrincipalPerson, gate.CredentialAccessToken},
+		{
+			"person with a session",
+			identity.KindPerson,
+			identity.CredentialSession,
+			gate.PrincipalPerson,
+			gate.CredentialSession,
+		},
+		{
+			"service with an access token",
+			identity.KindService,
+			identity.CredentialAccessToken,
+			gate.PrincipalService,
+			gate.CredentialAccessToken,
+		},
+		{
+			"workload with a trust token",
+			identity.KindWorkload,
+			identity.CredentialTrustToken,
+			gate.PrincipalService,
+			gate.CredentialTrustToken,
+		},
+		{
+			"service with a job token",
+			identity.KindService,
+			identity.CredentialJobToken,
+			gate.PrincipalService,
+			gate.CredentialJobToken,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			p := gatePrincipal("alice", tc.kind, tc.credential)
+
+			s, err := principalSubjects{}.Subject(t.Context(), p)
+			if err != nil || s.ID != "alice" || s.Kind != tc.wantKind || s.Credential != tc.wantCred ||
+				s.BreakGlassAccount || !s.AuthAt.IsZero() {
+				t.Fatalf("Subject() = %+v, %v, want kind %s and credential %s", s, err, tc.wantKind, tc.wantCred)
+			}
+		})
+	}
+}
+
+func TestPrincipalSubjectsRefuseAnEmptySubject(t *testing.T) {
+	t.Parallel()
+
+	for _, subject := range []string{"", "  "} {
+		_, err := principalSubjects{}.Subject(t.Context(), gatePrincipal(subject, "", ""))
+		if !errors.Is(err, identity.ErrDenied) {
+			t.Fatalf("Subject(%q) = %v, want identity.ErrDenied", subject, err)
+		}
+	}
+}
+
+func TestPrincipalSubjectsRefuseAnUnknownCredential(t *testing.T) {
+	t.Parallel()
+
+	for _, credential := range []identity.Credential{"unknown", "Session", "job-token ", "x\ny"} {
+		_, err := principalSubjects{}.Subject(t.Context(), gatePrincipal("alice", identity.KindPerson, credential))
+		if !errors.Is(err, identity.ErrDenied) {
+			t.Fatalf("Subject(credential %q) = %v, want identity.ErrDenied", credential, err)
+		}
+	}
+}
+
+func TestNoGateServiceWithoutGateStoreOrInventory(t *testing.T) {
+	t.Parallel()
+
+	svc, err := newGateService(new(settings), nil)
+	if svc != nil || err != nil {
+		t.Fatalf("newGateService(no store) = %v, %v, want nil, nil: no write is checked", svc, err)
+	}
+}
+
+func TestInventoryFactsOfAnUnknownUnitByIndexedLookup(t *testing.T) {
+	t.Parallel()
+
+	e := gateTestEntry()
+	e.Name = "other"
+	f, lookup := gateFacts([]inventory.Entry{e}, byIndexedLookup)
+
+	u, err := identity.UnitObject("opentofu", "acme", "other")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err = f.Labels(t.Context(), u); !errors.Is(err, gate.ErrNotFound) || lookup.calls != 1 {
+		t.Fatalf(
+			"Labels(unit the store does not know) = %v after %d lookups, want gate.ErrNotFound after 1",
+			err,
+			lookup.calls,
+		)
+	}
+}
+
+// errDeletedDown is the error of a store that does not answer.
+var errDeletedDown = errors.New("deleted facts down")
+
+// fakeDeleted serves the facts of the deleted units, by unit ID.
+type fakeDeleted struct {
+	facts map[string]inventory.DeletedFacts
+	err   error
+}
+
+func (f fakeDeleted) GetDeletedUnitFacts(
+	_ context.Context, _ namespace.Name, _, unitID string,
+) (inventory.DeletedFacts, error) {
+	if f.err != nil {
+		return inventory.DeletedFacts{}, f.err
+	}
+
+	if facts, ok := f.facts[unitID]; ok {
+		return facts, nil
+	}
+
+	return inventory.DeletedFacts{}, inventory.ErrNotFound
+}
+
+func TestInventoryFactsOfADeletedUnitGiveItsRealCollectionAndLabels(t *testing.T) {
+	t.Parallel()
+
+	f, _ := gateFacts(nil, byStableID)
+	f.deleted = fakeDeleted{
+		facts: map[string]inventory.DeletedFacts{
+			"ws-1": {Collection: "prod", Labels: map[string]string{"team": "core", "env": "prod"}},
+		},
+		err: nil,
+	}
+
+	coll, err := f.Collection(t.Context(), gateTestUnit(t, byStableID))
+	if err != nil || coll != collection.Name("prod") {
+		t.Fatalf("Collection(deleted unit) = %q, %v, want prod", coll, err)
+	}
+
+	labels, err := f.Labels(t.Context(), gateTestUnit(t, byStableID))
+	if err != nil || !slices.Equal(labels, []string{"env=prod", "team=core"}) {
+		t.Fatalf("Labels(deleted unit) = %v, %v, want the sorted labels", labels, err)
+	}
+}
+
+// A deleted unit that is not found must never read as a unit with no
+// collection: a gate on its collection would not match, and the write would go on.
+func TestInventoryFactsOfAUnitThatIsNeitherLiveNorDeletedFailClosed(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name    string
+		deleted inventory.DeletedFactsReader
+	}{
+		{"the unit is not deleted", fakeDeleted{facts: nil, err: nil}},
+		{"the store keeps no deleted units", nil},
+		{"the store does not answer", fakeDeleted{facts: nil, err: errDeletedDown}},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			f, _ := gateFacts(nil, byStableID)
+			f.deleted = tc.deleted
+
+			if _, err := f.Collection(t.Context(), gateTestUnit(t, byStableID)); err == nil ||
+				errors.Is(err, gate.ErrNotFound) {
+				t.Fatalf("Collection() = %v, want an error that is not gate.ErrNotFound", err)
+			}
+
+			if _, err := f.Labels(t.Context(), gateTestUnit(t, byStableID)); err == nil ||
+				errors.Is(err, gate.ErrNotFound) {
+				t.Fatalf("Labels() = %v, want an error that is not gate.ErrNotFound", err)
+			}
+		})
+	}
+}
+
+// A stable ID whose entry belongs to another namespace or tool never gives the
+// facts of that entry, and never reads as a unit with no collection.
+func TestInventoryFactsRefuseAnEntryOfAnotherNamespaceOrTool(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name   string
+		change func(e *inventory.Entry)
+	}{
+		{"another namespace", func(e *inventory.Entry) { e.Namespace = "globex" }},
+		{"another tool", func(e *inventory.Entry) { e.Tool = "pulumi" }},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			entry := gateTestEntry()
+			tc.change(&entry)
+
+			f, _ := gateFacts([]inventory.Entry{entry}, byStableID)
+
+			if _, err := f.Collection(t.Context(), gateTestUnit(t, byStableID)); !errors.Is(err, errUnitMismatch) ||
+				errors.Is(err, gate.ErrNotFound) {
+				t.Fatalf("Collection() = %v, want errUnitMismatch and not gate.ErrNotFound", err)
+			}
+
+			if _, err := f.Labels(t.Context(), gateTestUnit(t, byStableID)); !errors.Is(err, errUnitMismatch) ||
+				errors.Is(err, gate.ErrNotFound) {
+				t.Fatalf("Labels() = %v, want errUnitMismatch and not gate.ErrNotFound", err)
+			}
+		})
+	}
+}

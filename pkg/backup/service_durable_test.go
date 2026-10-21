@@ -377,9 +377,12 @@ func TestTakeoverKeepsTheBlobCopies(t *testing.T) {
 	setup := newDurableSetup()
 	id := backup.ID("bkp-takeover-blob")
 	content := []byte(`{"state":1}`)
-	setup.source.storeObject(t, "tofu/ws1/sv1/a1", content)
+	setup.source.storeObject(t, "namespaces/ns-aaaaaaaaaaaaaaaaaaaa/tofu/ws1/sv1/a1", content)
 
-	exporter := &blobGateExporter{gateExporter: newGateExporter(t), ref: blobRef("tofu/ws1/sv1/a1", content)}
+	exporter := &blobGateExporter{
+		gateExporter: newGateExporter(t),
+		ref:          blobRef("namespaces/ns-aaaaaaaaaaaaaaaaaaaa/tofu/ws1/sv1/a1", content),
+	}
 	storeA := &frozenStore{Store: setup.reg.ops, frozen: atomic.Bool{}}
 	svcA := setup.service(t, exporter, storeA, lease, "instance-a")
 	workerA := startWorker(t, svcA)
@@ -401,7 +404,8 @@ func TestTakeoverKeepsTheBlobCopies(t *testing.T) {
 
 	assertCompleteBackup(t, setup.target, id)
 
-	if got := setup.target.readObject(t, "blobs/tofu/ws1/sv1/a1"); !bytes.Equal(got, content) {
+	got := setup.target.readObject(t, "blobs/namespaces/ns-aaaaaaaaaaaaaaaaaaaa/tofu/ws1/sv1/a1")
+	if !bytes.Equal(got, content) {
 		t.Fatalf("blob copy = %q, want %q", got, content)
 	}
 }

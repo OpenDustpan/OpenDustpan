@@ -13,6 +13,7 @@ import (
 
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/workspace"
+	"opendustpan.org/opendustpan/pkg/workspace/workspacetest"
 )
 
 // stateDoc is a state document with one resource. The fence keeps the
@@ -258,6 +259,7 @@ func TestForceUnlockWithFailedPutLeavesNoFence(t *testing.T) {
 		States:             f.store,
 		Blobs:              failing,
 		Namespaces:         f.namespaces,
+		OutOfScope:         workspacetest.NewRefusals(),
 		Sealer:             f.secrets,
 		Logger:             nil,
 		Now:                func() time.Time { return *f.now },
@@ -280,11 +282,11 @@ func TestForceUnlockWithFailedPutLeavesNoFence(t *testing.T) {
 	}
 
 	parts := strings.Split(keys[0].String(), "/")
-	if len(parts) != 4 {
-		t.Fatalf("fence content key %q has %d parts, want 4", keys[0], len(parts))
+	if len(parts) != 6 {
+		t.Fatalf("fence content key %q has %d parts, want 6", keys[0], len(parts))
 	}
 
-	fenceID := workspace.StateVersionID(parts[2])
+	fenceID := workspace.StateVersionID(parts[4])
 
 	if _, err := f.store.GetStateVersion(ctx, fenceID); !errors.Is(err, workspace.ErrStateVersionNotFound) {
 		t.Fatalf("fence row %s: err = %v, want ErrStateVersionNotFound", fenceID, err)
@@ -425,7 +427,7 @@ func sweepUnnamedBlobs(t *testing.T, f fixture, blobs blob.Store) {
 
 	ctx := t.Context()
 
-	listed, err := blobs.List(ctx, "tofu/"+f.ws.ID.String()+"/")
+	listed, err := blobs.List(ctx, f.stateDir(t, f.ws.ID))
 	if err != nil {
 		t.Errorf("list blobs: %v", err)
 

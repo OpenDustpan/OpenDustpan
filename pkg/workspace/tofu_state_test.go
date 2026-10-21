@@ -9,6 +9,7 @@ import (
 	"opendustpan.org/opendustpan/internal/token"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/workspace"
+	"opendustpan.org/opendustpan/pkg/workspace/workspacetest"
 )
 
 // tofuTestState is a state file with two resources in the shape the CLI
@@ -758,6 +759,7 @@ func newMaskedFixture(t *testing.T) maskedFixture {
 		States:             store,
 		Blobs:              openFixtureBlobs(t),
 		Namespaces:         namespaces,
+		OutOfScope:         workspacetest.NewRefusals(),
 		Sealer:             newMemSealer(t, namespaces),
 		Logger:             nil,
 		Now:                func() time.Time { return now },

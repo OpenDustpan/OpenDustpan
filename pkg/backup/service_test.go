@@ -647,9 +647,19 @@ func TestRunWritesWholeBackup(t *testing.T) {
 	first := []byte(`{"state":1}`)
 	second := []byte(`{"state":2}`)
 	sql := []byte("sqlite-image-bytes")
-	sum := testSummary(blobRef("tofu/ws1/sv1/a1", first), blobRef("tofu/ws1/sv2/a1", second))
+	sum := testSummary(
+		blobRef("namespaces/ns-aaaaaaaaaaaaaaaaaaaa/tofu/ws1/sv1/a1", first),
+		blobRef("namespaces/ns-aaaaaaaaaaaaaaaaaaaa/tofu/ws1/sv2/a1", second),
+	)
 	fix := newFixture(t, &stubExporter{sum: sum, data: sql, err: nil}, 0)
-	seedSource(t, fix.source, map[string][]byte{"tofu/ws1/sv1/a1": first, "tofu/ws1/sv2/a1": second})
+	seedSource(
+		t,
+		fix.source,
+		map[string][]byte{
+			"namespaces/ns-aaaaaaaaaaaaaaaaaaaa/tofu/ws1/sv1/a1": first,
+			"namespaces/ns-aaaaaaaaaaaaaaaaaaaa/tofu/ws1/sv2/a1": second,
+		},
+	)
 
 	done := mustRun(t, fix.service, "bkp-whole")
 
@@ -658,8 +668,8 @@ func TestRunWritesWholeBackup(t *testing.T) {
 	}
 
 	assertBackupObjects(t, fix.target, "bkp-whole", sql, map[string][]byte{
-		"tofu/ws1/sv1/a1": first,
-		"tofu/ws1/sv2/a1": second,
+		"namespaces/ns-aaaaaaaaaaaaaaaaaaaa/tofu/ws1/sv1/a1": first,
+		"namespaces/ns-aaaaaaaaaaaaaaaaaaaa/tofu/ws1/sv2/a1": second,
 	})
 	assertWholeManifest(t, fix.target, "bkp-whole", wantManifest(fix.now, "bkp-whole", sql, first, second))
 
@@ -700,8 +710,18 @@ func wantManifest(now time.Time, id backup.ID, sql, first, second []byte) backup
 		HomeRegions: []string{"eu-west"},
 		WrapperIDs:  []string{"kek-1"},
 		Blobs: []backup.ManifestBlob{
-			{Key: "tofu/ws1/sv1/a1", Size: int64(len(first)), MD5: hex.EncodeToString(firstMD5[:]), Sealed: false},
-			{Key: "tofu/ws1/sv2/a1", Size: int64(len(second)), MD5: hex.EncodeToString(secondMD5[:]), Sealed: false},
+			{
+				Key:    "namespaces/ns-aaaaaaaaaaaaaaaaaaaa/tofu/ws1/sv1/a1",
+				Size:   int64(len(first)),
+				MD5:    hex.EncodeToString(firstMD5[:]),
+				Sealed: false,
+			},
+			{
+				Key:    "namespaces/ns-aaaaaaaaaaaaaaaaaaaa/tofu/ws1/sv2/a1",
+				Size:   int64(len(second)),
+				MD5:    hex.EncodeToString(secondMD5[:]),
+				Sealed: false,
+			},
 		},
 		Version:       "test-1.0",
 		SQLSHA256:     sqlSHA,
@@ -821,14 +841,15 @@ func TestRunSecondBackupReusesBlobs(t *testing.T) {
 
 	content := []byte(`{"state":1}`)
 	sql := []byte("sqlite-image-bytes")
-	sum := testSummary(blobRef("tofu/ws1/sv1/a1", content))
+	sum := testSummary(blobRef("namespaces/ns-aaaaaaaaaaaaaaaaaaaa/tofu/ws1/sv1/a1", content))
 	fix := newFixture(t, &stubExporter{sum: sum, data: sql, err: nil}, 0)
-	seedSource(t, fix.source, map[string][]byte{"tofu/ws1/sv1/a1": content})
+	seedSource(t, fix.source, map[string][]byte{"namespaces/ns-aaaaaaaaaaaaaaaaaaaa/tofu/ws1/sv1/a1": content})
 
 	mustRun(t, fix.service, "bkp-first")
 	mustRun(t, fix.service, "bkp-second")
 
-	if got := fix.target.readObject(t, "blobs/tofu/ws1/sv1/a1"); !bytes.Equal(got, content) {
+	got := fix.target.readObject(t, "blobs/namespaces/ns-aaaaaaaaaaaaaaaaaaaa/tofu/ws1/sv1/a1")
+	if !bytes.Equal(got, content) {
 		t.Fatalf("reused blob = %q, want the first copy %q", got, content)
 	}
 
@@ -836,7 +857,7 @@ func TestRunSecondBackupReusesBlobs(t *testing.T) {
 		t.Fatalf("second backup db = %q, want %q", got, sql)
 	}
 
-	if got := fix.target.putAttempts("blobs/tofu/ws1/sv1/a1"); got != 2 {
+	if got := fix.target.putAttempts("blobs/namespaces/ns-aaaaaaaaaaaaaaaaaaaa/tofu/ws1/sv1/a1"); got != 2 {
 		t.Fatalf("blob put attempts = %d, want 2: the second backup tries the blob again and keeps the first copy", got)
 	}
 
@@ -853,11 +874,15 @@ func TestRunFailsOnBlobMismatch(t *testing.T) {
 		stored  []byte
 		declare backup.BlobRef
 	}{
-		{name: "wrong size", stored: []byte("short"), declare: blobRef("tofu/ws1/sv1/a1", []byte("a longer state"))},
+		{
+			name:    "wrong size",
+			stored:  []byte("short"),
+			declare: blobRef("namespaces/ns-aaaaaaaaaaaaaaaaaaaa/tofu/ws1/sv1/a1", []byte("a longer state")),
+		},
 		{
 			name:    "wrong md5",
 			stored:  []byte("tampered-state!!"),
-			declare: blobRef("tofu/ws1/sv1/a1", []byte("original-state!!")),
+			declare: blobRef("namespaces/ns-aaaaaaaaaaaaaaaaaaaa/tofu/ws1/sv1/a1", []byte("original-state!!")),
 		},
 	}
 
@@ -867,7 +892,11 @@ func TestRunFailsOnBlobMismatch(t *testing.T) {
 
 			sql := []byte("sqlite-image-bytes")
 			fix := newFixture(t, &stubExporter{sum: testSummary(tc.declare), data: sql, err: nil}, 0)
-			seedSource(t, fix.source, map[string][]byte{"tofu/ws1/sv1/a1": tc.stored})
+			seedSource(
+				t,
+				fix.source,
+				map[string][]byte{"namespaces/ns-aaaaaaaaaaaaaaaaaaaa/tofu/ws1/sv1/a1": tc.stored},
+			)
 
 			_, err := fix.service.Run(t.Context(), "bkp-bad")
 			assertRunFailed(t, err, backup.ErrCorrupt)
@@ -875,7 +904,7 @@ func TestRunFailsOnBlobMismatch(t *testing.T) {
 			assertFailed(t, fix.registry, "bkp-bad")
 			assertNoManifest(t, fix.target, "bkp-bad")
 
-			if fix.target.has("blobs/tofu/ws1/sv1/a1") {
+			if fix.target.has("blobs/namespaces/ns-aaaaaaaaaaaaaaaaaaaa/tofu/ws1/sv1/a1") {
 				t.Fatal("target holds a copy of the mismatched blob, want none")
 			}
 		})
@@ -888,12 +917,27 @@ func TestRunSkipsBlobsTheSQLDataDoesNotName(t *testing.T) {
 	named := []byte(`{"state":1}`)
 	extra := []byte(`{"state":2}`)
 	sql := []byte("sqlite-image-bytes")
-	fix := newFixture(t, &stubExporter{sum: testSummary(blobRef("tofu/ws1/sv1/a1", named)), data: sql, err: nil}, 0)
-	seedSource(t, fix.source, map[string][]byte{"tofu/ws1/sv1/a1": named, "tofu/ws1/sv9/a1": extra})
+	fix := newFixture(
+		t,
+		&stubExporter{
+			sum:  testSummary(blobRef("namespaces/ns-aaaaaaaaaaaaaaaaaaaa/tofu/ws1/sv1/a1", named)),
+			data: sql,
+			err:  nil,
+		},
+		0,
+	)
+	seedSource(
+		t,
+		fix.source,
+		map[string][]byte{
+			"namespaces/ns-aaaaaaaaaaaaaaaaaaaa/tofu/ws1/sv1/a1": named,
+			"namespaces/ns-aaaaaaaaaaaaaaaaaaaa/tofu/ws1/sv9/a1": extra,
+		},
+	)
 
 	mustRun(t, fix.service, "bkp-skip")
 
-	if fix.target.has("blobs/tofu/ws1/sv9/a1") {
+	if fix.target.has("blobs/namespaces/ns-aaaaaaaaaaaaaaaaaaaa/tofu/ws1/sv9/a1") {
 		t.Fatal("target holds a blob the SQL data does not name, want it skipped")
 	}
 
@@ -923,8 +967,16 @@ func TestRunFailsWhenDatabaseWriteFails(t *testing.T) {
 
 	content := []byte(`{"state":1}`)
 	sql := []byte("sqlite-image-bytes")
-	fix := newFixture(t, &stubExporter{sum: testSummary(blobRef("tofu/ws1/sv1/a1", content)), data: sql, err: nil}, 0)
-	seedSource(t, fix.source, map[string][]byte{"tofu/ws1/sv1/a1": content})
+	fix := newFixture(
+		t,
+		&stubExporter{
+			sum:  testSummary(blobRef("namespaces/ns-aaaaaaaaaaaaaaaaaaaa/tofu/ws1/sv1/a1", content)),
+			data: sql,
+			err:  nil,
+		},
+		0,
+	)
+	seedSource(t, fix.source, map[string][]byte{"namespaces/ns-aaaaaaaaaaaaaaaaaaaa/tofu/ws1/sv1/a1": content})
 	fix.target.failPut[sqlPartKey("bkp-db")] = errTargetUnavailable
 
 	finished := make(chan error, 1)
@@ -952,8 +1004,16 @@ func TestRunWritesManifestLast(t *testing.T) {
 
 	content := []byte(`{"state":1}`)
 	sql := []byte("sqlite-image-bytes")
-	fix := newFixture(t, &stubExporter{sum: testSummary(blobRef("tofu/ws1/sv1/a1", content)), data: sql, err: nil}, 0)
-	seedSource(t, fix.source, map[string][]byte{"tofu/ws1/sv1/a1": content})
+	fix := newFixture(
+		t,
+		&stubExporter{
+			sum:  testSummary(blobRef("namespaces/ns-aaaaaaaaaaaaaaaaaaaa/tofu/ws1/sv1/a1", content)),
+			data: sql,
+			err:  nil,
+		},
+		0,
+	)
+	seedSource(t, fix.source, map[string][]byte{"namespaces/ns-aaaaaaaaaaaaaaaaaaaa/tofu/ws1/sv1/a1": content})
 	fix.target.failPut["backups/bkp-partial/manifest.json"] = errTargetUnavailable
 
 	if _, err := fix.service.Run(t.Context(), "bkp-partial"); err == nil {
@@ -977,14 +1037,14 @@ func TestRunRejectsASecondBackupWhileOneRuns(t *testing.T) {
 	content := []byte(`{"state":1}`)
 	sql := []byte("sqlite-image-bytes")
 	exporter := &blockingExporter{
-		sum:     testSummary(blobRef("tofu/ws1/sv1/a1", content)),
+		sum:     testSummary(blobRef("namespaces/ns-aaaaaaaaaaaaaaaaaaaa/tofu/ws1/sv1/a1", content)),
 		data:    sql,
 		started: make(chan struct{}),
 		release: make(chan struct{}),
 		once:    sync.Once{},
 	}
 	fix := newFixture(t, exporter, 0)
-	seedSource(t, fix.source, map[string][]byte{"tofu/ws1/sv1/a1": content})
+	seedSource(t, fix.source, map[string][]byte{"namespaces/ns-aaaaaaaaaaaaaaaaaaaa/tofu/ws1/sv1/a1": content})
 
 	firstDone := make(chan error, 1)
 
@@ -1028,8 +1088,16 @@ func TestRunRefusesSQLPartOverTheTargetLimit(t *testing.T) {
 
 	content := []byte(`{"state":1}`)
 	sql := []byte("a SQL part over the fake limit")
-	fix := newFixture(t, &stubExporter{sum: testSummary(blobRef("tofu/ws1/sv1/a1", content)), data: sql, err: nil}, 8)
-	seedSource(t, fix.source, map[string][]byte{"tofu/ws1/sv1/a1": content})
+	fix := newFixture(
+		t,
+		&stubExporter{
+			sum:  testSummary(blobRef("namespaces/ns-aaaaaaaaaaaaaaaaaaaa/tofu/ws1/sv1/a1", content)),
+			data: sql,
+			err:  nil,
+		},
+		8,
+	)
+	seedSource(t, fix.source, map[string][]byte{"namespaces/ns-aaaaaaaaaaaaaaaaaaaa/tofu/ws1/sv1/a1": content})
 
 	_, err := fix.service.Run(t.Context(), "bkp-big")
 	assertRunFailed(t, err, backup.ErrTooLarge)
@@ -1147,10 +1215,14 @@ func TestCheck(t *testing.T) {
 		sql := []byte("sqlite-image-bytes")
 		fix := newFixture(
 			t,
-			&stubExporter{sum: testSummary(blobRef("tofu/ws1/sv1/a1", content)), data: sql, err: nil},
+			&stubExporter{
+				sum:  testSummary(blobRef("namespaces/ns-aaaaaaaaaaaaaaaaaaaa/tofu/ws1/sv1/a1", content)),
+				data: sql,
+				err:  nil,
+			},
 			0,
 		)
-		seedSource(t, fix.source, map[string][]byte{"tofu/ws1/sv1/a1": content})
+		seedSource(t, fix.source, map[string][]byte{"namespaces/ns-aaaaaaaaaaaaaaaaaaaa/tofu/ws1/sv1/a1": content})
 		mustRun(t, fix.service, "bkp-check")
 
 		return fix.target, "bkp-check"
@@ -1162,18 +1234,21 @@ func TestCheck(t *testing.T) {
 		wantKey string
 	}{
 		{
-			name:    "missing blob",
-			breakIt: func(t *testing.T, target *memStore) { t.Helper(); mustDelete(t, target, "blobs/tofu/ws1/sv1/a1") },
-			wantKey: "blobs/tofu/ws1/sv1/a1",
+			name: "missing blob",
+			breakIt: func(t *testing.T, target *memStore) {
+				t.Helper()
+				mustDelete(t, target, "blobs/namespaces/ns-aaaaaaaaaaaaaaaaaaaa/tofu/ws1/sv1/a1")
+			},
+			wantKey: "blobs/namespaces/ns-aaaaaaaaaaaaaaaaaaaa/tofu/ws1/sv1/a1",
 		},
 		{
 			name: "wrong blob size",
 			breakIt: func(t *testing.T, target *memStore) {
 				t.Helper()
-				mustDelete(t, target, "blobs/tofu/ws1/sv1/a1")
-				target.storeObject(t, "blobs/tofu/ws1/sv1/a1", []byte("short"))
+				mustDelete(t, target, "blobs/namespaces/ns-aaaaaaaaaaaaaaaaaaaa/tofu/ws1/sv1/a1")
+				target.storeObject(t, "blobs/namespaces/ns-aaaaaaaaaaaaaaaaaaaa/tofu/ws1/sv1/a1", []byte("short"))
 			},
-			wantKey: "blobs/tofu/ws1/sv1/a1",
+			wantKey: "blobs/namespaces/ns-aaaaaaaaaaaaaaaaaaaa/tofu/ws1/sv1/a1",
 		},
 		{
 			name:    "missing database",

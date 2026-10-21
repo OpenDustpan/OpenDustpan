@@ -42,7 +42,7 @@ func (o *streamOpener) OpenStateBlob(_ context.Context, key blob.Key) (io.ReadCl
 }
 
 // streamBlobKey is the blob key every stream test copies.
-const streamBlobKey = "tofu/ws1/sv1/a1"
+const streamBlobKey = "namespaces/ns-aaaaaaaaaaaaaaaaaaaa/tofu/ws1/sv1/a1"
 
 // largeStreamBytes answers size deterministic pseudo-random bytes, over the
 // 32 KiB copy buffer, so the stream tests move multi-chunk blobs.

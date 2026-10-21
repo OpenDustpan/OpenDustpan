@@ -56,7 +56,8 @@ func contextUnit(t *testing.T, s *postgres.Store, u graph.Unit) {
 	}
 
 	w := workspace.Workspace{
-		CreatedAt: n.CreatedAt, UpdatedAt: n.CreatedAt,
+		NamespaceID: "",
+		CreatedAt:   n.CreatedAt, UpdatedAt: n.CreatedAt,
 		Lock:      workspace.Lock{LockedAt: time.Time{}, ID: "", Holder: "", Reason: ""},
 		ID:        workspace.ID(u.ID),
 		Ref:       workspace.Ref{Namespace: n.Name, Name: name},

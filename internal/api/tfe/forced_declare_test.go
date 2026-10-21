@@ -63,6 +63,7 @@ func TestForcedDeclareWithoutOverrideIsRefused(t *testing.T) {
 		MaxStateBytes:  0,
 		OnAuditFailure: nil,
 		DenialLimiter:  nil,
+		StateGuard:     nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -111,6 +112,7 @@ func TestRefusedOverrideIsAudited(t *testing.T) {
 		MaxStateBytes:  0,
 		OnAuditFailure: nil,
 		DenialLimiter:  nil,
+		StateGuard:     nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -249,6 +251,7 @@ func declareRefused(t *testing.T, err error) (*httptest.ResponseRecorder, []audi
 		MaxStateBytes:  0,
 		OnAuditFailure: nil,
 		DenialLimiter:  nil,
+		StateGuard:     nil,
 	})
 	if newErr != nil {
 		t.Fatalf("handler: %v", newErr)

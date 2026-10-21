@@ -174,7 +174,8 @@ func (f storeMoveFixture) createWorkspace(t *testing.T) {
 	}
 
 	w := workspace.Workspace{
-		CreatedAt: time.Now(), UpdatedAt: time.Now(),
+		NamespaceID: "",
+		CreatedAt:   time.Now(), UpdatedAt: time.Now(),
 		Lock: workspace.Lock{LockedAt: time.Time{}, ID: "", Holder: "", Reason: ""},
 		ID:   workspace.ID(ident.NewID("ws-")), Ref: workspace.Ref{Namespace: f.ns.Name, Name: name},
 		Revision: 1, Overrides: namespace.Overrides{Forced: false, Unlocked: false},
@@ -251,7 +252,8 @@ func (f storeMoveFixture) move(t *testing.T, authz identity.Authorizer) *httptes
 		Lifecycles: testLifecycles(), ReadScope: fixedScope{err: nil, ids: nil, all: true}, Now: nil,
 		Authenticator: tokenAuthenticator{}, Authorizer: authz, Audit: f.store, OnAuditFailure: nil,
 		DenialLimiter: nil, Sessions: nil,
-		Logger: slog.New(slog.DiscardHandler),
+		Logger:     slog.New(slog.DiscardHandler),
+		StateGuard: nil,
 	})
 	if err != nil {
 		t.Fatalf("inventory handler: %v", err)
