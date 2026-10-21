@@ -3751,3 +3751,43 @@ DELETE FROM notification_sink_secrets
 WHERE notification_sink_secrets.sink_id = sqlc.arg(sink_id)
   AND notification_sink_secrets.namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace));
 
+
+-- name: InsertItemKey :execrows
+-- The caller checks the fence in the same transaction. A record for the same
+-- item is not written: the caller reads the stored record.
+INSERT INTO item_keys (id, namespace_id, scope_id, kind, item, wrapper_id, created_at_ms, shredded_at_ms)
+VALUES (
+    sqlc.arg(id), (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace)),
+    sqlc.arg(scope_id), sqlc.arg(kind), sqlc.arg(item), sqlc.arg(wrapper_id), sqlc.arg(created_at_ms), 0
+)
+ON CONFLICT (namespace_id, scope_id, kind, item) DO NOTHING;
+
+-- name: GetItemKey :one
+SELECT k.id, n.name AS namespace, k.scope_id, k.kind, k.item, k.wrapper_id, k.created_at_ms, k.shredded_at_ms
+FROM item_keys AS k
+JOIN namespaces AS n ON n.id = k.namespace_id
+WHERE n.name = sqlc.arg(namespace) AND k.scope_id = sqlc.arg(scope_id) AND k.kind = sqlc.arg(kind)
+  AND k.item = sqlc.arg(item);
+
+-- name: ShredItemKey :execrows
+-- Only a record that is not shredded changes, so a second shred keeps the
+-- first shred time.
+UPDATE item_keys
+SET shredded_at_ms = sqlc.arg(shredded_at_ms)
+WHERE item_keys.shredded_at_ms = 0 AND item_keys.scope_id = sqlc.arg(scope_id) AND item_keys.kind = sqlc.arg(kind)
+  AND item_keys.item = sqlc.arg(item)
+  AND item_keys.namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace));
+
+-- name: ListItemKeys :many
+SELECT k.id, n.name AS namespace, k.scope_id, k.kind, k.item, k.wrapper_id, k.created_at_ms, k.shredded_at_ms
+FROM item_keys AS k
+JOIN namespaces AS n ON n.id = k.namespace_id
+WHERE n.name = sqlc.arg(namespace) AND k.scope_id = sqlc.arg(scope_id) AND k.id > sqlc.arg(after)
+ORDER BY k.id
+LIMIT sqlc.arg(max_rows);
+
+-- name: ListItemKeyWrapperIDs :many
+SELECT DISTINCT wrapper_id
+FROM item_keys
+WHERE shredded_at_ms = 0
+ORDER BY wrapper_id;

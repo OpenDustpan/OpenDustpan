@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	blobfs "opendustpan.org/opendustpan/pkg/blob/fs"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/secret"
 	"opendustpan.org/opendustpan/pkg/secret/secrettest"
@@ -185,4 +186,22 @@ func (m *memItemKeys) checkFence(fence namespace.Fence) error {
 	}
 
 	return nil
+}
+
+// TestItemSealerSuite runs the sealer suite over the in-memory records and a
+// directory of blobs.
+func TestItemSealerSuite(t *testing.T) {
+	t.Parallel()
+	secrettest.RunItemSealer(t, func(t *testing.T) *secrettest.SealerRig {
+		t.Helper()
+
+		blobs, err := blobfs.Open(t.TempDir())
+		if err != nil {
+			t.Fatalf("open blob store: %v", err)
+		}
+
+		t.Cleanup(func() { _ = blobs.Close() }) //nolint:errcheck // Test cleanup.
+
+		return secrettest.NewSealerRig(t, newMemItemKeys(), blobs)
+	})
 }

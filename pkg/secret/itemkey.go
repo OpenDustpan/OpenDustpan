@@ -189,3 +189,15 @@ type ItemSealer interface {
 	// stream of another item or binding, or a changed stream.
 	OpenContent(ctx context.Context, ref ItemRef, binding []byte, r io.Reader) (io.Reader, error)
 }
+
+// itemAADLabel starts the associated data of an item key and of the content
+// that it seals. It differs from aadLabel, so no item ciphertext opens as
+// the value of a scope, and no value of a scope opens as an item.
+const itemAADLabel = "opendustpan/item/v1"
+
+// aad is the associated data that binds a wrapped item key and its content
+// to the scope, the kind and the item ID of the reference.
+func (r ItemRef) aad() []byte {
+	return []byte(itemAADLabel + "\x00" + r.Scope.Namespace.String() + "\x00" + r.Scope.ID + "\x00" +
+		string(r.Kind) + "\x00" + r.Item)
+}

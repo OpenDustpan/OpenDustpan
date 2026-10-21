@@ -341,6 +341,43 @@ func TestSecretsConformance(t *testing.T) {
 	})
 }
 
+func TestItemKeysConformance(t *testing.T) {
+	t.Parallel()
+
+	base := os.Getenv(envURL)
+	if base == "" {
+		t.Skipf("set %s to run the PostgreSQL conformance suite", envURL)
+	}
+
+	secrettest.RunItemKeys(t, func(t *testing.T) secrettest.ItemKeyStore {
+		t.Helper()
+
+		return open(t, base)
+	})
+}
+
+func TestItemSealerConformance(t *testing.T) {
+	t.Parallel()
+
+	base := os.Getenv(envURL)
+	if base == "" {
+		t.Skipf("set %s to run the PostgreSQL conformance suite", envURL)
+	}
+
+	secrettest.RunItemSealer(t, func(t *testing.T) *secrettest.SealerRig {
+		t.Helper()
+
+		blobs, err := blobfs.Open(t.TempDir())
+		if err != nil {
+			t.Fatalf("open blob store: %v", err)
+		}
+
+		t.Cleanup(func() { _ = blobs.Close() }) //nolint:errcheck // Test cleanup.
+
+		return secrettest.NewSealerRig(t, open(t, base), blobs)
+	})
+}
+
 func TestInstallationSecretsConformance(t *testing.T) {
 	t.Parallel()
 

@@ -650,8 +650,8 @@ func checkRestoreFile(ctx context.Context, path string, want backup.Summary) (ba
 		return backup.Summary{}, fmt.Errorf("check staged backup: %w", idsErr)
 	}
 
-	if viewsErr := checkStagedSavedViews(ctx, conn); viewsErr != nil {
-		return backup.Summary{}, fmt.Errorf("check staged backup: %w", viewsErr)
+	if ownedErr := checkStagedOwnedRows(ctx, conn); ownedErr != nil {
+		return backup.Summary{}, fmt.Errorf("check staged backup: %w", ownedErr)
 	}
 
 	if featureErr := checkStagedFeatureRows(ctx, conn); featureErr != nil {
@@ -939,7 +939,8 @@ func summarizeConn(ctx context.Context, conn *sql.DB) (backup.Summary, error) {
 	wrappers, err := stringColumn(
 		ctx,
 		conn,
-		`SELECT wrapper_id FROM secret_keys UNION SELECT wrapper_id FROM installation_secret_keys ORDER BY wrapper_id`,
+		`SELECT wrapper_id FROM secret_keys UNION SELECT wrapper_id FROM installation_secret_keys
+		UNION SELECT wrapper_id FROM item_keys WHERE shredded_at_ms = 0 ORDER BY wrapper_id`,
 	)
 	if err != nil {
 		return backup.Summary{}, err
