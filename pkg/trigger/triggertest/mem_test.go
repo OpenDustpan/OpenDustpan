@@ -75,7 +75,10 @@ func (m *mem) Put(_ context.Context, t trigger.Trigger, fence namespace.Fence, e
 		return fmt.Errorf("%w: a trigger keeps its unit and its kind", trigger.ErrInvalid)
 	}
 
-	if err := trigger.CheckCycle(m.inNamespace(k.ns), t); err != nil {
+	// A stored row that fails Validate starts no plan, so it is no edge.
+	valid := slices.DeleteFunc(m.inNamespace(k.ns), func(o trigger.Trigger) bool { return o.Validate() != nil })
+
+	if err := trigger.CheckCycle(valid, t); err != nil {
 		return fmt.Errorf("put: %w", err)
 	}
 
@@ -102,6 +105,30 @@ func (m *mem) Get(_ context.Context, ns namespace.Name, id trigger.ID) (trigger.
 		return trigger.Trigger{}, trigger.ErrNotFound
 	}
 
+	if err := t.Validate(); err != nil {
+		return trigger.Trigger{}, fmt.Errorf("get: %w", err)
+	}
+
+	return t, nil
+}
+
+func (m *mem) Stored(_ context.Context, ns namespace.Name, id trigger.ID) (trigger.Trigger, error) {
+	if err := id.Validate(); err != nil {
+		return trigger.Trigger{}, fmt.Errorf("stored: %w", err)
+	}
+
+	if _, err := namespace.ParseName(string(ns)); err != nil {
+		return trigger.Trigger{}, fmt.Errorf("stored: %w: %w", trigger.ErrInvalid, err)
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	t, ok := m.triggers[key{ns: ns, id: id}]
+	if !ok {
+		return trigger.Trigger{}, trigger.ErrNotFound
+	}
+
 	return t, nil
 }
 
@@ -118,6 +145,10 @@ func (m *mem) List(_ context.Context, unit graph.Unit) ([]trigger.Trigger, error
 	all := m.inNamespace(unit.Namespace)
 	for i := range all {
 		if all[i].Unit == unit {
+			if err := all[i].Validate(); err != nil {
+				return nil, fmt.Errorf("list: %w", err)
+			}
+
 			out = append(out, all[i])
 		}
 	}

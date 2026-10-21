@@ -87,6 +87,10 @@ func TestOutputReadCheck(t *testing.T) {
 			func(r *fakeResolver, _ *fakeAuthz, _ *fakeStore) { r.people[ada] = person(grace) }, base, false,
 		},
 		{
+			"a subject that a new principal reuses",
+			func(r *fakeResolver, _ *fakeAuthz, _ *fakeStore) { r.ids[ada] = "prn-new-" + ada }, base, false,
+		},
+		{
 			"the administrator flag of the resolver is never trusted",
 			func(r *fakeResolver, a *fakeAuthz, _ *fakeStore) {
 				admin := person(ada)

@@ -71,7 +71,8 @@ func (s *Starter) StartPlan(ctx context.Context, actor job.Actor, unit graph.Uni
 		Location: req.Location, Pool: "",
 		Edits: nil, Delivery: "", Source: req.Source, IdempotencyKey: req.IdempotencyKey, Reason: req.Reason,
 		BreakGlass: nil, Trigger: &job.TriggerRef{ID: string(req.Trigger), Saver: req.Saver},
-		Channel: "", SourceIP: "", UserAgent: "", RequestID: "",
+		Channel: req.Request.Channel, SourceIP: req.Request.SourceIP, UserAgent: req.Request.UserAgent,
+		RequestID: req.Request.RequestID,
 	})
 	if err != nil {
 		return "", fmt.Errorf("start plan of %s: %w", unit, err)

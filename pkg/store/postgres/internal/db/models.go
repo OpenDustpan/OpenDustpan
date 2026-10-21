@@ -873,6 +873,7 @@ type Trigger struct {
 	SourceUnitID     string
 	Enabled          int64
 	LastSaverSubject string
+	LastSaverID      string
 	CreatedAtMs      int64
 	UpdatedAtMs      int64
 }

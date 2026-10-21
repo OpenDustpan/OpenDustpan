@@ -20,6 +20,7 @@ import (
 	"opendustpan.org/opendustpan/internal/denylimit"
 	"opendustpan.org/opendustpan/internal/sessionauth"
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/idempotency"
 	"opendustpan.org/opendustpan/pkg/identity"
 	coreinventory "opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/job"
@@ -179,13 +180,14 @@ var errNotFound = errors.New("not found")
 var errBody = errors.New("request body is not valid")
 
 // errKeyUnsupported reports a write with an Idempotency-Key header to a route
-// that takes none.
+// that takes none. Only the fire route takes the key.
 var errKeyUnsupported = errors.New("this route does not take the Idempotency-Key header: send the request without it")
 
 // Codes of the refusals of this API.
 const (
 	codeBodyInvalid  = "request.body-invalid"
 	codeKeyRefused   = "request.idempotency-key-unsupported"
+	codeKeyInvalid   = "request.idempotency-key-invalid"
 	codeInvalid      = "trigger.invalid"
 	codeCycle        = "trigger.cycle"
 	codeDisabled     = "trigger.disabled"
@@ -266,6 +268,11 @@ func classifyRule(err error) errorResponse {
 	case errors.Is(err, errKeyUnsupported):
 		return errorResponse{
 			Code: http.StatusBadRequest, ErrorCode: codeKeyRefused, Message: errKeyUnsupported.Error(), Units: nil,
+		}
+	case errors.Is(err, idempotency.ErrInvalidKey):
+		return errorResponse{
+			Code: http.StatusBadRequest, ErrorCode: codeKeyInvalid, Message: refusal.Clean(err.Error(), maxMessageBytes),
+			Units: nil,
 		}
 	case errors.Is(err, errBody):
 		return errorResponse{

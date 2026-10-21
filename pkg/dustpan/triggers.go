@@ -194,29 +194,32 @@ type saverRecords struct {
 // the subject now. A record that is missing, deleted or disabled is
 // trigger.ErrSaverGone. The answer never carries the administrator flag, a
 // token or a session: the grants of the record decide.
-func (r saverRecords) Saver(ctx context.Context, subject string) (identity.Principal, error) {
+func (r saverRecords) Saver(ctx context.Context, subject string) (trigger.SaverRecord, error) {
 	// Defense in depth: the form of a subject that belongs to the server never
 	// names a saver, whatever the records hold.
 	if identity.IsNamespaceServiceSubject(subject) {
-		return identity.Principal{}, trigger.ErrSaverGone
+		return trigger.SaverRecord{}, trigger.ErrSaverGone
 	}
 
 	p, err := r.records.GetPrincipalBySubject(ctx, subject)
 
 	switch {
 	case errors.Is(err, principal.ErrNotFound):
-		return identity.Principal{}, trigger.ErrSaverGone
+		return trigger.SaverRecord{}, trigger.ErrSaverGone
 	case err != nil:
-		return identity.Principal{}, fmt.Errorf("saver %q: %w", subject, err)
+		return trigger.SaverRecord{}, fmt.Errorf("saver %q: %w", subject, err)
 	case !p.DisabledAt.IsZero():
-		return identity.Principal{}, trigger.ErrSaverGone
+		return trigger.SaverRecord{}, trigger.ErrSaverGone
 	case p.Subject != subject:
-		return identity.Principal{}, trigger.ErrSaverGone
+		return trigger.SaverRecord{}, trigger.ErrSaverGone
 	}
 
-	return identity.Principal{
-		Subject: p.Subject, DisplayName: p.DisplayName, Admin: false, TokenID: "", TokenExpiresAt: time.Time{},
-		TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{}, Kind: identity.Kind(p.Kind),
-		Credential: identity.CredentialAccessToken, JobID: "",
+	return trigger.SaverRecord{
+		Principal: identity.Principal{
+			Subject: p.Subject, DisplayName: p.DisplayName, Admin: false, TokenID: "", TokenExpiresAt: time.Time{},
+			TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{}, Kind: identity.Kind(p.Kind),
+			Credential: identity.CredentialAccessToken, JobID: "",
+		},
+		ID: p.ID,
 	}, nil
 }

@@ -35,21 +35,21 @@ func seedBackupTriggers(t *testing.T, s BackupStore, acme namespace.Namespace) {
 	for _, tr := range []*trigger.Trigger{
 		{
 			ID: "seed-follows", Unit: app, Kind: trigger.KindFollows,
-			Frequency: trigger.Frequency{Preset: "", Cron: ""}, Source: net, Enabled: true, LastSaver: "alice",
+			Frequency: trigger.Frequency{Preset: "", Cron: ""}, Source: net, Enabled: true, LastSaver: "alice", LastSaverID: "prn-alice",
 		},
 		{
 			ID: "seed-schedule", Unit: app, Kind: trigger.KindSchedule,
 			Frequency: trigger.Frequency{Preset: cron.PresetDaily, Cron: ""}, Source: none, Enabled: false,
-			LastSaver: "alice",
+			LastSaver: "alice", LastSaverID: "prn-alice",
 		},
 		{
 			ID: "seed-custom", Unit: net, Kind: trigger.KindSchedule,
 			Frequency: trigger.Frequency{Preset: "", Cron: "30 4 * * 1-5"}, Source: none, Enabled: true,
-			LastSaver: "alice",
+			LastSaver: "alice", LastSaverID: "prn-alice",
 		},
 		{
 			ID: "seed-review", Unit: net, Kind: trigger.KindReviewRequestPush,
-			Frequency: trigger.Frequency{Preset: "", Cron: ""}, Source: none, Enabled: true, LastSaver: "alice",
+			Frequency: trigger.Frequency{Preset: "", Cron: ""}, Source: none, Enabled: true, LastSaver: "alice", LastSaverID: "prn-alice",
 		},
 	} {
 		if err := keeper.Triggers().Put(t.Context(), *tr, acme.Fence(), entry); err != nil {

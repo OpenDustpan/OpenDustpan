@@ -16,7 +16,7 @@ import (
 func triggerOf(id trigger.ID, kind trigger.Kind, unit, source graph.Unit) trigger.Trigger {
 	tr := trigger.Trigger{
 		ID: id, Unit: unit, Kind: kind, Frequency: trigger.Frequency{Preset: "", Cron: ""},
-		Source: graph.Unit{Namespace: "", Tool: "", ID: ""}, Enabled: true, LastSaver: "user:ada",
+		Source: graph.Unit{Namespace: "", Tool: "", ID: ""}, Enabled: true, LastSaver: "user:ada", LastSaverID: "prn-user:ada",
 	}
 
 	if kind == trigger.KindSchedule {

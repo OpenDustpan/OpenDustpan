@@ -47,20 +47,35 @@ type Units interface {
 	Find(ctx context.Context, ns namespace.Name, unitID string) (graph.Unit, error)
 }
 
+// SaverRecord is the answer of a SaverResolver: the current principal and the
+// stable ID of its record. The ID tells a principal from a later principal
+// that reuses the subject.
+type SaverRecord struct {
+	Principal identity.Principal
+	ID        string
+}
+
 // SaverResolver turns the subject of a saver into the current principal. The
 // server backs it with the lookup by subject of the principal record store.
 type SaverResolver interface {
-	// Saver returns the current principal for subject, as the records hold it
-	// now. It returns ErrSaverGone when no principal with the subject exists,
-	// when it was deleted, and when it is disabled. The Admin flag of the
-	// answer is always false: the server never rebuilds the flag of an
-	// administrator from a stored subject, so the grants alone decide.
-	Saver(ctx context.Context, subject string) (identity.Principal, error)
+	// Saver returns the current principal for subject, with the ID of its
+	// record, as the records hold them now. It returns ErrSaverGone when no
+	// principal with the subject exists, when it was deleted, and when it is
+	// disabled. The Admin flag of the principal is always false: the server
+	// never rebuilds the flag of an administrator from a stored subject, so
+	// the grants alone decide.
+	Saver(ctx context.Context, subject string) (SaverRecord, error)
 }
 
 // SaverCheck checks the last saver of a trigger against the actions that the
 // trigger needs. A check reads the current records and grants each time.
 type SaverCheck interface {
+	// SaverID returns the ID of the principal record of the caller with the
+	// subject subject. A manager stores it with the trigger as LastSaverID. It
+	// returns an error that wraps ErrSaverDenied when the principal is
+	// missing, deleted or disabled, for example a bootstrap token with no
+	// record.
+	SaverID(ctx context.Context, subject string) (string, error)
 	// CheckSave checks that the saver of t holds the settings action and the
 	// start action on t.Unit, and, for a follows trigger, unit:read on
 	// t.Source. It returns an error that wraps ErrSaverDenied (and so
@@ -101,6 +116,29 @@ func NewSaverCheck(cfg SaverCheckConfig) (SaverCheck, error) {
 // subject than the one it was asked for.
 var errOtherSubject = errors.New("the resolver answered another subject")
 
+// errOtherPrincipal reports a saver whose subject names a principal other than
+// the one that saved the trigger: the principal was deleted, and a new
+// principal took the subject.
+var errOtherPrincipal = errors.New("the subject of the saver names another principal")
+
+// SaverID implements SaverCheck.
+func (c *saverCheck) SaverID(ctx context.Context, subject string) (string, error) {
+	rec, err := c.resolver.Saver(ctx, subject)
+	if err != nil {
+		return "", fmt.Errorf("%w: saver %s: %w", ErrSaverDenied, quote(subject), err)
+	}
+
+	if rec.Principal.Subject != subject {
+		return "", fmt.Errorf("%w: saver %s: %w", ErrSaverDenied, quote(subject), errOtherSubject)
+	}
+
+	if err := validateSaverID(rec.ID); err != nil {
+		return "", fmt.Errorf("%w: saver %s: %w", ErrSaverDenied, quote(subject), err)
+	}
+
+	return rec.ID, nil
+}
+
 // CheckSave implements SaverCheck.
 func (c *saverCheck) CheckSave(ctx context.Context, t Trigger) error {
 	saver, err := c.checkUnitActions(ctx, t)
@@ -140,10 +178,12 @@ func (c *saverCheck) checkUnitActions(ctx context.Context, t Trigger) (identity.
 		return identity.Principal{}, err
 	}
 
-	saver, err := c.resolver.Saver(ctx, t.LastSaver)
+	rec, err := c.resolver.Saver(ctx, t.LastSaver)
 	if err != nil {
 		return identity.Principal{}, refusal(t, err)
 	}
+
+	saver := rec.Principal
 
 	// Defense in depth: the resolver returns a principal with the Admin flag
 	// off. This line stays so that a resolver that sets the flag, from a
@@ -153,6 +193,14 @@ func (c *saverCheck) checkUnitActions(ctx context.Context, t Trigger) (identity.
 
 	if saver.Subject != t.LastSaver {
 		return identity.Principal{}, refusal(t, errOtherSubject)
+	}
+
+	// Defense in depth: the grants of a subject are not the grants of the
+	// principal that saved the trigger. The check compares the ID of the
+	// record, and does not rely on the resolver, on the subject check above
+	// or on the removal of the triggers of a deleted principal.
+	if rec.ID != t.LastSaverID {
+		return identity.Principal{}, refusal(t, errOtherPrincipal)
 	}
 
 	unit, err := c.units.Object(ctx, t.Unit)

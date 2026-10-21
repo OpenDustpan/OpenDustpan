@@ -102,6 +102,7 @@ func (d *dispatcher) Scheduled(ctx context.Context, ns namespace.Name, id ID, sl
 	return d.start(ctx, &t, startPlan{
 		actor: nil, key: ScheduleKey(id, slot), cause: "schedule slot " + slot.UTC().Format(time.RFC3339),
 		source: job.SourceSchedule, location: noLocation(),
+		request: RequestInfo{Channel: "", SourceIP: "", UserAgent: "", RequestID: ""},
 	})
 }
 
@@ -141,6 +142,7 @@ func (d *dispatcher) Upstream(ctx context.Context, applied Applied) ([]Outcome, 
 		id, err := d.start(ctx, &t, startPlan{
 			actor: nil, key: UpstreamKey(t.ID, applied.Version), cause: "unit " + applied.Unit.ID + " applied",
 			source: job.SourceTrigger, location: noLocation(),
+			request: RequestInfo{Channel: "", SourceIP: "", UserAgent: "", RequestID: ""},
 		})
 		out = append(out, Outcome{Trigger: t.ID, Job: id, Err: err})
 	}
@@ -155,9 +157,16 @@ func (d *dispatcher) Manual(ctx context.Context, actor job.Actor, req ManualRequ
 		return "", err
 	}
 
+	// The key of the caller wins, so a retry across a minute boundary gives the
+	// same job. Without one, the key holds the minute of the request.
+	key := req.IdempotencyKey
+	if key == "" {
+		key = ManualKey(req.Trigger, actor.Principal.Subject, req.Now)
+	}
+
 	return d.start(ctx, &t, startPlan{
-		actor: &actor, key: ManualKey(req.Trigger, actor.Principal.Subject, req.Now),
-		cause: "manual: " + req.Reason, source: "", location: req.Location,
+		actor: &actor, key: key, cause: "manual: " + req.Reason, source: "", location: req.Location,
+		request: req.Request,
 	})
 }
 
@@ -189,6 +198,7 @@ type startPlan struct {
 	cause    string
 	source   job.SourceKind
 	location job.Location
+	request  RequestInfo
 }
 
 // noLocation returns the zero code location: the plan takes the location of
@@ -214,13 +224,13 @@ func (d *dispatcher) start(ctx context.Context, t *Trigger, p startPlan) (job.ID
 
 	err = d.savers.CheckStart(ctx, *t)
 	if err != nil {
-		return "", d.refuse(ctx, t, &actor, err)
+		return "", d.refuse(ctx, t, &actor, &p.request, err)
 	}
 
 	id, err := d.starter.StartPlan(ctx, actor, t.Unit, PlanRequest{
 		Trigger: t.ID, Kind: t.Kind, IdempotencyKey: p.key,
 		Reason: fmt.Sprintf("trigger %s (%s): %s", t.ID, t.Kind, p.cause), Source: p.source, Saver: t.LastSaver,
-		Location: p.location,
+		Location: p.location, Request: p.request,
 	})
 	if err != nil {
 		return "", fmt.Errorf("start the plan of trigger %s: %w", t.ID, err)
@@ -247,14 +257,14 @@ func (d *dispatcher) actorOf(t *Trigger, given *job.Actor) (job.Actor, error) {
 // refuse writes the audit entry of a refused start and returns the error of
 // the refusal. A failure to write the entry does not let the start through: the
 // returned error holds both causes.
-func (d *dispatcher) refuse(ctx context.Context, t *Trigger, actor *job.Actor, cause error) error {
+func (d *dispatcher) refuse(ctx context.Context, t *Trigger, actor *job.Actor, req *RequestInfo, cause error) error {
 	if !errors.Is(cause, ErrSaverDenied) {
 		// A failure of a port: the start fails closed with no entry, because
 		// the check decided nothing about the saver.
 		return fmt.Errorf("trigger %s: %w", t.ID, cause)
 	}
 
-	err := d.recordDenial(ctx, t, actor)
+	err := d.recordDenial(ctx, t, actor, req)
 	if err != nil {
 		return errors.Join(cause, fmt.Errorf("audit the refusal of trigger %s: %w", t.ID, err))
 	}
@@ -264,7 +274,7 @@ func (d *dispatcher) refuse(ctx context.Context, t *Trigger, actor *job.Actor, c
 
 // recordDenial appends the entry of a start that the saver check refused. It
 // names the trigger and its saver, and holds no text of the cause.
-func (d *dispatcher) recordDenial(ctx context.Context, t *Trigger, actor *job.Actor) error {
+func (d *dispatcher) recordDenial(ctx context.Context, t *Trigger, actor *job.Actor, req *RequestInfo) error {
 	fence, err := d.fences.Fence(ctx, t.Unit.Namespace)
 	if err != nil {
 		return fmt.Errorf("fence of %s: %w", t.Unit.Namespace, err)
@@ -285,8 +295,8 @@ func (d *dispatcher) recordDenial(ctx context.Context, t *Trigger, actor *job.Ac
 			{Key: changeTrigger, Old: nil, New: string(t.ID), Layer: "", TakesEffect: ""},
 			{Key: "trigger-saver", Old: nil, New: t.LastSaver, Layer: "", TakesEffect: ""},
 		},
-		SourceIP: "", UserAgent: "", Channel: audit.ChannelAPI, Kind: audit.KindChange,
-		Outcome: audit.OutcomeDenied, RequestID: "", ObjectID: t.Unit.ID, PrevHash: "", Hash: "", Sequence: 0,
+		SourceIP: req.SourceIP, UserAgent: req.UserAgent, Channel: channelOf(req), Kind: audit.KindChange,
+		Outcome: audit.OutcomeDenied, RequestID: req.RequestID, ObjectID: t.Unit.ID, PrevHash: "", Hash: "", Sequence: 0,
 		FenceVersion: 0, PrincipalKind: string(actor.Principal.Kind), JobID: "",
 		Reason: "the last saver of the trigger no longer holds the actions of a start",
 	})
@@ -295,4 +305,14 @@ func (d *dispatcher) recordDenial(ctx context.Context, t *Trigger, actor *job.Ac
 	}
 
 	return nil
+}
+
+// channelOf returns the audit channel of req, and the API channel when the
+// request names none.
+func channelOf(req *RequestInfo) audit.Channel {
+	if req.Channel == "" {
+		return audit.ChannelAPI
+	}
+
+	return req.Channel
 }

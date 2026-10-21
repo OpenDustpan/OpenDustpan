@@ -46,6 +46,9 @@ type Store interface {
 	// transactions retries a serialization failure inside Put, so the caller
 	// sees only nil or ErrCycle, and never a serialization error.
 	//
+	// A stored follows trigger that fails Validate takes no part in the check
+	// for a loop, because no plan starts for it. It does not make Put fail.
+	//
 	// On every error the store changes nothing. Put does not check access. The
 	// caller checks the actions on the unit, and on the source unit of a
 	// follows trigger.
@@ -54,6 +57,13 @@ type Store interface {
 	// returns ErrInvalid for an ID or a namespace that fails validation. Get
 	// does not check access.
 	Get(ctx context.Context, ns namespace.Name, id ID) (Trigger, error)
+	// Stored returns the trigger id of the namespace ns as the row holds it,
+	// with no check of the rules of a trigger. Only a delete uses it: Get
+	// refuses a row that fails its checks, and such a row must still be found
+	// to be removed. The caller treats every field as untrusted. It returns
+	// ErrNotFound for an unknown trigger and ErrInvalid for an ID or a
+	// namespace that fails validation. Stored does not check access.
+	Stored(ctx context.Context, ns namespace.Name, id ID) (Trigger, error)
 	// List returns the triggers of unit, ordered by ID. A unit with no trigger
 	// gives an empty list and no error. It returns ErrInvalid for a unit that
 	// fails validation.
@@ -63,8 +73,9 @@ type Store interface {
 	// error. It returns ErrInvalid for a unit that fails validation.
 	Followers(ctx context.Context, source graph.Unit) ([]Trigger, error)
 	// Delete removes the trigger id of the namespace ns and appends the audit
-	// entry e in the transaction. It returns ErrNotFound for an unknown
-	// trigger, ErrInvalid, and namespace.ErrFenced. The purge of a unit calls
+	// entry e in the transaction. It removes a row that fails its checks too.
+	// It returns ErrNotFound for an unknown trigger, ErrInvalid, and
+	// namespace.ErrFenced. The purge of a unit calls
 	// it for each trigger of the unit, and for each trigger that follows the
 	// unit.
 	Delete(ctx context.Context, ns namespace.Name, id ID, fence namespace.Fence, e audit.Entry) error
@@ -97,6 +108,9 @@ type PlanRequest struct {
 	// carries a location, because the namespace service principal holds no
 	// action for one.
 	Location job.Location
+	// Request describes the request of a manual fire, for the audit entry of the
+	// job start. It is the zero value for a start that no person makes.
+	Request RequestInfo
 }
 
 // Starter starts one plan job of a unit through the job service. It is the
@@ -178,8 +192,11 @@ type Dispatcher interface {
 	Upstream(ctx context.Context, applied Applied) ([]Outcome, error)
 	// Manual starts the plan of a trigger now, for the principal of actor. A
 	// person uses it to test a trigger. The idempotency key is
-	// ManualKey(req.Trigger, actor, req.Now), so a double click gives one job
-	// and two people who fire one trigger in one minute give two. It
+	// req.IdempotencyKey when the caller sent one. Else it is
+	// ManualKey(req.Trigger, actor, req.Now), so a double click inside one
+	// minute gives one job and two people who fire one trigger in one minute
+	// give two. A double click across a minute boundary gives two jobs, unless
+	// the caller sent a key. It
 	// returns ErrNotFound, ErrDisabled, ErrInvalid, and the errors of
 	// Starter.StartPlan.
 	Manual(ctx context.Context, actor job.Actor, req ManualRequest) (job.ID, error)
@@ -198,6 +215,11 @@ type ManualRequest struct {
 	// Location is the code location of the plan, or the zero value. The job
 	// service checks the extra action of a location for the caller.
 	Location job.Location
+	// IdempotencyKey is the key that the caller sent, or empty. A key that the
+	// job service refuses fails the start.
+	IdempotencyKey string
+	// Request describes the request, for the audit entry of the job start.
+	Request RequestInfo
 }
 
 // Applied is the event that the source of a follows trigger has applied. The

@@ -34,8 +34,8 @@ func (f namespaceFences) Fence(ctx context.Context, ns namespace.Name) (namespac
 // the queries of the store do.
 const insertTriggerSQL = `INSERT INTO triggers (
     namespace_id, id, unit_tool, unit_id, kind, preset, cron, source_namespace, source_tool, source_unit_id, enabled,
-    last_saver_subject, created_at_ms, updated_at_ms
-) SELECT n.id, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13 FROM namespaces AS n WHERE n.name = $14`
+    last_saver_subject, last_saver_id, created_at_ms, updated_at_ms
+) SELECT n.id, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14 FROM namespaces AS n WHERE n.name = $15`
 
 // plantTrigger writes tr with raw SQL. It runs no check of the rules of a
 // trigger and no check for a loop.
@@ -45,8 +45,8 @@ func plantTrigger(t *testing.T, s *postgres.Store, tr trigger.Trigger) {
 	r := triggerstore.RowOf(tr, 1)
 
 	err := s.ExecForTest(t.Context(), insertTriggerSQL, r.ID, r.UnitTool, r.UnitID, r.Kind, r.Preset, r.Cron,
-		r.SourceNamespace, r.SourceTool, r.SourceUnitID, r.Enabled, r.LastSaverSubject, r.CreatedAtMs, r.UpdatedAtMs,
-		r.Namespace)
+		r.SourceNamespace, r.SourceTool, r.SourceUnitID, r.Enabled, r.LastSaverSubject, r.LastSaverID,
+		r.CreatedAtMs, r.UpdatedAtMs, r.Namespace)
 	if err != nil {
 		t.Fatalf("plant trigger %s: %v", tr.ID, err)
 	}
@@ -128,6 +128,7 @@ func corruptTriggerRows() []corruptTriggerRow {
 			"s1",
 		},
 		{"empty saver", `UPDATE triggers SET last_saver_subject = '' WHERE id = 's1'`, nil, "s1"},
+		{"empty saver ID", `UPDATE triggers SET last_saver_id = '' WHERE id = 's1'`, nil, "s1"},
 		{
 			"saver is a service principal",
 			`UPDATE triggers SET last_saver_subject = 'system:namespace-service:acme' WHERE id = 's1'`, nil, "s1",
@@ -216,10 +217,10 @@ func checkCorruptRow(t *testing.T, s *postgres.Store, tc corruptTriggerRow) {
 	}
 }
 
-// TestTriggerPutFailsOnACorruptFollowsRow checks that a save does not pass over
-// a follows row that cannot be read: a graph with a hole proves no absence of a
-// loop.
-func TestTriggerPutFailsOnACorruptFollowsRow(t *testing.T) {
+// TestTriggerPutIgnoresACorruptFollowsRow checks that a save does not fail on a
+// follows row that cannot be read, that the row takes no part in the loop check
+// because it starts no plan, and that a delete removes the row.
+func TestTriggerPutIgnoresACorruptFollowsRow(t *testing.T) {
 	t.Parallel()
 
 	base := os.Getenv(envURL)
@@ -240,9 +241,16 @@ func TestTriggerPutFailsOnACorruptFollowsRow(t *testing.T) {
 		t.Fatalf("change the row: %v", err)
 	}
 
-	err := store.Put(t.Context(), triggerOf("f2", trigger.KindFollows, c, b), fence, triggerEntry())
-	if !errors.Is(err, triggerstore.ErrCorrupt) {
-		t.Fatalf("put = %v, want ErrCorrupt", err)
+	// The row is no edge: c follows b, and b follows a only through the bad row.
+	putTrigger(t, store, fence, triggerOf("f2", trigger.KindFollows, c, b))
+
+	// Get and List still fail closed for the row, and Stored serves it.
+	if _, err := store.Get(t.Context(), "acme", "f1"); !errors.Is(err, triggerstore.ErrCorrupt) {
+		t.Fatalf("get = %v, want ErrCorrupt", err)
+	}
+
+	if _, err := store.Stored(t.Context(), "acme", "f1"); err != nil {
+		t.Fatalf("stored: %v", err)
 	}
 
 	// A delete removes the bad row, so an operator can clean up.
@@ -250,7 +258,9 @@ func TestTriggerPutFailsOnACorruptFollowsRow(t *testing.T) {
 		t.Fatalf("delete of a corrupt row: %v", err)
 	}
 
-	putTrigger(t, store, fence, triggerOf("f2", trigger.KindFollows, c, b))
+	if _, err := store.Stored(t.Context(), "acme", "f1"); !errors.Is(err, trigger.ErrNotFound) {
+		t.Fatalf("stored after the delete = %v, want ErrNotFound", err)
+	}
 }
 
 // TestTriggerRowsMatchTheMigration checks that the CHECK constraints refuse a

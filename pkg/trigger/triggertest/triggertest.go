@@ -219,7 +219,7 @@ func followsTrigger(id trigger.ID, u, src graph.Unit) trigger.Trigger {
 		Frequency: noFrequency(),
 		Source:    src,
 		Enabled:   true,
-		LastSaver: ada,
+		LastSaver: ada, LastSaverID: SaverIDOf(ada),
 	}
 }
 
@@ -228,7 +228,7 @@ func scheduleTrigger(id trigger.ID, u graph.Unit) trigger.Trigger {
 	return trigger.Trigger{
 		ID: id, Unit: u, Kind: trigger.KindSchedule,
 		Frequency: trigger.Frequency{Preset: cron.PresetDaily, Cron: ""}, Source: noUnit(), Enabled: true,
-		LastSaver: ada,
+		LastSaver: ada, LastSaverID: SaverIDOf(ada),
 	}
 }
 
@@ -241,7 +241,7 @@ func reviewTrigger(id trigger.ID, u graph.Unit) trigger.Trigger {
 		Frequency: noFrequency(),
 		Source:    noUnit(),
 		Enabled:   true,
-		LastSaver: ada,
+		LastSaver: ada, LastSaverID: SaverIDOf(ada),
 	}
 }
 

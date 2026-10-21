@@ -24,14 +24,14 @@ func follows(id trigger.ID, unitID, sourceID string) trigger.Trigger {
 		Frequency: trigger.Frequency{Preset: "", Cron: ""},
 		Source:    unit(sourceID),
 		Enabled:   true,
-		LastSaver: "user:ada",
+		LastSaver: "user:ada", LastSaverID: "prn-user:ada",
 	}
 }
 
 func schedule(id trigger.ID, f trigger.Frequency) trigger.Trigger {
 	return trigger.Trigger{
 		ID: id, Unit: unit("a"), Kind: trigger.KindSchedule, Frequency: f,
-		Source: graph.Unit{Namespace: "", Tool: "", ID: ""}, Enabled: true, LastSaver: "user:ada",
+		Source: graph.Unit{Namespace: "", Tool: "", ID: ""}, Enabled: true, LastSaver: "user:ada", LastSaverID: "prn-user:ada",
 	}
 }
 
@@ -154,7 +154,7 @@ func TestTriggerValidate(t *testing.T) {
 			},
 			Source:    graph.Unit{Namespace: "", Tool: "", ID: ""},
 			Enabled:   false,
-			LastSaver: "user:ada",
+			LastSaver: "user:ada", LastSaverID: "prn-user:ada",
 		},
 	}
 
@@ -198,12 +198,12 @@ func TestTriggerValidate(t *testing.T) {
 		"review with a freq": {
 			ID: "r1", Unit: unit("a"), Kind: trigger.KindReviewRequestPush,
 			Frequency: trigger.Frequency{Preset: cron.PresetDaily, Cron: ""}, Source: graph.Unit{Namespace: "", Tool: "", ID: ""}, Enabled: true,
-			LastSaver: "user:ada",
+			LastSaver: "user:ada", LastSaverID: "prn-user:ada",
 		},
 		"review with a source": {
 			ID: "r1", Unit: unit("a"), Kind: trigger.KindReviewRequestPush,
 			Frequency: trigger.Frequency{Preset: "", Cron: ""}, Source: unit("b"), Enabled: true,
-			LastSaver: "user:ada",
+			LastSaver: "user:ada", LastSaverID: "prn-user:ada",
 		},
 		"no saver":               bad(func(tr *trigger.Trigger) { tr.LastSaver = "" }),
 		"long saver":             bad(func(tr *trigger.Trigger) { tr.LastSaver = strings.Repeat("a", trigger.MaxSaverBytes+1) }),

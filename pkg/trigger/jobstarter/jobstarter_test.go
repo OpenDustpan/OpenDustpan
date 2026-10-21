@@ -95,8 +95,15 @@ func plan(source job.SourceKind) trigger.PlanRequest {
 	return trigger.PlanRequest{
 		Trigger: "trg-1", Kind: trigger.KindSchedule, IdempotencyKey: "trigger:trg-1:schedule:1",
 		Reason: "trigger trg-1 (schedule): schedule slot", Source: source, Saver: "user:ada",
-		Location: noLocation(),
+		Location: noLocation(), Request: noInfo(),
 	}
+}
+
+// noInfo returns request facts with no field set.
+func noInfo() trigger.RequestInfo {
+	var i trigger.RequestInfo
+
+	return i
 }
 
 func TestNewNeedsPorts(t *testing.T) {
@@ -236,5 +243,42 @@ func TestStartPlanErrors(t *testing.T) {
 				t.Errorf("job service calls = %d, want %d", tt.jobs.calls, tt.calls)
 			}
 		})
+	}
+}
+
+// TestStartPlanRequestFacts proves the facts of the request of a manual fire
+// reach the job request, for the audit entry of the start, and that a start
+// that no person makes carries none.
+func TestStartPlanRequestFacts(t *testing.T) {
+	t.Parallel()
+
+	jobs := newJobs(nil)
+
+	s, err := jobstarter.New(jobs, newUnits(nil))
+	if err != nil {
+		t.Fatalf("New = %v", err)
+	}
+
+	req := plan("")
+	req.Request = trigger.RequestInfo{
+		Channel: "api", SourceIP: "192.0.2.7", UserAgent: "probe-agent", RequestID: "req-1",
+	}
+
+	if _, err := s.StartPlan(t.Context(), noActor(), testUnit(), req); err != nil {
+		t.Fatalf("StartPlan = %v", err)
+	}
+
+	got := jobs.req
+	if got.Channel != "api" || got.SourceIP != "192.0.2.7" || got.UserAgent != "probe-agent" || got.RequestID != "req-1" {
+		t.Errorf("job request = %+v, want the facts of the request", got)
+	}
+
+	if _, err := s.StartPlan(t.Context(), noActor(), testUnit(), plan(job.SourceTrigger)); err != nil {
+		t.Fatalf("StartPlan = %v", err)
+	}
+
+	got = jobs.req
+	if got.Channel != "" || got.SourceIP != "" || got.UserAgent != "" || got.RequestID != "" {
+		t.Errorf("job request = %+v, want no facts for a start that no person makes", got)
 	}
 }

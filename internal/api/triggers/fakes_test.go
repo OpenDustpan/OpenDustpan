@@ -175,6 +175,23 @@ func (s *fakeStore) Get(_ context.Context, _ namespace.Name, id trigger.ID) (tri
 		return trigger.Trigger{}, trigger.ErrNotFound
 	}
 
+	// Like an adapter, Get does not serve a row that fails its checks.
+	if err := t.Validate(); err != nil {
+		return trigger.Trigger{}, err
+	}
+
+	return t, nil
+}
+
+func (s *fakeStore) Stored(_ context.Context, _ namespace.Name, id trigger.ID) (trigger.Trigger, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	t, ok := s.triggers[id]
+	if !ok {
+		return trigger.Trigger{}, trigger.ErrNotFound
+	}
+
 	return t, nil
 }
 
@@ -242,6 +259,10 @@ func (s *fakeStore) plant(t trigger.Trigger) {
 
 // savers answers the one error for every check, nil for an allowed saver.
 type savers struct{ err error }
+
+func (s *savers) SaverID(_ context.Context, subject string) (string, error) {
+	return "prn-" + subject, nil
+}
 
 func (s *savers) CheckSave(context.Context, trigger.Trigger) error  { return s.err }
 func (s *savers) CheckStart(context.Context, trigger.Trigger) error { return s.err }

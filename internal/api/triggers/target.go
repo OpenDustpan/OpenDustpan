@@ -1,6 +1,7 @@
 package triggers
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
@@ -89,6 +90,20 @@ func (h *Handler) resolveUnit(r *http.Request) (target, error) {
 // An invalid ID, an unknown trigger and a trigger of another unit answer
 // errNotFound alike.
 func (h *Handler) resolveTrigger(r *http.Request) (target, error) {
+	return h.resolveWith(r, h.store.Get)
+}
+
+// resolveStoredTrigger is resolveTrigger for a delete. It reads the row as the
+// store holds it, so that a row that fails its checks can still be removed.
+// Every other route reads with Get, which refuses such a row.
+func (h *Handler) resolveStoredTrigger(r *http.Request) (target, error) {
+	return h.resolveWith(r, h.store.Stored)
+}
+
+// resolveWith finds the trigger of the path with read.
+func (h *Handler) resolveWith(
+	r *http.Request, read func(context.Context, namespace.Name, trigger.ID) (trigger.Trigger, error),
+) (target, error) {
 	t, err := h.resolveUnit(r)
 	if err != nil {
 		return target{}, err
@@ -99,7 +114,7 @@ func (h *Handler) resolveTrigger(r *http.Request) (target, error) {
 		return target{}, errNotFound
 	}
 
-	got, err := h.store.Get(r.Context(), t.ns.Name, id)
+	got, err := read(r.Context(), t.ns.Name, id)
 	if errors.Is(err, trigger.ErrNotFound) {
 		return target{}, errNotFound
 	}
@@ -124,6 +139,6 @@ func noTrigger() trigger.Trigger {
 	return trigger.Trigger{
 		ID: "", Unit: graph.Unit{Namespace: "", Tool: "", ID: ""}, Kind: "",
 		Frequency: trigger.Frequency{Preset: "", Cron: ""}, Source: graph.Unit{Namespace: "", Tool: "", ID: ""},
-		Enabled: false, LastSaver: "",
+		Enabled: false, LastSaver: "", LastSaverID: "",
 	}
 }

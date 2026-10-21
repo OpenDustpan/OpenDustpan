@@ -19,7 +19,8 @@ func pgCopyTriggerTables() []pgCopyTable {
 			table: "triggers",
 			columns: []string{
 				pgColNamespaceID, "id", "unit_tool", pgColUnitID, pgColKind, "preset", "cron", "source_namespace",
-				"source_tool", "source_unit_id", "enabled", "last_saver_subject", pgColCreatedAtMs, pgColUpdatedAtMs,
+				"source_tool", "source_unit_id", "enabled", "last_saver_subject",
+				"last_saver_id", pgColCreatedAtMs, pgColUpdatedAtMs,
 			},
 			orderBy: []string{pgColNamespaceID, "id"},
 		},
@@ -35,7 +36,8 @@ func pgCopyTriggerTables() []pgCopyTable {
 // stays so that a bad row fails the restore and does not wait for a reader.
 func checkStagedTriggers(ctx context.Context, pool *pgxpool.Pool, staging string) error {
 	query := "SELECT n.name, t.id, t.unit_tool, t.unit_id, t.kind, t.preset, t.cron, t.source_namespace, " +
-		"t.source_tool, t.source_unit_id, t.enabled, t.last_saver_subject, t.created_at_ms, t.updated_at_ms FROM " +
+		"t.source_tool, t.source_unit_id, t.enabled, t.last_saver_subject, t.last_saver_id, t.created_at_ms, " +
+		"t.updated_at_ms FROM " +
 		stagingTable(staging, "triggers") + " AS t LEFT JOIN " + stagingTable(staging, "namespaces") +
 		" AS n ON n.id = t.namespace_id"
 
@@ -76,7 +78,7 @@ func scanStagedTrigger(rows pgx.Rows) (triggerstore.Row, error) {
 	scanErr := rows.Scan(
 		&namespace, &row.ID, &row.UnitTool, &row.UnitID, &row.Kind, &row.Preset, &row.Cron,
 		&row.SourceNamespace, &row.SourceTool, &row.SourceUnitID, &row.Enabled, &row.LastSaverSubject,
-		&row.CreatedAtMs, &row.UpdatedAtMs,
+		&row.LastSaverID, &row.CreatedAtMs, &row.UpdatedAtMs,
 	)
 	if scanErr != nil {
 		return row, fmt.Errorf("read staged triggers: %w", backup.ErrExportRead)

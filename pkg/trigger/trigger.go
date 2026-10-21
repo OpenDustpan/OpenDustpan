@@ -175,6 +175,10 @@ func (f Frequency) Expression(unit graph.Unit) (string, error) {
 // a trigger whose saver is the subject of a namespace service principal,
 // does not validate.
 //
+// LastSaverID is the stable ID of the principal record of the last saver. The
+// subject of a deleted principal can name a new principal later, so a start
+// compares the ID too. A trigger with no ID does not validate.
+//
 // A disabled trigger keeps its rule and starts nothing.
 type Trigger struct {
 	ID        ID
@@ -184,6 +188,8 @@ type Trigger struct {
 	Source    graph.Unit
 	Enabled   bool
 	LastSaver string
+	// LastSaverID is the ID of the principal record of LastSaver.
+	LastSaverID string
 }
 
 // Validate returns an error that wraps ErrInvalid when t is not a valid
@@ -200,6 +206,10 @@ func (t Trigger) Validate() error {
 	}
 
 	if err := validateSaver(t.LastSaver); err != nil {
+		return err
+	}
+
+	if err := validateSaverID(t.LastSaverID); err != nil {
 		return err
 	}
 
@@ -253,6 +263,23 @@ func validateSaver(saver string) error {
 		return fmt.Errorf("%w: the last saver has a byte that is not allowed", ErrInvalid)
 	case identity.IsNamespaceServiceSubject(saver):
 		return fmt.Errorf("%w: a namespace service principal cannot be the last saver", ErrInvalid)
+	default:
+		return nil
+	}
+}
+
+// validateSaverID checks the principal ID of a last saver. Defense in depth:
+// the manager sets it from the record of the caller, and the store checks the
+// value again, so a row that another version wrote cannot name an ID that the
+// rules refuse.
+func validateSaverID(id string) error {
+	switch {
+	case id == "":
+		return fmt.Errorf("%w: a trigger has the principal ID of its last saver", ErrInvalid)
+	case len(id) > MaxSaverBytes:
+		return fmt.Errorf("%w: the principal ID of the last saver has at most %d bytes", ErrInvalid, MaxSaverBytes)
+	case !utf8.ValidString(id) || strings.ContainsFunc(id, audit.IsHiddenRune):
+		return fmt.Errorf("%w: the principal ID of the last saver has a byte that is not allowed", ErrInvalid)
 	default:
 		return nil
 	}

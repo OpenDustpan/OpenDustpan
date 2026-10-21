@@ -96,6 +96,20 @@ func TestSaverCheck(t *testing.T) {
 			trigger: savedFollows(), wantSave: trigger.ErrSaverDenied, wantStart: trigger.ErrSaverDenied,
 		},
 		{
+			name: "a subject that a new principal reuses",
+			setup: func(r *fakeResolver, _ *fakeAuthz, _ *fakeUnits) {
+				r.ids[ada] = "prn-new-" + ada
+			},
+			trigger: savedFollows(), wantSave: trigger.ErrSaverDenied, wantStart: trigger.ErrSaverDenied,
+		},
+		{
+			name: "a trigger with no saver ID",
+			setup: func(*fakeResolver, *fakeAuthz, *fakeUnits) {
+			},
+			trigger:  func() trigger.Trigger { tr := savedFollows(); tr.LastSaverID = ""; return tr }(),
+			wantSave: trigger.ErrInvalid, wantStart: trigger.ErrInvalid,
+		},
+		{
 			name: "an administrator flag from the resolver counts for nothing",
 			setup: func(r *fakeResolver, a *fakeAuthz, _ *fakeUnits) {
 				admin := person(ada)
@@ -175,6 +189,48 @@ func TestSaverCheck(t *testing.T) {
 				if err := c.CheckStart(t.Context(), tt.trigger); !errors.Is(err, identity.ErrDenied) {
 					t.Errorf("CheckStart = %v, want it to wrap identity.ErrDenied", err)
 				}
+			}
+		})
+	}
+}
+
+func TestSaverID(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		setup func(r *fakeResolver)
+		want  string
+		err   error
+	}{
+		{"the ID of the record", func(*fakeResolver) {}, saverID(ada), nil},
+		{"a saver that is missing", func(r *fakeResolver) { delete(r.people, ada) }, "", trigger.ErrSaverDenied},
+		{"a saver that is disabled", func(r *fakeResolver) { r.errs[ada] = trigger.ErrSaverGone }, "", trigger.ErrSaverDenied},
+		{"a resolver that fails", func(r *fakeResolver) { r.errs[ada] = errDBDown }, "", trigger.ErrSaverDenied},
+		{"another subject", func(r *fakeResolver) { r.people[ada] = person(grace) }, "", trigger.ErrSaverDenied},
+		{"a record with no ID", func(r *fakeResolver) { r.ids[ada] = "" }, "", trigger.ErrSaverDenied},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			r := newResolver()
+			r.people[ada] = person(ada)
+			tt.setup(r)
+
+			c, err := trigger.NewSaverCheck(trigger.SaverCheckConfig{Resolver: r, Authorizer: newAuthz(), Units: newUnits()})
+			if err != nil {
+				t.Fatalf("NewSaverCheck = %v", err)
+			}
+
+			got, err := c.SaverID(t.Context(), ada)
+			if got != tt.want {
+				t.Errorf("SaverID = %q, want %q", got, tt.want)
+			}
+
+			if tt.err == nil && err != nil || tt.err != nil && !errors.Is(err, tt.err) {
+				t.Errorf("SaverID error = %v, want %v", err, tt.err)
 			}
 		})
 	}

@@ -94,7 +94,7 @@ func (h *Handler) Operations() []apidesc.Operation {
 			Actions:          actions,
 			NamespaceActions: namespaceActions,
 			Public:           route.Scope == ScopePublic,
-			IdempotencyKey:   false,
+			IdempotencyKey:   route.IdempotencyKey,
 		})
 	}
 

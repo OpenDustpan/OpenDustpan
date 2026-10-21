@@ -36,11 +36,11 @@ func seedTriggers(t *testing.T, s *Store) {
 	for _, tr := range []*trigger.Trigger{
 		{
 			ID: "f1", Unit: b, Kind: trigger.KindFollows, Frequency: trigger.Frequency{Preset: "", Cron: ""},
-			Source: a, Enabled: true, LastSaver: "user:ada",
+			Source: a, Enabled: true, LastSaver: "user:ada", LastSaverID: "prn-user:ada",
 		},
 		{
 			ID: "s1", Unit: b, Kind: trigger.KindSchedule, Frequency: trigger.Frequency{Preset: cron.PresetDaily, Cron: ""},
-			Source: none, Enabled: true, LastSaver: "user:ada",
+			Source: none, Enabled: true, LastSaver: "user:ada", LastSaverID: "prn-user:ada",
 		},
 	} {
 		if err := s.Triggers().Put(t.Context(), *tr, ns.Fence(), triggerAuditEntry()); err != nil {
@@ -75,6 +75,7 @@ func TestCheckStagedTriggers(t *testing.T) {
 			`UPDATE triggers SET source_namespace = 'acme', source_tool = 'opentofu', source_unit_id = 'a' WHERE id = 's1'`,
 		},
 		{"empty saver", `UPDATE triggers SET last_saver_subject = '' WHERE id = 's1'`},
+		{"empty saver ID", `UPDATE triggers SET last_saver_id = '' WHERE id = 's1'`},
 		{"saver is a service principal", `UPDATE triggers SET last_saver_subject = 'system:namespace-service:acme'`},
 		{"source in another namespace", `UPDATE triggers SET source_namespace = 'other' WHERE id = 'f1'`},
 		{"follows trigger with no source", `UPDATE triggers SET source_namespace = '', source_tool = '', source_unit_id = '' WHERE id = 'f1'`},

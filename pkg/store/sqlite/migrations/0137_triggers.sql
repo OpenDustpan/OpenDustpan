@@ -8,7 +8,9 @@
 -- its namespace on its own: the rules refuse a source of another namespace, and
 -- only a row of another version can state such a value, so a read can refuse
 -- it. last_saver_subject is the subject of the principal that saved the
--- trigger last. The flag enabled is 0 or 1.
+-- trigger last, and last_saver_id is the ID of that principal's record. The ID
+-- tells a principal from a later principal that reuses the subject. The flag
+-- enabled is 0 or 1.
 CREATE TABLE triggers (
     namespace_id       TEXT    NOT NULL REFERENCES namespaces (id),
     id                 TEXT    NOT NULL,
@@ -22,6 +24,7 @@ CREATE TABLE triggers (
     source_unit_id     TEXT    NOT NULL,
     enabled            INTEGER NOT NULL CHECK (enabled IN (0, 1)),
     last_saver_subject TEXT    NOT NULL,
+    last_saver_id      TEXT    NOT NULL,
     created_at_ms      INTEGER NOT NULL,
     updated_at_ms      INTEGER NOT NULL,
     PRIMARY KEY (namespace_id, id)

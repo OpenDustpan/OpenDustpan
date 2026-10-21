@@ -39,6 +39,8 @@ func storeCases() []suiteCase {
 		{"store: the last saver round trips and a replace sets the new saver", caseLastSaver},
 		{"store: put refuses a saver that is empty, too long, hidden, not UTF-8 or a service principal", casePutSaver},
 		{"store: put refuses an audit entry of another namespace and an invalid entry", casePutAuditEntry},
+		{"store: put refuses a saver ID that is empty, too long, hidden or not UTF-8", casePutSaverID},
+		{"store: a stored row that fails its checks takes no part in the loop check and can be deleted", caseCorruptRow},
 	}
 }
 
@@ -564,7 +566,7 @@ func caseLastSaver(t *testing.T, h Harness, _ *Recorder) {
 
 	// A replace by another person makes that person the last saver.
 	changed := scheduleTrigger("s1", a)
-	changed.LastSaver = grace
+	changed.LastSaver, changed.LastSaverID = grace, SaverIDOf(grace)
 	changed.Enabled = false
 
 	must(t, "replace", h.Store.Put(t.Context(), changed, fence, auditOf("trigger:put")))
@@ -693,4 +695,83 @@ func triggerIDs(triggers []trigger.Trigger) []trigger.ID {
 	}
 
 	return ids
+}
+
+func casePutSaverID(t *testing.T, h Harness, _ *Recorder) {
+	t.Helper()
+
+	fence := h.Namespace(t, string(acme))
+	a := unit(acme, "a")
+
+	for name, id := range map[string]string{
+		"empty":                "",
+		"too long":             strings.Repeat("s", trigger.MaxSaverBytes+1),
+		"a newline":            "prn-ada\nroot",
+		"a bidirectional mark": "prn-ada\u202e",
+		"not UTF-8":            "prn-\xff",
+	} {
+		tr := scheduleTrigger("s1", a)
+		tr.LastSaverID = id
+
+		wantErr(
+			t,
+			"saver ID that is "+name,
+			h.Store.Put(t.Context(), tr, fence, auditOf("trigger:put")),
+			trigger.ErrInvalid,
+		)
+	}
+
+	wantErr(t, "get after the refusals", getErr(t, h, acme, "s1"), trigger.ErrNotFound)
+}
+
+func caseCorruptRow(t *testing.T, h Harness, _ *Recorder) {
+	t.Helper()
+
+	if h.StoreRaw == nil {
+		t.Skip("the harness has no raw store hook")
+	}
+
+	fence := h.Namespace(t, string(acme))
+	a, b, c := unit(acme, "a"), unit(acme, "b"), unit(acme, "c")
+
+	// b follows a, and the row has a frequency that a follows trigger refuses.
+	// A row of another version or a restore can hold it.
+	bad := withFrequency(followsTrigger("bad", b, a), trigger.Frequency{Preset: cron.PresetDaily, Cron: ""}, true)
+	h.StoreRaw(t, bad)
+
+	// Get and List fail closed for the row.
+	wantErr(t, "get of the bad row", getErr(t, h, acme, "bad"), trigger.ErrInvalid)
+
+	_, err := h.Store.List(t.Context(), b)
+	wantErr(t, "list of the unit of the bad row", err, trigger.ErrInvalid)
+
+	// The row starts no plan, so it is no edge: a trigger that would close a
+	// loop through it is saved, and a trigger of another unit is saved.
+	must(
+		t,
+		"put a follows trigger through the bad row",
+		h.Store.Put(t.Context(), followsTrigger("f1", a, b), fence, auditOf("trigger:put")),
+	)
+	must(
+		t,
+		"put an unrelated follows trigger",
+		h.Store.Put(t.Context(), followsTrigger("f2", c, b), fence, auditOf("trigger:put")),
+	)
+
+	// Stored finds the row, and a delete removes it.
+	got, err := h.Store.Stored(t.Context(), acme, "bad")
+	must(t, "stored", err)
+
+	if got.ID != "bad" || got.Unit != b || got.Kind != trigger.KindFollows {
+		t.Errorf("stored = %+v, want the bad row of the unit b", got)
+	}
+
+	must(t, "delete of the bad row", h.Store.Delete(t.Context(), acme, "bad", fence, auditOf("trigger:delete")))
+	wantErr(t, "get after the delete", getErr(t, h, acme, "bad"), trigger.ErrNotFound)
+
+	_, err = h.Store.Stored(t.Context(), acme, "bad")
+	wantErr(t, "stored after the delete", err, trigger.ErrNotFound)
+
+	_, err = h.Store.Stored(t.Context(), acme, "")
+	wantErr(t, "stored of an invalid ID", err, trigger.ErrInvalid)
 }

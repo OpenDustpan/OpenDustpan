@@ -31,8 +31,11 @@ of another namespace than the path, a deleted unit, a trigger that does not exis
 or belongs to another unit, and an ID that is not valid. A caller who lacks
 another action gets 403. A `follows` trigger needs `unit:read` on its source too.
 
-A write with an `Idempotency-Key` header fails with 400 and the code
-`request.idempotency-key-unsupported`: no route of this API takes the key.
+Only the fire route takes an `Idempotency-Key` header. It holds 1 to 255
+printable ASCII characters. Two fires by one person with one key give one job,
+also in two different minutes. The answer does not carry the header
+`Idempotent-Replayed`. A write to any other route with the header fails with 400
+and the code `request.idempotency-key-unsupported`.
 
 ## The trigger document
 
@@ -82,13 +85,14 @@ also has `units`: the units of the loop in order, each with `id`, `tool` and
 | --- | --- | --- |
 | 400 | `request.body-invalid` | The body is not one JSON object with known fields, or is larger than 16 KiB |
 | 400 | `trigger.invalid` | A value fails validation: the kind, the frequency, the source, the reason or the location |
-| 400 | `request.idempotency-key-unsupported` | The request has an `Idempotency-Key` header |
-| 403 | `trigger.saver-denied` | The person who saves or fires has no principal record that holds the actions of a start, or the last saver lost access |
+| 400 | `request.idempotency-key-unsupported` | A route other than the fire route got an `Idempotency-Key` header |
+| 400 | `request.idempotency-key-invalid` | The `Idempotency-Key` header of a fire is not one valid key |
+| 403 | `trigger.saver-denied` | The person who saves or fires has no principal record that holds the actions of a start, or the last saver lost access. A new principal that has the subject of the last saver does not count as the last saver |
 | 403 | | The caller lacks an action, or the stack or workspace to change does not exist |
 | 404 | | The object does not exist or the caller cannot read it |
 | 409 | `trigger.cycle` | The `follows` trigger closes a loop of units |
 | 409 | `trigger.disabled` | A fire of a trigger that is off |
-| 409 | `trigger.fire-conflict` | A second fire within the minute with another reason or location |
+| 409 | `trigger.fire-conflict` | A second fire with the same key, or without a key in the same minute, with another reason or location |
 | 409 | `namespace.fenced` | The namespace moved to another region during the call. Try again. |
 | 409, 422, 429 | `job.frozen`, `job.unsupported`, `job.limit` | The refusal of the job service |
 | 403 | `job.policy-denied`, `job.gate-enforced`, `job.agent-denied` | The refusal of the job service |

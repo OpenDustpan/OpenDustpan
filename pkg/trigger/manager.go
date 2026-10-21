@@ -11,6 +11,7 @@ import (
 	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/graph"
+	"opendustpan.org/opendustpan/pkg/idempotency"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/job"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -224,7 +225,10 @@ func (m *Manager) Delete(
 		return err
 	}
 
-	t, err := m.store.Get(ctx, ns, id)
+	// Stored, not Get: a row that fails its checks must be found to be removed.
+	// The caller still needs the settings action on the unit of the row, and a
+	// row whose unit cannot be found is refused.
+	t, err := m.store.Stored(ctx, ns, id)
 	if err != nil {
 		return fmt.Errorf("trigger %s: %w", quote(string(id)), err)
 	}
@@ -261,6 +265,12 @@ type FireInput struct {
 	// caller. Until the settings of a unit hold a code location, a plan needs
 	// one here.
 	Location job.Location
+	// IdempotencyKey is the key that the caller sent, or empty. Two fires of
+	// one caller with one key give one job. Without a key, two fires in one
+	// minute give one job (ManualKey).
+	IdempotencyKey string
+	// Request describes the request, for the audit entry of the job start.
+	Request RequestInfo
 }
 
 // Fire starts the plan of the trigger id now, as the caller. The job service
@@ -292,6 +302,15 @@ func (m *Manager) Fire(
 		}
 	}
 
+	// Defense in depth: the route parses the header, and the job service checks
+	// the key again. This check stays so that a caller of the manager cannot
+	// put a key that the rules refuse into the job store.
+	if in.IdempotencyKey != "" {
+		if _, err := idempotency.ParseKey(in.IdempotencyKey); err != nil {
+			return "", fmt.Errorf("%w: idempotency key: %w", ErrInvalid, err)
+		}
+	}
+
 	t, err := m.store.Get(ctx, ns, id)
 	if err != nil {
 		return "", fmt.Errorf("trigger %s: %w", quote(string(id)), err)
@@ -306,6 +325,7 @@ func (m *Manager) Fire(
 
 	jobID, err := m.dispatcher.Manual(ctx, actor, ManualRequest{
 		Namespace: ns, Trigger: id, Now: m.now(), Reason: reason, Location: in.Location,
+		IdempotencyKey: in.IdempotencyKey, Request: in.Request,
 	})
 	if err != nil {
 		return "", err
@@ -331,6 +351,14 @@ func (m *Manager) save(ctx context.Context, c *saveCall) (Trigger, error) {
 	}
 
 	t, obj, err := m.build(ctx, c)
+	if err != nil {
+		return Trigger{}, err
+	}
+
+	// The trigger names its saver by subject and by the ID of the principal
+	// record. A caller with no record, for example a bootstrap token, is
+	// refused here: its trigger could never start.
+	t.LastSaverID, err = m.savers.SaverID(ctx, t.LastSaver)
 	if err != nil {
 		return Trigger{}, err
 	}

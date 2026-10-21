@@ -33,6 +33,9 @@ func dispatcherCases() []suiteCase {
 		{"dispatcher: a manual fire passes its code location, and no other start has one", caseStartLocation},
 		{"dispatcher: a saver that lost access gets no start, and the refusal is audited", caseSaverRevoked},
 		{"dispatcher: the check follows the last saver, not the first", caseSaverReplaced},
+		{"dispatcher: a manual fire honors the key of the caller across a minute boundary", caseManualKey},
+		{"dispatcher: a manual fire passes the request to the starter", caseManualRequest},
+		{"dispatcher: a subject that a new principal reuses gets no start", caseSaverReused},
 	}
 }
 
@@ -541,7 +544,7 @@ func caseSaverReplaced(t *testing.T, h Harness, rec *Recorder) {
 	tr := scheduleTrigger("s1", a)
 	must(t, "put", h.Store.Put(t.Context(), tr, fence, auditOf("trigger:put")))
 
-	tr.LastSaver = grace
+	tr.LastSaver, tr.LastSaverID = grace, SaverIDOf(grace)
 	must(t, "replace", h.Store.Put(t.Context(), tr, fence, auditOf("trigger:put")))
 
 	h.Doubles.RevokeSaver(ada)
@@ -604,5 +607,110 @@ func caseInvalidRow(t *testing.T, h Harness, rec *Recorder) {
 
 	if len(rec.Starts()) != 0 {
 		t.Errorf("rows that do not validate started %v", rec.Starts())
+	}
+}
+
+func caseManualKey(t *testing.T, h Harness, rec *Recorder) {
+	t.Helper()
+
+	a := unit(acme, "a")
+	fence := h.Namespace(t, string(acme))
+
+	must(t, "put", h.Store.Put(t.Context(), scheduleTrigger("s1", a), fence, auditOf("trigger:put")))
+
+	actor := ActorOf("user:ada")
+
+	keyed := manual("s1", at(manualMinute))
+	keyed.IdempotencyKey = "click-1"
+
+	first, err := h.Dispatcher.Manual(t.Context(), actor, keyed)
+	must(t, "manual with a key", err)
+
+	// The retry comes in the next minute, and the key still gives the same job.
+	keyed.Now = at(manualMinute + 1)
+
+	again, err := h.Dispatcher.Manual(t.Context(), actor, keyed)
+	must(t, "manual with the key again", err)
+
+	if first != again || len(rec.Jobs()) != 1 {
+		t.Errorf("one key gave %d jobs; %q, %q; want 1", len(rec.Jobs()), first, again)
+	}
+
+	if got := rec.Starts()[0].Req.IdempotencyKey; got != "click-1" {
+		t.Errorf("key of the start = %q, want the key of the caller", got)
+	}
+
+	// Another key is another job.
+	keyed.IdempotencyKey = "click-2"
+
+	other, err := h.Dispatcher.Manual(t.Context(), actor, keyed)
+	must(t, "manual with another key", err)
+
+	if other == first || len(rec.Jobs()) != 2 {
+		t.Errorf("another key gave %d jobs, job %q; want 2", len(rec.Jobs()), other)
+	}
+
+	// With no key, the key holds the minute: a fire in the next minute is a
+	// new job.
+	for _, minute := range []int{manualMinute + 2, manualMinute + 3} {
+		_, err = h.Dispatcher.Manual(t.Context(), actor, manual("s1", at(minute)))
+		must(t, "manual with no key", err)
+	}
+
+	if got := len(rec.Jobs()); got != 4 {
+		t.Errorf("fires with no key in two minutes made %d jobs in all, want 4", got)
+	}
+}
+
+func caseManualRequest(t *testing.T, h Harness, rec *Recorder) {
+	t.Helper()
+
+	a := unit(acme, "a")
+	fence := h.Namespace(t, string(acme))
+
+	must(t, "put", h.Store.Put(t.Context(), scheduleTrigger("s1", a), fence, auditOf("trigger:put")))
+
+	req := manual("s1", at(manualMinute))
+	req.Request = trigger.RequestInfo{
+		Channel: audit.ChannelAPI, SourceIP: "192.0.2.7", UserAgent: "test-agent", RequestID: "req-1",
+	}
+
+	_, err := h.Dispatcher.Manual(t.Context(), ActorOf("user:ada"), req)
+	must(t, "manual", err)
+
+	starts := rec.Starts()
+	if len(starts) != 1 || starts[0].Req.Request != req.Request {
+		t.Fatalf("starts = %+v, want one start with the request %+v", starts, req.Request)
+	}
+
+	// A start that no person makes carries no request.
+	_, err = h.Dispatcher.Scheduled(t.Context(), acme, "s1", at(0))
+	must(t, "scheduled", err)
+
+	starts = rec.Starts()
+	if got := starts[len(starts)-1].Req.Request; got != (trigger.RequestInfo{}) {
+		t.Errorf("request of a scheduled start = %+v, want none", got)
+	}
+}
+
+func caseSaverReused(t *testing.T, h Harness, rec *Recorder) {
+	t.Helper()
+
+	a := unit(acme, "a")
+	fence := h.Namespace(t, string(acme))
+
+	must(t, "put", h.Store.Put(t.Context(), scheduleTrigger("s1", a), fence, auditOf("trigger:put")))
+
+	// The principal ada is deleted, and a new principal takes the subject.
+	h.Doubles.ReuseSubject(ada)
+
+	_, err := h.Dispatcher.Scheduled(t.Context(), acme, "s1", at(0))
+	wantErr(t, "scheduled with a reused subject", err, trigger.ErrSaverDenied)
+
+	_, err = h.Dispatcher.Manual(t.Context(), ActorOf(ada), manual("s1", at(manualMinute)))
+	wantErr(t, "manual with a reused subject", err, trigger.ErrSaverDenied)
+
+	if got := rec.Jobs(); len(got) != 0 {
+		t.Errorf("started %d jobs, want none", len(got))
 	}
 }

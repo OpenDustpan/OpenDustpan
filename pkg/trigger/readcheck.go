@@ -84,10 +84,12 @@ func (c *OutputReadCheck) Allow(ctx context.Context, in OutputRead) error {
 		return denyRead(in, errOtherUnit)
 	}
 
-	saver, err := c.resolver.Saver(ctx, t.LastSaver)
+	rec, err := c.resolver.Saver(ctx, t.LastSaver)
 	if err != nil {
 		return denyRead(in, err)
 	}
+
+	saver := rec.Principal
 
 	// Defense in depth: the resolver answers a principal with the Admin flag
 	// off. The flag is never rebuilt from a stored subject, so this line
@@ -96,6 +98,13 @@ func (c *OutputReadCheck) Allow(ctx context.Context, in OutputRead) error {
 
 	if saver.Subject != t.LastSaver {
 		return denyRead(in, errOtherSubject)
+	}
+
+	// Defense in depth: a subject that a new principal reuses does not carry
+	// the reads of the principal that saved the trigger. The ID of the record
+	// must match, whatever the resolver and the subject check say.
+	if rec.ID != t.LastSaverID {
+		return denyRead(in, errOtherPrincipal)
 	}
 
 	if err := c.authorize(ctx, saver, in); err != nil {

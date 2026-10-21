@@ -39,6 +39,7 @@ type Row struct {
 	SourceUnitID     string
 	Enabled          int64
 	LastSaverSubject string
+	LastSaverID      string
 	CreatedAtMs      int64
 	UpdatedAtMs      int64
 }
@@ -48,8 +49,8 @@ func RowOf(t trigger.Trigger, atMs int64) Row {
 	r := Row{
 		Namespace: t.Unit.Namespace.String(), ID: string(t.ID), UnitTool: t.Unit.Tool, UnitID: t.Unit.ID,
 		Kind: string(t.Kind), Preset: string(t.Frequency.Preset), Cron: t.Frequency.Cron,
-		SourceNamespace: "", SourceTool: "", SourceUnitID: "", LastSaverSubject: t.LastSaver, Enabled: 0,
-		CreatedAtMs: atMs, UpdatedAtMs: atMs,
+		SourceNamespace: "", SourceTool: "", SourceUnitID: "", LastSaverSubject: t.LastSaver, LastSaverID: t.LastSaverID,
+		Enabled: 0, CreatedAtMs: atMs, UpdatedAtMs: atMs,
 	}
 
 	if t.Source != (graph.Unit{Namespace: "", Tool: "", ID: ""}) {
@@ -71,7 +72,14 @@ func rebuild(r Row) (trigger.Trigger, error) {
 			ErrCorrupt, trigger.ErrInvalid, r.Enabled)
 	}
 
-	t := trigger.Trigger{
+	return Stored(r), nil
+}
+
+// Stored returns the trigger that r holds, with no check at all. An enabled
+// flag other than 1 reads as off. Only a delete uses it, to find the unit of a
+// row that fails its checks.
+func Stored(r Row) trigger.Trigger {
+	return trigger.Trigger{
 		ID:        trigger.ID(r.ID),
 		Unit:      graph.Unit{Namespace: namespace.Name(r.Namespace), Tool: r.UnitTool, ID: r.UnitID},
 		Kind:      trigger.Kind(r.Kind),
@@ -79,11 +87,10 @@ func rebuild(r Row) (trigger.Trigger, error) {
 		Source: graph.Unit{
 			Namespace: namespace.Name(r.SourceNamespace), Tool: r.SourceTool, ID: r.SourceUnitID,
 		},
-		Enabled:   r.Enabled == 1,
-		LastSaver: r.LastSaverSubject,
+		Enabled:     r.Enabled == 1,
+		LastSaver:   r.LastSaverSubject,
+		LastSaverID: r.LastSaverID,
 	}
-
-	return t, nil
 }
 
 // Trigger returns the trigger that r holds and checks it again with
@@ -117,6 +124,28 @@ func Triggers(rows []Row) ([]trigger.Trigger, error) {
 	}
 
 	return out, nil
+}
+
+// Usable returns the triggers of rows that pass their checks, in the order of
+// rows. It calls onSkip, when set, for each row that does not. The cycle check
+// uses it: a row that fails its checks starts no plan, so it is no edge.
+func Usable(rows []Row, onSkip func(Row)) []trigger.Trigger {
+	out := make([]trigger.Trigger, 0, len(rows))
+
+	for i := range rows {
+		t, err := Trigger(rows[i])
+		if err != nil {
+			if onSkip != nil {
+				onSkip(rows[i])
+			}
+
+			continue
+		}
+
+		out = append(out, t)
+	}
+
+	return out
 }
 
 // OfUnit returns the triggers of rows, which must be the triggers of unit. It
@@ -281,9 +310,11 @@ type Tx interface {
 // tx, applies trigger.CheckCycle, and writes the row. It returns
 // trigger.ErrInvalid, a *trigger.CycleError, or an error of tx.
 //
-// A row of the namespace that fails its checks fails the call (fail closed): a
-// graph with a row that cannot be read proves no absence of a loop.
-func ApplyPut(ctx context.Context, tx Tx, t trigger.Trigger, at time.Time) error {
+// A row of the namespace that fails its checks does not fail the call: no
+// dispatcher starts a plan for that row, so it is no edge of the graph, and one
+// bad row must not stop each save of the namespace. onSkip, when set, gets each
+// such row, for a log entry. Get and List still fail closed for the row.
+func ApplyPut(ctx context.Context, tx Tx, t trigger.Trigger, at time.Time, onSkip func(Row)) error {
 	old, found, err := tx.Find(ctx, t.Unit.Namespace, t.ID)
 	if err != nil {
 		return err
@@ -298,10 +329,7 @@ func ApplyPut(ctx context.Context, tx Tx, t trigger.Trigger, at time.Time) error
 		return err
 	}
 
-	existing, err := Triggers(rows)
-	if err != nil {
-		return err
-	}
+	existing := Usable(rows, onSkip)
 
 	if err := trigger.CheckCycle(existing, t); err != nil {
 		return fmt.Errorf("put trigger: %w", err)

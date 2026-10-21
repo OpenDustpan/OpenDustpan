@@ -20,6 +20,7 @@ import (
 // suite drives the doubles through the methods below.
 type Doubles struct {
 	revoked map[string]bool
+	reused  map[string]string
 	audited map[namespace.Name][]audit.Entry
 	last    map[graph.Unit]string
 	next    int
@@ -30,6 +31,7 @@ type Doubles struct {
 func NewDoubles() *Doubles {
 	return &Doubles{
 		revoked: map[string]bool{},
+		reused:  map[string]string{},
 		audited: map[namespace.Name][]audit.Entry{},
 		last:    map[graph.Unit]string{},
 		next:    0,
@@ -69,6 +71,44 @@ func (d *Doubles) RestoreSaver(subject string) {
 	defer d.mu.Unlock()
 
 	delete(d.revoked, subject)
+}
+
+// ReuseSubject makes the saver check see a new principal with the subject, as
+// if the old principal was deleted and a later principal took the subject. The
+// ID of the new record differs from SaverIDOf(subject), so a trigger that the
+// old principal saved is refused.
+func (d *Doubles) ReuseSubject(subject string) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	d.reused[subject] = SaverIDOf(subject) + "-reused"
+}
+
+// SaverIDOf returns the ID of the principal record that the doubles give to the
+// person with the subject, and that the triggers of this package carry.
+func SaverIDOf(subject string) string {
+	return "prn-" + subject
+}
+
+// SaverID implements trigger.SaverCheck.
+func (d *Doubles) SaverID(_ context.Context, subject string) (string, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	if d.revoked[subject] {
+		return "", fmt.Errorf("%w: the saver lost access", trigger.ErrSaverDenied)
+	}
+
+	return d.idOf(subject), nil
+}
+
+// idOf returns the ID of the current record of subject. The caller holds mu.
+func (d *Doubles) idOf(subject string) string {
+	if id, ok := d.reused[subject]; ok {
+		return id
+	}
+
+	return SaverIDOf(subject)
 }
 
 // Final records a final state version of unit and returns its ID.
@@ -159,6 +199,10 @@ func (d *Doubles) check(t trigger.Trigger) error {
 
 	if d.revoked[t.LastSaver] {
 		return fmt.Errorf("%w: trigger %s: the saver lost access", trigger.ErrSaverDenied, t.ID)
+	}
+
+	if t.LastSaverID != d.idOf(t.LastSaver) {
+		return fmt.Errorf("%w: trigger %s: the subject names another principal", trigger.ErrSaverDenied, t.ID)
 	}
 
 	return nil

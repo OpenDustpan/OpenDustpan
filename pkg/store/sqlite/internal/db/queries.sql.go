@@ -6435,7 +6435,7 @@ func (q *Queries) GetTempAdminBySubject(ctx context.Context, subject string) (Te
 
 const getTrigger = `-- name: GetTrigger :one
 SELECT n.name AS namespace, t.id, t.unit_tool, t.unit_id, t.kind, t.preset, t.cron, t.source_namespace,
-    t.source_tool, t.source_unit_id, t.enabled, t.last_saver_subject, t.created_at_ms, t.updated_at_ms
+    t.source_tool, t.source_unit_id, t.enabled, t.last_saver_subject, t.last_saver_id, t.created_at_ms, t.updated_at_ms
 FROM triggers AS t
 JOIN namespaces AS n ON n.id = t.namespace_id
 WHERE n.name = ?1 AND t.id = ?2
@@ -6459,6 +6459,7 @@ type GetTriggerRow struct {
 	SourceUnitID     string
 	Enabled          int64
 	LastSaverSubject string
+	LastSaverID      string
 	CreatedAtMs      int64
 	UpdatedAtMs      int64
 }
@@ -6479,6 +6480,7 @@ func (q *Queries) GetTrigger(ctx context.Context, arg GetTriggerParams) (GetTrig
 		&i.SourceUnitID,
 		&i.Enabled,
 		&i.LastSaverSubject,
+		&i.LastSaverID,
 		&i.CreatedAtMs,
 		&i.UpdatedAtMs,
 	)
@@ -9377,7 +9379,7 @@ func (q *Queries) ListDurableSteps(ctx context.Context, operationID string) ([]L
 
 const listEnabledFollowTriggers = `-- name: ListEnabledFollowTriggers :many
 SELECT n.name AS namespace, t.id, t.unit_tool, t.unit_id, t.kind, t.preset, t.cron, t.source_namespace,
-    t.source_tool, t.source_unit_id, t.enabled, t.last_saver_subject, t.created_at_ms, t.updated_at_ms
+    t.source_tool, t.source_unit_id, t.enabled, t.last_saver_subject, t.last_saver_id, t.created_at_ms, t.updated_at_ms
 FROM triggers AS t
 JOIN namespaces AS n ON n.id = t.namespace_id
 WHERE n.name = ?1 AND t.kind = 'follows' AND t.enabled = 1
@@ -9397,6 +9399,7 @@ type ListEnabledFollowTriggersRow struct {
 	SourceUnitID     string
 	Enabled          int64
 	LastSaverSubject string
+	LastSaverID      string
 	CreatedAtMs      int64
 	UpdatedAtMs      int64
 }
@@ -9423,6 +9426,7 @@ func (q *Queries) ListEnabledFollowTriggers(ctx context.Context, namespace strin
 			&i.SourceUnitID,
 			&i.Enabled,
 			&i.LastSaverSubject,
+			&i.LastSaverID,
 			&i.CreatedAtMs,
 			&i.UpdatedAtMs,
 		); err != nil {
@@ -12513,7 +12517,7 @@ func (q *Queries) ListTempAdmins(ctx context.Context) ([]TempAdmin, error) {
 
 const listTriggerFollowers = `-- name: ListTriggerFollowers :many
 SELECT n.name AS namespace, t.id, t.unit_tool, t.unit_id, t.kind, t.preset, t.cron, t.source_namespace,
-    t.source_tool, t.source_unit_id, t.enabled, t.last_saver_subject, t.created_at_ms, t.updated_at_ms
+    t.source_tool, t.source_unit_id, t.enabled, t.last_saver_subject, t.last_saver_id, t.created_at_ms, t.updated_at_ms
 FROM triggers AS t
 JOIN namespaces AS n ON n.id = t.namespace_id
 WHERE n.name = ?1 AND t.kind = 'follows' AND t.enabled = 1
@@ -12542,6 +12546,7 @@ type ListTriggerFollowersRow struct {
 	SourceUnitID     string
 	Enabled          int64
 	LastSaverSubject string
+	LastSaverID      string
 	CreatedAtMs      int64
 	UpdatedAtMs      int64
 }
@@ -12573,6 +12578,7 @@ func (q *Queries) ListTriggerFollowers(ctx context.Context, arg ListTriggerFollo
 			&i.SourceUnitID,
 			&i.Enabled,
 			&i.LastSaverSubject,
+			&i.LastSaverID,
 			&i.CreatedAtMs,
 			&i.UpdatedAtMs,
 		); err != nil {
@@ -12591,7 +12597,7 @@ func (q *Queries) ListTriggerFollowers(ctx context.Context, arg ListTriggerFollo
 
 const listTriggersOfUnit = `-- name: ListTriggersOfUnit :many
 SELECT n.name AS namespace, t.id, t.unit_tool, t.unit_id, t.kind, t.preset, t.cron, t.source_namespace,
-    t.source_tool, t.source_unit_id, t.enabled, t.last_saver_subject, t.created_at_ms, t.updated_at_ms
+    t.source_tool, t.source_unit_id, t.enabled, t.last_saver_subject, t.last_saver_id, t.created_at_ms, t.updated_at_ms
 FROM triggers AS t
 JOIN namespaces AS n ON n.id = t.namespace_id
 WHERE n.name = ?1 AND t.unit_tool = ?2 AND t.unit_id = ?3
@@ -12617,6 +12623,7 @@ type ListTriggersOfUnitRow struct {
 	SourceUnitID     string
 	Enabled          int64
 	LastSaverSubject string
+	LastSaverID      string
 	CreatedAtMs      int64
 	UpdatedAtMs      int64
 }
@@ -12643,6 +12650,7 @@ func (q *Queries) ListTriggersOfUnit(ctx context.Context, arg ListTriggersOfUnit
 			&i.SourceUnitID,
 			&i.Enabled,
 			&i.LastSaverSubject,
+			&i.LastSaverID,
 			&i.CreatedAtMs,
 			&i.UpdatedAtMs,
 		); err != nil {
@@ -16214,18 +16222,18 @@ func (q *Queries) UpsertPersonPreferences(ctx context.Context, arg UpsertPersonP
 const upsertTrigger = `-- name: UpsertTrigger :execrows
 INSERT INTO triggers (
     namespace_id, id, unit_tool, unit_id, kind, preset, cron, source_namespace, source_tool, source_unit_id, enabled,
-    last_saver_subject, created_at_ms, updated_at_ms
+    last_saver_subject, last_saver_id, created_at_ms, updated_at_ms
 )
 SELECT
     n.id, ?1, ?2, ?3, ?4, ?5, ?6,
     ?7, ?8, ?9, ?10,
-    ?11, ?12, ?13
+    ?11, ?12, ?13, ?14
 FROM namespaces AS n
-WHERE n.name = ?14
+WHERE n.name = ?15
 ON CONFLICT (namespace_id, id) DO UPDATE SET
     preset = excluded.preset, cron = excluded.cron, source_namespace = excluded.source_namespace,
     source_tool = excluded.source_tool, source_unit_id = excluded.source_unit_id, enabled = excluded.enabled,
-    last_saver_subject = excluded.last_saver_subject,
+    last_saver_subject = excluded.last_saver_subject, last_saver_id = excluded.last_saver_id,
     updated_at_ms = MAX(triggers.updated_at_ms, excluded.updated_at_ms)
 `
 
@@ -16241,6 +16249,7 @@ type UpsertTriggerParams struct {
 	SourceUnitID     string
 	Enabled          int64
 	LastSaverSubject string
+	LastSaverID      string
 	CreatedAtMs      int64
 	UpdatedAtMs      int64
 	Namespace        string
@@ -16261,6 +16270,7 @@ func (q *Queries) UpsertTrigger(ctx context.Context, arg UpsertTriggerParams) (i
 		arg.SourceUnitID,
 		arg.Enabled,
 		arg.LastSaverSubject,
+		arg.LastSaverID,
 		arg.CreatedAtMs,
 		arg.UpdatedAtMs,
 		arg.Namespace,

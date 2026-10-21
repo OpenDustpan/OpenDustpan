@@ -43,23 +43,30 @@ func person(s string) identity.Principal {
 type fakeResolver struct {
 	people map[string]identity.Principal
 	errs   map[string]error
+	// ids holds the record ID of a subject that a test gives another ID.
+	ids map[string]string
 }
 
 func newResolver() *fakeResolver {
-	return &fakeResolver{people: map[string]identity.Principal{}, errs: map[string]error{}}
+	return &fakeResolver{people: map[string]identity.Principal{}, errs: map[string]error{}, ids: map[string]string{}}
 }
 
-func (r *fakeResolver) Saver(_ context.Context, subject string) (identity.Principal, error) {
+func (r *fakeResolver) Saver(_ context.Context, subject string) (trigger.SaverRecord, error) {
 	if err := r.errs[subject]; err != nil {
-		return identity.Principal{}, err
+		return trigger.SaverRecord{}, err
 	}
 
 	p, ok := r.people[subject]
 	if !ok {
-		return identity.Principal{}, trigger.ErrSaverGone
+		return trigger.SaverRecord{}, trigger.ErrSaverGone
 	}
 
-	return p, nil
+	id, reused := r.ids[subject]
+	if !reused {
+		id = saverID(subject)
+	}
+
+	return trigger.SaverRecord{Principal: p, ID: id}, nil
 }
 
 // fakeAuthz allows the triples in allow, and every action for an administrator.
@@ -197,6 +204,23 @@ func (s *fakeStore) Get(_ context.Context, ns namespace.Name, id trigger.ID) (tr
 		return trigger.Trigger{}, trigger.ErrNotFound
 	}
 
+	// Like an adapter, Get does not serve a row that fails its checks.
+	if err := t.Validate(); err != nil {
+		return trigger.Trigger{}, err
+	}
+
+	return t, nil
+}
+
+func (s *fakeStore) Stored(_ context.Context, ns namespace.Name, id trigger.ID) (trigger.Trigger, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	t, ok := s.triggers[id]
+	if !ok || t.Unit.Namespace != ns {
+		return trigger.Trigger{}, trigger.ErrNotFound
+	}
+
 	return t, nil
 }
 
@@ -276,11 +300,25 @@ func (s *fakeStore) callCount() int {
 // fakeSaverCheck answers err for every check.
 type fakeSaverCheck struct {
 	err     error
+	idErr   error
 	saves   int
 	started int
 }
 
-func newSaverCheck() *fakeSaverCheck { return &fakeSaverCheck{err: nil, saves: 0, started: 0} }
+func newSaverCheck() *fakeSaverCheck {
+	return &fakeSaverCheck{err: nil, idErr: nil, saves: 0, started: 0}
+}
+
+// saverID is the ID of the principal record that the fakes give to subject.
+func saverID(subject string) string { return "prn-" + subject }
+
+func (c *fakeSaverCheck) SaverID(_ context.Context, subject string) (string, error) {
+	if c.idErr != nil {
+		return "", c.idErr
+	}
+
+	return saverID(subject), nil
+}
 
 func (c *fakeSaverCheck) CheckSave(context.Context, trigger.Trigger) error {
 	c.saves++

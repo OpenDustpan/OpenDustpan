@@ -66,7 +66,7 @@ func seed(r *rig) {
 	r.store.plant(trigger.Trigger{
 		ID: "trg-seed", Unit: unitNet(), Kind: trigger.KindSchedule,
 		Frequency: trigger.Frequency{Preset: cron.PresetDaily, Cron: ""}, Source: noUnit(), Enabled: true,
-		LastSaver: ada,
+		LastSaver: ada, LastSaverID: "prn-" + ada,
 	})
 }
 
@@ -250,7 +250,7 @@ func TestUnknownObjectsAnswerAlike(t *testing.T) {
 	r.store.plant(trigger.Trigger{
 		ID: "trg-app", Unit: graphUnit("pulumi", appID), Kind: trigger.KindSchedule,
 		Frequency: trigger.Frequency{Preset: cron.PresetDaily, Cron: ""}, Source: noUnit(), Enabled: true,
-		LastSaver: ada,
+		LastSaver: ada, LastSaverID: "prn-" + ada,
 	})
 
 	r.inv.gone["ws-gone"] = true
@@ -286,12 +286,13 @@ func TestUnknownObjectsAnswerAlike(t *testing.T) {
 }
 
 // TestKeyedWritesAreRefused proves a write with an Idempotency-Key header
-// answers 400, because no route of this API takes the key.
+// answers 400, because no route of this API takes the key except the fire
+// route.
 func TestKeyedWritesAreRefused(t *testing.T) {
 	t.Parallel()
 
 	for _, rc := range casesOf(t) {
-		if rc.route.Method == http.MethodGet {
+		if rc.route.Method == http.MethodGet || rc.route.IdempotencyKey {
 			continue
 		}
 

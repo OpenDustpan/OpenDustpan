@@ -65,6 +65,9 @@ type Route struct {
 	Resolve TargetResolver
 	// Serve handles the request after the wrapper has enforced the row.
 	Serve RouteHandler
+	// IdempotencyKey says that the route takes the Idempotency-Key header.
+	// The wrapper refuses the header on every other write.
+	IdempotencyKey bool
 }
 
 const (
@@ -82,27 +85,27 @@ func (h *Handler) buildRoutes() []Route {
 	return []Route{
 		{
 			Method: http.MethodGet, Path: unitTriggersPath, Scope: ScopeAuthorized, Reads: read, Actions: nil,
-			Resolve: h.resolveUnit, Serve: h.listTriggers,
+			Resolve: h.resolveUnit, Serve: h.listTriggers, IdempotencyKey: false,
 		},
 		{
 			Method: http.MethodPost, Path: unitTriggersPath, Scope: ScopeAuthorized, Reads: read, Actions: change,
-			Resolve: h.resolveUnit, Serve: h.createTrigger,
+			Resolve: h.resolveUnit, Serve: h.createTrigger, IdempotencyKey: false,
 		},
 		{
 			Method: http.MethodGet, Path: triggerPath, Scope: ScopeAuthorized, Reads: read, Actions: nil,
-			Resolve: h.resolveTrigger, Serve: h.getTrigger,
+			Resolve: h.resolveTrigger, Serve: h.getTrigger, IdempotencyKey: false,
 		},
 		{
 			Method: http.MethodPut, Path: triggerPath, Scope: ScopeAuthorized, Reads: read, Actions: change,
-			Resolve: h.resolveTrigger, Serve: h.replaceTrigger,
+			Resolve: h.resolveTrigger, Serve: h.replaceTrigger, IdempotencyKey: false,
 		},
 		{
 			Method: http.MethodDelete, Path: triggerPath, Scope: ScopeAuthorized, Reads: read,
-			Actions: []identity.Action{trigger.SettingsAction}, Resolve: h.resolveTrigger, Serve: h.deleteTrigger,
+			Actions: []identity.Action{trigger.SettingsAction}, Resolve: h.resolveStoredTrigger, Serve: h.deleteTrigger, IdempotencyKey: false,
 		},
 		{
 			Method: http.MethodPost, Path: firePath, Scope: ScopeAuthorized, Reads: read,
-			Actions: []identity.Action{trigger.StartAction}, Resolve: h.resolveTrigger, Serve: h.fireTrigger,
+			Actions: []identity.Action{trigger.StartAction}, Resolve: h.resolveTrigger, Serve: h.fireTrigger, IdempotencyKey: true,
 		},
 	}
 }
@@ -175,8 +178,9 @@ func (h *Handler) enforce(route Route) http.HandlerFunc {
 		}
 
 		// A write with the key would silently lose its replay protection: the
-		// routes of this API take no key, so the server refuses the header.
-		if r.Method != http.MethodGet && len(r.Header.Values(idempotencyHeader)) > 0 {
+		// routes of this API take no key, except the fire route, so the server
+		// refuses the header elsewhere.
+		if r.Method != http.MethodGet && !route.IdempotencyKey && len(r.Header.Values(idempotencyHeader)) > 0 {
 			h.writeError(ctx, w, errKeyUnsupported)
 
 			return

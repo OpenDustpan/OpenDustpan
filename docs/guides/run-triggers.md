@@ -62,6 +62,11 @@ document of the trigger then has `needsNewSave: true`. A person who holds the
 actions must save the trigger again, and so becomes its last saver. This holds
 for a fire by hand too: a trigger that nobody maintains starts nothing.
 
+The trigger keeps the ID of the principal record of its last saver, as well as
+the subject. If a person leaves and a new person gets the same subject, the
+new person is not the last saver. The server refuses the start with the same
+code, and a person who holds the actions must save the trigger again.
+
 ## Save a trigger
 
 Send `POST /api/dustpan/v1/namespaces/{namespace}/units/{unit_id}/triggers`.
@@ -94,6 +99,15 @@ first stack or workspace, also across tools. The answer lists the units of the
 loop in order, with the name that the tool of each unit uses. A trigger that is
 off closes no loop. When you switch it on, the server checks it again.
 
+## Delete a trigger
+
+Send `DELETE .../triggers/{trigger_id}`. The answer is 204. A stored trigger can
+fail the checks of the server, for example after a restore of a backup that
+another version made. The server does not serve such a trigger, and a read, a
+replace or a fire of it fails. It starts no plan, and it takes no part in the
+check for a loop of units. A delete deletes it. A delete needs `unit:manage` on
+the unit of the trigger.
+
 ## Fire a trigger
 
 Send `POST .../triggers/{trigger_id}/fire`. The body is optional:
@@ -113,10 +127,17 @@ answer is 201 with `job.id` and a `Location` header of the job. The job keeps
 the source `api`, the trigger ID and the last saver of the trigger, and the
 [jobs API](../reference/jobs-api.md) shows both in the field `trigger`.
 
-A double click starts one job: two fires of one trigger by one person within the
-same minute give the same job. A second fire in that minute with another reason
-or another location fails with 409 and the code `trigger.fire-conflict`. Two
-people who fire one trigger in one minute start two jobs.
+Send an `Idempotency-Key` header to make a retry safe. Two fires of one trigger
+by one person with one key give the same job, also when they come in different
+minutes. A second fire with that key and another reason or another location
+fails with 409 and the code `trigger.fire-conflict`. The key has 1 to 255
+printable ASCII characters. The answer to a second fire does not carry the
+header `Idempotent-Replayed`. Another key starts another job.
+
+Without a key, a double click starts one job: two fires of one trigger by one
+person within the same minute give the same job. A double click that crosses a
+minute boundary can start two jobs. Two people who fire one trigger in one
+minute start two jobs.
 
 | Status | Code | Meaning |
 | --- | --- | --- |

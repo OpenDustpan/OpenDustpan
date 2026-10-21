@@ -21,6 +21,7 @@ func portableTriggerTables() []PortableTable {
 				{Name: "source_unit_id", Kind: KindText},
 				{Name: "enabled", Kind: KindInteger},
 				{Name: "last_saver_subject", Kind: KindText},
+				{Name: "last_saver_id", Kind: KindText},
 				{Name: portColCreatedAtMs, Kind: KindTime},
 				{Name: portColUpdatedAtMs, Kind: KindTime},
 			},

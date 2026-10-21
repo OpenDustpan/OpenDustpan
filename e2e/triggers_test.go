@@ -462,6 +462,42 @@ func (fx *triggersFixture) firesATrigger(ctx context.Context, t *testing.T, firs
 		Check: inDoc(`"errorCode":"trigger.fire-conflict"`),
 	})
 
+	// A caller key makes a retry safe across a minute boundary: two fires with one
+	// key give one job, and it is another job than the one of the fires above.
+	var keyed string
+
+	for _, name := range []string{"fire with an Idempotency-Key", "fire again with the same Idempotency-Key"} {
+		fx.env.APIStepWithHeaders(ctx, t, e2e.APIStepSpec{
+			UserAgent: triggersAgent, Name: name, Method: http.MethodPost, Path: fire, Body: body,
+			Want: http.StatusCreated, Scheme: "token",
+			Check: func(answer string) error {
+				var doc fireDoc
+
+				if err := json.Unmarshal([]byte(answer), &doc); err != nil || !strings.HasPrefix(doc.Job.ID, "job-") {
+					return fmt.Errorf("%w: %s", errTriggerDoc, answer)
+				}
+
+				if keyed != "" && doc.Job.ID != keyed {
+					return fmt.Errorf("%w: one key made job %s, not %s", errTriggerDoc, doc.Job.ID, keyed)
+				}
+
+				if keyed == "" && doc.Job.ID == jobID {
+					return fmt.Errorf("%w: a key made the job %s of the fires with no key", errTriggerDoc, jobID)
+				}
+
+				keyed = doc.Job.ID
+
+				return nil
+			},
+		}, map[string]string{"Idempotency-Key": "triggers-e2e-key-1"})
+	}
+
+	fx.env.APIStepWithHeaders(ctx, t, e2e.APIStepSpec{
+		UserAgent: triggersAgent, Name: "a fire with an Idempotency-Key that is not valid", Method: http.MethodPost,
+		Path: fire, Body: body, Want: http.StatusBadRequest, Scheme: "token",
+		Check: inDoc(`"errorCode":"request.idempotency-key-invalid"`),
+	}, map[string]string{"Idempotency-Key": strings.Repeat("k", 256)})
+
 	fx.step(ctx, t, fx.ann(), e2e.APIStepSpec{
 		UserAgent: triggersAgent, Scheme: "token",
 		Name: "switch the trigger off", Method: http.MethodPut, Path: fx.triggers(fx.webID) + "/" + first.ID,

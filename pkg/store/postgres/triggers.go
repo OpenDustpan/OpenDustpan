@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 
 	"github.com/jackc/pgx/v5"
 
@@ -44,7 +45,12 @@ func (t triggers) Put(ctx context.Context, tr trigger.Trigger, fence namespace.F
 	}
 
 	return t.s.inFencedAuditedTx(ctx, fence, &e, func(q *db.Queries) error {
-		return triggerstore.ApplyPut(ctx, triggerTx{q: q}, tr, e.At)
+		return triggerstore.ApplyPut(ctx, triggerTx{q: q}, tr, e.At, func(r triggerstore.Row) {
+			// The warning names the row by its ID and its namespace: the text of the
+			// check can hold a cron expression or a subject, so it stays out of the log.
+			t.s.logger.WarnContext(ctx, "stored trigger left out of the loop check: it fails its checks",
+				slog.String("id", r.ID), slog.String("namespace", r.Namespace))
+		})
 	})
 }
 
@@ -64,6 +70,24 @@ func (t triggers) Get(ctx context.Context, ns namespace.Name, id trigger.ID) (tr
 	}
 
 	return triggerstore.Trigger(triggerstore.Row(row))
+}
+
+// Stored implements trigger.Store. It serves a row that fails its checks.
+func (t triggers) Stored(ctx context.Context, ns namespace.Name, id trigger.ID) (trigger.Trigger, error) {
+	if err := triggerstore.CheckGet(ns, id); err != nil {
+		return trigger.Trigger{}, err
+	}
+
+	row, err := t.s.queries.GetTrigger(ctx, db.GetTriggerParams{Namespace: ns.String(), ID: string(id)})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return trigger.Trigger{}, trigger.ErrNotFound
+	}
+
+	if err != nil {
+		return trigger.Trigger{}, fmt.Errorf("select trigger: %w", err)
+	}
+
+	return triggerstore.Stored(triggerstore.Row(row)), nil
 }
 
 // List implements trigger.Store. A row that fails its checks fails the read.
@@ -174,7 +198,7 @@ func (x triggerTx) Upsert(ctx context.Context, r triggerstore.Row) error {
 	n, err := x.q.UpsertTrigger(ctx, db.UpsertTriggerParams{
 		ID: r.ID, UnitTool: r.UnitTool, UnitID: r.UnitID, Kind: r.Kind, Preset: r.Preset, Cron: r.Cron,
 		SourceNamespace: r.SourceNamespace, SourceTool: r.SourceTool, SourceUnitID: r.SourceUnitID,
-		Enabled: r.Enabled, LastSaverSubject: r.LastSaverSubject, CreatedAtMs: r.CreatedAtMs,
+		Enabled: r.Enabled, LastSaverSubject: r.LastSaverSubject, LastSaverID: r.LastSaverID, CreatedAtMs: r.CreatedAtMs,
 		UpdatedAtMs: r.UpdatedAtMs, Namespace: r.Namespace,
 	})
 	if err != nil {

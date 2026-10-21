@@ -23,21 +23,21 @@ func noOne() graph.Unit { return graph.Unit{Namespace: "", Tool: "", ID: ""} }
 func follows(id trigger.ID, unit, source graph.Unit) trigger.Trigger {
 	return trigger.Trigger{
 		ID: id, Unit: unit, Kind: trigger.KindFollows, Frequency: trigger.Frequency{Preset: "", Cron: ""},
-		Source: source, Enabled: true, LastSaver: "user:ada",
+		Source: source, Enabled: true, LastSaver: "user:ada", LastSaverID: "prn-user:ada",
 	}
 }
 
 func schedule(id trigger.ID, unit graph.Unit, f trigger.Frequency) trigger.Trigger {
 	return trigger.Trigger{
 		ID: id, Unit: unit, Kind: trigger.KindSchedule, Frequency: f, Source: noOne(), Enabled: true,
-		LastSaver: "user:ada",
+		LastSaver: "user:ada", LastSaverID: "prn-user:ada",
 	}
 }
 
 func review(id trigger.ID, unit graph.Unit) trigger.Trigger {
 	return trigger.Trigger{
 		ID: id, Unit: unit, Kind: trigger.KindReviewRequestPush, Frequency: trigger.Frequency{Preset: "", Cron: ""},
-		Source: noOne(), Enabled: false, LastSaver: "user:ada",
+		Source: noOne(), Enabled: false, LastSaver: "user:ada", LastSaverID: "prn-user:ada",
 	}
 }
 
@@ -416,7 +416,7 @@ func TestApplyPut(t *testing.T) {
 		t.Parallel()
 
 		tx := newMemTx()
-		if err := triggerstore.ApplyPut(t.Context(), tx, follows("f1", unitA(), unitC()), at); err != nil {
+		if err := triggerstore.ApplyPut(t.Context(), tx, follows("f1", unitA(), unitC()), at, nil); err != nil {
 			t.Fatalf("put: %v", err)
 		}
 
@@ -430,7 +430,7 @@ func TestApplyPut(t *testing.T) {
 
 		tx := newMemTx(follows("f1", unitA(), unitC()), follows("f2", unitB(), unitA()))
 
-		err := triggerstore.ApplyPut(t.Context(), tx, follows("f3", unitC(), unitB()), at)
+		err := triggerstore.ApplyPut(t.Context(), tx, follows("f3", unitC(), unitB()), at, nil)
 		if !errors.Is(err, trigger.ErrCycle) || tx.upserts != 0 {
 			t.Fatalf("put = %v after %d upserts, want ErrCycle and no write", err, tx.upserts)
 		}
@@ -441,12 +441,12 @@ func TestApplyPut(t *testing.T) {
 
 		tx := newMemTx(follows("f1", unitA(), unitC()), follows("f2", unitC(), unitB()))
 
-		if err := triggerstore.ApplyPut(t.Context(), tx, follows("f1", unitA(), unitB()), at); err != nil {
+		if err := triggerstore.ApplyPut(t.Context(), tx, follows("f1", unitA(), unitB()), at, nil); err != nil {
 			t.Fatalf("put: %v", err)
 		}
 	})
 
-	t.Run("fails closed on a follows row that does not validate", func(t *testing.T) {
+	t.Run("skips a follows row that does not validate and reports it", func(t *testing.T) {
 		t.Parallel()
 
 		tx := newMemTx(follows("f1", unitA(), unitC()))
@@ -454,11 +454,72 @@ func TestApplyPut(t *testing.T) {
 		bad.LastSaverSubject = ""
 		tx.rows["f1"] = bad
 
-		err := triggerstore.ApplyPut(t.Context(), tx, follows("f2", unitB(), unitA()), at)
-		if !errors.Is(err, triggerstore.ErrCorrupt) || tx.upserts != 0 {
-			t.Fatalf("put = %v after %d upserts, want ErrCorrupt and no write", err, tx.upserts)
+		var skipped []string
+
+		// f2 would close a loop with f1 if f1 counted. f1 starts no plan, so it
+		// is no edge.
+		err := triggerstore.ApplyPut(t.Context(), tx, follows("f2", unitC(), unitA()), at, func(r triggerstore.Row) {
+			skipped = append(skipped, r.ID)
+		})
+		if err != nil || tx.upserts != 1 {
+			t.Fatalf("put = %v after %d upserts, want a write", err, tx.upserts)
+		}
+
+		if len(skipped) != 1 || skipped[0] != "f1" {
+			t.Errorf("skipped = %v, want [f1]", skipped)
 		}
 	})
+
+	t.Run("a valid row still closes a loop beside a row that does not validate", func(t *testing.T) {
+		t.Parallel()
+
+		tx := newMemTx(follows("f1", unitA(), unitC()), follows("f2", unitB(), unitA()), follows("f3", unitC(), unitB()))
+		bad := tx.rows["f3"]
+		bad.LastSaverID = ""
+		tx.rows["f3"] = bad
+
+		// f1 and f2 are valid: A follows C, B follows A. C follows B closes the loop.
+		err := triggerstore.ApplyPut(t.Context(), tx, follows("f4", unitC(), unitB()), at, nil)
+		if !errors.Is(err, trigger.ErrCycle) || tx.upserts != 0 {
+			t.Fatalf("put = %v after %d upserts, want ErrCycle and no write", err, tx.upserts)
+		}
+	})
+}
+
+func TestUsable(t *testing.T) {
+	t.Parallel()
+
+	good := triggerstore.RowOf(follows("f1", unitA(), unitC()), 1)
+	bad := triggerstore.RowOf(follows("f2", unitB(), unitA()), 1)
+	bad.LastSaverID = ""
+
+	var skipped []string
+
+	got := triggerstore.Usable([]triggerstore.Row{bad, good}, func(r triggerstore.Row) { skipped = append(skipped, r.ID) })
+	if len(got) != 1 || got[0].ID != "f1" || len(skipped) != 1 || skipped[0] != "f2" {
+		t.Errorf("usable = %v, skipped = %v; want [f1] and [f2]", got, skipped)
+	}
+
+	// A nil callback is allowed.
+	if got := triggerstore.Usable([]triggerstore.Row{bad}, nil); len(got) != 0 {
+		t.Errorf("usable = %v, want none", got)
+	}
+}
+
+func TestStoredServesARowThatFailsItsChecks(t *testing.T) {
+	t.Parallel()
+
+	row := triggerstore.RowOf(follows("f1", unitA(), unitC()), 1)
+	row.LastSaverSubject, row.LastSaverID, row.Enabled = "", "", 7
+
+	if _, err := triggerstore.Trigger(row); !errors.Is(err, triggerstore.ErrCorrupt) {
+		t.Fatalf("trigger = %v, want ErrCorrupt", err)
+	}
+
+	got := triggerstore.Stored(row)
+	if got.ID != "f1" || got.Unit != unitA() || got.Kind != trigger.KindFollows || got.Enabled {
+		t.Errorf("stored = %+v, want the row with its unit and kind, and off", got)
+	}
 }
 
 func TestApplyPutKeepsTheUnitAndTheKind(t *testing.T) {
@@ -475,7 +536,7 @@ func TestApplyPutKeepsTheUnitAndTheKind(t *testing.T) {
 	} {
 		tx := newMemTx(old)
 
-		err := triggerstore.ApplyPut(t.Context(), tx, tr, time.UnixMilli(5_000))
+		err := triggerstore.ApplyPut(t.Context(), tx, tr, time.UnixMilli(5_000), nil)
 		if !errors.Is(err, trigger.ErrInvalid) || tx.upserts != 0 {
 			t.Errorf("%s: put = %v after %d upserts, want ErrInvalid and no write", name, err, tx.upserts)
 		}

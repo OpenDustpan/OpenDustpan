@@ -17,6 +17,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/cron"
 	"opendustpan.org/opendustpan/pkg/graph"
+	"opendustpan.org/opendustpan/pkg/idempotency"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/job"
 	"opendustpan.org/opendustpan/pkg/trigger"
@@ -198,10 +199,19 @@ func (h *Handler) deleteTrigger(w http.ResponseWriter, r *http.Request, p identi
 
 // fireTrigger answers POST .../triggers/{trigger_id}/fire with the job that
 // the fire starts. The job service checks the start action of the caller and
-// applies the gates, the approval rules, the freezes and the manual locks. A
-// double click of one person within one minute gives the same job.
+// applies the gates, the approval rules, the freezes and the manual locks. With
+// an Idempotency-Key header, two fires of one caller with one key give the same
+// job. Without one, a double click of one person within one minute gives the
+// same job, and a double click across a minute boundary can give two.
 func (h *Handler) fireTrigger(w http.ResponseWriter, r *http.Request, p identity.Principal, t *target) {
 	ctx := r.Context()
+
+	key, err := idempotencyKey(r)
+	if err != nil {
+		h.writeError(ctx, w, err)
+
+		return
+	}
 
 	in, err := readFireInput(w, r)
 	if err != nil {
@@ -209,6 +219,9 @@ func (h *Handler) fireTrigger(w http.ResponseWriter, r *http.Request, p identity
 
 		return
 	}
+
+	in.IdempotencyKey = key
+	in.Request = requestInfo(r)
 
 	id, err := h.manager.Fire(ctx, p, t.ns.Name, t.trigger.ID, in)
 	if err != nil {
@@ -221,6 +234,26 @@ func (h *Handler) fireTrigger(w http.ResponseWriter, r *http.Request, p identity
 	w.Header().Set("Location", "/api/dustpan/v1/namespaces/"+url.PathEscape(t.ns.Name.String())+"/jobs/"+
 		url.PathEscape(string(id)))
 	h.writeJSON(ctx, w, http.StatusCreated, fireResponse{Job: jobRef{ID: string(id)}})
+}
+
+// idempotencyKey returns the key of the request, or "" for a request with no
+// key. A key that is not valid, or a second key, is an error.
+func idempotencyKey(r *http.Request) (string, error) {
+	values := r.Header.Values(idempotencyHeader)
+
+	switch len(values) {
+	case 0:
+		return "", nil
+	case 1:
+		k, err := idempotency.ParseKey(values[0])
+		if err != nil {
+			return "", fmt.Errorf("%w: send 1 to %d printable ASCII characters", err, idempotency.MaxKeyLength)
+		}
+
+		return string(k), nil
+	default:
+		return "", fmt.Errorf("%w: send one Idempotency-Key header", idempotency.ErrInvalidKey)
+	}
 }
 
 // manageError writes the audit entry of a refusal of an action that the manager
