@@ -153,3 +153,41 @@ func TestJournalBuildRetryOtherContentConflicts(t *testing.T) {
 		t.Fatalf("journal keys after refused retry = %v, want the two batches", keys)
 	}
 }
+
+// TestJournalBuildRetrySameBytesAdopts checks that a complete retried after
+// a failed built checkpoint write adopts the blob of the first build when
+// the retry builds the same bytes, and ends with the journal deleted.
+func TestJournalBuildRetrySameBytesAdopts(t *testing.T) {
+	t.Parallel()
+
+	clk := newClock()
+	f := newRetryFixture(t, clk, pulumijournal.NewReplayer(clk.Now, ""))
+
+	s := f.startJournaled(t)
+	first := f.replay(t)
+
+	if _, err := f.svc.Complete(t.Context(), f.ref, s.Update.ID, s.Token, stack.StatusSucceeded); err == nil {
+		t.Fatal("complete with a failed write: err = nil, want an error")
+	}
+
+	if !bytes.Equal(f.replay(t), first) {
+		t.Fatal("replay with the same clock differs from the first replay, want the same bytes")
+	}
+
+	if _, err := f.svc.Complete(t.Context(), f.ref, s.Update.ID, s.Token, stack.StatusSucceeded); err != nil {
+		t.Fatalf("retry complete with the same build: %v", err)
+	}
+
+	cp, err := f.svc.Export(t.Context(), f.ref)
+	if err != nil {
+		t.Fatalf("export after retry: %v", err)
+	}
+
+	if !bytes.Equal(cp.Deployment, first) {
+		t.Fatalf("export after retry = %s, want the first build %s", cp.Deployment, first)
+	}
+
+	if keys := f.journalKeys(t, s.Update.ID); len(keys) != 0 {
+		t.Fatalf("journal keys after retry = %v, want none", keys)
+	}
+}
