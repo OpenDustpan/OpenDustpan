@@ -327,11 +327,15 @@ func TestArtifactBlobsIDAllowlist(t *testing.T) {
 			ns := namespace.NewID()
 
 			_, planErr := b.OpenPlanPart(t.Context(),
-				job.PlanPartRef{Namespace: ns, Job: job.ID(job.IDPrefix + tt.id), Plan: job.PlanIDPrefix + tt.id,
-					Kind: job.OutputPlanApply})
+				job.PlanPartRef{
+					Namespace: ns, Job: job.ID(job.IDPrefix + tt.id), Plan: job.PlanIDPrefix + tt.id,
+					Kind: job.OutputPlanApply,
+				})
 			_, chunkErr := b.OpenLogChunk(t.Context(),
-				job.LogChunkRef{Namespace: ns, Job: job.ID(job.IDPrefix + tt.id), Version: job.LogVersionIDPrefix + tt.id,
-					Seq: 0})
+				job.LogChunkRef{
+					Namespace: ns, Job: job.ID(job.IDPrefix + tt.id), Version: job.LogVersionIDPrefix + tt.id,
+					Seq: 0,
+				})
 
 			for what, err := range map[string]error{"plan part": planErr, "log chunk": chunkErr} {
 				if got := !errors.Is(err, job.ErrInvalid); got != tt.ok {

@@ -12,6 +12,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/durable"
 	"opendustpan.org/opendustpan/pkg/history"
 	"opendustpan.org/opendustpan/pkg/job"
+	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/secret"
 )
 
@@ -611,6 +612,41 @@ func hostilePart(k job.OutputKind) job.PlanPart {
 	return job.PlanPart{Kind: k, Size: 1, SHA256: emptySHA256, Secret: false}
 }
 
+// hostilePartCases returns the lists of parts that the store refuses, by what
+// is wrong with each.
+func hostilePartCases() map[string][]job.PlanPart {
+	upper := hostilePart(job.OutputPlanDisplay)
+	upper.SHA256 = strings.ToUpper(emptySHA256)
+
+	short := hostilePart(job.OutputPlanDisplay)
+	short.SHA256 = emptySHA256[:10]
+
+	negative := hostilePart(job.OutputPlanDisplay)
+	negative.Size = -1
+
+	huge := hostilePart(job.OutputPlanDisplay)
+	huge.Size = job.MaxPlanPart + 1
+
+	unknown := hostilePart(valueOther)
+
+	cases := map[string][]job.PlanPart{
+		"no part": nil,
+		"three parts": {
+			hostilePart(job.OutputPlanDisplay),
+			hostilePart(job.OutputPlanApply),
+			hostilePart(job.OutputPlanApply),
+		},
+		"an unknown kind":        {unknown},
+		"a kind twice":           {hostilePart(job.OutputPlanApply), hostilePart(job.OutputPlanApply)},
+		"a hash in capitals":     {upper},
+		"a short hash":           {short},
+		"a negative size":        {negative},
+		"a size above the limit": {huge},
+	}
+
+	return cases
+}
+
 // testPlanHostileRef sends a hostile PlanRef directly to the store, as if the
 // recorder had not checked its uploads.
 //
@@ -629,30 +665,7 @@ func testPlanHostileRef(t *testing.T, h RecorderHarness) {
 		t.Fatalf("ReservePlan = %v", err)
 	}
 
-	upper := hostilePart(job.OutputPlanDisplay)
-	upper.SHA256 = strings.ToUpper(emptySHA256)
-
-	short := hostilePart(job.OutputPlanDisplay)
-	short.SHA256 = emptySHA256[:10]
-
-	negative := hostilePart(job.OutputPlanDisplay)
-	negative.Size = -1
-
-	huge := hostilePart(job.OutputPlanDisplay)
-	huge.Size = job.MaxPlanPart + 1
-
-	unknown := hostilePart(valueOther)
-
-	cases := map[string][]job.PlanPart{
-		"no part":                nil,
-		"three parts":            {hostilePart(job.OutputPlanDisplay), hostilePart(job.OutputPlanApply), hostilePart(job.OutputPlanApply)},
-		"an unknown kind":        {unknown},
-		"a kind twice":           {hostilePart(job.OutputPlanApply), hostilePart(job.OutputPlanApply)},
-		"a hash in capitals":     {upper},
-		"a short hash":           {short},
-		"a negative size":        {negative},
-		"a size above the limit": {huge},
-	}
+	cases := hostilePartCases()
 
 	for what, parts := range cases {
 		hostile := reserved
@@ -680,12 +693,21 @@ func testPlanHostileRef(t *testing.T, h RecorderHarness) {
 		t.Fatalf("PutPlan with valid parts = %v", err)
 	}
 
-	if !out.CreatedAt.Equal(reserved.CreatedAt) || !out.ExpiresAt.Equal(reserved.ExpiresAt) || !out.RedactedAt.IsZero() ||
+	if !out.CreatedAt.Equal(reserved.CreatedAt) || !out.ExpiresAt.Equal(reserved.ExpiresAt) ||
+		!out.RedactedAt.IsZero() ||
 		len(out.Parts) != 1 {
 		t.Fatalf("PutPlan = %+v, want the times of the reserve %+v and one part", out, reserved)
 	}
 
-	rec, err := h.Records.Plan(t.Context(), f.fence.Namespace, reserved.ID)
+	checkStoredTimes(t, h, f.fence.Namespace, &reserved)
+}
+
+// checkStoredTimes fails t unless the stored plan has the times of reserved and
+// no redaction.
+func checkStoredTimes(t *testing.T, h RecorderHarness, ns namespace.Name, reserved *job.PlanRef) {
+	t.Helper()
+
+	rec, err := h.Records.Plan(t.Context(), ns, reserved.ID)
 	if err != nil || rec.Plan == nil || !rec.Plan.CreatedAt.Equal(reserved.CreatedAt) ||
 		!rec.Plan.ExpiresAt.Equal(reserved.ExpiresAt) || !rec.Plan.RedactedAt.IsZero() {
 		t.Fatalf("stored plan = %+v, %v; want the times of the reserve", rec.Plan, err)
