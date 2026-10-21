@@ -271,7 +271,7 @@ func checkSlackMessage(t *testing.T, body, sinkID string) {
 		t.Fatalf("the receiver got a body that is not JSON: %v", err)
 	}
 
-	if len(msg.Blocks) == 0 || !strings.Contains(msg.Text, "Info: Test message") {
+	if len(msg.Blocks) == 0 || !strings.Contains(strings.ReplaceAll(msg.Text, "\u200b", ""), "Info: Test message") {
 		t.Errorf("message = %q with %d blocks, want a fallback text and blocks", msg.Text, len(msg.Blocks))
 	}
 
