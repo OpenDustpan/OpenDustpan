@@ -25,29 +25,53 @@ func goKeywords() []string {
 // variables. A parameter with one of these names gets one underscore at its end.
 func localNames() []string {
 	return []string{
-		"ctx",
-		"c",
-		"opts",
-		"body",
-		"query",
-		"req",
-		"out",
-		"resp",
-		"err",
-		"values",
-		"p",
-		"client",
-		"url",
-		"fmt",
+		"ctx", "c", "opts", "body", "query", "req", "out", "resp", "err", "values", "p", "client", "url", "fmt",
 	}
 }
 
-// reservedTypes returns the names of the types and values of the hand-written
-// transport. A schema with one of these names has no valid name in Go.
+// universeNames returns the names of the universe scope of Go. A path
+// parameter with one of them would hide the name in the generated method, for
+// example nil, true or string.
+func universeNames() []string {
+	return []string{
+		"any", "bool", "byte", "comparable", "complex64", "complex128", "error", "float32", "float64", "int",
+		"int8", "int16", "int32", "int64", "rune", "string", "uint", "uint8", "uint16", "uint32", "uint64",
+		"uintptr", "true", "false", "iota", "nil", "append", "cap", "clear", "close", "complex", "copy", "delete",
+		"imag", "len", "make", "max", "min", "new", "panic", "print", "println", "real", "recover",
+	}
+}
+
+// importNames returns the names of the packages that the generated files and
+// the adapter import. A path parameter with one of them would hide the
+// package.
+func importNames() []string {
+	return []string{"context", "http", "json", "fmt", "url", "strings", "client"}
+}
+
+// packageNames returns the lower-case package-level names of the hand-written
+// transport and of the adapter. A path parameter with one of them would hide
+// it in the generated method or in the table of the adapter. A test reads both
+// hand-written files and fails when this list is not complete.
+func packageNames() []string {
+	return []string{
+		"maxResponseBytes", "maxErrorTextBytes", "ifMatchMode", "ifMatchNone", "ifMatchOptional",
+		"ifMatchRequired", "request", "callConfig", "newKey", "isJSON", "errorOf",
+		"callTimeout", "protocolVersion", "clientModule", "maxLineBytes", "codeParse", "codeMethodNotFound",
+		"codeInvalidParams", "codeServer", "message", "rpcError", "reply", "success", "initializeParams",
+		"callParams", "callResult", "errorResult", "main", "run", "fail", "handle", "call", "errUnknownOperation",
+		"finish", "errorOutcome", "callOperation",
+	}
+}
+
+// reservedTypes returns the exported package-level names that the
+// hand-written transport and the metadata file declare. A schema, and the
+// query type of an operation, with one of these names has no valid name in Go.
+// A test reads the transport and fails when this list is not complete.
 func reservedTypes() []string {
 	return []string{
-		"Client", "Response", "Error", "Option", "CallOption", "Version", "DescriptionVersion", "ServerRelease",
-		"GeneratorVersion", "ErrInvalidResponse",
+		"Client", "Response", "Error", "Option", "CallOption", "New", "WithToken", "WithHTTPClient",
+		"WithIdempotencyKey", "WithIfMatch", "ErrInvalidResponse", "ErrOption", "ErrBody",
+		"Version", "DescriptionVersion", "ServerRelease", "GeneratorVersion",
 	}
 }
 
@@ -93,7 +117,8 @@ func words(name string) []string {
 }
 
 // camel turns a snake_case path parameter into lowerCamelCase: sink_id gives
-// sinkId. The reserved words of Go and the local names of the generated code
+// sinkId. The reserved words of Go, the names of the universe scope and of the
+// imports, and the names of the generated code and of its hand-written files
 // get one underscore at the end.
 func camel(name string) string {
 	parts := strings.Split(name, "_")
@@ -115,8 +140,14 @@ func camel(name string) string {
 		out = "_"
 	}
 
-	if slices.Contains(goKeywords(), out) || slices.Contains(localNames(), out) {
-		out += "_"
+	for _, reserved := range [][]string{
+		goKeywords(), localNames(), universeNames(), importNames(), packageNames(),
+	} {
+		if slices.Contains(reserved, out) {
+			out += "_"
+
+			break
+		}
 	}
 
 	return out

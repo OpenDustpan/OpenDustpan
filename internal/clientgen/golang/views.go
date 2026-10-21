@@ -20,6 +20,14 @@ func (d *data) addOperations(api *model.API) error {
 			return err
 		}
 
+		// The query type is a type of the package, so it shares the names of
+		// the schemas.
+		if ov.QueryType != "" {
+			if err = claim(d.seen, ov.QueryType, "the query of operation "+op.ID); err != nil {
+				return err
+			}
+		}
+
 		if err := claim(seen, ov.Method, "operation "+op.ID); err != nil {
 			return err
 		}

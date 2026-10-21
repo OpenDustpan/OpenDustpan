@@ -158,6 +158,9 @@ type data struct {
 	Title              string
 	Types              []typeView
 	Operations         []operationView
+	// seen holds the package-level names that the schemas and the query types
+	// take.
+	seen map[string]string
 	// NeedsURL and NeedsFmt say which imports operations.go needs.
 	NeedsURL bool
 	NeedsFmt bool
@@ -285,6 +288,8 @@ func (d *data) addTypes(api *model.API) error {
 	for _, name := range reservedTypes() {
 		seen[name] = transportOwner
 	}
+
+	d.seen = seen
 
 	for i := range api.Schemas {
 		s := &api.Schemas[i]

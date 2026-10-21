@@ -308,6 +308,22 @@ func TestRenderRefusesWhatItCannotWrite(t *testing.T) {
 			a.Schemas = append(a.Schemas, enumSchema("Kind", `a"b`))
 		}, clientgen.ErrInvalidName},
 		{
+			"schema that is the error of the transport",
+			func(a *model.API, _ *clientgen.Options) { a.Schemas[0].Name = "ErrBody" },
+			clientgen.ErrInvalidName,
+		},
+		{
+			"schema that is an option of the transport",
+			func(a *model.API, _ *clientgen.Options) { a.Schemas[0].Name = "WithToken" },
+			clientgen.ErrInvalidName,
+		},
+		{"schema that is the query type of an operation", func(a *model.API, _ *clientgen.Options) {
+			a.Operations[0].Parameters = append(a.Operations[0].Parameters, model.Parameter{
+				Name: "limit", In: model.InQuery, Required: false, Type: typ(model.TypeInteger), Description: "",
+			})
+			a.Schemas = append(a.Schemas, objectSchema("GetThingQuery", ""))
+		}, clientgen.ErrInvalidName},
+		{
 			"client minor that differs from the description",
 			func(_ *model.API, o *clientgen.Options) { o.ClientVersion = "0.2.0" },
 			clientgen.ErrVersion,
@@ -351,4 +367,168 @@ func TestRenderRefusesWhatItCannotWrite(t *testing.T) {
 			}
 		})
 	}
+}
+
+// declaredNames returns the names of the parameters, the variables of the
+// short declarations and the functions of the generated files.
+func declaredNames(t *testing.T, files []clientgen.File) map[string]bool {
+	t.Helper()
+
+	names := map[string]bool{}
+
+	for _, f := range files {
+		parsed, err := parser.ParseFile(token.NewFileSet(), f.Path, f.Content, 0)
+		if err != nil {
+			t.Fatalf("%s: Go cannot read the output: %v", f.Path, err)
+		}
+
+		ast.Inspect(parsed, func(n ast.Node) bool {
+			switch n := n.(type) {
+			case *ast.FuncType:
+				for _, p := range n.Params.List {
+					for _, id := range p.Names {
+						names[id.Name] = true
+					}
+				}
+			case *ast.AssignStmt:
+				for _, lhs := range n.Lhs {
+					if id, ok := lhs.(*ast.Ident); ok && n.Tok == token.DEFINE {
+						names[id.Name] = true
+					}
+				}
+			}
+
+			return true
+		})
+	}
+
+	return names
+}
+
+// TestRenderRenamesPathParametersThatHideNames checks that a path parameter
+// never hides a name that the generated code uses: the Go keywords, the names
+// of the universe scope (nil, true, string), the imported packages and the
+// package-level names of the hand-written files.
+func TestRenderRenamesPathParametersThatHideNames(t *testing.T) {
+	t.Parallel()
+
+	for _, name := range []string{
+		"http", "nil", "true", "false", "string", "len", "error", "json", "context", "finish", "request", "type",
+		"call", "message", "func",
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			api := hostileModel()
+			api.Operations[0].Path = "/api/dustpan/v1/things/{" + name + "}"
+			api.Operations[0].Parameters[0].Name = name
+
+			files, err := golang.New().Render(api, options())
+			if err != nil {
+				t.Fatalf("render: %v", err)
+			}
+
+			if declaredNames(t, files)[name] {
+				t.Errorf("a parameter of the generated code is named %s", name)
+			}
+		})
+	}
+}
+
+// snake writes the name of a package-level identifier as a path parameter:
+// newKey gives new_key.
+func snake(name string) string {
+	var b strings.Builder
+
+	for _, r := range name {
+		if r >= 'A' && r <= 'Z' {
+			b.WriteByte('_')
+			r += 'a' - 'A'
+		}
+
+		b.WriteRune(r)
+	}
+
+	return b.String()
+}
+
+// TestReservedNamesFollowTheHandWrittenFiles reads the transport and the
+// adapter loop, and checks that no package-level name of them can be taken by
+// a schema, a query type or a path parameter. The names come from the files,
+// so the lists cannot drift from them.
+func TestReservedNamesFollowTheHandWrittenFiles(t *testing.T) {
+	t.Parallel()
+
+	for _, file := range []string{"transport.go.txt", "main.go.txt"} {
+		src, err := os.ReadFile(filepath.Join("..", "conformance", "goclient", "files", file))
+		if err != nil {
+			t.Fatalf("read %s: %v", file, err)
+		}
+
+		parsed, err := parser.ParseFile(token.NewFileSet(), file, src, 0)
+		if err != nil {
+			t.Fatalf("parse %s: %v", file, err)
+		}
+
+		for _, name := range packageLevelNames(parsed) {
+			if token.IsExported(name) {
+				if file != "transport.go.txt" {
+					continue
+				}
+
+				api := hostileModel()
+				api.Schemas[0].Name = name
+
+				if _, err = golang.New().Render(api, options()); !errors.Is(err, clientgen.ErrInvalidName) {
+					t.Errorf("schema %s: want ErrInvalidName, got %v", name, err)
+				}
+
+				continue
+			}
+
+			param := snake(name)
+			api := hostileModel()
+			api.Operations[0].Path = "/api/dustpan/v1/things/{" + param + "}"
+			api.Operations[0].Parameters[0].Name = param
+
+			files, err := golang.New().Render(api, options())
+			if err != nil {
+				t.Errorf("path parameter %s: %v", param, err)
+
+				continue
+			}
+
+			if declaredNames(t, files)[name] {
+				t.Errorf("path parameter %s: a parameter of the generated code is named %s", param, name)
+			}
+		}
+	}
+}
+
+// packageLevelNames returns the names of the functions, types, constants and
+// variables that a file declares at package level.
+func packageLevelNames(f *ast.File) []string {
+	var names []string
+
+	for _, decl := range f.Decls {
+		switch d := decl.(type) {
+		case *ast.FuncDecl:
+			if d.Recv == nil {
+				names = append(names, d.Name.Name)
+			}
+		case *ast.GenDecl:
+			for _, spec := range d.Specs {
+				switch sp := spec.(type) {
+				case *ast.TypeSpec:
+					names = append(names, sp.Name.Name)
+				case *ast.ValueSpec:
+					for _, id := range sp.Names {
+						names = append(names, id.Name)
+					}
+				}
+			}
+		}
+	}
+
+	return names
 }
