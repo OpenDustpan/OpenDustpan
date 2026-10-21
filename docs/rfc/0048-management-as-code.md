@@ -112,9 +112,9 @@ part is the order of work, because one pull request cannot hold them.
 | C. All three at once | One release. | A large first change, and the port can be wrong in three places. |
 
 **Decided in ADR 270 decision 4: A.** The client port and the pin rule are
-tool-neutral, and the CLI exercises them without a plugin protocol. The providers then add only
-their protocol adapters (ADR 176). Every endpoint lands with its e2e step first
-(`CLAUDE.md`).
+tool-neutral, and the CLI exercises them without a plugin protocol. The
+providers then add only their protocol adapters (ADR 176). Every endpoint
+lands with its e2e step first (`CLAUDE.md`).
 
 Benchmark: HashiCorp keeps `go-tfe`, the client library, apart from the `tfe`
 provider and the `tfe` CLI role, and both use the library. The GitHub CLI and
@@ -163,33 +163,38 @@ The question has two parts, because the owner has decided the first part.
 
 #### 3a. The Go client library
 
-**Decided by the owner on 2026-10-20 (RFC 99 amendment 1, decision O7).** The
-Go client library lives in its own repository, `opendustpan/client-go`, with
-the module path `opendustpan.org/client`. It is not a Go submodule of this
-repository. The owner's reason: Go submodules make releases messy. A separate
-repository adds a small step to each client change, so that a person thinks
-before they break the client. The client is outside the `go.mod` of the
-server. The CLI and the providers use the client from `client-go` in every
-option of question 3b.
+**Decided by the owner on 2026-10-20 (RFC 99 amendment 1, decision O7).** The Go
+client library lives in its own repository, `opendustpan/client-go`, with the
+module path `opendustpan.org/client`. It is not a Go submodule of this
+repository. The owner's reasons: each language has its own release tooling and
+its own registry, and one repository for each language keeps them apart. A
+client change needs a pull request in a separate repository, and that extra step
+makes a person think before they break a client. The client is outside the
+`go.mod` of the server. The CLI and the providers use the client from
+`client-go` in every option of question 3b.
 
 #### 3b. The CLI and the providers
 
 | Option | Gives | Costs |
 | --- | --- | --- |
-| A. The CLI in this repository. Each provider in its own repository. | The CLI changes with the API in one pull request, and it needs no new repository. Each provider has the release line that its registry expects. | An API change that touches a provider needs a pull request in another repository. |
+| A. The CLI in this repository. Each provider in its own repository. | The CLI needs no new repository, and its code changes in this repository. Each provider has the release line that its registry expects. | An API change that the CLI or a provider uses needs a `client-go` release first. A change that touches a provider also needs a pull request in another repository. |
 | B. One new repository for the CLI and both providers | The CLI and the providers share a release and a version line of their own. | A registry that expects one release line for each provider cannot use it (see the benchmark). |
 | C. A repository for each product, with the CLI too | Each has its own release page and tag. | Three repositories for thin layers over one client, and the CLI leaves the repository whose API it calls. |
 
-**Decided by the product manager on 2026-10-20 (rule 16): A.** The OpenTofu
-provider and the Pulumi provider each live in their own repository. The names
-follow the convention of each tool: `terraform-provider-<name>` for the
-OpenTofu registry, and `pulumi-<name>` for the Pulumi plugin download. The
-exact names are fixed when each repository is created, and the naming rules of
-each registry are checked at that time. The `dustpan` CLI stays in this
-repository for now. It calls the REST API through the client, and it imports no
-server package. To move the CLI to its own repository is a later decision.
-Before 1.0, a client release ships on the day of each server minor release,
-and it pins that minor version (question 8).
+**Decided by the product manager under the owner's delegation of 20 October
+2026: A.** The OpenTofu provider and the Pulumi provider each live in their own
+repository. The names follow the convention of each tool:
+`terraform-provider-<name>` for the OpenTofu registry, and `pulumi-<name>` for
+the Pulumi plugin download. These names follow what the installer of each tool
+expects. Such a name is a protocol name, as in ADR 170 decision 8, and it does
+not make another project's name ours. The documentation says that a provider
+"works with OpenTofu" and "works with the Pulumi CLI". The exact names are fixed
+when each repository is created, and the naming rules of each registry are
+checked at that time. The `dustpan` CLI stays in this repository for now. It
+calls the REST API through the client, and it imports no server package. To move
+the CLI to its own repository is a later decision. Before 1.0, a client release
+ships on the day of each server minor release, and it pins that minor version
+(question 8).
 
 Benchmark: every published OpenTofu and Terraform provider has its own
 repository, and the registry protocol expects one release line for each
