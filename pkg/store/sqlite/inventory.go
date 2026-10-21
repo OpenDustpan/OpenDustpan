@@ -392,6 +392,13 @@ func (s *Store) GetDeletedUnit(
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
+	return s.deletedUnit(ctx, ns, tool, unitID)
+}
+
+// deletedUnit reads one deleted unit. The caller holds the read lock.
+func (s *Store) deletedUnit(
+	ctx context.Context, ns namespace.Name, tool, unitID string,
+) (inventory.DeletedEntry, error) {
 	row, err := s.queries.GetDeletedInventory(ctx, db.GetDeletedInventoryParams{
 		Namespace: ns.String(), Tool: tool, UnitID: unitID,
 	})
@@ -556,4 +563,42 @@ func inventoryLock(row db.ListInventoryRow) *inventory.Lock {
 	}
 
 	return lock
+}
+
+// GetDeletedUnitFacts implements inventory.DeletedFactsReader. The collection
+// is the membership that stays until the purge. The labels are the tags that
+// the tool keeps for the unit until the purge.
+func (s *Store) GetDeletedUnitFacts(
+	ctx context.Context, ns namespace.Name, tool, unitID string,
+) (inventory.DeletedFacts, error) {
+	// One lock over all reads: the entry, the collection and the labels come
+	// from the same state of the database.
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	if _, err := s.deletedUnit(ctx, ns, tool, unitID); err != nil {
+		return inventory.DeletedFacts{}, err
+	}
+
+	facts := inventory.DeletedFacts{Collection: "", Labels: map[string]string{}}
+
+	name, err := s.queries.GetUnitCollection(ctx, unitID)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+	case err != nil:
+		return inventory.DeletedFacts{}, fmt.Errorf("select collection of deleted unit: %w", err)
+	default:
+		facts.Collection = name
+	}
+
+	tags, err := s.queries.GetStackTags(ctx, unitID)
+	if err != nil {
+		return inventory.DeletedFacts{}, fmt.Errorf("select labels of deleted unit: %w", err)
+	}
+
+	for _, t := range tags {
+		facts.Labels[t.Name] = t.Value
+	}
+
+	return facts, nil
 }

@@ -57,9 +57,9 @@ type SweepTool interface {
 	// whose retention period ended by then: a restore and a new delete after
 	// the sweep read the unit gave it a new retention period.
 	PurgeExpired(ctx context.Context, ns namespace.Name, unitID string, dueBy time.Time, e audit.Entry) error
-	// DeletePurgedBlobs deletes every blob of the purged unit unitID. It
-	// returns nil only when no blob of the unit remains.
-	DeletePurgedBlobs(ctx context.Context, unitID string) error
+	// DeletePurgedBlobs deletes every blob of the purged unit unitID of ns.
+	// It returns nil only when no blob of the unit remains.
+	DeletePurgedBlobs(ctx context.Context, ns namespace.Name, unitID string) error
 }
 
 // Reference returns the unit reference of e in the form
@@ -348,7 +348,7 @@ func (s *Sweeper) deletePurgedBlobs(ctx context.Context, r BlobPurge) bool {
 		return false
 	}
 
-	if err := tool.DeletePurgedBlobs(ctx, r.UnitID); err != nil {
+	if err := tool.DeletePurgedBlobs(ctx, r.Namespace, r.UnitID); err != nil {
 		if !stopped(ctx) {
 			s.cfg.Logger.WarnContext(ctx, "blobs of a purged unit remain after the retention sweep",
 				slog.String("tool", r.Tool), slog.String("unit_id", r.UnitID),

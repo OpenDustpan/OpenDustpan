@@ -40,6 +40,7 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -659,6 +660,9 @@ type services struct {
 	// collections is the collection service (ADR 51), or nil when the store
 	// holds no collections. NewServer sets it after newServices.
 	collections *collection.Service
+	// gates checks the writes of state against the access limits and the
+	// gates of state.write, or is nil when the store keeps no gates.
+	gates *gateService
 	// deleted runs the retention sweep. assemble sets it, because
 	// it counts on the server metrics.
 	deleted *deletedSweeper
@@ -778,7 +782,7 @@ func NewServer(opts ...Option) (*Server, error) {
 
 	svc.tokens, svc.access = tokens, grants
 
-	svc.collections, err = newCollectionService(cfg)
+	svc.collections, svc.gates, err = newCollectionAndGateServices(cfg, svc.namespaces)
 	if err != nil {
 		return nil, err
 	}
@@ -1309,6 +1313,7 @@ func newTFEHandler(
 			observed.IncAuditAppendFailure()
 		},
 		DenialLimiter: cfg.denialLimiter,
+		StateGuard:    stateGuardOf(svc.gates),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("tfe api: %w", err)
@@ -1402,11 +1407,19 @@ func newWorkspaceService(
 		blobs = cfg.blobStore
 	}
 
+	refusals, err := secret.NewAuditOutOfScope(
+		serverAuditOf(cfg.namespaceStore), audit.ChannelAPI, workspace.StateBlobFamily(), cfg.now,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("workspace service: %w", err)
+	}
+
 	workspaces, err := workspace.NewService(workspace.Config{
 		Workspaces:         cfg.workspaceStore,
 		States:             cfg.stateStore,
 		Blobs:              blobs,
 		Namespaces:         namespaces,
+		OutOfScope:         refusals,
 		Sealer:             secrets,
 		Logger:             cfg.logger,
 		Now:                cfg.now,
@@ -1563,6 +1576,7 @@ func newServices(cfg *settings, tokens *accesstoken.Service) (services, error) {
 		deleted:     nil,
 		access:      nil,
 		collections: nil,
+		gates:       nil,
 	}, nil
 }
 
@@ -2358,13 +2372,36 @@ func newProfileHandler(svc services, cfg *settings, onFailure func()) (http.Hand
 	return handler, nil
 }
 
-// writeOnceFamilies are the blob key families that the cache keeps: a key in
-// them never holds other bytes, also after a delete. OpenTofu state versions
-// have such keys. Pulumi checkpoints and journal batches do not: a retry or a
-// restore can write a deleted key again.
+// writeOnceFamilies are the directories, inside the scope of one namespace
+// ("namespaces/<namespace ID>/"), of the blob key families that the cache
+// keeps: a key in them never holds other bytes, also after a delete. OpenTofu
+// state versions have such keys. Pulumi checkpoints and journal batches do
+// not: a retry or a restore can write a deleted key again. The list never
+// holds the namespace directory itself, which would cache them too.
 //
 //nolint:gochecknoglobals // A fixed list; Go has no constant slices.
-var writeOnceFamilies = []string{"tofu/"}
+var writeOnceFamilies = []string{"tofu"}
+
+// writeOnceKey reports whether key is in a write-once family of a namespace:
+// "namespaces/<namespace ID>/<family>/...", with a valid namespace ID. The
+// match is on whole segments, so a family name that only starts the same
+// ("tofu-x") or a key of no namespace does not match.
+func writeOnceKey(key blob.Key) bool {
+	parts := strings.SplitN(key.String(), "/", writeOnceKeyParts)
+	if len(parts) != writeOnceKeyParts || parts[0] != "namespaces" || parts[3] == "" {
+		return false
+	}
+
+	if _, err := namespace.ParseID(parts[1]); err != nil {
+		return false
+	}
+
+	return slices.Contains(writeOnceFamilies, parts[2])
+}
+
+// writeOnceKeyParts is the number of parts that writeOnceKey reads: "namespaces",
+// the namespace ID, the family, and the rest of the key.
+const writeOnceKeyParts = 4
 
 // wrapBlobCache sets the blob store of the workspace service: the in-process
 // cache over the blob store when WithBlobCache sets a size, else the blob
@@ -2384,7 +2421,7 @@ func wrapBlobCache(cfg *settings) error {
 	cached, err := blobcache.New(cfg.blobStore, blobcache.Config{
 		MaxBytes:       cfg.blobCacheBytes,
 		MaxObjectBytes: 0,
-		Cacheable:      blobcache.WriteOncePrefixes(writeOnceFamilies...),
+		Cacheable:      writeOnceKey,
 	})
 	if err != nil {
 		return fmt.Errorf("blob cache: %w", err)
@@ -2488,6 +2525,7 @@ func newInventoryHandler(svc services, cfg *settings, onFailure func()) (http.Ha
 		Audit:          neutralAudit,
 		OnAuditFailure: onFailure,
 		DenialLimiter:  cfg.denialLimiter,
+		StateGuard:     inventoryGuardOf(svc.gates),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("inventory api: %w", err)

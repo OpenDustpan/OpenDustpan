@@ -14,6 +14,7 @@ import (
 
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/workspace"
+	"opendustpan.org/opendustpan/pkg/workspace/workspacetest"
 )
 
 // streamDoc is a state document that declares its own serial and lineage. The
@@ -577,6 +578,7 @@ func ctxAwareService(t *testing.T, f fixture) *workspace.Service {
 		States:             ctxStates{StateStore: f.store},
 		Blobs:              f.blobs,
 		Namespaces:         f.namespaces,
+		OutOfScope:         workspacetest.NewRefusals(),
 		Sealer:             f.secrets,
 		Logger:             nil,
 		Now:                func() time.Time { return *f.now },

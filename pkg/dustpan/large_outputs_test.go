@@ -252,12 +252,20 @@ func putStateUpload(
 func blobTotal(t *testing.T, f largeOutputsFixture, ws workspace.Workspace) int {
 	t.Helper()
 
-	listed, err := f.blobs.List(t.Context(), "tofu/"+ws.ID.String()+"/")
+	listed, err := f.blobs.List(t.Context(), "namespaces/")
 	if err != nil {
 		t.Fatalf("list blobs: %v", err)
 	}
 
-	return len(listed)
+	n := 0
+
+	for _, obj := range listed {
+		if parsed, parseErr := workspace.ParseStateBlobKey(obj.Key); parseErr == nil && parsed.Workspace == ws.ID {
+			n++
+		}
+	}
+
+	return n
 }
 
 // postHTTPBackend POSTs content to the http backend address and returns its

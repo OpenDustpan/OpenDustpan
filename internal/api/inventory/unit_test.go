@@ -120,6 +120,7 @@ func newUnitHandler(t *testing.T, authz identity.Authorizer) *apiinventory.Handl
 		Now:           nil,
 		PublicURL:     "https://dustpan.example.com",
 		DenialLimiter: nil,
+		StateGuard:    nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)

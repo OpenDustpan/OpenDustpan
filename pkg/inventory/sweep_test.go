@@ -49,12 +49,14 @@ type sweepTool struct {
 	entries  []audit.Entry
 	dueBys   []time.Time
 	deleted  []string
+	// deletedIn holds the namespace of each blob delete, in the order of deleted.
+	deletedIn []namespace.Name
 }
 
 func newSweepTool() *sweepTool {
 	return &sweepTool{
 		mu: sync.Mutex{}, errs: map[string]error{}, blobErrs: map[string]error{},
-		entries: nil, dueBys: nil, deleted: nil,
+		entries: nil, dueBys: nil, deleted: nil, deletedIn: nil,
 	}
 }
 
@@ -74,11 +76,12 @@ func (l *sweepTool) PurgeExpired(
 	return nil
 }
 
-func (l *sweepTool) DeletePurgedBlobs(_ context.Context, unitID string) error {
+func (l *sweepTool) DeletePurgedBlobs(_ context.Context, ns namespace.Name, unitID string) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
 	l.deleted = append(l.deleted, unitID)
+	l.deletedIn = append(l.deletedIn, ns)
 
 	return l.blobErrs[unitID]
 }
@@ -298,9 +301,17 @@ func TestSweepFinishesOnlyOldRecords(t *testing.T) {
 		t.Fatalf("finished = %v, want pulumi/stk-gone", f.records.finished)
 	}
 
-	for _, id := range f.tool.deleted {
+	for i, id := range f.tool.deleted {
 		if id == "stk-young" {
 			t.Fatal("sweep deleted the blobs of a record inside its grace period")
+		}
+
+		if f.tool.deletedIn[i] != "acme" {
+			t.Fatalf(
+				"blob delete of %s ran in namespace %q, want the namespace of its record, acme",
+				id,
+				f.tool.deletedIn[i],
+			)
 		}
 	}
 

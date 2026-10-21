@@ -132,7 +132,7 @@ func seedJob(ctx context.Context, st namespace.Store, name string) (JobSeed, err
 			Pool: "default", Profile: "", Edits: nil, Delivery: "",
 		},
 		State: job.StateQueued, Wait: job.WaitNone, Reason: "", Phases: make([]job.Phase, len(phases)), Current: 0,
-		StartedBy: "e2e", Agent: "", AgentMode: "", BreakGlass: nil, Delivery: nil, Closed: nil,
+		StartedBy: actor, Agent: "", AgentMode: "", BreakGlass: nil, Delivery: nil, Closed: nil,
 		Verification: job.VerificationNone, IdempotencyKey: "", Version: 0, CreatedAt: time.Time{},
 		UpdatedAt: time.Time{},
 	}
@@ -164,7 +164,8 @@ func seedWorkspace(
 
 	now := time.Now().UTC()
 	w := workspace.Workspace{
-		CreatedAt: now, UpdatedAt: now, Lock: workspace.Lock{LockedAt: time.Time{}, ID: "", Holder: "", Reason: ""},
+		NamespaceID: "",
+		CreatedAt:   now, UpdatedAt: now, Lock: workspace.Lock{LockedAt: time.Time{}, ID: "", Holder: "", Reason: ""},
 		ID: workspace.ID(ident.NewID("ws-")), Ref: workspace.Ref{Namespace: fence.Namespace, Name: ref}, Revision: 1,
 		Overrides: namespace.Overrides{Forced: false, Unlocked: false},
 	}

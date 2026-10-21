@@ -75,8 +75,9 @@ func (conflictWorkspaces) GetByID(_ context.Context, id workspace.ID) (workspace
 	}
 
 	return workspace.Workspace{
-		CreatedAt: stubWorkspaceTime(),
-		UpdatedAt: stubWorkspaceTime(),
+		NamespaceID: "",
+		CreatedAt:   stubWorkspaceTime(),
+		UpdatedAt:   stubWorkspaceTime(),
 		Lock: workspace.Lock{
 			LockedAt: stubWorkspaceTime(),
 			ID:       "lock-alice",
@@ -115,6 +116,7 @@ func newConflictHandler(t *testing.T) *tfe.Handler {
 		MaxStateBytes:  0,
 		OnAuditFailure: nil,
 		DenialLimiter:  nil,
+		StateGuard:     nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -281,8 +283,9 @@ func (r *raceWorkspaces) lockedWorkspace(holder string) workspace.Workspace {
 	name, _ := workspace.ParseName("web") //nolint:errcheck // The test workspace name is valid.
 
 	return workspace.Workspace{
-		CreatedAt: stubWorkspaceTime(),
-		UpdatedAt: stubWorkspaceTime(),
+		NamespaceID: "",
+		CreatedAt:   stubWorkspaceTime(),
+		UpdatedAt:   stubWorkspaceTime(),
 		Lock: workspace.Lock{
 			LockedAt: stubWorkspaceTime(),
 			ID:       "lock-test",
@@ -393,6 +396,7 @@ func TestConcurrentLocksReportHeldLock(t *testing.T) {
 		MaxStateBytes:  0,
 		OnAuditFailure: nil,
 		DenialLimiter:  nil,
+		StateGuard:     nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)

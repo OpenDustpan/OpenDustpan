@@ -71,13 +71,14 @@ func TestCollectionWritesAreAudited(t *testing.T) {
 	}
 
 	w := workspace.Workspace{
-		CreatedAt: ns.CreatedAt,
-		UpdatedAt: ns.CreatedAt,
-		Lock:      workspace.Lock{LockedAt: time.Time{}, ID: "", Holder: "", Reason: ""},
-		ID:        workspace.ID(ident.NewID("ws-")),
-		Ref:       workspace.Ref{Namespace: ns.Name, Name: mustWorkspaceName(t, "web")},
-		Revision:  1,
-		Overrides: namespace.Overrides{Forced: false, Unlocked: false},
+		NamespaceID: "",
+		CreatedAt:   ns.CreatedAt,
+		UpdatedAt:   ns.CreatedAt,
+		Lock:        workspace.Lock{LockedAt: time.Time{}, ID: "", Holder: "", Reason: ""},
+		ID:          workspace.ID(ident.NewID("ws-")),
+		Ref:         workspace.Ref{Namespace: ns.Name, Name: mustWorkspaceName(t, "web")},
+		Revision:    1,
+		Overrides:   namespace.Overrides{Forced: false, Unlocked: false},
 	}
 	if err := s.CreateWorkspace(ctx, w, ns.Fence()); err != nil {
 		t.Fatalf("create workspace: %v", err)

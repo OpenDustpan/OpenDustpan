@@ -87,8 +87,8 @@ func TestBlobCacheServesRepeatReads(t *testing.T) {
 	}
 }
 
-// keyCounter counts the Get calls on a blob store by key family, the first
-// key segment.
+// keyCounter counts the Get calls on a blob store by key family: the first key
+// segment, or the segment after the namespace ID for a key of a namespace.
 type keyCounter struct {
 	blob.Store
 
@@ -97,7 +97,12 @@ type keyCounter struct {
 }
 
 func (c *keyCounter) Get(ctx context.Context, key blob.Key) (io.ReadCloser, error) {
-	family, _, _ := strings.Cut(key.String(), "/")
+	parts := strings.Split(key.String(), "/")
+	family := parts[0]
+
+	if family == "namespaces" && len(parts) > 2 {
+		family = parts[2]
+	}
 
 	c.mu.Lock()
 	c.gets[family]++

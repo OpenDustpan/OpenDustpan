@@ -440,7 +440,7 @@ type foreignKey struct {
 // each. Each key is a plain conversion, so no check of ParseKey ran on it.
 func foreignKeys(id secret.ItemKeyID) map[string]foreignKey {
 	a, other, tail := string(nsA), string(nsB), "/item-keys/"+string(id)+"/v1"
-	outside, inside := secret.OutsideNamespace, secret.OutsideItemKeys
+	outside, inside := secret.OutsideNamespace, secret.OutsideDirectory
 
 	return map[string]foreignKey{
 		"the item key of another namespace": {blob.Key("namespaces/" + other + tail), outside},
@@ -718,7 +718,12 @@ func TestAuditOutOfScope(t *testing.T) {
 	at := time.Date(2026, time.October, 20, 12, 0, 0, 0, time.UTC)
 	store := &fakeServerStore{err: nil, entries: nil}
 
-	rec, err := secret.NewAuditOutOfScope(store, audit.ChannelConsole, func() time.Time { return at })
+	rec, err := secret.NewAuditOutOfScope(
+		store,
+		audit.ChannelConsole,
+		secret.ItemKeyFamily(),
+		func() time.Time { return at },
+	)
 	if err != nil {
 		t.Fatalf("new: %v", err)
 	}
@@ -750,7 +755,7 @@ func TestAuditOutOfScopeReasonAndChannel(t *testing.T) {
 	}{
 		{secret.OutsideNamespace, audit.ChannelAPI, "item key blob get refused: key outside the namespace"},
 		{
-			secret.OutsideItemKeys,
+			secret.OutsideDirectory,
 			audit.ChannelConsole,
 			"item key blob get refused: key outside the item-keys directory of the namespace",
 		},
@@ -759,7 +764,7 @@ func TestAuditOutOfScopeReasonAndChannel(t *testing.T) {
 	for _, tc := range tests {
 		store := &fakeServerStore{err: nil, entries: nil}
 
-		rec, err := secret.NewAuditOutOfScope(store, tc.channel, nil)
+		rec, err := secret.NewAuditOutOfScope(store, tc.channel, secret.ItemKeyFamily(), nil)
 		if err != nil {
 			t.Fatalf("new: %v", err)
 		}
@@ -786,20 +791,38 @@ func TestAuditOutOfScopeReasonAndChannel(t *testing.T) {
 }
 
 // TestAuditOutOfScopeRefusesAWrongChannelOrPlace proves that the recorder fails
-// closed: a channel that is not api or console, and a place that it does not
-// know, write nothing.
+// closed: a channel that is not api or console, a family name that is not
+// valid, and a place that it does not know, write nothing.
 func TestAuditOutOfScopeRefusesAWrongChannelOrPlace(t *testing.T) {
 	t.Parallel()
 
 	store := &fakeServerStore{err: nil, entries: nil}
 
 	for _, channel := range []audit.Channel{"", "startup", "config-file", "api\nforged", "API"} {
-		if _, err := secret.NewAuditOutOfScope(store, channel, nil); !errors.Is(err, secret.ErrInvalidChannel) {
+		_, err := secret.NewAuditOutOfScope(store, channel, secret.ItemKeyFamily(), nil)
+		if !errors.Is(err, secret.ErrInvalidChannel) {
 			t.Errorf("channel %q: err = %v, want ErrInvalidChannel", channel, err)
 		}
 	}
 
-	rec, err := secret.NewAuditOutOfScope(store, audit.ChannelAPI, nil)
+	badFamilies := []secret.OutOfScopeFamily{
+		{Blobs: "", Dir: "item-keys"},
+		{Blobs: "item key blob", Dir: ""},
+		{Blobs: "item key blob\nforged", Dir: "item-keys"},
+		{Blobs: "item key blob", Dir: "item-keys/../x"},
+		{Blobs: "Item key blob", Dir: "item-keys"},
+		{Blobs: "-item", Dir: "item-keys"},
+		{Blobs: strings.Repeat("a", 33), Dir: "item-keys"},
+	}
+
+	for _, family := range badFamilies {
+		_, famErr := secret.NewAuditOutOfScope(store, audit.ChannelAPI, family, nil)
+		if !errors.Is(famErr, secret.ErrInvalidFamily) {
+			t.Errorf("family %q: err = %v, want ErrInvalidFamily", family, famErr)
+		}
+	}
+
+	rec, err := secret.NewAuditOutOfScope(store, audit.ChannelAPI, secret.ItemKeyFamily(), nil)
 	if err != nil {
 		t.Fatalf("new: %v", err)
 	}
@@ -842,7 +865,7 @@ func TestAuditOutOfScopeRefusesHostileInput(t *testing.T) {
 
 	store := &fakeServerStore{err: nil, entries: nil}
 
-	rec, err := secret.NewAuditOutOfScope(store, audit.ChannelAPI, nil)
+	rec, err := secret.NewAuditOutOfScope(store, audit.ChannelAPI, secret.ItemKeyFamily(), nil)
 	if err != nil {
 		t.Fatalf("new: %v", err)
 	}
@@ -868,7 +891,7 @@ func TestAuditOutOfScopeRefusesHostileInput(t *testing.T) {
 		t.Errorf("append failure err = %v, want the store error", recErr)
 	}
 
-	_, newErr := secret.NewAuditOutOfScope(nil, audit.ChannelAPI, nil)
+	_, newErr := secret.NewAuditOutOfScope(nil, audit.ChannelAPI, secret.ItemKeyFamily(), nil)
 	if !errors.Is(newErr, secret.ErrMissingDependency) {
 		t.Errorf("nil store err = %v, want ErrMissingDependency", newErr)
 	}
@@ -881,7 +904,7 @@ func TestItemKeyBlobsAuditEndToEnd(t *testing.T) {
 
 	entries := &fakeServerStore{err: nil, entries: nil}
 
-	rec, err := secret.NewAuditOutOfScope(entries, audit.ChannelAPI, nil)
+	rec, err := secret.NewAuditOutOfScope(entries, audit.ChannelAPI, secret.ItemKeyFamily(), nil)
 	if err != nil {
 		t.Fatalf("recorder: %v", err)
 	}

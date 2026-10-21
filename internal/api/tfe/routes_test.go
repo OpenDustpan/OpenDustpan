@@ -271,6 +271,7 @@ func newObjectHandler(t *testing.T, authz identity.Authorizer) *tfe.Handler {
 		MaxStateBytes:  0,
 		OnAuditFailure: nil,
 		DenialLimiter:  nil,
+		StateGuard:     nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -342,13 +343,14 @@ func (stubWorkspaces) Create(_ context.Context, ref workspace.Ref) (workspace.Wo
 	}
 
 	return workspace.Workspace{
-		CreatedAt: stubWorkspaceTime(),
-		UpdatedAt: stubWorkspaceTime(),
-		Lock:      workspace.Lock{LockedAt: time.Time{}, ID: "", Holder: "", Reason: ""},
-		ID:        workspace.ID("ws-" + name.String()),
-		Ref:       workspace.Ref{Namespace: ns, Name: name},
-		Revision:  1,
-		Overrides: namespace.Overrides{Forced: false, Unlocked: false},
+		NamespaceID: "",
+		CreatedAt:   stubWorkspaceTime(),
+		UpdatedAt:   stubWorkspaceTime(),
+		Lock:        workspace.Lock{LockedAt: time.Time{}, ID: "", Holder: "", Reason: ""},
+		ID:          workspace.ID("ws-" + name.String()),
+		Ref:         workspace.Ref{Namespace: ns, Name: name},
+		Revision:    1,
+		Overrides:   namespace.Overrides{Forced: false, Unlocked: false},
 	}, nil
 }
 
@@ -518,7 +520,7 @@ func stubStateVersion() workspace.StateVersion {
 		LockID:          "lock-test",
 		Lineage:         "seed-lineage",
 		Status:          workspace.StatusFinalized,
-		Content:         "tofu/ws-test123/sv-test123/seed",
+		Content:         "namespaces/ns-aaaaaaaaaaaaaaaaaaaa/tofu/ws-test123/sv-test123/seed",
 		Outputs:         []byte(stubStateOutputs()),
 		MD5:             sum,
 		Serial:          3,
@@ -860,8 +862,9 @@ func stubWorkspaceByID(id workspace.ID) (workspace.Workspace, error) {
 	}
 
 	return workspace.Workspace{
-		CreatedAt: stubWorkspaceTime(),
-		UpdatedAt: stubWorkspaceTime(),
+		NamespaceID: "",
+		CreatedAt:   stubWorkspaceTime(),
+		UpdatedAt:   stubWorkspaceTime(),
 		Lock: workspace.Lock{
 			LockedAt: time.Time{},
 			ID:       "",
@@ -891,6 +894,7 @@ func newTestHandler(t *testing.T) *tfe.Handler {
 		MaxStateBytes:  0,
 		OnAuditFailure: nil,
 		DenialLimiter:  nil,
+		StateGuard:     nil,
 	}, tfe.ExtraRoutes)
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -915,6 +919,7 @@ func newEnforcingHandler(t *testing.T, authz identity.Authorizer) *tfe.Handler {
 		MaxStateBytes:  0,
 		OnAuditFailure: nil,
 		DenialLimiter:  nil,
+		StateGuard:     nil,
 	}, tfe.ExtraRoutes)
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -941,6 +946,7 @@ func newProductionHandler(t *testing.T) *tfe.Handler {
 		MaxStateBytes:  0,
 		OnAuditFailure: nil,
 		DenialLimiter:  nil,
+		StateGuard:     nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -1840,6 +1846,7 @@ func TestErrorHidesInternalDetail(t *testing.T) {
 		MaxStateBytes:  0,
 		OnAuditFailure: nil,
 		DenialLimiter:  nil,
+		StateGuard:     nil,
 	}, tfe.ExtraRoutes)
 	if err != nil {
 		t.Fatalf("handler: %v", err)

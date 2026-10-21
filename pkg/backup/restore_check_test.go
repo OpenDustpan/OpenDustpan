@@ -131,8 +131,8 @@ func newCheckSetup(t *testing.T) *checkSetup {
 
 	target := newMemStore()
 	blobs := map[string][]byte{
-		"tofu/ws1/sv1/a1": []byte(`{"state":1}`),
-		"tofu/ws1/sv2/a1": []byte(`{"state":2}`),
+		"namespaces/ns-aaaaaaaaaaaaaaaaaaaa/tofu/ws1/sv1/a1": []byte(`{"state":1}`),
+		"namespaces/ns-aaaaaaaaaaaaaaaaaaaa/tofu/ws1/sv2/a1": []byte(`{"state":2}`),
 	}
 	dump := restoreDump{
 		Keys: []secret.WrappedKey{testWrappedKey(t)},
@@ -506,14 +506,14 @@ func TestCheckRestoreMissingBlob(t *testing.T) {
 	t.Parallel()
 
 	s := newCheckSetup(t)
-	mustDelete(t, s.target, "blobs/tofu/ws1/sv2/a1")
+	mustDelete(t, s.target, "blobs/namespaces/ns-aaaaaaaaaaaaaaaaaaaa/tofu/ws1/sv2/a1")
 
 	_, _, err := s.check(t, testWrapper(), "")
 	if !errors.Is(err, backup.ErrCorrupt) {
 		t.Fatalf("err = %v, want ErrCorrupt", err)
 	}
 
-	if !strings.Contains(err.Error(), "blobs/tofu/ws1/sv2/a1") {
+	if !strings.Contains(err.Error(), "blobs/namespaces/ns-aaaaaaaaaaaaaaaaaaaa/tofu/ws1/sv2/a1") {
 		t.Fatalf("error = %q, want it to name the missing blob", err)
 	}
 
@@ -524,8 +524,8 @@ func TestCheckRestoreTamperedBlob(t *testing.T) {
 	t.Parallel()
 
 	s := newCheckSetup(t)
-	mustDelete(t, s.target, "blobs/tofu/ws1/sv2/a1")
-	s.target.storeObject(t, "blobs/tofu/ws1/sv2/a1", []byte(`{"state":3}`))
+	mustDelete(t, s.target, "blobs/namespaces/ns-aaaaaaaaaaaaaaaaaaaa/tofu/ws1/sv2/a1")
+	s.target.storeObject(t, "blobs/namespaces/ns-aaaaaaaaaaaaaaaaaaaa/tofu/ws1/sv2/a1", []byte(`{"state":3}`))
 
 	_, _, err := s.check(t, testWrapper(), "")
 	if !errors.Is(err, backup.ErrCorrupt) {
@@ -539,8 +539,8 @@ func TestCheckRestoreShortBlob(t *testing.T) {
 	t.Parallel()
 
 	s := newCheckSetup(t)
-	mustDelete(t, s.target, "blobs/tofu/ws1/sv1/a1")
-	s.target.storeObject(t, "blobs/tofu/ws1/sv1/a1", []byte("short"))
+	mustDelete(t, s.target, "blobs/namespaces/ns-aaaaaaaaaaaaaaaaaaaa/tofu/ws1/sv1/a1")
+	s.target.storeObject(t, "blobs/namespaces/ns-aaaaaaaaaaaaaaaaaaaa/tofu/ws1/sv1/a1", []byte("short"))
 
 	_, _, err := s.check(t, testWrapper(), "")
 	if !errors.Is(err, backup.ErrCorrupt) {

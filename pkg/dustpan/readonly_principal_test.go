@@ -220,6 +220,7 @@ func writeTargets(t *testing.T, w *contextWorld) []writeTarget {
 	logger := slog.New(slog.DiscardHandler)
 
 	units, err := inventoryapi.NewHandler(inventoryapi.Config{
+		StateGuard:     nil,
 		Views:          nil,
 		Audit:          nil,
 		OnAuditFailure: nil,

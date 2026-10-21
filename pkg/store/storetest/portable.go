@@ -789,11 +789,14 @@ func testPortableStageRefusesBlobs(t *testing.T, newStore PortableFactory) {
 
 	sink, sum, files := exportPortable(t, s)
 
-	if len(sum.Blobs) == 0 {
-		t.Fatal("export names no blob, want the blob of the finalized state version")
+	// A sealed reference matches by key and flag only, so the test changes
+	// the size of the first reference of a blob that is not sealed.
+	i := slices.IndexFunc(sum.Blobs, func(ref backup.BlobRef) bool { return !ref.Sealed })
+	if i < 0 {
+		t.Fatal("export names no unsealed blob, want the blob of a checkpoint")
 	}
 
-	sum.Blobs[0].Size++
+	sum.Blobs[i].Size++
 
 	dst := newStore(t)
 
