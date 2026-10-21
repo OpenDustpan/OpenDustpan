@@ -196,10 +196,21 @@ func (x triggerTx) EnabledFollows(ctx context.Context, ns namespace.Name) ([]tri
 // Upsert implements triggerstore.Tx.
 func (x triggerTx) Upsert(ctx context.Context, r triggerstore.Row) error {
 	n, err := x.q.UpsertTrigger(ctx, db.UpsertTriggerParams{
-		ID: r.ID, UnitTool: r.UnitTool, UnitID: r.UnitID, Kind: r.Kind, Preset: r.Preset, Cron: r.Cron,
-		SourceNamespace: r.SourceNamespace, SourceTool: r.SourceTool, SourceUnitID: r.SourceUnitID,
-		Enabled: r.Enabled, LastSaverSubject: r.LastSaverSubject, LastSaverID: r.LastSaverID, CreatedAtMs: r.CreatedAtMs,
-		UpdatedAtMs: r.UpdatedAtMs, Namespace: r.Namespace,
+		ID:               r.ID,
+		UnitTool:         r.UnitTool,
+		UnitID:           r.UnitID,
+		Kind:             r.Kind,
+		Preset:           r.Preset,
+		Cron:             r.Cron,
+		SourceNamespace:  r.SourceNamespace,
+		SourceTool:       r.SourceTool,
+		SourceUnitID:     r.SourceUnitID,
+		Enabled:          r.Enabled,
+		LastSaverSubject: r.LastSaverSubject,
+		LastSaverID:      r.LastSaverID,
+		CreatedAtMs:      r.CreatedAtMs,
+		UpdatedAtMs:      r.UpdatedAtMs,
+		Namespace:        r.Namespace,
 	})
 	if err != nil {
 		return fmt.Errorf("write trigger: %w", err)

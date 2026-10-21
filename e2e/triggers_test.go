@@ -462,6 +462,26 @@ func (fx *triggersFixture) firesATrigger(ctx context.Context, t *testing.T, firs
 		Check: inDoc(`"errorCode":"trigger.fire-conflict"`),
 	})
 
+	fx.firesWithAKey(ctx, t, fire, body, jobID)
+
+	fx.step(ctx, t, fx.ann(), e2e.APIStepSpec{
+		UserAgent: triggersAgent, Scheme: "token",
+		Name: "switch the trigger off", Method: http.MethodPut, Path: fx.triggers(fx.webID) + "/" + first.ID,
+		Body: `{"kind":"schedule","frequency":{"preset":"weekly"},"enabled":false}`, Want: http.StatusOK, Check: nil,
+	})
+
+	fx.env.APIStepA(ctx, t, e2e.APIStepSpec{
+		UserAgent: triggersAgent, Name: "a trigger that is off is not fired", Method: http.MethodPost, Path: fire,
+		Body: body, Want: http.StatusConflict, Scheme: "token", Check: inDoc(`"errorCode":"trigger.disabled"`),
+	})
+}
+
+// firesWithAKey proves that a caller key gives one job for two fires, that it is
+// another job than the one of the fires with no key (previous), and that a key
+// that is not valid is refused.
+func (fx *triggersFixture) firesWithAKey(ctx context.Context, t *testing.T, fire, body, previous string) {
+	t.Helper()
+
 	// A caller key makes a retry safe across a minute boundary: two fires with one
 	// key give one job, and it is another job than the one of the fires above.
 	var keyed string
@@ -481,8 +501,8 @@ func (fx *triggersFixture) firesATrigger(ctx context.Context, t *testing.T, firs
 					return fmt.Errorf("%w: one key made job %s, not %s", errTriggerDoc, doc.Job.ID, keyed)
 				}
 
-				if keyed == "" && doc.Job.ID == jobID {
-					return fmt.Errorf("%w: a key made the job %s of the fires with no key", errTriggerDoc, jobID)
+				if keyed == "" && doc.Job.ID == previous {
+					return fmt.Errorf("%w: a key made the job %s of the fires with no key", errTriggerDoc, previous)
 				}
 
 				keyed = doc.Job.ID
@@ -497,17 +517,6 @@ func (fx *triggersFixture) firesATrigger(ctx context.Context, t *testing.T, firs
 		Path: fire, Body: body, Want: http.StatusBadRequest, Scheme: "token",
 		Check: inDoc(`"errorCode":"request.idempotency-key-invalid"`),
 	}, map[string]string{"Idempotency-Key": strings.Repeat("k", 256)})
-
-	fx.step(ctx, t, fx.ann(), e2e.APIStepSpec{
-		UserAgent: triggersAgent, Scheme: "token",
-		Name: "switch the trigger off", Method: http.MethodPut, Path: fx.triggers(fx.webID) + "/" + first.ID,
-		Body: `{"kind":"schedule","frequency":{"preset":"weekly"},"enabled":false}`, Want: http.StatusOK, Check: nil,
-	})
-
-	fx.env.APIStepA(ctx, t, e2e.APIStepSpec{
-		UserAgent: triggersAgent, Name: "a trigger that is off is not fired", Method: http.MethodPost, Path: fire,
-		Body: body, Want: http.StatusConflict, Scheme: "token", Check: inDoc(`"errorCode":"trigger.disabled"`),
-	})
 }
 
 // refusesASaverWithoutAccess proves that a start refuses a last saver who lost

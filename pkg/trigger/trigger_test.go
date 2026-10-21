@@ -30,8 +30,18 @@ func follows(id trigger.ID, unitID, sourceID string) trigger.Trigger {
 
 func schedule(id trigger.ID, f trigger.Frequency) trigger.Trigger {
 	return trigger.Trigger{
-		ID: id, Unit: unit("a"), Kind: trigger.KindSchedule, Frequency: f,
-		Source: graph.Unit{Namespace: "", Tool: "", ID: ""}, Enabled: true, LastSaver: "user:ada", LastSaverID: "prn-user:ada",
+		ID:        id,
+		Unit:      unit("a"),
+		Kind:      trigger.KindSchedule,
+		Frequency: f,
+		Source: graph.Unit{
+			Namespace: "",
+			Tool:      "",
+			ID:        "",
+		},
+		Enabled:     true,
+		LastSaver:   "user:ada",
+		LastSaverID: "prn-user:ada",
 	}
 }
 

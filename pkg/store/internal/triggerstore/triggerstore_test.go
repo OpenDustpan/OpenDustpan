@@ -445,6 +445,12 @@ func TestApplyPut(t *testing.T) {
 			t.Fatalf("put: %v", err)
 		}
 	})
+}
+
+func TestApplyPutBesideARowThatFailsItsChecks(t *testing.T) {
+	t.Parallel()
+
+	at := time.UnixMilli(5_000)
 
 	t.Run("skips a follows row that does not validate and reports it", func(t *testing.T) {
 		t.Parallel()
@@ -473,7 +479,11 @@ func TestApplyPut(t *testing.T) {
 	t.Run("a valid row still closes a loop beside a row that does not validate", func(t *testing.T) {
 		t.Parallel()
 
-		tx := newMemTx(follows("f1", unitA(), unitC()), follows("f2", unitB(), unitA()), follows("f3", unitC(), unitB()))
+		tx := newMemTx(
+			follows("f1", unitA(), unitC()),
+			follows("f2", unitB(), unitA()),
+			follows("f3", unitC(), unitB()),
+		)
 		bad := tx.rows["f3"]
 		bad.LastSaverID = ""
 		tx.rows["f3"] = bad
@@ -495,7 +505,10 @@ func TestUsable(t *testing.T) {
 
 	var skipped []string
 
-	got := triggerstore.Usable([]triggerstore.Row{bad, good}, func(r triggerstore.Row) { skipped = append(skipped, r.ID) })
+	got := triggerstore.Usable(
+		[]triggerstore.Row{bad, good},
+		func(r triggerstore.Row) { skipped = append(skipped, r.ID) },
+	)
 	if len(got) != 1 || got[0].ID != "f1" || len(skipped) != 1 || skipped[0] != "f2" {
 		t.Errorf("usable = %v, skipped = %v; want [f1] and [f2]", got, skipped)
 	}

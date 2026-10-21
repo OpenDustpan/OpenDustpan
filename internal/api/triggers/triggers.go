@@ -271,8 +271,10 @@ func classifyRule(err error) errorResponse {
 		}
 	case errors.Is(err, idempotency.ErrInvalidKey):
 		return errorResponse{
-			Code: http.StatusBadRequest, ErrorCode: codeKeyInvalid, Message: refusal.Clean(err.Error(), maxMessageBytes),
-			Units: nil,
+			Code:      http.StatusBadRequest,
+			ErrorCode: codeKeyInvalid,
+			Message:   refusal.Clean(err.Error(), maxMessageBytes),
+			Units:     nil,
 		}
 	case errors.Is(err, errBody):
 		return errorResponse{

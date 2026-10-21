@@ -407,6 +407,7 @@ func (m *Manager) build(ctx context.Context, c *saveCall) (Trigger, identity.Obj
 	t := Trigger{
 		ID: c.id, Unit: unit, Kind: c.in.Kind, Frequency: c.in.Frequency,
 		Source: graph.Unit{Namespace: "", Tool: "", ID: ""}, Enabled: c.in.Enabled, LastSaver: c.caller.Subject,
+		LastSaverID: "",
 	}
 
 	if c.in.SourceID == "" {

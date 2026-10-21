@@ -316,7 +316,7 @@ func decodeBody(raw []byte, v any) error {
 // readFireInput reads the optional body of a fire. An empty body is no reason
 // and no location.
 func readFireInput(w http.ResponseWriter, r *http.Request) (trigger.FireInput, error) {
-	none := trigger.FireInput{Reason: "", Location: job.Location{
+	none := trigger.FireInput{Reason: "", IdempotencyKey: "", Request: requestInfo(r), Location: job.Location{
 		Connection: "", Repository: "", Ref: "", Directory: "", Revision: "",
 	}}
 
@@ -334,7 +334,7 @@ func readFireInput(w http.ResponseWriter, r *http.Request) (trigger.FireInput, e
 		return none, err
 	}
 
-	in := trigger.FireInput{Reason: body.Reason, Location: none.Location}
+	in := trigger.FireInput{Reason: body.Reason, Location: none.Location, IdempotencyKey: "", Request: none.Request}
 	if l := body.Location; l != nil {
 		in.Location = job.Location{
 			Connection: l.Connection, Repository: l.Repository, Ref: l.Ref, Directory: l.Directory,

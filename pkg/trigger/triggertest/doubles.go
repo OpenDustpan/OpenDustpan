@@ -102,15 +102,6 @@ func (d *Doubles) SaverID(_ context.Context, subject string) (string, error) {
 	return d.idOf(subject), nil
 }
 
-// idOf returns the ID of the current record of subject. The caller holds mu.
-func (d *Doubles) idOf(subject string) string {
-	if id, ok := d.reused[subject]; ok {
-		return id
-	}
-
-	return SaverIDOf(subject)
-}
-
 // Final records a final state version of unit and returns its ID.
 func (d *Doubles) Final(_ *testing.T, unit graph.Unit) string {
 	d.mu.Lock()
@@ -185,6 +176,15 @@ func (d *Doubles) LastFinal(_ context.Context, unit graph.Unit) (string, bool, e
 	id, ok := d.last[unit]
 
 	return id, ok, nil
+}
+
+// idOf returns the ID of the current record of subject. The caller holds mu.
+func (d *Doubles) idOf(subject string) string {
+	if id, ok := d.reused[subject]; ok {
+		return id
+	}
+
+	return SaverIDOf(subject)
 }
 
 func (d *Doubles) write() string {

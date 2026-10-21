@@ -205,7 +205,12 @@ func TestSaverID(t *testing.T) {
 	}{
 		{"the ID of the record", func(*fakeResolver) {}, saverID(ada), nil},
 		{"a saver that is missing", func(r *fakeResolver) { delete(r.people, ada) }, "", trigger.ErrSaverDenied},
-		{"a saver that is disabled", func(r *fakeResolver) { r.errs[ada] = trigger.ErrSaverGone }, "", trigger.ErrSaverDenied},
+		{
+			"a saver that is disabled",
+			func(r *fakeResolver) { r.errs[ada] = trigger.ErrSaverGone },
+			"",
+			trigger.ErrSaverDenied,
+		},
 		{"a resolver that fails", func(r *fakeResolver) { r.errs[ada] = errDBDown }, "", trigger.ErrSaverDenied},
 		{"another subject", func(r *fakeResolver) { r.people[ada] = person(grace) }, "", trigger.ErrSaverDenied},
 		{"a record with no ID", func(r *fakeResolver) { r.ids[ada] = "" }, "", trigger.ErrSaverDenied},
@@ -219,7 +224,9 @@ func TestSaverID(t *testing.T) {
 			r.people[ada] = person(ada)
 			tt.setup(r)
 
-			c, err := trigger.NewSaverCheck(trigger.SaverCheckConfig{Resolver: r, Authorizer: newAuthz(), Units: newUnits()})
+			c, err := trigger.NewSaverCheck(
+				trigger.SaverCheckConfig{Resolver: r, Authorizer: newAuthz(), Units: newUnits()},
+			)
 			if err != nil {
 				t.Fatalf("NewSaverCheck = %v", err)
 			}

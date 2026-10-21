@@ -40,7 +40,10 @@ func storeCases() []suiteCase {
 		{"store: put refuses a saver that is empty, too long, hidden, not UTF-8 or a service principal", casePutSaver},
 		{"store: put refuses an audit entry of another namespace and an invalid entry", casePutAuditEntry},
 		{"store: put refuses a saver ID that is empty, too long, hidden or not UTF-8", casePutSaverID},
-		{"store: a stored row that fails its checks takes no part in the loop check and can be deleted", caseCorruptRow},
+		{
+			"store: a stored row that fails its checks takes no part in the loop check and can be deleted",
+			caseCorruptRow,
+		},
 	}
 }
 

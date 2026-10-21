@@ -21,7 +21,12 @@ func TestManagerCreateStoresTheSaverID(t *testing.T) {
 	}
 
 	if got.LastSaverID != saverID(ada) || r.store.triggers[got.ID].LastSaverID != saverID(ada) {
-		t.Errorf("saver ID = %q, stored %q; want %q", got.LastSaverID, r.store.triggers[got.ID].LastSaverID, saverID(ada))
+		t.Errorf(
+			"saver ID = %q, stored %q; want %q",
+			got.LastSaverID,
+			r.store.triggers[got.ID].LastSaverID,
+			saverID(ada),
+		)
 	}
 
 	// A replace by another person takes over the trigger, with the ID of that

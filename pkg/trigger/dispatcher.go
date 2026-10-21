@@ -288,17 +288,34 @@ func (d *dispatcher) recordDenial(ctx context.Context, t *Trigger, actor *job.Ac
 	}
 
 	_, err = d.audit.Append(ctx, fence, audit.Entry{
-		At: d.now().UTC(), Namespace: t.Unit.Namespace, Subject: actor.Principal.Subject, IDPSubject: "",
-		TokenID: actor.Principal.TokenID, Action: string(StartAction), Object: object, Version: "", ValuePath: "",
+		At:         d.now().UTC(),
+		Namespace:  t.Unit.Namespace,
+		Subject:    actor.Principal.Subject,
+		IDPSubject: "",
+		TokenID:    actor.Principal.TokenID,
+		Action:     string(StartAction),
+		Object:     object,
+		Version:    "",
+		ValuePath:  "",
 		ValueCount: nil,
 		Changes: []audit.Change{
 			{Key: changeTrigger, Old: nil, New: string(t.ID), Layer: "", TakesEffect: ""},
 			{Key: "trigger-saver", Old: nil, New: t.LastSaver, Layer: "", TakesEffect: ""},
 		},
-		SourceIP: req.SourceIP, UserAgent: req.UserAgent, Channel: channelOf(req), Kind: audit.KindChange,
-		Outcome: audit.OutcomeDenied, RequestID: req.RequestID, ObjectID: t.Unit.ID, PrevHash: "", Hash: "", Sequence: 0,
-		FenceVersion: 0, PrincipalKind: string(actor.Principal.Kind), JobID: "",
-		Reason: "the last saver of the trigger no longer holds the actions of a start",
+		SourceIP:      req.SourceIP,
+		UserAgent:     req.UserAgent,
+		Channel:       channelOf(req),
+		Kind:          audit.KindChange,
+		Outcome:       audit.OutcomeDenied,
+		RequestID:     req.RequestID,
+		ObjectID:      t.Unit.ID,
+		PrevHash:      "",
+		Hash:          "",
+		Sequence:      0,
+		FenceVersion:  0,
+		PrincipalKind: string(actor.Principal.Kind),
+		JobID:         "",
+		Reason:        "the last saver of the trigger no longer holds the actions of a start",
 	})
 	if err != nil {
 		return fmt.Errorf("append: %w", err)

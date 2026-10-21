@@ -47,10 +47,21 @@ type Row struct {
 // RowOf returns the row of t, stamped with atMs.
 func RowOf(t trigger.Trigger, atMs int64) Row {
 	r := Row{
-		Namespace: t.Unit.Namespace.String(), ID: string(t.ID), UnitTool: t.Unit.Tool, UnitID: t.Unit.ID,
-		Kind: string(t.Kind), Preset: string(t.Frequency.Preset), Cron: t.Frequency.Cron,
-		SourceNamespace: "", SourceTool: "", SourceUnitID: "", LastSaverSubject: t.LastSaver, LastSaverID: t.LastSaverID,
-		Enabled: 0, CreatedAtMs: atMs, UpdatedAtMs: atMs,
+		Namespace:        t.Unit.Namespace.String(),
+		ID:               string(t.ID),
+		UnitTool:         t.Unit.Tool,
+		UnitID:           t.Unit.ID,
+		Kind:             string(t.Kind),
+		Preset:           string(t.Frequency.Preset),
+		Cron:             t.Frequency.Cron,
+		SourceNamespace:  "",
+		SourceTool:       "",
+		SourceUnitID:     "",
+		LastSaverSubject: t.LastSaver,
+		LastSaverID:      t.LastSaverID,
+		Enabled:          0,
+		CreatedAtMs:      atMs,
+		UpdatedAtMs:      atMs,
 	}
 
 	if t.Source != (graph.Unit{Namespace: "", Tool: "", ID: ""}) {

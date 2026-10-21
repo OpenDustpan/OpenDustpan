@@ -546,7 +546,18 @@ func TestManagerFireLocation(t *testing.T) {
 			t.Fatalf("Create = %v", err)
 		}
 
-		_, err = r.m.Fire(t.Context(), person(ada), acme, created.ID, trigger.FireInput{Reason: "", Location: loc})
+		_, err = r.m.Fire(
+			t.Context(),
+			person(ada),
+			acme,
+			created.ID,
+			trigger.FireInput{
+				Reason:         "",
+				Location:       loc,
+				IdempotencyKey: "",
+				Request:        trigger.RequestInfo{Channel: "", SourceIP: "", UserAgent: "", RequestID: ""},
+			},
+		)
 		wantErr(t, "Fire with "+name, err, trigger.ErrInvalid)
 
 		if len(r.disp.actors) != 0 {
@@ -581,7 +592,12 @@ func fireInvalidReasons(t *testing.T, r *managerRig, id trigger.ID) {
 			person(ada),
 			acme,
 			id,
-			trigger.FireInput{Reason: reason, Location: noLocation()},
+			trigger.FireInput{
+				Reason:         reason,
+				Location:       noLocation(),
+				IdempotencyKey: "",
+				Request:        trigger.RequestInfo{Channel: "", SourceIP: "", UserAgent: "", RequestID: ""},
+			},
 		)
 		wantErr(t, "Fire with "+name, err, trigger.ErrInvalid)
 	}
@@ -604,7 +620,12 @@ func TestManagerFire(t *testing.T) {
 		person(ada),
 		acme,
 		created.ID,
-		trigger.FireInput{Reason: "test run", Location: loc},
+		trigger.FireInput{
+			Reason:         "test run",
+			Location:       loc,
+			IdempotencyKey: "",
+			Request:        trigger.RequestInfo{Channel: "", SourceIP: "", UserAgent: "", RequestID: ""},
+		},
 	)
 	if err != nil || id != "job-1" {
 		t.Fatalf("Fire = %q, %v; want job-1", id, err)
@@ -619,11 +640,27 @@ func TestManagerFire(t *testing.T) {
 		person(grace),
 		acme,
 		created.ID,
-		trigger.FireInput{Reason: "", Location: noLocation()},
+		trigger.FireInput{
+			Reason:         "",
+			Location:       noLocation(),
+			IdempotencyKey: "",
+			Request:        trigger.RequestInfo{Channel: "", SourceIP: "", UserAgent: "", RequestID: ""},
+		},
 	)
 	wantErr(t, "Fire without read", err, trigger.ErrNotFound)
 
-	_, err = r.m.Fire(t.Context(), person(ada), acme, "trg-nope", trigger.FireInput{Reason: "", Location: noLocation()})
+	_, err = r.m.Fire(
+		t.Context(),
+		person(ada),
+		acme,
+		"trg-nope",
+		trigger.FireInput{
+			Reason:         "",
+			Location:       noLocation(),
+			IdempotencyKey: "",
+			Request:        trigger.RequestInfo{Channel: "", SourceIP: "", UserAgent: "", RequestID: ""},
+		},
+	)
 	wantErr(t, "Fire of an unknown trigger", err, trigger.ErrNotFound)
 
 	service, err := identity.NamespaceService(acme)
@@ -631,14 +668,36 @@ func TestManagerFire(t *testing.T) {
 		t.Fatalf("NamespaceService = %v", err)
 	}
 
-	_, err = r.m.Fire(t.Context(), service, acme, created.ID, trigger.FireInput{Reason: "", Location: noLocation()})
+	_, err = r.m.Fire(
+		t.Context(),
+		service,
+		acme,
+		created.ID,
+		trigger.FireInput{
+			Reason:         "",
+			Location:       noLocation(),
+			IdempotencyKey: "",
+			Request:        trigger.RequestInfo{Channel: "", SourceIP: "", UserAgent: "", RequestID: ""},
+		},
+	)
 	wantErr(t, "Fire by the service principal", err, identity.ErrDenied)
 
 	fireInvalidReasons(t, r, created.ID)
 
 	r.disp.err = job.ErrFrozen
 
-	_, err = r.m.Fire(t.Context(), person(ada), acme, created.ID, trigger.FireInput{Reason: "", Location: noLocation()})
+	_, err = r.m.Fire(
+		t.Context(),
+		person(ada),
+		acme,
+		created.ID,
+		trigger.FireInput{
+			Reason:         "",
+			Location:       noLocation(),
+			IdempotencyKey: "",
+			Request:        trigger.RequestInfo{Channel: "", SourceIP: "", UserAgent: "", RequestID: ""},
+		},
+	)
 	wantErr(t, "Fire during a freeze", err, job.ErrFrozen)
 
 	if len(r.disp.actors) != 2 {

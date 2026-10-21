@@ -287,7 +287,10 @@ func caseScheduledRefusals(t *testing.T, h Harness, rec *Recorder) {
 
 // manual returns a manual request for the trigger id at now.
 func manual(id trigger.ID, now time.Time) trigger.ManualRequest {
-	return trigger.ManualRequest{Namespace: acme, Trigger: id, Now: now, Reason: "test run", Location: noLocation()}
+	return trigger.ManualRequest{
+		Namespace: acme, Trigger: id, Now: now, Reason: "test run", Location: noLocation(),
+		IdempotencyKey: "", Request: trigger.RequestInfo{Channel: "", SourceIP: "", UserAgent: "", RequestID: ""},
+	}
 }
 
 func caseManual(t *testing.T, h Harness, rec *Recorder) {
@@ -610,6 +613,10 @@ func caseInvalidRow(t *testing.T, h Harness, rec *Recorder) {
 	}
 }
 
+// wantKeylessJobs is the count of jobs that caseManualKey expects: one for the
+// first key, one for the second key, and one for each of two minutes with no key.
+const wantKeylessJobs = 4
+
 func caseManualKey(t *testing.T, h Harness, rec *Recorder) {
 	t.Helper()
 
@@ -657,8 +664,8 @@ func caseManualKey(t *testing.T, h Harness, rec *Recorder) {
 		must(t, "manual with no key", err)
 	}
 
-	if got := len(rec.Jobs()); got != 4 {
-		t.Errorf("fires with no key in two minutes made %d jobs in all, want 4", got)
+	if got := len(rec.Jobs()); got != wantKeylessJobs {
+		t.Errorf("fires with no key in two minutes made %d jobs in all, want %d", got, wantKeylessJobs)
 	}
 }
 
@@ -688,7 +695,7 @@ func caseManualRequest(t *testing.T, h Harness, rec *Recorder) {
 	must(t, "scheduled", err)
 
 	starts = rec.Starts()
-	if got := starts[len(starts)-1].Req.Request; got != (trigger.RequestInfo{}) {
+	if got := starts[len(starts)-1].Req.Request; got != (trigger.RequestInfo{Channel: "", SourceIP: "", UserAgent: "", RequestID: ""}) {
 		t.Errorf("request of a scheduled start = %+v, want none", got)
 	}
 }

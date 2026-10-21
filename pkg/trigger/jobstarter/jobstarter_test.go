@@ -210,6 +210,7 @@ func TestStartPlanErrors(t *testing.T) {
 				Saver:          "s",
 				IdempotencyKey: "",
 				Location:       noLocation(),
+				Request:        noInfo(),
 			},
 			trigger.ErrInvalid,
 			0,
@@ -269,7 +270,8 @@ func TestStartPlanRequestFacts(t *testing.T) {
 	}
 
 	got := jobs.req
-	if got.Channel != "api" || got.SourceIP != "192.0.2.7" || got.UserAgent != "probe-agent" || got.RequestID != "req-1" {
+	if got.Channel != "api" || got.SourceIP != "192.0.2.7" || got.UserAgent != "probe-agent" ||
+		got.RequestID != "req-1" {
 		t.Errorf("job request = %+v, want the facts of the request", got)
 	}
 

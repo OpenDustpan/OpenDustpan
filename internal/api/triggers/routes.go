@@ -100,12 +100,28 @@ func (h *Handler) buildRoutes() []Route {
 			Resolve: h.resolveTrigger, Serve: h.replaceTrigger, IdempotencyKey: false,
 		},
 		{
-			Method: http.MethodDelete, Path: triggerPath, Scope: ScopeAuthorized, Reads: read,
-			Actions: []identity.Action{trigger.SettingsAction}, Resolve: h.resolveStoredTrigger, Serve: h.deleteTrigger, IdempotencyKey: false,
+			Method: http.MethodDelete,
+			Path:   triggerPath,
+			Scope:  ScopeAuthorized,
+			Reads:  read,
+			Actions: []identity.Action{
+				trigger.SettingsAction,
+			},
+			Resolve:        h.resolveStoredTrigger,
+			Serve:          h.deleteTrigger,
+			IdempotencyKey: false,
 		},
 		{
-			Method: http.MethodPost, Path: firePath, Scope: ScopeAuthorized, Reads: read,
-			Actions: []identity.Action{trigger.StartAction}, Resolve: h.resolveTrigger, Serve: h.fireTrigger, IdempotencyKey: true,
+			Method: http.MethodPost,
+			Path:   firePath,
+			Scope:  ScopeAuthorized,
+			Reads:  read,
+			Actions: []identity.Action{
+				trigger.StartAction,
+			},
+			Resolve:        h.resolveTrigger,
+			Serve:          h.fireTrigger,
+			IdempotencyKey: true,
 		},
 	}
 }

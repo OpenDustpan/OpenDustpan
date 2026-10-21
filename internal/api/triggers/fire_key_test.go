@@ -10,108 +10,112 @@ import (
 	"opendustpan.org/opendustpan/pkg/idempotency"
 )
 
-// TestFireKeyAndRequest proves the fire route hands the Idempotency-Key header
-// and the facts of the request to the manager, and refuses a key that is not
-// valid before any fire.
-func TestFireKeyAndRequest(t *testing.T) {
+// TestFireKeyReachesTheDispatcher proves: a valid key and the request reach the dispatcher.
+func TestFireKeyReachesTheDispatcher(t *testing.T) {
 	t.Parallel()
 
 	fire := basePath + "/trg-seed/fire"
 
-	t.Run("a valid key and the request reach the dispatcher", func(t *testing.T) {
-		t.Parallel()
+	r := fullRig(t)
+	seed(r)
 
+	rec := serve(t, r.h, request{
+		method: http.MethodPost, path: fire, token: testToken, body: "",
+		header: map[string]string{"Idempotency-Key": "click-1", "User-Agent": "probe-agent/1"},
+	})
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("fire = %d %s, want 201", rec.Code, rec.Body.String())
+	}
+
+	r.disp.mu.Lock()
+	defer r.disp.mu.Unlock()
+
+	if len(r.disp.reqs) != 1 {
+		t.Fatalf("fires = %d, want 1", len(r.disp.reqs))
+	}
+
+	got := r.disp.reqs[0]
+	if got.IdempotencyKey != "click-1" {
+		t.Errorf("key = %q, want click-1", got.IdempotencyKey)
+	}
+
+	if got.Request.Channel != audit.ChannelAPI || got.Request.UserAgent != "probe-agent/1" ||
+		got.Request.SourceIP == "" {
+		t.Errorf("request = %+v, want the channel, the user agent and the address of the request", got.Request)
+	}
+}
+
+// TestFireWithoutAKey proves: no key gives an empty key.
+func TestFireWithoutAKey(t *testing.T) {
+	t.Parallel()
+
+	fire := basePath + "/trg-seed/fire"
+
+	r := fullRig(t)
+	seed(r)
+
+	rec := serve(t, r.h, request{method: http.MethodPost, path: fire, token: testToken, body: "", header: nil})
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("fire = %d %s, want 201", rec.Code, rec.Body.String())
+	}
+
+	r.disp.mu.Lock()
+	defer r.disp.mu.Unlock()
+
+	if got := r.disp.reqs[0].IdempotencyKey; got != "" {
+		t.Errorf("key = %q, want none", got)
+	}
+}
+
+// TestFireRefusesAKeyThatIsNotValid proves: a key that is not valid fires nothing.
+func TestFireRefusesAKeyThatIsNotValid(t *testing.T) {
+	t.Parallel()
+
+	fire := basePath + "/trg-seed/fire"
+
+	for name, key := range map[string]string{
+		"too long":      strings.Repeat("k", idempotency.MaxKeyLength+1),
+		"not printable": "k\x01k",
+	} {
 		r := fullRig(t)
 		seed(r)
 
 		rec := serve(t, r.h, request{
 			method: http.MethodPost, path: fire, token: testToken, body: "",
-			header: map[string]string{"Idempotency-Key": "click-1", "User-Agent": "probe-agent/1"},
+			header: map[string]string{"Idempotency-Key": key},
 		})
-		if rec.Code != http.StatusCreated {
-			t.Fatalf("fire = %d %s, want 201", rec.Code, rec.Body.String())
+
+		if rec.Code != http.StatusBadRequest ||
+			!strings.Contains(rec.Body.String(), "request.idempotency-key-invalid") {
+			t.Errorf("%s: fire = %d %s, want 400 request.idempotency-key-invalid", name, rec.Code, rec.Body.String())
 		}
 
-		r.disp.mu.Lock()
-		defer r.disp.mu.Unlock()
-
-		if len(r.disp.reqs) != 1 {
-			t.Fatalf("fires = %d, want 1", len(r.disp.reqs))
+		if r.disp.fires() != 0 {
+			t.Errorf("%s: a key that is not valid fired", name)
 		}
+	}
+}
 
-		got := r.disp.reqs[0]
-		if got.IdempotencyKey != "click-1" {
-			t.Errorf("key = %q, want click-1", got.IdempotencyKey)
-		}
+// TestFireRefusesTwoKeyHeaders proves: two key headers fire nothing.
+func TestFireRefusesTwoKeyHeaders(t *testing.T) {
+	t.Parallel()
 
-		if got.Request.Channel != audit.ChannelAPI || got.Request.UserAgent != "probe-agent/1" ||
-			got.Request.SourceIP == "" {
-			t.Errorf("request = %+v, want the channel, the user agent and the address of the request", got.Request)
-		}
-	})
+	fire := basePath + "/trg-seed/fire"
 
-	t.Run("no key gives an empty key", func(t *testing.T) {
-		t.Parallel()
+	r := fullRig(t)
+	seed(r)
 
-		r := fullRig(t)
-		seed(r)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, fire, strings.NewReader(""))
+	req.Header.Set("Authorization", "token "+testToken)
+	req.Header.Add("Idempotency-Key", "a")
+	req.Header.Add("Idempotency-Key", "b")
 
-		rec := serve(t, r.h, request{method: http.MethodPost, path: fire, token: testToken, body: "", header: nil})
-		if rec.Code != http.StatusCreated {
-			t.Fatalf("fire = %d %s, want 201", rec.Code, rec.Body.String())
-		}
+	rec := httptest.NewRecorder()
+	r.h.ServeHTTP(rec, req)
 
-		r.disp.mu.Lock()
-		defer r.disp.mu.Unlock()
-
-		if got := r.disp.reqs[0].IdempotencyKey; got != "" {
-			t.Errorf("key = %q, want none", got)
-		}
-	})
-
-	t.Run("a key that is not valid fires nothing", func(t *testing.T) {
-		t.Parallel()
-
-		for name, key := range map[string]string{
-			"too long":      strings.Repeat("k", idempotency.MaxKeyLength+1),
-			"not printable": "k\x01k",
-		} {
-			r := fullRig(t)
-			seed(r)
-
-			rec := serve(t, r.h, request{
-				method: http.MethodPost, path: fire, token: testToken, body: "",
-				header: map[string]string{"Idempotency-Key": key},
-			})
-
-			if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "request.idempotency-key-invalid") {
-				t.Errorf("%s: fire = %d %s, want 400 request.idempotency-key-invalid", name, rec.Code, rec.Body.String())
-			}
-
-			if r.disp.fires() != 0 {
-				t.Errorf("%s: a key that is not valid fired", name)
-			}
-		}
-	})
-
-	t.Run("two key headers fire nothing", func(t *testing.T) {
-		t.Parallel()
-
-		r := fullRig(t)
-		seed(r)
-
-		req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, fire, strings.NewReader(""))
-		req.Header.Set("Authorization", "token "+testToken)
-		req.Header.Add("Idempotency-Key", "a")
-		req.Header.Add("Idempotency-Key", "b")
-
-		rec := httptest.NewRecorder()
-		r.h.ServeHTTP(rec, req)
-
-		if rec.Code != http.StatusBadRequest || r.disp.fires() != 0 {
-			t.Errorf("fire = %d %s after %d fires, want 400 and none", rec.Code, rec.Body.String(), r.disp.fires())
-		}
-	})
+	if rec.Code != http.StatusBadRequest || r.disp.fires() != 0 {
+		t.Errorf("fire = %d %s after %d fires, want 400 and none", rec.Code, rec.Body.String(), r.disp.fires())
+	}
 }
 
 // TestDeleteRemovesARowThatFailsItsChecks proves a delete reaches a stored row
