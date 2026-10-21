@@ -428,15 +428,17 @@ func (s *Service) measureOne(ctx context.Context, view *blob.Scoped, f *measured
 	return nil
 }
 
-// check runs the checks in the fixed order: the signature over the raw bytes of
-// the checksums file first, then the parse, the names and the hashes. It
-// returns the release without the publisher and the time.
-func (s *Service) check(
-	ctx context.Context, rec namespace.Namespace, addr registry.Address, req PublishRequest, files []measured,
-) (registry.Release, error) {
-	var set releasecheck.Set
+// byRole is the measured files of a request, sorted by role. A nil file is a
+// file that the request lacks.
+type byRole struct {
+	set  releasecheck.Set
+	sums *measured
+	sig  *measured
+}
 
-	var sums, sig *measured
+// sortByRole builds the file set of the release check from the measured files.
+func sortByRole(files []measured) byRole {
+	var out byRole
 
 	for i := range files {
 		f := &files[i]
@@ -444,13 +446,33 @@ func (s *Service) check(
 
 		switch f.Role {
 		case RoleSums:
-			set.Sums, sums = file, f
+			out.set.Sums, out.sums = file, f
 		case RoleSignature:
-			set.Signature, sig = file, f
+			out.set.Signature, out.sig = file, f
 		case RoleArchive:
-			set.Archives = append(set.Archives, file)
+			out.set.Archives = append(out.set.Archives, file)
 		default:
 		}
+	}
+
+	return out
+}
+
+// check runs the checks in the fixed order: the signature over the raw bytes of
+// the checksums file first, then the parse, the names and the hashes. It
+// returns the release without the publisher and the time.
+func (s *Service) check(
+	ctx context.Context, rec namespace.Namespace, addr registry.Address, req PublishRequest, files []measured,
+) (registry.Release, error) {
+	sorted := sortByRole(files)
+	set, sums, sig := sorted.set, sorted.sums, sorted.sig
+
+	// Defense in depth: checkFileList refuses a request without one checksums
+	// file and one signature. This check stays so that a change of the request
+	// check cannot send a missing file to the verifier. It does not rely on
+	// the request check.
+	if sums == nil || sig == nil {
+		return registry.Release{}, fmt.Errorf("%w: the release needs a checksums file and a signature", ErrBadRequest)
 	}
 
 	records, err := s.keys.Keys(ctx, rec.Name)
