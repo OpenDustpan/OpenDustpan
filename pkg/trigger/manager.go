@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"time"
+	"unicode/utf8"
 
 	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/pkg/audit"
@@ -16,6 +17,9 @@ import (
 
 // IDPrefix starts every trigger ID that the server makes.
 const IDPrefix = "trg-"
+
+// MaxFireReasonLen is the most characters in the reason of a manual fire.
+const MaxFireReasonLen = 200
 
 // errNoUnit is the one text for a unit that does not exist and a unit that the
 // caller may not change, so that the answer is no oracle for the names of units.
@@ -301,6 +305,16 @@ func (m *Manager) Fire(
 ) (job.ID, error) {
 	if err := checkCaller(caller); err != nil {
 		return "", err
+	}
+
+	// The reason joins a text of the dispatcher in the audit entry of the
+	// start, so it keeps well below the bound of an audit reason.
+	if utf8.RuneCountInString(reason) > MaxFireReasonLen {
+		return "", fmt.Errorf("%w: a reason has at most %d characters", ErrInvalid, MaxFireReasonLen)
+	}
+
+	if err := audit.ValidateReason(reason); err != nil {
+		return "", fmt.Errorf("%w: reason: %w", ErrInvalid, err)
 	}
 
 	t, err := m.store.Get(ctx, ns, id)

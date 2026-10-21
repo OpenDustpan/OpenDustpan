@@ -3,6 +3,7 @@ package trigger_test
 import (
 	"errors"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -500,6 +501,16 @@ func TestManagerFire(t *testing.T) {
 
 	_, err = r.m.Fire(t.Context(), service, acme, created.ID, "")
 	wantErr(t, "Fire by the service principal", err, identity.ErrDenied)
+
+	for name, reason := range map[string]string{
+		"a long reason":                 strings.Repeat("x", trigger.MaxFireReasonLen+1),
+		"a reason with a line break":    "a\nb",
+		"a reason with a bidi override": "a\u202eb",
+		"a reason that is not UTF-8":    "a\xffb",
+	} {
+		_, err = r.m.Fire(t.Context(), person(ada), acme, created.ID, reason)
+		wantErr(t, "Fire with "+name, err, trigger.ErrInvalid)
+	}
 
 	r.disp.err = job.ErrFrozen
 
