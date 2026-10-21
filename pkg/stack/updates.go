@@ -951,85 +951,21 @@ func (s *Updates) leaseGet(ctx context.Context, ref Ref, id UpdateID) (Update, e
 
 // storeNewCheckpoint writes the blob of save, then its row. A blob that is
 // already there belongs to a first attempt whose commit never landed: the
-// retry adopts it when it holds the same content.
+// retry adopts it when it holds the same bytes, and checkpointCollision
+// answers any other blob.
 func (s *Updates) storeNewCheckpoint(ctx context.Context, save checkpointSave) error {
-	size, sum, err := s.putCheckpointBlob(ctx, save.blobs, save.key, save.in.Deployment)
-	if err != nil {
-		if errors.Is(err, blob.ErrExists) {
-			return s.adoptCheckpointBlob(ctx, save, size, sum)
-		}
-
-		if cerr := ctx.Err(); cerr != nil {
-			return fmt.Errorf("save checkpoint of update %s: %w", save.id, cerr)
-		}
-
-		return fmt.Errorf("save checkpoint of update %s: %w", save.id, ErrCheckpointUnavailable)
-	}
-
-	if err := s.commitCheckpointRow(ctx, save, size, sum); err != nil {
-		// The blob stays without a row that names it; the sweep below
-		// collects it once it is older than the grace period.
-		return fmt.Errorf("save checkpoint of update %s: %w", save.id, err)
-	}
-
-	s.afterCheckpointSave(ctx, save)
-
-	return nil
-}
-
-// adoptCheckpointBlob answers a blob write that met an existing key: the
-// first attempt wrote it but never committed its row. A blob with the same
-// content commits the row and succeeds, so a crash never blocks the retry.
-// Anything else is a concurrent save of the same update, which fails without
-// touching SQL, so no row can name a blob with other content. No error text
-// names the key.
-//
-// size with sum are the size and MD5 of the bytes this save tried to write,
-// returned with the ErrExists error. When the stored bytes match them, the
-// retry adopts without decompressing anything: gzip decodes deterministically,
-// so equal stored bytes mean equal content, which is the same guarantee the
-// gunzip and hash below give. That fast path hashes the compressed bytes
-// once, instead of paying a gunzip with two hash passes over a large
-// checkpoint. The same binary compresses the same content to the same bytes,
-// so stored bytes that differ hold other content. Across Go releases the
-// compressed bytes may differ. During a rolling upgrade, a retried save with
-// a sequence number whose first attempt ran on a binary of another release
-// can then get ErrConcurrentModification instead of an adopt. A retried save
-// without a sequence number mints the next key and succeeds.
-func (s *Updates) adoptCheckpointBlob(ctx context.Context, save checkpointSave, size int64, sum [md5.Size]byte) error {
-	raw, err := save.blobs.Get(ctx, save.key)
-	if err != nil {
-		if cerr := ctx.Err(); cerr != nil {
-			return fmt.Errorf("save checkpoint of update %s: %w", save.id, cerr)
-		}
-
-		return fmt.Errorf("save checkpoint of update %s: %w", save.id, ErrCheckpointUnavailable)
-	}
-
-	gave, err := readStoredBlob(raw, s.storedLimit())
-	if err != nil {
-		if errors.Is(err, ErrCheckpointMismatch) {
+	return s.writeCheckpoint(ctx, checkpointWrite{
+		op: "save checkpoint", id: save.id, blobs: save.blobs, key: save.key, deployment: save.in.Deployment,
+		other: func(ctx context.Context, _ []byte, _ int64, _ [md5.Size]byte) error {
+			// Anything but a retry of a committed save is a concurrent save
+			// of the same update, which fails without touching SQL, so no
+			// row can name a blob with other content.
 			return s.checkpointCollision(ctx, save)
-		}
-
-		if cerr := ctx.Err(); cerr != nil {
-			return fmt.Errorf("save checkpoint of update %s: %w", save.id, cerr)
-		}
-
-		return fmt.Errorf("save checkpoint of update %s: %w", save.id, ErrCheckpointUnavailable)
-	}
-
-	if storedSize, storedSum := storedAttrs(gave); storedSize != size || storedSum != sum {
-		return s.checkpointCollision(ctx, save)
-	}
-
-	if commitErr := s.commitCheckpointRow(ctx, save, size, sum); commitErr != nil {
-		return fmt.Errorf("save checkpoint of update %s: %w", save.id, commitErr)
-	}
-
-	s.afterCheckpointSave(ctx, save)
-
-	return nil
+		},
+		commit: func(ctx context.Context, size int64, sum [md5.Size]byte) error {
+			return s.commitCheckpoint(ctx, save, size, sum)
+		},
+	})
 }
 
 // checkpointCollision answers a blob that holds other content than save: a
@@ -1086,6 +1022,13 @@ func (s *Updates) storeMintedKey(ctx context.Context, save checkpointSave) error
 
 	save.key = next
 
+	return s.commitCheckpoint(ctx, save, size, sum)
+}
+
+// commitCheckpoint commits the row of save, then cleans up after the save.
+// A failed commit leaves the blob without a row that names it; the sweep
+// collects it once it is older than the grace period.
+func (s *Updates) commitCheckpoint(ctx context.Context, save checkpointSave, size int64, sum [md5.Size]byte) error {
 	if err := s.commitCheckpointRow(ctx, save, size, sum); err != nil {
 		return fmt.Errorf("save checkpoint of update %s: %w", save.id, err)
 	}
