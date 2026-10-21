@@ -2,8 +2,10 @@
 // reads an API description into the model, the template set of each language
 // and the writer of the generated files.
 //
-// The package holds no implementation yet. It reads only the bytes of a
-// published API description and imports no server package, so the same
+// The package holds the parser (NewParser), the writer (NewWriter) and the
+// rules for names and versions. The template set of a language is in a
+// package of its own, for example golang. The package reads only the bytes of
+// a published API description and imports no server package, so the same
 // generator works for anyone who downloads the description.
 //
 // Rules for every implementation:

@@ -1,0 +1,592 @@
+// Package golang is the template set of the Go client. It turns the model of
+// an API description into Go source that uses only net/http and
+// encoding/json.
+//
+// The generated files are the models, the operations, the metadata of the
+// client and the operation table of the conformance adapter. The transport of
+// the client and the message loop of the adapter are hand-written. They are
+// not part of the output.
+package golang
+
+import (
+	"bytes"
+	"embed"
+	"fmt"
+	"go/format"
+	"path"
+	"regexp"
+	"slices"
+	"strings"
+	"text/template"
+
+	"opendustpan.org/opendustpan/internal/clientgen"
+	"opendustpan.org/opendustpan/internal/clientgen/model"
+)
+
+//go:embed templates/*.tmpl
+var templateFS embed.FS
+
+// importPath is the shape of the module path of a client, for example
+// opendustpan.org/client.
+var importPath = regexp.MustCompile(`^[a-z0-9]+([.-][a-z0-9]+)*(/[a-z0-9]+([._-][a-z0-9]+)*)*$`)
+
+// packageName is the shape of the name of a Go package.
+var packageName = regexp.MustCompile(`^[a-z][a-z0-9]*$`)
+
+// Generated file paths, relative to the output directory.
+const (
+	pathModels     = "models.go"
+	pathOperations = "operations.go"
+	pathMetadata   = "metadata.go"
+	pathAdapter    = "cmd/conformance-adapter/operations.go"
+)
+
+// language is the Go template set.
+type language struct{}
+
+// New returns the Go template set.
+func New() clientgen.Language { //nolint:ireturn // The port is the contract; callers do not depend on the type.
+	return language{}
+}
+
+// Name implements clientgen.Language.
+func (language) Name() string { return "go" }
+
+// Render implements clientgen.Language. The files are in the order of their
+// paths.
+func (language) Render(api *model.API, opts clientgen.Options) ([]clientgen.File, error) {
+	d, err := newData(api, opts)
+	if err != nil {
+		return nil, err
+	}
+
+	tmpl, err := template.New("go").Funcs(funcs()).ParseFS(templateFS, "templates/*.tmpl")
+	if err != nil {
+		return nil, fmt.Errorf("go templates: %w", err)
+	}
+
+	outputs := []struct{ path, template string }{
+		{pathAdapter, "adapter.go.tmpl"},
+		{pathMetadata, "metadata.go.tmpl"},
+		{pathModels, "models.go.tmpl"},
+		{pathOperations, "operations.go.tmpl"},
+	}
+
+	files := make([]clientgen.File, 0, len(outputs))
+
+	for _, out := range outputs {
+		var buf bytes.Buffer
+		if err = tmpl.ExecuteTemplate(&buf, out.template, d); err != nil {
+			return nil, fmt.Errorf("go template %s: %w", out.template, err)
+		}
+
+		src, fmtErr := format.Source(buf.Bytes())
+		if fmtErr != nil {
+			return nil, fmt.Errorf("go template %s gave source that Go cannot read: %w", out.template, fmtErr)
+		}
+
+		files = append(files, clientgen.File{Path: out.path, Content: src})
+	}
+
+	slices.SortFunc(files, func(a, b clientgen.File) int { return strings.Compare(a.Path, b.Path) })
+
+	return files, nil
+}
+
+// funcs are the encoders that a template calls. A value from the description
+// goes into source through one of them only.
+func funcs() template.FuncMap {
+	return template.FuncMap{
+		"goString": goString,
+		"comment":  comment,
+		"typeDoc":  typeDoc,
+		"opDoc":    opDoc,
+		"join":     strings.Join,
+	}
+}
+
+// typeDoc writes the comment of a type.
+func typeDoc(name, doc string) string {
+	if strings.TrimSpace(doc) == "" {
+		return comment("", name+" is a schema of the API description.")
+	}
+
+	return comment("", doc)
+}
+
+// opDoc writes the comment of a method of the client.
+func opDoc(method, id, doc string) string {
+	head := comment("", method+" calls the operation "+id+".")
+	if strings.TrimSpace(doc) == "" {
+		return head
+	}
+
+	return head + "//\n" + comment("", doc)
+}
+
+// data is what the templates read.
+type data struct {
+	// Header is the first line of each generated file.
+	Header string
+	// Package is the name of the Go package of the client.
+	Package string
+	// Import is the import path of the client, for the adapter.
+	Import             string
+	ClientVersion      string
+	DescriptionVersion string
+	ServerRelease      string
+	GeneratorVersion   string
+	Title              string
+	Types              []typeView
+	Operations         []operationView
+	// NeedsURL and NeedsFmt say which imports operations.go needs.
+	NeedsURL bool
+	NeedsFmt bool
+}
+
+type typeView struct {
+	Name   string
+	Doc    string
+	IsEnum bool
+	Open   bool
+	Values []enumValue
+	Fields []fieldView
+	// Required lists the wire names of the required fields.
+	Required []string
+}
+
+type enumValue struct {
+	Const string
+	Value string
+}
+
+type fieldView struct {
+	Name string
+	Type string
+	Tag  string
+	Doc  string
+}
+
+type paramView struct {
+	// Ident is the name of the Go parameter.
+	Ident string
+	Type  string
+	Wire  string
+}
+
+type queryView struct {
+	Field string
+	Wire  string
+	// Mode is many (a list), ptr (an optional scalar) or value (a required
+	// scalar).
+	Mode string
+}
+
+type operationView struct {
+	ID          string
+	Method      string
+	Doc         string
+	HTTPMethod  string
+	PathExpr    string
+	Params      []paramView
+	QueryType   string
+	QueryFields []fieldView
+	Query       []queryView
+	// Body is the Go type of the body in the client package, and
+	// AdapterBody is the same type as the adapter writes it.
+	Body         string
+	AdapterBody  string
+	BodyPointer  bool
+	BodyRequired bool
+	MediaType    string
+	// Result is the declared type of the answer, and ResultReturn is the
+	// type that the method returns.
+	Result       string
+	ResultReturn string
+	ResultKind   string
+	Public       bool
+	Idempotent   bool
+	IfMatch      string
+	ETag         bool
+}
+
+// newData checks the options, and builds the views of the model.
+func newData(api *model.API, opts clientgen.Options) (*data, error) {
+	if !importPath.MatchString(opts.Package) {
+		return nil, fmt.Errorf("%w: package %q", clientgen.ErrInvalidName, opts.Package)
+	}
+
+	pkg := path.Base(opts.Package)
+	if !packageName.MatchString(pkg) {
+		return nil, fmt.Errorf("%w: package name %q", clientgen.ErrInvalidName, pkg)
+	}
+
+	tokens := []struct{ what, value string }{
+		{"description version", api.Version},
+		{"client version", opts.ClientVersion},
+		{"server release", opts.ServerRelease},
+		{"generator version", opts.GeneratorVersion},
+	}
+
+	for _, tok := range tokens {
+		if err := safeToken(tok.what, tok.value); err != nil {
+			return nil, err
+		}
+	}
+
+	if err := clientgen.CheckClientVersion(api.Version, opts.ClientVersion); err != nil {
+		return nil, err
+	}
+
+	d := new(data)
+	d.Header = "// Code generated by clientgen " + opts.GeneratorVersion + " from API description " +
+		api.Version + ". DO NOT EDIT."
+	d.Package, d.Import, d.Title = pkg, opts.Package, api.Title
+	d.ClientVersion, d.DescriptionVersion = opts.ClientVersion, api.Version
+	d.ServerRelease, d.GeneratorVersion = opts.ServerRelease, opts.GeneratorVersion
+
+	if err := checkNames(api); err != nil {
+		return nil, err
+	}
+
+	if err := d.addTypes(api); err != nil {
+		return nil, err
+	}
+
+	if err := d.addOperations(api); err != nil {
+		return nil, err
+	}
+
+	return d, nil
+}
+
+// addTypes builds the views of the schemas.
+func (d *data) addTypes(api *model.API) error {
+	seen := make(map[string]string)
+
+	for _, name := range reservedTypes() {
+		seen[name] = transportOwner
+	}
+
+	for i := range api.Schemas {
+		s := &api.Schemas[i]
+
+		if err := claim(seen, s.Name, "schema "+s.Name); err != nil {
+			return err
+		}
+
+		var (
+			tv  typeView
+			err error
+		)
+
+		switch s.Kind {
+		case model.KindEnum:
+			tv, err = enumView(s, seen)
+		case model.KindObject:
+			tv, err = objectView(s)
+		default:
+			err = fmt.Errorf("%w: schema %s has an unknown kind", clientgen.ErrInvalidDescription, s.Name)
+		}
+
+		if err != nil {
+			return err
+		}
+
+		d.Types = append(d.Types, tv)
+	}
+
+	return nil
+}
+
+// transportOwner names the hand-written transport as the owner of a name.
+const transportOwner = "the transport of the client"
+
+// claim records that a name is taken, and returns ErrInvalidName when it was
+// taken before.
+func claim(seen map[string]string, name, by string) error {
+	if prev, ok := seen[name]; ok {
+		return fmt.Errorf("%w: %s clashes with %s in the Go package", clientgen.ErrInvalidName, by, prev)
+	}
+
+	seen[name] = by
+
+	return nil
+}
+
+// enumView builds the view of an enum with a constant for each value.
+func enumView(s *model.Schema, seen map[string]string) (typeView, error) {
+	var tv typeView
+
+	tv.Name, tv.Doc, tv.IsEnum, tv.Open = s.Name, s.Description, true, s.Open
+
+	for _, v := range s.Values {
+		c := s.Name + pascal(v)
+
+		if err := claim(seen, c, "enum value "+v+" of "+s.Name); err != nil {
+			return tv, err
+		}
+
+		tv.Values = append(tv.Values, enumValue{Const: c, Value: v})
+	}
+
+	return tv, nil
+}
+
+// objectView builds the view of an object schema as a struct.
+func objectView(s *model.Schema) (typeView, error) {
+	var tv typeView
+
+	tv.Name, tv.Doc = s.Name, s.Description
+
+	if s.Extra != nil {
+		return tv, fmt.Errorf("%w: schema %s has additional properties, which the Go template set does not write",
+			clientgen.ErrUnsupported, s.Name)
+	}
+
+	names := make(map[string]string)
+	names["UnmarshalJSON"] = "the method UnmarshalJSON"
+
+	for _, f := range s.Fields {
+		ident := exported(f.Name)
+
+		if err := claim(names, ident, "field "+f.Name+" of "+s.Name); err != nil {
+			return tv, err
+		}
+
+		tag := f.Name
+		if !f.Required {
+			tag += ",omitempty"
+		}
+
+		tv.Fields = append(tv.Fields, fieldView{
+			Name: ident,
+			Type: typeExpr(f.Type, fieldPresence(f), ""),
+			Tag:  "`json:" + goString(tag) + "`",
+			Doc:  f.Description,
+		})
+
+		if f.Required {
+			tv.Required = append(tv.Required, f.Name)
+		}
+	}
+
+	return tv, nil
+}
+
+// fieldPresence says whether a field is required or optional.
+func fieldPresence(f model.Field) presence {
+	if f.Required {
+		return required
+	}
+
+	return optional
+}
+
+// parameterPresence says whether a parameter is required or optional.
+func parameterPresence(p model.Parameter) presence {
+	if p.Required {
+		return required
+	}
+
+	return optional
+}
+
+// presence says whether a member of an object can be absent.
+type presence int
+
+const (
+	// required means that the object always holds the member.
+	required presence = iota
+	// optional means that the member can be absent.
+	optional
+)
+
+// rawMessage is the Go type of any JSON value.
+const rawMessage = "json.RawMessage"
+
+// typeExpr writes a model type as a Go type. A value that can be absent or
+// null is a pointer, where the zero value of the type is also a value. qual is
+// the package qualifier of a named schema, for example "client.", or empty.
+func typeExpr(t model.Type, p presence, qual string) string {
+	base := baseExpr(t, qual)
+
+	if needsPointer(t, p) {
+		return "*" + base
+	}
+
+	return base
+}
+
+// needsPointer says that the Go type of a value is a pointer. A list or a map
+// is a pointer only when it can be null, because a nil list says that the
+// member is absent. Any JSON value is never a pointer, because json.RawMessage
+// holds null.
+func needsPointer(t model.Type, p presence) bool {
+	if t.Kind == model.TypeAny {
+		return false
+	}
+
+	if t.Kind == model.TypeArray || t.Kind == model.TypeMap {
+		return t.Nullable
+	}
+
+	return t.Nullable || p == optional
+}
+
+// baseExpr writes the Go type of a model type with no pointer on it.
+func baseExpr(t model.Type, qual string) string {
+	if t.Kind == model.TypeArray {
+		return "[]" + elemExpr(t, qual)
+	}
+
+	if t.Kind == model.TypeMap {
+		return "map[string]" + elemExpr(t, qual)
+	}
+
+	if t.Kind == model.TypeRef {
+		return qual + t.Ref
+	}
+
+	return scalarExpr(t.Kind)
+}
+
+// scalarExpr writes the Go type of a scalar. Any other kind is any JSON value.
+func scalarExpr(k model.TypeKind) string {
+	names := map[model.TypeKind]string{
+		model.TypeString: "string", model.TypeInteger: "int64", model.TypeNumber: "float64",
+		model.TypeBoolean: "bool",
+	}
+
+	if name, ok := names[k]; ok {
+		return name
+	}
+
+	return rawMessage
+}
+
+// elemExpr writes the type of the items of an array or the values of a map.
+// An item that can be null is a pointer.
+func elemExpr(t model.Type, qual string) string {
+	if t.Elem == nil {
+		return rawMessage
+	}
+
+	return typeExpr(*t.Elem, required, qual)
+}
+
+// checkNames checks every name of the model against its allowlist.
+//
+// Defense in depth: the parser checks the same names. This check stays so that
+// a model that something else built cannot put a name into source that the
+// parser would refuse.
+func checkNames(api *model.API) error {
+	for i := range api.Operations {
+		if err := checkOperation(&api.Operations[i]); err != nil {
+			return err
+		}
+	}
+
+	for i := range api.Schemas {
+		if err := checkSchema(&api.Schemas[i]); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// checkOperation checks the names, the method and the types of an operation.
+func checkOperation(op *model.Operation) error {
+	if err := clientgen.CheckName(clientgen.NameOperation, op.ID); err != nil {
+		return err
+	}
+
+	if err := checkOperationTypes(op); err != nil {
+		return err
+	}
+
+	for _, p := range op.Parameters {
+		kind := clientgen.NameQueryParameter
+		if p.In == model.InPath {
+			kind = clientgen.NamePathParameter
+		}
+
+		if err := clientgen.CheckName(kind, p.Name); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// checkSchema checks the names and the types of a schema.
+func checkSchema(s *model.Schema) error {
+	if err := clientgen.CheckName(clientgen.NameSchema, s.Name); err != nil {
+		return err
+	}
+
+	for _, f := range s.Fields {
+		if err := clientgen.CheckName(clientgen.NameField, f.Name); err != nil {
+			return err
+		}
+
+		if err := checkType(f.Type); err != nil {
+			return err
+		}
+	}
+
+	for _, v := range s.Values {
+		if err := clientgen.CheckName(clientgen.NameEnumValue, v); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// checkOperationTypes checks the method and the types of an operation.
+func checkOperationTypes(op *model.Operation) error {
+	switch op.Method {
+	case model.MethodGet, model.MethodHead, model.MethodPost, model.MethodPut, model.MethodPatch, model.MethodDelete:
+	default:
+		return fmt.Errorf("%w: method %q of %s", clientgen.ErrInvalidName, op.Method, op.ID)
+	}
+
+	var types []model.Type
+
+	for _, p := range op.Parameters {
+		types = append(types, p.Type)
+	}
+
+	if op.Body != nil {
+		types = append(types, op.Body.Type)
+	}
+
+	if op.Result.Type != nil {
+		types = append(types, *op.Result.Type)
+	}
+
+	for _, t := range types {
+		if err := checkType(t); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// checkType checks the schema names inside a type.
+func checkType(t model.Type) error {
+	if t.Kind == model.TypeRef {
+		if err := clientgen.CheckName(clientgen.NameSchema, t.Ref); err != nil {
+			return err
+		}
+	}
+
+	if t.Elem != nil {
+		return checkType(*t.Elem)
+	}
+
+	return nil
+}

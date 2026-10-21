@@ -1,0 +1,396 @@
+package conformance
+
+import (
+	"bufio"
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"os"
+	"os/exec"
+	"strconv"
+	"sync"
+	"sync/atomic"
+	"time"
+)
+
+// Time limits of the adapter process.
+const (
+	// DefaultCallTimeout bounds one request to the adapter.
+	DefaultCallTimeout = 30 * time.Second
+	// closeTimeout bounds the wait for the adapter to exit after shutdown.
+	closeTimeout = 5 * time.Second
+	// stderrKeepBytes is the part of the standard error of the adapter that the
+	// harness keeps for a report.
+	stderrKeepBytes = 8 << 10
+	// readBufferBytes is the size of the buffer of the reader of the output of
+	// the adapter. It holds one message and its line break.
+	readBufferBytes = MaxMessageBytes + 1
+)
+
+// RPCError is an error object of a JSON-RPC 2.0 answer. It wraps ErrProtocol,
+// because a correct adapter reports a fault of the client in the result.
+type RPCError struct {
+	Code    int
+	Message string
+}
+
+// Error implements error.
+func (e *RPCError) Error() string {
+	return fmt.Sprintf("%v: JSON-RPC error %d: %s", ErrProtocol, e.Code, e.Message)
+}
+
+// Unwrap lets errors.Is find ErrProtocol.
+func (e *RPCError) Unwrap() error { return ErrProtocol }
+
+// ProcessOptions are the settings of StartAdapter.
+type ProcessOptions struct {
+	// Path is the adapter program, and Args are its arguments. The harness runs
+	// it with exec.Command and no shell.
+	Path string
+	Args []string
+	// Env is the whole environment of the adapter. The adapter never gets the
+	// environment of the harness, because CI holds tokens in it.
+	Env []string
+	// CallTimeout bounds one request. Zero means DefaultCallTimeout.
+	CallTimeout time.Duration
+}
+
+// ProcessAdapter is an Adapter that talks to a child process. It is not safe
+// for concurrent use: the protocol has one request in flight.
+type ProcessAdapter struct {
+	cmd     *exec.Cmd
+	stdin   io.WriteCloser
+	lines   chan []byte
+	done    chan struct{}
+	stderr  *tailBuffer
+	timeout time.Duration
+
+	nextID int64
+	// stop ends a send that waits for a reader. kill closes it.
+	stop     chan struct{}
+	stopOnce sync.Once
+	killed   atomic.Bool
+	// readErr and waitErr are set before done is closed.
+	readErr error
+	waitErr error
+}
+
+// StartAdapter starts the adapter process.
+func StartAdapter(ctx context.Context, opts ProcessOptions) (*ProcessAdapter, error) {
+	cmd := exec.CommandContext(ctx, opts.Path, opts.Args...) //nolint:gosec // G204: the caller names the program.
+	cmd.Env = append([]string{}, opts.Env...)                // Never nil: nil would give the adapter our environment.
+	cmd.WaitDelay = closeTimeout
+
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		return nil, fmt.Errorf("adapter stdin: %w", err)
+	}
+
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return nil, fmt.Errorf("adapter stdout: %w", err)
+	}
+
+	a := new(ProcessAdapter)
+	a.cmd, a.stdin, a.stderr, a.timeout = cmd, stdin, new(tailBuffer), opts.CallTimeout
+	a.lines, a.done, a.stop = make(chan []byte), make(chan struct{}), make(chan struct{})
+
+	a.stderr.max = stderrKeepBytes
+	if a.timeout <= 0 {
+		a.timeout = DefaultCallTimeout
+	}
+
+	cmd.Stderr = a.stderr
+
+	if err = cmd.Start(); err != nil {
+		return nil, fmt.Errorf("start the adapter: %w", err)
+	}
+
+	go a.read(stdout)
+
+	return a, nil
+}
+
+// Initialize implements Adapter.
+func (a *ProcessAdapter) Initialize(ctx context.Context, p InitializeParams) (InitializeResult, error) {
+	var res InitializeResult
+
+	if err := a.roundTrip(ctx, MethodInitialize, p, &res); err != nil {
+		return res, err
+	}
+
+	if res.ProtocolVersion != ProtocolVersion {
+		return res, fmt.Errorf("%w: the adapter has version %d and the harness has %d",
+			ErrProtocolVersion, res.ProtocolVersion, ProtocolVersion)
+	}
+
+	return res, nil
+}
+
+// Call implements Adapter.
+func (a *ProcessAdapter) Call(ctx context.Context, p CallParams) (CallResult, error) {
+	var res CallResult
+
+	err := a.roundTrip(ctx, MethodCall, p, &res)
+
+	return res, err
+}
+
+// Paginate implements Adapter.
+func (a *ProcessAdapter) Paginate(ctx context.Context, p PaginateParams) (PaginateResult, error) {
+	var res PaginateResult
+
+	err := a.roundTrip(ctx, MethodPaginate, p, &res)
+
+	return res, err
+}
+
+// Close implements Adapter. It sends shutdown, closes the input, and waits for
+// the exit. It stops the process when the exit takes more than five seconds.
+func (a *ProcessAdapter) Close() error {
+	select {
+	case <-a.done:
+	default:
+		a.shutdown()
+	}
+
+	if a.killed.Load() {
+		return fmt.Errorf("%w: the harness stopped the process", ErrAdapterExited)
+	}
+
+	if a.waitErr != nil {
+		return fmt.Errorf("%w: %w; standard error: %q", ErrAdapterExited, a.waitErr, a.stderr.String())
+	}
+
+	return nil
+}
+
+// shutdown asks the adapter to end, and stops it when it does not.
+func (a *ProcessAdapter) shutdown() {
+	ctx, cancel := context.WithTimeout(context.Background(), closeTimeout)
+	defer cancel()
+
+	// A process that is gone gives an error here. It is closed anyway.
+	if err := a.roundTrip(ctx, MethodShutdown, struct{}{}, nil); err != nil {
+		a.stderr.note(err)
+	}
+
+	if err := a.stdin.Close(); err != nil {
+		a.stderr.note(err)
+	}
+
+	select {
+	case <-a.done:
+	case <-time.After(closeTimeout):
+		a.kill()
+		<-a.done
+	}
+}
+
+// read sends each line of the standard output to the channel until the output
+// ends, and then waits for the process.
+func (a *ProcessAdapter) read(stdout io.Reader) {
+	defer close(a.done)
+	defer close(a.lines)
+
+	r := bufio.NewReaderSize(stdout, readBufferBytes)
+
+	for a.readLine(r) {
+	}
+
+	// The process may still write; drain the pipe so that it can exit.
+	if _, err := io.Copy(io.Discard, stdout); err != nil {
+		a.stderr.note(err)
+	}
+
+	a.waitErr = a.cmd.Wait()
+}
+
+// readLine sends one line. It returns false at the end of the output, on an
+// error, or when the harness stops the process.
+func (a *ProcessAdapter) readLine(r *bufio.Reader) bool {
+	line, err := r.ReadSlice('\n')
+	if err != nil {
+		if errors.Is(err, bufio.ErrBufferFull) {
+			a.readErr = fmt.Errorf("%w: a message is longer than %d bytes", ErrProtocol, MaxMessageBytes)
+			a.kill()
+		} else if !errors.Is(err, io.EOF) {
+			a.readErr = fmt.Errorf("read the adapter output: %w", err)
+		}
+
+		return false
+	}
+
+	select {
+	case a.lines <- bytes.Clone(bytes.TrimRight(line, "\r\n")):
+		return true
+	case <-a.stop:
+		return false
+	}
+}
+
+// kill stops the process. The read goroutine then ends.
+func (a *ProcessAdapter) kill() {
+	a.killed.Store(true)
+	a.stopOnce.Do(func() { close(a.stop) })
+
+	if a.cmd.Process != nil {
+		if err := a.cmd.Process.Kill(); err != nil {
+			a.stderr.note(err)
+		}
+	}
+}
+
+// response is a JSON-RPC 2.0 answer.
+type response struct {
+	JSONRPC string          `json:"jsonrpc"`
+	ID      json.RawMessage `json:"id"`
+	Result  json.RawMessage `json:"result"`
+	Error   *rpcError       `json:"error"`
+}
+
+// rpcError is the error object of a JSON-RPC 2.0 answer.
+type rpcError struct {
+	Code    int    `json:"code"`
+	Message string `json:"message"`
+}
+
+// roundTrip sends one request and decodes the result into out.
+func (a *ProcessAdapter) roundTrip(ctx context.Context, method string, params, out any) error {
+	a.nextID++
+
+	id := a.nextID
+
+	req, err := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": id, "method": method, "params": params})
+	if err != nil {
+		return fmt.Errorf("encode %s: %w", method, err)
+	}
+
+	if len(req) > MaxMessageBytes {
+		return fmt.Errorf("%w: the %s request is longer than %d bytes", ErrProtocol, method, MaxMessageBytes)
+	}
+
+	if _, err = a.stdin.Write(append(req, '\n')); err != nil {
+		return fmt.Errorf("%w: write %s: %w", ErrAdapterExited, method, err)
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, a.timeout)
+	defer cancel()
+
+	select {
+	case line, ok := <-a.lines:
+		if !ok {
+			return a.exited(method)
+		}
+
+		return a.decode(line, id, method, out)
+	case <-ctx.Done():
+		a.kill()
+
+		return fmt.Errorf("%s: %w", method, ctx.Err())
+	}
+}
+
+// exited builds the error for an adapter that ended before it answered.
+func (a *ProcessAdapter) exited(method string) error {
+	<-a.done
+
+	if a.readErr != nil {
+		return a.readErr
+	}
+
+	return fmt.Errorf("%w: during %s: %w; standard error: %q", ErrAdapterExited, method, a.waitErr, a.stderr.String())
+}
+
+// decode checks one answer line and decodes its result.
+func (a *ProcessAdapter) decode(line []byte, id int64, method string, out any) error {
+	var r response
+	if err := json.Unmarshal(line, &r); err != nil {
+		a.kill()
+
+		return fmt.Errorf("%w: the answer to %s is not JSON: %w", ErrProtocol, method, err)
+	}
+
+	if r.JSONRPC != "2.0" || string(r.ID) != strconv.FormatInt(id, 10) {
+		a.kill()
+
+		return fmt.Errorf("%w: the answer to %s has jsonrpc %q and ID %s, and the request ID is %d",
+			ErrProtocol, method, r.JSONRPC, r.ID, id)
+	}
+
+	if r.Error != nil {
+		return &RPCError{Code: r.Error.Code, Message: r.Error.Message}
+	}
+
+	if out == nil {
+		return nil
+	}
+
+	if err := json.Unmarshal(r.Result, out); err != nil {
+		return fmt.Errorf("%w: the result of %s: %w", ErrProtocol, method, err)
+	}
+
+	return nil
+}
+
+// tailBuffer keeps the last bytes that are written to it.
+type tailBuffer struct {
+	mu  sync.Mutex
+	buf []byte
+	max int
+}
+
+// Write implements io.Writer.
+func (t *tailBuffer) Write(p []byte) (int, error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	t.buf = append(t.buf, p...)
+	if len(t.buf) > t.max {
+		t.buf = t.buf[len(t.buf)-t.max:]
+	}
+
+	return len(p), nil
+}
+
+// String returns the kept bytes.
+func (t *tailBuffer) String() string {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	return string(t.buf)
+}
+
+// note keeps the text of an error that has no other place to go, so that a
+// report can show it.
+func (t *tailBuffer) note(err error) {
+	if _, werr := t.Write([]byte("harness: " + err.Error() + "\n")); werr != nil {
+		return
+	}
+}
+
+// keep adds a line of text.
+func (t *tailBuffer) keep(line string) {
+	if _, err := t.Write([]byte(line + "\n")); err != nil {
+		return
+	}
+}
+
+// Environ returns the variables of this process that have the given names, as
+// NAME=value strings, and then extra. The result is never nil, so that a child
+// process does not inherit the rest of the environment. The harness reads each
+// variable by name and never lists the environment.
+func Environ(names []string, extra ...string) []string {
+	env := make([]string, 0, len(names)+len(extra))
+
+	for _, name := range names {
+		if v, ok := os.LookupEnv(name); ok {
+			env = append(env, name+"="+v)
+		}
+	}
+
+	return append(env, extra...)
+}

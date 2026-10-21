@@ -1,0 +1,444 @@
+package clientgen_test
+
+import (
+	"errors"
+	"os"
+	"reflect"
+	"strings"
+	"testing"
+
+	"opendustpan.org/opendustpan/internal/clientgen"
+	"opendustpan.org/opendustpan/internal/clientgen/model"
+)
+
+// baseDocument is a small description that the parser reads. The tests change
+// one part of it with a text replacement.
+// baseOperation is the one path item of the base document.
+const baseOperation = `"/api/dustpan/v1/things/{thing_id}": {
+   "get": {
+    "operationId": "getThing",
+    "tags": ["things"],
+    "parameters": [{"in": "path", "name": "thing_id", "required": true, "schema": {"type": "string"}}],
+    "responses": {
+     "2XX": {"description": "ok", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Thing"}}}},
+     "default": {"description": "err", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorResponse"}}}}
+    },
+    "x-dustpan-actions": [{"action": "unit:read", "object": "unit"}]
+   }
+  }`
+
+// baseDocument is a small description that the parser reads. The tests change
+// one part of it with a text replacement.
+const baseDocument = `{
+ "openapi": "3.1.0",
+ "info": {"title": "T", "version": "0.1.0"},
+ "tags": [{"name": "things", "description": "d"}],
+ "paths": {
+  ` + baseOperation + `
+ },
+ "components": {
+  "schemas": {
+   "Thing": {"type": "object", "required": ["name"], "properties": {"name": {"type": "string"}}},
+   "ErrorResponse": {"type": "object", "required": ["code", "message"],
+    "properties": {"code": {"type": "integer"}, "message": {"type": "string"}}}
+  }
+ }
+}`
+
+// change returns the base document with one text replaced. It fails the test
+// when the text is not in the document, so a change cannot do nothing.
+func change(t *testing.T, old, replacement string) []byte {
+	t.Helper()
+
+	if !strings.Contains(baseDocument, old) {
+		t.Fatalf("the base document has no %q", old)
+	}
+
+	return []byte(strings.Replace(baseDocument, old, replacement, 1))
+}
+
+// parseErr parses a document and returns the error.
+func parseErr(doc string, ids ...string) error {
+	_, err := clientgen.NewParser(ids...).Parse([]byte(doc))
+
+	return err
+}
+
+func TestParseBaseDocument(t *testing.T) {
+	t.Parallel()
+
+	api, err := clientgen.NewParser().Parse([]byte(baseDocument))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+
+	if api.Title != "T" || api.Version != "0.1.0" || api.Error != "ErrorResponse" || len(api.Operations) != 1 {
+		t.Fatalf("document: %+v", api)
+	}
+
+	checkBaseOperation(t, api.Operations[0])
+
+	names := make([]string, 0, len(api.Schemas))
+	for _, s := range api.Schemas {
+		names = append(names, s.Name)
+	}
+
+	if !reflect.DeepEqual(names, []string{"ErrorResponse", "Thing"}) {
+		t.Errorf("schemas are not in the order of their names: %v", names)
+	}
+}
+
+func checkBaseOperation(t *testing.T, op model.Operation) {
+	t.Helper()
+
+	if op.ID != "getThing" || op.Method != model.MethodGet || op.Public ||
+		!reflect.DeepEqual(op.Actions, []string{"unit:read"}) {
+		t.Errorf("operation: %+v", op)
+	}
+
+	if len(op.Parameters) != 1 || op.Parameters[0].Name != "thing_id" || op.Parameters[0].In != model.InPath {
+		t.Errorf("parameters: %+v", op.Parameters)
+	}
+
+	if op.Result.Type == nil || op.Result.Type.Ref != "Thing" || op.Result.Status != 0 {
+		t.Errorf("result: %+v", op.Result)
+	}
+}
+
+// TestParseRefuses checks that a construct outside the subset, a bad name or a
+// broken rule gives the right error and names the place.
+func TestParseRefuses(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		old     string
+		replace string
+		want    error
+		at      string
+	}{
+		{
+			"unknown key in an operation",
+			`"operationId": "getThing",`,
+			`"operationId": "getThing", "deprecated": true,`,
+			clientgen.ErrUnsupported,
+			"deprecated",
+		},
+		{
+			"external ref",
+			`"$ref": "#/components/schemas/Thing"`,
+			`"$ref": "other.json#/Thing"`,
+			clientgen.ErrUnsupported,
+			"$ref",
+		},
+		{
+			"allOf in a schema",
+			`"name": {"type": "string"}}}`,
+			`"name": {"allOf": [{"type": "string"}]}}}`,
+			clientgen.ErrUnsupported,
+			"allOf",
+		},
+		{
+			"schema with no type",
+			`"name": {"type": "string"}}}`,
+			`"name": {"description": "any"}}}`,
+			clientgen.ErrUnsupported,
+			"properties/name",
+		},
+		{"wrong openapi version", `"openapi": "3.1.0"`, `"openapi": "3.0.3"`, clientgen.ErrInvalidDescription, ""},
+		{
+			"operation ID with an underscore",
+			`"operationId": "getThing"`,
+			`"operationId": "get_thing"`,
+			clientgen.ErrInvalidName,
+			"operationId",
+		},
+		{
+			"operation ID with a capital first letter",
+			`"operationId": "getThing"`,
+			`"operationId": "GetThing"`,
+			clientgen.ErrInvalidName,
+			"operationId",
+		},
+		{
+			"field name that breaks the allowlist",
+			`"name": {"type": "string"}}}`,
+			`"Name": {"type": "string"}, "name": {"type": "string"}}}`,
+			clientgen.ErrInvalidName,
+			"Name",
+		},
+		{
+			"path with a dot-dot segment",
+			`/api/dustpan/v1/things/{thing_id}`,
+			`/api/dustpan/v1/../{thing_id}`,
+			clientgen.ErrInvalidName,
+			"",
+		},
+		{
+			"path outside the prefix",
+			`/api/dustpan/v1/things/{thing_id}`,
+			`/api/v2/things/{thing_id}`,
+			clientgen.ErrInvalidDescription,
+			"",
+		},
+		{
+			"catch-all wildcard",
+			`/api/dustpan/v1/things/{thing_id}`,
+			`/api/dustpan/v1/things/{thing_id...}`,
+			clientgen.ErrUnsupported,
+			"",
+		},
+		{
+			"wildcard with no parameter",
+			`/api/dustpan/v1/things/{thing_id}`,
+			`/api/dustpan/v1/things/{thing_id}/{other}`,
+			clientgen.ErrInvalidDescription,
+			"parameters",
+		},
+		{
+			"header parameter",
+			`"in": "path", "name": "thing_id"`,
+			`"in": "header", "name": "X-Thing"`,
+			clientgen.ErrUnsupported,
+			"",
+		},
+		{
+			"required field that is not a property",
+			`"required": ["name"]`,
+			`"required": ["nope"]`,
+			clientgen.ErrInvalidDescription,
+			"required",
+		},
+		{
+			"action in the wrong shape",
+			`"action": "unit:read"`,
+			`"action": "UNIT READ"`,
+			clientgen.ErrInvalidName,
+			"action",
+		},
+		{
+			"object kind that is not in the list",
+			`"object": "unit"`,
+			`"object": "planet"`,
+			clientgen.ErrInvalidDescription,
+			"object",
+		},
+		{
+			"public operation with an action",
+			`"x-dustpan-actions"`,
+			`"security": [], "x-dustpan-actions"`,
+			clientgen.ErrInvalidDescription,
+			"x-dustpan-actions",
+		},
+		{
+			"security on an operation",
+			`"x-dustpan-actions"`,
+			`"security": [{"bearer": []}], "x-dustpan-actions"`,
+			clientgen.ErrUnsupported,
+			"security",
+		},
+		{
+			"two success answers",
+			`"default": {`,
+			`"200": {"description": "x"}, "default": {`,
+			clientgen.ErrUnsupported,
+			"2XX",
+		},
+		{
+			"default answer that is not the error schema",
+			`"$ref": "#/components/schemas/ErrorResponse"}}}}`,
+			`"$ref": "#/components/schemas/Thing"}}}}`,
+			clientgen.ErrInvalidDescription,
+			"default",
+		},
+		{
+			"response header other than ETag",
+			`"2XX": {"description": "ok",`,
+			`"2XX": {"description": "ok", "headers": {"X-Other": {"description": "x"}},`,
+			clientgen.ErrUnsupported,
+			"X-Other",
+		},
+		{
+			"media type outside the subset",
+			`"application/json": {"schema": {"$ref": "#/components/schemas/Thing"}}`,
+			`"text/plain": {"schema": {"$ref": "#/components/schemas/Thing"}}`,
+			clientgen.ErrUnsupported,
+			"text~1plain",
+		},
+		{
+			"schema name in lowercase",
+			`"Thing": {"type": "object"`,
+			`"thing": {"type": "object"`,
+			clientgen.ErrInvalidDescription,
+			"",
+		},
+		{
+			"enum value with a space",
+			`"name": {"type": "string"}}},`,
+			`"name": {"type": "string"}, "kind": {"$ref": "#/components/schemas/Kind"}}},
+   "Kind": {"type": "string", "enum": ["a b"]},`,
+			clientgen.ErrInvalidName,
+			"enum",
+		},
+		{"data after the document", ``, ``, clientgen.ErrInvalidDescription, ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			doc := []byte(baseDocument + " {}")
+			if tt.old != "" {
+				doc = change(t, tt.old, tt.replace)
+			}
+
+			_, err := clientgen.NewParser().Parse(doc)
+			if !errors.Is(err, tt.want) {
+				t.Fatalf("want %v, got %v", tt.want, err)
+			}
+
+			if tt.at != "" && !strings.Contains(err.Error(), tt.at) {
+				t.Errorf("the error does not name %q: %v", tt.at, err)
+			}
+		})
+	}
+}
+
+func TestParseRefusesDocumentThatIsNotJSON(t *testing.T) {
+	t.Parallel()
+
+	for _, doc := range []string{"", "[]", `"text"`, "{", `{"openapi": 3}`} {
+		if _, err := clientgen.NewParser().Parse([]byte(doc)); !errors.Is(err, clientgen.ErrInvalidDescription) {
+			t.Errorf("document %q: want ErrInvalidDescription, got %v", doc, err)
+		}
+	}
+}
+
+func TestParseSizeLimit(t *testing.T) {
+	t.Parallel()
+
+	big := make([]byte, clientgen.MaxDescriptionBytes+1)
+	if _, err := clientgen.NewParser().Parse(big); !errors.Is(err, clientgen.ErrInvalidDescription) {
+		t.Fatalf("want ErrInvalidDescription for a document of %d bytes, got %v", len(big), err)
+	}
+}
+
+func TestParseSelection(t *testing.T) {
+	t.Parallel()
+
+	if err := parseErr(baseDocument, "getThing"); err != nil {
+		t.Errorf("select a known operation: %v", err)
+	}
+
+	if err := parseErr(baseDocument, "noSuchOperation"); !errors.Is(err, clientgen.ErrInvalidDescription) {
+		t.Errorf("select an unknown operation: want ErrInvalidDescription, got %v", err)
+	}
+
+	// An operation that is not selected is not read, so a construct in it does
+	// not stop the run.
+	other := `"/api/dustpan/v1/other": {"get": {"operationId": "getOther", "x": 1}},`
+
+	unread := strings.Replace(baseDocument, `"paths": {`, `"paths": {`+other, 1)
+	if err := parseErr(unread, "getThing"); err != nil {
+		t.Errorf("a construct in an operation that is not selected: %v", err)
+	}
+
+	// The rule on duplicate IDs holds for every operation.
+	twin := strings.Replace(baseOperation, "/things/", "/twins/", 1)
+
+	twice := strings.Replace(baseDocument, `"paths": {`, `"paths": {`+twin+`,`, 1)
+	if err := parseErr(twice, "getThing"); !errors.Is(err, clientgen.ErrInvalidDescription) {
+		t.Errorf("two operations with one ID: want ErrInvalidDescription, got %v", err)
+	}
+}
+
+func TestParseIsDeterministic(t *testing.T) {
+	t.Parallel()
+
+	raw, err := os.ReadFile(descriptionPath)
+	if err != nil {
+		t.Fatalf("read the description: %v", err)
+	}
+
+	p := clientgen.NewParser(coveredOperations()...)
+
+	first, err := p.Parse(raw)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+
+	second, err := p.Parse(raw)
+	if err != nil {
+		t.Fatalf("parse again: %v", err)
+	}
+
+	if !reflect.DeepEqual(first, second) {
+		t.Fatal("two parses of one description differ")
+	}
+}
+
+// coveredOperations are the operations of the first slice of the Go client.
+func coveredOperations() []string {
+	return []string{
+		"getCapabilities", "getGitHostApp", "getNotificationSink", "getPreferences",
+		"listNotificationSinks", "putGitHostApp",
+	}
+}
+
+// TestParsePublishedDescription reads the published description for the
+// operations of the first slice, and checks the parts that the Go client uses.
+func TestParsePublishedDescription(t *testing.T) {
+	t.Parallel()
+
+	raw, err := os.ReadFile(descriptionPath)
+	if err != nil {
+		t.Fatalf("read the description: %v", err)
+	}
+
+	api, err := clientgen.NewParser(coveredOperations()...).Parse(raw)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+
+	byID := make(map[string]model.Operation)
+	ids := make([]string, 0, len(api.Operations))
+
+	for _, op := range api.Operations {
+		byID[op.ID] = op
+		ids = append(ids, op.ID)
+	}
+
+	if !reflect.DeepEqual(ids, coveredOperations()) {
+		t.Fatalf("operations: want %v, got %v", coveredOperations(), ids)
+	}
+
+	for _, c := range publishedChecks() {
+		if !c.check(byID[c.id]) {
+			t.Errorf("%s: it should have a property: %s: %+v", c.id, c.what, byID[c.id])
+		}
+	}
+}
+
+type publishedCheck struct {
+	id    string
+	what  string
+	check func(model.Operation) bool
+}
+
+func publishedChecks() []publishedCheck {
+	return []publishedCheck{
+		{"getCapabilities", "is public with no action", func(o model.Operation) bool {
+			return o.Public && len(o.Actions) == 0
+		}},
+		{"getGitHostApp", "answers with an ETag", func(o model.Operation) bool {
+			return o.Result.ETag && !o.IdempotencyKey
+		}},
+		{"putGitHostApp", "takes Idempotency-Key and If-Match and has a required body", func(o model.Operation) bool {
+			return o.IdempotencyKey && o.IfMatch == model.IfMatchOptional && o.Body != nil && o.Body.Required &&
+				o.Result.ETag
+		}},
+		{"getNotificationSink", "has its path parameters in the order of the path", func(o model.Operation) bool {
+			return len(o.Parameters) == 2 && o.Parameters[0].Name == "namespace" && o.Parameters[1].Name == "sink_id"
+		}},
+	}
+}

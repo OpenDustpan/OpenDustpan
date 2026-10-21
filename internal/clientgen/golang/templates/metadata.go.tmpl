@@ -1,0 +1,16 @@
+{{.Header}}
+
+package {{.Package}}
+
+// What this client was generated from. The transport sends them in the
+// User-Agent header.
+const (
+	// Version is the version of this client.
+	Version = {{goString .ClientVersion}}
+	// DescriptionVersion is the version of the API description.
+	DescriptionVersion = {{goString .DescriptionVersion}}
+	// ServerRelease is the release of the server that the description comes from.
+	ServerRelease = {{goString .ServerRelease}}
+	// GeneratorVersion is the version of the generator.
+	GeneratorVersion = {{goString .GeneratorVersion}}
+)

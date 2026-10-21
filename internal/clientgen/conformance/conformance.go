@@ -9,7 +9,9 @@
 // its standard output. The harness checks each answer and the requests that
 // the proxy recorded. The same cases run for each client and each transport.
 //
-// The package holds no implementation yet. The cases have names and no body.
+// The package holds the process adapter, the recording proxy, the launcher of
+// the dev server and the runner. A case with no body (a nil Run) is reported
+// as not implemented. The cases that have a body are in cases.go.
 package conformance
 
 import (
@@ -139,6 +141,9 @@ type ErrorResult struct {
 	// Transport is true for an error with no answer from the server, for
 	// example a refused connection or a time-out.
 	Transport bool `json:"transport,omitempty"`
+	// Invalid is true for an answer with a success status and a body that
+	// does not match the schema of the description. Code is the status.
+	Invalid bool `json:"invalid,omitempty"`
 }
 
 // PaginateParams are the parameters of MethodPaginate.
@@ -292,6 +297,14 @@ type Env struct {
 	Adapter Adapter
 	// Transport is the transport of this run.
 	Transport string
+	// Operations are the IDs of the operations that the client covers. The case
+	// every-operation-is-called calls each one of them.
+	Operations []string
+	// Info is the answer of the adapter to initialize.
+	Info InitializeResult
+
+	// app makes the body of the Git host app once for a run. Run sets it.
+	app *appFixture
 }
 
 // Group is a group of cases.
@@ -334,7 +347,7 @@ func Groups() []Group {
 // Cases returns the cases of the suite. A case with a nil Run has no body
 // yet, and the harness reports it as not implemented, which fails a release.
 func Cases() []Case {
-	return []Case{
+	return withBodies([]Case{
 		{Group: GroupOperations, Name: "every-operation-is-called", Run: nil},
 		{Group: GroupOperations, Name: "public-operation-sends-no-token", Run: nil},
 		{Group: GroupOperations, Name: "signed-in-operation-sends-bearer-token", Run: nil},
@@ -343,6 +356,9 @@ func Cases() []Case {
 		{Group: GroupOperations, Name: "user-agent-names-client-description-and-server-release", Run: nil},
 		{Group: GroupOperations, Name: "token-is-not-sent-after-redirect-to-another-host", Run: nil},
 		{Group: GroupErrors, Name: "error-shape-is-decoded", Run: nil},
+		{Group: GroupErrors, Name: "forbidden-error-is-decoded", Run: nil},
+		{Group: GroupErrors, Name: "response-with-wrong-type-is-rejected", Run: nil},
+		{Group: GroupErrors, Name: "response-without-required-field-is-rejected", Run: nil},
 		{Group: GroupErrors, Name: "error-args-keep-their-json-types", Run: nil},
 		{Group: GroupErrors, Name: "error-without-error-code", Run: nil},
 		{Group: GroupErrors, Name: "error-body-that-is-not-json", Run: nil},
@@ -374,5 +390,5 @@ func Cases() []Case {
 		{Group: GroupCompatibility, Name: "absent-field-is-not-sent", Run: nil},
 		{Group: GroupVersion, Name: "description-version-matches-the-server", Run: nil},
 		{Group: GroupVersion, Name: "metadata-names-description-version-and-server-release", Run: nil},
-	}
+	})
 }
