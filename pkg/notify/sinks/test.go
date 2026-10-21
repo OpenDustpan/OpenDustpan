@@ -63,7 +63,7 @@ func (s *Service) SendTest(ctx context.Context, c *Caller, ns namespace.Name, id
 	}
 
 	sender, ok := s.senders[sink.Kind]
-	if !ok {
+	if !ok || !serves(sender, sink) {
 		return TestResult{}, fmt.Errorf("test sink %s: %w: %s", id, ErrNoSender, sink.Kind)
 	}
 
@@ -111,6 +111,16 @@ func (s *Service) SendTest(ctx context.Context, c *Caller, ns namespace.Name, id
 	}
 
 	return s.send(ctx, sender, sink, to, values), nil
+}
+
+// serves reports whether sender sends to sink. A sender that serves some
+// platforms of its kind says which, with a method Serves. A sink of another
+// platform has no sender, as a sink of a kind with no sender has. Any other
+// sender serves each sink of its kind.
+func serves(sender notify.Sender, sink notify.Sink) bool {
+	p, ok := sender.(interface{ Serves(sink notify.Sink) bool })
+
+	return !ok || p.Serves(sink)
 }
 
 // RecordTest appends the audit entry with the result of the test of the sink

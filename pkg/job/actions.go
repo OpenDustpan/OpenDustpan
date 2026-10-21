@@ -98,6 +98,29 @@ func StartRequirements(spec Spec, bg *BreakGlass) ([]Requirement, error) {
 	return reqs, nil
 }
 
+// RequestRequirements returns the extra actions that the fields of req need,
+// apart from the start action of its operation. A request that names a runner
+// pool needs ActionNamespaceManageRunners on the namespace of the unit, and a
+// request that names a code location needs ActionUnitDefineSteps on the unit:
+// choosing the hosts and choosing the code are choosing what runs where. A
+// request that names neither needs no extra action, and the server takes the
+// default pool and the code location of the unit.
+func RequestRequirements(req *StartRequest, unit identity.Object) []Requirement {
+	var reqs []Requirement
+
+	if req.Pool != "" {
+		reqs = append(reqs, Requirement{
+			Action: ActionNamespaceManageRunners, Object: identity.NamespaceObject(unit.Namespace()),
+		})
+	}
+
+	if !req.Location.IsZero() {
+		reqs = append(reqs, Requirement{Action: ActionUnitDefineSteps, Object: unit})
+	}
+
+	return reqs
+}
+
 // startAction returns the action that starts a job of op through k.
 func startAction(k ExecutorKind, op Operation) (identity.Action, error) {
 	if !op.Valid() {

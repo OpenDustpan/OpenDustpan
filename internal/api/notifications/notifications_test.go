@@ -16,6 +16,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/notify"
+	"opendustpan.org/opendustpan/pkg/notify/sinks"
 	"opendustpan.org/opendustpan/pkg/store/sqlite"
 )
 
@@ -712,6 +713,26 @@ func TestErrorsAreFixedText(t *testing.T) {
 		if strings.Contains(got, canary) {
 			t.Errorf("%s: the answer %q holds the text of the error", pr.name, got)
 		}
+	}
+}
+
+func TestRefusedPlatformHostHasItsOwnCode(t *testing.T) {
+	t.Parallel()
+
+	// An error with no rule, and one that repeats a secret in its text.
+	err := fmt.Errorf("%w: https://hooks.example.com/%s", sinks.ErrPlatformHost, canary)
+
+	if got := apinotifications.ClassifyCode(err); got != "sink.platform-host" {
+		t.Errorf("code = %q, want sink.platform-host", got)
+	}
+
+	got := apinotifications.ClassifyText(err)
+	if strings.Contains(got, canary) || strings.Contains(got, "hooks.example.com") {
+		t.Errorf("the answer %q holds the text of the error", got)
+	}
+
+	if !strings.Contains(got, "webhook URL") {
+		t.Errorf("the answer %q does not say what is wrong", got)
 	}
 }
 

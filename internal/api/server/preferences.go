@@ -145,6 +145,35 @@ type preferencesResponse struct {
 	UpdatedAt          *string                 `json:"updatedAt"`
 }
 
+// updatePreferencesRequest is the merge patch of the PATCH route, for the
+// description. The handler reads the body with preferences.ParsePatch, so
+// this type is never decoded: a test proves that its members are the members
+// that the parser accepts. Each member is optional. A member that is null
+// sets the field back to its default.
+type updatePreferencesRequest struct {
+	Theme              *string                      `dustpan:"nullable" json:"theme,omitempty"`
+	ColorMode          *string                      `dustpan:"nullable" json:"colorMode,omitempty"`
+	TerminalSchemes    *terminalSchemesPatchRequest `dustpan:"nullable" json:"terminalSchemes,omitempty"`
+	ShortcutHints      *string                      `dustpan:"nullable" json:"shortcutHints,omitempty"`
+	SingleKeyShortcuts *string                      `dustpan:"nullable" json:"singleKeyShortcuts,omitempty"`
+	ShortcutHintStyle  *string                      `dustpan:"nullable" json:"shortcutHintStyle,omitempty"`
+	Language           *string                      `dustpan:"nullable" json:"language,omitempty"`
+	FormattingLocale   *string                      `dustpan:"nullable" json:"formattingLocale,omitempty"`
+	HourCycle          *string                      `dustpan:"nullable" json:"hourCycle,omitempty"`
+	DateStyle          *string                      `dustpan:"nullable" json:"dateStyle,omitempty"`
+	FirstDayOfWeek     *string                      `dustpan:"nullable" json:"firstDayOfWeek,omitempty"`
+	TimeZone           *string                      `dustpan:"nullable" json:"timeZone,omitempty"`
+	Digits             *string                      `dustpan:"nullable" json:"digits,omitempty"`
+	ResolvedLanguage   *string                      `dustpan:"nullable" json:"resolvedLanguage,omitempty"`
+}
+
+// terminalSchemesPatchRequest is the terminalSchemes member of a patch: it
+// names the schemes that change.
+type terminalSchemesPatchRequest struct {
+	Light *string `dustpan:"nullable" json:"light,omitempty"`
+	Dark  *string `dustpan:"nullable" json:"dark,omitempty"`
+}
+
 // terminalSchemesResponse holds the color scheme of each color mode.
 type terminalSchemesResponse struct {
 	Light string `json:"light"`

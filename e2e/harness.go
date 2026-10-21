@@ -36,6 +36,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/ipallow"
 	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/notify"
 	"opendustpan.org/opendustpan/pkg/secret"
 	"opendustpan.org/opendustpan/pkg/stack"
 	"opendustpan.org/opendustpan/pkg/store/postgres"
@@ -268,6 +269,7 @@ func defaultEnvInput(tb testing.TB, cli Install, store Store) envInput {
 
 	return envInput{
 		deltaCutoff:       0,
+		sinkSenders:       nil,
 		disableJournaling: false,
 		ipAllowlists:      false,
 		signIn:            false,
@@ -306,6 +308,30 @@ func NewEnvWithJournalingOff(ctx context.Context, tb testing.TB, cli Install, st
 	return startEnv(ctx, in)
 }
 
+// NewEnvWithSinkSenders starts a server as NewEnv does, with senders in place
+// of the built-in notification sink senders of their kinds. It is for a step
+// that needs a receiver on the machine of the test, which the built-in
+// senders refuse by design. Only the in-process server takes the senders: the
+// server binary keeps its own, and SinkSendersApply reports which one runs.
+func NewEnvWithSinkSenders(
+	ctx context.Context,
+	tb testing.TB,
+	cli Install,
+	store Store,
+	senders ...notify.Sender,
+) *Env {
+	tb.Helper()
+
+	in := defaultEnvInput(tb, cli, store)
+	in.sinkSenders = senders
+
+	return startEnv(ctx, in)
+}
+
+// SinkSendersApply reports whether NewEnvWithSinkSenders changes the server:
+// it does for the in-process server only.
+func SinkSendersApply() bool { return !UseBinaryServer() }
+
 // NewEnvWithIPAllowlists starts a server as NewEnv does, with IP allowlists
 // turned on and applied to the bootstrap admin token too, so a step can lock
 // one namespace to one source address and prove the 403 answers.
@@ -326,6 +352,7 @@ func journalTestInput(tb testing.TB, cli Install, store Store) envInput {
 
 	return envInput{
 		deltaCutoff:       0,
+		sinkSenders:       nil,
 		disableJournaling: false,
 		ipAllowlists:      false,
 		signIn:            false,
@@ -384,6 +411,7 @@ func NewEnvWithDeltaCutoff(ctx context.Context, tb testing.TB, cli Install, stor
 	rec := &Recorder{step: "", entries: nil, arrived: 0, mu: sync.Mutex{}}
 	in := envInput{
 		deltaCutoff:       cutoff,
+		sinkSenders:       nil,
 		disableJournaling: false,
 		ipAllowlists:      false,
 		signIn:            false,
@@ -444,6 +472,7 @@ func startInprocessServer(
 		ipAllowlists:      in.ipAllowlists,
 		signIn:            signIn,
 		publicURL:         inprocessPublicURL(in, ts),
+		sinkSenders:       in.sinkSenders,
 	})
 
 	handler = cappedHandler(faultedHandler(build.handler, in.journalRefuser), in.journalCap)
@@ -589,6 +618,9 @@ func openServerStore(
 // serverArgs groups what newServer needs, so the constructor takes one
 // argument next to the context and the test helper.
 type serverArgs struct {
+	// sinkSenders replace the built-in sender of their kind on the in-process
+	// server.
+	sinkSenders []notify.Sender
 	store       Store
 	dbPath      string
 	tokens      serverTokens
@@ -646,6 +678,7 @@ func storeOptions(st serverStore, wrapper secret.Wrapper, args serverArgs) []dus
 	return slices.Concat(
 		profileStoreOptions(st, wrapper), jobStoreOptions(st), savedViewStoreOptions(st),
 		registryStoreOptions(st), sinkStoreOptions(st), publicURLOptions(args.publicURL),
+		[]dustpan.Option{dustpan.WithSinkSenders(args.sinkSenders...)},
 	)
 }
 

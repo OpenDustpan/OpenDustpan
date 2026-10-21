@@ -10,9 +10,10 @@ a `sink`.
 
 **This version sends one message to a destination: the test message.** The
 server does not yet send other notifications to a destination by itself. The
-signed webhook has a sender. The kinds `chat` and `email` have none yet, so
-you can make and read their destinations, but the test route answers
-`sink.no-sender` for them.
+signed webhook and the Slack chat destination have a sender. The kind `email`
+and the other chat platforms have none yet, so you can make and read their
+destinations, but the test route answers `sink.no-sender` for them. See
+`docs/guides/slack-notifications.md` for Slack.
 
 The paths in this guide are under `/api/dustpan/v1/`. See
 `docs/reference/notification-destinations-api.md` for every field and error.
@@ -159,7 +160,8 @@ curl -X POST -H "Authorization: token $DUSTPAN_TOKEN" \
 The `platform` is `slack`, `teams`, `mattermost` or `matrix`. The URL holds
 the token of the webhook, so the whole URL is a secret. The server seals it.
 A read of the destination shows the platform, the name and the **host** of the
-URL (`hooks.slack.com`), and `"urlSet": true`. It never shows the URL.
+URL (`hooks.slack.com`), and `"urlSet": true`. It never shows the URL. A Slack
+destination accepts only the hosts of Slack and GovSlack.
 
 To change the URL, send a `PUT` with a new `url`. The server stores the new
 URL as a new secret and deletes the old one. A change of the platform is a
