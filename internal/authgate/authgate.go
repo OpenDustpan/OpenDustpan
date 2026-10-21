@@ -137,6 +137,11 @@ type Config struct {
 	// OperationPrune, each time a call of Failures fails. Nil counts
 	// nothing.
 	CounterErrors func(operation string)
+	// Scope names the budget in the shared count. Gates with different
+	// scopes keep separate counts for one source, so the misses of one gate
+	// never spend the budget of another. Empty is the scope of the token
+	// lookups.
+	Scope string
 	// Burst is the count of misses that a source can have at once.
 	Burst int
 	// Refill is the time that gives a source back one miss.
@@ -158,6 +163,7 @@ type Gate struct {
 	logger     *slog.Logger
 	now        func() time.Time
 	failures   FailureCounter
+	scope      string
 	errors     func(operation string)
 	sources    map[string]*list.Element
 	recent     *list.List
@@ -213,6 +219,7 @@ func New(cfg Config) (*Gate, error) {
 		logger:     cfg.Logger,
 		now:        cfg.Now,
 		failures:   cfg.Failures,
+		scope:      cfg.Scope,
 		errors:     cfg.CounterErrors,
 		sources:    map[string]*list.Element{},
 		recent:     list.New(),
@@ -582,7 +589,7 @@ func (g *Gate) countShared(ctx context.Context, source string) {
 	callCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), counterTimeout)
 	defer cancel()
 
-	count, err := g.failures.AddFailure(callCtx, source, g.window)
+	count, err := g.failures.AddFailure(callCtx, g.counterSource(source), g.window)
 	if err != nil {
 		g.counterFailed(ctx, OperationAdd, err)
 	} else if float64(count.Count) >= g.burst {
@@ -590,6 +597,18 @@ func (g *Gate) countShared(ctx context.Context, source string) {
 	}
 
 	g.prune(callCtx, ctx)
+}
+
+// counterSource returns the key of source in the shared count: source as it
+// is for the scope of the token lookups, else the scope and source. A scope
+// has a separator that a source cannot hold, so no source of one scope
+// meets a source of another.
+func (g *Gate) counterSource(source string) string {
+	if g.scope == "" {
+		return source
+	}
+
+	return g.scope + "|" + source
 }
 
 // spendLocal uses one unit of the budget of source in this process.

@@ -224,9 +224,13 @@ type settings struct {
 	// signInHTTPClient makes the requests to the sign-in providers of the
 	// API. Nil uses the default client of the sign-in.
 	signInHTTPClient *http.Client
-	// gate is the per-address failure limit of the token lookups. The
-	// sign-in routes share it. wireTokens sets it; nil means no limit.
+	// gate is the per-address failure limit of the token lookups.
+	// wireTokens sets it; nil means no limit.
 	gate *authgate.Gate
+	// signInGate is the per-address limit of the sign-in routes. It has its
+	// own budget, so sign-ins never slow a token lookup. wireTokens sets it
+	// with gate; nil means no limit.
+	signInGate *authgate.Gate
 	// sessionCookies checks the console session cookie on the inventory,
 	// audit and Pulumi APIs. newAdapters sets it before it builds them; nil
 	// means no console sign-in.
@@ -735,6 +739,7 @@ func defaultSettings() *settings {
 		oidcProviders:           nil,
 		signInHTTPClient:        nil,
 		gate:                    nil,
+		signInGate:              nil,
 		sessionCookies:          nil,
 		version:                 "",
 		maxCheckpointBytes:      0,
@@ -3112,7 +3117,7 @@ func gatedAuthenticator(cfg *settings, tokens *accesstoken.Service) (identity.Au
 
 	gate, err := authgate.New(authgate.Config{
 		Next: tokens, Charge: accesstoken.LooksLikeSecret, Logger: cfg.logger, Now: cfg.now,
-		Failures: failures, Window: 0, CounterErrors: nil,
+		Failures: failures, Window: 0, CounterErrors: nil, Scope: "",
 		Burst: 0, Refill: 0, Penalty: 0, MaxWaiting: 0, MaxSources: 0,
 	})
 	if err != nil {
@@ -3121,7 +3126,32 @@ func gatedAuthenticator(cfg *settings, tokens *accesstoken.Service) (identity.Au
 
 	cfg.gate = gate
 
+	signInGate, err := authgate.New(authgate.Config{
+		Next: refuseAll{}, Charge: nil, Logger: cfg.logger, Now: cfg.now,
+		Failures: failures, Window: 0, CounterErrors: nil, Scope: signInGateScope,
+		Burst: 0, Refill: 0, Penalty: 0, MaxWaiting: 0, MaxSources: 0,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("sign-in gate: %w", err)
+	}
+
+	cfg.signInGate = signInGate
+
 	return identity.Chain{cfg.authenticator, gate}, nil
+}
+
+// signInGateScope names the budget of the sign-in routes in the shared
+// count.
+const signInGateScope = "signin"
+
+// refuseAll is the Next of the sign-in gate. The sign-in routes never look
+// up a token through that gate; if one does, it gets no principal.
+type refuseAll struct{}
+
+func (refuseAll) AuthenticateToken(context.Context, string) (identity.Principal, error) {
+	var none identity.Principal
+
+	return none, identity.ErrUnauthenticated
 }
 
 // schemaReporterOf returns the schema reporter of the namespace store, or
