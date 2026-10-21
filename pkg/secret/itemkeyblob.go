@@ -20,10 +20,10 @@ import (
 // 256-bit item key with the nonce and the tag of the wrapper is far smaller.
 const MaxWrappedItemKeyBytes = 4096
 
-// maxItemKeyVersion bounds the version of an item key blob. The version is the
+// MaxItemKeyVersion bounds the version of an item key blob. The version is the
 // version of the namespace key that wraps the item key, and each rewrap writes a
 // new blob, so a real value stays small.
-const maxItemKeyVersion = 1 << 20
+const MaxItemKeyVersion = 1 << 20
 
 // ItemKeyFamily is the family of the item key blobs.
 func ItemKeyFamily() scopeaudit.Family {
@@ -58,13 +58,13 @@ func NewItemKeyBlobs(store blob.Store, refusals scopeaudit.Recorder) (*ItemKeyBl
 
 // itemKeyRel returns the key of version of id, relative to the scope of a
 // namespace. It returns ErrInvalidItemRef for an invalid ID or a version that
-// is not in 1 to maxItemKeyVersion.
+// is not in 1 to MaxItemKeyVersion.
 func itemKeyRel(id ItemKeyID, version int) (string, error) {
 	if _, err := ParseItemKeyID(string(id)); err != nil {
 		return "", err
 	}
 
-	if version < 1 || version > maxItemKeyVersion {
+	if version < 1 || version > MaxItemKeyVersion {
 		return "", fmt.Errorf("%w: item key version %d", ErrInvalidItemRef, version)
 	}
 
@@ -106,7 +106,7 @@ func ParseItemKeyBlobKey(key blob.Key) (ItemKeyBlob, error) {
 	return ItemKeyBlob{Namespace: ns, ID: id, Version: version}, nil
 }
 
-// parseItemKeyVersion parses "v<version>": a version in 1 to maxItemKeyVersion
+// parseItemKeyVersion parses "v<version>": a version in 1 to MaxItemKeyVersion
 // in its plain decimal form, with no sign and no leading zero.
 func parseItemKeyVersion(s string) (int, bool) {
 	digits, ok := strings.CutPrefix(s, "v")
@@ -119,7 +119,7 @@ func parseItemKeyVersion(s string) (int, bool) {
 		return 0, false
 	}
 
-	return n, n >= 1 && n <= maxItemKeyVersion
+	return n, n >= 1 && n <= MaxItemKeyVersion
 }
 
 // Key returns the blob key of version of the item key id in the namespace ns:

@@ -9,6 +9,7 @@ import (
 	"io"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"opendustpan.org/opendustpan/pkg/blob"
@@ -29,14 +30,57 @@ type SealerRig struct {
 	// Unkeyed has the same index and blobs as Sealer and no key-encryption
 	// key.
 	Unkeyed secret.ItemSealer
-	Index   secret.ItemKeyIndex
-	Blobs   blob.Store
+	Index   secret.ItemKeyStore
+	// withIndex builds a sealer with the key-encryption key of Sealer, the
+	// blobs of the rig and the given index.
+	withIndex func(secret.ItemKeyIndex) secret.ItemSealer
+	Blobs     blob.Store
+	// Counts counts the calls that the sealers make to Blobs.
+	Counts *BlobCounts
 	// Acme and Other are two namespaces of the store.
 	Acme, Other namespace.Namespace
 }
 
 // SealerFactory returns a fresh rig for one subtest.
 type SealerFactory func(t *testing.T) *SealerRig
+
+// BlobCounts counts the calls that the sealers of a rig make to the blob
+// store. A case reads it to show that a check refused a call before the call
+// reached the store.
+type BlobCounts struct {
+	puts  atomic.Int64
+	reads atomic.Int64
+}
+
+// Puts returns the number of Put calls.
+func (c *BlobCounts) Puts() int64 { return c.puts.Load() }
+
+// Reads returns the number of Get and List calls.
+func (c *BlobCounts) Reads() int64 { return c.reads.Load() }
+
+// countingBlobs counts the calls to the blob store that it wraps.
+type countingBlobs struct {
+	blob.Store
+	counts *BlobCounts
+}
+
+func (c *countingBlobs) Put(ctx context.Context, key blob.Key, r io.Reader) error {
+	c.counts.puts.Add(1)
+
+	return c.Store.Put(ctx, key, r) //nolint:wrapcheck // A counting decorator returns the error unchanged.
+}
+
+func (c *countingBlobs) Get(ctx context.Context, key blob.Key) (io.ReadCloser, error) {
+	c.counts.reads.Add(1)
+
+	return c.Store.Get(ctx, key) //nolint:wrapcheck // A counting decorator returns the error unchanged.
+}
+
+func (c *countingBlobs) List(ctx context.Context, prefix string) ([]blob.Object, error) {
+	c.counts.reads.Add(1)
+
+	return c.Store.List(ctx, prefix) //nolint:wrapcheck // A counting decorator returns the error unchanged.
+}
 
 // noRefusals is a scopeaudit.Recorder that drops every refusal. The suite
 // reads the refusal as the returned error.
@@ -70,7 +114,9 @@ func NewSealerRig(t *testing.T, index ItemKeyStore, blobs blob.Store) *SealerRig
 		}
 	}
 
-	itemBlobs, err := secret.NewItemKeyBlobs(blobs, noRefusals{})
+	rig.Counts = &BlobCounts{}
+
+	itemBlobs, err := secret.NewItemKeyBlobs(&countingBlobs{Store: blobs, counts: rig.Counts}, noRefusals{})
 	if err != nil {
 		t.Fatalf("item key blobs: %v", err)
 	}
@@ -87,7 +133,20 @@ func NewSealerRig(t *testing.T, index ItemKeyStore, blobs blob.Store) *SealerRig
 		return s
 	}
 
-	rig.Sealer = build(newTestWrapper(t))
+	wrapper := newTestWrapper(t)
+
+	rig.withIndex = func(idx secret.ItemKeyIndex) secret.ItemSealer {
+		s, buildErr := secret.NewItemKeySealer(secret.ItemSealerConfig{
+			Index: idx, Blobs: itemBlobs, Wrapper: wrapper, Namespaces: index, Now: itemKeyTime,
+		})
+		if buildErr != nil {
+			t.Fatalf("item key sealer: %v", buildErr)
+		}
+
+		return s
+	}
+
+	rig.Sealer = build(wrapper)
 	rig.Foreign = build(newTestWrapper(t))
 	rig.Unkeyed = build(nil)
 
@@ -128,6 +187,8 @@ func RunItemSealer(t *testing.T, newRig SealerFactory) {
 		{name: "an item with no key does not seal or open", test: testSealerNoKey},
 		{name: "a stale fence writes no record and no blob", test: testSealerStaleFence},
 		{name: "a fence of another namespace writes no record and no blob", test: testSealerOtherNamespaceFence},
+		{name: "a rolled-back item transaction leaves no record", test: testSealerRollback},
+		{name: "a record of another item does not open", test: testSealerOtherRecord},
 		{name: "the binding must match", test: testSealerBinding},
 		{name: "content of one item does not open as another item", test: testSealerOtherItem},
 		{name: "a tampered, cut or extended stream does not open", test: testSealerTamper},
@@ -160,11 +221,29 @@ func sealerRef(t *testing.T, scope string, kind secret.ItemKind, item string) se
 // sealerBinding returns the binding of the cases.
 func sealerBinding() []byte { return []byte("pln-1") }
 
+// newKeyVia makes the item key of ref with s in one fenced transaction of the
+// index, as a tool store does for a new item: the record commits when the
+// function returns nil and rolls back otherwise.
+func newKeyVia(
+	ctx context.Context, r *SealerRig, s secret.ItemSealer, ref secret.ItemRef, fence namespace.Fence,
+) (secret.ItemKey, error) {
+	var k secret.ItemKey
+
+	err := r.Index.InItemKeyTx(ctx, fence, func(tx secret.ItemKeyTx) error {
+		got, err := s.NewItemKey(ctx, tx, ref, fence)
+		k = got
+
+		return err
+	})
+
+	return k, err
+}
+
 // mustNewKey makes the item key of ref.
 func mustNewKey(t *testing.T, r *SealerRig, ref secret.ItemRef) secret.ItemKey {
 	t.Helper()
 
-	k, err := r.Sealer.NewItemKey(t.Context(), ref, r.fence())
+	k, err := newKeyVia(t.Context(), r, r.Sealer, ref, r.fence())
 	if err != nil {
 		t.Fatalf("new item key %s: %v", ref, err)
 	}
@@ -336,7 +415,7 @@ func testSealerConcurrentNewKey(t *testing.T, r *SealerRig) {
 
 	for i := range writers {
 		wg.Go(func() {
-			k, err := r.Sealer.NewItemKey(t.Context(), ref, r.fence())
+			k, err := newKeyVia(t.Context(), r, r.Sealer, ref, r.fence())
 			ids[i], errs[i] = k.ID, err
 		})
 	}
@@ -390,7 +469,7 @@ func testSealerStaleFence(t *testing.T, r *SealerRig) {
 	stale := namespace.Fence{Namespace: "acme", FailoverVersion: itemKeyFenceVersion - 1}
 	ref := sealerRef(t, "unit-one", secret.ItemKindPlan, "pln-stale")
 
-	if _, err := r.Sealer.NewItemKey(t.Context(), ref, stale); !errors.Is(err, namespace.ErrFenced) {
+	if _, err := newKeyVia(t.Context(), r, r.Sealer, ref, stale); !errors.Is(err, namespace.ErrFenced) {
 		t.Errorf("new item key with a stale fence err = %v, want ErrFenced", err)
 	}
 
@@ -409,12 +488,101 @@ func testSealerOtherNamespaceFence(t *testing.T, r *SealerRig) {
 	ref := sealerRef(t, "unit-one", secret.ItemKindPlan, "pln-x")
 
 	// The reference names "acme", the fence names "other".
-	if _, err := r.Sealer.NewItemKey(t.Context(), ref, r.Other.Fence()); !errors.Is(err, namespace.ErrFenced) {
+	if _, err := newKeyVia(t.Context(), r, r.Sealer, ref, r.Other.Fence()); !errors.Is(err, namespace.ErrFenced) {
 		t.Errorf("new item key under the fence of another namespace err = %v, want ErrFenced", err)
 	}
 
 	if n := len(keyBlobs(t, r, r.Acme.ID)) + len(keyBlobs(t, r, r.Other.ID)); n != 0 {
 		t.Errorf("a refused create left %d key blobs", n)
+	}
+
+	// The sealer checks the namespace of the fence before it writes a blob.
+	// A key blob that is written and deleted afterwards would leave no blob
+	// either, so only the count of puts shows that this check refused the call.
+	if n := r.Counts.Puts(); n != 0 {
+		t.Errorf("a create under the fence of another namespace reached the blob store with %d puts", n)
+	}
+}
+
+// testSealerRollback shows that the record commits with the transaction of the
+// caller: when the caller rolls back after NewItemKey, no record stays, and the
+// item gets a new key at the next try.
+func testSealerRollback(t *testing.T, r *SealerRig) {
+	t.Helper()
+
+	ref := sealerRef(t, "unit-one", secret.ItemKindPlan, "pln-rollback")
+	errRollback := errors.New("the item row failed")
+
+	var first secret.ItemKey
+
+	err := r.Index.InItemKeyTx(t.Context(), r.fence(), func(tx secret.ItemKeyTx) error {
+		k, newErr := r.Sealer.NewItemKey(t.Context(), tx, ref, r.fence())
+		if newErr != nil {
+			return newErr
+		}
+
+		first = k
+
+		return errRollback
+	})
+	if !errors.Is(err, errRollback) {
+		t.Fatalf("rolled-back transaction err = %v, want the error of the caller", err)
+	}
+
+	if _, err = r.Index.GetItemKey(t.Context(), ref); !errors.Is(err, secret.ErrKeyNotFound) {
+		t.Fatalf("a rolled-back transaction left a record: err = %v", err)
+	}
+
+	second := mustNewKey(t, r, ref)
+	if second.ID == first.ID {
+		t.Error("the key of a rolled-back transaction came back")
+	}
+
+	sealed := sealItem(t, r, ref, sealerBinding(), []byte("after the rollback"))
+
+	got, err := openSealed(t.Context(), r.Sealer, ref, sealerBinding(), sealed)
+	if err != nil || string(got) != "after the rollback" {
+		t.Errorf("open after the rollback = %q, %v", got, err)
+	}
+}
+
+// relabelIndex answers each read with the stored record of the request, but
+// with the reference ref in the record.
+type relabelIndex struct {
+	secret.ItemKeyIndex
+	ref secret.ItemRef
+}
+
+func (i relabelIndex) GetItemKey(ctx context.Context, ref secret.ItemRef) (secret.ItemKey, error) {
+	k, err := i.ItemKeyIndex.GetItemKey(ctx, ref)
+	k.Ref = i.ref
+
+	return k, err
+}
+
+// testSealerOtherRecord sends a hostile record straight to the check of the
+// sealer: the index answers a lookup of item A with a record that names item
+// B, but that holds the ID of the key of item A. The blob unwraps for item A.
+// Only the comparison of the reference in the record with the reference of the
+// request refuses it.
+func testSealerOtherRecord(t *testing.T, r *SealerRig) {
+	t.Helper()
+
+	a := sealerRef(t, "unit-one", secret.ItemKindPlan, "pln-1")
+	b := sealerRef(t, "unit-one", secret.ItemKindPlan, "pln-2")
+	mustNewKey(t, r, a)
+	sealed := sealItem(t, r, a, sealerBinding(), []byte("content of pln-1"))
+
+	lying := r.withIndex(relabelIndex{ItemKeyIndex: r.Index, ref: b})
+
+	if _, err := openSealed(t.Context(), lying, a, sealerBinding(), sealed); !errors.Is(err, secret.ErrDecrypt) {
+		t.Errorf("open with a record that names another item err = %v, want ErrDecrypt", err)
+	}
+
+	if _, err := lying.SealContent(t.Context(), a, sealerBinding(), strings.NewReader("x")); !errors.Is(
+		err, secret.ErrDecrypt,
+	) {
+		t.Errorf("seal with a record that names another item err = %v, want ErrDecrypt", err)
 	}
 }
 
@@ -533,6 +701,8 @@ func testSealerShredded(t *testing.T, r *SealerRig) {
 		t.Fatalf("shred: %v", err)
 	}
 
+	reads, puts := r.Counts.Reads(), r.Counts.Puts()
+
 	if _, err := openSealed(t.Context(), r.Sealer, ref, sealerBinding(), sealed); !errors.Is(err, secret.ErrShredded) {
 		t.Errorf("open after a shred err = %v, want ErrShredded", err)
 	}
@@ -544,9 +714,14 @@ func testSealerShredded(t *testing.T, r *SealerRig) {
 	}
 
 	// NewItemKey never brings a shredded key back.
-	got, err := r.Sealer.NewItemKey(t.Context(), ref, r.fence())
+	got, err := newKeyVia(t.Context(), r, r.Sealer, ref, r.fence())
 	if !errors.Is(err, secret.ErrShredded) || got.ID != k.ID {
 		t.Errorf("new item key after a shred = %v, %v, want the shredded record and ErrShredded", got.ID, err)
+	}
+
+	if r.Counts.Reads() != reads || r.Counts.Puts() != puts {
+		t.Errorf("a shredded key reached the blob store: %d reads and %d puts after the shred",
+			r.Counts.Reads()-reads, r.Counts.Puts()-puts)
 	}
 
 	// With the blob gone too, the answer stays ErrShredded.
@@ -592,7 +767,7 @@ func testSealerOtherNamespaceBlob(t *testing.T, r *SealerRig) {
 		t.Fatalf("item ref: %v", err)
 	}
 
-	other, err := r.Sealer.NewItemKey(t.Context(), otherRef, r.Other.Fence())
+	other, err := newKeyVia(t.Context(), r, r.Sealer, otherRef, r.Other.Fence())
 	if err != nil {
 		t.Fatalf("new item key in other: %v", err)
 	}
@@ -632,7 +807,7 @@ func testSealerUnkeyed(t *testing.T, r *SealerRig) {
 
 	ref := sealerRef(t, "unit-one", secret.ItemKindPlan, "pln-1")
 
-	if _, err := r.Unkeyed.NewItemKey(t.Context(), ref, r.fence()); !errors.Is(err, secret.ErrKeyNotConfigured) {
+	if _, err := newKeyVia(t.Context(), r, r.Unkeyed, ref, r.fence()); !errors.Is(err, secret.ErrKeyNotConfigured) {
 		t.Errorf("new item key with no wrapper err = %v, want ErrKeyNotConfigured", err)
 	}
 
@@ -671,7 +846,7 @@ func testSealerBadRef(t *testing.T, r *SealerRig) {
 	}
 
 	for _, ref := range bad {
-		if _, err := r.Sealer.NewItemKey(t.Context(), ref, r.fence()); err == nil {
+		if _, err := newKeyVia(t.Context(), r, r.Sealer, ref, r.fence()); err == nil {
 			t.Errorf("new item key of %+v succeeded", ref)
 		}
 

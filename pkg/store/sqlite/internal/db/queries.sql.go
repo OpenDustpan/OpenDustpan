@@ -4992,7 +4992,8 @@ func (q *Queries) GetInventoryUnit(ctx context.Context, arg GetInventoryUnitPara
 }
 
 const getItemKey = `-- name: GetItemKey :one
-SELECT k.id, n.name AS namespace, k.scope_id, k.kind, k.item, k.wrapper_id, k.created_at_ms, k.shredded_at_ms
+SELECT k.id, n.name AS namespace, k.scope_id, k.kind, k.item, k.wrapper_id, k.created_at_ms, k.shredded_at_ms,
+       k.blob_version, k.blob_size, k.blob_md5
 FROM item_keys AS k
 JOIN namespaces AS n ON n.id = k.namespace_id
 WHERE n.name = ?1 AND k.scope_id = ?2 AND k.kind = ?3
@@ -5015,6 +5016,9 @@ type GetItemKeyRow struct {
 	WrapperID    string
 	CreatedAtMs  int64
 	ShreddedAtMs int64
+	BlobVersion  int64
+	BlobSize     int64
+	BlobMd5      []byte
 }
 
 func (q *Queries) GetItemKey(ctx context.Context, arg GetItemKeyParams) (GetItemKeyRow, error) {
@@ -5034,6 +5038,9 @@ func (q *Queries) GetItemKey(ctx context.Context, arg GetItemKeyParams) (GetItem
 		&i.WrapperID,
 		&i.CreatedAtMs,
 		&i.ShreddedAtMs,
+		&i.BlobVersion,
+		&i.BlobSize,
+		&i.BlobMd5,
 	)
 	return i, err
 }
@@ -7858,10 +7865,13 @@ func (q *Queries) InsertInventoryChange(ctx context.Context, arg InsertInventory
 }
 
 const insertItemKey = `-- name: InsertItemKey :execrows
-INSERT INTO item_keys (id, namespace_id, scope_id, kind, item, wrapper_id, created_at_ms, shredded_at_ms)
+INSERT INTO item_keys (
+    id, namespace_id, scope_id, kind, item, wrapper_id, created_at_ms, shredded_at_ms, blob_version, blob_size, blob_md5
+)
 VALUES (
     ?1, (SELECT n.id FROM namespaces AS n WHERE n.name = ?2),
-    ?3, ?4, ?5, ?6, ?7, 0
+    ?3, ?4, ?5, ?6, ?7, 0,
+    ?8, ?9, ?10
 )
 ON CONFLICT (namespace_id, scope_id, kind, item) DO NOTHING
 `
@@ -7874,6 +7884,9 @@ type InsertItemKeyParams struct {
 	Item        string
 	WrapperID   string
 	CreatedAtMs int64
+	BlobVersion int64
+	BlobSize    int64
+	BlobMd5     []byte
 }
 
 // The caller checks the fence in the same transaction. A record for the same
@@ -7887,6 +7900,9 @@ func (q *Queries) InsertItemKey(ctx context.Context, arg InsertItemKeyParams) (i
 		arg.Item,
 		arg.WrapperID,
 		arg.CreatedAtMs,
+		arg.BlobVersion,
+		arg.BlobSize,
+		arg.BlobMd5,
 	)
 	if err != nil {
 		return 0, err
@@ -11026,7 +11042,8 @@ func (q *Queries) ListItemKeyWrapperIDs(ctx context.Context) ([]string, error) {
 }
 
 const listItemKeys = `-- name: ListItemKeys :many
-SELECT k.id, n.name AS namespace, k.scope_id, k.kind, k.item, k.wrapper_id, k.created_at_ms, k.shredded_at_ms
+SELECT k.id, n.name AS namespace, k.scope_id, k.kind, k.item, k.wrapper_id, k.created_at_ms, k.shredded_at_ms,
+       k.blob_version, k.blob_size, k.blob_md5
 FROM item_keys AS k
 JOIN namespaces AS n ON n.id = k.namespace_id
 WHERE n.name = ?1 AND k.scope_id = ?2 AND k.id > ?3
@@ -11050,6 +11067,9 @@ type ListItemKeysRow struct {
 	WrapperID    string
 	CreatedAtMs  int64
 	ShreddedAtMs int64
+	BlobVersion  int64
+	BlobSize     int64
+	BlobMd5      []byte
 }
 
 func (q *Queries) ListItemKeys(ctx context.Context, arg ListItemKeysParams) ([]ListItemKeysRow, error) {
@@ -11075,6 +11095,9 @@ func (q *Queries) ListItemKeys(ctx context.Context, arg ListItemKeysParams) ([]L
 			&i.WrapperID,
 			&i.CreatedAtMs,
 			&i.ShreddedAtMs,
+			&i.BlobVersion,
+			&i.BlobSize,
+			&i.BlobMd5,
 		); err != nil {
 			return nil, err
 		}

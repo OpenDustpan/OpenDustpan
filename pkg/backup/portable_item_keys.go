@@ -17,6 +17,9 @@ func portableItemKeyTables() []PortableTable {
 				{Name: portColWrapperID, Kind: KindText},
 				{Name: portColCreatedAtMs, Kind: KindTime},
 				{Name: "shredded_at_ms", Kind: KindInteger},
+				{Name: "blob_version", Kind: KindInteger},
+				{Name: "blob_size", Kind: KindInteger},
+				{Name: "blob_md5", Kind: KindBytes},
 			},
 		},
 	}

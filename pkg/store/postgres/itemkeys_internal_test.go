@@ -38,6 +38,7 @@ func seedItemKey(t *testing.T, s *Store) secret.ItemRef {
 	k := secret.ItemKey{
 		CreatedAt: time.UnixMilli(1_700_000_000_000).UTC(), ShreddedAt: time.Time{}, Ref: ref,
 		ID: secret.NewItemKeyID(), WrapperID: "builtin-1",
+		Blob: secret.ItemKeyBlobInfo{Version: 1, Size: 60, MD5: [16]byte{1, 2, 3}},
 	}
 	if _, err = s.CreateItemKey(t.Context(), k, ns.Fence()); err != nil {
 		t.Fatalf("create item key: %v", err)
@@ -173,7 +174,7 @@ func TestItemKeyStoreRefusesHostileCreate(t *testing.T) {
 	acme := namespace.Fence{Namespace: "acme", FailoverVersion: 1}
 	good := secret.ItemKey{
 		CreatedAt: stored.CreatedAt, ShreddedAt: time.Time{}, Ref: stored.Ref, ID: secret.NewItemKeyID(),
-		WrapperID: "builtin-2",
+		WrapperID: "builtin-2", Blob: stored.Blob,
 	}
 
 	for _, tc := range refusedItemKeys(otherRef, acme) {

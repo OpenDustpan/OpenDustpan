@@ -3,6 +3,7 @@ package secrettest
 import (
 	"errors"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -11,10 +12,10 @@ import (
 )
 
 // ItemKeyStore is every persistence port that RunItemKeys exercises:
-// namespaces for the fence, and secret.ItemKeyIndex under test.
+// namespaces for the fence, and secret.ItemKeyStore under test.
 type ItemKeyStore interface {
 	namespace.Store
-	secret.ItemKeyIndex
+	secret.ItemKeyStore
 }
 
 // ItemKeyFactory returns a fresh, empty store for one subtest.
@@ -43,6 +44,9 @@ func RunItemKeys(t *testing.T, newStore ItemKeyFactory) {
 		{name: "a create after a shred is ErrShredded", test: testItemKeyCreateAfterShred},
 		{name: "shred of a missing record is ErrKeyNotFound", test: testItemKeyShredMissing},
 		{name: "a stale fence refuses create and shred", test: testItemKeyFenced},
+		{name: "a valid fence of another namespace refuses create and shred", test: testItemKeyOtherNamespaceFence},
+		{name: "a record with a bad blob description is refused", test: testItemKeyBadBlobInfo},
+		{name: "a transaction keeps its record on commit and drops it on rollback", test: testItemKeyTx},
 		{name: "list pages the records of one scope by ID", test: testItemKeyList},
 		{name: "wrapper IDs leave out shredded records", test: testItemKeyWrapperIDs},
 	}
@@ -109,6 +113,7 @@ func newItemKey(ref secret.ItemRef, wrapperID string) secret.ItemKey {
 		Ref:        ref,
 		ID:         secret.NewItemKeyID(),
 		WrapperID:  wrapperID,
+		Blob:       secret.ItemKeyBlobInfo{Version: 1, Size: 60, MD5: [16]byte{1, 2, 3}},
 	}
 }
 
@@ -130,7 +135,7 @@ func mustCreateItemKey(
 // as instants.
 func sameItemKey(a, b secret.ItemKey) bool {
 	return a.ID == b.ID && a.Ref == b.Ref && a.WrapperID == b.WrapperID &&
-		a.CreatedAt.Equal(b.CreatedAt) && a.ShreddedAt.Equal(b.ShreddedAt)
+		a.CreatedAt.Equal(b.CreatedAt) && a.ShreddedAt.Equal(b.ShreddedAt) && a.Blob == b.Blob
 }
 
 func testItemKeyCreateGet(t *testing.T, s ItemKeyStore) {
@@ -399,5 +404,124 @@ func testItemKeyWrapperIDs(t *testing.T, s ItemKeyStore) {
 
 	if want := []string{"builtin-a", "builtin-b"}; !slices.Equal(got, want) {
 		t.Errorf("wrapper IDs = %v, want %v", got, want)
+	}
+}
+
+// otherItemKeyFence creates the namespace "other" and returns its current
+// fence, which is valid for "other" and for no other namespace.
+func otherItemKeyFence(t *testing.T, s ItemKeyStore) namespace.Fence {
+	t.Helper()
+
+	ns := namespace.Namespace{
+		ID: namespace.NewID(), CreatedAt: itemKeyTime(), Name: "other", HomeRegion: "local",
+		FailoverVersion: itemKeyFenceVersion, Overrides: namespace.Overrides{Forced: false, Unlocked: false},
+	}
+
+	if err := s.CreateNamespace(t.Context(), ns); err != nil {
+		t.Fatalf("create namespace other: %v", err)
+	}
+
+	return ns.Fence()
+}
+
+// testItemKeyOtherNamespaceFence sends the hostile call straight to the store:
+// the fence is current, but it names another namespace than the record. The
+// failover version check of the fence passes, so only the check of the
+// namespace of the record refuses the call.
+func testItemKeyOtherNamespaceFence(t *testing.T, s ItemKeyStore) {
+	t.Helper()
+	acme := itemKeyNamespace(t, s)
+	other := otherItemKeyFence(t, s)
+	ref := itemRef(t, "stk-one", secret.ItemKindState, "upd-1")
+
+	if _, err := s.CreateItemKey(t.Context(), newItemKey(ref, "builtin-1"), other); !errors.Is(err, namespace.ErrFenced) {
+		t.Errorf("create under the fence of another namespace err = %v, want ErrFenced", err)
+	}
+
+	err := s.InItemKeyTx(t.Context(), other, func(tx secret.ItemKeyTx) error {
+		_, createErr := tx.CreateItemKey(t.Context(), newItemKey(ref, "builtin-1"))
+
+		return createErr
+	})
+	if !errors.Is(err, namespace.ErrFenced) {
+		t.Errorf("transaction create under the fence of another namespace err = %v, want ErrFenced", err)
+	}
+
+	if _, err = s.GetItemKey(t.Context(), ref); !errors.Is(err, secret.ErrKeyNotFound) {
+		t.Errorf("a refused create left a record: err = %v", err)
+	}
+
+	mustCreateItemKey(t, s, acme, ref, "builtin-1")
+
+	if _, err = s.ShredItemKey(t.Context(), ref, itemKeyTime(), other); !errors.Is(err, namespace.ErrFenced) {
+		t.Errorf("shred under the fence of another namespace err = %v, want ErrFenced", err)
+	}
+
+	if _, err = s.GetItemKey(t.Context(), ref); err != nil {
+		t.Errorf("a refused shred changed the record: err = %v", err)
+	}
+}
+
+func testItemKeyBadBlobInfo(t *testing.T, s ItemKeyStore) {
+	t.Helper()
+	fence := itemKeyNamespace(t, s)
+
+	for name, info := range map[string]secret.ItemKeyBlobInfo{
+		"no version":   {Version: 0, Size: 60, MD5: [16]byte{1}},
+		"huge version": {Version: secret.MaxItemKeyVersion + 1, Size: 60, MD5: [16]byte{1}},
+		"no size":      {Version: 1, Size: 0, MD5: [16]byte{1}},
+		"huge size":    {Version: 1, Size: secret.MaxWrappedItemKeyBytes + 1, MD5: [16]byte{1}},
+	} {
+		ref := itemRef(t, "stk-one", secret.ItemKindState, "upd-"+strings.ReplaceAll(name, " ", "-"))
+		k := newItemKey(ref, "builtin-1")
+		k.Blob = info
+
+		if _, err := s.CreateItemKey(t.Context(), k, fence); !errors.Is(err, secret.ErrInvalidItemRef) {
+			t.Errorf("create with %s err = %v, want ErrInvalidItemRef", name, err)
+		}
+	}
+}
+
+func testItemKeyTx(t *testing.T, s ItemKeyStore) {
+	t.Helper()
+	fence := itemKeyNamespace(t, s)
+	kept := itemRef(t, "stk-one", secret.ItemKindState, "upd-kept")
+	dropped := itemRef(t, "stk-one", secret.ItemKindState, "upd-dropped")
+	errRollback := errors.New("roll back")
+
+	err := s.InItemKeyTx(t.Context(), fence, func(tx secret.ItemKeyTx) error {
+		created, createErr := tx.CreateItemKey(t.Context(), newItemKey(kept, "builtin-1"))
+		if createErr != nil {
+			return createErr
+		}
+
+		got, getErr := tx.GetItemKey(t.Context(), kept)
+		if getErr != nil || got.ID != created.ID {
+			t.Errorf("get inside the transaction = %v, %v, want the created record", got.ID, getErr)
+		}
+
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("committed transaction: %v", err)
+	}
+
+	if _, err = s.GetItemKey(t.Context(), kept); err != nil {
+		t.Errorf("a committed transaction lost its record: %v", err)
+	}
+
+	err = s.InItemKeyTx(t.Context(), fence, func(tx secret.ItemKeyTx) error {
+		if _, createErr := tx.CreateItemKey(t.Context(), newItemKey(dropped, "builtin-1")); createErr != nil {
+			return createErr
+		}
+
+		return errRollback
+	})
+	if !errors.Is(err, errRollback) {
+		t.Fatalf("rolled-back transaction err = %v, want the error of the function", err)
+	}
+
+	if _, err = s.GetItemKey(t.Context(), dropped); !errors.Is(err, secret.ErrKeyNotFound) {
+		t.Errorf("a rolled-back transaction left a record: err = %v", err)
 	}
 }

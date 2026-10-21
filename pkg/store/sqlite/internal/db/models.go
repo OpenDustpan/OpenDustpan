@@ -435,6 +435,9 @@ type ItemKey struct {
 	WrapperID    string
 	CreatedAtMs  int64
 	ShreddedAtMs int64
+	BlobVersion  int64
+	BlobSize     int64
+	BlobMd5      []byte
 }
 
 type Job struct {

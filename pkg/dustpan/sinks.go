@@ -9,6 +9,8 @@ import (
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/egress"
 	"opendustpan.org/opendustpan/pkg/notify"
+	"opendustpan.org/opendustpan/pkg/notify/chat"
+	"opendustpan.org/opendustpan/pkg/notify/chat/slack"
 	"opendustpan.org/opendustpan/pkg/notify/sinks"
 	"opendustpan.org/opendustpan/pkg/notify/webhook"
 )
@@ -32,8 +34,9 @@ func WithSinkStore(st notify.SinkStore) Option {
 
 // WithSinkSenders adds senders for the test route of a sink, one for each sink
 // kind. A sender replaces the built-in sender of its kind. The server has the
-// signed webhook sender built in, so a caller needs this option for a test
-// double of it, or for a kind that has no built-in sender yet.
+// signed webhook sender and the chat sender for Slack built in, so a caller
+// needs this option for a test double of one of them, or for a kind that has
+// no built-in sender yet.
 func WithSinkSenders(senders ...notify.Sender) Option {
 	return func(o *settings) { o.sinks.senders = append(o.sinks.senders, senders...) }
 }
@@ -47,12 +50,17 @@ func WithSinkPorts(p egress.Ports) Option {
 }
 
 // sinkSenders returns the senders of the test route: the built-in signed
-// webhook sender, unless a sender of the kind is set, and then the set ones.
+// webhook sender and the built-in chat sender (Slack), unless a sender of the
+// kind is set, and then the set ones.
 func sinkSenders(cfg *settings) []notify.Sender {
 	out := slices.Clone(cfg.sinks.senders)
 
 	if !slices.ContainsFunc(out, func(s notify.Sender) bool { return s.Kind() == notify.SinkWebhook }) {
 		out = append(out, webhook.New(webhook.WithPorts(cfg.sinks.ports)))
+	}
+
+	if !slices.ContainsFunc(out, func(s notify.Sender) bool { return s.Kind() == notify.SinkChat }) {
+		out = append(out, chat.NewSender([]chat.Renderer{slack.New()}, chat.WithPorts(cfg.sinks.ports)))
 	}
 
 	return out

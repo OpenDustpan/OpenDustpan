@@ -5,7 +5,9 @@
 -- stable ID of the unit, never its name. kind is the item kind of
 -- secret.ItemKind and item is the ID that the tool or the job model gives
 -- the item. shredded_at_ms is 0 while the key exists. A record never comes
--- back after a shred: a new item gets a new key.
+-- back after a shred: a new item gets a new key. blob_version, blob_size and
+-- blob_md5 describe the wrapped key blob, so that a backup copies and checks
+-- it like every other blob. The MD5 is a checksum for integrity only.
 CREATE TABLE item_keys (
     id             text    NOT NULL PRIMARY KEY,
     namespace_id   text    NOT NULL REFERENCES namespaces (id),
@@ -14,7 +16,10 @@ CREATE TABLE item_keys (
     item           text    NOT NULL,
     wrapper_id     text    NOT NULL,
     created_at_ms  bigint  NOT NULL,
-    shredded_at_ms bigint  NOT NULL CHECK (shredded_at_ms >= 0)
+    shredded_at_ms bigint  NOT NULL CHECK (shredded_at_ms >= 0),
+    blob_version   bigint  NOT NULL CHECK (blob_version >= 1),
+    blob_size      bigint NOT NULL CHECK (blob_size >= 1),
+    blob_md5       bytea NOT NULL CHECK (length(blob_md5) = 16)
 );
 
 -- One key for each item.
