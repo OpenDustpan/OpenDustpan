@@ -249,3 +249,45 @@ func TestOpenInstallationKey(t *testing.T) {
 		t.Fatalf("open a key of a namespace = %v, want ErrInvalidScope", openErr)
 	}
 }
+
+// TestInstallationSealBoundOpensOnlyWithItsBinding sends a value to Open with
+// each wrong binding, as if every other check had failed.
+func TestInstallationSealBoundOpensOnlyWithItsBinding(t *testing.T) {
+	t.Parallel()
+
+	ctx := t.Context()
+	s := newInstallationSecrets(t, newMemInstallationKeys(), newWrapper(t, "kek-1"))
+
+	sealed, err := s.SealBound(ctx, "git-host-key", []byte("digest-1"), []byte("pem"))
+	if err != nil {
+		t.Fatalf("seal bound: %v", err)
+	}
+
+	opened, err := s.OpenBound(ctx, "git-host-key", []byte("digest-1"), sealed)
+	if err != nil || string(opened) != "pem" {
+		t.Fatalf("open bound = %q, %v; want the plaintext", opened, err)
+	}
+
+	for name, open := range map[string]func() ([]byte, error){
+		"another binding": func() ([]byte, error) { return s.OpenBound(ctx, "git-host-key", []byte("digest-2"), sealed) },
+		"a prefix":        func() ([]byte, error) { return s.OpenBound(ctx, "git-host-key", []byte("digest-"), sealed) },
+		"no binding":      func() ([]byte, error) { return s.Open(ctx, "git-host-key", sealed) },
+	} {
+		if _, openErr := open(); !errors.Is(openErr, secret.ErrDecrypt) {
+			t.Errorf("open with %s = %v, want ErrDecrypt", name, openErr)
+		}
+	}
+
+	plain, err := s.Seal(ctx, "git-host-key", []byte("pem"))
+	if err != nil {
+		t.Fatalf("seal: %v", err)
+	}
+
+	if _, err := s.OpenBound(ctx, "git-host-key", []byte("digest-1"), plain); !errors.Is(err, secret.ErrDecrypt) {
+		t.Errorf("open bound of an unbound value = %v, want ErrDecrypt", err)
+	}
+
+	if _, err := s.SealBound(ctx, "git-host-key", nil, []byte("pem")); !errors.Is(err, secret.ErrInvalidScope) {
+		t.Errorf("seal bound with no binding = %v, want ErrInvalidScope", err)
+	}
+}

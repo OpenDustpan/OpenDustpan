@@ -433,6 +433,27 @@ func (q *Queries) ClaimNotificationSinkRef(ctx context.Context, arg ClaimNotific
 	return result.RowsAffected()
 }
 
+const clearGitHostDefault = `-- name: ClearGitHostDefault :execrows
+UPDATE git_host_connections
+SET is_default = 0, version = version + 1, updated_at_ms = MAX(CAST(?1 AS INTEGER), git_host_connections.created_at_ms)
+WHERE git_host_connections.namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = ?2)
+  AND git_host_connections.is_default = 1 AND git_host_connections.id <> ?3
+`
+
+type ClearGitHostDefaultParams struct {
+	UpdatedAtMs int64
+	Namespace   string
+	ID          string
+}
+
+func (q *Queries) ClearGitHostDefault(ctx context.Context, arg ClearGitHostDefaultParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, clearGitHostDefault, arg.UpdatedAtMs, arg.Namespace, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const clearJournalOperations = `-- name: ClearJournalOperations :exec
 UPDATE update_journal SET operation_ids = '[]'
 WHERE stack_id = ? AND update_id = ?
@@ -738,6 +759,29 @@ type CountGateObjectsParams struct {
 // The count of objects of one kind in one scope.
 func (q *Queries) CountGateObjects(ctx context.Context, arg CountGateObjectsParams) (int64, error) {
 	row := q.db.QueryRowContext(ctx, countGateObjects, arg.NamespaceID, arg.ScopeKey, arg.Kind)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countGitHostConnections = `-- name: CountGitHostConnections :one
+SELECT COUNT(*) FROM git_host_connections
+WHERE namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = ?1)
+`
+
+func (q *Queries) CountGitHostConnections(ctx context.Context, namespace string) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countGitHostConnections, namespace)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countGitHostInstallations = `-- name: CountGitHostInstallations :one
+SELECT COUNT(*) FROM git_host_installations
+`
+
+func (q *Queries) CountGitHostInstallations(ctx context.Context) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countGitHostInstallations)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
@@ -2337,6 +2381,64 @@ func (q *Queries) DeleteGateReferences(ctx context.Context, arg DeleteGateRefere
 		arg.OwnerID,
 	)
 	return err
+}
+
+const deleteGitHostConnection = `-- name: DeleteGitHostConnection :execrows
+DELETE FROM git_host_connections
+WHERE git_host_connections.id = ?1
+  AND git_host_connections.namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = ?2)
+  AND (CAST(?3 AS INTEGER) = 0 OR git_host_connections.version = CAST(?3 AS INTEGER))
+`
+
+type DeleteGitHostConnectionParams struct {
+	ID        string
+	Namespace string
+	IfVersion int64
+}
+
+// A version of 0 sets no condition.
+func (q *Queries) DeleteGitHostConnection(ctx context.Context, arg DeleteGitHostConnectionParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, deleteGitHostConnection, arg.ID, arg.Namespace, arg.IfVersion)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const deleteGitHostInstallation = `-- name: DeleteGitHostInstallation :execrows
+DELETE FROM git_host_installations
+WHERE installation_id = ?1 AND (CAST(?2 AS INTEGER) = 0 OR version = CAST(?2 AS INTEGER))
+`
+
+type DeleteGitHostInstallationParams struct {
+	InstallationID string
+	IfVersion      int64
+}
+
+func (q *Queries) DeleteGitHostInstallation(ctx context.Context, arg DeleteGitHostInstallationParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, deleteGitHostInstallation, arg.InstallationID, arg.IfVersion)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const deleteGitHostRegistration = `-- name: DeleteGitHostRegistration :execrows
+DELETE FROM git_host_app_registrations
+WHERE kind = ?1 AND (CAST(?2 AS INTEGER) = 0 OR version = CAST(?2 AS INTEGER))
+`
+
+type DeleteGitHostRegistrationParams struct {
+	Kind      string
+	IfVersion int64
+}
+
+func (q *Queries) DeleteGitHostRegistration(ctx context.Context, arg DeleteGitHostRegistrationParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, deleteGitHostRegistration, arg.Kind, arg.IfVersion)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 const deleteGroup = `-- name: DeleteGroup :execrows
@@ -4420,6 +4522,109 @@ func (q *Queries) GetGateRecordByID(ctx context.Context, id string) (string, err
 	var namespace_id string
 	err := row.Scan(&namespace_id)
 	return namespace_id, err
+}
+
+const getGitHostConnection = `-- name: GetGitHostConnection :one
+SELECT n.name AS namespace, c.id, c.kind, c.auth, c.app_scope, c.installation_id, c.push, c.is_default, c.version,
+    c.created_at_ms, c.updated_at_ms
+FROM git_host_connections AS c
+JOIN namespaces AS n ON n.id = c.namespace_id
+WHERE n.name = ?1 AND c.id = ?2
+`
+
+type GetGitHostConnectionParams struct {
+	Namespace string
+	ID        string
+}
+
+type GetGitHostConnectionRow struct {
+	Namespace      string
+	ID             string
+	Kind           string
+	Auth           string
+	AppScope       string
+	InstallationID string
+	Push           bool
+	IsDefault      bool
+	Version        int64
+	CreatedAtMs    int64
+	UpdatedAtMs    int64
+}
+
+func (q *Queries) GetGitHostConnection(ctx context.Context, arg GetGitHostConnectionParams) (GetGitHostConnectionRow, error) {
+	row := q.db.QueryRowContext(ctx, getGitHostConnection, arg.Namespace, arg.ID)
+	var i GetGitHostConnectionRow
+	err := row.Scan(
+		&i.Namespace,
+		&i.ID,
+		&i.Kind,
+		&i.Auth,
+		&i.AppScope,
+		&i.InstallationID,
+		&i.Push,
+		&i.IsDefault,
+		&i.Version,
+		&i.CreatedAtMs,
+		&i.UpdatedAtMs,
+	)
+	return i, err
+}
+
+const getGitHostInstallation = `-- name: GetGitHostInstallation :one
+SELECT i.installation_id, n.name AS namespace, i.version, i.created_at_ms, i.updated_at_ms
+FROM git_host_installations AS i
+JOIN namespaces AS n ON n.id = i.namespace_id
+WHERE i.installation_id = ?1
+`
+
+type GetGitHostInstallationRow struct {
+	InstallationID string
+	Namespace      string
+	Version        int64
+	CreatedAtMs    int64
+	UpdatedAtMs    int64
+}
+
+func (q *Queries) GetGitHostInstallation(ctx context.Context, installationID string) (GetGitHostInstallationRow, error) {
+	row := q.db.QueryRowContext(ctx, getGitHostInstallation, installationID)
+	var i GetGitHostInstallationRow
+	err := row.Scan(
+		&i.InstallationID,
+		&i.Namespace,
+		&i.Version,
+		&i.CreatedAtMs,
+		&i.UpdatedAtMs,
+	)
+	return i, err
+}
+
+const getGitHostRegistration = `-- name: GetGitHostRegistration :one
+SELECT kind, app_id, base_url, hook_id, sealed_key, key_set_id, key_created_at_ms, sealed_event_secret,
+    event_secret_set_id, event_secret_created_at_ms, address_digest, version, created_at_ms, updated_at_ms
+FROM git_host_app_registrations
+WHERE kind = ?1
+`
+
+func (q *Queries) GetGitHostRegistration(ctx context.Context, kind string) (GitHostAppRegistration, error) {
+	row := q.db.QueryRowContext(ctx, getGitHostRegistration, kind)
+	var i GitHostAppRegistration
+	err := row.Scan(
+		&i.Kind,
+		&i.AppID,
+		&i.BaseUrl,
+		&i.HookID,
+		&i.SealedKey,
+		&i.KeySetID,
+		&i.KeyCreatedAtMs,
+		&i.SealedEventSecret,
+		&i.EventSecretSetID,
+		&i.EventSecretCreatedAtMs,
+		&i.AddressDigest,
+		&i.Version,
+		&i.CreatedAtMs,
+		&i.UpdatedAtMs,
+	)
+	return i, err
 }
 
 const getGrant = `-- name: GetGrant :one
@@ -6522,6 +6727,17 @@ func (q *Queries) GetWorkspaceByID(ctx context.Context, id string) (Workspace, e
 	return i, err
 }
 
+const gitHostNamespaceID = `-- name: GitHostNamespaceID :one
+SELECT n.id FROM namespaces AS n WHERE n.name = ?1
+`
+
+func (q *Queries) GitHostNamespaceID(ctx context.Context, namespace string) (string, error) {
+	row := q.db.QueryRowContext(ctx, gitHostNamespaceID, namespace)
+	var id string
+	err := row.Scan(&id)
+	return id, err
+}
+
 const grantIDsOnTarget = `-- name: GrantIDsOnTarget :many
 SELECT id FROM grants
 WHERE target = ? AND revoked_at_ms IS NULL
@@ -7107,6 +7323,132 @@ func (q *Queries) InsertGateReference(ctx context.Context, arg InsertGateReferen
 		arg.OwnerID,
 	)
 	return err
+}
+
+const insertGitHostConnection = `-- name: InsertGitHostConnection :execrows
+INSERT INTO git_host_connections (
+    namespace_id, id, kind, auth, app_scope, installation_id, push, is_default, version, created_at_ms, updated_at_ms
+)
+SELECT
+    n.id, ?1, ?2, ?3, ?4, ?5,
+    ?6, NOT EXISTS (SELECT 1 FROM git_host_connections AS c WHERE c.namespace_id = n.id), 1,
+    ?7, ?8
+FROM namespaces AS n
+WHERE n.name = ?9
+ON CONFLICT (namespace_id, kind, installation_id) DO NOTHING
+`
+
+type InsertGitHostConnectionParams struct {
+	ID             string
+	Kind           string
+	Auth           string
+	AppScope       string
+	InstallationID string
+	Push           bool
+	CreatedAtMs    int64
+	UpdatedAtMs    int64
+	Namespace      string
+}
+
+// The caller checks the fence in the same transaction. The first connection of
+// a namespace is the default. A second connection of the namespace to the same
+// installation is not written.
+func (q *Queries) InsertGitHostConnection(ctx context.Context, arg InsertGitHostConnectionParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, insertGitHostConnection,
+		arg.ID,
+		arg.Kind,
+		arg.Auth,
+		arg.AppScope,
+		arg.InstallationID,
+		arg.Push,
+		arg.CreatedAtMs,
+		arg.UpdatedAtMs,
+		arg.Namespace,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const insertGitHostInstallation = `-- name: InsertGitHostInstallation :execrows
+INSERT INTO git_host_installations (installation_id, namespace_id, version, created_at_ms, updated_at_ms)
+SELECT ?1, n.id, 1, ?2, ?3
+FROM namespaces AS n
+WHERE n.name = ?4
+ON CONFLICT (installation_id) DO NOTHING
+`
+
+type InsertGitHostInstallationParams struct {
+	InstallationID string
+	CreatedAtMs    int64
+	UpdatedAtMs    int64
+	Namespace      string
+}
+
+func (q *Queries) InsertGitHostInstallation(ctx context.Context, arg InsertGitHostInstallationParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, insertGitHostInstallation,
+		arg.InstallationID,
+		arg.CreatedAtMs,
+		arg.UpdatedAtMs,
+		arg.Namespace,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const insertGitHostRegistration = `-- name: InsertGitHostRegistration :execrows
+INSERT INTO git_host_app_registrations (
+    kind, app_id, base_url, hook_id, sealed_key, key_set_id, key_created_at_ms, sealed_event_secret,
+    event_secret_set_id, event_secret_created_at_ms, address_digest, version, created_at_ms, updated_at_ms
+)
+VALUES (
+    ?1, ?2, ?3, ?4, ?5,
+    ?6, ?7, ?8,
+    ?9, ?10, ?11, 1,
+    ?12, ?13
+)
+ON CONFLICT (kind) DO NOTHING
+`
+
+type InsertGitHostRegistrationParams struct {
+	Kind                   string
+	AppID                  string
+	BaseUrl                string
+	HookID                 string
+	SealedKey              []byte
+	KeySetID               string
+	KeyCreatedAtMs         int64
+	SealedEventSecret      []byte
+	EventSecretSetID       string
+	EventSecretCreatedAtMs int64
+	AddressDigest          string
+	CreatedAtMs            int64
+	UpdatedAtMs            int64
+}
+
+func (q *Queries) InsertGitHostRegistration(ctx context.Context, arg InsertGitHostRegistrationParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, insertGitHostRegistration,
+		arg.Kind,
+		arg.AppID,
+		arg.BaseUrl,
+		arg.HookID,
+		arg.SealedKey,
+		arg.KeySetID,
+		arg.KeyCreatedAtMs,
+		arg.SealedEventSecret,
+		arg.EventSecretSetID,
+		arg.EventSecretCreatedAtMs,
+		arg.AddressDigest,
+		arg.CreatedAtMs,
+		arg.UpdatedAtMs,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 const insertIdempotencyRecord = `-- name: InsertIdempotencyRecord :execrows
@@ -9367,6 +9709,108 @@ func (q *Queries) ListGateReferrers(ctx context.Context, arg ListGateReferrersPa
 			&i.ID,
 			&i.Version,
 			&i.Body,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listGitHostConnections = `-- name: ListGitHostConnections :many
+SELECT n.name AS namespace, c.id, c.kind, c.auth, c.app_scope, c.installation_id, c.push, c.is_default, c.version,
+    c.created_at_ms, c.updated_at_ms
+FROM git_host_connections AS c
+JOIN namespaces AS n ON n.id = c.namespace_id
+WHERE n.name = ?1
+ORDER BY c.created_at_ms, c.id
+`
+
+type ListGitHostConnectionsRow struct {
+	Namespace      string
+	ID             string
+	Kind           string
+	Auth           string
+	AppScope       string
+	InstallationID string
+	Push           bool
+	IsDefault      bool
+	Version        int64
+	CreatedAtMs    int64
+	UpdatedAtMs    int64
+}
+
+func (q *Queries) ListGitHostConnections(ctx context.Context, namespace string) ([]ListGitHostConnectionsRow, error) {
+	rows, err := q.db.QueryContext(ctx, listGitHostConnections, namespace)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListGitHostConnectionsRow
+	for rows.Next() {
+		var i ListGitHostConnectionsRow
+		if err := rows.Scan(
+			&i.Namespace,
+			&i.ID,
+			&i.Kind,
+			&i.Auth,
+			&i.AppScope,
+			&i.InstallationID,
+			&i.Push,
+			&i.IsDefault,
+			&i.Version,
+			&i.CreatedAtMs,
+			&i.UpdatedAtMs,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listGitHostInstallations = `-- name: ListGitHostInstallations :many
+SELECT i.installation_id, n.name AS namespace, i.version, i.created_at_ms, i.updated_at_ms
+FROM git_host_installations AS i
+JOIN namespaces AS n ON n.id = i.namespace_id
+ORDER BY length(i.installation_id), i.installation_id
+`
+
+type ListGitHostInstallationsRow struct {
+	InstallationID string
+	Namespace      string
+	Version        int64
+	CreatedAtMs    int64
+	UpdatedAtMs    int64
+}
+
+func (q *Queries) ListGitHostInstallations(ctx context.Context) ([]ListGitHostInstallationsRow, error) {
+	rows, err := q.db.QueryContext(ctx, listGitHostInstallations)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListGitHostInstallationsRow
+	for rows.Next() {
+		var i ListGitHostInstallationsRow
+		if err := rows.Scan(
+			&i.InstallationID,
+			&i.Namespace,
+			&i.Version,
+			&i.CreatedAtMs,
+			&i.UpdatedAtMs,
 		); err != nil {
 			return nil, err
 		}
@@ -14030,6 +14474,34 @@ func (q *Queries) SetDurableScheduleInterval(ctx context.Context, arg SetDurable
 	return err
 }
 
+const setGitHostDefault = `-- name: SetGitHostDefault :execrows
+UPDATE git_host_connections
+SET is_default = 1, version = version + 1, updated_at_ms = MAX(CAST(?1 AS INTEGER), git_host_connections.created_at_ms)
+WHERE git_host_connections.namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = ?2)
+  AND git_host_connections.id = ?3
+  AND (CAST(?4 AS INTEGER) = 0 OR git_host_connections.version = CAST(?4 AS INTEGER))
+`
+
+type SetGitHostDefaultParams struct {
+	UpdatedAtMs int64
+	Namespace   string
+	ID          string
+	IfVersion   int64
+}
+
+func (q *Queries) SetGitHostDefault(ctx context.Context, arg SetGitHostDefaultParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, setGitHostDefault,
+		arg.UpdatedAtMs,
+		arg.Namespace,
+		arg.ID,
+		arg.IfVersion,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const setImportPlan = `-- name: SetImportPlan :exec
 UPDATE imports
 SET plan = ?1
@@ -14976,6 +15448,81 @@ func (q *Queries) UpdateGateRefusal(ctx context.Context, arg UpdateGateRefusalPa
 		arg.ID,
 	)
 	return err
+}
+
+const updateGitHostInstallation = `-- name: UpdateGitHostInstallation :execrows
+UPDATE git_host_installations
+SET namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = ?1),
+    version = version + 1, updated_at_ms = MAX(CAST(?2 AS INTEGER), git_host_installations.created_at_ms)
+WHERE installation_id = ?3 AND (CAST(?4 AS INTEGER) = 0 OR version = CAST(?4 AS INTEGER))
+`
+
+type UpdateGitHostInstallationParams struct {
+	Namespace      string
+	UpdatedAtMs    int64
+	InstallationID string
+	IfVersion      int64
+}
+
+// A version of 0 sets no condition.
+func (q *Queries) UpdateGitHostInstallation(ctx context.Context, arg UpdateGitHostInstallationParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, updateGitHostInstallation,
+		arg.Namespace,
+		arg.UpdatedAtMs,
+		arg.InstallationID,
+		arg.IfVersion,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const updateGitHostRegistration = `-- name: UpdateGitHostRegistration :execrows
+UPDATE git_host_app_registrations
+SET app_id = ?1, base_url = ?2, sealed_key = ?3,
+    key_set_id = ?4, key_created_at_ms = ?5,
+    sealed_event_secret = ?6, event_secret_set_id = ?7,
+    event_secret_created_at_ms = ?8, address_digest = ?9,
+    version = version + 1, updated_at_ms = MAX(CAST(?10 AS INTEGER), git_host_app_registrations.created_at_ms)
+WHERE kind = ?11 AND (CAST(?12 AS INTEGER) = 0 OR version = CAST(?12 AS INTEGER))
+`
+
+type UpdateGitHostRegistrationParams struct {
+	AppID                  string
+	BaseUrl                string
+	SealedKey              []byte
+	KeySetID               string
+	KeyCreatedAtMs         int64
+	SealedEventSecret      []byte
+	EventSecretSetID       string
+	EventSecretCreatedAtMs int64
+	AddressDigest          string
+	UpdatedAtMs            int64
+	Kind                   string
+	IfVersion              int64
+}
+
+// The hook ID and the creation time stay. A version of 0 sets no condition.
+func (q *Queries) UpdateGitHostRegistration(ctx context.Context, arg UpdateGitHostRegistrationParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, updateGitHostRegistration,
+		arg.AppID,
+		arg.BaseUrl,
+		arg.SealedKey,
+		arg.KeySetID,
+		arg.KeyCreatedAtMs,
+		arg.SealedEventSecret,
+		arg.EventSecretSetID,
+		arg.EventSecretCreatedAtMs,
+		arg.AddressDigest,
+		arg.UpdatedAtMs,
+		arg.Kind,
+		arg.IfVersion,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 const updateGroup = `-- name: UpdateGroup :execrows

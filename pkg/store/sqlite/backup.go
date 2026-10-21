@@ -1184,10 +1184,15 @@ func (s *Store) createRestoreConflict(ctx context.Context, id backup.RestoreID) 
 	return err
 }
 
-// checkStagedFeatureRows checks the rows of the registry and of the
-// notification sinks of a staged backup.
+// checkStagedFeatureRows checks the rows of the staged features that have rules
+// of their own: the registry, the Git host connections and the notification
+// sinks.
 func checkStagedFeatureRows(ctx context.Context, conn *sql.DB) error {
 	if err := checkStagedRegistry(ctx, conn); err != nil {
+		return err
+	}
+
+	if err := checkStagedGitHost(ctx, conn); err != nil {
 		return err
 	}
 

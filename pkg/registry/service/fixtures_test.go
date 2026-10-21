@@ -238,6 +238,20 @@ func callerOf(subject string) *service.Caller {
 	return &service.Caller{Principal: principalOf(subject), By: by}
 }
 
+// fixtureNow returns the clock of the service in these tests. It is fixed, and
+// the signing keys of the tests are made at this time, so that a key is never
+// newer than the clock, whatever the date of the run.
+func fixtureNow() time.Time {
+	return time.Date(2026, 10, 21, 9, 0, 0, 0, time.UTC)
+}
+
+// newSigner makes a signing key whose creation time is fixtureNow.
+func newSigner(tb testing.TB) pgpfixture.Signer {
+	tb.Helper()
+
+	return pgpfixture.NewSignerAt(tb, fixtureNow())
+}
+
 // namespaceOf returns the namespace record of name with the given ID.
 func namespaceOf(name namespace.Name, id namespace.ID, now time.Time) namespace.Namespace {
 	return namespace.Namespace{
@@ -268,7 +282,7 @@ func newEnv(t *testing.T, flip bool) *env {
 
 	blobs := &flipBlobs{Store: dir, mu: sync.Mutex{}, reads: map[blob.Key]int{}, flip: flip}
 	store := newMemStore()
-	now := time.Date(2026, 10, 21, 9, 0, 0, 0, time.UTC)
+	now := fixtureNow()
 
 	ids := map[namespace.Name]namespace.ID{}
 	ns := nsStub{}
