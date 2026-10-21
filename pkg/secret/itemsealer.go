@@ -252,8 +252,16 @@ func (s *ItemKeySealer) createItemKey(ctx context.Context, tx ItemKeyTx, ref Ite
 	}
 
 	stored, err := tx.CreateItemKey(ctx, ItemKey{
-		CreatedAt: s.now().UTC(), ShreddedAt: time.Time{}, Ref: ref, ID: id, WrapperID: s.wrapper.ID(),
-		Blob: ItemKeyBlobInfo{Version: itemKeyBlobVersion, Size: int64(len(wrapped)), MD5: md5.Sum(wrapped)},
+		CreatedAt:  s.now().UTC(),
+		ShreddedAt: time.Time{},
+		Ref:        ref,
+		ID:         id,
+		WrapperID:  s.wrapper.ID(),
+		Blob: ItemKeyBlobInfo{
+			Version: itemKeyBlobVersion,
+			Size:    int64(len(wrapped)),
+			MD5:     md5.Sum(wrapped), //nolint:gosec // Manifest checksum only; the AEAD tag authenticates the blob.
+		},
 	})
 	if err != nil || stored.ID != id {
 		// The record was not stored, or another writer's record won. The

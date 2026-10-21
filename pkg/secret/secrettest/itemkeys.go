@@ -59,6 +59,9 @@ func RunItemKeys(t *testing.T, newStore ItemKeyFactory) {
 	}
 }
 
+// errRollback is the error of a function that asks for a rollback.
+var errRollback = errors.New("roll back the transaction")
+
 // itemKeyTime() returns the fixed creation time of the records of the suite.
 func itemKeyTime() time.Time {
 	return time.Date(2026, time.October, 17, 9, 0, 0, 0, time.UTC)
@@ -434,11 +437,12 @@ func testItemKeyOtherNamespaceFence(t *testing.T, s ItemKeyStore) {
 	other := otherItemKeyFence(t, s)
 	ref := itemRef(t, "stk-one", secret.ItemKindState, "upd-1")
 
-	if _, err := s.CreateItemKey(t.Context(), newItemKey(ref, "builtin-1"), other); !errors.Is(err, namespace.ErrFenced) {
+	_, err := s.CreateItemKey(t.Context(), newItemKey(ref, "builtin-1"), other)
+	if !errors.Is(err, namespace.ErrFenced) {
 		t.Errorf("create under the fence of another namespace err = %v, want ErrFenced", err)
 	}
 
-	err := s.InItemKeyTx(t.Context(), other, func(tx secret.ItemKeyTx) error {
+	err = s.InItemKeyTx(t.Context(), other, func(tx secret.ItemKeyTx) error {
 		_, createErr := tx.CreateItemKey(t.Context(), newItemKey(ref, "builtin-1"))
 
 		return createErr
@@ -487,7 +491,6 @@ func testItemKeyTx(t *testing.T, s ItemKeyStore) {
 	fence := itemKeyNamespace(t, s)
 	kept := itemRef(t, "stk-one", secret.ItemKindState, "upd-kept")
 	dropped := itemRef(t, "stk-one", secret.ItemKindState, "upd-dropped")
-	errRollback := errors.New("roll back")
 
 	err := s.InItemKeyTx(t.Context(), fence, func(tx secret.ItemKeyTx) error {
 		created, createErr := tx.CreateItemKey(t.Context(), newItemKey(kept, "builtin-1"))
