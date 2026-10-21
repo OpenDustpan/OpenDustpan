@@ -44,6 +44,7 @@ func newModuleServer(t *testing.T, extra ...dustpan.Option) *dustpan.Server {
 		dustpan.WithRunners(p.st.Runners()),
 		dustpan.WithSavedViewStore(p.st.SavedViews()),
 		dustpan.WithProfileStore(p.st.Profiles()),
+		dustpan.WithGitHostStore(p.st.GitHost()),
 		dustpan.WithIdempotencyStore(p.st.Idempotency(testWrapper(t))),
 		dustpan.WithPublicURL("https://dustpan.example"),
 	)
