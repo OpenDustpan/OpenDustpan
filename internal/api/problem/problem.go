@@ -122,9 +122,21 @@ func (wr Writer) Write(ctx context.Context, w http.ResponseWriter, err error) {
 	})
 }
 
-// Problem returns the answer to err: the classifier of the API first, then
-// the shared classes. An error that none of them knows is a 500.
+// Problem returns the answer to err. The order is part of the contract:
+//
+//  1. the refusals of the credential of a request (a rate limit, no
+//     sign-in, a CSRF or other-site session request), so no classifier can
+//     answer them in other words;
+//  2. the classifier of the API, so an API can answer a refusal that wraps
+//     identity.ErrDenied, or a shared error, in its own words;
+//  3. the other shared classes.
+//
+// An error that none of them knows is a 500.
 func (wr Writer) Problem(err error) Problem {
+	if p, ok := credential(err); ok {
+		return p
+	}
+
 	if wr.Classify != nil {
 		if p, ok := wr.Classify(err); ok {
 			return p
@@ -167,6 +179,19 @@ func Shared(err error) (Problem, bool) {
 // Auth returns the answer to an error of the authentication or the
 // authorization of a request.
 func Auth(err error) (Problem, bool) {
+	if p, ok := credential(err); ok {
+		return p, true
+	}
+
+	if errors.Is(err, identity.ErrDenied) {
+		return answer(http.StatusForbidden, errcode.Forbidden(err), "forbidden"), true
+	}
+
+	return Pass()
+}
+
+// credential returns the answer to a refusal of the credential of a request.
+func credential(err error) (Problem, bool) {
 	switch {
 	case errors.Is(err, identity.ErrRateLimited):
 		return answer(http.StatusTooManyRequests, "auth.rate-limited",
@@ -175,8 +200,6 @@ func Auth(err error) (Problem, bool) {
 		return answer(http.StatusUnauthorized, "auth.unauthenticated", "unauthenticated"), true
 	case errors.Is(err, sessionauth.ErrCSRF), errors.Is(err, sessionauth.ErrOtherSite):
 		return answer(http.StatusForbidden, errcode.Forbidden(err), err.Error()), true
-	case errors.Is(err, identity.ErrDenied):
-		return answer(http.StatusForbidden, errcode.Forbidden(err), "forbidden"), true
 	default:
 		return Pass()
 	}

@@ -241,3 +241,30 @@ func TestReauthenticate(t *testing.T) {
 		t.Fatalf("reauthenticate = %q, want /sign-in", got.Reauthenticate)
 	}
 }
+
+// TestCredentialRefusalsComeFirst checks that a classifier that claims every
+// error still cannot answer a refusal of the credential, while it can answer
+// a refusal that wraps identity.ErrDenied.
+func TestCredentialRefusalsComeFirst(t *testing.T) {
+	t.Parallel()
+
+	greedy := func(error) (problem.Problem, bool) {
+		var p problem.Problem
+
+		p.Status, p.Code, p.Message = http.StatusTeapot, "greedy.all", "mine"
+
+		return p, true
+	}
+
+	for _, err := range []error{identity.ErrRateLimited, identity.ErrUnauthenticated, sessionauth.ErrCSRF} {
+		rec, _ := write(t, greedy, err)
+		if rec.Code == http.StatusTeapot {
+			t.Fatalf("%v: the classifier answered a credential refusal", err)
+		}
+	}
+
+	rec, _ := write(t, greedy, identity.ErrDenied)
+	if rec.Code != http.StatusTeapot {
+		t.Fatalf("denied: answer %d, want the classifier to answer it", rec.Code)
+	}
+}

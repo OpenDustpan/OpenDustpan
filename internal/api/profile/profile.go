@@ -158,8 +158,9 @@ func (h *Handler) writeError(ctx context.Context, w http.ResponseWriter, err err
 }
 
 // classifyProfile maps the errors of the profile service and of the fresh
-// sign-in that a profile change needs. It runs before the shared classes, so
-// a routing refusal, which wraps identity.ErrDenied, keeps its own code.
+// sign-in that a profile change needs. It runs before the shared classes
+// other than the credential refusals, so a routing refusal, which wraps
+// identity.ErrDenied, keeps its own code.
 func classifyProfile(err error) (problem.Problem, bool) {
 	if p, ok := classifyFresh(err); ok {
 		return p, true
@@ -185,10 +186,6 @@ func classifyProfile(err error) (problem.Problem, bool) {
 // and of a routing change.
 func classifyFresh(err error) (problem.Problem, bool) {
 	switch {
-	case errors.Is(err, identity.ErrRateLimited), errors.Is(err, identity.ErrUnauthenticated),
-		errors.Is(err, sessionauth.ErrCSRF), errors.Is(err, sessionauth.ErrOtherSite):
-		// The shared classes answer these first, as before.
-		return problem.Pass()
 	case errors.Is(err, errFreshStepRequired), errors.Is(err, profile.ErrFreshRequired):
 		// A request with no console session, or a reveal with no fresh
 		// authentication check: fail closed.
