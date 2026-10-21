@@ -177,8 +177,20 @@ The answer of `GET /api/dustpan/v1/capabilities`: the version of the tool-neutra
 _Avoid_: Feature list, handshake, capability (alone)
 
 **API description**:
-The machine-readable document that lists the operations of the tool-neutral REST API under `/api/dustpan/v1`. The SDKs, the CLI and the providers are generated from it (ADR 264). It does not describe the Pulumi Cloud-compatible API or the TFE-compatible API.
+The machine-readable document that lists the operations of the tool-neutral REST API under `/api/dustpan/v1`. The API clients, the CLI and the providers are generated from it (ADR 264). It does not describe the Pulumi Cloud-compatible API or the TFE-compatible API.
 _Avoid_: Swagger file, API spec, OpenAPI spec, schema file
+
+**API client**:
+A library for one language that calls the tool-neutral REST API. The client generator makes it from the API description. A person writes only its small transport and the message loop of its adapter in the client conformance suite. Each language has its own repository, for example `client-go`. A client release needs a pass of the client conformance suite. "SDK" in ADR 264 and RFC 99 means an API client.
+_Avoid_: SDK (for a client, because the SDK of ADR 35 is the server SDK in `pkg/`), binding, wrapper
+
+**Client generator**:
+The program of this project that makes each API client from the API description. It has one parser of the OpenAPI subset that the description uses and one template set for each language. The same description always gives the same bytes.
+_Avoid_: codegen (alone), SDK generator, OpenAPI generator (that is a third-party tool)
+
+**Client conformance suite**:
+The one suite that runs every API client, through a small adapter for each language, against a real server. It covers each operation, the error shape, pagination, `Idempotency-Key`, `If-Match` and `ETag`, and unknown fields and enum values. It is not the conformance suite of a port.
+_Avoid_: SDK tests, client e2e
 
 **Forge**:
 A git hosting service with an API, for example GitHub, GitLab or Forgejo. The server uses a forge only through the `Forge` port and a forge connection. Internal term. User-facing text names the service (GitHub, GitLab, Forgejo). Where a generic term is needed, it says Git host.
