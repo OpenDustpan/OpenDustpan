@@ -21,7 +21,7 @@ import (
 //
 // Contract: never remove or rename these fields.
 type credentialSetDocument struct {
-	SetID     string `json:"setID"`
+	SetID     string `json:"setId"`
 	CreatedAt string `json:"createdAt"`
 	Set       bool   `json:"set"`
 }
@@ -31,9 +31,9 @@ type credentialSetDocument struct {
 // Contract: never remove or rename these fields.
 type gitHostAppDocument struct {
 	Kind        string                `json:"kind"`
-	AppID       string                `json:"appID"`
+	AppID       string                `json:"appId"`
 	APIAddress  string                `json:"apiAddress"`
-	HookID      string                `json:"hookID"`
+	HookID      string                `json:"hookId"`
 	PrivateKey  credentialSetDocument `json:"privateKey"`
 	EventSecret credentialSetDocument `json:"eventSecret"`
 	CreatedAt   string                `json:"createdAt"`
@@ -45,7 +45,7 @@ type gitHostAppDocument struct {
 // a registration holds an address, an app ID, a key and an event secret that
 // belong together, and a change of any of them is a new registration.
 type gitHostAppRequest struct {
-	AppID       *string `json:"appID"`
+	AppID       *string `json:"appId"`
 	APIAddress  *string `json:"apiAddress"`
 	PrivateKey  *string `json:"privateKey"`
 	EventSecret *string `json:"eventSecret"`
@@ -314,7 +314,7 @@ func (h *Handler) writeGitHostError(r *http.Request, w http.ResponseWriter, err 
 //
 // Contract: never remove or rename these fields.
 type gitHostInstallationDocument struct {
-	InstallationID string `json:"installationID"`
+	InstallationID string `json:"installationId"`
 	Namespace      string `json:"namespace"`
 	CreatedAt      string `json:"createdAt"`
 	UpdatedAt      string `json:"updatedAt"`

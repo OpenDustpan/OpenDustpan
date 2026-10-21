@@ -363,7 +363,7 @@ func (e *hostEnv) send(t *testing.T, method, target, body string) hostResponse {
 }
 
 func hostAppBody() string {
-	return `{"appID":"` + hostAppID + `","apiAddress":"` + hostAPIAddress + `","privateKey":"` + hostKeyCanary +
+	return `{"appId":"` + hostAppID + `","apiAddress":"` + hostAPIAddress + `","privateKey":"` + hostKeyCanary +
 		`","eventSecret":"` + hostSecretCanary + `"}`
 }
 
@@ -405,27 +405,27 @@ func (e *hostEnv) connect(t *testing.T, installationID string) string {
 }
 
 func createBody(installationID string) string {
-	return `{"kind":"github","auth":"app","installationID":"` + installationID + `","push":true}`
+	return `{"kind":"github","auth":"app","installationId":"` + installationID + `","push":true}`
 }
 
 type credentialDoc struct {
-	SetID     string `json:"setID"`
+	SetID     string `json:"setId"`
 	CreatedAt string `json:"createdAt"`
 	Set       bool   `json:"set"`
 }
 
 type appDoc struct {
 	Kind        string        `json:"kind"`
-	AppID       string        `json:"appID"`
+	AppID       string        `json:"appId"`
 	APIAddress  string        `json:"apiAddress"`
-	HookID      string        `json:"hookID"`
+	HookID      string        `json:"hookId"`
 	PrivateKey  credentialDoc `json:"privateKey"`
 	EventSecret credentialDoc `json:"eventSecret"`
 	Version     int64         `json:"version"`
 }
 
 type installationDoc struct {
-	InstallationID string `json:"installationID"`
+	InstallationID string `json:"installationId"`
 	Namespace      string `json:"namespace"`
 	Version        int64  `json:"version"`
 }
@@ -440,10 +440,10 @@ type connectionDoc struct {
 	Kind           string   `json:"kind"`
 	Auth           string   `json:"auth"`
 	AppScope       string   `json:"appScope"`
-	InstallationID string   `json:"installationID"`
-	AppID          string   `json:"appID"`
+	InstallationID string   `json:"installationId"`
+	AppID          string   `json:"appId"`
 	APIAddress     string   `json:"apiAddress"`
-	HookID         string   `json:"hookID"`
+	HookID         string   `json:"hookId"`
 	CredentialSets []string `json:"credentialSets"`
 	Version        int64    `json:"version"`
 	Push           bool     `json:"push"`

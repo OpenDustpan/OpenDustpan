@@ -14,7 +14,7 @@ import (
 // e2eHostConnection decodes a connection.
 type e2eHostConnection struct {
 	ID         string `json:"id"`
-	AppID      string `json:"appID"`
+	AppID      string `json:"appId"`
 	APIAddress string `json:"apiAddress"`
 	Default    bool   `json:"default"`
 }
@@ -107,7 +107,7 @@ func runGitHostSteps(t *testing.T, store e2e.Store) {
 		env: env, fake: fake, answers: nil, app: "/api/dustpan/v1/git-host-apps/github",
 		assign: "/api/dustpan/v1/git-host-installations/" + e2e.GitHostInstallationID,
 		conns:  "/api/dustpan/v1/namespaces/" + e2e.Namespace + "/git-host-connections",
-		create: `{"kind":"github","auth":"app","installationID":"` + e2e.GitHostInstallationID + `","push":false}`,
+		create: `{"kind":"github","auth":"app","installationId":"` + e2e.GitHostInstallationID + `","push":false}`,
 	}
 
 	s.operatorRegisters(t)
@@ -136,7 +136,7 @@ func (s *hostScenario) operatorRegisters(t *testing.T) {
 		t.Fatalf("encode the key: %v", err)
 	}
 
-	body := `{"appID":"` + e2e.GitHostAppID + `","apiAddress":"` + s.fake.URL() + `","privateKey":` + string(key) +
+	body := `{"appId":"` + e2e.GitHostAppID + `","apiAddress":"` + s.fake.URL() + `","privateKey":` + string(key) +
 		`,"eventSecret":"` + e2eEventSecret + `"}`
 
 	s.do(t, http.MethodPost, s.conns, s.create, http.StatusConflict)
@@ -154,7 +154,7 @@ func (s *hostScenario) makeConnection(t *testing.T) e2eHostConnection {
 	s.do(t, http.MethodPost, s.conns, s.create, http.StatusConflict)
 	s.do(t, http.MethodPut, s.assign, `{"namespace":"`+e2e.Namespace+`"}`, http.StatusCreated)
 	s.do(t, http.MethodPost, s.conns,
-		`{"kind":"github","auth":"app","installationID":"`+e2e.GitHostInstallationID+
+		`{"kind":"github","auth":"app","installationId":"`+e2e.GitHostInstallationID+
 			`","apiAddress":"https://evil.example"}`, http.StatusBadRequest)
 
 	var conn e2eHostConnection

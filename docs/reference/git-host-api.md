@@ -38,15 +38,15 @@ A registration:
 
 ```json
 {
-  "kind": "github", "appID": "12345", "apiAddress": "https://api.github.com",
-  "hookID": "0f3a...", "version": 1,
-  "privateKey": {"set": true, "setID": "set-...", "createdAt": "2026-10-21T09:30:00Z"},
-  "eventSecret": {"set": true, "setID": "set-...", "createdAt": "2026-10-21T09:30:00Z"},
+  "kind": "github", "appId": "12345", "apiAddress": "https://api.github.com",
+  "hookId": "0f3a...", "version": 1,
+  "privateKey": {"set": true, "setId": "set-...", "createdAt": "2026-10-21T09:30:00Z"},
+  "eventSecret": {"set": true, "setId": "set-...", "createdAt": "2026-10-21T09:30:00Z"},
   "createdAt": "2026-10-21T09:30:00Z", "updatedAt": "2026-10-21T09:30:00Z"
 }
 ```
 
-The body of `PUT` holds `appID`, `apiAddress`, `privateKey` and `eventSecret`.
+The body of `PUT` holds `appId`, `apiAddress`, `privateKey` and `eventSecret`.
 All four are required. `privateKey` and `eventSecret` are write-only: no answer
 and no audit entry holds them.
 
@@ -55,15 +55,15 @@ A connection:
 ```json
 {
   "id": "gitconn-...", "namespace": "acme", "kind": "github", "auth": "app",
-  "appScope": "installation", "installationID": "67890", "appID": "12345",
-  "apiAddress": "https://api.github.com", "hookID": "0f3a...",
+  "appScope": "installation", "installationId": "67890", "appId": "12345",
+  "apiAddress": "https://api.github.com", "hookId": "0f3a...",
   "credentialSets": [], "push": false, "default": true, "version": 1,
   "createdAt": "2026-10-21T09:30:00Z", "updatedAt": "2026-10-21T09:30:00Z"
 }
 ```
 
-The body of `POST` holds `kind` (`github`), `auth` (`app`), `installationID` and
-`push`. A body with `apiAddress`, `appID`, `privateKey`, `eventSecret`,
+The body of `POST` holds `kind` (`github`), `auth` (`app`), `installationId` and
+`push`. A body with `apiAddress`, `appId`, `privateKey`, `eventSecret`,
 `credential` or `credentials` answers 400.
 
 A check:

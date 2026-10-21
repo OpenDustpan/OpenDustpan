@@ -46,11 +46,11 @@ const maxGitHostBodyBytes = 64 * 1024
 
 // Errors of the Git host routes that no domain sentinel carries.
 var (
-	errGitHostAppBody = errors.New(`invalid GitHub App body: send {"appID":"<ID of the app>",` +
+	errGitHostAppBody = errors.New(`invalid GitHub App body: send {"appId":"<ID of the app>",` +
 		`"apiAddress":"https://api.github.com","privateKey":"<PEM text>","eventSecret":"<at least 32 bytes>"}`)
 	errGitHostInstallationBody = errors.New(`invalid installation body: send {"namespace":"<namespace>"}`)
 	errGitHostConnectionBody   = errors.New(
-		`invalid connection body: send {"kind":"github","auth":"app","installationID":"<ID>","push":false}`,
+		`invalid connection body: send {"kind":"github","auth":"app","installationId":"<ID>","push":false}`,
 	)
 	errGitHostOperatorOwns = errors.New(
 		"a connection of the installation-level GitHub App takes no key, no event secret, no API address and no " +
