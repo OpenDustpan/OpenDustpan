@@ -272,6 +272,10 @@ func (principalSubjects) Subject(_ context.Context, p identity.Principal) (gate.
 		// limit for services covers it, and no rule can treat it as a person
 		// or a session.
 		credential = gate.CredentialAccessToken
+	case identity.CredentialServer:
+		// The namespace service principal has no kind of credential in the
+		// gates yet. Until a gate names it, the gates deny it: fail closed.
+		return gate.Subject{}, fmt.Errorf("%w: the gates do not know the server credential", identity.ErrDenied)
 	default:
 		return gate.Subject{}, fmt.Errorf("%w: the principal has an unknown kind of credential", identity.ErrDenied)
 	}

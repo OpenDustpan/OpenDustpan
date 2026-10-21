@@ -829,6 +829,7 @@ func NewServer(opts ...Option) (*Server, error) {
 	}
 
 	wireDevGuard(cfg)
+	wireNamespaceServiceGuard(cfg)
 
 	svc.tempAdmins, err = newTempAdminService(cfg)
 	if err != nil {
@@ -901,6 +902,17 @@ func wireDevGuard(cfg *settings) {
 	}
 
 	cfg.authenticator = principal.RefuseDevSubjects(cfg.authenticator).OnRefused(devRefusalAudit(cfg))
+}
+
+// wireNamespaceServiceGuard makes the authenticator refuse a caller with the
+// subject of a namespace service principal, on every kind of installation.
+// The server builds that principal itself, so no authenticator gives it.
+func wireNamespaceServiceGuard(cfg *settings) {
+	if cfg.authenticator == nil {
+		return
+	}
+
+	cfg.authenticator = principal.RefuseNamespaceServiceSubjects(cfg.authenticator)
 }
 
 // requestOf answers the client address and the request ID that the server

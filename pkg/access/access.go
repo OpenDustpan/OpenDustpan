@@ -153,6 +153,7 @@ var families = map[identity.Action]Family{
 	identity.ActionCollectionManageAccess:            FamilyData,
 	identity.ActionCollectionReadAccess:              FamilyData,
 	identity.ActionUnitRead:                          FamilyData,
+	identity.ActionUnitRunPlan:                       FamilyData,
 	identity.ActionUnitWrite:                         FamilyData,
 	identity.ActionUnitManage:                        FamilyData,
 	identity.ActionUnitEncrypt:                       FamilyData,
