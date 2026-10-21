@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -81,8 +82,17 @@ func newTestPrincipalStore(t *testing.T) (*principal.Service, *sqlite.Store) {
 		t.Fatalf("principal service: %v", err)
 	}
 
+	principalSessions.Store(principals, newStoreSessions(t, st))
+
 	return principals, st
 }
+
+// principalSessions maps a principal service of a test to the console
+// sessions over its store. A change of group membership needs a fresh
+// authentication, which an access token never gives.
+//
+//nolint:gochecknoglobals // A test-only registry: the service has no field for its sessions.
+var principalSessions sync.Map
 
 // newPrincipalHandler builds a Handler with principals as its principal
 // service. Nil principals means a store that keeps none.
@@ -98,6 +108,13 @@ func newAuditedPrincipalHandler(
 	t *testing.T, principals *principal.Service, entries audit.ServerStore,
 ) *apiserver.Handler {
 	t.Helper()
+
+	var signIn *apiserver.SignIn
+
+	sessions, hasSessions := principalSessions.Load(principals)
+	if stored, isSessions := sessions.(storeSessions); hasSessions && isSessions {
+		signIn = stored.signIn()
+	}
 
 	handler, err := apiserver.NewHandler(apiserver.Config{
 		Preferences:      nil,
@@ -127,12 +144,16 @@ func newAuditedPrincipalHandler(
 		Gates:            nil,
 		SessionPolicy:    nil,
 		Audit:            entries,
-		SignIn:           nil,
+		SignIn:           signIn,
 		CheckpointEpochs: nil,
 		DenialLimiter:    nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
+	}
+
+	if stored, isSessions := sessions.(storeSessions); hasSessions && isSessions {
+		rememberSessions(handler, stored)
 	}
 
 	return handler
@@ -152,7 +173,14 @@ func call(t *testing.T, handler *apiserver.Handler, c apiCall) (int, string) {
 	t.Helper()
 
 	req := httptest.NewRequestWithContext(t.Context(), c.method, c.path, strings.NewReader(c.body))
-	req.Header.Set("Authorization", "Bearer test-token")
+
+	if _, hasSessions := handlerSessions.Load(handler); hasSessions && needsFreshSession(c.method, c.path) {
+		// An access token never gives the fresh authentication that a change
+		// of group membership needs.
+		startSession(t, handler, req, 0)
+	} else {
+		req.Header.Set("Authorization", "Bearer test-token")
+	}
 
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
@@ -320,8 +348,10 @@ func deleteLifeCycleRecords(t *testing.T, h *apiserver.Handler, group groupDoc, 
 	var list principalListDoc
 	mustCall(t, h, apiCall{http.MethodGet, "/api/server/principals", "", http.StatusOK}, &list)
 
-	if len(list.Principals) != 1 || list.Principals[0].ID != deploy.ID {
-		t.Fatalf("principals = %+v, want only ci-deploy", list.Principals)
+	// The person of the console session that the membership changes need is
+	// the other principal.
+	if len(list.Principals) != 2 || list.Principals[0].ID != deploy.ID || list.Principals[1].ID != "prn-tester" {
+		t.Fatalf("principals = %+v, want ci-deploy and the session person", list.Principals)
 	}
 }
 
@@ -684,12 +714,13 @@ func TestPrincipalChangesWriteAuditEntries(t *testing.T) {
 		{"server:manage-principals", "principal:" + alice.ID, audit.OutcomeSuccess},
 	}
 
-	if len(listing.Entries) != len(want) {
-		t.Fatalf("server entries = %d, want %d: %+v", len(listing.Entries), len(want), listing.Entries)
+	entries := withoutSessionEntries(listing.Entries)
+	if len(entries) != len(want) {
+		t.Fatalf("server entries = %d, want %d: %+v", len(entries), len(want), entries)
 	}
 
 	for i, w := range want {
-		e := listing.Entries[i]
+		e := entries[i]
 		if e.Action != w.action || e.Object != w.object || e.Outcome != w.outcome ||
 			e.Kind != audit.KindChange || e.Subject != "tester" || e.Namespace != audit.ServerScope {
 			t.Fatalf("entry %d = %+v, want %s on %s with %s", i, e, w.action, w.object, w.outcome)
@@ -700,6 +731,15 @@ func TestPrincipalChangesWriteAuditEntries(t *testing.T) {
 	if err != nil || !check.Valid {
 		t.Fatalf("server chain check = %+v, %v; want valid", check, err)
 	}
+}
+
+// withoutSessionEntries drops the entries of the console session of the test
+// person: its creation and the start of its session. A change of group
+// membership needs a console session, which makes both.
+func withoutSessionEntries(entries []audit.Entry) []audit.Entry {
+	return slices.DeleteFunc(slices.Clone(entries), func(e audit.Entry) bool {
+		return e.Action == "session:start" || e.Object == "principal:prn-tester"
+	})
 }
 
 // failingStore is a principal store whose principal create fails the way a
@@ -775,9 +815,11 @@ func TestPrincipalFailureObjectsNeverHoldRequestText(t *testing.T) {
 		t.Fatalf("list entries: %v", err)
 	}
 
-	objects := make([]string, 0, len(listing.Entries))
-	for i := range listing.Entries {
-		objects = append(objects, listing.Entries[i].Object)
+	entries := withoutSessionEntries(listing.Entries)
+	objects := make([]string, 0, len(entries))
+
+	for i := range entries {
+		objects = append(objects, entries[i].Object)
 	}
 
 	if want := []string{"group:invalid", "principal:invalid"}; !slices.Equal(objects, want) {
@@ -878,9 +920,11 @@ func TestPrincipalCountsAndSource(t *testing.T) {
 	}
 	mustCall(t, h, apiCall{http.MethodGet, "/api/server/principals?limit=1", "", http.StatusOK}, &list)
 
-	if list.Total != 2 || len(list.Principals) != 1 || list.Principals[0].GroupCount != 1 ||
+	// The total counts the person of the console session that the membership
+	// change needs.
+	if list.Total != 3 || len(list.Principals) != 1 || list.Principals[0].GroupCount != 1 ||
 		list.Principals[0].Source != "local" || list.NextCursor == "" {
-		t.Fatalf("principal page = %+v, want alice in 1 group, local, of 2 with a cursor", list)
+		t.Fatalf("principal page = %+v, want alice in 1 group, local, of 3 with a cursor", list)
 	}
 
 	var groups struct {

@@ -121,12 +121,69 @@ func freshRoutes() []freshRoute {
 		return ""
 	}
 	grantBody := `{"subject":"principal:` + testPrincipalID + `","role":"viewer"}`
-
 	return slices.Concat(
+		freshGroupRoutes(makeFreshGroup(false), makeFreshGroup(true)),
 		freshOwnRoutes(createBeta, ownToken, seedDefault, seedRule, principalTokens),
 		freshAccessRoutes(administrator, makeRole, grantBody),
 		freshOtherRoutes(seedAllowlist),
 	)
+}
+
+// makeFreshGroup returns the setup of a group route: it makes the person of
+// the session a site administrator and makes a group, with a member when
+// withMember is set. A group grant applies to each member, so a membership
+// change is an act-as edge. The setup returns the path of the group.
+func makeFreshGroup(withMember bool) func(*testing.T, providerEnv) string {
+	return func(t *testing.T, e providerEnv) string {
+		t.Helper()
+
+		e.makeSiteAdministrator(t)
+
+		var made groupDoc
+
+		rec := e.postWithSession(t, e.freshSignIn(t), "/api/server/groups", `{"name":"releasers"}`)
+		if rec.Code != http.StatusCreated {
+			t.Fatalf("make the group = %d %s, want 201", rec.Code, rec.Body.String())
+		}
+
+		decodeInto(t, rec.Body.String(), &made)
+
+		if withMember {
+			rec = e.postWithSession(t, e.freshSignIn(t), "/api/server/groups/"+made.ID+"/members",
+				`{"principalID":"`+testOtherPrincipalID+`"}`)
+			if rec.Code != http.StatusCreated {
+				t.Fatalf("make the member = %d %s, want 201", rec.Code, rec.Body.String())
+			}
+		}
+
+		return "/api/server/groups/" + made.ID
+	}
+}
+
+// freshGroupRoutes lists the writes of group membership that need a fresh
+// authentication. The setup of each route returns the path of its group. A
+// route with a member path has the member in setupMember.
+func freshGroupRoutes(setupGroup, setupMember func(*testing.T, providerEnv) string) []freshRoute {
+	return []freshRoute{
+		{
+			func(t *testing.T, e providerEnv) string {
+				t.Helper()
+
+				return setupGroup(t, e) + "/members"
+			},
+			"add group member", http.MethodPost, "", `{"principalID":"` + testOtherPrincipalID + `"}`,
+			http.StatusCreated,
+		},
+		{
+			func(t *testing.T, e providerEnv) string {
+				t.Helper()
+
+				return setupMember(t, e) + "/members/" + testOtherPrincipalID
+			},
+			"remove group member", http.MethodDelete, "", "", http.StatusNoContent,
+		},
+		{setupGroup, "delete group", http.MethodDelete, "", "", http.StatusNoContent},
+	}
 }
 
 // ipAllowlistTarget and ipAllowlistBody are the route and the body of the

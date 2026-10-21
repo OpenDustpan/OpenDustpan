@@ -45,12 +45,12 @@ var errNoFreshnessCheck = errors.New("a token change from a console session has 
 // never gives a fresh authentication.
 var errFreshStepRequired = &codedError{
 	status: http.StatusForbidden, code: freshStepRequiredCode, args: nil,
-	message: "a change needs a console session with a recent sign-in; sign in to the console again",
+	message: sessionauth.FreshStepRequiredMessage,
 }
 
 // freshStepRequiredCode is the errorCode of a change that has no fresh
 // authentication.
-const freshStepRequiredCode = "mfa.fresh-step-required"
+const freshStepRequiredCode = sessionauth.FreshStepRequiredCode
 
 // freshnessKey carries the freshness check of a token change.
 type freshnessKey struct{}
@@ -131,7 +131,7 @@ func (h *Handler) checkTokenFreshness(r *http.Request) error {
 	}
 
 	return reauthenticateError{
-		url:    signInStartPrefix + url.PathEscape(caller.Match.Session.Provider) + "?fresh=1",
+		url:    sessionauth.SignInStartPrefix + url.PathEscape(caller.Match.Session.Provider) + "?fresh=1",
 		window: window,
 	}
 }

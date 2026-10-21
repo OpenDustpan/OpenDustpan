@@ -117,10 +117,12 @@ func needsFreshSession(method, target string) bool {
 	case http.MethodPost:
 		return path == "/api/server/roles" || path == "/api/server/service-tokens" ||
 			path == "/api/server/caller/tokens" || strings.HasSuffix(path, "/tokens") ||
-			strings.HasSuffix(path, "/rotate") ||
+			strings.HasSuffix(path, "/rotate") || strings.HasSuffix(path, "/members") ||
 			(strings.HasSuffix(path, "/grants") && !strings.HasSuffix(path, "/unit-grants"))
 	case http.MethodPatch:
 		return strings.HasPrefix(path, "/api/server/roles/")
+	case http.MethodDelete:
+		return strings.HasPrefix(path, "/api/server/groups/")
 	default:
 		return false
 	}
@@ -129,31 +131,20 @@ func needsFreshSession(method, target string) bool {
 // storeSessions starts console sessions over st for the person "tester", the
 // subject of the test token. An access token never gives the fresh
 // authentication that some changes need, so their tests use these sessions.
+// The person is made when the first session starts.
 type storeSessions struct {
 	svc        *session.Sessions
 	principals *principal.Service
+	st         *sqlite.Store
 }
 
-// newStoreSessions returns the sessions over st and makes the person
-// "prn-tester" in st when it is not there.
+// newStoreSessions returns the sessions over st.
 func newStoreSessions(t *testing.T, st *sqlite.Store) storeSessions {
 	t.Helper()
 
 	svc, err := session.NewSessions(session.SessionsConfig{Store: st, Providers: st, Inactivity: nil, Now: nil})
 	if err != nil {
 		t.Fatalf("sessions: %v", err)
-	}
-
-	at := time.Date(2026, time.October, 13, 12, 0, 0, 0, time.UTC)
-	prn := principal.Principal{
-		CreatedAt: at, UpdatedAt: at, ID: "prn-tester", Subject: "tester", DisplayName: "Tester",
-		Kind: principal.KindPerson, Source: principal.SourceLocal, Namespace: "", GroupCount: 0,
-		BreakGlass: false, DisabledAt: time.Time{},
-	}
-
-	err = st.CreatePrincipal(t.Context(), prn, storetest.ServerChange(at, "principal:"+prn.ID))
-	if err != nil && !errors.Is(err, principal.ErrAlreadyExists) {
-		t.Fatalf("seed the person tester: %v", err)
 	}
 
 	principals, err := principal.NewService(principal.Config{
@@ -163,7 +154,24 @@ func newStoreSessions(t *testing.T, st *sqlite.Store) storeSessions {
 		t.Fatalf("principal service: %v", err)
 	}
 
-	return storeSessions{svc: svc, principals: principals}
+	return storeSessions{svc: svc, principals: principals, st: st}
+}
+
+// seedTester makes the person "prn-tester" in the store when it is not there.
+func (s storeSessions) seedTester(t *testing.T) {
+	t.Helper()
+
+	at := time.Date(2026, time.October, 13, 12, 0, 0, 0, time.UTC)
+	prn := principal.Principal{
+		CreatedAt: at, UpdatedAt: at, ID: "prn-tester", Subject: "tester", DisplayName: "Tester",
+		Kind: principal.KindPerson, Source: principal.SourceLocal, Namespace: "", GroupCount: 0,
+		BreakGlass: false, DisabledAt: time.Time{},
+	}
+
+	err := s.st.CreatePrincipal(t.Context(), prn, storetest.ServerChange(at, "principal:"+prn.ID))
+	if err != nil && !errors.Is(err, principal.ErrAlreadyExists) {
+		t.Fatalf("seed the person tester: %v", err)
+	}
 }
 
 // signIn returns the sign-in configuration that reads these sessions.
@@ -178,6 +186,8 @@ func (s storeSessions) signIn() *apiserver.SignIn {
 // req. The sign-in is age old.
 func (s storeSessions) start(t *testing.T, req *http.Request, age time.Duration) {
 	t.Helper()
+
+	s.seedTester(t)
 
 	at := s.svc.Now()
 	entry := audit.Entry{
