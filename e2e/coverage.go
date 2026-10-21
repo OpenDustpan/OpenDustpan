@@ -24,6 +24,7 @@ import (
 	serverapi "opendustpan.org/opendustpan/internal/api/server"
 	tfeapi "opendustpan.org/opendustpan/internal/api/tfe"
 	tofuhttpapi "opendustpan.org/opendustpan/internal/api/tofuhttp"
+	triggersapi "opendustpan.org/opendustpan/internal/api/triggers"
 	"opendustpan.org/opendustpan/internal/baseurl"
 	"opendustpan.org/opendustpan/internal/token"
 	"opendustpan.org/opendustpan/pkg/audit"
@@ -51,6 +52,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/stack"
 	"opendustpan.org/opendustpan/pkg/stack/stacktest"
 	"opendustpan.org/opendustpan/pkg/store/schema"
+	"opendustpan.org/opendustpan/pkg/trigger"
 	"opendustpan.org/opendustpan/pkg/workspace"
 )
 
@@ -92,6 +94,7 @@ func ServedRoutes(tb testing.TB) []RouteRef {
 	profileRoutes := coverageProfileRoutes(tb)
 	sinkRoutes := coverageSinkRoutes(tb)
 	jobRoutes := coverageJobRoutes(tb, namespaces)
+	triggerRoutes := coverageTriggerRoutes(tb, namespaces)
 	registryRoutes := coverageRegistryRoutes(tb)
 	server := coverageServerRoutes(tb)
 
@@ -117,6 +120,8 @@ func ServedRoutes(tb testing.TB) []RouteRef {
 		)+len(
 			jobRoutes,
 		)+len(
+			triggerRoutes,
+		)+len(
 			registryRoutes,
 		)+len(
 			server,
@@ -131,6 +136,7 @@ func ServedRoutes(tb testing.TB) []RouteRef {
 	out = append(out, profileRoutes...)
 	out = append(out, sinkRoutes...)
 	out = append(out, jobRoutes...)
+	out = append(out, triggerRoutes...)
 	out = append(out, registryRoutes...)
 	out = append(out, server...)
 
@@ -812,6 +818,46 @@ func coverageJobRoutes(tb testing.TB, namespaces *namespace.Service) []RouteRef 
 	return out
 }
 
+// coverageTriggerRoutes returns the trigger adapter's route table.
+func coverageTriggerRoutes(tb testing.TB, namespaces *namespace.Service) []RouteRef {
+	tb.Helper()
+
+	manager, err := trigger.NewManager(trigger.ManagerConfig{
+		Store: struct{ trigger.Store }{nil}, Dispatcher: struct{ trigger.Dispatcher }{nil},
+		Authorizer: coverageAuthorizer{}, Savers: struct{ trigger.SaverCheck }{nil},
+		Units: struct{ trigger.Units }{nil}, Fences: struct{ trigger.Fences }{nil}, Now: nil, NewID: nil,
+	})
+	if err != nil {
+		tb.Fatalf("trigger manager: %v", err)
+	}
+
+	handler, err := triggersapi.NewHandler(triggersapi.Config{
+		Namespaces:     namespaces,
+		Units:          coverageReader{},
+		Store:          struct{ trigger.Store }{nil},
+		Manager:        manager,
+		Authenticator:  coverageAuthenticator{},
+		Authorizer:     coverageAuthorizer{},
+		Audit:          nil,
+		OnAuditFailure: nil,
+		DenialLimiter:  nil,
+		Sessions:       nil,
+		Logger:         slog.New(slog.DiscardHandler),
+	})
+	if err != nil {
+		tb.Fatalf("triggers handler: %v", err)
+	}
+
+	routes := handler.Routes()
+	out := make([]RouteRef, 0, len(routes))
+
+	for _, route := range routes {
+		out = append(out, RouteRef{Method: route.Method, Path: route.Path})
+	}
+
+	return out
+}
+
 // coverageProfileRoutes returns the routes of the profile API. The stores
 // are empty shells: they exist only to build a Handler for its route table.
 func coverageProfileRoutes(tb testing.TB) []RouteRef {
@@ -1378,6 +1424,7 @@ func CoverageAllowlist() []AllowEntry {
 		auditSinkAllowEntries(),
 		manualLockAllowEntries(),
 		jobAllowEntries(),
+		triggerAllowEntries(),
 		preferencesAllowEntries(),
 		savedViewAllowEntries(),
 		gitHostAllowEntries(),
@@ -2441,6 +2488,27 @@ func jobAllowEntries() []AllowEntry {
 			Method: http.MethodGet, Path: "/api/dustpan/v1/namespaces/{namespace}/jobs/{job_id}",
 			CoveringTest: test, Reason: why,
 		},
+	}
+}
+
+// triggerAllowEntries covers the routes of the run triggers. No CLI calls them:
+// the console and the clients of the API do. The steps of TestRunTriggers call
+// each of them with the personal token of a person, on a unit that the real
+// OpenTofu CLI made.
+func triggerAllowEntries() []AllowEntry {
+	const (
+		base = "/api/dustpan/v1/namespaces/{namespace}/units/{unit_id}/triggers"
+		test = "TestRunTriggers"
+		why  = "Console and client route: no CLI calls it. The steps of TestRunTriggers call it with the token of a person."
+	)
+
+	return []AllowEntry{
+		{Method: http.MethodGet, Path: base, CoveringTest: test, Reason: why},
+		{Method: http.MethodPost, Path: base, CoveringTest: test, Reason: why},
+		{Method: http.MethodGet, Path: base + "/{trigger_id}", CoveringTest: test, Reason: why},
+		{Method: http.MethodPut, Path: base + "/{trigger_id}", CoveringTest: test, Reason: why},
+		{Method: http.MethodDelete, Path: base + "/{trigger_id}", CoveringTest: test, Reason: why},
+		{Method: http.MethodPost, Path: base + "/{trigger_id}/fire", CoveringTest: test, Reason: why},
 	}
 }
 

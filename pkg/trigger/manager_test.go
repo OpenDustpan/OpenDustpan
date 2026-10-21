@@ -440,7 +440,8 @@ func TestManagerDelete(t *testing.T) {
 	}
 
 	last := r.store.calls[len(r.store.calls)-1]
-	if !last.deleted || last.entry.Subject != ada || last.entry.Action != string(trigger.SettingsAction) {
+	if !last.deleted || last.entry.Subject != ada || last.entry.Action != string(trigger.SettingsAction) ||
+		last.entry.Reason != "delete trigger" {
 		t.Errorf("last store call = %+v, want a delete by %s", last, ada)
 	}
 

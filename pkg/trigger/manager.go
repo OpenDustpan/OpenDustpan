@@ -297,6 +297,7 @@ func (m *Manager) Delete(
 	}
 
 	e := m.entry(caller, info, &t, obj, false)
+	e.Reason = "delete trigger"
 	e.Changes = []audit.Change{
 		{Key: "trigger", Old: ptr(string(t.ID)), New: "", Layer: "", TakesEffect: ""},
 		{Key: "kind", Old: ptr(string(t.Kind)), New: "", Layer: "", TakesEffect: ""},
