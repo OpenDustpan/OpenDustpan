@@ -11,9 +11,6 @@ import (
 	"strconv"
 	"time"
 
-	"opendustpan.org/opendustpan/internal/clientip"
-	"opendustpan.org/opendustpan/internal/requestid"
-	"opendustpan.org/opendustpan/internal/sessionauth"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/secret"
@@ -301,33 +298,15 @@ func (h *Handler) appendRevealEntry(ctx context.Context, a revealAudit) bool {
 		return false
 	}
 
-	entry := audit.Entry{
-		At:            time.Now().UTC(),
-		Namespace:     a.object.Namespace(),
-		Subject:       a.principal.Subject,
-		IDPSubject:    "",
-		TokenID:       a.principal.TokenID,
-		Action:        string(identity.ActionUnitReadSecrets),
-		Object:        a.object.String(),
-		Version:       a.version,
-		ValuePath:     a.path,
-		ValueCount:    nil,
-		Changes:       nil,
-		SourceIP:      clientip.String(a.request),
-		UserAgent:     truncateUserAgent(a.request.UserAgent()),
-		Channel:       sessionauth.AuditChannel(a.request, channelHeader),
-		Kind:          audit.KindReveal,
-		Outcome:       a.outcome,
-		RequestID:     requestid.FromContext(ctx),
-		ObjectID:      a.object.UnitID(),
-		PrevHash:      "",
-		Hash:          "",
-		Sequence:      0,
-		FenceVersion:  0,
-		Reason:        "",
-		PrincipalKind: string(a.principal.Kind),
-		JobID:         a.principal.JobID,
-	}
+	entry := requestEntry(ctx, a.request, a.principal, a.object, auditDetail{
+		at:         time.Now().UTC(),
+		action:     string(identity.ActionUnitReadSecrets),
+		version:    a.version,
+		valuePath:  a.path,
+		valueCount: nil,
+		kind:       audit.KindReveal,
+		outcome:    a.outcome,
+	})
 
 	if _, err := h.audit.Append(ctx, ns.Fence(), entry); err != nil {
 		h.logger.ErrorContext(ctx, "audit append failed", slog.String("path", a.path))
