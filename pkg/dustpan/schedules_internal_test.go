@@ -129,6 +129,7 @@ func testServer(durableStore DurableStore, owner string) *Server {
 		handler:          nil,
 		ungated:          nil,
 		mounted:          nil,
+		root:             nil,
 		logger:           slog.New(slog.DiscardHandler),
 		listenAddr:       "",
 		listener:         nil,

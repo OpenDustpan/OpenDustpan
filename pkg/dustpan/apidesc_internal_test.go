@@ -54,6 +54,12 @@ func TestDescribeOperationsRefusesAHandlerThatHidesItsRoutes(t *testing.T) {
 		{"routes outside the prefix and no operations", patternsHandler{
 			Handler: http.NotFoundHandler(), patterns: []string{"GET /api/stacks/{stack}"},
 		}, false},
+		{"a route with no method under the prefix and no operations", patternsHandler{
+			Handler: http.NotFoundHandler(), patterns: []string{"/api/dustpan/v1/things"},
+		}, true},
+		{"a route with no method outside the prefix and no operations", patternsHandler{
+			Handler: http.NotFoundHandler(), patterns: []string{"/api/stacks/{stack}"},
+		}, false},
 		{"no patterns", http.NotFoundHandler(), true},
 	}
 

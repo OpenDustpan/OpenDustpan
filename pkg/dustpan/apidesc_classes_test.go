@@ -205,7 +205,10 @@ func newClassInput(moved map[string]string, described map[string]bool, undescrib
 // keyOfPattern returns the key that apidesc gives to a pattern: the method
 // and the path with the names of the wildcards removed.
 func keyOfPattern(pattern string) string {
-	method, path, _ := strings.Cut(pattern, " ")
+	method, path, found := strings.Cut(pattern, " ")
+	if !found {
+		method, path = "", pattern
+	}
 
 	return apidesc.Operation{
 		ID: "", Method: method, Path: path, Tags: nil, Actions: nil, Public: false,
@@ -219,7 +222,10 @@ func keyOfPattern(pattern string) string {
 // is described only when its key is in both lists of in.described. A path
 // under the prefix is not enough.
 func classesOf(pattern string, in classInput) []routeClass {
-	_, path, _ := strings.Cut(pattern, " ")
+	_, path, found := strings.Cut(pattern, " ")
+	if !found {
+		path = pattern
+	}
 
 	var out []routeClass
 
@@ -289,6 +295,68 @@ func checkClasses(patterns []string, in classInput) []string {
 	for pattern := range in.undescribed {
 		if !slices.Contains(patterns, pattern) {
 			problems = append(problems, pattern+" is on the undescribed list but no adapter serves it")
+		}
+	}
+
+	slices.Sort(problems)
+
+	return problems
+}
+
+// rootMounts lists the patterns that code registers directly on the root mux.
+// Each entry is one exact pattern, and it is the only list of them. A pattern
+// under the prefix of the tool-neutral REST API is allowed only as the
+// catch-all v1Prefix: an adapter serves each route of that API, and the
+// server adds its path from the patterns of the adapter. A pattern that is in
+// no entry fails the check, so a root route cannot skip the description.
+//
+//nolint:gochecknoglobals // A fixed table; Go has no constant slices.
+var rootMounts = []string{
+	// The catch-all under the prefix: it answers 404 for a path no adapter serves.
+	apidesc.Prefix,
+	// The tool APIs, the installation APIs and the runner protocol.
+	"/api/inventory/", "/api/audit/", "/api/runners/", "/runner/v1/",
+	"/api/v2/", "/api/server/", "/api/", "/tofu/state/",
+	// Service discovery, the metrics route and the probes.
+	"GET /.well-known/terraform.json", "GET /metrics",
+	"GET /health/live", "GET /health/ready", "GET /health/ready/{component}",
+	// The console files.
+	"/",
+}
+
+// checkRootPatterns returns one error text for each pattern of the root mux
+// that is not on the list rootMounts, and for each path that the server adds
+// from an adapter and that no adapter pattern serves. A pattern under the
+// prefix other than the catch-all is never allowed, whatever the list says.
+func checkRootPatterns(direct, mounted, adapterPatterns []string) []string {
+	var problems []string
+
+	for _, pattern := range direct {
+		_, path, found := strings.Cut(pattern, " ")
+		if !found {
+			path = pattern
+		}
+
+		switch {
+		case strings.HasPrefix(path, apidesc.Prefix) && pattern != apidesc.Prefix:
+			problems = append(problems, pattern+" is on the root mux under the prefix and is not the catch-all")
+		case !slices.Contains(rootMounts, pattern):
+			problems = append(problems, pattern+" is on the root mux and is not on the list rootMounts")
+		default:
+		}
+	}
+
+	served := map[string]bool{}
+
+	for _, pattern := range adapterPatterns {
+		if _, path, found := strings.Cut(pattern, " "); found {
+			served[path] = true
+		}
+	}
+
+	for _, path := range mounted {
+		if !served[path] {
+			problems = append(problems, path+" is mounted from an adapter that does not list it")
 		}
 	}
 

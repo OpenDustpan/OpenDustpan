@@ -112,6 +112,16 @@ func (a adapters) describeOperations() ([]apidesc.Operation, error) {
 // lists no operations.
 var errUnlisted = errors.New("api description: a mounted handler does not list its routes")
 
+// patternPath returns the path of a ServeMux pattern. A pattern with no
+// method is all path.
+func patternPath(pattern string) string {
+	if _, path, found := strings.Cut(pattern, " "); found {
+		return path
+	}
+
+	return pattern
+}
+
 // checkListers returns errUnlisted, wrapped, for the first handler that
 // serves a route under apidesc.Prefix and does not implement both listers, or
 // that does not implement patternLister. A handler like that, for example one
@@ -129,7 +139,7 @@ func checkListers(handlers []namedHandler) error {
 		}
 
 		for _, pattern := range patterns.RegisteredPatterns() {
-			if _, path, _ := strings.Cut(pattern, " "); strings.HasPrefix(path, apidesc.Prefix) {
+			if strings.HasPrefix(patternPath(pattern), apidesc.Prefix) {
 				return fmt.Errorf("%w: %s serves %s and lists no operations", errUnlisted, h.name, pattern)
 			}
 		}

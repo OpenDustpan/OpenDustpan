@@ -48,3 +48,24 @@ func (s *Server) HandlerNames() []string {
 
 	return out
 }
+
+// RootPatterns is what the root mux recorded.
+type RootPatterns struct {
+	// Direct holds the patterns that code registered directly.
+	Direct []string
+	// Mounted holds the paths that mountV1 added from the patterns of an
+	// adapter.
+	Mounted []string
+}
+
+// RootPatterns returns the patterns that the root mux recorded.
+func (s *Server) RootPatterns() RootPatterns {
+	if s.root == nil {
+		return RootPatterns{Direct: nil, Mounted: nil}
+	}
+
+	return RootPatterns{
+		Direct:  append([]string(nil), s.root.patterns...),
+		Mounted: append([]string(nil), s.root.mounted...),
+	}
+}

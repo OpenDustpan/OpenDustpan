@@ -12,8 +12,9 @@ import (
 
 // TestViewHeaderFlagsMatchTheHandler proves that the header flags of the
 // operations of the saved views match what the handler does with the header.
-// An operation with a flag and no scenario here fails, so a new flag cannot
-// enter without a check. The other routes of this adapter set no flag.
+// An operation with a flag and no scenario here fails, and so does a write
+// operation with no scenario, because the check of the "no flag" direction
+// needs one. The reads with no scenario set no flag.
 func TestViewHeaderFlagsMatchTheHandler(t *testing.T) {
 	t.Parallel()
 
@@ -82,8 +83,8 @@ func TestViewHeaderFlagsMatchTheHandler(t *testing.T) {
 
 			scenario, ok := scenarios[op.ID]
 			if !ok {
-				if headertest.Flagged(op) {
-					t.Fatalf("%s sets a header flag and has no scenario", op.ID)
+				if headertest.Flagged(op) || headertest.Writes(op) {
+					t.Fatalf("%s sets a header flag or writes, and has no scenario", op.ID)
 				}
 
 				t.Skip("the route sets no header flag")

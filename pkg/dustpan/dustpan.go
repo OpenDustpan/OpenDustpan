@@ -579,7 +579,9 @@ type Server struct {
 	ungated http.Handler
 	// mounted holds the adapters of the server. Only the tests of the API
 	// description read it.
-	mounted         *adapters
+	mounted *adapters
+	// root is the root mux. Only the tests of the API description read it.
+	root            *rootMux
 	logger          *slog.Logger
 	listenAddr      string
 	listener        net.Listener
@@ -981,7 +983,7 @@ func assemble(cfg *settings, base baseurl.Resolver, svc services, backups *backu
 
 	srv := &Server{
 		flushDenials: denialFlusher(cfg, svc, observed),
-		handler:      handlers.served, ungated: handlers.ungated, mounted: &mount,
+		handler:      handlers.served, ungated: handlers.ungated, mounted: &mount, root: handlers.root,
 		logger:           cfg.logger,
 		listenAddr:       cfg.listenAddr,
 		listener:         cfg.listener,
@@ -3500,6 +3502,48 @@ type patternLister interface {
 	RegisteredPatterns() []string
 }
 
+// rootMux is the root http.ServeMux. It records every pattern that is
+// registered on it, so that a test can classify each route the root mux
+// serves, not only the routes of the adapters. Register every route through
+// Handle, HandleFunc or handleMounted: the mux field is private to this type.
+type rootMux struct {
+	mux *http.ServeMux
+	// patterns holds the patterns that code registered directly.
+	patterns []string
+	// mounted holds the paths that mountV1 registered from the patterns of an
+	// adapter. The adapter patterns already cover them.
+	mounted []string
+}
+
+// newRootMux returns a rootMux ready to register routes.
+func newRootMux() *rootMux {
+	return &rootMux{mux: http.NewServeMux(), patterns: nil, mounted: nil}
+}
+
+// Handle registers handler for pattern and records the pattern.
+func (m *rootMux) Handle(pattern string, handler http.Handler) {
+	m.patterns = append(m.patterns, pattern)
+	m.mux.Handle(pattern, handler)
+}
+
+// HandleFunc registers handler for pattern and records the pattern.
+func (m *rootMux) HandleFunc(pattern string, handler func(http.ResponseWriter, *http.Request)) {
+	m.patterns = append(m.patterns, pattern)
+	m.mux.HandleFunc(pattern, handler)
+}
+
+// ServeHTTP implements http.Handler.
+func (m *rootMux) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	m.mux.ServeHTTP(w, r)
+}
+
+// handleMounted registers handler for the path of a route that an adapter
+// lists, and records the path apart from the direct patterns.
+func (m *rootMux) handleMounted(path string, handler http.Handler) {
+	m.mounted = append(m.mounted, path)
+	m.mux.Handle(path, handler)
+}
+
 // v1NotFound answers 404 for a path under v1Prefix that no handler serves, in
 // the error shape of the tool-neutral API.
 func v1NotFound(w http.ResponseWriter, _ *http.Request) {
@@ -3517,7 +3561,7 @@ func v1NotFound(w http.ResponseWriter, _ *http.Request) {
 // h. A path serves every method that h registers for it, and h answers the
 // methods it does not serve. A nil h or a handler that lists no patterns
 // registers nothing.
-func mountV1(mux *http.ServeMux, h http.Handler, wrap func(http.Handler) http.Handler) {
+func mountV1(mux *rootMux, h http.Handler, wrap func(http.Handler) http.Handler) {
 	lister, ok := h.(patternLister)
 	if !ok {
 		return
@@ -3538,14 +3582,14 @@ func mountV1(mux *http.ServeMux, h http.Handler, wrap func(http.Handler) http.Ha
 
 		seen[path] = struct{}{}
 
-		mux.Handle(path, wrapped)
+		mux.handleMounted(path, wrapped)
 	}
 }
 
 // mountAPI mounts the handlers of the api component on mux: the tool APIs,
 // the installation API, the runner protocol, service discovery and the
 // console files.
-func mountAPI(mux *http.ServeMux, a adapters, cfg *settings) error {
+func mountAPI(mux *rootMux, a adapters, cfg *settings) error {
 	// /api/inventory/, /api/v2/ and /api/server/ are more specific than
 	// /api/, so the inventory restore, purge and move routes, the OpenTofu
 	// routes and the installation routes reach their own adapters while every
@@ -3626,8 +3670,8 @@ func mountAPI(mux *http.ServeMux, a adapters, cfg *settings) error {
 
 // buildMux builds the root mux: the handlers of the api component, when the
 // process runs it, and the probes and the metrics route.
-func buildMux(a adapters, cfg *settings) (*http.ServeMux, error) {
-	mux := http.NewServeMux()
+func buildMux(a adapters, cfg *settings) (*rootMux, error) {
+	mux := newRootMux()
 	// Defense in depth: gateComponents answers 404 for a process without the
 	// api component, and this mount is a second layer that does not rely on
 	// it. A process without the api component mounts no API handler, so the
@@ -3662,6 +3706,8 @@ func buildMux(a adapters, cfg *settings) (*http.ServeMux, error) {
 type routeHandlers struct {
 	served  http.Handler
 	ungated http.Handler
+	// root is the root mux, which records its patterns.
+	root *rootMux
 }
 
 // routes builds the handlers of the server.
@@ -3685,6 +3731,7 @@ func routes(a adapters, cfg *settings, observed *metrics.ServerMetrics) (routeHa
 			gateComponents(gated, cfg.components), addr, cfg.logger, cfg.authenticator, observed,
 		)),
 		ungated: gated,
+		root:    mux,
 	}, nil
 }
 

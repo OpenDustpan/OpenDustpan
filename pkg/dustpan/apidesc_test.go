@@ -102,6 +102,80 @@ func TestEveryRouteHasOneClass(t *testing.T) {
 	}
 }
 
+// TestEveryRootRouteIsClassified proves that each pattern registered on the
+// root mux is the catch-all of the prefix or is on the list rootMounts, and
+// that each path the server adds from an adapter is a path the adapter lists.
+// The check runs on a server of the installation kind dev too.
+func TestEveryRootRouteIsClassified(t *testing.T) {
+	t.Parallel()
+
+	for _, srv := range []*dustpan.Server{newEveryModuleServer(t), newDevModuleServer(t)} {
+		root := srv.RootPatterns()
+		if len(root.Direct) == 0 {
+			t.Fatal("the root mux records no pattern")
+		}
+
+		var adapterPatterns []string
+		for _, source := range srv.RouteSources() {
+			adapterPatterns = append(adapterPatterns, source.Patterns...)
+		}
+
+		if problems := checkRootPatterns(root.Direct, root.Mounted, adapterPatterns); len(problems) > 0 {
+			t.Fatalf("root mux routes that are in no class:\n%s", strings.Join(problems, "\n"))
+		}
+	}
+}
+
+// TestRootCheckFailsClosed proves that a route on the root mux beside the
+// catch-all of the prefix fails the check, with the shape of the break that
+// the class check of the adapters could not see.
+func TestRootCheckFailsClosed(t *testing.T) {
+	t.Parallel()
+
+	adapter := []string{"GET /api/dustpan/v1/capabilities"}
+
+	tests := []struct {
+		name    string
+		direct  []string
+		mounted []string
+		want    string
+	}{
+		{"catch-all only", []string{"/api/dustpan/v1/", "GET /health/live"}, nil, ""},
+		{
+			"a route under the prefix beside the catch-all",
+			[]string{"/api/dustpan/v1/", "GET /api/dustpan/v1/rootonly"},
+			nil, "GET /api/dustpan/v1/rootonly is on the root mux under the prefix",
+		},
+		{
+			"a method-less route under the prefix",
+			[]string{"/api/dustpan/v1/rootonly"},
+			nil, "/api/dustpan/v1/rootonly is on the root mux under the prefix",
+		},
+		{"a root route outside the list", []string{"GET /extra"}, nil, "GET /extra is on the root mux"},
+		{"a mounted path no adapter lists", nil, []string{"/api/dustpan/v1/ghost"}, "/api/dustpan/v1/ghost is mounted"},
+		{"a mounted path an adapter lists", nil, []string{"/api/dustpan/v1/capabilities"}, ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			problems := strings.Join(checkRootPatterns(tt.direct, tt.mounted, adapter), "\n")
+			if tt.want == "" {
+				if problems != "" {
+					t.Fatalf("unexpected problems: %s", problems)
+				}
+
+				return
+			}
+
+			if !strings.Contains(problems, tt.want) {
+				t.Fatalf("problems %q do not contain %q", problems, tt.want)
+			}
+		})
+	}
+}
+
 // appendNew appends the items of more that list does not hold.
 func appendNew(list, more []string) []string {
 	for _, item := range more {

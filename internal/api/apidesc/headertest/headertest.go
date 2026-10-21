@@ -64,9 +64,9 @@ const (
 // closing quote.
 var trailingNumber = regexp.MustCompile(`^(.*?)(\d+)("?)$`)
 
-// staleOf returns an ETag of the same form as etag for a version that the
+// StaleOf returns an ETag of the same form as etag for a version that the
 // resource never had. An ETag with no version at the end gets a version.
-func staleOf(etag string) string {
+func StaleOf(etag string) string {
 	m := trailingNumber.FindStringSubmatch(etag)
 	if m == nil {
 		return etag + "9999"
@@ -87,6 +87,9 @@ func staleOf(etag string) string {
 //   - IfMatch: a request without If-Match succeeds.
 //   - IfMatch and IfMatchRequired: a request with an If-Match for a version
 //     that the resource never had answers 409 or 412.
+//   - no If-Match flag: a request with a stale If-Match is not answered as a
+//     failed or missing precondition (412 or 428), so a handler cannot read the
+//     header and leave the flag out of the description.
 //   - IdempotencyKey: two requests with one key give one answer, and the
 //     second one says that it is a replay.
 //   - Options.RefusesKey: a route that writes and has no key flag refuses a
@@ -108,6 +111,7 @@ func Check(t *testing.T, op apidesc.Operation, scenario Scenario, opts Options) 
 
 	checkSuccess(t, op, scenario, current)
 	checkPrecondition(t, op, scenario)
+	checkIfMatchIgnored(t, op, scenario)
 	checkKey(t, op, scenario, current, opts)
 }
 
@@ -149,9 +153,37 @@ func checkPrecondition(t *testing.T, op apidesc.Operation, scenario Scenario) {
 
 	p := scenario(t)
 
-	stale := p.Send(map[string]string{"If-Match": staleOf(p.ETag)})
+	stale := p.Send(map[string]string{"If-Match": StaleOf(p.ETag)})
+	// The description promises 412 (components.parameters.IfMatch). The
+	// approval handlers answer 409 for a stale tag today (#1286). Remove the
+	// 409 branch when that issue is fixed.
 	if stale.Status != http.StatusPreconditionFailed && stale.Status != http.StatusConflict {
 		t.Errorf("%s with a stale If-Match = %d %s, want 412 or 409", op.ID, stale.Status, stale.Body)
+	}
+}
+
+// checkIfMatchIgnored sends a stale If-Match to an operation that has no
+// If-Match flag. The handler must not honor the header as a precondition, so
+// the answer is neither 412 nor 428. A handler that reads the header without a
+// flag fails here, and every generated client would have the wrong signature.
+func checkIfMatchIgnored(t *testing.T, op apidesc.Operation, scenario Scenario) {
+	t.Helper()
+
+	if op.IfMatch || op.IfMatchRequired {
+		return
+	}
+
+	p := scenario(t)
+
+	etag := StaleOf(p.ETag)
+	if p.ETag == "" {
+		etag = `"headertest-stale"`
+	}
+
+	got := p.Send(map[string]string{"If-Match": etag})
+	if got.Status == http.StatusPreconditionFailed || got.Status == http.StatusPreconditionRequired {
+		t.Errorf("%s with a stale If-Match = %d %s: the handler reads the header and the description shows no flag",
+			op.ID, got.Status, got.Body)
 	}
 }
 
@@ -210,6 +242,17 @@ func checkReplay(t *testing.T, op apidesc.Operation, scenario Scenario, current 
 
 	if again.Header.Get("Idempotent-Replayed") != "true" {
 		t.Errorf("%s: the second request with one Idempotency-Key is not marked as a replay", op.ID)
+	}
+}
+
+// Writes reports whether the operation uses a method that changes state: POST,
+// PUT, PATCH or DELETE. A test of an adapter needs a scenario for each one.
+func Writes(op apidesc.Operation) bool {
+	switch op.Method {
+	case http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete:
+		return true
+	default:
+		return false
 	}
 }
 

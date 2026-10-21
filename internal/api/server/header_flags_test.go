@@ -11,15 +11,17 @@ import (
 
 // checkHeaderFlags runs the check of the header flags for each operation. An
 // operation with a flag and no scenario fails, so a new flag cannot enter
-// without a check. An operation with no flag and no scenario is skipped.
+// without a check. A write operation with no scenario fails too, because the
+// check of the "no flag" direction needs a scenario. Only a read with no flag
+// and no scenario is skipped.
 func checkHeaderFlags(t *testing.T, ops []apidesc.Operation, scenarios map[string]headertest.Scenario) {
 	t.Helper()
 
 	for _, op := range ops {
 		scenario, ok := scenarios[op.ID]
 		if !ok {
-			if headertest.Flagged(op) {
-				t.Errorf("%s sets a header flag and has no scenario", op.ID)
+			if headertest.Flagged(op) || headertest.Writes(op) {
+				t.Errorf("%s sets a header flag or writes, and has no scenario", op.ID)
 			}
 
 			continue
