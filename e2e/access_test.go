@@ -86,7 +86,7 @@ func runAccessOnStore(t *testing.T, cli e2e.Install, store e2e.Store) {
 	}
 
 	ctx := t.Context()
-	env := e2e.NewEnv(ctx, t, cli, store)
+	env := e2e.NewEnvWithRealTimeSignIn(ctx, t, cli, store)
 
 	checkReady(ctx, t, env)
 

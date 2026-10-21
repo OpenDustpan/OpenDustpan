@@ -355,7 +355,7 @@ func checkReviewScopes(ctx context.Context, t *testing.T, env *e2e.Env, f review
 		want  []string
 	}{
 		{"/api/server/access-review", url.Values{}, sorted(
-			"installation-operator@@server<", "account-administrator@@server<",
+			"installation-operator@@server<", "site-administrator@@server<", "account-administrator@@server<",
 			"writer@review<", "auditor@review<", "maintainer@pulumi:review/web/prod<",
 		)},
 		{"/api/server/namespaces/review/access-review", url.Values{}, sorted(

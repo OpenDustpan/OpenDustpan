@@ -140,10 +140,11 @@ func runTokenPolicyOnStore(t *testing.T, cli e2e.Install, store e2e.Store) {
 func checkBreakGlassRefused(ctx context.Context, t *testing.T, env *e2e.Env) {
 	t.Helper()
 
-	status, body, err := env.ServerAPIStatus(ctx, http.MethodPatch, "/api/server/token-policy",
-		`{"disableBreakGlass":true}`)
-	if err != nil || status != http.StatusBadRequest || !strings.Contains(body, "no longer supported") {
-		t.Fatalf("break-glass disable = %d, %v (%s); want 400 that says no longer supported", status, err, body)
+	status, body := freshServerCall(ctx, t, env, principalStep{
+		http.MethodPatch, "/api/server/token-policy", `{"disableBreakGlass":true}`, http.StatusBadRequest,
+	})
+	if status != http.StatusBadRequest || !strings.Contains(body, "no longer supported") {
+		t.Fatalf("break-glass disable = %d (%s); want 400 that says no longer supported", status, body)
 	}
 
 	var policy e2eTokenPolicy

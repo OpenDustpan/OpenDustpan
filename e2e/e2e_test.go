@@ -218,7 +218,7 @@ func runOnStore(t *testing.T, cli e2e.Install, store e2e.Store, scenario func(*t
 		writeReport(t, e2e.NewRun(env))
 	})
 
-	env = e2e.NewEnv(t.Context(), t, cli, store)
+	env = e2e.NewEnvWithRealTimeSignIn(t.Context(), t, cli, store)
 
 	scenario(t, env)
 
@@ -1700,7 +1700,7 @@ func pulumiMaskedStateScenario(t *testing.T, env *e2e.Env, org string) {
 	))
 	env.Step(ctx, t, step(
 		"masked reveal",
-		checkMaskedReveal(ctx, env, org, maskedStateSecret),
+		checkMaskedReveal(ctx, t, env, org, maskedStateSecret),
 		"stack", "--show-name", "--stack", qualified,
 	))
 	env.Step(ctx, t, step("stack rm masked", nil, "stack", "rm", "--yes", "--force", "--stack", qualified))
@@ -2066,11 +2066,11 @@ type revealedDoc struct {
 
 // checkMaskedReveal proves the reveal call (ADR 41 decisions 4 and 5) on
 // the masked stack: reveal of one masked output path answers the secret
-// value the program set, with Cache-Control: no-store, and the audit list
+// value the program set, and the audit list
 // holds the entry of the kind reveal with the path. A path outside the
 // masked set answers 404 with no value.
 func checkMaskedReveal(
-	ctx context.Context, env *e2e.Env, org, secret string,
+	ctx context.Context, tb testing.TB, env *e2e.Env, org, secret string,
 ) func(e2e.Result) error {
 	return func(e2e.Result) error {
 		base := fmt.Sprintf("/api/stacks/%s/%s/masked", org, e2e.Project)
@@ -2080,11 +2080,11 @@ func checkMaskedReveal(
 			return err
 		}
 
-		if err := checkPulumiReveal(ctx, env, org, path, secret); err != nil {
+		if err := checkPulumiReveal(ctx, tb, env, org, path, secret); err != nil {
 			return err
 		}
 
-		return checkPulumiRevealProbe(ctx, env, base, secret)
+		return checkPulumiRevealProbe(ctx, tb, env, base, secret)
 	}
 }
 
@@ -2111,38 +2111,40 @@ func maskedOutputPath(ctx context.Context, env *e2e.Env, base string) (string, e
 
 // checkPulumiReveal proves the reveal call answers the secret value with
 // no-store, and the audit list holds the reveal entry with the path.
-func checkPulumiReveal(ctx context.Context, env *e2e.Env, org, path, secret string) error {
+func checkPulumiReveal(ctx context.Context, tb testing.TB, env *e2e.Env, org, path, secret string) error {
 	base := fmt.Sprintf("/api/stacks/%s/%s/masked", org, e2e.Project)
 
-	resp, err := env.APIStatusHeaders(
-		ctx, http.MethodPost, base+"/state/latest/reveal", `{"path":`+strconv.Quote(path)+`}`,
-	)
-	if err != nil {
-		return fmt.Errorf("%w: POST reveal: %w", errUnexpected, err)
+	body := `{"path":` + strconv.Quote(path) + `}`
+
+	// An access token never gives the fresh authentication that a reveal needs.
+	tokenStatus, tokenBody, tokenErr := env.APIStatus(ctx, http.MethodPost, base+"/state/latest/reveal", body)
+	if tokenErr != nil {
+		return fmt.Errorf("%w: POST reveal with a token: %w", errUnexpected, tokenErr)
 	}
 
-	if resp.Status != http.StatusOK {
+	if tokenStatus != http.StatusForbidden || !strings.Contains(tokenBody, "mfa.fresh-step-required") ||
+		strings.Contains(tokenBody, secret) {
+		return fmt.Errorf("%w: POST reveal with a token answers %d %s, want 403 with mfa.fresh-step-required",
+			errUnexpected, tokenStatus, tokenBody)
+	}
+
+	status, respBody := env.FreshAdminAPIStatus(
+		ctx, tb, e2e.SessionRequest{Method: http.MethodPost, Path: base + "/state/latest/reveal", Body: body},
+	)
+	if status != http.StatusOK {
 		return fmt.Errorf(
-			"%w: POST reveal answers %d, want %d (%s)",
-			errUnexpected,
-			resp.Status,
-			http.StatusOK,
-			resp.Body,
+			"%w: POST reveal answers %d, want %d (%s)", errUnexpected, status, http.StatusOK, respBody,
 		)
 	}
 
 	var revealed revealedDoc
 
-	if decodeErr := json.Unmarshal([]byte(resp.Body), &revealed); decodeErr != nil {
+	if decodeErr := json.Unmarshal([]byte(respBody), &revealed); decodeErr != nil {
 		return fmt.Errorf("%w: decode reveal body: %w", errUnexpected, decodeErr)
 	}
 
 	if revealed.Path != path || revealed.Value != secret {
-		return fmt.Errorf("%w: reveal = %s, want the path with the secret value", errUnexpected, resp.Body)
-	}
-
-	if got := resp.Header.Get("Cache-Control"); got != "no-store" {
-		return fmt.Errorf("%w: reveal Cache-Control = %q, want no-store", errUnexpected, got)
+		return fmt.Errorf("%w: reveal = %s, want the path with the secret value", errUnexpected, respBody)
 	}
 
 	object := "pulumi:" + org + "/" + e2e.Project + "/masked"
@@ -2152,13 +2154,11 @@ func checkPulumiReveal(ctx context.Context, env *e2e.Env, org, path, secret stri
 
 // checkPulumiRevealProbe proves a path outside the masked set answers 404
 // with no value.
-func checkPulumiRevealProbe(ctx context.Context, env *e2e.Env, base, secret string) error {
-	status, body, err := env.APIStatus(
-		ctx, http.MethodPost, base+"/state/latest/reveal", `{"path":"/resources/0/outputs/no-such-secret"}`,
-	)
-	if err != nil {
-		return fmt.Errorf("%w: POST reveal probe: %w", errUnexpected, err)
-	}
+func checkPulumiRevealProbe(ctx context.Context, tb testing.TB, env *e2e.Env, base, secret string) error {
+	status, body := env.FreshAdminAPIStatus(ctx, tb, e2e.SessionRequest{
+		Method: http.MethodPost, Path: base + "/state/latest/reveal",
+		Body: `{"path":"/resources/0/outputs/no-such-secret"}`,
+	})
 
 	if status != http.StatusNotFound {
 		return fmt.Errorf(

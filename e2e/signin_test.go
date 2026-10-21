@@ -314,10 +314,11 @@ func checkTokensFromSession(t *testing.T, b browser, tofu e2e.Install) {
 
 	grant := `{"subject":"principal:` + tok.PrincipalID + `","role":"maintainer"}`
 
-	status, body, err := b.env.ServerAPIStatus(ctx, http.MethodPost, "/api/server/namespaces/"+e2e.Namespace+"/grants",
-		grant)
-	if err != nil || status != http.StatusCreated {
-		t.Fatalf("grant maintainer = %d, %v: %s", status, err, body)
+	status, body := b.env.FreshAdminAPIStatus(ctx, t, e2e.SessionRequest{
+		Method: http.MethodPost, Path: "/api/server/namespaces/" + e2e.Namespace + "/grants", Body: grant,
+	})
+	if status != http.StatusCreated {
+		t.Fatalf("grant maintainer = %d: %s", status, body)
 	}
 
 	checkPulumiWhoami(ctx, t, b.env, tok.Secret)

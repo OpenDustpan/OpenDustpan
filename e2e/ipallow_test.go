@@ -60,7 +60,7 @@ func runIPAllowlistOnStore(t *testing.T, cli e2e.Install, store e2e.Store) {
 	}
 
 	ctx := t.Context()
-	env := e2e.NewEnvWithIPAllowlists(ctx, t, cli, store)
+	env := e2e.NewEnvWithIPAllowlistsAndSignIn(ctx, t, cli, store)
 
 	checkReady(ctx, t, env)
 
@@ -88,11 +88,7 @@ type ipAllowlistStep struct {
 func ipAllowlistCall(ctx context.Context, t *testing.T, env *e2e.Env, s ipAllowlistStep) string {
 	t.Helper()
 
-	status, resp, err := env.ServerAPIStatus(ctx, s.method, s.path, s.body)
-	if err != nil {
-		t.Fatalf("%s: %s %s: %v", s.step, s.method, s.path, err)
-	}
-
+	status, resp := freshServerCall(ctx, t, env, principalStep{s.method, s.path, s.body, s.want})
 	if status != s.want {
 		t.Fatalf("%s: %s %s answers %d, want %d (%s)", s.step, s.method, s.path, status, s.want, resp)
 	}
@@ -107,9 +103,22 @@ func ipAllowlistCallFrom(
 ) string {
 	t.Helper()
 
-	status, resp, err := env.ServerAPIStatusFrom(ctx, source, env.TokenA(), s.method, s.path, s.body)
-	if err != nil {
-		t.Fatalf("%s: %s %s from %s: %v", s.step, s.method, s.path, source, err)
+	var (
+		status int
+		resp   string
+	)
+
+	if needsFreshAuth(s.method, s.path) {
+		status, resp = env.FreshAdminAPIStatusFrom(
+			ctx, t, source, e2e.SessionRequest{Method: s.method, Path: s.path, Body: s.body},
+		)
+	} else {
+		var err error
+
+		status, resp, err = env.ServerAPIStatusFrom(ctx, source, env.TokenA(), s.method, s.path, s.body)
+		if err != nil {
+			t.Fatalf("%s: %s %s from %s: %v", s.step, s.method, s.path, source, err)
+		}
 	}
 
 	if status != s.want {

@@ -230,15 +230,39 @@ func NewEnvWithRealTimeSignIn(ctx context.Context, tb testing.TB, cli Install, s
 	return startSignInEnv(ctx, tb, cli, store, true)
 }
 
+// NewEnvWithIPAllowlistsAndSignIn starts a server as NewEnvWithIPAllowlists
+// does, with the console sign-in of NewEnvWithRealTimeSignIn, so a step can
+// change an allowlist with the fresh console session that the change needs.
+func NewEnvWithIPAllowlistsAndSignIn(ctx context.Context, tb testing.TB, cli Install, store Store) *Env {
+	tb.Helper()
+
+	return startSignInEnvWith(ctx, tb, cli, store, signInEnvOptions{realTime: true, ipAllowlists: true})
+}
+
+// signInEnvOptions are the switches of a sign-in env.
+type signInEnvOptions struct {
+	realTime     bool
+	ipAllowlists bool
+}
+
 // startSignInEnv starts a sign-in env. realTime runs the in-process
 // server on the real time instead of a TestClock.
 func startSignInEnv(ctx context.Context, tb testing.TB, cli Install, store Store, realTime bool) *Env {
 	tb.Helper()
 
+	return startSignInEnvWith(ctx, tb, cli, store, signInEnvOptions{realTime: realTime, ipAllowlists: false})
+}
+
+// startSignInEnvWith starts a sign-in env with the switches opts.
+func startSignInEnvWith(ctx context.Context, tb testing.TB, cli Install, store Store, opts signInEnvOptions) *Env {
+	tb.Helper()
+
+	realTime := opts.realTime
+
 	in := envInput{
 		deltaCutoff:       0,
 		disableJournaling: false,
-		ipAllowlists:      false,
+		ipAllowlists:      opts.ipAllowlists,
 		signIn:            true,
 		signInRealTime:    realTime,
 		journalRefuser:    nil,

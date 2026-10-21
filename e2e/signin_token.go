@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"maps"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -262,6 +263,39 @@ func (e *Env) FreshAdminAPIStatus(ctx context.Context, tb testing.TB, req Sessio
 	}
 
 	return e.FreshSession(ctx, tb, e.freshAdmin(ctx, tb))(req)
+}
+
+// FreshAdminAPIStatusFrom is FreshAdminAPIStatus for a request that leaves
+// from the local address source. The sign-in itself leaves from the default
+// address. A step uses it for a route that an IP allowlist limits.
+func (e *Env) FreshAdminAPIStatusFrom(
+	ctx context.Context, tb testing.TB, source string, req SessionRequest,
+) (int, string) {
+	tb.Helper()
+
+	if e.signIn == nil {
+		tb.Fatal("FreshAdminAPIStatusFrom needs an env from NewEnvWithSignIn")
+	}
+
+	browser := e.BrowserClient(tb)
+	csrf := e.signInAs(ctx, tb, browser, e.signInSubjectOf(ctx, tb, e.freshAdmin(ctx, tb)))
+
+	base, ok := browser.Transport.(*http.Transport)
+	if !ok {
+		tb.Fatal("the browser client has no HTTP transport")
+	}
+
+	transport := base.Clone()
+	//nolint:exhaustruct_v5 // The dialer sets only the source address; the rest stays zero.
+	transport.DialContext = (&net.Dialer{LocalAddr: &net.TCPAddr{IP: net.ParseIP(source)}}).DialContext
+	browser.Transport = transport
+
+	defer transport.CloseIdleConnections()
+
+	return e.browserDo(ctx, tb, browser, browserRequest{
+		method: req.Method, target: e.URL + req.Path, body: req.Body,
+		header: http.Header{"X-Dustpan-Csrf": {csrf}, "Content-Type": {"application/json"}},
+	})
 }
 
 // FreshAdminSession signs in the site administrator of FreshAdminAPIStatus

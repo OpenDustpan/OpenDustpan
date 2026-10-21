@@ -113,12 +113,22 @@ func runNamespacePrincipalsOnStore(t *testing.T, cli e2e.Install, store e2e.Stor
 		{http.MethodGet, principals, "", http.StatusOK},
 		{http.MethodGet, one, "", http.StatusOK},
 		{http.MethodPatch, one, `{"displayName":"Team bot"}`, http.StatusOK},
+		// A grant needs a console session with a recent sign-in: the stored
+		// token of the admin is refused.
 		{
 			http.MethodPost, "/api/server/namespaces/teamns/grants",
-			`{"subject":"principal:` + bot.ID + `","role":"writer"}`, http.StatusCreated,
+			`{"subject":"principal:` + bot.ID + `","role":"writer"}`, http.StatusForbidden,
 		},
 	} {
 		tokenCall(ctx, t, env, leadTok.Secret, step)
+	}
+
+	status, body = env.SessionAPIStatus(ctx, t, lead.ID, e2e.SessionRequest{
+		Method: http.MethodPost, Path: "/api/server/namespaces/teamns/grants",
+		Body: `{"subject":"principal:` + bot.ID + `","role":"writer"}`,
+	})
+	if status != http.StatusCreated {
+		t.Fatalf("grant writer with the session of the admin = %d (%s); want 201", status, body)
 	}
 
 	for _, step := range []principalStep{
