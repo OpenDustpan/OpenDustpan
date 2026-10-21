@@ -6,9 +6,11 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	apiserver "opendustpan.org/opendustpan/internal/api/server"
+	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/internal/errcode/errcodetest"
 	"opendustpan.org/opendustpan/internal/sessionauth"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -80,6 +82,39 @@ func TestForbiddenCodes(t *testing.T) {
 			forbiddenHandler(t, cause.Err).ServeHTTP(rec, metricsRequest(t, "admin-token"))
 
 			errcodetest.Check(t, rec.Code, rec.Body.Bytes(), cause)
+		})
+	}
+}
+
+// TestForbiddenWithoutCode proves that a 403 that wraps identity.ErrDenied but
+// is not a missing permission answers with no code. access.denied means that
+// the caller needs a grant, and these callers do not.
+func TestForbiddenWithoutCode(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		err  error
+	}{
+		{"sign-in refused", errcode.Refusal("sign-in refused")},
+		{"wrapped sign-in refused", fmt.Errorf("callback: %w", errcode.Refusal("sign-in refused"))},
+		{"route with no action", errcode.Refusal("GET /x needs no action")},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			rec := httptest.NewRecorder()
+			forbiddenHandler(t, tc.err).ServeHTTP(rec, metricsRequest(t, "admin-token"))
+
+			if rec.Code != http.StatusForbidden {
+				t.Fatalf("status = %d, want 403: %s", rec.Code, rec.Body.String())
+			}
+
+			if strings.Contains(rec.Body.String(), "errorCode") {
+				t.Fatalf("the answer has a code: %s", rec.Body.String())
+			}
 		})
 	}
 }

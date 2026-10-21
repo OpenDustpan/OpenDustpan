@@ -69,7 +69,9 @@ func runIPAllowlistOnStore(t *testing.T, cli e2e.Install, store e2e.Store) {
 	checkIPAllowlistEmpty(ctx, t, env)
 	checkIPAllowlistSet(ctx, t, env)
 	checkIPAllowlistRefusesOutside(ctx, t, env)
-	checkAccessDeniedCode(ctx, t, env)
+	t.Run("access denied code", func(t *testing.T) {
+		checkAccessDeniedCode(ctx, t, env)
+	})
 	checkIPAllowlistAdmitsInside(ctx, t, env)
 	checkIPAllowlistLeavesOpenAlone(ctx, t, env)
 	checkIPAllowlistDelete(ctx, t, env)
@@ -213,9 +215,7 @@ func checkAccessDeniedCode(ctx context.Context, t *testing.T, env *e2e.Env) {
 
 	token, ok := env.MemberToken()
 	if !ok {
-		t.Log("skip the access.denied step: the binary server knows only the bootstrap admin tokens")
-
-		return
+		t.Skip("the binary server knows only the bootstrap admin tokens, so no caller without a grant exists")
 	}
 
 	status, body, err := env.ServerAPIStatusAs(

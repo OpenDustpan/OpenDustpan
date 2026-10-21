@@ -24,6 +24,23 @@ const (
 	SessionOtherSite = "session.other-site"
 )
 
+// errNoCode marks a refusal that wraps identity.ErrDenied but is not a missing
+// permission.
+var errNoCode = errors.New("refusal without a code")
+
+type refusal struct{ reason string }
+
+func (r refusal) Error() string { return identity.ErrDenied.Error() + ": " + r.reason }
+
+func (refusal) Unwrap() []error { return []error{identity.ErrDenied, errNoCode} }
+
+// Refusal returns an error that answers 403 like identity.ErrDenied, with the
+// text "permission denied: " and reason, and that has no code. Use it for a
+// refusal that is not a missing permission, such as a refused sign-in: a person
+// who gets access.denied needs a grant, and this person does not. Every other
+// error that wraps identity.ErrDenied gets access.denied, so check each new one.
+func Refusal(reason string) error { return refusal{reason: reason} }
+
 // Forbidden returns the code of a 403 that err causes, or "" when err is none
 // of these causes. The order is part of the contract. The session errors and
 // the allowlist error wrap identity.ErrDenied, so they come before it, as in
@@ -31,6 +48,8 @@ const (
 // order.
 func Forbidden(err error) string {
 	switch {
+	case errors.Is(err, errNoCode):
+		return ""
 	case errors.Is(err, sessionauth.ErrCSRF):
 		return SessionCSRF
 	case errors.Is(err, sessionauth.ErrOtherSite):
