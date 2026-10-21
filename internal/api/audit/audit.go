@@ -18,6 +18,7 @@ import (
 
 	"opendustpan.org/opendustpan/internal/api/refusal"
 	"opendustpan.org/opendustpan/internal/denylimit"
+	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/internal/sessionauth"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -462,12 +463,28 @@ type errorResponse struct {
 	Code    int    `json:"code"`
 }
 
+// codedErrorResponse is errorResponse with the stable machine code of a 403.
+// The fields of errorResponse keep their names and their meaning.
+type codedErrorResponse struct {
+	Message   string `json:"message"`
+	Code      int    `json:"code"`
+	ErrorCode string `json:"errorCode"`
+}
+
 func (h *Handler) writeError(ctx context.Context, w http.ResponseWriter, err error) {
 	status, message := classify(err)
 	if status == http.StatusInternalServerError {
 		// The log names the status only, never the error text: the text
 		// may hold driver detail, a token, or state (ADR 32 decision 7).
 		h.logger.ErrorContext(ctx, "request failed", slog.Int("status", status))
+	}
+
+	if status == http.StatusForbidden {
+		if code := errcode.Forbidden(err); code != "" {
+			h.writeJSON(ctx, w, status, codedErrorResponse{Code: status, Message: message, ErrorCode: code})
+
+			return
+		}
 	}
 
 	h.writeJSON(ctx, w, status, errorResponse{Code: status, Message: message})
