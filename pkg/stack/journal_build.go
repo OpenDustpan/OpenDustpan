@@ -48,17 +48,6 @@ type builtSave struct {
 	blobs   *scopedBlobs
 }
 
-// builtBlob groups a built save with its blob write: the key it wrote with
-// the size and digest of the bytes this save tried to write, and the
-// previous checkpoint of the update for the sweep after the commit.
-type builtBlob struct {
-	save builtSave
-	key  blob.Key
-	size int64
-	sum  [md5.Size]byte
-	prev *Checkpoint
-}
-
 // buildJournalCheckpoint replays the given batches of the update on its
 // base checkpoint and returns the checkpoint that results, without storing
 // it. It holds the batches and the built deployment in memory; a later
@@ -254,10 +243,11 @@ func (s *Updates) builtCheckpoint(ref Ref, u Update, document []byte) (Checkpoin
 	}, nil
 }
 
-// storeBuiltCheckpoint writes the blob of save through the checkpoint blob
-// path, then commits its row with the delete of the journal of the update.
-// A blob that is already there belongs to a first attempt whose commit never
-// landed: the retry adopts it when it holds the same content.
+// storeBuiltCheckpoint writes the blob of save through the checkpoint write
+// of an ordinary save, then commits its row with the delete of the journal
+// of the update. A blob that is already there belongs to a first attempt
+// whose commit never landed: the retry adopts it when it holds the same
+// build, even when the manifest time differs.
 func (s *Updates) storeBuiltCheckpoint(ctx context.Context, save builtSave) error {
 	prev, err := s.previousCheckpoint(ctx, save.ref, save.id)
 	if err != nil {
@@ -269,20 +259,58 @@ func (s *Updates) storeBuiltCheckpoint(ctx context.Context, save builtSave) erro
 		return fmt.Errorf("save built checkpoint of update %s: %w", save.id, err)
 	}
 
-	size, sum, err := s.putCheckpointBlob(ctx, save.blobs, key, save.built.Deployment)
-	if err != nil {
-		if errors.Is(err, blob.ErrExists) {
-			return s.adoptBuiltBlob(ctx, builtBlob{save: save, key: key, size: size, sum: sum, prev: prev})
-		}
-
-		if cerr := ctx.Err(); cerr != nil {
-			return fmt.Errorf("save built checkpoint of update %s: %w", save.id, cerr)
-		}
-
-		return fmt.Errorf("save built checkpoint of update %s: %w", save.id, ErrCheckpointUnavailable)
+	w := checkpointWrite{
+		op: "save built checkpoint", id: save.id, blobs: save.blobs, key: key, deployment: save.built.Deployment,
+		other: nil,
+		commit: func(ctx context.Context, size int64, sum [md5.Size]byte) error {
+			return s.commitBuiltRow(ctx, builtRow(save, key, prev), size, sum)
+		},
+	}
+	w.other = func(ctx context.Context, gave []byte, size int64, sum [md5.Size]byte) error {
+		return s.adoptOtherBuild(ctx, w, save, prev, storedBuild{gave: gave, size: size, sum: sum})
 	}
 
-	return s.commitBuiltRow(ctx, builtRow(save, key, prev), size, sum)
+	return s.writeCheckpoint(ctx, w)
+}
+
+// storedBuild is the stored gzip bytes under the key of a built save, with
+// their size and MD5. gave is nil when the stored blob is over the size
+// limit.
+type storedBuild struct {
+	gave []byte
+	size int64
+	sum  [md5.Size]byte
+}
+
+// adoptOtherBuild answers a stored blob whose bytes differ from the bytes of
+// this build. The first build may hold another manifest time: a blob with the
+// same build apart from that time commits a row that describes the stored
+// blob. Anything else is a concurrent save of the same update, which fails
+// without touching the journal.
+func (s *Updates) adoptOtherBuild(
+	ctx context.Context, w checkpointWrite, save builtSave, prev *Checkpoint, stored storedBuild,
+) error {
+	if stored.gave == nil {
+		// A stored blob over the size limit fails like a blob that cannot be
+		// read, so the journal stays for a later build.
+		return w.unavailable(ctx)
+	}
+
+	deployment, err := gunzipBytes(stored.gave, s.maxCheckpoints)
+	if err != nil {
+		return fmt.Errorf("save built checkpoint of update %s: %w", save.id, ErrConcurrentModification)
+	}
+
+	if !sameBuild(deployment, save.built.Deployment) {
+		return fmt.Errorf("save built checkpoint of update %s: %w", save.id, ErrConcurrentModification)
+	}
+
+	// The row describes the stored blob, which may hold the manifest time of
+	// the first build.
+	save.built.Deployment = deployment
+	save.built.Digest = sha256.Sum256(deployment)
+
+	return s.commitBuiltRow(ctx, builtRow(save, w.key, prev), stored.size, stored.sum)
 }
 
 // builtRow returns the checkpoint row write of save under key: the built
@@ -299,52 +327,6 @@ func builtRow(save builtSave, key blob.Key, prev *Checkpoint) checkpointSave {
 		},
 		digest: save.built.Digest, prev: prev, key: key, blobs: save.blobs,
 	}
-}
-
-// adoptBuiltBlob answers a blob write that met an existing key, like a
-// retried checkpoint save does: the first build wrote it but never
-// committed its row. Anything else is a concurrent save of the same update,
-// which fails without touching the journal.
-func (s *Updates) adoptBuiltBlob(ctx context.Context, stored builtBlob) error {
-	raw, err := stored.save.blobs.Get(ctx, stored.key)
-	if err != nil {
-		if cerr := ctx.Err(); cerr != nil {
-			return fmt.Errorf("save built checkpoint of update %s: %w", stored.save.id, cerr)
-		}
-
-		return fmt.Errorf("save built checkpoint of update %s: %w", stored.save.id, ErrCheckpointUnavailable)
-	}
-
-	gave, err := readStoredBlob(raw, s.storedLimit())
-	if err != nil {
-		if cerr := ctx.Err(); cerr != nil {
-			return fmt.Errorf("save built checkpoint of update %s: %w", stored.save.id, cerr)
-		}
-
-		return fmt.Errorf("save built checkpoint of update %s: %w", stored.save.id, ErrCheckpointUnavailable)
-	}
-
-	if storedSize, storedSum := storedAttrs(gave); storedSize != stored.size || storedSum != stored.sum {
-		deployment, derr := gunzipBytes(gave, s.maxCheckpoints)
-		if derr != nil {
-			return fmt.Errorf("save built checkpoint of update %s: %w", stored.save.id, ErrConcurrentModification)
-		}
-
-		digest := sha256.Sum256(deployment)
-		if !sameBuild(deployment, stored.save.built.Deployment) {
-			return fmt.Errorf("save built checkpoint of update %s: %w", stored.save.id, ErrConcurrentModification)
-		}
-
-		// The row describes the stored blob, which may hold the manifest
-		// time of the first build.
-		save := stored.save
-		save.built.Deployment = deployment
-		save.built.Digest = digest
-
-		return s.commitBuiltRow(ctx, builtRow(save, stored.key, stored.prev), storedSize, storedSum)
-	}
-
-	return s.commitBuiltRow(ctx, builtRow(stored.save, stored.key, stored.prev), stored.size, stored.sum)
 }
 
 // sameBuild reports whether two built deployments are equal apart from the
