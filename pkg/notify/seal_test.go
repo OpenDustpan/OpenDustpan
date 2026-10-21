@@ -156,7 +156,7 @@ func sealSink(id string, scope namespace.Name, refs ...string) notify.Sink {
 		Kind:       notify.SinkWebhook,
 		Name:       "Ops",
 		Platform:   "",
-		Target:     "https://hooks.example.com/ops",
+		Target:     "hooks.example.com",
 		SecretRefs: refs,
 		CreatedBy:  "alice",
 		Version:    0,
