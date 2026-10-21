@@ -46,8 +46,16 @@ func TestCheckFormsAllowsTwoForms(t *testing.T) {
 			`{"anyOf":[` + ref + `,{"type":"string","format":"date-time"}]}`,
 			false,
 		},
-		{"anyOf with a reference to an object", `{"anyOf":[{"$ref":"#/components/schemas/Shape"},{"type":"string"}]}`, false},
-		{"anyOf with a reference to nothing", `{"anyOf":[{"$ref":"#/components/schemas/Gone"},{"type":"string"}]}`, false},
+		{
+			"anyOf with a reference to an object",
+			`{"anyOf":[{"$ref":"#/components/schemas/Shape"},{"type":"string"}]}`,
+			false,
+		},
+		{
+			"anyOf with a reference to nothing",
+			`{"anyOf":[{"$ref":"#/components/schemas/Gone"},{"type":"string"}]}`,
+			false,
+		},
 		{"anyOf of three with no null", `{"anyOf":[` + ref + `,{"type":"string"},{"type":"integer"}]}`, false},
 		{"anyOf with two nulls", `{"anyOf":[` + ref + `,{"type":"string"},{"type":"null"},{"type":"null"}]}`, false},
 		{"anyOf with one branch", `{"anyOf":[` + ref + `]}`, false},
