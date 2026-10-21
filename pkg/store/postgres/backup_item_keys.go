@@ -44,7 +44,13 @@ func checkStagedOwnedRows(ctx context.Context, pool *pgxpool.Pool, staging strin
 // stays so that a bad row fails the restore and does not wait for a reader.
 func checkStagedItemKeys(ctx context.Context, pool *pgxpool.Pool, staging string) error {
 	query := "SELECT k.id, n.name, k.scope_id, k.kind, k.item, k.wrapper_id, k.created_at_ms, k.shredded_at_ms, k.blob_version, k.blob_size, k.blob_md5 FROM " +
-		stagingTable(staging, "item_keys") + " AS k LEFT JOIN " + stagingTable(staging, "namespaces") +
+		stagingTable(
+			staging,
+			"item_keys",
+		) + " AS k LEFT JOIN " + stagingTable(
+		staging,
+		"namespaces",
+	) +
 		" AS n ON n.id = k.namespace_id"
 
 	rows, err := pool.Query(ctx, query)

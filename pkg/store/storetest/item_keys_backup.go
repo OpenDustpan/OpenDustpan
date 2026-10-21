@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/rand"
 	"errors"
+	"fmt"
 	"io"
 	"strings"
 	"testing"
@@ -82,13 +83,63 @@ func RunItemKeyBackup(t *testing.T, newRig ItemKeyBackupFactory) {
 
 	in := ItemKeyBackupInput{Key: wrapper, Target: target}
 	source := newRig(t, in)
-	ctx := t.Context()
+	seed := seedItemKeyBackup(t, source, wrapper)
+	backupID := backup.ID(ident.NewID("bkp-"))
 
+	if _, err = source.Backups.Run(t.Context(), backupID); err != nil {
+		t.Fatalf("run backup: %v", err)
+	}
+
+	// The backup holds the key blob of the live key and none of the shredded
+	// key.
+	if _, err = target.Get(t.Context(), mustBlobKey(t, "blobs/"+seed.liveBlob.String())); err != nil {
+		t.Fatalf("the backup holds no copy of the key blob: %v", err)
+	}
+
+	if rc, getErr := target.Get(t.Context(), mustBlobKey(t, "blobs/"+seed.shreddedBlob.String())); getErr == nil {
+		_ = rc.Close() //nolint:errcheck // Test read.
+
+		t.Error("the backup holds the key blob of a shredded key")
+	}
+
+	// A second server with an empty store and an empty blob store restores the
+	// backup. Only the copy in the backup can bring the key blob back.
+	dest := newRig(t, in)
+	restoreID := backup.RestoreID(ident.NewID("rst-"))
+	req := backup.RestoreRequest{
+		BackupID: backupID, PreBackupID: "", CheckOnly: false, Force: false, RequestedBy: "tester",
+		KeepAccessTables: false,
+	}
+
+	if err = dest.Restores.Start(t.Context(), restoreID, req); err != nil {
+		t.Fatalf("start restore: %v", err)
+	}
+
+	waitItemKeyRestore(t, dest.Restores, restoreID)
+	checkRestoredItemKeys(t, dest, wrapper, seed)
+}
+
+// itemKeyBackupSeed is what seedItemKeyBackup wrote: the references, the sealed
+// content of the live item, and the blob keys of both item keys.
+type itemKeyBackupSeed struct {
+	liveRef, shreddedRef         secret.ItemRef
+	liveBlob, shreddedBlob       blob.Key
+	binding, plain, sealedOfLive []byte
+}
+
+// seedItemKeyBackup writes a namespace, a data key, a live item key with sealed
+// content, and a shredded item key whose blob is gone, as a redaction leaves
+// them.
+func seedItemKeyBackup(t *testing.T, source *ItemKeyBackupRig, wrapper secret.Wrapper) itemKeyBackupSeed {
+	t.Helper()
+
+	ctx := t.Context()
 	ns := namespace.Namespace{
 		ID: namespace.NewID(), CreatedAt: now(), Name: "acme", HomeRegion: "local", FailoverVersion: 1,
 		Overrides: namespace.Overrides{Forced: false, Unlocked: false},
 	}
-	if err = source.Store.CreateNamespace(ctx, ns); err != nil {
+
+	if err := source.Store.CreateNamespace(ctx, ns); err != nil {
 		t.Fatalf("create namespace: %v", err)
 	}
 
@@ -115,80 +166,56 @@ func RunItemKeyBackup(t *testing.T, newRig ItemKeyBackupFactory) {
 		t.Fatalf("make a data key: %v", err)
 	}
 
-	sourceSealer, sourceBlobs := itemKeySealerOf(t, source, wrapper)
-	liveRef := mustItemRef(t, scope, "pln-live")
-	shreddedRef := mustItemRef(t, scope, "pln-shredded")
-	binding := []byte("pln-live")
-	plain := []byte("content that must open after the restore")
+	sealer, blobs := itemKeySealerOf(t, source, wrapper)
+	seed := itemKeyBackupSeed{
+		liveRef: mustItemRef(t, scope, "pln-live"), shreddedRef: mustItemRef(t, scope, "pln-shredded"),
+		binding: []byte("pln-live"), plain: []byte("content that must open after the restore"),
+		liveBlob: "", shreddedBlob: "", sealedOfLive: nil,
+	}
 
-	liveKey := newItemKeyIn(t, source, sourceSealer, ns, liveRef)
-	shreddedKey := newItemKeyIn(t, source, sourceSealer, ns, shreddedRef)
-	sealed := readAllSealed(t, sourceSealer, liveRef, binding, plain)
+	liveKey := newItemKeyIn(t, source, sealer, ns, seed.liveRef)
+	shreddedKey := newItemKeyIn(t, source, sealer, ns, seed.shreddedRef)
+	seed.sealedOfLive = readAllSealed(t, sealer, seed.liveRef, seed.binding, seed.plain)
 
 	// A redaction shreds the record and then deletes the blob.
-	if _, err = source.Store.ShredItemKey(ctx, shreddedRef, now(), ns.Fence()); err != nil {
+	if _, err = source.Store.ShredItemKey(ctx, seed.shreddedRef, now(), ns.Fence()); err != nil {
 		t.Fatalf("shred: %v", err)
 	}
 
-	liveBlob := itemKeyBlobKey(t, sourceBlobs, ns.ID, liveKey)
-	shreddedBlob := itemKeyBlobKey(t, sourceBlobs, ns.ID, shreddedKey)
+	seed.liveBlob = itemKeyBlobKey(t, blobs, ns.ID, liveKey)
+	seed.shreddedBlob = itemKeyBlobKey(t, blobs, ns.ID, shreddedKey)
 
-	if err = source.Live.Delete(ctx, shreddedBlob); err != nil {
+	if err = source.Live.Delete(ctx, seed.shreddedBlob); err != nil {
 		t.Fatalf("delete the blob of the shredded key: %v", err)
 	}
 
-	backupID := backup.ID(ident.NewID("bkp-"))
-	if _, err = source.Backups.Run(ctx, backupID); err != nil {
-		t.Fatalf("run backup: %v", err)
-	}
+	return seed
+}
 
-	// The backup holds the key blob of the live key and none of the shredded
-	// key.
-	if _, err = target.Get(ctx, mustBlobKey(t, "blobs/"+liveBlob.String())); err != nil {
-		t.Fatalf("the backup holds no copy of the key blob: %v", err)
-	}
+// checkRestoredItemKeys proves that the content of the live item opens in the
+// restored store, and that the shredded key stays shredded with no blob.
+func checkRestoredItemKeys(t *testing.T, dest *ItemKeyBackupRig, wrapper secret.Wrapper, seed itemKeyBackupSeed) {
+	t.Helper()
 
-	if rc, getErr := target.Get(ctx, mustBlobKey(t, "blobs/"+shreddedBlob.String())); getErr == nil {
-		_ = rc.Close() //nolint:errcheck // Test read.
+	sealer, _ := itemKeySealerOf(t, dest, wrapper)
 
-		t.Error("the backup holds the key blob of a shredded key")
-	}
-
-	// A second server with an empty store and an empty blob store restores the
-	// backup. Only the copy in the backup can bring the key blob back.
-	dest := newRig(t, in)
-	restoreID := backup.RestoreID(ident.NewID("rst-"))
-	req := backup.RestoreRequest{
-		BackupID: backupID, PreBackupID: "", CheckOnly: false, Force: false, RequestedBy: "tester",
-		KeepAccessTables: false,
-	}
-
-	if err = dest.Restores.Start(ctx, restoreID, req); err != nil {
-		t.Fatalf("start restore: %v", err)
-	}
-
-	waitItemKeyRestore(t, dest.Restores, restoreID)
-
-	destSealer, _ := itemKeySealerOf(t, dest, wrapper)
-
-	got, err := openAll(t, destSealer, liveRef, binding, sealed)
+	got, err := openAll(t, sealer, seed.liveRef, seed.binding, seed.sealedOfLive)
 	if err != nil {
 		t.Fatalf("open restored content: %v", err)
 	}
 
-	if !bytes.Equal(got, plain) {
-		t.Errorf("restored content = %q, want %q", got, plain)
+	if !bytes.Equal(got, seed.plain) {
+		t.Errorf("restored content = %q, want %q", got, seed.plain)
 	}
 
-	if rc, getErr := dest.Live.Get(ctx, shreddedBlob); getErr == nil {
+	if rc, getErr := dest.Live.Get(t.Context(), seed.shreddedBlob); getErr == nil {
 		_ = rc.Close() //nolint:errcheck // Test read.
 
 		t.Error("the restore brought back the blob of a shredded key")
 	}
 
-	if _, openErr := destSealer.OpenContent(ctx, shreddedRef, binding, strings.NewReader("x")); !errors.Is(
-		openErr, secret.ErrShredded,
-	) {
+	_, openErr := sealer.OpenContent(t.Context(), seed.shreddedRef, seed.binding, strings.NewReader("x"))
+	if !errors.Is(openErr, secret.ErrShredded) {
 		t.Errorf("open with the shredded key err = %v, want ErrShredded", openErr)
 	}
 }
@@ -295,12 +322,12 @@ func openAll(t *testing.T, s secret.ItemSealer, ref secret.ItemRef, binding, sea
 
 	rd, err := s.OpenContent(t.Context(), ref, binding, bytes.NewReader(sealed))
 	if err != nil {
-		return nil, err //nolint:wrapcheck // The case reads the error as it is.
+		return nil, err
 	}
 
 	out, err := io.ReadAll(rd)
 	if err != nil {
-		return nil, err //nolint:wrapcheck // The case reads the error as it is.
+		return nil, fmt.Errorf("read opened content: %w", err)
 	}
 
 	return out, nil

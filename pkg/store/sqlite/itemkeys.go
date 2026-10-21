@@ -22,7 +22,7 @@ type itemKeyTx struct {
 	fence namespace.Fence
 }
 
-var _ secret.ItemKeyTx = itemKeyTx{q: nil, fence: namespace.Fence{}}
+var _ secret.ItemKeyTx = itemKeyTx{q: nil, fence: namespace.Fence{Namespace: "", FailoverVersion: 0}}
 
 // InItemKeyTx implements secret.ItemKeyStore. The transaction checks fence
 // first, and fn writes the item row and the record in it.
@@ -121,7 +121,7 @@ func (s *Store) GetItemKey(ctx context.Context, ref secret.ItemRef) (secret.Item
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	return itemKeyTx{q: s.queries, fence: namespace.Fence{}}.GetItemKey(ctx, ref)
+	return itemKeyTx{q: s.queries, fence: namespace.Fence{Namespace: "", FailoverVersion: 0}}.GetItemKey(ctx, ref)
 }
 
 // itemKeyOf reads the record of ref, shredded or not. It returns
@@ -200,8 +200,8 @@ func (s *Store) ListItemKeys(
 
 	out := make([]secret.ItemKey, 0, len(rows))
 
-	for _, row := range rows {
-		k, convErr := codec.FromItemKeyRow(codec.ItemKeyRow(row))
+	for i := range rows {
+		k, convErr := codec.FromItemKeyRow(codec.ItemKeyRow(rows[i]))
 		if convErr != nil {
 			return nil, convErr
 		}

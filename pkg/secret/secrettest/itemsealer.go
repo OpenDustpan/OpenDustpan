@@ -61,25 +61,26 @@ func (c *BlobCounts) Reads() int64 { return c.reads.Load() }
 // countingBlobs counts the calls to the blob store that it wraps.
 type countingBlobs struct {
 	blob.Store
+
 	counts *BlobCounts
 }
 
 func (c *countingBlobs) Put(ctx context.Context, key blob.Key, r io.Reader) error {
 	c.counts.puts.Add(1)
 
-	return c.Store.Put(ctx, key, r) //nolint:wrapcheck // A counting decorator returns the error unchanged.
+	return c.Store.Put(ctx, key, r)
 }
 
 func (c *countingBlobs) Get(ctx context.Context, key blob.Key) (io.ReadCloser, error) {
 	c.counts.reads.Add(1)
 
-	return c.Store.Get(ctx, key) //nolint:wrapcheck // A counting decorator returns the error unchanged.
+	return c.Store.Get(ctx, key)
 }
 
 func (c *countingBlobs) List(ctx context.Context, prefix string) ([]blob.Object, error) {
 	c.counts.reads.Add(1)
 
-	return c.Store.List(ctx, prefix) //nolint:wrapcheck // A counting decorator returns the error unchanged.
+	return c.Store.List(ctx, prefix)
 }
 
 // noRefusals is a scopeaudit.Recorder that drops every refusal. The suite
@@ -114,7 +115,7 @@ func NewSealerRig(t *testing.T, index ItemKeyStore, blobs blob.Store) *SealerRig
 		}
 	}
 
-	rig.Counts = &BlobCounts{}
+	rig.Counts = &BlobCounts{puts: atomic.Int64{}, reads: atomic.Int64{}}
 
 	itemBlobs, err := secret.NewItemKeyBlobs(&countingBlobs{Store: blobs, counts: rig.Counts}, noRefusals{})
 	if err != nil {
@@ -511,7 +512,6 @@ func testSealerRollback(t *testing.T, r *SealerRig) {
 	t.Helper()
 
 	ref := sealerRef(t, "unit-one", secret.ItemKindPlan, "pln-rollback")
-	errRollback := errors.New("the item row failed")
 
 	var first secret.ItemKey
 
@@ -550,6 +550,7 @@ func testSealerRollback(t *testing.T, r *SealerRig) {
 // with the reference ref in the record.
 type relabelIndex struct {
 	secret.ItemKeyIndex
+
 	ref secret.ItemRef
 }
 

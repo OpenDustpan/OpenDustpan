@@ -1259,7 +1259,8 @@ func stagingCount(ctx context.Context, pool *pgxpool.Pool, staging, table string
 
 // stagingBlobRefs reads the blob references of the staging schema: every blob
 // key the staged finalized state versions, the staged checkpoints, the staged journal
-// batches and the staged item keys that are not shredded name, with the size and MD5 of the plain bytes, ordered by key.
+// batches and the staged item keys that are not shredded name, with the size and MD5 of the plain bytes, ordered by
+// key.
 // Sealed state versions mark their references sealed; checkpoint and journal
 // blobs are never sealed. A pending version has no committed content, so the
 // backup leaves pending rows out. It matches BackupBlobs, so the staged summary
