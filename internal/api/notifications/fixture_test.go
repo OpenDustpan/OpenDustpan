@@ -45,6 +45,11 @@ const (
 	// answer, an audit entry or a log line.
 	canary = "CANARY-9f3a2c"
 
+	// webhookURL is the URL of a webhook sink. Its path and query are secret: no
+	// answer, audit entry or log line may show them.
+	webhookURL  = "https://hooks.example.com/ops/" + canary + "?token=" + canary
+	webhookHost = "hooks.example.com"
+
 	base = "/api/dustpan/v1/namespaces/acme/sinks"
 )
 
@@ -167,6 +172,7 @@ type fixture struct {
 	handler *apinotifications.Handler
 	config  apinotifications.Config
 	store   *sqlite.Store
+	secrets *secret.Service
 	hook    *recordingSender
 	logs    *logBuffer
 	// denied holds the actions that testAuthz refuses. A test can add one
@@ -315,7 +321,10 @@ func buildFixtureWith(
 		t.Fatalf("handler: %v", err)
 	}
 
-	return fixture{handler: handler, config: cfg, store: store, hook: hook, logs: logs, denied: denied, clock: clock}
+	return fixture{
+		handler: handler, config: cfg, store: store, secrets: secrets, hook: hook, logs: logs, denied: denied,
+		clock: clock,
+	}
 }
 
 // request is one call of a test.
@@ -430,7 +439,7 @@ func decode[T any](t *testing.T, got response) T {
 func webhookBody(t *testing.T, name string) string {
 	t.Helper()
 
-	return jsonString(t, map[string]string{"kind": "webhook", "name": name, "target": "https://hooks.example.com/ops"})
+	return jsonString(t, map[string]string{"kind": "webhook", "name": name, "target": webhookURL})
 }
 
 func chatBody(t *testing.T, name string) string {

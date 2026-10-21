@@ -36,8 +36,9 @@ A write carries the fence of the namespace. A stale fence answers 409
 | `kind` | `webhook`, `chat` or `email` |
 | `platform` | For `chat`: `slack`, `teams`, `mattermost` or `matrix`. Not in the answer for another kind. |
 | `name` | 1 to 100 bytes |
-| `target` | The address of an `email` destination, the URL of a `webhook`, or the host of a `chat` webhook |
-| `urlSet` | `true` for a `chat` destination. It says that a URL exists. |
+| `hostNeedsUpdate` | `true` when the stored host of a `webhook` or `chat` destination fails the host check of a write. The destination still sends. A change of it needs a host that passes. Absent otherwise. |
+| `target` | The address of an `email` destination, or the host of a `webhook` or of a `chat` webhook. The answer never holds the path or the query of a URL. |
+| `urlSet` | `true` for a `webhook` or a `chat` destination that has a sealed URL item. `false` for a destination that has no URL item, and for a `webhook` that an upgrade left with no URL. It does not say that the server can open the URL. |
 | `createdBy` | The subject that made the destination |
 | `version` | Starts at 1 and grows by 1 with each change |
 | `signingKey` | Only in the answer of the create of a `webhook`. 64 hex digits. |
@@ -49,7 +50,7 @@ The body has at most 64 KiB.
 
 | Kind | Fields |
 | --- | --- |
-| `webhook` | `kind`, `name`, `target` (an `https` URL on port 443, or on a port that the operator allows) |
+| `webhook` | `kind`, `name`, `target` (an `https` URL on port 443, or on a port that the operator allows). The host is an ASCII DNS name or an IP address, with an optional numeric port. The URL is a secret: the server seals it, and the answer shows only its host. |
 | `chat` | `kind`, `platform`, `name`, `url` (the incoming webhook URL, on the same ports) |
 | `email` | `kind`, `name`, `target` (one address) |
 
@@ -69,8 +70,9 @@ port answers 400 `sink.invalid`.
 ## Change
 
 The body has `version` and `name`, and may have `target` (a `webhook` or an
-`email` destination) or `url` (a `chat` destination). A `url` is a new secret
-under a new reference. The kind and the platform of a destination do not
+`email` destination) or `url` (a `chat` destination). A `target` of a `webhook`
+and a `url` are new secrets under a new reference. The signing keys of a
+`webhook` keep their references. The kind and the platform of a destination do not
 change. A `version` that is not the stored version answers 409 `sink.conflict`.
 
 ## Test
@@ -88,8 +90,11 @@ The answer never holds the URL, the answer of the receiver or the text of an
 error. A destination of a kind or a chat platform with no sender answers 422
 `sink.no-sender`. The platform `slack` has a sender. The host of a `slack`
 destination is `hooks.slack.com` or `hooks.slack-gov.com`, and any other host
-answers 400 `sink.platform-host` when you make or change the destination. See
-`docs/guides/slack-notifications.md` for the message.
+answers 400 `sink.platform-host` when you make or change the destination. A
+destination whose sealed URL is missing, does not open, or has another host
+than the `target` answers 422 `sink.no-url`, and the server sends nothing. Set
+the URL again with a change. See `docs/guides/slack-notifications.md` for the
+message.
 
 A name that resolves to an address that the outbound rules refuse gives the
 class `temporary`, the same as a name that does not resolve. The class
@@ -121,12 +126,14 @@ answers 409 `namespace.fenced`.
 | 400 | `sink.invalid` | A field is not valid, or the outbound address rules refuse the URL or its port |
 | 400 | `sink.platform-host` | The host of the chat URL is not a webhook host of the platform |
 | 400 | `request.body-invalid` | The body is not one JSON object with known fields |
+| 403 | `access.denied`, `access.ip-not-allowed`, `session.csrf`, `session.other-site` | See the error codes of a 403 answer |
 | 404 | `sink.not-found` | No destination with this ID in the namespace |
 | 409 | `sink.conflict` | The destination changed since you read it |
 | 409 | `namespace.fenced` | A failover moved the namespace during the request |
 | 421 | `namespace.not-home` | The namespace has its home region in another region |
 | 429 | `sink.test-rate-limited` | A limit of the test route refuses the test |
 | 422 | `sink.no-sender` | The server has no sender for the kind or the chat platform of the destination |
+| 422 | `sink.no-url` | The server cannot use the sealed URL of the destination: set the URL again |
 
 The text of a `sink.*` error is fixed. It never holds a part of the request.
 

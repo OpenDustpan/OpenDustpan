@@ -2,6 +2,7 @@ package sinks
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"opendustpan.org/opendustpan/internal/ident"
@@ -80,16 +81,12 @@ func (s *Service) SendTest(ctx context.Context, c *Caller, ns namespace.Name, id
 		return TestResult{}, &RateLimitedError{RetryAfter: wait}
 	}
 
-	to, values, err := s.open(ctx, sink)
+	to, dest, err := s.open(ctx, sink)
 	if err != nil {
 		return TestResult{}, err
 	}
 
-	defer func() {
-		for _, v := range values {
-			clear(v)
-		}
-	}()
+	defer dest.Clear()
 
 	// Defense in depth: Sink.Validate and Service.Create checked the address
 	// when the sink was made, and the sender checks it again and guards the
@@ -110,7 +107,7 @@ func (s *Service) SendTest(ctx context.Context, c *Caller, ns namespace.Name, id
 		return TestResult{}, fmt.Errorf("test sink: %w", err)
 	}
 
-	return s.send(ctx, sender, sink, to, values), nil
+	return s.send(ctx, sender, sink, to, dest.Keys), nil
 }
 
 // serves reports whether sender sends to sink. A sender that serves some
@@ -156,44 +153,33 @@ func classOf(r TestResult) string {
 	return r.Class
 }
 
-// open opens the secrets of the sink and returns the address that the sink
-// sends to and the opened values. The caller clears the values. A failure to
-// open the secrets is an error: the server cannot say anything about the
-// receiver.
-func (s *Service) open(ctx context.Context, sink notify.Sink) (string, [][]byte, error) {
+// open opens the secret items of the sink and returns the address that the
+// sink sends to and the signing keys of a webhook sink. The caller clears the
+// keys. The URL of a sink is opened here and in the dispatcher only, for the
+// one send. A failure to open the secrets is an error: the server cannot say
+// anything about the receiver. The error matches notify.ErrNoURL.
+func (s *Service) open(ctx context.Context, sink notify.Sink) (string, notify.Destination, error) {
 	sealed, err := s.store.SinkSecrets(ctx, sink.Scope, sink.ID)
 	if err != nil {
-		return "", nil, fmt.Errorf("test sink: read secrets: %w", err)
+		return "", notify.Destination{}, fmt.Errorf("test sink: read secrets: %w", err)
 	}
 
-	values, err := s.sealer.Open(ctx, sink, sealed)
+	dest, err := s.sealer.OpenDestination(ctx, sink, sealed)
 	if err != nil {
-		return "", nil, fmt.Errorf("test sink: open secrets: %w", err)
+		return "", notify.Destination{}, fmt.Errorf("test sink: open secrets: %w", err)
 	}
 
-	to := sink.Target
-
-	if sink.Kind == notify.SinkChat {
-		// A chat sink has exactly one secret item, the URL. Sink.Validate and
-		// the store keep this, and a restore could bring a row that breaks it.
-		if len(values) != 1 {
-			for _, v := range values {
-				clear(v)
-			}
-
-			return "", nil, fmt.Errorf("test sink: %w: a chat sink needs one secret item", notify.ErrInvalid)
-		}
-
-		to = string(values[0])
+	if sink.Kind == notify.SinkEmail {
+		return sink.Target, dest, nil
 	}
 
-	return to, values, nil
+	return dest.URL, dest, nil
 }
 
 // send sends the test message. A failure of the send is a result: notify.Class
 // sorts it, and a timeout is temporary.
 func (s *Service) send(
-	ctx context.Context, sender notify.Sender, sink notify.Sink, to string, values [][]byte,
+	ctx context.Context, sender notify.Sender, sink notify.Sink, to string, keys [][]byte,
 ) TestResult {
 	ctx, cancel := context.WithTimeout(ctx, SendTimeout)
 	defer cancel()
@@ -201,26 +187,16 @@ func (s *Service) send(
 	n := notify.SinkTestNotification(sink, ident.NewID(notify.IDPrefix), s.now())
 
 	err := sender.Send(ctx, notify.Message{
-		Notification: n, Sink: sink, Secrets: secretsOf(sink, values), To: to, Actions: nil,
+		Notification: n, Sink: sink, Secrets: keys, To: to, Actions: nil,
 	})
 
 	return testResult(err)
 }
 
-// secretsOf returns the signing keys that the sender gets: the opened values
-// of a webhook sink, and none for any other kind.
-func secretsOf(sink notify.Sink, values [][]byte) [][]byte {
-	if sink.Kind != notify.SinkWebhook {
-		return nil
-	}
-
-	return values
-}
-
 // checkAddress returns an error that matches egress.ErrRefused when the
 // outbound rules refuse the address that the sink sends to: the scheme, the
 // address ranges and the port of the URL, for each kind, and for a chat sink
-// also a host that is not the target of the sink.
+// or a webhook sink also a host that is not the target of the sink.
 func (s *Service) checkAddress(sink notify.Sink, to string) error {
 	if err := egress.CheckURL(to, egress.HTTPSOnly); err != nil {
 		return fmt.Errorf("check the address: %w", err)
@@ -230,12 +206,25 @@ func (s *Service) checkAddress(sink notify.Sink, to string) error {
 		return fmt.Errorf("check the address: %w", err)
 	}
 
-	if sink.Kind != notify.SinkChat {
+	// The test is a write-side check: it applies the host allowlist that a
+	// stored sink from before the allowlist does not pass.
+	if sink.Kind == notify.SinkEmail {
 		return nil
 	}
 
-	host, err := notify.ChatHost(to)
+	hostOf := notify.ChatHost
+	if sink.Kind == notify.SinkWebhook {
+		hostOf = notify.WebhookHost
+	}
+
+	host, err := hostOf(to)
 	if err != nil {
+		// The test is a write-side check: a host that fails the allowlist is
+		// a refused address, as one that the egress rules refuse.
+		if !errors.Is(err, egress.ErrRefused) {
+			err = fmt.Errorf("%w: %w", egress.ErrRefused, err)
+		}
+
 		return fmt.Errorf("check the address: %w", err)
 	}
 

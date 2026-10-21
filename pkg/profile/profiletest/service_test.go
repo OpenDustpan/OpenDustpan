@@ -142,8 +142,53 @@ func (f fixture) create(t *testing.T) profile.Profile {
 	return p
 }
 
+// readOf returns the options of a read. A reveal passes its fresh
+// authentication check.
 func readOf(reveal bool) profile.ReadOptions {
-	return profile.ReadOptions{Revision: 0, Reveal: reveal}
+	return profile.ReadOptions{Fresh: func() error { return nil }, Revision: 0, Reveal: reveal}
+}
+
+// errNotFresh is the refusal of the fresh authentication check of a test.
+var errNotFresh = errors.New("not fresh")
+
+// TestRevealNeedsAFreshAuthentication proves a reveal with a refused check, or
+// with no check, answers the refusal and no value, and writes one entry of the
+// kind reveal with the outcome failure.
+func TestRevealNeedsAFreshAuthentication(t *testing.T) {
+	t.Parallel()
+
+	for name, tc := range map[string]struct {
+		fresh func() error
+		want  error
+	}{
+		"a check that refuses": {fresh: func() error { return errNotFresh }, want: errNotFresh},
+		"no check":             {fresh: nil, want: profile.ErrFreshRequired},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			f := newFixture(t)
+			p := f.create(t)
+			target := f.target(profile.RefByID(p.ID))
+			before := len(f.m.entries[f.ns])
+
+			v, err := f.svc.Read(t.Context(), actor("admin"), target,
+				profile.ReadOptions{Fresh: tc.fresh, Revision: 0, Reveal: true})
+			if !errors.Is(err, tc.want) {
+				t.Fatalf("reveal: error = %v, want %v", err, tc.want)
+			}
+
+			if len(v.Secrets) != 0 {
+				t.Errorf("secrets left with a refused reveal: %v", v.Secrets)
+			}
+
+			got := f.m.entries[f.ns][before:]
+			if len(got) != 1 || got[0].Kind != audit.KindReveal || got[0].Outcome != audit.OutcomeFailure ||
+				got[0].Action != "profile:open" || got[0].Subject != "admin" {
+				t.Fatalf("entries of the refused reveal = %+v, want one failure of the kind reveal", got)
+			}
+		})
+	}
 }
 
 func TestCreateSealsSecrets(t *testing.T) {

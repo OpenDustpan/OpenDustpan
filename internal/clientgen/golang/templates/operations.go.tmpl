@@ -1,0 +1,73 @@
+{{.Header}}
+
+package {{.Package}}
+
+import (
+	"context"
+{{- if .NeedsFmt}}
+	"fmt"
+{{- end}}
+	"net/http"
+{{- if .NeedsURL}}
+	"net/url"
+{{- end}}
+)
+{{range $op := .Operations}}
+{{- if $op.QueryType}}
+// {{$op.QueryType}} holds the query parameters of {{$op.Method}}.
+type {{$op.QueryType}} struct {
+{{- range $op.QueryFields}}
+{{comment "\t" .Doc}}	{{.Name}} {{.Type}} {{.Tag}}
+{{- end}}
+}
+{{end}}
+{{opDoc $op.Method $op.ID $op.Doc}}func (c *Client) {{$op.Method}}(ctx context.Context{{range $op.Params}}, {{.Ident}} {{.Type}}{{end}}{{if $op.QueryType}}, query {{$op.QueryType}}{{end}}{{if $op.Body}}, body {{$op.Body}}{{end}}, opts ...CallOption) ({{if $op.ResultReturn}}{{$op.ResultReturn}}, {{end}}*Response, error) {
+{{- if $op.QueryType}}
+	values := url.Values{}
+{{- range $op.Query}}
+{{- if eq .Mode "many"}}
+	for _, v := range query.{{.Field}} {
+		values.Add({{goString .Wire}}, fmt.Sprint(v))
+	}
+{{- else if eq .Mode "ptr"}}
+	if query.{{.Field}} != nil {
+		values.Add({{goString .Wire}}, fmt.Sprint(*query.{{.Field}}))
+	}
+{{- else}}
+	values.Add({{goString .Wire}}, fmt.Sprint(query.{{.Field}}))
+{{- end}}
+{{- end}}
+
+{{end}}
+	req := &request{
+		operation:  {{goString $op.ID}},
+		method:     {{$op.HTTPMethod}},
+		path:       {{$op.PathExpr}},
+{{- if $op.QueryType}}
+		query:      values,
+{{- end}}
+{{- if $op.Body}}
+		body:         body,
+		bodySet:      {{if $op.BodyPointer}}body != nil{{else}}true{{end}},
+		bodyRequired: {{$op.BodyRequired}},
+		mediaType:    {{goString $op.MediaType}},
+{{- end}}
+		public:     {{$op.Public}},
+		idempotent: {{$op.Idempotent}},
+		ifMatch:    {{$op.IfMatch}},
+		etag:       {{$op.ETag}},
+	}
+{{if eq $op.ResultKind "none"}}
+	return c.do(ctx, req, opts, nil)
+{{- else}}
+	var out {{$op.Result}}
+
+	resp, err := c.do(ctx, req, opts, &out)
+	if err != nil {
+		return {{if eq $op.ResultKind "value"}}out{{else}}nil{{end}}, resp, err
+	}
+
+	return {{if eq $op.ResultKind "pointer"}}&out{{else}}out{{end}}, resp, nil
+{{- end}}
+}
+{{end}}

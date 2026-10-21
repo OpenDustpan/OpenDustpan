@@ -54,8 +54,8 @@ The answer is 201. It holds the ID of the destination, its version, and the
   "namespace": "acme",
   "kind": "webhook",
   "name": "Operations",
-  "target": "https://hooks.example.com/dustpan",
-  "urlSet": false,
+  "target": "hooks.example.com",
+  "urlSet": true,
   "createdBy": "ana",
   "version": 1,
   "signingKey": "9f2c...64 hex digits"
@@ -69,6 +69,25 @@ make a new destination.
 
 The server seals the key with the data key of the namespace. A list or a read
 of the destination shows no key.
+
+The URL of the webhook is a secret, because its path or its query can hold a
+token. The server seals it with the data key of the namespace, as it does for
+the signing key. It accepts the URL when you make or change the destination.
+No answer shows the URL again: `target` holds only the host, and `urlSet` says
+that the URL exists. A backup holds the sealed URL, never the plain URL. The
+server opens the URL only when it sends. To see the URL, read it from your own
+records.
+
+The host of the URL must be an ASCII DNS name or an IP address, with an
+optional port of 1 to 65535, with no leading zero. The server refuses any other
+host with 400 when you make a destination, change one, or send a test. For a
+name with non-ASCII letters, write its punycode form.
+
+A destination that you made before this check keeps working: it is listed, it
+gets notifications, and a backup that holds it restores. When its host fails
+the check, the list shows `hostNeedsUpdate: true`, and the `target` of a
+webhook shows empty. To change such a destination, give it a host that passes
+the check.
 
 ## Check the signature in your receiver
 
@@ -156,12 +175,31 @@ the `target` of a webhook or the `url` of a chat destination. Send the
 `version` that you read. If another request changed the destination since,
 the answer is 409 and nothing changes.
 
-A change of the `target` of a webhook keeps the signing key. The new receiver
-must use the key of the destination. To give the new receiver a new key,
-delete the destination and make it again.
+A change of the `target` of a webhook is a new URL. Send the whole URL. The
+server seals it as a new secret, deletes the old URL, and keeps the signing
+key. The new receiver must use the key of the destination. To give the new
+receiver a new key, delete the destination and make it again.
 
 `DELETE /api/dustpan/v1/namespaces/<namespace>/sinks/<id>` deletes the
 destination and its secrets. The answer is 204.
+
+## Set the URL again after an upgrade
+
+Older versions kept the URL of a webhook as plain text in the target of the
+destination, and in every backup. The upgrade deletes the plain URL. The
+server cannot seal it during the upgrade, so it does not keep it. After the
+upgrade, a webhook that you made with an older version has its host as the
+target and no URL:
+
+- `urlSet` is `false`. A test answers 422 `sink.no-url`, and the server sends
+  nothing to the destination. Each webhook with `urlSet` `false` needs its URL
+  again.
+- The signing key does not change.
+
+To set the URL, send a `PUT` with the `version` that you read and the whole
+URL as `target`. Do this for each webhook destination that you made before the
+upgrade. The older backups of your installation still hold the plain URL. Keep
+them as secret as the URL, or delete them.
 
 ## Which addresses the server accepts
 

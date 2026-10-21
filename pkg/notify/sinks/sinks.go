@@ -12,6 +12,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	"opendustpan.org/opendustpan/internal/ident"
@@ -104,7 +105,8 @@ type Caller struct {
 // New describes a sink to make. For a chat sink, URL is the incoming webhook
 // URL, Platform names the chat platform, and Target stays empty: the service
 // derives it from the URL. For a webhook sink, Target is the https URL of the
-// receiver. For an email sink, Target is the address.
+// receiver: the service seals it as a secret item and keeps only its host as
+// the target of the sink. For an email sink, Target is the address.
 type New struct {
 	Kind     notify.SinkKind
 	Platform string
@@ -128,28 +130,20 @@ func (s *Service) Create(ctx context.Context, c *Caller, ns namespace.Name, in N
 		Target: in.Target, SecretRefs: nil, CreatedBy: c.Principal.Subject, Version: 0,
 	}
 
-	value, err := s.secretValue(&sink, in.URL)
+	secrets, err := s.newSecrets(&sink, in)
 	if err != nil {
 		return Created{}, err
 	}
 
-	if portErr := s.checkPort(&sink, in.URL); portErr != nil {
+	if portErr := s.checkPort(&sink, secrets); portErr != nil {
 		return Created{}, portErr
-	}
-
-	var secrets []notify.SinkSecret
-
-	if value != nil {
-		ref := ident.NewID("itm-")
-		sink.SecretRefs = []string{ref}
-		secrets = []notify.SinkSecret{{Ref: ref, Value: value}}
 	}
 
 	// Defense in depth: the store validates the sink again, and the handler checks
 	// the body. This check stays so that a refused sink costs no read of the
 	// namespace and no sealing, and so that a store that skips its check cannot
 	// take an invalid sink from this service.
-	if err = sink.Validate(); err != nil {
+	if err = sink.ValidateWrite(); err != nil {
 		return Created{}, fmt.Errorf("create sink: %w", err)
 	}
 
@@ -170,8 +164,9 @@ func (s *Service) Create(ctx context.Context, c *Caller, ns namespace.Name, in N
 	out := Created{Sink: sink, SigningKey: ""}
 	out.Sink.Version = 1
 
-	if sink.Kind == notify.SinkWebhook {
-		out.SigningKey = string(value)
+	// A webhook sink has its URL first and its signing key second.
+	if sink.Kind == notify.SinkWebhook && len(secrets) == 2 {
+		out.SigningKey = string(secrets[1].Value)
 	}
 
 	return out, nil
@@ -191,9 +186,11 @@ func NewSigningKey() ([]byte, error) {
 }
 
 // Change describes a replace. Version is the version that the caller read.
-// Name is the new name. Target, when set, is the new target of a webhook or
-// an email sink. URL, when set, is the new incoming webhook URL of a chat
-// sink: the service stores it as a new secret item under a new ref.
+// Name is the new name. Target, when set, is the new address of an email
+// sink, or the new https URL of a webhook sink: the service stores that URL
+// as a new secret item under a new ref, and the signing keys stay. URL, when
+// set, is the new incoming webhook URL of a chat sink: the service stores it
+// as a new secret item under a new ref.
 type Change struct {
 	Version int64
 	Name    string
@@ -224,7 +221,7 @@ func (s *Service) Replace(
 	// Defense in depth: the store validates the sink again. This check stays so
 	// that a refused sink costs no sealing, and so that a store that skips its
 	// check cannot take an invalid sink from this service.
-	if err = next.Validate(); err != nil {
+	if err = next.ValidateWrite(); err != nil {
 		return notify.Sink{}, fmt.Errorf("replace sink: %w", err)
 	}
 
@@ -299,86 +296,132 @@ func (s *Service) changed(old notify.Sink, ch Change) (notify.Sink, []notify.Sin
 	next := old
 	next.Version, next.Name = ch.Version, ch.Name
 
-	if ch.Target != nil {
-		if old.Kind == notify.SinkChat {
-			return notify.Sink{}, nil, fmt.Errorf(
-				"%w: the target of a chat sink follows its URL: send the url",
-				notify.ErrInvalid,
-			)
-		}
+	next.SecretRefs = slices.Clone(old.SecretRefs)
 
+	switch {
+	case ch.Target != nil && old.Kind == notify.SinkChat:
+		return notify.Sink{}, nil, fmt.Errorf(
+			"%w: the target of a chat sink follows its URL: send the url",
+			notify.ErrInvalid,
+		)
+	case ch.URL != nil && old.Kind != notify.SinkChat:
+		return notify.Sink{}, nil, fmt.Errorf("%w: only a chat sink takes a url", notify.ErrInvalid)
+	case ch.Target != nil && old.Kind == notify.SinkWebhook:
+		return s.withNewURL(next, *ch.Target, notify.WebhookHost, old.SecretRefs[min(1, len(old.SecretRefs)):])
+	case ch.Target != nil:
 		next.Target = *ch.Target
+	case ch.URL != nil:
+		return s.withNewURL(next, *ch.URL, notify.ChatHost, nil)
+	default:
+		// A change of the name has no new URL.
 	}
 
-	var (
-		secrets []notify.SinkSecret
-		url     string
-	)
+	// A change of the name or of an email address has no new URL, so no new
+	// item meets the port rule: the address that the owner approved stays.
+	return next, nil, nil
+}
 
-	if ch.URL != nil {
-		if old.Kind != notify.SinkChat {
-			return notify.Sink{}, nil, fmt.Errorf("%w: only a chat sink takes a url", notify.ErrInvalid)
-		}
-
-		url, next.Target = *ch.URL, ""
-
-		value, err := s.secretValue(&next, url)
-		if err != nil {
-			return notify.Sink{}, nil, err
-		}
-
-		ref := ident.NewID("itm-")
-		next.SecretRefs = []string{ref}
-		secrets = []notify.SinkSecret{{Ref: ref, Value: value}}
+// withNewURL returns next with the URL raw as its new first secret item, then
+// the refs keys of the items that stay, and the host of the URL as the target.
+// hostOf reads the host. A webhook sink keeps its signing keys, so a receiver
+// keeps its key when the URL changes. A chat sink keeps no other item. It
+// returns the new item, and notify.ErrInvalid when the port rule or hostOf
+// refuses the URL.
+func (s *Service) withNewURL(
+	next notify.Sink, raw string, hostOf func(string) (string, error), keys []string,
+) (notify.Sink, []notify.SinkSecret, error) {
+	host, err := hostOf(raw)
+	if err != nil {
+		return notify.Sink{}, nil, fmt.Errorf("%w: %w", notify.ErrInvalid, err)
 	}
 
-	// A change of the name keeps the address that the owner approved, so only a
-	// new address meets the port rule.
-	if ch.Target != nil || ch.URL != nil {
-		if err := s.checkPort(&next, url); err != nil {
-			return notify.Sink{}, nil, err
+	if next.Kind == notify.SinkChat {
+		if hostErr := s.checkPlatformHost(next, host); hostErr != nil {
+			return notify.Sink{}, nil, hostErr
 		}
+	}
+
+	ref := ident.NewID("itm-")
+	next.Target, next.SecretRefs = host, slices.Concat([]string{ref}, keys)
+
+	secrets := []notify.SinkSecret{{Ref: ref, Value: []byte(raw)}}
+
+	if portErr := s.checkPort(&next, secrets); portErr != nil {
+		return notify.Sink{}, nil, portErr
 	}
 
 	return next, secrets, nil
 }
 
-// secretValue returns the plaintext secret of a new sink: a signing key for a
-// webhook, the URL for a chat webhook, and nil for an email sink. For a chat
-// sink it also sets the target to the host of the URL. The caller owns the
-// returned bytes.
-func (s *Service) secretValue(sink *notify.Sink, url string) ([]byte, error) {
+// newSecrets returns the new secret items of a new sink, and sets its target
+// and its refs. A chat sink has its URL. A webhook sink has its URL, then a
+// new signing key. An email sink has none. The caller owns the bytes of the
+// values.
+func (s *Service) newSecrets(sink *notify.Sink, in New) ([]notify.SinkSecret, error) {
 	// Each kind takes the fields it needs and refuses the others, so a field
 	// that a kind ignores never hides a mistake of the caller.
-	if sink.Kind != notify.SinkChat && url != "" {
+	if sink.Kind != notify.SinkChat && in.URL != "" {
 		return nil, fmt.Errorf("%w: only a chat sink takes a url", notify.ErrInvalid)
 	}
 
-	if sink.Kind == notify.SinkChat && sink.Target != "" {
+	if sink.Kind == notify.SinkChat && in.Target != "" {
 		return nil, fmt.Errorf("%w: a chat sink takes a url, not a target", notify.ErrInvalid)
 	}
 
 	switch sink.Kind {
 	case notify.SinkWebhook:
-		return NewSigningKey()
+		return webhookSecrets(sink, in.Target)
 	case notify.SinkChat:
-		host, err := notify.ChatHost(url)
-		if err != nil {
-			return nil, fmt.Errorf("%w: %w", notify.ErrInvalid, err)
-		}
-
-		if hostErr := s.checkPlatformHost(*sink, host); hostErr != nil {
-			return nil, hostErr
-		}
-
-		sink.Target = host
-
-		return []byte(url), nil
+		return s.chatSecrets(sink, in.URL)
 	case notify.SinkEmail:
 		return nil, nil
 	default:
 		return nil, fmt.Errorf("%w: unknown sink kind %q", notify.ErrInvalid, sink.Kind)
 	}
+}
+
+// webhookSecrets sets the target and the refs of a new webhook sink and
+// returns its URL item and a new signing key.
+func webhookSecrets(sink *notify.Sink, raw string) ([]notify.SinkSecret, error) {
+	host, err := notify.WebhookHost(raw)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", notify.ErrInvalid, err)
+	}
+
+	key, err := NewSigningKey()
+	if err != nil {
+		return nil, err
+	}
+
+	sink.Target = host
+	sink.SecretRefs = []string{ident.NewID("itm-"), ident.NewID("itm-")}
+
+	return []notify.SinkSecret{
+		{Ref: sink.SecretRefs[0], Value: []byte(raw)},
+		{Ref: sink.SecretRefs[1], Value: key},
+	}, nil
+}
+
+// chatSecrets sets the target and the ref of a new chat sink and returns its
+// URL item.
+func (s *Service) chatSecrets(sink *notify.Sink, raw string) ([]notify.SinkSecret, error) {
+	host, err := notify.ChatHost(raw)
+	if err != nil {
+		if !errors.Is(err, notify.ErrInvalid) {
+			err = fmt.Errorf("%w: %w", notify.ErrInvalid, err)
+		}
+
+		return nil, err
+	}
+
+	if hostErr := s.checkPlatformHost(*sink, host); hostErr != nil {
+		return nil, hostErr
+	}
+
+	sink.Target = host
+	sink.SecretRefs = []string{ident.NewID("itm-")}
+
+	return []notify.SinkSecret{{Ref: sink.SecretRefs[0], Value: []byte(raw)}}, nil
 }
 
 // ErrPlatformHost reports a chat URL whose host the platform of the sink does
@@ -436,26 +479,22 @@ func (s *Service) checkPlatformHost(sink notify.Sink, host string) error {
 }
 
 // checkPort returns notify.ErrInvalid when the sink would send to a port that
-// the operator did not allow. url is the incoming webhook URL of a chat sink.
-// A webhook sink sends to its target, and an email sink has no port.
+// the operator did not allow. secrets are the new secret items of the write:
+// the first one of a chat sink or of a webhook sink is its URL. An email sink
+// has no port, and a sink with no new URL keeps the address that the owner
+// approved.
 //
 // Defense in depth: the sender checks the port again before it sends, and
 // Service.Test checks it before the test. This check stays so that a refused
 // port is a refused write and not a sink that fails at the first send. The
 // store cannot hold this check: the ports are a setting of the operator.
-func (s *Service) checkPort(sink *notify.Sink, url string) error {
-	raw := sink.Target
-	if sink.Kind == notify.SinkChat {
-		raw = url
-	}
-
-	// An email sink has no port, and a chat sink with no new URL keeps the
-	// address that the owner approved.
-	if sink.Kind == notify.SinkEmail || raw == "" {
+func (s *Service) checkPort(sink *notify.Sink, secrets []notify.SinkSecret) error {
+	if sink.Kind == notify.SinkEmail || len(secrets) == 0 || len(sink.SecretRefs) == 0 ||
+		secrets[0].Ref != sink.SecretRefs[0] {
 		return nil
 	}
 
-	if err := egress.CheckPort(raw, s.ports); err != nil {
+	if err := egress.CheckPort(string(secrets[0].Value), s.ports); err != nil {
 		return fmt.Errorf("%w: %w", notify.ErrInvalid, err)
 	}
 

@@ -124,7 +124,8 @@ func sinksScenario(t *testing.T, env *e2e.Env) {
 
 	var key string
 
-	hookBody := `{"kind":"webhook","name":"Operations","target":"https://hooks.example.invalid/dustpan"}`
+	hookBody := `{"kind":"webhook","name":"Operations","target":"https://hooks.example.invalid/dustpan/` + sinkChatMarker + `?token=` +
+		sinkChatMarker + `"}`
 	chatBody := `{"kind":"chat","platform":"slack","name":"Ops channel",` +
 		`"url":"https://hooks.slack.com/services/T000/B000/` + sinkChatMarker + `"}`
 
@@ -135,9 +136,19 @@ func sinksScenario(t *testing.T, env *e2e.Env) {
 	sinkStep(t, env, sinkCase("a webhook on the metadata address is refused", http.MethodPost, sinksBase,
 		http.StatusBadRequest).withBody(`{"kind":"webhook","name":"Meta","target":"https://169.254.169.254/latest"}`))
 	sinkStep(t, env, sinkCase("make a signed webhook", http.MethodPost, sinksBase, http.StatusCreated).
-		withBody(hookBody).checking(func(body string) error { return rememberSink(body, &hook, &key) }))
+		withBody(hookBody).checking(func(body string) error {
+		if err := sinkNeverContains(sinkChatMarker, "/dustpan", "token=")(body); err != nil {
+			return err
+		}
+
+		return rememberSink(body, &hook, &key)
+	}))
 	sinkStep(t, env, sinkCase("make a chat webhook", http.MethodPost, sinksBase, http.StatusCreated).
 		withBody(chatBody).checking(func(body string) error { return rememberSink(body, &chat, nil) }))
+
+	if hook.Target != "hooks.example.invalid" || !hook.URLSet {
+		t.Fatalf("webhook target = %q and urlSet = %t, want the host only and a sealed URL", hook.Target, hook.URLSet)
+	}
 
 	if hook.ID == "" || chat.ID == "" || !chat.URLSet || chat.Target != "hooks.slack.com" {
 		t.Fatalf("sinks = %+v, %+v, want a webhook and a chat sink with the host as target", hook, chat)
@@ -187,14 +198,20 @@ func sinkReadSteps(t *testing.T, env *e2e.Env, hook, chat sinkDoc, key string) {
 				return fmt.Errorf("%w: both sinks are not in %s", errSinkAnswer, body)
 			}
 
-			return sinkNeverContains(sinkChatMarker, key, "signingKey")(body)
+			return sinkNeverContains(sinkChatMarker, key, "signingKey", "/dustpan", "token=")(body)
 		}))
+	sinkStep(t, env, sinkCase("read the webhook", http.MethodGet, sinksBase+"/"+hook.ID, http.StatusOK).
+		checking(sinkNeverContains(sinkChatMarker, key, "signingKey", "/dustpan", "token=")))
 	sinkStep(t, env, sinkCase("read the chat sink", http.MethodGet, sinksBase+"/"+chat.ID, http.StatusOK).
 		checking(sinkNeverContains(sinkChatMarker, "/services/")))
 	sinkStep(t, env, sinkCase("rename the webhook", http.MethodPut, sinksBase+"/"+hook.ID, http.StatusOK).
 		withBody(`{"version":1,"name":"Operations team"}`))
 	sinkStep(t, env, sinkCase("a stale version is refused", http.MethodPut, sinksBase+"/"+hook.ID,
 		http.StatusConflict).withBody(`{"version":1,"name":"Again"}`))
+	sinkStep(t, env, sinkCase("set a new URL of the webhook", http.MethodPut, sinksBase+"/"+hook.ID, http.StatusOK).
+		withBody(`{"version":2,"name":"Operations team","target":"https://hooks.example.invalid/second/`+
+			sinkChatMarker+`"}`).
+		checking(sinkNeverContains(sinkChatMarker, "/second", key, "signingKey")))
 }
 
 // sinkHasError checks that the answer is an error with this errorCode and this

@@ -200,8 +200,25 @@ func profileReads(t *testing.T, env *e2e.Env, one, tool string) {
 	profileStep(t, env, profileRequest("the entries of a revision answer the secret masked",
 		http.MethodGet, one+"/revisions/1", http.StatusOK).
 		checking(profileMasked(`"path":"db.password","secret":true`, `"path":"region"`)))
-	profileStep(t, env, profileRequest("a reveal by an administrator answers the plain text",
-		http.MethodGet, one+"/revisions/1?showSecrets=true", http.StatusOK).checking(profileRevealed))
+	profileStep(t, env, profileRequest("a reveal with an access token needs a fresh authentication",
+		http.MethodGet, one+"/revisions/1?showSecrets=true", http.StatusForbidden).
+		checking(profileMasked(`mfa.fresh-step-required`)))
+
+	if !env.HasSignIn() {
+		return
+	}
+
+	// A reveal needs a console session with a recent sign-in.
+	status, body := env.FreshAdminAPIStatus(t.Context(), t, e2e.SessionRequest{
+		Method: http.MethodGet, Path: one + "/revisions/1?showSecrets=true", Body: "",
+	})
+	if status != http.StatusOK {
+		t.Fatalf("a reveal by an administrator with a fresh session answers %d %s, want 200", status, body)
+	}
+
+	if err := profileRevealed(body); err != nil {
+		t.Fatalf("a reveal by an administrator with a fresh session: %v", err)
+	}
 }
 
 // profileWrites saves two revisions, each on the tag of the step before.

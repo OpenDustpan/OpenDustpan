@@ -1,5 +1,7 @@
 package tfe
 
+import "opendustpan.org/opendustpan/internal/sessionauth"
+
 // The machine codes of the errors that this API answers with a JSON:API
 // code member. A client selects its message by the code, not by the English
 // text of the detail. A code is never removed and never changes its
@@ -15,10 +17,18 @@ const (
 	// because the client encrypted the state, for example a force-unlock
 	// without the forced-write switches.
 	codeClientEncrypted = "workspace.client-encrypted"
+	// codeFreshStepRequired is a 403 for a write that needs a fresh
+	// authentication and comes with an access token, and a 401 for one that
+	// comes from a console session with an old sign-in. The error holds
+	// meta.reauthenticate in the second case.
+	codeFreshStepRequired = sessionauth.FreshStepRequiredCode
 )
 
 // ErrorCodes lists every machine code of this API. It is the one place that
 // names them.
 func ErrorCodes() []string {
-	return append([]string{codeNotLocked, codeLockMismatch, codeClientEncrypted}, gateErrorCodes()...)
+	return append(
+		[]string{codeNotLocked, codeLockMismatch, codeClientEncrypted, codeFreshStepRequired},
+		gateErrorCodes()...,
+	)
 }

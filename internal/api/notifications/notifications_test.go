@@ -37,10 +37,10 @@ func TestCreateWebhookAnswersTheKeyOnce(t *testing.T) {
 	s := decode[sinkWire](t, got)
 	if !strings.HasPrefix(s.ID, notify.SinkIDPrefix) || s.Kind != "webhook" || s.Name != "Ops" ||
 		s.Namespace != "acme" ||
-		s.Target != "https://hooks.example.com/ops" ||
+		s.Target != webhookHost ||
 		s.Version != 1 ||
 		s.CreatedBy != "admin" ||
-		s.URLSet ||
+		!s.URLSet ||
 		!hex64.MatchString(s.SigningKey) {
 		t.Fatalf("created = %+v, want a webhook at version 1 with a signing key of 64 hex digits", s)
 	}
@@ -57,6 +57,134 @@ func TestCreateWebhookAnswersTheKeyOnce(t *testing.T) {
 	checkKeyNotStored(t, f, s)
 }
 
+func TestWebhookURLIsWriteOnly(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+
+	created := f.do(t, send("admin", http.MethodPost, base, webhookBody(t, "Ops")))
+	wantCode(t, "create", created, http.StatusCreated)
+
+	s := decode[sinkWire](t, created)
+	one := base + "/" + s.ID
+	moved := f.do(t, send("admin", http.MethodPut, one,
+		`{"version":1,"name":"Ops","target":"https://new.example.com/path/`+canary+`?k=`+canary+`"}`))
+	wantCode(t, "replace", moved, http.StatusOK)
+
+	answers := map[string]response{
+		"create":  created,
+		"list":    f.do(t, get("reader", base)),
+		"get":     f.do(t, get("reader", one)),
+		"replace": moved,
+		"test":    f.do(t, send("admin", http.MethodPost, one+"/test", "")),
+	}
+
+	for name, got := range answers {
+		for _, hidden := range []string{canary, "/ops", "/path", "token=", "?k="} {
+			if strings.Contains(got.body, hidden) {
+				t.Errorf("%s answer shows %q: %s", name, hidden, got.body)
+			}
+		}
+	}
+
+	shown := []string{f.logs.String(), fmt.Sprintf("%+v", f.sinkEntries(t))}
+	for _, text := range shown {
+		if strings.Contains(text, canary) || strings.Contains(text, "hooks.example.com/ops") {
+			t.Errorf("an audit entry or a log line shows the URL: %s", text)
+		}
+	}
+
+	for _, name := range []string{"list", "get"} {
+		if !strings.Contains(answers[name].body, `"target":"new.example.com"`) {
+			t.Errorf("%s answer = %s, want the host as target", name, answers[name].body)
+		}
+	}
+}
+
+// TestRefusedWebhookWritesShowNoURL proves that a create and a replace that the
+// server refuses answer with a 400 that holds no part of the URL, and that no
+// audit entry and no log line holds it.
+func TestRefusedWebhookWritesShowNoURL(t *testing.T) {
+	t.Parallel()
+
+	tail := "/ops/" + canary + "?token=" + canary
+	targets := map[string]string{
+		"a scheme that is not https":  "http://hooks.example.com" + tail,
+		"a port the operator refuses": "https://hooks.example.com:8443" + tail,
+		"a metadata address":          "https://169.254.169.254" + tail,
+		"a sub-delimiter in the host": "https://hooks.example.com;" + canary + tail,
+		"an empty port":               "https://hooks.example.com:" + tail,
+		"raw Unicode in the host":     "https://h\u00f6\u00f6ks.example.com" + tail,
+	}
+
+	for name, target := range targets {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			f := newFixture(t)
+
+			created := f.do(t, send("admin", http.MethodPost, base,
+				jsonString(t, map[string]string{"kind": "webhook", "name": "Ops", "target": target})))
+			wantCode(t, "refused create", created, http.StatusBadRequest)
+
+			ok := f.do(t, send("admin", http.MethodPost, base, webhookBody(t, "Ops")))
+			wantCode(t, "create", ok, http.StatusCreated)
+
+			one := base + "/" + decode[sinkWire](t, ok).ID
+			moved := f.do(t, send("admin", http.MethodPut, one,
+				jsonString(t, map[string]any{"version": 1, "name": "Ops", "target": target})))
+			wantCode(t, "refused replace", moved, http.StatusBadRequest)
+
+			texts := []string{
+				created.body, moved.body, f.logs.String(), fmt.Sprintf("%+v", f.sinkEntries(t)),
+				f.do(t, get("reader", one)).body,
+			}
+			for _, text := range texts {
+				for _, hidden := range []string{canary, "/ops", "token="} {
+					if strings.Contains(text, hidden) {
+						t.Errorf("a refused write shows %q: %s", hidden, text)
+					}
+				}
+			}
+		})
+	}
+}
+
+// TestReplayedReplaceShowsOnlyTheHost proves that the replay of a replace with
+// the same Idempotency-Key answers the host, and that the stored replay holds
+// no part of the URL.
+func TestReplayedReplaceShowsOnlyTheHost(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+
+	created := f.do(t, send("admin", http.MethodPost, base, webhookBody(t, "Ops")))
+	wantCode(t, "create", created, http.StatusCreated)
+
+	one := base + "/" + decode[sinkWire](t, created).ID
+	body := `{"version":1,"name":"Ops","target":"https://new.example.com/path/` + canary + `?k=` + canary + `"}`
+
+	first := f.do(t, keyed(send("admin", http.MethodPut, one, body), "r1"))
+	wantCode(t, "replace", first, http.StatusOK)
+
+	again := f.do(t, keyed(send("admin", http.MethodPut, one, body), "r1"))
+	wantCode(t, "replay", again, http.StatusOK)
+
+	if again.body != first.body {
+		t.Errorf("replay = %s, want %s", again.body, first.body)
+	}
+
+	for _, text := range []string{first.body, again.body, f.logs.String(), fmt.Sprintf("%+v", f.sinkEntries(t))} {
+		if strings.Contains(text, canary) || strings.Contains(text, "/path") {
+			t.Errorf("a replace or its replay shows the URL: %s", text)
+		}
+	}
+
+	if !strings.Contains(again.body, `"target":"new.example.com"`) {
+		t.Errorf("replay = %s, want the host as target", again.body)
+	}
+}
+
 // checkKeyNotAnsweredAgain checks that no later read holds the signing key.
 func checkKeyNotAnsweredAgain(t *testing.T, f fixture, s sinkWire) {
 	t.Helper()
@@ -71,19 +199,30 @@ func checkKeyNotAnsweredAgain(t *testing.T, f fixture, s sinkWire) {
 	}
 }
 
+// requireSealed fails if an item holds one of the plain texts.
+func requireSealed(t *testing.T, items []notify.SealedSecret, plains ...string) {
+	t.Helper()
+
+	for _, item := range items {
+		for _, plain := range plains {
+			if strings.Contains(string(item.Ciphertext()), plain) {
+				t.Errorf("the store holds %q in plaintext", plain)
+			}
+		}
+	}
+}
+
 // checkKeyNotStored checks that the store holds the signing key sealed, and
 // that the audit entry and the log hold neither the key nor the plaintext.
 func checkKeyNotStored(t *testing.T, f fixture, s sinkWire) {
 	t.Helper()
 
 	sealed, err := f.store.NotificationSinks().SinkSecrets(t.Context(), "acme", s.ID)
-	if err != nil || len(sealed) != 1 {
-		t.Fatalf("stored secrets = %d (%v), want 1", len(sealed), err)
+	if err != nil || len(sealed) != 2 {
+		t.Fatalf("stored secrets = %d (%v), want 2: the URL and the signing key", len(sealed), err)
 	}
 
-	if strings.Contains(string(sealed[0].Ciphertext()), s.SigningKey) {
-		t.Error("the store holds the signing key in plaintext")
-	}
+	requireSealed(t, sealed, s.SigningKey, canary)
 
 	entries := f.sinkEntries(t)
 	if len(entries) != 1 || entries[0].Action != "sink:create" || entries[0].ObjectID != s.ID ||
@@ -199,7 +338,7 @@ func TestCreateRefusals(t *testing.T) {
 			"a body over the limit", "admin", `{"kind":"webhook","name":"` + strings.Repeat("n", 70<<10) + `"}`, 400,
 			"request.body-invalid",
 		},
-		{"a reader", "reader", webhookBody(t, "a"), 403, "auth.forbidden"},
+		{"a reader", "reader", webhookBody(t, "a"), 403, "access.denied"},
 		{"no token", "", webhookBody(t, "a"), 401, "auth.unauthenticated"},
 	}
 
@@ -274,7 +413,7 @@ func TestReplace(t *testing.T) {
 		`{"version":2,"name":"Ops team","target":"https://new.example.com/hook"}`))
 	wantCode(t, "new target", moved, http.StatusOK)
 
-	if got := decode[sinkWire](t, f.do(t, get("reader", path))); got.Target != "https://new.example.com/hook" ||
+	if got := decode[sinkWire](t, f.do(t, get("reader", path))); got.Target != "new.example.com" ||
 		got.Version != 3 {
 		t.Errorf("read after the change = %+v, want the new target at version 3", got)
 	}
@@ -536,9 +675,9 @@ func checkTestMessageSent(t *testing.T, f fixture, s sinkWire) {
 	}
 
 	m := f.hook.sent[0]
-	if m.To != "https://hooks.example.com/ops" || len(m.Secrets) != 1 || string(m.Secrets[0]) != s.SigningKey ||
+	if m.To != webhookURL || len(m.Secrets) != 1 || string(m.Secrets[0]) != s.SigningKey ||
 		m.Notification.Type != notify.SinkTest {
-		t.Errorf("message = to %q, %d secrets, type %q, want the target, the signing key and sink.test",
+		t.Errorf("message = to %q, %d secrets, type %q, want the URL, the signing key and sink.test",
 			m.To, len(m.Secrets), m.Notification.Type)
 	}
 
@@ -747,5 +886,131 @@ func TestTestRouteSendsNothingToAFencedNamespace(t *testing.T) {
 
 	if n := len(f.sinkEntries(t)); n != before {
 		t.Fatalf("audit entries = %d, want %d", n, before)
+	}
+}
+
+// TestTestFailsClosedWithoutAUsableURL proves that a webhook sink whose sealed
+// URL is on another host than its target sends nothing and answers 422
+// sink.no-url, and that neither the answer nor the log shows the URL.
+func TestTestFailsClosedWithoutAUsableURL(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	got := f.do(t, send("admin", http.MethodPost, base, webhookBody(t, "Ops")))
+	wantCode(t, "create", got, http.StatusCreated)
+
+	s := decode[sinkWire](t, got)
+	f.replaceURLItem(t, s.ID, "https://other.example.com/"+canary)
+
+	got = f.do(t, send("admin", http.MethodPost, base+"/"+s.ID+"/test", ""))
+	if got.code != http.StatusUnprocessableEntity || !strings.Contains(got.body, "sink.no-url") ||
+		strings.Contains(got.body, canary) || strings.Contains(f.logs.String(), canary) {
+		t.Fatalf(
+			"test of a sink with a URL on another host: %d %s, want 422 sink.no-url and no URL",
+			got.code,
+			got.body,
+		)
+	}
+
+	if n := f.hook.count(); n != 0 {
+		t.Errorf("sender got %d messages, want none", n)
+	}
+}
+
+// replaceURLItem replaces the sealed URL item of the webhook sink id in acme
+// with a new item for url, as a store left by another version could hold it.
+func (f fixture) replaceURLItem(t *testing.T, id, url string) {
+	t.Helper()
+
+	stored0, err := f.store.NotificationSinks().Sinks(t.Context(), "acme")
+	if err != nil || len(stored0) != 1 {
+		t.Fatalf("Sinks = %d (%v), want 1", len(stored0), err)
+	}
+
+	next := stored0[0]
+	next.SecretRefs = []string{"itm-replaced", next.SecretRefs[1]}
+
+	sealed, err := notify.SinkSealer{Namespaces: f.secrets, Installation: nil}.Seal(t.Context(), next,
+		[]notify.SinkSecret{{Ref: "itm-replaced", Value: []byte(url)}})
+	if err != nil {
+		t.Fatalf("Seal: %v", err)
+	}
+
+	ns, err := f.store.GetNamespace(t.Context(), "acme")
+	if err != nil {
+		t.Fatalf("GetNamespace: %v", err)
+	}
+
+	e := f.sinkEntries(t)[0]
+	e.Action, e.ObjectID, e.Hash, e.PrevHash, e.Sequence = "sink:update", id, "", "", 0
+
+	if err = f.store.NotificationSinks().PutSink(t.Context(), next, sealed, ns.Fence(), e); err != nil {
+		t.Fatalf("PutSink: %v", err)
+	}
+}
+
+// TestAnswerHoldsOnlyTheHostOfAWholeURLTarget proves the answer-side layer:
+// a row whose target is a whole URL, as a restore or another version could
+// leave it, never shows a path, a query, user information or a token.
+func TestAnswerHoldsOnlyTheHostOfAWholeURLTarget(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct{ name, target, want string }{
+		{"a path and a query", "https://hooks.example.com/ops/" + canary + "?k=" + canary, ""},
+		{"user information", "https://user:" + canary + "@hooks.example.com/x", ""},
+		{"a host and a path", "hooks.example.com/" + canary, ""},
+		{"a fragment", "hooks.example.com#" + canary, ""},
+		{"a bare host", "hooks.example.com:8443", "hooks.example.com:8443"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			for _, kind := range []notify.SinkKind{notify.SinkWebhook, notify.SinkChat} {
+				s := notify.Sink{
+					ID: "snk-1", Scope: "acme", Kind: kind, Name: "Ops", Platform: "", Target: tc.target,
+					SecretRefs: []string{"itm-1", "itm-2"}, CreatedBy: "ana", Version: 1,
+				}
+
+				body, err := apinotifications.DocumentJSON(&s)
+				if err != nil {
+					t.Fatalf("DocumentJSON: %v", err)
+				}
+
+				if strings.Contains(string(body), canary) ||
+					!strings.Contains(string(body), `"target":"`+tc.want+`"`) {
+					t.Errorf("%s answer = %s, want the target %q and no token", kind, body, tc.want)
+				}
+			}
+		})
+	}
+}
+
+// TestURLSetIsFalseForThePlaceholder proves that a webhook sink that has only
+// the placeholder item of the migration answers urlSet false, and that a sink
+// with a real URL item answers true.
+func TestURLSetIsFalseForThePlaceholder(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name string
+		refs []string
+		want string
+	}{
+		{"a placeholder first", []string{notify.NoURLRefPrefix + "snk-1", "itm-k1", "itm-k2"}, `"urlSet":false`},
+		{"a URL item first", []string{"itm-url", "itm-k1"}, `"urlSet":true`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			s := notify.Sink{
+				ID: "snk-1", Scope: "acme", Kind: notify.SinkWebhook, Name: "Ops", Platform: "",
+				Target: "hooks.example.com", SecretRefs: tc.refs, CreatedBy: "ana", Version: 1,
+			}
+
+			body, err := apinotifications.DocumentJSON(&s)
+			if err != nil || !strings.Contains(string(body), tc.want) {
+				t.Errorf("answer = %s (%v), want %s", body, err, tc.want)
+			}
+		})
 	}
 }

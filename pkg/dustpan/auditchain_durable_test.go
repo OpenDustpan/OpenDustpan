@@ -360,7 +360,9 @@ func runPostgresChainServer(t *testing.T, st *postgres.Store) chainServer {
 	ln := openTestListener(t)
 	addr := ln.Addr().String()
 
-	srv, err := dustpan.NewServer(
+	registerConsole(t, addr, st)
+
+	srv, err := dustpan.NewServer(append(signInOptions(t, st),
 		dustpan.WithRegion(region),
 		dustpan.WithNamespaceStore(st),
 		dustpan.WithStackStore(st),
@@ -376,7 +378,7 @@ func runPostgresChainServer(t *testing.T, st *postgres.Store) chainServer {
 		dustpan.WithAuthenticator(authn),
 		dustpan.WithListener(ln),
 		dustpan.WithAuditChain(audit.ChainOff),
-	)
+	)...)
 	if err != nil {
 		t.Fatalf("new server: %v", err)
 	}

@@ -1144,14 +1144,53 @@ func (fakeEpochs) NewEpoch(context.Context, time.Time) (int64, error) { return 1
 
 func (fakeEpochs) Now() time.Time { return time.Now() }
 
-// wantSuccessStatus answers the success status of route: POST
+// freshAuthRoutes lists the routes that need a fresh authentication: a
+// console session with a recent sign-in. The test caller uses an access
+// token, so these routes refuse it.
+func freshAuthRoutes() []string {
+	return []string{
+		"POST /api/server/caller/tokens",
+		"POST /api/server/caller/tokens/{id}/rotate",
+		"POST /api/server/service-tokens",
+		"POST /api/server/service-tokens/{id}/rotate",
+		"POST /api/server/principals/{principal}/tokens",
+		"POST /api/server/principals/{principal}/tokens/{id}/rotate",
+		"PATCH /api/server/session-policy",
+		"POST /api/server/principals/{principal}/grants",
+		"POST /api/server/grants",
+		"POST /api/server/namespaces/{namespace}/grants",
+		"POST /api/server/namespaces/{namespace}/collections/{collection}/grants",
+		"POST /api/server/roles",
+		"PATCH /api/server/roles/{id}",
+		"PATCH /api/server/token-policy",
+		"POST /api/server/groups/{id}/members",
+		"DELETE /api/server/groups/{id}/members/{principal}",
+		"DELETE /api/server/groups/{id}",
+		"POST /api/server/audit/chain",
+		"PUT /api/server/namespaces/{namespace}/ip-allowlist",
+		"DELETE /api/server/namespaces/{namespace}/ip-allowlist",
+	}
+}
+
+// wantSuccessStatus answers the success status of route: a route in
+// freshAuthRoutes answers 403 to an access token, POST
 // /api/server/backups and POST /api/server/restores start work in the
 // background and answer 202, POST /api/server/namespaces creates a namespace
 // and answers 201, every other route answers 200.
 func wantSuccessStatus(route apiserver.Route) int {
+	if slices.Contains(freshAuthRoutes(), route.Method+" "+route.Path) {
+		// An access token never gives a fresh authentication.
+		return http.StatusForbidden
+	}
+
+	return wantOtherSuccessStatus(route)
+}
+
+// wantOtherSuccessStatus answers the success status of a route that needs no
+// fresh authentication.
+func wantOtherSuccessStatus(route apiserver.Route) int {
 	if route.Method == http.MethodPost &&
-		(route.Path == "/api/server/backups" || route.Path == "/api/server/restores" ||
-			route.Path == "/api/server/audit/chain") {
+		(route.Path == "/api/server/backups" || route.Path == "/api/server/restores") {
 		return http.StatusAccepted
 	}
 

@@ -18,6 +18,7 @@ import (
 	"opendustpan.org/opendustpan/internal/api/idempotent"
 	"opendustpan.org/opendustpan/internal/api/refusal"
 	"opendustpan.org/opendustpan/internal/denylimit"
+	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/internal/sessionauth"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/egress"
@@ -278,6 +279,11 @@ func classifySink(err error) problem {
 			status: http.StatusUnprocessableEntity, code: "sink.no-sender",
 			message: "this server cannot send to this kind of notification destination",
 		}
+	case errors.Is(err, notify.ErrNoURL):
+		return problem{
+			status: http.StatusUnprocessableEntity, code: "sink.no-url",
+			message: "the notification destination has no URL that the server can use: set the URL again",
+		}
 	case errors.Is(err, sinks.ErrRateLimited):
 		return problem{
 			status: http.StatusTooManyRequests, code: "sink.test-rate-limited",
@@ -323,9 +329,9 @@ func classifyAuth(err error) (problem, bool) {
 	case errors.Is(err, identity.ErrUnauthenticated):
 		return problem{status: http.StatusUnauthorized, code: "auth.unauthenticated", message: "unauthenticated"}, true
 	case errors.Is(err, sessionauth.ErrCSRF), errors.Is(err, sessionauth.ErrOtherSite):
-		return problem{status: http.StatusForbidden, code: "auth.forbidden", message: err.Error()}, true
+		return problem{status: http.StatusForbidden, code: errcode.Forbidden(err), message: err.Error()}, true
 	case errors.Is(err, identity.ErrDenied):
-		return problem{status: http.StatusForbidden, code: "auth.forbidden", message: "forbidden"}, true
+		return problem{status: http.StatusForbidden, code: errcode.Forbidden(err), message: "forbidden"}, true
 	default:
 		return problem{status: 0, code: "", message: ""}, false
 	}

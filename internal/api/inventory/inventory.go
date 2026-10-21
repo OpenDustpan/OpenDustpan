@@ -20,6 +20,7 @@ import (
 	"opendustpan.org/opendustpan/internal/api/idempotent"
 	"opendustpan.org/opendustpan/internal/api/refusal"
 	"opendustpan.org/opendustpan/internal/denylimit"
+	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/internal/sessionauth"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/collection"
@@ -548,7 +549,12 @@ func (h *Handler) writeError(ctx context.Context, w http.ResponseWriter, err err
 		h.logger.WarnContext(ctx, "write fenced", slog.String("error", err.Error()))
 	}
 
-	h.writeJSON(ctx, w, status, errorResponse{Code: status, Message: message, ErrorCode: ""})
+	code := ""
+	if status == http.StatusForbidden {
+		code = errcode.Forbidden(err)
+	}
+
+	h.writeJSON(ctx, w, status, errorResponse{Code: status, Message: message, ErrorCode: code})
 }
 
 // classifyAuth maps the errors of the authentication and the

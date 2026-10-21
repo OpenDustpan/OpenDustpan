@@ -9,6 +9,7 @@ import (
 	"maps"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 	"unicode/utf8"
 
@@ -30,7 +31,11 @@ const maxBodyBytes = 64 << 10
 
 // sinkDocument is one sink as the API answers it. It never holds a secret:
 // URLSet says only that a chat sink has a webhook URL. Target is the address
-// of an email sink, the URL of a webhook, or the host of a chat webhook.
+// of an email sink, or the host of a webhook or of a chat webhook. The URL of
+// a webhook is a secret: it goes in on create and never comes out.
+// HostNeedsUpdate is true for a stored sink whose host fails the allowlist of
+// a new write. The sink still sends. A webhook sink of this kind shows an
+// empty target. A replace of it needs a host that passes the allowlist.
 //
 // Contract: never remove or rename these fields.
 type sinkDocument struct {
@@ -43,6 +48,8 @@ type sinkDocument struct {
 	URLSet    bool   `json:"urlSet"`
 	CreatedBy string `json:"createdBy"`
 	Version   int64  `json:"version"`
+
+	HostNeedsUpdate bool `json:"hostNeedsUpdate,omitempty"`
 }
 
 // createdDocument is the answer of a create. SigningKey is set for a webhook
@@ -64,11 +71,40 @@ type testDocument struct {
 	Message   string `json:"message"`
 }
 
+// answerTarget returns the target of s for an answer. An email sink shows its
+// address. A webhook or chat sink shows its host, and an empty string unless
+// the target is a bare host that passes the host checks.
+//
+// Defense in depth: the write path and the migration keep a URL out of the
+// target, and the store checks the target when it reads a row. This check
+// stays so that a row from a restore or from another version, with a whole
+// URL as its target, never puts a path, a query or a token in an answer.
+func answerTarget(s *notify.Sink) string {
+	if s.Kind == notify.SinkEmail {
+		return s.Target
+	}
+
+	host, err := notify.WebhookHost("https://" + s.Target + "/")
+	if err != nil || host != s.Target {
+		return ""
+	}
+
+	return host
+}
+
+// hasURL reports whether s has a URL item that the server can open. The
+// migration puts a placeholder item first in a webhook sink that had a URL in
+// its target. The placeholder has no value, so the sink has no URL.
+func hasURL(s *notify.Sink) bool {
+	return s.Kind != notify.SinkEmail && len(s.SecretRefs) > 0 &&
+		!strings.HasPrefix(s.SecretRefs[0], notify.NoURLRefPrefix)
+}
+
 func toDocument(s *notify.Sink) sinkDocument {
 	return sinkDocument{
 		ID: s.ID, Namespace: s.Scope.String(), Kind: string(s.Kind), Platform: s.Platform, Name: s.Name,
-		Target: s.Target, URLSet: s.Kind == notify.SinkChat && len(s.SecretRefs) == 1, CreatedBy: s.CreatedBy,
-		Version: s.Version,
+		Target: answerTarget(s), URLSet: hasURL(s), CreatedBy: s.CreatedBy,
+		Version: s.Version, HostNeedsUpdate: s.HostNeedsUpdate(),
 	}
 }
 

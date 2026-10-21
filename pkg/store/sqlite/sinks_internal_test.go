@@ -163,6 +163,79 @@ func checkTamperedSink(t *testing.T, tc sinkTampering) {
 	}
 }
 
+// legacyHostSinks lists the stored rows whose host was valid before the host
+// allowlist of a write: the update changes the seeded chat sink.
+func legacyHostSinks() []sinkTampering {
+	return []sinkTampering{
+		{"chat host in raw Unicode", `UPDATE notification_sinks SET target = 'chat.müller.de'`, true},
+		{"chat host with a trailing dot", `UPDATE notification_sinks SET target = 'mm.example.com.'`, true},
+		{"chat host with an underscore", `UPDATE notification_sinks SET target = 'mm_chat.example.com'`, true},
+		{"chat host with an empty port", `UPDATE notification_sinks SET target = 'hooks.example.com:'`, true},
+		{
+			"webhook host with an underscore",
+			`UPDATE notification_sinks SET kind = 'webhook', platform = '', target = 'hk_1.example.com';
+				INSERT INTO notification_sink_refs (namespace_id, ref) SELECT namespace_id, 'itm-bbbbbbbb' FROM notification_sinks;
+				INSERT INTO notification_sink_secrets (namespace_id, ref, sink_id, position, ciphertext)
+					SELECT namespace_id, 'itm-bbbbbbbb', id, 1, x'00' FROM notification_sinks`,
+			true,
+		},
+	}
+}
+
+// TestStoredSinkFromBeforeTheHostCheck proves that a stored sink whose host
+// fails the allowlist of a write still passes the restore check and is served
+// by a read, with the flag that asks for a new host. A write of it is refused.
+func TestStoredSinkFromBeforeTheHostCheck(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range legacyHostSinks() {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			s := openInternalTemplated(t)
+			seedSink(t, s)
+
+			for stmt := range strings.SplitSeq(tc.update, ";") {
+				if _, err := s.conn.ExecContext(t.Context(), stmt); err != nil {
+					t.Fatalf("change the rows: %v", err)
+				}
+			}
+
+			if err := checkStagedSinks(t.Context(), s.conn); err != nil {
+				t.Fatalf("restore check = %v, want nil", err)
+			}
+
+			checkServedAndNotWritten(t, s)
+		})
+	}
+}
+
+// checkServedAndNotWritten checks that a read serves the stored sink with the
+// flag, with no warning in the log, and that a write of it is refused.
+func checkServedAndNotWritten(t *testing.T, s *Store) {
+	t.Helper()
+
+	var logs bytes.Buffer
+
+	s.logger = slog.New(slog.NewTextHandler(&logs, nil))
+
+	got, err := s.NotificationSinks().Sinks(t.Context(), "acme")
+	if err != nil || len(got) != 1 || !got[0].HostNeedsUpdate() {
+		t.Fatalf("Sinks = %+v, %v; want the sink, flagged for a new host", got, err)
+	}
+
+	// The write path keeps the allowlist: the same sink is not stored again.
+	fence := namespace.Fence{Namespace: "acme", FailoverVersion: 1}
+	err = s.NotificationSinks().PutSink(t.Context(), got[0], nil, fence, sinkEntry())
+	if !errors.Is(err, notify.ErrInvalid) {
+		t.Fatalf("PutSink of the sink = %v, want ErrInvalid", err)
+	}
+
+	if logs.Len() != 0 {
+		t.Errorf("log = %q, want no warning: the sink is served", logs.String())
+	}
+}
+
 // TestCheckStagedSinksRefusesAMissingNamespace proves that a sink, a secret
 // item and a held ref whose namespace the backup does not hold are corrupt. An
 // inner join would skip such a row, and the restore would bring it in.

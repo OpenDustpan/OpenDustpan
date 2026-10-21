@@ -206,6 +206,7 @@ func newUserHandlerWithSessions(
 	}
 
 	handler, err := pulumi.NewHandler(pulumi.Config{
+		SessionPolicy:           nil,
 		DisablePulumiJournaling: false,
 		Stacks:                  stacks,
 		Updates:                 newUnusedUpdates(t, namespaces),

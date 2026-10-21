@@ -175,9 +175,15 @@ func newProviderEnv(t *testing.T) providerEnv {
 	return providerEnv{signInEnv: e, beta: beta, hub: hub, stale: stale}
 }
 
-// adminDo sends a request with the access token of an administrator.
+// adminDo sends a request as an administrator. A read uses the access token
+// of the administrator. A write uses a new console session, because an
+// access token never gives the fresh authentication that a write needs.
 func (e providerEnv) adminDo(t *testing.T, method, target, body string) *httptest.ResponseRecorder {
 	t.Helper()
+
+	if method != http.MethodGet {
+		return e.sendWithSession(t, method, e.freshSignIn(t), target, body)
+	}
 
 	req := httptest.NewRequestWithContext(t.Context(), method, target, strings.NewReader(body))
 	req.Header.Set("Authorization", "Bearer test-token")
@@ -507,6 +513,10 @@ func TestSignInProviderDisableRunsInMaintenanceMode(t *testing.T) {
 	created := e.createBeta(t)
 
 	_, betaSession := e.signInSession(t, e.beta, "beta")
+
+	// A sign-in is refused in maintenance mode, so the console session of the
+	// change exists before it.
+	admin := e.freshSignIn(t)
 	version := strconv.FormatInt(created.Version, 10)
 
 	if err := e.store.SetState(t.Context(), maintenance.StateMaintenance); err != nil {
@@ -515,17 +525,23 @@ func TestSignInProviderDisableRunsInMaintenanceMode(t *testing.T) {
 
 	target := "/api/server/sign-in-providers/beta"
 
-	rec := e.adminDo(t, http.MethodPatch, target, `{"version":`+version+`,"enabled":false,"displayName":"Renamed"}`)
+	rec := e.sendWithSession(
+		t,
+		http.MethodPatch,
+		admin,
+		target,
+		`{"version":`+version+`,"enabled":false,"displayName":"Renamed"}`,
+	)
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("disable with a rename in maintenance mode = %d %s, want 503", rec.Code, rec.Body.String())
 	}
 
-	rec = e.adminDo(t, http.MethodPatch, target, `{"version":`+version+`,"enabled":false}`)
+	rec = e.sendWithSession(t, http.MethodPatch, admin, target, `{"version":`+version+`,"enabled":false}`)
 	if rec.Code != http.StatusOK || decodeProvider(t, rec).Version != 2 || decodeProvider(t, rec).Enabled {
 		t.Fatalf("disable in maintenance mode = %d %s, want 200 with version 2, disabled", rec.Code, rec.Body.String())
 	}
 
-	rec = e.adminDo(t, http.MethodPatch, target, `{"version":2,"enabled":true}`)
+	rec = e.sendWithSession(t, http.MethodPatch, admin, target, `{"version":2,"enabled":true}`)
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("enable in maintenance mode = %d %s, want 503", rec.Code, rec.Body.String())
 	}
