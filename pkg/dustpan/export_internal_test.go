@@ -33,3 +33,18 @@ func (s *Server) RouteSources() []RouteSource {
 
 	return out
 }
+
+// HandlerNames returns the names of the adapters that the server mounts.
+func (s *Server) HandlerNames() []string {
+	if s.mounted == nil {
+		return nil
+	}
+
+	var out []string
+
+	for _, h := range s.mounted.handlers() {
+		out = append(out, h.name)
+	}
+
+	return out
+}

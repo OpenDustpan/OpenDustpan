@@ -27,6 +27,7 @@ const (
 	bearerScheme    = "bearerAuth"
 	idempotencyName = "IdempotencyKey"
 	ifMatchName     = "IfMatch"
+	ifMatchReqName  = "IfMatchRequired"
 	etagName        = "ETag"
 	actionsKey      = "x-dustpan-actions"
 )
@@ -146,11 +147,20 @@ func componentsObject() object {
 				"A string of 1 to 255 printable ASCII characters. "+
 					"A request with the same key and the same body gets the first answer again.",
 				object{keyType: typeString, "minLength": 1, "maxLength": maxIdempotencyKeyLength},
+				false,
 			),
 			ifMatchName: headerParameter(
 				"If-Match",
 				"The ETag of the version that the request replaces. A version that does not match answers 412.",
 				object{keyType: typeString},
+				false,
+			),
+			ifMatchReqName: headerParameter(
+				"If-Match",
+				"The ETag of the version that the request replaces. The request needs it: without it the answer is 428. "+
+					"A version that does not match answers 412.",
+				object{keyType: typeString},
+				true,
 			),
 		},
 		"headers": object{
@@ -164,9 +174,9 @@ func componentsObject() object {
 }
 
 // headerParameter returns a header parameter of components.parameters.
-func headerParameter(name, description string, schema object) object {
+func headerParameter(name, description string, schema object, required bool) object {
 	return object{
-		keyName: name, "in": "header", keyRequired: false, keyDescription: description, keySchema: schema,
+		keyName: name, "in": "header", keyRequired: required, keyDescription: description, keySchema: schema,
 	}
 }
 
@@ -226,6 +236,10 @@ func operationObject(op Operation) object {
 
 	if op.IfMatch {
 		params = append(params, object{keyRef: refParameters + ifMatchName})
+	}
+
+	if op.IfMatchRequired {
+		params = append(params, object{keyRef: refParameters + ifMatchReqName})
 	}
 
 	success := object{

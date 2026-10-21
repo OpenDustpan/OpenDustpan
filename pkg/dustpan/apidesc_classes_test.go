@@ -8,33 +8,39 @@ import (
 	"opendustpan.org/opendustpan/internal/api/apidesc"
 )
 
-// outsideByDesign lists the path prefixes that stay outside the prefix of the
-// tool-neutral REST API for good: the tool-compatible APIs, the probes, the
-// runner protocol, the discovery and identity paths that an outside system
-// stores, the MCP endpoint, the metrics and the chat actions. A route here is
-// not in the description. It is the one list of these paths: the check of each
-// route reads it, and no other test keeps a second copy.
+// outsideByDesign lists the paths that stay outside the prefix of the
+// tool-neutral REST API for good. An entry that ends in a slash is a prefix:
+// the tool-compatible APIs and the runner protocol, which are whole APIs with
+// their own routes. Another entry is one exact path: the discovery and
+// identity paths that an outside system stores, the MCP endpoint, the metrics
+// and the chat actions. A new route below an exact path is in no class and
+// fails the check. A route here is not in the description. It is the one list
+// of these paths: the check of each route reads it, and no other test keeps a
+// second copy.
+//
+// The probes under /health/ are not on this list. The server mounts them on
+// its root mux, and they are not in the route sources that the check reads.
 //
 //nolint:gochecknoglobals // A fixed table; Go has no constant slices.
 var outsideByDesign = []string{
 	// The Pulumi Cloud-compatible API.
-	"/api/capabilities", "/api/stacks/", "/api/user",
+	"/api/capabilities", "/api/stacks/", "/api/user", "/api/user/",
 	// The TFE-compatible API and its discovery document.
 	"/api/v2/", "/.well-known/terraform.json",
 	// The OpenTofu HTTP backend.
 	"/tofu/state/",
-	// The probes.
-	"/health/",
 	// The runner protocol.
 	"/runner/v1/",
-	// Paths that an identity provider, a cloud trust policy, an MCP client, a
-	// scrape configuration or a chat app stores.
-	"/oidc/", "/sign-in/", "/mcp", "/metrics", "/chat/",
+	// The paths that an identity provider, a cloud trust policy, an MCP
+	// client, a scrape configuration or a chat app stores.
+	"/sign-in/{id}/callback",
+	"/oidc/{namespace}/.well-known/openid-configuration", "/oidc/{namespace}/jwks",
+	"/mcp", "/metrics",
+	"/chat/{tool}/actions",
 }
 
 // notMoved lists the routes of the tool-neutral REST API that still sit
-// outside the prefix, or that sit under it with a wildcard name that the
-// description cannot hold. The key is the pattern now served. The value is
+// outside the prefix. The key is the pattern now served. The value is
 // the path that the route will have. The list shrinks to zero when the move
 // ends: a route that moves leaves the list in the same change.
 //
@@ -125,11 +131,11 @@ var notMoved = map[string]string{
 	"POST /api/server/caller/tokens":                                                 "/api/dustpan/v1/me/tokens",
 	"DELETE /api/server/caller/tokens/{id}":                                          "/api/dustpan/v1/me/tokens/{id}",
 	"POST /api/server/caller/tokens/{id}/rotate":                                     "/api/dustpan/v1/me/tokens/{id}/rotate",
-	"GET /api/server/token-policy":                                                   "/api/dustpan/v1/token-policy",
-	"PATCH /api/server/token-policy":                                                 "/api/dustpan/v1/token-policy",
-	"POST /api/server/token-policy/sweep":                                            "/api/dustpan/v1/token-policy/sweep",
-	"GET /api/server/session-policy":                                                 "/api/dustpan/v1/session-policy",
-	"PATCH /api/server/session-policy":                                               "/api/dustpan/v1/session-policy",
+	"GET /api/server/token-policy":                                                   "/api/dustpan/v1/settings/token-policy",
+	"PATCH /api/server/token-policy":                                                 "/api/dustpan/v1/settings/token-policy",
+	"POST /api/server/token-policy/sweep":                                            "/api/dustpan/v1/settings/token-policy/sweep",
+	"GET /api/server/session-policy":                                                 "/api/dustpan/v1/settings/session-policy",
+	"PATCH /api/server/session-policy":                                               "/api/dustpan/v1/settings/session-policy",
 	"GET /api/server/audit/sinks":                                                    "/api/dustpan/v1/audit/sinks",
 	"POST /api/server/audit/checkpoint-epochs":                                       "/api/dustpan/v1/audit/checkpoint-epochs",
 	"GET /api/server/sign-in/{provider}":                                             "/api/dustpan/v1/sign-in/{id}",
@@ -141,7 +147,6 @@ var notMoved = map[string]string{
 	"GET /api/server/sign-in-providers/{id}":                                         "/api/dustpan/v1/sign-in-providers/{id}",
 	"PATCH /api/server/sign-in-providers/{id}":                                       "/api/dustpan/v1/sign-in-providers/{id}",
 	"DELETE /api/server/sign-in-providers/{id}":                                      "/api/dustpan/v1/sign-in-providers/{id}",
-	"GET /api/dustpan/v1/namespaces/-/units/{unitID}":                                "/api/dustpan/v1/namespaces/-/units/{unit_id}",
 	"POST /api/inventory/deleted-units/{tool}/{unitID}/restore":                      "/api/dustpan/v1/namespaces/{namespace}/deleted-units/{unit_id}/restore",
 	"DELETE /api/inventory/deleted-units/{tool}/{unitID}":                            "/api/dustpan/v1/namespaces/{namespace}/deleted-units/{unit_id}",
 	"PUT /api/inventory/unit-collection":                                             "/api/dustpan/v1/namespaces/{namespace}/units/{unit_id}/collection",
@@ -165,39 +170,72 @@ var notMoved = map[string]string{
 	"POST /api/runners/{namespace}/runners/{runner}/retire":                          "/api/dustpan/v1/namespaces/{namespace}/runners/{runner}/retire",
 }
 
-// routeClass names the three classes of a route of the joined table.
+// routeClass names the classes of a route of the joined table.
 type routeClass string
 
 const (
-	// classDescribed is a route under the prefix that the description holds.
+	// classDescribed is a route under the prefix that is in the operations of
+	// the server and in the checked-in description.
 	classDescribed routeClass = "described"
+	// classUndescribed is a route under the prefix that is on the list
+	// apidesc.Undescribed, with a reason.
+	classUndescribed routeClass = "undescribed"
 	// classOutside is a route on the list outsideByDesign.
 	classOutside routeClass = "outside by design"
 	// classNotMoved is a route on the list notMoved.
 	classNotMoved routeClass = "not moved"
 )
 
-// classesOf returns every class that the pattern ("METHOD /path") belongs to,
-// with notMoved as the not-moved list.
+// classInput is what the class of a route depends on, besides its pattern.
+type classInput struct {
+	// moved is the list notMoved.
+	moved map[string]string
+	// described holds the keys of the operations that are in the operations
+	// of the server and in the checked-in description.
+	described map[string]bool
+	// undescribed is the list apidesc.Undescribed: pattern and reason.
+	undescribed map[string]string
+}
+
+// newClassInput returns a classInput. A nil list is an empty list.
+func newClassInput(moved map[string]string, described map[string]bool, undescribed map[string]string) classInput {
+	return classInput{moved: moved, described: described, undescribed: undescribed}
+}
+
+// keyOfPattern returns the key that apidesc gives to a pattern: the method
+// and the path with the names of the wildcards removed.
+func keyOfPattern(pattern string) string {
+	method, path, _ := strings.Cut(pattern, " ")
+
+	return apidesc.Operation{
+		ID: "", Method: method, Path: path, Tags: nil, Actions: nil, Public: false,
+		IdempotencyKey: false, IfMatch: false, IfMatchRequired: false, ETag: false,
+	}.Key()
+}
+
+// classesOf returns every class that the pattern ("METHOD /path") belongs to.
 // A route that belongs to one class only is in order. A route that belongs to
-// none or to two or more fails the check that calls this function.
-func classesOf(pattern string, notMoved map[string]string) []routeClass {
+// none or to two or more fails the check that calls this function. A route
+// is described only when its key is in both lists of in.described. A path
+// under the prefix is not enough.
+func classesOf(pattern string, in classInput) []routeClass {
 	_, path, _ := strings.Cut(pattern, " ")
 
 	var out []routeClass
 
-	_, moved := notMoved[pattern]
-	underPrefix := strings.HasPrefix(path, apidesc.Prefix)
-
-	if underPrefix && !moved {
+	if strings.HasPrefix(path, apidesc.Prefix) && in.described[keyOfPattern(pattern)] {
 		out = append(out, classDescribed)
+	}
+
+	if _, ok := in.undescribed[pattern]; ok {
+		out = append(out, classUndescribed)
 	}
 
 	if isOutsideByDesign(path) {
 		out = append(out, classOutside)
 	}
 
-	if moved {
+	if _, ok := in.moved[pattern]; ok {
 		out = append(out, classNotMoved)
 	}
 
@@ -205,8 +243,7 @@ func classesOf(pattern string, notMoved map[string]string) []routeClass {
 }
 
 // isOutsideByDesign reports whether path is on the list outsideByDesign. An
-// entry that ends in a slash is a prefix. Another entry is a path, and the
-// paths below it.
+// entry that ends in a slash is a prefix. Another entry is one exact path.
 func isOutsideByDesign(path string) bool {
 	for _, entry := range outsideByDesign {
 		if strings.HasSuffix(entry, "/") {
@@ -217,7 +254,7 @@ func isOutsideByDesign(path string) bool {
 			continue
 		}
 
-		if path == entry || strings.HasPrefix(path, entry+"/") {
+		if path == entry {
 			return true
 		}
 	}
@@ -226,12 +263,13 @@ func isOutsideByDesign(path string) bool {
 }
 
 // checkClasses returns one error text for each pattern that does not belong to
-// exactly one class, and for each entry of notMoved that no pattern serves.
-func checkClasses(patterns []string, moved map[string]string) []string {
+// exactly one class, and for each entry of the lists notMoved and
+// undescribed that no pattern serves.
+func checkClasses(patterns []string, in classInput) []string {
 	var problems []string
 
 	for _, pattern := range patterns {
-		classes := classesOf(pattern, moved)
+		classes := classesOf(pattern, in)
 
 		switch len(classes) {
 		case 1:
@@ -242,9 +280,15 @@ func checkClasses(patterns []string, moved map[string]string) []string {
 		}
 	}
 
-	for old := range moved {
+	for old := range in.moved {
 		if !slices.Contains(patterns, old) {
 			problems = append(problems, old+" is on the not-moved list but no adapter serves it")
+		}
+	}
+
+	for pattern := range in.undescribed {
+		if !slices.Contains(patterns, pattern) {
+			problems = append(problems, pattern+" is on the undescribed list but no adapter serves it")
 		}
 	}
 

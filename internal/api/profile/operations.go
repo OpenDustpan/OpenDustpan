@@ -10,22 +10,18 @@ import (
 const tagProfiles = "profiles"
 
 // operationLabels names the routes of this adapter. The key is the pattern of
-// the route.
+// the route. The Idempotency-Key flag comes from Route.IdempotencyKey, so no
+// label sets it.
 //
 //nolint:gochecknoglobals // A fixed table; Go has no constant maps.
 var operationLabels = map[string]apidesc.Label{
-	apidesc.Pattern(http.MethodGet, profilesPath): apidesc.Name("listProfiles", tagProfiles),
-	apidesc.Pattern(http.MethodPost, profilesPath): apidesc.Name("createProfile", tagProfiles).
-		WithKey().
-		WithETag(),
-	apidesc.Pattern(http.MethodGet, profilePath): apidesc.Name("getProfile", tagProfiles).WithETag(),
-	apidesc.Pattern(http.MethodDelete, profilePath): apidesc.Name("deleteProfile", tagProfiles).
-		WithKey().
-		WithIfMatch(),
-	apidesc.Pattern(http.MethodGet, revisionsPath): apidesc.Name("listProfileRevisions", tagProfiles),
-	apidesc.Pattern(http.MethodPost, revisionsPath): apidesc.Name("saveProfileRevision", tagProfiles).
-		WithKey().
-		WithIfMatch().
+	apidesc.Pattern(http.MethodGet, profilesPath):   apidesc.Name("listProfiles", tagProfiles),
+	apidesc.Pattern(http.MethodPost, profilesPath):  apidesc.Name("createProfile", tagProfiles).WithETag(),
+	apidesc.Pattern(http.MethodGet, profilePath):    apidesc.Name("getProfile", tagProfiles).WithETag(),
+	apidesc.Pattern(http.MethodDelete, profilePath): apidesc.Name("deleteProfile", tagProfiles).WithIfMatch(),
+	apidesc.Pattern(http.MethodGet, revisionsPath):  apidesc.Name("listProfileRevisions", tagProfiles),
+	apidesc.Pattern(http.MethodPost, revisionsPath): apidesc.Name("createProfileRevision", tagProfiles).
+		WithIfMatchRequired().
 		WithETag(),
 	apidesc.Pattern(http.MethodGet, revisionsPath+"/{revision}"): apidesc.Name("getProfileRevision", tagProfiles).
 		WithETag(),
@@ -44,6 +40,7 @@ func (h *Handler) Operations() []apidesc.Operation {
 
 		rows = append(rows, apidesc.Row{
 			Method: route.Method, Path: route.Path, Actions: actions, Public: route.Scope == ScopePublic,
+			IdempotencyKey: route.IdempotencyKey,
 		})
 	}
 

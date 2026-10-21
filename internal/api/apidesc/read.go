@@ -115,7 +115,7 @@ func readOperation(path, method string, raw json.RawMessage) (Operation, error) 
 
 	op := Operation{
 		ID: shape.OperationID, Method: upper, Path: path, Tags: shape.Tags, Actions: shape.Actions,
-		Public: false, IdempotencyKey: false, IfMatch: false, ETag: false,
+		Public: false, IdempotencyKey: false, IfMatch: false, IfMatchRequired: false, ETag: false,
 	}
 
 	if err := readSecurity(&op, shape.Security); err != nil {
@@ -160,6 +160,8 @@ func readParameters(op *Operation, params []parameterShape) error {
 			op.IdempotencyKey = true
 		case param.Ref == "#/components/parameters/"+ifMatchName:
 			op.IfMatch = true
+		case param.Ref == "#/components/parameters/"+ifMatchReqName:
+			op.IfMatchRequired = true
 		case param.Ref == "" && param.In == "path":
 		default:
 			return fmt.Errorf(

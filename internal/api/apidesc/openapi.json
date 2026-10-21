@@ -28,6 +28,15 @@
         "schema": {
           "type": "string"
         }
+      },
+      "IfMatchRequired": {
+        "description": "The ETag of the version that the request replaces. The request needs it: without it the answer is 428. A version that does not match answers 412.",
+        "in": "header",
+        "name": "If-Match",
+        "required": true,
+        "schema": {
+          "type": "string"
+        }
       }
     },
     "schemas": {
@@ -1692,7 +1701,7 @@
         ]
       },
       "post": {
-        "operationId": "saveProfileRevision",
+        "operationId": "createProfileRevision",
         "parameters": [
           {
             "in": "path",
@@ -1714,7 +1723,7 @@
             "$ref": "#/components/parameters/IdempotencyKey"
           },
           {
-            "$ref": "#/components/parameters/IfMatch"
+            "$ref": "#/components/parameters/IfMatchRequired"
           }
         ],
         "requestBody": {

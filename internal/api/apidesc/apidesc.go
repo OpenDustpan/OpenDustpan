@@ -52,8 +52,13 @@ type Operation struct {
 	// IdempotencyKey is true for a route that takes the Idempotency-Key
 	// header.
 	IdempotencyKey bool
-	// IfMatch is true for a route that takes the If-Match header.
+	// IfMatch is true for a route that takes the If-Match header and works
+	// without it.
 	IfMatch bool
+	// IfMatchRequired is true for a route that takes the If-Match header and
+	// answers 428 without it. A route sets IfMatch or IfMatchRequired, never
+	// both.
+	IfMatchRequired bool
 	// ETag is true for a route whose answer holds the ETag header.
 	ETag bool
 }
@@ -75,6 +80,12 @@ func (o Operation) Validate() error {
 
 	if err := validateTags(o); err != nil {
 		return err
+	}
+
+	if o.IfMatch && o.IfMatchRequired {
+		return fmt.Errorf(
+			"%w: %s %s sets If-Match as optional and as required", ErrInvalidOperation, o.Method, o.Path,
+		)
 	}
 
 	if !allowedMethod(o.Method) {
@@ -105,9 +116,10 @@ var (
 	operationID    = regexp.MustCompile(`^[a-z][a-zA-Z0-9]{2,63}$`)
 	tagGrammar     = regexp.MustCompile(`^[a-z]+(-[a-z]+)*$`)
 	literalSegment = regexp.MustCompile(`^[a-z0-9-]+$`)
-	// fileSegment is a literal with the one suffix .json. Only the last
-	// segment of a path may be one, for a route that serves a document.
-	fileSegment   = regexp.MustCompile(`^[a-z0-9-]+\.json$`)
+	// fileSegment is the one literal with a suffix: openapi.json. Only the
+	// last segment of a path may be one, for the route that serves the
+	// document.
+	fileSegment   = regexp.MustCompile(`^openapi\.json$`)
 	wildcardName  = regexp.MustCompile(`^[a-z_][a-z0-9_]*$`)
 	actionGrammar = regexp.MustCompile(`^[a-z]+:[a-z]+(-[a-z]+)*$`)
 )
@@ -140,8 +152,8 @@ func validateTags(o Operation) error {
 }
 
 // validatePath allows a path under Prefix whose segments are literals
-// ([a-z0-9-]+) or wildcards. The last segment may also be a literal with the
-// suffix .json. A wildcard is {name} with name [a-z_][a-z0-9_]*.
+// ([a-z0-9-]+) or wildcards. The last segment may also be openapi.json. A wildcard is {name} with name
+// [a-z_][a-z0-9_]*.
 // {name...} and {$} are allowed in the last segment only.
 func validatePath(path string) error {
 	rest, ok := strings.CutPrefix(path, Prefix)
@@ -323,6 +335,7 @@ func sameOperation(a, b Operation) bool {
 		a.Public == b.Public &&
 		a.IdempotencyKey == b.IdempotencyKey &&
 		a.IfMatch == b.IfMatch &&
+		a.IfMatchRequired == b.IfMatchRequired &&
 		a.ETag == b.ETag &&
 		slices.Equal(a.Tags, b.Tags) &&
 		sameActions(a.Actions, b.Actions)

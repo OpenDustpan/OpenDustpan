@@ -85,20 +85,73 @@ func TestAPIDescriptionDrift(t *testing.T) {
 }
 
 // TestEveryRouteHasOneClass proves that each route that the adapters serve is
-// in exactly one of three classes: under the prefix and in the description, on
-// the list of paths that stay outside by design, or on the not-moved list.
+// in exactly one of four classes: described, which means under the prefix and
+// in the operations of the server and in the checked-in description; on the
+// list of routes that no adapter describes, with a reason; on the list of
+// paths that stay outside by design; or on the not-moved list. A path under
+// the prefix is not enough: a route that is served and is in neither the
+// operations nor the description fails here. The check runs on a server of the
+// installation kind dev too, which serves the route of the one-time code.
 func TestEveryRouteHasOneClass(t *testing.T) {
 	t.Parallel()
 
-	var patterns []string
+	in, patterns := servedRoutes(t, newEveryModuleServer(t), newDevModuleServer(t))
 
-	for _, source := range newEveryModuleServer(t).RouteSources() {
-		patterns = append(patterns, source.Patterns...)
-	}
-
-	if problems := checkClasses(patterns, notMoved); len(problems) > 0 {
+	if problems := checkClasses(patterns, in); len(problems) > 0 {
 		t.Fatalf("routes that are not in exactly one class:\n%s", strings.Join(problems, "\n"))
 	}
+}
+
+// appendNew appends the items of more that list does not hold.
+func appendNew(list, more []string) []string {
+	for _, item := range more {
+		if !slices.Contains(list, item) {
+			list = append(list, item)
+		}
+	}
+
+	return list
+}
+
+// servedRoutes returns the patterns that the servers serve, each once, and the
+// input of the class check: the keys of the operations of the servers that the
+// checked-in description holds too. It fails the test when a mounted handler
+// lists no patterns, because the check would not see its routes.
+func servedRoutes(t *testing.T, servers ...*dustpan.Server) (classInput, []string) {
+	t.Helper()
+
+	described, err := apidesc.Read(apidesc.Document())
+	if err != nil {
+		t.Fatalf("read the checked-in description: %v", err)
+	}
+
+	inDocument := map[string]bool{}
+	for _, op := range described {
+		inDocument[op.Key()] = true
+	}
+
+	in := newClassInput(notMoved, map[string]bool{}, apidesc.Undescribed())
+
+	var patterns []string
+
+	for _, srv := range servers {
+		for _, op := range srv.Operations() {
+			in.described[op.Key()] = inDocument[op.Key()]
+		}
+
+		var listed []string
+
+		for _, source := range srv.RouteSources() {
+			listed = append(listed, source.Name)
+			patterns = appendNew(patterns, source.Patterns)
+		}
+
+		if names := srv.HandlerNames(); !slices.Equal(names, listed) {
+			t.Fatalf("the mounted handlers %v differ from the handlers that list their routes %v", names, listed)
+		}
+	}
+
+	return in, patterns
 }
 
 // TestNotMovedListIsConsistent proves that a route on the not-moved list
@@ -138,36 +191,91 @@ func TestNotMovedListIsConsistent(t *testing.T) {
 }
 
 // TestClassCheckFailsClosed proves the check of the classes for hostile input:
-// a route in no class, a route in two classes, and an entry of the not-moved
-// list that nothing serves each give a problem.
+// a route in no class, a route in two classes, a route under the prefix that
+// the description lacks, and an entry of a list that nothing serves each give a
+// problem.
 func TestClassCheckFailsClosed(t *testing.T) {
 	t.Parallel()
+
+	const (
+		added  = "GET /api/dustpan/v1/namespaces/-/units/{unit_id}/extra"
+		listed = "GET /api/dustpan/v1/namespaces/{namespace}/units"
+	)
 
 	tests := []struct {
 		name     string
 		patterns []string
-		moved    map[string]string
+		in       classInput
 		want     string
 	}{
-		{"route in no class", []string{"GET /api/other/x"}, nil, "is in no class"},
-		{"route outside the prefix and not listed", []string{"GET /api/server/x"}, nil, "is in no class"},
+		{"route in no class", []string{"GET /api/other/x"}, newClassInput(nil, nil, nil), "is in no class"},
 		{
-			"route under the prefix on the not-moved list is in that class only",
-			[]string{"GET /api/dustpan/v1/x/{id}"},
-			map[string]string{"GET /api/dustpan/v1/x/{id}": "/api/dustpan/v1/x/{x_id}"},
+			"route outside the prefix and not listed",
+			[]string{"GET /api/server/x"},
+			newClassInput(nil, nil, nil),
+			"is in no class",
+		},
+		{
+			// A new route under the prefix that no adapter lists and that
+			// the description lacks.
+			"route under the prefix that is not in the operations",
+			[]string{listed, added},
+			newClassInput(nil, map[string]bool{keyOfPattern(listed): true}, nil),
+			added + " is in no class",
+		},
+		{
+			"route under the prefix that is in the operations and not in the description",
+			[]string{listed},
+			newClassInput(nil, map[string]bool{keyOfPattern(listed): false}, nil),
+			listed + " is in no class",
+		},
+		{
+			"route under the prefix with a part of a listed path",
+			[]string{added},
+			newClassInput(nil, nil, map[string]string{"GET /api/dustpan/v1/namespaces/-/units/{unitID}": "reason"}),
+			"is in no class",
+		},
+		{
+			"route under the prefix that is described",
+			[]string{listed},
+			newClassInput(nil, map[string]bool{keyOfPattern(listed): true}, nil),
 			"",
+		},
+		{
+			"route under the prefix on the undescribed list",
+			[]string{listed},
+			newClassInput(nil, nil, map[string]string{listed: "reason"}),
+			"",
+		},
+		{
+			"route under the prefix that is described and on the undescribed list",
+			[]string{listed},
+			newClassInput(nil, map[string]bool{keyOfPattern(listed): true}, map[string]string{listed: "reason"}),
+			"is in 2 classes",
 		},
 		{
 			"route that is outside by design and on the not-moved list",
 			[]string{"GET /runner/v1/poll"},
-			map[string]string{"GET /runner/v1/poll": "/api/dustpan/v1/poll"},
+			newClassInput(map[string]string{"GET /runner/v1/poll": "/api/dustpan/v1/poll"}, nil, nil),
 			"is in 2 classes",
 		},
 		{
-			"entry that no adapter serves",
-			[]string{"GET /api/dustpan/v1/x"},
-			map[string]string{"GET /api/server/gone": "/api/dustpan/v1/gone"},
+			"route below an exact path that stays outside",
+			[]string{"GET /sign-in/{id}/other"},
+			newClassInput(nil, nil, nil),
+			"is in no class",
+		},
+		{
+			"entry of the not-moved list that no adapter serves",
+			[]string{"GET /runner/v1/x"},
+			newClassInput(map[string]string{"GET /api/server/gone": "/api/dustpan/v1/gone"}, nil, nil),
 			"no adapter serves it",
+		},
+		{
+			"entry of the undescribed list that no adapter serves",
+			[]string{"GET /runner/v1/x"},
+			newClassInput(nil, nil, map[string]string{"GET /api/dustpan/v1/gone": "reason"}),
+			"on the undescribed list but no adapter serves it",
 		},
 	}
 
@@ -175,7 +283,7 @@ func TestClassCheckFailsClosed(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			problems := strings.Join(checkClasses(tt.patterns, tt.moved), "\n")
+			problems := strings.Join(checkClasses(tt.patterns, tt.in), "\n")
 
 			if tt.want == "" {
 				if problems != "" {
@@ -192,9 +300,46 @@ func TestClassCheckFailsClosed(t *testing.T) {
 	}
 }
 
+// TestUndescribedRoutesAreNotInTheDescription proves that a route on the
+// undescribed list is in neither the operations nor the checked-in
+// description, and that each entry has a reason.
+func TestUndescribedRoutesAreNotInTheDescription(t *testing.T) {
+	t.Parallel()
+
+	described, err := apidesc.Read(apidesc.Document())
+	if err != nil {
+		t.Fatalf("read the checked-in description: %v", err)
+	}
+
+	keys := map[string]bool{}
+	for _, op := range described {
+		keys[op.Key()] = true
+	}
+
+	for _, srv := range []*dustpan.Server{newEveryModuleServer(t), newDevModuleServer(t)} {
+		for _, op := range srv.Operations() {
+			keys[op.Key()] = true
+		}
+	}
+
+	for pattern, reason := range apidesc.Undescribed() {
+		if reason == "" {
+			t.Errorf("%s is on the undescribed list with no reason", pattern)
+		}
+
+		if keys[keyOfPattern(pattern)] {
+			t.Errorf("%s is on the undescribed list and in the description", pattern)
+		}
+	}
+}
+
 // TestClassesOfKnownRoutes pins the class of one route of each kind.
 func TestClassesOfKnownRoutes(t *testing.T) {
 	t.Parallel()
+
+	in := newClassInput(
+		notMoved, map[string]bool{keyOfPattern("GET /api/dustpan/v1/capabilities"): true}, apidesc.Undescribed(),
+	)
 
 	tests := []struct {
 		pattern string
@@ -208,14 +353,38 @@ func TestClassesOfKnownRoutes(t *testing.T) {
 		{"POST /runner/v1/poll", classOutside},
 		{"GET /api/server/backups", classNotMoved},
 		{"GET /api/server/sign-in/{provider}/callback", classNotMoved},
+		{"GET /api/server/token-policy", classNotMoved},
 		{"GET /api/audit/entries", classNotMoved},
-		{"GET /api/dustpan/v1/namespaces/-/units/{unitID}", classNotMoved},
+		{"GET /api/dustpan/v1/namespaces/-/units/{unitID}", classUndescribed},
+		{"POST /api/dustpan/v1/sign-in/dev-code", classUndescribed},
 	}
 
 	for _, tt := range tests {
-		got := classesOf(tt.pattern, notMoved)
+		got := classesOf(tt.pattern, in)
 		if len(got) != 1 || got[0] != tt.want {
 			t.Errorf("classesOf(%q) = %v, want [%s]", tt.pattern, got, tt.want)
+		}
+	}
+}
+
+// TestNotMovedSettingsPolicies pins the paths that the decisions of the move
+// table give to the policies of the installation.
+//
+//nolint:gosec // The paths name policies and hold no secret.
+func TestNotMovedSettingsPolicies(t *testing.T) {
+	t.Parallel()
+
+	want := map[string]string{
+		"GET /api/server/token-policy":        "/api/dustpan/v1/settings/token-policy",
+		"PATCH /api/server/token-policy":      "/api/dustpan/v1/settings/token-policy",
+		"POST /api/server/token-policy/sweep": "/api/dustpan/v1/settings/token-policy/sweep",
+		"GET /api/server/session-policy":      "/api/dustpan/v1/settings/session-policy",
+		"PATCH /api/server/session-policy":    "/api/dustpan/v1/settings/session-policy",
+	}
+
+	for old, newPath := range want {
+		if got := notMoved[old]; got != newPath {
+			t.Errorf("notMoved[%q] = %q, want %q", old, got, newPath)
 		}
 	}
 }
@@ -288,8 +457,18 @@ func serveDescription(
 // writer must refuse.
 func hostileOperation(change func(o *apidesc.Operation)) apidesc.Operation {
 	o := apidesc.Operation{
-		ID: "getThing", Method: http.MethodGet, Path: "/api/dustpan/v1/things", Tags: []string{"things"},
-		Actions: []string{"thing:read"}, Public: false, IdempotencyKey: false, IfMatch: false, ETag: false,
+		ID:     "getThing",
+		Method: http.MethodGet,
+		Path:   "/api/dustpan/v1/things",
+		Tags:   []string{"things"},
+		Actions: []string{
+			"thing:read",
+		},
+		Public:          false,
+		IdempotencyKey:  false,
+		IfMatch:         false,
+		IfMatchRequired: false,
+		ETag:            false,
 	}
 	change(&o)
 

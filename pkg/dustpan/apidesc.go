@@ -1,8 +1,10 @@
 package dustpan
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 
 	"opendustpan.org/opendustpan/internal/api/apidesc"
 )
@@ -98,15 +100,50 @@ func (a adapters) routeSources() []routeSource {
 }
 
 // describeOperations returns the joined operations of the adapters, or an
-// error that names the first operation that breaks the allowlists of apidesc,
-// so that a server never starts with a description that the writer would
-// refuse.
+// error that names the first operation that breaks the allowlists of apidesc
+// or the first handler that hides its routes, so that a server never starts
+// with a description that the writer would refuse or that misses a route.
 func (a adapters) describeOperations() ([]apidesc.Operation, error) {
 	return describeHandlers(a.handlers())
 }
 
+// errUnlisted means that a mounted handler hides its routes from the
+// description: it lists no patterns, or it serves a route under the prefix and
+// lists no operations.
+var errUnlisted = errors.New("api description: a mounted handler does not list its routes")
+
+// checkListers returns errUnlisted, wrapped, for the first handler that
+// serves a route under apidesc.Prefix and does not implement both listers, or
+// that does not implement patternLister. A handler like that, for example one
+// that a later change wraps in a middleware, would drop out of the
+// description and out of the class check with no error.
+func checkListers(handlers []namedHandler) error {
+	for _, h := range handlers {
+		patterns, ok := h.handler.(patternLister)
+		if !ok {
+			return fmt.Errorf("%w: %s lists no patterns", errUnlisted, h.name)
+		}
+
+		if _, ok = h.handler.(operationLister); ok {
+			continue
+		}
+
+		for _, pattern := range patterns.RegisteredPatterns() {
+			if _, path, _ := strings.Cut(pattern, " "); strings.HasPrefix(path, apidesc.Prefix) {
+				return fmt.Errorf("%w: %s serves %s and lists no operations", errUnlisted, h.name, pattern)
+			}
+		}
+	}
+
+	return nil
+}
+
 // describeHandlers joins the operations of the handlers and checks each one.
 func describeHandlers(handlers []namedHandler) ([]apidesc.Operation, error) {
+	if err := checkListers(handlers); err != nil {
+		return nil, err
+	}
+
 	ops := joinOperations(handlers)
 
 	for _, op := range ops {

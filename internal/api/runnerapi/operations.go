@@ -15,7 +15,8 @@ var operationLabels = map[string]apidesc.Label{}
 
 // Operations returns the routes of this adapter that the description of the
 // tool-neutral REST API holds: the routes under apidesc.Prefix. The runner
-// protocol is not one of them.
+// protocol is not one of them. No scope of this adapter is public: each scope
+// needs a credential, so Public is false for every row.
 func (h *Handler) Operations() []apidesc.Operation {
 	rows := make([]apidesc.Row, 0, len(h.routes))
 
@@ -26,7 +27,7 @@ func (h *Handler) Operations() []apidesc.Operation {
 		}
 
 		rows = append(rows, apidesc.Row{
-			Method: route.Method, Path: route.Path, Actions: actions, Public: false,
+			Method: route.Method, Path: route.Path, Actions: actions, Public: false, IdempotencyKey: false,
 		})
 	}
 

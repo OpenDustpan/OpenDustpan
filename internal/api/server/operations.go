@@ -47,18 +47,16 @@ var operationLabels = map[string]apidesc.Label{
 // the unmoved paths still serve is not in the list.
 //
 // The sign-in with the one-time code of the dev command is not in the list.
-// Only the installation kind dev serves it, and a client never calls it.
+// It is on apidesc.Undescribed with the reason, and apidesc.Collect leaves it
+// out by its exact pattern.
 func (h *Handler) Operations() []apidesc.Operation {
 	rows := make([]apidesc.Row, 0, len(h.routes))
 
 	for _, route := range h.routes {
-		if route.Path == devCodePath {
-			continue
-		}
-
 		rows = append(rows, apidesc.Row{
 			Method: route.Method, Path: route.Path, Actions: actionNames(route.Actions),
-			Public: route.Scope == ScopePublic,
+			Public:         route.Scope == ScopePublic,
+			IdempotencyKey: false,
 		})
 	}
 

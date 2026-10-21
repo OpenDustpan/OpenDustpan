@@ -2,7 +2,6 @@ package inventory
 
 import (
 	"net/http"
-	"strings"
 
 	"opendustpan.org/opendustpan/internal/api/apidesc"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -61,18 +60,13 @@ var operationLabels = map[string]apidesc.Label{
 // Operations returns the routes of this adapter that the description of the
 // tool-neutral REST API holds: the routes under apidesc.Prefix.
 //
-// The route that reads one unit across namespaces is not in the list. Its
-// path names the wildcard unitID, and the description allows lower case
-// wildcard names with underscores only. The route joins the list when its
-// wildcard is renamed.
+// The route that reads one unit across namespaces is not in the list. It is
+// on apidesc.Undescribed with the reason, and apidesc.Collect leaves it out by
+// its exact pattern.
 func (h *Handler) Operations() []apidesc.Operation {
 	rows := make([]apidesc.Row, 0, len(h.routes))
 
 	for _, route := range h.routes {
-		if strings.Contains(route.Path, "{unitID}") {
-			continue
-		}
-
 		actions := make([]string, 0, len(route.NamespaceActions)+len(route.Actions))
 		for _, action := range append(append([]identity.Action(nil), route.NamespaceActions...), route.Actions...) {
 			actions = append(actions, string(action))
@@ -80,6 +74,7 @@ func (h *Handler) Operations() []apidesc.Operation {
 
 		rows = append(rows, apidesc.Row{
 			Method: route.Method, Path: route.Path, Actions: actions, Public: route.Scope == ScopePublic,
+			IdempotencyKey: false,
 		})
 	}
 

@@ -30,7 +30,7 @@ func sampleOperations() []apidesc.Operation {
 	update.ID, update.Tags, update.IfMatch, update.ETag = "updateThing", []string{"things", "extra"}, true, true
 
 	remove := op("DELETE", "/api/dustpan/v1/namespaces/{namespace}/things/{thing_id}", "thing:delete")
-	remove.ID, remove.Tags = "deleteThing", []string{"things"}
+	remove.ID, remove.Tags, remove.IfMatchRequired = "deleteThing", []string{"things"}, true
 
 	open := publicOp("/api/dustpan/v1/openapi.json")
 	open.ID, open.Tags = "getApiDescription", []string{"description"}
@@ -228,10 +228,18 @@ func TestCheckedInDocumentHasTheRequirementsOfTheGeneratorTrial(t *testing.T) {
 	}
 
 	params := member[map[string]any](t, doc, "components", "parameters")
-	for _, name := range []string{"IdempotencyKey", "IfMatch"} {
+	for _, name := range []string{"IdempotencyKey", "IfMatch", "IfMatchRequired"} {
 		if _, ok := params[name]; !ok {
 			t.Errorf("components.parameters has no %s", name)
 		}
+	}
+
+	if got := member[bool](t, params, "IfMatch", "required"); got {
+		t.Error("components.parameters.IfMatch is required, want optional")
+	}
+
+	if got := member[bool](t, params, "IfMatchRequired", "required"); !got {
+		t.Error("components.parameters.IfMatchRequired is optional, want required")
 	}
 
 	if _, ok := member[map[string]any](t, doc, "components", "headers")["ETag"]; !ok {

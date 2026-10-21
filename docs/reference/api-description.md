@@ -15,7 +15,7 @@ those keeps the shapes that its tool expects.
 curl -s https://dustpan.example.com/api/dustpan/v1/openapi.json
 ```
 
-The route needs no sign-in. It answers `GET` only. Any other method gets 405.
+The route needs no sign-in. It answers `GET` and `HEAD`. Any other method gets 405.
 
 The server sends the same bytes on each request, on each build of the same
 version, and with each set of modules. A module that is off does not change the
@@ -70,13 +70,15 @@ They name no field. A later version of the description adds the fields.
 | `components.securitySchemes.bearerAuth` | The one scheme: an HTTP `Authorization: Bearer` header with an access token. All routes use it except the routes that need no sign-in. |
 | `components.parameters.IdempotencyKey` | The `Idempotency-Key` request header: a string of 1 to 255 printable ASCII characters. A route that takes it refers to this parameter. |
 | `components.parameters.IfMatch` | The `If-Match` request header: the `ETag` of the version that the request replaces. A version that does not match answers 412. |
+| `components.parameters.IfMatchRequired` | The same header for a route that answers 428 without it. The parameter has `required: true`. |
 | `components.headers.ETag` | The `ETag` answer header. A route that sends it declares it in its `2XX` answer. |
 | `components.schemas.ErrorResponse` | The body of an error: `code` (the HTTP status), `message`, and the optional `errorCode` and `errorArgs` |
 
 ## Values that can grow
 
-A list of values that can get a new value, such as a kind or a state, is open
-in the description: `anyOf: [{type: string, enum: [...]}, {type: string}]`. A
+When the description has an enum, a list of values that can get a new value,
+such as a kind or a state, is open in the description:
+`anyOf: [{type: string, enum: [...]}, {type: string}]`. A
 client keeps a value that it does not know. A new value is an additive change.
 
 ## Routes that are not in the description

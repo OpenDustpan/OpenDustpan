@@ -28,7 +28,7 @@ func idOf(method, path string) string {
 func op(method, path string, actions ...string) apidesc.Operation {
 	return apidesc.Operation{
 		ID: idOf(method, path), Method: method, Path: path, Tags: []string{"backups"}, Actions: actions,
-		Public: false, IdempotencyKey: false, IfMatch: false, ETag: false,
+		Public: false, IdempotencyKey: false, IfMatch: false, IfMatchRequired: false, ETag: false,
 	}
 }
 
@@ -77,6 +77,13 @@ func TestValidateRefusesHostileInput(t *testing.T) {
 		{"file suffix twice", op("GET", "/api/dustpan/v1/openapi.json.json", "installation:backup")},
 		{"file suffix with a capital", op("GET", "/api/dustpan/v1/openapi.JSON", "installation:backup")},
 		{"other suffix", op("GET", "/api/dustpan/v1/openapi.yaml", "installation:backup")},
+		{"both If-Match flags", func() apidesc.Operation {
+			o := op("GET", "/api/dustpan/v1/backups", "installation:backup")
+			o.IfMatch, o.IfMatchRequired = true, true
+
+			return o
+		}()},
+		{"other file name", op("GET", "/api/dustpan/v1/backups.json", "installation:backup")},
 		{"file suffix alone", op("GET", "/api/dustpan/v1/.json", "installation:backup")},
 		{"dot in the middle", op("GET", "/api/dustpan/v1/open.api.json", "installation:backup")},
 		{"no actions on a route that is not public", op("GET", "/api/dustpan/v1/backups")},
@@ -282,6 +289,7 @@ func TestDiffContractFieldsDiffer(t *testing.T) {
 		{"tag added", func(o *apidesc.Operation) { o.Tags = []string{"backups", "restores"} }},
 		{"Idempotency-Key flag", func(o *apidesc.Operation) { o.IdempotencyKey = true }},
 		{"If-Match flag", func(o *apidesc.Operation) { o.IfMatch = true }},
+		{"required If-Match flag", func(o *apidesc.Operation) { o.IfMatchRequired = true }},
 		{"ETag flag", func(o *apidesc.Operation) { o.ETag = true }},
 	}
 
