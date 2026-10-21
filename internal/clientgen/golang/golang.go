@@ -175,6 +175,8 @@ type typeView struct {
 	Fields []fieldView
 	// Required lists the wire names of the required fields.
 	Required []string
+	// NotNull lists the wire names of the required fields that cannot be null.
+	NotNull []string
 }
 
 type enumValue struct {
@@ -391,6 +393,10 @@ func objectView(s *model.Schema) (typeView, error) {
 
 		if f.Required {
 			tv.Required = append(tv.Required, f.Name)
+
+			if !f.Type.Nullable {
+				tv.NotNull = append(tv.NotNull, f.Name)
+			}
 		}
 	}
 

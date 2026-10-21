@@ -369,6 +369,7 @@ func Cases() []Case {
 		{Group: GroupErrors, Name: "forbidden-error-is-decoded", Run: nil},
 		{Group: GroupErrors, Name: "response-with-wrong-type-is-rejected", Run: nil},
 		{Group: GroupErrors, Name: "response-without-required-field-is-rejected", Run: nil},
+		{Group: GroupErrors, Name: "response-with-null-required-is-rejected", Run: nil},
 		{Group: GroupErrors, Name: "error-args-keep-their-json-types", Run: nil},
 		{Group: GroupErrors, Name: "error-without-error-code", Run: nil},
 		{Group: GroupErrors, Name: "error-body-that-is-not-json", Run: nil},

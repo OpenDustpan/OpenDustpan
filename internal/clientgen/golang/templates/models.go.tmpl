@@ -3,13 +3,15 @@
 package {{.Package}}
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 )
 
-// requireFields checks that a JSON object holds every named member. A member
-// with the value null is there.
-func requireFields(data []byte, names ...string) error {
+// requireFields checks that a JSON object holds every required member, and that
+// a member that cannot be null is not null. Go decodes null into a string, a
+// number or a bool as no change, so the check is here and not in the decoder.
+func requireFields(data []byte, required, notNull []string) error {
 	var members map[string]json.RawMessage
 	if err := json.Unmarshal(data, &members); err != nil {
 		return err
@@ -19,9 +21,15 @@ func requireFields(data []byte, names ...string) error {
 		return fmt.Errorf("the value is null and an object is needed")
 	}
 
-	for _, name := range names {
+	for _, name := range required {
 		if _, ok := members[name]; !ok {
 			return fmt.Errorf("the member %q is missing", name)
+		}
+	}
+
+	for _, name := range notNull {
+		if bytes.Equal(bytes.TrimSpace(members[name]), []byte("null")) {
+			return fmt.Errorf("the member %q is null and a value is needed", name)
 		}
 	}
 
@@ -61,7 +69,7 @@ func (v *{{$t.Name}}) UnmarshalJSON(data []byte) error {
 {{if $t.Required}}
 // UnmarshalJSON checks that the required members are there.
 func (v *{{$t.Name}}) UnmarshalJSON(data []byte) error {
-	if err := requireFields(data, {{range $i, $n := $t.Required}}{{if $i}}, {{end}}{{goString $n}}{{end}}); err != nil {
+	if err := requireFields(data, []string{ {{- range $i, $n := $t.Required}}{{if $i}}, {{end}}{{goString $n}}{{end -}} }, []string{ {{- range $i, $n := $t.NotNull}}{{if $i}}, {{end}}{{goString $n}}{{end -}} }); err != nil {
 		return fmt.Errorf("{{$t.Name}}: %w", err)
 	}
 

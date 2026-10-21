@@ -13,6 +13,7 @@ func errorCases() map[string]caseFunc {
 		"errors/forbidden-error-is-decoded":                  forbiddenIsDecoded,
 		"errors/response-with-wrong-type-is-rejected":        wrongTypeIsRejected,
 		"errors/response-without-required-field-is-rejected": missingFieldIsRejected,
+		"errors/response-with-null-required-is-rejected":     nullRequiredIsRejected,
 		"errors/error-body-that-is-not-json":                 errorBodyNotJSON,
 	}
 }
@@ -64,6 +65,12 @@ func invalidAnswer(ctx context.Context, env Env, body string) error {
 
 func wrongTypeIsRejected(ctx context.Context, env Env) error {
 	return invalidAnswer(ctx, env, `{"apiVersion": 5}`)
+}
+
+// nullRequiredIsRejected checks that null for a required member that cannot be
+// null is a wrong type, and not a zero value.
+func nullRequiredIsRejected(ctx context.Context, env Env) error {
+	return invalidAnswer(ctx, env, `{"apiVersion": null, "installationKind": "dev"}`)
 }
 
 func missingFieldIsRejected(ctx context.Context, env Env) error {

@@ -39,6 +39,7 @@ func requiredCases() []string {
 		"concurrency/stale-if-match-gives-412",
 		"errors/response-with-wrong-type-is-rejected",
 		"errors/response-without-required-field-is-rejected",
+		"errors/response-with-null-required-is-rejected",
 	}
 }
 

@@ -3,13 +3,15 @@
 package client
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 )
 
-// requireFields checks that a JSON object holds every named member. A member
-// with the value null is there.
-func requireFields(data []byte, names ...string) error {
+// requireFields checks that a JSON object holds every required member, and that
+// a member that cannot be null is not null. Go decodes null into a string, a
+// number or a bool as no change, so the check is here and not in the decoder.
+func requireFields(data []byte, required, notNull []string) error {
 	var members map[string]json.RawMessage
 	if err := json.Unmarshal(data, &members); err != nil {
 		return err
@@ -19,9 +21,15 @@ func requireFields(data []byte, names ...string) error {
 		return fmt.Errorf("the value is null and an object is needed")
 	}
 
-	for _, name := range names {
+	for _, name := range required {
 		if _, ok := members[name]; !ok {
 			return fmt.Errorf("the member %q is missing", name)
+		}
+	}
+
+	for _, name := range notNull {
+		if bytes.Equal(bytes.TrimSpace(members[name]), []byte("null")) {
+			return fmt.Errorf("the member %q is null and a value is needed", name)
 		}
 	}
 
@@ -36,7 +44,7 @@ type Capabilities struct {
 
 // UnmarshalJSON checks that the required members are there.
 func (v *Capabilities) UnmarshalJSON(data []byte) error {
-	if err := requireFields(data, "apiVersion"); err != nil {
+	if err := requireFields(data, []string{"apiVersion"}, []string{"apiVersion"}); err != nil {
 		return fmt.Errorf("Capabilities: %w", err)
 	}
 
@@ -59,7 +67,7 @@ type ErrorResponse struct {
 
 // UnmarshalJSON checks that the required members are there.
 func (v *ErrorResponse) UnmarshalJSON(data []byte) error {
-	if err := requireFields(data, "code", "message"); err != nil {
+	if err := requireFields(data, []string{"code", "message"}, []string{"code", "message"}); err != nil {
 		return fmt.Errorf("ErrorResponse: %w", err)
 	}
 
@@ -83,7 +91,7 @@ type GitHostApp struct {
 
 // UnmarshalJSON checks that the required members are there.
 func (v *GitHostApp) UnmarshalJSON(data []byte) error {
-	if err := requireFields(data, "apiAddress", "appID", "createdAt", "eventSecret", "hookID", "kind", "privateKey", "updatedAt", "version"); err != nil {
+	if err := requireFields(data, []string{"apiAddress", "appID", "createdAt", "eventSecret", "hookID", "kind", "privateKey", "updatedAt", "version"}, []string{"apiAddress", "appID", "createdAt", "eventSecret", "hookID", "kind", "privateKey", "updatedAt", "version"}); err != nil {
 		return fmt.Errorf("GitHostApp: %w", err)
 	}
 
@@ -101,7 +109,7 @@ type GitHostCredentialSet struct {
 
 // UnmarshalJSON checks that the required members are there.
 func (v *GitHostCredentialSet) UnmarshalJSON(data []byte) error {
-	if err := requireFields(data, "createdAt", "set", "setID"); err != nil {
+	if err := requireFields(data, []string{"createdAt", "set", "setID"}, []string{"createdAt", "set", "setID"}); err != nil {
 		return fmt.Errorf("GitHostCredentialSet: %w", err)
 	}
 
@@ -117,7 +125,7 @@ type ListNotificationSinksResponse struct {
 
 // UnmarshalJSON checks that the required members are there.
 func (v *ListNotificationSinksResponse) UnmarshalJSON(data []byte) error {
-	if err := requireFields(data, "sinks"); err != nil {
+	if err := requireFields(data, []string{"sinks"}, []string{"sinks"}); err != nil {
 		return fmt.Errorf("ListNotificationSinksResponse: %w", err)
 	}
 
@@ -141,7 +149,7 @@ type NotificationSink struct {
 
 // UnmarshalJSON checks that the required members are there.
 func (v *NotificationSink) UnmarshalJSON(data []byte) error {
-	if err := requireFields(data, "createdBy", "id", "kind", "name", "namespace", "target", "urlSet", "version"); err != nil {
+	if err := requireFields(data, []string{"createdBy", "id", "kind", "name", "namespace", "target", "urlSet", "version"}, []string{"createdBy", "id", "kind", "name", "namespace", "target", "urlSet", "version"}); err != nil {
 		return fmt.Errorf("NotificationSink: %w", err)
 	}
 
@@ -171,7 +179,7 @@ type Preferences struct {
 
 // UnmarshalJSON checks that the required members are there.
 func (v *Preferences) UnmarshalJSON(data []byte) error {
-	if err := requireFields(data, "colorMode", "dateStyle", "digits", "firstDayOfWeek", "formattingLocale", "hourCycle", "language", "resolvedLanguage", "shortcutHintStyle", "shortcutHints", "singleKeyShortcuts", "terminalSchemes", "theme", "timeZone", "updatedAt"); err != nil {
+	if err := requireFields(data, []string{"colorMode", "dateStyle", "digits", "firstDayOfWeek", "formattingLocale", "hourCycle", "language", "resolvedLanguage", "shortcutHintStyle", "shortcutHints", "singleKeyShortcuts", "terminalSchemes", "theme", "timeZone", "updatedAt"}, []string{"colorMode", "dateStyle", "shortcutHintStyle", "shortcutHints", "singleKeyShortcuts", "terminalSchemes", "theme"}); err != nil {
 		return fmt.Errorf("Preferences: %w", err)
 	}
 
@@ -190,7 +198,7 @@ type PutGitHostAppRequest struct {
 
 // UnmarshalJSON checks that the required members are there.
 func (v *PutGitHostAppRequest) UnmarshalJSON(data []byte) error {
-	if err := requireFields(data, "apiAddress", "appID", "eventSecret", "privateKey"); err != nil {
+	if err := requireFields(data, []string{"apiAddress", "appID", "eventSecret", "privateKey"}, []string{}); err != nil {
 		return fmt.Errorf("PutGitHostAppRequest: %w", err)
 	}
 
@@ -207,7 +215,7 @@ type TerminalSchemes struct {
 
 // UnmarshalJSON checks that the required members are there.
 func (v *TerminalSchemes) UnmarshalJSON(data []byte) error {
-	if err := requireFields(data, "dark", "light"); err != nil {
+	if err := requireFields(data, []string{"dark", "light"}, []string{"dark", "light"}); err != nil {
 		return fmt.Errorf("TerminalSchemes: %w", err)
 	}
 
