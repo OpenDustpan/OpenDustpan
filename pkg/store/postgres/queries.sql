@@ -3679,3 +3679,45 @@ SELECT v.id
 FROM saved_views AS v
 WHERE v.namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace)) AND v.owner = sqlc.arg(owner)
 ORDER BY v.id COLLATE "C";
+
+-- name: InsertRegistryRelease :execrows
+-- The caller checks the fence in the same transaction. A release of the same
+-- address and version is not written.
+INSERT INTO registry_releases (
+    namespace_id, kind, name, system, version, sums_file, sums_sha256, signature_file, signature_sha256,
+    key_fingerprint, published_by, archives_json, published_at_ms
+)
+VALUES (
+    (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace)), sqlc.arg(kind), sqlc.arg(name),
+    sqlc.arg(system), sqlc.arg(version), sqlc.arg(sums_file), sqlc.arg(sums_sha256), sqlc.arg(signature_file),
+    sqlc.arg(signature_sha256), sqlc.arg(key_fingerprint), sqlc.arg(published_by), sqlc.arg(archives_json),
+    sqlc.arg(published_at_ms)
+)
+ON CONFLICT (namespace_id, kind, name, system, version) DO NOTHING;
+
+-- name: GetRegistryRelease :one
+SELECT n.name AS namespace, r.kind, r.name, r.system, r.version, r.sums_file, r.sums_sha256, r.signature_file,
+    r.signature_sha256, r.key_fingerprint, r.published_by, r.archives_json, r.published_at_ms
+FROM registry_releases AS r
+JOIN namespaces AS n ON n.id = r.namespace_id
+WHERE n.name = sqlc.arg(namespace) AND r.kind = sqlc.arg(kind) AND r.name = sqlc.arg(name)
+  AND r.system = sqlc.arg(system) AND r.version = sqlc.arg(version);
+
+-- name: ListRegistryReleases :many
+-- The caller orders the rows by version precedence.
+SELECT n.name AS namespace, r.kind, r.name, r.system, r.version, r.sums_file, r.sums_sha256, r.signature_file,
+    r.signature_sha256, r.key_fingerprint, r.published_by, r.archives_json, r.published_at_ms
+FROM registry_releases AS r
+JOIN namespaces AS n ON n.id = r.namespace_id
+WHERE n.name = sqlc.arg(namespace) AND r.kind = sqlc.arg(kind) AND r.name = sqlc.arg(name)
+  AND r.system = sqlc.arg(system)
+ORDER BY r.version COLLATE "C";
+
+-- name: ListRegistryAddresses :many
+SELECT r.name, r.system
+FROM registry_releases AS r
+JOIN namespaces AS n ON n.id = r.namespace_id
+WHERE n.name = sqlc.arg(namespace) AND r.kind = sqlc.arg(kind)
+GROUP BY r.name, r.system
+-- The order is by code point, whatever the collation of the database.
+ORDER BY r.name COLLATE "C", r.system COLLATE "C";

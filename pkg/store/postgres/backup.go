@@ -112,6 +112,7 @@ func pgCopyTables() []pgCopyTable {
 	tables = append(tables, pgCopyManualLockTables()...)
 	tables = append(tables, pgCopyPreferenceTables()...)
 	tables = append(tables, pgCopySavedViewTables()...)
+	tables = append(tables, pgCopyRegistryTables()...)
 
 	return tables
 }
@@ -912,6 +913,10 @@ func (s *Store) buildStaging(ctx context.Context, in stagingInput) (backup.Summa
 
 	if viewsErr := checkStagedSavedViews(ctx, s.pool, in.staging); viewsErr != nil {
 		return backup.Summary{}, viewsErr
+	}
+
+	if registryErr := checkStagedRegistryReleases(ctx, s.pool, in.staging); registryErr != nil {
+		return backup.Summary{}, registryErr
 	}
 
 	sum, err := s.summarizeStaging(ctx, in.staging, in.want)

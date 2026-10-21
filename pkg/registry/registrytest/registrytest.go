@@ -97,7 +97,8 @@ func stale(f namespace.Fence) namespace.Fence {
 	return namespace.Fence{Namespace: f.Namespace, FailoverVersion: f.FailoverVersion + 1}
 }
 
-// entry returns the audit entry of a publish into ns.
+// entry returns the audit entry of a publish into ns. It passes the checks of
+// a real audit store: an object, a channel, a kind and an outcome.
 func entry(ns namespace.Name) audit.Entry {
 	return audit.Entry{
 		At:            time.UnixMilli(fixtureT).UTC(),
@@ -106,16 +107,16 @@ func entry(ns namespace.Name) audit.Entry {
 		Action:        "registry:publish",
 		IDPSubject:    "",
 		TokenID:       "",
-		Object:        "",
+		Object:        ns.String(),
 		Version:       "",
 		ValuePath:     "",
 		ValueCount:    nil,
 		Changes:       nil,
-		SourceIP:      "",
+		SourceIP:      "192.0.2.1",
 		UserAgent:     "",
-		Channel:       "",
-		Kind:          "",
-		Outcome:       "",
+		Channel:       audit.ChannelAPI,
+		Kind:          audit.KindChange,
+		Outcome:       audit.OutcomeSuccess,
 		RequestID:     "",
 		ObjectID:      "",
 		PrevHash:      "",

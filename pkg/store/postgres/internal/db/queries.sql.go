@@ -5560,6 +5560,66 @@ func (q *Queries) GetProfileRevision(ctx context.Context, arg GetProfileRevision
 	return i, err
 }
 
+const getRegistryRelease = `-- name: GetRegistryRelease :one
+SELECT n.name AS namespace, r.kind, r.name, r.system, r.version, r.sums_file, r.sums_sha256, r.signature_file,
+    r.signature_sha256, r.key_fingerprint, r.published_by, r.archives_json, r.published_at_ms
+FROM registry_releases AS r
+JOIN namespaces AS n ON n.id = r.namespace_id
+WHERE n.name = $1 AND r.kind = $2 AND r.name = $3
+  AND r.system = $4 AND r.version = $5
+`
+
+type GetRegistryReleaseParams struct {
+	Namespace string
+	Kind      string
+	Name      string
+	System    string
+	Version   string
+}
+
+type GetRegistryReleaseRow struct {
+	Namespace       string
+	Kind            string
+	Name            string
+	System          string
+	Version         string
+	SumsFile        string
+	SumsSha256      string
+	SignatureFile   string
+	SignatureSha256 string
+	KeyFingerprint  string
+	PublishedBy     string
+	ArchivesJson    string
+	PublishedAtMs   int64
+}
+
+func (q *Queries) GetRegistryRelease(ctx context.Context, arg GetRegistryReleaseParams) (GetRegistryReleaseRow, error) {
+	row := q.db.QueryRow(ctx, getRegistryRelease,
+		arg.Namespace,
+		arg.Kind,
+		arg.Name,
+		arg.System,
+		arg.Version,
+	)
+	var i GetRegistryReleaseRow
+	err := row.Scan(
+		&i.Namespace,
+		&i.Kind,
+		&i.Name,
+		&i.System,
+		&i.Version,
+		&i.SumsFile,
+		&i.SumsSha256,
+		&i.SignatureFile,
+		&i.SignatureSha256,
+		&i.KeyFingerprint,
+		&i.PublishedBy,
+		&i.ArchivesJson,
+		&i.PublishedAtMs,
+	)
+	return i, err
+}
+
 const getRestore = `-- name: GetRestore :one
 SELECT id, state, backup_id, pre_backup_id, requested_by, started_at_ms, ended_at_ms, error, dev_report
 FROM restores
@@ -7766,6 +7826,60 @@ type InsertPurgedImportParams struct {
 func (q *Queries) InsertPurgedImport(ctx context.Context, arg InsertPurgedImportParams) error {
 	_, err := q.db.Exec(ctx, insertPurgedImport, arg.NamespaceID, arg.ID, arg.PurgedAtMs)
 	return err
+}
+
+const insertRegistryRelease = `-- name: InsertRegistryRelease :execrows
+INSERT INTO registry_releases (
+    namespace_id, kind, name, system, version, sums_file, sums_sha256, signature_file, signature_sha256,
+    key_fingerprint, published_by, archives_json, published_at_ms
+)
+VALUES (
+    (SELECT n.id FROM namespaces AS n WHERE n.name = $1), $2, $3,
+    $4, $5, $6, $7, $8,
+    $9, $10, $11, $12,
+    $13
+)
+ON CONFLICT (namespace_id, kind, name, system, version) DO NOTHING
+`
+
+type InsertRegistryReleaseParams struct {
+	Namespace       string
+	Kind            string
+	Name            string
+	System          string
+	Version         string
+	SumsFile        string
+	SumsSha256      string
+	SignatureFile   string
+	SignatureSha256 string
+	KeyFingerprint  string
+	PublishedBy     string
+	ArchivesJson    string
+	PublishedAtMs   int64
+}
+
+// The caller checks the fence in the same transaction. A release of the same
+// address and version is not written.
+func (q *Queries) InsertRegistryRelease(ctx context.Context, arg InsertRegistryReleaseParams) (int64, error) {
+	result, err := q.db.Exec(ctx, insertRegistryRelease,
+		arg.Namespace,
+		arg.Kind,
+		arg.Name,
+		arg.System,
+		arg.Version,
+		arg.SumsFile,
+		arg.SumsSha256,
+		arg.SignatureFile,
+		arg.SignatureSha256,
+		arg.KeyFingerprint,
+		arg.PublishedBy,
+		arg.ArchivesJson,
+		arg.PublishedAtMs,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const insertRunner = `-- name: InsertRunner :exec
@@ -10675,6 +10789,119 @@ func (q *Queries) ListProfileRevisions(ctx context.Context, arg ListProfileRevis
 			&i.Author,
 			&i.CreatedAtMs,
 			&i.Reason,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listRegistryAddresses = `-- name: ListRegistryAddresses :many
+SELECT r.name, r.system
+FROM registry_releases AS r
+JOIN namespaces AS n ON n.id = r.namespace_id
+WHERE n.name = $1 AND r.kind = $2
+GROUP BY r.name, r.system
+ORDER BY r.name COLLATE "C", r.system COLLATE "C"
+`
+
+type ListRegistryAddressesParams struct {
+	Namespace string
+	Kind      string
+}
+
+type ListRegistryAddressesRow struct {
+	Name   string
+	System string
+}
+
+// The order is by code point, whatever the collation of the database.
+func (q *Queries) ListRegistryAddresses(ctx context.Context, arg ListRegistryAddressesParams) ([]ListRegistryAddressesRow, error) {
+	rows, err := q.db.Query(ctx, listRegistryAddresses, arg.Namespace, arg.Kind)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListRegistryAddressesRow
+	for rows.Next() {
+		var i ListRegistryAddressesRow
+		if err := rows.Scan(&i.Name, &i.System); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listRegistryReleases = `-- name: ListRegistryReleases :many
+SELECT n.name AS namespace, r.kind, r.name, r.system, r.version, r.sums_file, r.sums_sha256, r.signature_file,
+    r.signature_sha256, r.key_fingerprint, r.published_by, r.archives_json, r.published_at_ms
+FROM registry_releases AS r
+JOIN namespaces AS n ON n.id = r.namespace_id
+WHERE n.name = $1 AND r.kind = $2 AND r.name = $3
+  AND r.system = $4
+ORDER BY r.version COLLATE "C"
+`
+
+type ListRegistryReleasesParams struct {
+	Namespace string
+	Kind      string
+	Name      string
+	System    string
+}
+
+type ListRegistryReleasesRow struct {
+	Namespace       string
+	Kind            string
+	Name            string
+	System          string
+	Version         string
+	SumsFile        string
+	SumsSha256      string
+	SignatureFile   string
+	SignatureSha256 string
+	KeyFingerprint  string
+	PublishedBy     string
+	ArchivesJson    string
+	PublishedAtMs   int64
+}
+
+// The caller orders the rows by version precedence.
+func (q *Queries) ListRegistryReleases(ctx context.Context, arg ListRegistryReleasesParams) ([]ListRegistryReleasesRow, error) {
+	rows, err := q.db.Query(ctx, listRegistryReleases,
+		arg.Namespace,
+		arg.Kind,
+		arg.Name,
+		arg.System,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListRegistryReleasesRow
+	for rows.Next() {
+		var i ListRegistryReleasesRow
+		if err := rows.Scan(
+			&i.Namespace,
+			&i.Kind,
+			&i.Name,
+			&i.System,
+			&i.Version,
+			&i.SumsFile,
+			&i.SumsSha256,
+			&i.SignatureFile,
+			&i.SignatureSha256,
+			&i.KeyFingerprint,
+			&i.PublishedBy,
+			&i.ArchivesJson,
+			&i.PublishedAtMs,
 		); err != nil {
 			return nil, err
 		}
