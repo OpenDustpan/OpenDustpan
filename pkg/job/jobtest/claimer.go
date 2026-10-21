@@ -244,10 +244,10 @@ func ended(a *job.Assignment, name string) job.StepRecord {
 }
 
 // record stores r in the step records of the phase of a.
-func record(t *testing.T, h Harness, f fixture, a *job.Assignment, r job.StepRecord) {
+func record(t *testing.T, h Harness, a *job.Assignment, r job.StepRecord) {
 	t.Helper()
 
-	if err := h.Domain.RecordStepBegin(t.Context(), f.fence, a.Claim.Job, a.Claim.Phase, r); err != nil {
+	if err := h.Domain.RecordStepBegin(t.Context(), a.Claim, r); err != nil {
 		t.Fatalf("RecordStepBegin(%s) = %v", r.Name, err)
 	}
 }
@@ -660,7 +660,7 @@ func testRelease(t *testing.T, h Harness) {
 	first := claim(t, h, runnerOne, time.Minute, runnerKind(&j))
 
 	// A begin of a step that changes nothing does not stop the next claim.
-	record(t, h, f, &first, ended(&first, "prepare"))
+	record(t, h, &first, ended(&first, "prepare"))
 
 	if err := h.Claimer.Release(t.Context(), first.Claim); err != nil {
 		t.Fatalf("Release = %v", err)
@@ -731,7 +731,7 @@ func testReleaseAfterChange(t *testing.T, h Harness) {
 	for i, tc := range tests {
 		j := dispatched(t, h, f, plannedJob{unit: unitName(i), op: job.OperationRefresh, steps: changeSteps()})
 		a := claim(t, h, runnerOne, time.Minute, runnerKind(&j))
-		record(t, h, f, &a, tc.record(&a))
+		record(t, h, &a, tc.record(&a))
 
 		if err := h.Claimer.Release(t.Context(), a.Claim); err != nil {
 			t.Fatalf("Release after %s = %v", tc.name, err)
@@ -770,7 +770,7 @@ func testReleaseCancel(t *testing.T, h Harness) {
 		a := claim(t, h, runnerOne, time.Minute, runnerKind(&j))
 
 		if tc.changed {
-			record(t, h, f, &a, beginApply(&a))
+			record(t, h, &a, beginApply(&a))
 		}
 
 		cancelJob(t, h, f, j.ID)
@@ -1061,7 +1061,7 @@ func testTakeoverAfterChange(t *testing.T, h Harness) {
 	for i, tc := range tests {
 		j := dispatched(t, h, f, plannedJob{unit: unitName(i), op: job.OperationRefresh, steps: changeSteps()})
 		a := claim(t, h, runnerOne, shortLease, runnerKind(&j))
-		record(t, h, f, &a, tc.record(&a))
+		record(t, h, &a, tc.record(&a))
 
 		expired(t, a.Claim)
 
@@ -1100,11 +1100,11 @@ func testTakeoverNoChange(t *testing.T, h Harness) {
 	// The claim looks for another phase after it fails the first one.
 	failed := dispatched(t, h, f, plannedJob{unit: "unit-0", op: job.OperationRefresh, steps: changeSteps()})
 	a := claim(t, h, runnerOne, shortLease, runnerKind(&failed))
-	record(t, h, f, &a, beginApply(&a))
+	record(t, h, &a, beginApply(&a))
 
 	other := dispatched(t, h, f, plannedJob{unit: "unit-1", op: job.OperationRefresh, steps: changeSteps()})
 	b := claim(t, h, runnerOne, shortLease, runnerKind(&other))
-	record(t, h, f, &b, ended(&b, "prepare"))
+	record(t, h, &b, ended(&b, "prepare"))
 
 	expired(t, a.Claim)
 	expired(t, b.Claim)
@@ -1160,7 +1160,7 @@ func testTakeoverDeliver(t *testing.T, h Harness) {
 
 	// The commit began, and the instance stopped. The deliver phase has no
 	// step with a spec, so the takeover runs again, with the lookup.
-	record(t, h, f, &b, begun(&b, job.WriteBackStepCommit))
+	record(t, h, &b, begun(&b, job.WriteBackStepCommit))
 	expired(t, b.Claim)
 
 	c, err := claimAgain(t, h, "instance-c", job.KindWriteBack)

@@ -2,6 +2,7 @@ package job
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/audit"
@@ -35,6 +36,64 @@ type Change struct {
 	MergedAt time.Time
 	// Approval is set when the change records an approval.
 	Approval *Approval
+	// End is set on EventRelease, EventPhaseFailed, EventPhaseDone,
+	// EventLastPhaseDone and EventDelivered of a claimed phase: the store
+	// ends the durable operation of the claim in the transaction of the
+	// change, and so the end and the event commit together or not at all.
+	// The claim binds the event: it applies only while the job is at the
+	// phase of the operation of the claim and the claim is the live claim of
+	// that operation.
+	End *OperationEnd
+}
+
+// EndKind says how Change.End ends the durable operation of a claim.
+type EndKind string
+
+// The kinds of OperationEnd.
+const (
+	// EndComplete ends the operation succeeded. While a cancel is requested
+	// it ends the operation canceled, as EndRelease does.
+	EndComplete EndKind = "complete"
+	// EndFail ends the attempt with OperationEnd.Failure, as
+	// durable.Store.Fail does.
+	EndFail EndKind = "fail"
+	// EndRelease returns the operation to pending, or ends it canceled
+	// while a cancel is requested, as durable.Store.Release does.
+	EndRelease EndKind = "release"
+)
+
+// OperationEnd is the end of the durable operation of Claim, with the rule
+// of Kind.
+type OperationEnd struct {
+	Claim durable.Claim
+	Kind  EndKind
+	// Failure is the failure of EndFail, and empty for the other kinds.
+	Failure durable.Failure
+}
+
+// Validate returns ErrInvalid for an end that names no operation, no owner or
+// no token, or a kind that is unknown.
+func (e *OperationEnd) Validate() error {
+	switch {
+	case e.Claim.Operation == "" || e.Claim.Owner == "" || e.Claim.Token <= 0:
+		return fmt.Errorf("%w: the end of an operation needs a claim with an operation, an owner and a token",
+			ErrInvalid)
+	case e.Kind != EndComplete && e.Kind != EndFail && e.Kind != EndRelease:
+		return fmt.Errorf("%w: unknown end %q of operation %s", ErrInvalid, e.Kind, e.Claim.Operation)
+	default:
+		return nil
+	}
+}
+
+// AllowsEnd reports whether ev can carry Change.End: the events that end or
+// give back a claimed phase.
+func AllowsEnd(ev Event) bool {
+	switch ev { //nolint:exhaustive // Every other event ends no claim.
+	case EventRelease, EventPhaseFailed, EventPhaseDone, EventLastPhaseDone, EventDelivered:
+		return true
+	default:
+		return false
+	}
 }
 
 // Filter selects jobs for List. A zero field matches every job. Limit 0
@@ -55,8 +114,9 @@ type Filter struct {
 // A job is data of its namespace: the backup of the namespace holds it, and
 // every write checks fence and appends its audit entries in its
 // transaction. The durable operations of its phases are control data, which
-// a restore keeps. The reconcile schedule applies AfterOperationEnded to
-// each job that Orphans returns. A phase that changes resources never
+// a restore keeps. A later change adds a reconcile schedule that applies
+// AfterOperationEnded to each job that Orphans returns. Until then, nothing
+// in the server calls Orphans. A phase that changes resources never
 // dispatches again on its own.
 //
 // One change at a time on a unit: a SQL adapter holds the rule with a
@@ -125,6 +185,16 @@ type Store interface {
 	//     the plan of that phase and the approvals of the next phase are
 	//     cleared. The old plan stays as a history item until its
 	//     retention ends.
+	//   - c.End: it ends the durable operation of c.End.Claim in the same
+	//     transaction, with the rules of durable.Store.Complete, Fail or
+	//     Release, and checks the token of the claim and its expiry on the
+	//     clock of the store. The job must be at the phase whose operation
+	//     the claim names. An error of the end (durable.ErrClaimLost, with
+	//     ErrClaimLost) or of the event changes nothing: the operation and the
+	//     job both stay as they were. So a holder that lost its claim to a
+	//     takeover changes neither the operation nor the job, and nobody can
+	//     see the end without the event. c.End on another event is
+	//     ErrInvalid.
 	//   - EventCancel of a job with a live durable operation: it applies
 	//     durable.Store.Cancel to the operation.
 	//   - EventMerged and EventDelivered: when the last final state version
@@ -164,8 +234,11 @@ type Store interface {
 	// canceling, but whose durable operation does not exist or ended with
 	// no Finish. A restore makes the first kind. A claim that expires
 	// during a cancel, or a durable failure at the limit of expired
-	// claims, makes the second. The reconcile schedule applies the event of
-	// AfterOperationEnded to each one: a change that began fails the job,
+	// claims, makes the second. The claimer never leaves a job with an operation
+	// that ended and no event, because it ends the operation and applies the
+	// event in one transaction (Change.End). A later change adds a reconcile
+	// schedule that applies the event of AfterOperationEnded to each job that
+	// this method returns: a change that began fails the job,
 	// and a canceling job with no change ends canceled.
 	Orphans(ctx context.Context, limit int) ([]Orphan, error)
 }

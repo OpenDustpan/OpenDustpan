@@ -38,7 +38,11 @@ type Harness struct {
 	// Claimer is the job.Claimer over Jobs, Durable and the namespaces of
 	// the database.
 	Claimer job.Claimer
-	Domain  Domain
+	// Namespaces reads the namespaces of the database, as the claimer does.
+	// The cases that put a hook between the reads and the writes of a claimer
+	// build their own claimer from it.
+	Namespaces job.NamespaceReader
+	Domain     Domain
 }
 
 // Domain makes the rows that a job needs and that other ports own, and
@@ -79,12 +83,17 @@ type Domain interface {
 	PutManualLock(ctx context.Context, fence namespace.Fence, target manuallock.Target, holder, reason string) error
 	// RemoveManualLock removes the manual lock of target.
 	RemoveManualLock(ctx context.Context, fence namespace.Fence, target manuallock.Target) error
-	// RecordStepBegin appends r to the step records of the phase at index
-	// phase of the job id, as the recorder of a running phase does when a
-	// step begins. It checks the fence like any write. The suite uses it to
+	// RecordStepBegin appends r to the step records of the phase of pc, as
+	// the recorder of a running phase does when a step begins. It checks the
+	// claim like every write of the executor: the fence of pc, the job at
+	// the phase and the operation of pc, the live claim in the transaction,
+	// and the token of r. It returns job.ErrClaimLost for a claim that is
+	// not live and for a phase that the job is not at (the same error for
+	// a phase that does not exist), job.ErrInvalid for a record with another
+	// token, and namespace.ErrFenced for a stale fence. The suite uses it to
 	// show what a takeover does after a begin that an earlier claim
 	// recorded.
-	RecordStepBegin(ctx context.Context, fence namespace.Fence, id job.ID, phase int, r job.StepRecord) error
+	RecordStepBegin(ctx context.Context, pc job.PhaseClaim, r job.StepRecord) error
 	// AuditEntries returns the audit entries of the namespace ns, in the
 	// order of their append.
 	AuditEntries(ctx context.Context, ns namespace.Name) ([]audit.Entry, error)
@@ -154,7 +163,7 @@ func Run(t *testing.T, newHarness Factory) {
 		{"freezes list, end once, and validate", testFreezes},
 	}
 
-	for _, tc := range slices.Concat(cases, claimerCases()) {
+	for _, tc := range slices.Concat(cases, claimerCases(), endClaimCases()) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			tc.run(t, newHarness(t))
@@ -308,6 +317,7 @@ func change(j *job.Job, ev job.Event) job.Change {
 	return job.Change{
 		Job: j.ID, Version: j.Version, Event: ev, Wait: job.WaitNone, Reason: "", Dispatch: nil,
 		PlanNotBefore: time.Time{}, Executor: "", Delivery: nil, MergedAt: time.Time{}, Approval: nil,
+		End: nil,
 	}
 }
 

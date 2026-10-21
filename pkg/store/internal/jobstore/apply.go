@@ -2,10 +2,12 @@ package jobstore
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/durable"
 	"opendustpan.org/opendustpan/pkg/job"
 	"opendustpan.org/opendustpan/pkg/namespace"
 )
@@ -13,6 +15,10 @@ import (
 // Apply implements job.Store.
 func (s *Store) Apply(ctx context.Context, c job.Change, fence namespace.Fence, e []audit.Entry) (job.Job, error) {
 	if err := checkEntries(e, fence); err != nil {
+		return job.Job{}, err
+	}
+
+	if err := checkEnd(&c); err != nil {
 		return job.Job{}, err
 	}
 
@@ -70,6 +76,10 @@ func applyIn(ctx context.Context, tx Tx, c *job.Change, ns namespace.Name) (job.
 		return job.Job{}, err
 	}
 
+	if err := endOperation(ctx, tx, &cur, c); err != nil {
+		return job.Job{}, err
+	}
+
 	if err := afterChange(ctx, tx, &cur, &next, c.Event); err != nil {
 		return job.Job{}, err
 	}
@@ -79,6 +89,63 @@ func applyIn(ctx context.Context, tx Tx, c *job.Change, ns namespace.Name) (job.
 	}
 
 	return next, nil
+}
+
+// endOperation ends the durable operation of c.End, in the transaction tx of
+// the change of cur. It does nothing when c has no end. The end binds the
+// event to its claim: the job must be at the phase whose operation the claim
+// names, and the durable store checks that the claim is the live claim of
+// that operation. A failed end rolls the whole change back.
+func endOperation(ctx context.Context, tx Tx, cur *job.Job, c *job.Change) error {
+	if c.End == nil {
+		return nil
+	}
+
+	// Defense in depth: Apply checks the end before it opens the
+	// transaction, and this check stays so that a new caller of applyIn cannot
+	// end an operation with an event that carries no phase.
+	if err := checkEnd(c); err != nil {
+		return err
+	}
+
+	if cur.Current >= len(cur.Phases) || cur.Phases[cur.Current].Operation != string(c.End.Claim.Operation) {
+		return fmt.Errorf("%w: %w: job %s is not at the phase of operation %s", job.ErrClaimLost,
+			durable.ErrClaimLost, cur.ID, c.End.Claim.Operation)
+	}
+
+	err := tx.EndOperation(ctx, c.End)
+	if c.End.Kind == job.EndComplete && errors.Is(err, durable.ErrCanceled) {
+		// A cancel arrived while the phase ran. The phase did end, so the
+		// event of the job says so, and the release ends the operation
+		// canceled.
+		release := *c.End
+		release.Kind = job.EndRelease
+		err = tx.EndOperation(ctx, &release)
+	}
+
+	if errors.Is(err, durable.ErrClaimLost) {
+		return fmt.Errorf("end operation %s: %w: %w", c.End.Claim.Operation, job.ErrClaimLost, err)
+	}
+
+	if err != nil {
+		return fmt.Errorf("end operation %s: %w", c.End.Claim.Operation, err)
+	}
+
+	return nil
+}
+
+// checkEnd returns job.ErrInvalid for a change whose end is not valid or
+// whose event cannot carry an end.
+func checkEnd(c *job.Change) error {
+	if c.End == nil {
+		return nil
+	}
+
+	if !job.AllowsEnd(c.Event) {
+		return fmt.Errorf("%w: event %s cannot end an operation", job.ErrInvalid, c.Event)
+	}
+
+	return c.End.Validate()
 }
 
 // loadJob returns the job id of the namespace ns, or job.ErrNotFound.
@@ -256,22 +323,38 @@ func setVerificationIn(
 	return true, update(ctx, tx, &j, prev)
 }
 
-// AppendStepRecord appends r to the step records of the phase at index phase
-// of the job id, and raises the version of the job. The recorder of a
-// running phase writes its step records through it, and the conformance
-// suite uses it to set up a takeover. It returns job.ErrNotFound for an
-// unknown job, and job.ErrInvalid for a phase that the job does not have.
-func (s *Store) AppendStepRecord(ctx context.Context, fence namespace.Fence, id job.ID, phase int,
-	r job.StepRecord,
-) error {
-	return s.run.Write(ctx, fence, func(tx Tx) error {
-		j, err := loadJob(ctx, tx, id, fence.Namespace)
+// AppendStepRecord appends r to the step records of the phase of pc, and
+// raises the version of the job. It is the write of the recorder of a running
+// phase, and it checks the claim like every write of the executor: in the
+// transaction of the write, the namespace fence of pc is current, the job is
+// running or canceling at the phase of pc with the operation of the claim of
+// pc, the claim is the live claim of that operation on the clock of the
+// database, and r carries the token of that claim. It returns
+// job.ErrNotFound for an unknown job, job.ErrClaimLost (with
+// durable.ErrClaimLost) for a claim that is not live or a phase that is not
+// the current phase of the job with that operation, job.ErrInvalid for a record
+// with another token, and namespace.ErrFenced for a stale fence. It does not
+// refuse a requested cancel: the recorder refuses the begin of a step during
+// a cancel, and still accepts the record of how a phase stopped.
+func (s *Store) AppendStepRecord(ctx context.Context, pc job.PhaseClaim, r job.StepRecord) error {
+	if r.Token != pc.Claim.Token {
+		return fmt.Errorf("%w: the record of step %q carries token %d, the claim has token %d", job.ErrInvalid, r.Name,
+			r.Token, pc.Claim.Token)
+	}
+
+	return s.run.Write(ctx, pc.Fence, func(tx Tx) error {
+		j, err := loadJob(ctx, tx, pc.Job, pc.Fence.Namespace)
 		if err != nil {
 			return err
 		}
 
-		if phase < 0 || phase >= len(j.Phases) {
-			return fmt.Errorf("%w: job %s has no phase %d", job.ErrInvalid, id, phase)
+		if !runsPhase(&j, pc) {
+			return fmt.Errorf("%w: %w: job %s is %s at phase %d", job.ErrClaimLost, durable.ErrClaimLost, j.ID, j.State,
+				j.Current)
+		}
+
+		if claimErr := tx.CheckClaim(ctx, pc.Claim); claimErr != nil {
+			return fmt.Errorf("claim of job %s: %w: %w", j.ID, job.ErrClaimLost, claimErr)
 		}
 
 		now, err := tx.Now(ctx)
@@ -280,9 +363,16 @@ func (s *Store) AppendStepRecord(ctx context.Context, fence namespace.Fence, id 
 		}
 
 		prev := j.Version
-		j.Phases[phase].Steps = append(j.Phases[phase].Steps, r)
+		j.Phases[pc.Phase].Steps = append(j.Phases[pc.Phase].Steps, r)
 		j.Version, j.UpdatedAt = prev+1, now
 
 		return update(ctx, tx, &j, prev)
 	})
+}
+
+// runsPhase reports whether j is running or canceling at the phase of pc,
+// with the operation of the claim of pc.
+func runsPhase(j *job.Job, pc job.PhaseClaim) bool {
+	return (j.State == job.StateRunning || j.State == job.StateCanceling) && j.Current == pc.Phase &&
+		pc.Phase >= 0 && pc.Phase < len(j.Phases) && j.Phases[pc.Phase].Operation == string(pc.Claim.Operation)
 }

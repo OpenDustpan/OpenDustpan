@@ -202,20 +202,19 @@ func lockEntry(ns namespace.Name, target manuallock.Target) audit.Entry {
 }
 
 // stepAppender is what the job store of both adapters adds to job.Store: the
-// write of a step record, which the recorder of a running phase uses.
+// write of a step record, which checks the claim and which the recorder of a
+// running phase uses.
 type stepAppender interface {
-	AppendStepRecord(ctx context.Context, fence namespace.Fence, id job.ID, phase int, r job.StepRecord) error
+	AppendStepRecord(ctx context.Context, pc job.PhaseClaim, r job.StepRecord) error
 }
 
-func (d *jobDomain) RecordStepBegin(
-	ctx context.Context, fence namespace.Fence, id job.ID, phase int, r job.StepRecord,
-) error {
+func (d *jobDomain) RecordStepBegin(ctx context.Context, pc job.PhaseClaim, r job.StepRecord) error {
 	a, ok := d.s.Jobs().(stepAppender)
 	if !ok {
 		return fmt.Errorf("the job store has no step record write: %w", job.ErrUnsupported)
 	}
 
-	return a.AppendStepRecord(ctx, fence, id, phase, r)
+	return a.AppendStepRecord(ctx, pc, r)
 }
 
 func (d *jobDomain) AuditEntries(ctx context.Context, ns namespace.Name) ([]audit.Entry, error) {
@@ -256,7 +255,8 @@ func TestJobConformance(t *testing.T) {
 		ops := s.DurableOperationsPort()
 
 		return jobtest.Harness{
-			Jobs: j, Durable: ops, Freezes: j, Claimer: job.NewClaimer(j, ops, s), Domain: &jobDomain{s: s},
+			Jobs: j, Durable: ops, Freezes: j, Claimer: job.NewClaimer(j, ops, s), Namespaces: s,
+			Domain: &jobDomain{s: s},
 		}
 	})
 }

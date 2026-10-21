@@ -31,7 +31,8 @@ func TestMemConformance(t *testing.T) {
 		db := newMemDB()
 
 		return jobtest.Harness{
-			Jobs: db, Durable: db.durable, Freezes: db, Claimer: job.NewClaimer(db, db.durable, db), Domain: db,
+			Jobs: db, Durable: db.durable, Freezes: db, Claimer: job.NewClaimer(db, db.durable, db), Namespaces: db,
+			Domain: db,
 		}
 	})
 }
@@ -232,23 +233,38 @@ func (m *memDB) GetNamespace(_ context.Context, name namespace.Name) (namespace.
 	}, nil
 }
 
-// RecordStepBegin implements jobtest.Domain.
-func (m *memDB) RecordStepBegin(
-	_ context.Context, fence namespace.Fence, id job.ID, phase int, r job.StepRecord,
-) error {
+// RecordStepBegin implements jobtest.Domain. It checks the claim as the SQL
+// adapters do in the transaction of the write.
+func (m *memDB) RecordStepBegin(ctx context.Context, pc job.PhaseClaim, r job.StepRecord) error {
+	if r.Token != pc.Claim.Token {
+		return fmt.Errorf("%w: the record carries token %d, the claim has token %d", job.ErrInvalid, r.Token,
+			pc.Claim.Token)
+	}
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	if err := m.checkFence(fence); err != nil {
+	if err := m.checkFence(pc.Fence); err != nil {
 		return err
 	}
 
-	j, ok := m.lookup(id)
-	if !ok || phase < 0 || phase >= len(j.Phases) {
+	j, ok := m.lookup(pc.Job)
+	if !ok || j.Spec.Unit.Namespace() != pc.Fence.Namespace {
 		return job.ErrNotFound
 	}
 
-	j.Phases[phase].Steps = append(j.Phases[phase].Steps, r)
+	runs := j.State == job.StateRunning || j.State == job.StateCanceling
+	if !runs || j.Current != pc.Phase || pc.Phase < 0 || pc.Phase >= len(j.Phases) ||
+		j.Phases[pc.Phase].Operation != string(pc.Claim.Operation) {
+		return fmt.Errorf("%w: %w: job %s is %s at phase %d", job.ErrClaimLost, durable.ErrClaimLost, j.ID, j.State,
+			j.Current)
+	}
+
+	if err := m.checkClaim(ctx, pc.Claim); err != nil {
+		return fmt.Errorf("%w: %w", job.ErrClaimLost, err)
+	}
+
+	j.Phases[pc.Phase].Steps = append(j.Phases[pc.Phase].Steps, r)
 	j.Version++
 
 	return nil
@@ -392,6 +408,10 @@ func (m *memDB) Apply(ctx context.Context, c job.Change, fence namespace.Fence, 
 		return job.Job{}, err
 	}
 
+	if err := checkEnd(&c); err != nil {
+		return job.Job{}, err
+	}
+
 	if cur.Version != c.Version {
 		return job.Job{}, job.ErrConflict
 	}
@@ -404,20 +424,15 @@ func (m *memDB) Apply(ctx context.Context, c job.Change, fence namespace.Fence, 
 	next := copyJob(cur)
 	now := time.Now().UTC()
 
+	if err := m.endOperation(ctx, cur, &c); err != nil {
+		return job.Job{}, err
+	}
+
 	if err := m.change(ctx, &next, &c, now); err != nil {
 		return job.Job{}, err
 	}
 
-	next.State, next.Version, next.UpdatedAt = to, cur.Version+1, now
-
-	next.Wait = job.WaitNone
-	if to == job.StateQueued {
-		next.Wait = c.Wait
-	}
-
-	if to.Terminal() {
-		next.Reason = c.Reason
-	}
+	settle(&next, to, &c, cur.Version, now)
 
 	if err := m.closeLate(ctx, &next, c.Event); err != nil {
 		return job.Job{}, err
@@ -431,6 +446,21 @@ func (m *memDB) Apply(ctx context.Context, c job.Change, fence namespace.Fence, 
 	m.audit[next.Spec.Unit.Namespace()] = append(m.audit[next.Spec.Unit.Namespace()], e...)
 
 	return copyJob(&next), nil
+}
+
+// settle sets the state, the version, the wait reason and the reason of next
+// after the event of c moved the job from the version prev to state to.
+func settle(next *job.Job, to job.State, c *job.Change, prev int64, now time.Time) {
+	next.State, next.Version, next.UpdatedAt = to, prev+1, now
+
+	next.Wait = job.WaitNone
+	if to == job.StateQueued {
+		next.Wait = c.Wait
+	}
+
+	if to.Terminal() {
+		next.Reason = c.Reason
+	}
 }
 
 // ObserveStateVersion implements job.Store.
@@ -990,6 +1020,77 @@ func checkNamespace(ns namespace.Name, fence namespace.Fence, e []audit.Entry) e
 			return fmt.Errorf("%w: entry names %q, fence names %q", audit.ErrInvalidEntry, e[i].Namespace,
 				fence.Namespace)
 		}
+	}
+
+	return nil
+}
+
+// checkClaim returns durable.ErrClaimLost unless c is the live claim of its
+// operation.
+func (m *memDB) checkClaim(ctx context.Context, c durable.Claim) error {
+	op, err := m.durable.Get(ctx, c.Operation)
+	if err != nil {
+		return durable.ErrClaimLost
+	}
+
+	if op.State != durable.StateRunning || op.Claim.Token != c.Token || !op.Claim.ExpiresAt.After(time.Now()) {
+		return durable.ErrClaimLost
+	}
+
+	return nil
+}
+
+// checkEnd returns job.ErrInvalid for a change whose end is not valid or
+// whose event cannot carry an end.
+func checkEnd(c *job.Change) error {
+	if c.End == nil {
+		return nil
+	}
+
+	if !job.AllowsEnd(c.Event) {
+		return fmt.Errorf("%w: event %s cannot end an operation", job.ErrInvalid, c.Event)
+	}
+
+	return c.End.Validate()
+}
+
+// endOperation ends the durable operation of c.End, in the one step of the
+// change of cur. It runs after the version and the state checks, and the
+// checks of the events that carry an end cannot fail later, so a refused
+// change ends nothing. It checks that the job is at the phase of
+// the operation, so the event binds to its claim.
+func (m *memDB) endOperation(ctx context.Context, cur *job.Job, c *job.Change) error {
+	if c.End == nil {
+		return nil
+	}
+
+	if cur.Current >= len(cur.Phases) || cur.Phases[cur.Current].Operation != string(c.End.Claim.Operation) {
+		return fmt.Errorf("%w: %w: job %s is not at the phase of operation %s", job.ErrClaimLost,
+			durable.ErrClaimLost, cur.ID, c.End.Claim.Operation)
+	}
+
+	var err error
+
+	switch c.End.Kind {
+	case job.EndComplete:
+		err = m.durable.Complete(ctx, c.End.Claim)
+		if errors.Is(err, durable.ErrCanceled) {
+			err = m.durable.Release(ctx, c.End.Claim)
+		}
+	case job.EndFail:
+		err = m.durable.Fail(ctx, c.End.Claim, c.End.Failure)
+	case job.EndRelease:
+		err = m.durable.Release(ctx, c.End.Claim)
+	default:
+		err = fmt.Errorf("%w: unknown end %q", job.ErrInvalid, c.End.Kind)
+	}
+
+	if errors.Is(err, durable.ErrClaimLost) {
+		return fmt.Errorf("end operation %s: %w: %w", c.End.Claim.Operation, job.ErrClaimLost, err)
+	}
+
+	if err != nil {
+		return fmt.Errorf("end operation %s: %w", c.End.Claim.Operation, err)
 	}
 
 	return nil
