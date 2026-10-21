@@ -3785,6 +3785,130 @@ DELETE FROM registry_keys
 WHERE registry_keys.fingerprint = sqlc.arg(fingerprint)
   AND registry_keys.namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace));
 
+-- name: GitHostNamespaceID :one
+SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace);
+
+-- name: InsertGitHostConnection :execrows
+-- The caller checks the fence in the same transaction. The first connection of
+-- a namespace is the default. A second connection of the namespace to the same
+-- installation is not written.
+INSERT INTO git_host_connections (
+    namespace_id, id, kind, auth, app_scope, installation_id, push, is_default, version, created_at_ms, updated_at_ms
+)
+SELECT
+    n.id, sqlc.arg(id), sqlc.arg(kind), sqlc.arg(auth), sqlc.arg(app_scope), sqlc.arg(installation_id),
+    sqlc.arg(push), NOT EXISTS (SELECT 1 FROM git_host_connections AS c WHERE c.namespace_id = n.id), 1,
+    sqlc.arg(created_at_ms), sqlc.arg(updated_at_ms)
+FROM namespaces AS n
+WHERE n.name = sqlc.arg(namespace)
+ON CONFLICT (namespace_id, kind, installation_id) DO NOTHING;
+
+-- name: CountGitHostConnections :one
+SELECT COUNT(*) FROM git_host_connections
+WHERE namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace));
+
+-- name: GetGitHostConnection :one
+SELECT n.name AS namespace, c.id, c.kind, c.auth, c.app_scope, c.installation_id, c.push, c.is_default, c.version,
+    c.created_at_ms, c.updated_at_ms
+FROM git_host_connections AS c
+JOIN namespaces AS n ON n.id = c.namespace_id
+WHERE n.name = sqlc.arg(namespace) AND c.id = sqlc.arg(id);
+
+-- name: ListGitHostConnections :many
+SELECT n.name AS namespace, c.id, c.kind, c.auth, c.app_scope, c.installation_id, c.push, c.is_default, c.version,
+    c.created_at_ms, c.updated_at_ms
+FROM git_host_connections AS c
+JOIN namespaces AS n ON n.id = c.namespace_id
+WHERE n.name = sqlc.arg(namespace)
+ORDER BY c.created_at_ms, c.id COLLATE "C";
+
+-- name: DeleteGitHostConnection :execrows
+-- A version of 0 sets no condition.
+DELETE FROM git_host_connections
+WHERE git_host_connections.id = sqlc.arg(id)
+  AND git_host_connections.namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace))
+  AND (sqlc.arg(if_version)::bigint = 0 OR git_host_connections.version = sqlc.arg(if_version)::bigint);
+
+-- name: ClearGitHostDefault :execrows
+UPDATE git_host_connections
+SET is_default = false, version = version + 1, updated_at_ms = GREATEST(sqlc.arg(updated_at_ms), git_host_connections.created_at_ms)
+WHERE git_host_connections.namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace))
+  AND git_host_connections.is_default = true AND git_host_connections.id <> sqlc.arg(id);
+
+-- name: SetGitHostDefault :execrows
+UPDATE git_host_connections
+SET is_default = true, version = version + 1, updated_at_ms = GREATEST(sqlc.arg(updated_at_ms), git_host_connections.created_at_ms)
+WHERE git_host_connections.namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace))
+  AND git_host_connections.id = sqlc.arg(id)
+  AND (sqlc.arg(if_version)::bigint = 0 OR git_host_connections.version = sqlc.arg(if_version)::bigint);
+
+-- name: GetGitHostRegistration :one
+SELECT kind, app_id, base_url, hook_id, sealed_key, key_set_id, key_created_at_ms, sealed_event_secret,
+    event_secret_set_id, event_secret_created_at_ms, address_digest, version, created_at_ms, updated_at_ms
+FROM git_host_app_registrations
+WHERE kind = sqlc.arg(kind);
+
+-- name: InsertGitHostRegistration :execrows
+INSERT INTO git_host_app_registrations (
+    kind, app_id, base_url, hook_id, sealed_key, key_set_id, key_created_at_ms, sealed_event_secret,
+    event_secret_set_id, event_secret_created_at_ms, address_digest, version, created_at_ms, updated_at_ms
+)
+VALUES (
+    sqlc.arg(kind), sqlc.arg(app_id), sqlc.arg(base_url), sqlc.arg(hook_id), sqlc.arg(sealed_key),
+    sqlc.arg(key_set_id), sqlc.arg(key_created_at_ms), sqlc.arg(sealed_event_secret),
+    sqlc.arg(event_secret_set_id), sqlc.arg(event_secret_created_at_ms), sqlc.arg(address_digest), 1,
+    sqlc.arg(created_at_ms), sqlc.arg(updated_at_ms)
+)
+ON CONFLICT (kind) DO NOTHING;
+
+-- name: UpdateGitHostRegistration :execrows
+-- The hook ID and the creation time stay. A version of 0 sets no condition.
+UPDATE git_host_app_registrations
+SET app_id = sqlc.arg(app_id), base_url = sqlc.arg(base_url), sealed_key = sqlc.arg(sealed_key),
+    key_set_id = sqlc.arg(key_set_id), key_created_at_ms = sqlc.arg(key_created_at_ms),
+    sealed_event_secret = sqlc.arg(sealed_event_secret), event_secret_set_id = sqlc.arg(event_secret_set_id),
+    event_secret_created_at_ms = sqlc.arg(event_secret_created_at_ms), address_digest = sqlc.arg(address_digest),
+    version = version + 1, updated_at_ms = GREATEST(sqlc.arg(updated_at_ms), git_host_app_registrations.created_at_ms)
+WHERE kind = sqlc.arg(kind) AND (sqlc.arg(if_version)::bigint = 0 OR version = sqlc.arg(if_version)::bigint);
+
+-- name: DeleteGitHostRegistration :execrows
+DELETE FROM git_host_app_registrations
+WHERE kind = sqlc.arg(kind) AND (sqlc.arg(if_version)::bigint = 0 OR version = sqlc.arg(if_version)::bigint);
+
+-- name: CountGitHostInstallations :one
+SELECT COUNT(*) FROM git_host_installations;
+
+-- name: GetGitHostInstallation :one
+SELECT i.installation_id, n.name AS namespace, i.version, i.created_at_ms, i.updated_at_ms
+FROM git_host_installations AS i
+JOIN namespaces AS n ON n.id = i.namespace_id
+WHERE i.installation_id = sqlc.arg(installation_id);
+
+-- name: ListGitHostInstallations :many
+SELECT i.installation_id, n.name AS namespace, i.version, i.created_at_ms, i.updated_at_ms
+FROM git_host_installations AS i
+JOIN namespaces AS n ON n.id = i.namespace_id
+ORDER BY char_length(i.installation_id), i.installation_id COLLATE "C";
+
+-- name: InsertGitHostInstallation :execrows
+INSERT INTO git_host_installations (installation_id, namespace_id, version, created_at_ms, updated_at_ms)
+SELECT sqlc.arg(installation_id), n.id, 1, sqlc.arg(created_at_ms), sqlc.arg(updated_at_ms)
+FROM namespaces AS n
+WHERE n.name = sqlc.arg(namespace)
+ON CONFLICT (installation_id) DO NOTHING;
+
+-- name: UpdateGitHostInstallation :execrows
+-- A version of 0 sets no condition.
+UPDATE git_host_installations
+SET namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace)),
+    version = version + 1, updated_at_ms = GREATEST(sqlc.arg(updated_at_ms), git_host_installations.created_at_ms)
+WHERE installation_id = sqlc.arg(installation_id) AND (sqlc.arg(if_version)::bigint = 0 OR version = sqlc.arg(if_version)::bigint);
+
+-- name: DeleteGitHostInstallation :execrows
+DELETE FROM git_host_installations
+WHERE installation_id = sqlc.arg(installation_id) AND (sqlc.arg(if_version)::bigint = 0 OR version = sqlc.arg(if_version)::bigint);
+
+
 -- name: GetNotificationSink :one
 -- The caller compares the namespace of the row with the scope of the request.
 SELECT k.id, n.name AS namespace, k.kind, k.name, k.platform, k.target, k.created_by, k.version
@@ -3865,3 +3989,4 @@ WHERE notification_sink_secrets.ref = sqlc.arg(ref) AND notification_sink_secret
 DELETE FROM notification_sink_secrets
 WHERE notification_sink_secrets.sink_id = sqlc.arg(sink_id)
   AND notification_sink_secrets.namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace));
+

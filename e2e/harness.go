@@ -649,6 +649,14 @@ func storeOptions(st serverStore, wrapper secret.Wrapper, args serverArgs) []dus
 	)
 }
 
+// featureStoreOptions returns the options that give the in-process server the
+// stores of the features that the store of the test keeps.
+func featureStoreOptions(tb testing.TB, st serverStore, wrapper secret.Wrapper, args serverArgs) []dustpan.Option {
+	tb.Helper()
+
+	return append(storeOptions(st, wrapper, args), gitHostOptions(tb, st)...)
+}
+
 func newServer(ctx context.Context, tb testing.TB, args serverArgs) serverBuild {
 	tb.Helper()
 
@@ -695,7 +703,7 @@ func newServer(ctx context.Context, tb testing.TB, args serverArgs) serverBuild 
 		st,
 		args,
 		append(
-			storeOptions(st, wrapper, args),
+			featureStoreOptions(tb, st, wrapper, args),
 			[]dustpan.Option{
 				dustpan.WithRegion(region),
 				dustpan.WithNamespaceStore(st),
