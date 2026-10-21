@@ -40,6 +40,7 @@ var settingFields = map[string]string{ //nolint:gochecknoglobals // A fixed decl
 	"max-body-bytes-in-flight":        "maxBodyBytesInFlight",
 	"soft-delete-retention":           "softDeleteRetention",
 	"audit-sink":                      "auditSinks",
+	"destination-ports":               "sinks",
 }
 
 // readerComponent names, for each function that reads a settings field, the
@@ -84,6 +85,10 @@ var readerComponent = map[string]map[string]string{ //nolint:gochecknoglobals //
 	"softDeleteRetention": {"checkSettings": "all", "newServices": "all", "newWorkspaceService": "all"},
 	// The api component lists the sinks. The worker component ships to them.
 	"auditSinks": {"newAuditShipper": "all"},
+	// The sink routes and the built-in webhook sender take the ports. Both
+	// serve the api component only. allHandlers names the adapter field of the
+	// same name for the description of the routes.
+	"sinks": {"allHandlers": "api", "mountAPI": "api", "newSinksHandler": "api", "sinkSenders": "api"},
 }
 
 // readersOf returns, for each field, the names of the functions of package

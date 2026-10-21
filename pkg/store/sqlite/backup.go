@@ -657,6 +657,9 @@ func checkRestoreFile(ctx context.Context, path string, want backup.Summary) (ba
 	if registryErr := checkStagedRegistry(ctx, conn); registryErr != nil {
 		return backup.Summary{}, fmt.Errorf("check staged backup: %w", registryErr)
 	}
+	if sinksErr := checkStagedSinks(ctx, conn); sinksErr != nil {
+		return backup.Summary{}, fmt.Errorf("check staged backup: %w", sinksErr)
+	}
 
 	sum, err := summarizeConn(ctx, conn)
 	if err != nil {

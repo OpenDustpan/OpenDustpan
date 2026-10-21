@@ -574,32 +574,42 @@ func (s *Store) ListBlobPurges(
 
 	size := int64(max(0, min(limit, maxBlobPurgeList)))
 
-	var (
-		rows []db.BlobPurge
-		err  error
-	)
-
 	if after == nil {
-		rows, err = s.queries.ListBlobPurges(ctx, size)
-	} else {
-		rows, err = s.queries.ListBlobPurgesAfter(ctx, db.ListBlobPurgesAfterParams{
-			AfterMs: codec.Millis(after.PurgedAt), AfterTool: after.Tool, AfterUnitID: after.UnitID, PageLimit: size,
-		})
+		rows, err := s.queries.ListBlobPurges(ctx, size)
+		if err != nil {
+			return nil, fmt.Errorf("list blob purges: %w", err)
+		}
+
+		out := make([]inventory.BlobPurge, 0, len(rows))
+		for _, r := range rows {
+			out = append(out, blobPurgeOf(r.Tool, r.UnitID, r.Namespace, r.NamespaceID, r.PurgedAtMs))
+		}
+
+		return out, nil
 	}
 
+	rows, err := s.queries.ListBlobPurgesAfter(ctx, db.ListBlobPurgesAfterParams{
+		AfterMs: codec.Millis(after.PurgedAt), AfterTool: after.Tool, AfterUnitID: after.UnitID, PageLimit: size,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("list blob purges: %w", err)
 	}
 
 	out := make([]inventory.BlobPurge, 0, len(rows))
 	for _, r := range rows {
-		out = append(out, inventory.BlobPurge{
-			PurgedAt: codec.FromMillis(r.PurgedAtMs), Namespace: namespace.Name(r.Namespace), Tool: r.Tool,
-			UnitID: r.UnitID,
-		})
+		out = append(out, blobPurgeOf(r.Tool, r.UnitID, r.Namespace, r.NamespaceID, r.PurgedAtMs))
 	}
 
 	return out, nil
+}
+
+// blobPurgeOf builds the record of a purged unit. nsID comes from the join with
+// the namespaces table and is empty when the namespace row is gone.
+func blobPurgeOf(tool, unitID, ns, nsID string, purgedAtMs int64) inventory.BlobPurge {
+	return inventory.BlobPurge{
+		PurgedAt: codec.FromMillis(purgedAtMs), Namespace: namespace.Name(ns), NamespaceID: namespace.ID(nsID),
+		Tool: tool, UnitID: unitID,
+	}
 }
 
 // FinishBlobPurge implements inventory.BlobPurges.

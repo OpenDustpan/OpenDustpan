@@ -13108,14 +13108,27 @@ func checkBackupRestartResumes(ctx context.Context, t *testing.T, env *e2e.Env, 
 	}
 }
 
+// isStackBlobKey reports whether key is a checkpoint or a journal blob of a
+// stack: namespaces/<namespace ID>/pulumi/<stack ID>/...
+func isStackBlobKey(key string) bool {
+	rest, ok := strings.CutPrefix(key, "namespaces/")
+	if !ok {
+		return false
+	}
+
+	_, rest, ok = strings.Cut(rest, "/")
+
+	return ok && strings.HasPrefix(rest, "pulumi/")
+}
+
 // backupCheckpointBlobSize returns the largest checkpoint blob of the
 // manifest: the padded checkpoint the backup data set writes. Checkpoints
-// live in blobs under the pulumi/ prefix.
+// live in blobs under namespaces/<namespace ID>/pulumi/.
 func backupCheckpointBlobSize(manifest backupManifestDoc) int64 {
 	var largest int64
 
 	for i := range manifest.Blobs {
-		if strings.HasPrefix(manifest.Blobs[i].Key, "pulumi/") {
+		if isStackBlobKey(manifest.Blobs[i].Key) {
 			largest = max(largest, manifest.Blobs[i].Size)
 		}
 	}

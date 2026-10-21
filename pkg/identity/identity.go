@@ -503,6 +503,11 @@ const (
 	// namespace that holds the profile.
 	ActionProfileManage Action = "profile:manage"
 
+	// ActionNamespaceManageNotifications allows creating, changing, deleting
+	// and testing the notification sinks of a namespace. Its object is the
+	// namespace. The value equals notify.ActionManage.
+	ActionNamespaceManageNotifications Action = "namespace:manage-notifications"
+
 	// ActionViewCreate allows a person to make a saved view of their own.
 	// Its object is the namespace that holds the view.
 	ActionViewCreate Action = "view:create"

@@ -312,6 +312,9 @@ How-to guides:
   again.
 - [Publish a provider to the private registry](docs/guides/private-registry.md): register a
   signing key, publish a signed provider version, and install it with `tofu init`.
+- [Connect a webhook and send a test message](docs/guides/notification-destinations.md):
+  make a notification destination, check its signature, and send a test
+  message.
 - [Architecture and sizing](docs/guides/architecture-and-sizing.md): the
   layout of an installation, and how to measure its size.
 - [Install with Helm](docs/guides/kubernetes.md): the Helm chart, its Secrets, storage, upgrade and rollback steps.
@@ -332,6 +335,8 @@ Reference:
   and change the preferences of a person.
 - [Registry API](docs/reference/registry-api.md): the routes that publish a provider,
   manage signing keys, and the routes that OpenTofu reads.
+- [Notification destinations API](docs/reference/notification-destinations-api.md):
+  the routes, fields and errors of notification destinations.
 - [Languages and digits](docs/reference/languages-and-digits.md): the
   languages, the `digits` setting and the plural forms.
 - [TFE-compatible API](docs/tfe-api.md): the endpoints that OpenTofu uses.

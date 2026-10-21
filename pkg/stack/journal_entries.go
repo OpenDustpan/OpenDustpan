@@ -9,11 +9,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"time"
 
 	"opendustpan.org/opendustpan/internal/token"
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/scopeaudit"
 )
 
 // ErrJournalConflict is returned when a batch holds a sequence ID that is stored
@@ -34,11 +34,6 @@ var ErrJournalKey = errors.New("journal blob key does not belong to the update")
 // ErrNilVerifier is returned by NewJournalEntries for a nil verifier. Without a
 // verifier a batch would be stored unchecked, so the writer is never built with one.
 var ErrNilVerifier = errors.New("journal writer needs a batch verifier")
-
-// journalSweepGrace is how long after its write a journal blob stays before the
-// sweep may delete it, so a blob written just before its row is not removed.
-// It matches the grace period of checkpoint blobs.
-const journalSweepGrace = time.Hour
 
 // ErrJournalBatch is returned for a batch body that has no entries, an entry with a
 // sequence ID of 0 or less, or a sequence ID that the batch holds twice.
@@ -66,9 +61,13 @@ type BatchVerifier interface {
 // holds the lowest sequence ID of the batch. Version is the journal version that
 // the server negotiated for the update.
 type JournalBatch struct {
-	Ref     Ref
-	StackID ID
-	Update  UpdateID
+	Ref Ref
+	// Namespace is the ID of the namespace of Ref. The service takes it from
+	// the namespace row that it resolved and authorized, never from a request
+	// field. The writer builds the scoped blob view from it.
+	Namespace namespace.ID
+	StackID   ID
+	Update    UpdateID
 	// Lease is the digest of the lease that authorized the write.
 	Lease   token.Digest
 	Content []byte
@@ -220,7 +219,7 @@ type journalEntryIDs struct {
 // JournalEntries writes journal batches: the blob first, then the row in a fenced
 // transaction (ADR 43, decision 6.1). It holds no state of its own.
 type JournalEntries struct {
-	blobs              blob.Store
+	blobs              blobAccess
 	rows               JournalStore
 	verifier           BatchVerifier
 	maxCheckpointBytes int
@@ -228,30 +227,55 @@ type JournalEntries struct {
 
 // NewJournalEntries returns a writer over the blob store, the row store and the
 // batch verifier. maxCheckpointBytes bounds a batch that holds one entry;
-// zero or less means DefaultMaxCheckpointBytes.
+// zero or less means DefaultMaxCheckpointBytes. The writer builds a scoped view
+// of the blob store for each call, and writes each refusal of a blob key
+// outside that view to refusals.
 func NewJournalEntries(
 	blobs blob.Store, rows JournalStore, verifier BatchVerifier, maxCheckpointBytes int,
+	refusals scopeaudit.Recorder,
 ) (*JournalEntries, error) {
 	if verifier == nil {
 		return nil, ErrNilVerifier
+	}
+
+	access, err := newBlobAccess(blobs, refusals)
+	if err != nil {
+		return nil, err
 	}
 
 	if maxCheckpointBytes <= 0 {
 		maxCheckpointBytes = DefaultMaxCheckpointBytes
 	}
 
-	return &JournalEntries{blobs: blobs, rows: rows, verifier: verifier, maxCheckpointBytes: maxCheckpointBytes}, nil
+	return &JournalEntries{blobs: access, rows: rows, verifier: verifier, maxCheckpointBytes: maxCheckpointBytes}, nil
 }
 
-// RemoveBlobs deletes the blobs of journal batches after the build has removed their
-// rows. A failed delete leaves the blob for the sweep. The returned error joins the
-// failures, and the caller logs it without failing the build.
-func (j *JournalEntries) RemoveBlobs(ctx context.Context, keys []blob.Key) error {
+// RemoveBlobs deletes the blobs of journal batches of the update in the stack
+// stackID of the namespace ns after the build has removed their rows. A failed
+// delete leaves the blob for the sweep. The keys come from rows, so each key
+// must name a batch in the journal directory of this update: a key outside it,
+// also a key of another stack or another update of the same namespace, is a
+// refusal with blob.ErrOutOfScope, and the call deletes nothing for it. The
+// returned error joins the failures, and the caller logs it without failing the
+// build.
+func (j *JournalEntries) RemoveBlobs(
+	ctx context.Context, ns namespace.ID, stackID ID, update UpdateID, keys []blob.Key,
+) error {
+	bl, err := j.blobs.scope(ns, stackID)
+	if err != nil {
+		return fmt.Errorf("remove journal blobs: %w", err)
+	}
+
+	return removeJournalBlobs(ctx, bl.narrow(bl.journalPrefix(stackID, update)), keys)
+}
+
+// removeJournalBlobs deletes the blobs under keys through the scoped access bl.
+func removeJournalBlobs(ctx context.Context, bl *scopedBlobs, keys []blob.Key) error {
 	var errs []error
 
 	for _, key := range keys {
-		if err := j.blobs.Delete(ctx, key); err != nil {
-			errs = append(errs, fmt.Errorf("delete journal blob %s: %w", key, err))
+		if err := bl.Delete(ctx, key); err != nil {
+			errs = append(errs, fmt.Errorf("delete journal blob: %w", err))
 		}
 	}
 
@@ -261,7 +285,18 @@ func (j *JournalEntries) RemoveBlobs(ctx context.Context, keys []blob.Key) error
 // Batches returns the bodies of the stored batches of the update, in arrival
 // order, for the replay. It holds every body in memory; a later streaming
 // build reads them without holding them all.
-func (j *JournalEntries) Batches(ctx context.Context, stackID ID, update UpdateID) ([][]byte, error) {
+func (j *JournalEntries) Batches(
+	ctx context.Context, ns namespace.ID, stackID ID, update UpdateID,
+) ([][]byte, error) {
+	bl, err := j.blobs.scope(ns, stackID)
+	if err != nil {
+		return nil, fmt.Errorf("read journal batches: %w", err)
+	}
+
+	// The keys come from rows. Each must name a batch in the journal
+	// directory of this update, so the reads are narrowed to it.
+	bl = bl.narrow(bl.journalPrefix(stackID, update))
+
 	keys, err := j.rows.JournalKeys(ctx, stackID, update)
 	if err != nil {
 		return nil, fmt.Errorf("read journal keys: %w", err)
@@ -270,7 +305,7 @@ func (j *JournalEntries) Batches(ctx context.Context, stackID ID, update UpdateI
 	out := make([][]byte, 0, len(keys))
 
 	for _, key := range keys {
-		body, err := j.batchBody(ctx, key)
+		body, err := batchBody(ctx, bl, key)
 		if err != nil {
 			return nil, err
 		}
@@ -348,55 +383,6 @@ func hasJournalGap(seqs []int64) bool {
 	return int64(len(seqs)) != highest
 }
 
-// SweepUpdate deletes the journal blobs of one update that no row names and that are
-// older than the grace period at now: batches whose row never committed, and blobs
-// that a finished build left behind. It runs only when the store reports the journal
-// sweepable, so no batch can be added during the sweep. The listing covers one update
-// prefix. It returns the first error that it meets, joined with the others.
-func (j *JournalEntries) SweepUpdate(ctx context.Context, stackID ID, update UpdateID, now time.Time) error {
-	sweepable, err := j.rows.JournalSweepable(ctx, stackID, update)
-	if err != nil {
-		return fmt.Errorf("check journal sweepable: %w", err)
-	}
-
-	if !sweepable {
-		return nil
-	}
-
-	prefix := "pulumi/" + stackID.String() + "/" + update.String() + "/journal/"
-
-	listed, err := j.blobs.List(ctx, prefix)
-	if err != nil {
-		return fmt.Errorf("list journal blobs: %w", err)
-	}
-
-	if len(listed) == 0 {
-		return nil
-	}
-
-	named, err := j.rows.JournalKeys(ctx, stackID, update)
-	if err != nil {
-		return fmt.Errorf("read journal keys: %w", err)
-	}
-
-	keep := make(map[blob.Key]bool, len(named))
-	for _, key := range named {
-		keep[key] = true
-	}
-
-	var orphans []blob.Key
-
-	for _, obj := range listed {
-		if keep[obj.Key] || now.Sub(obj.ModifiedAt) < journalSweepGrace {
-			continue
-		}
-
-		orphans = append(orphans, obj.Key)
-	}
-
-	return j.RemoveBlobs(ctx, orphans)
-}
-
 // batchLimitError reports a journal batch over MaxJournalBatchBytes. Its
 // Error text keeps the update wrapper for the log, and Message is the one
 // sentence the server answers. It wraps ErrTooLarge.
@@ -457,11 +443,20 @@ func (j *JournalEntries) Append(ctx context.Context, batch JournalBatch, fence n
 		return nil
 	}
 
+	bl, err := j.blobs.scope(batch.Namespace, batch.StackID)
+	if err != nil {
+		return fmt.Errorf("append journal batch: %w", err)
+	}
+
 	sum := sha256.Sum256(batch.Content)
 	sumMD5 := md5.Sum(batch.Content) //nolint:gosec // Integrity checksum for the backup manifest, not security.
-	key := journalKey(batch.StackID, batch.Update, lowest(ids.sequences))
 
-	created, err := j.putBlob(ctx, key, batch.Content, sum)
+	key, err := journalKey(bl, batch.StackID, batch.Update, lowest(ids.sequences))
+	if err != nil {
+		return j.recorded(ctx, batch, fence, ids.sequences, err)
+	}
+
+	created, err := putBlob(ctx, bl, key, batch.Content, sum)
 	if err != nil {
 		return j.recorded(ctx, batch, fence, ids.sequences, err)
 	}
@@ -485,7 +480,7 @@ func (j *JournalEntries) Append(ctx context.Context, batch JournalBatch, fence n
 	if _, err := j.rows.PutJournalRow(ctx, row, fence); err != nil {
 		err = fmt.Errorf("store journal batch: %w", err)
 		if created && refused(err) {
-			if derr := j.blobs.Delete(ctx, key); derr != nil {
+			if derr := bl.Delete(ctx, key); derr != nil {
 				// The sweep removes the blob that this delete leaves behind.
 				err = errors.Join(err, fmt.Errorf("delete refused journal blob: %w", derr))
 			}
@@ -569,13 +564,14 @@ func refused(err error) bool {
 // putBlob writes the content under key. It reports whether this call wrote it.
 // When the key already holds a blob, the content must match, so that a row
 // never names bytes other than the ones the batch carried.
-func (j *JournalEntries) putBlob(
+func putBlob(
 	ctx context.Context,
+	bl *scopedBlobs,
 	key blob.Key,
 	content []byte,
 	sum [sha256.Size]byte,
 ) (bool, error) {
-	err := j.blobs.Put(ctx, key, bytes.NewReader(content))
+	err := bl.Put(ctx, key, bytes.NewReader(content))
 	if err == nil {
 		return true, nil
 	}
@@ -584,7 +580,7 @@ func (j *JournalEntries) putBlob(
 		return false, fmt.Errorf("put journal blob: %w", err)
 	}
 
-	stored, err := j.digestOf(ctx, key)
+	stored, err := digestOf(ctx, bl, key)
 	if err != nil {
 		return false, err
 	}
@@ -597,8 +593,8 @@ func (j *JournalEntries) putBlob(
 }
 
 // digestOf reads the blob under key and returns the SHA-256 of its bytes.
-func (j *JournalEntries) digestOf(ctx context.Context, key blob.Key) ([sha256.Size]byte, error) {
-	r, err := j.blobs.Get(ctx, key)
+func digestOf(ctx context.Context, bl *scopedBlobs, key blob.Key) ([sha256.Size]byte, error) {
+	r, err := bl.Get(ctx, key)
 	if err != nil {
 		return [sha256.Size]byte{}, fmt.Errorf("read journal blob: %w", err)
 	}
@@ -708,14 +704,16 @@ func lowest(seqs []int64) int64 {
 	return low
 }
 
-// journalKey returns the blob key of a batch (ADR 43, decision 6.1).
-func journalKey(stackID ID, update UpdateID, low int64) blob.Key {
-	return blob.Key(fmt.Sprintf("pulumi/%s/%s/journal/%d", stackID, update, low))
+// journalKey returns the blob key of a batch in the scope of bl:
+// namespaces/<namespace ID>/pulumi/<stack ID>/<update ID>/journal/<lowest
+// sequence ID> (ADR 43, decision 6.1).
+func journalKey(bl *scopedBlobs, stackID ID, update UpdateID, low int64) (blob.Key, error) {
+	return bl.Key(fmt.Sprintf("%s/%s/journal/%d", stackID, update, low))
 }
 
 // batchBody reads the batch stored under key.
-func (j *JournalEntries) batchBody(ctx context.Context, key blob.Key) ([]byte, error) {
-	r, err := j.blobs.Get(ctx, key)
+func batchBody(ctx context.Context, bl *scopedBlobs, key blob.Key) ([]byte, error) {
+	r, err := bl.Get(ctx, key)
 	if err != nil {
 		return nil, fmt.Errorf("read journal batch: %w", err)
 	}

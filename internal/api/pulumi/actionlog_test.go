@@ -14,6 +14,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/stack"
+	"opendustpan.org/opendustpan/pkg/stack/stacktest"
 )
 
 // actionLogEntry decodes one structured action log line in tests.
@@ -65,6 +66,7 @@ func loggedUpdateFixture(t *testing.T, authz identity.Authorizer, buf *bytes.Buf
 		Namespaces:         namespaces,
 		Stacks:             stacks,
 		Blobs:              newMemBlob(),
+		Refusals:           stacktest.NewRefusals(),
 		Now:                nil,
 		Logger:             nil,
 		MaxCheckpointBytes: 0,

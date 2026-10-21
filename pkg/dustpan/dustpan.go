@@ -72,6 +72,7 @@ import (
 	blobcache "opendustpan.org/opendustpan/pkg/blob/cache"
 	"opendustpan.org/opendustpan/pkg/collection"
 	"opendustpan.org/opendustpan/pkg/durable"
+	"opendustpan.org/opendustpan/pkg/egress"
 	"opendustpan.org/opendustpan/pkg/idempotency"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/installation"
@@ -86,6 +87,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/profile"
 	"opendustpan.org/opendustpan/pkg/savedview"
+	"opendustpan.org/opendustpan/pkg/scopeaudit"
 	"opendustpan.org/opendustpan/pkg/secret"
 	"opendustpan.org/opendustpan/pkg/session"
 	"opendustpan.org/opendustpan/pkg/stack"
@@ -152,7 +154,10 @@ type settings struct {
 	// Every adapter gets it, so its bound on keys holds for the whole server.
 	denialLimiter *denylimit.Limiter
 	// devRefusal holds the one recorder of the refused dev sign-ins.
-	devRefusal      *devRefusalState
+	devRefusal *devRefusalState
+	// stackRefusals records the refusals of the stack blob scope. newServices
+	// builds it once.
+	stackRefusals   scopeaudit.Recorder
 	namespaceStore  namespace.Store
 	stackStore      stack.Store
 	updateStore     stack.UpdateStore
@@ -170,6 +175,7 @@ type settings struct {
 	workspaceBlobs       blob.Store
 	inventoryReader      inventory.Reader
 	profileStore         profile.Store
+	sinks                sinkSettings
 	jobStore             job.Store
 	savedViewStore       savedview.Store
 	registry             *registrySettings
@@ -272,6 +278,12 @@ type ipAllowlistSettings struct {
 type Option func(*settings)
 
 // WithNamespaceStore sets the namespace persistence port. Required.
+//
+// The server also uses the store for the audit entries of the scope @server,
+// for example the security entry of a stack blob key that a row names outside
+// the scope of its stack. So the store must implement audit.ServerStore, as
+// the SQLite and PostgreSQL stores do. NewServer answers ErrMissingOption for
+// a store that does not.
 func WithNamespaceStore(s namespace.Store) Option {
 	return func(o *settings) { o.namespaceStore = s }
 }
@@ -678,12 +690,15 @@ type services struct {
 }
 
 // defaultSettings answers the settings of a server before its options.
+//
+//nolint:funlen // One literal that names every field of settings (exhaustruct); its length is the field count.
 func defaultSettings() *settings {
 	return &settings{
 		denialLimiter: denylimit.New(denylimit.Config{
 			Window: 0, MaxKeys: 0, MaxFlush: 0, MaxKeysPerPrincipal: 0, Now: nil,
 		}),
 		devRefusal:              new(devRefusalState),
+		stackRefusals:           nil,
 		disablePulumiJournaling: false,
 		namespaceStore:          nil,
 		stackStore:              nil,
@@ -699,6 +714,7 @@ func defaultSettings() *settings {
 		workspaceBlobs:          nil,
 		inventoryReader:         nil,
 		profileStore:            nil,
+		sinks:                   sinkSettings{store: nil, senders: nil, ports: egress.Ports{}},
 		jobStore:                nil,
 		savedViewStore:          nil,
 		registry:                nil,
@@ -1157,6 +1173,8 @@ type neutralHandlers struct {
 	runners http.Handler
 	// profiles is nil when no profile store is set.
 	profiles http.Handler
+	// sinks is nil when no sink store is set.
+	sinks http.Handler
 	// jobs is nil when no job store is set.
 	jobs http.Handler
 	// registry is nil when no registry store is set.
@@ -1192,6 +1210,11 @@ func newNeutralHandlers(svc services, cfg *settings, observed *metrics.ServerMet
 		return neutralHandlers{}, err
 	}
 
+	sinks, err := newSinksHandler(svc, cfg, onFailure)
+	if err != nil {
+		return neutralHandlers{}, err
+	}
+
 	jobs, err := newJobsHandler(svc, cfg, onFailure)
 	if err != nil {
 		return neutralHandlers{}, err
@@ -1203,7 +1226,8 @@ func newNeutralHandlers(svc services, cfg *settings, observed *metrics.ServerMet
 	}
 
 	return neutralHandlers{
-		inventory: units, audit: entries, context: contexts, runners: runners, profiles: profiles, jobs: jobs,
+		inventory: units, audit: entries, context: contexts, runners: runners, profiles: profiles, sinks: sinks,
+		jobs:     jobs,
 		registry: registries,
 	}, nil
 }
@@ -1423,9 +1447,7 @@ func newWorkspaceService(
 		blobs = cfg.blobStore
 	}
 
-	refusals, err := secret.NewAuditOutOfScope(
-		serverAuditOf(cfg.namespaceStore), audit.ChannelAPI, workspace.StateBlobFamily(), cfg.now,
-	)
+	refusals, err := blobRefusals(cfg, workspace.StateBlobFamily())
 	if err != nil {
 		return nil, fmt.Errorf("workspace service: %w", err)
 	}
@@ -1486,6 +1508,7 @@ func newUpdateService(
 		Namespaces:         namespaces,
 		Stacks:             cfg.stackStore,
 		Blobs:              cfg.blobStore,
+		Refusals:           cfg.stackRefusals,
 		Tokens:             checker,
 		Now:                cfg.now,
 		Logger:             cfg.logger,
@@ -1534,6 +1557,10 @@ func newServices(cfg *settings, tokens *accesstoken.Service) (services, error) {
 	)
 	if err != nil {
 		return services{}, fmt.Errorf("namespace service: %w", err)
+	}
+
+	if refusalsErr := attachStackRefusals(cfg); refusalsErr != nil {
+		return services{}, refusalsErr
 	}
 
 	journal, err := journalWriter(cfg)
@@ -3682,6 +3709,9 @@ func mountAPI(mux *rootMux, a adapters, cfg *settings) error {
 		return withCORS(withMaintenance(h, a.maintenance, shapeInventory, cfg.logger), cfg.allowedOrigins)
 	})
 	mountV1(mux, a.profiles, func(h http.Handler) http.Handler {
+		return withCORS(withMaintenance(h, a.maintenance, shapeInventory, cfg.logger), cfg.allowedOrigins)
+	})
+	mountV1(mux, a.sinks, func(h http.Handler) http.Handler {
 		return withCORS(withMaintenance(h, a.maintenance, shapeInventory, cfg.logger), cfg.allowedOrigins)
 	})
 	mountV1(mux, a.registry, func(h http.Handler) http.Handler {

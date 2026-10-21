@@ -412,6 +412,27 @@ func (q *Queries) ClaimInstallationKind(ctx context.Context, kind sql.NullString
 	return result.RowsAffected()
 }
 
+const claimNotificationSinkRef = `-- name: ClaimNotificationSinkRef :execrows
+INSERT INTO notification_sink_refs (namespace_id, ref)
+VALUES ((SELECT n.id FROM namespaces AS n WHERE n.name = ?1), ?2)
+ON CONFLICT (namespace_id, ref) DO NOTHING
+`
+
+type ClaimNotificationSinkRefParams struct {
+	Namespace string
+	Ref       string
+}
+
+// Records that the namespace holds the ref. It writes nothing, and the caller
+// refuses the new value, when the namespace held the ref before.
+func (q *Queries) ClaimNotificationSinkRef(ctx context.Context, arg ClaimNotificationSinkRefParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, claimNotificationSinkRef, arg.Namespace, arg.Ref)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const clearJournalOperations = `-- name: ClearJournalOperations :exec
 UPDATE update_journal SET operation_ids = '[]'
 WHERE stack_id = ? AND update_id = ?
@@ -2540,6 +2561,57 @@ func (q *Queries) DeleteMissingCollectionMembership(ctx context.Context, unitID 
 	return err
 }
 
+const deleteNotificationSink = `-- name: DeleteNotificationSink :execrows
+DELETE FROM notification_sinks
+WHERE notification_sinks.id = ?1 AND notification_sinks.namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = ?2)
+`
+
+type DeleteNotificationSinkParams struct {
+	ID        string
+	Namespace string
+}
+
+func (q *Queries) DeleteNotificationSink(ctx context.Context, arg DeleteNotificationSinkParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, deleteNotificationSink, arg.ID, arg.Namespace)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const deleteNotificationSinkSecret = `-- name: DeleteNotificationSinkSecret :exec
+DELETE FROM notification_sink_secrets
+WHERE notification_sink_secrets.ref = ?1 AND notification_sink_secrets.sink_id = ?2
+  AND notification_sink_secrets.namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = ?3)
+`
+
+type DeleteNotificationSinkSecretParams struct {
+	Ref       string
+	SinkID    string
+	Namespace string
+}
+
+func (q *Queries) DeleteNotificationSinkSecret(ctx context.Context, arg DeleteNotificationSinkSecretParams) error {
+	_, err := q.db.ExecContext(ctx, deleteNotificationSinkSecret, arg.Ref, arg.SinkID, arg.Namespace)
+	return err
+}
+
+const deleteNotificationSinkSecrets = `-- name: DeleteNotificationSinkSecrets :exec
+DELETE FROM notification_sink_secrets
+WHERE notification_sink_secrets.sink_id = ?1
+  AND notification_sink_secrets.namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = ?2)
+`
+
+type DeleteNotificationSinkSecretsParams struct {
+	SinkID    string
+	Namespace string
+}
+
+func (q *Queries) DeleteNotificationSinkSecrets(ctx context.Context, arg DeleteNotificationSinkSecretsParams) error {
+	_, err := q.db.ExecContext(ctx, deleteNotificationSinkSecrets, arg.SinkID, arg.Namespace)
+	return err
+}
+
 const deleteObjectContext = `-- name: DeleteObjectContext :execrows
 DELETE FROM object_context
 WHERE namespace_id = ? AND object_kind = ? AND object_id = ? AND resource_key = ? AND source = ?
@@ -3811,11 +3883,13 @@ func (q *Queries) GetBackup(ctx context.Context, id string) (Backup, error) {
 }
 
 const getCheckpointByUpdate = `-- name: GetCheckpointByUpdate :one
-SELECT stack_id, update_id, lease_digest, schema_version, sequence,
-       digest, invalid, features_json, saved_at_ms,
-       blob_key, size, blob_size, blob_md5
-FROM checkpoints
-WHERE stack_id = ? AND update_id = ?
+SELECT c.stack_id, n.id AS namespace_id, c.update_id, c.lease_digest, c.schema_version, c.sequence,
+       c.digest, c.invalid, c.features_json, c.saved_at_ms,
+       c.blob_key, c.size, c.blob_size, c.blob_md5
+FROM checkpoints AS c
+JOIN stacks AS st ON st.id = c.stack_id
+JOIN namespaces AS n ON n.name = st.namespace
+WHERE c.stack_id = ? AND c.update_id = ?
 `
 
 type GetCheckpointByUpdateParams struct {
@@ -3823,11 +3897,29 @@ type GetCheckpointByUpdateParams struct {
 	UpdateID string
 }
 
-func (q *Queries) GetCheckpointByUpdate(ctx context.Context, arg GetCheckpointByUpdateParams) (Checkpoint, error) {
+type GetCheckpointByUpdateRow struct {
+	StackID       string
+	NamespaceID   string
+	UpdateID      string
+	LeaseDigest   []byte
+	SchemaVersion int64
+	Sequence      int64
+	Digest        []byte
+	Invalid       bool
+	FeaturesJson  string
+	SavedAtMs     int64
+	BlobKey       string
+	Size          sql.NullInt64
+	BlobSize      sql.NullInt64
+	BlobMd5       []byte
+}
+
+func (q *Queries) GetCheckpointByUpdate(ctx context.Context, arg GetCheckpointByUpdateParams) (GetCheckpointByUpdateRow, error) {
 	row := q.db.QueryRowContext(ctx, getCheckpointByUpdate, arg.StackID, arg.UpdateID)
-	var i Checkpoint
+	var i GetCheckpointByUpdateRow
 	err := row.Scan(
 		&i.StackID,
+		&i.NamespaceID,
 		&i.UpdateID,
 		&i.LeaseDigest,
 		&i.SchemaVersion,
@@ -3845,11 +3937,13 @@ func (q *Queries) GetCheckpointByUpdate(ctx context.Context, arg GetCheckpointBy
 }
 
 const getCheckpointByVersion = `-- name: GetCheckpointByVersion :one
-SELECT c.stack_id, c.update_id, c.lease_digest, c.schema_version, c.sequence,
+SELECT c.stack_id, n.id AS namespace_id, c.update_id, c.lease_digest, c.schema_version, c.sequence,
        c.digest, c.invalid, c.features_json, c.saved_at_ms,
        c.blob_key, c.size, c.blob_size, c.blob_md5
 FROM checkpoints AS c
 JOIN updates AS u ON c.stack_id = u.stack_id AND c.update_id = u.id
+JOIN stacks AS st ON st.id = c.stack_id
+JOIN namespaces AS n ON n.name = st.namespace
 WHERE c.stack_id = ? AND u.version = ?
 `
 
@@ -3858,11 +3952,29 @@ type GetCheckpointByVersionParams struct {
 	Version int64
 }
 
-func (q *Queries) GetCheckpointByVersion(ctx context.Context, arg GetCheckpointByVersionParams) (Checkpoint, error) {
+type GetCheckpointByVersionRow struct {
+	StackID       string
+	NamespaceID   string
+	UpdateID      string
+	LeaseDigest   []byte
+	SchemaVersion int64
+	Sequence      int64
+	Digest        []byte
+	Invalid       bool
+	FeaturesJson  string
+	SavedAtMs     int64
+	BlobKey       string
+	Size          sql.NullInt64
+	BlobSize      sql.NullInt64
+	BlobMd5       []byte
+}
+
+func (q *Queries) GetCheckpointByVersion(ctx context.Context, arg GetCheckpointByVersionParams) (GetCheckpointByVersionRow, error) {
 	row := q.db.QueryRowContext(ctx, getCheckpointByVersion, arg.StackID, arg.Version)
-	var i Checkpoint
+	var i GetCheckpointByVersionRow
 	err := row.Scan(
 		&i.StackID,
+		&i.NamespaceID,
 		&i.UpdateID,
 		&i.LeaseDigest,
 		&i.SchemaVersion,
@@ -4807,21 +4919,43 @@ func (q *Queries) GetJobHolderOfUnit(ctx context.Context, arg GetJobHolderOfUnit
 }
 
 const getLatestCheckpoint = `-- name: GetLatestCheckpoint :one
-SELECT c.stack_id, c.update_id, c.lease_digest, c.schema_version, c.sequence,
+SELECT c.stack_id, n.id AS namespace_id, c.update_id, c.lease_digest, c.schema_version, c.sequence,
        c.digest, c.invalid, c.features_json, c.saved_at_ms,
        c.blob_key, c.size, c.blob_size, c.blob_md5
 FROM checkpoints AS c
 JOIN updates AS u ON c.stack_id = u.stack_id AND c.update_id = u.id
+JOIN stacks AS st ON st.id = c.stack_id
+JOIN namespaces AS n ON n.name = st.namespace
 WHERE c.stack_id = ?
 ORDER BY u.version DESC
 LIMIT 1
 `
 
-func (q *Queries) GetLatestCheckpoint(ctx context.Context, stackID string) (Checkpoint, error) {
+type GetLatestCheckpointRow struct {
+	StackID       string
+	NamespaceID   string
+	UpdateID      string
+	LeaseDigest   []byte
+	SchemaVersion int64
+	Sequence      int64
+	Digest        []byte
+	Invalid       bool
+	FeaturesJson  string
+	SavedAtMs     int64
+	BlobKey       string
+	Size          sql.NullInt64
+	BlobSize      sql.NullInt64
+	BlobMd5       []byte
+}
+
+// The namespace ID comes from the join, so a caller reads the scope of the
+// blob of the row in the same call.
+func (q *Queries) GetLatestCheckpoint(ctx context.Context, stackID string) (GetLatestCheckpointRow, error) {
 	row := q.db.QueryRowContext(ctx, getLatestCheckpoint, stackID)
-	var i Checkpoint
+	var i GetLatestCheckpointRow
 	err := row.Scan(
 		&i.StackID,
+		&i.NamespaceID,
 		&i.UpdateID,
 		&i.LeaseDigest,
 		&i.SchemaVersion,
@@ -4983,6 +5117,41 @@ func (q *Queries) GetNamespaceIPAllowlist(ctx context.Context, name string) (str
 	var ip_allowlist string
 	err := row.Scan(&ip_allowlist)
 	return ip_allowlist, err
+}
+
+const getNotificationSink = `-- name: GetNotificationSink :one
+SELECT k.id, n.name AS namespace, k.kind, k.name, k.platform, k.target, k.created_by, k.version
+FROM notification_sinks AS k
+JOIN namespaces AS n ON n.id = k.namespace_id
+WHERE k.id = ?1
+`
+
+type GetNotificationSinkRow struct {
+	ID        string
+	Namespace string
+	Kind      string
+	Name      string
+	Platform  string
+	Target    string
+	CreatedBy string
+	Version   int64
+}
+
+// The caller compares the namespace of the row with the scope of the request.
+func (q *Queries) GetNotificationSink(ctx context.Context, id string) (GetNotificationSinkRow, error) {
+	row := q.db.QueryRowContext(ctx, getNotificationSink, id)
+	var i GetNotificationSinkRow
+	err := row.Scan(
+		&i.ID,
+		&i.Namespace,
+		&i.Kind,
+		&i.Name,
+		&i.Platform,
+		&i.Target,
+		&i.CreatedBy,
+		&i.Version,
+	)
+	return i, err
 }
 
 const getOIDCProviderIssuer = `-- name: GetOIDCProviderIssuer :one
@@ -5844,9 +6013,10 @@ func (q *Queries) GetSignInProviderEnabled(ctx context.Context, providerID strin
 }
 
 const getStack = `-- name: GetStack :one
-SELECT namespace, project, name, id, version, created_at_ms, updated_at_ms
-FROM stacks
-WHERE namespace = ? AND project = ? AND name = ? AND deleted_at_ms IS NULL
+SELECT s.namespace, s.project, s.name, s.id, n.id AS namespace_id, s.version, s.created_at_ms, s.updated_at_ms
+FROM stacks AS s
+JOIN namespaces AS n ON n.name = s.namespace
+WHERE s.namespace = ? AND s.project = ? AND s.name = ? AND s.deleted_at_ms IS NULL
 `
 
 type GetStackParams struct {
@@ -5860,11 +6030,14 @@ type GetStackRow struct {
 	Project     string
 	Name        string
 	ID          string
+	NamespaceID string
 	Version     int64
 	CreatedAtMs int64
 	UpdatedAtMs int64
 }
 
+// The namespace ID comes from the join, so a caller that reads blobs of the
+// stack builds their scope without a second read of the namespace.
 func (q *Queries) GetStack(ctx context.Context, arg GetStackParams) (GetStackRow, error) {
 	row := q.db.QueryRowContext(ctx, getStack, arg.Namespace, arg.Project, arg.Name)
 	var i GetStackRow
@@ -5873,6 +6046,7 @@ func (q *Queries) GetStack(ctx context.Context, arg GetStackParams) (GetStackRow
 		&i.Project,
 		&i.Name,
 		&i.ID,
+		&i.NamespaceID,
 		&i.Version,
 		&i.CreatedAtMs,
 		&i.UpdatedAtMs,
@@ -7383,6 +7557,70 @@ func (q *Queries) InsertManualLock(ctx context.Context, arg InsertManualLockPara
 	return result.RowsAffected()
 }
 
+const insertNotificationSink = `-- name: InsertNotificationSink :execrows
+INSERT INTO notification_sinks (id, namespace_id, kind, name, platform, target, created_by, version)
+VALUES (
+    ?1, (SELECT n.id FROM namespaces AS n WHERE n.name = ?2),
+    ?3, ?4, ?5, ?6, ?7, 1
+)
+ON CONFLICT (id) DO NOTHING
+`
+
+type InsertNotificationSinkParams struct {
+	ID        string
+	Namespace string
+	Kind      string
+	Name      string
+	Platform  string
+	Target    string
+	CreatedBy string
+}
+
+// The caller checks the fence in the same transaction. A sink with the same
+// ID is not written.
+func (q *Queries) InsertNotificationSink(ctx context.Context, arg InsertNotificationSinkParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, insertNotificationSink,
+		arg.ID,
+		arg.Namespace,
+		arg.Kind,
+		arg.Name,
+		arg.Platform,
+		arg.Target,
+		arg.CreatedBy,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const insertNotificationSinkSecret = `-- name: InsertNotificationSinkSecret :exec
+INSERT INTO notification_sink_secrets (namespace_id, ref, sink_id, position, ciphertext)
+VALUES (
+    (SELECT n.id FROM namespaces AS n WHERE n.name = ?1), ?2, ?3,
+    ?4, ?5
+)
+`
+
+type InsertNotificationSinkSecretParams struct {
+	Namespace  string
+	Ref        string
+	SinkID     string
+	Position   int64
+	Ciphertext []byte
+}
+
+func (q *Queries) InsertNotificationSinkSecret(ctx context.Context, arg InsertNotificationSinkSecretParams) error {
+	_, err := q.db.ExecContext(ctx, insertNotificationSinkSecret,
+		arg.Namespace,
+		arg.Ref,
+		arg.SinkID,
+		arg.Position,
+		arg.Ciphertext,
+	)
+	return err
+}
+
 const insertOIDCProvider = `-- name: InsertOIDCProvider :exec
 INSERT INTO oidc_providers (provider_id, issuer, created_at_ms) VALUES (?, ?, ?)
 ON CONFLICT (provider_id) DO NOTHING
@@ -8471,26 +8709,36 @@ func (q *Queries) ListBackups(ctx context.Context) ([]Backup, error) {
 }
 
 const listBlobPurges = `-- name: ListBlobPurges :many
-SELECT tool, unit_id, namespace, purged_at_ms
-FROM blob_purges
+SELECT bp.tool, bp.unit_id, bp.namespace, COALESCE(n.id, '') AS namespace_id, bp.purged_at_ms
+FROM blob_purges AS bp
+LEFT JOIN namespaces AS n ON n.name = bp.namespace
 ORDER BY purged_at_ms, tool, unit_id
 LIMIT ?
 `
 
+type ListBlobPurgesRow struct {
+	Tool        string
+	UnitID      string
+	Namespace   string
+	NamespaceID string
+	PurgedAtMs  int64
+}
+
 // The oldest rows first, so the sweep finishes the oldest purges first.
-func (q *Queries) ListBlobPurges(ctx context.Context, limit int64) ([]BlobPurge, error) {
+func (q *Queries) ListBlobPurges(ctx context.Context, limit int64) ([]ListBlobPurgesRow, error) {
 	rows, err := q.db.QueryContext(ctx, listBlobPurges, limit)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []BlobPurge
+	var items []ListBlobPurgesRow
 	for rows.Next() {
-		var i BlobPurge
+		var i ListBlobPurgesRow
 		if err := rows.Scan(
 			&i.Tool,
 			&i.UnitID,
 			&i.Namespace,
+			&i.NamespaceID,
 			&i.PurgedAtMs,
 		); err != nil {
 			return nil, err
@@ -8507,8 +8755,9 @@ func (q *Queries) ListBlobPurges(ctx context.Context, limit int64) ([]BlobPurge,
 }
 
 const listBlobPurgesAfter = `-- name: ListBlobPurgesAfter :many
-SELECT tool, unit_id, namespace, purged_at_ms
-FROM blob_purges
+SELECT bp.tool, bp.unit_id, bp.namespace, COALESCE(n.id, '') AS namespace_id, bp.purged_at_ms
+FROM blob_purges AS bp
+LEFT JOIN namespaces AS n ON n.name = bp.namespace
 WHERE purged_at_ms >= ?1
   AND (purged_at_ms > ?1
     OR (purged_at_ms = ?1 AND tool > ?2)
@@ -8524,9 +8773,17 @@ type ListBlobPurgesAfterParams struct {
 	PageLimit   int64
 }
 
+type ListBlobPurgesAfterRow struct {
+	Tool        string
+	UnitID      string
+	Namespace   string
+	NamespaceID string
+	PurgedAtMs  int64
+}
+
 // The page of ListBlobPurges after the cursor (purge time, tool, unit ID).
 // The lower bound on purged_at_ms lets the index scan start at the cursor.
-func (q *Queries) ListBlobPurgesAfter(ctx context.Context, arg ListBlobPurgesAfterParams) ([]BlobPurge, error) {
+func (q *Queries) ListBlobPurgesAfter(ctx context.Context, arg ListBlobPurgesAfterParams) ([]ListBlobPurgesAfterRow, error) {
 	rows, err := q.db.QueryContext(ctx, listBlobPurgesAfter,
 		arg.AfterMs,
 		arg.AfterTool,
@@ -8537,13 +8794,14 @@ func (q *Queries) ListBlobPurgesAfter(ctx context.Context, arg ListBlobPurgesAft
 		return nil, err
 	}
 	defer rows.Close()
-	var items []BlobPurge
+	var items []ListBlobPurgesAfterRow
 	for rows.Next() {
-		var i BlobPurge
+		var i ListBlobPurgesAfterRow
 		if err := rows.Scan(
 			&i.Tool,
 			&i.UnitID,
 			&i.Namespace,
+			&i.NamespaceID,
 			&i.PurgedAtMs,
 		); err != nil {
 			return nil, err
@@ -10344,6 +10602,135 @@ func (q *Queries) ListNarrowerGateObjects(ctx context.Context, arg ListNarrowerG
 	return items, nil
 }
 
+const listNotificationSinkRefs = `-- name: ListNotificationSinkRefs :many
+SELECT s.sink_id, s.ref
+FROM notification_sink_secrets AS s
+JOIN namespaces AS n ON n.id = s.namespace_id
+WHERE n.name = ?1
+ORDER BY s.sink_id, s.position
+`
+
+type ListNotificationSinkRefsRow struct {
+	SinkID string
+	Ref    string
+}
+
+// The secret refs of every sink of a namespace, in the order of each sink.
+func (q *Queries) ListNotificationSinkRefs(ctx context.Context, namespace string) ([]ListNotificationSinkRefsRow, error) {
+	rows, err := q.db.QueryContext(ctx, listNotificationSinkRefs, namespace)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListNotificationSinkRefsRow
+	for rows.Next() {
+		var i ListNotificationSinkRefsRow
+		if err := rows.Scan(&i.SinkID, &i.Ref); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listNotificationSinkSecrets = `-- name: ListNotificationSinkSecrets :many
+SELECT s.ref, s.ciphertext
+FROM notification_sink_secrets AS s
+JOIN namespaces AS n ON n.id = s.namespace_id
+WHERE n.name = ?1 AND s.sink_id = ?2
+ORDER BY s.position
+`
+
+type ListNotificationSinkSecretsParams struct {
+	Namespace string
+	SinkID    string
+}
+
+type ListNotificationSinkSecretsRow struct {
+	Ref        string
+	Ciphertext []byte
+}
+
+func (q *Queries) ListNotificationSinkSecrets(ctx context.Context, arg ListNotificationSinkSecretsParams) ([]ListNotificationSinkSecretsRow, error) {
+	rows, err := q.db.QueryContext(ctx, listNotificationSinkSecrets, arg.Namespace, arg.SinkID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListNotificationSinkSecretsRow
+	for rows.Next() {
+		var i ListNotificationSinkSecretsRow
+		if err := rows.Scan(&i.Ref, &i.Ciphertext); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listNotificationSinks = `-- name: ListNotificationSinks :many
+SELECT k.id, n.name AS namespace, k.kind, k.name, k.platform, k.target, k.created_by, k.version
+FROM notification_sinks AS k
+JOIN namespaces AS n ON n.id = k.namespace_id
+WHERE n.name = ?1
+ORDER BY k.id
+`
+
+type ListNotificationSinksRow struct {
+	ID        string
+	Namespace string
+	Kind      string
+	Name      string
+	Platform  string
+	Target    string
+	CreatedBy string
+	Version   int64
+}
+
+func (q *Queries) ListNotificationSinks(ctx context.Context, namespace string) ([]ListNotificationSinksRow, error) {
+	rows, err := q.db.QueryContext(ctx, listNotificationSinks, namespace)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListNotificationSinksRow
+	for rows.Next() {
+		var i ListNotificationSinksRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Namespace,
+			&i.Kind,
+			&i.Name,
+			&i.Platform,
+			&i.Target,
+			&i.CreatedBy,
+			&i.Version,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listObjectContext = `-- name: ListObjectContext :many
 SELECT tool, source, fields, warning, item_id, item_seq, updated_at_ms, updated_by
 FROM object_context
@@ -11989,6 +12376,30 @@ func (q *Queries) MinAuditSequence(ctx context.Context, namespace string) (int64
 	var column_1 int64
 	err := row.Scan(&column_1)
 	return column_1, err
+}
+
+const moveNotificationSinkSecret = `-- name: MoveNotificationSinkSecret :exec
+UPDATE notification_sink_secrets
+SET position = ?1
+WHERE notification_sink_secrets.ref = ?2 AND notification_sink_secrets.sink_id = ?3
+  AND notification_sink_secrets.namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = ?4)
+`
+
+type MoveNotificationSinkSecretParams struct {
+	Position  int64
+	Ref       string
+	SinkID    string
+	Namespace string
+}
+
+func (q *Queries) MoveNotificationSinkSecret(ctx context.Context, arg MoveNotificationSinkSecretParams) error {
+	_, err := q.db.ExecContext(ctx, moveNotificationSinkSecret,
+		arg.Position,
+		arg.Ref,
+		arg.SinkID,
+		arg.Namespace,
+	)
+	return err
 }
 
 const moveProfileLatest = `-- name: MoveProfileLatest :execrows
@@ -14659,6 +15070,37 @@ func (q *Queries) UpdateJob(ctx context.Context, arg UpdateJobParams) (int64, er
 		arg.UpdatedAtMs,
 		arg.ID,
 		arg.PrevVersion,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const updateNotificationSink = `-- name: UpdateNotificationSink :execrows
+UPDATE notification_sinks
+SET name = ?1, target = ?2, version = notification_sinks.version + 1
+WHERE notification_sinks.id = ?3 AND notification_sinks.version = ?4
+  AND notification_sinks.namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = ?5)
+`
+
+type UpdateNotificationSinkParams struct {
+	Name      string
+	Target    string
+	ID        string
+	Version   int64
+	Namespace string
+}
+
+// A replace changes the name and the target. The kind, the platform and the
+// creator stay. The version guards the replace.
+func (q *Queries) UpdateNotificationSink(ctx context.Context, arg UpdateNotificationSinkParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, updateNotificationSink,
+		arg.Name,
+		arg.Target,
+		arg.ID,
+		arg.Version,
+		arg.Namespace,
 	)
 	if err != nil {
 		return 0, err

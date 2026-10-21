@@ -103,6 +103,9 @@ const (
 	IncidentResolved      Type = "incident.resolved"
 	LockHeldLong          Type = "lock.held-long"
 	SubscriptionSuspended Type = "subscription.suspended"
+	// SinkTest is the fixed message of the test route of a sink. A person
+	// sends it to check a sink. It reports no event.
+	SinkTest Type = "sink.test"
 )
 
 // Types returns the catalog of notification types, in order.
@@ -113,6 +116,7 @@ func Types() []Type {
 		BreakGlassUsed, BreakGlassNotice, BreakGlassReviewed,
 		OnCallHandoff, OnCallSyncFailed, CostEstimated, BudgetThreshold,
 		IncidentOpened, IncidentChanged, IncidentResolved, LockHeldLong, SubscriptionSuspended,
+		SinkTest,
 	}
 }
 

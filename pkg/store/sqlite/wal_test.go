@@ -220,12 +220,13 @@ func createWALStack(
 	now := time.Now()
 
 	st := stack.Stack{
-		CreatedAt: now,
-		UpdatedAt: now,
-		Tags:      map[string]string{"worker": project},
-		Ref:       ref,
-		ID:        stack.ID(ident.NewID("stk-")),
-		Version:   0,
+		NamespaceID: "",
+		CreatedAt:   now,
+		UpdatedAt:   now,
+		Tags:        map[string]string{"worker": project},
+		Ref:         ref,
+		ID:          stack.ID(ident.NewID("stk-")),
+		Version:     0,
 	}
 
 	return s.CreateStack(ctx, st, ns.Fence())
@@ -560,12 +561,13 @@ func writeGrowWALRow(ctx context.Context, t *testing.T, row growWALRow) stack.Re
 	now := time.Now()
 
 	st := stack.Stack{
-		CreatedAt: now,
-		UpdatedAt: now,
-		Tags:      map[string]string{"batch": strconv.Itoa(row.batch), "pad": row.pad},
-		Ref:       ref,
-		ID:        stack.ID(ident.NewID("stk-")),
-		Version:   0,
+		NamespaceID: "",
+		CreatedAt:   now,
+		UpdatedAt:   now,
+		Tags:        map[string]string{"batch": strconv.Itoa(row.batch), "pad": row.pad},
+		Ref:         ref,
+		ID:          stack.ID(ident.NewID("stk-")),
+		Version:     0,
 	}
 
 	if err := row.store.CreateStack(ctx, st, row.ns.Fence()); err != nil {
@@ -1167,12 +1169,13 @@ func writeStacksForWindow(ctx context.Context, t *testing.T, job walTimedWrites)
 		now := time.Now()
 
 		st := stack.Stack{
-			CreatedAt: now,
-			UpdatedAt: now,
-			Tags:      map[string]string{"run": "fast"},
-			Ref:       ref,
-			ID:        stack.ID(ident.NewID("stk-")),
-			Version:   0,
+			NamespaceID: "",
+			CreatedAt:   now,
+			UpdatedAt:   now,
+			Tags:        map[string]string{"run": "fast"},
+			Ref:         ref,
+			ID:          stack.ID(ident.NewID("stk-")),
+			Version:     0,
 		}
 
 		start := time.Now()
@@ -1447,12 +1450,13 @@ func writeStacksPastThreshold(ctx context.Context, t *testing.T, job walWriteJob
 		now := time.Now()
 
 		st := stack.Stack{
-			CreatedAt: now,
-			UpdatedAt: now,
-			Tags:      map[string]string{"run": job.prefix, "pad": pad},
-			Ref:       ref,
-			ID:        stack.ID(ident.NewID("stk-")),
-			Version:   0,
+			NamespaceID: "",
+			CreatedAt:   now,
+			UpdatedAt:   now,
+			Tags:        map[string]string{"run": job.prefix, "pad": pad},
+			Ref:         ref,
+			ID:          stack.ID(ident.NewID("stk-")),
+			Version:     0,
 		}
 
 		start := time.Now()

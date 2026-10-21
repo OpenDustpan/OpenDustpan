@@ -30,7 +30,8 @@ func seedStack(t *testing.T, st *sqlite.Store, ns namespace.Name, project, name 
 
 	at := time.Date(2026, time.October, 13, 12, 0, 0, 0, time.UTC)
 	s := stack.Stack{
-		CreatedAt: at, UpdatedAt: at, Tags: map[string]string{}, Ref: ref,
+		NamespaceID: "",
+		CreatedAt:   at, UpdatedAt: at, Tags: map[string]string{}, Ref: ref,
 		ID: stack.ID("stk-" + ns.String() + "-" + project + "-" + name), Version: 0,
 	}
 

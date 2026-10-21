@@ -54,9 +54,10 @@ func FromStackRow(row StackRow, tags map[string]string) stack.Stack {
 	}
 
 	return stack.Stack{
-		CreatedAt: FromMillis(row.CreatedAtMs),
-		UpdatedAt: FromMillis(row.UpdatedAtMs),
-		Tags:      tags,
+		NamespaceID: "",
+		CreatedAt:   FromMillis(row.CreatedAtMs),
+		UpdatedAt:   FromMillis(row.UpdatedAtMs),
+		Tags:        tags,
 		Ref: stack.Ref{
 			Namespace: namespace.Name(row.Namespace),
 			Project:   stack.ProjectName(row.Project),

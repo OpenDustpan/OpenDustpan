@@ -337,7 +337,9 @@ func testRestoreStagingKeepsCheckpointBlobs(t *testing.T, newStore RestoreFactor
 
 	st := mustGetStack(t, ps.src, f.ref)
 
-	key, err := blob.ParseKey("pulumi/" + st.ID.String() + "/" + u.ID.String() + "/0")
+	key, err := blob.ParseKey(
+		stackBlobPrefix(t, ps.src, f.ref.Namespace) + st.ID.String() + "/" + u.ID.String() + "/0",
+	)
 	if err != nil {
 		t.Fatalf("parse blob key: %v", err)
 	}

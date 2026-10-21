@@ -83,9 +83,12 @@ VALUES ($1, $2, $3, $4, $5, $6, $7)
 ON CONFLICT DO NOTHING;
 
 -- name: GetStack :one
-SELECT namespace, project, name, id, version, created_at_ms, updated_at_ms
-FROM stacks
-WHERE namespace = $1 AND project = $2 AND name = $3 AND deleted_at_ms IS NULL;
+-- The namespace ID comes from the join, so a caller that reads blobs of the
+-- stack builds their scope without a second read of the namespace.
+SELECT s.namespace, s.project, s.name, s.id, n.id AS namespace_id, s.version, s.created_at_ms, s.updated_at_ms
+FROM stacks AS s
+JOIN namespaces AS n ON n.name = s.namespace
+WHERE s.namespace = $1 AND s.project = $2 AND s.name = $3 AND s.deleted_at_ms IS NULL;
 
 -- name: ListStacksInNamespace :many
 SELECT namespace, project, name, id, version, created_at_ms, updated_at_ms
@@ -240,11 +243,15 @@ WHERE stack_id = $1 AND id = $2
 FOR SHARE;
 
 -- name: GetLatestCheckpoint :one
-SELECT c.stack_id, c.update_id, c.lease_digest, c.schema_version, c.sequence,
+-- The namespace ID comes from the join, so a caller reads the scope of the
+-- blob of the row in the same call.
+SELECT c.stack_id, n.id AS namespace_id, c.update_id, c.lease_digest, c.schema_version, c.sequence,
        c.digest, c.invalid, c.features, c.saved_at_ms,
        c.blob_key, c.size, c.blob_size, c.blob_md5
 FROM checkpoints AS c
 JOIN updates AS u ON c.stack_id = u.stack_id AND c.update_id = u.id
+JOIN stacks AS st ON st.id = c.stack_id
+JOIN namespaces AS n ON n.name = st.namespace
 WHERE c.stack_id = $1
 ORDER BY u.version DESC
 LIMIT 1;
@@ -287,18 +294,22 @@ ORDER BY u.version DESC
 LIMIT 1;
 
 -- name: GetCheckpointByUpdate :one
-SELECT stack_id, update_id, lease_digest, schema_version, sequence,
-       digest, invalid, features, saved_at_ms,
-       blob_key, size, blob_size, blob_md5
-FROM checkpoints
-WHERE stack_id = $1 AND update_id = $2;
+SELECT c.stack_id, n.id AS namespace_id, c.update_id, c.lease_digest, c.schema_version, c.sequence,
+       c.digest, c.invalid, c.features, c.saved_at_ms,
+       c.blob_key, c.size, c.blob_size, c.blob_md5
+FROM checkpoints AS c
+JOIN stacks AS st ON st.id = c.stack_id
+JOIN namespaces AS n ON n.name = st.namespace
+WHERE c.stack_id = $1 AND c.update_id = $2;
 
 -- name: GetCheckpointByVersion :one
-SELECT c.stack_id, c.update_id, c.lease_digest, c.schema_version, c.sequence,
+SELECT c.stack_id, n.id AS namespace_id, c.update_id, c.lease_digest, c.schema_version, c.sequence,
        c.digest, c.invalid, c.features, c.saved_at_ms,
        c.blob_key, c.size, c.blob_size, c.blob_md5
 FROM checkpoints AS c
 JOIN updates AS u ON c.stack_id = u.stack_id AND c.update_id = u.id
+JOIN stacks AS st ON st.id = c.stack_id
+JOIN namespaces AS n ON n.name = st.namespace
 WHERE c.stack_id = $1 AND u.version = $2;
 
 -- name: PutCheckpoint :exec
@@ -1887,16 +1898,18 @@ DELETE FROM blob_purges WHERE tool = $1 AND unit_id = $2;
 
 -- name: ListBlobPurges :many
 -- The oldest rows first, so the sweep finishes the oldest purges first.
-SELECT tool, unit_id, namespace, purged_at_ms
-FROM blob_purges
+SELECT bp.tool, bp.unit_id, bp.namespace, COALESCE(n.id, '') AS namespace_id, bp.purged_at_ms
+FROM blob_purges AS bp
+LEFT JOIN namespaces AS n ON n.name = bp.namespace
 ORDER BY purged_at_ms, tool COLLATE "C", unit_id COLLATE "C"
 LIMIT $1;
 
 -- name: ListBlobPurgesAfter :many
 -- The page of ListBlobPurges after the cursor (purge time, tool, unit ID).
 -- The lower bound on purged_at_ms lets the index scan start at the cursor.
-SELECT tool, unit_id, namespace, purged_at_ms
-FROM blob_purges
+SELECT bp.tool, bp.unit_id, bp.namespace, COALESCE(n.id, '') AS namespace_id, bp.purged_at_ms
+FROM blob_purges AS bp
+LEFT JOIN namespaces AS n ON n.name = bp.namespace
 WHERE purged_at_ms >= sqlc.arg(after_ms)
   AND (purged_at_ms > sqlc.arg(after_ms)
     OR (purged_at_ms = sqlc.arg(after_ms) AND tool COLLATE "C" > sqlc.arg(after_tool))
@@ -3300,7 +3313,6 @@ SET deleted_at_ms = sqlc.arg(deleted_at_ms)
 WHERE namespace_id = sqlc.arg(namespace_id) AND id = sqlc.arg(id) AND deleted_at_ms = 0
   AND (CAST(sqlc.arg(if_latest) AS BIGINT) = 0 OR latest = CAST(sqlc.arg(if_latest) AS BIGINT));
 
-
 -- name: InsertManualLock :execrows
 -- Records the manual lock of one object. A row that exists for the object is
 -- not written. The caller checks the fence in the same transaction.
@@ -3368,8 +3380,6 @@ LEFT JOIN manual_locks AS cl ON cl.kind = 'collection' AND cl.object_id = c.id
 LEFT JOIN namespaces AS ns ON ns.name = i.namespace
 LEFT JOIN manual_locks AS nl ON nl.kind = 'namespace' AND nl.object_id = ns.id
 WHERE i.namespace = sqlc.arg(namespace) AND i.unit_id = sqlc.arg(unit_id);
-
-
 
 -- name: DeleteExpiredIdempotencyRecord :exec
 -- Deletes the record of the name when it is past its period: a record past
@@ -3453,8 +3463,6 @@ WHERE id = 1 AND wrapped_key = sqlc.arg(old_wrapped_key);
 
 -- name: DeleteAllIdempotencyRecords :exec
 DELETE FROM idempotency_records;
-
-
 
 -- name: GetAuditChainCheck :one
 -- The stored result of the scheduled audit chain check. No row means no check
@@ -3775,3 +3783,84 @@ ORDER BY k.fingerprint COLLATE "C";
 DELETE FROM registry_keys
 WHERE registry_keys.fingerprint = sqlc.arg(fingerprint)
   AND registry_keys.namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace));
+
+-- name: GetNotificationSink :one
+-- The caller compares the namespace of the row with the scope of the request.
+SELECT k.id, n.name AS namespace, k.kind, k.name, k.platform, k.target, k.created_by, k.version
+FROM notification_sinks AS k
+JOIN namespaces AS n ON n.id = k.namespace_id
+WHERE k.id = sqlc.arg(id);
+
+-- name: ListNotificationSinks :many
+SELECT k.id, n.name AS namespace, k.kind, k.name, k.platform, k.target, k.created_by, k.version
+FROM notification_sinks AS k
+JOIN namespaces AS n ON n.id = k.namespace_id
+WHERE n.name = sqlc.arg(namespace)
+ORDER BY k.id COLLATE "C";
+
+-- name: ListNotificationSinkRefs :many
+-- The secret refs of every sink of a namespace, in the order of each sink.
+SELECT s.sink_id, s.ref
+FROM notification_sink_secrets AS s
+JOIN namespaces AS n ON n.id = s.namespace_id
+WHERE n.name = sqlc.arg(namespace)
+ORDER BY s.sink_id COLLATE "C", s.position;
+
+-- name: InsertNotificationSink :execrows
+-- The caller checks the fence in the same transaction. A sink with the same
+-- ID is not written.
+INSERT INTO notification_sinks (id, namespace_id, kind, name, platform, target, created_by, version)
+VALUES (
+    sqlc.arg(id), (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace)),
+    sqlc.arg(kind), sqlc.arg(name), sqlc.arg(platform), sqlc.arg(target), sqlc.arg(created_by), 1
+)
+ON CONFLICT (id) DO NOTHING;
+
+-- name: UpdateNotificationSink :execrows
+-- A replace changes the name and the target. The kind, the platform and the
+-- creator stay. The version guards the replace.
+UPDATE notification_sinks
+SET name = sqlc.arg(name), target = sqlc.arg(target), version = notification_sinks.version + 1
+WHERE notification_sinks.id = sqlc.arg(id) AND notification_sinks.version = sqlc.arg(version)
+  AND notification_sinks.namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace));
+
+-- name: DeleteNotificationSink :execrows
+DELETE FROM notification_sinks
+WHERE notification_sinks.id = sqlc.arg(id) AND notification_sinks.namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace));
+
+-- name: ClaimNotificationSinkRef :execrows
+-- Records that the namespace holds the ref. It writes nothing, and the caller
+-- refuses the new value, when the namespace held the ref before.
+INSERT INTO notification_sink_refs (namespace_id, ref)
+VALUES ((SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace)), sqlc.arg(ref))
+ON CONFLICT (namespace_id, ref) DO NOTHING;
+
+-- name: InsertNotificationSinkSecret :exec
+INSERT INTO notification_sink_secrets (namespace_id, ref, sink_id, position, ciphertext)
+VALUES (
+    (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace)), sqlc.arg(ref), sqlc.arg(sink_id),
+    sqlc.arg(position), sqlc.arg(ciphertext)
+);
+
+-- name: ListNotificationSinkSecrets :many
+SELECT s.ref, s.ciphertext
+FROM notification_sink_secrets AS s
+JOIN namespaces AS n ON n.id = s.namespace_id
+WHERE n.name = sqlc.arg(namespace) AND s.sink_id = sqlc.arg(sink_id)
+ORDER BY s.position;
+
+-- name: MoveNotificationSinkSecret :exec
+UPDATE notification_sink_secrets
+SET position = sqlc.arg(position)
+WHERE notification_sink_secrets.ref = sqlc.arg(ref) AND notification_sink_secrets.sink_id = sqlc.arg(sink_id)
+  AND notification_sink_secrets.namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace));
+
+-- name: DeleteNotificationSinkSecret :exec
+DELETE FROM notification_sink_secrets
+WHERE notification_sink_secrets.ref = sqlc.arg(ref) AND notification_sink_secrets.sink_id = sqlc.arg(sink_id)
+  AND notification_sink_secrets.namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace));
+
+-- name: DeleteNotificationSinkSecrets :exec
+DELETE FROM notification_sink_secrets
+WHERE notification_sink_secrets.sink_id = sqlc.arg(sink_id)
+  AND notification_sink_secrets.namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace));

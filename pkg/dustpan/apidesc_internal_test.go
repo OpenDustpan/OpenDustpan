@@ -3,6 +3,9 @@ package dustpan
 import (
 	"errors"
 	"net/http"
+	"reflect"
+	"slices"
+	"strings"
 	"testing"
 
 	"opendustpan.org/opendustpan/internal/api/apidesc"
@@ -156,5 +159,95 @@ func TestPatternPathIgnoresTheHost(t *testing.T) {
 		if got := patternPath(tt.pattern); got != tt.want {
 			t.Errorf("patternPath(%q) = %q, want %q", tt.pattern, got, tt.want)
 		}
+	}
+}
+
+// handlerFieldNames returns the lower-case names of the fields of t, a struct
+// type, that have the type http.Handler, with embedded structs included.
+func handlerFieldNames(t reflect.Type) []string {
+	var out []string
+
+	for field := range t.Fields() {
+		switch {
+		case field.Type == reflect.TypeFor[http.Handler]():
+			out = append(out, strings.ToLower(field.Name))
+		case field.Anonymous && field.Type.Kind() == reflect.Struct:
+			out = append(out, handlerFieldNames(field.Type)...)
+		default:
+		}
+	}
+
+	return out
+}
+
+// unlistedFields returns the http.Handler fields of t that the names do not
+// hold, and the names that no http.Handler field has.
+func unlistedFields(t reflect.Type, names []string) []string {
+	fields := handlerFieldNames(t)
+
+	var problems []string
+
+	for _, field := range fields {
+		if !slices.Contains(names, field) {
+			problems = append(problems, field+" is a handler field that the list lacks")
+		}
+	}
+
+	for _, name := range names {
+		if !slices.Contains(fields, name) {
+			problems = append(problems, name+" is in the list and is no handler field")
+		}
+	}
+
+	slices.Sort(problems)
+
+	return problems
+}
+
+// TestEveryHandlerFieldIsListed proves that each http.Handler field of the
+// adapters that the server mounts has a row in allHandlers, which feeds the
+// description and the class check. The check reads the types and not a
+// server, so a module that a test server has off cannot hide a field from it.
+// A handler that production mounts under the prefix and that the list lacks
+// fails here.
+func TestEveryHandlerFieldIsListed(t *testing.T) {
+	t.Parallel()
+
+	var a adapters
+
+	names := make([]string, 0, len(a.allHandlers()))
+	for _, h := range a.allHandlers() {
+		names = append(names, h.name)
+	}
+
+	if problems := unlistedFields(reflect.TypeFor[adapters](), names); len(problems) > 0 {
+		t.Fatalf("handlers of adapters and the list differ: %v", problems)
+	}
+}
+
+// TestUnlistedHandlerFieldFails proves the check of TestEveryHandlerFieldIsListed
+// with a struct that has a handler which its list lacks, and a list that has a
+// name no field has.
+func TestUnlistedHandlerFieldFails(t *testing.T) {
+	t.Parallel()
+
+	type mounts struct {
+		Listed http.Handler
+		Hidden http.Handler
+		Note   string
+	}
+
+	if got := unlistedFields(reflect.TypeFor[mounts](), []string{"listed"}); len(got) != 1 ||
+		!strings.HasPrefix(got[0], "hidden ") {
+		t.Fatalf("problems = %v, want the hidden field", got)
+	}
+
+	if got := unlistedFields(reflect.TypeFor[mounts](), []string{"listed", "hidden", "ghost"}); len(got) != 1 ||
+		!strings.HasPrefix(got[0], "ghost ") {
+		t.Fatalf("problems = %v, want the ghost name", got)
+	}
+
+	if got := unlistedFields(reflect.TypeFor[mounts](), []string{"listed", "hidden"}); len(got) != 0 {
+		t.Fatalf("problems = %v, want none", got)
 	}
 }

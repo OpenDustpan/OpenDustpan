@@ -444,6 +444,30 @@ type Namespace struct {
 	ID                  string
 }
 
+type NotificationSink struct {
+	ID          string
+	NamespaceID string
+	Kind        string
+	Name        string
+	Platform    string
+	Target      string
+	CreatedBy   string
+	Version     int64
+}
+
+type NotificationSinkRef struct {
+	NamespaceID string
+	Ref         string
+}
+
+type NotificationSinkSecret struct {
+	NamespaceID string
+	Ref         string
+	SinkID      string
+	Position    int64
+	Ciphertext  []byte
+}
+
 type ObjectContext struct {
 	NamespaceID         string
 	ObjectKind          string

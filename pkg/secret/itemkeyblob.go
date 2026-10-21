@@ -10,11 +10,10 @@ import (
 	"slices"
 	"strconv"
 	"strings"
-	"time"
 
-	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/scopeaudit"
 )
 
 // MaxWrappedItemKeyBytes bounds the size of one wrapped item key blob. A
@@ -26,71 +25,9 @@ const MaxWrappedItemKeyBytes = 4096
 // new blob, so a real value stays small.
 const maxItemKeyVersion = 1 << 20
 
-// OutOfScopeRecorder records that a call tried to use a blob key outside the
-// namespace of the call. A recorder never holds the key of the call: the key
-// can name another namespace, and it can hold text that an attacker chose.
-type OutOfScopeRecorder interface {
-	// RecordOutOfScope records one refusal in the namespace ns, for the
-	// operation op ("put", "get", "delete" or "list"). Where says how far the
-	// key was out of scope. It returns an error when it cannot record the
-	// refusal.
-	RecordOutOfScope(ctx context.Context, ns namespace.ID, op string, where OutOfScopeWhere) error
-}
-
-// OutOfScopeWhere says where a refused key was: outside the namespace of the
-// call, inside the namespace and outside the directory of the blobs of the
-// call, or inside that directory and outside the directory of the unit of the
-// call.
-type OutOfScopeWhere string
-
-// The places of a refused key.
-const (
-	// OutsideNamespace is a key that is not inside the namespace of the call.
-	OutsideNamespace OutOfScopeWhere = "namespace"
-	// OutsideDirectory is a key inside the namespace of the call and outside
-	// the directory of the blobs of the call, for example the key of a
-	// checkpoint in a call for an item key.
-	OutsideDirectory OutOfScopeWhere = "directory"
-	// OutsideUnitDirectory is a key inside the directory of the blobs of the
-	// call and outside the directory of the unit of the call, for example the
-	// key of another workspace in a call for one workspace.
-	OutsideUnitDirectory OutOfScopeWhere = "unit-directory"
-)
-
-// OutOfScopeFamily names the blobs of one recorder in the reason of its
-// entries.
-type OutOfScopeFamily struct {
-	// Blobs names the blobs, for example "item key blob".
-	Blobs string
-	// Dir is the directory of the blobs inside the namespace, for example
-	// "item-keys".
-	Dir string
-}
-
 // ItemKeyFamily is the family of the item key blobs.
-func ItemKeyFamily() OutOfScopeFamily {
-	return OutOfScopeFamily{Blobs: "item key blob", Dir: strings.TrimSuffix(itemKeyDir, "/")}
-}
-
-// maxFamilyNameLen bounds each name of an OutOfScopeFamily.
-const maxFamilyNameLen = 32
-
-// validFamilyName reports whether s is a name of an OutOfScopeFamily:
-// lowercase ASCII letters, spaces and hyphens, at most maxFamilyNameLen bytes,
-// with a letter first. The name goes into the reason of an audit entry, so the
-// allowlist keeps line breaks and other control bytes out.
-func validFamilyName(s string) bool {
-	if s == "" || len(s) > maxFamilyNameLen || s[0] < 'a' || s[0] > 'z' {
-		return false
-	}
-
-	for _, c := range []byte(s) {
-		if (c < 'a' || c > 'z') && c != ' ' && c != '-' {
-			return false
-		}
-	}
-
-	return true
+func ItemKeyFamily() scopeaudit.Family {
+	return scopeaudit.Family{Blobs: "item key blob", Dir: strings.TrimSuffix(itemKeyDir, "/")}
 }
 
 // ItemKeyBlobs reads and writes the wrapped item key blobs. It builds a
@@ -99,15 +36,15 @@ func validFamilyName(s string) bool {
 // blob key is namespaces/<namespace ID>/item-keys/<item key ID>/v<version>.
 //
 // A call with a key of another namespace returns blob.ErrOutOfScope before any
-// call to the store, and writes one refusal to the OutOfScopeRecorder.
+// call to the store, and writes one refusal to the scopeaudit.Recorder.
 type ItemKeyBlobs struct {
 	store    blob.Store
-	refusals OutOfScopeRecorder
+	refusals scopeaudit.Recorder
 }
 
 // NewItemKeyBlobs returns ItemKeyBlobs over store. Both arguments are
 // required.
-func NewItemKeyBlobs(store blob.Store, refusals OutOfScopeRecorder) (*ItemKeyBlobs, error) {
+func NewItemKeyBlobs(store blob.Store, refusals scopeaudit.Recorder) (*ItemKeyBlobs, error) {
 	if store == nil {
 		return nil, fmt.Errorf("%w: blob store", ErrMissingDependency)
 	}
@@ -230,7 +167,7 @@ func (b *ItemKeyBlobs) Put(ctx context.Context, ns namespace.ID, key blob.Key, w
 	}
 
 	if err := v.Put(ctx, key, bytes.NewReader(wrapped)); err != nil {
-		return b.refuse(ctx, ns, "put", fmt.Errorf("put item key blob: %w", err), OutsideNamespace)
+		return b.refuse(ctx, ns, "put", fmt.Errorf("put item key blob: %w", err), scopeaudit.OutsideNamespace)
 	}
 
 	return nil
@@ -248,7 +185,7 @@ func (b *ItemKeyBlobs) Get(ctx context.Context, ns namespace.ID, key blob.Key) (
 
 	rc, err := v.Get(ctx, key)
 	if err != nil {
-		return nil, b.refuse(ctx, ns, "get", mapItemKeyBlobError(err), OutsideNamespace)
+		return nil, b.refuse(ctx, ns, "get", mapItemKeyBlobError(err), scopeaudit.OutsideNamespace)
 	}
 
 	return readWrappedKey(rc)
@@ -283,7 +220,7 @@ func (b *ItemKeyBlobs) Delete(ctx context.Context, ns namespace.ID, key blob.Key
 	}
 
 	if err := v.Delete(ctx, key); err != nil {
-		return b.refuse(ctx, ns, "delete", fmt.Errorf("delete item key blob: %w", err), OutsideNamespace)
+		return b.refuse(ctx, ns, "delete", fmt.Errorf("delete item key blob: %w", err), scopeaudit.OutsideNamespace)
 	}
 
 	return nil
@@ -305,7 +242,7 @@ func (b *ItemKeyBlobs) Versions(ctx context.Context, ns namespace.ID, id ItemKey
 
 	objects, err := v.List(ctx, v.Prefix()+itemKeyDir+string(id)+"/")
 	if err != nil {
-		return nil, b.refuse(ctx, ns, "list", fmt.Errorf("list item key blobs: %w", err), OutsideNamespace)
+		return nil, b.refuse(ctx, ns, "list", fmt.Errorf("list item key blobs: %w", err), scopeaudit.OutsideNamespace)
 	}
 
 	// Defense in depth: the view lists only under the prefix of the item key.
@@ -370,7 +307,7 @@ func (b *ItemKeyBlobs) scopedKey(ctx context.Context, ns namespace.ID, key blob.
 
 	rest, ok := strings.CutPrefix(key.String(), v.Prefix()+itemKeyDir)
 	if !ok {
-		return nil, b.refuse(ctx, ns, op, blob.ErrOutOfScope, OutOfScopePlace(v, key))
+		return nil, b.refuse(ctx, ns, op, blob.ErrOutOfScope, scopeaudit.PlaceOf(v, key))
 	}
 
 	if !validItemKeyRest(rest) {
@@ -378,19 +315,6 @@ func (b *ItemKeyBlobs) scopedKey(ctx context.Context, ns namespace.ID, key blob.
 	}
 
 	return v, nil
-}
-
-// OutOfScopePlace says where a refused key is. A key that a valid key of the
-// view would be, in the namespace of the view, is outside the directory of the
-// blobs of the call. Every other key is outside the namespace: another
-// namespace, a parent segment, an empty key or a key that is not a valid key at
-// all.
-func OutOfScopePlace(v *blob.Scoped, key blob.Key) OutOfScopeWhere {
-	if _, err := blob.ParseKey(key.String()); err == nil && strings.HasPrefix(key.String(), v.Prefix()) {
-		return OutsideDirectory
-	}
-
-	return OutsideNamespace
 }
 
 // validItemKeyRest reports whether rest, the part of a key after the item-keys
@@ -414,7 +338,7 @@ func validItemKeyRest(rest string) bool {
 // returns err, joined with the error of the recorder when the record fails, so
 // the caller still sees the refusal. Any other error passes through.
 func (b *ItemKeyBlobs) refuse(
-	ctx context.Context, ns namespace.ID, op string, err error, where OutOfScopeWhere,
+	ctx context.Context, ns namespace.ID, op string, err error, where scopeaudit.Where,
 ) error {
 	if !errors.Is(err, blob.ErrOutOfScope) {
 		return err
@@ -435,120 +359,4 @@ func mapItemKeyBlobError(err error) error {
 	}
 
 	return fmt.Errorf("get item key blob: %w", err)
-}
-
-// Actions and fields of the audit entry of a refusal.
-const (
-	// ActionBlobOutOfScope is the action of the audit entry of a refusal.
-	ActionBlobOutOfScope = "blob:out-of-scope"
-	// outOfScopeSubject is the subject of that entry: the server itself.
-	outOfScopeSubject = "server"
-)
-
-// AuditOutOfScope is an OutOfScopeRecorder that writes one audit entry of the
-// kind security in the scope @server. Each package that reads blobs through a
-// scoped view uses this recorder, with its own OutOfScopeFamily, so all
-// refusals have one shape.
-type AuditOutOfScope struct {
-	entries audit.ServerStore
-	channel audit.Channel
-	family  OutOfScopeFamily
-	now     func() time.Time
-}
-
-var _ OutOfScopeRecorder = (*AuditOutOfScope)(nil)
-
-// ErrInvalidChannel reports a channel that an out-of-scope record cannot have.
-var ErrInvalidChannel = errors.New("audit channel of a refusal is not api or console")
-
-// ErrInvalidFamily reports an OutOfScopeFamily with a name that is not valid.
-var ErrInvalidFamily = errors.New("family of an out-of-scope recorder is not valid")
-
-// NewAuditOutOfScope returns an OutOfScopeRecorder that appends to entries. The
-// caller gives the channel of its requests: audit.ChannelAPI or
-// audit.ChannelConsole, and the family of its blobs. now may be nil; it then
-// is time.Now.
-func NewAuditOutOfScope(
-	entries audit.ServerStore, channel audit.Channel, family OutOfScopeFamily, now func() time.Time,
-) (*AuditOutOfScope, error) {
-	if entries == nil {
-		return nil, fmt.Errorf("%w: audit store", ErrMissingDependency)
-	}
-
-	if channel != audit.ChannelAPI && channel != audit.ChannelConsole {
-		return nil, fmt.Errorf("%w: %q", ErrInvalidChannel, channel)
-	}
-
-	if !validFamilyName(family.Blobs) || !validFamilyName(family.Dir) {
-		return nil, fmt.Errorf("%w: %q, %q", ErrInvalidFamily, family.Blobs, family.Dir)
-	}
-
-	if now == nil {
-		now = time.Now
-	}
-
-	return &AuditOutOfScope{entries: entries, channel: channel, family: family, now: now}, nil
-}
-
-// RecordOutOfScope appends the entry. The object is the ID of the namespace of
-// the call, and the reason names op. The entry never holds the refused key.
-func (a *AuditOutOfScope) RecordOutOfScope(
-	ctx context.Context, ns namespace.ID, op string, where OutOfScopeWhere,
-) error {
-	switch op {
-	case "put", "get", "delete", "list":
-	default:
-		return fmt.Errorf("%w: operation %q", ErrInvalidItemRef, op)
-	}
-
-	var place string
-
-	switch where {
-	case OutsideNamespace:
-		place = "outside the namespace"
-	case OutsideDirectory:
-		place = "outside the " + a.family.Dir + " directory of the namespace"
-	case OutsideUnitDirectory:
-		place = "outside the unit directory"
-	default:
-		return fmt.Errorf("%w: place %q", ErrInvalidItemRef, where)
-	}
-
-	if _, err := namespace.ParseID(ns.String()); err != nil {
-		return fmt.Errorf("record out-of-scope refusal: %w", err)
-	}
-
-	entry := audit.Entry{
-		At:            a.now().UTC(),
-		Namespace:     audit.ServerScope,
-		Subject:       outOfScopeSubject,
-		IDPSubject:    "",
-		TokenID:       "",
-		Action:        ActionBlobOutOfScope,
-		Object:        ns.String(),
-		Version:       "",
-		ValuePath:     "",
-		ValueCount:    nil,
-		Changes:       nil,
-		SourceIP:      "",
-		UserAgent:     "",
-		Channel:       a.channel,
-		Kind:          audit.KindSecurity,
-		Outcome:       audit.OutcomeDenied,
-		RequestID:     "",
-		ObjectID:      "",
-		PrevHash:      "",
-		Hash:          "",
-		Sequence:      0,
-		FenceVersion:  0,
-		PrincipalKind: "",
-		JobID:         "",
-		Reason:        a.family.Blobs + " " + op + " refused: key " + place,
-	}
-
-	if _, err := a.entries.AppendServer(ctx, entry); err != nil {
-		return fmt.Errorf("append audit entry: %w", err)
-	}
-
-	return nil
 }
