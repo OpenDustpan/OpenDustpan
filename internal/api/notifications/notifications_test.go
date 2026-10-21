@@ -114,6 +114,19 @@ func checkKeyNotAnsweredAgain(t *testing.T, f fixture, s sinkWire) {
 	}
 }
 
+// requireSealed fails if an item holds one of the plain texts.
+func requireSealed(t *testing.T, items []notify.SealedSecret, plains ...string) {
+	t.Helper()
+
+	for _, item := range items {
+		for _, plain := range plains {
+			if strings.Contains(string(item.Ciphertext()), plain) {
+				t.Errorf("the store holds %q in plaintext", plain)
+			}
+		}
+	}
+}
+
 // checkKeyNotStored checks that the store holds the signing key sealed, and
 // that the audit entry and the log hold neither the key nor the plaintext.
 func checkKeyNotStored(t *testing.T, f fixture, s sinkWire) {
@@ -124,12 +137,7 @@ func checkKeyNotStored(t *testing.T, f fixture, s sinkWire) {
 		t.Fatalf("stored secrets = %d (%v), want 2: the URL and the signing key", len(sealed), err)
 	}
 
-	for _, item := range sealed {
-		if strings.Contains(string(item.Ciphertext()), s.SigningKey) ||
-			strings.Contains(string(item.Ciphertext()), canary) {
-			t.Error("the store holds the signing key or the webhook URL in plaintext")
-		}
-	}
+	requireSealed(t, sealed, s.SigningKey, canary)
 
 	entries := f.sinkEntries(t)
 	if len(entries) != 1 || entries[0].Action != "sink:create" || entries[0].ObjectID != s.ID ||
@@ -792,7 +800,11 @@ func TestTestFailsClosedWithoutAUsableURL(t *testing.T) {
 	got = f.do(t, send("admin", http.MethodPost, base+"/"+s.ID+"/test", ""))
 	if got.code != http.StatusUnprocessableEntity || !strings.Contains(got.body, "sink.no-url") ||
 		strings.Contains(got.body, canary) || strings.Contains(f.logs.String(), canary) {
-		t.Fatalf("test of a sink with a URL on another host: %d %s, want 422 sink.no-url and no URL", got.code, got.body)
+		t.Fatalf(
+			"test of a sink with a URL on another host: %d %s, want 422 sink.no-url and no URL",
+			got.code,
+			got.body,
+		)
 	}
 
 	if n := f.hook.count(); n != 0 {
@@ -813,7 +825,7 @@ func (f fixture) replaceURLItem(t *testing.T, id, url string) {
 	next := sinks[0]
 	next.SecretRefs = []string{"itm-replaced", next.SecretRefs[1]}
 
-	sealed, err := notify.SinkSealer{Namespaces: f.secrets}.Seal(t.Context(), next,
+	sealed, err := notify.SinkSealer{Namespaces: f.secrets, Installation: nil}.Seal(t.Context(), next,
 		[]notify.SinkSecret{{Ref: "itm-replaced", Value: []byte(url)}})
 	if err != nil {
 		t.Fatalf("Seal: %v", err)

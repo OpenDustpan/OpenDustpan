@@ -146,8 +146,48 @@ func testSinksWebhookURL(t *testing.T, h SinkHarness) {
 		t.Fatalf("PutSink of a webhook sink: %v", err)
 	}
 
-	// Read back: the host is the target, and no item holds the URL or the key
-	// in plaintext.
+	got := readBackWebhook(t, h, s, url)
+
+	// Replace: a new URL item first, and the key keeps its ref and value.
+	next := got[0]
+	next.SecretRefs = []string{"itm-snk-1-url2", s.SecretRefs[1]}
+	newURL := "https://" + s.Target + "/other"
+
+	err := h.Sinks.PutSink(
+		t.Context(),
+		next,
+		[]notify.SealedSecret{sealed(t.Context(), next, next.SecretRefs[0], newURL)},
+		fence,
+		manage(),
+	)
+	if err != nil {
+		t.Fatalf("PutSink with a new URL: %v", err)
+	}
+
+	stored, err := h.Sinks.SinkSecrets(t.Context(), shop, s.ID)
+	if err != nil || len(stored) != 2 {
+		t.Fatalf("SinkSecrets after the replace = %d items (%v), want 2", len(stored), err)
+	}
+
+	next.Version++
+	checkDestination(t, next, stored, newURL, 1)
+	checkFailsClosed(t, next, stored)
+
+	// Delete: no item stays.
+	if err = h.Sinks.DeleteSink(t.Context(), s.ID, fence, manage()); err != nil {
+		t.Fatalf("DeleteSink: %v", err)
+	}
+
+	if _, err = h.Sinks.SinkSecrets(t.Context(), shop, s.ID); !errors.Is(err, notify.ErrNotFound) {
+		t.Fatalf("SinkSecrets after the delete: err = %v, want ErrNotFound", err)
+	}
+}
+
+// readBackWebhook checks that the host is the target of the stored sink and
+// that no item holds the URL or the key in plaintext. It returns the sink.
+func readBackWebhook(t *testing.T, h SinkHarness, s notify.Sink, url string) []notify.Sink {
+	t.Helper()
+
 	got := sinksOf(t, h, shop)
 	if len(got) != 1 || got[0].Target != s.Target || strings.Contains(got[0].Target, "/") {
 		t.Fatalf("Sinks = %+v, want the host as the target", got)
@@ -166,34 +206,7 @@ func testSinksWebhookURL(t *testing.T, h SinkHarness) {
 
 	checkDestination(t, got[0], stored, url, 1)
 
-	// Replace: a new URL item first, and the key keeps its ref and value.
-	next := got[0]
-	next.SecretRefs = []string{"itm-snk-1-url2", s.SecretRefs[1]}
-	newURL := "https://" + s.Target + "/other"
-
-	err = h.Sinks.PutSink(t.Context(), next, []notify.SealedSecret{sealed(t.Context(), next, next.SecretRefs[0], newURL)},
-		fence, manage())
-	if err != nil {
-		t.Fatalf("PutSink with a new URL: %v", err)
-	}
-
-	stored, err = h.Sinks.SinkSecrets(t.Context(), shop, s.ID)
-	if err != nil || len(stored) != 2 {
-		t.Fatalf("SinkSecrets after the replace = %d items (%v), want 2", len(stored), err)
-	}
-
-	next.Version++
-	checkDestination(t, next, stored, newURL, 1)
-	checkFailsClosed(t, next, stored)
-
-	// Delete: no item stays.
-	if err = h.Sinks.DeleteSink(t.Context(), s.ID, fence, manage()); err != nil {
-		t.Fatalf("DeleteSink: %v", err)
-	}
-
-	if _, err = h.Sinks.SinkSecrets(t.Context(), shop, s.ID); !errors.Is(err, notify.ErrNotFound) {
-		t.Fatalf("SinkSecrets after the delete: err = %v, want ErrNotFound", err)
-	}
+	return got
 }
 
 // checkDestination checks that OpenDestination gives wantURL and wantKeys keys.

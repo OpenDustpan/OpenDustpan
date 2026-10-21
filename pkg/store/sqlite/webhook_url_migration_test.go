@@ -4,7 +4,6 @@ import (
 	"database/sql"
 	"path/filepath"
 	"slices"
-	"strings"
 	"testing"
 
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -76,7 +75,12 @@ func plantLegacyWebhook(t *testing.T, conn *sql.DB) {
 	ctx := t.Context()
 	nsID := namespace.NewID().String()
 
-	stmts := []struct {
+	stmts := make([]struct {
+		query string
+		args  []any
+	}, 0, 4)
+
+	stmts = append(stmts, []struct {
 		query string
 		args  []any
 	}{
@@ -90,10 +94,10 @@ func plantLegacyWebhook(t *testing.T, conn *sql.DB) {
 				VALUES (?, ?, 'webhook', 'Old hook', '', ?, 'alice', 1)`,
 			[]any{notifytest.LegacyWebhookID, nsID, notifytest.LegacyWebhookURL()},
 		},
-	}
+	}...)
 
 	other := namespace.NewID().String()
-	userinfo := "https://" + strings.Join([]string{"user", "pw"}, ":") + "@hooks.example.com/x"
+	userinfo := "https://" + "user:" + "pw" + "@hooks.example.com/x"
 
 	stmts = append(stmts, []struct {
 		query string
@@ -127,8 +131,13 @@ func plantLegacyWebhook(t *testing.T, conn *sql.DB) {
 			t.Fatalf("plant legacy secret: %v", err)
 		}
 
-		if _, err = conn.ExecContext(ctx,
-			`INSERT INTO notification_sink_refs (namespace_id, ref) VALUES (?, ?)`, nsID, refs[i]); err != nil {
+		_, err = conn.ExecContext(
+			ctx,
+			`INSERT INTO notification_sink_refs (namespace_id, ref) VALUES (?, ?)`,
+			nsID,
+			refs[i],
+		)
+		if err != nil {
 			t.Fatalf("plant legacy ref: %v", err)
 		}
 	}
@@ -152,9 +161,12 @@ func checkNoPlainURL(t *testing.T, path string) {
 
 	var count int
 
-	row := conn.QueryRowContext(t.Context(),
+	row := conn.QueryRowContext(
+		t.Context(),
 		`SELECT count(*) FROM notification_sinks WHERE instr(target, ?) > 0 OR instr(target, '/') > 0 OR instr(name, ?) > 0`,
-		notifytest.LegacyToken(), notifytest.LegacyToken())
+		notifytest.LegacyToken(),
+		notifytest.LegacyToken(),
+	)
 	if err = row.Scan(&count); err != nil || count != 0 {
 		t.Fatalf("sinks that hold the URL after the migration = %d (%v), want 0", count, err)
 	}

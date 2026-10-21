@@ -4,7 +4,6 @@ import (
 	"net/url"
 	"os"
 	"slices"
-	"strings"
 	"testing"
 
 	"github.com/jackc/pgx/v5"
@@ -94,7 +93,7 @@ func plantLegacyWebhook(t *testing.T, schemaURL string) {
 	}()
 
 	nsID, other := namespace.NewID().String(), namespace.NewID().String()
-	userinfo := "https://" + strings.Join([]string{"user", "pw"}, ":") + "@hooks.example.com/x"
+	userinfo := "https://" + "user:" + "pw" + "@hooks.example.com/x"
 
 	stmts := []struct {
 		query string
@@ -138,8 +137,13 @@ func plantLegacyWebhook(t *testing.T, schemaURL string) {
 			t.Fatalf("plant legacy secret: %v", execErr)
 		}
 
-		if _, execErr = conn.Exec(ctx,
-			`INSERT INTO notification_sink_refs (namespace_id, ref) VALUES ($1, $2)`, nsID, refs[i]); execErr != nil {
+		_, execErr = conn.Exec(
+			ctx,
+			`INSERT INTO notification_sink_refs (namespace_id, ref) VALUES ($1, $2)`,
+			nsID,
+			refs[i],
+		)
+		if execErr != nil {
 			t.Fatalf("plant legacy ref: %v", execErr)
 		}
 	}

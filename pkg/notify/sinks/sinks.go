@@ -321,7 +321,9 @@ func (s *Service) changed(old notify.Sink, ch Change) (notify.Sink, []notify.Sin
 		secrets = []notify.SinkSecret{{Ref: ref, Value: []byte(*ch.Target)}}
 	case ch.Target != nil:
 		next.Target = *ch.Target
-	case ch.URL != nil:
+	case ch.URL == nil:
+		// A change of the name keeps the destination.
+	default:
 		host, err := notify.ChatHost(*ch.URL)
 		if err != nil {
 			return notify.Sink{}, nil, fmt.Errorf("%w: %w", notify.ErrInvalid, err)

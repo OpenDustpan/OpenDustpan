@@ -360,22 +360,33 @@ func TestTestFailsClosedWithoutAUsableURL(t *testing.T) {
 		name   string
 		mutate func(t *testing.T, f fixture, s notify.Sink) []notify.SealedSecret
 	}{
-		{"no URL item", func(_ *testing.T, f fixture, s notify.Sink) []notify.SealedSecret {
+		{"no URL item", func(t *testing.T, f fixture, s notify.Sink) []notify.SealedSecret {
+			t.Helper()
+
 			return f.store.secrets[s.ID][1:]
 		}},
-		{"an empty URL item, as the upgrade leaves it", func(_ *testing.T, f fixture, s notify.Sink) []notify.SealedSecret {
-			items := slices.Clone(f.store.secrets[s.ID])
-			items[0] = notify.StoredSecret(s.Scope, s.ID, s.SecretRefs[0], nil)
+		{
+			"an empty URL item, as the upgrade leaves it",
+			func(t *testing.T, f fixture, s notify.Sink) []notify.SealedSecret {
+				t.Helper()
 
-			return items
-		}},
-		{"a garbled URL item", func(_ *testing.T, f fixture, s notify.Sink) []notify.SealedSecret {
+				items := slices.Clone(f.store.secrets[s.ID])
+				items[0] = notify.StoredSecret(s.Scope, s.ID, s.SecretRefs[0], nil)
+
+				return items
+			},
+		},
+		{"a garbled URL item", func(t *testing.T, f fixture, s notify.Sink) []notify.SealedSecret {
+			t.Helper()
+
 			items := slices.Clone(f.store.secrets[s.ID])
 			items[0] = notify.StoredSecret(s.Scope, s.ID, s.SecretRefs[0], bytes.Repeat([]byte{9}, 64))
 
 			return items
 		}},
 		{"a URL on another host", func(t *testing.T, _ fixture, s notify.Sink) []notify.SealedSecret {
+			t.Helper()
+
 			return sealWebhook(t, s, "https://other.example.com/"+canary)
 		}},
 	}

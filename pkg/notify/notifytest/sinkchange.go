@@ -287,7 +287,11 @@ func testSinkSecretRefs(t *testing.T, h Harness) {
 			[]notify.SealedSecret{secret(t.Context(), s, "itm-x")},
 		},
 		{"a new sink with no value", sink("snk-2", shop), nil},
-		{"a new sink that names the ref of another sink", withRefs(sink("snk-2", shop), "itm-snk-1-url", "itm-snk-1"), nil},
+		{
+			"a new sink that names the ref of another sink",
+			withRefs(sink("snk-2", shop), "itm-snk-1-url", "itm-snk-1"),
+			nil,
+		},
 	}
 
 	for i := range refused {

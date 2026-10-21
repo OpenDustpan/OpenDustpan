@@ -893,10 +893,35 @@ func testPortableNoPlainWebhookURL(t *testing.T, newStore PortableFactory) {
 	sink, sum, files := exportPortable(t, s)
 
 	hidden := []string{seedWebhookURL(), seedWebhookToken(), "/ops/", "?k=1", "https://" + seedWebhookHost}
+	rowsOf := scanPortableRows(t, sink, hidden)
+
+	sinks := rowsOf[backup.PortablePath("notification_sinks")]
+	secrets := rowsOf[backup.PortablePath("notification_sink_secrets")]
+
+	requireSinkHosts(t, sinks)
+
+	if len(secrets) != 4 {
+		t.Fatalf("the secret file holds %d rows, want 4: the chat URL, the webhook URL and two keys", len(secrets))
+	}
+
+	if _, err := s.StagePortable(t.Context(), sink.read, sum, files, StageAs(t, s)); err != nil {
+		t.Fatalf("stage the export of the webhook sink: %v", err)
+	}
+
+	if err := s.DiscardStaging(t.Context()); err != nil {
+		t.Fatalf("discard staging: %v", err)
+	}
+}
+
+// scanPortableRows reads every table file of the export and fails if a value
+// holds one of hidden. It returns the rows of each file by path.
+func scanPortableRows(t *testing.T, sink *portableSink, hidden []string) map[string][]map[string]any {
+	t.Helper()
+
 	rowsOf := make(map[string][]map[string]any, len(sink.files))
 
 	for path, data := range sink.files {
-		if !strings.HasSuffix(path, ".gz") && !bytes.HasPrefix(data.Bytes(), []byte{0x1f, 0x8b}) {
+		if !bytes.HasPrefix(data.Bytes(), []byte{0x1f, 0x8b}) {
 			continue
 		}
 
@@ -911,29 +936,27 @@ func testPortableNoPlainWebhookURL(t *testing.T, newStore PortableFactory) {
 		}
 	}
 
-	sinks := rowsOf[backup.PortablePath("notification_sinks")]
-	secrets := rowsOf[backup.PortablePath("notification_sink_secrets")]
+	return rowsOf
+}
+
+// requireSinkHosts fails unless the rows hold two sinks and one of them has the
+// host of the seeded webhook as its target.
+func requireSinkHosts(t *testing.T, sinks []map[string]any) {
+	t.Helper()
 
 	targets := make([]string, 0, len(sinks))
+
 	for _, row := range sinks {
-		target, _ := row["target"].(string) //nolint:errcheck // A missing target stays empty and fails below.
+		target, ok := row["target"].(string)
+		if !ok {
+			t.Fatalf("sink row %v has no text target", row)
+		}
+
 		targets = append(targets, target)
 	}
 
 	if len(sinks) != 2 || !slices.Contains(targets, seedWebhookHost) {
 		t.Fatalf("sink targets = %v, want the host %q for the webhook sink", targets, seedWebhookHost)
-	}
-
-	if len(secrets) != 4 {
-		t.Fatalf("the secret file holds %d rows, want 4: the chat URL, the webhook URL and two keys", len(secrets))
-	}
-
-	if _, err := s.StagePortable(t.Context(), sink.read, sum, files, StageAs(t, s)); err != nil {
-		t.Fatalf("stage the export of the webhook sink: %v", err)
-	}
-
-	if err := s.DiscardStaging(t.Context()); err != nil {
-		t.Fatalf("discard staging: %v", err)
 	}
 }
 

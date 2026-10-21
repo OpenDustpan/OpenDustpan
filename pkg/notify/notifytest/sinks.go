@@ -287,7 +287,11 @@ func checkRefRules(t *testing.T, h SinkHarness, fence namespace.Fence) {
 		{"a new value under a stored ref", base, []notify.SealedSecret{sealed(t.Context(), base, "itm-snk-1", "new")}},
 		{"a ref with no value", withRefs(base, "itm-snk-1", "itm-x"), nil},
 		{"a new sink with no value", sink("snk-2", shop), nil},
-		{"a new sink that names the ref of another sink", withRefs(sink("snk-2", shop), "itm-snk-1", "itm-snk-1-b"), nil},
+		{
+			"a new sink that names the ref of another sink",
+			withRefs(sink("snk-2", shop), "itm-snk-1", "itm-snk-1-b"),
+			nil,
+		},
 	}
 
 	for i := range refused {

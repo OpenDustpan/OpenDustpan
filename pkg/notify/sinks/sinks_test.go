@@ -870,10 +870,17 @@ func checkNewWebhookURL(newURL string) func(t *testing.T, f fixture, before, aft
 			t.Fatalf("destination = %q with %d keys, want the new URL and the old key", dest.URL, len(dest.Keys))
 		}
 
-		for _, item := range sealed {
-			if bytes.Contains(item.Ciphertext(), []byte(canary)) {
-				t.Fatal("the store got a plaintext URL")
-			}
+		requireNoCanary(t, sealed)
+	}
+}
+
+// requireNoCanary fails if an item holds the canary in plaintext.
+func requireNoCanary(t *testing.T, items []notify.SealedSecret) {
+	t.Helper()
+
+	for _, item := range items {
+		if bytes.Contains(item.Ciphertext(), []byte(canary)) {
+			t.Fatal("the store got a plaintext URL")
 		}
 	}
 }

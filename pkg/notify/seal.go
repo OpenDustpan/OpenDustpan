@@ -199,7 +199,8 @@ func (d *Destination) Clear() {
 
 // OpenDestination opens the sealed secret items of s, for a send. A chat
 // sink gives its URL, and a webhook sink its URL and its signing keys. The
-// URL must have the host s.Target: the host is what a person approved. An email sink has no secret item and gives an empty
+// URL must have the host s.Target: the host is what a person approved. An email sink has no secret item and gives an
+// empty
 // Destination.
 //
 // It fails closed. It returns an error that matches ErrNoURL, and also
@@ -208,12 +209,12 @@ func (d *Destination) Clear() {
 // another host than the target. The error never holds a value.
 func (b SinkSealer) OpenDestination(ctx context.Context, s Sink, sealed []SealedSecret) (Destination, error) {
 	if s.Kind == SinkEmail {
-		return Destination{}, nil
+		return Destination{URL: "", Keys: nil}, nil
 	}
 
 	values, err := b.Open(ctx, s, sealed)
 	if err != nil {
-		return Destination{}, fmt.Errorf("%w: %w", ErrNoURL, err)
+		return Destination{URL: "", Keys: nil}, fmt.Errorf("%w: %w", ErrNoURL, err)
 	}
 
 	// Defense in depth: Sink.Validate keeps one URL item and, for a webhook, at
@@ -224,7 +225,7 @@ func (b SinkSealer) OpenDestination(ctx context.Context, s Sink, sealed []Sealed
 			clear(v)
 		}
 
-		return Destination{}, fmt.Errorf("%w: sink %s lacks a secret item", ErrNoURL, s.ID)
+		return Destination{URL: "", Keys: nil}, fmt.Errorf("%w: sink %s lacks a secret item", ErrNoURL, s.ID)
 	}
 
 	d := Destination{URL: string(values[0]), Keys: values[1:]}
@@ -237,7 +238,7 @@ func (b SinkSealer) OpenDestination(ctx context.Context, s Sink, sealed []Sealed
 	if err = checkDestination(s, d.URL); err != nil {
 		d.Clear()
 
-		return Destination{}, err
+		return Destination{URL: "", Keys: nil}, err
 	}
 
 	return d, nil
@@ -255,7 +256,7 @@ func (b SinkSealer) OpenDestination(ctx context.Context, s Sink, sealed []Sealed
 // host that nobody approved.
 func checkDestination(s Sink, raw string) error {
 	u, err := url.Parse(raw)
-	if err != nil || u == nil || strings.ToLower(u.Host) != s.Target {
+	if err != nil || u == nil || !strings.EqualFold(u.Host, s.Target) {
 		return fmt.Errorf("%w: the URL is not on the host of sink %s", ErrNoURL, s.ID)
 	}
 

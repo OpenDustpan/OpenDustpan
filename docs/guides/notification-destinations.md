@@ -173,7 +173,7 @@ destination and its secrets. The answer is 204.
 ## Set the URL again after an upgrade
 
 Older versions kept the URL of a webhook as plain text in the target of the
-destination, and in every backup. The upgrade removes the plain URL. The
+destination, and in every backup. The upgrade deletes the plain URL. The
 server cannot seal it during the upgrade, so it does not keep it. After the
 upgrade, a webhook that you made with an older version has its host as the
 target and no URL:
