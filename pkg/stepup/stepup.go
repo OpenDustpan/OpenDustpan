@@ -40,7 +40,8 @@ var (
 	// ErrBadAnswer reports a signature or a code that does not verify.
 	ErrBadAnswer = errors.New("step-up answer does not verify")
 	// ErrFactorRefused reports a factor that the step-up factor level of the
-	// namespace or the installation does not allow, or a suspended key.
+	// namespace or the installation does not allow, a suspended key, or a
+	// credential whose level is below the level of the write.
 	ErrFactorRefused = errors.New("factor not allowed for this step-up")
 	// ErrCLIStepUpOff reports a CLI step-up in a namespace or an
 	// installation that turned it off.
@@ -62,7 +63,8 @@ var (
 	// ErrChallengeLimit reports a person who already holds the maximum count
 	// of open challenges.
 	ErrChallengeLimit = errors.New("step-up challenge limit reached")
-	// ErrConflict reports a key that the person registered before.
+	// ErrConflict reports a key that the person registered before, or a
+	// first-key enrollment for a person who already holds a key.
 	ErrConflict = errors.New("step-up key conflict")
 	// ErrCounterRegressed reports a signature counter of a FIDO key that is
 	// not higher than the stored counter: a possible clone of the key.
@@ -163,6 +165,9 @@ type Key struct {
 	// Suspended reports a key after a counter regression. A suspended key
 	// answers no challenge.
 	Suspended bool
+	// EnrolledBy is the principal ID of the administrator who enrolled the
+	// first key of the person, or empty for a key that the person added.
+	EnrolledBy string
 	// CreatedAt is the time of the add.
 	CreatedAt time.Time
 }
@@ -194,13 +199,25 @@ type Requester struct {
 	ClientIP string
 }
 
+// KeyAddProof is what a challenge of ScopeKeyAdd binds: the person who gets
+// the new key and the key itself, so that a proof for one person or one key
+// never adds another.
+type KeyAddProof struct {
+	// Type is the key type of the new key.
+	Type string
+	// Fingerprint is the fingerprint of the new key, in the form of Key.
+	Fingerprint string
+}
+
 // Challenge is the server record of one step-up.
 type Challenge struct {
 	// ID is the challenge ID, with the prefix "stc-".
 	ID string
 	// Nonce holds 32 random bytes.
 	Nonce []byte
-	// PersonID names the person of the request that made the challenge.
+	// PersonID names the person of the request that made the challenge. For
+	// ScopeKeyAdd it names the person who gets the key, which is another
+	// person only for a first-key enrollment by an administrator.
 	PersonID string
 	// Holder names the session or the access token of that request.
 	Holder Holder
@@ -225,6 +242,8 @@ type Challenge struct {
 	// Namespace and Actions are what a credential of ScopeWindow allows.
 	Namespace string
 	Actions   []identity.Action
+	// KeyAdd is the new key, for ScopeKeyAdd.
+	KeyAdd KeyAddProof
 	// PlanSummary is the list of the changes of the plan of a window, as
 	// information only. The server does not limit the writes to it.
 	PlanSummary string
@@ -283,6 +302,14 @@ type Credential struct {
 	KeyID  string
 	TOTPID string
 	Scope  Scope
+	// Level is the strictest step-up factor level that the factor met. A
+	// TOTP code and each console factor except a WebAuthn assertion meet
+	// LevelAny only. The audit entry of the step-up names the console method.
+	Level Level
+	// JobID and PlanDigest are those of the challenge, for the action
+	// "job:apply", and empty for every other write.
+	JobID      string
+	PlanDigest string
 	// AuthTime is the time of the factor, for the fresh window of a write.
 	AuthTime  time.Time
 	ExpiresAt time.Time
@@ -296,9 +323,17 @@ type Credential struct {
 type Completion struct {
 	PersonID    string
 	ChallengeID string
-	Credential  Credential
-	Entry       audit.Entry
-	At          time.Time
+	// KeyID and Counter are the key and the signature counter of a key
+	// answer. KeyID is empty for FactorTOTP and FactorConsole, and equals
+	// Credential.KeyID otherwise.
+	KeyID      string
+	Counter    uint32
+	Credential Credential
+	Entry      audit.Entry
+	// Regression is the audit entry of the kind security that the store
+	// appends when the counter went back.
+	Regression audit.Entry
+	At         time.Time
 }
 
 // Use is one use of a credential by a request.
@@ -312,12 +347,19 @@ type Use struct {
 	Object    string
 	Namespace string
 	Binding   Binding
+	// Level is the step-up factor level that holds for the write. The store
+	// refuses a credential whose level is below it.
+	Level Level
+	// JobID and PlanDigest are those of the apply, for the action
+	// "job:apply". The store refuses a credential of another job or plan.
+	JobID      string
+	PlanDigest string
 	// Excluded reports an action that a window credential never covers.
 	// The service sets it from its own list. The store refuses a window
 	// credential when it is true.
 	Excluded bool
 	// Failure is the audit entry that the store appends when the use
-	// fails with ErrMismatch.
+	// fails with ErrMismatch or ErrFactorRefused.
 	Failure audit.Entry
 	At      time.Time
 }
@@ -327,23 +369,24 @@ type KeyStore interface {
 	// AddKey stores k and appends e in the same transaction. It returns
 	// ErrConflict for a fingerprint that the person registered before,
 	// ErrLimit when the person holds the maximum count of keys, and
-	// ErrInvalid for a key with an empty field. A failed add stores nothing
-	// and appends nothing.
+	// ErrInvalid for a key with an empty field or a non-empty EnrolledBy. A
+	// failed add stores nothing and appends nothing.
 	AddKey(ctx context.Context, k Key, e audit.Entry) error
 	// Keys returns the keys of the person personID in the order of the add.
 	Keys(ctx context.Context, personID string) ([]Key, error)
 	// Key returns the key id of the person personID, or ErrNotFound.
 	Key(ctx context.Context, personID, id string) (Key, error)
+	// EnrollFirstKey stores k, the first key of the person k.PersonID, for
+	// the administrator adminID, and appends e, in one transaction. It
+	// returns ErrConflict when the person holds a key, also a suspended one,
+	// and ErrInvalid when adminID is empty or names the person, or for a key
+	// with an empty field or an EnrolledBy that is not adminID.
+	// Of two calls at the same time for one person, one wins. A failed
+	// enrollment stores nothing and appends nothing.
+	EnrollFirstKey(ctx context.Context, adminID string, k Key, e audit.Entry) error
 	// RevokeKey deletes the key, revokes each credential that it made and
 	// appends e, in one transaction. It returns ErrNotFound.
 	RevokeKey(ctx context.Context, personID, id string, e audit.Entry) error
-	// AdvanceCounter sets the counter of a FIDO key to counter when it is
-	// higher than the stored counter, or when both are 0. Else it suspends
-	// the key, revokes each credential that the key made and appends
-	// regression, in one transaction, and returns ErrCounterRegressed. It
-	// returns ErrNotFound for a missing key or a key of another person, and
-	// ErrFactorRefused for a suspended key.
-	AdvanceCounter(ctx context.Context, personID, id string, counter uint32, regression audit.Entry) error
 }
 
 // ChallengeStore is the persistence port for step-up challenges.
@@ -354,21 +397,39 @@ type ChallengeStore interface {
 	// challenges.
 	CreateChallenge(ctx context.Context, c Challenge) error
 	// Challenge returns the challenge id of the person personID, or
-	// ErrNotFound. A challenge of another person is ErrNotFound.
+	// ErrNotFound. A challenge of another person is ErrNotFound. The read
+	// does not check the holder, because the console accept page reads it
+	// from another session. The service answers a poll from another holder
+	// with ErrNotFound, and CompleteChallenge refuses its credential.
 	Challenge(ctx context.Context, personID, id string) (Challenge, error)
 	// AcceptChallenge moves an open challenge to StateAccepted at the time
 	// at and appends e, in one transaction, for the console path. It returns
 	// ErrNotFound, ErrExpired after the expiry, and ErrUsed for a challenge
 	// that is not open.
 	AcceptChallenge(ctx context.Context, personID, id string, at time.Time, e audit.Entry) error
-	// CompleteChallenge moves the challenge to StateAnswered, saves the
-	// credential and appends the entry of c, in one transaction, so that a
-	// credential never exists without its entry. It takes an open
-	// challenge, or an accepted one for FactorConsole. It returns
-	// ErrNotFound, ErrExpired after the expiry, ErrUsed for a challenge that
-	// was answered or is void, and ErrInvalid for a credential whose person,
-	// holder, challenge or scope differ from the challenge. Of two calls at
-	// the same time, one wins, and the other saves nothing.
+	// CompleteChallenge completes one challenge in one transaction:
+	//
+	//  1. It checks the state first. It takes an open challenge, or an
+	//     accepted one for FactorConsole. It returns ErrNotFound, ErrExpired
+	//     after the expiry, and ErrUsed for a challenge that was answered or
+	//     is void. On these errors it changes nothing, also not the counter
+	//     of the key, so that a retry of the same answer never suspends a
+	//     good key.
+	//  2. For a key answer, it reads the key c.KeyID of the person. It
+	//     returns ErrNotFound for a missing key or a key of another person,
+	//     and ErrFactorRefused for a suspended key. It sets the counter to
+	//     c.Counter when it is higher than the stored counter, or when both
+	//     are 0. Else it suspends the key, revokes each credential that the
+	//     key made, makes the challenge void, appends c.Regression, saves no
+	//     credential and returns ErrCounterRegressed.
+	//  3. It moves the challenge to StateAnswered, saves the credential and
+	//     appends c.Entry, so that a credential never exists without its
+	//     entry.
+	//
+	// It returns ErrInvalid for a credential whose person, holder,
+	// challenge, scope, key, job or plan digest differ from the challenge or
+	// from c. Of two calls at the same time, one wins, and the other changes
+	// nothing.
 	CompleteChallenge(ctx context.Context, c Completion) error
 	// RecordFailure counts one wrong answer and appends e, in one
 	// transaction. When the count reaches the limit, the challenge is void
@@ -382,11 +443,13 @@ type CredentialStore interface {
 	// UseCredential checks u against the credential with the same secret
 	// hash and takes one use, in its own transaction, before the write. It
 	// returns ErrNotFound, ErrExpired, ErrUsed when no use is left or the
-	// credential is void, and ErrMismatch when the person, the holder, the
-	// action, the object, the namespace or the binding differ, or when u is
-	// excluded for a window credential. A mismatch makes the credential void
-	// and appends the failure entry of u. Of two calls at the same time on
-	// the last use, one wins.
+	// credential is void, ErrMismatch when the person, the holder, the
+	// action, the object, the namespace, the binding, the job or the plan
+	// digest differ, or when u is excluded for a window credential, and
+	// ErrFactorRefused when the level of the credential is below u.Level. A
+	// mismatch or a refused level makes the credential void and appends the
+	// failure entry of u. Of two calls at the same time on the last use, one
+	// wins.
 	UseCredential(ctx context.Context, u Use) (Credential, error)
 	// RevokeCredentialsOfKey revokes each credential that the key keyID of
 	// the person personID made.
@@ -429,7 +492,9 @@ type TOTP struct {
 type Attempt struct {
 	PersonID string
 	TOTPID   string
-	At       time.Time
+	// Count is the failure count after the reservation of this attempt.
+	Count int
+	At    time.Time
 }
 
 // TOTPStore is the persistence port for TOTP factors.
@@ -451,15 +516,20 @@ type TOTPStore interface {
 	// BeginTOTPAttempt checks the lock and the disable of the active factor
 	// and counts one failure, in one transaction, before the service
 	// checks the code. It appends e. It returns ErrNotFound, ErrLocked
-	// before LockedUntil, and ErrDisabled. When the count reaches the lock
-	// limit or the upper limit, it sets the lock or the disable and appends
-	// lockout in the same transaction. Of calls at the same time, no more
-	// than the limit pass.
+	// before LockedUntil, and ErrDisabled, and then counts nothing. The
+	// lock and the disable come only from earlier attempts: the attempt
+	// that takes the count to a multiple of the lock limit passes, sets the
+	// lock and appends lockout in the same transaction, and the attempt that
+	// takes the count to the upper limit passes and sets the disable. So the
+	// 10th wrong code locks, and the 10th attempt can still pass. Of calls
+	// at the same time, no more than the limit pass.
 	BeginTOTPAttempt(ctx context.Context, personID string, at time.Time, e, lockout audit.Entry) (Attempt, error)
-	// AcceptStep sets the last step to step and the failures to 0 for the
-	// attempt a, when step is higher than the stored step. It returns ErrUsed
-	// for a step that is not higher, and ErrLocked or ErrDisabled for a
-	// factor that is locked or disabled, and then changes nothing. Of two
+	// AcceptStep sets the last step to step, the failures to 0 and ends the
+	// lock and the disable, for the attempt a, when step is higher than the
+	// stored step. A lock or a disable that a or a concurrent attempt set
+	// does not refuse a, because BeginTOTPAttempt passed it. It returns
+	// ErrUsed for a step that is not higher, and ErrNotFound when the factor
+	// a.TOTPID is not the active factor, and then changes nothing. Of two
 	// calls at the same time with the same step, one wins.
 	AcceptStep(ctx context.Context, a Attempt, step int64) error
 	// ResetTOTP deletes the active and the pending factor, revokes each
@@ -472,11 +542,14 @@ type TOTPStore interface {
 // states the rules.
 type Verifier interface {
 	// Verify returns the assertion of a valid signature of k over message
-	// for the scope scope. It returns ErrBadAnswer for a signature that does
-	// not verify, or that has another SSH namespace or OpenPGP notation than
-	// the scope needs, another hash algorithm than the allowlist, or an
-	// OpenPGP signature that is not binary or whose notation is not in the
-	// hashed area. It returns ErrInvalid for a key type or a key size that
-	// the verifier does not allow.
+	// for the scope scope. It verifies with k only, never with a key that
+	// the signature holds. It returns ErrBadAnswer for a signature that does
+	// not verify, an SSH signature whose embedded public key is not k, an
+	// OpenPGP signature whose issuer fingerprint is not k or a signing
+	// subkey of k, a signature that has another SSH namespace or OpenPGP
+	// notation than the scope needs, an SSH hash algorithm other than
+	// sha256 or sha512, or an OpenPGP signature that is not binary or whose
+	// notation is not in the hashed area. It returns ErrInvalid for a key
+	// type or a key size that the verifier does not allow.
 	Verify(ctx context.Context, k Key, scope Scope, message, signature []byte) (Assertion, error)
 }

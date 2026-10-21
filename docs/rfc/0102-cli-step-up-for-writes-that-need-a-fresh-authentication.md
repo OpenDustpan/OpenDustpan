@@ -75,7 +75,12 @@ Three personas from RFC 48 decide the options:
   sign-in.
 - The installation API is served under `/api/server/...` and also under
   `/api/dustpan/v1/...` (`mountV1` in `pkg/dustpan/dustpan.go`).
-- `go.mod` has no `golang.org/x/crypto` and no OpenPGP or TOTP module.
+- `go.mod` has `github.com/ProtonMail/go-crypto` v1.5.2 as a direct
+  requirement since #1306, for the OpenPGP checks of the registry, and
+  `golang.org/x/crypto` v0.56.0 as an indirect requirement only. It has no
+  TOTP module.
+- `GLOSSARY.md` has **Trusted signing key**: an OpenPGP key that a namespace
+  registers for its registry. It is not a factor of a person.
 
 ### Owner decisions of 20 October 2026 (not reopened)
 
@@ -103,7 +108,8 @@ Three personas from RFC 48 decide the options:
 
 ### PM decisions (2026-10-21)
 
-The PM made these decisions on behalf of the owner after review round 1.
+The PM made D1 to D5 on behalf of the owner after review round 1, and D6
+and D7 after review round 2.
 They are final for this RFC.
 
 - **D1. Two levels in v1 (review M3).** The step-up factor levels are `any`
@@ -137,9 +143,21 @@ They are final for this RFC.
   answer of the challenge create holds each field that the CLI needs.
 - **Exclusions (review M5).** This RFC writes the explicit list of the writes
   that a window credential never covers.
+- **D6. The first key (review round 2).** A person with no WebAuthn and no
+  SSO cannot add the first step-up key through the CLI. The person adds it
+  in the console after a WebAuthn assertion, or an administrator enrolls it
+  (Q2, "Admin enrollment of the first key"). This closes the earlier open
+  point on the first key.
+- **D7. SSO and the level `key` (review round 2).** A fresh authentication
+  at the SSO identity provider (`fresh=1`) counts at the level `any` only.
+  This closes the earlier open point on SSO and the level `key`. OpenDustpan cannot see which factor the identity provider
+  used. So `fresh=1` alone adds no key and revokes no key (D5), and it does
+  not pass a write at the level `key`.
 - **Dependencies (review S12).** An open question for the owner. Prefer the
   standard library: RFC 6238 over `crypto/hmac`. Use `golang.org/x/crypto/ssh`
-  for `sshsig` only if `go.mod` already has it. It does not.
+  for `sshsig` only if `go.mod` already has it as a direct requirement. On
+  `main`, `golang.org/x/crypto` is indirect only, and
+  `github.com/ProtonMail/go-crypto` is direct (open point 2).
 - **ADR 46 decision 2 amendment.** An open question for the owner, with the
   conditions of the reviewer (see the section on it).
 - **#1323 (401 or 403).** Open for the owner. This RFC aligns with it as an
@@ -178,8 +196,10 @@ grant.
 - **Service principals and automation.** Nothing in this RFC lets a service
   principal, a job or a pipeline get a step-up credential. Automation uses job
   identities and approval rules.
-- **No route adds a factor for another person.** An administrator can only
-  reset the factors of another person (ADR 46 decision 9).
+- **One route adds a factor for another person, and only the first key.**
+  An administrator can reset the factors of another person (ADR 46 decision
+  9), and can enroll the first step-up key of a person who has none (D6). No
+  other route adds a factor for another person.
 
 ## The flow
 
@@ -230,6 +250,12 @@ ADR 227 decision 1 and accepts. The challenge then goes to the state
 `accepted`. The CLI polls `GET .../step-up-challenges/{id}` at most once each
 5 seconds, as a device authorization grant does (RFC 8628). The first poll
 after the accept gets the credential, and the challenge goes to `answered`.
+A poll must come from the `Holder` of the challenge: the same access token or
+session that made it. A poll from another token or session of the same
+person gets `404` (`stepup.ErrNotFound`). The service takes the holder of the
+new credential from the poll request, never from the challenge record, and
+`CompleteChallenge` refuses a credential whose holder differs from the
+challenge, so the store refuses a poll from another holder too.
 
 The device grant pattern has a known phishing risk: an attacker with the
 access token makes a challenge and sends the console URL to the person. The
@@ -320,6 +346,28 @@ the touch or the code allows.
   for the proof of possession of a new key (Q2). A window text has the lines
   `namespace` and `actions` in place of the lines from `method` to
   `idempotency-key`.
+- **The `key-add` text.** It has these lines, in this order:
+
+  ```
+  opendustpan-step-up: 1
+  purpose: key-add
+  origin: https://dustpan.example.com
+  challenge: stc-...
+  nonce: <base64url of the 32 bytes, no padding>
+  principal: <principal ID of the person who gets the key>
+  credential: access-token <access token ID>
+  key-type: sk-ssh-ed25519@openssh.com
+  key-fingerprint: SHA256:<base64>
+  expires: 2026-10-21T12:02:00Z
+  ```
+
+  `principal` and `key-fingerprint` bind the proof to one person and one
+  key, so that a proof for one person or one key never adds another. The CLI
+  computes `key-type` and `key-fingerprint` from the public key that it
+  sends. The server computes both again from the public key of the add
+  request and refuses a mismatch. `credential` names the holder of the
+  request that made the challenge: the access token or the session of the
+  person, or the session of the administrator for an admin enrollment (Q2).
 - **Canonical values and boundary checks.** The server checks each value at
   the challenge create with an allowlist, and refuses a value that fails
   (ADR 250 step 1). It does not change a value to make it valid.
@@ -347,7 +395,13 @@ the touch or the code allows.
 - **The signatures.** An SSH signature uses the `ssh-keygen -Y sign` format
   (`PROTOCOL.sshsig`) with the namespace `step-up@opendustpan.org`, so that a
   signature for git or for a file never verifies as a step-up, and a step-up
-  signature never verifies as a git commit signature. An OpenPGP signature is
+  signature never verifies as a git commit signature. The hash algorithm of
+  the signature is `sha256` or `sha512`, and the server refuses each other
+  value. An SSH signature holds the public key of the signer. The server
+  compares it with the registered key and verifies with the registered key
+  only, never with the embedded key. An OpenPGP signature must name the
+  fingerprint of the registered key or of one of its signing subkeys as its
+  issuer, and the server verifies with that registered key only. An OpenPGP signature is
   a detached binary signature (type 0x00) over the same text, by the primary
   key or a signing subkey, with the notation `step-up@opendustpan.org` of the
   value `1` in the hashed area. The server refuses a text-mode signature
@@ -412,15 +466,70 @@ level (D1).**
   needs a fresh authentication at the level `key` or stricter: a step-up
   with a key that the person registered before, or the console path with a
   WebAuthn assertion. TOTP adds no key. A console sign-in with a password
-  only, or with a recovery code, adds no key. In an SSO installation, each
-  key add also needs a fresh authentication at the identity provider
-  (`fresh=1`). An access token alone never adds a key, so a stolen token
-  cannot add the factor of the thief.
-- **The first key.** A person with no step-up key and no WebAuthn has no
-  factor at the level `key`. D5 then allows the first key only through the
-  console path with WebAuthn, or, in an SSO installation, with a fresh
-  authentication at the identity provider. This is open point 5 for the
-  owner.
+  only, or with a recovery code, adds no key. A fresh authentication at the
+  SSO identity provider (`fresh=1`) counts at the level `any` only (D7), so
+  it alone adds no key. In an SSO installation, each key add needs
+  `fresh=1` in addition to the factor at the level `key`, if the owner
+  accepts the conditions of the ADR 46 amendment. An access token alone
+  never adds a key, so a stolen token cannot add the factor of the thief.
+- **Two challenges for one add.** A key add uses two challenges:
+  1. A challenge of the purpose `key-add`, which the CLI creates with the
+     public key. The new key signs its text (Q1). This proves that the
+     signer holds the private key.
+  2. The add itself, `POST /api/dustpan/v1/me/step-up-keys`, is a write that
+     needs a fresh authentication at the level `key`. It gets a `write`
+     step-up as in Q1, with a key that the person registered before or the
+     console path with WebAuthn. The body holds the public key, the name,
+     the `key-add` challenge ID and its signature, so `body-sha256` binds
+     the factor of the step-up to this one new key and this one proof.
+
+  The `key-add` challenge makes no credential. A `key-add` challenge that a
+  completed add did not use is void at its expiry.
+- **The first key (D6).** A person with no step-up key and no WebAuthn has no
+  factor at the level `key`, also in an SSO installation (D7). Such a person
+  cannot add the first key through the CLI. The person adds it in the
+  console after a WebAuthn assertion, or an administrator enrolls it.
+- **Admin enrollment of the first key (D6).**
+  - **Route.** `POST /api/dustpan/v1/principals/{principal}/step-up-keys`,
+    also under `/api/server/principals/{principal}/step-up-keys`. The action
+    is `server:enroll-step-up-key` on the object `principal:<ID>`. It is a
+    new action, and no built-in role has it except the installation
+    administrator.
+  - **Fresh authentication.** The administrator needs a fresh
+    authentication at the level `key`: a `write` step-up with a step-up key
+    of the administrator, or the console path with a WebAuthn assertion. A
+    window credential never covers it (Q4).
+  - **The first key only.** The server refuses the enrollment with `409`
+    `mfa.step-up-key-conflict` when the person holds a key, also a suspended
+    key. The store checks this in the same transaction as the add
+    (`KeyStore.EnrollFirstKey`), so that two enrollments at the same time
+    give one key. A later key the person adds with D5.
+  - **Never the own account.** The server refuses an enrollment whose
+    principal is the administrator, with `422` `mfa.step-up-invalid`. The
+    route checks it, and the store checks it again.
+  - **Only a person.** The principal must be of the kind `person`, and not
+    disabled. Else `403` `mfa.step-up-person-only`.
+  - **The proof.** The request holds the public key and a `key-add`
+    signature over a challenge whose `principal` line names the person and
+    whose `credential` line names the session or token of the administrator.
+    The person can sign it and give the public key and the signature to the
+    administrator, or the administrator can make the key pair and sign it.
+  - **What the proof cannot show.** A `key-add` signature only shows that
+    the signer holds the private key. It does not show that the person
+    holds it. An administrator who made the key pair, or who kept a copy,
+    holds a factor of the person at the level `key`. If that administrator
+    also holds a CLI sign-in token of the person, the administrator can step
+    up as the person. Without that token, layer 3 of Q4 and D4 stop the
+    step-up: a challenge binds the access token or the session of the person
+    who makes it, and only the interactive CLI sign-in of the person or a
+    console session of the person can make one. The user guide tells the
+    person to revoke an enrolled key and add their own, when the
+    administrator made the key pair.
+  - **Audit and email.** The enrollment writes an audit entry of the kind
+    `security`, with the administrator, the person, the key ID and the
+    fingerprint, in the same transaction as the add. The server sends the
+    email of the notifications below to the person. The key row records the
+    administrator (`EnrolledBy`), and the key list of the person shows it.
 - **Revoke (D5).** A revoke needs a fresh authentication at the level `key`:
   any registered key of the person, also the key that it revokes, or the
   console path with WebAuthn. TOTP revokes no key, so a thief with a TOTP
@@ -430,10 +539,12 @@ level (D1).**
 - **Admin reset.** The MFA reset of ADR 46 decision 9 needs a fresh
   authentication of the administrator. It deletes the keys and the TOTP
   factor of the person, and revokes each step-up credential of the person,
-  from a key or from TOTP. No route adds a factor for another person.
+  from a key or from TOTP. A window credential never covers it (Q4). The
+  only route that adds a factor for another person is the admin enrollment
+  of the first key (D6).
 - **Notifications.** The server sends an email to the person (the SMTP of
   ADR 212) on each key add, each key revoke, each TOTP enrollment, each TOTP
-  reset and each admin reset. The email says what changed, when, and from
+  reset, each admin reset and each admin enrollment. The email says what changed, when, and from
   which IP address, and how to revoke.
 - **Allowed key types.** `sk-ssh-ed25519@openssh.com`,
   `sk-ecdsa-sha2-nistp256@openssh.com`, `ssh-ed25519`,
@@ -503,7 +614,21 @@ configured list of roots is the subject of a future RFC.
 | TOTP code (built-in MFA) | yes | no |
 | A password only, with built-in MFA off | yes, when ADR 227 decision 1 counts it | no |
 | A recovery code | no | no |
-| A fresh authentication at the SSO identity provider | yes | open point 6 |
+| A fresh authentication at the SSO identity provider (`fresh=1`, D7) | yes | no |
+
+The console path of a CLI challenge records the console method of the fresh
+authentication in the audit entry of the step-up, and its credential records
+the level that the method met (`Credential.Level`). At each use, the server
+compares that level with the level that holds for the write at that time
+(`Use.Level`), and refuses a credential below it with
+`mfa.factor-not-allowed`. So a window credential from a TOTP code stops at
+its next use when the namespace changes to `key`.
+
+**A write done directly in the console.** This RFC does not decide whether
+`stepUpFactors` also governs a fresh write that a person does directly in
+the console, with no CLI challenge. It is open point 5, next to the ADR 46
+amendment, because the answer decides what the level `key` means in an SSO
+installation with no built-in WebAuthn.
 
 The installation holds the same setting as a floor, and the strictest level
 that holds for a write applies, as for the window (ADR 227 decision 4). A
@@ -553,13 +678,24 @@ provider apply, with these limits:**
   made the challenge.
 - **What a window credential never covers (M5).** The server refuses a
   window credential for each of these writes, with `mfa.step-up-mismatch`,
-  and asks for a one-write step (A) or the console:
-  - a step-up key add or revoke.
+  and asks for a one-write step (A) or the console. The list is each row of
+  Q6 that says "one write only" or "one read only", and a change to Q6 changes
+  this list in the same change:
+  - a step-up key add or revoke, and the admin enrollment of a first key.
   - a TOTP enrollment, confirmation or reset.
+  - the admin MFA reset of another person.
   - a change of `cliStepUp` or `stepUpFactors`.
   - an access token create or rotate, of any principal.
+  - `PATCH` of the session policy.
+  - `POST`, `PATCH` and `DELETE` of a sign-in provider.
   - a grant of `principal:manage-tokens`, and an act-as edge.
+  - the create of a runner join token.
+  - the apply of a job (`job:apply`), which binds one job and one plan.
   - a reveal (a secret reveal, a state download by a person).
+
+  The server checks this list on its own. It does not rely on the namespace
+  check of the window, which refuses an installation write today only
+  because a window has one namespace.
 
   The list is in the server, not in the challenge, so a client cannot ask for
   a window that holds one of these actions. The challenge create refuses such
@@ -697,10 +833,15 @@ DPoP key is a later layer for option B, and this RFC does not propose it.
   Each wrong code and each lockout write an audit entry.
 - **Atomic attempts (D3).** The server reserves one attempt before it checks
   the code: one store transaction checks the lock and the disable, and counts
-  the attempt as a failure. A good code then sets the count to 0 and stores
-  the step, in one transaction that refuses a locked or a disabled factor.
-  So parallel challenges never get more than 10 guesses before the lock, or
-  100 before the disable.
+  the attempt as a failure. The lock and the disable come only from earlier
+  attempts. The reservation that takes the count to 10 passes and sets the
+  lock in the same transaction. The 11th reservation gets
+  `mfa.factor-locked`. A good code of a reserved attempt then sets the count
+  to 0, ends the lock, and stores the step, in one transaction. A lock that
+  its own reservation or a parallel reservation set does not refuse it. So
+  the 10th code still counts: 10 wrong codes lock the factor, not 9. The
+  disable at 100 works the same way. Parallel challenges never get more than
+  10 guesses before the lock, or 100 before the disable.
 - **Recovery codes** (ADR 46 decision 4) are for a sign-in when a person lost
   each factor. They never answer a step-up challenge, and a sign-in with a
   recovery code gives no fresh authentication for a factor add.
@@ -729,6 +870,8 @@ writes the CLI step-up can satisfy, and which writes `main` checks today.
 | A secret reveal, and a state download by a person (a reveal) | ADR 227 decision 2, ADR 240 | no: #1240 | yes, one read only |
 | The create of a runner join token | this RFC (recommendation) | no | yes, one write only |
 | The add and the revoke of a step-up key, the enrollment and the reset of TOTP | this RFC | not built | yes, one write only, at the level of D5 for a key |
+| The admin enrollment of the first step-up key of another person (D6) | this RFC | not built | yes, one write only, at the level `key` for the administrator |
+| The admin MFA reset of another person | ADR 46 decision 9, this RFC (Q2) | not built | yes, one write only |
 | `cliStepUp` from `off` to `on`, `stepUpFactors` to a less strict level | this RFC, ADR 212 decision 3 | not built | yes, one write only |
 | The apply of a unit that requires a second factor for an apply | RFC 89 question 8 | not built | yes, with `opendustpan apply`, one write bound to the job and its plan |
 | An approval or a signature of a change order | ADR 225 decisions 5 and 7, ADR 227 decision 5 | session | no: console only |
@@ -750,7 +893,7 @@ the CLI. The step-up of that apply binds to the job ID, the action
 plan ID), so that a touch for one plan never applies another plan.
 
 **The error.** A write with no fresh authentication changes nothing. The
-status is open point 7 (#1323). The recommendation follows the first option of
+status is open point 6 (#1323). The recommendation follows the first option of
 #1323:
 
 - A credential that can never be fresh, such as an access token, answers `403`
@@ -832,9 +975,10 @@ accepts this RFC must say:
 amended for the step-up factors only, with these conditions from review
 round 1:
 
-- In an SSO installation, each key add (not only the first) and each TOTP
-  enrollment needs a fresh authentication at the identity provider (the
-  console path with `fresh=1`). Then the identity provider still controls
+- In an SSO installation, each key add by the person (not only the first)
+  and each TOTP enrollment needs a fresh authentication at the identity
+  provider (the console path with `fresh=1`), in addition to the factor of
+  D5 for a key add. `fresh=1` alone counts at `any` only (D7). Then the identity provider still controls
   enrollment, as GitHub does with SSH keys under SAML SSO.
 - In an SSO installation, the installation default of `stepUpFactors` is
   `key`, not `any`. TOTP is often weaker than the policy of the identity
@@ -850,7 +994,17 @@ round 1:
 
 A namespace that wants only its identity provider sets `cliStepUp: off`, and
 the console path then asks the identity provider for a new authentication
-(`fresh=1`).
+(`fresh=1`). At the level `key`, that console path fails, because `fresh=1`
+counts at `any` only (D7).
+
+**The effect on SSO installations (with open point 5).** With D7 and the
+default `key` above, a person in an SSO installation with no built-in
+WebAuthn has no console factor at the level `key`. The first key of each
+such person is an admin enrollment (D6). If `stepUpFactors` also governs a
+direct console write (open point 5, option A), each write of Q6 at the level
+`key` in such an installation needs a step-up key in the CLI, also a gate
+change that a person starts in the console. The owner decides the amendment
+and open point 5 together.
 
 ## Security layers (ADR 250)
 
@@ -859,7 +1013,7 @@ the console path then asks the identity provider for a new authentication
 | 1. Check at the boundary | A strict decoder for each body. The server refuses a key type outside the allowlist, a challenge ID without `stc-`, a code that is not 6 digits, and a digest that is not 64 hex digits. It refuses a target, an `If-Match` or an `Idempotency-Key` outside its allowlist (Q1). |
 | 2. Encode or contain | The server builds the signed text from its own record, one value on each line, with no CR or LF in a value. The CLI builds the origin and the request lines from its own values. The SSH namespaces and the OpenPGP notation keep a step-up signature and a key-add signature apart from other signatures. The CLI escapes control characters in server text. |
 | 3. Limit the effect | One write, 120 seconds (A). At most 900 seconds and 50 writes (B), never for the exclusion list. At most 10 open challenges. Rate limits on codes, with an atomic reserve. |
-| 4. Authorization at the point of use | The route checks its action on its object as before. The step-up adds a fact. It never grants an action. Each use checks the person and the credential kind and ID. |
+| 4. Authorization at the point of use | The route checks its action on its object as before. The step-up adds a fact. It never grants an action. Each use checks the person, the credential kind and ID, the level, and the job and plan of an apply. The admin enrollment checks `server:enroll-step-up-key` on the person, and the store refuses the own account and a person who holds a key. |
 | 5. Fail closed | An unknown factor, an unknown level, a store error or a missing setting refuses, and writes a failure entry to the audit log. |
 
 Each step gets its own test, as `CLAUDE.md` says. The conformance case names
@@ -873,19 +1027,29 @@ case names only, and each case skips until an adapter exists.
 
 | Port | Methods | Errors |
 | --- | --- | --- |
-| `KeyStore` | `AddKey`, `Keys`, `Key`, `RevokeKey`, `AdvanceCounter` | `ErrNotFound`, `ErrInvalid`, `ErrLimit`, `ErrConflict`, `ErrCounterRegressed` |
-| `ChallengeStore` | `CreateChallenge`, `Challenge`, `AcceptChallenge`, `CompleteChallenge`, `RecordFailure` | `ErrNotFound`, `ErrInvalid`, `ErrExpired`, `ErrUsed`, `ErrChallengeLimit` |
-| `CredentialStore` | `UseCredential`, `RevokeCredentialsOfKey`, `RevokeCredentialsOfTOTP`, `RevokeCredentialsOfPerson` | `ErrNotFound`, `ErrExpired`, `ErrUsed`, `ErrMismatch` |
+| `KeyStore` | `AddKey`, `EnrollFirstKey`, `Keys`, `Key`, `RevokeKey` | `ErrNotFound`, `ErrInvalid`, `ErrLimit`, `ErrConflict` |
+| `ChallengeStore` | `CreateChallenge`, `Challenge`, `AcceptChallenge`, `CompleteChallenge`, `RecordFailure` | `ErrNotFound`, `ErrInvalid`, `ErrExpired`, `ErrUsed`, `ErrChallengeLimit`, `ErrFactorRefused`, `ErrCounterRegressed` |
+| `CredentialStore` | `UseCredential`, `RevokeCredentialsOfKey`, `RevokeCredentialsOfTOTP`, `RevokeCredentialsOfPerson` | `ErrNotFound`, `ErrExpired`, `ErrUsed`, `ErrMismatch`, `ErrFactorRefused` |
 | `TOTPStore` | `EnrollTOTP`, `ConfirmTOTP`, `TOTP`, `BeginTOTPAttempt`, `AcceptStep`, `ResetTOTP` | `ErrNotFound`, `ErrExpired`, `ErrUsed`, `ErrLocked`, `ErrDisabled` |
 | `Verifier` | `Verify` | `ErrBadAnswer`, `ErrInvalid` |
 
-**Atomicity.** `CompleteChallenge` marks the challenge `answered`, saves the
-credential and appends the audit entry of the step-up in one transaction, so
-that a credential never exists without its entry, and two answers of one
-challenge give one credential. `RevokeKey`, `ResetTOTP`, `ConfirmTOTP` and
-`AdvanceCounter` (on a regression) revoke the credentials and append their
-entry in the same transaction. `UseCredential` uses the credential up in its
-own transaction before the write (Q4).
+**Atomicity.** `CompleteChallenge` does the whole answer in one transaction,
+in this order: it checks the state of the challenge, then, for a key answer,
+it checks the key and advances its counter (`Completion.KeyID` and
+`Completion.Counter`), then it marks the challenge `answered`, saves the
+credential and appends the audit entry of the step-up. So a credential never
+exists without its entry, and two answers of one challenge give one
+credential. A second answer of a challenge that is not open answers
+`ErrUsed` and never touches the counter, so a retry of the same answer, from
+the CLI or a proxy after a lost response, never suspends a good key. A
+counter that went back suspends the key, revokes its credentials, makes the
+challenge void and appends the `security` entry in the same transaction, and
+saves no credential, so a cloned key never gets one. No separate counter
+method exists. `RevokeKey`, `ResetTOTP` and `ConfirmTOTP` revoke the
+credentials and append their entry in the same transaction.
+`EnrollFirstKey` checks that the person holds no key in the same transaction
+as the add. `UseCredential` uses the credential up in its own transaction
+before the write (Q4).
 
 ## Proposed terms
 
@@ -899,44 +1063,74 @@ The terms go to `GLOSSARY.md` with the ADR.
 - **Step-up credential**: the short-lived proof that a challenge was
   answered. It is not an access token. Avoid "step-up token".
 - **Step-up key**: an SSH or OpenPGP public key that a person registered as a
-  factor. Avoid "signing key", which names the secret of a webhook sink.
+  factor. Avoid "signing key", which names the secret of a webhook sink, and
+  "trusted signing key", which names an OpenPGP key of a namespace registry.
+  A trusted signing key never counts as a step-up key, also when it is the
+  same OpenPGP key.
 - **Step-up factor level**: `any` or `key`, the weakest factor that a
   namespace or the installation accepts for a step-up.
 
 ## Open points for the owner
 
 1. **The ADR** that accepts the step-up credential as a new credential type.
-2. **New dependencies (S12).** `go.mod` has no `golang.org/x/crypto`. The
-   options:
+2. **New dependencies (S12).** On `main`, `go.mod` has
+   `github.com/ProtonMail/go-crypto` v1.5.2 as a direct requirement since
+   #1306, for the registry, and `golang.org/x/crypto` v0.56.0 as an indirect
+   requirement only. The options:
    - TOTP: RFC 6238 over `crypto/hmac` and `crypto/sha1` of the standard
      library, with no new module. Recommended.
    - `sshsig`: `golang.org/x/crypto/ssh` parses SSH keys and verifies the
-     inner signature, but has no `-Y verify`, and it is a new module. The
+     inner signature, but has no `-Y verify`. The module is in the module
+     graph already, but only as indirect, so a use makes it a new direct
+     requirement. The
      other option is a small `sshsig` verifier on the standard library
      (`crypto/ed25519`, `crypto/ecdsa`, `crypto/rsa`) with the SSH wire
      format written in the project. The owner decides between the new module
      and the project code.
-   - OpenPGP: no standard library option. A new module, or OpenPGP keys out
-     of v1.
+   - OpenPGP: no standard library option. `github.com/ProtonMail/go-crypto`
+     is linked already for the trusted signing keys of the registry, so a
+     step-up verifier on it adds no module. Its use for a factor of a person
+     is a new use of a security dependency, which the owner accepts or
+     refuses. The other option is OpenPGP keys out of v1.
 3. **The token kind of D4.** A personal access token from the CLI sign-in
    flow needs a server-side field on the token row (for example
    `issuedBy: cli-sign-in`). That is a change to `accesstoken`, with its own
    migration.
-4. **The amendment of ADR 46 decision 2**, with the conditions above.
-5. **The first key (D5).** With D5, a person with no WebAuthn and no SSO can
-   add no step-up key, and uses TOTP or the console only. The options:
-   - A. Keep it so. The small team uses TOTP, or enrolls WebAuthn first.
-     Recommended, because it keeps D5 with no exception.
-   - B. Let a console fresh authentication at the level `any` add the first
-     key only, with an email to the person and a wait of 24 hours before the
-     key answers a challenge. An exception to D5 that the owner must accept.
-6. **SSO and the level `key`.** OpenDustpan cannot see which factor the
-   identity provider used for `fresh=1`. D1 counts the console path as `key`
-   only after a WebAuthn assertion. Recommendation: a fresh authentication at
-   the identity provider counts at `any` only. In an SSO installation with the
-   default `key`, a person then uses a step-up key, or the console path
-   fails at that level.
-7. **#1323 (401 or 403)**, which shapes the error section of Q6.
+4. **The amendment of ADR 46 decision 2**, with the conditions above and
+   the effect on SSO installations that open point 5 states.
+5. **Does `stepUpFactors` govern a write done directly in the console?** The
+   console factor table of Q3 and D1 make the level apply to the console
+   path of a CLI challenge. This RFC does not say whether it also applies to
+   a fresh write that a person does directly in the console, with no CLI
+   challenge. The fact: in an SSO installation, ADR 46 decision 2 gives no
+   built-in WebAuthn, and D7 counts `fresh=1` at `any` only. So at the level
+   `key`, no console authentication passes in such an installation, and the
+   console has no step-up key factor. The options:
+   - A. The level governs each fresh write, in the CLI and in the console.
+     `key` then holds for the write, whatever the route. In an SSO
+     installation with no built-in WebAuthn, at the level `key`, only a
+     person with a step-up key can do the write, and only through the CLI.
+     Each first key is an admin enrollment (D6). With the SSO default `key`
+     of the amendment conditions, this is each SSO installation by default.
+   - B. The level governs only a CLI challenge and its console path. A
+     direct console write keeps ADR 227 decision 1, and `fresh=1` passes it.
+     No installation is blocked, but `key` then holds only for the route:
+     the console path of a challenge refuses `fresh=1` at `key`, and the same
+     write done directly in the console accepts it.
+   - C. A, with the SSO installation default of `stepUpFactors` at `any`,
+     not `key`. An SSO installation is not blocked by default. An
+     installation or a namespace that sets `key` accepts the effect of A, and
+     the user guide says so. TOTP then counts by default in an SSO
+     installation, which the amendment conditions tried to prevent.
+
+   Recommendation: C. A level that a direct console write passes around
+   gives no guarantee, so B makes `key` weaker than its name. A with the
+   default `key` blocks each gate change in a new SSO installation until an
+   administrator enrolls a key for each person who changes gates. C keeps
+   the meaning of `key` and moves the strict default to an explicit setting.
+   C changes one condition of the ADR 46 amendment, so the owner decides it
+   with open point 4.
+6. **#1323 (401 or 403)**, which shapes the error section of Q6.
 
 ## Follow-up work
 
@@ -945,6 +1139,8 @@ The terms go to `GLOSSARY.md` with the ADR.
 - The TOTP part of ADR 46, shared with the step-up (Q5), with the separate
   counter of each surface.
 - The token field of open point 3.
+- The admin enrollment route of the first key (D6), with its action
+  `server:enroll-step-up-key`.
 - The store adapters for both dialects, with the conformance suite, and the
   `Verifier` adapters with their suite.
 - The step-up routes, and the `mfa.fresh-step-required` answer with

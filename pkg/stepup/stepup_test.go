@@ -48,6 +48,21 @@ func TestServiceRules(t *testing.T) {
 		"a value with a CR, an LF or a control character fails with ErrInvalid at the challenge create",
 		"a counter regression answers ErrBadAnswer and appends a security entry",
 		"the TOTP secret is sealed before it reaches the store",
+		"a runner protocol, tool-compatible or MCP request with the header gets 400",
+		"a job spec with an stp- value gets 422",
+		"a TOTP answer at the level key fails with ErrFactorRefused",
+		"a CLI answer with cliStepUp off fails with ErrCLIStepUpOff",
+		"a disabled principal gets no challenge and its credentials stop working",
+		"a fresh authentication at the identity provider counts at the level any only",
+		"a fresh authentication at the identity provider alone cannot add a step-up key",
+		"an admin enrollment for a person who has a key fails",
+		"an admin cannot enroll a key for themselves",
+		"an admin enrollment without a fresh authentication at the level key fails",
+		"an admin enrollment appends a security entry and sends an email to the person",
+		"a key-add proof for another person or another key fails with ErrBadAnswer",
+		"a poll by another token of the same person gets ErrNotFound",
+		"a window credential on each one-write-only write fails with ErrMismatch",
+		"a key add, a key revoke, a TOTP enrollment, a TOTP reset and an admin reset each send an email to the person",
 	}
 
 	for _, rule := range rules {
