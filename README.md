@@ -310,6 +310,9 @@ How-to guides:
 - [Save and open a view of the unit list](docs/guides/saved-views.md): store
   the labels and references of a unit list under a name, and open the view
   again.
+- [Connect a webhook and send a test message](docs/guides/notification-destinations.md):
+  make a notification destination, check its signature, and send a test
+  message.
 - [Architecture and sizing](docs/guides/architecture-and-sizing.md): the
   layout of an installation, and how to measure its size.
 - [Install with Helm](docs/guides/kubernetes.md): the Helm chart, its Secrets, storage, upgrade and rollback steps.
@@ -328,6 +331,8 @@ Reference:
   of a journaled update.
 - [Preferences API](docs/reference/preferences-api.md): the routes that read
   and change the preferences of a person.
+- [Notification destinations API](docs/reference/notification-destinations-api.md):
+  the routes, fields and errors of notification destinations.
 - [Languages and digits](docs/reference/languages-and-digits.md): the
   languages, the `digits` setting and the plural forms.
 - [TFE-compatible API](docs/tfe-api.md): the endpoints that OpenTofu uses.

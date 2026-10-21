@@ -159,3 +159,66 @@ func TestCheckRedirect(t *testing.T) {
 		})
 	}
 }
+
+func TestCheckPort(t *testing.T) {
+	t.Parallel()
+
+	extra, err := egress.NewPorts(8443, 9443)
+	if err != nil {
+		t.Fatalf("NewPorts = %v", err)
+	}
+
+	tests := []struct {
+		name  string
+		raw   string
+		ports egress.Ports
+		ok    bool
+	}{
+		{"no port is 443", "https://example.com/hook", egress.Ports{}, true},
+		{"explicit 443", "https://example.com:443/hook", egress.Ports{}, true},
+		{"ssh", "https://example.com:22/", egress.Ports{}, false},
+		{"smtp", "https://example.com:25/", egress.Ports{}, false},
+		{"8443 by default", "https://example.com:8443/", egress.Ports{}, false},
+		{"8443 by the operator", "https://example.com:8443/", extra, true},
+		{"9443 by the operator", "https://example.com:9443/", extra, true},
+		{"22 is not added", "https://example.com:22/", extra, false},
+		{"port 0", "https://example.com:0/", egress.Ports{}, false},
+		{"port over 65535", "https://example.com:65536/", extra, false},
+		{"port 443 plus a digit", "https://example.com:4430/", egress.Ports{}, false},
+		{"port that is not a number", "https://example.com:http/", egress.Ports{}, false},
+		{"leading zeros", "https://example.com:0443/", egress.Ports{}, true},
+		{"an IP host on a closed port", "https://93.184.215.14:6379/", egress.Ports{}, false},
+		{"an IPv6 host on 443", "https://[2606:2800:21f:cb07:6820:80da:af6b:8b2c]:443/", egress.Ports{}, true},
+		{
+			"an IPv6 host on a closed port", "https://[2606:2800:21f:cb07:6820:80da:af6b:8b2c]:22/",
+			egress.Ports{},
+			false,
+		},
+		{"does not parse", "https://exa mple.com:22/", egress.Ports{}, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			err := egress.CheckPort(tt.raw, tt.ports)
+			if tt.ok != (err == nil) {
+				t.Fatalf("CheckPort(%q) = %v, want ok=%v", tt.raw, err, tt.ok)
+			}
+
+			if err != nil && !errors.Is(err, egress.ErrRefused) {
+				t.Fatalf("CheckPort(%q) = %v, want egress.ErrRefused", tt.raw, err)
+			}
+		})
+	}
+}
+
+func TestNewPortsRefusesANumberThatIsNoPort(t *testing.T) {
+	t.Parallel()
+
+	for _, port := range []int{-1, 0, 65536, 1 << 20} {
+		if _, err := egress.NewPorts(443, port); !errors.Is(err, egress.ErrRefused) {
+			t.Errorf("NewPorts(443, %d) = %v, want egress.ErrRefused", port, err)
+		}
+	}
+}

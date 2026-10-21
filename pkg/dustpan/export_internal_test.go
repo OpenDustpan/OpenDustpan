@@ -69,3 +69,18 @@ func (s *Server) RootPatterns() RootPatterns {
 		Mounted: append([]string(nil), s.root.mounted...),
 	}
 }
+
+// AllHandlerNames returns the names of every adapter slot, mounted or not.
+func (s *Server) AllHandlerNames() []string {
+	if s.mounted == nil {
+		return nil
+	}
+
+	var out []string
+
+	for _, h := range s.mounted.allHandlers() {
+		out = append(out, h.name)
+	}
+
+	return out
+}

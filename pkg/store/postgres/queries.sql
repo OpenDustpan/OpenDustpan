@@ -3713,3 +3713,84 @@ SELECT v.id
 FROM saved_views AS v
 WHERE v.namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace)) AND v.owner = sqlc.arg(owner)
 ORDER BY v.id COLLATE "C";
+
+-- name: GetNotificationSink :one
+-- The caller compares the namespace of the row with the scope of the request.
+SELECT k.id, n.name AS namespace, k.kind, k.name, k.platform, k.target, k.created_by, k.version
+FROM notification_sinks AS k
+JOIN namespaces AS n ON n.id = k.namespace_id
+WHERE k.id = sqlc.arg(id);
+
+-- name: ListNotificationSinks :many
+SELECT k.id, n.name AS namespace, k.kind, k.name, k.platform, k.target, k.created_by, k.version
+FROM notification_sinks AS k
+JOIN namespaces AS n ON n.id = k.namespace_id
+WHERE n.name = sqlc.arg(namespace)
+ORDER BY k.id COLLATE "C";
+
+-- name: ListNotificationSinkRefs :many
+-- The secret refs of every sink of a namespace, in the order of each sink.
+SELECT s.sink_id, s.ref
+FROM notification_sink_secrets AS s
+JOIN namespaces AS n ON n.id = s.namespace_id
+WHERE n.name = sqlc.arg(namespace)
+ORDER BY s.sink_id COLLATE "C", s.position;
+
+-- name: InsertNotificationSink :execrows
+-- The caller checks the fence in the same transaction. A sink with the same
+-- ID is not written.
+INSERT INTO notification_sinks (id, namespace_id, kind, name, platform, target, created_by, version)
+VALUES (
+    sqlc.arg(id), (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace)),
+    sqlc.arg(kind), sqlc.arg(name), sqlc.arg(platform), sqlc.arg(target), sqlc.arg(created_by), 1
+)
+ON CONFLICT (id) DO NOTHING;
+
+-- name: UpdateNotificationSink :execrows
+-- A replace changes the name and the target. The kind, the platform and the
+-- creator stay. The version guards the replace.
+UPDATE notification_sinks
+SET name = sqlc.arg(name), target = sqlc.arg(target), version = notification_sinks.version + 1
+WHERE notification_sinks.id = sqlc.arg(id) AND notification_sinks.version = sqlc.arg(version)
+  AND notification_sinks.namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace));
+
+-- name: DeleteNotificationSink :execrows
+DELETE FROM notification_sinks
+WHERE notification_sinks.id = sqlc.arg(id) AND notification_sinks.namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace));
+
+-- name: ClaimNotificationSinkRef :execrows
+-- Records that the namespace holds the ref. It writes nothing, and the caller
+-- refuses the new value, when the namespace held the ref before.
+INSERT INTO notification_sink_refs (namespace_id, ref)
+VALUES ((SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace)), sqlc.arg(ref))
+ON CONFLICT (namespace_id, ref) DO NOTHING;
+
+-- name: InsertNotificationSinkSecret :exec
+INSERT INTO notification_sink_secrets (namespace_id, ref, sink_id, position, ciphertext)
+VALUES (
+    (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace)), sqlc.arg(ref), sqlc.arg(sink_id),
+    sqlc.arg(position), sqlc.arg(ciphertext)
+);
+
+-- name: ListNotificationSinkSecrets :many
+SELECT s.ref, s.ciphertext
+FROM notification_sink_secrets AS s
+JOIN namespaces AS n ON n.id = s.namespace_id
+WHERE n.name = sqlc.arg(namespace) AND s.sink_id = sqlc.arg(sink_id)
+ORDER BY s.position;
+
+-- name: MoveNotificationSinkSecret :exec
+UPDATE notification_sink_secrets
+SET position = sqlc.arg(position)
+WHERE notification_sink_secrets.ref = sqlc.arg(ref) AND notification_sink_secrets.sink_id = sqlc.arg(sink_id)
+  AND notification_sink_secrets.namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace));
+
+-- name: DeleteNotificationSinkSecret :exec
+DELETE FROM notification_sink_secrets
+WHERE notification_sink_secrets.ref = sqlc.arg(ref) AND notification_sink_secrets.sink_id = sqlc.arg(sink_id)
+  AND notification_sink_secrets.namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace));
+
+-- name: DeleteNotificationSinkSecrets :exec
+DELETE FROM notification_sink_secrets
+WHERE notification_sink_secrets.sink_id = sqlc.arg(sink_id)
+  AND notification_sink_secrets.namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace));
