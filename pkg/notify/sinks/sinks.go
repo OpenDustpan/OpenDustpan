@@ -364,46 +364,58 @@ func (s *Service) newSecrets(sink *notify.Sink, in New) ([]notify.SinkSecret, er
 
 	switch sink.Kind {
 	case notify.SinkWebhook:
-		host, err := notify.WebhookHost(in.Target)
-		if err != nil {
-			return nil, fmt.Errorf("%w: %w", notify.ErrInvalid, err)
-		}
-
-		key, err := NewSigningKey()
-		if err != nil {
-			return nil, err
-		}
-
-		sink.Target = host
-		sink.SecretRefs = []string{ident.NewID("itm-"), ident.NewID("itm-")}
-
-		return []notify.SinkSecret{
-			{Ref: sink.SecretRefs[0], Value: []byte(in.Target)},
-			{Ref: sink.SecretRefs[1], Value: key},
-		}, nil
+		return webhookSecrets(sink, in.Target)
 	case notify.SinkChat:
-		host, err := notify.ChatHost(in.URL)
-		if err != nil {
-			if !errors.Is(err, notify.ErrInvalid) {
-				err = fmt.Errorf("%w: %w", notify.ErrInvalid, err)
-			}
-
-			return nil, err
-		}
-
-		if hostErr := s.checkPlatformHost(*sink, host); hostErr != nil {
-			return nil, hostErr
-		}
-
-		sink.Target = host
-		sink.SecretRefs = []string{ident.NewID("itm-")}
-
-		return []notify.SinkSecret{{Ref: sink.SecretRefs[0], Value: []byte(in.URL)}}, nil
+		return s.chatSecrets(sink, in.URL)
 	case notify.SinkEmail:
 		return nil, nil
 	default:
 		return nil, fmt.Errorf("%w: unknown sink kind %q", notify.ErrInvalid, sink.Kind)
 	}
+}
+
+// webhookSecrets sets the target and the refs of a new webhook sink and
+// returns its URL item and a new signing key.
+func webhookSecrets(sink *notify.Sink, raw string) ([]notify.SinkSecret, error) {
+	host, err := notify.WebhookHost(raw)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", notify.ErrInvalid, err)
+	}
+
+	key, err := NewSigningKey()
+	if err != nil {
+		return nil, err
+	}
+
+	sink.Target = host
+	sink.SecretRefs = []string{ident.NewID("itm-"), ident.NewID("itm-")}
+
+	return []notify.SinkSecret{
+		{Ref: sink.SecretRefs[0], Value: []byte(raw)},
+		{Ref: sink.SecretRefs[1], Value: key},
+	}, nil
+}
+
+// chatSecrets sets the target and the ref of a new chat sink and returns its
+// URL item.
+func (s *Service) chatSecrets(sink *notify.Sink, raw string) ([]notify.SinkSecret, error) {
+	host, err := notify.ChatHost(raw)
+	if err != nil {
+		if !errors.Is(err, notify.ErrInvalid) {
+			err = fmt.Errorf("%w: %w", notify.ErrInvalid, err)
+		}
+
+		return nil, err
+	}
+
+	if hostErr := s.checkPlatformHost(*sink, host); hostErr != nil {
+		return nil, hostErr
+	}
+
+	sink.Target = host
+	sink.SecretRefs = []string{ident.NewID("itm-")}
+
+	return []notify.SinkSecret{{Ref: sink.SecretRefs[0], Value: []byte(raw)}}, nil
 }
 
 // ErrPlatformHost reports a chat URL whose host the platform of the sink does

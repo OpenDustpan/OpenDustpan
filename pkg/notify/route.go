@@ -166,20 +166,6 @@ func asInvalid(err error) error {
 	return fmt.Errorf("%w: %w", ErrInvalid, err)
 }
 
-// validAllowedHost applies the host allowlist to the target of a webhook or
-// chat sink. Any other kind has no host.
-func (s Sink) validAllowedHost() error {
-	if s.Kind != SinkChat && s.Kind != SinkWebhook {
-		return nil
-	}
-
-	if _, err := hostOf("https://"+s.Target+"/", "target"); err != nil {
-		return fmt.Errorf("a %s sink: %w", s.Kind, asInvalid(err))
-	}
-
-	return nil
-}
-
 // badRef reports whether ref is not a valid secret ref of a sink.
 func badRef(ref string) bool {
 	return !ident.Valid(ref, MaxRefLen)
@@ -218,6 +204,20 @@ func (s Sink) ValidateSecrets(secrets []SinkSecret) error {
 		}
 
 		seen = append(seen, sec.Ref)
+	}
+
+	return nil
+}
+
+// validAllowedHost applies the host allowlist to the target of a webhook or
+// chat sink. Any other kind has no host.
+func (s Sink) validAllowedHost() error {
+	if s.Kind != SinkChat && s.Kind != SinkWebhook {
+		return nil
+	}
+
+	if _, err := hostOf("https://"+s.Target+"/", "target"); err != nil {
+		return fmt.Errorf("a %s sink: %w", s.Kind, asInvalid(err))
 	}
 
 	return nil

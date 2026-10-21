@@ -95,7 +95,12 @@ func plantLegacyWebhook(t *testing.T, schemaURL string) {
 	nsID, other := namespace.NewID().String(), namespace.NewID().String()
 	userinfo := "https://" + "user:" + "pw" + "@hooks.example.com/x"
 
-	stmts := []struct {
+	stmts := make([]struct {
+		query string
+		args  []any
+	}, 0, 4+len(notifytest.LegacyShapes()))
+
+	stmts = append(stmts, []struct {
 		query string
 		args  []any
 	}{
@@ -119,7 +124,7 @@ func plantLegacyWebhook(t *testing.T, schemaURL string) {
 				VALUES ('snk-userinfo', $1, 'webhook', 'Odd hook', '', $2, 'alice', 1)`,
 			[]any{other, userinfo},
 		},
-	}
+	}...)
 
 	for _, sh := range notifytest.LegacyShapes() {
 		stmts = append(stmts, struct {

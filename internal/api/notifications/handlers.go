@@ -96,7 +96,8 @@ func answerTarget(s *notify.Sink) string {
 // migration puts a placeholder item first in a webhook sink that had a URL in
 // its target. The placeholder has no value, so the sink has no URL.
 func hasURL(s *notify.Sink) bool {
-	return s.Kind != notify.SinkEmail && len(s.SecretRefs) > 0 && !strings.HasPrefix(s.SecretRefs[0], notify.NoURLRefPrefix)
+	return s.Kind != notify.SinkEmail && len(s.SecretRefs) > 0 &&
+		!strings.HasPrefix(s.SecretRefs[0], notify.NoURLRefPrefix)
 }
 
 func toDocument(s *notify.Sink) sinkDocument {

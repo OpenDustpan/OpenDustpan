@@ -922,12 +922,12 @@ func TestTestFailsClosedWithoutAUsableURL(t *testing.T) {
 func (f fixture) replaceURLItem(t *testing.T, id, url string) {
 	t.Helper()
 
-	sinks, err := f.store.NotificationSinks().Sinks(t.Context(), "acme")
-	if err != nil || len(sinks) != 1 {
-		t.Fatalf("Sinks = %d (%v), want 1", len(sinks), err)
+	stored0, err := f.store.NotificationSinks().Sinks(t.Context(), "acme")
+	if err != nil || len(stored0) != 1 {
+		t.Fatalf("Sinks = %d (%v), want 1", len(stored0), err)
 	}
 
-	next := sinks[0]
+	next := stored0[0]
 	next.SecretRefs = []string{"itm-replaced", next.SecretRefs[1]}
 
 	sealed, err := notify.SinkSealer{Namespaces: f.secrets, Installation: nil}.Seal(t.Context(), next,
