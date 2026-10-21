@@ -9,9 +9,7 @@ import (
 	"net/http"
 	"time"
 
-	"opendustpan.org/opendustpan/internal/api/refusal"
-	"opendustpan.org/opendustpan/internal/clientip"
-	"opendustpan.org/opendustpan/internal/requestid"
+	"opendustpan.org/opendustpan/internal/api/tofuunit"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -68,10 +66,9 @@ func overrideSwitchesOf(ov namespace.Overrides) overrideSwitchesBody {
 	}
 }
 
-// allowance returns the overrides that the caller may use on the unit for one
-// request: the switch of the namespace narrowed by the switch of the unit, and
-// the action of the override. It refuses nothing: the domain refuses an
-// override that the result does not allow (ADR 44, decisions 4, 5 and 8).
+// allowance returns the overrides that the caller may use on the workspace
+// id for one request. It refuses nothing: the domain refuses an override that
+// the result does not allow (ADR 44, decisions 4, 5 and 8).
 func (h *Handler) allowance(
 	ctx context.Context, p identity.Principal, id workspace.ID, obj identity.Object,
 ) (namespace.Overrides, error) {
@@ -80,43 +77,7 @@ func (h *Handler) allowance(
 		return namespace.Overrides{}, err
 	}
 
-	ns, err := h.namespaces.Get(ctx, w.Ref.Namespace)
-	if err != nil {
-		return namespace.Overrides{}, err
-	}
-
-	switches := ns.Overrides.And(w.Overrides)
-
-	return namespace.Overrides{
-		Forced:   switches.Forced && h.permits(ctx, p, identity.ActionUnitWriteForced, obj),
-		Unlocked: switches.Unlocked && h.permits(ctx, p, identity.ActionUnitWriteUnlocked, obj),
-	}, nil
-}
-
-// permits reports whether the principal may do action on obj.
-func (h *Handler) permits(ctx context.Context, p identity.Principal, action identity.Action, obj identity.Object) bool {
-	return h.authz.Authorize(ctx, p, action, obj) == nil
-}
-
-// recordOverrideRefusal writes the audit entry of a write that the workspace
-// refused because an override is off or not granted. The switch check in the
-// domain and the permits check above write none, and the 403 alone leaves no
-// trace. It does nothing for any other error.
-func (h *Handler) recordOverrideRefusal(
-	ctx context.Context, r *http.Request, p identity.Principal, obj identity.Object, err error,
-) {
-	if !errors.Is(err, workspace.ErrOverrideRefused) {
-		return
-	}
-
-	// The action comes from the typed refusal, never from its text. A refusal
-	// without a type is a forced write.
-	action := identity.ActionUnitWriteForced
-	if override, ok := workspace.RefusedOverride(err); ok && override == workspace.OverrideUnlocked {
-		action = identity.ActionUnitWriteUnlocked
-	}
-
-	h.guard.Record(ctx, r, p, refusal.Denial{Action: action, Object: obj, Reason: "override refused", Window: 0})
+	return h.rules().Allowance(ctx, p, w, obj)
 }
 
 // appendOverrideAudit writes the audit entry of one allowed override: the
@@ -126,48 +87,10 @@ func (h *Handler) recordOverrideRefusal(
 func (h *Handler) appendOverrideAudit(
 	r *http.Request, p identity.Principal, obj identity.Object, action identity.Action, version string,
 ) error {
-	if h.audit == nil {
-		return nil
-	}
-
-	ctx := r.Context()
-
-	entry := audit.Entry{
-		At:            time.Now().UTC(),
-		Namespace:     obj.Namespace(),
-		Subject:       p.Subject,
-		IDPSubject:    "",
-		TokenID:       p.TokenID,
-		Action:        string(action),
-		Object:        obj.String(),
-		Version:       version,
-		ValuePath:     "",
-		ValueCount:    nil,
-		Changes:       nil,
-		SourceIP:      clientip.String(r),
-		UserAgent:     truncateUserAgent(r.UserAgent()),
-		Channel:       audit.NormalizeChannel(r.Header.Get(channelHeader)),
-		Kind:          audit.KindOverride,
-		Outcome:       audit.OutcomeSuccess,
-		RequestID:     requestid.FromContext(ctx),
-		ObjectID:      obj.UnitID(),
-		PrevHash:      "",
-		Hash:          "",
-		Sequence:      0,
-		FenceVersion:  0,
-		Reason:        "",
-		PrincipalKind: string(p.Kind),
-		JobID:         p.JobID,
-	}
-
-	ns, err := h.namespaces.Get(ctx, entry.Namespace)
-	if err != nil {
-		return err
-	}
-
-	_, err = h.audit.Append(ctx, ns.Fence(), entry)
-
-	return err
+	return h.rules().Append(r.Context(), tofuunit.Entry(r, p, obj, tofuunit.Detail{
+		At: time.Now().UTC(), Action: action, Version: version, ValuePath: "",
+		Kind: audit.KindOverride, Outcome: audit.OutcomeSuccess, Reason: "",
+	}))
 }
 
 // overrideRoutes returns the override switch rows of the route table: a read

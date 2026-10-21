@@ -10,8 +10,7 @@ import (
 	"net/http"
 	"time"
 
-	"opendustpan.org/opendustpan/internal/clientip"
-	"opendustpan.org/opendustpan/internal/requestid"
+	"opendustpan.org/opendustpan/internal/api/tofuunit"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/workspace"
@@ -32,10 +31,6 @@ const (
 	// The audit entry keeps the path, so a longer path is refused instead
 	// of stored.
 	maxRevealPathLen = 1024
-	// revealChannelHeader declares where a request comes from: "api" or
-	// "console". The audit entry records it as declared; unknown values
-	// are "api".
-	revealChannelHeader = "Dustpan-Channel"
 	// revealResourceType is the JSON:API type of the reveal call.
 	revealResourceType = "state-version-reveals"
 	// noStoreValue is the Cache-Control of every reveal answer: a revealed
@@ -261,79 +256,19 @@ type revealAuditEntry struct {
 // but never the value, and counts the failure: the caller then answers 500
 // and no value.
 func (h *Handler) appendRevealEntry(ctx context.Context, a revealAuditEntry) bool {
-	if h.audit == nil {
-		return true
-	}
+	entry := tofuunit.Entry(a.request, a.principal, a.object, tofuunit.Detail{
+		At: time.Now().UTC(), Action: identity.ActionUnitReadSecrets, Version: a.version, ValuePath: a.path,
+		Kind: audit.KindReveal, Outcome: a.outcome, Reason: "",
+	})
 
-	ns, err := h.namespaces.Get(ctx, a.object.Namespace())
-	if err != nil {
-		h.failRevealAudit(ctx)
-
-		return false
-	}
-
-	entry := audit.Entry{
-		At:            time.Now().UTC(),
-		Namespace:     a.object.Namespace(),
-		Subject:       a.principal.Subject,
-		IDPSubject:    "",
-		TokenID:       a.principal.TokenID,
-		Action:        string(identity.ActionUnitReadSecrets),
-		Object:        a.object.String(),
-		Version:       a.version,
-		ValuePath:     a.path,
-		ValueCount:    nil,
-		Changes:       nil,
-		SourceIP:      clientip.String(a.request),
-		UserAgent:     truncateRevealUserAgent(a.request.UserAgent()),
-		Channel:       audit.NormalizeChannel(a.request.Header.Get(revealChannelHeader)),
-		Kind:          audit.KindReveal,
-		Outcome:       a.outcome,
-		RequestID:     requestid.FromContext(ctx),
-		ObjectID:      a.object.UnitID(),
-		PrevHash:      "",
-		Hash:          "",
-		Sequence:      0,
-		FenceVersion:  0,
-		Reason:        "",
-		PrincipalKind: string(a.principal.Kind),
-		JobID:         a.principal.JobID,
-	}
-
-	if _, err := h.audit.Append(ctx, ns.Fence(), entry); err != nil {
+	if err := h.rules().Append(ctx, entry); err != nil {
 		h.logger.ErrorContext(ctx, "audit append failed", slog.String("path", a.path))
-		h.failRevealAudit(ctx)
+		h.failAudit(ctx)
 
 		return false
 	}
 
 	return true
-}
-
-// failRevealAudit records a lost audit entry: one log line with no secret
-// and no value, and one count on the failure metric through the wired
-// callback. It names no error text: the text may hold driver detail.
-func (h *Handler) failRevealAudit(ctx context.Context) {
-	h.logger.ErrorContext(ctx, "audit append failed")
-
-	if h.onAuditFailure != nil {
-		h.onAuditFailure()
-	}
-}
-
-// truncateRevealUserAgent caps s at audit.MaxUserAgentLen bytes on a UTF-8
-// rune boundary, so a multi-byte rune is never split.
-func truncateRevealUserAgent(s string) string {
-	if len(s) <= audit.MaxUserAgentLen {
-		return s
-	}
-
-	cut := audit.MaxUserAgentLen
-	for cut > 0 && s[cut]&0xC0 == 0x80 {
-		cut--
-	}
-
-	return s[:cut]
 }
 
 // writeNoStore answers err with Cache-Control: no-store, so no reveal

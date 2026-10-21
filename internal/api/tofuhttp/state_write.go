@@ -67,7 +67,7 @@ func (h *Handler) postState(w http.ResponseWriter, r *http.Request, c call) {
 		return
 	}
 
-	allow, err := h.allowance(ctx, c.principal, ws, obj)
+	allow, err := h.rules().Allowance(ctx, c.principal, ws, obj)
 	if err != nil {
 		h.writeError(ctx, w, err)
 
@@ -84,7 +84,7 @@ func (h *Handler) postState(w http.ResponseWriter, r *http.Request, c call) {
 
 	_, err = h.ws.WriteState(ctx, ws.ID, in, auth, r.Body)
 	if err != nil {
-		h.recordOverrideRefusal(ctx, r, c.principal, obj, err)
+		h.rules().RecordOverrideRefusal(ctx, r, c.principal, obj, err)
 		h.writeStateRefusal(ctx, w, c, err)
 
 		return
@@ -153,7 +153,7 @@ func (h *Handler) forceUnlockWorkspace(w http.ResponseWriter, r *http.Request, c
 		return
 	}
 
-	if !h.permits(ctx, c.principal, identity.ActionUnitWriteForced, obj) {
+	if !h.rules().Permits(ctx, c.principal, identity.ActionUnitWriteForced, obj) {
 		h.writeError(
 			ctx,
 			w,
@@ -163,7 +163,7 @@ func (h *Handler) forceUnlockWorkspace(w http.ResponseWriter, r *http.Request, c
 		return
 	}
 
-	allow, err := h.allowance(ctx, c.principal, ws, obj)
+	allow, err := h.rules().Allowance(ctx, c.principal, ws, obj)
 	if err != nil {
 		h.writeError(ctx, w, err)
 
@@ -193,7 +193,7 @@ func (h *Handler) forceUnlockWorkspace(w http.ResponseWriter, r *http.Request, c
 	}
 
 	if err != nil {
-		h.recordOverrideRefusal(ctx, r, c.principal, obj, err)
+		h.rules().RecordOverrideRefusal(ctx, r, c.principal, obj, err)
 		h.writeError(ctx, w, err)
 
 		return

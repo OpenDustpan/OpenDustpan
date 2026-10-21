@@ -11,8 +11,7 @@ import (
 	"net/http"
 	"time"
 
-	"opendustpan.org/opendustpan/internal/clientip"
-	"opendustpan.org/opendustpan/internal/requestid"
+	"opendustpan.org/opendustpan/internal/api/tofuunit"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/gate"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -250,33 +249,10 @@ func parseForceUnlock(body []byte) (forceUnlockAttributes, error) {
 // fields. The workspace service sets the rest: the time, the namespace, the
 // subject, the unit ID, the changes and the new state version.
 func forceUnlockEntry(r *http.Request, p identity.Principal, obj identity.Object, reason string) audit.Entry {
-	return audit.Entry{
-		At:            time.Time{},
-		Namespace:     obj.Namespace(),
-		Subject:       p.Subject,
-		IDPSubject:    "",
-		TokenID:       p.TokenID,
-		Action:        string(identity.ActionUnitWriteForced),
-		Object:        obj.String(),
-		Version:       "",
-		ValuePath:     "",
-		ValueCount:    nil,
-		Changes:       nil,
-		SourceIP:      clientip.String(r),
-		UserAgent:     truncateUserAgent(r.UserAgent()),
-		Channel:       audit.NormalizeChannel(r.Header.Get(channelHeader)),
-		Kind:          audit.KindChange,
-		Outcome:       audit.OutcomeSuccess,
-		RequestID:     requestid.FromContext(r.Context()),
-		ObjectID:      obj.UnitID(),
-		PrevHash:      "",
-		Hash:          "",
-		Sequence:      0,
-		FenceVersion:  0,
-		Reason:        reason,
-		PrincipalKind: string(p.Kind),
-		JobID:         p.JobID,
-	}
+	return tofuunit.Entry(r, p, obj, tofuunit.Detail{
+		At: time.Time{}, Action: identity.ActionUnitWriteForced, Version: "", ValuePath: "",
+		Kind: audit.KindChange, Outcome: audit.OutcomeSuccess, Reason: reason,
+	})
 }
 
 // forceUnlockWorkspace serves POST
@@ -335,7 +311,7 @@ func (h *Handler) forceUnlockWorkspace(
 		ctx, id, expect, p.Subject, allow, record, forceUnlockEntry(r, p, obj, attrs.Reason),
 	)
 	if err != nil {
-		h.recordOverrideRefusal(ctx, r, p, obj, err)
+		h.rules().RecordOverrideRefusal(ctx, r, p, obj, err)
 		h.writeError(ctx, w, err)
 
 		return
