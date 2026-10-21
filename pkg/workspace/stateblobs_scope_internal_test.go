@@ -125,6 +125,10 @@ func (e *scopeServices) checkRefusedAndKept(t *testing.T, err error) {
 		t.Errorf("audit entry = %+v, want a denied security entry in @server for the namespace", got)
 	}
 
+	if reason := e.entries.got[0].Reason; !strings.HasSuffix(reason, "key outside the unit directory") {
+		t.Errorf("reason = %q, want it to end with %q", reason, "key outside the unit directory")
+	}
+
 	for i := range e.entries.got {
 		if reason := e.entries.got[i].Reason; strings.Contains(reason, "namespaces/") ||
 			strings.Contains(reason, string(siblingWS)) {

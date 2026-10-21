@@ -38,7 +38,8 @@ type OutOfScopeRecorder interface {
 }
 
 // OutOfScopeWhere says where a refused key was: outside the namespace of the
-// call, or inside the namespace and outside the directory of the blobs of the
+// call, inside the namespace and outside the directory of the blobs of the
+// call, or inside that directory and outside the directory of the unit of the
 // call.
 type OutOfScopeWhere string
 
@@ -50,6 +51,10 @@ const (
 	// the directory of the blobs of the call, for example the key of a
 	// checkpoint in a call for an item key.
 	OutsideDirectory OutOfScopeWhere = "directory"
+	// OutsideUnitDirectory is a key inside the directory of the blobs of the
+	// call and outside the directory of the unit of the call, for example the
+	// key of another workspace in a call for one workspace.
+	OutsideUnitDirectory OutOfScopeWhere = "unit-directory"
 )
 
 // OutOfScopeFamily names the blobs of one recorder in the reason of its
@@ -503,6 +508,8 @@ func (a *AuditOutOfScope) RecordOutOfScope(
 		place = "outside the namespace"
 	case OutsideDirectory:
 		place = "outside the " + a.family.Dir + " directory of the namespace"
+	case OutsideUnitDirectory:
+		place = "outside the unit directory"
 	default:
 		return fmt.Errorf("%w: place %q", ErrInvalidItemRef, where)
 	}

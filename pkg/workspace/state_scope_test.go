@@ -419,6 +419,46 @@ func TestOpenStateBlobRefusesTheOldLayout(t *testing.T) {
 	}
 }
 
+// TestOpenStateBlobRecordsAKeyOfAnotherWorkspace proves that a key which names
+// another workspace than the row of its version is refused with
+// ErrStateVersionNotFound, reaches the blob store never, and writes one
+// security refusal in the namespace of the row, in the place "unit directory".
+func TestOpenStateBlobRecordsAKeyOfAnotherWorkspace(t *testing.T) {
+	t.Parallel()
+
+	cases := map[string]string{
+		"another workspace ID":     "ws-other",
+		"a look-alike of ours":     "x",
+		"the ID of ours, extended": "ws-extended-",
+	}
+
+	for name, prefix := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			e := newScopeEnv(t)
+			own := "/tofu/" + e.ws.ID.String() + "/"
+			key := blob.Key(strings.Replace(e.sv.Content.String(), own, "/tofu/"+prefix+e.ws.ID.String()+"/", 1))
+			before := e.spy.total()
+
+			_, err := e.svc.OpenStateBlob(t.Context(), key)
+			if !errors.Is(err, workspace.ErrStateVersionNotFound) {
+				t.Fatalf("err = %v, want ErrStateVersionNotFound", err)
+			}
+
+			if calls := e.spy.total() - before; calls != 0 {
+				t.Errorf("calls that reached the blob store = %d, want 0", calls)
+			}
+
+			got := e.refusals.All()
+			if len(got) != 1 || got[0].Namespace != e.acme.ID || got[0].Op != "get" ||
+				got[0].Where != secret.OutsideUnitDirectory {
+				t.Fatalf("refusals = %+v, want one get refusal in %s outside the unit directory", got, e.acme.ID)
+			}
+		})
+	}
+}
+
 // TestRefusalRecordFailureStillRefuses proves the refusal stands when the
 // recorder fails: the caller still gets blob.ErrOutOfScope, with the record
 // failure beside it.

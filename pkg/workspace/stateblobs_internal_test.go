@@ -486,8 +486,13 @@ func TestAuditOutOfScope(t *testing.T) {
 		t.Fatalf("record outside the directory: %v", recordErr)
 	}
 
-	if len(entries.got) != 5 {
-		t.Fatalf("entries = %d, want 5", len(entries.got))
+	unitErr := rec.RecordOutOfScope(context.Background(), acmeID, opGet, secret.OutsideUnitDirectory)
+	if unitErr != nil {
+		t.Fatalf("record outside the unit directory: %v", unitErr)
+	}
+
+	if len(entries.got) != 6 {
+		t.Fatalf("entries = %d, want 6", len(entries.got))
 	}
 
 	for i, e := range entries.got {
@@ -500,6 +505,11 @@ func TestAuditOutOfScope(t *testing.T) {
 
 	want := "state blob get refused: key outside the tofu directory of the namespace"
 	if got := entries.got[4].Reason; got != want {
+		t.Errorf("reason = %q, want %q", got, want)
+	}
+
+	want = "state blob get refused: key outside the unit directory"
+	if got := entries.got[5].Reason; got != want {
 		t.Errorf("reason = %q, want %q", got, want)
 	}
 }

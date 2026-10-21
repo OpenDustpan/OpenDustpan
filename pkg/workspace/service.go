@@ -1363,16 +1363,17 @@ func (s *Service) OpenStateBlob(ctx context.Context, key blob.Key) (io.ReadClose
 		return nil, fmt.Errorf("open state blob %q: %w", key, err)
 	}
 
-	// The key must name the workspace and the version it resolves to:
-	// a key whose workspace segment names another workspace opens
-	// nothing, so one workspace never opens another's sealed bytes.
-	if parsed.Workspace != sv.Workspace || parsed.Version != sv.ID {
-		return nil, fmt.Errorf("open state blob %q: %w", key, ErrStateVersionNotFound)
-	}
-
 	w, err := s.GetByID(ctx, sv.Workspace)
 	if err != nil {
 		return nil, err
+	}
+
+	// The key must name the workspace and the version it resolves to:
+	// a key whose workspace segment names another workspace opens
+	// nothing, so one workspace never opens another's sealed bytes. The
+	// refusal goes to the audit log in the namespace of the row.
+	if parsed.Workspace != sv.Workspace || parsed.Version != sv.ID {
+		return nil, fmt.Errorf("open state blob %q: %w", key, s.blobs.refuseMismatch(ctx, w.NamespaceID))
 	}
 
 	r, err := s.blobs.get(ctx, w.NamespaceID, w.ID, key)

@@ -171,10 +171,39 @@ func (b *stateBlobs) scopedKey(
 	}
 
 	if ws == "" || !strings.HasPrefix(key.String(), workspaceDir(v, ws)) {
-		return nil, b.refuse(ctx, ns, op, blob.ErrOutOfScope, secret.OutOfScopePlace(v, key))
+		return nil, b.refuse(ctx, ns, op, blob.ErrOutOfScope, statePlace(v, key))
 	}
 
 	return v, nil
+}
+
+// statePlace says where a refused state key is. A valid key inside the state
+// directory of the namespace, and outside the directory of the workspace of the
+// call, is outside the unit directory. Any other key has the place that
+// secret.OutOfScopePlace gives.
+func statePlace(v *blob.Scoped, key blob.Key) secret.OutOfScopeWhere {
+	place := secret.OutOfScopePlace(v, key)
+	if place == secret.OutsideDirectory && strings.HasPrefix(key.String(), v.Prefix()+stateBlobDir) {
+		return secret.OutsideUnitDirectory
+	}
+
+	return place
+}
+
+// refuseMismatch records the refusal of a key that names another workspace or
+// another version than the row of the version, in the namespace ns. The caller
+// still answers ErrStateVersionNotFound. When the record fails, the failure
+// joins that error, so it is not hidden.
+func (b *stateBlobs) refuseMismatch(ctx context.Context, ns namespace.ID) error {
+	// The record must survive a canceled request, as in refuse.
+	recCtx, cancel := cleanupContext(ctx)
+	defer cancel()
+
+	if recErr := b.refusals.RecordOutOfScope(recCtx, ns, opGet, secret.OutsideUnitDirectory); recErr != nil {
+		return errors.Join(ErrStateVersionNotFound, fmt.Errorf("record the refusal: %w", recErr))
+	}
+
+	return ErrStateVersionNotFound
 }
 
 // validStateRest reports whether rest, the part of a key after the state

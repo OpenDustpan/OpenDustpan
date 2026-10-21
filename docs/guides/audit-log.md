@@ -168,8 +168,9 @@ directory of these blobs:
 
 The action is `blob:out-of-scope`. The scope is `@server`, the subject is
 `server`, and the object is the ID of the namespace of the call. The reason
-names the blob, the operation, and whether the key was outside the namespace
-or outside the directory of the blob in the namespace, for example
+names the blob, the operation, and whether the key was outside the namespace,
+outside the directory of the blob in the namespace, or outside the directory of
+the unit in the blob directory, for example
 `state blob get refused: key outside the namespace`. The entry never holds the
 blob key that the call used.
 
