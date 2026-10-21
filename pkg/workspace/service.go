@@ -9,7 +9,6 @@ import (
 	"hash"
 	"io"
 	"log/slog"
-	"strings"
 	"sync"
 	"time"
 
@@ -252,9 +251,14 @@ type StateStore interface {
 type Config struct {
 	Workspaces Store
 	States     StateStore
-	// Blobs holds state content under "tofu/<workspace id>/<state version id>/<attempt>".
+	// Blobs holds state content under
+	// "namespaces/<namespace id>/tofu/<workspace id>/<state version id>/<attempt>".
+	// The service reads and writes it only through a view of one namespace.
 	Blobs      blob.Store
 	Namespaces *namespace.Service
+	// OutOfScope records each refusal of a blob key outside the namespace of
+	// a call. It is required: a refusal must reach the audit log.
+	OutOfScope secret.OutOfScopeRecorder
 	// Sealer seals state blobs and outputs documents with the data key of
 	// the workspace scope. It is required: every stored version is sealed.
 	Sealer Sealer
@@ -302,7 +306,7 @@ const lockStripes = 64
 type Service struct {
 	workspaces Store
 	states     StateStore
-	blobs      blob.Store
+	blobs      *stateBlobs
 	namespaces *namespace.Service
 	sealer     Sealer
 	logger     *slog.Logger
@@ -342,6 +346,8 @@ func NewService(cfg Config) (*Service, error) {
 		return nil, fmt.Errorf("%w: blob store", ErrMissingDependency)
 	case cfg.Namespaces == nil:
 		return nil, fmt.Errorf("%w: namespace service", ErrMissingDependency)
+	case cfg.OutOfScope == nil:
+		return nil, fmt.Errorf("%w: out-of-scope recorder", ErrMissingDependency)
 	case cfg.Sealer == nil:
 		return nil, fmt.Errorf("%w: workspace service", ErrMissingSealer)
 	}
@@ -349,7 +355,7 @@ func NewService(cfg Config) (*Service, error) {
 	s := &Service{
 		workspaces: cfg.Workspaces,
 		states:     cfg.States,
-		blobs:      cfg.Blobs,
+		blobs:      &stateBlobs{store: cfg.Blobs, refusals: cfg.OutOfScope},
 		namespaces: cfg.Namespaces,
 		sealer:     cfg.Sealer,
 		logger:     cfg.Logger,
@@ -390,20 +396,23 @@ func NewService(cfg Config) (*Service, error) {
 
 // Create creates an unlocked workspace without state.
 func (s *Service) Create(ctx context.Context, ref Ref) (Workspace, error) {
-	fence, err := s.fence(ctx, ref.Namespace)
+	n, err := s.writable(ctx, ref.Namespace)
 	if err != nil {
 		return Workspace{}, err
 	}
 
+	fence := n.Fence()
+
 	now := s.clock()
 	w := Workspace{
-		CreatedAt: now,
-		UpdatedAt: now,
-		Lock:      Lock{LockedAt: time.Time{}, ID: "", Holder: "", Reason: ""},
-		ID:        ID(ident.NewID("ws-")),
-		Ref:       ref,
-		Revision:  1,
-		Overrides: namespace.Overrides{Forced: false, Unlocked: false},
+		CreatedAt:   now,
+		UpdatedAt:   now,
+		Lock:        Lock{LockedAt: time.Time{}, ID: "", Holder: "", Reason: ""},
+		ID:          ID(ident.NewID("ws-")),
+		Ref:         ref,
+		NamespaceID: n.ID,
+		Revision:    1,
+		Overrides:   namespace.Overrides{Forced: false, Unlocked: false},
 	}
 
 	if err := s.workspaces.CreateWorkspace(ctx, w, fence); err != nil {
@@ -526,8 +535,15 @@ func (s *Service) PurgeExpired(ctx context.Context, ns namespace.Name, id ID, du
 // gone, so no upload can still commit a row that names these blobs. It
 // returns an error when a blob may remain, so the caller keeps the blob
 // purge record for the sweep. No log line and no error names a blob key.
-func (s *Service) DeletePurgedBlobs(ctx context.Context, id ID) error {
-	listed, err := s.blobs.List(ctx, "tofu/"+id.String()+"/")
+func (s *Service) DeletePurgedBlobs(ctx context.Context, ns namespace.Name, id ID) error {
+	// The workspace row is gone, so the namespace record gives the ID. This
+	// is the one read of the namespace of a purge; the blob calls read none.
+	n, err := s.namespaces.Get(ctx, ns)
+	if err != nil {
+		return fmt.Errorf("scope of state blobs: %w", err)
+	}
+
+	listed, err := s.blobs.list(ctx, n.ID, id)
 	if err != nil {
 		return fmt.Errorf("list state blobs of workspace %s: %w", id, err)
 	}
@@ -535,7 +551,7 @@ func (s *Service) DeletePurgedBlobs(ctx context.Context, id ID) error {
 	failed := 0
 
 	for _, obj := range listed {
-		if deleteErr := s.deleteBlobRetried(ctx, obj.Key); deleteErr != nil {
+		if deleteErr := s.blobs.deleteRetried(ctx, n.ID, id, obj.Key); deleteErr != nil {
 			failed++
 		}
 	}
@@ -1101,14 +1117,14 @@ func (s *Service) Upload(
 		return StateVersion{}, err
 	}
 
-	key, err := attemptKey(sv)
+	key, err := s.blobs.attemptKey(w.NamespaceID, w.ID, sv.ID)
 	if err != nil {
 		return StateVersion{}, err
 	}
 
 	// Note the attempt before writing: when the finalize outcome stays
 	// unknown, the row still names the content, so a later sweep deletes it.
-	if noteErr := s.noteAttempt(ctx, id, key, fence); noteErr != nil {
+	if noteErr := s.noteAttempt(ctx, w, id, key, fence); noteErr != nil {
 		return StateVersion{}, noteErr
 	}
 
@@ -1127,7 +1143,7 @@ func (s *Service) Upload(
 		err = fmt.Errorf("finalize state %s: %w", id, err)
 		if rejected(err) {
 			// Nothing was written, so this attempt's blob is an orphan.
-			return StateVersion{}, errors.Join(err, deleteOnCleanup(ctx, s.blobs, key))
+			return StateVersion{}, errors.Join(err, s.deleteOnCleanup(ctx, w, key))
 		}
 
 		// The outcome is unknown; the version may point at this blob. Keep it.
@@ -1307,14 +1323,16 @@ func (s *Service) Open(ctx context.Context, sv StateVersion) (io.ReadCloser, err
 		return nil, fmt.Errorf("%w: state version %s is %s", ErrStateVersionNotFound, sv.ID, sv.Status)
 	}
 
-	r, err := s.blobs.Get(ctx, sv.Content)
-	if err != nil {
-		return nil, fmt.Errorf("open state %s: %w", sv.ID, err)
-	}
-
+	// The namespace comes from the workspace row, never from the key of the
+	// version: a key of another namespace gives blob.ErrOutOfScope.
 	w, err := s.GetByID(ctx, sv.Workspace)
 	if err != nil {
-		return nil, errors.Join(err, r.Close())
+		return nil, err
+	}
+
+	r, err := s.blobs.get(ctx, w.NamespaceID, w.ID, sv.Content)
+	if err != nil {
+		return nil, fmt.Errorf("open state %s: %w", sv.ID, err)
 	}
 
 	opened, err := s.sealer.OpenState(ctx, w.Ref.Namespace, w.ID.String(), string(sv.ID), r)
@@ -1327,35 +1345,40 @@ func (s *Service) Open(ctx context.Context, sv StateVersion) (io.ReadCloser, err
 
 // OpenStateBlob returns the plain content of the sealed blob under key, for
 // the backup copy check. The key names one state version attempt as
-// "tofu/<workspace id>/<state version id>/<attempt>". A failure reports the
-// version ID only, never a key, a scope or content. The caller closes the
-// result.
+// "namespaces/<namespace id>/tofu/<workspace id>/<state version id>/<attempt>".
+// A failure reports the version ID only, never a key, a scope or content. The
+// caller closes the result.
+//
+// The namespace of the read comes from the workspace row of the version, never
+// from the key. A key that names another namespace gives blob.ErrOutOfScope,
+// and the store gets no call.
 func (s *Service) OpenStateBlob(ctx context.Context, key blob.Key) (io.ReadCloser, error) {
-	parts := blobKeyParts(key)
-	if len(parts) != 4 || parts[0] != "tofu" {
-		return nil, fmt.Errorf("open state blob %q: %w", key, ErrStateVersionNotFound)
-	}
-
-	sv, err := s.states.GetStateVersion(ctx, StateVersionID(parts[2]))
+	parsed, err := ParseStateBlobKey(key)
 	if err != nil {
 		return nil, fmt.Errorf("open state blob %q: %w", key, err)
 	}
 
-	// The key must name the workspace and the version it resolves to:
-	// a key whose workspace segment names another workspace opens
-	// nothing, so one workspace never opens another's sealed bytes.
-	if parts[1] != sv.Workspace.String() || parts[2] != sv.ID.String() {
-		return nil, fmt.Errorf("open state blob %q: %w", key, ErrStateVersionNotFound)
-	}
-
-	r, err := s.blobs.Get(ctx, key)
+	sv, err := s.states.GetStateVersion(ctx, parsed.Version)
 	if err != nil {
-		return nil, fmt.Errorf("open state %s: %w", sv.ID, err)
+		return nil, fmt.Errorf("open state blob %q: %w", key, err)
 	}
 
 	w, err := s.GetByID(ctx, sv.Workspace)
 	if err != nil {
-		return nil, errors.Join(err, r.Close())
+		return nil, err
+	}
+
+	// The key must name the workspace and the version it resolves to:
+	// a key whose workspace segment names another workspace opens
+	// nothing, so one workspace never opens another's sealed bytes. The
+	// refusal goes to the audit log in the namespace of the row.
+	if parsed.Workspace != sv.Workspace || parsed.Version != sv.ID {
+		return nil, fmt.Errorf("open state blob %q: %w", key, s.blobs.refuseMismatch(ctx, w.NamespaceID))
+	}
+
+	r, err := s.blobs.get(ctx, w.NamespaceID, w.ID, key)
+	if err != nil {
+		return nil, fmt.Errorf("open state %s: %w", sv.ID, err)
 	}
 
 	opened, err := s.sealer.OpenState(ctx, w.Ref.Namespace, w.ID.String(), string(sv.ID), r)
@@ -1903,7 +1926,7 @@ func (s *Service) copyState(ctx context.Context, w Workspace, src StateVersion) 
 		return StateVersion{}, fmt.Errorf("restore %s from %s: %w", w.ID, src.ID, err)
 	}
 
-	key, err := attemptKey(stored)
+	key, err := s.blobs.attemptKey(w.NamespaceID, w.ID, stored.ID)
 	if err != nil {
 		return StateVersion{}, err
 	}
@@ -1924,7 +1947,7 @@ func (s *Service) copyState(ctx context.Context, w Workspace, src StateVersion) 
 
 	// Like an upload, the row names the attempt before the bytes land, so a
 	// sweep finds the blob even when the finalize outcome stays unknown.
-	if noteErr := s.noteAttempt(ctx, pending.Version.ID, key, fence); noteErr != nil {
+	if noteErr := s.noteAttempt(ctx, w, pending.Version.ID, key, fence); noteErr != nil {
 		return StateVersion{}, noteErr
 	}
 
@@ -1940,7 +1963,7 @@ func (s *Service) copyState(ctx context.Context, w Workspace, src StateVersion) 
 	sv.Content = key
 
 	if err := s.states.FinalizeStateVersion(ctx, sv, fence); err != nil {
-		return StateVersion{}, s.refusedRestore(ctx, sv, fence, err)
+		return StateVersion{}, s.refusedRestore(ctx, w, sv, fence, err)
 	}
 
 	// The caller renders the new version: carry the plain outputs, while the
@@ -1956,15 +1979,19 @@ func (s *Service) copyState(ctx context.Context, w Workspace, src StateVersion) 
 // row, so the row does not fill the pending cap. Any other error leaves the
 // outcome unknown: the version may name the blob, so it stays.
 func (s *Service) refusedRestore(
-	ctx context.Context, sv StateVersion, fence namespace.Fence, finalizeErr error,
+	ctx context.Context, w Workspace, sv StateVersion, fence namespace.Fence, finalizeErr error,
 ) error {
 	err := fmt.Errorf("finalize restored state %s: %w", sv.ID, finalizeErr)
 
 	switch {
 	case errors.Is(err, ErrAlreadyRestored):
-		return errors.Join(err, s.blobs.Delete(ctx, sv.Content), s.states.DiscardStateVersion(ctx, sv.ID, fence))
+		return errors.Join(
+			err,
+			s.blobs.delete(ctx, w.NamespaceID, w.ID, sv.Content),
+			s.states.DiscardStateVersion(ctx, sv.ID, fence),
+		)
 	case rejected(err):
-		return errors.Join(err, s.blobs.Delete(ctx, sv.Content))
+		return errors.Join(err, s.blobs.delete(ctx, w.NamespaceID, w.ID, sv.Content))
 	default:
 		return err
 	}
@@ -1996,7 +2023,7 @@ func (s *Service) openRestoreOutputs(
 func (s *Service) copyBlob(
 	ctx context.Context, w Workspace, key blob.Key, src StateVersion, version string,
 ) (int64, error) {
-	r, err := s.blobs.Get(ctx, src.Content)
+	r, err := s.blobs.get(ctx, w.NamespaceID, w.ID, src.Content)
 	if err != nil {
 		return 0, fmt.Errorf("restore %s from %s: %w", src.Workspace, src.ID, err)
 	}
@@ -2012,13 +2039,14 @@ func (s *Service) copyBlob(
 	r = &closeReader{reader: opened, closer: r, id: src.ID}
 
 	size, storeErr := s.store(ctx, storeInput{
-		namespace: w.Ref.Namespace,
-		workspace: w.ID,
-		version:   version,
-		key:       key,
-		want:      src.MD5,
-		content:   r,
-		unchecked: false,
+		namespace:   w.Ref.Namespace,
+		namespaceID: w.NamespaceID,
+		workspace:   w.ID,
+		version:     version,
+		key:         key,
+		want:        src.MD5,
+		content:     r,
+		unchecked:   false,
 	})
 	closeErr := r.Close()
 
@@ -2028,7 +2056,7 @@ func (s *Service) copyBlob(
 	case closeErr != nil:
 		return 0, fmt.Errorf("restore %s from %s: %w", src.Workspace, src.ID, errors.Join(
 			closeErr,
-			s.blobs.Delete(ctx, key),
+			s.blobs.delete(ctx, w.NamespaceID, w.ID, key),
 		))
 	default:
 		return size, nil
@@ -2074,7 +2102,7 @@ func (s *Service) sweepExpired(ctx context.Context, w Workspace) error {
 		return err
 	}
 
-	cleanupErr := s.deleteExpiredBlobs(ctx, expired)
+	cleanupErr := s.deleteExpiredBlobs(ctx, w, expired)
 
 	// A blob delete above may have failed, or the process may have crashed
 	// between an earlier row delete and its blob delete: the unreferenced
@@ -2101,7 +2129,7 @@ func (s *Service) sweepExpiredRows(ctx context.Context, w Workspace) error {
 		return err
 	}
 
-	if cleanupErr := s.deleteExpiredBlobs(ctx, expired); cleanupErr != nil {
+	if cleanupErr := s.deleteExpiredBlobs(ctx, w, expired); cleanupErr != nil {
 		return fmt.Errorf("sweep expired state of %s: %w", w.Ref, cleanupErr)
 	}
 
@@ -2133,7 +2161,7 @@ func (s *Service) expirePending(ctx context.Context, w Workspace) ([]StateVersio
 // deleteExpiredBlobs deletes the attempted content of the expired versions.
 // A blob that is already gone counts as done, with no error, so two sweeps
 // that overlap on one blob do not fail.
-func (s *Service) deleteExpiredBlobs(ctx context.Context, expired []StateVersion) error {
+func (s *Service) deleteExpiredBlobs(ctx context.Context, w Workspace, expired []StateVersion) error {
 	var cleanupErr error
 
 	for i := range expired {
@@ -2141,7 +2169,7 @@ func (s *Service) deleteExpiredBlobs(ctx context.Context, expired []StateVersion
 			continue
 		}
 
-		if blobErr := s.deleteBlobRetried(ctx, expired[i].Content); blobErr != nil {
+		if blobErr := s.blobs.deleteRetried(ctx, w.NamespaceID, w.ID, expired[i].Content); blobErr != nil {
 			if errors.Is(blobErr, blob.ErrNotFound) {
 				continue
 			}
@@ -2163,7 +2191,7 @@ func (s *Service) deleteExpiredBlobs(ctx context.Context, expired []StateVersion
 // sweep filters by age before reading the referenced keys, so a declare
 // with only fresh blobs pays for one listing and no history read.
 func (s *Service) sweepUnreferenced(ctx context.Context, w Workspace) error {
-	listed, err := s.blobs.List(ctx, "tofu/"+w.ID.String()+"/")
+	listed, err := s.blobs.list(ctx, w.NamespaceID, w.ID)
 	if err != nil {
 		return fmt.Errorf("list state content of %s: %w", w.Ref, err)
 	}
@@ -2204,7 +2232,7 @@ func (s *Service) sweepUnreferenced(ctx context.Context, w Workspace) error {
 			continue
 		}
 
-		if blobErr := s.deleteBlobRetried(ctx, obj.Key); blobErr != nil {
+		if blobErr := s.blobs.deleteRetried(ctx, w.NamespaceID, w.ID, obj.Key); blobErr != nil {
 			cleanupErr = errors.Join(cleanupErr, fmt.Errorf("delete unreferenced content %q: %w", obj.Key, blobErr))
 		}
 	}
@@ -2221,27 +2249,18 @@ func (s *Service) sweepUnreferenced(ctx context.Context, w Workspace) error {
 // names, so a concurrent upload on another service never loses its content:
 // the finalize admits only the recorded attempt, and each loser deletes
 // only its own blob.
-func (s *Service) noteAttempt(ctx context.Context, id StateVersionID, key blob.Key, fence namespace.Fence) error {
+func (s *Service) noteAttempt(
+	ctx context.Context, w Workspace, id StateVersionID, key blob.Key, fence namespace.Fence,
+) error {
 	superseded, err := s.states.RecordUploadAttempt(ctx, id, key, fence)
 	if err != nil {
 		return fmt.Errorf("upload state %s: %w", id, err)
 	}
 
 	if superseded != "" && superseded != key {
-		if deleteErr := s.deleteBlobRetried(ctx, superseded); deleteErr != nil {
+		if deleteErr := s.blobs.deleteRetried(ctx, w.NamespaceID, w.ID, superseded); deleteErr != nil {
 			return fmt.Errorf("upload state %s: %w", id, deleteErr)
 		}
-	}
-
-	return nil
-}
-
-// deleteBlobRetried removes the object under key, retrying a transient
-// failure after a short backoff (blob.DeleteRetried). Deleting a missing key
-// is not an error.
-func (s *Service) deleteBlobRetried(ctx context.Context, key blob.Key) error {
-	if err := blob.DeleteRetried(ctx, s.blobs, key); err != nil {
-		return fmt.Errorf("delete blob: %w", err)
 	}
 
 	return nil
@@ -2349,8 +2368,9 @@ func (s *Service) createPending(
 // the declared MD5 of the plain bytes, and the content, which seals as it
 // streams into the blob store.
 type storeInput struct {
-	namespace namespace.Name
-	workspace ID
+	namespace   namespace.Name
+	namespaceID namespace.ID
+	workspace   ID
 	// version is the state version ID that binds a sealed write.
 	version string
 	key     blob.Key
@@ -2392,7 +2412,7 @@ func (s *Service) storeContent(ctx context.Context, in storeInput) (storedConten
 
 	checked = sealedReader
 
-	if err := s.blobs.Put(ctx, in.key, checked); err != nil {
+	if err := s.blobs.put(ctx, in.namespaceID, in.workspace, in.key, checked); err != nil {
 		return storedContent{}, fmt.Errorf("store content: %w", err)
 	}
 
@@ -2409,7 +2429,7 @@ func (s *Service) storeContent(ctx context.Context, in storeInput) (storedConten
 		return storedContent{size: counted.n, sum: sum}, nil
 	}
 
-	return storedContent{}, errors.Join(problem, s.blobs.Delete(ctx, in.key))
+	return storedContent{}, errors.Join(problem, s.blobs.delete(ctx, in.namespaceID, in.workspace, in.key))
 }
 
 // openOutputs opens the sealed outputs of sv in place, so callers read plain
@@ -2531,12 +2551,22 @@ func (s *Service) change(
 }
 
 func (s *Service) fence(ctx context.Context, ns namespace.Name) (namespace.Fence, error) {
-	n, err := s.namespaces.WritableHere(ctx, ns)
+	n, err := s.writable(ctx, ns)
 	if err != nil {
-		return namespace.Fence{}, fmt.Errorf("write to namespace %q: %w", ns, err)
+		return namespace.Fence{}, err
 	}
 
 	return n.Fence(), nil
+}
+
+// writable returns the namespace ns when this region may write to it.
+func (s *Service) writable(ctx context.Context, ns namespace.Name) (namespace.Namespace, error) {
+	n, err := s.namespaces.WritableHere(ctx, ns)
+	if err != nil {
+		return namespace.Namespace{}, fmt.Errorf("write to namespace %q: %w", ns, err)
+	}
+
+	return n, nil
 }
 
 func (s *Service) clock() time.Time {
@@ -2561,22 +2591,6 @@ func (s *Service) releaseUnfenced(ctx context.Context, w Workspace, entry audit.
 	}
 
 	return released, nil
-}
-
-// attemptKey is a fresh blob key for one upload attempt of sv. IDs are
-// lowercase, so the key is valid whatever the namespace is called.
-func attemptKey(sv StateVersion) (blob.Key, error) {
-	key, err := blob.ParseKey("tofu/" + sv.Workspace.String() + "/" + sv.ID.String() + "/" + ident.NewID(""))
-	if err != nil {
-		return "", fmt.Errorf("state content key: %w", err)
-	}
-
-	return key, nil
-}
-
-// blobKeyParts splits a blob key into its slash-separated parts.
-func blobKeyParts(key blob.Key) []string {
-	return strings.Split(key.String(), "/")
 }
 
 type countingReader struct {
@@ -2605,13 +2619,14 @@ func (s *Service) storeUploadBody(
 	reader, stream := newMetaStream(content, grow)
 
 	size, storeErr := s.store(ctx, storeInput{
-		namespace: w.Ref.Namespace,
-		workspace: w.ID,
-		version:   string(sv.ID),
-		key:       key,
-		want:      sv.MD5,
-		content:   reader,
-		unchecked: false,
+		namespace:   w.Ref.Namespace,
+		namespaceID: w.NamespaceID,
+		workspace:   w.ID,
+		version:     string(sv.ID),
+		key:         key,
+		want:        sv.MD5,
+		content:     reader,
+		unchecked:   false,
 	})
 
 	if storeErr != nil {
@@ -2626,12 +2641,12 @@ func (s *Service) storeUploadBody(
 	// cannot read must not become current (ADR 49, decision 8).
 	meta, metaErr := stream.finish(nil)
 	if metaErr != nil {
-		return uploadedBody{}, errors.Join(metaErr, deleteOnCleanup(ctx, s.blobs, key))
+		return uploadedBody{}, errors.Join(metaErr, s.deleteOnCleanup(ctx, w, key))
 	}
 
 	outputs, err := s.streamedOutputs(ctx, w, string(sv.ID), meta)
 	if err != nil {
-		return uploadedBody{}, errors.Join(err, deleteOnCleanup(ctx, s.blobs, key))
+		return uploadedBody{}, errors.Join(err, s.deleteOnCleanup(ctx, w, key))
 	}
 
 	return uploadedBody{size: size, outputs: outputs}, nil
@@ -2645,11 +2660,11 @@ func abandonStream(stream *metaStream, cause error) {
 
 // deleteOnCleanup deletes the blob under key on the cleanup context of a refused
 // upload, so a client that disconnects does not leave the blob behind.
-func deleteOnCleanup(ctx context.Context, blobs blob.Store, key blob.Key) error {
+func (s *Service) deleteOnCleanup(ctx context.Context, w Workspace, key blob.Key) error {
 	cleanCtx, cancel := cleanupContext(ctx)
 	defer cancel()
 
-	return blobs.Delete(cleanCtx, key)
+	return s.blobs.delete(cleanCtx, w.NamespaceID, w.ID, key)
 }
 
 // purge removes the deleted workspace id of ns with the retention check of

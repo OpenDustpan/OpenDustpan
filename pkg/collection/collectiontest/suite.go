@@ -797,13 +797,14 @@ func createUnit(t *testing.T, s Store, ns namespace.Namespace) collection.UnitRe
 	name := unitName
 	ref := workspace.Ref{Namespace: ns.Name, Name: mustWorkspaceName(t, name)}
 	w := workspace.Workspace{
-		CreatedAt: now(),
-		UpdatedAt: now(),
-		Lock:      workspace.Lock{LockedAt: time.Time{}, ID: "", Holder: "", Reason: ""},
-		ID:        workspace.ID(ident.NewID("ws-")),
-		Ref:       ref,
-		Revision:  1,
-		Overrides: namespace.Overrides{Forced: false, Unlocked: false},
+		NamespaceID: "",
+		CreatedAt:   now(),
+		UpdatedAt:   now(),
+		Lock:        workspace.Lock{LockedAt: time.Time{}, ID: "", Holder: "", Reason: ""},
+		ID:          workspace.ID(ident.NewID("ws-")),
+		Ref:         ref,
+		Revision:    1,
+		Overrides:   namespace.Overrides{Forced: false, Unlocked: false},
 	}
 
 	if err := s.CreateWorkspace(t.Context(), w, ns.Fence()); err != nil {

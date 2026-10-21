@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/dustpan"
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -354,6 +355,7 @@ type namespaceOnlyStore struct {
 		GetNamespace(ctx context.Context, name namespace.Name) (namespace.Namespace, error)
 		ListNamespaces(ctx context.Context) ([]namespace.Namespace, error)
 		Ping(ctx context.Context) error
+		AppendServer(ctx context.Context, e audit.Entry) (audit.Entry, error)
 	}
 }
 
@@ -371,6 +373,13 @@ func (s namespaceOnlyStore) ListNamespaces(ctx context.Context) ([]namespace.Nam
 
 func (s namespaceOnlyStore) Ping(ctx context.Context) error {
 	return s.store.Ping(ctx)
+}
+
+// AppendServer serves the audit log of the server scope, which the workspace
+// service needs to record a refused blob key, so the maintenance check stays
+// the first to refuse.
+func (s namespaceOnlyStore) AppendServer(ctx context.Context, e audit.Entry) (audit.Entry, error) {
+	return s.store.AppendServer(ctx, e)
 }
 
 // TestNewServerRequiresMaintenanceStore proves NewServer refuses a namespace

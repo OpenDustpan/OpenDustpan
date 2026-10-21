@@ -1,7 +1,7 @@
 // Package blob defines the object storage port for large, immutable payloads.
 // The first user of the port is OpenTofu state content. That user writes keys
-// as tofu/<workspace ID>/<state version ID>/<attempt>. The port does not
-// enforce a layout. Adapters live in subpackages (blob/fs, blob/s3) or in
+// as namespaces/<namespace ID>/tofu/<workspace ID>/<state version ID>/<attempt>.
+// The port does not enforce a layout. Adapters live in subpackages (blob/fs, blob/s3) or in
 // user code. blob/blobtest is the conformance suite every adapter must pass.
 //
 // The S3 adapter sends each object with one PUT of 5 GiB at most. Its suite

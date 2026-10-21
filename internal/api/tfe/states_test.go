@@ -789,7 +789,7 @@ func newListStateHandler(t *testing.T) *tfe.Handler {
 			LockID:          "lock-test",
 			Lineage:         "seed-lineage",
 			Status:          workspace.StatusFinalized,
-			Content:         blob.Key("tofu/ws-test123/" + tc.id + "/seed"),
+			Content:         blob.Key("namespaces/ns-aaaaaaaaaaaaaaaaaaaa/tofu/ws-test123/" + tc.id + "/seed"),
 			Outputs:         []byte(stubStateOutputs()),
 			MD5:             [md5.Size]byte{},
 			Serial:          tc.serial,

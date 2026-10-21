@@ -146,7 +146,7 @@ func (s *Service) admitStream(
 		return nil, err
 	}
 
-	if noteErr := s.noteAttempt(ctx, sv.ID, key, fence); noteErr != nil {
+	if noteErr := s.noteAttempt(ctx, w, sv.ID, key, fence); noteErr != nil {
 		return nil, noteErr
 	}
 
@@ -176,13 +176,14 @@ func (s *Service) streamVersion(ctx context.Context, sw *streamWrite, body io.Re
 	reader, stream := newMetaStream(body, grow)
 
 	stored, storeErr := s.storeContent(ctx, storeInput{
-		namespace: sw.workspace.Ref.Namespace,
-		workspace: sw.workspace.ID,
-		version:   string(sv.ID),
-		key:       sw.key,
-		want:      sw.want,
-		content:   reader,
-		unchecked: !sw.checked,
+		namespace:   sw.workspace.Ref.Namespace,
+		namespaceID: sw.workspace.NamespaceID,
+		workspace:   sw.workspace.ID,
+		version:     string(sv.ID),
+		key:         sw.key,
+		want:        sw.want,
+		content:     reader,
+		unchecked:   !sw.checked,
 	})
 
 	meta, err := stream.finish(storeErr)
@@ -248,7 +249,7 @@ func (s *Service) refuseStream(ctx context.Context, sw *streamWrite, cause error
 	cleanCtx, cancel := cleanupContext(ctx)
 	defer cancel()
 
-	if delErr := s.deleteBlobRetried(cleanCtx, sw.key); delErr != nil {
+	if delErr := s.blobs.deleteRetried(cleanCtx, sw.workspace.NamespaceID, sw.workspace.ID, sw.key); delErr != nil {
 		return errors.Join(cause, fmt.Errorf("delete refused blob of %s: %w", sw.version.ID, delErr))
 	}
 
@@ -317,7 +318,7 @@ func (s *Service) declarePlaceholder(
 		return StateVersion{}, "", fmt.Errorf("create state version for %s: %w", w.Ref, createErr)
 	}
 
-	key, err := attemptKey(sv)
+	key, err := s.blobs.attemptKey(w.NamespaceID, w.ID, sv.ID)
 	if err != nil {
 		return StateVersion{}, "", err
 	}

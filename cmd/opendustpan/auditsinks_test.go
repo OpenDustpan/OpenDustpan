@@ -130,7 +130,8 @@ func TestAuditSinksRefuseBadItems(t *testing.T) {
 		{name: "webhook over plain http", raw: "webhook:http://hooks.example/audit"},
 		{name: "blob with an invalid prefix", raw: "blob:Audit Logs"},
 		{name: "file with an empty path", raw: "file:"},
-		{name: "blob under the OpenTofu state prefix", raw: "blob:tofu/audit"},
+		{name: "blob under the namespaces prefix", raw: "blob:namespaces/audit"},
+		{name: "blob under the directory of a namespace", raw: "blob:namespaces/ns-acmeacmeacmeacmeacme/tofu"},
 		{name: "blob under the Pulumi state prefix", raw: "blob:pulumi"},
 		{name: "blob under the audit checkpoint prefix", raw: "blob:audit-checkpoints/audit"},
 	}
@@ -153,6 +154,20 @@ func TestAuditSinksRefuseBadItems(t *testing.T) {
 				t.Fatalf("open %q: got %v, want an --audit-sink error", tc.raw, err)
 			}
 		})
+	}
+}
+
+// TestAuditSinkRefusesTheNamespacesPrefix proves that an operator sink under
+// namespaces/ is refused with the reserved prefix error. The state blobs and
+// the item key blobs live there, and the sweepers delete unknown objects.
+func TestAuditSinkRefusesTheNamespacesPrefix(t *testing.T) {
+	t.Parallel()
+
+	for _, raw := range []string{"blob:namespaces", "blob:namespaces/audit", "blob:namespaces/ns-acmeacmeacmeacmeacme/x"} {
+		_, err := openTestSinks(t, []string{raw}, noEnv)
+		if !errors.Is(err, errReservedPrefix) {
+			t.Errorf("open %q: err = %v, want errReservedPrefix", raw, err)
+		}
 	}
 }
 

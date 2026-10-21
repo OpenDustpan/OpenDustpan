@@ -34,11 +34,11 @@ func TestOpenStateBlobRefusesSwappedVersionBlob(t *testing.T) {
 	}
 
 	parts := strings.Split(svB.Content.String(), "/")
-	if len(parts) != 4 {
-		t.Fatalf("content key = %q, want tofu/<workspace>/<version>/<attempt>", svB.Content)
+	if len(parts) != 6 {
+		t.Fatalf("content key = %q, want namespaces/<namespace>/tofu/<workspace>/<version>/<attempt>", svB.Content)
 	}
 
-	planted, keyErr := blob.ParseKey("tofu/" + parts[1] + "/" + parts[2] + "/swapped")
+	planted, keyErr := blob.ParseKey(strings.Join(parts[:5], "/") + "/swapped")
 	if keyErr != nil {
 		t.Fatalf("planted key: %v", keyErr)
 	}
