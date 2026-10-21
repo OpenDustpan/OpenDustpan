@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"opendustpan.org/opendustpan/internal/clientgen/model"
@@ -27,8 +28,57 @@ var ErrNotLoopback = errors.New("conformance: the address is not a loopback addr
 // answer of the server.
 var ErrPointer = errors.New("conformance: the JSON pointer does not fit the answer")
 
-// maxProxyBodyBytes is the largest request or answer body that the proxy reads.
+// ErrBodyTooLarge means that a request or an answer body is longer than
+// maxProxyBodyBytes. The harness refuses the body and never cuts it.
+var ErrBodyTooLarge = errors.New("conformance: the body is longer than the limit")
+
+// maxProxyBodyBytes is the largest request or answer body that the harness reads.
 const maxProxyBodyBytes = 16 << 20
+
+// readLimited reads a body up to maxProxyBodyBytes. It reads one byte more, so
+// that a longer body is an error and not a body that is cut in silence.
+func readLimited(r io.Reader) ([]byte, error) {
+	body, err := io.ReadAll(io.LimitReader(r, maxProxyBodyBytes+1))
+	if err != nil {
+		return nil, fmt.Errorf("read the body: %w", err)
+	}
+
+	if len(body) > maxProxyBodyBytes {
+		return nil, fmt.Errorf("%w (%d bytes)", ErrBodyTooLarge, maxProxyBodyBytes)
+	}
+
+	return body, nil
+}
+
+// loopbackClient returns an HTTP client that connects to a loopback address
+// only. The check is on the address of each connection, when it opens, so a
+// host name that resolves to another address is refused. The proxy settings of
+// the environment do not apply.
+func loopbackClient(timeout time.Duration) *http.Client {
+	dialer := &net.Dialer{
+		Timeout: timeout,
+		// Defense in depth: loopbackURL checks the name of the host too. This
+		// check stays so that a name that resolves to another address, or a
+		// redirect, cannot reach a host that is not on this machine.
+		ControlContext: func(_ context.Context, _, address string, _ syscall.RawConn) error {
+			host, _, err := net.SplitHostPort(address)
+			if err != nil {
+				return fmt.Errorf("%w: %q", ErrNotLoopback, address)
+			}
+
+			if ip := net.ParseIP(host); ip == nil || !ip.IsLoopback() {
+				return fmt.Errorf("%w: %q", ErrNotLoopback, address)
+			}
+
+			return nil
+		},
+	}
+
+	return &http.Client{
+		Transport: &http.Transport{Proxy: nil, DialContext: dialer.DialContext},
+		Timeout:   timeout,
+	}
+}
 
 // authorizationHeader is the request header that holds the token.
 const authorizationHeader = "Authorization"
@@ -72,12 +122,9 @@ func NewProxy(ctx context.Context, opts ProxyOptions) (*RecordingProxy, error) {
 
 	p := new(RecordingProxy)
 	p.upstream, p.operations = up, opts.Operations
-	p.client = &http.Client{
-		Transport: &http.Transport{Proxy: nil}, // The environment must not route loopback traffic elsewhere.
-		// The proxy gives a redirect to the client as it is.
-		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
-		Timeout:       DefaultCallTimeout,
-	}
+	p.client = loopbackClient(DefaultCallTimeout)
+	// The proxy gives a redirect to the client as it is.
+	p.client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 
 	if p.main, err = serve(ctx, "127.0.0.1", http.HandlerFunc(p.handle)); err != nil {
 		return nil, err
@@ -143,7 +190,7 @@ func (p *RecordingProxy) Reset() {
 func (p *RecordingProxy) handleOther(w http.ResponseWriter, r *http.Request) {
 	body, err := readBody(r)
 	if err != nil {
-		http.Error(w, "proxy: "+err.Error(), http.StatusBadRequest)
+		http.Error(w, "proxy: "+err.Error(), refusalStatus(err))
 
 		return
 	}
@@ -159,7 +206,7 @@ func (p *RecordingProxy) handleOther(w http.ResponseWriter, r *http.Request) {
 func (p *RecordingProxy) handle(w http.ResponseWriter, r *http.Request) {
 	body, err := readBody(r)
 	if err != nil {
-		http.Error(w, "proxy: "+err.Error(), http.StatusBadRequest)
+		http.Error(w, "proxy: "+err.Error(), refusalStatus(err))
 
 		return
 	}
@@ -171,9 +218,19 @@ func (p *RecordingProxy) handle(w http.ResponseWriter, r *http.Request) {
 	p.mu.Unlock()
 }
 
+// refusalStatus is the status for a request that the proxy cannot read: 413
+// for a body over the limit, and 400 for another fault.
+func refusalStatus(err error) int {
+	if errors.Is(err, ErrBodyTooLarge) {
+		return http.StatusRequestEntityTooLarge
+	}
+
+	return http.StatusBadRequest
+}
+
 // readBody reads the body of a request up to the limit.
 func readBody(r *http.Request) ([]byte, error) {
-	body, err := io.ReadAll(io.LimitReader(r.Body, maxProxyBodyBytes))
+	body, err := readLimited(r.Body)
 	if err != nil {
 		return nil, fmt.Errorf("read the request: %w", err)
 	}
@@ -365,7 +422,7 @@ func (p *RecordingProxy) forward(r *http.Request, body []byte) (upstreamAnswer, 
 
 	up.status, up.header = resp.StatusCode, resp.Header
 
-	if up.body, err = io.ReadAll(io.LimitReader(resp.Body, maxProxyBodyBytes)); err != nil {
+	if up.body, err = readLimited(resp.Body); err != nil {
 		return up, fmt.Errorf("read the answer of the server: %w", err)
 	}
 

@@ -2,7 +2,6 @@ package conformance
 
 import (
 	"bufio"
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -89,11 +88,7 @@ func StartDevServer(ctx context.Context, opts DevOptions) (*DevServer, error) {
 		return nil, fmt.Errorf("server stderr: %w", err)
 	}
 
-	s := new(DevServer)
-	s.cmd, s.cancel, s.done, s.release = cmd, cancel, make(chan struct{}), release
-	s.stderr = new(tailBuffer)
-	s.stderr.max = stderrKeepBytes
-	s.client = &http.Client{Transport: &http.Transport{Proxy: nil}, Timeout: DefaultCallTimeout}
+	s := newDevServer(cmd, cancel, release)
 
 	if err = cmd.Start(); err != nil {
 		cancel()
@@ -110,6 +105,18 @@ func StartDevServer(ctx context.Context, opts DevOptions) (*DevServer, error) {
 	}
 
 	return s, nil
+}
+
+// newDevServer returns a DevServer with its client, which connects to
+// loopback addresses only.
+func newDevServer(cmd *exec.Cmd, cancel context.CancelFunc, release string) *DevServer {
+	s := new(DevServer)
+	s.cmd, s.cancel, s.done, s.release = cmd, cancel, make(chan struct{}), release
+	s.stderr = new(tailBuffer)
+	s.stderr.max = stderrKeepBytes
+	s.client = loopbackClient(DefaultCallTimeout)
+
+	return s
 }
 
 // releaseOf asks the binary for its version.
@@ -148,8 +155,8 @@ func (s *DevServer) Description(ctx context.Context) ([]byte, error) {
 
 	defer resp.Body.Close() //nolint:errcheck // The body is read below.
 
-	var buf bytes.Buffer
-	if _, err = io.Copy(&buf, io.LimitReader(resp.Body, maxProxyBodyBytes)); err != nil {
+	doc, err := readLimited(resp.Body)
+	if err != nil {
 		return nil, fmt.Errorf("read the description: %w", err)
 	}
 
@@ -157,7 +164,7 @@ func (s *DevServer) Description(ctx context.Context) ([]byte, error) {
 		return nil, fmt.Errorf("%w: the description route answered %d", ErrServer, resp.StatusCode)
 	}
 
-	return buf.Bytes(), nil
+	return doc, nil
 }
 
 // Close stops the server with an interrupt, and kills it after five seconds.

@@ -10,7 +10,6 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"reflect"
@@ -170,7 +169,7 @@ func direct(ctx context.Context, env Env, dr directRequest) (answer, error) {
 		req.Header.Set("Content-Type", dr.contentType)
 	}
 
-	client := &http.Client{Transport: &http.Transport{Proxy: nil}, Timeout: DefaultCallTimeout}
+	client := loopbackClient(DefaultCallTimeout)
 	defer client.CloseIdleConnections()
 
 	resp, err := client.Do(req)
@@ -182,7 +181,7 @@ func direct(ctx context.Context, env Env, dr directRequest) (answer, error) {
 
 	out.status, out.header = resp.StatusCode, resp.Header
 
-	if out.body, err = io.ReadAll(io.LimitReader(resp.Body, maxProxyBodyBytes)); err != nil {
+	if out.body, err = readLimited(resp.Body); err != nil {
 		return out, fmt.Errorf("read the answer: %w", err)
 	}
 
