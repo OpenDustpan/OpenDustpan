@@ -713,7 +713,7 @@ func secretRoute(t *testing.T, handler *pulumi.Handler, pattern string) pulumi.R
 
 	t.Fatalf("route %q is not declared", pattern)
 
-	return pulumi.Route{Method: "", Path: "", Scope: 0, Actions: nil, Resolve: nil, Serve: nil}
+	return pulumi.Route{Method: "", Path: "", Scope: 0, Actions: nil, Resolve: nil, Serve: nil, Lease: nil}
 }
 
 // TestSecretsRoundTrip encrypts and decrypts one value through HTTP.

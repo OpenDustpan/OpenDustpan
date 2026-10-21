@@ -1121,7 +1121,7 @@ func updateRoute(t *testing.T, handler *pulumi.Handler, pattern string) pulumi.R
 
 	t.Fatalf("route %q is not declared", pattern)
 
-	return pulumi.Route{Method: "", Path: "", Scope: 0, Actions: nil, Resolve: nil, Serve: nil}
+	return pulumi.Route{Method: "", Path: "", Scope: 0, Actions: nil, Resolve: nil, Serve: nil, Lease: nil}
 }
 
 // accessTarget holds the target and body for an access-authed update route.
