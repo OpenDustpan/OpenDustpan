@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -12,6 +13,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/manuallock"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/stack"
+	"opendustpan.org/opendustpan/pkg/stack/stacktest"
 )
 
 // errManualLockRead is the failure of a store that cannot read a manual lock.
@@ -107,6 +109,7 @@ func withManualLocks(t *testing.T, f updatesFixture, locks stack.ManualLocks) *s
 		Namespaces:         f.namespaces,
 		Stacks:             f.store,
 		Blobs:              f.blobs,
+		Refusals:           stacktest.NewRefusals(),
 		Now:                f.clock.Now,
 		Logger:             nil,
 		MaxCheckpointBytes: 1024,
@@ -302,7 +305,11 @@ func newLockedStackService(t *testing.T, locks stack.ManualLocks) (*stack.Servic
 	}
 
 	namespaces, err := namespace.NewService(
-		namespace.Config{Store: &memNamespaces{ns: ns}, Now: func() time.Time { return now }, Region: "local"},
+		namespace.Config{
+			Store:  &memNamespaces{ns: ns, reads: atomic.Int64{}},
+			Now:    func() time.Time { return now },
+			Region: "local",
+		},
 	)
 	if err != nil {
 		t.Fatalf("namespace service: %v", err)

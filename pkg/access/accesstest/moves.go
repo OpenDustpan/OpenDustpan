@@ -112,7 +112,8 @@ func seedStack(t *testing.T, s access.Store) {
 	}
 
 	stk := stack.Stack{
-		CreatedAt: at(0), UpdatedAt: at(0), Tags: map[string]string{}, Ref: ref, ID: "stk-web", Version: 0,
+		NamespaceID: "",
+		CreatedAt:   at(0), UpdatedAt: at(0), Tags: map[string]string{}, Ref: ref, ID: "stk-web", Version: 0,
 	}
 	if err := st.CreateStack(t.Context(), stk, ns.Fence()); err != nil {
 		t.Fatalf("create stack: %v", err)

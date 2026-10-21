@@ -64,9 +64,12 @@ VALUES (?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT DO NOTHING;
 
 -- name: GetStack :one
-SELECT namespace, project, name, id, version, created_at_ms, updated_at_ms
-FROM stacks
-WHERE namespace = ? AND project = ? AND name = ? AND deleted_at_ms IS NULL;
+-- The namespace ID comes from the join, so a caller that reads blobs of the
+-- stack builds their scope without a second read of the namespace.
+SELECT s.namespace, s.project, s.name, s.id, n.id AS namespace_id, s.version, s.created_at_ms, s.updated_at_ms
+FROM stacks AS s
+JOIN namespaces AS n ON n.name = s.namespace
+WHERE s.namespace = ? AND s.project = ? AND s.name = ? AND s.deleted_at_ms IS NULL;
 
 -- name: ListStacksInNamespace :many
 SELECT namespace, project, name, id, version, created_at_ms, updated_at_ms
@@ -211,11 +214,15 @@ FROM updates
 WHERE stack_id = ? AND id = ?;
 
 -- name: GetLatestCheckpoint :one
-SELECT c.stack_id, c.update_id, c.lease_digest, c.schema_version, c.sequence,
+-- The namespace ID comes from the join, so a caller reads the scope of the
+-- blob of the row in the same call.
+SELECT c.stack_id, n.id AS namespace_id, c.update_id, c.lease_digest, c.schema_version, c.sequence,
        c.digest, c.invalid, c.features_json, c.saved_at_ms,
        c.blob_key, c.size, c.blob_size, c.blob_md5
 FROM checkpoints AS c
 JOIN updates AS u ON c.stack_id = u.stack_id AND c.update_id = u.id
+JOIN stacks AS st ON st.id = c.stack_id
+JOIN namespaces AS n ON n.name = st.namespace
 WHERE c.stack_id = ?
 ORDER BY u.version DESC
 LIMIT 1;
@@ -258,18 +265,22 @@ ORDER BY u.version DESC
 LIMIT 1;
 
 -- name: GetCheckpointByUpdate :one
-SELECT stack_id, update_id, lease_digest, schema_version, sequence,
-       digest, invalid, features_json, saved_at_ms,
-       blob_key, size, blob_size, blob_md5
-FROM checkpoints
-WHERE stack_id = ? AND update_id = ?;
+SELECT c.stack_id, n.id AS namespace_id, c.update_id, c.lease_digest, c.schema_version, c.sequence,
+       c.digest, c.invalid, c.features_json, c.saved_at_ms,
+       c.blob_key, c.size, c.blob_size, c.blob_md5
+FROM checkpoints AS c
+JOIN stacks AS st ON st.id = c.stack_id
+JOIN namespaces AS n ON n.name = st.namespace
+WHERE c.stack_id = ? AND c.update_id = ?;
 
 -- name: GetCheckpointByVersion :one
-SELECT c.stack_id, c.update_id, c.lease_digest, c.schema_version, c.sequence,
+SELECT c.stack_id, n.id AS namespace_id, c.update_id, c.lease_digest, c.schema_version, c.sequence,
        c.digest, c.invalid, c.features_json, c.saved_at_ms,
        c.blob_key, c.size, c.blob_size, c.blob_md5
 FROM checkpoints AS c
 JOIN updates AS u ON c.stack_id = u.stack_id AND c.update_id = u.id
+JOIN stacks AS st ON st.id = c.stack_id
+JOIN namespaces AS n ON n.name = st.namespace
 WHERE c.stack_id = ? AND u.version = ?;
 
 -- name: PutCheckpoint :exec
@@ -1808,16 +1819,18 @@ DELETE FROM blob_purges WHERE tool = ? AND unit_id = ?;
 
 -- name: ListBlobPurges :many
 -- The oldest rows first, so the sweep finishes the oldest purges first.
-SELECT tool, unit_id, namespace, purged_at_ms
-FROM blob_purges
+SELECT bp.tool, bp.unit_id, bp.namespace, COALESCE(n.id, '') AS namespace_id, bp.purged_at_ms
+FROM blob_purges AS bp
+LEFT JOIN namespaces AS n ON n.name = bp.namespace
 ORDER BY purged_at_ms, tool, unit_id
 LIMIT ?;
 
 -- name: ListBlobPurgesAfter :many
 -- The page of ListBlobPurges after the cursor (purge time, tool, unit ID).
 -- The lower bound on purged_at_ms lets the index scan start at the cursor.
-SELECT tool, unit_id, namespace, purged_at_ms
-FROM blob_purges
+SELECT bp.tool, bp.unit_id, bp.namespace, COALESCE(n.id, '') AS namespace_id, bp.purged_at_ms
+FROM blob_purges AS bp
+LEFT JOIN namespaces AS n ON n.name = bp.namespace
 WHERE purged_at_ms >= sqlc.arg(after_ms)
   AND (purged_at_ms > sqlc.arg(after_ms)
     OR (purged_at_ms = sqlc.arg(after_ms) AND tool > sqlc.arg(after_tool))

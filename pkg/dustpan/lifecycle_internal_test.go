@@ -64,7 +64,8 @@ func newScopeFixture(t *testing.T) scopeFixture {
 
 	ref := stack.Ref{Namespace: "acme", Project: "web", Stack: "prod"}
 	s := stack.Stack{
-		CreatedAt: scopeAt(), UpdatedAt: scopeAt(), Tags: map[string]string{}, Ref: ref, ID: "stk-scope", Version: 0,
+		NamespaceID: "",
+		CreatedAt:   scopeAt(), UpdatedAt: scopeAt(), Tags: map[string]string{}, Ref: ref, ID: "stk-scope", Version: 0,
 	}
 
 	if createErr := st.CreateStack(t.Context(), s, rec.Fence()); createErr != nil {

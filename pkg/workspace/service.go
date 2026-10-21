@@ -20,6 +20,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/manuallock"
 	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/scopeaudit"
 	"opendustpan.org/opendustpan/pkg/secret"
 )
 
@@ -258,7 +259,7 @@ type Config struct {
 	Namespaces *namespace.Service
 	// OutOfScope records each refusal of a blob key outside the namespace of
 	// a call. It is required: a refusal must reach the audit log.
-	OutOfScope secret.OutOfScopeRecorder
+	OutOfScope scopeaudit.Recorder
 	// Sealer seals state blobs and outputs documents with the data key of
 	// the workspace scope. It is required: every stored version is sealed.
 	Sealer Sealer
@@ -514,9 +515,10 @@ func (s *Service) RestoreDeleted(
 // PurgeDeleted removes the deleted workspace id of ns for good, before its
 // retention period ends (ADR 47). The store removes its rows, records the
 // blob purge and appends the audit entry e in one fenced transaction. The
-// caller then removes the state blobs with DeletePurgedBlobs. It returns
-// ErrNotFound if ns has no deleted workspace id.
-func (s *Service) PurgeDeleted(ctx context.Context, ns namespace.Name, id ID, e audit.Entry) error {
+// caller then removes the state blobs with DeletePurgedBlobs, in the scope of
+// the namespace ID that this call returns. It returns ErrNotFound if ns has
+// no deleted workspace id.
+func (s *Service) PurgeDeleted(ctx context.Context, ns namespace.Name, id ID, e audit.Entry) (namespace.ID, error) {
 	return s.purge(ctx, ns, id, time.Time{}, e)
 }
 
@@ -525,25 +527,23 @@ func (s *Service) PurgeDeleted(ctx context.Context, ns namespace.Name, id ID, e 
 // dueBy. The store checks the end of the retention in the purge
 // transaction. It returns ErrNotFound if ns has no deleted workspace id
 // whose retention period ended by then: a restore and a new delete after
-// the caller read the unit gave it a new retention period.
-func (s *Service) PurgeExpired(ctx context.Context, ns namespace.Name, id ID, dueBy time.Time, e audit.Entry) error {
+// the caller read the unit gave it a new retention period. It returns the ID
+// of the namespace row that it resolved, for the delete of the blobs.
+func (s *Service) PurgeExpired(
+	ctx context.Context, ns namespace.Name, id ID, dueBy time.Time, e audit.Entry,
+) (namespace.ID, error) {
 	return s.purge(ctx, ns, id, dueBy, e)
 }
 
-// DeletePurgedBlobs removes every state blob of the purged workspace id,
-// with a retry for each blob (ADR 47). The purge runs it after the rows are
-// gone, so no upload can still commit a row that names these blobs. It
-// returns an error when a blob may remain, so the caller keeps the blob
-// purge record for the sweep. No log line and no error names a blob key.
-func (s *Service) DeletePurgedBlobs(ctx context.Context, ns namespace.Name, id ID) error {
-	// The workspace row is gone, so the namespace record gives the ID. This
-	// is the one read of the namespace of a purge; the blob calls read none.
-	n, err := s.namespaces.Get(ctx, ns)
-	if err != nil {
-		return fmt.Errorf("scope of state blobs: %w", err)
-	}
-
-	listed, err := s.blobs.list(ctx, n.ID, id)
+// DeletePurgedBlobs removes every state blob of the purged workspace id of the
+// namespace with the ID ns, with a retry for each blob (ADR 47). The caller
+// takes ns from the namespace row of the purge or from the blob purge record,
+// never from a request field. The purge runs it after the rows are gone, so no
+// upload can still commit a row that names these blobs. It returns an error
+// when a blob may remain, so the caller keeps the blob purge record for the
+// sweep. No log line and no error names a blob key.
+func (s *Service) DeletePurgedBlobs(ctx context.Context, ns namespace.ID, id ID) error {
+	listed, err := s.blobs.list(ctx, ns, id)
 	if err != nil {
 		return fmt.Errorf("list state blobs of workspace %s: %w", id, err)
 	}
@@ -551,7 +551,7 @@ func (s *Service) DeletePurgedBlobs(ctx context.Context, ns namespace.Name, id I
 	failed := 0
 
 	for _, obj := range listed {
-		if deleteErr := s.blobs.deleteRetried(ctx, n.ID, id, obj.Key); deleteErr != nil {
+		if deleteErr := s.blobs.deleteRetried(ctx, ns, id, obj.Key); deleteErr != nil {
 			failed++
 		}
 	}
@@ -2669,19 +2669,21 @@ func (s *Service) deleteOnCleanup(ctx context.Context, w Workspace, key blob.Key
 
 // purge removes the deleted workspace id of ns with the retention check of
 // dueBy, which zero turns off.
-func (s *Service) purge(ctx context.Context, ns namespace.Name, id ID, dueBy time.Time, e audit.Entry) error {
-	fence, err := s.fence(ctx, ns)
+func (s *Service) purge(
+	ctx context.Context, ns namespace.Name, id ID, dueBy time.Time, e audit.Entry,
+) (namespace.ID, error) {
+	n, err := s.writable(ctx, ns)
 	if err != nil {
-		return err
+		return "", err
 	}
 
 	e.At = s.clock()
 
-	if err := s.workspaces.PurgeWorkspace(ctx, id, fence, dueBy, e); err != nil {
-		return fmt.Errorf("purge workspace %s: %w", id, err)
+	if err := s.workspaces.PurgeWorkspace(ctx, id, n.Fence(), dueBy, e); err != nil {
+		return "", fmt.Errorf("purge workspace %s: %w", id, err)
 	}
 
-	return nil
+	return n.ID, nil
 }
 
 // checkManualLock refuses a lock request on the workspace id while a manual

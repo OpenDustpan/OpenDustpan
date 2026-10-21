@@ -19,6 +19,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/stack"
+	"opendustpan.org/opendustpan/pkg/stack/stacktest"
 	"opendustpan.org/opendustpan/pkg/workspace"
 	"opendustpan.org/opendustpan/pkg/workspace/workspacetest"
 )
@@ -536,6 +537,7 @@ func newFixtureWith(
 		Namespaces:         namespaces,
 		Stacks:             f.stacks,
 		Blobs:              newTestBlobs(t),
+		Refusals:           stacktest.NewRefusals(),
 		Now:                nil,
 		Logger:             nil,
 		MaxCheckpointBytes: 0,
@@ -607,12 +609,13 @@ func seedRunningUpdate(t *testing.T, f *fixture, ref stack.Ref) {
 // the service's stack list.
 func addRunningUpdate(f *fixture, ref stack.Ref, id stack.UpdateID, stackID stack.ID) {
 	f.stacks.stacks = append(f.stacks.stacks, stack.Stack{
-		CreatedAt: time.Now(),
-		UpdatedAt: time.Now(),
-		Tags:      map[string]string{},
-		Ref:       ref,
-		ID:        stackID,
-		Version:   0,
+		NamespaceID: "",
+		CreatedAt:   time.Now(),
+		UpdatedAt:   time.Now(),
+		Tags:        map[string]string{},
+		Ref:         ref,
+		ID:          stackID,
+		Version:     0,
 	})
 
 	f.updates.updates[id] = stack.Update{
@@ -688,6 +691,7 @@ func TestNewServiceRequiresDependencies(t *testing.T) {
 		Namespaces:         namespaces,
 		Stacks:             f.stacks,
 		Blobs:              newTestBlobs(t),
+		Refusals:           stacktest.NewRefusals(),
 		Now:                nil,
 		Logger:             nil,
 		MaxCheckpointBytes: 0,
