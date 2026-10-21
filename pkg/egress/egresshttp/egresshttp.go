@@ -17,10 +17,18 @@ import (
 	"opendustpan.org/opendustpan/pkg/egress"
 )
 
-// Control is a net.Dialer Control function. It returns egress.ErrRefused
-// for a connection to an address that egress.CheckAddr refuses. It runs
-// after name resolution, on the address of each connection, so a DNS answer
-// that changes after a URL check cannot pass it.
+// ErrDialRefused marks a refusal of the dial guard: the name of the URL
+// resolved to an address that the rules refuse. The error also matches
+// egress.ErrRefused. A caller that answers a principal maps it to the class
+// of a failed connection, so that the answer does not tell a name that
+// resolves to a private address from a name that does not resolve.
+var ErrDialRefused = errors.New("the connection was refused by the address rules")
+
+// Control is a net.Dialer Control function. It returns an error that matches
+// ErrDialRefused and egress.ErrRefused for a connection to an address that
+// egress.CheckAddr refuses. It runs after name resolution, on the address of
+// each connection, so a DNS answer that changes after a URL check cannot pass
+// it.
 func Control(_, address string, _ syscall.RawConn) error {
 	return ControlWith(egress.Rules{Allow: nil, Loopback: false})("", address, nil)
 }
@@ -31,10 +39,14 @@ func ControlWith(rules egress.Rules) func(network, address string, c syscall.Raw
 	return func(_, address string, _ syscall.RawConn) error {
 		ap, err := netip.ParseAddrPort(address)
 		if err != nil {
-			return fmt.Errorf("%w: the address does not parse", egress.ErrRefused)
+			return fmt.Errorf("%w: %w: the address does not parse", ErrDialRefused, egress.ErrRefused)
 		}
 
-		return rules.CheckAddr(ap.Addr())
+		if err = rules.CheckAddr(ap.Addr()); err != nil {
+			return fmt.Errorf("%w: %w", ErrDialRefused, err)
+		}
+
+		return nil
 	}
 }
 

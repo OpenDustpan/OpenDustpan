@@ -36,6 +36,7 @@ var componentOnly = map[string]string{
 	"ip-allowlists":                   ComponentAPI,
 	"ip-allowlists-include-bootstrap": ComponentAPI,
 	"git-host-allowed-ranges":         ComponentAPI,
+	"destination-ports":               ComponentAPI,
 	"oidc-issuer":                     ComponentAPI,
 	"oidc-provider":                   ComponentAPI,
 	"oidc-display-name":               ComponentAPI,

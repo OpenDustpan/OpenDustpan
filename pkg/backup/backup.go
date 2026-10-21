@@ -156,6 +156,9 @@ var Tables = []string{
 	TableGitHostAppRegistrations,
 	TableGitHostInstallations,
 	"git_host_connections",
+	"notification_sinks",
+	"notification_sink_secrets",
+	"notification_sink_refs",
 }
 
 // TablesCopy returns a copy of Tables. Callers that sort or filter the list

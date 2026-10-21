@@ -151,8 +151,15 @@ func newSinkSealer(t *testing.T) notify.SinkSealer {
 
 func sealSink(id string, scope namespace.Name, refs ...string) notify.Sink {
 	return notify.Sink{
-		ID: id, Scope: scope, Kind: notify.SinkWebhook, Name: "Ops", Target: "https://hooks.example.com/ops",
-		SecretRefs: refs, CreatedBy: "alice", Version: 0,
+		ID:         id,
+		Scope:      scope,
+		Kind:       notify.SinkWebhook,
+		Name:       "Ops",
+		Platform:   "",
+		Target:     "https://hooks.example.com/ops",
+		SecretRefs: refs,
+		CreatedBy:  "alice",
+		Version:    0,
 	}
 }
 

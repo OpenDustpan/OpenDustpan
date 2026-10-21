@@ -16,6 +16,7 @@ import (
 	auditapi "opendustpan.org/opendustpan/internal/api/audit"
 	inventoryapi "opendustpan.org/opendustpan/internal/api/inventory"
 	jobsapi "opendustpan.org/opendustpan/internal/api/jobs"
+	notificationsapi "opendustpan.org/opendustpan/internal/api/notifications"
 	contextapi "opendustpan.org/opendustpan/internal/api/objectcontext"
 	profileapi "opendustpan.org/opendustpan/internal/api/profile"
 	pulumiapi "opendustpan.org/opendustpan/internal/api/pulumi"
@@ -28,6 +29,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/collection"
 	"opendustpan.org/opendustpan/pkg/forge"
+	"opendustpan.org/opendustpan/pkg/egress"
 	"opendustpan.org/opendustpan/pkg/gate"
 	"opendustpan.org/opendustpan/pkg/identity"
 	coreinventory "opendustpan.org/opendustpan/pkg/inventory"
@@ -36,6 +38,8 @@ import (
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/manuallock"
 	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/notify"
+	"opendustpan.org/opendustpan/pkg/notify/sinks"
 	"opendustpan.org/opendustpan/pkg/objectcontext"
 	"opendustpan.org/opendustpan/pkg/profile"
 	"opendustpan.org/opendustpan/pkg/savedview"
@@ -83,6 +87,7 @@ func ServedRoutes(tb testing.TB) []RouteRef {
 	auditRoutes := coverageAuditRoutes(tb, namespaces)
 	contextRoutes := coverageContextRoutes(tb, namespaces)
 	profileRoutes := coverageProfileRoutes(tb)
+	sinkRoutes := coverageSinkRoutes(tb)
 	jobRoutes := coverageJobRoutes(tb, namespaces)
 	server := coverageServerRoutes(tb)
 
@@ -104,6 +109,8 @@ func ServedRoutes(tb testing.TB) []RouteRef {
 		)+len(
 			profileRoutes,
 		)+len(
+			sinkRoutes,
+		)+len(
 			jobRoutes,
 		)+len(
 			server,
@@ -116,6 +123,7 @@ func ServedRoutes(tb testing.TB) []RouteRef {
 	out = append(out, auditRoutes...)
 	out = append(out, contextRoutes...)
 	out = append(out, profileRoutes...)
+	out = append(out, sinkRoutes...)
 	out = append(out, jobRoutes...)
 	out = append(out, server...)
 
@@ -826,6 +834,50 @@ func coverageProfileRoutes(tb testing.TB) []RouteRef {
 	return out
 }
 
+// coverageSinkRoutes returns the routes of the notification sink API. The
+// stores are empty shells: they exist only to build a Handler for its route
+// table.
+func coverageSinkRoutes(tb testing.TB) []RouteRef {
+	tb.Helper()
+
+	svc, err := sinks.NewService(sinks.Config{
+		Store:      struct{ notify.SinkStore }{nil},
+		Sealer:     notify.SinkSealer{Namespaces: struct{ notify.ScopeSealer }{nil}, Installation: nil},
+		Namespaces: coverageNamespaces(tb),
+		Senders:    nil,
+		Ports:      egress.Ports{},
+		Now:        nil,
+	})
+	if err != nil {
+		tb.Fatalf("sink service: %v", err)
+	}
+
+	handler, err := notificationsapi.NewHandler(notificationsapi.Config{
+		Sinks:          svc,
+		Authenticator:  coverageAuthenticator{},
+		Authorizer:     coverageAuthorizer{},
+		Sessions:       nil,
+		Idempotency:    nil,
+		Logger:         slog.New(slog.DiscardHandler),
+		Audit:          nil,
+		Namespaces:     nil,
+		OnAuditFailure: nil,
+		DenialLimiter:  nil,
+	})
+	if err != nil {
+		tb.Fatalf("sink handler: %v", err)
+	}
+
+	routes := handler.Routes()
+	out := make([]RouteRef, 0, len(routes))
+
+	for _, route := range routes {
+		out = append(out, RouteRef{Method: route.Method, Path: route.Path})
+	}
+
+	return out
+}
+
 // coverageContextStore holds no context. It exists only to build a Handler
 // for its route table; no request is ever served.
 type coverageContextStore struct{}
@@ -1309,6 +1361,7 @@ func CoverageAllowlist() []AllowEntry {
 		preferencesAllowEntries(),
 		savedViewAllowEntries(),
 		gitHostAllowEntries(),
+		sinkAllowEntries(),
 		apiDescriptionAllowEntries(),
 	)
 }
@@ -2378,6 +2431,26 @@ func savedViewAllowEntries() []AllowEntry {
 		{Method: http.MethodGet, Path: base + "/{view_id}", CoveringTest: test, Reason: why},
 		{Method: http.MethodDelete, Path: base + "/{view_id}", CoveringTest: test, Reason: why},
 		{Method: http.MethodGet, Path: base + "/{view_id}/units", CoveringTest: test, Reason: why},
+	}
+}
+
+// sinkAllowEntries covers the routes of the notification sinks. No CLI calls
+// them: the console and the clients of the API do. The steps of
+// TestNotificationSinksAPI call each of them with the token of an administrator.
+func sinkAllowEntries() []AllowEntry {
+	const (
+		base = "/api/dustpan/v1/namespaces/{namespace}/sinks"
+		test = "TestNotificationSinksAPI"
+		why  = "Console and client route: no CLI calls it. The steps of TestNotificationSinksAPI call it through the API."
+	)
+
+	return []AllowEntry{
+		{Method: http.MethodPost, Path: base, CoveringTest: test, Reason: why},
+		{Method: http.MethodGet, Path: base, CoveringTest: test, Reason: why},
+		{Method: http.MethodGet, Path: base + "/{sink_id}", CoveringTest: test, Reason: why},
+		{Method: http.MethodPut, Path: base + "/{sink_id}", CoveringTest: test, Reason: why},
+		{Method: http.MethodDelete, Path: base + "/{sink_id}", CoveringTest: test, Reason: why},
+		{Method: http.MethodPost, Path: base + "/{sink_id}/test", CoveringTest: test, Reason: why},
 	}
 }
 

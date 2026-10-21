@@ -616,6 +616,27 @@ func (q *Queries) ClaimInstallationKind(ctx context.Context, kind pgtype.Text) (
 	return result.RowsAffected(), nil
 }
 
+const claimNotificationSinkRef = `-- name: ClaimNotificationSinkRef :execrows
+INSERT INTO notification_sink_refs (namespace_id, ref)
+VALUES ((SELECT n.id FROM namespaces AS n WHERE n.name = $1), $2)
+ON CONFLICT (namespace_id, ref) DO NOTHING
+`
+
+type ClaimNotificationSinkRefParams struct {
+	Namespace string
+	Ref       string
+}
+
+// Records that the namespace holds the ref. It writes nothing, and the caller
+// refuses the new value, when the namespace held the ref before.
+func (q *Queries) ClaimNotificationSinkRef(ctx context.Context, arg ClaimNotificationSinkRefParams) (int64, error) {
+	result, err := q.db.Exec(ctx, claimNotificationSinkRef, arg.Namespace, arg.Ref)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const claimSinkOperation = `-- name: ClaimSinkOperation :one
 UPDATE durable_operations
 SET state = 'running', attempt = attempt + 1, expiries = expiries + $1::bigint,
@@ -2855,6 +2876,57 @@ WHERE unit_id = $1 AND NOT EXISTS (
 // restore calls it, so a restored unit never points at a missing collection.
 func (q *Queries) DeleteMissingCollectionMembership(ctx context.Context, unitID string) error {
 	_, err := q.db.Exec(ctx, deleteMissingCollectionMembership, unitID)
+	return err
+}
+
+const deleteNotificationSink = `-- name: DeleteNotificationSink :execrows
+DELETE FROM notification_sinks
+WHERE notification_sinks.id = $1 AND notification_sinks.namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = $2)
+`
+
+type DeleteNotificationSinkParams struct {
+	ID        string
+	Namespace string
+}
+
+func (q *Queries) DeleteNotificationSink(ctx context.Context, arg DeleteNotificationSinkParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteNotificationSink, arg.ID, arg.Namespace)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const deleteNotificationSinkSecret = `-- name: DeleteNotificationSinkSecret :exec
+DELETE FROM notification_sink_secrets
+WHERE notification_sink_secrets.ref = $1 AND notification_sink_secrets.sink_id = $2
+  AND notification_sink_secrets.namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = $3)
+`
+
+type DeleteNotificationSinkSecretParams struct {
+	Ref       string
+	SinkID    string
+	Namespace string
+}
+
+func (q *Queries) DeleteNotificationSinkSecret(ctx context.Context, arg DeleteNotificationSinkSecretParams) error {
+	_, err := q.db.Exec(ctx, deleteNotificationSinkSecret, arg.Ref, arg.SinkID, arg.Namespace)
+	return err
+}
+
+const deleteNotificationSinkSecrets = `-- name: DeleteNotificationSinkSecrets :exec
+DELETE FROM notification_sink_secrets
+WHERE notification_sink_secrets.sink_id = $1
+  AND notification_sink_secrets.namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = $2)
+`
+
+type DeleteNotificationSinkSecretsParams struct {
+	SinkID    string
+	Namespace string
+}
+
+func (q *Queries) DeleteNotificationSinkSecrets(ctx context.Context, arg DeleteNotificationSinkSecretsParams) error {
+	_, err := q.db.Exec(ctx, deleteNotificationSinkSecrets, arg.SinkID, arg.Namespace)
 	return err
 }
 
@@ -5624,6 +5696,41 @@ func (q *Queries) GetNamespaceIPAllowlist(ctx context.Context, name string) (str
 	return ip_allowlist, err
 }
 
+const getNotificationSink = `-- name: GetNotificationSink :one
+SELECT k.id, n.name AS namespace, k.kind, k.name, k.platform, k.target, k.created_by, k.version
+FROM notification_sinks AS k
+JOIN namespaces AS n ON n.id = k.namespace_id
+WHERE k.id = $1
+`
+
+type GetNotificationSinkRow struct {
+	ID        string
+	Namespace string
+	Kind      string
+	Name      string
+	Platform  string
+	Target    string
+	CreatedBy string
+	Version   int64
+}
+
+// The caller compares the namespace of the row with the scope of the request.
+func (q *Queries) GetNotificationSink(ctx context.Context, id string) (GetNotificationSinkRow, error) {
+	row := q.db.QueryRow(ctx, getNotificationSink, id)
+	var i GetNotificationSinkRow
+	err := row.Scan(
+		&i.ID,
+		&i.Namespace,
+		&i.Kind,
+		&i.Name,
+		&i.Platform,
+		&i.Target,
+		&i.CreatedBy,
+		&i.Version,
+	)
+	return i, err
+}
+
 const getOIDCProviderIssuer = `-- name: GetOIDCProviderIssuer :one
 SELECT issuer FROM oidc_providers WHERE provider_id = $1
 `
@@ -7999,6 +8106,70 @@ func (q *Queries) InsertManualLock(ctx context.Context, arg InsertManualLockPara
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const insertNotificationSink = `-- name: InsertNotificationSink :execrows
+INSERT INTO notification_sinks (id, namespace_id, kind, name, platform, target, created_by, version)
+VALUES (
+    $1, (SELECT n.id FROM namespaces AS n WHERE n.name = $2),
+    $3, $4, $5, $6, $7, 1
+)
+ON CONFLICT (id) DO NOTHING
+`
+
+type InsertNotificationSinkParams struct {
+	ID        string
+	Namespace string
+	Kind      string
+	Name      string
+	Platform  string
+	Target    string
+	CreatedBy string
+}
+
+// The caller checks the fence in the same transaction. A sink with the same
+// ID is not written.
+func (q *Queries) InsertNotificationSink(ctx context.Context, arg InsertNotificationSinkParams) (int64, error) {
+	result, err := q.db.Exec(ctx, insertNotificationSink,
+		arg.ID,
+		arg.Namespace,
+		arg.Kind,
+		arg.Name,
+		arg.Platform,
+		arg.Target,
+		arg.CreatedBy,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const insertNotificationSinkSecret = `-- name: InsertNotificationSinkSecret :exec
+INSERT INTO notification_sink_secrets (namespace_id, ref, sink_id, position, ciphertext)
+VALUES (
+    (SELECT n.id FROM namespaces AS n WHERE n.name = $1), $2, $3,
+    $4, $5
+)
+`
+
+type InsertNotificationSinkSecretParams struct {
+	Namespace  string
+	Ref        string
+	SinkID     string
+	Position   int64
+	Ciphertext []byte
+}
+
+func (q *Queries) InsertNotificationSinkSecret(ctx context.Context, arg InsertNotificationSinkSecretParams) error {
+	_, err := q.db.Exec(ctx, insertNotificationSinkSecret,
+		arg.Namespace,
+		arg.Ref,
+		arg.SinkID,
+		arg.Position,
+		arg.Ciphertext,
+	)
+	return err
 }
 
 const insertOIDCProvider = `-- name: InsertOIDCProvider :exec
@@ -10904,6 +11075,126 @@ func (q *Queries) ListNarrowerGateObjects(ctx context.Context, arg ListNarrowerG
 	return items, nil
 }
 
+const listNotificationSinkRefs = `-- name: ListNotificationSinkRefs :many
+SELECT s.sink_id, s.ref
+FROM notification_sink_secrets AS s
+JOIN namespaces AS n ON n.id = s.namespace_id
+WHERE n.name = $1
+ORDER BY s.sink_id COLLATE "C", s.position
+`
+
+type ListNotificationSinkRefsRow struct {
+	SinkID string
+	Ref    string
+}
+
+// The secret refs of every sink of a namespace, in the order of each sink.
+func (q *Queries) ListNotificationSinkRefs(ctx context.Context, namespace string) ([]ListNotificationSinkRefsRow, error) {
+	rows, err := q.db.Query(ctx, listNotificationSinkRefs, namespace)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListNotificationSinkRefsRow
+	for rows.Next() {
+		var i ListNotificationSinkRefsRow
+		if err := rows.Scan(&i.SinkID, &i.Ref); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listNotificationSinkSecrets = `-- name: ListNotificationSinkSecrets :many
+SELECT s.ref, s.ciphertext
+FROM notification_sink_secrets AS s
+JOIN namespaces AS n ON n.id = s.namespace_id
+WHERE n.name = $1 AND s.sink_id = $2
+ORDER BY s.position
+`
+
+type ListNotificationSinkSecretsParams struct {
+	Namespace string
+	SinkID    string
+}
+
+type ListNotificationSinkSecretsRow struct {
+	Ref        string
+	Ciphertext []byte
+}
+
+func (q *Queries) ListNotificationSinkSecrets(ctx context.Context, arg ListNotificationSinkSecretsParams) ([]ListNotificationSinkSecretsRow, error) {
+	rows, err := q.db.Query(ctx, listNotificationSinkSecrets, arg.Namespace, arg.SinkID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListNotificationSinkSecretsRow
+	for rows.Next() {
+		var i ListNotificationSinkSecretsRow
+		if err := rows.Scan(&i.Ref, &i.Ciphertext); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listNotificationSinks = `-- name: ListNotificationSinks :many
+SELECT k.id, n.name AS namespace, k.kind, k.name, k.platform, k.target, k.created_by, k.version
+FROM notification_sinks AS k
+JOIN namespaces AS n ON n.id = k.namespace_id
+WHERE n.name = $1
+ORDER BY k.id COLLATE "C"
+`
+
+type ListNotificationSinksRow struct {
+	ID        string
+	Namespace string
+	Kind      string
+	Name      string
+	Platform  string
+	Target    string
+	CreatedBy string
+	Version   int64
+}
+
+func (q *Queries) ListNotificationSinks(ctx context.Context, namespace string) ([]ListNotificationSinksRow, error) {
+	rows, err := q.db.Query(ctx, listNotificationSinks, namespace)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListNotificationSinksRow
+	for rows.Next() {
+		var i ListNotificationSinksRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Namespace,
+			&i.Kind,
+			&i.Name,
+			&i.Platform,
+			&i.Target,
+			&i.CreatedBy,
+			&i.Version,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listObjectContext = `-- name: ListObjectContext :many
 SELECT tool, source, fields, warning, item_id, item_seq, updated_at_ms, updated_by
 FROM object_context
@@ -12525,6 +12816,30 @@ func (q *Queries) MinAuditSequence(ctx context.Context, namespace string) (int64
 	var column_1 int64
 	err := row.Scan(&column_1)
 	return column_1, err
+}
+
+const moveNotificationSinkSecret = `-- name: MoveNotificationSinkSecret :exec
+UPDATE notification_sink_secrets
+SET position = $1
+WHERE notification_sink_secrets.ref = $2 AND notification_sink_secrets.sink_id = $3
+  AND notification_sink_secrets.namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = $4)
+`
+
+type MoveNotificationSinkSecretParams struct {
+	Position  int64
+	Ref       string
+	SinkID    string
+	Namespace string
+}
+
+func (q *Queries) MoveNotificationSinkSecret(ctx context.Context, arg MoveNotificationSinkSecretParams) error {
+	_, err := q.db.Exec(ctx, moveNotificationSinkSecret,
+		arg.Position,
+		arg.Ref,
+		arg.SinkID,
+		arg.Namespace,
+	)
+	return err
 }
 
 const moveProfileLatest = `-- name: MoveProfileLatest :execrows
@@ -15214,6 +15529,37 @@ func (q *Queries) UpdateJob(ctx context.Context, arg UpdateJobParams) (int64, er
 		arg.UpdatedAtMs,
 		arg.ID,
 		arg.PrevVersion,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const updateNotificationSink = `-- name: UpdateNotificationSink :execrows
+UPDATE notification_sinks
+SET name = $1, target = $2, version = notification_sinks.version + 1
+WHERE notification_sinks.id = $3 AND notification_sinks.version = $4
+  AND notification_sinks.namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = $5)
+`
+
+type UpdateNotificationSinkParams struct {
+	Name      string
+	Target    string
+	ID        string
+	Version   int64
+	Namespace string
+}
+
+// A replace changes the name and the target. The kind, the platform and the
+// creator stay. The version guards the replace.
+func (q *Queries) UpdateNotificationSink(ctx context.Context, arg UpdateNotificationSinkParams) (int64, error) {
+	result, err := q.db.Exec(ctx, updateNotificationSink,
+		arg.Name,
+		arg.Target,
+		arg.ID,
+		arg.Version,
+		arg.Namespace,
 	)
 	if err != nil {
 		return 0, err

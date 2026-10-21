@@ -20,7 +20,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -641,9 +640,7 @@ func ipAllowlistOptions(st serverStore, args serverArgs, opts []dustpan.Option) 
 func featureStoreOptions(tb testing.TB, st serverStore, wrapper secret.Wrapper) []dustpan.Option {
 	tb.Helper()
 
-	return slices.Concat(
-		profileStoreOptions(st, wrapper), jobStoreOptions(st), savedViewStoreOptions(st), gitHostOptions(tb, st),
-	)
+	return slices.Concat(storeOptions(st, wrapper), gitHostOptions(tb, st))
 }
 
 func newServer(ctx context.Context, tb testing.TB, args serverArgs) serverBuild {

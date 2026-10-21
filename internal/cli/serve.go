@@ -47,6 +47,7 @@ func ServeFlags() []*Setting {
 		"audit-verify-keys-file",
 		"soft-delete-retention",
 		"audit-sink",
+		"destination-ports",
 		"oidc-issuer",
 		"oidc-provider",
 		"oidc-display-name",

@@ -113,6 +113,7 @@ func pgCopyTables() []pgCopyTable {
 	tables = append(tables, pgCopyPreferenceTables()...)
 	tables = append(tables, pgCopySavedViewTables()...)
 	tables = append(tables, pgCopyGitHostTables()...)
+	tables = append(tables, pgCopySinkTables()...)
 
 	return tables
 }
@@ -917,6 +918,9 @@ func (s *Store) buildStaging(ctx context.Context, in stagingInput) (backup.Summa
 
 	if hostErr := checkStagedGitHost(ctx, s.pool, in.staging); hostErr != nil {
 		return backup.Summary{}, hostErr
+	}
+	if sinksErr := checkStagedSinks(ctx, s.pool, in.staging); sinksErr != nil {
+		return backup.Summary{}, sinksErr
 	}
 
 	sum, err := s.summarizeStaging(ctx, in.staging, in.want)

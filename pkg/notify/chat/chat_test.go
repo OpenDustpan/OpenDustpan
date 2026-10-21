@@ -119,3 +119,22 @@ func TestContentValidate(t *testing.T) {
 		})
 	}
 }
+
+// TestSinkPlatformsMatch keeps the platform list of the sink in the notify
+// package equal to the platforms of this package, in the same order.
+func TestSinkPlatformsMatch(t *testing.T) {
+	t.Parallel()
+
+	want := chat.Platforms()
+	got := notify.ChatPlatforms()
+
+	if len(got) != len(want) {
+		t.Fatalf("notify.ChatPlatforms = %v, want the %d platforms of chat.Platforms", got, len(want))
+	}
+
+	for i := range want {
+		if got[i] != string(want[i]) {
+			t.Fatalf("notify.ChatPlatforms[%d] = %q, want %q", i, got[i], want[i])
+		}
+	}
+}
