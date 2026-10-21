@@ -156,3 +156,17 @@ func notFound(err error) error {
 
 	return fmt.Errorf("find namespace: %w", err)
 }
+
+// OpenFile opens a file of a published release by its SHA-256, as Open does,
+// and returns its size. The size is zero for a checksums file and a signature
+// file, which the release does not measure.
+func (s *Service) OpenFile(
+	ctx context.Context, ns namespace.Name, name, version, sum string,
+) (int64, io.ReadCloser, error) {
+	file, r, err := s.Open(ctx, ns, name, version, sum)
+	if err != nil {
+		return 0, nil, err
+	}
+
+	return file.Size, r, nil
+}
