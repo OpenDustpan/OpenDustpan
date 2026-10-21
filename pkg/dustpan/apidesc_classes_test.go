@@ -324,6 +324,27 @@ var rootMounts = []string{
 	"/",
 }
 
+// rootPatternRaw returns the part of a ServeMux pattern after the method. A
+// pattern with no method is all of it.
+func rootPatternRaw(pattern string) string {
+	if _, rest, found := strings.Cut(pattern, " "); found {
+		return rest
+	}
+
+	return pattern
+}
+
+// rootPatternPath returns the path of a ServeMux pattern. A host part is not
+// part of the path: it starts at the first slash.
+func rootPatternPath(pattern string) string {
+	raw := rootPatternRaw(pattern)
+	if i := strings.Index(raw, "/"); i > 0 {
+		return raw[i:]
+	}
+
+	return raw
+}
+
 // checkRootPatterns returns one error text for each pattern of the root mux
 // that is not on the list rootMounts, and for each path that the server adds
 // from an adapter and that no adapter pattern serves. A pattern under the
@@ -332,12 +353,11 @@ func checkRootPatterns(direct, mounted, adapterPatterns []string) []string {
 	var problems []string
 
 	for _, pattern := range direct {
-		_, path, found := strings.Cut(pattern, " ")
-		if !found {
-			path = pattern
-		}
+		path := rootPatternPath(pattern)
 
 		switch {
+		case !strings.HasPrefix(rootPatternRaw(pattern), "/"):
+			problems = append(problems, pattern+" is on the root mux with a host part")
 		case strings.HasPrefix(path, apidesc.Prefix) && pattern != apidesc.Prefix:
 			problems = append(problems, pattern+" is on the root mux under the prefix and is not the catch-all")
 		case !slices.Contains(rootMounts, pattern):

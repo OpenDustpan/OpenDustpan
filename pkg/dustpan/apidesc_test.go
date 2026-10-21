@@ -151,6 +151,16 @@ func TestRootCheckFailsClosed(t *testing.T) {
 			[]string{"/api/dustpan/v1/rootonly"},
 			nil, "/api/dustpan/v1/rootonly is on the root mux under the prefix",
 		},
+		{
+			"a route under the prefix with a host part",
+			[]string{"/api/dustpan/v1/", "GET localhost/api/dustpan/v1/hidden"},
+			nil, "GET localhost/api/dustpan/v1/hidden is on the root mux with a host part",
+		},
+		{
+			"a method-less route with a host part",
+			[]string{"example.org/api/dustpan/v1/hidden"},
+			nil, "example.org/api/dustpan/v1/hidden is on the root mux with a host part",
+		},
 		{"a root route outside the list", []string{"GET /extra"}, nil, "GET /extra is on the root mux"},
 		{"a mounted path no adapter lists", nil, []string{"/api/dustpan/v1/ghost"}, "/api/dustpan/v1/ghost is mounted"},
 		{"a mounted path an adapter lists", nil, []string{"/api/dustpan/v1/capabilities"}, ""},

@@ -155,8 +155,8 @@ func checkPrecondition(t *testing.T, op apidesc.Operation, scenario Scenario) {
 
 	stale := p.Send(map[string]string{"If-Match": StaleOf(p.ETag)})
 	// The description promises 412 (components.parameters.IfMatch). The
-	// approval handlers answer 409 for a stale tag today (#1286). Remove the
-	// 409 branch when that issue is fixed.
+	// approval handlers answer 409 for a stale tag. Remove the 409 branch when
+	// they answer 412.
 	if stale.Status != http.StatusPreconditionFailed && stale.Status != http.StatusConflict {
 		t.Errorf("%s with a stale If-Match = %d %s, want 412 or 409", op.ID, stale.Status, stale.Body)
 	}

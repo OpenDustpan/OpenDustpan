@@ -60,6 +60,9 @@ func TestDescribeOperationsRefusesAHandlerThatHidesItsRoutes(t *testing.T) {
 		{"a route with no method outside the prefix and no operations", patternsHandler{
 			Handler: http.NotFoundHandler(), patterns: []string{"/api/stacks/{stack}"},
 		}, false},
+		{"a route with a host under the prefix and no operations", patternsHandler{
+			Handler: http.NotFoundHandler(), patterns: []string{"GET localhost/api/dustpan/v1/things"},
+		}, true},
 		{"no patterns", http.NotFoundHandler(), true},
 	}
 
@@ -133,5 +136,25 @@ func TestDescribeOperationsFailsClosed(t *testing.T) {
 				t.Fatalf("describeHandlers() = %v", err)
 			}
 		})
+	}
+}
+
+// TestPatternPathIgnoresTheHost proves that a host part never hides a path from
+// the class check: the path starts at the first slash.
+func TestPatternPathIgnoresTheHost(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct{ pattern, want string }{
+		{"GET /api/dustpan/v1/x", "/api/dustpan/v1/x"},
+		{"/api/dustpan/v1/", "/api/dustpan/v1/"},
+		{"GET localhost/api/dustpan/v1/hidden", "/api/dustpan/v1/hidden"},
+		{"example.org/api/dustpan/v1/hidden", "/api/dustpan/v1/hidden"},
+		{"POST [::1]/api/dustpan/v1/hidden", "/api/dustpan/v1/hidden"},
+	}
+
+	for _, tt := range tests {
+		if got := patternPath(tt.pattern); got != tt.want {
+			t.Errorf("patternPath(%q) = %q, want %q", tt.pattern, got, tt.want)
+		}
 	}
 }

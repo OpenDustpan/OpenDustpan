@@ -113,13 +113,20 @@ func (a adapters) describeOperations() ([]apidesc.Operation, error) {
 var errUnlisted = errors.New("api description: a mounted handler does not list its routes")
 
 // patternPath returns the path of a ServeMux pattern. A pattern with no
-// method is all path.
+// method is all path. A host part, as in "example.org/api/dustpan/v1/x", is
+// not part of the path: the path starts at the first slash, so a pattern with
+// a host is classified by its path, never skipped.
 func patternPath(pattern string) string {
-	if _, path, found := strings.Cut(pattern, " "); found {
-		return path
+	path := pattern
+	if _, rest, found := strings.Cut(pattern, " "); found {
+		path = rest
 	}
 
-	return pattern
+	if i := strings.Index(path, "/"); i > 0 {
+		return path[i:]
+	}
+
+	return path
 }
 
 // checkListers returns errUnlisted, wrapped, for the first handler that

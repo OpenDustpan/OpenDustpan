@@ -3599,6 +3599,10 @@ func v1NotFound(w http.ResponseWriter, _ *http.Request) {
 // h. A path serves every method that h registers for it, and h answers the
 // methods it does not serve. A nil h or a handler that lists no patterns
 // registers nothing.
+//
+// The pattern check sees only the patterns that the handlers list and the
+// patterns of the root mux. A route that a wrapper (the wrap argument or a
+// middleware before the mux) answers by itself is outside what the check sees.
 func mountV1(mux *rootMux, h http.Handler, wrap func(http.Handler) http.Handler) {
 	lister, ok := h.(patternLister)
 	if !ok {
