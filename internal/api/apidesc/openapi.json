@@ -633,6 +633,9 @@
           "createdBy": {
             "type": "string"
           },
+          "hostNeedsUpdate": {
+            "type": "boolean"
+          },
           "id": {
             "type": "string"
           },
@@ -1682,6 +1685,9 @@
         "properties": {
           "createdBy": {
             "type": "string"
+          },
+          "hostNeedsUpdate": {
+            "type": "boolean"
           },
           "id": {
             "type": "string"

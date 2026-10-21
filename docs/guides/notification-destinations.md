@@ -54,7 +54,7 @@ The answer is 201. It holds the ID of the destination, its version, and the
   "namespace": "acme",
   "kind": "webhook",
   "name": "Operations",
-  "target": "https://hooks.example.com/dustpan",
+  "target": "hooks.example.com",
   "urlSet": false,
   "createdBy": "ana",
   "version": 1,
@@ -69,6 +69,24 @@ make a new destination.
 
 The server seals the key with the data key of the namespace. A list or a read
 of the destination shows no key.
+
+The URL of the webhook is a secret, because its path or its query can hold a
+token. The server accepts it when you make or change the destination. No
+answer shows it again: `target` holds only the host. To see the URL, read it
+from your own records. The server does not seal the URL of a webhook yet: the
+database and each backup hold it as plain text. Protect them the same way as
+other secrets.
+
+The host of the URL must be an ASCII DNS name or an IP address, with an
+optional port of 1 to 65535, with no leading zero. The server refuses any other
+host with 400 when you make a destination, change one, or send a test. For a
+name with non-ASCII letters, write its punycode form.
+
+A destination that you made before this check keeps working: it is listed, it
+gets notifications, and a backup that holds it restores. When its host fails
+the check, the list shows `hostNeedsUpdate: true`, and the `target` of a
+webhook shows empty. To change such a destination, give it a host that passes
+the check.
 
 ## Check the signature in your receiver
 
