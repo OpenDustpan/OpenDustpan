@@ -59,6 +59,10 @@ func FromItemKeyRow(r ItemKeyRow) (secret.ItemKey, error) {
 		return secret.ItemKey{}, err
 	}
 
+	if r.WrapperID == "" {
+		return secret.ItemKey{}, fmt.Errorf("%w: item key %q has no wrapper ID", secret.ErrInvalidItemRef, r.ID)
+	}
+
 	return secret.ItemKey{
 		CreatedAt: FromMillis(r.CreatedAtMs), ShreddedAt: FromOptionalMillis(r.ShreddedAtMs),
 		Ref: ref, ID: id, WrapperID: r.WrapperID,
