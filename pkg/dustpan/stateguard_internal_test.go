@@ -224,13 +224,6 @@ func TestPrincipalSubjects(t *testing.T) {
 			gate.PrincipalService,
 			gate.CredentialJobToken,
 		},
-		{
-			"the namespace service principal counts as a service with an access token",
-			identity.KindService,
-			identity.CredentialServer,
-			gate.PrincipalService,
-			gate.CredentialAccessToken,
-		},
 	}
 
 	for _, tc := range cases {

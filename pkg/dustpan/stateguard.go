@@ -265,12 +265,7 @@ func (principalSubjects) Subject(_ context.Context, p identity.Principal) (gate.
 		credential = gate.CredentialJobToken
 	case identity.CredentialTrustToken:
 		credential = gate.CredentialTrustToken
-	case identity.CredentialAccessToken, identity.CredentialServer, "":
-		// The server credential is the one of the namespace service principal
-		// of a start that no person makes. No client can present it. The facts
-		// of a gate know it as a service principal with an access token, so a
-		// limit for services covers it, and no rule can treat it as a person
-		// or a session.
+	case identity.CredentialAccessToken, "":
 		credential = gate.CredentialAccessToken
 	case identity.CredentialServer:
 		// The namespace service principal has no kind of credential in the
