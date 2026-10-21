@@ -16,6 +16,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/secret"
 	"opendustpan.org/opendustpan/pkg/store/sqlite"
 	"opendustpan.org/opendustpan/pkg/workspace"
+	"opendustpan.org/opendustpan/pkg/workspace/workspacetest"
 )
 
 // sealedContent is a state file that a service with a sealer stores sealed.
@@ -95,7 +96,7 @@ func TestRunWritesNoWorkspaceBlobAtStartup(t *testing.T) {
 func listBlobs(t *testing.T, blobs *fs.Store) []blob.Object {
 	t.Helper()
 
-	listed, err := blobs.List(t.Context(), "tofu/")
+	listed, err := blobs.List(t.Context(), "namespaces/")
 	if err != nil {
 		t.Fatalf("list blobs: %v", err)
 	}
@@ -153,6 +154,7 @@ func seedSealedState(
 		States:             st,
 		Blobs:              blobs,
 		Namespaces:         namespaces,
+		OutOfScope:         workspacetest.NewRefusals(),
 		Sealer:             secrets,
 		Logger:             nil,
 		Now:                nil,

@@ -11,6 +11,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/manuallock"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/workspace"
+	"opendustpan.org/opendustpan/pkg/workspace/workspacetest"
 )
 
 // errManualLockRead is the failure of a store that cannot read a manual lock.
@@ -98,6 +99,7 @@ func withManualLocks(t *testing.T, f fixture, locks workspace.ManualLocks) *work
 		States:             f.store,
 		Blobs:              f.blobs,
 		Namespaces:         f.namespaces,
+		OutOfScope:         workspacetest.NewRefusals(),
 		Sealer:             f.secrets,
 		Logger:             nil,
 		Now:                func() time.Time { return *f.now },
@@ -571,6 +573,7 @@ func TestDeleteFailsClosedWhenTheWorkspaceCannotBeRead(t *testing.T) {
 		States:             f.store,
 		Blobs:              f.blobs,
 		Namespaces:         f.namespaces,
+		OutOfScope:         workspacetest.NewRefusals(),
 		Sealer:             f.secrets,
 		Logger:             nil,
 		Now:                func() time.Time { return *f.now },

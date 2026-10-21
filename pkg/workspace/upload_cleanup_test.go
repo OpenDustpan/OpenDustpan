@@ -11,6 +11,7 @@ import (
 
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/workspace"
+	"opendustpan.org/opendustpan/pkg/workspace/workspacetest"
 )
 
 // ctxBlobs fails the deletes of a blob store whose context is done, as an object
@@ -66,6 +67,7 @@ func TestUploadCleanupSurvivesTheRequest(t *testing.T) {
 		States:             f.store,
 		Blobs:              ctxBlobs{Store: f.blobs},
 		Namespaces:         f.namespaces,
+		OutOfScope:         workspacetest.NewRefusals(),
 		Sealer:             f.secrets,
 		Logger:             nil,
 		Now:                func() time.Time { return *f.now },

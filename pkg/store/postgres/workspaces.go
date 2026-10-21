@@ -67,7 +67,7 @@ func (s *Store) CreateWorkspace(ctx context.Context, w workspace.Workspace, fenc
 
 // GetWorkspace implements workspace.Store.
 func (s *Store) GetWorkspace(ctx context.Context, ref workspace.Ref) (workspace.Workspace, error) {
-	row, err := s.queries.GetWorkspace(ctx, db.GetWorkspaceParams{
+	row, err := s.queries.ReadWorkspace(ctx, db.ReadWorkspaceParams{
 		Namespace: ref.Namespace.String(),
 		Name:      ref.Name.String(),
 	})
@@ -79,12 +79,12 @@ func (s *Store) GetWorkspace(ctx context.Context, ref workspace.Ref) (workspace.
 		return workspace.Workspace{}, fmt.Errorf("select workspace: %w", err)
 	}
 
-	return workspaceFromRow(row), nil
+	return workspaceFromRow(row.Workspace, row.NamespaceID), nil
 }
 
 // GetWorkspaceByID implements workspace.Store.
 func (s *Store) GetWorkspaceByID(ctx context.Context, id workspace.ID) (workspace.Workspace, error) {
-	row, err := s.queries.GetWorkspaceByID(ctx, id.String())
+	row, err := s.queries.ReadWorkspaceByID(ctx, id.String())
 	if errors.Is(err, pgx.ErrNoRows) {
 		return workspace.Workspace{}, workspace.ErrNotFound
 	}
@@ -93,19 +93,19 @@ func (s *Store) GetWorkspaceByID(ctx context.Context, id workspace.ID) (workspac
 		return workspace.Workspace{}, fmt.Errorf("select workspace: %w", err)
 	}
 
-	return workspaceFromRow(row), nil
+	return workspaceFromRow(row.Workspace, row.NamespaceID), nil
 }
 
 // ListWorkspaces implements workspace.Store.
 func (s *Store) ListWorkspaces(ctx context.Context, ns namespace.Name) ([]workspace.Workspace, error) {
-	rows, err := s.queries.ListWorkspaces(ctx, ns.String())
+	rows, err := s.queries.ReadWorkspaces(ctx, ns.String())
 	if err != nil {
 		return nil, fmt.Errorf("select workspaces: %w", err)
 	}
 
 	out := make([]workspace.Workspace, 0, len(rows))
 	for i := range rows {
-		out = append(out, workspaceFromRow(rows[i]))
+		out = append(out, workspaceFromRow(rows[i].Workspace, rows[i].NamespaceID))
 	}
 
 	return out, nil
@@ -1026,10 +1026,12 @@ func checkFinalizeRestore(ctx context.Context, q *db.Queries, row codec.StateVer
 
 // workspaceFromRow converts a workspace row into a domain workspace. The
 // current state pointer stays in SQL; the domain reads current state
-// through CurrentStateVersion.
-func workspaceFromRow(row db.Workspace) workspace.Workspace {
+// through CurrentStateVersion. The namespace ID comes from the join of the
+// read with the namespace row, so the caller needs no second read.
+func workspaceFromRow(row db.Workspace, namespaceID string) workspace.Workspace {
 	return codec.FromWorkspaceRow(codec.WorkspaceRow{
 		Namespace:           row.Namespace,
+		NamespaceID:         namespaceID,
 		Name:                row.Name,
 		ID:                  row.ID,
 		LockID:              row.LockID,

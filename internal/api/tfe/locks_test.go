@@ -75,8 +75,9 @@ func (conflictWorkspaces) GetByID(_ context.Context, id workspace.ID) (workspace
 	}
 
 	return workspace.Workspace{
-		CreatedAt: stubWorkspaceTime(),
-		UpdatedAt: stubWorkspaceTime(),
+		NamespaceID: "",
+		CreatedAt:   stubWorkspaceTime(),
+		UpdatedAt:   stubWorkspaceTime(),
 		Lock: workspace.Lock{
 			LockedAt: stubWorkspaceTime(),
 			ID:       "lock-alice",
@@ -282,8 +283,9 @@ func (r *raceWorkspaces) lockedWorkspace(holder string) workspace.Workspace {
 	name, _ := workspace.ParseName("web") //nolint:errcheck // The test workspace name is valid.
 
 	return workspace.Workspace{
-		CreatedAt: stubWorkspaceTime(),
-		UpdatedAt: stubWorkspaceTime(),
+		NamespaceID: "",
+		CreatedAt:   stubWorkspaceTime(),
+		UpdatedAt:   stubWorkspaceTime(),
 		Lock: workspace.Lock{
 			LockedAt: stubWorkspaceTime(),
 			ID:       "lock-test",

@@ -77,12 +77,7 @@ func smallOutputsDoc() string {
 func blobCount(t *testing.T, base memBase, ws workspace.Workspace) int {
 	t.Helper()
 
-	listed, listErr := base.blobs.List(t.Context(), "tofu/"+ws.ID.String()+"/")
-	if listErr != nil {
-		t.Fatalf("list blobs: %v", listErr)
-	}
-
-	return len(listed)
+	return len(listStateBlobs(t, base.blobs, ws.ID))
 }
 
 // lockOutputsWorkspace locks the workspace for an outputs upload.

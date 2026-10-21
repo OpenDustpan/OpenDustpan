@@ -127,6 +127,10 @@ type Workspace struct {
 	Lock      Lock
 	ID        ID
 	Ref       Ref
+	// NamespaceID is the ID of the namespace in Ref. The store fills it in the
+	// read that returns the workspace, so a state blob call needs no read of
+	// the namespace. A write ignores it: the row keeps the namespace name.
+	NamespaceID namespace.ID
 	// Overrides holds the switches of this unit. A switch only narrows the
 	// switch of its namespace: an override needs both (ADR 44, decision 6).
 	Overrides namespace.Overrides

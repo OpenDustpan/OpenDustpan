@@ -299,6 +299,16 @@ func (e Entry) validatePrincipal() error {
 	return nil
 }
 
+// knownKind reports whether k is one of the kinds of this package.
+func knownKind(k Kind) bool {
+	switch k {
+	case KindToolOperation, KindReveal, KindOverride, KindChange, KindReadAccess, KindSecurity:
+		return true
+	default:
+		return false
+	}
+}
+
 // validateHow checks the channel, kind, outcome and changes of the entry.
 func (e Entry) validateHow() error {
 	if err := validateChanges(e.Changes); err != nil {
@@ -314,16 +324,6 @@ func (e Entry) validateHow() error {
 		return fmt.Errorf("%w: unknown outcome %q", ErrInvalidEntry, e.Outcome)
 	default:
 		return nil
-	}
-}
-
-// knownKind reports whether k is one of the kinds of this package.
-func knownKind(k Kind) bool {
-	switch k {
-	case KindToolOperation, KindReveal, KindOverride, KindChange, KindReadAccess, KindSecurity:
-		return true
-	default:
-		return false
 	}
 }
 

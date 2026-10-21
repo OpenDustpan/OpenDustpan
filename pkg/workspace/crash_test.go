@@ -14,6 +14,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/store/sqlite"
 	"opendustpan.org/opendustpan/pkg/store/storefault"
 	"opendustpan.org/opendustpan/pkg/workspace"
+	"opendustpan.org/opendustpan/pkg/workspace/workspacetest"
 )
 
 // crashFixture runs the workspace service over fault wrappers: SQL through
@@ -147,6 +148,7 @@ func newCrashFixture(
 		States:             wrappedSQL,
 		Blobs:              wrappedBlobs,
 		Namespaces:         namespaces,
+		OutOfScope:         workspacetest.NewRefusals(),
 		Sealer:             newMemSealer(t, namespaces),
 		Logger:             nil,
 		Now:                nil,
@@ -280,12 +282,7 @@ func readCrashContent(t *testing.T, service *workspace.Service, sv workspace.Sta
 func listWorkspaceBlobs(t *testing.T, blobs *blobfault.Store, id workspace.ID) []blob.Object {
 	t.Helper()
 
-	listed, err := blobs.List(t.Context(), "tofu/"+id.String()+"/")
-	if err != nil {
-		t.Fatalf("list blobs of %s: %v", id, err)
-	}
-
-	return listed
+	return listStateBlobs(t, blobs, id)
 }
 
 // assertContentReferenced checks the crash invariant: every blob key SQL
