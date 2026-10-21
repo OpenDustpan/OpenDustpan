@@ -32,6 +32,17 @@ const (
 	// Authorizer does not run, but the address gate runs when one is
 	// configured. Only the state upload routes may use it.
 	ScopeUpload
+	// ScopeRegistry serves a route of the provider registry protocol. It checks
+	// the host of the request first, then needs a signed-in principal and the
+	// Authorizer to allow every declared action on the resolved object. Only
+	// the registry routes may use it.
+	ScopeRegistry
+	// ScopeSigned serves the file route of the provider registry protocol. It
+	// checks the host first. OpenTofu fetches the files without credentials, so
+	// the signature in the query is the credential: the download document
+	// minted it for a caller who held the declared action. The Authorizer does
+	// not run. Only the registry file route may use it.
+	ScopeSigned
 )
 
 // ObjectResolver returns the authorization object for a request: the unit
@@ -80,6 +91,7 @@ func (h *Handler) buildRoutes() []Route {
 		h.overrideRoutes(),
 		h.stateRoutes(),
 		h.stateWriteRoutes(),
+		h.registryRoutes(),
 	)
 }
 
@@ -541,6 +553,10 @@ func (h *Handler) enforce(route Route) http.HandlerFunc {
 		return h.enforcePublic(route)
 	case ScopeAuthorized:
 		return h.enforceAuthorized(route)
+	case ScopeRegistry:
+		return h.enforceRegistry(route)
+	case ScopeSigned:
+		return h.enforceSigned(route)
 	}
 
 	return h.enforceAuthorized(route)

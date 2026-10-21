@@ -734,6 +734,14 @@ _Avoid_: Package, artifact (that is a plan or a log of a job)
 The name of a provider or module in a namespace: the namespace, the kind and the name, with the system for a module. The host of the address is the host of the server (RFC 101).
 _Avoid_: Source address (that is the field of OpenTofu), package name
 
+**Trusted signing key**:
+A public OpenPGP key that a namespace registers for its registry. A provider release is published only when a trusted signing key of the namespace made the signature of its checksums file. The server takes the fingerprint from the key. If a namespace deletes the key, the registry stops serving the releases that it signed.
+_Avoid_: Signing certificate, GPG key (the format is OpenPGP), trusted publisher
+
+**Staged file**:
+A file of an upload that the server holds under a staging key until a publish moves it. It is not readable through the registry. A publish measures it again, checks it, and copies it to its content key. A staged file that no publish moved is deleted after 24 hours.
+_Avoid_: Temporary file, pending upload
+
 **Catalog**:
 The self-service gateway of OpenDustpan, with its routes under `/api/dustpan/v1` (ADR 210). A principal sends a Catalog request to it, for example for a unit from a blueprint. Write it with a capital C, as a name.
 _Avoid_: Service catalog, marketplace, portal, inventory
