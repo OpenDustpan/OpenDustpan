@@ -254,3 +254,23 @@ func checkFailsClosed(t *testing.T, s notify.Sink, stored []notify.SealedSecret)
 		}
 	}
 }
+
+// LegacyShape is a webhook sink with no secret items, planted with a plain
+// text URL as its target. Want is the target after the migration.
+type LegacyShape struct {
+	ID, Target, Want string
+}
+
+// LegacyShapes returns the target shapes that a migration test plants in
+// addition to LegacyWebhookURL: a port, a query with no path, a fragment, and
+// an upper-case scheme and host. Each URL holds LegacyToken.
+func LegacyShapes() []LegacyShape {
+	tok := LegacyToken()
+
+	return []LegacyShape{
+		{"snk-shape-port", "https://hooks.example.com:8443/x/" + tok, "hooks.example.com:8443"},
+		{"snk-shape-query", "https://hooks.example.com?token=" + tok, "hooks.example.com"},
+		{"snk-shape-fragment", "https://hooks.example.com/x#" + tok, "hooks.example.com"},
+		{"snk-shape-upper", "HTTPS://Hooks.Example.COM/x/" + tok, "hooks.example.com"},
+	}
+}

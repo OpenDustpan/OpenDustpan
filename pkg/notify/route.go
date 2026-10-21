@@ -185,6 +185,12 @@ func badRef(ref string) bool {
 	return !ident.Valid(ref, MaxRefLen)
 }
 
+// NoURLRefPrefix starts the ref of the placeholder item that a migration puts
+// first in a webhook sink that had its URL as plain text. The placeholder has
+// no value, so it never opens. The migration SQL holds the same prefix: do
+// not change it.
+const NoURLRefPrefix = "itm-nourl-"
+
 // MaxSecretLen caps the value of a secret item of a sink, in bytes.
 const MaxSecretLen = 4096
 

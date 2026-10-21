@@ -121,6 +121,17 @@ func plantLegacyWebhook(t *testing.T, schemaURL string) {
 		},
 	}
 
+	for _, sh := range notifytest.LegacyShapes() {
+		stmts = append(stmts, struct {
+			query string
+			args  []any
+		}{
+			`INSERT INTO notification_sinks (id, namespace_id, kind, name, platform, target, created_by, version)
+				VALUES ($1, $2, 'webhook', 'Shape hook', '', $3, 'alice', 1)`,
+			[]any{sh.ID, other, sh.Target},
+		})
+	}
+
 	for _, st := range stmts {
 		if _, execErr := conn.Exec(ctx, st.query, st.args...); execErr != nil {
 			t.Fatalf("plant legacy rows: %v", execErr)
@@ -174,6 +185,15 @@ func checkNoPlainURL(t *testing.T, schemaURL string) {
 		notifytest.LegacyToken()).Scan(&count)
 	if err != nil || count != 0 {
 		t.Fatalf("sinks that hold the URL after the migration = %d (%v), want 0", count, err)
+	}
+
+	for _, sh := range notifytest.LegacyShapes() {
+		var got string
+
+		err = conn.QueryRow(ctx, `SELECT target FROM notification_sinks WHERE id = $1`, sh.ID).Scan(&got)
+		if err != nil || got != sh.Want {
+			t.Fatalf("target of %s after the migration = %q (%v), want %q", sh.ID, got, err, sh.Want)
+		}
 	}
 
 	// A target with user information never passed the egress rules, but the

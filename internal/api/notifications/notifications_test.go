@@ -948,3 +948,69 @@ func (f fixture) replaceURLItem(t *testing.T, id, url string) {
 		t.Fatalf("PutSink: %v", err)
 	}
 }
+
+// TestAnswerHoldsOnlyTheHostOfAWholeURLTarget proves the answer-side layer:
+// a row whose target is a whole URL, as a restore or another version could
+// leave it, never shows a path, a query, user information or a token.
+func TestAnswerHoldsOnlyTheHostOfAWholeURLTarget(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct{ name, target, want string }{
+		{"a path and a query", "https://hooks.example.com/ops/" + canary + "?k=" + canary, ""},
+		{"user information", "https://user:" + canary + "@hooks.example.com/x", ""},
+		{"a host and a path", "hooks.example.com/" + canary, ""},
+		{"a fragment", "hooks.example.com#" + canary, ""},
+		{"a bare host", "hooks.example.com:8443", "hooks.example.com:8443"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			for _, kind := range []notify.SinkKind{notify.SinkWebhook, notify.SinkChat} {
+				s := notify.Sink{
+					ID: "snk-1", Scope: "acme", Kind: kind, Name: "Ops", Platform: "", Target: tc.target,
+					SecretRefs: []string{"itm-1", "itm-2"}, CreatedBy: "ana", Version: 1,
+				}
+
+				body, err := apinotifications.DocumentJSON(&s)
+				if err != nil {
+					t.Fatalf("DocumentJSON: %v", err)
+				}
+
+				if strings.Contains(string(body), canary) ||
+					!strings.Contains(string(body), `"target":"`+tc.want+`"`) {
+					t.Errorf("%s answer = %s, want the target %q and no token", kind, body, tc.want)
+				}
+			}
+		})
+	}
+}
+
+// TestURLSetIsFalseForThePlaceholder proves that a webhook sink that has only
+// the placeholder item of the migration answers urlSet false, and that a sink
+// with a real URL item answers true.
+func TestURLSetIsFalseForThePlaceholder(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name string
+		refs []string
+		want string
+	}{
+		{"a placeholder first", []string{notify.NoURLRefPrefix + "snk-1", "itm-k1", "itm-k2"}, `"urlSet":false`},
+		{"a URL item first", []string{"itm-url", "itm-k1"}, `"urlSet":true`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			s := notify.Sink{
+				ID: "snk-1", Scope: "acme", Kind: notify.SinkWebhook, Name: "Ops", Platform: "",
+				Target: "hooks.example.com", SecretRefs: tc.refs, CreatedBy: "ana", Version: 1,
+			}
+
+			body, err := apinotifications.DocumentJSON(&s)
+			if err != nil || !strings.Contains(string(body), tc.want) {
+				t.Errorf("answer = %s (%v), want %s", body, err, tc.want)
+			}
+		})
+	}
+}
