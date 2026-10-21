@@ -30,7 +30,7 @@ var ErrDialRefused = errors.New("the connection was refused by the address rules
 // each connection, so a DNS answer that changes after a URL check cannot pass
 // it.
 func Control(_, address string, _ syscall.RawConn) error {
-	return ControlWith(egress.Rules{Allow: nil, Loopback: false})("", address, nil)
+	return ControlWith(egress.Rules{Allow: nil, LoopbackForTests: false})("", address, nil)
 }
 
 // ControlWith returns a net.Dialer Control function that applies rules to
@@ -59,7 +59,7 @@ const maxIdleConns = 16
 // proxy from the environment, the redirect policy r, and egress.Timeout
 // for each request. Read a body with ReadBody.
 func Client(r egress.Redirects, s egress.Scheme) *http.Client {
-	return ClientWith(egress.Rules{Allow: nil, Loopback: false}, r, s, Options{RootCAs: nil})
+	return ClientWith(egress.Rules{Allow: nil, LoopbackForTests: false}, r, s, Options{RootCAs: nil})
 }
 
 // Options are the settings of ClientWith that are not egress rules.

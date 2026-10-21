@@ -251,7 +251,7 @@ func newHostEnvWrapped(
 	}
 	opener := &hostOpener{mu: sync.Mutex{}, opened: 0, checkErr: nil, openErr: nil}
 
-	rules := egress.Rules{Allow: nil, Loopback: false}
+	rules := egress.Rules{Allow: nil, LoopbackForTests: false}
 
 	svc, err := forge.NewService(forge.Config{
 		Store: wrap(st.GitHost()), Namespaces: st, Secrets: hostSealer{}, Audit: st, Openers: []forge.Opener{opener},

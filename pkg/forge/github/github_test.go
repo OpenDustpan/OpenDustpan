@@ -18,7 +18,7 @@ import (
 func loopbackRules(t *testing.T) egress.Rules {
 	t.Helper()
 
-	return egress.Rules{Allow: nil, Loopback: true}
+	return egress.Rules{Allow: nil, LoopbackForTests: true}
 }
 
 func newOpener(t *testing.T, f *fake, rules egress.Rules) *github.Opener {
@@ -111,7 +111,7 @@ func TestConformanceToken(t *testing.T) {
 func TestKind(t *testing.T) {
 	t.Parallel()
 
-	o, err := github.NewOpener(github.Config{Rules: egress.Rules{Allow: nil, Loopback: false}, RootCAs: nil, Now: nil})
+	o, err := github.NewOpener(github.Config{Rules: egress.Rules{Allow: nil, LoopbackForTests: false}, RootCAs: nil, Now: nil})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -363,7 +363,7 @@ func TestDefaultRulesRefuseLoopback(t *testing.T) {
 	t.Parallel()
 
 	f := newFake(t, testKey(), "")
-	o := newOpener(t, f, egress.Rules{Allow: nil, Loopback: false})
+	o := newOpener(t, f, egress.Rules{Allow: nil, LoopbackForTests: false})
 	cred := forge.Credential{SetID: "s", Secret: pkcs1PEM(testKey()), CreatedAt: time.Time{}}
 
 	if _, err := o.Open(t.Context(), appConnection(f), cred); !errors.Is(err, forge.ErrInvalid) {

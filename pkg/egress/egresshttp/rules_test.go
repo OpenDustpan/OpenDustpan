@@ -15,7 +15,7 @@ import (
 func loopbackRules(t *testing.T) egress.Rules {
 	t.Helper()
 
-	return egress.Rules{Allow: nil, Loopback: true}
+	return egress.Rules{Allow: nil, LoopbackForTests: true}
 }
 
 func TestControlWith(t *testing.T) {
@@ -92,7 +92,7 @@ func TestDialLayer(t *testing.T) {
 
 	srv, _ := tlsServer(t, func(http.ResponseWriter, *http.Request) {})
 	dialer := &net.Dialer{ //nolint:exhaustruct_v5 // the other fields keep their zero defaults
-		Control: egresshttp.ControlWith(egress.Rules{Allow: nil, Loopback: false}),
+		Control: egresshttp.ControlWith(egress.Rules{Allow: nil, LoopbackForTests: false}),
 	}
 
 	conn, err := dialer.DialContext(t.Context(), "tcp", srv.Listener.Addr().String())
@@ -171,7 +171,7 @@ func TestControlWithAllowedRangeRefusesLoopback(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	control := egresshttp.ControlWith(egress.Rules{Allow: ranges, Loopback: false})
+	control := egresshttp.ControlWith(egress.Rules{Allow: ranges, LoopbackForTests: false})
 
 	for address, ok := range map[string]bool{
 		"10.0.0.1:443": true, "127.0.0.1:443": false, "169.254.169.254:80": false, "[fd00:ec2::254]:80": false,

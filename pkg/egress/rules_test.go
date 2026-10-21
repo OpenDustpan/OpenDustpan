@@ -17,7 +17,7 @@ func mustRanges(t *testing.T, list ...string) egress.Rules {
 		t.Fatalf("ParseRanges(%v) = %v", list, err)
 	}
 
-	return egress.Rules{Allow: ranges, Loopback: false}
+	return egress.Rules{Allow: ranges, LoopbackForTests: false}
 }
 
 func TestCheckAddrRefusesCloudMetadataAddresses(t *testing.T) {
@@ -100,7 +100,7 @@ func TestRulesAddressLayer(t *testing.T) {
 		t.Fatalf("CheckAddr of an invalid address = %v, want ErrRefused", err)
 	}
 
-	if err := (egress.Rules{Allow: nil, Loopback: false}).CheckAddr(netip.MustParseAddr("10.1.2.3")); err == nil {
+	if err := (egress.Rules{Allow: nil, LoopbackForTests: false}).CheckAddr(netip.MustParseAddr("10.1.2.3")); err == nil {
 		t.Fatal("the zero rules allowed a private address")
 	}
 }
@@ -275,7 +275,7 @@ func TestParseAllowedRanges(t *testing.T) {
 func TestLoopbackFlagOpensLoopbackOnly(t *testing.T) {
 	t.Parallel()
 
-	rules := egress.Rules{Allow: nil, Loopback: true}
+	rules := egress.Rules{Allow: nil, LoopbackForTests: true}
 
 	for addr, ok := range map[string]bool{
 		"127.0.0.1": true, "::1": true, "10.0.0.1": false, "169.254.169.254": false, "0.0.0.0": false,

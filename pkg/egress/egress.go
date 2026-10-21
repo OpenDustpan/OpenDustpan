@@ -100,10 +100,10 @@ type Rules struct {
 	// Allow lists the ranges that pass the address checks for private-network
 	// addresses.
 	Allow []netip.Prefix
-	// Loopback lets the loopback addresses pass. It exists for the tests of an
-	// adapter that run a fake server on the local host. No flag, no
+	// LoopbackForTests lets the loopback addresses pass. It exists for the
+	// tests of an adapter that run a fake server on the local host. No flag, no
 	// environment variable and no setting of an operator reaches it.
-	Loopback bool
+	LoopbackForTests bool
 }
 
 // Bounds of an allowed range. A range with fewer bits opens more of the
@@ -231,7 +231,7 @@ func (r Rules) CheckAddr(a netip.Addr) error {
 		return nil
 	}
 
-	if r.Loopback && a.IsLoopback() {
+	if r.LoopbackForTests && a.IsLoopback() {
 		return nil
 	}
 
@@ -276,7 +276,7 @@ func CheckAddr(a netip.Addr) error {
 // address. A host name passes: the adapter checks the resolved address of
 // each connection.
 func CheckURL(raw string, s Scheme) error {
-	return Rules{Allow: nil, Loopback: false}.CheckURL(raw, s)
+	return Rules{Allow: nil, LoopbackForTests: false}.CheckURL(raw, s)
 }
 
 // CheckURL is the package function CheckURL with the allowed ranges of r.
@@ -332,7 +332,7 @@ func numericLabel(l string) bool {
 // only to the same host and never from https to http; a use with NoRedirect
 // follows none. Every redirect target also passes CheckURL.
 func CheckRedirect(from, to *url.URL, r Redirects, s Scheme) error {
-	return Rules{Allow: nil, Loopback: false}.CheckRedirect(from, to, r, s)
+	return Rules{Allow: nil, LoopbackForTests: false}.CheckRedirect(from, to, r, s)
 }
 
 // CheckRedirect is the package function CheckRedirect with the allowed

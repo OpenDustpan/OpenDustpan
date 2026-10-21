@@ -719,3 +719,60 @@ func TestCheckLimitsTheCallsOfOneInstallation(t *testing.T) {
 		t.Fatalf("check after the window: %v", err)
 	}
 }
+
+// invalidCheckLimits are the limits that turn the limiter off or break it.
+func invalidCheckLimits() map[string]forge.CheckLimits {
+	good := forge.DefaultCheckLimits()
+
+	return map[string]forge.CheckLimits{
+		"zero":                  {PerConnection: 0, PerInstallation: 0, Window: 0},
+		"zero per installation": {PerConnection: good.PerConnection, PerInstallation: 0, Window: good.Window},
+		"negative per installation": {
+			PerConnection: good.PerConnection, PerInstallation: -1, Window: good.Window,
+		},
+		"zero per connection":     {PerConnection: 0, PerInstallation: good.PerInstallation, Window: good.Window},
+		"negative per connection": {PerConnection: -time.Second, PerInstallation: good.PerInstallation, Window: good.Window},
+		"zero window":             {PerConnection: good.PerConnection, PerInstallation: good.PerInstallation, Window: 0},
+		"negative window":         {PerConnection: good.PerConnection, PerInstallation: good.PerInstallation, Window: -time.Minute},
+	}
+}
+
+// TestNewServiceRefusesCheckLimitsThatAreNotPositive sends each limit that
+// would turn the limiter off, or make the first check read an empty list.
+func TestNewServiceRefusesCheckLimitsThatAreNotPositive(t *testing.T) {
+	t.Parallel()
+
+	r := newRig(t)
+
+	for name, limits := range invalidCheckLimits() {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			_, err := forge.NewService(forge.Config{
+				Store: r.store, Namespaces: newNamespaces("acme"), Secrets: r.sealer, Audit: r.audit,
+				Openers: []forge.Opener{r.opener}, CheckURL: testCheckURL, OnAuditFailure: nil, OnRefused: nil,
+				CheckLimits: &limits, Now: nil,
+			})
+			if !errors.Is(err, forge.ErrInvalid) {
+				t.Fatalf("NewService with %+v = %v, want ErrInvalid", limits, err)
+			}
+		})
+	}
+}
+
+// TestTheLimiterRefusesLimitsThatAreNotPositive sends the same limits to the
+// limiter itself, as if NewService had not checked them. It refuses the check
+// and does not panic.
+func TestTheLimiterRefusesLimitsThatAreNotPositive(t *testing.T) {
+	t.Parallel()
+
+	for name, limits := range invalidCheckLimits() {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			if _, ok := forge.AdmitWithLimits(limits, time.UnixMilli(1_700_000_000_000)); ok {
+				t.Fatalf("the limiter admitted a check with %+v", limits)
+			}
+		})
+	}
+}

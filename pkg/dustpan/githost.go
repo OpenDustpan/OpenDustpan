@@ -120,7 +120,7 @@ func newGitHostService(cfg *settings, deps installationDeps) (*forge.Service, er
 		}
 	}
 
-	rules := egress.Rules{Allow: cfg.gitHost.allow, Loopback: cfg.gitHost.loopback}
+	rules := egress.Rules{Allow: cfg.gitHost.allow, LoopbackForTests: cfg.gitHost.loopback}
 
 	opener, err := github.NewOpener(github.Config{Rules: rules, RootCAs: cfg.gitHost.cas, Now: cfg.now})
 	if err != nil {
