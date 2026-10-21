@@ -183,6 +183,7 @@ func newStateHandlerWithBaseURL(t *testing.T, base baseurl.Resolver) *tfe.Handle
 		MaxStateBytes:  0,
 		OnAuditFailure: nil,
 		DenialLimiter:  nil,
+		StateGuard:     nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -788,7 +789,7 @@ func newListStateHandler(t *testing.T) *tfe.Handler {
 			LockID:          "lock-test",
 			Lineage:         "seed-lineage",
 			Status:          workspace.StatusFinalized,
-			Content:         blob.Key("tofu/ws-test123/" + tc.id + "/seed"),
+			Content:         blob.Key("namespaces/ns-aaaaaaaaaaaaaaaaaaaa/tofu/ws-test123/" + tc.id + "/seed"),
 			Outputs:         []byte(stubStateOutputs()),
 			MD5:             [md5.Size]byte{},
 			Serial:          tc.serial,
@@ -815,6 +816,7 @@ func newListStateHandler(t *testing.T) *tfe.Handler {
 		MaxStateBytes:  0,
 		OnAuditFailure: nil,
 		DenialLimiter:  nil,
+		StateGuard:     nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -1109,6 +1111,7 @@ func newSensitiveStateHandler(t *testing.T) *tfe.Handler {
 		MaxStateBytes:  0,
 		OnAuditFailure: nil,
 		DenialLimiter:  nil,
+		StateGuard:     nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -1224,6 +1227,7 @@ func TestStateSecretsNeedReadSecrets(t *testing.T) {
 		MaxStateBytes:  0,
 		OnAuditFailure: nil,
 		DenialLimiter:  nil,
+		StateGuard:     nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)

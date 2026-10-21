@@ -13,6 +13,7 @@ import (
 	"opendustpan.org/opendustpan/internal/token"
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/scopeaudit"
 )
 
 // ErrJournalConflict is returned when a batch holds a sequence ID that is stored
@@ -231,7 +232,7 @@ type JournalEntries struct {
 // outside that view to refusals.
 func NewJournalEntries(
 	blobs blob.Store, rows JournalStore, verifier BatchVerifier, maxCheckpointBytes int,
-	refusals OutOfScopeRecorder,
+	refusals scopeaudit.Recorder,
 ) (*JournalEntries, error) {
 	if verifier == nil {
 		return nil, ErrNilVerifier

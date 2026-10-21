@@ -250,6 +250,10 @@ func checkSecurityEntry(t *testing.T, e *audit.Entry, ns namespace.ID, channel a
 			e.Kind, e.Outcome, e.Object, e.Channel, ns, channel)
 	}
 
+	if want := "stack blob get refused: key outside the unit directory"; e.Reason != want {
+		t.Errorf("entry reason = %q, want %q", e.Reason, want)
+	}
+
 	if strings.Contains(e.Reason, "victim") || strings.Contains(e.Reason, "upd-") {
 		t.Errorf("entry reason names a blob key: %q", e.Reason)
 	}

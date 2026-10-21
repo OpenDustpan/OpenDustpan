@@ -10,6 +10,7 @@ import (
 	"opendustpan.org/opendustpan/internal/pulumijournal"
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/scopeaudit"
 	"opendustpan.org/opendustpan/pkg/stack"
 )
 
@@ -27,7 +28,7 @@ func unitForeignKeys() []foreignKey {
 	return append(foreignKeys(), foreignKey{
 		name:  "same stack, another update",
 		build: func(ns, _ string) string { return "namespaces/" + ns + "/pulumi/stk-test/upd-other/5" },
-		where: stack.OutsideStackBlobs,
+		where: scopeaudit.OutsideUnitDirectory,
 	})
 }
 

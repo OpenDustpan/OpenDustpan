@@ -158,20 +158,25 @@ allows only the two kinds.
 
 The server writes one entry of the kind `security` and the outcome `denied`
 when it stops an access that crosses a namespace boundary. Today this is a
-read, a write, a delete or a listing of one of these blobs with a blob key of
+read, a write, a list or a delete of one of these blobs, with a blob key of
 another namespace, or with a key of its own namespace that is outside the
-directory of the blob kind:
+directory of these blobs:
 
-- An item key blob, in the item-keys directory.
-- A Pulumi checkpoint blob or a journal batch blob, in the Pulumi directory.
+- An item key blob, in the `item-keys` directory of the namespace.
+- The content of an OpenTofu state version, in the `tofu` directory of the
+  namespace.
+- A Pulumi checkpoint blob or a journal batch blob, in the `pulumi` directory
+  of the namespace.
 
 The action is `blob:out-of-scope`. The scope is `@server`, the subject is
 `server`, and the object is the ID of the namespace of the call. The reason
-names the blob kind and the operation. It also says whether the key was
-outside the namespace or outside the directory of the blob kind in the
-namespace. The entry never holds the blob key that the call used.
+names the blob, the operation, and whether the key was outside the namespace,
+outside the directory of the blob in the namespace, or outside the directory of
+the unit in the blob directory, for example
+`state blob get refused: key outside the namespace`. The entry never holds the
+blob key that the call used.
 
-For a Pulumi blob, the directory is the directory of one stack:
+For a Pulumi blob, the directory of the unit is the directory of one stack:
 `namespaces/<namespace ID>/pulumi/<stack ID>/`. A key in the directory of
 another stack of the same namespace is a refusal too. The server checks this
 each time that it uses a key from a row, to read, to delete or to list.
@@ -726,7 +731,7 @@ The server does not follow a redirect: a 3xx answer is a failed batch, and the s
 ### Object storage
 
 `blob:<prefix>` writes to the blob store of the server: the directory of `--blob-dir` or the bucket of `--blob-store`.
-The prefixes `tofu` and `pulumi` hold state, so the server refuses them.
+The prefixes `namespaces` and `pulumi` hold state, so the server refuses them.
 The prefix `audit-checkpoints` holds signed audit checkpoints, so the server refuses it.
 Each object is `<prefix>/<scope>/<yyyy-mm-dd>/<first>-<last>-<random>.jsonl.gz`.
 The two times are the first and the last entry of the file in Unix milliseconds.

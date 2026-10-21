@@ -625,6 +625,27 @@ FROM workspaces
 WHERE namespace = ? AND deleted_at_ms IS NULL
 ORDER BY name;
 
+-- name: ReadWorkspace :one
+-- The read behind the store port: the workspace with the ID of its namespace,
+-- from the join with the namespace row, so a caller needs no second read.
+SELECT sqlc.embed(w), n.id AS namespace_id
+FROM workspaces AS w
+JOIN namespaces AS n ON n.name = w.namespace
+WHERE w.namespace = ? AND w.name = ? AND w.deleted_at_ms IS NULL;
+
+-- name: ReadWorkspaceByID :one
+SELECT sqlc.embed(w), n.id AS namespace_id
+FROM workspaces AS w
+JOIN namespaces AS n ON n.name = w.namespace
+WHERE w.id = ? AND w.deleted_at_ms IS NULL;
+
+-- name: ReadWorkspaces :many
+SELECT sqlc.embed(w), n.id AS namespace_id
+FROM workspaces AS w
+JOIN namespaces AS n ON n.name = w.namespace
+WHERE w.namespace = ? AND w.deleted_at_ms IS NULL
+ORDER BY w.name;
+
 -- name: SaveWorkspace :execrows
 -- A compare-and-swap: it changes nothing unless the stored revision is the
 -- one the caller read. The current state pointer stays: only FinalizeStateVersion moves it.
@@ -3397,6 +3418,23 @@ VALUES (
 )
 ON CONFLICT (unit_id) DO UPDATE SET version_id = excluded.version_id, commit_id = excluded.commit_id,
     job_id = excluded.job_id, at_ms = excluded.at_ms;
+
+-- name: GetPersonPreferences :one
+-- One row for a live person, with the stored preferences when the person has
+-- a row. No row means no live person: a service, a deleted principal or an
+-- unknown ID.
+SELECT p.id, pp.document, pp.updated_at_ms
+FROM principals AS p
+LEFT JOIN person_preferences AS pp ON pp.principal_id = p.id
+WHERE p.id = sqlc.arg(id) AND p.kind = 'person' AND p.deleted_at_ms IS NULL;
+
+-- name: UpsertPersonPreferences :exec
+INSERT INTO person_preferences (principal_id, document, updated_at_ms)
+VALUES (sqlc.arg(principal_id), sqlc.arg(document), sqlc.arg(updated_at_ms))
+ON CONFLICT (principal_id) DO UPDATE SET document = excluded.document, updated_at_ms = excluded.updated_at_ms;
+
+-- name: DeletePersonPreferences :exec
+DELETE FROM person_preferences WHERE principal_id = sqlc.arg(principal_id);
 
 -- name: InsertSavedView :execrows
 -- The caller checks the fence in the same transaction. A view of the same

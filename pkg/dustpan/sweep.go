@@ -205,11 +205,11 @@ func (l pulumiLifecycle) DeletePurgedBlobs(ctx context.Context, ns namespace.ID,
 
 // DeletePurgedBlobs implements inventory.SweepTool for OpenTofu
 // workspaces, within purgeBlobTimeout.
-func (l opentofuLifecycle) DeletePurgedBlobs(ctx context.Context, _ namespace.ID, unitID string) error {
+func (l opentofuLifecycle) DeletePurgedBlobs(ctx context.Context, ns namespace.ID, unitID string) error {
 	bounded, cancel := context.WithTimeout(ctx, purgeBlobTimeout)
 	defer cancel()
 
-	if err := l.workspaces.DeletePurgedBlobs(bounded, workspace.ID(unitID)); err != nil {
+	if err := l.workspaces.DeletePurgedBlobs(bounded, ns, workspace.ID(unitID)); err != nil {
 		return fmt.Errorf("delete blobs of workspace %s: %w", unitID, err)
 	}
 

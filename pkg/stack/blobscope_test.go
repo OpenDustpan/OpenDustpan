@@ -10,9 +10,9 @@ import (
 	"sync"
 	"testing"
 
-	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/scopeaudit"
 	"opendustpan.org/opendustpan/pkg/stack"
 	"opendustpan.org/opendustpan/pkg/stack/stacktest"
 )
@@ -74,7 +74,7 @@ func (c *countingBlob) calls() int {
 type foreignKey struct {
 	build func(ns, tail string) string
 	name  string
-	where stack.OutOfScopeWhere
+	where scopeaudit.Where
 }
 
 // foreignKeys are the keys that the blob scope refuses, with the place that
@@ -84,37 +84,37 @@ func foreignKeys() []foreignKey {
 		{
 			name:  "another namespace",
 			build: func(_, tail string) string { return "namespaces/ns-other/pulumi/stk-test/" + tail },
-			where: stack.OutsideNamespace,
+			where: scopeaudit.OutsideNamespace,
 		},
 		{
 			name:  "old layout",
 			build: func(_, tail string) string { return "pulumi/stk-test/" + tail },
-			where: stack.OutsideNamespace,
+			where: scopeaudit.OutsideNamespace,
 		},
 		{
 			name:  "id as a prefix",
 			build: func(ns, tail string) string { return "namespaces/" + ns + "x/pulumi/stk-test/" + tail },
-			where: stack.OutsideNamespace,
+			where: scopeaudit.OutsideNamespace,
 		},
 		{
 			name:  "own tofu directory",
 			build: func(ns, tail string) string { return "namespaces/" + ns + "/tofu/stk-test/" + tail },
-			where: stack.OutsideStackBlobs,
+			where: scopeaudit.OutsideDirectory,
 		},
 		{
 			name:  "own item keys",
 			build: func(ns, tail string) string { return "namespaces/" + ns + "/item-keys/stk-test/" + tail },
-			where: stack.OutsideStackBlobs,
+			where: scopeaudit.OutsideDirectory,
 		},
 		{
 			name:  "same namespace, another stack",
 			build: func(ns, tail string) string { return "namespaces/" + ns + "/pulumi/stk-other/" + tail },
-			where: stack.OutsideStackBlobs,
+			where: scopeaudit.OutsideUnitDirectory,
 		},
 		{
 			name:  "same namespace, stack ID as a prefix",
 			build: func(ns, tail string) string { return "namespaces/" + ns + "/pulumi/stk-testx/" + tail },
-			where: stack.OutsideStackBlobs,
+			where: scopeaudit.OutsideUnitDirectory,
 		},
 	}
 }
@@ -304,32 +304,32 @@ func TestCheckpointReadsRefuseKeysOutsideTheScope(t *testing.T) {
 // namespace must never name.
 type journalForeignKey struct {
 	key   blob.Key
-	where stack.OutOfScopeWhere
+	where scopeaudit.Where
 }
 
 // journalForeignKeys are the journal keys that the blob scope refuses, with
 // the place that the refusal records.
 func journalForeignKeys() map[string]journalForeignKey {
 	return map[string]journalForeignKey{
-		"another namespace": {"namespaces/ns-other/pulumi/stack-1/upd-1/journal/1", stack.OutsideNamespace},
-		"old layout":        {"pulumi/stack-1/upd-1/journal/1", stack.OutsideNamespace},
+		"another namespace": {"namespaces/ns-other/pulumi/stack-1/upd-1/journal/1", scopeaudit.OutsideNamespace},
+		"old layout":        {"pulumi/stack-1/upd-1/journal/1", scopeaudit.OutsideNamespace},
 		"id as a prefix": {
-			"namespaces/ns-journal-testx/pulumi/stack-1/upd-1/journal/1", stack.OutsideNamespace,
+			"namespaces/ns-journal-testx/pulumi/stack-1/upd-1/journal/1", scopeaudit.OutsideNamespace,
 		},
 		"own tofu directory": {
-			"namespaces/ns-journal-test/tofu/stack-1/upd-1/journal/1", stack.OutsideStackBlobs,
+			"namespaces/ns-journal-test/tofu/stack-1/upd-1/journal/1", scopeaudit.OutsideDirectory,
 		},
 		"same namespace, another stack": {
-			"namespaces/ns-journal-test/pulumi/stack-2/upd-1/journal/1", stack.OutsideStackBlobs,
+			"namespaces/ns-journal-test/pulumi/stack-2/upd-1/journal/1", scopeaudit.OutsideUnitDirectory,
 		},
 		"same namespace, stack ID as a prefix": {
-			"namespaces/ns-journal-test/pulumi/stack-10/upd-1/journal/1", stack.OutsideStackBlobs,
+			"namespaces/ns-journal-test/pulumi/stack-10/upd-1/journal/1", scopeaudit.OutsideUnitDirectory,
 		},
 		"same stack, another update": {
-			"namespaces/ns-journal-test/pulumi/stack-1/upd-2/journal/1", stack.OutsideStackBlobs,
+			"namespaces/ns-journal-test/pulumi/stack-1/upd-2/journal/1", scopeaudit.OutsideUnitDirectory,
 		},
 		"same stack, checkpoint of the update": {
-			"namespaces/ns-journal-test/pulumi/stack-1/upd-1/1", stack.OutsideStackBlobs,
+			"namespaces/ns-journal-test/pulumi/stack-1/upd-1/1", scopeaudit.OutsideUnitDirectory,
 		},
 	}
 }
@@ -474,7 +474,7 @@ func TestJournalAppendWritesUnderTheNamespacePrefix(t *testing.T) {
 
 // updatesConfigFor returns the configuration of the update service over the
 // stores of f with the given blob store and recorder.
-func updatesConfigFor(f updatesFixture, blobs blob.Store, refusals stack.OutOfScopeRecorder) stack.UpdatesConfig {
+func updatesConfigFor(f updatesFixture, blobs blob.Store, refusals scopeaudit.Recorder) stack.UpdatesConfig {
 	return stack.UpdatesConfig{
 		Updates:            f.store,
 		Checkpoints:        f.store,
@@ -592,193 +592,5 @@ func TestDeleteStackBlobsRefusesAnInvalidScope(t *testing.T) {
 
 	if got := blobKeysOf(t, f.blobs); len(got) != 1 {
 		t.Fatalf("blobs left = %v, want the one blob", got)
-	}
-}
-
-// serverAudit is an audit.ServerStore that keeps the entries.
-type serverAudit struct {
-	err     error
-	entries []audit.Entry
-}
-
-func (s *serverAudit) AppendServer(_ context.Context, e audit.Entry) (audit.Entry, error) {
-	s.entries = append(s.entries, e)
-
-	return e, s.err
-}
-
-// errDiskFull is the failure of the audit store in the recorder test.
-var errDiskFull = errors.New("disk full")
-
-// checkSecurityEntry checks the fields of the entry of a refusal.
-func checkSecurityEntry(t *testing.T, e audit.Entry, reason string) {
-	t.Helper()
-
-	if e.Kind != audit.KindSecurity || e.Outcome != audit.OutcomeDenied {
-		t.Errorf("kind %q, outcome %q; want security, denied", e.Kind, e.Outcome)
-	}
-
-	if e.Namespace != audit.ServerScope || e.Subject != "server" {
-		t.Errorf("scope %q, subject %q; want @server, server", e.Namespace, e.Subject)
-	}
-
-	if e.Action != stack.ActionBlobOutOfScope || e.Object != "ns-one" {
-		t.Errorf("action %q, object %q; want blob:out-of-scope, ns-one", e.Action, e.Object)
-	}
-
-	if e.Channel != audit.ChannelAPI || e.Reason != reason {
-		t.Errorf("channel %q, reason %q; want api, %q", e.Channel, e.Reason, reason)
-	}
-}
-
-// TestAuditOutOfScopeWritesASecurityEntry checks the entry of a refusal: the
-// kind security, the outcome denied, the scope @server, the namespace of the
-// call as the object, a reason with the operation and the place, and no key.
-func TestAuditOutOfScopeWritesASecurityEntry(t *testing.T) {
-	t.Parallel()
-
-	const (
-		inNamespace = "outside the namespace"
-		inDirectory = "outside the stack blob directory of the namespace"
-	)
-
-	tests := []struct {
-		name   string
-		op     string
-		reason string
-		where  stack.OutOfScopeWhere
-	}{
-		{"a put outside the namespace", "put", "stack blob put refused: key " + inNamespace, stack.OutsideNamespace},
-		{"a get outside the namespace", "get", "stack blob get refused: key " + inNamespace, stack.OutsideNamespace},
-		{
-			"a delete in another directory",
-			"delete",
-			"stack blob delete refused: key " + inDirectory,
-			stack.OutsideStackBlobs,
-		},
-		{"a list outside the namespace", "list", "stack blob list refused: key " + inNamespace, stack.OutsideNamespace},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-
-			store := &serverAudit{err: nil, entries: nil}
-
-			rec, err := stack.NewAuditOutOfScope(store, nil)
-			if err != nil {
-				t.Fatalf("recorder: %v", err)
-			}
-
-			if recErr := rec.RecordOutOfScope(t.Context(), "ns-one", tc.op, tc.where); recErr != nil {
-				t.Fatalf("record: %v", recErr)
-			}
-
-			if len(store.entries) != 1 {
-				t.Fatalf("entries = %d, want 1", len(store.entries))
-			}
-
-			checkSecurityEntry(t, store.entries[0], tc.reason)
-		})
-	}
-}
-
-// TestNewAuditOutOfScopeRefusesBadInput checks the boundary of the
-// constructor: no audit store.
-func TestNewAuditOutOfScopeRefusesBadInput(t *testing.T) {
-	t.Parallel()
-
-	if _, err := stack.NewAuditOutOfScope(nil, nil); !errors.Is(err, stack.ErrMissingDependency) {
-		t.Errorf("no audit store: err = %v, want ErrMissingDependency", err)
-	}
-}
-
-// TestAuditOutOfScopeTakesTheChannelOfTheRequest checks that the entry of a
-// refusal names the channel that the context of the call carries: console for
-// a console request, api for an API request and for a call with none, and api
-// for a channel that is not one of the two.
-func TestAuditOutOfScopeTakesTheChannelOfTheRequest(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name string
-		ctx  context.Context //nolint:containedctx // The test table holds the context of each case.
-		want audit.Channel
-	}{
-		{"console request", audit.WithChannel(t.Context(), audit.ChannelConsole), audit.ChannelConsole},
-		{"api request", audit.WithChannel(t.Context(), audit.ChannelAPI), audit.ChannelAPI},
-		{"no channel", t.Context(), audit.ChannelAPI},
-		{"startup is not a request channel", audit.WithChannel(t.Context(), audit.ChannelStartup), audit.ChannelAPI},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-
-			store := &serverAudit{err: nil, entries: nil}
-
-			rec, err := stack.NewAuditOutOfScope(store, nil)
-			if err != nil {
-				t.Fatalf("recorder: %v", err)
-			}
-
-			if recErr := rec.RecordOutOfScope(tc.ctx, "ns-one", "get", stack.OutsideNamespace); recErr != nil {
-				t.Fatalf("record: %v", recErr)
-			}
-
-			if len(store.entries) != 1 || store.entries[0].Channel != tc.want {
-				t.Fatalf("entries = %+v, want one with the channel %q", store.entries, tc.want)
-			}
-		})
-	}
-}
-
-// TestAuditOutOfScopeRefusesBadRecords checks the boundary of the recorder: an
-// operation, a place or a namespace ID that the entry cannot hold writes
-// nothing, and a failure of the audit store is an error.
-func TestAuditOutOfScopeRefusesBadRecords(t *testing.T) {
-	t.Parallel()
-
-	store := &serverAudit{err: nil, entries: nil}
-
-	rec, err := stack.NewAuditOutOfScope(store, nil)
-	if err != nil {
-		t.Fatalf("recorder: %v", err)
-	}
-
-	bad := []struct {
-		name  string
-		ns    namespace.ID
-		op    string
-		where stack.OutOfScopeWhere
-	}{
-		{"unknown operation", "ns-one", "rename", stack.OutsideNamespace},
-		{"key text as the operation", "ns-one", "get namespaces/ns-two/x", stack.OutsideNamespace},
-		{"unknown place", "ns-one", "get", stack.OutOfScopeWhere("elsewhere")},
-		{"invalid namespace ID", "acme", "get", stack.OutsideNamespace},
-		{"empty namespace ID", "", "get", stack.OutsideNamespace},
-	}
-
-	for _, tc := range bad {
-		if recErr := rec.RecordOutOfScope(t.Context(), tc.ns, tc.op, tc.where); recErr == nil {
-			t.Errorf("%s: err = nil, want an error", tc.name)
-		}
-	}
-
-	if len(store.entries) != 0 {
-		t.Fatalf("entries = %d, want none for bad input", len(store.entries))
-	}
-
-	failing := &serverAudit{err: errDiskFull, entries: nil}
-
-	failRec, err := stack.NewAuditOutOfScope(failing, nil)
-	if err != nil {
-		t.Fatalf("recorder: %v", err)
-	}
-
-	if recErr := failRec.RecordOutOfScope(t.Context(), "ns-one", "get", stack.OutsideNamespace); !errors.Is(
-		recErr, errDiskFull,
-	) {
-		t.Fatalf("append failure: err = %v, want the audit failure", recErr)
 	}
 }

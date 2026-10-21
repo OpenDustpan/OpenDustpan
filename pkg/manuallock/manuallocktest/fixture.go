@@ -167,13 +167,14 @@ func createWorkspace(t *testing.T, s Store, ns namespace.Namespace, name string)
 	t.Helper()
 
 	w := workspace.Workspace{
-		CreatedAt: now(),
-		UpdatedAt: now(),
-		Lock:      workspace.Lock{LockedAt: time.Time{}, ID: "", Holder: "", Reason: ""},
-		ID:        workspace.ID(ident.NewID("ws-")),
-		Ref:       workspace.Ref{Namespace: ns.Name, Name: mustWorkspaceName(t, name)},
-		Revision:  1,
-		Overrides: namespace.Overrides{Forced: false, Unlocked: false},
+		NamespaceID: "",
+		CreatedAt:   now(),
+		UpdatedAt:   now(),
+		Lock:        workspace.Lock{LockedAt: time.Time{}, ID: "", Holder: "", Reason: ""},
+		ID:          workspace.ID(ident.NewID("ws-")),
+		Ref:         workspace.Ref{Namespace: ns.Name, Name: mustWorkspaceName(t, name)},
+		Revision:    1,
+		Overrides:   namespace.Overrides{Forced: false, Unlocked: false},
 	}
 
 	if err := s.CreateWorkspace(t.Context(), w, ns.Fence()); err != nil {

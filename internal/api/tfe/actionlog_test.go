@@ -48,6 +48,7 @@ func loggedTFEHandler(t *testing.T, stores tfe.WorkspaceService, buf *bytes.Buff
 		MaxStateBytes:  0,
 		OnAuditFailure: nil,
 		DenialLimiter:  nil,
+		StateGuard:     nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -125,8 +126,9 @@ func (lockedActionWorkspaces) GetByID(_ context.Context, id workspace.ID) (works
 	}
 
 	return workspace.Workspace{
-		CreatedAt: stubWorkspaceTime(),
-		UpdatedAt: stubWorkspaceTime(),
+		NamespaceID: "",
+		CreatedAt:   stubWorkspaceTime(),
+		UpdatedAt:   stubWorkspaceTime(),
 		Lock: workspace.Lock{
 			LockedAt: stubWorkspaceTime(),
 			ID:       "lock-alice",

@@ -359,9 +359,9 @@ type namespaceOnlyStore struct {
 	}
 }
 
-// AppendServer lets the server write the security entries of the stack blobs,
-// which the update service needs at its start. It is no part of the
-// maintenance port.
+// AppendServer serves the audit log of the server scope, which the workspace
+// service needs to record a refused blob key, so the maintenance check stays
+// the first to refuse.
 func (s namespaceOnlyStore) AppendServer(ctx context.Context, e audit.Entry) (audit.Entry, error) {
 	return s.store.AppendServer(ctx, e)
 }

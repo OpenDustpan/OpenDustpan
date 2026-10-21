@@ -56,7 +56,8 @@ func (d *jobDomain) CreateUnit(
 		}
 
 		w := workspace.Workspace{
-			CreatedAt: now, UpdatedAt: now,
+			NamespaceID: "",
+			CreatedAt:   now, UpdatedAt: now,
 			Lock: workspace.Lock{LockedAt: time.Time{}, ID: "", Holder: "", Reason: ""},
 			ID:   workspace.ID(ident.NewID("ws-")), Ref: workspace.Ref{Namespace: fence.Namespace, Name: ref},
 			Revision: 1, Overrides: namespace.Overrides{Forced: false, Unlocked: false},

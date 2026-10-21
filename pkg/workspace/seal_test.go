@@ -9,6 +9,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/secret"
 	"opendustpan.org/opendustpan/pkg/workspace"
+	"opendustpan.org/opendustpan/pkg/workspace/workspacetest"
 )
 
 // sealFixture holds one sealing service over its stores, so tests push
@@ -60,6 +61,7 @@ func newSealFixture(t *testing.T) sealFixture {
 		States:             store,
 		Blobs:              blobs,
 		Namespaces:         namespaces,
+		OutOfScope:         workspacetest.NewRefusals(),
 		Sealer:             secrets,
 		Logger:             nil,
 		Now:                func() time.Time { return now },

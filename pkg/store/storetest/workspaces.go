@@ -21,6 +21,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/secret"
 	"opendustpan.org/opendustpan/pkg/workspace"
+	"opendustpan.org/opendustpan/pkg/workspace/workspacetest"
 )
 
 // WorkspaceStore is every persistence port the workspace suite exercises:
@@ -365,13 +366,14 @@ func mustWorkspaceName(t *testing.T, name string) workspace.Name {
 
 func newTestWorkspace(ns namespace.Namespace, name workspace.Name) workspace.Workspace {
 	return workspace.Workspace{
-		CreatedAt: now(),
-		UpdatedAt: now(),
-		Lock:      clearedLock(),
-		ID:        workspace.ID(ident.NewID("ws-")),
-		Ref:       workspace.Ref{Namespace: ns.Name, Name: name},
-		Revision:  1,
-		Overrides: namespace.Overrides{Forced: false, Unlocked: false},
+		CreatedAt:   now(),
+		UpdatedAt:   now(),
+		Lock:        clearedLock(),
+		ID:          workspace.ID(ident.NewID("ws-")),
+		Ref:         workspace.Ref{Namespace: ns.Name, Name: name},
+		NamespaceID: ns.ID,
+		Revision:    1,
+		Overrides:   namespace.Overrides{Forced: false, Unlocked: false},
 	}
 }
 
@@ -493,7 +495,7 @@ func createPendingVersion(
 func finalizedVersion(sv workspace.StateVersion, at time.Time, content string) workspace.StateVersion {
 	sv.Status = workspace.StatusFinalized
 	sv.FinalizedAt = at
-	sv.Content = blob.Key("tofu/" + sv.Workspace.String() + "/" + sv.ID.String() + "/a1")
+	sv.Content = blob.Key(stateBlobDir(sv.Workspace) + sv.ID.String() + "/a1")
 	sv.Size = int64(len(content))
 
 	return sv
@@ -519,11 +521,12 @@ func finalizeRecorded(
 func assertWorkspace(t *testing.T, got, want workspace.Workspace) {
 	t.Helper()
 
-	if got.Ref != want.Ref || got.ID != want.ID || got.Revision != want.Revision ||
-		!got.CreatedAt.Equal(want.CreatedAt) || !got.UpdatedAt.Equal(want.UpdatedAt) ||
-		got.Lock.ID != want.Lock.ID || got.Lock.Holder != want.Lock.Holder ||
-		got.Lock.Reason != want.Lock.Reason || !got.Lock.LockedAt.Equal(want.Lock.LockedAt) ||
-		got.Overrides != want.Overrides {
+	same := got.Ref == want.Ref && got.NamespaceID == want.NamespaceID && got.ID == want.ID &&
+		got.Revision == want.Revision && got.Overrides == want.Overrides &&
+		got.CreatedAt.Equal(want.CreatedAt) && got.UpdatedAt.Equal(want.UpdatedAt) &&
+		got.Lock.ID == want.Lock.ID && got.Lock.Holder == want.Lock.Holder &&
+		got.Lock.Reason == want.Lock.Reason && got.Lock.LockedAt.Equal(want.Lock.LockedAt)
+	if !same {
 		t.Fatalf("workspace = %+v, want %+v", got, want)
 	}
 }
@@ -737,7 +740,7 @@ func testListWorkspaces(t *testing.T, s WorkspaceStore) {
 	}
 
 	for i := range want {
-		if got[i].Ref.Name.String() != want[i] || got[i].Ref.Namespace != ns.Name {
+		if got[i].Ref.Name.String() != want[i] || got[i].Ref.Namespace != ns.Name || got[i].NamespaceID != ns.ID {
 			t.Fatalf("listed workspaces = %v, want %v", workspaceNames(got), want)
 		}
 	}
@@ -1312,7 +1315,7 @@ func testConcurrentFinalize(t *testing.T, s WorkspaceStore) {
 	for i := range pendings {
 		finalized[i] = finalizedVersion(pendings[i], now().Add(time.Duration(i+2)*time.Hour), "v1")
 		finalized[i].Content = blob.Key(
-			"tofu/" + pendings[i].Workspace.String() + "/" + pendings[i].ID.String() + "/" + attempts[i],
+			stateBlobDir(pendings[i].Workspace) + pendings[i].ID.String() + "/" + attempts[i],
 		)
 
 		if _, err := s.RecordUploadAttempt(t.Context(), finalized[i].ID, finalized[i].Content, ns.Fence()); err != nil {
@@ -2335,7 +2338,18 @@ func testCountPendingStateVersions(t *testing.T, s WorkspaceStore) {
 
 // attemptKeyOf returns the blob key of one upload attempt of sv.
 func attemptKeyOf(sv workspace.StateVersion, attempt string) blob.Key {
-	return blob.Key("tofu/" + sv.Workspace.String() + "/" + sv.ID.String() + "/" + attempt)
+	return blob.Key(stateBlobDir(sv.Workspace) + sv.ID.String() + "/" + attempt)
+}
+
+// stateNamespaceID is the namespace ID in the state content keys of this suite.
+// The stores keep a content key as an opaque string and never read it, so one
+// fixed ID is enough; the workspace service tests check the real layout.
+const stateNamespaceID = namespace.ID("ns-aaaaaaaaaaaaaaaaaaaa")
+
+// stateBlobDir returns the blob directory of the state of the workspace ws:
+// namespaces/<namespace ID>/tofu/<workspace ID>/.
+func stateBlobDir(ws workspace.ID) string {
+	return "namespaces/" + stateNamespaceID.String() + "/tofu/" + ws.String() + "/"
 }
 
 // assertAttemptContent checks that id is pending with content.
@@ -3283,7 +3297,7 @@ func newFenceVersion(t *testing.T, w workspace.Workspace, serial int64, at time.
 		LockID:          "",
 		Lineage:         "lin-b",
 		Status:          workspace.StatusFinalized,
-		Content:         blob.Key("tofu/" + w.ID.String() + "/fence/a1"),
+		Content:         blob.Key(stateBlobDir(w.ID) + "fence/a1"),
 		Outputs:         nil,
 		MD5:             sum,
 		Serial:          serial,
@@ -3536,7 +3550,7 @@ func testFenceAndUnlockNeedsStagedVersion(t *testing.T, s WorkspaceStore) {
 	stageFence(t, s, ns, staged)
 
 	other := staged
-	other.Content = blob.Key("tofu/" + locked.ID.String() + "/fence/other")
+	other.Content = blob.Key(stateBlobDir(locked.ID) + "fence/other")
 
 	refused := []workspace.StateVersion{unstaged, other}
 
@@ -4043,6 +4057,7 @@ func servicesOver(t *testing.T, s WorkspaceStore, n int) []*workspace.Service {
 			States:             s,
 			Blobs:              blobs,
 			Namespaces:         nsSvc,
+			OutOfScope:         workspacetest.NewRefusals(),
 			Sealer:             sealer,
 			Logger:             nil,
 			Now:                now,

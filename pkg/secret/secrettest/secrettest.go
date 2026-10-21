@@ -425,13 +425,14 @@ func testDeleteWorkspaceKeepsKey(t *testing.T, s Store) {
 	}
 
 	w := workspace.Workspace{
-		CreatedAt: now(),
-		UpdatedAt: now(),
-		Lock:      workspace.Lock{LockedAt: time.Time{}, ID: "", Holder: "", Reason: ""},
-		Ref:       workspace.Ref{Namespace: ns.Name, Name: name},
-		ID:        workspace.ID(ident.NewID("ws-")),
-		Revision:  1,
-		Overrides: namespace.Overrides{Forced: false, Unlocked: false},
+		NamespaceID: "",
+		CreatedAt:   now(),
+		UpdatedAt:   now(),
+		Lock:        workspace.Lock{LockedAt: time.Time{}, ID: "", Holder: "", Reason: ""},
+		Ref:         workspace.Ref{Namespace: ns.Name, Name: name},
+		ID:          workspace.ID(ident.NewID("ws-")),
+		Revision:    1,
+		Overrides:   namespace.Overrides{Forced: false, Unlocked: false},
 	}
 
 	if err := s.CreateWorkspace(t.Context(), w, ns.Fence()); err != nil {

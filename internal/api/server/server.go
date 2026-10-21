@@ -27,6 +27,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/ipallow"
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/preferences"
 	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/session"
 	"opendustpan.org/opendustpan/pkg/store/schema"
@@ -127,6 +128,10 @@ type Config struct {
 	// AuditSinks lists the configured audit sinks with their delivery
 	// state. Nil means no sink is configured: the sink list is empty.
 	AuditSinks AuditSinkSource
+	// Preferences keeps the preferences of a person. Nil means the store
+	// keeps none: the preferences routes answer 501. Both SQL adapters keep
+	// them.
+	Preferences *preferences.Service
 	// Workers reports the components of the process and the state of the
 	// worker, and refuses the start of a durable operation when no worker
 	// claimed or renewed a claim. Nil means no refusal and an empty report.
@@ -190,6 +195,7 @@ type Handler struct {
 	workers        WorkerSource
 	signIn         *signInState
 	kind           installation.Kind
+	preferences    *preferences.Service
 	mux            *patternMux
 	routes         []Route
 }
@@ -247,6 +253,7 @@ func NewHandler(cfg Config) (*Handler, error) {
 		workers:        cfg.Workers,
 		signIn:         signIn,
 		kind:           cfg.InstallationKind,
+		preferences:    cfg.Preferences,
 		mux:            newPatternMux(),
 		routes:         nil,
 	}
@@ -400,6 +407,14 @@ type errorResponse struct {
 const maintenanceRetryAfter = "30"
 
 func (h *Handler) writeError(ctx context.Context, w http.ResponseWriter, err error) {
+	if coded, ok := errors.AsType[*codedError](err); ok {
+		h.writeJSON(ctx, w, coded.status, codedResponse{
+			Message: coded.message, Code: coded.status, ErrorCode: coded.code, ErrorArgs: coded.args,
+		})
+
+		return
+	}
+
 	status, message := classify(err)
 	if status == http.StatusInternalServerError {
 		// The log names the status only, never the error text: the text

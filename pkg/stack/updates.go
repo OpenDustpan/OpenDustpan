@@ -23,6 +23,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/manuallock"
 	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/scopeaudit"
 )
 
 const (
@@ -152,7 +153,7 @@ type UpdatesConfig struct {
 	Blobs blob.Store
 	// Refusals records each refusal of a blob key outside the scope of the
 	// namespace of a call.
-	Refusals OutOfScopeRecorder
+	Refusals scopeaudit.Recorder
 	Now      func() time.Time
 	// Logger receives sweep failures; nil discards them.
 	Logger *slog.Logger

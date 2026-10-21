@@ -6,17 +6,17 @@ import (
 	"sync"
 
 	"opendustpan.org/opendustpan/pkg/namespace"
-	"opendustpan.org/opendustpan/pkg/stack"
+	"opendustpan.org/opendustpan/pkg/scopeaudit"
 )
 
 // Refusal is one refusal that Refusals saw.
 type Refusal struct {
 	Namespace namespace.ID
 	Op        string
-	Where     stack.OutOfScopeWhere
+	Where     scopeaudit.Where
 }
 
-// Refusals is a stack.OutOfScopeRecorder that keeps the refusals in memory.
+// Refusals is a scopeaudit.Recorder that keeps the refusals in memory.
 // Set Err before use to make each record fail.
 type Refusals struct {
 	// Err is the error that each record returns after it keeps the refusal.
@@ -26,16 +26,16 @@ type Refusals struct {
 	mu  sync.Mutex
 }
 
-var _ stack.OutOfScopeRecorder = (*Refusals)(nil)
+var _ scopeaudit.Recorder = (*Refusals)(nil)
 
 // NewRefusals returns an empty recorder.
 func NewRefusals() *Refusals {
 	return &Refusals{Err: nil, got: nil, mu: sync.Mutex{}}
 }
 
-// RecordOutOfScope implements stack.OutOfScopeRecorder.
+// RecordOutOfScope implements scopeaudit.Recorder.
 func (r *Refusals) RecordOutOfScope(
-	_ context.Context, ns namespace.ID, op string, where stack.OutOfScopeWhere,
+	_ context.Context, ns namespace.ID, op string, where scopeaudit.Where,
 ) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()

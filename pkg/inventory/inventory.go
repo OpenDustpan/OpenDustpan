@@ -131,6 +131,25 @@ type DeletedEntry struct {
 	Name       string
 }
 
+// DeletedFacts holds what the gates and the access limits need about a
+// deleted unit: the collection that still holds it and its labels. A deleted
+// unit keeps its membership of a collection until it is purged.
+type DeletedFacts struct {
+	// Collection is the name of the collection of the unit, or empty when the
+	// unit has none.
+	Collection string
+	// Labels are the labels of the unit. The map is never nil.
+	Labels map[string]string
+}
+
+// DeletedFactsReader is the read port of the facts of a deleted unit. A store
+// that keeps deleted units implements it next to DeletedReader.
+type DeletedFactsReader interface {
+	// GetDeletedUnitFacts returns the facts of the deleted unit of ns with the
+	// tool and the unit ID, or ErrNotFound. A live unit is not a deleted unit.
+	GetDeletedUnitFacts(ctx context.Context, ns namespace.Name, tool, unitID string) (DeletedFacts, error)
+}
+
 // DeletedReader is the read port of the deleted units.
 type DeletedReader interface {
 	// ListDeletedUnits returns the deleted units of ns, ordered by tool, then

@@ -77,7 +77,8 @@ func unitStore(t *testing.T, s access.Store) UnitStore {
 	}
 
 	ws := workspace.Workspace{
-		CreatedAt: at(0), UpdatedAt: at(0),
+		NamespaceID: "",
+		CreatedAt:   at(0), UpdatedAt: at(0),
 		Lock: workspace.Lock{LockedAt: at(0), ID: "", Holder: "", Reason: ""},
 		ID:   "ws-network", Ref: workspace.Ref{Namespace: "acme", Name: name},
 		Overrides: namespace.Overrides{Forced: false, Unlocked: false}, Revision: 1,

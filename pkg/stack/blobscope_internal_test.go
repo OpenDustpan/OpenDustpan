@@ -11,6 +11,7 @@ import (
 
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/scopeaudit"
 )
 
 const (
@@ -103,7 +104,7 @@ func (c *countingStore) count() int {
 type recordedRefusal struct {
 	ns    namespace.ID
 	op    string
-	where OutOfScopeWhere
+	where scopeaudit.Where
 }
 
 // scopeRecorder is an OutOfScopeRecorder that keeps the refusals. A non-nil
@@ -113,7 +114,7 @@ type scopeRecorder struct {
 	got []recordedRefusal
 }
 
-func (r *scopeRecorder) RecordOutOfScope(_ context.Context, ns namespace.ID, op string, where OutOfScopeWhere) error {
+func (r *scopeRecorder) RecordOutOfScope(_ context.Context, ns namespace.ID, op string, where scopeaudit.Where) error {
 	r.got = append(r.got, recordedRefusal{ns: ns, op: op, where: where})
 
 	return r.err
@@ -124,44 +125,44 @@ func (r *scopeRecorder) RecordOutOfScope(_ context.Context, ns namespace.ID, op 
 // as a row from a damaged or hostile database would.
 func hostileKeys() map[string]struct {
 	key   blob.Key
-	where OutOfScopeWhere
+	where scopeaudit.Where
 } {
 	type entry = struct {
 		key   blob.Key
-		where OutOfScopeWhere
+		where scopeaudit.Where
 	}
 
 	return map[string]entry{
-		"another namespace":        {"namespaces/" + scopeOther + "/pulumi/stk-1/upd-1/1", OutsideNamespace},
-		"old layout without ns":    {"pulumi/stk-1/upd-1/1", OutsideNamespace},
-		"id as a string prefix":    {"namespaces/ns-scope-ax/pulumi/stk-1/upd-1/1", OutsideNamespace},
-		"id with a longer segment": {"namespaces/ns-scope-a.b/pulumi/stk-1/upd-1/1", OutsideNamespace},
+		"another namespace":        {"namespaces/" + scopeOther + "/pulumi/stk-1/upd-1/1", scopeaudit.OutsideNamespace},
+		"old layout without ns":    {"pulumi/stk-1/upd-1/1", scopeaudit.OutsideNamespace},
+		"id as a string prefix":    {"namespaces/ns-scope-ax/pulumi/stk-1/upd-1/1", scopeaudit.OutsideNamespace},
+		"id with a longer segment": {"namespaces/ns-scope-a.b/pulumi/stk-1/upd-1/1", scopeaudit.OutsideNamespace},
 		"parent segment": {
 			"namespaces/ns-scope-a/../" + scopeOther + "/pulumi/stk-1/upd-1/1",
-			OutsideNamespace,
+			scopeaudit.OutsideNamespace,
 		},
-		"parent of the scope":         {"namespaces/pulumi/stk-1/upd-1/1", OutsideNamespace},
-		"empty key":                   {"", OutsideNamespace},
-		"scope directory only":        {"namespaces/ns-scope-a/", OutsideNamespace},
-		"absolute path":               {"/namespaces/ns-scope-a/pulumi/stk-1/upd-1/1", OutsideNamespace},
-		"backslash":                   {`namespaces\ns-scope-a\pulumi\stk-1\upd-1\1`, OutsideNamespace},
-		"own namespace, tofu":         {"namespaces/ns-scope-a/tofu/ws-1/sv-1/1", OutsideStackBlobs},
-		"own namespace, item keys":    {"namespaces/ns-scope-a/item-keys/ik-1/v1", OutsideStackBlobs},
-		"own namespace, string match": {"namespaces/ns-scope-a/pulumix/stk-1/upd-1/1", OutsideStackBlobs},
+		"parent of the scope":         {"namespaces/pulumi/stk-1/upd-1/1", scopeaudit.OutsideNamespace},
+		"empty key":                   {"", scopeaudit.OutsideNamespace},
+		"scope directory only":        {"namespaces/ns-scope-a/", scopeaudit.OutsideNamespace},
+		"absolute path":               {"/namespaces/ns-scope-a/pulumi/stk-1/upd-1/1", scopeaudit.OutsideNamespace},
+		"backslash":                   {`namespaces\ns-scope-a\pulumi\stk-1\upd-1\1`, scopeaudit.OutsideNamespace},
+		"own namespace, tofu":         {"namespaces/ns-scope-a/tofu/ws-1/sv-1/1", scopeaudit.OutsideDirectory},
+		"own namespace, item keys":    {"namespaces/ns-scope-a/item-keys/ik-1/v1", scopeaudit.OutsideDirectory},
+		"own namespace, string match": {"namespaces/ns-scope-a/pulumix/stk-1/upd-1/1", scopeaudit.OutsideDirectory},
 		"same namespace, another stack": {
-			"namespaces/ns-scope-a/pulumi/stk-2/upd-1/1", OutsideStackBlobs,
+			"namespaces/ns-scope-a/pulumi/stk-2/upd-1/1", scopeaudit.OutsideUnitDirectory,
 		},
 		"same namespace, another stack, journal": {
-			"namespaces/ns-scope-a/pulumi/stk-2/upd-1/journal/1", OutsideStackBlobs,
+			"namespaces/ns-scope-a/pulumi/stk-2/upd-1/journal/1", scopeaudit.OutsideUnitDirectory,
 		},
 		"same namespace, stack ID as a string prefix": {
-			"namespaces/ns-scope-a/pulumi/stk-10/upd-1/1", OutsideStackBlobs,
+			"namespaces/ns-scope-a/pulumi/stk-10/upd-1/1", scopeaudit.OutsideUnitDirectory,
 		},
 		"same namespace, family directory only": {
-			"namespaces/ns-scope-a/pulumi/", OutsideNamespace,
+			"namespaces/ns-scope-a/pulumi/", scopeaudit.OutsideNamespace,
 		},
 		"same namespace, stack ID only": {
-			"namespaces/ns-scope-a/pulumi/stk-1", OutsideStackBlobs,
+			"namespaces/ns-scope-a/pulumi/stk-1", scopeaudit.OutsideUnitDirectory,
 		},
 	}
 }
@@ -229,7 +230,7 @@ func TestScopedBlobsRefuseHostileKeys(t *testing.T) {
 }
 
 // checkHostileKey sends key to run and checks the refusal.
-func checkHostileKey(t *testing.T, opName string, run scopeOp, key blob.Key, where OutOfScopeWhere) {
+func checkHostileKey(t *testing.T, opName string, run scopeOp, key blob.Key, where scopeaudit.Where) {
 	t.Helper()
 
 	b, store, rec := newScopeFixture(t, nil)
@@ -256,20 +257,24 @@ func TestScopedBlobsRefuseHostilePrefixes(t *testing.T) {
 	tests := []struct {
 		name   string
 		prefix string
-		where  OutOfScopeWhere
+		where  scopeaudit.Where
 	}{
-		{"empty prefix", "", OutsideNamespace},
-		{"all namespaces", "namespaces/", OutsideNamespace},
-		{"another namespace", "namespaces/" + scopeOther + "/pulumi/", OutsideNamespace},
-		{"string prefix of the id", "namespaces/ns-scope-ax/pulumi/", OutsideNamespace},
-		{"old layout", "pulumi/stk-1/", OutsideNamespace},
-		{"scope root", "namespaces/ns-scope-a/", OutsideStackBlobs},
-		{"same namespace, family directory", "namespaces/ns-scope-a/pulumi/", OutsideStackBlobs},
-		{"same namespace, another stack", "namespaces/ns-scope-a/pulumi/stk-2/", OutsideStackBlobs},
-		{"same namespace, stack ID as a string prefix", "namespaces/ns-scope-a/pulumi/stk-10/", OutsideStackBlobs},
-		{"scope root without slash", "namespaces/ns-scope-a", OutsideStackBlobs},
-		{"own tofu directory", "namespaces/ns-scope-a/tofu/", OutsideStackBlobs},
-		{"string prefix of the directory", "namespaces/ns-scope-a/pulumix/", OutsideStackBlobs},
+		{"empty prefix", "", scopeaudit.OutsideNamespace},
+		{"all namespaces", "namespaces/", scopeaudit.OutsideNamespace},
+		{"another namespace", "namespaces/" + scopeOther + "/pulumi/", scopeaudit.OutsideNamespace},
+		{"string prefix of the id", "namespaces/ns-scope-ax/pulumi/", scopeaudit.OutsideNamespace},
+		{"old layout", "pulumi/stk-1/", scopeaudit.OutsideNamespace},
+		{"scope root", "namespaces/ns-scope-a/", scopeaudit.OutsideDirectory},
+		{"same namespace, family directory", "namespaces/ns-scope-a/pulumi/", scopeaudit.OutsideUnitDirectory},
+		{"same namespace, another stack", "namespaces/ns-scope-a/pulumi/stk-2/", scopeaudit.OutsideUnitDirectory},
+		{
+			"same namespace, stack ID as a string prefix",
+			"namespaces/ns-scope-a/pulumi/stk-10/",
+			scopeaudit.OutsideUnitDirectory,
+		},
+		{"scope root without slash", "namespaces/ns-scope-a", scopeaudit.OutsideDirectory},
+		{"own tofu directory", "namespaces/ns-scope-a/tofu/", scopeaudit.OutsideDirectory},
+		{"string prefix of the directory", "namespaces/ns-scope-a/pulumix/", scopeaudit.OutsideDirectory},
 	}
 
 	for _, tc := range tests {
@@ -553,7 +558,7 @@ func checkNarrowedRefusal(t *testing.T, opName string, run scopeOp, key blob.Key
 		t.Fatalf("%s reached the store %d times, want 0", opName, n)
 	}
 
-	if len(rec.got) != 1 || rec.got[0].op != opName || rec.got[0].where != OutsideStackBlobs {
+	if len(rec.got) != 1 || rec.got[0].op != opName || rec.got[0].where != scopeaudit.OutsideUnitDirectory {
 		t.Fatalf("refusals = %+v, want one %s refusal in the stack directory", rec.got, opName)
 	}
 }
@@ -617,7 +622,7 @@ func TestListRefusesAKeyOutsideTheStack(t *testing.T) {
 		t.Fatalf("list = %v, %v; want no key and blob.ErrOutOfScope", listed, err)
 	}
 
-	if len(rec.got) != 1 || rec.got[0].op != "list" || rec.got[0].where != OutsideStackBlobs {
+	if len(rec.got) != 1 || rec.got[0].op != "list" || rec.got[0].where != scopeaudit.OutsideUnitDirectory {
 		t.Fatalf("refusals = %+v, want one list refusal in the stack directory", rec.got)
 	}
 }

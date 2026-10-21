@@ -154,6 +154,7 @@ func (d devDeps) handler(t *testing.T, parts devParts) *apiserver.Handler {
 	}
 
 	handler, err := apiserver.NewHandler(apiserver.Config{
+		Preferences:      nil,
 		Authenticator:    tokenAuthenticator{},
 		Authorizer:       d.authz,
 		Logger:           slog.New(slog.DiscardHandler),

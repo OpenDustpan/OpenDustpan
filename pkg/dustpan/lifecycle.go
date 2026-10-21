@@ -184,12 +184,13 @@ func (l opentofuLifecycle) purgeUnit(
 ) error {
 	id := workspace.ID(unitID)
 
-	if err := l.workspaces.PurgeExpired(ctx, ns, id, dueBy, e); err != nil {
+	nsID, err := l.workspaces.PurgeExpired(ctx, ns, id, dueBy, e)
+	if err != nil {
 		return lifecycleError(err, workspace.ErrNotFound, workspace.ErrAlreadyExists)
 	}
 
 	l.blobs.deleteBlobs(ctx, opentofuTool, unitID, func(c context.Context) error {
-		return l.workspaces.DeletePurgedBlobs(c, id)
+		return l.workspaces.DeletePurgedBlobs(c, nsID, id)
 	})
 
 	return nil

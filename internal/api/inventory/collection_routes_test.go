@@ -67,6 +67,7 @@ func newCollectionRouteHandler(t *testing.T, authz identity.Authorizer) *apiinve
 		Sessions:      nil,
 		Logger:        slog.New(slog.DiscardHandler),
 		DenialLimiter: nil,
+		StateGuard:    nil,
 	})
 	if err != nil {
 		t.Fatalf("inventory handler: %v", err)

@@ -245,13 +245,14 @@ func createWALWorkspace(
 	now := time.Now()
 
 	w := workspace.Workspace{
-		CreatedAt: now,
-		UpdatedAt: now,
-		Lock:      workspace.Lock{LockedAt: time.Time{}, ID: "", Holder: "", Reason: ""},
-		ID:        workspace.ID(ident.NewID("ws-")),
-		Ref:       workspace.Ref{Namespace: ns.Name, Name: name},
-		Revision:  1,
-		Overrides: namespace.Overrides{Forced: false, Unlocked: false},
+		NamespaceID: "",
+		CreatedAt:   now,
+		UpdatedAt:   now,
+		Lock:        workspace.Lock{LockedAt: time.Time{}, ID: "", Holder: "", Reason: ""},
+		ID:          workspace.ID(ident.NewID("ws-")),
+		Ref:         workspace.Ref{Namespace: ns.Name, Name: name},
+		Revision:    1,
+		Overrides:   namespace.Overrides{Forced: false, Unlocked: false},
 	}
 
 	return s.CreateWorkspace(ctx, w, ns.Fence())

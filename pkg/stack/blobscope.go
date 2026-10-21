@@ -7,11 +7,10 @@ import (
 	"io"
 	"strconv"
 	"strings"
-	"time"
 
-	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/scopeaudit"
 )
 
 // pulumiDir is the directory of the stack blobs inside the blob scope of a
@@ -21,41 +20,21 @@ import (
 // sequence ID>.
 const pulumiDir = "pulumi/"
 
-// OutOfScopeRecorder records that a call tried to use a blob key outside the
-// blob scope of the namespace of the call. A recorder never holds the key of
-// the call: the key can name another namespace, and it can hold text that an
-// attacker chose.
-type OutOfScopeRecorder interface {
-	// RecordOutOfScope records one refusal in the namespace ns, for the
-	// operation op ("put", "get", "delete" or "list"). Where says how far the
-	// key was out of scope. It returns an error when it cannot record the
-	// refusal.
-	RecordOutOfScope(ctx context.Context, ns namespace.ID, op string, where OutOfScopeWhere) error
+// BlobFamily is the family of the Pulumi checkpoint and journal blobs in
+// the reason of a refusal.
+func BlobFamily() scopeaudit.Family {
+	return scopeaudit.Family{Blobs: "stack blob", Dir: strings.TrimSuffix(pulumiDir, "/")}
 }
-
-// OutOfScopeWhere says where a refused key was: outside the namespace of the
-// call, or inside the namespace and outside its stack blob directory.
-type OutOfScopeWhere string
-
-// The places of a refused key.
-const (
-	// OutsideNamespace is a key that is not inside the namespace of the call.
-	OutsideNamespace OutOfScopeWhere = "namespace"
-	// OutsideStackBlobs is a key inside the namespace of the call and outside
-	// its stack blob directory, for example the key of an OpenTofu state
-	// version.
-	OutsideStackBlobs OutOfScopeWhere = "stack-blobs"
-)
 
 // blobAccess builds the scoped blob view of one namespace for one call. It
 // holds the blob store and the recorder of refusals, and no view.
 type blobAccess struct {
 	store    blob.Store
-	refusals OutOfScopeRecorder
+	refusals scopeaudit.Recorder
 }
 
 // newBlobAccess returns the access over store. Both arguments are required.
-func newBlobAccess(store blob.Store, refusals OutOfScopeRecorder) (blobAccess, error) {
+func newBlobAccess(store blob.Store, refusals scopeaudit.Recorder) (blobAccess, error) {
 	if store == nil {
 		return blobAccess{}, fmt.Errorf("%w: blob store", ErrMissingDependency)
 	}
@@ -103,7 +82,7 @@ var ErrInvalidScope = errors.New("invalid scope of stack blobs")
 // too. It implements blob.Store.
 type scopedBlobs struct {
 	view     *blob.Scoped
-	refusals OutOfScopeRecorder
+	refusals scopeaudit.Recorder
 	ns       namespace.ID
 	stack    ID
 	// allowed is the directory that the calls may use, with the trailing
@@ -258,26 +237,33 @@ func (b *scopedBlobs) check(ctx context.Context, op string, key blob.Key) error 
 // refusePrefix refuses the listing of a prefix outside the directory of the
 // stack.
 func (b *scopedBlobs) refusePrefix(ctx context.Context, prefix string) error {
-	where := OutsideNamespace
-	if strings.HasPrefix(strings.TrimSuffix(prefix, "/")+"/", b.view.Prefix()) {
-		where = OutsideStackBlobs
-	}
-
-	return b.record(ctx, "list", where)
+	return b.record(ctx, "list", b.placeOf(strings.TrimSuffix(prefix, "/")+"/", true))
 }
 
-// whereOf says where the refused key is. A key that a valid key of the view
-// would be, in the namespace of the view, is outside the directory of the
-// stack: the directory of another stack, another kind of blob, or a directory
-// of the stack that the call does not use. Every other key is outside the
-// namespace: another namespace, a parent segment, an empty key or a key that
-// is not a valid key at all.
-func (b *scopedBlobs) whereOf(key blob.Key) OutOfScopeWhere {
-	if _, err := blob.ParseKey(key.String()); err == nil && strings.HasPrefix(key.String(), b.view.Prefix()) {
-		return OutsideStackBlobs
-	}
+// whereOf says where the refused key is. See placeOf.
+func (b *scopedBlobs) whereOf(key blob.Key) scopeaudit.Where {
+	_, err := blob.ParseKey(key.String())
 
-	return OutsideNamespace
+	return b.placeOf(key.String(), err == nil)
+}
+
+// placeOf says where a refused key or prefix is. A valid one in the stack
+// blob directory of the namespace, which is outside the directory of the
+// stack of the call, is in another stack of the same namespace or in a
+// directory of the stack that the call does not use: the unit directory. A
+// valid one in the namespace and outside the stack blob directory is in
+// another kind of blob, for example the key of an OpenTofu state version: the
+// directory. Every other one is outside the namespace: another namespace, a
+// parent segment, an empty key or a key that is not a valid key at all.
+func (b *scopedBlobs) placeOf(name string, valid bool) scopeaudit.Where {
+	switch {
+	case !valid || !strings.HasPrefix(name, b.view.Prefix()):
+		return scopeaudit.OutsideNamespace
+	case strings.HasPrefix(name, b.dir()):
+		return scopeaudit.OutsideUnitDirectory
+	default:
+		return scopeaudit.OutsideDirectory
+	}
 }
 
 // refuse writes the refusal to the recorder when err is blob.ErrOutOfScope,
@@ -288,116 +274,18 @@ func (b *scopedBlobs) refuse(ctx context.Context, op string, err error) error {
 		return err
 	}
 
-	return b.record(ctx, op, OutsideNamespace)
+	return b.record(ctx, op, scopeaudit.OutsideNamespace)
 }
 
 // record writes one refusal to the recorder and returns blob.ErrOutOfScope,
 // joined with the error of the recorder when the record fails, so the caller
 // still sees the refusal.
-func (b *scopedBlobs) record(ctx context.Context, op string, where OutOfScopeWhere) error {
+func (b *scopedBlobs) record(ctx context.Context, op string, where scopeaudit.Where) error {
 	if recErr := b.refusals.RecordOutOfScope(ctx, b.ns, op, where); recErr != nil {
 		return errors.Join(blob.ErrOutOfScope, fmt.Errorf("record the refusal: %w", recErr))
 	}
 
 	return blob.ErrOutOfScope
-}
-
-// Actions and fields of the audit entry of a refusal.
-const (
-	// ActionBlobOutOfScope is the action of the audit entry of a refusal.
-	ActionBlobOutOfScope = "blob:out-of-scope"
-	// outOfScopeSubject is the subject of that entry: the server itself.
-	outOfScopeSubject = "server"
-)
-
-// ErrInvalidRefusal reports an out-of-scope record with an operation, a place
-// or a namespace ID that the entry cannot hold.
-var ErrInvalidRefusal = errors.New("invalid out-of-scope refusal")
-
-// AuditOutOfScope is an OutOfScopeRecorder that writes one audit entry of the
-// kind security in the scope @server.
-type AuditOutOfScope struct {
-	entries audit.ServerStore
-	now     func() time.Time
-}
-
-var _ OutOfScopeRecorder = (*AuditOutOfScope)(nil)
-
-// NewAuditOutOfScope returns an OutOfScopeRecorder that appends to entries.
-// The channel of each entry is the channel of the request, which the context
-// of the call carries (audit.WithChannel). A call without one is an API call.
-// now may be nil; it then is time.Now.
-func NewAuditOutOfScope(entries audit.ServerStore, now func() time.Time) (*AuditOutOfScope, error) {
-	if entries == nil {
-		return nil, fmt.Errorf("%w: audit store", ErrMissingDependency)
-	}
-
-	if now == nil {
-		now = time.Now
-	}
-
-	return &AuditOutOfScope{entries: entries, now: now}, nil
-}
-
-// RecordOutOfScope appends the entry. The object is the ID of the namespace of
-// the call, and the reason names op. The entry never holds the refused key.
-func (a *AuditOutOfScope) RecordOutOfScope(
-	ctx context.Context, ns namespace.ID, op string, where OutOfScopeWhere,
-) error {
-	switch op {
-	case "put", "get", "delete", "list":
-	default:
-		return fmt.Errorf("%w: operation %q", ErrInvalidRefusal, op)
-	}
-
-	var place string
-
-	switch where {
-	case OutsideNamespace:
-		place = "outside the namespace"
-	case OutsideStackBlobs:
-		place = "outside the stack blob directory of the namespace"
-	default:
-		return fmt.Errorf("%w: place %q", ErrInvalidRefusal, where)
-	}
-
-	if _, err := namespace.ParseID(ns.String()); err != nil {
-		return fmt.Errorf("record out-of-scope refusal: %w", err)
-	}
-
-	entry := audit.Entry{
-		At:            a.now().UTC(),
-		Namespace:     audit.ServerScope,
-		Subject:       outOfScopeSubject,
-		IDPSubject:    "",
-		TokenID:       "",
-		Action:        ActionBlobOutOfScope,
-		Object:        ns.String(),
-		Version:       "",
-		ValuePath:     "",
-		ValueCount:    nil,
-		Changes:       nil,
-		SourceIP:      "",
-		UserAgent:     "",
-		Channel:       audit.ChannelFrom(ctx),
-		Kind:          audit.KindSecurity,
-		Outcome:       audit.OutcomeDenied,
-		RequestID:     "",
-		ObjectID:      "",
-		PrevHash:      "",
-		Hash:          "",
-		Sequence:      0,
-		FenceVersion:  0,
-		PrincipalKind: "",
-		JobID:         "",
-		Reason:        "stack blob " + op + " refused: key " + place,
-	}
-
-	if _, err := a.entries.AppendServer(ctx, entry); err != nil {
-		return fmt.Errorf("append audit entry: %w", err)
-	}
-
-	return nil
 }
 
 // CheckCheckpointBlobKey returns nil when key is the blob key of a checkpoint

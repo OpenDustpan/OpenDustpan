@@ -167,7 +167,7 @@ func (f sweepFixture) deleteUnits(t *testing.T) []sweptUnit {
 
 	units := []sweptUnit{
 		{id: st.ID.String(), prefix: "namespaces/" + ns.ID.String() + "/pulumi/" + st.ID.String() + "/"},
-		{id: ws.ID.String(), prefix: "tofu/" + ws.ID.String() + "/"},
+		{id: ws.ID.String(), prefix: "namespaces/" + ns.ID.String() + "/tofu/" + ws.ID.String() + "/"},
 	}
 
 	for _, u := range units {

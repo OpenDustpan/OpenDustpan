@@ -12,6 +12,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/stack/stacktest"
 	"opendustpan.org/opendustpan/pkg/store/sqlite"
 	"opendustpan.org/opendustpan/pkg/workspace"
+	"opendustpan.org/opendustpan/pkg/workspace/workspacetest"
 )
 
 // racingState is the real store with a hook that runs before the
@@ -85,7 +86,8 @@ func newRealStack(t *testing.T) *realStack {
 
 	workspaces, err := workspace.NewService(workspace.Config{
 		ManualLocks: nil, Workspaces: st, States: st, Blobs: newTestBlobs(t), Namespaces: namespaces,
-		Sealer: stubSealer{}, Logger: nil, Now: nil, MaxStateBytes: 0, MaxPendingVersions: 0, Retention: 0,
+		OutOfScope: workspacetest.NewRefusals(),
+		Sealer:     stubSealer{}, Logger: nil, Now: nil, MaxStateBytes: 0, MaxPendingVersions: 0, Retention: 0,
 	})
 	if err != nil {
 		t.Fatalf("workspace service: %v", err)

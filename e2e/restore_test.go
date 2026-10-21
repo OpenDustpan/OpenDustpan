@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"slices"
 	"time"
 
 	"opendustpan.org/opendustpan/e2e"
@@ -379,7 +380,10 @@ func tofuRestoreSteps(ctx context.Context, env *e2e.Env, removedID *string, exis
 	// target reads the ID when a step runs: an earlier step sets it.
 	target := func() unitTarget { return unitTarget{org: e2e.Namespace, tool: "opentofu", id: *removedID} }
 
-	return []e2e.StepSpec{
+	restoreGate := restoreGateSteps(ctx, env, target, "rollback", remoteProdName)
+	purgeGate := restoreGateSteps(ctx, env, target, "delete", newName)
+
+	steps := []e2e.StepSpec{
 		step("deleted list holds the deleted workspace", func(e2e.Result) error {
 			return checkDeletedListed(ctx, env, target(), remoteProdName)
 		}, "workspace", "list", "-no-color"),
@@ -437,4 +441,11 @@ func tofuRestoreSteps(ctx context.Context, env *e2e.Env, removedID *string, exis
 			return checkSweepKeepsRecord(ctx, env)
 		}, "workspace", "list", "-no-color"),
 	}
+
+	// The gate steps run before the restore and before the purge.
+	at := slices.IndexFunc(steps, func(s e2e.StepSpec) bool { return s.Name == "restore workspace under a new name" })
+	steps = slices.Insert(steps, at, restoreGate...)
+	at = slices.IndexFunc(steps, func(s e2e.StepSpec) bool { return s.Name == "purge the deleted workspace" })
+
+	return slices.Insert(steps, at, purgeGate...)
 }

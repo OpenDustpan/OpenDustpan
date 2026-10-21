@@ -17,6 +17,7 @@ import (
 // without state keeps an empty current state version ID.
 type WorkspaceRow struct {
 	Namespace           string
+	NamespaceID         string
 	Name                string
 	ID                  string
 	LockID              string
@@ -65,6 +66,7 @@ type StateVersionRow struct {
 func ToWorkspaceRow(w workspace.Workspace) WorkspaceRow {
 	return WorkspaceRow{
 		Namespace:           w.Ref.Namespace.String(),
+		NamespaceID:         w.NamespaceID.String(),
 		Name:                w.Ref.Name.String(),
 		ID:                  w.ID.String(),
 		LockID:              w.Lock.ID,
@@ -91,10 +93,11 @@ func FromWorkspaceRow(row WorkspaceRow) workspace.Workspace {
 			Holder:   row.LockHolder,
 			Reason:   row.LockReason,
 		},
-		ID:        workspace.ID(row.ID),
-		Ref:       workspace.Ref{Namespace: namespace.Name(row.Namespace), Name: workspace.Name(row.Name)},
-		Overrides: namespace.Overrides{Forced: row.AllowForcedWrites, Unlocked: row.AllowUnlockedWrites},
-		Revision:  row.Revision,
+		ID:          workspace.ID(row.ID),
+		NamespaceID: namespace.ID(row.NamespaceID),
+		Ref:         workspace.Ref{Namespace: namespace.Name(row.Namespace), Name: workspace.Name(row.Name)},
+		Overrides:   namespace.Overrides{Forced: row.AllowForcedWrites, Unlocked: row.AllowUnlockedWrites},
+		Revision:    row.Revision,
 	}
 }
 

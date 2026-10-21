@@ -120,13 +120,14 @@ func makeWorkspace(t *testing.T, s Store, f namespace.Fence, id workspace.ID) {
 	}
 
 	err = s.CreateWorkspace(t.Context(), workspace.Workspace{
-		CreatedAt: suiteTime(),
-		UpdatedAt: suiteTime(),
-		Lock:      workspace.Lock{LockedAt: time.Time{}, ID: "", Holder: "", Reason: ""},
-		ID:        id,
-		Ref:       workspace.Ref{Namespace: f.Namespace, Name: name},
-		Overrides: namespace.Overrides{Forced: false, Unlocked: false},
-		Revision:  1,
+		NamespaceID: "",
+		CreatedAt:   suiteTime(),
+		UpdatedAt:   suiteTime(),
+		Lock:        workspace.Lock{LockedAt: time.Time{}, ID: "", Holder: "", Reason: ""},
+		ID:          id,
+		Ref:         workspace.Ref{Namespace: f.Namespace, Name: name},
+		Overrides:   namespace.Overrides{Forced: false, Unlocked: false},
+		Revision:    1,
 	}, f)
 	if err != nil {
 		t.Fatalf("create workspace %q: %v", id, err)

@@ -107,6 +107,7 @@ func newWorkspaceHandler(t *testing.T, authz identity.Authorizer) *tfe.Handler {
 		MaxStateBytes:  0,
 		OnAuditFailure: nil,
 		DenialLimiter:  nil,
+		StateGuard:     nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -672,13 +673,14 @@ func newPagingWorkspaces(t *testing.T) pagingWorkspaces {
 		}
 
 		items = append(items, workspace.Workspace{
-			CreatedAt: at,
-			UpdatedAt: at,
-			Lock:      tc.lock,
-			ID:        workspace.ID(tc.id),
-			Ref:       workspace.Ref{Namespace: ns, Name: name},
-			Revision:  1,
-			Overrides: namespace.Overrides{Forced: false, Unlocked: false},
+			NamespaceID: "",
+			CreatedAt:   at,
+			UpdatedAt:   at,
+			Lock:        tc.lock,
+			ID:          workspace.ID(tc.id),
+			Ref:         workspace.Ref{Namespace: ns, Name: name},
+			Revision:    1,
+			Overrides:   namespace.Overrides{Forced: false, Unlocked: false},
 		})
 	}
 
@@ -822,6 +824,7 @@ func newPagingHandler(t *testing.T, authz identity.Authorizer) *tfe.Handler {
 		MaxStateBytes:  0,
 		OnAuditFailure: nil,
 		DenialLimiter:  nil,
+		StateGuard:     nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)

@@ -302,6 +302,9 @@ How-to guides:
   stack, a workspace or a collection, with a reason, and end the lock.
 - [Approval defaults and approval rules](docs/guides/approval-rules.md): turn on
   approval before apply for a namespace, and store named approval rules.
+- [Gates and access limits on state writes](docs/guides/state-write-gates.md):
+  what the server checks before it lets an OpenTofu lock or a restore go on,
+  and what a refusal looks like.
 - [Set and read context](docs/guides/context.md): the owners, the on-call
   text and the other context of a namespace and of a unit.
 - [Save and open a view of the unit list](docs/guides/saved-views.md): store
@@ -323,6 +326,10 @@ Reference:
   steps and the bounds of a journaled update.
 - [Journal limits](docs/reference/journal-limits.md): the size and time limits
   of a journaled update.
+- [Preferences API](docs/reference/preferences-api.md): the routes that read
+  and change the preferences of a person.
+- [Languages and digits](docs/reference/languages-and-digits.md): the
+  languages, the `digits` setting and the plural forms.
 - [TFE-compatible API](docs/tfe-api.md): the endpoints that OpenTofu uses.
 - [Glossary](GLOSSARY.md): the words this project uses.
 

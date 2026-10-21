@@ -16,6 +16,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/scopeaudit"
 	"opendustpan.org/opendustpan/pkg/secret"
 )
 
@@ -109,15 +110,12 @@ func (m *memBlobs) callCount() int {
 	return m.calls
 }
 
-var (
-	errAuditDown    = errors.New("audit store is down")
-	errAppendFailed = errors.New("append failed")
-)
+var errAuditDown = errors.New("audit store is down")
 
 // refusal is one call of a recorder.
 type refusal struct {
 	op    string
-	where secret.OutOfScopeWhere
+	where scopeaudit.Where
 	ns    namespace.ID
 }
 
@@ -129,7 +127,7 @@ type fakeRecorder struct {
 }
 
 func (f *fakeRecorder) RecordOutOfScope(
-	_ context.Context, ns namespace.ID, op string, where secret.OutOfScopeWhere,
+	_ context.Context, ns namespace.ID, op string, where scopeaudit.Where,
 ) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -433,14 +431,14 @@ func TestItemKeyBlobsSizeLimits(t *testing.T) {
 // directory.
 type foreignKey struct {
 	key   blob.Key
-	where secret.OutOfScopeWhere
+	where scopeaudit.Where
 }
 
 // foreignKeys returns keys that a call in nsA must refuse, with a name for
 // each. Each key is a plain conversion, so no check of ParseKey ran on it.
 func foreignKeys(id secret.ItemKeyID) map[string]foreignKey {
 	a, other, tail := string(nsA), string(nsB), "/item-keys/"+string(id)+"/v1"
-	outside, inside := secret.OutsideNamespace, secret.OutsideItemKeys
+	outside, inside := scopeaudit.OutsideNamespace, scopeaudit.OutsideDirectory
 
 	return map[string]foreignKey{
 		"the item key of another namespace": {blob.Key("namespaces/" + other + tail), outside},
@@ -712,168 +710,6 @@ func (f *fakeServerStore) AppendServer(_ context.Context, e audit.Entry) (audit.
 	return e, nil
 }
 
-func TestAuditOutOfScope(t *testing.T) {
-	t.Parallel()
-
-	at := time.Date(2026, time.October, 20, 12, 0, 0, 0, time.UTC)
-	store := &fakeServerStore{err: nil, entries: nil}
-
-	rec, err := secret.NewAuditOutOfScope(store, audit.ChannelConsole, func() time.Time { return at })
-	if err != nil {
-		t.Fatalf("new: %v", err)
-	}
-
-	for _, op := range []string{"put", "get", "delete", "list"} {
-		if recErr := rec.RecordOutOfScope(t.Context(), nsA, op, secret.OutsideNamespace); recErr != nil {
-			t.Fatalf("record %s: %v", op, recErr)
-		}
-	}
-
-	if len(store.entries) != 4 {
-		t.Fatalf("entries = %d, want 4", len(store.entries))
-	}
-
-	for _, e := range store.entries {
-		checkSecurityEntry(t, e, at)
-	}
-}
-
-// TestAuditOutOfScopeReasonAndChannel proves that the reason of the entry names
-// where the key was, and that the channel is the one that the caller gave.
-func TestAuditOutOfScopeReasonAndChannel(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		where   secret.OutOfScopeWhere
-		channel audit.Channel
-		reason  string
-	}{
-		{secret.OutsideNamespace, audit.ChannelAPI, "item key blob get refused: key outside the namespace"},
-		{
-			secret.OutsideItemKeys,
-			audit.ChannelConsole,
-			"item key blob get refused: key outside the item-keys directory of the namespace",
-		},
-	}
-
-	for _, tc := range tests {
-		store := &fakeServerStore{err: nil, entries: nil}
-
-		rec, err := secret.NewAuditOutOfScope(store, tc.channel, nil)
-		if err != nil {
-			t.Fatalf("new: %v", err)
-		}
-
-		if recErr := rec.RecordOutOfScope(t.Context(), nsA, "get", tc.where); recErr != nil {
-			t.Fatalf("record %s: %v", tc.where, recErr)
-		}
-
-		if len(store.entries) != 1 {
-			t.Fatalf("%s: entries = %d, want 1", tc.where, len(store.entries))
-		}
-
-		if got := store.entries[0]; got.Reason != tc.reason || got.Channel != tc.channel {
-			t.Errorf(
-				"%s: reason %q on channel %q, want %q on %q",
-				tc.where,
-				got.Reason,
-				got.Channel,
-				tc.reason,
-				tc.channel,
-			)
-		}
-	}
-}
-
-// TestAuditOutOfScopeRefusesAWrongChannelOrPlace proves that the recorder fails
-// closed: a channel that is not api or console, and a place that it does not
-// know, write nothing.
-func TestAuditOutOfScopeRefusesAWrongChannelOrPlace(t *testing.T) {
-	t.Parallel()
-
-	store := &fakeServerStore{err: nil, entries: nil}
-
-	for _, channel := range []audit.Channel{"", "startup", "config-file", "api\nforged", "API"} {
-		if _, err := secret.NewAuditOutOfScope(store, channel, nil); !errors.Is(err, secret.ErrInvalidChannel) {
-			t.Errorf("channel %q: err = %v, want ErrInvalidChannel", channel, err)
-		}
-	}
-
-	rec, err := secret.NewAuditOutOfScope(store, audit.ChannelAPI, nil)
-	if err != nil {
-		t.Fatalf("new: %v", err)
-	}
-
-	for _, where := range []secret.OutOfScopeWhere{"", "elsewhere", "namespace\nforged"} {
-		recErr := rec.RecordOutOfScope(t.Context(), nsA, "get", where)
-		if !errors.Is(recErr, secret.ErrInvalidItemRef) {
-			t.Errorf("place %q: err = %v, want ErrInvalidItemRef", where, recErr)
-		}
-	}
-
-	if len(store.entries) != 0 {
-		t.Errorf("entries = %d, want 0", len(store.entries))
-	}
-}
-
-// checkSecurityEntry checks one entry of a refusal.
-func checkSecurityEntry(t *testing.T, e audit.Entry, at time.Time) {
-	t.Helper()
-
-	if err := e.Validate(); err != nil {
-		t.Errorf("entry %q is not valid: %v", e.Reason, err)
-	}
-
-	if e.Kind != audit.KindSecurity || e.Outcome != audit.OutcomeDenied || e.Namespace != audit.ServerScope {
-		t.Errorf("kind, outcome or scope of %+v", e)
-	}
-
-	if e.Action != secret.ActionBlobOutOfScope || e.Object != string(nsA) || !e.At.Equal(at) {
-		t.Errorf("action, object or time of %+v", e)
-	}
-
-	if strings.Contains(e.Reason, "namespaces/") || strings.Contains(e.Reason, string(nsB)) {
-		t.Errorf("reason %q holds a key", e.Reason)
-	}
-}
-
-func TestAuditOutOfScopeRefusesHostileInput(t *testing.T) {
-	t.Parallel()
-
-	store := &fakeServerStore{err: nil, entries: nil}
-
-	rec, err := secret.NewAuditOutOfScope(store, audit.ChannelAPI, nil)
-	if err != nil {
-		t.Fatalf("new: %v", err)
-	}
-
-	opErr := rec.RecordOutOfScope(t.Context(), nsA, "get\nforged entry", secret.OutsideNamespace)
-	if !errors.Is(opErr, secret.ErrInvalidItemRef) {
-		t.Errorf("hostile op err = %v, want ErrInvalidItemRef", opErr)
-	}
-
-	recErr := rec.RecordOutOfScope(t.Context(), "ns-A\nx", "get", secret.OutsideNamespace)
-	if !errors.Is(recErr, namespace.ErrInvalidID) {
-		t.Errorf("hostile namespace err = %v, want ErrInvalidID", recErr)
-	}
-
-	if len(store.entries) != 0 {
-		t.Errorf("entries = %d, want 0", len(store.entries))
-	}
-
-	store.err = errAppendFailed
-
-	recErr = rec.RecordOutOfScope(t.Context(), nsA, "get", secret.OutsideNamespace)
-	if !errors.Is(recErr, errAppendFailed) {
-		t.Errorf("append failure err = %v, want the store error", recErr)
-	}
-
-	_, newErr := secret.NewAuditOutOfScope(nil, audit.ChannelAPI, nil)
-	if !errors.Is(newErr, secret.ErrMissingDependency) {
-		t.Errorf("nil store err = %v, want ErrMissingDependency", newErr)
-	}
-}
-
 // TestItemKeyBlobsAuditEndToEnd checks that a refusal reaches the audit store
 // through the recorder of the package.
 func TestItemKeyBlobsAuditEndToEnd(t *testing.T) {
@@ -881,7 +717,7 @@ func TestItemKeyBlobsAuditEndToEnd(t *testing.T) {
 
 	entries := &fakeServerStore{err: nil, entries: nil}
 
-	rec, err := secret.NewAuditOutOfScope(entries, audit.ChannelAPI, nil)
+	rec, err := scopeaudit.New(entries, secret.ItemKeyFamily(), nil)
 	if err != nil {
 		t.Fatalf("recorder: %v", err)
 	}
