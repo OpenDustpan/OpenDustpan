@@ -2471,6 +2471,9 @@ func registryAllowEntries() []AllowEntry {
 		base = "/api/dustpan/v1/namespaces/{namespace}/registry"
 		test = "TestRegistryTofuInit"
 		why  = "Client route: no CLI calls it. The steps of TestRegistryTofuInit call it, and OpenTofu installs what it published."
+
+		protocol    = "/v1/providers/{namespace}/{type}"
+		protocolWhy = "OpenTofu calls it on init, but only on the registry host. The steps of TestRegistryTofuInit run the real CLI against it."
 	)
 
 	return []AllowEntry{
@@ -2481,5 +2484,13 @@ func registryAllowEntries() []AllowEntry {
 		{Method: http.MethodPost, Path: base + "/keys", CoveringTest: test, Reason: why},
 		{Method: http.MethodGet, Path: base + "/keys", CoveringTest: test, Reason: why},
 		{Method: http.MethodDelete, Path: base + "/keys/{fingerprint}", CoveringTest: test, Reason: why},
+		{Method: http.MethodGet, Path: protocol + "/versions", CoveringTest: test, Reason: protocolWhy},
+		{
+			Method:       http.MethodGet,
+			Path:         protocol + "/{version}/download/{os}/{arch}",
+			CoveringTest: test,
+			Reason:       protocolWhy,
+		},
+		{Method: http.MethodGet, Path: protocol + "/{version}/files/{sha256}", CoveringTest: test, Reason: protocolWhy},
 	}
 }
