@@ -707,5 +707,6 @@ func portableSpec() []PortableTable {
 		portableManualLockTables(),
 		portablePreferenceTables(),
 		portableSavedViewTables(),
+		portableGitHostTables(),
 	)
 }

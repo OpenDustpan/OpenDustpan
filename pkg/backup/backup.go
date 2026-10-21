@@ -153,6 +153,9 @@ var Tables = []string{
 	"manual_locks",
 	TablePersonPreferences,
 	"saved_views",
+	TableGitHostAppRegistrations,
+	"git_host_installations",
+	"git_host_connections",
 }
 
 // TablesCopy returns a copy of Tables. Callers that sort or filter the list
