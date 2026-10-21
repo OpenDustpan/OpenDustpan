@@ -383,7 +383,9 @@ type DecisionInput struct {
 	Agent     string
 	// AgentMode is the mode of Agent, or empty.
 	AgentMode AgentMode
-	Spec      Spec
+	// Source tells where the start came from.
+	Source SourceKind
+	Spec   Spec
 	// Keys are the key paths that the edits of a write-back job change.
 	Keys []string
 }
