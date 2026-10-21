@@ -1,12 +1,14 @@
 package server_test
 
 import (
+	"crypto/sha256"
 	"net/http"
 	"slices"
 	"testing"
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/access"
+	"opendustpan.org/opendustpan/pkg/accesstoken"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/store/storetest"
@@ -41,6 +43,37 @@ func (f accessFixture) seedService(t *testing.T, subject string) {
 	}
 }
 
+// seedToken stores an active token of the principal prn-<subject> and
+// returns its ID. A route cannot make it: an access token never gives the
+// fresh authentication that a token change needs.
+func (f accessFixture) seedToken(t *testing.T, id, subject string, kind accesstoken.Kind) tokenDoc {
+	t.Helper()
+
+	at := time.Now().UTC().Truncate(time.Millisecond)
+	tok := accesstoken.Token{
+		CreatedAt:   at.Add(-time.Hour),
+		ExpiresAt:   at.Add(48 * time.Hour),
+		LastUsedAt:  time.Time{},
+		RevokedAt:   time.Time{},
+		DisabledAt:  time.Time{},
+		ID:          id,
+		PrincipalID: "prn-" + subject,
+		Name:        "seed",
+		Kind:        kind,
+		ReplacedBy:  "",
+		CreatedBy:   "admin",
+	}
+
+	digest := accesstoken.Digest(sha256.Sum256([]byte(id)))
+	change := storetest.ServerChange(at, accesstoken.Ref(id))
+
+	if err := f.store.CreateToken(t.Context(), tok, digest, change); err != nil {
+		t.Fatalf("seed token %s: %v", id, err)
+	}
+
+	return tokenDoc{ID: id}
+}
+
 // TestDelegationRoutesRefuse proves the refusals of the routes of one
 // service principal with the authorizer that decides with grants: a
 // principal with no grant, a token manager on one principal, and a token
@@ -59,11 +92,8 @@ func TestDelegationRoutesRefuse(t *testing.T) {
 		alice  = "/api/server/principals/prn-alice"
 	)
 
-	var service, personal tokenDoc
-	f.as(t, "admin", apiCall{http.MethodPost, deploy + "/tokens", `{"name":"ci"}`, http.StatusCreated}, &service)
-	f.as(t, "alice", apiCall{
-		http.MethodPost, "/api/server/caller/tokens", `{"name":"laptop"}`, http.StatusCreated,
-	}, &personal)
+	service := f.seedToken(t, "tok-delegation-service", "deploy", accesstoken.KindService)
+	personal := f.seedToken(t, "tok-delegation-personal", "alice", accesstoken.KindPersonal)
 
 	for _, c := range []struct {
 		subject string
@@ -89,20 +119,23 @@ func TestDelegationRoutesRefuse(t *testing.T) {
 		}},
 		{"ops", apiCall{http.MethodDelete, "/api/server/tokens/" + personal.ID, "", http.StatusForbidden}},
 		{"tm", apiCall{http.MethodDelete, alice + "/tokens/" + personal.ID, "", http.StatusBadRequest}},
+		// An access token never gives a fresh authentication, so the fresh
+		// check refuses the creation before the kind of the principal.
 		{"tm", apiCall{http.MethodPost, alice + "/tokens/" + personal.ID + "/rotate", `{}`, http.StatusBadRequest}},
-		{"tm", apiCall{http.MethodPost, alice + "/tokens", `{"name":"x"}`, http.StatusBadRequest}},
+		{"tm", apiCall{http.MethodPost, alice + "/tokens", `{"name":"x"}`, http.StatusForbidden}},
 		{"tm", apiCall{http.MethodDelete, "/api/server/tokens/" + personal.ID, "", http.StatusForbidden}},
 		{"admin", apiCall{
 			http.MethodPost, "/api/server/service-tokens", `{"principalID":"prn-none","name":"x"}`,
-			http.StatusNotFound,
+			http.StatusForbidden,
 		}},
 	} {
 		f.as(t, c.subject, c.call, nil)
 	}
 
-	// The token manager of deploy makes and revokes its tokens.
-	var made tokenDoc
-	f.as(t, "ops", apiCall{http.MethodPost, deploy + "/tokens", `{"name":"ops"}`, http.StatusCreated}, &made)
+	// The token manager of deploy revokes its tokens. An access token makes no
+	// token: that change needs a console session with a recent sign-in.
+	made := f.seedToken(t, "tok-delegation-made", "deploy", accesstoken.KindService)
+	f.as(t, "ops", apiCall{http.MethodPost, deploy + "/tokens", `{"name":"ops"}`, http.StatusForbidden}, nil)
 	f.as(t, "ops", apiCall{http.MethodDelete, deploy + "/tokens/" + made.ID, "", http.StatusNoContent}, nil)
 	f.as(t, "ops", apiCall{http.MethodDelete, "/api/server/tokens/" + service.ID, "", http.StatusNoContent}, nil)
 }
@@ -134,8 +167,8 @@ func TestTokenManagerReads(t *testing.T) {
 		year   = int64(365 * 24 * 60 * 60)
 	)
 
-	f.as(t, "admin", apiCall{http.MethodPost, deploy, `{"name":"ci"}`, http.StatusCreated}, nil)
-	f.as(t, "admin", apiCall{http.MethodPost, other, `{"name":"ci"}`, http.StatusCreated}, nil)
+	f.seedToken(t, "tok-reads-deploy", "deploy", accesstoken.KindService)
+	f.seedToken(t, "tok-reads-other", "other", accesstoken.KindService)
 
 	var list limitedTokenListDoc
 	f.as(t, "ops", apiCall{http.MethodGet, deploy, "", http.StatusOK}, &list)
@@ -233,11 +266,11 @@ func TestNamespacePrincipalRoutes(t *testing.T) {
 		{"bob", apiCall{http.MethodGet, principals, "", http.StatusForbidden}},
 		{"bob", apiCall{http.MethodDelete, one, "", http.StatusForbidden}},
 		{"olga", apiCall{http.MethodGet, principals, "", http.StatusForbidden}},
-		{"alice", apiCall{http.MethodPost, tokens, `{"name":"x"}`, http.StatusCreated}},
+		{"alice", apiCall{http.MethodPost, tokens, `{"name":"x"}`, http.StatusForbidden}},
 		{"alice", apiCall{http.MethodGet, tokens, "", http.StatusOK}},
 		{"bob", apiCall{http.MethodPost, tokens, `{"name":"x"}`, http.StatusForbidden}},
 		{"bob", apiCall{http.MethodGet, tokens, "", http.StatusForbidden}},
-		{"admin", apiCall{http.MethodPost, tokens, `{"name":"x"}`, http.StatusCreated}},
+		{"admin", apiCall{http.MethodPost, tokens, `{"name":"x"}`, http.StatusForbidden}},
 		{"admin", apiCall{http.MethodGet, tokens, "", http.StatusOK}},
 		{"admin", apiCall{
 			http.MethodPost, "/api/server/groups/" + ops.ID + "/members", `{"principalID":"` + bot.ID + `"}`,
@@ -262,13 +295,7 @@ func TestNoRouteMakesAPersonalTokenOfAnother(t *testing.T) {
 
 	f := newAccessFixture(t)
 
-	var own tokenDoc
-	f.as(
-		t,
-		"alice",
-		apiCall{http.MethodPost, "/api/server/caller/tokens", `{"name":"laptop"}`, http.StatusCreated},
-		&own,
-	)
+	own := f.seedToken(t, "tok-own-alice", "alice", accesstoken.KindPersonal)
 
 	for _, c := range []apiCall{
 		{http.MethodPost, "/api/server/tokens", `{"principalID":"prn-alice","name":"laptop"}`, http.StatusMethodNotAllowed},

@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -364,16 +365,85 @@ func checkPrincipalChanges(ctx context.Context, t *testing.T, env *e2e.Env, fx p
 	}
 }
 
-// principalCall sends one installation API request with the bootstrap admin
-// token and fails unless it answers step.want. It decodes the answer into
-// out when out is not nil.
+// freshAuthPath matches the writes that need a fresh authentication: the
+// creation and the rotation of an access token, a change of the session
+// policy, a change of a sign-in provider and a change of a gate object.
+var freshAuthPath = regexp.MustCompile(`^(?:/api/server/(?:caller/tokens|service-tokens|principals/[^/]+/tokens)` +
+	`(?:/[^/]+/rotate)?|/api/server/session-policy|/api/server/sign-in-providers(?:/[^/]+)?` +
+	`|/api/dustpan/v1/namespaces/[^/]+/approval-(?:default|rules/[^/]+))$`)
+
+// needsFreshAuth reports whether method on path is a write that needs a
+// fresh authentication. An access token never gives one.
+func needsFreshAuth(method, path string) bool {
+	if !freshAuthPath.MatchString(path) {
+		return false
+	}
+
+	switch {
+	case strings.HasSuffix(path, "/rotate") || strings.HasSuffix(path, "/tokens") || strings.HasSuffix(path, "service-tokens"):
+		return method == http.MethodPost
+	case strings.Contains(path, "/approval-"):
+		return method == http.MethodPut || method == http.MethodDelete
+	case strings.Contains(path, "/sign-in-providers"):
+		return method != http.MethodGet
+	default:
+		return method == http.MethodPatch
+	}
+}
+
+// freshServerCall sends one installation API request and answers its status and
+// body. A write that needs a fresh authentication goes with the console
+// session of a site administrator, any other request with the bootstrap
+// admin token. The env of a fresh write must come from NewEnvWithSignIn.
+func freshServerCall(ctx context.Context, t *testing.T, env *e2e.Env, step principalStep) (int, string) {
+	t.Helper()
+
+	if needsFreshAuth(step.method, step.path) {
+		return env.FreshAdminAPIStatus(
+			ctx,
+			t,
+			e2e.SessionRequest{Method: step.method, Path: step.path, Body: step.body},
+		)
+	}
+
+	status, resp, err := env.ServerAPIStatus(ctx, step.method, step.path, step.body)
+	if err != nil {
+		t.Fatalf("%s %s: %v", step.method, step.path, err)
+	}
+
+	return status, resp
+}
+
+// principalCall sends one installation API request, as freshServerCall does, and
+// fails unless it answers step.want. It decodes the answer into out when out
+// is not nil.
 func principalCall(ctx context.Context, t *testing.T, env *e2e.Env, step principalStep, out any) {
+	t.Helper()
+
+	status, resp := freshServerCall(ctx, t, env, step)
+
+	checkPrincipalAnswer(t, step, status, resp, out)
+}
+
+// principalCallWithToken sends one installation API request with the
+// bootstrap admin token, also a write that needs a fresh authentication, and
+// fails unless it answers step.want. A step uses it to prove that an access
+// token never gives a fresh authentication.
+func principalCallWithToken(ctx context.Context, t *testing.T, env *e2e.Env, step principalStep, out any) {
 	t.Helper()
 
 	status, resp, err := env.ServerAPIStatus(ctx, step.method, step.path, step.body)
 	if err != nil {
 		t.Fatalf("%s %s: %v", step.method, step.path, err)
 	}
+
+	checkPrincipalAnswer(t, step, status, resp, out)
+}
+
+// checkPrincipalAnswer fails unless status is step.want. It decodes resp into
+// out when out is not nil.
+func checkPrincipalAnswer(t *testing.T, step principalStep, status int, resp string, out any) {
+	t.Helper()
 
 	if status != step.want {
 		t.Fatalf("%s %s answers %d, want %d (%s)", step.method, step.path, status, step.want, resp)

@@ -5,6 +5,7 @@ package e2e_test
 import (
 	"context"
 	"net/http"
+	"strings"
 	"testing"
 
 	"opendustpan.org/opendustpan/e2e"
@@ -147,10 +148,26 @@ func checkSessionPolicyRoles(ctx context.Context, t *testing.T, env *e2e.Env) {
 			t.Fatalf("%s reads the policy = %d, %v (%s); want 200", s.role, status, err, body)
 		}
 
+		// A change of the policy needs a fresh authentication: the token of the
+		// person is refused, and the person changes it with a console session.
 		status, body, err = env.ServerAPIStatusAs(ctx, token.Secret, http.MethodPatch, "/api/server/session-policy",
 			`{"idleSeconds":900}`)
-		if err != nil || status != s.change {
-			t.Fatalf("%s changes the policy = %d, %v (%s); want %d", s.role, status, err, body, s.change)
+		if err != nil || status != http.StatusForbidden ||
+			(s.change == http.StatusOK && !strings.Contains(body, "mfa.fresh-step-required")) {
+			t.Fatalf(
+				"%s changes the policy with a token = %d, %v (%s); want 403, and mfa.fresh-step-required for a role that may change it",
+				s.role,
+				status,
+				err,
+				body,
+			)
+		}
+
+		status, body = env.SessionAPIStatus(ctx, t, person.ID, e2e.SessionRequest{
+			Method: http.MethodPatch, Path: "/api/server/session-policy", Body: `{"idleSeconds":900}`,
+		})
+		if status != s.change {
+			t.Fatalf("%s changes the policy with a session = %d (%s); want %d", s.role, status, body, s.change)
 		}
 	}
 }

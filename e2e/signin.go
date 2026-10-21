@@ -90,6 +90,9 @@ type signInSetup struct {
 	// mu makes the sign-ins of PersonalToken take turns: the test
 	// provider signs in one person at a time.
 	mu sync.Mutex
+	// adminMu guards adminID, the person that FreshAdminAPIStatus made.
+	adminMu sync.Mutex
+	adminID string
 }
 
 // options returns the server options of the sign-in.
@@ -158,6 +161,7 @@ func newSignInSetup(tb testing.TB, publicURL string, shared *TestClock) *signInS
 
 	return &signInSetup{
 		publicURL: publicURL, idp: idp, beta: beta, hub: hub, clock: clock, shared: shared != nil, mu: sync.Mutex{},
+		adminMu: sync.Mutex{}, adminID: "",
 	}
 }
 

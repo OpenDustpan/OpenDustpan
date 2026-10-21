@@ -281,8 +281,10 @@ one.
 ## Tokens from a console session
 
 A signed-in person can create and rotate access tokens from the console,
-on the same routes as with a token. The sign-in of the session must be
-fresh: the token freshness window of the session policy sets how old it
+on the same routes as with a token. An access token never creates or
+rotates a token: the request answers 403 with the error code
+`mfa.fresh-step-required`, and changes nothing. The sign-in of the session
+must be fresh: the token freshness window of the session policy sets how old it
 can be. The default is 15 minutes, and 0 turns the check off.
 
 When the sign-in is older than the window, a create or a rotation answers
@@ -293,6 +295,11 @@ identity provider for a new authentication (`max_age=0`), and the callback
 refuses an authentication that is older. The new session then creates the
 token. For a plain OAuth 2.0 provider, see "Plain OAuth 2.0 providers":
 the window then counts from the last sign-in round trip.
+
+The same rule holds for a change of the session policy and for a change of a
+sign-in provider: an access token answers 403 with `mfa.fresh-step-required`,
+and a session with an old sign-in answers 401 with `reauthenticate` and the
+same error code.
 
 Set the window with `PATCH /api/server/session-policy` and the field
 `tokenFreshnessSeconds` (action `server:manage-sign-in`): 0, or 60 to

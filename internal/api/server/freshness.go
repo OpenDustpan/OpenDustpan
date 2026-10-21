@@ -36,16 +36,28 @@ func (reauthenticateError) Unwrap() error { return errReauthenticate }
 // each token change with serveTokenChange. It fails the request closed.
 var errNoFreshnessCheck = errors.New("a token change from a console session has no freshness check")
 
+// errFreshStepRequired is the refusal of a change that needs a fresh
+// authentication when the request has no console session. An access token
+// never gives a fresh authentication.
+var errFreshStepRequired = &codedError{
+	status: http.StatusForbidden, code: freshStepRequiredCode, args: nil,
+	message: "a change needs a console session with a recent sign-in; sign in to the console again",
+}
+
+// freshStepRequiredCode is the errorCode of a change that has no fresh
+// authentication.
+const freshStepRequiredCode = "mfa.fresh-step-required"
+
 // freshnessKey carries the freshness check of a token change.
 type freshnessKey struct{}
 
-// requireFresh runs the freshness check of a token change on a request
-// with a console session. A request with an access token passes. A
-// request with a session and no check in its context returns
-// errNoFreshnessCheck.
+// requireFresh runs the freshness check of a change on a request with a
+// console session. A request with no session, for example one with an
+// access token, returns errFreshStepRequired. A request with a session and
+// no check in its context returns errNoFreshnessCheck.
 func requireFresh(r *http.Request) error {
 	if _, ok := sessionFromRequest(r); !ok {
-		return nil
+		return errFreshStepRequired
 	}
 
 	check, ok := r.Context().Value(freshnessKey{}).(func(*http.Request) error)
@@ -65,6 +77,7 @@ type reauthenticateResponse struct {
 	Message        string `json:"message"`
 	Reauthenticate string `json:"reauthenticate"`
 	Code           int    `json:"code"`
+	ErrorCode      string `json:"errorCode"`
 }
 
 // freshParam reports whether the start of a sign-in asks for a new
@@ -83,13 +96,14 @@ func freshParam(r *http.Request) (bool, error) {
 
 // checkTokenFreshness refuses a token change, or a change of the session
 // policy, from a console session whose sign-in is older than the token
-// freshness window of the session policy. A request with an access token,
-// and a window of 0, pass. With no session policy service, the window is
-// session.DefaultTokenFreshness.
+// freshness window of the session policy. A request with no console
+// session, for example one with an access token, returns
+// errFreshStepRequired. A window of 0 passes. With no session policy
+// service, the window is session.DefaultTokenFreshness.
 func (h *Handler) checkTokenFreshness(r *http.Request) error {
 	caller, ok := sessionFromRequest(r)
 	if !ok {
-		return nil
+		return errFreshStepRequired
 	}
 
 	if h.signIn == nil {

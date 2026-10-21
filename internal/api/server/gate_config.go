@@ -233,10 +233,6 @@ func (h *Handler) gateConfigRoutes() []Route {
 	}
 }
 
-// errFreshSession is the refusal of a gate configuration write from an
-// access token. An access token never gives fresh authentication.
-var errFreshSession = errors.New("a change needs a console session with a recent sign-in; sign in to the console again")
-
 // fresh wraps a write: a console session must have signed in recently
 // enough, and a request with an access token is refused. The refusal
 // writes one failure entry, best effort.
@@ -246,15 +242,15 @@ func (h *Handler) fresh(serve RouteHandler) RouteHandler {
 
 		r = r.WithContext(ctx)
 
-		// Defense in depth: requireFresh passes a request with no session, so
-		// this check stays here and does not rely on the route table or the
-		// policy check.
+		// Defense in depth: requireFresh refuses a request with no session too.
+		// This check stays here so that the refusal writes its audit entry, and
+		// it does not rely on the route table or the policy check.
 		if _, ok := sessionFromRequest(r); !ok {
 			h.appendObjectChange(r, p, obj, serverChange{
 				at: h.now(), action: identity.ActionNamespaceManageGates, object: obj.String(),
 				outcome: audit.OutcomeFailure,
 			})
-			h.writeError(ctx, w, errFreshSession)
+			h.writeError(ctx, w, errFreshStepRequired)
 
 			return
 		}

@@ -107,7 +107,7 @@ func (e *Env) signInAs(ctx context.Context, tb testing.TB, browser *http.Client,
 		Subject: idpSubject, Name: idpSubject, PreferredUsername: idpSubject, Email: idpSubject + "@example.com",
 	})
 
-	start := e.browserLocation(ctx, tb, browser, e.URL+"/api/server/sign-in/"+SignInProvider+"?return=/console",
+	start := e.browserLocation(ctx, tb, browser, e.URL+"/api/server/sign-in/"+SignInProvider+"?return=/console&fresh=1",
 		http.StatusFound)
 	callback := e.browserLocation(ctx, tb, &idpClient, start, http.StatusFound)
 	e.browserLocation(ctx, tb, browser, callback, http.StatusSeeOther)
@@ -205,17 +205,103 @@ func (e *Env) SessionAPIStatus(
 ) (int, string) {
 	tb.Helper()
 
+	return e.FreshSession(ctx, tb, principalID)(req)
+}
+
+// FreshSession signs in the person principalID with a fresh sign-in, as
+// SessionAPIStatus does, and returns a function that sends installation API
+// requests with that console session. A step that needs the time of the
+// request after the sign-in calls the function when it knows the time.
+func (e *Env) FreshSession(ctx context.Context, tb testing.TB, principalID string) func(SessionRequest) (int, string) {
+	tb.Helper()
+
 	idpSubject := e.signInSubjectOf(ctx, tb, principalID)
 	browser := e.BrowserClient(tb)
 	csrf := e.signInAs(ctx, tb, browser, idpSubject)
 
-	return e.browserDo(ctx, tb, browser, browserRequest{
-		method: req.Method, target: e.URL + req.Path, body: req.Body,
-		header: http.Header{"X-Dustpan-Csrf": {csrf}, "Content-Type": {"application/json"}},
-	})
+	return func(req SessionRequest) (int, string) {
+		tb.Helper()
+
+		return e.browserDo(ctx, tb, browser, browserRequest{
+			method: req.Method, target: e.URL + req.Path, body: req.Body,
+			header: http.Header{"X-Dustpan-Csrf": {csrf}, "Content-Type": {"application/json"}},
+		})
+	}
 }
 
 // SessionRequest is one installation API request of SessionAPIStatus.
 type SessionRequest struct {
 	Method, Path, Body string
+}
+
+// freshAdminSubject is the provider subject of the site administrator that
+// FreshAdminAPIStatus signs in.
+const freshAdminSubject = "fresh-admin@example.com"
+
+// FreshAdminAPIStatus sends one installation API request as a site
+// administrator with a console session that has a fresh sign-in, and returns
+// the status and the body of the answer. An access token never gives the
+// fresh authentication that a token change, a sign-in setting or a gate
+// write needs, so a step that makes such a change calls this method. The env
+// must come from NewEnvWithSignIn. The first call makes the administrator
+// with the bootstrap admin token. It fails the test when the sign-in or the
+// request cannot run.
+func (e *Env) FreshAdminAPIStatus(ctx context.Context, tb testing.TB, req SessionRequest) (int, string) {
+	tb.Helper()
+
+	if e.signIn == nil {
+		tb.Fatal("FreshAdminAPIStatus needs an env from NewEnvWithSignIn")
+	}
+
+	return e.FreshSession(ctx, tb, e.freshAdmin(ctx, tb))(req)
+}
+
+// FreshAdminSession signs in the site administrator of FreshAdminAPIStatus
+// and returns a function that sends installation API requests with the
+// console session, as FreshSession does.
+func (e *Env) FreshAdminSession(ctx context.Context, tb testing.TB) func(SessionRequest) (int, string) {
+	tb.Helper()
+
+	if e.signIn == nil {
+		tb.Fatal("FreshAdminSession needs an env from NewEnvWithSignIn")
+	}
+
+	return e.FreshSession(ctx, tb, e.freshAdmin(ctx, tb))
+}
+
+// freshAdmin returns the ID of the site administrator person of
+// FreshAdminAPIStatus and makes it on the first call.
+func (e *Env) freshAdmin(ctx context.Context, tb testing.TB) string {
+	tb.Helper()
+
+	e.signIn.adminMu.Lock()
+	defer e.signIn.adminMu.Unlock()
+
+	if e.signIn.adminID != "" {
+		return e.signIn.adminID
+	}
+
+	status, body, err := e.ServerAPIStatus(ctx, http.MethodPost, "/api/server/principals",
+		`{"subject":"`+SignInSubject(freshAdminSubject)+`","kind":"person"}`)
+	if err != nil || status != http.StatusCreated {
+		tb.Fatalf("make the fresh administrator = %d, %v: %s", status, err, body)
+	}
+
+	var made struct {
+		ID string `json:"id"`
+	}
+
+	if decodeErr := json.Unmarshal([]byte(body), &made); decodeErr != nil || made.ID == "" {
+		tb.Fatalf("decode the fresh administrator: %v: %s", decodeErr, body)
+	}
+
+	status, body, err = e.ServerAPIStatus(ctx, http.MethodPost, "/api/server/grants",
+		`{"subject":"principal:`+made.ID+`","role":"site-administrator"}`)
+	if err != nil || status != http.StatusCreated {
+		tb.Fatalf("grant the fresh administrator = %d, %v: %s", status, err, body)
+	}
+
+	e.signIn.adminID = made.ID
+
+	return made.ID
 }
