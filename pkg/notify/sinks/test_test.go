@@ -416,3 +416,137 @@ func runTestWith(
 
 	return res, nil
 }
+
+// platformSender is a chat sender that serves one platform only.
+type platformSender struct {
+	fakeSender
+
+	platform string
+}
+
+func (p *platformSender) Serves(s notify.Sink) bool { return s.Platform == p.platform }
+
+func TestTestChatSenderThatServesOtherPlatformsOnly(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t, nil)
+	other := &platformSender{
+		kind: notify.SinkChat, err: nil, mu: sync.Mutex{}, got: nil, left: 0,
+		platform: "teams",
+	}
+
+	svc, err := sinks.NewService(config(f.store, fakeNamespaces{notHome: false}, other))
+	if err != nil {
+		t.Fatalf("NewService: %v", err)
+	}
+
+	f.svc = svc
+	id := makeChat(t, f).ID
+	before := len(f.store.entries)
+
+	// The sink is a Slack sink and the sender serves Teams: the answer is that
+	// the server has no sender, and nothing is sent or audited.
+	if _, err = runTest(t.Context(), f, shop, id); !errors.Is(err, sinks.ErrNoSender) {
+		t.Fatalf("Test = %v, want ErrNoSender", err)
+	}
+
+	if len(other.got) != 0 || len(f.store.entries) != before {
+		t.Errorf("sent %d messages, audit entries %d -> %d, want none of both", len(other.got), before,
+			len(f.store.entries))
+	}
+}
+
+// hostSender is a chat sender that accepts one host for Slack only.
+type hostSender struct {
+	fakeSender
+}
+
+// ruleError is a host error with a rule, as chat.HostRuleError is.
+type ruleError struct{}
+
+func (ruleError) Error() string { return notify.ErrInvalid.Error() + ": " + hostRule }
+
+func (ruleError) Unwrap() error { return notify.ErrInvalid }
+
+func (ruleError) HostRule() string { return hostRule }
+
+const hostRule = "The Slack URL must use hooks.slack.com or a GovSlack host."
+
+func (*hostSender) CheckHost(platform, host string) error {
+	if platform == "slack" && host != "hooks.slack.com" {
+		return ruleError{}
+	}
+
+	return nil
+}
+
+func TestChatHostIsCheckedWhenAPersonSavesTheSink(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t, nil)
+	sender := &hostSender{kind: notify.SinkChat, err: nil, mu: sync.Mutex{}, got: nil, left: 0}
+
+	svc, err := sinks.NewService(config(f.store, fakeNamespaces{notHome: false}, sender))
+	if err != nil {
+		t.Fatalf("NewService: %v", err)
+	}
+
+	f.svc = svc
+
+	for name, tc := range map[string]struct {
+		platform, url string
+		ok            bool
+	}{
+		"the host of the platform":           {"slack", "https://hooks.slack.com/services/T0/B0/" + canary, true},
+		"another host for the platform":      {"slack", "https://hooks.example.com/services/T0/B0/" + canary, false},
+		"another platform has no host rule":  {"teams", "https://hooks.example.com/x/" + canary, true},
+		"a host that ends with the platform": {"slack", "https://hooks.slack.com.evil.example/x/" + canary, false},
+	} {
+		_, createErr := f.svc.Create(t.Context(), f.caller, shop, sinks.New{
+			Kind: notify.SinkChat, Platform: tc.platform, Name: "Chat", Target: "", URL: tc.url,
+		})
+		if tc.ok {
+			if createErr != nil {
+				t.Errorf("%s: Create = %v, want nil", name, createErr)
+			}
+
+			continue
+		}
+
+		checkRefusedHost(t, name, createErr)
+	}
+
+	// A replace with a URL of another host fails the same way.
+	made := makeChat(t, f)
+
+	url := "https://hooks.example.com/services/T0/B0/" + canary
+	_, err = f.svc.Replace(t.Context(), f.caller, shop, made.ID,
+		sinks.Change{Version: made.Version, Name: "Chat", Target: nil, URL: &url})
+	if !errors.Is(err, notify.ErrInvalid) {
+		t.Errorf("Replace with another host = %v, want ErrInvalid", err)
+	}
+}
+
+// checkRefusedHost checks the error of a refused host: its own sentinel, the
+// rule of the platform, and ErrInvalid once in the text.
+func checkRefusedHost(t *testing.T, name string, err error) {
+	t.Helper()
+
+	if err == nil {
+		t.Fatalf("%s: Create = nil, want a refused host", name)
+	}
+
+	if strings.Contains(err.Error(), canary) {
+		t.Errorf("%s: the error holds the token", name)
+	}
+
+	if !errors.Is(err, notify.ErrInvalid) || !errors.Is(err, sinks.ErrPlatformHost) ||
+		sinks.PlatformHostRule(err) != hostRule {
+		t.Errorf("%s: Create = %v, rule %q, want ErrPlatformHost with the rule of the platform", name, err,
+			sinks.PlatformHostRule(err))
+	}
+
+	if n := strings.Count(err.Error(), notify.ErrInvalid.Error()); n != 1 {
+		t.Errorf("%s: the error text %q holds ErrInvalid %d times, want 1", name, err, n)
+	}
+}

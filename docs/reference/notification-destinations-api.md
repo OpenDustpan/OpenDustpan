@@ -85,7 +85,11 @@ of the kind of the destination. The answer:
 | `message` | A fixed text for the class |
 
 The answer never holds the URL, the answer of the receiver or the text of an
-error. A destination of a kind with no sender answers 422 `sink.no-sender`.
+error. A destination of a kind or a chat platform with no sender answers 422
+`sink.no-sender`. The platform `slack` has a sender. The host of a `slack`
+destination is `hooks.slack.com` or `hooks.slack-gov.com`, and any other host
+answers 400 `sink.platform-host` when you make or change the destination. See
+`docs/guides/slack-notifications.md` for the message.
 
 A name that resolves to an address that the outbound rules refuse gives the
 class `temporary`, the same as a name that does not resolve. The class
@@ -115,13 +119,14 @@ answers 409 `namespace.fenced`.
 | Status | `errorCode` | Cause |
 | --- | --- | --- |
 | 400 | `sink.invalid` | A field is not valid, or the outbound address rules refuse the URL or its port |
+| 400 | `sink.platform-host` | The host of the chat URL is not a webhook host of the platform |
 | 400 | `request.body-invalid` | The body is not one JSON object with known fields |
 | 404 | `sink.not-found` | No destination with this ID in the namespace |
 | 409 | `sink.conflict` | The destination changed since you read it |
 | 409 | `namespace.fenced` | A failover moved the namespace during the request |
 | 421 | `namespace.not-home` | The namespace has its home region in another region |
 | 429 | `sink.test-rate-limited` | A limit of the test route refuses the test |
-| 422 | `sink.no-sender` | The server has no sender for the kind of the destination |
+| 422 | `sink.no-sender` | The server has no sender for the kind or the chat platform of the destination |
 
 The text of a `sink.*` error is fixed. It never holds a part of the request.
 
