@@ -26,6 +26,12 @@ func (stubMembership) Collection(context.Context, identity.Object) (collection.N
 	return "", gate.ErrNotFound
 }
 
+type stubFences struct{}
+
+func (stubFences) Fence(_ context.Context, ns namespace.Name) (namespace.Fence, error) {
+	return namespace.Fence{Namespace: ns, FailoverVersion: 1}, nil
+}
+
 type stubUnits struct{}
 
 func (stubUnits) Labels(context.Context, identity.Object) ([]string, error) { return nil, nil }
@@ -46,7 +52,7 @@ func newService(t *testing.T) *gate.Service {
 
 	svc, err := gate.NewService(gate.ServiceConfig{
 		Store: stubStore{Store: nil}, Engine: stubEngine{Engine: nil}, Producers: nil, Members: stubMembership{},
-		Units: stubUnits{}, Subjects: subjects{}, Now: nil, Log: slog.New(slog.DiscardHandler),
+		Units: stubUnits{}, Subjects: subjects{}, Fences: stubFences{}, Now: nil, Log: slog.New(slog.DiscardHandler),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -59,7 +65,15 @@ func TestNewServiceNeedsPorts(t *testing.T) {
 	t.Parallel()
 
 	_, err := gate.NewService(gate.ServiceConfig{
-		Store: nil, Engine: nil, Producers: nil, Members: nil, Units: nil, Subjects: nil, Now: nil, Log: nil,
+		Store:     nil,
+		Engine:    nil,
+		Producers: nil,
+		Members:   nil,
+		Units:     nil,
+		Subjects:  nil,
+		Fences:    nil,
+		Now:       nil,
+		Log:       nil,
 	})
 	if !errors.Is(err, gate.ErrInvalid) {
 		t.Fatalf("NewService(nil ports) = %v, want ErrInvalid", err)
@@ -84,7 +98,7 @@ func jobWrite(t *testing.T, unit string, passedApply, planLock bool) gate.Change
 
 	return gate.Change{
 		Point: gate.PointStateWrite, Namespace: "acme",
-		Ref: gate.ChangeRef{Kind: gate.ChangeStateWrite, ID: ""},
+		Ref: gate.ChangeRef{Kind: gate.ChangeStateWrite, ID: ""}, Source: "",
 		Subject: gate.Subject{
 			ID: "job:42", Groups: nil, Kind: gate.PrincipalService, Credential: gate.CredentialJobToken,
 			AuthAt: time.Time{}, BreakGlassAccount: false,

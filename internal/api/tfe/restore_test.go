@@ -231,6 +231,7 @@ func TestRestoreVersionOfAnotherWorkspace(t *testing.T) {
 		MaxStateBytes:  0,
 		OnAuditFailure: nil,
 		DenialLimiter:  nil,
+		StateGuard:     nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -307,6 +308,7 @@ func TestRestoreLockedByOther(t *testing.T) {
 		MaxStateBytes:  0,
 		OnAuditFailure: nil,
 		DenialLimiter:  nil,
+		StateGuard:     nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)

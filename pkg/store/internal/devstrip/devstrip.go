@@ -136,6 +136,7 @@ var classes = []class{
 		extra: func(d Dialect) string { return d.provider("provider") },
 	},
 	{name: backup.RemovedAccessTokens, table: "access_tokens", link: colPrincipalID, only: "", extra: nil},
+	{name: backup.RemovedPreferences, table: "person_preferences", link: colPrincipalID, only: "", extra: nil},
 	{
 		name: backup.RemovedTempAdmins, table: "temp_admins", link: colPrincipalID, only: "",
 		extra: func(d Dialect) string { return d.matchSubject() },

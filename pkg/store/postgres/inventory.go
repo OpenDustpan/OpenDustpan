@@ -410,7 +410,14 @@ func scanDeletedRows(rows pgx.Rows) ([]inventory.DeletedEntry, error) {
 func (s *Store) GetDeletedUnit(
 	ctx context.Context, ns namespace.Name, tool, unitID string,
 ) (inventory.DeletedEntry, error) {
-	row, err := s.queries.GetDeletedInventory(ctx, db.GetDeletedInventoryParams{
+	return deletedUnit(ctx, s.queries, ns, tool, unitID)
+}
+
+// deletedUnit reads one deleted unit with q, which may run in a transaction.
+func deletedUnit(
+	ctx context.Context, q *db.Queries, ns namespace.Name, tool, unitID string,
+) (inventory.DeletedEntry, error) {
+	row, err := q.GetDeletedInventory(ctx, db.GetDeletedInventoryParams{
 		Namespace: ns.String(), Tool: tool, UnitID: unitID,
 	})
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -591,4 +598,53 @@ func inventoryLock(row db.ListInventoryRow) *inventory.Lock {
 	}
 
 	return lock
+}
+
+// GetDeletedUnitFacts implements inventory.DeletedFactsReader. The collection
+// is the membership that stays until the purge. The labels are the tags that
+// the tool keeps for the unit until the purge.
+func (s *Store) GetDeletedUnitFacts(
+	ctx context.Context, ns namespace.Name, tool, unitID string,
+) (inventory.DeletedFacts, error) {
+	// One snapshot, so that the entry, the collection and the labels come from
+	// the same state of the database.
+	//nolint:exhaustruct_v5 // A snapshot read sets only isolation and access mode.
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
+	if err != nil {
+		return inventory.DeletedFacts{}, fmt.Errorf("begin read transaction: %w", err)
+	}
+
+	defer func() {
+		if rollbackErr := tx.Rollback(ctx); rollbackErr != nil {
+			_ = rollbackErr
+		}
+	}()
+
+	q := s.queries.WithTx(tx)
+
+	if _, err = deletedUnit(ctx, q, ns, tool, unitID); err != nil {
+		return inventory.DeletedFacts{}, err
+	}
+
+	facts := inventory.DeletedFacts{Collection: "", Labels: map[string]string{}}
+
+	name, err := q.GetUnitCollection(ctx, unitID)
+	switch {
+	case errors.Is(err, pgx.ErrNoRows):
+	case err != nil:
+		return inventory.DeletedFacts{}, fmt.Errorf("select collection of deleted unit: %w", err)
+	default:
+		facts.Collection = name
+	}
+
+	tags, err := q.GetStackTags(ctx, unitID)
+	if err != nil {
+		return inventory.DeletedFacts{}, fmt.Errorf("select labels of deleted unit: %w", err)
+	}
+
+	for _, t := range tags {
+		facts.Labels[t.Name] = t.Value
+	}
+
+	return facts, nil
 }

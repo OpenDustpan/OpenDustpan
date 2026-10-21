@@ -82,6 +82,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/manuallock"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/objectcontext"
+	"opendustpan.org/opendustpan/pkg/preferences"
 	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/profile"
 	"opendustpan.org/opendustpan/pkg/savedview"
@@ -654,6 +655,9 @@ type services struct {
 	// collections is the collection service (ADR 51), or nil when the store
 	// holds no collections. NewServer sets it after newServices.
 	collections *collection.Service
+	// gates checks the writes of state against the access limits and the
+	// gates of state.write, or is nil when the store keeps no gates.
+	gates *gateService
 	// deleted runs the retention sweep. assemble sets it, because
 	// it counts on the server metrics.
 	deleted *deletedSweeper
@@ -773,7 +777,7 @@ func NewServer(opts ...Option) (*Server, error) {
 
 	svc.tokens, svc.access = tokens, grants
 
-	svc.collections, err = newCollectionService(cfg)
+	svc.collections, svc.gates, err = newCollectionAndGateServices(cfg, svc.namespaces)
 	if err != nil {
 		return nil, err
 	}
@@ -812,7 +816,9 @@ func wireTokens(cfg *settings, tokens *accesstoken.Service) error {
 
 	cfg.authenticator = authn
 	cfg.authorizer = allowlistGate(identity.SelfAllowed{
-		Next: cfg.authorizer, Actions: []identity.Action{identity.ActionTokenManageOwn},
+		Next: cfg.authorizer, Actions: []identity.Action{
+			identity.ActionTokenManageOwn, identity.ActionCallerManagePreferences,
+		},
 	}, cfg.ipAllowlists)
 
 	return nil
@@ -1294,6 +1300,7 @@ func newTFEHandler(
 			observed.IncAuditAppendFailure()
 		},
 		DenialLimiter: cfg.denialLimiter,
+		StateGuard:    stateGuardOf(svc.gates),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("tfe api: %w", err)
@@ -1556,6 +1563,7 @@ func newServices(cfg *settings, tokens *accesstoken.Service) (services, error) {
 		deleted:     nil,
 		access:      nil,
 		collections: nil,
+		gates:       nil,
 	}, nil
 }
 
@@ -2504,6 +2512,7 @@ func newInventoryHandler(svc services, cfg *settings, onFailure func()) (http.Ha
 		Audit:          neutralAudit,
 		OnAuditFailure: onFailure,
 		DenialLimiter:  cfg.denialLimiter,
+		StateGuard:     inventoryGuardOf(svc.gates),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("inventory api: %w", err)
@@ -2626,6 +2635,7 @@ func newServerHandler(
 		AuditSinks:    sinks,
 		Workers:       cfg.watch,
 		SignIn:        deps.signIn,
+		Preferences:   newPreferencesService(cfg),
 
 		InstallationKind: cfg.installationKind,
 	})
@@ -2634,6 +2644,23 @@ func newServerHandler(
 	}
 
 	return handler, nil
+}
+
+// newPreferencesService builds the preferences service from the namespace
+// store, or returns nil when the store keeps no preferences or no principals.
+// Both SQL adapters keep both. A nil service makes the routes answer 501.
+func newPreferencesService(cfg *settings) *preferences.Service {
+	store, ok := cfg.namespaceStore.(preferences.Store)
+	if !ok {
+		return nil
+	}
+
+	people, ok := cfg.namespaceStore.(preferences.People)
+	if !ok {
+		return nil
+	}
+
+	return preferences.NewService(store, people, cfg.now)
 }
 
 // serverAuditOf returns the audit store of the scope @server, or nil when the
@@ -3274,7 +3301,8 @@ func adapterForRequest(pattern, path string) string {
 	}
 
 	switch {
-	case name == v1Prefix+"capabilities", strings.HasPrefix(name, v1Prefix+"sign-in/"):
+	case name == v1Prefix+"capabilities", strings.HasPrefix(name, v1Prefix+"sign-in/"),
+		strings.HasPrefix(name, v1Prefix+"me/"):
 		return adapterServer
 	case strings.HasPrefix(name, "/api/inventory/"), strings.HasPrefix(name, v1Prefix):
 		return "inventory"

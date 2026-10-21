@@ -169,6 +169,26 @@ func buildDeletedFixture(
 ) deletedFixture {
 	t.Helper()
 
+	return buildGuardedFixture(t, guardSpec{
+		entries: entries, authz: authz, lifecycleErr: lifecycleErr, scope: scope, guard: nil,
+	})
+}
+
+// guardSpec holds the parts of a fixture with a state guard.
+type guardSpec struct {
+	entries      []coreinventory.DeletedEntry
+	authz        identity.Authorizer
+	lifecycleErr error
+	scope        apiinventory.DeletedReadScope
+	guard        apiinventory.StateGuard
+}
+
+// buildGuardedFixture is buildDeletedFixture with the state guard of spec.
+func buildGuardedFixture(t *testing.T, spec guardSpec) deletedFixture {
+	t.Helper()
+
+	entries, authz, lifecycleErr, scope, guard := spec.entries, spec.authz, spec.lifecycleErr, spec.scope, spec.guard
+
 	nsStore := &memNamespaceStore{namespaces: map[namespace.Name]namespace.Namespace{}}
 	seedNamespace(t, nsStore)
 
@@ -199,6 +219,7 @@ func buildDeletedFixture(
 		Logger:        slog.New(slog.DiscardHandler),
 		Now:           func() time.Time { return time.Unix(deletedNowUnix, 0) },
 		DenialLimiter: nil,
+		StateGuard:    guard,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)

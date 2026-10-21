@@ -252,7 +252,8 @@ func (f storeMoveFixture) move(t *testing.T, authz identity.Authorizer) *httptes
 		Lifecycles: testLifecycles(), ReadScope: fixedScope{err: nil, ids: nil, all: true}, Now: nil,
 		Authenticator: tokenAuthenticator{}, Authorizer: authz, Audit: f.store, OnAuditFailure: nil,
 		DenialLimiter: nil, Sessions: nil,
-		Logger: slog.New(slog.DiscardHandler),
+		Logger:     slog.New(slog.DiscardHandler),
+		StateGuard: nil,
 	})
 	if err != nil {
 		t.Fatalf("inventory handler: %v", err)

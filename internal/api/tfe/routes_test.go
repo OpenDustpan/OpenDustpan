@@ -271,6 +271,7 @@ func newObjectHandler(t *testing.T, authz identity.Authorizer) *tfe.Handler {
 		MaxStateBytes:  0,
 		OnAuditFailure: nil,
 		DenialLimiter:  nil,
+		StateGuard:     nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -893,6 +894,7 @@ func newTestHandler(t *testing.T) *tfe.Handler {
 		MaxStateBytes:  0,
 		OnAuditFailure: nil,
 		DenialLimiter:  nil,
+		StateGuard:     nil,
 	}, tfe.ExtraRoutes)
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -917,6 +919,7 @@ func newEnforcingHandler(t *testing.T, authz identity.Authorizer) *tfe.Handler {
 		MaxStateBytes:  0,
 		OnAuditFailure: nil,
 		DenialLimiter:  nil,
+		StateGuard:     nil,
 	}, tfe.ExtraRoutes)
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -943,6 +946,7 @@ func newProductionHandler(t *testing.T) *tfe.Handler {
 		MaxStateBytes:  0,
 		OnAuditFailure: nil,
 		DenialLimiter:  nil,
+		StateGuard:     nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -1842,6 +1846,7 @@ func TestErrorHidesInternalDetail(t *testing.T) {
 		MaxStateBytes:  0,
 		OnAuditFailure: nil,
 		DenialLimiter:  nil,
+		StateGuard:     nil,
 	}, tfe.ExtraRoutes)
 	if err != nil {
 		t.Fatalf("handler: %v", err)

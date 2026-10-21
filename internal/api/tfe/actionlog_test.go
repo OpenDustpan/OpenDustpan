@@ -48,6 +48,7 @@ func loggedTFEHandler(t *testing.T, stores tfe.WorkspaceService, buf *bytes.Buff
 		MaxStateBytes:  0,
 		OnAuditFailure: nil,
 		DenialLimiter:  nil,
+		StateGuard:     nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)

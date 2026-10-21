@@ -838,6 +838,23 @@ func (s *Store) GetDeletedUnit(
 	return s.inner.GetDeletedUnit(ctx, ns, tool, unitID)
 }
 
+// GetDeletedUnitFacts returns the facts of one deleted unit, unless a fault
+// fires first. It fails closed when the inner store cannot give them.
+func (s *Store) GetDeletedUnitFacts(
+	ctx context.Context, ns namespace.Name, tool, unitID string,
+) (inventory.DeletedFacts, error) {
+	if err := s.before(ctx, "GetDeletedUnitFacts"); err != nil {
+		return inventory.DeletedFacts{}, err
+	}
+
+	inner, ok := s.inner.(inventory.DeletedFactsReader)
+	if !ok {
+		return inventory.DeletedFacts{}, inventory.ErrNotFound
+	}
+
+	return inner.GetDeletedUnitFacts(ctx, ns, tool, unitID)
+}
+
 // ListExpiredDeleted returns one page of expired deleted units, unless a
 // fault fires first.
 func (s *Store) ListExpiredDeleted(

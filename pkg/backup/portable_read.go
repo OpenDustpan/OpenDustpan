@@ -184,13 +184,16 @@ func checkManualLockReason(value any) error {
 }
 
 // checkPortableValue runs the check of the column that has one: the ID of a
-// namespace and the reason of a manual lock.
+// namespace, the reason of a manual lock and the document of the preferences
+// of a person.
 func checkPortableValue(table, column string, value any) error {
 	switch {
 	case table == portTableNamespaces && column == "id":
 		return checkNamespaceID(value)
 	case table == portTableManualLocks && column == portColReason:
 		return checkManualLockReason(value)
+	case table == TablePersonPreferences && column == portColDocument:
+		return checkPreferencesDocument(value)
 	default:
 		return nil
 	}

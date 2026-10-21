@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"opendustpan.org/opendustpan/pkg/gate"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/workspace"
@@ -469,6 +470,10 @@ func (h *Handler) restoreStateVersion(
 	if err != nil {
 		h.writeError(ctx, w, err)
 
+		return
+	}
+
+	if !h.guardStateWrite(w, r, p, obj, stateCheck{action: identity.ActionUnitWrite, op: gate.OperationRollback}) {
 		return
 	}
 
