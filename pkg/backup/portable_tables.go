@@ -48,6 +48,7 @@ const (
 	portColAtMs          = "at_ms"
 	portColScopeKey      = "scope_key"
 	portColSeq           = "seq"
+	portColSHA256Text    = "sha256"
 	portColOwner         = "owner"
 	portColBody          = "body"
 )
@@ -256,7 +257,7 @@ func portableSpec() []PortableTable {
 			OrderBy: []string{portColNamespaceID, portColSeq},
 			Columns: []Column{
 				{Name: portColNamespaceID, Kind: KindText},
-				{Name: "seq", Kind: KindInteger},
+				{Name: portColSeq, Kind: KindInteger},
 				{Name: portColAtMs, Kind: KindTime},
 				{Name: portColTool, Kind: KindText},
 				{Name: portColUnitID, Kind: KindText},
@@ -706,6 +707,7 @@ func portableSpec() []PortableTable {
 		portableBlameTables(),
 		portableRunnerTables(),
 		portableJobTables(),
+		portableJobArtifactTables(),
 		portableProfileTables(),
 		portableManualLockTables(),
 		portablePreferenceTables(),

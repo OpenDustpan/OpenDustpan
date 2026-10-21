@@ -52,6 +52,12 @@ func save(ctx context.Context, tx Tx, j *job.Job) error {
 	return update(ctx, tx, j, prev)
 }
 
+// stepKey returns the key of the record of the step called name under the claim
+// pc.
+func stepKey(pc *job.PhaseClaim, name string) job.StepKey {
+	return job.StepKey{Phase: pc.Phase, Token: pc.Claim.Token, Name: name}
+}
+
 // BeginStep implements job.RecordStore.
 func (s *Store) BeginStep(ctx context.Context, pc job.PhaseClaim, name string) error {
 	return s.run.Write(ctx, pc.Fence, func(tx Tx) error {
@@ -65,9 +71,9 @@ func (s *Store) BeginStep(ctx context.Context, pc job.PhaseClaim, name string) e
 			return err
 		}
 
-		changed, err := job.BeginStepRecord(&j, pc.Phase, pc.Claim.Token, name, now)
+		changed, err := job.BeginStepRecord(&j, stepKey(&pc, name), now)
 		if err != nil || !changed {
-			return err //nolint:wrapcheck // The rule returns the sentinels of the job package.
+			return err
 		}
 
 		return save(ctx, tx, &j)
@@ -89,9 +95,9 @@ func (s *Store) EndStep(
 			return err
 		}
 
-		changed, err := job.EndStepRecord(&j, pc.Phase, pc.Claim.Token, name, exit, closing, now)
+		changed, err := job.EndStepRecord(&j, stepKey(&pc, name), exit, closing, now)
 		if err != nil || !changed {
-			return err //nolint:wrapcheck // See BeginStep.
+			return err
 		}
 
 		return save(ctx, tx, &j)
@@ -116,14 +122,14 @@ func (s *Store) ReserveLogChunk(
 			return tx.Chunk(ctx, ns, version, seq)
 		}
 
-		plan, err = job.PlanChunk(&j, pc.Phase, pc.Claim.Token, step, c, newLog, lookup)
+		plan, err = job.PlanChunk(&j, stepKey(&pc, step), c, newLog, lookup)
 		if err != nil {
-			return err //nolint:wrapcheck // See BeginStep.
+			return err
 		}
 
 		if plan.CreateLog {
-			if err = createLog(ctx, tx, &j, &pc, step, newLog); err != nil {
-				return err
+			if createErr := createLog(ctx, tx, &j, &logCreate{pc: &pc, step: step, log: newLog}); createErr != nil {
+				return createErr
 			}
 		}
 
@@ -146,10 +152,18 @@ func (s *Store) ReserveLogChunk(
 	return plan, nil
 }
 
+// logCreate is the creation of a log version: the claim that runs the step,
+// the step, and the new version.
+type logCreate struct {
+	pc   *job.PhaseClaim
+	step string
+	log  *job.LogRef
+}
+
 // createLog sets the new log version on the step record of j, stores its
 // lookup row and saves j.
-func createLog(ctx context.Context, tx Tx, j *job.Job, pc *job.PhaseClaim, step string, newLog *job.LogRef) error {
-	job.CreateLogRecord(j, pc.Phase, pc.Claim.Token, step, newLog)
+func createLog(ctx context.Context, tx Tx, j *job.Job, lc *logCreate) error {
+	job.CreateLogRecord(j, stepKey(lc.pc, lc.step), lc.log)
 
 	now, err := tx.Now(ctx)
 	if err != nil {
@@ -157,10 +171,15 @@ func createLog(ctx context.Context, tx Tx, j *job.Job, pc *job.PhaseClaim, step 
 	}
 
 	row := LogRow{
-		ID: newLog.ID, Job: j.ID, Phase: pc.Phase, Step: step, Token: pc.Claim.Token, CreatedMs: now.UnixMilli(),
+		ID:        lc.log.ID,
+		Job:       j.ID,
+		Phase:     lc.pc.Phase,
+		Step:      lc.step,
+		Token:     lc.pc.Claim.Token,
+		CreatedMs: now.UnixMilli(),
 	}
-	if err = tx.InsertLog(ctx, pc.Fence.Namespace, row); err != nil {
-		return err
+	if insertErr := tx.InsertLog(ctx, lc.pc.Fence.Namespace, row); insertErr != nil {
+		return insertErr
 	}
 
 	return save(ctx, tx, j)
@@ -185,14 +204,14 @@ func (s *Store) ConfirmLogChunk(ctx context.Context, pc job.PhaseClaim, step, ve
 			return fmt.Errorf("%w: chunk %d of log %s was not reserved", job.ErrInvalid, seq, version)
 		}
 
-		changed, err := job.ConfirmChunkRecord(&j, pc.Phase, pc.Claim.Token, step, version, seq, row)
+		changed, err := job.ConfirmChunkRecord(&j, stepKey(&pc, step), version, seq, row)
 		if err != nil {
-			return err //nolint:wrapcheck // See BeginStep.
+			return err
 		}
 
 		if !row.Confirmed {
-			if err = tx.ConfirmChunk(ctx, ns, version, seq); err != nil {
-				return err
+			if confirmErr := tx.ConfirmChunk(ctx, ns, version, seq); confirmErr != nil {
+				return confirmErr
 			}
 		}
 
@@ -224,7 +243,7 @@ func (s *Store) PutPlan(ctx context.Context, pc job.PhaseClaim, p job.PlanRef) (
 
 		if checkErr := job.CheckPutPlan(&j, pc.Phase, current); checkErr != nil {
 			if !errors.Is(checkErr, job.ErrPlanStale) {
-				return checkErr //nolint:wrapcheck // See BeginStep.
+				return checkErr
 			}
 
 			// The plan read a state that is not the current one. The phase fails
@@ -244,8 +263,8 @@ func (s *Store) PutPlan(ctx context.Context, pc job.PhaseClaim, p job.PlanRef) (
 		}
 
 		row := PlanRow{ID: p.ID, Job: j.ID, Body: string(body), CreatedMs: p.CreatedAt.UnixMilli()}
-		if err = tx.InsertPlan(ctx, pc.Fence.Namespace, row); err != nil {
-			return err
+		if insertErr := tx.InsertPlan(ctx, pc.Fence.Namespace, row); insertErr != nil {
+			return insertErr
 		}
 
 		out = p
@@ -299,13 +318,13 @@ func (s *Store) Delivered(ctx context.Context, pc job.PhaseClaim, d job.Delivery
 
 		changed, err := job.CheckDelivered(&j, pc.Phase, &d)
 		if err != nil || !changed {
-			return err //nolint:wrapcheck // See BeginStep.
+			return err
 		}
 
 		j.Delivery = &d
 
-		if err = save(ctx, tx, &j); err != nil {
-			return err
+		if saveErr := save(ctx, tx, &j); saveErr != nil {
+			return saveErr
 		}
 
 		return tx.AppendAudit(ctx, entries)

@@ -20,21 +20,22 @@ func deliveryCases() []recorderCase {
 	}
 }
 
-// openDeliver stores a write-back job and claims its deliver phase.
-func openDeliver(t *testing.T, h RecorderHarness, f fixture, name string) job.Assignment {
+// openDeliver stores a write-back job on the unit unit-0 and claims its deliver
+// phase.
+func openDeliver(t *testing.T, h RecorderHarness, f fixture) *job.Assignment {
 	t.Helper()
 
-	deliverJob(t, h.Harness, f, name)
+	deliverJob(t, h.Harness, f, "unit-0")
 
-	return claim(t, h.Harness, "instance-a", time.Minute, job.KindWriteBack)
+	return claimOf(t, h.Harness, "instance-a", time.Minute, job.KindWriteBack)
 }
 
 func testDeliveredRecords(t *testing.T, h RecorderHarness) {
 	t.Helper()
 
 	f := setUp(t, h.Harness)
-	a := openDeliver(t, h, f, "unit-0")
-	d := delivered("def456", job.DeliveryDirectPush)
+	a := openDeliver(t, h, f)
+	d := delivered(commitDef, job.DeliveryDirectPush)
 
 	if err := h.Recorder.Delivered(t.Context(), a.Claim, d); err != nil {
 		t.Fatalf("Delivered = %v", err)
@@ -45,37 +46,41 @@ func testDeliveredRecords(t *testing.T, h RecorderHarness) {
 		t.Fatalf("job after Delivered = %s, delivery %+v; want running with %+v", got.State, got.Delivery, d)
 	}
 
+	checkDeliveryEntry(t, h, f, a, &got)
+}
+
+// checkDeliveryEntry fails t unless the audit log of the namespace of f holds
+// the entry of the delivery of the job of a.
+func checkDeliveryEntry(t *testing.T, h RecorderHarness, f fixture, a *job.Assignment, got *job.Job) {
+	t.Helper()
+
 	entries, err := h.Domain.AuditEntries(t.Context(), f.fence.Namespace)
 	if err != nil {
 		t.Fatalf("AuditEntries = %v", err)
 	}
 
-	var found bool
-
 	for i := range entries {
-		e := entries[i]
+		e := &entries[i]
 		if e.Action != string(job.ActionUnitWriteBack) {
 			continue
 		}
 
-		found = true
-
-		if e.JobID != string(a.Claim.Job) || e.Version != "def456" || e.Subject != "instance-a" ||
+		if e.JobID != string(a.Claim.Job) || e.Version != commitDef || e.Subject != "instance-a" ||
 			e.Object != got.Spec.Unit.String() || e.ObjectID != got.Spec.Unit.UnitID() || e.Reason == "" {
-			t.Fatalf("audit entry of the delivery = %+v, want the job, the commit and the instance", e)
+			t.Fatalf("audit entry of the delivery = %+v, want the job, the commit and the instance", *e)
 		}
+
+		return
 	}
 
-	if !found {
-		t.Fatalf("no audit entry of the action %s in %d entries", job.ActionUnitWriteBack, len(entries))
-	}
+	t.Fatalf("no audit entry of the action %s in %d entries", job.ActionUnitWriteBack, len(entries))
 }
 
 func testDeliveredFinish(t *testing.T, h RecorderHarness) {
 	t.Helper()
 
-	a := openDeliver(t, h, setUp(t, h.Harness), "unit-0")
-	d := delivered("def456", job.DeliveryDirectPush)
+	a := openDeliver(t, h, setUp(t, h.Harness))
+	d := delivered(commitDef, job.DeliveryDirectPush)
 
 	if err := h.Recorder.Delivered(t.Context(), a.Claim, d); err != nil {
 		t.Fatalf("Delivered = %v", err)
@@ -95,8 +100,8 @@ func testDeliveredTwice(t *testing.T, h RecorderHarness) {
 	t.Helper()
 
 	f := setUp(t, h.Harness)
-	a := openDeliver(t, h, f, "unit-0")
-	d := delivered("def456", job.DeliveryDirectPush)
+	a := openDeliver(t, h, f)
+	d := delivered(commitDef, job.DeliveryDirectPush)
 
 	if err := h.Recorder.Delivered(t.Context(), a.Claim, d); err != nil {
 		t.Fatalf("Delivered = %v", err)
@@ -120,8 +125,13 @@ func testDeliveredTwice(t *testing.T, h RecorderHarness) {
 	}
 
 	got := jobOf(t, h.Harness, a.Claim.Job)
-	if got.Version != cur.Version || got.Delivery.Commit != "def456" {
-		t.Fatalf("job after repeats: version %d, commit %q; want %d, def456", got.Version, got.Delivery.Commit, cur.Version)
+	if got.Version != cur.Version || got.Delivery.Commit != commitDef {
+		t.Fatalf(
+			"job after repeats: version %d, commit %q; want %d, def456",
+			got.Version,
+			got.Delivery.Commit,
+			cur.Version,
+		)
 	}
 
 	after, err := h.Domain.AuditEntries(t.Context(), f.fence.Namespace)
@@ -137,8 +147,8 @@ func testDeliveredWrongPhase(t *testing.T, h RecorderHarness) {
 	a := openPlan(t, h, f, "unit-0")
 	b := openApply(t, h, f, "unit-1")
 
-	for _, as := range []job.Assignment{a, b} {
-		err := h.Recorder.Delivered(t.Context(), as.Claim, delivered("def456", job.DeliveryDirectPush))
+	for _, as := range []*job.Assignment{a, b} {
+		err := h.Recorder.Delivered(t.Context(), as.Claim, delivered(commitDef, job.DeliveryDirectPush))
 		if !errors.Is(err, job.ErrInvalid) {
 			t.Errorf("Delivered in a %s phase = %v, want ErrInvalid", as.Job.Phases[as.Claim.Phase].Kind, err)
 		}
@@ -153,10 +163,10 @@ func testDeliveredInvalid(t *testing.T, h RecorderHarness) {
 	t.Helper()
 
 	f := setUp(t, h.Harness)
-	a := openDeliver(t, h, f, "unit-0")
+	a := openDeliver(t, h, f)
 	cur := jobOf(t, h.Harness, a.Claim.Job)
 
-	good := delivered("def456", job.DeliveryDirectPush)
+	good := delivered(commitDef, job.DeliveryDirectPush)
 
 	mutate := func(fn func(d *job.DeliveryResult)) job.DeliveryResult {
 		d := good
@@ -166,18 +176,22 @@ func testDeliveredInvalid(t *testing.T, h RecorderHarness) {
 	}
 
 	cases := map[string]job.DeliveryResult{
-		"no commit":                 mutate(func(d *job.DeliveryResult) { d.Commit = "" }),
-		"a commit with a break":     mutate(func(d *job.DeliveryResult) { d.Commit = "abc\ndef" }),
-		"a commit that is too long": mutate(func(d *job.DeliveryResult) { d.Commit = string(make([]byte, 129)) }),
-		"no branch":                 mutate(func(d *job.DeliveryResult) { d.Branch = "" }),
-		"an unknown delivery":       mutate(func(d *job.DeliveryResult) { d.Delivery = "other" }),
-		"a direct push with a URL":  mutate(func(d *job.DeliveryResult) { d.ReviewRequest = "https://x.example/1" }),
+		"no commit":             mutate(func(d *job.DeliveryResult) { d.Commit = "" }),
+		"a commit with a break": mutate(func(d *job.DeliveryResult) { d.Commit = "abc\ndef" }),
+		"a commit that is too long": mutate(
+			func(d *job.DeliveryResult) { d.Commit = string(make([]byte, longCommit)) },
+		),
+		"no branch":                mutate(func(d *job.DeliveryResult) { d.Branch = "" }),
+		"an unknown delivery":      mutate(func(d *job.DeliveryResult) { d.Delivery = valueOther }),
+		"a direct push with a URL": mutate(func(d *job.DeliveryResult) { d.ReviewRequest = "https://x.example/1" }),
 		"a review request with no URL": mutate(func(d *job.DeliveryResult) {
 			d.Delivery = job.DeliveryReviewRequest
 		}),
-		"a merge time":       mutate(func(d *job.DeliveryResult) { d.MergedAt = time.Now() }),
-		"no delivery time":   mutate(func(d *job.DeliveryResult) { d.DeliveredAt = time.Time{} }),
-		"a hidden character": mutate(func(d *job.DeliveryResult) { d.Branch = "dustpan/‮evil" }),
+		"a merge time":     mutate(func(d *job.DeliveryResult) { d.MergedAt = time.Now() }),
+		"no delivery time": mutate(func(d *job.DeliveryResult) { d.DeliveredAt = time.Time{} }),
+		"a hidden character": mutate(
+			func(d *job.DeliveryResult) { d.Branch = "dustpan/" + string(rune(hiddenRune)) + "evil" },
+		),
 	}
 
 	for what, d := range cases {
@@ -196,15 +210,16 @@ func testDeliveredReview(t *testing.T, h RecorderHarness) {
 	t.Helper()
 
 	f := setUp(t, h.Harness)
-	a := openDeliver(t, h, f, "unit-0")
-	d := delivered("def456", job.DeliveryReviewRequest)
+	a := openDeliver(t, h, f)
+	d := delivered(commitDef, job.DeliveryReviewRequest)
 
 	if err := h.Recorder.Delivered(t.Context(), a.Claim, d); err != nil {
 		t.Fatalf("Delivered = %v", err)
 	}
 
 	got := jobOf(t, h.Harness, a.Claim.Job)
-	if got.Delivery == nil || got.Delivery.ReviewRequest != d.ReviewRequest || got.Delivery.Delivery != job.DeliveryReviewRequest {
+	if got.Delivery == nil || got.Delivery.ReviewRequest != d.ReviewRequest ||
+		got.Delivery.Delivery != job.DeliveryReviewRequest {
 		t.Fatalf("delivery = %+v, want the review request %s", got.Delivery, d.ReviewRequest)
 	}
 }

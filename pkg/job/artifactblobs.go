@@ -24,6 +24,22 @@ const (
 	opDelete = "delete"
 )
 
+// PlanPartRef names one part of a stored plan in the blob store.
+type PlanPartRef struct {
+	Namespace namespace.ID
+	Job       ID
+	Plan      string
+	Kind      OutputKind
+}
+
+// LogChunkRef names one chunk of a log version in the blob store.
+type LogChunkRef struct {
+	Namespace namespace.ID
+	Job       ID
+	Version   string
+	Seq       int
+}
+
 // ArtifactBlobFamily is the family of the plan and log blobs, as the audit
 // entry of a refusal names it.
 func ArtifactBlobFamily() scopeaudit.Family {
@@ -61,8 +77,70 @@ func NewArtifactBlobs(store blob.Store, refusals scopeaudit.Recorder) (*Artifact
 	return &ArtifactBlobs{store: store, refusals: refusals}, nil
 }
 
-// checkParts returns ErrInvalid unless the job ID, the artifact ID and the
-// name are one key segment each, with the prefixes of this package.
+// PutPlanPart stores r as the part ref. It returns blob.ErrExists when the
+// part exists already.
+func (b *ArtifactBlobs) PutPlanPart(ctx context.Context, ref PlanPartRef, r io.Reader) error {
+	at, err := b.planKey(ref)
+	if err != nil {
+		return err
+	}
+
+	return b.refuse(ctx, ref.Namespace, opPut, at.view.Put(ctx, at.key, r), at)
+}
+
+// DeletePlanPart deletes the part ref. A part that does not exist is not an
+// error. The recorder uses it to remove the parts of a plan that it did not
+// store.
+func (b *ArtifactBlobs) DeletePlanPart(ctx context.Context, ref PlanPartRef) error {
+	at, err := b.planKey(ref)
+	if err != nil {
+		return err
+	}
+
+	return b.refuse(ctx, ref.Namespace, opDelete, at.view.Delete(ctx, at.key), at)
+}
+
+// OpenPlanPart opens the part ref. It returns blob.ErrNotFound for a part that
+// does not exist.
+func (b *ArtifactBlobs) OpenPlanPart(ctx context.Context, ref PlanPartRef) (io.ReadCloser, error) {
+	at, err := b.planKey(ref)
+	if err != nil {
+		return nil, err
+	}
+
+	return b.open(ctx, ref.Namespace, at)
+}
+
+// PutLogChunk stores r as the chunk ref. It returns blob.ErrExists when the
+// chunk exists already.
+func (b *ArtifactBlobs) PutLogChunk(ctx context.Context, ref LogChunkRef, r io.Reader) error {
+	at, err := b.logKey(ref)
+	if err != nil {
+		return err
+	}
+
+	return b.refuse(ctx, ref.Namespace, opPut, at.view.Put(ctx, at.key, r), at)
+}
+
+// OpenLogChunk opens the chunk ref. It returns blob.ErrNotFound for a chunk
+// that does not exist.
+func (b *ArtifactBlobs) OpenLogChunk(ctx context.Context, ref LogChunkRef) (io.ReadCloser, error) {
+	at, err := b.logKey(ref)
+	if err != nil {
+		return nil, err
+	}
+
+	return b.open(ctx, ref.Namespace, at)
+}
+
+// keyAt is a key and the view of the namespace that it is in.
+type keyAt struct {
+	view *blob.Scoped
+	key  blob.Key
+}
+
+// checkParts returns ErrInvalid unless the job ID and the artifact ID are one
+// key segment each, with the prefixes of this package.
 //
 // Defense in depth: blob.ParseKey and the scoped view refuse a key that leaves
 // the namespace. This check stays so that an ID with a "/" never makes a key
@@ -76,131 +154,62 @@ func checkParts(id ID, prefix, artifact string) error {
 	return nil
 }
 
-// planKey returns the scoped view and the key of the part k of the plan.
-func (b *ArtifactBlobs) planKey(ns namespace.ID, id ID, plan string, k OutputKind) (*blob.Scoped, blob.Key, error) {
-	if err := checkParts(id, PlanIDPrefix, plan); err != nil {
-		return nil, "", err
+// planKey returns the key of the part ref and the view that it is in.
+func (b *ArtifactBlobs) planKey(ref PlanPartRef) (keyAt, error) {
+	if err := checkParts(ref.Job, PlanIDPrefix, ref.Plan); err != nil {
+		return keyAt{}, err
 	}
 
-	if k != OutputPlanDisplay && k != OutputPlanApply {
-		return nil, "", fmt.Errorf("%w: plan part %q", ErrInvalid, k)
+	if ref.Kind != OutputPlanDisplay && ref.Kind != OutputPlanApply {
+		return keyAt{}, fmt.Errorf("%w: plan part %q", ErrInvalid, ref.Kind)
 	}
 
-	rel, err := PlanPartKey(id, plan, k)
+	rel, err := PlanPartKey(ref.Job, ref.Plan, ref.Kind)
 	if err != nil {
-		return nil, "", fmt.Errorf("%w: %w", ErrInvalid, err)
+		return keyAt{}, fmt.Errorf("%w: %w", ErrInvalid, err)
 	}
 
-	return b.scoped(ns, rel)
+	return b.scoped(ref.Namespace, rel)
 }
 
-// logKey returns the scoped view and the key of the chunk seq of the log
-// version.
-func (b *ArtifactBlobs) logKey(ns namespace.ID, id ID, version string, seq int) (*blob.Scoped, blob.Key, error) {
-	if err := checkParts(id, LogVersionIDPrefix, version); err != nil {
-		return nil, "", err
+// logKey returns the key of the chunk ref and the view that it is in.
+func (b *ArtifactBlobs) logKey(ref LogChunkRef) (keyAt, error) {
+	if err := checkParts(ref.Job, LogVersionIDPrefix, ref.Version); err != nil {
+		return keyAt{}, err
 	}
 
-	if seq < 0 || seq >= MaxLogChunks {
-		return nil, "", fmt.Errorf("%w: log chunk %d", ErrInvalid, seq)
+	if ref.Seq < 0 || ref.Seq >= MaxLogChunks {
+		return keyAt{}, fmt.Errorf("%w: log chunk %d", ErrInvalid, ref.Seq)
 	}
 
-	rel, err := LogChunkKey(id, version, seq)
+	rel, err := LogChunkKey(ref.Job, ref.Version, ref.Seq)
 	if err != nil {
-		return nil, "", fmt.Errorf("%w: %w", ErrInvalid, err)
+		return keyAt{}, fmt.Errorf("%w: %w", ErrInvalid, err)
 	}
 
-	return b.scoped(ns, rel)
+	return b.scoped(ref.Namespace, rel)
 }
 
 // scoped returns the view for ns and the key of rel inside it.
-func (b *ArtifactBlobs) scoped(ns namespace.ID, rel blob.Key) (*blob.Scoped, blob.Key, error) {
+func (b *ArtifactBlobs) scoped(ns namespace.ID, rel blob.Key) (keyAt, error) {
 	v, err := blob.NewScoped(b.store, ns)
 	if err != nil {
-		return nil, "", fmt.Errorf("scope of artifact blobs: %w", err)
+		return keyAt{}, fmt.Errorf("scope of artifact blobs: %w", err)
 	}
 
 	key, err := v.Key(rel.String())
 	if err != nil {
-		return nil, "", fmt.Errorf("%w: %w", ErrInvalid, err)
+		return keyAt{}, fmt.Errorf("%w: %w", ErrInvalid, err)
 	}
 
-	return v, key, nil
+	return keyAt{view: v, key: key}, nil
 }
 
-// PutPlanPart stores r as the part k of the plan of the job id. It returns
-// blob.ErrExists when the part exists already.
-func (b *ArtifactBlobs) PutPlanPart(
-	ctx context.Context, ns namespace.ID, id ID, plan string, k OutputKind, r io.Reader,
-) error {
-	v, key, err := b.planKey(ns, id, plan, k)
+// open opens the blob under the key of at.
+func (b *ArtifactBlobs) open(ctx context.Context, ns namespace.ID, at keyAt) (io.ReadCloser, error) {
+	rc, err := at.view.Get(ctx, at.key)
 	if err != nil {
-		return err
-	}
-
-	return b.refuse(ctx, ns, opPut, v.Put(ctx, key, r), v, key)
-}
-
-// DeletePlanPart deletes the part k of the plan of the job id. A part that does
-// not exist is not an error. The recorder uses it to remove the parts of a plan
-// that it did not store.
-func (b *ArtifactBlobs) DeletePlanPart(
-	ctx context.Context, ns namespace.ID, id ID, plan string, k OutputKind,
-) error {
-	v, key, err := b.planKey(ns, id, plan, k)
-	if err != nil {
-		return err
-	}
-
-	return b.refuse(ctx, ns, opDelete, v.Delete(ctx, key), v, key)
-}
-
-// OpenPlanPart opens the part k of the plan of the job id. It returns
-// blob.ErrNotFound for a part that does not exist.
-func (b *ArtifactBlobs) OpenPlanPart(
-	ctx context.Context, ns namespace.ID, id ID, plan string, k OutputKind,
-) (io.ReadCloser, error) {
-	v, key, err := b.planKey(ns, id, plan, k)
-	if err != nil {
-		return nil, err
-	}
-
-	return b.open(ctx, ns, v, key)
-}
-
-// PutLogChunk stores r as the chunk seq of the log version of the job id. It
-// returns blob.ErrExists when the chunk exists already.
-func (b *ArtifactBlobs) PutLogChunk(
-	ctx context.Context, ns namespace.ID, id ID, version string, seq int, r io.Reader,
-) error {
-	v, key, err := b.logKey(ns, id, version, seq)
-	if err != nil {
-		return err
-	}
-
-	return b.refuse(ctx, ns, opPut, v.Put(ctx, key, r), v, key)
-}
-
-// OpenLogChunk opens the chunk seq of the log version of the job id. It
-// returns blob.ErrNotFound for a chunk that does not exist.
-func (b *ArtifactBlobs) OpenLogChunk(
-	ctx context.Context, ns namespace.ID, id ID, version string, seq int,
-) (io.ReadCloser, error) {
-	v, key, err := b.logKey(ns, id, version, seq)
-	if err != nil {
-		return nil, err
-	}
-
-	return b.open(ctx, ns, v, key)
-}
-
-// open opens the blob under key.
-func (b *ArtifactBlobs) open(
-	ctx context.Context, ns namespace.ID, v *blob.Scoped, key blob.Key,
-) (io.ReadCloser, error) {
-	rc, err := v.Get(ctx, key)
-	if err != nil {
-		return nil, b.refuse(ctx, ns, opGet, err, v, key)
+		return nil, b.refuse(ctx, ns, opGet, err, at)
 	}
 
 	return rc, nil
@@ -210,14 +219,12 @@ func (b *ArtifactBlobs) open(
 // It returns err, joined with the error of the recorder when the record
 // fails, so the caller still sees the refusal. Any other error passes
 // through.
-func (b *ArtifactBlobs) refuse(
-	ctx context.Context, ns namespace.ID, op string, err error, v *blob.Scoped, key blob.Key,
-) error {
+func (b *ArtifactBlobs) refuse(ctx context.Context, ns namespace.ID, op string, err error, at keyAt) error {
 	if !errors.Is(err, blob.ErrOutOfScope) {
 		return err
 	}
 
-	if recErr := b.refusals.RecordOutOfScope(ctx, ns, op, scopeaudit.PlaceOf(v, key)); recErr != nil {
+	if recErr := b.refusals.RecordOutOfScope(ctx, ns, op, scopeaudit.PlaceOf(at.view, at.key)); recErr != nil {
 		return errors.Join(blob.ErrOutOfScope, fmt.Errorf("record the refusal: %w", recErr))
 	}
 

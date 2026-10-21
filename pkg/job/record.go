@@ -2,7 +2,7 @@ package job
 
 import (
 	"context"
-	"encoding/hex"
+	"crypto/sha256"
 	"fmt"
 	"slices"
 	"time"
@@ -134,6 +134,14 @@ type RecordStore interface {
 	Log(ctx context.Context, ns namespace.Name, version string) (ArtifactRecord, error)
 }
 
+// StepKey names the record of one step under one claim: the phase of the job,
+// the token of the claim and the name of the step.
+type StepKey struct {
+	Phase int
+	Token int64
+	Name  string
+}
+
 // stepWriteAllowed reports whether the phase at index phase of j may record
 // the step called name: a step of the spec that runs in that phase, or a
 // step of the write-back executor in a deliver phase.
@@ -157,54 +165,51 @@ func recordIndex(p *Phase, token int64, name string) int {
 	return slices.IndexFunc(p.Steps, func(r StepRecord) bool { return r.Name == name && r.Token == token })
 }
 
-// BeginStepRecord applies the begin of the step called name under the claim
-// token to the phase at index phase of j, at the time now. It reports
+// BeginStepRecord applies the begin of the step k to j, at the time now. It reports
 // whether j changed. The rules are the ones of RecordStore.BeginStep.
-func BeginStepRecord(j *Job, phase int, token int64, name string, now time.Time) (bool, error) {
-	if !stepWriteAllowed(j, phase, name) {
-		return false, fmt.Errorf("%w: phase %d of job %s has no step %q", ErrInvalid, phase, j.ID, name)
+func BeginStepRecord(j *Job, k StepKey, now time.Time) (bool, error) {
+	if !stepWriteAllowed(j, k.Phase, k.Name) {
+		return false, fmt.Errorf("%w: phase %d of job %s has no step %q", ErrInvalid, k.Phase, j.ID, k.Name)
 	}
 
 	if j.State == StateCanceling {
 		return false, fmt.Errorf("%w: job %s is canceling", ErrCanceled, j.ID)
 	}
 
-	p := &j.Phases[phase]
+	p := &j.Phases[k.Phase]
 
-	if i := recordIndex(p, token, name); i >= 0 {
+	if i := recordIndex(p, k.Token, k.Name); i >= 0 {
 		if !p.Steps[i].FinishedAt.IsZero() {
-			return false, fmt.Errorf("%w: step %q of job %s ended under claim %d", durable.ErrStepDone, name, j.ID, token)
+			return false, fmt.Errorf("%w: step %q of job %s ended under claim %d", durable.ErrStepDone, k.Name, j.ID,
+				k.Token)
 		}
 
 		return false, nil
 	}
 
 	p.Steps = append(p.Steps, StepRecord{
-		Name: name, Token: token, ExitCode: 0, StartedAt: now, FinishedAt: time.Time{}, Log: nil,
+		Name: k.Name, Token: k.Token, ExitCode: 0, StartedAt: now, FinishedAt: time.Time{}, Log: nil,
 	})
 
 	return true, nil
 }
 
-// EndStepRecord applies the end of the step called name under the claim token
-// to the phase at index phase of j, at the time now. It reports whether j
+// EndStepRecord applies the end of the step k to j, at the time now. It reports whether j
 // changed. The rules are the ones of RecordStore.EndStep.
-func EndStepRecord(
-	j *Job, phase int, token int64, name string, exit int, closing *LogClose, now time.Time,
-) (bool, error) {
+func EndStepRecord(j *Job, k StepKey, exit int, closing *LogClose, now time.Time) (bool, error) {
 	if exit < -1 || exit > MaxExitCode {
 		return false, fmt.Errorf("%w: exit code %d is not in -1 to %d", ErrInvalid, exit, MaxExitCode)
 	}
 
-	if phase < 0 || phase >= len(j.Phases) {
-		return false, fmt.Errorf("%w: job %s has no phase %d", ErrInvalid, j.ID, phase)
+	if k.Phase < 0 || k.Phase >= len(j.Phases) {
+		return false, fmt.Errorf("%w: job %s has no phase %d", ErrInvalid, j.ID, k.Phase)
 	}
 
-	p := &j.Phases[phase]
+	p := &j.Phases[k.Phase]
 
-	i := recordIndex(p, token, name)
+	i := recordIndex(p, k.Token, k.Name)
 	if i < 0 {
-		return false, fmt.Errorf("%w: step %q has no begin record under claim %d", ErrInvalid, name, token)
+		return false, fmt.Errorf("%w: step %q has no begin record under claim %d", ErrInvalid, k.Name, k.Token)
 	}
 
 	r := &p.Steps[i]
@@ -214,7 +219,7 @@ func EndStepRecord(
 			return false, nil
 		}
 
-		return false, fmt.Errorf("%w: step %q ended with exit code %d, not %d", ErrConflict, name, r.ExitCode, exit)
+		return false, fmt.Errorf("%w: step %q ended with exit code %d, not %d", ErrConflict, k.Name, r.ExitCode, exit)
 	}
 
 	if err := closeLog(r, closing, now); err != nil {
@@ -242,7 +247,7 @@ func closeLog(r *StepRecord, closing *LogClose, now time.Time) error {
 	case closing.Version != r.Log.ID || closing.Chunks != r.Log.Chunks:
 		return fmt.Errorf("%w: the log of step %q has %d chunks, the close names %d of %q", ErrConflict, r.Name,
 			r.Log.Chunks, closing.Chunks, closing.Version)
-	case !validHash(closing.SHA256) || closing.Size < 0:
+	case !ValidHash(closing.SHA256) || closing.Size < 0:
 		return fmt.Errorf("%w: the close of the log of step %q has no valid hash or size", ErrInvalid, r.Name)
 	}
 
@@ -251,39 +256,26 @@ func closeLog(r *StepRecord, closing *LogClose, now time.Time) error {
 	return nil
 }
 
-// validHash reports whether h is a SHA-256 in lowercase hexadecimal.
-func validHash(h string) bool {
-	if len(h) != 2*32 || h != string(lowerHex(h)) {
-		return false
-	}
-
-	_, err := hex.DecodeString(h)
-
-	return err == nil
-}
-
-// lowerHex returns h in lowercase.
-func lowerHex(h string) []byte {
-	out := []byte(h)
-	for i, c := range out {
-		if c >= 'A' && c <= 'F' {
-			out[i] = c + ('a' - 'A')
-		}
-	}
-
-	return out
-}
-
 // ValidHash reports whether h is a SHA-256 in lowercase hexadecimal, the form
 // of every hash of a plan part and of a log.
 func ValidHash(h string) bool {
-	return validHash(h)
+	if len(h) != 2*sha256.Size {
+		return false
+	}
+
+	for _, c := range []byte(h) {
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return false
+		}
+	}
+
+	return true
 }
 
-// PlanChunk decides the reserve of the chunk c of the log of the step called
-// step, under the claim token, in the phase at index phase of j. lookup reads
-// the stored row of a chunk, and reports false when none exists. newLog is the
-// log version that a chunk 0 creates when the step has no log. The rules:
+// PlanChunk decides the reserve of the chunk c of the log of the step k of j.
+// lookup reads the stored row of a chunk, and reports false when none exists.
+// newLog is the log version that a chunk 0 creates when the step has no log.
+// The rules:
 //   - the step must have a begin record under the claim and no end record,
 //   - the number must be 0 or more, the size 0 to MaxLogChunk and the hash a
 //     SHA-256, else ErrInvalid,
@@ -294,31 +286,20 @@ func ValidHash(h string) bool {
 //   - a chunk with no row must be the next one (LogRef.Chunks) and below
 //     MaxLogChunks, else ErrInvalid.
 func PlanChunk(
-	j *Job, phase int, token int64, step string, c ChunkReserve, newLog *LogRef,
+	j *Job, k StepKey, c ChunkReserve, newLog *LogRef,
 	lookup func(version string, seq int) (ChunkRow, bool, error),
 ) (ChunkPlan, error) {
-	if c.Seq < 0 || c.Seq >= MaxLogChunks || c.Size < 0 || c.Size > MaxLogChunk || !validHash(c.SHA256) {
+	if !c.valid() {
 		return ChunkPlan{}, fmt.Errorf("%w: chunk %d is not valid", ErrInvalid, c.Seq)
 	}
 
-	if phase < 0 || phase >= len(j.Phases) {
-		return ChunkPlan{}, fmt.Errorf("%w: job %s has no phase %d", ErrInvalid, j.ID, phase)
+	log, err := openLogOf(j, k)
+	if err != nil {
+		return ChunkPlan{}, err
 	}
 
-	p := &j.Phases[phase]
-
-	i := recordIndex(p, token, step)
-	if i < 0 || !p.Steps[i].FinishedAt.IsZero() {
-		return ChunkPlan{}, fmt.Errorf("%w: step %q is not open under claim %d", ErrInvalid, step, token)
-	}
-
-	log := p.Steps[i].Log
 	if log == nil {
-		return planFirstChunk(step, c.Seq, newLog)
-	}
-
-	if !log.ClosedAt.IsZero() {
-		return ChunkPlan{}, fmt.Errorf("%w: the log of step %q is closed", ErrInvalid, step)
+		return planFirstChunk(k.Name, c.Seq, newLog)
 	}
 
 	row, ok, err := lookup(log.ID, c.Seq)
@@ -326,6 +307,18 @@ func PlanChunk(
 		return ChunkPlan{}, err
 	}
 
+	return planNextChunk(log, k.Name, &c, row, ok)
+}
+
+// valid reports whether c has a number below MaxLogChunks, a size up to
+// MaxLogChunk and a SHA-256.
+func (c ChunkReserve) valid() bool {
+	return c.Seq >= 0 && c.Seq < MaxLogChunks && c.Size >= 0 && c.Size <= MaxLogChunk && ValidHash(c.SHA256)
+}
+
+// planNextChunk decides the reserve of the chunk c of the open log, when the
+// store holds the row (ok) or not.
+func planNextChunk(log *LogRef, step string, c *ChunkReserve, row ChunkRow, ok bool) (ChunkPlan, error) {
 	switch {
 	case ok && row.SHA256 != c.SHA256:
 		return ChunkPlan{}, fmt.Errorf("%w: chunk %d of step %q has another hash", ErrConflict, c.Seq, step)
@@ -337,6 +330,29 @@ func PlanChunk(
 	default:
 		return ChunkPlan{Version: log.ID, CreateLog: false, Insert: true, Duplicate: false}, nil
 	}
+}
+
+// openLogOf returns the log of the open step k of j, or nil when the step has
+// none. It returns ErrInvalid for a step that is not open under the claim, and
+// for a log that is closed.
+func openLogOf(j *Job, k StepKey) (*LogRef, error) {
+	if k.Phase < 0 || k.Phase >= len(j.Phases) {
+		return nil, fmt.Errorf("%w: job %s has no phase %d", ErrInvalid, j.ID, k.Phase)
+	}
+
+	p := &j.Phases[k.Phase]
+
+	i := recordIndex(p, k.Token, k.Name)
+	if i < 0 || !p.Steps[i].FinishedAt.IsZero() {
+		return nil, fmt.Errorf("%w: step %q is not open under claim %d", ErrInvalid, k.Name, k.Token)
+	}
+
+	log := p.Steps[i].Log
+	if log != nil && !log.ClosedAt.IsZero() {
+		return nil, fmt.Errorf("%w: the log of step %q is closed", ErrInvalid, k.Name)
+	}
+
+	return log, nil
 }
 
 // planFirstChunk decides the reserve of a chunk for a step with no log.
@@ -352,32 +368,29 @@ func planFirstChunk(step string, seq int, newLog *LogRef) (ChunkPlan, error) {
 }
 
 // CreateLogRecord sets the new log version newLog on the open record of the
-// step called step under the claim token, in the phase at index phase of j.
+// step k of j.
 // PlanChunk checked the step before.
-func CreateLogRecord(j *Job, phase int, token int64, step string, newLog *LogRef) {
-	p := &j.Phases[phase]
+func CreateLogRecord(j *Job, k StepKey, newLog *LogRef) {
+	p := &j.Phases[k.Phase]
 
 	log := *newLog
-	p.Steps[recordIndex(p, token, step)].Log = &log
+	p.Steps[recordIndex(p, k.Token, k.Name)].Log = &log
 }
 
-// ConfirmChunkRecord counts the chunk seq of the open log version of the step
-// in the phase at index phase of j, with the row of the chunk. It reports
-// whether j changed. A chunk that is counted already changes nothing. It
-// returns ErrInvalid for a log that is not the version, is closed, or when seq
-// is above the next chunk.
-func ConfirmChunkRecord(
-	j *Job, phase int, token int64, step, version string, seq int, row ChunkRow,
-) (bool, error) {
-	if phase < 0 || phase >= len(j.Phases) {
-		return false, fmt.Errorf("%w: job %s has no phase %d", ErrInvalid, j.ID, phase)
+// ConfirmChunkRecord counts the chunk seq of the open log version of the step k
+// of j, with the row of the chunk. It reports whether j changed. A chunk that
+// is counted already changes nothing. It returns ErrInvalid for a log that is
+// not the version, is closed, or when seq is above the next chunk.
+func ConfirmChunkRecord(j *Job, k StepKey, version string, seq int, row ChunkRow) (bool, error) {
+	if k.Phase < 0 || k.Phase >= len(j.Phases) {
+		return false, fmt.Errorf("%w: job %s has no phase %d", ErrInvalid, j.ID, k.Phase)
 	}
 
-	p := &j.Phases[phase]
+	p := &j.Phases[k.Phase]
 
-	i := recordIndex(p, token, step)
+	i := recordIndex(p, k.Token, k.Name)
 	if i < 0 || p.Steps[i].Log == nil || p.Steps[i].Log.ID != version || !p.Steps[i].Log.ClosedAt.IsZero() {
-		return false, fmt.Errorf("%w: step %q has no open log %q under claim %d", ErrInvalid, step, version, token)
+		return false, fmt.Errorf("%w: step %q has no open log %q under claim %d", ErrInvalid, k.Name, version, k.Token)
 	}
 
 	log := p.Steps[i].Log
@@ -386,7 +399,7 @@ func ConfirmChunkRecord(
 	case seq < log.Chunks:
 		return false, nil
 	case seq > log.Chunks:
-		return false, fmt.Errorf("%w: chunk %d of step %q is not the next one, which is %d", ErrInvalid, seq, step,
+		return false, fmt.Errorf("%w: chunk %d of step %q is not the next one, which is %d", ErrInvalid, seq, k.Name,
 			log.Chunks)
 	}
 

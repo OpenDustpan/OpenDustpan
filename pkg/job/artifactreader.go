@@ -82,7 +82,7 @@ func (a *ArtifactReads) OpenPlanPart(
 ) (io.ReadCloser, error) {
 	rec, err := a.store.Plan(ctx, ns, plan)
 	if err != nil {
-		return nil, err //nolint:wrapcheck // The store returns the sentinels of this package.
+		return nil, err
 	}
 
 	part := rec.Plan.Part(k)
@@ -115,7 +115,7 @@ func (a *ArtifactReads) OpenPlanPart(
 		return nil, fmt.Errorf("open plan part: %w", probeErr)
 	}
 
-	rc, err := a.blobs.OpenPlanPart(ctx, nsID, rec.Job, plan, k)
+	rc, err := a.blobs.OpenPlanPart(ctx, PlanPartRef{Namespace: nsID, Job: rec.Job, Plan: plan, Kind: k})
 	if err != nil {
 		return nil, mapBlobError(err, "plan part")
 	}
@@ -134,7 +134,7 @@ func (a *ArtifactReads) OpenPlanPart(
 func (a *ArtifactReads) OpenLog(ctx context.Context, ns namespace.Name, version string) (io.ReadCloser, error) {
 	rec, err := a.store.Log(ctx, ns, version)
 	if err != nil {
-		return nil, err //nolint:wrapcheck // The store returns the sentinels of this package.
+		return nil, err
 	}
 
 	nsID, err := a.namespaceID(ctx, ns)
@@ -248,23 +248,13 @@ type logReader struct {
 func (r *logReader) Read(p []byte) (int, error) {
 	for {
 		if r.cur == nil {
-			if r.done {
-				return 0, io.EOF
-			}
-
-			if r.next >= r.log.Chunks {
-				r.done = true
-
-				return 0, r.finish()
-			}
-
-			if err := r.openChunk(); err != nil {
+			if err := r.advance(); err != nil {
 				return 0, err
 			}
 		}
 
 		n, err := r.cur.Read(p)
-		_, _ = r.sum.Write(p[:n]) //nolint:errcheck // A hash never fails to write.
+		_, _ = r.sum.Write(p[:n])
 
 		if errors.Is(err, io.EOF) {
 			if closeErr := r.closeChunk(); closeErr != nil {
@@ -280,9 +270,54 @@ func (r *logReader) Read(p []byte) (int, error) {
 	}
 }
 
+// Close implements io.Closer.
+func (r *logReader) Close() error {
+	r.done = true
+
+	if r.closer == nil {
+		return nil
+	}
+
+	return r.closeChunk()
+}
+
+// verifyReader reads src and checks its SHA-256 and size at the end.
+type verifyReader struct {
+	src    io.Reader
+	closer io.Closer
+	sum    hash.Hash
+	want   string
+	size   int64
+	read   int64
+	check  bool
+}
+
+// Read implements io.Reader.
+func (v *verifyReader) Read(p []byte) (int, error) {
+	n, err := v.src.Read(p)
+	_, _ = v.sum.Write(p[:n])
+	v.read += int64(n)
+
+	if errors.Is(err, io.EOF) && v.check &&
+		(v.read != v.size || hex.EncodeToString(v.sum.Sum(nil)) != v.want) {
+		return n, fmt.Errorf("%w: the content does not match its hash", secret.ErrDecrypt)
+	}
+
+	return n, err //nolint:wrapcheck // io.EOF must pass as it is.
+}
+
+// Close implements io.Closer.
+func (v *verifyReader) Close() error {
+	if err := v.closer.Close(); err != nil {
+		return fmt.Errorf("close artifact: %w", err)
+	}
+
+	return nil
+}
+
 // openChunk opens the chunk r.next.
 func (r *logReader) openChunk() error {
-	rc, err := r.blobs.OpenLogChunk(r.ctx, r.ns, r.job, r.log.ID, r.next)
+	rc, err := r.blobs.OpenLogChunk(r.ctx, LogChunkRef{Namespace: r.ns, Job: r.job, Version: r.log.ID, Seq: r.next})
 	if err != nil {
 		return mapBlobError(err, "log chunk")
 	}
@@ -328,47 +363,18 @@ func (r *logReader) finish() error {
 	return io.EOF
 }
 
-// Close implements io.Closer.
-func (r *logReader) Close() error {
-	r.done = true
-
-	if r.closer == nil {
-		return nil
+// advance opens the next chunk. At the end of the log it returns io.EOF, or
+// the error of the hash check of a closed log.
+func (r *logReader) advance() error {
+	if r.done {
+		return io.EOF
 	}
 
-	return r.closeChunk()
-}
+	if r.next >= r.log.Chunks {
+		r.done = true
 
-// verifyReader reads src and checks its SHA-256 and size at the end.
-type verifyReader struct {
-	src    io.Reader
-	closer io.Closer
-	sum    hash.Hash
-	want   string
-	size   int64
-	read   int64
-	check  bool
-}
-
-// Read implements io.Reader.
-func (v *verifyReader) Read(p []byte) (int, error) {
-	n, err := v.src.Read(p)
-	_, _ = v.sum.Write(p[:n]) //nolint:errcheck // A hash never fails to write.
-	v.read += int64(n)
-
-	if errors.Is(err, io.EOF) && v.check &&
-		(v.read != v.size || hex.EncodeToString(v.sum.Sum(nil)) != v.want) {
-		return n, fmt.Errorf("%w: the content does not match its hash", secret.ErrDecrypt)
+		return r.finish()
 	}
 
-	return n, err //nolint:wrapcheck // io.EOF must pass as it is.
-}
-
-// Close implements io.Closer.
-func (v *verifyReader) Close() error {
-	if err := v.closer.Close(); err != nil {
-		return fmt.Errorf("close artifact: %w", err)
-	}
-
-	return nil
+	return r.openChunk()
 }

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"testing"
 	"time"
 
@@ -25,6 +26,7 @@ import (
 // job store of the embedded harness, as the adapters of one installation do.
 type RecorderHarness struct {
 	Harness
+
 	// Recorder is the job.Recorder under test.
 	Recorder job.Recorder
 	// Reader is the job.ArtifactReader under test.
@@ -68,7 +70,7 @@ func (noRefusals) RecordOutOfScope(context.Context, namespace.ID, string, scopea
 func NewRecorderHarness(t *testing.T, parts RecorderParts) RecorderHarness {
 	t.Helper()
 
-	key := make([]byte, 32)
+	key := make([]byte, keyBytes)
 	if _, err := rand.Read(key); err != nil {
 		t.Fatalf("key-encryption key: %v", err)
 	}
@@ -96,7 +98,7 @@ func NewRecorderHarness(t *testing.T, parts RecorderParts) RecorderHarness {
 		t.Fatalf("artifact blobs: %v", err)
 	}
 
-	retention := history.RetentionSettings{Plan: 48 * time.Hour, JobLog: 72 * time.Hour}
+	retention := history.RetentionSettings{Plan: planRetention, JobLog: logRetention}
 
 	rec, err := job.NewRecorder(job.RecorderConfig{
 		Store: parts.Records, Jobs: parts.Harness.Jobs, Blobs: artifacts, Sealer: sealer,
@@ -139,15 +141,8 @@ type recorderCase struct {
 func RunRecorder(t *testing.T, newHarness RecorderFactory) {
 	t.Helper()
 
-	var cases []recorderCase
-
-	cases = append(cases, stepCases()...)
-	cases = append(cases, claimRuleCases()...)
-	cases = append(cases, logCases()...)
-	cases = append(cases, logReadCases()...)
-	cases = append(cases, planCases()...)
-	cases = append(cases, planReadCases()...)
-	cases = append(cases, deliveryCases()...)
+	cases := slices.Concat(stepCases(), claimRuleCases(), logCases(), logReadCases(), planCases(), planReadCases(),
+		deliveryCases())
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -178,28 +173,85 @@ const (
 	stepPlan = "plan"
 	// stepApply is the step of the refresh job that changes resources.
 	stepApply = "apply"
+	// stepPrepare is the step of the refresh job that changes nothing.
+	stepPrepare = "prepare"
+	// valueOther is a value that no case stored.
+	valueOther = "other"
+	// commitDef is the commit of the delivery of the cases.
+	commitDef = "def456"
+	// keyBytes is the size of a key-encryption key.
+	keyBytes = 32
+	// planRetention and logRetention are the retention periods of the suite.
+	planRetention = 48 * time.Hour
+	logRetention  = 72 * time.Hour
+	// exitUsage and exitFailure are exit codes of a failed tool, and
+	// beyondExit is the first one that a process cannot have.
+	exitUsage   = 2
+	exitFailure = 3
+	beyondExit  = 256
+	// planBlobs is the number of blobs of a plan with two parts, and
+	// chunksPair is the number of chunks of a log that the cases make from two
+	// writes.
+	planBlobs  = 2
+	chunksPair = 2
+	// gapSeq is a chunk number above the next one after chunk 1, thirdChunk is
+	// the number of the third chunk.
+	gapSeq     = 2
+	thirdChunk = 2
+	// bigChunk, repeatSmall, repeatMid and repeatPlan are the sizes of the
+	// contents of the cases, in bytes.
+	bigChunk    = 100 << 10
+	repeatSmall = 1000
+	repeatMid   = 5000
+	repeatPlan  = 100
+	// longCommit is a commit text above the limit of 128 bytes.
+	longCommit = 129
+	// hiddenRune is a bidirectional override, which a text must not hold.
+	hiddenRune = 0x202e
 )
 
+// claimOf is claim, with the assignment by pointer: an assignment is large.
+func claimOf(t *testing.T, h Harness, owner string, lease time.Duration, k durable.Kind) *job.Assignment {
+	t.Helper()
+
+	a := claim(t, h, owner, lease, k)
+
+	return &a
+}
+
+// claimAgainOf is claimAgain, with the assignment by pointer. It returns the
+// error of the claim too, which a case that expects none reads.
+func claimAgainOf(t *testing.T, h Harness, owner string, k durable.Kind) (*job.Assignment, error) {
+	t.Helper()
+
+	a, err := claimAgain(t, h, owner, k)
+	if err != nil {
+		return nil, err
+	}
+
+	return &a, nil
+}
+
 // openPlan stores a plan job on the unit of f and claims its plan phase.
-func openPlan(t *testing.T, h RecorderHarness, f fixture, name string) job.Assignment {
+func openPlan(t *testing.T, h RecorderHarness, f fixture, name string) *job.Assignment {
 	t.Helper()
 
 	j := dispatched(t, h.Harness, f, plannedJob{unit: name, op: job.OperationPlan, steps: nil})
 
-	return claim(t, h.Harness, runnerOne, time.Minute, runnerKind(&j))
+	return claimOf(t, h.Harness, runnerOne, time.Minute, runnerKind(&j))
 }
 
 // openApply stores a refresh job and claims its apply phase.
-func openApply(t *testing.T, h RecorderHarness, f fixture, name string) job.Assignment {
+func openApply(t *testing.T, h RecorderHarness, f fixture, name string) *job.Assignment {
 	t.Helper()
 
 	j := dispatched(t, h.Harness, f, plannedJob{unit: name, op: job.OperationRefresh, steps: changeSteps()})
 
-	return claim(t, h.Harness, runnerOne, time.Minute, runnerKind(&j))
+	return claimOf(t, h.Harness, runnerOne, time.Minute, runnerKind(&j))
 }
 
 // stepsOf returns the step records of the phase of a.
-func stepsOf(t *testing.T, h RecorderHarness, a job.Assignment) []job.StepRecord {
+func stepsOf(t *testing.T, h RecorderHarness, a *job.Assignment) []job.StepRecord {
 	t.Helper()
 
 	return jobOf(t, h.Harness, a.Claim.Job).Phases[a.Claim.Phase].Steps
@@ -207,7 +259,7 @@ func stepsOf(t *testing.T, h RecorderHarness, a job.Assignment) []job.StepRecord
 
 // endRecord returns the record that EndStep takes for a step of a, with the
 // exit code exit.
-func endRecord(a job.Assignment, name string, exit int) job.StepRecord {
+func endRecord(a *job.Assignment, name string, exit int) job.StepRecord {
 	return job.StepRecord{
 		Name: name, Token: a.Claim.Claim.Token, ExitCode: exit, StartedAt: time.Time{}, FinishedAt: time.Time{},
 		Log: nil,
@@ -215,7 +267,7 @@ func endRecord(a job.Assignment, name string, exit int) job.StepRecord {
 }
 
 // mustBegin begins the step and fails t on an error.
-func mustBegin(t *testing.T, h RecorderHarness, a job.Assignment, name string) {
+func mustBegin(t *testing.T, h RecorderHarness, a *job.Assignment, name string) {
 	t.Helper()
 
 	if err := h.Recorder.BeginStep(t.Context(), a.Claim, name); err != nil {
@@ -224,7 +276,7 @@ func mustBegin(t *testing.T, h RecorderHarness, a job.Assignment, name string) {
 }
 
 // mustEnd ends the step with the exit code and fails t on an error.
-func mustEnd(t *testing.T, h RecorderHarness, a job.Assignment, name string, exit int) {
+func mustEnd(t *testing.T, h RecorderHarness, a *job.Assignment, name string, exit int) {
 	t.Helper()
 
 	if err := h.Recorder.EndStep(t.Context(), a.Claim, endRecord(a, name, exit)); err != nil {
@@ -233,7 +285,7 @@ func mustEnd(t *testing.T, h RecorderHarness, a job.Assignment, name string, exi
 }
 
 // versionOf returns the version of the job of a.
-func versionOf(t *testing.T, h RecorderHarness, a job.Assignment) int64 {
+func versionOf(t *testing.T, h RecorderHarness, a *job.Assignment) int64 {
 	t.Helper()
 
 	return jobOf(t, h.Harness, a.Claim.Job).Version
@@ -245,28 +297,34 @@ func testStepBeginEnd(t *testing.T, h RecorderHarness) {
 	a := openApply(t, h, setUp(t, h.Harness), "unit-0")
 	before := time.Now().Add(-time.Minute)
 
-	mustBegin(t, h, a, "prepare")
+	mustBegin(t, h, a, stepPrepare)
 
 	got := stepsOf(t, h, a)
-	if len(got) != 1 || got[0].Name != "prepare" || got[0].Token != a.Claim.Claim.Token ||
-		!got[0].FinishedAt.IsZero() || got[0].StartedAt.Before(before) || got[0].Log != nil {
+	if len(got) != 1 || !openRecordOf(&got[0], stepPrepare, a.Claim.Claim.Token) || got[0].StartedAt.Before(before) {
 		t.Fatalf("steps after BeginStep = %+v, want one open record of prepare under the token", got)
 	}
 
-	mustEnd(t, h, a, "prepare", 3)
+	mustEnd(t, h, a, stepPrepare, exitFailure)
 
 	got = stepsOf(t, h, a)
-	if len(got) != 1 || got[0].ExitCode != 3 || got[0].FinishedAt.IsZero() || got[0].FinishedAt.Before(got[0].StartedAt) {
-		t.Fatalf("steps after EndStep = %+v, want the record ended with exit code 3", got)
+	if len(got) != 1 || got[0].ExitCode != exitFailure || got[0].FinishedAt.IsZero() ||
+		got[0].FinishedAt.Before(got[0].StartedAt) {
+		t.Fatalf("steps after EndStep = %+v, want the record ended with exit code %d", got, exitFailure)
 	}
 
 	mustBegin(t, h, a, stepApply)
 	mustEnd(t, h, a, stepApply, -1)
 
 	got = stepsOf(t, h, a)
-	if len(got) != 2 || got[1].Name != stepApply || got[1].ExitCode != -1 {
+	if len(got) != chunksPair || got[1].Name != stepApply || got[1].ExitCode != -1 {
 		t.Fatalf("steps = %+v, want prepare then apply with exit code -1", got)
 	}
+}
+
+// openRecordOf reports whether r is the record of the step name under the
+// token, with no end and no log.
+func openRecordOf(r *job.StepRecord, name string, token int64) bool {
+	return r.Name == name && r.Token == token && r.FinishedAt.IsZero() && r.Log == nil
 }
 
 func testStepBeginTwice(t *testing.T, h RecorderHarness) {
@@ -311,10 +369,10 @@ func testStepBeginAfterEnd(t *testing.T, h RecorderHarness) {
 	t.Helper()
 
 	a := openApply(t, h, setUp(t, h.Harness), "unit-0")
-	mustBegin(t, h, a, "prepare")
-	mustEnd(t, h, a, "prepare", 0)
+	mustBegin(t, h, a, stepPrepare)
+	mustEnd(t, h, a, stepPrepare, 0)
 
-	if err := h.Recorder.BeginStep(t.Context(), a.Claim, "prepare"); !errors.Is(err, durable.ErrStepDone) {
+	if err := h.Recorder.BeginStep(t.Context(), a.Claim, stepPrepare); !errors.Is(err, durable.ErrStepDone) {
 		t.Fatalf("BeginStep after EndStep = %v, want durable.ErrStepDone", err)
 	}
 
@@ -341,7 +399,7 @@ func testStepEndInvalid(t *testing.T, h RecorderHarness) {
 	cases := map[string]job.StepRecord{
 		"another token":             other,
 		"an exit code below -1":     endRecord(a, stepApply, -2),
-		"an exit code above 255":    endRecord(a, stepApply, 256),
+		"an exit code above 255":    endRecord(a, stepApply, beyondExit),
 		"a name that is not a step": endRecord(a, "Not A Step", 0),
 	}
 
@@ -361,11 +419,11 @@ func testStepEndTwice(t *testing.T, h RecorderHarness) {
 
 	a := openApply(t, h, setUp(t, h.Harness), "unit-0")
 	mustBegin(t, h, a, stepApply)
-	mustEnd(t, h, a, stepApply, 2)
+	mustEnd(t, h, a, stepApply, exitUsage)
 
 	cur := versionOf(t, h, a)
 
-	mustEnd(t, h, a, stepApply, 2)
+	mustEnd(t, h, a, stepApply, exitUsage)
 
 	if got := versionOf(t, h, a); got != cur {
 		t.Fatalf("job version after a repeated end = %d, want %d", got, cur)
@@ -376,7 +434,7 @@ func testStepEndTwice(t *testing.T, h RecorderHarness) {
 		t.Fatalf("EndStep with another exit code = %v, want ErrConflict", err)
 	}
 
-	if got := stepsOf(t, h, a); got[0].ExitCode != 2 {
+	if got := stepsOf(t, h, a); got[0].ExitCode != exitUsage {
 		t.Fatalf("exit code after a refused end = %d, want 2", got[0].ExitCode)
 	}
 }
@@ -386,7 +444,7 @@ func testStepCancel(t *testing.T, h RecorderHarness) {
 
 	f := setUp(t, h.Harness)
 	a := openApply(t, h, f, "unit-0")
-	mustBegin(t, h, a, "prepare")
+	mustBegin(t, h, a, stepPrepare)
 	cancelJob(t, h.Harness, f, a.Claim.Job)
 
 	if err := h.Recorder.BeginStep(t.Context(), a.Claim, stepApply); !errors.Is(err, job.ErrCanceled) {
@@ -394,7 +452,7 @@ func testStepCancel(t *testing.T, h RecorderHarness) {
 	}
 
 	// The executor still records how the phase stopped.
-	mustEnd(t, h, a, "prepare", -1)
+	mustEnd(t, h, a, stepPrepare, -1)
 
 	got := stepsOf(t, h, a)
 	if len(got) != 1 || got[0].FinishedAt.IsZero() || got[0].ExitCode != -1 {
@@ -407,18 +465,22 @@ func testStepTakeover(t *testing.T, h RecorderHarness) {
 
 	f := setUp(t, h.Harness)
 	j := dispatched(t, h.Harness, f, plannedJob{unit: "unit-0", op: job.OperationPlan, steps: nil})
-	first := claim(t, h.Harness, runnerOne, shortLease, runnerKind(&j))
+	first := claimOf(t, h.Harness, runnerOne, shortLease, runnerKind(&j))
 
 	mustBegin(t, h, first, stepPlan)
 	expired(t, first.Claim)
 
-	second, err := claimAgain(t, h.Harness, runnerTwo, runnerKind(&j))
+	second, err := claimAgainOf(t, h.Harness, runnerTwo, runnerKind(&j))
 	if err != nil {
 		t.Fatalf("takeover = %v", err)
 	}
 
 	// The claim that a takeover replaced writes nothing.
-	if err = h.Recorder.EndStep(t.Context(), first.Claim, endRecord(first, stepPlan, 0)); !errors.Is(err, job.ErrClaimLost) {
+	err = h.Recorder.EndStep(t.Context(), first.Claim, endRecord(first, stepPlan, 0))
+	if !errors.Is(
+		err,
+		job.ErrClaimLost,
+	) {
 		t.Fatalf("EndStep by the replaced claim = %v, want ErrClaimLost", err)
 	}
 
@@ -436,7 +498,7 @@ func testStepDeliver(t *testing.T, h RecorderHarness) {
 
 	f := setUp(t, h.Harness)
 	deliverJob(t, h.Harness, f, "unit-0")
-	a := claim(t, h.Harness, "instance-a", time.Minute, job.KindWriteBack)
+	a := claimOf(t, h.Harness, "instance-a", time.Minute, job.KindWriteBack)
 
 	for _, name := range []string{job.WriteBackStepCommit, job.WriteBackStepReview} {
 		mustBegin(t, h, a, name)
@@ -447,7 +509,7 @@ func testStepDeliver(t *testing.T, h RecorderHarness) {
 		t.Fatalf("BeginStep of a runner step in a deliver phase = %v, want ErrInvalid", err)
 	}
 
-	if got := stepsOf(t, h, a); len(got) != 2 {
+	if got := stepsOf(t, h, a); len(got) != chunksPair {
 		t.Fatalf("records = %d, want commit and review-request", len(got))
 	}
 }
@@ -466,7 +528,7 @@ func claimRuleCases() []recorderCase {
 // write is one write of the recorder, for the cases that try each of them.
 type write struct {
 	name string
-	do   func(t *testing.T, h RecorderHarness, a job.Assignment) error
+	do   func(t *testing.T, h RecorderHarness, a *job.Assignment) error
 }
 
 // writes returns one write for each method of the recorder, valid for the
@@ -474,29 +536,29 @@ type write struct {
 // phase, so it fails the same way for a claim that is not live.
 func writes() []write {
 	return []write{
-		{"BeginStep", func(t *testing.T, h RecorderHarness, a job.Assignment) error {
+		{"BeginStep", func(t *testing.T, h RecorderHarness, a *job.Assignment) error {
 			t.Helper()
 
 			return h.Recorder.BeginStep(t.Context(), a.Claim, stepPlan)
 		}},
-		{"EndStep", func(t *testing.T, h RecorderHarness, a job.Assignment) error {
+		{"EndStep", func(t *testing.T, h RecorderHarness, a *job.Assignment) error {
 			t.Helper()
 
 			return h.Recorder.EndStep(t.Context(), a.Claim, endRecord(a, stepPlan, 0))
 		}},
-		{"AppendLog", func(t *testing.T, h RecorderHarness, a job.Assignment) error {
+		{"AppendLog", func(t *testing.T, h RecorderHarness, a *job.Assignment) error {
 			t.Helper()
 
 			return h.Recorder.AppendLog(t.Context(), a.Claim, stepPlan, 0, bytes.NewReader([]byte("line\n")))
 		}},
-		{"PutPlan", func(t *testing.T, h RecorderHarness, a job.Assignment) error {
+		{"PutPlan", func(t *testing.T, h RecorderHarness, a *job.Assignment) error {
 			t.Helper()
 
 			_, err := h.Recorder.PutPlan(t.Context(), a.Claim, planParts("display", "apply"))
 
 			return err
 		}},
-		{"Delivered", func(t *testing.T, h RecorderHarness, a job.Assignment) error {
+		{"Delivered", func(t *testing.T, h RecorderHarness, a *job.Assignment) error {
 			t.Helper()
 
 			return h.Recorder.Delivered(t.Context(), a.Claim, delivered("abc123", job.DeliveryDirectPush))
@@ -532,12 +594,12 @@ func testWritesLost(t *testing.T, h RecorderHarness) {
 
 	for i, w := range writes() {
 		j := dispatched(t, h.Harness, f, plannedJob{unit: unitName(i), op: job.OperationPlan, steps: nil})
-		first := claim(t, h.Harness, runnerOne, shortLease, runnerKind(&j))
+		first := claimOf(t, h.Harness, runnerOne, shortLease, runnerKind(&j))
 
 		mustBegin(t, h, first, stepPlan)
 		expired(t, first.Claim)
 
-		if _, err := claimAgain(t, h.Harness, runnerTwo, runnerKind(&j)); err != nil {
+		if _, err := claimAgainOf(t, h.Harness, runnerTwo, runnerKind(&j)); err != nil {
 			t.Fatalf("%s: takeover = %v", w.name, err)
 		}
 
@@ -563,7 +625,8 @@ func testWritesAfterEnd(t *testing.T, h RecorderHarness) {
 		a := openPlan(t, h, f, unitName(i))
 		mustBegin(t, h, a, stepPlan)
 
-		if err := h.Claimer.Finish(t.Context(), a.Claim, job.Outcome{Succeeded: false, Message: "stopped"}); err != nil {
+		err := h.Claimer.Finish(t.Context(), a.Claim, job.Outcome{Succeeded: false, Message: "stopped"})
+		if err != nil {
 			t.Fatalf("%s: Finish = %v", w.name, err)
 		}
 
@@ -672,9 +735,8 @@ func itemKeyOf(t *testing.T, j *job.Job, kind secret.ItemKind, item string) secr
 	return ref
 }
 
-// blobsUnder lists the blobs of the namespace ns that are under dir, a
-// directory relative to the namespace.
-func blobsUnder(t *testing.T, h RecorderHarness, ns namespace.Name, dir string) []blob.Object {
+// blobsUnder lists the plan and log blobs of the namespace ns.
+func blobsUnder(t *testing.T, h RecorderHarness, ns namespace.Name) []blob.Object {
 	t.Helper()
 
 	n, err := h.Namespaces.GetNamespace(t.Context(), ns)
@@ -682,9 +744,9 @@ func blobsUnder(t *testing.T, h RecorderHarness, ns namespace.Name, dir string) 
 		t.Fatalf("GetNamespace(%s) = %v", ns, err)
 	}
 
-	objects, err := h.Blobs.List(t.Context(), "namespaces/"+n.ID.String()+"/"+dir)
+	objects, err := h.Blobs.List(t.Context(), "namespaces/"+n.ID.String()+"/job/")
 	if err != nil {
-		t.Fatalf("list %s: %v", dir, err)
+		t.Fatalf("list the plan and log blobs: %v", err)
 	}
 
 	return objects

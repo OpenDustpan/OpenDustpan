@@ -1,11 +1,11 @@
 package job_test
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"io"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"opendustpan.org/opendustpan/pkg/blob"
@@ -17,10 +17,10 @@ import (
 )
 
 // refusalCount counts the refusals that the blob code records.
-type refusalCount struct{ n int }
+type refusalCount struct{ n atomic.Int64 }
 
 func (r *refusalCount) RecordOutOfScope(context.Context, namespace.ID, string, scopeaudit.Where) error {
-	r.n++
+	r.n.Add(1)
 
 	return nil
 }
@@ -40,7 +40,7 @@ func newArtifactBlobs(t *testing.T) (*job.ArtifactBlobs, *blobfault.Store, *refu
 		t.Fatalf("blobfault: %v", err)
 	}
 
-	refusals := &refusalCount{}
+	refusals := new(refusalCount)
 
 	b, err := job.NewArtifactBlobs(counted, refusals)
 	if err != nil {
@@ -48,6 +48,16 @@ func newArtifactBlobs(t *testing.T) (*job.ArtifactBlobs, *blobfault.Store, *refu
 	}
 
 	return b, counted, refusals
+}
+
+// planRef returns the reference of the part k of the plan pln-1 of job-1.
+func planRef(ns namespace.ID, k job.OutputKind) job.PlanPartRef {
+	return job.PlanPartRef{Namespace: ns, Job: "job-1", Plan: "pln-1", Kind: k}
+}
+
+// chunkRef returns the reference of the chunk seq of the log jlv-1 of job-1.
+func chunkRef(ns namespace.ID, seq int) job.LogChunkRef {
+	return job.LogChunkRef{Namespace: ns, Job: "job-1", Version: "jlv-1", Seq: seq}
 }
 
 func TestNewArtifactBlobsNeedsItsPorts(t *testing.T) {
@@ -60,7 +70,7 @@ func TestNewArtifactBlobsNeedsItsPorts(t *testing.T) {
 
 	t.Cleanup(func() { _ = inner.Close() }) //nolint:errcheck // Test cleanup.
 
-	if _, err = job.NewArtifactBlobs(nil, &refusalCount{}); !errors.Is(err, job.ErrInvalid) {
+	if _, err = job.NewArtifactBlobs(nil, new(refusalCount)); !errors.Is(err, job.ErrInvalid) {
 		t.Errorf("no store = %v, want ErrInvalid", err)
 	}
 
@@ -72,51 +82,122 @@ func TestNewArtifactBlobsNeedsItsPorts(t *testing.T) {
 func TestArtifactBlobsRoundTrip(t *testing.T) {
 	t.Parallel()
 
+	const chunk = 3
+
 	b, _, _ := newArtifactBlobs(t)
 	ns := namespace.NewID()
+	part := planRef(ns, job.OutputPlanApply)
 
-	if err := b.PutPlanPart(t.Context(), ns, "job-1", "pln-1", job.OutputPlanApply, strings.NewReader("plan")); err != nil {
+	if err := b.PutPlanPart(t.Context(), part, strings.NewReader("plan")); err != nil {
 		t.Fatalf("PutPlanPart = %v", err)
 	}
 
-	if err := b.PutLogChunk(t.Context(), ns, "job-1", "jlv-1", 3, strings.NewReader("log")); err != nil {
+	if err := b.PutLogChunk(t.Context(), chunkRef(ns, chunk), strings.NewReader("log")); err != nil {
 		t.Fatalf("PutLogChunk = %v", err)
 	}
 
-	rc, err := b.OpenPlanPart(t.Context(), ns, "job-1", "pln-1", job.OutputPlanApply)
+	rc, err := b.OpenPlanPart(t.Context(), part)
 	if err != nil {
 		t.Fatalf("OpenPlanPart = %v", err)
 	}
 
-	got, _ := io.ReadAll(rc)
-	_ = rc.Close() //nolint:errcheck // Test read.
-
-	if string(got) != "plan" {
-		t.Fatalf("plan part = %q, want plan", got)
+	got, err := io.ReadAll(rc)
+	if closeErr := rc.Close(); err != nil || closeErr != nil || string(got) != "plan" {
+		t.Fatalf("plan part = %q, %v, %v; want plan", got, err, closeErr)
 	}
 
 	// Written once: a second put keeps the first object.
-	err = b.PutPlanPart(t.Context(), ns, "job-1", "pln-1", job.OutputPlanApply, strings.NewReader("other"))
-	if !errors.Is(err, blob.ErrExists) {
+	if err = b.PutPlanPart(t.Context(), part, strings.NewReader("other")); !errors.Is(err, blob.ErrExists) {
 		t.Fatalf("second PutPlanPart = %v, want blob.ErrExists", err)
 	}
 
-	if _, err = b.OpenLogChunk(t.Context(), ns, "job-1", "jlv-1", 4); !errors.Is(err, blob.ErrNotFound) {
+	if _, err = b.OpenLogChunk(t.Context(), chunkRef(ns, chunk+1)); !errors.Is(err, blob.ErrNotFound) {
 		t.Fatalf("OpenLogChunk of a chunk that is not stored = %v, want blob.ErrNotFound", err)
 	}
 
 	// The same IDs in another namespace are another blob.
-	if _, err = b.OpenPlanPart(t.Context(), namespace.NewID(), "job-1", "pln-1", job.OutputPlanApply); !errors.Is(err,
+	if _, err = b.OpenPlanPart(t.Context(), planRef(namespace.NewID(), job.OutputPlanApply)); !errors.Is(err,
 		blob.ErrNotFound) {
 		t.Fatalf("OpenPlanPart in another namespace = %v, want blob.ErrNotFound", err)
 	}
 
-	if err = b.DeletePlanPart(t.Context(), ns, "job-1", "pln-1", job.OutputPlanApply); err != nil {
+	if err = b.DeletePlanPart(t.Context(), part); err != nil {
 		t.Fatalf("DeletePlanPart = %v", err)
 	}
 
-	if err = b.DeletePlanPart(t.Context(), ns, "job-1", "pln-1", job.OutputPlanApply); err != nil {
+	if err = b.DeletePlanPart(t.Context(), part); err != nil {
 		t.Fatalf("DeletePlanPart of a part that is gone = %v", err)
+	}
+}
+
+// hostileCall is a call of the blob code with a part that makes no key.
+type hostileCall struct {
+	name string
+	do   func(b *job.ArtifactBlobs, ns namespace.ID) error
+}
+
+// hostileCalls lists calls whose parts are not one segment, lack their
+// prefix, or are out of range.
+func hostileCalls() []hostileCall {
+	put := func(ref job.PlanPartRef) func(b *job.ArtifactBlobs, ns namespace.ID) error {
+		return func(b *job.ArtifactBlobs, ns namespace.ID) error {
+			ref.Namespace = ns
+
+			return b.PutPlanPart(context.Background(), ref, strings.NewReader("x"))
+		}
+	}
+
+	chunk := func(ref job.LogChunkRef) func(b *job.ArtifactBlobs, ns namespace.ID) error {
+		return func(b *job.ArtifactBlobs, ns namespace.ID) error {
+			ref.Namespace = ns
+
+			return b.PutLogChunk(context.Background(), ref, strings.NewReader("x"))
+		}
+	}
+
+	apply := job.OutputPlanApply
+
+	return []hostileCall{
+		{
+			"a job ID with a slash",
+			put(job.PlanPartRef{Namespace: "", Job: "job-1/../job-2", Plan: "pln-1", Kind: apply}),
+		},
+		{"a job ID with no prefix", put(job.PlanPartRef{Namespace: "", Job: "x", Plan: "pln-1", Kind: apply})},
+		{"a plan ID with a slash", put(job.PlanPartRef{Namespace: "", Job: "job-1", Plan: "pln-1/x", Kind: apply})},
+		{
+			"a plan ID with the prefix of a log",
+			put(job.PlanPartRef{Namespace: "", Job: "job-1", Plan: "jlv-1", Kind: apply}),
+		},
+		{
+			"a part kind that is not a plan output",
+			put(job.PlanPartRef{Namespace: "", Job: "job-1", Plan: "pln-1", Kind: "../x"}),
+		},
+		{"a version with a slash", chunk(job.LogChunkRef{Namespace: "", Job: "job-1", Version: "jlv-1/2", Seq: 0})},
+		{
+			"a version with the prefix of a plan",
+			chunk(job.LogChunkRef{Namespace: "", Job: "job-1", Version: "pln-1", Seq: 0}),
+		},
+		{"a negative chunk number", chunk(job.LogChunkRef{Namespace: "", Job: "job-1", Version: "jlv-1", Seq: -1})},
+		{
+			"a chunk number above the limit",
+			chunk(job.LogChunkRef{Namespace: "", Job: "job-1", Version: "jlv-1", Seq: job.MaxLogChunks}),
+		},
+		{"an open of a part with a hostile plan ID", func(b *job.ArtifactBlobs, ns namespace.ID) error {
+			_, err := b.OpenPlanPart(context.Background(),
+				job.PlanPartRef{Namespace: ns, Job: "job-1", Plan: "pln-1/../../x", Kind: apply})
+
+			return err
+		}},
+		{"an open of a chunk with a hostile version", func(b *job.ArtifactBlobs, ns namespace.ID) error {
+			_, err := b.OpenLogChunk(context.Background(),
+				job.LogChunkRef{Namespace: ns, Job: "job-1", Version: "../jlv-1", Seq: 0})
+
+			return err
+		}},
+		{"a delete of a part with a hostile job ID", func(b *job.ArtifactBlobs, ns namespace.ID) error {
+			return b.DeletePlanPart(context.Background(),
+				job.PlanPartRef{Namespace: ns, Job: "../job-1", Plan: "pln-1", Kind: apply})
+		}},
 	}
 }
 
@@ -129,72 +210,31 @@ func TestArtifactBlobsRefusesHostileParts(t *testing.T) {
 	b, store, refusals := newArtifactBlobs(t)
 	ns := namespace.NewID()
 
-	hostile := []struct {
-		name string
-		do   func() error
-	}{
-		{"a job ID with a slash", func() error {
-			return b.PutPlanPart(t.Context(), ns, "job-1/../job-2", "pln-1", job.OutputPlanApply, strings.NewReader("x"))
-		}},
-		{"a job ID with no prefix", func() error {
-			return b.PutPlanPart(t.Context(), ns, "x", "pln-1", job.OutputPlanApply, strings.NewReader("x"))
-		}},
-		{"a plan ID with a slash", func() error {
-			return b.PutPlanPart(t.Context(), ns, "job-1", "pln-1/x", job.OutputPlanApply, strings.NewReader("x"))
-		}},
-		{"a plan ID with the prefix of a log", func() error {
-			return b.PutPlanPart(t.Context(), ns, "job-1", "jlv-1", job.OutputPlanApply, strings.NewReader("x"))
-		}},
-		{"a part kind that is not a plan output", func() error {
-			return b.PutPlanPart(t.Context(), ns, "job-1", "pln-1", "../x", strings.NewReader("x"))
-		}},
-		{"a version with a slash", func() error {
-			return b.PutLogChunk(t.Context(), ns, "job-1", "jlv-1/2", 0, strings.NewReader("x"))
-		}},
-		{"a version with the prefix of a plan", func() error {
-			return b.PutLogChunk(t.Context(), ns, "job-1", "pln-1", 0, strings.NewReader("x"))
-		}},
-		{"a negative chunk number", func() error {
-			return b.PutLogChunk(t.Context(), ns, "job-1", "jlv-1", -1, strings.NewReader("x"))
-		}},
-		{"a chunk number above the limit", func() error {
-			return b.PutLogChunk(t.Context(), ns, "job-1", "jlv-1", job.MaxLogChunks, strings.NewReader("x"))
-		}},
-		{"an open of a part with a hostile plan ID", func() error {
-			_, err := b.OpenPlanPart(t.Context(), ns, "job-1", "pln-1/../../x", job.OutputPlanApply)
-
-			return err
-		}},
-		{"an open of a chunk with a hostile version", func() error {
-			_, err := b.OpenLogChunk(t.Context(), ns, "job-1", "../jlv-1", 0)
-
-			return err
-		}},
-		{"a delete of a part with a hostile job ID", func() error {
-			return b.DeletePlanPart(t.Context(), ns, "../job-1", "pln-1", job.OutputPlanApply)
-		}},
-		{"a namespace ID that is not one", func() error {
-			return b.PutPlanPart(t.Context(), "NS-UPPER", "job-1", "pln-1", job.OutputPlanApply, strings.NewReader("x"))
-		}},
+	for _, h := range hostileCalls() {
+		if err := h.do(b, ns); !errors.Is(err, job.ErrInvalid) {
+			t.Errorf("%s: err = %v, want ErrInvalid", h.name, err)
+		}
 	}
 
-	for _, h := range hostile {
-		if err := h.do(); err == nil {
-			t.Errorf("%s: the call succeeded", h.name)
-		}
+	// A namespace ID that is not one makes no view.
+	err := b.PutPlanPart(t.Context(), planRef("NS-UPPER", job.OutputPlanApply), strings.NewReader("x"))
+	if err == nil {
+		t.Error("a namespace ID that is not one: the call succeeded")
 	}
 
 	if n := store.Calls("Put") + store.Calls("Get") + store.Calls("Delete"); n != 0 {
 		t.Fatalf("hostile calls reached the blob store %d times, want 0", n)
 	}
 
-	if refusals.n != 0 {
-		t.Fatalf("refusals = %d, want 0: a refused part never makes a key", refusals.n)
+	if n := refusals.n.Load(); n != 0 {
+		t.Fatalf("refusals = %d, want 0: a refused part never makes a key", n)
 	}
 }
 
 func TestArtifactBlobsKeepTheKeyLayout(t *testing.T) {
 	t.Parallel()
+
+	const chunk = 12
 
 	inner, err := blobfs.Open(t.TempDir())
 	if err != nil {
@@ -203,18 +243,18 @@ func TestArtifactBlobsKeepTheKeyLayout(t *testing.T) {
 
 	t.Cleanup(func() { _ = inner.Close() }) //nolint:errcheck // Test cleanup.
 
-	b, err := job.NewArtifactBlobs(inner, &refusalCount{})
+	b, err := job.NewArtifactBlobs(inner, new(refusalCount))
 	if err != nil {
 		t.Fatalf("NewArtifactBlobs: %v", err)
 	}
 
 	ns := namespace.NewID()
 
-	if err = b.PutPlanPart(t.Context(), ns, "job-1", "pln-1", job.OutputPlanDisplay, bytes.NewReader([]byte("x"))); err != nil {
+	if err = b.PutPlanPart(t.Context(), planRef(ns, job.OutputPlanDisplay), strings.NewReader("x")); err != nil {
 		t.Fatalf("PutPlanPart = %v", err)
 	}
 
-	if err = b.PutLogChunk(t.Context(), ns, "job-1", "jlv-1", 12, bytes.NewReader([]byte("x"))); err != nil {
+	if err = b.PutLogChunk(t.Context(), chunkRef(ns, chunk), strings.NewReader("x")); err != nil {
 		t.Fatalf("PutLogChunk = %v", err)
 	}
 
@@ -233,7 +273,7 @@ func TestArtifactBlobsKeepTheKeyLayout(t *testing.T) {
 		"namespaces/" + ns.String() + "/job/job-1/plan/pln-1/plan-display",
 	}
 
-	if len(got) != 2 || got[0] != want[0] || got[1] != want[1] {
+	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
 		t.Fatalf("keys = %v, want %v", got, want)
 	}
 }

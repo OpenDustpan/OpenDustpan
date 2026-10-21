@@ -38,7 +38,7 @@ const (
 )
 
 // putPlan stores a plan with the standard contents and fails t on an error.
-func putPlan(t *testing.T, h RecorderHarness, a job.Assignment) job.PlanRef {
+func putPlan(t *testing.T, h RecorderHarness, a *job.Assignment) job.PlanRef {
 	t.Helper()
 
 	p, err := h.Recorder.PutPlan(t.Context(), a.Claim, planParts(displayJSON, applyBinary))
@@ -62,36 +62,52 @@ func testPlanPut(t *testing.T, h RecorderHarness) {
 
 	p := putPlan(t, h, a)
 
-	display, apply := p.Part(job.OutputPlanDisplay), p.Part(job.OutputPlanApply)
-
-	if !strings.HasPrefix(p.ID, job.PlanIDPrefix) || p.ItemKey == "" || p.StateVersion != svOne || len(p.Parts) != 2 ||
-		display == nil || apply == nil || p.CreatedAt.Before(started) || !p.RedactedAt.IsZero() ||
+	if !strings.HasPrefix(p.ID, job.PlanIDPrefix) || p.ItemKey == "" || p.StateVersion != svOne ||
+		len(p.Parts) != planBlobs || p.CreatedAt.Before(started) || !p.RedactedAt.IsZero() ||
 		!p.ExpiresAt.Equal(history.ExpiresAt(p.CreatedAt, h.Retention.Plan)) {
 		t.Fatalf("PutPlan = %+v, want pln-, an item key, state version %s, two parts, retention", p, svOne)
+	}
+
+	checkPlanParts(t, &p)
+	checkPlanRecord(t, h, a, &p)
+
+	if n := len(blobsUnder(t, h, f.fence.Namespace)); n != planBlobs {
+		t.Fatalf("plan blobs = %d, want %d", n, planBlobs)
+	}
+}
+
+// checkPlanRecord fails t unless the phase of the job of a holds the plan p with
+// the state version svOne and its retention, and the binding of the plan has
+// both hashes.
+func checkPlanRecord(t *testing.T, h RecorderHarness, a *job.Assignment, p *job.PlanRef) {
+	t.Helper()
+
+	got := jobOf(t, h.Harness, a.Claim.Job)
+	if got.Phases[0].Plan == nil || got.Phases[0].Plan.ID != p.ID || got.Phases[0].StateVersion != svOne ||
+		got.Phases[0].Plan.ExpiresAt.IsZero() {
+		t.Fatalf("phase = %+v, want the plan %s with state version %s and its retention", got.Phases[0], p.ID, svOne)
+	}
+
+	if b := got.Phases[0].Plan.Binding(); b.Plan != p.ID || b.DisplaySHA256 != hashOf(displayJSON) ||
+		b.ApplySHA256 != hashOf(applyBinary) || b.StateVersion != svOne {
+		t.Fatalf("binding = %+v, want the plan, both hashes and the state version", b)
+	}
+}
+
+// checkPlanParts fails t unless p has the readable part and the apply part with
+// the sizes and hashes of their plaintext, and only the apply part is marked
+// secret.
+func checkPlanParts(t *testing.T, p *job.PlanRef) {
+	t.Helper()
+
+	display, apply := p.Part(job.OutputPlanDisplay), p.Part(job.OutputPlanApply)
+	if display == nil || apply == nil {
+		t.Fatalf("parts = %+v, want a display part and an apply part", p.Parts)
 	}
 
 	if display.Size != int64(len(displayJSON)) || display.SHA256 != hashOf(displayJSON) || display.Secret ||
 		apply.Size != int64(len(applyBinary)) || apply.SHA256 != hashOf(applyBinary) || !apply.Secret {
 		t.Fatalf("parts = %+v, want sizes and hashes of the plaintext, and the apply part marked secret", p.Parts)
-	}
-
-	// The job record holds the same plan, and the phase holds the state version.
-	got := jobOf(t, h.Harness, a.Claim.Job)
-	if got.Phases[0].Plan == nil || got.Phases[0].Plan.ID != p.ID || got.Phases[0].StateVersion != svOne {
-		t.Fatalf("phase = %+v, want the plan %s with state version %s", got.Phases[0], p.ID, svOne)
-	}
-
-	if b := got.Phases[0].Plan.Binding(); b.Plan != p.ID || b.DisplaySHA256 != display.SHA256 ||
-		b.ApplySHA256 != apply.SHA256 || b.StateVersion != svOne {
-		t.Fatalf("binding = %+v, want the plan, both hashes and the state version", b)
-	}
-
-	if n := len(blobsUnder(t, h, f.fence.Namespace, "job/")); n != 2 {
-		t.Fatalf("plan blobs = %d, want 2", n)
-	}
-
-	if got.Phases[0].Plan.ExpiresAt.IsZero() {
-		t.Fatal("the plan of the job record has no end of retention")
 	}
 }
 
@@ -113,7 +129,7 @@ func testPlanTwice(t *testing.T, h RecorderHarness) {
 	}
 
 	// The blobs of the refused plan are gone. The first plan reads as before.
-	if n := len(blobsUnder(t, h, f.fence.Namespace, "job/")); n != 2 {
+	if n := len(blobsUnder(t, h, f.fence.Namespace)); n != planBlobs {
 		t.Fatalf("plan blobs after a refused plan = %d, want 2", n)
 	}
 
@@ -146,7 +162,7 @@ func testPlanInvalidParts(t *testing.T, h RecorderHarness) {
 
 	cases := map[string][]job.PlanUpload{
 		"no part":         nil,
-		"an unknown kind": {{Kind: "other", Body: body()}},
+		"an unknown kind": {{Kind: valueOther, Body: body()}},
 		"a kind twice": {
 			{Kind: job.OutputPlanDisplay, Body: body()}, {Kind: job.OutputPlanDisplay, Body: body()},
 		},
@@ -163,7 +179,7 @@ func testPlanInvalidParts(t *testing.T, h RecorderHarness) {
 		t.Fatalf("job version after refused plans = %d, want %d", got, cur)
 	}
 
-	if n := len(blobsUnder(t, h, f.fence.Namespace, "job/")); n != 0 {
+	if n := len(blobsUnder(t, h, f.fence.Namespace)); n != 0 {
 		t.Fatalf("blobs after refused plans = %d, want 0", n)
 	}
 
@@ -182,13 +198,13 @@ func testPlanWrongPhase(t *testing.T, h RecorderHarness) {
 	}
 
 	deliverJob(t, h.Harness, f, "unit-1")
-	deliver := claim(t, h.Harness, "instance-a", time.Minute, job.KindWriteBack)
+	deliver := claimOf(t, h.Harness, "instance-a", time.Minute, job.KindWriteBack)
 
 	if _, err := h.Recorder.PutPlan(t.Context(), deliver.Claim, planParts("a", "b")); !errors.Is(err, job.ErrInvalid) {
 		t.Fatalf("PutPlan in a deliver phase = %v, want ErrInvalid", err)
 	}
 
-	if n := len(blobsUnder(t, h, f.fence.Namespace, "job/")); n != 0 {
+	if n := len(blobsUnder(t, h, f.fence.Namespace)); n != 0 {
 		t.Fatalf("blobs after plans in the wrong phase = %d, want 0", n)
 	}
 }
@@ -224,7 +240,7 @@ func testPutPlanStale(t *testing.T, h RecorderHarness) {
 		t.Fatalf("operation after a stale plan = %s, want failed", op.State)
 	}
 
-	if n := len(blobsUnder(t, h, f.fence.Namespace, "job/")); n != 0 {
+	if n := len(blobsUnder(t, h, f.fence.Namespace)); n != 0 {
 		t.Fatalf("blobs after a stale plan = %d, want 0", n)
 	}
 
@@ -243,7 +259,7 @@ func testPlanTakeover(t *testing.T, h RecorderHarness) {
 	}
 
 	j := dispatched(t, h.Harness, f, plannedJob{unit: "", op: job.OperationPlan, steps: nil})
-	first := claim(t, h.Harness, runnerOne, shortLease, runnerKind(&j))
+	first := claimOf(t, h.Harness, runnerOne, shortLease, runnerKind(&j))
 
 	if err := h.Domain.SetStateVersion(t.Context(), f.fence, f.unit, svTwo); err != nil {
 		t.Fatalf("SetStateVersion = %v", err)
@@ -251,7 +267,7 @@ func testPlanTakeover(t *testing.T, h RecorderHarness) {
 
 	expired(t, first.Claim)
 
-	second, err := claimAgain(t, h.Harness, runnerTwo, runnerKind(&j))
+	second, err := claimAgainOf(t, h.Harness, runnerTwo, runnerKind(&j))
 	if err != nil {
 		t.Fatalf("takeover = %v", err)
 	}
@@ -310,8 +326,8 @@ func testPlanParallel(t *testing.T, h RecorderHarness) {
 	var wg sync.WaitGroup
 
 	for i := range writers {
-		display := strings.Repeat(string(rune('a'+i)), 100)
-		apply := strings.Repeat(string(rune('A'+i)), 100)
+		display := strings.Repeat(string(rune('a'+i)), repeatPlan)
+		apply := strings.Repeat(string(rune('A'+i)), repeatPlan)
 
 		wg.Go(func() { plans[i], errs[i] = h.Recorder.PutPlan(t.Context(), a.Claim, planParts(display, apply)) })
 	}
@@ -328,6 +344,7 @@ func testPlanParallel(t *testing.T, h RecorderHarness) {
 			t.Errorf("writers %d and %d both stored a plan", winner, i)
 		case !errors.Is(err, job.ErrConflict):
 			t.Errorf("writer %d: PutPlan = %v, want nil or ErrConflict", i, err)
+		default:
 		}
 	}
 
@@ -341,12 +358,12 @@ func testPlanParallel(t *testing.T, h RecorderHarness) {
 	}
 
 	// Only the blobs of the winner stay, and they read as its content.
-	if n := len(blobsUnder(t, h, f.fence.Namespace, "job/")); n != 2 {
+	if n := len(blobsUnder(t, h, f.fence.Namespace)); n != planBlobs {
 		t.Fatalf("plan blobs = %d, want the 2 of the winner", n)
 	}
 
-	assertPart(t, h, plans[winner].ID, job.OutputPlanDisplay, strings.Repeat(string(rune('a'+winner)), 100))
-	assertPart(t, h, plans[winner].ID, job.OutputPlanApply, strings.Repeat(string(rune('A'+winner)), 100))
+	assertPart(t, h, plans[winner].ID, job.OutputPlanDisplay, strings.Repeat(string(rune('a'+winner)), repeatPlan))
+	assertPart(t, h, plans[winner].ID, job.OutputPlanApply, strings.Repeat(string(rune('A'+winner)), repeatPlan))
 }
 
 func testPlanAndStateWrite(t *testing.T, h RecorderHarness) {
@@ -426,26 +443,38 @@ func testPlanReadUnknown(t *testing.T, h RecorderHarness) {
 		t.Fatalf("PutPlan = %v", err)
 	}
 
-	if _, err = h.Reader.OpenPlanPart(t.Context(), "acme", one.ID, job.OutputPlanApply); !errors.Is(err, job.ErrNotFound) {
+	_, err = h.Reader.OpenPlanPart(t.Context(), "acme", one.ID, job.OutputPlanApply)
+	if !errors.Is(
+		err,
+		job.ErrNotFound,
+	) {
 		t.Errorf("OpenPlanPart of a part that the plan has not = %v, want ErrNotFound", err)
 	}
 
-	if _, err = h.Reader.OpenPlanPart(t.Context(), "acme", one.ID, "other"); !errors.Is(err, job.ErrNotFound) {
+	if _, err = h.Reader.OpenPlanPart(t.Context(), "acme", one.ID, valueOther); !errors.Is(err, job.ErrNotFound) {
 		t.Errorf("OpenPlanPart of an unknown kind = %v, want ErrNotFound", err)
 	}
 
 	for _, id := range []string{"pln-unknown", "", "jlv-x", "../x"} {
-		if _, err = h.Reader.OpenPlanPart(t.Context(), "acme", id, job.OutputPlanDisplay); !errors.Is(err, job.ErrNotFound) &&
+		_, err = h.Reader.OpenPlanPart(t.Context(), "acme", id, job.OutputPlanDisplay)
+		if !errors.Is(
+			err,
+			job.ErrNotFound,
+		) &&
 			!errors.Is(err, job.ErrInvalid) {
 			t.Errorf("OpenPlanPart(%q) = %v, want ErrNotFound", id, err)
 		}
 	}
 
-	if _, err = h.Domain.CreateNamespace(t.Context(), "other"); err != nil {
+	if _, err = h.Domain.CreateNamespace(t.Context(), valueOther); err != nil {
 		t.Fatalf("CreateNamespace = %v", err)
 	}
 
-	if _, err = h.Reader.OpenPlanPart(t.Context(), "other", one.ID, job.OutputPlanDisplay); !errors.Is(err, job.ErrNotFound) {
+	_, err = h.Reader.OpenPlanPart(t.Context(), valueOther, one.ID, job.OutputPlanDisplay)
+	if !errors.Is(
+		err,
+		job.ErrNotFound,
+	) {
 		t.Errorf("OpenPlanPart of a plan of another namespace = %v, want ErrNotFound", err)
 	}
 }
@@ -458,24 +487,29 @@ func testPlanReadShredded(t *testing.T, h RecorderHarness) {
 	p := putPlan(t, h, a)
 	j := jobOf(t, h.Harness, a.Claim.Job)
 
-	if _, err := h.ItemKeys.ShredItemKey(t.Context(), itemKeyOf(t, &j, secret.ItemKindPlan, p.ID), time.Now(),
-		f.fence); err != nil {
+	_, err := h.ItemKeys.ShredItemKey(t.Context(), itemKeyOf(t, &j, secret.ItemKindPlan, p.ID), time.Now(), f.fence)
+	if err != nil {
 		t.Fatalf("ShredItemKey = %v", err)
 	}
 
 	for _, k := range []job.OutputKind{job.OutputPlanDisplay, job.OutputPlanApply} {
-		if _, err := h.Reader.OpenPlanPart(t.Context(), "acme", p.ID, k); !errors.Is(err, secret.ErrShredded) {
-			t.Errorf("OpenPlanPart(%s) of a shredded plan = %v, want ErrShredded", k, err)
+		_, openErr := h.Reader.OpenPlanPart(t.Context(), "acme", p.ID, k)
+		if !errors.Is(openErr, secret.ErrShredded) {
+			t.Errorf("OpenPlanPart(%s) of a shredded plan = %v, want ErrShredded", k, openErr)
 		}
 	}
 
-	for _, o := range blobsUnder(t, h, f.fence.Namespace, "job/") {
-		if err := h.Blobs.Delete(t.Context(), o.Key); err != nil {
-			t.Fatalf("delete blob: %v", err)
+	for _, o := range blobsUnder(t, h, f.fence.Namespace) {
+		if delErr := h.Blobs.Delete(t.Context(), o.Key); delErr != nil {
+			t.Fatalf("delete blob: %v", delErr)
 		}
 	}
 
-	if _, err := h.Reader.OpenPlanPart(t.Context(), "acme", p.ID, job.OutputPlanDisplay); !errors.Is(err, secret.ErrShredded) {
+	_, err = h.Reader.OpenPlanPart(t.Context(), "acme", p.ID, job.OutputPlanDisplay)
+	if !errors.Is(
+		err,
+		secret.ErrShredded,
+	) {
 		t.Errorf("OpenPlanPart of a shredded plan with no blob = %v, want ErrShredded", err)
 	}
 }
@@ -489,13 +523,14 @@ func testPlanReadDamaged(t *testing.T, h RecorderHarness) {
 
 	var dKey, aKey blob.Key
 
-	objects := blobsUnder(t, h, f.fence.Namespace, "job/")
+	objects := blobsUnder(t, h, f.fence.Namespace)
 	for _, o := range objects {
 		switch {
 		case strings.HasSuffix(o.Key.String(), "/"+string(job.OutputPlanDisplay)):
 			dKey = o.Key
 		case strings.HasSuffix(o.Key.String(), "/"+string(job.OutputPlanApply)):
 			aKey = o.Key
+		default:
 		}
 	}
 
@@ -542,7 +577,7 @@ func testPlanReadAfterReplan(t *testing.T, h RecorderHarness) {
 	}
 
 	j := dispatched(t, h.Harness, f, plannedJob{unit: "", op: job.OperationApply, steps: nil})
-	a := claim(t, h.Harness, runnerOne, time.Minute, runnerKind(&j))
+	a := claimOf(t, h.Harness, runnerOne, time.Minute, runnerKind(&j))
 	p := putPlan(t, h, a)
 
 	if err := h.Claimer.Finish(t.Context(), a.Claim, job.Outcome{Succeeded: true, Message: ""}); err != nil {

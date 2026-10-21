@@ -95,7 +95,7 @@ func (r *DurableRecorder) BeginStep(ctx context.Context, c PhaseClaim, name stri
 		return err
 	}
 
-	return r.store.BeginStep(ctx, c, name) //nolint:wrapcheck // The store returns the sentinels of this package.
+	return r.store.BeginStep(ctx, c, name)
 }
 
 // checkStepName returns ErrInvalid for a name that is not the name of a step.
@@ -126,7 +126,241 @@ func (r *DurableRecorder) EndStep(ctx context.Context, c PhaseClaim, rec StepRec
 		return err
 	}
 
-	return r.store.EndStep(ctx, c, rec.Name, rec.ExitCode, closing) //nolint:wrapcheck // See BeginStep.
+	return r.store.EndStep(ctx, c, rec.Name, rec.ExitCode, closing)
+}
+
+// stepRecordOf returns the record of the step called name under the claim c
+// in the phase of c.
+func stepRecordOf(j *Job, c PhaseClaim, name string) (*StepRecord, bool) {
+	if c.Phase < 0 || c.Phase >= len(j.Phases) {
+		return nil, false
+	}
+
+	p := &j.Phases[c.Phase]
+
+	i := recordIndex(p, c.Claim.Token, name)
+	if i < 0 {
+		return nil, false
+	}
+
+	return &p.Steps[i], true
+}
+
+// AppendLog implements Recorder. A chunk costs one read of the job, one write
+// that reserves the chunk, one blob and one write that counts it. The
+// reserve decides every conflict, so two writers of one chunk with different
+// content never both store a blob.
+func (r *DurableRecorder) AppendLog(ctx context.Context, c PhaseClaim, step string, seq int, chunk io.Reader) error {
+	if err := checkStepName(step); err != nil {
+		return err
+	}
+
+	if seq < 0 || seq >= MaxLogChunks {
+		return fmt.Errorf("%w: chunk number %d", ErrInvalid, seq)
+	}
+
+	data, sum, err := readChunk(chunk)
+	if err != nil {
+		return err
+	}
+
+	j, err := r.jobOf(ctx, c)
+	if err != nil {
+		return err
+	}
+
+	newLog, err := r.newLogVersion(ctx, c, &j, step, seq)
+	if err != nil {
+		return err
+	}
+
+	plan, err := r.store.ReserveLogChunk(
+		ctx,
+		c,
+		step,
+		ChunkReserve{Seq: seq, SHA256: sum, Size: int64(len(data))},
+		newLog,
+	)
+	if err != nil {
+		return err
+	}
+
+	if plan.Duplicate {
+		return nil
+	}
+
+	ref := LogChunkRef{Namespace: "", Job: j.ID, Version: plan.Version, Seq: seq}
+
+	if storeErr := r.storeChunk(ctx, c, &j, ref, data); storeErr != nil {
+		return storeErr
+	}
+
+	return r.store.ConfirmLogChunk(ctx, c, step, plan.Version, seq)
+}
+
+// readChunk reads a chunk of at most MaxLogChunk bytes, and returns it with
+// its SHA-256. A longer chunk is ErrInvalid.
+func readChunk(chunk io.Reader) ([]byte, string, error) {
+	data, err := io.ReadAll(io.LimitReader(chunk, MaxLogChunk+1))
+	if err != nil {
+		return nil, "", fmt.Errorf("read log chunk: %w", err)
+	}
+
+	if len(data) > MaxLogChunk {
+		return nil, "", fmt.Errorf("%w: a log chunk has at most %d bytes", ErrInvalid, MaxLogChunk)
+	}
+
+	sum := sha256.Sum256(data)
+
+	return data, hex.EncodeToString(sum[:]), nil
+}
+
+// PutPlan implements Recorder. The part of kind OutputPlanApply gets the flag
+// Secret: it is the plan that the tool reads back, and it can hold plain
+// secret values. The hash and the size of each part are those of its
+// plaintext, which the recorder counts while it seals.
+func (r *DurableRecorder) PutPlan(ctx context.Context, c PhaseClaim, parts []PlanUpload) (PlanRef, error) {
+	if err := checkPlanUploads(parts); err != nil {
+		return PlanRef{}, err
+	}
+
+	j, err := r.jobOf(ctx, c)
+	if err != nil {
+		return PlanRef{}, err
+	}
+
+	// A cheap check before the upload: the store checks the same in its
+	// transaction.
+	if c.Phase < 0 || c.Phase >= len(j.Phases) {
+		return PlanRef{}, fmt.Errorf("%w: job %s has no phase %d", ErrInvalid, j.ID, c.Phase)
+	}
+
+	// Passing the state version of the phase as the current one leaves the
+	// stale check to the store, which reads the current version.
+	if checkErr := CheckPutPlan(&j, c.Phase, j.Phases[c.Phase].StateVersion); checkErr != nil {
+		return PlanRef{}, checkErr
+	}
+
+	planID := ident.NewID(PlanIDPrefix)
+	art := ArtifactRecord{Job: j.ID, Unit: j.Spec.Unit, Step: "", Plan: nil, Log: nil}
+
+	ref, err := itemRef(&art, secret.ItemKindPlan, planID)
+	if err != nil {
+		return PlanRef{}, err
+	}
+
+	key, err := r.sealer.NewItemKey(ctx, ref, c.Fence)
+	if err != nil {
+		return PlanRef{}, fmt.Errorf("item key of plan %s: %w", planID, err)
+	}
+
+	nsID, err := namespaceIDOf(ctx, r.namespaces, c.Fence.Namespace)
+	if err != nil {
+		return PlanRef{}, err
+	}
+
+	at := &planAt{ns: nsID, job: j.ID, plan: planID, item: ref}
+
+	stored, err := r.storeParts(ctx, at, parts)
+	if err != nil {
+		return PlanRef{}, err
+	}
+
+	now := r.now().UTC()
+	plan := PlanRef{
+		ID: planID, ItemKey: key.ID, StateVersion: "", Parts: stored, CreatedAt: now,
+		ExpiresAt: history.ExpiresAt(now, r.retention.Plan), RedactedAt: time.Time{},
+	}
+
+	out, err := r.store.PutPlan(ctx, c, plan)
+	if err != nil {
+		r.deleteParts(ctx, at, stored)
+
+		return PlanRef{}, err
+	}
+
+	return out, nil
+}
+
+// checkPlanUploads returns ErrInvalid for no part, a kind that is not a plan
+// output, or a kind twice.
+func checkPlanUploads(parts []PlanUpload) error {
+	if len(parts) == 0 {
+		return fmt.Errorf("%w: a plan needs at least one part", ErrInvalid)
+	}
+
+	seen := make(map[OutputKind]bool, len(parts))
+
+	for _, p := range parts {
+		switch {
+		case p.Kind != OutputPlanDisplay && p.Kind != OutputPlanApply:
+			return fmt.Errorf("%w: %q is not a plan output", ErrInvalid, p.Kind)
+		case seen[p.Kind]:
+			return fmt.Errorf("%w: plan part %q twice", ErrInvalid, p.Kind)
+		case p.Body == nil:
+			return fmt.Errorf("%w: plan part %q has no content", ErrInvalid, p.Kind)
+		}
+
+		seen[p.Kind] = true
+	}
+
+	return nil
+}
+
+// countingReader counts and hashes what it reads, and fails with ErrInvalid
+// when the content is longer than limit.
+type countingReader struct {
+	src   io.Reader
+	sum   hash.Hash
+	size  int64
+	limit int64
+}
+
+// Read implements io.Reader.
+func (c *countingReader) Read(p []byte) (int, error) {
+	n, err := c.src.Read(p)
+	c.size += int64(n)
+	_, _ = c.sum.Write(p[:n])
+
+	if c.size > c.limit {
+		return n, fmt.Errorf("%w: a plan part has at most %d bytes", ErrInvalid, c.limit)
+	}
+
+	return n, err //nolint:wrapcheck // io.EOF must pass as it is.
+}
+
+// Delivered implements Recorder. It writes the audit entry of the delivery of
+// a write-back (action unit:write-back) in the transaction of the record.
+func (r *DurableRecorder) Delivered(ctx context.Context, c PhaseClaim, d DeliveryResult) error {
+	if err := d.Validate(); err != nil {
+		return err
+	}
+
+	j, err := r.jobOf(ctx, c)
+	if err != nil {
+		return err
+	}
+
+	unit := j.Spec.Unit
+
+	return r.store.Delivered(
+		ctx,
+		c,
+		d,
+		deliveryEntry(&j, unit, &d, c, r.now().UTC()),
+	)
+}
+
+// deliveryEntry returns the audit entry of a delivery. It holds the commit and
+// the review request, and no secret.
+func deliveryEntry(j *Job, unit identity.Object, d *DeliveryResult, c PhaseClaim, at time.Time) audit.Entry {
+	return audit.Entry{
+		At: at, Namespace: unit.Namespace(), Subject: c.Claim.Owner, IDPSubject: "", TokenID: "",
+		Action: string(ActionUnitWriteBack), Object: unit.String(), Version: d.Commit, ValuePath: "", ValueCount: nil,
+		Changes: nil, SourceIP: "", UserAgent: "", Channel: audit.ChannelAPI, Kind: audit.KindChange,
+		Outcome: audit.OutcomeSuccess, RequestID: "", ObjectID: unit.UnitID(), PrevHash: "", Hash: "", Sequence: 0,
+		FenceVersion: 0, PrincipalKind: audit.PrincipalKindService, JobID: string(j.ID), Reason: d.AuditReason(),
+	}
 }
 
 // closeLog reads the open log version of the step called name back, and
@@ -165,7 +399,12 @@ func (r *DurableRecorder) closeLog(ctx context.Context, c PhaseClaim, name strin
 		return nil, fmt.Errorf("read log %s: %w", rec.Log.ID, err)
 	}
 
-	return &LogClose{Version: rec.Log.ID, Chunks: rec.Log.Chunks, SHA256: hex.EncodeToString(h.Sum(nil)), Size: size}, nil
+	return &LogClose{
+		Version: rec.Log.ID,
+		Chunks:  rec.Log.Chunks,
+		SHA256:  hex.EncodeToString(h.Sum(nil)),
+		Size:    size,
+	}, nil
 }
 
 // jobOf reads the job of c and checks that it is a job of the namespace of the
@@ -185,84 +424,6 @@ func (r *DurableRecorder) jobOf(ctx context.Context, c PhaseClaim) (Job, error) 
 	}
 
 	return j, nil
-}
-
-// stepRecordOf returns the record of the step called name under the claim c
-// in the phase of c.
-func stepRecordOf(j *Job, c PhaseClaim, name string) (StepRecord, bool) {
-	if c.Phase < 0 || c.Phase >= len(j.Phases) {
-		return StepRecord{}, false
-	}
-
-	p := &j.Phases[c.Phase]
-
-	i := recordIndex(p, c.Claim.Token, name)
-	if i < 0 {
-		return StepRecord{}, false
-	}
-
-	return p.Steps[i], true
-}
-
-// AppendLog implements Recorder. A chunk costs one read of the job, one write
-// that reserves the chunk, one blob and one write that counts it. The
-// reserve decides every conflict, so two writers of one chunk with different
-// content never both store a blob.
-func (r *DurableRecorder) AppendLog(ctx context.Context, c PhaseClaim, step string, seq int, chunk io.Reader) error {
-	if err := checkStepName(step); err != nil {
-		return err
-	}
-
-	if seq < 0 || seq >= MaxLogChunks {
-		return fmt.Errorf("%w: chunk number %d", ErrInvalid, seq)
-	}
-
-	data, sum, err := readChunk(chunk)
-	if err != nil {
-		return err
-	}
-
-	j, err := r.jobOf(ctx, c)
-	if err != nil {
-		return err
-	}
-
-	newLog, err := r.newLogVersion(ctx, c, &j, step, seq)
-	if err != nil {
-		return err
-	}
-
-	plan, err := r.store.ReserveLogChunk(ctx, c, step, ChunkReserve{Seq: seq, SHA256: sum, Size: int64(len(data))}, newLog)
-	if err != nil {
-		return err //nolint:wrapcheck // See BeginStep.
-	}
-
-	if plan.Duplicate {
-		return nil
-	}
-
-	if err := r.storeChunk(ctx, c, &j, plan.Version, seq, data); err != nil {
-		return err
-	}
-
-	return r.store.ConfirmLogChunk(ctx, c, step, plan.Version, seq) //nolint:wrapcheck // See BeginStep.
-}
-
-// readChunk reads a chunk of at most MaxLogChunk bytes, and returns it with
-// its SHA-256. A longer chunk is ErrInvalid.
-func readChunk(chunk io.Reader) ([]byte, string, error) {
-	data, err := io.ReadAll(io.LimitReader(chunk, MaxLogChunk+1))
-	if err != nil {
-		return nil, "", fmt.Errorf("read log chunk: %w", err)
-	}
-
-	if len(data) > MaxLogChunk {
-		return nil, "", fmt.Errorf("%w: a log chunk has at most %d bytes", ErrInvalid, MaxLogChunk)
-	}
-
-	sum := sha256.Sum256(data)
-
-	return data, hex.EncodeToString(sum[:]), nil
 }
 
 // newLogVersion returns the log version that chunk 0 of a step with no log
@@ -299,154 +460,75 @@ func (r *DurableRecorder) newLogVersion(
 	}, nil
 }
 
-// storeChunk seals the chunk seq of the log version and stores its blob. A
-// blob that exists already is the one that an earlier attempt of the same
-// chunk stored: the reserve proved that the content is the same.
-func (r *DurableRecorder) storeChunk(
-	ctx context.Context, c PhaseClaim, j *Job, version string, seq int, data []byte,
-) error {
+// storeChunk seals the chunk ref and stores its blob. A blob that exists
+// already is the one that an earlier attempt of the same chunk stored: the
+// reserve proved that the content is the same. ref.Namespace is set here.
+func (r *DurableRecorder) storeChunk(ctx context.Context, c PhaseClaim, j *Job, ref LogChunkRef, data []byte) error {
 	art := ArtifactRecord{Job: j.ID, Unit: j.Spec.Unit, Step: "", Plan: nil, Log: nil}
 
-	ref, err := itemRef(&art, secret.ItemKindJobLog, version)
+	item, err := itemRef(&art, secret.ItemKindJobLog, ref.Version)
 	if err != nil {
 		return err
 	}
 
-	binding, err := chunkBinding(j.ID, version, seq)
+	binding, err := chunkBinding(j.ID, ref.Version, ref.Seq)
 	if err != nil {
 		return err
 	}
 
-	sealed, err := r.sealer.SealContent(ctx, ref, binding, bytes.NewReader(data))
+	sealed, err := r.sealer.SealContent(ctx, item, binding, bytes.NewReader(data))
 	if err != nil {
 		return fmt.Errorf("seal log chunk: %w", err)
 	}
 
-	nsID, err := namespaceIDOf(ctx, r.namespaces, c.Fence.Namespace)
+	ref.Namespace, err = namespaceIDOf(ctx, r.namespaces, c.Fence.Namespace)
 	if err != nil {
 		return err
 	}
 
-	if err := r.blobs.PutLogChunk(ctx, nsID, j.ID, version, seq, sealed); err != nil && !errors.Is(err, blob.ErrExists) {
-		return fmt.Errorf("store log chunk: %w", err)
+	putErr := r.blobs.PutLogChunk(ctx, ref, sealed)
+	if putErr != nil && !errors.Is(putErr, blob.ErrExists) {
+		return fmt.Errorf("store log chunk: %w", putErr)
 	}
 
 	return nil
 }
 
-// PutPlan implements Recorder. The part of kind OutputPlanApply gets the flag
-// Secret: it is the plan that the tool reads back, and it can hold plain
-// secret values. The hash and the size of each part are those of its
-// plaintext, which the recorder counts while it seals.
-func (r *DurableRecorder) PutPlan(ctx context.Context, c PhaseClaim, parts []PlanUpload) (PlanRef, error) {
-	if err := checkPlanUploads(parts); err != nil {
-		return PlanRef{}, err
-	}
-
-	j, err := r.jobOf(ctx, c)
-	if err != nil {
-		return PlanRef{}, err
-	}
-
-	// A cheap check before the upload: the store checks the same in its
-	// transaction.
-	if c.Phase < 0 || c.Phase >= len(j.Phases) {
-		return PlanRef{}, fmt.Errorf("%w: job %s has no phase %d", ErrInvalid, j.ID, c.Phase)
-	}
-
-	// Passing the state version of the phase as the current one leaves the
-	// stale check to the store, which reads the current version.
-	if err := CheckPutPlan(&j, c.Phase, j.Phases[c.Phase].StateVersion); err != nil {
-		return PlanRef{}, err
-	}
-
-	planID := ident.NewID(PlanIDPrefix)
-	art := ArtifactRecord{Job: j.ID, Unit: j.Spec.Unit, Step: "", Plan: nil, Log: nil}
-
-	ref, err := itemRef(&art, secret.ItemKindPlan, planID)
-	if err != nil {
-		return PlanRef{}, err
-	}
-
-	key, err := r.sealer.NewItemKey(ctx, ref, c.Fence)
-	if err != nil {
-		return PlanRef{}, fmt.Errorf("item key of plan %s: %w", planID, err)
-	}
-
-	nsID, err := namespaceIDOf(ctx, r.namespaces, c.Fence.Namespace)
-	if err != nil {
-		return PlanRef{}, err
-	}
-
-	stored, err := r.storeParts(ctx, nsID, j.ID, ref, planID, parts)
-	if err != nil {
-		return PlanRef{}, err
-	}
-
-	now := r.now().UTC()
-	plan := PlanRef{
-		ID: planID, ItemKey: key.ID, StateVersion: "", Parts: stored, CreatedAt: now,
-		ExpiresAt: history.ExpiresAt(now, r.retention.Plan), RedactedAt: time.Time{},
-	}
-
-	out, err := r.store.PutPlan(ctx, c, plan)
-	if err != nil {
-		r.deleteParts(ctx, nsID, j.ID, planID, stored)
-
-		return PlanRef{}, err //nolint:wrapcheck // See BeginStep.
-	}
-
-	return out, nil
+// planAt names the plan whose parts the recorder stores: the namespace and the
+// job that hold it, its ID, and the item key that seals it.
+type planAt struct {
+	ns   namespace.ID
+	job  ID
+	plan string
+	item secret.ItemRef
 }
 
-// checkPlanUploads returns ErrInvalid for no part, a kind that is not a plan
-// output, or a kind twice.
-func checkPlanUploads(parts []PlanUpload) error {
-	if len(parts) == 0 {
-		return fmt.Errorf("%w: a plan needs at least one part", ErrInvalid)
-	}
-
-	seen := make(map[OutputKind]bool, len(parts))
-
-	for _, p := range parts {
-		switch {
-		case p.Kind != OutputPlanDisplay && p.Kind != OutputPlanApply:
-			return fmt.Errorf("%w: %q is not a plan output", ErrInvalid, p.Kind)
-		case seen[p.Kind]:
-			return fmt.Errorf("%w: plan part %q twice", ErrInvalid, p.Kind)
-		case p.Body == nil:
-			return fmt.Errorf("%w: plan part %q has no content", ErrInvalid, p.Kind)
-		}
-
-		seen[p.Kind] = true
-	}
-
-	return nil
+// part returns the reference of the part k of the plan.
+func (p *planAt) part(k OutputKind) PlanPartRef {
+	return PlanPartRef{Namespace: p.ns, Job: p.job, Plan: p.plan, Kind: k}
 }
 
 // storeParts seals and stores each part, and returns its metadata.
-func (r *DurableRecorder) storeParts(
-	ctx context.Context, nsID namespace.ID, id ID, ref secret.ItemRef, planID string, parts []PlanUpload,
-) ([]PlanPart, error) {
+func (r *DurableRecorder) storeParts(ctx context.Context, at *planAt, parts []PlanUpload) ([]PlanPart, error) {
 	stored := make([]PlanPart, 0, len(parts))
 
 	for _, p := range parts {
-		key, err := PlanPartKey(id, planID, p.Kind)
+		key, err := PlanPartKey(at.job, at.plan, p.Kind)
 		if err != nil {
-			r.deleteParts(ctx, nsID, id, planID, stored)
+			r.deleteParts(ctx, at, stored)
 
 			return nil, fmt.Errorf("%w: %w", ErrInvalid, err)
 		}
 
 		counted := &countingReader{src: p.Body, sum: sha256.New(), size: 0, limit: MaxPlanPart}
 
-		sealed, err := r.sealer.SealContent(ctx, ref, []byte(key.String()), counted)
+		sealed, err := r.sealer.SealContent(ctx, at.item, []byte(key.String()), counted)
 		if err == nil {
-			err = r.blobs.PutPlanPart(ctx, nsID, id, planID, p.Kind, sealed)
+			err = r.blobs.PutPlanPart(ctx, at.part(p.Kind), sealed)
 		}
 
 		if err != nil {
-			r.deleteParts(ctx, nsID, id, planID, stored)
+			r.deleteParts(ctx, at, stored)
 
 			return nil, fmt.Errorf("store plan part %q: %w", p.Kind, err)
 		}
@@ -463,61 +545,10 @@ func (r *DurableRecorder) storeParts(
 // deleteParts deletes the blobs of the stored parts of a plan that was not
 // stored. It does not stop when the context ends, and it ignores a failure:
 // the orphan cleanup deletes what stays.
-func (r *DurableRecorder) deleteParts(ctx context.Context, nsID namespace.ID, id ID, planID string, parts []PlanPart) {
+func (r *DurableRecorder) deleteParts(ctx context.Context, at *planAt, parts []PlanPart) {
 	ctx = context.WithoutCancel(ctx)
 
 	for _, p := range parts {
-		_ = r.blobs.DeletePlanPart(ctx, nsID, id, planID, p.Kind) //nolint:errcheck // See above.
-	}
-}
-
-// countingReader counts and hashes what it reads, and fails with ErrInvalid
-// when the content is longer than limit.
-type countingReader struct {
-	src   io.Reader
-	sum   hash.Hash
-	size  int64
-	limit int64
-}
-
-// Read implements io.Reader.
-func (c *countingReader) Read(p []byte) (int, error) {
-	n, err := c.src.Read(p)
-	c.size += int64(n)
-	_, _ = c.sum.Write(p[:n]) //nolint:errcheck // A hash never fails to write.
-
-	if c.size > c.limit {
-		return n, fmt.Errorf("%w: a plan part has at most %d bytes", ErrInvalid, c.limit)
-	}
-
-	return n, err //nolint:wrapcheck // io.EOF must pass as it is.
-}
-
-// Delivered implements Recorder. It writes the audit entry of the delivery of
-// a write-back (action unit:write-back) in the transaction of the record.
-func (r *DurableRecorder) Delivered(ctx context.Context, c PhaseClaim, d DeliveryResult) error {
-	if err := d.Validate(); err != nil {
-		return err
-	}
-
-	j, err := r.jobOf(ctx, c)
-	if err != nil {
-		return err
-	}
-
-	unit := j.Spec.Unit
-
-	return r.store.Delivered(ctx, c, d, deliveryEntry(&j, unit, &d, c, r.now().UTC())) //nolint:wrapcheck // See BeginStep.
-}
-
-// deliveryEntry returns the audit entry of a delivery. It holds the commit and
-// the review request, and no secret.
-func deliveryEntry(j *Job, unit identity.Object, d *DeliveryResult, c PhaseClaim, at time.Time) audit.Entry {
-	return audit.Entry{
-		At: at, Namespace: unit.Namespace(), Subject: c.Claim.Owner, IDPSubject: "", TokenID: "",
-		Action: string(ActionUnitWriteBack), Object: unit.String(), Version: d.Commit, ValuePath: "", ValueCount: nil,
-		Changes: nil, SourceIP: "", UserAgent: "", Channel: audit.ChannelAPI, Kind: audit.KindChange,
-		Outcome: audit.OutcomeSuccess, RequestID: "", ObjectID: unit.UnitID(), PrevHash: "", Hash: "", Sequence: 0,
-		FenceVersion: 0, PrincipalKind: audit.PrincipalKindService, JobID: string(j.ID), Reason: d.AuditReason(),
+		_ = r.blobs.DeletePlanPart(ctx, at.part(p.Kind)) //nolint:errcheck // See above.
 	}
 }

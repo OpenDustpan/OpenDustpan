@@ -421,26 +421,27 @@ const (
 // time (the merge comes later, as EventMerged). The result goes to the audit
 // entry of the delivery, so the text rules are those of an audit reason.
 func (d *DeliveryResult) Validate() error {
+	if err := d.validateTexts(); err != nil {
+		return err
+	}
+
 	switch {
-	case d.Delivery != DeliveryReviewRequest && d.Delivery != DeliveryDirectPush:
-		return fmt.Errorf("%w: unknown delivery %q", ErrInvalid, d.Delivery)
-	case d.Commit == "" || len(d.Commit) > maxCommitLen:
-		return fmt.Errorf("%w: a delivery needs a commit of 1 to %d bytes", ErrInvalid, maxCommitLen)
-	case d.Branch == "" || len(d.Branch) > maxBranchLen:
-		return fmt.Errorf("%w: a delivery needs a branch of 1 to %d bytes", ErrInvalid, maxBranchLen)
-	case d.Delivery == DeliveryDirectPush && d.ReviewRequest != "":
-		return fmt.Errorf("%w: a direct push has no review request", ErrInvalid)
-	case d.Delivery == DeliveryReviewRequest && (d.ReviewRequest == "" || len(d.ReviewRequest) > maxReviewLen):
-		return fmt.Errorf("%w: a review request delivery needs a URL of 1 to %d bytes", ErrInvalid, maxReviewLen)
 	case !d.MergedAt.IsZero():
 		return fmt.Errorf("%w: a delivery has no merge time yet", ErrInvalid)
 	case d.DeliveredAt.IsZero():
 		return fmt.Errorf("%w: a delivery needs the time of the commit", ErrInvalid)
-	}
-
-	if audit.ValidateReason(d.AuditReason()) != nil {
+	case audit.ValidateReason(d.AuditReason()) != nil:
 		return fmt.Errorf("%w: the commit, the branch and the review request are too long or hold a control character",
 			ErrInvalid)
+	default:
+		return nil
+	}
+}
+
+// checkBounded returns ErrInvalid unless text has 1 to max bytes.
+func checkBounded(what, text string, limit int) error {
+	if text == "" || len(text) > limit {
+		return fmt.Errorf("%w: a delivery needs a %s of 1 to %d bytes", ErrInvalid, what, limit)
 	}
 
 	return nil
@@ -549,4 +550,34 @@ type StateVersion struct {
 	// version closes a write-back job. An intermediate write of a run
 	// never does.
 	Final bool
+}
+
+// validateTexts checks the delivery kind and the text fields of d.
+func (d *DeliveryResult) validateTexts() error {
+	if d.Delivery != DeliveryReviewRequest && d.Delivery != DeliveryDirectPush {
+		return fmt.Errorf("%w: unknown delivery %q", ErrInvalid, d.Delivery)
+	}
+
+	if err := checkBounded("commit", d.Commit, maxCommitLen); err != nil {
+		return err
+	}
+
+	if err := checkBounded("branch", d.Branch, maxBranchLen); err != nil {
+		return err
+	}
+
+	return d.validateReview()
+}
+
+// validateReview checks that a review request delivery has a URL and a direct
+// push has none.
+func (d *DeliveryResult) validateReview() error {
+	switch {
+	case d.Delivery == DeliveryDirectPush && d.ReviewRequest != "":
+		return fmt.Errorf("%w: a direct push has no review request", ErrInvalid)
+	case d.Delivery == DeliveryReviewRequest:
+		return checkBounded("review request", d.ReviewRequest, maxReviewLen)
+	default:
+		return nil
+	}
 }

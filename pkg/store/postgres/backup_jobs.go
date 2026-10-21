@@ -11,7 +11,7 @@ func pgCopyJobTables() []pgCopyTable {
 				"id",
 				pgColNamespaceID,
 				pgColUnitID,
-				"seq",
+				pgColSeq,
 				"state",
 				"wait",
 				"current_phase",
@@ -23,7 +23,7 @@ func pgCopyJobTables() []pgCopyTable {
 				pgColCreatedAtMs,
 				pgColUpdatedAtMs,
 			},
-			orderBy: []string{"seq", "id"},
+			orderBy: []string{pgColSeq, "id"},
 		},
 		{
 			table: "job_freezes",
@@ -54,8 +54,8 @@ func pgCopyJobTables() []pgCopyTable {
 		},
 		{
 			table:   "job_log_chunks",
-			columns: []string{"log_id", "seq", pgColNamespaceID, "sha256", "size", "confirmed"},
-			orderBy: []string{"log_id", "seq"},
+			columns: []string{"log_id", pgColSeq, pgColNamespaceID, pgColSHA256, "size", "confirmed"},
+			orderBy: []string{"log_id", pgColSeq},
 		},
 	}
 }

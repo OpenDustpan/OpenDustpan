@@ -12,7 +12,7 @@ func portableJobTables() []PortableTable {
 				{Name: "id", Kind: KindText},
 				{Name: portColNamespaceID, Kind: KindText},
 				{Name: portColUnitID, Kind: KindText},
-				{Name: "seq", Kind: KindInteger},
+				{Name: portColSeq, Kind: KindInteger},
 				{Name: portColState, Kind: KindText},
 				{Name: "wait", Kind: KindText},
 				{Name: "current_phase", Kind: KindInteger},
@@ -60,6 +60,13 @@ func portableJobTables() []PortableTable {
 				{Name: "at_ms", Kind: KindTime},
 			},
 		},
+	}
+}
+
+// portableJobArtifactTables is the portable description of the tables of plans, log
+// versions and log chunks, in the order of Tables.
+func portableJobArtifactTables() []PortableTable {
+	return []PortableTable{
 		{
 			Table:   "job_plans",
 			OrderBy: []string{"id"},
@@ -86,12 +93,12 @@ func portableJobTables() []PortableTable {
 		},
 		{
 			Table:   "job_log_chunks",
-			OrderBy: []string{"log_id", "seq"},
+			OrderBy: []string{"log_id", portColSeq},
 			Columns: []Column{
 				{Name: "log_id", Kind: KindText},
-				{Name: "seq", Kind: KindInteger},
+				{Name: portColSeq, Kind: KindInteger},
 				{Name: portColNamespaceID, Kind: KindText},
-				{Name: "sha256", Kind: KindText},
+				{Name: portColSHA256Text, Kind: KindText},
 				{Name: "size", Kind: KindInteger},
 				{Name: "confirmed", Kind: KindInteger},
 			},
