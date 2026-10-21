@@ -25,15 +25,12 @@ const canaryEnv = "CONFORMANCE_CANARY_SECRET"
 // runFakeAdapter reads one request on each line, and answers as the mode says.
 func runFakeAdapter(mode string) {
 	switch mode {
-	case "noread":
-		// An adapter that never reads its input.
-		time.Sleep(time.Minute)
+	case "noread", "sleeper":
+		// An adapter that never reads its input, and the child of an adapter.
+		<-time.After(time.Minute)
 
 		return
-	case "sleeper":
-		time.Sleep(time.Minute)
-
-		return
+	default:
 	}
 
 	in := bufio.NewScanner(os.Stdin)
@@ -143,7 +140,12 @@ func startFake(t *testing.T, mode string, timeout time.Duration) *conformance.Pr
 }
 
 // startFakeWith starts the fake adapter with more variables in its environment.
-func startFakeWith(t *testing.T, mode string, timeout time.Duration, extra ...string) (*conformance.ProcessAdapter, error) {
+func startFakeWith(
+	t *testing.T,
+	mode string,
+	timeout time.Duration,
+	extra ...string,
+) (*conformance.ProcessAdapter, error) {
 	t.Helper()
 
 	a, err := conformance.StartAdapter(

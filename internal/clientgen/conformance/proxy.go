@@ -55,23 +55,22 @@ func readLimited(r io.Reader) ([]byte, error) {
 // host name that resolves to another address is refused. The proxy settings of
 // the environment do not apply.
 func loopbackClient(timeout time.Duration) *http.Client {
-	dialer := &net.Dialer{
-		Timeout: timeout,
-		// Defense in depth: loopbackURL checks the name of the host too. This
-		// check stays so that a name that resolves to another address, or a
-		// redirect, cannot reach a host that is not on this machine.
-		ControlContext: func(_ context.Context, _, address string, _ syscall.RawConn) error {
-			host, _, err := net.SplitHostPort(address)
-			if err != nil {
-				return fmt.Errorf("%w: %q", ErrNotLoopback, address)
-			}
+	dialer := new(net.Dialer)
+	dialer.Timeout = timeout
+	// Defense in depth: loopbackURL checks the name of the host too. This
+	// check stays so that a name that resolves to another address, or a
+	// redirect, cannot reach a host that is not on this machine.
+	dialer.ControlContext = func(_ context.Context, _, address string, _ syscall.RawConn) error {
+		host, _, err := net.SplitHostPort(address)
+		if err != nil {
+			return fmt.Errorf("%w: %q", ErrNotLoopback, address)
+		}
 
-			if ip := net.ParseIP(host); ip == nil || !ip.IsLoopback() {
-				return fmt.Errorf("%w: %q", ErrNotLoopback, address)
-			}
+		if ip := net.ParseIP(host); ip == nil || !ip.IsLoopback() {
+			return fmt.Errorf("%w: %q", ErrNotLoopback, address)
+		}
 
-			return nil
-		},
+		return nil
 	}
 
 	return &http.Client{

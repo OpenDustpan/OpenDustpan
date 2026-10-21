@@ -7,8 +7,8 @@ import (
 	"net/http"
 )
 
-// ReadLimited exports readLimited.
-func ReadLimited(r io.Reader) ([]byte, error) { return readLimited(r) }
+// ExportReadLimited exports readLimited.
+func ExportReadLimited(r io.Reader) ([]byte, error) { return readLimited(r) }
 
 // MaxProxyBodyBytes exports the limit of a body.
 const MaxProxyBodyBytes = maxProxyBodyBytes
@@ -35,10 +35,17 @@ type stubServer struct {
 func (s stubServer) URL() string   { return s.url }
 func (s stubServer) Token() string { return "t" }
 
-// Direct sends a GET to a server at a URL, as the harness does for its own
+// DirectGet sends a GET to a server at a URL, as the harness does for its own
 // requests, and returns the status and the body.
-func Direct(ctx context.Context, url, path string) (int, []byte, error) {
-	out, err := direct(ctx, Env{Server: stubServer{Server: nil, url: url}}, directRequest{
+func DirectGet(ctx context.Context, url, path string) (int, []byte, error) {
+	var info InitializeResult
+
+	env := Env{
+		Server: stubServer{Server: nil, url: url}, Proxy: nil, Adapter: nil, Transport: "", Operations: nil,
+		Info: info, app: nil,
+	}
+
+	out, err := direct(ctx, env, directRequest{
 		method: http.MethodGet, path: path, auth: withToken, contentType: "", body: nil,
 	})
 

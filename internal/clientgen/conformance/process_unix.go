@@ -13,7 +13,8 @@ import (
 // prepareGroup puts the adapter in a process group of its own, so that a kill
 // reaches the processes that the adapter starts.
 func prepareGroup(cmd *exec.Cmd) {
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.SysProcAttr = new(syscall.SysProcAttr)
+	cmd.SysProcAttr.Setpgid = true
 	cmd.Cancel = func() error { return killGroup(cmd.Process) }
 }
 

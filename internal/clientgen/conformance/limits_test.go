@@ -35,7 +35,7 @@ func TestReadLimitedRefusesALongBody(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			got, err := conformance.ReadLimited(bytes.NewReader(make([]byte, tt.size)))
+			got, err := conformance.ExportReadLimited(bytes.NewReader(make([]byte, tt.size)))
 			if !errors.Is(err, tt.want) {
 				t.Fatalf("want %v, got %v", tt.want, err)
 			}
@@ -71,6 +71,44 @@ type zeroReader struct{}
 
 func (zeroReader) Read(p []byte) (int, error) { clear(p); return len(p), nil }
 
+// putThrough sends a PUT with a body of a size through a new proxy in front of
+// an upstream, and returns the status that the client gets.
+func putThrough(t *testing.T, upstream string, size int) int {
+	t.Helper()
+
+	routes := []model.Operation{route("putThing", model.MethodPut, "/api/dustpan/v1/things")}
+
+	proxy, err := conformance.NewProxy(t.Context(), conformance.ProxyOptions{Upstream: upstream, Operations: routes})
+	if err != nil {
+		t.Fatalf("new proxy: %v", err)
+	}
+
+	t.Cleanup(func() {
+		if closeErr := proxy.Close(); closeErr != nil {
+			t.Errorf("close the proxy: %v", closeErr)
+		}
+	})
+
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodPut, proxy.URL()+"/api/dustpan/v1/things",
+		strings.NewReader(strings.Repeat("x", size)))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("send: %v", err)
+	}
+
+	defer resp.Body.Close() //nolint:errcheck // The body is read below.
+
+	if _, err = io.Copy(io.Discard, resp.Body); err != nil {
+		t.Errorf("read the answer: %v", err)
+	}
+
+	return resp.StatusCode
+}
+
 // TestProxyRefusesBodiesOverTheLimit checks both ways: a request body over the
 // limit gets 413 and never reaches the server, and an answer over the limit is
 // not cut and sent with a correct length: the client gets 502.
@@ -85,58 +123,20 @@ func TestProxyRefusesBodiesOverTheLimit(t *testing.T) {
 	}))
 	t.Cleanup(counting.Close)
 
-	routes := []model.Operation{route("putThing", model.MethodPut, "/api/dustpan/v1/things")}
-
-	tests := []struct {
-		name     string
-		upstream string
-		body     int
-		want     int
-		hits     int64
-	}{
-		{"request at the limit", counting.URL, conformance.MaxProxyBodyBytes, http.StatusNoContent, 1},
-		{"request over the limit", counting.URL, conformance.MaxProxyBodyBytes + 1, http.StatusRequestEntityTooLarge, 0},
-		{"answer over the limit", bigServer(t).URL, 0, http.StatusBadGateway, 0},
+	got := putThrough(t, counting.URL, conformance.MaxProxyBodyBytes)
+	if got != http.StatusNoContent || hits.Load() != 1 {
+		t.Errorf("request at the limit: want 204 and 1 hit, got %d and %d", got, hits.Load())
 	}
 
-	for _, tt := range tests {
-		hits.Store(0)
+	hits.Store(0)
 
-		proxy, err := conformance.NewProxy(t.Context(), conformance.ProxyOptions{Upstream: tt.upstream, Operations: routes})
-		if err != nil {
-			t.Fatalf("%s: new proxy: %v", tt.name, err)
-		}
+	got = putThrough(t, counting.URL, conformance.MaxProxyBodyBytes+1)
+	if got != http.StatusRequestEntityTooLarge || hits.Load() != 0 {
+		t.Errorf("request over the limit: want 413 and no hit, got %d and %d", got, hits.Load())
+	}
 
-		req, err := http.NewRequestWithContext(t.Context(), http.MethodPut, proxy.URL()+"/api/dustpan/v1/things",
-			strings.NewReader(strings.Repeat("x", tt.body)))
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		resp, err := http.DefaultClient.Do(req)
-		if err != nil {
-			t.Fatalf("%s: %v", tt.name, err)
-		}
-
-		if _, err = io.Copy(io.Discard, resp.Body); err != nil {
-			t.Errorf("%s: read the answer: %v", tt.name, err)
-		}
-
-		if err = resp.Body.Close(); err != nil {
-			t.Errorf("%s: close: %v", tt.name, err)
-		}
-
-		if resp.StatusCode != tt.want {
-			t.Errorf("%s: want status %d, got %d", tt.name, tt.want, resp.StatusCode)
-		}
-
-		if tt.name != "answer over the limit" && hits.Load() != tt.hits {
-			t.Errorf("%s: the server got %d requests, want %d", tt.name, hits.Load(), tt.hits)
-		}
-
-		if err = proxy.Close(); err != nil {
-			t.Errorf("%s: close the proxy: %v", tt.name, err)
-		}
+	if got = putThrough(t, bigServer(t).URL, 0); got != http.StatusBadGateway {
+		t.Errorf("answer over the limit: want 502, got %d", got)
 	}
 }
 
@@ -147,13 +147,33 @@ func TestHarnessReadsRefuseAnswersOverTheLimit(t *testing.T) {
 
 	srv := bigServer(t)
 
-	if _, err := conformance.DevServerAt(srv.URL).Description(t.Context()); !errors.Is(err, conformance.ErrBodyTooLarge) {
+	_, err := conformance.DevServerAt(srv.URL).Description(t.Context())
+	if !errors.Is(err, conformance.ErrBodyTooLarge) {
 		t.Errorf("description: want ErrBodyTooLarge, got %v", err)
 	}
 
-	if _, _, err := conformance.Direct(t.Context(), srv.URL, "/x"); !errors.Is(err, conformance.ErrBodyTooLarge) {
+	_, _, err = conformance.DirectGet(t.Context(), srv.URL, "/x")
+	if !errors.Is(err, conformance.ErrBodyTooLarge) {
 		t.Errorf("direct: want ErrBodyTooLarge, got %v", err)
 	}
+}
+
+// proxyDial sends a GET to an address with the client that the proxy uses for
+// its upstream, and returns the error.
+func proxyDial(t *testing.T, proxy *conformance.RecordingProxy, addr string) error {
+	t.Helper()
+
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, addr, http.NoBody)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	resp, err := proxy.Client().Do(req)
+	if err == nil {
+		resp.Body.Close() //nolint:errcheck,gosec // The test fails below.
+	}
+
+	return err //nolint:wrapcheck // The test checks the error.
 }
 
 // TestHarnessClientsConnectToLoopbackOnly checks the address of each
@@ -181,29 +201,25 @@ func TestHarnessClientsConnectToLoopbackOnly(t *testing.T) {
 		t.Run(addr, func(t *testing.T) {
 			t.Parallel()
 
-			req, reqErr := http.NewRequestWithContext(t.Context(), http.MethodGet, addr, nil)
-			if reqErr != nil {
-				t.Fatal(reqErr)
+			dialErr := proxyDial(t, proxy, addr)
+			if !errors.Is(dialErr, conformance.ErrNotLoopback) {
+				t.Errorf("proxy upstream client: want ErrNotLoopback, got %v", dialErr)
 			}
 
-			if resp, doErr := proxy.Client().Do(req); !errors.Is(doErr, conformance.ErrNotLoopback) {
-				t.Errorf("proxy upstream client: want ErrNotLoopback, got %v", doErr)
-			} else if resp != nil {
-				t.Error("a refused connection has no answer")
-			}
-
-			if _, descErr := conformance.DevServerAt(addr).Description(t.Context()); !errors.Is(descErr, conformance.ErrNotLoopback) {
+			_, descErr := conformance.DevServerAt(addr).Description(t.Context())
+			if !errors.Is(descErr, conformance.ErrNotLoopback) {
 				t.Errorf("dev server client: want ErrNotLoopback, got %v", descErr)
 			}
 
-			if _, _, directErr := conformance.Direct(t.Context(), addr, "/x"); !errors.Is(directErr, conformance.ErrNotLoopback) {
+			_, _, directErr := conformance.DirectGet(t.Context(), addr, "/x")
+			if !errors.Is(directErr, conformance.ErrNotLoopback) {
 				t.Errorf("direct client: want ErrNotLoopback, got %v", directErr)
 			}
 		})
 	}
 
 	// The positive control: a loopback address is not refused.
-	status, _, err := conformance.Direct(t.Context(), live.URL, "/x")
+	status, _, err := conformance.DirectGet(t.Context(), live.URL, "/x")
 	if err != nil || status != http.StatusNotFound {
 		t.Errorf("a loopback server should answer: %d %v", status, err)
 	}

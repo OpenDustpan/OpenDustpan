@@ -333,16 +333,7 @@ func checkErrorShape(ptr string, s *model.Schema) error {
 		return invalid(ptr, "the error schema must be an object with no additional properties")
 	}
 
-	want := map[string]struct {
-		kind     model.TypeKind
-		required bool
-	}{
-		"code":      {model.TypeInteger, true},
-		"message":   {model.TypeString, true},
-		"errorCode": {model.TypeString, false},
-		"errorArgs": {model.TypeMap, false},
-	}
-
+	want := errorMembers()
 	if len(s.Fields) != len(want) {
 		return invalid(ptr, "the error schema must have the members code, message, errorCode and errorArgs")
 	}
@@ -355,18 +346,43 @@ func checkErrorShape(ptr string, s *model.Schema) error {
 			return invalid(fptr, "the error schema has a member that is not code, message, errorCode or errorArgs")
 		}
 
-		if f.Required != w.required {
-			return invalid(fptr, "the member of the error schema has the wrong required setting")
+		if err := checkErrorMember(fptr, f, w); err != nil {
+			return err
 		}
+	}
 
-		t := f.Type
-		if t.Kind != w.kind || t.Nullable || t.Format != "" {
-			return invalid(fptr, "the member of the error schema has the wrong type")
-		}
+	return nil
+}
 
-		if w.kind == model.TypeMap && (t.Elem == nil || t.Elem.Kind != model.TypeAny) {
-			return invalid(fptr, "errorArgs must be an object with additionalProperties true")
-		}
+// errorMember is what a transport needs of one member of the error schema.
+type errorMember struct {
+	kind     model.TypeKind
+	required bool
+}
+
+// errorMembers returns the members of the error schema, by wire name.
+func errorMembers() map[string]errorMember {
+	return map[string]errorMember{
+		"code":      {model.TypeInteger, true},
+		"message":   {model.TypeString, true},
+		"errorCode": {model.TypeString, false},
+		"errorArgs": {model.TypeMap, false},
+	}
+}
+
+// checkErrorMember checks the type and the presence of one member.
+func checkErrorMember(ptr string, f model.Field, w errorMember) error {
+	if f.Required != w.required {
+		return invalid(ptr, "the member of the error schema has the wrong required setting")
+	}
+
+	t := f.Type
+	if t.Kind != w.kind || t.Nullable || t.Format != "" {
+		return invalid(ptr, "the member of the error schema has the wrong type")
+	}
+
+	if w.kind == model.TypeMap && (t.Elem == nil || t.Elem.Kind != model.TypeAny) {
+		return invalid(ptr, "errorArgs must be an object with additionalProperties true")
 	}
 
 	return nil

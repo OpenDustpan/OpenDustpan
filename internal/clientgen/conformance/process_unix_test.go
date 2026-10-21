@@ -21,13 +21,14 @@ const pidFileEnv = "CONFORMANCE_FAKE_PIDFILE"
 // PID to the file that the test names. The process has no pipe of the harness,
 // so only a kill of the group can end it.
 func startGrandchild() {
-	cmd := exec.Command(os.Args[0]) //nolint:gosec // The test starts its own binary.
+	cmd := exec.CommandContext(context.Background(), os.Args[0]) //nolint:gosec // The test starts its own binary.
 	cmd.Env = []string{fakeModeEnv + "=sleeper"}
 
 	if err := cmd.Start(); err != nil {
 		return
 	}
 
+	//nolint:gosec // G703: the path is from the test, which names the file in its own directory.
 	if err := os.WriteFile(os.Getenv(pidFileEnv), []byte(strconv.Itoa(cmd.Process.Pid)), 0o600); err != nil {
 		return
 	}
@@ -40,7 +41,7 @@ func alive(pid int) bool {
 		return false
 	}
 
-	stat, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/stat") //nolint:gosec // The PID is from the test.
+	stat, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/stat")
 	if err != nil {
 		return true
 	}
@@ -81,7 +82,7 @@ func TestProcessAdapterKillsTheGroup(t *testing.T) {
 
 	deadline := time.Now().Add(5 * time.Second)
 	for alive(pid) && time.Now().Before(deadline) {
-		time.Sleep(20 * time.Millisecond)
+		<-time.After(20 * time.Millisecond)
 	}
 
 	if alive(pid) {
