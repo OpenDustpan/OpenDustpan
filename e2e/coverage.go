@@ -98,47 +98,20 @@ func ServedRoutes(tb testing.TB) []RouteRef {
 	registryRoutes := coverageRegistryRoutes(tb)
 	server := coverageServerRoutes(tb)
 
-	out := make(
-		[]RouteRef,
-		0,
-		len(
-			pulumi,
-		)+len(
-			tfe,
-		)+len(
-			tofuHTTP,
-		)+len(
-			inventory,
-		)+len(
-			auditRoutes,
-		)+len(
-			contextRoutes,
-		)+len(
-			profileRoutes,
-		)+len(
-			sinkRoutes,
-		)+len(
-			jobRoutes,
-		)+len(
-			triggerRoutes,
-		)+len(
-			registryRoutes,
-		)+len(
-			server,
-		)+probeRouteCount,
-	)
-	out = append(out, pulumi...)
-	out = append(out, tfe...)
-	out = append(out, tofuHTTP...)
-	out = append(out, inventory...)
-	out = append(out, auditRoutes...)
-	out = append(out, contextRoutes...)
-	out = append(out, profileRoutes...)
-	out = append(out, sinkRoutes...)
-	out = append(out, jobRoutes...)
-	out = append(out, triggerRoutes...)
-	out = append(out, registryRoutes...)
-	out = append(out, server...)
+	tables := [][]RouteRef{
+		pulumi, tfe, tofuHTTP, inventory, auditRoutes, contextRoutes, profileRoutes, sinkRoutes, jobRoutes,
+		triggerRoutes, registryRoutes, server,
+	}
+
+	size := probeRouteCount
+	for _, table := range tables {
+		size += len(table)
+	}
+
+	out := make([]RouteRef, 0, size)
+	for _, table := range tables {
+		out = append(out, table...)
+	}
 
 	// The probes live on the root mux, not in any adapter table.
 	out = append(out,
@@ -2498,18 +2471,30 @@ func jobAllowEntries() []AllowEntry {
 func triggerAllowEntries() []AllowEntry {
 	const (
 		base = "/api/dustpan/v1/namespaces/{namespace}/units/{unit_id}/triggers"
-		test = "TestRunTriggers"
-		why  = "Console and client route: no CLI calls it. The steps of TestRunTriggers call it with the token of a person."
+		one  = base + "/{trigger_id}"
 	)
 
-	return []AllowEntry{
-		{Method: http.MethodGet, Path: base, CoveringTest: test, Reason: why},
-		{Method: http.MethodPost, Path: base, CoveringTest: test, Reason: why},
-		{Method: http.MethodGet, Path: base + "/{trigger_id}", CoveringTest: test, Reason: why},
-		{Method: http.MethodPut, Path: base + "/{trigger_id}", CoveringTest: test, Reason: why},
-		{Method: http.MethodDelete, Path: base + "/{trigger_id}", CoveringTest: test, Reason: why},
-		{Method: http.MethodPost, Path: base + "/{trigger_id}/fire", CoveringTest: test, Reason: why},
+	return allowRoutes(
+		"TestRunTriggers",
+		"Console and client route: no CLI calls it. The steps of TestRunTriggers call it with the token of a person.",
+		RouteRef{Method: http.MethodGet, Path: base},
+		RouteRef{Method: http.MethodPost, Path: base},
+		RouteRef{Method: http.MethodGet, Path: one},
+		RouteRef{Method: http.MethodPut, Path: one},
+		RouteRef{Method: http.MethodDelete, Path: one},
+		RouteRef{Method: http.MethodPost, Path: one + "/fire"},
+	)
+}
+
+// allowRoutes builds the allow entries of routes that one test covers for one
+// reason.
+func allowRoutes(test, reason string, routes ...RouteRef) []AllowEntry {
+	out := make([]AllowEntry, 0, len(routes))
+	for _, r := range routes {
+		out = append(out, AllowEntry{Method: r.Method, Path: r.Path, CoveringTest: test, Reason: reason})
 	}
+
+	return out
 }
 
 // savedViewAllowEntries covers the routes of the saved views. No CLI calls

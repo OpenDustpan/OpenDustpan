@@ -23,30 +23,55 @@ var errTriggerDoc = errors.New("the trigger document is not the expected one")
 
 // triggerDoc is the part of a trigger document that the steps read.
 type triggerDoc struct {
-	ID        string `json:"id"`
-	Namespace string `json:"namespace"`
-	Unit      struct {
-		ID, Tool, Name string
-	} `json:"unit"`
-	Kind      string `json:"kind"`
-	Frequency *struct {
-		Preset string `json:"preset"`
-		Cron   string `json:"cron"`
-	} `json:"frequency"`
-	Source *struct {
-		ID, Tool, Name string
-	} `json:"source"`
-	Enabled      bool   `json:"enabled"`
-	LastSaver    string `json:"lastSaver"`
-	NeedsNewSave bool   `json:"needsNewSave"`
+	ID           string            `json:"id"`
+	Namespace    string            `json:"namespace"`
+	Unit         triggerUnitRef    `json:"unit"`
+	Kind         string            `json:"kind"`
+	Frequency    *triggerFrequency `json:"frequency"`
+	Source       *triggerUnitRef   `json:"source"`
+	Enabled      bool              `json:"enabled"`
+	LastSaver    string            `json:"lastSaver"`
+	NeedsNewSave bool              `json:"needsNewSave"`
 }
 
 // triggerErrDoc is the part of an error document that the steps read.
 type triggerErrDoc struct {
-	ErrorCode string `json:"errorCode"`
-	Units     []struct {
-		ID, Tool, Name string
-	} `json:"units"`
+	ErrorCode string           `json:"errorCode"`
+	Units     []triggerUnitRef `json:"units"`
+}
+
+// triggerUnitRef is a unit reference in a trigger document.
+type triggerUnitRef struct {
+	ID   string `json:"id"`
+	Tool string `json:"tool"`
+	Name string `json:"name"`
+}
+
+// triggerFrequency is the frequency of a schedule trigger.
+type triggerFrequency struct {
+	Preset string `json:"preset"`
+	Cron   string `json:"cron"`
+}
+
+// unitListDoc is the part of the unit list that the steps read.
+type unitListDoc struct {
+	Units []unitListItem `json:"units"`
+}
+
+// unitListItem is one unit of the unit list.
+type unitListItem struct {
+	UnitID string `json:"unitID"`
+	Name   string `json:"name"`
+}
+
+// fireDoc is the part of a fire answer that the steps read.
+type fireDoc struct {
+	Job fireJob `json:"job"`
+}
+
+// fireJob is the job in a fire answer.
+type fireJob struct {
+	ID string `json:"id"`
 }
 
 // triggersFixture holds the people, the units and the paths of the scenario.
@@ -120,11 +145,14 @@ func runTriggersOnStore(t *testing.T, cli e2e.Install, store e2e.Store) {
 	checkReady(ctx, t, env)
 	env.CreateNamespace(ctx, t, refusalNamespace)
 
-	fx := &triggersFixture{env: env, cli: cli}
-	fx.admin = issueRefusalPerson(ctx, t, env, "ann", "admin")
-	fx.viewer = issueRefusalPerson(ctx, t, env, "vic", "viewer")
-	fx.outside = newTriggerPerson(ctx, t, env, "eve", "")
-	fx.second = newTriggerPerson(ctx, t, env, "bob", "admin")
+	admin := issueRefusalPerson(ctx, t, env, "ann", "admin")
+	viewer := issueRefusalPerson(ctx, t, env, "vic", "viewer")
+	outside := newTriggerPerson(ctx, t, env, "eve", "")
+	second := newTriggerPerson(ctx, t, env, "bob", "admin")
+
+	fx := &triggersFixture{
+		env: env, cli: cli, admin: admin, viewer: viewer, outside: outside, second: second, webID: "", dbID: "",
+	}
 
 	// The workspace web comes from the real CLI, with the token of the admin.
 	writeRefusalTofuProject(t, env)
@@ -197,12 +225,7 @@ func unitIDOf(ctx context.Context, t *testing.T, env *e2e.Env, token, name strin
 		t.Fatalf("list the units = %d, %v: %s", status, err, body)
 	}
 
-	var list struct {
-		Units []struct {
-			UnitID string `json:"unitID"`
-			Name   string `json:"name"`
-		} `json:"units"`
-	}
+	var list unitListDoc
 
 	if err := json.Unmarshal([]byte(body), &list); err != nil {
 		t.Fatalf("decode the unit list: %v: %s", err, body)
@@ -227,7 +250,6 @@ func (fx *triggersFixture) triggers(unitID string) string {
 func (fx *triggersFixture) step(ctx context.Context, t *testing.T, token string, spec e2e.APIStepSpec) {
 	t.Helper()
 
-	spec.UserAgent, spec.Scheme = triggersAgent, "token"
 	fx.env.APIStep(ctx, t, token, spec)
 }
 
@@ -266,6 +288,7 @@ func (fx *triggersFixture) savesAndReads(ctx context.Context, t *testing.T) trig
 	annSubject := e2e.SignInSubject("ann@example.com")
 
 	fx.step(ctx, t, fx.ann(), e2e.APIStepSpec{
+		UserAgent: triggersAgent, Scheme: "token",
 		Name: "save a schedule trigger", Method: http.MethodPost, Path: fx.triggers(fx.webID),
 		Body: `{"kind":"schedule","frequency":{"preset":"daily"}}`, Want: http.StatusCreated,
 		Check: func(body string) error {
@@ -273,16 +296,12 @@ func (fx *triggersFixture) savesAndReads(ctx context.Context, t *testing.T) trig
 				return err
 			}
 
-			if !strings.HasPrefix(first.ID, "trg-") || first.Unit.ID != fx.webID || first.Unit.Tool != "OpenTofu" ||
-				first.Unit.Name != "web" || first.LastSaver != annSubject || first.NeedsNewSave || !first.Enabled {
-				return fmt.Errorf("%w: %s", errTriggerDoc, body)
-			}
-
-			return nil
+			return fx.checkFirst(&first, annSubject, body)
 		},
 	})
 
 	fx.step(ctx, t, fx.ann(), e2e.APIStepSpec{
+		UserAgent: triggersAgent, Scheme: "token",
 		Name: "save a follows trigger", Method: http.MethodPost, Path: fx.triggers(fx.webID),
 		Body: `{"kind":"follows","source":{"id":"` + fx.dbID + `"}}`, Want: http.StatusCreated,
 		Check: func(body string) error {
@@ -298,17 +317,40 @@ func (fx *triggersFixture) savesAndReads(ctx context.Context, t *testing.T) trig
 		},
 	})
 
+	fx.readsAndReplaces(ctx, t, first, follows)
+
+	return first
+}
+
+// checkFirst checks the schedule trigger that the first save answered.
+func (fx *triggersFixture) checkFirst(first *triggerDoc, saver, body string) error {
+	if !strings.HasPrefix(first.ID, "trg-") || first.Unit.ID != fx.webID || first.Unit.Tool != "OpenTofu" ||
+		first.Unit.Name != "web" || first.LastSaver != saver || first.NeedsNewSave || !first.Enabled {
+		return fmt.Errorf("%w: %s", errTriggerDoc, body)
+	}
+
+	return nil
+}
+
+// readsAndReplaces lists and reads the saved triggers and replaces the
+// schedule trigger.
+func (fx *triggersFixture) readsAndReplaces(ctx context.Context, t *testing.T, first, follows triggerDoc) {
+	t.Helper()
+
 	fx.step(ctx, t, fx.ann(), e2e.APIStepSpec{
+		UserAgent: triggersAgent, Scheme: "token",
 		Name: "list the triggers of the unit", Method: http.MethodGet, Path: fx.triggers(fx.webID), Body: "",
 		Want: http.StatusOK, Check: inDoc(`"id":"`+first.ID+`"`, `"id":"`+follows.ID+`"`),
 	})
 
 	fx.step(ctx, t, fx.ann(), e2e.APIStepSpec{
+		UserAgent: triggersAgent, Scheme: "token",
 		Name: "read one trigger", Method: http.MethodGet, Path: fx.triggers(fx.webID) + "/" + first.ID, Body: "",
 		Want: http.StatusOK, Check: inDoc(`"preset":"daily"`),
 	})
 
 	fx.step(ctx, t, fx.ann(), e2e.APIStepSpec{
+		UserAgent: triggersAgent, Scheme: "token",
 		Name: "replace the trigger with a cron expression", Method: http.MethodPut,
 		Path: fx.triggers(fx.webID) + "/" + first.ID,
 		Body: `{"kind":"schedule","frequency":{"cron":"30 4 * * 1-5"},"enabled":false}`, Want: http.StatusOK,
@@ -316,19 +358,19 @@ func (fx *triggersFixture) savesAndReads(ctx context.Context, t *testing.T) trig
 	})
 
 	fx.step(ctx, t, fx.ann(), e2e.APIStepSpec{
+		UserAgent: triggersAgent, Scheme: "token",
 		Name: "a replace cannot change the kind", Method: http.MethodPut,
 		Path: fx.triggers(fx.webID) + "/" + first.ID, Body: `{"kind":"review-request-push"}`,
 		Want: http.StatusBadRequest, Check: inDoc(`"errorCode":"trigger.invalid"`),
 	})
 
 	fx.step(ctx, t, fx.ann(), e2e.APIStepSpec{
+		UserAgent: triggersAgent, Scheme: "token",
 		Name: "switch the trigger on again", Method: http.MethodPut,
 		Path: fx.triggers(fx.webID) + "/" + first.ID,
 		Body: `{"kind":"schedule","frequency":{"preset":"weekly"}}`, Want: http.StatusOK,
 		Check: inDoc(`"enabled":true`),
 	})
-
-	return first
 }
 
 // refusesALoop proves that a loop of units fails with the units named.
@@ -337,6 +379,7 @@ func (fx *triggersFixture) refusesALoop(ctx context.Context, t *testing.T) {
 
 	// web follows db. A trigger that makes db follow web closes a loop.
 	fx.step(ctx, t, fx.ann(), e2e.APIStepSpec{
+		UserAgent: triggersAgent, Scheme: "token",
 		Name: "refuse a trigger that closes a loop", Method: http.MethodPost, Path: fx.triggers(fx.dbID),
 		Body: `{"kind":"follows","source":{"id":"` + fx.webID + `"}}`, Want: http.StatusConflict,
 		Check: func(body string) error {
@@ -355,6 +398,7 @@ func (fx *triggersFixture) refusesALoop(ctx context.Context, t *testing.T) {
 	})
 
 	fx.step(ctx, t, fx.ann(), e2e.APIStepSpec{
+		UserAgent: triggersAgent, Scheme: "token",
 		Name: "a unit that follows itself", Method: http.MethodPost, Path: fx.triggers(fx.webID),
 		Body: `{"kind":"follows","source":{"id":"` + fx.webID + `"}}`, Want: http.StatusConflict,
 		Check: inDoc(`"errorCode":"trigger.cycle"`),
@@ -370,6 +414,7 @@ func (fx *triggersFixture) firesATrigger(ctx context.Context, t *testing.T, firs
 
 	// A plan needs a code location, and a unit has none in its settings yet.
 	fx.step(ctx, t, fx.ann(), e2e.APIStepSpec{
+		UserAgent: triggersAgent, Scheme: "token",
 		Name: "a fire with no code location", Method: http.MethodPost, Path: fire, Body: "",
 		Want: http.StatusUnprocessableEntity, Check: inDoc(`"errorCode":"job.unsupported"`),
 	})
@@ -383,11 +428,7 @@ func (fx *triggersFixture) firesATrigger(ctx context.Context, t *testing.T, firs
 			UserAgent: triggersAgent, Name: name, Method: http.MethodPost, Path: fire, Body: body,
 			Want: http.StatusCreated, Scheme: "token",
 			Check: func(answer string) error {
-				var doc struct {
-					Job struct {
-						ID string `json:"id"`
-					} `json:"job"`
-				}
+				var doc fireDoc
 
 				if err := json.Unmarshal([]byte(answer), &doc); err != nil || !strings.HasPrefix(doc.Job.ID, "job-") {
 					return fmt.Errorf("%w: %s", errTriggerDoc, answer)
@@ -422,6 +463,7 @@ func (fx *triggersFixture) firesATrigger(ctx context.Context, t *testing.T, firs
 	})
 
 	fx.step(ctx, t, fx.ann(), e2e.APIStepSpec{
+		UserAgent: triggersAgent, Scheme: "token",
 		Name: "switch the trigger off", Method: http.MethodPut, Path: fx.triggers(fx.webID) + "/" + first.ID,
 		Body: `{"kind":"schedule","frequency":{"preset":"weekly"},"enabled":false}`, Want: http.StatusOK, Check: nil,
 	})
@@ -441,6 +483,7 @@ func (fx *triggersFixture) refusesASaverWithoutAccess(ctx context.Context, t *te
 	var saved triggerDoc
 
 	fx.step(ctx, t, fx.second.token.Secret, e2e.APIStepSpec{
+		UserAgent: triggersAgent, Scheme: "token",
 		Name: "a second admin saves a trigger", Method: http.MethodPost, Path: fx.triggers(fx.webID),
 		Body: `{"kind":"schedule","frequency":{"preset":"hourly"}}`, Want: http.StatusCreated,
 		Check: decodeTrigger(&saved),
@@ -454,6 +497,7 @@ func (fx *triggersFixture) refusesASaverWithoutAccess(ctx context.Context, t *te
 	one := fx.triggers(fx.webID) + "/" + saved.ID
 
 	fx.step(ctx, t, fx.ann(), e2e.APIStepSpec{
+		UserAgent: triggersAgent, Scheme: "token",
 		Name: "the trigger needs a new save", Method: http.MethodGet, Path: one, Body: "", Want: http.StatusOK,
 		Check: inDoc(`"needsNewSave":true`),
 	})
@@ -465,18 +509,21 @@ func (fx *triggersFixture) refusesASaverWithoutAccess(ctx context.Context, t *te
 	})
 
 	fx.step(ctx, t, fx.second.token.Secret, e2e.APIStepSpec{
+		UserAgent: triggersAgent, Scheme: "token",
 		Name: "the saver without access cannot save again", Method: http.MethodPut, Path: one,
 		Body: `{"kind":"schedule","frequency":{"preset":"daily"}}`, Want: http.StatusNotFound, Check: nil,
 	})
 
 	fx.step(ctx, t, fx.ann(), e2e.APIStepSpec{
+		UserAgent: triggersAgent, Scheme: "token",
 		Name: "a person with access saves it again", Method: http.MethodPut, Path: one,
 		Body: `{"kind":"schedule","frequency":{"preset":"hourly"}}`, Want: http.StatusOK,
 		Check: inDoc(`"needsNewSave":false`, `"lastSaver":"`+e2e.SignInSubject("ann@example.com")+`"`),
 	})
 
 	entries := readAuditEntries(ctx, t, fx.env, refusalNamespace)
-	for _, e := range entries {
+	for i := range entries {
+		e := &entries[i]
 		if e.Outcome == "denied" && e.Action == "unit:run-plan" && strings.Contains(e.Reason, "last saver") {
 			return
 		}
@@ -517,6 +564,7 @@ func (fx *triggersFixture) refusesWhatItMust(ctx context.Context, t *testing.T, 
 		{"a follows trigger on a source that does not exist", http.MethodPost, web, `{"kind":"follows","source":{"id":"ws-nope"}}`, fx.ann(), http.StatusForbidden},
 	} {
 		fx.step(ctx, t, step.token, e2e.APIStepSpec{
+			UserAgent: triggersAgent, Scheme: "token",
 			Name: step.name, Method: step.method, Path: step.path, Body: step.body, Want: step.want, Check: nil,
 		})
 	}
@@ -528,10 +576,12 @@ func (fx *triggersFixture) refusesWhatItMust(ctx context.Context, t *testing.T, 
 	}, map[string]string{"Idempotency-Key": "k-1"})
 
 	fx.step(ctx, t, fx.ann(), e2e.APIStepSpec{
+		UserAgent: triggersAgent, Scheme: "token",
 		Name: "delete the trigger", Method: http.MethodDelete, Path: one, Body: "", Want: http.StatusNoContent,
 		Check: nil,
 	})
 	fx.step(ctx, t, fx.ann(), e2e.APIStepSpec{
+		UserAgent: triggersAgent, Scheme: "token",
 		Name: "the deleted trigger is gone", Method: http.MethodGet, Path: one, Body: "", Want: http.StatusNotFound,
 		Check: nil,
 	})
@@ -543,7 +593,9 @@ func (fx *triggersFixture) writesAuditEntries(ctx context.Context, t *testing.T)
 
 	var saves, deletes int
 
-	for _, e := range readAuditEntries(ctx, t, fx.env, refusalNamespace) {
+	entries := readAuditEntries(ctx, t, fx.env, refusalNamespace)
+	for i := range entries {
+		e := &entries[i]
 		if e.Action != "unit:manage" || e.Outcome != "success" || e.Object != "opentofu:"+refusalNamespace+"/web" {
 			continue
 		}
@@ -553,6 +605,7 @@ func (fx *triggersFixture) writesAuditEntries(ctx context.Context, t *testing.T)
 			saves++
 		case e.Reason == "delete trigger":
 			deletes++
+		default:
 		}
 	}
 
