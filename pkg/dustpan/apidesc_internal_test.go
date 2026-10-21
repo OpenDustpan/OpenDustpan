@@ -81,13 +81,9 @@ func TestDescribeOperationsRefusesAHandlerThatHidesItsRoutes(t *testing.T) {
 	}
 }
 
-// TestDescribeOperationsFailsClosed proves that the server refuses an adapter
-// whose operations the description cannot hold, so it never starts with a
-// partial description. An unnamed route is the case that a new route meets.
-func TestDescribeOperationsFailsClosed(t *testing.T) {
-	t.Parallel()
-
-	good := apidesc.Operation{
+// goodOperation returns a valid operation of the description.
+func goodOperation() apidesc.Operation {
+	return apidesc.Operation{
 		ID:     "getThing",
 		Method: "GET",
 		Path:   "/api/dustpan/v1/things",
@@ -95,48 +91,100 @@ func TestDescribeOperationsFailsClosed(t *testing.T) {
 		Actions: []string{
 			"thing:read",
 		},
+		ActionObjects:   map[string]string{"thing:read": apidesc.KindNamespace},
 		Public:          false,
 		IdempotencyKey:  false,
 		IfMatch:         false,
 		IfMatchRequired: false,
 		ETag:            false,
+		Bodies:          &apidesc.Bodies{Request: apidesc.NoBody, Response: apidesc.NoBody},
 	}
+}
 
-	unnamed := good
+// describeOne runs describeHandlers on a server whose one adapter lists the
+// operation.
+func describeOne(op apidesc.Operation) ([]apidesc.Operation, error) {
+	return describeHandlers([]namedHandler{
+		{name: "server", handler: operationsHandler{Handler: http.NotFoundHandler(), ops: []apidesc.Operation{op}}},
+	})
+}
+
+// TestDescribeOperationsFailsClosed proves that the server refuses an adapter
+// whose operations the description cannot hold, so it never starts with a
+// partial description. An unnamed route is the case that a new route meets.
+func TestDescribeOperationsFailsClosed(t *testing.T) {
+	t.Parallel()
+
+	unnamed := goodOperation()
 	unnamed.ID = ""
 
-	outside := good
+	outside := goodOperation()
 	outside.Path = "/api/server/things"
+
+	noObject := goodOperation()
+	noObject.ActionObjects = nil
 
 	tests := []struct {
 		name string
-		ops  []apidesc.Operation
+		op   apidesc.Operation
 		bad  bool
 	}{
-		{"a named route", []apidesc.Operation{good}, false},
-		{"a route with no name", []apidesc.Operation{unnamed}, true},
-		{"a route outside the prefix", []apidesc.Operation{outside}, true},
+		{"a named route", goodOperation(), false},
+		{"a route with no name", unnamed, true},
+		{"a route outside the prefix", outside, true},
+		{"an action with no object kind", noObject, true},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			handlers := []namedHandler{
-				{name: "server", handler: operationsHandler{Handler: http.NotFoundHandler(), ops: tt.ops}},
-			}
-
-			ops, err := describeHandlers(handlers)
-			if tt.bad {
-				if !errors.Is(err, apidesc.ErrInvalidOperation) || ops != nil {
-					t.Fatalf("describeHandlers() = %v, %v; want ErrInvalidOperation and no operations", ops, err)
+			ops, err := describeOne(tt.op)
+			if !tt.bad {
+				if err != nil {
+					t.Fatalf("describeHandlers() = %v", err)
 				}
 
 				return
 			}
 
-			if err != nil {
-				t.Fatalf("describeHandlers() = %v", err)
+			if !errors.Is(err, apidesc.ErrInvalidOperation) || ops != nil {
+				t.Fatalf("describeHandlers() = %v, %v; want ErrInvalidOperation and no operations", ops, err)
+			}
+		})
+	}
+}
+
+// TestDescribeOperationsRefusesAnUnmarkedBody proves that a route which names
+// no body type and does not say that it has no body stops the server, with its
+// own error, so that the person who adds a route sees what to add.
+func TestDescribeOperationsRefusesAnUnmarkedBody(t *testing.T) {
+	t.Parallel()
+
+	var unset apidesc.Body
+
+	noResponse := goodOperation()
+	noResponse.Bodies = &apidesc.Bodies{Request: apidesc.NoBody, Response: unset}
+
+	post := goodOperation()
+	post.ID, post.Method = "createThing", "POST"
+	post.Bodies = &apidesc.Bodies{Request: unset, Response: apidesc.NoBody}
+
+	noBodies := goodOperation()
+	noBodies.Bodies = nil
+
+	tests := map[string]apidesc.Operation{
+		"a route with no response type": noResponse,
+		"a POST with no request type":   post,
+		"a route that names no bodies":  noBodies,
+	}
+
+	for name, op := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			if ops, err := describeOne(op); !errors.Is(err, apidesc.ErrInvalidBody) || ops != nil {
+				t.Fatalf("describeHandlers() = %v, %v; want ErrInvalidBody and no operations", ops, err)
 			}
 		})
 	}

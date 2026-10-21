@@ -40,6 +40,675 @@
       }
     },
     "schemas": {
+      "AddRegistryKeyRequest": {
+        "properties": {
+          "armoredPublicKey": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "armoredPublicKey"
+        ],
+        "type": "object"
+      },
+      "ApiDescription": {
+        "additionalProperties": {
+          "description": "Any JSON value. Only the operator sets the field that holds it. A request that holds the field is refused."
+        },
+        "type": "object"
+      },
+      "ApprovalDefault": {
+        "properties": {
+          "approvers": {
+            "$ref": "#/components/schemas/Approvers"
+          },
+          "count": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "freshAuthSeconds": {
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "version": {
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "approvers",
+          "count",
+          "freshAuthSeconds"
+        ],
+        "type": "object"
+      },
+      "ApprovalRule": {
+        "properties": {
+          "approvers": {
+            "$ref": "#/components/schemas/Approvers"
+          },
+          "authorMayApprove": {
+            "type": "boolean"
+          },
+          "count": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "freshAuthSeconds": {
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "timeoutSeconds": {
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "version": {
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "approvers",
+          "authorMayApprove",
+          "count",
+          "freshAuthSeconds",
+          "timeoutSeconds"
+        ],
+        "type": "object"
+      },
+      "Approvers": {
+        "properties": {
+          "groups": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "unitOwners": {
+            "type": "boolean"
+          },
+          "users": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "groups",
+          "unitOwners",
+          "users"
+        ],
+        "type": "object"
+      },
+      "Capabilities": {
+        "properties": {
+          "apiVersion": {
+            "type": "string"
+          },
+          "installationKind": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "apiVersion"
+        ],
+        "type": "object"
+      },
+      "Collection": {
+        "properties": {
+          "createdAt": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "name": {
+            "type": "string"
+          },
+          "namespace": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "createdAt",
+          "name",
+          "namespace"
+        ],
+        "type": "object"
+      },
+      "ContextAnswer": {
+        "properties": {
+          "action": {
+            "type": "string"
+          },
+          "data": {
+            "additionalProperties": {
+              "description": "Any JSON value. Only the operator sets the field that holds it. A request that holds the field is refused."
+            },
+            "type": "object"
+          },
+          "hidden": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "layers": {
+            "items": {
+              "$ref": "#/components/schemas/ContextLayerStatus"
+            },
+            "type": "array"
+          },
+          "object": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ContextObjectRole"
+              },
+              {
+                "type": "string"
+              }
+            ]
+          },
+          "status": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ContextStatus"
+              },
+              {
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "required": [
+          "action",
+          "object",
+          "status"
+        ],
+        "type": "object"
+      },
+      "ContextDocument": {
+        "properties": {
+          "deleted": {
+            "type": "boolean"
+          },
+          "object": {
+            "$ref": "#/components/schemas/ContextObject"
+          },
+          "schemaVersion": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "sections": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/ContextAnswer"
+            },
+            "type": "object"
+          }
+        },
+        "required": [
+          "object",
+          "schemaVersion",
+          "sections"
+        ],
+        "type": "object"
+      },
+      "ContextEntry": {
+        "properties": {
+          "fields": {
+            "$ref": "#/components/schemas/ContextFields"
+          },
+          "item": {
+            "type": "string"
+          },
+          "object": {
+            "$ref": "#/components/schemas/ContextObject"
+          },
+          "readme": {
+            "type": "string"
+          },
+          "source": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ContextSource"
+              },
+              {
+                "type": "string"
+              }
+            ]
+          },
+          "updatedAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "updatedBy": {
+            "type": "string"
+          },
+          "warning": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "fields",
+          "object",
+          "source"
+        ],
+        "type": "object"
+      },
+      "ContextFields": {
+        "properties": {
+          "links": {
+            "items": {
+              "$ref": "#/components/schemas/ContextLink"
+            },
+            "type": "array"
+          },
+          "onCall": {
+            "type": "string"
+          },
+          "owners": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "runbook": {
+            "type": "string"
+          },
+          "summary": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "ContextLayerStatus": {
+        "properties": {
+          "action": {
+            "type": "string"
+          },
+          "object": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ContextObjectKind"
+              },
+              {
+                "type": "string"
+              }
+            ]
+          },
+          "status": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ContextStatus"
+              },
+              {
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "required": [
+          "action",
+          "object",
+          "status"
+        ],
+        "type": "object"
+      },
+      "ContextLink": {
+        "properties": {
+          "kind": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ContextLinkKind"
+              },
+              {
+                "type": "string"
+              }
+            ]
+          },
+          "title": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "title",
+          "url"
+        ],
+        "type": "object"
+      },
+      "ContextLinkKind": {
+        "enum": [
+          "docs",
+          "runbook",
+          "dashboard",
+          "repository",
+          "other"
+        ],
+        "type": "string"
+      },
+      "ContextObject": {
+        "properties": {
+          "kind": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ContextObjectKind"
+              },
+              {
+                "type": "string"
+              }
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "namespace": {
+            "type": "string"
+          },
+          "resource": {
+            "type": "string"
+          },
+          "tool": {
+            "type": "string"
+          },
+          "unitID": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "namespace"
+        ],
+        "type": "object"
+      },
+      "ContextObjectKind": {
+        "enum": [
+          "namespace",
+          "collection",
+          "unit",
+          "resource",
+          "blueprint"
+        ],
+        "type": "string"
+      },
+      "ContextObjectRole": {
+        "enum": [
+          "target",
+          "each-layer",
+          "each-named-unit",
+          "namespace"
+        ],
+        "type": "string"
+      },
+      "ContextSource": {
+        "enum": [
+          "api",
+          "output"
+        ],
+        "type": "string"
+      },
+      "ContextStatus": {
+        "enum": [
+          "ok",
+          "partial",
+          "denied",
+          "unavailable"
+        ],
+        "type": "string"
+      },
+      "CreateCollectionRequest": {
+        "properties": {
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "type": "object"
+      },
+      "CreateGitHostConnectionRequest": {
+        "properties": {
+          "apiAddress": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "appID": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "auth": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "credential": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "credentials": {
+            "items": {
+              "description": "Any JSON value. Only the operator sets the field that holds it. A request that holds the field is refused."
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "eventSecret": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "installationID": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "kind": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "privateKey": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "push": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "apiAddress",
+          "appID",
+          "auth",
+          "credential",
+          "credentials",
+          "eventSecret",
+          "installationID",
+          "kind",
+          "privateKey",
+          "push"
+        ],
+        "type": "object"
+      },
+      "CreateNotificationSinkRequest": {
+        "properties": {
+          "kind": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "platform": {
+            "type": "string"
+          },
+          "target": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "name"
+        ],
+        "type": "object"
+      },
+      "CreateProfileRequest": {
+        "properties": {
+          "document": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "document",
+          "name"
+        ],
+        "type": "object"
+      },
+      "CreateProfileRevisionRequest": {
+        "properties": {
+          "document": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "document"
+        ],
+        "type": "object"
+      },
+      "CreateViewRequest": {
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "query": {
+            "$ref": "#/components/schemas/ViewQuery"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "type": "object"
+      },
+      "CreatedNotificationSink": {
+        "properties": {
+          "createdBy": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "namespace": {
+            "type": "string"
+          },
+          "platform": {
+            "type": "string"
+          },
+          "signingKey": {
+            "type": "string"
+          },
+          "target": {
+            "type": "string"
+          },
+          "urlSet": {
+            "type": "boolean"
+          },
+          "version": {
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "createdBy",
+          "id",
+          "kind",
+          "name",
+          "namespace",
+          "target",
+          "urlSet",
+          "version"
+        ],
+        "type": "object"
+      },
+      "DeletedUnit": {
+        "properties": {
+          "deletedAt": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "namespace": {
+            "type": "string"
+          },
+          "purgeAfter": {
+            "type": "string"
+          },
+          "reference": {
+            "type": "string"
+          },
+          "tool": {
+            "type": "string"
+          },
+          "unitID": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "deletedAt",
+          "name",
+          "namespace",
+          "purgeAfter",
+          "reference",
+          "tool",
+          "unitID"
+        ],
+        "type": "object"
+      },
       "ErrorResponse": {
         "properties": {
           "code": {
@@ -65,6 +734,1708 @@
           "message"
         ],
         "type": "object"
+      },
+      "GitHostAccount": {
+        "properties": {
+          "expiresAt": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "login": {
+            "type": "string"
+          },
+          "noExpiry": {
+            "type": "boolean"
+          },
+          "scopes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "expiresAt",
+          "id",
+          "login",
+          "noExpiry",
+          "scopes"
+        ],
+        "type": "object"
+      },
+      "GitHostApp": {
+        "properties": {
+          "apiAddress": {
+            "type": "string"
+          },
+          "appID": {
+            "type": "string"
+          },
+          "createdAt": {
+            "type": "string"
+          },
+          "eventSecret": {
+            "$ref": "#/components/schemas/GitHostCredentialSet"
+          },
+          "hookID": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "privateKey": {
+            "$ref": "#/components/schemas/GitHostCredentialSet"
+          },
+          "updatedAt": {
+            "type": "string"
+          },
+          "version": {
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "apiAddress",
+          "appID",
+          "createdAt",
+          "eventSecret",
+          "hookID",
+          "kind",
+          "privateKey",
+          "updatedAt",
+          "version"
+        ],
+        "type": "object"
+      },
+      "GitHostCheck": {
+        "properties": {
+          "account": {
+            "$ref": "#/components/schemas/GitHostAccount"
+          },
+          "capabilities": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "missing": {
+            "additionalProperties": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "type": "object"
+          }
+        },
+        "required": [
+          "account",
+          "capabilities",
+          "missing"
+        ],
+        "type": "object"
+      },
+      "GitHostConnection": {
+        "properties": {
+          "apiAddress": {
+            "type": "string"
+          },
+          "appID": {
+            "type": "string"
+          },
+          "appScope": {
+            "type": "string"
+          },
+          "auth": {
+            "type": "string"
+          },
+          "createdAt": {
+            "type": "string"
+          },
+          "credentialSets": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "default": {
+            "type": "boolean"
+          },
+          "hookID": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "installationID": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "namespace": {
+            "type": "string"
+          },
+          "push": {
+            "type": "boolean"
+          },
+          "updatedAt": {
+            "type": "string"
+          },
+          "version": {
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "apiAddress",
+          "appID",
+          "appScope",
+          "auth",
+          "createdAt",
+          "credentialSets",
+          "default",
+          "hookID",
+          "id",
+          "installationID",
+          "kind",
+          "namespace",
+          "push",
+          "updatedAt",
+          "version"
+        ],
+        "type": "object"
+      },
+      "GitHostCredentialSet": {
+        "properties": {
+          "createdAt": {
+            "type": "string"
+          },
+          "set": {
+            "type": "boolean"
+          },
+          "setID": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "createdAt",
+          "set",
+          "setID"
+        ],
+        "type": "object"
+      },
+      "GitHostInstallation": {
+        "properties": {
+          "createdAt": {
+            "type": "string"
+          },
+          "installationID": {
+            "type": "string"
+          },
+          "namespace": {
+            "type": "string"
+          },
+          "updatedAt": {
+            "type": "string"
+          },
+          "version": {
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "createdAt",
+          "installationID",
+          "namespace",
+          "updatedAt",
+          "version"
+        ],
+        "type": "object"
+      },
+      "Job": {
+        "properties": {
+          "agent": {
+            "type": "string"
+          },
+          "agentMode": {
+            "type": "string"
+          },
+          "breakGlass": {
+            "$ref": "#/components/schemas/JobBreakGlass"
+          },
+          "closed": {
+            "$ref": "#/components/schemas/JobClosed"
+          },
+          "createdAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "current": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "delivery": {
+            "$ref": "#/components/schemas/JobDelivery"
+          },
+          "executor": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "location": {
+            "$ref": "#/components/schemas/JobLocation"
+          },
+          "namespace": {
+            "type": "string"
+          },
+          "operation": {
+            "type": "string"
+          },
+          "phases": {
+            "items": {
+              "$ref": "#/components/schemas/JobPhase"
+            },
+            "type": "array"
+          },
+          "pool": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "startedBy": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string"
+          },
+          "steps": {
+            "items": {
+              "$ref": "#/components/schemas/JobStep"
+            },
+            "type": "array"
+          },
+          "unit": {
+            "$ref": "#/components/schemas/JobUnit"
+          },
+          "updatedAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "verification": {
+            "type": "string"
+          },
+          "version": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "wait": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "createdAt",
+          "current",
+          "executor",
+          "id",
+          "location",
+          "namespace",
+          "operation",
+          "phases",
+          "state",
+          "steps",
+          "unit",
+          "updatedAt",
+          "version"
+        ],
+        "type": "object"
+      },
+      "JobApproval": {
+        "properties": {
+          "agent": {
+            "type": "string"
+          },
+          "at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "comment": {
+            "type": "string"
+          },
+          "gate": {
+            "type": "string"
+          },
+          "subject": {
+            "type": "string"
+          },
+          "verdict": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "at",
+          "gate",
+          "subject",
+          "verdict"
+        ],
+        "type": "object"
+      },
+      "JobBreakGlass": {
+        "properties": {
+          "freeze": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "freeze",
+          "reason"
+        ],
+        "type": "object"
+      },
+      "JobClosed": {
+        "properties": {
+          "at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "commit": {
+            "type": "string"
+          },
+          "versionID": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "at",
+          "versionID"
+        ],
+        "type": "object"
+      },
+      "JobDelivery": {
+        "properties": {
+          "branch": {
+            "type": "string"
+          },
+          "commit": {
+            "type": "string"
+          },
+          "deliveredAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "delivery": {
+            "type": "string"
+          },
+          "mergedAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "reviewRequest": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "delivery"
+        ],
+        "type": "object"
+      },
+      "JobGate": {
+        "properties": {
+          "allowSelf": {
+            "type": "boolean"
+          },
+          "approvals": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "bindPlan": {
+            "type": "boolean"
+          },
+          "groups": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "type": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "allowSelf",
+          "approvals",
+          "bindPlan",
+          "type"
+        ],
+        "type": "object"
+      },
+      "JobLocation": {
+        "properties": {
+          "connection": {
+            "type": "string"
+          },
+          "directory": {
+            "type": "string"
+          },
+          "ref": {
+            "type": "string"
+          },
+          "repository": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "JobLog": {
+        "properties": {
+          "closed": {
+            "type": "boolean"
+          },
+          "id": {
+            "type": "string"
+          },
+          "redacted": {
+            "type": "boolean"
+          },
+          "size": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "version": {
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "closed",
+          "id",
+          "redacted",
+          "size",
+          "version"
+        ],
+        "type": "object"
+      },
+      "JobPhase": {
+        "properties": {
+          "approvals": {
+            "items": {
+              "$ref": "#/components/schemas/JobApproval"
+            },
+            "type": "array"
+          },
+          "claims": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "executor": {
+            "type": "string"
+          },
+          "finishedAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "gates": {
+            "items": {
+              "$ref": "#/components/schemas/JobGate"
+            },
+            "type": "array"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "plan": {
+            "$ref": "#/components/schemas/JobPlan"
+          },
+          "startedAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "stateVersion": {
+            "type": "string"
+          },
+          "steps": {
+            "items": {
+              "$ref": "#/components/schemas/JobStepRecord"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "approvals",
+          "claims",
+          "gates",
+          "kind",
+          "steps"
+        ],
+        "type": "object"
+      },
+      "JobPlan": {
+        "properties": {
+          "createdAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "expiresAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "parts": {
+            "items": {
+              "$ref": "#/components/schemas/JobPlanPart"
+            },
+            "type": "array"
+          },
+          "redactedAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "stateVersion": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "createdAt",
+          "id",
+          "parts",
+          "stateVersion"
+        ],
+        "type": "object"
+      },
+      "JobPlanPart": {
+        "properties": {
+          "kind": {
+            "type": "string"
+          },
+          "secret": {
+            "type": "boolean"
+          },
+          "sha256": {
+            "type": "string"
+          },
+          "size": {
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "kind",
+          "secret",
+          "sha256",
+          "size"
+        ],
+        "type": "object"
+      },
+      "JobStep": {
+        "properties": {
+          "changesResources": {
+            "type": "boolean"
+          },
+          "name": {
+            "type": "string"
+          },
+          "phase": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "changesResources",
+          "name",
+          "phase",
+          "role"
+        ],
+        "type": "object"
+      },
+      "JobStepRecord": {
+        "properties": {
+          "exitCode": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "finishedAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "log": {
+            "$ref": "#/components/schemas/JobLog"
+          },
+          "name": {
+            "type": "string"
+          },
+          "startedAt": {
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "exitCode",
+          "name"
+        ],
+        "type": "object"
+      },
+      "JobUnit": {
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "tool": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "tool"
+        ],
+        "type": "object"
+      },
+      "ListApprovalRulesResponse": {
+        "properties": {
+          "rules": {
+            "items": {
+              "$ref": "#/components/schemas/ApprovalRule"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "rules"
+        ],
+        "type": "object"
+      },
+      "ListCollectionsResponse": {
+        "properties": {
+          "collections": {
+            "items": {
+              "$ref": "#/components/schemas/Collection"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "collections"
+        ],
+        "type": "object"
+      },
+      "ListDeletedUnitsResponse": {
+        "properties": {
+          "nextPageToken": {
+            "type": "string"
+          },
+          "total": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "units": {
+            "items": {
+              "$ref": "#/components/schemas/DeletedUnit"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "total",
+          "units"
+        ],
+        "type": "object"
+      },
+      "ListGitHostConnectionsResponse": {
+        "properties": {
+          "connections": {
+            "items": {
+              "$ref": "#/components/schemas/GitHostConnection"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "connections"
+        ],
+        "type": "object"
+      },
+      "ListGitHostInstallationsResponse": {
+        "properties": {
+          "installations": {
+            "items": {
+              "$ref": "#/components/schemas/GitHostInstallation"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "installations"
+        ],
+        "type": "object"
+      },
+      "ListNotificationSinksResponse": {
+        "properties": {
+          "sinks": {
+            "items": {
+              "$ref": "#/components/schemas/NotificationSink"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "sinks"
+        ],
+        "type": "object"
+      },
+      "ListProfileRevisionsResponse": {
+        "properties": {
+          "nextPageToken": {
+            "type": "string"
+          },
+          "revisions": {
+            "items": {
+              "$ref": "#/components/schemas/ProfileRevision"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "revisions"
+        ],
+        "type": "object"
+      },
+      "ListProfilesResponse": {
+        "properties": {
+          "nextPageToken": {
+            "type": "string"
+          },
+          "profiles": {
+            "items": {
+              "$ref": "#/components/schemas/Profile"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "profiles"
+        ],
+        "type": "object"
+      },
+      "ListProviderReleasesResponse": {
+        "properties": {
+          "releases": {
+            "items": {
+              "$ref": "#/components/schemas/ProviderRelease"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "releases"
+        ],
+        "type": "object"
+      },
+      "ListRegistryKeysResponse": {
+        "properties": {
+          "keys": {
+            "items": {
+              "$ref": "#/components/schemas/RegistryKey"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "keys"
+        ],
+        "type": "object"
+      },
+      "ListUnitsResponse": {
+        "properties": {
+          "nextPageToken": {
+            "type": "string"
+          },
+          "units": {
+            "items": {
+              "$ref": "#/components/schemas/Unit"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "units"
+        ],
+        "type": "object"
+      },
+      "ListViewsResponse": {
+        "properties": {
+          "views": {
+            "items": {
+              "$ref": "#/components/schemas/View"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "views"
+        ],
+        "type": "object"
+      },
+      "LockRequest": {
+        "properties": {
+          "reason": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "reason"
+        ],
+        "type": "object"
+      },
+      "ManualLock": {
+        "properties": {
+          "holder": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "object": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "since": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "holder",
+          "kind",
+          "object",
+          "reason",
+          "since"
+        ],
+        "type": "object"
+      },
+      "NotificationSink": {
+        "properties": {
+          "createdBy": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "namespace": {
+            "type": "string"
+          },
+          "platform": {
+            "type": "string"
+          },
+          "target": {
+            "type": "string"
+          },
+          "urlSet": {
+            "type": "boolean"
+          },
+          "version": {
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "createdBy",
+          "id",
+          "kind",
+          "name",
+          "namespace",
+          "target",
+          "urlSet",
+          "version"
+        ],
+        "type": "object"
+      },
+      "NotificationSinkTest": {
+        "properties": {
+          "class": {
+            "type": "string"
+          },
+          "delivered": {
+            "type": "boolean"
+          },
+          "message": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "delivered",
+          "message"
+        ],
+        "type": "object"
+      },
+      "Preferences": {
+        "properties": {
+          "colorMode": {
+            "type": "string"
+          },
+          "dateStyle": {
+            "type": "string"
+          },
+          "digits": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "firstDayOfWeek": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "formattingLocale": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "hourCycle": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "language": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "resolvedLanguage": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "shortcutHintStyle": {
+            "type": "string"
+          },
+          "shortcutHints": {
+            "type": "string"
+          },
+          "singleKeyShortcuts": {
+            "type": "string"
+          },
+          "terminalSchemes": {
+            "$ref": "#/components/schemas/TerminalSchemes"
+          },
+          "theme": {
+            "type": "string"
+          },
+          "timeZone": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "updatedAt": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "colorMode",
+          "dateStyle",
+          "digits",
+          "firstDayOfWeek",
+          "formattingLocale",
+          "hourCycle",
+          "language",
+          "resolvedLanguage",
+          "shortcutHintStyle",
+          "shortcutHints",
+          "singleKeyShortcuts",
+          "terminalSchemes",
+          "theme",
+          "timeZone",
+          "updatedAt"
+        ],
+        "type": "object"
+      },
+      "Profile": {
+        "properties": {
+          "createdAt": {
+            "type": "string"
+          },
+          "createdBy": {
+            "type": "string"
+          },
+          "etag": {
+            "type": "string"
+          },
+          "folder": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "latestRevision": {
+            "$ref": "#/components/schemas/ProfileRevision"
+          },
+          "name": {
+            "type": "string"
+          },
+          "namespace": {
+            "type": "string"
+          },
+          "revision": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "updatedAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "createdAt",
+          "createdBy",
+          "etag",
+          "id",
+          "name",
+          "namespace",
+          "revision",
+          "updatedAt"
+        ],
+        "type": "object"
+      },
+      "ProfileEntry": {
+        "properties": {
+          "description": {
+            "type": "string"
+          },
+          "final": {
+            "type": "boolean"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "neverStore": {
+            "type": "boolean"
+          },
+          "path": {
+            "type": "string"
+          },
+          "secret": {
+            "type": "boolean"
+          },
+          "value": {
+            "description": "Any JSON value."
+          }
+        },
+        "required": [
+          "path",
+          "secret"
+        ],
+        "type": "object"
+      },
+      "ProfileRevision": {
+        "properties": {
+          "author": {
+            "type": "string"
+          },
+          "createdAt": {
+            "type": "string"
+          },
+          "document": {
+            "type": "string"
+          },
+          "entries": {
+            "items": {
+              "$ref": "#/components/schemas/ProfileEntry"
+            },
+            "type": "array"
+          },
+          "profile": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "revision": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "sha256": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "author",
+          "createdAt",
+          "profile",
+          "revision",
+          "sha256"
+        ],
+        "type": "object"
+      },
+      "ProviderRelease": {
+        "properties": {
+          "files": {
+            "items": {
+              "$ref": "#/components/schemas/ProviderReleaseFile"
+            },
+            "type": "array"
+          },
+          "keyFingerprint": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "namespace": {
+            "type": "string"
+          },
+          "protocols": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "publishedAt": {
+            "type": "string"
+          },
+          "publishedBy": {
+            "type": "string"
+          },
+          "version": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "files",
+          "keyFingerprint",
+          "name",
+          "namespace",
+          "protocols",
+          "publishedAt",
+          "publishedBy",
+          "version"
+        ],
+        "type": "object"
+      },
+      "ProviderReleaseFile": {
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "platform": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string"
+          },
+          "sha256": {
+            "type": "string"
+          },
+          "size": {
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "name",
+          "role",
+          "sha256"
+        ],
+        "type": "object"
+      },
+      "PublishFile": {
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string"
+          },
+          "upload": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "role",
+          "upload"
+        ],
+        "type": "object"
+      },
+      "PublishProviderReleaseRequest": {
+        "properties": {
+          "files": {
+            "items": {
+              "$ref": "#/components/schemas/PublishFile"
+            },
+            "type": "array"
+          },
+          "protocols": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "files",
+          "protocols"
+        ],
+        "type": "object"
+      },
+      "PutGitHostAppRequest": {
+        "properties": {
+          "apiAddress": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "appID": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "eventSecret": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "privateKey": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "apiAddress",
+          "appID",
+          "eventSecret",
+          "privateKey"
+        ],
+        "type": "object"
+      },
+      "PutGitHostInstallationRequest": {
+        "properties": {
+          "namespace": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "namespace"
+        ],
+        "type": "object"
+      },
+      "RegistryKey": {
+        "properties": {
+          "addedAt": {
+            "type": "string"
+          },
+          "addedBy": {
+            "type": "string"
+          },
+          "armoredPublicKey": {
+            "type": "string"
+          },
+          "fingerprint": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "addedAt",
+          "addedBy",
+          "armoredPublicKey",
+          "fingerprint"
+        ],
+        "type": "object"
+      },
+      "ReplaceNotificationSinkRequest": {
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "target": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          },
+          "version": {
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "name",
+          "version"
+        ],
+        "type": "object"
+      },
+      "StagedUpload": {
+        "properties": {
+          "sha256": {
+            "type": "string"
+          },
+          "size": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "upload": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "sha256",
+          "size",
+          "upload"
+        ],
+        "type": "object"
+      },
+      "TerminalSchemes": {
+        "properties": {
+          "dark": {
+            "type": "string"
+          },
+          "light": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "dark",
+          "light"
+        ],
+        "type": "object"
+      },
+      "TerminalSchemesPatch": {
+        "properties": {
+          "dark": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "light": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "Unit": {
+        "properties": {
+          "collection": {
+            "type": "string"
+          },
+          "consoleUrl": {
+            "type": "string"
+          },
+          "labels": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "lastChange": {
+            "type": "string"
+          },
+          "lock": {
+            "$ref": "#/components/schemas/UnitLock"
+          },
+          "manualLock": {
+            "$ref": "#/components/schemas/ManualLock"
+          },
+          "name": {
+            "type": "string"
+          },
+          "namespace": {
+            "type": "string"
+          },
+          "reference": {
+            "type": "string"
+          },
+          "resourceCount": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "states": {
+            "items": {
+              "$ref": "#/components/schemas/UnitState"
+            },
+            "type": "array"
+          },
+          "status": {
+            "type": "string"
+          },
+          "tool": {
+            "type": "string"
+          },
+          "unitID": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "lastChange",
+          "name",
+          "namespace",
+          "reference",
+          "states",
+          "tool",
+          "unitID"
+        ],
+        "type": "object"
+      },
+      "UnitLock": {
+        "properties": {
+          "holder": {
+            "type": "string"
+          },
+          "operation": {
+            "type": "string"
+          },
+          "since": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "holder",
+          "operation",
+          "since"
+        ],
+        "type": "object"
+      },
+      "UnitState": {
+        "properties": {
+          "since": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "since",
+          "state"
+        ],
+        "type": "object"
+      },
+      "UpdateContextRequest": {
+        "properties": {
+          "links": {
+            "items": {
+              "$ref": "#/components/schemas/ContextLink"
+            },
+            "type": "array"
+          },
+          "onCall": {
+            "type": "string"
+          },
+          "owners": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "runbook": {
+            "type": "string"
+          },
+          "summary": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "UpdatePreferencesRequest": {
+        "properties": {
+          "colorMode": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "dateStyle": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "digits": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "firstDayOfWeek": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "formattingLocale": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "hourCycle": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "language": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "resolvedLanguage": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "shortcutHintStyle": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "shortcutHints": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "singleKeyShortcuts": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "terminalSchemes": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/TerminalSchemesPatch"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "theme": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "timeZone": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "View": {
+        "properties": {
+          "createdAt": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "namespace": {
+            "type": "string"
+          },
+          "query": {
+            "$ref": "#/components/schemas/ViewQuery"
+          }
+        },
+        "required": [
+          "createdAt",
+          "id",
+          "name",
+          "namespace",
+          "query"
+        ],
+        "type": "object"
+      },
+      "ViewLabel": {
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "value": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "key",
+          "value"
+        ],
+        "type": "object"
+      },
+      "ViewQuery": {
+        "properties": {
+          "labels": {
+            "items": {
+              "$ref": "#/components/schemas/ViewLabel"
+            },
+            "type": "array"
+          },
+          "references": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "labels",
+          "references"
+        ],
+        "type": "object"
       }
     },
     "securitySchemes": {
@@ -76,7 +2447,7 @@
     }
   },
   "info": {
-    "description": "The tool-neutral REST API of an OpenDustpan server. The description covers the paths under /api/dustpan/v1/ only. A body is a generic JSON object.",
+    "description": "The tool-neutral REST API of an OpenDustpan server. The description covers the paths under /api/dustpan/v1/ only. A body has the schema of the Go type that the route names.",
     "title": "OpenDustpan REST API",
     "version": "0.1.0"
   },
@@ -90,8 +2461,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
-                  "type": "object"
+                  "$ref": "#/components/schemas/Capabilities"
                 }
               }
             },
@@ -136,14 +2506,6 @@
         ],
         "responses": {
           "2XX": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "additionalProperties": true,
-                  "type": "object"
-                }
-              }
-            },
             "description": "The request succeeded."
           },
           "default": {
@@ -161,7 +2523,10 @@
           "git-host"
         ],
         "x-dustpan-actions": [
-          "server:manage-git-host"
+          {
+            "action": "server:manage-git-host",
+            "object": "server"
+          }
         ]
       },
       "get": {
@@ -181,8 +2546,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
-                  "type": "object"
+                  "$ref": "#/components/schemas/GitHostApp"
                 }
               }
             },
@@ -208,7 +2572,10 @@
           "git-host"
         ],
         "x-dustpan-actions": [
-          "server:read-git-host"
+          {
+            "action": "server:read-git-host",
+            "object": "server"
+          }
         ]
       },
       "put": {
@@ -233,19 +2600,18 @@
           "content": {
             "application/json": {
               "schema": {
-                "additionalProperties": true,
-                "type": "object"
+                "$ref": "#/components/schemas/PutGitHostAppRequest"
               }
             }
-          }
+          },
+          "required": true
         },
         "responses": {
           "2XX": {
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
-                  "type": "object"
+                  "$ref": "#/components/schemas/GitHostApp"
                 }
               }
             },
@@ -271,7 +2637,10 @@
           "git-host"
         ],
         "x-dustpan-actions": [
-          "server:manage-git-host"
+          {
+            "action": "server:manage-git-host",
+            "object": "server"
+          }
         ]
       }
     },
@@ -283,8 +2652,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
-                  "type": "object"
+                  "$ref": "#/components/schemas/ListGitHostInstallationsResponse"
                 }
               }
             },
@@ -305,7 +2673,10 @@
           "git-host"
         ],
         "x-dustpan-actions": [
-          "server:read-git-host"
+          {
+            "action": "server:read-git-host",
+            "object": "server"
+          }
         ]
       }
     },
@@ -330,14 +2701,6 @@
         ],
         "responses": {
           "2XX": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "additionalProperties": true,
-                  "type": "object"
-                }
-              }
-            },
             "description": "The request succeeded."
           },
           "default": {
@@ -355,7 +2718,10 @@
           "git-host"
         ],
         "x-dustpan-actions": [
-          "server:manage-git-host"
+          {
+            "action": "server:manage-git-host",
+            "object": "server"
+          }
         ]
       },
       "get": {
@@ -375,8 +2741,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
-                  "type": "object"
+                  "$ref": "#/components/schemas/GitHostInstallation"
                 }
               }
             },
@@ -402,7 +2767,10 @@
           "git-host"
         ],
         "x-dustpan-actions": [
-          "server:read-git-host"
+          {
+            "action": "server:read-git-host",
+            "object": "server"
+          }
         ]
       },
       "put": {
@@ -427,19 +2795,18 @@
           "content": {
             "application/json": {
               "schema": {
-                "additionalProperties": true,
-                "type": "object"
+                "$ref": "#/components/schemas/PutGitHostInstallationRequest"
               }
             }
-          }
+          },
+          "required": true
         },
         "responses": {
           "2XX": {
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
-                  "type": "object"
+                  "$ref": "#/components/schemas/GitHostInstallation"
                 }
               }
             },
@@ -465,7 +2832,10 @@
           "git-host"
         ],
         "x-dustpan-actions": [
-          "server:manage-git-host"
+          {
+            "action": "server:manage-git-host",
+            "object": "server"
+          }
         ]
       }
     },
@@ -477,8 +2847,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
-                  "type": "object"
+                  "$ref": "#/components/schemas/Preferences"
                 }
               }
             },
@@ -504,7 +2873,10 @@
           "preferences"
         ],
         "x-dustpan-actions": [
-          "caller:read"
+          {
+            "action": "caller:read",
+            "object": "caller"
+          }
         ]
       },
       "patch": {
@@ -518,19 +2890,18 @@
           "content": {
             "application/merge-patch+json": {
               "schema": {
-                "additionalProperties": true,
-                "type": "object"
+                "$ref": "#/components/schemas/UpdatePreferencesRequest"
               }
             }
-          }
+          },
+          "required": true
         },
         "responses": {
           "2XX": {
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
-                  "type": "object"
+                  "$ref": "#/components/schemas/Preferences"
                 }
               }
             },
@@ -556,7 +2927,10 @@
           "preferences"
         ],
         "x-dustpan-actions": [
-          "caller:manage-preferences"
+          {
+            "action": "caller:manage-preferences",
+            "object": "caller"
+          }
         ]
       }
     },
@@ -578,14 +2952,6 @@
         ],
         "responses": {
           "2XX": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "additionalProperties": true,
-                  "type": "object"
-                }
-              }
-            },
             "description": "The request succeeded."
           },
           "default": {
@@ -603,7 +2969,10 @@
           "approvals"
         ],
         "x-dustpan-actions": [
-          "namespace:manage-gates"
+          {
+            "action": "namespace:manage-gates",
+            "object": "namespace"
+          }
         ]
       },
       "get": {
@@ -623,8 +2992,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
-                  "type": "object"
+                  "$ref": "#/components/schemas/ApprovalDefault"
                 }
               }
             },
@@ -650,7 +3018,10 @@
           "approvals"
         ],
         "x-dustpan-actions": [
-          "namespace:read-gates"
+          {
+            "action": "namespace:read-gates",
+            "object": "namespace"
+          }
         ]
       },
       "put": {
@@ -672,19 +3043,18 @@
           "content": {
             "application/json": {
               "schema": {
-                "additionalProperties": true,
-                "type": "object"
+                "$ref": "#/components/schemas/ApprovalDefault"
               }
             }
-          }
+          },
+          "required": true
         },
         "responses": {
           "2XX": {
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
-                  "type": "object"
+                  "$ref": "#/components/schemas/ApprovalDefault"
                 }
               }
             },
@@ -710,7 +3080,10 @@
           "approvals"
         ],
         "x-dustpan-actions": [
-          "namespace:manage-gates"
+          {
+            "action": "namespace:manage-gates",
+            "object": "namespace"
+          }
         ]
       }
     },
@@ -732,8 +3105,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
-                  "type": "object"
+                  "$ref": "#/components/schemas/ListApprovalRulesResponse"
                 }
               }
             },
@@ -754,7 +3126,10 @@
           "approvals"
         ],
         "x-dustpan-actions": [
-          "namespace:read-gates"
+          {
+            "action": "namespace:read-gates",
+            "object": "namespace"
+          }
         ]
       }
     },
@@ -784,14 +3159,6 @@
         ],
         "responses": {
           "2XX": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "additionalProperties": true,
-                  "type": "object"
-                }
-              }
-            },
             "description": "The request succeeded."
           },
           "default": {
@@ -809,7 +3176,10 @@
           "approvals"
         ],
         "x-dustpan-actions": [
-          "namespace:manage-gates"
+          {
+            "action": "namespace:manage-gates",
+            "object": "namespace"
+          }
         ]
       },
       "get": {
@@ -837,8 +3207,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
-                  "type": "object"
+                  "$ref": "#/components/schemas/ApprovalRule"
                 }
               }
             },
@@ -864,7 +3233,10 @@
           "approvals"
         ],
         "x-dustpan-actions": [
-          "namespace:read-gates"
+          {
+            "action": "namespace:read-gates",
+            "object": "namespace"
+          }
         ]
       },
       "put": {
@@ -894,19 +3266,18 @@
           "content": {
             "application/json": {
               "schema": {
-                "additionalProperties": true,
-                "type": "object"
+                "$ref": "#/components/schemas/ApprovalRule"
               }
             }
-          }
+          },
+          "required": true
         },
         "responses": {
           "2XX": {
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
-                  "type": "object"
+                  "$ref": "#/components/schemas/ApprovalRule"
                 }
               }
             },
@@ -932,7 +3303,10 @@
           "approvals"
         ],
         "x-dustpan-actions": [
-          "namespace:manage-gates"
+          {
+            "action": "namespace:manage-gates",
+            "object": "namespace"
+          }
         ]
       }
     },
@@ -954,8 +3328,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
-                  "type": "object"
+                  "$ref": "#/components/schemas/ListCollectionsResponse"
                 }
               }
             },
@@ -976,7 +3349,10 @@
           "collections"
         ],
         "x-dustpan-actions": [
-          "collection:read"
+          {
+            "action": "collection:read",
+            "object": "namespace"
+          }
         ]
       },
       "post": {
@@ -995,19 +3371,18 @@
           "content": {
             "application/json": {
               "schema": {
-                "additionalProperties": true,
-                "type": "object"
+                "$ref": "#/components/schemas/CreateCollectionRequest"
               }
             }
-          }
+          },
+          "required": true
         },
         "responses": {
           "2XX": {
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
-                  "type": "object"
+                  "$ref": "#/components/schemas/Collection"
                 }
               }
             },
@@ -1028,7 +3403,10 @@
           "collections"
         ],
         "x-dustpan-actions": [
-          "collection:create"
+          {
+            "action": "collection:create",
+            "object": "namespace"
+          }
         ]
       }
     },
@@ -1055,14 +3433,6 @@
         ],
         "responses": {
           "2XX": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "additionalProperties": true,
-                  "type": "object"
-                }
-              }
-            },
             "description": "The request succeeded."
           },
           "default": {
@@ -1080,7 +3450,10 @@
           "collections"
         ],
         "x-dustpan-actions": [
-          "collection:delete"
+          {
+            "action": "collection:delete",
+            "object": "collection"
+          }
         ]
       },
       "get": {
@@ -1108,8 +3481,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
-                  "type": "object"
+                  "$ref": "#/components/schemas/Collection"
                 }
               }
             },
@@ -1130,7 +3502,10 @@
           "collections"
         ],
         "x-dustpan-actions": [
-          "collection:read"
+          {
+            "action": "collection:read",
+            "object": "collection"
+          }
         ]
       }
     },
@@ -1157,14 +3532,6 @@
         ],
         "responses": {
           "2XX": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "additionalProperties": true,
-                  "type": "object"
-                }
-              }
-            },
             "description": "The request succeeded."
           },
           "default": {
@@ -1182,7 +3549,10 @@
           "locks"
         ],
         "x-dustpan-actions": [
-          "unit:lock"
+          {
+            "action": "unit:lock",
+            "object": "collection"
+          }
         ]
       },
       "get": {
@@ -1210,8 +3580,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
-                  "type": "object"
+                  "$ref": "#/components/schemas/ManualLock"
                 }
               }
             },
@@ -1232,7 +3601,10 @@
           "locks"
         ],
         "x-dustpan-actions": [
-          "collection:read"
+          {
+            "action": "collection:read",
+            "object": "collection"
+          }
         ]
       },
       "put": {
@@ -1259,19 +3631,18 @@
           "content": {
             "application/json": {
               "schema": {
-                "additionalProperties": true,
-                "type": "object"
+                "$ref": "#/components/schemas/LockRequest"
               }
             }
-          }
+          },
+          "required": true
         },
         "responses": {
           "2XX": {
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
-                  "type": "object"
+                  "$ref": "#/components/schemas/ManualLock"
                 }
               }
             },
@@ -1292,7 +3663,10 @@
           "locks"
         ],
         "x-dustpan-actions": [
-          "unit:lock"
+          {
+            "action": "unit:lock",
+            "object": "collection"
+          }
         ]
       }
     },
@@ -1317,26 +3691,8 @@
             }
           }
         ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "additionalProperties": true,
-                "type": "object"
-              }
-            }
-          }
-        },
         "responses": {
           "2XX": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "additionalProperties": true,
-                  "type": "object"
-                }
-              }
-            },
             "description": "The request succeeded."
           },
           "default": {
@@ -1354,7 +3710,10 @@
           "locks"
         ],
         "x-dustpan-actions": [
-          "unit:manage"
+          {
+            "action": "unit:manage",
+            "object": "collection"
+          }
         ]
       }
     },
@@ -1373,14 +3732,6 @@
         ],
         "responses": {
           "2XX": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "additionalProperties": true,
-                  "type": "object"
-                }
-              }
-            },
             "description": "The request succeeded."
           },
           "default": {
@@ -1398,8 +3749,14 @@
           "context"
         ],
         "x-dustpan-actions": [
-          "namespace:read",
-          "namespace:set-context"
+          {
+            "action": "namespace:read",
+            "object": "namespace"
+          },
+          {
+            "action": "namespace:set-context",
+            "object": "namespace"
+          }
         ]
       },
       "get": {
@@ -1419,8 +3776,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
-                  "type": "object"
+                  "$ref": "#/components/schemas/ContextDocument"
                 }
               }
             },
@@ -1441,7 +3797,10 @@
           "context"
         ],
         "x-dustpan-actions": [
-          "namespace:read"
+          {
+            "action": "namespace:read",
+            "object": "namespace"
+          }
         ]
       },
       "patch": {
@@ -1460,19 +3819,18 @@
           "content": {
             "application/merge-patch+json": {
               "schema": {
-                "additionalProperties": true,
-                "type": "object"
+                "$ref": "#/components/schemas/UpdateContextRequest"
               }
             }
-          }
+          },
+          "required": true
         },
         "responses": {
           "2XX": {
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
-                  "type": "object"
+                  "$ref": "#/components/schemas/ContextEntry"
                 }
               }
             },
@@ -1493,8 +3851,14 @@
           "context"
         ],
         "x-dustpan-actions": [
-          "namespace:read",
-          "namespace:set-context"
+          {
+            "action": "namespace:read",
+            "object": "namespace"
+          },
+          {
+            "action": "namespace:set-context",
+            "object": "namespace"
+          }
         ]
       }
     },
@@ -1516,8 +3880,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
-                  "type": "object"
+                  "$ref": "#/components/schemas/ListDeletedUnitsResponse"
                 }
               }
             },
@@ -1538,7 +3901,10 @@
           "units"
         ],
         "x-dustpan-actions": [
-          "namespace:read"
+          {
+            "action": "namespace:read",
+            "object": "namespace"
+          }
         ]
       }
     },
@@ -1560,8 +3926,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
-                  "type": "object"
+                  "$ref": "#/components/schemas/ListGitHostConnectionsResponse"
                 }
               }
             },
@@ -1582,7 +3947,10 @@
           "git-host"
         ],
         "x-dustpan-actions": [
-          "namespace:read-git-host-connections"
+          {
+            "action": "namespace:read-git-host-connections",
+            "object": "namespace"
+          }
         ]
       },
       "post": {
@@ -1604,19 +3972,18 @@
           "content": {
             "application/json": {
               "schema": {
-                "additionalProperties": true,
-                "type": "object"
+                "$ref": "#/components/schemas/CreateGitHostConnectionRequest"
               }
             }
-          }
+          },
+          "required": true
         },
         "responses": {
           "2XX": {
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
-                  "type": "object"
+                  "$ref": "#/components/schemas/GitHostConnection"
                 }
               }
             },
@@ -1642,7 +4009,10 @@
           "git-host"
         ],
         "x-dustpan-actions": [
-          "namespace:manage-git-host-connections"
+          {
+            "action": "namespace:manage-git-host-connections",
+            "object": "namespace"
+          }
         ]
       }
     },
@@ -1675,14 +4045,6 @@
         ],
         "responses": {
           "2XX": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "additionalProperties": true,
-                  "type": "object"
-                }
-              }
-            },
             "description": "The request succeeded."
           },
           "default": {
@@ -1700,7 +4062,10 @@
           "git-host"
         ],
         "x-dustpan-actions": [
-          "namespace:manage-git-host-connections"
+          {
+            "action": "namespace:manage-git-host-connections",
+            "object": "namespace"
+          }
         ]
       },
       "get": {
@@ -1728,8 +4093,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
-                  "type": "object"
+                  "$ref": "#/components/schemas/GitHostConnection"
                 }
               }
             },
@@ -1755,7 +4119,10 @@
           "git-host"
         ],
         "x-dustpan-actions": [
-          "namespace:read-git-host-connections"
+          {
+            "action": "namespace:read-git-host-connections",
+            "object": "namespace"
+          }
         ]
       }
     },
@@ -1780,23 +4147,12 @@
             }
           }
         ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "additionalProperties": true,
-                "type": "object"
-              }
-            }
-          }
-        },
         "responses": {
           "2XX": {
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
-                  "type": "object"
+                  "$ref": "#/components/schemas/GitHostCheck"
                 }
               }
             },
@@ -1817,7 +4173,10 @@
           "git-host"
         ],
         "x-dustpan-actions": [
-          "namespace:manage-git-host-connections"
+          {
+            "action": "namespace:manage-git-host-connections",
+            "object": "namespace"
+          }
         ]
       }
     },
@@ -1848,23 +4207,12 @@
             "$ref": "#/components/parameters/IfMatch"
           }
         ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "additionalProperties": true,
-                "type": "object"
-              }
-            }
-          }
-        },
         "responses": {
           "2XX": {
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
-                  "type": "object"
+                  "$ref": "#/components/schemas/GitHostConnection"
                 }
               }
             },
@@ -1890,7 +4238,10 @@
           "git-host"
         ],
         "x-dustpan-actions": [
-          "namespace:manage-git-host-connections"
+          {
+            "action": "namespace:manage-git-host-connections",
+            "object": "namespace"
+          }
         ]
       }
     },
@@ -1920,8 +4271,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
-                  "type": "object"
+                  "$ref": "#/components/schemas/Job"
                 }
               }
             },
@@ -1942,7 +4292,14 @@
           "jobs"
         ],
         "x-dustpan-actions": [
-          "job:read"
+          {
+            "action": "namespace:read",
+            "object": "namespace"
+          },
+          {
+            "action": "job:read",
+            "object": "unit"
+          }
         ]
       }
     },
@@ -1961,14 +4318,6 @@
         ],
         "responses": {
           "2XX": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "additionalProperties": true,
-                  "type": "object"
-                }
-              }
-            },
             "description": "The request succeeded."
           },
           "default": {
@@ -1986,7 +4335,10 @@
           "locks"
         ],
         "x-dustpan-actions": [
-          "unit:lock"
+          {
+            "action": "unit:lock",
+            "object": "namespace"
+          }
         ]
       },
       "get": {
@@ -2006,8 +4358,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
-                  "type": "object"
+                  "$ref": "#/components/schemas/ManualLock"
                 }
               }
             },
@@ -2028,7 +4379,10 @@
           "locks"
         ],
         "x-dustpan-actions": [
-          "namespace:read"
+          {
+            "action": "namespace:read",
+            "object": "namespace"
+          }
         ]
       },
       "put": {
@@ -2047,19 +4401,18 @@
           "content": {
             "application/json": {
               "schema": {
-                "additionalProperties": true,
-                "type": "object"
+                "$ref": "#/components/schemas/LockRequest"
               }
             }
-          }
+          },
+          "required": true
         },
         "responses": {
           "2XX": {
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
-                  "type": "object"
+                  "$ref": "#/components/schemas/ManualLock"
                 }
               }
             },
@@ -2080,7 +4433,10 @@
           "locks"
         ],
         "x-dustpan-actions": [
-          "unit:lock"
+          {
+            "action": "unit:lock",
+            "object": "namespace"
+          }
         ]
       }
     },
@@ -2097,26 +4453,8 @@
             }
           }
         ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "additionalProperties": true,
-                "type": "object"
-              }
-            }
-          }
-        },
         "responses": {
           "2XX": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "additionalProperties": true,
-                  "type": "object"
-                }
-              }
-            },
             "description": "The request succeeded."
           },
           "default": {
@@ -2134,7 +4472,10 @@
           "locks"
         ],
         "x-dustpan-actions": [
-          "unit:manage"
+          {
+            "action": "unit:manage",
+            "object": "namespace"
+          }
         ]
       }
     },
@@ -2156,8 +4497,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
-                  "type": "object"
+                  "$ref": "#/components/schemas/ListProfilesResponse"
                 }
               }
             },
@@ -2178,7 +4518,10 @@
           "profiles"
         ],
         "x-dustpan-actions": [
-          "profile:read"
+          {
+            "action": "profile:read",
+            "object": "namespace"
+          }
         ]
       },
       "post": {
@@ -2200,19 +4543,18 @@
           "content": {
             "application/json": {
               "schema": {
-                "additionalProperties": true,
-                "type": "object"
+                "$ref": "#/components/schemas/CreateProfileRequest"
               }
             }
-          }
+          },
+          "required": true
         },
         "responses": {
           "2XX": {
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
-                  "type": "object"
+                  "$ref": "#/components/schemas/Profile"
                 }
               }
             },
@@ -2238,7 +4580,10 @@
           "profiles"
         ],
         "x-dustpan-actions": [
-          "profile:write"
+          {
+            "action": "profile:write",
+            "object": "namespace"
+          }
         ]
       }
     },
@@ -2271,14 +4616,6 @@
         ],
         "responses": {
           "2XX": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "additionalProperties": true,
-                  "type": "object"
-                }
-              }
-            },
             "description": "The request succeeded."
           },
           "default": {
@@ -2296,7 +4633,10 @@
           "profiles"
         ],
         "x-dustpan-actions": [
-          "profile:manage"
+          {
+            "action": "profile:manage",
+            "object": "namespace"
+          }
         ]
       },
       "get": {
@@ -2324,8 +4664,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
-                  "type": "object"
+                  "$ref": "#/components/schemas/Profile"
                 }
               }
             },
@@ -2351,7 +4690,10 @@
           "profiles"
         ],
         "x-dustpan-actions": [
-          "profile:read"
+          {
+            "action": "profile:read",
+            "object": "namespace"
+          }
         ]
       }
     },
@@ -2381,8 +4723,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
-                  "type": "object"
+                  "$ref": "#/components/schemas/ListProfileRevisionsResponse"
                 }
               }
             },
@@ -2403,7 +4744,10 @@
           "profiles"
         ],
         "x-dustpan-actions": [
-          "profile:read"
+          {
+            "action": "profile:read",
+            "object": "namespace"
+          }
         ]
       },
       "post": {
@@ -2436,19 +4780,18 @@
           "content": {
             "application/json": {
               "schema": {
-                "additionalProperties": true,
-                "type": "object"
+                "$ref": "#/components/schemas/CreateProfileRevisionRequest"
               }
             }
-          }
+          },
+          "required": true
         },
         "responses": {
           "2XX": {
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
-                  "type": "object"
+                  "$ref": "#/components/schemas/Profile"
                 }
               }
             },
@@ -2474,7 +4817,10 @@
           "profiles"
         ],
         "x-dustpan-actions": [
-          "profile:write"
+          {
+            "action": "profile:write",
+            "object": "namespace"
+          }
         ]
       }
     },
@@ -2512,8 +4858,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
-                  "type": "object"
+                  "$ref": "#/components/schemas/ProfileRevision"
                 }
               }
             },
@@ -2539,7 +4884,10 @@
           "profiles"
         ],
         "x-dustpan-actions": [
-          "profile:read"
+          {
+            "action": "profile:read",
+            "object": "namespace"
+          }
         ]
       }
     },
@@ -2561,8 +4909,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
-                  "type": "object"
+                  "$ref": "#/components/schemas/ListRegistryKeysResponse"
                 }
               }
             },
@@ -2583,7 +4930,10 @@
           "registry"
         ],
         "x-dustpan-actions": [
-          "registry:manage-keys"
+          {
+            "action": "registry:manage-keys",
+            "object": "namespace"
+          }
         ]
       },
       "post": {
@@ -2605,19 +4955,18 @@
           "content": {
             "application/json": {
               "schema": {
-                "additionalProperties": true,
-                "type": "object"
+                "$ref": "#/components/schemas/AddRegistryKeyRequest"
               }
             }
-          }
+          },
+          "required": true
         },
         "responses": {
           "2XX": {
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
-                  "type": "object"
+                  "$ref": "#/components/schemas/RegistryKey"
                 }
               }
             },
@@ -2638,7 +4987,10 @@
           "registry"
         ],
         "x-dustpan-actions": [
-          "registry:manage-keys"
+          {
+            "action": "registry:manage-keys",
+            "object": "namespace"
+          }
         ]
       }
     },
@@ -2668,14 +5020,6 @@
         ],
         "responses": {
           "2XX": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "additionalProperties": true,
-                  "type": "object"
-                }
-              }
-            },
             "description": "The request succeeded."
           },
           "default": {
@@ -2693,7 +5037,10 @@
           "registry"
         ],
         "x-dustpan-actions": [
-          "registry:manage-keys"
+          {
+            "action": "registry:manage-keys",
+            "object": "namespace"
+          }
         ]
       }
     },
@@ -2723,8 +5070,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
-                  "type": "object"
+                  "$ref": "#/components/schemas/ListProviderReleasesResponse"
                 }
               }
             },
@@ -2745,7 +5091,10 @@
           "registry"
         ],
         "x-dustpan-actions": [
-          "registry:read"
+          {
+            "action": "registry:read",
+            "object": "namespace"
+          }
         ]
       }
     },
@@ -2783,8 +5132,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
-                  "type": "object"
+                  "$ref": "#/components/schemas/ProviderRelease"
                 }
               }
             },
@@ -2805,7 +5153,10 @@
           "registry"
         ],
         "x-dustpan-actions": [
-          "registry:read"
+          {
+            "action": "registry:read",
+            "object": "namespace"
+          }
         ]
       },
       "put": {
@@ -2843,19 +5194,18 @@
           "content": {
             "application/json": {
               "schema": {
-                "additionalProperties": true,
-                "type": "object"
+                "$ref": "#/components/schemas/PublishProviderReleaseRequest"
               }
             }
-          }
+          },
+          "required": true
         },
         "responses": {
           "2XX": {
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
-                  "type": "object"
+                  "$ref": "#/components/schemas/ProviderRelease"
                 }
               }
             },
@@ -2876,7 +5226,10 @@
           "registry"
         ],
         "x-dustpan-actions": [
-          "registry:publish"
+          {
+            "action": "registry:publish",
+            "object": "namespace"
+          }
         ]
       }
     },
@@ -2893,23 +5246,12 @@
             }
           }
         ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "additionalProperties": true,
-                "type": "object"
-              }
-            }
-          }
-        },
         "responses": {
           "2XX": {
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
-                  "type": "object"
+                  "$ref": "#/components/schemas/StagedUpload"
                 }
               }
             },
@@ -2930,7 +5272,10 @@
           "registry"
         ],
         "x-dustpan-actions": [
-          "registry:publish"
+          {
+            "action": "registry:publish",
+            "object": "namespace"
+          }
         ]
       }
     },
@@ -2952,8 +5297,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
-                  "type": "object"
+                  "$ref": "#/components/schemas/ListNotificationSinksResponse"
                 }
               }
             },
@@ -2974,7 +5318,10 @@
           "notification-sinks"
         ],
         "x-dustpan-actions": [
-          "namespace:read"
+          {
+            "action": "namespace:read",
+            "object": "namespace"
+          }
         ]
       },
       "post": {
@@ -2996,19 +5343,18 @@
           "content": {
             "application/json": {
               "schema": {
-                "additionalProperties": true,
-                "type": "object"
+                "$ref": "#/components/schemas/CreateNotificationSinkRequest"
               }
             }
-          }
+          },
+          "required": true
         },
         "responses": {
           "2XX": {
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
-                  "type": "object"
+                  "$ref": "#/components/schemas/CreatedNotificationSink"
                 }
               }
             },
@@ -3029,7 +5375,10 @@
           "notification-sinks"
         ],
         "x-dustpan-actions": [
-          "namespace:manage-notifications"
+          {
+            "action": "namespace:manage-notifications",
+            "object": "namespace"
+          }
         ]
       }
     },
@@ -3059,14 +5408,6 @@
         ],
         "responses": {
           "2XX": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "additionalProperties": true,
-                  "type": "object"
-                }
-              }
-            },
             "description": "The request succeeded."
           },
           "default": {
@@ -3084,7 +5425,10 @@
           "notification-sinks"
         ],
         "x-dustpan-actions": [
-          "namespace:manage-notifications"
+          {
+            "action": "namespace:manage-notifications",
+            "object": "namespace"
+          }
         ]
       },
       "get": {
@@ -3112,8 +5456,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
-                  "type": "object"
+                  "$ref": "#/components/schemas/NotificationSink"
                 }
               }
             },
@@ -3134,7 +5477,10 @@
           "notification-sinks"
         ],
         "x-dustpan-actions": [
-          "namespace:read"
+          {
+            "action": "namespace:read",
+            "object": "namespace"
+          }
         ]
       },
       "put": {
@@ -3164,19 +5510,18 @@
           "content": {
             "application/json": {
               "schema": {
-                "additionalProperties": true,
-                "type": "object"
+                "$ref": "#/components/schemas/ReplaceNotificationSinkRequest"
               }
             }
-          }
+          },
+          "required": true
         },
         "responses": {
           "2XX": {
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
-                  "type": "object"
+                  "$ref": "#/components/schemas/NotificationSink"
                 }
               }
             },
@@ -3197,7 +5542,10 @@
           "notification-sinks"
         ],
         "x-dustpan-actions": [
-          "namespace:manage-notifications"
+          {
+            "action": "namespace:manage-notifications",
+            "object": "namespace"
+          }
         ]
       }
     },
@@ -3225,23 +5573,12 @@
             "$ref": "#/components/parameters/IdempotencyKey"
           }
         ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "additionalProperties": true,
-                "type": "object"
-              }
-            }
-          }
-        },
         "responses": {
           "2XX": {
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
-                  "type": "object"
+                  "$ref": "#/components/schemas/NotificationSinkTest"
                 }
               }
             },
@@ -3262,7 +5599,10 @@
           "notification-sinks"
         ],
         "x-dustpan-actions": [
-          "namespace:manage-notifications"
+          {
+            "action": "namespace:manage-notifications",
+            "object": "namespace"
+          }
         ]
       }
     },
@@ -3284,8 +5624,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
-                  "type": "object"
+                  "$ref": "#/components/schemas/ListUnitsResponse"
                 }
               }
             },
@@ -3306,7 +5645,10 @@
           "units"
         ],
         "x-dustpan-actions": [
-          "namespace:read"
+          {
+            "action": "namespace:read",
+            "object": "namespace"
+          }
         ]
       }
     },
@@ -3333,14 +5675,6 @@
         ],
         "responses": {
           "2XX": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "additionalProperties": true,
-                  "type": "object"
-                }
-              }
-            },
             "description": "The request succeeded."
           },
           "default": {
@@ -3358,8 +5692,18 @@
           "context"
         ],
         "x-dustpan-actions": [
-          "unit:read",
-          "unit:set-context"
+          {
+            "action": "namespace:read",
+            "object": "namespace"
+          },
+          {
+            "action": "unit:read",
+            "object": "unit"
+          },
+          {
+            "action": "unit:set-context",
+            "object": "unit"
+          }
         ]
       },
       "get": {
@@ -3387,8 +5731,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
-                  "type": "object"
+                  "$ref": "#/components/schemas/ContextDocument"
                 }
               }
             },
@@ -3409,7 +5752,14 @@
           "context"
         ],
         "x-dustpan-actions": [
-          "unit:read"
+          {
+            "action": "namespace:read",
+            "object": "namespace"
+          },
+          {
+            "action": "unit:read",
+            "object": "unit"
+          }
         ]
       },
       "patch": {
@@ -3436,19 +5786,18 @@
           "content": {
             "application/merge-patch+json": {
               "schema": {
-                "additionalProperties": true,
-                "type": "object"
+                "$ref": "#/components/schemas/UpdateContextRequest"
               }
             }
-          }
+          },
+          "required": true
         },
         "responses": {
           "2XX": {
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
-                  "type": "object"
+                  "$ref": "#/components/schemas/ContextEntry"
                 }
               }
             },
@@ -3469,8 +5818,18 @@
           "context"
         ],
         "x-dustpan-actions": [
-          "unit:read",
-          "unit:set-context"
+          {
+            "action": "namespace:read",
+            "object": "namespace"
+          },
+          {
+            "action": "unit:read",
+            "object": "unit"
+          },
+          {
+            "action": "unit:set-context",
+            "object": "unit"
+          }
         ]
       }
     },
@@ -3492,8 +5851,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
-                  "type": "object"
+                  "$ref": "#/components/schemas/ListViewsResponse"
                 }
               }
             },
@@ -3514,7 +5872,10 @@
           "views"
         ],
         "x-dustpan-actions": [
-          "view:read"
+          {
+            "action": "view:read",
+            "object": "namespace"
+          }
         ]
       },
       "post": {
@@ -3536,19 +5897,18 @@
           "content": {
             "application/json": {
               "schema": {
-                "additionalProperties": true,
-                "type": "object"
+                "$ref": "#/components/schemas/CreateViewRequest"
               }
             }
-          }
+          },
+          "required": true
         },
         "responses": {
           "2XX": {
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
-                  "type": "object"
+                  "$ref": "#/components/schemas/View"
                 }
               }
             },
@@ -3569,7 +5929,10 @@
           "views"
         ],
         "x-dustpan-actions": [
-          "view:create"
+          {
+            "action": "view:create",
+            "object": "namespace"
+          }
         ]
       }
     },
@@ -3599,14 +5962,6 @@
         ],
         "responses": {
           "2XX": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "additionalProperties": true,
-                  "type": "object"
-                }
-              }
-            },
             "description": "The request succeeded."
           },
           "default": {
@@ -3624,7 +5979,10 @@
           "views"
         ],
         "x-dustpan-actions": [
-          "view:delete"
+          {
+            "action": "view:delete",
+            "object": "namespace"
+          }
         ]
       },
       "get": {
@@ -3652,8 +6010,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
-                  "type": "object"
+                  "$ref": "#/components/schemas/View"
                 }
               }
             },
@@ -3674,7 +6031,10 @@
           "views"
         ],
         "x-dustpan-actions": [
-          "view:read"
+          {
+            "action": "view:read",
+            "object": "namespace"
+          }
         ]
       }
     },
@@ -3704,8 +6064,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
-                  "type": "object"
+                  "$ref": "#/components/schemas/ListUnitsResponse"
                 }
               }
             },
@@ -3726,8 +6085,14 @@
           "views"
         ],
         "x-dustpan-actions": [
-          "view:read",
-          "namespace:read"
+          {
+            "action": "view:read",
+            "object": "namespace"
+          },
+          {
+            "action": "namespace:read",
+            "object": "namespace"
+          }
         ]
       }
     },
@@ -3739,8 +6104,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
-                  "type": "object"
+                  "$ref": "#/components/schemas/ApiDescription"
                 }
               }
             },

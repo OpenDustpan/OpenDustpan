@@ -405,7 +405,7 @@ guesses its meaning.
 | --- | --- |
 | Document | `openapi: 3.1.0`, `info` (`title`, `version`, `description`), `servers` (items with `url`, `description`), `tags` (items with `name`, `description`), `paths`, `components`, top-level `security` (a list of requirements, each a map from a scheme name to a list of scopes) |
 | Components | `schemas`, `parameters`, `headers` and `securitySchemes`, and no other sub-key. A security scheme has `type: http`, `scheme: bearer` and `description`. A component header has `description` and `schema`. |
-| Operation | `operationId`, `tags`, `summary`, `description`, `parameters`, `requestBody`, `responses`, `security` (empty for a public route), `x-dustpan-actions` |
+| Operation | `operationId`, `tags`, `summary`, `description`, `parameters`, `requestBody`, `responses`, `security` (empty for a public route), `x-dustpan-actions` (a list of `{action, object}`, where `object` is the kind of the object of the action: `namespace`, `unit`, `collection`, `caller` or `server`) |
 | Parameter | `name`, `in`, `required`, `description` and `schema`. `in: path`, `in: query`, `in: header`. A `$ref` to `#/components/parameters/IdempotencyKey`, `IfMatch` or `IfMatchRequired`. A scalar schema, or an array of a scalar schema. |
 | Request body | `content` and `required`. `application/json` and `application/merge-patch+json`, each with one schema |
 | Response | `description`, `content` and `headers`. One success answer (a status code or `2XX`), `default` with a `$ref` to the error schema. A header object has `description` and `schema`, or a `$ref` to `#/components/headers/ETag`. |

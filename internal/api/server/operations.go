@@ -22,26 +22,69 @@ const (
 //nolint:gochecknoglobals // A fixed table; Go has no constant maps.
 var operationLabels = map[string]apidesc.Label{
 	apidesc.Pattern(http.MethodGet, approvalDefaultPath): apidesc.Name("getApprovalDefault", tagApprovals).
-		WithETag(),
+		WithETag().
+		On(apidesc.KindNamespace).
+		WithBodies(apidesc.NoBody, approvalDefaultSchema),
 	apidesc.Pattern(http.MethodPut, approvalDefaultPath): apidesc.Name("setApprovalDefault", tagApprovals).
 		WithIfMatch().
-		WithETag(),
+		WithETag().
+		On(apidesc.KindNamespace).
+		WithBodies(approvalDefaultSchema, approvalDefaultSchema),
 	apidesc.Pattern(http.MethodDelete, approvalDefaultPath): apidesc.Name("deleteApprovalDefault", tagApprovals).
-		WithIfMatch(),
-	apidesc.Pattern(http.MethodGet, approvalRulesPath):    apidesc.Name("listApprovalRules", tagApprovals),
-	apidesc.Pattern(http.MethodGet, approvalRuleItemPath): apidesc.Name("getApprovalRule", tagApprovals).WithETag(),
+		WithIfMatch().
+		On(apidesc.KindNamespace).
+		WithBodies(apidesc.NoBody, apidesc.NoBody),
+	apidesc.Pattern(http.MethodGet, approvalRulesPath): apidesc.Name("listApprovalRules", tagApprovals).
+		On(apidesc.KindNamespace).
+		WithBodies(apidesc.NoBody, apidesc.Typed[approvalRuleListBody](
+			"ListApprovalRulesResponse", apidesc.Named[approvalRuleBody]("ApprovalRule"),
+			apidesc.Named[approversBody]("Approvers"),
+		)),
+	apidesc.Pattern(http.MethodGet, approvalRuleItemPath): apidesc.Name("getApprovalRule", tagApprovals).
+		WithETag().
+		On(apidesc.KindNamespace).
+		WithBodies(apidesc.NoBody, approvalRuleSchema),
 	apidesc.Pattern(http.MethodPut, approvalRuleItemPath): apidesc.Name("setApprovalRule", tagApprovals).
 		WithIfMatch().
-		WithETag(),
+		WithETag().
+		On(apidesc.KindNamespace).
+		WithBodies(approvalRuleSchema, approvalRuleSchema),
 	apidesc.Pattern(http.MethodDelete, approvalRuleItemPath): apidesc.Name("deleteApprovalRule", tagApprovals).
-		WithIfMatch(),
-	apidesc.Pattern(http.MethodGet, capabilitiesPath): apidesc.Name("getCapabilities", "capabilities"),
-	apidesc.Pattern(http.MethodGet, openAPIPath):      apidesc.Name("getApiDescription", "description"),
-	apidesc.Pattern(http.MethodGet, preferencesPath):  apidesc.Name("getPreferences", tagPreferences).WithETag(),
+		WithIfMatch().
+		On(apidesc.KindNamespace).
+		WithBodies(apidesc.NoBody, apidesc.NoBody),
+	apidesc.Pattern(http.MethodGet, capabilitiesPath): apidesc.Name("getCapabilities", "capabilities").
+		WithBodies(apidesc.NoBody, apidesc.Typed[capabilitiesResponse]("Capabilities")),
+	apidesc.Pattern(http.MethodGet, openAPIPath): apidesc.Name("getApiDescription", "description").
+		WithBodies(apidesc.NoBody, apidesc.Free("ApiDescription")),
+	apidesc.Pattern(http.MethodGet, preferencesPath): apidesc.Name("getPreferences", tagPreferences).
+		WithETag().
+		On(apidesc.KindCaller).
+		WithBodies(apidesc.NoBody, preferencesSchema),
 	apidesc.Pattern(http.MethodPatch, preferencesPath): apidesc.Name("updatePreferences", tagPreferences).
 		WithIfMatch().
-		WithETag(),
+		WithETag().
+		On(apidesc.KindCaller).
+		WithBodies(apidesc.Typed[updatePreferencesRequest](
+			"UpdatePreferencesRequest", apidesc.Named[terminalSchemesPatchRequest]("TerminalSchemesPatch"),
+		), preferencesSchema),
 }
+
+// The bodies that several routes share. The types of the bodies are the types
+// that the handlers write and read, so the description cannot drift from
+// them.
+//
+//nolint:gochecknoglobals // Fixed values; Go has no constant structs.
+var (
+	approvalDefaultSchema = apidesc.Typed[approvalDefaultBody](
+		"ApprovalDefault",
+		apidesc.Named[approversBody]("Approvers"),
+	)
+	approvalRuleSchema = apidesc.Typed[approvalRuleBody]("ApprovalRule", apidesc.Named[approversBody]("Approvers"))
+	preferencesSchema  = apidesc.Typed[preferencesResponse](
+		"Preferences", apidesc.Named[terminalSchemesResponse]("TerminalSchemes"),
+	)
+)
 
 // Operations returns the routes of this adapter that the description of the
 // tool-neutral REST API holds: the routes under apidesc.Prefix. A route that
@@ -55,7 +98,7 @@ func (h *Handler) Operations() []apidesc.Operation {
 
 	for _, route := range h.routes {
 		rows = append(rows, apidesc.Row{
-			Method: route.Method, Path: route.Path, Actions: actionNames(route.Actions),
+			Method: route.Method, Path: route.Path, Actions: actionNames(route.Actions), NamespaceActions: nil,
 			Public:         route.Scope == ScopePublic,
 			IdempotencyKey: false,
 		})

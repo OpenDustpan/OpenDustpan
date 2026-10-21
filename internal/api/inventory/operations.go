@@ -26,36 +26,97 @@ const (
 //
 //nolint:gochecknoglobals // A fixed table; Go has no constant maps.
 var operationLabels = map[string]apidesc.Label{
-	apidesc.Pattern(http.MethodGet, namespacePath+"/units"):         apidesc.Name("listUnits", tagUnits),
-	apidesc.Pattern(http.MethodGet, namespacePath+"/deleted-units"): apidesc.Name("listDeletedUnits", tagUnits),
+	apidesc.Pattern(http.MethodGet, namespacePath+"/units"): apidesc.Name("listUnits", tagUnits).
+		On(apidesc.KindNamespace).
+		WithBodies(apidesc.NoBody, unitList),
+	apidesc.Pattern(http.MethodGet, namespacePath+"/deleted-units"): apidesc.Name("listDeletedUnits", tagUnits).
+		On(apidesc.KindNamespace).
+		WithBodies(apidesc.NoBody, apidesc.Typed[listDeletedUnitsResponse](
+			"ListDeletedUnitsResponse", apidesc.Named[deletedUnitEntry]("DeletedUnit"),
+		)),
 
-	apidesc.Pattern(http.MethodGet, namespacePath+"/collections"):  apidesc.Name("listCollections", tagCollections),
-	apidesc.Pattern(http.MethodPost, namespacePath+"/collections"): apidesc.Name("createCollection", tagCollections),
-	apidesc.Pattern(http.MethodGet, collectionPath):                apidesc.Name("getCollection", tagCollections),
-	apidesc.Pattern(http.MethodDelete, collectionPath):             apidesc.Name("deleteCollection", tagCollections),
+	apidesc.Pattern(http.MethodGet, namespacePath+"/collections"): apidesc.Name("listCollections", tagCollections).
+		On(apidesc.KindNamespace).
+		WithBodies(apidesc.NoBody, apidesc.Typed[collectionsResponse](
+			"ListCollectionsResponse", apidesc.Named[collectionEntry]("Collection"),
+		)),
+	apidesc.Pattern(http.MethodPost, namespacePath+"/collections"): apidesc.Name("createCollection", tagCollections).
+		On(apidesc.KindNamespace).
+		WithBodies(apidesc.Typed[createCollectionRequest]("CreateCollectionRequest"), collectionBody),
+	apidesc.Pattern(http.MethodGet, collectionPath): apidesc.Name("getCollection", tagCollections).
+		On(apidesc.KindCollection).
+		WithBodies(apidesc.NoBody, collectionBody),
+	apidesc.Pattern(http.MethodDelete, collectionPath): apidesc.Name("deleteCollection", tagCollections).
+		On(apidesc.KindCollection).
+		WithBodies(apidesc.NoBody, apidesc.NoBody),
 
-	apidesc.Pattern(http.MethodPut, collectionPath+"/lock"):    apidesc.Name("lockCollection", tagLocks),
-	apidesc.Pattern(http.MethodGet, collectionPath+"/lock"):    apidesc.Name("getCollectionLock", tagLocks),
-	apidesc.Pattern(http.MethodDelete, collectionPath+"/lock"): apidesc.Name("unlockCollection", tagLocks),
+	apidesc.Pattern(http.MethodPut, collectionPath+"/lock"): apidesc.Name("lockCollection", tagLocks).
+		On(apidesc.KindCollection).
+		WithBodies(lockRequestBody, manualLockBody),
+	apidesc.Pattern(http.MethodGet, collectionPath+"/lock"): apidesc.Name("getCollectionLock", tagLocks).
+		On(apidesc.KindCollection).
+		WithBodies(apidesc.NoBody, manualLockBody),
+	apidesc.Pattern(http.MethodDelete, collectionPath+"/lock"): apidesc.Name("unlockCollection", tagLocks).
+		On(apidesc.KindCollection).
+		WithBodies(apidesc.NoBody, apidesc.NoBody),
 	apidesc.Pattern(http.MethodPost, collectionPath+"/lock/force-unlock"): apidesc.Name(
 		"forceUnlockCollection",
 		tagLocks,
-	),
+	).On(apidesc.KindCollection).WithBodies(apidesc.NoBody, apidesc.NoBody),
 
-	apidesc.Pattern(http.MethodPut, namespacePath+"/lock"):    apidesc.Name("lockNamespace", tagLocks),
-	apidesc.Pattern(http.MethodGet, namespacePath+"/lock"):    apidesc.Name("getNamespaceLock", tagLocks),
-	apidesc.Pattern(http.MethodDelete, namespacePath+"/lock"): apidesc.Name("unlockNamespace", tagLocks),
+	apidesc.Pattern(http.MethodPut, namespacePath+"/lock"): apidesc.Name("lockNamespace", tagLocks).
+		On(apidesc.KindNamespace).
+		WithBodies(lockRequestBody, manualLockBody),
+	apidesc.Pattern(http.MethodGet, namespacePath+"/lock"): apidesc.Name("getNamespaceLock", tagLocks).
+		On(apidesc.KindNamespace).
+		WithBodies(apidesc.NoBody, manualLockBody),
+	apidesc.Pattern(http.MethodDelete, namespacePath+"/lock"): apidesc.Name("unlockNamespace", tagLocks).
+		On(apidesc.KindNamespace).
+		WithBodies(apidesc.NoBody, apidesc.NoBody),
 	apidesc.Pattern(http.MethodPost, namespacePath+"/lock/force-unlock"): apidesc.Name(
 		"forceUnlockNamespace",
 		tagLocks,
-	),
+	).On(apidesc.KindNamespace).WithBodies(apidesc.NoBody, apidesc.NoBody),
 
-	apidesc.Pattern(http.MethodPost, namespacePath+"/views"): apidesc.Name("createView", tagViews).WithKey(),
-	apidesc.Pattern(http.MethodGet, namespacePath+"/views"):  apidesc.Name("listViews", tagViews),
-	apidesc.Pattern(http.MethodGet, viewPath):                apidesc.Name("getView", tagViews),
-	apidesc.Pattern(http.MethodDelete, viewPath):             apidesc.Name("deleteView", tagViews).WithKey(),
-	apidesc.Pattern(http.MethodGet, viewPath+"/units"):       apidesc.Name("listViewUnits", tagViews),
+	apidesc.Pattern(http.MethodPost, namespacePath+"/views"): apidesc.Name("createView", tagViews).WithKey().
+		On(apidesc.KindNamespace).
+		WithBodies(apidesc.Typed[createViewBody]("CreateViewRequest", viewNames...), viewBody),
+	apidesc.Pattern(http.MethodGet, namespacePath+"/views"): apidesc.Name("listViews", tagViews).
+		On(apidesc.KindNamespace).
+		WithBodies(apidesc.NoBody, apidesc.Typed[listViewsResponse]("ListViewsResponse", viewNames...)),
+	apidesc.Pattern(http.MethodGet, viewPath): apidesc.Name("getView", tagViews).
+		On(apidesc.KindNamespace).
+		WithBodies(apidesc.NoBody, viewBody),
+	apidesc.Pattern(http.MethodDelete, viewPath): apidesc.Name("deleteView", tagViews).WithKey().
+		On(apidesc.KindNamespace).
+		WithBodies(apidesc.NoBody, apidesc.NoBody),
+	apidesc.Pattern(http.MethodGet, viewPath+"/units"): apidesc.Name("listViewUnits", tagViews).
+		On(apidesc.KindNamespace).
+		WithBodies(apidesc.NoBody, unitList),
 }
+
+// The bodies that several routes share. The types of the bodies are the types
+// that the handlers write and read, so the description cannot drift from
+// them.
+//
+//nolint:gochecknoglobals // Fixed values; Go has no constant structs.
+var (
+	// unitList is the page of units, for the unit list and for a view.
+	unitList = apidesc.Typed[listUnitsResponse](
+		"ListUnitsResponse",
+		apidesc.Named[unitEntry]("Unit"),
+		apidesc.Named[stateEntry]("UnitState"),
+		apidesc.Named[lockEntry]("UnitLock"),
+	)
+	collectionBody  = apidesc.Typed[collectionEntry]("Collection")
+	lockRequestBody = apidesc.Typed[lockRequest]("LockRequest")
+	manualLockBody  = apidesc.Typed[lockEntryDocument]("ManualLock")
+	viewBody        = apidesc.Typed[viewDocument]("View", viewNames...)
+	viewNames       = []apidesc.Declaration{
+		apidesc.Named[viewQuery]("ViewQuery"),
+		apidesc.Named[viewLabel]("ViewLabel"),
+	}
+)
 
 // Operations returns the routes of this adapter that the description of the
 // tool-neutral REST API holds: the routes under apidesc.Prefix.
@@ -72,9 +133,14 @@ func (h *Handler) Operations() []apidesc.Operation {
 			actions = append(actions, string(action))
 		}
 
+		namespaceActions := make([]string, len(route.NamespaceActions))
+		for i, action := range route.NamespaceActions {
+			namespaceActions[i] = string(action)
+		}
+
 		rows = append(rows, apidesc.Row{
-			Method: route.Method, Path: route.Path, Actions: actions, Public: route.Scope == ScopePublic,
-			IdempotencyKey: false,
+			Method: route.Method, Path: route.Path, Actions: actions, NamespaceActions: namespaceActions,
+			Public: route.Scope == ScopePublic, IdempotencyKey: false,
 		})
 	}
 

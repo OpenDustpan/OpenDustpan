@@ -119,6 +119,12 @@ type collectionsResponse struct {
 	Collections []collectionEntry `json:"collections"`
 }
 
+// createCollectionRequest is the body of a collection create. The field is a
+// pointer so that a missing name differs from an empty one.
+type createCollectionRequest struct {
+	Name *string `dustpan:"required" json:"name"`
+}
+
 // moveBody is the body of a unit move. Its field names the target collection.
 type moveBody struct {
 	Collection string `json:"collection"`
@@ -568,9 +574,7 @@ func readCollectionName(w http.ResponseWriter, r *http.Request) (collection.Name
 	dec := json.NewDecoder(bytes.NewReader(body))
 	dec.DisallowUnknownFields()
 
-	var in struct {
-		Name *string `json:"name"`
-	}
+	var in createCollectionRequest
 
 	if err := dec.Decode(&in); err != nil {
 		return "", errCollectionBody
