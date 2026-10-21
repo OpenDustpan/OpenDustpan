@@ -4,6 +4,7 @@ package e2e_test
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"strings"
 	"testing"
@@ -68,6 +69,9 @@ func runIPAllowlistOnStore(t *testing.T, cli e2e.Install, store e2e.Store) {
 	checkIPAllowlistEmpty(ctx, t, env)
 	checkIPAllowlistSet(ctx, t, env)
 	checkIPAllowlistRefusesOutside(ctx, t, env)
+	t.Run("access denied code", func(t *testing.T) {
+		checkAccessDeniedCode(ctx, t, env)
+	})
 	checkIPAllowlistAdmitsInside(ctx, t, env)
 	checkIPAllowlistLeavesOpenAlone(ctx, t, env)
 	checkIPAllowlistDelete(ctx, t, env)
@@ -185,6 +189,58 @@ func checkIPAllowlistRefusesOutside(ctx context.Context, t *testing.T, env *e2e.
 	if strings.Contains(body, ipAllowlistSource) {
 		t.Fatalf("read the locked namespace from outside: body %s leaks the list", body)
 	}
+
+	checkForbiddenAnswer(t, "read the locked namespace from outside", body, "access.ip-not-allowed")
+}
+
+// checkForbiddenAnswer fails unless body is a 403 answer with the message
+// "forbidden" and the machine code wantCode. The message is the text that
+// every released client reads, so the code must come as an addition to it.
+func checkForbiddenAnswer(t *testing.T, step, body, wantCode string) {
+	t.Helper()
+
+	var got struct {
+		Code      int    `json:"code"`
+		Message   string `json:"message"`
+		ErrorCode string `json:"errorCode"`
+	}
+
+	if err := json.Unmarshal([]byte(body), &got); err != nil {
+		t.Fatalf("%s: body %s is not JSON: %v", step, body, err)
+	}
+
+	if got.Code != http.StatusForbidden || got.Message != "forbidden" || got.ErrorCode != wantCode {
+		t.Fatalf("%s: body %s, want code 403, message \"forbidden\" and errorCode %q", step, body, wantCode)
+	}
+}
+
+// checkAccessDeniedCode sends a request of a caller that holds no grant for
+// it. The answer is 403 with the message that the allowlist refusal has, and
+// the code access.denied, so only the code tells the two causes apart.
+func checkAccessDeniedCode(ctx context.Context, t *testing.T, env *e2e.Env) {
+	t.Helper()
+
+	token, ok := env.MemberToken()
+	if !ok {
+		t.Skip("the binary server knows only the bootstrap admin tokens, so no caller without a grant exists")
+	}
+
+	status, body, err := env.ServerAPIStatusAs(
+		ctx,
+		token,
+		http.MethodPost,
+		"/api/server/namespaces",
+		`{"name":"denied"}`,
+	)
+	if err != nil {
+		t.Fatalf("create a namespace without a grant: %v", err)
+	}
+
+	if status != http.StatusForbidden {
+		t.Fatalf("create a namespace without a grant answers %d, want %d (%s)", status, http.StatusForbidden, body)
+	}
+
+	checkForbiddenAnswer(t, "create a namespace without a grant", body, "access.denied")
 }
 
 // checkIPAllowlistAdmitsInside reads the locked namespace from a source

@@ -110,6 +110,14 @@ type fixture struct {
 func newFixture(t *testing.T, deny ...identity.Action) fixture {
 	t.Helper()
 
+	return newFixtureWithAuthorizer(t, nil, deny...)
+}
+
+// newFixtureWithAuthorizer is newFixture with authz in place of the test
+// authorizer. A nil authz keeps the test authorizer.
+func newFixtureWithAuthorizer(t *testing.T, override identity.Authorizer, deny ...identity.Action) fixture {
+	t.Helper()
+
 	store, err := sqlite.Open(t.Context(), filepath.Join(t.TempDir(), "dustpan.db"))
 	if err != nil {
 		t.Fatalf("open store: %v", err)
@@ -156,7 +164,10 @@ func newFixture(t *testing.T, deny ...identity.Action) fixture {
 		denied[a] = true
 	}
 
-	authz := testAuthz{deny: denied}
+	var authz identity.Authorizer = testAuthz{deny: denied}
+	if override != nil {
+		authz = override
+	}
 
 	idem, err := idempotent.New(idempotent.Config{
 		Store:  store.Idempotency(idempotencytest.TestWrapper(t, 1)),

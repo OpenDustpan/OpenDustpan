@@ -104,6 +104,7 @@ text names the file or the field that fails and holds no byte of a key.
 | --- | --- | --- |
 | 400 | `registry.invalid` | A name, a version, a protocol or a request field is not valid |
 | 400 | `registry.key-invalid` | The key cannot be registered |
+| 403 | `access.denied`, `access.ip-not-allowed`, `session.csrf`, `session.other-site` | See the error codes of a 403 answer |
 | 404 | `registry.not-found` | No such release, provider, version or key |
 | 404 | `registry.not-staged` | A token names a file that does not exist: upload the file again |
 | 409 | `registry.version-exists` | The version exists with other files |
