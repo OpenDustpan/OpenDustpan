@@ -36,7 +36,8 @@ A write carries the fence of the namespace. A stale fence answers 409
 | `kind` | `webhook`, `chat` or `email` |
 | `platform` | For `chat`: `slack`, `teams`, `mattermost` or `matrix`. Not in the answer for another kind. |
 | `name` | 1 to 100 bytes |
-| `target` | The address of an `email` destination, the URL of a `webhook`, or the host of a `chat` webhook |
+| `hostNeedsUpdate` | `true` when the stored host of a `webhook` or `chat` destination fails the host check of a write. The destination still sends. A change of it needs a host that passes. Absent otherwise. |
+| `target` | The address of an `email` destination, or the host of a `webhook` or of a `chat` webhook. The answer never holds the path or the query of a URL. |
 | `urlSet` | `true` for a `chat` destination. It says that a URL exists. |
 | `createdBy` | The subject that made the destination |
 | `version` | Starts at 1 and grows by 1 with each change |
@@ -49,7 +50,7 @@ The body has at most 64 KiB.
 
 | Kind | Fields |
 | --- | --- |
-| `webhook` | `kind`, `name`, `target` (an `https` URL on port 443, or on a port that the operator allows) |
+| `webhook` | `kind`, `name`, `target` (an `https` URL on port 443, or on a port that the operator allows). The host is an ASCII DNS name or an IP address, with an optional numeric port. The URL is a secret: it is write-only. |
 | `chat` | `kind`, `platform`, `name`, `url` (the incoming webhook URL, on the same ports) |
 | `email` | `kind`, `name`, `target` (one address) |
 
@@ -121,6 +122,7 @@ answers 409 `namespace.fenced`.
 | 400 | `sink.invalid` | A field is not valid, or the outbound address rules refuse the URL or its port |
 | 400 | `sink.platform-host` | The host of the chat URL is not a webhook host of the platform |
 | 400 | `request.body-invalid` | The body is not one JSON object with known fields |
+| 403 | `access.denied`, `access.ip-not-allowed`, `session.csrf`, `session.other-site` | See the error codes of a 403 answer |
 | 404 | `sink.not-found` | No destination with this ID in the namespace |
 | 409 | `sink.conflict` | The destination changed since you read it |
 | 409 | `namespace.fenced` | A failover moved the namespace during the request |

@@ -30,7 +30,11 @@ const maxBodyBytes = 64 << 10
 
 // sinkDocument is one sink as the API answers it. It never holds a secret:
 // URLSet says only that a chat sink has a webhook URL. Target is the address
-// of an email sink, the URL of a webhook, or the host of a chat webhook.
+// of an email sink, or the host of a webhook or of a chat webhook. The URL of
+// a webhook is a secret: it goes in on create and never comes out.
+// HostNeedsUpdate is true for a stored sink whose host fails the allowlist of
+// a new write. The sink still sends. A webhook sink of this kind shows an
+// empty target. A replace of it needs a host that passes the allowlist.
 //
 // Contract: never remove or rename these fields.
 type sinkDocument struct {
@@ -43,6 +47,8 @@ type sinkDocument struct {
 	URLSet    bool   `json:"urlSet"`
 	CreatedBy string `json:"createdBy"`
 	Version   int64  `json:"version"`
+
+	HostNeedsUpdate bool `json:"hostNeedsUpdate,omitempty"`
 }
 
 // createdDocument is the answer of a create. SigningKey is set for a webhook
@@ -65,10 +71,15 @@ type testDocument struct {
 }
 
 func toDocument(s *notify.Sink) sinkDocument {
+	target := s.Target
+	if s.Kind == notify.SinkWebhook {
+		target = notify.WebhookHost(s.Target)
+	}
+
 	return sinkDocument{
 		ID: s.ID, Namespace: s.Scope.String(), Kind: string(s.Kind), Platform: s.Platform, Name: s.Name,
-		Target: s.Target, URLSet: s.Kind == notify.SinkChat && len(s.SecretRefs) == 1, CreatedBy: s.CreatedBy,
-		Version: s.Version,
+		Target: target, URLSet: s.Kind == notify.SinkChat && len(s.SecretRefs) == 1, CreatedBy: s.CreatedBy,
+		Version: s.Version, HostNeedsUpdate: s.HostNeedsUpdate(),
 	}
 }
 

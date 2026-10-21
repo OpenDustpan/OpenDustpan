@@ -89,7 +89,8 @@ trivy-canary: ## Trivy license canary: the gate must flag the GPL fixture in tes
 # .trufflehog-exclude-paths.txt lists files that are known false positives,
 # one regular expression per line. Each entry needs the owner's approval.
 # Today it holds one vendored agent skill, where a Markdown link that names a
-# file looks like a credential to a detector.
+# file looks like a credential to a detector, and six test files whose fake
+# URLs with a user name and a password test the masking of credentials.
 trufflehog: ## TruffleHog: verified secrets in the Git history.
 	trufflehog git file://. --results=verified,unknown --fail --no-update --exclude-paths=.trufflehog-exclude-paths.txt
 
