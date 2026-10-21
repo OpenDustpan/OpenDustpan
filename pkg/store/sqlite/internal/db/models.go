@@ -220,6 +220,45 @@ type GateReference struct {
 	OwnerID     string
 }
 
+type GitHostAppRegistration struct {
+	Kind                   string
+	AppID                  string
+	BaseUrl                string
+	HookID                 string
+	SealedKey              []byte
+	KeySetID               string
+	KeyCreatedAtMs         int64
+	SealedEventSecret      []byte
+	EventSecretSetID       string
+	EventSecretCreatedAtMs int64
+	AddressDigest          string
+	Version                int64
+	CreatedAtMs            int64
+	UpdatedAtMs            int64
+}
+
+type GitHostConnection struct {
+	NamespaceID    string
+	ID             string
+	Kind           string
+	Auth           string
+	AppScope       string
+	InstallationID string
+	Push           bool
+	IsDefault      bool
+	Version        int64
+	CreatedAtMs    int64
+	UpdatedAtMs    int64
+}
+
+type GitHostInstallation struct {
+	InstallationID string
+	NamespaceID    string
+	Version        int64
+	CreatedAtMs    int64
+	UpdatedAtMs    int64
+}
+
 type Grant struct {
 	ID          string
 	Subject     string

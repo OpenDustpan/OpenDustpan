@@ -52,6 +52,19 @@ func installationAAD(id string) []byte {
 	return []byte(aadLabel + "\x00" + installationLabel + "\x00" + id)
 }
 
+// boundAAD is installationAAD with a binding. The zero byte cannot occur in
+// id, so a bound value never shares its associated data with an unbound one.
+func boundAAD(id string, binding []byte) ([]byte, error) {
+	if len(binding) == 0 {
+		return nil, fmt.Errorf("%w: empty binding for installation scope %s", ErrInvalidScope, id)
+	}
+
+	aad := installationAAD(id)
+	aad = append(aad, 0)
+
+	return append(aad, binding...), nil
+}
+
 // InstallationConfig holds the dependencies of InstallationSecrets.
 type InstallationConfig struct {
 	Keys InstallationKeyStore
@@ -86,6 +99,40 @@ func NewInstallationSecrets(cfg InstallationConfig) (*InstallationSecrets, error
 // Seal seals plaintext under the data key of the installation scope id,
 // and creates the key at its first use. plaintext is at most 1 MiB.
 func (s *InstallationSecrets) Seal(ctx context.Context, id string, plaintext []byte) ([]byte, error) {
+	return s.sealAAD(ctx, id, installationAAD(id), plaintext)
+}
+
+// SealBound is Seal with a binding: the AEAD authenticates binding as
+// associated data, so OpenBound opens the value only with the same binding.
+// It returns ErrInvalidScope for an empty binding.
+func (s *InstallationSecrets) SealBound(ctx context.Context, id string, binding, plaintext []byte) ([]byte, error) {
+	aad, err := boundAAD(id, binding)
+	if err != nil {
+		return nil, err
+	}
+
+	return s.sealAAD(ctx, id, aad, plaintext)
+}
+
+// Open opens a ciphertext that Seal made for the same installation scope.
+// Any failure is ErrDecrypt.
+func (s *InstallationSecrets) Open(ctx context.Context, id string, ciphertext []byte) ([]byte, error) {
+	return s.openAAD(ctx, id, installationAAD(id), ciphertext)
+}
+
+// OpenBound opens a ciphertext that SealBound made for the same installation
+// scope and the same binding. A value sealed with another binding, or with
+// none, is ErrDecrypt.
+func (s *InstallationSecrets) OpenBound(ctx context.Context, id string, binding, ciphertext []byte) ([]byte, error) {
+	aad, err := boundAAD(id, binding)
+	if err != nil {
+		return nil, err
+	}
+
+	return s.openAAD(ctx, id, aad, ciphertext)
+}
+
+func (s *InstallationSecrets) sealAAD(ctx context.Context, id string, aad, plaintext []byte) ([]byte, error) {
 	if len(plaintext) > maxValueBytes {
 		return nil, fmt.Errorf("%w: value has %d bytes, limit %d", ErrTooLarge, len(plaintext), maxValueBytes)
 	}
@@ -95,12 +142,10 @@ func (s *InstallationSecrets) Seal(ctx context.Context, id string, plaintext []b
 		return nil, err
 	}
 
-	return sealValue(aead, installationAAD(id), plaintext)
+	return sealValue(aead, aad, plaintext)
 }
 
-// Open opens a ciphertext that Seal made for the same installation scope.
-// Any failure is ErrDecrypt.
-func (s *InstallationSecrets) Open(ctx context.Context, id string, ciphertext []byte) ([]byte, error) {
+func (s *InstallationSecrets) openAAD(ctx context.Context, id string, aad, ciphertext []byte) ([]byte, error) {
 	if len(ciphertext) > maxValueBytes+sealOverhead {
 		return nil, fmt.Errorf("%w: value has %d bytes", ErrTooLarge, len(ciphertext))
 	}
@@ -110,7 +155,7 @@ func (s *InstallationSecrets) Open(ctx context.Context, id string, ciphertext []
 		return nil, err
 	}
 
-	p, ok := openValue(aead, installationAAD(id), ciphertext)
+	p, ok := openValue(aead, aad, ciphertext)
 	if !ok {
 		return nil, fmt.Errorf("%w: value of installation scope %s", ErrDecrypt, id)
 	}

@@ -160,6 +160,15 @@ type Connection struct {
 	Push bool
 }
 
+// The keys of Connection.Params that the GitHub adapter reads. Both hold
+// decimal numbers as strings.
+const (
+	// ParamAppID is the ID of the GitHub App.
+	ParamAppID = "app_id"
+	// ParamInstallationID is the ID of the installation of the GitHub App.
+	ParamInstallationID = "installation_id"
+)
+
 // Credential is one credential set of a connection, unsealed for one
 // Open. Secret holds the private key of an app or the token. The secret
 // that signs the events of the forge is not here: it belongs to the app

@@ -738,6 +738,13 @@ func insertStagedRows(
 		insertQuery := `INSERT INTO "` + table + `" (` + strings.Join(columns, ", ") + `) VALUES ` +
 			strings.Join(groups, ", ") // #nosec G202 // Table and column names come from the portable spec.
 		if _, err := tx.ExecContext(ctx, insertQuery, args...); err != nil {
+			// A live row that names a namespace the backup does not hold breaks a
+			// foreign key: the backup names data that is not in the current
+			// access tables.
+			if strings.Contains(err.Error(), "FOREIGN KEY constraint failed") {
+				return fmt.Errorf("keep staged access table %q: %w", table, backup.ErrRestoreAccessMismatch)
+			}
+
 			return fmt.Errorf("keep staged access table %q: %w", table, backup.ErrExportRead)
 		}
 	}

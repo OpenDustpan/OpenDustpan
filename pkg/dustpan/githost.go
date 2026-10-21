@@ -1,0 +1,146 @@
+package dustpan
+
+import (
+	"crypto/x509"
+	"fmt"
+	"net/netip"
+
+	"opendustpan.org/opendustpan/internal/api/idempotent"
+	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/egress"
+	"opendustpan.org/opendustpan/pkg/forge"
+	"opendustpan.org/opendustpan/pkg/forge/github"
+	"opendustpan.org/opendustpan/pkg/secret"
+)
+
+// gitHostSettings holds the settings of the Git host connections: the store,
+// the address ranges that a connection may reach in addition to public
+// addresses, and the root certificates that it trusts.
+type gitHostSettings struct {
+	store forge.Store
+	allow []netip.Prefix
+	cas   *x509.CertPool
+	// loopback lets a connection reach the loopback interface, for the tests
+	// of the server with a fake Git host on the local host.
+	loopback bool
+	// checkLimits bounds the check calls. Nil means the default limits.
+	checkLimits *forge.CheckLimits
+}
+
+// WithGitHostStore sets the store of the Git host connections. With it, and
+// with a namespace store that keeps installation secret keys and audit
+// entries, the server serves the Git host routes. Without it, the server
+// serves none.
+func WithGitHostStore(st forge.Store) Option {
+	return func(o *settings) { o.gitHost.store = st }
+}
+
+// WithGitHostAllowedRanges sets the address ranges that a connection to a Git
+// host may reach in addition to public addresses, for example the range of a
+// GitHub Enterprise Server on a private network. A range opens private-network
+// addresses only (RFC 1918 and unique local). The server never opens loopback,
+// link-local, cloud metadata, unspecified or multicast addresses, also inside
+// a range, and NewServer refuses a range that is too wide (see
+// egress.ParseAllowedRanges).
+func WithGitHostAllowedRanges(ranges ...netip.Prefix) Option {
+	return func(o *settings) { o.gitHost.allow = append([]netip.Prefix(nil), ranges...) }
+}
+
+// WithGitHostLoopbackForTests lets the connections to a Git host reach the
+// loopback interface, so that a test can run a fake Git host on the local host.
+// A server in production does not set it: no flag or environment variable
+// reaches it.
+func WithGitHostLoopbackForTests() Option {
+	return func(o *settings) { o.gitHost.loopback = true }
+}
+
+// WithGitHostCheckLimits sets the limits of the check of a Git host connection:
+// the shortest time between two checks of one connection, and the number of
+// checks of one installation in a window. The default is one check in 10
+// seconds for each connection and 30 in a minute for each installation. The
+// server has no flag for it.
+func WithGitHostCheckLimits(limits forge.CheckLimits) Option {
+	return func(o *settings) { o.gitHost.checkLimits = &limits }
+}
+
+// WithGitHostRootCAs sets the root certificates that the connections to a Git
+// host trust, for a GitHub Enterprise Server with a certificate of a private
+// authority. Nil, the default, uses the roots of the system.
+func WithGitHostRootCAs(pool *x509.CertPool) Option {
+	return func(o *settings) { o.gitHost.cas = pool }
+}
+
+// newGitHostParts returns the Git host service and the middleware of the
+// Idempotency-Key header that its routes use. Both are nil when no Git host
+// store is set.
+func newGitHostParts(cfg *settings, deps installationDeps) (*forge.Service, *idempotent.Middleware, error) {
+	svc, err := newGitHostService(cfg, deps)
+	if err != nil || svc == nil {
+		return nil, nil, err
+	}
+
+	idem, err := idempotencyMiddleware(cfg)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	return svc, idem, nil
+}
+
+// newGitHostService returns the Git host service, or nil when no Git host store
+// is set.
+func newGitHostService(cfg *settings, deps installationDeps) (*forge.Service, error) {
+	if cfg.gitHost.store == nil {
+		return nil, nil //nolint:nilnil // No Git host routes: no store is set.
+	}
+
+	keys, ok := cfg.namespaceStore.(secret.InstallationKeyStore)
+	if !ok {
+		return nil, fmt.Errorf("namespace store keeps no installation keys: %w", ErrMissingOption)
+	}
+
+	entries, ok := cfg.namespaceStore.(audit.Store)
+	if !ok {
+		return nil, fmt.Errorf("namespace store keeps no audit entries: %w", ErrMissingOption)
+	}
+
+	secrets, err := secret.NewInstallationSecrets(secret.InstallationConfig{
+		Keys: keys, Wrapper: cfg.secretWrapper, Now: cfg.now,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("installation secrets: %w", err)
+	}
+
+	// Defense in depth: the flag parser refuses a range that is too wide, and
+	// the rules never open loopback or metadata addresses. This check stays so
+	// that an embedder cannot pass a wide range.
+	for _, p := range cfg.gitHost.allow {
+		if rangeErr := egress.CheckAllowedRange(p); rangeErr != nil {
+			return nil, fmt.Errorf("git host allowed ranges: %w", rangeErr)
+		}
+	}
+
+	rules := egress.Rules{Allow: cfg.gitHost.allow, LoopbackForTests: cfg.gitHost.loopback}
+
+	opener, err := github.NewOpener(github.Config{Rules: rules, RootCAs: cfg.gitHost.cas, Now: cfg.now})
+	if err != nil {
+		return nil, fmt.Errorf("make the GitHub adapter: %w", err)
+	}
+
+	svc, err := forge.NewService(forge.Config{
+		Store: cfg.gitHost.store, Namespaces: cfg.namespaceStore, Secrets: secrets, Audit: entries,
+		Openers: []forge.Opener{opener},
+		CheckURL: func(raw string) error {
+			return rules.CheckURL(raw, egress.HTTPSOnly)
+		},
+		OnAuditFailure: func() { deps.observed.IncAuditAppendFailure() },
+		OnRefused:      func(reason string) { deps.observed.ObserveGitHostRefused(reason) },
+		CheckLimits:    cfg.gitHost.checkLimits,
+		Now:            cfg.now,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("make the Git host service: %w", err)
+	}
+
+	return svc, nil
+}

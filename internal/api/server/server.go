@@ -16,12 +16,14 @@ import (
 	"strings"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/api/idempotent"
 	denials "opendustpan.org/opendustpan/internal/api/refusal"
 	"opendustpan.org/opendustpan/internal/denylimit"
 	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/accesstoken"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/backup"
+	"opendustpan.org/opendustpan/pkg/forge"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/installation"
 	"opendustpan.org/opendustpan/pkg/ipallow"
@@ -144,6 +146,14 @@ type Config struct {
 	// InstallationKind is the kind that the capabilities document answers
 	// to a signed-in caller. Empty means production.
 	InstallationKind installation.Kind
+	// GitHost keeps the registration of the GitHub App of the installation, the
+	// map of its installations and the connections of the namespaces. Nil
+	// means the store keeps none: the Git host routes are not mounted. Both SQL
+	// adapters keep them.
+	GitHost *forge.Service
+	// Idempotency serves the Idempotency-Key header of the Git host writes. Nil
+	// makes each request with the header answer 400.
+	Idempotency *idempotent.Middleware
 }
 
 // SchemaReporter reports the applied migrations of the database. Both store
@@ -196,6 +206,8 @@ type Handler struct {
 	signIn         *signInState
 	kind           installation.Kind
 	preferences    *preferences.Service
+	gitHost        *forge.Service
+	idem           *idempotent.Middleware
 	mux            *patternMux
 	routes         []Route
 }
@@ -254,6 +266,8 @@ func NewHandler(cfg Config) (*Handler, error) {
 		signIn:         signIn,
 		kind:           cfg.InstallationKind,
 		preferences:    cfg.Preferences,
+		gitHost:        cfg.GitHost,
+		idem:           cfg.Idempotency,
 		mux:            newPatternMux(),
 		routes:         nil,
 	}
@@ -407,6 +421,14 @@ type errorResponse struct {
 const maintenanceRetryAfter = "30"
 
 func (h *Handler) writeError(ctx context.Context, w http.ResponseWriter, err error) {
+	if ie, ok := errors.AsType[*idempotent.Error](err); ok {
+		h.writeJSON(ctx, w, ie.Status, codedResponse{
+			Message: ie.Message, Code: ie.Status, ErrorCode: ie.Code, ErrorArgs: idempotencyArgs(ie),
+		})
+
+		return
+	}
+
 	if coded, ok := errors.AsType[*codedError](err); ok {
 		h.writeJSON(ctx, w, coded.status, codedResponse{
 			Message: coded.message, Code: coded.status, ErrorCode: coded.code, ErrorArgs: coded.args,
@@ -480,6 +502,10 @@ func classify(err error) (int, string) {
 	}
 
 	if status, message, ok := classifyProviders(err); ok {
+		return status, message
+	}
+
+	if status, message, ok := classifyGitHost(err); ok {
 		return status, message
 	}
 

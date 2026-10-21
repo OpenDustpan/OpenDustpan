@@ -178,6 +178,7 @@ type settings struct {
 	sinks                sinkSettings
 	jobStore             job.Store
 	savedViewStore       savedview.Store
+	gitHost              gitHostSettings
 	registry             *registrySettings
 	idempotencyStore     idempotency.Store
 	authenticator        identity.Authenticator
@@ -694,9 +695,7 @@ type services struct {
 //nolint:funlen // One literal that names every field of settings (exhaustruct); its length is the field count.
 func defaultSettings() *settings {
 	return &settings{
-		denialLimiter: denylimit.New(denylimit.Config{
-			Window: 0, MaxKeys: 0, MaxFlush: 0, MaxKeysPerPrincipal: 0, Now: nil,
-		}),
+		denialLimiter:           defaultDenialLimiter(),
 		devRefusal:              new(devRefusalState),
 		stackRefusals:           nil,
 		disablePulumiJournaling: false,
@@ -717,6 +716,7 @@ func defaultSettings() *settings {
 		sinks:                   sinkSettings{store: nil, senders: nil, ports: egress.Ports{}},
 		jobStore:                nil,
 		savedViewStore:          nil,
+		gitHost:                 gitHostSettings{store: nil, allow: nil, cas: nil, loopback: false, checkLimits: nil},
 		registry:                nil,
 		idempotencyStore:        nil,
 		authenticator:           nil,
@@ -765,6 +765,13 @@ func defaultSettings() *settings {
 		allowDevBackups:         false,
 		allowDevHint:            "",
 	}
+}
+
+// defaultDenialLimiter returns the denial limiter with its default limits.
+func defaultDenialLimiter() *denylimit.Limiter {
+	return denylimit.New(denylimit.Config{
+		Window: 0, MaxKeys: 0, MaxFlush: 0, MaxKeysPerPrincipal: 0, Now: nil,
+	})
 }
 
 // NewServer validates the options and wires the server together.
@@ -2703,12 +2710,14 @@ func newServerHandler(
 		return nil, err
 	}
 
-	var sinks serverapi.AuditSinkSource
-	if cfg.auditShipper != nil {
-		sinks = cfg.auditShipper
+	gitHost, idem, err := newGitHostParts(cfg, deps)
+	if err != nil {
+		return nil, err
 	}
 
 	handler, err := serverapi.NewHandler(serverapi.Config{
+		GitHost:          gitHost,
+		Idempotency:      idem,
 		Authenticator:    cfg.authenticator,
 		Authorizer:       cfg.authorizer,
 		Logger:           cfg.logger,
@@ -2736,7 +2745,7 @@ func newServerHandler(
 		TempAdmins:    tempReaderOf(cfg.namespaceStore),
 		Now:           cfg.now,
 		AuditChain:    auditChainPort(deps.chain),
-		AuditSinks:    sinks,
+		AuditSinks:    auditSinksOf(cfg),
 		Workers:       cfg.watch,
 		SignIn:        deps.signIn,
 		Preferences:   newPreferencesService(cfg),
@@ -2748,6 +2757,18 @@ func newServerHandler(
 	}
 
 	return handler, nil
+}
+
+// auditSinksOf returns the source of the audit sink list, or nil when no audit
+// shipper is set.
+//
+//nolint:ireturn // The route reads the list through its own port.
+func auditSinksOf(cfg *settings) serverapi.AuditSinkSource {
+	if cfg.auditShipper == nil {
+		return nil
+	}
+
+	return cfg.auditShipper
 }
 
 // newPreferencesService builds the preferences service from the namespace

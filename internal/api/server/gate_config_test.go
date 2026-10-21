@@ -124,6 +124,8 @@ func gateHandler(
 
 	handler, err := apiserver.NewHandler(apiserver.Config{
 		Preferences: nil,
+		GitHost:     nil,
+		Idempotency: nil,
 		Workers:     nil, InstallationKind: "", Now: nil, TempAdmins: nil,
 		Authenticator: tokenAuthenticator{}, Authorizer: authz, Logger: slog.New(slog.DiscardHandler),
 		Namespaces: nss, Backups: nil, Restores: nil, Maintenance: newFakeMaintenance(maintenance.StateNormal),

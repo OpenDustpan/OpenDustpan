@@ -74,6 +74,8 @@ func newAuditChainHandler(
 
 	handler, err := apiserver.NewHandler(apiserver.Config{
 		Preferences:      nil,
+		GitHost:          nil,
+		Idempotency:      nil,
 		Workers:          nil,
 		InstallationKind: "",
 		TempAdmins:       nil,

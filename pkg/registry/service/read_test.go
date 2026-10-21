@@ -72,8 +72,10 @@ func TestStageSweepsOldFiles(t *testing.T) {
 		t.Fatalf("staged files = %v, want 1", got)
 	}
 
-	// A later stage, after the grace period, removes the old file.
-	later := e.now.Add(service.StagingGrace + time.Hour)
+	// A later stage, after the grace period, removes the old file. The age of
+	// a staged file is its modification time in the file system, which is the
+	// real time, so the later clock starts from the real time too.
+	later := time.Now().Add(service.StagingGrace + time.Hour)
 
 	ns := nsStub{}
 	for name, id := range e.ids {
@@ -101,7 +103,7 @@ func TestOpenRefusals(t *testing.T) {
 	t.Parallel()
 
 	e := newEnv(t, false)
-	sg := pgpfixture.NewSigner(t)
+	sg := newSigner(t)
 	e.trust(t, acme, sg)
 
 	rel, err := e.publish(t, acme, buildSet(t, sg, "payments", "1.0.0", "linux_amd64"))
@@ -149,7 +151,7 @@ func TestSigningKeyFailsClosedAfterRemoval(t *testing.T) {
 	t.Parallel()
 
 	e := newEnv(t, false)
-	sg := pgpfixture.NewSigner(t)
+	sg := newSigner(t)
 	e.trust(t, acme, sg)
 
 	rel, err := e.publish(t, acme, buildSet(t, sg, "payments", "1.0.0", "linux_amd64"))
@@ -182,7 +184,7 @@ func TestServableReleasesLeaveOutARemovedKey(t *testing.T) {
 	t.Parallel()
 
 	e := newEnv(t, false)
-	old, current := pgpfixture.NewSigner(t), pgpfixture.NewSigner(t)
+	old, current := newSigner(t), newSigner(t)
 	e.trust(t, acme, old)
 	e.trust(t, acme, current)
 
@@ -239,7 +241,7 @@ func TestAddKeyRefusals(t *testing.T) {
 		}
 	}
 
-	_, err := e.svc.AddKey(context.Background(), e.caller, "gamma", pgpfixture.NewSigner(t).Key.Armored)
+	_, err := e.svc.AddKey(context.Background(), e.caller, "gamma", newSigner(t).Key.Armored)
 	if !errors.Is(err, namespace.ErrNotFound) {
 		t.Fatalf("AddKey in an unknown namespace = %v, want ErrNotFound", err)
 	}
