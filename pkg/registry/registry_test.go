@@ -26,6 +26,7 @@ func provider() registry.Release {
 		SignatureFile:   "terraform-provider-payments_1.2.3_SHA256SUMS.sig",
 		SignatureSHA256: sum,
 		KeyFingerprint:  strings.Repeat("CD", 20),
+		Protocols:       []string{"5.0"},
 		PublishedBy:     "user-1",
 		PublishedAt:     time.UnixMilli(1_800_000_000_000).UTC(),
 		Archives: []registry.Archive{
@@ -242,6 +243,7 @@ func TestReleaseValidate(t *testing.T) {
 			SignatureFile:   "",
 			SignatureSHA256: "",
 			KeyFingerprint:  "",
+			Protocols:       nil,
 			PublishedBy:     "user-1",
 			PublishedAt:     time.UnixMilli(1_800_000_000_000).UTC(),
 			Archives:        []registry.Archive{{Platform: "", FileName: "vpc-1.0.0.zip", SHA256: sum, Size: 5}},
@@ -298,6 +300,20 @@ func TestReleaseValidate(t *testing.T) {
 			false,
 		},
 		{func(r *registry.Release) { *r = mod(); r.SumsFile = "x" }, "module with sums", false},
+		{func(r *registry.Release) { *r = mod(); r.Protocols = []string{"5.0"} }, "module with protocols", false},
+		{func(r *registry.Release) { r.Protocols = nil }, "provider with no protocols", false},
+		{func(r *registry.Release) { r.Protocols = []string{"5.0", "6.0"} }, "provider with two protocols", true},
+		{func(r *registry.Release) { r.Protocols = []string{"5.10", "6.0"} }, "protocol with two digits", true},
+		{func(r *registry.Release) { r.Protocols = []string{"6.0", "5.0"} }, "falling protocols", false},
+		{func(r *registry.Release) { r.Protocols = []string{"5.0", "5.0"} }, "repeated protocol", false},
+		{func(r *registry.Release) { r.Protocols = []string{"5.9", "5.10"} }, "protocols compare as numbers", true},
+		{func(r *registry.Release) { r.Protocols = []string{"5"} }, "protocol with no minor", false},
+		{func(r *registry.Release) { r.Protocols = []string{"5.0\n"} }, "protocol with a newline", false},
+		{
+			func(r *registry.Release) { r.Protocols = []string{"1.0", "2.0", "3.0", "4.0", "5.0"} },
+			"five protocols",
+			false,
+		},
 		{func(r *registry.Release) {
 			r.Archives = make([]registry.Archive, registry.MaxArchives+1)
 		}, "too many archives", false},
@@ -433,6 +449,7 @@ func TestSameContent(t *testing.T) {
 		"signature file": func(r *registry.Release) { r.SignatureFile = "x.sig" },
 		"signature hash": func(r *registry.Release) { r.SignatureSHA256 = strings.Repeat("a", 64) },
 		"fingerprint":    func(r *registry.Release) { r.KeyFingerprint = strings.Repeat("AB", 20) },
+		"protocols":      func(r *registry.Release) { r.Protocols = []string{"6.0"} },
 	} {
 		d := b
 		d.Archives = append([]registry.Archive(nil), b.Archives...)

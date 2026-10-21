@@ -259,6 +259,7 @@ func newObjectHandler(t *testing.T, authz identity.Authorizer) *tfe.Handler {
 	t.Helper()
 
 	handler, err := tfe.NewHandler(tfe.Config{
+		Registry:       nil,
 		Authenticator:  tokenAuthenticator{},
 		Authorizer:     authz,
 		AddressGate:    nil,
@@ -882,6 +883,7 @@ func newTestHandler(t *testing.T) *tfe.Handler {
 	t.Helper()
 
 	handler, err := tfe.NewHandlerWithRoutes(tfe.Config{
+		Registry:       nil,
 		Authenticator:  stubAuthenticator{},
 		Authorizer:     stubAuthorizer{},
 		AddressGate:    nil,
@@ -907,6 +909,7 @@ func newEnforcingHandler(t *testing.T, authz identity.Authorizer) *tfe.Handler {
 	t.Helper()
 
 	handler, err := tfe.NewHandlerWithRoutes(tfe.Config{
+		Registry:       nil,
 		Authenticator:  tokenAuthenticator{},
 		Authorizer:     authz,
 		AddressGate:    nil,
@@ -934,6 +937,7 @@ func newProductionHandler(t *testing.T) *tfe.Handler {
 	t.Helper()
 
 	handler, err := tfe.NewHandler(tfe.Config{
+		Registry:       nil,
 		Authenticator:  stubAuthenticator{},
 		Authorizer:     stubAuthorizer{},
 		AddressGate:    nil,
@@ -1149,6 +1153,9 @@ func validateRoute(route tfe.Route, public map[string]bool) error {
 		return validatePublicRoute(route, public)
 	case tfe.ScopeAuthorized:
 		return validateAuthorizedRoute(route, public)
+	case tfe.ScopeRegistry, tfe.ScopeSigned:
+		// The registry routes are not in this table. registry_test.go checks them.
+		return fmt.Errorf("%w: %q uses a registry scope", errInvalidRoute, route.Path)
 	case tfe.ScopeUpload:
 		return validateUploadRoute(route, public)
 	default:
@@ -1834,6 +1841,7 @@ func TestErrorHidesInternalDetail(t *testing.T) {
 	t.Parallel()
 
 	handler, err := tfe.NewHandlerWithRoutes(tfe.Config{
+		Registry:       nil,
 		Authenticator:  tokenAuthenticator{},
 		Authorizer:     selectiveAuthorizer{deny: map[identity.Action]bool{}},
 		AddressGate:    nil,
@@ -1948,6 +1956,11 @@ func checkRouteObject(t *testing.T, route tfe.Route) {
 		checkAuthorizedRouteObject(t, route)
 
 		return
+	case tfe.ScopeRegistry, tfe.ScopeSigned:
+		// The production table of this test holds no registry route.
+		t.Fatalf("route %q uses a registry scope", route.Path)
+	default:
+		t.Fatalf("route %q has unknown scope %v", route.Path, route.Scope)
 	}
 }
 

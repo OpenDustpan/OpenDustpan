@@ -199,6 +199,7 @@ func newRevealHandler(
 	t.Helper()
 
 	handler, err := tfe.NewHandler(tfe.Config{
+		Registry:       nil,
 		Authenticator:  tokenAuthenticator{},
 		Authorizer:     authz,
 		AddressGate:    nil,

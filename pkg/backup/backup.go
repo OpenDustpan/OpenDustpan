@@ -153,6 +153,8 @@ var Tables = []string{
 	"manual_locks",
 	TablePersonPreferences,
 	"saved_views",
+	"registry_releases",
+	"registry_keys",
 	"notification_sinks",
 	"notification_sink_secrets",
 	"notification_sink_refs",
