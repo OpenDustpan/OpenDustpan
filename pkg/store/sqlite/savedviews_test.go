@@ -1,13 +1,16 @@
 package sqlite_test
 
 import (
+	"path/filepath"
 	"slices"
 	"testing"
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/savedview"
 	"opendustpan.org/opendustpan/pkg/savedview/savedviewtest"
+	"opendustpan.org/opendustpan/pkg/store/internal/viewstore"
 	"opendustpan.org/opendustpan/pkg/store/sqlite"
 )
 
@@ -16,9 +19,18 @@ import (
 func savedViewHarness(t *testing.T) savedviewtest.Harness {
 	t.Helper()
 
-	s := open(t)
+	path := filepath.Join(t.TempDir(), "dustpan.db")
+
+	copyTemplate(t, path)
+
+	s := openPath(t, path)
 
 	return savedviewtest.Harness{
+		Seed: func(t *testing.T, views []savedview.View) {
+			t.Helper()
+
+			seedSavedViews(t, path, views)
+		},
 		Store: s.SavedViews(),
 		Namespace: func(t *testing.T, name string) namespace.Fence {
 			t.Helper()
@@ -30,6 +42,51 @@ func savedViewHarness(t *testing.T) savedviewtest.Harness {
 
 			return allAuditEntries(t, s, namespace.Name(ns))
 		},
+	}
+}
+
+// seedSavedViews inserts views into the database file at path through a
+// second handle, in one transaction, with the query encoding of the store.
+func seedSavedViews(t *testing.T, path string, views []savedview.View) {
+	t.Helper()
+
+	raw, err := openRawDB(path)
+	if err != nil {
+		t.Fatalf("seed saved views: %v", err)
+	}
+
+	defer func() {
+		if closeErr := raw.Close(); closeErr != nil {
+			t.Errorf("close the seed handle: %v", closeErr)
+		}
+	}()
+
+	tx, err := raw.BeginTx(t.Context(), nil)
+	if err != nil {
+		t.Fatalf("seed saved views: begin: %v", err)
+	}
+
+	defer func() {
+		_ = tx.Rollback() //nolint:errcheck // A rollback after the commit has nothing to undo.
+	}()
+
+	for _, v := range views {
+		query, encodeErr := viewstore.EncodeQuery(v.Query)
+		if encodeErr != nil {
+			t.Fatalf("seed saved views: encode the query: %v", encodeErr)
+		}
+
+		if _, execErr := tx.ExecContext(t.Context(), `INSERT INTO saved_views
+			(id, namespace_id, owner, name, query_json, created_at_ms)
+			VALUES (?, (SELECT id FROM namespaces WHERE name = ?), ?, ?, ?, ?)`,
+			string(v.ID), v.Namespace.String(), v.Owner, v.Name, query, v.CreatedAt.UnixMilli(),
+		); execErr != nil {
+			t.Fatalf("seed saved views: insert %q of %s: %v", v.Name, v.Owner, execErr)
+		}
+	}
+
+	if commitErr := tx.Commit(); commitErr != nil {
+		t.Fatalf("seed saved views: commit: %v", commitErr)
 	}
 }
 

@@ -1,14 +1,19 @@
 package postgres_test
 
 import (
+	"context"
 	"os"
 	"slices"
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
+
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/savedview"
 	"opendustpan.org/opendustpan/pkg/savedview/savedviewtest"
+	"opendustpan.org/opendustpan/pkg/store/internal/viewstore"
 	"opendustpan.org/opendustpan/pkg/store/postgres"
 )
 
@@ -18,14 +23,21 @@ func savedViewHarness(base string) savedviewtest.Factory {
 	return func(t *testing.T) savedviewtest.Harness {
 		t.Helper()
 
-		return newSavedViewHarness(t, open(t, base))
+		schemaURL := isolatedURL(t, base)
+
+		return newSavedViewHarness(t, openURL(t, schemaURL), schemaURL)
 	}
 }
 
-func newSavedViewHarness(t *testing.T, s *postgres.Store) savedviewtest.Harness {
+func newSavedViewHarness(t *testing.T, s *postgres.Store, schemaURL string) savedviewtest.Harness {
 	t.Helper()
 
 	return savedviewtest.Harness{
+		Seed: func(t *testing.T, views []savedview.View) {
+			t.Helper()
+
+			seedSavedViews(t, schemaURL, views)
+		},
 		Store: s.SavedViews(),
 		Namespace: func(t *testing.T, name string) namespace.Fence {
 			t.Helper()
@@ -37,6 +49,52 @@ func newSavedViewHarness(t *testing.T, s *postgres.Store) savedviewtest.Harness 
 
 			return allAuditEntries(t, s, namespace.Name(ns))
 		},
+	}
+}
+
+// seedSavedViews inserts views into the schema of schemaURL through a second
+// connection, in one transaction, with the query encoding of the store.
+func seedSavedViews(t *testing.T, schemaURL string, views []savedview.View) {
+	t.Helper()
+
+	conn, err := pgx.Connect(t.Context(), schemaURL)
+	if err != nil {
+		t.Fatalf("seed saved views: connect: %v", err)
+	}
+
+	defer func() {
+		if closeErr := conn.Close(context.WithoutCancel(t.Context())); closeErr != nil {
+			t.Errorf("close the seed connection: %v", closeErr)
+		}
+	}()
+
+	rows := make([][]any, 0, len(views))
+	nsIDs := map[namespace.Name]string{}
+
+	for _, v := range views {
+		query, encodeErr := viewstore.EncodeQuery(v.Query)
+		if encodeErr != nil {
+			t.Fatalf("seed saved views: encode the query: %v", encodeErr)
+		}
+
+		nsID, ok := nsIDs[v.Namespace]
+		if !ok {
+			if scanErr := conn.QueryRow(t.Context(), "SELECT id FROM namespaces WHERE name = $1", v.Namespace.String()).
+				Scan(&nsID); scanErr != nil {
+				t.Fatalf("seed saved views: read namespace %s: %v", v.Namespace, scanErr)
+			}
+
+			nsIDs[v.Namespace] = nsID
+		}
+
+		rows = append(rows, []any{string(v.ID), nsID, v.Owner, v.Name, query, v.CreatedAt.UnixMilli()})
+	}
+
+	columns := []string{"id", "namespace_id", "owner", "name", "query_json", "created_at_ms"}
+	if _, copyErr := conn.CopyFrom(
+		t.Context(), pgx.Identifier{"saved_views"}, columns, pgx.CopyFromRows(rows),
+	); copyErr != nil {
+		t.Fatalf("seed saved views: copy: %v", copyErr)
 	}
 }
 
