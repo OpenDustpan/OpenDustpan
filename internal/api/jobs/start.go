@@ -197,8 +197,13 @@ func idempotencyKey(r *http.Request) (string, error) {
 
 		// The keys of drift checks share the key space of the jobs. The server
 		// makes them, so a caller key with the prefix is refused.
-		if len(k) >= len(drift.CheckKeyPrefix) && strings.EqualFold(string(k[:len(drift.CheckKeyPrefix)]), drift.CheckKeyPrefix) {
-			return "", fmt.Errorf("%w: the prefix %q is reserved for the server", idempotency.ErrInvalidKey, drift.CheckKeyPrefix)
+		if len(k) >= len(drift.CheckKeyPrefix) &&
+			strings.EqualFold(string(k[:len(drift.CheckKeyPrefix)]), drift.CheckKeyPrefix) {
+			return "", fmt.Errorf(
+				"%w: the prefix %q is reserved for the server",
+				idempotency.ErrInvalidKey,
+				drift.CheckKeyPrefix,
+			)
 		}
 
 		return string(k), nil

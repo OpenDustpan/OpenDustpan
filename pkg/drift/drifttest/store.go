@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/drift"
+	"opendustpan.org/opendustpan/pkg/graph"
 	"opendustpan.org/opendustpan/pkg/job"
 	"opendustpan.org/opendustpan/pkg/namespace"
 )
@@ -230,6 +231,33 @@ func testRecordStale(t *testing.T, h Harness) {
 	}
 }
 
+// recordAll records the results of the jobs in ids, keyed by their minute, at
+// the same time, and returns the error of each record.
+func recordAll(t *testing.T, h Harness, u graph.Unit, ids map[int]job.ID, f namespace.Fence) map[int]error {
+	t.Helper()
+
+	errs := make(map[int]error, len(ids))
+
+	var (
+		wg sync.WaitGroup
+		mu sync.Mutex
+	)
+
+	for n, id := range ids {
+		wg.Go(func() {
+			_, err := h.Store.Record(t.Context(), result(u, id, n, "a"), f)
+
+			mu.Lock()
+			errs[n] = err
+			mu.Unlock()
+		})
+	}
+
+	wg.Wait()
+
+	return errs
+}
+
 // testRecordConcurrent sends the results of minutes 1 to 9 of one unit at the
 // same time, so that two writers can read the same stored row. Each record
 // returns nil or ErrStale, the newest one returns nil, and the stored result
@@ -250,24 +278,7 @@ func testRecordConcurrent(t *testing.T, h Harness) {
 			ids[n] = h.Jobs.DriftCheck(t, u)
 		}
 
-		errs := make(map[int]error, last)
-
-		var (
-			wg sync.WaitGroup
-			mu sync.Mutex
-		)
-
-		for n := first; n <= last; n++ {
-			wg.Go(func() {
-				_, err := h.Store.Record(t.Context(), result(u, ids[n], n, "a"), f)
-
-				mu.Lock()
-				errs[n] = err
-				mu.Unlock()
-			})
-		}
-
-		wg.Wait()
+		errs := recordAll(t, h, u, ids, f)
 
 		for n, err := range errs {
 			if err != nil && !errors.Is(err, drift.ErrStale) {

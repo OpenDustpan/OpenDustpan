@@ -222,14 +222,23 @@ func TestValidateDriftSteps(t *testing.T) {
 		{"TF_VAR_x", func(s []job.Step) []job.Step { s[1].Env["TF_VAR_x"] = "1"; return s }},
 		{"TF_LOG_PATH", func(s []job.Step) []job.Step { s[0].Env["TF_LOG_PATH"] = "/tmp/x"; return s }},
 		{"TF_CLI_CONFIG_FILE", func(s []job.Step) []job.Step { s[1].Env["TF_CLI_CONFIG_FILE"] = "/tmp/x"; return s }},
-		{"a changed value of TF_IN_AUTOMATION", func(s []job.Step) []job.Step { s[1].Env["TF_IN_AUTOMATION"] = "0"; return s }},
+		{
+			"a changed value of TF_IN_AUTOMATION",
+			func(s []job.Step) []job.Step { s[1].Env["TF_IN_AUTOMATION"] = "0"; return s },
+		},
 		{"no environment", func(s []job.Step) []job.Step { s[1].Env = nil; return s }},
 		{"a Dir", func(s []job.Step) []job.Step { s[1].Dir = "sub"; return s }},
 		{"a Dir that leaves the checkout", func(s []job.Step) []job.Step { s[0].Dir = "../.."; return s }},
 		{"apply", func(s []job.Step) []job.Step { s[1].Args = []string{"tofu", "apply", "-auto-approve"}; return s }},
-		{"destroy", func(s []job.Step) []job.Step { s[1].Args = []string{"tofu", "destroy", "-auto-approve"}; return s }},
+		{
+			"destroy",
+			func(s []job.Step) []job.Step { s[1].Args = []string{"tofu", "destroy", "-auto-approve"}; return s },
+		},
 		{"plan with -destroy", func(s []job.Step) []job.Step { s[1].Args = append(s[1].Args, "-destroy"); return s }},
-		{"plan with -lock=false", func(s []job.Step) []job.Step { s[1].Args = append(s[1].Args, "-lock=false"); return s }},
+		{
+			"plan with -lock=false",
+			func(s []job.Step) []job.Step { s[1].Args = append(s[1].Args, "-lock=false"); return s },
+		},
 		{"plan with -chdir", func(s []job.Step) []job.Step {
 			s[1].Args = []string{"tofu", "-chdir=sub", "plan", "-refresh-only", "-input=false", "-out=drift.tfplan"}
 
@@ -241,9 +250,15 @@ func TestValidateDriftSteps(t *testing.T) {
 			return s
 		}},
 		{"another program", func(s []job.Step) []job.Step { s[0].Args = []string{"sh", "-c", "tofu apply"}; return s }},
-		{"init with an extra flag", func(s []job.Step) []job.Step { s[0].Args = append(s[0].Args, "-upgrade"); return s }},
+		{
+			"init with an extra flag",
+			func(s []job.Step) []job.Step { s[0].Args = append(s[0].Args, "-upgrade"); return s },
+		},
 		{"the steps in the other order", func(s []job.Step) []job.Step { return []job.Step{s[1], s[0]} }},
-		{"a third step", func(s []job.Step) []job.Step { return append(s, driftStep("extra", "tofu", "init", "-input=false")) }},
+		{
+			"a third step",
+			func(s []job.Step) []job.Step { return append(s, driftStep("extra", "tofu", "init", "-input=false")) },
+		},
 		{"one step", func(s []job.Step) []job.Step { return s[:1] }},
 		{"a step that ValidateSteps refuses", func(s []job.Step) []job.Step { s[0].Args = nil; return s }},
 	}
