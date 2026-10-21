@@ -1268,6 +1268,7 @@ func (f *serveFlags) storeOptions(st store, wrapper secret.Wrapper) ([]dustpan.O
 	opts = append(opts, durableStoreOption(st)...)
 	opts = append(opts, runnerStoreOption(st)...)
 	opts = append(opts, jobStoreOption(st)...)
+	opts = append(opts, triggerStoreOption(st)...)
 	opts = append(opts, savedViewStoreOption(st)...)
 	opts = append(opts, gitHostStoreOption(st)...)
 	opts = append(opts, registryStoreOption(st)...)
@@ -1356,6 +1357,19 @@ func jobStoreOption(st store) []dustpan.Option {
 			dustpan.WithJobStore(s.Jobs()),
 			dustpan.WithJobClaimer(job.NewClaimer(s.Jobs(), s.DurableOperationsPort(), s.Store)),
 		}
+	default:
+		return nil
+	}
+}
+
+// triggerStoreOption returns the option of the run trigger store for st, or nil
+// when st keeps no triggers.
+func triggerStoreOption(st store) []dustpan.Option {
+	switch s := st.(type) {
+	case sqliteStore:
+		return []dustpan.Option{dustpan.WithTriggerStore(s.Triggers())}
+	case postgresStore:
+		return []dustpan.Option{dustpan.WithTriggerStore(s.Triggers())}
 	default:
 		return nil
 	}
