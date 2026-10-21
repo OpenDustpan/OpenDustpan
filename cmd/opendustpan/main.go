@@ -1239,6 +1239,7 @@ func (f *serveFlags) storeOptions(st store, wrapper secret.Wrapper) ([]dustpan.O
 	opts = append(opts, runnerStoreOption(st)...)
 	opts = append(opts, jobStoreOption(st)...)
 	opts = append(opts, savedViewStoreOption(st)...)
+	opts = append(opts, registryStoreOption(st)...)
 	opts = append(opts, dustpan.WithInstallationKind(f.kind()), dustpan.WithInstallationKindStore(st))
 
 	return append(opts, profileStoreOption(st, wrapper)...), nil
@@ -1291,6 +1292,19 @@ func savedViewStoreOption(st store) []dustpan.Option {
 		return []dustpan.Option{dustpan.WithSavedViewStore(s.SavedViews())}
 	case postgresStore:
 		return []dustpan.Option{dustpan.WithSavedViewStore(s.SavedViews())}
+	default:
+		return nil
+	}
+}
+
+// registryStoreOption returns the option of the registry stores for st, or nil
+// when st keeps no registry.
+func registryStoreOption(st store) []dustpan.Option {
+	switch s := st.(type) {
+	case sqliteStore:
+		return []dustpan.Option{dustpan.WithRegistry(s.Registry(), s.RegistryKeys())}
+	case postgresStore:
+		return []dustpan.Option{dustpan.WithRegistry(s.Registry(), s.RegistryKeys())}
 	default:
 		return nil
 	}

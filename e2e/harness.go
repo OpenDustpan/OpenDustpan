@@ -442,6 +442,7 @@ func startInprocessServer(
 		disableJournaling: in.disableJournaling,
 		ipAllowlists:      in.ipAllowlists,
 		signIn:            signIn,
+		publicURL:         inprocessPublicURL(in, ts),
 	})
 
 	handler = cappedHandler(faultedHandler(build.handler, in.journalRefuser), in.journalCap)
@@ -599,6 +600,9 @@ type serverArgs struct {
 	// signIn turns on the console sign-in of the in-process server, or is
 	// nil.
 	signIn *signInSetup
+	// publicURL is the external URL of the in-process server, or empty. The
+	// provider registry protocol compares each request with its host.
+	publicURL string
 }
 
 // profileStoreOptions returns the option that gives the in-process server the
@@ -681,7 +685,10 @@ func newServer(ctx context.Context, tb testing.TB, args serverArgs) serverBuild 
 		st,
 		args,
 		append(
-			slices.Concat(profileStoreOptions(st, wrapper), jobStoreOptions(st), savedViewStoreOptions(st)),
+			slices.Concat(
+				profileStoreOptions(st, wrapper), jobStoreOptions(st), savedViewStoreOptions(st),
+				registryStoreOptions(st), publicURLOptions(args.publicURL),
+			),
 			[]dustpan.Option{
 				dustpan.WithRegion(region),
 				dustpan.WithNamespaceStore(st),

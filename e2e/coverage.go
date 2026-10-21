@@ -19,6 +19,7 @@ import (
 	contextapi "opendustpan.org/opendustpan/internal/api/objectcontext"
 	profileapi "opendustpan.org/opendustpan/internal/api/profile"
 	pulumiapi "opendustpan.org/opendustpan/internal/api/pulumi"
+	registryapi "opendustpan.org/opendustpan/internal/api/registry"
 	serverapi "opendustpan.org/opendustpan/internal/api/server"
 	tfeapi "opendustpan.org/opendustpan/internal/api/tfe"
 	tofuhttpapi "opendustpan.org/opendustpan/internal/api/tofuhttp"
@@ -37,6 +38,8 @@ import (
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/objectcontext"
 	"opendustpan.org/opendustpan/pkg/profile"
+	"opendustpan.org/opendustpan/pkg/registry"
+	registryservice "opendustpan.org/opendustpan/pkg/registry/service"
 	"opendustpan.org/opendustpan/pkg/savedview"
 	"opendustpan.org/opendustpan/pkg/secret"
 	"opendustpan.org/opendustpan/pkg/session"
@@ -82,6 +85,7 @@ func ServedRoutes(tb testing.TB) []RouteRef {
 	contextRoutes := coverageContextRoutes(tb, namespaces)
 	profileRoutes := coverageProfileRoutes(tb)
 	jobRoutes := coverageJobRoutes(tb, namespaces)
+	registryRoutes := coverageRegistryRoutes(tb)
 	server := coverageServerRoutes(tb)
 
 	out := make(
@@ -104,6 +108,8 @@ func ServedRoutes(tb testing.TB) []RouteRef {
 		)+len(
 			jobRoutes,
 		)+len(
+			registryRoutes,
+		)+len(
 			server,
 		)+probeRouteCount,
 	)
@@ -115,6 +121,7 @@ func ServedRoutes(tb testing.TB) []RouteRef {
 	out = append(out, contextRoutes...)
 	out = append(out, profileRoutes...)
 	out = append(out, jobRoutes...)
+	out = append(out, registryRoutes...)
 	out = append(out, server...)
 
 	// The probes live on the root mux, not in any adapter table.
@@ -422,6 +429,10 @@ func coverageTFERoutes(tb testing.TB, namespaces *namespace.Service) []RouteRef 
 		Audit:          nil,
 		OnAuditFailure: nil,
 		DenialLimiter:  nil,
+		Registry: tfeapi.RegistryConfig{
+			Service: coverageRegistryService{}, Host: "", DefaultPort: "", URLKey: make([]byte, tfeapi.MinRegistryURLKeyBytes),
+			URLTTL: 0, Now: nil,
+		},
 	})
 	if err != nil {
 		tb.Fatalf("tfe handler: %v", err)
@@ -1301,6 +1312,7 @@ func CoverageAllowlist() []AllowEntry {
 		jobAllowEntries(),
 		preferencesAllowEntries(),
 		savedViewAllowEntries(),
+		registryAllowEntries(),
 	)
 }
 
@@ -2374,5 +2386,94 @@ func coverageViews(tb testing.TB) *inventoryapi.ViewsConfig {
 
 	return &inventoryapi.ViewsConfig{
 		Service: service, Principals: struct{ inventoryapi.ViewPrincipals }{nil}, Idempotency: nil,
+	}
+}
+
+// coverageRegistryService answers nothing. It exists only to build a Handler
+// for its route table.
+type coverageRegistryService struct{}
+
+func (coverageRegistryService) Releases(context.Context, namespace.Name, string) ([]registry.Release, error) {
+	return nil, registry.ErrNotFound
+}
+
+func (coverageRegistryService) Release(context.Context, namespace.Name, string, string) (registry.Release, error) {
+	return registry.Release{}, registry.ErrNotFound
+}
+
+func (coverageRegistryService) SigningKey(context.Context, registry.Release) (registry.TrustedKey, error) {
+	return registry.TrustedKey{}, registry.ErrKeyNotFound
+}
+
+func (coverageRegistryService) OpenFile(
+	context.Context, namespace.Name, string, string, string,
+) (int64, io.ReadCloser, error) {
+	return 0, nil, registry.ErrNotFound
+}
+
+// coverageRegistryRoutes returns the route table of the registry API. The
+// service is an empty shell: it exists only to build a Handler.
+func coverageRegistryRoutes(tb testing.TB) []RouteRef {
+	tb.Helper()
+
+	store := struct{ registry.Store }{nil}
+	keys := struct{ registry.KeyStore }{nil}
+	verifier := struct {
+		registry.SignatureVerifier
+		registry.KeyInspector
+	}{nil, nil}
+
+	svc, err := registryservice.New(registryservice.Config{
+		Store: store, Keys: keys, Verifier: verifier, Inspector: verifier, Blobs: struct{ blob.Store }{nil},
+		Namespaces: coverageRegistryNamespaces{}, Now: nil, MaxArchiveBytes: 0, MaxReleaseBytes: 0,
+	})
+	if err != nil {
+		tb.Fatalf("registry service: %v", err)
+	}
+
+	handler, err := registryapi.NewHandler(registryapi.Config{
+		Service: svc, Authenticator: coverageAuthenticator{}, Authorizer: coverageAuthorizer{},
+		MaxUploadBytes: registryservice.DefaultMaxArchiveBytes, Audit: nil, Namespaces: nil, OnAuditFailure: nil,
+		DenialLimiter: nil, Sessions: nil, Idempotency: nil, Logger: slog.New(slog.DiscardHandler),
+	})
+	if err != nil {
+		tb.Fatalf("registry handler: %v", err)
+	}
+
+	routes := handler.Routes()
+	out := make([]RouteRef, 0, len(routes))
+
+	for _, route := range routes {
+		out = append(out, RouteRef{Method: route.Method, Path: route.Path})
+	}
+
+	return out
+}
+
+// coverageRegistryNamespaces holds no namespace.
+type coverageRegistryNamespaces struct{}
+
+func (coverageRegistryNamespaces) GetNamespace(context.Context, namespace.Name) (namespace.Namespace, error) {
+	return namespace.Namespace{}, namespace.ErrNotFound
+}
+
+// registryAllowEntries covers the routes of the registry API. No CLI calls
+// them: a CI job or a client of the API does. The steps of TestRegistryTofuInit
+// call each of them, and OpenTofu then installs what they published.
+func registryAllowEntries() []AllowEntry {
+	const (
+		base = "/api/dustpan/v1/namespaces/{namespace}/registry"
+		test = "TestRegistryTofuInit"
+		why  = "Client route: no CLI calls it. The steps of TestRegistryTofuInit call it, and OpenTofu installs what it published."
+	)
+
+	return []AllowEntry{
+		{Method: http.MethodPost, Path: base + "/uploads", CoveringTest: test, Reason: why},
+		{Method: http.MethodPut, Path: base + "/providers/{name}/versions/{version}", CoveringTest: test, Reason: why},
+		{Method: http.MethodGet, Path: base + "/providers/{name}/versions", CoveringTest: test, Reason: why},
+		{Method: http.MethodGet, Path: base + "/providers/{name}/versions/{version}", CoveringTest: test, Reason: why},
+		{Method: http.MethodPost, Path: base + "/keys", CoveringTest: test, Reason: why},
+		{Method: http.MethodGet, Path: base + "/keys", CoveringTest: test, Reason: why},
+		{Method: http.MethodDelete, Path: base + "/keys/{fingerprint}", CoveringTest: test, Reason: why},
 	}
 }
