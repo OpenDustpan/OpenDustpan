@@ -63,6 +63,7 @@ func (h *Handler) revealRoute() Route {
 		Actions: []identity.Action{identity.ActionUnitRead, identity.ActionUnitReadSecrets},
 		Resolve: resolveGetStack,
 		Serve:   h.freshReveal(h.revealStateValue),
+		Lease:   nil,
 	}
 }
 
