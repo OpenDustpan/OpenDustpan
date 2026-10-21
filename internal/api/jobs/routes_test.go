@@ -218,14 +218,23 @@ func (a *recordingAuthorizer) seen() []string {
 func newHandler(t *testing.T, authz identity.Authorizer, jobs job.Store) *jobsapi.Handler {
 	t.Helper()
 
+	return newStartHandler(t, authz, jobs, nil, nil)
+}
+
+// newStartHandler is newHandler with a job service and an audit store.
+func newStartHandler(
+	t *testing.T, authz identity.Authorizer, jobs job.Store, starter job.Starter, entries audit.Store,
+) *jobsapi.Handler {
+	t.Helper()
+
 	namespaces, err := namespace.NewService(namespace.Config{Store: fakeNamespaces{}, Now: nil, Region: "test-region"})
 	if err != nil {
 		t.Fatalf("namespace service: %v", err)
 	}
 
 	handler, err := jobsapi.NewHandler(jobsapi.Config{
-		Namespaces: namespaces, Jobs: jobs, Authenticator: tokenAuthenticator{}, Authorizer: authz,
-		Audit: nil, OnAuditFailure: nil, DenialLimiter: nil, Sessions: nil, Logger: slog.New(slog.DiscardHandler),
+		Namespaces: namespaces, Jobs: jobs, Starter: starter, Authenticator: tokenAuthenticator{}, Authorizer: authz,
+		Audit: entries, OnAuditFailure: nil, DenialLimiter: nil, Sessions: nil, Logger: slog.New(slog.DiscardHandler),
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -277,9 +286,23 @@ func runningJob(t *testing.T, id job.ID) job.Job {
 			},
 			Pool: "pool-1", Profile: "prf-secret-profile", Edits: nil, Delivery: "",
 		},
-		State: job.StateRunning, Wait: job.WaitNone, Reason: "", Current: 1, StartedBy: "ada", Agent: "", AgentMode: "",
-		BreakGlass: nil, Delivery: nil, Closed: nil, Verification: job.VerificationNone, IdempotencyKey: "key-1",
-		Version: 3, CreatedAt: at, UpdatedAt: at.Add(time.Minute),
+		State:          job.StateRunning,
+		Wait:           job.WaitNone,
+		Reason:         "",
+		Current:        1,
+		StartedBy:      "ada",
+		Source:         job.SourceSchedule,
+		Agent:          "",
+		AgentMode:      "",
+		BreakGlass:     nil,
+		Delivery:       nil,
+		Closed:         nil,
+		Verification:   job.VerificationNone,
+		IdempotencyKey: "key-1",
+		RequestHash:    "",
+		Version:        3,
+		CreatedAt:      at,
+		UpdatedAt:      at.Add(time.Minute),
 		Phases: []job.Phase{
 			{
 				Kind: job.PhasePlan, Operation: "dop-internal-operation", Claims: 1, Executor: "runner-1",
@@ -572,7 +595,7 @@ func TestJobDocument(t *testing.T) {
 	for _, want := range []string{
 		`"id":"` + testJob + `"`, `"namespace":"acme"`, `"tool":"OpenTofu"`, `"id":"` + testUnit + `"`,
 		`"operation":"apply"`, `"executor":"runner"`, `"state":"running"`, `"current":1`, `"startedBy":"ada"`,
-		`"version":3`, `"kind":"plan"`, `"kind":"apply"`, `"stateVersion":"sv-1"`, `"pool":"pool-1"`,
+		`"version":3`, `"source":"schedule"`, `"kind":"plan"`, `"kind":"apply"`, `"stateVersion":"sv-1"`, `"pool":"pool-1"`,
 		`"repository":"acme/infra"`, `"exitCode":0`, `"subject":"bo"`, `"verdict":"approve"`,
 		`"name":"plan","role":"tool","phase":"plan","changesResources":false`,
 	} {
@@ -620,7 +643,7 @@ func TestNewHandlerNeedsItsDependencies(t *testing.T) {
 	t.Parallel()
 
 	_, err := jobsapi.NewHandler(jobsapi.Config{
-		Namespaces: nil, Jobs: nil, Authenticator: nil, Authorizer: nil, Audit: nil, OnAuditFailure: nil,
+		Namespaces: nil, Jobs: nil, Starter: nil, Authenticator: nil, Authorizer: nil, Audit: nil, OnAuditFailure: nil,
 		DenialLimiter: nil, Sessions: nil, Logger: nil,
 	})
 	if !errors.Is(err, jobsapi.ErrMissingDependency) {

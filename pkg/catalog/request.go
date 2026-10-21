@@ -240,10 +240,14 @@ func StartRequestFor(req *Request, rev *Revision, v *Version, reason string) (jo
 		Pool:           v.Blueprint.Platform.Pool,
 		Edits:          nil,
 		Delivery:       "",
+		Source:         job.SourceCatalog,
 		IdempotencyKey: rev.Key(),
 		Reason:         reason,
 		BreakGlass:     rev.BreakGlass,
 		Channel:        audit.ChannelAPI,
+		SourceIP:       "",
+		UserAgent:      "",
+		RequestID:      "",
 	}
 
 	switch rev.Operation {

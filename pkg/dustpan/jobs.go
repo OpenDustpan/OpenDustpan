@@ -11,7 +11,9 @@ import (
 
 // WithJobStore sets the store of jobs. With it, the server serves the jobs
 // API under /api/dustpan/v1/namespaces/{namespace}/jobs. Without it, the
-// server serves no job route.
+// server serves no job route. With the runner stores (WithRunners), the
+// inventory reader and a store of gates, the server also starts plan jobs
+// through POST on that path.
 func WithJobStore(st job.Store) Option {
 	return func(o *settings) { o.jobStore = st }
 }
@@ -30,9 +32,15 @@ func newJobsHandler(svc services, cfg *settings, onFailure func()) (http.Handler
 		neutralAudit = st
 	}
 
+	starter, err := newJobService(svc, cfg)
+	if err != nil {
+		return nil, err
+	}
+
 	handler, err := jobsapi.NewHandler(jobsapi.Config{
 		Namespaces:     svc.namespaces,
 		Jobs:           cfg.jobStore,
+		Starter:        starter,
 		Authenticator:  cfg.authenticator,
 		Authorizer:     cfg.authorizer,
 		Audit:          neutralAudit,

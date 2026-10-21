@@ -302,8 +302,14 @@ type StartRequest struct {
 	// Edits and Delivery are for a write-back job.
 	Edits    []FileEdit
 	Delivery Delivery
+	// Source tells where the start came from. Empty takes SourceAgent for an
+	// agent and SourceAPI for any other actor. Only a feature of the server
+	// sets it: the REST API always starts a job with SourceAPI. A source
+	// kind that is not in SourceKinds fails with ErrInvalid.
+	Source SourceKind
 	// IdempotencyKey makes a retry of the start safe: two starts with one key
-	// and one spec give one job. Empty makes a new job each time.
+	// and one spec by one principal give one job. Empty makes a new job each
+	// time.
 	IdempotencyKey string
 	// Reason is the text that the caller gives for the change. The audit
 	// entry of the start holds it.
@@ -314,6 +320,12 @@ type StartRequest struct {
 	BreakGlass *BreakGlass
 	// Channel is where the request came from, for the audit entry.
 	Channel audit.Channel
+	// SourceIP, UserAgent and RequestID describe the request for the audit
+	// entry. They are empty for a start that no request made. The service
+	// holds them as given: the caller bounds them.
+	SourceIP  string
+	UserAgent string
+	RequestID string
 }
 
 // Service is what a caller uses to start and drive a job. The REST API
