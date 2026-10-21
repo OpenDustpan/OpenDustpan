@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"maps"
 	"net/http"
 	"net/url"
@@ -15,6 +14,7 @@ import (
 
 	"opendustpan.org/opendustpan/internal/api/idempotent"
 	"opendustpan.org/opendustpan/internal/api/problem"
+	"opendustpan.org/opendustpan/internal/api/routekit"
 	"opendustpan.org/opendustpan/internal/clientip"
 	"opendustpan.org/opendustpan/internal/requestid"
 	"opendustpan.org/opendustpan/internal/sessionauth"
@@ -107,25 +107,6 @@ func toDocument(s *notify.Sink) sinkDocument {
 		Target: answerTarget(s), URLSet: hasURL(s), CreatedBy: s.CreatedBy,
 		Version: s.Version, HostNeedsUpdate: s.HostNeedsUpdate(),
 	}
-}
-
-// readBody decodes one JSON object into v. It refuses an unknown field, a
-// second value and a body over the limit. The error text is fixed: it never
-// holds a part of the body.
-func readBody(w http.ResponseWriter, r *http.Request, v any) error {
-	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxBodyBytes))
-	if err != nil {
-		return problem.BadRequest("request.body-invalid", "the request body is not readable or is over 64 KiB")
-	}
-
-	dec := json.NewDecoder(bytes.NewReader(body))
-	dec.DisallowUnknownFields()
-
-	if err = dec.Decode(v); err != nil || dec.More() {
-		return problem.BadRequest("request.body-invalid", "the request body must be one JSON object with known fields")
-	}
-
-	return nil
 }
 
 // caller makes the caller of the sink service from the request.
@@ -310,7 +291,7 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request, p identity.Prin
 	ctx := r.Context()
 
 	var body createBody
-	if err := readBody(w, r, &body); err != nil {
+	if err := routekit.DecodeBody(w, r, maxBodyBytes, &body); err != nil {
 		h.writeError(ctx, w, err)
 
 		return
@@ -352,7 +333,7 @@ func (h *Handler) replace(w http.ResponseWriter, r *http.Request, p identity.Pri
 	ctx := r.Context()
 
 	var body replaceBody
-	if err := readBody(w, r, &body); err != nil {
+	if err := routekit.DecodeBody(w, r, maxBodyBytes, &body); err != nil {
 		h.writeError(ctx, w, err)
 
 		return

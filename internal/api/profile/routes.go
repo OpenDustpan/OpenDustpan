@@ -6,7 +6,7 @@ import (
 
 	"opendustpan.org/opendustpan/internal/api/idempotent"
 	"opendustpan.org/opendustpan/internal/api/problem"
-	"opendustpan.org/opendustpan/internal/sessionauth"
+	"opendustpan.org/opendustpan/internal/api/routekit"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
 )
@@ -119,34 +119,6 @@ func (h *Handler) RegisteredPatterns() []string {
 	return h.mux.Patterns()
 }
 
-// patternMux is an http.ServeMux that records every pattern registered on
-// it, so the route test can list every served route.
-type patternMux struct {
-	servemux *http.ServeMux
-
-	patterns []string
-}
-
-func newPatternMux() *patternMux {
-	return &patternMux{servemux: http.NewServeMux(), patterns: nil}
-}
-
-// HandleFunc registers pattern and records it.
-func (m *patternMux) HandleFunc(pattern string, handler func(http.ResponseWriter, *http.Request)) {
-	m.patterns = append(m.patterns, pattern)
-	m.servemux.HandleFunc(pattern, handler)
-}
-
-// ServeHTTP implements http.Handler.
-func (m *patternMux) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	m.servemux.ServeHTTP(w, r)
-}
-
-// Patterns returns a copy of the recorded patterns.
-func (m *patternMux) Patterns() []string {
-	return append([]string(nil), m.patterns...)
-}
-
 // resolveNamespace returns the namespace named in the path. Profile actions
 // are checked on the namespace: no grant on a single profile exists yet.
 func resolveNamespace(_ http.ResponseWriter, r *http.Request) (identity.Object, error) {
@@ -158,26 +130,27 @@ func resolveNamespace(_ http.ResponseWriter, r *http.Request) (identity.Object, 
 	return identity.NamespaceObject(name), nil
 }
 
+// kit returns the route steps that this API shares with the other
+// tool-neutral APIs.
+func (h *Handler) kit() routekit.Guard {
+	return routekit.Guard{Tokens: h.authn, Sessions: h.sessions, Refusals: h.guard}
+}
+
 // enforce wraps one route table row. It authenticates, resolves the object,
 // authorizes every declared action on it, and only then runs the handler.
 func (h *Handler) enforce(route Route) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
 
-		p, caller, err := h.authenticate(r)
+		p, caller, err := h.kit().Authenticate(r)
 		if err != nil {
 			h.writeError(ctx, w, err)
 
 			return
 		}
 
-		if caller != nil {
-			ctx = sessionauth.WithSession(ctx)
-			ctx = sessionauth.WithSignIn(ctx, sessionauth.SignIn{
-				At: caller.Match.Session.AuthTime, Provider: caller.Match.Session.Provider,
-			})
-			r = r.WithContext(ctx)
-		}
+		ctx = routekit.WithCaller(ctx, caller)
+		r = r.WithContext(ctx)
 
 		obj, err := route.Resolve(w, r)
 		if err != nil {
@@ -186,15 +159,13 @@ func (h *Handler) enforce(route Route) http.HandlerFunc {
 			return
 		}
 
-		for _, action := range route.Actions {
-			if err = h.guard.Authorize(ctx, r, p, action, obj); err != nil {
-				h.writeError(ctx, w, fmt.Errorf("authorize %s: %w", action, err))
+		if err = h.kit().AuthorizeAll(r, p, obj, route.Actions); err != nil {
+			h.writeError(ctx, w, err)
 
-				return
-			}
+			return
 		}
 
-		if mutating(r.Method) && idempotent.Present(r) {
+		if routekit.Mutating(r.Method) && idempotent.Present(r) {
 			h.serveKeyed(w, r, route, p, obj)
 
 			return
@@ -234,8 +205,3 @@ var errIdempotencyKey = problem.BadRequest(
 	"request.idempotency-key-unsupported",
 	"this route does not take the Idempotency-Key header: send the request without it",
 )
-
-// mutating reports whether the method changes data.
-func mutating(method string) bool {
-	return method != http.MethodGet && method != http.MethodHead
-}

@@ -10,12 +10,12 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
-	"strings"
 	"time"
 
 	"opendustpan.org/opendustpan/internal/api/idempotent"
 	"opendustpan.org/opendustpan/internal/api/problem"
 	"opendustpan.org/opendustpan/internal/api/refusal"
+	"opendustpan.org/opendustpan/internal/api/routekit"
 	"opendustpan.org/opendustpan/internal/denylimit"
 	"opendustpan.org/opendustpan/internal/sessionauth"
 	"opendustpan.org/opendustpan/pkg/audit"
@@ -27,8 +27,6 @@ import (
 var ErrMissingDependency = errors.New("missing dependency")
 
 const (
-	tokenScheme  = "token "
-	bearerScheme = "Bearer "
 	// v1Prefix is the prefix of the tool-neutral REST API.
 	v1Prefix = "/api/dustpan/v1"
 	// channelHeader says where a request came from, for the audit entry.
@@ -78,7 +76,7 @@ type Handler struct {
 	policy   SessionPolicy
 	idem     *idempotent.Middleware
 	logger   *slog.Logger
-	mux      *patternMux
+	mux      *routekit.Mux
 	routes   []Route
 }
 
@@ -106,7 +104,7 @@ func NewHandler(cfg Config) (*Handler, error) {
 		policy:   cfg.SessionPolicy,
 		idem:     cfg.Idempotency,
 		logger:   cfg.Logger,
-		mux:      newPatternMux(),
+		mux:      routekit.NewMux(),
 		routes:   nil,
 	}
 
@@ -121,34 +119,6 @@ func NewHandler(cfg Config) (*Handler, error) {
 // ServeHTTP implements http.Handler.
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	h.mux.ServeHTTP(w, r)
-}
-
-// authenticate resolves the Authorization header to a principal. A request
-// with no header uses the console session cookie, and the Caller reports that
-// the cookie signed it in. It is nil for an access token.
-func (h *Handler) authenticate(r *http.Request) (identity.Principal, *sessionauth.Caller, error) {
-	header := r.Header.Get("Authorization")
-	if header == "" {
-		p, caller, err := h.sessions.Authenticate(r)
-		if err != nil {
-			return p, nil, err
-		}
-
-		return p, &caller, nil
-	}
-
-	raw, ok := strings.CutPrefix(header, tokenScheme)
-	if !ok {
-		raw, ok = strings.CutPrefix(header, bearerScheme)
-	}
-
-	if !ok || raw == "" {
-		return identity.Principal{}, nil, identity.ErrUnauthenticated
-	}
-
-	p, err := h.authn.AuthenticateToken(r.Context(), raw)
-
-	return p, nil, err
 }
 
 // writeError answers err through the shared error module of the

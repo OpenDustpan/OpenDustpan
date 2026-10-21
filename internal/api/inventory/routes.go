@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"net/http"
 
-	"opendustpan.org/opendustpan/internal/sessionauth"
+	"opendustpan.org/opendustpan/internal/api/routekit"
 	"opendustpan.org/opendustpan/pkg/identity"
 	coreinventory "opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -175,46 +175,6 @@ func (h *Handler) RegisteredPatterns() []string {
 	return h.mux.Patterns()
 }
 
-// patternMux is an http.ServeMux that records every pattern registered on
-// it, so the route test can list every served route. All handler routes go
-// through Handle or HandleFunc, which both record. The inner mux stays
-// private and is built only by newPatternMux, so no code outside this file
-// can serve a pattern without recording it. TestNoMuxBypass enforces this:
-// it fails if any other file in this package builds a mux or touches the
-// inner mux.
-type patternMux struct {
-	servemux *http.ServeMux
-
-	patterns []string
-}
-
-// newPatternMux returns a patternMux ready to register routes.
-func newPatternMux() *patternMux {
-	return &patternMux{servemux: http.NewServeMux(), patterns: nil}
-}
-
-// Handle registers pattern and records it.
-func (m *patternMux) Handle(pattern string, handler http.Handler) {
-	m.patterns = append(m.patterns, pattern)
-	m.servemux.Handle(pattern, handler)
-}
-
-// HandleFunc registers pattern and records it.
-func (m *patternMux) HandleFunc(pattern string, handler func(http.ResponseWriter, *http.Request)) {
-	m.patterns = append(m.patterns, pattern)
-	m.servemux.HandleFunc(pattern, handler)
-}
-
-// ServeHTTP implements http.Handler.
-func (m *patternMux) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	m.servemux.ServeHTTP(w, r)
-}
-
-// Patterns returns a copy of the recorded patterns.
-func (m *patternMux) Patterns() []string {
-	return append([]string(nil), m.patterns...)
-}
-
 // resolveListUnits returns the namespace in the organization query value.
 // The value is required: without it the request names no object, so the
 // request fails with a 400 before authorization. It validates the name the
@@ -232,6 +192,12 @@ func resolveListUnits(_ http.ResponseWriter, r *http.Request) (identity.Object, 
 	}
 
 	return identity.NamespaceObject(ns), nil
+}
+
+// kit returns the route steps that this API shares with the other
+// tool-neutral APIs.
+func (h *Handler) kit() routekit.Guard {
+	return routekit.Guard{Tokens: h.authn, Sessions: h.sessions, Refusals: h.guard}
 }
 
 // enforce wraps one route table row. Public routes run unwrapped. Every
@@ -265,17 +231,15 @@ func (h *Handler) enforceAuthorized(route Route) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
 
-		p, session, err := h.authenticate(r)
+		p, caller, err := h.kit().Authenticate(r)
 		if err != nil {
 			h.writeError(ctx, w, err)
 
 			return
 		}
 
-		if session {
-			ctx = sessionauth.WithSession(ctx)
-			r = r.WithContext(ctx)
-		}
+		ctx = routekit.WithCaller(ctx, caller)
+		r = r.WithContext(ctx)
 
 		obj, err := route.Resolve(w, r)
 		if err != nil {

@@ -15,10 +15,10 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
-	"strings"
 
 	"opendustpan.org/opendustpan/internal/api/problem"
 	"opendustpan.org/opendustpan/internal/api/refusal"
+	"opendustpan.org/opendustpan/internal/api/routekit"
 	"opendustpan.org/opendustpan/internal/denylimit"
 	"opendustpan.org/opendustpan/internal/sessionauth"
 	"opendustpan.org/opendustpan/pkg/audit"
@@ -33,11 +33,6 @@ import (
 var ErrMissingDependency = errors.New("missing dependency")
 
 const (
-	tokenScheme = "token "
-	// bearerScheme is the scheme of the TFE-compatible API and the
-	// installation API. This API accepts it too, so one client can read
-	// every API.
-	bearerScheme = "Bearer "
 	// channelHeader names the request header that says where a request came
 	// from, for the audit entry.
 	channelHeader = "Dustpan-Channel"
@@ -83,7 +78,7 @@ type Handler struct {
 	authz       identity.Authorizer
 	guard       *refusal.Recorder
 	logger      *slog.Logger
-	mux         *patternMux
+	mux         *routekit.Mux
 	routes      []Route
 }
 
@@ -123,7 +118,7 @@ func NewHandler(cfg Config) (*Handler, error) {
 			WithLimiter(cfg.DenialLimiter).
 			WithSurface("context"),
 		logger: cfg.Logger,
-		mux:    newPatternMux(),
+		mux:    routekit.NewMux(),
 		routes: nil,
 	}
 
@@ -138,33 +133,6 @@ func NewHandler(cfg Config) (*Handler, error) {
 // ServeHTTP implements http.Handler.
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	h.mux.ServeHTTP(w, r)
-}
-
-// authenticate resolves the "Authorization: token <t>" or the
-// "Authorization: Bearer <t>" header to a principal. A request with no
-// Authorization header uses the console session cookie, and the bool
-// reports that the cookie signed it in. A request with an Authorization
-// header never uses the cookie.
-func (h *Handler) authenticate(r *http.Request) (identity.Principal, bool, error) {
-	header := r.Header.Get("Authorization")
-	if header == "" {
-		p, _, err := h.sessions.Authenticate(r)
-
-		return p, err == nil, err
-	}
-
-	raw, ok := strings.CutPrefix(header, tokenScheme)
-	if !ok {
-		raw, ok = strings.CutPrefix(header, bearerScheme)
-	}
-
-	if !ok || raw == "" {
-		return identity.Principal{}, false, identity.ErrUnauthenticated
-	}
-
-	p, err := h.authn.AuthenticateToken(r.Context(), raw)
-
-	return p, false, err
 }
 
 // errNotFound is the one answer for an unknown namespace, an unknown unit, a
