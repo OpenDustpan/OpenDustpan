@@ -101,7 +101,7 @@ func (d *dispatcher) Scheduled(ctx context.Context, ns namespace.Name, id ID, sl
 
 	return d.start(ctx, &t, startPlan{
 		actor: nil, key: ScheduleKey(id, slot), cause: "schedule slot " + slot.UTC().Format(time.RFC3339),
-		source: job.SourceSchedule,
+		source: job.SourceSchedule, location: noLocation(),
 	})
 }
 
@@ -140,7 +140,7 @@ func (d *dispatcher) Upstream(ctx context.Context, applied Applied) ([]Outcome, 
 
 		id, err := d.start(ctx, &t, startPlan{
 			actor: nil, key: UpstreamKey(t.ID, applied.Version), cause: "unit " + applied.Unit.ID + " applied",
-			source: job.SourceTrigger,
+			source: job.SourceTrigger, location: noLocation(),
 		})
 		out = append(out, Outcome{Trigger: t.ID, Job: id, Err: err})
 	}
@@ -157,7 +157,7 @@ func (d *dispatcher) Manual(ctx context.Context, actor job.Actor, req ManualRequ
 
 	return d.start(ctx, &t, startPlan{
 		actor: &actor, key: ManualKey(req.Trigger, actor.Principal.Subject, req.Now),
-		cause: "manual: " + req.Reason, source: "",
+		cause: "manual: " + req.Reason, source: "", location: req.Location,
 	})
 }
 
@@ -184,10 +184,17 @@ func (d *dispatcher) load(ctx context.Context, ns namespace.Name, id ID) (Trigge
 // startPlan is what one start needs besides the trigger. A nil actor means
 // the namespace service principal.
 type startPlan struct {
-	actor  *job.Actor
-	key    string
-	cause  string
-	source job.SourceKind
+	actor    *job.Actor
+	key      string
+	cause    string
+	source   job.SourceKind
+	location job.Location
+}
+
+// noLocation returns the zero code location: the plan takes the location of
+// the unit settings.
+func noLocation() job.Location {
+	return job.Location{Connection: "", Repository: "", Ref: "", Directory: "", Revision: ""}
 }
 
 // start checks the trigger and its last saver, and starts the plan.
@@ -211,6 +218,7 @@ func (d *dispatcher) start(ctx context.Context, t *Trigger, p startPlan) (job.ID
 	id, err := d.starter.StartPlan(ctx, actor, t.Unit, PlanRequest{
 		Trigger: t.ID, Kind: t.Kind, IdempotencyKey: p.key,
 		Reason: fmt.Sprintf("trigger %s (%s): %s", t.ID, t.Kind, p.cause), Source: p.source, Saver: t.LastSaver,
+		Location: p.location,
 	})
 	if err != nil {
 		return "", fmt.Errorf("start the plan of trigger %s: %w", t.ID, err)

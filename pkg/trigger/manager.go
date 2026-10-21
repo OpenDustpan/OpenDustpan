@@ -309,13 +309,26 @@ func (m *Manager) Delete(
 	return nil
 }
 
+// FireInput is what a caller gives to fire a trigger.
+type FireInput struct {
+	// Reason is the text of the caller for the audit entry of the start.
+	Reason string
+	// Location is the code location of the plan, or the zero value. The job
+	// service checks unit:define-steps on the unit for a location, for the
+	// caller. Until the settings of a unit hold a code location, a plan needs
+	// one here.
+	Location job.Location
+}
+
 // Fire starts the plan of the trigger id now, as the caller. The job service
 // checks the start action of the caller and applies the gates, the approval
 // rules, the freezes and the manual locks. A caller without unit:read on the
 // unit gets ErrNotFound.
 func (m *Manager) Fire(
-	ctx context.Context, caller identity.Principal, ns namespace.Name, id ID, reason string,
+	ctx context.Context, caller identity.Principal, ns namespace.Name, id ID, in FireInput,
 ) (job.ID, error) {
+	reason := in.Reason
+
 	if err := checkCaller(caller); err != nil {
 		return "", err
 	}
@@ -330,6 +343,12 @@ func (m *Manager) Fire(
 		return "", fmt.Errorf("%w: reason: %w", ErrInvalid, err)
 	}
 
+	if !in.Location.IsZero() {
+		if err := in.Location.Validate(); err != nil {
+			return "", fmt.Errorf("%w: location: %w", ErrInvalid, err)
+		}
+	}
+
 	t, err := m.store.Get(ctx, ns, id)
 	if err != nil {
 		return "", fmt.Errorf("trigger %s: %w", quote(string(id)), err)
@@ -342,7 +361,7 @@ func (m *Manager) Fire(
 	actor := job.Actor{Principal: caller, Agent: "", Mode: "", ConfirmAuth: "", AuthAt: time.Time{}}
 
 	jobID, err := m.dispatcher.Manual(ctx, actor, ManualRequest{
-		Namespace: ns, Trigger: id, Now: m.now(), Reason: reason,
+		Namespace: ns, Trigger: id, Now: m.now(), Reason: reason, Location: in.Location,
 	})
 	if err != nil {
 		return "", err //nolint:wrapcheck // The dispatcher wraps its errors with the trigger.

@@ -30,6 +30,7 @@ func dispatcherCases() []suiteCase {
 		{"dispatcher: a stored row that no longer validates starts no plan", caseInvalidRow},
 		{"dispatcher: a start that the job service refuses is an error and no start", caseStartRefused},
 		{"dispatcher: a start that no person makes runs as the namespace service principal", caseStartActor},
+		{"dispatcher: a manual fire passes its code location, and no other start has one", caseStartLocation},
 		{"dispatcher: a saver that lost access gets no start, and the refusal is audited", caseSaverRevoked},
 		{"dispatcher: the check follows the last saver, not the first", caseSaverReplaced},
 	}
@@ -283,7 +284,7 @@ func caseScheduledRefusals(t *testing.T, h Harness, rec *Recorder) {
 
 // manual returns a manual request for the trigger id at now.
 func manual(id trigger.ID, now time.Time) trigger.ManualRequest {
-	return trigger.ManualRequest{Namespace: acme, Trigger: id, Now: now, Reason: "test run"}
+	return trigger.ManualRequest{Namespace: acme, Trigger: id, Now: now, Reason: "test run", Location: noLocation()}
 }
 
 func caseManual(t *testing.T, h Harness, rec *Recorder) {
@@ -423,6 +424,44 @@ func caseStartActor(t *testing.T, h Harness, rec *Recorder) {
 		if isService != (want[i].actor == service) || p.Admin {
 			t.Errorf("start %d: service principal %v, admin %v; want service %v and no admin flag",
 				i, isService, p.Admin, want[i].actor == service)
+		}
+	}
+}
+
+func caseStartLocation(t *testing.T, h Harness, rec *Recorder) {
+	t.Helper()
+
+	a, b := unit(acme, "a"), unit(acme, "b")
+	fence := h.Namespace(t, string(acme))
+
+	putAll(t, h, fence, scheduleTrigger("s1", a), followsTrigger("f1", b, a))
+
+	_, err := h.Dispatcher.Scheduled(t.Context(), acme, "s1", at(0))
+	must(t, "scheduled", err)
+
+	_, err = h.Dispatcher.Upstream(t.Context(), trigger.Applied{Unit: a, Version: h.Doubles.Final(t, a)})
+	must(t, "upstream", err)
+
+	loc := job.Location{Connection: "", Repository: "acme/infra", Ref: "main", Directory: "net", Revision: ""}
+	req := manual("s1", at(manualMinute))
+	req.Location = loc
+
+	_, err = h.Dispatcher.Manual(t.Context(), ActorOf("user:grace"), req)
+	must(t, "manual", err)
+
+	starts := rec.Starts()
+	if len(starts) != threeStarts {
+		t.Fatalf("starts = %+v, want %d", starts, threeStarts)
+	}
+
+	for i := range starts {
+		want := noLocation()
+		if i == threeStarts-1 {
+			want = loc
+		}
+
+		if starts[i].Req.Location != want {
+			t.Errorf("start %d has the location %+v, want %+v", i, starts[i].Req.Location, want)
 		}
 	}
 }

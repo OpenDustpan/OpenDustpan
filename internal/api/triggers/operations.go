@@ -49,7 +49,8 @@ var (
 		apidesc.Named[unitResponse]("TriggerUnit"),
 		apidesc.Named[frequencyBody]("TriggerFrequency"),
 	)...)
-	fireSchema       = apidesc.Typed[fireBody]("FireTriggerRequest")
+	fireSchema = apidesc.Typed[fireBody]("FireTriggerRequest",
+		apidesc.Named[locationRequest]("TriggerLocationRequest"))
 	fireResultSchema = apidesc.Typed[fireResponse]("FireTriggerResult", apidesc.Named[jobRef]("TriggerJob"))
 )
 

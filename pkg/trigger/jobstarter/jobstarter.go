@@ -68,7 +68,7 @@ func (s *Starter) StartPlan(ctx context.Context, actor job.Actor, unit graph.Uni
 
 	j, err := s.jobs.Start(ctx, actor, job.StartRequest{
 		Unit: obj, Operation: job.OperationPlan, Executor: job.ExecutorRunner,
-		Location: job.Location{Connection: "", Repository: "", Ref: "", Directory: "", Revision: ""}, Pool: "",
+		Location: req.Location, Pool: "",
 		Edits: nil, Delivery: "", Source: req.Source, IdempotencyKey: req.IdempotencyKey, Reason: req.Reason,
 		BreakGlass: nil, Trigger: &job.TriggerRef{ID: string(req.Trigger), Saver: req.Saver},
 		Channel: "", SourceIP: "", UserAgent: "", RequestID: "",

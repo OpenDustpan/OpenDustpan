@@ -452,6 +452,35 @@ func TestManagerDelete(t *testing.T) {
 	}(), info, acme, created.ID), identity.ErrDenied)
 }
 
+func noLocation() job.Location {
+	return job.Location{Connection: "", Repository: "", Ref: "", Directory: "", Revision: ""}
+}
+
+func TestManagerFireLocation(t *testing.T) {
+	t.Parallel()
+
+	for name, loc := range map[string]job.Location{
+		"a repository with no ref":      {Connection: "", Repository: "acme/infra", Ref: "", Directory: "", Revision: ""},
+		"a ref with no repository":      {Connection: "", Repository: "", Ref: "main", Directory: "", Revision: ""},
+		"a directory above the checkout": {Connection: "", Repository: "acme/infra", Ref: "main", Directory: "../x", Revision: ""},
+		"a revision that is no commit":  {Connection: "", Repository: "acme/infra", Ref: "main", Directory: "", Revision: "zz"},
+	} {
+		r := newManagerRig(t)
+
+		created, err := r.m.Create(t.Context(), person(ada), info, scheduleInput("b"))
+		if err != nil {
+			t.Fatalf("Create = %v", err)
+		}
+
+		_, err = r.m.Fire(t.Context(), person(ada), acme, created.ID, trigger.FireInput{Reason: "", Location: loc})
+		wantErr(t, "Fire with "+name, err, trigger.ErrInvalid)
+
+		if len(r.disp.actors) != 0 {
+			t.Errorf("Fire with %s reached the dispatcher", name)
+		}
+	}
+}
+
 func TestManagerFire(t *testing.T) {
 	t.Parallel()
 
@@ -462,23 +491,25 @@ func TestManagerFire(t *testing.T) {
 		t.Fatalf("Create = %v", err)
 	}
 
-	id, err := r.m.Fire(t.Context(), person(ada), acme, created.ID, "test run")
+	loc := job.Location{Connection: "", Repository: "acme/infra", Ref: "main", Directory: "net", Revision: ""}
+
+	id, err := r.m.Fire(t.Context(), person(ada), acme, created.ID, trigger.FireInput{Reason: "test run", Location: loc})
 	if err != nil || id != "job-1" {
 		t.Fatalf("Fire = %q, %v; want job-1", id, err)
 	}
 
 	if len(r.disp.actors) != 1 || r.disp.actors[0].Principal.Subject != ada || r.disp.actors[0].Agent != "" ||
 		r.disp.reqs[0].Trigger != created.ID || r.disp.reqs[0].Namespace != acme || r.disp.reqs[0].Reason != "test run" ||
-		r.disp.reqs[0].Now.IsZero() {
+		r.disp.reqs[0].Now.IsZero() || r.disp.reqs[0].Location != loc {
 		t.Errorf("dispatcher calls = %+v %+v, want the caller as the actor", r.disp.actors, r.disp.reqs)
 	}
 
 	// A caller without unit:read gets the answer for a trigger that does not
 	// exist, and no start.
-	_, err = r.m.Fire(t.Context(), person(grace), acme, created.ID, "")
+	_, err = r.m.Fire(t.Context(), person(grace), acme, created.ID, trigger.FireInput{Reason: "", Location: noLocation()})
 	wantErr(t, "Fire without read", err, trigger.ErrNotFound)
 
-	_, err = r.m.Fire(t.Context(), person(ada), acme, "trg-nope", "")
+	_, err = r.m.Fire(t.Context(), person(ada), acme, "trg-nope", trigger.FireInput{Reason: "", Location: noLocation()})
 	wantErr(t, "Fire of an unknown trigger", err, trigger.ErrNotFound)
 
 	service, err := identity.NamespaceService(acme)
@@ -486,7 +517,7 @@ func TestManagerFire(t *testing.T) {
 		t.Fatalf("NamespaceService = %v", err)
 	}
 
-	_, err = r.m.Fire(t.Context(), service, acme, created.ID, "")
+	_, err = r.m.Fire(t.Context(), service, acme, created.ID, trigger.FireInput{Reason: "", Location: noLocation()})
 	wantErr(t, "Fire by the service principal", err, identity.ErrDenied)
 
 	for name, reason := range map[string]string{
@@ -495,13 +526,13 @@ func TestManagerFire(t *testing.T) {
 		"a reason with a bidi override": "a\u202eb",
 		"a reason that is not UTF-8":    "a\xffb",
 	} {
-		_, err = r.m.Fire(t.Context(), person(ada), acme, created.ID, reason)
+		_, err = r.m.Fire(t.Context(), person(ada), acme, created.ID, trigger.FireInput{Reason: reason, Location: noLocation()})
 		wantErr(t, "Fire with "+name, err, trigger.ErrInvalid)
 	}
 
 	r.disp.err = job.ErrFrozen
 
-	_, err = r.m.Fire(t.Context(), person(ada), acme, created.ID, "")
+	_, err = r.m.Fire(t.Context(), person(ada), acme, created.ID, trigger.FireInput{Reason: "", Location: noLocation()})
 	wantErr(t, "Fire during a freeze", err, job.ErrFrozen)
 
 	if len(r.disp.actors) != 2 {

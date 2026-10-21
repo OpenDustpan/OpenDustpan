@@ -345,6 +345,21 @@ func TestFire(t *testing.T) {
 		{"no body", ``, nil, http.StatusCreated, "", ""},
 		{"a reason", `{"reason":"test run"}`, nil, http.StatusCreated, "", "test run"},
 		{"an empty object", `{}`, nil, http.StatusCreated, "", ""},
+		{
+			"a location", `{"reason":"x","location":{"repository":"acme/infra","ref":"main","directory":"net"}}`, nil,
+			http.StatusCreated, "", "x",
+		},
+		{
+			"a location with no ref", `{"location":{"repository":"acme/infra"}}`, nil, http.StatusBadRequest,
+			"trigger.invalid", "",
+		},
+		{
+			"a directory above the checkout",
+			`{"location":{"repository":"acme/infra","ref":"main","directory":"../net"}}`, nil, http.StatusBadRequest,
+			"trigger.invalid", "",
+		},
+		{"an unknown field of the location", `{"location":{"repository":"a","ref":"b","path":"c"}}`, nil, http.StatusBadRequest, "request.body-invalid", ""},
+		{"a second fire with another request", ``, func(r *rig) { r.disp.err = job.ErrKeyConflict }, http.StatusConflict, "trigger.fire-conflict", ""},
 		{"an unknown field", `{"reason":"x","executor":"write-back"}`, nil, http.StatusBadRequest, "request.body-invalid", ""},
 		{"data after the document", `{} {}`, nil, http.StatusBadRequest, "request.body-invalid", ""},
 		{"a reason that is too long", `{"reason":"` + strings.Repeat("x", 201) + `"}`, nil, http.StatusBadRequest, "trigger.invalid", ""},
@@ -411,6 +426,10 @@ func TestFire(t *testing.T) {
 			if len(r.disp.reqs) != 1 || r.disp.subjs[0] != ada || r.disp.reqs[0].Trigger != "trg-seed" ||
 				r.disp.reqs[0].Namespace != "acme" || r.disp.reqs[0].Reason != tt.reason {
 				t.Errorf("dispatcher calls = %+v by %v", r.disp.reqs, r.disp.subjs)
+			}
+
+			if hasLocation := strings.Contains(tt.body, `"repository"`); hasLocation != !r.disp.reqs[0].Location.IsZero() {
+				t.Errorf("location = %+v for the body %q", r.disp.reqs[0].Location, tt.body)
 			}
 		})
 	}

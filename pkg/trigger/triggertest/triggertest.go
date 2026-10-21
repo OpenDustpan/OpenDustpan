@@ -166,6 +166,8 @@ const (
 	otherZoneOffset = 3600
 	// concurrentRounds is the number of rounds of the case with two saves at once.
 	concurrentRounds = 50
+	// threeStarts is the number of starts in the cases with three.
+	threeStarts = 3
 	// oneDay is the distance of two slots of a daily schedule.
 	oneDay = 24 * time.Hour
 )
@@ -307,4 +309,9 @@ func ActorOf(subject string) job.Actor {
 		ConfirmAuth: "",
 		AuthAt:      time.Time{},
 	}
+}
+
+// noLocation returns the zero code location, for a start that names none.
+func noLocation() job.Location {
+	return job.Location{Connection: "", Repository: "", Ref: "", Directory: "", Revision: ""}
 }

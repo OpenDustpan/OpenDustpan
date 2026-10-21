@@ -18,6 +18,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/cron"
 	"opendustpan.org/opendustpan/pkg/graph"
 	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/job"
 	"opendustpan.org/opendustpan/pkg/trigger"
 )
 
@@ -76,9 +77,20 @@ type listResponse struct {
 	Triggers []triggerResponse `json:"triggers"`
 }
 
-// fireBody is the optional body of the request that fires a trigger.
+// fireBody is the optional body of the request that fires a trigger. The
+// location is where the program and the config are in git. Until the settings
+// of a unit hold a code location, a fire names one.
 type fireBody struct {
-	Reason string `json:"reason"`
+	Reason   string           `json:"reason"`
+	Location *locationRequest `json:"location"`
+}
+
+type locationRequest struct {
+	Connection string `json:"connection"`
+	Repository string `json:"repository"`
+	Ref        string `json:"ref"`
+	Directory  string `json:"directory"`
+	Revision   string `json:"revision"`
 }
 
 type jobRef struct {
@@ -191,14 +203,14 @@ func (h *Handler) deleteTrigger(w http.ResponseWriter, r *http.Request, p identi
 func (h *Handler) fireTrigger(w http.ResponseWriter, r *http.Request, p identity.Principal, t target) {
 	ctx := r.Context()
 
-	reason, err := readFireReason(w, r)
+	in, err := readFireInput(w, r)
 	if err != nil {
 		h.writeError(ctx, w, err)
 
 		return
 	}
 
-	id, err := h.manager.Fire(ctx, p, t.ns.Name, t.trigger.ID, reason)
+	id, err := h.manager.Fire(ctx, p, t.ns.Name, t.trigger.ID, in)
 	if err != nil {
 		h.manageError(r, p, err)
 		h.writeError(ctx, w, err)
@@ -268,23 +280,36 @@ func decodeBody(raw []byte, v any) error {
 	return nil
 }
 
-// readFireReason reads the optional body of a fire. An empty body is no reason.
-func readFireReason(w http.ResponseWriter, r *http.Request) (string, error) {
+// readFireInput reads the optional body of a fire. An empty body is no reason
+// and no location.
+func readFireInput(w http.ResponseWriter, r *http.Request) (trigger.FireInput, error) {
+	none := trigger.FireInput{Reason: "", Location: job.Location{
+		Connection: "", Repository: "", Ref: "", Directory: "", Revision: "",
+	}}
+
 	raw, err := readRaw(w, r)
 	if err != nil {
-		return "", err
+		return none, err
 	}
 
 	if len(bytes.TrimSpace(raw)) == 0 {
-		return "", nil
+		return none, nil
 	}
 
 	var body fireBody
 	if err := decodeBody(raw, &body); err != nil {
-		return "", err
+		return none, err
 	}
 
-	return body.Reason, nil
+	in := trigger.FireInput{Reason: body.Reason, Location: none.Location}
+	if l := body.Location; l != nil {
+		in.Location = job.Location{
+			Connection: l.Connection, Repository: l.Repository, Ref: l.Ref, Directory: l.Directory,
+			Revision: l.Revision,
+		}
+	}
+
+	return in, nil
 }
 
 // saveInput builds the input of the manager from the body. It checks each field

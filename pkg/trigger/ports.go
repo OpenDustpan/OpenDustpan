@@ -90,6 +90,13 @@ type PlanRequest struct {
 	// Saver is the subject of the last saver of the trigger. The job records
 	// it with the trigger ID, and the audit entry of the start names it.
 	Saver string
+	// Location is the code location of the plan, or the zero value to take the
+	// location of the unit settings. Only a manual fire sets it: the caller
+	// names the location, and the job service checks the extra action for it
+	// as for any start by that caller. A start that no person makes never
+	// carries a location, because the namespace service principal holds no
+	// action for one.
+	Location job.Location
 }
 
 // Starter starts one plan job of a unit through the job service. It is the
@@ -188,6 +195,9 @@ type ManualRequest struct {
 	Now time.Time
 	// Reason is the text of the person for the audit entry of the start.
 	Reason string
+	// Location is the code location of the plan, or the zero value. The job
+	// service checks the extra action of a location for the caller.
+	Location job.Location
 }
 
 // Applied is the event that the source of a follows trigger has applied. The

@@ -92,6 +92,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/session"
 	"opendustpan.org/opendustpan/pkg/stack"
 	"opendustpan.org/opendustpan/pkg/tempadmin"
+	"opendustpan.org/opendustpan/pkg/trigger"
 	"opendustpan.org/opendustpan/pkg/workspace"
 )
 
@@ -177,6 +178,7 @@ type settings struct {
 	profileStore         profile.Store
 	sinks                sinkSettings
 	jobStore             job.Store
+	triggerStore         trigger.Store
 	savedViewStore       savedview.Store
 	gitHost              gitHostSettings
 	registry             *registrySettings
@@ -715,6 +717,7 @@ func defaultSettings() *settings {
 		profileStore:            nil,
 		sinks:                   sinkSettings{store: nil, senders: nil, ports: egress.Ports{}},
 		jobStore:                nil,
+		triggerStore:            nil,
 		savedViewStore:          nil,
 		gitHost:                 gitHostSettings{store: nil, allow: nil, cas: nil, loopback: false, checkLimits: nil},
 		registry:                nil,
@@ -1184,6 +1187,9 @@ type neutralHandlers struct {
 	sinks http.Handler
 	// jobs is nil when no job store is set.
 	jobs http.Handler
+	// triggers is nil when no trigger store is set, or the server lacks the
+	// job service that a trigger starts a plan through.
+	triggers http.Handler
 	// registry is nil when no registry store is set.
 	registry http.Handler
 }
@@ -1234,9 +1240,15 @@ func newNeutralHandlers(
 		return neutralHandlers{}, err
 	}
 
+	triggers, err := newTriggersHandler(svc, cfg, onFailure)
+	if err != nil {
+		return neutralHandlers{}, err
+	}
+
 	return neutralHandlers{
 		inventory: units, audit: entries, context: contexts, runners: runners, profiles: profiles, sinks: sinks,
 		jobs:     jobs,
+		triggers: triggers,
 		registry: registries,
 	}, nil
 }
@@ -3787,6 +3799,9 @@ func mountAPI(mux *rootMux, a adapters, cfg *settings) error {
 		return withCORS(withMaintenance(h, a.maintenance, shapeInventory, cfg.logger), cfg.allowedOrigins)
 	})
 	mountV1(mux, a.jobs, func(h http.Handler) http.Handler {
+		return withCORS(withMaintenance(h, a.maintenance, shapeInventory, cfg.logger), cfg.allowedOrigins)
+	})
+	mountV1(mux, a.triggers, func(h http.Handler) http.Handler {
 		return withCORS(withMaintenance(h, a.maintenance, shapeInventory, cfg.logger), cfg.allowedOrigins)
 	})
 	// The capabilities document and the dev sign-in belong to the

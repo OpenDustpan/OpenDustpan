@@ -197,6 +197,7 @@ const (
 	codeUnsupported  = "job.unsupported"
 	codeGateEnforced = "job.gate-enforced"
 	codeAgentDenied  = "job.agent-denied"
+	codeFireConflict = "trigger.fire-conflict"
 	codeInvalidJob   = "job.invalid"
 	maxMessageBytes  = 300
 )
@@ -307,6 +308,8 @@ func classifyJob(err error) (int, string, bool) {
 		return http.StatusForbidden, codeGateEnforced, true
 	case errors.Is(err, job.ErrAgentDenied):
 		return http.StatusForbidden, codeAgentDenied, true
+	case errors.Is(err, job.ErrKeyConflict):
+		return http.StatusConflict, codeFireConflict, true
 	case errors.Is(err, job.ErrFrozen):
 		return http.StatusConflict, codeFrozen, true
 	case errors.Is(err, job.ErrLimit):
