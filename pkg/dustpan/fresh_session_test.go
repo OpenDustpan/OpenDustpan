@@ -46,10 +46,10 @@ func signInOptions(t *testing.T, st consoleBackend) []dustpan.Option {
 	// servers of a store, because a provider ID keeps its first issuer.
 	idp := providerOf(t, st, publicURL)
 
-	if err := session.BindProviders(
-		t.Context(), st, []session.Provider{{ID: "corp", Issuer: idp.Issuer(), UserinfoURL: "", SubjectClaim: ""}},
-		time.Now(),
-	); err != nil {
+	bound := []session.Provider{{ID: "corp", Issuer: idp.Issuer(), UserinfoURL: "", SubjectClaim: ""}}
+
+	err := session.BindProviders(t.Context(), st, bound, time.Now())
+	if err != nil {
 		t.Fatalf("record the issuer: %v", err)
 	}
 
@@ -270,7 +270,9 @@ func seedConsoleAdmin(t *testing.T, st consoleBackend) {
 
 	entry.Object = access.GrantRef(grant)
 
-	if err := st.CreateGrant(t.Context(), grant, namespace.Fence{Namespace: "", FailoverVersion: 0}, entry, nil); err != nil {
+	fence := namespace.Fence{Namespace: "", FailoverVersion: 0}
+
+	if err := st.CreateGrant(t.Context(), grant, fence, entry, nil); err != nil {
 		t.Fatalf("make the console grant: %v", err)
 	}
 }
