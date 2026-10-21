@@ -7,8 +7,10 @@ import (
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/cron"
 	"opendustpan.org/opendustpan/pkg/graph"
+	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/job"
 	"opendustpan.org/opendustpan/pkg/trigger"
 )
@@ -27,6 +29,9 @@ func dispatcherCases() []suiteCase {
 		{"dispatcher: manual refuses a trigger that is off or unknown", caseManualRefusals},
 		{"dispatcher: a stored row that no longer validates starts no plan", caseInvalidRow},
 		{"dispatcher: a start that the job service refuses is an error and no start", caseStartRefused},
+		{"dispatcher: a start that no person makes runs as the namespace service principal", caseStartActor},
+		{"dispatcher: a saver that lost access gets no start, and the refusal is audited", caseSaverRevoked},
+		{"dispatcher: the check follows the last saver, not the first", caseSaverReplaced},
 	}
 }
 
@@ -62,7 +67,7 @@ func caseUpstream(t *testing.T, h Harness, rec *Recorder) {
 
 	must(t, "put off", h.Store.Put(t.Context(), off, h.Namespace(t, string(acme)), auditOf("trigger:put")))
 
-	applied := h.Versions.Final(t, a)
+	applied := h.Doubles.Final(t, a)
 
 	out, err := h.Dispatcher.Upstream(t.Context(), trigger.Applied{Unit: a, Version: applied})
 	must(t, "upstream", err)
@@ -98,7 +103,7 @@ func caseUpstreamRepeat(t *testing.T, h Harness, rec *Recorder) {
 
 	follower(t, h, "f1", b, a)
 
-	event := trigger.Applied{Unit: a, Version: h.Versions.Final(t, a)}
+	event := trigger.Applied{Unit: a, Version: h.Doubles.Final(t, a)}
 
 	for range twoFollowers {
 		_, err := h.Dispatcher.Upstream(t.Context(), event)
@@ -110,7 +115,7 @@ func caseUpstreamRepeat(t *testing.T, h Harness, rec *Recorder) {
 	}
 
 	// A second apply is a new event.
-	_, err := h.Dispatcher.Upstream(t.Context(), trigger.Applied{Unit: a, Version: h.Versions.Final(t, a)})
+	_, err := h.Dispatcher.Upstream(t.Context(), trigger.Applied{Unit: a, Version: h.Doubles.Final(t, a)})
 	must(t, "upstream of a second apply", err)
 
 	if got := rec.Jobs(); len(got) != twoFollowers {
@@ -125,7 +130,7 @@ func caseUpstreamNoFollowers(t *testing.T, h Harness, rec *Recorder) {
 
 	h.Namespace(t, string(acme))
 
-	out, err := h.Dispatcher.Upstream(t.Context(), trigger.Applied{Unit: a, Version: h.Versions.Final(t, a)})
+	out, err := h.Dispatcher.Upstream(t.Context(), trigger.Applied{Unit: a, Version: h.Doubles.Final(t, a)})
 	must(t, "upstream", err)
 
 	if len(out) != 0 || len(rec.Starts()) != 0 {
@@ -144,8 +149,8 @@ func caseUpstreamMismatch(t *testing.T, h Harness, rec *Recorder) {
 		name  string
 		event trigger.Applied
 	}{
-		{"a version inside a run", trigger.Applied{Unit: a, Version: h.Versions.Intermediate(t, a)}},
-		{"a final version of another unit", trigger.Applied{Unit: a, Version: h.Versions.Final(t, b)}},
+		{"a version inside a run", trigger.Applied{Unit: a, Version: h.Doubles.Intermediate(t, a)}},
+		{"a final version of another unit", trigger.Applied{Unit: a, Version: h.Doubles.Final(t, b)}},
 		{"an unknown version", trigger.Applied{Unit: a, Version: "version-unknown"}},
 	}
 
@@ -194,7 +199,7 @@ func caseUpstreamPartial(t *testing.T, h Harness, rec *Recorder) {
 
 	rec.FailFor(b, job.ErrLimit)
 
-	out, err := h.Dispatcher.Upstream(t.Context(), trigger.Applied{Unit: a, Version: h.Versions.Final(t, a)})
+	out, err := h.Dispatcher.Upstream(t.Context(), trigger.Applied{Unit: a, Version: h.Doubles.Final(t, a)})
 	must(t, "upstream", err)
 
 	if len(out) != twoFollowers {
@@ -371,6 +376,149 @@ func caseStartRefused(t *testing.T, h Harness, rec *Recorder) {
 	}
 }
 
+func caseStartActor(t *testing.T, h Harness, rec *Recorder) {
+	t.Helper()
+
+	a, b := unit(acme, "a"), unit(acme, "b")
+	fence := h.Namespace(t, string(acme))
+
+	putAll(t, h, fence, scheduleTrigger("s1", a), followsTrigger("f1", b, a), reviewTrigger("r1", a))
+
+	_, err := h.Dispatcher.Scheduled(t.Context(), acme, "s1", at(0))
+	must(t, "scheduled", err)
+
+	_, err = h.Dispatcher.Upstream(t.Context(), trigger.Applied{Unit: a, Version: h.Doubles.Final(t, a)})
+	must(t, "upstream", err)
+
+	caller := ActorOf("user:grace")
+
+	_, err = h.Dispatcher.Manual(t.Context(), caller, manual("r1", at(manualMinute)))
+	must(t, "manual", err)
+
+	service := identity.NamespaceServiceSubject(acme)
+	want := []struct {
+		actor  string
+		source job.SourceKind
+	}{
+		{service, job.SourceSchedule},
+		{service, job.SourceTrigger},
+		{"user:grace", ""},
+	}
+
+	starts := rec.Starts()
+	if len(starts) != len(want) {
+		t.Fatalf("starts = %+v, want %d", starts, len(want))
+	}
+
+	for i := range starts {
+		s := &starts[i]
+		p := s.Actor.Principal
+
+		if p.Subject != want[i].actor || s.Req.Source != want[i].source || s.Req.Saver != ada {
+			t.Errorf("start %d = actor %q, source %q, saver %q; want actor %q, source %q, saver %q",
+				i, p.Subject, s.Req.Source, s.Req.Saver, want[i].actor, want[i].source, ada)
+		}
+
+		isService := p.IsNamespaceService()
+		if isService != (want[i].actor == service) || p.Admin {
+			t.Errorf("start %d: service principal %v, admin %v; want service %v and no admin flag",
+				i, isService, p.Admin, want[i].actor == service)
+		}
+	}
+}
+
+func caseSaverRevoked(t *testing.T, h Harness, rec *Recorder) {
+	t.Helper()
+
+	a, b := unit(acme, "a"), unit(acme, "b")
+	fence := h.Namespace(t, string(acme))
+
+	putAll(t, h, fence, scheduleTrigger("s1", a), followsTrigger("f1", b, a))
+
+	h.Doubles.RevokeSaver(ada)
+
+	_, err := h.Dispatcher.Scheduled(t.Context(), acme, "s1", at(0))
+	wantErr(t, "scheduled", err, trigger.ErrSaverDenied)
+	wantErr(t, "scheduled is a denial", err, identity.ErrDenied)
+
+	caller := ActorOf("user:grace")
+
+	_, err = h.Dispatcher.Manual(t.Context(), caller, manual("s1", at(manualMinute)))
+	wantErr(t, "manual", err, trigger.ErrSaverDenied)
+
+	out, err := h.Dispatcher.Upstream(t.Context(), trigger.Applied{Unit: a, Version: h.Doubles.Final(t, a)})
+	must(t, "upstream", err)
+
+	if len(out) != 1 || out[0].Job != "" {
+		t.Fatalf("upstream outcomes = %+v, want one outcome and no job", out)
+	}
+
+	wantErr(t, "upstream outcome", out[0].Err, trigger.ErrSaverDenied)
+
+	if got := rec.Starts(); len(got) != 0 {
+		t.Errorf("a saver that lost access started %v", got)
+	}
+
+	refusals := h.Doubles.Refusals(acme)
+	if len(refusals) != 3 {
+		t.Fatalf("audit entries of refusals = %d, want 3", len(refusals))
+	}
+
+	subjects := []string{identity.NamespaceServiceSubject(acme), "user:grace", identity.NamespaceServiceSubject(acme)}
+	for i := range refusals {
+		e := &refusals[i]
+		changes := map[string]string{}
+
+		for _, ch := range e.Changes {
+			changes[ch.Key] = ch.New
+		}
+
+		if e.Outcome != audit.OutcomeDenied || e.Subject != subjects[i] || e.Action != string(identity.ActionUnitRunPlan) ||
+			changes["trigger-saver"] != ada ||
+			changes["trigger"] == "" {
+			t.Errorf(
+				"refusal %d = %+v, want a denied start by %q that names the trigger and the saver",
+				i,
+				*e,
+				subjects[i],
+			)
+		}
+	}
+
+	// The check reads the access of the saver at each start.
+	h.Doubles.RestoreSaver(ada)
+
+	_, err = h.Dispatcher.Scheduled(t.Context(), acme, "s1", at(1))
+	must(t, "scheduled after the access came back", err)
+}
+
+func caseSaverReplaced(t *testing.T, h Harness, rec *Recorder) {
+	t.Helper()
+
+	a := unit(acme, "a")
+	fence := h.Namespace(t, string(acme))
+
+	tr := scheduleTrigger("s1", a)
+	must(t, "put", h.Store.Put(t.Context(), tr, fence, auditOf("trigger:put")))
+
+	tr.LastSaver = grace
+	must(t, "replace", h.Store.Put(t.Context(), tr, fence, auditOf("trigger:put")))
+
+	h.Doubles.RevokeSaver(ada)
+
+	_, err := h.Dispatcher.Scheduled(t.Context(), acme, "s1", at(0))
+	must(t, "scheduled with the first saver revoked", err)
+
+	h.Doubles.RevokeSaver(grace)
+
+	_, err = h.Dispatcher.Scheduled(t.Context(), acme, "s1", at(1))
+	wantErr(t, "scheduled with the last saver revoked", err, trigger.ErrSaverDenied)
+
+	if got := rec.Jobs(); len(got) != 1 {
+		t.Errorf("started %d jobs, want 1", len(got))
+	}
+}
+
 // caseInvalidRow stores rows that Validate refuses, as a row of another version
 // would be, and fires each. The dispatcher must fail closed.
 func caseInvalidRow(t *testing.T, h Harness, rec *Recorder) {
@@ -405,7 +553,7 @@ func caseInvalidRow(t *testing.T, h Harness, rec *Recorder) {
 	withFreq.Frequency = trigger.Frequency{Preset: cron.PresetDaily, Cron: ""}
 	h.StoreRaw(t, withFreq)
 
-	out, err := h.Dispatcher.Upstream(t.Context(), trigger.Applied{Unit: a, Version: h.Versions.Final(t, a)})
+	out, err := h.Dispatcher.Upstream(t.Context(), trigger.Applied{Unit: a, Version: h.Doubles.Final(t, a)})
 	must(t, "upstream", err)
 
 	if len(out) != 1 || out[0].Job != "" {

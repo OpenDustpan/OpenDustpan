@@ -75,7 +75,10 @@ func TestStartTrigger(t *testing.T) {
 			"a manual fire by a person", func(*testing.T) job.Actor { return actorOf("ada") }, "", ref, nil,
 		},
 		{
-			"a manual fire with the source api", func(*testing.T) job.Actor { return actorOf("ada") }, job.SourceAPI, ref,
+			"a manual fire with the source api",
+			func(*testing.T) job.Actor { return actorOf("ada") },
+			job.SourceAPI,
+			ref,
 			nil,
 		},
 		{

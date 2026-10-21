@@ -20,9 +20,12 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"unicode/utf8"
 
+	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/cron"
 	"opendustpan.org/opendustpan/pkg/graph"
+	"opendustpan.org/opendustpan/pkg/identity"
 )
 
 // Sentinel errors of the trigger model and its ports.
@@ -53,6 +56,8 @@ const (
 	MaxVersionBytes = 128
 	// MaxPathShown is the most units that the text of a CycleError names.
 	MaxPathShown = 10
+	// MaxSaverBytes is the longest subject of a last saver.
+	MaxSaverBytes = 255
 	// maxEchoBytes bounds the part of the input that an error text repeats.
 	maxEchoBytes = 32
 )
@@ -162,6 +167,14 @@ func (f Frequency) Expression(unit graph.Unit) (string, error) {
 // trigger starts. Frequency is set for the kind schedule only. Source is set
 // for the kind follows only: the unit that Unit follows.
 //
+// LastSaver is the subject of the principal that saved the trigger last. The
+// server sets it at each save from the caller, and a client never gives it.
+// A start that no person makes runs as the namespace service principal, and
+// the grants that the trigger needs for reads and for the start check come
+// from its last saver, at the time of each use. A trigger with no saver, and
+// a trigger whose saver is the subject of a namespace service principal,
+// does not validate.
+//
 // A disabled trigger keeps its rule and starts nothing.
 type Trigger struct {
 	ID        ID
@@ -170,6 +183,7 @@ type Trigger struct {
 	Frequency Frequency
 	Source    graph.Unit
 	Enabled   bool
+	LastSaver string
 }
 
 // Validate returns an error that wraps ErrInvalid when t is not a valid
@@ -183,6 +197,10 @@ func (t Trigger) Validate() error {
 
 	if err := t.Unit.Validate(); err != nil {
 		return fmt.Errorf("%w: unit: %w", ErrInvalid, err)
+	}
+
+	if err := validateSaver(t.LastSaver); err != nil {
+		return err
 	}
 
 	if !t.Kind.Valid() {
@@ -213,6 +231,25 @@ func (t Trigger) Validate() error {
 		return nil
 	default:
 		return fmt.Errorf("%w: kind %s", ErrInvalid, quote(string(t.Kind)))
+	}
+}
+
+// validateSaver checks the subject of a last saver. Defense in depth: the
+// route and the manager set the saver from the caller, and the store checks
+// the value again, so a row that another version wrote cannot name a saver
+// that the rules refuse.
+func validateSaver(saver string) error {
+	switch {
+	case saver == "":
+		return fmt.Errorf("%w: a trigger has a last saver", ErrInvalid)
+	case len(saver) > MaxSaverBytes:
+		return fmt.Errorf("%w: the last saver has at most %d bytes", ErrInvalid, MaxSaverBytes)
+	case !utf8.ValidString(saver) || strings.ContainsFunc(saver, audit.IsHiddenRune):
+		return fmt.Errorf("%w: the last saver has a byte that is not allowed", ErrInvalid)
+	case identity.IsNamespaceServiceSubject(saver):
+		return fmt.Errorf("%w: a namespace service principal cannot be the last saver", ErrInvalid)
+	default:
+		return nil
 	}
 }
 

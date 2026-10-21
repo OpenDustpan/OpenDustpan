@@ -82,6 +82,14 @@ type PlanRequest struct {
 	// Reason is the text for the audit entry of the start. It names the
 	// trigger and the cause.
 	Reason string
+	// Source is the source kind of the job. It is empty for a manual fire,
+	// and the job then keeps the source kind of the caller (api). Else it is
+	// schedule, forge or trigger by the kind of the trigger, and the start is
+	// the start of the namespace service principal.
+	Source job.SourceKind
+	// Saver is the subject of the last saver of the trigger. The job records
+	// it with the trigger ID, and the audit entry of the start names it.
+	Saver string
 }
 
 // Starter starts one plan job of a unit through the job service. It is the
@@ -116,9 +124,8 @@ type Outcome struct {
 }
 
 // Dispatcher fires triggers. The schedule, the end of a job and the REST route
-// call it. It starts plans through the Starter and nothing else, and it
-// checks nothing about the people who set the triggers: the Store caller did
-// that at save. A start that the job service refuses is an error of that start.
+// call it. It starts plans through the Starter and nothing else. A start that
+// the job service refuses is an error of that start.
 //
 // Defense in depth: each method runs Trigger.Validate on the trigger that it
 // reads, and fails closed with ErrInvalid. A stored row that another version
@@ -132,6 +139,13 @@ type Outcome struct {
 // source use the current grants of the last saver of the trigger, and the
 // server denies when that saver is missing, deleted or disabled. A manual
 // fire uses the actor of the caller.
+//
+// Before each start, the dispatcher checks that the last saver of the trigger
+// still holds the settings action and the start action on the unit (SaverCheck).
+// A saver that lost access, or whose principal is missing, deleted or
+// disabled, gets no start: the dispatcher writes an audit entry of the refusal
+// and returns an error that wraps ErrSaverDenied. The check applies to a manual
+// fire as well, so a trigger that nobody maintains starts nothing.
 //
 // The kind review-request-push has no method yet. It joins when the Forge
 // port exists.

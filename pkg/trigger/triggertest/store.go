@@ -4,9 +4,11 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 
+	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/cron"
 	"opendustpan.org/opendustpan/pkg/graph"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -34,6 +36,9 @@ func storeCases() []suiteCase {
 		{"store: two saves at once cannot close a loop", casePutConcurrentCycle},
 		{"store: get and delete refuse an invalid namespace", caseInvalidNamespace},
 		{"store: a write appends an audit entry", caseAudit},
+		{"store: the last saver round trips and a replace sets the new saver", caseLastSaver},
+		{"store: put refuses a saver that is empty, too long, hidden, not UTF-8 or a service principal", casePutSaver},
+		{"store: put refuses an audit entry of another namespace and an invalid entry", casePutAuditEntry},
 	}
 }
 
@@ -547,6 +552,93 @@ func caseAudit(t *testing.T, h Harness, _ *Recorder) {
 	if got := h.Audited(t, string(acme)); got != twoAudited {
 		t.Fatalf("audit entries after a delete = %d, want %d", got, twoAudited)
 	}
+}
+
+func caseLastSaver(t *testing.T, h Harness, _ *Recorder) {
+	t.Helper()
+
+	fence := h.Namespace(t, string(acme))
+	a, b := unit(acme, "a"), unit(acme, "b")
+
+	putAll(t, h, fence, scheduleTrigger("s1", a), followsTrigger("f1", b, a))
+
+	// A replace by another person makes that person the last saver.
+	changed := scheduleTrigger("s1", a)
+	changed.LastSaver = grace
+	changed.Enabled = false
+
+	must(t, "replace", h.Store.Put(t.Context(), changed, fence, auditOf("trigger:put")))
+
+	got, err := h.Store.Get(t.Context(), acme, "s1")
+	must(t, "get", err)
+
+	if got.LastSaver != grace || got != changed {
+		t.Errorf("get = %+v, want %+v", got, changed)
+	}
+
+	list, err := h.Store.List(t.Context(), a)
+	must(t, "list", err)
+
+	if len(list) != 1 || list[0].LastSaver != grace {
+		t.Errorf("list = %+v, want one trigger saved by %s", list, grace)
+	}
+
+	followers, err := h.Store.Followers(t.Context(), a)
+	must(t, "followers", err)
+
+	if len(followers) != 1 || followers[0].LastSaver != ada {
+		t.Errorf("followers = %+v, want one trigger saved by %s", followers, ada)
+	}
+}
+
+func casePutSaver(t *testing.T, h Harness, _ *Recorder) {
+	t.Helper()
+
+	fence := h.Namespace(t, string(acme))
+	a := unit(acme, "a")
+
+	for name, saver := range map[string]string{
+		"empty":                     "",
+		"too long":                  strings.Repeat("s", trigger.MaxSaverBytes+1),
+		"a newline":                 "user:ada\nroot",
+		"a bidirectional mark":      "user:ada\u202e",
+		"not UTF-8":                 "user:\xff",
+		"a service principal":       "system:namespace-service:acme",
+		"a service principal cased": "System:Namespace-Service:acme",
+	} {
+		tr := scheduleTrigger("s1", a)
+		tr.LastSaver = saver
+
+		wantErr(
+			t,
+			"saver that is "+name,
+			h.Store.Put(t.Context(), tr, fence, auditOf("trigger:put")),
+			trigger.ErrInvalid,
+		)
+	}
+
+	wantErr(t, "get after the refusals", getErr(t, h, acme, "s1"), trigger.ErrNotFound)
+}
+
+func casePutAuditEntry(t *testing.T, h Harness, _ *Recorder) {
+	t.Helper()
+
+	fence := h.Namespace(t, string(acme))
+	a := unit(acme, "a")
+
+	foreign := auditOf("trigger:put")
+	foreign.Namespace = other
+
+	noSubject := auditOf("trigger:put")
+	noSubject.Subject = ""
+
+	for name, e := range map[string]audit.Entry{"an entry of another namespace": foreign, "an entry with no subject": noSubject} {
+		wantErr(t, name, h.Store.Put(t.Context(), scheduleTrigger("s1", a), fence, e), audit.ErrInvalidEntry)
+	}
+
+	wantErr(t, "delete with an entry of another namespace", h.Store.Delete(t.Context(), acme, "s1", fence, foreign),
+		audit.ErrInvalidEntry)
+	wantErr(t, "get after the refusals", getErr(t, h, acme, "s1"), trigger.ErrNotFound)
 }
 
 // getErr returns the error of Store.Get.

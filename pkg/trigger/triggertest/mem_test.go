@@ -8,21 +8,13 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
 
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/graph"
-	"opendustpan.org/opendustpan/pkg/job"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/trigger"
 	"opendustpan.org/opendustpan/pkg/trigger/triggertest"
 )
-
-// knownVersion is a state version that the reference knows.
-type knownVersion struct {
-	unit  graph.Unit
-	final bool
-}
 
 type key struct {
 	ns namespace.Name
@@ -33,30 +25,41 @@ type key struct {
 // each case runs before any SQL adapter exists. It keeps the audit log that a
 // SQL adapter writes in the same transaction.
 type mem struct {
-	starter  trigger.Starter
 	fences   map[namespace.Name]int64
 	triggers map[key]trigger.Trigger
-	versions map[string]knownVersion
 	audited  map[namespace.Name]int
-	next     int
 	mu       sync.Mutex
 }
 
-func newMem(starter trigger.Starter) *mem {
+func newMem() *mem {
 	return &mem{
-		starter:  starter,
 		fences:   map[namespace.Name]int64{},
 		triggers: map[key]trigger.Trigger{},
-		versions: map[string]knownVersion{},
 		audited:  map[namespace.Name]int{},
-		next:     0,
 		mu:       sync.Mutex{},
 	}
 }
 
-func (m *mem) Put(_ context.Context, t trigger.Trigger, fence namespace.Fence, _ audit.Entry) error {
+// Fence implements trigger.Fences.
+func (m *mem) Fence(_ context.Context, ns namespace.Name) (namespace.Fence, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	v, ok := m.fences[ns]
+	if !ok {
+		return namespace.Fence{}, namespace.ErrNotFound
+	}
+
+	return namespace.Fence{Namespace: ns, FailoverVersion: v}, nil
+}
+
+func (m *mem) Put(_ context.Context, t trigger.Trigger, fence namespace.Fence, e audit.Entry) error {
 	if err := t.Validate(); err != nil {
 		return fmt.Errorf("put: %w", err)
+	}
+
+	if err := checkEntry(e, t.Unit.Namespace); err != nil {
+		return err
 	}
 
 	m.mu.Lock()
@@ -142,13 +145,17 @@ func (m *mem) Followers(_ context.Context, source graph.Unit) ([]trigger.Trigger
 	return out, nil
 }
 
-func (m *mem) Delete(_ context.Context, ns namespace.Name, id trigger.ID, fence namespace.Fence, _ audit.Entry) error {
+func (m *mem) Delete(_ context.Context, ns namespace.Name, id trigger.ID, fence namespace.Fence, e audit.Entry) error {
 	if err := id.Validate(); err != nil {
 		return fmt.Errorf("delete: %w", err)
 	}
 
 	if _, err := namespace.ParseName(string(ns)); err != nil {
 		return fmt.Errorf("delete: %w: %w", trigger.ErrInvalid, err)
+	}
+
+	if err := checkEntry(e, ns); err != nil {
+		return err
 	}
 
 	m.mu.Lock()
@@ -169,69 +176,18 @@ func (m *mem) Delete(_ context.Context, ns namespace.Name, id trigger.ID, fence 
 	return nil
 }
 
-func (m *mem) Scheduled(ctx context.Context, ns namespace.Name, id trigger.ID, slot time.Time) (job.ID, error) {
-	if slot.IsZero() {
-		return "", fmt.Errorf("%w: a schedule slot is not zero", trigger.ErrInvalid)
+// checkEntry refuses an audit entry that is not valid or names another
+// namespace than ns.
+func checkEntry(e audit.Entry, ns namespace.Name) error {
+	if err := e.Validate(); err != nil {
+		return fmt.Errorf("audit entry: %w", err)
 	}
 
-	t, err := m.fire(ctx, ns, id)
-	if err != nil {
-		return "", err
+	if e.Namespace != ns {
+		return fmt.Errorf("%w: the entry names namespace %q, not %q", audit.ErrInvalidEntry, e.Namespace, ns)
 	}
 
-	if t.Kind != trigger.KindSchedule {
-		return "", fmt.Errorf("%w: trigger %s is not a schedule trigger", trigger.ErrInvalid, id)
-	}
-
-	return m.start(ctx, triggertest.ActorOf("trigger:test"), t, trigger.ScheduleKey(id, slot), "schedule slot")
-}
-
-func (m *mem) Upstream(ctx context.Context, applied trigger.Applied) ([]trigger.Outcome, error) {
-	if err := applied.Validate(); err != nil {
-		return nil, err
-	}
-
-	m.mu.Lock()
-	known, ok := m.versions[applied.Version]
-	m.mu.Unlock()
-
-	if !ok || known.unit != applied.Unit || !known.final {
-		return nil, trigger.ErrVersionMismatch
-	}
-
-	followers, err := m.Followers(ctx, applied.Unit)
-	if err != nil {
-		return nil, err
-	}
-
-	out := make([]trigger.Outcome, 0, len(followers))
-
-	for i := range followers {
-		t := followers[i]
-		key := trigger.UpstreamKey(t.ID, applied.Version)
-
-		if err := t.Validate(); err != nil {
-			out = append(out, trigger.Outcome{Trigger: t.ID, Job: "", Err: fmt.Errorf("trigger %s: %w", t.ID, err)})
-
-			continue
-		}
-
-		id, err := m.start(ctx, triggertest.ActorOf("trigger:test"), t, key, "unit "+applied.Unit.ID+" applied")
-		out = append(out, trigger.Outcome{Trigger: t.ID, Job: id, Err: err})
-	}
-
-	return out, nil
-}
-
-func (m *mem) Manual(ctx context.Context, actor job.Actor, req trigger.ManualRequest) (job.ID, error) {
-	t, err := m.fire(ctx, req.Namespace, req.Trigger)
-	if err != nil {
-		return "", err
-	}
-
-	key := trigger.ManualKey(req.Trigger, actor.Principal.Subject, req.Now)
-
-	return m.start(ctx, actor, t, key, "manual: "+req.Reason)
+	return nil
 }
 
 func (m *mem) checkFence(f namespace.Fence, ns namespace.Name) error {
@@ -255,43 +211,6 @@ func (m *mem) inNamespace(ns namespace.Name) []trigger.Trigger {
 	return out
 }
 
-// fire returns the trigger id after the checks that every method of the
-// dispatcher shares.
-func (m *mem) fire(ctx context.Context, ns namespace.Name, id trigger.ID) (trigger.Trigger, error) {
-	t, err := m.Get(ctx, ns, id)
-	if err != nil {
-		return t, err
-	}
-
-	// Defense in depth: the store checked the trigger at save, and this check
-	// stays for a row that another version wrote or a restore brought back.
-	if err := t.Validate(); err != nil {
-		return t, fmt.Errorf("trigger %s: %w", id, err)
-	}
-
-	if !t.Enabled {
-		return t, trigger.ErrDisabled
-	}
-
-	return t, nil
-}
-
-// start starts the plan of t. The kind of t decides nothing here: every kind
-// starts a plan of its unit.
-func (m *mem) start(ctx context.Context, actor job.Actor, t trigger.Trigger, key, cause string) (job.ID, error) {
-	id, err := m.starter.StartPlan(ctx, actor, t.Unit, trigger.PlanRequest{
-		Trigger:        t.ID,
-		Kind:           t.Kind,
-		IdempotencyKey: key,
-		Reason:         fmt.Sprintf("trigger %s (%s): %s", t.ID, t.Kind, cause),
-	})
-	if err != nil {
-		return "", fmt.Errorf("start the plan of trigger %s: %w", t.ID, err)
-	}
-
-	return id, nil
-}
-
 // storeRaw writes t without Validate and without the cycle check.
 func (m *mem) storeRaw(t trigger.Trigger) {
 	m.mu.Lock()
@@ -300,26 +219,22 @@ func (m *mem) storeRaw(t trigger.Trigger) {
 	m.triggers[key{ns: t.Unit.Namespace, id: t.ID}] = t
 }
 
-func (m *mem) writeVersion(u graph.Unit, final bool) string {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	m.next++
-	id := fmt.Sprintf("version-%d", m.next)
-	m.versions[id] = knownVersion{unit: u, final: final}
-
-	return id
-}
-
 func TestConformance(t *testing.T) {
 	t.Parallel()
 
 	triggertest.Run(t, func(_ *testing.T, starter trigger.Starter) triggertest.Harness {
-		m := newMem(starter)
+		m := newMem()
+		doubles := triggertest.NewDoubles()
+
+		dispatcher, err := doubles.Dispatcher(m, starter, m)
+		if err != nil {
+			t.Fatalf("dispatcher: %v", err)
+		}
 
 		return triggertest.Harness{
 			Store:      m,
-			Dispatcher: m,
+			Dispatcher: dispatcher,
+			Doubles:    doubles,
 			Namespace: func(_ *testing.T, name string) namespace.Fence {
 				m.mu.Lock()
 				defer m.mu.Unlock()
@@ -327,10 +242,6 @@ func TestConformance(t *testing.T) {
 				m.fences[namespace.Name(name)] = 1
 
 				return namespace.Fence{Namespace: namespace.Name(name), FailoverVersion: 1}
-			},
-			Versions: triggertest.Versions{
-				Final:        func(_ *testing.T, u graph.Unit) string { return m.writeVersion(u, true) },
-				Intermediate: func(_ *testing.T, u graph.Unit) string { return m.writeVersion(u, false) },
 			},
 			StoreRaw: func(_ *testing.T, tr trigger.Trigger) { m.storeRaw(tr) },
 			Audited: func(_ *testing.T, ns string) int {

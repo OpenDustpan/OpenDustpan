@@ -24,13 +24,14 @@ func follows(id trigger.ID, unitID, sourceID string) trigger.Trigger {
 		Frequency: trigger.Frequency{Preset: "", Cron: ""},
 		Source:    unit(sourceID),
 		Enabled:   true,
+		LastSaver: "user:ada",
 	}
 }
 
 func schedule(id trigger.ID, f trigger.Frequency) trigger.Trigger {
 	return trigger.Trigger{
 		ID: id, Unit: unit("a"), Kind: trigger.KindSchedule, Frequency: f,
-		Source: graph.Unit{Namespace: "", Tool: "", ID: ""}, Enabled: true,
+		Source: graph.Unit{Namespace: "", Tool: "", ID: ""}, Enabled: true, LastSaver: "user:ada",
 	}
 }
 
@@ -151,8 +152,9 @@ func TestTriggerValidate(t *testing.T) {
 				Preset: "",
 				Cron:   "",
 			},
-			Source:  graph.Unit{Namespace: "", Tool: "", ID: ""},
-			Enabled: false,
+			Source:    graph.Unit{Namespace: "", Tool: "", ID: ""},
+			Enabled:   false,
+			LastSaver: "user:ada",
 		},
 	}
 
@@ -196,11 +198,24 @@ func TestTriggerValidate(t *testing.T) {
 		"review with a freq": {
 			ID: "r1", Unit: unit("a"), Kind: trigger.KindReviewRequestPush,
 			Frequency: trigger.Frequency{Preset: cron.PresetDaily, Cron: ""}, Source: graph.Unit{Namespace: "", Tool: "", ID: ""}, Enabled: true,
+			LastSaver: "user:ada",
 		},
 		"review with a source": {
 			ID: "r1", Unit: unit("a"), Kind: trigger.KindReviewRequestPush,
 			Frequency: trigger.Frequency{Preset: "", Cron: ""}, Source: unit("b"), Enabled: true,
+			LastSaver: "user:ada",
 		},
+		"no saver":               bad(func(tr *trigger.Trigger) { tr.LastSaver = "" }),
+		"long saver":             bad(func(tr *trigger.Trigger) { tr.LastSaver = strings.Repeat("a", trigger.MaxSaverBytes+1) }),
+		"saver with a newline":   bad(func(tr *trigger.Trigger) { tr.LastSaver = "user:ada\nadmin" }),
+		"saver with a bidi mark": bad(func(tr *trigger.Trigger) { tr.LastSaver = "user:ada\u202e" }),
+		"saver not UTF-8":        bad(func(tr *trigger.Trigger) { tr.LastSaver = "user:\xff" }),
+		"saver is a service principal": bad(func(tr *trigger.Trigger) {
+			tr.LastSaver = "system:namespace-service:acme"
+		}),
+		"saver is a service principal in other case": bad(func(tr *trigger.Trigger) {
+			tr.LastSaver = "SYSTEM:Namespace-Service:acme"
+		}),
 	} {
 		if err := tr.Validate(); !errors.Is(err, trigger.ErrInvalid) {
 			t.Errorf("%s: Validate() = %v, want ErrInvalid", name, err)
