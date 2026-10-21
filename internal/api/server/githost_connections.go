@@ -13,8 +13,8 @@ import (
 	"opendustpan.org/opendustpan/pkg/namespace"
 )
 
-// gitHostConnectionDocument is a connection on the wire. apiAddress, appId and
-// hookId come from the registration of the operator and are empty when the
+// gitHostConnectionDocument is a connection on the wire. apiAddress, appID and
+// hookID come from the registration of the operator and are empty when the
 // installation has no registration. credentialSets is always empty: a
 // connection of the installation-level app holds no credential of its own.
 //
@@ -25,10 +25,10 @@ type gitHostConnectionDocument struct {
 	Kind           string   `json:"kind"`
 	Auth           string   `json:"auth"`
 	AppScope       string   `json:"appScope"`
-	InstallationID string   `json:"installationId"`
-	AppID          string   `json:"appId"`
+	InstallationID string   `json:"installationID"`
+	AppID          string   `json:"appID"`
 	APIAddress     string   `json:"apiAddress"`
-	HookID         string   `json:"hookId"`
+	HookID         string   `json:"hookID"`
 	CredentialSets []string `json:"credentialSets"`
 	CreatedAt      string   `json:"createdAt"`
 	UpdatedAt      string   `json:"updatedAt"`
@@ -51,10 +51,10 @@ type gitHostConnectionsDocument struct {
 type gitHostConnectionRequest struct {
 	Kind           *string `json:"kind"`
 	Auth           *string `json:"auth"`
-	InstallationID *string `json:"installationId"`
+	InstallationID *string `json:"installationID"`
 	Push           *bool   `json:"push"`
 	APIAddress     *string `json:"apiAddress"`
-	AppID          *string `json:"appId"`
+	AppID          *string `json:"appID"`
 	PrivateKey     *string `json:"privateKey"`
 	EventSecret    *string `json:"eventSecret"`
 	Credential     *string `json:"credential"`

@@ -74,20 +74,20 @@ func TestGitHostAppRefusesInputThatIsNotValid(t *testing.T) {
 	t.Parallel()
 
 	for name, body := range map[string]string{
-		"an event secret of 31 bytes": `{"appId":"1","apiAddress":"` + hostAPIAddress + `","privateKey":"k","eventSecret":"` +
+		"an event secret of 31 bytes": `{"appID":"1","apiAddress":"` + hostAPIAddress + `","privateKey":"k","eventSecret":"` +
 			strings.Repeat("a", 31) + `"}`,
-		"no event secret": `{"appId":"1","apiAddress":"` + hostAPIAddress + `","privateKey":"k"}`,
-		"no key":          `{"appId":"1","apiAddress":"` + hostAPIAddress + `","eventSecret":"` + strings.Repeat("a", 40) + `"}`,
-		"no address":      `{"appId":"1","privateKey":"k","eventSecret":"` + strings.Repeat("a", 40) + `"}`,
-		"an unknown field": `{"appId":"1","apiAddress":"` + hostAPIAddress + `","privateKey":"k","eventSecret":"` +
-			strings.Repeat("a", 40) + `","hookId":"x"}`,
-		"the http scheme": `{"appId":"1","apiAddress":"http://api.github.com","privateKey":"k","eventSecret":"` +
+		"no event secret": `{"appID":"1","apiAddress":"` + hostAPIAddress + `","privateKey":"k"}`,
+		"no key":          `{"appID":"1","apiAddress":"` + hostAPIAddress + `","eventSecret":"` + strings.Repeat("a", 40) + `"}`,
+		"no address":      `{"appID":"1","privateKey":"k","eventSecret":"` + strings.Repeat("a", 40) + `"}`,
+		"an unknown field": `{"appID":"1","apiAddress":"` + hostAPIAddress + `","privateKey":"k","eventSecret":"` +
+			strings.Repeat("a", 40) + `","hookID":"x"}`,
+		"the http scheme": `{"appID":"1","apiAddress":"http://api.github.com","privateKey":"k","eventSecret":"` +
 			strings.Repeat("a", 40) + `"}`,
-		"a loopback address": `{"appId":"1","apiAddress":"https://127.0.0.1","privateKey":"k","eventSecret":"` +
+		"a loopback address": `{"appID":"1","apiAddress":"https://127.0.0.1","privateKey":"k","eventSecret":"` +
 			strings.Repeat("a", 40) + `"}`,
-		"the metadata address": `{"appId":"1","apiAddress":"https://169.254.169.254","privateKey":"k","eventSecret":"` +
+		"the metadata address": `{"appID":"1","apiAddress":"https://169.254.169.254","privateKey":"k","eventSecret":"` +
 			strings.Repeat("a", 40) + `"}`,
-		"a private address": `{"appId":"1","apiAddress":"https://10.0.0.5","privateKey":"k","eventSecret":"` +
+		"a private address": `{"appID":"1","apiAddress":"https://10.0.0.5","privateKey":"k","eventSecret":"` +
 			strings.Repeat("a", 40) + `"}`,
 		"text after the object": hostAppBody() + `{}`,
 		"not JSON":              `key=value`,
@@ -118,7 +118,7 @@ func TestGitHostAppRefusesInputThatIsNotValid(t *testing.T) {
 		t.Parallel()
 
 		e := newHostEnv(t, hostAllowAll())
-		big := `{"appId":"1","apiAddress":"` + hostAPIAddress + `","privateKey":"` + strings.Repeat("a", 70<<10) +
+		big := `{"appID":"1","apiAddress":"` + hostAPIAddress + `","privateKey":"` + strings.Repeat("a", 70<<10) +
 			`","eventSecret":"` + strings.Repeat("a", 40) + `"}`
 
 		wantHost(t, e.send(t, http.MethodPut, hostAppPath, big), http.StatusRequestEntityTooLarge)
@@ -156,7 +156,7 @@ func TestGitHostAppNeverAnswersAnyOfItsSecrets(t *testing.T) {
 	}
 
 	// A refusal that names the body must not echo it.
-	bad := e.send(t, http.MethodPut, hostAppPath, strings.Replace(hostAppBody(), `"appId":"12345"`, `"appId":"x"`, 1))
+	bad := e.send(t, http.MethodPut, hostAppPath, strings.Replace(hostAppBody(), `"appID":"12345"`, `"appID":"x"`, 1))
 	texts = append(texts, bad.body)
 
 	for _, scope := range []string{"@server", "acme"} {
@@ -368,14 +368,14 @@ func TestGitHostConnectionTakesNothingThatTheOperatorOwns(t *testing.T) {
 	//nolint:gosec // The strings are fields of a request that the route refuses, not credentials.
 	for name, field := range map[string]string{
 		"an API address":     `"apiAddress":"https://evil.example.com"`,
-		"an app ID":          `"appId":"777"`,
+		"an app ID":          `"appID":"777"`,
 		"a private key":      `"privateKey":"` + hostKeyCanary + `"`,
 		"an event secret":    `"eventSecret":"` + hostSecretCanary + `"`,
 		"a credential":       `"credential":"token"`,
 		"a list of sets":     `"credentials":[]`,
 		"a field of nothing": `"other":"x"`,
 	} {
-		body := `{"kind":"github","auth":"app","installationId":"101",` + field + `}`
+		body := `{"kind":"github","auth":"app","installationID":"101",` + field + `}`
 
 		r := e.send(t, http.MethodPost, hostConnectionsPath, body)
 		wantHost(t, r, http.StatusBadRequest)
@@ -398,11 +398,11 @@ func TestGitHostConnectionRefusesInputThatIsNotValid(t *testing.T) {
 	e.register(t)
 
 	for name, body := range map[string]string{ //nolint:gosec // The strings are bodies of requests, not credentials.
-		"the token auth kind": `{"kind":"github","auth":"token","installationId":"101"}`,
-		"another kind":        `{"kind":"gitlab","auth":"app","installationId":"101"}`,
+		"the token auth kind": `{"kind":"github","auth":"token","installationID":"101"}`,
+		"another kind":        `{"kind":"gitlab","auth":"app","installationID":"101"}`,
 		"no installation":     `{"kind":"github","auth":"app"}`,
-		"a bad installation":  `{"kind":"github","auth":"app","installationId":"1 OR 1=1"}`,
-		"no kind":             `{"auth":"app","installationId":"101"}`,
+		"a bad installation":  `{"kind":"github","auth":"app","installationID":"1 OR 1=1"}`,
+		"no kind":             `{"auth":"app","installationID":"101"}`,
 		"not JSON":            `x`,
 		"an empty body":       ``,
 	} {

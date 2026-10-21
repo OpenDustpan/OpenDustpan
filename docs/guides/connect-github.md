@@ -53,13 +53,13 @@ role installation operator has it.
 curl -X PUT "$SERVER/api/dustpan/v1/git-host-apps/github" \
   -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
   -d "$(jq -n --rawfile key app.pem --arg secret "$EVENT_SECRET" \
-        '{appId:"12345", apiAddress:"https://api.github.com", privateKey:$key, eventSecret:$secret}')"
+        '{appID:"12345", apiAddress:"https://api.github.com", privateKey:$key, eventSecret:$secret}')"
 ```
 
 The request needs all four fields. The server answers 201 and the first time,
 and 200 for a replacement. The answer shows that the key and the event secret
 are set, with a set ID and a creation time. It never shows their values. It also
-shows the `hookId`.
+shows the `hookID`.
 
 Rules for the registration:
 
@@ -76,7 +76,7 @@ Rules for the registration:
   unique local). It must have at least 8 bits for IPv4 and 32 bits for IPv6.
   The server refuses loopback, link-local, metadata, unspecified and multicast
   addresses also inside a range.
-- A replacement keeps the `hookId`. To change the key, the event secret, the
+- A replacement keeps the `hookID`. To change the key, the event secret, the
   app ID or the address, send all four fields again. Send `If-Match` with the
   version that you read to make sure that no one else changed it.
 - A console session needs a recent sign-in for this change.
@@ -114,11 +114,11 @@ namespace. The role admin has it.
 ```sh
 curl -X POST "$SERVER/api/dustpan/v1/namespaces/acme/git-host-connections" \
   -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
-  -d '{"kind":"github","auth":"app","installationId":"67890","push":false}'
+  -d '{"kind":"github","auth":"app","installationID":"67890","push":false}'
 ```
 
 The answer has the ID of the connection, the app ID and the API address of the
-registration, and the `hookId`. The first connection of a namespace is the
+registration, and the `hookID`. The first connection of a namespace is the
 default connection.
 
 The request has these rules:
@@ -185,7 +185,7 @@ The check takes no `Idempotency-Key`. A retry is safe.
 
 ## Webhooks and a federation
 
-This release takes no webhook. The `hookId` that the registration shows is
+This release takes no webhook. The `hookID` that the registration shows is
 for the next release. A GitHub App has one webhook address. When webhooks
 arrive, use an address with a stable host name that every member of a
 federation accepts, for example a name with DNS failover or a global load

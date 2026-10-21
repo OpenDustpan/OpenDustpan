@@ -52,9 +52,7 @@
         "type": "object"
       },
       "ApiDescription": {
-        "additionalProperties": {
-          "description": "Any JSON value. Only the operator sets the field that holds it. A request that holds the field is refused."
-        },
+        "additionalProperties": true,
         "type": "object"
       },
       "ApprovalDefault": {
@@ -193,9 +191,7 @@
             "type": "string"
           },
           "data": {
-            "additionalProperties": {
-              "description": "Any JSON value. Only the operator sets the field that holds it. A request that holds the field is refused."
-            },
+            "additionalProperties": true,
             "type": "object"
           },
           "hidden": {
@@ -478,86 +474,6 @@
         ],
         "type": "object"
       },
-      "CreateGitHostConnectionRequest": {
-        "properties": {
-          "apiAddress": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "appId": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "auth": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "credential": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "credentials": {
-            "items": {
-              "description": "Any JSON value. Only the operator sets the field that holds it. A request that holds the field is refused."
-            },
-            "type": [
-              "array",
-              "null"
-            ]
-          },
-          "eventSecret": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "installationId": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "kind": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "privateKey": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "push": {
-            "type": [
-              "boolean",
-              "null"
-            ]
-          }
-        },
-        "required": [
-          "apiAddress",
-          "appId",
-          "auth",
-          "credential",
-          "credentials",
-          "eventSecret",
-          "installationId",
-          "kind",
-          "privateKey",
-          "push"
-        ],
-        "type": "object"
-      },
       "CreateNotificationSinkRequest": {
         "properties": {
           "kind": {
@@ -732,229 +648,6 @@
         "required": [
           "code",
           "message"
-        ],
-        "type": "object"
-      },
-      "GitHostAccount": {
-        "properties": {
-          "expiresAt": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "id": {
-            "type": "string"
-          },
-          "login": {
-            "type": "string"
-          },
-          "noExpiry": {
-            "type": "boolean"
-          },
-          "scopes": {
-            "items": {
-              "type": "string"
-            },
-            "type": "array"
-          }
-        },
-        "required": [
-          "expiresAt",
-          "id",
-          "login",
-          "noExpiry",
-          "scopes"
-        ],
-        "type": "object"
-      },
-      "GitHostApp": {
-        "properties": {
-          "apiAddress": {
-            "type": "string"
-          },
-          "appId": {
-            "type": "string"
-          },
-          "createdAt": {
-            "type": "string"
-          },
-          "eventSecret": {
-            "$ref": "#/components/schemas/GitHostCredentialSet"
-          },
-          "hookId": {
-            "type": "string"
-          },
-          "kind": {
-            "type": "string"
-          },
-          "privateKey": {
-            "$ref": "#/components/schemas/GitHostCredentialSet"
-          },
-          "updatedAt": {
-            "type": "string"
-          },
-          "version": {
-            "format": "int64",
-            "type": "integer"
-          }
-        },
-        "required": [
-          "apiAddress",
-          "appId",
-          "createdAt",
-          "eventSecret",
-          "hookId",
-          "kind",
-          "privateKey",
-          "updatedAt",
-          "version"
-        ],
-        "type": "object"
-      },
-      "GitHostCheck": {
-        "properties": {
-          "account": {
-            "$ref": "#/components/schemas/GitHostAccount"
-          },
-          "capabilities": {
-            "items": {
-              "type": "string"
-            },
-            "type": "array"
-          },
-          "missing": {
-            "additionalProperties": {
-              "items": {
-                "type": "string"
-              },
-              "type": "array"
-            },
-            "type": "object"
-          }
-        },
-        "required": [
-          "account",
-          "capabilities",
-          "missing"
-        ],
-        "type": "object"
-      },
-      "GitHostConnection": {
-        "properties": {
-          "apiAddress": {
-            "type": "string"
-          },
-          "appId": {
-            "type": "string"
-          },
-          "appScope": {
-            "type": "string"
-          },
-          "auth": {
-            "type": "string"
-          },
-          "createdAt": {
-            "type": "string"
-          },
-          "credentialSets": {
-            "items": {
-              "type": "string"
-            },
-            "type": "array"
-          },
-          "default": {
-            "type": "boolean"
-          },
-          "hookId": {
-            "type": "string"
-          },
-          "id": {
-            "type": "string"
-          },
-          "installationId": {
-            "type": "string"
-          },
-          "kind": {
-            "type": "string"
-          },
-          "namespace": {
-            "type": "string"
-          },
-          "push": {
-            "type": "boolean"
-          },
-          "updatedAt": {
-            "type": "string"
-          },
-          "version": {
-            "format": "int64",
-            "type": "integer"
-          }
-        },
-        "required": [
-          "apiAddress",
-          "appId",
-          "appScope",
-          "auth",
-          "createdAt",
-          "credentialSets",
-          "default",
-          "hookId",
-          "id",
-          "installationId",
-          "kind",
-          "namespace",
-          "push",
-          "updatedAt",
-          "version"
-        ],
-        "type": "object"
-      },
-      "GitHostCredentialSet": {
-        "properties": {
-          "createdAt": {
-            "type": "string"
-          },
-          "set": {
-            "type": "boolean"
-          },
-          "setId": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "createdAt",
-          "set",
-          "setId"
-        ],
-        "type": "object"
-      },
-      "GitHostInstallation": {
-        "properties": {
-          "createdAt": {
-            "type": "string"
-          },
-          "installationId": {
-            "type": "string"
-          },
-          "namespace": {
-            "type": "string"
-          },
-          "updatedAt": {
-            "type": "string"
-          },
-          "version": {
-            "format": "int64",
-            "type": "integer"
-          }
-        },
-        "required": [
-          "createdAt",
-          "installationId",
-          "namespace",
-          "updatedAt",
-          "version"
         ],
         "type": "object"
       },
@@ -1457,34 +1150,6 @@
         "required": [
           "total",
           "units"
-        ],
-        "type": "object"
-      },
-      "ListGitHostConnectionsResponse": {
-        "properties": {
-          "connections": {
-            "items": {
-              "$ref": "#/components/schemas/GitHostConnection"
-            },
-            "type": "array"
-          }
-        },
-        "required": [
-          "connections"
-        ],
-        "type": "object"
-      },
-      "ListGitHostInstallationsResponse": {
-        "properties": {
-          "installations": {
-            "items": {
-              "$ref": "#/components/schemas/GitHostInstallation"
-            },
-            "type": "array"
-          }
-        },
-        "required": [
-          "installations"
         ],
         "type": "object"
       },
@@ -2012,55 +1677,6 @@
         ],
         "type": "object"
       },
-      "PutGitHostAppRequest": {
-        "properties": {
-          "apiAddress": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "appId": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "eventSecret": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "privateKey": {
-            "type": [
-              "string",
-              "null"
-            ]
-          }
-        },
-        "required": [
-          "apiAddress",
-          "appId",
-          "eventSecret",
-          "privateKey"
-        ],
-        "type": "object"
-      },
-      "PutGitHostInstallationRequest": {
-        "properties": {
-          "namespace": {
-            "type": [
-              "string",
-              "null"
-            ]
-          }
-        },
-        "required": [
-          "namespace"
-        ],
-        "type": "object"
-      },
       "RegistryKey": {
         "properties": {
           "addedAt": {
@@ -2506,6 +2122,14 @@
         ],
         "responses": {
           "2XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object"
+                }
+              }
+            },
             "description": "The request succeeded."
           },
           "default": {
@@ -2523,10 +2147,7 @@
           "git-host"
         ],
         "x-dustpan-actions": [
-          {
-            "action": "server:manage-git-host",
-            "object": "server"
-          }
+          "server:manage-git-host"
         ]
       },
       "get": {
@@ -2546,7 +2167,8 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/GitHostApp"
+                  "additionalProperties": true,
+                  "type": "object"
                 }
               }
             },
@@ -2572,10 +2194,7 @@
           "git-host"
         ],
         "x-dustpan-actions": [
-          {
-            "action": "server:read-git-host",
-            "object": "server"
-          }
+          "server:read-git-host"
         ]
       },
       "put": {
@@ -2600,18 +2219,19 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/PutGitHostAppRequest"
+                "additionalProperties": true,
+                "type": "object"
               }
             }
-          },
-          "required": true
+          }
         },
         "responses": {
           "2XX": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/GitHostApp"
+                  "additionalProperties": true,
+                  "type": "object"
                 }
               }
             },
@@ -2637,10 +2257,7 @@
           "git-host"
         ],
         "x-dustpan-actions": [
-          {
-            "action": "server:manage-git-host",
-            "object": "server"
-          }
+          "server:manage-git-host"
         ]
       }
     },
@@ -2652,7 +2269,8 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ListGitHostInstallationsResponse"
+                  "additionalProperties": true,
+                  "type": "object"
                 }
               }
             },
@@ -2673,10 +2291,7 @@
           "git-host"
         ],
         "x-dustpan-actions": [
-          {
-            "action": "server:read-git-host",
-            "object": "server"
-          }
+          "server:read-git-host"
         ]
       }
     },
@@ -2701,6 +2316,14 @@
         ],
         "responses": {
           "2XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object"
+                }
+              }
+            },
             "description": "The request succeeded."
           },
           "default": {
@@ -2718,10 +2341,7 @@
           "git-host"
         ],
         "x-dustpan-actions": [
-          {
-            "action": "server:manage-git-host",
-            "object": "server"
-          }
+          "server:manage-git-host"
         ]
       },
       "get": {
@@ -2741,7 +2361,8 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/GitHostInstallation"
+                  "additionalProperties": true,
+                  "type": "object"
                 }
               }
             },
@@ -2767,10 +2388,7 @@
           "git-host"
         ],
         "x-dustpan-actions": [
-          {
-            "action": "server:read-git-host",
-            "object": "server"
-          }
+          "server:read-git-host"
         ]
       },
       "put": {
@@ -2795,18 +2413,19 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/PutGitHostInstallationRequest"
+                "additionalProperties": true,
+                "type": "object"
               }
             }
-          },
-          "required": true
+          }
         },
         "responses": {
           "2XX": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/GitHostInstallation"
+                  "additionalProperties": true,
+                  "type": "object"
                 }
               }
             },
@@ -2832,10 +2451,7 @@
           "git-host"
         ],
         "x-dustpan-actions": [
-          {
-            "action": "server:manage-git-host",
-            "object": "server"
-          }
+          "server:manage-git-host"
         ]
       }
     },
@@ -3926,7 +3542,8 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ListGitHostConnectionsResponse"
+                  "additionalProperties": true,
+                  "type": "object"
                 }
               }
             },
@@ -3947,10 +3564,7 @@
           "git-host"
         ],
         "x-dustpan-actions": [
-          {
-            "action": "namespace:read-git-host-connections",
-            "object": "namespace"
-          }
+          "namespace:read-git-host-connections"
         ]
       },
       "post": {
@@ -3972,18 +3586,19 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/CreateGitHostConnectionRequest"
+                "additionalProperties": true,
+                "type": "object"
               }
             }
-          },
-          "required": true
+          }
         },
         "responses": {
           "2XX": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/GitHostConnection"
+                  "additionalProperties": true,
+                  "type": "object"
                 }
               }
             },
@@ -4009,10 +3624,7 @@
           "git-host"
         ],
         "x-dustpan-actions": [
-          {
-            "action": "namespace:manage-git-host-connections",
-            "object": "namespace"
-          }
+          "namespace:manage-git-host-connections"
         ]
       }
     },
@@ -4045,6 +3657,14 @@
         ],
         "responses": {
           "2XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object"
+                }
+              }
+            },
             "description": "The request succeeded."
           },
           "default": {
@@ -4062,10 +3682,7 @@
           "git-host"
         ],
         "x-dustpan-actions": [
-          {
-            "action": "namespace:manage-git-host-connections",
-            "object": "namespace"
-          }
+          "namespace:manage-git-host-connections"
         ]
       },
       "get": {
@@ -4093,7 +3710,8 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/GitHostConnection"
+                  "additionalProperties": true,
+                  "type": "object"
                 }
               }
             },
@@ -4119,10 +3737,7 @@
           "git-host"
         ],
         "x-dustpan-actions": [
-          {
-            "action": "namespace:read-git-host-connections",
-            "object": "namespace"
-          }
+          "namespace:read-git-host-connections"
         ]
       }
     },
@@ -4147,12 +3762,23 @@
             }
           }
         ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "type": "object"
+              }
+            }
+          }
+        },
         "responses": {
           "2XX": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/GitHostCheck"
+                  "additionalProperties": true,
+                  "type": "object"
                 }
               }
             },
@@ -4173,10 +3799,7 @@
           "git-host"
         ],
         "x-dustpan-actions": [
-          {
-            "action": "namespace:manage-git-host-connections",
-            "object": "namespace"
-          }
+          "namespace:manage-git-host-connections"
         ]
       }
     },
@@ -4207,12 +3830,23 @@
             "$ref": "#/components/parameters/IfMatch"
           }
         ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "type": "object"
+              }
+            }
+          }
+        },
         "responses": {
           "2XX": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/GitHostConnection"
+                  "additionalProperties": true,
+                  "type": "object"
                 }
               }
             },
@@ -4238,10 +3872,7 @@
           "git-host"
         ],
         "x-dustpan-actions": [
-          {
-            "action": "namespace:manage-git-host-connections",
-            "object": "namespace"
-          }
+          "namespace:manage-git-host-connections"
         ]
       }
     },

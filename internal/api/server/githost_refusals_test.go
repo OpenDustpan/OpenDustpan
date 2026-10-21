@@ -273,8 +273,8 @@ func TestGitHostRoutesRefuseABodyAbove64KiB(t *testing.T) {
 	pad := strings.Repeat("a", limit)
 
 	for _, call := range []struct{ method, target, body string }{
-		{http.MethodPost, hostConnectionsPath, `{"kind":"github","auth":"app","installationId":"101","x":"` + pad + `"}`},
-		{http.MethodPut, hostAppPath, `{"appId":"` + hostAppID + `","apiAddress":"` + pad + `"}`},
+		{http.MethodPost, hostConnectionsPath, `{"kind":"github","auth":"app","installationID":"101","x":"` + pad + `"}`},
+		{http.MethodPut, hostAppPath, `{"appID":"` + hostAppID + `","apiAddress":"` + pad + `"}`},
 		{http.MethodPut, hostInstallationsPath + "/102", `{"namespace":"` + pad + `"}`},
 	} {
 		r := e.send(t, call.method, call.target, call.body)

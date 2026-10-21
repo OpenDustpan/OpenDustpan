@@ -66,7 +66,7 @@ func TestGitHostKeyWithAnotherBodyIsRefused(t *testing.T) {
 	wantHost(t, e.do(t, first), http.StatusCreated)
 
 	other := first
-	other.body = `{"kind":"github","auth":"app","installationId":"101","push":false}`
+	other.body = `{"kind":"github","auth":"app","installationID":"101","push":false}`
 
 	r := e.do(t, other)
 	wantHost(t, r, http.StatusUnprocessableEntity)
