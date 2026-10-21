@@ -265,3 +265,47 @@ func TestCallerWithoutSubject(t *testing.T) {
 		t.Fatalf("Stage with no caller = %v, want ErrUnauthenticated", err)
 	}
 }
+
+func TestProviders(t *testing.T) {
+	t.Parallel()
+
+	e := newEnv(t, false)
+	sg := newSigner(t)
+	e.trust(t, acme, sg)
+
+	// Two versions of one provider list the provider once.
+	for _, rel := range []struct{ name, version string }{
+		{"vault", "1.0.0"}, {"dns", "1.0.0"}, {"dns", "1.1.0"},
+	} {
+		if _, err := e.publish(t, acme, buildSet(t, sg, rel.name, rel.version, "linux_amd64")); err != nil {
+			t.Fatalf("publish %s %s: %v", rel.name, rel.version, err)
+		}
+	}
+
+	tests := []struct {
+		name    string
+		ns      namespace.Name
+		want    []string
+		wantErr error
+	}{
+		{"providers ordered by name", acme, []string{"dns", "vault"}, nil},
+		{"a namespace with no provider", beta, []string{}, nil},
+		{"a namespace that does not exist", "gamma", nil, registry.ErrNotFound},
+		{"a name that is not a namespace", "../acme", nil, registry.ErrNotFound},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, err := e.svc.Providers(context.Background(), tt.ns)
+			if !errors.Is(err, tt.wantErr) {
+				t.Fatalf("Providers(%q) error = %v, want %v", tt.ns, err, tt.wantErr)
+			}
+
+			if tt.wantErr == nil && !slices.Equal(got, tt.want) {
+				t.Errorf("Providers(%q) = %v, want %v", tt.ns, got, tt.want)
+			}
+		})
+	}
+}

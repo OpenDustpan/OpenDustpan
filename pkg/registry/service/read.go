@@ -209,3 +209,24 @@ func (s *Service) OpenFile(
 
 	return file.Size, r, nil
 }
+
+// Providers returns the names of the providers in ns that have at least one
+// release, ordered by name. It returns an empty list for a namespace with no
+// provider, and registry.ErrNotFound for a namespace that does not exist.
+func (s *Service) Providers(ctx context.Context, ns namespace.Name) ([]string, error) {
+	if _, err := s.namespaces.GetNamespace(ctx, ns); err != nil {
+		return nil, notFound(err)
+	}
+
+	addrs, err := s.store.Addresses(ctx, ns, registry.KindProvider)
+	if err != nil {
+		return nil, fmt.Errorf("list providers: %w", err)
+	}
+
+	out := make([]string, 0, len(addrs))
+	for i := range addrs {
+		out = append(out, addrs[i].Name)
+	}
+
+	return out, nil
+}

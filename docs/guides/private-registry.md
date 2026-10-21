@@ -156,6 +156,25 @@ OpenTofu downloads the files of a release without the token. The download
 document holds signed addresses for them. An address is valid for 15 minutes
 and for one file of one release.
 
+## List the providers of a namespace
+
+A token with `registry:read` lists the providers of a namespace that have at
+least one release. The list is in the order of the provider name:
+
+```sh
+curl -sS -H "Authorization: token <token>" \
+  "https://dustpan.example.com/api/dustpan/v1/namespaces/acme/registry/providers?limit=50"
+```
+
+```json
+{"providers": [{"namespace": "acme", "name": "payments"}], "nextCursor": ""}
+```
+
+`limit` is a number from 1 to 1000. The default is 100. When more providers
+remain, `nextCursor` holds a value. Send it as `cursor` in the next request.
+`nextCursor` is empty on the last page. A namespace with no provider answers
+an empty list. A `limit` or a `cursor` that is not valid answers 400.
+
 ## Remove a key
 
 Remove a key when it is no longer safe:

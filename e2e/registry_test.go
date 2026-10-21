@@ -258,6 +258,8 @@ func (sc *registryScenario) publishGood(ctx context.Context, t *testing.T) {
 		t.Fatalf("publish with no trusted key = %d %s", resp.Status, resp.Body)
 	}
 
+	sc.checkProviders(ctx, t, `"providers":[]`)
+
 	sc.api.addKey(ctx, t, sc.signer)
 
 	good := buildProvider(t, sc.signer, "1.0.0")
@@ -266,6 +268,13 @@ func (sc *registryScenario) publishGood(ctx context.Context, t *testing.T) {
 	resp = sc.api.publish(ctx, t, good, good.asBuilt())
 	if resp.Status != http.StatusOK || !strings.Contains(resp.Body, sc.signer.Key.Fingerprint) {
 		t.Fatalf("publish = %d %s", resp.Status, resp.Body)
+	}
+
+	sc.checkProviders(ctx, t, `"name":"`+good.name+`"`)
+
+	// A cursor that is not a provider name is refused.
+	if bad := sc.api.call(ctx, t, http.MethodGet, "/providers?cursor=../x", ""); bad.Status != http.StatusBadRequest {
+		t.Fatalf("list providers with a hostile cursor = %d %s", bad.Status, bad.Body)
 	}
 
 	// The same files again are a repeat and change nothing.
@@ -278,6 +287,18 @@ func (sc *registryScenario) publishGood(ctx context.Context, t *testing.T) {
 	const name = "registry init"
 
 	sc.env.StepIn(ctx, t, dir, step(name, sc.checkInit(name, dir, good), "init", "-input=false", "-no-color"))
+}
+
+// checkProviders proves that the provider list answers 200 with one page that
+// holds want and no next cursor.
+func (sc *registryScenario) checkProviders(ctx context.Context, t *testing.T, want string) {
+	t.Helper()
+
+	resp := sc.api.call(ctx, t, http.MethodGet, "/providers", "")
+	if resp.Status != http.StatusOK || !strings.Contains(resp.Body, want) ||
+		!strings.Contains(resp.Body, `"nextCursor":""`) {
+		t.Fatalf("list providers = %d %s, want %s", resp.Status, resp.Body, want)
+	}
 }
 
 const registryConfig = `terraform {
