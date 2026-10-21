@@ -327,7 +327,7 @@ func TestCreateRefusals(t *testing.T) {
 			"a body over the limit", "admin", `{"kind":"webhook","name":"` + strings.Repeat("n", 70<<10) + `"}`, 400,
 			"request.body-invalid",
 		},
-		{"a reader", "reader", webhookBody(t, "a"), 403, "auth.forbidden"},
+		{"a reader", "reader", webhookBody(t, "a"), 403, "access.denied"},
 		{"no token", "", webhookBody(t, "a"), 401, "auth.unauthenticated"},
 	}
 
