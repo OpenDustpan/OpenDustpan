@@ -76,14 +76,13 @@ type hostScenario struct {
 	create  string
 }
 
-// do sends one request as the bootstrap administrator and checks the status.
+// do sends one request as the bootstrap administrator and checks the status. A
+// write of the registration or of an installation needs a console session with
+// a recent sign-in, so it goes with the session of a site administrator.
 func (s *hostScenario) do(t *testing.T, method, path, body string, want int) string {
 	t.Helper()
 
-	status, got, err := s.env.ServerAPIStatus(t.Context(), method, path, body)
-	if err != nil {
-		t.Fatalf("%s %s: %v", method, path, err)
-	}
+	status, got := freshServerCall(t.Context(), t, s.env, principalStep{method, path, body, want})
 
 	if status != want {
 		t.Fatalf("%s %s = %d (%s), want %d", method, path, status, got, want)

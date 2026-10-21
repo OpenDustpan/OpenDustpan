@@ -192,7 +192,9 @@ func NewEnvWithGitHost(ctx context.Context, tb testing.TB, store Store, fake *Gi
 	gitHostFakes.Store(tb, fake)
 	tb.Cleanup(func() { gitHostFakes.Delete(tb) })
 
-	return NewEnv(ctx, tb, NoCLI(), store)
+	// The writes of the registration and of an installation need a console
+	// session with a recent sign-in.
+	return NewEnvWithSignIn(ctx, tb, NoCLI(), store)
 }
 
 // gitHostOptions returns the options that give the in-process server of tb the
