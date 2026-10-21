@@ -78,6 +78,27 @@ func (h *Handler) largeReader(
 	return &countingReader{r: io.LimitReader(gz, limit+1), n: 0}, release, true
 }
 
+// decodeCheckpoint decodes a checkpoint body of at most the checkpoint size
+// limit into out, under a memory hold of that size. The caller calls the
+// returned release after the save ends, so the hold covers the save too. On
+// failure the answer is written and the hold is already released.
+func (h *Handler) decodeCheckpoint(w http.ResponseWriter, r *http.Request, out any) (func(), bool) {
+	limit := int64(h.updates.MaxCheckpointBytes())
+
+	release, ok := h.hold(w, r, limit)
+	if !ok {
+		return func() {}, false
+	}
+
+	if !h.decodeLargeBody(w, r, limit, out) {
+		release()
+
+		return func() {}, false
+	}
+
+	return release, true
+}
+
 // decodeLargeBody decodes one large JSON body without keeping both its wire
 // and decompressed forms. It gunzips when the client sent gzip, bounds the
 // decompressed size by limit, and maps an oversized body to 413 and invalid
