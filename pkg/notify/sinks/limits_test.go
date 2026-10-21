@@ -179,7 +179,7 @@ func TestPortIsCheckedBeforeATestSends(t *testing.T) {
 
 	narrow := serviceWith(t, f, egress.Ports{}, fakeNamespaces{notHome: false}, newClock())
 
-	res, err := narrow.svc.Test(t.Context(), narrow.caller, shop, made.Sink.ID)
+	res, err := runTestWith(t.Context(), narrow.svc, narrow.caller, shop, made.Sink.ID)
 	if err != nil || res.Delivered || res.Class != notify.ClassRefused || res.Message != sinks.TextRefused {
 		t.Fatalf("Test = %+v, %v, want the class refused", res, err)
 	}
@@ -189,7 +189,7 @@ func TestPortIsCheckedBeforeATestSends(t *testing.T) {
 	}
 
 	// The same sink passes where the operator allows the port.
-	res, err = wide.svc.Test(t.Context(), wide.caller, shop, made.Sink.ID)
+	res, err = runTestWith(t.Context(), wide.svc, wide.caller, shop, made.Sink.ID)
 	if err != nil || !res.Delivered {
 		t.Fatalf("Test with the port allowed = %+v, %v, want delivered", res, err)
 	}
@@ -233,7 +233,7 @@ func TestChatURLIsCheckedBeforeATestSends(t *testing.T) {
 
 			f.store.secrets[s.ID] = sealed
 
-			res, err := f.svc.Test(t.Context(), f.caller, shop, c.ID)
+			res, err := runTest(t.Context(), f, shop, c.ID)
 			if err != nil || res.Class != notify.ClassRefused {
 				t.Fatalf("Test = %+v, %v, want the class refused", res, err)
 			}
@@ -254,7 +254,7 @@ func TestTestIsLimitedForEachSink(t *testing.T) {
 	f := serviceWith(t, newFixture(t, nil), egress.Ports{}, fakeNamespaces{notHome: false}, clk)
 	made := makeHook(t, f)
 
-	if _, err := f.svc.Test(t.Context(), f.caller, shop, made.Sink.ID); err != nil {
+	if _, err := runTest(t.Context(), f, shop, made.Sink.ID); err != nil {
 		t.Fatalf("first Test: %v", err)
 	}
 
@@ -263,7 +263,7 @@ func TestTestIsLimitedForEachSink(t *testing.T) {
 	for _, after := range []time.Duration{0, 3 * time.Second, sinks.TestSinkInterval - 3*time.Second - time.Nanosecond} {
 		clk.advance(after)
 
-		_, err := f.svc.Test(t.Context(), f.caller, shop, made.Sink.ID)
+		_, err := runTest(t.Context(), f, shop, made.Sink.ID)
 
 		var limited *sinks.RateLimitedError
 		if !errors.Is(err, sinks.ErrRateLimited) || !errors.As(err, &limited) {
@@ -282,7 +282,7 @@ func TestTestIsLimitedForEachSink(t *testing.T) {
 
 	clk.advance(time.Nanosecond)
 
-	if res, err := f.svc.Test(t.Context(), f.caller, shop, made.Sink.ID); err != nil || !res.Delivered {
+	if res, err := runTest(t.Context(), f, shop, made.Sink.ID); err != nil || !res.Delivered {
 		t.Fatalf("Test after the interval = %+v, %v, want delivered", res, err)
 	}
 }
@@ -310,7 +310,7 @@ func TestTestIsLimitedForEachNamespace(t *testing.T) {
 	}
 
 	for _, id := range ids[:sinks.TestNamespaceBurst] {
-		if res, err := f.svc.Test(t.Context(), f.caller, shop, id); err != nil || !res.Delivered {
+		if res, err := runTest(t.Context(), f, shop, id); err != nil || !res.Delivered {
 			t.Fatalf("Test = %+v, %v, want delivered", res, err)
 		}
 
@@ -319,7 +319,7 @@ func TestTestIsLimitedForEachNamespace(t *testing.T) {
 
 	sent, entries := len(f.hook.got), len(f.store.entries)
 
-	_, err := f.svc.Test(t.Context(), f.caller, shop, ids[sinks.TestNamespaceBurst])
+	_, err := runTest(t.Context(), f, shop, ids[sinks.TestNamespaceBurst])
 
 	var limited *sinks.RateLimitedError
 	if !errors.As(err, &limited) {
@@ -338,7 +338,7 @@ func TestTestIsLimitedForEachNamespace(t *testing.T) {
 
 	clk.advance(limited.RetryAfter)
 
-	res, err := f.svc.Test(t.Context(), f.caller, shop, ids[sinks.TestNamespaceBurst])
+	res, err := runTest(t.Context(), f, shop, ids[sinks.TestNamespaceBurst])
 	if err != nil || !res.Delivered {
 		t.Fatalf("Test after the wait = %+v, %v, want delivered", res, err)
 	}
@@ -357,7 +357,7 @@ func TestRefusedTestDoesNotUseTheLimit(t *testing.T) {
 	away := serviceWith(t, f, egress.Ports{}, fakeNamespaces{notHome: true}, clk)
 
 	for range 3 {
-		_, err := away.svc.Test(t.Context(), away.caller, shop, made.Sink.ID)
+		_, err := runTestWith(t.Context(), away.svc, away.caller, shop, made.Sink.ID)
 		if !errors.Is(err, namespace.ErrNotHome) {
 			t.Fatalf("Test = %v, want namespace.ErrNotHome", err)
 		}
@@ -365,7 +365,7 @@ func TestRefusedTestDoesNotUseTheLimit(t *testing.T) {
 
 	home := serviceWith(t, f, egress.Ports{}, fakeNamespaces{notHome: false}, clk)
 
-	if res, err := home.svc.Test(t.Context(), home.caller, shop, made.Sink.ID); err != nil || !res.Delivered {
+	if res, err := runTestWith(t.Context(), home.svc, home.caller, shop, made.Sink.ID); err != nil || !res.Delivered {
 		t.Fatalf("Test = %+v, %v, want delivered", res, err)
 	}
 }
@@ -398,7 +398,7 @@ func TestNothingIsSentWhenAStepBeforeTheSendFails(t *testing.T) {
 			f.store.testErr = tt.testErr
 			before := len(f.store.entries)
 
-			res, err := f.svc.Test(t.Context(), f.caller, shop, made.Sink.ID)
+			res, err := runTest(t.Context(), f, shop, made.Sink.ID)
 			if !errors.Is(err, tt.want) {
 				t.Fatalf("Test = %+v, %v, want %v", res, err, tt.want)
 			}
@@ -426,7 +426,7 @@ func TestTestWritesTheStartBeforeTheSend(t *testing.T) {
 		t.Fatalf("NewService: %v", err)
 	}
 
-	if _, err = svc.Test(t.Context(), f.caller, shop, made.Sink.ID); err != nil {
+	if _, err = runTestWith(t.Context(), svc, f.caller, shop, made.Sink.ID); err != nil {
 		t.Fatalf("Test: %v", err)
 	}
 
@@ -467,4 +467,42 @@ func (e *entryCounter) Send(_ context.Context, _ notify.Message) error {
 	}
 
 	return nil
+}
+
+// TestRefusedAddressCountsAgainstTheLimits proves that the limits come before
+// the opening of the secrets and the check of the address: a test of a sink
+// whose address the rules refuse takes a slot, and a limited test opens no
+// secret and writes no entry, so a caller cannot write audit entries without
+// bound.
+func TestRefusedAddressCountsAgainstTheLimits(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t, nil)
+	wide := serviceWith(t, f, mustPorts(t, 8443), fakeNamespaces{notHome: false}, newClock())
+
+	made, err := wide.svc.Create(t.Context(), wide.caller, shop, hook("https://hooks.example.com:8443/ops"))
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	clk := newClock()
+	narrow := serviceWith(t, f, egress.Ports{}, fakeNamespaces{notHome: false}, clk)
+
+	res, err := runTestWith(t.Context(), narrow.svc, narrow.caller, shop, made.Sink.ID)
+	if err != nil || res.Class != notify.ClassRefused {
+		t.Fatalf("first Test = %+v, %v, want the class refused", res, err)
+	}
+
+	reads, entries := f.store.secretReads, len(f.store.entries)
+
+	_, err = runTestWith(t.Context(), narrow.svc, narrow.caller, shop, made.Sink.ID)
+
+	if !errors.Is(err, sinks.ErrRateLimited) {
+		t.Fatalf("second Test of a refused address = %v, want sinks.ErrRateLimited", err)
+	}
+
+	if f.store.secretReads != reads || len(f.store.entries) != entries {
+		t.Fatalf("a limited test read %d secrets and wrote %d entries, want none",
+			f.store.secretReads-reads, len(f.store.entries)-entries)
+	}
 }

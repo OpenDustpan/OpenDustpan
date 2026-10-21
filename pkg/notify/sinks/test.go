@@ -47,30 +47,11 @@ func testResult(err error) TestResult {
 	}
 }
 
-// Test sends one fixed message through the sender of the kind of the sink id
-// in ns, and appends the audit entries of the test. The message says that it
-// is a test. The result never holds the URL, the network error or the answer
-// of the receiver. It returns ErrNoSender for a kind with no sender,
-// *RateLimitedError, notify.ErrNotFound, namespace.ErrNotFound,
-// namespace.ErrNotHome and namespace.ErrFenced.
-func (s *Service) Test(ctx context.Context, c *Caller, ns namespace.Name, id string) (TestResult, error) {
-	result, err := s.SendTest(ctx, c, ns, id)
-	if err != nil {
-		return TestResult{}, err
-	}
-
-	if recordErr := s.RecordTest(ctx, c, ns, id, result); recordErr != nil {
-		return TestResult{}, recordErr
-	}
-
-	return result, nil
-}
-
 // SendTest sends the test message of the sink id in ns and returns the result.
 // It sends only after these steps, and a step that fails sends nothing: the
 // sink and its sender exist; the namespace is homed in this region; the
-// secrets open and the address passes the outbound rules, which refuses with
-// a result and not an error; the limits take the test; and the audit entry
+// limits take the test; the secrets open and the address passes the outbound
+// rules, which refuses with a result and not an error; and the audit entry
 // that says the test started is appended under the fence of the namespace.
 // RecordTest appends the second entry, with the class of the result. An
 // adapter that stores the answer of the request calls RecordTest after it
@@ -91,6 +72,14 @@ func (s *Service) SendTest(ctx context.Context, c *Caller, ns namespace.Name, id
 		return TestResult{}, err
 	}
 
+	// The limits come before the decryption, the address check and the first
+	// write, so that a refused request leaves no entry and a request that the
+	// address check refuses counts against the limit too: a caller cannot write
+	// audit entries without bound.
+	if wait := s.limiter.take(ns, id, s.now()); wait > 0 {
+		return TestResult{}, &RateLimitedError{RetryAfter: wait}
+	}
+
 	to, values, err := s.open(ctx, sink)
 	if err != nil {
 		return TestResult{}, err
@@ -106,16 +95,10 @@ func (s *Service) SendTest(ctx context.Context, c *Caller, ns namespace.Name, id
 	// when the sink was made, and the sender checks it again and guards the
 	// dial. This check stays so that a sink that a restore, a changed rule or
 	// a changed port setting left behind never reaches the sender with an
-	// address that the rules refuse now. The check opens no connection, so it
-	// needs neither the limits nor an audit entry before it.
+	// address that the rules refuse now. The check opens no connection and
+	// needs no audit entry before it.
 	if checkErr := s.checkAddress(sink, to); checkErr != nil {
 		return testResult(checkErr), nil
-	}
-
-	// The limits come before the first write, so that a refused request leaves
-	// no entry.
-	if wait := s.limiter.take(ns, id, s.now()); wait > 0 {
-		return TestResult{}, &RateLimitedError{RetryAfter: wait}
 	}
 
 	// The entry is appended without the idempotency completion of the request:

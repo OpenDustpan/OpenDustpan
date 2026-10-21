@@ -33,6 +33,8 @@ type fakeStore struct {
 	secrets map[string][]notify.SealedSecret
 	entries []audit.Entry
 	puts    int
+	// secretReads counts the reads of the sealed secrets of a sink.
+	secretReads int
 	// testErr, when set, is the error of RecordSinkTest: a failed audit append.
 	testErr error
 }
@@ -40,7 +42,7 @@ type fakeStore struct {
 func newFakeStore() *fakeStore {
 	return &fakeStore{
 		mu: sync.Mutex{}, sinks: map[string]notify.Sink{}, secrets: map[string][]notify.SealedSecret{},
-		entries: nil, puts: 0, testErr: nil,
+		entries: nil, puts: 0, secretReads: 0, testErr: nil,
 	}
 }
 
@@ -77,6 +79,8 @@ func (f *fakeStore) SinkSecrets(_ context.Context, scope namespace.Name, id stri
 	if s, ok := f.sinks[id]; !ok || s.Scope != scope {
 		return nil, notify.ErrNotFound
 	}
+
+	f.secretReads++
 
 	return slices.Clone(f.secrets[id]), nil
 }

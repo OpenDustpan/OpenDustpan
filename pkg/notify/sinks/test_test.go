@@ -11,6 +11,7 @@ import (
 
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/egress"
+	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/notify"
 	"opendustpan.org/opendustpan/pkg/notify/sinks"
 )
@@ -25,7 +26,7 @@ func TestTestSendsOneFixedMessage(t *testing.T) {
 	f := newFixture(t, nil)
 	created := makeHook(t, f)
 
-	res, err := f.svc.Test(t.Context(), f.caller, shop, created.Sink.ID)
+	res, err := runTest(t.Context(), f, shop, created.Sink.ID)
 	if err != nil || !res.Delivered || res.Class != "" || res.Message != sinks.TextDelivered {
 		t.Fatalf("Test = %+v, %v, want a delivered result", res, err)
 	}
@@ -96,7 +97,7 @@ func TestTestChatSendsToTheURL(t *testing.T) {
 	f, chatSender := chatFixture(t)
 	chat := makeChat(t, f)
 
-	res, err := f.svc.Test(t.Context(), f.caller, shop, chat.ID)
+	res, err := runTest(t.Context(), f, shop, chat.ID)
 	if err != nil || !res.Delivered {
 		t.Fatalf("Test = %+v, %v, want delivered", res, err)
 	}
@@ -156,7 +157,7 @@ func TestTestResultClasses(t *testing.T) {
 			f := newFixture(t, tc.err)
 			created := makeHook(t, f)
 
-			res, err := f.svc.Test(t.Context(), f.caller, shop, created.Sink.ID)
+			res, err := runTest(t.Context(), f, shop, created.Sink.ID)
 			if err != nil {
 				t.Fatalf("Test = %v, want a result", err)
 			}
@@ -202,14 +203,14 @@ func TestTestRefusals(t *testing.T) {
 		{"an unknown sink", func(t *testing.T, f fixture) error {
 			t.Helper()
 
-			_, err := f.svc.Test(t.Context(), f.caller, shop, "snk-nothing")
+			_, err := runTest(t.Context(), f, shop, "snk-nothing")
 
 			return err
 		}, notify.ErrNotFound},
 		{"a chat sink with no chat sender", func(t *testing.T, f fixture) error {
 			t.Helper()
 
-			_, err := f.svc.Test(t.Context(), f.caller, shop, makeChat(t, f).ID)
+			_, err := runTest(t.Context(), f, shop, makeChat(t, f).ID)
 
 			return err
 		}, sinks.ErrNoSender},
@@ -223,7 +224,7 @@ func TestTestRefusals(t *testing.T) {
 				t.Fatalf("Create: %v", err)
 			}
 
-			_, err = f.svc.Test(t.Context(), f.caller, shop, got.Sink.ID)
+			_, err = runTest(t.Context(), f, shop, got.Sink.ID)
 
 			return err
 		}, sinks.ErrNoSender},
@@ -256,7 +257,7 @@ func TestTestInAnUnknownNamespace(t *testing.T) {
 
 	f := newFixture(t, nil)
 
-	if _, err := f.svc.Test(t.Context(), f.caller, "nowhere", "snk-1"); err == nil {
+	if _, err := runTest(t.Context(), f, "nowhere", "snk-1"); err == nil {
 		t.Fatal("Test = nil, want an error")
 	}
 
@@ -290,7 +291,7 @@ func TestTestChecksTheAddressAgain(t *testing.T) {
 			s.Target = tc.target
 			f.store.sinks[s.ID] = s
 
-			res, err := f.svc.Test(t.Context(), f.caller, shop, s.ID)
+			res, err := runTest(t.Context(), f, shop, s.ID)
 			if err != nil || res.Delivered || res.Class != notify.ClassRefused || res.Message != sinks.TextRefused {
 				t.Fatalf("Test = %+v, %v, want the class refused", res, err)
 			}
@@ -314,7 +315,7 @@ func TestTestChatHostMustBeTheTarget(t *testing.T) {
 	s.Target = "other.example.com"
 	f.store.sinks[s.ID] = s
 
-	res, err := f.svc.Test(t.Context(), f.caller, shop, chat.ID)
+	res, err := runTest(t.Context(), f, shop, chat.ID)
 	if err != nil || res.Class != notify.ClassRefused {
 		t.Fatalf("Test = %+v, %v, want the class refused", res, err)
 	}
@@ -336,7 +337,7 @@ func TestTestSecretOfAnotherSink(t *testing.T) {
 	f.store.secrets[one.Sink.ID] = f.store.secrets[two.Sink.ID]
 	before := len(f.store.entries)
 
-	res, err := f.svc.Test(t.Context(), f.caller, shop, one.Sink.ID)
+	res, err := runTest(t.Context(), f, shop, one.Sink.ID)
 	if err == nil {
 		t.Fatalf("Test = %+v, nil, want an error", res)
 	}
@@ -379,7 +380,7 @@ func TestTestClearsThePlaintext(t *testing.T) {
 	f.svc = svc
 	created := makeHook(t, f)
 
-	if _, err = svc.Test(t.Context(), f.caller, shop, created.Sink.ID); err != nil {
+	if _, err = runTest(t.Context(), f, shop, created.Sink.ID); err != nil {
 		t.Fatalf("Test: %v", err)
 	}
 
@@ -392,4 +393,26 @@ func TestTestClearsThePlaintext(t *testing.T) {
 			t.Fatal("the plaintext of the signing key is still in memory after the test")
 		}
 	}
+}
+
+// runTest sends the test message of the sink and records its result, as the
+// API adapter does.
+func runTest(ctx context.Context, f fixture, ns namespace.Name, id string) (sinks.TestResult, error) {
+	return runTestWith(ctx, f.svc, f.caller, ns, id)
+}
+
+// runTestWith is runTest for a service and a caller of its own.
+func runTestWith(
+	ctx context.Context, svc *sinks.Service, c *sinks.Caller, ns namespace.Name, id string,
+) (sinks.TestResult, error) {
+	res, err := svc.SendTest(ctx, c, ns, id)
+	if err != nil {
+		return sinks.TestResult{}, fmt.Errorf("send test: %w", err)
+	}
+
+	if err = svc.RecordTest(ctx, c, ns, id, res); err != nil {
+		return sinks.TestResult{}, fmt.Errorf("record test: %w", err)
+	}
+
+	return res, nil
 }

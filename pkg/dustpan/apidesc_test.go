@@ -126,6 +126,23 @@ func TestEveryRootRouteIsClassified(t *testing.T) {
 	}
 }
 
+// TestEveryModuleServerMountsEveryAdapter proves that the server of the class
+// check has every adapter on. A module that the binary can set and that this
+// server leaves off hides its routes from the description, the golden file and
+// the class check, so each new module option must be set in newModuleServer.
+func TestEveryModuleServerMountsEveryAdapter(t *testing.T) {
+	t.Parallel()
+
+	srv := newEveryModuleServer(t)
+
+	mounted := srv.HandlerNames()
+	for _, name := range srv.AllHandlerNames() {
+		if !slices.Contains(mounted, name) {
+			t.Errorf("the adapter %s is off in the server of the class check: set its option in newModuleServer", name)
+		}
+	}
+}
+
 // TestRootCheckFailsClosed proves that a route on the root mux beside the
 // catch-all of the prefix fails the check, with the shape of the break that
 // the class check of the adapters could not see.

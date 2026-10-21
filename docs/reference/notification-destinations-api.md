@@ -100,13 +100,15 @@ class `temporary`, the same as a name that does not resolve. The class
 
 A test over a limit answers 429 `sink.test-rate-limited` with the header
 `Retry-After` (whole seconds) and `errorArgs.retryAfterSeconds`. The server
-sends no message and writes no audit entry. Each server instance applies the
-limits on its own.
+sends no message and writes no audit entry. A test of a destination whose
+address the rules refuse counts against the limits too. Each server instance
+applies the limits on its own.
 
 The server sends the message only after these steps: the namespace has its home
-region here, the limits take the test, and the first audit entry is written
-under the fence of the namespace. A namespace of another region answers 421
-`namespace.not-home`. A moved fence answers 409 `namespace.fenced`.
+region here, the limits take the test, the address passes the outbound rules,
+and the first audit entry is written under the fence of the namespace. A
+namespace of another region answers 421 `namespace.not-home`. A moved fence
+answers 409 `namespace.fenced`.
 
 ## Error codes
 

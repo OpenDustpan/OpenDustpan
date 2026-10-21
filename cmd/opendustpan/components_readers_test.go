@@ -86,8 +86,9 @@ var readerComponent = map[string]map[string]string{ //nolint:gochecknoglobals //
 	// The api component lists the sinks. The worker component ships to them.
 	"auditSinks": {"newAuditShipper": "all"},
 	// The sink routes and the built-in webhook sender take the ports. Both
-	// serve the api component only.
-	"sinks": {"mountAPI": "api", "newSinksHandler": "api", "sinkSenders": "api"},
+	// serve the api component only. allHandlers names the adapter field of the
+	// same name for the description of the routes.
+	"sinks": {"allHandlers": "api", "mountAPI": "api", "newSinksHandler": "api", "sinkSenders": "api"},
 }
 
 // readersOf returns, for each field, the names of the functions of package
