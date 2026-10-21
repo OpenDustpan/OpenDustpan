@@ -4,10 +4,10 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path"
-	"regexp"
 	"strings"
 )
 
@@ -15,9 +15,6 @@ import (
 // of a generated file, and that file has no generated header. The writer never
 // changes such a file.
 var ErrNotGenerated = errors.New("clientgen: the file exists and has no generated header")
-
-// generatedHeader is the standard form of the header of a generated Go file.
-var generatedHeader = regexp.MustCompile(`(?m)^// Code generated .* DO NOT EDIT\.$`)
 
 // The modes of the files and directories that the writer makes. Generated
 // source is public, so its mode is the usual mode of source.
@@ -30,14 +27,16 @@ const (
 const headerScanBytes = 1024
 
 // NewWriter returns the Writer that writes into a directory with os.Root.
-func NewWriter() Writer { //nolint:ireturn // The port is the contract; callers do not depend on the type.
-	return dirWriter{}
+// The language says which files are generated, because each language has its
+// own form of comment.
+func NewWriter(lang Language) Writer { //nolint:ireturn // The port is the contract; callers do not depend on the type.
+	return dirWriter{lang: lang}
 }
 
-type dirWriter struct{}
+type dirWriter struct{ lang Language }
 
 // Write implements Writer.
-func (dirWriter) Write(dir string, files []File) error {
+func (w dirWriter) Write(dir string, files []File) error {
 	want, err := checkPaths(files)
 	if err != nil {
 		return err
@@ -55,12 +54,12 @@ func (dirWriter) Write(dir string, files []File) error {
 	defer root.Close() //nolint:errcheck // Nothing was written through the close.
 
 	for _, f := range files {
-		if err := writeOne(root, f); err != nil {
+		if err := writeOne(root, w.lang, f); err != nil {
 			return err
 		}
 	}
 
-	return removeStale(root, want)
+	return removeStale(root, w.lang, want)
 }
 
 // checkPaths checks every path before the first write, so that a bad path
@@ -86,23 +85,33 @@ func checkPaths(files []File) (map[string]bool, error) {
 	return want, nil
 }
 
-// hasHeader says that the content starts with a generated header.
-func hasHeader(content []byte) bool {
-	if len(content) > headerScanBytes {
-		content = content[:headerScanBytes]
+// readHead reads the first bytes of a file, where the header is. It never
+// reads the whole file, so a large file that clientgen did not write costs
+// no more than a small one.
+func readHead(root *os.Root, name string) ([]byte, error) {
+	f, err := root.Open(name)
+	if err != nil {
+		return nil, fmt.Errorf("open %s: %w", name, err)
 	}
 
-	return generatedHeader.Match(content)
+	defer f.Close() //nolint:errcheck // Nothing was written through the close.
+
+	head, err := io.ReadAll(io.LimitReader(f, headerScanBytes))
+	if err != nil {
+		return nil, fmt.Errorf("read %s: %w", name, err)
+	}
+
+	return head, nil
 }
 
 // writeOne writes one file, unless a file without a header is there.
-func writeOne(root *os.Root, f File) error {
-	if old, err := root.ReadFile(f.Path); err == nil {
-		if !hasHeader(old) {
+func writeOne(root *os.Root, lang Language, f File) error {
+	if head, err := readHead(root, f.Path); err == nil {
+		if !lang.IsGenerated(head) {
 			return fmt.Errorf("%w: %s", ErrNotGenerated, f.Path)
 		}
 
-		if bytes.Equal(old, f.Content) {
+		if old, readErr := root.ReadFile(f.Path); readErr == nil && bytes.Equal(old, f.Content) {
 			return nil
 		}
 	} else if !errors.Is(err, fs.ErrNotExist) {
@@ -122,9 +131,10 @@ func writeOne(root *os.Root, f File) error {
 	return nil
 }
 
-// removeStale removes the generated files that the new run does not give. A
-// file without a header stays.
-func removeStale(root *os.Root, want map[string]bool) error {
+// removeStale removes the files that carry the header of the language and
+// that the new run does not give. Any other file stays, also a file with the
+// header of another generator.
+func removeStale(root *os.Root, lang Language, want map[string]bool) error {
 	var stale []string
 
 	err := fs.WalkDir(root.FS(), ".", func(p string, d fs.DirEntry, walkErr error) error {
@@ -132,12 +142,12 @@ func removeStale(root *os.Root, want map[string]bool) error {
 			return walkErr
 		}
 
-		content, readErr := root.ReadFile(p)
+		head, readErr := readHead(root, p)
 		if readErr != nil {
-			return fmt.Errorf("read %s: %w", p, readErr)
+			return readErr
 		}
 
-		if hasHeader(content) {
+		if lang.IsGenerated(head) {
 			stale = append(stale, p)
 		}
 

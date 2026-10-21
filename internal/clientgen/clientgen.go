@@ -92,13 +92,23 @@ type Language interface {
 	// Name is the short name of the language, for example go or python.
 	Name() string
 	Render(api *model.API, opts Options) ([]File, error)
+	// Header is the header line of a generated file, in the comment form of
+	// the language. It names the generator version and the description
+	// version, so that only clientgen output has it.
+	Header(opts Options, descriptionVersion string) string
+	// IsGenerated says whether the first bytes of a file hold a header that
+	// Header could give, for any version. The header of another generator
+	// does not match. The writer calls it to find the files that it may
+	// replace or remove.
+	IsGenerated(head []byte) bool
 }
 
 // Writer writes generated files under one output directory.
 //
 // Write returns ErrUnsafePath, wrapped, for a path outside the directory. It
-// removes a generated file that the new run does not give, and it never
-// changes a file that has no generated header.
+// removes a file with the header of the language (Language.IsGenerated) that
+// the new run does not give. It never changes a file that has no such header,
+// also not a generated file of another generator.
 type Writer interface {
 	Write(dir string, files []File) error
 }

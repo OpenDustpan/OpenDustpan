@@ -117,7 +117,7 @@ func Build(ctx context.Context, opts Options) (Built, error) {
 		return built, err
 	}
 
-	if err = clientgen.NewWriter().Write(opts.Dir, gen.Files); err != nil {
+	if err = clientgen.NewWriter(golang.New()).Write(opts.Dir, gen.Files); err != nil {
 		return built, fmt.Errorf("write the generated files: %w", err)
 	}
 
