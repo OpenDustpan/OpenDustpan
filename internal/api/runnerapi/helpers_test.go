@@ -78,7 +78,13 @@ func (c *opsClaimer) Claim(ctx context.Context, req job.ClaimRequest) (job.Assig
 
 	op, err := c.ops.Claim(
 		ctx,
-		durable.ClaimRequest{Owner: req.Owner, Kinds: req.Kinds, MaxVersions: req.MaxVersions, Lease: lease, TakeCanceled: false},
+		durable.ClaimRequest{
+			Owner:        req.Owner,
+			Kinds:        req.Kinds,
+			MaxVersions:  req.MaxVersions,
+			Lease:        lease,
+			TakeCanceled: false,
+		},
 	)
 	if err != nil {
 		return job.Assignment{}, fmt.Errorf("claim: %w", err)

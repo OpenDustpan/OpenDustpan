@@ -351,21 +351,27 @@ func (s memStore) Claim(_ context.Context, req durable.ClaimRequest) (durable.Op
 		case due == dueTakeover && op.CancelRequested && !req.TakeCanceled:
 			s.db.endCanceled(op, now)
 		default:
-			if due == dueTakeover && s.db.broken == breakTakeoverSteps {
-				op.Steps = nil
-			}
-
-			if due == dueTakeover || s.db.broken == breakExpiryCount {
-				op.Expiries++
-			}
-
-			s.db.take(op, req, now)
+			s.db.takeOver(op, due, req, now)
 
 			return copyOp(op), nil
 		}
 	}
 
 	return durable.Operation{}, durable.ErrNoWork
+}
+
+// takeOver gives op a new claim for req, with the changes of a takeover when
+// due says that the claim before it expired.
+func (m *memDB) takeOver(op *durable.Operation, due dueKind, req durable.ClaimRequest, now time.Time) {
+	if due == dueTakeover && m.broken == breakTakeoverSteps {
+		op.Steps = nil
+	}
+
+	if due == dueTakeover || m.broken == breakExpiryCount {
+		op.Expiries++
+	}
+
+	m.take(op, req, now)
 }
 
 // dueKind says whether a claim can take an operation, and how.

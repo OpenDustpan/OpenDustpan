@@ -77,8 +77,13 @@ func testClaimEventBound(t *testing.T, h Harness) {
 
 	got := jobOf(t, h, j.ID)
 	if got.Version != before.Version || got.Phases[0].Executor != runnerTwo || got.Phases[0].Claims != 2 {
-		t.Fatalf("job after the refused events = version %d, executor %q, %d claims; want version %d, runner-2, 2 claims",
-			got.Version, got.Phases[0].Executor, got.Phases[0].Claims, before.Version)
+		t.Fatalf(
+			"job after the refused events = version %d, executor %q, %d claims; want version %d, runner-2, 2 claims",
+			got.Version,
+			got.Phases[0].Executor,
+			got.Phases[0].Claims,
+			before.Version,
+		)
 	}
 
 	if n := len(allEntries(t, h, f)); n != entries {
@@ -141,6 +146,15 @@ func testClaimTwoTakeovers(t *testing.T, h Harness) {
 	if bClaim.Owner != runnerTwo || bClaim.Token != a.Claim.Claim.Token+1 {
 		t.Fatalf("claim of runner-2 = %+v, want token %d", bClaim, a.Claim.Claim.Token+1)
 	}
+
+	checkTwoTakeovers(t, h, f, &j, &c)
+}
+
+// checkTwoTakeovers checks that the job, the operation and the audit entries
+// of j name only the runners 1 and 3, which held the phase, and not the
+// runner 2, whose lease expired before its event.
+func checkTwoTakeovers(t *testing.T, h Harness, f fixture, j *job.Job, c *job.Assignment) {
+	t.Helper()
 
 	got := jobOf(t, h, j.ID)
 	if got.State != job.StateRunning || got.Phases[0].Executor != runnerThree || got.Phases[0].Claims != 2 {

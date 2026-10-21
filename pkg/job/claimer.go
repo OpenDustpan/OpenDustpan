@@ -270,9 +270,19 @@ func (c *DurableClaimer) end(ctx context.Context, pc *PhaseClaim, plan func(j *J
 		}
 
 		_, err = c.jobs.Apply(ctx, Change{
-			Job: pc.Job, Version: j.Version, Event: pe.event, Wait: WaitNone, Reason: pe.reason, Dispatch: nil,
-			PlanNotBefore: time.Time{}, Executor: "", Claim: nil, Delivery: pe.delivery, MergedAt: time.Time{}, Approval: nil,
-			End: &pe.operation,
+			Job:           pc.Job,
+			Version:       j.Version,
+			Event:         pe.event,
+			Wait:          WaitNone,
+			Reason:        pe.reason,
+			Dispatch:      nil,
+			PlanNotBefore: time.Time{},
+			Executor:      "",
+			Claim:         nil,
+			Delivery:      pe.delivery,
+			MergedAt:      time.Time{},
+			Approval:      nil,
+			End:           &pe.operation,
 		}, pc.Fence, nil)
 		if errors.Is(err, ErrConflict) {
 			lastErr = err
@@ -325,43 +335,29 @@ func (c *DurableClaimer) assign(ctx context.Context, op *durable.Operation) (Ass
 func (c *DurableClaimer) claimOnce(
 	ctx context.Context, op *durable.Operation, id ID, phase int,
 ) (Assignment, bool, error) {
+	var none Assignment
+
 	j, err := c.jobs.Get(ctx, id)
 	if errors.Is(err, ErrNotFound) {
-		return Assignment{}, false, c.endOperation(ctx, op.Claim, reasonNoPhase)
+		return none, false, c.endOperation(ctx, op.Claim, reasonNoPhase)
 	}
 
 	if err != nil {
-		return Assignment{}, false, c.giveBack(ctx, op.Claim, err)
+		return none, false, c.giveBack(ctx, op.Claim, err)
 	}
 
 	if j.Current != phase || phase >= len(j.Phases) || j.Phases[phase].Operation != string(op.ID) {
-		return Assignment{}, false, c.endOperation(ctx, op.Claim, reasonNoPhase)
-	}
-
-	if j.State == StateCanceling {
-		// A cancel arrived while the phase had no holder, for example when the
-		// lease of the last holder expired after the cancel. The claim ends the
-		// phase, so the job ends canceled and releases its unit, or fails when
-		// a change began.
-		fence, err := c.fence(ctx, &j)
-		if err != nil {
-			return Assignment{}, false, c.giveBack(ctx, op.Claim, err)
-		}
-
-		return Assignment{}, false, c.endPhase(ctx, op.Claim, &j, fence, releaseEnd(&j, phase, op.Claim))
+		return none, false, c.endOperation(ctx, op.Claim, reasonNoPhase)
 	}
 
 	ev, why, ok := claimEvent(&j)
 	if !ok {
-		// The job will not run this operation: it ended without it, for example
-		// by an expiry. Giving the operation back would make the next Claim take
-		// it again without end, so the claimer ends it.
-		return Assignment{}, false, c.endOperation(ctx, op.Claim, reasonNotRunnable)
+		return c.endUnrunnable(ctx, op, &j)
 	}
 
 	fence, err := c.fence(ctx, &j)
 	if err != nil {
-		return Assignment{}, false, c.giveBack(ctx, op.Claim, err)
+		return none, false, c.giveBack(ctx, op.Claim, err)
 	}
 
 	if ev == EventPhaseFailed {
@@ -372,8 +368,39 @@ func (c *DurableClaimer) claimOnce(
 			},
 		}
 
-		return Assignment{}, false, c.endPhase(ctx, op.Claim, &j, fence, pe)
+		return none, false, c.endPhase(ctx, op.Claim, &j, fence, pe)
 	}
+
+	return c.applyClaim(ctx, op, &j, fence)
+}
+
+// endUnrunnable ends the claimed operation op of the job j, which cannot take
+// a claim. A canceling job got its cancel while the phase had no holder, for
+// example when the lease of the last holder expired after the cancel. The
+// claim then ends the phase with the rule of Release, so the job ends
+// canceled and releases its unit, or fails when a change began. For any other
+// job, for example one that expired, giving the operation back would make the
+// next Claim take it again without end, so the claimer ends the operation.
+func (c *DurableClaimer) endUnrunnable(ctx context.Context, op *durable.Operation, j *Job) (Assignment, bool, error) {
+	var none Assignment
+
+	if j.State != StateCanceling {
+		return none, false, c.endOperation(ctx, op.Claim, reasonNotRunnable)
+	}
+
+	fence, err := c.fence(ctx, j)
+	if err != nil {
+		return none, false, c.giveBack(ctx, op.Claim, err)
+	}
+
+	return none, false, c.endPhase(ctx, op.Claim, j, fence, releaseEnd(j, j.Current, op.Claim))
+}
+
+// applyClaim applies the event of the claim of op to j, bound to that claim.
+func (c *DurableClaimer) applyClaim(
+	ctx context.Context, op *durable.Operation, j *Job, fence namespace.Fence,
+) (Assignment, bool, error) {
+	var none Assignment
 
 	claim := op.Claim
 
@@ -381,17 +408,17 @@ func (c *DurableClaimer) claimOnce(
 		Job: j.ID, Version: j.Version, Event: EventClaim, Wait: WaitNone, Reason: "", Dispatch: nil,
 		PlanNotBefore: time.Time{}, Executor: op.Claim.Owner, Claim: &claim, Delivery: nil, MergedAt: time.Time{},
 		Approval: nil, End: nil,
-	}, fence, c.claimEntries(op, &j))
+	}, fence, c.claimEntries(op, j))
 
 	switch {
 	case errors.Is(err, durable.ErrClaimLost):
 		// The lease of this claim expired before its event, and a later claim
 		// holds the operation. That claim applies its own event.
-		return Assignment{}, false, nil
+		return none, false, nil
 	case errors.Is(err, ErrConflict) || errors.Is(err, namespace.ErrFenced):
-		return Assignment{}, false, fmt.Errorf("%w: %w", errRetryClaim, err)
+		return none, false, fmt.Errorf("%w: %w", errRetryClaim, err)
 	case err != nil:
-		return Assignment{}, false, c.giveBack(ctx, op.Claim, err)
+		return none, false, c.giveBack(ctx, op.Claim, err)
 	default:
 		return assignmentOf(op, fence, &claimed), true, nil
 	}

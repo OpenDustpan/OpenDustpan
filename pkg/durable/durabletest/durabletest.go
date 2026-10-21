@@ -977,8 +977,15 @@ func testTakeCanceled(t *testing.T, h Harness) {
 			taken.Expiries, ownerB, held.Claim.Token+1)
 	}
 
-	// The old holder lost the claim. The new holder cannot extend it, and its
-	// release ends the operation canceled.
+	endTaken(t, a, b, &held, &taken)
+}
+
+// endTaken checks that the replaced holder lost its claim of a taken
+// operation, and that the new holder cannot extend it, and that its release
+// ends the operation canceled.
+func endTaken(t *testing.T, a, b durable.Store, held, taken *durable.Operation) {
+	t.Helper()
+
 	if err := a.Release(t.Context(), held.Claim); !errors.Is(err, durable.ErrClaimLost) {
 		t.Fatalf("Release by the replaced holder: error = %v, want ErrClaimLost", err)
 	}
@@ -991,7 +998,7 @@ func testTakeCanceled(t *testing.T, h Harness) {
 		t.Fatalf("Release of the taken operation: %v", err)
 	}
 
-	if got := mustGet(t, b, op.ID); got.State != durable.StateCanceled {
+	if got := mustGet(t, b, taken.ID); got.State != durable.StateCanceled {
 		t.Fatalf("state after the release of the taken operation = %s, want canceled", got.State)
 	}
 }

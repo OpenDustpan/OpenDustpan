@@ -420,33 +420,14 @@ func (m *memDB) Apply(ctx context.Context, c job.Change, fence namespace.Fence, 
 		return job.Job{}, job.ErrConflict
 	}
 
-	to, err := job.Next(cur.State, c.Event)
-	if err != nil {
+	if _, err := job.Next(cur.State, c.Event); err != nil {
 		return job.Job{}, err
 	}
 
 	next := copyJob(cur)
 	now := time.Now().UTC()
 
-	if err := m.change(ctx, &next, &c, now); err != nil {
-		return job.Job{}, err
-	}
-
-	settle(&next, to, &c, cur.Version, now)
-
-	if err := m.closeLate(ctx, &next, c.Event); err != nil {
-		return job.Job{}, err
-	}
-
-	if err := m.endOperation(ctx, cur, &c); err != nil {
-		return job.Job{}, err
-	}
-
-	if err := m.bindClaim(ctx, cur, &c); err != nil {
-		return job.Job{}, err
-	}
-
-	if err := m.afterChange(ctx, cur, &next, c.Event); err != nil {
+	if err := m.applyIn(ctx, cur, &next, &c, now); err != nil {
 		return job.Job{}, err
 	}
 
@@ -1120,4 +1101,33 @@ func (m *memDB) endOperation(ctx context.Context, cur *job.Job, c *job.Change) e
 	}
 
 	return nil
+}
+
+// applyIn makes the change c of cur on next, with the rules of its event, then
+// ends the operation of the end of c and binds the event to its claim.
+func (m *memDB) applyIn(ctx context.Context, cur, next *job.Job, c *job.Change, now time.Time) error {
+	to, err := job.Next(cur.State, c.Event)
+	if err != nil {
+		return err
+	}
+
+	if err := m.change(ctx, next, c, now); err != nil {
+		return err
+	}
+
+	settle(next, to, c, cur.Version, now)
+
+	if err := m.closeLate(ctx, next, c.Event); err != nil {
+		return err
+	}
+
+	if err := m.endOperation(ctx, cur, c); err != nil {
+		return err
+	}
+
+	if err := m.bindClaim(ctx, cur, c); err != nil {
+		return err
+	}
+
+	return m.afterChange(ctx, cur, next, c.Event)
 }

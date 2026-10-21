@@ -37,15 +37,36 @@ func TestClaimRequestValidate(t *testing.T) {
 		req  durable.ClaimRequest
 		want error
 	}{
-		{durable.ClaimRequest{Owner: "a", Kinds: kinds, MaxVersions: nil, Lease: time.Second, TakeCanceled: false}, nil},
-		{durable.ClaimRequest{Owner: "", Kinds: kinds, MaxVersions: nil, Lease: time.Second, TakeCanceled: false}, durable.ErrInvalid},
-		{durable.ClaimRequest{Owner: "a", Kinds: nil, MaxVersions: nil, Lease: time.Second, TakeCanceled: false}, durable.ErrInvalid},
 		{
-			durable.ClaimRequest{Owner: "a", Kinds: []durable.Kind{"backup", ""}, MaxVersions: nil, Lease: time.Second, TakeCanceled: false},
+			durable.ClaimRequest{Owner: "a", Kinds: kinds, MaxVersions: nil, Lease: time.Second, TakeCanceled: false},
+			nil,
+		},
+		{
+			durable.ClaimRequest{Owner: "", Kinds: kinds, MaxVersions: nil, Lease: time.Second, TakeCanceled: false},
 			durable.ErrInvalid,
 		},
-		{durable.ClaimRequest{Owner: "a", Kinds: kinds, MaxVersions: nil, Lease: 0, TakeCanceled: false}, durable.ErrInvalid},
-		{durable.ClaimRequest{Owner: "a", Kinds: kinds, MaxVersions: nil, Lease: -time.Second, TakeCanceled: false}, durable.ErrInvalid},
+		{
+			durable.ClaimRequest{Owner: "a", Kinds: nil, MaxVersions: nil, Lease: time.Second, TakeCanceled: false},
+			durable.ErrInvalid,
+		},
+		{
+			durable.ClaimRequest{
+				Owner:        "a",
+				Kinds:        []durable.Kind{"backup", ""},
+				MaxVersions:  nil,
+				Lease:        time.Second,
+				TakeCanceled: false,
+			},
+			durable.ErrInvalid,
+		},
+		{
+			durable.ClaimRequest{Owner: "a", Kinds: kinds, MaxVersions: nil, Lease: 0, TakeCanceled: false},
+			durable.ErrInvalid,
+		},
+		{
+			durable.ClaimRequest{Owner: "a", Kinds: kinds, MaxVersions: nil, Lease: -time.Second, TakeCanceled: false},
+			durable.ErrInvalid,
+		},
 		{
 			durable.ClaimRequest{
 				Owner:        "a",
