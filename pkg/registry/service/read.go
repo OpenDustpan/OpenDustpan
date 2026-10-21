@@ -44,6 +44,43 @@ func (s *Service) Releases(ctx context.Context, ns namespace.Name, name string) 
 	return out, nil
 }
 
+// ServableReleases returns the releases of the provider name in ns whose
+// signing key the namespace still trusts, from the lowest version to the
+// highest. A release of a removed key is left out, because the registry serves
+// no download of it and a client that picks it fails. It returns
+// registry.ErrNotFound as Releases does, also when the namespace trusts the
+// key of no release.
+func (s *Service) ServableReleases(ctx context.Context, ns namespace.Name, name string) ([]registry.Release, error) {
+	all, err := s.Releases(ctx, ns, name)
+	if err != nil {
+		return nil, err
+	}
+
+	keys, err := s.keys.Keys(ctx, ns)
+	if err != nil {
+		return nil, fmt.Errorf("read the trusted keys: %w", err)
+	}
+
+	trusted := make(map[string]bool, len(keys))
+	for _, k := range keys {
+		trusted[k.Key.Fingerprint] = true
+	}
+
+	out := make([]registry.Release, 0, len(all))
+
+	for i := range all {
+		if trusted[all[i].KeyFingerprint] {
+			out = append(out, all[i])
+		}
+	}
+
+	if len(out) == 0 {
+		return nil, registry.ErrNotFound
+	}
+
+	return out, nil
+}
+
 // Release returns the release of version of the provider name in ns. It returns
 // registry.ErrNotFound for a namespace, a provider or a version that does not
 // exist.

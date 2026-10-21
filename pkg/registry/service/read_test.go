@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -171,6 +172,59 @@ func TestSigningKeyFailsClosedAfterRemoval(t *testing.T) {
 
 	if err = e.svc.RemoveKey(context.Background(), e.caller, acme, "../x"); !errors.Is(err, registry.ErrInvalid) {
 		t.Fatalf("RemoveKey with a bad fingerprint = %v, want ErrInvalid", err)
+	}
+}
+
+// TestServableReleasesLeaveOutARemovedKey holds the rule that the version list
+// of the registry protocol offers no release whose signing key was removed, so
+// a client picks an older release that it can download.
+func TestServableReleasesLeaveOutARemovedKey(t *testing.T) {
+	t.Parallel()
+
+	e := newEnv(t, false)
+	old, current := pgpfixture.NewSigner(t), pgpfixture.NewSigner(t)
+	e.trust(t, acme, old)
+	e.trust(t, acme, current)
+
+	for version, sg := range map[string]pgpfixture.Signer{"1.0.0": old, "2.0.0": current} {
+		if _, err := e.publish(t, acme, buildSet(t, sg, "payments", version, "linux_amd64")); err != nil {
+			t.Fatalf("Publish %s: %v", version, err)
+		}
+	}
+
+	versions := func() []string {
+		rels, err := e.svc.ServableReleases(context.Background(), acme, "payments")
+		if err != nil {
+			return nil
+		}
+
+		out := make([]string, 0, len(rels))
+		for _, rel := range rels {
+			out = append(out, rel.Version)
+		}
+
+		return out
+	}
+
+	if got := versions(); !slices.Equal(got, []string{"1.0.0", "2.0.0"}) {
+		t.Fatalf("versions = %v, want both", got)
+	}
+
+	if err := e.svc.RemoveKey(context.Background(), e.caller, acme, current.Key.Fingerprint); err != nil {
+		t.Fatalf("RemoveKey: %v", err)
+	}
+
+	if got := versions(); !slices.Equal(got, []string{"1.0.0"}) {
+		t.Fatalf("versions after the removal = %v, want only 1.0.0", got)
+	}
+
+	if err := e.svc.RemoveKey(context.Background(), e.caller, acme, old.Key.Fingerprint); err != nil {
+		t.Fatalf("RemoveKey: %v", err)
+	}
+
+	_, err := e.svc.ServableReleases(context.Background(), acme, "payments")
+	if !errors.Is(err, registry.ErrNotFound) {
+		t.Fatalf("ServableReleases with no trusted key = %v, want ErrNotFound", err)
 	}
 }
 

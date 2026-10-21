@@ -185,8 +185,9 @@ type request struct {
 }
 
 type response struct {
-	code int
-	body string
+	code   int
+	body   string
+	header http.Header
 }
 
 func (f fixture) do(t *testing.T, r request) response {
@@ -202,6 +203,12 @@ func (f fixture) do(t *testing.T, r request) response {
 		req.Header.Set("Authorization", "token "+r.token)
 	}
 
+	// A client sends the bytes of an upload as a binary body and every other
+	// body as JSON. A case that tests the media type sets the header itself.
+	if strings.HasSuffix(r.target, "/uploads") {
+		req.Header.Set("Content-Type", "application/octet-stream")
+	}
+
 	for k, v := range r.headers {
 		req.Header.Set(k, v)
 	}
@@ -209,7 +216,7 @@ func (f fixture) do(t *testing.T, r request) response {
 	rec := httptest.NewRecorder()
 	f.handler.ServeHTTP(rec, req)
 
-	return response{code: rec.Code, body: rec.Body.String()}
+	return response{code: rec.Code, body: rec.Body.String(), header: rec.Header()}
 }
 
 func (f fixture) call(t *testing.T, token, method, target string, body []byte) response {
@@ -302,7 +309,7 @@ func (f fixture) stage(t *testing.T, ns string, data []byte) string {
 	return doc.Upload
 }
 
-func (f fixture) publishBody(t *testing.T, ns, name, version string, s archiveSet) []byte {
+func (f fixture) publishBody(t *testing.T, s archiveSet) []byte {
 	t.Helper()
 
 	files := make([]map[string]string, 0, 2+len(s.names))
@@ -310,16 +317,20 @@ func (f fixture) publishBody(t *testing.T, ns, name, version string, s archiveSe
 		files,
 		map[string]string{
 			"role":   "sums",
-			"name":   releasecheck.SumsName(name, version),
-			"upload": f.stage(t, ns, s.sums),
+			"name":   releasecheck.SumsName(providerName, providerVersion),
+			"upload": f.stage(t, "acme", s.sums),
 		},
 		map[string]string{
-			"role": "signature", "name": releasecheck.SignatureName(name, version), "upload": f.stage(t, ns, s.sig),
+			"role":   "signature",
+			"name":   releasecheck.SignatureName(providerName, providerVersion),
+			"upload": f.stage(t, "acme", s.sig),
 		},
 	)
 
 	for _, n := range s.names {
-		files = append(files, map[string]string{"role": "archive", "name": n, "upload": f.stage(t, ns, s.archive[n])})
+		files = append(files, map[string]string{
+			"role": "archive", "name": n, "upload": f.stage(t, "acme", s.archive[n]),
+		})
 	}
 
 	return js(t, map[string]any{"protocols": []string{"5.0"}, "files": files})
@@ -347,7 +358,7 @@ func TestPublishFlow(t *testing.T) {
 	f.trust(t, "acme", sg)
 
 	s := buildSet(t, sg)
-	body := f.publishBody(t, "acme", "payments", "1.0.0", s)
+	body := f.publishBody(t, s)
 	target := base + "/providers/payments/versions/1.0.0"
 
 	got := f.do(t, request{
@@ -456,7 +467,7 @@ func TestPublishRefusals(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			body := f.publishBody(t, "acme", "payments", "1.0.0", tc.set)
+			body := f.publishBody(t, tc.set)
 
 			got := f.call(t, "publisher", http.MethodPut, tc.target, body)
 			if got.code != tc.want || !strings.Contains(got.body, tc.code) || !strings.Contains(got.body, tc.text) {
@@ -482,7 +493,7 @@ func TestKeyOfAnotherNamespaceDoesNotSign(t *testing.T) {
 	f.trust(t, "beta", other)
 	f.trust(t, "acme", pgpfixture.NewSigner(t))
 
-	body := f.publishBody(t, "acme", "payments", "1.0.0", buildSet(t, other))
+	body := f.publishBody(t, buildSet(t, other))
 
 	got := f.call(t, "publisher", http.MethodPut, base+"/providers/payments/versions/1.0.0", body)
 	if got.code != http.StatusUnprocessableEntity || !strings.Contains(got.body, "registry.signature-untrusted-key") {
@@ -501,6 +512,19 @@ func TestStageLimitsAndKeys(t *testing.T) {
 
 	got = f.call(t, "publisher", http.MethodPost, base+"/uploads", nil)
 	wantCode(t, "an empty body", got, http.StatusBadRequest)
+
+	// The body of an upload is binary. Any other media type, and a missing one,
+	// is refused before the body is read.
+	for name, header := range map[string]string{
+		"JSON": "application/json", "a form": "application/x-www-form-urlencoded", "text": "text/plain",
+		"a bad value": "application/octet-stream;;;=", "empty": "",
+	} {
+		got = f.do(t, request{
+			token: "publisher", method: http.MethodPost, target: base + "/uploads", body: []byte("x"),
+			headers: map[string]string{"Content-Type": header},
+		})
+		wantCode(t, "an upload as "+name, got, http.StatusUnsupportedMediaType)
+	}
 
 	// A route that takes no key refuses the header and does not ignore it.
 	got = f.do(t, request{

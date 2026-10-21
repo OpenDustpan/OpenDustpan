@@ -89,6 +89,24 @@ func (r registryStore) Publish(ctx context.Context, rel registry.Release, fence 
 func publishRegistryRelease(
 	ctx context.Context, q *db.Queries, rel registry.Release, archives string,
 ) (bool, error) {
+	// The key check is in the transaction of the write. Defense in depth: the
+	// service checks the key before it copies the files. This check stays so
+	// that a key removed after that check cannot sign a new release, and so that
+	// a new caller of the store cannot publish a release of an untrusted key.
+	// A release of a module has no signature and no key.
+	if rel.KeyFingerprint != "" {
+		_, keyErr := q.GetRegistryKey(ctx, db.GetRegistryKeyParams{
+			Namespace: rel.Address.Namespace.String(), Fingerprint: rel.KeyFingerprint,
+		})
+		if errors.Is(keyErr, sql.ErrNoRows) {
+			return false, registry.ErrKeyNotFound
+		}
+
+		if keyErr != nil {
+			return false, fmt.Errorf("select registry key: %w", keyErr)
+		}
+	}
+
 	row, err := q.GetRegistryRelease(ctx, db.GetRegistryReleaseParams{
 		Namespace: rel.Address.Namespace.String(), Kind: string(rel.Address.Kind), Name: rel.Address.Name,
 		System: rel.Address.System, Version: rel.Version,

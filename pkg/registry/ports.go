@@ -29,6 +29,10 @@ type Store interface {
 	//   - namespace.ErrFenced when the fence is stale or belongs to another
 	//     namespace than r.Address.
 	//   - ErrVersionExists when the version exists and r.SameContent is false.
+	//   - ErrKeyNotFound when r has a signing key and the namespace does not
+	//     trust it at the time of the transaction. The key check is in the same
+	//     transaction as the write, so a key removed after the checks of the
+	//     caller refuses the publish. A release with no key is a module.
 	//
 	// A publish of a version that exists with the same content returns nil and
 	// changes nothing, so a repeat after a timeout is safe. A repeat writes no

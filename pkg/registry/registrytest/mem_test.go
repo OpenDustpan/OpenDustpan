@@ -23,6 +23,7 @@ type key struct {
 // mem is the reference adapter of Store. It runs the suite before any SQL
 // adapter exists.
 type mem struct {
+	trust    *memKeys
 	fences   map[namespace.Name]int64
 	releases map[key]registry.Release
 	entries  map[namespace.Name][]audit.Entry
@@ -39,6 +40,10 @@ func (m *mem) Publish(_ context.Context, r registry.Release, fence namespace.Fen
 
 	if fence.Namespace != r.Address.Namespace || m.fences[fence.Namespace] != fence.FailoverVersion {
 		return namespace.ErrFenced
+	}
+
+	if r.KeyFingerprint != "" && !m.trust.holds(r.Address.Namespace, r.KeyFingerprint) {
+		return registry.ErrKeyNotFound
 	}
 
 	k := key{r.Address, r.Version}
@@ -143,7 +148,14 @@ func TestMemStore(t *testing.T) {
 	t.Parallel()
 
 	registrytest.RunStore(t, func(*testing.T) registrytest.Harness {
+		trust := &memKeys{
+			fences:  map[namespace.Name]int64{},
+			keys:    map[namespace.Name]map[string]registry.KeyRecord{},
+			entries: map[namespace.Name][]audit.Entry{},
+			mu:      sync.Mutex{},
+		}
 		m := &mem{
+			trust:    trust,
 			fences:   map[namespace.Name]int64{},
 			releases: map[key]registry.Release{},
 			entries:  map[namespace.Name][]audit.Entry{},
@@ -152,11 +164,16 @@ func TestMemStore(t *testing.T) {
 
 		return registrytest.Harness{
 			Store: m,
+			Keys:  trust,
 			Namespace: func(_ *testing.T, name namespace.Name) namespace.Fence {
 				m.mu.Lock()
 				defer m.mu.Unlock()
 
 				m.fences[name] = 1
+
+				trust.mu.Lock()
+				trust.fences[name] = 1
+				trust.mu.Unlock()
 
 				return namespace.Fence{Namespace: name, FailoverVersion: 1}
 			},
@@ -164,7 +181,10 @@ func TestMemStore(t *testing.T) {
 				m.mu.Lock()
 				defer m.mu.Unlock()
 
-				return slices.Clone(m.entries[name])
+				trust.mu.Lock()
+				defer trust.mu.Unlock()
+
+				return append(slices.Clone(trust.entries[name]), m.entries[name]...)
 			},
 		}
 	})
@@ -275,6 +295,16 @@ func (m *memKeys) Keys(_ context.Context, ns namespace.Name) ([]registry.KeyReco
 	)
 
 	return out, nil
+}
+
+// holds reports whether ns trusts the key with fingerprint.
+func (m *memKeys) holds(ns namespace.Name, fingerprint string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	_, ok := m.keys[ns][fingerprint]
+
+	return ok
 }
 
 func (m *memKeys) fenced(f namespace.Fence) error {

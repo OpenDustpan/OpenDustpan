@@ -69,6 +69,7 @@ the server measured:
 
 ```sh
 curl -X POST -H "Authorization: token $DUSTPAN_TOKEN" \
+  -H "Content-Type: application/octet-stream" \
   --data-binary @terraform-provider-payments_1.0.0_linux_amd64.zip \
   https://dustpan.example.com/api/dustpan/v1/namespaces/acme/registry/uploads
 ```
@@ -166,8 +167,17 @@ curl -X DELETE -H "Authorization: token $DUSTPAN_TOKEN" \
 
 The releases that the key signed stay in the record. The registry stops
 serving them, because the download document must name the key that signed
-the release. `tofu init` then fails for these versions. Register the key
-again to serve them again.
+the release. The list of versions does not show them, so `tofu init` selects
+an older version that a trusted key signed. If you pin one of these versions,
+`tofu init` fails. Register the key again to serve them again.
+
+A signed address that the server gave out before the removal stays valid for
+its 15 minutes. After that time the registry serves no file of these releases.
+
+Always remove a revoked key. Do not update it: the registry has no route to
+replace the bytes of a key, and it refuses a key with the fingerprint of a
+key that it holds when the bytes are different. A key that is revoked now
+does not sign a new release in any case.
 
 ## What the registry refuses
 

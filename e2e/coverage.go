@@ -2412,7 +2412,7 @@ func coverageViews(tb testing.TB) *inventoryapi.ViewsConfig {
 // for its route table.
 type coverageRegistryService struct{}
 
-func (coverageRegistryService) Releases(context.Context, namespace.Name, string) ([]registry.Release, error) {
+func (coverageRegistryService) ServableReleases(context.Context, namespace.Name, string) ([]registry.Release, error) {
 	return nil, registry.ErrNotFound
 }
 

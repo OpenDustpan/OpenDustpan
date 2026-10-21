@@ -9,7 +9,7 @@ import (
 )
 
 // newEveryModuleServer builds a server with every optional module turned on:
-// jobs, runners, profiles, saved views, durable operations and the stores of
+// jobs, runners, profiles, the registry, saved views, durable operations and the stores of
 // idempotency. The description of the API holds all of them.
 func newEveryModuleServer(t *testing.T) *dustpan.Server {
 	t.Helper()
@@ -44,6 +44,7 @@ func newModuleServer(t *testing.T, extra ...dustpan.Option) *dustpan.Server {
 		dustpan.WithRunners(p.st.Runners()),
 		dustpan.WithSavedViewStore(p.st.SavedViews()),
 		dustpan.WithProfileStore(p.st.Profiles()),
+		dustpan.WithRegistry(p.st.Registry(), p.st.RegistryKeys()),
 		dustpan.WithIdempotencyStore(p.st.Idempotency(testWrapper(t))),
 		dustpan.WithPublicURL("https://dustpan.example"),
 	)

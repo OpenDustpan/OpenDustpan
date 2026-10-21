@@ -369,3 +369,34 @@ func TestPublishRefusesBytesThatChange(t *testing.T) {
 		t.Fatalf("a refused publish stored a release: %v", e.store.releases)
 	}
 }
+
+// TestPublishRefusesAKeyRemovedBeforeTheCommit holds the rule that the key is
+// checked again in the commit: a key removed after the checks of the service
+// and before the write refuses the publish, and no release is stored.
+func TestPublishRefusesAKeyRemovedBeforeTheCommit(t *testing.T) {
+	t.Parallel()
+
+	e := newEnv(t, false)
+	sg := pgpfixture.NewSigner(t)
+	e.trust(t, acme, sg)
+
+	req := e.stage(t, acme, buildSet(t, sg, "payments", "1.0.0", "linux_amd64"))
+
+	e.store.beforeCommit = func() {
+		e.store.beforeCommit = nil
+
+		if err := e.svc.RemoveKey(context.Background(), e.caller, acme, sg.Key.Fingerprint); err != nil {
+			t.Errorf("RemoveKey: %v", err)
+		}
+	}
+
+	_, err := e.svc.Publish(context.Background(), e.caller, req)
+	if !errors.Is(err, registry.ErrUntrustedKey) {
+		t.Fatalf("Publish = %v, want ErrUntrustedKey", err)
+	}
+
+	_, getErr := e.svc.Release(context.Background(), acme, "payments", "1.0.0")
+	if !errors.Is(getErr, registry.ErrNotFound) {
+		t.Fatalf("Release after the refused publish = %v, want ErrNotFound", getErr)
+	}
+}

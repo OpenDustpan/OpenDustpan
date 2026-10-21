@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"mime"
 	"net/http"
 	"time"
 
@@ -172,9 +173,25 @@ func readBody(w http.ResponseWriter, r *http.Request, v any) error {
 	return nil
 }
 
+// uploadMediaType is the media type of the body of an upload.
+const uploadMediaType = "application/octet-stream"
+
 // stage serves POST .../registry/uploads: the body is the bytes of one file.
 func (h *Handler) stage(w http.ResponseWriter, r *http.Request, p identity.Principal, obj identity.Object) {
 	ctx := r.Context()
+
+	// Only raw bytes are a file. A body with another media type, for example a
+	// form that curl sends with --data-binary and no header, is refused before
+	// it is read.
+	mediaType, _, typeErr := mime.ParseMediaType(r.Header.Get("Content-Type"))
+	if typeErr != nil || mediaType != uploadMediaType {
+		h.writeError(ctx, w, &statusError{
+			status: http.StatusUnsupportedMediaType, code: "request.content-type-unsupported",
+			message: "send the file with the header Content-Type: " + uploadMediaType,
+		})
+
+		return
+	}
 
 	// Defense in depth: the service stops the write at the same limit. The early
 	// answer saves the read of a body that the service would refuse.

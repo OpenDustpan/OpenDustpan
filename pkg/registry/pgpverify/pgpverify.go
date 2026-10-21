@@ -231,11 +231,17 @@ func classify(err error) error {
 var allowedHashes = []crypto.Hash{crypto.SHA256, crypto.SHA384, crypto.SHA512}
 
 // checkPolicy applies the rules of the registry to a signature that the library
-// accepted: the hash function, and the algorithm and size of every key of the
-// signer. Defense in depth: the packet configuration states the same rules.
+// accepted: the signature type, the hash function, and the algorithm and size
+// of every key of the signer. Only a binary signature is valid: a text-mode
+// signature hashes the data after a change of the line endings, so it does not
+// sign the exact bytes of the checksums file. Defense in depth: the packet configuration states the same rules.
 // This check stays so that a library that ignores a field of its configuration
 // cannot accept a weak signature.
 func checkPolicy(sig *packet.Signature, signer *openpgp.Entity) error {
+	if sig.SigType != packet.SigTypeBinary {
+		return registry.ErrBadSignature
+	}
+
 	if !slices.Contains(allowedHashes, sig.Hash) || sig.IssuerKeyId == nil {
 		return registry.ErrBadSignature
 	}

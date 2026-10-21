@@ -56,8 +56,16 @@ func fixtureRelease() registry.Release {
 	}
 }
 
-func (f *fakeRegistry) Releases(_ context.Context, ns namespace.Name, name string) ([]registry.Release, error) {
+func (f *fakeRegistry) ServableReleases(_ context.Context, ns namespace.Name, name string) ([]registry.Release, error) {
 	if ns != "acme" || name != "payments" {
+		return nil, registry.ErrNotFound
+	}
+
+	// The contract of the port: a release of a removed key is left out.
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	if f.keyGone {
 		return nil, registry.ErrNotFound
 	}
 
@@ -458,6 +466,10 @@ func TestRegistryDownloadFailsClosedWhenTheKeyIsRemoved(t *testing.T) {
 
 	if rec := f.get(t, downloadPath); rec.Code != http.StatusNotFound {
 		t.Fatalf("download with a removed key = %d, want 404", rec.Code)
+	}
+
+	if rec := f.get(t, versionsPath); rec.Code != http.StatusNotFound {
+		t.Fatalf("versions with a removed key = %d, want 404", rec.Code)
 	}
 }
 

@@ -37,12 +37,16 @@ type memStore struct {
 	releases map[string]registry.Release
 	keys     map[namespace.Name][]registry.KeyRecord
 	audits   []audit.Entry
+	// beforeCommit, when it is not nil, runs at the start of Publish, before the
+	// key check. A test uses it to remove a key between the checks of the
+	// service and the commit.
+	beforeCommit func()
 }
 
 func newMemStore() *memStore {
 	return &memStore{
 		mu: sync.Mutex{}, releases: map[string]registry.Release{}, keys: map[namespace.Name][]registry.KeyRecord{},
-		audits: nil,
+		audits: nil, beforeCommit: nil,
 	}
 }
 
@@ -55,8 +59,19 @@ func (m *memStore) Publish(_ context.Context, r registry.Release, _ namespace.Fe
 		return fmt.Errorf("validate: %w", err)
 	}
 
+	if m.beforeCommit != nil {
+		m.beforeCommit()
+	}
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
+
+	// The contract of the port: the key is trusted at the time of the write.
+	if !slices.ContainsFunc(m.keys[r.Address.Namespace], func(k registry.KeyRecord) bool {
+		return k.Key.Fingerprint == r.KeyFingerprint
+	}) {
+		return registry.ErrKeyNotFound
+	}
 
 	if old, ok := m.releases[relKey(r.Address, r.Version)]; ok {
 		if old.SameContent(r) {

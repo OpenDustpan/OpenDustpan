@@ -22,6 +22,7 @@ func newRegistryHarness(t *testing.T, s *sqlite.Store) registrytest.Harness {
 
 	return registrytest.Harness{
 		Store: s.Registry(),
+		Keys:  s.RegistryKeys(),
 		Namespace: func(t *testing.T, name namespace.Name) namespace.Fence {
 			t.Helper()
 

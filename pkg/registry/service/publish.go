@@ -176,7 +176,8 @@ type measured struct {
 // same content returns that release and changes nothing. It returns
 // registry.ErrInvalid or ErrBadRequest for a request that fails its checks,
 // ErrNotStaged, ErrTooLarge, ErrNoKeys, registry.ErrBadSignature,
-// registry.ErrUntrustedKey, releasecheck.ErrRefused, registry.ErrVersionExists,
+// registry.ErrUntrustedKey (also for a key removed during the publish),
+// releasecheck.ErrRefused, registry.ErrVersionExists,
 // namespace.ErrNotFound or namespace.ErrFenced. The staged files are removed
 // whatever the result.
 func (s *Service) Publish(ctx context.Context, c *Caller, req PublishRequest) (registry.Release, error) {
@@ -273,7 +274,17 @@ func (s *Service) verify(ctx context.Context, c *Caller, p publishing) (registry
 // the store holds it. A repeat of a published version changes nothing, so the
 // answer is the first release, with the first publisher and time.
 func (s *Service) record(ctx context.Context, c *Caller, p publishing, rel registry.Release) (registry.Release, error) {
-	if err := s.store.Publish(ctx, rel, p.rec.Fence(), s.releaseEntry(c, rel)); err != nil {
+	err := s.store.Publish(ctx, rel, p.rec.Fence(), s.releaseEntry(c, rel))
+	if errors.Is(err, registry.ErrKeyNotFound) {
+		// A key removed between the check and the commit. The store checked it in
+		// the transaction of the write. The answer is the one of a signature of a
+		// key that the namespace does not trust.
+		return registry.Release{}, fmt.Errorf(
+			"%w: the signing key was removed during the publish", registry.ErrUntrustedKey,
+		)
+	}
+
+	if err != nil {
 		return registry.Release{}, fmt.Errorf("publish release: %w", err)
 	}
 

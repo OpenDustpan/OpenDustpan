@@ -115,7 +115,14 @@ func (r registryAPI) addKey(ctx context.Context, t *testing.T, sg pgpfixture.Sig
 func (r registryAPI) stage(ctx context.Context, t *testing.T, data []byte) string {
 	t.Helper()
 
-	resp := r.call(ctx, t, http.MethodPost, "/uploads", string(data))
+	resp, err := r.env.ServerAPIStatusTyped(ctx, e2e.TypedRequest{
+		Token: r.env.TokenA(), Method: http.MethodPost, Path: r.base + "/uploads",
+		ContentType: "application/octet-stream", Body: string(data), IfMatch: "",
+	})
+	if err != nil {
+		t.Fatalf("stage: %v", err)
+	}
+
 	if resp.Status != http.StatusCreated {
 		t.Fatalf("stage = %d %s", resp.Status, resp.Body)
 	}

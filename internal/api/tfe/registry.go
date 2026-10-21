@@ -48,9 +48,11 @@ const (
 // RegistryService is what the registry protocol routes need. The registry
 // service implements it.
 type RegistryService interface {
-	// Releases returns the releases of a provider from the lowest version to the
-	// highest, or registry.ErrNotFound.
-	Releases(ctx context.Context, ns namespace.Name, name string) ([]registry.Release, error)
+	// ServableReleases returns the releases of a provider that have a download,
+	// from the lowest version to the highest: a release whose signing key the
+	// namespace removed is left out. It returns registry.ErrNotFound when none
+	// is left.
+	ServableReleases(ctx context.Context, ns namespace.Name, name string) ([]registry.Release, error)
 	// Release returns one release, or registry.ErrNotFound.
 	Release(ctx context.Context, ns namespace.Name, name, version string) (registry.Release, error)
 	// SigningKey returns the trusted key that signed rel, or
@@ -383,7 +385,7 @@ func splitPlatform(platform string) [2]string {
 func (h *Handler) registryVersions(w http.ResponseWriter, r *http.Request, _ identity.Principal, obj identity.Object) {
 	ctx := r.Context()
 
-	releases, err := h.registry.service.Releases(ctx, obj.Namespace(), r.PathValue("type"))
+	releases, err := h.registry.service.ServableReleases(ctx, obj.Namespace(), r.PathValue("type"))
 	if err != nil {
 		h.registryServiceError(ctx, w, err)
 

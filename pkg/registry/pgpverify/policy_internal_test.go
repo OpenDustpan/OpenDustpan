@@ -23,6 +23,16 @@ func signatureOf(hash crypto.Hash, issuer *uint64) *packet.Signature {
 	return &sig
 }
 
+// signatureTypeOf returns a signature packet of the given type. A text-mode
+// signature (SigTypeText) hashes the data after a change of its line endings.
+func signatureTypeOf(kind packet.SignatureType) *packet.Signature {
+	issuer := uint64(42)
+	sig := signatureOf(crypto.SHA256, &issuer)
+	sig.SigType = kind
+
+	return sig
+}
+
 // entityWith returns an entity whose primary key has the given algorithm.
 func entityWith(algo packet.PublicKeyAlgorithm) *openpgp.Entity {
 	var key packet.PublicKey
@@ -56,6 +66,9 @@ func TestCheckPolicy(t *testing.T) {
 		{name: "signature with SHA-1", sig: signatureOf(crypto.SHA1, &issuer), signer: signer.Entity},
 		{name: "signature with MD5", sig: signatureOf(crypto.MD5, &issuer), signer: signer.Entity},
 		{name: "signature with RIPEMD-160", sig: signatureOf(crypto.RIPEMD160, &issuer), signer: signer.Entity},
+		{name: "text-mode signature", sig: signatureTypeOf(packet.SigTypeText), signer: signer.Entity},
+		{name: "certification signature", sig: signatureTypeOf(packet.SigTypeGenericCert), signer: signer.Entity},
+		{name: "binary signature type", sig: signatureTypeOf(packet.SigTypeBinary), signer: signer.Entity, ok: true},
 		{name: "no hash", sig: signatureOf(0, &issuer), signer: signer.Entity},
 		{name: "no issuer", sig: signatureOf(crypto.SHA256, nil), signer: signer.Entity},
 		{

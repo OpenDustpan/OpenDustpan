@@ -29,7 +29,9 @@ The role `admin` holds all three actions. No other built-in role holds
 
 ### Upload
 
-The body of `POST /uploads` is the bytes of one file. The answer is:
+The body of `POST /uploads` is the bytes of one file. Send the header
+`Content-Type: application/octet-stream`. Another media type, or none, answers
+415. The answer is:
 
 ```json
 {"upload": "<token>", "sha256": "<hex>", "size": 12345}
@@ -124,6 +126,10 @@ file and of the signature file, the SHA-256 of the archive, and the public key
 that signed the release. An address is valid for 15 minutes, for one file of
 one release. The file route serves the file only for a valid signature, and
 only for a file that the release names.
+
+The list of versions leaves out a release whose key the namespace removed, so
+a client selects an older release that it can download. A signed address stays
+valid for its 15 minutes after the removal of the key.
 
 A request for a host other than the host of the public URL, a name outside the
 rule, a missing namespace, provider or version, and a release whose key the
