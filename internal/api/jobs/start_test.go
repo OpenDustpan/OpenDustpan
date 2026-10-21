@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -185,8 +186,14 @@ func checkStartOperation(t *testing.T, ops []apidesc.Operation) {
 			continue
 		}
 
-		if !op.IdempotencyKey || !op.ETag || !slices.Equal(op.Actions, []string{"unit:run-plan"}) {
-			t.Fatalf("operation = %+v, want the key, the ETag and unit:run-plan", op)
+		// The wrapper reads the namespace of the path first, then the job
+		// service checks the start action on the unit of the body.
+		wantActions := []string{"namespace:read", "unit:run-plan"}
+		wantObjects := map[string]string{"namespace:read": apidesc.KindNamespace, "unit:run-plan": apidesc.KindUnit}
+
+		if !op.IdempotencyKey || !op.ETag || !slices.Equal(op.Actions, wantActions) ||
+			!maps.Equal(op.ActionObjects, wantObjects) {
+			t.Fatalf("operation = %+v, want the key, the ETag, %v and the kinds %v", op, wantActions, wantObjects)
 		}
 
 		return
