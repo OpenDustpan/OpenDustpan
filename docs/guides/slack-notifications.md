@@ -48,8 +48,8 @@ The server accepts these hosts for a Slack destination:
 | `hooks.slack.com` | Slack |
 | `hooks.slack-gov.com` | GovSlack |
 
-Any other host answers 400 `sink.invalid` when you make or change the
-destination. A host with a port, a URL with user information, and a URL that
+Any other host answers 400 `sink.platform-host` when you make or change the
+destination. The message gives the host rule. A host with a port, a URL with user information, and a URL that
 is not `https` fail too.
 
 ## Send a test message

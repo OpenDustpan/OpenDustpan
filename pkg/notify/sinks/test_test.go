@@ -461,9 +461,20 @@ type hostSender struct {
 	fakeSender
 }
 
+// ruleError is a host error with a rule, as chat.HostRuleError is.
+type ruleError struct{}
+
+func (ruleError) Error() string { return notify.ErrInvalid.Error() + ": " + hostRule }
+
+func (ruleError) Unwrap() error { return notify.ErrInvalid }
+
+func (ruleError) HostRule() string { return hostRule }
+
+const hostRule = "The Slack URL must use hooks.slack.com or a GovSlack host."
+
 func (*hostSender) CheckHost(platform, host string) error {
 	if platform == "slack" && host != "hooks.slack.com" {
-		return notify.ErrInvalid
+		return ruleError{}
 	}
 
 	return nil
@@ -494,13 +505,15 @@ func TestChatHostIsCheckedWhenAPersonSavesTheSink(t *testing.T) {
 		_, createErr := f.svc.Create(t.Context(), f.caller, shop, sinks.New{
 			Kind: notify.SinkChat, Platform: tc.platform, Name: "Chat", Target: "", URL: tc.url,
 		})
-		if tc.ok != (createErr == nil) || (!tc.ok && !errors.Is(createErr, notify.ErrInvalid)) {
-			t.Errorf("%s: Create = %v, want ok %v", name, createErr, tc.ok)
+		if tc.ok {
+			if createErr != nil {
+				t.Errorf("%s: Create = %v, want nil", name, createErr)
+			}
+
+			continue
 		}
 
-		if createErr != nil && strings.Contains(createErr.Error(), canary) {
-			t.Errorf("%s: the error holds the token", name)
-		}
+		checkRefusedHost(t, name, createErr)
 	}
 
 	// A replace with a URL of another host fails the same way.
@@ -511,5 +524,29 @@ func TestChatHostIsCheckedWhenAPersonSavesTheSink(t *testing.T) {
 		sinks.Change{Version: made.Version, Name: "Chat", Target: nil, URL: &url})
 	if !errors.Is(err, notify.ErrInvalid) {
 		t.Errorf("Replace with another host = %v, want ErrInvalid", err)
+	}
+}
+
+// checkRefusedHost checks the error of a refused host: its own sentinel, the
+// rule of the platform, and ErrInvalid once in the text.
+func checkRefusedHost(t *testing.T, name string, err error) {
+	t.Helper()
+
+	if err == nil {
+		t.Fatalf("%s: Create = nil, want a refused host", name)
+	}
+
+	if strings.Contains(err.Error(), canary) {
+		t.Errorf("%s: the error holds the token", name)
+	}
+
+	if !errors.Is(err, notify.ErrInvalid) || !errors.Is(err, sinks.ErrPlatformHost) ||
+		sinks.PlatformHostRule(err) != hostRule {
+		t.Errorf("%s: Create = %v, rule %q, want ErrPlatformHost with the rule of the platform", name, err,
+			sinks.PlatformHostRule(err))
+	}
+
+	if n := strings.Count(err.Error(), notify.ErrInvalid.Error()); n != 1 {
+		t.Errorf("%s: the error text %q holds ErrInvalid %d times, want 1", name, err, n)
 	}
 }

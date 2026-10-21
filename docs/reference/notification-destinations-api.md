@@ -88,7 +88,7 @@ The answer never holds the URL, the answer of the receiver or the text of an
 error. A destination of a kind or a chat platform with no sender answers 422
 `sink.no-sender`. The platform `slack` has a sender. The host of a `slack`
 destination is `hooks.slack.com` or `hooks.slack-gov.com`, and any other host
-answers 400 `sink.invalid` when you make or change the destination. See
+answers 400 `sink.platform-host` when you make or change the destination. See
 `docs/guides/slack-notifications.md` for the message.
 
 A name that resolves to an address that the outbound rules refuse gives the
@@ -119,6 +119,7 @@ answers 409 `namespace.fenced`.
 | Status | `errorCode` | Cause |
 | --- | --- | --- |
 | 400 | `sink.invalid` | A field is not valid, or the outbound address rules refuse the URL or its port |
+| 400 | `sink.platform-host` | The host of the chat URL is not a webhook host of the platform |
 | 400 | `request.body-invalid` | The body is not one JSON object with known fields |
 | 404 | `sink.not-found` | No destination with this ID in the namespace |
 | 409 | `sink.conflict` | The destination changed since you read it |

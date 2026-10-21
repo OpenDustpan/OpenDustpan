@@ -14,6 +14,12 @@
 //     text bold, struck through, italic or code;
 //   - it cuts a text on a character boundary, never inside an entity.
 //
+// Slack also parses a mrkdwn text on its own: it turns @here, #general, a URL
+// and a bare host name into a link or a mention. So every mrkdwn object sets
+// verbatim to true, and Slack shows the text as it is. The fallback text has
+// no such switch, so the renderer puts a zero-width space after @, #, a dot
+// and a colon in it, and no automatic link or mention starts there.
+//
 // A URL goes only in the url field of a button, and never in text. The button
 // has a fixed label, so no text of a person is in a plain_text object, where
 // the entity rules of Slack are not documented.
@@ -72,7 +78,7 @@ func New() Renderer { return Renderer{} }
 // Platform returns chat.Slack.
 func (Renderer) Platform() chat.Platform { return chat.Slack }
 
-// CheckHost returns an error that matches notify.ErrInvalid for every host
+// CheckHost returns a *chat.HostRuleError, which matches notify.ErrInvalid, for every host
 // other than HostPublic and HostGov. The match is exact: a port, user
 // information, a sub-domain and a different case all fail.
 func (Renderer) CheckHost(host string) error {
@@ -80,7 +86,7 @@ func (Renderer) CheckHost(host string) error {
 		return nil
 	}
 
-	return fmt.Errorf("%w: a Slack webhook uses the host %s or %s", notify.ErrInvalid, HostPublic, HostGov)
+	return &chat.HostRuleError{Rule: "The Slack URL must use " + HostPublic + " or a GovSlack host."}
 }
 
 // Check reads the answer of Slack. Slack answers a message that it took with
@@ -95,11 +101,17 @@ func (Renderer) Check(status int, body []byte) error {
 	return fmt.Errorf("%w: Slack did not answer ok", notify.ErrPermanent)
 }
 
-// text is a mrkdwn text object.
+// text is a text object. Verbatim is set on each mrkdwn object, and Slack
+// accepts it on no other type, so the label of a button leaves it false.
 type text struct {
-	Type string `json:"type"`
-	Text string `json:"text"`
+	Type     string `json:"type"`
+	Text     string `json:"text"`
+	Verbatim bool   `json:"verbatim,omitempty"`
 }
+
+// mrkdwnText returns a mrkdwn text object that Slack shows as it is, without
+// the automatic links and mentions.
+func mrkdwnText(t string) text { return text{Type: typeMrkdwn, Text: t, Verbatim: true} }
 
 // button is a link button with a fixed label.
 type button struct {
@@ -136,7 +148,7 @@ func (Renderer) Render(c chat.Content) (chat.Request, error) {
 	title := fmt.Sprintf("%s *%s*", style.emoji, mrkdwn(c.Title, maxSectionText))
 
 	msg := message{
-		Text: mrkdwn(label+": "+c.Title, maxFallback),
+		Text: fallbackText(label+": "+c.Title, maxFallback),
 		Blocks: []block{
 			contextBlock(mrkdwn(c.Product, maxFieldText)),
 			sectionBlock(title+"\n"+label, nil),
@@ -150,7 +162,7 @@ func (Renderer) Render(c chat.Content) (chat.Request, error) {
 	if len(c.Fields) > 0 {
 		fields := make([]text, 0, len(c.Fields))
 		for _, f := range c.Fields {
-			fields = append(fields, text{Type: typeMrkdwn, Text: field(f)})
+			fields = append(fields, mrkdwnText(field(f)))
 		}
 
 		msg.Blocks = append(
@@ -161,7 +173,7 @@ func (Renderer) Render(c chat.Content) (chat.Request, error) {
 
 	for i, l := range c.Links {
 		msg.Blocks = append(msg.Blocks, sectionBlock(mrkdwn(l.Title, maxLinkText), button{
-			Type: "button", Text: text{Type: "plain_text", Text: "Open"}, URL: l.URL,
+			Type: "button", Text: text{Type: "plain_text", Text: "Open", Verbatim: false}, URL: l.URL,
 			ActionID: fmt.Sprintf("open-%d", i+1),
 		}))
 	}
@@ -191,15 +203,17 @@ func (Renderer) Render(c chat.Content) (chat.Request, error) {
 
 // contextBlock returns a context block with one mrkdwn text.
 func contextBlock(t string) block {
-	return block{Type: "context", Text: nil, Fields: nil, Elements: []text{{Type: typeMrkdwn, Text: t}}, Accessory: nil}
+	return block{Type: "context", Text: nil, Fields: nil, Elements: []text{mrkdwnText(t)}, Accessory: nil}
 }
 
 // sectionBlock returns a section block with a mrkdwn text, and the accessory
 // when it is not nil.
 func sectionBlock(t string, accessory any) block {
+	t0 := mrkdwnText(t)
+
 	return block{
 		Type:      typeSection,
-		Text:      &text{Type: typeMrkdwn, Text: t},
+		Text:      &t0,
 		Fields:    nil,
 		Elements:  nil,
 		Accessory: accessory,
@@ -240,13 +254,21 @@ func severityStyleOf(s notify.Severity) severityStyle {
 // mrkdwn encodes s for mrkdwn text of at most limit bytes. It cuts s, and ends
 // it with an ellipsis, when the encoded text does not fit. It cuts between
 // characters, and so never inside an entity or a character.
-func mrkdwn(s string, limit int) string {
+func mrkdwn(s string, limit int) string { return encode(s, limit, encodeRune) }
+
+// fallbackText encodes s like mrkdwn, and also breaks the characters that
+// start an automatic link or mention. The top-level text of a message has no
+// verbatim switch, and a phone shows it in a notification.
+func fallbackText(s string, limit int) string { return encode(s, limit, encodeFallbackRune) }
+
+// encode is mrkdwn with the encoder of one character as a parameter.
+func encode(s string, limit int, encodeOne func(r rune, rs []rune, i int) string) string {
 	rs := []rune(s)
 	pieces := make([]string, len(rs))
 	total := 0
 
 	for i, r := range rs {
-		pieces[i] = encodeRune(r, rs, i)
+		pieces[i] = encodeOne(r, rs, i)
 		total += len(pieces[i])
 	}
 
@@ -267,6 +289,19 @@ func mrkdwn(s string, limit int) string {
 	b.WriteString(ellipsis)
 
 	return b.String()
+}
+
+// encodeFallbackRune returns the form of rs[i] in the fallback text: the
+// mrkdwn form, and a zero-width space after @, #, a dot and a colon, so that
+// @here, #general, evil.example and https://evil.example are not links or
+// mentions.
+func encodeFallbackRune(r rune, rs []rune, i int) string {
+	switch r {
+	case '@', '#', '.', ':':
+		return string(r) + zeroWidthSpace
+	default:
+		return encodeRune(r, rs, i)
+	}
 }
 
 // encodeRune returns the mrkdwn form of rs[i].

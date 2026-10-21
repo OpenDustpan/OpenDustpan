@@ -381,7 +381,35 @@ func (s *Service) secretValue(sink *notify.Sink, url string) ([]byte, error) {
 	}
 }
 
-// checkPlatformHost returns notify.ErrInvalid when the sender of chat sinks
+// ErrPlatformHost reports a chat URL whose host the platform of the sink does
+// not use for its webhooks. It also matches notify.ErrInvalid.
+var ErrPlatformHost = errors.New("the URL host is not a webhook host of the platform")
+
+// platformHostError is the error of a refused host. It matches
+// notify.ErrInvalid and ErrPlatformHost through Is, so that ErrInvalid is in
+// the chain and in the text only once.
+type platformHostError struct{ rule string }
+
+func (e platformHostError) Error() string {
+	return notify.ErrInvalid.Error() + ": " + ErrPlatformHost.Error()
+}
+
+func (platformHostError) Is(target error) bool {
+	return target == ErrPlatformHost || target == notify.ErrInvalid
+}
+
+// PlatformHostRule returns the host rule that err carries when err matches
+// ErrPlatformHost, and an empty string otherwise. The rule is a fixed
+// sentence of the platform and never holds the host of the URL.
+func PlatformHostRule(err error) string {
+	if pe, ok := errors.AsType[platformHostError](err); ok {
+		return pe.rule
+	}
+
+	return ""
+}
+
+// checkPlatformHost returns ErrPlatformHost, which matches notify.ErrInvalid, when the sender of chat sinks
 // says that host is not a webhook host of the platform of sink, so a person
 // who pastes the wrong URL learns it when the sink is saved and not at the
 // first message. A sender that has no such check, or no adapter for the
@@ -396,7 +424,12 @@ func (s *Service) checkPlatformHost(sink notify.Sink, host string) error {
 	}
 
 	if err := checker.CheckHost(sink.Platform, host); err != nil {
-		return fmt.Errorf("%w: %w", notify.ErrInvalid, err)
+		var rule interface{ HostRule() string }
+		if !errors.As(err, &rule) {
+			return platformHostError{rule: ""}
+		}
+
+		return platformHostError{rule: rule.HostRule()}
 	}
 
 	return nil

@@ -17,8 +17,9 @@ import (
 // wireText, wireButton, wireBlock and wireMessage are the parts of a Slack
 // body that the tests read.
 type wireText struct {
-	Type string `json:"type"`
-	Text string `json:"text"`
+	Type     string `json:"type"`
+	Text     string `json:"text"`
+	Verbatim bool   `json:"verbatim"`
 }
 
 type wireButton struct {
@@ -88,7 +89,8 @@ func harness(t *testing.T) chattest.Harness {
 		Markup: []string{"<", ">"},
 		Hostile: []string{
 			"<!channel>", "<!here>", "<!everyone>", "<@U123ABC>", "<@U123ABC|admin>", "<!subteam^S123|@ops>",
-			"<#C123|general>", "<https://evil.example|click here>", "a<b>c", "x&lt;!channel&gt;", "<<!channel>>",
+			"<#C123|general>", "<https://evil.example|click here>", "<@U123>", "<https://evil|x>",
+			"a<b>c", "x&lt;!channel&gt;", "<<!channel>>",
 		},
 		Accepted: chattest.Answer{Status: http.StatusOK, Body: []byte("ok")},
 		Refusals: []chattest.Answer{
@@ -321,5 +323,119 @@ func TestCheck(t *testing.T) {
 		if !errors.Is(err, tt.want) || (tt.want == nil && err != nil) {
 			t.Errorf("%s: Check = %v, want %v", tt.name, err, tt.want)
 		}
+	}
+}
+
+// plainHostile returns strings that Slack acts on in a plain text: they have
+// no markup that the renderer can encode, so only verbatim stops them.
+func plainHostile() []string {
+	return []string{
+		"@here", "@channel", "#general", "https://evil.example", "evil.example",
+		"<!channel>", "<@U123>", "<https://evil|x>",
+	}
+}
+
+func TestRenderShowsHostileAsPlainText(t *testing.T) {
+	t.Parallel()
+
+	for _, hostile := range plainHostile() {
+		t.Run(hostile, func(t *testing.T) {
+			t.Parallel()
+
+			req, err := slack.New().Render(content(func(c *chat.Content) {
+				c.Product, c.Title, c.Summary = hostile, hostile, hostile
+				c.Fields = []chat.Field{{Label: hostile, Value: hostile}}
+				c.Links[0].Title = hostile
+			}))
+			if err != nil {
+				t.Fatalf("Render: %v", err)
+			}
+
+			var msg wireMessage
+			if err := json.Unmarshal(req.Body, &msg); err != nil {
+				t.Fatal(err)
+			}
+
+			checkVerbatim(t, msg)
+
+			// The text of a block shows the string, entity-encoded, and with
+			// no link or mention markup.
+			want := strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;").Replace(hostile)
+			if got := msg.Blocks[2].Text.Text; got != want {
+				t.Errorf("summary = %q, want the plain text %q", got, want)
+			}
+
+			checkFallback(t, msg.Text, hostile, want)
+		})
+	}
+}
+
+// checkVerbatim checks that every mrkdwn object of msg tells Slack to show
+// the text as it is, and that the label of a button is plain text.
+func checkVerbatim(t *testing.T, msg wireMessage) {
+	t.Helper()
+
+	var objects []*wireText
+
+	for _, b := range msg.Blocks {
+		objects = append(objects, b.Text)
+
+		for _, group := range [][]wireText{b.Fields, b.Elements} {
+			for i := range group {
+				objects = append(objects, &group[i])
+			}
+		}
+
+		if b.Accessory != nil {
+			checkButtonLabel(t, b.Accessory.Text)
+		}
+	}
+
+	var mrkdwn int
+
+	for _, o := range objects {
+		if o == nil {
+			continue
+		}
+
+		mrkdwn++
+
+		if o.Type != "mrkdwn" || !o.Verbatim {
+			t.Errorf("text object %+v, want a mrkdwn object with verbatim true", *o)
+		}
+	}
+
+	if mrkdwn == 0 {
+		t.Fatal("the body has no mrkdwn object")
+	}
+}
+
+// checkButtonLabel checks that the label is plain text with no verbatim, which
+// Slack accepts on mrkdwn only.
+func checkButtonLabel(t *testing.T, label wireText) {
+	t.Helper()
+
+	if label.Type != "plain_text" || label.Verbatim {
+		t.Errorf("button label = %+v, want plain_text with no verbatim", label)
+	}
+}
+
+// checkFallback checks the top-level text: it cannot set verbatim, so no
+// automatic link or mention may start in it, and it still shows the string.
+func checkFallback(t *testing.T, fallback, hostile, want string) {
+	t.Helper()
+
+	if strings.ContainsAny(fallback, "<>") {
+		t.Errorf("fallback %q holds link or mention markup", fallback)
+	}
+
+	for _, trigger := range []string{"@here", "@channel", "@U123", "#general", "://", "evil.example", hostile} {
+		if strings.Contains(fallback, trigger) {
+			t.Errorf("fallback %q holds the trigger %q", fallback, trigger)
+		}
+	}
+
+	if shown := strings.ReplaceAll(fallback, "\u200b", ""); !strings.Contains(shown, want) {
+		t.Errorf("fallback %q does not show %q as text", shown, want)
 	}
 }

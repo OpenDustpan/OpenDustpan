@@ -103,6 +103,16 @@ type slackTestResult struct {
 	Message   string `json:"message"`
 }
 
+// slackHostRefused checks the answer for a Slack URL on another host: its own
+// errorCode, the host rule, and no part of the URL.
+func slackHostRefused(answer string) error {
+	if err := sinkNeverContains(slackMarker, "hooks.example.com")(answer); err != nil {
+		return err
+	}
+
+	return sinkHasError(answer, "sink.platform-host", "The Slack URL must use hooks.slack.com or a GovSlack host.")
+}
+
 func slackScenario(t *testing.T, env *e2e.Env, recv *slackReceiver) {
 	t.Helper()
 
@@ -116,7 +126,7 @@ func slackScenario(t *testing.T, env *e2e.Env, recv *slackReceiver) {
 		env,
 		sinkCase("a Slack URL on another host is refused", http.MethodPost, sinksBase, http.StatusBadRequest).
 			withBody(`{"kind":"chat","platform":"slack","name":"Wrong","url":"https://hooks.example.com/services/`+slackMarker+`"}`).
-			checking(sinkNeverContains(slackMarker)),
+			checking(slackHostRefused),
 	)
 	sinkStep(t, env, sinkCase("a Slack URL with a port is refused", http.MethodPost, sinksBase, http.StatusBadRequest).
 		withBody(`{"kind":"chat","platform":"slack","name":"Port","url":"https://hooks.slack.com:8443/services/`+slackMarker+`"}`).

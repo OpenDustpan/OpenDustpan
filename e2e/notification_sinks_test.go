@@ -197,6 +197,26 @@ func sinkReadSteps(t *testing.T, env *e2e.Env, hook, chat sinkDoc, key string) {
 		http.StatusConflict).withBody(`{"version":1,"name":"Again"}`))
 }
 
+// sinkHasError checks that the answer is an error with this errorCode and this
+// message.
+func sinkHasError(answer, code, message string) error {
+	var doc struct {
+		Message   string `json:"message"`
+		ErrorCode string `json:"errorCode"`
+	}
+
+	if err := json.Unmarshal([]byte(answer), &doc); err != nil {
+		return fmt.Errorf("%w: read the error: %w", errSinkAnswer, err)
+	}
+
+	if doc.ErrorCode != code || doc.Message != message {
+		return fmt.Errorf("%w: errorCode %q, message %q; want %q, %q", errSinkAnswer, doc.ErrorCode, doc.Message,
+			code, message)
+	}
+
+	return nil
+}
+
 // sinkNeverContains returns a check that the answer holds none of the texts.
 func sinkNeverContains(texts ...string) func(string) error {
 	return func(body string) error {
