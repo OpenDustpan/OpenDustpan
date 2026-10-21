@@ -65,7 +65,9 @@ type revealDocument struct {
 // revealRoute returns the reveal call: it answers the plain value at one
 // value path of a finalized state version. The path must be in the masked
 // set of that version, else the call answers 404, so a caller cannot probe
-// paths. The call needs unit:read and unit:read-secrets, answers
+// paths. The call needs unit:read and unit:read-secrets, and a console
+// session with a recent sign-in: an access token gets 403 and an old sign-in
+// gets 401, and each refusal writes a failure entry. It answers
 // Cache-Control: no-store, and writes one audit entry of the kind reveal
 // before it answers. If the append fails, the call answers 500 and no value.
 // A request body over the limit answers 413. A log line may hold the path,
@@ -78,10 +80,12 @@ func (h *Handler) revealRoute() Route {
 		// and unit:read-secrets on the unit of the workspace. The
 		// resolver maps the version to that unit. Unknown versions
 		// answer 404; a state the client encrypted answers 409.
-		Scope:   ScopeAuthorized,
+		// A console reveal needs a console session with a recent sign-in. An
+		// access token never gives one, so it gets 403.
+		Scope:   ScopeConsole,
 		Actions: []identity.Action{identity.ActionUnitRead, identity.ActionUnitReadSecrets},
 		Resolve: h.resolveStateVersionID,
-		Serve:   h.revealStateValue,
+		Serve:   h.freshReveal(h.revealStateValue),
 	}
 }
 

@@ -272,6 +272,7 @@ func coveragePulumiRoutes(tb testing.TB, namespaces *namespace.Service) []RouteR
 	}
 
 	handler, err := pulumiapi.NewHandler(pulumiapi.Config{
+		SessionPolicy:           nil,
 		DisablePulumiJournaling: false,
 		Stacks:                  stacks,
 		Updates:                 updates,
@@ -428,6 +429,8 @@ func coverageTFERoutes(tb testing.TB, namespaces *namespace.Service) []RouteRef 
 	tb.Helper()
 
 	handler, err := tfeapi.NewHandler(tfeapi.Config{
+		Sessions:       nil,
+		SessionPolicy:  nil,
 		StateGuard:     nil,
 		Authenticator:  coverageAuthenticator{},
 		Authorizer:     coverageAuthorizer{},
@@ -831,6 +834,7 @@ func coverageProfileRoutes(tb testing.TB) []RouteRef {
 		Authenticator: coverageAuthenticator{},
 		Authorizer:    coverageAuthorizer{},
 		Sessions:      nil,
+		SessionPolicy: nil,
 		Idempotency:   nil,
 		Logger:        slog.New(slog.DiscardHandler),
 		Now:           nil,

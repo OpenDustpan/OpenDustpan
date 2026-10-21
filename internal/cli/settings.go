@@ -333,9 +333,9 @@ var Settings = []*Setting{
 	stringSetting(
 		"audit-chain", "DUSTPAN_AUDIT_CHAIN", "on",
 		"hash chain of the audit log: on or off. A change starts the server in maintenance mode "+
-			"until a person approves it (DUSTPAN_AUDIT_CHAIN)",
+			"until a person approves it in the console (DUSTPAN_AUDIT_CHAIN)",
 		"`on`. `off` turns the chain off. A change starts the server in maintenance mode until a person "+
-			"runs `opendustpan audit-chain approve`",
+			"approves it in the console",
 	).WithFile("audit-chain"),
 	boolSetting(
 		"audit-checkpoints", "DUSTPAN_AUDIT_CHECKPOINTS",

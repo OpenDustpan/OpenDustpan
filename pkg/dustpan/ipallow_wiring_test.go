@@ -135,7 +135,7 @@ func newIPAllowlistServerWith(t *testing.T, includeBootstrap bool, extra ...dust
 		t.Fatalf("set list: %v", setErr)
 	}
 
-	opts := []dustpan.Option{
+	opts := append(signInOptions(t, st),
 		dustpan.WithRegion(region),
 		dustpan.WithNamespaceStore(st),
 		dustpan.WithStackStore(st),
@@ -153,12 +153,14 @@ func newIPAllowlistServerWith(t *testing.T, includeBootstrap bool, extra ...dust
 		dustpan.WithIPAllowlistsIncludeBootstrap(includeBootstrap),
 		dustpan.WithIPAllowlistStore(st),
 		dustpan.WithClock(func() time.Time { return time.Date(2026, time.October, 8, 21, 0, 0, 0, time.UTC) }),
-	}
+	)
 
 	srv, err := dustpan.NewServer(append(opts, extra...)...)
 	if err != nil {
 		t.Fatalf("new server: %v", err)
 	}
+
+	registerServer(srv, st, func() time.Time { return time.Date(2026, time.October, 8, 21, 0, 0, 0, time.UTC) })
 
 	return srv
 }

@@ -121,7 +121,7 @@ func (h *Handler) ipAllowlistRoutes() []Route {
 			Scope:   ScopeAuthorized,
 			Actions: []identity.Action{identity.ActionNamespaceManageIPAllowlist},
 			Resolve: resolveNamespacePath, ActionsFor: nil,
-			Serve: h.writeIPAllowlist,
+			Serve: h.fresh(ipAllowlistSetAction, h.writeIPAllowlist),
 		},
 		{
 			Method:  http.MethodDelete,
@@ -129,7 +129,7 @@ func (h *Handler) ipAllowlistRoutes() []Route {
 			Scope:   ScopeAuthorized,
 			Actions: []identity.Action{identity.ActionNamespaceManageIPAllowlist},
 			Resolve: resolveNamespacePath, ActionsFor: nil,
-			Serve: h.removeIPAllowlist,
+			Serve: h.fresh(ipAllowlistRemoveAction, h.removeIPAllowlist),
 		},
 	}
 }

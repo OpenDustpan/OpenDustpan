@@ -148,12 +148,10 @@ const (
 	// chainMismatchMessage answers a request to an instance whose setting
 	// differs from the stored state.
 	chainMismatchMessage = "The audit chain setting of this server differs from the stored state. " +
-		"Restart this server with the stored setting, or approve the change with " +
-		"'opendustpan audit-chain approve --server <url>'."
+		"Restart this server with the stored setting, or approve the change in the console."
 	// chainPendingMessage answers a request while a change of the chain
 	// waits for approval.
-	chainPendingMessage = "An audit chain change waits for approval. " +
-		"Run 'opendustpan audit-chain approve --server <url>'."
+	chainPendingMessage = "An audit chain change waits for approval. Approve it in the console."
 	// chainMigratingMessage answers a request while a migration of the
 	// chain runs.
 	chainMigratingMessage = "An audit chain migration runs. Requests stop until it is complete."
