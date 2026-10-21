@@ -27,12 +27,39 @@ type Label struct {
 	IfMatchRequired bool
 	// ETag is true when the answer of the route holds the ETag header.
 	ETag bool
+	// Object is the kind of the object that the actions of the route apply
+	// to, except the actions that the row lists as namespace actions. It is
+	// one of the constants Kind...
+	Object string
+	// Bodies names the body of the request and the body of the success
+	// answer.
+	Bodies *Bodies
 }
 
 // Name returns the label of an operation that sets no header: the operationId
 // and the tags.
 func Name(id string, tags ...string) Label {
-	return Label{ID: id, Tags: tags, IdempotencyKey: false, IfMatch: false, IfMatchRequired: false, ETag: false}
+	return Label{
+		ID: id, Tags: tags, IdempotencyKey: false, IfMatch: false, IfMatchRequired: false, ETag: false,
+		Object: "", Bodies: nil,
+	}
+}
+
+// On returns the label for a route whose actions apply to an object of the
+// kind. The kind is one of the constants Kind...
+func (l Label) On(kind string) Label {
+	l.Object = kind
+
+	return l
+}
+
+// WithBodies returns the label for a route with the body of its request and
+// the body of its success answer. A body is a Go type or NoBody. A GET, a HEAD
+// and a DELETE send no request, and take NoBody.
+func (l Label) WithBodies(request, response Body) Label {
+	l.Bodies = &Bodies{Request: request, Response: response}
+
+	return l
 }
 
 // WithKey returns the label for a route that takes the Idempotency-Key header
@@ -73,6 +100,9 @@ type Row struct {
 	Path   string
 	// Actions lists the actions that the route can need, as text.
 	Actions []string
+	// NamespaceActions lists the actions of Actions that apply to the
+	// namespace of the object and not to the object that the label names.
+	NamespaceActions []string
 	// Public is true for a route that needs no sign-in.
 	Public bool
 	// IdempotencyKey is true when the route table says that the route takes
@@ -123,18 +153,21 @@ func Collect(rows []Row, labels map[string]Label) []Operation {
 		}
 
 		label := labels[Pattern(row.Method, row.Path)]
+		actions := uniqueActions(row.Actions)
 
 		out = append(out, Operation{
 			ID:              label.ID,
 			Method:          row.Method,
 			Path:            row.Path,
 			Tags:            append([]string(nil), label.Tags...),
-			Actions:         uniqueActions(row.Actions),
+			Actions:         actions,
+			ActionObjects:   actionObjects(actions, row.NamespaceActions, label.Object),
 			Public:          row.Public,
 			IdempotencyKey:  row.IdempotencyKey || label.IdempotencyKey,
 			IfMatch:         label.IfMatch,
 			IfMatchRequired: label.IfMatchRequired,
 			ETag:            label.ETag,
+			Bodies:          copyBodies(label.Bodies),
 		})
 	}
 
@@ -151,6 +184,37 @@ func uniqueActions(actions []string) []string {
 		if !slices.Contains(out, action) {
 			out = append(out, action)
 		}
+	}
+
+	return out
+}
+
+// copyBodies returns a copy of the bodies, so that two operations of one label
+// never share them.
+func copyBodies(b *Bodies) *Bodies {
+	if b == nil {
+		return nil
+	}
+
+	out := *b
+
+	return &out
+}
+
+// actionObjects gives each action the kind of its object: the namespace for a
+// namespace action and the kind of the label for the rest. A label with no
+// kind gives the empty kind, which Validate refuses.
+func actionObjects(actions, namespaceActions []string, kind string) map[string]string {
+	out := make(map[string]string, len(actions))
+
+	for _, action := range actions {
+		if slices.Contains(namespaceActions, action) {
+			out[action] = KindNamespace
+
+			continue
+		}
+
+		out[action] = kind
 	}
 
 	return out

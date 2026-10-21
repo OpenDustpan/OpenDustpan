@@ -61,16 +61,20 @@ type revisionEntry struct {
 	Entries   []entryValue `json:"entries,omitempty"`
 }
 
+// jsonValue is a value of any JSON type. It has its own type so that the
+// description can state what it holds.
+type jsonValue any
+
 // entryValue is one entry. A secret entry holds no value unless the caller
 // revealed it with showSecrets.
 type entryValue struct {
-	Path        string `json:"path"`
-	Secret      bool   `json:"secret"`
-	Final       bool   `json:"final,omitempty"`
-	NeverStore  bool   `json:"neverStore,omitempty"`
-	Description string `json:"description,omitempty"`
-	Kind        string `json:"kind,omitempty"`
-	Value       any    `json:"value,omitempty"`
+	Path        string    `json:"path"`
+	Secret      bool      `json:"secret"`
+	Final       bool      `json:"final,omitempty"`
+	NeverStore  bool      `json:"neverStore,omitempty"`
+	Description string    `json:"description,omitempty"`
+	Kind        string    `json:"kind,omitempty"`
+	Value       jsonValue `json:"value,omitempty"`
 }
 
 func formatTime(t time.Time) string { return t.UTC().Format(time.RFC3339) }
@@ -165,7 +169,7 @@ func targetOf(r *http.Request, obj identity.Object) (profile.Target, error) {
 type createBody struct {
 	Name     string `json:"name"`
 	Document string `json:"document"`
-	Reason   string `json:"reason"`
+	Reason   string `json:"reason,omitempty"`
 }
 
 // create serves POST /profiles.
@@ -547,10 +551,7 @@ func (h *Handler) listRevisions(w http.ResponseWriter, r *http.Request, p identi
 		return
 	}
 
-	resp := struct {
-		Revisions     []revisionEntry `json:"revisions"`
-		NextPageToken string          `json:"nextPageToken,omitempty"`
-	}{Revisions: make([]revisionEntry, 0, len(revs)), NextPageToken: ""}
+	resp := listRevisionsResponse{Revisions: make([]revisionEntry, 0, len(revs)), NextPageToken: ""}
 
 	for i, rev := range revs {
 		if i == size {
@@ -565,9 +566,15 @@ func (h *Handler) listRevisions(w http.ResponseWriter, r *http.Request, p identi
 	h.writeJSON(ctx, w, http.StatusOK, resp)
 }
 
+// listRevisionsResponse is one page of revisions.
+type listRevisionsResponse struct {
+	Revisions     []revisionEntry `json:"revisions"`
+	NextPageToken string          `json:"nextPageToken,omitempty"`
+}
+
 type saveBody struct {
 	Document string `json:"document"`
-	Reason   string `json:"reason"`
+	Reason   string `json:"reason,omitempty"`
 }
 
 // save serves POST /profiles/{profile}/revisions.

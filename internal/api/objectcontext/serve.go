@@ -152,11 +152,11 @@ func (h *Handler) deleteContext(w http.ResponseWriter, r *http.Request, p identi
 // patchBody is the body of a PATCH. A field that the body leaves out stays as
 // it is.
 type patchBody struct {
-	Summary *string               `json:"summary"`
-	Runbook *string               `json:"runbook"`
-	OnCall  *string               `json:"onCall"`
-	Owners  *[]string             `json:"owners"`
-	Links   *[]objectcontext.Link `json:"links"`
+	Summary *string               `dustpan:"optional" json:"summary"`
+	Runbook *string               `dustpan:"optional" json:"runbook"`
+	OnCall  *string               `dustpan:"optional" json:"onCall"`
+	Owners  *[]string             `dustpan:"optional" json:"owners"`
+	Links   *[]objectcontext.Link `dustpan:"optional" json:"links"`
 }
 
 // readPatch decodes a PATCH body. It refuses an unknown field, a body that is

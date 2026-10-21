@@ -5,6 +5,8 @@ import (
 	_ "embed" // The checked-in document is part of the binary.
 	"encoding/json"
 	"fmt"
+	"maps"
+	"net/http"
 	"slices"
 	"strings"
 )
@@ -34,19 +36,20 @@ const (
 
 // Members and values that the writer uses more than once.
 const (
-	keyDescription = "description"
-	keyType        = "type"
-	keySchema      = "schema"
-	keyName        = "name"
-	keyRequired    = "required"
-	keyContent     = "content"
-	keyRef         = "$ref"
-	typeString     = "string"
-	typeObject     = "object"
-	mediaJSON      = "application/json"
-	refParameters  = "#/components/parameters/"
-	refHeaders     = "#/components/headers/"
-	refSchemas     = "#/components/schemas/"
+	keyDescription  = "description"
+	keyType         = "type"
+	keySchema       = "schema"
+	keyName         = "name"
+	keyRequired     = "required"
+	keyContent      = "content"
+	keyRef          = "$ref"
+	typeString      = "string"
+	typeObject      = "object"
+	mediaJSON       = "application/json"
+	mediaMergePatch = "application/merge-patch+json"
+	refParameters   = "#/components/parameters/"
+	refHeaders      = "#/components/headers/"
+	refSchemas      = "#/components/schemas/"
 
 	// maxIdempotencyKeyLength is the longest Idempotency-Key that the server
 	// accepts.
@@ -73,6 +76,11 @@ type object = map[string]any
 // cannot hold, and it writes nothing then.
 func Build(ops []Operation) ([]byte, error) {
 	if _, err := index(ops); err != nil {
+		return nil, err
+	}
+
+	schemas, err := bodySchemas(ops)
+	if err != nil {
 		return nil, err
 	}
 
@@ -103,7 +111,7 @@ func Build(ops []Operation) ([]byte, error) {
 		"tags":       tagList(ops),
 		"security":   []any{object{bearerScheme: []any{}}},
 		"paths":      paths,
-		"components": componentsObject(),
+		"components": componentsObject(schemas),
 	}
 
 	var buf bytes.Buffer
@@ -127,13 +135,36 @@ func infoObject() object {
 		"version": DocumentVersion,
 		keyDescription: "The tool-neutral REST API of an OpenDustpan server. " +
 			"The description covers the paths under " + Prefix + " only. " +
-			"A body is a generic JSON object.",
+			"A body has the schema of the Go type that the route names.",
 	}
 }
 
+// bodySchemas checks the bodies of the operations and returns the schemas of
+// the Go types that they name, by name.
+func bodySchemas(ops []Operation) (object, error) {
+	var bodies []Body
+
+	for _, op := range ops {
+		if err := op.ValidateBodies(); err != nil {
+			return nil, err
+		}
+
+		b := op.bodies()
+		bodies = append(bodies, b.Request, b.Response)
+	}
+
+	r := newReflector()
+	if err := r.reflectBodies(bodies); err != nil {
+		return nil, err
+	}
+
+	return r.schemas, nil
+}
+
 // componentsObject returns the parts that the operations share: the security
-// scheme, the two request headers, the ETag answer header and the error shape.
-func componentsObject() object {
+// scheme, the two request headers, the ETag answer header, the error shape and
+// the schemas of the bodies.
+func componentsObject(bodies object) object {
 	return object{
 		"securitySchemes": object{
 			bearerScheme: object{
@@ -169,8 +200,17 @@ func componentsObject() object {
 				keySchema:      object{keyType: typeString},
 			},
 		},
-		"schemas": object{errorSchema: errorSchemaObject()},
+		"schemas": withError(bodies),
 	}
+}
+
+// withError returns the schemas of the bodies and the error shape. A body
+// never takes the name of the error shape: the reflector refuses it.
+func withError(bodies object) object {
+	out := object{errorSchema: errorSchemaObject()}
+	maps.Copy(out, bodies)
+
+	return out
 }
 
 // headerParameter returns a header parameter of components.parameters.
@@ -221,11 +261,6 @@ func tagList(ops []Operation) []any {
 	return out
 }
 
-// jsonBody is the generic body: a JSON object with any member.
-func jsonBody() object {
-	return object{keyType: typeObject, "additionalProperties": true}
-}
-
 // operationObject returns the operation object of one operation.
 func operationObject(op Operation) object {
 	params := pathParameters(op.Path)
@@ -242,9 +277,9 @@ func operationObject(op Operation) object {
 		params = append(params, object{keyRef: refParameters + ifMatchReqName})
 	}
 
-	success := object{
-		keyDescription: "The request succeeded.",
-		keyContent:     object{mediaJSON: object{keySchema: jsonBody()}},
+	success := object{keyDescription: "The request succeeded."}
+	if response := op.bodies().Response; response.kind == bodyTyped {
+		success[keyContent] = object{mediaJSON: object{keySchema: response.ref()}}
 	}
 
 	if op.ETag {
@@ -254,7 +289,7 @@ func operationObject(op Operation) object {
 	out := object{
 		"operationId": op.ID,
 		"tags":        stringsAsAny(op.Tags),
-		actionsKey:    stringsAsAny(op.Actions),
+		actionsKey:    actionList(op),
 		"responses": object{
 			"2XX": success,
 			"default": object{
@@ -268,7 +303,7 @@ func operationObject(op Operation) object {
 		out["parameters"] = params
 	}
 
-	if body := requestBody(op.Method); body != nil {
+	if body := requestBody(op); body != nil {
 		out["requestBody"] = body
 	}
 
@@ -280,17 +315,31 @@ func operationObject(op Operation) object {
 	return out
 }
 
-// requestBody returns the generic body of a method that sends one, or nil. A
-// PATCH sends a merge patch.
-func requestBody(method string) object {
-	switch method {
-	case "POST", "PUT":
-		return object{keyContent: object{mediaJSON: object{keySchema: jsonBody()}}}
-	case "PATCH":
-		return object{keyContent: object{"application/merge-patch+json": object{keySchema: jsonBody()}}}
-	default:
+// requestBody returns the body of the request of a method that sends one, or
+// nil when the route says that it has none. A PATCH sends a merge patch.
+func requestBody(op Operation) object {
+	request := op.bodies().Request
+	if request.kind != bodyTyped {
 		return nil
 	}
+
+	media := mediaJSON
+	if op.Method == http.MethodPatch {
+		media = mediaMergePatch
+	}
+
+	return object{keyRequired: true, keyContent: object{media: object{keySchema: request.ref()}}}
+}
+
+// actionList returns the actions of the operation, each with the kind of its
+// object, in the order of the operation.
+func actionList(op Operation) []any {
+	out := make([]any, len(op.Actions))
+	for i, action := range op.Actions {
+		out[i] = object{"action": action, "object": op.ActionObjects[action]}
+	}
+
+	return out
 }
 
 // pathParameters returns one path parameter for each wildcard of the path, in

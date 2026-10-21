@@ -102,11 +102,21 @@ type Domain interface {
 // Factory returns a fresh harness for one case.
 type Factory func(t *testing.T) Harness
 
+// createRuleCases returns the cases of the rules of a create for the request
+// hash and for the first state.
+func createRuleCases() []suiteCase {
+	return []suiteCase{
+		{"a key with another request hash conflicts", testCreateKeyHashConflict},
+		{"a job that waits for approval is stored awaiting-approval", testCreateAwaitingApproval},
+		{"a job in another first state is refused", testCreateBadState},
+	}
+}
+
 // Run executes the conformance suite against harnesses from newHarness.
 func Run(t *testing.T, newHarness Factory) {
 	t.Helper()
 
-	cases := []suiteCase{
+	cases := slices.Concat([]suiteCase{
 		{"create stores a queued job and get returns it", testCreateGet},
 		{"get of an unknown ID is ErrNotFound", testGetUnknown},
 		{"two creates with one key and one spec give one job", testCreateKeyOnce},
@@ -161,7 +171,7 @@ func Run(t *testing.T, newHarness Factory) {
 		{"a dispatch of a unit that left the inventory is refused", testUnitGone},
 		{"parallel creates in several namespaces, then paging returns every job", testParallelNamespaces},
 		{"freezes list, end once, and validate", testFreezes},
-	}
+	}, createRuleCases())
 
 	for _, tc := range slices.Concat(cases, claimerCases(), endClaimCases(), claimBoundCases()) {
 		t.Run(tc.name, func(t *testing.T) {
@@ -224,6 +234,7 @@ func newJob(unit identity.Object, op job.Operation, key string) *job.Job {
 		Phases:         make([]job.Phase, len(phases)),
 		Current:        0,
 		StartedBy:      "al",
+		Source:         job.SourceAPI,
 		Agent:          "",
 		AgentMode:      "",
 		BreakGlass:     nil,
@@ -231,6 +242,7 @@ func newJob(unit identity.Object, op job.Operation, key string) *job.Job {
 		Closed:         nil,
 		Verification:   job.VerificationNone,
 		IdempotencyKey: key,
+		RequestHash:    "",
 		Version:        0,
 		CreatedAt:      time.Time{},
 		UpdatedAt:      time.Time{},

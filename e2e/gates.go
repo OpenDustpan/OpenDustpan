@@ -117,6 +117,26 @@ func (e *Env) DeleteApprovalRule(ctx context.Context, ns namespace.Name, scope g
 	})
 }
 
+// AuditEntries returns the audit entries of the namespace ns, newest first.
+// Like the gate writes, it needs the in-process server.
+func (e *Env) AuditEntries(ctx context.Context, ns namespace.Name) ([]audit.Entry, error) {
+	if e.binPath != "" || e.inprocess == nil {
+		return nil, errBinaryGates
+	}
+
+	st, ok := any(e.inprocess).(audit.Store)
+	if !ok {
+		return nil, fmt.Errorf("%w: the store %T keeps no audit log", errBinaryGates, e.inprocess)
+	}
+
+	listing, err := st.List(ctx, ns, audit.Page{Number: 1, Size: audit.MaxPageSize})
+	if err != nil {
+		return nil, fmt.Errorf("audit entries of %s: %w", ns, err)
+	}
+
+	return listing.Entries, nil
+}
+
 // StateWriteRecords returns the decision records of state.write in ns, newest
 // first.
 func (e *Env) StateWriteRecords(ctx context.Context, ns namespace.Name) ([]gate.Record, error) {

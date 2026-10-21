@@ -44,7 +44,9 @@ func fullJob(t *testing.T) job.Job {
 			Edits:    []job.FileEdit{{Path: "a.json", Keys: map[string][]byte{"k": []byte(`"v"`)}}},
 			Delivery: job.DeliveryReviewRequest,
 		},
-		State: job.StateAwaitingState, Wait: job.WaitFrozen, Reason: "because",
+		State:  job.StateAwaitingState,
+		Wait:   job.WaitFrozen,
+		Reason: "because",
 		Phases: []job.Phase{{
 			Kind: job.PhaseDeliver, Operation: "dop-1", Claims: 2, Executor: "runner-1",
 			Steps: []job.StepRecord{{
@@ -70,7 +72,11 @@ func fullJob(t *testing.T) job.Job {
 			}},
 			StartedAt: at, FinishedAt: at,
 		}},
-		Current: 1, StartedBy: "ada", Agent: "dusty", AgentMode: job.AgentModeDirect,
+		Current:    1,
+		StartedBy:  "ada",
+		Source:     job.SourceSchedule,
+		Agent:      "dusty",
+		AgentMode:  job.AgentModeDirect,
 		BreakGlass: &job.BreakGlass{Reason: "outage", Freeze: "frz-1"},
 		Delivery: &job.DeliveryResult{
 			Delivery: job.DeliveryReviewRequest, Commit: "c0ffee", Branch: "b", ReviewRequest: "https://x/1",
@@ -79,7 +85,12 @@ func fullJob(t *testing.T) job.Job {
 		Closed: &job.StateVersion{
 			Unit: unit, VersionID: "sv-2", Commit: "c0ffee", Job: "job-1", At: at, Final: true,
 		},
-		Verification: job.VerificationPending, IdempotencyKey: "key", Version: 7, CreatedAt: at, UpdatedAt: at,
+		Verification:   job.VerificationPending,
+		IdempotencyKey: "key",
+		RequestHash:    "hash",
+		Version:        7,
+		CreatedAt:      at,
+		UpdatedAt:      at,
 	}
 }
 
