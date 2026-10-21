@@ -23,5 +23,16 @@ func portableRegistryTables() []PortableTable {
 				{Name: "published_at_ms", Kind: KindTime},
 			},
 		},
+		{
+			Table:   "registry_keys",
+			OrderBy: []string{portColNamespaceID, "fingerprint"},
+			Columns: []Column{
+				{Name: portColNamespaceID, Kind: KindText},
+				{Name: "fingerprint", Kind: KindText},
+				{Name: "armored_key", Kind: KindText},
+				{Name: "added_by", Kind: KindText},
+				{Name: "added_at_ms", Kind: KindTime},
+			},
+		},
 	}
 }

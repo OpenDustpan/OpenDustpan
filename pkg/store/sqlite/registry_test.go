@@ -40,3 +40,18 @@ func TestRegistryConformance(t *testing.T) {
 
 	registrytest.RunStore(t, registryHarness)
 }
+
+func registryKeyHarness(t *testing.T) registrytest.KeyHarness {
+	t.Helper()
+
+	s := open(t)
+	h := newRegistryHarness(t, s)
+
+	return registrytest.KeyHarness{Store: s.RegistryKeys(), Namespace: h.Namespace, Entries: h.Entries}
+}
+
+func TestRegistryKeyConformance(t *testing.T) {
+	t.Parallel()
+
+	registrytest.RunKeyStore(t, registryKeyHarness)
+}

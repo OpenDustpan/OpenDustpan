@@ -134,3 +134,34 @@ func Address(ns, kind, name, system string) (registry.Address, error) {
 
 	return addr, nil
 }
+
+// KeyRow is one row of the key table, with the name of its namespace.
+type KeyRow struct {
+	Namespace   string
+	Fingerprint string
+	ArmoredKey  string
+	AddedBy     string
+	AddedAtMs   int64
+}
+
+// Key returns the key record that row holds. It runs the checks of a new key
+// again and returns ErrCorrupt for a row that fails them.
+func Key(row KeyRow) (registry.KeyRecord, error) {
+	ns, err := namespace.ParseName(row.Namespace)
+	if err != nil {
+		return registry.KeyRecord{}, fmt.Errorf("%w: namespace: %w", ErrCorrupt, err)
+	}
+
+	rec := registry.KeyRecord{
+		AddedAt:   time.UnixMilli(row.AddedAtMs).UTC(),
+		Namespace: ns,
+		Key:       registry.TrustedKey{Fingerprint: row.Fingerprint, Armored: []byte(row.ArmoredKey)},
+		AddedBy:   row.AddedBy,
+	}
+
+	if err := rec.Validate(); err != nil {
+		return registry.KeyRecord{}, fmt.Errorf("%w: %w", ErrCorrupt, err)
+	}
+
+	return rec, nil
+}

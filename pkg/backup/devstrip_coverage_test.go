@@ -87,6 +87,10 @@ var devColumnDecisions = map[string]devDecision{
 		strip:  false,
 		reason: "ID of a principal, not a subject: a view of a missing principal matches no reader",
 	},
+	"registry_keys.added_by": {
+		strip:  false,
+		reason: "ID of a principal, not a subject: history text of who registered the key",
+	},
 	"registry_releases.published_by": {
 		strip:  false,
 		reason: "ID of a principal, not a subject: history text of who published the release",

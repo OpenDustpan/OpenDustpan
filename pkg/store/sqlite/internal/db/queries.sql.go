@@ -1046,6 +1046,18 @@ func (q *Queries) CountPurgedImport(ctx context.Context, arg CountPurgedImportPa
 	return count, err
 }
 
+const countRegistryKeys = `-- name: CountRegistryKeys :one
+SELECT COUNT(*) FROM registry_keys
+WHERE namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = ?1)
+`
+
+func (q *Queries) CountRegistryKeys(ctx context.Context, namespace string) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countRegistryKeys, namespace)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const countReviewGrants = `-- name: CountReviewGrants :one
 SELECT COUNT(*)
 FROM grants g
@@ -2602,6 +2614,25 @@ type DeletePrincipalParams struct {
 
 func (q *Queries) DeletePrincipal(ctx context.Context, arg DeletePrincipalParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, deletePrincipal, arg.DeletedAtMs, arg.ID, arg.Namespace)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const deleteRegistryKey = `-- name: DeleteRegistryKey :execrows
+DELETE FROM registry_keys
+WHERE registry_keys.fingerprint = ?1
+  AND registry_keys.namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = ?2)
+`
+
+type DeleteRegistryKeyParams struct {
+	Fingerprint string
+	Namespace   string
+}
+
+func (q *Queries) DeleteRegistryKey(ctx context.Context, arg DeleteRegistryKeyParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, deleteRegistryKey, arg.Fingerprint, arg.Namespace)
 	if err != nil {
 		return 0, err
 	}
@@ -5109,6 +5140,39 @@ func (q *Queries) GetProfileRevision(ctx context.Context, arg GetProfileRevision
 	return i, err
 }
 
+const getRegistryKey = `-- name: GetRegistryKey :one
+SELECT n.name AS namespace, k.fingerprint, k.armored_key, k.added_by, k.added_at_ms
+FROM registry_keys AS k
+JOIN namespaces AS n ON n.id = k.namespace_id
+WHERE n.name = ?1 AND k.fingerprint = ?2
+`
+
+type GetRegistryKeyParams struct {
+	Namespace   string
+	Fingerprint string
+}
+
+type GetRegistryKeyRow struct {
+	Namespace   string
+	Fingerprint string
+	ArmoredKey  string
+	AddedBy     string
+	AddedAtMs   int64
+}
+
+func (q *Queries) GetRegistryKey(ctx context.Context, arg GetRegistryKeyParams) (GetRegistryKeyRow, error) {
+	row := q.db.QueryRowContext(ctx, getRegistryKey, arg.Namespace, arg.Fingerprint)
+	var i GetRegistryKeyRow
+	err := row.Scan(
+		&i.Namespace,
+		&i.Fingerprint,
+		&i.ArmoredKey,
+		&i.AddedBy,
+		&i.AddedAtMs,
+	)
+	return i, err
+}
+
 const getRegistryRelease = `-- name: GetRegistryRelease :one
 SELECT n.name AS namespace, r.kind, r.name, r.system, r.version, r.sums_file, r.sums_sha256, r.signature_file,
     r.signature_sha256, r.key_fingerprint, r.published_by, r.archives_json, r.published_at_ms
@@ -7443,6 +7507,39 @@ type InsertPurgedImportParams struct {
 func (q *Queries) InsertPurgedImport(ctx context.Context, arg InsertPurgedImportParams) error {
 	_, err := q.db.ExecContext(ctx, insertPurgedImport, arg.NamespaceID, arg.ID, arg.PurgedAtMs)
 	return err
+}
+
+const insertRegistryKey = `-- name: InsertRegistryKey :execrows
+INSERT INTO registry_keys (namespace_id, fingerprint, armored_key, added_by, added_at_ms)
+VALUES (
+    (SELECT n.id FROM namespaces AS n WHERE n.name = ?1), ?2,
+    ?3, ?4, ?5
+)
+ON CONFLICT (namespace_id, fingerprint) DO NOTHING
+`
+
+type InsertRegistryKeyParams struct {
+	Namespace   string
+	Fingerprint string
+	ArmoredKey  string
+	AddedBy     string
+	AddedAtMs   int64
+}
+
+// The caller checks the fence in the same transaction. A key with the same
+// fingerprint in the namespace is not written.
+func (q *Queries) InsertRegistryKey(ctx context.Context, arg InsertRegistryKeyParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, insertRegistryKey,
+		arg.Namespace,
+		arg.Fingerprint,
+		arg.ArmoredKey,
+		arg.AddedBy,
+		arg.AddedAtMs,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 const insertRegistryRelease = `-- name: InsertRegistryRelease :execrows
@@ -10542,6 +10639,51 @@ func (q *Queries) ListRegistryAddresses(ctx context.Context, arg ListRegistryAdd
 	for rows.Next() {
 		var i ListRegistryAddressesRow
 		if err := rows.Scan(&i.Name, &i.System); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listRegistryKeys = `-- name: ListRegistryKeys :many
+SELECT n.name AS namespace, k.fingerprint, k.armored_key, k.added_by, k.added_at_ms
+FROM registry_keys AS k
+JOIN namespaces AS n ON n.id = k.namespace_id
+WHERE n.name = ?1
+ORDER BY k.fingerprint
+`
+
+type ListRegistryKeysRow struct {
+	Namespace   string
+	Fingerprint string
+	ArmoredKey  string
+	AddedBy     string
+	AddedAtMs   int64
+}
+
+func (q *Queries) ListRegistryKeys(ctx context.Context, namespace string) ([]ListRegistryKeysRow, error) {
+	rows, err := q.db.QueryContext(ctx, listRegistryKeys, namespace)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListRegistryKeysRow
+	for rows.Next() {
+		var i ListRegistryKeysRow
+		if err := rows.Scan(
+			&i.Namespace,
+			&i.Fingerprint,
+			&i.ArmoredKey,
+			&i.AddedBy,
+			&i.AddedAtMs,
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)

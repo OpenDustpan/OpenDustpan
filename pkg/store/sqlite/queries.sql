@@ -3484,3 +3484,35 @@ FROM registry_releases AS r
 JOIN namespaces AS n ON n.id = r.namespace_id
 WHERE n.name = sqlc.arg(namespace) AND r.kind = sqlc.arg(kind)
 ORDER BY r.name, r.system;
+
+-- name: InsertRegistryKey :execrows
+-- The caller checks the fence in the same transaction. A key with the same
+-- fingerprint in the namespace is not written.
+INSERT INTO registry_keys (namespace_id, fingerprint, armored_key, added_by, added_at_ms)
+VALUES (
+    (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace)), sqlc.arg(fingerprint),
+    sqlc.arg(armored_key), sqlc.arg(added_by), sqlc.arg(added_at_ms)
+)
+ON CONFLICT (namespace_id, fingerprint) DO NOTHING;
+
+-- name: GetRegistryKey :one
+SELECT n.name AS namespace, k.fingerprint, k.armored_key, k.added_by, k.added_at_ms
+FROM registry_keys AS k
+JOIN namespaces AS n ON n.id = k.namespace_id
+WHERE n.name = sqlc.arg(namespace) AND k.fingerprint = sqlc.arg(fingerprint);
+
+-- name: CountRegistryKeys :one
+SELECT COUNT(*) FROM registry_keys
+WHERE namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace));
+
+-- name: ListRegistryKeys :many
+SELECT n.name AS namespace, k.fingerprint, k.armored_key, k.added_by, k.added_at_ms
+FROM registry_keys AS k
+JOIN namespaces AS n ON n.id = k.namespace_id
+WHERE n.name = sqlc.arg(namespace)
+ORDER BY k.fingerprint;
+
+-- name: DeleteRegistryKey :execrows
+DELETE FROM registry_keys
+WHERE registry_keys.fingerprint = sqlc.arg(fingerprint)
+  AND registry_keys.namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace));

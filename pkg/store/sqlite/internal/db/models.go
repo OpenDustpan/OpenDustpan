@@ -531,6 +531,14 @@ type ProfileRevision struct {
 	Reason         string
 }
 
+type RegistryKey struct {
+	NamespaceID string
+	Fingerprint string
+	ArmoredKey  string
+	AddedBy     string
+	AddedAtMs   int64
+}
+
 type RegistryRelease struct {
 	NamespaceID     string
 	Kind            string

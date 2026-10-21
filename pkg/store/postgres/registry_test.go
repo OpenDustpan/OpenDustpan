@@ -48,3 +48,25 @@ func TestRegistryConformance(t *testing.T) {
 
 	registrytest.RunStore(t, registryHarness(base))
 }
+
+func registryKeyHarness(base string) registrytest.KeyFactory {
+	return func(t *testing.T) registrytest.KeyHarness {
+		t.Helper()
+
+		s := open(t, base)
+		h := newRegistryHarness(t, s)
+
+		return registrytest.KeyHarness{Store: s.RegistryKeys(), Namespace: h.Namespace, Entries: h.Entries}
+	}
+}
+
+func TestRegistryKeyConformance(t *testing.T) {
+	t.Parallel()
+
+	base := os.Getenv(envURL)
+	if base == "" {
+		t.Skipf("set %s to run the PostgreSQL conformance suite", envURL)
+	}
+
+	registrytest.RunKeyStore(t, registryKeyHarness(base))
+}

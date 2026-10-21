@@ -154,6 +154,7 @@ var Tables = []string{
 	TablePersonPreferences,
 	"saved_views",
 	"registry_releases",
+	"registry_keys",
 }
 
 // TablesCopy returns a copy of Tables. Callers that sort or filter the list

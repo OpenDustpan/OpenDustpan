@@ -23,6 +23,11 @@ func pgCopyRegistryTables() []pgCopyTable {
 			},
 			orderBy: []string{pgColNamespaceID, "kind", pgColName, "system", "version"},
 		},
+		{
+			table:   "registry_keys",
+			columns: []string{pgColNamespaceID, "fingerprint", "armored_key", "added_by", "added_at_ms"},
+			orderBy: []string{pgColNamespaceID, "fingerprint"},
+		},
 	}
 }
 
@@ -74,6 +79,53 @@ func checkStagedRegistryReleases(ctx context.Context, pool *pgxpool.Pool, stagin
 
 	if rowsErr := rows.Err(); rowsErr != nil {
 		return fmt.Errorf("read staged registry releases: %w", backup.ErrExportRead)
+	}
+
+	return nil
+}
+
+// checkStagedRegistryKeys checks each key row of a staged backup with the rules
+// of a new key. A row that fails makes the backup corrupt. It returns
+// backup.ErrCorrupt.
+//
+// Defense in depth: the store checks a row again when it reads it. This check
+// stays so that a bad row fails the restore and does not wait for a reader.
+func checkStagedRegistryKeys(ctx context.Context, pool *pgxpool.Pool, staging string) error {
+	query := "SELECT n.name, k.fingerprint, k.armored_key, k.added_by, k.added_at_ms FROM " +
+		stagingTable(staging, "registry_keys") + " AS k LEFT JOIN " + stagingTable(staging, "namespaces") +
+		" AS n ON n.id = k.namespace_id"
+
+	rows, err := pool.Query(ctx, query)
+	if err != nil {
+		return fmt.Errorf("read staged registry keys: %w", backup.ErrExportRead)
+	}
+
+	defer rows.Close()
+
+	for rows.Next() {
+		var (
+			row       registrystore.KeyRow
+			namespace *string
+		)
+
+		if scanErr := rows.Scan(&namespace, &row.Fingerprint, &row.ArmoredKey, &row.AddedBy, &row.AddedAtMs); scanErr != nil {
+			return fmt.Errorf("read staged registry keys: %w", backup.ErrExportRead)
+		}
+
+		// A key of a namespace that the backup does not hold is corrupt.
+		if namespace == nil {
+			return fmt.Errorf("staged registry key %q has no namespace: %w", row.Fingerprint, backup.ErrCorrupt)
+		}
+
+		row.Namespace = *namespace
+
+		if _, keyErr := registrystore.Key(row); keyErr != nil {
+			return fmt.Errorf("staged registry key %q is not valid: %w: %w", row.Fingerprint, keyErr, backup.ErrCorrupt)
+		}
+	}
+
+	if rowsErr := rows.Err(); rowsErr != nil {
+		return fmt.Errorf("read staged registry keys: %w", backup.ErrExportRead)
 	}
 
 	return nil

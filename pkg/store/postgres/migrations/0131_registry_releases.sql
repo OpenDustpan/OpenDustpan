@@ -22,3 +22,17 @@ CREATE TABLE registry_releases (
     published_at_ms  bigint  NOT NULL,
     PRIMARY KEY (namespace_id, kind, name, system, version)
 );
+
+-- Registry keys are the trusted signing keys of a namespace. A provider release
+-- needs a signature by one of them. fingerprint is the fingerprint of the
+-- primary key in uppercase hex, and armored_key is the public key in ASCII
+-- armor. added_by is the ID of the principal that registered the key, and it is
+-- not a foreign key because a key outlives the principal.
+CREATE TABLE registry_keys (
+    namespace_id text NOT NULL REFERENCES namespaces (id),
+    fingerprint  text NOT NULL,
+    armored_key  text NOT NULL,
+    added_by     text NOT NULL,
+    added_at_ms  bigint NOT NULL,
+    PRIMARY KEY (namespace_id, fingerprint)
+);
