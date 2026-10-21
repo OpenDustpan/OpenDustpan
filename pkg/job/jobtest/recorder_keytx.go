@@ -45,7 +45,7 @@ func recordingKey(after error) job.NewItemKeyFunc {
 			Blob:      secret.ItemKeyBlobInfo{MD5: [16]byte{1}, Size: keyBlobSize, Version: 1},
 		})
 		if err != nil {
-			return secret.ItemKey{}, err //nolint:wrapcheck // The case reads the error as it is.
+			return secret.ItemKey{}, err
 		}
 
 		return k, after
@@ -170,7 +170,8 @@ func testKeyRollsBackWithLog(t *testing.T, h RecorderHarness) {
 	nl := newLogFor(t, h, a, recordingKey(errKeyFunc))
 	reserve := job.ChunkReserve{Seq: 0, SHA256: emptySHA256, Size: 0}
 
-	if _, err := h.Records.ReserveLogChunk(t.Context(), a.Claim, stepPrepare, reserve, nl); !errors.Is(err, errKeyFunc) {
+	_, err := h.Records.ReserveLogChunk(t.Context(), a.Claim, stepPrepare, reserve, nl)
+	if !errors.Is(err, errKeyFunc) {
 		t.Fatalf("ReserveLogChunk = %v, want the error of the key function", err)
 	}
 

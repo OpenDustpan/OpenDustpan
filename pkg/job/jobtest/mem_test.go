@@ -77,20 +77,21 @@ type memDB struct {
 
 func newMemDB() *memDB {
 	return &memDB{
-		mu:      sync.Mutex{},
-		durable: durabletest.NewMem().Store(),
-		fences:  map[namespace.Name]int64{},
-		nsIDs:   map[namespace.Name]namespace.ID{},
-		records: newMemRecords(),
-		states:  map[string]string{},
-		finals:  map[string]job.StateVersion{},
-		jobs:    map[job.ID]*job.Job{},
-		order:   nil,
-		keys:    map[string]job.ID{},
-		freezes: map[string]*job.Freeze{},
-		audit:   map[namespace.Name][]audit.Entry{},
-		locks:   map[string]manuallock.Lock{},
-		units:   map[string]collection.UnitRef{},
+		mu:       sync.Mutex{},
+		durable:  durabletest.NewMem().Store(),
+		fences:   map[namespace.Name]int64{},
+		itemKeys: nil,
+		nsIDs:    map[namespace.Name]namespace.ID{},
+		records:  newMemRecords(),
+		states:   map[string]string{},
+		finals:   map[string]job.StateVersion{},
+		jobs:     map[job.ID]*job.Job{},
+		order:    nil,
+		keys:     map[string]job.ID{},
+		freezes:  map[string]*job.Freeze{},
+		audit:    map[namespace.Name][]audit.Entry{},
+		locks:    map[string]manuallock.Lock{},
+		units:    map[string]collection.UnitRef{},
 	}
 }
 
@@ -232,19 +233,6 @@ func (m *memDB) GetNamespace(_ context.Context, name namespace.Name) (namespace.
 	defer m.mu.Unlock()
 
 	return m.namespaceLocked(name)
-}
-
-// namespaceLocked returns the namespace name. The caller holds m.mu.
-func (m *memDB) namespaceLocked(name namespace.Name) (namespace.Namespace, error) {
-	v, ok := m.fences[name]
-	if !ok {
-		return namespace.Namespace{}, namespace.ErrNotFound
-	}
-
-	return namespace.Namespace{
-		ID: m.nsIDs[name], CreatedAt: time.Time{}, Name: name, HomeRegion: "", FailoverVersion: v,
-		Overrides: namespace.Overrides{Forced: false, Unlocked: false},
-	}, nil
 }
 
 // RecordStepBegin implements jobtest.Domain. It checks the claim as the SQL
@@ -637,6 +625,19 @@ func (m *memDB) ListFreezes(_ context.Context, ns namespace.Name, since time.Tim
 	slices.SortFunc(out, func(a, b job.Freeze) int { return a.StartsAt.Compare(b.StartsAt) })
 
 	return out, nil
+}
+
+// namespaceLocked returns the namespace name. The caller holds m.mu.
+func (m *memDB) namespaceLocked(name namespace.Name) (namespace.Namespace, error) {
+	v, ok := m.fences[name]
+	if !ok {
+		return namespace.Namespace{}, namespace.ErrNotFound
+	}
+
+	return namespace.Namespace{
+		ID: m.nsIDs[name], CreatedAt: time.Time{}, Name: name, HomeRegion: "", FailoverVersion: v,
+		Overrides: namespace.Overrides{Forced: false, Unlocked: false},
+	}, nil
 }
 
 // lookup returns the job id, and false when the store does not know it.

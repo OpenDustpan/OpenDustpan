@@ -158,26 +158,32 @@ func (s *Store) ReserveLogChunk(
 	return plan, nil
 }
 
+// newItem names a new plan or log version and the function that makes its item
+// key.
+type newItem struct {
+	ref  secret.ItemRef
+	mk   job.NewItemKeyFunc
+	kind secret.ItemKind
+	id   string
+}
+
 // newItemKey creates the item key of the new item of kind and ID item, in the
 // transaction tx, and returns the ID of its record.
 //
 // Defense in depth: the recorder builds the reference from the same item, and
 // the sealer checks the namespace against the fence. This check stays so that
 // a record never lands for another item than the row that commits with it.
-func newItemKey(
-	ctx context.Context, tx Tx, fence namespace.Fence, ref secret.ItemRef, mk job.NewItemKeyFunc,
-	kind secret.ItemKind, item string,
-) (secret.ItemKeyID, error) {
+func newItemKey(ctx context.Context, tx Tx, fence namespace.Fence, n *newItem) (secret.ItemKeyID, error) {
 	switch {
-	case mk == nil:
+	case n.mk == nil:
 		return "", fmt.Errorf("%w: no item key function", job.ErrInvalid)
-	case ref.Kind != kind || ref.Item != item || ref.Scope.Namespace != fence.Namespace:
-		return "", fmt.Errorf("%w: the item key reference does not name the new %s %s", job.ErrInvalid, kind, item)
+	case n.ref.Kind != n.kind || n.ref.Item != n.id || n.ref.Scope.Namespace != fence.Namespace:
+		return "", fmt.Errorf("%w: the item key reference does not name the new %s %s", job.ErrInvalid, n.kind, n.id)
 	}
 
-	key, err := mk(ctx, tx.ItemKeys(fence), ref, fence)
+	key, err := n.mk(ctx, tx.ItemKeys(fence), n.ref, fence)
 	if err != nil {
-		return "", fmt.Errorf("create item key of %s %s: %w", kind, item, err)
+		return "", fmt.Errorf("create item key of %s %s: %w", n.kind, n.id, err)
 	}
 
 	return key.ID, nil
@@ -196,7 +202,9 @@ type logCreate struct {
 func createLog(ctx context.Context, tx Tx, j *job.Job, lc *logCreate) error {
 	log := lc.log.Log
 
-	key, err := newItemKey(ctx, tx, lc.pc.Fence, lc.log.Ref, lc.log.NewKey, secret.ItemKindJobLog, log.ID)
+	key, err := newItemKey(ctx, tx, lc.pc.Fence, &newItem{
+		ref: lc.log.Ref, mk: lc.log.NewKey, kind: secret.ItemKindJobLog, id: log.ID,
+	})
 	if err != nil {
 		return err
 	}
@@ -269,28 +277,42 @@ func (s *Store) ConfirmLogChunk(ctx context.Context, pc job.PhaseClaim, step, ve
 // that. gatePlan then returns the job and the stale error in stale, and the
 // caller returns with no further write. The caller gives the stale error to its
 // own caller after the commit.
-func gatePlan(ctx context.Context, tx Tx, pc *job.PhaseClaim) (j job.Job, stale error, err error) {
-	j, err = claimed(ctx, tx, *pc)
+func gatePlan(ctx context.Context, tx Tx, pc *job.PhaseClaim) (planGate, error) {
+	j, err := claimed(ctx, tx, *pc)
 	if err != nil {
-		return job.Job{}, nil, err
+		return planGate{}, err
 	}
 
 	current, err := tx.StateVersion(ctx, pc.Fence.Namespace, j.Spec.Unit.UnitID())
 	if err != nil {
-		return job.Job{}, nil, err
+		return planGate{}, err
 	}
 
 	checkErr := job.CheckPutPlan(&j, pc.Phase, current)
 
 	switch {
 	case checkErr == nil:
-		return j, nil, nil
+		return planGate{j: j, stale: nil}, nil
 	case !errors.Is(checkErr, job.ErrPlanStale):
-		return job.Job{}, nil, checkErr
-	default:
-		return j, checkErr, failPhase(ctx, tx, &j, pc, checkErr)
+		return planGate{}, checkErr
 	}
+
+	if failErr := failPhase(ctx, tx, &j, pc, checkErr); failErr != nil {
+		return planGate{}, failErr
+	}
+
+	return planGate{j: j, stale: checkErr}, nil
 }
+
+// planGate is the result of gatePlan: the job, and the stale error when the
+// plan read a state version that is not the current one.
+type planGate struct {
+	j     job.Job
+	stale error
+}
+
+// isStale reports whether the plan read a state version that is not current.
+func (g *planGate) isStale() bool { return g.stale != nil }
 
 // ReservePlan implements job.RecordStore.
 func (s *Store) ReservePlan(ctx context.Context, pc job.PhaseClaim, np *job.NewPlan) (job.PlanRef, error) {
@@ -300,20 +322,24 @@ func (s *Store) ReservePlan(ctx context.Context, pc job.PhaseClaim, np *job.NewP
 	)
 
 	err := s.run.Write(ctx, pc.Fence, func(tx Tx) error {
-		j, staleErr, err := gatePlan(ctx, tx, &pc)
+		g, err := gatePlan(ctx, tx, &pc)
 		if err != nil {
 			return err
 		}
 
-		if staleErr != nil {
-			stale = staleErr
+		if g.isStale() {
+			stale = g.stale
 
 			return nil
 		}
 
+		j := g.j
+
 		p := np.Plan
 
-		key, err := newItemKey(ctx, tx, pc.Fence, np.Ref, np.NewKey, secret.ItemKindPlan, p.ID)
+		key, err := newItemKey(ctx, tx, pc.Fence, &newItem{
+			ref: np.Ref, mk: np.NewKey, kind: secret.ItemKindPlan, id: p.ID,
+		})
 		if err != nil {
 			return err
 		}
@@ -350,16 +376,18 @@ func (s *Store) PutPlan(ctx context.Context, pc job.PhaseClaim, p job.PlanRef) (
 	)
 
 	err := s.run.Write(ctx, pc.Fence, func(tx Tx) error {
-		j, staleErr, err := gatePlan(ctx, tx, &pc)
+		g, err := gatePlan(ctx, tx, &pc)
 		if err != nil {
 			return err
 		}
 
-		if staleErr != nil {
-			stale = staleErr
+		if g.isStale() {
+			stale = g.stale
 
 			return nil
 		}
+
+		j := g.j
 
 		if reserveErr := checkReserved(ctx, tx, &j, &pc, &p); reserveErr != nil {
 			return reserveErr

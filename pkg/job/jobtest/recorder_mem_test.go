@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"sync"
 	"testing"
 	"time"
@@ -91,29 +92,13 @@ type memKeyTx struct {
 	staged map[secret.ItemRef]secret.ItemKey
 }
 
-// begin starts a transaction under fence. The caller holds the lock of the
-// memDB.
-func (m *memKeyIndex) begin(fence namespace.Fence) *memKeyTx {
-	return &memKeyTx{idx: m, fence: fence, staged: map[secret.ItemRef]secret.ItemKey{}}
-}
-
-// commit stores the staged records.
-func (t *memKeyTx) commit() {
-	t.idx.mu.Lock()
-	defer t.idx.mu.Unlock()
-
-	for ref, k := range t.staged {
-		t.idx.keys[ref] = k
-	}
-}
-
 // CreateItemKey implements secret.ItemKeyTx.
-func (t *memKeyTx) CreateItemKey(_ context.Context, k secret.ItemKey) (secret.ItemKey, error) {
+func (t *memKeyTx) CreateItemKey(ctx context.Context, k secret.ItemKey) (secret.ItemKey, error) {
 	if k.Ref.Scope.Namespace != t.fence.Namespace {
 		return secret.ItemKey{}, namespace.ErrFenced
 	}
 
-	if have, err := t.GetItemKey(context.Background(), k.Ref); err == nil || errors.Is(err, secret.ErrShredded) {
+	if have, err := t.GetItemKey(ctx, k.Ref); err == nil || errors.Is(err, secret.ErrShredded) {
 		return have, err
 	}
 
@@ -134,6 +119,14 @@ func (t *memKeyTx) GetItemKey(ctx context.Context, ref secret.ItemRef) (secret.I
 // GetNamespace implements secret.ItemKeyTx. The memDB is locked already.
 func (t *memKeyTx) GetNamespace(_ context.Context, name namespace.Name) (namespace.Namespace, error) {
 	return t.idx.db.namespaceLocked(name)
+}
+
+// commit stores the staged records.
+func (t *memKeyTx) commit() {
+	t.idx.mu.Lock()
+	defer t.idx.mu.Unlock()
+
+	maps.Copy(t.idx.keys, t.staged)
 }
 
 // InItemKeyTx implements secret.ItemKeyStore.
@@ -239,6 +232,12 @@ func (m *memKeyIndex) ListItemKeys(context.Context, secret.Scope, secret.ItemKey
 // ListItemKeyWrapperIDs implements secret.ItemKeyIndex.
 func (m *memKeyIndex) ListItemKeyWrapperIDs(context.Context) ([]string, error) {
 	return []string{}, nil
+}
+
+// begin starts a transaction under fence. The caller holds the lock of the
+// memDB.
+func (m *memKeyIndex) begin(fence namespace.Fence) *memKeyTx {
+	return &memKeyTx{idx: m, fence: fence, staged: map[secret.ItemRef]secret.ItemKey{}}
 }
 
 // memRecords holds the rows that the recorder adds to the jobs in a memDB: the
@@ -394,7 +393,11 @@ func (m *memDB) ReserveLogChunk(
 	if plan.CreateLog {
 		log := newLog.Log
 
-		key, keyErr := m.newKey(ctx, pc.Fence, newLog.NewKey, newLog.Ref, secret.ItemKindJobLog, log.ID)
+		key, keyErr := m.newKey(
+			ctx,
+			pc.Fence,
+			&memNewItem{mk: newLog.NewKey, ref: newLog.Ref, kind: secret.ItemKindJobLog, id: log.ID},
+		)
 		if keyErr != nil {
 			return job.ChunkPlan{}, fmt.Errorf("reserve log chunk: %w", keyErr)
 		}
@@ -446,33 +449,47 @@ func (m *memDB) ConfirmLogChunk(ctx context.Context, pc job.PhaseClaim, step, ve
 
 // gatePlan applies the rules of a plan write. For a stale plan it fails the
 // phase and returns the stale error in stale. The caller holds m.mu.
-func (m *memDB) gatePlan(ctx context.Context, pc job.PhaseClaim) (next job.Job, stale error, err error) {
-	next, err = m.guard(ctx, pc)
+func (m *memDB) gatePlan(ctx context.Context, pc job.PhaseClaim) (memGate, error) {
+	next, err := m.guard(ctx, pc)
 	if err != nil {
-		return job.Job{}, nil, err
+		return memGate{}, err
 	}
 
-	current := m.states[next.Spec.Unit.UnitID()]
-
-	checkErr := job.CheckPutPlan(&next, pc.Phase, current)
+	checkErr := job.CheckPutPlan(&next, pc.Phase, m.states[next.Spec.Unit.UnitID()])
 
 	switch {
 	case checkErr == nil:
-		return next, nil, nil
+		return memGate{next: next, stale: nil}, nil
 	case !errors.Is(checkErr, job.ErrPlanStale):
-		return job.Job{}, nil, checkErr
-	default:
-		return job.Job{}, checkErr, m.failStalePhase(ctx, pc, checkErr)
+		return memGate{}, checkErr
 	}
+
+	if failErr := m.failStalePhase(ctx, pc, checkErr); failErr != nil {
+		return memGate{}, failErr
+	}
+
+	return memGate{next: next, stale: checkErr}, nil
+}
+
+// memGate is the result of gatePlan: the job, and the stale error.
+type memGate struct {
+	next  job.Job
+	stale error
+}
+
+// memNewItem names a new plan or log version and its item key function.
+type memNewItem struct {
+	mk   job.NewItemKeyFunc
+	ref  secret.ItemRef
+	kind secret.ItemKind
+	id   string
 }
 
 // newKey makes the item key of a new item with mk in a transaction of the key
 // index, and commits the transaction when mk succeeds. The caller holds m.mu.
-func (m *memDB) newKey(
-	ctx context.Context, fence namespace.Fence, mk job.NewItemKeyFunc, ref secret.ItemRef, kind secret.ItemKind,
-	item string,
-) (secret.ItemKey, error) {
-	if mk == nil || ref.Kind != kind || ref.Item != item || ref.Scope.Namespace != fence.Namespace {
+func (m *memDB) newKey(ctx context.Context, fence namespace.Fence, n *memNewItem) (secret.ItemKey, error) {
+	mk, ref := n.mk, n.ref
+	if mk == nil || ref.Kind != n.kind || ref.Item != n.id || ref.Scope.Namespace != fence.Namespace {
 		return secret.ItemKey{}, fmt.Errorf("%w: the item key function or reference does not fit the new item",
 			job.ErrInvalid)
 	}
@@ -481,7 +498,7 @@ func (m *memDB) newKey(
 
 	key, err := mk(ctx, keyTx, ref, fence)
 	if err != nil {
-		return secret.ItemKey{}, err //nolint:wrapcheck // The caller wraps it.
+		return secret.ItemKey{}, err
 	}
 
 	keyTx.commit()
@@ -494,16 +511,22 @@ func (m *memDB) ReservePlan(ctx context.Context, pc job.PhaseClaim, np *job.NewP
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	next, stale, err := m.gatePlan(ctx, pc)
+	g, err := m.gatePlan(ctx, pc)
 	if err != nil {
 		return job.PlanRef{}, err
 	}
 
-	if stale != nil {
-		return job.PlanRef{}, fmt.Errorf("reserve plan: %w", stale)
+	if g.stale != nil {
+		return job.PlanRef{}, fmt.Errorf("reserve plan: %w", g.stale)
 	}
 
-	key, err := m.newKey(ctx, pc.Fence, np.NewKey, np.Ref, secret.ItemKindPlan, np.Plan.ID)
+	next := g.next
+
+	key, err := m.newKey(
+		ctx,
+		pc.Fence,
+		&memNewItem{mk: np.NewKey, ref: np.Ref, kind: secret.ItemKindPlan, id: np.Plan.ID},
+	)
 	if err != nil {
 		return job.PlanRef{}, fmt.Errorf("reserve plan: %w", err)
 	}
@@ -520,14 +543,16 @@ func (m *memDB) PutPlan(ctx context.Context, pc job.PhaseClaim, p job.PlanRef) (
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	next, stale, err := m.gatePlan(ctx, pc)
+	g, err := m.gatePlan(ctx, pc)
 	if err != nil {
 		return job.PlanRef{}, err
 	}
 
-	if stale != nil {
-		return job.PlanRef{}, fmt.Errorf("put plan: %w", stale)
+	if g.stale != nil {
+		return job.PlanRef{}, fmt.Errorf("put plan: %w", g.stale)
 	}
+
+	next := g.next
 
 	e, ok := m.records.plans[p.ID]
 

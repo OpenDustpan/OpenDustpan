@@ -115,6 +115,8 @@ type ArtifactRecord struct {
 // namespace.ErrFenced for a stale fence, ErrNotFound for an unknown job, and
 // ErrClaimLost (with durable.ErrClaimLost) for a claim that is not live or a
 // phase that the job is not at. It changes nothing on an error.
+//
+//nolint:interfacebloat // One port for the writes and the lookup of one record set: the recorder needs them all in one transaction each.
 type RecordStore interface {
 	// BeginStep records the begin of the step called name under the claim,
 	// with the time of the store. It returns ErrCanceled while a cancel is

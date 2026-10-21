@@ -617,7 +617,9 @@ func (t *jobTx) InsertPlan(ctx context.Context, ns namespace.Name, r jobstore.Pl
 
 // UpdatePlan implements jobstore.Tx.
 func (t *jobTx) UpdatePlan(ctx context.Context, ns namespace.Name, r jobstore.PlanRow) error {
-	if err := t.q.UpdateJobPlanBody(ctx, db.UpdateJobPlanBodyParams{ID: r.ID, Namespace: ns.String(), Body: r.Body}); err != nil {
+	params := db.UpdateJobPlanBodyParams{ID: r.ID, Namespace: ns.String(), Body: r.Body}
+
+	if err := t.q.UpdateJobPlanBody(ctx, params); err != nil {
 		return jobIndexError("update plan", err)
 	}
 
@@ -625,6 +627,8 @@ func (t *jobTx) UpdatePlan(ctx context.Context, ns namespace.Name, r jobstore.Pl
 }
 
 // ItemKeys implements jobstore.Tx.
+//
+//nolint:ireturn // The method of jobstore.Tx returns the interface.
 func (t *jobTx) ItemKeys(fence namespace.Fence) secret.ItemKeyTx {
 	return itemKeyTx{q: t.q, fence: fence}
 }
