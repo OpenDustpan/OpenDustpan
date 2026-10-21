@@ -107,8 +107,9 @@ func (a adapters) routeSources() []routeSource {
 }
 
 // describeOperations returns the joined operations of the adapters, or an
-// error that names the first operation that breaks the allowlists of apidesc
-// or the first handler that hides its routes, so that a server never starts
+// error that names the first operation that breaks the allowlists of apidesc,
+// the first operation that leaves a body unmarked, or the first handler that hides its routes, so that a server never
+// starts
 // with a description that the writer would refuse or that misses a route.
 func (a adapters) describeOperations() ([]apidesc.Operation, error) {
 	return describeHandlers(a.handlers())
@@ -172,6 +173,10 @@ func describeHandlers(handlers []namedHandler) ([]apidesc.Operation, error) {
 
 	for _, op := range ops {
 		if err := op.Validate(); err != nil {
+			return nil, fmt.Errorf("api description: %w", err)
+		}
+
+		if err := op.ValidateBodies(); err != nil {
 			return nil, fmt.Errorf("api description: %w", err)
 		}
 	}

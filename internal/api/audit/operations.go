@@ -28,8 +28,12 @@ func (h *Handler) Operations() []apidesc.Operation {
 		}
 
 		rows = append(rows, apidesc.Row{
-			Method: route.Method, Path: route.Path, Actions: actions, Public: route.Scope == ScopePublic,
-			IdempotencyKey: false,
+			Method:           route.Method,
+			Path:             route.Path,
+			Actions:          actions,
+			NamespaceActions: nil,
+			Public:           route.Scope == ScopePublic,
+			IdempotencyKey:   false,
 		})
 	}
 

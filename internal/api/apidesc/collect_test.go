@@ -25,8 +25,14 @@ func TestCollectSkipsOnlyTheExactUndescribedRoutes(t *testing.T) {
 	method, path, _ := strings.Cut(listed, " ")
 
 	rows := []apidesc.Row{
-		{Method: method, Path: path, Actions: []string{"unit:read"}, Public: false, IdempotencyKey: false},
-		{Method: method, Path: path + "/extra", Actions: []string{"unit:read"}, Public: false, IdempotencyKey: false},
+		{
+			Method: method, Path: path, Actions: []string{"unit:read"}, NamespaceActions: nil, Public: false,
+			IdempotencyKey: false,
+		},
+		{
+			Method: method, Path: path + "/extra", Actions: []string{"unit:read"}, NamespaceActions: nil,
+			Public: false, IdempotencyKey: false,
+		},
 	}
 
 	got := apidesc.Collect(rows, nil)
@@ -42,18 +48,20 @@ func TestCollectTakesTheKeyFromTheRowOrTheLabel(t *testing.T) {
 
 	rows := []apidesc.Row{
 		{
-			Method:         "POST",
-			Path:           "/api/dustpan/v1/things",
-			Actions:        []string{"thing:write"},
-			Public:         false,
-			IdempotencyKey: true,
+			Method:           "POST",
+			Path:             "/api/dustpan/v1/things",
+			Actions:          []string{"thing:write"},
+			NamespaceActions: nil,
+			Public:           false,
+			IdempotencyKey:   true,
 		},
 		{
-			Method:         "GET",
-			Path:           "/api/dustpan/v1/things",
-			Actions:        []string{"thing:read"},
-			Public:         false,
-			IdempotencyKey: false,
+			Method:           "GET",
+			Path:             "/api/dustpan/v1/things",
+			Actions:          []string{"thing:read"},
+			NamespaceActions: nil,
+			Public:           false,
+			IdempotencyKey:   false,
 		},
 	}
 	labels := map[string]apidesc.Label{

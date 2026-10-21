@@ -6,6 +6,7 @@ import (
 	"errors"
 	"regexp"
 	"slices"
+	"strings"
 	"testing"
 
 	"opendustpan.org/opendustpan/internal/api/apidesc"
@@ -325,9 +326,82 @@ type walkState struct {
 func TestCheckedInDocumentUsesTheSubsetOf30(t *testing.T) {
 	t.Parallel()
 
-	for _, problem := range subsetProblems("$", decoded(t), walkState{inProperties: false, openEnum: false}) {
+	doc := decoded(t)
+	allowed := openEnumComponents(doc)
+
+	for _, problem := range subsetProblems("$", doc, walkState{inProperties: false, openEnum: false}) {
+		// The values of an open enum sit in a schema of their own, and the
+		// use is anyOf [ref, string]. That schema is not a closed enum.
+		if name, ok := closedEnumComponent(problem); ok && allowed[name] {
+			continue
+		}
+
 		t.Error(problem)
 	}
+}
+
+// closedEnumComponent returns the name of the component schema that a
+// closed-enum problem is about.
+func closedEnumComponent(problem string) (string, bool) {
+	rest, ok := strings.CutPrefix(problem, "$.components.schemas.")
+	if !ok {
+		return "", false
+	}
+
+	name, _, found := strings.Cut(rest, " has a closed enum")
+
+	return name, found
+}
+
+// openEnumComponents returns the names of the component schemas that an anyOf
+// refers to, next to a plain string. Each is the list of values of an open
+// enum.
+func openEnumComponents(doc map[string]any) map[string]bool {
+	found := map[string]bool{}
+
+	collectOpenEnumRefs(doc, found)
+
+	return found
+}
+
+// collectOpenEnumRefs adds the references of each open anyOf below the value.
+func collectOpenEnumRefs(v any, found map[string]bool) {
+	switch x := v.(type) {
+	case map[string]any:
+		if anyOf, ok := x["anyOf"].([]any); ok && hasPlainString(anyOf) {
+			for _, ref := range refsOfAlternatives(anyOf) {
+				found[strings.TrimPrefix(ref, "#/components/schemas/")] = true
+			}
+		}
+
+		for _, child := range x {
+			collectOpenEnumRefs(child, found)
+		}
+	case []any:
+		for _, child := range x {
+			collectOpenEnumRefs(child, found)
+		}
+	default:
+		// A string, a number, a boolean or null holds no schema.
+	}
+}
+
+// refsOfAlternatives returns the references among the alternatives of an anyOf.
+func refsOfAlternatives(alts []any) []string {
+	var refs []string
+
+	for _, alt := range alts {
+		m, isObject := alt.(map[string]any)
+		if !isObject {
+			continue
+		}
+
+		if ref, isString := m["$ref"].(string); isString {
+			refs = append(refs, ref)
+		}
+	}
+
+	return refs
 }
 
 // TestSubsetCheckSeesTheForbiddenForms proves that the walk finds each form
@@ -513,5 +587,41 @@ func TestReadFailsClosed(t *testing.T) {
 		if !errors.Is(readErr, apidesc.ErrInvalidDocument) || ops != nil {
 			t.Errorf("%s: Read() = %d operations, %v; want ErrInvalidDocument", name, len(ops), readErr)
 		}
+	}
+}
+
+// TestOpenEnumComponentNeedsAnOpenUse proves that a schema with an enum passes
+// the subset check when an anyOf refers to it next to a plain string, and fails
+// when no such anyOf does.
+func TestOpenEnumComponentNeedsAnOpenUse(t *testing.T) {
+	t.Parallel()
+
+	var doc map[string]any
+
+	text := `{"components":{"schemas":{
+	"Open":{"type":"string","enum":["a"]},
+	"Closed":{"type":"string","enum":["b"]},
+	"Holder":{"type":"object","properties":{
+	"kind":{"anyOf":[{"$ref":"#/components/schemas/Open"},{"type":"string"}]}}}}}}`
+
+	if err := json.Unmarshal([]byte(text), &doc); err != nil {
+		t.Fatal(err)
+	}
+
+	allowed := openEnumComponents(doc)
+	if !allowed["Open"] || allowed["Closed"] || allowed["Holder"] {
+		t.Fatalf("openEnumComponents() = %v, want only Open", allowed)
+	}
+
+	var flagged []string
+
+	for _, problem := range subsetProblems("$", doc, walkState{inProperties: false, openEnum: false}) {
+		if name, ok := closedEnumComponent(problem); ok && !allowed[name] {
+			flagged = append(flagged, name)
+		}
+	}
+
+	if !slices.Equal(flagged, []string{"Closed"}) {
+		t.Errorf("closed enums = %v, want [Closed]", flagged)
 	}
 }
