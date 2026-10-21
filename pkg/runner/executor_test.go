@@ -176,8 +176,15 @@ func TestExecutorBasics(t *testing.T) {
 // the purpose, and the plan steps of a refresh-only plan.
 func driftSpec(s *job.Spec) {
 	s.Operation, s.Purpose = job.OperationRefresh, job.PurposeDriftCheck
-	s.Steps = []job.Step{toolStep("plan", job.PhasePlan, "plan", false)}
-	s.Steps[0].Env = map[string]string{"TF_IN_AUTOMATION": "1"}
+	s.Steps = []job.Step{
+		toolStep("init", job.PhasePlan, "init", false), toolStep("plan", job.PhasePlan, "plan", false),
+	}
+	s.Steps[0].Args = []string{"tofu", "init", "-input=false"}
+	s.Steps[1].Args = []string{"tofu", "plan", "-refresh-only", "-input=false", "-out=drift.tfplan"}
+
+	for i := range s.Steps {
+		s.Steps[i].Env = map[string]string{"TF_IN_AUTOMATION": "1"}
+	}
 }
 
 // driftCases returns the cases of a drift check. A drift check has the plan

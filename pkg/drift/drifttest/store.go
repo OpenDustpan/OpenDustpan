@@ -1,9 +1,11 @@
 package drifttest
 
 import (
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -20,6 +22,7 @@ func storeCases() []suiteCase {
 		{"store: the kinds, the order and the truncated mark of a result come back", testRecordRoundTrip},
 		{"store: a result that fails validation changes nothing", testRecordInvalid},
 		{"store: an older or equal result is stale", testRecordStale},
+		{"store: concurrent records never leave an older result", testRecordConcurrent},
 		{"store: the same job twice is stale", testRecordSameJob},
 		{"store: a job that is not a finished drift check of the unit is refused", testRecordJobMismatch},
 		{"store: a result checked outside the run of its job is refused", testRecordOutsideJob},
@@ -224,6 +227,64 @@ func testRecordStale(t *testing.T, h Harness) {
 
 	if got.Status != drift.StatusDrifted || !got.CheckedAt.Equal(at(minute5)) {
 		t.Errorf("latest = %+v, want the first result unchanged", got)
+	}
+}
+
+// testRecordConcurrent sends the results of minutes 1 to 9 of one unit at the
+// same time, so that two writers can read the same stored row. Each record
+// returns nil or ErrStale, the newest one returns nil, and the stored result
+// is the newest one, whatever the order of the writers.
+func testRecordConcurrent(t *testing.T, h Harness) {
+	t.Helper()
+
+	const first, last = 1, 9
+
+	f := h.Namespace(t, "acme")
+
+	for round := range 3 {
+		u := unit("acme", fmt.Sprintf("wsp-%d", round))
+		ids := make(map[int]job.ID, last)
+
+		// Jobs are made before the writers start: the factory may stop the test.
+		for n := first; n <= last; n++ {
+			ids[n] = h.Jobs.DriftCheck(t, u)
+		}
+
+		errs := make(map[int]error, last)
+
+		var (
+			wg sync.WaitGroup
+			mu sync.Mutex
+		)
+
+		for n := first; n <= last; n++ {
+			wg.Go(func() {
+				_, err := h.Store.Record(t.Context(), result(u, ids[n], n, "a"), f)
+
+				mu.Lock()
+				errs[n] = err
+				mu.Unlock()
+			})
+		}
+
+		wg.Wait()
+
+		for n, err := range errs {
+			if err != nil && !errors.Is(err, drift.ErrStale) {
+				t.Errorf("round %d: record of minute %d = %v, want nil or ErrStale", round, n, err)
+			}
+		}
+
+		if errs[last] != nil {
+			t.Errorf("round %d: record of the newest minute = %v, want nil", round, errs[last])
+		}
+
+		got, err := h.Store.GetLatest(t.Context(), u)
+		must(t, "get", err)
+
+		if !got.CheckedAt.Equal(at(last)) || got.JobID != ids[last] {
+			t.Errorf("round %d: latest = %+v, want the result of minute %d", round, got, last)
+		}
 	}
 }
 

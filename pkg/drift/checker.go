@@ -61,6 +61,11 @@ func (s *Service) Check(ctx context.Context, actor job.Actor, req CheckRequest) 
 	return j.ID, nil
 }
 
+// CheckKeyPrefix starts every idempotency key that a drift check takes. The
+// jobs API refuses a key from a caller that starts with it, so a caller cannot
+// take the key of a drift check first.
+const CheckKeyPrefix = "drift-"
+
 // checkKey returns the idempotency key of a drift check of the unit ref at
 // time at: the same key for the same unit in the same minute, so a double click
 // gives one job. The key is the hash of the reference and the minute, so it is
@@ -68,5 +73,5 @@ func (s *Service) Check(ctx context.Context, actor job.Actor, req CheckRequest) 
 func checkKey(ref string, at time.Time) string {
 	sum := sha256.Sum256([]byte(ref))
 
-	return "drift-" + hex.EncodeToString(sum[:16]) + "-" + strconv.FormatInt(at.Unix()/60, 10)
+	return CheckKeyPrefix + hex.EncodeToString(sum[:16]) + "-" + strconv.FormatInt(at.Unix()/60, 10)
 }

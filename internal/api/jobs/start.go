@@ -17,6 +17,7 @@ import (
 	"opendustpan.org/opendustpan/internal/requestid"
 	"opendustpan.org/opendustpan/internal/sessionauth"
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/drift"
 	"opendustpan.org/opendustpan/pkg/idempotency"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/job"
@@ -192,6 +193,12 @@ func idempotencyKey(r *http.Request) (string, error) {
 		k, err := idempotency.ParseKey(values[0])
 		if err != nil {
 			return "", fmt.Errorf("%w: send 1 to %d printable ASCII characters", err, idempotency.MaxKeyLength)
+		}
+
+		// The keys of drift checks share the key space of the jobs. The server
+		// makes them, so a caller key with the prefix is refused.
+		if len(k) >= len(drift.CheckKeyPrefix) && strings.EqualFold(string(k[:len(drift.CheckKeyPrefix)]), drift.CheckKeyPrefix) {
+			return "", fmt.Errorf("%w: the prefix %q is reserved for the server", idempotency.ErrInvalidKey, drift.CheckKeyPrefix)
 		}
 
 		return string(k), nil

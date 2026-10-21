@@ -174,6 +174,17 @@ func (t driftTx) Put(ctx context.Context, r driftstore.Row) error {
 	}
 
 	if n == 0 {
+		// The row is not older than r, or the unit ID belongs to another
+		// namespace or tool. Read the row to tell them apart.
+		_, found, err := t.Latest(ctx, graph.Unit{Namespace: namespace.Name(r.Namespace), Tool: r.Tool, ID: r.UnitID})
+		if err != nil {
+			return err
+		}
+
+		if found {
+			return drift.ErrStale
+		}
+
 		return fmt.Errorf("%w: unit ID %q belongs to another namespace or another tool", driftstore.ErrCorrupt,
 			r.UnitID)
 	}
