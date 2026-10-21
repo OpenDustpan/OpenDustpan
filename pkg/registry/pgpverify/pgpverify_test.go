@@ -215,8 +215,8 @@ func TestInspectRefuses(t *testing.T) {
 	revoked := pgpfixture.NewSigner(t)
 	revoked.Revoke(t)
 
-	weak := pgpfixture.New(t, pgpfixture.KeySpec{RSABits: 1024, LifetimeSecs: 0})
-	expiring := pgpfixture.New(t, pgpfixture.KeySpec{RSABits: 0, LifetimeSecs: 3600})
+	weak := pgpfixture.New(t, pgpfixture.KeySpec{RSABits: 1024, LifetimeSecs: 0, CreatedAt: time.Time{}})
+	expiring := pgpfixture.New(t, pgpfixture.KeySpec{RSABits: 0, LifetimeSecs: 3600, CreatedAt: time.Time{}})
 
 	//nolint:exhaustruct_v5 // Each case names only the fields that it tests.
 	tests := []struct {

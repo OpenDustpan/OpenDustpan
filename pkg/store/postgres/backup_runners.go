@@ -58,7 +58,7 @@ func pgCopyRunnerTables() []pgCopyTable {
 				"labels",
 				"release",
 				"key_public",
-				"key_created_at_ms",
+				pgColKeyCreatedAtMs,
 				"previous_key_public",
 				"previous_key_created_at_ms",
 				"rotated_at_ms",
@@ -92,7 +92,7 @@ func pgRunnerControlTables() []pgCopyTable {
 		{
 			table: "runner_sessions",
 			columns: []string{
-				"id", pgColOperationID, pgColToken, "runner_id", "key_public", "key_created_at_ms", pgColCreatedAtMs,
+				"id", pgColOperationID, pgColToken, "runner_id", "key_public", pgColKeyCreatedAtMs, pgColCreatedAtMs,
 			},
 			orderBy: []string{"id"},
 		},

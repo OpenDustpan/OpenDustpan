@@ -15,6 +15,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/durable"
+	"opendustpan.org/opendustpan/pkg/forge"
 	"opendustpan.org/opendustpan/pkg/gate"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/inventory"
@@ -280,6 +281,7 @@ func seedBackupStore(t *testing.T, s BackupStore) backupSeed {
 	profiles := seedBackupProfiles(t, s, acme)
 	seedBackupGate(t, s, acme)
 	seedBackupSavedViews(t, s, acme)
+	seedBackupGitHost(t, s, acme)
 	seedBackupSinks(t, s, acme)
 
 	return backupSeed{
@@ -335,6 +337,65 @@ func seedBackupSavedViews(t *testing.T, s BackupStore, acme namespace.Namespace)
 		if err := keeper.SavedViews().Create(t.Context(), v, acme.Fence(), entry); err != nil {
 			t.Fatalf("create saved view %d: %v", i, err)
 		}
+	}
+}
+
+// seedBackupGitHost writes the registration of the installation-level GitHub
+// App, the assignment of one installation to the namespace acme and one
+// connection of acme, when s keeps Git host connections. A store with no Git
+// host port skips it: the fake of this package's own tests is one.
+func seedBackupGitHost(t *testing.T, s BackupStore, acme namespace.Namespace) {
+	t.Helper()
+
+	keeper, ok := s.(interface{ GitHost() forge.Store })
+	if !ok {
+		return
+	}
+
+	store := keeper.GitHost()
+
+	entry := func(scope namespace.Name, action string) audit.Entry {
+		return audit.Entry{
+			At: now(), Namespace: scope, Subject: "alice", IDPSubject: "", TokenID: "", Action: action,
+			Object: scope.String(), Version: "", ValuePath: "", ValueCount: nil, Changes: nil, SourceIP: "192.0.2.1",
+			UserAgent: "", Channel: audit.ChannelAPI, Kind: audit.KindChange, Outcome: audit.OutcomeSuccess,
+			RequestID: "", ObjectID: "", PrevHash: "", Hash: "", Sequence: 0, FenceVersion: 0, PrincipalKind: "",
+			JobID: "", Reason: "",
+		}
+	}
+
+	const apiURL = "https://api.github.com"
+
+	reg := forge.Registration{
+		CreatedAt: now(), UpdatedAt: now(), KeyCreatedAt: now(), EventSecretCreatedAt: now(), Kind: forge.KindGitHub,
+		AppID: "12345", BaseURL: apiURL, HookID: forge.NewHookID(), KeySetID: forge.NewSetID(),
+		EventSecretSetID: forge.NewSetID(), AddressDigest: forge.AddressDigest(forge.KindGitHub, apiURL, "12345"),
+		SealedKey: []byte("sealed-key"), SealedEventSecret: []byte("sealed-event-secret"), Version: 1,
+	}
+
+	_, err := store.PutRegistration(t.Context(), reg, 0, entry(audit.ServerScope, "git-host-app:put"))
+	if err != nil {
+		t.Fatalf("put Git host registration: %v", err)
+	}
+
+	assignment := forge.Assignment{
+		CreatedAt: now(), UpdatedAt: now(), InstallationID: "4242", Namespace: acme.Name, Version: 1,
+	}
+
+	_, err = store.PutAssignment(t.Context(), assignment, 0, entry(audit.ServerScope, "git-host-installation:assign"))
+	if err != nil {
+		t.Fatalf("assign Git host installation: %v", err)
+	}
+
+	conn := forge.ConnectionRecord{
+		CreatedAt: now(), UpdatedAt: now(), Namespace: acme.Name, ID: forge.NewConnectionID(), Kind: forge.KindGitHub,
+		Auth: forge.AuthApp, Scope: forge.AppScopeInstallation, InstallationID: "4242", Version: 1, Push: true,
+		Default: false,
+	}
+
+	_, err = store.CreateConnection(t.Context(), conn, acme.Fence(), entry(acme.Name, "git-host-connection:create"))
+	if err != nil {
+		t.Fatalf("create Git host connection: %v", err)
 	}
 }
 

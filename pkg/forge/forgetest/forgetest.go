@@ -9,7 +9,10 @@
 //
 // The cases come before the first adapter. A case with no body skips with
 // "not implemented", and gets its body before an adapter implements the
-// methods that it covers. A case whose capability the forge does not list
+// methods that it covers. The cases of the group "The connection" have
+// bodies, except "a missing repository is not found on each method", which
+// waits for the methods that read a repository. CaseNamesWithBody lists the
+// cases that have a body. A case whose capability the forge does not list
 // skips for that forge, and the case "an operation outside the
 // capabilities is unsupported" checks that such a method returns
 // forge.ErrUnsupported.
@@ -42,6 +45,9 @@ type Harness struct {
 	// Forge is the adapter under test, opened with Connection and Credential,
 	// and accepted by the forge.
 	Forge forge.Forge
+	// Account is the account that the forge gives for Credential: the ID
+	// and the login that Check must answer.
+	Account forge.Account
 	// Repo is the full path of a repository that only this case uses. Its
 	// default branch is "main" with one commit.
 	Repo string
@@ -52,7 +58,7 @@ type Harness struct {
 
 // Fixture changes the repository of a case outside the port, and makes the
 // events that the forge sends.
-type Fixture interface {
+type Fixture interface { //nolint:interfacebloat // One fixture changes the repository, makes events and breaks the forge for the whole suite.
 	// Push commits files on branch with no check, as another author does,
 	// and returns the commit. A nil value deletes the file.
 	Push(ctx context.Context, branch string, files map[string][]byte) (forge.Commit, error)
@@ -75,6 +81,14 @@ type Fixture interface {
 	// connection since the case began, so that a case can check that Open
 	// makes none and that RotateSelf makes one.
 	Calls(ctx context.Context) (int, error)
+	// SetTokenExpiry sets the expiry that the forge gives for the token of a
+	// connection with the auth kind token. The zero time removes the expiry,
+	// so that the forge says that the token has none. A fixture of an auth
+	// kind with no token expiry returns an error.
+	SetTokenExpiry(ctx context.Context, at time.Time) error
+	// Garble makes the forge answer each call with a success status and a
+	// body that does not parse, until the returned function restores it.
+	Garble(ctx context.Context) (restore func(), err error)
 	// Unavailable makes the forge fail with a server error, or with a rate
 	// limit and the wait time retryAfter when it is above zero, until the
 	// returned function restores it.
@@ -99,16 +113,16 @@ type testCase struct {
 func cases() []testCase {
 	return []testCase{
 		// The connection.
-		{"check answers the account of the credential", "", nil},
-		{"check answers the expiry of a token that has one", "", nil},
-		{"check of a token with no expiry says so", "", nil},
-		{"open refuses another kind, a missing parameter and a bad secret, and makes no call", "", nil},
-		{"a refused credential is ErrAuth on each method", "", nil},
+		{"check answers the account of the credential", "", caseCheckAccount},
+		{"check answers the expiry of a token that has one", "", caseCheckExpiry},
+		{"check of a token with no expiry says so", "", caseCheckNoExpiry},
+		{"open refuses another kind, a missing parameter and a bad secret, and makes no call", "", caseOpenRefuses},
+		{"a refused credential is ErrAuth on each method", "", caseRefusedIsAuth},
 		{"a missing repository is not found on each method", "", nil},
-		{"an operation outside the capabilities is unsupported", "", nil},
-		{"no error and no event holds a part of the secret", "", nil},
-		{"a forge that does not answer is ErrUnavailable", "", nil},
-		{"a rate limit is ErrUnavailable with the wait time", "", nil},
+		{"an operation outside the capabilities is unsupported", "", caseUnsupported},
+		{"no error and no event holds a part of the secret", "", caseNoSecretInErrors},
+		{"a forge that does not answer is ErrUnavailable", "", caseUnavailable},
+		{"a rate limit is ErrUnavailable with the wait time", "", caseRateLimit},
 
 		// Files.
 		{"head of a branch answers its commit", forge.CapFiles, nil},
@@ -134,7 +148,7 @@ func cases() []testCase {
 		{"two commits to the same new branch: one passes, one is a conflict", forge.CapCommit, nil},
 		{"commit to a protected branch is refused", forge.CapCommit, nil},
 		{"commit to a missing branch is not found", forge.CapCommit, nil},
-		{"a connection with no push access lists no commit and no review", "", nil},
+		{"a connection with no push access lists no commit and no review", "", caseNoPushNoWrite},
 		{"commit that fails validation makes no call", forge.CapCommit, nil},
 		{"commit above the size limit is too large and makes no call", forge.CapCommit, nil},
 		{"commit keeps the author and the trailer", forge.CapCommit, nil},
@@ -163,7 +177,7 @@ func cases() []testCase {
 		{"repo token of an app expires within one hour", forge.CapRepoToken, nil},
 		// Skips when Connection.Auth is not AuthToken.
 		{"repo token of a token connection is not scoped", forge.CapGitAccess, nil},
-		{"a forge with repo-token also lists git-access", forge.CapRepoToken, nil},
+		{"a forge with repo-token also lists git-access", forge.CapRepoToken, caseRepoTokenImpliesGitAccess},
 
 		// Rotation.
 		{"rotate self answers a new token that check accepts", forge.CapSelfRotate, nil},
@@ -186,6 +200,20 @@ func cases() []testCase {
 		{"each of two active event secrets verifies an event", forge.CapEvents, nil},
 		{"a retried delivery keeps its delivery ID", forge.CapEvents, nil},
 	}
+}
+
+// CaseNamesWithBody returns the name of each case that has a body, in the
+// order of Run. A case with no body skips with "not implemented".
+func CaseNamesWithBody() []string {
+	var names []string
+
+	for _, c := range cases() {
+		if c.run != nil {
+			names = append(names, c.name)
+		}
+	}
+
+	return names
 }
 
 // CaseNames returns the name of each case, in the order of Run.

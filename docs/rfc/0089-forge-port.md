@@ -3,11 +3,12 @@ rfc: 89
 title: The Forge port, what each consumer needs from a forge, and the forge connection API
 status: accepted, except Q4 (spike) and Q11 (RFC 12)
 created: 2026-10-19
+adr: 271
 ---
 
 # RFC 89. The Forge port, what each consumer needs from a forge, and the forge connection API
 
-Status: accepted, except Q4 (spike) and Q11 (RFC 12). The owner decided
+Status: accepted, except Q4 (spike) and Q11 (RFC 12). [ADR 271](../adr/0271-the-forge-port-git-host-connections-and-the-installation-level-github-app.md) records the decisions. The owner decided
 each other question on 20 October 2026 (see "Decisions"). Q4 waits for the
 signing spike. RFC 12 owns Q11. An agent wrote this RFC for issue #886 under the
 direction of the project manager. It proposes the shape of the `Forge` port
