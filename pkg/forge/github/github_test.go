@@ -111,7 +111,9 @@ func TestConformanceToken(t *testing.T) {
 func TestKind(t *testing.T) {
 	t.Parallel()
 
-	o, err := github.NewOpener(github.Config{Rules: egress.Rules{Allow: nil, LoopbackForTests: false}, RootCAs: nil, Now: nil})
+	o, err := github.NewOpener(
+		github.Config{Rules: egress.Rules{Allow: nil, LoopbackForTests: false}, RootCAs: nil, Now: nil},
+	)
 	if err != nil {
 		t.Fatal(err)
 	}

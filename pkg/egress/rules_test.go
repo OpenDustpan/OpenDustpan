@@ -100,7 +100,9 @@ func TestRulesAddressLayer(t *testing.T) {
 		t.Fatalf("CheckAddr of an invalid address = %v, want ErrRefused", err)
 	}
 
-	if err := (egress.Rules{Allow: nil, LoopbackForTests: false}).CheckAddr(netip.MustParseAddr("10.1.2.3")); err == nil {
+	zero := egress.Rules{Allow: nil, LoopbackForTests: false}
+
+	if err := zero.CheckAddr(netip.MustParseAddr("10.1.2.3")); err == nil {
 		t.Fatal("the zero rules allowed a private address")
 	}
 }

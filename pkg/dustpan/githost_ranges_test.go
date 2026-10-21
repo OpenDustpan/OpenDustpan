@@ -23,7 +23,7 @@ func newGitHostServer(t *testing.T, extra ...dustpan.Option) error {
 
 	_, err := dustpan.NewServer(opts...)
 
-	return err //nolint:wrapcheck // The test checks the chain of the error.
+	return err
 }
 
 // TestNewServerRefusesHostileGitHostRanges sends a wide or unsafe range

@@ -165,7 +165,7 @@ Errors of a check:
 
 | Answer | Cause |
 | --- | --- |
-| 409 | The operator did not give the installation to this namespace, the address of the app changed after its key was stored, the server cannot open the stored key, or the address rules of the server refuse the address. |
+| 409 | The operator did not give the installation to this namespace. Or the address of the app changed after its key was stored. Or the server cannot open the stored key. Or the address rules of the server refuse the address. |
 | 422 | GitHub refused the credential. |
 | 429 | The connection was checked more than once in 10 seconds, or the installation more than 30 times in a minute. The header `Retry-After` gives the wait time, at most 60 seconds. |
 | 503 | GitHub did not answer, or limited the rate. The header `Retry-After` gives the wait time when GitHub gave one, at most 60 seconds. |

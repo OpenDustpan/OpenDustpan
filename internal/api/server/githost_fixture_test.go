@@ -328,7 +328,9 @@ func buildHostEnv(t *testing.T, parts hostParts, authz identity.Authorizer) *hos
 		t.Fatalf("handler: %v", err)
 	}
 
-	return &hostEnv{handler: handler, store: st, opener: opener}
+	return &hostEnv{
+		handler: handler, store: st, opener: opener, refuseAddress: nil, mu: sync.Mutex{}, refused: nil,
+	}
 }
 
 func (e *hostEnv) do(t *testing.T, c hostCall) hostResponse {

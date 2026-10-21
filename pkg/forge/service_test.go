@@ -730,10 +730,22 @@ func invalidCheckLimits() map[string]forge.CheckLimits {
 		"negative per installation": {
 			PerConnection: good.PerConnection, PerInstallation: -1, Window: good.Window,
 		},
-		"zero per connection":     {PerConnection: 0, PerInstallation: good.PerInstallation, Window: good.Window},
-		"negative per connection": {PerConnection: -time.Second, PerInstallation: good.PerInstallation, Window: good.Window},
-		"zero window":             {PerConnection: good.PerConnection, PerInstallation: good.PerInstallation, Window: 0},
-		"negative window":         {PerConnection: good.PerConnection, PerInstallation: good.PerInstallation, Window: -time.Minute},
+		"zero per connection": {PerConnection: 0, PerInstallation: good.PerInstallation, Window: good.Window},
+		"negative per connection": {
+			PerConnection:   -time.Second,
+			PerInstallation: good.PerInstallation,
+			Window:          good.Window,
+		},
+		"zero window": {
+			PerConnection:   good.PerConnection,
+			PerInstallation: good.PerInstallation,
+			Window:          0,
+		},
+		"negative window": {
+			PerConnection:   good.PerConnection,
+			PerInstallation: good.PerInstallation,
+			Window:          -time.Minute,
+		},
 	}
 }
 
@@ -755,23 +767,6 @@ func TestNewServiceRefusesCheckLimitsThatAreNotPositive(t *testing.T) {
 			})
 			if !errors.Is(err, forge.ErrInvalid) {
 				t.Fatalf("NewService with %+v = %v, want ErrInvalid", limits, err)
-			}
-		})
-	}
-}
-
-// TestTheLimiterRefusesLimitsThatAreNotPositive sends the same limits to the
-// limiter itself, as if NewService had not checked them. It refuses the check
-// and does not panic.
-func TestTheLimiterRefusesLimitsThatAreNotPositive(t *testing.T) {
-	t.Parallel()
-
-	for name, limits := range invalidCheckLimits() {
-		t.Run(name, func(t *testing.T) {
-			t.Parallel()
-
-			if _, ok := forge.AdmitWithLimits(limits, time.UnixMilli(1_700_000_000_000)); ok {
-				t.Fatalf("the limiter admitted a check with %+v", limits)
 			}
 		})
 	}

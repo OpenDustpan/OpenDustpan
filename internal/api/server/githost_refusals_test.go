@@ -14,6 +14,26 @@ import (
 
 const hostBetaConnectionsPath = "/api/dustpan/v1/namespaces/beta/git-host-connections"
 
+// spoilKeyBinding changes the address and the digest column of the registration
+// together, as a writer of the database does. The digest check then passes, and
+// only the binding of the sealed key can refuse.
+func spoilKeyBinding(t *testing.T, e *hostEnv) {
+	t.Helper()
+
+	reg, err := e.store.GitHost().GetRegistration(t.Context(), forge.KindGitHub)
+	if err != nil {
+		t.Fatalf("get registration: %v", err)
+	}
+
+	reg.BaseURL = "https://ghe.example.com/api/v3"
+	reg.AddressDigest = forge.AddressDigest(reg.Kind, reg.BaseURL, reg.AppID)
+
+	_, err = e.store.GitHost().PutRegistration(t.Context(), reg, reg.Version, hostRegistrationEntry())
+	if err != nil {
+		t.Fatalf("put registration: %v", err)
+	}
+}
+
 // TestGitHostCheckAnswersEachOpenRefusalWithItsOwnCause sends a check for a
 // connection that the service refuses to open for a reason of the stored
 // registration. Each cause answers its own status and sentence, never the
@@ -29,34 +49,12 @@ func TestGitHostCheckAnswersEachOpenRefusalWithItsOwnCause(t *testing.T) {
 		message string
 	}{
 		{
-			name: "a key that does not open with the binding of the address",
-			spoil: func(t *testing.T, e *hostEnv) {
-				t.Helper()
-
-				// A writer of the database changes the address and the digest column
-				// together, as if the digest check had passed.
-				reg, err := e.store.GitHost().GetRegistration(t.Context(), forge.KindGitHub)
-				if err != nil {
-					t.Fatalf("get registration: %v", err)
-				}
-
-				reg.BaseURL = "https://ghe.example.com/api/v3"
-				reg.AddressDigest = forge.AddressDigest(reg.Kind, reg.BaseURL, reg.AppID)
-
-				if _, err = e.store.GitHost().PutRegistration(
-					t.Context(), reg, reg.Version, hostRegistrationEntry(),
-				); err != nil {
-					t.Fatalf("put registration: %v", err)
-				}
-			},
-			reason:  forge.ReasonKeyNotOpened,
-			message: "cannot open the stored key",
+			"a key that does not open with the binding of the address", spoilKeyBinding,
+			forge.ReasonKeyNotOpened, "cannot open the stored key",
 		},
 		{
-			name:    "an address that the rules refuse",
-			spoil:   func(_ *testing.T, e *hostEnv) { e.refuseAddress.Store(true) },
-			reason:  forge.ReasonAddressRefused,
-			message: "address rules of the server refuse",
+			"an address that the rules refuse", func(_ *testing.T, e *hostEnv) { e.refuseAddress.Store(true) },
+			forge.ReasonAddressRefused, "address rules of the server refuse",
 		},
 	}
 
@@ -74,27 +72,34 @@ func TestGitHostCheckAnswersEachOpenRefusalWithItsOwnCause(t *testing.T) {
 
 			r := e.send(t, http.MethodPost, hostConnectionsPath+"/"+id+"/check", "")
 			wantHost(t, r, http.StatusConflict)
-
-			if !strings.Contains(r.body, tc.message) {
-				t.Fatalf("answer = %s, want the sentence %q", r.body, tc.message)
-			}
-
-			if strings.Contains(r.body, "GitHub refused") || strings.Contains(r.body, "ghe.example.com") {
-				t.Fatalf("answer = %s, want no sentence about GitHub and no address", r.body)
-			}
+			wantOpenRefusal(t, e, r, tc.reason, tc.message)
 
 			if e.opener.openedCount() != opened {
 				t.Fatal("the adapter opened a connection that the service refused")
 			}
-
-			if got := e.refusals(); len(got) != 1 || got[0] != tc.reason {
-				t.Fatalf("refusals = %v, want one %q", got, tc.reason)
-			}
-
-			if n := countEntries(e.auditEntries(t, "acme"), audit.OutcomeDenied, "git-host-connection:open"); n != 1 {
-				t.Fatalf("%d denied open entries, want 1", n)
-			}
 		})
+	}
+}
+
+// wantOpenRefusal checks the sentence of a refused open, and that the service
+// counted it with reason and wrote one denied entry.
+func wantOpenRefusal(t *testing.T, e *hostEnv, r hostResponse, reason, message string) {
+	t.Helper()
+
+	if !strings.Contains(r.body, message) {
+		t.Fatalf("answer = %s, want the sentence %q", r.body, message)
+	}
+
+	if strings.Contains(r.body, "GitHub refused") || strings.Contains(r.body, "ghe.example.com") {
+		t.Fatalf("answer = %s, want no sentence about GitHub and no address", r.body)
+	}
+
+	if got := e.refusals(); len(got) != 1 || got[0] != reason {
+		t.Fatalf("refusals = %v, want one %q", got, reason)
+	}
+
+	if n := countEntries(e.auditEntries(t, "acme"), audit.OutcomeDenied, "git-host-connection:open"); n != 1 {
+		t.Fatalf("%d denied open entries, want 1", n)
 	}
 }
 
@@ -119,16 +124,19 @@ func TestGitHostCheckAuditsItsRefusals(t *testing.T) {
 				wantHost(t, e.send(t, http.MethodPost, target, ""), http.StatusOK)
 			},
 			target: func(id string) string { return hostConnectionsPath + "/" + id + "/check" },
+			header: nil,
 			status: http.StatusTooManyRequests,
 		},
 		{
 			name:   "a connection that does not exist",
+			header: nil,
 			prep:   func(*testing.T, *hostEnv, string) {},
 			target: func(string) string { return hostConnectionsPath + "/" + forge.NewConnectionID() + "/check" },
 			status: http.StatusNotFound,
 		},
 		{
 			name:   "an ID that is not a connection ID",
+			header: nil,
 			prep:   func(*testing.T, *hostEnv, string) {},
 			target: func(string) string { return hostConnectionsPath + "/not-an-id/check" },
 			status: http.StatusNotFound,
@@ -219,11 +227,11 @@ type foreignStore struct {
 }
 
 func (f foreignStore) GetConnection(ctx context.Context, _ namespace.Name, id string) (forge.ConnectionRecord, error) {
-	return f.Store.GetConnection(ctx, "acme", id) //nolint:wrapcheck // The test double passes the error on.
+	return f.Store.GetConnection(ctx, "acme", id)
 }
 
 func (f foreignStore) ListConnections(ctx context.Context, _ namespace.Name) ([]forge.ConnectionRecord, error) {
-	return f.Store.ListConnections(ctx, "acme") //nolint:wrapcheck // The test double passes the error on.
+	return f.Store.ListConnections(ctx, "acme")
 }
 
 // TestGitHostReadsCheckTheNamespaceOfTheRowsThemselves lets the store answer

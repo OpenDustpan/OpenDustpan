@@ -12,7 +12,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/identity"
 )
 
-func hostAllowAll() hostAuthorizer { return hostAuthorizer{deny: nil} }
+func hostAllowAll() hostAuthorizer { return hostAuthorizer{deny: nil, anyNamespace: false} }
 
 // isFirstApp reports whether a is the registration that the first put makes.
 func isFirstApp(a *appDoc) bool {
@@ -588,7 +588,7 @@ func TestGitHostRoutesEnforceTheirActions(t *testing.T) {
 			deny[a] = true
 		}
 
-		denied := newHostEnv(t, hostAuthorizer{deny: deny})
+		denied := newHostEnv(t, hostAuthorizer{deny: deny, anyNamespace: false})
 		target := strings.NewReplacer(
 			"{kind}", "github", "{installation_id}", "1", "{namespace}", "acme", "{id}", forge.NewConnectionID(),
 		).Replace(route.Path)

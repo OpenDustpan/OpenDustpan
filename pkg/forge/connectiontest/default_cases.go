@@ -276,15 +276,11 @@ func testMakeDefaultConcurrent(t *testing.T, h Harness) {
 	var wg sync.WaitGroup
 
 	for i, id := range ids {
-		wg.Add(1)
-
-		go func() {
-			defer wg.Done()
-
+		wg.Go(func() {
 			_, errs[i] = h.Store.MakeDefault(
 				t.Context(), nsAcme, id, 0, fence, entry(nsAcme, "git-host-connection:make-default"),
 			)
-		}()
+		})
 	}
 
 	wg.Wait()

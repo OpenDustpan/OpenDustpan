@@ -4,7 +4,6 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -12,9 +11,12 @@ import (
 	"opendustpan.org/opendustpan/internal/cli"
 )
 
-// loopbackSeams are the names of the seam that opens the loopback interface to
-// a connection to a Git host. Only tests may use them.
-var loopbackSeams = map[string]bool{"LoopbackForTests": true, "WithGitHostLoopbackForTests": true}
+// isLoopbackSeam reports whether name is one of the names of the seam that
+// opens the loopback interface to a connection to a Git host. Only tests may
+// use them.
+func isLoopbackSeam(name string) bool {
+	return name == "LoopbackForTests" || name == "WithGitHostLoopbackForTests"
+}
 
 // TestNoSettingReachesTheGitHostLoopbackSeam proves that no flag, environment
 // variable or configuration file key declares a way to open the loopback
@@ -60,20 +62,15 @@ func TestProductionCodeNeverNamesTheGitHostLoopbackSeam(t *testing.T) {
 
 		checked++
 
-		src, err := os.ReadFile(path)
-		if err != nil {
-			t.Fatalf("read %s: %v", path, err)
-		}
-
 		fset := token.NewFileSet()
 
-		file, err := parser.ParseFile(fset, path, src, parser.SkipObjectResolution)
+		file, err := parser.ParseFile(fset, path, nil, parser.SkipObjectResolution)
 		if err != nil {
 			t.Fatalf("parse %s: %v", path, err)
 		}
 
 		ast.Inspect(file, func(n ast.Node) bool {
-			if id, ok := n.(*ast.Ident); ok && loopbackSeams[id.Name] {
+			if id, ok := n.(*ast.Ident); ok && isLoopbackSeam(id.Name) {
 				t.Errorf("%s names the test seam %s", fset.Position(id.Pos()), id.Name)
 			}
 
@@ -101,7 +98,7 @@ func TestTheLoopbackSeamScanSeesTheSeam(t *testing.T) {
 	found := false
 
 	ast.Inspect(file, func(n ast.Node) bool {
-		if id, ok := n.(*ast.Ident); ok && loopbackSeams[id.Name] {
+		if id, ok := n.(*ast.Ident); ok && isLoopbackSeam(id.Name) {
 			found = true
 		}
 
