@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/authgate"
+	"opendustpan.org/opendustpan/internal/devsignin"
 	"opendustpan.org/opendustpan/pkg/accesstoken"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -181,5 +182,44 @@ func TestSignInBudgetIsApartFromTokenLookups(t *testing.T) {
 				t.Errorf("sign-in admit: err = %v, want limited = %v", err, tc.signInLimited)
 			}
 		})
+	}
+}
+
+// TestSignInRoutesUseTheirOwnGate proves the wiring of newSignIn: the limiter
+// of the sign-in routes is not the gate of the token lookups. Many sign-in
+// starts from one address spend the limiter of newSignIn, and a valid token
+// lookup from that address then passes at once. With the token gate as the
+// limiter, the same starts spend the token budget, and the lookup waits.
+func TestSignInRoutesUseTheirOwnGate(t *testing.T) {
+	t.Parallel()
+
+	f := newBudgetFixture(t)
+	f.cfg.publicURL = "https://dustpan.example"
+	f.cfg.devSignIn = &devsignin.Config{Code: nil, Admin: noDevAdmin}
+
+	policies, err := newSessionPolicyService(f.cfg)
+	if err != nil {
+		t.Fatalf("session policies: %v", err)
+	}
+
+	in, err := newSignIn(f.cfg, policies, nil)
+	if err != nil {
+		t.Fatalf("new sign-in: %v", err)
+	}
+
+	if in == nil || in.Limiter == nil {
+		t.Fatal("sign-in limiter: nil, want the sign-in gate")
+	}
+
+	for range 100 {
+		in.Limiter.Fail(authgate.WithRequest(t.Context(), budgetAddress))
+	}
+
+	if err = in.Limiter.Admit(canceledContext(t)); !errors.Is(err, identity.ErrRateLimited) {
+		t.Fatalf("sign-in admit after 100 starts: err = %v, want ErrRateLimited", err)
+	}
+
+	if err = f.lookupValid(t); err != nil {
+		t.Fatalf("valid token lookup after 100 sign-in starts: err = %v, want nil", err)
 	}
 }

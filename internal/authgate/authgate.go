@@ -43,6 +43,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/netip"
+	"strings"
 	"sync"
 	"time"
 
@@ -110,6 +111,18 @@ var ErrInvalidWindow = errors.New("authgate: the failure window must be 1 ms or 
 
 // ErrMissingNext reports a Config without Next.
 var ErrMissingNext = errors.New("authgate: missing next authenticator")
+
+// ErrInvalidScope reports a Config with a Scope that is not empty and not
+// made of the letters a to z only.
+var ErrInvalidScope = errors.New("authgate: the scope must be empty or the letters a to z")
+
+// unknownSource is the budget key of a source that holds the scope
+// separator. All such sources share one budget.
+const unknownSource = "unknown"
+
+// scopeSeparator joins the scope and the source in the key of the shared
+// count. A scope cannot hold it.
+const scopeSeparator = "|"
 
 // Config holds the settings of a Gate. Zero values take the defaults.
 type Config struct {
@@ -205,6 +218,10 @@ func New(cfg Config) (*Gate, error) {
 		return nil, ErrMissingNext
 	}
 
+	if !validScope(cfg.Scope) {
+		return nil, ErrInvalidScope
+	}
+
 	burst := positiveOr(cfg.Burst, DefaultBurst)
 	refill := positiveOr(cfg.Refill, DefaultRefill)
 
@@ -253,6 +270,17 @@ func New(cfg Config) (*Gate, error) {
 	return g, nil
 }
 
+// validScope reports whether scope is empty or made of the letters a to z.
+func validScope(scope string) bool {
+	for _, r := range scope {
+		if r < 'a' || r > 'z' {
+			return false
+		}
+	}
+
+	return true
+}
+
 // positiveOr returns v, or fallback when v is not above zero.
 func positiveOr[T int | time.Duration](v, fallback T) T {
 	if v > 0 {
@@ -286,8 +314,16 @@ func WithRequest(ctx context.Context, source string) context.Context {
 }
 
 // sourceKey returns the budget key of the address source: an IPv4 address
-// as it is, an IPv6 address as its /64, and any other text as it is.
+// as it is, an IPv6 address as its /64, a text with the scope separator as
+// the one unknown source, and any other text as it is.
 func sourceKey(source string) string {
+	// Defense in depth: the counter key adds the scope in front of the source
+	// with a separator, and this check keeps a source from forging another
+	// scope. It does not rely on the scope check of New.
+	if strings.Contains(source, scopeSeparator) {
+		return unknownSource
+	}
+
 	addr, err := netip.ParseAddr(source)
 	if err != nil {
 		return source
@@ -608,7 +644,7 @@ func (g *Gate) counterSource(source string) string {
 		return source
 	}
 
-	return g.scope + "|" + source
+	return g.scope + scopeSeparator + source
 }
 
 // spendLocal uses one unit of the budget of source in this process.

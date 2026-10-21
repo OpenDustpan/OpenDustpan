@@ -229,7 +229,8 @@ type settings struct {
 	gate *authgate.Gate
 	// signInGate is the per-address limit of the sign-in routes. It has its
 	// own budget, so sign-ins never slow a token lookup. wireTokens sets it
-	// with gate; nil means no limit.
+	// with gate; nil means no limit. Each gate keeps its own LRU of sources,
+	// so the gate memory of one process is at most 2 x 10,000 buckets.
 	signInGate *authgate.Gate
 	// sessionCookies checks the console session cookie on the inventory,
 	// audit and Pulumi APIs. newAdapters sets it before it builds them; nil
