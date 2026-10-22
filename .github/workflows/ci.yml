@@ -137,15 +137,34 @@ jobs:
         ports: [ "5432:5432" ]
         # The image declares a volume at /var/lib/postgresql on the disk of the
         # runner. The runner does not remove that volume after the job. The job
-        # hooks of each self-hosted runner remove it. A parallel query keeps its
-        # shared memory in /dev/shm, and the Docker default of 64 MiB is too
-        # small for the tests.
+        # hooks of each self-hosted runner remove it. On the trial runners,
+        # the data stays in memory instead. A parallel query keeps its shared
+        # memory in /dev/shm, and the Docker default of 64 MiB is too small
+        # for the tests.
         options: >-
           --shm-size=1g
+          ${{ vars.CI_TRIAL_RUNS_ON_LARGE && '--tmpfs /var/lib/postgresql:rw,size=8g' || '' }}
           --health-cmd "pg_isready -U postgres"
           --health-interval 5s --health-timeout 5s --health-retries 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # On a trial runner, the temporary files of the tests (SQLite databases,
+      # test binaries, the data directories of the e2e servers) and the Go
+      # build cache stay in memory. The 8 vCPU trial runner has 32 GB of
+      # memory and the jobs used 1.1 GB at most, but its disk showed high
+      # IOPS during the tests. The step must come before setup-go, which
+      # restores its cache into GOCACHE. The project's machines keep the Go
+      # build cache on their disks between jobs, so they skip this step.
+      - &ramdisk
+        name: Keep temporary files and the Go build cache in memory
+        if: ${{ !startsWith(runner.name, 'github-actions-runner') }}
+        run: |
+          set -euo pipefail
+          sudo mkdir -p /mnt/ram
+          sudo mount -t tmpfs -o size=16g,mode=1777 tmpfs /mnt/ram
+          mkdir -p /mnt/ram/tmp /mnt/ram/go-build
+          echo "TMPDIR=/mnt/ram/tmp" >> "$GITHUB_ENV"
+          echo "GOCACHE=/mnt/ram/go-build" >> "$GITHUB_ENV"
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
@@ -181,10 +200,12 @@ jobs:
         ports: [ "5432:5432" ]
         options: >-
           --shm-size=1g
+          ${{ vars.CI_TRIAL_RUNS_ON_LARGE && '--tmpfs /var/lib/postgresql:rw,size=8g' || '' }}
           --health-cmd "pg_isready -U postgres"
           --health-interval 5s --health-timeout 5s --health-retries 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - *ramdisk
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
@@ -274,11 +295,13 @@ jobs:
         ports: [ "5432:5432" ]
         # The image declares a volume at /var/lib/postgresql on the disk of the
         # runner. The runner does not remove that volume after the job. The job
-        # hooks of each self-hosted runner remove it. A parallel query keeps its
-        # shared memory in /dev/shm, and the Docker default of 64 MiB is too
-        # small for the tests.
+        # hooks of each self-hosted runner remove it. On the trial runners,
+        # the data stays in memory instead. A parallel query keeps its shared
+        # memory in /dev/shm, and the Docker default of 64 MiB is too small
+        # for the tests.
         options: >-
           --shm-size=1g
+          ${{ vars.CI_TRIAL_RUNS_ON_LARGE && '--tmpfs /var/lib/postgresql:rw,size=8g' || '' }}
           --health-cmd "pg_isready -U postgres"
           --health-interval 5s --health-timeout 5s --health-retries 10
       # The network fault tests (make faults) drive this Toxiproxy server.
@@ -300,6 +323,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+      - *ramdisk
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
