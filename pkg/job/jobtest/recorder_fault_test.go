@@ -108,7 +108,7 @@ func newPlanJob(unit identity.Object) *job.Job {
 		Delivery: nil, Closed: nil, Verification: job.VerificationNone, IdempotencyKey: "", RequestHash: "",
 		Version: 0, CreatedAt: time.Time{}, UpdatedAt: time.Time{},
 		Spec: job.Spec{
-			Unit: unit, Operation: job.OperationPlan, Executor: job.ExecutorRunner,
+			Unit: unit, Operation: job.OperationPlan, Purpose: job.PurposeNone, Executor: job.ExecutorRunner,
 			Location: job.Location{Connection: "", Repository: "", Ref: "", Directory: "", Revision: ""},
 			Steps:    []job.Step{step}, Pool: "rpl-default", Profile: "prf-default", Edits: nil, Delivery: "",
 		},
