@@ -145,25 +145,49 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # On a Blacksmith runner, the temporary files of the tests (SQLite
       # databases, test binaries, the data directories of the e2e servers)
-      # and the Go build cache stay in memory. The 8 vCPU runner has 32 GB of
-      # memory and the jobs used 1.1 GB at most, but its disk showed high
-      # IOPS during the tests. The step must come before setup-go, which
-      # restores its cache into GOCACHE. The project's machines keep the Go
-      # build cache on their disks between jobs, so they skip this step.
+      # stay in memory. The 8 vCPU runner has 32 GB of memory and the jobs
+      # used 1.1 GB at most, but its disk showed high IOPS during the tests.
       - &ramdisk
-        name: Keep temporary files and the Go build cache in memory
-        if: ${{ !startsWith(runner.name, 'github-actions-runner') }}
+        name: Keep temporary files in memory
+        if: ${{ startsWith(runner.name, 'blacksmith-') }}
         run: |
           set -euo pipefail
           sudo mkdir -p /mnt/ram
           sudo mount -t tmpfs -o size=16g,mode=1777 tmpfs /mnt/ram
-          mkdir -p /mnt/ram/tmp /mnt/ram/go-build
+          mkdir -p /mnt/ram/tmp
           echo "TMPDIR=/mnt/ram/tmp" >> "$GITHUB_ENV"
-          echo "GOCACHE=/mnt/ram/go-build" >> "$GITHUB_ENV"
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      # A Blacksmith sticky disk keeps the Go build cache, with the test
+      # results, and the Go module cache from job to job, like the disk of a
+      # project machine. The setup-go cache cannot do this: it saves only
+      # when no cache for the go.sum exists, so the test results in it get
+      # old. Each job (and each store) has its own disks, so jobs that run at
+      # the same time do not overwrite the snapshot of another job. Only runs
+      # on main save the disks. A pull request reads them and saves nothing,
+      # so that no pull request can put a bad result into the cache of main.
+      # The disks mount at the default GOCACHE and GOMODCACHE paths. The key
+      # holds the job and its index in the matrix (0 for a job without a
+      # matrix), so a change of the store order gives the stores new disks.
+      - &sticky-go-build
+        name: Mount the Go build cache
+        if: ${{ startsWith(runner.name, 'blacksmith-') }}
+        uses: useblacksmith/stickydisk@3f6be1451e3cad893b778bc93495c80452a5da26 # v1.7.2
+        with:
+          key: ${{ github.repository }}-go-build-${{ github.job }}-${{ strategy.job-index }}
+          path: ~/.cache/go-build
+          commit: ${{ github.event_name == 'pull_request' && 'false' || 'on-change' }}
+      - &sticky-go-mod
+        name: Mount the Go module cache
+        if: ${{ startsWith(runner.name, 'blacksmith-') }}
+        uses: useblacksmith/stickydisk@3f6be1451e3cad893b778bc93495c80452a5da26 # v1.7.2
+        with:
+          key: ${{ github.repository }}-go-mod-${{ github.job }}-${{ strategy.job-index }}
+          path: ~/go/pkg/mod
+          commit: ${{ github.event_name == 'pull_request' && 'false' || 'on-change' }}
+      - &setup-go-sticky
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
-          cache: ${{ !startsWith(runner.name, 'github-actions-runner') }}
+          cache: false
       # Pushes and pull requests use the test cache. The schedule runs every
       # package again (GO_TEST_COUNT=-count=1). The two store packages run in
       # the store job.
@@ -201,10 +225,9 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - *ramdisk
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version-file: go.mod
-          cache: ${{ !startsWith(runner.name, 'github-actions-runner') }}
+      - *sticky-go-build
+      - *sticky-go-mod
+      - *setup-go-sticky
       # The runner throws the service container away after the job, so its
       # data needs no durability. On a runner, each checkpoint of a store test
       # run spent 55 to 90 seconds in fsync of about 120,000 files. These
@@ -300,10 +323,9 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - *ramdisk
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version-file: go.mod
-          cache: ${{ !startsWith(runner.name, 'github-actions-runner') }}
+      - *sticky-go-build
+      - *sticky-go-mod
+      - *setup-go-sticky
       # The pinned versions of the matrix are in e2e/tool.go, so the key changes
       # when they change. The "latest" versions are downloaded on each run.
       - &cache-clis
