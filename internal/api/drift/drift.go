@@ -209,8 +209,6 @@ func classify(err error) errorResponse {
 		return errorResponse{Code: http.StatusUnauthorized, ErrorCode: "", Message: "unauthenticated"}
 	case errors.Is(err, sessionauth.ErrCSRF), errors.Is(err, sessionauth.ErrOtherSite):
 		return errorResponse{Code: http.StatusForbidden, ErrorCode: "", Message: err.Error()}
-	case errors.Is(err, identity.ErrDenied):
-		return errorResponse{Code: http.StatusForbidden, ErrorCode: "", Message: "forbidden"}
 	case errors.Is(err, errNotFound), errors.Is(err, namespace.ErrNotFound), errors.Is(err, job.ErrNotFound):
 		return errorResponse{Code: http.StatusNotFound, ErrorCode: "", Message: errNotFound.Error()}
 	case errors.Is(err, namespace.ErrNotHome):
@@ -224,8 +222,14 @@ func classify(err error) errorResponse {
 		}
 	}
 
+	// The refusals of a start come before identity.ErrDenied: an error that
+	// wraps both keeps the code of its cause.
 	if status, code, ok := classifyStart(err); ok {
 		return errorResponse{Code: status, ErrorCode: code, Message: refusal.Clean(err.Error(), maxMessageBytes)}
+	}
+
+	if errors.Is(err, identity.ErrDenied) {
+		return errorResponse{Code: http.StatusForbidden, ErrorCode: "", Message: "forbidden"}
 	}
 
 	return errorResponse{Code: http.StatusInternalServerError, ErrorCode: "", Message: "internal error"}

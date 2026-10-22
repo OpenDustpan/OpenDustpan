@@ -206,6 +206,18 @@ func TestStartCheckErrors(t *testing.T) {
 		{"same minute, other request", job.ErrKeyConflict, http.StatusConflict, "drift.start-conflict"},
 		{"fenced", namespace.ErrFenced, http.StatusConflict, "namespace.fenced"},
 		{"limit", job.ErrLimit, http.StatusTooManyRequests, "job.limit"},
+		{
+			"policy denied that also wraps denied",
+			fmt.Errorf("%w: %w", identity.ErrDenied, job.ErrPolicyDenied),
+			http.StatusForbidden,
+			"job.policy-denied",
+		},
+		{
+			"frozen that also wraps denied",
+			fmt.Errorf("%w: %w", identity.ErrDenied, job.ErrFrozen),
+			http.StatusConflict,
+			"job.frozen",
+		},
 		{"job not found", job.ErrNotFound, http.StatusNotFound, ""},
 		{"not home", namespace.ErrNotHome, http.StatusMisdirectedRequest, ""},
 		{
@@ -321,6 +333,17 @@ func TestStartWritesADenialForEachRefusal(t *testing.T) {
 		{"limit", job.ErrLimit, "too many open jobs"},
 		{"gate", &job.GateError{Gates: []job.EnforcedGate{{Scope: "s", ID: "no-plans", Point: "p"}}}, "no-plans"},
 		{"unsupported", fmt.Errorf("%w: hunter2", job.ErrUnsupported), "the server cannot start this job"},
+		{
+			"policy that also wraps denied",
+			fmt.Errorf("%w: %w: hunter2", identity.ErrDenied, job.ErrPolicyDenied),
+			"policy denied the job",
+		},
+		{
+			"gate that also wraps denied",
+			fmt.Errorf("%w: %w", identity.ErrDenied,
+				&job.GateError{Gates: []job.EnforcedGate{{Scope: "s", ID: "no-plans", Point: "p"}}}),
+			"no-plans",
+		},
 	}
 
 	for _, tt := range tests {
