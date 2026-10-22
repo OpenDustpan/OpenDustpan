@@ -181,18 +181,48 @@ So no CLI version reads outputs only. Each read path reads a whole state.
 
    No caller gives the `Checker` a principal whose grants decide. For an
    open of the profile block, the profile service passes only a reference
-   to the saved attachment (`ReadRequest.Attachment`: the profile, the
-   revision and the block). The `Checker` does not trust the reference. It
-   reads the attachment through the small port `outputshare.Attachments`,
-   which the profile store serves, and takes the authority from the saved
-   revision. It denies with the check `attachment` unless the revision is
-   attached to the unit of the job and the block names this producer, both
-   by stable ID. So a job, an SDK caller or an adapter that copies a value by
-   mistake cannot read with the grants of another principal: a reference to
-   the attachment of an administrator on another unit, or to a block that
-   names another producer, denies, and the denial goes to the audit log. A
-   direct open is a read by the principal with the grants of the caller, and
-   the `Checker` refuses an attachment reference on a read by a principal.
+   (`ReadRequest.Attachment`): the ID of the attachment, and the profile,
+   the revision and the block that the job reached through it. The
+   reference names the attachment, because the authority belongs to the
+   attachment (ADR 203 decision 4). One profile can have more than one
+   attachment that covers the unit of the job, for example one on its
+   collection and one on the unit, each with its own authority. When the job
+   reaches a block of one name through more than one attachment, the
+   reference names the attachment whose block the merge keeps: the later
+   one (ADR 203 decision 5).
+
+   The `Checker` does not trust the reference. It reads the attachment
+   through the small port `outputshare.Attachments`, which the profile
+   store serves, for the job of the job-ID claim of the job token. The port
+   answers from the spec of that job, which fixed the attachments and their
+   revisions at the start of the job (ADR 203 decision 5). It answers only
+   when the spec holds that attachment and, through it, that revision of
+   that profile, as the attached profile or as a profile that it imports or
+   reads, that revision holds the block, and the merge keeps the block from
+   that attachment. The port returns the ID of the
+   attachment, its object (a unit, a collection or a namespace), the
+   producer that the block names and the authority. A block of an imported
+   profile uses the authority of the attachment through which the job
+   reached it.
+
+   The `Checker` denies with the check `attachment` unless the port answers,
+   the ID is the ID of the reference, the object covers the unit of the job
+   (the same unit, its collection or its namespace, by stable ID), and the
+   block names this producer by stable ID. A unit that moved out of the
+   collection of the attachment after the start of the job is not covered,
+   so the read fails closed. So a job, an SDK caller or an adapter that
+   copies a value by mistake cannot read with the grants of another
+   principal. A reference to the attachment of an administrator on another
+   unit, to an attachment or a revision that the spec of the job does not
+   hold, to the spec of another job, or to a block that names another
+   producer denies, and the denial goes to the audit log. Of two
+   attachments of one profile that cover the unit, only the authority of
+   the attachment whose block the merge keeps decides. A reference to the
+   other attachment denies, also when its authority holds the grant.
+
+   A direct open is a read by the principal with the grants of the caller,
+   and the `Checker` refuses an attachment reference on a read by a
+   principal.
    We chose a reference and a port over a type that only the profile
    package can make. Go cannot stop another package from making a value of
    an exported type of `pkg/outputshare`, and a type of `pkg/profile` in the
@@ -379,9 +409,9 @@ So no CLI version reads outputs only. Each read path reads a whole state.
     give it to others with a custom role.
 11. **The ports.** The package `pkg/outputshare` holds the tool-neutral ports:
     `Store` (rules and the setting), `Checker` (each read), and the two
-    small ports that the `Checker` reads: `Attachments` (the saved
-    attachment of an open of the profile block, which the profile store
-    serves) and `States` (the ID of the latest state of a unit, and whether
+    small ports that the `Checker` reads: `Attachments` (the attachment
+    of an open of the profile block, from the spec of the job, which the
+    profile store serves) and `States` (the ID of the latest state of a unit, and whether
     the client encrypted it, which the store of each tool serves). The rule of a
     new unit is a write inside the SQL adapters (decision 4), not a port. `pkg/outputshare/outputsharetest` holds their
     conformance suite. The service goes to `internal/outputsharesvc` (ADR
@@ -399,8 +429,9 @@ So no CLI version reads outputs only. Each read path reads a whole state.
       both conditions at each read, with the current grants. It reads the
       latest state itself and denies a read of another state, and of a
       state that the client encrypted. It reads the attachment authority
-      itself from the saved attachment, and denies an attachment of
-      another unit or of another producer.
+      itself from the spec of the job, and denies an attachment that the
+      spec does not hold, that does not cover the unit of the job, or whose
+      block names another producer.
     - A hidden denial unwraps to one sentinel only, so an adapter cannot
       answer it with 403.
     - The answer to a job token holds the root outputs only.

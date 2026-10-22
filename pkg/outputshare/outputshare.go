@@ -57,8 +57,9 @@ var (
 	// server cannot read such a state, so it cannot answer the outputs only.
 	// A tool adapter answers 409 to a caller of the producer namespace.
 	ErrClientEncrypted = errors.New("state of the producer is encrypted by the client")
-	// ErrUnknownAttachment reports an attachment reference that names no
-	// saved attachment of a profile block outputs/opendustpan.
+	// ErrUnknownAttachment reports an attachment reference that the spec of the
+	// job does not hold: no such attachment, revision or block
+	// outputs/opendustpan reached through that attachment.
 	ErrUnknownAttachment = errors.New("attachment of the profile block not found")
 )
 
@@ -94,28 +95,45 @@ func (id ID) Validate() error {
 	return nil
 }
 
-// AttachmentRef is a reference to one block outputs/opendustpan of a saved
-// revision of a profile. The profile service puts it in a ReadRequest for an
-// open of the block by a job. It is not trusted: the checker reads the
-// attachment that it names through the Attachments port, and checks it.
+// AttachmentRef is a reference to one block outputs/opendustpan that a job
+// reached through one profile attachment. The profile service puts it in a
+// ReadRequest for an open of the block by a job. It names the attachment,
+// because the authority belongs to the attachment: one profile can have more
+// than one attachment that covers the unit of the job, each with its own
+// authority. It is not trusted: the checker reads the attachment that it
+// names through the Attachments port, for the job of the job token, and
+// checks it.
 type AttachmentRef struct {
-	// Profile is the stable ID of the profile.
+	// Attachment is the stable ID of the profile attachment that the spec
+	// of the job resolved, and through which the job reached the block. When
+	// the job reaches a block of that name through more than one attachment,
+	// it is the attachment whose block the merge of the profiles keeps: the
+	// later one.
+	Attachment string
+	// Profile is the stable ID of the profile that holds the block: the
+	// attached profile, or a profile that it imports or reads.
 	Profile string
 	// Block is the name of the block in the document of the revision.
 	Block string
-	// Revision is the number of the saved revision, 1 or more.
+	// Revision is the number of the revision of Profile that the spec of the
+	// job fixed, 1 or more.
 	Revision int
 }
 
 // IsZero reports whether r names no attachment.
 func (r AttachmentRef) IsZero() bool {
-	return r == AttachmentRef{Profile: "", Block: "", Revision: 0}
+	return r == AttachmentRef{Attachment: "", Profile: "", Block: "", Revision: 0}
 }
 
 // Validate returns an error that wraps ErrInvalid when r is not a reference
-// to an attachment: a profile ID or a block name that is empty, too long or
-// has a byte that is not in the allowlist, or a revision below 1.
+// to an attachment: an attachment ID, a profile ID or a block name that is
+// empty, too long or has a byte that is not in the allowlist, or a revision
+// below 1.
 func (r AttachmentRef) Validate() error {
+	if !validRefPart(r.Attachment, MaxIDBytes, "") {
+		return fmt.Errorf("%w: the attachment ID of the attachment reference", ErrInvalid)
+	}
+
 	if !validRefPart(r.Profile, MaxIDBytes, "") {
 		return fmt.Errorf("%w: the profile ID of the attachment reference", ErrInvalid)
 	}

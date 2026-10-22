@@ -126,8 +126,9 @@ const (
 	// ReadByAttachment is an open of the profile block outputs/opendustpan by
 	// a job of another unit. A sharing rule must name the unit of the job,
 	// and the attachment authority must hold the actions. The checker reads
-	// the authority from the saved attachment that ReadRequest.Attachment
-	// names. The grants of the starter of the job do not count.
+	// the authority from the attachment that ReadRequest.Attachment names,
+	// as the spec of the job of the job token resolved it. The grants of the
+	// starter of the job do not count.
 	ReadByAttachment ReadKind = "attachment"
 )
 
@@ -144,11 +145,13 @@ type ReadRequest struct {
 	// reference of the route, no stable ID and no collection, so that an
 	// unknown producer takes the same path as a known one.
 	Producer Placement
-	// Attachment names the saved attachment of an open of the profile block
-	// outputs/opendustpan by a job. Only the profile service sets it, from
-	// the revision that the job opens. A tool adapter leaves it zero. The
-	// checker does not trust it: it reads the attachment through the
-	// Attachments port, and denies unless the attachment is attached to the
+	// Attachment names the attachment, the profile, the revision and the
+	// block of an open of the profile block outputs/opendustpan by a job, as
+	// the spec of the job resolved them, also for a block of an imported
+	// profile. Only the profile service sets it. A tool adapter leaves it
+	// zero. The checker does not trust it: it reads the attachment through
+	// the Attachments port for the job of the job-ID claim of Caller, and
+	// denies unless the spec of that job holds it, its object covers the
 	// unit of the job and its block names the producer.
 	//
 	// For a job token, a set Attachment makes the read a ReadByAttachment.
@@ -192,9 +195,10 @@ const (
 	CheckCaller = "caller"
 	// CheckProducer is the check that the producer of the route exists.
 	CheckProducer = "producer"
-	// CheckAttachment is the check that the attachment of a ReadByAttachment
-	// is a saved attachment of the unit of the job whose block names the
-	// producer.
+	// CheckAttachment is the check that the spec of the job holds the
+	// attachment, the revision and the block of a ReadByAttachment, that the
+	// object of the attachment covers the unit of the job, and that the block
+	// names the producer.
 	CheckAttachment = "attachment"
 	// CheckRule is the check that a sharing rule names the unit of the job.
 	CheckRule = "sharing-rule"
@@ -293,37 +297,86 @@ func (e *DeniedError) Unwrap() error {
 	}
 }
 
-// Attachment is a saved attachment of a profile block outputs/opendustpan,
-// as the Attachments port reads it from the saved revision.
+// Attachment is a profile attachment through which a job reached a block
+// outputs/opendustpan, as the Attachments port reads it from the spec of the
+// job.
 type Attachment struct {
-	// Unit is the unit that the revision of the profile is attached to, with
-	// its stable ID.
-	Unit identity.Object
+	// ID is the stable ID of the attachment.
+	ID string
+	// Object is the object that the profile is attached to: a unit, a
+	// collection or a namespace, with its stable ID for a unit and a
+	// collection. Covers tells whether it covers the unit of a job.
+	Object identity.Object
 	// Producer is the unit that the block names, with the stable ID that the
 	// save of the revision resolved.
 	Producer identity.Object
-	// Authority is the principal ID of the attachment authority: the
-	// principal that made the attachment, or the blueprint publisher of a
-	// Catalog attachment.
+	// Authority is the principal ID of the attachment authority, which the
+	// attachment stores: the principal that made the attachment, or the
+	// blueprint publisher of a Catalog attachment. A block of an imported
+	// profile uses the authority of the attachment through which the job
+	// reached it.
 	Authority string
 }
 
-// Attachments reads the saved attachments of the profile block
-// outputs/opendustpan for the checker. The profile store serves it. It is the
-// only source of the attachment authority: no caller passes an authority to
-// the checker.
+// Covers reports whether the object of a covers the unit u: the same unit by
+// stable ID, the collection of u by stable ID, or the namespace of u. A
+// placement that fails Validate, an object with no stable ID, an object of
+// another namespace and an object of another kind do not cover u.
+//
+// Defense in depth: the Attachments port answers only an attachment that the
+// spec of the job holds, and the spec holds only the attachments of the unit
+// of the job; the checker calls Covers too, so that a port that answers the
+// attachment of another object cannot widen a read. A unit that moved out of
+// the collection of the attachment after the start of the job is not covered,
+// so the read fails closed.
+func (a Attachment) Covers(u Placement) bool {
+	if u.Validate() != nil || a.Object.Namespace() != u.Unit.Namespace() {
+		return false
+	}
+
+	switch {
+	case a.Object.IsUnit():
+		return a.Object.UnitID() != "" && a.Object.UnitID() == u.Unit.UnitID()
+	case a.Object.IsCollection():
+		return a.Object.CollectionID() != "" && a.Object.CollectionID() == u.Collection.CollectionID()
+	case a.Object.IsNamespace():
+		return true
+	default:
+		return false
+	}
+}
+
+// Attachments reads, for the checker, the profile attachments through which
+// a job reached a block outputs/opendustpan. The profile store serves it from
+// the spec of the job: at the start of a job, the server resolves the
+// attachments of the namespace, of the collection and of the unit of the job
+// to fixed revisions, also of each profile that they import or read, and
+// stores them in the spec. It is the only source of the attachment authority:
+// no caller passes an authority to the checker.
 type Attachments interface {
-	// Attachment returns the attachment that ref names in the namespace ns:
-	// the block ref.Block of the saved revision ref.Revision of the profile
-	// ref.Profile. It returns ErrInvalid when ref fails
-	// AttachmentRef.Validate, and ErrUnknownAttachment for an unknown
-	// profile, revision or block, for a block that is not of the provider
-	// outputs/opendustpan, and for a revision that is attached to no unit.
+	// Attachment returns the attachment ref.Attachment of the job with the
+	// ID job in the namespace ns, when the spec of that job holds it and,
+	// through it, the revision ref.Revision of the profile ref.Profile, as
+	// the attached profile or as a profile that it imports or reads, and that
+	// revision holds the block ref.Block of the provider outputs/opendustpan,
+	// and the merge of the profiles of the spec keeps the block of that name
+	// from that attachment. The caller takes job from the job-ID claim of the
+	// job token.
+	//
+	// It returns ErrInvalid when ref fails AttachmentRef.Validate or job is
+	// empty. It returns ErrUnknownAttachment for an unknown job or a job of
+	// another namespace, for an attachment that the spec of the job does not
+	// hold, for a revision that the spec does not fix through that
+	// attachment, also an older or a later revision of the same profile, for
+	// an unknown block, for a block that is not of the provider
+	// outputs/opendustpan, and for a block that the merge keeps from another
+	// attachment.
 	//
 	// The port does not compare the attachment with the read. The checker
-	// compares Unit with the unit of the job and Producer with the producer,
-	// by stable ID.
-	Attachment(ctx context.Context, ns namespace.Name, ref AttachmentRef) (Attachment, error)
+	// compares ID with ref.Attachment, checks that Object covers the unit of
+	// the job (Attachment.Covers), and compares Producer with the producer by
+	// stable ID.
+	Attachment(ctx context.Context, ns namespace.Name, job string, ref AttachmentRef) (Attachment, error)
 }
 
 // State is the latest state of a unit, as the States port tells it to the
@@ -368,12 +421,16 @@ type States interface {
 //
 // For a read by a job token, the checker reads the job of the claim and its
 // unit, and the principal whose grants decide check 2: the attachment
-// authority of the saved attachment that ReadRequest.Attachment names, else
+// authority of the attachment that ReadRequest.Attachment names, else
 // the last saver of the trigger that started the job, else the principal that
 // started it. It allows the read only when every check passes at this call:
-//   - For a ReadByAttachment, the Attachments port returns the attachment,
-//     its Unit is the unit of the job and its Producer is the producer, by
-//     stable ID, and the producer is in the namespace of the unit of the job.
+//   - For a ReadByAttachment, the Attachments port returns the attachment
+//     for the job of the job-ID claim, its ID is the attachment of the
+//     reference, its Object covers the unit of the job (Attachment.Covers),
+//     its Producer is the producer by stable ID, and the producer is in the
+//     namespace of the unit of the job. So of two attachments of one profile
+//     that cover the unit, only the authority of the attachment whose block
+//     the merge of the spec keeps decides, never the other.
 //   - Store.Find returns a rule that names the unit of the job.
 //   - That principal holds unit:read-outputs on the producer with its own
 //     current grants, and unit:read-secrets for a secret output.
@@ -395,13 +452,14 @@ type States interface {
 // not tell them apart.
 //
 // The checker fails closed. A job, a starter, a saver or an authority that is
-// missing, deleted or disabled denies. An unknown or mismatched attachment
-// denies. A stale or empty Latest denies. An error of a port denies. Each
-// denial writes one audit entry in the producer namespace (the namespace of
-// the route) only, with the check that denied, the producer and the unit of
-// the job, when that namespace exists. For a job of another namespace, the
-// entry names the unit of the job by its reference, the namespace of the job
-// gets no entry, and the denial is hidden (DeniedError.IsHidden).
+// missing, deleted or disabled denies. An attachment that the spec of the job
+// does not hold, or that does not cover the unit of the job, denies. A stale
+// or empty Latest denies. An error of a port denies. Each denial writes one
+// audit entry in the producer namespace (the namespace of the route) only,
+// with the check that denied, the producer and the unit of the job, when that
+// namespace exists. For a job of another namespace, the entry names the unit
+// of the job by its reference, the namespace of the job gets no entry, and
+// the denial is hidden (DeniedError.IsHidden).
 type Checker interface {
 	// CheckRead returns the decision for req. It returns a *DeniedError when
 	// a check denies. The error unwraps to one sentinel only, as

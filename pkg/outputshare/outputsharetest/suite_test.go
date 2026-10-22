@@ -18,7 +18,7 @@ func TestSuiteWaitsForAnAdapter(t *testing.T) {
 
 		return outputsharetest.Harness{
 			Store: nil, Checker: nil, Attachments: nil, States: nil, Namespace: nil, Unit: nil, UnitFault: nil,
-			Authority: nil, Attach: nil, SaveState: nil, Grant: nil, Job: nil, Disable: nil, Audited: nil,
+			Authority: nil, Profile: nil, Attach: nil, SaveState: nil, Grant: nil, Job: nil, Disable: nil, Audited: nil,
 			Calls: nil, StoreRaw: nil,
 		}
 	})

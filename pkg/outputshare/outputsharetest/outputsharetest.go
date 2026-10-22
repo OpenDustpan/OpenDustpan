@@ -48,17 +48,26 @@ type Harness struct {
 	// Authority makes the attachment authority of an open of the profile
 	// block outputs/opendustpan and returns its principal ID.
 	Authority func(t *testing.T, ns namespace.Name) string
-	// Attach saves a revision of a profile with one block
-	// outputs/opendustpan that names the producer, made by the authority,
-	// attaches it to the unit, and returns the reference of the block.
-	Attach func(t *testing.T, unit, producer outputshare.Placement, authority string) outputshare.AttachmentRef
+	// Profile saves a new revision of the profile with the stable ID profile
+	// in the namespace ns, and makes the profile at its first revision. The
+	// revision has one block outputs/opendustpan that names the producer,
+	// and imports the profile imports when imports is not empty. The tag
+	// latest moves to the new revision. It returns the reference of the
+	// block with no attachment ID.
+	Profile func(t *testing.T, ns namespace.Name, profile string, producer outputshare.Placement, imports string) outputshare.AttachmentRef
+	// Attach attaches the profile at the tag latest to the object (a unit, a
+	// collection or a namespace), with the authority as its attachment
+	// authority, and returns the stable ID of the attachment. The spec of a
+	// job that Job starts later resolves it.
+	Attach func(t *testing.T, object identity.Object, profile, authority string) string
 	// SaveState saves a new latest state of the unit, encrypted by the client
 	// when encrypted is true, and returns its ID as State.ID names it.
 	SaveState func(t *testing.T, unit outputshare.Placement, encrypted bool) string
 	// Grant gives the principal the action on the object.
 	Grant func(t *testing.T, principal string, action identity.Action, object identity.Object)
 	// Job starts a job of the unit for the starter principal and returns the
-	// principal of its job token.
+	// principal of its job token. The start resolves the attachments that
+	// cover the unit to fixed revisions in the spec of the job.
 	Job func(t *testing.T, unit outputshare.Placement, starter string) identity.Principal
 	// Disable disables the principal, as a person who leaves the team.
 	Disable func(t *testing.T, principal string)
@@ -288,7 +297,8 @@ func latestCases() []suiteCase {
 }
 
 // attachmentCases are the behaviors of the checker for an open of the profile
-// block outputs/opendustpan.
+// block outputs/opendustpan. The reference names the attachment that the spec
+// of the job resolved, and the checker reads it for the job of the job token.
 func attachmentCases() []suiteCase {
 	return []suiteCase{
 		{nil, "attachment: a job open with a rule and an authority with the grant reads"},
@@ -298,8 +308,52 @@ func attachmentCases() []suiteCase {
 		{nil, "attachment: a secret output needs unit:read-secrets of the authority"},
 		{nil, "attachment: an authority that is deleted or disabled denies"},
 		{nil, "attachment: a job open of a producer of another namespace is denied and hidden"},
-		{nil, "attachment: an unknown profile, revision or block is denied by the attachment check"},
+		{nil, "attachment: an unknown attachment, profile, revision or block is denied by the attachment check"},
 		{nil, "attachment: an attachment of another unit is denied by the attachment check"},
+		{nil, "attachment: a collection attachment that covers the unit of the job reads"},
+		{nil, "attachment: a collection attachment of another collection is denied by the attachment check"},
+		{
+			nil,
+			"attachment: a collection attachment after the unit of the job moved out of the collection is denied",
+		},
+		{nil, "attachment: a namespace attachment that covers the unit of the job reads"},
+		{nil, "attachment: a namespace attachment whose object the port answers in another namespace is denied"},
+		{nil, "attachment: a reference with the ID of an attachment that the spec of the job holds reads"},
+		{
+			nil,
+			"attachment: a reference with the ID of an attachment that the spec of the job does not hold is denied",
+		},
+		{nil, "attachment: an attachment ID that the port answers other than the reference is denied"},
+		{
+			nil,
+			"attachment: two attachments of one profile cover the unit and the authority of the attachment " +
+				"that the job resolved decides when it holds the grant",
+		},
+		{
+			nil,
+			"attachment: two attachments of one profile cover the unit and the attachment that the job resolved " +
+				"denies when its authority has no grant, also when the other authority has it",
+		},
+		{
+			nil,
+			"attachment: two attachments of one profile cover the unit and a reference to the attachment whose " +
+				"block the merge does not keep is denied, also when its authority has the grant",
+		},
+		{
+			nil,
+			"attachment: a block of a profile that the attached profile imports reads with the authority of the attachment",
+		},
+		{
+			nil,
+			"attachment: a block of an imported profile that the job did not reach through the attachment of the " +
+				"reference is denied",
+		},
+		{nil, "attachment: the revision that the spec of the job fixed reads after the tag moves to a new revision"},
+		{
+			nil,
+			"attachment: an older revision of an attached profile that the spec of the job does not hold is denied",
+		},
+		{nil, "attachment: the reference of an attachment of the spec of another job of the unit is denied"},
 		{nil, "attachment: an attachment whose block names another producer is denied by the attachment check"},
 		{
 			nil,
@@ -321,13 +375,27 @@ func attachmentCases() []suiteCase {
 // attachmentsCases are the behaviors of Attachments.
 func attachmentsCases() []suiteCase {
 	return []suiteCase{
-		{nil, "attachments: a saved attachment answers its unit, its producer and its authority"},
+		{
+			nil,
+			"attachments: an attachment of the spec of the job answers its ID, its object, its producer and its authority",
+		},
+		{nil, "attachments: the object of a unit, a collection and a namespace attachment"},
 		{nil, "attachments: the producer has the stable ID that the save resolved"},
-		{nil, "attachments: an unknown profile, revision or block answers ErrUnknownAttachment"},
+		{nil, "attachments: a block of an imported profile answers the attachment through which the job reached it"},
+		{nil, "attachments: two attachments of one profile answer the attachment whose block the merge keeps"},
+		{nil, "attachments: an attachment whose block the merge does not keep answers ErrUnknownAttachment"},
+		{nil, "attachments: an unknown attachment, profile, revision or block answers ErrUnknownAttachment"},
 		{nil, "attachments: a block of another provider answers ErrUnknownAttachment"},
-		{nil, "attachments: a revision that is attached to no unit answers ErrUnknownAttachment"},
+		{nil, "attachments: an attachment that the spec of the job does not hold answers ErrUnknownAttachment"},
+		{nil, "attachments: a revision that the spec of the job does not fix answers ErrUnknownAttachment"},
+		{
+			nil,
+			"attachments: an imported profile that the job did not reach through the attachment answers ErrUnknownAttachment",
+		},
+		{nil, "attachments: an attachment made after the start of the job answers ErrUnknownAttachment"},
+		{nil, "attachments: an unknown job and a job of another namespace answer ErrUnknownAttachment"},
 		{nil, "attachments: a profile of another namespace answers ErrUnknownAttachment"},
-		{nil, "attachments: a reference that fails Validate answers ErrInvalid"},
+		{nil, "attachments: a reference that fails Validate and an empty job answer ErrInvalid"},
 	}
 }
 

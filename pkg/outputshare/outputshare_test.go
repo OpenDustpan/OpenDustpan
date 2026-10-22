@@ -381,42 +381,56 @@ func checkOnlyUnknownProducer(t *testing.T, denied *outputshare.DeniedError) {
 func TestAttachmentRefValidate(t *testing.T) {
 	t.Parallel()
 
-	good := outputshare.AttachmentRef{Profile: "prf-0a1b", Block: "network.vpc", Revision: 3}
+	good := outputshare.AttachmentRef{Attachment: "att-7c2d", Profile: "prf-0a1b", Block: "network.vpc", Revision: 3}
 
 	if err := good.Validate(); err != nil {
 		t.Fatalf("Validate(%+v) = %v", good, err)
 	}
 
-	if good.IsZero() || !(outputshare.AttachmentRef{Profile: "", Block: "", Revision: 0}).IsZero() {
+	zero := outputshare.AttachmentRef{Attachment: "", Profile: "", Block: "", Revision: 0}
+	if good.IsZero() || !zero.IsZero() {
 		t.Fatal("IsZero is wrong")
+	}
+
+	// with returns good with one part changed.
+	with := func(change func(r *outputshare.AttachmentRef)) outputshare.AttachmentRef {
+		r := good
+		change(&r)
+
+		return r
 	}
 
 	for _, tc := range []struct {
 		name string
 		ref  outputshare.AttachmentRef
 	}{
-		{"zero", outputshare.AttachmentRef{Profile: "", Block: "", Revision: 0}},
-		{"no profile", outputshare.AttachmentRef{Profile: "", Block: good.Block, Revision: 3}},
-		{"no block", outputshare.AttachmentRef{Profile: good.Profile, Block: "", Revision: 3}},
-		{"revision 0", outputshare.AttachmentRef{Profile: good.Profile, Block: good.Block, Revision: 0}},
-		{"negative revision", outputshare.AttachmentRef{Profile: good.Profile, Block: good.Block, Revision: -1}},
-		{"profile with a slash", outputshare.AttachmentRef{Profile: "prf-1/../2", Block: good.Block, Revision: 3}},
-		{"profile with a dot", outputshare.AttachmentRef{Profile: "prf.1", Block: good.Block, Revision: 3}},
-		{"profile with an upper case byte", outputshare.AttachmentRef{Profile: "PRF-1", Block: good.Block, Revision: 3}},
+		{"zero", zero},
+		{"no attachment", with(func(r *outputshare.AttachmentRef) { r.Attachment = "" })},
+		{"attachment with a slash", with(func(r *outputshare.AttachmentRef) { r.Attachment = "att-1/../2" })},
+		{"attachment with a dot", with(func(r *outputshare.AttachmentRef) { r.Attachment = "att.1" })},
+		{"attachment with an upper case byte", with(func(r *outputshare.AttachmentRef) { r.Attachment = "ATT-1" })},
+		{"attachment with a CR LF", with(func(r *outputshare.AttachmentRef) { r.Attachment = "att\r\n1" })},
+		{
+			"attachment too long",
+			with(func(r *outputshare.AttachmentRef) { r.Attachment = strings.Repeat("a", outputshare.MaxIDBytes+1) }),
+		},
+		{"no profile", with(func(r *outputshare.AttachmentRef) { r.Profile = "" })},
+		{"no block", with(func(r *outputshare.AttachmentRef) { r.Block = "" })},
+		{"revision 0", with(func(r *outputshare.AttachmentRef) { r.Revision = 0 })},
+		{"negative revision", with(func(r *outputshare.AttachmentRef) { r.Revision = -1 })},
+		{"profile with a slash", with(func(r *outputshare.AttachmentRef) { r.Profile = "prf-1/../2" })},
+		{"profile with a dot", with(func(r *outputshare.AttachmentRef) { r.Profile = "prf.1" })},
+		{"profile with an upper case byte", with(func(r *outputshare.AttachmentRef) { r.Profile = "PRF-1" })},
 		{
 			"profile too long",
-			outputshare.AttachmentRef{
-				Profile: strings.Repeat("p", outputshare.MaxIDBytes+1), Block: good.Block, Revision: 3,
-			},
+			with(func(r *outputshare.AttachmentRef) { r.Profile = strings.Repeat("p", outputshare.MaxIDBytes+1) }),
 		},
-		{"block with a slash", outputshare.AttachmentRef{Profile: good.Profile, Block: "a/b", Revision: 3}},
-		{"block with a CR LF", outputshare.AttachmentRef{Profile: good.Profile, Block: "a\r\nb", Revision: 3}},
-		{"block with a NUL", outputshare.AttachmentRef{Profile: good.Profile, Block: "a\x00", Revision: 3}},
+		{"block with a slash", with(func(r *outputshare.AttachmentRef) { r.Block = "a/b" })},
+		{"block with a CR LF", with(func(r *outputshare.AttachmentRef) { r.Block = "a\r\nb" })},
+		{"block with a NUL", with(func(r *outputshare.AttachmentRef) { r.Block = "a\x00" })},
 		{
 			"block too long",
-			outputshare.AttachmentRef{
-				Profile: good.Profile, Block: strings.Repeat("b", outputshare.MaxBlockBytes+1), Revision: 3,
-			},
+			with(func(r *outputshare.AttachmentRef) { r.Block = strings.Repeat("b", outputshare.MaxBlockBytes+1) }),
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -424,11 +438,68 @@ func TestAttachmentRefValidate(t *testing.T) {
 
 			before := tc.ref
 			if err := tc.ref.Validate(); !errors.Is(err, outputshare.ErrInvalid) {
-				t.Fatalf("Validate(%q) = %v, want ErrInvalid", tc.ref.Profile+"|"+tc.ref.Block, err)
+				t.Fatalf(
+					"Validate(%q) = %v, want ErrInvalid",
+					tc.ref.Attachment+"|"+tc.ref.Profile+"|"+tc.ref.Block,
+					err,
+				)
 			}
 
 			if tc.ref != before {
 				t.Fatal("Validate changed the reference")
+			}
+		})
+	}
+}
+
+// TestAttachmentCovers proves that the object of an attachment covers the
+// unit of a job only as the same unit, the collection of the unit or the
+// namespace of the unit, each by stable ID, and that each other object, as
+// a port could answer it, does not.
+func TestAttachmentCovers(t *testing.T) {
+	t.Parallel()
+
+	web := unitObject(t, "opentofu", acme, "web").WithUnitID("u-web")
+	apps := identity.CollectionObject(acme, "apps").WithCollectionID("c-apps")
+	job := outputshare.Placement{Unit: web, Collection: apps}
+	noCollection := outputshare.Placement{Unit: web, Collection: identity.Object{}}
+
+	for _, tc := range []struct {
+		name   string
+		object identity.Object
+		unit   outputshare.Placement
+		want   bool
+	}{
+		{"the unit of the job", web, job, true},
+		{"the unit of the job after a rename", unitObject(t, "opentofu", acme, "web2").WithUnitID("u-web"), job, true},
+		{"the collection of the unit", apps, job, true},
+		{"the collection of the unit after a rename", identity.CollectionObject(acme, "apps2").WithCollectionID("c-apps"), job, true},
+		{"the namespace of the unit", identity.NamespaceObject(acme), job, true},
+		{"the namespace of a unit with no collection", identity.NamespaceObject(acme), noCollection, true},
+		{"another unit", unitObject(t, "opentofu", acme, "db").WithUnitID("u-db"), job, false},
+		{"a unit with the same name and another stable ID", unitObject(t, "opentofu", acme, "web").WithUnitID("u-old"), job, false},
+		{"a unit with no stable ID", unitObject(t, "opentofu", acme, "web"), job, false},
+		{"a unit of another namespace with the same stable ID", unitObject(t, "opentofu", beta, "web").WithUnitID("u-web"), job, false},
+		{"another collection", identity.CollectionObject(acme, "data").WithCollectionID("c-data"), job, false},
+		{"a collection with the same name and another stable ID", identity.CollectionObject(acme, "apps").WithCollectionID("c-old"), job, false},
+		{"a collection with no stable ID", identity.CollectionObject(acme, "apps"), job, false},
+		{"a collection with no stable ID and a unit with no collection", identity.CollectionObject(acme, "apps"), noCollection, false},
+		{"a collection and a unit that moved out of it", apps, noCollection, false},
+		{"a collection of another namespace with the same stable ID", identity.CollectionObject(beta, "apps").WithCollectionID("c-apps"), job, false},
+		{"another namespace", identity.NamespaceObject(beta), job, false},
+		{"a principal", identity.PrincipalObject("p-admin"), job, false},
+		{"the caller", identity.CallerObject(), job, false},
+		{"the installation", identity.ServerObject(), job, false},
+		{"the zero object", identity.Object{}, job, false},
+		{"a unit of the job with no stable ID", identity.NamespaceObject(acme), outputshare.Placement{Unit: unitObject(t, "opentofu", acme, "web"), Collection: apps}, false},
+		{"a unit of the job with a collection of another namespace", identity.NamespaceObject(acme), outputshare.Placement{Unit: web, Collection: identity.CollectionObject(beta, "apps").WithCollectionID("c-apps")}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			a := outputshare.Attachment{ID: "att-1", Object: tc.object, Producer: identity.Object{}, Authority: "p-1"}
+			if got := a.Covers(tc.unit); got != tc.want {
+				t.Fatalf("Covers(%q) of the object %q = %v, want %v", tc.unit.Unit, tc.object, got, tc.want)
 			}
 		})
 	}
