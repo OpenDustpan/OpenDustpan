@@ -393,7 +393,7 @@ func (h *Handler) appendRevealAudit(r *http.Request, p identity.Principal, obj i
 // with a person who asked to see a secret value. Version stays empty: it
 // names a state version. It returns the append error,
 // so the route answers 500 with no secret value when it cannot record the
-// entry (ADR 41 decision 5).
+// entry.
 func (h *Handler) appendToolOperationAudit(
 	r *http.Request, p identity.Principal, obj identity.Object, count int,
 ) error {

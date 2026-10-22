@@ -143,7 +143,7 @@ func (h *Handler) recordOverride(
 }
 
 // appendOverrideAudit writes the audit entry of one allowed override: the
-// action and the unit (ADR 44, decision 7).
+// action and the unit.
 // It returns the append error, so the write is refused when the entry is lost.
 func (h *Handler) appendOverrideAudit(
 	r *http.Request, p identity.Principal, obj identity.Object, action identity.Action, version string,

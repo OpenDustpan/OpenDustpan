@@ -731,8 +731,8 @@ func checkLockID(w Workspace, expect Lock) error {
 // override let the release go through for a client-encrypted state, which
 // has no fence (ADR 44, decision 4). Without the override that state is
 // refused with ErrClientEncrypted and the lock stays held. record runs before
-// an unfenced release and writes its audit entry; a failure stops the release
-// (ADR 41 decision 5). An unfenced release with a nil record is refused with
+// an unfenced release and writes its audit entry; a failure stops the
+// release. An unfenced release with a nil record is refused with
 // ErrNoRecorder before it changes anything.
 //
 // Each release appends one audit entry of the kind change, in the transaction
@@ -884,7 +884,7 @@ type PendingState struct {
 // (ADR 44, decision 8).
 //
 // auth.Record runs before the store write, and a failed record refuses the
-// declare, so no override writes without its entry (ADR 41, decision 5). A
+// declare, so no override writes without its entry. A
 // declare that uses an override with a nil auth.Record is refused with
 // ErrNoRecorder before it writes.
 func (s *Service) BeginState(

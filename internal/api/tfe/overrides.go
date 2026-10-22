@@ -120,7 +120,7 @@ func (h *Handler) recordOverrideRefusal(
 }
 
 // appendOverrideAudit writes the audit entry of one allowed override: the
-// action, the unit, and the version it wrote (ADR 44, decision 7). It returns
+// action, the unit, and the version it wrote. It returns
 // the append error, so the route answers 500 when the entry is lost.
 func (h *Handler) appendOverrideAudit(
 	r *http.Request, p identity.Principal, obj identity.Object, action identity.Action, version string,
