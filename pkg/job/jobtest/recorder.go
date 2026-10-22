@@ -11,13 +11,13 @@ import (
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/scopeaudit"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/durable"
 	"opendustpan.org/opendustpan/pkg/history"
 	"opendustpan.org/opendustpan/pkg/job"
 	"opendustpan.org/opendustpan/pkg/namespace"
-	"opendustpan.org/opendustpan/pkg/scopeaudit"
 	"opendustpan.org/opendustpan/pkg/secret"
 )
 
