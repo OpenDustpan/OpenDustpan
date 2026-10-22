@@ -199,16 +199,14 @@ func testLastSiteAdministratorParallel(t *testing.T, d *delegation) {
 		start   = make(chan struct{})
 	)
 
-	for i, p := range []principal.Principal{first, second} {
-		wg.Add(1)
+	targets := []string{first.ID, second.ID}
 
-		go func() {
-			defer wg.Done()
-
+	for i := range targets {
+		wg.Go(func() {
 			<-start
 
-			results[i] = d.principals.DisablePrincipal(ctx, managePrincipals, bootstrap(), p.ID)
-		}()
+			results[i] = d.principals.DisablePrincipal(ctx, managePrincipals, bootstrap(), targets[i])
+		})
 	}
 
 	close(start)
