@@ -113,6 +113,29 @@ type seedState struct {
 //nolint:gochecknoglobals // One shared counter, so that two such Envs never make the same name.
 var fallbackSeed seedState
 
+// fallbackSeeds holds the seed state of each server URL, for an Env that no run
+// made.
+//
+//nolint:gochecknoglobals // One state for each server, so that a second call finds the profile.
+var (
+	fallbackSeedsMu sync.Mutex
+	fallbackSeeds   = map[string]*seedState{}
+)
+
+// fallbackSeedFor returns the shared seed state of a server address.
+func fallbackSeedFor(addr string) *seedState {
+	fallbackSeedsMu.Lock()
+	defer fallbackSeedsMu.Unlock()
+
+	s, ok := fallbackSeeds[addr]
+	if !ok {
+		s = new(seedState)
+		fallbackSeeds[addr] = s
+	}
+
+	return s
+}
+
 // next returns prefix and a number that no earlier call of next returned.
 func (s *seedState) next(prefix string) string {
 	if s == nil {
@@ -153,8 +176,9 @@ type answer struct {
 type authMode int
 
 const (
+	_ authMode = iota // Zero means that nobody chose.
 	// withToken sends the token of the server.
-	withToken authMode = iota
+	withToken
 	// withoutToken sends no Authorization header.
 	withoutToken
 )
@@ -215,7 +239,9 @@ func direct(ctx context.Context, env Env, dr directRequest) (answer, error) {
 func ensureProfile(ctx context.Context, env Env) (string, error) {
 	seed := env.seed
 	if seed == nil {
-		seed = new(seedState)
+		// No run made this Env, so the seed of the server is the shared one for
+		// its URL. A fresh state here would write the profile on each call.
+		seed = fallbackSeedFor(env.Server.URL())
 	}
 
 	seed.once.Do(func() { seed.err = writeSeed(ctx, env) })
