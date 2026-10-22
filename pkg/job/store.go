@@ -289,6 +289,10 @@ type StartRequest struct {
 	// Unit is the unit reference.
 	Unit      identity.Object
 	Operation Operation
+	// Purpose is empty, or PurposeDriftCheck for a drift check. A drift check
+	// has the operation refresh and the one phase plan, and needs the action
+	// of a plan on the unit.
+	Purpose Purpose
 	// Executor is empty to take the executor that the unit settings name.
 	Executor ExecutorKind
 	// Location is empty to take the code location of the unit. Revision may

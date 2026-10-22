@@ -10,7 +10,8 @@ import (
 )
 
 // jobStoreOptions returns the options that give the in-process server the job
-// store of st and the runner stores that a job needs for its pool.
+// store of st, the runner stores that a job needs for its pool and the drift
+// result store.
 func jobStoreOptions(st serverStore) []dustpan.Option {
 	var opts []dustpan.Option
 
@@ -20,9 +21,11 @@ func jobStoreOptions(st serverStore) []dustpan.Option {
 
 	switch s := any(st).(type) {
 	case *sqlite.Store:
-		opts = append(opts, dustpan.WithRunners(s.Runners()), dustpan.WithTriggerStore(s.Triggers()))
+		opts = append(opts, dustpan.WithRunners(s.Runners()), dustpan.WithTriggerStore(s.Triggers()),
+			dustpan.WithDriftStore(s.DriftResults()))
 	case *postgres.Store:
-		opts = append(opts, dustpan.WithRunners(s.Runners()), dustpan.WithTriggerStore(s.Triggers()))
+		opts = append(opts, dustpan.WithRunners(s.Runners()), dustpan.WithTriggerStore(s.Triggers()),
+			dustpan.WithDriftStore(s.DriftResults()))
 	default:
 	}
 

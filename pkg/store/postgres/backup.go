@@ -51,6 +51,7 @@ const (
 	pgColSize        = "size"
 	pgColStackID     = "stack_id"
 	pgColWrapperID   = "wrapper_id"
+	pgColScopeID     = "scope_id"
 	pgColStartedAtMs = "started_at_ms"
 	pgColState       = "state"
 	pgColStatus      = "status"
@@ -112,10 +113,12 @@ func pgCopyTables() []pgCopyTable {
 	tables = append(tables, pgCopyManualLockTables()...)
 	tables = append(tables, pgCopyPreferenceTables()...)
 	tables = append(tables, pgCopySavedViewTables()...)
+	tables = append(tables, pgCopyDriftTables()...)
 	tables = append(tables, pgCopyGitHostTables()...)
 	tables = append(tables, pgCopyRegistryTables()...)
 	tables = append(tables, pgCopySinkTables()...)
 	tables = append(tables, pgCopyTriggerTables()...)
+	tables = append(tables, pgCopyItemKeyTables()...)
 
 	return tables
 }
@@ -172,14 +175,14 @@ func pgCopyStackTables() []pgCopyTable {
 		{
 			table: "update_journal",
 			columns: []string{
-				pgColStackID, pgColUpdateID, pgColArrival, "blob_key", "sha256", "md5", pgColSize,
+				pgColStackID, pgColUpdateID, pgColArrival, "blob_key", pgColSHA256, "md5", pgColSize,
 				"lowest_sequence", "sequence_ids", "operation_ids",
 			},
 			orderBy: []string{pgColStackID, pgColUpdateID, pgColArrival},
 		},
 		{
 			table:   "update_journal_sequences",
-			columns: []string{pgColStackID, pgColUpdateID, pgColSequence, pgColArrival, "sha256"},
+			columns: []string{pgColStackID, pgColUpdateID, pgColSequence, pgColArrival, pgColSHA256},
 			orderBy: []string{pgColStackID, pgColUpdateID, pgColSequence},
 		},
 		{
@@ -472,7 +475,7 @@ func pgCopySessionTables() []pgCopyTable {
 		},
 		{
 			table:   "installation_secret_keys",
-			columns: []string{"scope_id", pgColWrapperID, "ciphertext", pgColCreatedAtMs},
+			columns: []string{pgColScopeID, pgColWrapperID, "ciphertext", pgColCreatedAtMs},
 			orderBy: []string{"scope_id"},
 		},
 		{
@@ -914,8 +917,8 @@ func (s *Store) buildStaging(ctx context.Context, in stagingInput) (backup.Summa
 		return backup.Summary{}, idsErr
 	}
 
-	if viewsErr := checkStagedSavedViews(ctx, s.pool, in.staging); viewsErr != nil {
-		return backup.Summary{}, viewsErr
+	if ownedErr := checkStagedOwnedRows(ctx, s.pool, in.staging); ownedErr != nil {
+		return backup.Summary{}, ownedErr
 	}
 
 	if featureErr := checkStagedFeatureRows(ctx, s.pool, in.staging); featureErr != nil {
@@ -1168,7 +1171,8 @@ func checkStagedNamespaceIDs(ctx context.Context, pool *pgxpool.Pool, staging st
 }
 
 // stagingWrapperIDs returns the distinct wrapper IDs of the namespace keys and
-// of the installation keys in the staging schema, ordered, never nil.
+// of the installation keys and the item keys that are not shredded in the staging
+// schema, ordered, never nil.
 func stagingWrapperIDs(ctx context.Context, pool *pgxpool.Pool, staging string) ([]string, error) {
 	keys, err := stagingStrings(ctx, pool, staging, "secret_keys", pgColWrapperID)
 	if err != nil {
@@ -1180,7 +1184,12 @@ func stagingWrapperIDs(ctx context.Context, pool *pgxpool.Pool, staging string) 
 		return nil, err
 	}
 
-	out := slices.Concat(keys, installation)
+	items, err := stagingItemKeyWrapperIDs(ctx, pool, staging)
+	if err != nil {
+		return nil, err
+	}
+
+	out := slices.Concat(keys, installation, items)
 	slices.Sort(out)
 
 	return slices.Compact(out), nil
@@ -1191,10 +1200,28 @@ func stagingWrapperIDs(ctx context.Context, pool *pgxpool.Pool, staging string) 
 func stagingStrings(
 	ctx context.Context, pool *pgxpool.Pool, staging, table, column string,
 ) ([]string, error) {
-	rows, err := pool.Query(
+	return queryStrings(
 		ctx,
+		pool,
 		"SELECT DISTINCT "+pgIdent(column)+" FROM "+stagingTable(staging, table)+" ORDER BY "+pgIdent(column),
 	)
+}
+
+// stagingItemKeyWrapperIDs returns the distinct wrapper IDs of the item keys
+// in the staging schema that are not shredded, ordered, never nil. A shredded
+// key has no key blob left to open, so its wrapper does not count.
+func stagingItemKeyWrapperIDs(ctx context.Context, pool *pgxpool.Pool, staging string) ([]string, error) {
+	return queryStrings(
+		ctx, pool, "SELECT DISTINCT wrapper_id FROM "+stagingTable(staging, "item_keys")+
+			" WHERE shredded_at_ms = 0 ORDER BY wrapper_id",
+	)
+}
+
+// queryStrings runs a query that returns one text column, and returns the
+// values, never nil. The query text comes from this package, never from the
+// network.
+func queryStrings(ctx context.Context, pool *pgxpool.Pool, query string) ([]string, error) {
+	rows, err := pool.Query(ctx, query)
 	if err != nil {
 		return nil, fmt.Errorf("read staged backup summary: %w", err)
 	}
@@ -1233,8 +1260,9 @@ func stagingCount(ctx context.Context, pool *pgxpool.Pool, staging, table string
 }
 
 // stagingBlobRefs reads the blob references of the staging schema: every blob
-// key the staged finalized state versions, the staged checkpoints and the staged journal
-// batches name, with the size and MD5 of the plain bytes, ordered by key.
+// key the staged finalized state versions, the staged checkpoints, the staged journal
+// batches and the staged item keys that are not shredded name, with the size and MD5 of the plain bytes, ordered by
+// key.
 // Sealed state versions mark their references sealed; checkpoint and journal
 // blobs are never sealed. A pending version has no committed content, so the
 // backup leaves pending rows out. It matches BackupBlobs, so the staged summary
@@ -1247,6 +1275,9 @@ func stagingBlobRefs(ctx context.Context, pool *pgxpool.Pool, staging string) ([
 			"blob_md5 AS md5, FALSE AS sealed FROM "+stagingTable(staging, "checkpoints")+
 			" UNION ALL SELECT blob_key AS content_key, size AS size, "+
 			"md5 AS md5, FALSE AS sealed FROM "+stagingTable(staging, "update_journal")+
+			" UNION ALL SELECT 'namespaces/' || namespace_id || '/item-keys/' || id || '/v' || blob_version::text "+
+			"AS content_key, blob_size AS size, blob_md5 AS md5, FALSE AS sealed FROM "+
+			stagingTable(staging, "item_keys")+" WHERE shredded_at_ms = 0"+
 			" ORDER BY content_key",
 	)
 	if err != nil {
@@ -1687,9 +1718,13 @@ func (s *Store) createRestoreConflict(ctx context.Context, id backup.RestoreID) 
 }
 
 // checkStagedFeatureRows checks the rows of the staged features that have rules
-// of their own: the registry, the Git host connections, the notification sinks
-// and the triggers.
+// of their own: the drift results, the registry, the Git host connections,
+// the notification sinks and the triggers.
 func checkStagedFeatureRows(ctx context.Context, pool *pgxpool.Pool, staging string) error {
+	if err := checkStagedDriftResults(ctx, pool, staging); err != nil {
+		return err
+	}
+
 	if err := checkStagedRegistry(ctx, pool, staging); err != nil {
 		return err
 	}

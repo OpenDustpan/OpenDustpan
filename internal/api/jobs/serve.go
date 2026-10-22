@@ -18,6 +18,7 @@ type jobResponse struct {
 	Namespace    string            `json:"namespace"`
 	Unit         unitResponse      `json:"unit"`
 	Operation    string            `json:"operation"`
+	Purpose      string            `json:"purpose,omitempty"`
 	Executor     string            `json:"executor"`
 	State        string            `json:"state"`
 	Wait         string            `json:"wait,omitempty"`
@@ -174,6 +175,7 @@ func toJobResponse(j *job.Job) jobResponse {
 			ID: j.Spec.Unit.UnitID(), Tool: toolLabel(j.Spec.Unit.Tool()), Name: j.Spec.Unit.UnitName(),
 		},
 		Operation:    string(j.Spec.Operation),
+		Purpose:      string(j.Spec.Purpose),
 		Executor:     string(j.Spec.Executor),
 		State:        string(j.State),
 		Wait:         string(j.Wait),

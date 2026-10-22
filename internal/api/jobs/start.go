@@ -17,6 +17,7 @@ import (
 	"opendustpan.org/opendustpan/internal/requestid"
 	"opendustpan.org/opendustpan/internal/sessionauth"
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/drift"
 	"opendustpan.org/opendustpan/pkg/idempotency"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/job"
@@ -194,6 +195,17 @@ func idempotencyKey(r *http.Request) (string, error) {
 			return "", fmt.Errorf("%w: send 1 to %d printable ASCII characters", err, idempotency.MaxKeyLength)
 		}
 
+		// The keys of drift checks share the key space of the jobs. The server
+		// makes them, so a caller key with the prefix is refused.
+		if len(k) >= len(drift.CheckKeyPrefix) &&
+			strings.EqualFold(string(k[:len(drift.CheckKeyPrefix)]), drift.CheckKeyPrefix) {
+			return "", fmt.Errorf(
+				"%w: the prefix %q is reserved for the server",
+				idempotency.ErrInvalidKey,
+				drift.CheckKeyPrefix,
+			)
+		}
+
 		return string(k), nil
 	default:
 		return "", fmt.Errorf("%w: send one Idempotency-Key header", idempotency.ErrInvalidKey)
@@ -257,7 +269,7 @@ func (h *Handler) startRequest(r *http.Request, t *target, b *startBody, key str
 	}
 
 	return job.StartRequest{
-		Unit: unit, Operation: op, Executor: "", Location: loc, Pool: b.Pool, Edits: nil, Delivery: "",
+		Unit: unit, Operation: op, Purpose: "", Executor: "", Location: loc, Pool: b.Pool, Edits: nil, Delivery: "",
 		Source: job.SourceAPI, IdempotencyKey: key, Reason: b.Reason, BreakGlass: nil, Trigger: nil,
 		Channel:  sessionauth.AuditChannel(r, channelHeader),
 		SourceIP: clientip.String(r), UserAgent: truncate(r.UserAgent(), audit.MaxUserAgentLen),

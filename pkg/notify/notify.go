@@ -42,6 +42,11 @@ var (
 	ErrConflict = errors.New("notification data changed since it was read")
 	// ErrInUse reports a delete of a sink that a subscription uses.
 	ErrInUse = errors.New("sink is in use")
+	// ErrNoURL reports a sink that has no URL the server can send to: the
+	// URL item is missing, it does not open, or it holds a URL that does not
+	// fit the sink. A send to such a sink fails closed and sends nothing. A
+	// person sets the URL of the sink again.
+	ErrNoURL = errors.New("the sink has no URL that the server can use: set the URL of the sink again")
 	// ErrPermanent reports a delivery that the receiver refused for good,
 	// for example an unknown address or a removed webhook. The dispatcher
 	// does not try it again.

@@ -235,6 +235,7 @@ func StartRequestFor(req *Request, rev *Revision, v *Version, reason string) (jo
 	out := job.StartRequest{
 		Unit:           req.Unit,
 		Operation:      job.OperationApply,
+		Purpose:        "",
 		Executor:       job.ExecutorRunner,
 		Location:       job.Location{Connection: "", Repository: "", Ref: "", Directory: "", Revision: ""},
 		Pool:           v.Blueprint.Platform.Pool,

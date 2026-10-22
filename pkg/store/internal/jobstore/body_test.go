@@ -31,7 +31,7 @@ func fullJob(t *testing.T) job.Job {
 	return job.Job{
 		ID: "job-1",
 		Spec: job.Spec{
-			Unit: unit, Operation: job.OperationApply, Executor: job.ExecutorWriteBack,
+			Unit: unit, Operation: job.OperationApply, Purpose: "", Executor: job.ExecutorWriteBack,
 			Location: job.Location{
 				Connection: "gh", Repository: "acme/infra", Ref: "main", Directory: "net", Revision: "abc",
 			},
@@ -185,5 +185,49 @@ func TestRowMustAgreeWithItsBody(t *testing.T) {
 				t.Fatalf("JobOf = %v, want ErrDamaged", err)
 			}
 		})
+	}
+}
+
+// TestBodyKeepsThePurpose proves that the purpose of a job survives the body:
+// the drift store reads it to tell a drift check from any other job, and a job
+// that an older server stored has none.
+func TestBodyKeepsThePurpose(t *testing.T) {
+	t.Parallel()
+
+	for _, purpose := range []job.Purpose{job.PurposeNone, job.PurposeDriftCheck} {
+		j := fullJob(t)
+		j.Spec.Purpose = purpose
+
+		body, err := jobstore.EncodeJobBody(&j)
+		if err != nil {
+			t.Fatalf("EncodeBody = %v", err)
+		}
+
+		var got job.Job
+		if err := jobstore.DecodeJobBody(body, &got); err != nil {
+			t.Fatalf("DecodeBody = %v", err)
+		}
+
+		if got.Spec.Purpose != purpose {
+			t.Errorf("purpose = %q, want %q", got.Spec.Purpose, purpose)
+		}
+	}
+
+	// A body without the member, as an older server wrote it, has no purpose.
+	j := fullJob(t)
+
+	body, err := jobstore.EncodeJobBody(&j)
+	if err != nil {
+		t.Fatalf("EncodeBody = %v", err)
+	}
+
+	old := strings.Replace(body, `"purpose":"",`, "", 1)
+	if old == body {
+		t.Fatal("the body has no purpose member to remove")
+	}
+
+	var got job.Job
+	if err := jobstore.DecodeJobBody(old, &got); err != nil || got.Spec.Purpose != job.PurposeNone {
+		t.Fatalf("DecodeBody of an old body = purpose %q, %v; want none", got.Spec.Purpose, err)
 	}
 }

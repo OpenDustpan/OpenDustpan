@@ -64,7 +64,7 @@ func dispatchPlan(t *testing.T, e *env, pool string, unit identity.Object) job.J
 	j := job.Job{
 		ID: job.ID(ident.NewID(job.IDPrefix)),
 		Spec: job.Spec{
-			Unit: unit, Operation: job.OperationPlan, Executor: job.ExecutorRunner,
+			Unit: unit, Operation: job.OperationPlan, Purpose: "", Executor: job.ExecutorRunner,
 			Location: job.Location{
 				Connection: "github", Repository: "acme/infra", Ref: "main", Directory: "network", Revision: "abc123",
 			},

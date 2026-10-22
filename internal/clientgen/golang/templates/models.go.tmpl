@@ -1,0 +1,82 @@
+{{.Header}}
+
+package {{.Package}}
+
+import (
+	"bytes"
+	"encoding/json"
+	"fmt"
+)
+
+// requireFields checks that a JSON object holds every required member, and that
+// a member that cannot be null is not null. Go decodes null into a string, a
+// number or a bool as no change, so the check is here and not in the decoder.
+func requireFields(data []byte, required, notNull []string) error {
+	var members map[string]json.RawMessage
+	if err := json.Unmarshal(data, &members); err != nil {
+		return err
+	}
+
+	if members == nil {
+		return fmt.Errorf("the value is null and an object is needed")
+	}
+
+	for _, name := range required {
+		if _, ok := members[name]; !ok {
+			return fmt.Errorf("the member %q is missing", name)
+		}
+	}
+
+	for _, name := range notNull {
+		if bytes.Equal(bytes.TrimSpace(members[name]), []byte("null")) {
+			return fmt.Errorf("the member %q is null and a value is needed", name)
+		}
+	}
+
+	return nil
+}
+{{range $t := .Types}}
+{{typeDoc $t.Name $t.Doc}}type {{$t.Name}} {{if $t.IsEnum}}string
+
+const (
+{{- range $t.Values}}
+	{{.Const}} {{$t.Name}} = {{goString .Value}}
+{{- end}}
+)
+{{if not $t.Open}}
+// UnmarshalJSON rejects a value that is not in the list.
+func (v *{{$t.Name}}) UnmarshalJSON(data []byte) error {
+	var s string
+	if err := json.Unmarshal(data, &s); err != nil {
+		return err
+	}
+
+	switch {{$t.Name}}(s) {
+	case {{range $i, $v := $t.Values}}{{if $i}}, {{end}}{{$v.Const}}{{end}}:
+		*v = {{$t.Name}}(s)
+
+		return nil
+	}
+
+	return fmt.Errorf("%q is not a value of {{$t.Name}}", s)
+}
+{{end}}
+{{- else}}struct {
+{{- range $t.Fields}}
+{{comment "\t" .Doc}}	{{.Name}} {{.Type}} {{.Tag}}
+{{- end}}
+}
+{{if $t.Required}}
+// UnmarshalJSON checks that the required members are there.
+func (v *{{$t.Name}}) UnmarshalJSON(data []byte) error {
+	if err := requireFields(data, []string{ {{- range $i, $n := $t.Required}}{{if $i}}, {{end}}{{goString $n}}{{end -}} }, []string{ {{- range $i, $n := $t.NotNull}}{{if $i}}, {{end}}{{goString $n}}{{end -}} }); err != nil {
+		return fmt.Errorf("{{$t.Name}}: %w", err)
+	}
+
+	type plain {{$t.Name}}
+
+	return json.Unmarshal(data, (*plain)(v))
+}
+{{end}}
+{{- end}}
+{{end}}

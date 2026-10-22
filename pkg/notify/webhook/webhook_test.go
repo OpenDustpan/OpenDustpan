@@ -390,7 +390,7 @@ func TestProductionSenderRefuses(t *testing.T) {
 			t.Cleanup(s.Close)
 
 			m := message([]byte(canary))
-			m.To = tt.to
+			toHost(&m, tt.to)
 
 			checkRefused(t, s.Send(t.Context(), m))
 
@@ -632,7 +632,7 @@ func TestPortIsChecked(t *testing.T) {
 			s.SetPortsForTest(tt.ports)
 
 			m := message([]byte(canary))
-			m.To = tt.to
+			toHost(&m, tt.to)
 
 			if tt.ok {
 				if sendErr := s.Send(t.Context(), m); sendErr != nil {
@@ -662,7 +662,7 @@ func TestDialRefusalIsAFailedConnection(t *testing.T) {
 	t.Cleanup(guarded.Close)
 
 	m := message([]byte(canary))
-	m.To = "https://db.corp.example/hook"
+	toHost(&m, "https://db.corp.example/hook")
 
 	err := guarded.Send(t.Context(), m)
 	if got := notify.Class(err); got != notify.ClassTemporary {
@@ -680,7 +680,7 @@ func TestDialRefusalIsAFailedConnection(t *testing.T) {
 	plain := webhook.New()
 	t.Cleanup(plain.Close)
 
-	m.To = "https://nothing.invalid/hook"
+	toHost(&m, "https://nothing.invalid/hook")
 
 	unresolved := plain.Send(ctx, m)
 	if got := notify.Class(unresolved); got != notify.Class(err) {
@@ -688,6 +688,59 @@ func TestDialRefusalIsAFailedConnection(t *testing.T) {
 	}
 
 	// The URL rules refuse a literal private address before any lookup.
-	m.To = "https://10.0.0.1/hook"
+	toHost(&m, "https://10.0.0.1/hook")
 	checkRefused(t, plain.Send(t.Context(), m))
+}
+
+// toHost sets m.To and, when the URL has a host that WebhookHost accepts, the
+// target of the sink to that host, so that the host check of the sender passes.
+func toHost(m *notify.Message, to string) {
+	m.To = to
+
+	if host, err := notify.WebhookHost(to); err == nil {
+		m.Sink.Target = host
+	}
+}
+
+// TestHostMustBeTheTarget checks that the sender refuses a URL that the egress
+// rules refuse and a URL whose host is not the target of the sink, and sends
+// nothing. Each case fails the check of the sender alone: the service layer
+// is not in the path.
+func TestHostMustBeTheTarget(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		to     string
+		target string
+	}{
+		{"another host", "https://other.example.com/ops", "hooks.example.com"},
+		{"empty target", "https://hooks.example.com/ops", ""},
+		{"target with a port the URL lacks", "https://hooks.example.com/ops", "hooks.example.com:443"},
+		{"URL with a port the target lacks", "https://hooks.example.com:443/ops", "hooks.example.com"},
+		{"target is a whole URL", "https://hooks.example.com/ops", "https://hooks.example.com/ops"},
+		{"http", "http://hooks.example.com/ops", "hooks.example.com"},
+		{"user information", "https://user@hooks.example.com/ops", "hooks.example.com"},
+		{"host the allowlist refuses", "https://hooks.example.com:/ops", "hooks.example.com:"},
+		{"loopback with its own target", "https://127.0.0.1/ops", "127.0.0.1"},
+		{"does not parse", "https://hooks.example.com/%zz", "hooks.example.com"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			r := newReceiver(t)
+
+			m := message([]byte(canary))
+			m.To = tt.to
+			m.Sink.Target = tt.target
+
+			checkRefused(t, r.sender(t).Send(t.Context(), m))
+
+			if n := len(r.requests()); n != 0 {
+				t.Fatalf("the test server got %d requests, want 0", n)
+			}
+		})
+	}
 }
