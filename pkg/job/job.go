@@ -154,6 +154,26 @@ func (o Operation) WritesState() bool {
 	return o.Valid() && o != OperationPlan
 }
 
+// Purpose tells why a job runs, when its operation alone does not say. The
+// server fixes it at start and a later change of the unit settings never
+// changes it. It selects the phase list of the operation.
+type Purpose string
+
+// The purposes of a job.
+const (
+	// PurposeNone is a job whose operation says all: the default.
+	PurposeNone Purpose = ""
+	// PurposeDriftCheck is a drift check: the operation refresh with the
+	// one phase plan. It changes no resource and writes no state version.
+	PurposeDriftCheck Purpose = "drift-check"
+)
+
+// Valid reports whether p is one of the purposes of this package, with the
+// empty purpose.
+func (p Purpose) Valid() bool {
+	return p == PurposeNone || p == PurposeDriftCheck
+}
+
 // ExecutorKind names the executor of a job.
 type ExecutorKind string
 
@@ -240,8 +260,10 @@ type Spec struct {
 	// (identity.Object.WithUnitID).
 	Unit      identity.Object
 	Operation Operation
-	Executor  ExecutorKind
-	Location  Location
+	// Purpose is empty, or PurposeDriftCheck for a drift check.
+	Purpose  Purpose
+	Executor ExecutorKind
+	Location Location
 	// Steps are the steps of a runner job, resolved by the server at start
 	// from the settings of the unit, its blueprint or the defaults of its
 	// tool. The server sets Step.ChangesResources (see MarkCustomSteps). A
@@ -261,8 +283,13 @@ type Spec struct {
 }
 
 // Changes reports whether a job of s can change resources, state or the
-// code in git: every job but a runner job that only plans.
+// code in git: every job but a runner job that only plans, and a drift
+// check, which has a plan phase only.
 func (s *Spec) Changes() bool {
+	if s.Purpose == PurposeDriftCheck {
+		return false
+	}
+
 	return s.Executor == ExecutorWriteBack || s.Operation != OperationPlan
 }
 

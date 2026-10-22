@@ -48,12 +48,17 @@ func (e *Executor) Phases(ctx context.Context, spec job.Spec) ([]job.PhaseKind, 
 		return nil, fmt.Errorf("%w: the runner executor does not run %q jobs", job.ErrInvalid, spec.Executor)
 	}
 
-	kinds, err := job.DefaultPhases(job.ExecutorRunner, spec.Operation)
+	kinds, err := job.PhasesFor(job.ExecutorRunner, spec.Operation, spec.Purpose)
 	if err != nil {
 		return nil, fmt.Errorf("phases of the job: %w", err)
 	}
 
-	err = job.ValidateSteps(spec.Steps)
+	validate := job.ValidateSteps
+	if spec.Purpose == job.PurposeDriftCheck {
+		validate = job.ValidateDriftSteps
+	}
+
+	err = validate(spec.Steps)
 	if err != nil {
 		return nil, fmt.Errorf("steps: %w", err)
 	}
