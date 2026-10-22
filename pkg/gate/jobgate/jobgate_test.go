@@ -98,7 +98,7 @@ func input(t *testing.T, executor job.ExecutorKind, op job.Operation) job.Decisi
 		},
 		Agent: "", AgentMode: "", Source: job.SourceAPI, Keys: nil,
 		Spec: job.Spec{
-			Unit: unit(t), Operation: op, Executor: executor, Location: job.Location{
+			Unit: unit(t), Operation: op, Purpose: "", Executor: executor, Location: job.Location{
 				Connection: "", Repository: "", Ref: "", Directory: "", Revision: "",
 			},
 			Steps: nil, Pool: "", Profile: "", Edits: nil, Delivery: "",
@@ -339,6 +339,37 @@ func TestDecideAPlanReadsNothing(t *testing.T) {
 	got, err := d.Decide(t.Context(), input(t, job.ExecutorRunner, job.OperationPlan))
 	if err != nil || !got.Allow || len(got.Gates) != 0 || src.calls != 0 {
 		t.Fatalf("Decide(plan) = %+v, %v after %d reads; want allow, no gate and no read", got, err, src.calls)
+	}
+}
+
+// TestDecideADriftCheckNeedsNoApproval proves that a drift check has no gate,
+// also when a default asks for approvals and the start comes from a schedule:
+// a drift check has the plan phase alone and changes nothing, so the decider
+// reads no default for it.
+func TestDecideADriftCheckNeedsNoApproval(t *testing.T) {
+	t.Parallel()
+
+	for _, source := range []job.SourceKind{job.SourceAPI, job.SourceSchedule, job.SourceTrigger} {
+		src := withDefaults(def(nsScope(), 5), def(colScope(), 2), def(unitScope(t), 3))
+		d := newDecider(t, src, inCollection("prod"))
+
+		in := input(t, job.ExecutorRunner, job.OperationRefresh)
+		in.Spec.Purpose, in.Source = job.PurposeDriftCheck, source
+
+		got, err := d.Decide(t.Context(), in)
+		if err != nil || !got.Allow || len(got.Gates) != 0 || src.calls != 0 {
+			t.Fatalf("Decide(drift check from %s) = %+v, %v after %d reads; want allow, no gate and no read", source,
+				got, err, src.calls)
+		}
+	}
+
+	// The same refresh with no purpose writes state, so the default gates it.
+	src := withDefaults(def(nsScope(), 2))
+	d := newDecider(t, src, inCollection(""))
+
+	got, err := d.Decide(t.Context(), input(t, job.ExecutorRunner, job.OperationRefresh))
+	if err != nil || len(got.Gates) != 1 {
+		t.Fatalf("Decide(refresh) = %+v, %v; want one gate on the apply phase", got, err)
 	}
 }
 
