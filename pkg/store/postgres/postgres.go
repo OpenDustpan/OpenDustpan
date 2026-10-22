@@ -486,12 +486,19 @@ func (s *Store) RenameStack(
 // update with a name that no stack has: its checkpoint saves would fail and
 // the stack would stay locked by the update.
 func refuseRename(ctx context.Context, q *db.Queries, oldRef stack.Ref, newName stack.Name) error {
-	stackID, err := stackIDFor(ctx, q, oldRef)
+	// The stack lock serializes this check with StartUpdate. Without it, a
+	// start could commit between the count and the rename, and the update
+	// would run under a name that no stack has.
+	locked, err := lockStack(ctx, q, oldRef)
+	if errors.Is(err, stack.ErrUpdateNotFound) {
+		return stack.ErrNotFound
+	}
+
 	if err != nil {
 		return err
 	}
 
-	if runErr := refuseRunningStack(ctx, q, stackID); runErr != nil {
+	if runErr := refuseRunningStack(ctx, q, locked.ID); runErr != nil {
 		return runErr
 	}
 
