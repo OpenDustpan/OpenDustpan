@@ -189,3 +189,30 @@ func (c *Client) ListNotificationSinks(ctx context.Context, namespace string, op
 
 	return &out, resp, nil
 }
+
+// PutGitHostApp calls the operation putGitHostApp.
+func (c *Client) PutGitHostApp(ctx context.Context, kind string, body *PutGitHostAppRequest, opts ...CallOption) (*GitHostApp, *Response, error) {
+	req := &request{
+		operation:    "putGitHostApp",
+		method:       http.MethodPut,
+		path:         "/api/dustpan/v1/git-host-apps/" + url.PathEscape(kind),
+		body:         body,
+		bodySet:      body != nil,
+		bodyRequired: true,
+		mediaType:    "application/json",
+		public:       false,
+		idempotent:   true,
+		ifMatch:      ifMatchOptional,
+		etag:         true,
+		statuses:     []int{200, 201},
+	}
+
+	var out GitHostApp
+
+	resp, err := c.do(ctx, req, opts, &out)
+	if err != nil {
+		return nil, resp, err
+	}
+
+	return &out, resp, nil
+}

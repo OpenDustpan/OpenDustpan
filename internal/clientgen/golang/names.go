@@ -168,13 +168,3 @@ func pascal(value string) string {
 
 	return b.String()
 }
-
-// safeToken checks a version or a release before it goes into source.
-func safeToken(what, v string) error {
-	if v == "" || len(v) > 64 ||
-		strings.Trim(v, "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ.+-_") != "" {
-		return fmt.Errorf("%w: %s %q", clientgen.ErrInvalidName, what, v)
-	}
-
-	return nil
-}

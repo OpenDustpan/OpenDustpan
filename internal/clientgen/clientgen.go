@@ -71,6 +71,10 @@ type Options struct {
 	// GeneratorVersion is the version of the generator. It goes into the
 	// header of each generated file.
 	GeneratorVersion string
+	// DescriptionSHA256 is the SHA-256 of the bytes of the description, in
+	// lowercase hexadecimal. A client can carry it as a pin of the
+	// description. A template set that has no use for it ignores it.
+	DescriptionSHA256 string
 }
 
 // File is one generated file.
