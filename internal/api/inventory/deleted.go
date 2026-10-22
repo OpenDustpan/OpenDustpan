@@ -3,13 +3,16 @@ package inventory
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"opendustpan.org/opendustpan/internal/clientip"
@@ -101,6 +104,9 @@ type cursorWire struct {
 	Tool   string `json:"t"`
 	Name   string `json:"n"`
 	UnitID string `json:"u"`
+	// Fingerprint is a digest of the namespace and the filters of the query
+	// that made the cursor, so a cursor works only for that query.
+	Fingerprint string `json:"f"`
 }
 
 // DeletedReadScope answers which deleted units of ns the principal p may
@@ -141,13 +147,14 @@ func formatTime(t time.Time) string {
 	return t.UTC().Format(time.RFC3339Nano)
 }
 
-// encodeCursor returns the opaque form of c, or "" for no cursor.
-func encodeCursor(c *coreinventory.DeletedCursor) string {
+// encodeCursor returns the opaque form of c for the query with the
+// fingerprint fingerprint, or "" for no cursor.
+func encodeCursor(c *coreinventory.DeletedCursor, fingerprint string) string {
 	if c == nil {
 		return ""
 	}
 
-	raw, err := json.Marshal(cursorWire{Tool: c.Tool, Name: c.Name, UnitID: c.UnitID})
+	raw, err := json.Marshal(cursorWire{Tool: c.Tool, Name: c.Name, UnitID: c.UnitID, Fingerprint: fingerprint})
 	if err != nil {
 		return ""
 	}
@@ -155,8 +162,10 @@ func encodeCursor(c *coreinventory.DeletedCursor) string {
 	return base64.RawURLEncoding.EncodeToString(raw)
 }
 
-// decodeCursor parses an opaque cursor. An empty value is no cursor.
-func decodeCursor(s string) (*coreinventory.DeletedCursor, error) {
+// decodeCursor parses an opaque cursor of the query with the fingerprint
+// fingerprint. An empty value is no cursor. A cursor that another query made
+// gives errPageToken.
+func decodeCursor(s, fingerprint string) (*coreinventory.DeletedCursor, error) {
 	if s == "" {
 		return nil, nil //nolint:nilnil // No cursor is a valid answer: the first page.
 	}
@@ -169,6 +178,10 @@ func decodeCursor(s string) (*coreinventory.DeletedCursor, error) {
 	var w cursorWire
 	if err := json.Unmarshal(raw, &w); err != nil {
 		return nil, fmt.Errorf("%w: cursor", errInvalidQuery)
+	}
+
+	if w.Fingerprint != fingerprint {
+		return nil, errPageToken
 	}
 
 	return &coreinventory.DeletedCursor{Tool: w.Tool, Name: w.Name, UnitID: w.UnitID}, nil
@@ -189,28 +202,46 @@ func intQuery(raw, name string, low, limit int) (int, error) {
 	return n, nil
 }
 
-// deletedQuery builds the store query of a list request for ns. It does not
-// set the read scope.
-func (h *Handler) deletedQuery(r *http.Request, ns namespace.Name) (coreinventory.DeletedQuery, error) {
+// deletedFingerprint returns a short digest of the namespace and the filters
+// of a list of deleted units, so a page token works only for the query that
+// made it. The page size can change from page to page, so it is not part of
+// the digest.
+func deletedFingerprint(ns namespace.Name, tool, namePrefix string, purgeWithin bool, days int) string {
+	parts := []string{"ns=" + ns.String(), "tool=" + tool, "namePrefix=" + namePrefix}
+	if purgeWithin {
+		parts = append(parts, "purgeWithinDays="+strconv.Itoa(days))
+	}
+
+	sum := sha256.Sum256([]byte(strings.Join(parts, "\n")))
+
+	return hex.EncodeToString(sum[:8])
+}
+
+// deletedQuery builds the store query of a list request for ns and the
+// fingerprint of its filters. It does not set the read scope.
+func (h *Handler) deletedQuery(r *http.Request, ns namespace.Name) (coreinventory.DeletedQuery, string, error) {
 	limit, err := intQuery(queryOf(r).Get("pageSize"), "pageSize", 1, coreinventory.MaxDeletedPageSize)
 	if err != nil {
-		return coreinventory.DeletedQuery{}, err
+		return coreinventory.DeletedQuery{}, "", err
 	}
 
 	days, err := intQuery(queryOf(r).Get("purgeWithinDays"), "purgeWithinDays", 0, maxPurgeWithinDays)
 	if err != nil {
-		return coreinventory.DeletedQuery{}, err
+		return coreinventory.DeletedQuery{}, "", err
 	}
 
 	query := queryOf(r)
+	tool, prefix := toolCode(query.Get("tool")), query.Get("namePrefix")
+	purgeWithin := query.Has("purgeWithinDays")
+	fingerprint := deletedFingerprint(ns, tool, prefix, purgeWithin, days)
 
-	cursor, err := decodeCursor(query.Get("pageToken"))
+	cursor, err := decodeCursor(query.Get("pageToken"), fingerprint)
 	if err != nil {
-		return coreinventory.DeletedQuery{}, err
+		return coreinventory.DeletedQuery{}, "", err
 	}
 
 	var before time.Time
-	if query.Has("purgeWithinDays") {
+	if purgeWithin {
 		before = h.now().Add(time.Duration(days) * day)
 	}
 
@@ -218,12 +249,12 @@ func (h *Handler) deletedQuery(r *http.Request, ns namespace.Name) (coreinventor
 		PurgeBefore: before,
 		After:       cursor,
 		Namespace:   ns,
-		Tool:        toolCode(query.Get("tool")),
-		NamePrefix:  query.Get("namePrefix"),
+		Tool:        tool,
+		NamePrefix:  prefix,
 		UnitIDs:     nil,
 		Limit:       limit,
 		Restricted:  false,
-	}, nil
+	}, fingerprint, nil
 }
 
 // listDeletedUnits answers GET /api/dustpan/v1/namespaces/{namespace}/deleted-units with one page of
@@ -244,7 +275,7 @@ func (h *Handler) listDeletedUnits(
 		return
 	}
 
-	q, err := h.deletedQuery(r, ns)
+	q, fingerprint, err := h.deletedQuery(r, ns)
 	if err != nil {
 		h.writeError(ctx, w, err)
 
@@ -276,7 +307,7 @@ func (h *Handler) listDeletedUnits(
 	}
 
 	h.writeJSON(ctx, w, http.StatusOK, listDeletedUnitsResponse{
-		NextPageToken: encodeCursor(page.Next), Units: units, Total: page.Total,
+		NextPageToken: encodeCursor(page.Next, fingerprint), Units: units, Total: page.Total,
 	})
 }
 
