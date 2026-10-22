@@ -13,6 +13,7 @@ import (
 // The TypeScript names that the views use more than once.
 const (
 	stringType  = "string"
+	numberType  = "number"
 	unknownType = "unknown"
 	anyDecoder  = "anyValue"
 	useNone     = "none"
@@ -153,34 +154,40 @@ func objectOf(s *model.Schema, tv typeView) (typeView, error) {
 
 // typeExpr writes a model type as a TypeScript type.
 func typeExpr(t model.Type) (string, error) {
-	typ, _, err := typeAndDecoder(t)
+	w, err := walk(t)
 
-	return typ, err
+	return w.Type, err
 }
 
 // decoderExpr writes the validator of a model type as an expression of the
 // combinators of the runtime.
 func decoderExpr(t model.Type) (string, error) {
-	_, dec, err := typeAndDecoder(t)
+	w, err := walk(t)
 
-	return dec, err
+	return w.Decoder, err
 }
 
-// typeAndDecoder writes the TypeScript type of a model type and its validator
-// in one walk, so that a type never gets a weaker check than the description
-// asks for: the one walk refuses a kind or a format that the template set
-// cannot check, and the type and the validator cannot disagree.
-func typeAndDecoder(t model.Type) (string, string, error) {
-	typ, dec, err := baseTypeAndDecoder(t)
+// walked is the TypeScript type of a model type and its validator.
+type walked struct {
+	Type    string
+	Decoder string
+}
+
+// walk writes the type and the validator of a model type in one walk, so that
+// a type never gets a weaker check than the description asks for: the one
+// walk refuses a kind or a format that the template set cannot check, and the
+// type and the validator cannot disagree.
+func walk(t model.Type) (walked, error) {
+	w, err := walkBase(t)
 	if err != nil {
-		return "", "", err
+		return walked{}, err
 	}
 
 	if t.Nullable && t.Kind != model.TypeAny {
-		return typ + " | null", "nullable(" + dec + ")", nil
+		return walked{Type: w.Type + " | null", Decoder: "nullable(" + w.Decoder + ")"}, nil
 	}
 
-	return typ, dec, nil
+	return w, nil
 }
 
 // knownFormats lists the formats that the validator of a kind checks. The
@@ -215,51 +222,52 @@ func checkFormat(t model.Type) error {
 	return nil
 }
 
-// baseTypeAndDecoder writes the type and the validator of a model type,
-// without null.
-func baseTypeAndDecoder(t model.Type) (string, string, error) {
+// walkBase walks a model type, without null.
+func walkBase(t model.Type) (walked, error) {
 	if err := checkFormat(t); err != nil {
-		return "", "", err
+		return walked{}, err
 	}
 
 	switch t.Kind {
 	case model.TypeString:
 		if t.Format == "date-time" {
-			return stringType, "dateTime", nil
+			return walked{stringType, "dateTime"}, nil
 		}
 
-		return stringType, stringType, nil
+		return walked{stringType, stringType}, nil
 	case model.TypeInteger:
-		return "number", "int64", nil
+		return walked{numberType, "int64"}, nil
 	case model.TypeNumber:
-		return "number", "number", nil
+		return walked{numberType, numberType}, nil
 	case model.TypeBoolean:
-		return "boolean", "boolean", nil
+		return walked{"boolean", "boolean"}, nil
 	case model.TypeArray:
-		elemTyp, elemDec, err := elemTypeAndDecoder(t)
+		elem, err := walkElem(t)
 
-		return "ReadonlyArray<" + elemTyp + ">", "array(" + elemDec + ")", err
+		return walked{"ReadonlyArray<" + elem.Type + ">", "array(" + elem.Decoder + ")"}, err
 	case model.TypeMap:
-		elemTyp, elemDec, err := elemTypeAndDecoder(t)
+		elem, err := walkElem(t)
 
-		return "Readonly<Record<string, " + elemTyp + ">>", "record(" + elemDec + ")", err
+		return walked{"Readonly<Record<string, " + elem.Type + ">>", "record(" + elem.Decoder + ")"}, err
 	case model.TypeRef:
-		return t.Ref, "ref(() => decode" + t.Ref + ")", nil
+		return walked{t.Ref, "ref(() => decode" + t.Ref + ")"}, nil
 	case model.TypeAny:
 		// The description says explicitly that the value is any JSON value.
-		return unknownType, anyDecoder, nil
+		return walked{unknownType, anyDecoder}, nil
 	}
 
-	return "", "", fmt.Errorf("%w: the TypeScript template set has no type for kind %d", clientgen.ErrUnsupported, t.Kind)
+	return walked{}, fmt.Errorf(
+		"%w: the TypeScript template set has no type for kind %d", clientgen.ErrUnsupported, t.Kind,
+	)
 }
 
-// elemTypeAndDecoder walks the items of an array or the values of a map.
-func elemTypeAndDecoder(t model.Type) (string, string, error) {
+// walkElem walks the items of an array or the values of a map.
+func walkElem(t model.Type) (walked, error) {
 	if t.Elem == nil {
-		return "", "", fmt.Errorf("%w: an array or a map has no item type", clientgen.ErrUnsupported)
+		return walked{}, fmt.Errorf("%w: an array or a map has no item type", clientgen.ErrUnsupported)
 	}
 
-	return typeAndDecoder(*t.Elem)
+	return walk(*t.Elem)
 }
 
 type memberView struct {
@@ -479,14 +487,14 @@ func addQuery(ov *operationView, op *model.Operation) (queryNames, error) {
 		typ, typeErr := queryType(p.Type)
 		if typeErr != nil {
 			return queryNames{
-					all:      nil,
-					required: nil,
-				}, fmt.Errorf(
-					"operation %s, query parameter %s: %w",
-					op.ID,
-					p.Name,
-					typeErr,
-				)
+				all:      nil,
+				required: nil,
+			}, fmt.Errorf(
+				"operation %s, query parameter %s: %w",
+				op.ID,
+				p.Name,
+				typeErr,
+			)
 		}
 
 		names.all = append(names.all, tsString(p.Name))
@@ -504,9 +512,9 @@ func addQuery(ov *operationView, op *model.Operation) (queryNames, error) {
 
 // baseTypeExpr writes the TypeScript type of a model type, without null.
 func baseTypeExpr(t model.Type) (string, error) {
-	typ, _, err := baseTypeAndDecoder(t)
+	w, err := walkBase(t)
 
-	return typ, err
+	return w.Type, err
 }
 
 // queryType writes the TypeScript type of a query parameter. The runtime sends

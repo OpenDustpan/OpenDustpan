@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"slices"
 	"strings"
 )
 
@@ -130,17 +131,9 @@ func tokenStaysOnTheHost(ctx context.Context, env Env) error {
 		return err
 	}
 
-	// The fault must fire. A run in which the redirect does not happen proves
-	// nothing about the token.
-	redirected := false
-
-	for _, exchange := range env.Proxy.Exchanges() {
-		if exchange.Status == http.StatusTemporaryRedirect {
-			redirected = true
-		}
-	}
-
-	if !redirected {
+	if !hasStatus(env.Proxy.Exchanges(), http.StatusTemporaryRedirect) {
+		// The fault must fire. A run in which the redirect does not happen
+		// proves nothing about the token.
 		return failf("the proxy did not redirect the request, so the case proves nothing")
 	}
 
@@ -162,4 +155,9 @@ func tokenStaysOnTheHost(ctx context.Context, env Env) error {
 	}
 
 	return nil
+}
+
+// hasStatus says whether one of the exchanges got the given status.
+func hasStatus(exchanges []Exchange, status int) bool {
+	return slices.ContainsFunc(exchanges, func(e Exchange) bool { return e.Status == status })
 }
