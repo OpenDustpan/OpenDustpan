@@ -1824,6 +1824,79 @@ func pulumiDiffScenario(t *testing.T, env *e2e.Env, org string) {
 		"stack", "--show-name", "--stack", qualified,
 	))
 	env.Step(ctx, t, step("stack rm diffed", nil, "stack", "rm", "--yes", "--force", "--stack", qualified))
+
+	pulumiUnreadableDeploymentScenario(t, env, org)
+}
+
+// unreadableDeployments returns bodies for the deployment member that the
+// Pulumi CLI cannot read. The import route and the checkpoint route must
+// refuse each.
+func unreadableDeployments() []string {
+	return []string{`"notanobject"`, `42`, `[1,2]`, `null`, `{"resources":"x"}`}
+}
+
+// pulumiUnreadableDeploymentScenario proves that a client other than the CLI
+// cannot make a stack unreadable: the import route and the checkpoint route of
+// a running update answer 400 for a deployment that is not an object, and the
+// CLI then still reads the stack and updates it. The stack is removed at the
+// end.
+func pulumiUnreadableDeploymentScenario(t *testing.T, env *e2e.Env, org string) {
+	t.Helper()
+
+	ctx := t.Context()
+	qualified := fmt.Sprintf("%s/%s/unreadable", org, e2e.Project)
+	prefix := fmt.Sprintf("/api/stacks/%s/%s/unreadable", org, e2e.Project)
+
+	env.WritePulumiProject(t, changeSecretsProviderProgram)
+	env.Step(ctx, t, step("stack init unreadable", nil, "stack", "init", qualified, "--no-select"))
+	env.Step(ctx, t, step("up unreadable", nil, "up", "--yes", "--non-interactive", "--stack", qualified))
+
+	for _, deployment := range unreadableDeployments() {
+		status, body, err := env.APIStatus(
+			ctx, http.MethodPost, prefix+"/import", `{"version":3,"deployment":`+deployment+`}`,
+		)
+		if err != nil || status != http.StatusBadRequest || !strings.Contains(body, `"code":400`) {
+			t.Fatalf("import of %s answers %d %q (%v), want 400 in the error shape", deployment, status, body, err)
+		}
+	}
+
+	status, body, err := env.APIStatus(ctx, http.MethodPost, prefix+"/import", `{"version":3}`)
+	if err != nil || status != http.StatusBadRequest {
+		t.Fatalf("import without a deployment answers %d %q (%v), want 400", status, body, err)
+	}
+
+	env.Step(ctx, t, step(
+		"up after refused imports", upHasNoChanges, "up", "--yes", "--non-interactive", "--stack", qualified,
+	))
+
+	held := env.StartHeldUpdate(ctx, t, org, e2e.Project, "unreadable")
+
+	for _, deployment := range unreadableDeployments() {
+		call := env.StartAsyncCall(ctx, e2e.AsyncRequest{
+			Method:      http.MethodPatch,
+			Target:      env.URL + prefix + "/update/" + held.ID + "/checkpoint",
+			Auth:        "update-token " + held.Lease,
+			ContentType: "application/json",
+			Body:        []byte(`{"version":3,"deployment":` + deployment + `}`),
+		})
+
+		status, body, err := call.Wait()
+		if err != nil || status != http.StatusBadRequest || !strings.Contains(body, `"code":400`) {
+			t.Fatalf(
+				"checkpoint save of %s answers %d %q (%v), want 400 in the error shape",
+				deployment,
+				status,
+				body,
+				err,
+			)
+		}
+	}
+
+	env.EndHeldUpdate(ctx, t, held, "cancelled") //nolint:misspell // The CLI's wire value; it must not change.
+	env.Step(ctx, t, step(
+		"up after refused checkpoint saves", upHasNoChanges, "up", "--yes", "--non-interactive", "--stack", qualified,
+	))
+	env.Step(ctx, t, step("stack rm unreadable", nil, "stack", "rm", "--yes", "--force", "--stack", qualified))
 }
 
 // stateDiffChangedEntry is one changed resource of the diff in e2e checks.
