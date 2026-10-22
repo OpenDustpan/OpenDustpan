@@ -204,12 +204,12 @@ func intQuery(raw, name string, low, limit int) (int, error) {
 
 // deletedFingerprint returns a short digest of the namespace and the filters
 // of a list of deleted units, so a page token works only for the query that
-// made it. The page size can change from page to page, so it is not part of
-// the digest.
-func deletedFingerprint(ns namespace.Name, tool, namePrefix string, purgeWithin bool, days int) string {
+// made it. purgeWithin is the purge window in days, or "" for none. The page
+// size can change from page to page, so it is not part of the digest.
+func deletedFingerprint(ns namespace.Name, tool, namePrefix, purgeWithin string) string {
 	parts := []string{"ns=" + ns.String(), "tool=" + tool, "namePrefix=" + namePrefix}
-	if purgeWithin {
-		parts = append(parts, "purgeWithinDays="+strconv.Itoa(days))
+	if purgeWithin != "" {
+		parts = append(parts, "purgeWithinDays="+purgeWithin)
 	}
 
 	sum := sha256.Sum256([]byte(strings.Join(parts, "\n")))
@@ -233,7 +233,13 @@ func (h *Handler) deletedQuery(r *http.Request, ns namespace.Name) (coreinventor
 	query := queryOf(r)
 	tool, prefix := toolCode(query.Get("tool")), query.Get("namePrefix")
 	purgeWithin := query.Has("purgeWithinDays")
-	fingerprint := deletedFingerprint(ns, tool, prefix, purgeWithin, days)
+
+	window := ""
+	if purgeWithin {
+		window = strconv.Itoa(days)
+	}
+
+	fingerprint := deletedFingerprint(ns, tool, prefix, window)
 
 	cursor, err := decodeCursor(query.Get("pageToken"), fingerprint)
 	if err != nil {
