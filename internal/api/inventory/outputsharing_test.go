@@ -407,12 +407,12 @@ func (brokenOutputSharing) Setting(_ context.Context, _ namespace.Name) (outputs
 func (brokenOutputSharing) SetSetting(
 	_ context.Context, _ namespace.Name, _ outputshare.Default, _ namespace.Fence, _ audit.Entry,
 ) error {
-	return fmt.Errorf("%w: the stored output sharing setting", outputshare.ErrInvalid)
+	return nil
 }
 
 // TestOutputSharingFailsClosedOnABadStoredValue proves that a stored value
 // that fails validation answers 500 with no value, and never a default, on
-// the read and on the change.
+// the read.
 func TestOutputSharingFailsClosedOnABadStoredValue(t *testing.T) {
 	t.Parallel()
 
@@ -451,15 +451,13 @@ func TestOutputSharingFailsClosedOnABadStoredValue(t *testing.T) {
 
 	f.handler = handler
 
-	for _, method := range []string{http.MethodGet, http.MethodPut} {
-		rec := f.do(t, "alice", method, outputSharingPath, `{"newUnitDefault":"namespace"}`)
-		if rec.Code != http.StatusInternalServerError {
-			t.Fatalf("%s answers %d, want 500: %s", method, rec.Code, rec.Body.String())
-		}
+	rec := f.do(t, "alice", http.MethodGet, outputSharingPath, "")
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("GET answers %d, want 500: %s", rec.Code, rec.Body.String())
+	}
 
-		if strings.Contains(rec.Body.String(), "newUnitDefault") || strings.Contains(rec.Body.String(), "nobody") {
-			t.Fatalf("%s answers a value: %s", method, rec.Body.String())
-		}
+	if strings.Contains(rec.Body.String(), "newUnitDefault") || strings.Contains(rec.Body.String(), "nobody") {
+		t.Fatalf("GET answers a value: %s", rec.Body.String())
 	}
 }
 

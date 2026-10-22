@@ -95,6 +95,13 @@ namespace as its object, and the change of `outputSharing.newUnitDefault` from
 the old value to the new value. A change by a caller without the action
 writes one entry with the outcome `denied`. A read writes no entry.
 
+## Repair a stored value that is not valid
+
+A read of a stored value that is not `nobody` or `namespace` answers 500 and
+no value. A row of another version could hold such a value. To repair it, send
+a change with a valid value. The change replaces the stored value. The audit
+entry records the old value as `invalid:` followed by the quoted stored value.
+
 ## Backup and restore
 
 A backup holds the setting of each namespace. A restore refuses a backup whose

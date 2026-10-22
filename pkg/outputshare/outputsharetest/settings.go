@@ -128,8 +128,8 @@ func testSettingRoundTrip(t *testing.T, h Harness) {
 
 // testSettingStoredInvalid proves that a stored value that fails Validate,
 // as a row of another version or a restore can hold, reads as ErrInvalid and
-// never as a value, so that the caller fails closed. A change over such a
-// value fails closed too.
+// never as a value, so that the caller fails closed. A valid change replaces
+// such a value, which repairs the row.
 func testSettingStoredInvalid(t *testing.T, h Harness) {
 	t.Helper()
 
@@ -142,12 +142,6 @@ func testSettingStoredInvalid(t *testing.T, h Harness) {
 	for _, bad := range []string{"", "everyone", "Namespace", "namespace "} {
 		h.SettingRaw(t, acme, bad)
 
-		// A change reads the value it replaces, so it fails closed too.
-		werr := h.Settings.SetSetting(t.Context(), acme, outputshare.DefaultNamespace, fence, settingEntry(fence))
-		if !errors.Is(werr, outputshare.ErrInvalid) {
-			t.Fatalf("SetSetting over the stored value %q = %v, want ErrInvalid", bad, werr)
-		}
-
 		got, err := h.Settings.Setting(t.Context(), acme)
 		if !errors.Is(err, outputshare.ErrInvalid) {
 			t.Fatalf("Setting of the stored value %q = %q, %v, want ErrInvalid", bad, got, err)
@@ -156,6 +150,13 @@ func testSettingStoredInvalid(t *testing.T, h Harness) {
 		if got != "" {
 			t.Fatalf("Setting of the stored value %q = %q with the error, want no value", bad, got)
 		}
+
+		werr := h.Settings.SetSetting(t.Context(), acme, outputshare.DefaultNamespace, fence, settingEntry(fence))
+		if werr != nil {
+			t.Fatalf("SetSetting over the stored value %q = %v, want the repair", bad, werr)
+		}
+
+		wantSetting(t, h, acme, outputshare.DefaultNamespace)
 	}
 }
 

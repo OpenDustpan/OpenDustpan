@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strconv"
 
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -22,6 +23,10 @@ import (
 func (s *Store) OutputSharingSettings() outputshare.Settings {
 	return outputSharingSettings{s: s}
 }
+
+// invalidOldPrefix marks the Old value of an audit change when the replaced
+// value failed Default.Validate. The quoted raw value follows the prefix.
+const invalidOldPrefix = "invalid:"
 
 // outputSharingSettings is outputshare.Settings over the database of a Store.
 type outputSharingSettings struct {
@@ -61,7 +66,8 @@ func (o outputSharingSettings) Setting(ctx context.Context, ns namespace.Name) (
 	return d, nil
 }
 
-// SetSetting implements outputshare.Settings.
+// SetSetting implements outputshare.Settings. A valid value replaces a stored
+// value that fails Validate, so an admin can repair the row through the API.
 func (o outputSharingSettings) SetSetting(
 	ctx context.Context, ns namespace.Name, d outputshare.Default, fence namespace.Fence, e audit.Entry,
 ) error {
@@ -132,14 +138,16 @@ func (o outputSharingSettings) writeSetting(
 			return fmt.Errorf("select output sharing setting: %w", err)
 		}
 
-		// A stored value of another version or a restore never reaches the
-		// audit entry, and a change over it fails closed like a read.
-		if outputshare.Default(old).Validate() != nil {
-			return fmt.Errorf("%w: the stored output sharing setting of %s", outputshare.ErrInvalid, ns)
-		}
-
+		// A stored value that fails Validate, as a row of another version or
+		// a restore can hold, is the one case that a valid write repairs. The
+		// entry records the raw value, marked invalid. Reads still refuse it.
 		if len(e.Changes) == 1 {
-			e.Changes[0].Old = &old
+			shown := old
+			if outputshare.Default(old).Validate() != nil {
+				shown = invalidOldPrefix + strconv.Quote(old)
+			}
+
+			e.Changes[0].Old = &shown
 		}
 
 		n, err := q.SetNamespaceOutputSharingDefault(ctx, db.SetNamespaceOutputSharingDefaultParams{

@@ -308,6 +308,71 @@ func TestSettingAuditOldValueIsReadInTheTransaction(t *testing.T) {
 	}
 }
 
+// TestSettingPreCheckRefusesAForeignFenceAlone proves the pre-check call of
+// SetSetting alone. A canceled context makes every transaction fail, so only
+// the pre-check can answer namespace.ErrFenced for a fence of another
+// namespace.
+func TestSettingPreCheckRefusesAForeignFenceAlone(t *testing.T) {
+	t.Parallel()
+
+	base := os.Getenv(envURL)
+	if base == "" {
+		t.Skipf("set %s to run the PostgreSQL test", envURL)
+	}
+
+	s := openURL(t, isolatedURL(t, base))
+	globex := ensureNamespace(t, s, "globex")
+
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+
+	err := s.OutputSharingSettings().SetSetting(ctx, "acme", outputshare.DefaultNamespace, globex,
+		outputsharetest.EntryForSetting(globex, outputshare.DefaultNamespace))
+	if !errors.Is(err, namespace.ErrFenced) {
+		t.Fatalf("SetSetting under the fence of globex with a canceled context = %v, want namespace.ErrFenced", err)
+	}
+}
+
+// TestSettingRepairsAnInvalidStoredValue proves that a valid change replaces
+// a stored value that fails Validate, that the audit change records the raw
+// value marked invalid, and that a read of the invalid value still fails
+// closed.
+func TestSettingRepairsAnInvalidStoredValue(t *testing.T) {
+	t.Parallel()
+
+	base := os.Getenv(envURL)
+	if base == "" {
+		t.Skipf("set %s to run the PostgreSQL test", envURL)
+	}
+
+	schemaURL := isolatedURL(t, base)
+	s := openURL(t, schemaURL)
+	fence := ensureNamespace(t, s, "acme")
+	ctx := t.Context()
+	settings := s.OutputSharingSettings()
+
+	plantSettingRow(t, schemaURL, "acme", "every one")
+
+	if got, err := settings.Setting(ctx, "acme"); !errors.Is(err, outputshare.ErrInvalid) || got != "" {
+		t.Fatalf("Setting of the invalid value = %q, %v, want ErrInvalid and no value", got, err)
+	}
+
+	err := settings.SetSetting(ctx, "acme", outputshare.DefaultNamespace, fence,
+		outputsharetest.EntryForSetting(fence, outputshare.DefaultNamespace))
+	if err != nil {
+		t.Fatalf("SetSetting over the invalid value: %v", err)
+	}
+
+	if got, err := settings.Setting(ctx, "acme"); err != nil || got != outputshare.DefaultNamespace {
+		t.Fatalf("Setting after the repair = %q, %v, want namespace", got, err)
+	}
+
+	got := settingOld(allAuditEntries(t, s, "acme"))
+	if want := []string{"invalid:\"every one\""}; !slices.Equal(got, want) {
+		t.Fatalf("Old values of the entries = %q, want %q", got, want)
+	}
+}
+
 // TestOutputSharingSettingSurvivesABackupRestore proves that a restore brings
 // back the value namespace of the setting, and not the value that the
 // namespace holds at the restore.

@@ -113,8 +113,10 @@ type Settings interface {
 	// audit entry e in the transaction. When e holds one change, the store
 	// sets the Old value of that change to the value that the write replaces,
 	// read in the same transaction. It returns ErrInvalid when d fails
-	// Default.Validate, when ns fails namespace.ParseName or when the value
-	// that the write replaces fails Default.Validate. It returns
+	// Default.Validate or when ns fails namespace.ParseName. A valid d
+	// replaces a stored value that fails Default.Validate, and the Old value
+	// of the change then holds the raw stored value, quoted and marked
+	// invalid. It returns
 	// namespace.ErrFenced when the fence is stale or names another namespace
 	// than ns, and namespace.ErrNotFound for an unknown namespace. On every
 	// error the store changes nothing. The change applies to the units that
