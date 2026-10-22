@@ -204,3 +204,46 @@ test("the table is frozen", () => {
     operations.getCapabilities.spec.id = "x";
   });
 });
+
+test("a required If-Match is refused before the request when it is absent", async () => {
+  const t = transport({ status: 200, body: {}, etag: undefined });
+  const input = { path: { namespace: "dev", profile: "p" }, body: { document: "d", reason: "r" } };
+  assert.equal(operations.createProfileRevision.spec.ifMatch, "required");
+  const error = await rejection(new Client(t).createProfileRevision(input));
+  assert.equal(error.kind, "request");
+  assert.match(error.message, /If-Match/);
+  assert.equal(t.calls.length, 0);
+});
+
+test("a required query parameter is refused before the request when it is absent", async () => {
+  const t = transport({ status: 200, body: { sinks: [] }, etag: undefined });
+  const spec = { ...operations.listNotificationSinks.spec, queryParameters: ["q"], requiredQueryParameters: ["q"] };
+  const op = { spec, decode: undefined };
+  const path = { namespace: "dev" };
+  for (const query of [undefined, {}, { q: undefined }, { q: [] }]) {
+    const error = await rejection(execute(t, op, { path, query }));
+    assert.equal(error.kind, "request", JSON.stringify(query));
+    assert.match(error.message, /"q"/);
+  }
+  assert.equal(t.calls.length, 0);
+  await execute(t, op, { path, query: { q: "x" } });
+  assert.equal(t.calls.length, 1);
+});
+
+test("a query value that is not text, a finite number or a boolean is refused", async () => {
+  const t = transport({ status: 200, body: { sinks: [] }, etag: undefined });
+  const spec = { ...operations.listNotificationSinks.spec, queryParameters: ["q"] };
+  const op = { spec, decode: undefined };
+  for (const q of [NaN, Infinity, -Infinity, {}, null, [{}], [NaN], () => 1, 10n]) {
+    const error = await rejection(execute(t, op, { path: { namespace: "dev" }, query: { q } }));
+    assert.equal(error.kind, "request", String(q));
+  }
+  assert.equal(t.calls.length, 0);
+});
+
+test("the package carries the description that its digest names", async () => {
+  const { createHash } = await import("node:crypto");
+  const { description, metadata } = await import("../dist/index.js");
+  assert.equal(createHash("sha256").update(new TextEncoder().encode(description)).digest("hex"), metadata.descriptionSha256);
+  assert.match(metadata.serverCommit, /^(development|[0-9a-f]{40})$/);
+});

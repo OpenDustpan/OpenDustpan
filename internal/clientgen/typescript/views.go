@@ -2,6 +2,7 @@ package typescript
 
 import (
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -115,7 +116,16 @@ func objectOf(s *model.Schema, tv typeView) (typeView, error) {
 		}
 
 		tv.Kind = kindRecord
-		tv.RecordType, tv.RecordDecoder = typeExpr(*s.Extra), decoderExpr(*s.Extra)
+
+		var err error
+
+		if tv.RecordType, err = typeExpr(*s.Extra); err != nil {
+			return typeView{}, fmt.Errorf("schema %s: %w", s.Name, err)
+		}
+
+		if tv.RecordDecoder, err = decoderExpr(*s.Extra); err != nil {
+			return typeView{}, fmt.Errorf("schema %s: %w", s.Name, err)
+		}
 
 		return tv, nil
 	}
@@ -123,53 +133,103 @@ func objectOf(s *model.Schema, tv typeView) (typeView, error) {
 	tv.Kind = kindInterface
 
 	for _, f := range s.Fields {
+		typ, err := typeExpr(f.Type)
+		if err != nil {
+			return typeView{}, fmt.Errorf("schema %s, member %s: %w", s.Name, f.Name, err)
+		}
+
+		dec, err := decoderExpr(f.Type)
+		if err != nil {
+			return typeView{}, fmt.Errorf("schema %s, member %s: %w", s.Name, f.Name, err)
+		}
+
 		tv.Fields = append(tv.Fields, fieldView{
-			Name: propName(f.Name), Type: typeExpr(f.Type), Decoder: decoderExpr(f.Type), Doc: f.Description,
-			Optional: !f.Required,
+			Name: propName(f.Name), Type: typ, Decoder: dec, Doc: f.Description, Optional: !f.Required,
 		})
 	}
 
 	return tv, nil
 }
 
-// typeExpr writes a model type as a TypeScript type.
-func typeExpr(t model.Type) string {
-	base := baseExpr(t)
-	if t.Nullable && t.Kind != model.TypeAny {
-		return base + " | null"
+// typeExpr writes a model type as a TypeScript type. It refuses a kind or a
+// format that the template set cannot check, so that a type never gets a
+// weaker check than the description asks for.
+func typeExpr(t model.Type) (string, error) {
+	base, err := baseExpr(t)
+	if err != nil {
+		return "", err
 	}
 
-	return base
+	if t.Nullable && t.Kind != model.TypeAny {
+		return base + " | null", nil
+	}
+
+	return base, nil
+}
+
+// knownFormats lists the formats that the validator of a kind checks. An
+// unknown kind has none, so that nothing passes for it.
+func knownFormats(kind model.TypeKind) []string {
+	switch kind {
+	case model.TypeString:
+		return []string{"", "date-time"}
+	case model.TypeInteger:
+		return []string{"", "int64"}
+	case model.TypeNumber:
+		return []string{"", "float", "double"}
+	case model.TypeBoolean, model.TypeArray, model.TypeMap, model.TypeRef, model.TypeAny:
+		return []string{""}
+	default:
+		return nil
+	}
+}
+
+// checkFormat refuses a format that the validator of the kind does not check.
+func checkFormat(t model.Type) error {
+	if !slices.Contains(knownFormats(t.Kind), t.Format) {
+		return fmt.Errorf(
+			"%w: the TypeScript template set does not check the format %q of a type of kind %d",
+			clientgen.ErrUnsupported, t.Format, t.Kind,
+		)
+	}
+
+	return nil
 }
 
 // baseExpr writes the TypeScript type of a model type, without null.
-func baseExpr(t model.Type) string {
-	switch t.Kind {
-	case model.TypeString:
-		return stringType
-	case model.TypeInteger, model.TypeNumber:
-		return "number"
-	case model.TypeBoolean:
-		return "boolean"
-	case model.TypeArray:
-		return "ReadonlyArray<" + elemExpr(t) + ">"
-	case model.TypeMap:
-		return "Readonly<Record<string, " + elemExpr(t) + ">>"
-	case model.TypeRef:
-		return t.Ref
-	case model.TypeAny:
-		return unknownType
+func baseExpr(t model.Type) (string, error) {
+	if err := checkFormat(t); err != nil {
+		return "", err
 	}
 
-	// An unknown kind has no type to write, so the type is the one that holds
-	// any value.
-	return unknownType
+	switch t.Kind {
+	case model.TypeString:
+		return stringType, nil
+	case model.TypeInteger, model.TypeNumber:
+		return "number", nil
+	case model.TypeBoolean:
+		return "boolean", nil
+	case model.TypeArray:
+		elem, err := elemExpr(t)
+
+		return "ReadonlyArray<" + elem + ">", err
+	case model.TypeMap:
+		elem, err := elemExpr(t)
+
+		return "Readonly<Record<string, " + elem + ">>", err
+	case model.TypeRef:
+		return t.Ref, nil
+	case model.TypeAny:
+		return unknownType, nil
+	}
+
+	return "", fmt.Errorf("%w: the TypeScript template set has no type for kind %d", clientgen.ErrUnsupported, t.Kind)
 }
 
 // elemExpr writes the type of the items of an array or the values of a map.
-func elemExpr(t model.Type) string {
+func elemExpr(t model.Type) (string, error) {
 	if t.Elem == nil {
-		return unknownType
+		return "", fmt.Errorf("%w: an array or a map has no item type", clientgen.ErrUnsupported)
 	}
 
 	return typeExpr(*t.Elem)
@@ -177,46 +237,63 @@ func elemExpr(t model.Type) string {
 
 // decoderExpr writes the validator of a model type as an expression of the
 // combinators of the runtime.
-func decoderExpr(t model.Type) string {
-	expr := baseDecoder(t)
-	if t.Nullable && t.Kind != model.TypeAny {
-		return "nullable(" + expr + ")"
+func decoderExpr(t model.Type) (string, error) {
+	expr, err := baseDecoder(t)
+	if err != nil {
+		return "", err
 	}
 
-	return expr
+	if t.Nullable && t.Kind != model.TypeAny {
+		return "nullable(" + expr + ")", nil
+	}
+
+	return expr, nil
 }
 
 // baseDecoder writes the validator of a model type, without null.
-func baseDecoder(t model.Type) string {
+func baseDecoder(t model.Type) (string, error) {
+	if err := checkFormat(t); err != nil {
+		return "", err
+	}
+
 	switch t.Kind {
 	case model.TypeString:
 		if t.Format == "date-time" {
-			return "dateTime"
+			return "dateTime", nil
 		}
 
-		return stringType
+		return stringType, nil
 	case model.TypeInteger:
-		return "int64"
+		return "int64", nil
 	case model.TypeNumber:
-		return "number"
+		return "number", nil
 	case model.TypeBoolean:
-		return "boolean"
+		return "boolean", nil
 	case model.TypeArray:
-		return "array(" + elemDecoder(t) + ")"
+		elem, err := elemDecoder(t)
+
+		return "array(" + elem + ")", err
 	case model.TypeMap:
-		return "record(" + elemDecoder(t) + ")"
+		elem, err := elemDecoder(t)
+
+		return "record(" + elem + ")", err
 	case model.TypeRef:
-		return "ref(() => decode" + t.Ref + ")"
+		return "ref(() => decode" + t.Ref + ")", nil
 	case model.TypeAny:
-		return anyDecoder
+		// The description says explicitly that the value is any JSON value.
+		return anyDecoder, nil
 	}
 
-	return anyDecoder
+	return "", fmt.Errorf(
+		"%w: the TypeScript template set has no validator for kind %d",
+		clientgen.ErrUnsupported,
+		t.Kind,
+	)
 }
 
-func elemDecoder(t model.Type) string {
+func elemDecoder(t model.Type) (string, error) {
 	if t.Elem == nil {
-		return "anyValue"
+		return "", fmt.Errorf("%w: an array or a map has no item type", clientgen.ErrUnsupported)
 	}
 
 	return decoderExpr(*t.Elem)
@@ -239,16 +316,18 @@ type operationView struct {
 	// Decoder is the validator of the body, or undefined.
 	Decoder string
 
-	Method       string
-	Path         string
-	PathParams   string
-	QueryParams  string
-	Security     string
-	Idempotency  string
-	IfMatch      string
-	RequestBody  string
-	BodyRequired bool
-	Statuses     string
+	Method      string
+	Path        string
+	PathParams  string
+	QueryParams string
+	// RequiredQuery are the names of the query parameters that a call must give.
+	RequiredQuery string
+	Security      string
+	Idempotency   string
+	IfMatch       string
+	RequestBody   string
+	BodyRequired  bool
+	Statuses      string
 
 	// PathMembers, QueryMembers and Body build the input type.
 	PathMembers  []memberView
@@ -259,6 +338,8 @@ type operationView struct {
 	// can leave it out.
 	InputOptional bool
 	TakesIfMatch  bool
+	// IfMatchNeeded says that a call must give If-Match.
+	IfMatchNeeded bool
 	TakesKey      bool
 }
 
@@ -321,15 +402,8 @@ func operationOf(op *model.Operation) (operationView, error) {
 		return operationView{}, err
 	}
 
-	if op.Body != nil {
-		ov.RequestBody = tsString(string(op.Body.MediaType))
-		ov.BodyRequired = op.Body.Required
-		ov.Body = &memberView{Name: "body", Type: typeExpr(op.Body.Type), Doc: "", Optional: !op.Body.Required}
-	}
-
-	ov.Result, ov.Decoder = "void", "undefined"
-	if op.Result.Type != nil {
-		ov.Result, ov.Decoder = typeExpr(*op.Result.Type), decoderExpr(*op.Result.Type)
+	if err := addBodyAndResult(&ov, op); err != nil {
+		return operationView{}, err
 	}
 
 	codes := make([]string, len(op.Result.Statuses))
@@ -338,9 +412,43 @@ func operationOf(op *model.Operation) (operationView, error) {
 	}
 
 	ov.Statuses = strings.Join(codes, ", ")
-	ov.InputOptional = len(ov.PathMembers) == 0 && !ov.QueryNeeded && (ov.Body == nil || ov.Body.Optional)
+	ov.IfMatchNeeded = op.IfMatch == model.IfMatchRequired
+	ov.InputOptional = len(ov.PathMembers) == 0 && !ov.QueryNeeded && !ov.IfMatchNeeded &&
+		(ov.Body == nil || ov.Body.Optional)
 
 	return ov, nil
+}
+
+// addBodyAndResult builds the request body member, and the type and the
+// validator of the answer.
+func addBodyAndResult(ov *operationView, op *model.Operation) error {
+	if op.Body != nil {
+		ov.RequestBody = tsString(string(op.Body.MediaType))
+		ov.BodyRequired = op.Body.Required
+
+		typ, err := typeExpr(op.Body.Type)
+		if err != nil {
+			return fmt.Errorf("operation %s, body: %w", op.ID, err)
+		}
+
+		ov.Body = &memberView{Name: "body", Type: typ, Doc: "", Optional: !op.Body.Required}
+	}
+
+	ov.Result, ov.Decoder = "void", "undefined"
+
+	if op.Result.Type != nil {
+		var err error
+
+		if ov.Result, err = typeExpr(*op.Result.Type); err != nil {
+			return fmt.Errorf("operation %s, answer: %w", op.ID, err)
+		}
+
+		if ov.Decoder, err = decoderExpr(*op.Result.Type); err != nil {
+			return fmt.Errorf("operation %s, answer: %w", op.ID, err)
+		}
+	}
+
+	return nil
 }
 
 // addParameters builds the path and query members, and the lists of names.
@@ -353,7 +461,7 @@ func addParameters(ov *operationView, op *model.Operation) error {
 		}
 	}
 
-	var pathNames, queryNames []string
+	var pathNames []string
 
 	for seg := range strings.SplitSeq(strings.TrimPrefix(op.Path, "/"), "/") {
 		inner, ok := strings.CutPrefix(seg, "{")
@@ -379,28 +487,65 @@ func addParameters(ov *operationView, op *model.Operation) error {
 		})
 	}
 
+	query, err := addQuery(ov, op)
+	if err != nil {
+		return err
+	}
+
+	ov.PathParams, ov.QueryParams = "["+strings.Join(pathNames, ", ")+"]", "["+strings.Join(query.all, ", ")+"]"
+	ov.RequiredQuery = "[" + strings.Join(query.required, ", ") + "]"
+
+	return nil
+}
+
+// queryNames are the quoted names of the query parameters of an operation.
+type queryNames struct {
+	all, required []string
+}
+
+// addQuery builds the query members. It returns the quoted names of all query
+// parameters and of the required ones.
+func addQuery(ov *operationView, op *model.Operation) (queryNames, error) {
+	var names queryNames
+
 	for _, p := range op.Parameters {
 		if p.In != model.InQuery {
 			continue
 		}
 
-		queryNames = append(queryNames, tsString(p.Name))
+		typ, typeErr := queryType(p.Type)
+		if typeErr != nil {
+			return queryNames{
+				all:      nil,
+				required: nil,
+			}, fmt.Errorf(
+				"operation %s, query parameter %s: %w",
+				op.ID,
+				p.Name,
+				typeErr,
+			)
+		}
+
+		names.all = append(names.all, tsString(p.Name))
 		ov.QueryNeeded = ov.QueryNeeded || p.Required
 		ov.QueryMembers = append(ov.QueryMembers, memberView{
-			Name: propName(p.Name), Type: queryType(p.Type), Doc: p.Description, Optional: !p.Required,
+			Name: propName(p.Name), Type: typ, Doc: p.Description, Optional: !p.Required,
 		})
+		if p.Required {
+			names.required = append(names.required, tsString(p.Name))
+		}
 	}
 
-	ov.PathParams, ov.QueryParams = "["+strings.Join(pathNames, ", ")+"]", "["+strings.Join(queryNames, ", ")+"]"
-
-	return nil
+	return names, nil
 }
 
 // queryType writes the TypeScript type of a query parameter. The runtime sends
 // a number or a boolean as text.
-func queryType(t model.Type) string {
+func queryType(t model.Type) (string, error) {
 	if t.Kind == model.TypeArray && t.Elem != nil {
-		return "ReadonlyArray<" + baseExpr(*t.Elem) + ">"
+		elem, err := baseExpr(*t.Elem)
+
+		return "ReadonlyArray<" + elem + ">", err
 	}
 
 	return baseExpr(t)

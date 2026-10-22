@@ -34,7 +34,7 @@ export interface {{$op.Input}} {
 {{- end}}
 {{- if $op.TakesIfMatch}}
   /** The ETag of the object, from an earlier answer. */
-  readonly ifMatch?: string;
+  readonly ifMatch{{if not $op.IfMatchNeeded}}?{{end}}: string;
 {{- end}}
 {{- if $op.TakesKey}}
   /** The Idempotency-Key. The transport makes a new random key when this is absent. */
@@ -56,6 +56,7 @@ export const operations = {
       security: {{$op.Security}},
       idempotencyKey: {{$op.Idempotency}},
       ifMatch: {{$op.IfMatch}},
+      requiredQueryParameters: {{$op.RequiredQuery}},
       requestBody: {{$op.RequestBody}},
       requestBodyRequired: {{$op.BodyRequired}},
       statuses: [{{$op.Statuses}}],

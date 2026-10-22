@@ -10,6 +10,11 @@ export interface Metadata {
   readonly descriptionSha256: string;
   /** The release of the server that the description comes from, or the server commit before the first release. */
   readonly serverRelease: string;
+  /**
+   * The Git commit of the server that the description comes from, or
+   * "development" for a run that is not a release.
+   */
+  readonly serverCommit: string;
   /** The version of the generator. */
   readonly generatorVersion: string;
 }
@@ -17,7 +22,8 @@ export interface Metadata {
 export const metadata: Metadata = {
   clientVersion: "0.3.0",
   descriptionVersion: "0.3.0",
-  descriptionSha256: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+  descriptionSha256: "e57505cbf0ac0dc3e1dc88706c42c58408b1ee366058e3f98797abf1fd80e8d3",
   serverRelease: "0.1.0-test",
+  serverCommit: "0123456789abcdef0123456789abcdef01234567",
   generatorVersion: "0.1.0",
 };

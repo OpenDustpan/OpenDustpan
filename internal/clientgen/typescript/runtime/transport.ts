@@ -27,6 +27,8 @@ export interface OperationSpec {
   readonly pathParameters: readonly string[];
   /** The names of the query parameters that the operation declares. */
   readonly queryParameters: readonly string[];
+  /** The names of the query parameters that every call must give. */
+  readonly requiredQueryParameters: readonly string[];
   readonly security: OperationSecurity;
   readonly idempotencyKey: Exclude<HeaderUse, "required">;
   readonly ifMatch: HeaderUse;

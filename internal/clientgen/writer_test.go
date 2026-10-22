@@ -206,6 +206,8 @@ func TestWriterUsesTheHeaderOfTheLanguage(t *testing.T) {
 			Package:           "",
 			ClientVersion:     "",
 			ServerRelease:     "",
+			ServerCommit:      "",
+			Description:       nil,
 			GeneratorVersion:  "0.1.0",
 			DescriptionSHA256: "",
 		},

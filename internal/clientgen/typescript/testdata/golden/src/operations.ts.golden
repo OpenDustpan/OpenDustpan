@@ -37,7 +37,7 @@ export interface DeleteWidgetInput {
     readonly widget_id: string;
   };
   /** The ETag of the object, from an earlier answer. */
-  readonly ifMatch?: string;
+  readonly ifMatch: string;
   readonly signal?: AbortSignal;
 }
 
@@ -115,6 +115,7 @@ export const operations = {
       security: "caller",
       idempotencyKey: "optional",
       ifMatch: "none",
+      requiredQueryParameters: [],
       requestBody: "application/json",
       requestBodyRequired: true,
       statuses: [201],
@@ -131,6 +132,7 @@ export const operations = {
       security: "caller",
       idempotencyKey: "none",
       ifMatch: "required",
+      requiredQueryParameters: [],
       requestBody: undefined,
       requestBodyRequired: false,
       statuses: [204],
@@ -147,6 +149,7 @@ export const operations = {
       security: "caller",
       idempotencyKey: "none",
       ifMatch: "none",
+      requiredQueryParameters: [],
       requestBody: undefined,
       requestBodyRequired: false,
       statuses: [200],
@@ -163,6 +166,7 @@ export const operations = {
       security: "caller",
       idempotencyKey: "none",
       ifMatch: "none",
+      requiredQueryParameters: [],
       requestBody: undefined,
       requestBodyRequired: false,
       statuses: [200],
@@ -179,6 +183,7 @@ export const operations = {
       security: "caller",
       idempotencyKey: "none",
       ifMatch: "none",
+      requiredQueryParameters: ["kind"],
       requestBody: undefined,
       requestBodyRequired: false,
       statuses: [200],
@@ -195,6 +200,7 @@ export const operations = {
       security: "caller",
       idempotencyKey: "none",
       ifMatch: "optional",
+      requiredQueryParameters: [],
       requestBody: "application/merge-patch+json",
       requestBodyRequired: true,
       statuses: [200],
@@ -211,6 +217,7 @@ export const operations = {
       security: "public",
       idempotencyKey: "none",
       ifMatch: "none",
+      requiredQueryParameters: [],
       requestBody: undefined,
       requestBodyRequired: false,
       statuses: [204],
@@ -227,6 +234,7 @@ export const operations = {
       security: "caller",
       idempotencyKey: "optional",
       ifMatch: "optional",
+      requiredQueryParameters: [],
       requestBody: "application/json",
       requestBodyRequired: true,
       statuses: [200, 201],
@@ -243,6 +251,7 @@ export const operations = {
       security: "caller",
       idempotencyKey: "optional",
       ifMatch: "none",
+      requiredQueryParameters: [],
       requestBody: undefined,
       requestBodyRequired: false,
       statuses: [202],

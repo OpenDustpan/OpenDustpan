@@ -61,7 +61,7 @@ func TestWriteThenCheck(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "client")
 	args := []string{"-target", "typescript", "-description", syntheticPath, "-out", dir}
 
-	if code, stdout, stderr := run(t, args...); code != cli.ExitOK || !strings.Contains(stdout, "wrote 13 files") {
+	if code, stdout, stderr := run(t, args...); code != cli.ExitOK || !strings.Contains(stdout, "wrote 14 files") {
 		t.Fatalf("write: exit %d\n%s\n%s", code, stdout, stderr)
 	}
 

@@ -76,6 +76,7 @@ func Generate(opts Options) ([]clientgen.File, string, error) {
 
 	files, err := typescript.New().Render(api, clientgen.Options{
 		Package: Package, ClientVersion: api.Version, ServerRelease: opts.ServerRelease,
+		ServerCommit: "development", Description: opts.Description,
 		GeneratorVersion: clientgen.GeneratorVersion, DescriptionSHA256: hex.EncodeToString(digest[:]),
 	})
 	if err != nil {

@@ -66,8 +66,8 @@ func targetNames() []string {
 
 // config holds the flags of one run.
 type config struct {
-	target, description, out, pkg, release, version string
-	check                                           bool
+	target, description, out, pkg, release, commit, version string
+	check                                                   bool
 }
 
 // sayf writes one line of the report. A failed write to the terminal has no
@@ -91,6 +91,8 @@ func parse(args []string, stderr io.Writer) (config, int, bool) {
 	fs.StringVar(&c.pkg, "package", "", "the package name; the default depends on the target")
 	fs.StringVar(&c.release, "server-release", DefaultServerRelease,
 		"the server release, or the commit before the first release, that the description comes from")
+	fs.StringVar(&c.commit, "server-commit", DefaultServerRelease,
+		"the Git commit of the server that the description comes from (40 hexadecimal digits)")
 	fs.StringVar(&c.version, "client-version", "", "the client version; the default is info.version of the description")
 	fs.BoolVar(&c.check, "check", false,
 		"write nothing; exit with 1 and list the differences if the output directory is not what a run gives")
@@ -135,6 +137,7 @@ func Run(args []string, stdout, stderr io.Writer) int {
 
 	files, err := generate(lang, c.description, clientgen.Options{
 		Package: c.pkg, ClientVersion: c.version, ServerRelease: c.release,
+		ServerCommit: c.commit, Description: nil,
 		GeneratorVersion: clientgen.GeneratorVersion, DescriptionSHA256: "",
 	})
 	if err != nil {
@@ -171,7 +174,7 @@ func generate(lang clientgen.Language, path string, opts clientgen.Options) ([]c
 	}
 
 	digest := sha256.Sum256(raw)
-	opts.DescriptionSHA256 = hex.EncodeToString(digest[:])
+	opts.DescriptionSHA256, opts.Description = hex.EncodeToString(digest[:]), raw
 
 	if opts.ClientVersion == "" {
 		opts.ClientVersion = api.Version

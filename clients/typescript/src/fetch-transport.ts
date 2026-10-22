@@ -113,6 +113,13 @@ function urlOf(base: string, call: OperationCall): string {
   return base + pathOf(call) + (text === "" ? "" : `?${text}`);
 }
 
+/** True when the target has the origin and the path prefix of the base URL. */
+function insideBase(base: string, target: URL): boolean {
+  const root = new URL(base);
+  const prefix = root.pathname.replace(/\/+$/, "");
+  return target.origin === root.origin && (target.pathname === prefix || target.pathname.startsWith(`${prefix}/`));
+}
+
 function isRedirect(status: number): boolean {
   return status === 301 || status === 302 || status === 303 || status === 307 || status === 308;
 }
@@ -212,9 +219,10 @@ async function answerOf(response: Response, limit: number): Promise<OperationAns
  * Makes the default transport: global fetch, bearer tokens and JSON.
  *
  * The transport sends the token to an operation that needs a sign-in, to the
- * origin of the base URL only. It follows a redirect itself, and drops the
- * token when the redirect leaves the origin. It reads an answer up to a size
- * limit. It does not retry.
+ * origin of the base URL only. It follows a redirect itself, except in a
+ * browser, and only inside the base URL: a redirect to another origin, or
+ * outside the base path, is a transport error and sends nothing. It reads an
+ * answer up to a size limit. It does not retry.
  */
 export function createFetchTransport(options: FetchTransportOptions): ApiTransport {
   const base = parseBase(options.baseUrl);
@@ -237,6 +245,10 @@ export function createFetchTransport(options: FetchTransportOptions): ApiTranspo
         } catch (error) {
           throw transportError(`${call.spec.id}: ${error instanceof Error ? error.message : String(error)}`, error);
         }
+        if (response.type === "opaqueredirect") {
+          // A browser hides the target of a manual redirect, so the transport cannot check it.
+          throw transportError(`${call.spec.id}: the server redirected, and a browser does not show where to`);
+        }
         if (!isRedirect(response.status)) {
           return answerOf(response, limit);
         }
@@ -249,6 +261,14 @@ export function createFetchTransport(options: FetchTransportOptions): ApiTranspo
         if (next.protocol !== "http:" && next.protocol !== "https:") {
           throw transportError(`${call.spec.id}: the redirect leaves http and https`);
         }
+        // The API has no reason to leave its origin or its base path. The
+        // transport sends nothing to such a target and does not accept an
+        // answer from it.
+        if (!insideBase(base, next)) {
+          throw transportError(`${call.spec.id}: the server redirected outside the base URL, and the transport refuses it`);
+        }
+        // Defense in depth: insideBase refuses a target on another origin, and
+        // this line keeps the token off any such request if that check changes.
         if (next.origin !== new URL(url).origin) {
           headers.delete("authorization");
         }

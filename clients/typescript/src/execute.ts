@@ -25,7 +25,15 @@ export interface Answer<O> {
   readonly body: O;
 }
 
-function queryText(value: string | number | boolean): string {
+function queryText(name: string, value: unknown): string {
+  // Defense in depth: the input type allows scalars only, and a JavaScript
+  // caller can give anything.
+  if (typeof value === "number" && !Number.isFinite(value)) {
+    throw requestError(`the query parameter ${JSON.stringify(name)} must be a finite number`);
+  }
+  if (typeof value !== "string" && typeof value !== "number" && typeof value !== "boolean") {
+    throw requestError(`the query parameter ${JSON.stringify(name)} must be text, a number or a boolean`);
+  }
   return String(value);
 }
 
@@ -39,7 +47,7 @@ function queryOf(op: Operation<unknown>, input: CallInput): Record<string, Query
     if (value === undefined) {
       continue;
     }
-    out[name] = Array.isArray(value) ? value.map(queryText) : queryText(value as string | number | boolean);
+    out[name] = Array.isArray(value) ? value.map((item) => queryText(name, item)) : queryText(name, value);
   }
   return out;
 }
@@ -55,6 +63,11 @@ function callOf(op: Operation<unknown>, input: CallInput): OperationCall {
   if (input.ifMatch !== undefined && spec.ifMatch === "none") {
     throw requestError(`${spec.id}: the operation does not take If-Match`);
   }
+  // Defense in depth: the input type requires the value too, and a JavaScript
+  // caller does not get that check.
+  if (input.ifMatch === undefined && spec.ifMatch === "required") {
+    throw requestError(`${spec.id}: the operation needs If-Match`);
+  }
   if (input.idempotencyKey !== undefined && spec.idempotencyKey === "none") {
     throw requestError(`${spec.id}: the operation does not take an Idempotency-Key`);
   }
@@ -64,10 +77,17 @@ function callOf(op: Operation<unknown>, input: CallInput): OperationCall {
   if (spec.requestBody === undefined && input.body !== undefined) {
     throw requestError(`${spec.id}: the operation takes no body`);
   }
+  const query = queryOf(op, input);
+  for (const name of spec.requiredQueryParameters) {
+    const given = query[name];
+    if (given === undefined || (Array.isArray(given) && given.length === 0)) {
+      throw requestError(`${spec.id}: the query parameter ${JSON.stringify(name)} is missing`);
+    }
+  }
   return {
     spec,
     path,
-    query: queryOf(op, input),
+    query,
     body: input.body,
     ifMatch: input.ifMatch,
     idempotencyKey: input.idempotencyKey,
@@ -133,5 +153,6 @@ export function operation<O>(spec: OperationSpec, decode: Decoder<O> | undefined
   Object.freeze(spec.statuses);
   Object.freeze(spec.pathParameters);
   Object.freeze(spec.queryParameters);
+  Object.freeze(spec.requiredQueryParameters);
   return Object.freeze({ spec: Object.freeze(spec), decode });
 }

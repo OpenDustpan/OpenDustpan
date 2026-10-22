@@ -13,13 +13,16 @@ package typescript
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"embed"
+	"encoding/hex"
 	"fmt"
 	"io/fs"
 	"regexp"
 	"slices"
 	"strings"
 	"text/template"
+	"unicode/utf8"
 
 	"opendustpan.org/opendustpan/internal/clientgen"
 	"opendustpan.org/opendustpan/internal/clientgen/model"
@@ -75,6 +78,7 @@ func (language) Render(api *model.API, opts clientgen.Options) ([]clientgen.File
 		{pathTSConfig, "tsconfig.json.tmpl"},
 		{srcDir + "client.ts", "client.ts.tmpl"},
 		{srcDir + "decoders.ts", "decoders.ts.tmpl"},
+		{srcDir + "description.ts", "description.ts.tmpl"},
 		{srcDir + "index.ts", "index.ts.tmpl"},
 		{srcDir + "metadata.ts", "metadata.ts.tmpl"},
 		{srcDir + "operations.ts", "operations.ts.tmpl"},
@@ -175,10 +179,13 @@ type data struct {
 	DescriptionVersion string
 	DescriptionSHA256  string
 	ServerRelease      string
-	GeneratorVersion   string
-	Title              string
-	Types              []typeView
-	Operations         []operationView
+	ServerCommit       string
+	// DescriptionText is the bytes of the description as a TypeScript string literal.
+	DescriptionText  string
+	GeneratorVersion string
+	Title            string
+	Types            []typeView
+	Operations       []operationView
 }
 
 // newData checks the options, and builds the views of the model.
@@ -204,6 +211,10 @@ func newData(api *model.API, opts clientgen.Options, runtime map[string][]byte) 
 		return nil, fmt.Errorf("%w: description digest %q", clientgen.ErrInvalidName, opts.DescriptionSHA256)
 	}
 
+	if err := checkEvidence(opts); err != nil {
+		return nil, err
+	}
+
 	if err := clientgen.CheckClientVersion(api.Version, opts.ClientVersion); err != nil {
 		return nil, err
 	}
@@ -212,11 +223,44 @@ func newData(api *model.API, opts clientgen.Options, runtime map[string][]byte) 
 		return nil, err
 	}
 
+	return newView(api, opts, runtime)
+}
+
+// checkEvidence checks the options that name the source of the description:
+// the server commit, the description and its digest.
+func checkEvidence(opts clientgen.Options) error {
+	if !commitPattern.MatchString(opts.ServerCommit) {
+		return fmt.Errorf(
+			"%w: server commit %q is not 40 lowercase hexadecimal digits or %q",
+			clientgen.ErrInvalidName, opts.ServerCommit, developmentCommit,
+		)
+	}
+
+	// A string holds text, so the copy is exact only for valid UTF-8.
+	if !utf8.Valid(opts.Description) {
+		return fmt.Errorf("%w: the description is not valid UTF-8", clientgen.ErrInvalidDescription)
+	}
+
+	// Defense in depth: the caller computes the digest, and this check makes
+	// sure that the package never carries a copy that its digest does not name.
+	if sum := sha256.Sum256(opts.Description); hex.EncodeToString(sum[:]) != opts.DescriptionSHA256 {
+		return fmt.Errorf(
+			"%w: the digest %s is not the digest of the bytes of the description",
+			clientgen.ErrInvalidDescription, opts.DescriptionSHA256,
+		)
+	}
+
+	return nil
+}
+
+// newView builds the views of a model that the checks accepted.
+func newView(api *model.API, opts clientgen.Options, runtime map[string][]byte) (*data, error) {
 	d := new(data)
 	d.Header = header(opts.GeneratorVersion, api.Version)
 	d.Package, d.Title = opts.Package, api.Title
 	d.ClientVersion, d.DescriptionVersion = opts.ClientVersion, api.Version
 	d.DescriptionSHA256, d.ServerRelease, d.GeneratorVersion = opts.DescriptionSHA256, opts.ServerRelease, opts.GeneratorVersion
+	d.ServerCommit, d.DescriptionText = opts.ServerCommit, tsString(string(opts.Description))
 
 	seen := make(map[string]string)
 
@@ -237,3 +281,9 @@ func newData(api *model.API, opts clientgen.Options, runtime map[string][]byte) 
 
 // sha256Pattern is the shape of a SHA-256 digest in lowercase hexadecimal.
 var sha256Pattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
+
+// developmentCommit is the server commit of a run that is not a release.
+const developmentCommit = "development"
+
+// commitPattern is the shape of a Git commit, or the development marker.
+var commitPattern = regexp.MustCompile(`^(?:development|[0-9a-f]{40})$`)

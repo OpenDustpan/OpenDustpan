@@ -58,7 +58,7 @@ Every error is an `ApiError`. Its `kind` says what failed:
 | `server` | The server answered with a status that is not a success status. `errorCode` and `errorArgs` come from the error document. |
 | `invalid` | The server answered, but the answer does not match the description. `status` is the status of the answer and `path` is the JSON path of the first wrong value. |
 | `transport` | No answer came. |
-| `request` | The call does not fit the operation, for example an empty path value. The client sends nothing. |
+| `request` | The call does not fit the operation. Examples: an empty path value, a missing `If-Match` that the operation needs, or a missing required query parameter. The client sends nothing. |
 
 ## Use your own transport
 
@@ -73,8 +73,11 @@ The default transport:
 
 - sends the token only to operations that need a sign-in, and only to the
   origin of the base URL.
-- follows a redirect itself, and drops the token when the redirect leaves the
-  origin.
+- follows a redirect itself, except in a browser, and only when the target is
+  inside the base URL (the same origin and the base path). A redirect to
+  another origin or outside the base path is an `ApiError` of kind `transport`.
+  The transport then sends no second request. In a browser, the transport
+  cannot read the target of a redirect, so any redirect is a `transport` error.
 - refuses a path value that is empty, `.` or `..`.
 - refuses an answer longer than 16 MiB.
 - does not retry a request.
@@ -105,7 +108,10 @@ go run ./cmd/clientgen -target typescript -description openapi.json -out clients
 | `-package` | The package name. The default is `@opendustpan/client`. |
 | `-client-version` | The package version. The default is `info.version`. Its major and minor parts must be those of `info.version`. |
 | `-server-release` | The server release. Before the first release, use the commit. The package records it in `metadata`. The default is `development`. |
+| `-server-commit` | The Git commit of the server, 40 lowercase hexadecimal digits. The package records it in `metadata.serverCommit`. The default is `development`, for a run that is not a release. |
 | `-check` | Write nothing. Exit with 1 and list the differences. |
 
 The package records the SHA-256 of the description in `metadata.descriptionSha256`.
-`info.version` alone is not a safe pin.
+`info.version` alone is not a safe pin. The package also exports `description`,
+the text of the description. The SHA-256 of its UTF-8 bytes is
+`metadata.descriptionSha256`.

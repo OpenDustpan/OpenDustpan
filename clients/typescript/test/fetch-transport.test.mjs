@@ -232,36 +232,86 @@ test("the signal of the caller reaches fetch", async () => {
   assert.equal(s.seen[0].init.signal, controller.signal);
 });
 
-test("a redirect to the same origin keeps the token, a redirect to another origin drops it for good", async () => {
+test("a redirect inside the base URL is followed with the token", async () => {
   const redirect = (location, status = 307) => new Response(null, { status, headers: { location } });
-  const s = scripted(
-    redirect("/moved"),
-    redirect("http://other.test/x"),
-    redirect("http://api.test/back"),
-    ok({ sinks: [] }),
-  );
+  const s = scripted(redirect("/api/dustpan/v1/moved"), redirect("http://api.test/api/dustpan/v1/back"), ok({ sinks: [] }));
   await client(s.fetch, { token: "tok" }).listNotificationSinks({ path: { namespace: "dev" } });
   assert.deepEqual(
     s.seen.map((r) => r.url),
     [
       "http://api.test/api/dustpan/v1/namespaces/dev/sinks",
-      "http://api.test/moved",
-      "http://other.test/x",
-      "http://api.test/back",
+      "http://api.test/api/dustpan/v1/moved",
+      "http://api.test/api/dustpan/v1/back",
     ],
   );
   assert.deepEqual(
     s.seen.map((r) => r.headers.authorization),
-    ["Bearer tok", "Bearer tok", undefined, undefined],
+    ["Bearer tok", "Bearer tok", "Bearer tok"],
   );
 });
 
-test("a redirect to a port or a scheme of another origin drops the token", async () => {
-  for (const target of ["http://api.test:8080/x", "https://api.test/x", "http://127.0.0.1/x", "//other.test/x"]) {
-    const s = scripted(new Response(null, { status: 302, headers: { location: target } }), ok({ sinks: [] }));
-    await client(s.fetch, { token: "tok" }).listNotificationSinks({ path: { namespace: "dev" } });
-    assert.equal(s.seen[1].headers.authorization, undefined, target);
+test("a redirect that leaves the base origin sends nothing and is a transport error", async () => {
+  const targets = [
+    "http://other.test/x",
+    "https://evil.example.net/steal",
+    "http://api.test:8080/x",
+    "https://api.test/x",
+    "http://127.0.0.1/x",
+    "//other.test/x",
+    "http://api.test.evil.test/x",
+    "http://api.test@evil.test/x",
+  ];
+  for (const status of [301, 302, 303, 307, 308]) {
+    for (const target of targets) {
+      const answer = new Response(null, { status, headers: { location: target } });
+      const s = scripted(answer, ok({ sinks: [] }));
+      const c = client(s.fetch, { token: "tok" });
+      const error = await rejection(c.createProfile({ path: { namespace: "dev" }, body: { name: "p", document: "d" } }));
+      assert.equal(error.kind, "transport", `${status} ${target}`);
+      assert.equal(s.seen.length, 1, `${status} ${target}`);
+    }
   }
+});
+
+test("a cross-origin 307 never carries the secret body to the other origin", async () => {
+  const secret = { appID: "1", apiAddress: "https://api.github.com", privateKey: "-----BEGIN PRIVATE KEY-----", eventSecret: "s" };
+  const evil = new Response(JSON.stringify({ kind: "github" }), { status: 200, headers: json });
+  const hop = new Response(null, { status: 307, headers: { location: "https://evil.example.net/steal" } });
+  const s = scripted(hop, evil);
+  const c = new Client(createFetchTransport({ baseUrl: "https://api.example.com", fetch: s.fetch, token: "tok" }));
+  const error = await rejection(c.putGitHostApp({ path: { kind: "github" }, body: secret }));
+  assert.equal(error.kind, "transport");
+  assert.deepEqual(
+    s.seen.map((r) => r.url),
+    ["https://api.example.com/api/dustpan/v1/git-host-apps/github"],
+  );
+  assert.ok(s.seen.every((r) => !String(r.url).includes("evil")));
+});
+
+test("a redirect outside the base path is a transport error", async () => {
+  const s = scripted(new Response(null, { status: 307, headers: { location: "/elsewhere" } }), ok({ sinks: [] }));
+  const c = new Client(createFetchTransport({ baseUrl: "http://api.test/prefix", fetch: s.fetch }));
+  assert.equal((await rejection(c.getCapabilities())).kind, "transport");
+  assert.equal(s.seen.length, 1);
+  for (const target of ["/prefixed", "/prefix/../x", "/"]) {
+    const t = scripted(new Response(null, { status: 307, headers: { location: target } }), ok());
+    const d = new Client(createFetchTransport({ baseUrl: "http://api.test/prefix", fetch: t.fetch }));
+    assert.equal((await rejection(d.getCapabilities())).kind, "transport", target);
+    assert.equal(t.seen.length, 1, target);
+  }
+  const inside = scripted(new Response(null, { status: 307, headers: { location: "/prefix/api/dustpan/v1/next" } }), ok());
+  const e = new Client(createFetchTransport({ baseUrl: "http://api.test/prefix", fetch: inside.fetch }));
+  await e.getCapabilities();
+  assert.equal(inside.seen.length, 2);
+});
+
+test("an opaque redirect from a browser is a transport error, not a server error with status 0", async () => {
+  const opaque = { type: "opaqueredirect", status: 0, headers: new Headers(), body: null };
+  const s = scripted(opaque);
+  const error = await rejection(client(s.fetch).getCapabilities());
+  assert.equal(error.kind, "transport");
+  assert.match(error.message, /redirected/);
+  assert.equal(s.seen.length, 1);
 });
 
 test("a redirect keeps the method for 307 and 308 and becomes a GET for 301, 302 and 303", async () => {

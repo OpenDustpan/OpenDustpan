@@ -2,6 +2,8 @@ package typescript_test
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"flag"
 	"os"
@@ -23,13 +25,31 @@ import (
 //nolint:gochecknoglobals // A test flag is read once; passing it as a parameter adds nothing.
 var updateGolden = flag.Bool("update", false, "write the golden files of the TypeScript template set")
 
-// digest is a SHA-256 digest that the tests use in place of the digest of a description.
-const digest = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+// commit is a server commit that the tests use.
+const commit = "0123456789abcdef0123456789abcdef01234567"
+
+// syntheticBytes are the bytes of the synthetic description.
+func syntheticBytes() []byte {
+	raw, err := os.ReadFile("testdata/synthetic.json")
+	if err != nil {
+		panic(err)
+	}
+
+	return raw
+}
+
+// digest is the SHA-256 digest of the synthetic description.
+func digest() string {
+	sum := sha256.Sum256(syntheticBytes())
+
+	return hex.EncodeToString(sum[:])
+}
 
 func options(version string) clientgen.Options {
 	return clientgen.Options{
 		Package: "@opendustpan/client", ClientVersion: version, ServerRelease: "0.1.0-test",
-		GeneratorVersion: clientgen.GeneratorVersion, DescriptionSHA256: digest,
+		ServerCommit: commit, Description: syntheticBytes(),
+		GeneratorVersion: clientgen.GeneratorVersion, DescriptionSHA256: digest(),
 	}
 }
 
@@ -375,7 +395,7 @@ func TestRenderRefusesHostileInput(t *testing.T) {
 		},
 		{
 			"digest in capitals",
-			func(_ *model.API, o *clientgen.Options) { o.DescriptionSHA256 = strings.ToUpper(digest) },
+			func(_ *model.API, o *clientgen.Options) { o.DescriptionSHA256 = strings.ToUpper(digest()) },
 			clientgen.ErrInvalidName,
 		},
 		{
@@ -388,9 +408,169 @@ func TestRenderRefusesHostileInput(t *testing.T) {
 			a.Schemas[0].Extra = &extra
 		}, clientgen.ErrUnsupported},
 		{
+			"server commit that is too short",
+			func(_ *model.API, o *clientgen.Options) { o.ServerCommit = "0123abc" },
+			clientgen.ErrInvalidName,
+		},
+		{
+			"server commit in capitals",
+			func(_ *model.API, o *clientgen.Options) { o.ServerCommit = strings.ToUpper(commit) },
+			clientgen.ErrInvalidName,
+		},
+		{
+			"server commit with a quote",
+			func(_ *model.API, o *clientgen.Options) { o.ServerCommit = `a"b` },
+			clientgen.ErrInvalidName,
+		},
+		{
+			"empty server commit",
+			func(_ *model.API, o *clientgen.Options) { o.ServerCommit = "" },
+			clientgen.ErrInvalidName,
+		},
+		{
+			"description copy that its digest does not name",
+			func(_ *model.API, o *clientgen.Options) { o.Description = append([]byte(nil), "{}"...) },
+			clientgen.ErrInvalidDescription,
+		},
+		{
+			"description that is not UTF-8",
+			func(_ *model.API, o *clientgen.Options) {
+				o.Description = []byte{0xff, 0xfe}
+				sum := sha256.Sum256(o.Description)
+				o.DescriptionSHA256 = hex.EncodeToString(sum[:])
+			},
+			clientgen.ErrInvalidDescription,
+		},
+		{
+			"no description copy",
+			func(_ *model.API, o *clientgen.Options) { o.Description = nil },
+			clientgen.ErrInvalidDescription,
+		},
+		{
 			"unknown kind of schema",
 			func(a *model.API, _ *clientgen.Options) { a.Schemas[0].Kind = 99 },
 			clientgen.ErrInvalidDescription,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			api := synthetic(t)
+			opts := options(api.Version)
+			tc.mutate(api, &opts)
+
+			_, err := typescript.New().Render(api, opts)
+			if !errors.Is(err, tc.want) {
+				t.Errorf("want %v, got %v", tc.want, err)
+			}
+		})
+	}
+}
+
+// TestRenderRefusesTypesThatItCannotCheck sends a model with a kind or a format
+// that the validators of the template set do not cover. The template set must
+// fail, and must not fall back to an unchecked type.
+func TestRenderRefusesTypesThatItCannotCheck(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		mutate func(*model.API, *clientgen.Options)
+		want   error
+	}{
+		{
+			"unknown kind of a member type",
+			func(a *model.API, _ *clientgen.Options) { a.Schemas[0].Fields[0].Type.Kind = 99 },
+			clientgen.ErrUnsupported,
+		},
+		{
+			"array of a member with no item type",
+			func(a *model.API, _ *clientgen.Options) {
+				a.Schemas[0].Fields[0].Type = model.Type{
+					Kind:     model.TypeArray,
+					Format:   "",
+					Elem:     nil,
+					Ref:      "",
+					Nullable: false,
+				}
+			},
+			clientgen.ErrUnsupported,
+		},
+		{
+			"map of a member with no value type",
+			func(a *model.API, _ *clientgen.Options) {
+				a.Schemas[0].Fields[0].Type = model.Type{
+					Kind:     model.TypeMap,
+					Format:   "",
+					Elem:     nil,
+					Ref:      "",
+					Nullable: false,
+				}
+			},
+			clientgen.ErrUnsupported,
+		},
+		{
+			"unknown kind of an item type",
+			func(a *model.API, _ *clientgen.Options) {
+				elem := model.Type{Kind: 99, Format: "", Elem: nil, Ref: "", Nullable: false}
+				a.Schemas[0].Fields[0].Type = model.Type{
+					Kind: model.TypeArray, Format: "", Elem: &elem, Ref: "", Nullable: false,
+				}
+			},
+			clientgen.ErrUnsupported,
+		},
+		{
+			"unknown kind of the type of an additional property",
+			func(a *model.API, _ *clientgen.Options) {
+				extra := model.Type{Kind: 99, Format: "", Elem: nil, Ref: "", Nullable: false}
+				a.Schemas[0].Fields = nil
+				a.Schemas[0].Extra = &extra
+			},
+			clientgen.ErrUnsupported,
+		},
+		{
+			"unknown kind in an answer",
+			func(a *model.API, _ *clientgen.Options) { onEachResult(a, func(t *model.Type) { t.Kind = 99 }) },
+			clientgen.ErrUnsupported,
+		},
+		{
+			"unknown kind in a body",
+			func(a *model.API, _ *clientgen.Options) { onEachBody(a, func(t *model.Type) { t.Kind = 99 }) },
+			clientgen.ErrUnsupported,
+		},
+		{
+			"unknown kind in a query parameter",
+			func(a *model.API, _ *clientgen.Options) { onEachQuery(a, func(t *model.Type) { t.Kind = 99 }) },
+			clientgen.ErrUnsupported,
+		},
+		{
+			"format of an answer that the set does not check",
+			func(a *model.API, _ *clientgen.Options) {
+				onEachResult(a, func(t *model.Type) {
+					*t = model.Type{Kind: model.TypeString, Format: "uuid", Elem: nil, Ref: "", Nullable: false}
+				})
+			},
+			clientgen.ErrUnsupported,
+		},
+		{
+			"format of a body that the set does not check",
+			func(a *model.API, _ *clientgen.Options) {
+				onEachBody(a, func(t *model.Type) {
+					*t = model.Type{Kind: model.TypeInteger, Format: "int32", Elem: nil, Ref: "", Nullable: false}
+				})
+			},
+			clientgen.ErrUnsupported,
+		},
+		{
+			"format of a query parameter that the set does not check",
+			func(a *model.API, _ *clientgen.Options) {
+				onEachQuery(a, func(t *model.Type) {
+					*t = model.Type{Kind: model.TypeString, Format: "date", Elem: nil, Ref: "", Nullable: false}
+				})
+			},
+			clientgen.ErrUnsupported,
 		},
 	}
 
@@ -502,5 +682,82 @@ func TestDiffRefusesAPathOutsideTheDirectory(t *testing.T) {
 	bad := []clientgen.File{{Path: "../x.ts", Content: nil}}
 	if _, err := clientgen.Diff(typescript.New(), t.TempDir(), bad); !errors.Is(err, clientgen.ErrUnsafePath) {
 		t.Errorf("want ErrUnsafePath, got %v", err)
+	}
+}
+
+// onEachResult, onEachBody and onEachQuery change the type of each answer,
+// body or query parameter of a model, and fail the test run when there is none.
+func onEachResult(a *model.API, f func(*model.Type)) {
+	n := 0
+
+	for i := range a.Operations {
+		if t := a.Operations[i].Result.Type; t != nil {
+			f(t)
+
+			n++
+		}
+	}
+
+	if n == 0 {
+		panic("the synthetic description has no answer with a body")
+	}
+}
+
+func onEachBody(a *model.API, f func(*model.Type)) {
+	n := 0
+
+	for i := range a.Operations {
+		if b := a.Operations[i].Body; b != nil {
+			f(&b.Type)
+
+			n++
+		}
+	}
+
+	if n == 0 {
+		panic("the synthetic description has no request body")
+	}
+}
+
+func onEachQuery(a *model.API, f func(*model.Type)) {
+	n := 0
+
+	for i := range a.Operations {
+		for j := range a.Operations[i].Parameters {
+			if p := &a.Operations[i].Parameters[j]; p.In == model.InQuery {
+				f(&p.Type)
+
+				n++
+			}
+		}
+	}
+
+	if n == 0 {
+		panic("the synthetic description has no query parameter")
+	}
+}
+
+// TestPackageCarriesTheDescriptionAndTheCommit checks that the package holds
+// a byte copy of the description that its digest names, and the server commit.
+func TestPackageCarriesTheDescriptionAndTheCommit(t *testing.T) {
+	t.Parallel()
+
+	files := render(t, synthetic(t))
+	byPath := make(map[string][]byte, len(files))
+
+	for _, f := range files {
+		byPath[f.Path] = f.Content
+	}
+
+	if _, ok := byPath["src/description.ts"]; !ok {
+		t.Fatal("the package has no copy of the description")
+	}
+
+	if !bytes.Contains(byPath["src/metadata.ts"], []byte(digest())) {
+		t.Error("metadata.ts does not name the digest of the description")
+	}
+
+	if !bytes.Contains(byPath["src/metadata.ts"], []byte(`serverCommit: "`+commit+`"`)) {
+		t.Error("metadata.ts does not name the server commit")
 	}
 }

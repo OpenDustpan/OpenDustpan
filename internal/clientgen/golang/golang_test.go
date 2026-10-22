@@ -45,6 +45,7 @@ func options() clientgen.Options {
 
 	return clientgen.Options{
 		Package: "opendustpan.org/client", ClientVersion: version, ServerRelease: "0.1.0-test",
+		ServerCommit: "development", Description: nil,
 		GeneratorVersion: clientgen.GeneratorVersion, DescriptionSHA256: "",
 	}
 }
