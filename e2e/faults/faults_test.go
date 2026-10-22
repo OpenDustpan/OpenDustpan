@@ -644,7 +644,10 @@ func dropPGSchema(schema, base string) {
 		_ = conn.Close(ctx) //nolint:errcheck // Best-effort cleanup at test end.
 	}()
 
-	_, _ = conn.Exec(ctx, `DROP SCHEMA "`+schema+`" CASCADE`) //nolint:errcheck // Best-effort cleanup.
+	// The store keeps its control tables in a second schema, <schema>_control.
+	for _, name := range []string{schema, schema + "_control"} {
+		_, _ = conn.Exec(ctx, `DROP SCHEMA IF EXISTS "`+name+`" CASCADE`) //nolint:errcheck // Best-effort cleanup.
+	}
 }
 
 // schemaURL returns base with its host replaced by proxyListen and its
