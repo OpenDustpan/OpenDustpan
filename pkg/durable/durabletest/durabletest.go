@@ -93,6 +93,10 @@ const (
 	// liveLease stays live for the few calls of a case that needs a live
 	// claim, also on a busy database under -race.
 	liveLease = 2 * time.Second
+	// firstLease is the lease of a claim that a case extends and then waits
+	// for the end of the first lease. It is long enough that a slow store
+	// cannot end it before the Extend.
+	firstLease = expiryWait
 	// instanceSkew is the clock offset of the instances in the clock case.
 	instanceSkew = time.Hour
 	// longLease does not expire inside one case.
@@ -628,7 +632,7 @@ func testExtend(t *testing.T, h Harness) {
 
 	a, b := h.Open(t, 0), h.Open(t, 0)
 	mustStart(t, a, "k", kindA)
-	held := mustClaim(t, a, ownerA, liveLease, kindA)
+	held := mustClaim(t, a, ownerA, firstLease, kindA)
 
 	extended, err := a.Extend(t.Context(), held.Claim, longLease)
 	if err != nil {
@@ -641,7 +645,7 @@ func testExtend(t *testing.T, h Harness) {
 			held.Claim.ExpiresAt)
 	}
 
-	pause(t, liveLease+2*pollEvery)
+	pause(t, time.Until(held.Claim.ExpiresAt)+2*pollEvery)
 
 	if _, err := b.Claim(t.Context(), claimReq(ownerB, longLease, kindA)); !errors.Is(err, durable.ErrNoWork) {
 		t.Fatalf("Claim after the first lease, before the extended expiry: error = %v, want ErrNoWork", err)
@@ -729,7 +733,7 @@ func testStepDoneAfterTakeover(t *testing.T, h Harness) {
 
 	a, b := h.Open(t, 0), h.Open(t, 0)
 	mustStart(t, a, "k", kindA)
-	first := mustClaim(t, a, ownerA, liveLease, kindA)
+	first := mustClaim(t, a, ownerA, longLease, kindA)
 
 	if err := a.RecordStep(t.Context(), first.Claim.Step("one"), []byte("result-one")); err != nil {
 		t.Fatalf("RecordStep by the holder: %v", err)
@@ -739,6 +743,8 @@ func testStepDoneAfterTakeover(t *testing.T, h Harness) {
 	if !errors.Is(err, durable.ErrStepDone) {
 		t.Fatalf("second RecordStep of one step: error = %v, want ErrStepDone", err)
 	}
+
+	shorten(t, a, first.Claim)
 
 	second := claimWhenExpired(t, b)
 
@@ -1447,6 +1453,25 @@ func mustNamespace(t *testing.T, d Domain, name namespace.Name) namespace.Fence 
 	}
 
 	return f
+}
+
+// shorten sets the lease of the claim c to shortLease with Extend, after the
+// last write that the case needs under a live claim, and fails the test at
+// once when the expiry does not move earlier. A case claims with longLease
+// and calls shorten, so that a slow store cannot end the claim before a
+// write: only the wait for the end depends on time.
+func shorten(t *testing.T, s durable.Store, c durable.Claim) {
+	t.Helper()
+
+	shorter, err := s.Extend(t.Context(), c, shortLease)
+	if err != nil {
+		t.Fatalf("Extend to a short lease: %v", err)
+	}
+
+	if !shorter.ExpiresAt.Before(c.ExpiresAt) {
+		t.Fatalf("Extend to %v did not move the expiry earlier: %v after %v", shortLease, shorter.ExpiresAt,
+			c.ExpiresAt)
+	}
 }
 
 // claimWhenExpired claims an operation of kindA for ownerB as soon as one

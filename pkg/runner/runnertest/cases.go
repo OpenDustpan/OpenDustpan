@@ -1037,12 +1037,45 @@ func recordClaimIsOnce(t *testing.T, h Harness, in recordedClaim) {
 	wantErr(t, "LookupClaim of a claim with another owner", err, runner.ErrClaimLost)
 }
 
-// shortLease is the lease of a claim that the cases let pass, and
-// leaseWait is the time to wait until it passed.
+// The cases claim with longLease, do every write that needs a live claim,
+// and then shorten the lease to shortLease with Domain.Shorten. A slow store
+// cannot end the claim before the writes: only the wait for the end depends
+// on time, and a slow store makes it longer, not shorter.
 const (
+	longLease  = time.Hour
 	shortLease = 500 * time.Millisecond
-	leaseWait  = 800 * time.Millisecond
+	// leaseMargin is the time to wait after the expiry that the store
+	// answered, so that the clock of the store has passed it.
+	leaseMargin = 300 * time.Millisecond
 )
+
+// lapse shortens the lease of the claim c to shortLease and waits until the
+// expiry that the store answered has passed. It fails at once when the
+// store does not move the expiry earlier.
+func lapse(t *testing.T, h Harness, c durable.Claim) {
+	t.Helper()
+
+	shorter, err := h.Domain.Shorten(t.Context(), c, shortLease)
+	if err != nil {
+		t.Fatalf("Shorten to a short lease: %v", err)
+	}
+
+	// A store that keeps the later expiry would make the case wait for the
+	// first lease, up to the timeout of the test, with no message.
+	if !shorter.ExpiresAt.Before(c.ExpiresAt) {
+		t.Fatalf("Shorten to %v did not move the expiry earlier: %v after %v", shortLease, shorter.ExpiresAt,
+			c.ExpiresAt)
+	}
+
+	timer := time.NewTimer(time.Until(shorter.ExpiresAt) + leaseMargin)
+	defer timer.Stop()
+
+	select {
+	case <-t.Context().Done():
+		t.Fatal("the case ended before the lease passed")
+	case <-timer.C:
+	}
+}
 
 func testClaimLeasePasses(t *testing.T, h Harness) {
 	t.Helper()
@@ -1054,7 +1087,7 @@ func testClaimLeasePasses(t *testing.T, h Harness) {
 		t.Fatalf("Join: %v", err)
 	}
 
-	waiting, err := h.Domain.ClaimLease(t.Context(), job.RunnerKind(f.pool.ID), r.ID, shortLease)
+	waiting, err := h.Domain.ClaimLease(t.Context(), job.RunnerKind(f.pool.ID), r.ID, longLease)
 	if err != nil {
 		t.Fatalf("ClaimLease: %v", err)
 	}
@@ -1066,7 +1099,7 @@ func testClaimLeasePasses(t *testing.T, h Harness) {
 		t.Fatalf("IssueHandoffToken: %v", err)
 	}
 
-	withSession, err := h.Domain.ClaimLease(t.Context(), job.RunnerKind(f.pool.ID), r.ID, shortLease)
+	withSession, err := h.Domain.ClaimLease(t.Context(), job.RunnerKind(f.pool.ID), r.ID, longLease)
 	if err != nil {
 		t.Fatalf("ClaimLease: %v", err)
 	}
@@ -1083,12 +1116,9 @@ func testClaimLeasePasses(t *testing.T, h Harness) {
 		t.Fatalf("OpenSession: %v", err)
 	}
 
-	timer := time.NewTimer(leaseWait)
-	select {
-	case <-t.Context().Done():
-		t.Fatal("the case ended before the lease passed")
-	case <-timer.C:
-	}
+	// Shorten each lease after the last write under it, then wait for its end.
+	lapse(t, h, withSession)
+	lapse(t, h, waiting)
 
 	_, err = h.Sessions.RunnerRenew(t.Context(), waiting, f.fence, runner.DefaultLease, time.Now())
 	wantErr(t, "RunnerRenew after the lease passed", err, runner.ErrClaimLost)

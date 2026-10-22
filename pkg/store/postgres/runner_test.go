@@ -84,6 +84,15 @@ func (d *runnerDomain) ClaimLease(
 	return op.Claim, nil
 }
 
+func (d *runnerDomain) Shorten(ctx context.Context, c durable.Claim, lease time.Duration) (durable.Claim, error) {
+	shorter, err := d.s.DurableOperations().Extend(ctx, c, lease)
+	if err != nil {
+		return durable.Claim{}, fmt.Errorf("extend claim: %w", err)
+	}
+
+	return shorter, nil
+}
+
 func (d *runnerDomain) Takeover(ctx context.Context, c durable.Claim) (durable.Claim, error) {
 	ops := d.s.DurableOperations()
 

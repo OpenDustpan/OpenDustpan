@@ -139,6 +139,22 @@ func (m *mem) ClaimLease(
 	return durable.Claim{Operation: id, Owner: owner, Token: 1, ExpiresAt: expires}, nil
 }
 
+func (m *mem) Shorten(_ context.Context, c durable.Claim, lease time.Duration) (durable.Claim, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if !liveClaim(m, c) {
+		return durable.Claim{}, durable.ErrClaimLost
+	}
+
+	o := m.ops[c.Operation]
+	o.expires = time.Now().Add(lease)
+	m.ops[c.Operation] = o
+	c.ExpiresAt = o.expires
+
+	return c, nil
+}
+
 func (m *mem) Takeover(_ context.Context, c durable.Claim) (durable.Claim, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
