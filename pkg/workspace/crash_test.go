@@ -7,12 +7,12 @@ import (
 	"strings"
 	"testing"
 
+	"opendustpan.org/opendustpan/internal/blob/blobfault"
+	"opendustpan.org/opendustpan/internal/store/storefault"
 	"opendustpan.org/opendustpan/pkg/blob"
-	"opendustpan.org/opendustpan/pkg/blob/blobfault"
 	"opendustpan.org/opendustpan/pkg/blob/fs"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/store/sqlite"
-	"opendustpan.org/opendustpan/pkg/store/storefault"
 	"opendustpan.org/opendustpan/pkg/workspace"
 	"opendustpan.org/opendustpan/pkg/workspace/workspacetest"
 )
