@@ -79,8 +79,7 @@ func TestAPIDescriptionDrift(t *testing.T) {
 	}
 
 	if !drift.Empty() {
-		t.Fatalf("the routes and the description differ:\nno entry: %v\nno route: %v\ndiffer: %v",
-			drift.Undescribed, drift.Unrouted, drift.Mismatch)
+		t.Fatalf("the routes and the description differ:\n%s", strings.Join(drift.Problems(), "\n"))
 	}
 }
 
@@ -227,7 +226,9 @@ func servedRoutes(t *testing.T, servers ...*dustpan.Server) (classInput, []strin
 	}
 
 	inDocument := map[string]bool{}
-	for _, op := range described {
+	for i := range described {
+		op := &described[i]
+
 		inDocument[op.Key()] = true
 	}
 
@@ -236,8 +237,9 @@ func servedRoutes(t *testing.T, servers ...*dustpan.Server) (classInput, []strin
 	var patterns []string
 
 	for _, srv := range servers {
-		for _, op := range srv.Operations() {
-			in.described[op.Key()] = inDocument[op.Key()]
+		ops := srv.Operations()
+		for i := range ops {
+			in.described[ops[i].Key()] = inDocument[ops[i].Key()]
 		}
 
 		var listed []string
@@ -267,7 +269,9 @@ func TestNotMovedListIsConsistent(t *testing.T) {
 	}
 
 	taken := map[string]string{}
-	for _, op := range described {
+	for i := range described {
+		op := &described[i]
+
 		taken[op.Key()] = "the description"
 	}
 
@@ -413,7 +417,9 @@ func TestUndescribedRoutesAreNotInTheDescription(t *testing.T) {
 	}
 
 	keys := map[string]bool{}
-	for _, op := range described {
+	for i := range described {
+		op := &described[i]
+
 		keys[op.Key()] = true
 	}
 
@@ -571,6 +577,7 @@ func hostileOperation(change func(o *apidesc.Operation)) apidesc.Operation {
 		IfMatch:         false,
 		IfMatchRequired: false,
 		ETag:            false,
+		Query:           nil,
 		Bodies:          &apidesc.Bodies{Request: apidesc.NoBody, Response: apidesc.NoBody},
 	}
 	change(&o)
@@ -684,7 +691,9 @@ func TestThreatStep4CheckAuthorization(t *testing.T) {
 
 	var public []string
 
-	for _, op := range described {
+	for i := range described {
+		op := &described[i]
+
 		if op.Public {
 			public = append(public, op.ID)
 		}

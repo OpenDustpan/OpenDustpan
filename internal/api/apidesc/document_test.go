@@ -247,8 +247,23 @@ func TestCheckedInDocumentHasTheRequirementsOfTheGeneratorTrial(t *testing.T) {
 		t.Error("components.headers has no ETag")
 	}
 
-	if len(member[map[string]any](t, doc, "components", "securitySchemes")) != 1 {
-		t.Error("the document must hold one security scheme")
+	checkSecuritySchemes(t, doc)
+}
+
+// checkSecuritySchemes checks that the document holds the three schemes of the
+// API: the access token, the session cookie and the CSRF header.
+func checkSecuritySchemes(t *testing.T, doc map[string]any) {
+	t.Helper()
+
+	schemes := member[map[string]any](t, doc, "components", "securitySchemes")
+	for _, name := range []string{"bearerAuth", "sessionCookie", "csrfHeader"} {
+		if _, ok := schemes[name]; !ok {
+			t.Errorf("components.securitySchemes has no %s", name)
+		}
+	}
+
+	if len(schemes) != 3 {
+		t.Errorf("the document holds %d security schemes, want 3", len(schemes))
 	}
 }
 

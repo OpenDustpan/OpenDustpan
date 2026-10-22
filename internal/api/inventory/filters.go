@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"net/url"
 	"strings"
 
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -123,12 +122,12 @@ func hasAnyState(e coreinventory.Entry, want map[coreinventory.State]struct{}) b
 func parseUnitFilter(r *http.Request, ns namespace.Name) (unitFilter, error) {
 	var f unitFilter
 
-	query, err := url.ParseQuery(r.URL.RawQuery)
-	if err != nil {
+	query := queryOf(r)
+	if query.Err() != nil {
 		return unitFilter{}, fmt.Errorf("%w: the query string is not valid", errInvalidQuery)
 	}
 
-	rawLabels := query["label"]
+	rawLabels := query.All("label")
 	if len(rawLabels) > coreinventory.MaxLabelFilters {
 		return unitFilter{}, fmt.Errorf(
 			"%w: send at most %d label query values", errInvalidQuery, coreinventory.MaxLabelFilters,
@@ -144,7 +143,7 @@ func parseUnitFilter(r *http.Request, ns namespace.Name) (unitFilter, error) {
 		f.labels = append(f.labels, pair)
 	}
 
-	rawRefs := query["reference"]
+	rawRefs := query.All("reference")
 	if len(rawRefs) > coreinventory.MaxReferenceFilters {
 		return unitFilter{}, fmt.Errorf(
 			"%w: send at most %d reference query values", errInvalidQuery, coreinventory.MaxReferenceFilters,
@@ -164,7 +163,7 @@ func parseUnitFilter(r *http.Request, ns namespace.Name) (unitFilter, error) {
 		f.references[obj.String()] = unitNameOf(obj)
 	}
 
-	states, stateErr := parseStateFilter(query["state"])
+	states, stateErr := parseStateFilter(query.All("state"))
 	if stateErr != nil {
 		return unitFilter{}, stateErr
 	}
