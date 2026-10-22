@@ -2651,6 +2651,7 @@ func registryAllowEntries() []AllowEntry {
 	return []AllowEntry{
 		{Method: http.MethodPost, Path: base + "/uploads", CoveringTest: test, Reason: why},
 		{Method: http.MethodPut, Path: base + "/providers/{name}/versions/{version}", CoveringTest: test, Reason: why},
+		{Method: http.MethodGet, Path: base + "/providers", CoveringTest: test, Reason: why},
 		{Method: http.MethodGet, Path: base + "/providers/{name}/versions", CoveringTest: test, Reason: why},
 		{Method: http.MethodGet, Path: base + "/providers/{name}/versions/{version}", CoveringTest: test, Reason: why},
 		{Method: http.MethodPost, Path: base + "/keys", CoveringTest: test, Reason: why},
