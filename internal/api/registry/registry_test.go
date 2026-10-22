@@ -22,6 +22,8 @@ import (
 
 	"opendustpan.org/opendustpan/internal/api/idempotent"
 	apiregistry "opendustpan.org/opendustpan/internal/api/registry"
+	"opendustpan.org/opendustpan/internal/registry/releasecheck"
+	"opendustpan.org/opendustpan/internal/registry/service"
 	"opendustpan.org/opendustpan/pkg/audit"
 	blobfs "opendustpan.org/opendustpan/pkg/blob/fs"
 	"opendustpan.org/opendustpan/pkg/idempotency/idempotencytest"
@@ -29,8 +31,6 @@ import (
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/registry/pgpfixture"
 	"opendustpan.org/opendustpan/pkg/registry/pgpverify"
-	"opendustpan.org/opendustpan/pkg/registry/releasecheck"
-	"opendustpan.org/opendustpan/pkg/registry/service"
 	"opendustpan.org/opendustpan/pkg/store/sqlite"
 )
 
