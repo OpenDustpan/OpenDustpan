@@ -64,6 +64,7 @@ func runApprovalRulesOnStore(t *testing.T, cli e2e.Install, store e2e.Store) {
 	checkReady(ctx, t, env)
 
 	checkApprovalCreateNamespace(ctx, t, approvalEnv{env: env, person: ""})
+	approvalGroups(ctx, t, approvalEnv{env: env, person: ""})
 
 	ae := approvalAdmin(ctx, t, env)
 
@@ -145,6 +146,47 @@ func wantBodyHas(t *testing.T, step, body string, parts ...string) {
 		if !strings.Contains(body, part) {
 			t.Fatalf("%s: body %s has no %s", step, body, part)
 		}
+	}
+}
+
+// approvalGroups makes the groups that the approvers of the steps name: platform
+// with two members and a with one. The server refuses a group that does not
+// exist and a count above the members.
+func approvalGroups(ctx context.Context, t *testing.T, env approvalEnv) {
+	t.Helper()
+
+	for name, subjects := range map[string][]string{"platform": {"approver-one", "approver-two"}, "a": {"approver-one"}} {
+		var group e2eGroup
+
+		decodeApprovalBody(t, approvalCall(ctx, t, env, approvalStep{
+			step: "make the group " + name, method: http.MethodPost, path: "/api/server/groups",
+			body: `{"name":"` + name + `"}`, want: http.StatusCreated,
+		}), &group)
+
+		for _, subject := range subjects {
+			var member e2ePrincipal
+
+			resp := approvalCall(ctx, t, env, approvalStep{
+				step: "make the approver " + subject, method: http.MethodPost, path: "/api/server/principals",
+				body: `{"subject":"` + name + "-" + subject + `","kind":"person"}`, want: http.StatusCreated,
+			})
+			decodeApprovalBody(t, resp, &member)
+
+			approvalCall(ctx, t, env, approvalStep{
+				step: "add " + subject + " to " + name, method: http.MethodPost,
+				path: "/api/server/groups/" + group.ID + "/members",
+				body: `{"principalID":"` + member.ID + `"}`, want: http.StatusCreated,
+			})
+		}
+	}
+}
+
+// decodeApprovalBody decodes the JSON body of an answer into v.
+func decodeApprovalBody(t *testing.T, body string, v any) {
+	t.Helper()
+
+	if err := json.Unmarshal([]byte(body), v); err != nil {
+		t.Fatalf("decode %q: %v", body, err)
 	}
 }
 
@@ -296,6 +338,12 @@ func checkApprovalRefusals(ctx context.Context, t *testing.T, env approvalEnv) {
 		{step: "default with an unknown field", method: http.MethodPut, path: def, body: `{"count":1,"approvers":{},"unless":"true"}`, want: http.StatusBadRequest},
 		{step: "rule with no approver", method: http.MethodPut, path: rule, body: `{"count":1,"approvers":{}}`, want: http.StatusUnprocessableEntity},
 		{step: "rule with the reserved ID", method: http.MethodPut, path: approvalNamespaceBase + "/approval-rules/default", body: `{"count":1,"approvers":{"groups":["a"]}}`, want: http.StatusUnprocessableEntity},
+		{step: "default with a group that does not exist", method: http.MethodPut, path: def, body: `{"count":1,"approvers":{"groups":["nogroup"]}}`, want: http.StatusBadRequest},
+		{step: "default with a group name that is not valid", method: http.MethodPut, path: def, body: `{"count":1,"approvers":{"groups":["<b>x</b>"]}}`, want: http.StatusBadRequest},
+		{step: "default with a count above the named users", method: http.MethodPut, path: def, body: `{"count":10,"approvers":{"users":["approval-user"]}}`, want: http.StatusBadRequest},
+		{step: "default with a count above the group members", method: http.MethodPut, path: def, body: `{"count":3,"approvers":{"groups":["platform"]}}`, want: http.StatusBadRequest},
+		{step: "rule with a group that does not exist", method: http.MethodPut, path: rule, body: `{"count":1,"approvers":{"groups":["nogroup"]}}`, want: http.StatusBadRequest},
+		{step: "rule with a count above the named users", method: http.MethodPut, path: rule, body: `{"count":2,"approvers":{"users":["approval-user"]}}`, want: http.StatusBadRequest},
 		{step: "delete when unset", method: http.MethodDelete, path: def, body: "", want: http.StatusNoContent},
 	} {
 		approvalCall(ctx, t, env, s)

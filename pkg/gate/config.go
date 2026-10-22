@@ -17,6 +17,15 @@ type NamespaceSource interface {
 	Get(ctx context.Context, name namespace.Name) (namespace.Namespace, error)
 }
 
+// ApproverDirectory reads the groups that approvers name. The config service
+// uses it to refuse an approver list that no one can meet.
+type ApproverDirectory interface {
+	// GroupMembers returns the number of current members of the group called
+	// name. It returns ErrInvalid when name is not a valid group name, and
+	// ErrNotFound when no group has that name.
+	GroupMembers(ctx context.Context, name string) (int64, error)
+}
+
 // ConfigService reads and writes the approval defaults and the approval
 // rules of the scopes that hold a namespace. It reads the fence of the
 // namespace, completes the audit entry of the caller, and calls the Store,
@@ -26,15 +35,18 @@ type NamespaceSource interface {
 // The service does not check who may call. The adapter of the transport
 // checks the action of the route before it calls.
 type ConfigService struct {
-	store Store
-	ns    NamespaceSource
-	now   func() time.Time
+	store  Store
+	ns     NamespaceSource
+	groups ApproverDirectory
+	now    func() time.Time
 }
 
 // ConfigServiceConfig holds the ports of a ConfigService.
 type ConfigServiceConfig struct {
 	Store      Store
 	Namespaces NamespaceSource
+	// Approvers reads the groups that approvers name.
+	Approvers ApproverDirectory
 	// Now is the clock, and time.Now when nil.
 	Now func() time.Time
 }
@@ -42,8 +54,10 @@ type ConfigServiceConfig struct {
 // NewConfigService returns a ConfigService. It returns ErrInvalid when a
 // port is nil.
 func NewConfigService(cfg ConfigServiceConfig) (*ConfigService, error) {
-	if cfg.Store == nil || cfg.Namespaces == nil {
-		return nil, fmt.Errorf("%w: the gate config service needs a store and a namespace source", ErrInvalid)
+	if cfg.Store == nil || cfg.Namespaces == nil || cfg.Approvers == nil {
+		return nil, fmt.Errorf(
+			"%w: the gate config service needs a store, a namespace source and an approver directory", ErrInvalid,
+		)
 	}
 
 	now := cfg.Now
@@ -51,7 +65,7 @@ func NewConfigService(cfg ConfigServiceConfig) (*ConfigService, error) {
 		now = time.Now
 	}
 
-	return &ConfigService{store: cfg.Store, ns: cfg.Namespaces, now: now}, nil
+	return &ConfigService{store: cfg.Store, ns: cfg.Namespaces, groups: cfg.Approvers, now: now}, nil
 }
 
 // Audit actions of the writes of this service. They name the entry only. The
@@ -92,6 +106,10 @@ func (s *ConfigService) PutApprovalDefault(
 	}
 
 	if err := d.Validate(); err != nil {
+		return ApprovalDefault{}, err
+	}
+
+	if err := s.checkApprovers(ctx, d.Approvers, d.Count); err != nil {
 		return ApprovalDefault{}, err
 	}
 
@@ -177,6 +195,10 @@ func (s *ConfigService) PutApprovalRule(
 	}
 
 	if err := r.Validate(); err != nil {
+		return ApprovalRule{}, err
+	}
+
+	if err := s.checkApprovers(ctx, r.Approvers, r.Count); err != nil {
 		return ApprovalRule{}, err
 	}
 

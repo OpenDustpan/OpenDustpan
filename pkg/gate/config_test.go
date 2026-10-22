@@ -28,6 +28,25 @@ func (fakeNamespaces) Get(_ context.Context, name namespace.Name) (namespace.Nam
 	}, nil
 }
 
+// fakeGroups holds the groups platform (5 members), ops (1 member) and empty
+// (no member). A name with a character that a group name cannot hold is not
+// valid, and any other name names no group.
+type fakeGroups struct{}
+
+func (fakeGroups) GroupMembers(_ context.Context, name string) (int64, error) {
+	members := map[string]int64{"platform": 5, "ops": 1, "empty": 0}
+
+	if strings.ContainsAny(name, "<>/ ") {
+		return 0, gate.ErrInvalid
+	}
+
+	if n, ok := members[strings.ToLower(name)]; ok {
+		return n, nil
+	}
+
+	return 0, gate.ErrNotFound
+}
+
 // write records the last write that reached a store.
 type write struct {
 	fence namespace.Fence
@@ -98,7 +117,7 @@ func newConfigService(t *testing.T) (*gate.ConfigService, *recordingStore) {
 	st := &recordingStore{Store: nil, writes: nil}
 
 	svc, err := gate.NewConfigService(gate.ConfigServiceConfig{
-		Store: st, Namespaces: fakeNamespaces{}, Now: configNow,
+		Store: st, Namespaces: fakeNamespaces{}, Approvers: fakeGroups{}, Now: configNow,
 	})
 	if err != nil {
 		t.Fatalf("NewConfigService() = %v", err)
@@ -325,16 +344,27 @@ func TestConfigServiceRefusesBeforeTheStore(t *testing.T) {
 func TestNewConfigServiceNeedsPorts(t *testing.T) {
 	t.Parallel()
 
-	_, err := gate.NewConfigService(gate.ConfigServiceConfig{Store: nil, Namespaces: fakeNamespaces{}, Now: nil})
+	_, err := gate.NewConfigService(
+		gate.ConfigServiceConfig{Store: nil, Namespaces: fakeNamespaces{}, Approvers: fakeGroups{}, Now: nil},
+	)
 	if !errors.Is(err, gate.ErrInvalid) {
 		t.Fatalf("no store = %v, want ErrInvalid", err)
 	}
 
 	st := &recordingStore{Store: nil, writes: nil}
 
-	_, err = gate.NewConfigService(gate.ConfigServiceConfig{Store: st, Namespaces: nil, Now: nil})
+	_, err = gate.NewConfigService(
+		gate.ConfigServiceConfig{Store: st, Namespaces: nil, Approvers: fakeGroups{}, Now: nil},
+	)
 	if !errors.Is(err, gate.ErrInvalid) {
 		t.Fatalf("no namespaces = %v, want ErrInvalid", err)
+	}
+
+	_, err = gate.NewConfigService(
+		gate.ConfigServiceConfig{Store: st, Namespaces: fakeNamespaces{}, Approvers: nil, Now: nil},
+	)
+	if !errors.Is(err, gate.ErrInvalid) {
+		t.Fatalf("no approver directory = %v, want ErrInvalid", err)
 	}
 }
 
@@ -426,5 +456,143 @@ func TestValidateApprovalFields(t *testing.T) {
 	def.Count = 0
 	if err := def.Validate(); !errors.Is(err, gate.ErrInvalid) {
 		t.Fatalf("default count 0: Validate() = %v, want ErrInvalid", err)
+	}
+}
+
+// TestConfigServiceRefusesApproversThatCannotBeMet proves that a default and a
+// rule whose approvers cannot give the count are refused before the store, and
+// that the cases next to them are stored.
+func TestConfigServiceRefusesApproversThatCannotBeMet(t *testing.T) {
+	t.Parallel()
+
+	scope := gate.NamespaceScope("acme")
+
+	tests := []struct {
+		name      string
+		approvers gate.Approvers
+		count     int
+		refused   bool
+	}{
+		{
+			"group name that is not valid",
+			gate.Approvers{Groups: []string{"<b>x</b>"}, Users: nil, UnitOwners: false},
+			1,
+			true,
+		},
+		{
+			"group that does not exist",
+			gate.Approvers{Groups: []string{"nogroup"}, Users: nil, UnitOwners: false},
+			1,
+			true,
+		},
+		{
+			"user with a control character",
+			gate.Approvers{Groups: nil, Users: []string{"a\x07b"}, UnitOwners: false},
+			1,
+			true,
+		},
+		{
+			"user with white space around it",
+			gate.Approvers{Groups: nil, Users: []string{" alice"}, UnitOwners: false},
+			1,
+			true,
+		},
+		{"count above one user", gate.Approvers{Groups: nil, Users: []string{"alice"}, UnitOwners: false}, 2, true},
+		{
+			"a user named twice counts once",
+			gate.Approvers{Groups: nil, Users: []string{"alice", "alice"}, UnitOwners: false},
+			2,
+			true,
+		},
+		{
+			"count above the members of a group",
+			gate.Approvers{Groups: []string{"ops"}, Users: nil, UnitOwners: false},
+			2,
+			true,
+		},
+		{"a group with no member", gate.Approvers{Groups: []string{"empty"}, Users: nil, UnitOwners: false}, 1, true},
+		{"count within a group", gate.Approvers{Groups: []string{"platform"}, Users: nil, UnitOwners: false}, 5, false},
+		{
+			"a group named in another case counts once",
+			gate.Approvers{Groups: []string{"ops", "OPS"}, Users: nil, UnitOwners: false},
+			2,
+			true,
+		},
+		{
+			"count within users and groups",
+			gate.Approvers{Groups: []string{"ops"}, Users: []string{"a", "b"}, UnitOwners: false},
+			3,
+			false,
+		},
+		{
+			"count above the list with the unit owners",
+			gate.Approvers{Groups: nil, Users: []string{"alice"}, UnitOwners: true},
+			9,
+			false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			svc, st := newConfigService(t)
+
+			def := goodDefault(scope)
+			def.Approvers, def.Count = tt.approvers, tt.count
+
+			rule := goodRule(scope)
+			rule.Approvers, rule.Count = tt.approvers, tt.count
+
+			_, defErr := svc.PutApprovalDefault(t.Context(), def, 0, callerEntry())
+			_, ruleErr := svc.PutApprovalRule(t.Context(), rule, 0, callerEntry())
+
+			if tt.refused {
+				wantRefused(t, defErr, ruleErr, len(st.writes))
+
+				return
+			}
+
+			wantStored(t, defErr, ruleErr)
+		})
+	}
+}
+
+// wantStored fails the test unless the default and the rule were both stored.
+func wantStored(t *testing.T, defErr, ruleErr error) {
+	t.Helper()
+
+	if defErr != nil || ruleErr != nil {
+		t.Fatalf("default = %v, rule = %v, want both stored", defErr, ruleErr)
+	}
+}
+
+// wantRefused fails the test unless the default and the rule were both refused
+// with gate.ErrApprovers and reached no store.
+func wantRefused(t *testing.T, defErr, ruleErr error, writes int) {
+	t.Helper()
+
+	if !errors.Is(defErr, gate.ErrApprovers) || !errors.Is(ruleErr, gate.ErrApprovers) {
+		t.Fatalf("default = %v, rule = %v, want gate.ErrApprovers", defErr, ruleErr)
+	}
+
+	if writes != 0 {
+		t.Fatalf("a refused write reached the store: %d writes", writes)
+	}
+}
+
+// TestConfigServiceAnyApproveHolderHasNoBound proves that a default with no
+// approver stays valid at every count: it means any holder of the approve
+// action.
+func TestConfigServiceAnyApproveHolderHasNoBound(t *testing.T) {
+	t.Parallel()
+
+	svc, _ := newConfigService(t)
+
+	def := goodDefault(gate.NamespaceScope("acme"))
+	def.Approvers, def.Count = gate.Approvers{Groups: nil, Users: nil, UnitOwners: false}, 10
+
+	if _, err := svc.PutApprovalDefault(t.Context(), def, 0, callerEntry()); err != nil {
+		t.Fatalf("default with no approver and count 10 = %v, want stored", err)
 	}
 }
