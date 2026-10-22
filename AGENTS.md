@@ -76,6 +76,7 @@ pkg/                   the public SDK: dustpan, the port packages and the confor
   unmanaged/           domain: the resource index, Sweep and findings of unmanaged resources
   drift/               domain: drift checks, the drift result and status, the drift schedule setting (RFC 25)
   trigger/             domain: run triggers that start a plan (review request push, schedule, follows unit), the cycle rule (RFC 24)
+  outputshare/         domain: sharing rules, the output sharing setting of a namespace and the read check of outputs (RFC 15)
   cron/                helper: the 5-field UTC cron parser and the schedule presets, standard library only
   savedview/           domain: saved views, a named query of the unit list (RFC 100)
   preferences/         domain: the preferences of a person (theme, language, formats, time zone), the merge patch and its checks
@@ -133,7 +134,7 @@ The web console lives in its own repository, `OpenDustpan/console` (ADR 8).
 
 - Domain packages (`namespace`, `stack`, `secret`, `workspace`, `identity`, `blob`, `backup`,
   `history`, `dependency`, `job`, `runner`, `launcher`, `source`, `agent`, `objectcontext`, `graph`,
-  `unmanaged`, `drift`, `trigger`, `savedview`, `registry`, `unitimport`, `preferences`, `stepup`, `gate`, `forge`) never import
+  `unmanaged`, `drift`, `trigger`, `outputshare`, `savedview`, `registry`, `unitimport`, `preferences`, `stepup`, `gate`, `forge`) never import
   `net/http`, `database/sql`, drivers, `pkg/store/...` or `internal/api/...`. depguard enforces this.
 - Define each port in the `pkg/` package of its domain. Put the service that
   uses the port in `internal/<domain>svc`. Keep ports small, and document them

@@ -9,12 +9,12 @@ import (
 	"strings"
 	"testing"
 
+	"opendustpan.org/opendustpan/internal/registry/pgpfixture"
 	"opendustpan.org/opendustpan/internal/registry/releasecheck"
 	"opendustpan.org/opendustpan/internal/registry/service"
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/registry"
-	"opendustpan.org/opendustpan/pkg/registry/pgpfixture"
 )
 
 // readAll reads and closes r.
