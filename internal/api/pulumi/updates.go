@@ -728,6 +728,14 @@ func (h *Handler) listHistory(w http.ResponseWriter, r *http.Request, _ identity
 		return
 	}
 
+	// A stack that does not exist answers as GET on the stack does: 404 with
+	// the same body, not an empty list.
+	if _, err = h.stacks.Get(ctx, ref); err != nil {
+		h.writeError(ctx, w, err)
+
+		return
+	}
+
 	list, err := h.updates.History(ctx, ref, page)
 	if err != nil {
 		h.writeError(ctx, w, err)
