@@ -168,6 +168,11 @@ func (f *fakeStacks) ListStacks(_ context.Context, _ stack.Filter) ([]stack.Stac
 	return append([]stack.Stack(nil), f.stacks...), nil
 }
 
+// QueryStacks implements stack.Store over the lists of ListStacks.
+func (f *fakeStacks) QueryStacks(ctx context.Context, q stack.PageQuery) ([]stack.Stack, error) {
+	return stack.ListPage(ctx, f.ListStacks, q)
+}
+
 func (*fakeStacks) DeleteStack(
 	context.Context,
 	stack.Ref,
@@ -338,6 +343,16 @@ func (f *fakeWorkspaces) ListWorkspaces(_ context.Context, _ namespace.Name) ([]
 	}
 
 	return out, nil
+}
+
+// QueryWorkspaces implements workspace.Store over the list of ListWorkspaces.
+func (f *fakeWorkspaces) QueryWorkspaces(ctx context.Context, q workspace.ListQuery) (workspace.ListPage, error) {
+	all, err := f.ListWorkspaces(ctx, q.Namespace)
+	if err != nil {
+		return workspace.ListPage{}, err
+	}
+
+	return workspace.PageWorkspaces(all, q), nil
 }
 
 func (f *fakeWorkspaces) SaveWorkspace(

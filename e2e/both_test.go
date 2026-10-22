@@ -42,15 +42,17 @@ func TestBothToolsSameServer(t *testing.T) {
 	for _, db := range databases {
 		t.Run(string(db), func(t *testing.T) {
 			t.Parallel()
-			runBothOnStore(t, fetcher, pulumiVersions[0], tofuVersions[0], db)
+			runBothOnStore(t, fetcher, pulumiVersions, tofuVersions[0], db)
 		})
 	}
 }
 
-// runBothOnStore installs one Pulumi CLI and one OpenTofu CLI and runs both
-// full scenarios on one server.
+// runBothOnStore installs every Pulumi CLI of the matrix and one OpenTofu CLI
+// and runs both full scenarios on one server. The first Pulumi CLI runs the
+// full Pulumi scenario; every Pulumi CLI lists the stacks of the paging
+// scenario.
 func runBothOnStore(
-	t *testing.T, fetcher *e2e.Fetcher, pulumiLabel, tofuLabel string, store e2e.Store,
+	t *testing.T, fetcher *e2e.Fetcher, pulumiLabels []string, tofuLabel string, store e2e.Store,
 ) {
 	t.Helper()
 
@@ -61,10 +63,18 @@ func runBothOnStore(
 	installCtx, cancel := context.WithTimeout(t.Context(), installLimit)
 	defer cancel()
 
-	pulumiCLI, err := fetcher.Install(installCtx, e2e.Pulumi(), pulumiLabel)
-	if err != nil {
-		t.Fatalf("install pulumi %s: %v", pulumiLabel, err)
+	pulumiCLIs := make([]e2e.Install, 0, len(pulumiLabels))
+
+	for _, label := range pulumiLabels {
+		cli, err := fetcher.Install(installCtx, e2e.Pulumi(), label)
+		if err != nil {
+			t.Fatalf("install pulumi %s: %v", label, err)
+		}
+
+		pulumiCLIs = append(pulumiCLIs, cli)
 	}
+
+	pulumiCLI := pulumiCLIs[0]
 
 	tofuCLI, err := fetcher.Install(installCtx, e2e.OpenTofu(), tofuLabel)
 	if err != nil {
@@ -80,6 +90,8 @@ func runBothOnStore(
 	env.SetCLI(pulumiCLI)
 
 	pulumiScenario(t, env)
+	pulumiStackPagingScenario(t, env, pulumiCLIs)
+	env.SetCLI(pulumiCLI)
 
 	checkServerMetrics(t, env)
 	checkServerComponents(t, env)

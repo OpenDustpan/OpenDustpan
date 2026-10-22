@@ -1568,6 +1568,9 @@ func TestListObjectsWithinAuthorize(t *testing.T) {
 				identitytest.CheckListWithinAuthorize(t.Context(), t, identitytest.ListCheck{
 					Authorizer: authz, Principal: p, Action: action, Every: every,
 				})
+				identitytest.CheckExactScope(t.Context(), t, identitytest.ListCheck{
+					Authorizer: authz, Principal: p, Action: action, Every: every,
+				})
 			}
 		}
 	}
