@@ -58,8 +58,6 @@ func openStagingTestStore(t *testing.T) *postgres.Store {
 		t.Fatalf("create schema: %v", execErr)
 	}
 
-	dropSchemaAtCleanup(t, base, name)
-
 	u, parseErr := url.Parse(base)
 	if parseErr != nil {
 		t.Fatalf("parse %s: %v", stagingTestURL, parseErr)
