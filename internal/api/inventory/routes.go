@@ -221,7 +221,7 @@ func (m *patternMux) Patterns() []string {
 // way the namespace service does, so an invalid value fails closed before
 // authorization.
 func resolveListUnits(_ http.ResponseWriter, r *http.Request) (identity.Object, error) {
-	org := r.URL.Query().Get("organization")
+	org := queryOf(r).Get("organization")
 	if org == "" {
 		return identity.Object{}, errMissingOrganization
 	}

@@ -23,6 +23,7 @@ import (
 	"strings"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/api/apidesc"
 	"opendustpan.org/opendustpan/pkg/idempotency"
 )
 
@@ -116,7 +117,7 @@ func New(cfg Config) (*Middleware, error) {
 // Present reports whether the request has the header. A header with an empty
 // value is present, and an invalid key.
 func Present(r *http.Request) bool {
-	return len(r.Header.Values(Header)) > 0
+	return len(apidesc.HeaderValues(r, Header)) > 0
 }
 
 // Call is a request that has the key header.
@@ -174,7 +175,8 @@ func (m *Middleware) Handle(w http.ResponseWriter, r *http.Request, c Call) erro
 
 	// The query and the If-Match header are part of the request: another
 	// query or another precondition is another request.
-	material := frame(body, []byte(r.URL.RawQuery), []byte(strings.Join(r.Header.Values("If-Match"), ",")))
+	//nolint:forbidigo // The raw query goes into a digest as bytes. No parameter is read from it.
+	material := frame(body, []byte(r.URL.RawQuery), []byte(strings.Join(apidesc.HeaderValues(r, "If-Match"), ",")))
 
 	res, err := m.store.Begin(r.Context(), ref, material, m.now())
 	if err != nil {
@@ -219,7 +221,7 @@ func (m *Middleware) Handle(w http.ResponseWriter, r *http.Request, c Call) erro
 // keyOf returns the key of the request, or the empty key when the request
 // has no header.
 func keyOf(r *http.Request) (idempotency.Key, error) {
-	values := r.Header.Values(Header)
+	values := apidesc.HeaderValues(r, Header)
 
 	switch len(values) {
 	case 0:

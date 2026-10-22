@@ -21,6 +21,9 @@ func TestStaleTestDatabase(t *testing.T) {
 		want bool
 	}{
 		{name: "older than the stale age", db: testDatabasePrefix + at(3*time.Hour) + "_0011223344556677", want: true},
+		{name: "a template older", db: testDatabasePrefix + at(3*time.Hour) + "_00112233_tpl", want: true},
+		{name: "a clone older", db: testDatabasePrefix + at(3*time.Hour) + "_00112233_tpl_c0011", want: true},
+		{name: "a clone younger", db: testDatabasePrefix + at(time.Hour) + "_00112233_tpl_c0011", want: false},
 		{name: "younger than the stale age", db: testDatabasePrefix + at(time.Hour) + "_0011223344556677", want: false},
 		{name: "exactly the stale age", db: testDatabasePrefix + at(staleTestDatabaseAge) + "_00", want: false},
 		{name: "another database", db: "postgres", want: false},

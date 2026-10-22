@@ -253,7 +253,7 @@ func viewAuditTemplate(r *http.Request) audit.Entry {
 	return audit.Entry{
 		At: time.Time{}, Namespace: "", Subject: "", IDPSubject: "", TokenID: "", Action: "", Object: "",
 		Version: "", ValuePath: "", ValueCount: nil, Changes: nil, SourceIP: clientip.String(r),
-		UserAgent: truncateUserAgent(r.UserAgent()), Channel: sessionauth.AuditChannel(r, channelHeader),
+		UserAgent: truncateUserAgent(userAgent(r)), Channel: sessionauth.AuditChannel(r, channelHeader),
 		Kind: audit.KindChange, Outcome: audit.OutcomeSuccess, RequestID: requestid.FromContext(r.Context()),
 		ObjectID: "", PrevHash: "", Hash: "", Sequence: 0, FenceVersion: 0, Reason: "", PrincipalKind: "", JobID: "",
 	}
@@ -374,19 +374,18 @@ func (h *Handler) listViewUnits(w http.ResponseWriter, r *http.Request, p identi
 
 	// An allowlist of query values: a filter in the request would change the
 	// query that the view stores.
-	values, parseErr := url.ParseQuery(r.URL.RawQuery)
-	if parseErr != nil {
+	query := queryOf(r)
+	if query.Err() != nil {
 		h.writeError(ctx, w, fmt.Errorf("%w: the query string is not valid", errInvalidQuery))
 
 		return
 	}
 
-	for key := range values {
-		if key != "pageSize" && key != "pageToken" {
-			h.writeError(ctx, w, errViewQueryValue)
+	// The label of the route declares pageSize and pageToken only.
+	if len(query.Undeclared()) > 0 {
+		h.writeError(ctx, w, errViewQueryValue)
 
-			return
-		}
+		return
 	}
 
 	if _, nsErr := h.namespaces.Get(ctx, ns); nsErr != nil {
