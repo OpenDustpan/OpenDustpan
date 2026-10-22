@@ -1324,13 +1324,13 @@ func testRestoreApplyReleasesWorkspaceLocks(t *testing.T, newStore RestoreFactor
 	locked := lockTestWorkspace(t, src, ns, createTestWorkspace(t, src, ns, "prod"), "alice")
 	free := createTestWorkspace(t, src, ns, "dev")
 
+	ps := portableRestoreStores(t, src, newStore(t))
+
 	// The inventory entry must hold the lock before the restore. Without
 	// this, the check on the restored entry below could pass on its own.
-	if workspaceInventoryLock(t, src, ns.Name, locked.Ref.Name.String()) == nil {
+	if workspaceInventoryLock(t, ps.src, ns.Name, locked.Ref.Name.String()) == nil {
 		t.Fatalf("inventory lock of %s before the restore = none, want one", locked.Ref)
 	}
-
-	ps := portableRestoreStores(t, src, newStore(t))
 
 	sink, sum, files := exportPortable(t, ps.src)
 
