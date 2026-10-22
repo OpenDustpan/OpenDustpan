@@ -1142,7 +1142,8 @@ func checkOperatorSavesNoCrossRule(ctx context.Context, t *testing.T, env *e2e.E
 
 	var principal e2ePrincipal
 	principalCall(ctx, t, env, principalStep{
-		http.MethodPost, "/api/server/principals", `{"subject":"sharing-operator","kind":"service"}`, http.StatusCreated,
+		http.MethodPost, "/api/server/principals", `{"subject":"sharing-operator","kind":"service"}`,
+		http.StatusCreated,
 	}, &principal)
 
 	var role struct {
