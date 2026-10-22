@@ -163,7 +163,8 @@ func wantRefused(t *testing.T, what string, tr drift.Transition, err, want error
 
 	wantErr(t, what, err, want)
 
-	if tr != (drift.Transition{}) {
+	var zero drift.Transition
+	if tr != zero {
 		t.Errorf("%s: transition = %+v, want the zero transition", what, tr)
 	}
 }
