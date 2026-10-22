@@ -313,7 +313,7 @@ func (h *Handler) startSignIn(w http.ResponseWriter, r *http.Request, _ identity
 		return
 	}
 
-	returnPath := r.URL.Query().Get("return")
+	returnPath := queryOf(r).Get("return")
 	if returnPath == "" {
 		returnPath = defaultReturnPath
 	}
@@ -410,12 +410,13 @@ func refused(reason string) (callback, string) {
 // gives, or the reason of a refusal.
 func (h *Handler) callbackIdentity(r *http.Request, provider SignInProvider) (callback, string) {
 	ctx := r.Context()
-	q := r.URL.Query()
+	q := queryOf(r)
 
 	if q.Get("error") != "" {
 		return refused(reasonProviderError)
 	}
 
+	//nolint:forbidigo // An identity provider calls the sign-in callback, which is outside the description.
 	cookie, err := r.Cookie(SignInCookie)
 	if err != nil {
 		return refused(reasonState)
@@ -620,7 +621,7 @@ func signInEntry(r *http.Request, subject, idpSubject, action string) audit.Entr
 	return audit.Entry{
 		At: time.Time{}, Namespace: "", Subject: subject, IDPSubject: idpSubject, TokenID: "", Action: action,
 		Object: "", Version: "", ValuePath: "", ValueCount: nil, Changes: nil, SourceIP: clientip.String(r),
-		UserAgent: truncateUserAgent(r.UserAgent()), Channel: audit.ChannelConsole, Kind: "", Outcome: "",
+		UserAgent: truncateUserAgent(userAgent(r)), Channel: audit.ChannelConsole, Kind: "", Outcome: "",
 		RequestID: requestid.FromContext(r.Context()), ObjectID: "", PrevHash: "", Hash: "", Sequence: 0,
 		FenceVersion:  0,
 		Reason:        "",

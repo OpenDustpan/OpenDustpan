@@ -181,7 +181,9 @@ func checkPostRoute(t *testing.T, h *jobsapi.Handler) {
 func checkStartOperation(t *testing.T, ops []apidesc.Operation) {
 	t.Helper()
 
-	for _, op := range ops {
+	for i := range ops {
+		op := &ops[i]
+
 		if op.ID != "startJob" {
 			continue
 		}

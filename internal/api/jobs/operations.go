@@ -80,3 +80,8 @@ func (h *Handler) Operations() []apidesc.Operation {
 
 	return apidesc.Collect(rows, operationLabels)
 }
+
+// userAgent returns the User-Agent header of a request, for the audit record.
+func userAgent(r *http.Request) string {
+	return apidesc.Header(r, "User-Agent")
+}

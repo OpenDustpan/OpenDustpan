@@ -12,6 +12,7 @@ import (
 	"strings"
 	"unicode"
 
+	"opendustpan.org/opendustpan/internal/api/apidesc"
 	"opendustpan.org/opendustpan/internal/api/idempotent"
 )
 
@@ -61,7 +62,7 @@ func withCORS(next http.Handler, allowed []string) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Add("Vary", "Origin")
 
-		origin := r.Header.Get("Origin")
+		origin := apidesc.Header(r, "Origin")
 		if origin == "" || !slices.Contains(allowed, origin) {
 			next.ServeHTTP(w, r)
 

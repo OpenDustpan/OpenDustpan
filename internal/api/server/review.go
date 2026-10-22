@@ -369,7 +369,7 @@ func reviewRequest(r *http.Request) (access.ReviewRequest, error) {
 		return access.ReviewRequest{}, err
 	}
 
-	q := r.URL.Query()
+	q := queryOf(r)
 	req := access.ReviewRequest{
 		From: nil, To: nil, Subject: q.Get("subject"), Cursor: page.Cursor, Limit: page.Limit, Expand: false,
 	}
@@ -472,7 +472,7 @@ func millisOf(t *time.Time) *int64 {
 func callerAccess(
 	_ http.ResponseWriter, r *http.Request, svc *access.Service, c *call,
 ) (principalResult, error) {
-	q := r.URL.Query()
+	q := queryOf(r)
 	object, kind := q.Get("object"), q.Get("type")
 
 	switch {
@@ -643,7 +643,7 @@ func callerAccessByType(
 	}
 
 	got, err := svc.Objects(r.Context(), p, access.ObjectsRequest{
-		Kind: kind, Action: identity.Action(r.URL.Query().Get("action")), Cursor: page.Cursor, Limit: page.Limit,
+		Kind: kind, Action: identity.Action(queryOf(r).Get("action")), Cursor: page.Cursor, Limit: page.Limit,
 	})
 	if err != nil {
 		return failed(""), err

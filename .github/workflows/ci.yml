@@ -90,11 +90,15 @@ jobs:
       # files are left out of that build and one run cannot hold both. The
       # make target holds the build tag, so this file never names it and the
       # release guard (make journal-guard) stays clean. The install-only step
-      # puts golangci-lint on the PATH.
+      # puts golangci-lint on the PATH. It does not restore the lint cache:
+      # the step above already did that on a GitHub-hosted runner, and on a
+      # self-hosted runner the restore took 40 to 55 seconds to download and
+      # unpack an old 145 MB copy over the cache on the disk.
       - uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
         with:
           version: v2.14.0
           install-only: true
+          skip-cache: true
       - name: Lint the journal recording build
         run: make lint-journal-build
       - name: Nil-panic analysis
@@ -104,10 +108,17 @@ jobs:
       # Put the pipx directory first on PATH: a self-hosted machine can have
       # another semgrep (for example a snap, which cannot read the workspace).
       # --force makes the pin apply on a machine that keeps an older install.
+      # A machine that already has the pinned version skips the install,
+      # which took 15 seconds on each run.
       - name: Install Semgrep
+        env:
+          SEMGREP_VERSION: 1.178.0
         run: |
-          pipx install --force semgrep==1.178.0
-          echo "${PIPX_BIN_DIR:-$HOME/.local/bin}" >> "$GITHUB_PATH"
+          bin="${PIPX_BIN_DIR:-$HOME/.local/bin}"
+          if [ "$("$bin/semgrep" --version --disable-version-check 2>/dev/null)" != "$SEMGREP_VERSION" ]; then
+            pipx install --force "semgrep==$SEMGREP_VERSION"
+          fi
+          echo "$bin" >> "$GITHUB_PATH"
       - name: Semgrep rules
         run: make semgrep
       - name: Each linked module has a license file to ship
@@ -153,6 +164,22 @@ jobs:
         with:
           go-version-file: go.mod
           cache: ${{ runner.environment == 'github-hosted' }}
+      # The runner throws the service container away after the job, so its
+      # data needs no durability. On a runner, each checkpoint of a store test
+      # run spent 55 to 90 seconds in fsync of about 120,000 files. These
+      # settings change only what PostgreSQL keeps after a crash of the
+      # machine, not what a query returns. The e2e job, which has the crash
+      # test, keeps the defaults.
+      - name: Turn off fsync in the test PostgreSQL
+        if: ${{ matrix.store == 'postgres' }}
+        env:
+          PG_CONTAINER: ${{ job.services.postgres.id }}
+        run: |
+          docker exec "$PG_CONTAINER" psql -U postgres -v ON_ERROR_STOP=1 -q \
+            -c "ALTER SYSTEM SET fsync = off" \
+            -c "ALTER SYSTEM SET synchronous_commit = off" \
+            -c "ALTER SYSTEM SET full_page_writes = off" \
+            -c "SELECT pg_reload_conf()"
       # The runner throws the service container away after the job, so the
       # PostgreSQL tests keep their database at the end
       # (DUSTPAN_TEST_SKIP_FINAL_DROP). A local run drops it.
