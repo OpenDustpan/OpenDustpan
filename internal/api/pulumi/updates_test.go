@@ -3006,7 +3006,7 @@ func TestCheckpointDeltaOverLimit(t *testing.T) {
 
 	// The base nearly fills the limit, so the verbatim save fits while a
 	// delta that grows it past the limit does not.
-	base := `"` + strings.Repeat("a", 1900) + `"`
+	base := `{"a":"` + strings.Repeat("a", 1890) + `"}`
 	verbatim := `{"version":3,"untypedDeployment":` + base + `,"sequenceNumber":1}`
 	status, body := f.doUpdate(t, leaseRequest(http.MethodPatch, paths.Verbatim, lease, verbatim))
 
@@ -3014,8 +3014,8 @@ func TestCheckpointDeltaOverLimit(t *testing.T) {
 		t.Fatalf("verbatim answers %d, want %d (%s)", status, http.StatusOK, body)
 	}
 
-	grown := `"` + strings.Repeat("a", 2) + strings.Repeat("b", 200) + strings.Repeat("a", 1890) + `"`
-	edits := `[` + deltaEditJSON(1, 11, strings.Repeat("b", 200)) + `]`
+	grown := `{"a":"` + strings.Repeat("b", 200) + strings.Repeat("a", 1880) + `"}`
+	edits := `[` + deltaEditJSON(6, 16, strings.Repeat("b", 200)) + `]`
 	delta := `{"version":3,"checkpointHash":` + strconv.Quote(deltaHash(grown)) +
 		`,"sequenceNumber":2,"deploymentDelta":` + edits + `}`
 	status, body = f.doUpdate(t, leaseRequest(http.MethodPatch, paths.Delta, lease, delta))
@@ -3211,5 +3211,184 @@ func TestStartRefusesMalformedOffer(t *testing.T) {
 	status, body := f.doUpdate(t, accessRequest(http.MethodPost, paths.Start, `{"journalVersion":`))
 	if status != http.StatusBadRequest {
 		t.Fatalf("start with a malformed body answers %d, want %d (%s)", status, http.StatusBadRequest, body)
+	}
+}
+
+// badDeployment is a body for the deployment member that the CLI cannot read.
+type badDeployment struct {
+	name       string
+	deployment string
+}
+
+// badDeployments returns the bodies for the deployment member that the CLI
+// cannot read.
+func badDeployments() []badDeployment {
+	return []badDeployment{
+		{name: "a string", deployment: `"notanobject"`},
+		{name: "a number", deployment: `42`},
+		{name: "an array", deployment: `[1,2]`},
+		{name: "null", deployment: `null`},
+		{name: "no deployment", deployment: ``},
+		{name: "resources that are a string", deployment: `{"resources":"x"}`},
+	}
+}
+
+// bodyWithDeployment returns a body of the given shape with deployment in the
+// member that the route reads. An empty deployment leaves the member out.
+func bodyWithDeployment(member, versionMember, deployment string) string {
+	if deployment == "" {
+		return `{"` + versionMember + `":3}`
+	}
+
+	return `{"` + versionMember + `":3,"` + member + `":` + deployment + `}`
+}
+
+// TestImportRefusesADeploymentThatIsNotAnObject proves that the import route
+// answers 400 in the error shape of the Pulumi Cloud-compatible API for a
+// deployment that the CLI cannot read, and that the stack keeps the checkpoint
+// that it had.
+func TestImportRefusesADeploymentThatIsNotAnObject(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range badDeployments() {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			f := newUpdateFixture(t, allowAll())
+
+			const good = `{"resources":[]}`
+
+			status, body := f.doUpdate(t, accessRequest(
+				http.MethodPost, "/api/stacks/acme/web/prod/import", `{"version":3,"deployment":`+good+`}`,
+			))
+			if status != http.StatusOK {
+				t.Fatalf("import of a good deployment answers %d, want %d (%s)", status, http.StatusOK, body)
+			}
+
+			status, body = f.doUpdate(t, accessRequest(
+				http.MethodPost, "/api/stacks/acme/web/prod/import",
+				bodyWithDeployment("deployment", "version", tc.deployment),
+			))
+			if status != http.StatusBadRequest {
+				t.Fatalf("import answers %d, want %d (%s)", status, http.StatusBadRequest, body)
+			}
+
+			checkErrorShape(t, http.StatusBadRequest, body)
+
+			if got := exportDeployment(t, f); got != good {
+				t.Fatalf("export = %s, want %s: a refused import must store nothing", got, good)
+			}
+		})
+	}
+}
+
+// TestCheckpointSaveRefusesADeploymentThatIsNotAnObject proves that the
+// checkpoint routes of a running update answer 400 in the error shape of the
+// Pulumi Cloud-compatible API for a deployment that the CLI cannot read, and
+// keep the last good checkpoint.
+func TestCheckpointSaveRefusesADeploymentThatIsNotAnObject(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range badDeployments() {
+		t.Run("whole save/"+tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			checkRefusedSave(t, func(p updatePaths) string { return p.Checkpoint },
+				bodyWithDeployment("deployment", "version", tc.deployment))
+		})
+
+		t.Run("verbatim save/"+tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			request := strings.TrimSuffix(bodyWithDeployment("untypedDeployment", "version", tc.deployment), "}") +
+				`,"sequenceNumber":2}`
+
+			checkRefusedSave(t, func(p updatePaths) string { return p.Verbatim }, request)
+		})
+	}
+}
+
+// checkRefusedSave sends request to the checkpoint route that path names, after
+// a good verbatim save, and checks the 400 answer and the kept checkpoint.
+func checkRefusedSave(t *testing.T, path func(updatePaths) string, request string) {
+	t.Helper()
+
+	f := newUpdateFixture(t, allowAll())
+	paths, lease := verbatimPaths(t, f)
+
+	good := `{"version":3,"untypedDeployment":{"resources":[]},"sequenceNumber":1}`
+
+	status, body := f.doUpdate(t, leaseRequest(http.MethodPatch, paths.Verbatim, lease, good))
+	if status != http.StatusOK {
+		t.Fatalf("save of a good deployment answers %d, want %d (%s)", status, http.StatusOK, body)
+	}
+
+	status, body = f.doUpdate(t, leaseRequest(http.MethodPatch, path(paths), lease, request))
+	if status != http.StatusBadRequest {
+		t.Fatalf("save answers %d, want %d (%s)", status, http.StatusBadRequest, body)
+	}
+
+	checkErrorShape(t, http.StatusBadRequest, body)
+
+	if got := exportDeployment(t, f); got != `{"resources":[]}` {
+		t.Fatalf("export = %s: a refused save must keep the last checkpoint", got)
+	}
+}
+
+// exportedProviders is the secrets provider entry of an exported deployment in
+// the tests.
+type exportedProviders struct {
+	State map[string]string `json:"state"`
+}
+
+// exportedDeploymentDoc is the deployment of an export in the tests.
+type exportedDeploymentDoc struct {
+	Providers exportedProviders `json:"secrets_providers"` //nolint:tagliatelle // The Pulumi wire name; it must not change.
+}
+
+// exportedProvidersDoc decodes an export in the tests.
+type exportedProvidersDoc struct {
+	Deployment exportedDeploymentDoc `json:"deployment"`
+}
+
+// TestExportNamesTheCurrentStackInTheSecretsProvider proves that both export
+// routes name the stack that serves the deployment in the state of the service
+// secrets provider. A checkpoint that a renamed stack kept holds the old name,
+// and the CLI would ask for that stack.
+func TestExportNamesTheCurrentStackInTheSecretsProvider(t *testing.T) {
+	t.Parallel()
+
+	f := newUpdateFixture(t, allowAll())
+
+	stale := `{"type":"service","state":{"url":"http://127.0.0.1:18080","owner":"acme","project":"web","stack":"old"}}`
+
+	status, body := f.doUpdate(t, accessRequest(
+		http.MethodPost, "/api/stacks/acme/web/prod/import",
+		`{"version":3,"deployment":{"manifest":{},"secrets_providers":`+stale+`,"resources":[]}}`,
+	))
+	if status != http.StatusOK {
+		t.Fatalf("import answers %d, want %d (%s)", status, http.StatusOK, body)
+	}
+
+	for _, target := range []string{"/api/stacks/acme/web/prod/export", "/api/stacks/acme/web/prod/export/1"} {
+		status, body = f.doUpdate(t, accessRequest(http.MethodGet, target, ""))
+		if status != http.StatusOK {
+			t.Fatalf("%s answers %d, want %d (%s)", target, status, http.StatusOK, body)
+		}
+
+		var doc exportedProvidersDoc
+
+		if err := json.Unmarshal([]byte(body), &doc); err != nil {
+			t.Fatalf("%s: decode %q: %v", target, body, err)
+		}
+
+		state := doc.Deployment.Providers.State
+		if state["stack"] != "prod" || state["project"] != "web" || state["owner"] != "acme" {
+			t.Errorf("%s: provider state = %v, want the stack acme/web/prod", target, state)
+		}
+
+		if state["url"] != "http://127.0.0.1:18080" {
+			t.Errorf("%s: provider url = %q, want it unchanged", target, state["url"])
+		}
 	}
 }
