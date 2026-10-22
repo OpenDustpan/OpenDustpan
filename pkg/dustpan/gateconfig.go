@@ -54,26 +54,79 @@ type groupDirectory struct {
 
 var _ gate.ApproverDirectory = groupDirectory{groups: nil}
 
-// GroupMembers implements gate.ApproverDirectory.
-func (d groupDirectory) GroupMembers(ctx context.Context, name string) (int64, error) {
+// GroupMembers implements gate.ApproverDirectory. It reads the members of the
+// group in pages and counts the active memberships of principals that are not
+// disabled, and of those the persons.
+func (d groupDirectory) GroupMembers(ctx context.Context, name string) (gate.MemberCounts, error) {
+	none := gate.MemberCounts{Enabled: 0, Persons: 0}
+
 	if err := principal.ValidateGroupName(name); err != nil {
-		return 0, fmt.Errorf("%w: %w", gate.ErrInvalid, err)
+		return none, fmt.Errorf("%w: %w", gate.ErrInvalid, err)
 	}
 
 	if d.groups == nil {
-		return 0, fmt.Errorf("%w: group %q: this server keeps no groups", gate.ErrNotFound, name)
+		return none, fmt.Errorf("%w: group %q: this server keeps no groups", gate.ErrNotFound, name)
 	}
 
+	group, err := d.group(ctx, name)
+	if err != nil {
+		return none, err
+	}
+
+	return d.count(ctx, group)
+}
+
+// count reads the members of group in pages and counts the active memberships
+// of principals that are not disabled, and of those the persons.
+func (d groupDirectory) count(ctx context.Context, group principal.Group) (gate.MemberCounts, error) {
+	counts := gate.MemberCounts{Enabled: 0, Persons: 0}
+	cursor := ""
+
+	for {
+		page, err := d.groups.ListMembers(ctx, group.ID, principal.PageRequest{
+			Prefix: "", Cursor: cursor, Limit: principal.MaxLimit,
+		})
+		if err != nil {
+			return gate.MemberCounts{Enabled: 0, Persons: 0},
+				fmt.Errorf("list the members of group %q: %w", group.Name, err)
+		}
+
+		for i := range page.Items {
+			m := &page.Items[i]
+			if m.State != principal.MembershipStateActive || !m.Principal.DisabledAt.IsZero() {
+				continue
+			}
+
+			counts.Enabled++
+
+			if m.Principal.Kind == principal.KindPerson {
+				counts.Persons++
+			}
+		}
+
+		if page.NextCursor == "" {
+			return counts, nil
+		}
+
+		cursor = page.NextCursor
+	}
+}
+
+// group returns the group called name without regard to case, or
+// gate.ErrNotFound. The groups are ordered by the lower-case name and the
+// prefix starts the range, so the exact name is the first row of its range:
+// every longer name with the same prefix sorts after it.
+func (d groupDirectory) group(ctx context.Context, name string) (principal.Group, error) {
 	page, err := d.groups.ListGroups(ctx, principal.PageRequest{Prefix: name, Cursor: "", Limit: 0})
 	if err != nil {
-		return 0, fmt.Errorf("list groups: %w", err)
+		return principal.Group{}, fmt.Errorf("list groups: %w", err)
 	}
 
 	for _, g := range page.Items {
 		if strings.EqualFold(g.Name, name) {
-			return g.MemberCount, nil
+			return g, nil
 		}
 	}
 
-	return 0, fmt.Errorf("%w: group %q", gate.ErrNotFound, name)
+	return principal.Group{}, fmt.Errorf("%w: group %q", gate.ErrNotFound, name)
 }
