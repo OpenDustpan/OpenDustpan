@@ -356,6 +356,9 @@ type namespaceOnlyStore struct {
 		ListNamespaces(ctx context.Context) ([]namespace.Namespace, error)
 		Ping(ctx context.Context) error
 		AppendServer(ctx context.Context, e audit.Entry) (audit.Entry, error)
+		Append(ctx context.Context, fence namespace.Fence, e audit.Entry) (audit.Entry, error)
+		List(ctx context.Context, ns namespace.Name, page audit.Page) (audit.Listing, error)
+		Check(ctx context.Context, ns namespace.Name) (audit.CheckResult, error)
 	}
 }
 
@@ -364,6 +367,20 @@ type namespaceOnlyStore struct {
 // the first to refuse.
 func (s namespaceOnlyStore) AppendServer(ctx context.Context, e audit.Entry) (audit.Entry, error) {
 	return s.store.AppendServer(ctx, e)
+}
+
+// Append, List and Check serve the audit log of the namespaces, which the
+// server needs before it checks the maintenance port.
+func (s namespaceOnlyStore) Append(ctx context.Context, fence namespace.Fence, e audit.Entry) (audit.Entry, error) {
+	return s.store.Append(ctx, fence, e)
+}
+
+func (s namespaceOnlyStore) List(ctx context.Context, ns namespace.Name, page audit.Page) (audit.Listing, error) {
+	return s.store.List(ctx, ns, page)
+}
+
+func (s namespaceOnlyStore) Check(ctx context.Context, ns namespace.Name) (audit.CheckResult, error) {
+	return s.store.Check(ctx, ns)
 }
 
 func (s namespaceOnlyStore) CreateNamespace(ctx context.Context, ns namespace.Namespace) error {

@@ -161,25 +161,41 @@ type Handler struct {
 	supportedJournal int
 }
 
+// validate returns ErrMissingDependency when cfg lacks a required dependency.
+func (cfg Config) validate() error {
+	switch {
+	case cfg.Audit == nil:
+		return fmt.Errorf("%w: audit store", ErrMissingDependency)
+	case cfg.Stacks == nil:
+		return fmt.Errorf("%w: stack service", ErrMissingDependency)
+	case cfg.Updates == nil:
+		return fmt.Errorf("%w: update service", ErrMissingDependency)
+	case cfg.Secrets == nil:
+		return fmt.Errorf("%w: secret service", ErrMissingDependency)
+	case cfg.Namespaces == nil:
+		return fmt.Errorf("%w: namespace service", ErrMissingDependency)
+	case cfg.Authenticator == nil:
+		return fmt.Errorf("%w: authenticator", ErrMissingDependency)
+	case cfg.Authorizer == nil:
+		return fmt.Errorf("%w: authorizer", ErrMissingDependency)
+	case cfg.Logger == nil:
+		return fmt.Errorf("%w: logger", ErrMissingDependency)
+	case cfg.CheckpointDeltaCutoff < 0:
+		return fmt.Errorf("%w: %d", ErrInvalidCutoff, cfg.CheckpointDeltaCutoff)
+	}
+
+	return nil
+}
+
 // NewHandler returns a Handler. Every Config field but Sessions is required.
 func NewHandler(cfg Config) (*Handler, error) {
-	switch {
-	case cfg.Stacks == nil:
-		return nil, fmt.Errorf("%w: stack service", ErrMissingDependency)
-	case cfg.Updates == nil:
-		return nil, fmt.Errorf("%w: update service", ErrMissingDependency)
-	case cfg.Secrets == nil:
-		return nil, fmt.Errorf("%w: secret service", ErrMissingDependency)
-	case cfg.Namespaces == nil:
-		return nil, fmt.Errorf("%w: namespace service", ErrMissingDependency)
-	case cfg.Authenticator == nil:
-		return nil, fmt.Errorf("%w: authenticator", ErrMissingDependency)
-	case cfg.Authorizer == nil:
-		return nil, fmt.Errorf("%w: authorizer", ErrMissingDependency)
-	case cfg.Logger == nil:
-		return nil, fmt.Errorf("%w: logger", ErrMissingDependency)
-	case cfg.CheckpointDeltaCutoff < 0:
-		return nil, fmt.Errorf("%w: %d", ErrInvalidCutoff, cfg.CheckpointDeltaCutoff)
+	if err := cfg.validate(); err != nil {
+		return nil, err
+	}
+
+	recorder, err := refusal.New(cfg.Authorizer, cfg.Audit, cfg.Namespaces, cfg.Logger, cfg.OnAuditFailure)
+	if err != nil {
+		return nil, fmt.Errorf("denial recorder: %w", err)
 	}
 
 	h := &Handler{
@@ -197,12 +213,10 @@ func NewHandler(cfg Config) (*Handler, error) {
 		gate:           cfg.Gate,
 		audit:          cfg.Audit,
 		onAuditFailure: cfg.OnAuditFailure,
-		guard: refusal.New(cfg.Authorizer, cfg.Audit, cfg.Namespaces, cfg.Logger,
-			cfg.OnAuditFailure).WithLimiter(cfg.DenialLimiter).
-			WithSurface("pulumi"),
-		mux:         newPatternMux(),
-		routes:      nil,
-		deltaCutoff: cfg.CheckpointDeltaCutoff,
+		guard:          recorder.WithLimiter(cfg.DenialLimiter).WithSurface("pulumi"),
+		mux:            newPatternMux(),
+		routes:         nil,
+		deltaCutoff:    cfg.CheckpointDeltaCutoff,
 
 		disablePulumiJournaling: cfg.DisablePulumiJournaling,
 		supportedJournal:        maxSupportedJournalVersion,

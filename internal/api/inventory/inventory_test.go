@@ -264,7 +264,7 @@ func newBehaviorHandlerWith(
 
 	handler, err := apiinventory.NewHandler(apiinventory.Config{
 		Views: nil,
-		Audit: nil, OnAuditFailure: nil, Locks: nil, Moves: nil,
+		Audit: newTestAudit(), OnAuditFailure: nil, Locks: nil, Moves: nil,
 		Collections:   testCollectionService(t, nsStore),
 		Namespaces:    namespaces,
 		Units:         reader,
@@ -957,7 +957,7 @@ func TestNewHandlerRequiresDependencies(t *testing.T) {
 
 	full := apiinventory.Config{
 		Views: nil,
-		Audit: nil, OnAuditFailure: nil, Locks: nil, Moves: nil,
+		Audit: newTestAudit(), OnAuditFailure: nil, Locks: nil, Moves: nil,
 		Collections:   testCollectionService(t, nsStore),
 		Namespaces:    namespaces,
 		Units:         reader,

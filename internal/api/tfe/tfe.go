@@ -290,6 +290,8 @@ type Handler struct {
 // NewHandler returns a Handler. Every Config field is required.
 func NewHandler(cfg Config) (*Handler, error) {
 	switch {
+	case cfg.Audit == nil:
+		return nil, fmt.Errorf("%w: audit store", ErrMissingDependency)
 	case cfg.Authenticator == nil:
 		return nil, fmt.Errorf("%w: authenticator", ErrMissingDependency)
 	case cfg.Authorizer == nil:
@@ -307,6 +309,11 @@ func NewHandler(cfg Config) (*Handler, error) {
 		return nil, err
 	}
 
+	recorder, err := refusal.New(cfg.Authorizer, cfg.Audit, cfg.Namespaces, cfg.Logger, cfg.OnAuditFailure)
+	if err != nil {
+		return nil, fmt.Errorf("denial recorder: %w", err)
+	}
+
 	h := &Handler{
 		registry:       reg,
 		authn:          cfg.Authenticator,
@@ -320,14 +327,12 @@ func NewHandler(cfg Config) (*Handler, error) {
 		baseURL:        cfg.BaseURL,
 		audit:          cfg.Audit,
 		onAuditFailure: cfg.OnAuditFailure,
-		guard: refusal.New(cfg.Authorizer, cfg.Audit, cfg.Namespaces, cfg.Logger,
-			cfg.OnAuditFailure).WithLimiter(cfg.DenialLimiter).
-			WithSurface("tfe"),
-		gate:       cfg.Gate,
-		maxState:   cfg.MaxStateBytes,
-		stateGuard: cfg.StateGuard,
-		mux:        newPatternMux(),
-		routes:     nil,
+		guard:          recorder.WithLimiter(cfg.DenialLimiter).WithSurface("tfe"),
+		gate:           cfg.Gate,
+		maxState:       cfg.MaxStateBytes,
+		stateGuard:     cfg.StateGuard,
+		mux:            newPatternMux(),
+		routes:         nil,
 	}
 
 	if h.gate == nil {
