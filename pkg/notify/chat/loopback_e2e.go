@@ -10,8 +10,8 @@ import (
 	"net/http"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/egress/egresshttp"
 	"opendustpan.org/opendustpan/pkg/egress"
-	"opendustpan.org/opendustpan/pkg/egress/egresshttp"
 )
 
 // NewLoopback returns a Sender that sends every request to the TLS receiver at
