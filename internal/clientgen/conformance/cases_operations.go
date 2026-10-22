@@ -2,6 +2,8 @@ package conformance
 
 import (
 	"context"
+	"errors"
+	"net/http"
 	"strings"
 )
 
@@ -117,20 +119,46 @@ func tokenStaysOnTheHost(ctx context.Context, env Env) error {
 		return err
 	}
 
+	env.Proxy.Reset()
 	env.Proxy.Inject(faultOf(FaultRedirect, opListSinks))
 
 	// The answer of the second listener is 204 with no body, so the client may
-	// report it as an invalid answer. A client may also refuse the redirect
-	// and send nothing to the other host. The case checks only that no token
-	// goes there.
-	if _, err := env.Adapter.Call(ctx, sinksCall()); err != nil {
+	// report it as an invalid answer. The error of the call is not the verdict:
+	// the exchanges are.
+	res, err := env.Adapter.Call(ctx, sinksCall())
+	if err != nil && !errors.Is(err, ErrRequestRefused) {
 		return err
 	}
 
-	for _, exchange := range env.Proxy.OtherExchanges() {
-		if _, has := exchange.Headers["Authorization"]; has {
+	// The fault must fire. A run in which the redirect does not happen proves
+	// nothing about the token.
+	redirected := false
+
+	for _, exchange := range env.Proxy.Exchanges() {
+		if exchange.Status == http.StatusTemporaryRedirect {
+			redirected = true
+		}
+	}
+
+	if !redirected {
+		return failf("the proxy did not redirect the request, so the case proves nothing")
+	}
+
+	other := env.Proxy.OtherExchanges()
+
+	switch len(other) {
+	case 0:
+		// A client may refuse the redirect and send nothing to the other
+		// host. Then the call must fail as a transport error.
+		if err != nil || res.Error == nil || !res.Error.Transport {
+			return failf("want a transport error when the client does not follow the redirect, got %+v", res)
+		}
+	case 1:
+		if _, has := other[0].Headers["Authorization"]; has {
 			return failf("the client sent the token to another host after a redirect")
 		}
+	default:
+		return failf("want at most 1 request on the other host, got %d", len(other))
 	}
 
 	return nil

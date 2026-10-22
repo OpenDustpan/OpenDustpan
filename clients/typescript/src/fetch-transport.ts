@@ -120,6 +120,19 @@ function insideBase(base: string, target: URL): boolean {
   return target.origin === root.origin && (target.pathname === prefix || target.pathname.startsWith(`${prefix}/`));
 }
 
+/**
+ * Removes the token from the headers of a hop to another origin.
+ *
+ * Defense in depth: insideBase refuses a target on another origin before this
+ * runs, and this step keeps the token off any such request if that check
+ * changes. Exported so that a test can reach it alone.
+ */
+export function dropTokenOffOrigin(headers: Headers, from: URL, to: URL): void {
+  if (to.origin !== from.origin) {
+    headers.delete("authorization");
+  }
+}
+
 function isRedirect(status: number): boolean {
   return status === 301 || status === 302 || status === 303 || status === 307 || status === 308;
 }
@@ -267,11 +280,7 @@ export function createFetchTransport(options: FetchTransportOptions): ApiTranspo
         if (!insideBase(base, next)) {
           throw transportError(`${call.spec.id}: the server redirected outside the base URL, and the transport refuses it`);
         }
-        // Defense in depth: insideBase refuses a target on another origin, and
-        // this line keeps the token off any such request if that check changes.
-        if (next.origin !== new URL(url).origin) {
-          headers.delete("authorization");
-        }
+        dropTokenOffOrigin(headers, new URL(url), next);
         if (response.status === 303 || ((response.status === 301 || response.status === 302) && method === "POST")) {
           method = "GET";
           body = undefined;

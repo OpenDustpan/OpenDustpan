@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { ApiError, Client, createFetchTransport, metadata, operations, pathSegment } from "../dist/index.js";
+import { ApiError, Client, createFetchTransport, dropTokenOffOrigin, metadata, operations, pathSegment } from "../dist/index.js";
 
 const capabilities = { apiVersion: "1", installationKind: "dev" };
 const json = { "content-type": "application/json" };
@@ -357,4 +357,27 @@ test("the operation table agrees with the transport on the use of keys", () => {
   assert.equal(operations.createProfile.spec.idempotencyKey, "optional");
   assert.equal(operations.getCapabilities.spec.idempotencyKey, "none");
   assert.equal(operations.getCapabilities.spec.security, "public");
+});
+
+// Defense in depth: the redirect check refuses another origin before this
+// step runs. These tests reach the step alone, as if that check had failed.
+test("the token is dropped on a hop to another origin", () => {
+  const headers = new Headers({ authorization: "Bearer secret", accept: "application/json" });
+  dropTokenOffOrigin(headers, new URL("https://api.example.com/api/dustpan/v1/a"), new URL("https://evil.example.net/x"));
+  assert.equal(headers.has("authorization"), false);
+  assert.equal(headers.get("accept"), "application/json");
+});
+
+test("the token is dropped on a hop to another port or scheme", () => {
+  for (const to of ["https://api.example.com:8443/x", "http://api.example.com/x"]) {
+    const headers = new Headers({ authorization: "Bearer secret" });
+    dropTokenOffOrigin(headers, new URL("https://api.example.com/a"), new URL(to));
+    assert.equal(headers.has("authorization"), false, to);
+  }
+});
+
+test("the token stays on a hop inside the origin", () => {
+  const headers = new Headers({ authorization: "Bearer secret" });
+  dropTokenOffOrigin(headers, new URL("https://api.example.com/a"), new URL("https://api.example.com/b"));
+  assert.equal(headers.get("authorization"), "Bearer secret");
 });

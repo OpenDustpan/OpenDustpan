@@ -151,20 +151,36 @@ func objectOf(s *model.Schema, tv typeView) (typeView, error) {
 	return tv, nil
 }
 
-// typeExpr writes a model type as a TypeScript type. It refuses a kind or a
-// format that the template set cannot check, so that a type never gets a
-// weaker check than the description asks for.
+// typeExpr writes a model type as a TypeScript type.
 func typeExpr(t model.Type) (string, error) {
-	base, err := baseExpr(t)
+	typ, _, err := typeAndDecoder(t)
+
+	return typ, err
+}
+
+// decoderExpr writes the validator of a model type as an expression of the
+// combinators of the runtime.
+func decoderExpr(t model.Type) (string, error) {
+	_, dec, err := typeAndDecoder(t)
+
+	return dec, err
+}
+
+// typeAndDecoder writes the TypeScript type of a model type and its validator
+// in one walk, so that a type never gets a weaker check than the description
+// asks for: the one walk refuses a kind or a format that the template set
+// cannot check, and the type and the validator cannot disagree.
+func typeAndDecoder(t model.Type) (string, string, error) {
+	typ, dec, err := baseTypeAndDecoder(t)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 
 	if t.Nullable && t.Kind != model.TypeAny {
-		return base + " | null", nil
+		return typ + " | null", "nullable(" + dec + ")", nil
 	}
 
-	return base, nil
+	return typ, dec, nil
 }
 
 // knownFormats lists the formats that the validator of a kind checks. An
@@ -196,107 +212,51 @@ func checkFormat(t model.Type) error {
 	return nil
 }
 
-// baseExpr writes the TypeScript type of a model type, without null.
-func baseExpr(t model.Type) (string, error) {
+// baseTypeAndDecoder writes the type and the validator of a model type,
+// without null.
+func baseTypeAndDecoder(t model.Type) (string, string, error) {
 	if err := checkFormat(t); err != nil {
-		return "", err
-	}
-
-	switch t.Kind {
-	case model.TypeString:
-		return stringType, nil
-	case model.TypeInteger, model.TypeNumber:
-		return "number", nil
-	case model.TypeBoolean:
-		return "boolean", nil
-	case model.TypeArray:
-		elem, err := elemExpr(t)
-
-		return "ReadonlyArray<" + elem + ">", err
-	case model.TypeMap:
-		elem, err := elemExpr(t)
-
-		return "Readonly<Record<string, " + elem + ">>", err
-	case model.TypeRef:
-		return t.Ref, nil
-	case model.TypeAny:
-		return unknownType, nil
-	}
-
-	return "", fmt.Errorf("%w: the TypeScript template set has no type for kind %d", clientgen.ErrUnsupported, t.Kind)
-}
-
-// elemExpr writes the type of the items of an array or the values of a map.
-func elemExpr(t model.Type) (string, error) {
-	if t.Elem == nil {
-		return "", fmt.Errorf("%w: an array or a map has no item type", clientgen.ErrUnsupported)
-	}
-
-	return typeExpr(*t.Elem)
-}
-
-// decoderExpr writes the validator of a model type as an expression of the
-// combinators of the runtime.
-func decoderExpr(t model.Type) (string, error) {
-	expr, err := baseDecoder(t)
-	if err != nil {
-		return "", err
-	}
-
-	if t.Nullable && t.Kind != model.TypeAny {
-		return "nullable(" + expr + ")", nil
-	}
-
-	return expr, nil
-}
-
-// baseDecoder writes the validator of a model type, without null.
-func baseDecoder(t model.Type) (string, error) {
-	if err := checkFormat(t); err != nil {
-		return "", err
+		return "", "", err
 	}
 
 	switch t.Kind {
 	case model.TypeString:
 		if t.Format == "date-time" {
-			return "dateTime", nil
+			return stringType, "dateTime", nil
 		}
 
-		return stringType, nil
+		return stringType, stringType, nil
 	case model.TypeInteger:
-		return "int64", nil
+		return "number", "int64", nil
 	case model.TypeNumber:
-		return "number", nil
+		return "number", "number", nil
 	case model.TypeBoolean:
-		return "boolean", nil
+		return "boolean", "boolean", nil
 	case model.TypeArray:
-		elem, err := elemDecoder(t)
+		elemTyp, elemDec, err := elemTypeAndDecoder(t)
 
-		return "array(" + elem + ")", err
+		return "ReadonlyArray<" + elemTyp + ">", "array(" + elemDec + ")", err
 	case model.TypeMap:
-		elem, err := elemDecoder(t)
+		elemTyp, elemDec, err := elemTypeAndDecoder(t)
 
-		return "record(" + elem + ")", err
+		return "Readonly<Record<string, " + elemTyp + ">>", "record(" + elemDec + ")", err
 	case model.TypeRef:
-		return "ref(() => decode" + t.Ref + ")", nil
+		return t.Ref, "ref(() => decode" + t.Ref + ")", nil
 	case model.TypeAny:
 		// The description says explicitly that the value is any JSON value.
-		return anyDecoder, nil
+		return unknownType, anyDecoder, nil
 	}
 
-	return "", fmt.Errorf(
-		"%w: the TypeScript template set has no validator for kind %d",
-		clientgen.ErrUnsupported,
-		t.Kind,
-	)
+	return "", "", fmt.Errorf("%w: the TypeScript template set has no type for kind %d", clientgen.ErrUnsupported, t.Kind)
 }
 
-func elemDecoder(t model.Type) (string, error) {
+// elemTypeAndDecoder walks the items of an array or the values of a map.
+func elemTypeAndDecoder(t model.Type) (string, string, error) {
 	if t.Elem == nil {
-		return "", fmt.Errorf("%w: an array or a map has no item type", clientgen.ErrUnsupported)
+		return "", "", fmt.Errorf("%w: an array or a map has no item type", clientgen.ErrUnsupported)
 	}
 
-	return decoderExpr(*t.Elem)
+	return typeAndDecoder(*t.Elem)
 }
 
 type memberView struct {
@@ -516,14 +476,14 @@ func addQuery(ov *operationView, op *model.Operation) (queryNames, error) {
 		typ, typeErr := queryType(p.Type)
 		if typeErr != nil {
 			return queryNames{
-				all:      nil,
-				required: nil,
-			}, fmt.Errorf(
-				"operation %s, query parameter %s: %w",
-				op.ID,
-				p.Name,
-				typeErr,
-			)
+					all:      nil,
+					required: nil,
+				}, fmt.Errorf(
+					"operation %s, query parameter %s: %w",
+					op.ID,
+					p.Name,
+					typeErr,
+				)
 		}
 
 		names.all = append(names.all, tsString(p.Name))
@@ -539,16 +499,23 @@ func addQuery(ov *operationView, op *model.Operation) (queryNames, error) {
 	return names, nil
 }
 
+// baseTypeExpr writes the TypeScript type of a model type, without null.
+func baseTypeExpr(t model.Type) (string, error) {
+	typ, _, err := baseTypeAndDecoder(t)
+
+	return typ, err
+}
+
 // queryType writes the TypeScript type of a query parameter. The runtime sends
 // a number or a boolean as text.
 func queryType(t model.Type) (string, error) {
 	if t.Kind == model.TypeArray && t.Elem != nil {
-		elem, err := baseExpr(*t.Elem)
+		elem, err := baseTypeExpr(*t.Elem)
 
 		return "ReadonlyArray<" + elem + ">", err
 	}
 
-	return baseExpr(t)
+	return baseTypeExpr(t)
 }
 
 // ifMatchOf names the use of If-Match.

@@ -35,6 +35,10 @@ const DefaultTypeScriptPackage = "@opendustpan/client"
 // caller gives none. A published package carries the real release or commit.
 const DefaultServerRelease = "development"
 
+// DefaultServerCommit is the server commit that a run records when the caller
+// gives none. A published package carries the 40-digit commit.
+const DefaultServerCommit = "development"
+
 // ErrTooLarge means that the description is longer than the parser accepts.
 var ErrTooLarge = errors.New("the description is longer than the limit")
 
@@ -91,7 +95,7 @@ func parse(args []string, stderr io.Writer) (config, int, bool) {
 	fs.StringVar(&c.pkg, "package", "", "the package name; the default depends on the target")
 	fs.StringVar(&c.release, "server-release", DefaultServerRelease,
 		"the server release, or the commit before the first release, that the description comes from")
-	fs.StringVar(&c.commit, "server-commit", DefaultServerRelease,
+	fs.StringVar(&c.commit, "server-commit", DefaultServerCommit,
 		"the Git commit of the server that the description comes from (40 hexadecimal digits)")
 	fs.StringVar(&c.version, "client-version", "", "the client version; the default is info.version of the description")
 	fs.BoolVar(&c.check, "check", false,
