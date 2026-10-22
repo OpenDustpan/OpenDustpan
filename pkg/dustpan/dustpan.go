@@ -793,14 +793,15 @@ func NewServer(opts ...Option) (*Server, error) {
 		opt(cfg)
 	}
 
-	// A handler that reads a name the API description does not hold logs the
-	// error through the logger of the server.
-	apidesc.SetLogger(cfg.logger)
-
 	base, err := checkSettings(cfg)
 	if err != nil {
 		return nil, err
 	}
+
+	// A handler that reads a name the API description does not hold logs the
+	// error through the logger of the server. Set it only after the settings
+	// pass, so that a NewServer that fails changes nothing.
+	apidesc.SetLogger(cfg.logger)
 
 	if cacheErr := wrapBlobCache(cfg); cacheErr != nil {
 		return nil, cacheErr
