@@ -226,8 +226,10 @@ func testTakeover(t *testing.T, h Harness) {
 	j := runApplyPhase(t, h, f)
 	operation := j.Phases[0].Operation
 
-	claimOp(t, h, "runner-1", job.RunnerKind(j.Spec.Pool), shortLease)
+	first := claimOp(t, h, "runner-1", job.RunnerKind(j.Spec.Pool), longRenew)
 	j = claimed(t, h, f, &j, "runner-1")
+
+	shortenOp(t, h, first.Claim)
 
 	op := claimAfterExpiry(t, h, "runner-2", job.RunnerKind(j.Spec.Pool))
 	if string(op.ID) != operation || op.Claim.Token < 2 {
