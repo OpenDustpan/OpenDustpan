@@ -793,9 +793,9 @@ func (h *Handler) serveRevokeGrantByID(
 
 // classifyAccess maps the role and grant errors to their status and
 // message: a bad body or role answers 400, an escalation 403, an unknown
-// role or grant 404, a taken name or grant, a built-in role, a role in use
-// and a unit that moved to another collection during the request 409, and
-// a store with no access or review port 501.
+// role or grant 404, a taken name or grant, a built-in role, a role in use,
+// the end of the last site administrator and a unit that moved to another
+// collection during the request 409, and a store with no access or review port 501.
 func classifyAccess(err error) (int, string, bool) {
 	switch {
 	case errors.Is(err, errRoleBody), errors.Is(err, errRoleChangeBody), errors.Is(err, errGrantBody),
@@ -808,7 +808,7 @@ func classifyAccess(err error) (int, string, bool) {
 	case errors.Is(err, access.ErrNotFound):
 		return http.StatusNotFound, err.Error(), true
 	case errors.Is(err, access.ErrAlreadyExists), errors.Is(err, access.ErrBuiltIn), errors.Is(err, access.ErrInUse),
-		errors.Is(err, access.ErrUnitMoved):
+		errors.Is(err, access.ErrUnitMoved), errors.Is(err, access.ErrLastSiteAdministrator):
 		return http.StatusConflict, err.Error(), true
 	case errors.Is(err, errNoAccessStore), errors.Is(err, access.ErrNoReview),
 		errors.Is(err, access.ErrCollectionReview):

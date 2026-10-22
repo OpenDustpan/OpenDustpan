@@ -82,6 +82,10 @@ func RunDelegation(t *testing.T, newStore DelegationFactory) {
 			test: testNamespacePrincipalTokenManagers,
 		},
 		{name: "a delete of a principal of a namespace ends its grants", test: testNamespacePrincipalDelete},
+		{name: "the store refuses a change that ends the last site administrator", test: testLastSiteAdministrator},
+		{name: "a change works while a second site administrator remains", test: testLastSiteAdministratorSecond},
+		{name: "a site administrator through a group counts", test: testLastSiteAdministratorGroup},
+		{name: "an installation with no site administrator refuses nothing", test: testNoSiteAdministratorNoRefusal},
 	}
 
 	for _, tc := range cases {
