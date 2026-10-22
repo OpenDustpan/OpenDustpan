@@ -1,0 +1,202 @@
+// Package outputshare is the tool-neutral model of output sharing: the sharing
+// rules that let the units of a job read the outputs of another unit, the
+// namespace setting that decides the rule of a new unit, and the ports that
+// store the rules and check a read of outputs.
+//
+// The unit that makes the outputs decides who reads them. A sharing rule is
+// set on the producer: a unit, a collection or a namespace. It names the
+// consumer: a unit, a collection, or the namespace of the producer. A rule can
+// name a unit or a collection of another namespace. It never names a whole
+// other namespace, and it never names a principal. A person reads outputs with
+// a grant of the action unit:read-outputs, not with a rule. A job token reads
+// outputs only when a rule names the unit of the job and the principal that
+// started the job holds unit:read-outputs on the producer.
+//
+// The package is tool-neutral. A unit is a unit reference: the tool, the
+// namespace and the tool's own name. The package never reads a state, and it
+// has no type that exists for one tool only.
+package outputshare
+
+import (
+	"errors"
+	"fmt"
+	"time"
+
+	"opendustpan.org/opendustpan/pkg/identity"
+)
+
+// Sentinel errors of the output sharing model and its ports.
+var (
+	// ErrInvalid reports a value that fails validation. The error text names
+	// the field.
+	ErrInvalid = errors.New("invalid sharing rule")
+	// ErrNotFound reports a sharing rule that does not exist in the namespace
+	// that a call names.
+	ErrNotFound = errors.New("sharing rule not found")
+	// ErrAlreadyExists reports a second rule with the same producer and the
+	// same consumer.
+	ErrAlreadyExists = errors.New("sharing rule already exists")
+	// ErrLimit reports a producer that already has MaxRulesPerProducer rules.
+	ErrLimit = errors.New("too many sharing rules on the producer")
+	// ErrNoRule reports that no sharing rule of the producer names the
+	// consumer. A check that gets it denies the read.
+	ErrNoRule = errors.New("no sharing rule names the consumer")
+)
+
+// Bounds of a sharing rule.
+const (
+	// MaxIDBytes is the longest rule ID.
+	MaxIDBytes = 64
+	// MaxRulesPerProducer is the most rules that one producer object has.
+	MaxRulesPerProducer = 100
+)
+
+// ID is the ID of a sharing rule. The server makes it, and it is unique in
+// the namespace of the producer. It has 1 to MaxIDBytes characters from a-z,
+// 0-9, "-" and "_".
+type ID string
+
+// Validate returns an error that wraps ErrInvalid when id is not an ID.
+func (id ID) Validate() error {
+	if id == "" || len(id) > MaxIDBytes {
+		return fmt.Errorf("%w: rule ID length %d", ErrInvalid, len(id))
+	}
+
+	for i := range len(id) {
+		c := id[i]
+		if (c < 'a' || c > 'z') && (c < '0' || c > '9') && c != '-' && c != '_' {
+			return fmt.Errorf("%w: rule ID has a byte that is not in a-z, 0-9, \"-\" or \"_\"", ErrInvalid)
+		}
+	}
+
+	return nil
+}
+
+// Default is the namespace setting that decides the sharing rule of a new
+// unit.
+type Default string
+
+// The values of the namespace setting.
+const (
+	// DefaultNobody gives a new unit no sharing rule. No job of another unit
+	// reads its outputs until a person saves a rule. It is the value of a
+	// namespace that never set the setting.
+	DefaultNobody Default = "nobody"
+	// DefaultNamespace gives a new unit one sharing rule that names the
+	// namespace of the unit. The store writes the rule in the transaction
+	// that makes the unit.
+	DefaultNamespace Default = "namespace"
+)
+
+// Validate returns an error that wraps ErrInvalid when d is not a value of
+// the setting. The empty value is not valid: a store answers DefaultNobody
+// for a namespace that never set it.
+func (d Default) Validate() error {
+	switch d {
+	case DefaultNobody, DefaultNamespace:
+		return nil
+	default:
+		return fmt.Errorf("%w: output sharing default %q", ErrInvalid, d)
+	}
+}
+
+// Rule is one sharing rule.
+type Rule struct {
+	// CreatedAt is the time of the save. The store sets it.
+	CreatedAt time.Time
+	// ID is the ID of the rule.
+	ID ID
+	// CreatedBy is the ID of the principal that saved the rule.
+	CreatedBy string
+	// Producer is the object whose units share their outputs: a unit, a
+	// collection or a namespace. A collection or a namespace covers each unit
+	// that it holds at the time of a check.
+	Producer identity.Object
+	// Consumer is the object whose units read the outputs: a unit, a
+	// collection, or the namespace of the producer. A unit or a collection
+	// of another namespace is valid. A whole other namespace is not.
+	Consumer identity.Object
+}
+
+// Validate returns an error that wraps ErrInvalid when r is not a valid rule.
+// It checks the ID, the kinds of both objects, and that a consumer namespace
+// is the namespace of the producer. It allows the kinds of objects that it
+// lists and refuses each other kind, so a new kind of object is refused until
+// a decision adds it.
+//
+// Defense in depth: the HTTP adapter checks the same request, the store runs
+// Validate at each write, and the checker runs it on each rule that it reads.
+// Each check stays, so that a new caller, a row that another version wrote or
+// a restored backup cannot make a rule that names a principal or a whole other
+// namespace.
+func (r Rule) Validate() error {
+	if err := r.ID.Validate(); err != nil {
+		return err
+	}
+
+	if r.CreatedBy == "" {
+		return fmt.Errorf("%w: a rule names the principal that saved it", ErrInvalid)
+	}
+
+	if !scopeObject(r.Producer) {
+		return fmt.Errorf("%w: the producer %q is not a unit, a collection or a namespace", ErrInvalid, r.Producer)
+	}
+
+	if !scopeObject(r.Consumer) {
+		return fmt.Errorf("%w: the consumer %q is not a unit, a collection or a namespace", ErrInvalid, r.Consumer)
+	}
+
+	if r.Consumer.IsNamespace() && r.Consumer.Namespace() != r.Producer.Namespace() {
+		return fmt.Errorf(
+			"%w: the consumer %q is another namespace; name a unit or a collection of it", ErrInvalid, r.Consumer,
+		)
+	}
+
+	return nil
+}
+
+// CrossNamespace reports whether the consumer of r is in another namespace
+// than the producer.
+func (r Rule) CrossNamespace() bool {
+	return r.Consumer.Namespace() != r.Producer.Namespace()
+}
+
+// scopeObject reports whether o is a unit, a collection or a namespace. It
+// refuses a principal, the caller, the installation and the zero object.
+func scopeObject(o identity.Object) bool {
+	if o.IsPrincipal() || o.IsCaller() || o.IsServer() || o.Namespace() == "" {
+		return false
+	}
+
+	return o.IsUnit() || o.IsCollection() || o.IsNamespace()
+}
+
+// Placement is a unit with the collection that holds it at the time of a
+// check. Unit is a unit reference with its stable ID. Collection is the
+// reference of its collection with its stable ID, or the zero object when
+// the unit has no collection. A rule that names a collection matches by the
+// stable ID, so a collection that is deleted and made again with the same
+// name does not get the rules of the old one.
+type Placement struct {
+	Unit       identity.Object
+	Collection identity.Object
+}
+
+// Validate returns an error that wraps ErrInvalid when p holds no unit with
+// a stable ID, or a collection of another namespace than the unit.
+func (p Placement) Validate() error {
+	if !p.Unit.IsUnit() || p.Unit.UnitID() == "" {
+		return fmt.Errorf("%w: the placement %q is not a unit with a stable ID", ErrInvalid, p.Unit)
+	}
+
+	if p.Collection.String() == "" {
+		return nil
+	}
+
+	if !p.Collection.IsCollection() || p.Collection.CollectionID() == "" ||
+		p.Collection.Namespace() != p.Unit.Namespace() {
+		return fmt.Errorf("%w: the collection %q of the unit %q", ErrInvalid, p.Collection, p.Unit)
+	}
+
+	return nil
+}
