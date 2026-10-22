@@ -67,8 +67,9 @@ func overrideSwitchesOf(ov namespace.Overrides) overrideSwitchesBody {
 }
 
 // allowance returns the overrides that the caller may use on the workspace
-// id for one request. It refuses nothing: the domain refuses an override that
-// the result does not allow (ADR 44, decisions 4, 5 and 8).
+// id for one request: the switch of the namespace, narrowed by the switch of
+// the workspace, and each override action that the caller holds. It refuses
+// nothing: the domain refuses an override that the result does not allow.
 func (h *Handler) allowance(
 	ctx context.Context, p identity.Principal, id workspace.ID, obj identity.Object,
 ) (namespace.Overrides, error) {
