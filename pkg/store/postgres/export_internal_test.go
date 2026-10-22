@@ -90,3 +90,10 @@ func (s *Store) StagingSchemaForTest() string {
 
 	return s.stagingSchema
 }
+
+// InterleaveProfileRead implements storetest.ProfileReadInterleaver: fn runs
+// once in the next read of a profile revision, between the read of the
+// profile and the read of the revision.
+func (s *Store) InterleaveProfileRead(fn func()) {
+	s.betweenProfileReads.Store(&fn)
+}

@@ -200,8 +200,9 @@ func buildGuardedFixture(t *testing.T, spec guardSpec) deletedFixture {
 	pulumi := &memLifecycle{err: lifecycleErr, calls: nil}
 
 	handler, err := newCheckedHandler(t, apiinventory.Config{
-		Views: nil,
-		Audit: newTestAudit(), OnAuditFailure: nil, Locks: nil, PublicURL: "",
+		OutputSharing: nil,
+		Views:         nil,
+		Audit:         newTestAudit(), OnAuditFailure: nil, Locks: nil, PublicURL: "",
 		Moves:      nil,
 		Namespaces: namespaces,
 		Units:      &memReader{entries: map[namespace.Name][]coreinventory.Entry{}, err: nil},

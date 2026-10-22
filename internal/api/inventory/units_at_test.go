@@ -113,8 +113,9 @@ func newHistoryHandlerWithURL(
 	}
 
 	handler, err := newCheckedHandler(t, apiinventory.Config{
-		Views: nil,
-		Audit: newTestAudit(), OnAuditFailure: nil, Locks: nil, Moves: nil,
+		OutputSharing: nil,
+		Views:         nil,
+		Audit:         newTestAudit(), OnAuditFailure: nil, Locks: nil, Moves: nil,
 		Collections:   testCollectionService(t, nsStore),
 		Namespaces:    namespaces,
 		Units:         &memReader{entries: nil, err: nil},
