@@ -17,6 +17,7 @@ import (
 	"strings"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/api/apidesc"
 	"opendustpan.org/opendustpan/internal/api/idempotent"
 	"opendustpan.org/opendustpan/internal/api/refusal"
 	"opendustpan.org/opendustpan/internal/denylimit"
@@ -399,7 +400,7 @@ func (h *Handler) listUnits(
 			return
 		}
 
-		if r.URL.Query().Get("pageToken") != "" {
+		if queryOf(r).Get("pageToken") != "" {
 			h.writeError(ctx, w, errPageTokenAt)
 
 			return
@@ -514,7 +515,7 @@ func unitObject(e coreinventory.Entry) (identity.Object, error) {
 // reports that the cookie signed it in. A request with an
 // Authorization header never uses the cookie.
 func (h *Handler) authenticate(r *http.Request) (identity.Principal, bool, error) {
-	header := r.Header.Get("Authorization")
+	header := apidesc.Header(r, "Authorization")
 	if header == "" {
 		p, _, err := h.sessions.Authenticate(r)
 

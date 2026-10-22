@@ -52,7 +52,7 @@ type pageTokenWire struct {
 // parseUnitPage reads the pageSize and pageToken query values of a unit list
 // in the namespace ns with the filter f.
 func parseUnitPage(r *http.Request, ns namespace.Name, f unitFilter) (unitPage, error) {
-	query := r.URL.Query()
+	query := queryOf(r)
 	page := unitPage{size: defaultUnitPageSize, after: ""}
 
 	if raw := query.Get("pageSize"); raw != "" {

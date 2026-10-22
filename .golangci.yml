@@ -313,6 +313,19 @@ linters:
           msg: Only cmd/ may exit; return errors everywhere else.
         - pattern: ^time\.Sleep$
           msg: Use a timer with context cancellation.
+        # The query and the headers of a request in the tool-neutral REST
+        # API: a handler reads them through apidesc, which allows only the
+        # names that the API description declares for the route. The
+        # exclusions below limit these patterns to the packages of that API.
+        - pattern: ^url\.URL\.(Query|RawQuery|ForceQuery|RequestURI)$
+          pkg: ^net/url$
+          msg: Read the query through apidesc.QueryOf, which allows only the declared names.
+        - pattern: ^url\.ParseQuery$
+          pkg: ^net/url$
+          msg: Read the query through apidesc.QueryOf, which allows only the declared names.
+        - pattern: ^http\.Request\.(Header|Form|PostForm|MultipartForm|RequestURI|Trailer|FormValue|PostFormValue|FormFile|ParseForm|ParseMultipartForm|MultipartReader|UserAgent|Referer|Cookie|Cookies|CookiesNamed|BasicAuth)$
+          pkg: ^net/http$
+          msg: Read the query through apidesc.QueryOf and the headers through apidesc.Header, which allow only the declared names.
       analyze-types: true
 
     funlen:
@@ -497,6 +510,19 @@ linters:
           - funlen
           - dupl
           - goconst
+      # The ban on direct reads of the query and the headers covers the
+      # adapters of the tool-neutral REST API and the helpers that they call.
+      # The tool-compatible APIs and the runner protocol keep their own wire
+      # formats, and apidesc is the one place that reads the raw request.
+      - path-except: ^internal/api/(audit|drift|idempotent|inventory|jobs|notifications|objectcontext|profile|refusal|registry|server)/
+        linters:
+          - forbidigo
+        text: through apidesc
+      # A test builds requests and reads answers; it serves no route.
+      - path: _test\.go$
+        linters:
+          - forbidigo
+        text: through apidesc
       # The binary entry point is the only place allowed to exit.
       - path: ^cmd/
         linters:

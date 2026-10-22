@@ -52,7 +52,7 @@ Each operation has these members:
 | `operationId` | A stable name in lowerCamelCase, for example `listUnits`. A generator names an SDK method from it. A change of a path does not change it. No two operations share one. |
 | `tags` | One to three tags. The first tag names the group of the operation. |
 | `x-dustpan-actions` | The actions that the route declares, each with the kind of the object that it applies to, for example `{"action": "unit:lock", "object": "collection"}`. The kind is `namespace`, `unit`, `collection`, `caller` or `server`. The list is empty for a route that needs no sign-in. |
-| `parameters` | One path parameter for each wildcard of the path, and a reference to a shared header parameter when the route takes the header |
+| `parameters` | One path parameter for each wildcard of the path. One query parameter for each query value that the route reads. A reference to a shared header parameter when the route takes the header. |
 | `requestBody` | A reference to the schema of the body, for a route that reads a JSON body. A `PATCH` takes `application/merge-patch+json`. A route that reads no body has no `requestBody`. |
 | `responses` | `2XX` for success, with a reference to the schema of the answer when the answer has a body, and `default` for an error |
 | `security` | `[]` for a route that needs no sign-in. A route that needs sign-in has no `security` member and uses the default. |
@@ -63,6 +63,27 @@ example an action on an object that it finds from the request.
 A route that takes a file as raw bytes, for example the upload of a provider
 file to the registry, has no `requestBody`, because the description holds JSON
 bodies only.
+
+## Query parameters
+
+A query parameter has `in: query`, a `name` in camelCase, `required`, a
+`description` and a `schema`. The schema is `string`, `integer` with
+`format: int64`, or `boolean`. A parameter that the query can hold more than
+once, for example `label` of `listUnits`, is an array of one of these types.
+A list that pages has `pageSize` and `pageToken`, and its answer has
+`nextPageToken`.
+
+The description lists every query value that a route reads. A server reads no
+other query value of a route in the description. The route that lists the
+units of a view answers 400 to a query value that it does not list.
+
+## Request headers
+
+A route reads the request headers that the description shows: `Authorization`
+(the security scheme), `Content-Type` (the media type of the body),
+`Idempotency-Key` and `If-Match` (the shared parameters). The server also reads
+two headers for the audit record only: `User-Agent` and `Dustpan-Channel`. They
+change no answer, so the description does not show them.
 
 ## Schemas
 
@@ -120,7 +141,13 @@ because its path holds a wildcard name that the description does not allow.
 A test builds the server with each module on and compares its operations with
 the checked-in description. The test fails when a route has no entry, when an
 entry has no route, and when a path, an `operationId`, a tag, an action, a
-public flag or a header differs. The server does not start when a route under
+public flag, a header or a query parameter differs. Each failure names the
+route and the command below.
+
+A handler reads the query and the request headers through one function that
+gives the values of the declared names only. The linter refuses a direct read
+of the query or of the headers in the code of the tool-neutral REST API, so a
+handler cannot read a value that the description does not show. The server does not start when a route under
 `/api/dustpan/v1` has no valid `operationId`, when an action has no object
 kind, or when a route names no body type and does not say that it has no body.
 

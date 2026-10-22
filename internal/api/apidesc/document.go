@@ -86,7 +86,9 @@ func Build(ops []Operation) ([]byte, error) {
 
 	paths := object{}
 
-	for _, op := range ops {
+	for i := range ops {
+		op := &ops[i]
+
 		if strings.Contains(op.Path, "{$}") || strings.Contains(op.Path, "...}") {
 			return nil, fmt.Errorf(
 				"%w: path %q holds a wildcard that OpenAPI cannot hold",
@@ -101,7 +103,7 @@ func Build(ops []Operation) ([]byte, error) {
 			paths[op.Path] = item
 		}
 
-		item[strings.ToLower(op.Method)] = operationObject(op)
+		item[strings.ToLower(op.Method)] = operationObject(*op)
 	}
 
 	doc := object{
@@ -144,7 +146,9 @@ func infoObject() object {
 func bodySchemas(ops []Operation) (object, error) {
 	var bodies []Body
 
-	for _, op := range ops {
+	for i := range ops {
+		op := &ops[i]
+
 		if err := op.ValidateBodies(); err != nil {
 			return nil, err
 		}
@@ -246,7 +250,9 @@ func errorSchemaObject() object {
 func tagList(ops []Operation) []any {
 	var names []string
 
-	for _, op := range ops {
+	for i := range ops {
+		op := &ops[i]
+
 		for _, tag := range op.Tags {
 			if !slices.Contains(names, tag) {
 				names = append(names, tag)
@@ -267,6 +273,10 @@ func tagList(ops []Operation) []any {
 // operationObject returns the operation object of one operation.
 func operationObject(op Operation) object {
 	params := pathParameters(op.Path)
+
+	for _, p := range sortedQuery(op.Query) {
+		params = append(params, queryParameter(p))
+	}
 
 	if op.IdempotencyKey {
 		params = append(params, object{keyRef: refParameters + idempotencyName})

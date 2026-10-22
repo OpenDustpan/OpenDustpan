@@ -22,7 +22,9 @@ func (h operationsHandler) Operations() []apidesc.Operation { return h.ops }
 
 func (h operationsHandler) RegisteredPatterns() []string {
 	out := make([]string, 0, len(h.ops))
-	for _, op := range h.ops {
+	for i := range h.ops {
+		op := &h.ops[i]
+
 		out = append(out, op.Method+" "+op.Path)
 	}
 
@@ -97,6 +99,7 @@ func goodOperation() apidesc.Operation {
 		IfMatch:         false,
 		IfMatchRequired: false,
 		ETag:            false,
+		Query:           nil,
 		Bodies:          &apidesc.Bodies{Request: apidesc.NoBody, Response: apidesc.NoBody},
 	}
 }
