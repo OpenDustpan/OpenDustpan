@@ -1394,6 +1394,16 @@ func (s *fakeBackupStore) ListWorkspaces(
 	return out, nil
 }
 
+// QueryWorkspaces implements workspace.Store over the list of ListWorkspaces.
+func (s *fakeBackupStore) QueryWorkspaces(ctx context.Context, q workspace.ListQuery) (workspace.ListPage, error) {
+	all, err := s.ListWorkspaces(ctx, q.Namespace)
+	if err != nil {
+		return workspace.ListPage{}, err
+	}
+
+	return workspace.PageWorkspaces(all, q), nil
+}
+
 // SaveWorkspace implements workspace.Store with a revision compare-and-swap.
 func (s *fakeBackupStore) SaveWorkspace(
 	_ context.Context, w workspace.Workspace, fence namespace.Fence,

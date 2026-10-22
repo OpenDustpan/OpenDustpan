@@ -545,6 +545,16 @@ func (s *Store) GetWorkspaceByID(ctx context.Context, id workspace.ID) (workspac
 	return s.inner.GetWorkspaceByID(ctx, id)
 }
 
+// QueryWorkspaces returns one page of workspaces, unless a fault fires
+// first.
+func (s *Store) QueryWorkspaces(ctx context.Context, q workspace.ListQuery) (workspace.ListPage, error) {
+	if err := s.before(ctx, "QueryWorkspaces"); err != nil {
+		return workspace.ListPage{}, err
+	}
+
+	return s.inner.QueryWorkspaces(ctx, q)
+}
+
 // ListWorkspaces returns the namespace's workspaces, unless a fault fires first.
 func (s *Store) ListWorkspaces(ctx context.Context, ns namespace.Name) ([]workspace.Workspace, error) {
 	if err := s.before(ctx, "ListWorkspaces"); err != nil {
