@@ -33,8 +33,6 @@ func TestOverrideNeedsARecorder(t *testing.T) {
 
 				forced := newState("lin-old", 2, smallDoc)
 				forced.Force = true
-				enableForced(t, f)
-
 				_, err := f.svc.BeginState(t.Context(), f.ws.ID, "alice", forced, authority(forcedOnly(), nil))
 
 				return err
@@ -85,6 +83,16 @@ func TestOverrideNeedsARecorder(t *testing.T) {
 
 			if err := f.push(t, newState("lin-old", 1, smallDoc), smallDoc); err != nil {
 				t.Fatalf("first state: %v", err)
+			}
+
+			// Both switches are on, so the store alone would let the write through.
+			allow := namespace.Overrides{Unlocked: true, Forced: true}
+			if _, err := f.namespaces.SetOverrides(t.Context(), f.ws.Ref.Namespace, allow); err != nil {
+				t.Fatalf("set namespace switches: %v", err)
+			}
+
+			if _, err := f.svc.SetOverrides(t.Context(), f.ws.ID, allow); err != nil {
+				t.Fatalf("set unit switches: %v", err)
 			}
 
 			if !tt.locked {
