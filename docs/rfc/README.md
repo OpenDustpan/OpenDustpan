@@ -151,3 +151,4 @@ both together.
 | [101](0101-a-private-registry-for-opentofu-providers-and-modules.md) | A private registry for OpenTofu providers and modules (ADR 269) | discussing |
 | [102](0102-cli-step-up-for-writes-that-need-a-fresh-authentication.md) | A step-up of a person in the CLI for writes that need a fresh authentication | discussing |
 | [103](0103-the-public-sdk-surface.md) | The public SDK surface: what stays in `pkg/`, and the CI check | accepted (ADR 272) |
+| [104](0104-dialect-neutral-store-logic.md) | Dialect-neutral store logic, so that a third SQL dialect can come later | accepted (ADR 274) |
