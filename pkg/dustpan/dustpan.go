@@ -1253,22 +1253,7 @@ func newNeutralHandlers(
 		return neutralHandlers{}, err
 	}
 
-	// One job service starts the jobs of the jobs API and the drift checks.
-	var starter job.Starter
-
-	if cfg.jobStore != nil {
-		starter, err = newJobService(svc, cfg)
-		if err != nil {
-			return neutralHandlers{}, err
-		}
-	}
-
-	jobs, err := newJobsHandler(svc, cfg, onFailure, starter)
-	if err != nil {
-		return neutralHandlers{}, err
-	}
-
-	drifts, err := newDriftHandler(svc, cfg, onFailure, starter)
+	jobAPIs, err := newJobAndDriftHandlers(svc, cfg, onFailure)
 	if err != nil {
 		return neutralHandlers{}, err
 	}
@@ -1285,11 +1270,44 @@ func newNeutralHandlers(
 
 	return neutralHandlers{
 		inventory: units, audit: entries, context: contexts, runners: runners, profiles: profiles, sinks: sinks,
-		jobs:     jobs,
+		jobs:     jobAPIs.jobs,
 		triggers: triggers,
-		drift:    drifts,
+		drift:    jobAPIs.drift,
 		registry: registries,
 	}, nil
+}
+
+// jobAPIs holds the jobs API and the drift API, which share one job service.
+type jobAPIs struct {
+	jobs  http.Handler
+	drift http.Handler
+}
+
+// newJobAndDriftHandlers builds the jobs API and the drift API. One job service
+// starts the jobs of the jobs API and the drift checks.
+func newJobAndDriftHandlers(svc services, cfg *settings, onFailure func()) (jobAPIs, error) {
+	var starter job.Starter
+
+	if cfg.jobStore != nil {
+		service, err := newJobService(svc, cfg)
+		if err != nil {
+			return jobAPIs{jobs: nil, drift: nil}, err
+		}
+
+		starter = service
+	}
+
+	jobs, err := newJobsHandler(svc, cfg, onFailure, starter)
+	if err != nil {
+		return jobAPIs{jobs: nil, drift: nil}, err
+	}
+
+	drifts, err := newDriftHandler(svc, cfg, onFailure, starter)
+	if err != nil {
+		return jobAPIs{jobs: nil, drift: nil}, err
+	}
+
+	return jobAPIs{jobs: jobs, drift: drifts}, nil
 }
 
 // newReadiness builds the readiness probe: it pings the store and the blob

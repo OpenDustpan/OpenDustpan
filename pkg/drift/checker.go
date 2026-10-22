@@ -52,6 +52,7 @@ func (s *Service) Check(ctx context.Context, actor job.Actor, req CheckRequest) 
 		Unit: req.Unit, Operation: job.OperationRefresh, Purpose: job.PurposeDriftCheck, Executor: "",
 		Location: req.Location, Pool: req.Pool, Edits: nil, Delivery: "", Source: job.SourceAPI,
 		IdempotencyKey: checkKey(req.Unit.String(), s.now()), Reason: req.Reason, BreakGlass: nil,
+		Trigger: nil,
 		Channel: req.Channel, SourceIP: req.SourceIP, UserAgent: req.UserAgent, RequestID: req.RequestID,
 	})
 	if err != nil {

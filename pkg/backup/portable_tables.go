@@ -716,7 +716,7 @@ func portableSpec() []PortableTable {
 		portableGitHostTables(),
 		portableRegistryTables(),
 		portableSinkTables(),
-		portableItemKeyTables(),
 		portableTriggerTables(),
+		portableItemKeyTables(),
 	)
 }

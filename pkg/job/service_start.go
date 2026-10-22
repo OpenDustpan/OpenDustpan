@@ -57,24 +57,12 @@ func checkRequest(a Actor, req *StartRequest) (SourceKind, error) {
 		return "", fmt.Errorf("%w: a job token cannot start a job", identity.ErrDenied)
 	}
 
-	if !req.Operation.Valid() {
-		return "", fmt.Errorf("%w: unknown operation %q", ErrInvalid, req.Operation)
+	err := checkKinds(req)
+	if err != nil {
+		return "", err
 	}
 
-	if req.Executor != "" && !req.Executor.Valid() {
-		return "", fmt.Errorf("%w: unknown executor %q", ErrInvalid, req.Executor)
-	}
-
-	if !req.Purpose.Valid() {
-		return "", fmt.Errorf("%w: unknown purpose %q", ErrInvalid, req.Purpose)
-	}
-
-	if req.Purpose == PurposeDriftCheck && req.Operation != OperationRefresh {
-		return "", fmt.Errorf("%w: a %s has the operation %s, not %s", ErrInvalid, req.Purpose, OperationRefresh,
-			req.Operation)
-	}
-
-	err := checkText(req)
+	err = checkText(req)
 	if err != nil {
 		return "", err
 	}
@@ -95,6 +83,29 @@ func checkRequest(a Actor, req *StartRequest) (SourceKind, error) {
 	}
 
 	return source, nil
+}
+
+// checkKinds checks the operation, the executor and the purpose of req, and that
+// a drift check is a refresh.
+func checkKinds(req *StartRequest) error {
+	if !req.Operation.Valid() {
+		return fmt.Errorf("%w: unknown operation %q", ErrInvalid, req.Operation)
+	}
+
+	if req.Executor != "" && !req.Executor.Valid() {
+		return fmt.Errorf("%w: unknown executor %q", ErrInvalid, req.Executor)
+	}
+
+	if !req.Purpose.Valid() {
+		return fmt.Errorf("%w: unknown purpose %q", ErrInvalid, req.Purpose)
+	}
+
+	if req.Purpose == PurposeDriftCheck && req.Operation != OperationRefresh {
+		return fmt.Errorf("%w: a %s has the operation %s, not %s", ErrInvalid, req.Purpose, OperationRefresh,
+			req.Operation)
+	}
+
+	return nil
 }
 
 // checkText checks the idempotency key and the reason of req.
