@@ -63,7 +63,7 @@ both together.
 | [12](0012-api-edits-and-write-back.md) | API edits, and write-back to git | draft; forge connection credentials and defaults accepted (ADR 213) |
 | [13](0013-policy-and-approvals.md) | Policy and approvals | accepted (ADRs 222 to 230); the points of RFC 77 decided |
 | [14](0014-blueprints.md) | Blueprints, self-service units with validated inputs | accepted |
-| [15](0015-output-sharing.md) | Output sharing between units | draft; output reads of a job, on two paths, accepted (ADR 213) |
+| [15](0015-output-sharing.md) | Output sharing between units | accepted (ADRs 213, 273) |
 | [16](0016-egress-proxy.md) | Egress proxy for jobs, with request rules and credential injection | draft |
 | [17](0017-unit-lifecycle.md) | Stack and workspace lifecycle: delete, rename, move, tags | draft |
 | [18](0018-state-operations.md) | State operations: history, restore, locks and leases | accepted; the manual lock (ADR 213) |
