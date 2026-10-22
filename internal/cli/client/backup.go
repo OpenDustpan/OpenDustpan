@@ -18,7 +18,6 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
-	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -106,12 +105,6 @@ type BackupStatusResponse struct {
 	State    string          `json:"state"`
 	Error    string          `json:"error"`
 	Manifest *BackupManifest `json:"manifest"`
-}
-
-// backupErrorResponse is the error body the installation API answers. Only
-// the message is read; the code repeats the status.
-type backupErrorResponse struct {
-	Message string `json:"message"`
 }
 
 // BackupCommand runs `opendustpan backup`: it starts a backup, waits until
@@ -268,57 +261,6 @@ func backupAuth(req *http.Request, token string) {
 	req.Header.Set("Authorization", "Bearer "+token)
 }
 
-// decodeCappedJSON decodes one installation API answer from r, reading at
-// most MaxClientBodyBytes. A larger body is an error wrapping
-// ErrResponseTooLarge, never a silent truncation.
-func decodeCappedJSON(r io.Reader, doc any) error {
-	raw, err := io.ReadAll(io.LimitReader(r, MaxClientBodyBytes+1))
-	if err != nil {
-		return fmt.Errorf("read server answer: %w", err)
-	}
-
-	if len(raw) > MaxClientBodyBytes {
-		return fmt.Errorf(
-			"%w: over %d bytes: check the server log",
-			ErrResponseTooLarge,
-			MaxClientBodyBytes,
-		)
-	}
-
-	if err := json.Unmarshal(raw, doc); err != nil {
-		return fmt.Errorf("decode server answer: %w", err)
-	}
-
-	return nil
-}
-
-// decodeBackupError reads an error body of the installation API: the
-// message with its code, or the status alone when the body has no JSON
-// error. The body is capped at MaxClientBodyBytes: an oversized body answers
-// the status alone.
-func decodeBackupError(resp *http.Response) string {
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, MaxClientBodyBytes+1))
-	if err != nil {
-		return resp.Status
-	}
-
-	if len(raw) > MaxClientBodyBytes {
-		return resp.Status
-	}
-
-	var doc backupErrorResponse
-
-	if jsonErr := json.Unmarshal(raw, &doc); jsonErr != nil || doc.Message == "" {
-		if text := strings.TrimSpace(string(raw)); text != "" {
-			return fmt.Sprintf("%s: %s", resp.Status, text)
-		}
-
-		return resp.Status
-	}
-
-	return fmt.Sprintf("%s: %s", resp.Status, doc.Message)
-}
-
 // startBackup starts a backup and answers its ID. A second start while one
 // runs names the running backup and the one command that helps.
 func startBackup(ctx context.Context, client *http.Client, server, token string) (string, error) {
@@ -352,7 +294,7 @@ func startBackup(ctx context.Context, client *http.Client, server, token string)
 		return "", fmt.Errorf(
 			"%w: %s: check the server log and "+rerunHelp,
 			ErrBackupStart,
-			decodeBackupError(resp),
+			decodeErrorAnswer(resp),
 			server,
 		)
 	}
@@ -409,7 +351,7 @@ func readBackup(
 			"%w %s: %s: "+rerunHelp,
 			ErrBackupRead,
 			id,
-			decodeBackupError(resp),
+			decodeErrorAnswer(resp),
 			server,
 		)
 	}

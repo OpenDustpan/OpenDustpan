@@ -239,7 +239,7 @@ func readUpgradeCheck(
 		return none, fmt.Errorf(
 			"%w: %s: check the server log and run opendustpan upgrade check again",
 			ErrBackupRead,
-			decodeBackupError(resp),
+			decodeErrorAnswer(resp),
 		)
 	}
 

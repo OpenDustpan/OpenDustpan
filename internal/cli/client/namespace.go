@@ -67,12 +67,6 @@ type namespaceCreateResponse struct {
 	FailoverVersion int64  `json:"failoverVersion"`
 }
 
-// namespaceErrorResponse is the error body the installation API answers. Only
-// the message is read; the code repeats the status.
-type namespaceErrorResponse struct {
-	Message string `json:"message"`
-}
-
 // CreateNamespace runs `opendustpan namespace create --server <url> <name>`:
 // it creates a namespace through the installation API and prints it. It opens
 // no database and no store: only the server opens the data (ADR 39).
@@ -228,14 +222,14 @@ func decodeNamespaceResponse(
 			"%w %q: %s: check the server log and run opendustpan namespace create --server %s again",
 			ErrNamespaceCreate,
 			name,
-			decodeNamespaceError(resp),
+			decodeErrorAnswer(resp),
 			server,
 		)
 	}
 
 	var doc namespaceCreateResponse
 
-	if err := json.NewDecoder(resp.Body).Decode(&doc); err != nil {
+	if err := decodeCappedJSON(resp.Body, &doc); err != nil {
 		return namespaceCreateResponse{}, fmt.Errorf(
 			"%w %q: %w: check the server log and run opendustpan namespace create --server %s again",
 			ErrNamespaceCreate,
@@ -255,25 +249,4 @@ func decodeNamespaceResponse(
 	}
 
 	return doc, nil
-}
-
-// decodeNamespaceError reads an error body of the installation API: the
-// message with its code, or the status alone when the body has no JSON error.
-func decodeNamespaceError(resp *http.Response) string {
-	raw, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return resp.Status
-	}
-
-	var doc namespaceErrorResponse
-
-	if jsonErr := json.Unmarshal(raw, &doc); jsonErr != nil || doc.Message == "" {
-		if text := strings.TrimSpace(string(raw)); text != "" {
-			return resp.Status + ": " + text
-		}
-
-		return resp.Status
-	}
-
-	return resp.Status + ": " + doc.Message
 }

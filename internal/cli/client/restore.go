@@ -358,7 +358,7 @@ func startRestore(ctx context.Context, params startRestoreParams) (restoreStartR
 		return restoreStartResponse{}, fmt.Errorf(
 			"%w: %s: check the server log and "+restoreRerunHelp,
 			ErrRestoreStart,
-			decodeBackupError(resp),
+			decodeErrorAnswer(resp),
 			server,
 			id,
 		)
@@ -458,7 +458,7 @@ func restoreStatusError(resp *http.Response, params restoreReadParams) error {
 			ErrRestoreRead,
 			params.restoreID,
 			ErrRestoreMissing,
-			decodeBackupError(resp),
+			decodeErrorAnswer(resp),
 			params.server,
 			params.backupID,
 		)
@@ -468,7 +468,7 @@ func restoreStatusError(resp *http.Response, params restoreReadParams) error {
 		"%w %s: %s: "+restoreRerunHelp,
 		ErrRestoreRead,
 		params.restoreID,
-		decodeBackupError(resp),
+		decodeErrorAnswer(resp),
 		params.server,
 		params.backupID,
 	)

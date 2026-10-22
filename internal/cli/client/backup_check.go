@@ -169,7 +169,7 @@ func readBackupCheck(
 			"%w %s: %s: check the server log and run opendustpan backup check again",
 			ErrBackupRead,
 			id,
-			decodeBackupError(resp),
+			decodeErrorAnswer(resp),
 		)
 	}
 
