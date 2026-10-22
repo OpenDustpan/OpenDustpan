@@ -790,7 +790,7 @@ func checkLockID(w Workspace, expect Lock) error {
 	}
 
 	if w.Lock.ID != expect.ID || (expect.Holder != "" && w.Lock.Holder != expect.Holder) {
-		return fmt.Errorf("%w: unit %s", ErrLockMismatch, w.Ref)
+		return lockRefused(w.Lock, fmt.Errorf("%w: unit %s", ErrLockMismatch, w.Ref))
 	}
 
 	return nil
