@@ -260,3 +260,13 @@ func testSettingAudit(t *testing.T, h Harness) {
 		t.Fatalf("the change of the setting of acme wrote %d entries in globex, want none", n-beforeOther)
 	}
 }
+
+// SettingEntry returns a valid audit entry of a change of the setting in the
+// namespace of fence, with one change that has no Old value. Tests of an
+// adapter use it to call SetSetting.
+func SettingEntry(fence namespace.Fence, d outputshare.Default) audit.Entry {
+	e := settingEntry(fence)
+	e.Changes = []audit.Change{{Key: "outputSharing.newUnitDefault", Old: nil, New: string(d), Layer: "", TakesEffect: ""}}
+
+	return e
+}

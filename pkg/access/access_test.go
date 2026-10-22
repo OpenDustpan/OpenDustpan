@@ -1720,3 +1720,43 @@ func TestBuiltInRolesHoldTheOutputSharingActions(t *testing.T) {
 		}
 	}
 }
+
+// TestCustomRoleWithUnitReadOnlyDoesNotReadOutputs proves that a custom role
+// that holds unit:read and not unit:read-outputs is denied unit:read-outputs
+// on a unit, a collection and a namespace, whereas it still reads the unit.
+// No action implies another one.
+func TestCustomRoleWithUnitReadOnlyDoesNotReadOutputs(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	ctx := t.Context()
+
+	r, err := f.svc.CreateRole(ctx, testEntry(), admin(), access.RoleInput{
+		Name: "reader", Description: "Reads units only",
+		Actions: []identity.Action{identity.ActionUnitRead},
+	})
+	if err != nil {
+		t.Fatalf("create role: %v", err)
+	}
+
+	p := f.person(t, "reader")
+	web := unitObject(t, "acme", "web/prod")
+	payments := identity.CollectionObject("acme", "payments")
+	f.units[web.String()] = "payments"
+
+	f.grant(t, prn("reader"), r.ID, identity.NamespaceObject("acme"))
+	f.grant(t, prn("reader"), r.ID, payments)
+	f.grant(t, prn("reader"), r.ID, web)
+
+	read := identity.ActionUnitRead
+	outputs := identity.ActionUnitReadOutputs
+
+	assertChecks(t, f.authz, p, []check{
+		{web, read, true},
+		{web, outputs, false},
+		{payments, read, true},
+		{payments, outputs, false},
+		{identity.NamespaceObject("acme"), read, true},
+		{identity.NamespaceObject("acme"), outputs, false},
+	})
+}

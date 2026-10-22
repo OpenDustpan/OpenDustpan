@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 
 	"github.com/jackc/pgx/v5"
 
@@ -73,15 +74,63 @@ func (o outputSharingSettings) SetSetting(
 		return fmt.Errorf("set output sharing setting: %w", err)
 	}
 
-	// Defense in depth: the fence check of the transaction compares the
-	// namespace of the fence with the namespace row. This check stays so that
-	// the setting of one namespace cannot be written under the fence of
-	// another namespace. It does not rely on the caller.
+	// Defense in depth: the transaction below checks the same binding again
+	// and the fence check of the transaction compares the failover version of
+	// the namespace of the fence. This check stays so that a refusal needs no
+	// transaction. It does not rely on the caller, the service or the
+	// transaction.
+	if err := settingFenceBinds(ns, fence); err != nil {
+		return err
+	}
+
+	return o.writeSetting(ctx, ns, d, fence, e)
+}
+
+// settingFenceBinds returns namespace.ErrFenced unless the fence names ns. The
+// fence check of the transaction compares the version of the namespace row of
+// the fence, so only this comparison stops the setting of one namespace from
+// being written under a valid fence of another namespace.
+func settingFenceBinds(ns namespace.Name, fence namespace.Fence) error {
 	if fence.Namespace != ns {
 		return fmt.Errorf("%w: setting names %q, fence names %q", namespace.ErrFenced, ns, fence.Namespace)
 	}
 
+	return nil
+}
+
+// writeSetting writes d as the setting of ns and appends e in one fenced
+// transaction. The transaction reads the value that the write replaces and
+// records it as the Old value of the one change of e, so a concurrent change
+// cannot make the entry name a stale value.
+func (o outputSharingSettings) writeSetting(
+	ctx context.Context, ns namespace.Name, d outputshare.Default, fence namespace.Fence, e audit.Entry,
+) error {
+	// The entry is a copy, but its changes share the array of the caller.
+	e.Changes = slices.Clone(e.Changes)
+
 	return o.s.inFencedAuditedTx(ctx, fence, &e, func(q *db.Queries) error {
+		// Defense in depth: the pre-check of SetSetting makes the same
+		// comparison, and the fence check of the transaction compares the
+		// failover version only. This check stays so that the UPDATE below
+		// cannot write the setting of ns under the fence of another
+		// namespace, also when a new caller skips the pre-check.
+		if err := settingFenceBinds(ns, fence); err != nil {
+			return err
+		}
+
+		old, err := q.GetNamespaceOutputSharingDefault(ctx, ns.String())
+		if errors.Is(err, pgx.ErrNoRows) {
+			return namespace.ErrNotFound
+		}
+
+		if err != nil {
+			return fmt.Errorf("select output sharing setting: %w", err)
+		}
+
+		if len(e.Changes) == 1 {
+			e.Changes[0].Old = &old
+		}
+
 		n, err := q.SetNamespaceOutputSharingDefault(ctx, db.SetNamespaceOutputSharingDefaultParams{
 			OutputSharingDefault: string(d),
 			Name:                 ns.String(),

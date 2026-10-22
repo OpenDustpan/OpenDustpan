@@ -110,10 +110,12 @@ type Settings interface {
 	// that fails Default.Validate, so the caller fails closed.
 	Setting(ctx context.Context, ns namespace.Name) (Default, error)
 	// SetSetting stores d as the setting of the namespace ns and appends the
-	// audit entry e in the transaction. It returns ErrInvalid when d fails
-	// Default.Validate or ns fails namespace.ParseName, namespace.ErrFenced when the fence is stale or names
-	// another namespace than ns, and namespace.ErrNotFound for an unknown
-	// namespace. On every error the store changes nothing. The change applies
+	// audit entry e in the transaction. When e holds one change, the store
+	// sets the Old value of that change to the value that the write replaces,
+	// read in the same transaction. It returns ErrInvalid when d fails
+	// Default.Validate or ns fails namespace.ParseName, namespace.ErrFenced
+	// when the fence is stale or names another namespace than ns, and
+	// namespace.ErrNotFound for an unknown namespace. On every error the store changes nothing. The change applies
 	// to the units that the namespace makes later. It changes no rule of a
 	// unit that exists.
 	SetSetting(ctx context.Context, ns namespace.Name, d Default, fence namespace.Fence, e audit.Entry) error

@@ -1,15 +1,21 @@
 package sqlite_test
 
 import (
+	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
+	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/outputshare"
 	"opendustpan.org/opendustpan/pkg/outputshare/outputsharetest"
 	"opendustpan.org/opendustpan/pkg/store/sqlite"
+	"opendustpan.org/opendustpan/pkg/store/storetest"
 )
 
 // openOutputShare returns a fresh store and the path of its database.
@@ -152,5 +158,176 @@ func TestOutputSharingDefaultColumnRefusesAnotherValue(t *testing.T) {
 		if err := storeSettingRow(t, path, "acme", good); err != nil {
 			t.Fatalf("store the setting %q: %v", good, err)
 		}
+	}
+}
+
+// settingOld returns the Old value of the one change of each entry of ns, or
+// "-" for an entry with no Old value, oldest first.
+func settingOld(entries []audit.Entry) []string {
+	out := make([]string, 0, len(entries))
+
+	for i := range entries {
+		old := "-"
+		if len(entries[i].Changes) == 1 && entries[i].Changes[0].Old != nil {
+			old = *entries[i].Changes[0].Old
+		}
+
+		out = append(out, old)
+	}
+
+	return out
+}
+
+// TestSettingFenceCheckAlone proves the comparison that SetSetting makes
+// before the transaction, with no store behind it: a fence of another
+// namespace is refused, and a fence of the namespace passes.
+func TestSettingFenceCheckAlone(t *testing.T) {
+	t.Parallel()
+
+	for _, bad := range []namespace.Fence{
+		{Namespace: "globex", FailoverVersion: 1},
+		{Namespace: "", FailoverVersion: 1},
+		{Namespace: "acme ", FailoverVersion: 1},
+		{Namespace: "ACME", FailoverVersion: 1},
+	} {
+		if err := sqlite.CheckSettingFence("acme", bad); !errors.Is(err, namespace.ErrFenced) {
+			t.Fatalf("CheckSettingFence(acme, %+v) = %v, want namespace.ErrFenced", bad, err)
+		}
+	}
+
+	if err := sqlite.CheckSettingFence("acme", namespace.Fence{Namespace: "acme", FailoverVersion: 1}); err != nil {
+		t.Fatalf("CheckSettingFence with the fence of the namespace: %v", err)
+	}
+}
+
+// TestSettingTransactionRefusesAForeignFence proves the layer inside the
+// transaction alone. It skips the pre-check of SetSetting and gives the
+// setting of acme a valid fence and a valid entry of globex. The fence check
+// of the transaction accepts both, so only the comparison inside the
+// transaction stops the write.
+func TestSettingTransactionRefusesAForeignFence(t *testing.T) {
+	t.Parallel()
+
+	s, _ := openOutputShare(t)
+	acme := ensureNamespace(t, s, "acme")
+	globex := ensureNamespace(t, s, "globex")
+	ctx := t.Context()
+
+	beforeAcme, beforeGlobex := len(allAuditEntries(t, s, "acme")), len(allAuditEntries(t, s, "globex"))
+
+	err := sqlite.WriteSettingInTx(ctx, s, "acme", outputshare.DefaultNamespace, globex,
+		outputsharetest.SettingEntry(globex, outputshare.DefaultNamespace))
+	if !errors.Is(err, namespace.ErrFenced) {
+		t.Fatalf("write under the fence of globex = %v, want namespace.ErrFenced", err)
+	}
+
+	for _, ns := range []namespace.Name{"acme", "globex"} {
+		got, getErr := s.OutputSharingSettings().Setting(ctx, ns)
+		if getErr != nil || got != outputshare.DefaultNobody {
+			t.Fatalf("Setting(%s) = %q, %v, want nobody and no error", ns, got, getErr)
+		}
+	}
+
+	if n := len(allAuditEntries(t, s, "acme")); n != beforeAcme {
+		t.Fatalf("the refused write added %d entries in acme", n-beforeAcme)
+	}
+
+	if n := len(allAuditEntries(t, s, "globex")); n != beforeGlobex {
+		t.Fatalf("the refused write added %d entries in globex", n-beforeGlobex)
+	}
+
+	if err := sqlite.WriteSettingInTx(ctx, s, "acme", outputshare.DefaultNamespace, acme,
+		outputsharetest.SettingEntry(acme, outputshare.DefaultNamespace)); err != nil {
+		t.Fatalf("write under the fence of acme: %v", err)
+	}
+}
+
+// TestSettingAuditOldValueIsReadInTheTransaction proves that the store sets
+// the Old value of the change to the value that the write replaced, whatever
+// Old the caller gave, and that it does not change the entry of the caller.
+func TestSettingAuditOldValueIsReadInTheTransaction(t *testing.T) {
+	t.Parallel()
+
+	s, _ := openOutputShare(t)
+	fence := ensureNamespace(t, s, "acme")
+	ctx := t.Context()
+	lie := "namespace"
+
+	first := outputsharetest.SettingEntry(fence, outputshare.DefaultNamespace)
+	first.Changes[0].Old = &lie
+
+	if err := s.OutputSharingSettings().SetSetting(ctx, "acme", outputshare.DefaultNamespace, fence, first); err != nil {
+		t.Fatalf("first SetSetting: %v", err)
+	}
+
+	if first.Changes[0].Old != &lie || lie != "namespace" {
+		t.Fatal("SetSetting changed the changes of the entry of the caller")
+	}
+
+	second := outputsharetest.SettingEntry(fence, outputshare.DefaultNobody)
+
+	if err := s.OutputSharingSettings().SetSetting(ctx, "acme", outputshare.DefaultNobody, fence, second); err != nil {
+		t.Fatalf("second SetSetting: %v", err)
+	}
+
+	if second.Changes[0].Old != nil {
+		t.Fatal("SetSetting changed the changes of the entry of the caller")
+	}
+
+	if got, want := settingOld(allAuditEntries(t, s, "acme")), []string{"nobody", "namespace"}; !slices.Equal(got, want) {
+		t.Fatalf("Old values of the entries = %q, want %q", got, want)
+	}
+}
+
+// TestOutputSharingSettingSurvivesABackupRestore proves that a restore brings
+// back the value namespace of the setting, and not the value that the
+// namespace holds at the restore.
+func TestOutputSharingSettingSurvivesABackupRestore(t *testing.T) {
+	t.Parallel()
+
+	st, ok := openBackup(t).(*backupStore)
+	if !ok {
+		t.Fatal("the backup store is not a *backupStore")
+	}
+
+	ps, ok := storetest.BackupStore(st).(storetest.PortableRestoreStore)
+	if !ok {
+		t.Fatal("the SQLite store does not export and stage the portable format")
+	}
+
+	ctx := t.Context()
+	fence := ensureNamespace(t, st.Store, "acme")
+	settings := st.OutputSharingSettings()
+
+	if err := settings.SetSetting(ctx, "acme", outputshare.DefaultNamespace, fence,
+		outputsharetest.SettingEntry(fence, outputshare.DefaultNamespace)); err != nil {
+		t.Fatalf("set namespace: %v", err)
+	}
+
+	files, sum, descs := storetest.PortableFiles(t, ps)
+
+	if err := settings.SetSetting(ctx, "acme", outputshare.DefaultNobody, fence,
+		outputsharetest.SettingEntry(fence, outputshare.DefaultNobody)); err != nil {
+		t.Fatalf("set nobody: %v", err)
+	}
+
+	_, err := ps.StagePortable(ctx, storetest.PortableOpener(files), sum, descs, storetest.StageAs(t, ps))
+	if err != nil {
+		t.Fatalf("stage the portable backup: %v", err)
+	}
+
+	t.Cleanup(func() {
+		if discardErr := ps.DiscardStaging(context.WithoutCancel(ctx)); discardErr != nil {
+			t.Errorf("discard staging: %v", discardErr)
+		}
+	})
+
+	if err := ps.ApplyStaging(ctx); err != nil {
+		t.Fatalf("apply the staged backup: %v", err)
+	}
+
+	got, err := settings.Setting(ctx, "acme")
+	if err != nil || got != outputshare.DefaultNamespace {
+		t.Fatalf("Setting after the restore = %q, %v, want namespace", got, err)
 	}
 }

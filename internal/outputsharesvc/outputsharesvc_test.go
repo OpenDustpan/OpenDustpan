@@ -255,7 +255,8 @@ func TestSetSettingStampsTheAuditEntry(t *testing.T) {
 }
 
 // checkStampedEntry fails the test unless e is the entry of the change of
-// acme by alice from nobody to namespace.
+// acme by alice to namespace. The service leaves the Old value to the store,
+// which reads it in the transaction of the write.
 func checkStampedEntry(t *testing.T, e audit.Entry) {
 	t.Helper()
 
@@ -277,13 +278,13 @@ func checkStampedEntry(t *testing.T, e audit.Entry) {
 	}
 
 	c := e.Changes[0]
-	if c.Key != outputsharesvc.SettingKey || c.Old == nil || *c.Old != "nobody" || c.New != "namespace" {
-		t.Fatalf("audit change = %+v, want nobody to namespace", c)
+	if c.Key != outputsharesvc.SettingKey || c.Old != nil || c.New != "namespace" {
+		t.Fatalf("audit change = %+v, want the new value namespace and no old value", c)
 	}
 }
 
 // TestSetSettingFailsClosedOnAStoreError proves that an error of the store
-// at the read of the old value stops the change.
+// at the write stops the change.
 func TestSetSettingFailsClosedOnAStoreError(t *testing.T) {
 	t.Parallel()
 

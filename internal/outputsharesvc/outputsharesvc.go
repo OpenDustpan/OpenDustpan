@@ -87,7 +87,8 @@ func (s *Service) Setting(ctx context.Context, p identity.Principal, ns namespac
 // SetSetting stores d as the setting of the namespace ns for the principal
 // p, who needs unit:manage-sharing on the namespace. The audit entry by
 // names the caller and the request. The service sets its time, its
-// namespace, its object, its action and the change of the setting. A value
+// namespace, its object, its action and the change of the setting. The store
+// sets the Old value of the change in the transaction of the write. A value
 // that is not a value of the setting returns an error that wraps
 // outputshare.ErrInvalid and changes nothing. The change applies to the
 // units that the namespace makes later. It changes no rule of a unit that
@@ -106,17 +107,10 @@ func (s *Service) SetSetting(
 		return fmt.Errorf("set the output sharing setting of %s: %w", ns, err)
 	}
 
-	old, err := s.settings.Setting(ctx, ns)
-	if err != nil {
-		return fmt.Errorf("read the output sharing setting of %s: %w", ns, err)
-	}
-
 	n, err := s.namespaces.GetNamespace(ctx, ns)
 	if err != nil {
 		return fmt.Errorf("read namespace %s: %w", ns, err)
 	}
-
-	prev := string(old)
 
 	by.At = s.now().UTC()
 	by.Namespace = ns
@@ -124,7 +118,7 @@ func (s *Service) SetSetting(
 	by.Action = string(identity.ActionUnitManageSharing)
 	by.Kind = audit.KindChange
 	by.Outcome = audit.OutcomeSuccess
-	by.Changes = []audit.Change{{Key: SettingKey, Old: &prev, New: string(d), Layer: "", TakesEffect: ""}}
+	by.Changes = []audit.Change{{Key: SettingKey, Old: nil, New: string(d), Layer: "", TakesEffect: ""}}
 
 	if err := s.settings.SetSetting(ctx, ns, d, n.Fence(), by); err != nil {
 		return fmt.Errorf("set the output sharing setting of %s: %w", ns, err)
