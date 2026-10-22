@@ -14,6 +14,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/workspace"
 )
 
 // RestoreStore is every port the restore suite exercises: the backup store
@@ -1325,7 +1326,9 @@ func testRestoreApplyReleasesWorkspaceLocks(t *testing.T, newStore RestoreFactor
 
 	// The inventory entry must hold the lock before the restore. Without
 	// this, the check on the restored entry below could pass on its own.
-	assertWorkspaceInventoryLock(t, src, ns.Name, locked.Ref.Name.String(), true)
+	if workspaceInventoryLock(t, src, ns.Name, locked.Ref.Name.String()) == nil {
+		t.Fatalf("inventory lock of %s before the restore = none, want one", locked.Ref)
+	}
 
 	ps := portableRestoreStores(t, src, newStore(t))
 
@@ -1339,8 +1342,11 @@ func testRestoreApplyReleasesWorkspaceLocks(t *testing.T, newStore RestoreFactor
 		t.Fatalf("apply staging area: %v", err)
 	}
 
-	assertWorkspaceInventoryLock(t, ps.dst, ns.Name, locked.Ref.Name.String(), false)
-	assertWorkspaceInventoryLock(t, ps.dst, ns.Name, free.Ref.Name.String(), false)
+	for _, ref := range []workspace.Ref{locked.Ref, free.Ref} {
+		if got := workspaceInventoryLock(t, ps.dst, ns.Name, ref.Name.String()); got != nil {
+			t.Fatalf("inventory lock of %s after restore = %+v, want none", ref, got)
+		}
+	}
 
 	got, err := ps.dst.GetWorkspace(ctx, locked.Ref)
 	if err != nil {
@@ -1365,12 +1371,11 @@ func testRestoreApplyReleasesWorkspaceLocks(t *testing.T, newStore RestoreFactor
 	}
 }
 
-// assertWorkspaceInventoryLock fails the test unless the inventory entry of
-// the OpenTofu workspace name in ns holds a lock exactly when wantLocked is
-// true. The console reads the lock of a workspace from this entry.
-func assertWorkspaceInventoryLock(
-	t *testing.T, s inventory.Reader, ns namespace.Name, name string, wantLocked bool,
-) {
+// workspaceInventoryLock returns the lock on the inventory entry of the
+// OpenTofu workspace name in ns, or nil when the entry holds none. The console
+// reads the lock of a workspace from this entry. It fails the test when the
+// inventory has no such entry.
+func workspaceInventoryLock(t *testing.T, s inventory.Reader, ns namespace.Name, name string) *inventory.Lock {
 	t.Helper()
 
 	entries, err := s.ListUnits(t.Context(), ns)
@@ -1378,17 +1383,13 @@ func assertWorkspaceInventoryLock(
 		t.Fatalf("list inventory of %q: %v", ns, err)
 	}
 
-	for _, e := range entries {
-		if e.Tool != "opentofu" || e.Name != name {
-			continue
+	for i := range entries {
+		if entries[i].Tool == "opentofu" && entries[i].Name == name {
+			return entries[i].Lock
 		}
-
-		if (e.Lock != nil) != wantLocked {
-			t.Fatalf("inventory lock of %s = %+v, want locked %t", e.Reference(), e.Lock, wantLocked)
-		}
-
-		return
 	}
 
 	t.Fatalf("inventory has no opentofu entry %q in %q", name, ns)
+
+	return nil
 }
