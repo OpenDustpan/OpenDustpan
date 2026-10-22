@@ -1366,6 +1366,11 @@ func pulumiScenario(t *testing.T, env *e2e.Env) {
 		outputContains("another update of this stack is in progress"),
 		"stack", "import", "--file", importPath,
 	))
+	env.Step(ctx, t, failStep(
+		"stack rename while one runs",
+		outputContains("another update of this stack is in progress"),
+		"stack", "rename", "renamed-while-running",
+	))
 	env.EndHeldUpdate(ctx, t, held, "cancelled") //nolint:misspell // The CLI's wire value; it must not change.
 	// The ended update releases the lock: the inventory entry holds none.
 	checkInventoryUnlockedByID(ctx, t, env, "pulumi:"+org+"/"+e2e.Project+"/renamed")
