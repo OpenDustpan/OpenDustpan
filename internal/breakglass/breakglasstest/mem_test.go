@@ -9,10 +9,10 @@ import (
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/breakglass/breakglasstest"
 	"opendustpan.org/opendustpan/internal/opsmem"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/breakglass"
-	"opendustpan.org/opendustpan/pkg/breakglass/breakglasstest"
 	"opendustpan.org/opendustpan/pkg/namespace"
 )
 

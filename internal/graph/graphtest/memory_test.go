@@ -3,8 +3,8 @@ package graphtest_test
 import (
 	"testing"
 
+	"opendustpan.org/opendustpan/internal/graph/graphtest"
 	"opendustpan.org/opendustpan/pkg/graph"
-	"opendustpan.org/opendustpan/pkg/graph/graphtest"
 )
 
 func TestMemoryEdges(t *testing.T) {

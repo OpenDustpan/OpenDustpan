@@ -8,9 +8,9 @@ import (
 	"strings"
 	"testing"
 
+	"opendustpan.org/opendustpan/internal/notify/chat/chattest"
 	"opendustpan.org/opendustpan/pkg/notify"
 	"opendustpan.org/opendustpan/pkg/notify/chat"
-	"opendustpan.org/opendustpan/pkg/notify/chat/chattest"
 )
 
 // fakeHost is the one host that the fake platform uses for its webhooks.
