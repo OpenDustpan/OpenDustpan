@@ -627,7 +627,10 @@ func (s *Updates) AppendJournal(ctx context.Context, ref Ref, id UpdateID, tok t
 		return fmt.Errorf("%w: a preview does not save state", ErrWrongUpdateState)
 	}
 
-	if batchTooLarge(content, s.maxCheckpoints) {
+	// A body over both bounds is refused before any read of the stack. The
+	// journal writer refuses a body over the batch bound that does not hold
+	// exactly one entry when it reads the batch.
+	if len(content) > MaxJournalBatchBytes && len(content) > s.maxCheckpoints {
 		return fmt.Errorf(
 			"append journal to update %s: %w",
 			id,
