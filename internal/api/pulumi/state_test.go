@@ -456,6 +456,35 @@ func TestStateResourceMasksSecrets(t *testing.T) {
 	checkStateBodyHasNoSecrets(t, body, doc.Masked)
 }
 
+// TestLatestStateReadsNeedNoUpdate proves that the latest reads that need no
+// version answer from the checkpoint alone: the resource, the outputs and a
+// diff of two latest sides answer 200 when the update that saved the latest
+// checkpoint cannot be read. The resource list names the previous version,
+// so it reads that update and fails.
+func TestLatestStateReadsNeedNoUpdate(t *testing.T) {
+	t.Parallel()
+
+	f := newUpdateFixture(t, allowAll())
+	seedStateVersions(t, f)
+
+	f.mem.mu.Lock()
+	clear(f.mem.updates)
+	f.mem.mu.Unlock()
+
+	for _, target := range []string{
+		"/api/stacks/acme/web/prod/state/latest/resources/" + stateURNStack,
+		"/api/stacks/acme/web/prod/state/latest/outputs",
+		"/api/stacks/acme/web/prod/state/diff?from=latest&to=latest",
+	} {
+		getStateOK(t, f, target)
+	}
+
+	status, body := f.doUpdate(t, accessRequest(http.MethodGet, "/api/stacks/acme/web/prod/state/latest/resources", ""))
+	if status == http.StatusOK {
+		t.Fatalf("resource list without the update answers 200, want an error: %s", body)
+	}
+}
+
 // TestStateOutputsMasksSecrets proves the outputs route masks the stack
 // outputs the same way.
 func TestStateOutputsMasksSecrets(t *testing.T) {

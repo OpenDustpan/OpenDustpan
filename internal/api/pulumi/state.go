@@ -189,6 +189,24 @@ func (h *Handler) stateCurrent(
 	return st, true
 }
 
+// stateCheckpoint returns the checkpoint that sel names, for a read that
+// needs no version: it does not read the update that saved the checkpoint.
+// It writes the error and reports false when the version has no checkpoint.
+func (h *Handler) stateCheckpoint(
+	w http.ResponseWriter, r *http.Request, ref stack.Ref, sel stack.StateSelector,
+) (stack.Checkpoint, bool) {
+	cp, err := h.updates.SelectCheckpoint(r.Context(), ref, sel)
+	if err != nil {
+		h.writeError(r.Context(), w, err)
+
+		var none stack.Checkpoint
+
+		return none, false
+	}
+
+	return cp, true
+}
+
 // statePrevious returns the deployment of the version before current, or nil
 // when there is none. It writes the error and reports false when the lookup
 // itself fails.
@@ -415,12 +433,12 @@ func (h *Handler) getStateResource(
 		return
 	}
 
-	current, ok := h.stateCurrent(w, r, ref, sel)
+	current, ok := h.stateCheckpoint(w, r, ref, sel)
 	if !ok {
 		return
 	}
 
-	detail, err := stack.ReadStateResource(current.Checkpoint.Deployment, r.PathValue("urn"))
+	detail, err := stack.ReadStateResource(current.Deployment, r.PathValue("urn"))
 	if err != nil {
 		h.writeError(ctx, w, err)
 
@@ -460,12 +478,7 @@ func (h *Handler) diffCheckpointOf(
 		return none, false
 	}
 
-	st, ok := h.stateCurrent(w, r, ref, sel)
-	if !ok {
-		return none, false
-	}
-
-	return st.Checkpoint, true
+	return h.stateCheckpoint(w, r, ref, sel)
 }
 
 // invalidDiffVersion reports a missing or empty diff side.
@@ -565,12 +578,12 @@ func (h *Handler) getStateOutputs(
 		return
 	}
 
-	current, ok := h.stateCurrent(w, r, ref, sel)
+	current, ok := h.stateCheckpoint(w, r, ref, sel)
 	if !ok {
 		return
 	}
 
-	outputs, err := stack.ReadStateOutputs(current.Checkpoint.Deployment)
+	outputs, err := stack.ReadStateOutputs(current.Deployment)
 	if err != nil {
 		h.writeError(ctx, w, err)
 
