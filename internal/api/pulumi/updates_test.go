@@ -3392,3 +3392,33 @@ func TestExportNamesTheCurrentStackInTheSecretsProvider(t *testing.T) {
 		}
 	}
 }
+
+// TestHistoryOfMissingStackIsNotFound proves that the history of a stack that
+// does not exist answers 404 with the body of GET on that stack. A stack with
+// no update still answers 200 with an empty list.
+func TestHistoryOfMissingStackIsNotFound(t *testing.T) {
+	t.Parallel()
+
+	f := newUpdateFixture(t, allowAll())
+
+	for _, path := range []string{"/api/stacks/acme/web/" + unknownStackName, "/api/stacks/other/x/" + unknownStackName} {
+		wantStatus, wantBody := f.doUpdate(t, accessRequest(http.MethodGet, path, ""))
+		if wantStatus != http.StatusNotFound {
+			t.Fatalf("GET %s answers %d (%s), want 404", path, wantStatus, wantBody)
+		}
+
+		status, body := f.doUpdate(t, accessRequest(http.MethodGet, path+"/updates?pageSize=10&page=1", ""))
+		if status != http.StatusNotFound {
+			t.Fatalf("history of %s answers %d (%s), want 404", path, status, body)
+		}
+
+		if body != wantBody {
+			t.Fatalf("history body = %s, want the body of GET: %s", body, wantBody)
+		}
+	}
+
+	status, body := f.doUpdate(t, accessRequest(http.MethodGet, "/api/stacks/acme/web/prod/updates", ""))
+	if status != http.StatusOK || strings.TrimSpace(body) != `{"updates":[]}` {
+		t.Fatalf("history of a stack with no update answers %d %q, want 200 and no updates", status, body)
+	}
+}

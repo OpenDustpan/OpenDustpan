@@ -241,8 +241,9 @@ func newMoveFixtureFull(
 	}
 
 	handler, err := newCheckedHandler(t, apiinventory.Config{
-		Views: nil,
-		Audit: newTestAudit(), OnAuditFailure: nil, Locks: locks, PublicURL: "",
+		OutputSharing: nil,
+		Views:         nil,
+		Audit:         newTestAudit(), OnAuditFailure: nil, Locks: locks, PublicURL: "",
 		Namespaces:    nsSvc,
 		Units:         &memReader{entries: map[namespace.Name][]coreinventory.Entry{}, err: nil},
 		Collections:   svc,
