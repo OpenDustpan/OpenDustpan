@@ -2,10 +2,10 @@
 // outputshare: Store, Checker, Attachments and States, and the rule that the
 // SQL adapter of a tool store writes when it makes a unit. A new adapter runs Run with a Factory.
 //
-// No adapter implements the ports yet. Each case names one behavior and is
-// skipped with the reason Pending until the slice that adds the first adapter
-// writes it. That slice writes the case before the adapter code, and removes
-// the skip of each case that it writes.
+// The SQL adapters serve the Settings port. Each other case names one
+// behavior and is skipped with the reason Pending until the slice that adds
+// the first adapter of its port writes it. That slice writes the case before
+// the adapter code, and removes the skip of each case that it writes.
 package outputsharetest
 
 import (
@@ -18,13 +18,17 @@ import (
 )
 
 // Pending is the skip reason of a case that no adapter can run yet.
-const Pending = "no adapter implements the output sharing ports yet; " +
+const Pending = "no adapter implements this output sharing port yet; " +
 	"the slice that adds the first adapter writes this case"
 
 // Harness is one fresh, empty set of ports for one subtest.
 type Harness struct {
-	// Store keeps the rules and the setting.
+	// Store keeps the rules and the setting. A case of the rules uses it.
 	Store outputshare.Store
+	// Settings keeps the setting. A case of the setting uses it, so that an
+	// adapter that serves the setting and no rule runs those cases. An
+	// adapter that serves Store gives Store here too.
+	Settings outputshare.Settings
 	// Checker decides each read. It reads the attachments and the latest
 	// states through Attachments and States.
 	Checker outputshare.Checker
@@ -71,8 +75,9 @@ type Harness struct {
 	Job func(t *testing.T, unit outputshare.Placement, starter string) identity.Principal
 	// Disable disables the principal, as a person who leaves the team.
 	Disable func(t *testing.T, principal string)
-	// Audited is an optional hook: it returns the audit entries of the
-	// namespace, oldest first. A case that needs it skips when it is nil.
+	// Audited is an optional hook: it returns the action of each audit entry
+	// of the namespace, oldest first. A case that needs it skips when it is
+	// nil.
 	Audited func(t *testing.T, ns string) []string
 	// Calls is an optional hook: it returns the port calls that the checker
 	// made since the last call of Calls, in order, each as the port and the
@@ -82,6 +87,10 @@ type Harness struct {
 	// no Validate, as a row of another version or a restore would. A case
 	// that needs it skips when it is nil.
 	StoreRaw func(t *testing.T, r outputshare.Rule)
+	// SettingRaw is an optional hook: it writes value as the stored setting
+	// of the namespace ns with no Validate, as a row of another version or a
+	// restore would. A case that needs it skips when it is nil.
+	SettingRaw func(t *testing.T, ns namespace.Name, value string)
 }
 
 // Factory returns a fresh harness for one subtest.
@@ -134,7 +143,7 @@ func allCases() []suiteCase {
 
 // storeCases are the behaviors of Store.
 func storeCases() []suiteCase {
-	return []suiteCase{
+	rules := []suiteCase{
 		{nil, "store: put and get round trip a rule on a unit, a collection and a namespace"},
 		{nil, "store: put refuses a rule that fails Validate and changes nothing"},
 		{nil, "store: put refuses a rule that names a principal"},
@@ -172,12 +181,12 @@ func storeCases() []suiteCase {
 		{nil, "store: find of a producer with no stable ID runs the same query and returns ErrNoRule"},
 		{nil, "store: find never matches a stored row that fails Validate"},
 		{nil, "store: find refuses an invalid placement"},
-		{nil, "store: the setting is nobody for a namespace that never set it"},
-		{nil, "store: set setting round trips and refuses an invalid value"},
-		{nil, "store: a stored setting that fails Validate gives ErrInvalid"},
+	}
+
+	return slices.Concat(rules, settingCases(), []suiteCase{
 		{nil, "store: set setting changes no rule of a unit that exists"},
 		{nil, "store: each write appends one audit entry in its transaction"},
-	}
+	})
 }
 
 // newUnitCases are the behaviors of the rule that a tool store writes when it

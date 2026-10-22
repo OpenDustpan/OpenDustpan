@@ -22,6 +22,7 @@ import (
 	"opendustpan.org/opendustpan/internal/api/refusal"
 	"opendustpan.org/opendustpan/internal/denylimit"
 	"opendustpan.org/opendustpan/internal/errcode"
+	"opendustpan.org/opendustpan/internal/outputsharesvc"
 	"opendustpan.org/opendustpan/internal/sessionauth"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/collection"
@@ -71,6 +72,9 @@ type Config struct {
 	// no lock route, so a namespace store that holds no manual locks keeps the
 	// rest of the API unchanged.
 	Locks *manuallock.Service
+	// OutputSharing serves the routes of the output sharing setting of a
+	// namespace. It is optional: nil serves no such route.
+	OutputSharing *outputsharesvc.Service
 	// Moves checks the escalation of a move into a collection. It is required
 	// with Collections: a move with no checker is refused.
 	Moves         MoveChecker
@@ -107,26 +111,27 @@ type Config struct {
 
 // Handler serves the inventory API under /api/inventory/.
 type Handler struct {
-	namespaces  *namespace.Service
-	units       coreinventory.Reader
-	deleted     coreinventory.DeletedReader
-	history     coreinventory.HistoryReader
-	lifecycles  map[string]coreinventory.Lifecycle
-	readScope   DeletedReadScope
-	collections *collection.Service
-	locks       *manuallock.Service
-	moves       MoveChecker
-	views       *views
-	authn       identity.Authenticator
-	sessions    *sessionauth.Checker
-	authz       identity.Authorizer
-	guard       *refusal.Recorder
-	publicURL   *url.URL
-	logger      *slog.Logger
-	now         func() time.Time
-	stateGuard  StateGuard
-	mux         *patternMux
-	routes      []Route
+	namespaces    *namespace.Service
+	units         coreinventory.Reader
+	deleted       coreinventory.DeletedReader
+	history       coreinventory.HistoryReader
+	lifecycles    map[string]coreinventory.Lifecycle
+	readScope     DeletedReadScope
+	collections   *collection.Service
+	locks         *manuallock.Service
+	outputSharing *outputsharesvc.Service
+	moves         MoveChecker
+	views         *views
+	authn         identity.Authenticator
+	sessions      *sessionauth.Checker
+	authz         identity.Authorizer
+	guard         *refusal.Recorder
+	publicURL     *url.URL
+	logger        *slog.Logger
+	now           func() time.Time
+	stateGuard    StateGuard
+	mux           *patternMux
+	routes        []Route
 }
 
 // validate returns ErrMissingDependency when cfg lacks a required dependency.
@@ -178,26 +183,27 @@ func NewHandler(cfg Config) (*Handler, error) {
 	}
 
 	h := &Handler{
-		views:       viewState,
-		namespaces:  cfg.Namespaces,
-		units:       cfg.Units,
-		deleted:     cfg.Deleted,
-		history:     cfg.History,
-		lifecycles:  cfg.Lifecycles,
-		readScope:   cfg.ReadScope,
-		collections: cfg.Collections,
-		locks:       cfg.Locks,
-		moves:       cfg.Moves,
-		authn:       cfg.Authenticator,
-		sessions:    cfg.Sessions,
-		authz:       cfg.Authorizer,
-		guard:       recorder.WithLimiter(cfg.DenialLimiter).WithSurface("inventory"),
-		publicURL:   publicURL,
-		logger:      cfg.Logger,
-		now:         clockOf(cfg.Now),
-		stateGuard:  cfg.StateGuard,
-		mux:         newPatternMux(),
-		routes:      nil,
+		views:         viewState,
+		namespaces:    cfg.Namespaces,
+		units:         cfg.Units,
+		deleted:       cfg.Deleted,
+		history:       cfg.History,
+		lifecycles:    cfg.Lifecycles,
+		readScope:     cfg.ReadScope,
+		collections:   cfg.Collections,
+		locks:         cfg.Locks,
+		outputSharing: cfg.OutputSharing,
+		moves:         cfg.Moves,
+		authn:         cfg.Authenticator,
+		sessions:      cfg.Sessions,
+		authz:         cfg.Authorizer,
+		guard:         recorder.WithLimiter(cfg.DenialLimiter).WithSurface("inventory"),
+		publicURL:     publicURL,
+		logger:        cfg.Logger,
+		now:           clockOf(cfg.Now),
+		stateGuard:    cfg.StateGuard,
+		mux:           newPatternMux(),
+		routes:        nil,
 	}
 
 	h.routes = h.buildRoutes()
@@ -674,7 +680,7 @@ func classify(err error) (int, string) {
 	}
 
 	switch {
-	case errors.Is(err, errMissingOrganization):
+	case errors.Is(err, errMissingOrganization), errors.Is(err, errOutputSharingBody):
 		return http.StatusBadRequest, err.Error()
 	case errors.Is(err, namespace.ErrInvalidName), errors.Is(err, identity.ErrInvalidObject):
 		return http.StatusBadRequest, err.Error()

@@ -278,8 +278,9 @@ func newViewFixtureWith(t *testing.T, opts viewFixtureOptions) *viewFixture {
 	reader := &memReader{entries: map[namespace.Name][]coreinventory.Entry{"acme": labeledEntries()}, err: nil}
 
 	handler, err := apiinventory.NewHandler(apiinventory.Config{
-		Views:      &apiinventory.ViewsConfig{Service: service, Principals: people, Idempotency: idem},
-		Namespaces: namespaces, Units: reader, Deleted: seededDeleted(), History: nil, Lifecycles: testLifecycles(),
+		OutputSharing: nil,
+		Views:         &apiinventory.ViewsConfig{Service: service, Principals: people, Idempotency: idem},
+		Namespaces:    namespaces, Units: reader, Deleted: seededDeleted(), History: nil, Lifecycles: testLifecycles(),
 		ReadScope: fixedScope{err: nil, ids: nil, all: true}, Collections: nil, Locks: nil, Moves: nil, StateGuard: nil,
 		Authenticator: viewCallers{}, Authorizer: authz, Audit: store, OnAuditFailure: nil, DenialLimiter: nil,
 		Sessions: nil, PublicURL: "", Logger: slog.New(slog.DiscardHandler), Now: nil,
