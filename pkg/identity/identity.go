@@ -175,6 +175,20 @@ const (
 	// ActionUnitReadSecrets allows reading secret values in plain text. Its
 	// object is a unit.
 	ActionUnitReadSecrets Action = "unit:read-secrets"
+	// ActionUnitReadOutputs allows reading the root outputs of the latest
+	// state of a unit, and nothing else. Its object is a unit, a collection
+	// or a namespace. A secret output also needs ActionUnitReadSecrets.
+	// ActionUnitRead does not imply it: a check of a read of outputs reads
+	// grants of this action only. Each built-in role that holds
+	// ActionUnitRead also holds it.
+	ActionUnitReadOutputs Action = "unit:read-outputs"
+	// ActionUnitManageSharing allows saving and removing the sharing rules of
+	// a unit, a collection or a namespace, and changing the output sharing
+	// setting of a namespace. Its object is a unit, a collection or a
+	// namespace. Of the namespace roles, only the administrator holds it. The
+	// account administrator and the site administrator hold it as data
+	// actions.
+	ActionUnitManageSharing Action = "unit:manage-sharing"
 	// ActionCallerRead allows reading the caller's own record, for example
 	// the current-user endpoint of a tool API. Its object is CallerObject.
 	ActionCallerRead Action = "caller:read"

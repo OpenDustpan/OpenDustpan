@@ -1843,6 +1843,28 @@
         ],
         "type": "object"
       },
+      "OutputSharing": {
+        "properties": {
+          "newUnitDefault": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "newUnitDefault"
+        ],
+        "type": "object"
+      },
+      "OutputSharingRequest": {
+        "properties": {
+          "newUnitDefault": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "newUnitDefault"
+        ],
+        "type": "object"
+      },
       "Preferences": {
         "properties": {
           "colorMode": {
@@ -4811,6 +4833,106 @@
         ]
       }
     },
+    "/api/dustpan/v1/namespaces/{namespace}/output-sharing": {
+      "get": {
+        "operationId": "getOutputSharing",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "namespace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "2XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OutputSharing"
+                }
+              }
+            },
+            "description": "The request succeeded."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The request failed."
+          }
+        },
+        "tags": [
+          "output-sharing"
+        ],
+        "x-dustpan-actions": [
+          {
+            "action": "namespace:read",
+            "object": "namespace"
+          }
+        ]
+      },
+      "put": {
+        "operationId": "setOutputSharing",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "namespace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OutputSharingRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "2XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OutputSharing"
+                }
+              }
+            },
+            "description": "The request succeeded."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The request failed."
+          }
+        },
+        "tags": [
+          "output-sharing"
+        ],
+        "x-dustpan-actions": [
+          {
+            "action": "unit:manage-sharing",
+            "object": "namespace"
+          }
+        ]
+      }
+    },
     "/api/dustpan/v1/namespaces/{namespace}/profiles": {
       "get": {
         "operationId": "listProfiles",
@@ -6677,6 +6799,9 @@
     },
     {
       "name": "notification-sinks"
+    },
+    {
+      "name": "output-sharing"
     },
     {
       "name": "preferences"

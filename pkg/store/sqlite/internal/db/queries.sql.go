@@ -5549,6 +5549,19 @@ func (q *Queries) GetNamespaceIPAllowlist(ctx context.Context, name string) (str
 	return ip_allowlist, err
 }
 
+const getNamespaceOutputSharingDefault = `-- name: GetNamespaceOutputSharingDefault :one
+SELECT output_sharing_default
+FROM namespaces
+WHERE name = ?
+`
+
+func (q *Queries) GetNamespaceOutputSharingDefault(ctx context.Context, name string) (string, error) {
+	row := q.db.QueryRowContext(ctx, getNamespaceOutputSharingDefault, name)
+	var output_sharing_default string
+	err := row.Scan(&output_sharing_default)
+	return output_sharing_default, err
+}
+
 const getNotificationSink = `-- name: GetNotificationSink :one
 SELECT k.id, n.name AS namespace, k.kind, k.name, k.platform, k.target, k.created_by, k.version
 FROM notification_sinks AS k
@@ -15185,6 +15198,26 @@ type SetNamespaceIPAllowlistParams struct {
 // Replaces the IP allowlist of one namespace (ADR 55, decision 8).
 func (q *Queries) SetNamespaceIPAllowlist(ctx context.Context, arg SetNamespaceIPAllowlistParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, setNamespaceIPAllowlist, arg.IpAllowlist, arg.Name)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const setNamespaceOutputSharingDefault = `-- name: SetNamespaceOutputSharingDefault :execrows
+UPDATE namespaces
+SET output_sharing_default = ?
+WHERE name = ?
+`
+
+type SetNamespaceOutputSharingDefaultParams struct {
+	OutputSharingDefault string
+	Name                 string
+}
+
+// Replaces the output sharing setting of one namespace.
+func (q *Queries) SetNamespaceOutputSharingDefault(ctx context.Context, arg SetNamespaceOutputSharingDefaultParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, setNamespaceOutputSharingDefault, arg.OutputSharingDefault, arg.Name)
 	if err != nil {
 		return 0, err
 	}

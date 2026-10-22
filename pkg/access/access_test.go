@@ -1666,3 +1666,57 @@ func TestBuiltInRolesHoldTheNotificationAction(t *testing.T) {
 		}
 	}
 }
+
+// TestBuiltInRolesHoldTheOutputSharingActions proves that each built-in role
+// that holds unit:read also holds unit:read-outputs, so that no holder of a
+// built-in role loses a read of outputs, and that of the namespace roles only
+// the administrator manages the sharing rules and the setting.
+func TestBuiltInRolesHoldTheOutputSharingActions(t *testing.T) {
+	t.Parallel()
+
+	read, manage := identity.ActionUnitReadOutputs, identity.ActionUnitManageSharing
+
+	for _, action := range []identity.Action{read, manage} {
+		if family, ok := access.FamilyOf(action); !ok || family != access.FamilyData {
+			t.Fatalf("family of %s = %q, %t, want the data family", action, family, ok)
+		}
+	}
+
+	tests := []struct {
+		role       string
+		wantRead   bool
+		wantManage bool
+	}{
+		{access.RoleViewer, true, false},
+		{access.RoleSecretViewer, true, false},
+		{access.RoleAuditor, true, false},
+		{access.RoleWriter, true, false},
+		{access.RoleMaintainer, true, false},
+		{access.RoleAdmin, true, true},
+		{access.RoleAccountAdministrator, true, true},
+		{access.RoleSiteAdministrator, true, true},
+		{access.RoleTokenManager, false, false},
+		{access.RoleInstallationOperator, false, false},
+	}
+
+	for _, tt := range tests {
+		r, ok := access.BuiltInRole(tt.role)
+		if !ok {
+			t.Fatalf("no built-in role %q", tt.role)
+		}
+
+		if got := slices.Contains(r.Actions, read); got != tt.wantRead {
+			t.Errorf("%s holds %s = %t, want %t", tt.role, read, got, tt.wantRead)
+		}
+
+		if got := slices.Contains(r.Actions, manage); got != tt.wantManage {
+			t.Errorf("%s holds %s = %t, want %t", tt.role, manage, got, tt.wantManage)
+		}
+	}
+
+	for _, r := range access.BuiltInRoles() {
+		if r.Has(identity.ActionUnitRead) && !r.Has(read) {
+			t.Errorf("%s holds %s and not %s", r.ID, identity.ActionUnitRead, read)
+		}
+	}
+}

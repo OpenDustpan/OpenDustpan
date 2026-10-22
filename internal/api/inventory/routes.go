@@ -152,6 +152,10 @@ func (h *Handler) buildRoutes() []Route {
 		routes = append(routes, h.viewRoutes()...)
 	}
 
+	if h.outputSharing != nil {
+		routes = append(routes, h.outputSharingRoutes()...)
+	}
+
 	return routes
 }
 

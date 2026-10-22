@@ -231,6 +231,7 @@ func newLockFixture(t *testing.T, authz identity.Authorizer) lockFixture {
 	}
 
 	handler, err := apiinventory.NewHandler(apiinventory.Config{
+		OutputSharing:  nil,
 		Views:          nil,
 		Namespaces:     nsSvc,
 		Units:          &memReader{entries: map[namespace.Name][]coreinventory.Entry{}, err: nil},

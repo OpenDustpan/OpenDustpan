@@ -15,6 +15,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/installation"
 	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/outputshare"
 )
 
 // exampleTable has one column of each kind, so the writer's forms are all
@@ -306,6 +307,16 @@ func namespacesTable(t *testing.T) backup.PortableTable {
 func readNamespaceRow(t *testing.T, id any) (int, error) {
 	t.Helper()
 
+	return readNamespaceRowWith(t, id, "nobody")
+}
+
+// readNamespaceRowWith writes one namespaces row with the id value id and the
+// output sharing setting setting to a table file and reads the file back. It
+// returns the number of rows that reached the caller and the error of the
+// read.
+func readNamespaceRowWith(t *testing.T, id, setting any) (int, error) {
+	t.Helper()
+
 	table := namespacesTable(t)
 
 	var buf bytes.Buffer
@@ -315,7 +326,7 @@ func readNamespaceRow(t *testing.T, id any) (int, error) {
 		t.Fatalf("new table writer: %v", err)
 	}
 
-	row := []any{"acme", "eu-west", int64(1), int64(1000), false, false, "", id}
+	row := []any{"acme", "eu-west", int64(1), int64(1000), false, false, "", id, setting}
 	if writeErr := tw.WriteRow(row); writeErr != nil {
 		t.Fatalf("write row: %v", writeErr)
 	}
@@ -370,6 +381,54 @@ func TestReadPortableNamespaceIDs(t *testing.T) {
 
 			if !tc.want && (!errors.Is(err, backup.ErrCorrupt) || !errors.Is(err, namespace.ErrInvalidID)) {
 				t.Fatalf("read: err = %v, want ErrCorrupt and ErrInvalidID", err)
+			}
+		})
+	}
+}
+
+// TestReadPortableOutputSharingDefault proves the check of the restore alone:
+// a portable namespaces table with an output sharing setting that is not a
+// value of the setting fails with ErrCorrupt and outputshare.ErrInvalid, and
+// each value of the setting reaches the caller.
+func TestReadPortableOutputSharingDefault(t *testing.T) {
+	t.Parallel()
+
+	const id = "ns-abcdefghij234567klmn"
+
+	cases := []struct {
+		setting any
+		name    string
+		want    bool
+	}{
+		{name: "nobody", setting: "nobody", want: true},
+		{name: "namespace", setting: "namespace", want: true},
+		{name: "empty", setting: "", want: false},
+		{name: "null", setting: nil, want: false},
+		{name: "unknown", setting: "everyone", want: false},
+		{name: "upper case", setting: "Nobody", want: false},
+		{name: "trailing space", setting: "namespace ", want: false},
+		{name: "line feed", setting: "nobody\n", want: false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			rows, err := readNamespaceRowWith(t, id, tc.setting)
+			if tc.want && (err != nil || rows != 1) {
+				t.Fatalf("read: rows = %d, err = %v, want 1 row", rows, err)
+			}
+
+			if tc.want {
+				return
+			}
+
+			if !errors.Is(err, backup.ErrCorrupt) || !errors.Is(err, outputshare.ErrInvalid) {
+				t.Fatalf("read: err = %v, want ErrCorrupt and outputshare.ErrInvalid", err)
+			}
+
+			if rows != 0 {
+				t.Fatalf("read: %d rows reached the caller, want none", rows)
 			}
 		})
 	}

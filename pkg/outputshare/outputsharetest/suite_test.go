@@ -1,26 +1,27 @@
 package outputsharetest_test
 
 import (
+	"strings"
 	"testing"
 
 	"opendustpan.org/opendustpan/pkg/outputshare/outputsharetest"
 )
 
-// TestSuiteWaitsForAnAdapter runs the suite with a factory that no case may
-// call: each case is pending, so each case skips before it asks for a
-// harness.
-func TestSuiteWaitsForAnAdapter(t *testing.T) {
+// TestSuiteOverAMemorySettingsStore runs the suite with a Settings in
+// memory. The cases of the setting run on it. Each other case is pending, so
+// it skips before it asks for a harness: the factory fails such a case.
+func TestSuiteOverAMemorySettingsStore(t *testing.T) {
 	t.Parallel()
 
 	outputsharetest.Run(t, func(t *testing.T) outputsharetest.Harness {
 		t.Helper()
-		t.Fatal("a pending case asked for a harness")
 
-		return outputsharetest.Harness{
-			Store: nil, Checker: nil, Attachments: nil, States: nil, Namespace: nil, Unit: nil, UnitFault: nil,
-			Authority: nil, Profile: nil, Attach: nil, SaveState: nil, Grant: nil, Job: nil, Disable: nil, Audited: nil,
-			Calls: nil, StoreRaw: nil,
+		if !strings.HasPrefix(t.Name(), "TestSuiteOverAMemorySettingsStore/store:_") ||
+			!strings.Contains(t.Name(), "setting") {
+			t.Fatal("a pending case asked for a harness")
 		}
+
+		return newMemSettings().harness()
 	})
 }
 
