@@ -71,7 +71,9 @@ func seedSavedViews(t *testing.T, schemaURL string, views []savedview.View) {
 	rows := make([][]any, 0, len(views))
 	nsIDs := map[namespace.Name]string{}
 
-	for _, v := range views {
+	for i := range views {
+		v := &views[i]
+
 		query, encodeErr := viewstore.EncodeQuery(v.Query)
 		if encodeErr != nil {
 			t.Fatalf("seed saved views: encode the query: %v", encodeErr)
@@ -79,8 +81,8 @@ func seedSavedViews(t *testing.T, schemaURL string, views []savedview.View) {
 
 		nsID, ok := nsIDs[v.Namespace]
 		if !ok {
-			if scanErr := conn.QueryRow(t.Context(), "SELECT id FROM namespaces WHERE name = $1", v.Namespace.String()).
-				Scan(&nsID); scanErr != nil {
+			row := conn.QueryRow(t.Context(), "SELECT id FROM namespaces WHERE name = $1", v.Namespace.String())
+			if scanErr := row.Scan(&nsID); scanErr != nil {
 				t.Fatalf("seed saved views: read namespace %s: %v", v.Namespace, scanErr)
 			}
 
@@ -91,9 +93,8 @@ func seedSavedViews(t *testing.T, schemaURL string, views []savedview.View) {
 	}
 
 	columns := []string{"id", "namespace_id", "owner", "name", "query_json", "created_at_ms"}
-	if _, copyErr := conn.CopyFrom(
-		t.Context(), pgx.Identifier{"saved_views"}, columns, pgx.CopyFromRows(rows),
-	); copyErr != nil {
+	_, copyErr := conn.CopyFrom(t.Context(), pgx.Identifier{"saved_views"}, columns, pgx.CopyFromRows(rows))
+	if copyErr != nil {
 		t.Fatalf("seed saved views: copy: %v", copyErr)
 	}
 }

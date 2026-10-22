@@ -167,9 +167,9 @@ func testNamespaceCap(t *testing.T, h Harness) {
 	}
 
 	// One writer: a store that serializes its writes must not time out.
-	for _, v := range stored {
-		if err := h.Store.Create(t.Context(), v, fence, auditEntry("acme", "create")); err != nil {
-			t.Fatalf("fill the namespace: owner %s view %q: %v", v.Owner, v.Name, err)
+	for i := range stored {
+		if err := h.Store.Create(t.Context(), stored[i], fence, auditEntry("acme", "create")); err != nil {
+			t.Fatalf("fill the namespace: owner %s view %q: %v", stored[i].Owner, stored[i].Name, err)
 		}
 	}
 

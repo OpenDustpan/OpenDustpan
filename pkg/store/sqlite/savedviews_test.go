@@ -70,17 +70,21 @@ func seedSavedViews(t *testing.T, path string, views []savedview.View) {
 		_ = tx.Rollback() //nolint:errcheck // A rollback after the commit has nothing to undo.
 	}()
 
-	for _, v := range views {
+	const insert = `INSERT INTO saved_views (id, namespace_id, owner, name, query_json, created_at_ms)
+		VALUES (?, (SELECT id FROM namespaces WHERE name = ?), ?, ?, ?, ?)`
+
+	for i := range views {
+		v := &views[i]
+
 		query, encodeErr := viewstore.EncodeQuery(v.Query)
 		if encodeErr != nil {
 			t.Fatalf("seed saved views: encode the query: %v", encodeErr)
 		}
 
-		if _, execErr := tx.ExecContext(t.Context(), `INSERT INTO saved_views
-			(id, namespace_id, owner, name, query_json, created_at_ms)
-			VALUES (?, (SELECT id FROM namespaces WHERE name = ?), ?, ?, ?, ?)`,
-			string(v.ID), v.Namespace.String(), v.Owner, v.Name, query, v.CreatedAt.UnixMilli(),
-		); execErr != nil {
+		_, execErr := tx.ExecContext(
+			t.Context(), insert, string(v.ID), v.Namespace.String(), v.Owner, v.Name, query, v.CreatedAt.UnixMilli(),
+		)
+		if execErr != nil {
 			t.Fatalf("seed saved views: insert %q of %s: %v", v.Name, v.Owner, execErr)
 		}
 	}
