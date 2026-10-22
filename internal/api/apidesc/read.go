@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"slices"
+	"strconv"
 	"strings"
 )
 
@@ -133,7 +135,7 @@ func readOperation(path, method string, raw json.RawMessage) (Operation, error) 
 	op := Operation{
 		ID: shape.OperationID, Method: upper, Path: path, Tags: shape.Tags, Actions: nil, ActionObjects: nil,
 		Public: false, IdempotencyKey: false, IfMatch: false, IfMatchRequired: false, ETag: false,
-		Query: nil, Bodies: nil,
+		Query: nil, Status: 0, Bodies: nil,
 	}
 
 	readActions(&op, shape.Actions)
@@ -146,9 +148,61 @@ func readOperation(path, method string, raw json.RawMessage) (Operation, error) 
 		return Operation{}, err
 	}
 
-	op.ETag = shape.Responses["2XX"].Headers["ETag"].Ref == "#/components/headers/"+etagName
+	status, success, err := readSuccess(path, method, shape.Responses)
+	if err != nil {
+		return Operation{}, err
+	}
+
+	op.Status = status
+	op.ETag = success.Headers["ETag"].Ref == "#/components/headers/"+etagName
 
 	return op, nil
+}
+
+// readSuccess returns the success status and the success answer of an
+// operation. The key is 2XX or a status from 200 to 299, and an operation
+// has exactly one. The status of 2XX is zero.
+func readSuccess(path, method string, responses map[string]responseShape) (int, responseShape, error) {
+	var (
+		status  int
+		success responseShape
+		found   bool
+	)
+
+	for key, response := range responses {
+		if key == "default" {
+			continue
+		}
+
+		code := 0
+
+		if key != "2XX" {
+			n, err := strconv.Atoi(key)
+			if err != nil || n < http.StatusOK || n >= http.StatusMultipleChoices {
+				return 0, responseShape{}, fmt.Errorf(
+					"%w: %s %s has the response key %q", ErrInvalidDocument, strings.ToUpper(method), path, key,
+				)
+			}
+
+			code = n
+		}
+
+		if found {
+			return 0, responseShape{}, fmt.Errorf(
+				"%w: %s %s has more than one success response", ErrInvalidDocument, strings.ToUpper(method), path,
+			)
+		}
+
+		status, success, found = code, response, true
+	}
+
+	if !found {
+		return 0, responseShape{}, fmt.Errorf(
+			"%w: %s %s has no success response", ErrInvalidDocument, strings.ToUpper(method), path,
+		)
+	}
+
+	return status, success, nil
 }
 
 // readActions sets the actions and their object kinds, in the order of the

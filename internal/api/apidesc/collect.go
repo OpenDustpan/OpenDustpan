@@ -2,6 +2,7 @@ package apidesc
 
 import (
 	"maps"
+	"net/http"
 	"slices"
 	"strings"
 )
@@ -33,6 +34,12 @@ type Label struct {
 	Object string
 	// Query lists the query parameters that the route reads.
 	Query []QueryParam
+	// Status is the status code of the success answer. Zero means the default
+	// of the body: 200 for a typed answer and 204 for an answer with no body.
+	Status int
+	// AnyStatus is true when the route has more than one success status.
+	// The description then gives the key 2XX.
+	AnyStatus bool
 	// Bodies names the body of the request and the body of the success
 	// answer.
 	Bodies *Bodies
@@ -43,8 +50,26 @@ type Label struct {
 func Name(id string, tags ...string) Label {
 	return Label{
 		ID: id, Tags: tags, IdempotencyKey: false, IfMatch: false, IfMatchRequired: false, ETag: false,
-		Object: "", Query: nil, Bodies: nil,
+		Object: "", Query: nil, Status: 0, AnyStatus: false, Bodies: nil,
 	}
+}
+
+// WithStatus returns the label for a route whose success answer has a status
+// other than the default of its body (200 with a body, 204 without one), for
+// example 201 for a route that creates an object.
+func (l Label) WithStatus(status int) Label {
+	l.Status = status
+
+	return l
+}
+
+// WithAnyStatus returns the label for a route that has more than one success
+// status, for example 201 for the first write of an object and 200 for a
+// replacement. The description gives the key 2XX for it.
+func (l Label) WithAnyStatus() Label {
+	l.AnyStatus = true
+
+	return l
 }
 
 // On returns the label for a route whose actions apply to an object of the
@@ -103,6 +128,21 @@ func (l Label) WithETag() Label {
 	l.ETag = true
 
 	return l
+}
+
+// status returns the success status of the label: zero for any 2xx status,
+// the explicit status, or the default of the body.
+func (l Label) status() int {
+	switch {
+	case l.AnyStatus:
+		return 0
+	case l.Status != 0:
+		return l.Status
+	case l.Bodies != nil && l.Bodies.Response.kind == bodyNone:
+		return http.StatusNoContent
+	default:
+		return http.StatusOK
+	}
 }
 
 // Row is what an adapter knows of one route: the fields that every adapter
@@ -179,6 +219,7 @@ func Collect(rows []Row, labels map[string]Label) []Operation {
 			IfMatch:         label.IfMatch,
 			IfMatchRequired: label.IfMatchRequired,
 			ETag:            label.ETag,
+			Status:          label.status(),
 			Query:           sortedQuery(label.Query),
 			Bodies:          copyBodies(label.Bodies),
 		})

@@ -57,6 +57,7 @@ var operationLabels = map[string]apidesc.Label{
 			"ListCollectionsResponse", apidesc.Named[collectionEntry]("Collection"),
 		)),
 	apidesc.Pattern(http.MethodPost, namespacePath+"/collections"): apidesc.Name("createCollection", tagCollections).
+		WithStatus(http.StatusCreated).
 		On(apidesc.KindNamespace).
 		WithBodies(apidesc.Typed[createCollectionRequest]("CreateCollectionRequest"), collectionBody),
 	apidesc.Pattern(http.MethodGet, collectionPath): apidesc.Name("getCollection", tagCollections).
@@ -95,6 +96,7 @@ var operationLabels = map[string]apidesc.Label{
 	).On(apidesc.KindNamespace).WithBodies(apidesc.NoBody, apidesc.NoBody),
 
 	apidesc.Pattern(http.MethodPost, namespacePath+"/views"): apidesc.Name("createView", tagViews).WithKey().
+		WithStatus(http.StatusCreated).
 		On(apidesc.KindNamespace).
 		WithBodies(apidesc.Typed[createViewBody]("CreateViewRequest", viewNames...), viewBody),
 	apidesc.Pattern(http.MethodGet, namespacePath+"/views"): apidesc.Name("listViews", tagViews).

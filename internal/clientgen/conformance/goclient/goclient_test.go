@@ -36,7 +36,7 @@ func TestGenerateIsDeterministic(t *testing.T) {
 		t.Fatalf("generate again: %v", err)
 	}
 
-	if first.ClientVersion != "0.1.0" {
+	if first.ClientVersion != "0.2.0" {
 		t.Errorf("the client takes the major and minor version of the description: %s", first.ClientVersion)
 	}
 

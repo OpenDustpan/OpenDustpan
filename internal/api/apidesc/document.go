@@ -8,13 +8,14 @@ import (
 	"maps"
 	"net/http"
 	"slices"
+	"strconv"
 	"strings"
 )
 
 // DocumentVersion is the version of the description: info.version. It is not
 // the version of a build. It changes when the description changes. It is
 // valid in SemVer and in PEP 440, so each SDK can carry it.
-const DocumentVersion = "0.1.0"
+const DocumentVersion = "0.2.0"
 
 // OpenAPIVersion is the version of the OpenAPI format. The document uses the
 // part of 3.1.0 that maps one to one to 3.0.3: a nullable type is
@@ -319,7 +320,7 @@ func operationObject(op Operation) object {
 		"tags":        stringsAsAny(op.Tags),
 		actionsKey:    actionList(op),
 		"responses": object{
-			"2XX": success,
+			successKey(op.Status): success,
 			"default": object{
 				keyDescription: "The request failed.",
 				keyContent:     object{mediaJSON: object{keySchema: object{keyRef: refSchemas + errorSchema}}},
@@ -341,6 +342,16 @@ func operationObject(op Operation) object {
 	}
 
 	return out
+}
+
+// successKey returns the key of the success answer: the exact status, or 2XX
+// for an operation with more than one success status.
+func successKey(status int) string {
+	if status == 0 {
+		return "2XX"
+	}
+
+	return strconv.Itoa(status)
 }
 
 // requestBody returns the body of the request of a method that sends one, or

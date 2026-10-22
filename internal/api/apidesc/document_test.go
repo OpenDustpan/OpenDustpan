@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"net/http"
 	"regexp"
 	"slices"
 	"strings"
@@ -22,16 +23,18 @@ var pep440 = regexp.MustCompile(`^(0|[1-9]\d*)(\.(0|[1-9]\d*))*$`)
 // sampleOperations returns a list that uses every feature of the document.
 func sampleOperations() []apidesc.Operation {
 	list := op("GET", "/api/dustpan/v1/namespaces/{namespace}/things", "thing:read")
-	list.ID, list.Tags = "listThings", []string{"things"}
+	list.ID, list.Tags, list.Status = "listThings", []string{"things"}, http.StatusOK
 
 	create := op("POST", "/api/dustpan/v1/namespaces/{namespace}/things", "thing:write")
 	create.ID, create.Tags, create.IdempotencyKey, create.ETag = "createThing", []string{"things"}, true, true
+	create.Status = http.StatusCreated
 
 	update := op("PATCH", "/api/dustpan/v1/namespaces/{namespace}/things/{thing_id}", "thing:write")
 	update.ID, update.Tags, update.IfMatch, update.ETag = "updateThing", []string{"things", "extra"}, true, true
 
 	remove := op("DELETE", "/api/dustpan/v1/namespaces/{namespace}/things/{thing_id}", "thing:delete")
 	remove.ID, remove.Tags, remove.IfMatchRequired = "deleteThing", []string{"things"}, true
+	remove.Status = http.StatusNoContent
 
 	open := publicOp("/api/dustpan/v1/openapi.json")
 	open.ID, open.Tags = "getApiDescription", []string{"description"}
@@ -121,6 +124,33 @@ func TestBuildRoundTrips(t *testing.T) {
 	}
 }
 
+func TestBuildWritesTheExactSuccessKey(t *testing.T) {
+	t.Parallel()
+
+	doc, err := apidesc.Build(sampleOperations())
+	if err != nil {
+		t.Fatalf("Build() = %v", err)
+	}
+
+	built := decodedBytes(t, doc)
+	want := map[string]string{
+		"/api/dustpan/v1/namespaces/{namespace}/things get":               "200",
+		"/api/dustpan/v1/namespaces/{namespace}/things post":              "201",
+		"/api/dustpan/v1/namespaces/{namespace}/things/{thing_id} patch":  "2XX",
+		"/api/dustpan/v1/namespaces/{namespace}/things/{thing_id} delete": "204",
+	}
+
+	for key, wantKey := range want {
+		path, method, _ := strings.Cut(key, " ")
+
+		responses := member[map[string]any](t, built, "paths", path, method, "responses")
+
+		if _, ok := responses[wantKey]; !ok || len(responses) != 2 {
+			t.Errorf("%s: responses = %v, want the keys %s and default", key, responses, wantKey)
+		}
+	}
+}
+
 func TestBuildRefusesWhatValidateRefuses(t *testing.T) {
 	t.Parallel()
 
@@ -165,9 +195,16 @@ func TestDocumentVersions(t *testing.T) {
 func decoded(t *testing.T) map[string]any {
 	t.Helper()
 
+	return decodedBytes(t, apidesc.Document())
+}
+
+// decodedBytes returns the document in raw as a JSON value.
+func decodedBytes(t *testing.T, raw []byte) map[string]any {
+	t.Helper()
+
 	var doc map[string]any
-	if err := json.Unmarshal(apidesc.Document(), &doc); err != nil {
-		t.Fatalf("the checked-in document is not JSON: %v", err)
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		t.Fatalf("the document is not JSON: %v", err)
 	}
 
 	return doc
@@ -625,11 +662,14 @@ func TestReadFailsClosed(t *testing.T) {
 	}
 
 	for name, doc := range map[string][]byte{
-		"empty":                     nil,
-		"not JSON":                  []byte("<xml/>"),
-		"truncate":                  good[:len(good)/2],
-		"other format version":      bytes.Replace(good, []byte(`"3.1.0"`), []byte(`"3.0.3"`), 1),
-		"other description version": bytes.Replace(good, []byte(`"`+apidesc.DocumentVersion+`"`), []byte(`"9.9.9"`), 1),
+		"empty":                      nil,
+		"not JSON":                   []byte("<xml/>"),
+		"truncate":                   good[:len(good)/2],
+		"other format version":       bytes.Replace(good, []byte(`"3.1.0"`), []byte(`"3.0.3"`), 1),
+		"other description version":  bytes.Replace(good, []byte(`"`+apidesc.DocumentVersion+`"`), []byte(`"9.9.9"`), 1),
+		"success status outside 2xx": bytes.Replace(good, []byte(`"200": {`), []byte(`"302": {`), 1),
+		"two success answers":        bytes.Replace(good, []byte(`"default": {`), []byte(`"201": {`), 1),
+		"no success answer":          bytes.Replace(good, []byte(`"200": {`), []byte(`"default": {`), 1),
 	} {
 		ops, readErr := apidesc.Read(doc)
 		if !errors.Is(readErr, apidesc.ErrInvalidDocument) || ops != nil {

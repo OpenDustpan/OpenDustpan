@@ -29,7 +29,7 @@ namespace, no setting and no secret.
 | Part | Value |
 | --- | --- |
 | `openapi` | `3.1.0` |
-| `info.version` | The version of the description, for example `0.1.0`. It is not the version of the server. It changes when the description changes. It is valid as a SemVer version and as a PEP 440 version. |
+| `info.version` | The version of the description, for example `0.2.0`. It is not the version of the server. It changes when the description changes. It is valid as a SemVer version and as a PEP 440 version. |
 | `servers` | One relative server, `/` |
 
 The document uses the part of OpenAPI 3.1.0 that maps one to one to 3.0.3, so
@@ -54,7 +54,7 @@ Each operation has these members:
 | `x-dustpan-actions` | The actions that the route declares, each with the kind of the object that it applies to, for example `{"action": "unit:lock", "object": "collection"}`. The kind is `namespace`, `unit`, `collection`, `caller` or `server`. The list is empty for a route that needs no sign-in. |
 | `parameters` | One path parameter for each wildcard of the path. One query parameter for each query value that the route reads. A reference to a shared header parameter when the route takes the header. |
 | `requestBody` | A reference to the schema of the body, for a route that reads a JSON body. A `PATCH` takes `application/merge-patch+json`. A route that reads no body has no `requestBody`. |
-| `responses` | `2XX` for success, with a reference to the schema of the answer when the answer has a body, and `default` for an error |
+| `responses` | The exact status code of the success answer, for example `200`, `201`, `202` or `204`. It has a reference to the schema of the answer when the answer has a body. The key `default` is for an error. A route with two success codes has the key `2XX`. An example is `201` for a first write and `200` for a replacement. A `204` answer has no body. |
 | `security` | `[]` for a route that needs no sign-in. A route that needs sign-in has no `security` member and uses the default. |
 
 The actions are those that the route declares. A handler can check more, for
@@ -138,7 +138,7 @@ reads them as they are. They are renamed in a later version of the API.
 | `components.parameters.IdempotencyKey` | The `Idempotency-Key` request header: a string of 1 to 255 printable ASCII characters. A route that takes it refers to this parameter. |
 | `components.parameters.IfMatch` | The `If-Match` request header: the `ETag` of the version that the request replaces. A version that does not match answers 412. |
 | `components.parameters.IfMatchRequired` | The same header for a route that answers 428 without it. The parameter has `required: true`. |
-| `components.headers.ETag` | The `ETag` answer header. A route that sends it declares it in its `2XX` answer. |
+| `components.headers.ETag` | The `ETag` answer header. A route that sends it declares it in its success answer. |
 | `components.schemas.ErrorResponse` | The body of an error: `code` (the HTTP status), `message`, and the optional `errorCode` and `errorArgs` |
 
 ## Values that can grow

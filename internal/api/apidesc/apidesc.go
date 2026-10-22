@@ -69,6 +69,11 @@ type Operation struct {
 	// Query lists the query parameters that the route reads. A handler gets
 	// the value of a declared name only, through QueryOf.
 	Query []QueryParam
+	// Status is the status code of the success answer, for example 200 or
+	// 204. Zero means that the route has more than one success status, for
+	// example 201 for a first write and 200 for a replacement, and the
+	// description gives the key 2XX.
+	Status int
 	// Bodies names the body of the request and the body of the success
 	// answer. It is nil for a route that names none, and Build refuses that.
 	Bodies *Bodies
@@ -90,6 +95,10 @@ func (o Operation) Validate() error {
 	}
 
 	if err := validateTags(o); err != nil {
+		return err
+	}
+
+	if err := validateStatus(o); err != nil {
 		return err
 	}
 
@@ -116,6 +125,24 @@ func (o Operation) Validate() error {
 	}
 
 	return validateObjects(o)
+}
+
+// validateStatus refuses a success status outside 200 to 299, and a 204 for
+// a route that names a body in its answer.
+func validateStatus(o Operation) error {
+	if o.Status != 0 && (o.Status < http.StatusOK || o.Status >= http.StatusMultipleChoices) {
+		return fmt.Errorf(
+			"%w: success status %d of %s %s is not a 2xx status", ErrInvalidOperation, o.Status, o.Method, o.Path,
+		)
+	}
+
+	if o.Status == http.StatusNoContent && o.bodies().Response.kind == bodyTyped {
+		return fmt.Errorf(
+			"%w: %s %s answers 204 and names a body for the answer", ErrInvalidOperation, o.Method, o.Path,
+		)
+	}
+
+	return nil
 }
 
 // validateObjects refuses an action without an object kind, an object kind
@@ -427,6 +454,7 @@ func sameOperation(a, b Operation) bool {
 	return a.ID == b.ID &&
 		a.Path == b.Path &&
 		a.Public == b.Public &&
+		a.Status == b.Status &&
 		a.IdempotencyKey == b.IdempotencyKey &&
 		a.IfMatch == b.IfMatch &&
 		a.IfMatchRequired == b.IfMatchRequired &&

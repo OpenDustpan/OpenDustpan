@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -234,7 +235,16 @@ func checkOperationBodies(t *testing.T, op apidesc.Operation, described descript
 
 	where := op.Method + " " + op.Path
 
-	response := described.Responses["2XX"].Content[mediaJSON]
+	key := "2XX"
+	if op.Status != 0 {
+		key = strconv.Itoa(op.Status)
+	}
+
+	if _, ok := described.Responses[key]; !ok {
+		t.Errorf("%s: the description has no answer with the key %s", where, key)
+	}
+
+	response := described.Responses[key].Content[mediaJSON]
 	if hasSchema := len(response.Schema) > 0; hasSchema == op.Bodies.Response.IsNone() {
 		t.Errorf("%s: answer schema present %v, NoBody %v", where, hasSchema, op.Bodies.Response.IsNone())
 	}

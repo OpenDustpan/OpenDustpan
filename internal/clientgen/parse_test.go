@@ -106,6 +106,25 @@ func checkBaseOperation(t *testing.T, op model.Operation) {
 	}
 }
 
+// TestParseReadsTheExactSuccessStatus checks that an exact success key gives
+// its status, and that the key 2XX gives zero.
+func TestParseReadsTheExactSuccessStatus(t *testing.T) {
+	t.Parallel()
+
+	for key, want := range map[string]int{"2XX": 0, "200": 200, "201": 201, "202": 202, "204": 204} {
+		doc := change(t, `"2XX": {"description": "ok", "content"`, `"`+key+`": {"description": "ok", "content"`)
+
+		api, err := clientgen.NewParser().Parse(doc)
+		if err != nil {
+			t.Fatalf("%s: parse: %v", key, err)
+		}
+
+		if got := api.Operations[0].Result.Status; got != want {
+			t.Errorf("%s: status = %d, want %d", key, got, want)
+		}
+	}
+}
+
 // TestParseRefuses checks that a construct outside the subset, a bad name or a
 // broken rule gives the right error and names the place.
 func TestParseRefuses(t *testing.T) {
