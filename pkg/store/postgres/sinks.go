@@ -269,20 +269,30 @@ func writeSinkSecret(ctx context.Context, q *db.Queries, p secretPlace) error {
 
 // SinkSecrets implements notify.SinkStore.
 func (k sinks) SinkSecrets(ctx context.Context, scope namespace.Name, id string) ([]notify.SealedSecret, error) {
-	row, err := k.s.queries.GetNotificationSink(ctx, id)
-	if errors.Is(err, pgx.ErrNoRows) || err == nil && row.Namespace != scope.String() {
-		return nil, fmt.Errorf("secrets of sink %s: %w", id, notify.ErrNotFound)
-	}
+	var rows []db.ListNotificationSinkSecretsRow
 
-	if err != nil {
-		return nil, fmt.Errorf("select sink: %w", err)
-	}
+	// One snapshot, so the sink and its secrets come from one state.
+	err := k.s.inSnapshotTx(ctx, func(q *db.Queries) error {
+		row, err := q.GetNotificationSink(ctx, id)
+		if errors.Is(err, pgx.ErrNoRows) || err == nil && row.Namespace != scope.String() {
+			return fmt.Errorf("secrets of sink %s: %w", id, notify.ErrNotFound)
+		}
 
-	rows, err := k.s.queries.ListNotificationSinkSecrets(ctx, db.ListNotificationSinkSecretsParams{
-		Namespace: scope.String(), SinkID: id,
+		if err != nil {
+			return fmt.Errorf("select sink: %w", err)
+		}
+
+		rows, err = q.ListNotificationSinkSecrets(ctx, db.ListNotificationSinkSecretsParams{
+			Namespace: scope.String(), SinkID: id,
+		})
+		if err != nil {
+			return fmt.Errorf("select sink secrets: %w", err)
+		}
+
+		return nil
 	})
 	if err != nil {
-		return nil, fmt.Errorf("select sink secrets: %w", err)
+		return nil, err
 	}
 
 	out := make([]notify.SealedSecret, 0, len(rows))
@@ -338,14 +348,29 @@ func (k sinks) DeleteSink(ctx context.Context, id string, fence namespace.Fence,
 
 // Sinks implements notify.SinkStore. A row that fails its checks is left out.
 func (k sinks) Sinks(ctx context.Context, scope namespace.Name) ([]notify.Sink, error) {
-	rows, err := k.s.queries.ListNotificationSinks(ctx, scope.String())
-	if err != nil {
-		return nil, fmt.Errorf("select sinks: %w", err)
-	}
+	var (
+		rows    []db.ListNotificationSinksRow
+		refRows []db.ListNotificationSinkRefsRow
+	)
 
-	refRows, err := k.s.queries.ListNotificationSinkRefs(ctx, scope.String())
+	// One snapshot, so the sinks and their secret refs come from one state.
+	err := k.s.inSnapshotTx(ctx, func(q *db.Queries) error {
+		var err error
+
+		rows, err = q.ListNotificationSinks(ctx, scope.String())
+		if err != nil {
+			return fmt.Errorf("select sinks: %w", err)
+		}
+
+		refRows, err = q.ListNotificationSinkRefs(ctx, scope.String())
+		if err != nil {
+			return fmt.Errorf("select sink refs: %w", err)
+		}
+
+		return nil
+	})
 	if err != nil {
-		return nil, fmt.Errorf("select sink refs: %w", err)
+		return nil, err
 	}
 
 	refs := make(map[string][]string, len(rows))

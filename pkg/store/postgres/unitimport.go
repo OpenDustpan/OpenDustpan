@@ -56,7 +56,23 @@ func (i *Imports) Create(
 
 // Get implements unitimport.Store.
 func (i *Imports) Get(ctx context.Context, ns namespace.Name, id string) (unitimport.Import, error) {
-	_, row, err := i.readImport(ctx, ns, id)
+	var out unitimport.Import
+
+	// One snapshot, so the statements of the read see one state.
+	err := i.store.inSnapshotTx(ctx, func(q *db.Queries) error {
+		var err error
+
+		out, err = getWith(ctx, q, ns, id)
+
+		return err
+	})
+
+	return out, err
+}
+
+// getWith is Get on the queries of one snapshot.
+func getWith(ctx context.Context, q *db.Queries, ns namespace.Name, id string) (unitimport.Import, error) {
+	_, row, err := readImport(ctx, q, ns, id)
 	if err != nil {
 		return unitimport.Import{}, err
 	}
@@ -66,7 +82,26 @@ func (i *Imports) Get(ctx context.Context, ns namespace.Name, id string) (unitim
 
 // List implements unitimport.Store.
 func (i *Imports) List(ctx context.Context, ns namespace.Name, f unitimport.Filter) ([]unitimport.Import, error) {
-	nsID, err := importNamespaceID(ctx, i.store.queries, ns)
+	var out []unitimport.Import
+
+	// One snapshot, so the statements of the read see one state.
+	err := i.store.inSnapshotTx(ctx, func(q *db.Queries) error {
+		var err error
+
+		out, err = listWith(ctx, q, ns, f)
+
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return out, nil
+}
+
+// listWith is List on the queries of one snapshot.
+func listWith(ctx context.Context, q *db.Queries, ns namespace.Name, f unitimport.Filter) ([]unitimport.Import, error) {
+	nsID, err := importNamespaceID(ctx, q, ns)
 	if errors.Is(err, unitimport.ErrNotFound) {
 		return []unitimport.Import{}, nil
 	}
@@ -75,7 +110,7 @@ func (i *Imports) List(ctx context.Context, ns namespace.Name, f unitimport.Filt
 		return nil, err
 	}
 
-	rows, err := i.store.queries.ListImports(ctx, nsID)
+	rows, err := q.ListImports(ctx, nsID)
 	if err != nil {
 		return nil, fmt.Errorf("select imports: %w", err)
 	}
@@ -247,12 +282,31 @@ func (i *Imports) PutUnits(
 
 // Units implements unitimport.UnitStore.
 func (i *Imports) Units(ctx context.Context, ns namespace.Name, id string) ([]unitimport.ImportUnit, error) {
-	nsID, _, err := i.readImport(ctx, ns, id)
+	var out []unitimport.ImportUnit
+
+	// One snapshot, so the statements of the read see one state.
+	err := i.store.inSnapshotTx(ctx, func(q *db.Queries) error {
+		var err error
+
+		out, err = unitsWith(ctx, q, ns, id)
+
+		return err
+	})
 	if err != nil {
 		return nil, err
 	}
 
-	rows, err := i.store.queries.ListImportUnits(ctx, db.ListImportUnitsParams{NamespaceID: nsID, ImportID: id})
+	return out, nil
+}
+
+// unitsWith is Units on the queries of one snapshot.
+func unitsWith(ctx context.Context, q *db.Queries, ns namespace.Name, id string) ([]unitimport.ImportUnit, error) {
+	nsID, _, err := readImport(ctx, q, ns, id)
+	if err != nil {
+		return nil, err
+	}
+
+	rows, err := q.ListImportUnits(ctx, db.ListImportUnitsParams{NamespaceID: nsID, ImportID: id})
 	if err != nil {
 		return nil, fmt.Errorf("select import units: %w", err)
 	}
@@ -273,12 +327,28 @@ func (i *Imports) Units(ctx context.Context, ns namespace.Name, id string) ([]un
 
 // Unit implements unitimport.UnitStore.
 func (i *Imports) Unit(ctx context.Context, ns namespace.Name, id, unitID string) (unitimport.ImportUnit, error) {
-	nsID, _, err := i.readImport(ctx, ns, id)
+	var out unitimport.ImportUnit
+
+	// One snapshot, so the statements of the read see one state.
+	err := i.store.inSnapshotTx(ctx, func(q *db.Queries) error {
+		var err error
+
+		out, err = unitWith(ctx, q, ns, id, unitID)
+
+		return err
+	})
+
+	return out, err
+}
+
+// unitWith is Unit on the queries of one snapshot.
+func unitWith(ctx context.Context, q *db.Queries, ns namespace.Name, id, unitID string) (unitimport.ImportUnit, error) {
+	nsID, _, err := readImport(ctx, q, ns, id)
 	if err != nil {
 		return unitimport.ImportUnit{}, err
 	}
 
-	row, err := findImportUnit(ctx, i.store.queries, nsID, unitimport.UnitKey{ImportID: id, UnitID: unitID})
+	row, err := findImportUnit(ctx, q, nsID, unitimport.UnitKey{ImportID: id, UnitID: unitID})
 	if err != nil {
 		return unitimport.ImportUnit{}, err
 	}
@@ -358,12 +428,36 @@ func (i *Imports) SetCounts(
 // import too, and wraps unitimport.ErrNotFound for a namespace that does not
 // exist.
 func (i *Imports) Ledger(ctx context.Context, ns namespace.Name, id, unitID string) ([]unitimport.LedgerRow, error) {
-	nsID, _, err := i.readImport(ctx, ns, id)
+	var out []unitimport.LedgerRow
+
+	// One snapshot, so the statements of the read see one state.
+	err := i.store.inSnapshotTx(ctx, func(q *db.Queries) error {
+		var err error
+
+		out, err = ledgerWith(ctx, q, ns, id, unitID)
+
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return out, nil
+}
+
+// ledgerWith is Ledger on the queries of one snapshot.
+func ledgerWith(
+	ctx context.Context,
+	q *db.Queries,
+	ns namespace.Name,
+	id, unitID string,
+) ([]unitimport.LedgerRow, error) {
+	nsID, _, err := readImport(ctx, q, ns, id)
 	if err != nil && !errors.Is(err, unitimport.ErrPurged) {
 		return nil, err
 	}
 
-	rows, err := i.store.queries.ListImportLedger(ctx, db.ListImportLedgerParams{
+	rows, err := q.ListImportLedger(ctx, db.ListImportLedgerParams{
 		NamespaceID: nsID, ImportID: id, ImportUnitID: unitID,
 	})
 	if err != nil {
@@ -378,14 +472,15 @@ func (i *Imports) Ledger(ctx context.Context, ns namespace.Name, id, unitID stri
 	return out, nil
 }
 
-// readImport resolves the namespace and the import in one read.
-func (i *Imports) readImport(ctx context.Context, ns namespace.Name, id string) (string, db.Import, error) {
-	nsID, err := importNamespaceID(ctx, i.store.queries, ns)
+// readImport resolves the namespace and the import with q, so a snapshot
+// transaction can read both.
+func readImport(ctx context.Context, q *db.Queries, ns namespace.Name, id string) (string, db.Import, error) {
+	nsID, err := importNamespaceID(ctx, q, ns)
 	if err != nil {
 		return "", db.Import{}, err
 	}
 
-	row, err := findImport(ctx, i.store.queries, nsID, id)
+	row, err := findImport(ctx, q, nsID, id)
 
 	return nsID, row, err
 }
