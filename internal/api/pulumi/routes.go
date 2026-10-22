@@ -49,11 +49,12 @@ type ObjectResolver func(w http.ResponseWriter, r *http.Request) (identity.Objec
 type RouteHandler func(w http.ResponseWriter, r *http.Request, p identity.Principal, obj identity.Object)
 
 // LeaseCall is the update that a lease route acts on, as the registration
-// wrapper read it from the request: the lease token with its raw text, the
-// stack and the update ID. A lease handler never parses them again.
+// wrapper read it from the request: the lease token, the stack and the update
+// ID. A lease handler never parses them again. The token redacts itself in
+// every format and log value, so a LeaseCall never shows the token; a handler
+// that must send the token back calls Token.Reveal.
 type LeaseCall struct {
 	Token token.Token
-	Raw   string
 	Ref   stack.Ref
 	ID    stack.UpdateID
 }
@@ -735,12 +736,12 @@ func (h *Handler) enforceLease(route Route) http.HandlerFunc {
 var errNoLeaseHandler = errors.New("lease route has no lease handler")
 
 // leaseCall parses the lease token and the update of a lease route. A
-// missing or malformed token answers 401 and a malformed update path 4xx,
-// without touching any store.
+// missing or malformed token answers 401 and a malformed update path 4xx.
+// leaseCall itself reads no store; the resolver of the route ran before it.
 func (h *Handler) leaseCall(w http.ResponseWriter, r *http.Request) (LeaseCall, bool) {
 	var none LeaseCall
 
-	tok, raw, ok := h.leaseToken(w, r)
+	tok, ok := h.leaseToken(w, r)
 	if !ok {
 		return none, false
 	}
@@ -750,7 +751,7 @@ func (h *Handler) leaseCall(w http.ResponseWriter, r *http.Request) (LeaseCall, 
 		return none, false
 	}
 
-	return LeaseCall{Token: tok, Raw: raw, Ref: ref, ID: id}, true
+	return LeaseCall{Token: tok, Ref: ref, ID: id}, true
 }
 
 // checkLeaseAddress verifies the lease of call, then checks the client
