@@ -19,6 +19,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/idempotency"
 	"opendustpan.org/opendustpan/pkg/identity"
+	coreinventory "opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/savedview"
@@ -413,7 +414,7 @@ func filterOfView(q savedview.Query) unitFilter {
 	}
 
 	if len(q.References) > 0 {
-		f.references = make(map[string]struct{}, len(q.References))
+		f.references = make(map[string]coreinventory.UnitName, len(q.References))
 	}
 
 	for _, ref := range q.References {
@@ -422,12 +423,12 @@ func filterOfView(q savedview.Query) unitFilter {
 		// nothing, so the filter fails closed.
 		obj, err := identity.ParseObject(ref)
 		if err != nil {
-			f.references[ref] = struct{}{}
+			f.references[ref] = coreinventory.UnitName{Tool: "", Name: ""}
 
 			continue
 		}
 
-		f.references[obj.String()] = struct{}{}
+		f.references[obj.String()] = unitNameOf(obj)
 	}
 
 	return f

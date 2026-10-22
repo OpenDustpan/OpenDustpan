@@ -35,6 +35,10 @@ import (
 // ErrMissingDependency reports a Config without a required dependency.
 var ErrMissingDependency = errors.New("missing dependency")
 
+// errUnitOrder reports a store page that is not in the order of the unit ID.
+// It is an internal error.
+var errUnitOrder = errors.New("store answered a unit out of order")
+
 // errMissingOrganization reports a list request without the organization
 // query value. classify maps it to the 400 response the console expects.
 var errMissingOrganization = errors.New("missing organization query parameter")
@@ -436,14 +440,7 @@ func (h *Handler) serveUnitList(
 		return
 	}
 
-	entries, err := h.units.ListUnits(ctx, ns)
-	if err != nil {
-		h.writeError(ctx, w, err)
-
-		return
-	}
-
-	units, next, err := h.readableUnits(ctx, p, entries, filter, page)
+	units, next, err := h.readableUnits(ctx, p, ns, filter, page)
 	if err != nil {
 		h.writeError(ctx, w, err)
 
@@ -458,49 +455,125 @@ func (h *Handler) serveUnitList(
 	h.writeJSON(ctx, w, http.StatusOK, resp)
 }
 
-// readableUnits returns one page of the wire entries of the units in entries
-// that pass the filter and that the caller may read (unit:read on the
-// reference), in the order of the unit ID. A denied unit is not in the result.
-// The second result is the ID of the last unit of the page when a later page
-// exists, else empty.
+// storePageGrowth is the factor by which each store page of the unit list
+// is larger than the one before.
+const storePageGrowth = 2
+
+// readableUnits returns one page of the wire entries of the units of ns that
+// pass the filter and that the caller may read (unit:read on the reference),
+// in the order of the unit ID. A denied unit is not in the result. The second
+// result is the ID of the last unit of the page when a later page exists,
+// else empty.
+//
+// The store reads the units in pages of the unit ID with the filter in its
+// query. A caller who may read every unit fills the page from the first
+// store page. For a caller who may read fewer units, the loop reads more
+// store pages, each one larger than the one before, until the page is full
+// or the namespace has no more units.
 func (h *Handler) readableUnits(
-	ctx context.Context, p identity.Principal, entries []coreinventory.Entry, filter unitFilter, page unitPage,
+	ctx context.Context, p identity.Principal, ns namespace.Name, filter unitFilter, page unitPage,
 ) ([]unitEntry, string, error) {
-	units := make([]unitEntry, 0, min(len(entries), page.size+1))
+	fill := unitFill{units: make([]unitEntry, 0, page.size+1), after: page.after, size: page.size}
 
-	sorted := sortedByUnitID(entries, func(e coreinventory.Entry) string { return e.UnitID })
+	q := filter.query(ns)
+	q.Limit = page.size + 1
 
-	for i := range sorted {
-		e := &sorted[i]
-		if page.after != "" && e.UnitID <= page.after {
-			continue
-		}
+	for {
+		q.After = fill.after
 
-		uobj, err := unitObject(*e)
+		batch, err := h.units.QueryUnits(ctx, q)
 		if err != nil {
-			return nil, "", err
+			return nil, "", fmt.Errorf("query units: %w", err)
 		}
 
-		if !filter.matches(*e, uobj) {
+		full, err := h.addReadable(ctx, p, filter, &fill, batch)
+
+		switch {
+		case err != nil:
+			return nil, "", err
+		case full:
+			return fill.units, fill.units[len(fill.units)-1].UnitID, nil
+		case len(batch) < q.PageLimit():
+			return fill.units, "", nil
+		}
+
+		q.Limit = min(storePageGrowth*q.Limit, coreinventory.MaxUnitQueryLimit)
+	}
+}
+
+// unitFill is one page of the unit list while the store pages fill it: the
+// wire entries so far, the ID of the last unit that the loop read, and the
+// page size.
+type unitFill struct {
+	units []unitEntry
+	after string
+	size  int
+}
+
+// addReadable appends to the page the wire entries of the units of batch
+// that readableUnit keeps, up to the page size, and moves the cursor of the
+// page to each unit that it reads. It returns true when the page is full and
+// batch holds one more readable unit, so a later page exists.
+func (h *Handler) addReadable(
+	ctx context.Context, p identity.Principal, filter unitFilter, fill *unitFill, batch []coreinventory.Entry,
+) (bool, error) {
+	for i := range batch {
+		e := &batch[i]
+
+		// Defense in depth: the store keeps only the units after the cursor.
+		// This check stays so that a store that answers a unit again cannot
+		// make the loop read the same page forever.
+		if e.UnitID <= fill.after {
+			return false, fmt.Errorf("%w: %q is not after %q", errUnitOrder, e.UnitID, fill.after)
+		}
+
+		fill.after = e.UnitID
+
+		keep, err := h.readableUnit(ctx, p, *e, filter)
+		if err != nil {
+			return false, err
+		}
+
+		if !keep {
 			continue
 		}
 
-		if err := h.authz.Authorize(ctx, p, identity.ActionUnitRead, uobj); err != nil {
-			if errors.Is(err, identity.ErrDenied) {
-				continue
-			}
-
-			return nil, "", fmt.Errorf("authorize %s: %w", identity.ActionUnitRead, err)
+		if len(fill.units) == fill.size {
+			return true, nil
 		}
 
-		if len(units) == page.size {
-			return units, units[len(units)-1].UnitID, nil
-		}
-
-		units = append(units, h.toUnitEntry(*e))
+		fill.units = append(fill.units, h.toUnitEntry(*e))
 	}
 
-	return units, "", nil
+	return false, nil
+}
+
+// readableUnit reports whether the unit e passes the filter and the caller
+// may read it (unit:read on the reference). A denial is not an error.
+func (h *Handler) readableUnit(
+	ctx context.Context, p identity.Principal, e coreinventory.Entry, filter unitFilter,
+) (bool, error) {
+	uobj, err := unitObject(e)
+	if err != nil {
+		return false, err
+	}
+
+	// Defense in depth: the store applies the filter in its query. This
+	// check stays so that a store that answers more units cannot add a unit
+	// that the filter does not select.
+	if !filter.matches(e, uobj) {
+		return false, nil
+	}
+
+	if err := h.authz.Authorize(ctx, p, identity.ActionUnitRead, uobj); err != nil {
+		if errors.Is(err, identity.ErrDenied) {
+			return false, nil
+		}
+
+		return false, fmt.Errorf("authorize %s: %w", identity.ActionUnitRead, err)
+	}
+
+	return true, nil
 }
 
 // unitObject maps one inventory entry to its tool-neutral unit reference. It

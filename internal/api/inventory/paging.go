@@ -1,7 +1,6 @@
 package inventory
 
 import (
-	"cmp"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
@@ -132,13 +131,4 @@ func decodePageToken(token, fingerprint string) (string, error) {
 	}
 
 	return w.After, nil
-}
-
-// sortedByUnitID returns a copy of units in the stable order of the unit list:
-// by unit ID.
-func sortedByUnitID[T any](units []T, id func(T) string) []T {
-	out := slices.Clone(units)
-	slices.SortFunc(out, func(a, b T) int { return cmp.Compare(id(a), id(b)) })
-
-	return out
 }
