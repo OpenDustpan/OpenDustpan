@@ -432,19 +432,7 @@ func (s *Store) RenameStack(
 			return confirmStackPresent(ctx, q, oldRef)
 		}
 
-		// A running update addresses the stack by its name. A rename under it
-		// would leave the update with a name that no stack has: its checkpoint
-		// saves would fail and the stack would stay locked by the update.
-		stackID, err := stackIDFor(ctx, q, oldRef)
-		if err != nil {
-			return err
-		}
-
-		if err := refuseRunningStack(ctx, q, stackID); err != nil {
-			return err
-		}
-
-		if err := rejectTakenName(ctx, q, oldRef, newName); err != nil {
+		if err := refuseRename(ctx, q, oldRef, newName); err != nil {
 			return err
 		}
 
@@ -489,6 +477,25 @@ func (s *Store) RenameStack(
 			unitWrite{unitID: row.ID, atMs: row.UpdatedAtMs, kind: inventory.ChangeRenamed},
 		)
 	})
+}
+
+// refuseRename returns ErrNotFound when no live stack has oldRef,
+// ErrUpdateConflict while a mutating update of the stack runs, and
+// ErrAlreadyExists when newName names a stack of the same project. A running
+// update addresses the stack by its name. A rename under it would leave the
+// update with a name that no stack has: its checkpoint saves would fail and
+// the stack would stay locked by the update.
+func refuseRename(ctx context.Context, q *db.Queries, oldRef stack.Ref, newName stack.Name) error {
+	stackID, err := stackIDFor(ctx, q, oldRef)
+	if err != nil {
+		return err
+	}
+
+	if runErr := refuseRunningStack(ctx, q, stackID); runErr != nil {
+		return runErr
+	}
+
+	return rejectTakenName(ctx, q, oldRef, newName)
 }
 
 // confirmStackPresent returns nil when ref exists and ErrNotFound otherwise.
