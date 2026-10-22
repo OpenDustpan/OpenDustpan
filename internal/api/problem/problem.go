@@ -5,8 +5,12 @@
 // rules: a 500 logs its status only, and a fenced write logs its wrap.
 //
 // Each API gives its own classifier for the errors of its domain. The
-// classifier runs first, so an API can answer a shared error in its own
-// words, for example a not-found that never tells that an object exists.
+// refusals of the credential of a request (a rate limit, no sign-in, a CSRF
+// or other-site session request) are answered first, so no classifier can
+// answer them in other words. The classifier runs next, before the other
+// shared classes, so an API can answer a shared error in its own words, for
+// example a not-found that never tells that an object exists. Writer.Problem
+// holds this order.
 package problem
 
 import (
