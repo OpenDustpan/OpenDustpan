@@ -183,26 +183,29 @@ func typeAndDecoder(t model.Type) (string, string, error) {
 	return typ, dec, nil
 }
 
-// knownFormats lists the formats that the validator of a kind checks. An
-// unknown kind has none, so that nothing passes for it.
-func knownFormats(kind model.TypeKind) []string {
+// knownFormats lists the formats that the validator of a kind checks. The
+// second result is false for a kind that the template set does not know; the
+// walk refuses that kind in its own check.
+func knownFormats(kind model.TypeKind) ([]string, bool) {
 	switch kind {
 	case model.TypeString:
-		return []string{"", "date-time"}
+		return []string{"", "date-time"}, true
 	case model.TypeInteger:
-		return []string{"", "int64"}
+		return []string{"", "int64"}, true
 	case model.TypeNumber:
-		return []string{"", "float", "double"}
+		return []string{"", "float", "double"}, true
 	case model.TypeBoolean, model.TypeArray, model.TypeMap, model.TypeRef, model.TypeAny:
-		return []string{""}
+		return []string{""}, true
 	default:
-		return nil
+		return nil, false
 	}
 }
 
-// checkFormat refuses a format that the validator of the kind does not check.
+// checkFormat refuses a format that the validator of a known kind does not
+// check.
 func checkFormat(t model.Type) error {
-	if !slices.Contains(knownFormats(t.Kind), t.Format) {
+	formats, known := knownFormats(t.Kind)
+	if known && !slices.Contains(formats, t.Format) {
 		return fmt.Errorf(
 			"%w: the TypeScript template set does not check the format %q of a type of kind %d",
 			clientgen.ErrUnsupported, t.Format, t.Kind,
