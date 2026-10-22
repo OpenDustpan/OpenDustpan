@@ -98,7 +98,8 @@ func NewReplayer(now func() time.Time, cliVersion string) *Replayer {
 // deployment that results to out. Each batch is a batch body (DecodeEntries),
 // in the order the update sent them; the entries are applied in that order,
 // batch by batch and in the order of each body, as the replayer of the CLI
-// does (ADR 43, decision 6.6). The bounds count the entries of all batches.
+// does: the server applies them in the order that they arrived, not in the
+// order of their sequence IDs. The bounds count the entries of all batches.
 //
 // The replay runs in three steps. First it reads the whole entry stream, and
 // applies each entry as it is read. Then the first pass reads the base for the
