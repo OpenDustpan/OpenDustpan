@@ -130,6 +130,10 @@ A manual lock is on one stack, one workspace, one collection or one namespace.
   that moment. One that leaves the collection is not covered any more.
 - A lock on a namespace covers each stack and workspace of the namespace, in a
   collection or not, and each one that someone creates later.
+- While a namespace has a lock, the server creates no OpenTofu workspace in it.
+  The first `LOCK` or `POST` of a new workspace answers 423, and the server
+  creates nothing. A job whose phase started before the lock can still create
+  its workspace, as it can still lock the workspaces that exist.
 - A stack or workspace can have its own lock, be in a locked collection and be in
   a locked namespace. The nearest lock shows first: its own lock, then the lock
   of its collection, then the lock of its namespace. Removing the nearest lock
