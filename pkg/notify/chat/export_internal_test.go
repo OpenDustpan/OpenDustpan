@@ -8,8 +8,8 @@ import (
 	"net/http/httptest"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/egress/egresshttp"
 	"opendustpan.org/opendustpan/pkg/egress"
-	"opendustpan.org/opendustpan/pkg/egress/egresshttp"
 )
 
 // errNotTransport reports a test server whose client has no *http.Transport.

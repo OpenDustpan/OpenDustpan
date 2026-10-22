@@ -259,6 +259,17 @@ _Avoid_: Recovery, load, import
 **Control table**:
 A table that a restore does not replace (ADR 72, decision 5). The live rows stay across the swap. The installation, backups, restores and durable operation tables are control tables. The claim tokens of durable operations only grow, and an older token from a backup would let a stale holder write.
 
+**Table list**:
+The one declaration of every built-in table: its name, class, columns, row order and the tables that a foreign key needs first (ADR 274). Backup, restore, portable backup and dev data read it. It lives in `internal/store/tables`. The format types of a backup stay in `pkg/backup`.
+_Avoid_: Table registry (a registry is also the private registry)
+
+**Store runner**:
+The part of a SQL dialect that opens a read and a write on its database (`sqlstore.Runner`, ADR 274). It holds the one writer of SQLite and the maintenance gate. It is not a runner of a job (see Runner).
+_Avoid_: Runner (alone: a runner is also the process that claims work for a pool)
+
+**Maintenance gate**:
+The lock that a write holds while it runs, so that entering maintenance mode waits for each write in flight (ADR 274). Each dialect holds it in its own way. PostgreSQL uses an advisory lock.
+
 **Deleted unit**:
 A unit after a delete through its tool (ADR 47). It leaves every list and its name is free at once. OpenDustpan keeps its state, history, secrets and grants until a purge. The inventory API lists the deleted units of a namespace, and a restore of a deleted unit brings one back with its stable ID.
 _Avoid_: Tombstone (that is the shred record of a purged unit), trashed unit, archived unit
@@ -1337,8 +1348,8 @@ _Avoid_: Grace period, undo window
 ### Context, graph and Sweep
 
 **Sweep**:
-The feature that finds unmanaged resources, and one run of it (ADR 163). A sweep is a cloud sweep or a state check. The console shows both kinds together. As the name of the feature, write Sweep. The Go names of `pkg/unmanaged` keep "scan", for example `Scan` and `ScanStore`, because they are internal.
-_Avoid_: Scan (except in the Go names of `pkg/unmanaged`), discovery, crawl, sweep for anything but the Sweep feature (write "retention expiry" or "orphan cleanup")
+The feature that finds unmanaged resources, and one run of it (ADR 163). A sweep is a cloud sweep or a state check. The console shows both kinds together. As the name of the feature, write Sweep. The Go names of `internal/unmanaged` keep "scan", for example `Scan` and `ScanStore`, because they are internal.
+_Avoid_: Scan (except in the Go names of `internal/unmanaged`), discovery, crawl, sweep for anything but the Sweep feature (write "retention expiry" or "orphan cleanup")
 
 **Cloud sweep**:
 A sweep that reads the cloud on a runner of the team, never in the server (ADR 164). A runner of a pool of the purpose `sweeps` claims the sweep and runs the command of its sweep target. The command runs with the workload identity of the runner host. The runner uploads a sweep report, and the server matches it against the resource index. Only a cloud sweep can find a resource that is not in any unit. A sweep is not a job, and the server holds no cloud credential for it.
