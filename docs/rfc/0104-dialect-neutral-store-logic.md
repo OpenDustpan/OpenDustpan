@@ -1,13 +1,16 @@
 ---
 rfc: 104
 title: Dialect-neutral store logic, so that a third SQL dialect can come later
-status: discussing
+status: decided
 created: 2026-10-22
+adr: 274
 ---
 
 # RFC 104. Dialect-neutral store logic, so that a third SQL dialect can come later
 
-Status: discussing. This RFC answers finding 3 of the architecture review. The
+Status: decided. [ADR 274](../adr/0274-dialect-neutral-store-logic.md) records
+the decisions. The owner accepted all seven recommendations of this RFC on
+22 October 2026. This RFC answers finding 3 of the architecture review. The
 owner gave the direction of that finding. This RFC does not reopen it:
 
 - SQLite is a production adapter. More SQL dialects come later, so a third
@@ -973,4 +976,6 @@ the reason in one line.
 
 ## Outcome
 
-Empty until the owner accepts or drops this RFC.
+The owner accepted answer A to questions 1 to 6 and answer B to question 7 on
+22 October 2026. [ADR 274](../adr/0274-dialect-neutral-store-logic.md) records
+them.
