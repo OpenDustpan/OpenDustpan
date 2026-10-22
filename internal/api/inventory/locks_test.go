@@ -204,7 +204,7 @@ func (m *memAudit) denied() []audit.Entry {
 
 // lockFixture is a handler with the lock routes over an in-memory store.
 type lockFixture struct {
-	handler *apiinventory.Handler
+	handler testHandler
 	store   *memLocks
 	audit   *memAudit
 }
@@ -230,7 +230,7 @@ func newLockFixture(t *testing.T, authz identity.Authorizer) lockFixture {
 		t.Fatalf("manual lock service: %v", err)
 	}
 
-	handler, err := apiinventory.NewHandler(apiinventory.Config{
+	handler, err := newCheckedHandler(t, apiinventory.Config{
 		Views:          nil,
 		Namespaces:     nsSvc,
 		Units:          &memReader{entries: map[namespace.Name][]coreinventory.Entry{}, err: nil},

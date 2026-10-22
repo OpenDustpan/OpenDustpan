@@ -244,7 +244,7 @@ func (f storeMoveFixture) move(t *testing.T, authz identity.Authorizer) *httptes
 		t.Fatalf("manual lock service: %v", err)
 	}
 
-	handler, err := apiinventory.NewHandler(apiinventory.Config{
+	handler, err := newCheckedHandler(t, apiinventory.Config{
 		Views: nil,
 		Locks: locks, PublicURL: "", Namespaces: nsSvc,
 		Units:       &memReader{entries: map[namespace.Name][]coreinventory.Entry{}, err: nil},

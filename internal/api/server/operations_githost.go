@@ -19,7 +19,7 @@ var gitHostOperationLabels = map[string]apidesc.Label{
 		On(apidesc.KindServer).
 		WithBodies(apidesc.NoBody, gitHostAppSchema),
 	apidesc.Pattern(http.MethodPut, gitHostAppPath): apidesc.Name("putGitHostApp", tagGitHost).
-		WithAnyStatus().
+		WithStatus(http.StatusOK, http.StatusCreated).
 		WithKey().WithIfMatch().WithETag().
 		On(apidesc.KindServer).
 		WithBodies(apidesc.Typed[gitHostAppRequest]("PutGitHostAppRequest"), gitHostAppSchema),
@@ -37,7 +37,7 @@ var gitHostOperationLabels = map[string]apidesc.Label{
 		On(apidesc.KindServer).
 		WithBodies(apidesc.NoBody, gitHostInstallationSchema),
 	apidesc.Pattern(http.MethodPut, gitHostInstallationPath): apidesc.Name("putGitHostInstallation", tagGitHost).
-		WithAnyStatus().
+		WithStatus(http.StatusOK, http.StatusCreated).
 		WithKey().WithIfMatch().WithETag().
 		On(apidesc.KindServer).
 		WithBodies(apidesc.Typed[gitHostInstallationRequest]("PutGitHostInstallationRequest"), gitHostInstallationSchema),

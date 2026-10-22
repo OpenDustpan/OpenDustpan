@@ -54,7 +54,7 @@ Each operation has these members:
 | `x-dustpan-actions` | The actions that the route declares, each with the kind of the object that it applies to, for example `{"action": "unit:lock", "object": "collection"}`. The kind is `namespace`, `unit`, `collection`, `caller` or `server`. The list is empty for a route that needs no sign-in. |
 | `parameters` | One path parameter for each wildcard of the path. One query parameter for each query value that the route reads. A reference to a shared header parameter when the route takes the header. |
 | `requestBody` | A reference to the schema of the body, for a route that reads a JSON body. A `PATCH` takes `application/merge-patch+json`. A route that reads no body has no `requestBody`. |
-| `responses` | The exact status code of the success answer, for example `200`, `201`, `202` or `204`. It has a reference to the schema of the answer when the answer has a body. The key `default` is for an error. A route with two success codes has the key `2XX`. An example is `201` for a first write and `200` for a replacement. A `204` answer has no body. |
+| `responses` | One key for each success status code that the route answers, for example `200`, `201`, `202` or `204`. Most routes have one key. A route that answers `201` for a first write and `200` for a replacement has both keys. Each success answer has a reference to the schema of the answer when the answer has a body. A `204` answer has no body. The description never has the key `2XX` or another range. The key `default` is for an error. |
 | `security` | `[]` for a route that needs no sign-in. A route that needs sign-in has no `security` member and uses the default. |
 
 The actions are those that the route declares. A handler can check more, for

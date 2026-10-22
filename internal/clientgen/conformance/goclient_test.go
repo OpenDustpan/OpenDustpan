@@ -40,6 +40,7 @@ func requiredCases() []string {
 		"errors/response-with-wrong-type-is-rejected",
 		"errors/response-without-required-field-is-rejected",
 		"errors/response-with-null-required-is-rejected",
+		"errors/success-status-outside-the-description-is-rejected",
 	}
 }
 
