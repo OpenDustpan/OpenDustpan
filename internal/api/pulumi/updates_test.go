@@ -3244,7 +3244,7 @@ func bodyWithDeployment(member, versionMember, deployment string) string {
 }
 
 // TestImportRefusesADeploymentThatIsNotAnObject proves that the import route
-// answers 400 in the error shape of the Pulumi API for a deployment that the CLI
+// answers 400 in the error shape of the Pulumi Cloud-compatible API for a deployment that the CLI
 // cannot read, and that the stack keeps the checkpoint that it had.
 func TestImportRefusesADeploymentThatIsNotAnObject(t *testing.T) {
 	t.Parallel()
