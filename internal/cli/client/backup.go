@@ -47,6 +47,12 @@ const (
 	// reads: 1 MiB, far above the small JSON documents the routes answer. A
 	// hostile or broken server cannot grow the client without bound.
 	MaxClientBodyBytes = 1 << 20
+	// MaxManifestAnswerBytes caps the answer of a read that embeds the full
+	// backup manifest. The manifest lists each blob of the backup with its
+	// key, size and checksum, about 200 bytes for each blob, and the server
+	// sets no limit on the blob count. 64 MiB holds about 300,000 blobs and
+	// still stops a hostile or broken server.
+	MaxManifestAnswerBytes = 64 << 20
 )
 
 // Sentinel errors of the backup subcommand. Each error text names what
@@ -66,7 +72,8 @@ var (
 	ErrBackupStart = errors.New("start backup failed")
 	// ErrBackupRead reports a backup row that never arrived.
 	ErrBackupRead = errors.New("read backup failed")
-	// ErrResponseTooLarge reports a server answer above MaxClientBodyBytes.
+	// ErrResponseTooLarge reports a server answer above the cap of the read:
+	// MaxClientBodyBytes, or MaxManifestAnswerBytes for a manifest.
 	// The body may come from a hostile or broken server, so the client
 	// refuses it instead of growing without bound.
 	ErrResponseTooLarge = errors.New("server answered more data than the client reads")
@@ -301,7 +308,7 @@ func startBackup(ctx context.Context, client *http.Client, server, token string)
 
 	var doc backupStartResponse
 
-	if err := decodeCappedJSON(resp.Body, &doc); err != nil || strings.TrimSpace(doc.ID) == "" {
+	if err := decodeCappedJSON(resp.Body, MaxClientBodyBytes, &doc); err != nil || strings.TrimSpace(doc.ID) == "" {
 		return "", fmt.Errorf(
 			"%w: the server answered no backup ID: check the server log and "+rerunHelp,
 			ErrBackupStart,
@@ -358,7 +365,7 @@ func readBackup(
 
 	var doc BackupStatusResponse
 
-	if err := decodeCappedJSON(resp.Body, &doc); err != nil {
+	if err := decodeCappedJSON(resp.Body, MaxManifestAnswerBytes, &doc); err != nil {
 		return BackupStatusResponse{}, fmt.Errorf(
 			"%w %s: %w: "+rerunHelp,
 			ErrBackupRead,

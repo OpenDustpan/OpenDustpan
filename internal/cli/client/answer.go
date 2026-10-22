@@ -15,20 +15,17 @@ type errorAnswer struct {
 }
 
 // decodeCappedJSON decodes one installation API answer from r, reading at
-// most MaxClientBodyBytes. A larger body is an error wrapping
-// ErrResponseTooLarge, never a silent truncation.
-func decodeCappedJSON(r io.Reader, doc any) error {
-	raw, err := io.ReadAll(io.LimitReader(r, MaxClientBodyBytes+1))
+// most limit bytes. A larger body is an error wrapping ErrResponseTooLarge,
+// never a silent truncation. The error holds no advice: each caller adds the
+// one command that helps.
+func decodeCappedJSON(r io.Reader, limit int64, doc any) error {
+	raw, err := io.ReadAll(io.LimitReader(r, limit+1))
 	if err != nil {
 		return fmt.Errorf("read server answer: %w", err)
 	}
 
-	if len(raw) > MaxClientBodyBytes {
-		return fmt.Errorf(
-			"%w: over %d bytes: check the server log",
-			ErrResponseTooLarge,
-			MaxClientBodyBytes,
-		)
+	if int64(len(raw)) > limit {
+		return fmt.Errorf("%w: over %d bytes", ErrResponseTooLarge, limit)
 	}
 
 	if err := json.Unmarshal(raw, doc); err != nil {
@@ -39,9 +36,9 @@ func decodeCappedJSON(r io.Reader, doc any) error {
 }
 
 // decodeErrorAnswer reads an error body of the installation API: the
-// message, or the text of the body, or the status alone when the body is
-// empty. The body is capped at MaxClientBodyBytes: an oversized body answers
-// the status alone.
+// message, or the text of the body when it is not JSON. It answers the status
+// alone when the body is empty, when the body is larger than
+// MaxClientBodyBytes, or when the read fails.
 func decodeErrorAnswer(resp *http.Response) string {
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, MaxClientBodyBytes+1))
 	if err != nil {

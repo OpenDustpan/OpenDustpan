@@ -58,11 +58,6 @@ var (
 // the same restore command against the same server.
 const restoreRerunHelp = "run opendustpan restore --server %s --backup %s again"
 
-// maxRestoreStatusBytes bounds a restore status read: the row is small, but
-// GET can embed the full manifest, so the client never reads unbounded
-// server bytes.
-const maxRestoreStatusBytes = 8 << 20
-
 // restoreFlags holds the settings of the restore subcommand.
 type restoreFlags struct {
 	server    string
@@ -364,11 +359,24 @@ func startRestore(ctx context.Context, params startRestoreParams) (restoreStartR
 		)
 	}
 
+	return readRestoreStart(resp.Body, server, id)
+}
+
+// readRestoreStart reads the answer of a started restore: the restore ID.
+func readRestoreStart(body io.Reader, server, id string) (restoreStartResponse, error) {
 	var doc restoreStartResponse
 
-	limited := io.LimitReader(resp.Body, maxRestoreStatusBytes)
+	if err := decodeCappedJSON(body, MaxClientBodyBytes, &doc); err != nil {
+		return restoreStartResponse{}, fmt.Errorf(
+			"%w: %w: check the server log and "+restoreRerunHelp,
+			ErrRestoreStart,
+			err,
+			server,
+			id,
+		)
+	}
 
-	if err := json.NewDecoder(limited).Decode(&doc); err != nil || strings.TrimSpace(doc.ID) == "" {
+	if strings.TrimSpace(doc.ID) == "" {
 		return restoreStartResponse{}, fmt.Errorf(
 			"%w: the server answered no restore ID: check the server log and "+restoreRerunHelp,
 			ErrRestoreStart,
@@ -432,9 +440,7 @@ func readRestore(ctx context.Context, params restoreReadParams) (RestoreStatusRe
 
 	var doc RestoreStatusResponse
 
-	limited := io.LimitReader(resp.Body, maxRestoreStatusBytes)
-
-	if err := json.NewDecoder(limited).Decode(&doc); err != nil {
+	if err := decodeCappedJSON(resp.Body, MaxManifestAnswerBytes, &doc); err != nil {
 		return RestoreStatusResponse{}, fmt.Errorf(
 			"%w %s: %w: "+restoreRerunHelp,
 			ErrRestoreRead,
@@ -618,7 +624,7 @@ func warnDevBackup(ctx context.Context, params restoreReadParams, stderr io.Writ
 	}
 
 	var doc backupKindResponse
-	if err := json.NewDecoder(io.LimitReader(resp.Body, maxRestoreStatusBytes)).Decode(&doc); err != nil {
+	if err := decodeCappedJSON(resp.Body, MaxManifestAnswerBytes, &doc); err != nil {
 		return
 	}
 

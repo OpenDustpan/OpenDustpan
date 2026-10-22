@@ -229,22 +229,20 @@ func decodeNamespaceResponse(
 
 	var doc namespaceCreateResponse
 
-	if err := decodeCappedJSON(resp.Body, &doc); err != nil {
+	if err := decodeCappedJSON(resp.Body, MaxClientBodyBytes, &doc); err != nil {
 		return namespaceCreateResponse{}, fmt.Errorf(
-			"%w %q: %w: check the server log and run opendustpan namespace create --server %s again",
+			"%w %q: %w: the server created the namespace: check the server log",
 			ErrNamespaceCreate,
 			name,
 			err,
-			server,
 		)
 	}
 
 	if strings.TrimSpace(doc.Name) == "" || strings.TrimSpace(doc.HomeRegion) == "" {
 		return namespaceCreateResponse{}, fmt.Errorf(
-			"%w %q: the server answered no namespace: check the server log and run opendustpan namespace create --server %s again",
+			"%w %q: the server answered no namespace: check the server log",
 			ErrNamespaceCreate,
 			name,
-			server,
 		)
 	}
 
