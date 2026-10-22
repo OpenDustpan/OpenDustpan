@@ -176,14 +176,14 @@ func (st *parseState) field(ptr, name string, node any) (model.Field, error) {
 	var f model.Field
 
 	if !fieldName.MatchString(name) {
-		return f, invalidName(ptr, "field name", name)
+		return model.Field{}, invalidName(ptr, "field name", name)
 	}
 
 	f.Name = name
 
 	t, err := st.typeOf(ptr, node)
 	if err != nil {
-		return f, err
+		return model.Field{}, err
 	}
 
 	f.Type = t
@@ -309,8 +309,9 @@ func (st *parseState) refType(ptr string, o object) (model.Type, error) {
 type refUse int
 
 const (
+	_ refUse = iota // Zero means that nobody chose.
 	// useClosed is a plain $ref. A $ref to an enum is a closed enum then.
-	useClosed refUse = iota
+	useClosed
 	// useOpen is a $ref in anyOf with a string, an open enum.
 	useOpen
 )
