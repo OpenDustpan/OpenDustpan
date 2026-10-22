@@ -776,6 +776,10 @@ _Avoid_: Template (Pulumi templates copy code), no-code module, product, offerin
 Work that OpenDustpan asks an executor to do on one unit (ADR 100 decision 19). Its unit is a unit reference with the stable unit ID set, so a rename of the unit keeps its jobs. A change to many units is many jobs. A job has one of four tool-neutral operations: `plan`, `apply`, `destroy` or `refresh`. Each tool maps them to its own commands, and user-facing text keeps the words of the tool. A job is a list of phases. The server fixes the spec of a job at start. A later change of the unit settings or of the branch does not change it.
 _Avoid_: Task, deployment, run (without a tool), operation (alone: name the operation of the job or the durable operation)
 
+**Job purpose**:
+The field `purpose` of the job spec. It says why a job runs when its operation alone does not say. `drift-check` is the only value. The server fixes it at start, and it selects the phase list of the operation: a drift check has the one phase `plan`. A job with no purpose has the phases of its operation. The purpose never changes what the policy sees: the policy gets the spec with the purpose.
+_Avoid_: Job type, job kind (a kind names a phase or a durable operation)
+
 **Executor**:
 The way a job runs: write-back or runners (ADR 100 decision 19). The port `job.Executor` names the kind, `write-back` or `runner`, and gives the phases of a spec (ADR 101 decision 1). It also undoes what a job left open after a cancel, a rejection or an expiry. Both executors call the same progress ports, `job.Claimer` and `job.Recorder`. So both meet the same rules for claims, cancel, steps, logs and plans.
 _Avoid_: Launcher (that is the program of a runner that starts each step)

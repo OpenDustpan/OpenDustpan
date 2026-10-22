@@ -76,7 +76,7 @@ func (d *Decider) Decide(ctx context.Context, in job.DecisionInput) (job.Decisio
 		return job.Decision{}, fmt.Errorf("%w: %q is not a unit", gate.ErrInvalid, unit.String())
 	}
 
-	kinds, err := job.DefaultPhases(in.Spec.Executor, in.Spec.Operation)
+	kinds, err := job.PhasesFor(in.Spec.Executor, in.Spec.Operation, in.Spec.Purpose)
 	if err != nil {
 		return job.Decision{}, fmt.Errorf("phases of the job: %w", err)
 	}
