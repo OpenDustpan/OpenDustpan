@@ -27,70 +27,44 @@ func TestAdmitFirstRequests(t *testing.T) {
 		return workspace.LockRequest{Holder: holder, Reason: "plan", LockID: lockID, JobID: ""}
 	}
 
+	lockAt := func(ref workspace.Ref, holder, lockID string) func(*workspace.Service) error {
+		return func(s *workspace.Service) error {
+			return s.AdmitFirstLock(t.Context(), ref, lock(holder, lockID))
+		}
+	}
+	writeAt := func(ref workspace.Ref, lockID string) func(*workspace.Service) error {
+		return func(s *workspace.Service) error {
+			return s.AdmitFirstWrite(t.Context(), ref, workspace.StreamInput{Holder: "ci", LockID: lockID, MD5: ""})
+		}
+	}
+
+	acme, nowhere := newRef("acme"), newRef("nowhere")
+
 	cases := []struct {
 		name string
-		call func(*workspace.Service, workspace.Ref) error
+		call func(*workspace.Service) error
 		ref  workspace.Ref
 		want error
 		// nsLocked puts a manual lock on the namespace.
 		nsLocked bool
 	}{
+		{"LOCK that meets no refusal", lockAt(acme, "ci", "lock-1"), acme, nil, false},
 		{
-			name: "LOCK that meets no refusal",
-			call: func(s *workspace.Service, r workspace.Ref) error {
-				return s.AdmitFirstLock(t.Context(), r, lock("ci", "lock-1"))
-			},
-			ref: newRef("acme"), want: nil,
+			"LOCK under a manual lock of the namespace", lockAt(acme, "ci", "lock-1"), acme,
+			workspace.ErrLocked, true,
 		},
+		{"LOCK with a lock ID that is not valid", lockAt(acme, "ci", "a b"), acme, workspace.ErrInvalidLockID, false},
+		{"LOCK with no holder", lockAt(acme, "", "lock-1"), acme, workspace.ErrNotLocked, false},
 		{
-			name: "LOCK under a manual lock of the namespace",
-			call: func(s *workspace.Service, r workspace.Ref) error {
-				return s.AdmitFirstLock(t.Context(), r, lock("ci", "lock-1"))
-			},
-			ref: newRef("acme"), want: workspace.ErrLocked, nsLocked: true,
+			"LOCK in a namespace that does not exist",
+			lockAt(nowhere, "ci", "lock-1"),
+			nowhere,
+			namespace.ErrNotFound,
+			false,
 		},
-		{
-			name: "LOCK with a lock ID that is not valid",
-			call: func(s *workspace.Service, r workspace.Ref) error {
-				return s.AdmitFirstLock(t.Context(), r, lock("ci", "a b"))
-			},
-			ref: newRef("acme"), want: workspace.ErrInvalidLockID,
-		},
-		{
-			name: "LOCK with no holder",
-			call: func(s *workspace.Service, r workspace.Ref) error {
-				return s.AdmitFirstLock(t.Context(), r, lock("", "lock-1"))
-			},
-			ref: newRef("acme"), want: workspace.ErrNotLocked,
-		},
-		{
-			name: "LOCK in a namespace that does not exist",
-			call: func(s *workspace.Service, r workspace.Ref) error {
-				return s.AdmitFirstLock(t.Context(), r, lock("ci", "lock-1"))
-			},
-			ref: newRef("nowhere"), want: namespace.ErrNotFound,
-		},
-		{
-			name: "POST with no lock ID",
-			call: func(s *workspace.Service, r workspace.Ref) error {
-				return s.AdmitFirstWrite(t.Context(), r, workspace.StreamInput{Holder: "ci", LockID: "", MD5: ""})
-			},
-			ref: newRef("acme"), want: workspace.ErrOverrideRefused,
-		},
-		{
-			name: "POST that names a lock nobody holds",
-			call: func(s *workspace.Service, r workspace.Ref) error {
-				return s.AdmitFirstWrite(t.Context(), r, workspace.StreamInput{Holder: "ci", LockID: "x", MD5: ""})
-			},
-			ref: newRef("acme"), want: workspace.ErrLockMismatch,
-		},
-		{
-			name: "POST in a namespace that does not exist",
-			call: func(s *workspace.Service, r workspace.Ref) error {
-				return s.AdmitFirstWrite(t.Context(), r, workspace.StreamInput{Holder: "ci", LockID: "", MD5: ""})
-			},
-			ref: newRef("nowhere"), want: namespace.ErrNotFound,
-		},
+		{"POST with no lock ID", writeAt(acme, ""), acme, workspace.ErrOverrideRefused, false},
+		{"POST that names a lock nobody holds", writeAt(acme, "x"), acme, workspace.ErrLockMismatch, false},
+		{"POST in a namespace that does not exist", writeAt(nowhere, ""), nowhere, namespace.ErrNotFound, false},
 	}
 
 	for _, tc := range cases {
@@ -104,7 +78,7 @@ func TestAdmitFirstRequests(t *testing.T) {
 				svc = withManualLocks(t, f, answering(heldNamespaceLock()))
 			}
 
-			err := tc.call(svc, tc.ref)
+			err := tc.call(svc)
 			if tc.want == nil && err != nil || tc.want != nil && !errors.Is(err, tc.want) {
 				t.Fatalf("admit = %v, want %v", err, tc.want)
 			}
