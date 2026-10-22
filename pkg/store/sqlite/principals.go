@@ -862,6 +862,12 @@ func isUniqueViolation(err error) bool {
 // administrator. The count runs in the transaction of the change, so a change
 // that commits first is in the count. An installation with no site
 // administrator before the change refuses nothing.
+//
+// The guard is correct only because its callers run in a write transaction of
+// the store, which SQLite serializes (an immediate transaction holds the write
+// lock before the first statement). Two removals of two administrators then
+// run one after the other, and the second count reads the commit of the first.
+// A new caller must use a write transaction of the store too.
 func guardSiteAdministrator(ctx context.Context, change func(q *db.Queries) error) func(q *db.Queries) error {
 	return func(q *db.Queries) error {
 		before, err := q.CountSiteAdministrators(ctx, access.RoleSiteAdministrator)

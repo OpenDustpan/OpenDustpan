@@ -1611,7 +1611,7 @@ func (q *Queries) CountSignInProvider(ctx context.Context, providerID string) (i
 
 const countSiteAdministrators = `-- name: CountSiteAdministrators :one
 SELECT COUNT(*) FROM principals p
-WHERE p.deleted_at_ms IS NULL AND p.disabled_at_ms IS NULL AND p.namespace = ''
+WHERE p.deleted_at_ms IS NULL AND p.disabled_at_ms IS NULL AND p.namespace = '' AND p.kind = 'person'
   AND EXISTS (
     SELECT 1 FROM grants g
     WHERE g.role = $1 AND g.object_kind = 'installation' AND g.revoked_at_ms IS NULL
@@ -1626,7 +1626,9 @@ WHERE p.deleted_at_ms IS NULL AND p.disabled_at_ms IS NULL AND p.namespace = ''
 // The principals that can act now with the role $1: a current grant of the
 // role on the installation to the principal, or to a group with an active
 // membership of the principal. A principal that was ended, was disabled or
-// belongs to a namespace does not count.
+// belongs to a namespace does not count. Only a person counts: a service
+// principal can hold the role, but every route that makes a site administrator
+// needs a fresh console session, which only a person has.
 func (q *Queries) CountSiteAdministrators(ctx context.Context, role string) (int64, error) {
 	row := q.db.QueryRow(ctx, countSiteAdministrators, role)
 	var count int64

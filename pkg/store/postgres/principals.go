@@ -828,6 +828,14 @@ func isUniqueViolation(err error) bool {
 // administrator. The count runs in the transaction of the change, so a change
 // that commits first is in the count. An installation with no site
 // administrator before the change refuses nothing.
+//
+// The guard is correct only because its callers take the lock of the server
+// audit scope (LockServerAuditScope, a transaction-level advisory lock) before
+// they run change, and so before the first count. That lock serializes two
+// removals of two administrators, and under READ COMMITTED the second count
+// reads a new snapshot after the lock, so it sees the commit of the first. A
+// new caller in a transaction that does not take this lock would make the guard
+// race: take the lock first.
 func guardSiteAdministrator(ctx context.Context, change func(q *db.Queries) error) func(q *db.Queries) error {
 	return func(q *db.Queries) error {
 		before, err := q.CountSiteAdministrators(ctx, access.RoleSiteAdministrator)

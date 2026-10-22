@@ -2,6 +2,7 @@ package storetest
 
 import (
 	"errors"
+	"sync"
 	"testing"
 
 	"opendustpan.org/opendustpan/pkg/access"
@@ -143,5 +144,89 @@ func testNoSiteAdministratorNoRefusal(t *testing.T, d *delegation) {
 		bootstrap(), person.ID)
 	if err != nil {
 		t.Fatalf("delete of an account administrator: %v", err)
+	}
+}
+
+// testLastSiteAdministratorCountsPersons proves that only a person counts as a
+// site administrator. A service principal can hold the role, but every route
+// that makes a site administrator needs a fresh console session, which only a
+// person has. So the change that takes the last person is refused while a
+// service or workload principal still holds the role.
+func testLastSiteAdministratorCountsPersons(t *testing.T, d *delegation) {
+	t.Helper()
+
+	ctx := t.Context()
+	person, _ := d.siteAdministrator(t, "root@example.com")
+	managePrincipals := changeEntry(bootstrap(), identity.ActionServerManagePrincipals)
+
+	var service principal.Principal
+
+	for _, kind := range []principal.Kind{principal.KindService, principal.KindWorkload} {
+		bot := d.principalOf(t, "bot-"+string(kind), kind)
+		d.mustGrant(t, bootstrap(), bot, access.RoleSiteAdministrator, identity.ServerObject())
+
+		if kind == principal.KindService {
+			service = bot
+		}
+	}
+
+	wantLastSiteAdministrator(t, "delete of the last person with a site-administrator service principal",
+		d.principals.DeletePrincipal(ctx, managePrincipals, bootstrap(), person.ID))
+	wantLastSiteAdministrator(t, "disable of the last person with a site-administrator service principal",
+		d.principals.DisablePrincipal(ctx, managePrincipals, bootstrap(), person.ID))
+
+	// A principal that is not a person is not protected by the guard.
+	if err := d.principals.DeletePrincipal(ctx, managePrincipals, bootstrap(), service.ID); err != nil {
+		t.Fatalf("delete of a service principal that holds the role: %v", err)
+	}
+}
+
+// testLastSiteAdministratorParallel proves that two removals of two site
+// administrators that run at the same time leave one: exactly one of them is
+// refused. The store serializes the writes, and each count reads the commit of
+// the write before it.
+func testLastSiteAdministratorParallel(t *testing.T, d *delegation) {
+	t.Helper()
+
+	ctx := t.Context()
+	first, _ := d.siteAdministrator(t, "first@example.com")
+	second, _ := d.siteAdministrator(t, "second@example.com")
+	managePrincipals := changeEntry(bootstrap(), identity.ActionServerManagePrincipals)
+
+	var (
+		wg      sync.WaitGroup
+		results [2]error
+		start   = make(chan struct{})
+	)
+
+	for i, p := range []principal.Principal{first, second} {
+		wg.Add(1)
+
+		go func() {
+			defer wg.Done()
+
+			<-start
+
+			results[i] = d.principals.DisablePrincipal(ctx, managePrincipals, bootstrap(), p.ID)
+		}()
+	}
+
+	close(start)
+	wg.Wait()
+
+	refused := 0
+
+	for _, err := range results {
+		switch {
+		case err == nil:
+		case errors.Is(err, access.ErrLastSiteAdministrator):
+			refused++
+		default:
+			t.Fatalf("parallel disable = %v, want nil or access.ErrLastSiteAdministrator", err)
+		}
+	}
+
+	if refused != 1 {
+		t.Fatalf("parallel disables of two administrators: %d refused (%v), want exactly one", refused, results)
 	}
 }

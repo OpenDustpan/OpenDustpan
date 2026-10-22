@@ -122,14 +122,16 @@ persons and services.
   installation. No sign-in method issues a session yet, so the policy has
   no effect until one is available.
 - **The server keeps one site administrator.** The server refuses each change
-  that leaves the installation with no site administrator, and answers 409.
-  The changes are: the delete or the disable of the last person who holds the
-  `site-administrator` role on the installation, the revoke of the last grant
-  of the role, the removal of the last holder from a group that has the grant,
-  and the delete of that group. A holder who is disabled does not count. The
-  inactivity disable and the expiry of a temporary administrator are not
-  refused: they are policy, and the host command in the host recovery guide
-  makes a new administrator.
+  that leaves the installation with no person who is a site administrator, and
+  answers 409. The changes are: the delete or the disable of the last person
+  who holds the `site-administrator` role on the installation, the revoke of
+  the last grant of the role, the removal of the last holder from a group that
+  has the grant, and the delete of that group. A holder who is disabled does
+  not count. A service principal or a workload that holds the role does not
+  count either, because every route that makes a site administrator needs a
+  fresh console session, and only a person has one. The inactivity disable and
+  the expiry of a temporary administrator are not refused: they are policy, and
+  the host command in the host recovery guide makes a new administrator.
 
 ## Pulumi secrets
 
