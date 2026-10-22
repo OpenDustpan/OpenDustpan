@@ -106,15 +106,15 @@ type streamWrite struct {
 	record func(Override, int64) error
 }
 
-// admitStream checks the lock and the overrides of a streamed write, records
-// each override it uses, and declares its placeholder row. The attempt is noted
-// before the body streams, so a write that stops midway leaves a row that names
-// its blob.
-func (s *Service) admitStream(
+// checkStreamAdmission runs the checks that come before a streamed write
+// declares its placeholder row, and writes nothing. It checks the lock, the
+// overrides, the manual lock and the fence. It returns whether the write passes
+// the lock as an override, the overrides it uses, and the fence of the write.
+func (s *Service) checkStreamAdmission(
 	ctx context.Context, w Workspace, in StreamInput, auth StreamAuthority,
-) (*streamWrite, error) {
+) (bool, []Override, namespace.Fence, error) {
 	if lockErr := checkStreamLock(w, in.LockID); lockErr != nil {
-		return nil, lockErr
+		return false, nil, namespace.Fence{}, lockErr
 	}
 
 	unlocked, used, err := declareOverrides(
@@ -125,7 +125,7 @@ func (s *Service) admitStream(
 		auth.Allow,
 	)
 	if err != nil {
-		return nil, fmt.Errorf("new state for %s: %w", w.Ref, err)
+		return false, nil, namespace.Fence{}, fmt.Errorf("new state for %s: %w", w.Ref, err)
 	}
 
 	if auth.Record == nil {
@@ -139,11 +139,50 @@ func (s *Service) admitStream(
 	// change to the workspace.
 	if unlocked {
 		if lockErr := s.refuseManualLock(ctx, w, ""); lockErr != nil {
-			return nil, fmt.Errorf("write state of %s: %w", w.Ref, lockErr)
+			return false, nil, namespace.Fence{}, fmt.Errorf("write state of %s: %w", w.Ref, lockErr)
 		}
 	}
 
 	fence, err := s.fence(ctx, w.Ref.Namespace)
+	if err != nil {
+		return false, nil, namespace.Fence{}, err
+	}
+
+	return unlocked, used, fence, nil
+}
+
+// AdmitFirstWrite reports whether a streamed write to the workspace called
+// ref would pass the checks that come before the body streams, when the
+// workspace does not exist yet. It returns the error that WriteState would
+// return for the new workspace, and nil when the write could go on. It writes
+// nothing, so a caller creates the workspace only after it returns nil: a
+// refused first request leaves no workspace.
+//
+// A new workspace is unlocked and has both override switches off, so a write
+// to it needs the lock that no one holds, or an override that is off: the
+// check refuses every first write today. The check stays a call to the same
+// code that WriteState runs, so the two cannot disagree.
+func (s *Service) AdmitFirstWrite(ctx context.Context, ref Ref, in StreamInput) error {
+	if _, err := s.writable(ctx, ref.Namespace); err != nil {
+		return err
+	}
+
+	_, _, _, err := s.checkStreamAdmission(ctx, newWorkspaceOf(ref), in, StreamAuthority{
+		Allow:  namespace.Overrides{Forced: false, Unlocked: false},
+		Record: nil,
+	})
+
+	return err
+}
+
+// admitStream checks the lock and the overrides of a streamed write, records
+// each override it uses, and declares its placeholder row. The attempt is noted
+// before the body streams, so a write that stops midway leaves a row that names
+// its blob.
+func (s *Service) admitStream(
+	ctx context.Context, w Workspace, in StreamInput, auth StreamAuthority,
+) (*streamWrite, error) {
+	unlocked, used, fence, err := s.checkStreamAdmission(ctx, w, in, auth)
 	if err != nil {
 		return nil, err
 	}
