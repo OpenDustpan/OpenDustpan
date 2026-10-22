@@ -2,6 +2,7 @@ package golang
 
 import (
 	"fmt"
+	"go/token"
 	"slices"
 	"strconv"
 	"strings"
@@ -119,8 +120,11 @@ func words(name string) []string {
 // camel turns a snake_case path parameter into lowerCamelCase: sink_id gives
 // sinkId. The reserved words of Go, the names of the universe scope and of the
 // imports, and the names of the generated code and of its hand-written files
-// get one underscore at the end.
-func camel(name string) string {
+// get one underscore at the end. It returns ErrInvalidName, wrapped, for a name
+// that gives no Go identifier that a method can use as a parameter: a name of
+// underscores only gives the blank identifier, and a name like _1 starts with
+// a digit.
+func camel(name string) (string, error) {
 	parts := strings.Split(name, "_")
 
 	var b strings.Builder
@@ -136,8 +140,8 @@ func camel(name string) string {
 	}
 
 	out := b.String()
-	if out == "" {
-		out = "_"
+	if out == "" || (!token.IsIdentifier(out) && !token.IsKeyword(out)) {
+		return "", fmt.Errorf("%w: path parameter %q gives no Go identifier", clientgen.ErrInvalidName, name)
 	}
 
 	for _, reserved := range [][]string{
@@ -150,7 +154,7 @@ func camel(name string) string {
 		}
 	}
 
-	return out
+	return out, nil
 }
 
 // pascal turns an enum value into the tail of the name of its constant:

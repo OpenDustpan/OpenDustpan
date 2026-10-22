@@ -51,5 +51,19 @@ func sqliteJobBackupTables() []sqliteBackupTable {
 				backupColAtMs,
 			},
 		},
+		{
+			table:   "job_plans",
+			columns: []string{"id", backupColNamespaceID, backupColJobID, "body", backupColCreatedAtMs},
+		},
+		{
+			table: "job_logs",
+			columns: []string{
+				"id", backupColNamespaceID, backupColJobID, "phase", "step", "token", backupColCreatedAtMs,
+			},
+		},
+		{
+			table:   "job_log_chunks",
+			columns: []string{"log_id", "seq", backupColNamespaceID, "sha256", "size", "confirmed"},
+		},
 	}
 }

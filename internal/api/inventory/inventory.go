@@ -124,26 +124,37 @@ type Handler struct {
 	routes      []Route
 }
 
+// validate returns ErrMissingDependency when cfg lacks a required dependency.
+func (cfg Config) validate() error {
+	switch {
+	case cfg.Audit == nil:
+		return fmt.Errorf("%w: audit store", ErrMissingDependency)
+	case cfg.Namespaces == nil:
+		return fmt.Errorf("%w: namespace service", ErrMissingDependency)
+	case cfg.Units == nil:
+		return fmt.Errorf("%w: inventory reader", ErrMissingDependency)
+	case cfg.Deleted == nil:
+		return fmt.Errorf("%w: deleted unit reader", ErrMissingDependency)
+	case len(cfg.Lifecycles) == 0:
+		return fmt.Errorf("%w: unit lifecycles", ErrMissingDependency)
+	case cfg.ReadScope == nil:
+		return fmt.Errorf("%w: deleted unit read scope", ErrMissingDependency)
+	case cfg.Authenticator == nil:
+		return fmt.Errorf("%w: authenticator", ErrMissingDependency)
+	case cfg.Authorizer == nil:
+		return fmt.Errorf("%w: authorizer", ErrMissingDependency)
+	case cfg.Logger == nil:
+		return fmt.Errorf("%w: logger", ErrMissingDependency)
+	}
+
+	return nil
+}
+
 // NewHandler returns a Handler. Every Config field except Now, Collections
 // and Sessions is required.
 func NewHandler(cfg Config) (*Handler, error) {
-	switch {
-	case cfg.Namespaces == nil:
-		return nil, fmt.Errorf("%w: namespace service", ErrMissingDependency)
-	case cfg.Units == nil:
-		return nil, fmt.Errorf("%w: inventory reader", ErrMissingDependency)
-	case cfg.Deleted == nil:
-		return nil, fmt.Errorf("%w: deleted unit reader", ErrMissingDependency)
-	case len(cfg.Lifecycles) == 0:
-		return nil, fmt.Errorf("%w: unit lifecycles", ErrMissingDependency)
-	case cfg.ReadScope == nil:
-		return nil, fmt.Errorf("%w: deleted unit read scope", ErrMissingDependency)
-	case cfg.Authenticator == nil:
-		return nil, fmt.Errorf("%w: authenticator", ErrMissingDependency)
-	case cfg.Authorizer == nil:
-		return nil, fmt.Errorf("%w: authorizer", ErrMissingDependency)
-	case cfg.Logger == nil:
-		return nil, fmt.Errorf("%w: logger", ErrMissingDependency)
+	if err := cfg.validate(); err != nil {
+		return nil, err
 	}
 
 	publicURL, err := parsePublicURL(cfg.PublicURL)
@@ -154,6 +165,11 @@ func NewHandler(cfg Config) (*Handler, error) {
 	viewState, err := newViews(cfg.Views)
 	if err != nil {
 		return nil, err
+	}
+
+	recorder, err := refusal.New(cfg.Authorizer, cfg.Audit, cfg.Namespaces, cfg.Logger, cfg.OnAuditFailure)
+	if err != nil {
+		return nil, fmt.Errorf("denial recorder: %w", err)
 	}
 
 	h := &Handler{
@@ -170,15 +186,13 @@ func NewHandler(cfg Config) (*Handler, error) {
 		authn:       cfg.Authenticator,
 		sessions:    cfg.Sessions,
 		authz:       cfg.Authorizer,
-		guard: refusal.New(cfg.Authorizer, cfg.Audit, cfg.Namespaces, cfg.Logger, cfg.OnAuditFailure).
-			WithLimiter(cfg.DenialLimiter).
-			WithSurface("inventory"),
-		publicURL:  publicURL,
-		logger:     cfg.Logger,
-		now:        clockOf(cfg.Now),
-		stateGuard: cfg.StateGuard,
-		mux:        newPatternMux(),
-		routes:     nil,
+		guard:       recorder.WithLimiter(cfg.DenialLimiter).WithSurface("inventory"),
+		publicURL:   publicURL,
+		logger:      cfg.Logger,
+		now:         clockOf(cfg.Now),
+		stateGuard:  cfg.StateGuard,
+		mux:         newPatternMux(),
+		routes:      nil,
 	}
 
 	h.routes = h.buildRoutes()
