@@ -231,7 +231,7 @@ func buildFixtureWith(
 	idem := middleware(t, store, clock)
 
 	hcfg := apiprofile.Config{
-		Audit:          nil,
+		Audit:          newTestAudit(),
 		Namespaces:     nil,
 		OnAuditFailure: nil,
 		Profiles:       svc,
@@ -880,7 +880,12 @@ func TestSharedLimiterFlushReachesNamespace(t *testing.T) {
 		})
 
 	// Another adapter holds the counts of a key in the namespace.
-	other := refusal.New(nil, f.store, namespaces, slog.New(slog.DiscardHandler), nil).WithLimiter(lim)
+	otherRec, err := refusal.New(nil, f.store, namespaces, slog.New(slog.DiscardHandler), nil)
+	if err != nil {
+		t.Fatalf("refusal.New: %v", err)
+	}
+
+	other := otherRec.WithLimiter(lim)
 
 	bo := identity.Principal{
 		Subject: "bo@example.com", DisplayName: "", Admin: false, TokenID: "", TokenExpiresAt: time.Time{},
@@ -922,7 +927,7 @@ func TestNewHandlerNeedsItsDependencies(t *testing.T) {
 	t.Parallel()
 
 	_, err := apiprofile.NewHandler(apiprofile.Config{
-		Audit:          nil,
+		Audit:          newTestAudit(),
 		Namespaces:     nil,
 		OnAuditFailure: nil,
 		Profiles:       nil,

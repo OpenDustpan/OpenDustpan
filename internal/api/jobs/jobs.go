@@ -78,6 +78,8 @@ type Handler struct {
 // required.
 func NewHandler(cfg Config) (*Handler, error) {
 	switch {
+	case cfg.Audit == nil:
+		return nil, fmt.Errorf("%w: audit store", ErrMissingDependency)
 	case cfg.Namespaces == nil:
 		return nil, fmt.Errorf("%w: namespace service", ErrMissingDependency)
 	case cfg.Jobs == nil:
@@ -90,18 +92,21 @@ func NewHandler(cfg Config) (*Handler, error) {
 		return nil, fmt.Errorf("%w: logger", ErrMissingDependency)
 	}
 
+	recorder, err := refusal.New(cfg.Authorizer, cfg.Audit, cfg.Namespaces, cfg.Logger, cfg.OnAuditFailure)
+	if err != nil {
+		return nil, fmt.Errorf("denial recorder: %w", err)
+	}
+
 	h := &Handler{
 		namespaces: cfg.Namespaces,
 		jobs:       cfg.Jobs,
 		starter:    cfg.Starter,
 		authn:      cfg.Authenticator,
 		sessions:   cfg.Sessions,
-		guard: refusal.New(cfg.Authorizer, cfg.Audit, cfg.Namespaces, cfg.Logger, cfg.OnAuditFailure).
-			WithLimiter(cfg.DenialLimiter).
-			WithSurface("jobs"),
-		logger: cfg.Logger,
-		mux:    newPatternMux(),
-		routes: nil,
+		guard:      recorder.WithLimiter(cfg.DenialLimiter).WithSurface("jobs"),
+		logger:     cfg.Logger,
+		mux:        newPatternMux(),
+		routes:     nil,
 	}
 
 	h.routes = h.buildRoutes()

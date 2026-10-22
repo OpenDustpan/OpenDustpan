@@ -248,12 +248,9 @@ func (s *service) StartOnce(ctx context.Context, a Actor, req StartRequest) (Job
 		return Job{}, false, fmt.Errorf("plan job: %w", err)
 	}
 
-	// Defense in depth: the planner builds the spec, and the planner may
-	// change the unit, the operation or the executor. The actions are
-	// checked again on the spec, so the planner can never widen what the
-	// caller may start.
-	if spec.Unit.String() != unit.String() || spec.Unit.UnitID() != unit.UnitID() || spec.Operation != req.Operation {
-		return Job{}, false, fmt.Errorf("%w: the planner changed the unit or the operation", ErrInvalid)
+	err = checkPlanned(unit, &spec, &req)
+	if err != nil {
+		return Job{}, false, err
 	}
 
 	err = s.authorize(ctx, a, &spec, &req)
@@ -269,6 +266,21 @@ func (s *service) StartOnce(ctx context.Context, a Actor, req StartRequest) (Job
 	}
 
 	return s.create(ctx, a, source, &req, spec)
+}
+
+// checkPlanned returns ErrInvalid when the spec that the planner built is for
+// another unit, another operation or another purpose than the request.
+//
+// Defense in depth: the planner builds the spec, and the planner may change the
+// unit, the operation, the purpose or the executor. The actions are checked
+// again on the spec, so the planner can never widen what the caller may start.
+func checkPlanned(unit identity.Object, spec *Spec, req *StartRequest) error {
+	if spec.Unit.String() != unit.String() || spec.Unit.UnitID() != unit.UnitID() ||
+		spec.Operation != req.Operation || spec.Purpose != req.Purpose {
+		return fmt.Errorf("%w: the planner changed the unit, the operation or the purpose", ErrInvalid)
+	}
+
+	return nil
 }
 
 // Get implements Service. A caller without job:read on the unit of the job
