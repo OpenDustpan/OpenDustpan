@@ -61,28 +61,22 @@ type env struct {
 }
 
 // opsClaimer is a job.Claimer on the durable store: the phases of a job are
-// durable operations. The lease is the lease of the test, not of the pool.
+// durable operations. The lease is the lease of the request.
 type opsClaimer struct {
 	ops      durable.Store
-	lease    time.Duration
 	released atomic.Int64
 }
 
 var _ job.Claimer = (*opsClaimer)(nil)
 
 func (c *opsClaimer) Claim(ctx context.Context, req job.ClaimRequest) (job.Assignment, error) {
-	lease := req.Lease
-	if c.lease > 0 {
-		lease = c.lease
-	}
-
 	op, err := c.ops.Claim(
 		ctx,
 		durable.ClaimRequest{
 			Owner:        req.Owner,
 			Kinds:        req.Kinds,
 			MaxVersions:  req.MaxVersions,
-			Lease:        lease,
+			Lease:        req.Lease,
 			TakeCanceled: false,
 		},
 	)
@@ -204,15 +198,15 @@ func openSQLite(t *testing.T) stores {
 func newEnv(t *testing.T) *env {
 	t.Helper()
 
-	return newEnvOn(t, 0, openSQLite)
+	return newEnvOn(t, openSQLite)
 }
 
 // newEnvOn opens a store with open, creates the namespace acme, and serves
 // the handler.
-func newEnvOn(t *testing.T, lease time.Duration, open func(t *testing.T) stores) *env {
+func newEnvOn(t *testing.T, open func(t *testing.T) stores) *env {
 	t.Helper()
 
-	return newEnvWith(t, lease, open, nil)
+	return newEnvWith(t, open, nil)
 }
 
 // newEnvWith is newEnvOn with the claimer that phases returns for the
@@ -220,7 +214,6 @@ func newEnvOn(t *testing.T, lease time.Duration, open func(t *testing.T) stores)
 // jobs.
 func newEnvWith(
 	t *testing.T,
-	lease time.Duration,
 	open func(t *testing.T) stores,
 	phases func(stores) job.Claimer,
 ) *env {
@@ -245,10 +238,44 @@ func newEnvWith(
 	h, srv, ops := serve(
 		t,
 		s,
-		serveOptions{lease: lease, now: clock.now, authz: identity.AdminOnly{}, claimer: claimer},
+		serveOptions{now: clock.now, authz: identity.AdminOnly{}, claimer: claimer},
 	)
 
 	return &env{t: t, store: s, server: srv, handler: h, claimer: ops, fence: ns.Fence(), clock: clock}
+}
+
+// lapseLease is the lease that lapse sets, and lapseMargin is the time to
+// wait after its expiry.
+const (
+	lapseLease  = 200 * time.Millisecond
+	lapseMargin = 200 * time.Millisecond
+)
+
+// lapse ends the claim of the operation. A case polls with the lease of the
+// pool, so that a slow store cannot end the claim before the poll has
+// recorded it. After the poll, lapse shortens the lease to lapseLease with
+// Extend and waits until the expiry that the store answered has passed. It
+// fails at once when the store does not move the expiry earlier. A slow store
+// makes the wait longer, not shorter.
+func (e *env) lapse(operation string) {
+	e.t.Helper()
+
+	op, err := e.claimer.ops.Get(e.t.Context(), durable.ID(operation))
+	if err != nil {
+		e.t.Fatalf("get operation %s: %v", operation, err)
+	}
+
+	shorter, err := e.claimer.ops.Extend(e.t.Context(), op.Claim, lapseLease)
+	if err != nil {
+		e.t.Fatalf("extend the claim of %s to a short lease: %v", operation, err)
+	}
+
+	if !shorter.ExpiresAt.Before(op.Claim.ExpiresAt) {
+		e.t.Fatalf("extend to %v did not move the expiry earlier: %v after %v", lapseLease, shorter.ExpiresAt,
+			op.Claim.ExpiresAt)
+	}
+
+	pause(e.t, time.Until(shorter.ExpiresAt)+lapseMargin)
 }
 
 // skewClock is the clock of the server in a test: the real time plus an
@@ -264,10 +291,8 @@ func (c *skewClock) now() time.Time { return time.Now().Add(time.Duration(c.offs
 // carry none.
 func (c *skewClock) advance(d time.Duration) { c.offset.Add(int64(d)) }
 
-// serveOptions are the settings of serve. A zero lease takes the lease of
-// the pool.
+// serveOptions are the settings of serve.
 type serveOptions struct {
-	lease time.Duration
 	now   func() time.Time
 	authz identity.Authorizer
 	// claimer replaces the claimer of the test, which has no jobs.
@@ -284,7 +309,7 @@ func serve(t *testing.T, s stores, opts serveOptions) (*runnerapi.Handler, *http
 		t.Fatalf("namespace service: %v", err)
 	}
 
-	claimer := &opsClaimer{ops: s.operations, lease: opts.lease, released: atomic.Int64{}}
+	claimer := &opsClaimer{ops: s.operations, released: atomic.Int64{}}
 
 	var phases job.Claimer = claimer
 	if opts.claimer != nil {
