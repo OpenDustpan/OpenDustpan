@@ -10,7 +10,8 @@ on:
     types: [ opened, synchronize, reopened, ready_for_review ]
   # Every 2 hours, the go and store jobs on main run each test package again
   # without the test cache (GO_TEST_COUNT=-count=1), to find flaky tests. The
-  # e2e and scan jobs do not run on the schedule. Each run uses about 9 runner-minutes.
+  # lint job also runs, so that make vuln finds a new advisory. The e2e and
+  # scan jobs do not run on the schedule. Each run uses about 9 runner-minutes.
   # GitHub sends the failure notification of a scheduled run to the user who
   # last changed this cron line.
   schedule:
@@ -34,10 +35,14 @@ concurrency:
 # means the project's own machines. Never point a public repository's
 # pull requests from forks at self-hosted runners.
 #
-# The repository variable CI_TRIAL_RUNS_ON, when it is set, replaces
-# CI_RUNS_ON, with the same JSON format. It sends all runs to the runners of
-# a trial provider, for example "blacksmith-4vcpu-ubuntu-2404". Change it
-# to try another size without a commit. Unset it to stop the trial.
+# Three repository variables, when they are set, replace CI_RUNS_ON, with
+# the same JSON format. They send all runs to the runners of a trial
+# provider, in three sizes:
+#   CI_TRIAL_RUNS_ON_LARGE  go and store, the CPU-bound tests
+#   CI_TRIAL_RUNS_ON        e2e
+#   CI_TRIAL_RUNS_ON_SMALL  lint and scan
+# For example "blacksmith-8vcpu-ubuntu-2404". Change a variable to try
+# another size without a commit. Unset all three to stop the trial.
 #
 # The project's machines (github-actions-runner1 to 4) keep the Go build
 # cache, the Go module cache and the golangci-lint cache on their disks
@@ -47,30 +52,12 @@ concurrency:
 # runner.environment, so the jobs check the runner name instead.
 
 jobs:
-  go:
+  # The checks that need no database. They use little CPU, so they run on
+  # a small runner, apart from the tests.
+  lint:
     if: ${{ github.event_name != 'pull_request' || !github.event.pull_request.draft }}
-    # The other jobs use this value through the YAML alias *runs-on.
-    runs-on: &runs-on ${{ fromJSON(vars.CI_TRIAL_RUNS_ON || vars.CI_RUNS_ON || '"ubuntu-latest"') }}
-    services:
-      postgres:
-        # The Go test cache does not see the image. The digest makes sure that
-        # the image changes only in a commit, not under cached test results. The
-        # scheduled uncached run tests each new digest.
-        image: postgres:18@sha256:74935e72241653ca55e0414067e6d8763aceb8a810eb51b452253ec3dcfc4336
-        env:
-          POSTGRES_PASSWORD: postgres
-        # A fixed port keeps DUSTPAN_TEST_POSTGRES_URL the same from job to job,
-        # so go test can use cached results. Each machine runs one job at a time.
-        ports: [ "5432:5432" ]
-        # The image declares a volume at /var/lib/postgresql on the disk of the
-        # runner. The runner does not remove that volume after the job. The job
-        # hooks of each self-hosted runner remove it. A parallel query keeps its
-        # shared memory in /dev/shm, and the Docker default of 64 MiB is too
-        # small for the tests.
-        options: >-
-          --shm-size=1g
-          --health-cmd "pg_isready -U postgres"
-          --health-interval 5s --health-timeout 5s --health-retries 10
+    # The scan job uses this value through the YAML alias *runs-on-small.
+    runs-on: &runs-on-small ${{ fromJSON(vars.CI_TRIAL_RUNS_ON_SMALL || vars.CI_RUNS_ON || '"ubuntu-latest"') }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
@@ -133,6 +120,37 @@ jobs:
         run: make licenses
       - name: Docs follow ASD-STE100 (ADR 14)
         run: make docs-lint
+
+  go:
+    if: ${{ github.event_name != 'pull_request' || !github.event.pull_request.draft }}
+    # The store job uses this value through the YAML alias *runs-on-large.
+    runs-on: &runs-on-large ${{ fromJSON(vars.CI_TRIAL_RUNS_ON_LARGE || vars.CI_RUNS_ON || '"ubuntu-latest"') }}
+    services:
+      postgres:
+        # The Go test cache does not see the image. The digest makes sure that
+        # the image changes only in a commit, not under cached test results. The
+        # scheduled uncached run tests each new digest.
+        image: postgres:18@sha256:74935e72241653ca55e0414067e6d8763aceb8a810eb51b452253ec3dcfc4336
+        env:
+          POSTGRES_PASSWORD: postgres
+        # A fixed port keeps DUSTPAN_TEST_POSTGRES_URL the same from job to job,
+        # so go test can use cached results. Each machine runs one job at a time.
+        ports: [ "5432:5432" ]
+        # The image declares a volume at /var/lib/postgresql on the disk of the
+        # runner. The runner does not remove that volume after the job. The job
+        # hooks of each self-hosted runner remove it. A parallel query keeps its
+        # shared memory in /dev/shm, and the Docker default of 64 MiB is too
+        # small for the tests.
+        options: >-
+          --shm-size=1g
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: ${{ !startsWith(runner.name, 'github-actions-runner') }}
       # Pushes and pull requests use the test cache. The schedule runs every
       # package again (GO_TEST_COUNT=-count=1). The two store packages run in
       # the store job.
@@ -149,7 +167,7 @@ jobs:
   # rest of go test.
   store:
     if: ${{ github.event_name != 'pull_request' || !github.event.pull_request.draft }}
-    runs-on: *runs-on
+    runs-on: *runs-on-large
     strategy:
       fail-fast: false
       matrix:
@@ -202,7 +220,7 @@ jobs:
   # pinned here. Change a version together with its checksum and the Makefile.
   scan:
     if: ${{ github.event_name != 'schedule' && (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
-    runs-on: *runs-on
+    runs-on: *runs-on-small
     env:
       TRIVY_VERSION: 0.75.0
       TRIVY_SHA256: c6e65abddb348e25f10549df887045629cf28cc72453cd1c63acb717316b3f3f
@@ -242,7 +260,7 @@ jobs:
   # binaries drive the server on SQLite and on PostgreSQL.
   e2e:
     if: ${{ github.event_name != 'schedule' && (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
-    runs-on: *runs-on
+    runs-on: ${{ fromJSON(vars.CI_TRIAL_RUNS_ON || vars.CI_RUNS_ON || '"ubuntu-latest"') }}
     timeout-minutes: 70
     services:
       postgres:
