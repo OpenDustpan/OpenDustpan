@@ -95,5 +95,5 @@ func (s *Store) StagingSchemaForTest() string {
 // once in the next read of a profile revision, between the read of the
 // profile and the read of the revision.
 func (s *Store) InterleaveProfileRead(fn func()) {
-	s.betweenProfileReads = fn
+	s.betweenProfileReads.Store(&fn)
 }

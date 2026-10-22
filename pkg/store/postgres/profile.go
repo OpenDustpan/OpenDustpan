@@ -244,10 +244,8 @@ func (p *Profiles) Revision(
 			return err
 		}
 
-		if hook := p.store.betweenProfileReads; hook != nil {
-			p.store.betweenProfileReads = nil
-
-			hook()
+		if hook := p.store.betweenProfileReads.Swap(nil); hook != nil {
+			(*hook)()
 		}
 
 		if number == 0 {

@@ -276,12 +276,7 @@ func (s *Store) QueryDeletedUnits(ctx context.Context, q inventory.DeletedQuery)
 
 	// One REPEATABLE READ snapshot for the count and the page, so the total
 	// agrees with the rows.
-	opts := pgx.TxOptions{
-		IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly, DeferrableMode: pgx.NotDeferrable, BeginQuery: "",
-		CommitQuery: "",
-	}
-
-	err := pgx.BeginTxFunc(ctx, s.pool, opts, func(tx pgx.Tx) error {
+	err := pgx.BeginTxFunc(ctx, s.pool, s.snapshotOptions(), func(tx pgx.Tx) error {
 		var readErr error
 
 		page, readErr = queryDeletedPage(ctx, tx, q)
@@ -289,7 +284,7 @@ func (s *Store) QueryDeletedUnits(ctx context.Context, q inventory.DeletedQuery)
 		return readErr
 	})
 	if err != nil {
-		return inventory.DeletedPage{}, fmt.Errorf("deleted inventory snapshot: %w", err)
+		return inventory.DeletedPage{}, fmt.Errorf("deleted inventory snapshot: %w", readConflict(err))
 	}
 
 	return page, nil
@@ -635,8 +630,7 @@ func (s *Store) GetDeletedUnitFacts(
 ) (inventory.DeletedFacts, error) {
 	// One snapshot, so that the entry, the collection and the labels come from
 	// the same state of the database.
-	//nolint:exhaustruct_v5 // A snapshot read sets only isolation and access mode.
-	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
+	tx, err := s.pool.BeginTx(ctx, s.snapshotOptions())
 	if err != nil {
 		return inventory.DeletedFacts{}, fmt.Errorf("begin read transaction: %w", err)
 	}

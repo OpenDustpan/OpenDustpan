@@ -139,17 +139,34 @@ func journalRevocation(ctx context.Context, q *db.Queries, rev revocation, e aud
 	return nil
 }
 
-// lockRevocationJournal locks the journal in share mode for the rest of tx.
-// A write to the journal waits until tx ends, and tx waits for the writes in
-// flight, so the replay reads every journaled revocation and no later one
-// lands in the schema that the swap drops.
-func lockRevocationJournal(ctx context.Context, tx pgx.Tx, live string) error {
-	query := "LOCK TABLE " + revocationJournal(live) + " IN SHARE MODE"
+// lockSwap takes the swap lock in ACCESS EXCLUSIVE mode for the rest of the
+// swap transaction tx. The lock is the revocation journal, in the control
+// schema, which the swap never renames. A swap takes it before it touches a
+// live table:
+//
+//   - A snapshot read takes the same lock in ACCESS SHARE mode before its
+//     snapshot (see inSnapshotTx). So the swap waits for each snapshot read in
+//     flight, while it holds no live table, and a snapshot read that starts
+//     later waits for the swap to commit. A read cannot deadlock with the
+//     swap, and it cannot see the swapped tables without the changes of the
+//     swap.
+//   - A write to the journal waits until tx ends, and tx waits for the writes
+//     in flight, so the replay reads every journaled revocation and no later
+//     one lands in the schema that the swap drops.
+func lockSwap(ctx context.Context, tx pgx.Tx, live string) error {
+	query := "LOCK TABLE " + swapLockTable(live) + " IN ACCESS EXCLUSIVE MODE"
 	if _, err := tx.Exec(ctx, query); err != nil {
-		return fmt.Errorf("lock revocation journal: %w", err)
+		return fmt.Errorf("lock restore swap: %w", err)
 	}
 
 	return nil
+}
+
+// swapLockTable returns the qualified name of the table that serves as the
+// swap lock: the revocation journal. The name is qualified, so a table of the
+// same name in the live schema cannot take its place.
+func swapLockTable(live string) string {
+	return revocationJournal(live)
 }
 
 // revocationJournal returns the qualified name of the journal: the table
