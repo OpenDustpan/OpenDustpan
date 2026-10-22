@@ -62,7 +62,7 @@ A rule of a namespace that matches a Pulumi project and a stack-name pattern. It
 _Avoid_: Routing rule, assignment rule
 
 **Sharing rule**:
-A rule of the producer namespace that lets the jobs of named units read the root outputs of a producer (ADR 273). Its producer is a unit, a collection or a namespace. Its consumer is a unit, a collection, or the namespace of the producer. It can name a unit or a collection of another namespace, never a whole other namespace, and never a principal. A job token reads the outputs of another unit only when a sharing rule names the unit of the job and the principal that started the job holds `unit:read-outputs` on the producer. A sharing rule gives a person nothing: a person reads outputs with a grant of `unit:read-outputs`.
+A rule of the producer namespace that lets the jobs of named units read the root outputs of a producer (ADR 273). Its producer is a unit, a collection or a namespace. Its consumer is a unit, a collection, or the namespace of the producer. It can name a unit or a collection of another namespace, never a whole other namespace, and never a principal. A job token reads the outputs of another unit only when two checks pass. A sharing rule names the unit of the job, and the principal that started the job holds `unit:read-outputs` on the producer. A sharing rule gives a person nothing: a person reads outputs with a grant of `unit:read-outputs`.
 _Avoid_: Remote state sharing (except when naming the HCP Terraform feature), output grant, share, output-sharing rule (in new text)
 _Copy says_: "sharing rule", with "who can read the outputs" where it helps. The `unit:read-outputs` and `unit:manage-sharing` action names stay in the API.
 
@@ -75,7 +75,7 @@ The unit that reads the outputs of a producer, in the language of output sharing
 _Avoid_: Dependent (that is the side of a dependency edge), downstream, reader
 
 **Output sharing default**:
-The namespace setting `outputSharing.newUnitDefault` that decides the sharing rule of a new unit (ADR 273): `nobody` (the default) gives it none, and `namespace` gives it one rule that names its namespace. A change of the setting changes no rule of a unit that exists.
+The namespace setting `outputSharing.newUnitDefault` that decides the sharing rule of a new unit (ADR 273). The value `nobody` is the default and gives a new unit no rule. The value `namespace` gives it one rule that names its namespace. A change of the setting changes no rule of a unit that exists.
 _Avoid_: Sharing policy, default visibility
 
 **Label**:
