@@ -44,6 +44,7 @@ func recordJob() *job.Job {
 		Spec: job.Spec{
 			Unit:      identity.Object{},
 			Operation: job.OperationApply,
+			Purpose:   job.PurposeNone,
 			Executor:  job.ExecutorRunner,
 			Location: job.Location{
 				Connection: "",

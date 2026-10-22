@@ -56,7 +56,7 @@ func portableJobTables() []PortableTable {
 				{Name: portColNamespaceID, Kind: KindText},
 				{Name: "version_id", Kind: KindText},
 				{Name: "commit_id", Kind: KindText},
-				{Name: "job_id", Kind: KindText},
+				{Name: portColJobID, Kind: KindText},
 				{Name: "at_ms", Kind: KindTime},
 			},
 		},
