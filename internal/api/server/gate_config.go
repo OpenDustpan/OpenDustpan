@@ -582,9 +582,7 @@ func classifyGateConfig(err error) (failure, bool) {
 		return fail(http.StatusConflict, "the stored version changed: read it again and retry"), true
 	case errors.Is(err, gate.ErrFinal):
 		return fail(http.StatusConflict, err.Error()), true
-	case errors.Is(err, gate.ErrApprovers):
-		return http.StatusBadRequest, err.Error(), true
-	case errors.Is(err, gate.ErrInvalid), errors.Is(err, gate.ErrLimit):
+	case errors.Is(err, gate.ErrInvalid), errors.Is(err, gate.ErrApprovers), errors.Is(err, gate.ErrLimit):
 		return fail(http.StatusUnprocessableEntity, err.Error()), true
 	case errors.Is(err, gate.ErrUnavailable):
 		return fail(http.StatusServiceUnavailable, "the gate configuration is not available"), true

@@ -68,7 +68,7 @@ The server answers 200 with the stored default:
 The body takes no other field. A body with an unknown field answers 400. A
 value outside its bounds answers 422 with the field in the message.
 
-The server refuses approvers that no one can meet, and answers 400 with the
+The server refuses approvers that no one can meet, and answers 422 with the
 reason in the message. This holds for an approval default and for an approval
 rule:
 
@@ -155,12 +155,12 @@ audit log. A read works with an access token.
 
 | Status | Cause |
 | --- | --- |
-| 400 | The body is not one JSON object, holds an unknown field, or is larger than 64 KiB. The `If-Match` value is not one version. The approvers cannot be met. Examples: a group that does not exist, or a count above the people who can approve. |
+| 400 | The body is not one JSON object, holds an unknown field, or is larger than 64 KiB. The `If-Match` value is not one version. |
 | 401 | The request has no valid credential, or a console session must sign in again. |
 | 403 | The caller lacks the action on this namespace, or a change came with an access token. |
 | 404 | The namespace, the default or the rule does not exist. |
 | 409 | The stored version changed, or (rule PUT) a wider scope holds a rule with this ID. |
-| 422 | A field is outside its bounds, the ID is not valid, or a stored gate names the rule. |
+| 422 | A field is outside its bounds, the ID is not valid, or a stored gate names the rule. The approvers cannot be met, for example a group that does not exist or a count above the people who can approve. |
 
 ## The audit log
 
