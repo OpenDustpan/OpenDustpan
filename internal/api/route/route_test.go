@@ -171,7 +171,7 @@ func TestAuthorizeAll(t *testing.T) {
 	first := newAuthorizer(nil, nil)
 
 	err := guard(new([]string), first).AuthorizeAll(r, p, obj, actions)
-	if !errors.Is(err, identity.ErrDenied) || len(*first.asked) != 1 ||
+	if err == nil || !errors.Is(err, identity.ErrDenied) || len(*first.asked) != 1 ||
 		!strings.Contains(err.Error(), string(actions[0])) {
 		t.Fatalf("AuthorizeAll = %v after %d checks, want the first refusal after 1", err, len(*first.asked))
 	}
