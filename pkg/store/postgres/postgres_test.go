@@ -18,6 +18,7 @@ import (
 
 	"opendustpan.org/opendustpan/internal/authgate"
 	"opendustpan.org/opendustpan/internal/ident"
+	"opendustpan.org/opendustpan/internal/pgtest"
 	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/access/accesstest"
 	"opendustpan.org/opendustpan/pkg/accesstoken/accesstokentest"
@@ -1686,8 +1687,19 @@ func TestRenameKeepsTags(t *testing.T) {
 	}
 }
 
-// isolatedURL creates a fresh schema and returns base with search_path set to it.
+// isolatedURL returns a URL for a migrated schema in a database of its own,
+// cloned from the template that TestMain migrates one time. The clone is
+// dropped when the test ends. A test that needs to see the migrations run, or
+// to plant data before them, calls emptySchemaURL.
 func isolatedURL(tb testing.TB, base string) string {
+	tb.Helper()
+
+	return pgtest.MigratedURL(tb, base)
+}
+
+// emptySchemaURL creates a fresh, empty schema and returns base with
+// search_path set to it.
+func emptySchemaURL(tb testing.TB, base string) string {
 	tb.Helper()
 
 	suffix := make([]byte, 8)
