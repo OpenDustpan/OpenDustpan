@@ -555,6 +555,13 @@ func testStaleHolderCannotAdvance(t *testing.T, s FeedStore) {
 		t.Fatalf("renew of a live claim: got %+v after %+v, want the same token", short, old)
 	}
 
+	// A store that keeps the later expiry would leave B waiting for the
+	// first lease, so this fails at once with the cause.
+	if !short.claim.ExpiresAt.Before(old.claim.ExpiresAt) {
+		t.Fatalf("renew to a short lease did not move the expiry earlier: %v after %v", short.claim.ExpiresAt,
+			old.claim.ExpiresAt)
+	}
+
 	live := acquireWhenExpired(t, s)
 	if live.claim.Token <= old.claim.Token {
 		t.Fatalf("claim after expiry: got %+v after %+v, want a higher token", live, old)

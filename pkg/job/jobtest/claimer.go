@@ -164,9 +164,9 @@ func claimAgain(t *testing.T, h Harness, owner string, k durable.Kind) (job.Assi
 	}
 }
 
-// expired waits until the claim c is no longer live on the clock of the
-// store, without a claim by another owner: it claims a kind that holds no
-// operation until the lease passes.
+// expired waits on the local clock until the expiry that the store answered
+// for the claim c has passed, plus lapses polls, without a claim by another
+// owner. On one host the local clock and the clock of the store agree.
 func expired(t *testing.T, c job.PhaseClaim) {
 	t.Helper()
 
@@ -174,8 +174,8 @@ func expired(t *testing.T, c job.PhaseClaim) {
 }
 
 // lapse makes the claim of a expire: it shortens the lease of the claim to
-// shortLease and waits until that lease passes on the clock of the store. A
-// case claims with longRenew and calls lapse after its last write under the
+// shortLease and waits until the expiry that the store answered has passed,
+// plus lapses polls. A case claims with longRenew and calls lapse after its last write under the
 // claim. So no write of the case needs a short lease to be still live, and
 // a slow store cannot make a claim expire before the case wants it to: a
 // slow store makes the wait longer, not shorter.
@@ -196,6 +196,13 @@ func shorten(t *testing.T, h Harness, a *job.Assignment) {
 	pc, err := h.Claimer.Renew(t.Context(), a.Claim, shortLease)
 	if err != nil {
 		t.Fatalf("Renew to a short lease = %v", err)
+	}
+
+	// An adapter that keeps the later expiry would make expired wait for the
+	// first lease, up to the timeout of the test, with no message.
+	if !pc.Claim.ExpiresAt.Before(a.Claim.Claim.ExpiresAt) {
+		t.Fatalf("Renew to %v did not move the expiry earlier: %v after %v", shortLease, pc.Claim.ExpiresAt,
+			a.Claim.Claim.ExpiresAt)
 	}
 
 	a.Claim = pc

@@ -143,6 +143,7 @@ func Run(t *testing.T, newHarness Factory) {
 		{"a claim that expires inside a step transaction cannot write", testExpiryInsideStepTx},
 		{"a replaced claim cannot write", testReplacedClaimCannotWrite},
 		{"extend moves the expiry and keeps the claim live", testExtend},
+		{"extend to a shorter lease moves the expiry earlier", testExtendShorter},
 		{"a release by a non-holder changes nothing", testReleaseByNonHolder},
 		{"a release returns the operation to pending", testRelease},
 		{"a recorded step stays done after a takeover", testStepDoneAfterTakeover},
@@ -648,6 +649,35 @@ func testExtend(t *testing.T, h Harness) {
 
 	if _, err := a.Extend(t.Context(), extended, 0); !errors.Is(err, durable.ErrInvalid) {
 		t.Fatalf("Extend with a lease of 0: error = %v, want ErrInvalid", err)
+	}
+}
+
+// testExtendShorter proves that Extend sets the expiry to now plus the lease,
+// also when that is earlier than the expiry of the claim. The job and audit
+// suites shorten a long lease with Extend to end a claim fast.
+func testExtendShorter(t *testing.T, h Harness) {
+	t.Helper()
+
+	a := h.Open(t, 0)
+	mustStart(t, a, "k", kindA)
+	held := mustClaim(t, a, ownerA, longLease, kindA)
+
+	shorter, err := a.Extend(t.Context(), held.Claim, liveLease)
+	if err != nil {
+		t.Fatalf("Extend to a shorter lease: %v", err)
+	}
+
+	if shorter.Token != held.Claim.Token || shorter.Owner != ownerA {
+		t.Fatalf("Extend returned %+v, want the same token and owner as %+v", shorter, held.Claim)
+	}
+
+	if !shorter.ExpiresAt.Before(held.Claim.ExpiresAt) {
+		t.Fatalf("Extend to %v did not move the expiry earlier: %v after %v", liveLease, shorter.ExpiresAt,
+			held.Claim.ExpiresAt)
+	}
+
+	if got := mustGet(t, a, held.ID); !sameClaim(got.Claim, shorter) {
+		t.Fatalf("operation after Extend to a shorter lease = %+v, want the claim %+v", got.Claim, shorter)
 	}
 }
 
