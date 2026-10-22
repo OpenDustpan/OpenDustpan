@@ -42,10 +42,17 @@ SELECT u.stack_id, u.id, u.kind, u.dry_run, u.status, u.version, u.revision,
        u.created_by, u.restored_from, u.journal_version, u.token_id,
        COALESCE(c.size, 0)::BIGINT AS checkpoint_bytes
 FROM updates AS u
+JOIN stacks AS st ON st.id = u.stack_id
 LEFT JOIN checkpoints AS c ON c.stack_id = u.stack_id AND c.update_id = u.id
-WHERE u.stack_id = $1
+WHERE st.namespace = $1 AND st.project = $2 AND st.name = $3 AND st.deleted_at_ms IS NULL
   AND u.status = 'running' AND NOT u.dry_run AND u.kind <> 'preview'
 `
+
+type ActiveUpdateParams struct {
+	Namespace string
+	Project   string
+	Name      string
+}
 
 type ActiveUpdateRow struct {
 	StackID          string
@@ -67,8 +74,10 @@ type ActiveUpdateRow struct {
 	CheckpointBytes  int64
 }
 
-func (q *Queries) ActiveUpdate(ctx context.Context, stackID string) (ActiveUpdateRow, error) {
-	row := q.db.QueryRow(ctx, activeUpdate, stackID)
+// One statement finds the stack by its reference and reads the update, so the
+// read needs no transaction. No stack and no running update both return no row.
+func (q *Queries) ActiveUpdate(ctx context.Context, arg ActiveUpdateParams) (ActiveUpdateRow, error) {
+	row := q.db.QueryRow(ctx, activeUpdate, arg.Namespace, arg.Project, arg.Name)
 	var i ActiveUpdateRow
 	err := row.Scan(
 		&i.StackID,
@@ -4406,6 +4415,70 @@ func (q *Queries) GetCheckpointByUpdate(ctx context.Context, arg GetCheckpointBy
 	return i, err
 }
 
+const getCheckpointByUpdateRef = `-- name: GetCheckpointByUpdateRef :one
+SELECT c.stack_id, n.id AS namespace_id, c.update_id, c.lease_digest, c.schema_version, c.sequence,
+       c.digest, c.invalid, c.features, c.saved_at_ms,
+       c.blob_key, c.size, c.blob_size, c.blob_md5
+FROM checkpoints AS c
+JOIN stacks AS st ON st.id = c.stack_id
+JOIN namespaces AS n ON n.name = st.namespace
+WHERE st.namespace = $1 AND st.project = $2 AND st.name = $3 AND st.deleted_at_ms IS NULL AND c.update_id = $4
+`
+
+type GetCheckpointByUpdateRefParams struct {
+	Namespace string
+	Project   string
+	Name      string
+	UpdateID  string
+}
+
+type GetCheckpointByUpdateRefRow struct {
+	StackID       string
+	NamespaceID   string
+	UpdateID      string
+	LeaseDigest   []byte
+	SchemaVersion int64
+	Sequence      int64
+	Digest        []byte
+	Invalid       bool
+	Features      []byte
+	SavedAtMs     int64
+	BlobKey       string
+	Size          pgtype.Int8
+	BlobSize      pgtype.Int8
+	BlobMd5       []byte
+}
+
+// GetCheckpointByUpdate for a stack reference: one statement finds the stack
+// and reads the checkpoint, so the read needs no transaction. No stack and no
+// checkpoint both return no row.
+func (q *Queries) GetCheckpointByUpdateRef(ctx context.Context, arg GetCheckpointByUpdateRefParams) (GetCheckpointByUpdateRefRow, error) {
+	row := q.db.QueryRow(ctx, getCheckpointByUpdateRef,
+		arg.Namespace,
+		arg.Project,
+		arg.Name,
+		arg.UpdateID,
+	)
+	var i GetCheckpointByUpdateRefRow
+	err := row.Scan(
+		&i.StackID,
+		&i.NamespaceID,
+		&i.UpdateID,
+		&i.LeaseDigest,
+		&i.SchemaVersion,
+		&i.Sequence,
+		&i.Digest,
+		&i.Invalid,
+		&i.Features,
+		&i.SavedAtMs,
+		&i.BlobKey,
+		&i.Size,
+		&i.BlobSize,
+		&i.BlobMd5,
+	)
+	return i, err
+}
+
 const getCheckpointByVersion = `-- name: GetCheckpointByVersion :one
 SELECT c.stack_id, n.id AS namespace_id, c.update_id, c.lease_digest, c.schema_version, c.sequence,
        c.digest, c.invalid, c.features, c.saved_at_ms,
@@ -4414,12 +4487,14 @@ FROM checkpoints AS c
 JOIN updates AS u ON c.stack_id = u.stack_id AND c.update_id = u.id
 JOIN stacks AS st ON st.id = c.stack_id
 JOIN namespaces AS n ON n.name = st.namespace
-WHERE c.stack_id = $1 AND u.version = $2
+WHERE st.namespace = $1 AND st.project = $2 AND st.name = $3 AND st.deleted_at_ms IS NULL AND u.version = $4
 `
 
 type GetCheckpointByVersionParams struct {
-	StackID string
-	Version int64
+	Namespace string
+	Project   string
+	Name      string
+	Version   int64
 }
 
 type GetCheckpointByVersionRow struct {
@@ -4439,8 +4514,15 @@ type GetCheckpointByVersionRow struct {
 	BlobMd5       []byte
 }
 
+// One statement finds the stack by its reference and reads the checkpoint, so
+// the read needs no transaction. No stack and no checkpoint both return no row.
 func (q *Queries) GetCheckpointByVersion(ctx context.Context, arg GetCheckpointByVersionParams) (GetCheckpointByVersionRow, error) {
-	row := q.db.QueryRow(ctx, getCheckpointByVersion, arg.StackID, arg.Version)
+	row := q.db.QueryRow(ctx, getCheckpointByVersion,
+		arg.Namespace,
+		arg.Project,
+		arg.Name,
+		arg.Version,
+	)
 	var i GetCheckpointByVersionRow
 	err := row.Scan(
 		&i.StackID,
@@ -5773,6 +5855,67 @@ func (q *Queries) GetLatestCheckpoint(ctx context.Context, stackID string) (GetL
 	return i, err
 }
 
+const getLatestCheckpointByRef = `-- name: GetLatestCheckpointByRef :one
+SELECT c.stack_id, n.id AS namespace_id, c.update_id, c.lease_digest, c.schema_version, c.sequence,
+       c.digest, c.invalid, c.features, c.saved_at_ms,
+       c.blob_key, c.size, c.blob_size, c.blob_md5
+FROM checkpoints AS c
+JOIN updates AS u ON c.stack_id = u.stack_id AND c.update_id = u.id
+JOIN stacks AS st ON st.id = c.stack_id
+JOIN namespaces AS n ON n.name = st.namespace
+WHERE st.namespace = $1 AND st.project = $2 AND st.name = $3 AND st.deleted_at_ms IS NULL
+ORDER BY u.version DESC
+LIMIT 1
+`
+
+type GetLatestCheckpointByRefParams struct {
+	Namespace string
+	Project   string
+	Name      string
+}
+
+type GetLatestCheckpointByRefRow struct {
+	StackID       string
+	NamespaceID   string
+	UpdateID      string
+	LeaseDigest   []byte
+	SchemaVersion int64
+	Sequence      int64
+	Digest        []byte
+	Invalid       bool
+	Features      []byte
+	SavedAtMs     int64
+	BlobKey       string
+	Size          pgtype.Int8
+	BlobSize      pgtype.Int8
+	BlobMd5       []byte
+}
+
+// GetLatestCheckpoint for a stack reference: one statement finds the stack
+// and reads its checkpoint, so the read needs no transaction. No stack and no
+// checkpoint both return no row.
+func (q *Queries) GetLatestCheckpointByRef(ctx context.Context, arg GetLatestCheckpointByRefParams) (GetLatestCheckpointByRefRow, error) {
+	row := q.db.QueryRow(ctx, getLatestCheckpointByRef, arg.Namespace, arg.Project, arg.Name)
+	var i GetLatestCheckpointByRefRow
+	err := row.Scan(
+		&i.StackID,
+		&i.NamespaceID,
+		&i.UpdateID,
+		&i.LeaseDigest,
+		&i.SchemaVersion,
+		&i.Sequence,
+		&i.Digest,
+		&i.Invalid,
+		&i.Features,
+		&i.SavedAtMs,
+		&i.BlobKey,
+		&i.Size,
+		&i.BlobSize,
+		&i.BlobMd5,
+	)
+	return i, err
+}
+
 const getLatestDurableHeartbeat = `-- name: GetLatestDurableHeartbeat :one
 SELECT owner, at_ms FROM durable_heartbeats ORDER BY at_ms DESC, owner DESC LIMIT 1
 `
@@ -6947,6 +7090,55 @@ func (q *Queries) GetStackTags(ctx context.Context, stackID string) ([]GetStackT
 	return items, nil
 }
 
+const getStackWithTags = `-- name: GetStackWithTags :one
+SELECT s.namespace, s.project, s.name, s.id, n.id AS namespace_id, s.version, s.created_at_ms, s.updated_at_ms,
+       ARRAY(SELECT t.name FROM stack_tags AS t WHERE t.stack_id = s.id ORDER BY t.name)::TEXT[] AS tag_names,
+       ARRAY(SELECT t.value FROM stack_tags AS t WHERE t.stack_id = s.id ORDER BY t.name)::TEXT[] AS tag_values
+FROM stacks AS s
+JOIN namespaces AS n ON n.name = s.namespace
+WHERE s.namespace = $1 AND s.project = $2 AND s.name = $3 AND s.deleted_at_ms IS NULL
+`
+
+type GetStackWithTagsParams struct {
+	Namespace string
+	Project   string
+	Name      string
+}
+
+type GetStackWithTagsRow struct {
+	Namespace   string
+	Project     string
+	Name        string
+	ID          string
+	NamespaceID string
+	Version     int64
+	CreatedAtMs int64
+	UpdatedAtMs int64
+	TagNames    []string
+	TagValues   []string
+}
+
+// GetStack with the tags of the stack, ordered by name, in one statement, so
+// the read needs no transaction. The tag names and values are two arrays in
+// the same order.
+func (q *Queries) GetStackWithTags(ctx context.Context, arg GetStackWithTagsParams) (GetStackWithTagsRow, error) {
+	row := q.db.QueryRow(ctx, getStackWithTags, arg.Namespace, arg.Project, arg.Name)
+	var i GetStackWithTagsRow
+	err := row.Scan(
+		&i.Namespace,
+		&i.Project,
+		&i.Name,
+		&i.ID,
+		&i.NamespaceID,
+		&i.Version,
+		&i.CreatedAtMs,
+		&i.UpdatedAtMs,
+		&i.TagNames,
+		&i.TagValues,
+	)
+	return i, err
+}
+
 const getStateVersion = `-- name: GetStateVersion :one
 SELECT id, workspace_id, status, serial, lineage, md5, size, content_key, outputs,
        force, upload_digest, upload_expires_at_ms, holder, lock_id, created_at_ms, finalized_at_ms,
@@ -7132,13 +7324,16 @@ SELECT u.stack_id, u.id, u.kind, u.dry_run, u.status, u.version, u.revision,
        u.created_by, u.restored_from, u.journal_version, u.token_id,
        COALESCE(c.size, 0)::BIGINT AS checkpoint_bytes
 FROM updates AS u
+JOIN stacks AS st ON st.id = u.stack_id
 LEFT JOIN checkpoints AS c ON c.stack_id = u.stack_id AND c.update_id = u.id
-WHERE u.stack_id = $1 AND u.id = $2
+WHERE st.namespace = $1 AND st.project = $2 AND st.name = $3 AND st.deleted_at_ms IS NULL AND u.id = $4
 `
 
 type GetUpdateParams struct {
-	StackID string
-	ID      string
+	Namespace string
+	Project   string
+	Name      string
+	ID        string
 }
 
 type GetUpdateRow struct {
@@ -7161,8 +7356,15 @@ type GetUpdateRow struct {
 	CheckpointBytes  int64
 }
 
+// One statement finds the stack by its reference and reads the update, so the
+// read needs no transaction. No stack and no update both return no row.
 func (q *Queries) GetUpdate(ctx context.Context, arg GetUpdateParams) (GetUpdateRow, error) {
-	row := q.db.QueryRow(ctx, getUpdate, arg.StackID, arg.ID)
+	row := q.db.QueryRow(ctx, getUpdate,
+		arg.Namespace,
+		arg.Project,
+		arg.Name,
+		arg.ID,
+	)
 	var i GetUpdateRow
 	err := row.Scan(
 		&i.StackID,
@@ -9852,17 +10054,25 @@ func (q *Queries) ListBlobPurgesAfter(ctx context.Context, arg ListBlobPurgesAft
 }
 
 const listCheckpointBlobKeys = `-- name: ListCheckpointBlobKeys :many
-SELECT blob_key
-FROM checkpoints
-WHERE stack_id = $1
-ORDER BY blob_key
+SELECT c.blob_key
+FROM checkpoints AS c
+JOIN stacks AS st ON st.id = c.stack_id
+WHERE st.namespace = $1 AND st.project = $2 AND st.name = $3 AND st.deleted_at_ms IS NULL
+ORDER BY c.blob_key
 `
+
+type ListCheckpointBlobKeysParams struct {
+	Namespace string
+	Project   string
+	Name      string
+}
 
 // Every blob key the checkpoints of one stack name, ordered. A sweeper
 // compares this set against the stored objects to find blobs no checkpoint
-// references.
-func (q *Queries) ListCheckpointBlobKeys(ctx context.Context, stackID string) ([]string, error) {
-	rows, err := q.db.Query(ctx, listCheckpointBlobKeys, stackID)
+// references. One statement finds the stack by its reference and reads the
+// keys, so the read needs no transaction. No stack returns no row.
+func (q *Queries) ListCheckpointBlobKeys(ctx context.Context, arg ListCheckpointBlobKeysParams) ([]string, error) {
+	rows, err := q.db.Query(ctx, listCheckpointBlobKeys, arg.Namespace, arg.Project, arg.Name)
 	if err != nil {
 		return nil, err
 	}
@@ -10046,32 +10256,51 @@ func (q *Queries) ListDurableSteps(ctx context.Context, ids []string) ([]Durable
 }
 
 const listEvents = `-- name: ListEvents :many
-SELECT sequence, timestamp_ms, payload
-FROM update_events
-WHERE stack_id = $1 AND update_id = $2 AND sequence > $3
-ORDER BY sequence
-LIMIT $4
+SELECT (e.sequence IS NOT NULL)::BOOLEAN AS has_event,
+       COALESCE(e.sequence, 0)::BIGINT AS sequence,
+       COALESCE(e.timestamp_ms, 0)::BIGINT AS timestamp_ms,
+       COALESCE(e.payload, ''::BYTEA)::BYTEA AS payload
+FROM updates AS u
+JOIN stacks AS st ON st.id = u.stack_id
+LEFT JOIN LATERAL (
+    SELECT ev.sequence, ev.timestamp_ms, ev.payload
+    FROM update_events AS ev
+    WHERE ev.stack_id = u.stack_id AND ev.update_id = u.id AND ev.sequence > $1
+    ORDER BY ev.sequence
+    LIMIT $2
+) AS e ON TRUE
+WHERE st.namespace = $3 AND st.project = $4 AND st.name = $5 AND st.deleted_at_ms IS NULL AND u.id = $6
+ORDER BY e.sequence
 `
 
 type ListEventsParams struct {
-	StackID  string
-	UpdateID string
-	Sequence int64
-	Limit    int32
+	After     int64
+	PageLimit int32
+	Namespace string
+	Project   string
+	Name      string
+	ID        string
 }
 
 type ListEventsRow struct {
+	HasEvent    bool
 	Sequence    int64
 	TimestampMs int64
 	Payload     []byte
 }
 
+// One statement finds the stack by its reference, checks the update and reads
+// the page of events, so the read needs no transaction. No stack and no update
+// both return no row. An update with no event in the page returns one row
+// with has_event false.
 func (q *Queries) ListEvents(ctx context.Context, arg ListEventsParams) ([]ListEventsRow, error) {
 	rows, err := q.db.Query(ctx, listEvents,
-		arg.StackID,
-		arg.UpdateID,
-		arg.Sequence,
-		arg.Limit,
+		arg.After,
+		arg.PageLimit,
+		arg.Namespace,
+		arg.Project,
+		arg.Name,
+		arg.ID,
 	)
 	if err != nil {
 		return nil, err
@@ -10080,7 +10309,12 @@ func (q *Queries) ListEvents(ctx context.Context, arg ListEventsParams) ([]ListE
 	var items []ListEventsRow
 	for rows.Next() {
 		var i ListEventsRow
-		if err := rows.Scan(&i.Sequence, &i.TimestampMs, &i.Payload); err != nil {
+		if err := rows.Scan(
+			&i.HasEvent,
+			&i.Sequence,
+			&i.TimestampMs,
+			&i.Payload,
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -12818,6 +13052,129 @@ func (q *Queries) ListSignInProviders(ctx context.Context) ([]SignInProvider, er
 	return items, nil
 }
 
+const listStackPageInNamespace = `-- name: ListStackPageInNamespace :many
+SELECT namespace, project, name, id, version, created_at_ms, updated_at_ms
+FROM stacks
+WHERE namespace = $1 AND deleted_at_ms IS NULL
+  AND (project, name) > ($2, $3)
+ORDER BY project, name
+LIMIT $4
+`
+
+type ListStackPageInNamespaceParams struct {
+	Namespace    string
+	AfterProject string
+	AfterName    string
+	PageLimit    int32
+}
+
+type ListStackPageInNamespaceRow struct {
+	Namespace   string
+	Project     string
+	Name        string
+	ID          string
+	Version     int64
+	CreatedAtMs int64
+	UpdatedAtMs int64
+}
+
+// One page of the live stacks of a namespace after a project and a name, in
+// the order of the primary key. The cursor is a range of the key, so the read
+// starts at the cursor.
+func (q *Queries) ListStackPageInNamespace(ctx context.Context, arg ListStackPageInNamespaceParams) ([]ListStackPageInNamespaceRow, error) {
+	rows, err := q.db.Query(ctx, listStackPageInNamespace,
+		arg.Namespace,
+		arg.AfterProject,
+		arg.AfterName,
+		arg.PageLimit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListStackPageInNamespaceRow
+	for rows.Next() {
+		var i ListStackPageInNamespaceRow
+		if err := rows.Scan(
+			&i.Namespace,
+			&i.Project,
+			&i.Name,
+			&i.ID,
+			&i.Version,
+			&i.CreatedAtMs,
+			&i.UpdatedAtMs,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listStackPageInProject = `-- name: ListStackPageInProject :many
+SELECT namespace, project, name, id, version, created_at_ms, updated_at_ms
+FROM stacks
+WHERE namespace = $1 AND project = $2 AND deleted_at_ms IS NULL
+  AND name > $3
+ORDER BY name
+LIMIT $4
+`
+
+type ListStackPageInProjectParams struct {
+	Namespace string
+	Project   string
+	AfterName string
+	PageLimit int32
+}
+
+type ListStackPageInProjectRow struct {
+	Namespace   string
+	Project     string
+	Name        string
+	ID          string
+	Version     int64
+	CreatedAtMs int64
+	UpdatedAtMs int64
+}
+
+// One page of the live stacks of a project after a name, in the order of the
+// primary key.
+func (q *Queries) ListStackPageInProject(ctx context.Context, arg ListStackPageInProjectParams) ([]ListStackPageInProjectRow, error) {
+	rows, err := q.db.Query(ctx, listStackPageInProject,
+		arg.Namespace,
+		arg.Project,
+		arg.AfterName,
+		arg.PageLimit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListStackPageInProjectRow
+	for rows.Next() {
+		var i ListStackPageInProjectRow
+		if err := rows.Scan(
+			&i.Namespace,
+			&i.Project,
+			&i.Name,
+			&i.ID,
+			&i.Version,
+			&i.CreatedAtMs,
+			&i.UpdatedAtMs,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listStackTagsInNamespace = `-- name: ListStackTagsInNamespace :many
 SELECT t.stack_id, t.name, t.value
 FROM stack_tags AS t
@@ -12828,6 +13185,34 @@ ORDER BY t.stack_id, t.name
 
 func (q *Queries) ListStackTagsInNamespace(ctx context.Context, namespace string) ([]StackTag, error) {
 	rows, err := q.db.Query(ctx, listStackTagsInNamespace, namespace)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []StackTag
+	for rows.Next() {
+		var i StackTag
+		if err := rows.Scan(&i.StackID, &i.Name, &i.Value); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listStackTagsOfStacks = `-- name: ListStackTagsOfStacks :many
+SELECT stack_id, name, value
+FROM stack_tags
+WHERE stack_id = ANY($1::text[])
+ORDER BY stack_id, name
+`
+
+// Every tag of the stacks with the IDs, for one page of stacks.
+func (q *Queries) ListStackTagsOfStacks(ctx context.Context, stackIds []string) ([]StackTag, error) {
+	rows, err := q.db.Query(ctx, listStackTagsOfStacks, stackIds)
 	if err != nil {
 		return nil, err
 	}

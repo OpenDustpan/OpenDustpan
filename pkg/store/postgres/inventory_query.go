@@ -53,7 +53,28 @@ func (s *Store) QueryUnits(ctx context.Context, q inventory.UnitQuery) ([]invent
 
 	query, args := unitPageQuery(q)
 
-	rows, err := s.pool.Query(ctx, query, args...)
+	var page []inventory.Entry
+
+	// One snapshot, so that a restore swap between the two statements cannot
+	// give the units of one state with the labels of another.
+	err := s.inSnapshotConn(ctx, func(tx pgx.Tx) error {
+		var err error
+
+		page, err = queryUnitPage(ctx, s.queries.WithTx(tx), tx, query, args)
+
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return page, nil
+}
+
+// queryUnitPage runs the page statement and the label statement of QueryUnits
+// on tx.
+func queryUnitPage(ctx context.Context, q *db.Queries, tx pgx.Tx, query string, args []any) ([]inventory.Entry, error) {
+	rows, err := tx.Query(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("select inventory page: %w", err)
 	}
@@ -72,7 +93,7 @@ func (s *Store) QueryUnits(ctx context.Context, q inventory.UnitQuery) ([]invent
 		ids[i] = page[i].UnitID
 	}
 
-	labels, err := s.queries.ListInventoryLabelsOfUnits(ctx, ids)
+	labels, err := q.ListInventoryLabelsOfUnits(ctx, ids)
 	if err != nil {
 		return nil, fmt.Errorf("select inventory page labels: %w", err)
 	}
