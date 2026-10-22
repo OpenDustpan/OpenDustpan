@@ -441,8 +441,9 @@ type listStacksResponse struct {
 
 // listStacks answers GET /api/user/stacks. With an organization it lists the
 // stacks in that namespace. Without one it lists the stacks in every readable
-// namespace, ordered by namespace, project, then stack name. Paging stays
-// trivial: every answer holds all stacks and no continuation token.
+// namespace. The list is ordered by namespace, project, then stack name, in
+// pages of stackPageSize stacks: an answer with a continuationToken has a
+// next page.
 func (h *Handler) listStacks(
 	w http.ResponseWriter, r *http.Request, p identity.Principal, obj identity.Object,
 ) {
@@ -464,7 +465,7 @@ func (h *Handler) listStacks(
 		return
 	}
 
-	h.listStacksAll(ctx, w, p, project)
+	h.listStacksAll(ctx, w, r, p, project)
 }
 
 // listStacksIn lists the stacks in one namespace. The caller must hold
@@ -490,22 +491,14 @@ func (h *Handler) listStacksIn(
 		return
 	}
 
-	stacks, err := h.stacks.List(ctx, stack.Filter{Namespace: ns, Project: project})
-	if err != nil {
-		h.writeError(ctx, w, err)
-
-		return
-	}
-
-	h.writeJSON(ctx, w, http.StatusOK, listStacksResponse{
-		Stacks:            summarize(stacks),
-		ContinuationToken: nil,
+	h.serveStackPage(ctx, w, r, stackListQuery{
+		organization: ns.String(), project: project, namespaces: []namespace.Name{ns},
 	})
 }
 
-// listStacksAll lists the stacks in every readable namespace.
+// listStacksAll lists the stacks in every namespace that p may read.
 func (h *Handler) listStacksAll(
-	ctx context.Context, w http.ResponseWriter, p identity.Principal, project stack.ProjectName,
+	ctx context.Context, w http.ResponseWriter, r *http.Request, p identity.Principal, project stack.ProjectName,
 ) {
 	all, err := h.namespaces.List(ctx)
 	if err != nil {
@@ -514,7 +507,7 @@ func (h *Handler) listStacksAll(
 		return
 	}
 
-	out := []stackSummary{}
+	readable := make([]namespace.Name, 0, len(all))
 
 	for i := range all {
 		obj := identity.NamespaceObject(all[i].Name)
@@ -529,17 +522,10 @@ func (h *Handler) listStacksAll(
 			return
 		}
 
-		stacks, err := h.stacks.List(ctx, stack.Filter{Namespace: all[i].Name, Project: project})
-		if err != nil {
-			h.writeError(ctx, w, err)
-
-			return
-		}
-
-		out = append(out, summarize(stacks)...)
+		readable = append(readable, all[i].Name)
 	}
 
-	h.writeJSON(ctx, w, http.StatusOK, listStacksResponse{Stacks: out, ContinuationToken: nil})
+	h.serveStackPage(ctx, w, r, stackListQuery{organization: "", project: project, namespaces: readable})
 }
 
 // summarize converts stacks to the wire shape, never returning nil.
@@ -1000,7 +986,7 @@ func classify(err error) (int, string) {
 	switch {
 	case errors.Is(err, errInvalidBody):
 		return http.StatusBadRequest, invalidBodyMessage
-	case errors.Is(err, errRevealPathTooLong):
+	case errors.Is(err, errRevealPathTooLong), errors.Is(err, errContinuationToken):
 		return http.StatusBadRequest, err.Error()
 	case errors.Is(err, namespace.ErrInvalidName), errors.Is(err, stack.ErrInvalidName),
 		errors.Is(err, identity.ErrInvalidObject), errors.Is(err, stack.ErrInvalidUpdate):

@@ -102,6 +102,34 @@ FROM stacks
 WHERE namespace = $1 AND project = $2 AND deleted_at_ms IS NULL
 ORDER BY name;
 
+-- name: ListStackPageInNamespace :many
+-- One page of the live stacks of a namespace after a project and a name, in
+-- the order of the primary key. The cursor is a range of the key, so the read
+-- starts at the cursor.
+SELECT namespace, project, name, id, version, created_at_ms, updated_at_ms
+FROM stacks
+WHERE namespace = sqlc.arg(namespace) AND deleted_at_ms IS NULL
+  AND (project, name) > (sqlc.arg(after_project), sqlc.arg(after_name))
+ORDER BY project, name
+LIMIT sqlc.arg(page_limit);
+
+-- name: ListStackPageInProject :many
+-- One page of the live stacks of a project after a name, in the order of the
+-- primary key.
+SELECT namespace, project, name, id, version, created_at_ms, updated_at_ms
+FROM stacks
+WHERE namespace = sqlc.arg(namespace) AND project = sqlc.arg(project) AND deleted_at_ms IS NULL
+  AND name > sqlc.arg(after_name)
+ORDER BY name
+LIMIT sqlc.arg(page_limit);
+
+-- name: ListStackTagsOfStacks :many
+-- Every tag of the stacks with the IDs, for one page of stacks.
+SELECT stack_id, name, value
+FROM stack_tags
+WHERE stack_id = ANY(sqlc.arg(stack_ids)::text[])
+ORDER BY stack_id, name;
+
 -- name: CreateStackTag :exec
 INSERT INTO stack_tags (stack_id, name, value)
 VALUES ($1, $2, $3);

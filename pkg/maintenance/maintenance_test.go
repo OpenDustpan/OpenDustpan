@@ -168,6 +168,11 @@ func (f *fakeStacks) ListStacks(_ context.Context, _ stack.Filter) ([]stack.Stac
 	return append([]stack.Stack(nil), f.stacks...), nil
 }
 
+// QueryStacks implements stack.Store over the lists of ListStacks.
+func (f *fakeStacks) QueryStacks(ctx context.Context, q stack.PageQuery) ([]stack.Stack, error) {
+	return stack.ListPage(ctx, f.ListStacks, q)
+}
+
 func (*fakeStacks) DeleteStack(
 	context.Context,
 	stack.Ref,

@@ -221,6 +221,15 @@ func (s *Store) GetStack(ctx context.Context, ref stack.Ref) (stack.Stack, error
 	return s.inner.GetStack(ctx, ref)
 }
 
+// QueryStacks returns one page of stacks, unless a fault fires first.
+func (s *Store) QueryStacks(ctx context.Context, q stack.PageQuery) ([]stack.Stack, error) {
+	if err := s.before(ctx, "QueryStacks"); err != nil {
+		return nil, err
+	}
+
+	return s.inner.QueryStacks(ctx, q)
+}
+
 // ListStacks returns the stacks matching filter, unless a fault fires first.
 func (s *Store) ListStacks(ctx context.Context, filter stack.Filter) ([]stack.Stack, error) {
 	if err := s.before(ctx, "ListStacks"); err != nil {
