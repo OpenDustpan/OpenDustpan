@@ -38,9 +38,9 @@ concurrency:
 # Three repository variables, when they are set, replace CI_RUNS_ON, with
 # the same JSON format. They send all runs to the runners of a trial
 # provider, in three sizes:
-#   CI_TRIAL_RUNS_ON_LARGE  go and store, the CPU-bound tests
-#   CI_TRIAL_RUNS_ON        e2e
-#   CI_TRIAL_RUNS_ON_SMALL  lint and scan
+#   CI_TRIAL_RUNS_ON_LARGE  go, store and e2e, the CPU-bound tests
+#   CI_TRIAL_RUNS_ON        lint
+#   CI_TRIAL_RUNS_ON_SMALL  scan
 # For example "blacksmith-8vcpu-ubuntu-2404". Change a variable to try
 # another size without a commit. Unset all three to stop the trial.
 #
@@ -52,12 +52,11 @@ concurrency:
 # runner.environment, so the jobs check the runner name instead.
 
 jobs:
-  # The checks that need no database. They use little CPU, so they run on
-  # a small runner, apart from the tests.
+  # The checks that need no database. They run apart from the tests, so
+  # that they can use a smaller runner.
   lint:
     if: ${{ github.event_name != 'pull_request' || !github.event.pull_request.draft }}
-    # The scan job uses this value through the YAML alias *runs-on-small.
-    runs-on: &runs-on-small ${{ fromJSON(vars.CI_TRIAL_RUNS_ON_SMALL || vars.CI_RUNS_ON || '"ubuntu-latest"') }}
+    runs-on: ${{ fromJSON(vars.CI_TRIAL_RUNS_ON || vars.CI_RUNS_ON || '"ubuntu-latest"') }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
@@ -123,7 +122,7 @@ jobs:
 
   go:
     if: ${{ github.event_name != 'pull_request' || !github.event.pull_request.draft }}
-    # The store job uses this value through the YAML alias *runs-on-large.
+    # The store and e2e jobs use this value through the YAML alias *runs-on-large.
     runs-on: &runs-on-large ${{ fromJSON(vars.CI_TRIAL_RUNS_ON_LARGE || vars.CI_RUNS_ON || '"ubuntu-latest"') }}
     services:
       postgres:
@@ -220,7 +219,7 @@ jobs:
   # pinned here. Change a version together with its checksum and the Makefile.
   scan:
     if: ${{ github.event_name != 'schedule' && (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
-    runs-on: *runs-on-small
+    runs-on: ${{ fromJSON(vars.CI_TRIAL_RUNS_ON_SMALL || vars.CI_RUNS_ON || '"ubuntu-latest"') }}
     env:
       TRIVY_VERSION: 0.75.0
       TRIVY_SHA256: c6e65abddb348e25f10549df887045629cf28cc72453cd1c63acb717316b3f3f
@@ -260,7 +259,7 @@ jobs:
   # binaries drive the server on SQLite and on PostgreSQL.
   e2e:
     if: ${{ github.event_name != 'schedule' && (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
-    runs-on: ${{ fromJSON(vars.CI_TRIAL_RUNS_ON || vars.CI_RUNS_ON || '"ubuntu-latest"') }}
+    runs-on: *runs-on-large
     timeout-minutes: 70
     services:
       postgres:
