@@ -116,12 +116,8 @@ func (m *mem) BumpFence(_ context.Context, fence namespace.Fence) (namespace.Fen
 	return namespace.Fence{Namespace: fence.Namespace, FailoverVersion: m.fences[fence.Namespace]}, nil
 }
 
-// hour is the lease of the claims that Claim makes.
+// hour is the lease of the claims that Takeover makes.
 const hour = time.Hour
-
-func (m *mem) Claim(ctx context.Context, kind durable.Kind, owner string) (durable.Claim, error) {
-	return m.ClaimLease(ctx, kind, owner, hour)
-}
 
 func (m *mem) ClaimLease(
 	_ context.Context, kind durable.Kind, owner string, lease time.Duration,

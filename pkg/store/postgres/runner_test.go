@@ -59,10 +59,6 @@ func (d *runnerDomain) BumpFence(ctx context.Context, fence namespace.Fence) (na
 	return ns.Fence(), nil
 }
 
-func (d *runnerDomain) Claim(ctx context.Context, kind durable.Kind, owner string) (durable.Claim, error) {
-	return d.ClaimLease(ctx, kind, owner, time.Hour)
-}
-
 func (d *runnerDomain) ClaimLease(
 	ctx context.Context, kind durable.Kind, owner string, lease time.Duration,
 ) (durable.Claim, error) {
@@ -249,7 +245,7 @@ func TestRunnersOpenSessionRace(t *testing.T) {
 		t.Fatalf("Join: %v", err)
 	}
 
-	c, err := d.Claim(ctx, job.RunnerKind(pool.ID), joined.Runner.ID)
+	c, err := d.ClaimLease(ctx, job.RunnerKind(pool.ID), joined.Runner.ID, time.Hour)
 	if err != nil {
 		t.Fatalf("Claim: %v", err)
 	}

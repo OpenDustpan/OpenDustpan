@@ -460,7 +460,7 @@ func handoffSetUp(t *testing.T, h Harness) handoff {
 		t.Fatalf("Join: %v", err)
 	}
 
-	c, err := h.Domain.Claim(t.Context(), job.RunnerKind(f.pool.ID), r.ID)
+	c, err := h.Domain.ClaimLease(t.Context(), job.RunnerKind(f.pool.ID), r.ID, longLease)
 	if err != nil {
 		t.Fatalf("Claim: %v", err)
 	}
@@ -506,7 +506,7 @@ func testHandoffTokenClaim(t *testing.T, h Harness) {
 	_, err := h.Sessions.OpenSession(t.Context(), hash(secret), newKey(t), now.Add(runner.HandoffTokenTTL))
 	wantErr(t, "OpenSession at the expiry of the token", err, runner.ErrTokenExpired)
 
-	sweep, err := h.Domain.Claim(t.Context(), runner.SweepKind(f.pool.ID), r.ID)
+	sweep, err := h.Domain.ClaimLease(t.Context(), runner.SweepKind(f.pool.ID), r.ID, longLease)
 	if err != nil {
 		t.Fatalf("Claim: %v", err)
 	}
@@ -516,7 +516,7 @@ func testHandoffTokenClaim(t *testing.T, h Harness) {
 	err = h.Sessions.IssueHandoffToken(t.Context(), tok, sweep)
 	wantErr(t, "IssueHandoffToken for a kind of the other purpose", err, runner.ErrInvalid)
 
-	c, err := h.Domain.Claim(t.Context(), job.RunnerKind(f.pool.ID), r.ID)
+	c, err := h.Domain.ClaimLease(t.Context(), job.RunnerKind(f.pool.ID), r.ID, longLease)
 	if err != nil {
 		t.Fatalf("Claim: %v", err)
 	}
@@ -583,7 +583,7 @@ func testRejoinNeedsOffline(t *testing.T, h Harness) {
 		t.Fatalf("Join: %v", err)
 	}
 
-	c, err := h.Domain.Claim(t.Context(), job.RunnerKind(f.pool.ID), first.ID)
+	c, err := h.Domain.ClaimLease(t.Context(), job.RunnerKind(f.pool.ID), first.ID, longLease)
 	if err != nil {
 		t.Fatalf("Claim: %v", err)
 	}
@@ -644,7 +644,7 @@ func testHandoffTokenOwner(t *testing.T, h Harness) {
 		t.Fatalf("Join: %v", err)
 	}
 
-	c, err := h.Domain.Claim(t.Context(), job.RunnerKind(f.pool.ID), l.r.ID)
+	c, err := h.Domain.ClaimLease(t.Context(), job.RunnerKind(f.pool.ID), l.r.ID, longLease)
 	if err != nil {
 		t.Fatalf("Claim: %v", err)
 	}
@@ -765,7 +765,7 @@ func testRejoinKeepsSessions(t *testing.T, h Harness) {
 		t.Fatalf("OpenSession: %v", err)
 	}
 
-	waiting, err := h.Domain.Claim(t.Context(), job.RunnerKind(f.pool.ID), r.ID)
+	waiting, err := h.Domain.ClaimLease(t.Context(), job.RunnerKind(f.pool.ID), r.ID, longLease)
 	if err != nil {
 		t.Fatalf("Claim: %v", err)
 	}
@@ -844,7 +844,7 @@ func testRunnerRenew(t *testing.T, h Harness) {
 	_, err = h.Sessions.RunnerRenew(t.Context(), c, f.fence, runner.DefaultLease, after)
 	wantErr(t, "RunnerRenew again after the session wait limit", err, runner.ErrSessionWaitPassed)
 
-	renewed, err := h.Domain.Claim(t.Context(), job.RunnerKind(f.pool.ID), r.ID)
+	renewed, err := h.Domain.ClaimLease(t.Context(), job.RunnerKind(f.pool.ID), r.ID, longLease)
 	if err != nil {
 		t.Fatalf("Claim: %v", err)
 	}
@@ -918,7 +918,7 @@ func testSessionNearWaitLimit(t *testing.T, h Harness) {
 		t.Fatalf("Session after a renewal by the runner past the limit: %v", err)
 	}
 
-	slow, err := h.Domain.Claim(t.Context(), job.RunnerKind(f.pool.ID), r.ID)
+	slow, err := h.Domain.ClaimLease(t.Context(), job.RunnerKind(f.pool.ID), r.ID, longLease)
 	if err != nil {
 		t.Fatalf("Claim: %v", err)
 	}
@@ -967,7 +967,7 @@ func testRecordClaim(t *testing.T, h Harness) {
 		t.Fatalf("Join: %v", err)
 	}
 
-	c, err := h.Domain.Claim(t.Context(), job.RunnerKind(f.pool.ID), r.ID)
+	c, err := h.Domain.ClaimLease(t.Context(), job.RunnerKind(f.pool.ID), r.ID, longLease)
 	if err != nil {
 		t.Fatalf("Claim: %v", err)
 	}
@@ -1151,7 +1151,7 @@ func testRenewExpiryFromDatabase(t *testing.T, h Harness) {
 		t.Fatalf("Join: %v", err)
 	}
 
-	c, err := h.Domain.Claim(t.Context(), job.RunnerKind(f.pool.ID), r.ID)
+	c, err := h.Domain.ClaimLease(t.Context(), job.RunnerKind(f.pool.ID), r.ID, longLease)
 	if err != nil {
 		t.Fatalf("Claim: %v", err)
 	}
