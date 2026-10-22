@@ -2,9 +2,10 @@ package postgres
 
 import (
 	"context"
+	"crypto/rand"
 	"errors"
 	"fmt"
-	"math/rand/v2"
+	"math/big"
 	"strconv"
 	"time"
 
@@ -195,18 +196,28 @@ func lockSwap(ctx context.Context, tx pgx.Tx, live string) error {
 			return fmt.Errorf("lock restore swap: %w", err)
 		}
 
-		// The jitter keeps two restores from retrying in step.
-		half := backoff / backoffJitterDivisor
-		wait := half + rand.N(half+1) //nolint:gosec // G404: jitter only, not a secret.
-
 		select {
-		case <-time.After(wait):
+		case <-time.After(swapJitter(backoff)):
 		case <-ctx.Done():
 			return errSwapLockBusy(ctx)
 		}
 
 		backoff = min(backoff*backoffGrowth, swapLockBackoffMax)
 	}
+}
+
+// swapJitter returns a wait from half of backoff to backoff. The jitter keeps
+// two restores from retrying in step. When the random source fails, it
+// returns half of backoff, with no jitter.
+func swapJitter(backoff time.Duration) time.Duration {
+	half := backoff / backoffJitterDivisor
+
+	n, err := rand.Int(rand.Reader, big.NewInt(int64(half)+1))
+	if err != nil {
+		return half
+	}
+
+	return half + time.Duration(n.Int64())
 }
 
 // errSwapLockBusy returns the error of a swap that did not get the lock
