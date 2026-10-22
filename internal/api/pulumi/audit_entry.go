@@ -70,10 +70,10 @@ func requestEntry(
 	}
 }
 
-// changeEntry returns the audit entry of the kind change for a (ADR 60,
-// decision 4). The store appends it in the transaction of the change, so the
-// change and its entry commit together or not at all (fail closed). The
-// service stamps the time of the change on it.
+// changeEntry returns the audit entry of the kind change for a. The store
+// appends it in the transaction of the change, so the change and its entry
+// commit together or not at all (fail closed). The service stamps the time of
+// the change on it.
 func changeEntry(ctx context.Context, a changeAudit) audit.Entry {
 	return requestEntry(ctx, a.request, a.principal, a.object, auditDetail{
 		at:         time.Time{},
