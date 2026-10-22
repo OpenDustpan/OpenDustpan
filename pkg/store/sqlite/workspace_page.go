@@ -2,7 +2,6 @@ package sqlite
 
 import (
 	"context"
-	"errors"
 	"fmt"
 
 	"opendustpan.org/opendustpan/pkg/store/sqlite/internal/db"
@@ -10,25 +9,25 @@ import (
 )
 
 // QueryWorkspaces implements workspace.Store with one count and one page
-// query in one transaction, so the total agrees with the page. The search
-// compares characters exactly, as strings.Contains does: instr, unlike LIKE,
-// does not fold the case of ASCII letters.
+// query in one read transaction, so the total agrees with the page. The read
+// transaction takes no write lock. The search compares characters exactly, as
+// strings.Contains does: instr, unlike LIKE, does not fold the case of ASCII
+// letters.
 func (s *Store) QueryWorkspaces(ctx context.Context, q workspace.ListQuery) (workspace.ListPage, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	tx, err := s.conn.BeginTx(ctx, nil)
-	if err != nil {
-		return workspace.ListPage{}, fmt.Errorf("begin transaction: %w", err)
-	}
+	var page workspace.ListPage
 
-	page, err := queryWorkspacePage(ctx, s.queries.WithTx(tx), q)
-	if err != nil {
-		return workspace.ListPage{}, errors.Join(err, rollback(tx))
-	}
+	err := s.inReadTx(ctx, func(qtx *db.Queries) error {
+		var readErr error
 
-	if err := tx.Commit(); err != nil {
-		return workspace.ListPage{}, fmt.Errorf("commit transaction: %w", err)
+		page, readErr = queryWorkspacePage(ctx, qtx, q)
+
+		return readErr
+	})
+	if err != nil {
+		return workspace.ListPage{}, err
 	}
 
 	return page, nil
