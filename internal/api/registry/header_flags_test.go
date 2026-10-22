@@ -68,6 +68,13 @@ func TestHeaderFlagsMatchTheHandler(t *testing.T) {
 
 			return probe(t, f, http.MethodPut, versionTarget, body)
 		},
+		"listRegistryProviders": func(t *testing.T) headertest.Probe {
+			t.Helper()
+
+			f, _ := released(t)
+
+			return probe(t, f, http.MethodGet, base+"/providers", nil)
+		},
 		"listProviderReleases": func(t *testing.T) headertest.Probe {
 			t.Helper()
 

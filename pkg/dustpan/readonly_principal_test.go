@@ -222,7 +222,7 @@ func writeTargets(t *testing.T, w *contextWorld) []writeTarget {
 	units, err := inventoryapi.NewHandler(inventoryapi.Config{
 		StateGuard:     nil,
 		Views:          nil,
-		Audit:          nil,
+		Audit:          st,
 		OnAuditFailure: nil,
 		Locks:          nil,
 		PublicURL:      "",
@@ -246,7 +246,7 @@ func writeTargets(t *testing.T, w *contextWorld) []writeTarget {
 	}
 
 	contexts, err := contextapi.NewHandler(contextapi.Config{
-		Audit: nil, OnAuditFailure: nil,
+		Audit: st, OnAuditFailure: nil,
 		Namespaces: namespaces, Units: st, Deleted: st, Collections: collections, Entries: st, Writer: writer,
 		Authenticator: authn, Authorizer: identity.AdminOnly{}, Sessions: nil, Logger: logger,
 		DenialLimiter: nil,

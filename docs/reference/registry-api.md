@@ -15,6 +15,7 @@ the namespace as its object.
 | --- | --- | --- | --- |
 | `POST /uploads` | `registry:publish` | refused with 400 | 201 and the token, the SHA-256 and the size of the staged file |
 | `PUT /providers/{name}/versions/{version}` | `registry:publish` | taken | 200 and the release |
+| `GET /providers` | `registry:read` | not applicable | One page of the providers of the namespace that have a release, ordered by name |
 | `GET /providers/{name}/versions` | `registry:read` | not applicable | The releases of the provider, from the lowest version to the highest |
 | `GET /providers/{name}/versions/{version}` | `registry:read` | not applicable | The release |
 | `POST /keys` | `registry:manage-keys` | taken | 201 and the key |
@@ -40,6 +41,14 @@ The body of `POST /uploads` is the bytes of one file. Send the header
 The token has 32 lowercase letters and digits. The SHA-256 and the size are the
 values that the server computed while it wrote the file. A body above the limit
 of one file answers 413. An empty body answers 400.
+
+### List providers
+
+`GET /providers` answers `{"providers": [{"namespace", "name"}], "nextPageToken"}`.
+`pageSize` is a number from 1 to 1000, and the default is 100. When more providers
+remain, `nextPageToken` holds the value to send as `pageToken` in the next request.
+It is empty on the last page. A namespace with no provider answers an empty
+list. A `pageSize` or a `pageToken` that is not valid answers 400.
 
 ### Publish
 
@@ -95,6 +104,7 @@ text names the file or the field that fails and holds no byte of a key.
 | --- | --- | --- |
 | 400 | `registry.invalid` | A name, a version, a protocol or a request field is not valid |
 | 400 | `registry.key-invalid` | The key cannot be registered |
+| 403 | `access.denied`, `access.ip-not-allowed`, `session.csrf`, `session.other-site` | See the error codes of a 403 answer |
 | 404 | `registry.not-found` | No such release, provider, version or key |
 | 404 | `registry.not-staged` | A token names a file that does not exist: upload the file again |
 | 409 | `registry.version-exists` | The version exists with other files |

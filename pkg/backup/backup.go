@@ -148,11 +148,15 @@ var Tables = []string{
 	"job_freezes",
 	"unit_state_versions",
 	"unit_final_versions",
+	"job_plans",
+	"job_logs",
+	"job_log_chunks",
 	"profiles",
 	"profile_revisions",
 	"manual_locks",
 	TablePersonPreferences,
 	"saved_views",
+	"drift_results",
 	TableGitHostAppRegistrations,
 	TableGitHostInstallations,
 	"git_host_connections",
@@ -161,6 +165,7 @@ var Tables = []string{
 	"notification_sinks",
 	"notification_sink_secrets",
 	"notification_sink_refs",
+	"item_keys",
 }
 
 // TablesCopy returns a copy of Tables. Callers that sort or filter the list

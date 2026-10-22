@@ -17,6 +17,7 @@ import (
 	"opendustpan.org/opendustpan/internal/api/idempotent"
 	"opendustpan.org/opendustpan/internal/api/refusal"
 	"opendustpan.org/opendustpan/internal/denylimit"
+	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/internal/sessionauth"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/idempotency"
@@ -88,6 +89,8 @@ type Handler struct {
 // NewHandler returns a Handler.
 func NewHandler(cfg Config) (*Handler, error) {
 	switch {
+	case cfg.Audit == nil:
+		return nil, fmt.Errorf("%w: audit store", ErrMissingDependency)
 	case cfg.Profiles == nil:
 		return nil, fmt.Errorf("%w: profile service", ErrMissingDependency)
 	case cfg.Authenticator == nil:
@@ -98,13 +101,16 @@ func NewHandler(cfg Config) (*Handler, error) {
 		return nil, fmt.Errorf("%w: logger", ErrMissingDependency)
 	}
 
+	recorder, err := refusal.New(cfg.Authorizer, cfg.Audit, cfg.Namespaces, cfg.Logger, cfg.OnAuditFailure)
+	if err != nil {
+		return nil, fmt.Errorf("denial recorder: %w", err)
+	}
+
 	h := &Handler{
 		profiles: cfg.Profiles,
 		authn:    cfg.Authenticator,
 		authz:    cfg.Authorizer,
-		guard: refusal.New(cfg.Authorizer, cfg.Audit, cfg.Namespaces, cfg.Logger, cfg.OnAuditFailure).
-			WithLimiter(cfg.DenialLimiter).
-			WithSurface("profile"),
+		guard:    recorder.WithLimiter(cfg.DenialLimiter).WithSurface("profile"),
 		sessions: cfg.Sessions,
 		policy:   cfg.SessionPolicy,
 		idem:     cfg.Idempotency,
@@ -290,7 +296,7 @@ func classifyAuth(err error) (problem, bool) {
 	case errors.Is(err, identity.ErrUnauthenticated):
 		return problem{status: http.StatusUnauthorized, code: "auth.unauthenticated", message: "unauthenticated"}, true
 	case errors.Is(err, sessionauth.ErrCSRF), errors.Is(err, sessionauth.ErrOtherSite):
-		return problem{status: http.StatusForbidden, code: "auth.forbidden", message: err.Error()}, true
+		return problem{status: http.StatusForbidden, code: errcode.Forbidden(err), message: err.Error()}, true
 	case errors.Is(err, errFreshStepRequired), errors.Is(err, profile.ErrFreshRequired):
 		// A request with no console session, or a reveal with no fresh
 		// authentication check: fail closed.
@@ -311,7 +317,7 @@ func classifyAuth(err error) (problem, bool) {
 	}
 
 	if errors.Is(err, identity.ErrDenied) {
-		return problem{status: http.StatusForbidden, code: "auth.forbidden", message: "forbidden"}, true
+		return problem{status: http.StatusForbidden, code: errcode.Forbidden(err), message: "forbidden"}, true
 	}
 
 	return problem{status: 0, code: "", message: ""}, false

@@ -173,7 +173,10 @@ func legacyHostSinks() []sinkTampering {
 		{"chat host with an empty port", `UPDATE notification_sinks SET target = 'hooks.example.com:'`, true},
 		{
 			"webhook host with an underscore",
-			`UPDATE notification_sinks SET kind = 'webhook', platform = '', target = 'https://hk_1.example.com/SECRET-PATH'`,
+			`UPDATE notification_sinks SET kind = 'webhook', platform = '', target = 'hk_1.example.com';
+				INSERT INTO notification_sink_refs (namespace_id, ref) SELECT namespace_id, 'itm-bbbbbbbb' FROM notification_sinks;
+				INSERT INTO notification_sink_secrets (namespace_id, ref, sink_id, position, ciphertext)
+					SELECT namespace_id, 'itm-bbbbbbbb', id, 1, x'00' FROM notification_sinks`,
 			true,
 		},
 	}
@@ -192,8 +195,10 @@ func TestStoredSinkFromBeforeTheHostCheck(t *testing.T) {
 			s := openInternalTemplated(t)
 			seedSink(t, s)
 
-			if _, err := s.conn.ExecContext(t.Context(), tc.update); err != nil {
-				t.Fatalf("change the rows: %v", err)
+			for stmt := range strings.SplitSeq(tc.update, ";") {
+				if _, err := s.conn.ExecContext(t.Context(), stmt); err != nil {
+					t.Fatalf("change the rows: %v", err)
+				}
 			}
 
 			if err := checkStagedSinks(t.Context(), s.conn); err != nil {

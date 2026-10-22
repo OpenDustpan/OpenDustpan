@@ -37,6 +37,7 @@ import (
 	"opendustpan.org/opendustpan/internal/baseurl"
 	"opendustpan.org/opendustpan/internal/bodygate"
 	"opendustpan.org/opendustpan/internal/denylimit"
+	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/internal/sessionauth"
 	"opendustpan.org/opendustpan/internal/token"
 	"opendustpan.org/opendustpan/pkg/audit"
@@ -160,25 +161,41 @@ type Handler struct {
 	supportedJournal int
 }
 
+// validate returns ErrMissingDependency when cfg lacks a required dependency.
+func (cfg Config) validate() error {
+	switch {
+	case cfg.Audit == nil:
+		return fmt.Errorf("%w: audit store", ErrMissingDependency)
+	case cfg.Stacks == nil:
+		return fmt.Errorf("%w: stack service", ErrMissingDependency)
+	case cfg.Updates == nil:
+		return fmt.Errorf("%w: update service", ErrMissingDependency)
+	case cfg.Secrets == nil:
+		return fmt.Errorf("%w: secret service", ErrMissingDependency)
+	case cfg.Namespaces == nil:
+		return fmt.Errorf("%w: namespace service", ErrMissingDependency)
+	case cfg.Authenticator == nil:
+		return fmt.Errorf("%w: authenticator", ErrMissingDependency)
+	case cfg.Authorizer == nil:
+		return fmt.Errorf("%w: authorizer", ErrMissingDependency)
+	case cfg.Logger == nil:
+		return fmt.Errorf("%w: logger", ErrMissingDependency)
+	case cfg.CheckpointDeltaCutoff < 0:
+		return fmt.Errorf("%w: %d", ErrInvalidCutoff, cfg.CheckpointDeltaCutoff)
+	}
+
+	return nil
+}
+
 // NewHandler returns a Handler. Every Config field but Sessions is required.
 func NewHandler(cfg Config) (*Handler, error) {
-	switch {
-	case cfg.Stacks == nil:
-		return nil, fmt.Errorf("%w: stack service", ErrMissingDependency)
-	case cfg.Updates == nil:
-		return nil, fmt.Errorf("%w: update service", ErrMissingDependency)
-	case cfg.Secrets == nil:
-		return nil, fmt.Errorf("%w: secret service", ErrMissingDependency)
-	case cfg.Namespaces == nil:
-		return nil, fmt.Errorf("%w: namespace service", ErrMissingDependency)
-	case cfg.Authenticator == nil:
-		return nil, fmt.Errorf("%w: authenticator", ErrMissingDependency)
-	case cfg.Authorizer == nil:
-		return nil, fmt.Errorf("%w: authorizer", ErrMissingDependency)
-	case cfg.Logger == nil:
-		return nil, fmt.Errorf("%w: logger", ErrMissingDependency)
-	case cfg.CheckpointDeltaCutoff < 0:
-		return nil, fmt.Errorf("%w: %d", ErrInvalidCutoff, cfg.CheckpointDeltaCutoff)
+	if err := cfg.validate(); err != nil {
+		return nil, err
+	}
+
+	recorder, err := refusal.New(cfg.Authorizer, cfg.Audit, cfg.Namespaces, cfg.Logger, cfg.OnAuditFailure)
+	if err != nil {
+		return nil, fmt.Errorf("denial recorder: %w", err)
 	}
 
 	h := &Handler{
@@ -196,12 +213,10 @@ func NewHandler(cfg Config) (*Handler, error) {
 		gate:           cfg.Gate,
 		audit:          cfg.Audit,
 		onAuditFailure: cfg.OnAuditFailure,
-		guard: refusal.New(cfg.Authorizer, cfg.Audit, cfg.Namespaces, cfg.Logger,
-			cfg.OnAuditFailure).WithLimiter(cfg.DenialLimiter).
-			WithSurface("pulumi"),
-		mux:         newPatternMux(),
-		routes:      nil,
-		deltaCutoff: cfg.CheckpointDeltaCutoff,
+		guard:          recorder.WithLimiter(cfg.DenialLimiter).WithSurface("pulumi"),
+		mux:            newPatternMux(),
+		routes:         nil,
+		deltaCutoff:    cfg.CheckpointDeltaCutoff,
 
 		disablePulumiJournaling: cfg.DisablePulumiJournaling,
 		supportedJournal:        maxSupportedJournalVersion,
@@ -916,6 +931,14 @@ type errorResponse struct {
 	Code    int    `json:"code"`
 }
 
+// codedErrorResponse is errorResponse with the stable machine code of a 403.
+// The fields of errorResponse keep their names and their meaning.
+type codedErrorResponse struct {
+	Message   string `json:"message"`
+	Code      int    `json:"code"`
+	ErrorCode string `json:"errorCode"`
+}
+
 func (h *Handler) writeError(ctx context.Context, w http.ResponseWriter, err error) {
 	status, message := classify(err)
 
@@ -929,6 +952,14 @@ func (h *Handler) writeError(ctx context.Context, w http.ResponseWriter, err err
 	case errors.Is(err, namespace.ErrFenced):
 		h.logger.WarnContext(ctx, "write fenced", slog.String("error", err.Error()))
 	default:
+	}
+
+	if status == http.StatusForbidden {
+		if code := errcode.Forbidden(err); code != "" {
+			h.writeJSON(ctx, w, status, codedErrorResponse{Code: status, Message: message, ErrorCode: code})
+
+			return
+		}
 	}
 
 	h.writeJSON(ctx, w, status, errorResponse{Code: status, Message: message})

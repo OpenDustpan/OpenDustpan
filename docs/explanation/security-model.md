@@ -333,6 +333,7 @@ through each API and check that the log and the metrics do not hold them.
   answers 503 with `Retry-After`. An upload with large outputs asks for more budget as the outputs grow. It answers 503 with a Retry-After of 1 to 3 seconds when the budget has no room. It answers 413 when the upload can never fit the budget. Raise `--max-body-bytes-in-flight` to fit such an upload.
 - The server waits at most 10 seconds for the request headers.
 - **Failed token lookups have a limit for each client address.** The server counts the failed lookups of secret-shaped token values for each client address. The address is the resolved client address. An IPv6 address counts by its /64 network. Behind a proxy that is not in `--trusted-proxies`, every client shares the address of the proxy. A request with an unknown address counts in one shared bucket named `unknown`.
+- **Sign-in requests have their own limit for each client address.** The server counts each start of a console sign-in and each failed sign-in step. The count has its own budget. Token lookups do not use it. Many successful sign-ins from one address slow only the next sign-ins from that address. An example is a team behind one proxy. They never slow a token lookup. The address rules are the same as for failed token lookups.
 - No other rate limit exists today. Planned in a new RFC (ADR 32).
 
 ## Outbound connections

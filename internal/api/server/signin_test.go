@@ -963,6 +963,12 @@ func TestSignInWithoutAutoCreate(t *testing.T) {
 		t.Fatalf("callback = %d %s, want 403 that names no principal", rec.Code, rec.Body.String())
 	}
 
+	// A refused sign-in is not a missing permission: a grant does not help,
+	// so the answer must not carry access.denied.
+	if strings.Contains(rec.Body.String(), "errorCode") {
+		t.Errorf("a refused sign-in answers a code: %s", rec.Body.String())
+	}
+
 	if reason, outcome := e.refusedReason(t); reason != "no principal" || outcome != audit.OutcomeDenied {
 		t.Errorf("audit = %q %s, want no principal, denied", reason, outcome)
 	}

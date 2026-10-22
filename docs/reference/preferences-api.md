@@ -135,7 +135,8 @@ A client selects its text from `errorCode`. An error of a field has
 | 400 | `preferences.if-match-invalid` | `If-Match` is not one version in quotes, or `*` |
 | 401 | | No valid token |
 | 403 | `preferences.person-required` | The caller is not a person |
-| 403 | | The caller lacks the action |
+| 403 | `access.denied` | The caller lacks the action |
+| 403 | `access.ip-not-allowed` | The client address is outside the IP allowlist of the namespace |
 | 413 | `preferences.body-too-large` | The body is over 4096 bytes |
 | 412 | `preferences.precondition-failed` | `If-Match` holds a version that is not the current one |
 | 415 | `preferences.media-type-unsupported` | The content type is not `application/merge-patch+json` |

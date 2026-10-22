@@ -190,8 +190,8 @@ func sink(id string, scope namespace.Name) notify.Sink {
 		Kind:       notify.SinkWebhook,
 		Name:       "Ops",
 		Platform:   "",
-		Target:     "https://hooks.example.com/ops",
-		SecretRefs: []string{"itm-" + id},
+		Target:     "hooks.example.com",
+		SecretRefs: []string{"itm-" + id + "-url", "itm-" + id},
 		CreatedBy:  "alice",
 		Version:    0,
 	}
@@ -1374,7 +1374,7 @@ func changeDestination(t *testing.T, h Harness, fence namespace.Fence, renamed n
 		change  func(s *notify.Sink)
 		secrets []notify.SealedSecret
 	}{
-		{"a new target", func(s *notify.Sink) { s.Target = "https://hooks.example.net/ops" }, nil},
+		{"a new target", func(s *notify.Sink) { s.Target = "hooks.example.net" }, nil},
 		{
 			"new secrets", func(s *notify.Sink) { s.SecretRefs = []string{"itm-snk-1", "itm-snk-1-b"} },
 			[]notify.SealedSecret{secret(t.Context(), renamed, "itm-snk-1-b")},
@@ -1416,7 +1416,7 @@ func testSinkChangeRace(t *testing.T, h Harness) {
 	stale.Version, stale.Filter.MinSeverity = 1, notify.SeverityCritical
 
 	changed := sink("snk-1", shop)
-	changed.Version, changed.Target = 1, "https://hooks.example.net/ops"
+	changed.Version, changed.Target = 1, "hooks.example.net"
 
 	if err := h.Subscriptions.PutSink(t.Context(), changed, nil, fence, manage()); err != nil {
 		t.Fatalf("PutSink: %v", err)
@@ -1457,7 +1457,7 @@ func raceSinkChange(t *testing.T, h Harness, fence namespace.Fence, round int) {
 	}
 
 	changed := sink(id, shop)
-	changed.Version, changed.Target = 1, "https://hooks.example.net/ops"
+	changed.Version, changed.Target = 1, "hooks.example.net"
 
 	edit := read
 	edit.Version, edit.Filter.MinSeverity = 1, notify.SeverityCritical

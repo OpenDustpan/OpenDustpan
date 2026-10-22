@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 
+	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/pkg/identity"
 )
 
@@ -401,8 +402,8 @@ func (h *Handler) enforceAuthorized(route Route) http.HandlerFunc {
 
 		actions := route.ActionsOn(obj)
 		if len(actions) == 0 {
-			h.writeError(ctx, w, fmt.Errorf("%w: %s %s needs no action on %q", identity.ErrDenied,
-				route.Method, route.Path, obj.String()))
+			h.writeError(ctx, w, errcode.Refusal(fmt.Sprintf("%s %s needs no action on %q",
+				route.Method, route.Path, obj.String())))
 
 			return
 		}
