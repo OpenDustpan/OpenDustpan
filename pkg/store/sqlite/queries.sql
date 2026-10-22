@@ -664,7 +664,8 @@ WHERE w.namespace = sqlc.arg(namespace) AND w.deleted_at_ms IS NULL AND instr(w.
 -- One page of the live workspaces of a namespace whose name holds the search,
 -- in the order of ReadWorkspaces. The inner query finds the names of the page
 -- in the index of the live workspace names alone, so an offset skips index
--- entries and no table rows. The outer query reads the rows of the page.
+-- entries and no table rows. The CROSS JOIN keeps that order of the joins:
+-- the outer query reads the rows of the page names only.
 SELECT sqlc.embed(w), n.id AS namespace_id
 FROM (
     SELECT p.name
@@ -673,9 +674,10 @@ FROM (
     ORDER BY p.name
     LIMIT sqlc.arg(page_limit) OFFSET sqlc.arg(page_offset)
 ) AS page
-JOIN workspaces AS w ON w.namespace = sqlc.arg(namespace) AND w.name = page.name AND w.deleted_at_ms IS NULL
+CROSS JOIN workspaces AS w
 JOIN namespaces AS n ON n.name = w.namespace
-ORDER BY w.name;
+WHERE w.namespace = sqlc.arg(namespace) AND w.name = page.name AND w.deleted_at_ms IS NULL
+ORDER BY page.name;
 
 -- name: SaveWorkspace :execrows
 -- A compare-and-swap: it changes nothing unless the stored revision is the
