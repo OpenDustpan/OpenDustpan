@@ -259,6 +259,17 @@ _Avoid_: Recovery, load, import
 **Control table**:
 A table that a restore does not replace (ADR 72, decision 5). The live rows stay across the swap. The installation, backups, restores and durable operation tables are control tables. The claim tokens of durable operations only grow, and an older token from a backup would let a stale holder write.
 
+**Table list**:
+The one declaration of every built-in table: its name, class, columns, row order and the tables that a foreign key needs first (ADR 274). Backup, restore, portable backup and dev data read it. It lives in `internal/store/tables`. The format types of a backup stay in `pkg/backup`.
+_Avoid_: Table registry (a registry is also the private registry)
+
+**Store runner**:
+The part of a SQL dialect that opens a read and a write on its database (`sqlstore.Runner`, ADR 274). It holds the one writer of SQLite and the maintenance gate. It is not a runner of a job (see Runner).
+_Avoid_: Runner (alone: a runner is also the process that claims work for a pool)
+
+**Maintenance gate**:
+The lock that a write holds while it runs, so that entering maintenance mode waits for each write in flight (ADR 274). Each dialect holds it in its own way. PostgreSQL uses an advisory lock.
+
 **Deleted unit**:
 A unit after a delete through its tool (ADR 47). It leaves every list and its name is free at once. OpenDustpan keeps its state, history, secrets and grants until a purge. The inventory API lists the deleted units of a namespace, and a restore of a deleted unit brings one back with its stable ID.
 _Avoid_: Tombstone (that is the shred record of a purged unit), trashed unit, archived unit
