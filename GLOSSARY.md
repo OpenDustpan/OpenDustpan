@@ -61,6 +61,23 @@ _Copy says_: "collection", with the things it holds: "a collection of stacks and
 A rule of a namespace that matches a Pulumi project and a stack-name pattern. It names the collection of a new stack that the Pulumi CLI makes (ADR 61).
 _Avoid_: Routing rule, assignment rule
 
+**Sharing rule**:
+A rule of the producer namespace that lets the jobs of named units read the root outputs of a producer (ADR 273). Its producer is a unit, a collection or a namespace. Its consumer is a unit, a collection, or the namespace of the producer. It can name a unit or a collection of another namespace, never a whole other namespace, and never a principal. A job token reads the outputs of another unit only when two checks pass. A sharing rule names the unit of the job, and the principal that started the job holds `unit:read-outputs` on the producer. A sharing rule gives a person nothing: a person reads outputs with a grant of `unit:read-outputs`.
+_Avoid_: Remote state sharing (except when naming the HCP Terraform feature), output grant, share, output-sharing rule (in new text)
+_Copy says_: "sharing rule", with "who can read the outputs" where it helps. The `unit:read-outputs` and `unit:manage-sharing` action names stay in the API.
+
+**Producer**:
+The unit whose outputs another unit reads, in the language of output sharing (ADR 273). The producer holds its sharing rules and decides who reads.
+_Avoid_: Source unit (in new text about output sharing), upstream
+
+**Consumer**:
+The unit that reads the outputs of a producer, in the language of output sharing (ADR 273). A sharing rule names it as a unit, as its collection or as its namespace.
+_Avoid_: Dependent (that is the side of a dependency edge), downstream, reader
+
+**Output sharing default**:
+The namespace setting `outputSharing.newUnitDefault` that decides the sharing rule of a new unit (ADR 273). The value `nobody` is the default and gives a new unit no rule. The value `namespace` gives it one rule that names its namespace. A change of the setting changes no rule of a unit that exists.
+_Avoid_: Sharing policy, default visibility
+
 **Label**:
 A key and a value on a unit, for views and filters. A label never grants access and never puts a unit into a collection (ADR 51). A label change needs `unit:edit-labels` and writes no state (ADR 223 decision 11). A key has 1 to 128 characters: letters, digits and `.`, `_`, `:`, `/` and `-`. A value has 0 to 256 characters of valid UTF-8 and no control character. The label filter of the unit list accepts only this form. A Pulumi stack tag outside this form still shows in the list as a label.
 _Avoid_: Tag (except when naming a tool's own field), attribute
@@ -864,7 +881,7 @@ A reason in a start request that lets a job start during an active freeze (ADR 1
 _Avoid_: Freeze override, bypass
 
 **Job token**:
-An access token that the server makes for the steps of a runner phase, at the claim of the phase (ADR 100 decision 20). It is a token of the principal that started the job. The server limits it to the unit of the job, and it has the expiry of the claim. It reads the outputs of another unit only when two checks pass (ADR 213 decision 1). An output-sharing rule names the unit of the job, and the principal can read the outputs. The token of a job that only plans decrypts the secrets of its own unit only when the principal that started the job has `unit:read-secrets`. It also decrypts them when the commit comes from a protected branch. It writes only its lock or lease and the events of the plan (ADR 213 decision 2). It carries the job-ID claim. The launcher gives it to the tool (ADR 133, ADR 134). OpenTofu gets it through its credentials helper, and the Pulumi CLI through a file of mode 0600. It never goes in an environment variable. A job token of a job that ended authenticates nothing.
+An access token that the server makes for the steps of a runner phase, at the claim of the phase (ADR 100 decision 20). It is a token of the principal that started the job. The server limits it to the unit of the job, and it has the expiry of the claim. It reads the outputs of another unit only when two checks pass (ADR 213 decision 1, ADR 273 decision 5). A sharing rule names the unit of the job, and the principal holds `unit:read-outputs` on the producer. The token of a job that only plans decrypts the secrets of its own unit only when the principal that started the job has `unit:read-secrets`. It also decrypts them when the commit comes from a protected branch. It writes only its lock or lease and the events of the plan (ADR 213 decision 2). It carries the job-ID claim. The launcher gives it to the tool (ADR 133, ADR 134). OpenTofu gets it through its credentials helper, and the Pulumi CLI through a file of mode 0600. It never goes in an environment variable. A job token of a job that ended authenticates nothing.
 _Avoid_: Runner token (the credential of a runner is the runner key)
 
 **Job-ID claim**:
