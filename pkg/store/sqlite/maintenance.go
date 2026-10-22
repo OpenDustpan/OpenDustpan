@@ -56,6 +56,9 @@ func (s *Store) SetState(ctx context.Context, state maintenance.State) error {
 
 	var n int64
 
+	unlock := s.lockEnter(state)
+	defer unlock()
+
 	err := s.inControlTx(ctx, func(q *db.Queries) error {
 		if err := clearJournalOnEnter(ctx, q, state); err != nil {
 			return err
@@ -97,6 +100,9 @@ func (s *Store) SetStateIf(ctx context.Context, expected, next maintenance.State
 
 	var changed int64
 
+	unlock := s.lockEnter(next)
+	defer unlock()
+
 	err := s.inControlTx(ctx, func(q *db.Queries) error {
 		if err := clearJournalOnEnter(ctx, q, next); err != nil {
 			return err
@@ -127,4 +133,18 @@ func (s *Store) SetStateIf(ctx context.Context, expected, next maintenance.State
 	}
 
 	return nil
+}
+
+// lockEnter holds enterGate exclusive when next is maintenance mode, so that
+// the checked writes in flight end and no new one starts until the enter
+// ends. It returns the function that releases the gate. A move back to normal
+// takes no gate: no writer is refused then, and none competes for the lock.
+func (s *Store) lockEnter(next maintenance.State) func() {
+	if next != maintenance.StateMaintenance {
+		return func() {}
+	}
+
+	s.enterGate.Lock()
+
+	return s.enterGate.Unlock
 }

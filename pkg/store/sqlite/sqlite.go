@@ -208,6 +208,13 @@ type Store struct {
 	// hold it shared, and the swap holds it exclusive while it renames the
 	// database file. Lock order with stagingMu is stagingMu before mu.
 	mu sync.RWMutex
+	// enterGate orders an enter of maintenance mode against the checked
+	// writes of this store. A checked write holds it shared for its
+	// transaction. An enter holds it exclusive, so the writes in flight end,
+	// the new writes wait, and the enter gets the database write lock at
+	// once. Without it the enter polls the write lock against writers that
+	// never pause, and it can wait out the whole busy timeout.
+	enterGate sync.RWMutex
 	// stagingMu guards stagingPath: one staged restore at a time.
 	stagingMu   sync.Mutex
 	stagingPath string
@@ -1179,6 +1186,9 @@ func stackTagMap(ctx context.Context, q *db.Queries, ns string) (map[string]map[
 // and it queues behind an enter that waits for the outer one: a deadlock.
 // Take the state check once, in the outermost transaction.
 func (s *Store) inTx(ctx context.Context, fn func(q *db.Queries) error) error {
+	s.enterGate.RLock()
+	defer s.enterGate.RUnlock()
+
 	return s.runTx(ctx, fn, checkWritable)
 }
 
