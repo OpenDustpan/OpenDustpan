@@ -298,7 +298,8 @@ func TestListWorkspacesRefusedNamespaceNoStoreCount(t *testing.T) {
 		queries := &atomic.Int64{}
 		ws := queryCounting{pagingWorkspaces: newPagingWorkspaces(t), queries: queries}
 
-		doc := getListPage(t, newPagingHandlerWith(t, refusingNamespace{}, ws), "/api/v2/organizations/acme/workspaces?"+query)
+		handler := newPagingHandlerWith(t, refusingNamespace{}, ws)
+		doc := getListPage(t, handler, "/api/v2/organizations/acme/workspaces?"+query)
 		if got := listNames(doc); len(got) != 0 || doc.Meta.Pagination.TotalCount != 0 {
 			t.Fatalf("%q: list = %v of %d, want none of 0", query, got, doc.Meta.Pagination.TotalCount)
 		}

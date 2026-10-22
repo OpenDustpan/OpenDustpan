@@ -239,12 +239,16 @@ func TestGateScopeExact(t *testing.T) {
 		},
 		{
 			name: "off over no marker",
-			gate: ipallow.Gate{Next: &fakeNext{calls: 0, err: nil}, Rules: nil, Enabled: false, IncludeBootstrap: false},
+			gate: ipallow.Gate{
+				Next: &fakeNext{calls: 0, err: nil}, Rules: nil, Enabled: false, IncludeBootstrap: false,
+			},
 			want: false,
 		},
 		{
 			name: "on over no marker",
-			gate: ipallow.Gate{Next: &fakeNext{calls: 0, err: nil}, Rules: nil, Enabled: true, IncludeBootstrap: false},
+			gate: ipallow.Gate{
+				Next: &fakeNext{calls: 0, err: nil}, Rules: nil, Enabled: true, IncludeBootstrap: false,
+			},
 			want: false,
 		},
 	}
