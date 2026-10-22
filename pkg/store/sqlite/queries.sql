@@ -83,6 +83,27 @@ FROM stacks
 WHERE namespace = ? AND project = ? AND deleted_at_ms IS NULL
 ORDER BY name;
 
+-- name: ListStackPage :many
+-- One page of the live stacks of the namespaces, after the cursor, in the
+-- order of the primary key: namespace, project, name. The namespaces are a
+-- JSON array of strings. every_project is 1 to match every project. The first
+-- page has an empty cursor.
+SELECT namespace, project, name, id, version, created_at_ms, updated_at_ms
+FROM stacks
+WHERE namespace IN (SELECT j.value FROM json_each(CAST(sqlc.arg(namespaces_json) AS TEXT)) AS j)
+  AND deleted_at_ms IS NULL
+  AND (CAST(sqlc.arg(every_project) AS INTEGER) = 1 OR project = sqlc.arg(project))
+  AND (namespace, project, name) > (sqlc.arg(after_namespace), sqlc.arg(after_project), sqlc.arg(after_name))
+ORDER BY namespace, project, name
+LIMIT sqlc.arg(page_limit);
+
+-- name: ListStackTagsOfStacks :many
+-- Every tag of the stacks with the IDs, for one page of stacks.
+SELECT stack_id, name, value
+FROM stack_tags
+WHERE stack_id IN (sqlc.slice(stack_ids))
+ORDER BY stack_id, name;
+
 -- name: CreateStackTag :exec
 INSERT INTO stack_tags (stack_id, name, value)
 VALUES (?, ?, ?);

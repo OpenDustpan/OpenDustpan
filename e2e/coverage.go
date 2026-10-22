@@ -324,6 +324,11 @@ func (coverageStackStore) ListStacks(_ context.Context, _ stack.Filter) ([]stack
 	return nil, nil
 }
 
+// QueryStacks implements stack.Store over the lists of ListStacks.
+func (coverageStackStore) QueryStacks(ctx context.Context, q stack.PageQuery) ([]stack.Stack, error) {
+	return stack.ListPage(ctx, coverageStackStore{}.ListStacks, q)
+}
+
 func (coverageStackStore) RenameStack(
 	_ context.Context, _ stack.Ref, _ stack.Name, _ namespace.Fence,
 ) error {

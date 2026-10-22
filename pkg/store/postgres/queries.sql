@@ -102,6 +102,25 @@ FROM stacks
 WHERE namespace = $1 AND project = $2 AND deleted_at_ms IS NULL
 ORDER BY name;
 
+-- name: ListStackPage :many
+-- One page of the live stacks of the namespaces, after the cursor, in the
+-- order of the primary key: namespace, project, name. An empty project matches
+-- every project. The first page has an empty cursor.
+SELECT namespace, project, name, id, version, created_at_ms, updated_at_ms
+FROM stacks
+WHERE namespace = ANY(sqlc.arg(namespaces)::text[]) AND deleted_at_ms IS NULL
+  AND (sqlc.arg(project)::text = '' OR project = sqlc.arg(project)::text)
+  AND (namespace, project, name) > (sqlc.arg(after_namespace)::text, sqlc.arg(after_project)::text, sqlc.arg(after_name)::text)
+ORDER BY namespace, project, name
+LIMIT sqlc.arg(page_limit);
+
+-- name: ListStackTagsOfStacks :many
+-- Every tag of the stacks with the IDs, for one page of stacks.
+SELECT stack_id, name, value
+FROM stack_tags
+WHERE stack_id = ANY(sqlc.arg(stack_ids)::text[])
+ORDER BY stack_id, name;
+
 -- name: CreateStackTag :exec
 INSERT INTO stack_tags (stack_id, name, value)
 VALUES ($1, $2, $3);

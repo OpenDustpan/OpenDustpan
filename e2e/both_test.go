@@ -80,6 +80,7 @@ func runBothOnStore(
 	env.SetCLI(pulumiCLI)
 
 	pulumiScenario(t, env)
+	pulumiStackPagingScenario(t, env)
 
 	checkServerMetrics(t, env)
 	checkServerComponents(t, env)
