@@ -34,8 +34,13 @@ func newRecorder(
 ) *refusal.Recorder {
 	t.Helper()
 
-	return refusal.New(fakeAuthorizer{err: identity.ErrDenied}, store, fakeNamespaces{},
-		slog.New(slog.DiscardHandler), func() { *failures++ }).WithLimiter(lim)
+	rec, err := refusal.New(fakeAuthorizer{err: identity.ErrDenied}, store, fakeNamespaces{},
+		slog.New(slog.DiscardHandler), func() { *failures++ })
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	return rec.WithLimiter(lim)
 }
 
 func request(t *testing.T, path string) *http.Request {
@@ -349,8 +354,13 @@ func TestFloodOfNamespacesDoesNotHideAnotherPrincipal(t *testing.T) {
 		Window: time.Minute, MaxKeys: 8, MaxFlush: 0, MaxKeysPerPrincipal: 3, Now: func() time.Time { return now },
 	})
 	store, failures := newFakeStore(nil), 0
-	rec := refusal.New(fakeAuthorizer{err: identity.ErrDenied}, store, everyNamespace{},
-		slog.New(slog.DiscardHandler), func() { failures++ }).WithLimiter(lim)
+	built, newErr := refusal.New(fakeAuthorizer{err: identity.ErrDenied}, store, everyNamespace{},
+		slog.New(slog.DiscardHandler), func() { failures++ })
+	if newErr != nil {
+		t.Fatalf("New: %v", newErr)
+	}
+
+	rec := built.WithLimiter(lim)
 
 	for i := range 2000 {
 		deny(t, rec, request(t, "/api/x"), person("bo@example.com"),
@@ -459,8 +469,13 @@ func TestAuthorizerFailureIsRecordedWithoutItsText(t *testing.T) {
 	t.Parallel()
 
 	store, failures := newFakeStore(nil), 0
-	rec := refusal.New(fakeAuthorizer{err: errStoreDown}, store, fakeNamespaces{},
+	built, newErr := refusal.New(fakeAuthorizer{err: errStoreDown}, store, fakeNamespaces{},
 		slog.New(slog.DiscardHandler), func() { failures++ })
+	if newErr != nil {
+		t.Fatalf("New: %v", newErr)
+	}
+
+	rec := built
 
 	err := rec.Authorize(t.Context(), request(t, "/api/x"), person("bo@example.com"), identity.ActionUnitWrite,
 		identity.NamespaceObject("team"))
@@ -546,8 +561,13 @@ func TestRawScopeIsCleanedInTheKey(t *testing.T) {
 
 	lim := denylimit.New(denylimit.Config{Window: 0, MaxKeys: 0, MaxFlush: 0, MaxKeysPerPrincipal: 0, Now: nil})
 	failures := 0
-	rec := refusal.New(fakeAuthorizer{err: identity.ErrDenied}, newFakeStore(nil), brokenNamespaces{},
-		slog.New(slog.DiscardHandler), func() { failures++ }).WithLimiter(lim)
+	built, newErr := refusal.New(fakeAuthorizer{err: identity.ErrDenied}, newFakeStore(nil), brokenNamespaces{},
+		slog.New(slog.DiscardHandler), func() { failures++ })
+	if newErr != nil {
+		t.Fatalf("New: %v", newErr)
+	}
+
+	rec := built.WithLimiter(lim)
 
 	hostile := namespace.Name("a\r\nb\x1b\u202e" + strings.Repeat("x", 600))
 
