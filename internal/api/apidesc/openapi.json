@@ -2699,9 +2699,21 @@
     },
     "securitySchemes": {
       "bearerAuth": {
-        "description": "An access token or a session of the console.",
+        "description": "An access token.",
         "scheme": "bearer",
         "type": "http"
+      },
+      "csrfHeader": {
+        "description": "The CSRF value of the session of the console. A request with the session cookie needs it when its method is not GET, HEAD or OPTIONS. Without it, or with a wrong value, the answer is 403 with the errorCode session.csrf. The server ignores it on the other methods.",
+        "in": "header",
+        "name": "X-Dustpan-Csrf",
+        "type": "apiKey"
+      },
+      "sessionCookie": {
+        "description": "The session of the console. A request that uses it also sends the csrfHeader scheme.",
+        "in": "cookie",
+        "name": "__Host-dustpan_session",
+        "type": "apiKey"
       }
     }
   },
@@ -6882,6 +6894,10 @@
   "security": [
     {
       "bearerAuth": []
+    },
+    {
+      "csrfHeader": [],
+      "sessionCookie": []
     }
   ],
   "servers": [

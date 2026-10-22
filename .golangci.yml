@@ -318,7 +318,8 @@ linters:
         # API: a handler reads them through apidesc, which allows only the
         # names that the API description declares for the route. The
         # exclusions below limit these patterns to the packages of that API.
-        - pattern: ^url\.URL\.(Query|RawQuery|ForceQuery|RequestURI)$
+        # String and Redacted give back the raw query as part of the URL.
+        - pattern: ^url\.URL\.(Query|RawQuery|ForceQuery|RequestURI|String|Redacted)$
           pkg: ^net/url$
           msg: Read the query through apidesc.QueryOf, which allows only the declared names.
         - pattern: ^url\.ParseQuery$
@@ -515,7 +516,7 @@ linters:
       # adapters of the tool-neutral REST API and the helpers that they call.
       # The tool-compatible APIs and the runner protocol keep their own wire
       # formats, and apidesc is the one place that reads the raw request.
-      - path-except: ^internal/api/(audit|drift|idempotent|inventory|jobs|notifications|objectcontext|profile|refusal|registry|server)/
+      - path-except: ^(internal/api/(audit|drift|idempotent|inventory|jobs|notifications|objectcontext|profile|refusal|registry|server)/|internal/(sessionauth|clientip)/|pkg/dustpan/web\.go$)
         linters:
           - forbidigo
         text: through apidesc

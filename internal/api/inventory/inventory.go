@@ -355,6 +355,7 @@ func (h *Handler) consoleURL(unitID string) string {
 		return ""
 	}
 
+	//nolint:forbidigo // This builds a link from the configured public URL; no request is read.
 	return h.publicURL.JoinPath("units", url.PathEscape(unitID)).String()
 }
 

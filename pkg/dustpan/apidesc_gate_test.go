@@ -104,7 +104,7 @@ func TestEveryDescribedAdapterReadsThroughApidesc(t *testing.T) {
 	config := string(raw)
 
 	for _, pattern := range []string{
-		`- pattern: ^url\.URL\.(Query|RawQuery|ForceQuery|RequestURI)$`,
+		`- pattern: ^url\.URL\.(Query|RawQuery|ForceQuery|RequestURI|String|Redacted)$`,
 		`- pattern: ^url\.ParseQuery$`,
 		`- pattern: ^http\.Request\.(Header|Form|PostForm|MultipartForm|RequestURI|Trailer|FormValue|`,
 	} {
@@ -126,6 +126,29 @@ func TestEveryDescribedAdapterReadsThroughApidesc(t *testing.T) {
 		if !scope.MatchString(dir + "/handlers.go") {
 			t.Errorf("the adapter %s serves routes under %s, and the ban on direct reads in %s does not cover %s: "+
 				"add the package to the path-except of the forbidigo exclusion", source.Name, apidesc.Prefix, lintConfig, dir)
+		}
+	}
+}
+
+// TestHelpersOfDescribedRoutesReadThroughApidesc proves that the ban on direct
+// reads covers the helpers that the described routes call: the session check,
+// the resolver of the client address and the CORS wrapper. They read headers
+// and a cookie of a request that a described route serves.
+func TestHelpersOfDescribedRoutesReadThroughApidesc(t *testing.T) {
+	t.Parallel()
+
+	raw, err := os.ReadFile(lintConfig)
+	if err != nil {
+		t.Fatalf("read %s: %v", lintConfig, err)
+	}
+
+	scope := banScope(t, string(raw))
+
+	for _, file := range []string{
+		"internal/sessionauth/sessionauth.go", "internal/clientip/clientip.go", "pkg/dustpan/web.go",
+	} {
+		if !scope.MatchString(file) {
+			t.Errorf("the ban on direct reads in %s does not cover %s", lintConfig, file)
 		}
 	}
 }

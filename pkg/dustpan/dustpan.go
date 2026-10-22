@@ -45,6 +45,7 @@ import (
 	"sync"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/api/apidesc"
 	auditapi "opendustpan.org/opendustpan/internal/api/audit"
 	inventoryapi "opendustpan.org/opendustpan/internal/api/inventory"
 	contextapi "opendustpan.org/opendustpan/internal/api/objectcontext"
@@ -791,6 +792,10 @@ func NewServer(opts ...Option) (*Server, error) {
 	for _, opt := range opts {
 		opt(cfg)
 	}
+
+	// A handler that reads a name the API description does not hold logs the
+	// error through the logger of the server.
+	apidesc.SetLogger(cfg.logger)
 
 	base, err := checkSettings(cfg)
 	if err != nil {

@@ -27,6 +27,8 @@ const OpenAPIVersion = "3.1.0"
 const (
 	errorSchema     = "ErrorResponse"
 	bearerScheme    = "bearerAuth"
+	cookieScheme    = "sessionCookie"
+	csrfScheme      = "csrfHeader"
 	idempotencyName = "IdempotencyKey"
 	ifMatchName     = "IfMatch"
 	ifMatchReqName  = "IfMatchRequired"
@@ -107,11 +109,14 @@ func Build(ops []Operation) ([]byte, error) {
 	}
 
 	doc := object{
-		"openapi":    OpenAPIVersion,
-		"info":       infoObject(),
-		"servers":    []any{object{"url": "/"}},
-		"tags":       tagList(ops),
-		"security":   []any{object{bearerScheme: []any{}}},
+		"openapi": OpenAPIVersion,
+		"info":    infoObject(),
+		"servers": []any{object{"url": "/"}},
+		"tags":    tagList(ops),
+		"security": []any{
+			object{bearerScheme: []any{}},
+			object{cookieScheme: []any{}, csrfScheme: []any{}},
+		},
 		"paths":      paths,
 		"components": componentsObject(schemas),
 	}
@@ -173,7 +178,17 @@ func componentsObject(bodies object) object {
 		"securitySchemes": object{
 			bearerScheme: object{
 				keyType: "http", "scheme": "bearer",
-				keyDescription: "An access token or a session of the console.",
+				keyDescription: "An access token.",
+			},
+			cookieScheme: object{
+				keyType: "apiKey", "in": "cookie", keyName: SessionCookie,
+				keyDescription: "The session of the console. A request that uses it also sends the csrfHeader scheme.",
+			},
+			csrfScheme: object{
+				keyType: "apiKey", "in": "header", keyName: CSRFHeader,
+				keyDescription: "The CSRF value of the session of the console. A request with the session cookie " +
+					"needs it when its method is not GET, HEAD or OPTIONS. Without it, or with a wrong value, " +
+					"the answer is 403 with the errorCode session.csrf. The server ignores it on the other methods.",
 			},
 		},
 		"parameters": object{
