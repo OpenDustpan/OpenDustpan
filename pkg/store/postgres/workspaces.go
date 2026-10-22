@@ -33,6 +33,14 @@ func (s *Store) CreateWorkspace(ctx context.Context, w workspace.Workspace, fenc
 	row := codec.ToWorkspaceRow(w)
 
 	return s.inFencedTx(ctx, fence, func(q *db.Queries) error {
+		if err := q.LockNamespaceCreatesShared(ctx, w.Ref.Namespace.String()); err != nil {
+			return fmt.Errorf("lock the creates of namespace %q: %w", w.Ref.Namespace, err)
+		}
+
+		if err := refuseUnderNamespaceLock(ctx, q, w.Ref, workspace.LockPassFrom(ctx)); err != nil {
+			return err
+		}
+
 		n, err := q.CreateWorkspace(ctx, db.CreateWorkspaceParams{
 			ID:                    row.ID,
 			Namespace:             row.Namespace,

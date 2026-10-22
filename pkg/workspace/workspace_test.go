@@ -50,6 +50,8 @@ type memStore struct {
 	current  map[workspace.ID]workspace.StateVersionID
 	entries  map[memInventoryKey]inventory.Entry
 	mu       sync.Mutex
+	// lastLockPass is the lock pass that the last CreateWorkspace got in its context.
+	lastLockPass time.Time
 	// lostAck makes the next finalize commit and then report an error, as a
 	// dropped connection after COMMIT would.
 	lostAck bool
@@ -82,6 +84,7 @@ func newMemStore() *memStore {
 		lostAck:      false,
 		failFinalize: nil,
 		released:     nil,
+		lastLockPass: time.Time{},
 	}
 }
 
@@ -245,9 +248,11 @@ func (m *memStore) GetDeletedUnit(
 	return e, nil
 }
 
-func (m *memStore) CreateWorkspace(_ context.Context, w workspace.Workspace, fence namespace.Fence) error {
+func (m *memStore) CreateWorkspace(ctx context.Context, w workspace.Workspace, fence namespace.Fence) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+
+	m.lastLockPass = workspace.LockPassFrom(ctx)
 
 	if err := m.checkFence(fence); err != nil {
 		return err

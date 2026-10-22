@@ -1322,6 +1322,21 @@ WHERE m.principal_id = @principal_id AND m.removed_at_ms IS NULL
   AND g.name_key COLLATE "C" >= @low::text
   AND (@high::text = '' OR g.name_key COLLATE "C" < @high::text);
 
+-- name: LockNamespaceCreatesShared :exec
+-- A create of a workspace takes this lock, in the shared form, before it reads
+-- the manual lock of its namespace. The put of a manual lock on a namespace
+-- takes the exclusive form. So a lock that commits while a create runs is
+-- either read by the create or waits until the create ends: no create commits
+-- under a lock that it did not read. The key holds the schema, so databases that
+-- hold several schemas do not wait for each other.
+SELECT pg_advisory_xact_lock_shared(
+  hashtextextended('namespace-creates:' || current_schema() || ':' || sqlc.arg(namespace)::text, 0));
+
+-- name: LockNamespaceCreatesExclusive :exec
+-- Takes the exclusive form of the lock of LockNamespaceCreatesShared.
+SELECT pg_advisory_xact_lock(
+  hashtextextended('namespace-creates:' || current_schema() || ':' || sqlc.arg(namespace)::text, 0));
+
 -- name: LockServerAuditScope :exec
 -- Orders the appends of the audit scope @server, which has no namespace row
 -- to lock. The key is fixed: 0x6175646974 is "audit" in ASCII.

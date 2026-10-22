@@ -70,6 +70,9 @@ func Run(t *testing.T, newStore Factory) {
 		test func(t *testing.T, s Store)
 	}{
 		{name: "lock a unit and read the lock", test: testLockUnit},
+		{name: "a create of a workspace under a namespace lock is refused", test: testCreateUnderNamespaceLock},
+		{name: "a create under a namespace lock passes for a phase that started before it", test: testCreatePhasePass},
+		{name: "a lock on a collection or on another unit does not refuse a create", test: testCreateIgnoresOtherLocks},
 		{name: "lock a collection and read the lock", test: testLockCollection},
 		{name: "a second lock on the same object is refused", test: testAlreadyLocked},
 		{name: "a lock on a missing object is refused", test: testTargetNotFound},
@@ -1066,7 +1069,17 @@ func testNamespaceLockCovers(t *testing.T, s Store) {
 
 	f.lock(t, target, alice, testReason)
 
-	later := createWorkspace(t, s, f.ns, "later")
+	// The create of a workspace meets the lock of its namespace. A job whose
+	// phase started before the lock passes it, so this workspace is made after
+	// the lock, and the lock still covers it.
+	later := newWorkspaceValue(t, f.ns, "later")
+	passed := workspace.WithLockPass(t.Context(), now().Add(-time.Hour))
+
+	if err := s.CreateWorkspace(passed, later, f.ns.Fence()); err != nil {
+		t.Fatalf("create workspace %q: %v", "later", err)
+	}
+
+	laterUnit := collection.UnitRef{Namespace: f.ns.Name, Tool: toolOpenTofu, Name: "later"}
 	stk := newPulumiStack(f.ns.Name, "proj", "dev")
 
 	if err := s.CreateStack(t.Context(), stk, f.ns.Fence()); err != nil {
@@ -1075,7 +1088,7 @@ func testNamespaceLockCovers(t *testing.T, s Store) {
 
 	pulumi := collection.UnitRef{Namespace: f.ns.Name, Tool: toolPulumi, Name: "proj/dev"}
 
-	for _, unit := range []collection.UnitRef{f.web, f.api, later, pulumi} {
+	for _, unit := range []collection.UnitRef{f.web, f.api, laterUnit, pulumi} {
 		got, err := s.CoveringLock(t.Context(), unit)
 		if err != nil || got.Holder != alice || got.Target != target {
 			t.Errorf("%s: covering lock = %+v, %v; want the lock of the namespace", unit, got, err)

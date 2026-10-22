@@ -13406,6 +13406,33 @@ func (q *Queries) LockGateRefusal(ctx context.Context, lockKey string) error {
 	return err
 }
 
+const lockNamespaceCreatesExclusive = `-- name: LockNamespaceCreatesExclusive :exec
+SELECT pg_advisory_xact_lock(
+  hashtextextended('namespace-creates:' || current_schema() || ':' || $1::text, 0))
+`
+
+// Takes the exclusive form of the lock of LockNamespaceCreatesShared.
+func (q *Queries) LockNamespaceCreatesExclusive(ctx context.Context, namespace string) error {
+	_, err := q.db.Exec(ctx, lockNamespaceCreatesExclusive, namespace)
+	return err
+}
+
+const lockNamespaceCreatesShared = `-- name: LockNamespaceCreatesShared :exec
+SELECT pg_advisory_xact_lock_shared(
+  hashtextextended('namespace-creates:' || current_schema() || ':' || $1::text, 0))
+`
+
+// A create of a workspace takes this lock, in the shared form, before it reads
+// the manual lock of its namespace. The put of a manual lock on a namespace
+// takes the exclusive form. So a lock that commits while a create runs is
+// either read by the create or waits until the create ends: no create commits
+// under a lock that it did not read. The key holds the schema, so databases that
+// hold several schemas do not wait for each other.
+func (q *Queries) LockNamespaceCreatesShared(ctx context.Context, namespace string) error {
+	_, err := q.db.Exec(ctx, lockNamespaceCreatesShared, namespace)
+	return err
+}
+
 const lockPersonPreferences = `-- name: LockPersonPreferences :one
 SELECT p.id, pp.document, pp.updated_at_ms
 FROM principals AS p
