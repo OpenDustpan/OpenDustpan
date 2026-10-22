@@ -88,6 +88,16 @@ func (f fakeUnits) ListUnits(_ context.Context, ns namespace.Name) ([]coreinvent
 	}
 }
 
+// QueryUnits implements coreinventory.Reader over the entries of ListUnits.
+func (f fakeUnits) QueryUnits(ctx context.Context, q coreinventory.UnitQuery) ([]coreinventory.Entry, error) {
+	all, err := f.ListUnits(ctx, q.Namespace)
+	if err != nil {
+		return nil, err
+	}
+
+	return coreinventory.PageUnits(all, q), nil
+}
+
 func (f fakeUnits) GetUnit(ctx context.Context, unitID string) (coreinventory.Entry, error) {
 	if f.liar {
 		return entryOf("other", unitID, "db"), nil
@@ -267,7 +277,9 @@ func newRig(t *testing.T, authz *recordingAuthorizer, opts ...rigOption) *rig {
 
 	cfg := driftapi.Config{
 		Namespaces: namespaces, Units: fakeUnits{liar: false}, Results: results, Checker: checker,
-		Authenticator: tokenAuthenticator{}, Authorizer: authz, Audit: nil, OnAuditFailure: nil, DenialLimiter: nil,
+		Authenticator: tokenAuthenticator{}, Authorizer: authz,
+		Audit:          &recordingAudit{Store: nil, mu: sync.Mutex{}, entries: nil},
+		OnAuditFailure: nil, DenialLimiter: nil,
 		Sessions: nil, Logger: slog.New(slog.DiscardHandler),
 	}
 

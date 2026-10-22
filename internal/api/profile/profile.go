@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/api/apidesc"
 	"opendustpan.org/opendustpan/internal/api/idempotent"
 	"opendustpan.org/opendustpan/internal/api/refusal"
 	"opendustpan.org/opendustpan/internal/denylimit"
@@ -89,6 +90,8 @@ type Handler struct {
 // NewHandler returns a Handler.
 func NewHandler(cfg Config) (*Handler, error) {
 	switch {
+	case cfg.Audit == nil:
+		return nil, fmt.Errorf("%w: audit store", ErrMissingDependency)
 	case cfg.Profiles == nil:
 		return nil, fmt.Errorf("%w: profile service", ErrMissingDependency)
 	case cfg.Authenticator == nil:
@@ -99,13 +102,16 @@ func NewHandler(cfg Config) (*Handler, error) {
 		return nil, fmt.Errorf("%w: logger", ErrMissingDependency)
 	}
 
+	recorder, err := refusal.New(cfg.Authorizer, cfg.Audit, cfg.Namespaces, cfg.Logger, cfg.OnAuditFailure)
+	if err != nil {
+		return nil, fmt.Errorf("denial recorder: %w", err)
+	}
+
 	h := &Handler{
 		profiles: cfg.Profiles,
 		authn:    cfg.Authenticator,
 		authz:    cfg.Authorizer,
-		guard: refusal.New(cfg.Authorizer, cfg.Audit, cfg.Namespaces, cfg.Logger, cfg.OnAuditFailure).
-			WithLimiter(cfg.DenialLimiter).
-			WithSurface("profile"),
+		guard:    recorder.WithLimiter(cfg.DenialLimiter).WithSurface("profile"),
 		sessions: cfg.Sessions,
 		policy:   cfg.SessionPolicy,
 		idem:     cfg.Idempotency,
@@ -131,7 +137,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // with no header uses the console session cookie, and the Caller reports that
 // the cookie signed it in. It is nil for an access token.
 func (h *Handler) authenticate(r *http.Request) (identity.Principal, *sessionauth.Caller, error) {
-	header := r.Header.Get("Authorization")
+	header := apidesc.Header(r, "Authorization")
 	if header == "" {
 		p, caller, err := h.sessions.Authenticate(r)
 		if err != nil {

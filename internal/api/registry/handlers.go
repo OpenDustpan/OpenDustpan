@@ -14,15 +14,16 @@ import (
 	"strconv"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/api/apidesc"
 	"opendustpan.org/opendustpan/internal/api/idempotent"
 	"opendustpan.org/opendustpan/internal/clientip"
+	"opendustpan.org/opendustpan/internal/registry/service"
 	"opendustpan.org/opendustpan/internal/requestid"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/idempotency"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/registry"
-	"opendustpan.org/opendustpan/pkg/registry/service"
 )
 
 // maxBodyBytes bounds a JSON request body: a release names at most 66 files and
@@ -147,7 +148,7 @@ func callerOf(r *http.Request, p identity.Principal) *service.Caller {
 	by := audit.Entry{
 		At: time.Time{}, Namespace: "", Subject: "", IDPSubject: "", TokenID: "", Action: "", Object: "",
 		Version: "", ValuePath: "", ValueCount: nil, Changes: nil, SourceIP: clientip.String(r),
-		UserAgent: truncateUserAgent(r.UserAgent()), Channel: audit.NormalizeChannel(r.Header.Get(channelHeader)),
+		UserAgent: truncateUserAgent(userAgent(r)), Channel: audit.NormalizeChannel(apidesc.Header(r, channelHeader)),
 		Kind: audit.KindChange, Outcome: audit.OutcomeSuccess, RequestID: requestid.FromContext(r.Context()),
 		ObjectID: "", PrevHash: "", Hash: "", Sequence: 0, FenceVersion: 0, Reason: "", PrincipalKind: string(p.Kind),
 		JobID: p.JobID,
@@ -200,7 +201,7 @@ func (h *Handler) stage(w http.ResponseWriter, r *http.Request, p identity.Princ
 	// Only raw bytes are a file. A body with another media type, for example a
 	// form that curl sends with --data-binary and no header, is refused before
 	// it is read.
-	mediaType, _, typeErr := mime.ParseMediaType(r.Header.Get("Content-Type"))
+	mediaType, _, typeErr := mime.ParseMediaType(apidesc.Header(r, "Content-Type"))
 	if typeErr != nil || mediaType != uploadMediaType {
 		h.writeError(ctx, w, &statusError{
 			status: http.StatusUnsupportedMediaType, code: "request.content-type-unsupported",
@@ -298,7 +299,7 @@ type providerQuery struct {
 // against the same rules as the name of a provider, and a value that fails is
 // refused, never repaired.
 func parseProviderQuery(r *http.Request, ns namespace.Name) (providerQuery, error) {
-	q := r.URL.Query()
+	q := queryOf(r)
 	out := providerQuery{pageSize: defaultProviderPage, after: ""}
 
 	if raw := q.Get("pageSize"); raw != "" {

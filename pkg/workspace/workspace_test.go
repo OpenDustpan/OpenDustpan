@@ -190,6 +190,16 @@ func (m *memStore) ListUnits(_ context.Context, ns namespace.Name) ([]inventory.
 	return out, nil
 }
 
+// QueryUnits implements inventory.Reader over the entries of ListUnits.
+func (m *memStore) QueryUnits(ctx context.Context, q inventory.UnitQuery) ([]inventory.Entry, error) {
+	all, err := m.ListUnits(ctx, q.Namespace)
+	if err != nil {
+		return nil, err
+	}
+
+	return inventory.PageUnits(all, q), nil
+}
+
 // ListDeletedUnits implements inventory.DeletedReader, ordered by tool, then
 // name, then unit ID.
 func (m *memStore) ListDeletedUnits(_ context.Context, ns namespace.Name) ([]inventory.DeletedEntry, error) {
@@ -1566,7 +1576,7 @@ func (f fixture) push(t *testing.T, in workspace.NewState, content string) error
 		f.ws.ID,
 		"alice",
 		in,
-		authority(forcedOnly(), nil),
+		authority(forcedOnly(), noRecord),
 	)
 	if err != nil {
 		return err

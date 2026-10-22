@@ -69,7 +69,7 @@ func newSweepHandler(
 		Principals:       nil,
 		Access:           nil,
 		Tokens:           nil,
-		Audit:            nil,
+		Audit:            newTestAudit(),
 		OnAuditFailure:   nil,
 		DeletedUnits:     sweeper,
 		AuditChain:       nil,

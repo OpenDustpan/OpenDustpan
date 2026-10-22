@@ -1458,6 +1458,52 @@ func pulumiScenario(t *testing.T, env *e2e.Env) {
 	pulumiDiffScenario(t, env, org)
 }
 
+// pulumiRenameWithCheckpointScenario proves that a stack with a checkpoint and
+// the service secrets provider works under its new name: the checkpoint holds
+// the name from before the rename in the state of the provider, and up,
+// preview, stack output and destroy must not ask for the old stack. A new
+// stack with the old name must not change that. The stack is removed at the
+// end.
+func pulumiRenameWithCheckpointScenario(t *testing.T, env *e2e.Env, org string) {
+	t.Helper()
+
+	ctx := t.Context()
+	before := fmt.Sprintf("%s/%s/keep", org, e2e.Project)
+	after := fmt.Sprintf("%s/%s/kept", org, e2e.Project)
+
+	env.WritePulumiProject(t, changeSecretsProviderProgram)
+
+	for _, s := range []e2e.StepSpec{
+		step("stack init before rename with checkpoint", nil, "stack", "init", before, "--no-select"),
+		step("config set before rename with checkpoint", nil, "config", "set", "--secret", "--stack", before, "apiKey", "s3cr3t"),
+		step("up before rename with checkpoint", nil, "up", "--yes", "--non-interactive", "--stack", before),
+		step("stack rename with checkpoint", nil, "stack", "rename", after, "--stack", before),
+		// The URN of the stack resource holds the stack name, so the first up
+		// after a rename replaces that resource. The up must still work.
+		step("up after rename with checkpoint", nil, "up", "--yes", "--non-interactive", "--stack", after),
+		step("preview after rename with checkpoint", nil, "preview", "--non-interactive", "--stack", after),
+		step(
+			"stack output after rename with checkpoint",
+			contains("abc"),
+			"stack", "output", "key", "--show-secrets", "--stack", after,
+		),
+		step(
+			"stack export names the new stack",
+			contains(`"stack": "kept"`),
+			"stack", "export", "--stack", after,
+		),
+		// A new stack under the old name must not take the secrets of the
+		// renamed one.
+		step("stack init under the old name", nil, "stack", "init", before, "--no-select"),
+		step("up after the old name is used again", upHasNoChanges, "up", "--yes", "--non-interactive", "--stack", after),
+		step("destroy after rename with checkpoint", nil, "destroy", "--yes", "--non-interactive", "--stack", after),
+		step("stack rm after rename with checkpoint", nil, "stack", "rm", "--yes", "--stack", after),
+		step("stack rm under the old name", nil, "stack", "rm", "--yes", "--stack", before),
+	} {
+		env.Step(ctx, t, s)
+	}
+}
+
 // changeSecretsProviderProgram is the scratch YAML program for the
 // change-secrets-provider steps. Its secret output proves that state
 // encrypted under each provider still decrypts after the change.
@@ -1609,6 +1655,8 @@ func pulumiChangeSecretsProviderScenario(t *testing.T, env *e2e.Env, org string)
 	calls := checkAuditLogCalls(t, env, org)
 	checkAuditLog(ctx, t, env, org, calls)
 	env.Step(ctx, t, step("stack rm secrets", nil, "stack", "rm", "--yes", "--stack", qualified))
+
+	pulumiRenameWithCheckpointScenario(t, env, org)
 }
 
 // maskedStateSecret is the secret value the masked state scenario sets. It
@@ -1776,6 +1824,79 @@ func pulumiDiffScenario(t *testing.T, env *e2e.Env, org string) {
 		"stack", "--show-name", "--stack", qualified,
 	))
 	env.Step(ctx, t, step("stack rm diffed", nil, "stack", "rm", "--yes", "--force", "--stack", qualified))
+
+	pulumiUnreadableDeploymentScenario(t, env, org)
+}
+
+// unreadableDeployments returns bodies for the deployment member that the
+// Pulumi CLI cannot read. The import route and the checkpoint route must
+// refuse each.
+func unreadableDeployments() []string {
+	return []string{`"notanobject"`, `42`, `[1,2]`, `null`, `{"resources":"x"}`}
+}
+
+// pulumiUnreadableDeploymentScenario proves that a client other than the CLI
+// cannot make a stack unreadable: the import route and the checkpoint route of
+// a running update answer 400 for a deployment that is not an object, and the
+// CLI then still reads the stack and updates it. The stack is removed at the
+// end.
+func pulumiUnreadableDeploymentScenario(t *testing.T, env *e2e.Env, org string) {
+	t.Helper()
+
+	ctx := t.Context()
+	qualified := fmt.Sprintf("%s/%s/unreadable", org, e2e.Project)
+	prefix := fmt.Sprintf("/api/stacks/%s/%s/unreadable", org, e2e.Project)
+
+	env.WritePulumiProject(t, changeSecretsProviderProgram)
+	env.Step(ctx, t, step("stack init unreadable", nil, "stack", "init", qualified, "--no-select"))
+	env.Step(ctx, t, step("up unreadable", nil, "up", "--yes", "--non-interactive", "--stack", qualified))
+
+	for _, deployment := range unreadableDeployments() {
+		status, body, err := env.APIStatus(
+			ctx, http.MethodPost, prefix+"/import", `{"version":3,"deployment":`+deployment+`}`,
+		)
+		if err != nil || status != http.StatusBadRequest || !strings.Contains(body, `"code":400`) {
+			t.Fatalf("import of %s answers %d %q (%v), want 400 in the error shape", deployment, status, body, err)
+		}
+	}
+
+	status, body, err := env.APIStatus(ctx, http.MethodPost, prefix+"/import", `{"version":3}`)
+	if err != nil || status != http.StatusBadRequest {
+		t.Fatalf("import without a deployment answers %d %q (%v), want 400", status, body, err)
+	}
+
+	env.Step(ctx, t, step(
+		"up after refused imports", upHasNoChanges, "up", "--yes", "--non-interactive", "--stack", qualified,
+	))
+
+	held := env.StartHeldUpdate(ctx, t, org, e2e.Project, "unreadable")
+
+	for _, deployment := range unreadableDeployments() {
+		call := env.StartAsyncCall(ctx, e2e.AsyncRequest{
+			Method:      http.MethodPatch,
+			Target:      env.URL + prefix + "/update/" + held.ID + "/checkpoint",
+			Auth:        "update-token " + held.Lease,
+			ContentType: "application/json",
+			Body:        []byte(`{"version":3,"deployment":` + deployment + `}`),
+		})
+
+		status, body, err := call.Wait()
+		if err != nil || status != http.StatusBadRequest || !strings.Contains(body, `"code":400`) {
+			t.Fatalf(
+				"checkpoint save of %s answers %d %q (%v), want 400 in the error shape",
+				deployment,
+				status,
+				body,
+				err,
+			)
+		}
+	}
+
+	env.EndHeldUpdate(ctx, t, held, "cancelled") //nolint:misspell // The CLI's wire value; it must not change.
+	env.Step(ctx, t, step(
+		"up after refused checkpoint saves", upHasNoChanges, "up", "--yes", "--non-interactive", "--stack", qualified,
+	))
+	env.Step(ctx, t, step("stack rm unreadable", nil, "stack", "rm", "--yes", "--force", "--stack", qualified))
 }
 
 // stateDiffChangedEntry is one changed resource of the diff in e2e checks.

@@ -243,7 +243,7 @@ func newLockFixture(t *testing.T, authz identity.Authorizer) lockFixture {
 		Moves:          nil,
 		Authenticator:  subjectAuthenticator{},
 		Authorizer:     authz,
-		Audit:          auditStore,
+		Audit:          orTestAudit(auditStore),
 		OnAuditFailure: nil,
 		DenialLimiter:  nil,
 		Sessions:       nil,

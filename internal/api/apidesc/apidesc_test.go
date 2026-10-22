@@ -34,7 +34,7 @@ func op(method, path string, actions ...string) apidesc.Operation {
 	return apidesc.Operation{
 		ID: idOf(method, path), Method: method, Path: path, Tags: []string{"backups"}, Actions: actions,
 		ActionObjects: objects,
-		Public:        false, IdempotencyKey: false, IfMatch: false, IfMatchRequired: false, ETag: false,
+		Public:        false, IdempotencyKey: false, IfMatch: false, IfMatchRequired: false, ETag: false, Query: nil,
 		Bodies: &apidesc.Bodies{Request: apidesc.NoBody, Response: apidesc.NoBody},
 	}
 }

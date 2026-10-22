@@ -17,13 +17,13 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/ident"
+	"opendustpan.org/opendustpan/internal/scopeaudit"
 	"opendustpan.org/opendustpan/internal/token"
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/collection"
 	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/manuallock"
 	"opendustpan.org/opendustpan/pkg/namespace"
-	"opendustpan.org/opendustpan/pkg/scopeaudit"
 )
 
 const (
@@ -1456,7 +1456,8 @@ func (s *Updates) validate(in CheckpointInput) error {
 	case len(in.Deployment) > s.maxCheckpoints:
 		return fmt.Errorf("%w: checkpoint of %d bytes, limit %d", ErrTooLarge, len(in.Deployment), s.maxCheckpoints)
 	default:
-		return nil
+		// The size is within the limit, so the scan of the shape is bounded.
+		return checkDeploymentShape(in.Deployment, in.Sequence)
 	}
 }
 

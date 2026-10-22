@@ -2699,9 +2699,21 @@
     },
     "securitySchemes": {
       "bearerAuth": {
-        "description": "An access token or a session of the console.",
+        "description": "An access token.",
         "scheme": "bearer",
         "type": "http"
+      },
+      "csrfHeader": {
+        "description": "The CSRF value of the session of the console. A request with the session cookie needs it when its method is not GET, HEAD or OPTIONS. Without it, or with a wrong value, the answer is 403 with the errorCode session.csrf. The server ignores it on the other methods.",
+        "in": "header",
+        "name": "X-Dustpan-Csrf",
+        "type": "apiKey"
+      },
+      "sessionCookie": {
+        "description": "The session of the console. A request that uses it also sends the csrfHeader scheme.",
+        "in": "cookie",
+        "name": "__Host-dustpan_session",
+        "type": "apiKey"
       }
     }
   },
@@ -4028,6 +4040,15 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "description": "The sections of the answer, separated by commas. Without it, the answer holds the default sections.",
+            "in": "query",
+            "name": "include",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -4129,6 +4150,53 @@
             "in": "path",
             "name": "namespace",
             "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Keeps the units whose name starts with this text.",
+            "in": "query",
+            "name": "namePrefix",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The largest number of deleted units on the page.",
+            "in": "query",
+            "name": "pageSize",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "The nextPageToken of the page before.",
+            "in": "query",
+            "name": "pageToken",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Keeps the units that the server purges within this number of days.",
+            "in": "query",
+            "name": "purgeWithinDays",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Keeps the units of this tool.",
+            "in": "query",
+            "name": "tool",
+            "required": false,
             "schema": {
               "type": "string"
             }
@@ -4822,6 +4890,34 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "description": "Keeps the profiles in this folder.",
+            "in": "query",
+            "name": "folder",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The largest number of profiles on the page.",
+            "in": "query",
+            "name": "pageSize",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "The nextPageToken of the page before, for the same folder.",
+            "in": "query",
+            "name": "pageToken",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -4940,6 +5036,15 @@
             }
           },
           {
+            "description": "Why the profile is deleted. The audit record holds it.",
+            "in": "query",
+            "name": "reason",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
             "$ref": "#/components/parameters/IdempotencyKey"
           },
           {
@@ -4988,6 +5093,15 @@
             "required": true,
             "schema": {
               "type": "string"
+            }
+          },
+          {
+            "description": "Shows the values of the secrets. The caller needs the permission to reveal them.",
+            "in": "query",
+            "name": "showSecrets",
+            "required": false,
+            "schema": {
+              "type": "boolean"
             }
           }
         ],
@@ -5045,6 +5159,25 @@
             "in": "path",
             "name": "profile",
             "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The largest number of revisions on the page.",
+            "in": "query",
+            "name": "pageSize",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "The nextPageToken of the page before.",
+            "in": "query",
+            "name": "pageToken",
+            "required": false,
             "schema": {
               "type": "string"
             }
@@ -5182,6 +5315,15 @@
             "required": true,
             "schema": {
               "type": "string"
+            }
+          },
+          {
+            "description": "Shows the values of the secrets. The caller needs the permission to reveal them.",
+            "in": "query",
+            "name": "showSecrets",
+            "required": false,
+            "schema": {
+              "type": "boolean"
             }
           }
         ],
@@ -5384,6 +5526,25 @@
             "in": "path",
             "name": "namespace",
             "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The largest number of providers on the page.",
+            "in": "query",
+            "name": "pageSize",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "The nextPageToken of the page before.",
+            "in": "query",
+            "name": "pageToken",
+            "required": false,
             "schema": {
               "type": "string"
             }
@@ -5995,6 +6156,71 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "description": "Lists the units as they were at this time, in Unix milliseconds. It takes no filter and no page token.",
+            "in": "query",
+            "name": "at",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Keeps the units with this label, as key=value. All label values must match.",
+            "in": "query",
+            "name": "label",
+            "required": false,
+            "schema": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          },
+          {
+            "description": "The largest number of units on the page.",
+            "in": "query",
+            "name": "pageSize",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "The nextPageToken of the page before, for the same query.",
+            "in": "query",
+            "name": "pageToken",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Keeps the unit with this reference in the namespace.",
+            "in": "query",
+            "name": "reference",
+            "required": false,
+            "schema": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          },
+          {
+            "description": "Keeps the units in this state. One of the states must match.",
+            "in": "query",
+            "name": "state",
+            "required": false,
+            "schema": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
           }
         ],
         "responses": {
@@ -6099,6 +6325,15 @@
             "in": "path",
             "name": "unit_id",
             "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The sections of the answer, separated by commas. Without it, the answer holds the default sections.",
+            "in": "query",
+            "name": "include",
+            "required": false,
             "schema": {
               "type": "string"
             }
@@ -6565,6 +6800,25 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "description": "The largest number of units on the page.",
+            "in": "query",
+            "name": "pageSize",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "The nextPageToken of the page before, for the same query.",
+            "in": "query",
+            "name": "pageToken",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -6640,6 +6894,10 @@
   "security": [
     {
       "bearerAuth": []
+    },
+    {
+      "csrfHeader": [],
+      "sessionCookie": []
     }
   ],
   "servers": [

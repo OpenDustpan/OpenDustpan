@@ -123,15 +123,48 @@ chart-lint: ## Lint and render the Helm chart (helm lint, helm template, kubecon
 # on a CI runner with 4 cores. GO_TEST_TIMEOUT is the limit for each package.
 GO_TEST_TIMEOUT := 20m
 
-test: ## Go tests; the PostgreSQL suite is skipped unless DUSTPAN_TEST_POSTGRES_URL is set. A package whose code, files and environment did not change gives its cached result.
-	go test -race -timeout $(GO_TEST_TIMEOUT) ./...
+# With -race the compiler also adds checkptr checks to every package. In the
+# SQLite engine, which is C translated to Go with much unsafe pointer
+# arithmetic, these checks took about 30% of the CPU of the SQLite store
+# tests. RACE_TEST_FLAGS turns checkptr off for modernc.org/... only: the race
+# detector stays on for all code, and checkptr stays on for our own code. On
+# 4 cores, the dev data suite of pkg/store/sqlite used 904 s of user CPU with
+# the checks and 647 s without them. The cost: checkptr does not find unsafe
+# pointer misuse inside those modules, which we do not maintain. A second
+# -gcflags on the same command line replaces this one, so a target that needs
+# its own -gcflags must merge them into one.
+RACE_TEST_FLAGS := -race -gcflags='modernc.org/...=-d=checkptr=0'
 
-test-nocache: ## Go tests as in test, but every package runs again. CI runs this on main every 2 hours to find flaky tests.
-	go test -race -count=1 -timeout $(GO_TEST_TIMEOUT) ./...
+test: ## Go tests; the PostgreSQL suite is skipped unless DUSTPAN_TEST_POSTGRES_URL is set. A package whose code, files and environment did not change gives its cached result.
+	go test $(RACE_TEST_FLAGS) -timeout $(GO_TEST_TIMEOUT) ./...
+
+test-nocache: ## Go tests as in test, but every package runs again. CI does the same on main every 2 hours, with test-ci-other and test-ci-store, to find flaky tests.
+	go test $(RACE_TEST_FLAGS) -count=1 -timeout $(GO_TEST_TIMEOUT) ./...
+
+# CI runs the two store packages in jobs of their own, one for each package, so
+# that they do not share the 4 cores of a runner with each other or with the
+# other packages. GO_TEST_COUNT=-count=1 runs every package again, as the
+# schedule of CI does.
+STORE_TEST_PKGS := opendustpan.org/opendustpan/pkg/store/sqlite opendustpan.org/opendustpan/pkg/store/postgres
+GO_TEST_COUNT ?=
+
+# STORE_TEST_TIMEOUT is the limit of test-ci-store only, sized for one store
+# package on a CI runner: pkg/store/postgres alone took more than 20 minutes
+# there. It is not a fix of that time, and GO_TEST_TIMEOUT stays the limit of
+# every other target.
+STORE_TEST_TIMEOUT := 30m
+
+test-ci-other: ## Go tests as in test, without the two store packages; the go job of CI runs it.
+	go list ./... >/dev/null
+	go test $(RACE_TEST_FLAGS) $(GO_TEST_COUNT) -timeout $(GO_TEST_TIMEOUT) $$(go list ./... | grep -v -x -F $(addprefix -e ,$(STORE_TEST_PKGS)))
+
+test-ci-store: ## Go tests of one store package, STORE=sqlite or STORE=postgres; each store job of CI runs it.
+	@case "$(STORE)" in sqlite|postgres) ;; *) echo "set STORE=sqlite or STORE=postgres"; exit 1 ;; esac
+	go test $(RACE_TEST_FLAGS) $(GO_TEST_COUNT) -timeout $(STORE_TEST_TIMEOUT) ./pkg/store/$(STORE)/
 
 test-postgres: ## Go tests including PostgreSQL (needs DUSTPAN_TEST_POSTGRES_URL).
 	@test -n "$$DUSTPAN_TEST_POSTGRES_URL" || (echo "set DUSTPAN_TEST_POSTGRES_URL" && exit 1)
-	go test -race -count=1 -timeout $(GO_TEST_TIMEOUT) ./pkg/store/postgres/...
+	go test $(RACE_TEST_FLAGS) -count=1 -timeout $(GO_TEST_TIMEOUT) ./pkg/store/postgres/...
 
 bench: ## Fast benchmarks (delta apply, gzip, checkpoint store) with one iteration each; proves they compile and run.
 	go test -run '^$$' -bench . -benchtime 1x ./pkg/stack/ ./pkg/store/sqlite/

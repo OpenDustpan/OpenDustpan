@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/ident"
+	"opendustpan.org/opendustpan/internal/scopeaudit"
 	"opendustpan.org/opendustpan/internal/token"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/blob"
@@ -20,7 +21,6 @@ import (
 	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/manuallock"
 	"opendustpan.org/opendustpan/pkg/namespace"
-	"opendustpan.org/opendustpan/pkg/scopeaudit"
 	"opendustpan.org/opendustpan/pkg/secret"
 )
 
@@ -731,8 +731,9 @@ func checkLockID(w Workspace, expect Lock) error {
 // override let the release go through for a client-encrypted state, which
 // has no fence (ADR 44, decision 4). Without the override that state is
 // refused with ErrClientEncrypted and the lock stays held. record runs before
-// an unfenced release and writes its audit entry; a failure stops the release
-// (ADR 41 decision 5). A nil record writes nothing.
+// an unfenced release and writes its audit entry; a failure stops the
+// release. An unfenced release with a nil record is refused with
+// ErrNoRecorder before it changes anything.
 //
 // Each release appends one audit entry of the kind change, in the transaction
 // of the release (see ForceUnlockLock).
@@ -798,10 +799,14 @@ func (s *Service) ForceUnlockLock(
 
 	released, err := s.releaseWithFence(ctx, w, cur, by, forceUnlockEntry(entry, w, by, s.clock()))
 	if errors.Is(err, ErrClientEncrypted) && allow.Forced {
-		if record != nil {
-			if recordErr := record(); recordErr != nil {
-				return Workspace{}, false, fmt.Errorf("record override of %s: %w", w.Ref, recordErr)
-			}
+		// Defense in depth: the adapters pass a callback too; this check stays so
+		// that a new caller cannot release without the entry of the override.
+		if record == nil {
+			return Workspace{}, false, fmt.Errorf("unfenced release of %s: %w", w.Ref, ErrNoRecorder)
+		}
+
+		if recordErr := record(); recordErr != nil {
+			return Workspace{}, false, fmt.Errorf("record override of %s: %w", w.Ref, recordErr)
 		}
 
 		unfenced, changeErr := s.releaseUnfenced(ctx, w, forceUnlockEntry(entry, w, by, s.clock()))
@@ -879,8 +884,9 @@ type PendingState struct {
 // (ADR 44, decision 8).
 //
 // auth.Record runs before the store write, and a failed record refuses the
-// declare, so no override writes without its entry (ADR 41, decision 5). A nil
-// auth.Record writes nothing.
+// declare, so no override writes without its entry. A
+// declare that uses an override with a nil auth.Record is refused with
+// ErrNoRecorder before it writes.
 func (s *Service) BeginState(
 	ctx context.Context, id ID, holder string, in NewState, auth Authority,
 ) (PendingState, error) {
@@ -943,7 +949,8 @@ func (s *Service) BeginState(
 type Authority struct {
 	// Allow holds the overrides the caller may use.
 	Allow namespace.Overrides
-	// Record writes the audit entry of one override. A nil Record writes nothing.
+	// Record writes the audit entry of one override. A declare that uses an
+	// override while Record is nil is refused with ErrNoRecorder.
 	Record func(Override) error
 }
 
@@ -1027,13 +1034,26 @@ func declareOverrides(
 // and stops at the first entry that fails.
 func recordOverrides(w Workspace, used []Override, record func(Override) error) error {
 	if record == nil {
-		return nil
+		return refuseWithoutRecorder(w, used)
 	}
 
 	for _, override := range used {
 		if err := record(override); err != nil {
 			return fmt.Errorf("record override of %s: %w", w.Ref, err)
 		}
+	}
+
+	return nil
+}
+
+// refuseWithoutRecorder is called for a write that has no callback that
+// records its overrides. It refuses the write when the write uses an override.
+//
+// Defense in depth: the adapters pass a callback too; this check stays so that
+// a new caller cannot write an override without its entry.
+func refuseWithoutRecorder(w Workspace, used []Override) error {
+	if len(used) > 0 {
+		return fmt.Errorf("write to %s: %w", w.Ref, ErrNoRecorder)
 	}
 
 	return nil

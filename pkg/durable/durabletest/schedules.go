@@ -248,12 +248,32 @@ func testMissedTicks(t *testing.T, h ScheduleHarness) {
 		t.Fatalf("next run after a late claim is %v away, want one interval from the claim", late.Schedule.Wait())
 	}
 
-	if _, err := s.ClaimTick(t.Context(), spec); !errors.Is(err, durable.ErrNoWork) {
-		t.Fatalf("second claim after missed ticks: error = %v, want ErrNoWork: missed ticks run once", err)
+	// The next claim may come after the next run on a slow store, so the
+	// case reads the times of the store, not the time between the claims.
+	// A claim before the next run finds no work. A claim at or after it is
+	// the tick of the next run, not a missed tick.
+	want := 2
+
+	next, err := s.ClaimTick(t.Context(), spec)
+
+	switch {
+	case errors.Is(err, durable.ErrNoWork):
+	case err != nil:
+		t.Fatalf("second claim after missed ticks: %v", err)
+	case next.Schedule.Now.Before(late.Schedule.NextRunAt) ||
+		next.Operation.Key != durable.TickKey(spec.Name, late.Schedule.NextRunAt):
+		t.Fatalf(
+			"second claim after missed ticks at %v = operation %q, want ErrNoWork before %v: missed ticks run once",
+			next.Schedule.Now, next.Operation.Key, late.Schedule.NextRunAt,
+		)
+	default:
+		t.Logf("the second claim came at %v, after the next run at %v", next.Schedule.Now, late.Schedule.NextRunAt)
+
+		want = 3
 	}
 
-	if ops := mustList(t, s, durable.Filter{Kind: kindA, States: nil, Limit: 0}); len(ops) != 2 {
-		t.Fatalf("%d operations after one tick, three missed ticks and a claim, want 2", len(ops))
+	if ops := mustList(t, s, durable.Filter{Kind: kindA, States: nil, Limit: 0}); len(ops) != want {
+		t.Fatalf("%d operations after one tick, three missed ticks and a claim, want %d", len(ops), want)
 	}
 }
 
