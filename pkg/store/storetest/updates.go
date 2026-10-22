@@ -1963,15 +1963,25 @@ func testRenameRaceWithNewUpdate(t *testing.T, f fixture) {
 		close(gate)
 		wg.Wait()
 
-		checkRenameRace(t, f, st.Ref, newRef, startErr, renameErr)
+		checkRenameRace(t, f, renameRace{oldRef: st.Ref, newRef: newRef, startErr: startErr, renameErr: renameErr})
 	}
+}
+
+// renameRace is the outcome of one round of testRenameRaceWithNewUpdate.
+type renameRace struct {
+	startErr  error
+	renameErr error
+	oldRef    stack.Ref
+	newRef    stack.Ref
 }
 
 // checkRenameRace proves that a rename and a concurrent start of a mutating
 // update of the same stack never both succeed, and that the loser changed
 // nothing.
-func checkRenameRace(t *testing.T, f fixture, oldRef, newRef stack.Ref, startErr, renameErr error) {
+func checkRenameRace(t *testing.T, f fixture, r renameRace) {
 	t.Helper()
+
+	oldRef, newRef, startErr, renameErr := r.oldRef, r.newRef, r.startErr, r.renameErr
 
 	switch {
 	case startErr == nil && renameErr == nil:
