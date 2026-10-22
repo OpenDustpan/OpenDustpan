@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -274,5 +275,146 @@ func TestReadConflictReportsUnavailable(t *testing.T) {
 	other.Message = "driver text"
 	if got := readConflict(other); !errors.Is(got, other) || errors.Is(got, namespace.ErrUnavailable) {
 		t.Errorf("readConflict(23505) = %v, want the error unchanged", got)
+	}
+}
+
+// TestSwapWaitingForLongReadDoesNotStopNewReads proves that a restore swap
+// that waits for a long snapshot read, for example an export, does not make
+// new snapshot reads wait for that long read. The swap gives up each wait at
+// a short lock timeout and tries again, so a new read waits at most about one
+// timeout. When the long read ends, the swap succeeds.
+func TestSwapWaitingForLongReadDoesNotStopNewReads(t *testing.T) {
+	t.Parallel()
+
+	for _, path := range swapPaths() {
+		t.Run(path.name, func(t *testing.T) {
+			t.Parallel()
+
+			checkSwapDoesNotQueueReads(t, path)
+		})
+	}
+}
+
+// checkSwapDoesNotQueueReads runs the case of
+// TestSwapWaitingForLongReadDoesNotStopNewReads while path swaps.
+func checkSwapDoesNotQueueReads(t *testing.T, path swapPath) {
+	t.Helper()
+
+	const readBound = 2 * time.Second
+
+	ctx := t.Context()
+	s, _ := stageOwnExport(t)
+	release := make(chan struct{})
+	started := make(chan struct{})
+	longDone := make(chan error, 1)
+
+	go func() {
+		longDone <- s.inSnapshotTx(ctx, func(q *db.Queries) error {
+			if _, err := q.GetInstallationState(ctx); err != nil {
+				return err
+			}
+
+			close(started)
+			<-release
+
+			return nil
+		})
+	}()
+
+	select {
+	case <-started:
+	case err := <-longDone:
+		t.Fatalf("long read ended early: %v", err)
+	}
+
+	var releaseOnce sync.Once
+
+	endLongRead := func() { releaseOnce.Do(func() { close(release) }) }
+	defer endLongRead()
+
+	applied := make(chan error, 1)
+
+	go func() { applied <- path.apply(ctx, s) }()
+
+	// Let the swap make several attempts at the lock.
+	<-time.After(3 * swapLockTimeout)
+
+	for range 5 {
+		begin := time.Now()
+
+		if got := readFailoverVersion(ctx, s); got.err != nil {
+			t.Fatalf("short read while the swap waits: %v", got.err)
+		}
+
+		if took := time.Since(begin); took > readBound {
+			t.Fatalf("short read took %v while the swap waits, want at most %v", took, readBound)
+		}
+	}
+
+	select {
+	case err := <-applied:
+		t.Fatalf("swap ended while the long read was open: %v", err)
+	default:
+	}
+
+	endLongRead()
+
+	if err := <-longDone; err != nil {
+		t.Fatalf("long read: %v", err)
+	}
+
+	if err := <-applied; err != nil {
+		t.Fatalf("apply the staged restore after the long read: %v", err)
+	}
+}
+
+// TestSwapLockGivesUpWithClearError proves that a swap that cannot get the
+// lock before its context ends reports the cause and the action that helps.
+func TestSwapLockGivesUpWithClearError(t *testing.T) {
+	t.Parallel()
+
+	s, live := stageOwnExport(t)
+	release := make(chan struct{})
+	started := make(chan struct{})
+	longDone := make(chan error, 1)
+
+	go func() {
+		longDone <- s.inSnapshotTx(t.Context(), func(*db.Queries) error {
+			close(started)
+			<-release
+
+			return nil
+		})
+	}()
+	<-started
+
+	var releaseOnce sync.Once
+
+	endLongRead := func() { releaseOnce.Do(func() { close(release) }) }
+	defer endLongRead()
+
+	ctx, cancel := context.WithTimeout(t.Context(), 600*time.Millisecond)
+	defer cancel()
+
+	tx, err := s.pool.Begin(t.Context())
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+
+	defer func() {
+		//nolint:errcheck // The test ends the transaction.
+		_ = tx.Rollback(context.WithoutCancel(ctx))
+	}()
+
+	err = lockSwap(ctx, tx, live)
+	if err == nil || !strings.Contains(err.Error(), "backup") ||
+		!strings.Contains(err.Error(), "run the restore again") {
+		t.Fatalf("lockSwap with a held lock = %v, want an error that names a backup and the retry", err)
+	}
+
+	endLongRead()
+
+	if err := <-longDone; err != nil {
+		t.Fatalf("long read: %v", err)
 	}
 }

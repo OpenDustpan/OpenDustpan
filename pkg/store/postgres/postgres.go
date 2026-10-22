@@ -991,9 +991,15 @@ func readWritable(ctx context.Context, tx pgx.Tx, readSQL string, fenceName *str
 // it on the pool. The SQLite adapter needs no such lock, because its swap
 // and its reads hold the same mutex of the store.
 func (s *Store) inSnapshotTx(ctx context.Context, fn func(q *db.Queries) error) error {
-	err := pgx.BeginTxFunc(ctx, s.pool, s.snapshotOptions(), func(tx pgx.Tx) error {
+	return s.inSnapshotConn(ctx, func(tx pgx.Tx) error {
 		return fn(s.queries.WithTx(tx))
 	})
+}
+
+// inSnapshotConn is inSnapshotTx for a read that also runs a hand-written
+// statement: fn gets the transaction itself.
+func (s *Store) inSnapshotConn(ctx context.Context, fn func(tx pgx.Tx) error) error {
+	err := pgx.BeginTxFunc(ctx, s.pool, s.snapshotOptions(), fn)
 	if err != nil {
 		return fmt.Errorf("snapshot transaction: %w", readConflict(err))
 	}
@@ -1016,7 +1022,9 @@ func (s *Store) snapshotOptions() pgx.TxOptions {
 // snapshotBeginQuery returns the statement that starts a snapshot read on the
 // live schema live: BEGIN, then the swap lock in ACCESS SHARE mode. pgx sends
 // a statement with no arguments in the simple protocol, so the two
-// statements go in one message and cost no extra round trip.
+// statements go in one message and cost no extra round trip. If the lock
+// statement fails (for example, the context ends while it waits for a swap),
+// pgx closes the connection and does not roll it back. The read fails closed.
 func snapshotBeginQuery(live string) string {
 	return "BEGIN READ ONLY ISOLATION LEVEL REPEATABLE READ; " +
 		"LOCK TABLE " + swapLockTable(live) + " IN ACCESS SHARE MODE"

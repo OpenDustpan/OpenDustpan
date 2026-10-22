@@ -2,9 +2,14 @@ package postgres
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"math/rand/v2"
+	"strconv"
+	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/audit"
@@ -153,10 +158,114 @@ func journalRevocation(ctx context.Context, q *db.Queries, rev revocation, e aud
 //   - A write to the journal waits until tx ends, and tx waits for the writes
 //     in flight, so the replay reads every journaled revocation and no later
 //     one lands in the schema that the swap drops.
+//
+// A waiting ACCESS EXCLUSIVE request makes PostgreSQL queue every later
+// snapshot read behind it. So the swap never waits long: each attempt has a
+// short lock timeout, and a failed attempt leaves the queue. The swap tries
+// again, with backoff and jitter, until ctx ends. Then it returns an error
+// that names the cause: a long snapshot read, for example a backup.
 func lockSwap(ctx context.Context, tx pgx.Tx, live string) error {
+	var previous string
+	if err := tx.QueryRow(ctx, "SELECT current_setting('lock_timeout')").Scan(&previous); err != nil {
+		return fmt.Errorf("read lock timeout: %w", err)
+	}
+
 	query := "LOCK TABLE " + swapLockTable(live) + " IN ACCESS EXCLUSIVE MODE"
-	if _, err := tx.Exec(ctx, query); err != nil {
-		return fmt.Errorf("lock restore swap: %w", err)
+	backoff := swapLockBackoffStart
+
+	for {
+		err := tryLockSwap(ctx, tx, query)
+		if err == nil {
+			// The attempt set the timeout for this transaction. Put the
+			// earlier value back for the rest of the swap.
+			if _, resetErr := tx.Exec(ctx, "SELECT set_config('lock_timeout', $1, true)", previous); resetErr != nil {
+				return fmt.Errorf("restore lock timeout: %w", resetErr)
+			}
+
+			return nil
+		}
+
+		// The context can end inside the attempt, as a wait or as a driver
+		// error. Then the lock is still held by a long read.
+		if ctx.Err() != nil {
+			return errSwapLockBusy(ctx)
+		}
+
+		if !isLockTimeout(err) {
+			return fmt.Errorf("lock restore swap: %w", err)
+		}
+
+		// The jitter keeps two restores from retrying in step.
+		half := backoff / backoffJitterDivisor
+		wait := half + rand.N(half+1) //nolint:gosec // G404: jitter only, not a secret.
+
+		select {
+		case <-time.After(wait):
+		case <-ctx.Done():
+			return errSwapLockBusy(ctx)
+		}
+
+		backoff = min(backoff*backoffGrowth, swapLockBackoffMax)
+	}
+}
+
+// errSwapLockBusy returns the error of a swap that did not get the lock
+// before ctx ended.
+func errSwapLockBusy(ctx context.Context) error {
+	return fmt.Errorf("lock restore swap: a snapshot read, for example a backup, holds the lock;"+
+		" wait for it to end, then run the restore again: %w", context.Cause(ctx))
+}
+
+// The timing of the attempts of lockSwap. An attempt waits at most
+// swapLockTimeout, so a snapshot read waits at most that long behind a
+// waiting swap.
+const (
+	swapLockTimeout      = 100 * time.Millisecond
+	swapLockBackoffStart = 50 * time.Millisecond
+	swapLockBackoffMax   = time.Second
+	backoffGrowth        = 2
+	backoffJitterDivisor = 2
+)
+
+// sqlstateLockNotAvailable is the SQLSTATE of a lock wait that ended at the
+// lock timeout.
+const sqlstateLockNotAvailable = "55P03"
+
+// isLockTimeout reports whether err is a lock wait that ended at the lock
+// timeout.
+func isLockTimeout(err error) bool {
+	var pgErr *pgconn.PgError
+
+	return errors.As(err, &pgErr) && pgErr.Code == sqlstateLockNotAvailable
+}
+
+// tryLockSwap runs one attempt of lockSwap in a savepoint, so that a lock
+// timeout does not end tx.
+func tryLockSwap(ctx context.Context, tx pgx.Tx, query string) (err error) {
+	attempt, err := tx.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin lock attempt: %w", err)
+	}
+
+	defer func() {
+		if err != nil {
+			//nolint:errcheck // The attempt failed; its error is the one to report.
+			_ = attempt.Rollback(context.WithoutCancel(ctx))
+		}
+	}()
+
+	timeout := strconv.FormatInt(swapLockTimeout.Milliseconds(), 10) + "ms"
+
+	if _, err = attempt.Exec(ctx, "SELECT set_config('lock_timeout', $1, true)", timeout); err != nil {
+		return fmt.Errorf("set lock timeout: %w", err)
+	}
+
+	if _, err = attempt.Exec(ctx, query); err != nil {
+		return err //nolint:wrapcheck // The caller reads the SQLSTATE.
+	}
+
+	if err = attempt.Commit(ctx); err != nil {
+		return fmt.Errorf("release lock attempt: %w", err)
 	}
 
 	return nil
@@ -165,6 +274,10 @@ func lockSwap(ctx context.Context, tx pgx.Tx, live string) error {
 // swapLockTable returns the qualified name of the table that serves as the
 // swap lock: the revocation journal. The name is qualified, so a table of the
 // same name in the live schema cannot take its place.
+//
+// A future ALTER TABLE of maintenance_revocations takes ACCESS EXCLUSIVE on
+// it, and then every snapshot read waits until that ALTER ends. Keep such a
+// change short, or give the swap lock a table of its own.
 func swapLockTable(live string) string {
 	return revocationJournal(live)
 }
