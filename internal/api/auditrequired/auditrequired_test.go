@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	apiaudit "opendustpan.org/opendustpan/internal/api/audit"
+	apidrift "opendustpan.org/opendustpan/internal/api/drift"
 	apiinventory "opendustpan.org/opendustpan/internal/api/inventory"
 	apijobs "opendustpan.org/opendustpan/internal/api/jobs"
 	apinotifications "opendustpan.org/opendustpan/internal/api/notifications"
@@ -58,6 +59,11 @@ func TestEveryAdapterNeedsAnAuditStore(t *testing.T) {
 			"context",
 			zeroConfig(apicontext.NewHandler),
 			apicontext.ErrMissingDependency,
+		},
+		{
+			"drift",
+			zeroConfig(apidrift.NewHandler),
+			apidrift.ErrMissingDependency,
 		},
 		{
 			"profile",
