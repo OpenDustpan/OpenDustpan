@@ -10,8 +10,9 @@ on:
     types: [ opened, synchronize, reopened, ready_for_review ]
   # Every 2 hours, the go and store jobs on main run each test package again
   # without the test cache (GO_TEST_COUNT=-count=1), to find flaky tests. The
-  # lint job also runs, so that make vuln finds a new advisory. The e2e and
-  # scan jobs do not run on the schedule. Each run uses about 9 runner-minutes.
+  # lint job also runs, so that make vuln finds a new advisory. The e2e,
+  # e2e-light and scan jobs do not run on the schedule. Each run uses about 9
+  # runner-minutes, most of them on the paid Blacksmith runners.
   # GitHub sends the failure notification of a scheduled run to the user who
   # last changed this cron line.
   schedule:
@@ -30,33 +31,29 @@ concurrency:
   group: ci-${{ github.event.pull_request.number || github.sha }}-${{ github.event.pull_request.draft == true }}${{ github.event_name == 'schedule' && '-schedule' || '' }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
-# The repository variable CI_RUNS_ON picks the runners, as a JSON value:
-# unset means GitHub-hosted "ubuntu-latest"; ["self-hosted","linux","x64"]
-# means the project's own machines. Never point a public repository's
-# pull requests from forks at self-hosted runners.
-#
-# Three repository variables, when they are set, replace CI_RUNS_ON, with
-# the same JSON format. They send all runs to the runners of a trial
-# provider, in three sizes:
-#   CI_TRIAL_RUNS_ON_LARGE  go, store and e2e, the CPU-bound tests
-#   CI_TRIAL_RUNS_ON        lint
-#   CI_TRIAL_RUNS_ON_SMALL  scan
-# For example "blacksmith-8vcpu-ubuntu-2404". Change a variable to try
-# another size without a commit. Unset all three to stop the trial.
+# The CPU-bound tests (go, store and e2e) run on paid 8 vCPU Blacksmith
+# runners. They kept all the cores of a 4 vCPU runner busy, and on 8 vCPUs
+# they took about half the time. The other jobs (lint, scan and e2e-light)
+# run on the runners in the repository variable CI_RUNS_ON, as a JSON
+# value: unset means GitHub-hosted "ubuntu-latest"; ["self-hosted","linux",
+# "x64"] means the project's own machines. Never point a public
+# repository's pull requests from forks at self-hosted runners.
 #
 # The project's machines (github-actions-runner1 to 4) keep the Go build
 # cache, the Go module cache and the golangci-lint cache on their disks
 # between jobs, and also the CLI archives of the e2e suite. Thus the jobs
 # use the GitHub Actions cache only on other runners, where each job starts
-# on an empty machine. The trial runners also say "self-hosted" in
+# on an empty machine. The Blacksmith runners also say "self-hosted" in
 # runner.environment, so the jobs check the runner name instead.
 
 jobs:
-  # The checks that need no database. They run apart from the tests, so
-  # that they can use a smaller runner.
+  # The checks that need no database. They run apart from the tests, on
+  # the runners in CI_RUNS_ON.
   lint:
     if: ${{ github.event_name != 'pull_request' || !github.event.pull_request.draft }}
-    runs-on: ${{ fromJSON(vars.CI_TRIAL_RUNS_ON || vars.CI_RUNS_ON || '"ubuntu-latest"') }}
+    # The scan and e2e-light jobs use this value through the YAML alias
+    # *runs-on-own.
+    runs-on: &runs-on-own ${{ fromJSON(vars.CI_RUNS_ON || '"ubuntu-latest"') }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
@@ -123,7 +120,7 @@ jobs:
   go:
     if: ${{ github.event_name != 'pull_request' || !github.event.pull_request.draft }}
     # The store and e2e jobs use this value through the YAML alias *runs-on-large.
-    runs-on: &runs-on-large ${{ fromJSON(vars.CI_TRIAL_RUNS_ON_LARGE || vars.CI_RUNS_ON || '"ubuntu-latest"') }}
+    runs-on: &runs-on-large blacksmith-8vcpu-ubuntu-2404
     services:
       postgres:
         # The Go test cache does not see the image. The digest makes sure that
@@ -135,22 +132,20 @@ jobs:
         # A fixed port keeps DUSTPAN_TEST_POSTGRES_URL the same from job to job,
         # so go test can use cached results. Each machine runs one job at a time.
         ports: [ "5432:5432" ]
-        # The image declares a volume at /var/lib/postgresql on the disk of the
-        # runner. The runner does not remove that volume after the job. The job
-        # hooks of each self-hosted runner remove it. On the trial runners,
-        # the data stays in memory instead. A parallel query keeps its shared
-        # memory in /dev/shm, and the Docker default of 64 MiB is too small
-        # for the tests.
+        # The image declares a volume at /var/lib/postgresql. On the
+        # Blacksmith runner, the data stays in memory instead. A parallel
+        # query keeps its shared memory in /dev/shm, and the Docker default of
+        # 64 MiB is too small for the tests.
         options: >-
           --shm-size=1g
-          ${{ vars.CI_TRIAL_RUNS_ON_LARGE && '--tmpfs /var/lib/postgresql:rw,size=8g' || '' }}
+          --tmpfs /var/lib/postgresql:rw,size=8g
           --health-cmd "pg_isready -U postgres"
           --health-interval 5s --health-timeout 5s --health-retries 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      # On a trial runner, the temporary files of the tests (SQLite databases,
-      # test binaries, the data directories of the e2e servers) and the Go
-      # build cache stay in memory. The 8 vCPU trial runner has 32 GB of
+      # On a Blacksmith runner, the temporary files of the tests (SQLite
+      # databases, test binaries, the data directories of the e2e servers)
+      # and the Go build cache stay in memory. The 8 vCPU runner has 32 GB of
       # memory and the jobs used 1.1 GB at most, but its disk showed high
       # IOPS during the tests. The step must come before setup-go, which
       # restores its cache into GOCACHE. The project's machines keep the Go
@@ -200,7 +195,7 @@ jobs:
         ports: [ "5432:5432" ]
         options: >-
           --shm-size=1g
-          ${{ vars.CI_TRIAL_RUNS_ON_LARGE && '--tmpfs /var/lib/postgresql:rw,size=8g' || '' }}
+          --tmpfs /var/lib/postgresql:rw,size=8g
           --health-cmd "pg_isready -U postgres"
           --health-interval 5s --health-timeout 5s --health-retries 10
     steps:
@@ -214,8 +209,8 @@ jobs:
       # data needs no durability. On a runner, each checkpoint of a store test
       # run spent 55 to 90 seconds in fsync of about 120,000 files. These
       # settings change only what PostgreSQL keeps after a crash of the
-      # machine, not what a query returns. The e2e job, which has the crash
-      # test, keeps the defaults.
+      # machine, not what a query returns. The e2e-light job, which has the
+      # crash test, keeps the defaults.
       - name: Turn off fsync in the test PostgreSQL
         if: ${{ matrix.store == 'postgres' }}
         env:
@@ -240,7 +235,7 @@ jobs:
   # pinned here. Change a version together with its checksum and the Makefile.
   scan:
     if: ${{ github.event_name != 'schedule' && (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
-    runs-on: ${{ fromJSON(vars.CI_TRIAL_RUNS_ON_SMALL || vars.CI_RUNS_ON || '"ubuntu-latest"') }}
+    runs-on: *runs-on-own
     env:
       TRIVY_VERSION: 0.75.0
       TRIVY_SHA256: c6e65abddb348e25f10549df887045629cf28cc72453cd1c63acb717316b3f3f
@@ -293,15 +288,65 @@ jobs:
         # A fixed port keeps DUSTPAN_TEST_POSTGRES_URL the same from job to job,
         # so go test can use cached results. Each machine runs one job at a time.
         ports: [ "5432:5432" ]
-        # The image declares a volume at /var/lib/postgresql on the disk of the
-        # runner. The runner does not remove that volume after the job. The job
-        # hooks of each self-hosted runner remove it. On the trial runners,
-        # the data stays in memory instead. A parallel query keeps its shared
-        # memory in /dev/shm, and the Docker default of 64 MiB is too small
-        # for the tests.
+        # The image declares a volume at /var/lib/postgresql. On the
+        # Blacksmith runner, the data stays in memory instead. A parallel
+        # query keeps its shared memory in /dev/shm, and the Docker default of
+        # 64 MiB is too small for the tests.
         options: >-
           --shm-size=1g
-          ${{ vars.CI_TRIAL_RUNS_ON_LARGE && '--tmpfs /var/lib/postgresql:rw,size=8g' || '' }}
+          --tmpfs /var/lib/postgresql:rw,size=8g
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - *ramdisk
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: ${{ !startsWith(runner.name, 'github-actions-runner') }}
+      # The pinned versions of the matrix are in e2e/tool.go, so the key changes
+      # when they change. The "latest" versions are downloaded on each run.
+      - &cache-clis
+        name: Cache the CLI archives
+        if: ${{ !startsWith(runner.name, 'github-actions-runner') }}
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/opendustpan-e2e
+          key: e2e-clis-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('e2e/tool.go') }}
+      - name: End-to-end suite
+        env:
+          DUSTPAN_TEST_POSTGRES_URL: postgres://postgres:postgres@localhost:${{ job.services.postgres.ports['5432'] }}/postgres?sslmode=disable
+        run: make e2e
+      - &show-report
+        name: Show the report
+        if: ${{ !cancelled() }}
+        run: |
+          if [ -f e2e/report/summary.md ]; then
+            cat e2e/report/summary.md >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+  # The shorter tests that drive the server binary: the journal route, an
+  # upgrade, a crash and network faults. Each one uses little CPU, so they
+  # run apart from the e2e suite, on the runners in CI_RUNS_ON.
+  e2e-light:
+    if: ${{ github.event_name != 'schedule' && (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
+    runs-on: *runs-on-own
+    timeout-minutes: 70
+    services:
+      postgres:
+        # The same image as the e2e job.
+        image: postgres:18@sha256:74935e72241653ca55e0414067e6d8763aceb8a810eb51b452253ec3dcfc4336
+        env:
+          POSTGRES_PASSWORD: postgres
+        # Each machine runs one job at a time, so a fixed port is free.
+        ports: [ "5432:5432" ]
+        # The image declares a volume at /var/lib/postgresql on the disk of the
+        # runner. The runner does not remove that volume after the job. The job
+        # hooks of each self-hosted runner remove it. A parallel query keeps its
+        # shared memory in /dev/shm, and the Docker default of 64 MiB is too
+        # small for the tests.
+        options: >-
+          --shm-size=1g
           --health-cmd "pg_isready -U postgres"
           --health-interval 5s --health-timeout 5s --health-retries 10
       # The network fault tests (make faults) drive this Toxiproxy server.
@@ -323,23 +368,11 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
-      - *ramdisk
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
           cache: ${{ !startsWith(runner.name, 'github-actions-runner') }}
-      # The pinned versions of the matrix are in e2e/tool.go, so the key changes
-      # when they change. The "latest" versions are downloaded on each run.
-      - name: Cache the CLI archives
-        if: ${{ !startsWith(runner.name, 'github-actions-runner') }}
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ~/.cache/opendustpan-e2e
-          key: e2e-clis-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('e2e/tool.go') }}
-      - name: End-to-end suite
-        env:
-          DUSTPAN_TEST_POSTGRES_URL: postgres://postgres:postgres@localhost:${{ job.services.postgres.ports['5432'] }}/postgres?sslmode=disable
-        run: make e2e
+      - *cache-clis
       - name: Journal end-to-end tests
         env:
           DUSTPAN_TEST_POSTGRES_URL: postgres://postgres:postgres@localhost:${{ job.services.postgres.ports['5432'] }}/postgres?sslmode=disable
@@ -361,9 +394,4 @@ jobs:
           TOXIPROXY_PORT_BASE: "8475"
           TOXIPROXY_UPSTREAM_HOST: host.docker.internal
         run: make faults
-      - name: Show the report
-        if: ${{ !cancelled() }}
-        run: |
-          if [ -f e2e/report/summary.md ]; then
-            cat e2e/report/summary.md >> "$GITHUB_STEP_SUMMARY"
-          fi
+      - *show-report
