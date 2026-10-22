@@ -150,3 +150,4 @@ both together.
 | [100](0100-saved-views.md) | Saved views of the unit list, a part of RFC 40 | accepted (ADR 266) |
 | [101](0101-a-private-registry-for-opentofu-providers-and-modules.md) | A private registry for OpenTofu providers and modules (ADR 269) | discussing |
 | [102](0102-cli-step-up-for-writes-that-need-a-fresh-authentication.md) | A step-up of a person in the CLI for writes that need a fresh authentication | discussing |
+| [103](0103-the-public-sdk-surface.md) | The public SDK surface: what stays in `pkg/`, and the CI check | discussing |
