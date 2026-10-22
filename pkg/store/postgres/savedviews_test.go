@@ -54,6 +54,9 @@ func newSavedViewHarness(t *testing.T, s *postgres.Store, schemaURL string) save
 
 // seedSavedViews inserts views into the schema of schemaURL through a second
 // connection, in one transaction, with the query encoding of the store.
+// It is a test-only back door for the limit cases: it writes with no fence,
+// no audit entry and no limit check. Every write of the store under test
+// still goes through Store.Create, with its fence check.
 func seedSavedViews(t *testing.T, schemaURL string, views []savedview.View) {
 	t.Helper()
 

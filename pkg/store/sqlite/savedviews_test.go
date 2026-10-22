@@ -47,6 +47,9 @@ func savedViewHarness(t *testing.T) savedviewtest.Harness {
 
 // seedSavedViews inserts views into the database file at path through a
 // second handle, in one transaction, with the query encoding of the store.
+// It is a test-only back door for the limit cases: it writes with no fence,
+// no audit entry and no limit check. Every write of the store under test
+// still goes through Store.Create, with its fence check.
 func seedSavedViews(t *testing.T, path string, views []savedview.View) {
 	t.Helper()
 
