@@ -81,6 +81,12 @@ func (s *Store) keepAccessTx(ctx context.Context, tx pgx.Tx, staging string) (in
 		return 0, fmt.Errorf("apply staging schema %q over %q: %w", staging, live, backup.ErrCorrupt)
 	}
 
+	// The swap lock comes first, before the swap touches a live table, so
+	// that no snapshot read overlaps the swap.
+	if err := lockSwap(ctx, tx, live); err != nil {
+		return 0, err
+	}
+
 	// The check covers the whole staging area, also the access tables that
 	// the swap does not take, and runs before any write.
 	if err := checkSwapDev(ctx, tx, staging); err != nil {
