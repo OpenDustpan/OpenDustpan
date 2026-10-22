@@ -490,7 +490,12 @@ func (h *Handler) renewLease(w http.ResponseWriter, r *http.Request, call LeaseC
 		return
 	}
 
-	h.writeJSON(ctx, w, http.StatusOK, renewLeaseResponse{TokenExpiration: u.Lease.ExpiresAt.Unix(), Token: call.Raw})
+	h.writeJSON(
+		ctx,
+		w,
+		http.StatusOK,
+		renewLeaseResponse{TokenExpiration: u.Lease.ExpiresAt.Unix(), Token: call.Token.Reveal()},
+	)
 }
 
 // recordEvents stores a batch of engine events for the update. Retried
@@ -864,22 +869,22 @@ func (h *Handler) updateTarget(w http.ResponseWriter, r *http.Request) (stack.Re
 
 // leaseToken reads the update lease token from the Authorization header. A
 // missing or malformed token answers 401 without touching any store.
-func (h *Handler) leaseToken(w http.ResponseWriter, r *http.Request) (token.Token, string, bool) {
+func (h *Handler) leaseToken(w http.ResponseWriter, r *http.Request) (token.Token, bool) {
 	raw, ok := strings.CutPrefix(r.Header.Get("Authorization"), updateTokenScheme)
 	if !ok || raw == "" {
 		h.writeError(r.Context(), w, identity.ErrUnauthenticated)
 
-		return token.Token{}, "", false
+		return token.Token{}, false
 	}
 
 	tok, err := token.Parse(raw)
 	if err != nil {
 		h.writeError(r.Context(), w, err)
 
-		return token.Token{}, "", false
+		return token.Token{}, false
 	}
 
-	return tok, raw, true
+	return tok, true
 }
 
 // readBody reads at most maxBodyBytes request bytes. An oversized body answers
