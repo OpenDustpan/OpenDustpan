@@ -480,7 +480,7 @@ func (h *Handler) restoreStateVersion(
 	restored, err := h.workspaces.Restore(ctx, src.Workspace, from, p.Subject)
 	if err != nil {
 		if errors.Is(err, workspace.ErrLockedByOther) {
-			holder := h.lockHolder(ctx, src.Workspace)
+			holder := h.refusingHolder(ctx, src.Workspace, err)
 			if holder == "" {
 				h.writeConflict(ctx, w, err.Error())
 

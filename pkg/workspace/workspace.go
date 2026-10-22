@@ -149,12 +149,12 @@ func (w Workspace) lock(now time.Time, holder, reason string) (Workspace, error)
 // decision 6), so the lock keeps the ID the client chose.
 func (w Workspace) lockAs(now time.Time, holder, reason, lockID string) (Workspace, error) {
 	if w.Lock.Locked() {
-		return Workspace{}, fmt.Errorf(
+		return Workspace{}, lockRefused(w.Lock, fmt.Errorf(
 			"%w by %s since %s",
 			ErrLocked,
 			w.Lock.Holder,
 			w.Lock.LockedAt.Format(time.RFC3339),
-		)
+		))
 	}
 
 	return w.withLock(now, Lock{LockedAt: now, ID: lockID, Holder: holder, Reason: reason}), nil
@@ -184,7 +184,7 @@ func (w Workspace) heldBy(holder string) error {
 	case !w.Lock.Locked():
 		return ErrNotLocked
 	case w.Lock.Holder != holder:
-		return fmt.Errorf("%w: held by %s", ErrLockedByOther, w.Lock.Holder)
+		return lockRefused(w.Lock, fmt.Errorf("%w: held by %s", ErrLockedByOther, w.Lock.Holder))
 	default:
 		return nil
 	}
@@ -207,4 +207,40 @@ func (w Workspace) withLock(now time.Time, lock Lock) Workspace {
 	next.Revision++
 
 	return next
+}
+
+// LockRefusedError is the refusal of a call because of the current lock of
+// the workspace: a lock of a locked workspace, an unlock by another holder,
+// or a write with another lock ID or with none. It names the lock as the
+// refusing revision held it, so a caller can show the holder without a
+// second read that could see another lock. It matches the sentinel of the
+// refusal: ErrLocked, ErrLockedByOther or ErrLockMismatch.
+type LockRefusedError struct {
+	// Lock is the lock of the workspace when the call was refused. It is the
+	// zero Lock when a write named a lock ID on an unlocked workspace.
+	Lock Lock
+	// Err is the refusal. It wraps the sentinel, and it is never nil.
+	Err error
+}
+
+// Error returns the text of the refusal.
+func (e *LockRefusedError) Error() string { return e.Err.Error() }
+
+// Unwrap returns the refusal, which wraps its sentinel.
+func (e *LockRefusedError) Unwrap() error { return e.Err }
+
+// lockRefused returns err as a LockRefusedError that names lock.
+func lockRefused(lock Lock, err error) error {
+	return &LockRefusedError{Lock: lock, Err: err}
+}
+
+// RefusingLock returns the lock of the first LockRefusedError in the chain
+// of err, and false when the chain holds none, for example for a refusal of
+// the store after a lost compare-and-swap.
+func RefusingLock(err error) (Lock, bool) {
+	if refused, ok := errors.AsType[*LockRefusedError](err); ok {
+		return refused.Lock, true
+	}
+
+	return Lock{LockedAt: time.Time{}, ID: "", Holder: "", Reason: ""}, false
 }

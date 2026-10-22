@@ -109,14 +109,7 @@ func (h *Handler) writeStateRefusal(ctx context.Context, w http.ResponseWriter, 
 	case errors.Is(refusal, workspace.ErrLocked), errors.Is(refusal, workspace.ErrLockedByOther):
 		h.writeHeld(ctx, w, c, refusal)
 	case errors.Is(refusal, workspace.ErrLockMismatch):
-		current, err := h.ws.Get(ctx, c.ref)
-		if err != nil {
-			h.writeError(ctx, w, refusal)
-
-			return
-		}
-
-		h.writeConflict(w, current.Lock)
+		h.writeHeldOrConflict(ctx, w, c, refusal)
 	default:
 		h.writeError(ctx, w, refusal)
 	}

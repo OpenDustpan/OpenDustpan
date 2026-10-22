@@ -266,9 +266,9 @@ func (s *Service) refuseStream(ctx context.Context, sw *streamWrite, cause error
 func checkStreamLock(w Workspace, lockID string) error {
 	switch {
 	case lockID != "" && lockID != w.Lock.ID:
-		return fmt.Errorf("%w: write names lock %q, unit %s", ErrLockMismatch, lockID, w.Ref)
+		return lockRefused(w.Lock, fmt.Errorf("%w: write names lock %q, unit %s", ErrLockMismatch, lockID, w.Ref))
 	case lockID == "" && w.Lock.Locked():
-		return fmt.Errorf("%w: write names no lock ID, unit %s", ErrLocked, w.Ref)
+		return lockRefused(w.Lock, fmt.Errorf("%w: write names no lock ID, unit %s", ErrLocked, w.Ref))
 	default:
 		return nil
 	}

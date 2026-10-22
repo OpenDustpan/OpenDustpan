@@ -103,6 +103,13 @@ func (conflictWorkspaces) forceUnlockUnfenced(_ context.Context, id workspace.ID
 func newConflictHandler(t *testing.T) *tfe.Handler {
 	t.Helper()
 
+	return newConflictHandlerOver(t, conflictWorkspaces{stubWorkspaces: stubWorkspaces{}})
+}
+
+// newConflictHandlerOver returns a production Handler over workspaces.
+func newConflictHandlerOver(t *testing.T, workspaces tfe.WorkspaceService) *tfe.Handler {
+	t.Helper()
+
 	handler, err := tfe.NewHandler(tfe.Config{
 		Registry:       nil,
 		Authenticator:  tokenAuthenticator{},
@@ -110,7 +117,7 @@ func newConflictHandler(t *testing.T) *tfe.Handler {
 		AddressGate:    nil,
 		Logger:         slog.New(slog.DiscardHandler),
 		Namespaces:     newTestNamespaces(t),
-		Workspaces:     conflictWorkspaces{stubWorkspaces: stubWorkspaces{}},
+		Workspaces:     workspaces,
 		BaseURL:        baseurl.Resolver{},
 		Audit:          nil,
 		Gate:           nil,
@@ -175,6 +182,33 @@ func TestUnlockConflictDetail(t *testing.T) {
 
 	if !strings.Contains(detail, "is locked by User") || !strings.Contains(detail, "alice") {
 		t.Fatalf("unlock detail = %q, want %q and the holder", detail, "is locked by User")
+	}
+}
+
+// movedLockWorkspaces refuses an unlock with the lock of dana, while a later
+// read of the workspace sees the lock of alice.
+type movedLockWorkspaces struct {
+	conflictWorkspaces
+}
+
+func (movedLockWorkspaces) Unlock(context.Context, workspace.ID, string) (workspace.Workspace, error) {
+	return workspace.Workspace{}, &workspace.LockRefusedError{
+		Lock: workspace.Lock{LockedAt: stubWorkspaceTime(), ID: "lock-dana", Holder: "dana", Reason: ""},
+		Err:  workspace.ErrLockedByOther,
+	}
+}
+
+// TestUnlockConflictNamesTheRefusingLock proves that a refused unlock names
+// the holder of the lock that refused it, not the holder that a later read
+// sees: the answer and the refusal come from one revision.
+func TestUnlockConflictNamesTheRefusingLock(t *testing.T) {
+	t.Parallel()
+
+	handler := newConflictHandlerOver(t, movedLockWorkspaces{conflictWorkspaces{stubWorkspaces: stubWorkspaces{}}})
+	detail := lockErrorDetail(t, handler, "/api/v2/workspaces/ws-test123/actions/unlock")
+
+	if !strings.Contains(detail, "is locked by User dana") {
+		t.Fatalf("unlock detail = %q, want the holder dana of the refusal", detail)
 	}
 }
 

@@ -236,14 +236,31 @@ func (h *Handler) writeHeld(ctx context.Context, w http.ResponseWriter, c call, 
 		return
 	}
 
-	current, err := h.ws.Get(ctx, c.ref)
-	if err != nil || !current.Lock.Locked() {
+	lock, err := h.refusingLock(ctx, c, refused)
+	if err != nil || !lock.Locked() {
 		h.writeError(ctx, w, refused)
 
 		return
 	}
 
-	h.writeLocked(w, current.Lock)
+	h.writeLocked(w, lock)
+}
+
+// refusingLock returns the lock that refused the call. The domain names that
+// lock in its refusal, as the refusing revision held it. A refusal without
+// one, such as a lost compare-and-swap of the store, reads the workspace
+// again.
+func (h *Handler) refusingLock(ctx context.Context, c call, refused error) (workspace.Lock, error) {
+	if lock, ok := workspace.RefusingLock(refused); ok {
+		return lock, nil
+	}
+
+	current, err := h.ws.Get(ctx, c.ref)
+	if err != nil {
+		return workspace.Lock{}, err
+	}
+
+	return current.Lock, nil
 }
 
 // workspaceOf returns the workspace of the call, creating it on first use. Two
@@ -366,12 +383,12 @@ func (h *Handler) writeConflict(w http.ResponseWriter, held workspace.Lock) {
 // writeHeldOrConflict answers a refused UNLOCK with the lock that holds the
 // workspace now, as 409.
 func (h *Handler) writeHeldOrConflict(ctx context.Context, w http.ResponseWriter, c call, refused error) {
-	current, err := h.ws.Get(ctx, c.ref)
+	lock, err := h.refusingLock(ctx, c, refused)
 	if err != nil {
 		h.writeError(ctx, w, refused)
 
 		return
 	}
 
-	h.writeConflict(w, current.Lock)
+	h.writeConflict(w, lock)
 }
