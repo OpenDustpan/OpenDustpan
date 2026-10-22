@@ -67,7 +67,10 @@ func newTemplate(t *testing.T, base string) string {
 		t.Fatalf("random name: %v", err)
 	}
 
-	name := "dustpan_test_pgtest_" + hex.EncodeToString(suffix)
+	// The name has the shape that the stale cleanup of the store tests parses:
+	// the prefix, the Unix time, and a suffix. A template that a crash leaves
+	// is then dropped by a later run.
+	name := fmt.Sprintf("dustpan_test_%d_pgtest%s", time.Now().Unix(), hex.EncodeToString(suffix))
 
 	migrate := func(ctx context.Context, dbURL string) error {
 		conn, err := pgx.Connect(ctx, dbURL)
@@ -101,6 +104,14 @@ func newTemplate(t *testing.T, base string) string {
 		drop := "DROP DATABASE IF EXISTS " + pgx.Identifier{name}.Sanitize() + " WITH (FORCE)"
 		if _, err = conn.Exec(context.Background(), drop); err != nil {
 			t.Logf("drop the template: %v", err)
+		}
+	})
+
+	// Cleanups run last in, first out: this one drops the clones before the
+	// cleanup above drops the template, also when the test ends with a Fatal.
+	t.Cleanup(func() {
+		if _, err := pgtest.DropClones(context.Background(), base, name, t.Logf); err != nil {
+			t.Logf("drop the clones: %v", err)
 		}
 	})
 
