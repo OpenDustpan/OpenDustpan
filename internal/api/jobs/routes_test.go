@@ -227,6 +227,11 @@ func newStartHandler(
 ) *jobsapi.Handler {
 	t.Helper()
 
+	// The handler needs an audit store; a test that reads the entries passes its own.
+	if entries == nil {
+		entries = newTestAudit()
+	}
+
 	namespaces, err := namespace.NewService(namespace.Config{Store: fakeNamespaces{}, Now: nil, Region: "test-region"})
 	if err != nil {
 		t.Fatalf("namespace service: %v", err)
@@ -266,7 +271,7 @@ func runningJob(t *testing.T, id job.ID) job.Job {
 	return job.Job{
 		ID: id,
 		Spec: job.Spec{
-			Unit: unitOf(t, "acme", testUnit), Operation: job.OperationApply, Executor: job.ExecutorRunner,
+			Unit: unitOf(t, "acme", testUnit), Operation: job.OperationApply, Purpose: "", Executor: job.ExecutorRunner,
 			Location: job.Location{
 				Connection: "", Repository: "acme/infra", Ref: "main", Directory: "net", Revision: "abc123",
 			},
@@ -621,6 +626,25 @@ func TestJobDocument(t *testing.T) {
 	}
 }
 
+// TestJobDocumentShowsThePurpose proves that a drift check says so in its
+// document, and that a job with no purpose leaves the member out.
+func TestJobDocumentShowsThePurpose(t *testing.T) {
+	t.Parallel()
+
+	for purpose, want := range map[job.Purpose]bool{job.PurposeDriftCheck: true, job.PurposeNone: false} {
+		j := runningJob(t, testJob)
+		j.Spec.Purpose = purpose
+
+		handler := newHandler(t, newAuthorizer(holdsBoth()...), newFakeJobs(j))
+		rec := serve(t, handler, request{method: http.MethodGet, path: jobPath("acme", testJob), token: testToken})
+
+		if got := strings.Contains(rec.Body.String(), `"purpose":"drift-check"`); got != want ||
+			(!want && strings.Contains(rec.Body.String(), `"purpose"`)) {
+			t.Errorf("purpose %q: body = %s, want the purpose member = %t", purpose, rec.Body.String(), want)
+		}
+	}
+}
+
 // TestStoreFailureAnswers500 proves a failure of the store answers 500 with
 // no detail of the failure.
 func TestStoreFailureAnswers500(t *testing.T) {
@@ -643,8 +667,16 @@ func TestNewHandlerNeedsItsDependencies(t *testing.T) {
 	t.Parallel()
 
 	_, err := jobsapi.NewHandler(jobsapi.Config{
-		Namespaces: nil, Jobs: nil, Starter: nil, Authenticator: nil, Authorizer: nil, Audit: nil, OnAuditFailure: nil,
-		DenialLimiter: nil, Sessions: nil, Logger: nil,
+		Namespaces:     nil,
+		Jobs:           nil,
+		Starter:        nil,
+		Authenticator:  nil,
+		Authorizer:     nil,
+		Audit:          newTestAudit(),
+		OnAuditFailure: nil,
+		DenialLimiter:  nil,
+		Sessions:       nil,
+		Logger:         nil,
 	})
 	if !errors.Is(err, jobsapi.ErrMissingDependency) {
 		t.Fatalf("NewHandler with no dependency = %v, want ErrMissingDependency", err)

@@ -607,7 +607,7 @@ func newUpdateFixtureWithAuthenticator(
 		BaseURL:                 baseurl.Resolver{},
 		MaxBodyBytesInFlight:    0,
 		Gate:                    nil,
-		Audit:                   nil,
+		Audit:                   newTestAudit(),
 		OnAuditFailure:          nil,
 		CheckpointDeltaCutoff:   cutoff,
 		DenialLimiter:           nil,
@@ -2833,7 +2833,7 @@ func TestNegativeDeltaCutoffFails(t *testing.T) {
 		MaxBodyBytesInFlight:    0,
 		Gate:                    nil,
 		CheckpointDeltaCutoff:   -1,
-		Audit:                   nil,
+		Audit:                   newTestAudit(),
 		OnAuditFailure:          nil,
 		DenialLimiter:           nil,
 	})
@@ -3331,5 +3331,63 @@ func checkRefusedSave(t *testing.T, path func(updatePaths) string, request strin
 
 	if got := exportDeployment(t, f); got != `{"resources":[]}` {
 		t.Fatalf("export = %s: a refused save must keep the last checkpoint", got)
+	}
+}
+
+// exportedProviders is the secrets provider entry of an exported deployment in
+// the tests.
+type exportedProviders struct {
+	State map[string]string `json:"state"`
+}
+
+// exportedDeploymentDoc is the deployment of an export in the tests.
+type exportedDeploymentDoc struct {
+	Providers exportedProviders `json:"secrets_providers"` //nolint:tagliatelle // The Pulumi wire name; it must not change.
+}
+
+// exportedProvidersDoc decodes an export in the tests.
+type exportedProvidersDoc struct {
+	Deployment exportedDeploymentDoc `json:"deployment"`
+}
+
+// TestExportNamesTheCurrentStackInTheSecretsProvider proves that both export
+// routes name the stack that serves the deployment in the state of the service
+// secrets provider. A checkpoint that a renamed stack kept holds the old name,
+// and the CLI would ask for that stack.
+func TestExportNamesTheCurrentStackInTheSecretsProvider(t *testing.T) {
+	t.Parallel()
+
+	f := newUpdateFixture(t, allowAll())
+
+	stale := `{"type":"service","state":{"url":"http://127.0.0.1:18080","owner":"acme","project":"web","stack":"old"}}`
+
+	status, body := f.doUpdate(t, accessRequest(
+		http.MethodPost, "/api/stacks/acme/web/prod/import",
+		`{"version":3,"deployment":{"manifest":{},"secrets_providers":`+stale+`,"resources":[]}}`,
+	))
+	if status != http.StatusOK {
+		t.Fatalf("import answers %d, want %d (%s)", status, http.StatusOK, body)
+	}
+
+	for _, target := range []string{"/api/stacks/acme/web/prod/export", "/api/stacks/acme/web/prod/export/1"} {
+		status, body = f.doUpdate(t, accessRequest(http.MethodGet, target, ""))
+		if status != http.StatusOK {
+			t.Fatalf("%s answers %d, want %d (%s)", target, status, http.StatusOK, body)
+		}
+
+		var doc exportedProvidersDoc
+
+		if err := json.Unmarshal([]byte(body), &doc); err != nil {
+			t.Fatalf("%s: decode %q: %v", target, body, err)
+		}
+
+		state := doc.Deployment.Providers.State
+		if state["stack"] != "prod" || state["project"] != "web" || state["owner"] != "acme" {
+			t.Errorf("%s: provider state = %v, want the stack acme/web/prod", target, state)
+		}
+
+		if state["url"] != "http://127.0.0.1:18080" {
+			t.Errorf("%s: provider url = %q, want it unchanged", target, state["url"])
+		}
 	}
 }

@@ -1458,6 +1458,52 @@ func pulumiScenario(t *testing.T, env *e2e.Env) {
 	pulumiDiffScenario(t, env, org)
 }
 
+// pulumiRenameWithCheckpointScenario proves that a stack with a checkpoint and
+// the service secrets provider works under its new name: the checkpoint holds
+// the name from before the rename in the state of the provider, and up,
+// preview, stack output and destroy must not ask for the old stack. A new
+// stack with the old name must not change that. The stack is removed at the
+// end.
+func pulumiRenameWithCheckpointScenario(t *testing.T, env *e2e.Env, org string) {
+	t.Helper()
+
+	ctx := t.Context()
+	before := fmt.Sprintf("%s/%s/keep", org, e2e.Project)
+	after := fmt.Sprintf("%s/%s/kept", org, e2e.Project)
+
+	env.WritePulumiProject(t, changeSecretsProviderProgram)
+
+	for _, s := range []e2e.StepSpec{
+		step("stack init before rename with checkpoint", nil, "stack", "init", before, "--no-select"),
+		step("config set before rename with checkpoint", nil, "config", "set", "--secret", "--stack", before, "apiKey", "s3cr3t"),
+		step("up before rename with checkpoint", nil, "up", "--yes", "--non-interactive", "--stack", before),
+		step("stack rename with checkpoint", nil, "stack", "rename", after, "--stack", before),
+		// The URN of the stack resource holds the stack name, so the first up
+		// after a rename replaces that resource. The up must still work.
+		step("up after rename with checkpoint", nil, "up", "--yes", "--non-interactive", "--stack", after),
+		step("preview after rename with checkpoint", nil, "preview", "--non-interactive", "--stack", after),
+		step(
+			"stack output after rename with checkpoint",
+			contains("abc"),
+			"stack", "output", "key", "--show-secrets", "--stack", after,
+		),
+		step(
+			"stack export names the new stack",
+			contains(`"stack": "kept"`),
+			"stack", "export", "--stack", after,
+		),
+		// A new stack under the old name must not take the secrets of the
+		// renamed one.
+		step("stack init under the old name", nil, "stack", "init", before, "--no-select"),
+		step("up after the old name is used again", upHasNoChanges, "up", "--yes", "--non-interactive", "--stack", after),
+		step("destroy after rename with checkpoint", nil, "destroy", "--yes", "--non-interactive", "--stack", after),
+		step("stack rm after rename with checkpoint", nil, "stack", "rm", "--yes", "--stack", after),
+		step("stack rm under the old name", nil, "stack", "rm", "--yes", "--stack", before),
+	} {
+		env.Step(ctx, t, s)
+	}
+}
+
 // changeSecretsProviderProgram is the scratch YAML program for the
 // change-secrets-provider steps. Its secret output proves that state
 // encrypted under each provider still decrypts after the change.
@@ -1609,6 +1655,8 @@ func pulumiChangeSecretsProviderScenario(t *testing.T, env *e2e.Env, org string)
 	calls := checkAuditLogCalls(t, env, org)
 	checkAuditLog(ctx, t, env, org, calls)
 	env.Step(ctx, t, step("stack rm secrets", nil, "stack", "rm", "--yes", "--stack", qualified))
+
+	pulumiRenameWithCheckpointScenario(t, env, org)
 }
 
 // maskedStateSecret is the secret value the masked state scenario sets. It

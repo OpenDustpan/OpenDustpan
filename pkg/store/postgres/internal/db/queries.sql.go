@@ -2531,6 +2531,22 @@ func (q *Queries) DeleteDeletedInventory(ctx context.Context, arg DeleteDeletedI
 	return result.RowsAffected(), nil
 }
 
+const deleteDriftResult = `-- name: DeleteDriftResult :exec
+DELETE FROM drift_results
+WHERE drift_results.unit_id = $1
+  AND drift_results.namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = $2)
+`
+
+type DeleteDriftResultParams struct {
+	UnitID    string
+	Namespace string
+}
+
+func (q *Queries) DeleteDriftResult(ctx context.Context, arg DeleteDriftResultParams) error {
+	_, err := q.db.Exec(ctx, deleteDriftResult, arg.UnitID, arg.Namespace)
+	return err
+}
+
 const deleteEventsOfStack = `-- name: DeleteEventsOfStack :exec
 DELETE FROM update_events
 WHERE stack_id = $1
@@ -4696,6 +4712,48 @@ func (q *Queries) GetDeletedWorkspace(ctx context.Context, arg GetDeletedWorkspa
 	var deleted_name pgtype.Text
 	err := row.Scan(&deleted_name)
 	return deleted_name, err
+}
+
+const getDriftResult = `-- name: GetDriftResult :one
+SELECT d.unit_id, n.name AS namespace, d.tool, d.job_id, d.status, d.checked_at_ms, d.truncated, d.resources_json
+FROM drift_results AS d
+JOIN namespaces AS n ON n.id = d.namespace_id
+WHERE n.name = $1 AND d.unit_id = $2 AND d.tool = $3
+`
+
+type GetDriftResultParams struct {
+	Namespace string
+	UnitID    string
+	Tool      string
+}
+
+type GetDriftResultRow struct {
+	UnitID        string
+	Namespace     string
+	Tool          string
+	JobID         string
+	Status        string
+	CheckedAtMs   int64
+	Truncated     bool
+	ResourcesJson string
+}
+
+// The namespace and the tool are part of the key: a result of another
+// namespace or another tool reads as no row.
+func (q *Queries) GetDriftResult(ctx context.Context, arg GetDriftResultParams) (GetDriftResultRow, error) {
+	row := q.db.QueryRow(ctx, getDriftResult, arg.Namespace, arg.UnitID, arg.Tool)
+	var i GetDriftResultRow
+	err := row.Scan(
+		&i.UnitID,
+		&i.Namespace,
+		&i.Tool,
+		&i.JobID,
+		&i.Status,
+		&i.CheckedAtMs,
+		&i.Truncated,
+		&i.ResourcesJson,
+	)
+	return i, err
 }
 
 const getDurableOperation = `-- name: GetDurableOperation :one
@@ -16536,6 +16594,52 @@ func (q *Queries) UpdateSignInProvider(ctx context.Context, arg UpdateSignInProv
 		arg.UpdatedAtMs,
 		arg.Version,
 		arg.ProviderID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const upsertDriftResult = `-- name: UpsertDriftResult :execrows
+INSERT INTO drift_results (unit_id, namespace_id, tool, job_id, status, checked_at_ms, truncated, resources_json)
+VALUES (
+    $1, (SELECT n.id FROM namespaces AS n WHERE n.name = $2), $3,
+    $4, $5, $6, $7, $8
+)
+ON CONFLICT (unit_id) DO UPDATE SET
+    job_id = excluded.job_id, status = excluded.status, checked_at_ms = excluded.checked_at_ms,
+    truncated = excluded.truncated, resources_json = excluded.resources_json
+WHERE drift_results.namespace_id = excluded.namespace_id AND drift_results.tool = excluded.tool
+  AND drift_results.checked_at_ms < excluded.checked_at_ms
+`
+
+type UpsertDriftResultParams struct {
+	UnitID        string
+	Namespace     string
+	Tool          string
+	JobID         string
+	Status        string
+	CheckedAtMs   int64
+	Truncated     bool
+	ResourcesJson string
+}
+
+// The caller checks the fence, the job and the time in the same transaction.
+// A row of the same unit ID in another namespace or of another tool is not
+// replaced: the count is 0. A stored row that is not older is not replaced
+// either (count 0), so that two writers cannot put an older result over a
+// newer one.
+func (q *Queries) UpsertDriftResult(ctx context.Context, arg UpsertDriftResultParams) (int64, error) {
+	result, err := q.db.Exec(ctx, upsertDriftResult,
+		arg.UnitID,
+		arg.Namespace,
+		arg.Tool,
+		arg.JobID,
+		arg.Status,
+		arg.CheckedAtMs,
+		arg.Truncated,
+		arg.ResourcesJson,
 	)
 	if err != nil {
 		return 0, err

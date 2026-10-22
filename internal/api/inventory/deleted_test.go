@@ -201,7 +201,7 @@ func buildGuardedFixture(t *testing.T, spec guardSpec) deletedFixture {
 
 	handler, err := apiinventory.NewHandler(apiinventory.Config{
 		Views: nil,
-		Audit: nil, OnAuditFailure: nil, Locks: nil, PublicURL: "",
+		Audit: newTestAudit(), OnAuditFailure: nil, Locks: nil, PublicURL: "",
 		Moves:      nil,
 		Namespaces: namespaces,
 		Units:      &memReader{entries: map[namespace.Name][]coreinventory.Entry{}, err: nil},

@@ -145,6 +145,17 @@ type CollectionMember struct {
 	AssignedAtMs  int64
 }
 
+type DriftResult struct {
+	UnitID        string
+	NamespaceID   string
+	Tool          string
+	JobID         string
+	Status        string
+	CheckedAtMs   int64
+	Truncated     bool
+	ResourcesJson string
+}
+
 type DurableHeartbeat struct {
 	Owner string
 	AtMs  int64
