@@ -1009,6 +1009,16 @@ func (coverageReader) ListUnits(_ context.Context, _ namespace.Name) ([]coreinve
 	return nil, nil
 }
 
+// QueryUnits implements coreinventory.Reader over the entries of ListUnits.
+func (c coverageReader) QueryUnits(ctx context.Context, q coreinventory.UnitQuery) ([]coreinventory.Entry, error) {
+	all, err := c.ListUnits(ctx, q.Namespace)
+	if err != nil {
+		return nil, err
+	}
+
+	return coreinventory.PageUnits(all, q), nil
+}
+
 func (coverageReader) GetUnit(_ context.Context, _ string) (coreinventory.Entry, error) {
 	return coreinventory.Entry{}, coreinventory.ErrUnitNotFound
 }

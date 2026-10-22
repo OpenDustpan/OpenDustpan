@@ -1291,6 +1291,16 @@ func (s *fakeBackupStore) ListUnits(_ context.Context, ns namespace.Name) ([]inv
 	return out, nil
 }
 
+// QueryUnits implements inventory.Reader over the entries of ListUnits.
+func (s *fakeBackupStore) QueryUnits(ctx context.Context, q inventory.UnitQuery) ([]inventory.Entry, error) {
+	all, err := s.ListUnits(ctx, q.Namespace)
+	if err != nil {
+		return nil, err
+	}
+
+	return inventory.PageUnits(all, q), nil
+}
+
 // CreateWorkspace implements workspace.Store.
 func (s *fakeBackupStore) CreateWorkspace(
 	_ context.Context, w workspace.Workspace, fence namespace.Fence,
