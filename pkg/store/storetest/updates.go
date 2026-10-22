@@ -110,6 +110,7 @@ func RunUpdates(t *testing.T, newStore UpdatesFactory) {
 		{name: "canceled or failed update keeps its checkpoint", test: testCheckpointKeepsAfterEnd},
 		{name: "children of a deleted stack are not reachable by name", test: testDeletedStackChildrenUnreachable},
 		{name: "delete during a running update is ErrUpdateConflict", test: testDeleteDuringRunningUpdate},
+		{name: "rename during a running update is ErrUpdateConflict", test: testRenameDuringRunningUpdate},
 		{name: "delete without force refuses a stack with resources", test: testDeleteRefusesResources},
 		{name: "delete with force removes a stack with resources", test: testDeleteWithForceRemovesResources},
 		{name: "delete without force follows the latest checkpoint", test: testDeleteFollowsLatestCheckpoint},
@@ -1879,6 +1880,40 @@ func testDeletedStackChildrenUnreachable(t *testing.T, f fixture) {
 
 	if _, err := f.s.ListEvents(t.Context(), f.ref, u.ID, -1, 100); !errors.Is(err, stack.ErrUpdateNotFound) {
 		t.Errorf("events after delete: err = %v, want ErrUpdateNotFound", err)
+	}
+}
+
+// testRenameDuringRunningUpdate checks that a rename waits for the stack lock:
+// while a mutating update runs it fails with ErrUpdateConflict and changes
+// nothing, so the update keeps its stack.
+func testRenameDuringRunningUpdate(t *testing.T, f fixture) {
+	t.Helper()
+
+	newRef := stack.Ref{Namespace: f.ref.Namespace, Project: f.ref.Project, Stack: "renamed"}
+
+	running := f.run(t, f.ref, "u1", mutating())
+
+	renameErr := f.s.RenameStack(t.Context(), f.ref, "renamed", f.fence)
+	if !errors.Is(renameErr, stack.ErrUpdateConflict) {
+		t.Fatalf("rename during a running update: err = %v, want ErrUpdateConflict", renameErr)
+	}
+
+	if _, err := f.s.GetStack(t.Context(), f.ref); err != nil {
+		t.Errorf("get stack after a refused rename: %v", err)
+	}
+
+	if _, err := f.s.GetStack(t.Context(), newRef); !errors.Is(err, stack.ErrNotFound) {
+		t.Errorf("get new name after a refused rename: err = %v, want ErrNotFound", err)
+	}
+
+	if _, err := f.s.ActiveUpdate(t.Context(), f.ref); err != nil {
+		t.Errorf("active update after a refused rename: %v", err)
+	}
+
+	f.end(t, running, stack.StatusSucceeded)
+
+	if err := f.s.RenameStack(t.Context(), f.ref, "renamed", f.fence); err != nil {
+		t.Errorf("rename after the update ended: %v", err)
 	}
 }
 
