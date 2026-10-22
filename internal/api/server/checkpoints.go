@@ -78,10 +78,6 @@ func (h *Handler) newCheckpointEpoch(
 // already exists, so the server logs the loss and counts it on the failure
 // metric.
 func (h *Handler) appendEpochChange(r *http.Request, p identity.Principal, epoch int64, at time.Time) {
-	if h.audit == nil {
-		return
-	}
-
 	entry := callerEntry(r, p, identity.ActionServerManageAudit)
 	entry.At = at
 	entry.Namespace = audit.ServerScope

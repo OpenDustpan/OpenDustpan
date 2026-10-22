@@ -5,7 +5,6 @@ import (
 	"net/http"
 
 	driftapi "opendustpan.org/opendustpan/internal/api/drift"
-	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/drift"
 	"opendustpan.org/opendustpan/pkg/job"
 )
@@ -28,19 +27,17 @@ func newDriftHandler(svc services, cfg *settings, onFailure func(), starter job.
 		return nil, nil //nolint:nilnil // No drift API: no drift store or no inventory is set.
 	}
 
-	// A namespace store that keeps no audit entries gives a nil store, and a
-	// refusal then writes no entry.
-	var neutralAudit audit.Store
-	if st, ok := cfg.namespaceStore.(audit.Store); ok {
-		neutralAudit = st
+	neutralAudit, err := auditStoreOf(cfg)
+	if err != nil {
+		return nil, err
 	}
 
 	var checker drift.Checker
 
 	if starter != nil {
-		service, err := drift.NewService(starter, cfg.now)
-		if err != nil {
-			return nil, fmt.Errorf("drift service: %w", err)
+		service, serviceErr := drift.NewService(starter, cfg.now)
+		if serviceErr != nil {
+			return nil, fmt.Errorf("drift service: %w", serviceErr)
 		}
 
 		checker = service

@@ -21,7 +21,6 @@ const channelHeader = "Dustpan-Channel"
 // tool-operation, so a reader never confuses it with a person who asked to
 // see a secret value. It returns the append error, so the route answers 500
 // with no secret value when it cannot record the entry (ADR 41 decision 5).
-// A nil audit store writes no entry.
 func (h *Handler) appendToolOperationAudit(
 	r *http.Request, p identity.Principal, obj identity.Object, version, valuePath string,
 ) error {
@@ -60,10 +59,6 @@ type readEntry struct {
 func (h *Handler) appendReadAudit(
 	r *http.Request, p identity.Principal, obj identity.Object, re readEntry,
 ) error {
-	if h.audit == nil {
-		return nil
-	}
-
 	ctx := r.Context()
 
 	entry := audit.Entry{
