@@ -101,31 +101,9 @@ func (h *Handler) revealStateValue(
 
 	id := workspace.StateVersionID(r.PathValue("state_version_id"))
 
-	sv, err := h.workspaces.ReadState(ctx, id)
-	if err != nil {
-		h.writeNoStore(ctx, w, err)
-
-		return
-	}
-
-	// The sealed state opens as a stream: decode from it directly, so no
-	// reveal ever reads the whole state into memory.
-	open := func() (io.ReadCloser, error) {
-		content, openErr := h.workspaces.Open(ctx, sv)
-		if openErr != nil {
-			return nil, openErr
-		}
-
-		return &logCloseReader{
-			ReadCloser: content,
-
-			warn: func(closeErr error) {
-				h.logger.WarnContext(ctx, "close state content failed", slog.String("error", closeErr.Error()))
-			},
-		}, nil
-	}
-
-	value, _, err := workspace.RevealValueFromOpener(open, sv.SensitiveMarks, path)
+	// The domain opens the sealed state as a stream for each pass of the
+	// lookup, so no reveal ever reads the whole state into memory.
+	value, err := workspace.RevealVersion(ctx, h.workspaces, id, path, h.logger)
 	if err != nil {
 		// A path outside the masked set answers 404 with no audit entry
 		// and no value, so a caller cannot probe paths. A client-encrypted
@@ -161,25 +139,6 @@ func (h *Handler) revealStateValue(
 			Attributes: revealAttributes{Path: path, Value: value},
 		},
 	})
-}
-
-// logCloseReader wraps a state stream and logs a close failure. The lookup
-// closes the stream; the log keeps the warning the direct close had.
-type logCloseReader struct {
-	io.ReadCloser
-
-	warn func(closeErr error)
-}
-
-// Close closes the wrapped stream, logs a failure, and returns it.
-func (r *logCloseReader) Close() error {
-	if err := r.ReadCloser.Close(); err != nil {
-		r.warn(err)
-
-		return err //nolint:wrapcheck // Close returns the exact stream error so the lookup joins it.
-	}
-
-	return nil
 }
 
 // errRevealAuditFailed reports a failed audit append before a reveal answer.
