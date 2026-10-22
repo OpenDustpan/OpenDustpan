@@ -58,6 +58,18 @@ func lockConflictDetail(id workspace.ID, holder string) string {
 	return fmt.Sprintf("Workspace %s is locked by User %s", id, holder)
 }
 
+// refusingHolder returns the holder of the lock that refused err. The domain
+// names that lock in its refusal, as the refusing revision held it. A
+// refusal without one, such as a lost compare-and-swap of the store, reads
+// the workspace again.
+func (h *Handler) refusingHolder(ctx context.Context, id workspace.ID, err error) string {
+	if lock, ok := workspace.RefusingLock(err); ok {
+		return lock.Holder
+	}
+
+	return h.lockHolder(ctx, id)
+}
+
 // lockHolder returns the holder of the stored workspace, or "" when the
 // workspace is missing or unlocked.
 func (h *Handler) lockHolder(ctx context.Context, id workspace.ID) string {
@@ -171,7 +183,7 @@ func (h *Handler) lockRefusalDetail(ctx context.Context, id workspace.ID, err er
 		return manual.Error()
 	}
 
-	return lockConflictDetail(id, h.lockHolder(ctx, id))
+	return lockConflictDetail(id, h.refusingHolder(ctx, id, err))
 }
 
 // unlockWorkspace serves POST /api/v2/workspaces/{id}/actions/unlock. The
@@ -186,7 +198,7 @@ func (h *Handler) unlockWorkspace(
 	unlocked, err := h.workspaces.Unlock(ctx, id, p.Subject)
 	if err != nil {
 		if errors.Is(err, workspace.ErrLockedByOther) {
-			h.writeConflict(ctx, w, lockConflictDetail(id, h.lockHolder(ctx, id)))
+			h.writeConflict(ctx, w, lockConflictDetail(id, h.refusingHolder(ctx, id, err)))
 
 			return
 		}
