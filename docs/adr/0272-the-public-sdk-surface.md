@@ -56,7 +56,14 @@ The owner answered the three questions of RFC 103 on 22 October 2026.
    `pkg/dustpan`, when it declares a type that the port closure reaches, or
    when it is the conformance suite of a port that the closure reaches. Any
    other package moves to `internal/`. No exported signature in `pkg/` names a
-   type from `internal/`. RFC 103 gives the exact definition of the port
+   type from `internal/`. One more rule applies: a package that another Go
+   module of this repository imports stays in `pkg/` and is SDK. Go lets only
+   code inside the same module tree import `internal/`, so a wire contract
+   between two modules must be public. Such a package is frozen like any other
+   SDK package, and the same CI check covers it. `pkg/runner/protocol` is the
+   first case: the server module, the runner module and the launcher share it.
+   A path that an earlier ADR names is the location at that time. This ADR
+   decides the location now. RFC 103 gives the exact definition of the port
    closure, the move plan and the CI check. This ADR adopts them.
 
 ## Consequences
@@ -90,3 +97,5 @@ The owner answered the three questions of RFC 103 on 22 October 2026.
 | 2 | "each with a small public service and the interfaces it consumes" | Decision 2 | A domain has a public port package and an internal service. |
 | 35 | 1, the built-in adapters `pkg/store/sqlite`, `pkg/store/postgres`, `pkg/blob/fs`, `pkg/blob/s3` | Decision 1 | The built-in adapters live in `internal/`. `pkg/dustpan` has constructors for them. |
 | 35 | 1, the domain packages "and their ports" | Decisions 2 and 4 | A package is SDK only by the rule of decision 4. A service lives in `internal/<domain>svc`. |
+| 131 | The runner messages in `pkg/runner/protocol` | Decision 4 | No change. The protocol stays SDK. |
+| 139 | 4, the runner as a nested module that requires the server module | Decision 4 | No change. The protocol stays SDK, so the nested module can import it. |

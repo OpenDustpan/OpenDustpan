@@ -256,7 +256,7 @@ request, to the packages that the open architecture pull requests change.
 | 0 | The ADR for this RFC | none | the owner |
 | 1 | The CI check, with a baseline of today's findings, and the move script | none | step 0 |
 | 2 | Move the 8 packages without a caller and their 6 suites to `internal/` | 14 | step 1 |
-| 3 | Move the other packages that R2 does not reach: `agent`, `calendar`, `catalog`, `cron`, `freeze`, `policy`, `quota`, `scopeaudit`, `unmanaged`, `unitimport`, `egress/egresshttp`, `registry/service`, `registry/releasecheck`, `runner/protocol`, with their suites. Before the move, the interface `registry/service.Namespaces` goes to `pkg/registry`. The built-in store implements it | 23 | step 1 |
+| 3 | Move the other packages that R2 does not reach: `agent`, `calendar`, `catalog`, `cron`, `freeze`, `policy`, `quota`, `scopeaudit`, `unmanaged`, `unitimport`, `egress/egresshttp`, `registry/service`, `registry/releasecheck`, with their suites. `runner/protocol` stays in `pkg/`: a nested module imports it (decision 4 of ADR 272). Before the move, the interface `registry/service.Namespaces` goes to `pkg/registry`. The built-in store implements it | 23 | step 1 |
 | 4 | Move `trigger` and `trigger/triggertest`, or keep its port if #1392 wires it into `NewServer` | 2 | #1392 |
 | 5 | Move the test helpers: `blob/blobfault`, `store/storefault`, `registry/pgpfixture`, `graph/graphtest`, `history/historytest`, `breakglass/breakglasstest`, `notify/chat/chattest` | 7 | step 1 |
 | 6 | Fix the leaks: move `internal/token` to `pkg/token`, move the failure counter port to `pkg/session`, replace `Server.Metrics` | 0 moved, 14 leaks fixed | #1435, #1454, #1455, #1456, #1458, #1459 (`pkg/stack`), #1452, #1457 (`pkg/workspace`) |
@@ -555,7 +555,7 @@ The steps 7 and 8 of the move plan are no longer conditional on question 1.
 | `registry/releasecheck` | 234 | 2 | internal |
 | `registry/service` | 1177 | 2 | internal |
 | `runner` | 2091 | 8 | split |
-| `runner/protocol` | 479 | 2 | internal |
+| `runner/protocol` | 479 | 2 | SDK: imported by a nested module (ADR 272) |
 | `runner/runnertest` | 1536 | 0 | SDK: suite |
 | `savedview` | 578 | 7 | split |
 | `savedview/savedviewtest` | 1135 | 0 | SDK: suite |
