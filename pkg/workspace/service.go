@@ -1033,8 +1033,8 @@ func declareOverrides(
 // recordOverrides writes the audit entry of each override that a declare uses,
 // and stops at the first entry that fails.
 func recordOverrides(w Workspace, used []Override, record func(Override) error) error {
-	if err := requireRecorder(w, used, record != nil); err != nil {
-		return err
+	if record == nil {
+		return refuseWithoutRecorder(w, used)
 	}
 
 	for _, override := range used {
@@ -1046,13 +1046,13 @@ func recordOverrides(w Workspace, used []Override, record func(Override) error) 
 	return nil
 }
 
-// requireRecorder refuses a write that uses an override while it has no
-// callback that records the override.
+// refuseWithoutRecorder is called for a write that has no callback that
+// records its overrides. It refuses the write when the write uses an override.
 //
 // Defense in depth: the adapters pass a callback too; this check stays so that
 // a new caller cannot write an override without its entry.
-func requireRecorder(w Workspace, used []Override, hasRecord bool) error {
-	if len(used) > 0 && !hasRecord {
+func refuseWithoutRecorder(w Workspace, used []Override) error {
+	if len(used) > 0 {
 		return fmt.Errorf("write to %s: %w", w.Ref, ErrNoRecorder)
 	}
 

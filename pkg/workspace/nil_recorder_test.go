@@ -9,39 +9,38 @@ import (
 	"opendustpan.org/opendustpan/pkg/workspace"
 )
 
-// TestOverrideNeedsARecorder proves that each write path that uses an override
-// refuses a nil record callback with ErrNoRecorder before it changes anything,
-// as if the adapter had passed no callback. The three paths are the declare
-// (forced and unlocked), the streamed write and the unfenced release.
-func TestOverrideNeedsARecorder(t *testing.T) {
-	t.Parallel()
+// noRecorderCase is one write that uses an override and gives no record
+// callback.
+type noRecorderCase struct {
+	name string
+	// locked keeps the lock of alice while the write runs.
+	locked bool
+	run    func(t *testing.T, f fixture) error
+}
 
+// noRecorderCases returns the declare (forced and unlocked) and the streamed
+// write. Each one uses an override with a nil callback.
+func noRecorderCases() []noRecorderCase {
 	unlockedOnly := namespace.Overrides{Unlocked: true, Forced: false}
 
-	tests := []struct {
-		name string
-		run  func(t *testing.T, f fixture) error
-		// versions is the number of state versions that must remain.
-		versions int
-		// locked keeps the lock of alice while the write runs.
-		locked bool
-	}{
+	return []noRecorderCase{
 		{
-			name: "declare with the forced override",
+			name:   "declare with the forced override",
+			locked: true,
 			run: func(t *testing.T, f fixture) error {
 				t.Helper()
 
 				forced := newState("lin-old", 2, smallDoc)
 				forced.Force = true
+
 				_, err := f.svc.BeginState(t.Context(), f.ws.ID, "alice", forced, authority(forcedOnly(), nil))
 
 				return err
 			},
-			versions: 1,
-			locked:   true,
 		},
 		{
-			name: "declare with the unlocked override",
+			name:   "declare with the unlocked override",
+			locked: false,
 			run: func(t *testing.T, f fixture) error {
 				t.Helper()
 
@@ -51,10 +50,10 @@ func TestOverrideNeedsARecorder(t *testing.T) {
 
 				return err
 			},
-			versions: 1,
 		},
 		{
-			name: "streamed write with the unlocked override",
+			name:   "streamed write with the unlocked override",
+			locked: false,
 			run: func(t *testing.T, f fixture) error {
 				t.Helper()
 
@@ -68,32 +67,52 @@ func TestOverrideNeedsARecorder(t *testing.T) {
 
 				return err
 			},
-			versions: 1,
 		},
 	}
+}
 
-	for _, tt := range tests {
+// overrideFixture returns a workspace with one state version and both switches
+// on, so that the store alone would let an override through. Alice holds the
+// lock.
+func overrideFixture(t *testing.T) fixture {
+	t.Helper()
+
+	f := newFixture(t)
+	ctx := t.Context()
+
+	if _, err := f.svc.Lock(ctx, f.ws.ID, "alice", "apply"); err != nil {
+		t.Fatalf("lock: %v", err)
+	}
+
+	if err := f.push(t, newState("lin-old", 1, smallDoc), smallDoc); err != nil {
+		t.Fatalf("first state: %v", err)
+	}
+
+	allow := namespace.Overrides{Unlocked: true, Forced: true}
+	if _, err := f.namespaces.SetOverrides(ctx, f.ws.Ref.Namespace, allow); err != nil {
+		t.Fatalf("set namespace switches: %v", err)
+	}
+
+	if _, err := f.svc.SetOverrides(ctx, f.ws.ID, allow); err != nil {
+		t.Fatalf("set unit switches: %v", err)
+	}
+
+	return f
+}
+
+// TestOverrideNeedsARecorder proves that each write path that uses an override
+// refuses a nil record callback with ErrNoRecorder before it changes anything,
+// as if the adapter had passed no callback. The paths are the declare (forced
+// and unlocked) and the streamed write. TestForceUnlockNeedsARecorder covers
+// the unfenced release.
+func TestOverrideNeedsARecorder(t *testing.T) {
+	t.Parallel()
+
+	for _, tt := range noRecorderCases() {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			f := newFixture(t)
-			if _, err := f.svc.Lock(t.Context(), f.ws.ID, "alice", "apply"); err != nil {
-				t.Fatalf("lock: %v", err)
-			}
-
-			if err := f.push(t, newState("lin-old", 1, smallDoc), smallDoc); err != nil {
-				t.Fatalf("first state: %v", err)
-			}
-
-			// Both switches are on, so the store alone would let the write through.
-			allow := namespace.Overrides{Unlocked: true, Forced: true}
-			if _, err := f.namespaces.SetOverrides(t.Context(), f.ws.Ref.Namespace, allow); err != nil {
-				t.Fatalf("set namespace switches: %v", err)
-			}
-
-			if _, err := f.svc.SetOverrides(t.Context(), f.ws.ID, allow); err != nil {
-				t.Fatalf("set unit switches: %v", err)
-			}
+			f := overrideFixture(t)
 
 			if !tt.locked {
 				if _, err := f.svc.Unlock(t.Context(), f.ws.ID, "alice"); err != nil {
@@ -101,12 +120,11 @@ func TestOverrideNeedsARecorder(t *testing.T) {
 				}
 			}
 
-			err := tt.run(t, f)
-			if !errors.Is(err, workspace.ErrNoRecorder) {
+			if err := tt.run(t, f); !errors.Is(err, workspace.ErrNoRecorder) {
 				t.Fatalf("err = %v, want ErrNoRecorder", err)
 			}
 
-			checkHistoryTotal(t, f, tt.versions)
+			checkHistoryTotal(t, f, 1)
 		})
 	}
 }

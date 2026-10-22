@@ -128,8 +128,10 @@ func (s *Service) admitStream(
 		return nil, fmt.Errorf("new state for %s: %w", w.Ref, err)
 	}
 
-	if recErr := requireRecorder(w, used, auth.Record != nil); recErr != nil {
-		return nil, recErr
+	if auth.Record == nil {
+		if recErr := refuseWithoutRecorder(w, used); recErr != nil {
+			return nil, recErr
+		}
 	}
 
 	// A write without a lock ID passes the workspace lock when the caller may
@@ -444,8 +446,8 @@ func parseStreamMD5(s string) ([md5.Size]byte, bool, error) {
 // serial of the body. It stops at the first entry that fails, and the write
 // does not finalize.
 func (sw *streamWrite) recordUsed(serial int64) error {
-	if err := requireRecorder(sw.workspace, sw.used, sw.record != nil); err != nil {
-		return err
+	if sw.record == nil {
+		return refuseWithoutRecorder(sw.workspace, sw.used)
 	}
 
 	for _, override := range sw.used {
