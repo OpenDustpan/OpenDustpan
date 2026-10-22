@@ -2,6 +2,7 @@ package audit
 
 import (
 	"net/http"
+	"slices"
 
 	"opendustpan.org/opendustpan/internal/api/route"
 	"opendustpan.org/opendustpan/internal/errcode"
@@ -121,6 +122,7 @@ func (h *Handler) kit() route.Guard {
 func (h *Handler) enforce(rt Route) http.HandlerFunc {
 	return route.Enforce(h.kit(), h.writeError, route.Steps[identity.Object]{
 		Scope:   rt.Scope,
+		Actions: slices.Concat(rt.Actions, rt.ServerActions),
 		Resolve: rt.Resolve,
 		Authorize: func(r *http.Request, p identity.Principal, obj identity.Object) error {
 			actions := rt.Actions

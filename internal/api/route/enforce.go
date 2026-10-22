@@ -46,7 +46,11 @@ func (rt Route[T]) Pattern() string {
 // Steps are the steps of one route that its API owns, in the order Enforce
 // runs them: Resolve, Authorize, Serve.
 type Steps[T any] struct {
-	Scope   Scope
+	Scope Scope
+	// Actions are every action that the row declares, in all of its lists.
+	// An authorized row with none is refused: it would serve with no
+	// authorization.
+	Actions []identity.Action
 	Resolve func(w http.ResponseWriter, r *http.Request) (T, error)
 	// Authorize checks the principal on the target at the point of use. It
 	// returns the first refusal. The recorder of the Guard writes the
@@ -60,6 +64,7 @@ type Steps[T any] struct {
 func StepsOf[T any](g Guard, rt Route[T], object func(T) identity.Object) Steps[T] {
 	return Steps[T]{
 		Scope:   rt.Scope,
+		Actions: rt.Actions,
 		Resolve: rt.Resolve,
 		Authorize: func(r *http.Request, p identity.Principal, target T) error {
 			return g.AuthorizeAll(r, p, object(target), rt.Actions)
@@ -77,7 +82,9 @@ type ErrorWriter func(ctx context.Context, w http.ResponseWriter, err error)
 // errNoStep is the refusal of a route that lacks a step or has an unknown
 // scope. It is a bug in the route table, which the route test of the API
 // refuses too.
-var errNoStep = errors.New("the route has no resolver, no authorization, no handler or no known scope")
+var errNoStep = errors.New(
+	"the route has no resolver, no authorization, no handler, no known scope or no declared action",
+)
 
 // Enforce returns the handler of one route. The order of its steps is fixed
 // for every API:
@@ -90,7 +97,8 @@ var errNoStep = errors.New("the route has no resolver, no authorization, no hand
 //  5. Serve handles the request.
 //
 // The first error stops the request, and write answers it. A route with an
-// unknown scope or a missing step answers 500 and serves nothing.
+// unknown scope, a missing step, or an authorized route that declares no
+// action answers 500 and serves nothing.
 func Enforce[T any](g Guard, write ErrorWriter, s Steps[T]) http.HandlerFunc {
 	if s.Serve == nil {
 		return refuse(write)
@@ -111,6 +119,15 @@ func Enforce[T any](g Guard, write ErrorWriter, s Steps[T]) http.HandlerFunc {
 		// these steps too; this check stays so that a row that skips the test
 		// never serves without its authorization.
 		if s.Resolve == nil || s.Authorize == nil {
+			return refuse(write)
+		}
+
+		// Defense in depth: the route test of each API refuses an authorized
+		// row with no action too, and AuthorizeAll refuses an empty list;
+		// this check stays so that such a row fails closed at run time
+		// without either of them, also when its own Authorize step checks
+		// nothing for an empty list.
+		if len(s.Actions) == 0 {
 			return refuse(write)
 		}
 

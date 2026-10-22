@@ -32,7 +32,8 @@ func (rec *recorder) write(_ context.Context, w http.ResponseWriter, err error) 
 // resolveErr and authorizeErr make that step fail.
 func (rec *recorder) stepsFor(resolveErr, authorizeErr error) route.Steps[string] {
 	return route.Steps[string]{
-		Scope: route.ScopeAuthorized,
+		Scope:   route.ScopeAuthorized,
+		Actions: []identity.Action{identity.ActionNamespaceRead},
 		Resolve: func(http.ResponseWriter, *http.Request) (string, error) {
 			rec.steps = append(rec.steps, "resolve")
 
@@ -137,6 +138,10 @@ func TestEnforceFailsClosed(t *testing.T) {
 		"no resolver":      func(s *route.Steps[string]) { s.Resolve = nil },
 		"no authorization": func(s *route.Steps[string]) { s.Authorize = nil },
 		"no handler":       func(s *route.Steps[string]) { s.Serve = nil },
+		// An Authorize step that checks nothing for an empty list, as the
+		// walk of a row with no action did, must not let the row serve.
+		"no declared action":   func(s *route.Steps[string]) { s.Actions = nil },
+		"an empty action list": func(s *route.Steps[string]) { s.Actions = []identity.Action{} },
 		"public, no handler": func(s *route.Steps[string]) {
 			s.Scope = route.ScopePublic
 			s.Serve = nil
@@ -159,6 +164,32 @@ func TestEnforceFailsClosed(t *testing.T) {
 
 			if !slices.Equal(rec.steps, []string{"error"}) || rec.written == nil || len(seen) != 0 {
 				t.Fatalf("steps = %v, error = %v, tokens = %v; want only the error", rec.steps, rec.written, seen)
+			}
+		})
+	}
+}
+
+// TestAuthorizeAllRefusesNoAction sends an empty action list straight to
+// AuthorizeAll, as if Enforce and the route test had both missed the row. It
+// refuses with an error and asks the authorizer nothing.
+func TestAuthorizeAllRefusesNoAction(t *testing.T) {
+	t.Parallel()
+
+	for name, actions := range map[string][]identity.Action{"nil": nil, "empty": {}} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			var (
+				seen []string
+				p    identity.Principal
+			)
+
+			authz := newAuthorizer(nil, nil)
+			r := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/x", http.NoBody)
+
+			err := guard(&seen, authz).AuthorizeAll(r, p, identity.NamespaceObject(namespace.Name("acme")), actions)
+			if err == nil || len(*authz.asked) != 0 {
+				t.Fatalf("err = %v, asked = %v; want a refusal and no question", err, *authz.asked)
 			}
 		})
 	}
