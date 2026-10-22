@@ -34,12 +34,17 @@ const contentType = "application/json"
 // op names a send in the error texts.
 const op = "post webhook"
 
+// SendTimeout is the longest time of one send, as a deadline on the context
+// of the request. The timeout of the client is a second layer above it.
+const SendTimeout = 10 * time.Second
+
 // Sender posts notifications to webhook sinks. It is safe for concurrent
 // use. Call Close when done, to close the idle connections.
 type Sender struct {
-	client *http.Client
-	now    func() time.Time
-	ports  egress.Ports
+	client  *http.Client
+	now     func() time.Time
+	ports   egress.Ports
+	timeout time.Duration
 }
 
 var _ notify.Sender = (*Sender)(nil)
@@ -67,7 +72,7 @@ func New(opts ...Option) *Sender {
 }
 
 func newSender(c *http.Client, now func() time.Time) *Sender {
-	return &Sender{client: c, now: now, ports: egress.Ports{}}
+	return &Sender{client: c, now: now, ports: egress.Ports{}, timeout: SendTimeout}
 }
 
 // Close closes the idle connections of the sender.
@@ -89,7 +94,8 @@ func (s *Sender) Kind() notify.SinkKind { return notify.SinkWebhook }
 //     other than 408 and 429 or any other answer that will not change;
 //   - a *notify.RetryAfterError for an answer 408, 429 or 5xx with a
 //     Retry-After header that notify.ParseRetryAfter reads;
-//   - notify.ErrTemporary for every other failure.
+//   - notify.ErrTemporary for every other failure, also a send that passes
+//     SendTimeout.
 func (s *Sender) Send(ctx context.Context, m notify.Message) error {
 	if m.Sink.Kind != notify.SinkWebhook {
 		return fmt.Errorf("%w: the message is for a %q sink, not a webhook", notify.ErrPermanent, m.Sink.Kind)
@@ -105,6 +111,9 @@ func (s *Sender) Send(ctx context.Context, m notify.Message) error {
 	if refused := post.CheckTarget(op, m.To, m.Sink.Target, s.ports, notify.WebhookHost); refused != nil {
 		return refused
 	}
+
+	ctx, cancel := context.WithTimeout(ctx, s.timeout)
+	defer cancel()
 
 	req, err := s.request(ctx, m, body)
 	if err != nil {

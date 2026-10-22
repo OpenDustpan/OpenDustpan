@@ -81,3 +81,6 @@ func NewDialGuardedForTest(now func() time.Time) *Sender {
 
 // SetPortsForTest sets the ports of s, for a Sender that NewForTest made.
 func (s *Sender) SetPortsForTest(p egress.Ports) { s.ports = p }
+
+// SetTimeoutForTest sets the deadline of one send.
+func (s *Sender) SetTimeoutForTest(d time.Duration) { s.timeout = d }
