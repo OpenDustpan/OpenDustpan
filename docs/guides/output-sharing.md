@@ -49,8 +49,8 @@ curl -sS -H "Authorization: Bearer $TOKEN" \
 ```json
 {
   "tool": "opentofu",
-  "unitID": "ws-0123456789abcdefghij",
-  "stateID": "sv-0123456789abcdefghij",
+  "unitId": "ws-0123456789abcdefghij",
+  "stateId": "sv-0123456789abcdefghij",
   "outputs": [
     {"name": "db_password", "secret": true},
     {"name": "vpc_id", "secret": false, "value": "vpc-0abc"}
@@ -62,7 +62,7 @@ curl -sS -H "Authorization: Bearer $TOKEN" \
 - A secret output has `"secret": true` and no `value`. The route never answers
   the value of a secret output. For a stack, a secret in an object or a list
   of a plain output stays a marker with the path of the secret.
-- `stateID` names the state that the outputs come from. A new state has a new
+- `stateId` names the state that the outputs come from. A new state has a new
   ID.
 
 ### Errors

@@ -1552,8 +1552,8 @@ func checkSettingAudit(ctx context.Context, t *testing.T, env *e2e.Env) {
 // neutralOutputs is the answer of the tool-neutral outputs route.
 type neutralOutputs struct {
 	Tool    string          `json:"tool"`
-	UnitID  string          `json:"unitID"`
-	StateID string          `json:"stateID"`
+	UnitID  string          `json:"unitId"`  //nolint:tagliatelle // The tool-neutral API names this field in lower camel case.
+	StateID string          `json:"stateId"` //nolint:tagliatelle // The tool-neutral API names this field in lower camel case.
 	Outputs []neutralOutput `json:"outputs"`
 }
 

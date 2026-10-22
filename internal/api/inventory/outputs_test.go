@@ -321,8 +321,8 @@ func checkOutputsRefusal(t *testing.T, f outputsFixture, want int, rec *httptest
 // outputsDocument is the answer of the outputs route, as a client decodes it.
 type outputsDocument struct {
 	Tool    string        `json:"tool"`
-	UnitID  string        `json:"unitID"`
-	StateID string        `json:"stateID"`
+	UnitID  string        `json:"unitId"`  //nolint:tagliatelle // The tool-neutral API names this field in lower camel case.
+	StateID string        `json:"stateId"` //nolint:tagliatelle // The tool-neutral API names this field in lower camel case.
 	Outputs []outputEntry `json:"outputs"`
 }
 

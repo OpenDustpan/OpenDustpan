@@ -30,9 +30,9 @@ type unitOutputsDocument struct {
 	// Tool is the tool of the unit, for example "pulumi" or "opentofu".
 	Tool string `json:"tool"`
 	// UnitID is the stable ID of the unit.
-	UnitID string `json:"unitID"`
+	UnitID string `json:"unitId"` //nolint:tagliatelle // The tool-neutral API names this field in lower camel case.
 	// StateID names the state that the outputs come from.
-	StateID string `json:"stateID"`
+	StateID string `json:"stateId"` //nolint:tagliatelle // The tool-neutral API names this field in lower camel case.
 	// Outputs holds the root outputs, ordered by name.
 	Outputs []unitOutputEntry `json:"outputs"`
 }

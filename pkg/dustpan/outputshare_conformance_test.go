@@ -308,6 +308,8 @@ func (r *outputShareRig) nextSerial(unit identity.Object) int64 {
 
 // saveState saves a new latest state of the unit and returns its ID as
 // State.ID names it.
+//
+//nolint:revive // The SaveState hook of the suite has this signature.
 func (r *outputShareRig) saveState(t *testing.T, unit outputshare.Placement, encrypted bool) string {
 	t.Helper()
 
@@ -315,7 +317,12 @@ func (r *outputShareRig) saveState(t *testing.T, unit outputshare.Placement, enc
 
 	switch unit.Unit.Tool() {
 	case "opentofu":
-		return r.saveWorkspaceState(t, unit.Unit, serial, workspaceStateContent(serial, encrypted))
+		content := plainStateContent(serial)
+		if encrypted {
+			content = encryptedStateContent(serial)
+		}
+
+		return r.saveWorkspaceState(t, unit.Unit, serial, content)
 	case "pulumi":
 		return r.saveStackCheckpoint(t, unit.Unit, serial)
 	default:
@@ -325,14 +332,16 @@ func (r *outputShareRig) saveState(t *testing.T, unit outputshare.Placement, enc
 	}
 }
 
-// workspaceStateContent returns the state document of the serial, encrypted
-// by the client when encrypted is true.
-func workspaceStateContent(serial int64, encrypted bool) string {
-	if encrypted {
-		return fmt.Sprintf(`{"serial":%d,"lineage":"lineage-1","encrypted_data":"aa"}`, serial)
-	}
-
+// plainStateContent returns the state document of the serial that the server
+// reads.
+func plainStateContent(serial int64) string {
 	return fmt.Sprintf(`{"serial":%d,"lineage":"lineage-1","outputs":{}}`, serial)
+}
+
+// encryptedStateContent returns the state document of the serial that the
+// client encrypted.
+func encryptedStateContent(serial int64) string {
+	return fmt.Sprintf(`{"serial":%d,"lineage":"lineage-1","encrypted_data":"aa"}`, serial)
 }
 
 func (r *outputShareRig) saveWorkspaceState(t *testing.T, unit identity.Object, serial int64, content string) string {
