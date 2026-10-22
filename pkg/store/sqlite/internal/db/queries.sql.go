@@ -13982,11 +13982,16 @@ func (q *Queries) ReadWorkspaceByID(ctx context.Context, id string) (ReadWorkspa
 
 const readWorkspacePage = `-- name: ReadWorkspacePage :many
 SELECT w.id, w.namespace, w.name, w.revision, w.lock_id, w.lock_holder, w.lock_reason, w.locked_at_ms, w.current_state_version_id, w.created_at_ms, w.updated_at_ms, w.allow_forced_writes, w.allow_unlocked_writes, w.deleted_at_ms, w.deleted_name, n.id AS namespace_id
-FROM workspaces AS w
+FROM (
+    SELECT p.name
+    FROM workspaces AS p
+    WHERE p.namespace = ?1 AND p.deleted_at_ms IS NULL AND instr(p.name, ?2) > 0
+    ORDER BY p.name
+    LIMIT ?4 OFFSET ?3
+) AS page
+JOIN workspaces AS w ON w.namespace = ?1 AND w.name = page.name AND w.deleted_at_ms IS NULL
 JOIN namespaces AS n ON n.name = w.namespace
-WHERE w.namespace = ?1 AND w.deleted_at_ms IS NULL AND instr(w.name, ?2) > 0
 ORDER BY w.name
-LIMIT ?4 OFFSET ?3
 `
 
 type ReadWorkspacePageParams struct {
@@ -14002,7 +14007,9 @@ type ReadWorkspacePageRow struct {
 }
 
 // One page of the live workspaces of a namespace whose name holds the search,
-// in the order of ReadWorkspaces.
+// in the order of ReadWorkspaces. The inner query finds the names of the page
+// in the index of the live workspace names alone, so an offset skips index
+// entries and no table rows. The outer query reads the rows of the page.
 func (q *Queries) ReadWorkspacePage(ctx context.Context, arg ReadWorkspacePageParams) ([]ReadWorkspacePageRow, error) {
 	rows, err := q.db.QueryContext(ctx, readWorkspacePage,
 		arg.Namespace,
