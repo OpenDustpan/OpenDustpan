@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/api/apidesc"
 	"opendustpan.org/opendustpan/internal/api/refusal"
 	"opendustpan.org/opendustpan/internal/clientip"
 	"opendustpan.org/opendustpan/internal/requestid"
@@ -71,7 +72,7 @@ func (h *Handler) startCheck(w http.ResponseWriter, r *http.Request, p identity.
 
 	// The service gives two starts of one unit in one minute one job, so this
 	// route takes no key. The server never ignores a key without an error.
-	if len(r.Header.Values(idempotencyHeader)) > 0 {
+	if len(apidesc.HeaderValues(r, idempotencyHeader)) > 0 {
 		h.writeError(ctx, w, fmt.Errorf("%w: this route takes no %s header: two starts of one unit in one minute "+
 			"give one job", errBody, idempotencyHeader))
 
@@ -115,7 +116,7 @@ func checkRequest(r *http.Request, t *target, b *startBody) drift.CheckRequest {
 	req := drift.CheckRequest{
 		Unit: t.obj, Location: job.Location{Connection: "", Repository: "", Ref: "", Directory: "", Revision: ""},
 		Pool: "", Reason: "", Channel: sessionauth.AuditChannel(r, channelHeader), SourceIP: clientip.String(r),
-		UserAgent: truncate(r.UserAgent(), audit.MaxUserAgentLen), RequestID: requestid.FromContext(r.Context()),
+		UserAgent: truncate(userAgent(r), audit.MaxUserAgentLen), RequestID: requestid.FromContext(r.Context()),
 	}
 
 	// The pool and the code location decide which hosts run which code. The

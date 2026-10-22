@@ -106,6 +106,16 @@ func (m *memReader) ListUnits(_ context.Context, ns namespace.Name) ([]coreinven
 	return out, nil
 }
 
+// QueryUnits implements coreinventory.Reader over the entries of ListUnits.
+func (m *memReader) QueryUnits(ctx context.Context, q coreinventory.UnitQuery) ([]coreinventory.Entry, error) {
+	all, err := m.ListUnits(ctx, q.Namespace)
+	if err != nil {
+		return nil, err
+	}
+
+	return coreinventory.PageUnits(all, q), nil
+}
+
 func (m *memReader) GetUnit(_ context.Context, unitID string) (coreinventory.Entry, error) {
 	if m.err != nil {
 		return coreinventory.Entry{}, m.err
@@ -251,7 +261,8 @@ type behaviorWiring struct {
 // newBehaviorHandlerWith is newBehaviorHandlerWithSessions with the
 // session check and the lifecycles of wiring.
 func newBehaviorHandlerWith(
-	t *testing.T, nsStore *memNamespaceStore, reader *memReader, authz identity.Authorizer, wiring behaviorWiring,
+	t *testing.T, nsStore *memNamespaceStore, reader coreinventory.Reader, authz identity.Authorizer,
+	wiring behaviorWiring,
 ) *apiinventory.Handler {
 	t.Helper()
 

@@ -475,6 +475,13 @@ FROM stack_tags AS t
 JOIN stacks AS s ON s.id = t.stack_id
 WHERE t.stack_id = $1;
 
+-- name: ListInventoryLabelsOfUnits :many
+-- Every label of the live units with the IDs, for one page of the unit list.
+SELECT unit_id, label_key, label_value
+FROM inventory_labels
+WHERE unit_id = ANY(sqlc.arg(unit_ids)::text[])
+ORDER BY unit_id, label_key;
+
 -- name: ListInventoryLabels :many
 -- Every label of the live units of a namespace.
 SELECT unit_id, label_key, label_value

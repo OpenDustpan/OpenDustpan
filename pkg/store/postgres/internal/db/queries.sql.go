@@ -11260,6 +11260,40 @@ func (q *Queries) ListInventoryLabels(ctx context.Context, namespace string) ([]
 	return items, nil
 }
 
+const listInventoryLabelsOfUnits = `-- name: ListInventoryLabelsOfUnits :many
+SELECT unit_id, label_key, label_value
+FROM inventory_labels
+WHERE unit_id = ANY($1::text[])
+ORDER BY unit_id, label_key
+`
+
+type ListInventoryLabelsOfUnitsRow struct {
+	UnitID     string
+	LabelKey   string
+	LabelValue string
+}
+
+// Every label of the live units with the IDs, for one page of the unit list.
+func (q *Queries) ListInventoryLabelsOfUnits(ctx context.Context, unitIds []string) ([]ListInventoryLabelsOfUnitsRow, error) {
+	rows, err := q.db.Query(ctx, listInventoryLabelsOfUnits, unitIds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListInventoryLabelsOfUnitsRow
+	for rows.Next() {
+		var i ListInventoryLabelsOfUnitsRow
+		if err := rows.Scan(&i.UnitID, &i.LabelKey, &i.LabelValue); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listInventoryUnitBounds = `-- name: ListInventoryUnitBounds :many
 (SELECT a.namespace_id, a.seq, a.at_ms, a.tool, a.unit_id, a.name, a.display_name, a.status, a.collection,
         a.kind, a.resource_count

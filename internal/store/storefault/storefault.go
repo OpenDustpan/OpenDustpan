@@ -807,6 +807,16 @@ func (s *Store) ListUnits(ctx context.Context, ns namespace.Name) ([]inventory.E
 	return s.inner.ListUnits(ctx, ns)
 }
 
+// QueryUnits returns one page of the inventory entries, unless a fault fires
+// first.
+func (s *Store) QueryUnits(ctx context.Context, q inventory.UnitQuery) ([]inventory.Entry, error) {
+	if err := s.before(ctx, "QueryUnits"); err != nil {
+		return nil, err
+	}
+
+	return s.inner.QueryUnits(ctx, q)
+}
+
 // ListDeletedUnits returns the deleted inventory entries of ns, unless a fault
 // fires first.
 func (s *Store) ListDeletedUnits(ctx context.Context, ns namespace.Name) ([]inventory.DeletedEntry, error) {
