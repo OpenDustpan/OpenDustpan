@@ -123,15 +123,25 @@ chart-lint: ## Lint and render the Helm chart (helm lint, helm template, kubecon
 # on a CI runner with 4 cores. GO_TEST_TIMEOUT is the limit for each package.
 GO_TEST_TIMEOUT := 20m
 
+# With -race the compiler also adds checkptr checks to every package. In the
+# SQLite engine, which is C translated to Go with much unsafe pointer
+# arithmetic, these checks took about 30% of the CPU of the SQLite store
+# tests. RACE_TEST_FLAGS turns checkptr off for modernc.org/... only: the race
+# detector stays on for all code, and checkptr stays on for our own code. On
+# 4 cores, the dev data suite of pkg/store/sqlite used 904 s of user CPU with
+# the checks and 647 s without them. The cost: checkptr does not find unsafe
+# pointer misuse inside those modules, which we do not maintain.
+RACE_TEST_FLAGS := -race -gcflags='modernc.org/...=-d=checkptr=0'
+
 test: ## Go tests; the PostgreSQL suite is skipped unless DUSTPAN_TEST_POSTGRES_URL is set. A package whose code, files and environment did not change gives its cached result.
-	go test -race -timeout $(GO_TEST_TIMEOUT) ./...
+	go test $(RACE_TEST_FLAGS) -timeout $(GO_TEST_TIMEOUT) ./...
 
 test-nocache: ## Go tests as in test, but every package runs again. CI runs this on main every 2 hours to find flaky tests.
-	go test -race -count=1 -timeout $(GO_TEST_TIMEOUT) ./...
+	go test $(RACE_TEST_FLAGS) -count=1 -timeout $(GO_TEST_TIMEOUT) ./...
 
 test-postgres: ## Go tests including PostgreSQL (needs DUSTPAN_TEST_POSTGRES_URL).
 	@test -n "$$DUSTPAN_TEST_POSTGRES_URL" || (echo "set DUSTPAN_TEST_POSTGRES_URL" && exit 1)
-	go test -race -count=1 -timeout $(GO_TEST_TIMEOUT) ./pkg/store/postgres/...
+	go test $(RACE_TEST_FLAGS) -count=1 -timeout $(GO_TEST_TIMEOUT) ./pkg/store/postgres/...
 
 bench: ## Fast benchmarks (delta apply, gzip, checkpoint store) with one iteration each; proves they compile and run.
 	go test -run '^$$' -bench . -benchtime 1x ./pkg/stack/ ./pkg/store/sqlite/
