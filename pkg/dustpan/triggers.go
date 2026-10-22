@@ -37,22 +37,33 @@ type triggerPorts struct {
 
 // triggerPortsOf returns the ports that the triggers need, and false when the
 // server lacks one. Fail closed: a server without them saves no trigger that
-// could never start.
-func triggerPortsOf(svc services, cfg *settings) (triggerPorts, bool) {
-	records, hasRecords := cfg.namespaceStore.(principal.RecordStore)
-	entries, hasAudit := cfg.namespaceStore.(audit.Store)
+// could never start. A namespace store that keeps no audit entries is an
+// error, not a missing feature: the trigger API must not run without the
+// entries of its refusals.
+func triggerPortsOf(svc services, cfg *settings) (triggerPorts, bool, error) {
+	entries, err := auditStoreOf(cfg)
+	if err != nil {
+		return triggerPorts{records: nil, entries: nil}, false, err
+	}
 
-	ok := cfg.triggerStore != nil && hasRecords && hasAudit && cfg.inventoryReader != nil &&
+	records, hasRecords := cfg.namespaceStore.(principal.RecordStore)
+
+	ok := cfg.triggerStore != nil && hasRecords && cfg.inventoryReader != nil &&
 		svc.namespaces != nil && cfg.authorizer != nil
 
-	return triggerPorts{records: records, entries: entries}, ok
+	return triggerPorts{records: records, entries: entries}, ok, nil
 }
 
 // newTriggersHandler builds the trigger API, or returns nil when the server
 // has no trigger store or lacks a port that the triggers need: the job service,
-// the inventory, the principal records and the audit store.
+// the inventory and the principal records. It answers ErrMissingOption when the
+// namespace store keeps no audit entries.
 func newTriggersHandler(svc services, cfg *settings, onFailure func()) (http.Handler, error) {
-	ports, ok := triggerPortsOf(svc, cfg)
+	ports, ok, err := triggerPortsOf(svc, cfg)
+	if err != nil {
+		return nil, err
+	}
+
 	if !ok {
 		return nil, nil //nolint:nilnil // No trigger API: the server lacks a port that it needs.
 	}

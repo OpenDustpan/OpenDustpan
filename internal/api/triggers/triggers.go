@@ -62,8 +62,9 @@ type Config struct {
 	Manager       *trigger.Manager
 	Authenticator identity.Authenticator
 	Authorizer    identity.Authorizer
-	// Audit keeps the entries of the requests that the Authorizer refuses. Nil
-	// writes none.
+	// Audit keeps the entries of the requests that the Authorizer refuses.
+	// Required: a handler that cannot write the entry of a refusal does not
+	// start.
 	Audit audit.Store
 	// OnAuditFailure, when set, runs once for each refusal whose entry could not
 	// be written, so the server can count it.
@@ -94,6 +95,8 @@ type Handler struct {
 // required.
 func NewHandler(cfg Config) (*Handler, error) {
 	switch {
+	case cfg.Audit == nil:
+		return nil, fmt.Errorf("%w: audit store", ErrMissingDependency)
 	case cfg.Namespaces == nil:
 		return nil, fmt.Errorf("%w: namespace service", ErrMissingDependency)
 	case cfg.Units == nil:
@@ -110,6 +113,11 @@ func NewHandler(cfg Config) (*Handler, error) {
 		return nil, fmt.Errorf("%w: logger", ErrMissingDependency)
 	}
 
+	recorder, err := refusal.New(cfg.Authorizer, cfg.Audit, cfg.Namespaces, cfg.Logger, cfg.OnAuditFailure)
+	if err != nil {
+		return nil, fmt.Errorf("denial recorder: %w", err)
+	}
+
 	h := &Handler{
 		namespaces: cfg.Namespaces,
 		units:      cfg.Units,
@@ -117,12 +125,10 @@ func NewHandler(cfg Config) (*Handler, error) {
 		manager:    cfg.Manager,
 		authn:      cfg.Authenticator,
 		sessions:   cfg.Sessions,
-		guard: refusal.New(cfg.Authorizer, cfg.Audit, cfg.Namespaces, cfg.Logger, cfg.OnAuditFailure).
-			WithLimiter(cfg.DenialLimiter).
-			WithSurface("triggers"),
-		logger: cfg.Logger,
-		mux:    newPatternMux(),
-		routes: nil,
+		guard:      recorder.WithLimiter(cfg.DenialLimiter).WithSurface("triggers"),
+		logger:     cfg.Logger,
+		mux:        newPatternMux(),
+		routes:     nil,
 	}
 
 	h.routes = h.buildRoutes()

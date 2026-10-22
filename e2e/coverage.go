@@ -805,7 +805,7 @@ func coverageTriggerRoutes(tb testing.TB, namespaces *namespace.Service) []Route
 		Manager:        manager,
 		Authenticator:  coverageAuthenticator{},
 		Authorizer:     coverageAuthorizer{},
-		Audit:          nil,
+		Audit:          coverageAuditStore{},
 		OnAuditFailure: nil,
 		DenialLimiter:  nil,
 		Sessions:       nil,

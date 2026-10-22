@@ -417,7 +417,8 @@ func newRig(t *testing.T, authz identity.Authorizer) *rig {
 
 	r.h, err = triggers.NewHandler(triggers.Config{
 		Namespaces: namespaces, Units: r.inv, Store: r.store, Manager: manager, Authenticator: tokenAuthenticator{},
-		Authorizer: authz, Audit: nil, OnAuditFailure: nil, DenialLimiter: nil, Sessions: nil,
+		Authorizer: authz, Audit: &recordingAudit{Store: nil, mu: sync.Mutex{}, entries: nil},
+		OnAuditFailure: nil, DenialLimiter: nil, Sessions: nil,
 		Logger: slog.New(slog.DiscardHandler),
 	})
 	if err != nil {
@@ -478,3 +479,20 @@ func graphUnit(tool, id string) graph.Unit {
 }
 
 func noUnit() graph.Unit { return graph.Unit{Namespace: "", Tool: "", ID: ""} }
+
+// recordingAudit keeps the entries that the handler appends.
+type recordingAudit struct {
+	audit.Store
+
+	mu      sync.Mutex
+	entries []audit.Entry
+}
+
+func (a *recordingAudit) Append(_ context.Context, _ namespace.Fence, e audit.Entry) (audit.Entry, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	a.entries = append(a.entries, e)
+
+	return e, nil
+}
