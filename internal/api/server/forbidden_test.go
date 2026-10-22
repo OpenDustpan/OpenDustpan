@@ -50,7 +50,7 @@ func forbiddenHandler(t *testing.T, err error) *apiserver.Handler {
 		Principals:       nil,
 		Access:           nil,
 		Tokens:           nil,
-		Audit:            nil,
+		Audit:            newTestAudit(),
 		OnAuditFailure:   nil,
 		DeletedUnits:     nil,
 		AuditChain:       nil,

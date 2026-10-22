@@ -267,7 +267,9 @@ func newRig(t *testing.T, authz *recordingAuthorizer, opts ...rigOption) *rig {
 
 	cfg := driftapi.Config{
 		Namespaces: namespaces, Units: fakeUnits{liar: false}, Results: results, Checker: checker,
-		Authenticator: tokenAuthenticator{}, Authorizer: authz, Audit: nil, OnAuditFailure: nil, DenialLimiter: nil,
+		Authenticator: tokenAuthenticator{}, Authorizer: authz,
+		Audit:          &recordingAudit{Store: nil, mu: sync.Mutex{}, entries: nil},
+		OnAuditFailure: nil, DenialLimiter: nil,
 		Sessions: nil, Logger: slog.New(slog.DiscardHandler),
 	}
 
