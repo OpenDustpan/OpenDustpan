@@ -214,25 +214,19 @@ func TestAuthorizeRecordsRefusals(t *testing.T) {
 	}
 }
 
-// TestNoStoreWritesNothing proves that a Recorder without an audit store
-// answers the refusal and writes nothing.
-func TestNoStoreWritesNothing(t *testing.T) {
+// TestNoStoreIsRefused proves that New fails closed: a Recorder without an
+// audit store would let a refusal pass with no entry.
+func TestNoStoreIsRefused(t *testing.T) {
 	t.Parallel()
 
-	rec := refusal.New(fakeAuthorizer{err: identity.ErrDenied}, nil, fakeNamespaces{},
+	rec, err := refusal.New(fakeAuthorizer{err: identity.ErrDenied}, nil, fakeNamespaces{},
 		slog.New(slog.DiscardHandler), nil)
+	if !errors.Is(err, refusal.ErrNoStore) {
+		t.Fatalf("New answers %v, want %v", err, refusal.ErrNoStore)
+	}
 
-	err := rec.Authorize(t.Context(), httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/", http.NoBody),
-		identity.Principal{
-			Subject: "bo@example.com", TokenID: "tok-1", DisplayName: "", Admin: false, TokenExpiresAt: time.Time{},
-			TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{},
-			Kind:       "",
-			Credential: "",
-			JobID:      "",
-		},
-		identity.ActionUnitWrite, identity.NamespaceObject("team"))
-	if !errors.Is(err, identity.ErrDenied) {
-		t.Fatalf("Authorize answers %v, want %v", err, identity.ErrDenied)
+	if rec != nil {
+		t.Fatal("New answers a recorder with no store")
 	}
 }
 
@@ -242,14 +236,17 @@ func checkRefusal(t *testing.T, tc refusalCase) {
 	t.Helper()
 
 	failures := 0
-	rec := refusal.New(fakeAuthorizer{err: tc.authz}, tc.store, fakeNamespaces{},
+	rec, err := refusal.New(fakeAuthorizer{err: tc.authz}, tc.store, fakeNamespaces{},
 		slog.New(slog.DiscardHandler), func() { failures++ })
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
 
 	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/stacks",
 		strings.NewReader(`{"secret":"hunter2"}`))
 	req.Header.Set("User-Agent", "pulumi/3")
 
-	err := rec.Authorize(t.Context(), req,
+	err = rec.Authorize(t.Context(), req,
 		identity.Principal{
 			Subject: tc.subject, TokenID: "tok-1", DisplayName: "", Admin: false, TokenExpiresAt: time.Time{},
 			TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{},
