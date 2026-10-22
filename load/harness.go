@@ -467,7 +467,9 @@ type deltaMade struct {
 }
 
 // makeDelta answers a one-edit delta turning base into result with the hash
-// of the result. The edit replaces 64 bytes at three quarters of the text.
+// of the result. The edit replaces 64 bytes of padding inside a string value,
+// at or after three quarters of the text, so the result stays a deployment
+// that the server can read.
 func makeDelta(base []byte) (deltaMade, error) {
 	const editLen = 64
 	const editAtNumerator = 3
@@ -481,7 +483,21 @@ func makeDelta(base []byte) (deltaMade, error) {
 		)
 	}
 
-	at := len(base) * editAtNumerator / editAtDenominator
+	from := len(base) * editAtNumerator / editAtDenominator
+
+	pad := bytes.Repeat([]byte("x"), editLen)
+
+	offset := bytes.Index(base[from:], pad)
+	if offset < 0 {
+		return deltaMade{}, fmt.Errorf(
+			"delta of %d bytes: no padding after offset %d: %w",
+			len(base),
+			from,
+			errDeploymentTooSmall,
+		)
+	}
+
+	at := from + offset
 
 	filler := bytes.Repeat([]byte("y"), editLen)
 
