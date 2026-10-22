@@ -13,9 +13,10 @@ import (
 )
 
 // DocumentVersion is the version of the description: info.version. It is not
-// the version of a build. It changes when the description changes. It is
-// valid in SemVer and in PEP 440, so each SDK can carry it.
-const DocumentVersion = "0.2.0"
+// the version of a build. It changes when the description changes, and the
+// test of openapi.pin fails when it does not. It is valid in SemVer and in
+// PEP 440, so each SDK can carry it.
+const DocumentVersion = "0.3.0"
 
 // OpenAPIVersion is the version of the OpenAPI format. The document uses the
 // part of 3.1.0 that maps one to one to 3.0.3: a nullable type is
