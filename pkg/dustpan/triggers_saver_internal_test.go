@@ -88,13 +88,13 @@ func TestSaverRecordsNameThePrincipalRecord(t *testing.T) {
 		Source: graph.Unit{Namespace: "", Tool: "", ID: ""}, Enabled: true, LastSaver: subject, LastSaverID: firstID,
 	}
 
-	if err := check.CheckStart(t.Context(), saved); err != nil {
+	err = check.CheckStart(t.Context(), saved)
+	if err != nil {
 		t.Fatalf("CheckStart of the saver = %v, want nil", err)
 	}
 
-	if err := st.DeletePrincipal(
-		t.Context(), "prn-first", storetest.ServerChange(time.Unix(1, 0), "principal:prn-first"),
-	); err != nil {
+	err = st.DeletePrincipal(t.Context(), "prn-first", storetest.ServerChange(time.Unix(1, 0), "principal:prn-first"))
+	if err != nil {
 		t.Fatalf("delete principal: %v", err)
 	}
 
