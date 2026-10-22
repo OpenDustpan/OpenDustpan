@@ -1423,7 +1423,6 @@ func CoverageAllowlist() []AllowEntry {
 		manualLockAllowEntries(),
 		jobAllowEntries(),
 		driftAllowEntries(),
-		jobAllowEntries(),
 		triggerAllowEntries(),
 		preferencesAllowEntries(),
 		savedViewAllowEntries(),
