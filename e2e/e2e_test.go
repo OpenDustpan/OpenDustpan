@@ -3437,11 +3437,35 @@ func readHistory(ctx context.Context, t *testing.T, env *e2e.Env, org string) []
 	return decoded.Updates
 }
 
+// checkHistoryOfMissingStack proves that the history of a stack that does not
+// exist answers 404 with the body of GET on that stack, not 200 with an empty
+// list.
+func checkHistoryOfMissingStack(ctx context.Context, t *testing.T, env *e2e.Env, org string) {
+	t.Helper()
+
+	path := fmt.Sprintf("/api/stacks/%s/%s/ghost", org, e2e.Project)
+
+	wantStatus, wantBody, err := env.APIStatus(ctx, http.MethodGet, path, "")
+	if err != nil || wantStatus != http.StatusNotFound {
+		t.Fatalf("GET %s: status %d, body %q, err %v, want 404", path, wantStatus, wantBody, err)
+	}
+
+	status, body, err := env.APIStatus(ctx, http.MethodGet, path+"/updates?pageSize=10&page=1", "")
+	if err != nil || status != http.StatusNotFound || body != wantBody {
+		t.Fatalf("GET %s/updates: status %d, body %q, err %v, want 404 and %q", path, status, body, err, wantBody)
+	}
+
+	env.Step(ctx, t, failStep("stack history of a stack that does not exist", nil,
+		"stack", "history", "--stack", org+"/"+e2e.Project+"/ghost"))
+}
+
 // checkHistoryFields proves the history shows the requester and the
 // checkpoint size: every entry names the subject, never a token, and one
 // update that saved a checkpoint reports above 0.
 func checkHistoryFields(ctx context.Context, t *testing.T, env *e2e.Env, org string) {
 	t.Helper()
+
+	checkHistoryOfMissingStack(ctx, t, env, org)
 
 	updates := readHistory(ctx, t, env, org)
 
