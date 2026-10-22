@@ -3,10 +3,10 @@ package postgres //nolint:testpackage // The Tool seams are unexported, so the e
 import (
 	"context"
 
+	"opendustpan.org/opendustpan/internal/unitimport"
 	"opendustpan.org/opendustpan/pkg/history"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/store/postgres/internal/db"
-	"opendustpan.org/opendustpan/pkg/unitimport"
 )
 
 // SeedLedgerRow stores a ledger row in its own transaction, as a Tool adapter

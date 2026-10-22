@@ -335,6 +335,10 @@ func applyStagedFence(ctx context.Context, conn *sql.DB, keep bookkeeping) error
 		return errors.Join(fmt.Errorf("fence staged namespaces: %w", execErr), tx.Rollback())
 	}
 
+	if err := releaseStagedWorkspaceLocks(ctx, tx); err != nil {
+		return errors.Join(err, tx.Rollback())
+	}
+
 	if err := writeStagedBookkeeping(ctx, tx, keep); err != nil {
 		return errors.Join(err, tx.Rollback())
 	}
@@ -356,6 +360,31 @@ func applyStagedFence(ctx context.Context, conn *sql.DB, keep bookkeeping) error
 
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("fence staged namespaces: %w", err)
+	}
+
+	return nil
+}
+
+// releaseStagedWorkspaceLocks releases every workspace lock of the staged
+// file, in tx, and clears the lock on the inventory entry of each workspace.
+// The client picks the lock ID, so the ID alone cannot tell a lock from before
+// the restore from a lock after it. A client that holds a lock from before
+// the restore must take a new lock and read the restored state first.
+func releaseStagedWorkspaceLocks(ctx context.Context, tx *sql.Tx) error {
+	const release = `UPDATE main.workspaces
+SET lock_id = '', lock_holder = '', lock_reason = '', locked_at_ms = 0
+WHERE lock_id <> ''`
+
+	if _, err := tx.ExecContext(ctx, release); err != nil {
+		return fmt.Errorf("release staged workspace locks: %w", err)
+	}
+
+	const clearInventory = `UPDATE main.inventory
+SET lock_holder = NULL, lock_since_ms = NULL, lock_operation = NULL
+WHERE tool = ?`
+
+	if _, err := tx.ExecContext(ctx, clearInventory, workspaceInventoryTool); err != nil {
+		return fmt.Errorf("clear staged workspace inventory locks: %w", err)
 	}
 
 	return nil
