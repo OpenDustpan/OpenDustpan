@@ -211,7 +211,13 @@ func holdCreateLock(t *testing.T, s *Store, ns namespace.Name, fn string) create
 
 	hold := createLockHold{tx: tx}
 
-	t.Cleanup(func() { _ = tx.Rollback(context.Background()) })
+	t.Cleanup(func() {
+		// A release has ended the transaction already, which is not an error.
+		rollbackErr := tx.Rollback(context.Background())
+		if rollbackErr != nil && !errors.Is(rollbackErr, pgx.ErrTxClosed) {
+			t.Errorf("roll back the hold: %v", rollbackErr)
+		}
+	})
 
 	if _, err := tx.Exec(t.Context(), "SELECT "+fn+"("+createLockKeySQL+")", ns.String()); err != nil {
 		t.Fatalf("take the advisory lock: %v", err)
