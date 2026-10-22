@@ -186,32 +186,39 @@ func runTofuHTTPRefusedCreatesNothing(t *testing.T, env *e2e.Env) {
 	}
 
 	nsLock := "/api/dustpan/v1/namespaces/" + e2e.Namespace + "/lock"
+	bootstrapCall(t, env, http.MethodPut, nsLock, `{"reason":"freeze"}`)
 
-	status, body, err := env.ServerAPIStatus(ctx, http.MethodPut, nsLock, `{"reason":"freeze"}`)
-	if err != nil || status/100 != 2 {
-		t.Fatalf("lock the namespace: status %d, body %q, err %v", status, body, err)
-	}
-
-	status, body, err = env.TFEStatusA(ctx, "LOCK", path, tofuHTTPLockInfo())
+	status, body, err := env.TFEStatusA(ctx, "LOCK", path, tofuHTTPLockInfo())
 	if err != nil || status != http.StatusLocked {
 		t.Fatalf("LOCK under the manual lock: status %d, body %q, err %v, want 423", status, body, err)
 	}
 
-	status, body, err = env.ServerAPIStatus(ctx, http.MethodDelete, nsLock, "")
-	if err != nil || status/100 != 2 {
-		t.Fatalf("unlock the namespace: status %d, body %q, err %v", status, body, err)
-	}
+	bootstrapCall(t, env, http.MethodDelete, nsLock, "")
 
-	status, body, err = env.ServerAPIStatus(
-		ctx, http.MethodGet, "/api/dustpan/v1/namespaces/"+e2e.Namespace+"/units?pageSize=500", "",
+	units := bootstrapCall(
+		t,
+		env,
+		http.MethodGet,
+		"/api/dustpan/v1/namespaces/"+e2e.Namespace+"/units?pageSize=500",
+		"",
 	)
-	if err != nil || status != http.StatusOK {
-		t.Fatalf("list the units: status %d, body %q, err %v", status, body, err)
+	if strings.Contains(units, "refused-first") {
+		t.Fatalf("the unit list names the workspace of the refused requests: %s", units)
+	}
+}
+
+// bootstrapCall sends one installation API request with the bootstrap token and
+// fails the test unless it answers a 2xx status. It
+// returns the body.
+func bootstrapCall(t *testing.T, env *e2e.Env, method, path, body string) string {
+	t.Helper()
+
+	status, got, err := env.ServerAPIStatus(t.Context(), method, path, body)
+	if err != nil || status/100 != 2 {
+		t.Fatalf("%s %s: status %d, body %q, err %v", method, path, status, got, err)
 	}
 
-	if strings.Contains(body, "refused-first") {
-		t.Fatalf("the unit list names the workspace of the refused requests: %s", body)
-	}
+	return got
 }
 
 // runTofuHTTPManualLock proves a manual lock on the workspace stops the http

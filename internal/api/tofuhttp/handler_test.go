@@ -82,6 +82,8 @@ func newFakeUnits(exists bool) *fakeUnits {
 		createErr: nil,
 		writeErr:  nil,
 		lockErr:   nil,
+		admitErr:  nil,
+		created:   0,
 		lockJobs:  nil,
 		forced:    nil,
 	}

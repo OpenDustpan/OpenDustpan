@@ -105,15 +105,28 @@ type streamWrite struct {
 	record func(Override, int64) error
 }
 
+// streamAdmission is what the checks before a streamed write find: whether the
+// write passes the lock as an override, the overrides it uses, and its fence.
+type streamAdmission struct {
+	unlocked bool
+	used     []Override
+	fence    namespace.Fence
+}
+
+// noAdmission is the streamAdmission that comes with a refusal.
+func noAdmission() streamAdmission {
+	return streamAdmission{unlocked: false, used: nil, fence: namespace.Fence{Namespace: "", FailoverVersion: 0}}
+}
+
 // checkStreamAdmission runs the checks that come before a streamed write
 // declares its placeholder row, and writes nothing. It checks the lock, the
 // overrides, the manual lock and the fence. It returns whether the write passes
 // the lock as an override, the overrides it uses, and the fence of the write.
 func (s *Service) checkStreamAdmission(
 	ctx context.Context, w Workspace, in StreamInput, auth StreamAuthority,
-) (bool, []Override, namespace.Fence, error) {
+) (streamAdmission, error) {
 	if lockErr := checkStreamLock(w, in.LockID); lockErr != nil {
-		return false, nil, namespace.Fence{}, lockErr
+		return noAdmission(), lockErr
 	}
 
 	unlocked, used, err := declareOverrides(
@@ -124,7 +137,7 @@ func (s *Service) checkStreamAdmission(
 		auth.Allow,
 	)
 	if err != nil {
-		return false, nil, namespace.Fence{}, fmt.Errorf("new state for %s: %w", w.Ref, err)
+		return noAdmission(), fmt.Errorf("new state for %s: %w", w.Ref, err)
 	}
 
 	// A write without a lock ID passes the workspace lock when the caller may
@@ -132,16 +145,16 @@ func (s *Service) checkStreamAdmission(
 	// change to the workspace.
 	if unlocked {
 		if lockErr := s.refuseManualLock(ctx, w, ""); lockErr != nil {
-			return false, nil, namespace.Fence{}, fmt.Errorf("write state of %s: %w", w.Ref, lockErr)
+			return noAdmission(), fmt.Errorf("write state of %s: %w", w.Ref, lockErr)
 		}
 	}
 
 	fence, err := s.fence(ctx, w.Ref.Namespace)
 	if err != nil {
-		return false, nil, namespace.Fence{}, err
+		return noAdmission(), err
 	}
 
-	return unlocked, used, fence, nil
+	return streamAdmission{unlocked: unlocked, used: used, fence: fence}, nil
 }
 
 // AdmitFirstWrite reports whether a streamed write to the workspace called
@@ -160,7 +173,7 @@ func (s *Service) AdmitFirstWrite(ctx context.Context, ref Ref, in StreamInput) 
 		return err
 	}
 
-	_, _, _, err := s.checkStreamAdmission(ctx, newWorkspaceOf(ref), in, StreamAuthority{
+	_, err := s.checkStreamAdmission(ctx, newWorkspaceOf(ref), in, StreamAuthority{
 		Allow:  namespace.Overrides{Forced: false, Unlocked: false},
 		Record: nil,
 	})
@@ -175,10 +188,12 @@ func (s *Service) AdmitFirstWrite(ctx context.Context, ref Ref, in StreamInput) 
 func (s *Service) admitStream(
 	ctx context.Context, w Workspace, in StreamInput, auth StreamAuthority,
 ) (*streamWrite, error) {
-	unlocked, used, fence, err := s.checkStreamAdmission(ctx, w, in, auth)
+	adm, err := s.checkStreamAdmission(ctx, w, in, auth)
 	if err != nil {
 		return nil, err
 	}
+
+	unlocked, used, fence := adm.unlocked, adm.used, adm.fence
 
 	sv, key, err := s.declarePlaceholder(ctx, w, fence, unlocked)
 	if err != nil {
