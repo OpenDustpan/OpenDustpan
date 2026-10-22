@@ -113,6 +113,7 @@ func pgCopyTables() []pgCopyTable {
 	tables = append(tables, pgCopyManualLockTables()...)
 	tables = append(tables, pgCopyPreferenceTables()...)
 	tables = append(tables, pgCopySavedViewTables()...)
+	tables = append(tables, pgCopyDriftTables()...)
 	tables = append(tables, pgCopyGitHostTables()...)
 	tables = append(tables, pgCopyRegistryTables()...)
 	tables = append(tables, pgCopySinkTables()...)
@@ -173,14 +174,14 @@ func pgCopyStackTables() []pgCopyTable {
 		{
 			table: "update_journal",
 			columns: []string{
-				pgColStackID, pgColUpdateID, pgColArrival, "blob_key", "sha256", "md5", pgColSize,
+				pgColStackID, pgColUpdateID, pgColArrival, "blob_key", pgColSHA256, "md5", pgColSize,
 				"lowest_sequence", "sequence_ids", "operation_ids",
 			},
 			orderBy: []string{pgColStackID, pgColUpdateID, pgColArrival},
 		},
 		{
 			table:   "update_journal_sequences",
-			columns: []string{pgColStackID, pgColUpdateID, pgColSequence, pgColArrival, "sha256"},
+			columns: []string{pgColStackID, pgColUpdateID, pgColSequence, pgColArrival, pgColSHA256},
 			orderBy: []string{pgColStackID, pgColUpdateID, pgColSequence},
 		},
 		{
@@ -1716,9 +1717,13 @@ func (s *Store) createRestoreConflict(ctx context.Context, id backup.RestoreID) 
 }
 
 // checkStagedFeatureRows checks the rows of the staged features that have rules
-// of their own: the registry, the Git host connections and the notification
-// sinks.
+// of their own: the drift results, the registry, the Git host connections and
+// the notification sinks.
 func checkStagedFeatureRows(ctx context.Context, pool *pgxpool.Pool, staging string) error {
+	if err := checkStagedDriftResults(ctx, pool, staging); err != nil {
+		return err
+	}
+
 	if err := checkStagedRegistry(ctx, pool, staging); err != nil {
 		return err
 	}

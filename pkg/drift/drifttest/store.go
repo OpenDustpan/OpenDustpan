@@ -1,12 +1,16 @@
 package drifttest
 
 import (
+	"errors"
+	"fmt"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/drift"
+	"opendustpan.org/opendustpan/pkg/graph"
 	"opendustpan.org/opendustpan/pkg/job"
 	"opendustpan.org/opendustpan/pkg/namespace"
 )
@@ -16,8 +20,10 @@ func storeCases() []suiteCase {
 		{"store: a drifted result is the latest result", testRecordDrifted},
 		{"store: a clean result clears the drift", testRecordClears},
 		{"store: a repeated status is no change", testRecordSameStatus},
+		{"store: the kinds, the order and the truncated mark of a result come back", testRecordRoundTrip},
 		{"store: a result that fails validation changes nothing", testRecordInvalid},
 		{"store: an older or equal result is stale", testRecordStale},
+		{"store: concurrent records never leave an older result", testRecordConcurrent},
 		{"store: the same job twice is stale", testRecordSameJob},
 		{"store: a job that is not a finished drift check of the unit is refused", testRecordJobMismatch},
 		{"store: a result checked outside the run of its job is refused", testRecordOutsideJob},
@@ -63,6 +69,63 @@ func testRecordDrifted(t *testing.T, h Harness) {
 
 	if !slices.Equal(addresses, want) {
 		t.Errorf("addresses = %v, want %v", addresses, want)
+	}
+}
+
+func testRecordRoundTrip(t *testing.T, h Harness) {
+	t.Helper()
+
+	f := h.Namespace(t, "acme")
+	u := unit("acme", "wsp-1")
+
+	// The longest result: the limit of resources, cut by the runner, with both
+	// kinds and an address that holds the characters of a real one.
+	r := drift.Result{CheckedAt: at(1), Unit: u, JobID: h.Jobs.DriftCheck(t, u), Resources: nil, Truncated: true}
+
+	for i := range drift.MaxResources {
+		kind := drift.KindChanged
+		if i%2 == 1 {
+			kind = drift.KindDeleted
+		}
+
+		r.Resources = append(r.Resources, drift.Resource{
+			Address: fmt.Sprintf("module.net[\"eu-%d\"].aws_subnet.private[%d]", i, i), Kind: kind,
+		})
+	}
+
+	_, err := h.Store.Record(t.Context(), r, f)
+	must(t, "record", err)
+
+	got, err := h.Store.GetLatest(t.Context(), u)
+	must(t, "get", err)
+
+	if !got.Truncated || got.Status != drift.StatusDrifted || got.ResourceCount() != drift.MaxResources {
+		t.Fatalf("latest = truncated %t, status %q, %d resources; want the truncated result of %d",
+			got.Truncated, got.Status, got.ResourceCount(), drift.MaxResources)
+	}
+
+	sorted := func(rs []drift.Resource) []drift.Resource {
+		out := slices.Clone(rs)
+		slices.SortFunc(out, func(a, b drift.Resource) int { return strings.Compare(a.Address, b.Address) })
+
+		return out
+	}
+
+	if !slices.Equal(sorted(got.Resources), sorted(r.Resources)) {
+		t.Error("the addresses or the kinds of the latest result differ from the recorded result")
+	}
+
+	// A newer result that is not truncated replaces the whole result.
+	next := result(u, h.Jobs.DriftCheck(t, u), minute2, "only.one")
+
+	_, err = h.Store.Record(t.Context(), next, f)
+	must(t, "second record", err)
+
+	got, err = h.Store.GetLatest(t.Context(), u)
+	must(t, "second get", err)
+
+	if got.Truncated || got.ResourceCount() != 1 || got.Resources[0].Address != "only.one" {
+		t.Errorf("latest = %+v, want the second result alone", got)
 	}
 }
 
@@ -138,8 +201,8 @@ func testRecordInvalid(t *testing.T, h Harness) {
 	}
 
 	for name, r := range hostile {
-		_, err := h.Store.Record(t.Context(), r, f)
-		wantErr(t, name, err, drift.ErrInvalid)
+		tr, err := h.Store.Record(t.Context(), r, f)
+		wantRefused(t, name, tr, err, drift.ErrInvalid)
 	}
 
 	_, err := h.Store.GetLatest(t.Context(), u)
@@ -156,8 +219,8 @@ func testRecordStale(t *testing.T, h Harness) {
 	must(t, "first record", err)
 
 	for _, n := range []int{minute4, minute5} {
-		_, err = h.Store.Record(t.Context(), result(u, h.Jobs.DriftCheck(t, u), n), f)
-		wantErr(t, "older or equal result", err, drift.ErrStale)
+		tr, recErr := h.Store.Record(t.Context(), result(u, h.Jobs.DriftCheck(t, u), n), f)
+		wantRefused(t, "older or equal result", tr, recErr, drift.ErrStale)
 	}
 
 	got, err := h.Store.GetLatest(t.Context(), u)
@@ -165,6 +228,74 @@ func testRecordStale(t *testing.T, h Harness) {
 
 	if got.Status != drift.StatusDrifted || !got.CheckedAt.Equal(at(minute5)) {
 		t.Errorf("latest = %+v, want the first result unchanged", got)
+	}
+}
+
+// recordAll records the results of the jobs in ids, keyed by their minute, at
+// the same time, and returns the error of each record.
+func recordAll(t *testing.T, h Harness, u graph.Unit, ids map[int]job.ID, f namespace.Fence) map[int]error {
+	t.Helper()
+
+	errs := make(map[int]error, len(ids))
+
+	var (
+		wg sync.WaitGroup
+		mu sync.Mutex
+	)
+
+	for n, id := range ids {
+		wg.Go(func() {
+			_, err := h.Store.Record(t.Context(), result(u, id, n, "a"), f)
+
+			mu.Lock()
+			errs[n] = err
+			mu.Unlock()
+		})
+	}
+
+	wg.Wait()
+
+	return errs
+}
+
+// testRecordConcurrent sends the results of minutes 1 to 9 of one unit at the
+// same time, so that two writers can read the same stored row. Each record
+// returns nil or ErrStale, the newest one returns nil, and the stored result
+// is the newest one, whatever the order of the writers.
+func testRecordConcurrent(t *testing.T, h Harness) {
+	t.Helper()
+
+	const first, last = 1, 9
+
+	f := h.Namespace(t, "acme")
+
+	for round := range 3 {
+		u := unit("acme", fmt.Sprintf("wsp-%d", round))
+		ids := make(map[int]job.ID, last)
+
+		// Jobs are made before the writers start: the factory may stop the test.
+		for n := first; n <= last; n++ {
+			ids[n] = h.Jobs.DriftCheck(t, u)
+		}
+
+		errs := recordAll(t, h, u, ids, f)
+
+		for n, err := range errs {
+			if err != nil && !errors.Is(err, drift.ErrStale) {
+				t.Errorf("round %d: record of minute %d = %v, want nil or ErrStale", round, n, err)
+			}
+		}
+
+		if errs[last] != nil {
+			t.Errorf("round %d: record of the newest minute = %v, want nil", round, errs[last])
+		}
+
+		got, err := h.Store.GetLatest(t.Context(), u)
+		must(t, "get", err)
+
+		if !got.CheckedAt.Equal(at(last)) || got.JobID != ids[last] {
+			t.Errorf("round %d: latest = %+v, want the result of minute %d", round, got, last)
+		}
 	}
 }
 
@@ -199,8 +330,8 @@ func testRecordJobMismatch(t *testing.T, h Harness) {
 	}
 
 	for name, id := range jobs {
-		_, err := h.Store.Record(t.Context(), result(u, id, 1, "a"), f)
-		wantErr(t, name, err, drift.ErrJobMismatch)
+		tr, err := h.Store.Record(t.Context(), result(u, id, 1, "a"), f)
+		wantRefused(t, name, tr, err, drift.ErrJobMismatch)
 	}
 
 	_, err := h.Store.GetLatest(t.Context(), u)

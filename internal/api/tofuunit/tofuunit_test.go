@@ -158,7 +158,11 @@ func fixture(t *testing.T) (workspace.Workspace, identity.Object, identity.Princ
 func rules(ns namespaces, authz authorizer, st *store) tofuunit.Rules {
 	var guard *refusal.Recorder
 	if st != nil {
-		guard = refusal.New(authz, st, ns, slog.New(slog.DiscardHandler), nil)
+		// refusal.New refuses only a nil store, and st is set here, so a
+		// failed build leaves guard nil and the case that needs it fails.
+		if g, err := refusal.New(authz, st, ns, slog.New(slog.DiscardHandler), nil); err == nil {
+			guard = g
+		}
 	}
 
 	var auditStore audit.Store
@@ -390,7 +394,7 @@ func TestReadKind(t *testing.T) {
 	}
 }
 
-// TestAppend checks that Append writes the entry, writes nothing without a
+// TestAppend checks that Append writes the entry, fails closed without a
 // store, and returns the error of the namespace read and of the append.
 func TestAppend(t *testing.T) {
 	t.Parallel()
@@ -413,8 +417,8 @@ func TestAppend(t *testing.T) {
 	}
 
 	err = rules(newNamespaces(none, nil), allow, nil).Append(t.Context(), entry)
-	if err != nil {
-		t.Fatalf("Append without a store: %v, want nil", err)
+	if !errors.Is(err, tofuunit.ErrNoAuditStore) {
+		t.Fatalf("Append without a store: %v, want ErrNoAuditStore", err)
 	}
 
 	err = rules(newNamespaces(none, errNoNamespace), allow, newStore(nil)).Append(t.Context(), entry)
