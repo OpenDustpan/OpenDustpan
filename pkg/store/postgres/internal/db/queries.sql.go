@@ -1643,6 +1643,26 @@ func (q *Queries) CountUnitGateObjects(ctx context.Context, arg CountUnitGateObj
 	return count, err
 }
 
+const countWorkspacePage = `-- name: CountWorkspacePage :one
+SELECT COUNT(*)
+FROM workspaces AS w
+WHERE w.namespace = $1 AND w.deleted_at_ms IS NULL AND strpos(w.name, $2) > 0
+`
+
+type CountWorkspacePageParams struct {
+	Namespace    string
+	NameContains string
+}
+
+// The count of the live workspaces of a namespace whose name holds the
+// search, for the total of a workspace page.
+func (q *Queries) CountWorkspacePage(ctx context.Context, arg CountWorkspacePageParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countWorkspacePage, arg.Namespace, arg.NameContains)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const createAccessToken = `-- name: CreateAccessToken :execrows
 
 INSERT INTO access_tokens (id, principal_id, name, kind, digest, created_at_ms, expires_at_ms, created_by)
@@ -14326,6 +14346,78 @@ func (q *Queries) ReadWorkspaceByID(ctx context.Context, id string) (ReadWorkspa
 		&i.NamespaceID,
 	)
 	return i, err
+}
+
+const readWorkspacePage = `-- name: ReadWorkspacePage :many
+SELECT w.id, w.namespace, w.name, w.revision, w.lock_id, w.lock_holder, w.lock_reason, w.locked_at_ms, w.current_state_version_id, w.created_at_ms, w.updated_at_ms, w.allow_forced_writes, w.allow_unlocked_writes, w.deleted_at_ms, w.deleted_name, n.id AS namespace_id
+FROM (
+    SELECT p.name
+    FROM workspaces AS p
+    WHERE p.namespace = $1 AND p.deleted_at_ms IS NULL AND strpos(p.name, $2) > 0
+    ORDER BY p.name
+    LIMIT $4 OFFSET $3
+) AS page
+JOIN workspaces AS w ON w.namespace = $1 AND w.name = page.name AND w.deleted_at_ms IS NULL
+JOIN namespaces AS n ON n.name = w.namespace
+ORDER BY w.name
+`
+
+type ReadWorkspacePageParams struct {
+	Namespace    string
+	NameContains string
+	PageOffset   int32
+	PageLimit    int32
+}
+
+type ReadWorkspacePageRow struct {
+	Workspace   Workspace
+	NamespaceID string
+}
+
+// One page of the live workspaces of a namespace whose name holds the search,
+// in the order of ReadWorkspaces. The inner query finds the names of the page
+// in the index of the live workspace names alone, so an offset skips index
+// entries and no table rows. The outer query reads the rows of the page.
+func (q *Queries) ReadWorkspacePage(ctx context.Context, arg ReadWorkspacePageParams) ([]ReadWorkspacePageRow, error) {
+	rows, err := q.db.Query(ctx, readWorkspacePage,
+		arg.Namespace,
+		arg.NameContains,
+		arg.PageOffset,
+		arg.PageLimit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ReadWorkspacePageRow
+	for rows.Next() {
+		var i ReadWorkspacePageRow
+		if err := rows.Scan(
+			&i.Workspace.ID,
+			&i.Workspace.Namespace,
+			&i.Workspace.Name,
+			&i.Workspace.Revision,
+			&i.Workspace.LockID,
+			&i.Workspace.LockHolder,
+			&i.Workspace.LockReason,
+			&i.Workspace.LockedAtMs,
+			&i.Workspace.CurrentStateVersionID,
+			&i.Workspace.CreatedAtMs,
+			&i.Workspace.UpdatedAtMs,
+			&i.Workspace.AllowForcedWrites,
+			&i.Workspace.AllowUnlockedWrites,
+			&i.Workspace.DeletedAtMs,
+			&i.Workspace.DeletedName,
+			&i.NamespaceID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const readWorkspaces = `-- name: ReadWorkspaces :many

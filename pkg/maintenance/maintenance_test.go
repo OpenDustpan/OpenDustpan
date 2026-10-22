@@ -340,6 +340,16 @@ func (f *fakeWorkspaces) ListWorkspaces(_ context.Context, _ namespace.Name) ([]
 	return out, nil
 }
 
+// QueryWorkspaces implements workspace.Store over the list of ListWorkspaces.
+func (f *fakeWorkspaces) QueryWorkspaces(ctx context.Context, q workspace.ListQuery) (workspace.ListPage, error) {
+	all, err := f.ListWorkspaces(ctx, q.Namespace)
+	if err != nil {
+		return workspace.ListPage{}, err
+	}
+
+	return workspace.PageWorkspaces(all, q), nil
+}
+
 func (f *fakeWorkspaces) SaveWorkspace(
 	_ context.Context, w workspace.Workspace, _ namespace.Fence,
 ) error {
