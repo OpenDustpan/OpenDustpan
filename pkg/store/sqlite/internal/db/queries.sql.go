@@ -536,6 +536,27 @@ func (q *Queries) CompleteIdempotencyRecord(ctx context.Context, arg CompleteIde
 	return result.RowsAffected()
 }
 
+const confirmJobLogChunk = `-- name: ConfirmJobLogChunk :execrows
+UPDATE job_log_chunks
+SET confirmed = 1
+WHERE job_log_chunks.log_id = ?1 AND job_log_chunks.seq = ?2
+  AND job_log_chunks.namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = ?3)
+`
+
+type ConfirmJobLogChunkParams struct {
+	LogID     string
+	Seq       int64
+	Namespace string
+}
+
+func (q *Queries) ConfirmJobLogChunk(ctx context.Context, arg ConfirmJobLogChunkParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, confirmJobLogChunk, arg.LogID, arg.Seq, arg.Namespace)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const contextUnitExists = `-- name: ContextUnitExists :one
 SELECT CAST(EXISTS (SELECT 1 FROM inventory AS i WHERE i.namespace = ?1 AND i.tool = ?2 AND i.unit_id = ?3)
     OR EXISTS (SELECT 1 FROM inventory_deleted AS d WHERE d.namespace = ?1 AND d.tool = ?2 AND d.unit_id = ?3) AS INTEGER) AS present
@@ -5177,6 +5198,98 @@ func (q *Queries) GetJobHolderOfUnit(ctx context.Context, arg GetJobHolderOfUnit
 	return id, err
 }
 
+const getJobLog = `-- name: GetJobLog :one
+SELECT l.id, l.job_id, l.phase, l.step, l.token, l.created_at_ms
+FROM job_logs AS l
+JOIN namespaces AS n ON n.id = l.namespace_id
+WHERE n.name = ?1 AND l.id = ?2
+`
+
+type GetJobLogParams struct {
+	Namespace string
+	ID        string
+}
+
+type GetJobLogRow struct {
+	ID          string
+	JobID       string
+	Phase       int64
+	Step        string
+	Token       int64
+	CreatedAtMs int64
+}
+
+func (q *Queries) GetJobLog(ctx context.Context, arg GetJobLogParams) (GetJobLogRow, error) {
+	row := q.db.QueryRowContext(ctx, getJobLog, arg.Namespace, arg.ID)
+	var i GetJobLogRow
+	err := row.Scan(
+		&i.ID,
+		&i.JobID,
+		&i.Phase,
+		&i.Step,
+		&i.Token,
+		&i.CreatedAtMs,
+	)
+	return i, err
+}
+
+const getJobLogChunk = `-- name: GetJobLogChunk :one
+SELECT c.sha256, c.size, c.confirmed
+FROM job_log_chunks AS c
+JOIN namespaces AS n ON n.id = c.namespace_id
+WHERE n.name = ?1 AND c.log_id = ?2 AND c.seq = ?3
+`
+
+type GetJobLogChunkParams struct {
+	Namespace string
+	LogID     string
+	Seq       int64
+}
+
+type GetJobLogChunkRow struct {
+	Sha256    string
+	Size      int64
+	Confirmed int64
+}
+
+func (q *Queries) GetJobLogChunk(ctx context.Context, arg GetJobLogChunkParams) (GetJobLogChunkRow, error) {
+	row := q.db.QueryRowContext(ctx, getJobLogChunk, arg.Namespace, arg.LogID, arg.Seq)
+	var i GetJobLogChunkRow
+	err := row.Scan(&i.Sha256, &i.Size, &i.Confirmed)
+	return i, err
+}
+
+const getJobPlan = `-- name: GetJobPlan :one
+SELECT p.id, p.job_id, p.body, p.created_at_ms
+FROM job_plans AS p
+JOIN namespaces AS n ON n.id = p.namespace_id
+WHERE n.name = ?1 AND p.id = ?2
+`
+
+type GetJobPlanParams struct {
+	Namespace string
+	ID        string
+}
+
+type GetJobPlanRow struct {
+	ID          string
+	JobID       string
+	Body        string
+	CreatedAtMs int64
+}
+
+func (q *Queries) GetJobPlan(ctx context.Context, arg GetJobPlanParams) (GetJobPlanRow, error) {
+	row := q.db.QueryRowContext(ctx, getJobPlan, arg.Namespace, arg.ID)
+	var i GetJobPlanRow
+	err := row.Scan(
+		&i.ID,
+		&i.JobID,
+		&i.Body,
+		&i.CreatedAtMs,
+	)
+	return i, err
+}
+
 const getLatestCheckpoint = `-- name: GetLatestCheckpoint :one
 SELECT c.stack_id, n.id AS namespace_id, c.update_id, c.lease_digest, c.schema_version, c.sequence,
        c.digest, c.invalid, c.features_json, c.saved_at_ms,
@@ -7879,6 +7992,95 @@ func (q *Queries) InsertJobFreeze(ctx context.Context, arg InsertJobFreezeParams
 		return 0, err
 	}
 	return result.RowsAffected()
+}
+
+const insertJobLog = `-- name: InsertJobLog :exec
+INSERT INTO job_logs (id, namespace_id, job_id, phase, step, token, created_at_ms)
+VALUES (
+    ?1, (SELECT n.id FROM namespaces AS n WHERE n.name = ?2), ?3,
+    ?4, ?5, ?6, ?7
+)
+`
+
+type InsertJobLogParams struct {
+	ID          string
+	Namespace   string
+	JobID       string
+	Phase       int64
+	Step        string
+	Token       int64
+	CreatedAtMs int64
+}
+
+func (q *Queries) InsertJobLog(ctx context.Context, arg InsertJobLogParams) error {
+	_, err := q.db.ExecContext(ctx, insertJobLog,
+		arg.ID,
+		arg.Namespace,
+		arg.JobID,
+		arg.Phase,
+		arg.Step,
+		arg.Token,
+		arg.CreatedAtMs,
+	)
+	return err
+}
+
+const insertJobLogChunk = `-- name: InsertJobLogChunk :exec
+INSERT INTO job_log_chunks (log_id, seq, namespace_id, sha256, size, confirmed)
+VALUES (
+    ?1, ?2, (SELECT n.id FROM namespaces AS n WHERE n.name = ?3),
+    ?4, ?5, 0
+)
+ON CONFLICT (log_id, seq) DO NOTHING
+`
+
+type InsertJobLogChunkParams struct {
+	LogID     string
+	Seq       int64
+	Namespace string
+	Sha256    string
+	Size      int64
+}
+
+// The write transaction of the namespace serializes the reserves of a chunk,
+// so the caller reads the row before it inserts. A row that exists stays.
+func (q *Queries) InsertJobLogChunk(ctx context.Context, arg InsertJobLogChunkParams) error {
+	_, err := q.db.ExecContext(ctx, insertJobLogChunk,
+		arg.LogID,
+		arg.Seq,
+		arg.Namespace,
+		arg.Sha256,
+		arg.Size,
+	)
+	return err
+}
+
+const insertJobPlan = `-- name: InsertJobPlan :exec
+INSERT INTO job_plans (id, namespace_id, job_id, body, created_at_ms)
+VALUES (
+    ?1, (SELECT n.id FROM namespaces AS n WHERE n.name = ?2), ?3,
+    ?4, ?5
+)
+`
+
+type InsertJobPlanParams struct {
+	ID          string
+	Namespace   string
+	JobID       string
+	Body        string
+	CreatedAtMs int64
+}
+
+// The caller checks the fence and the claim in the same transaction.
+func (q *Queries) InsertJobPlan(ctx context.Context, arg InsertJobPlanParams) error {
+	_, err := q.db.ExecContext(ctx, insertJobPlan,
+		arg.ID,
+		arg.Namespace,
+		arg.JobID,
+		arg.Body,
+		arg.CreatedAtMs,
+	)
+	return err
 }
 
 const insertJournal = `-- name: InsertJournal :exec
@@ -15855,6 +16057,23 @@ func (q *Queries) UpdateJob(ctx context.Context, arg UpdateJobParams) (int64, er
 		return 0, err
 	}
 	return result.RowsAffected()
+}
+
+const updateJobPlanBody = `-- name: UpdateJobPlanBody :exec
+UPDATE job_plans SET body = ?1
+WHERE job_plans.id = ?2 AND job_plans.namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = ?3)
+`
+
+type UpdateJobPlanBodyParams struct {
+	Body      string
+	ID        string
+	Namespace string
+}
+
+// The caller checks the fence and the claim in the same transaction.
+func (q *Queries) UpdateJobPlanBody(ctx context.Context, arg UpdateJobPlanBodyParams) error {
+	_, err := q.db.ExecContext(ctx, updateJobPlanBody, arg.Body, arg.ID, arg.Namespace)
+	return err
 }
 
 const updateNotificationSink = `-- name: UpdateNotificationSink :execrows
