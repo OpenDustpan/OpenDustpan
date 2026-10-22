@@ -68,6 +68,21 @@ The server answers 200 with the stored default:
 The body takes no other field. A body with an unknown field answers 400. A
 value outside its bounds answers 422 with the field in the message.
 
+The server refuses approvers that no one can meet, and answers 400 with the
+reason in the message. This holds for an approval default and for an approval
+rule:
+
+- A group name must be a valid group name, and the group must exist. Make the
+  group first. A group with no member counts no one.
+- A user name must not hold a control character or start or end with white
+  space. The user does not need to exist yet: a person can sign in later.
+- When `unitOwners` is false, `count` must not be more than the number of
+  people who can approve. The server counts each named user once and the
+  current members of each named group. A person in two groups counts twice.
+  With `unitOwners` true, or with no approver named, the server checks no
+  count, because the owners or the holders of the approve action are not
+  known when you save.
+
 `GET` on the same path reads the default. It answers 404 when the namespace sets
 none. The answer has an `ETag` header with the version.
 
@@ -140,7 +155,7 @@ audit log. A read works with an access token.
 
 | Status | Cause |
 | --- | --- |
-| 400 | The body is not one JSON object, holds an unknown field, or is larger than 64 KiB. The `If-Match` value is not one version. |
+| 400 | The body is not one JSON object, holds an unknown field, or is larger than 64 KiB. The `If-Match` value is not one version. The approvers cannot be met. Examples: a group that does not exist, or a count above the people who can approve. |
 | 401 | The request has no valid credential, or a console session must sign in again. |
 | 403 | The caller lacks the action on this namespace, or a change came with an access token. |
 | 404 | The namespace, the default or the rule does not exist. |
