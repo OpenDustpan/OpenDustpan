@@ -303,10 +303,10 @@ func (s *Store) finishSwap(ctx context.Context, tx pgx.Tx, live, previous, stagi
 }
 
 // fenceRestored increments the failover version of every namespace of the
-// restored schema live, releases the workspace locks and resets the audit sink cursors and leases, in tx.
-// The control tables stay across the swap, so the running restore row of
-// this installation stays readable during the swap and no restored running
-// row needs failing.
+// restored schema live, releases the workspace locks and resets the audit
+// sink cursors and leases, in tx. The control tables stay across the swap,
+// so the running restore row of this installation stays readable during the
+// swap and no restored running row needs failing.
 func fenceRestored(ctx context.Context, tx pgx.Tx, live string) error {
 	fenceNamespaces := "UPDATE " + pgIdent(live) + ".namespaces SET failover_version = failover_version + 1"
 

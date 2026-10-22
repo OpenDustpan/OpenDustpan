@@ -11,6 +11,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/installation"
+	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
 )
@@ -1322,6 +1323,10 @@ func testRestoreApplyReleasesWorkspaceLocks(t *testing.T, newStore RestoreFactor
 	locked := lockTestWorkspace(t, src, ns, createTestWorkspace(t, src, ns, "prod"), "alice")
 	free := createTestWorkspace(t, src, ns, "dev")
 
+	// The inventory entry must hold the lock before the restore. Without
+	// this, the check on the restored entry below could pass on its own.
+	assertWorkspaceInventoryLock(t, src, ns.Name, locked.Ref.Name.String(), true)
+
 	ps := portableRestoreStores(t, src, newStore(t))
 
 	sink, sum, files := exportPortable(t, ps.src)
@@ -1333,6 +1338,9 @@ func testRestoreApplyReleasesWorkspaceLocks(t *testing.T, newStore RestoreFactor
 	if err := ps.dst.ApplyStaging(ctx); err != nil {
 		t.Fatalf("apply staging area: %v", err)
 	}
+
+	assertWorkspaceInventoryLock(t, ps.dst, ns.Name, locked.Ref.Name.String(), false)
+	assertWorkspaceInventoryLock(t, ps.dst, ns.Name, free.Ref.Name.String(), false)
 
 	got, err := ps.dst.GetWorkspace(ctx, locked.Ref)
 	if err != nil {
@@ -1355,4 +1363,32 @@ func testRestoreApplyReleasesWorkspaceLocks(t *testing.T, newStore RestoreFactor
 	if other.Lock != clearedLock() {
 		t.Fatalf("lock of %s after restore = %+v, want no lock", free.Ref, other.Lock)
 	}
+}
+
+// assertWorkspaceInventoryLock fails the test unless the inventory entry of
+// the OpenTofu workspace name in ns holds a lock exactly when wantLocked is
+// true. The console reads the lock of a workspace from this entry.
+func assertWorkspaceInventoryLock(
+	t *testing.T, s inventory.Reader, ns namespace.Name, name string, wantLocked bool,
+) {
+	t.Helper()
+
+	entries, err := s.ListUnits(t.Context(), ns)
+	if err != nil {
+		t.Fatalf("list inventory of %q: %v", ns, err)
+	}
+
+	for _, e := range entries {
+		if e.Tool != "opentofu" || e.Name != name {
+			continue
+		}
+
+		if (e.Lock != nil) != wantLocked {
+			t.Fatalf("inventory lock of %s = %+v, want locked %t", e.Reference(), e.Lock, wantLocked)
+		}
+
+		return
+	}
+
+	t.Fatalf("inventory has no opentofu entry %q in %q", name, ns)
 }
