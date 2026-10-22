@@ -156,6 +156,18 @@ func wantErr(t *testing.T, what string, err, want error) {
 	}
 }
 
+// wantRefused checks that a refused Record returned want and the zero
+// transition, so that no caller can read a result from a refusal.
+func wantRefused(t *testing.T, what string, tr drift.Transition, err, want error) {
+	t.Helper()
+
+	wantErr(t, what, err, want)
+
+	if tr != (drift.Transition{}) {
+		t.Errorf("%s: transition = %+v, want the zero transition", what, tr)
+	}
+}
+
 func must(t *testing.T, what string, err error) {
 	t.Helper()
 

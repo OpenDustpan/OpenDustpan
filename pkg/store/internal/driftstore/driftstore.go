@@ -156,7 +156,9 @@ func Latest(row *Row) (drift.Latest, error) {
 // stored result or comes from the job of the stored result. It changes nothing
 // on an error.
 func Record(ctx context.Context, tx Tx, r *drift.Result) (drift.Transition, error) {
-	none := drift.Transition{At: r.CheckedAt, Unit: r.Unit, JobID: r.JobID, From: "", To: ""}
+	// An error returns the zero transition, so that no caller reads a result
+	// from it.
+	var none drift.Transition
 
 	// Defense in depth: the adapter validates r before it opens the
 	// transaction. This check stays so that a new caller cannot store a result

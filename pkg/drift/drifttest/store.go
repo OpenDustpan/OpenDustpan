@@ -201,8 +201,8 @@ func testRecordInvalid(t *testing.T, h Harness) {
 	}
 
 	for name, r := range hostile {
-		_, err := h.Store.Record(t.Context(), r, f)
-		wantErr(t, name, err, drift.ErrInvalid)
+		tr, err := h.Store.Record(t.Context(), r, f)
+		wantRefused(t, name, tr, err, drift.ErrInvalid)
 	}
 
 	_, err := h.Store.GetLatest(t.Context(), u)
@@ -219,8 +219,8 @@ func testRecordStale(t *testing.T, h Harness) {
 	must(t, "first record", err)
 
 	for _, n := range []int{minute4, minute5} {
-		_, err = h.Store.Record(t.Context(), result(u, h.Jobs.DriftCheck(t, u), n), f)
-		wantErr(t, "older or equal result", err, drift.ErrStale)
+		tr, recErr := h.Store.Record(t.Context(), result(u, h.Jobs.DriftCheck(t, u), n), f)
+		wantRefused(t, "older or equal result", tr, recErr, drift.ErrStale)
 	}
 
 	got, err := h.Store.GetLatest(t.Context(), u)
@@ -330,8 +330,8 @@ func testRecordJobMismatch(t *testing.T, h Harness) {
 	}
 
 	for name, id := range jobs {
-		_, err := h.Store.Record(t.Context(), result(u, id, 1, "a"), f)
-		wantErr(t, name, err, drift.ErrJobMismatch)
+		tr, err := h.Store.Record(t.Context(), result(u, id, 1, "a"), f)
+		wantRefused(t, name, tr, err, drift.ErrJobMismatch)
 	}
 
 	_, err := h.Store.GetLatest(t.Context(), u)
