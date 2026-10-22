@@ -63,7 +63,9 @@ func newMem() *mem {
 }
 
 func (m *mem) Record(_ context.Context, r drift.Result, fence namespace.Fence) (drift.Transition, error) {
-	none := drift.Transition{At: r.CheckedAt, Unit: r.Unit, JobID: r.JobID, From: "", To: ""}
+	// An error returns the zero transition, so that no caller reads a result
+	// from it.
+	var none drift.Transition
 
 	if err := r.Validate(); err != nil {
 		return none, fmt.Errorf("record: %w", err)

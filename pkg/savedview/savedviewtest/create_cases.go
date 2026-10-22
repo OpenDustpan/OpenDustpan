@@ -149,14 +149,27 @@ func testNamespaceCap(t *testing.T, h Harness) {
 	fence := h.Namespace(t, "acme")
 	owners := savedview.MaxPerNamespace / savedview.MaxPerOwner
 
-	// One writer: a store that serializes its writes must not time out.
+	fill := make([]savedview.View, 0, savedview.MaxPerNamespace)
+
 	for o := range owners {
 		for i := range savedview.MaxPerOwner {
-			v := newView("acme", ownerN(o), fmt.Sprintf("view %03d", i))
+			fill = append(fill, newView("acme", ownerN(o), fmt.Sprintf("view %03d", i)))
+		}
+	}
 
-			if err := h.Store.Create(t.Context(), v, fence, auditEntry("acme", "create")); err != nil {
-				t.Fatalf("fill the namespace: owner %d view %d: %v", o, i, err)
-			}
+	// The store writes the last view of the fill, which makes the count equal
+	// to the cap. A store with a seed gets the other views directly, so that
+	// the case does not write thousands of audited transactions.
+	stored := fill
+	if h.Seed != nil {
+		h.Seed(t, fill[:len(fill)-1])
+		stored = fill[len(fill)-1:]
+	}
+
+	// One writer: a store that serializes its writes must not time out.
+	for i := range stored {
+		if err := h.Store.Create(t.Context(), stored[i], fence, auditEntry("acme", "create")); err != nil {
+			t.Fatalf("fill the namespace: owner %s view %q: %v", stored[i].Owner, stored[i].Name, err)
 		}
 	}
 

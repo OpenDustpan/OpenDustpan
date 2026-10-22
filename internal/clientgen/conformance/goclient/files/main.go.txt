@@ -1,0 +1,279 @@
+package main
+
+// This file is the hand-written message loop of the conformance adapter. The
+// generator writes the operation table (operations.go) beside it. The adapter
+// speaks JSON-RPC 2.0 on standard input and output, one message on each line.
+
+import (
+	"bufio"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"os"
+	"time"
+
+	client "opendustpan.org/client"
+)
+
+const callTimeout = 30 * time.Second
+
+const (
+	protocolVersion = 1
+	clientModule    = "opendustpan.org/client"
+	maxLineBytes    = 1 << 20
+)
+
+// JSON-RPC 2.0 error codes.
+const (
+	codeParse          = -32700
+	codeMethodNotFound = -32601
+	codeInvalidParams  = -32602
+	codeServer         = -32000
+)
+
+type message struct {
+	JSONRPC string          `json:"jsonrpc"`
+	ID      json.RawMessage `json:"id"`
+	Method  string          `json:"method"`
+	Params  json.RawMessage `json:"params"`
+}
+
+type rpcError struct {
+	Code    int    `json:"code"`
+	Message string `json:"message"`
+}
+
+type reply struct {
+	JSONRPC string          `json:"jsonrpc"`
+	ID      json.RawMessage `json:"id"`
+	Result  json.RawMessage `json:"result,omitempty"`
+	Error   *rpcError       `json:"error,omitempty"`
+}
+
+// success makes the answer to a request. A success holds a result, also when
+// the result is null.
+func success(id json.RawMessage, result any) *reply {
+	raw, err := json.Marshal(result)
+	if err != nil {
+		return fail(id, codeServer, err.Error())
+	}
+
+	return &reply{JSONRPC: "2.0", ID: id, Result: raw}
+}
+
+type initializeParams struct {
+	ProtocolVersion int    `json:"protocolVersion"`
+	BaseURL         string `json:"baseURL"`
+	Token           string `json:"token"`
+	Transport       string `json:"transport"`
+	RetryLimit      int    `json:"retryLimit"`
+}
+
+type callParams struct {
+	Operation      string                     `json:"operation"`
+	Path           map[string]string          `json:"path"`
+	Query          map[string]json.RawMessage `json:"query"`
+	Body           json.RawMessage            `json:"body"`
+	IdempotencyKey string                     `json:"idempotencyKey"`
+	IfMatch        string                     `json:"ifMatch"`
+}
+
+type callResult struct {
+	Status int             `json:"status"`
+	ETag   string          `json:"etag,omitempty"`
+	Body   json.RawMessage `json:"body,omitempty"`
+	Error  *errorResult    `json:"error,omitempty"`
+}
+
+type errorResult struct {
+	Code      int                        `json:"code"`
+	Message   string                     `json:"message"`
+	ErrorCode string                     `json:"errorCode,omitempty"`
+	ErrorArgs map[string]json.RawMessage `json:"errorArgs,omitempty"`
+	Transport bool                       `json:"transport,omitempty"`
+	Invalid   bool                       `json:"invalid,omitempty"`
+}
+
+func main() {
+	if err := run(); err != nil {
+		fmt.Fprintln(os.Stderr, "adapter:", err)
+		os.Exit(1)
+	}
+}
+
+// run reads one message on each line until shutdown or the end of the input.
+func run() error {
+	in := bufio.NewScanner(os.Stdin)
+	in.Buffer(make([]byte, 0, 64*1024), maxLineBytes)
+
+	out := json.NewEncoder(os.Stdout)
+
+	var c *client.Client
+
+	for in.Scan() {
+		var m message
+		if err := json.Unmarshal(in.Bytes(), &m); err != nil {
+			if err = out.Encode(fail(nil, codeParse, "the line is not JSON")); err != nil {
+				return err
+			}
+
+			continue
+		}
+
+		r, stop := handle(&c, &m)
+		if err := out.Encode(r); err != nil {
+			return err
+		}
+
+		if stop {
+			return nil
+		}
+	}
+
+	return in.Err()
+}
+
+func fail(id json.RawMessage, code int, text string) *reply {
+	return &reply{JSONRPC: "2.0", ID: id, Error: &rpcError{Code: code, Message: text}}
+}
+
+// handle answers one message. It reports true after shutdown.
+func handle(c **client.Client, m *message) (*reply, bool) {
+	ok := func(result any) *reply { return success(m.ID, result) }
+
+	switch m.Method {
+	case "initialize":
+		var p initializeParams
+		if err := json.Unmarshal(m.Params, &p); err != nil || p.ProtocolVersion != protocolVersion {
+			return fail(m.ID, codeInvalidParams, "initialize needs protocol version 1"), false
+		}
+
+		cl, err := client.New(p.BaseURL, client.WithToken(p.Token))
+		if err != nil {
+			return fail(m.ID, codeInvalidParams, err.Error()), false
+		}
+
+		*c = cl
+
+		return ok(map[string]any{
+			"protocolVersion": protocolVersion, "client": clientModule, "clientVersion": client.Version,
+			"descriptionVersion": client.DescriptionVersion, "serverRelease": client.ServerRelease,
+			"transports": []string{"net/http"},
+		}), false
+	case "call":
+		return call(*c, m), false
+	case "paginate":
+		return fail(m.ID, codeServer, "this adapter does not paginate yet"), false
+	case "shutdown":
+		return ok(nil), true
+	default:
+		return fail(m.ID, codeMethodNotFound, "unknown method"), false
+	}
+}
+
+// call runs one operation.
+func call(c *client.Client, m *message) *reply {
+	if c == nil {
+		return fail(m.ID, codeServer, "initialize comes first")
+	}
+
+	var p callParams
+	if err := json.Unmarshal(m.Params, &p); err != nil {
+		return fail(m.ID, codeInvalidParams, "the parameters are not valid")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), callTimeout)
+	defer cancel()
+
+	res, err := callOperation(ctx, c, &p)
+	if err != nil {
+		return fail(m.ID, codeInvalidParams, err.Error())
+	}
+
+	return success(m.ID, res)
+}
+
+func errUnknownOperation(id string) error { return fmt.Errorf("unknown operation %q", id) }
+
+func (p *callParams) pathParam(name string) (string, error) {
+	v, ok := p.Path[name]
+	if !ok {
+		return "", fmt.Errorf("path parameter %q is missing", name)
+	}
+
+	return v, nil
+}
+
+func (p *callParams) decodeBody(v any) error {
+	if len(p.Body) == 0 {
+		return nil
+	}
+
+	return json.Unmarshal(p.Body, v)
+}
+
+func (p *callParams) decodeQuery(v any) error {
+	raw, err := json.Marshal(p.Query)
+	if err != nil {
+		return err
+	}
+
+	return json.Unmarshal(raw, v)
+}
+
+func (p *callParams) options() []client.CallOption {
+	var opts []client.CallOption
+	if p.IdempotencyKey != "" {
+		opts = append(opts, client.WithIdempotencyKey(p.IdempotencyKey))
+	}
+
+	if p.IfMatch != "" {
+		opts = append(opts, client.WithIfMatch(p.IfMatch))
+	}
+
+	return opts
+}
+
+// finish turns the outcome of the client into a result of the protocol.
+func finish(out any, resp *client.Response, err error) (*callResult, error) {
+	res := &callResult{}
+	if resp != nil {
+		res.Status, res.ETag = resp.Status, resp.ETag
+	}
+
+	if err == nil {
+		if out != nil {
+			raw, mErr := json.Marshal(out)
+			if mErr != nil {
+				return nil, mErr
+			}
+
+			res.Body = raw
+		}
+
+		return res, nil
+	}
+
+	res.Error = errorOutcome(resp, err)
+
+	return res, nil
+}
+
+func errorOutcome(resp *client.Response, err error) *errorResult {
+	var apiErr *client.Error
+
+	switch {
+	case errors.As(err, &apiErr):
+		e := &errorResult{Code: apiErr.Status, Message: apiErr.Body.Message, ErrorArgs: apiErr.Body.ErrorArgs}
+		if apiErr.Body.ErrorCode != nil {
+			e.ErrorCode = *apiErr.Body.ErrorCode
+		}
+
+		return e
+	case errors.Is(err, client.ErrInvalidResponse):
+		return &errorResult{Code: resp.Status, Message: err.Error(), Invalid: true}
+	default:
+		return &errorResult{Message: err.Error(), Transport: true}
+	}
+}

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/http"
 
+	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -239,7 +240,7 @@ func (h *Handler) enforceAuthorized(route Route) http.HandlerFunc {
 				h.writeError(
 					ctx,
 					w,
-					fmt.Errorf("%w: %s has no action for the installation", identity.ErrDenied, route.Path),
+					errcode.Refusal(route.Path+" has no action for the installation"),
 				)
 
 				return

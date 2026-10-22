@@ -3,11 +3,14 @@ package secrettest_test
 import (
 	"cmp"
 	"context"
+	"errors"
+	"maps"
 	"slices"
 	"sync"
 	"testing"
 	"time"
 
+	blobfs "opendustpan.org/opendustpan/pkg/blob/fs"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/secret"
 	"opendustpan.org/opendustpan/pkg/secret/secrettest"
@@ -72,17 +75,24 @@ func (m *memItemKeys) Ping(context.Context) error {
 	return nil
 }
 
-func (m *memItemKeys) CreateItemKey(
-	_ context.Context, k secret.ItemKey, fence namespace.Fence,
-) (secret.ItemKey, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
+// memItemKeyTx is the transaction of the in-memory store. The caller of
+// InItemKeyTx holds the lock.
+type memItemKeyTx struct {
+	m     *memItemKeys
+	fence namespace.Fence
+}
 
-	if err := m.checkFence(fence); err != nil {
-		return secret.ItemKey{}, err
+func (t memItemKeyTx) CreateItemKey(_ context.Context, k secret.ItemKey) (secret.ItemKey, error) {
+	if k.Ref.Scope.Namespace != t.fence.Namespace {
+		return secret.ItemKey{}, namespace.ErrFenced
 	}
 
-	if stored, ok := m.keys[k.Ref]; ok {
+	if b := k.Blob; b.Version < 1 || b.Version > secret.MaxItemKeyVersion || b.Size < 1 ||
+		b.Size > secret.MaxWrappedItemKeyBytes {
+		return secret.ItemKey{}, secret.ErrInvalidItemRef
+	}
+
+	if stored, ok := t.m.keys[k.Ref]; ok {
 		if stored.Shredded() {
 			return stored, secret.ErrShredded
 		}
@@ -90,9 +100,70 @@ func (m *memItemKeys) CreateItemKey(
 		return stored, nil
 	}
 
-	m.keys[k.Ref] = k
+	t.m.keys[k.Ref] = k
 
 	return k, nil
+}
+
+func (t memItemKeyTx) GetNamespace(_ context.Context, name namespace.Name) (namespace.Namespace, error) {
+	ns, ok := t.m.namespaces[name]
+	if !ok {
+		return namespace.Namespace{}, namespace.ErrNotFound
+	}
+
+	return ns, nil
+}
+
+func (t memItemKeyTx) GetItemKey(_ context.Context, ref secret.ItemRef) (secret.ItemKey, error) {
+	k, ok := t.m.keys[ref]
+	if !ok {
+		return secret.ItemKey{}, secret.ErrKeyNotFound
+	}
+
+	if k.Shredded() {
+		return k, secret.ErrShredded
+	}
+
+	return k, nil
+}
+
+// InItemKeyTx runs fn on a copy of the records and keeps the copy only when fn
+// returns nil, so a failed function leaves no record.
+func (m *memItemKeys) InItemKeyTx(_ context.Context, fence namespace.Fence, fn func(secret.ItemKeyTx) error) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if err := m.checkFence(fence); err != nil {
+		return err
+	}
+
+	before := maps.Clone(m.keys)
+
+	if err := fn(memItemKeyTx{m: m, fence: fence}); err != nil {
+		m.keys = before
+
+		return err
+	}
+
+	return nil
+}
+
+func (m *memItemKeys) CreateItemKey(
+	ctx context.Context, k secret.ItemKey, fence namespace.Fence,
+) (secret.ItemKey, error) {
+	var stored secret.ItemKey
+
+	err := m.InItemKeyTx(ctx, fence, func(tx secret.ItemKeyTx) error {
+		got, err := tx.CreateItemKey(ctx, k)
+		stored = got
+
+		return err
+	})
+	if err != nil && !errors.Is(err, secret.ErrShredded) {
+		return secret.ItemKey{}, err
+	}
+
+	return stored, err
 }
 
 func (m *memItemKeys) GetItemKey(_ context.Context, ref secret.ItemRef) (secret.ItemKey, error) {
@@ -119,6 +190,10 @@ func (m *memItemKeys) ShredItemKey(
 
 	if err := m.checkFence(fence); err != nil {
 		return secret.ItemKey{}, err
+	}
+
+	if ref.Scope.Namespace != fence.Namespace {
+		return secret.ItemKey{}, namespace.ErrFenced
 	}
 
 	k, ok := m.keys[ref]
@@ -185,4 +260,22 @@ func (m *memItemKeys) checkFence(fence namespace.Fence) error {
 	}
 
 	return nil
+}
+
+// TestItemSealerSuite runs the sealer suite over the in-memory records and a
+// directory of blobs.
+func TestItemSealerSuite(t *testing.T) {
+	t.Parallel()
+	secrettest.RunItemSealer(t, func(t *testing.T) *secrettest.SealerRig {
+		t.Helper()
+
+		blobs, err := blobfs.Open(t.TempDir())
+		if err != nil {
+			t.Fatalf("open blob store: %v", err)
+		}
+
+		t.Cleanup(func() { _ = blobs.Close() }) //nolint:errcheck // Test cleanup.
+
+		return secrettest.NewSealerRig(t, newMemItemKeys(), blobs)
+	})
 }

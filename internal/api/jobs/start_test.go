@@ -399,6 +399,8 @@ func TestStartRefusesABadKey(t *testing.T) {
 		{"a control character", []string{"Idempotency-Key", "a\tb"}},
 		{"not ASCII", []string{"Idempotency-Key", "schlüssel"}},
 		{"two keys", []string{"Idempotency-Key", "a", "Idempotency-Key", "b"}},
+		{"the prefix of a drift check", []string{"Idempotency-Key", "drift-" + strings.Repeat("0", 32) + "-1"}},
+		{"the prefix of a drift check in upper case", []string{"Idempotency-Key", "DRIFT-x"}},
 	}
 
 	for _, tt := range tests {

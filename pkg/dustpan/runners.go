@@ -6,7 +6,6 @@ import (
 	"strings"
 
 	"opendustpan.org/opendustpan/internal/api/runnerapi"
-	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/job"
 	"opendustpan.org/opendustpan/pkg/runner"
 )
@@ -39,9 +38,9 @@ func WithJobClaimer(c job.Claimer) Option {
 // join challenge names the public URL without a trailing slash, so a runner
 // cannot join without it.
 func newRunnerHandler(cfg *settings, svc services, onFailure func()) (http.Handler, error) {
-	var neutralAudit audit.Store
-	if st, ok := cfg.namespaceStore.(audit.Store); ok {
-		neutralAudit = st
+	neutralAudit, err := auditStoreOf(cfg)
+	if err != nil {
+		return nil, err
 	}
 
 	publicURL := strings.TrimRight(strings.TrimSpace(cfg.publicURL), "/")
