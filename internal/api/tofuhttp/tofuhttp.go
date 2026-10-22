@@ -45,6 +45,14 @@ type WorkspaceService interface {
 	GetByID(ctx context.Context, id workspace.ID) (workspace.Workspace, error)
 	// Create creates an unlocked workspace without state.
 	Create(ctx context.Context, ref workspace.Ref) (workspace.Workspace, error)
+	// AdmitFirstWrite returns the error that WriteState would return for a
+	// workspace called ref that does not exist yet, and nil when the write could
+	// go on. It writes nothing.
+	AdmitFirstWrite(ctx context.Context, ref workspace.Ref, in workspace.StreamInput) error
+	// AdmitFirstLock returns the error that LockWithIDForJob would return for a
+	// workspace called ref that does not exist yet, and nil when the lock could
+	// go on. It writes nothing.
+	AdmitFirstLock(ctx context.Context, ref workspace.Ref, req workspace.LockRequest) error
 	// LockWithIDForJob locks the workspace for holder under lockID, the ID the
 	// client chose (ADR 49, decision 6). jobID is the job whose job token made
 	// the request, or empty: a job whose phase started before a manual lock

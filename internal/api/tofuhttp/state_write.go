@@ -53,7 +53,15 @@ func (h *Handler) postState(w http.ResponseWriter, r *http.Request, c call) {
 		return
 	}
 
-	ws, err := h.workspaceOf(ctx, c)
+	in := workspace.StreamInput{
+		Holder: c.principal.Subject,
+		LockID: r.URL.Query().Get("ID"),
+		MD5:    sum,
+	}
+
+	ws, err := h.workspaceOf(ctx, c, func(ctx context.Context) error {
+		return h.ws.AdmitFirstWrite(ctx, c.ref, in)
+	})
 	if err != nil {
 		h.writeError(ctx, w, err)
 
@@ -72,12 +80,6 @@ func (h *Handler) postState(w http.ResponseWriter, r *http.Request, c call) {
 		h.writeError(ctx, w, err)
 
 		return
-	}
-
-	in := workspace.StreamInput{
-		Holder: c.principal.Subject,
-		LockID: r.URL.Query().Get("ID"),
-		MD5:    sum,
 	}
 
 	auth := workspace.StreamAuthority{Allow: allow, Record: h.recordOverride(r, c.principal, obj)}

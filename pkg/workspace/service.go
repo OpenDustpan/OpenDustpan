@@ -423,6 +423,22 @@ func (s *Service) Create(ctx context.Context, ref Ref) (Workspace, error) {
 	return w, nil
 }
 
+// newWorkspaceOf returns the workspace that Create would make for ref, with no
+// ID and no time: the value that a check holds for a workspace that does not
+// exist yet.
+func newWorkspaceOf(ref Ref) Workspace {
+	return Workspace{
+		CreatedAt:   time.Time{},
+		UpdatedAt:   time.Time{},
+		Lock:        Lock{LockedAt: time.Time{}, ID: "", Holder: "", Reason: ""},
+		ID:          "",
+		Ref:         ref,
+		NamespaceID: "",
+		Revision:    1,
+		Overrides:   namespace.Overrides{Forced: false, Unlocked: false},
+	}
+}
+
 // Delete soft-deletes the workspace called ref (ADR 47): the workspace leaves
 // every lookup by name or ID and every list, and its name is free at once,
 // but its state versions and data key stay until the final delete. It first
@@ -642,12 +658,8 @@ type LockRequest struct {
 func (s *Service) LockWithIDForJob(ctx context.Context, id ID, req LockRequest) (Workspace, error) {
 	holder, reason, lockID, jobID := req.Holder, req.Reason, req.LockID, req.JobID
 
-	if holder == "" {
-		return Workspace{}, fmt.Errorf("%w: lock without a holder", ErrNotLocked)
-	}
-
-	if !validLockID(lockID) {
-		return Workspace{}, fmt.Errorf("%w: %d characters", ErrInvalidLockID, len(lockID))
+	if err := checkLockRequest(req); err != nil {
+		return Workspace{}, err
 	}
 
 	// The manual lock check and the tool lock below run in separate
@@ -661,6 +673,41 @@ func (s *Service) LockWithIDForJob(ctx context.Context, id ID, req LockRequest) 
 	return s.change(ctx, id, func(w Workspace, now time.Time) (Workspace, error) {
 		return w.lockAs(now, holder, reason, lockID)
 	})
+}
+
+// checkLockRequest returns the error of a lock request that names no holder or
+// a lock ID that the domain does not accept.
+func checkLockRequest(req LockRequest) error {
+	if req.Holder == "" {
+		return fmt.Errorf("%w: lock without a holder", ErrNotLocked)
+	}
+
+	if !validLockID(req.LockID) {
+		return fmt.Errorf("%w: %d characters", ErrInvalidLockID, len(req.LockID))
+	}
+
+	return nil
+}
+
+// AdmitFirstLock reports whether a lock request on the workspace called ref
+// would pass the checks that come before the lock, when the workspace does not
+// exist yet: the holder, the lock ID, the fence and the manual lock. It
+// returns the error that LockWithIDForJob would return, and nil when the lock
+// could go on. It writes nothing, so a caller creates the workspace only after
+// it returns nil: a refused first request leaves no workspace.
+func (s *Service) AdmitFirstLock(ctx context.Context, ref Ref, req LockRequest) error {
+	if _, err := s.writable(ctx, ref.Namespace); err != nil {
+		return err
+	}
+
+	if err := checkLockRequest(req); err != nil {
+		return err
+	}
+
+	// The manual lock query reads the row of the unit, and a unit that does not
+	// exist has none. The only lock that covers a new unit is the lock of its
+	// namespace, so the check reads that lock itself.
+	return s.refuseUnderNamespaceLock(ctx, ref.Namespace, ref.Name.String())
 }
 
 // maxLockIDLength bounds a lock ID the caller chooses.
@@ -2727,6 +2774,12 @@ func (s *Service) refuseManualLock(ctx context.Context, w Workspace, jobID strin
 // there is no manual lock service or the namespace has no lock. A lock that
 // cannot be read refuses the restore: the check fails closed.
 func (s *Service) refuseRestoreUnderNamespaceLock(ctx context.Context, ns namespace.Name, id ID) error {
+	return s.refuseUnderNamespaceLock(ctx, ns, id.String())
+}
+
+// refuseUnderNamespaceLock is refuseRestoreUnderNamespaceLock for the unit
+// called name, which can be a unit that does not exist yet.
+func (s *Service) refuseUnderNamespaceLock(ctx context.Context, ns namespace.Name, name string) error {
 	if s.manual == nil {
 		return nil
 	}
@@ -2741,6 +2794,6 @@ func (s *Service) refuseRestoreUnderNamespaceLock(ctx context.Context, ns namesp
 	}
 
 	return fmt.Errorf("%w: %w", ErrLocked, &manuallock.LockedError{
-		Lock: l, Noun: "workspace", Name: ns.String() + "/" + id.String(),
+		Lock: l, Noun: "workspace", Name: ns.String() + "/" + name,
 	})
 }

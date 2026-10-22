@@ -50,6 +50,10 @@ type fakeUnits struct {
 	writeErr error
 	// lockErr, when set, is what LockWithIDForJob answers.
 	lockErr error
+	// admitErr, when set, is what AdmitFirstWrite and AdmitFirstLock answer.
+	admitErr error
+	// created counts the calls of Create that made the unit.
+	created int
 	// lockJobs holds the job ID of each lock request.
 	lockJobs []string
 	// forced holds the audit entry template of each force-unlock.
@@ -116,8 +120,19 @@ func (f *fakeUnits) Create(_ context.Context, _ workspace.Ref) (workspace.Worksp
 	}
 
 	f.exists = true
+	f.created++
 
 	return f.ws, nil
+}
+
+// AdmitFirstWrite answers admitErr, or nil.
+func (f *fakeUnits) AdmitFirstWrite(_ context.Context, _ workspace.Ref, _ workspace.StreamInput) error {
+	return f.admitErr
+}
+
+// AdmitFirstLock answers admitErr, or nil.
+func (f *fakeUnits) AdmitFirstLock(_ context.Context, _ workspace.Ref, _ workspace.LockRequest) error {
+	return f.admitErr
 }
 
 // LockWithIDForJob takes the lock under lockID, or answers ErrLocked. It keeps
@@ -885,6 +900,67 @@ func TestRefusedUnlockedWriteIsAudited(t *testing.T) {
 			if e := store.entries[0]; e.Outcome != audit.OutcomeDenied || e.Action != tc.wantAction ||
 				e.Kind != audit.KindOverride {
 				t.Fatalf("entry = %+v, want denied override entry with action %s", e, tc.wantAction)
+			}
+		})
+	}
+}
+
+// TestRefusedFirstRequestCreatesNoUnit proves that the handler creates the unit
+// for a first LOCK or POST only when the admission checks of the service pass:
+// a refusal answers its status and the unit does not exist.
+func TestRefusedFirstRequestCreatesNoUnit(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name   string
+		method string
+		path   string
+		body   string
+		refuse error
+		want   int
+	}{
+		{
+			"POST with no lock",
+			http.MethodPost,
+			unitPath,
+			`{"serial":1,"lineage":"l"}`,
+			workspace.ErrOverrideRefused,
+			http.StatusForbidden,
+		},
+		{
+			"POST that names a lock",
+			http.MethodPost,
+			unitPath + "?ID=x",
+			`{"serial":1,"lineage":"l"}`,
+			workspace.ErrLockMismatch,
+			http.StatusConflict,
+		},
+		{"LOCK under a manual lock", "LOCK", unitPath, lockBody(lockOne, "ci"), workspace.ErrLocked, http.StatusLocked},
+		{
+			"LOCK with a bad lock ID",
+			"LOCK",
+			unitPath,
+			lockBody("a b", "ci"),
+			workspace.ErrInvalidLockID,
+			http.StatusBadRequest,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			units := newFakeUnits(false)
+			units.admitErr = tc.refuse
+			h := newTestHandler(t, units)
+
+			rec := do(h, tc.method, tc.path, tc.body, bearer(adminToken))
+			if rec.Code != tc.want {
+				t.Fatalf("%s: status %d, want %d: %s", tc.method, rec.Code, tc.want, rec.Body.String())
+			}
+
+			if units.exists || units.created != 0 {
+				t.Fatalf("a refused %s created the unit (created %d)", tc.method, units.created)
 			}
 		})
 	}

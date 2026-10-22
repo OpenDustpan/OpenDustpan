@@ -185,16 +185,20 @@ func (h *Handler) lockWorkspace(w http.ResponseWriter, r *http.Request, c call) 
 		return
 	}
 
-	ws, err := h.workspaceOf(ctx, c)
+	req := workspace.LockRequest{
+		Holder: c.principal.Subject, Reason: info.Info, LockID: info.ID, JobID: c.principal.JobTokenID(),
+	}
+
+	ws, err := h.workspaceOf(ctx, c, func(ctx context.Context) error {
+		return h.ws.AdmitFirstLock(ctx, c.ref, req)
+	})
 	if err != nil {
 		h.writeLockError(ctx, w, err)
 
 		return
 	}
 
-	_, err = h.ws.LockWithIDForJob(ctx, ws.ID, workspace.LockRequest{
-		Holder: c.principal.Subject, Reason: info.Info, LockID: info.ID, JobID: c.principal.JobTokenID(),
-	})
+	_, err = h.ws.LockWithIDForJob(ctx, ws.ID, req)
 	if errors.Is(err, workspace.ErrLocked) || errors.Is(err, workspace.ErrConcurrentModification) {
 		h.writeHeld(ctx, w, c, err)
 
@@ -246,16 +250,22 @@ func (h *Handler) writeHeld(ctx context.Context, w http.ResponseWriter, c call, 
 	h.writeLocked(w, current.Lock)
 }
 
-// workspaceOf returns the workspace of the call, creating it on first use. Two
-// first requests can both find it missing: the create that loses answers
-// ErrAlreadyExists, and the workspace is read again, so it is not a 500.
-func (h *Handler) workspaceOf(ctx context.Context, c call) (workspace.Workspace, error) {
+// workspaceOf returns the workspace of the call, creating it on first use. A
+// first request creates the workspace only when the request is admitted: the
+// caller holds unit:manage on the unit, and admit, which runs the checks of the
+// request against a workspace that does not exist yet, returns nil. A refused
+// request leaves no workspace. Two first requests can both find the workspace
+// missing: the create that loses answers ErrAlreadyExists, and the workspace is
+// read again, so it is not a 500.
+func (h *Handler) workspaceOf(
+	ctx context.Context, c call, admit func(ctx context.Context) error,
+) (workspace.Workspace, error) {
 	ws, err := h.ws.Get(ctx, c.ref)
 	if !errors.Is(err, workspace.ErrNotFound) {
 		return ws, err
 	}
 
-	ws, err = h.createWorkspace(ctx, c)
+	ws, err = h.createWorkspace(ctx, c, admit)
 	if errors.Is(err, workspace.ErrAlreadyExists) {
 		return h.ws.Get(ctx, c.ref)
 	}
@@ -264,8 +274,11 @@ func (h *Handler) workspaceOf(ctx context.Context, c call) (workspace.Workspace,
 }
 
 // createWorkspace creates the workspace of the path for a first LOCK or POST, after the caller
-// holds unit:manage on its unit.
-func (h *Handler) createWorkspace(ctx context.Context, c call) (workspace.Workspace, error) {
+// holds unit:manage on its unit and admit returns nil. The caller authorizes
+// first, so a caller without the action learns nothing from the checks of admit.
+func (h *Handler) createWorkspace(
+	ctx context.Context, c call, admit func(ctx context.Context) error,
+) (workspace.Workspace, error) {
 	obj, err := unitObject(c.ref)
 	if err != nil {
 		return workspace.Workspace{}, err
@@ -273,6 +286,10 @@ func (h *Handler) createWorkspace(ctx context.Context, c call) (workspace.Worksp
 
 	if authErr := h.guard.Authorize(ctx, c.request, c.principal, identity.ActionUnitManage, obj); authErr != nil {
 		return workspace.Workspace{}, fmt.Errorf("authorize %s: %w", identity.ActionUnitManage, authErr)
+	}
+
+	if admitErr := admit(ctx); admitErr != nil {
+		return workspace.Workspace{}, admitErr
 	}
 
 	return h.ws.Create(ctx, c.ref)

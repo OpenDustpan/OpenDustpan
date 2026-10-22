@@ -156,6 +156,62 @@ func runTofuHTTPOnStore(t *testing.T, cli e2e.Install, store e2e.Store) {
 	runTofuHTTPForceUnlock(t, env, backendEnv)
 
 	tofuNotHomeScenario(t, env, backendEnv)
+
+	runTofuHTTPRefusedCreatesNothing(t, env)
+}
+
+// runTofuHTTPRefusedCreatesNothing proves that a POST or a LOCK that the server
+// refuses leaves no workspace: the unit list of the namespace does not name
+// the workspace that the requests used. The refusals are a POST with no lock, a
+// POST that names a lock nobody holds, and a LOCK under a manual lock of the
+// namespace.
+func runTofuHTTPRefusedCreatesNothing(t *testing.T, env *e2e.Env) {
+	t.Helper()
+
+	ctx := t.Context()
+	path := "/tofu/state/" + e2e.Namespace + "/refused-first"
+	state := `{"version":4,"serial":1,"lineage":"Q","terraform_version":"1.12.7","outputs":{},"resources":[]}`
+
+	for _, step := range []struct {
+		method, path, body string
+		want               int
+	}{
+		{http.MethodPost, path, state, http.StatusForbidden},
+		{http.MethodPost, path + "?ID=x", state, http.StatusConflict},
+	} {
+		status, body, err := env.TFEStatusA(ctx, step.method, step.path, step.body)
+		if err != nil || status != step.want {
+			t.Fatalf("%s %s: status %d, body %q, err %v, want %d", step.method, step.path, status, body, err, step.want)
+		}
+	}
+
+	nsLock := "/api/dustpan/v1/namespaces/" + e2e.Namespace + "/lock"
+
+	status, body, err := env.ServerAPIStatus(ctx, http.MethodPut, nsLock, `{"reason":"freeze"}`)
+	if err != nil || status/100 != 2 {
+		t.Fatalf("lock the namespace: status %d, body %q, err %v", status, body, err)
+	}
+
+	status, body, err = env.TFEStatusA(ctx, "LOCK", path, tofuHTTPLockInfo())
+	if err != nil || status != http.StatusLocked {
+		t.Fatalf("LOCK under the manual lock: status %d, body %q, err %v, want 423", status, body, err)
+	}
+
+	status, body, err = env.ServerAPIStatus(ctx, http.MethodDelete, nsLock, "")
+	if err != nil || status/100 != 2 {
+		t.Fatalf("unlock the namespace: status %d, body %q, err %v", status, body, err)
+	}
+
+	status, body, err = env.ServerAPIStatus(
+		ctx, http.MethodGet, "/api/dustpan/v1/namespaces/"+e2e.Namespace+"/units?pageSize=500", "",
+	)
+	if err != nil || status != http.StatusOK {
+		t.Fatalf("list the units: status %d, body %q, err %v", status, body, err)
+	}
+
+	if strings.Contains(body, "refused-first") {
+		t.Fatalf("the unit list names the workspace of the refused requests: %s", body)
+	}
 }
 
 // runTofuHTTPManualLock proves a manual lock on the workspace stops the http
