@@ -1448,8 +1448,11 @@ func claimWhenExpired(t *testing.T, s durable.Store) durable.Operation {
 }
 
 // waitPast waits until a claim of a probe operation shows that the clock of
-// the store passed at. A probe is a fresh operation of its own kind, claimed
-// with a short lease: its claim time is the store clock.
+// the store passed at. A probe is a fresh operation of its own kind: its
+// claim time is the store clock. The probe claim has a lease that does not
+// expire inside the case, so that its Complete does not fail with
+// ErrClaimLost when a slow store takes longer than a short lease between
+// the claim and the Complete.
 func waitPast(t *testing.T, s durable.Store, id durable.ID, at time.Time) {
 	t.Helper()
 
@@ -1467,7 +1470,7 @@ func waitPast(t *testing.T, s durable.Store, id durable.ID, at time.Time) {
 			t.Fatalf("start a clock probe: %v", err)
 		}
 
-		probe, err := s.Claim(ctx, claimReq("probe", shortLease, probeKind))
+		probe, err := s.Claim(ctx, claimReq("probe", longLease, probeKind))
 		if err != nil {
 			t.Fatalf("claim a clock probe: %v", err)
 		}

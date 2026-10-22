@@ -544,8 +544,16 @@ func testStaleHolderCannotAdvance(t *testing.T, s FeedStore) {
 
 	ns := newNamespace(t, s)
 
-	old := acquireLease(t, s, "siem", "ins-holder-a", 150*time.Millisecond)
+	// The first lease outlasts the first write, so a slow store cannot end
+	// it before the write. After the write, A renews with a short lease and
+	// B takes the sink once that lease ends: only the wait depends on time.
+	old := acquireLease(t, s, "siem", "ins-holder-a", 30*time.Second)
 	advance(t, s, ns.Fence(), old, 4)
+
+	short := acquireLease(t, s, "siem", "ins-holder-a", 150*time.Millisecond)
+	if short.claim.Token != old.claim.Token {
+		t.Fatalf("renew of a live claim: got %+v after %+v, want the same token", short, old)
+	}
 
 	live := acquireWhenExpired(t, s)
 	if live.claim.Token <= old.claim.Token {
