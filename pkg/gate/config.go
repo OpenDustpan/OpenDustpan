@@ -17,13 +17,27 @@ type NamespaceSource interface {
 	Get(ctx context.Context, name namespace.Name) (namespace.Namespace, error)
 }
 
+// MemberCounts says how many members of a group could approve.
+type MemberCounts struct {
+	// Enabled is the number of current members that are enabled: not disabled
+	// and not ended. A disabled principal cannot approve.
+	Enabled int64
+	// Persons is the number of those members that are persons. Only a person
+	// signs in to the console, so only a person gives the fresh authentication
+	// that an approval window asks for.
+	Persons int64
+}
+
 // ApproverDirectory reads the groups that approvers name. The config service
-// uses it to refuse an approver list that no one can meet.
+// uses it to refuse an approver list that no one can meet. Package
+// approverdirectorytest holds the conformance suite of an adapter.
 type ApproverDirectory interface {
-	// GroupMembers returns the number of current members of the group called
-	// name. It returns ErrInvalid when name is not a valid group name, and
-	// ErrNotFound when no group has that name.
-	GroupMembers(ctx context.Context, name string) (int64, error)
+	// GroupMembers returns the counts of the current members of the group
+	// called name, without regard to case. A member counts when its membership
+	// is active and its principal is not disabled. It returns ErrInvalid when
+	// name is not a valid group name, and ErrNotFound when no group has that
+	// name. A group with no member answers zero counts and no error.
+	GroupMembers(ctx context.Context, name string) (MemberCounts, error)
 }
 
 // ConfigService reads and writes the approval defaults and the approval
@@ -109,7 +123,7 @@ func (s *ConfigService) PutApprovalDefault(
 		return ApprovalDefault{}, err
 	}
 
-	if err := s.checkApprovers(ctx, d.Approvers, d.Count); err != nil {
+	if err := s.checkApprovers(ctx, d.Approvers, d.Count, d.FreshAuth); err != nil {
 		return ApprovalDefault{}, err
 	}
 
@@ -198,7 +212,7 @@ func (s *ConfigService) PutApprovalRule(
 		return ApprovalRule{}, err
 	}
 
-	if err := s.checkApprovers(ctx, r.Approvers, r.Count); err != nil {
+	if err := s.checkApprovers(ctx, r.Approvers, r.Count, r.FreshAuth); err != nil {
 		return ApprovalRule{}, err
 	}
 

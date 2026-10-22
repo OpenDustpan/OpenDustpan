@@ -1012,21 +1012,22 @@ func TestApprovalDefaultAcceptsApproversThatCanBeMet(t *testing.T) {
 }
 
 // testApprovers is the group directory of the gate tests: the groups ops,
-// platform, finance, sre and x exist with the member counts below. Any other
-// valid name names no group, and a name that is not valid is refused.
+// platform, finance, sre and x exist, each with enabled members that are all
+// persons, as many as below. Any other valid name names no group, and a name
+// that is not valid is refused.
 type testApprovers struct{}
 
 // GroupMembers implements gate.ApproverDirectory.
-func (testApprovers) GroupMembers(_ context.Context, name string) (int64, error) {
+func (testApprovers) GroupMembers(_ context.Context, name string) (gate.MemberCounts, error) {
 	members := map[string]int64{"ops": 10, "platform": 5, "finance": 5, "sre": 5, "x": 10}
 
 	if err := principal.ValidateGroupName(name); err != nil {
-		return 0, fmt.Errorf("%w: %w", gate.ErrInvalid, err)
+		return gate.MemberCounts{Enabled: 0, Persons: 0}, fmt.Errorf("%w: %w", gate.ErrInvalid, err)
 	}
 
 	if n, ok := members[name]; ok {
-		return n, nil
+		return gate.MemberCounts{Enabled: n, Persons: n}, nil
 	}
 
-	return 0, fmt.Errorf("%w: group %q", gate.ErrNotFound, name)
+	return gate.MemberCounts{Enabled: 0, Persons: 0}, fmt.Errorf("%w: group %q", gate.ErrNotFound, name)
 }
