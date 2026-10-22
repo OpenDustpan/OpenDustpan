@@ -12,7 +12,6 @@ import (
 	"log/slog"
 	"maps"
 
-	"opendustpan.org/opendustpan/internal/pulumijournal"
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/namespace"
 )
@@ -28,13 +27,6 @@ type builtOutput struct {
 	Version    int             `json:"version"`
 	Features   []string        `json:"features"`
 	Deployment json.RawMessage `json:"deployment"`
-}
-
-// journalBatchBody is the shape of one stored batch: the entries in the
-// order the CLI sent them. The build replays the entries of every batch in
-// arrival order.
-type journalBatchBody struct {
-	Entries []json.RawMessage `json:"entries"`
 }
 
 // builtSave groups one built checkpoint with the write it needs: the
@@ -87,18 +79,13 @@ func (s *Updates) buildJournalCheckpoint(
 		return zero, s.mapReplayBound(u.ID, err)
 	}
 
-	combined, err := combineBatches(batches)
-	if err != nil {
-		return zero, fmt.Errorf("build checkpoint of update %s: %w", u.ID, err)
-	}
-
 	open := func(context.Context) (io.ReadCloser, error) {
 		return io.NopCloser(bytes.NewReader(base)), nil
 	}
 
 	var out bytes.Buffer
 
-	if err := s.replayer.Replay(buildCtx, open, bytes.NewReader(combined), &out); err != nil {
+	if err := s.replayer.Replay(buildCtx, open, batches, &out); err != nil {
 		if errors.Is(buildCtx.Err(), context.DeadlineExceeded) && ctx.Err() == nil {
 			return zero, fmt.Errorf("build checkpoint of update %s: %w", u.ID, ErrJournalBuildTimeout)
 		}
@@ -113,10 +100,7 @@ func (s *Updates) buildJournalCheckpoint(
 // limit and the one command that helps. Any other error passes through with
 // the update ID.
 func (s *Updates) mapReplayBound(id UpdateID, err error) error {
-	if errors.Is(err, pulumijournal.ErrTooManyEntries) ||
-		errors.Is(err, pulumijournal.ErrNewStateTooLarge) ||
-		errors.Is(err, pulumijournal.ErrLinkIndexTooLarge) ||
-		errors.Is(err, pulumijournal.ErrAddedBytesTooLarge) {
+	if bound, ok := errors.AsType[ReplayBound](err); ok && bound != nil {
 		return fmt.Errorf(
 			"build checkpoint of update %s: %w: %w: split the update into smaller updates and run `pulumi up` again",
 			id,
@@ -132,14 +116,16 @@ func (s *Updates) mapReplayBound(id UpdateID, err error) error {
 // the one command that helps. It reports false when err holds no replay
 // bound, so the caller answers the error text itself.
 func ReplayBoundMessage(err error) (string, bool) {
-	var bound *pulumijournal.BoundError
-	if !errors.As(err, &bound) {
+	bound, ok := errors.AsType[ReplayBound](err)
+	if !ok {
 		return "", false
 	}
 
+	limit := bound.ReplayBound()
+
 	return fmt.Sprintf(
 		"This update has %d %s, more than the limit of %d: run `pulumi up` with fewer resources.",
-		bound.Count, bound.Bound, bound.Limit,
+		limit.Count, limit.Bound, limit.Limit,
 	), true
 }
 
@@ -186,28 +172,6 @@ func (s *Updates) baseDeployment(ctx context.Context, bl *scopedBlobs, cp Checkp
 	}
 
 	return innerDeployment(resolved).Deployment, nil
-}
-
-// combineBatches merges the entries of every batch body into one batch body,
-// in arrival order. The entries of a batch keep the order of the body.
-func combineBatches(bodies [][]byte) ([]byte, error) {
-	entries := make([]json.RawMessage, 0)
-
-	for _, body := range bodies {
-		var batch journalBatchBody
-		if err := json.Unmarshal(body, &batch); err != nil {
-			return nil, fmt.Errorf("decode journal batch: %w", err)
-		}
-
-		entries = append(entries, batch.Entries...)
-	}
-
-	combined, err := json.Marshal(journalBatchBody{Entries: entries})
-	if err != nil {
-		return nil, fmt.Errorf("encode journal batches: %w", err)
-	}
-
-	return combined, nil
 }
 
 // builtCheckpoint splits the replay output into the checkpoint it stores:

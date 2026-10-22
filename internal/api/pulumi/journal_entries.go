@@ -44,6 +44,10 @@ func (h *Handler) journalEntries(w http.ResponseWriter, r *http.Request, _ ident
 		return
 	}
 
+	// Defense in depth: the journal writer of the update service refuses a
+	// large batch with more than one entry too; this check stays so that the
+	// adapter answers 413 before the service decodes the body, and so that a
+	// service without that check cannot take one.
 	if int64(len(body)) > limit && !h.singleEntry(w, r, body, limit) {
 		return
 	}

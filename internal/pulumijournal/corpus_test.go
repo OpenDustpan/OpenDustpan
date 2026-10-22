@@ -182,7 +182,7 @@ func corpusReplay(t *testing.T, base string, entries []pulumijournal.JournalEntr
 	err = pulumijournal.NewReplayer(now, cliVersion).Replay(
 		t.Context(),
 		func(_ context.Context) (io.ReadCloser, error) { return open(), nil },
-		bytes.NewReader(body),
+		[][]byte{body},
 		&out,
 	)
 	if err != nil {

@@ -53,7 +53,7 @@ type changeAfterFirstReplayer struct {
 
 // Replay implements stack.JournalReplayer.
 func (r *changeAfterFirstReplayer) Replay(
-	ctx context.Context, openBase func(context.Context) (io.ReadCloser, error), entries io.Reader, out io.Writer,
+	ctx context.Context, openBase func(context.Context) (io.ReadCloser, error), batches [][]byte, out io.Writer,
 ) error {
 	r.mu.Lock()
 	r.calls++
@@ -61,7 +61,7 @@ func (r *changeAfterFirstReplayer) Replay(
 	r.mu.Unlock()
 
 	var buf bytes.Buffer
-	if err := r.inner.Replay(ctx, openBase, entries, &buf); err != nil {
+	if err := r.inner.Replay(ctx, openBase, batches, &buf); err != nil {
 		return err
 	}
 
