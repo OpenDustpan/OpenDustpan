@@ -447,3 +447,156 @@ records the decisions:
   it now.
 
 The steps 7 and 8 of the move plan are no longer conditional on question 1.
+
+## Appendix: the verdict for each package
+
+| Package | Lines | Importers | Verdict |
+| --- | ---: | ---: | --- |
+| `access` | 5460 | 9 | split |
+| `access/accesstest` | 5537 | 0 | SDK: suite |
+| `accesstoken` | 2234 | 12 | split |
+| `accesstoken/accesstokentest` | 1651 | 0 | SDK: suite |
+| `agent` | 3458 | 1 | internal |
+| `agent/agenttest` | 2994 | 0 | internal |
+| `audit` | 4174 | 100 | split |
+| `audit/audittest` | 3197 | 0 | SDK: suite |
+| `backup` | 7198 | 8 | split |
+| `blob` | 322 | 28 | SDK |
+| `blob/blobfault` | 223 | 0 | internal |
+| `blob/blobtest` | 849 | 0 | SDK: suite |
+| `blob/cache` | 386 | 1 | internal: adapter (Q1) |
+| `blob/fs` | 342 | 4 | internal: adapter (Q1) |
+| `blob/s3` | 1571 | 1 | internal: adapter (Q1) |
+| `breakglass` | 823 | 2 | split |
+| `breakglass/breakglasstest` | 827 | 0 | internal |
+| `calendar` | 1046 | 5 | internal |
+| `calendar/calendartest` | 1140 | 0 | internal |
+| `catalog` | 3758 | 1 | internal |
+| `catalog/catalogtest` | 1343 | 0 | internal |
+| `chatops` | 703 | 1 | internal: no caller |
+| `chatops/chatopstest` | 971 | 0 | internal: no caller |
+| `collection` | 381 | 18 | split |
+| `collection/collectiontest` | 842 | 0 | SDK: suite |
+| `cost` | 1087 | 1 | internal: no caller |
+| `cost/costtest` | 775 | 0 | internal: no caller |
+| `cron` | 498 | 2 | internal |
+| `dependency` | 209 | 1 | internal: no caller |
+| `dependency/dependencytest` | 305 | 0 | internal: no caller |
+| `drift` | 636 | 8 | split |
+| `drift/drifttest` | 1069 | 1 | SDK: suite |
+| `durable` | 1521 | 21 | split |
+| `durable/durabletest` | 2820 | 0 | SDK: suite |
+| `dustpan` | 10784 | 3 | SDK: entry point |
+| `egress` | 455 | 11 | SDK |
+| `egress/egresshttp` | 165 | 3 | internal |
+| `forge` | 2221 | 9 | split |
+| `forge/connectiontest` | 1382 | 0 | SDK: suite |
+| `forge/forgetest` | 658 | 0 | SDK: suite |
+| `forge/github` | 694 | 1 | internal: adapter (Q1) |
+| `freeze` | 781 | 1 | internal |
+| `freeze/freezetest` | 1222 | 0 | internal |
+| `gate` | 4668 | 13 | split |
+| `gate/cedargo` | 965 | 1 | internal: adapter (Q1) |
+| `gate/gatetest` | 4688 | 1 | SDK: suite |
+| `gate/jobgate` | 202 | 1 | internal: adapter (Q1) |
+| `graph` | 1121 | 16 | split |
+| `graph/graphtest` | 249 | 0 | internal |
+| `history` | 853 | 17 | split |
+| `history/historytest` | 1326 | 0 | internal |
+| `idempotency` | 309 | 15 | SDK |
+| `idempotency/idempotencytest` | 830 | 0 | SDK: suite |
+| `identity` | 1250 | 64 | SDK |
+| `identity/identitytest` | 865 | 0 | SDK: suite |
+| `incident` | 569 | 1 | internal: no caller |
+| `incident/incidenttest` | 1012 | 0 | internal: no caller |
+| `installation` | 129 | 8 | SDK |
+| `inventory` | 1362 | 19 | split |
+| `inventory/inventorytest` | 1073 | 0 | SDK: suite |
+| `ipallow` | 497 | 8 | split |
+| `job` | 6778 | 26 | split |
+| `job/jobtest` | 7195 | 0 | SDK: suite |
+| `launcher` | 714 | 0 | internal: no caller |
+| `logsink` | 347 | 9 | SDK |
+| `logsink/file` | 141 | 1 | internal: adapter (Q1) |
+| `logsink/logsinktest` | 221 | 0 | SDK: suite |
+| `logsink/objectstore` | 269 | 1 | internal: adapter (Q1) |
+| `logsink/slogsink` | 362 | 1 | internal: adapter (Q1) |
+| `logsink/syslog` | 481 | 1 | internal: adapter (Q1) |
+| `logsink/webhook` | 250 | 1 | internal: adapter (Q1) |
+| `maintenance` | 994 | 20 | split |
+| `manuallock` | 622 | 13 | split |
+| `manuallock/manuallocktest` | 1903 | 0 | SDK: suite |
+| `namespace` | 395 | 119 | split |
+| `notify` | 2367 | 12 | split |
+| `notify/chat` | 791 | 3 | internal: adapter (Q1) |
+| `notify/chat/chattest` | 559 | 0 | internal |
+| `notify/chat/slack` | 335 | 1 | internal: adapter (Q1) |
+| `notify/notifytest` | 3521 | 1 | SDK: suite |
+| `notify/sinks` | 912 | 2 | internal: adapter (Q1) |
+| `notify/webhook` | 286 | 1 | internal: adapter (Q1) |
+| `objectcontext` | 2204 | 7 | split |
+| `objectcontext/objectcontexttest` | 802 | 0 | SDK: suite |
+| `oncall` | 1001 | 1 | internal: no caller |
+| `oncall/oncalltest` | 1042 | 0 | internal: no caller |
+| `policy` | 703 | 3 | internal |
+| `policy/policytest` | 268 | 0 | internal |
+| `preferences` | 1162 | 6 | split |
+| `preferences/preferencestest` | 1055 | 0 | SDK: suite |
+| `principal` | 1907 | 24 | split |
+| `principal/principaltest` | 1967 | 1 | SDK: suite |
+| `profile` | 2070 | 7 | split |
+| `profile/profiletest` | 882 | 0 | SDK: suite |
+| `quota` | 427 | 3 | internal |
+| `quota/quotatest` | 580 | 0 | internal |
+| `registry` | 754 | 11 | SDK |
+| `registry/pgpfixture` | 201 | 0 | internal |
+| `registry/pgpverify` | 374 | 1 | internal: adapter (Q1) |
+| `registry/registrytest` | 1272 | 0 | SDK: suite |
+| `registry/releasecheck` | 234 | 2 | internal |
+| `registry/service` | 1177 | 2 | internal |
+| `runner` | 2091 | 8 | split |
+| `runner/protocol` | 479 | 2 | internal |
+| `runner/runnertest` | 1536 | 0 | SDK: suite |
+| `savedview` | 578 | 7 | split |
+| `savedview/savedviewtest` | 1135 | 0 | SDK: suite |
+| `scopeaudit` | 199 | 10 | internal |
+| `secret` | 2384 | 23 | split |
+| `secret/secrettest` | 2619 | 0 | SDK: suite |
+| `session` | 2289 | 12 | split |
+| `session/sessiontest` | 1969 | 0 | SDK: suite |
+| `source` | 711 | 0 | internal: no caller |
+| `stack` | 7248 | 15 | split |
+| `stack/stackhistorytest` | 270 | 0 | SDK: suite |
+| `stack/stacktest` | 54 | 0 | SDK: suite |
+| `stepup` | 555 | 1 | internal: no caller |
+| `stepup/stepuptest` | 200 | 0 | internal: no caller |
+| `store/internal/baseline` | 0 | 0 | internal already, moves with the store (Q1) |
+| `store/internal/codec` | 2633 | 2 | internal already, moves with the store (Q1) |
+| `store/internal/devstrip` | 903 | 2 | internal already, moves with the store (Q1) |
+| `store/internal/driftstore` | 250 | 2 | internal already, moves with the store (Q1) |
+| `store/internal/gatestore` | 2189 | 2 | internal already, moves with the store (Q1) |
+| `store/internal/githoststore` | 115 | 2 | internal already, moves with the store (Q1) |
+| `store/internal/jobstore` | 2795 | 3 | internal already, moves with the store (Q1) |
+| `store/internal/migrate` | 315 | 2 | internal already, moves with the store (Q1) |
+| `store/internal/registrystore` | 188 | 2 | internal already, moves with the store (Q1) |
+| `store/internal/sinkstore` | 187 | 2 | internal already, moves with the store (Q1) |
+| `store/internal/viewstore` | 113 | 2 | internal already, moves with the store (Q1) |
+| `store/postgres` | 26310 | 3 | internal: adapter (Q1) |
+| `store/postgres/internal/db` | 17994 | 1 | internal already, moves with the store (Q1) |
+| `store/schema` | 516 | 7 | internal: adapter (Q1) |
+| `store/sqlite` | 28355 | 2 | internal: adapter (Q1) |
+| `store/sqlite/internal/db` | 17692 | 1 | internal already, moves with the store (Q1) |
+| `store/storefault` | 1001 | 0 | internal |
+| `store/storetest` | 31272 | 0 | SDK: suite |
+| `tempadmin` | 919 | 9 | split |
+| `tempadmin/tempadmintest` | 750 | 0 | SDK: suite |
+| `trigger` | 595 | 1 | internal |
+| `trigger/triggertest` | 1332 | 0 | internal |
+| `unitimport` | 1013 | 6 | internal |
+| `unitimport/unitimporttest` | 1765 | 0 | internal |
+| `unitimport/upload` | 670 | 0 | internal |
+| `unmanaged` | 1920 | 1 | internal |
+| `unmanaged/unmanagedtest` | 1960 | 0 | internal |
+| `workspace` | 10366 | 16 | split |
+| `workspace/workspacehistorytest` | 677 | 0 | SDK: suite |
+| `workspace/workspacetest` | 54 | 1 | SDK: suite |
