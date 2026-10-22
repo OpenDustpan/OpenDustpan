@@ -1337,8 +1337,8 @@ _Avoid_: Grace period, undo window
 ### Context, graph and Sweep
 
 **Sweep**:
-The feature that finds unmanaged resources, and one run of it (ADR 163). A sweep is a cloud sweep or a state check. The console shows both kinds together. As the name of the feature, write Sweep. The Go names of `pkg/unmanaged` keep "scan", for example `Scan` and `ScanStore`, because they are internal.
-_Avoid_: Scan (except in the Go names of `pkg/unmanaged`), discovery, crawl, sweep for anything but the Sweep feature (write "retention expiry" or "orphan cleanup")
+The feature that finds unmanaged resources, and one run of it (ADR 163). A sweep is a cloud sweep or a state check. The console shows both kinds together. As the name of the feature, write Sweep. The Go names of `internal/unmanaged` keep "scan", for example `Scan` and `ScanStore`, because they are internal.
+_Avoid_: Scan (except in the Go names of `internal/unmanaged`), discovery, crawl, sweep for anything but the Sweep feature (write "retention expiry" or "orphan cleanup")
 
 **Cloud sweep**:
 A sweep that reads the cloud on a runner of the team, never in the server (ADR 164). A runner of a pool of the purpose `sweeps` claims the sweep and runs the command of its sweep target. The command runs with the workload identity of the runner host. The runner uploads a sweep report, and the server matches it against the resource index. Only a cloud sweep can find a resource that is not in any unit. A sweep is not a job, and the server holds no cloud credential for it.
