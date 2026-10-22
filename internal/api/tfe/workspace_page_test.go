@@ -54,6 +54,29 @@ func (l limitedLike) ListObjects(
 	return l.inner.ListObjects(ctx, p, action)
 }
 
+// refusingNamespace is an exact authorizer with an All scope that refuses
+// unit:read on every unit of every namespace, as a gate does for an address
+// that the namespace does not allow.
+type refusingNamespace struct{}
+
+func (refusingNamespace) ScopeExact() bool { return true }
+
+func (refusingNamespace) Authorize(
+	_ context.Context, p identity.Principal, action identity.Action, obj identity.Object,
+) error {
+	if action == identity.ActionUnitRead {
+		return fmt.Errorf("%w: %s may not %s on %q", identity.ErrDenied, p.Subject, action, obj.String())
+	}
+
+	return nil
+}
+
+func (refusingNamespace) ListObjects(context.Context, identity.Principal, identity.Action) (identity.Scope, error) {
+	return identity.Scope{ //nolint:exhaustruct_v5 // An All scope only.
+		All: true,
+	}, nil
+}
+
 func (a scopedAuthorizer) Authorize(
 	_ context.Context, p identity.Principal, action identity.Action, obj identity.Object,
 ) error {
@@ -261,5 +284,27 @@ func checkDeniedCount(t *testing.T, authz identity.Authorizer, want deniedWant) 
 
 	if queries.Load() > want.queries {
 		t.Fatalf("store page queries = %d, want at most %d", queries.Load(), want.queries)
+	}
+}
+
+// TestListWorkspacesRefusedNamespaceNoStoreCount proves that an authorizer
+// with an exact All scope that refuses unit:read in the namespace gets no
+// store page and no store count, also for a page after the last page, where
+// no row is left for the check of the page to drop.
+func TestListWorkspacesRefusedNamespaceNoStoreCount(t *testing.T) {
+	t.Parallel()
+
+	for _, query := range []string{"", "page[number]=999", "page[number]=2&page[size]=1"} {
+		queries := &atomic.Int64{}
+		ws := queryCounting{pagingWorkspaces: newPagingWorkspaces(t), queries: queries}
+
+		doc := getListPage(t, newPagingHandlerWith(t, refusingNamespace{}, ws), "/api/v2/organizations/acme/workspaces?"+query)
+		if got := listNames(doc); len(got) != 0 || doc.Meta.Pagination.TotalCount != 0 {
+			t.Fatalf("%q: list = %v of %d, want none of 0", query, got, doc.Meta.Pagination.TotalCount)
+		}
+
+		if queries.Load() != 0 {
+			t.Fatalf("%q: store page queries = %d, want 0", query, queries.Load())
+		}
 	}
 }

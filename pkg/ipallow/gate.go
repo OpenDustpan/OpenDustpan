@@ -48,11 +48,13 @@ func (g Gate) Authorize(ctx context.Context, p identity.Principal, action identi
 	return g.checkNamespace(ctx, obj.Namespace())
 }
 
-// ScopeExact reports that the scope is exact when the scope of Next is exact.
-// The gate refuses a whole namespace, and a list of one namespace
-// Authorizes that namespace through the gate first.
+// ScopeExact reports that the scope is exact when the gate is off and the
+// scope of Next is exact. An enabled gate says no: it keeps a scope with All
+// set unchanged, and Authorize still refuses each object in a namespace whose
+// list does not hold the client address. A caller that needs an exact scope
+// checks each object instead.
 func (g Gate) ScopeExact() bool {
-	return identity.HasExactScope(g.Next)
+	return !g.Enabled && identity.HasExactScope(g.Next)
 }
 
 // ListObjects asks Next, then leaves out each object in a namespace whose
