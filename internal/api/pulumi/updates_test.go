@@ -484,6 +484,9 @@ type updateFixture struct {
 	handler *pulumi.Handler
 	updates *stack.Updates
 	ref     stack.Ref
+	// mem is the update store of the fixture, or nil for a fixture that
+	// builds its own store.
+	mem *memUpdateStore
 }
 
 // newUpdateFixture builds a Handler whose update routes work end to end.
@@ -621,7 +624,7 @@ func newUpdateFixtureWithAuthenticator(
 		t.Fatalf("parse ref: %v", err)
 	}
 
-	return updateFixture{handler: handler, updates: updates, ref: ref}
+	return updateFixture{handler: handler, updates: updates, ref: ref, mem: mem}
 }
 
 // allowAll authorizes every action.
