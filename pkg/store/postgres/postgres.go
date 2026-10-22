@@ -59,6 +59,10 @@ type Store struct {
 	// Tests set it to prove the live access tables stay locked across that
 	// window. Nil in production.
 	keepAccessHook func(ctx context.Context, tx pgx.Tx, live string)
+	// betweenProfileReads, when set, runs once in the next read of a profile
+	// revision, between the read of the profile and the read of the revision,
+	// inside the snapshot. Tests run a restore swap there. Nil in production.
+	betweenProfileReads func()
 	// beforeLockDelete, when set, runs in the removal of a manual lock between
 	// the read of the lock and the delete, inside the transaction. Tests change
 	// the lock there to reach the changed-lock check. Nil in production.
@@ -168,7 +172,7 @@ func Open(ctx context.Context, url string, opts ...Option) (*Store, error) {
 
 	s := &Store{
 		pool: pool, queries: db.New(pool), stagingMu: sync.Mutex{}, stagingSchema: "", keepAccessHook: nil,
-		beforeLockDelete: nil, stateLockWait: 0,
+		betweenProfileReads: nil, beforeLockDelete: nil, stateLockWait: 0,
 		binaryVersion: "", gate: nil, kind: "", noMigrate: false, logger: slog.New(slog.DiscardHandler),
 	}
 	s.gate = gatestore.New(gateRunner{s: s}, gatestore.WithKindReader(s))
@@ -310,7 +314,26 @@ func (s *Store) CreateStack(ctx context.Context, st stack.Stack, fence namespace
 
 // GetStack implements stack.Store.
 func (s *Store) GetStack(ctx context.Context, ref stack.Ref) (stack.Stack, error) {
-	row, err := s.queries.GetStack(ctx, db.GetStackParams{
+	var st stack.Stack
+
+	// One snapshot, so the stack and its tags come from one state.
+	err := s.inSnapshotTx(ctx, func(q *db.Queries) error {
+		var err error
+
+		st, err = getStack(ctx, q, ref)
+
+		return err
+	})
+	if err != nil {
+		return stack.Stack{}, err
+	}
+
+	return st, nil
+}
+
+// getStack is GetStack on the queries of one snapshot.
+func getStack(ctx context.Context, q *db.Queries, ref stack.Ref) (stack.Stack, error) {
+	row, err := q.GetStack(ctx, db.GetStackParams{
 		Namespace: ref.Namespace.String(),
 		Project:   ref.Project.String(),
 		Name:      ref.Stack.String(),
@@ -323,7 +346,7 @@ func (s *Store) GetStack(ctx context.Context, ref stack.Ref) (stack.Stack, error
 		return stack.Stack{}, fmt.Errorf("select stack: %w", err)
 	}
 
-	tags, err := stackTags(ctx, s.queries, row.ID)
+	tags, err := stackTags(ctx, q, row.ID)
 	if err != nil {
 		return stack.Stack{}, err
 	}
@@ -712,8 +735,27 @@ func softDeleteStack(
 // ListStacks implements stack.Store. Tags come from one query for the whole
 // namespace, not one query per stack.
 func (s *Store) ListStacks(ctx context.Context, filter stack.Filter) ([]stack.Stack, error) {
+	var out []stack.Stack
+
+	// One snapshot, so the stacks and their tags come from one state.
+	err := s.inSnapshotTx(ctx, func(q *db.Queries) error {
+		var err error
+
+		out, err = listStacks(ctx, q, filter)
+
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return out, nil
+}
+
+// listStacks is ListStacks on the queries of one snapshot.
+func listStacks(ctx context.Context, q *db.Queries, filter stack.Filter) ([]stack.Stack, error) {
 	if filter.Project == "" {
-		rows, err := s.queries.ListStacksInNamespace(ctx, filter.Namespace.String())
+		rows, err := q.ListStacksInNamespace(ctx, filter.Namespace.String())
 		if err != nil {
 			return nil, fmt.Errorf("select stacks: %w", err)
 		}
@@ -724,7 +766,7 @@ func (s *Store) ListStacks(ctx context.Context, filter stack.Filter) ([]stack.St
 			return out, nil
 		}
 
-		tags, err := stackTagMap(ctx, s.queries, filter.Namespace.String())
+		tags, err := stackTagMap(ctx, q, filter.Namespace.String())
 		if err != nil {
 			return nil, err
 		}
@@ -744,7 +786,7 @@ func (s *Store) ListStacks(ctx context.Context, filter stack.Filter) ([]stack.St
 		return out, nil
 	}
 
-	rows, err := s.queries.ListStacksInProject(ctx, db.ListStacksInProjectParams{
+	rows, err := q.ListStacksInProject(ctx, db.ListStacksInProjectParams{
 		Namespace: filter.Namespace.String(),
 		Project:   filter.Project.String(),
 	})
@@ -758,7 +800,7 @@ func (s *Store) ListStacks(ctx context.Context, filter stack.Filter) ([]stack.St
 		return out, nil
 	}
 
-	tags, err := stackTagMap(ctx, s.queries, filter.Namespace.String())
+	tags, err := stackTagMap(ctx, q, filter.Namespace.String())
 	if err != nil {
 		return nil, err
 	}

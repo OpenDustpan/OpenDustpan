@@ -91,12 +91,28 @@ func isForeignKeyViolation(err error) bool {
 
 // GetUpdate implements stack.UpdateStore.
 func (s *Store) GetUpdate(ctx context.Context, ref stack.Ref, id stack.UpdateID) (stack.Update, error) {
-	stackID, err := s.stackID(ctx, ref)
+	var out stack.Update
+
+	// One snapshot, so the statements of the read see one state.
+	err := s.inSnapshotTx(ctx, func(q *db.Queries) error {
+		var err error
+
+		out, err = getUpdateWith(ctx, q, ref, id)
+
+		return err
+	})
+
+	return out, err
+}
+
+// getUpdateWith is GetUpdate on the queries of one snapshot.
+func getUpdateWith(ctx context.Context, q *db.Queries, ref stack.Ref, id stack.UpdateID) (stack.Update, error) {
+	stackID, err := lookupStackID(ctx, q, ref)
 	if err != nil {
 		return stack.Update{}, err
 	}
 
-	row, err := s.queries.GetUpdate(ctx, db.GetUpdateParams{StackID: stackID, ID: id.String()})
+	row, err := q.GetUpdate(ctx, db.GetUpdateParams{StackID: stackID, ID: id.String()})
 	if errors.Is(err, pgx.ErrNoRows) {
 		return stack.Update{}, stack.ErrUpdateNotFound
 	}
@@ -213,12 +229,28 @@ func endMutatingUpdate(ctx context.Context, q *db.Queries, u stack.Update, stack
 
 // ActiveUpdate implements stack.UpdateStore.
 func (s *Store) ActiveUpdate(ctx context.Context, ref stack.Ref) (stack.Update, error) {
-	stackID, err := s.stackID(ctx, ref)
+	var out stack.Update
+
+	// One snapshot, so the statements of the read see one state.
+	err := s.inSnapshotTx(ctx, func(q *db.Queries) error {
+		var err error
+
+		out, err = activeUpdateWith(ctx, q, ref)
+
+		return err
+	})
+
+	return out, err
+}
+
+// activeUpdateWith is ActiveUpdate on the queries of one snapshot.
+func activeUpdateWith(ctx context.Context, q *db.Queries, ref stack.Ref) (stack.Update, error) {
+	stackID, err := lookupStackID(ctx, q, ref)
 	if err != nil {
 		return stack.Update{}, err
 	}
 
-	row, err := s.queries.ActiveUpdate(ctx, stackID)
+	row, err := q.ActiveUpdate(ctx, stackID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return stack.Update{}, stack.ErrUpdateNotFound
 	}
@@ -262,7 +294,26 @@ func (s *Store) CountRunningJournaledUpdates(ctx context.Context) (int64, error)
 
 // ListUpdates implements stack.UpdateStore.
 func (s *Store) ListUpdates(ctx context.Context, ref stack.Ref, page stack.Page) ([]stack.Update, error) {
-	stackID, err := s.stackID(ctx, ref)
+	var out []stack.Update
+
+	// One snapshot, so the statements of the read see one state.
+	err := s.inSnapshotTx(ctx, func(q *db.Queries) error {
+		var err error
+
+		out, err = listUpdatesWith(ctx, q, ref, page)
+
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return out, nil
+}
+
+// listUpdatesWith is ListUpdates on the queries of one snapshot.
+func listUpdatesWith(ctx context.Context, q *db.Queries, ref stack.Ref, page stack.Page) ([]stack.Update, error) {
+	stackID, err := lookupStackID(ctx, q, ref)
 	if errors.Is(err, stack.ErrUpdateNotFound) {
 		return nil, nil
 	}
@@ -271,7 +322,7 @@ func (s *Store) ListUpdates(ctx context.Context, ref stack.Ref, page stack.Page)
 		return nil, err
 	}
 
-	rows, err := s.queries.ListUpdates(ctx, db.ListUpdatesParams{
+	rows, err := q.ListUpdates(ctx, db.ListUpdatesParams{
 		StackID: stackID,
 		Limit:   clampInt32(page.Limit),
 		Offset:  clampInt32(page.Offset),
@@ -396,7 +447,23 @@ func writeCheckpoint(
 // LatestCheckpoint implements stack.CheckpointStore. It returns the
 // checkpoint of the stack's highest version that has one.
 func (s *Store) LatestCheckpoint(ctx context.Context, ref stack.Ref) (stack.Checkpoint, error) {
-	stackID, err := s.stackID(ctx, ref)
+	var out stack.Checkpoint
+
+	// One snapshot, so the statements of the read see one state.
+	err := s.inSnapshotTx(ctx, func(q *db.Queries) error {
+		var err error
+
+		out, err = latestCheckpointWith(ctx, q, ref)
+
+		return err
+	})
+
+	return out, err
+}
+
+// latestCheckpointWith is LatestCheckpoint on the queries of one snapshot.
+func latestCheckpointWith(ctx context.Context, q *db.Queries, ref stack.Ref) (stack.Checkpoint, error) {
+	stackID, err := lookupStackID(ctx, q, ref)
 	if errors.Is(err, stack.ErrUpdateNotFound) {
 		return stack.Checkpoint{}, stack.ErrNoState
 	}
@@ -405,7 +472,7 @@ func (s *Store) LatestCheckpoint(ctx context.Context, ref stack.Ref) (stack.Chec
 		return stack.Checkpoint{}, err
 	}
 
-	row, err := s.queries.GetLatestCheckpoint(ctx, stackID)
+	row, err := q.GetLatestCheckpoint(ctx, stackID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return stack.Checkpoint{}, stack.ErrNoState
 	}
@@ -436,7 +503,25 @@ func (s *Store) LatestCheckpoint(ctx context.Context, ref stack.Ref) (stack.Chec
 func (s *Store) CheckpointByVersion(
 	ctx context.Context, ref stack.Ref, version int64,
 ) (stack.Checkpoint, error) {
-	stackID, err := s.stackID(ctx, ref)
+	var out stack.Checkpoint
+
+	// One snapshot, so the statements of the read see one state.
+	err := s.inSnapshotTx(ctx, func(q *db.Queries) error {
+		var err error
+
+		out, err = checkpointByVersionWith(ctx, q, ref, version)
+
+		return err
+	})
+
+	return out, err
+}
+
+// checkpointByVersionWith is CheckpointByVersion on the queries of one snapshot.
+func checkpointByVersionWith(
+	ctx context.Context, q *db.Queries, ref stack.Ref, version int64,
+) (stack.Checkpoint, error) {
+	stackID, err := lookupStackID(ctx, q, ref)
 	if errors.Is(err, stack.ErrUpdateNotFound) {
 		return stack.Checkpoint{}, stack.ErrNoState
 	}
@@ -445,7 +530,7 @@ func (s *Store) CheckpointByVersion(
 		return stack.Checkpoint{}, err
 	}
 
-	row, err := s.queries.GetCheckpointByVersion(ctx, db.GetCheckpointByVersionParams{
+	row, err := q.GetCheckpointByVersion(ctx, db.GetCheckpointByVersionParams{
 		StackID: stackID,
 		Version: version,
 	})
@@ -479,7 +564,25 @@ func (s *Store) CheckpointByVersion(
 func (s *Store) CheckpointByUpdate(
 	ctx context.Context, ref stack.Ref, id stack.UpdateID,
 ) (stack.Checkpoint, error) {
-	stackID, err := s.stackID(ctx, ref)
+	var out stack.Checkpoint
+
+	// One snapshot, so the statements of the read see one state.
+	err := s.inSnapshotTx(ctx, func(q *db.Queries) error {
+		var err error
+
+		out, err = checkpointByUpdateWith(ctx, q, ref, id)
+
+		return err
+	})
+
+	return out, err
+}
+
+// checkpointByUpdateWith is CheckpointByUpdate on the queries of one snapshot.
+func checkpointByUpdateWith(
+	ctx context.Context, q *db.Queries, ref stack.Ref, id stack.UpdateID,
+) (stack.Checkpoint, error) {
+	stackID, err := lookupStackID(ctx, q, ref)
 	if errors.Is(err, stack.ErrUpdateNotFound) {
 		return stack.Checkpoint{}, stack.ErrNoState
 	}
@@ -488,7 +591,7 @@ func (s *Store) CheckpointByUpdate(
 		return stack.Checkpoint{}, err
 	}
 
-	row, err := s.queries.GetCheckpointByUpdate(ctx, db.GetCheckpointByUpdateParams{
+	row, err := q.GetCheckpointByUpdate(ctx, db.GetCheckpointByUpdateParams{
 		StackID:  stackID,
 		UpdateID: id.String(),
 	})
@@ -520,7 +623,26 @@ func (s *Store) CheckpointByUpdate(
 
 // ReferencedCheckpointKeys implements stack.CheckpointStore.
 func (s *Store) ReferencedCheckpointKeys(ctx context.Context, ref stack.Ref) ([]blob.Key, error) {
-	stackID, err := s.stackID(ctx, ref)
+	var out []blob.Key
+
+	// One snapshot, so the statements of the read see one state.
+	err := s.inSnapshotTx(ctx, func(q *db.Queries) error {
+		var err error
+
+		out, err = referencedCheckpointKeysWith(ctx, q, ref)
+
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return out, nil
+}
+
+// referencedCheckpointKeysWith is ReferencedCheckpointKeys on the queries of one snapshot.
+func referencedCheckpointKeysWith(ctx context.Context, q *db.Queries, ref stack.Ref) ([]blob.Key, error) {
+	stackID, err := lookupStackID(ctx, q, ref)
 	if errors.Is(err, stack.ErrUpdateNotFound) {
 		return nil, nil
 	}
@@ -529,7 +651,7 @@ func (s *Store) ReferencedCheckpointKeys(ctx context.Context, ref stack.Ref) ([]
 		return nil, err
 	}
 
-	rows, err := s.queries.ListCheckpointBlobKeys(ctx, stackID)
+	rows, err := q.ListCheckpointBlobKeys(ctx, stackID)
 	if err != nil {
 		return nil, fmt.Errorf("select checkpoint blob keys: %w", err)
 	}
@@ -588,28 +710,38 @@ func (s *Store) AppendEvents(ctx context.Context, batch stack.EventBatch, fence 
 func (s *Store) ListEvents(
 	ctx context.Context, ref stack.Ref, id stack.UpdateID, after int64, limit int,
 ) ([]stack.Event, error) {
-	stackID, err := s.stackID(ctx, ref)
-	if err != nil {
-		return nil, err
-	}
+	var rows []db.ListEventsRow
 
-	exists, err := s.queries.UpdateExists(ctx, db.UpdateExistsParams{StackID: stackID, ID: id.String()})
-	if err != nil {
-		return nil, fmt.Errorf("check update: %w", err)
-	}
+	// One snapshot, so the stack, the update and its events come from one state.
+	err := s.inSnapshotTx(ctx, func(q *db.Queries) error {
+		stackID, err := lookupStackID(ctx, q, ref)
+		if err != nil {
+			return err
+		}
 
-	if !exists {
-		return nil, stack.ErrUpdateNotFound
-	}
+		exists, err := q.UpdateExists(ctx, db.UpdateExistsParams{StackID: stackID, ID: id.String()})
+		if err != nil {
+			return fmt.Errorf("check update: %w", err)
+		}
 
-	rows, err := s.queries.ListEvents(ctx, db.ListEventsParams{
-		StackID:  stackID,
-		UpdateID: id.String(),
-		Sequence: after,
-		Limit:    clampInt32(limit),
+		if !exists {
+			return stack.ErrUpdateNotFound
+		}
+
+		rows, err = q.ListEvents(ctx, db.ListEventsParams{
+			StackID:  stackID,
+			UpdateID: id.String(),
+			Sequence: after,
+			Limit:    clampInt32(limit),
+		})
+		if err != nil {
+			return fmt.Errorf("select events: %w", err)
+		}
+
+		return nil
 	})
 	if err != nil {
-		return nil, fmt.Errorf("select events: %w", err)
+		return nil, err
 	}
 
 	events := make([]stack.Event, 0, len(rows))
@@ -626,8 +758,8 @@ func (s *Store) ListEvents(
 
 // stackID resolves ref to its stable ID, or ErrUpdateNotFound if the stack
 // does not exist.
-func (s *Store) stackID(ctx context.Context, ref stack.Ref) (string, error) {
-	id, err := s.queries.GetStackID(ctx, db.GetStackIDParams{
+func lookupStackID(ctx context.Context, q *db.Queries, ref stack.Ref) (string, error) {
+	id, err := q.GetStackID(ctx, db.GetStackIDParams{
 		Namespace: ref.Namespace.String(),
 		Project:   ref.Project.String(),
 		Name:      ref.Stack.String(),

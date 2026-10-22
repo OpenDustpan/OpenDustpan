@@ -138,28 +138,31 @@ func insertProfile(ctx context.Context, q *db.Queries, nsID string, pr profile.P
 
 // Get implements profile.Store.
 func (p *Profiles) Get(ctx context.Context, ns namespace.Name, ref profile.Ref) (profile.Profile, error) {
-	nsID, err := profileNamespaceID(ctx, p.store.queries, ns)
-	if err != nil {
-		return profile.Profile{}, err
-	}
-
 	var row db.Profile
 
-	switch {
-	case ref.ID != "":
-		row, err = liveProfile(ctx, p.store.queries, nsID, ref.ID)
-	case ref.Name != "":
-		row, err = p.store.queries.GetLiveProfileByName(
-			ctx,
-			db.GetLiveProfileByNameParams{NamespaceID: nsID, Name: string(ref.Name)},
-		)
-		if errors.Is(err, pgx.ErrNoRows) {
-			err = profile.ErrNotFound
+	err := p.read(ctx, func(q *db.Queries) error {
+		nsID, err := profileNamespaceID(ctx, q, ns)
+		if err != nil {
+			return err
 		}
-	default:
-		err = fmt.Errorf("%w: a reference names an ID or a name", profile.ErrInvalid)
-	}
 
+		switch {
+		case ref.ID != "":
+			row, err = liveProfile(ctx, q, nsID, ref.ID)
+		case ref.Name != "":
+			row, err = q.GetLiveProfileByName(
+				ctx,
+				db.GetLiveProfileByNameParams{NamespaceID: nsID, Name: string(ref.Name)},
+			)
+			if errors.Is(err, pgx.ErrNoRows) {
+				err = profile.ErrNotFound
+			}
+		default:
+			err = fmt.Errorf("%w: a reference names an ID or a name", profile.ErrInvalid)
+		}
+
+		return err
+	})
 	if err != nil {
 		return profile.Profile{}, err
 	}
@@ -173,23 +176,32 @@ func (p *Profiles) List(ctx context.Context, f profile.Filter) (profile.Page, er
 		return profile.Page{}, fmt.Errorf("%w: limit must be 1 or more", profile.ErrInvalid)
 	}
 
-	nsID, err := profileNamespaceID(ctx, p.store.queries, f.Namespace)
+	var rows []db.Profile
+
+	err := p.read(ctx, func(q *db.Queries) error {
+		nsID, err := profileNamespaceID(ctx, q, f.Namespace)
+		if err != nil {
+			return err
+		}
+
+		rows, err = q.ListLiveProfiles(ctx, db.ListLiveProfilesParams{
+			NamespaceID: nsID,
+			AfterName:   string(f.After),
+			Folder:      f.Folder,
+			PageLimit:   int32(min(f.Limit+1, math.MaxInt32)), //nolint:gosec // The min bounds the value.
+		})
+		if err != nil {
+			return fmt.Errorf("select profiles: %w", err)
+		}
+
+		return nil
+	})
 	if errors.Is(err, profile.ErrNotFound) {
 		return profile.Page{Profiles: []profile.Profile{}, Next: ""}, nil
 	}
 
 	if err != nil {
 		return profile.Page{}, err
-	}
-
-	rows, err := p.store.queries.ListLiveProfiles(ctx, db.ListLiveProfilesParams{
-		NamespaceID: nsID,
-		AfterName:   string(f.After),
-		Folder:      f.Folder,
-		PageLimit:   int32(min(f.Limit+1, math.MaxInt32)),
-	})
-	if err != nil {
-		return profile.Page{}, fmt.Errorf("select profiles: %w", err)
 	}
 
 	page := profile.Page{Profiles: make([]profile.Profile, 0, min(len(rows), f.Limit)), Next: ""}
@@ -221,7 +233,7 @@ func (p *Profiles) Revision(
 
 	var rev profile.Revision
 
-	err := p.read(func(q *db.Queries) error {
+	err := p.read(ctx, func(q *db.Queries) error {
 		nsID, err := profileNamespaceID(ctx, q, ns)
 		if err != nil {
 			return err
@@ -230,6 +242,12 @@ func (p *Profiles) Revision(
 		row, err := liveProfile(ctx, q, nsID, id)
 		if err != nil {
 			return err
+		}
+
+		if hook := p.store.betweenProfileReads; hook != nil {
+			p.store.betweenProfileReads = nil
+
+			hook()
 		}
 
 		if number == 0 {
@@ -272,7 +290,7 @@ func (p *Profiles) Revisions(
 
 	var out []profile.Revision
 
-	err := p.read(func(q *db.Queries) error {
+	err := p.read(ctx, func(q *db.Queries) error {
 		nsID, err := profileNamespaceID(ctx, q, ns)
 		if err != nil {
 			return err
@@ -406,10 +424,11 @@ func (p *Profiles) Delete(ctx context.Context, at profile.Anchor, fence namespac
 	})
 }
 
-// read runs fn on the queries of the pool. The reads of a revision are two
-// statements; a delete between them reads as not found.
-func (p *Profiles) read(fn func(q *db.Queries) error) error {
-	return fn(p.store.queries)
+// read runs fn in one read-only snapshot. The reads of a profile are two or
+// three statements that must see one state: a restore swap between them
+// would read as not found.
+func (p *Profiles) read(ctx context.Context, fn func(q *db.Queries) error) error {
+	return p.store.inSnapshotTx(ctx, fn)
 }
 
 // inAuditedTx runs fn and appends each entry of es in the same fenced
