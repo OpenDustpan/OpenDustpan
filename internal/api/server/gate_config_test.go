@@ -946,7 +946,7 @@ func TestGateConfigRefusesAccessTokenWrites(t *testing.T) {
 }
 
 // TestApprovalDefaultRefusesApproversThatCannotBeMet proves that a default
-// whose approvers cannot give the count it asks for answers 400, and that the
+// whose approvers cannot give the count it asks for answers 422, and that the
 // namespace keeps no default. The cases are a group name that is not valid, a
 // group that does not exist, and a count above the people who can approve.
 func TestApprovalDefaultRefusesApproversThatCannotBeMet(t *testing.T) {
@@ -971,7 +971,7 @@ func TestApprovalDefaultRefusesApproversThatCannotBeMet(t *testing.T) {
 			target := gateBase + "acme" + gateDefault
 
 			rec := serveGate(t, h, gateCall{http.MethodPut, target, tc.body, ""})
-			wantStatus(t, rec, http.StatusBadRequest)
+			wantStatus(t, rec, http.StatusUnprocessableEntity)
 			wantStatus(t, serveGate(t, h, gateCall{http.MethodGet, target, "", ""}), http.StatusNotFound)
 		})
 	}
