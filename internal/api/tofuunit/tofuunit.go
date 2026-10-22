@@ -42,9 +42,12 @@ type Namespaces interface {
 	Get(ctx context.Context, name namespace.Name) (namespace.Namespace, error)
 }
 
+// ErrNoAuditStore is the refusal of Append when Rules has no audit store.
+var ErrNoAuditStore = errors.New("tofuunit: no audit store")
+
 // Rules checks the overrides of a caller on a workspace and writes the audit
-// entries of OpenTofu requests. Authz, Namespaces and Guard must be set. A
-// nil Audit writes no entry.
+// entries of OpenTofu requests. Authz, Namespaces, Audit and Guard must be
+// set: Append refuses to run without an audit store.
 type Rules struct {
 	Authz      identity.Authorizer
 	Namespaces Namespaces
@@ -172,12 +175,15 @@ func ReadKind(p identity.Principal) audit.Kind {
 }
 
 // Append writes entry in its namespace with the fence of the namespace, so
-// the appends of one namespace form one sequence. A nil Audit writes nothing.
-// It returns the error of the namespace read or of the append; the caller
-// refuses its answer when the entry is lost.
+// the appends of one namespace form one sequence. It returns ErrNoAuditStore
+// without an audit store, and the error of the namespace read or of the
+// append; the caller refuses its answer when the entry is lost.
 func (u Rules) Append(ctx context.Context, entry audit.Entry) error {
+	// Defense in depth: each adapter refuses a nil audit store when it is
+	// built; this check stays so that a Rules value built another way fails
+	// closed and never answers as if the entry were written.
 	if u.Audit == nil {
-		return nil
+		return ErrNoAuditStore
 	}
 
 	ns, err := u.Namespaces.Get(ctx, entry.Namespace)

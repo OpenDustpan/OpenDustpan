@@ -53,7 +53,7 @@ Do not report work as finished if any of these fail. Say what fails instead.
 ```
 .agents/skills/        agent skills, installed with `npx skills` (see skills-lock.json); .claude/skills/ links here
 cmd/opendustpan/       the binary: flags, env, built-in adapters. Only place that may exit.
-pkg/                   the public SDK (ADR 35)
+pkg/                   the public SDK: dustpan, the port packages and the conformance suites (ADR 35, ADR 272)
   dustpan/             the SDK entry point: NewServer + options, routes, probes
   namespace/           domain: namespaces, home region, failover-version fencing
   inventory/           domain: cross-tool inventory projection of units
@@ -86,8 +86,10 @@ pkg/                   the public SDK (ADR 35)
   gate/cedargo/        adapter: the linked Cedar engine (cedar-go) of the gate engine port; gate/gatetest holds its suite
   gate/jobgate/        adapter: the job.Decider that turns approval defaults into the approval gates of a job
   forge/               domain: the Forge port, forge connections and their errors; forge/forgetest holds the conformance suite
-  store/               SQL adapters: sqlite/, postgres/; storetest/ conformance suite
+  store/               SQL adapters: sqlite/, postgres/; storetest/ conformance suite (the adapters move to internal/store/)
 internal/              code that is not part of the SDK
+  <domain>svc/         the service of each split domain package (for example stacksvc); the ports stay in pkg/<domain>
+  store/, blob/, ...   the built-in adapters. pkg/dustpan has a constructor for each (OpenSQLite, OpenPostgres, FileBlobs, S3Blobs)
   api/pulumi/          HTTP adapter for the Pulumi Cloud-compatible API (also used by the console)
   api/tfe/             HTTP adapter for the TFE-compatible API (OpenTofu)
   api/inventory/       HTTP adapter for the tool-neutral inventory API (also used by the console)
@@ -133,8 +135,9 @@ The web console lives in its own repository, `OpenDustpan/console` (ADR 8).
   `history`, `dependency`, `job`, `runner`, `launcher`, `source`, `agent`, `objectcontext`, `graph`,
   `unmanaged`, `drift`, `trigger`, `savedview`, `registry`, `unitimport`, `preferences`, `stepup`, `gate`, `forge`) never import
   `net/http`, `database/sql`, drivers, `pkg/store/...` or `internal/api/...`. depguard enforces this.
-- Define interfaces (ports) in the package that consumes them. Keep them
-  small, and document them with the errors they return.
+- Define each port in the `pkg/` package of its domain. Put the service that
+  uses the port in `internal/<domain>svc`. Keep ports small, and document them
+  with the errors they return.
 - Every port has a conformance suite (`*test` package). A new adapter must run
   it. A new port method must get conformance tests before any adapter implements it.
 - Errors: sentinel `Err...` values in the domain package, wrapped with
