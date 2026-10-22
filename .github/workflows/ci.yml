@@ -34,12 +34,10 @@ concurrency:
 # means the project's own machines. Never point a public repository's
 # pull requests from forks at self-hosted runners.
 #
-# When the repository variable CI_TRIAL_SPLIT is "true", a part of the runs
-# goes to the trial runners of two providers, with 4 vCPUs like the
-# project's machines. The last digit of the run ID picks the runners: 0 and
-# 1 go to Blacksmith, 2 and 3 go to Ubicloud, and the other digits use
-# CI_RUNS_ON. All jobs of a run, and each re-run of it, use the same
-# provider. Unset the variable to stop the split.
+# The repository variable CI_TRIAL_RUNS_ON, when it is set, replaces
+# CI_RUNS_ON, with the same JSON format. It sends all runs to the runners of
+# a trial provider, for example "blacksmith-4vcpu-ubuntu-2404". Change it
+# to try another size without a commit. Unset it to stop the trial.
 #
 # The project's machines (github-actions-runner1 to 4) keep the Go build
 # cache, the Go module cache and the golangci-lint cache on their disks
@@ -52,11 +50,7 @@ jobs:
   go:
     if: ${{ github.event_name != 'pull_request' || !github.event.pull_request.draft }}
     # The other jobs use this value through the YAML alias *runs-on.
-    runs-on: &runs-on >-
-      ${{ fromJSON(
-        vars.CI_TRIAL_SPLIT == 'true' && (endsWith(github.run_id, '0') || endsWith(github.run_id, '1')) && '"blacksmith-4vcpu-ubuntu-2404"' ||
-        vars.CI_TRIAL_SPLIT == 'true' && (endsWith(github.run_id, '2') || endsWith(github.run_id, '3')) && '"ubicloud-standard-4-ubuntu-2404"' ||
-        vars.CI_RUNS_ON || '"ubuntu-latest"') }}
+    runs-on: &runs-on ${{ fromJSON(vars.CI_TRIAL_RUNS_ON || vars.CI_RUNS_ON || '"ubuntu-latest"') }}
     services:
       postgres:
         # The Go test cache does not see the image. The digest makes sure that
