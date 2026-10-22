@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 
 	"opendustpan.org/opendustpan/internal/api/route"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -133,6 +134,7 @@ func (h *Handler) kit() route.Guard {
 func (h *Handler) enforce(rt Route) http.HandlerFunc {
 	return route.Enforce(h.kit(), h.writeError, route.Steps[target]{
 		Scope:   rt.Scope,
+		Actions: slices.Concat(rt.Reads, rt.Actions),
 		Resolve: rt.Resolve,
 		Authorize: func(r *http.Request, p identity.Principal, t target) error {
 			return h.authorizeRoute(r.Context(), r, rt, p, t)
