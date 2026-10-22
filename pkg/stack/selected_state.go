@@ -44,25 +44,34 @@ func (st SelectedState) VersionLabel() string {
 	return strconv.FormatInt(st.Version, 10)
 }
 
+// SelectCheckpoint returns the checkpoint of ref that sel names. It reads
+// the checkpoint only, so a read that needs no version does not fail when the
+// update that saved the checkpoint cannot be read. It fails with ErrNoState
+// when the version saved no checkpoint, and with the errors of Export and
+// ExportVersion.
+func (s *Updates) SelectCheckpoint(ctx context.Context, ref Ref, sel StateSelector) (Checkpoint, error) {
+	if sel.Latest {
+		return s.Export(ctx, ref)
+	}
+
+	return s.ExportVersion(ctx, ref, sel.Version)
+}
+
 // SelectState returns the checkpoint of ref that sel names, with its
 // version. For the latest checkpoint, the version is the version of the
-// update that saved it. It fails with ErrNoState when the version saved no
+// update that saved it, so SelectState also reads that update and fails when
+// the read fails. It fails with ErrNoState when the version saved no
 // checkpoint, and with the errors of Export, ExportVersion and Get.
 func (s *Updates) SelectState(ctx context.Context, ref Ref, sel StateSelector) (SelectedState, error) {
 	var none SelectedState
 
-	if !sel.Latest {
-		cp, err := s.ExportVersion(ctx, ref, sel.Version)
-		if err != nil {
-			return none, err
-		}
-
-		return SelectedState{Checkpoint: cp, Version: sel.Version}, nil
-	}
-
-	cp, err := s.Export(ctx, ref)
+	cp, err := s.SelectCheckpoint(ctx, ref, sel)
 	if err != nil {
 		return none, err
+	}
+
+	if !sel.Latest {
+		return SelectedState{Checkpoint: cp, Version: sel.Version}, nil
 	}
 
 	u, err := s.Get(ctx, ref, cp.Update)
