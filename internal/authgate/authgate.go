@@ -117,8 +117,9 @@ var ErrMissingNext = errors.New("authgate: missing next authenticator")
 var ErrInvalidScope = errors.New("authgate: the scope must be empty or the letters a to z")
 
 // unknownSource is the budget key of a source that holds the scope
-// separator. All such sources share one budget.
-const unknownSource = "unknown"
+// separator. All such sources share one budget. The key is the separator
+// itself, so no source that is not mapped to it can have the same key.
+const unknownSource = scopeSeparator
 
 // scopeSeparator joins the scope and the source in the key of the shared
 // count. A scope cannot hold it.

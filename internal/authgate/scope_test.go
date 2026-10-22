@@ -103,6 +103,21 @@ func TestSourceWithSeparatorIsUnknown(t *testing.T) {
 			t.Fatal("a plain address: over budget, want within")
 		}
 	})
+
+	t.Run("no plain source shares the unknown budget", func(t *testing.T) {
+		t.Parallel()
+
+		for _, plain := range []string{"unknown", "signin", "192.0.2.10"} {
+			c := newClock()
+			token := newTwoGates(t, c, authgatetest.NewMemory(c.Now)).token
+
+			spend(t, token, "a|b")
+
+			if overBudget(t, token, plain) {
+				t.Errorf("source %q after a source with a separator spent its budget: over budget, want within", plain)
+			}
+		}
+	})
 }
 
 // twoGates is the two gates of newTwoGates.
