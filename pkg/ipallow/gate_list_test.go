@@ -210,20 +210,82 @@ func TestGateListWithinAuthorize(t *testing.T) {
 	}
 }
 
+// exactAll is an exact identity.Authorizer that lists every object and
+// allows each.
+type exactAll struct{ scopeNext }
+
+func (exactAll) ScopeExact() bool { return true }
+
 // TestGateScopeExact proves that the gate says its scope is exact only when
-// the scope of Next is exact.
+// it is off and the scope of Next is exact: an enabled gate refuses objects
+// that a scope with All set holds.
 func TestGateScopeExact(t *testing.T) {
 	t.Parallel()
 
-	if !identity.HasExactScope(
-		ipallow.Gate{Next: identity.AdminOnly{}, Rules: nil, Enabled: true, IncludeBootstrap: false},
-	) {
-		t.Fatal("a gate over an exact scope is not exact")
+	tests := []struct {
+		name string
+		gate ipallow.Gate
+		want bool
+	}{
+		{
+			name: "off over exact",
+			gate: ipallow.Gate{Next: identity.AdminOnly{}, Rules: nil, Enabled: false, IncludeBootstrap: false},
+			want: true,
+		},
+		{
+			name: "on over exact",
+			gate: ipallow.Gate{Next: identity.AdminOnly{}, Rules: nil, Enabled: true, IncludeBootstrap: false},
+			want: false,
+		},
+		{
+			name: "off over no marker",
+			gate: ipallow.Gate{
+				Next: &fakeNext{calls: 0, err: nil}, Rules: nil, Enabled: false, IncludeBootstrap: false,
+			},
+			want: false,
+		},
+		{
+			name: "on over no marker",
+			gate: ipallow.Gate{
+				Next: &fakeNext{calls: 0, err: nil}, Rules: nil, Enabled: true, IncludeBootstrap: false,
+			},
+			want: false,
+		},
 	}
 
-	if identity.HasExactScope(
-		ipallow.Gate{Next: &fakeNext{calls: 0, err: nil}, Rules: nil, Enabled: true, IncludeBootstrap: false},
-	) {
-		t.Fatal("a gate over a scope with no marker is exact")
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := identity.HasExactScope(tc.gate); got != tc.want {
+				t.Fatalf("HasExactScope = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestGateExactScopeWithinAuthorize runs the conformance check of an exact
+// scope with a principal who is not an administrator and an All scope from
+// Next, for a gate that refuses the client address in acme. It fails when
+// the gate says that its scope is exact.
+func TestGateExactScopeWithinAuthorize(t *testing.T) {
+	t.Parallel()
+
+	f := newListFixture(t)
+	unit, err := identity.UnitObject("pulumi", "acme", "web/prod")
+	if err != nil {
+		t.Fatalf("unit object: %v", err)
+	}
+
+	for _, enabled := range []bool{true, false} {
+		next := exactAll{scopeNext{scope: identity.Scope{ //nolint:exhaustruct_v5 // An All scope only.
+			All: true,
+		}}}
+		gate := ipallow.Gate{Next: next, Rules: f.rules, Enabled: enabled, IncludeBootstrap: false}
+
+		identitytest.CheckExactScope(ctxWithAddr(netip.MustParseAddr("192.0.2.10")), t, identitytest.ListCheck{
+			Authorizer: gate, Principal: userPrincipal("alice"), Action: identity.ActionUnitRead,
+			Every: []identity.Object{identity.NamespaceObject("acme"), unit},
+		})
 	}
 }

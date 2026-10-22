@@ -1042,3 +1042,27 @@ func (scopeOnly) Authorize(context.Context, identity.Principal, identity.Action,
 func (scopeOnly) ListObjects(context.Context, identity.Principal, identity.Action) (identity.Scope, error) {
 	return identity.Scope{Namespaces: nil, Collections: nil, Units: nil, Principals: nil, All: false}, nil
 }
+
+// TestExactScopeWithinAuthorize runs the conformance check of an exact scope
+// for the authorizers of this package, with a principal who is not an
+// administrator.
+func TestExactScopeWithinAuthorize(t *testing.T) {
+	t.Parallel()
+
+	unit, err := identity.UnitObject("pulumi", "acme", "web/prod")
+	if err != nil {
+		t.Fatalf("unit object: %v", err)
+	}
+
+	p := identity.Principal{Subject: "alice", Admin: false} //nolint:exhaustruct_v5 // A plain person.
+
+	for _, authz := range []identity.Authorizer{
+		identity.AdminOnly{},
+		identity.SelfAllowed{Next: identity.AdminOnly{}, Actions: []identity.Action{identity.ActionTokenManageOwn}},
+	} {
+		identitytest.CheckExactScope(t.Context(), t, identitytest.ListCheck{
+			Authorizer: authz, Principal: p, Action: identity.ActionUnitRead,
+			Every: []identity.Object{identity.NamespaceObject("acme"), unit},
+		})
+	}
+}
