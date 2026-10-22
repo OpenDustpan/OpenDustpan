@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/graph/graphtest"
 	"opendustpan.org/opendustpan/pkg/graph"
-	"opendustpan.org/opendustpan/pkg/graph/graphtest"
 )
 
 //nolint:gochecknoglobals // A fixed test time that the fixture and the tests read.

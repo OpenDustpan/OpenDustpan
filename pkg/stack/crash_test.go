@@ -6,15 +6,15 @@ import (
 	"path/filepath"
 	"testing"
 
+	"opendustpan.org/opendustpan/internal/blob/blobfault"
+	"opendustpan.org/opendustpan/internal/store/storefault"
 	"opendustpan.org/opendustpan/internal/token"
 	"opendustpan.org/opendustpan/pkg/blob"
-	"opendustpan.org/opendustpan/pkg/blob/blobfault"
 	"opendustpan.org/opendustpan/pkg/blob/fs"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/stack"
 	"opendustpan.org/opendustpan/pkg/stack/stacktest"
 	"opendustpan.org/opendustpan/pkg/store/sqlite"
-	"opendustpan.org/opendustpan/pkg/store/storefault"
 )
 
 // crashFixture runs the update cycle over fault wrappers: SQL through sql and
