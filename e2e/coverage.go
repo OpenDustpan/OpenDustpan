@@ -544,6 +544,15 @@ func (coverageWorkspaces) List(_ context.Context, _ namespace.Name) ([]workspace
 	return nil, nil
 }
 
+func (coverageWorkspaces) Query(ctx context.Context, q workspace.ListQuery) (workspace.ListPage, error) {
+	all, err := coverageWorkspaces{}.List(ctx, q.Namespace)
+	if err != nil {
+		return workspace.ListPage{}, err
+	}
+
+	return workspace.PageWorkspaces(all, q), nil
+}
+
 func (coverageWorkspaces) LockForJob(
 	_ context.Context, _ workspace.ID, _, _, _ string,
 ) (workspace.Workspace, error) {
