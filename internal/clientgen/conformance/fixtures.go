@@ -268,7 +268,7 @@ func writeSeed(ctx context.Context, env Env) error {
 		method:      http.MethodPost,
 		path:        profilesPath,
 		auth:        withToken,
-		contentType: "application/json",
+		contentType: mediaJSON,
 		body:        env.profileBody(seedProfile, "schemaVersion: 1\n"),
 	}
 

@@ -360,7 +360,7 @@ func TestNamespaceListSkipsCollectionGrant(t *testing.T) {
 
 // newListNoAccessHandler builds a handler with no access service over a
 // store with the given namespaces.
-func newListNoAccessHandler(t *testing.T, authn identity.Authenticator, names []string) *apiserver.Handler {
+func newListNoAccessHandler(t *testing.T, authn identity.Authenticator, names []string) testHandler {
 	t.Helper()
 
 	st := openServerTemplateStore(t, filepath.Join(t.TempDir(), "dustpan.db"))
@@ -381,7 +381,7 @@ func newListNoAccessHandler(t *testing.T, authn identity.Authenticator, names []
 		}
 	}
 
-	handler, err := apiserver.NewHandler(apiserver.Config{
+	handler, err := newCheckedHandler(t, apiserver.Config{
 		Preferences:      nil,
 		GitHost:          nil,
 		Idempotency:      nil,
@@ -423,7 +423,7 @@ func newListNoAccessHandler(t *testing.T, authn identity.Authenticator, names []
 }
 
 // serveListAs sends one list request with the given bearer token.
-func serveListAs(t *testing.T, handler *apiserver.Handler, token, path string) (int, string) {
+func serveListAs(t *testing.T, handler testHandler, token, path string) (int, string) {
 	t.Helper()
 
 	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, path, http.NoBody)
@@ -501,7 +501,7 @@ func TestNamespaceListBadQuery(t *testing.T) {
 func TestNamespaceListWithoutPager(t *testing.T) {
 	t.Parallel()
 
-	handler, err := apiserver.NewHandler(apiserver.Config{
+	handler, err := newCheckedHandler(t, apiserver.Config{
 		Preferences:      nil,
 		GitHost:          nil,
 		Idempotency:      nil,

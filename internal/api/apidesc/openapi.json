@@ -2742,7 +2742,7 @@
   "info": {
     "description": "The tool-neutral REST API of an OpenDustpan server. The description covers the paths under /api/dustpan/v1/ only. A body has the schema of the Go type that the route names.",
     "title": "OpenDustpan REST API",
-    "version": "0.1.0"
+    "version": "0.2.0"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -2750,7 +2750,7 @@
       "get": {
         "operationId": "getCapabilities",
         "responses": {
-          "2XX": {
+          "200": {
             "content": {
               "application/json": {
                 "schema": {
@@ -2798,7 +2798,7 @@
           }
         ],
         "responses": {
-          "2XX": {
+          "204": {
             "description": "The request succeeded."
           },
           "default": {
@@ -2835,7 +2835,7 @@
           }
         ],
         "responses": {
-          "2XX": {
+          "200": {
             "content": {
               "application/json": {
                 "schema": {
@@ -2900,7 +2900,22 @@
           "required": true
         },
         "responses": {
-          "2XX": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GitHostApp"
+                }
+              }
+            },
+            "description": "The request succeeded.",
+            "headers": {
+              "ETag": {
+                "$ref": "#/components/headers/ETag"
+              }
+            }
+          },
+          "201": {
             "content": {
               "application/json": {
                 "schema": {
@@ -2941,7 +2956,7 @@
       "get": {
         "operationId": "listGitHostInstallations",
         "responses": {
-          "2XX": {
+          "200": {
             "content": {
               "application/json": {
                 "schema": {
@@ -2993,7 +3008,7 @@
           }
         ],
         "responses": {
-          "2XX": {
+          "204": {
             "description": "The request succeeded."
           },
           "default": {
@@ -3030,7 +3045,7 @@
           }
         ],
         "responses": {
-          "2XX": {
+          "200": {
             "content": {
               "application/json": {
                 "schema": {
@@ -3095,7 +3110,22 @@
           "required": true
         },
         "responses": {
-          "2XX": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GitHostInstallation"
+                }
+              }
+            },
+            "description": "The request succeeded.",
+            "headers": {
+              "ETag": {
+                "$ref": "#/components/headers/ETag"
+              }
+            }
+          },
+          "201": {
             "content": {
               "application/json": {
                 "schema": {
@@ -3136,7 +3166,7 @@
       "get": {
         "operationId": "getPreferences",
         "responses": {
-          "2XX": {
+          "200": {
             "content": {
               "application/json": {
                 "schema": {
@@ -3190,7 +3220,7 @@
           "required": true
         },
         "responses": {
-          "2XX": {
+          "200": {
             "content": {
               "application/json": {
                 "schema": {
@@ -3244,7 +3274,7 @@
           }
         ],
         "responses": {
-          "2XX": {
+          "204": {
             "description": "The request succeeded."
           },
           "default": {
@@ -3281,7 +3311,7 @@
           }
         ],
         "responses": {
-          "2XX": {
+          "200": {
             "content": {
               "application/json": {
                 "schema": {
@@ -3343,7 +3373,7 @@
           "required": true
         },
         "responses": {
-          "2XX": {
+          "200": {
             "content": {
               "application/json": {
                 "schema": {
@@ -3394,7 +3424,7 @@
           }
         ],
         "responses": {
-          "2XX": {
+          "200": {
             "content": {
               "application/json": {
                 "schema": {
@@ -3451,7 +3481,7 @@
           }
         ],
         "responses": {
-          "2XX": {
+          "204": {
             "description": "The request succeeded."
           },
           "default": {
@@ -3496,7 +3526,7 @@
           }
         ],
         "responses": {
-          "2XX": {
+          "200": {
             "content": {
               "application/json": {
                 "schema": {
@@ -3566,7 +3596,7 @@
           "required": true
         },
         "responses": {
-          "2XX": {
+          "200": {
             "content": {
               "application/json": {
                 "schema": {
@@ -3617,7 +3647,7 @@
           }
         ],
         "responses": {
-          "2XX": {
+          "200": {
             "content": {
               "application/json": {
                 "schema": {
@@ -3671,7 +3701,7 @@
           "required": true
         },
         "responses": {
-          "2XX": {
+          "201": {
             "content": {
               "application/json": {
                 "schema": {
@@ -3725,7 +3755,7 @@
           }
         ],
         "responses": {
-          "2XX": {
+          "204": {
             "description": "The request succeeded."
           },
           "default": {
@@ -3770,7 +3800,7 @@
           }
         ],
         "responses": {
-          "2XX": {
+          "200": {
             "content": {
               "application/json": {
                 "schema": {
@@ -3824,7 +3854,7 @@
           }
         ],
         "responses": {
-          "2XX": {
+          "204": {
             "description": "The request succeeded."
           },
           "default": {
@@ -3869,7 +3899,7 @@
           }
         ],
         "responses": {
-          "2XX": {
+          "200": {
             "content": {
               "application/json": {
                 "schema": {
@@ -3931,7 +3961,7 @@
           "required": true
         },
         "responses": {
-          "2XX": {
+          "200": {
             "content": {
               "application/json": {
                 "schema": {
@@ -3985,7 +4015,7 @@
           }
         ],
         "responses": {
-          "2XX": {
+          "204": {
             "description": "The request succeeded."
           },
           "default": {
@@ -4024,7 +4054,7 @@
           }
         ],
         "responses": {
-          "2XX": {
+          "204": {
             "description": "The request succeeded."
           },
           "default": {
@@ -4074,7 +4104,7 @@
           }
         ],
         "responses": {
-          "2XX": {
+          "200": {
             "content": {
               "application/json": {
                 "schema": {
@@ -4128,7 +4158,7 @@
           "required": true
         },
         "responses": {
-          "2XX": {
+          "200": {
             "content": {
               "application/json": {
                 "schema": {
@@ -4225,7 +4255,7 @@
           }
         ],
         "responses": {
-          "2XX": {
+          "200": {
             "content": {
               "application/json": {
                 "schema": {
@@ -4271,7 +4301,7 @@
           }
         ],
         "responses": {
-          "2XX": {
+          "200": {
             "content": {
               "application/json": {
                 "schema": {
@@ -4328,7 +4358,7 @@
           "required": true
         },
         "responses": {
-          "2XX": {
+          "201": {
             "content": {
               "application/json": {
                 "schema": {
@@ -4393,7 +4423,7 @@
           }
         ],
         "responses": {
-          "2XX": {
+          "204": {
             "description": "The request succeeded."
           },
           "default": {
@@ -4438,7 +4468,7 @@
           }
         ],
         "responses": {
-          "2XX": {
+          "200": {
             "content": {
               "application/json": {
                 "schema": {
@@ -4497,7 +4527,7 @@
           }
         ],
         "responses": {
-          "2XX": {
+          "200": {
             "content": {
               "application/json": {
                 "schema": {
@@ -4557,7 +4587,7 @@
           }
         ],
         "responses": {
-          "2XX": {
+          "200": {
             "content": {
               "application/json": {
                 "schema": {
@@ -4621,7 +4651,7 @@
           "required": true
         },
         "responses": {
-          "2XX": {
+          "201": {
             "content": {
               "application/json": {
                 "schema": {
@@ -4684,7 +4714,7 @@
           }
         ],
         "responses": {
-          "2XX": {
+          "200": {
             "content": {
               "application/json": {
                 "schema": {
@@ -4739,7 +4769,7 @@
           }
         ],
         "responses": {
-          "2XX": {
+          "204": {
             "description": "The request succeeded."
           },
           "default": {
@@ -4776,7 +4806,7 @@
           }
         ],
         "responses": {
-          "2XX": {
+          "200": {
             "content": {
               "application/json": {
                 "schema": {
@@ -4830,7 +4860,7 @@
           "required": true
         },
         "responses": {
-          "2XX": {
+          "200": {
             "content": {
               "application/json": {
                 "schema": {
@@ -4876,7 +4906,7 @@
           }
         ],
         "responses": {
-          "2XX": {
+          "204": {
             "description": "The request succeeded."
           },
           "default": {
@@ -4915,7 +4945,7 @@
           }
         ],
         "responses": {
-          "2XX": {
+          "200": {
             "content": {
               "application/json": {
                 "schema": {
@@ -4969,7 +4999,7 @@
           "required": true
         },
         "responses": {
-          "2XX": {
+          "200": {
             "content": {
               "application/json": {
                 "schema": {
@@ -5043,7 +5073,7 @@
           }
         ],
         "responses": {
-          "2XX": {
+          "200": {
             "content": {
               "application/json": {
                 "schema": {
@@ -5100,7 +5130,7 @@
           "required": true
         },
         "responses": {
-          "2XX": {
+          "201": {
             "content": {
               "application/json": {
                 "schema": {
@@ -5174,7 +5204,7 @@
           }
         ],
         "responses": {
-          "2XX": {
+          "204": {
             "description": "The request succeeded."
           },
           "default": {
@@ -5228,7 +5258,7 @@
           }
         ],
         "responses": {
-          "2XX": {
+          "200": {
             "content": {
               "application/json": {
                 "schema": {
@@ -5306,7 +5336,7 @@
           }
         ],
         "responses": {
-          "2XX": {
+          "200": {
             "content": {
               "application/json": {
                 "schema": {
@@ -5374,7 +5404,7 @@
           "required": true
         },
         "responses": {
-          "2XX": {
+          "201": {
             "content": {
               "application/json": {
                 "schema": {
@@ -5450,7 +5480,7 @@
           }
         ],
         "responses": {
-          "2XX": {
+          "200": {
             "content": {
               "application/json": {
                 "schema": {
@@ -5501,7 +5531,7 @@
           }
         ],
         "responses": {
-          "2XX": {
+          "200": {
             "content": {
               "application/json": {
                 "schema": {
@@ -5558,7 +5588,7 @@
           "required": true
         },
         "responses": {
-          "2XX": {
+          "201": {
             "content": {
               "application/json": {
                 "schema": {
@@ -5615,7 +5645,7 @@
           }
         ],
         "responses": {
-          "2XX": {
+          "204": {
             "description": "The request succeeded."
           },
           "default": {
@@ -5673,7 +5703,7 @@
           }
         ],
         "responses": {
-          "2XX": {
+          "200": {
             "content": {
               "application/json": {
                 "schema": {
@@ -5727,7 +5757,7 @@
           }
         ],
         "responses": {
-          "2XX": {
+          "200": {
             "content": {
               "application/json": {
                 "schema": {
@@ -5789,7 +5819,7 @@
           }
         ],
         "responses": {
-          "2XX": {
+          "200": {
             "content": {
               "application/json": {
                 "schema": {
@@ -5862,7 +5892,7 @@
           "required": true
         },
         "responses": {
-          "2XX": {
+          "200": {
             "content": {
               "application/json": {
                 "schema": {
@@ -5908,7 +5938,7 @@
           }
         ],
         "responses": {
-          "2XX": {
+          "201": {
             "content": {
               "application/json": {
                 "schema": {
@@ -5954,7 +5984,7 @@
           }
         ],
         "responses": {
-          "2XX": {
+          "200": {
             "content": {
               "application/json": {
                 "schema": {
@@ -6011,7 +6041,7 @@
           "required": true
         },
         "responses": {
-          "2XX": {
+          "201": {
             "content": {
               "application/json": {
                 "schema": {
@@ -6068,7 +6098,7 @@
           }
         ],
         "responses": {
-          "2XX": {
+          "204": {
             "description": "The request succeeded."
           },
           "default": {
@@ -6113,7 +6143,7 @@
           }
         ],
         "responses": {
-          "2XX": {
+          "200": {
             "content": {
               "application/json": {
                 "schema": {
@@ -6178,7 +6208,7 @@
           "required": true
         },
         "responses": {
-          "2XX": {
+          "200": {
             "content": {
               "application/json": {
                 "schema": {
@@ -6235,7 +6265,7 @@
           }
         ],
         "responses": {
-          "2XX": {
+          "200": {
             "content": {
               "application/json": {
                 "schema": {
@@ -6346,7 +6376,7 @@
           }
         ],
         "responses": {
-          "2XX": {
+          "200": {
             "content": {
               "application/json": {
                 "schema": {
@@ -6400,7 +6430,7 @@
           }
         ],
         "responses": {
-          "2XX": {
+          "204": {
             "description": "The request succeeded."
           },
           "default": {
@@ -6462,7 +6492,7 @@
           }
         ],
         "responses": {
-          "2XX": {
+          "200": {
             "content": {
               "application/json": {
                 "schema": {
@@ -6528,7 +6558,7 @@
           "required": true
         },
         "responses": {
-          "2XX": {
+          "200": {
             "content": {
               "application/json": {
                 "schema": {
@@ -6590,7 +6620,7 @@
           }
         ],
         "responses": {
-          "2XX": {
+          "200": {
             "content": {
               "application/json": {
                 "schema": {
@@ -6658,7 +6688,7 @@
           "required": true
         },
         "responses": {
-          "2XX": {
+          "202": {
             "content": {
               "application/json": {
                 "schema": {
@@ -6712,7 +6742,7 @@
           }
         ],
         "responses": {
-          "2XX": {
+          "200": {
             "content": {
               "application/json": {
                 "schema": {
@@ -6769,7 +6799,7 @@
           "required": true
         },
         "responses": {
-          "2XX": {
+          "201": {
             "content": {
               "application/json": {
                 "schema": {
@@ -6826,7 +6856,7 @@
           }
         ],
         "responses": {
-          "2XX": {
+          "204": {
             "description": "The request succeeded."
           },
           "default": {
@@ -6871,7 +6901,7 @@
           }
         ],
         "responses": {
-          "2XX": {
+          "200": {
             "content": {
               "application/json": {
                 "schema": {
@@ -6944,7 +6974,7 @@
           }
         ],
         "responses": {
-          "2XX": {
+          "200": {
             "content": {
               "application/json": {
                 "schema": {
@@ -6984,7 +7014,7 @@
       "get": {
         "operationId": "getApiDescription",
         "responses": {
-          "2XX": {
+          "200": {
             "content": {
               "application/json": {
                 "schema": {

@@ -18,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/api/apidesc/apidesctest"
 	"opendustpan.org/opendustpan/internal/api/idempotent"
 	apinotifications "opendustpan.org/opendustpan/internal/api/notifications"
 	"opendustpan.org/opendustpan/pkg/audit"
@@ -170,6 +171,9 @@ func (l *logBuffer) String() string {
 
 type fixture struct {
 	handler *apinotifications.Handler
+	// served is the handler that the tests call: it fails a test when a
+	// handler answers a success status that the description does not give.
+	served  http.Handler
 	config  apinotifications.Config
 	store   *sqlite.Store
 	secrets *secret.Service
@@ -322,8 +326,15 @@ func buildFixtureWith(
 	}
 
 	return fixture{
-		handler: handler, config: cfg, store: store, secrets: secrets, hook: hook, logs: logs, denied: denied,
-		clock: clock,
+		handler: handler,
+		served:  apidesctest.CheckStatus(t, handler),
+		config:  cfg,
+		store:   store,
+		secrets: secrets,
+		hook:    hook,
+		logs:    logs,
+		denied:  denied,
+		clock:   clock,
 	}
 }
 
@@ -382,7 +393,7 @@ func (f fixture) do(t *testing.T, r request) response {
 	}
 
 	rec := httptest.NewRecorder()
-	f.handler.ServeHTTP(rec, req)
+	f.served.ServeHTTP(rec, req)
 
 	return response{code: rec.Code, header: rec.Header(), body: rec.Body.String()}
 }

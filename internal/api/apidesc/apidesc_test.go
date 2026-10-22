@@ -2,6 +2,7 @@ package apidesc_test
 
 import (
 	"errors"
+	"net/http"
 	"strings"
 	"testing"
 	"unicode"
@@ -35,7 +36,8 @@ func op(method, path string, actions ...string) apidesc.Operation {
 		ID: idOf(method, path), Method: method, Path: path, Tags: []string{"backups"}, Actions: actions,
 		ActionObjects: objects,
 		Public:        false, IdempotencyKey: false, IfMatch: false, IfMatchRequired: false, ETag: false, Query: nil,
-		Bodies: &apidesc.Bodies{Request: apidesc.NoBody, Response: apidesc.NoBody},
+		Statuses: []int{http.StatusNoContent},
+		Bodies:   &apidesc.Bodies{Request: apidesc.NoBody, Response: apidesc.NoBody},
 	}
 }
 
@@ -243,6 +245,36 @@ func TestDiffFailsClosed(t *testing.T) {
 	}
 }
 
+func TestValidateRefusesBadSuccessStatus(t *testing.T) {
+	t.Parallel()
+
+	typed := op("GET", "/api/dustpan/v1/backups", "installation:backup")
+	typed.Bodies = &apidesc.Bodies{Request: apidesc.NoBody, Response: apidesc.Typed[struct{}]("Empty")}
+
+	for name, change := range map[string]func(o *apidesc.Operation){
+		"none":                   func(o *apidesc.Operation) { o.Statuses = nil },
+		"below 200":              func(o *apidesc.Operation) { o.Statuses = []int{199} },
+		"redirect":               func(o *apidesc.Operation) { o.Statuses = []int{http.StatusFound} },
+		"error":                  func(o *apidesc.Operation) { o.Statuses = []int{http.StatusNotFound} },
+		"negative":               func(o *apidesc.Operation) { o.Statuses = []int{-204} },
+		"one of two is an error": func(o *apidesc.Operation) { o.Statuses = []int{http.StatusOK, http.StatusNotFound} },
+		"duplicate":              func(o *apidesc.Operation) { o.Statuses = []int{http.StatusOK, http.StatusOK} },
+		"out of order":           func(o *apidesc.Operation) { o.Statuses = []int{http.StatusCreated, http.StatusOK} },
+		"204 with a typed body":  func(o *apidesc.Operation) { *o = typed; o.Statuses = []int{http.StatusNoContent} },
+		"204 among others with a typed body": func(o *apidesc.Operation) {
+			*o = typed
+			o.Statuses = []int{http.StatusOK, http.StatusNoContent}
+		},
+	} {
+		o := op("GET", "/api/dustpan/v1/backups", "installation:backup")
+		change(&o)
+
+		if err := o.Validate(); !errors.Is(err, apidesc.ErrInvalidOperation) {
+			t.Errorf("%s: Validate() = %v, want ErrInvalidOperation", name, err)
+		}
+	}
+}
+
 func TestValidateRefusesBadIDAndTags(t *testing.T) {
 	t.Parallel()
 
@@ -298,6 +330,10 @@ func TestDiffContractFieldsDiffer(t *testing.T) {
 		{"If-Match flag", func(o *apidesc.Operation) { o.IfMatch = true }},
 		{"required If-Match flag", func(o *apidesc.Operation) { o.IfMatchRequired = true }},
 		{"ETag flag", func(o *apidesc.Operation) { o.ETag = true }},
+		{"success status", func(o *apidesc.Operation) { o.Statuses = []int{http.StatusCreated} }},
+		{"second success status", func(o *apidesc.Operation) {
+			o.Statuses = []int{http.StatusOK, http.StatusNoContent}
+		}},
 	}
 
 	for _, tt := range tests {

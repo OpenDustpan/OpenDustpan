@@ -75,7 +75,7 @@
     "operationId": "getWidgetLabels",
     "parameters": [{"in": "path", "name": "widget_id", "required": true, "schema": {"type": "string"}}],
     "responses": {
-     "2XX": {"description": "ok", "content": {"application/json": {"schema": {"type": "object", "additionalProperties": {"type": "string"}}}}},
+     "200": {"description": "ok", "content": {"application/json": {"schema": {"type": "object", "additionalProperties": {"type": "string"}}}}},
      "default": {"description": "err", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorResponse"}}}}
     },
     "x-dustpan-actions": [{"action": "unit:read", "object": "unit"}]
