@@ -79,8 +79,11 @@ FROM triggers AS t LEFT JOIN namespaces AS n ON n.id = t.namespace_id`
 // of the namespace, which is NULL when the backup does not hold the namespace of
 // the trigger.
 func scanStagedTrigger(rows *sql.Rows) (triggerstore.Row, error) {
+	// An error returns the zero row, so that no caller reads a partial
+	// trigger from it.
 	var (
 		row       triggerstore.Row
+		none      triggerstore.Row
 		namespace sql.NullString
 	)
 
@@ -90,13 +93,13 @@ func scanStagedTrigger(rows *sql.Rows) (triggerstore.Row, error) {
 		&row.LastSaverID, &row.CreatedAtMs, &row.UpdatedAtMs,
 	)
 	if scanErr != nil {
-		return row, fmt.Errorf("read staged triggers: %w", backup.ErrExportRead)
+		return none, fmt.Errorf("read staged triggers: %w", backup.ErrExportRead)
 	}
 
 	// A trigger of a namespace that the backup does not hold is corrupt. The
 	// LEFT JOIN keeps such a row in the result, and the NULL name fails it.
 	if !namespace.Valid {
-		return row, fmt.Errorf("staged trigger %q has no namespace: %w", row.ID, backup.ErrCorrupt)
+		return none, fmt.Errorf("staged trigger %q has no namespace: %w", row.ID, backup.ErrCorrupt)
 	}
 
 	row.Namespace = namespace.String

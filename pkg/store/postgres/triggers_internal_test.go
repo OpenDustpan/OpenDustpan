@@ -130,6 +130,54 @@ func TestCheckStagedTriggersRefusesAMissingNamespace(t *testing.T) {
 	}
 }
 
+// TestScanStagedTriggerReturnsTheZeroRowOnError proves that a staged row that
+// fails to scan or names no namespace comes back as the zero row with its error,
+// so no caller reads a partial trigger from a refusal.
+func TestScanStagedTriggerReturnsTheZeroRowOnError(t *testing.T) {
+	t.Parallel()
+
+	s := openForSavedViews(t)
+
+	cases := map[string]struct {
+		query string
+		want  error
+	}{
+		"no namespace": {
+			query: `SELECT NULL::text, 'f1', 'opentofu', 'b', 'follows', '', '', 'acme', 'opentofu', 'a', 1::bigint,
+'user:ada', 'prn-user:ada', 1::bigint, 2::bigint`,
+			want: backup.ErrCorrupt,
+		},
+		"a row with too few columns": {query: `SELECT 'acme', 'f1'`, want: backup.ErrExportRead},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			rows, err := s.pool.Query(t.Context(), tc.query)
+			if err != nil {
+				t.Fatalf("query: %v", err)
+			}
+
+			defer rows.Close()
+
+			if !rows.Next() {
+				t.Fatalf("query gave no row: %v", rows.Err())
+			}
+
+			row, scanErr := scanStagedTrigger(rows)
+			if !errors.Is(scanErr, tc.want) {
+				t.Fatalf("scan = %v, want %v", scanErr, tc.want)
+			}
+
+			var zero triggerstore.Row
+			if row != zero {
+				t.Errorf("row = %+v, want the zero row", row)
+			}
+		})
+	}
+}
+
 // triggerAuditEntry returns a valid audit entry for the save of a trigger in acme.
 func triggerAuditEntry() audit.Entry {
 	return audit.Entry{

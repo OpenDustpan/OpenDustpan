@@ -116,6 +116,12 @@ func TestCheckStagedTriggersRefusesAMissingNamespace(t *testing.T) {
 		t.Fatalf("take a connection: %v", err)
 	}
 
+	// The deferred close releases the connection on a failed step. The close
+	// below still runs before the check, and a second close is a no-op.
+	defer func() {
+		_ = pinned.Close() //nolint:errcheck // The connection is closed below on the success path.
+	}()
+
 	for _, stmt := range []string{
 		`PRAGMA foreign_keys = OFF`,
 		`UPDATE triggers SET namespace_id = 'ns-gone'`,
@@ -136,6 +142,56 @@ func TestCheckStagedTriggersRefusesAMissingNamespace(t *testing.T) {
 
 	if !strings.Contains(fmt.Sprint(err), "has no namespace") {
 		t.Fatalf("check = %v, want the refusal of a trigger with no namespace", err)
+	}
+}
+
+// TestScanStagedTriggerReturnsTheZeroRowOnError proves that a staged row that
+// fails to scan or names no namespace comes back as the zero row with its error,
+// so no caller reads a partial trigger from a refusal.
+func TestScanStagedTriggerReturnsTheZeroRowOnError(t *testing.T) {
+	t.Parallel()
+
+	s := openInternalTemplated(t)
+
+	cases := map[string]struct {
+		query string
+		want  error
+	}{
+		"no namespace": {
+			query: `SELECT NULL, 'f1', 'opentofu', 'b', 'follows', '', '', 'acme', 'opentofu', 'a', 1,
+'user:ada', 'prn-user:ada', 1, 2`,
+			want: backup.ErrCorrupt,
+		},
+		"a row with too few columns": {query: `SELECT 'acme', 'f1'`, want: backup.ErrExportRead},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			rows, err := s.conn.QueryContext(t.Context(), tc.query)
+			if err != nil {
+				t.Fatalf("query: %v", err)
+			}
+
+			defer func() {
+				_ = rows.Close() //nolint:errcheck // Read-only test handle.
+			}()
+
+			if !rows.Next() {
+				t.Fatalf("query gave no row: %v", rows.Err())
+			}
+
+			row, scanErr := scanStagedTrigger(rows)
+			if !errors.Is(scanErr, tc.want) {
+				t.Fatalf("scan = %v, want %v", scanErr, tc.want)
+			}
+
+			var zero triggerstore.Row
+			if row != zero {
+				t.Errorf("row = %+v, want the zero row", row)
+			}
+		})
 	}
 }
 
