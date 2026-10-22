@@ -113,12 +113,12 @@ type Settings interface {
 	// audit entry e in the transaction. When e holds one change, the store
 	// sets the Old value of that change to the value that the write replaces,
 	// read in the same transaction. It returns ErrInvalid when d fails
-	// Default.Validate, ns fails namespace.ParseName or the value that the
-	// write replaces fails Default.Validate, namespace.ErrFenced
-	// when the fence is stale or names another namespace than ns, and
-	// namespace.ErrNotFound for an unknown namespace. On every error the store changes nothing. The change applies
-	// to the units that the namespace makes later. It changes no rule of a
-	// unit that exists.
+	// Default.Validate, when ns fails namespace.ParseName or when the value
+	// that the write replaces fails Default.Validate. It returns
+	// namespace.ErrFenced when the fence is stale or names another namespace
+	// than ns, and namespace.ErrNotFound for an unknown namespace. On every
+	// error the store changes nothing. The change applies to the units that
+	// the namespace makes later. It changes no rule of a unit that exists.
 	SetSetting(ctx context.Context, ns namespace.Name, d Default, fence namespace.Fence, e audit.Entry) error
 }
 
