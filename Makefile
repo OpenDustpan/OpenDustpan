@@ -136,13 +136,19 @@ test-nocache: ## Go tests as in test, but every package runs again. CI does the 
 STORE_TEST_PKGS := opendustpan.org/opendustpan/pkg/store/sqlite opendustpan.org/opendustpan/pkg/store/postgres
 GO_TEST_COUNT ?=
 
+# STORE_TEST_TIMEOUT is the limit of test-ci-store only, sized for one store
+# package on a CI runner: pkg/store/postgres alone took more than 20 minutes
+# there. It is not a fix of that time, and GO_TEST_TIMEOUT stays the limit of
+# every other target.
+STORE_TEST_TIMEOUT := 30m
+
 test-ci-other: ## Go tests as in test, without the two store packages; the go job of CI runs it.
 	go list ./... >/dev/null
 	go test -race $(GO_TEST_COUNT) -timeout $(GO_TEST_TIMEOUT) $$(go list ./... | grep -v -x -F $(addprefix -e ,$(STORE_TEST_PKGS)))
 
 test-ci-store: ## Go tests of one store package, STORE=sqlite or STORE=postgres; each store job of CI runs it.
 	@case "$(STORE)" in sqlite|postgres) ;; *) echo "set STORE=sqlite or STORE=postgres"; exit 1 ;; esac
-	go test -race $(GO_TEST_COUNT) -timeout $(GO_TEST_TIMEOUT) ./pkg/store/$(STORE)/
+	go test -race $(GO_TEST_COUNT) -timeout $(STORE_TEST_TIMEOUT) ./pkg/store/$(STORE)/
 
 test-postgres: ## Go tests including PostgreSQL (needs DUSTPAN_TEST_POSTGRES_URL).
 	@test -n "$$DUSTPAN_TEST_POSTGRES_URL" || (echo "set DUSTPAN_TEST_POSTGRES_URL" && exit 1)
