@@ -107,8 +107,8 @@ PM decision, taken on the owner's behalf:
   list.
 - A generated Go client accepts the described success statuses of an operation
   only. It returns an invalid-response error for any other 2xx status.
-- The description changes, so `info.version` is `0.2.1`. The major and minor
-  parts of the client version follow it, so the Go client is `0.2.x`.
+- The description changes, so `info.version` is `0.3.0`. The major and minor
+  parts of the client version follow it, so the Go client is `0.3.x`.
 - The TypeScript template set, the program `cmd/clientgen` and the publish
   workflow are later changes. Each one has its own gates. The Python template
   set waits for them.
