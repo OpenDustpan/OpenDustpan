@@ -81,8 +81,9 @@ func newTestHandler(t *testing.T) testHandler {
 	}
 
 	handler, err := newCheckedHandler(t, apiinventory.Config{
-		Views: testViewsConfig(t),
-		Audit: newTestAudit(), OnAuditFailure: nil, Locks: nil, Moves: nil,
+		OutputSharing: nil,
+		Views:         testViewsConfig(t),
+		Audit:         newTestAudit(), OnAuditFailure: nil, Locks: nil, Moves: nil,
 		Collections:   testCollectionService(t, nsStore),
 		Namespaces:    namespaces,
 		Units:         &memReader{entries: map[namespace.Name][]coreinventory.Entry{}, err: nil},
@@ -119,8 +120,9 @@ func newEnforcingHandler(t *testing.T, authz identity.Authorizer) testHandler {
 	}
 
 	handler, err := newCheckedHandler(t, apiinventory.Config{
-		Views: nil,
-		Audit: newTestAudit(), OnAuditFailure: nil, Locks: nil, Moves: nil,
+		OutputSharing: nil,
+		Views:         nil,
+		Audit:         newTestAudit(), OnAuditFailure: nil, Locks: nil, Moves: nil,
 		Collections:   testCollectionService(t, homedNamespaceStore{}),
 		Namespaces:    namespaces,
 		Units:         &memReader{entries: enforcingUnitEntries(), err: nil},

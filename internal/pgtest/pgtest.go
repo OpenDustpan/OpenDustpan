@@ -77,7 +77,9 @@ func BuildTemplate(ctx context.Context, base, name string, migrate Migrate) erro
 }
 
 // MigratedURL clones the template database and returns a URL for the migrated
-// schema of the clone. The clone is dropped when the test ends.
+// schema of the clone. The clone is dropped when the test ends. A drop that
+// fails is only logged, because a slow checkpoint of the server is no failure
+// of the test. DropClones removes the clones that stay.
 func MigratedURL(tb testing.TB, base string) string {
 	tb.Helper()
 
@@ -86,12 +88,24 @@ func MigratedURL(tb testing.TB, base string) string {
 		tb.Fatalf("%s is not set: TestMain makes the template database", TemplateEnv)
 	}
 
+	return MigratedURLWithTimeout(tb, base, template, dropTimeout)
+}
+
+// cloneSuffix is the text between the name of the template and the random
+// part of the name of a clone.
+const cloneSuffix = "_c"
+
+// MigratedURLWithTimeout is MigratedURL for the template database template,
+// with timeout as the time limit of the drop of the clone.
+func MigratedURLWithTimeout(tb testing.TB, base, template string, timeout time.Duration) string {
+	tb.Helper()
+
 	suffix := make([]byte, suffixBytes)
 	if _, err := rand.Read(suffix); err != nil {
 		tb.Fatalf("random database name: %v", err)
 	}
 
-	name := template + "_c" + hex.EncodeToString(suffix)
+	name := template + cloneSuffix + hex.EncodeToString(suffix)
 	clone := "CREATE DATABASE " + pgx.Identifier{name}.Sanitize() +
 		" TEMPLATE " + pgx.Identifier{template}.Sanitize() + " STRATEGY " + cloneStrategy
 
@@ -100,12 +114,11 @@ func MigratedURL(tb testing.TB, base string) string {
 	}
 
 	tb.Cleanup(func() {
-		ctx, cancel := context.WithTimeout(context.Background(), dropTimeout)
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
 		defer cancel()
 
-		drop := "DROP DATABASE IF EXISTS " + pgx.Identifier{name}.Sanitize() + " WITH (FORCE)"
-		if err := exec(ctx, base, drop); err != nil {
-			tb.Errorf("drop the clone %s: %v", name, err)
+		if err := dropDatabase(ctx, base, name); err != nil {
+			tb.Logf("drop the clone %s: %v: DropClones tries again at the end of the run", name, err)
 		}
 	})
 
@@ -115,6 +128,61 @@ func MigratedURL(tb testing.TB, base string) string {
 	}
 
 	return withSearchPath(u).String()
+}
+
+// Logf writes one line of a report.
+type Logf func(format string, args ...any)
+
+// DropClones drops each remaining clone of template on the server of base.
+// Clones of other runs have other template names, so they stay. It returns
+// the number of clones that it could not drop. It writes each failure to
+// logf. The error is not nil when the list of clones fails.
+func DropClones(ctx context.Context, base, template string, logf Logf) (int, error) {
+	return DropClonesWithTimeout(ctx, base, template, dropTimeout, logf)
+}
+
+// DropClonesWithTimeout is DropClones with timeout as the time limit of each
+// drop.
+func DropClonesWithTimeout(ctx context.Context, base, template string, timeout time.Duration, logf Logf) (int, error) {
+	conn, err := pgx.Connect(ctx, base)
+	if err != nil {
+		return 0, fmt.Errorf("list the clones: connect: %w", err)
+	}
+
+	defer func() {
+		_ = conn.Close(ctx) //nolint:errcheck // The list decides the outcome.
+	}()
+
+	rows, err := conn.Query(ctx, "SELECT datname FROM pg_database WHERE starts_with(datname, $1)", template+cloneSuffix)
+	if err != nil {
+		return 0, fmt.Errorf("list the clones: %w", err)
+	}
+
+	names, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil {
+		return 0, fmt.Errorf("list the clones: %w", err)
+	}
+
+	failed := 0
+
+	for _, name := range names {
+		dropCtx, cancel := context.WithTimeout(ctx, timeout)
+		dropErr := dropDatabase(dropCtx, base, name)
+
+		cancel()
+
+		if dropErr != nil {
+			failed++
+
+			logf("drop the clone %s: %v", name, dropErr)
+		}
+	}
+
+	return failed, nil
+}
+
+func dropDatabase(ctx context.Context, base, name string) error {
+	return exec(ctx, base, "DROP DATABASE IF EXISTS "+pgx.Identifier{name}.Sanitize()+" WITH (FORCE)")
 }
 
 // databaseURL returns base with the database name replaced by name.

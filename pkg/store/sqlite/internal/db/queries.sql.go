@@ -1406,6 +1406,26 @@ func (q *Queries) CountUnitGateObjects(ctx context.Context, arg CountUnitGateObj
 	return count, err
 }
 
+const countWorkspacePage = `-- name: CountWorkspacePage :one
+SELECT COUNT(*)
+FROM workspaces AS w
+WHERE w.namespace = ?1 AND w.deleted_at_ms IS NULL AND instr(w.name, ?2) > 0
+`
+
+type CountWorkspacePageParams struct {
+	Namespace    string
+	NameContains string
+}
+
+// The count of the live workspaces of a namespace whose name holds the
+// search, for the total of a workspace page.
+func (q *Queries) CountWorkspacePage(ctx context.Context, arg CountWorkspacePageParams) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countWorkspacePage, arg.Namespace, arg.NameContains)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const createAccessToken = `-- name: CreateAccessToken :execrows
 
 INSERT INTO access_tokens (id, principal_id, name, kind, digest, created_at_ms, expires_at_ms, created_by)
@@ -5547,6 +5567,19 @@ func (q *Queries) GetNamespaceIPAllowlist(ctx context.Context, name string) (str
 	var ip_allowlist string
 	err := row.Scan(&ip_allowlist)
 	return ip_allowlist, err
+}
+
+const getNamespaceOutputSharingDefault = `-- name: GetNamespaceOutputSharingDefault :one
+SELECT output_sharing_default
+FROM namespaces
+WHERE name = ?
+`
+
+func (q *Queries) GetNamespaceOutputSharingDefault(ctx context.Context, name string) (string, error) {
+	row := q.db.QueryRowContext(ctx, getNamespaceOutputSharingDefault, name)
+	var output_sharing_default string
+	err := row.Scan(&output_sharing_default)
+	return output_sharing_default, err
 }
 
 const getNotificationSink = `-- name: GetNotificationSink :one
@@ -12623,6 +12656,135 @@ func (q *Queries) ListSignInProviders(ctx context.Context) ([]SignInProvider, er
 	return items, nil
 }
 
+const listStackPageInNamespace = `-- name: ListStackPageInNamespace :many
+SELECT namespace, project, name, id, version, created_at_ms, updated_at_ms
+FROM stacks
+WHERE namespace = ?1 AND deleted_at_ms IS NULL
+  AND (project, name) > (?2, ?3)
+ORDER BY project, name
+LIMIT ?4
+`
+
+type ListStackPageInNamespaceParams struct {
+	Namespace    string
+	AfterProject string
+	AfterName    string
+	PageLimit    int64
+}
+
+type ListStackPageInNamespaceRow struct {
+	Namespace   string
+	Project     string
+	Name        string
+	ID          string
+	Version     int64
+	CreatedAtMs int64
+	UpdatedAtMs int64
+}
+
+// One page of the live stacks of a namespace after a project and a name, in
+// the order of the primary key. The cursor is a range of the key, so the read
+// starts at the cursor.
+func (q *Queries) ListStackPageInNamespace(ctx context.Context, arg ListStackPageInNamespaceParams) ([]ListStackPageInNamespaceRow, error) {
+	rows, err := q.db.QueryContext(ctx, listStackPageInNamespace,
+		arg.Namespace,
+		arg.AfterProject,
+		arg.AfterName,
+		arg.PageLimit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListStackPageInNamespaceRow
+	for rows.Next() {
+		var i ListStackPageInNamespaceRow
+		if err := rows.Scan(
+			&i.Namespace,
+			&i.Project,
+			&i.Name,
+			&i.ID,
+			&i.Version,
+			&i.CreatedAtMs,
+			&i.UpdatedAtMs,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listStackPageInProject = `-- name: ListStackPageInProject :many
+SELECT namespace, project, name, id, version, created_at_ms, updated_at_ms
+FROM stacks
+WHERE namespace = ?1 AND project = ?2 AND deleted_at_ms IS NULL
+  AND name > ?3
+ORDER BY name
+LIMIT ?4
+`
+
+type ListStackPageInProjectParams struct {
+	Namespace string
+	Project   string
+	AfterName string
+	PageLimit int64
+}
+
+type ListStackPageInProjectRow struct {
+	Namespace   string
+	Project     string
+	Name        string
+	ID          string
+	Version     int64
+	CreatedAtMs int64
+	UpdatedAtMs int64
+}
+
+// One page of the live stacks of a project after a name, in the order of the
+// primary key.
+func (q *Queries) ListStackPageInProject(ctx context.Context, arg ListStackPageInProjectParams) ([]ListStackPageInProjectRow, error) {
+	rows, err := q.db.QueryContext(ctx, listStackPageInProject,
+		arg.Namespace,
+		arg.Project,
+		arg.AfterName,
+		arg.PageLimit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListStackPageInProjectRow
+	for rows.Next() {
+		var i ListStackPageInProjectRow
+		if err := rows.Scan(
+			&i.Namespace,
+			&i.Project,
+			&i.Name,
+			&i.ID,
+			&i.Version,
+			&i.CreatedAtMs,
+			&i.UpdatedAtMs,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listStackTagsInNamespace = `-- name: ListStackTagsInNamespace :many
 SELECT t.stack_id, t.name, t.value
 FROM stack_tags AS t
@@ -12633,6 +12795,47 @@ ORDER BY t.stack_id, t.name
 
 func (q *Queries) ListStackTagsInNamespace(ctx context.Context, namespace string) ([]StackTag, error) {
 	rows, err := q.db.QueryContext(ctx, listStackTagsInNamespace, namespace)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []StackTag
+	for rows.Next() {
+		var i StackTag
+		if err := rows.Scan(&i.StackID, &i.Name, &i.Value); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listStackTagsOfStacks = `-- name: ListStackTagsOfStacks :many
+SELECT stack_id, name, value
+FROM stack_tags
+WHERE stack_id IN (/*SLICE:stack_ids*/?)
+ORDER BY stack_id, name
+`
+
+// Every tag of the stacks with the IDs, for one page of stacks.
+func (q *Queries) ListStackTagsOfStacks(ctx context.Context, stackIds []string) ([]StackTag, error) {
+	query := listStackTagsOfStacks
+	var queryParams []interface{}
+	if len(stackIds) > 0 {
+		for _, v := range stackIds {
+			queryParams = append(queryParams, v)
+		}
+		query = strings.Replace(query, "/*SLICE:stack_ids*/?", strings.Repeat(",?", len(stackIds))[1:], 1)
+	} else {
+		query = strings.Replace(query, "/*SLICE:stack_ids*/?", "NULL", 1)
+	}
+	rows, err := q.db.QueryContext(ctx, query, queryParams...)
 	if err != nil {
 		return nil, err
 	}
@@ -13960,6 +14163,83 @@ func (q *Queries) ReadWorkspaceByID(ctx context.Context, id string) (ReadWorkspa
 	return i, err
 }
 
+const readWorkspacePage = `-- name: ReadWorkspacePage :many
+SELECT w.id, w.namespace, w.name, w.revision, w.lock_id, w.lock_holder, w.lock_reason, w.locked_at_ms, w.current_state_version_id, w.created_at_ms, w.updated_at_ms, w.allow_forced_writes, w.allow_unlocked_writes, w.deleted_at_ms, w.deleted_name, n.id AS namespace_id
+FROM (
+    SELECT p.name
+    FROM workspaces AS p
+    WHERE p.namespace = ?1 AND p.deleted_at_ms IS NULL AND instr(p.name, ?2) > 0
+    ORDER BY p.name
+    LIMIT ?4 OFFSET ?3
+) AS page
+CROSS JOIN workspaces AS w
+JOIN namespaces AS n ON n.name = w.namespace
+WHERE w.namespace = ?1 AND w.name = page.name AND w.deleted_at_ms IS NULL
+ORDER BY page.name
+`
+
+type ReadWorkspacePageParams struct {
+	Namespace    string
+	NameContains string
+	PageOffset   int64
+	PageLimit    int64
+}
+
+type ReadWorkspacePageRow struct {
+	Workspace   Workspace
+	NamespaceID string
+}
+
+// One page of the live workspaces of a namespace whose name holds the search,
+// in the order of ReadWorkspaces. The inner query finds the names of the page
+// in the index of the live workspace names alone, so an offset skips index
+// entries and no table rows. The CROSS JOIN keeps that order of the joins:
+// the outer query reads the rows of the page names only.
+func (q *Queries) ReadWorkspacePage(ctx context.Context, arg ReadWorkspacePageParams) ([]ReadWorkspacePageRow, error) {
+	rows, err := q.db.QueryContext(ctx, readWorkspacePage,
+		arg.Namespace,
+		arg.NameContains,
+		arg.PageOffset,
+		arg.PageLimit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ReadWorkspacePageRow
+	for rows.Next() {
+		var i ReadWorkspacePageRow
+		if err := rows.Scan(
+			&i.Workspace.ID,
+			&i.Workspace.Namespace,
+			&i.Workspace.Name,
+			&i.Workspace.Revision,
+			&i.Workspace.LockID,
+			&i.Workspace.LockHolder,
+			&i.Workspace.LockReason,
+			&i.Workspace.LockedAtMs,
+			&i.Workspace.CurrentStateVersionID,
+			&i.Workspace.CreatedAtMs,
+			&i.Workspace.UpdatedAtMs,
+			&i.Workspace.AllowForcedWrites,
+			&i.Workspace.AllowUnlockedWrites,
+			&i.Workspace.DeletedAtMs,
+			&i.Workspace.DeletedName,
+			&i.NamespaceID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const readWorkspaces = `-- name: ReadWorkspaces :many
 SELECT w.id, w.namespace, w.name, w.revision, w.lock_id, w.lock_holder, w.lock_reason, w.locked_at_ms, w.current_state_version_id, w.created_at_ms, w.updated_at_ms, w.allow_forced_writes, w.allow_unlocked_writes, w.deleted_at_ms, w.deleted_name, n.id AS namespace_id
 FROM workspaces AS w
@@ -15232,6 +15512,26 @@ type SetNamespaceIPAllowlistParams struct {
 // Replaces the IP allowlist of one namespace (ADR 55, decision 8).
 func (q *Queries) SetNamespaceIPAllowlist(ctx context.Context, arg SetNamespaceIPAllowlistParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, setNamespaceIPAllowlist, arg.IpAllowlist, arg.Name)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const setNamespaceOutputSharingDefault = `-- name: SetNamespaceOutputSharingDefault :execrows
+UPDATE namespaces
+SET output_sharing_default = ?
+WHERE name = ?
+`
+
+type SetNamespaceOutputSharingDefaultParams struct {
+	OutputSharingDefault string
+	Name                 string
+}
+
+// Replaces the output sharing setting of one namespace.
+func (q *Queries) SetNamespaceOutputSharingDefault(ctx context.Context, arg SetNamespaceOutputSharingDefaultParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, setNamespaceOutputSharingDefault, arg.OutputSharingDefault, arg.Name)
 	if err != nil {
 		return 0, err
 	}

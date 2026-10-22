@@ -319,6 +319,16 @@ func (m *memStore) ListWorkspaces(_ context.Context, ns namespace.Name) ([]works
 	return out, nil
 }
 
+// QueryWorkspaces implements workspace.Store over the list of ListWorkspaces.
+func (m *memStore) QueryWorkspaces(ctx context.Context, q workspace.ListQuery) (workspace.ListPage, error) {
+	all, err := m.ListWorkspaces(ctx, q.Namespace)
+	if err != nil {
+		return workspace.ListPage{}, err
+	}
+
+	return workspace.PageWorkspaces(all, q), nil
+}
+
 func (m *memStore) SaveWorkspace(_ context.Context, w workspace.Workspace, fence namespace.Fence) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()

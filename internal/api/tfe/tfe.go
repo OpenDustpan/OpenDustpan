@@ -85,6 +85,9 @@ type WorkspaceReader interface {
 	GetByID(ctx context.Context, id workspace.ID) (workspace.Workspace, error)
 	// List returns the namespace's workspaces, ordered by name.
 	List(ctx context.Context, ns namespace.Name) ([]workspace.Workspace, error)
+	// Query returns one page of the namespace's workspaces that match q, in
+	// the order of List, with the count of every match.
+	Query(ctx context.Context, q workspace.ListQuery) (workspace.ListPage, error)
 }
 
 // WorkspaceLocker is what the lock routes need.

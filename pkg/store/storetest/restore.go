@@ -99,6 +99,10 @@ func RunRestore(t *testing.T, newStore RestoreFactory) {
 			test: testRestoreKeepsLiveOnlyPrincipal,
 		},
 		{name: "a restore that keeps access refuses unknown namespaces and units", test: testRestoreKeepAccessMismatch},
+		{
+			name: "a read of the newest profile revision during a restore swap never answers not found",
+			test: testRestoreProfileRevisionDuringSwap,
+		},
 	}
 
 	for _, tc := range cases {
