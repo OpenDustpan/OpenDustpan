@@ -69,8 +69,11 @@ func stageOwnExport(t *testing.T) (*Store, string) {
 var errNoSwapWait = errors.New("the swap did not wait for a lock")
 
 // waitForSwap returns when a session waits for a lock in a statement that
-// names the live schema live and starts with prefix. Other tests share the
-// database, so the schema name selects the swap of this test.
+// names the live schema live and starts with prefix. pg_stat_activity shows
+// the sessions of every database on the server, and each test store has a
+// database of its own with the same schema names. So the query reads only
+// the sessions of this database, and the schema name selects the swap of
+// this test.
 func waitForSwap(ctx context.Context, t *testing.T, pool *pgxpool.Pool, live, prefix string) {
 	t.Helper()
 
@@ -80,7 +83,8 @@ func waitForSwap(ctx context.Context, t *testing.T, pool *pgxpool.Pool, live, pr
 		var waiting int
 
 		query := "SELECT count(*) FROM pg_stat_activity WHERE wait_event_type = 'Lock'" +
-			" AND pid <> pg_backend_pid() AND starts_with(query, $1) AND strpos(query, $2) > 0"
+			" AND datname = current_database() AND pid <> pg_backend_pid()" +
+			" AND starts_with(query, $1) AND strpos(query, $2) > 0"
 		if err := pool.QueryRow(ctx, query, prefix, live).Scan(&waiting); err != nil {
 			t.Fatalf("read waiting sessions: %v", err)
 		}
