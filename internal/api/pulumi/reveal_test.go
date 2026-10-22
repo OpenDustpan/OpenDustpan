@@ -232,16 +232,16 @@ func seedRevealVersion(t *testing.T, f revealFixture, provider string) (int64, s
 		t.Fatalf("complete: %v", err)
 	}
 
-	masked, err := stack.MaskedPaths([]byte(deployment))
+	detail, err := stack.ReadStateResource([]byte(deployment), "urn:pulumi:dev::web::pulumi:pulumi:Stack::web-dev")
 	if err != nil {
-		t.Fatalf("masked paths: %v", err)
+		t.Fatalf("masked read: %v", err)
 	}
 
-	if len(masked) != 1 {
-		t.Fatalf("masked = %q, want one secret path", masked)
+	if len(detail.Masked) != 1 {
+		t.Fatalf("masked = %q, want one secret path", detail.Masked)
 	}
 
-	return done.Version, masked[0]
+	return done.Version, detail.Masked[0]
 }
 
 // reveal sends one reveal request with body from a console session that signed
