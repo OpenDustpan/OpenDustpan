@@ -3244,8 +3244,9 @@ func bodyWithDeployment(member, versionMember, deployment string) string {
 }
 
 // TestImportRefusesADeploymentThatIsNotAnObject proves that the import route
-// answers 400 in the error shape of the Pulumi Cloud-compatible API for a deployment that the CLI
-// cannot read, and that the stack keeps the checkpoint that it had.
+// answers 400 in the error shape of the Pulumi Cloud-compatible API for a
+// deployment that the CLI cannot read, and that the stack keeps the checkpoint
+// that it had.
 func TestImportRefusesADeploymentThatIsNotAnObject(t *testing.T) {
 	t.Parallel()
 
@@ -3283,8 +3284,8 @@ func TestImportRefusesADeploymentThatIsNotAnObject(t *testing.T) {
 
 // TestCheckpointSaveRefusesADeploymentThatIsNotAnObject proves that the
 // checkpoint routes of a running update answer 400 in the error shape of the
-// Pulumi API for a deployment that the CLI cannot read, and keep the last good
-// checkpoint.
+// Pulumi Cloud-compatible API for a deployment that the CLI cannot read, and
+// keep the last good checkpoint.
 func TestCheckpointSaveRefusesADeploymentThatIsNotAnObject(t *testing.T) {
 	t.Parallel()
 
