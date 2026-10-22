@@ -11,10 +11,9 @@ import (
 	"strings"
 )
 
-// Reveal of one secret value (ADR 41 decisions 4, 5 and 7): the caller names
-// a value path of a checkpoint deployment, the server answers the plain value
-// only when the path is in the masked set of the masked state read. The
-// reveal lookup streams the deployment to the path and decodes only the value
+// Reveal of one secret value: the caller names a value path of a checkpoint
+// deployment, and the server answers the plain value only when the path is in
+// the masked set of the masked state read. The reveal lookup streams the deployment to the path and decodes only the value
 // there, so no tree of the whole deployment is built. It decides that the
 // value is a secret with secretSignature, the check of the masked read too.
 // The masked read builds a tree and the lookup streams, so the tests hold the
