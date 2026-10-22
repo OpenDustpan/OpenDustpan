@@ -258,7 +258,7 @@ func coveragePulumiRoutes(tb testing.TB, namespaces *namespace.Service) []RouteR
 		// The gate is irrelevant here: no request is ever served.
 		MaxBodyBytesInFlight: 0,
 		Gate:                 nil,
-		Audit:                nil,
+		Audit:                coverageAuditStore{},
 		OnAuditFailure:       nil,
 		DenialLimiter:        nil,
 	})
@@ -411,7 +411,7 @@ func coverageTFERoutes(tb testing.TB, namespaces *namespace.Service) []RouteRef 
 		BaseURL:        baseurl.Resolver{},
 		Gate:           nil,
 		MaxStateBytes:  0,
-		Audit:          nil,
+		Audit:          coverageAuditStore{},
 		OnAuditFailure: nil,
 		DenialLimiter:  nil,
 		Registry: &tfeapi.RegistryConfig{
@@ -441,7 +441,7 @@ func coverageTofuHTTPRoutes(tb testing.TB, namespaces *namespace.Service) []Rout
 		Logger:         slog.New(slog.DiscardHandler),
 		Workspaces:     coverageTofuHTTPWorkspaces{},
 		Namespaces:     namespaces,
-		Audit:          nil,
+		Audit:          coverageAuditStore{},
 		Gate:           nil,
 		OnAuditFailure: nil,
 		DenialLimiter:  nil,
@@ -704,7 +704,7 @@ func coverageInventoryRoutes(tb testing.TB, namespaces *namespace.Service) []Rou
 		Sessions:      nil,
 		Logger:        slog.New(slog.DiscardHandler),
 		Now:           nil,
-		Audit:         nil, OnAuditFailure: nil, DenialLimiter: nil,
+		Audit:         coverageAuditStore{}, OnAuditFailure: nil, DenialLimiter: nil,
 		StateGuard: nil,
 	})
 	if err != nil {
@@ -736,7 +736,7 @@ func coverageContextRoutes(tb testing.TB, namespaces *namespace.Service) []Route
 		Authorizer:    coverageAuthorizer{},
 		Sessions:      nil,
 		Logger:        slog.New(slog.DiscardHandler),
-		Audit:         nil, OnAuditFailure: nil, DenialLimiter: nil,
+		Audit:         coverageAuditStore{}, OnAuditFailure: nil, DenialLimiter: nil,
 	})
 	if err != nil {
 		tb.Fatalf("context handler: %v", err)
@@ -762,7 +762,7 @@ func coverageJobRoutes(tb testing.TB, namespaces *namespace.Service) []RouteRef 
 		Starter:        struct{ job.Starter }{nil},
 		Authenticator:  coverageAuthenticator{},
 		Authorizer:     coverageAuthorizer{},
-		Audit:          nil,
+		Audit:          coverageAuditStore{},
 		OnAuditFailure: nil,
 		DenialLimiter:  nil,
 		Sessions:       nil,
@@ -793,7 +793,7 @@ func coverageDriftRoutes(tb testing.TB, namespaces *namespace.Service) []RouteRe
 		Checker:        struct{ drift.Checker }{nil},
 		Authenticator:  coverageAuthenticator{},
 		Authorizer:     coverageAuthorizer{},
-		Audit:          nil,
+		Audit:          coverageAuditStore{},
 		OnAuditFailure: nil,
 		DenialLimiter:  nil,
 		Sessions:       nil,
@@ -839,7 +839,7 @@ func coverageProfileRoutes(tb testing.TB) []RouteRef {
 		Idempotency:   nil,
 		Logger:        slog.New(slog.DiscardHandler),
 		Now:           nil,
-		Audit:         nil, Namespaces: nil, OnAuditFailure: nil, DenialLimiter: nil,
+		Audit:         coverageAuditStore{}, Namespaces: nil, OnAuditFailure: nil, DenialLimiter: nil,
 	})
 	if err != nil {
 		tb.Fatalf("profile handler: %v", err)
@@ -880,7 +880,7 @@ func coverageSinkRoutes(tb testing.TB) []RouteRef {
 		Sessions:       nil,
 		Idempotency:    nil,
 		Logger:         slog.New(slog.DiscardHandler),
-		Audit:          nil,
+		Audit:          coverageAuditStore{},
 		Namespaces:     nil,
 		OnAuditFailure: nil,
 		DenialLimiter:  nil,
@@ -1086,6 +1086,12 @@ func (coverageAuditStore) Append(
 	return zero, nil
 }
 
+func (coverageAuditStore) AppendServer(_ context.Context, _ audit.Entry) (audit.Entry, error) {
+	var zero audit.Entry
+
+	return zero, nil
+}
+
 func (coverageAuditStore) List(
 	_ context.Context, _ namespace.Name, _ audit.Page,
 ) (audit.Listing, error) {
@@ -1250,7 +1256,7 @@ func coverageServerRoutes(tb testing.TB) []RouteRef {
 		Principals:       nil,
 		Access:           nil,
 		Tokens:           nil,
-		Audit:            nil,
+		Audit:            coverageAuditStore{},
 		OnAuditFailure:   nil,
 		DeletedUnits:     nil,
 		AuditChain:       nil,
@@ -2621,9 +2627,17 @@ func coverageRegistryRoutes(tb testing.TB) []RouteRef {
 	}
 
 	handler, err := registryapi.NewHandler(registryapi.Config{
-		Service: svc, Authenticator: coverageAuthenticator{}, Authorizer: coverageAuthorizer{},
-		MaxUploadBytes: registryservice.DefaultMaxArchiveBytes, Audit: nil, Namespaces: nil, OnAuditFailure: nil,
-		DenialLimiter: nil, Sessions: nil, Idempotency: nil, Logger: slog.New(slog.DiscardHandler),
+		Service:        svc,
+		Authenticator:  coverageAuthenticator{},
+		Authorizer:     coverageAuthorizer{},
+		MaxUploadBytes: registryservice.DefaultMaxArchiveBytes,
+		Audit:          coverageAuditStore{},
+		Namespaces:     nil,
+		OnAuditFailure: nil,
+		DenialLimiter:  nil,
+		Sessions:       nil,
+		Idempotency:    nil,
+		Logger:         slog.New(slog.DiscardHandler),
 	})
 	if err != nil {
 		tb.Fatalf("registry handler: %v", err)

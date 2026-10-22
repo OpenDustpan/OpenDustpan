@@ -1566,7 +1566,7 @@ func (f fixture) push(t *testing.T, in workspace.NewState, content string) error
 		f.ws.ID,
 		"alice",
 		in,
-		authority(forcedOnly(), nil),
+		authority(forcedOnly(), noRecord),
 	)
 	if err != nil {
 		return err
