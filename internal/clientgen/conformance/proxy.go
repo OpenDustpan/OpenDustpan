@@ -620,8 +620,9 @@ func decodeNumbers(raw []byte) (any, error) {
 type editMode int
 
 const (
+	_ editMode = iota // Zero means that nobody chose.
 	// modeAdd sets a member, and makes it when it is not there.
-	modeAdd editMode = iota
+	modeAdd
 	// modeReplace sets a member that is there.
 	modeReplace
 )
