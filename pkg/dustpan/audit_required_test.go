@@ -32,8 +32,9 @@ type auditEntries = audit.Store
 
 // TestNewServerNeedsAuditStores proves that NewServer fails closed. Every
 // refusal and every override writes an audit entry, so a namespace store that
-// keeps no entries cannot serve any adapter: the check names the missing
-// interface, and no adapter or recorder is built with a nil store.
+// keeps no entries cannot serve any adapter. Each case checks the text of
+// checkAuditStores, so that a removed check fails the test and a later error
+// that names the same interface does not hide it.
 func TestNewServerNeedsAuditStores(t *testing.T) {
 	t.Parallel()
 
@@ -45,17 +46,17 @@ func TestNewServerNeedsAuditStores(t *testing.T) {
 		{
 			name:  "no audit.Store, for the refusals of the OpenTofu, Pulumi, inventory, jobs, runner and context adapters",
 			wrap:  func(st *sqlite.Store) namespace.Store { return noEntries{Store: st, ServerStore: st} },
-			wants: "audit.Store",
+			wants: "audit.Store, for the entries of refusals and overrides",
 		},
 		{
 			name:  "no audit.ServerStore, for the installation API and the temporary administrators",
 			wrap:  func(st *sqlite.Store) namespace.Store { return noServerEntries{Store: st, auditEntries: st} },
-			wants: "audit.ServerStore",
+			wants: "audit.ServerStore, for the entries of the installation scope",
 		},
 		{
 			name:  "neither",
 			wrap:  func(st *sqlite.Store) namespace.Store { return bareNamespaceStore{st} },
-			wants: "audit.Store",
+			wants: "audit.Store, for the entries of refusals and overrides",
 		},
 	}
 

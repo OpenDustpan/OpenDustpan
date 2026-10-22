@@ -47,7 +47,8 @@ type StreamAuthority struct {
 	// Allow holds the overrides the caller may use.
 	Allow namespace.Overrides
 	// Record writes the audit entry of one override with the serial of the body.
-	// A nil Record writes nothing. A failed record refuses the write.
+	// A write that uses an override while Record is nil is refused with
+	// ErrNoRecorder before it writes. A failed record refuses the write.
 	Record func(Override, int64) error
 }
 
@@ -125,6 +126,10 @@ func (s *Service) admitStream(
 	)
 	if err != nil {
 		return nil, fmt.Errorf("new state for %s: %w", w.Ref, err)
+	}
+
+	if recErr := requireRecorder(w, used, auth.Record != nil); recErr != nil {
+		return nil, recErr
 	}
 
 	// A write without a lock ID passes the workspace lock when the caller may
@@ -439,8 +444,8 @@ func parseStreamMD5(s string) ([md5.Size]byte, bool, error) {
 // serial of the body. It stops at the first entry that fails, and the write
 // does not finalize.
 func (sw *streamWrite) recordUsed(serial int64) error {
-	if sw.record == nil {
-		return nil
+	if err := requireRecorder(sw.workspace, sw.used, sw.record != nil); err != nil {
+		return err
 	}
 
 	for _, override := range sw.used {

@@ -283,8 +283,9 @@ type Option func(*settings)
 // The server also uses the store for the audit entries of the scope @server,
 // for example the security entry of a stack blob key that a row names outside
 // the scope of its stack. So the store must implement audit.ServerStore, as
-// the SQLite and PostgreSQL stores do. NewServer answers ErrMissingOption for
-// a store that does not.
+// the SQLite and PostgreSQL stores do. It must implement audit.Store too, for
+// the entries of refusals and overrides. NewServer answers ErrMissingOption
+// for a store that lacks either.
 func WithNamespaceStore(s namespace.Store) Option {
 	return func(o *settings) { o.namespaceStore = s }
 }

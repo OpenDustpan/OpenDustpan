@@ -24,8 +24,8 @@ func newJobsHandler(svc services, cfg *settings, onFailure func()) (http.Handler
 		return nil, nil //nolint:nilnil // No jobs API: no job store is set.
 	}
 
-	// A namespace store that keeps no audit entries gives a nil store, and a
-	// refusal then writes no entry.
+	// A namespace store that keeps no audit entries is an error: a refusal
+	// always writes its entry.
 	neutralAudit, err := auditStoreOf(cfg)
 	if err != nil {
 		return nil, err
