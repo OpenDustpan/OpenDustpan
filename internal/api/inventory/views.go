@@ -14,6 +14,7 @@ import (
 	"opendustpan.org/opendustpan/internal/api/idempotent"
 	"opendustpan.org/opendustpan/internal/api/problem"
 	"opendustpan.org/opendustpan/internal/api/refusal"
+	"opendustpan.org/opendustpan/internal/api/route"
 	"opendustpan.org/opendustpan/internal/clientip"
 	"opendustpan.org/opendustpan/internal/requestid"
 	"opendustpan.org/opendustpan/internal/sessionauth"
@@ -115,29 +116,39 @@ func (h *Handler) viewRoutes() []Route {
 
 	return []Route{
 		{
-			Method: http.MethodPost, Path: viewPathPrefix, Scope: ScopeAuthorized,
-			Actions: []identity.Action{identity.ActionViewCreate}, NamespaceActions: nil,
-			Resolve: resolveCollectionNamespace, DeniedAsNotFound: false, Serve: h.createView,
+			Method: http.MethodPost, Path: viewPathPrefix, Scope: route.ScopeAuthorized,
+			Actions: []identity.Action{identity.ActionViewCreate},
+			Resolve: resolveCollectionNamespace, Serve: h.createView,
+			NamespaceActions: nil,
+			DeniedAsNotFound: false,
 		},
 		{
-			Method: http.MethodGet, Path: viewPathPrefix, Scope: ScopeAuthorized,
-			Actions: []identity.Action{identity.ActionViewRead}, NamespaceActions: nil,
-			Resolve: resolveCollectionNamespace, DeniedAsNotFound: false, Serve: h.listViews,
+			Method: http.MethodGet, Path: viewPathPrefix, Scope: route.ScopeAuthorized,
+			Actions: []identity.Action{identity.ActionViewRead},
+			Resolve: resolveCollectionNamespace, Serve: h.listViews,
+			NamespaceActions: nil,
+			DeniedAsNotFound: false,
 		},
 		{
-			Method: http.MethodGet, Path: viewPathPrefix + "/{view_id}", Scope: ScopeAuthorized,
-			Actions: []identity.Action{identity.ActionViewRead}, NamespaceActions: nil,
-			Resolve: resolveCollectionNamespace, DeniedAsNotFound: false, Serve: h.getView,
+			Method: http.MethodGet, Path: viewPathPrefix + "/{view_id}", Scope: route.ScopeAuthorized,
+			Actions: []identity.Action{identity.ActionViewRead},
+			Resolve: resolveCollectionNamespace, Serve: h.getView,
+			NamespaceActions: nil,
+			DeniedAsNotFound: false,
 		},
 		{
-			Method: http.MethodDelete, Path: viewPathPrefix + "/{view_id}", Scope: ScopeAuthorized,
-			Actions: []identity.Action{identity.ActionViewDelete}, NamespaceActions: nil,
-			Resolve: resolveCollectionNamespace, DeniedAsNotFound: false, Serve: h.deleteView,
+			Method: http.MethodDelete, Path: viewPathPrefix + "/{view_id}", Scope: route.ScopeAuthorized,
+			Actions: []identity.Action{identity.ActionViewDelete},
+			Resolve: resolveCollectionNamespace, Serve: h.deleteView,
+			NamespaceActions: nil,
+			DeniedAsNotFound: false,
 		},
 		{
-			Method: http.MethodGet, Path: viewPathPrefix + "/{view_id}/units", Scope: ScopeAuthorized,
-			Actions: nsRead, NamespaceActions: nil,
-			Resolve: resolveCollectionNamespace, DeniedAsNotFound: false, Serve: h.listViewUnits,
+			Method: http.MethodGet, Path: viewPathPrefix + "/{view_id}/units", Scope: route.ScopeAuthorized,
+			Actions: nsRead,
+			Resolve: resolveCollectionNamespace, Serve: h.listViewUnits,
+			NamespaceActions: nil,
+			DeniedAsNotFound: false,
 		},
 	}
 }

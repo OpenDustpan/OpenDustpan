@@ -1,4 +1,4 @@
-package routekit_test
+package route_test
 
 import (
 	"context"
@@ -10,7 +10,7 @@ import (
 	"testing"
 
 	"opendustpan.org/opendustpan/internal/api/refusal"
-	"opendustpan.org/opendustpan/internal/api/routekit"
+	"opendustpan.org/opendustpan/internal/api/route"
 	"opendustpan.org/opendustpan/internal/sessionauth"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -67,8 +67,8 @@ func (a authorizer) Authorize(
 	}
 }
 
-func guard(seen *[]string, authz authorizer) routekit.Guard {
-	return routekit.Guard{
+func guard(seen *[]string, authz authorizer) route.Guard {
+	return route.Guard{
 		Tokens:   tokens{Authenticator: nil, seen: seen},
 		Sessions: nil,
 		Refusals: refusal.New(authz, nil, nil, slog.New(slog.DiscardHandler), nil),
@@ -143,7 +143,7 @@ func checkScheme(t *testing.T, tc schemeCase) {
 		t.Fatalf("Authenticate(%q) asked the authenticator %d times, want reached %t", tc.header, len(seen), tc.reached)
 	}
 
-	if caller != nil || sessionauth.FromSession(routekit.WithCaller(r.Context(), caller)) {
+	if caller != nil || sessionauth.FromSession(route.WithCaller(r.Context(), caller)) {
 		t.Fatalf("Authenticate(%q) marked a token request as a session", tc.header)
 	}
 }
@@ -211,7 +211,7 @@ func TestDecodeBody(t *testing.T) {
 
 			var got doc
 
-			err := routekit.DecodeBody(httptest.NewRecorder(), r, 1<<10, &got)
+			err := route.DecodeBody(httptest.NewRecorder(), r, 1<<10, &got)
 			if (err == nil) != tc.ok {
 				t.Fatalf("DecodeBody(%q) = %v, want ok %t", tc.body, err, tc.ok)
 			}
@@ -228,7 +228,7 @@ func TestDecodeBody(t *testing.T) {
 func TestMuxRecordsEveryPattern(t *testing.T) {
 	t.Parallel()
 
-	m := routekit.NewMux()
+	m := route.NewMux()
 	m.HandleFunc("GET /a", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusTeapot) })
 	m.Handle("GET /b", http.NotFoundHandler())
 
@@ -249,7 +249,7 @@ func TestMuxRecordsEveryPattern(t *testing.T) {
 func TestWithCaller(t *testing.T) {
 	t.Parallel()
 
-	if sessionauth.FromSession(routekit.WithCaller(t.Context(), nil)) {
+	if sessionauth.FromSession(route.WithCaller(t.Context(), nil)) {
 		t.Fatal("WithCaller(nil) marked the context as a session")
 	}
 
@@ -257,7 +257,7 @@ func TestWithCaller(t *testing.T) {
 
 	caller.Match.Session.Provider = "corp"
 
-	ctx := routekit.WithCaller(t.Context(), &caller)
+	ctx := route.WithCaller(t.Context(), &caller)
 	if !sessionauth.FromSession(ctx) {
 		t.Fatal("WithCaller(session) did not mark the context as a session")
 	}

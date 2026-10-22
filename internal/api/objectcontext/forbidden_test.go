@@ -16,7 +16,7 @@ func TestForbiddenCodes(t *testing.T) {
 
 	cases := casesOf(t)
 	for i := range cases {
-		if cases[i].route.Method == http.MethodPatch {
+		if cases[i].rt.Method == http.MethodPatch {
 			write = &cases[i]
 
 			break
@@ -35,7 +35,7 @@ func TestForbiddenCodes(t *testing.T) {
 			rec := serve(
 				t,
 				h,
-				request{method: write.route.Method, path: write.path, token: testToken, body: write.body},
+				request{method: write.rt.Method, path: write.path, token: testToken, body: write.body},
 			)
 
 			errcodetest.Check(t, rec.Code, rec.Body.Bytes(), cause)

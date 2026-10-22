@@ -6,31 +6,18 @@ import (
 	"fmt"
 	"net/http"
 
-	"opendustpan.org/opendustpan/internal/api/routekit"
+	"opendustpan.org/opendustpan/internal/api/route"
 	"opendustpan.org/opendustpan/pkg/identity"
-)
-
-// Scope names how a route is protected. Every route declares one explicitly
-// and the route test enforces the meaning of each value.
-type Scope int
-
-const (
-	// ScopePublic serves without sign-in. Only routes on the public list may
-	// use it. This API has none.
-	ScopePublic Scope = iota + 1
-	// ScopeAuthorized needs a signed-in principal and the Authorizer to allow
-	// the checks of the route before the handler runs.
-	ScopeAuthorized
 )
 
 // TargetResolver finds the object of a request: the namespace and, for a
 // unit route, the unit. It answers errNotFound for an object that does not
 // exist. It runs after the sign-in and before any authorization check.
-type TargetResolver func(r *http.Request) (target, error)
+type TargetResolver = func(w http.ResponseWriter, r *http.Request) (target, error)
 
 // RouteHandler serves a route after the registration wrapper has
 // authenticated and authorized it.
-type RouteHandler func(w http.ResponseWriter, r *http.Request, p identity.Principal, t target)
+type RouteHandler = func(w http.ResponseWriter, r *http.Request, p identity.Principal, t target)
 
 // Route declares one endpoint: its ServeMux pattern, how it is protected,
 // the actions it needs, how to find its object, and how to serve it.
@@ -46,21 +33,14 @@ type RouteHandler func(w http.ResponseWriter, r *http.Request, p identity.Princi
 //  2. Reads on the object of the route.
 //  3. Actions on the object of the route. A refusal answers 403, because
 //     the caller can already read the object.
+//
+// The shared row holds the pattern, the scope, the Actions, the resolver and
+// the handler. Every route has the scope route.ScopeAuthorized.
 type Route struct {
-	// Method is the HTTP method, for example GET.
-	Method string
-	// Path is the ServeMux path pattern.
-	Path string
-	// Scope names how the route is protected.
-	Scope Scope
+	route.Route[target]
+
 	// Reads lists the read actions that the route needs on its object.
 	Reads []identity.Action
-	// Actions lists the other actions that the route needs on its object.
-	Actions []identity.Action
-	// Resolve finds the object of the request.
-	Resolve TargetResolver
-	// Serve handles the request after the wrapper has enforced the row.
-	Serve RouteHandler
 }
 
 // buildRoutes returns the route table. It is the single source of the
@@ -83,32 +63,40 @@ func (h *Handler) contextRoutes(namespacePath, unitPath string, resolveUnit Targ
 
 	return []Route{
 		{
-			Method: http.MethodGet, Path: namespacePath, Scope: ScopeAuthorized,
-			Reads: nsRead, Actions: nil, Resolve: h.resolveNamespace, Serve: h.readContext,
+			Method: http.MethodGet, Path: namespacePath, Scope: route.ScopeAuthorized,
+			Actions: nil,
+			Resolve: h.resolveNamespace, Serve: h.readContext,
+			Reads: nsRead,
 		},
 		{
-			Method: http.MethodPatch, Path: namespacePath, Scope: ScopeAuthorized,
-			Reads: nsRead, Actions: []identity.Action{identity.ActionNamespaceSetContext},
+			Method: http.MethodPatch, Path: namespacePath, Scope: route.ScopeAuthorized,
+			Actions: []identity.Action{identity.ActionNamespaceSetContext},
 			Resolve: h.resolveNamespace, Serve: h.patchContext,
+			Reads: nsRead,
 		},
 		{
-			Method: http.MethodDelete, Path: namespacePath, Scope: ScopeAuthorized,
-			Reads: nsRead, Actions: []identity.Action{identity.ActionNamespaceSetContext},
+			Method: http.MethodDelete, Path: namespacePath, Scope: route.ScopeAuthorized,
+			Actions: []identity.Action{identity.ActionNamespaceSetContext},
 			Resolve: h.resolveNamespace, Serve: h.deleteContext,
+			Reads: nsRead,
 		},
 		{
-			Method: http.MethodGet, Path: unitPath, Scope: ScopeAuthorized,
-			Reads: unitRead, Actions: nil, Resolve: resolveUnit, Serve: h.readContext,
+			Method: http.MethodGet, Path: unitPath, Scope: route.ScopeAuthorized,
+			Actions: nil,
+			Resolve: resolveUnit, Serve: h.readContext,
+			Reads: unitRead,
 		},
 		{
-			Method: http.MethodPatch, Path: unitPath, Scope: ScopeAuthorized,
-			Reads: unitRead, Actions: []identity.Action{identity.ActionUnitSetContext},
+			Method: http.MethodPatch, Path: unitPath, Scope: route.ScopeAuthorized,
+			Actions: []identity.Action{identity.ActionUnitSetContext},
 			Resolve: resolveUnit, Serve: h.patchContext,
+			Reads: unitRead,
 		},
 		{
-			Method: http.MethodDelete, Path: unitPath, Scope: ScopeAuthorized,
-			Reads: unitRead, Actions: []identity.Action{identity.ActionUnitSetContext},
+			Method: http.MethodDelete, Path: unitPath, Scope: route.ScopeAuthorized,
+			Actions: []identity.Action{identity.ActionUnitSetContext},
 			Resolve: resolveUnit, Serve: h.deleteContext,
+			Reads: unitRead,
 		},
 	}
 }
@@ -117,10 +105,10 @@ func (h *Handler) contextRoutes(namespacePath, unitPath string, resolveUnit Targ
 // so callers cannot mutate handler state through the result.
 func (h *Handler) Routes() []Route {
 	out := make([]Route, len(h.routes))
-	for i, route := range h.routes {
-		out[i] = route
-		out[i].Reads = append([]identity.Action(nil), route.Reads...)
-		out[i].Actions = append([]identity.Action(nil), route.Actions...)
+	for i, rt := range h.routes {
+		out[i] = rt
+		out[i].Reads = append([]identity.Action(nil), rt.Reads...)
+		out[i].Actions = append([]identity.Action(nil), rt.Actions...)
 	}
 
 	return out
@@ -135,48 +123,29 @@ func (h *Handler) RegisteredPatterns() []string {
 
 // kit returns the route steps that this API shares with the other
 // tool-neutral APIs.
-func (h *Handler) kit() routekit.Guard {
-	return routekit.Guard{Tokens: h.authn, Sessions: h.sessions, Refusals: h.guard}
+func (h *Handler) kit() route.Guard {
+	return route.Guard{Tokens: h.authn, Sessions: h.sessions, Refusals: h.guard}
 }
 
-// enforce wraps one route table row: it authenticates, finds the object,
-// runs the checks in the order of Route, and only then runs the handler.
-func (h *Handler) enforce(route Route) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		ctx := r.Context()
-
-		p, caller, err := h.kit().Authenticate(r)
-		if err != nil {
-			h.writeError(ctx, w, err)
-
-			return
-		}
-
-		ctx = routekit.WithCaller(ctx, caller)
-		r = r.WithContext(ctx)
-
-		t, err := route.Resolve(r)
-		if err != nil {
-			h.writeError(ctx, w, err)
-
-			return
-		}
-
-		if err := h.authorizeRoute(ctx, r, route, p, t); err != nil {
-			h.writeError(ctx, w, err)
-
-			return
-		}
-
-		route.Serve(w, r, p, t)
-	}
+// enforce wraps one route table row in the shared wrapper: it
+// authenticates, resolves the target, runs the checks of the row in the
+// order of the Route comment, and only then runs the handler.
+func (h *Handler) enforce(rt Route) http.HandlerFunc {
+	return route.Enforce(h.kit(), h.writeError, route.Steps[target]{
+		Scope:   rt.Scope,
+		Resolve: rt.Resolve,
+		Authorize: func(r *http.Request, p identity.Principal, t target) error {
+			return h.authorizeRoute(r.Context(), r, rt, p, t)
+		},
+		Serve: rt.Serve,
+	})
 }
 
 // authorizeRoute runs the checks of route for p on t. It returns errNotFound
 // for a refused read check and an error that wraps identity.ErrDenied for a
 // refused action.
 func (h *Handler) authorizeRoute(
-	ctx context.Context, r *http.Request, route Route, p identity.Principal, t target,
+	ctx context.Context, r *http.Request, rt Route, p identity.Principal, t target,
 ) error {
 	nsRead := identity.ActionNamespaceRead
 
@@ -185,7 +154,7 @@ func (h *Handler) authorizeRoute(
 		return err
 	}
 
-	for _, action := range route.Reads {
+	for _, action := range rt.Reads {
 		if action == nsRead && !t.obj.IsUnit() {
 			// The object is the namespace, which the first check read.
 			continue
@@ -196,7 +165,7 @@ func (h *Handler) authorizeRoute(
 		}
 	}
 
-	for _, action := range route.Actions {
+	for _, action := range rt.Actions {
 		if err := h.guard.Authorize(ctx, r, p, action, t.obj); err != nil {
 			return fmt.Errorf("authorize %s: %w", action, err)
 		}

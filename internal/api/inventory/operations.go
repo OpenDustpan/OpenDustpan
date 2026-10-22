@@ -4,6 +4,7 @@ import (
 	"net/http"
 
 	"opendustpan.org/opendustpan/internal/api/apidesc"
+	"opendustpan.org/opendustpan/internal/api/route"
 	"opendustpan.org/opendustpan/pkg/identity"
 )
 
@@ -127,20 +128,20 @@ var (
 func (h *Handler) Operations() []apidesc.Operation {
 	rows := make([]apidesc.Row, 0, len(h.routes))
 
-	for _, route := range h.routes {
-		actions := make([]string, 0, len(route.NamespaceActions)+len(route.Actions))
-		for _, action := range append(append([]identity.Action(nil), route.NamespaceActions...), route.Actions...) {
+	for _, rt := range h.routes {
+		actions := make([]string, 0, len(rt.NamespaceActions)+len(rt.Actions))
+		for _, action := range append(append([]identity.Action(nil), rt.NamespaceActions...), rt.Actions...) {
 			actions = append(actions, string(action))
 		}
 
-		namespaceActions := make([]string, len(route.NamespaceActions))
-		for i, action := range route.NamespaceActions {
+		namespaceActions := make([]string, len(rt.NamespaceActions))
+		for i, action := range rt.NamespaceActions {
 			namespaceActions[i] = string(action)
 		}
 
 		rows = append(rows, apidesc.Row{
-			Method: route.Method, Path: route.Path, Actions: actions, NamespaceActions: namespaceActions,
-			Public: route.Scope == ScopePublic, IdempotencyKey: false,
+			Method: rt.Method, Path: rt.Path, Actions: actions, NamespaceActions: namespaceActions,
+			Public: rt.Scope == route.ScopePublic, IdempotencyKey: false,
 		})
 	}
 

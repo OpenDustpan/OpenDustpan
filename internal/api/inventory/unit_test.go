@@ -12,6 +12,7 @@ import (
 	"time"
 
 	apiinventory "opendustpan.org/opendustpan/internal/api/inventory"
+	"opendustpan.org/opendustpan/internal/api/route"
 	"opendustpan.org/opendustpan/pkg/identity"
 	coreinventory "opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -345,18 +346,18 @@ func TestGetUnitByIDRouteRow(t *testing.T) {
 
 	var found bool
 
-	for _, route := range newUnitHandler(t, grantAuthorizer{allow: nil}).Routes() {
-		if route.Path != "/api/dustpan/v1/namespaces/-/units/{unitID}" {
+	for _, rt := range newUnitHandler(t, grantAuthorizer{allow: nil}).Routes() {
+		if rt.Path != "/api/dustpan/v1/namespaces/-/units/{unitID}" {
 			continue
 		}
 
 		found = true
 
-		if route.Method != http.MethodGet || route.Scope != apiinventory.ScopeAuthorized ||
-			!reflect.DeepEqual(route.Actions, []identity.Action{identity.ActionUnitRead}) ||
-			!reflect.DeepEqual(route.NamespaceActions, []identity.Action{identity.ActionNamespaceRead}) ||
-			!route.DeniedAsNotFound {
-			t.Fatalf("route row = %+v", route)
+		if rt.Method != http.MethodGet || rt.Scope != route.ScopeAuthorized ||
+			!reflect.DeepEqual(rt.Actions, []identity.Action{identity.ActionUnitRead}) ||
+			!reflect.DeepEqual(rt.NamespaceActions, []identity.Action{identity.ActionNamespaceRead}) ||
+			!rt.DeniedAsNotFound {
+			t.Fatalf("route row = %+v", rt)
 		}
 	}
 

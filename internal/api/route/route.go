@@ -1,9 +1,10 @@
-// Package routekit holds the request steps that every tool-neutral API runs
-// before a handler: the authentication of the credential, the authorization
-// of each declared action at the point of use, the strict JSON body reader,
-// and the ServeMux that records each pattern for the route test. Each API
-// keeps its route table, its resolvers and the order of its own checks.
-package routekit
+// Package route holds the route table row and the enforcement wrapper that
+// the HTTP APIs share: the authentication of the credential, the
+// authorization of each declared action at the point of use, the fixed order
+// of these steps, the strict JSON body reader, and the ServeMux that records
+// each pattern for the route test. Each API keeps its route table, its
+// resolvers, and the authorization rules that only it has.
+package route
 
 import (
 	"bytes"

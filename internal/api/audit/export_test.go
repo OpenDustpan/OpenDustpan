@@ -3,4 +3,4 @@ package audit //nolint:testpackage // The route wrapper is unexported: a test gi
 import "net/http"
 
 // ServeRoute returns the enforcement wrapper of route.
-func (h *Handler) ServeRoute(route Route) http.HandlerFunc { return h.enforce(route) }
+func (h *Handler) ServeRoute(rt Route) http.HandlerFunc { return h.enforce(rt) }

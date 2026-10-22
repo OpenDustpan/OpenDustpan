@@ -17,6 +17,7 @@ import (
 
 	"opendustpan.org/opendustpan/internal/api/apidesc"
 	contextapi "opendustpan.org/opendustpan/internal/api/objectcontext"
+	"opendustpan.org/opendustpan/internal/api/route"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
 	coreinventory "opendustpan.org/opendustpan/pkg/inventory"
@@ -288,7 +289,7 @@ func serve(t *testing.T, h http.Handler, r request) *httptest.ResponseRecorder {
 // routeCase is a route with the request path and the checks that the route
 // makes, in order.
 type routeCase struct {
-	route  contextapi.Route
+	rt     contextapi.Route
 	path   string
 	body   string
 	checks []string
@@ -304,18 +305,18 @@ func casesOf(t *testing.T) []routeCase {
 	routes := newHandler(t, newAuthorizer(), newFakeStore()).Routes()
 	out := make([]routeCase, 0, len(routes))
 
-	for _, route := range routes {
+	for _, rt := range routes {
 		path := strings.NewReplacer("{namespace}", "acme", "{tool}", "opentofu", "{unit_id}", testUnitID).
-			Replace(route.Path)
+			Replace(rt.Path)
 		object := "acme"
 
-		if strings.Contains(route.Path, "{unit_id}") {
+		if strings.Contains(rt.Path, "{unit_id}") {
 			object = "opentofu:acme/net"
 		}
 
 		checks := []string{string(identity.ActionNamespaceRead) + " acme"}
 
-		for _, a := range route.Reads {
+		for _, a := range rt.Reads {
 			if c := string(a) + " " + object; !slices.Contains(checks, c) {
 				checks = append(checks, c)
 			}
@@ -323,16 +324,16 @@ func casesOf(t *testing.T) []routeCase {
 
 		reads := len(checks)
 
-		for _, a := range route.Actions {
+		for _, a := range rt.Actions {
 			checks = append(checks, string(a)+" "+object)
 		}
 
 		body := ""
-		if route.Method == http.MethodPatch {
+		if rt.Method == http.MethodPatch {
 			body = `{"onCall":"pager:x"}`
 		}
 
-		out = append(out, routeCase{route: route, path: path, body: body, checks: checks, reads: reads})
+		out = append(out, routeCase{rt: rt, path: path, body: body, checks: checks, reads: reads})
 	}
 
 	return out
@@ -346,7 +347,7 @@ func (rc *routeCase) wantStatus(held int) int {
 		return http.StatusNotFound
 	case held < len(rc.checks):
 		return http.StatusForbidden
-	case rc.route.Method == http.MethodDelete:
+	case rc.rt.Method == http.MethodDelete:
 		return http.StatusNoContent
 	default:
 		return http.StatusOK
@@ -363,22 +364,22 @@ func TestRoutesDeclareActions(t *testing.T) {
 	handler := newHandler(t, newAuthorizer(), newFakeStore())
 	byPattern := map[string]contextapi.Route{}
 
-	for _, route := range handler.Routes() {
-		pattern := route.Method + " " + route.Path
+	for _, rt := range handler.Routes() {
+		pattern := rt.Method + " " + rt.Path
 		if _, dup := byPattern[pattern]; dup {
 			t.Fatalf("duplicate route %q", pattern)
 		}
 
-		byPattern[pattern] = route
+		byPattern[pattern] = rt
 
 		switch {
-		case route.Scope != contextapi.ScopeAuthorized:
+		case rt.Scope != route.ScopeAuthorized:
 			t.Errorf("route %q is not authorized: this API serves no public route", pattern)
-		case len(route.Reads) == 0:
+		case len(rt.Reads) == 0:
 			t.Errorf("route %q declares no read action", pattern)
-		case route.Resolve == nil || route.Serve == nil:
+		case rt.Resolve == nil || rt.Serve == nil:
 			t.Errorf("route %q declares no resolver or no handler", pattern)
-		case (route.Method == http.MethodGet) != (len(route.Actions) == 0):
+		case (rt.Method == http.MethodGet) != (len(rt.Actions) == 0):
 			t.Errorf("route %q: only a read route may declare no set action", pattern)
 		default:
 		}
@@ -402,9 +403,9 @@ func checkSignedOut(t *testing.T, handler http.Handler) {
 
 	for i := range cases {
 		rc := &cases[i]
-		rec := serve(t, handler, request{method: rc.route.Method, path: rc.path, token: "", body: ""})
+		rec := serve(t, handler, request{method: rc.rt.Method, path: rc.path, token: "", body: ""})
 		if rec.Code != http.StatusUnauthorized {
-			t.Errorf("route %q with no token = %d, want 401", rc.route.Method+" "+rc.route.Path, rec.Code)
+			t.Errorf("route %q with no token = %d, want 401", rc.rt.Method+" "+rc.rt.Path, rec.Code)
 		}
 	}
 }
@@ -452,7 +453,7 @@ func TestRoutesEnforceTheChecks(t *testing.T) {
 		rc := &cases[i]
 
 		for held := range len(rc.checks) + 1 {
-			t.Run(fmt.Sprintf("%s %s holding %d of %d checks", rc.route.Method, rc.route.Path, held, len(rc.checks)),
+			t.Run(fmt.Sprintf("%s %s holding %d of %d checks", rc.rt.Method, rc.rt.Path, held, len(rc.checks)),
 				func(t *testing.T) {
 					t.Parallel()
 					checkRoute(t, rc, held)
@@ -470,7 +471,7 @@ func checkRoute(t *testing.T, rc *routeCase, held int) {
 	rec := serve(
 		t,
 		newHandler(t, authz, store),
-		request{method: rc.route.Method, path: rc.path, token: testToken, body: rc.body},
+		request{method: rc.rt.Method, path: rc.path, token: testToken, body: rc.body},
 	)
 
 	want := rc.wantStatus(held)
@@ -485,7 +486,7 @@ func checkRoute(t *testing.T, rc *routeCase, held int) {
 		t.Errorf("checks = %q, want %q first, in order", got, wantChecks)
 	}
 
-	if rc.route.Method == http.MethodGet {
+	if rc.rt.Method == http.MethodGet {
 		return
 	}
 
@@ -605,22 +606,22 @@ func TestDescriptionHoldsTheChecksOfEachRoute(t *testing.T) {
 	}
 
 	for _, rc := range casesOf(t) {
-		t.Run(rc.route.Method+" "+rc.route.Path, func(t *testing.T) {
+		t.Run(rc.rt.Method+" "+rc.rt.Path, func(t *testing.T) {
 			t.Parallel()
 
 			authz := newAuthorizer(rc.checks...)
 
 			rec := serve(t, newHandler(t, authz, newFakeStore()),
-				request{method: rc.route.Method, path: rc.path, token: testToken, body: rc.body})
+				request{method: rc.rt.Method, path: rc.path, token: testToken, body: rc.body})
 			if rec.Code >= http.StatusBadRequest {
 				t.Fatalf("status = %d %s, want a pass of every check", rec.Code, rec.Body.String())
 			}
 
 			got := kindsOf(t, authz.seen())
 
-			op, ok := described[apidesc.Pattern(rc.route.Method, rc.route.Path)]
+			op, ok := described[apidesc.Pattern(rc.rt.Method, rc.rt.Path)]
 			if !ok {
-				t.Fatalf("the description has no operation for %s %s", rc.route.Method, rc.route.Path)
+				t.Fatalf("the description has no operation for %s %s", rc.rt.Method, rc.rt.Path)
 			}
 
 			if !maps.Equal(got, op.ActionObjects) {

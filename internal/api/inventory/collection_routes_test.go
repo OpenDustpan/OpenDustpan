@@ -18,9 +18,9 @@ import (
 // rows fill their path values and answer their own statuses, so TestCollectionRoutes
 // checks them instead of the generic route tests. The saved view rows need a
 // person, a body and a view ID, so TestViewActions checks them.
-func isCollectionRoute(route apiinventory.Route) bool {
-	return strings.Contains(route.Path, "/collections") || strings.Contains(route.Path, "unit-collection") ||
-		strings.Contains(route.Path, "/views")
+func isCollectionRoute(rt apiinventory.Route) bool {
+	return strings.Contains(rt.Path, "/collections") || strings.Contains(rt.Path, "unit-collection") ||
+		strings.Contains(rt.Path, "/views")
 }
 
 // newCollectionRouteHandler returns a handler with the collections of the acme
@@ -78,15 +78,15 @@ func newCollectionRouteHandler(t *testing.T, authz identity.Authorizer) *apiinve
 
 // collectionRouteRequest fills the {namespace} and {collection} path values of a
 // route, and the unit query of the move route, and signs the request in.
-func collectionRouteRequest(t *testing.T, route apiinventory.Route, body string) *http.Request {
+func collectionRouteRequest(t *testing.T, rt apiinventory.Route, body string) *http.Request {
 	t.Helper()
 
-	target := strings.NewReplacer("{namespace}", "acme", "{collection}", "payments").Replace(route.Path)
-	if strings.HasSuffix(route.Path, "unit-collection") {
+	target := strings.NewReplacer("{namespace}", "acme", "{collection}", "payments").Replace(rt.Path)
+	if strings.HasSuffix(rt.Path, "unit-collection") {
 		target += "?unit=pulumi:acme/web/prod"
 	}
 
-	req := httptest.NewRequestWithContext(t.Context(), route.Method, target, strings.NewReader(body))
+	req := httptest.NewRequestWithContext(t.Context(), rt.Method, target, strings.NewReader(body))
 	req.Header.Set("Authorization", "token test-token")
 
 	return req
@@ -134,14 +134,14 @@ func TestCollectionRoutes(t *testing.T) {
 
 	seen := 0
 
-	for _, route := range handler.Routes() {
-		if !isCollectionRoute(route) {
+	for _, rt := range handler.Routes() {
+		if !isCollectionRoute(rt) {
 			continue
 		}
 
 		seen++
 
-		key := route.Method + " " + route.Path
+		key := rt.Method + " " + rt.Path
 
 		want, ok := collectionRouteCases[key]
 		if !ok {
@@ -154,21 +154,21 @@ func TestCollectionRoutes(t *testing.T) {
 			allowed := newCollectionRouteHandler(t, selectiveAuthorizer{deny: nil})
 
 			rec := httptest.NewRecorder()
-			allowed.ServeHTTP(rec, collectionRouteRequest(t, route, want.body))
+			allowed.ServeHTTP(rec, collectionRouteRequest(t, rt, want.body))
 
 			if rec.Code != want.status {
 				t.Fatalf("allowed request answers %d, want %d: %s", rec.Code, want.status, rec.Body.String())
 			}
 
 			deny := map[identity.Action]bool{}
-			for _, action := range route.Actions {
+			for _, action := range rt.Actions {
 				deny[action] = true
 			}
 
 			denied := newCollectionRouteHandler(t, selectiveAuthorizer{deny: deny})
 
 			rec = httptest.NewRecorder()
-			denied.ServeHTTP(rec, collectionRouteRequest(t, route, want.body))
+			denied.ServeHTTP(rec, collectionRouteRequest(t, rt, want.body))
 
 			if rec.Code != http.StatusForbidden {
 				t.Fatalf("denied request answers %d, want %d", rec.Code, http.StatusForbidden)

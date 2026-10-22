@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	apitaudit "opendustpan.org/opendustpan/internal/api/audit"
+	"opendustpan.org/opendustpan/internal/api/route"
 	"opendustpan.org/opendustpan/pkg/identity"
 )
 
@@ -50,39 +51,39 @@ func TestAuditRoutes(t *testing.T) {
 		t.Fatalf("routes = %d, want %d", len(routes), len(want))
 	}
 
-	for _, route := range routes {
-		pattern := route.Method + " " + route.Path
+	for _, rt := range routes {
+		pattern := rt.Method + " " + rt.Path
 
 		actions, ok := want[pattern]
 		if !ok {
 			t.Fatalf("unexpected route %q", pattern)
 		}
 
-		checkRouteActions(t, route, actions, wantServer[pattern])
+		checkRouteActions(t, rt, actions, wantServer[pattern])
 	}
 }
 
 // checkRouteActions fails when a route does not declare the actions of its
 // object and the actions of the installation, or is not an authorized route
 // with a resolver.
-func checkRouteActions(t *testing.T, route apitaudit.Route, actions, serverActions []identity.Action) {
+func checkRouteActions(t *testing.T, rt apitaudit.Route, actions, serverActions []identity.Action) {
 	t.Helper()
 
-	pattern := route.Method + " " + route.Path
+	pattern := rt.Method + " " + rt.Path
 
-	if !sameActions(route.Actions, actions) {
-		t.Fatalf("route %q actions = %v, want %v", pattern, route.Actions, actions)
+	if !sameActions(rt.Actions, actions) {
+		t.Fatalf("route %q actions = %v, want %v", pattern, rt.Actions, actions)
 	}
 
-	if !sameActions(route.ServerActions, serverActions) {
-		t.Fatalf("route %q server actions = %v, want %v", pattern, route.ServerActions, serverActions)
+	if !sameActions(rt.ServerActions, serverActions) {
+		t.Fatalf("route %q server actions = %v, want %v", pattern, rt.ServerActions, serverActions)
 	}
 
-	if route.Scope != apitaudit.ScopeAuthorized {
+	if rt.Scope != route.ScopeAuthorized {
 		t.Fatalf("route %q is not an authorized route", pattern)
 	}
 
-	if route.Resolve == nil {
+	if rt.Resolve == nil {
 		t.Fatalf("route %q declares actions but no resolver", pattern)
 	}
 }
@@ -117,16 +118,16 @@ func TestRoutesDeclareActions(t *testing.T) {
 	}
 
 	byPattern := map[string]apitaudit.Route{}
-	for _, route := range handler.Routes() {
-		pattern := route.Method + " " + route.Path
+	for _, rt := range handler.Routes() {
+		pattern := rt.Method + " " + rt.Path
 		if _, dup := byPattern[pattern]; dup {
 			t.Fatalf("duplicate route %q", pattern)
 		}
 
-		byPattern[pattern] = route
+		byPattern[pattern] = rt
 
-		checkRouteScope(t, route, public)
-		checkServerActions(t, route)
+		checkRouteScope(t, rt, public)
+		checkServerActions(t, rt)
 	}
 
 	for _, pattern := range handler.RegisteredPatterns() {
@@ -135,8 +136,8 @@ func TestRoutesDeclareActions(t *testing.T) {
 		}
 	}
 
-	for _, route := range byPattern {
-		probeRoute(t, handler, route)
+	for _, rt := range byPattern {
+		probeRoute(t, handler, rt)
 	}
 }
 
@@ -173,16 +174,16 @@ func TestNoMuxBypass(t *testing.T) {
 
 // checkRouteScope fails for a route that is neither public nor authorized
 // with actions and a resolver.
-func checkRouteScope(t *testing.T, route apitaudit.Route, public map[string]bool) {
+func checkRouteScope(t *testing.T, rt apitaudit.Route, public map[string]bool) {
 	t.Helper()
 
-	pattern := route.Method + " " + route.Path
+	pattern := rt.Method + " " + rt.Path
 
-	switch route.Scope {
-	case apitaudit.ScopePublic:
-		checkPublicRoute(t, route, public)
-	case apitaudit.ScopeAuthorized:
-		checkAuthorizedRoute(t, route, public)
+	switch rt.Scope {
+	case route.ScopePublic:
+		checkPublicRoute(t, rt, public)
+	case route.ScopeAuthorized:
+		checkAuthorizedRoute(t, rt, public)
 	default:
 		t.Fatalf("route %q declares no scope", pattern)
 	}
@@ -190,56 +191,56 @@ func checkRouteScope(t *testing.T, route apitaudit.Route, public map[string]bool
 
 // checkPublicRoute fails for a public route that is not on the public list
 // or that declares actions or a resolver.
-func checkPublicRoute(t *testing.T, route apitaudit.Route, public map[string]bool) {
+func checkPublicRoute(t *testing.T, rt apitaudit.Route, public map[string]bool) {
 	t.Helper()
 
-	pattern := route.Method + " " + route.Path
+	pattern := rt.Method + " " + rt.Path
 
 	if !public[pattern] {
 		t.Fatalf("route %q is public but not on the public list", pattern)
 	}
 
-	if len(route.Actions) != 0 {
+	if len(rt.Actions) != 0 {
 		t.Fatalf("public route %q declares actions", pattern)
 	}
 
-	if route.Resolve != nil {
+	if rt.Resolve != nil {
 		t.Fatalf("public route %q declares a resolver", pattern)
 	}
 }
 
 // checkAuthorizedRoute fails for an authorized route that is on the public
 // list or that declares no action or no resolver.
-func checkAuthorizedRoute(t *testing.T, route apitaudit.Route, public map[string]bool) {
+func checkAuthorizedRoute(t *testing.T, rt apitaudit.Route, public map[string]bool) {
 	t.Helper()
 
-	pattern := route.Method + " " + route.Path
+	pattern := rt.Method + " " + rt.Path
 
 	if public[pattern] {
 		t.Fatalf("route %q is on the public list but declares actions", pattern)
 	}
 
-	if len(route.Actions) == 0 {
+	if len(rt.Actions) == 0 {
 		t.Fatalf("route %q declares no action", pattern)
 	}
 
-	if route.Resolve == nil {
+	if rt.Resolve == nil {
 		t.Fatalf("route %q declares actions but no resolver", pattern)
 	}
 }
 
 // probeRoute checks that a declared route is registered: a request without a
 // token must fail closed, never with 404.
-func probeRoute(t *testing.T, handler *apitaudit.Handler, route apitaudit.Route) {
+func probeRoute(t *testing.T, handler *apitaudit.Handler, rt apitaudit.Route) {
 	t.Helper()
 
-	req := routeRequest(t, route, "")
+	req := routeRequest(t, rt, "")
 	rec := httptest.NewRecorder()
 
 	handler.ServeHTTP(rec, req)
 
 	if rec.Code == http.StatusNotFound {
-		t.Fatalf("route %q is declared but not served", route.Method+" "+route.Path)
+		t.Fatalf("route %q is declared but not served", rt.Method+" "+rt.Path)
 	}
 }
 
@@ -247,12 +248,12 @@ func probeRoute(t *testing.T, handler *apitaudit.Handler, route apitaudit.Route)
 // value where the route reads it, and the sequence 1 where the path has
 // one. token is sent as the Authorization header
 // when not empty.
-func routeRequest(t *testing.T, route apitaudit.Route, token string) *http.Request {
+func routeRequest(t *testing.T, rt apitaudit.Route, token string) *http.Request {
 	t.Helper()
 
-	target := strings.ReplaceAll(route.Path, "{sequence}", "1") + "?organization=acme"
+	target := strings.ReplaceAll(rt.Path, "{sequence}", "1") + "?organization=acme"
 
-	req := httptest.NewRequestWithContext(t.Context(), route.Method, target, http.NoBody)
+	req := httptest.NewRequestWithContext(t.Context(), rt.Method, target, http.NoBody)
 
 	if token != "" {
 		req.Header.Set("Authorization", "token "+token)
@@ -269,10 +270,10 @@ func TestRoutesEnforceAuthorization(t *testing.T) {
 
 	handler := newTestHandler(t)
 
-	for _, route := range handler.Routes() {
-		t.Run(route.Method+" "+route.Path, func(t *testing.T) {
+	for _, rt := range handler.Routes() {
+		t.Run(rt.Method+" "+rt.Path, func(t *testing.T) {
 			t.Parallel()
-			checkRouteEnforcement(t, route)
+			checkRouteEnforcement(t, rt)
 		})
 	}
 }
@@ -280,14 +281,14 @@ func TestRoutesEnforceAuthorization(t *testing.T) {
 // checkRouteEnforcement proves one route enforces its row: it answers 200
 // when allowed, and an authorized route answers 403 when its actions are
 // denied.
-func checkRouteEnforcement(t *testing.T, route apitaudit.Route) {
+func checkRouteEnforcement(t *testing.T, rt apitaudit.Route) {
 	t.Helper()
 
-	if route.Scope == apitaudit.ScopePublic {
+	if rt.Scope == route.ScopePublic {
 		allowed, _ := newEnforcingHandler(t, selectiveAuthorizer{deny: map[identity.Action]bool{}})
 
 		rec := httptest.NewRecorder()
-		allowed.ServeHTTP(rec, routeRequest(t, route, ""))
+		allowed.ServeHTTP(rec, routeRequest(t, rt, ""))
 
 		if rec.Code != http.StatusOK {
 			t.Fatalf("public route answers %d, want %d", rec.Code, http.StatusOK)
@@ -300,21 +301,21 @@ func checkRouteEnforcement(t *testing.T, route apitaudit.Route) {
 	seedEntry(t, store, "acme", "alice")
 
 	rec := httptest.NewRecorder()
-	allowed.ServeHTTP(rec, routeRequest(t, route, "test-token"))
+	allowed.ServeHTTP(rec, routeRequest(t, rt, "test-token"))
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("allowed request answers %d, want %d (%s)", rec.Code, http.StatusOK, rec.Body.String())
 	}
 
 	deny := map[identity.Action]bool{}
-	for _, action := range route.Actions {
+	for _, action := range rt.Actions {
 		deny[action] = true
 	}
 
 	denied, _ := newEnforcingHandler(t, selectiveAuthorizer{deny: deny})
 
 	rec = httptest.NewRecorder()
-	denied.ServeHTTP(rec, routeRequest(t, route, "test-token"))
+	denied.ServeHTTP(rec, routeRequest(t, rt, "test-token"))
 
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("denied request answers %d, want %d", rec.Code, http.StatusForbidden)
@@ -330,9 +331,9 @@ func TestResolveAuditNamespace(t *testing.T) {
 
 	var resolve apitaudit.ObjectResolver
 
-	for _, route := range handler.Routes() {
-		if route.Method+" "+route.Path == "GET /api/audit/entries" {
-			resolve = route.Resolve
+	for _, rt := range handler.Routes() {
+		if rt.Method+" "+rt.Path == "GET /api/audit/entries" {
+			resolve = rt.Resolve
 		}
 	}
 
@@ -382,16 +383,16 @@ func resolveFails(t *testing.T, resolve apitaudit.ObjectResolver, target string)
 func TestRoutesAuthorizeTheNamespace(t *testing.T) {
 	t.Parallel()
 
-	for _, route := range auditRoutes(t) {
+	for _, rt := range auditRoutes(t) {
 		recorder := &recordingAuthorizer{calls: nil}
 		handler, store := newEnforcingHandler(t, recorder)
 		seedEntry(t, store, "acme", "alice")
 
 		rec := httptest.NewRecorder()
-		handler.ServeHTTP(rec, routeRequest(t, route, "test-token"))
+		handler.ServeHTTP(rec, routeRequest(t, rt, "test-token"))
 
 		if rec.Code != http.StatusOK {
-			t.Fatalf("route %q answers %d, want %d", route.Method+" "+route.Path, rec.Code, http.StatusOK)
+			t.Fatalf("route %q answers %d, want %d", rt.Method+" "+rt.Path, rec.Code, http.StatusOK)
 		}
 
 		want := fmt.Sprintf("%s on %s", identity.ActionNamespaceReadAudit, "acme")
@@ -406,7 +407,7 @@ func TestRoutesAuthorizeTheNamespace(t *testing.T) {
 		if !found {
 			t.Fatalf(
 				"route %q authorized %v, want %q",
-				route.Method+" "+route.Path,
+				rt.Method+" "+rt.Path,
 				recorder.calls,
 				want,
 			)
@@ -455,18 +456,18 @@ func (*recordingAuthorizer) ListObjects(
 // checkServerActions fails when a route can resolve to the installation object
 // and declares no ServerActions. The check asks the resolver itself, with the
 // organization @server, so a new route cannot skip it.
-func checkServerActions(t *testing.T, route apitaudit.Route) {
+func checkServerActions(t *testing.T, rt apitaudit.Route) {
 	t.Helper()
 
-	if route.Resolve == nil || len(route.ServerActions) > 0 {
+	if rt.Resolve == nil || len(rt.ServerActions) > 0 {
 		return
 	}
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequestWithContext(t.Context(), route.Method, route.Path+"?organization=@server", http.NoBody)
+	req := httptest.NewRequestWithContext(t.Context(), rt.Method, rt.Path+"?organization=@server", http.NoBody)
 
-	obj, err := route.Resolve(rec, req)
+	obj, err := rt.Resolve(rec, req)
 	if err == nil && obj.IsServer() {
-		t.Fatalf("route %q resolves @server but declares no server actions", route.Method+" "+route.Path)
+		t.Fatalf("route %q resolves @server but declares no server actions", rt.Method+" "+rt.Path)
 	}
 }
