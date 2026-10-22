@@ -10,9 +10,9 @@ import (
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/history/historytest"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/history"
-	"opendustpan.org/opendustpan/pkg/history/historytest"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/secret"
 )

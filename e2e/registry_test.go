@@ -18,7 +18,7 @@ import (
 	"testing"
 
 	"opendustpan.org/opendustpan/e2e"
-	"opendustpan.org/opendustpan/pkg/registry/pgpfixture"
+	"opendustpan.org/opendustpan/internal/registry/pgpfixture"
 )
 
 // providerName is the provider that the test publishes.
