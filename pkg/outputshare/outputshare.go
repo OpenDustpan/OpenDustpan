@@ -41,6 +41,14 @@ var (
 	// ErrNoRule reports that no sharing rule of the producer names the
 	// consumer. A check that gets it denies the read.
 	ErrNoRule = errors.New("no sharing rule names the consumer")
+	// ErrUnknownObject reports a unit or a collection of the producer
+	// namespace that a rule names and that does not exist with that stable
+	// ID and that name.
+	ErrUnknownObject = errors.New("unit or collection of the sharing rule not found")
+	// ErrUnknownProducer reports a hidden denial of a read by a job: a job of
+	// another namespace, or a job whose unit the checker could not read. A
+	// tool adapter answers it exactly as a producer that does not exist.
+	ErrUnknownProducer = errors.New("producer not found")
 )
 
 // Bounds of a sharing rule.
@@ -114,13 +122,16 @@ type Rule struct {
 	Producer identity.Object
 	// Consumer is the object whose units read the outputs: a unit, a
 	// collection, or the namespace of the producer. A unit or a collection
-	// of another namespace is valid. A whole other namespace is not.
+	// of another namespace is valid, as a reference by name with no stable
+	// ID. A whole other namespace is not.
 	Consumer identity.Object
 }
 
 // Validate returns an error that wraps ErrInvalid when r is not a valid rule.
-// It checks the ID, the kinds of both objects, and that a consumer namespace
-// is the namespace of the producer. It allows the kinds of objects that it
+// It checks the ID, the kinds of both objects, that a consumer namespace is
+// the namespace of the producer, that each unit and each collection of the
+// producer namespace has its stable ID, and that a consumer of another
+// namespace has none. It allows the kinds of objects that it
 // lists and refuses each other kind, so a new kind of object is refused until
 // a decision adds it.
 //
@@ -152,7 +163,40 @@ func (r Rule) Validate() error {
 		)
 	}
 
+	if !stableIn(r.Producer) {
+		return fmt.Errorf("%w: the producer %q has no stable ID", ErrInvalid, r.Producer)
+	}
+
+	if r.CrossNamespace() {
+		// A consumer of another namespace is a reference by name. A stable ID
+		// on it would come from a resolve of an object of another namespace,
+		// which the save never does.
+		if r.Consumer.UnitID() != "" || r.Consumer.CollectionID() != "" {
+			return fmt.Errorf("%w: the consumer %q of another namespace has a stable ID", ErrInvalid, r.Consumer)
+		}
+
+		return nil
+	}
+
+	if !stableIn(r.Consumer) {
+		return fmt.Errorf("%w: the consumer %q has no stable ID", ErrInvalid, r.Consumer)
+	}
+
 	return nil
+}
+
+// stableIn reports whether o, an object of the producer namespace, has the
+// stable ID that its kind needs: a unit and a collection have one, a
+// namespace needs none.
+func stableIn(o identity.Object) bool {
+	switch {
+	case o.IsUnit():
+		return o.UnitID() != ""
+	case o.IsCollection():
+		return o.CollectionID() != ""
+	default:
+		return true
+	}
 }
 
 // CrossNamespace reports whether the consumer of r is in another namespace
@@ -174,9 +218,12 @@ func scopeObject(o identity.Object) bool {
 // Placement is a unit with the collection that holds it at the time of a
 // check. Unit is a unit reference with its stable ID. Collection is the
 // reference of its collection with its stable ID, or the zero object when
-// the unit has no collection. A rule that names a collection matches by the
-// stable ID, so a collection that is deleted and made again with the same
-// name does not get the rules of the old one.
+// the unit has no collection. A rule that names a collection of the producer
+// namespace matches by the stable ID, so a collection of that namespace that
+// is deleted and made again with the same name does not get the rules of the
+// old one. A rule that names a collection of another namespace matches by
+// name, so a collection of that namespace made again with the old name gets
+// the rule.
 type Placement struct {
 	Unit       identity.Object
 	Collection identity.Object

@@ -1,6 +1,6 @@
 // Package outputsharetest is the conformance suite of the ports of package
-// outputshare: Store, NewUnitRules and Checker. A new adapter runs Run with a
-// Factory.
+// outputshare: Store and Checker, and the rule that the SQL adapter of a tool
+// store writes when it makes a unit. A new adapter runs Run with a Factory.
 //
 // No adapter implements the ports yet. Each case names one behavior and is
 // skipped with the reason Pending until the slice that adds the first adapter
@@ -25,15 +25,23 @@ const Pending = "no adapter implements the output sharing ports yet; " +
 type Harness struct {
 	// Store keeps the rules and the setting.
 	Store outputshare.Store
-	// NewUnitRules gives the rule of the setting to a new unit.
-	NewUnitRules outputshare.NewUnitRules
 	// Checker decides each read.
 	Checker outputshare.Checker
 	// Namespace makes the namespace name and returns its current fence.
 	Namespace func(t *testing.T, name string) namespace.Fence
 	// Unit makes a unit of the tool in the namespace, in the collection when
-	// it is not empty, and returns its placement with the stable IDs.
+	// it is not empty, and returns its placement with the stable IDs. The
+	// tool store writes the rule of the setting of the namespace in the
+	// transaction that makes the unit.
 	Unit func(t *testing.T, tool string, ns namespace.Name, name, collection string) outputshare.Placement
+	// UnitFault is an optional hook: it makes a unit as Unit does, with a
+	// fault that the adapter injects after the write of the first rule and
+	// before the commit, and returns the error of the create. A case that
+	// needs it skips when it is nil.
+	UnitFault func(t *testing.T, tool string, ns namespace.Name, name string) error
+	// Authority makes the attachment authority of an open of the profile
+	// block outputs/opendustpan and returns its principal ID.
+	Authority func(t *testing.T, ns namespace.Name) string
 	// Grant gives the principal the action on the object.
 	Grant func(t *testing.T, principal string, action identity.Action, object identity.Object)
 	// Job starts a job of the unit for the starter principal and returns the
@@ -92,7 +100,7 @@ func Names() []string {
 
 // allCases returns the cases of the suite. Each call returns a new slice.
 func allCases() []suiteCase {
-	return slices.Concat(storeCases(), newUnitCases(), checkerCases())
+	return slices.Concat(storeCases(), newUnitCases(), checkerCases(), attachmentCases())
 }
 
 // storeCases are the behaviors of Store.
@@ -103,17 +111,28 @@ func storeCases() []suiteCase {
 		{nil, "store: put refuses a rule that names a principal"},
 		{nil, "store: put refuses a rule that names a whole other namespace"},
 		{nil, "store: put keeps a rule that names a unit or a collection of another namespace"},
+		{nil, "store: put refuses a producer or a consumer of the namespace with no stable ID"},
+		{nil, "store: put refuses a producer unit that does not exist with ErrUnknownObject"},
+		{nil, "store: put refuses a consumer unit or collection of the namespace that does not exist"},
+		{nil, "store: put refuses a stable ID that names another object than the name"},
+		{nil, "store: put refuses a consumer of another namespace with a stable ID"},
+		{nil, "store: put of a consumer of another namespace answers the same whether it exists or not"},
 		{nil, "store: put refuses a second rule with the same producer and consumer"},
 		{nil, "store: put refuses the rule past the limit of the producer"},
 		{nil, "store: put refuses a stale fence and a fence of another namespace"},
 		{nil, "store: a rule across namespaces carries the fence of the producer only"},
 		{nil, "store: get and delete of an unknown rule"},
+		{nil, "store: get and delete of a rule of another unit answer ErrNotFound and change nothing"},
+		{nil, "store: get and delete on a unit never reach the rule of its collection or its namespace"},
+		{nil, "store: get and delete on the namespace never reach the rule of a unit"},
+		{nil, "store: get and delete on a unit made again with the old name never reach the rule of the old unit"},
 		{nil, "store: get and delete refuse an invalid ID and an invalid namespace"},
 		{nil, "store: delete refuses a stale fence"},
 		{nil, "store: list returns the rules of one producer ordered by ID"},
 		{nil, "store: a rule is invisible to another namespace"},
 		{nil, "store: a rename of the producer or of a consumer in the namespace keeps the rule"},
-		{nil, "store: a collection made again with the old name does not get the rules"},
+		{nil, "store: a collection of the namespace made again with the old name does not get the rules"},
+		{nil, "store: a collection of another namespace made again with the old name matches the rule"},
 		{nil, "store: the purge of a unit removes the rules that name it in its namespace"},
 		{nil, "store: find matches a rule on the unit, its collection and its namespace"},
 		{nil, "store: find matches a consumer unit, its collection and the namespace of the producer"},
@@ -131,12 +150,15 @@ func storeCases() []suiteCase {
 	}
 }
 
-// newUnitCases are the behaviors of NewUnitRules.
+// newUnitCases are the behaviors of the rule that a tool store writes when it
+// makes a unit.
 func newUnitCases() []suiteCase {
 	return []suiteCase{
 		{nil, "new unit: nobody gives no rule"},
 		{nil, "new unit: namespace gives one rule that names the namespace of the unit"},
-		{nil, "new unit: a unit with no stable ID is refused"},
+		{nil, "new unit: the rule has its audit entry in the namespace of the unit"},
+		{nil, "new unit: a fault before the commit leaves no unit, no rule and no audit entry"},
+		{nil, "new unit: a setting that fails Validate refuses the create and writes nothing"},
 	}
 }
 
@@ -158,9 +180,34 @@ func checkerCases() []suiteCase {
 		{nil, "checker: a job that ended denies"},
 		{nil, "checker: a job of another namespace reads only with a rule that names its unit or collection"},
 		{nil, "checker: a job of another namespace never matches a namespace rule"},
+		{nil, "checker: a job of another namespace with no rule answers ErrUnknownProducer, not identity.ErrDenied"},
+		{nil, "checker: a job of another namespace whose starter has no grant answers ErrUnknownProducer"},
+		{nil, "checker: a hidden denial writes its audit entry in the producer namespace only"},
+		{nil, "checker: a hidden denial writes no audit entry in the namespace of the job"},
+		{nil, "checker: a job of the producer namespace with no rule answers identity.ErrDenied"},
+		{nil, "checker: a job whose unit cannot be read gives a hidden denial"},
+		{nil, "checker: a request that is not of the latest state is denied by the latest-state check"},
+		{nil, "checker: a principal with unit:read-outputs and unit:read-secrets gets no right to decrypt"},
 		{nil, "checker: a stored rule that fails Validate denies"},
 		{nil, "checker: an error of a port denies"},
 		{nil, "checker: each denial writes an audit entry with the check, the producer and the unit of the job"},
 		{nil, "checker: an invalid producer placement is refused"},
+	}
+}
+
+// attachmentCases are the behaviors of the checker for an open of the profile
+// block outputs/opendustpan.
+func attachmentCases() []suiteCase {
+	return []suiteCase{
+		{nil, "attachment: a job open with a rule and an authority with the grant reads"},
+		{nil, "attachment: a job open with a rule and an authority without the grant is denied by the grant check"},
+		{nil, "attachment: a job open uses the grants of the authority, not of the starter"},
+		{nil, "attachment: a job open with no rule is denied by the rule check"},
+		{nil, "attachment: a secret output needs unit:read-secrets of the authority"},
+		{nil, "attachment: an authority that is deleted or disabled denies"},
+		{nil, "attachment: a job open of a producer of another namespace is denied and hidden"},
+		{nil, "attachment: a direct open uses the grants of the caller"},
+		{nil, "attachment: a direct open with an authority that is not the caller is refused"},
+		{nil, "attachment: the decision names the kind attachment and the rule"},
 	}
 }

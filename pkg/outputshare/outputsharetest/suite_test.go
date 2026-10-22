@@ -17,7 +17,7 @@ func TestSuiteWaitsForAnAdapter(t *testing.T) {
 		t.Fatal("a pending case asked for a harness")
 
 		return outputsharetest.Harness{
-			Store: nil, NewUnitRules: nil, Checker: nil, Namespace: nil, Unit: nil,
+			Store: nil, Checker: nil, Namespace: nil, Unit: nil, UnitFault: nil, Authority: nil,
 			Grant: nil, Job: nil, Disable: nil, Audited: nil, StoreRaw: nil,
 		}
 	})

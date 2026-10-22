@@ -13,13 +13,19 @@ var ErrNotAnOutput = errors.New("ciphertext is not a secret output of the latest
 
 // OutputCiphertexts reads the ciphertexts that the root outputs of the latest
 // checkpoint of a stack hold. The decrypt and batch-decrypt routes call it for
-// a caller that may read the outputs of the stack and does not hold
-// unit:decrypt on it: the job token of another stack whose sharing rule
-// passes, or a principal with unit:read-outputs and unit:read-secrets. Each
-// ciphertext of such a request must be in the answer, or the route refuses
-// the whole request with ErrNotAnOutput. A Pulumi CLI that reads another stack
-// with a stack reference decrypts its secret outputs on these routes: version
+// the job token of another stack whose read of the outputs passes both
+// checks of the sharing rules. Each ciphertext of such a request must be in
+// the answer, or the route refuses the whole request with ErrNotAnOutput. A
+// principal decrypts only with unit:decrypt, as before: unit:read-outputs and
+// unit:read-secrets give a principal no decrypt, and the routes do not call
+// this port for a principal. A Pulumi CLI that reads another stack with a
+// stack reference decrypts its secret outputs on these routes: version
 // 3.200.0 calls decrypt, and 3.250.0 and later call batch-decrypt.
+//
+// The routes read the latest checkpoint at the decrypt. When the producer
+// saves a new checkpoint between the export and the decrypt, a ciphertext
+// that only the older checkpoint holds is refused with 403. This fails
+// closed. The next run of the job reads the new checkpoint.
 //
 // Only the Pulumi CLI has secret outputs as ciphertext of the producer. An
 // OpenTofu output marked sensitive is plain text in the state, so this port

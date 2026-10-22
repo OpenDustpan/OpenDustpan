@@ -753,11 +753,15 @@ func checkSharingRuleRefusals(ctx context.Context, t *testing.T, env *e2e.Env, p
 //     of the job and the principal that started the job holds
 //     unit:read-outputs. The decrypt route refuses a ciphertext that is not
 //     in the outputs of the latest checkpoint.
+//   - The stack read and the export that such a job token gets hold no tag
+//     and no resource other than the root stack resource. The export of a
+//     version and the update history refuse it.
 func pulumiSharingRules(t *testing.T, env *e2e.Env) {
 	t.Helper()
 
 	ctx := t.Context()
 	pulumiShareSetup(ctx, t, env)
+	pulumiProducerWithResource(ctx, t, env)
 
 	producerID, _, err := env.StackID(ctx, e2e.Namespace, e2e.Project, shareProducer)
 	if err != nil || producerID == "" {
@@ -787,6 +791,9 @@ func pulumiSharingRules(t *testing.T, env *e2e.Env) {
 		outputContains("403"), "up", "--yes", "--non-interactive", "--stack", shareStack(shareConsumer)),
 		"PULUMI_ACCESS_TOKEN="+reader))
 
+	// Only this test passes a job token in PULUMI_ACCESS_TOKEN, to drive the
+	// CLI with it. The launcher never puts a job token in an environment
+	// variable.
 	jobToken := jobTokenOf(t, e2e.Namespace, consumer)
 
 	env.Step(ctx, t, withEnv(failStep("a job token with no rule", outputContains("403"),
@@ -800,6 +807,138 @@ func pulumiSharingRules(t *testing.T, env *e2e.Env) {
 		path: stackPath + "/decrypt", body: `{"ciphertext":` + strconv.Quote(configSecret) + `}`,
 		want: http.StatusForbidden,
 	})
+	checkReducedStack(ctx, t, env, jobToken, stackPath)
+	checkReducedDeployment(ctx, t, env, jobToken, stackPath)
+
+	for _, c := range []shareCall{
+		{"a job token reads no export of a version", jobToken, http.MethodGet, stackPath + "/export/1", "", http.StatusForbidden},
+		{"a job token reads no update history", jobToken, http.MethodGet, stackPath + "/updates", "", http.StatusForbidden},
+	} {
+		shareAPI(ctx, t, env, c)
+	}
+}
+
+// pulumiShareAnchor is the Pulumi program of the anchor stack: one plain
+// output and no config, so that the producer can hold a resource that needs
+// no plugin.
+func pulumiShareAnchor() string {
+	return "name: " + e2e.Project + "\nruntime: yaml\n" +
+		"outputs:\n" +
+		"  anchor: anchor\n"
+}
+
+// pulumiProducerWithResource gives the state of the producer a resource
+// other than the root stack resource, a stack reference to an anchor stack,
+// so that a check of the reduced deployment has a resource to leave out. The
+// project file holds the consumer program at the end.
+func pulumiProducerWithResource(ctx context.Context, t *testing.T, env *e2e.Env) {
+	t.Helper()
+
+	anchor := shareStack("anchor")
+
+	env.WritePulumiProject(t, pulumiShareAnchor())
+	env.Step(ctx, t, step("share init anchor", nil, "stack", "init", anchor, "--no-select"))
+	env.Step(ctx, t, step("share up anchor", nil, "up", "--yes", "--non-interactive", "--stack", anchor))
+	env.WritePulumiProject(t, shareProducerProgram()+
+		"resources:\n"+
+		"  anchor:\n"+
+		"    type: pulumi:pulumi:StackReference\n"+
+		"    properties:\n"+
+		"      name: "+anchor+"\n")
+	env.Step(ctx, t, step("share up producer with a resource", nil,
+		"up", "--yes", "--non-interactive", "--stack", shareStack(shareProducer)))
+	env.WritePulumiProject(t, shareConsumerProgram())
+}
+
+// checkReducedStack proves that the stack read of a job token of another
+// stack holds no tag of the producer.
+func checkReducedStack(ctx context.Context, t *testing.T, env *e2e.Env, token, stackPath string) {
+	t.Helper()
+
+	body := shareAPI(ctx, t, env, shareCall{
+		name: "a job token reads the stack", token: token, method: http.MethodGet, path: stackPath, body: "",
+		want: http.StatusOK,
+	})
+
+	var answer struct {
+		Tags         map[string]string `json:"tags"`
+		ActiveUpdate string            `json:"activeUpdate"`
+	}
+
+	if err := json.Unmarshal([]byte(body), &answer); err != nil {
+		t.Fatalf("the stack answer to a job token is not JSON: %v", err)
+	}
+
+	if len(answer.Tags) != 0 || answer.ActiveUpdate != "" {
+		t.Fatalf("the stack answer to a job token has %d tags and active update %q, want none",
+			len(answer.Tags), answer.ActiveUpdate)
+	}
+}
+
+// checkReducedDeployment proves that the export that a job token of another
+// stack gets holds the root stack resource with its outputs and the secrets
+// providers, and no other resource, no inputs and no pending operation. The
+// body holds the ciphertext of a secret output, so no message prints it.
+func checkReducedDeployment(ctx context.Context, t *testing.T, env *e2e.Env, token, stackPath string) {
+	t.Helper()
+
+	full := shareAPI(ctx, t, env, shareCall{
+		name: "the producer reads its export", token: "", method: http.MethodGet, path: stackPath + "/export", body: "",
+		want: http.StatusOK,
+	})
+	if n := len(deploymentOf(t, full).Resources); n < 2 {
+		t.Fatalf("the export of the producer has %d resources, want the root stack resource and another", n)
+	}
+
+	reduced := deploymentOf(t, shareAPI(ctx, t, env, shareCall{
+		name: "a job token reads the export", token: token, method: http.MethodGet, path: stackPath + "/export",
+		body: "", want: http.StatusOK,
+	}))
+
+	if len(reduced.Resources) != 1 || reduced.Resources[0].Type != "pulumi:pulumi:Stack" {
+		t.Fatalf("the export to a job token has %d resources, want the root stack resource only",
+			len(reduced.Resources))
+	}
+
+	if len(reduced.Resources[0].Inputs) != 0 || len(reduced.Resources[0].Outputs) == 0 {
+		t.Fatal("the root stack resource of the export to a job token has inputs or no outputs")
+	}
+
+	if len(reduced.SecretsProviders) == 0 || len(reduced.PendingOperations) != 0 {
+		t.Fatal("the export to a job token has no secrets providers, or has pending operations")
+	}
+}
+
+// shareResource is the part of a resource of an export that the reduced
+// deployment checks read.
+type shareResource struct {
+	Inputs  map[string]any `json:"inputs"`
+	Outputs map[string]any `json:"outputs"`
+	Type    string         `json:"type"`
+}
+
+// shareDeployment is the part of an export that the reduced deployment
+// checks read.
+type shareDeployment struct {
+	SecretsProviders  json.RawMessage   `json:"secrets_providers"` //nolint:tagliatelle // The Pulumi wire name.
+	Resources         []shareResource   `json:"resources"`
+	PendingOperations []json.RawMessage `json:"pending_operations"` //nolint:tagliatelle // The Pulumi wire name.
+}
+
+// deploymentOf parses the deployment of the export body. The body holds
+// ciphertext, so no message prints it.
+func deploymentOf(t *testing.T, body string) shareDeployment {
+	t.Helper()
+
+	var export struct {
+		Deployment shareDeployment `json:"deployment"`
+	}
+
+	if err := json.Unmarshal([]byte(body), &export); err != nil {
+		t.Fatalf("the export is not JSON: %v", err)
+	}
+
+	return export.Deployment
 }
 
 // producerConfigCiphertext answers the ciphertext of the config secret of the
@@ -830,7 +969,12 @@ func producerConfigCiphertext(t *testing.T, env *e2e.Env) string {
 //     and terraform_remote_state fails, because the download holds the whole
 //     state and needs unit:read.
 //   - A job token of a consumer in another namespace reads the producer only
-//     when a sharing rule of the producer names that consumer.
+//     when a sharing rule of the producer names that consumer. With no rule,
+//     each read answers 404, as for a workspace that does not exist.
+//   - The download that such a job token gets holds the outputs and no
+//     resource, and a state version that is not current is refused.
+//   - A grant of unit:manage-sharing on the installation saves no rule whose
+//     consumer is in another namespace.
 func tofuSharingRules(t *testing.T, env *e2e.Env) {
 	t.Helper()
 
@@ -859,14 +1003,173 @@ func tofuSharingRules(t *testing.T, env *e2e.Env) {
 
 	env.StepIn(ctx, t, crossDir, step("share init cross-namespace consumer", nil, "init", "-input=false", "-no-color"))
 
+	producerID := env.WorkspaceIDByName(ctx, t, e2e.Workspace)
+	oldVersion := currentStateVersion(ctx, t, env, "", producerID)
+
+	env.WriteTofuConfig(t, tofuProducerConfig(env.Host())+"\nresource \"terraform_data\" \"anchor\" {}\n")
+	env.Step(ctx, t, step("share apply producer with a resource", nil,
+		"apply", "-input=false", "-auto-approve", "-no-color"))
+
+	if oldVersion == currentStateVersion(ctx, t, env, "", producerID) {
+		t.Fatal("the apply with a resource made no new state version of the producer")
+	}
+
+	// Only this test gives a job token to the CLI in its configuration, to
+	// drive the CLI with it. The launcher never puts a job token in an
+	// environment variable.
 	jobToken := jobTokenOf(t, e2e.Namespace2, crossConsumer)
 
 	env.StepIn(ctx, t, crossDir, withEnv(failStep("a job token across namespaces with no rule",
-		outputContains("403"), "plan", "-input=false", "-no-color"), tofuTokenConfig(t, env.Host(), jobToken)))
-	producerID := env.WorkspaceIDByName(ctx, t, e2e.Workspace)
+		outputContains("404"), "plan", "-input=false", "-no-color"), tofuTokenConfig(t, env.Host(), jobToken)))
+	checkHiddenProducer(ctx, t, env, jobToken, producerID)
+	checkOperatorSavesNoCrossRule(ctx, t, env, producerID, crossConsumer)
 	sharingRule(ctx, t, env, ruleTarget{e2e.Namespace, producerID, crossConsumer})
 	env.StepIn(ctx, t, crossDir, withEnv(step("a job token across namespaces with a rule",
 		contains(shareVPC), "plan", "-input=false", "-no-color"), tofuTokenConfig(t, env.Host(), jobToken)))
+	checkReducedState(ctx, t, env, jobToken, producerID)
+	shareAPI(ctx, t, env, shareCall{
+		name: "a job token across namespaces downloads no old state version", token: jobToken,
+		method: http.MethodGet, path: "/api/v2/state-versions/" + oldVersion + "/download", body: "",
+		want: http.StatusNotFound,
+	})
+}
+
+// currentStateVersion answers the ID of the current state version of the
+// workspace workspaceID, read with token, or with the token of the
+// administrator when token is "".
+func currentStateVersion(ctx context.Context, t *testing.T, env *e2e.Env, token, workspaceID string) string {
+	t.Helper()
+
+	body := shareAPI(ctx, t, env, shareCall{
+		name: "read the current state version", token: token, method: http.MethodGet,
+		path: "/api/v2/workspaces/" + workspaceID + "/current-state-version", body: "", want: http.StatusOK,
+	})
+
+	var answer struct {
+		Data shareResourceID `json:"data"`
+	}
+
+	if err := json.Unmarshal([]byte(body), &answer); err != nil || answer.Data.ID == "" {
+		t.Fatalf("the current state version answer has no id: %v", err)
+	}
+
+	return answer.Data.ID
+}
+
+// shareResourceID is the ID of a JSON:API resource.
+type shareResourceID struct {
+	ID string `json:"id"`
+}
+
+// checkHiddenProducer proves that a job token of another namespace with no
+// rule gets the same answer for the producer as for a workspace that does
+// not exist, on each route that terraform_remote_state calls.
+func checkHiddenProducer(ctx context.Context, t *testing.T, env *e2e.Env, token, producerID string) {
+	t.Helper()
+
+	byName := "/api/v2/organizations/" + e2e.Namespace + "/workspaces/"
+
+	for _, pair := range [][2]string{
+		{byName + e2e.Workspace, byName + "no-such-workspace"},
+		{"/api/v2/workspaces/" + producerID + "/current-state-version", "/api/v2/workspaces/ws-nosuchworkspace0/current-state-version"},
+	} {
+		known := shareAPI(ctx, t, env, shareCall{
+			name: "a job token across namespaces reads the producer with no rule", token: token,
+			method: http.MethodGet, path: pair[0], body: "", want: http.StatusNotFound,
+		})
+		unknown := shareAPI(ctx, t, env, shareCall{
+			name: "a job token across namespaces reads an unknown workspace", token: token,
+			method: http.MethodGet, path: pair[1], body: "", want: http.StatusNotFound,
+		})
+
+		if known != unknown {
+			t.Fatalf("%s answers %q, and an unknown workspace answers %q; want the same body", pair[0], known, unknown)
+		}
+	}
+}
+
+// checkReducedState proves that the download that a job token of another
+// unit gets holds the outputs and no resource.
+func checkReducedState(ctx context.Context, t *testing.T, env *e2e.Env, token, producerID string) {
+	t.Helper()
+
+	full := stateOf(t, shareAPI(ctx, t, env, shareCall{
+		name: "the producer downloads its state", token: "", method: http.MethodGet,
+		path: "/api/v2/state-versions/" + currentStateVersion(ctx, t, env, "", producerID) + "/download", body: "",
+		want: http.StatusOK,
+	}))
+	if len(full.Resources) == 0 {
+		t.Fatal("the state of the producer has no resource, so the check of the reduced state proves nothing")
+	}
+
+	reduced := stateOf(t, shareAPI(ctx, t, env, shareCall{
+		name: "a job token downloads the current state version", token: token, method: http.MethodGet,
+		path: "/api/v2/state-versions/" + currentStateVersion(ctx, t, env, token, producerID) + "/download",
+		body: "", want: http.StatusOK,
+	}))
+
+	if reduced.Resources == nil || len(reduced.Resources) != 0 || len(reduced.Outputs) == 0 {
+		t.Fatalf("the state to a job token has %d resources and %d outputs, want resources: [] and the outputs",
+			len(reduced.Resources), len(reduced.Outputs))
+	}
+}
+
+// shareState is the part of an OpenTofu state that the reduced state checks
+// read.
+type shareState struct {
+	Outputs   map[string]json.RawMessage `json:"outputs"`
+	Resources []json.RawMessage          `json:"resources"`
+}
+
+// stateOf parses an OpenTofu state. The body can hold a sensitive output, so
+// no message prints it.
+func stateOf(t *testing.T, body string) shareState {
+	t.Helper()
+
+	var state shareState
+	if err := json.Unmarshal([]byte(body), &state); err != nil {
+		t.Fatalf("the state is not JSON: %v", err)
+	}
+
+	return state
+}
+
+// checkOperatorSavesNoCrossRule proves that a principal with a grant of
+// unit:manage-sharing on the installation only saves no rule whose consumer
+// is in another namespace.
+func checkOperatorSavesNoCrossRule(ctx context.Context, t *testing.T, env *e2e.Env, producerID, consumer string) {
+	t.Helper()
+
+	var principal e2ePrincipal
+	principalCall(ctx, t, env, principalStep{
+		http.MethodPost, "/api/server/principals", `{"subject":"sharing-operator","kind":"service"}`, http.StatusCreated,
+	}, &principal)
+
+	var role struct {
+		ID string `json:"id"`
+	}
+	principalCall(ctx, t, env, principalStep{
+		http.MethodPost, "/api/server/roles", `{"name":"sharing-operator","actions":["unit:manage-sharing"]}`,
+		http.StatusCreated,
+	}, &role)
+	principalCall(ctx, t, env, principalStep{
+		http.MethodPost, "/api/server/grants",
+		`{"subject":"principal:` + principal.ID + `","role":"` + role.ID + `"}`, http.StatusCreated,
+	}, nil)
+
+	var created struct {
+		Token e2eToken `json:"token"`
+	}
+	principalCall(ctx, t, env, principalStep{
+		http.MethodPost, "/api/server/principals/" + principal.ID + "/tokens", `{"name":"sharing-operator"}`,
+		http.StatusCreated,
+	}, &created)
+
+	shareAPI(ctx, t, env, shareCall{
+		name: "an operator saves no rule across namespaces", token: created.Token.Secret, method: http.MethodPost,
+		path: sharingAPI + e2e.Namespace + "/units/" + producerID + "/sharing-rules",
+		body: `{"consumer":` + strconv.Quote(consumer) + `}`, want: http.StatusForbidden,
+	})
 }
 
 // tofuTokenConfig writes a CLI configuration of OpenTofu that signs in to

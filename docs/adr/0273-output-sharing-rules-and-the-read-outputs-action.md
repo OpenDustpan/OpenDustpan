@@ -1,6 +1,6 @@
 # 273. Output sharing: the read-outputs action and sharing rules on the producer
 
-Status: accepted · 2026-10-22. Records decisions 15.1 to 15.7 of the owner and the product manager. Accepts RFC 15. Amends ADR 213 decision 1, ADR 207 decision 7 and ADR 267 decision 14 (the action of check 2). Supersedes in part ADR 216 decision 8 and ADR 220 decision 12, for output-sharing rules only. Answers the open item of ADR 213 on a rule that names a unit of another namespace
+Status: accepted · 2026-10-22. Records decisions 15.1 to 15.7 of the owner and the product manager. Accepts RFC 15. Supersedes in part ADR 213 decision 1, ADR 207 decision 7 and ADR 267 decision 14 (the action of check 2). Supersedes in part ADR 216 decision 8 and ADR 220 decision 12, for sharing rules only. Answers the open item of ADR 213 on a rule that names a unit of another namespace
 
 ## Context
 
@@ -11,7 +11,7 @@ backend. Today such a read needs `unit:read`, which also reads the whole state.
 
 [ADR 213](0213-job-tokens-no-change-plans-bulk-calls-forge-connections-and-locks.md)
 decision 1 already decides the two paths of a job: a job reads the outputs of
-another unit only when an output-sharing rule names the unit of the job, and
+another unit only when a sharing rule names the unit of the job, and
 the principal that started the job can read the source. It leaves open the
 shape of the rule, the action, the default of a new unit, and a rule across
 namespaces. [ADR 51](0051-collections-of-units.md) decision 8 lets a rule name
@@ -53,6 +53,9 @@ So no CLI version reads outputs only. Each read path reads a whole state.
    state of a unit, and nothing else. Its object is a unit, a collection or a
    namespace. A collection and a namespace widen the object (ADR 51 decision
    8). A secret output also needs `unit:read-secrets`, as in ADR 213 decision 1.
+   `unit:read` does not imply `unit:read-outputs`: the check reads grants of
+   `unit:read-outputs` only. So a starter of a job with a custom role that
+   holds `unit:read` and not `unit:read-outputs` fails check 2 of decision 5.
    Each built-in role that holds `unit:read` also holds `unit:read-outputs`,
    so no holder of a built-in role loses a read.
 
@@ -76,15 +79,45 @@ So no CLI version reads outputs only. Each read path reads a whole state.
    - The save does not tell whether the unit or the collection of the other
      namespace exists, as ADR 220 decision 11 requires. So the store keeps the
      reference of such a consumer, and matches it at each read. A rename in
-     the other namespace ends the match. A new unit with the old name matches.
-     The docs page says so.
+     the other namespace ends the match. A new unit or a new collection with
+     the old name matches. The docs page says so.
    - A job of the other namespace also needs check 2 of decision 5: the
      principal that started the job holds `unit:read-outputs` on the producer.
      So the producer namespace gives that grant too.
 
+   - A denial of a read by a job of another namespace answers as a unit that
+     does not exist: 404, with the same body as for a producer that does not
+     exist (ADR 220 decision 11). This applies to each check: no rule, no
+     grant of the starter, no grant for a secret output, and a job or a
+     starter that is not known. So a job cannot probe for the units of
+     another namespace. A denial of a read by a job of the producer
+     namespace answers 403, as before.
+   - The audit entry of such a denial goes to the audit log of the producer
+     namespace only. It names the check, the producer and the unit of the
+     job by its reference. The namespace of the job gets no entry, and no
+     answer to the job names the check or the producer.
+
    This decision supersedes ADR 216 decision 8 and ADR 220 decision 12 for
-   output-sharing rules. A namespace link and a dependency edge across
-   namespaces still need the acceptance of both namespaces.
+   sharing rules. For each point of ADR 216 decision 8:
+   - "The join is pending until an administrator of the other namespace
+     accepts it": superseded. A rule is active when the producer saves it.
+   - "An administrator of either namespace can end the join alone":
+     superseded. Only a holder of `unit:manage-sharing` on the producer, its
+     collection or its namespace removes a rule. The consumer namespace
+     cannot end a rule that names one of its units.
+   - "The operator cannot make a join alone, also not with a grant on
+     `@server`": this stays. A grant on `@server` does not give
+     `unit:manage-sharing` for a rule whose consumer is in another
+     namespace. The save of such a rule needs the action from a grant in the
+     producer namespace: on the producer, its collection or its namespace.
+   - "Each step writes an audit entry in the scope of each namespace":
+     superseded. The save and the removal of a rule write one audit entry in
+     the producer namespace only. The consumer namespace gets no entry. An
+     entry there would need a write in the other namespace, with its fence,
+     and would tell whether the consumer exists.
+
+   A namespace link and a dependency edge across namespaces still need the
+   acceptance of both namespaces, as ADR 216 decision 8 says.
 4. **A namespace setting decides the rule of a new unit, and the default is
    "nobody" (15.6, option c).** The namespace setting
    `outputSharing.newUnitDefault` has the values `nobody` and `namespace`. The
@@ -92,8 +125,11 @@ So no CLI version reads outputs only. Each read path reads a whole state.
    - With `nobody`, a new unit gets no rule. No job of another unit reads its
      outputs until a person saves a rule.
    - With `namespace`, the store writes one rule on a new unit that names the
-     namespace of the unit. It writes the rule in the transaction that makes
-     the unit, with an audit entry.
+     namespace of the unit. The SQL adapter of the store writes the unit, the
+     rule and the audit entry of the rule in the one transaction that makes
+     the unit. The three commit together, or none of them commits. This
+     write is inside the SQL adapters. It is not a port of the public SDK
+     (ADR 272), and the contract of `outputshare.Store` states it.
    - A change of the setting changes no rule of a unit that exists.
    - The escape hatch is a rule: on one unit, or one rule on a collection or
      on the namespace that shares the outputs of all its units (ADR 213
@@ -111,20 +147,38 @@ So no CLI version reads outputs only. Each read path reads a whole state.
      secret output.
 
    The job gets the intersection of the two checks, never more. Check 2 uses
-   `unit:read-outputs` in place of `unit:read`. This amends ADR 213 decision 1.
-   The same change applies to the attachment authority of the profile block
-   `outputs/opendustpan` (ADR 207 decision 7) and to the last saver of a
-   trigger (ADR 267 decision 14). Each part of those decisions stays.
+   `unit:read-outputs` in place of `unit:read`. This supersedes that part of
+   ADR 213 decision 1.
+
+   The principal whose grants decide check 2 is one of these:
+   - The principal that started the job (ADR 213 decision 1).
+   - The last saver of the trigger that started the job (ADR 267 decision
+     14).
+   - For an open of the profile block `outputs/opendustpan` by a job, the
+     attachment authority (ADR 207 decision 7): the principal that made the
+     attachment, or the blueprint publisher of a Catalog attachment. The
+     grants of the starter do not count. The profile service passes the
+     authority to the `Checker` in `ReadRequest.Authority`, from the saved
+     revision of the profile. A tool adapter never sets it. For a direct
+     open, the authority is the caller, and the `Checker` refuses an
+     authority that is not the caller.
+
+   For each of them, check 2 uses `unit:read-outputs` in place of
+   `unit:read`. Each other part of ADR 207 decision 7 and ADR 267 decision 14
+   stays.
 
    Benchmark: AWS IAM gives a session the intersection of the session policy
    and the policy of its role.
 6. **A decrypt for a caller that only reads outputs decrypts only outputs
    (15.2, option a).** For the Pulumi CLI, a secret output reaches the
    consumer as ciphertext of the producer, and the CLI asks the producer to
-   decrypt it. A caller that can only read outputs (a job token that passes
-   both checks, or a principal with `unit:read-outputs` and
-   `unit:read-secrets` and no `unit:decrypt`) can decrypt only ciphertext that
-   the root outputs of the latest checkpoint of the producer hold.
+   decrypt it. A job token of another unit that passes both checks of
+   decision 5 can decrypt only ciphertext that the root outputs of the latest
+   checkpoint of the producer hold.
+   - A principal decrypts only with `unit:decrypt`, as before.
+     `unit:read-outputs` and `unit:read-secrets` give a principal no decrypt.
+     No CLI path needs it: a principal with only those actions cannot get the
+     ciphertext, because the export needs `unit:read` (decision 7).
    - The rule applies to `decrypt` and to `batch-decrypt`. The e2e run shows
      that 3.200.0 calls `decrypt`, and 3.250.0 and 3.271.0 call
      `batch-decrypt`.
@@ -135,6 +189,10 @@ So no CLI version reads outputs only. Each read path reads a whole state.
      decrypts the config secrets of the producer.
    - The server reads the latest checkpoint to find the outputs. ADR 41 lets
      the server read state, so this needs no exception.
+   - The server reads the latest checkpoint at the decrypt. When the producer
+     saves a new checkpoint between the export and the decrypt, a ciphertext
+     that only the older checkpoint holds answers 403. This fails closed. The
+     next run of the job reads the new checkpoint. The docs page states it.
 
    OpenTofu has no such case: a sensitive output is plain text in the state.
 7. **The action covers only the paths that read outputs (15.3, option a).**
@@ -153,6 +211,59 @@ So no CLI version reads outputs only. Each read path reads a whole state.
    on the producer. The console states this limit on the sharing settings of
    a unit. For a job token of another unit, ADR 213 decision 1 stays: those
    routes answer the root outputs only, after the checks of decision 5.
+
+   **The routes that a CLI calls with a job token of another unit.** Each
+   route below declares `unit:read` for a principal, as before. For a job
+   token of another unit, it declares `unit:read-outputs` on the producer
+   and calls the `Checker` in place of the grant check, with `Latest` true.
+   It answers only the fields in the table. Each other field is left out or
+   has its zero value: no stack tags, no VCS settings, no variables, no
+   resource count, no lock holder.
+
+   | Route | Answer to the job token |
+   | --- | --- |
+   | `GET /api/stacks/{namespace}/{project}/{stack}` | `orgName`, `projectName`, `stackName`, `id` and `version` of the latest checkpoint. `tags` is empty, `activeUpdate` is empty. |
+   | `GET /api/stacks/.../export` | The reduced Pulumi deployment below. |
+   | `POST /api/stacks/.../decrypt`, `POST /api/stacks/.../batch-decrypt` | Decision 6. |
+   | `GET /api/v2/organizations/{organization}/workspaces/{workspace}` | `id`, `name` and the `current-state-version` relationship. `locked` is false and the lock fields are empty. `permissions` allows the read of state versions only. No other relationship. |
+   | `GET /api/v2/workspaces/{id}/current-state-version` | `id`, `serial`, `lineage`, `terraform-version`, `status`, `hosted-state-download-url`, and `md5` and `size` of the reduced document. No upload URL, no `holder`, no resource relationship. |
+   | `GET /api/v2/state-versions/{id}/download` | The reduced OpenTofu document below, for the current state version only. |
+   | `GET /api/v2/workspaces/{id}/current-state-version-outputs` | The outputs, as for a principal. |
+
+   A slice adds a field to this table only when its e2e step shows that a
+   supported CLI version needs it, and the review of that slice accepts it.
+
+   **The reduced documents.** A secret or sensitive output is left out when
+   `Decision.Secrets` is false.
+   - Pulumi: the deployment keeps the `manifest` and `secrets_providers`, so
+     that the CLI can decrypt. Its `resources` hold only the root
+     `pulumi:pulumi:Stack` resource, with its `urn`, `type` and `outputs`,
+     and no `inputs`. It has no other resource and no `pending_operations`.
+   - OpenTofu: `version`, `terraform_version`, `serial`, `lineage`,
+     `outputs`, and `resources: []`. No `check_results`.
+
+   The e2e step of each slice reads the answer that the CLI gets and asserts
+   that it holds no other resource. A CLI that succeeds proves only that the
+   answer is compatible, not that it is reduced.
+
+   **The latest state only.** Decision 1 reads the outputs of the latest
+   state. An outputs-only caller is a job token of another unit, or a
+   principal that holds `unit:read-outputs` and not `unit:read` on the
+   producer. For such a caller:
+   - `state-versions/{id}/download` refuses an `{id}` that is not the current
+     state version of the producer.
+   - `state-version-outputs/{id}` refuses an output of a state version that
+     is not current.
+   - `export/{version}`, `updates`, `update/{update}` and the other history
+     routes of a stack refuse the caller. `state-versions`,
+     `state-versions/{id}`, `state-versions/{id}/resources` and
+     `state-at/{at}` of a workspace refuse the caller too.
+
+   Old outputs can hold values that were rotated. A refusal answers 403 to a
+   caller of the producer namespace, and 404 to a job of another namespace,
+   as decision 3 says. Each refusal writes an audit entry in the producer
+   namespace. A principal that holds `unit:read` reads each version, as
+   before.
 8. **OpenDustpan supports a Pulumi read of OpenTofu outputs where e2e passes
    (15.7, option b).** The `terraform` package of Pulumi reads an OpenTofu workspace
    through the routes of `terraform_remote_state`. The same checks apply. The
@@ -185,17 +296,22 @@ So no CLI version reads outputs only. Each read path reads a whole state.
     setting. Of the built-in roles, only `admin` holds it. A namespace can
     give it to others with a custom role.
 11. **The ports.** The package `pkg/outputshare` holds the tool-neutral ports:
-    `Store` (rules and the setting), `NewUnitRules` (the rule of a new unit)
-    and `Checker` (each read). `pkg/outputshare/outputsharetest` holds their
+    `Store` (rules and the setting) and `Checker` (each read). The rule of a
+    new unit is a write inside the SQL adapters (decision 4), not a port. `pkg/outputshare/outputsharetest` holds their
     conformance suite. The service goes to `internal/outputsharesvc` (ADR
     272). The port of decision 6 names ciphertext, which only the Pulumi CLI
     has, so it is `stack.OutputCiphertexts` in `pkg/stack`, with its suite in
     `pkg/stack/stacktest`.
 12. **Defense in depth (ADR 250).** Each layer stops a bad read alone:
     - The HTTP adapter checks the request with an allowlist of object kinds.
-    - The store runs `Rule.Validate` at each write.
+    - The store runs `Rule.Validate` at each write. It checks that each unit
+      and each collection of the producer namespace that a rule names exists
+      with its stable ID. It binds `Get` and `Delete` to the producer of the
+      route, so that `unit:manage-sharing` on one unit does not reach a rule
+      of another unit or of the namespace.
     - The checker runs `Rule.Validate` on each rule that it reads, and checks
-      both conditions at each read, with the current grants.
+      both conditions at each read, with the current grants. It denies a
+      read that is not of the latest state.
     - The answer to a job token holds the root outputs only.
     - The decrypt route checks each ciphertext against the outputs.
     - An unknown value, a missing starter or an error of a port denies, and
@@ -238,5 +354,5 @@ So no CLI version reads outputs only. Each read path reads a whole state.
 | 213 | 1, check 2: `unit:read` on the source unit | Decision 5 | Check 2 needs `unit:read-outputs`. |
 | 207 | 7, `unit:read` of the attachment authority | Decision 5 | The attachment authority needs `unit:read-outputs`. |
 | 267 | 14, `unit:read` of the last saver | Decision 5 | The last saver needs `unit:read-outputs`. |
-| 216 | 8, the acceptance of both namespaces, for an output-sharing rule | Decision 3 | The producer decides alone. A namespace link and a dependency edge keep the rule. |
-| 220 | 12, the acceptance of both namespaces, for an output-sharing rule | Decision 3 | The producer decides alone. A namespace link and a dependency edge keep the rule. |
+| 216 | 8, the acceptance of both namespaces, for a sharing rule | Decision 3 | The producer decides alone. Only the producer namespace ends a rule and gets the audit entry. The refusal of an operator with a grant on `@server` stays. A namespace link and a dependency edge keep the rule. |
+| 220 | 12, the acceptance of both namespaces, for a sharing rule | Decision 3 | The producer decides alone. A namespace link and a dependency edge keep the rule. |

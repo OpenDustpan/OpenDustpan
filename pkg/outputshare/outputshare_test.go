@@ -40,10 +40,10 @@ func rule(producer, consumer identity.Object) outputshare.Rule {
 func TestRuleValidate(t *testing.T) {
 	t.Parallel()
 
-	network := unitObject(t, "pulumi", acme, "net/prod")
-	web := unitObject(t, "opentofu", acme, "web")
+	network := unitObject(t, "pulumi", acme, "net/prod").WithUnitID("stk-1")
+	web := unitObject(t, "opentofu", acme, "web").WithUnitID("ws-1")
 	otherWeb := unitObject(t, "opentofu", beta, "web")
-	platform := identity.CollectionObject(acme, "platform")
+	platform := identity.CollectionObject(acme, "platform").WithCollectionID("col-1")
 	otherPlatform := identity.CollectionObject(beta, "platform")
 	principal := identity.PrincipalObject("p-2")
 
@@ -71,6 +71,15 @@ func TestRuleValidate(t *testing.T) {
 		{"ID with a slash", withID(rule(network, web), "r/1"), false},
 		{"ID too long", withID(rule(network, web), outputshare.ID(strings.Repeat("r", outputshare.MaxIDBytes+1))), false},
 		{"no saver", withSaver(rule(network, web), ""), false},
+		{"producer unit with no stable ID", rule(unitObject(t, "pulumi", acme, "net/prod"), web), false},
+		{"producer collection with no stable ID", rule(identity.CollectionObject(acme, "platform"), web), false},
+		{"consumer unit of the namespace with no stable ID", rule(network, unitObject(t, "opentofu", acme, "web")), false},
+		{"consumer collection of the namespace with no stable ID", rule(network, identity.CollectionObject(acme, "platform")), false},
+		{"consumer unit of another namespace with a stable ID", rule(network, otherWeb.WithUnitID("ws-9")), false},
+		{
+			"consumer collection of another namespace with a stable ID",
+			rule(network, otherPlatform.WithCollectionID("col-9")), false,
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -187,15 +196,19 @@ func TestDeniedError(t *testing.T) {
 	t.Parallel()
 
 	producer := unitObject(t, "pulumi", acme, "net/prod")
-	consumer := unitObject(t, "opentofu", beta, "web")
+	consumer := unitObject(t, "opentofu", acme, "web")
 
 	byJob := &outputshare.DeniedError{
-		Err: outputshare.ErrNoRule, Check: outputshare.CheckRule, Producer: producer, Consumer: consumer,
+		Err: outputshare.ErrNoRule, Check: outputshare.CheckRule, Producer: producer, Consumer: consumer, Hidden: false,
 	}
 
 	var err error = byJob
 	if !errors.Is(err, identity.ErrDenied) || !errors.Is(err, outputshare.ErrNoRule) {
 		t.Fatalf("errors.Is(%v) misses identity.ErrDenied or ErrNoRule", err)
+	}
+
+	if errors.Is(err, outputshare.ErrUnknownProducer) {
+		t.Fatalf("a denial of a job of the producer namespace %v is hidden", err)
 	}
 
 	for _, want := range []string{producer.String(), consumer.String(), outputshare.CheckRule} {
@@ -205,10 +218,57 @@ func TestDeniedError(t *testing.T) {
 	}
 
 	byPrincipal := &outputshare.DeniedError{
-		Err: nil, Check: outputshare.CheckGrant, Producer: producer, Consumer: identity.Object{},
+		Err: nil, Check: outputshare.CheckGrant, Producer: producer, Consumer: identity.Object{}, Hidden: false,
 	}
 
 	if !errors.Is(byPrincipal, identity.ErrDenied) || strings.Contains(byPrincipal.Error(), "job") {
 		t.Fatalf("a denial of a principal = %q, want identity.ErrDenied and no job", byPrincipal.Error())
+	}
+}
+
+// TestDeniedErrorHidden sends each denial that must answer as an unknown
+// producer, and proves that it never wraps identity.ErrDenied, so that an
+// adapter cannot answer 403 for it.
+func TestDeniedErrorHidden(t *testing.T) {
+	t.Parallel()
+
+	producer := unitObject(t, "pulumi", acme, "net/prod")
+
+	for _, tc := range []struct {
+		name   string
+		denied *outputshare.DeniedError
+	}{
+		{
+			"a job of another namespace, with no flag",
+			&outputshare.DeniedError{
+				Err: outputshare.ErrNoRule, Check: outputshare.CheckRule, Producer: producer,
+				Consumer: unitObject(t, "opentofu", beta, "web"), Hidden: false,
+			},
+		},
+		{
+			"a job of another namespace denied by the grant check",
+			&outputshare.DeniedError{
+				Err: nil, Check: outputshare.CheckGrant, Producer: producer,
+				Consumer: unitObject(t, "opentofu", beta, "web"), Hidden: true,
+			},
+		},
+		{
+			"a job whose unit the checker could not read",
+			&outputshare.DeniedError{
+				Err: nil, Check: outputshare.CheckCaller, Producer: producer, Consumer: identity.Object{}, Hidden: true,
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			if !tc.denied.IsHidden() {
+				t.Fatal("IsHidden() = false, want true")
+			}
+
+			if !errors.Is(tc.denied, outputshare.ErrUnknownProducer) || errors.Is(tc.denied, identity.ErrDenied) {
+				t.Fatalf("errors.Is(%v): want ErrUnknownProducer and not identity.ErrDenied", tc.denied)
+			}
+		})
 	}
 }
