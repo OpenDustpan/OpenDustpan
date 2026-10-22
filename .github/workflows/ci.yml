@@ -34,15 +34,29 @@ concurrency:
 # means the project's own machines. Never point a public repository's
 # pull requests from forks at self-hosted runners.
 #
-# A self-hosted machine keeps the Go build cache, the Go module cache and
-# the golangci-lint cache on its disk between jobs, and also the CLI
-# archives of the e2e suite. Thus the jobs use the GitHub Actions cache only
-# on a GitHub-hosted runner, where each job starts on an empty machine.
+# When the repository variable CI_TRIAL_SPLIT is "true", a part of the runs
+# goes to the trial runners of two providers, with 4 vCPUs like the
+# project's machines. The last digit of the run ID picks the runners: 0 and
+# 1 go to Blacksmith, 2 and 3 go to Ubicloud, and the other digits use
+# CI_RUNS_ON. All jobs of a run, and each re-run of it, use the same
+# provider. Unset the variable to stop the split.
+#
+# The project's machines (github-actions-runner1 to 4) keep the Go build
+# cache, the Go module cache and the golangci-lint cache on their disks
+# between jobs, and also the CLI archives of the e2e suite. Thus the jobs
+# use the GitHub Actions cache only on other runners, where each job starts
+# on an empty machine. The trial runners also say "self-hosted" in
+# runner.environment, so the jobs check the runner name instead.
 
 jobs:
   go:
     if: ${{ github.event_name != 'pull_request' || !github.event.pull_request.draft }}
-    runs-on: ${{ fromJSON(vars.CI_RUNS_ON || '"ubuntu-latest"') }}
+    # The other jobs use this value through the YAML alias *runs-on.
+    runs-on: &runs-on >-
+      ${{ fromJSON(
+        vars.CI_TRIAL_SPLIT == 'true' && (endsWith(github.run_id, '0') || endsWith(github.run_id, '1')) && '"blacksmith-4vcpu-ubuntu-2404"' ||
+        vars.CI_TRIAL_SPLIT == 'true' && (endsWith(github.run_id, '2') || endsWith(github.run_id, '3')) && '"ubicloud-standard-4-ubuntu-2404"' ||
+        vars.CI_RUNS_ON || '"ubuntu-latest"') }}
     services:
       postgres:
         # The Go test cache does not see the image. The digest makes sure that
@@ -68,7 +82,7 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
-          cache: ${{ runner.environment == 'github-hosted' }}
+          cache: ${{ !startsWith(runner.name, 'github-actions-runner') }}
       - name: go.mod and go.sum are tidy
         run: go mod tidy -diff
       - name: Verify module checksums
@@ -85,14 +99,14 @@ jobs:
       - uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
         with:
           version: v2.14.0
-          skip-cache: ${{ runner.environment == 'self-hosted' }}
+          skip-cache: ${{ startsWith(runner.name, 'github-actions-runner') }}
       # The journal recording build needs a second lint run, because some
       # files are left out of that build and one run cannot hold both. The
       # make target holds the build tag, so this file never names it and the
       # release guard (make journal-guard) stays clean. The install-only step
       # puts golangci-lint on the PATH. It does not restore the lint cache:
-      # the step above already did that on a GitHub-hosted runner, and on a
-      # self-hosted runner the restore took 40 to 55 seconds to download and
+      # the step above already did that on an empty machine, and on one of the
+      # project's machines the restore took 40 to 55 seconds to download and
       # unpack an old 145 MB copy over the cache on the disk.
       - uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
         with:
@@ -141,7 +155,7 @@ jobs:
   # rest of go test.
   store:
     if: ${{ github.event_name != 'pull_request' || !github.event.pull_request.draft }}
-    runs-on: ${{ fromJSON(vars.CI_RUNS_ON || '"ubuntu-latest"') }}
+    runs-on: *runs-on
     strategy:
       fail-fast: false
       matrix:
@@ -163,7 +177,7 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
-          cache: ${{ runner.environment == 'github-hosted' }}
+          cache: ${{ !startsWith(runner.name, 'github-actions-runner') }}
       # The runner throws the service container away after the job, so its
       # data needs no durability. On a runner, each checkpoint of a store test
       # run spent 55 to 90 seconds in fsync of about 120,000 files. These
@@ -194,7 +208,7 @@ jobs:
   # pinned here. Change a version together with its checksum and the Makefile.
   scan:
     if: ${{ github.event_name != 'schedule' && (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
-    runs-on: ${{ fromJSON(vars.CI_RUNS_ON || '"ubuntu-latest"') }}
+    runs-on: *runs-on
     env:
       TRIVY_VERSION: 0.75.0
       TRIVY_SHA256: c6e65abddb348e25f10549df887045629cf28cc72453cd1c63acb717316b3f3f
@@ -210,7 +224,7 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
-          cache: ${{ runner.environment == 'github-hosted' }}
+          cache: ${{ !startsWith(runner.name, 'github-actions-runner') }}
       - name: Install Trivy and TruffleHog
         run: |
           set -euo pipefail
@@ -234,7 +248,7 @@ jobs:
   # binaries drive the server on SQLite and on PostgreSQL.
   e2e:
     if: ${{ github.event_name != 'schedule' && (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
-    runs-on: ${{ fromJSON(vars.CI_RUNS_ON || '"ubuntu-latest"') }}
+    runs-on: *runs-on
     timeout-minutes: 70
     services:
       postgres:
@@ -278,11 +292,11 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
-          cache: ${{ runner.environment == 'github-hosted' }}
+          cache: ${{ !startsWith(runner.name, 'github-actions-runner') }}
       # The pinned versions of the matrix are in e2e/tool.go, so the key changes
       # when they change. The "latest" versions are downloaded on each run.
       - name: Cache the CLI archives
-        if: ${{ runner.environment == 'github-hosted' }}
+        if: ${{ !startsWith(runner.name, 'github-actions-runner') }}
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.cache/opendustpan-e2e
