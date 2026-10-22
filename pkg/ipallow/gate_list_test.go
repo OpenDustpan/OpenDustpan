@@ -209,3 +209,21 @@ func TestGateListWithinAuthorize(t *testing.T) {
 		})
 	}
 }
+
+// TestGateScopeExact proves that the gate says its scope is exact only when
+// the scope of Next is exact.
+func TestGateScopeExact(t *testing.T) {
+	t.Parallel()
+
+	if !identity.HasExactScope(
+		ipallow.Gate{Next: identity.AdminOnly{}, Rules: nil, Enabled: true, IncludeBootstrap: false},
+	) {
+		t.Fatal("a gate over an exact scope is not exact")
+	}
+
+	if identity.HasExactScope(
+		ipallow.Gate{Next: &fakeNext{calls: 0, err: nil}, Rules: nil, Enabled: true, IncludeBootstrap: false},
+	) {
+		t.Fatal("a gate over a scope with no marker is exact")
+	}
+}

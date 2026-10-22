@@ -27,10 +27,31 @@ func (q queryCounting) Query(ctx context.Context, lq workspace.ListQuery) (works
 }
 
 // scopedAuthorizer allows each action except unit:read on the workspaces in
-// deny, and gives scope as the scope of every principal.
+// deny, and gives scope as the scope of every principal. It says that its
+// scope is exact when exact is true.
 type scopedAuthorizer struct {
 	deny  map[string]bool
 	scope identity.Scope
+	exact bool
+}
+
+func (a scopedAuthorizer) ScopeExact() bool { return a.exact }
+
+// limitedLike is a decorator as gate.LimitedAuthorizer is: it gives the scope
+// of the grants, does not filter it, and denies single workspaces in
+// Authorize. It does not implement identity.ExactScoper.
+type limitedLike struct{ inner scopedAuthorizer }
+
+func (l limitedLike) Authorize(
+	ctx context.Context, p identity.Principal, action identity.Action, obj identity.Object,
+) error {
+	return l.inner.Authorize(ctx, p, action, obj)
+}
+
+func (l limitedLike) ListObjects(
+	ctx context.Context, p identity.Principal, action identity.Action,
+) (identity.Scope, error) {
+	return l.inner.ListObjects(ctx, p, action)
 }
 
 func (a scopedAuthorizer) Authorize(
@@ -101,7 +122,7 @@ func checkStorePage(t *testing.T, scope identity.Scope, query string, want []str
 
 	queries := &atomic.Int64{}
 	ws := queryCounting{pagingWorkspaces: newPagingWorkspaces(t), queries: queries}
-	handler := newPagingHandlerWith(t, scopedAuthorizer{deny: nil, scope: scope}, ws)
+	handler := newPagingHandlerWith(t, scopedAuthorizer{deny: nil, scope: scope, exact: true}, ws)
 
 	doc := getListPage(t, handler, "/api/v2/organizations/acme/workspaces?"+query)
 	if got := listNames(doc); !slices.Equal(got, want) || doc.Meta.Pagination.TotalCount != total {
@@ -136,7 +157,7 @@ func TestListWorkspacesOtherScopeChecksEach(t *testing.T) {
 	} {
 		queries := &atomic.Int64{}
 		ws := queryCounting{pagingWorkspaces: newPagingWorkspaces(t), queries: queries}
-		authz := scopedAuthorizer{deny: map[string]bool{"acme": true, "zeta": true}, scope: scope}
+		authz := scopedAuthorizer{deny: map[string]bool{"acme": true, "zeta": true}, scope: scope, exact: true}
 
 		doc := getListPage(t, newPagingHandlerWith(t, authz, ws), "/api/v2/organizations/acme/workspaces")
 		if got := listNames(doc); !slices.Equal(got, []string{"beta"}) || doc.Meta.Pagination.TotalCount != 1 {
@@ -149,22 +170,96 @@ func TestListWorkspacesOtherScopeChecksEach(t *testing.T) {
 	}
 }
 
-// TestListWorkspacesStorePageRechecks proves the check of unit:read on the
-// store page alone: the scope holds the namespace, but the authorizer denies
-// one workspace, and the page leaves it out.
-func TestListWorkspacesStorePageRechecks(t *testing.T) {
+// TestListWorkspacesDeniedWorkspaceCounts proves that the count and the pages
+// hold only the workspaces that the caller may read, for an authorizer whose
+// scope holds the namespace but whose decisions deny the workspace beta: one
+// that does not say its scope is exact, a decorator such as the access limits,
+// and one that says so but denies a workspace of the page. Each case must give
+// the same answer as the list that checks each workspace.
+func TestListWorkspacesDeniedWorkspaceCounts(t *testing.T) {
 	t.Parallel()
+
+	deny := map[string]bool{"beta": true}
+	inexact := scopedAuthorizer{deny: deny, scope: namespaceScope("acme"), exact: false}
+	exact := scopedAuthorizer{deny: deny, scope: namespaceScope("acme"), exact: true}
+
+	authorizers := []struct {
+		authz       identity.Authorizer
+		name        string
+		wantQueries int64
+		// pageCheckOnly is true when only the check of the page can find the
+		// denied workspace, so that a page without it is out of reach.
+		pageCheckOnly bool
+	}{
+		{name: "scope not exact", authz: inexact, wantQueries: 0, pageCheckOnly: false},
+		{name: "decorator", authz: limitedLike{inner: exact}, wantQueries: 0, pageCheckOnly: false},
+		{name: "exact scope, denied workspace on the page", authz: exact, wantQueries: 1, pageCheckOnly: true},
+	}
+
+	pages := []struct {
+		name, query string
+		want        []string
+		totalPages  int
+		holdsDenied bool
+	}{
+		{name: "one page", query: "", want: []string{"acme", "zeta"}, totalPages: 1, holdsDenied: true},
+		{name: "page 1 of size 1", query: "page[size]=1", want: []string{"acme"}, totalPages: 2, holdsDenied: false},
+		{
+			name: "page 2 of size 1", query: "page[number]=2&page[size]=1", want: []string{"zeta"}, totalPages: 2,
+			holdsDenied: true,
+		},
+		{
+			name: "page 3 of size 1", query: "page[number]=3&page[size]=1", want: []string{}, totalPages: 2,
+			holdsDenied: false,
+		},
+	}
+
+	for _, a := range authorizers {
+		for _, pg := range pages {
+			if a.pageCheckOnly && !pg.holdsDenied {
+				continue
+			}
+
+			t.Run(a.name+"/"+pg.name, func(t *testing.T) {
+				t.Parallel()
+
+				checkDeniedCount(
+					t,
+					a.authz,
+					deniedWant{query: pg.query, names: pg.want, totalPages: pg.totalPages, queries: a.wantQueries},
+				)
+			})
+		}
+	}
+}
+
+// deniedWant holds the request and the expected answer of checkDeniedCount.
+type deniedWant struct {
+	query      string
+	names      []string
+	totalPages int
+	queries    int64
+}
+
+// checkDeniedCount lists the workspaces of acme with query and checks the
+// names, the total count of 2, the total pages, and that the list reads at
+// most wantQueries pages from the store.
+func checkDeniedCount(t *testing.T, authz identity.Authorizer, want deniedWant) {
+	t.Helper()
 
 	queries := &atomic.Int64{}
 	ws := queryCounting{pagingWorkspaces: newPagingWorkspaces(t), queries: queries}
-	authz := scopedAuthorizer{deny: map[string]bool{"beta": true}, scope: namespaceScope("acme")}
 
-	doc := getListPage(t, newPagingHandlerWith(t, authz, ws), "/api/v2/organizations/acme/workspaces")
-	if got := listNames(doc); !slices.Equal(got, []string{"acme", "zeta"}) {
-		t.Fatalf("list = %v, want [acme zeta]", got)
+	doc := getListPage(t, newPagingHandlerWith(t, authz, ws), "/api/v2/organizations/acme/workspaces?"+want.query)
+	if got := listNames(doc); !slices.Equal(got, want.names) {
+		t.Fatalf("list = %v, want %v", got, want.names)
 	}
 
-	if queries.Load() != 1 {
-		t.Fatalf("store page queries = %d, want 1", queries.Load())
+	if got := doc.Meta.Pagination; got.TotalCount != 2 || got.TotalPages != want.totalPages {
+		t.Fatalf("total-count = %d, total-pages = %d, want 2 and %d", got.TotalCount, got.TotalPages, want.totalPages)
+	}
+
+	if queries.Load() > want.queries {
+		t.Fatalf("store page queries = %d, want at most %d", queries.Load(), want.queries)
 	}
 }
