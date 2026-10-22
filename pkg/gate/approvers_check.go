@@ -16,21 +16,25 @@ import (
 // holder of the approve action, so it has no upper bound to check.
 //
 // The people who can approve are the users that a names, each once, and the
-// current members of the groups that a names. A person who is in two of them
-// counts twice, so the check refuses a count only when even this upper bound
-// is below it. A group can get members later, but a count above its members
-// now cannot be met now, and the error says how many people can approve.
+// enabled members of the groups that a names. A disabled principal cannot
+// approve, so it does not count. When fresh asks for a fresh authentication, a
+// window of any length, only a person can give it, so only the persons among
+// the members count; otherwise a service principal or a workload with the
+// approve action can sign too, and counts. A person who is in two of the groups
+// counts twice, so the check refuses a count only when even this upper bound is
+// below it. A group can get members later, but a count above its members now
+// cannot be met now, and the error says how many people can approve.
 //
 // Defense in depth: ApprovalDefault.Validate and ApprovalRule.Validate check
 // the shape of the lists and the count; this check does not rely on them, and
 // they do not rely on it.
-func (s *ConfigService) checkApprovers(ctx context.Context, a Approvers, count int) error {
+func (s *ConfigService) checkApprovers(ctx context.Context, a Approvers, count int, fresh FreshAuth) error {
 	users, err := countUsers(a.Users)
 	if err != nil {
 		return err
 	}
 
-	members, err := s.countGroupMembers(ctx, a.Groups)
+	members, err := s.countGroupMembers(ctx, a.Groups, fresh)
 	if err != nil {
 		return err
 	}
@@ -66,7 +70,7 @@ func countUsers(users []string) (int64, error) {
 // countGroupMembers checks that each group name is valid and names a group
 // that exists, and returns the current members of the groups, each group once
 // (a name in another case is the same group).
-func (s *ConfigService) countGroupMembers(ctx context.Context, groups []string) (int64, error) {
+func (s *ConfigService) countGroupMembers(ctx context.Context, groups []string, fresh FreshAuth) (int64, error) {
 	seen := make(map[string]struct{}, len(groups))
 	people := int64(0)
 
@@ -92,7 +96,11 @@ func (s *ConfigService) countGroupMembers(ctx context.Context, groups []string) 
 		default:
 		}
 
-		people += members
+		if fresh.Set {
+			people += members.Persons
+		} else {
+			people += members.Enabled
+		}
 	}
 
 	return people, nil

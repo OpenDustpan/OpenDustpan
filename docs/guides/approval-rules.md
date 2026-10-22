@@ -78,10 +78,15 @@ rule:
   space. The user does not need to exist yet: a person can sign in later.
 - When `unitOwners` is false, `count` must not be more than the number of
   people who can approve. The server counts each named user once and the
-  current members of each named group. A person in two groups counts twice.
-  With `unitOwners` true, or with no approver named, the server checks no
-  count, because the owners or the holders of the approve action are not
-  known when you save.
+  enabled members of each named group. A disabled principal does not count,
+  and a member who left the group does not count. A person in two groups counts
+  twice. When `freshAuthSeconds` is set, also to 0, an approval needs a new
+  sign-in, which only a person gives, so the server counts only the persons
+  among the members. With `freshAuthSeconds` null, a service principal or a
+  workload with the approve action can approve too, so it counts. With
+  `unitOwners` true, or with no approver named, the server checks no count,
+  because the owners or the holders of the approve action are not known when
+  you save.
 
 `GET` on the same path reads the default. It answers 404 when the namespace sets
 none. The answer has an `ETag` header with the version.
