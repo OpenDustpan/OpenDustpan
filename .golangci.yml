@@ -140,13 +140,13 @@ linters:
             - "**/pkg/collection/**"
             - "**/pkg/maintenance/**"
             - "**/pkg/durable/**"
-            - "**/pkg/agent/**"
+            - "**/internal/agent/**"
             - "**/pkg/job/**"
             - "**/pkg/history/**"
             - "**/pkg/dependency/**"
             - "**/pkg/graph/**"
             - "**/pkg/objectcontext/**"
-            - "**/pkg/unmanaged/**"
+            - "**/internal/unmanaged/**"
             - "**/pkg/drift/**"
             - "**/pkg/trigger/**"
             - "**/pkg/savedview/**"
@@ -157,9 +157,9 @@ linters:
             - "**/pkg/launcher/**"
             - "**/pkg/source/**"
             - "**/pkg/forge/*.go"
-            - "**/pkg/scopeaudit/**"
-            - "**/pkg/calendar/**"
-            - "**/pkg/freeze/**"
+            - "**/internal/scopeaudit/**"
+            - "**/internal/calendar/**"
+            - "**/internal/freeze/**"
             - "**/pkg/breakglass/**"
             - "**/pkg/tempadmin/**"
             - "**/pkg/oncall/**"
@@ -168,13 +168,13 @@ linters:
             - "**/pkg/egress/*.go"
             - "**/pkg/chatops/**"
             - "**/pkg/incident/**"
-            - "**/pkg/catalog/**"
-            - "**/pkg/policy/**"
+            - "**/internal/catalog/**"
+            - "**/internal/policy/**"
             - "**/pkg/gate/**"
-            - "**/pkg/quota/**"
+            - "**/internal/quota/**"
             - "**/pkg/blob/*.go"
             - "**/pkg/logsink/*.go"
-            - "**/pkg/unitimport/*.go"
+            - "**/internal/unitimport/*.go"
             - "**/pkg/installation/**"
             - "!**/*_test.go"
             - "!**/internal/api/inventory/**"
@@ -489,7 +489,7 @@ linters:
     rules:
       # Tests may use numeric literals and longer table-driven functions. The
       # conformance suites are tests that adapters import, so the same applies.
-      - path: (_test\.go$|^pkg/store/storetest/|^pkg/blob/blobtest/|^pkg/secret/secrettest/|^pkg/audit/audittest/|^pkg/principal/principaltest/|^pkg/accesstoken/accesstokentest/|^pkg/session/sessiontest/|^pkg/access/accesstest/|^pkg/durable/durabletest/|^pkg/history/historytest/|^pkg/inventory/inventorytest/|^pkg/dependency/dependencytest/|^pkg/stack/stackhistorytest/|^pkg/workspace/workspacehistorytest/|^pkg/agent/agenttest/|^pkg/graph/graphtest/|^pkg/objectcontext/objectcontexttest/|^pkg/unmanaged/unmanagedtest/|^pkg/runner/runnertest/|^pkg/calendar/calendartest/|^pkg/freeze/freezetest/|^pkg/breakglass/breakglasstest/|^pkg/oncall/oncalltest/|^pkg/cost/costtest/|^pkg/notify/notifytest/|^pkg/chatops/chatopstest/|^pkg/incident/incidenttest/|^pkg/catalog/catalogtest/|^pkg/policy/policytest/|^pkg/quota/quotatest/|^pkg/gate/gatetest/|^pkg/unitimport/unitimporttest/|^pkg/forge/forgetest/|^pkg/preferences/preferencestest/)
+      - path: (_test\.go$|^pkg/store/storetest/|^pkg/blob/blobtest/|^pkg/secret/secrettest/|^pkg/audit/audittest/|^pkg/principal/principaltest/|^pkg/accesstoken/accesstokentest/|^pkg/session/sessiontest/|^pkg/access/accesstest/|^pkg/durable/durabletest/|^pkg/history/historytest/|^pkg/inventory/inventorytest/|^pkg/dependency/dependencytest/|^pkg/stack/stackhistorytest/|^pkg/workspace/workspacehistorytest/|^internal/agent/agenttest/|^pkg/graph/graphtest/|^pkg/objectcontext/objectcontexttest/|^internal/unmanaged/unmanagedtest/|^pkg/runner/runnertest/|^internal/calendar/calendartest/|^internal/freeze/freezetest/|^pkg/breakglass/breakglasstest/|^pkg/oncall/oncalltest/|^pkg/cost/costtest/|^pkg/notify/notifytest/|^pkg/chatops/chatopstest/|^pkg/incident/incidenttest/|^internal/catalog/catalogtest/|^internal/policy/policytest/|^internal/quota/quotatest/|^pkg/gate/gatetest/|^internal/unitimport/unitimporttest/|^pkg/forge/forgetest/|^pkg/preferences/preferencestest/)
         linters:
           - mnd
           - funlen

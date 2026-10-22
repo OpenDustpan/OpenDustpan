@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"opendustpan.org/opendustpan/pkg/calendar"
+	"opendustpan.org/opendustpan/internal/calendar"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/oncall"
 )

@@ -11,9 +11,9 @@ import (
 	"strconv"
 	"strings"
 
+	"opendustpan.org/opendustpan/internal/scopeaudit"
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/namespace"
-	"opendustpan.org/opendustpan/pkg/scopeaudit"
 )
 
 // MaxWrappedItemKeyBytes bounds the size of one wrapped item key blob. A
