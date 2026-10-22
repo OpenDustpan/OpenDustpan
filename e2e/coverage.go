@@ -485,6 +485,14 @@ func (coverageTofuHTTPWorkspaces) Create(_ context.Context, _ workspace.Ref) (wo
 	return workspace.Workspace{}, workspace.ErrNotFound
 }
 
+func (coverageTofuHTTPWorkspaces) AdmitFirstWrite(_ context.Context, _ workspace.Ref, _ workspace.StreamInput) error {
+	return workspace.ErrNotFound
+}
+
+func (coverageTofuHTTPWorkspaces) AdmitFirstLock(_ context.Context, _ workspace.Ref, _ workspace.LockRequest) error {
+	return workspace.ErrNotFound
+}
+
 func (coverageTofuHTTPWorkspaces) LockWithIDForJob(
 	_ context.Context, _ workspace.ID, _ workspace.LockRequest,
 ) (workspace.Workspace, error) {
