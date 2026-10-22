@@ -228,8 +228,10 @@ func TestSettingTransactionRefusesAForeignFence(t *testing.T) {
 
 	beforeAcme, beforeGlobex := len(allAuditEntries(t, s, "acme")), len(allAuditEntries(t, s, "globex"))
 
-	err := postgres.WriteSettingInTx(ctx, s, "acme", outputshare.DefaultNamespace, globex,
-		outputsharetest.SettingEntry(globex, outputshare.DefaultNamespace))
+	err := postgres.WriteSettingInTx(ctx, s, postgres.SettingWrite{
+		Namespace: "acme", Value: outputshare.DefaultNamespace, Fence: globex,
+		Entry: outputsharetest.EntryForSetting(globex, outputshare.DefaultNamespace),
+	})
 	if !errors.Is(err, namespace.ErrFenced) {
 		t.Fatalf("write under the fence of globex = %v, want namespace.ErrFenced", err)
 	}
@@ -249,8 +251,12 @@ func TestSettingTransactionRefusesAForeignFence(t *testing.T) {
 		t.Fatalf("the refused write added %d entries in globex", n-beforeGlobex)
 	}
 
-	if err := postgres.WriteSettingInTx(ctx, s, "acme", outputshare.DefaultNamespace, acme,
-		outputsharetest.SettingEntry(acme, outputshare.DefaultNamespace)); err != nil {
+	own := postgres.SettingWrite{
+		Namespace: "acme", Value: outputshare.DefaultNamespace, Fence: acme,
+		Entry: outputsharetest.EntryForSetting(acme, outputshare.DefaultNamespace),
+	}
+
+	if err := postgres.WriteSettingInTx(ctx, s, own); err != nil {
 		t.Fatalf("write under the fence of acme: %v", err)
 	}
 }
@@ -271,10 +277,13 @@ func TestSettingAuditOldValueIsReadInTheTransaction(t *testing.T) {
 	ctx := t.Context()
 	lie := "namespace"
 
-	first := outputsharetest.SettingEntry(fence, outputshare.DefaultNamespace)
+	first := outputsharetest.EntryForSetting(fence, outputshare.DefaultNamespace)
 	first.Changes[0].Old = &lie
 
-	if err := s.OutputSharingSettings().SetSetting(ctx, "acme", outputshare.DefaultNamespace, fence, first); err != nil {
+	settings := s.OutputSharingSettings()
+
+	err := settings.SetSetting(ctx, "acme", outputshare.DefaultNamespace, fence, first)
+	if err != nil {
 		t.Fatalf("first SetSetting: %v", err)
 	}
 
@@ -282,9 +291,10 @@ func TestSettingAuditOldValueIsReadInTheTransaction(t *testing.T) {
 		t.Fatal("SetSetting changed the changes of the entry of the caller")
 	}
 
-	second := outputsharetest.SettingEntry(fence, outputshare.DefaultNobody)
+	second := outputsharetest.EntryForSetting(fence, outputshare.DefaultNobody)
 
-	if err := s.OutputSharingSettings().SetSetting(ctx, "acme", outputshare.DefaultNobody, fence, second); err != nil {
+	err = settings.SetSetting(ctx, "acme", outputshare.DefaultNobody, fence, second)
+	if err != nil {
 		t.Fatalf("second SetSetting: %v", err)
 	}
 
@@ -292,7 +302,8 @@ func TestSettingAuditOldValueIsReadInTheTransaction(t *testing.T) {
 		t.Fatal("SetSetting changed the changes of the entry of the caller")
 	}
 
-	if got, want := settingOld(allAuditEntries(t, s, "acme")), []string{"nobody", "namespace"}; !slices.Equal(got, want) {
+	got := settingOld(allAuditEntries(t, s, "acme"))
+	if want := []string{"nobody", "namespace"}; !slices.Equal(got, want) {
 		t.Fatalf("Old values of the entries = %q, want %q", got, want)
 	}
 }
@@ -315,19 +326,31 @@ func TestOutputSharingSettingSurvivesABackupRestore(t *testing.T) {
 	fence := ensureNamespace(t, st, "acme")
 	settings := st.OutputSharingSettings()
 
-	if err := settings.SetSetting(ctx, "acme", outputshare.DefaultNamespace, fence,
-		outputsharetest.SettingEntry(fence, outputshare.DefaultNamespace)); err != nil {
+	err := settings.SetSetting(
+		ctx,
+		"acme",
+		outputshare.DefaultNamespace,
+		fence,
+		outputsharetest.EntryForSetting(fence, outputshare.DefaultNamespace),
+	)
+	if err != nil {
 		t.Fatalf("set namespace: %v", err)
 	}
 
 	files, sum, descs := storetest.PortableFiles(t, ps)
 
-	if err := settings.SetSetting(ctx, "acme", outputshare.DefaultNobody, fence,
-		outputsharetest.SettingEntry(fence, outputshare.DefaultNobody)); err != nil {
+	err = settings.SetSetting(
+		ctx,
+		"acme",
+		outputshare.DefaultNobody,
+		fence,
+		outputsharetest.EntryForSetting(fence, outputshare.DefaultNobody),
+	)
+	if err != nil {
 		t.Fatalf("set nobody: %v", err)
 	}
 
-	_, err := ps.StagePortable(ctx, storetest.PortableOpener(files), sum, descs, storetest.StageAs(t, ps))
+	_, err = ps.StagePortable(ctx, storetest.PortableOpener(files), sum, descs, storetest.StageAs(t, ps))
 	if err != nil {
 		t.Fatalf("stage the portable backup: %v", err)
 	}
@@ -338,7 +361,8 @@ func TestOutputSharingSettingSurvivesABackupRestore(t *testing.T) {
 		}
 	})
 
-	if err := ps.ApplyStaging(ctx); err != nil {
+	err = ps.ApplyStaging(ctx)
+	if err != nil {
 		t.Fatalf("apply the staged backup: %v", err)
 	}
 

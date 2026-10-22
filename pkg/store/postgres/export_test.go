@@ -14,11 +14,17 @@ func CheckSettingFence(ns namespace.Name, fence namespace.Fence) error {
 	return settingFenceBinds(ns, fence)
 }
 
+// SettingWrite is the input of WriteSettingInTx.
+type SettingWrite struct {
+	Namespace namespace.Name
+	Value     outputshare.Default
+	Fence     namespace.Fence
+	Entry     audit.Entry
+}
+
 // WriteSettingInTx writes the setting through the transaction of SetSetting
 // and skips the pre-check, so a test reaches the layer inside the
 // transaction alone.
-func WriteSettingInTx(
-	ctx context.Context, s *Store, ns namespace.Name, d outputshare.Default, fence namespace.Fence, e audit.Entry,
-) error {
-	return outputSharingSettings{s: s}.writeSetting(ctx, ns, d, fence, e)
+func WriteSettingInTx(ctx context.Context, s *Store, w SettingWrite) error {
+	return outputSharingSettings{s: s}.writeSetting(ctx, w.Namespace, w.Value, w.Fence, w.Entry)
 }
