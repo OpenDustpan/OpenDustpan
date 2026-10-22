@@ -942,6 +942,26 @@ type Authorizer interface {
 	ListObjects(ctx context.Context, p Principal, action Action) (Scope, error)
 }
 
+// ExactScoper is an optional interface of an Authorizer. ScopeExact reports
+// that ListObjects gives a scope whose objects are exactly the objects that
+// Authorize allows: Authorize never denies an object that the scope holds,
+// for the grants and for every other check of the authorizer. A caller that
+// counts objects in its own query may take the scope as the answer only for
+// such an authorizer. A decorator that does not filter the scope, for
+// example one that checks access limits for each object, does not implement
+// it.
+type ExactScoper interface {
+	ScopeExact() bool
+}
+
+// HasExactScope reports whether the scope of a is exact: a implements
+// ExactScoper and says so. Any other authorizer is not exact.
+func HasExactScope(a Authorizer) bool {
+	exact, ok := a.(ExactScoper)
+
+	return ok && exact.ScopeExact()
+}
+
 // Scope is the set of objects of one kind where a principal may perform one
 // action. All is true when the principal may perform it on every object. A
 // unit is in the scope when it, its collection or its namespace is in a
@@ -1194,6 +1214,12 @@ func (s SelfAllowed) ListObjects(ctx context.Context, p Principal, action Action
 	return scope, nil
 }
 
+// ScopeExact reports that the scope is exact when the scope of Next is exact:
+// a self action adds nothing to the scope and no check to the other actions.
+func (s SelfAllowed) ScopeExact() bool {
+	return HasExactScope(s.Next)
+}
+
 // AdminOnly allows administrators and denies everyone else. It is the safe
 // default until a real authorizer (roles, teams) is configured.
 type AdminOnly struct{}
@@ -1207,6 +1233,12 @@ func (AdminOnly) Authorize(_ context.Context, p Principal, action Action, obj Ob
 	}
 
 	return fmt.Errorf("%w: %s may not %s on %q", ErrDenied, p.Subject, action, obj.String())
+}
+
+// ScopeExact reports that the scope is exact: Authorize and ListObjects
+// decide on the administrator flag alone.
+func (AdminOnly) ScopeExact() bool {
+	return true
 }
 
 // ListObjects gives an administrator every object and any other principal

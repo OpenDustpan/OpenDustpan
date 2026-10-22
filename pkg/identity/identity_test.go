@@ -997,3 +997,72 @@ func TestObjectIsNamespace(t *testing.T) {
 		})
 	}
 }
+
+// TestHasExactScope proves that only an authorizer that says so has an exact
+// scope, and that SelfAllowed says so only when its Next does.
+func TestHasExactScope(t *testing.T) {
+	t.Parallel()
+
+	var plain identity.Authorizer = scopeOnly{}
+
+	tests := []struct {
+		authz identity.Authorizer
+		name  string
+		want  bool
+	}{
+		{name: "admin only", authz: identity.AdminOnly{}, want: true},
+		{name: "no marker", authz: plain, want: false},
+		{
+			name:  "self allowed over exact",
+			authz: identity.SelfAllowed{Next: identity.AdminOnly{}, Actions: nil},
+			want:  true,
+		},
+		{name: "self allowed over no marker", authz: identity.SelfAllowed{Next: plain, Actions: nil}, want: false},
+		{name: "self allowed over nothing", authz: identity.SelfAllowed{Next: nil, Actions: nil}, want: false},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := identity.HasExactScope(tc.authz); got != tc.want {
+				t.Fatalf("HasExactScope = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// scopeOnly is an Authorizer with no ScopeExact method.
+type scopeOnly struct{}
+
+func (scopeOnly) Authorize(context.Context, identity.Principal, identity.Action, identity.Object) error {
+	return nil
+}
+
+func (scopeOnly) ListObjects(context.Context, identity.Principal, identity.Action) (identity.Scope, error) {
+	return identity.Scope{Namespaces: nil, Collections: nil, Units: nil, Principals: nil, All: false}, nil
+}
+
+// TestExactScopeWithinAuthorize runs the conformance check of an exact scope
+// for the authorizers of this package, with a principal who is not an
+// administrator.
+func TestExactScopeWithinAuthorize(t *testing.T) {
+	t.Parallel()
+
+	unit, err := identity.UnitObject("pulumi", "acme", "web/prod")
+	if err != nil {
+		t.Fatalf("unit object: %v", err)
+	}
+
+	p := identity.Principal{Subject: "alice", Admin: false} //nolint:exhaustruct_v5 // A plain person.
+
+	for _, authz := range []identity.Authorizer{
+		identity.AdminOnly{},
+		identity.SelfAllowed{Next: identity.AdminOnly{}, Actions: []identity.Action{identity.ActionTokenManageOwn}},
+	} {
+		identitytest.CheckExactScope(t.Context(), t, identitytest.ListCheck{
+			Authorizer: authz, Principal: p, Action: identity.ActionUnitRead,
+			Every: []identity.Object{identity.NamespaceObject("acme"), unit},
+		})
+	}
+}

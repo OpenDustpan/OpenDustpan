@@ -113,6 +113,34 @@ FROM stacks
 WHERE namespace = $1 AND project = $2 AND deleted_at_ms IS NULL
 ORDER BY name;
 
+-- name: ListStackPageInNamespace :many
+-- One page of the live stacks of a namespace after a project and a name, in
+-- the order of the primary key. The cursor is a range of the key, so the read
+-- starts at the cursor.
+SELECT namespace, project, name, id, version, created_at_ms, updated_at_ms
+FROM stacks
+WHERE namespace = sqlc.arg(namespace) AND deleted_at_ms IS NULL
+  AND (project, name) > (sqlc.arg(after_project), sqlc.arg(after_name))
+ORDER BY project, name
+LIMIT sqlc.arg(page_limit);
+
+-- name: ListStackPageInProject :many
+-- One page of the live stacks of a project after a name, in the order of the
+-- primary key.
+SELECT namespace, project, name, id, version, created_at_ms, updated_at_ms
+FROM stacks
+WHERE namespace = sqlc.arg(namespace) AND project = sqlc.arg(project) AND deleted_at_ms IS NULL
+  AND name > sqlc.arg(after_name)
+ORDER BY name
+LIMIT sqlc.arg(page_limit);
+
+-- name: ListStackTagsOfStacks :many
+-- Every tag of the stacks with the IDs, for one page of stacks.
+SELECT stack_id, name, value
+FROM stack_tags
+WHERE stack_id = ANY(sqlc.arg(stack_ids)::text[])
+ORDER BY stack_id, name;
+
 -- name: CreateStackTag :exec
 INSERT INTO stack_tags (stack_id, name, value)
 VALUES ($1, $2, $3);
@@ -721,6 +749,30 @@ SELECT sqlc.embed(w), n.id AS namespace_id
 FROM workspaces AS w
 JOIN namespaces AS n ON n.name = w.namespace
 WHERE w.namespace = $1 AND w.deleted_at_ms IS NULL
+ORDER BY w.name;
+
+-- name: CountWorkspacePage :one
+-- The count of the live workspaces of a namespace whose name holds the
+-- search, for the total of a workspace page.
+SELECT COUNT(*)
+FROM workspaces AS w
+WHERE w.namespace = sqlc.arg(namespace) AND w.deleted_at_ms IS NULL AND strpos(w.name, sqlc.arg(name_contains)) > 0;
+
+-- name: ReadWorkspacePage :many
+-- One page of the live workspaces of a namespace whose name holds the search,
+-- in the order of ReadWorkspaces. The inner query finds the names of the page
+-- in the index of the live workspace names alone, so an offset skips index
+-- entries and no table rows. The outer query reads the rows of the page.
+SELECT sqlc.embed(w), n.id AS namespace_id
+FROM (
+    SELECT p.name
+    FROM workspaces AS p
+    WHERE p.namespace = sqlc.arg(namespace) AND p.deleted_at_ms IS NULL AND strpos(p.name, sqlc.arg(name_contains)) > 0
+    ORDER BY p.name
+    LIMIT sqlc.arg(page_limit) OFFSET sqlc.arg(page_offset)
+) AS page
+JOIN workspaces AS w ON w.namespace = sqlc.arg(namespace) AND w.name = page.name AND w.deleted_at_ms IS NULL
+JOIN namespaces AS n ON n.name = w.namespace
 ORDER BY w.name;
 
 -- name: LockWorkspaceForFinalize :one
