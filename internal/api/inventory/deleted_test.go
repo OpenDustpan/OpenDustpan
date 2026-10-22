@@ -861,3 +861,37 @@ func TestUnknownUnitAnswersLikeAForbiddenOne(t *testing.T) {
 		})
 	}
 }
+
+// TestDeletedPageTokenBelongsToItsQuery proves that a page token works only
+// for the filters that made it: another tool, name prefix or purge window
+// answers 400, and another page size keeps the token.
+func TestDeletedPageTokenBelongsToItsQuery(t *testing.T) {
+	t.Parallel()
+
+	f := newDeletedFixture(t, fiveDeleted(), selectiveAuthorizer{deny: map[identity.Action]bool{}}, nil)
+
+	first := decodeDeleted(t, f.serve(t, http.MethodGet, listTarget(url.Values{"pageSize": {"2"}}), ""))
+	if first.NextPageToken == "" {
+		t.Fatal("first page has no next page token")
+	}
+
+	other := []url.Values{
+		{"tool": {"OpenTofu"}},
+		{"namePrefix": {"s"}},
+		{"purgeWithinDays": {"30"}},
+	}
+
+	for _, q := range other {
+		q.Set("pageToken", first.NextPageToken)
+
+		rec := f.serve(t, http.MethodGet, listTarget(q), "")
+		if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "does not belong to this query") {
+			t.Errorf("token with %v = %d %s, want 400", q, rec.Code, rec.Body.String())
+		}
+	}
+
+	same := url.Values{"pageSize": {"3"}, "pageToken": {first.NextPageToken}}
+	if rec := f.serve(t, http.MethodGet, listTarget(same), ""); rec.Code != http.StatusOK {
+		t.Fatalf("token with another page size = %d %s, want 200", rec.Code, rec.Body.String())
+	}
+}
