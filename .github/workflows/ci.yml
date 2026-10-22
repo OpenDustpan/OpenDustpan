@@ -36,8 +36,9 @@ concurrency:
 #
 # The repository variable CI_TRIAL_RUNS_ON, when it is set, replaces
 # CI_RUNS_ON, with the same JSON format. It sends all runs to the runners of
-# a trial provider, for example "blacksmith-4vcpu-ubuntu-2404". Change it
-# to try another size without a commit. Unset it to stop the trial.
+# a trial provider, for example "blacksmith-4vcpu-ubuntu-2404-arm". The jobs
+# run on x64 and on arm64. Change the variable to try another size or
+# architecture without a commit. Unset it to stop the trial.
 #
 # The project's machines (github-actions-runner1 to 4) keep the Go build
 # cache, the Go module cache and the golangci-lint cache on their disks
@@ -199,15 +200,18 @@ jobs:
 
   # Trivy and TruffleHog (make trivy, make trufflehog). The binaries come from
   # the upstream releases, and each archive is checked against the SHA-256
-  # pinned here. Change a version together with its checksum and the Makefile.
+  # pinned here. Change a version together with its checksums and the
+  # Makefile. Each archive has a checksum for x64 and one for arm64.
   scan:
     if: ${{ github.event_name != 'schedule' && (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
     runs-on: *runs-on
     env:
       TRIVY_VERSION: 0.75.0
-      TRIVY_SHA256: c6e65abddb348e25f10549df887045629cf28cc72453cd1c63acb717316b3f3f
+      TRIVY_SHA256_X64: c6e65abddb348e25f10549df887045629cf28cc72453cd1c63acb717316b3f3f
+      TRIVY_SHA256_ARM64: a1ee9f6ffb7d112b64ff726a2a0717c21175c1114361391f4a132956751a13b3
       TRUFFLEHOG_VERSION: 3.99.2
-      TRUFFLEHOG_SHA256: 3c7b0d1dc4278294269bfdd7594bca8bb28c78da0a4a06ad202ded37b48deca4
+      TRUFFLEHOG_SHA256_X64: 3c7b0d1dc4278294269bfdd7594bca8bb28c78da0a4a06ad202ded37b48deca4
+      TRUFFLEHOG_SHA256_ARM64: 929b81efffca752eafd58bf6f17bf725d354f338636a7bbbee65c086d2f9ddf3
     steps:
       # TruffleHog scans the Git history, so fetch all of it.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -222,14 +226,25 @@ jobs:
       - name: Install Trivy and TruffleHog
         run: |
           set -euo pipefail
+          case "$(uname -m)" in
+            x86_64)
+              trivy_arch=64bit trufflehog_arch=amd64
+              trivy_sha256="$TRIVY_SHA256_X64" trufflehog_sha256="$TRUFFLEHOG_SHA256_X64" ;;
+            aarch64)
+              trivy_arch=ARM64 trufflehog_arch=arm64
+              trivy_sha256="$TRIVY_SHA256_ARM64" trufflehog_sha256="$TRUFFLEHOG_SHA256_ARM64" ;;
+            *)
+              echo "No pinned Trivy and TruffleHog archives for $(uname -m)." >&2
+              exit 1 ;;
+          esac
           mkdir -p "$RUNNER_TEMP/scan" "$HOME/.local/bin"
           cd "$RUNNER_TEMP/scan"
           curl -fsSL --retry 3 -o trivy.tar.gz \
-            "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz"
+            "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-${trivy_arch}.tar.gz"
           curl -fsSL --retry 3 -o trufflehog.tar.gz \
-            "https://github.com/trufflesecurity/trufflehog/releases/download/v${TRUFFLEHOG_VERSION}/trufflehog_${TRUFFLEHOG_VERSION}_linux_amd64.tar.gz"
-          echo "${TRIVY_SHA256}  trivy.tar.gz" | sha256sum -c -
-          echo "${TRUFFLEHOG_SHA256}  trufflehog.tar.gz" | sha256sum -c -
+            "https://github.com/trufflesecurity/trufflehog/releases/download/v${TRUFFLEHOG_VERSION}/trufflehog_${TRUFFLEHOG_VERSION}_linux_${trufflehog_arch}.tar.gz"
+          echo "${trivy_sha256}  trivy.tar.gz" | sha256sum -c -
+          echo "${trufflehog_sha256}  trufflehog.tar.gz" | sha256sum -c -
           tar -xzf trivy.tar.gz -C "$HOME/.local/bin" trivy
           tar -xzf trufflehog.tar.gz -C "$HOME/.local/bin" trufflehog
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
