@@ -10961,6 +10961,53 @@ func (q *Queries) ListInventoryLabels(ctx context.Context, namespace string) ([]
 	return items, nil
 }
 
+const listInventoryLabelsOfUnits = `-- name: ListInventoryLabelsOfUnits :many
+SELECT unit_id, label_key, label_value
+FROM inventory_labels
+WHERE unit_id IN (/*SLICE:unit_ids*/?)
+ORDER BY unit_id, label_key
+`
+
+type ListInventoryLabelsOfUnitsRow struct {
+	UnitID     string
+	LabelKey   string
+	LabelValue string
+}
+
+// Every label of the live units with the IDs, for one page of the unit list.
+func (q *Queries) ListInventoryLabelsOfUnits(ctx context.Context, unitIds []string) ([]ListInventoryLabelsOfUnitsRow, error) {
+	query := listInventoryLabelsOfUnits
+	var queryParams []interface{}
+	if len(unitIds) > 0 {
+		for _, v := range unitIds {
+			queryParams = append(queryParams, v)
+		}
+		query = strings.Replace(query, "/*SLICE:unit_ids*/?", strings.Repeat(",?", len(unitIds))[1:], 1)
+	} else {
+		query = strings.Replace(query, "/*SLICE:unit_ids*/?", "NULL", 1)
+	}
+	rows, err := q.db.QueryContext(ctx, query, queryParams...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListInventoryLabelsOfUnitsRow
+	for rows.Next() {
+		var i ListInventoryLabelsOfUnitsRow
+		if err := rows.Scan(&i.UnitID, &i.LabelKey, &i.LabelValue); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listInventoryUnitBounds = `-- name: ListInventoryUnitBounds :many
 SELECT namespace_id, seq, at_ms, tool, unit_id, name, display_name, status, collection, kind, resource_count
 FROM (

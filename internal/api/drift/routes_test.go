@@ -88,6 +88,16 @@ func (f fakeUnits) ListUnits(_ context.Context, ns namespace.Name) ([]coreinvent
 	}
 }
 
+// QueryUnits implements coreinventory.Reader over the entries of ListUnits.
+func (f fakeUnits) QueryUnits(ctx context.Context, q coreinventory.UnitQuery) ([]coreinventory.Entry, error) {
+	all, err := f.ListUnits(ctx, q.Namespace)
+	if err != nil {
+		return nil, err
+	}
+
+	return coreinventory.PageUnits(all, q), nil
+}
+
 func (f fakeUnits) GetUnit(ctx context.Context, unitID string) (coreinventory.Entry, error) {
 	if f.liar {
 		return entryOf("other", unitID, "db"), nil
