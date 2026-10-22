@@ -250,6 +250,13 @@ func idempotencyKey(r *http.Request) (string, error) {
 			return "", fmt.Errorf("%w: send 1 to %d printable ASCII characters", err, idempotency.MaxKeyLength)
 		}
 
+		// Defense in depth: the job service refuses the prefix too. A key
+		// with the prefix of the drift checks of the server could name the
+		// job of a drift check of the same caller, so no fire sends one.
+		if strings.HasPrefix(string(k), reservedKeyPrefix) {
+			return "", fmt.Errorf("%w: a key does not start with %q", idempotency.ErrInvalidKey, reservedKeyPrefix)
+		}
+
 		return string(k), nil
 	default:
 		return "", fmt.Errorf("%w: send one Idempotency-Key header", idempotency.ErrInvalidKey)

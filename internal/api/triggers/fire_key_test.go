@@ -157,3 +157,42 @@ func TestDeleteRemovesARowThatFailsItsChecks(t *testing.T) {
 		t.Error("the row is still stored after the delete")
 	}
 }
+
+// TestFireRefusesAReservedKeyPrefix proves: a key with the prefix of the drift
+// checks of the server fires nothing, and a key with another prefix fires.
+func TestFireRefusesAReservedKeyPrefix(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name string
+		key  string
+		want int
+	}{
+		{"prefix only", "drift-", http.StatusBadRequest},
+		{"prefix and text", "drift-unit-1-29000000", http.StatusBadRequest},
+		{"other case", "Drift-unit-1", http.StatusCreated},
+		{"inside", "my-drift-1", http.StatusCreated},
+		{"no hyphen", "drift", http.StatusCreated},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			r := fullRig(t)
+			seed(r)
+
+			rec := serve(t, r.h, request{
+				method: http.MethodPost, path: basePath + "/trg-seed/fire", token: testToken, body: "",
+				header: map[string]string{"Idempotency-Key": tc.key},
+			})
+
+			if rec.Code != tc.want {
+				t.Fatalf("fire = %d %s, want %d", rec.Code, rec.Body.String(), tc.want)
+			}
+
+			if tc.want == http.StatusBadRequest &&
+				(!strings.Contains(rec.Body.String(), "request.idempotency-key-invalid") || r.disp.fires() != 0) {
+				t.Errorf("body = %s, fires = %d, want the key error and no fire", rec.Body.String(), r.disp.fires())
+			}
+		})
+	}
+}
