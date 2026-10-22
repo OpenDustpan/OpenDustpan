@@ -83,6 +83,10 @@ func (m *memSettings) SetSetting(
 		return namespace.ErrFenced
 	}
 
+	if err := outputshare.Default(space.setting).Validate(); err != nil {
+		return fmt.Errorf("stored setting: %w", err)
+	}
+
 	space.setting = string(d)
 	space.audited = append(space.audited, e.Action)
 

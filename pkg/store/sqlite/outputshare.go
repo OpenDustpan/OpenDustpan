@@ -132,6 +132,12 @@ func (o outputSharingSettings) writeSetting(
 			return fmt.Errorf("select output sharing setting: %w", err)
 		}
 
+		// A stored value of another version or a restore never reaches the
+		// audit entry, and a change over it fails closed like a read.
+		if outputshare.Default(old).Validate() != nil {
+			return fmt.Errorf("%w: the stored output sharing setting of %s", outputshare.ErrInvalid, ns)
+		}
+
 		if len(e.Changes) == 1 {
 			e.Changes[0].Old = &old
 		}

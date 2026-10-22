@@ -128,7 +128,8 @@ func testSettingRoundTrip(t *testing.T, h Harness) {
 
 // testSettingStoredInvalid proves that a stored value that fails Validate,
 // as a row of another version or a restore can hold, reads as ErrInvalid and
-// never as a value, so that the caller fails closed.
+// never as a value, so that the caller fails closed. A change over such a
+// value fails closed too.
 func testSettingStoredInvalid(t *testing.T, h Harness) {
 	t.Helper()
 
@@ -136,10 +137,16 @@ func testSettingStoredInvalid(t *testing.T, h Harness) {
 		t.Skip("the adapter has no hook that writes a raw setting")
 	}
 
-	h.Namespace(t, acme.String())
+	fence := h.Namespace(t, acme.String())
 
 	for _, bad := range []string{"", "everyone", "Namespace", "namespace "} {
 		h.SettingRaw(t, acme, bad)
+
+		// A change reads the value it replaces, so it fails closed too.
+		werr := h.Settings.SetSetting(t.Context(), acme, outputshare.DefaultNamespace, fence, settingEntry(fence))
+		if !errors.Is(werr, outputshare.ErrInvalid) {
+			t.Fatalf("SetSetting over the stored value %q = %v, want ErrInvalid", bad, werr)
+		}
 
 		got, err := h.Settings.Setting(t.Context(), acme)
 		if !errors.Is(err, outputshare.ErrInvalid) {

@@ -407,7 +407,7 @@ func (brokenOutputSharing) Setting(_ context.Context, _ namespace.Name) (outputs
 func (brokenOutputSharing) SetSetting(
 	_ context.Context, _ namespace.Name, _ outputshare.Default, _ namespace.Fence, _ audit.Entry,
 ) error {
-	return nil
+	return fmt.Errorf("%w: the stored output sharing setting", outputshare.ErrInvalid)
 }
 
 // TestOutputSharingFailsClosedOnABadStoredValue proves that a stored value
