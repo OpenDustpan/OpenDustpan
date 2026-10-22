@@ -189,3 +189,40 @@ To write the checked-in file again after a change of the routes, run:
 ```sh
 go test ./pkg/dustpan -run TestAPIDescriptionGolden -update-api-description
 ```
+
+## Change the version of the description
+
+`info.version` changes with every change of the description. A test in
+`internal/api/apidesc` keeps the file `openapi.pin`. The file holds the
+`info.version` and the SHA-256 of the last committed description. The test
+fails when the bytes of the description differ from the pin and the version
+is the same. It also fails when the version differs and the bytes are the
+same, and when the version does not rise.
+
+After a change of the routes, a contributor does these steps:
+
+1. Raise `DocumentVersion` in `internal/api/apidesc/document.go`. The new
+   version must be higher than the version in `openapi.pin`.
+2. Write the description again:
+
+   ```sh
+   go test ./pkg/dustpan -run TestAPIDescriptionGolden -update-api-description
+   ```
+
+3. Write the pin again. The command refuses to write the pin when the version
+   did not rise:
+
+   ```sh
+   go test ./internal/api/apidesc -run TestVersionFollowsTheDescription -update-description-pin
+   ```
+
+4. If the minor or major part of the version rose, write the golden files of
+   the Go client again. The client version takes these two parts from the
+   description:
+
+   ```sh
+   go test ./internal/clientgen/golang -run TestRenderGolden -update
+   ```
+
+Commit `document.go`, `openapi.json`, `openapi.pin` and the golden files in
+the same pull request.
