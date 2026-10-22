@@ -338,12 +338,12 @@ func checkApprovalRefusals(ctx context.Context, t *testing.T, env approvalEnv) {
 		{step: "default with an unknown field", method: http.MethodPut, path: def, body: `{"count":1,"approvers":{},"unless":"true"}`, want: http.StatusBadRequest},
 		{step: "rule with no approver", method: http.MethodPut, path: rule, body: `{"count":1,"approvers":{}}`, want: http.StatusUnprocessableEntity},
 		{step: "rule with the reserved ID", method: http.MethodPut, path: approvalNamespaceBase + "/approval-rules/default", body: `{"count":1,"approvers":{"groups":["a"]}}`, want: http.StatusUnprocessableEntity},
-		{step: "default with a group that does not exist", method: http.MethodPut, path: def, body: `{"count":1,"approvers":{"groups":["nogroup"]}}`, want: http.StatusBadRequest},
-		{step: "default with a group name that is not valid", method: http.MethodPut, path: def, body: `{"count":1,"approvers":{"groups":["<b>x</b>"]}}`, want: http.StatusBadRequest},
-		{step: "default with a count above the named users", method: http.MethodPut, path: def, body: `{"count":10,"approvers":{"users":["approval-user"]}}`, want: http.StatusBadRequest},
-		{step: "default with a count above the group members", method: http.MethodPut, path: def, body: `{"count":3,"approvers":{"groups":["platform"]}}`, want: http.StatusBadRequest},
-		{step: "rule with a group that does not exist", method: http.MethodPut, path: rule, body: `{"count":1,"approvers":{"groups":["nogroup"]}}`, want: http.StatusBadRequest},
-		{step: "rule with a count above the named users", method: http.MethodPut, path: rule, body: `{"count":2,"approvers":{"users":["approval-user"]}}`, want: http.StatusBadRequest},
+		{step: "default with a group that does not exist", method: http.MethodPut, path: def, body: `{"count":1,"approvers":{"groups":["nogroup"]}}`, want: http.StatusUnprocessableEntity},
+		{step: "default with a group name that is not valid", method: http.MethodPut, path: def, body: `{"count":1,"approvers":{"groups":["<b>x</b>"]}}`, want: http.StatusUnprocessableEntity},
+		{step: "default with a count above the named users", method: http.MethodPut, path: def, body: `{"count":10,"approvers":{"users":["approval-user"]}}`, want: http.StatusUnprocessableEntity},
+		{step: "default with a count above the group members", method: http.MethodPut, path: def, body: `{"count":3,"approvers":{"groups":["platform"]}}`, want: http.StatusUnprocessableEntity},
+		{step: "rule with a group that does not exist", method: http.MethodPut, path: rule, body: `{"count":1,"approvers":{"groups":["nogroup"]}}`, want: http.StatusUnprocessableEntity},
+		{step: "rule with a count above the named users", method: http.MethodPut, path: rule, body: `{"count":2,"approvers":{"users":["approval-user"]}}`, want: http.StatusUnprocessableEntity},
 		{step: "delete when unset", method: http.MethodDelete, path: def, body: "", want: http.StatusNoContent},
 	} {
 		approvalCall(ctx, t, env, s)
