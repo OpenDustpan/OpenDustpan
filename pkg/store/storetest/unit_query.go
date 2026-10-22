@@ -315,14 +315,17 @@ func labelNames() [][2]string {
 
 // testQueryUnitsLabelPages walks label filters with pages of 2: one label,
 // two labels, and a key with another value. Each walk gives the units of
-// inventory.PageUnits.
+// inventory.PageUnits, and no unit of another namespace with the same
+// labels.
 func testQueryUnitsLabelPages(t *testing.T, s Store) {
 	t.Helper()
 
 	ns := newNamespace(t, s, "acme")
+	other := newNamespace(t, s, "other")
 	createStacks(t, s, ns, labelNames(), []map[string]string{
 		{"env": "prod", "team": "a"}, {"env": "prod", "team": "b"}, {"env": "dev", "team": "a"}, {},
 	})
+	createStacks(t, s, other, labelNames(), []map[string]string{{"env": "prod", "team": "a"}})
 
 	filters := [][]inventory.UnitLabel{
 		{{Key: "env", Value: "prod"}},
