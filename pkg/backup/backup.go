@@ -156,6 +156,7 @@ var Tables = []string{
 	"manual_locks",
 	TablePersonPreferences,
 	"saved_views",
+	"drift_results",
 	TableGitHostAppRegistrations,
 	TableGitHostInstallations,
 	"git_host_connections",
