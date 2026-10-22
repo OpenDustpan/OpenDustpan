@@ -1612,6 +1612,24 @@
         ],
         "type": "object"
       },
+      "ListRegistryProvidersResponse": {
+        "properties": {
+          "nextPageToken": {
+            "type": "string"
+          },
+          "providers": {
+            "items": {
+              "$ref": "#/components/schemas/RegistryProvider"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "nextPageToken",
+          "providers"
+        ],
+        "type": "object"
+      },
       "ListUnitsResponse": {
         "properties": {
           "nextPageToken": {
@@ -2132,6 +2150,21 @@
           "addedBy",
           "armoredPublicKey",
           "fingerprint"
+        ],
+        "type": "object"
+      },
+      "RegistryProvider": {
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "namespace": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "namespace"
         ],
         "type": "object"
       },
@@ -5204,6 +5237,52 @@
         "x-dustpan-actions": [
           {
             "action": "registry:manage-keys",
+            "object": "namespace"
+          }
+        ]
+      }
+    },
+    "/api/dustpan/v1/namespaces/{namespace}/registry/providers": {
+      "get": {
+        "operationId": "listRegistryProviders",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "namespace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "2XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListRegistryProvidersResponse"
+                }
+              }
+            },
+            "description": "The request succeeded."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The request failed."
+          }
+        },
+        "tags": [
+          "registry"
+        ],
+        "x-dustpan-actions": [
+          {
+            "action": "registry:read",
             "object": "namespace"
           }
         ]
