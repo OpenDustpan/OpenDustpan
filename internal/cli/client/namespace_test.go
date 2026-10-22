@@ -71,7 +71,7 @@ func TestCreateNamespaceCapsTheAnswer(t *testing.T) {
 	hugeError := `{"message":"` + strings.Repeat("y", client.MaxClientBodyBytes) + `"}`
 
 	_, err = createNamespace(t, serveNamespaceCreate(t, http.StatusConflict, hugeError))
-	if !errors.Is(err, client.ErrNamespaceCreate) || strings.Contains(err.Error(), "yyyy") {
+	if err == nil || !errors.Is(err, client.ErrNamespaceCreate) || strings.Contains(err.Error(), "yyyy") {
 		t.Fatalf("oversized error body: err holds the body or lacks ErrNamespaceCreate: %.200v", err)
 	}
 
