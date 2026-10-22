@@ -51,8 +51,9 @@ func newCollectionRouteHandler(t *testing.T, authz identity.Authorizer) *apiinve
 	}
 
 	handler, err := apiinventory.NewHandler(apiinventory.Config{
-		Views: nil,
-		Audit: newTestAudit(), OnAuditFailure: nil, Locks: nil, PublicURL: "",
+		OutputSharing: nil,
+		Views:         nil,
+		Audit:         newTestAudit(), OnAuditFailure: nil, Locks: nil, PublicURL: "",
 		Namespaces:    nsSvc,
 		Units:         &memReader{entries: map[namespace.Name][]coreinventory.Entry{}, err: nil},
 		Collections:   svc,
