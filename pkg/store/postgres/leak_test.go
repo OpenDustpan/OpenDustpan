@@ -57,6 +57,13 @@ func (o ownDatabase) Run() int {
 
 	code := o.m.Run()
 
+	// A CI service container is thrown away after the job, with its
+	// database. The drop then only costs time: about 150 s to delete the
+	// files of about 4,000 schemas. Any other value than "1" drops.
+	if os.Getenv(skipFinalDropEnv) == "1" {
+		return code
+	}
+
 	drop := "DROP DATABASE IF EXISTS " + pgx.Identifier{db.name}.Sanitize() + " WITH (FORCE)"
 	if dropErr := execOn(ctx, base, drop); dropErr != nil {
 		fmt.Fprintf(os.Stderr, "drop the test database %s: %v\n", db.name, dropErr)
@@ -68,6 +75,11 @@ func (o ownDatabase) Run() int {
 
 	return code
 }
+
+// skipFinalDropEnv names the variable that keeps the test database after the
+// tests. CI sets it to "1" for a PostgreSQL server that it throws away after
+// the job. A stale database on any other server is dropped by a later run.
+const skipFinalDropEnv = "DUSTPAN_TEST_SKIP_FINAL_DROP"
 
 // testDatabasePrefix starts the name of each test database. The Unix time of
 // its creation and a random suffix follow.
