@@ -1,0 +1,69 @@
+{{.Header}}
+
+import { anyValue, array, boolean, dateTime, int64, nullable, number, record, ref, string } from "./decode.js";
+import {
+{{- range .Types}}
+  decode{{.Name}},
+{{- end}}
+} from "./decoders.js";
+import { operation } from "./execute.js";
+import type {
+{{- range .Types}}
+  {{.Name}},
+{{- end}}
+} from "./types.js";
+{{range $op := .Operations}}
+/** The input of the operation {{$op.ID}}. */
+export interface {{$op.Input}} {
+{{- if $op.PathMembers}}
+  readonly path: {
+{{- range $op.PathMembers}}
+{{jsdoc "    " .Doc}}    readonly {{.Name}}: {{.Type}};
+{{- end}}
+  };
+{{- end}}
+{{- if $op.QueryMembers}}
+  readonly query{{if not $op.QueryNeeded}}?{{end}}: {
+{{- range $op.QueryMembers}}
+{{jsdoc "    " .Doc}}    readonly {{.Name}}{{if .Optional}}?{{end}}: {{.Type}};
+{{- end}}
+  };
+{{- end}}
+{{- if $op.Body}}
+  readonly body{{if $op.Body.Optional}}?{{end}}: {{$op.Body.Type}};
+{{- end}}
+{{- if $op.TakesIfMatch}}
+  /** The ETag of the object, from an earlier answer. */
+  readonly ifMatch?: string;
+{{- end}}
+{{- if $op.TakesKey}}
+  /** The Idempotency-Key. The transport makes a new random key when this is absent. */
+  readonly idempotencyKey?: string;
+{{- end}}
+  readonly signal?: AbortSignal;
+}
+{{end}}
+/** The operations of the API description, by operationId. */
+export const operations = {
+{{- range $op := .Operations}}
+  {{$op.ID}}: operation<{{$op.Result}}>(
+    {
+      id: {{tsString $op.ID}},
+      method: {{$op.Method}},
+      path: {{$op.Path}},
+      pathParameters: {{$op.PathParams}},
+      queryParameters: {{$op.QueryParams}},
+      security: {{$op.Security}},
+      idempotencyKey: {{$op.Idempotency}},
+      ifMatch: {{$op.IfMatch}},
+      requestBody: {{$op.RequestBody}},
+      requestBodyRequired: {{$op.BodyRequired}},
+      statuses: [{{$op.Statuses}}],
+    },
+    {{$op.Decoder}},
+  ),
+{{- end}}
+};
+
+/** The operationId of an operation. */
+export type OperationId = keyof typeof operations;

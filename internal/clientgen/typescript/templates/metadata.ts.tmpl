@@ -1,0 +1,23 @@
+{{.Header}}
+
+/** What this package was generated from. */
+export interface Metadata {
+  /** The version of this package. */
+  readonly clientVersion: string;
+  /** info.version of the API description. It is not a safe pin: use the digest. */
+  readonly descriptionVersion: string;
+  /** The SHA-256 of the bytes of the API description, in lowercase hexadecimal. */
+  readonly descriptionSha256: string;
+  /** The release of the server that the description comes from, or the server commit before the first release. */
+  readonly serverRelease: string;
+  /** The version of the generator. */
+  readonly generatorVersion: string;
+}
+
+export const metadata: Metadata = {
+  clientVersion: {{tsString .ClientVersion}},
+  descriptionVersion: {{tsString .DescriptionVersion}},
+  descriptionSha256: {{tsString .DescriptionSHA256}},
+  serverRelease: {{tsString .ServerRelease}},
+  generatorVersion: {{tsString .GeneratorVersion}},
+};

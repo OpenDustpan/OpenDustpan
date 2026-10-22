@@ -53,6 +53,7 @@ Do not report work as finished if any of these fail. Say what fails instead.
 ```
 .agents/skills/        agent skills, installed with `npx skills` (see skills-lock.json); .claude/skills/ links here
 cmd/opendustpan/       the binary: flags, env, built-in adapters. Only place that may exit.
+cmd/clientgen/         the client generator: reads openapi.json and writes a client (make clients-generate)
 pkg/                   the public SDK: dustpan, the port packages and the conformance suites (ADR 35, ADR 272)
   dustpan/             the SDK entry point: NewServer + options, routes, probes
   namespace/           domain: namespaces, home region, failover-version fencing
@@ -98,7 +99,9 @@ internal/              code that is not part of the SDK
   api/jobs/            HTTP adapter for the tool-neutral jobs API
   api/server/          HTTP adapter for the tool-neutral installation API (backups, metrics)
   api/runnerapi/       HTTP adapter for the runner protocol (/runner/v1) and the runner management API
+  clientgen/           the client generator: parser, writer, template sets (golang/, typescript/) and the conformance suite
   metrics/, token/...  helpers shared across packages
+clients/typescript/    the generated TypeScript client package; make clients-check fails when it is not what a fresh run gives
 load/                  load harness that replays recorded CLI traffic (make load); not part of make check
 e2e/                   end-to-end suite driving real CLI binaries of every supported tool (make e2e)
 deploy/helm/           the Helm chart in opendustpan/ (templates, values, schema, ci/ profiles); charttest/ holds its golden-file tests (make chart-lint)
