@@ -233,8 +233,8 @@ func (r *outputShareRig) audited(t *testing.T, ns string) []string {
 	}
 
 	actions := make([]string, 0, len(listing.Entries))
-	for _, entry := range slices.Backward(listing.Entries) {
-		actions = append(actions, entry.Action)
+	for i := range slices.Backward(listing.Entries) {
+		actions = append(actions, listing.Entries[i].Action)
 	}
 
 	return actions
@@ -315,7 +315,7 @@ func (r *outputShareRig) saveState(t *testing.T, unit outputshare.Placement, enc
 
 	switch unit.Unit.Tool() {
 	case "opentofu":
-		return r.saveWorkspaceState(t, unit.Unit, serial, encrypted)
+		return r.saveWorkspaceState(t, unit.Unit, serial, workspaceStateContent(serial, encrypted))
 	case "pulumi":
 		return r.saveStackCheckpoint(t, unit.Unit, serial)
 	default:
@@ -325,16 +325,21 @@ func (r *outputShareRig) saveState(t *testing.T, unit outputshare.Placement, enc
 	}
 }
 
-func (r *outputShareRig) saveWorkspaceState(t *testing.T, unit identity.Object, serial int64, encrypted bool) string {
+// workspaceStateContent returns the state document of the serial, encrypted
+// by the client when encrypted is true.
+func workspaceStateContent(serial int64, encrypted bool) string {
+	if encrypted {
+		return fmt.Sprintf(`{"serial":%d,"lineage":"lineage-1","encrypted_data":"aa"}`, serial)
+	}
+
+	return fmt.Sprintf(`{"serial":%d,"lineage":"lineage-1","outputs":{}}`, serial)
+}
+
+func (r *outputShareRig) saveWorkspaceState(t *testing.T, unit identity.Object, serial int64, content string) string {
 	t.Helper()
 
 	ctx := t.Context()
 	id := workspace.ID(unit.UnitID())
-
-	content := fmt.Sprintf(`{"serial":%d,"lineage":"lineage-1","outputs":{}}`, serial)
-	if encrypted {
-		content = fmt.Sprintf(`{"serial":%d,"lineage":"lineage-1","encrypted_data":"aa"}`, serial)
-	}
 
 	if _, err := r.svc.Workspaces.Lock(ctx, id, "saver", "apply"); err != nil {
 		t.Fatalf("lock %s: %v", unit, err)

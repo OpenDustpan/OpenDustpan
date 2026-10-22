@@ -844,9 +844,6 @@ func pulumiSharingRules(t *testing.T, env *e2e.Env) {
 	}
 
 	consumer := "pulumi:" + shareStack(shareConsumer)
-	stackPath := "/api/stacks/" + shareStack(shareProducer)
-	configSecret := producerConfigCiphertext(t, env)
-
 	// Only this test passes a job token in PULUMI_ACCESS_TOKEN, to drive the
 	// CLI with it. The launcher never puts a job token in an environment
 	// variable.
@@ -858,6 +855,10 @@ func pulumiSharingRules(t *testing.T, env *e2e.Env) {
 	sharingRule(ctx, t, env, ruleTarget{e2e.Namespace, producerID, consumer})
 	env.Step(ctx, t, withEnv(step("a job token with a rule", nil,
 		"up", "--yes", "--non-interactive", "--stack", shareStack(shareConsumer)), "PULUMI_ACCESS_TOKEN="+jobToken))
+
+	stackPath := "/api/stacks/" + shareStack(shareProducer)
+	configSecret := producerConfigCiphertext(t, env)
+
 	shareAPI(ctx, t, env, shareCall{
 		name: "a job token decrypts no config secret", token: jobToken, method: http.MethodPost,
 		path: stackPath + "/decrypt", body: `{"ciphertext":` + strconv.Quote(configSecret) + `}`,
@@ -1551,8 +1552,8 @@ func checkSettingAudit(ctx context.Context, t *testing.T, env *e2e.Env) {
 // neutralOutputs is the answer of the tool-neutral outputs route.
 type neutralOutputs struct {
 	Tool    string          `json:"tool"`
-	UnitID  string          `json:"unitId"`
-	StateID string          `json:"stateId"`
+	UnitID  string          `json:"unitID"`
+	StateID string          `json:"stateID"`
 	Outputs []neutralOutput `json:"outputs"`
 }
 

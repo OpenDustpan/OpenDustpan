@@ -296,27 +296,33 @@ func TestOutputsRouteAnswers(t *testing.T) {
 				t.Fatalf("status = %d, want %d: %s", rec.Code, tt.want, rec.Body.String())
 			}
 
-			if tt.want == http.StatusOK {
-				return
-			}
-
-			body := rec.Body.String()
-			if strings.Contains(body, "hello") || strings.Contains(body, "s3cr3t") {
-				t.Errorf("a refusal answered an output: %s", body)
-			}
-
-			if tt.want == http.StatusNotFound && f.source.reads != 0 {
-				t.Errorf("a refused read called the source %d times", f.source.reads)
+			if tt.want != http.StatusOK {
+				checkOutputsRefusal(t, f, tt.want, rec)
 			}
 		})
+	}
+}
+
+// checkOutputsRefusal proves that a refusal answered no output, and that a
+// refusal of the route did not call the source.
+func checkOutputsRefusal(t *testing.T, f outputsFixture, want int, rec *httptest.ResponseRecorder) {
+	t.Helper()
+
+	body := rec.Body.String()
+	if strings.Contains(body, "hello") || strings.Contains(body, "s3cr3t") {
+		t.Errorf("a refusal answered an output: %s", body)
+	}
+
+	if want == http.StatusNotFound && f.source.reads != 0 {
+		t.Errorf("a refused read called the source %d times", f.source.reads)
 	}
 }
 
 // outputsDocument is the answer of the outputs route, as a client decodes it.
 type outputsDocument struct {
 	Tool    string        `json:"tool"`
-	UnitID  string        `json:"unitId"`
-	StateID string        `json:"stateId"`
+	UnitID  string        `json:"unitID"`
+	StateID string        `json:"stateID"`
 	Outputs []outputEntry `json:"outputs"`
 }
 
@@ -345,9 +351,20 @@ func TestOutputsRouteAnswersNoSecretValue(t *testing.T) {
 		t.Fatalf("decode: %v", err)
 	}
 
-	want := outputsDocument{Tool: "opentofu", UnitID: "ws-1", StateID: "state-1", Outputs: nil}
-	if doc.Tool != want.Tool || doc.UnitID != want.UnitID || doc.StateID != want.StateID || len(doc.Outputs) != 2 {
-		t.Fatalf("document = %+v", doc)
+	checkOutputsDocument(t, &doc)
+
+	if strings.Contains(rec.Body.String(), "s3cr3t") {
+		t.Errorf("the body holds the secret value: %s", rec.Body.String())
+	}
+}
+
+// checkOutputsDocument proves the header of the document, the plain output and
+// the secret output with no value.
+func checkOutputsDocument(t *testing.T, doc *outputsDocument) {
+	t.Helper()
+
+	if doc.Tool != "opentofu" || doc.UnitID != "ws-1" || doc.StateID != "state-1" || len(doc.Outputs) != 2 {
+		t.Fatalf("document = %+v", *doc)
 	}
 
 	greeting, token := doc.Outputs[0], doc.Outputs[1]
@@ -357,10 +374,6 @@ func TestOutputsRouteAnswersNoSecretValue(t *testing.T) {
 
 	if token.Name != "token" || !token.Secret || len(token.Value) != 0 {
 		t.Errorf("secret output = %+v, want the mark and no value", token)
-	}
-
-	if strings.Contains(rec.Body.String(), "s3cr3t") {
-		t.Errorf("the body holds the secret value: %s", rec.Body.String())
 	}
 }
 

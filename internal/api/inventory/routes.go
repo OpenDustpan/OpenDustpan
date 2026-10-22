@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 
 	"opendustpan.org/opendustpan/internal/sessionauth"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -140,7 +141,7 @@ func (h *Handler) buildRoutes() []Route {
 		},
 	}
 
-	return append(routes, h.optionalRoutes()...)
+	return slices.Concat(routes, h.optionalRoutes())
 }
 
 // optionalRoutes returns the rows of the routes that exist only when the

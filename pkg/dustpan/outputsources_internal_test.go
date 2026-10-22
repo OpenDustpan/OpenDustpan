@@ -176,7 +176,14 @@ func TestStackOutputsReadTheLatestCheckpoint(t *testing.T) {
 		t.Errorf("url = %+v, want the plain value", got[2])
 	}
 
-	for _, output := range got {
+	wantNoCiphertext(t, got)
+}
+
+// wantNoCiphertext proves that no output value holds ciphertext of a secret.
+func wantNoCiphertext(t *testing.T, outputs []outputsharesvc.Output) {
+	t.Helper()
+
+	for _, output := range outputs {
 		if strings.Contains(string(output.Value), "c2VjcmV0") || strings.Contains(string(output.Value), "ciphertext") {
 			t.Errorf("output %q holds ciphertext: %s", output.Name, output.Value)
 		}
