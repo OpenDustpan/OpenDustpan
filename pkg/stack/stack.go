@@ -162,6 +162,8 @@ func EmptyGuard() DeleteGuard {
 
 // Store is the persistence port for stacks. Tags live in their own table
 // keyed by the stack ID, so a rename keeps them without moving any tag row.
+//
+//nolint:interfacebloat // One adapter contract for one table set: every stack read and write shares its rows and its fence.
 type Store interface {
 	// CreateStack persists st if fence matches the namespace's current failover
 	// version. It returns ErrAlreadyExists, namespace.ErrNotFound or
@@ -171,6 +173,10 @@ type Store interface {
 	GetStack(ctx context.Context, ref Ref) (Stack, error)
 	// ListStacks returns the stacks matching filter, ordered by project then name.
 	ListStacks(ctx context.Context, filter Filter) ([]Stack, error)
+	// QueryStacks returns at most q.PageLimit() live stacks that match q,
+	// ordered by namespace, project, then name, with their tags. PageStacks
+	// defines the result.
+	QueryStacks(ctx context.Context, q PageQuery) ([]Stack, error)
 	// DeleteStack soft-deletes the stack identified by ref at the time e.At,
 	// in one fenced transaction (ADR 47), and appends the audit entry e to the
 	// chain of the namespace in the same transaction. If the append fails,
@@ -377,6 +383,16 @@ func (s *Service) List(ctx context.Context, filter Filter) ([]Stack, error) {
 	stacks, err := s.store.ListStacks(ctx, filter)
 	if err != nil {
 		return nil, fmt.Errorf("list stacks in %q: %w", filter.Namespace, err)
+	}
+
+	return stacks, nil
+}
+
+// Page returns one page of the stacks that match q.
+func (s *Service) Page(ctx context.Context, q PageQuery) ([]Stack, error) {
+	stacks, err := s.store.QueryStacks(ctx, q)
+	if err != nil {
+		return nil, fmt.Errorf("query stacks: %w", err)
 	}
 
 	return stacks, nil
