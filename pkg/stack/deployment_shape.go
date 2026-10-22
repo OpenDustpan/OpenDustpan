@@ -8,13 +8,17 @@ import (
 	"io"
 )
 
+// secretsProvidersMember is the member of a deployment that holds the state of
+// its secrets provider.
+const secretsProvidersMember = "secrets_providers"
+
 // deploymentFieldKind returns the JSON type that the CLI expects for the
 // member name of a deployment, and false for a member that it does not check.
 // A member with another type makes the CLI fail to read the whole stack. A null
 // value reads as a missing member.
 func deploymentFieldKind(name string) (jsontext.Kind, bool) {
 	switch name {
-	case "manifest", "secrets_providers":
+	case "manifest", secretsProvidersMember:
 		return jsontext.KindBeginObject, true
 	case "resources", "pending_operations":
 		return jsontext.KindBeginArray, true
