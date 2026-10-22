@@ -120,18 +120,17 @@ func tokenStaysOnTheHost(ctx context.Context, env Env) error {
 	env.Proxy.Inject(faultOf(FaultRedirect, opListSinks))
 
 	// The answer of the second listener is 204 with no body, so the client may
-	// report it as an invalid answer. The case checks only where the token went.
+	// report it as an invalid answer. A client may also refuse the redirect
+	// and send nothing to the other host. The case checks only that no token
+	// goes there.
 	if _, err := env.Adapter.Call(ctx, sinksCall()); err != nil {
 		return err
 	}
 
-	other := env.Proxy.OtherExchanges()
-	if len(other) != 1 {
-		return failf("want 1 request on the other host, got %d", len(other))
-	}
-
-	if _, has := other[0].Headers["Authorization"]; has {
-		return failf("the client sent the token to another host after a redirect")
+	for _, exchange := range env.Proxy.OtherExchanges() {
+		if _, has := exchange.Headers["Authorization"]; has {
+			return failf("the client sent the token to another host after a redirect")
+		}
 	}
 
 	return nil

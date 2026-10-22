@@ -3,6 +3,7 @@ package conformance
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"regexp"
 )
@@ -170,6 +171,12 @@ func missingIfMatchGives428(ctx context.Context, env Env) error {
 	}
 
 	res, err := env.Adapter.Call(ctx, reviseCall(env, ""))
+	if errors.Is(err, ErrRequestRefused) {
+		// A client may refuse the call itself, because the operation needs
+		// If-Match. Then the request never reaches the server.
+		return nil
+	}
+
 	if err != nil {
 		return err
 	}
