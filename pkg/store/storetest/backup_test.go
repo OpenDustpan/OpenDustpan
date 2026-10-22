@@ -335,6 +335,11 @@ func (s *fakeBackupStore) ListStacks(_ context.Context, filter stack.Filter) ([]
 	return out, nil
 }
 
+// QueryStacks implements stack.Store over the lists of ListStacks.
+func (s *fakeBackupStore) QueryStacks(ctx context.Context, q stack.PageQuery) ([]stack.Stack, error) {
+	return stack.ListPage(ctx, s.ListStacks, q)
+}
+
 // DeleteStack implements stack.Store with its children, key and entry.
 // When the latest checkpoint manages resources, it returns
 // ErrHasResources and removes nothing. It ignores the delete guard and

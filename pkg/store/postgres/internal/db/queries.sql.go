@@ -12818,6 +12818,129 @@ func (q *Queries) ListSignInProviders(ctx context.Context) ([]SignInProvider, er
 	return items, nil
 }
 
+const listStackPageInNamespace = `-- name: ListStackPageInNamespace :many
+SELECT namespace, project, name, id, version, created_at_ms, updated_at_ms
+FROM stacks
+WHERE namespace = $1 AND deleted_at_ms IS NULL
+  AND (project, name) > ($2, $3)
+ORDER BY project, name
+LIMIT $4
+`
+
+type ListStackPageInNamespaceParams struct {
+	Namespace    string
+	AfterProject string
+	AfterName    string
+	PageLimit    int32
+}
+
+type ListStackPageInNamespaceRow struct {
+	Namespace   string
+	Project     string
+	Name        string
+	ID          string
+	Version     int64
+	CreatedAtMs int64
+	UpdatedAtMs int64
+}
+
+// One page of the live stacks of a namespace after a project and a name, in
+// the order of the primary key. The cursor is a range of the key, so the read
+// starts at the cursor.
+func (q *Queries) ListStackPageInNamespace(ctx context.Context, arg ListStackPageInNamespaceParams) ([]ListStackPageInNamespaceRow, error) {
+	rows, err := q.db.Query(ctx, listStackPageInNamespace,
+		arg.Namespace,
+		arg.AfterProject,
+		arg.AfterName,
+		arg.PageLimit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListStackPageInNamespaceRow
+	for rows.Next() {
+		var i ListStackPageInNamespaceRow
+		if err := rows.Scan(
+			&i.Namespace,
+			&i.Project,
+			&i.Name,
+			&i.ID,
+			&i.Version,
+			&i.CreatedAtMs,
+			&i.UpdatedAtMs,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listStackPageInProject = `-- name: ListStackPageInProject :many
+SELECT namespace, project, name, id, version, created_at_ms, updated_at_ms
+FROM stacks
+WHERE namespace = $1 AND project = $2 AND deleted_at_ms IS NULL
+  AND name > $3
+ORDER BY name
+LIMIT $4
+`
+
+type ListStackPageInProjectParams struct {
+	Namespace string
+	Project   string
+	AfterName string
+	PageLimit int32
+}
+
+type ListStackPageInProjectRow struct {
+	Namespace   string
+	Project     string
+	Name        string
+	ID          string
+	Version     int64
+	CreatedAtMs int64
+	UpdatedAtMs int64
+}
+
+// One page of the live stacks of a project after a name, in the order of the
+// primary key.
+func (q *Queries) ListStackPageInProject(ctx context.Context, arg ListStackPageInProjectParams) ([]ListStackPageInProjectRow, error) {
+	rows, err := q.db.Query(ctx, listStackPageInProject,
+		arg.Namespace,
+		arg.Project,
+		arg.AfterName,
+		arg.PageLimit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListStackPageInProjectRow
+	for rows.Next() {
+		var i ListStackPageInProjectRow
+		if err := rows.Scan(
+			&i.Namespace,
+			&i.Project,
+			&i.Name,
+			&i.ID,
+			&i.Version,
+			&i.CreatedAtMs,
+			&i.UpdatedAtMs,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listStackTagsInNamespace = `-- name: ListStackTagsInNamespace :many
 SELECT t.stack_id, t.name, t.value
 FROM stack_tags AS t
@@ -12828,6 +12951,34 @@ ORDER BY t.stack_id, t.name
 
 func (q *Queries) ListStackTagsInNamespace(ctx context.Context, namespace string) ([]StackTag, error) {
 	rows, err := q.db.Query(ctx, listStackTagsInNamespace, namespace)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []StackTag
+	for rows.Next() {
+		var i StackTag
+		if err := rows.Scan(&i.StackID, &i.Name, &i.Value); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listStackTagsOfStacks = `-- name: ListStackTagsOfStacks :many
+SELECT stack_id, name, value
+FROM stack_tags
+WHERE stack_id = ANY($1::text[])
+ORDER BY stack_id, name
+`
+
+// Every tag of the stacks with the IDs, for one page of stacks.
+func (q *Queries) ListStackTagsOfStacks(ctx context.Context, stackIds []string) ([]StackTag, error) {
+	rows, err := q.db.Query(ctx, listStackTagsOfStacks, stackIds)
 	if err != nil {
 		return nil, err
 	}
