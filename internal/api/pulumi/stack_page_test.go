@@ -1,7 +1,9 @@
 package pulumi_test
 
 import (
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -186,6 +188,14 @@ func TestListStacksRefusesBadToken(t *testing.T) {
 	}
 
 	badName := map[string]string{"n": "acme", "p": "../x", "s": "s0001", "f": wire["f"]}
+	tamperedFingerprint := map[string]string{"n": wire["n"], "p": wire["p"], "s": wire["s"], "f": "0000000000000000"}
+	// The fingerprint is not keyed: a token with the fingerprint of the query
+	// and the key of another place must still answer 400.
+	otherNamespace := map[string]string{"n": "beta", "p": wire["p"], "s": wire["s"], "f": wire["f"]}
+	missingNamespace := map[string]string{"n": "zzz", "p": wire["p"], "s": wire["s"], "f": wire["f"]}
+	otherProject := map[string]string{"n": "acme", "p": "p2", "s": "s0001", "f": testFingerprint("acme", "p1")}
+	otherRoute := map[string]string{"cursor": "abc", "mode": "history", "n": "acme"}
+	org := "/api/user/stacks?organization=acme&continuationToken="
 
 	for _, tc := range []struct{ name, target string }{
 		{name: "not base64", target: "/api/user/stacks?organization=acme&continuationToken=%25%25"},
@@ -193,7 +203,15 @@ func TestListStacksRefusesBadToken(t *testing.T) {
 		{name: "another organization", target: "/api/user/stacks?organization=beta&continuationToken=" + good},
 		{name: "another project", target: "/api/user/stacks?organization=acme&project=p1&continuationToken=" + good},
 		{name: "no organization", target: "/api/user/stacks?continuationToken=" + good},
-		{name: "a name that is not valid", target: "/api/user/stacks?organization=acme&continuationToken=" + encodeToken(t, badName)},
+		{name: "a name that is not valid", target: org + encodeToken(t, badName)},
+		{name: "tampered fingerprint", target: org + encodeToken(t, tamperedFingerprint)},
+		{name: "key in another namespace", target: org + encodeToken(t, otherNamespace)},
+		{name: "key in a namespace that does not exist", target: org + encodeToken(t, missingNamespace)},
+		{
+			name:   "key in another project",
+			target: "/api/user/stacks?organization=acme&project=p1&continuationToken=" + encodeToken(t, otherProject),
+		},
+		{name: "token of another route", target: org + encodeToken(t, otherRoute)},
 	} {
 		rec := get(t, handler, tc.target)
 
@@ -205,6 +223,34 @@ func TestListStacksRefusesBadToken(t *testing.T) {
 		if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil || rec.Code != http.StatusBadRequest ||
 			body.Code != http.StatusBadRequest {
 			t.Fatalf("%s: answer %d %s, want 400 with code 400", tc.name, rec.Code, rec.Body.String())
+		}
+	}
+}
+
+// testFingerprint returns the fingerprint that the stack list gives a query:
+// the first 8 bytes of the SHA-256 of the organization and the project, in hex.
+func testFingerprint(organization, project string) string {
+	sum := sha256.Sum256([]byte("organization=" + organization + "\nproject=" + project))
+
+	return hex.EncodeToString(sum[:8])
+}
+
+// TestListStacksAcceptsBoundToken proves that a token whose key lies in the
+// organization and the project of the query still pages.
+func TestListStacksAcceptsBoundToken(t *testing.T) {
+	t.Parallel()
+
+	handler := manyStacks(t, 501, selectiveAuthorizer{deny: map[identity.Action]bool{}}, "acme", "beta")
+	token := encodeToken(t, map[string]string{"n": "acme", "p": "p1", "s": "s0001", "f": testFingerprint("acme", "p1")})
+
+	page := readStackPage(t, handler, "/api/user/stacks?organization=acme&project=p1&continuationToken="+token)
+	if len(page.Stacks) == 0 {
+		t.Fatal("page after a bound token holds no stack")
+	}
+
+	for _, st := range page.Stacks {
+		if st.OrgName != "acme" || st.ProjectName != "p1" {
+			t.Fatalf("page holds %s/%s, want acme/p1 only", st.OrgName, st.ProjectName)
 		}
 	}
 }

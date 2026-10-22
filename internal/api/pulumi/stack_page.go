@@ -67,16 +67,18 @@ func encodeContinuation(st stack.Stack, fingerprint string) string {
 }
 
 // decodeContinuation returns the cursor of the token. A token that does not
-// decode, that another query made, or that holds a name that is not valid
-// gives errContinuationToken.
-func decodeContinuation(token, fingerprint string) (stack.PageCursor, error) {
+// decode, that another query made, that holds a name that is not valid, or
+// whose key lies outside the query gives errContinuationToken. The
+// fingerprint is not keyed, so anyone can compute it; the cursor is bound to
+// the query by its own names as well.
+func decodeContinuation(token string, q stackListQuery) (stack.PageCursor, error) {
 	raw, err := base64.RawURLEncoding.DecodeString(token)
 	if err != nil {
 		return stack.PageCursor{}, errContinuationToken
 	}
 
 	var w continuationWire
-	if jsonErr := json.Unmarshal(raw, &w); jsonErr != nil || w.Fingerprint != fingerprint {
+	if jsonErr := json.Unmarshal(raw, &w); jsonErr != nil || w.Fingerprint != q.fingerprint() {
 		return stack.PageCursor{}, errContinuationToken
 	}
 
@@ -84,6 +86,15 @@ func decodeContinuation(token, fingerprint string) (stack.PageCursor, error) {
 	// be valid names, so a tampered token cannot carry other text.
 	ref, err := stack.ParseRef(w.Namespace, w.Project, w.Stack)
 	if err != nil {
+		return stack.PageCursor{}, errContinuationToken
+	}
+
+	// Defense in depth: the fingerprint check above and the readable
+	// namespaces of the query do not bind the key of the cursor. This check
+	// stays so that a token with a valid fingerprint cannot start the page
+	// at a key outside the organization or the project of the query.
+	if (q.organization != "" && ref.Namespace.String() != q.organization) ||
+		(q.project != "" && ref.Project != q.project) {
 		return stack.PageCursor{}, errContinuationToken
 	}
 
@@ -97,7 +108,7 @@ func (h *Handler) serveStackPage(ctx context.Context, w http.ResponseWriter, r *
 	page := stack.PageQuery{After: nil, Project: q.project, Namespaces: q.namespaces, Limit: stackPageSize + 1}
 
 	if raw := r.URL.Query().Get("continuationToken"); raw != "" {
-		after, err := decodeContinuation(raw, q.fingerprint())
+		after, err := decodeContinuation(raw, q)
 		if err != nil {
 			h.writeError(ctx, w, err)
 

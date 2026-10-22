@@ -27,8 +27,11 @@ const (
 // pulumiStackPagingScenario creates pagingStacks stacks in a namespace of
 // their own through the API, then proves that stack ls of the real CLI
 // lists each of them once: the CLI follows the continuationToken of the
-// stack list to the last page. It runs with the organization and without it.
-func pulumiStackPagingScenario(t *testing.T, env *e2e.Env) {
+// stack list to the last page. It runs with the organization and without it,
+// for each CLI in clis: a client that does not follow the token lists only the
+// first page of 500 stacks, with no error, so each supported version must
+// show that it follows it.
+func pulumiStackPagingScenario(t *testing.T, env *e2e.Env, clis []e2e.Install) {
 	t.Helper()
 
 	ctx := t.Context()
@@ -45,12 +48,18 @@ func pulumiStackPagingScenario(t *testing.T, env *e2e.Env) {
 		}
 	}
 
-	for _, s := range []e2e.StepSpec{
-		step("stack ls of one organization over two pages", pagingStacksListed,
-			"stack", "ls", "--json", "--all", "--organization", pagingNamespace),
-		step("stack ls of every organization over two pages", pagingStacksListed, "stack", "ls", "--json", "--all"),
-	} {
-		env.Step(ctx, t, s)
+	for _, cli := range clis {
+		env.SetCLI(cli)
+
+		for _, s := range []e2e.StepSpec{
+			step("login "+cli.Version, nil, "login"),
+			step("stack ls of one organization over two pages with "+cli.Version, pagingStacksListed,
+				"stack", "ls", "--json", "--all", "--organization", pagingNamespace),
+			step("stack ls of every organization over two pages with "+cli.Version, pagingStacksListed,
+				"stack", "ls", "--json", "--all"),
+		} {
+			env.Step(ctx, t, s)
+		}
 	}
 }
 
