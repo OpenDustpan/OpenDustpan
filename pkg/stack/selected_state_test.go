@@ -59,6 +59,38 @@ func TestSelectState(t *testing.T) {
 	}
 }
 
+// TestSelectCheckpointNeedsNoUpdate proves that a read of the latest
+// checkpoint that needs no version does not read the update that saved it:
+// SelectCheckpoint answers when that update cannot be read, and only
+// SelectState, which names the version, fails.
+func TestSelectCheckpointNeedsNoUpdate(t *testing.T) {
+	t.Parallel()
+
+	f := newUpdates(t)
+	f.savedVersion(t, `{"v":1}`)
+
+	latest := stack.StateSelector{Latest: true, Version: 0}
+
+	cp, err := f.svc.SelectCheckpoint(t.Context(), f.ref, latest)
+	if err != nil {
+		t.Fatalf("select checkpoint: %v", err)
+	}
+
+	// The update that saved the checkpoint can no longer be read.
+	f.store.mu.Lock()
+	delete(f.store.updates, cp.Update)
+	f.store.mu.Unlock()
+
+	again, err := f.svc.SelectCheckpoint(t.Context(), f.ref, latest)
+	if err != nil || !bytes.Equal(again.Deployment, []byte(`{"v":1}`)) {
+		t.Fatalf("select checkpoint without the update = %s %v, want the deployment", again.Deployment, err)
+	}
+
+	if _, err := f.svc.SelectState(t.Context(), f.ref, latest); !errors.Is(err, stack.ErrUpdateNotFound) {
+		t.Fatalf("select state without the update: %v, want ErrUpdateNotFound", err)
+	}
+}
+
 // checkPrevious checks that the previous deployment of latest is the one of
 // first, and that first has none.
 func checkPrevious(t *testing.T, f updatesFixture, latest, first stack.SelectedState) {
