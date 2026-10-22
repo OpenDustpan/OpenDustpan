@@ -104,8 +104,9 @@ func newUnitHandler(t *testing.T, authz identity.Authorizer) *apiinventory.Handl
 	}}
 
 	handler, err := apiinventory.NewHandler(apiinventory.Config{
-		Views: nil,
-		Audit: newTestAudit(), OnAuditFailure: nil, Locks: nil, Moves: nil,
+		OutputSharing: nil,
+		Views:         nil,
+		Audit:         newTestAudit(), OnAuditFailure: nil, Locks: nil, Moves: nil,
 		Collections:   testCollectionService(t, homedNamespaceStore{}),
 		Namespaces:    namespaces,
 		Units:         &memReader{entries: unitEntries(), err: nil},

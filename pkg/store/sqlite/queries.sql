@@ -53,6 +53,17 @@ UPDATE namespaces
 SET ip_allowlist = ?
 WHERE name = ?;
 
+-- name: GetNamespaceOutputSharingDefault :one
+SELECT output_sharing_default
+FROM namespaces
+WHERE name = ?;
+
+-- name: SetNamespaceOutputSharingDefault :execrows
+-- Replaces the output sharing setting of one namespace.
+UPDATE namespaces
+SET output_sharing_default = ?
+WHERE name = ?;
+
 -- name: GetFailoverVersion :one
 SELECT failover_version
 FROM namespaces
