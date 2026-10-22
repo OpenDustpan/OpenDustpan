@@ -299,7 +299,17 @@ type ManualLocks interface {
 	// unit has no inventory entry, so CoveringFor cannot find the lock of its
 	// namespace.
 	NamespaceLock(ctx context.Context, ns namespace.Name) (manuallock.Lock, error)
+	// NamespaceLockFor is CoveringFor for a unit that does not exist yet: only
+	// the lock of its namespace covers it. A job whose phase started before
+	// the lock passes it.
+	NamespaceLockFor(ctx context.Context, unit collection.UnitRef, jobID string) (manuallock.Lock, error)
+	// PhaseStart returns when the current phase of the job jobID on the unit
+	// started, or the zero time, which passes no lock.
+	PhaseStart(ctx context.Context, unit collection.UnitRef, jobID string) time.Time
 }
+
+// lockNounWorkspace names a workspace in the error of a manual lock.
+const lockNounWorkspace = "workspace"
 
 // lockStripes is the number of striped mutexes serializing declares and
 // uploads. Two IDs that share a stripe only wait for each other; the bound
@@ -410,15 +420,17 @@ func (s *Service) Create(ctx context.Context, ref Ref) (Workspace, error) {
 	fence := n.Fence()
 
 	now := s.clock()
-	w := Workspace{
-		CreatedAt:   now,
-		UpdatedAt:   now,
-		Lock:        Lock{LockedAt: time.Time{}, ID: "", Holder: "", Reason: ""},
-		ID:          ID(ident.NewID("ws-")),
-		Ref:         ref,
-		NamespaceID: n.ID,
-		Revision:    1,
-		Overrides:   namespace.Overrides{Forced: false, Unlocked: false},
+	w := newWorkspaceOf(ref)
+	w.CreatedAt, w.UpdatedAt = now, now
+	w.ID = ID(ident.NewID("ws-"))
+	w.NamespaceID = n.ID
+
+	// The store refuses the create while the namespace has a manual lock, in
+	// the transaction of the create. The phase of the job of the request, if it
+	// has one, decides whether the lock applies to it, as it does for the lock
+	// request that follows the create.
+	if s.manual != nil {
+		ctx = WithLockPass(ctx, s.manual.PhaseStart(ctx, newUnitRef(ref), JobFrom(ctx)))
 	}
 
 	if err := s.workspaces.CreateWorkspace(ctx, w, fence); err != nil {
@@ -722,8 +734,8 @@ func (s *Service) AdmitFirstLock(ctx context.Context, ref Ref, req LockRequest) 
 
 	// The manual lock query reads the row of the unit, and a unit that does not
 	// exist has none. The only lock that covers a new unit is the lock of its
-	// namespace, so the check reads that lock itself.
-	return s.refuseUnderNamespaceLock(ctx, ref.Namespace, ref.Name.String())
+	// namespace, so the check reads that lock, with the rule of the job.
+	return s.refuseNewUnitManualLock(ctx, ref, req.JobID)
 }
 
 // maxLockIDLength bounds a lock ID the caller chooses.
@@ -2802,7 +2814,11 @@ func (s *Service) refuseManualLock(ctx context.Context, w Workspace, jobID strin
 		return fmt.Errorf("read manual lock of %s: %w", w.Ref, err)
 	}
 
-	return fmt.Errorf("%w: %w", ErrLocked, &manuallock.LockedError{Lock: l, Noun: "workspace", Name: w.Ref.String()})
+	return fmt.Errorf(
+		"%w: %w",
+		ErrLocked,
+		&manuallock.LockedError{Lock: l, Noun: lockNounWorkspace, Name: w.Ref.String()},
+	)
 }
 
 // refuseRestoreUnderNamespaceLock returns an error that matches ErrLocked and
@@ -2811,6 +2827,37 @@ func (s *Service) refuseManualLock(ctx context.Context, w Workspace, jobID strin
 // cannot be read refuses the restore: the check fails closed.
 func (s *Service) refuseRestoreUnderNamespaceLock(ctx context.Context, ns namespace.Name, id ID) error {
 	return s.refuseUnderNamespaceLock(ctx, ns, id.String())
+}
+
+// refuseNewUnitManualLock returns an error that matches ErrLocked and
+// manuallock.ErrLocked while a manual lock covers the workspace ref, which does
+// not exist yet, for the request of the job jobID. Only the lock of the
+// namespace can cover it. A job whose phase started before that lock passes,
+// as in refuseManualLock. A lock that cannot be read refuses the request.
+func (s *Service) refuseNewUnitManualLock(ctx context.Context, ref Ref, jobID string) error {
+	if s.manual == nil {
+		return nil
+	}
+
+	l, err := s.manual.NamespaceLockFor(ctx, newUnitRef(ref), jobID)
+	if errors.Is(err, manuallock.ErrNotLocked) {
+		return nil
+	}
+
+	if err != nil {
+		return fmt.Errorf("read manual lock of namespace %s: %w", ref.Namespace, err)
+	}
+
+	return fmt.Errorf(
+		"%w: %w",
+		ErrLocked,
+		&manuallock.LockedError{Lock: l, Noun: lockNounWorkspace, Name: ref.String()},
+	)
+}
+
+// newUnitRef returns the inventory reference of the workspace ref.
+func newUnitRef(ref Ref) collection.UnitRef {
+	return collection.UnitRef{Namespace: ref.Namespace, Tool: InventoryTool, Name: ref.Name.String()}
 }
 
 // refuseUnderNamespaceLock is refuseRestoreUnderNamespaceLock for the unit
@@ -2830,6 +2877,6 @@ func (s *Service) refuseUnderNamespaceLock(ctx context.Context, ns namespace.Nam
 	}
 
 	return fmt.Errorf("%w: %w", ErrLocked, &manuallock.LockedError{
-		Lock: l, Noun: "workspace", Name: ns.String() + "/" + name,
+		Lock: l, Noun: lockNounWorkspace, Name: ns.String() + "/" + name,
 	})
 }

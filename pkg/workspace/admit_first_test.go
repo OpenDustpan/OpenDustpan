@@ -3,6 +3,7 @@ package workspace_test
 import (
 	"errors"
 	"testing"
+	"time"
 
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/workspace"
@@ -32,6 +33,7 @@ func TestAdmitFirstRequests(t *testing.T) {
 			return s.AdmitFirstLock(t.Context(), ref, lock(holder, lockID))
 		}
 	}
+
 	writeAt := func(ref workspace.Ref, lockID string) func(*workspace.Service) error {
 		return func(s *workspace.Service) error {
 			return s.AdmitFirstWrite(t.Context(), ref, workspace.StreamInput{Holder: "ci", LockID: lockID, MD5: ""})
@@ -85,6 +87,102 @@ func TestAdmitFirstRequests(t *testing.T) {
 
 			if _, getErr := svc.Get(t.Context(), tc.ref); !errors.Is(getErr, workspace.ErrNotFound) {
 				t.Fatalf("workspace after the check: Get = %v, want ErrNotFound", getErr)
+			}
+		})
+	}
+}
+
+// TestAdmitFirstLockAppliesTheJobPhase proves the rule of the manual lock for
+// the first LOCK of a new workspace: a job whose phase started before the lock
+// of the namespace passes it, and the create goes on; a job whose phase started
+// after the lock, a job with no known phase and a request with no job meet it.
+func TestAdmitFirstLockAppliesTheJobPhase(t *testing.T) {
+	t.Parallel()
+
+	lockAt := heldNamespaceLock().Since
+
+	cases := []struct {
+		name  string
+		jobID string
+		want  error
+	}{
+		{"job that started before the lock", "job-before", nil},
+		{"job that started after the lock", "job-after", workspace.ErrLocked},
+		{"job that started at the time of the lock", "job-same", workspace.ErrLocked},
+		{"job with no known phase", "job-unknown", workspace.ErrLocked},
+		{"request with no job", "", workspace.ErrLocked},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			f := newFixture(t)
+			locks := answering(heldNamespaceLock())
+			locks.phases = map[string]time.Time{
+				"job-before": lockAt.Add(-time.Hour),
+				"job-after":  lockAt.Add(time.Hour),
+				"job-same":   lockAt,
+			}
+			svc := withManualLocks(t, f, locks)
+
+			name, err := workspace.ParseName("fresh")
+			if err != nil {
+				t.Fatalf("parse name: %v", err)
+			}
+
+			ref := workspace.Ref{Namespace: "acme", Name: name}
+			req := workspace.LockRequest{Holder: "ci", Reason: "plan", LockID: "lock-1", JobID: tc.jobID}
+
+			got := svc.AdmitFirstLock(t.Context(), ref, req)
+			if tc.want == nil && got != nil || tc.want != nil && !errors.Is(got, tc.want) {
+				t.Fatalf("AdmitFirstLock = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestCreatePassesTheJobPhaseToTheStore proves that Create hands the start of
+// the phase of the job to the store, so the store applies the rule of the
+// manual lock in the transaction of the create. A request with no job, and a
+// job with no known phase, hand over the zero time, which passes no lock.
+func TestCreatePassesTheJobPhaseToTheStore(t *testing.T) {
+	t.Parallel()
+
+	lockAt := heldNamespaceLock().Since
+
+	cases := []struct {
+		name  string
+		jobID string
+		want  time.Time
+	}{
+		{"job with a phase", "job-1", lockAt.Add(-time.Hour)},
+		{"job with no known phase", "job-2", time.Time{}},
+		{"request with no job", "", time.Time{}},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			f := newFixture(t)
+			locks := answering(heldNamespaceLock())
+			locks.phases = map[string]time.Time{"job-1": lockAt.Add(-time.Hour)}
+			svc := withManualLocks(t, f, locks)
+
+			name, err := workspace.ParseName("fresh")
+			if err != nil {
+				t.Fatalf("parse name: %v", err)
+			}
+
+			ctx := workspace.WithJob(t.Context(), tc.jobID)
+
+			if _, err := svc.Create(ctx, workspace.Ref{Namespace: "acme", Name: name}); err != nil {
+				t.Fatalf("Create: %v", err)
+			}
+
+			if got := f.store.lastLockPass; !got.Equal(tc.want) {
+				t.Fatalf("the store got the lock pass %v, want %v", got, tc.want)
 			}
 		})
 	}

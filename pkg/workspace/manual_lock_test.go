@@ -26,6 +26,9 @@ type fakeManualLocks struct {
 	// passJob, when set, is the job whose request the lock does not refuse.
 	passJob string
 	jobs    []string
+	// phases holds the start of the phase of each job. A job passes a lock that
+	// came after its phase, as the manual lock service lets it.
+	phases map[string]time.Time
 }
 
 func (f *fakeManualLocks) CoveringFor(
@@ -47,12 +50,37 @@ func (f *fakeManualLocks) CoveringFor(
 
 // answering returns a port that answers with lock.
 func answering(lock manuallock.Lock) *fakeManualLocks {
-	return &fakeManualLocks{lock: lock, err: nil, asked: nil, passJob: "", jobs: nil}
+	return &fakeManualLocks{lock: lock, err: nil, asked: nil, passJob: "", jobs: nil, phases: nil}
 }
 
 // failing returns a port that answers with err.
 func failing(err error) *fakeManualLocks {
-	return &fakeManualLocks{lock: heldCollectionLock(), err: err, asked: nil, passJob: "", jobs: nil}
+	return &fakeManualLocks{lock: heldCollectionLock(), err: err, asked: nil, passJob: "", jobs: nil, phases: nil}
+}
+
+// NamespaceLockFor answers the lock of the namespace for a unit that does not
+// exist yet, and lets a job pass a lock that came after its phase.
+func (f *fakeManualLocks) NamespaceLockFor(
+	ctx context.Context, unit collection.UnitRef, jobID string,
+) (manuallock.Lock, error) {
+	f.asked = append(f.asked, unit)
+	f.jobs = append(f.jobs, jobID)
+
+	lock, err := f.NamespaceLock(ctx, unit.Namespace)
+	if err != nil {
+		return manuallock.Lock{}, err
+	}
+
+	if started := f.PhaseStart(ctx, unit, jobID); !started.IsZero() && started.Before(lock.Since) {
+		return manuallock.Lock{}, manuallock.ErrNotLocked
+	}
+
+	return lock, nil
+}
+
+// PhaseStart answers the start of the phase of the job, or the zero time.
+func (f *fakeManualLocks) PhaseStart(_ context.Context, _ collection.UnitRef, jobID string) time.Time {
+	return f.phases[jobID]
 }
 
 // NamespaceLock answers the held lock when it is on a namespace, as the manual
@@ -610,7 +638,7 @@ func TestRestoreMeetsTheNamespaceLock(t *testing.T) {
 	}{
 		{
 			"namespace locked",
-			&fakeManualLocks{lock: heldNamespaceLock(), err: nil, asked: nil, passJob: "", jobs: nil},
+			&fakeManualLocks{lock: heldNamespaceLock(), err: nil, asked: nil, passJob: "", jobs: nil, phases: nil},
 			manuallock.ErrLocked, false,
 		},
 		{"namespace not locked", failing(manuallock.ErrNotLocked), nil, true},
