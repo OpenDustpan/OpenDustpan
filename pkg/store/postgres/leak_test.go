@@ -82,6 +82,20 @@ func (o ownDatabase) Run() int {
 		return code
 	}
 
+	// A clone that its test could not drop stays. A failure here does not
+	// fail the package: the clones are only disk, and the next run removes
+	// the stale ones.
+	failed, sweepErr := pgtest.DropClones(ctx, base, template, func(format string, args ...any) {
+		fmt.Fprintf(os.Stderr, format+"\n", args...)
+	})
+	if sweepErr != nil {
+		fmt.Fprintf(os.Stderr, "drop the remaining clones: %v\n", sweepErr)
+	}
+
+	if failed > 0 {
+		fmt.Fprintf(os.Stderr, "could not drop %d clones\n", failed)
+	}
+
 	for _, name := range []string{template, db.name} {
 		drop := "DROP DATABASE IF EXISTS " + pgx.Identifier{name}.Sanitize() + " WITH (FORCE)"
 		if dropErr := execOn(ctx, base, drop); dropErr != nil {
