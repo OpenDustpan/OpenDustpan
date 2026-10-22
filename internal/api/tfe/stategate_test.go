@@ -111,7 +111,7 @@ func newGuardedHandler(t *testing.T, ws tfe.WorkspaceService, guard tfe.StateGua
 	h, err := tfe.NewHandler(tfe.Config{
 		Registry:      nil,
 		Authenticator: tokenAuthenticator{}, Authorizer: allowAll(), AddressGate: nil,
-		Logger: slog.New(slog.DiscardHandler), Namespaces: newTestNamespaces(t), Workspaces: ws,
+		Logger: slog.New(slog.DiscardHandler), Namespaces: newTestNamespaces(t), Workspaces: ws, OutputChecker: nil,
 		BaseURL: baseurl.Resolver{}, Audit: newTestAudit(), OnAuditFailure: nil, DenialLimiter: nil, Gate: nil,
 		MaxStateBytes: 0, Sessions: nil, SessionPolicy: nil, StateGuard: guard,
 	})

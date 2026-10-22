@@ -14,6 +14,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/outputshare"
 	"opendustpan.org/opendustpan/pkg/workspace"
 )
 
@@ -230,6 +231,10 @@ func classifyNamespace(err error) (errorClass, bool) {
 // state, a concurrent change. ok is false for any other error.
 func classifyConflict(err error) (errorClass, bool) {
 	switch {
+	case errors.Is(err, outputshare.ErrClientEncrypted):
+		// The detail names the reason and no object: the error of the
+		// checker holds the check and the unit for the audit log.
+		return errorClass{status: http.StatusConflict, title: titleConflict, detail: clientEncryptedDetail}, true
 	case errors.Is(err, workspace.ErrClientEncrypted),
 		errors.Is(err, workspace.ErrAlreadyExists),
 		errors.Is(err, workspace.ErrLocked),
@@ -252,7 +257,7 @@ func errorCode(err error) string {
 		return codeNotLocked
 	case errors.Is(err, workspace.ErrLockMismatch):
 		return codeLockMismatch
-	case errors.Is(err, workspace.ErrClientEncrypted):
+	case errors.Is(err, workspace.ErrClientEncrypted), errors.Is(err, outputshare.ErrClientEncrypted):
 		return codeClientEncrypted
 	default:
 		return ""
@@ -287,6 +292,7 @@ func classify(err error) errorClass {
 	case errors.Is(err, identity.ErrDenied), errors.Is(err, workspace.ErrUploadDenied):
 		return errorClass{status: http.StatusForbidden, title: titleForbidden, detail: titleForbidden}
 	case errors.Is(err, workspace.ErrNotFound), errors.Is(err, namespace.ErrNotFound),
+		errors.Is(err, outputshare.ErrUnknownProducer),
 		errors.Is(err, workspace.ErrNoState), errors.Is(err, workspace.ErrStateVersionNotFound),
 		errors.Is(err, workspace.ErrResourceNotFound), errors.Is(err, workspace.ErrNoStateAt):
 		return errorClass{status: http.StatusNotFound, title: notFoundTitle, detail: err.Error()}

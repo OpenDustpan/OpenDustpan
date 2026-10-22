@@ -246,6 +246,7 @@ func (f storeMoveFixture) move(t *testing.T, authz identity.Authorizer) *httptes
 
 	handler, err := apiinventory.NewHandler(apiinventory.Config{
 		OutputSharing: nil,
+		Outputs:       nil,
 		Views:         nil,
 		Locks:         locks, PublicURL: "", Namespaces: nsSvc,
 		Units:       &memReader{entries: map[namespace.Name][]coreinventory.Entry{}, err: nil},

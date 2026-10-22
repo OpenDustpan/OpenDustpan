@@ -479,7 +479,7 @@ func TestStateResourceDenied(t *testing.T) {
 	t.Parallel()
 
 	handler := newStateHandler(t, selectiveAuthorizer{
-		deny: map[identity.Action]bool{identity.ActionUnitRead: true},
+		deny: map[identity.Action]bool{identity.ActionUnitRead: true, identity.ActionUnitReadOutputs: true},
 	})
 
 	for _, target := range []string{

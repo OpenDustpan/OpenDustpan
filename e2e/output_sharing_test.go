@@ -7,9 +7,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -91,7 +93,7 @@ func TestOutputReadPaths(t *testing.T) {
 				t.Run(string(db), func(t *testing.T) {
 					t.Parallel()
 					skipWithoutStore(t, db)
-					pulumiReadPath(t, e2e.NewEnv(t.Context(), t, cli, db))
+					pulumiReadPath(t, e2e.NewEnvWithSignIn(t.Context(), t, cli, db))
 				})
 			}
 		})
@@ -111,7 +113,7 @@ func TestOutputReadPaths(t *testing.T) {
 					t.Parallel()
 					skipWithoutStore(t, db)
 
-					env := e2e.NewEnv(t.Context(), t, cli, db)
+					env := e2e.NewEnvWithSignIn(t.Context(), t, cli, db)
 					tofuReadPath(t, env)
 					crossToolReadPath(t, env, pulumiCLI)
 				})
@@ -581,21 +583,68 @@ func TestOutputSharingRules(t *testing.T) {
 
 	t.Run("pulumi", func(t *testing.T) {
 		t.Parallel()
-		t.Skip(sharingRulesSkip)
 
 		cli := installShareCLI(t, fetcher, e2e.Pulumi(), pulumiVersions[0])
-		env := e2e.NewEnv(t.Context(), t, cli, e2e.StoreSQLite)
-		pulumiSharingRules(t, env)
+
+		t.Run("reader", func(t *testing.T) {
+			t.Parallel()
+			eachShareStore(t, func(t *testing.T, db e2e.Store) {
+				t.Helper()
+
+				pulumiOutputsReader(t, e2e.NewEnvWithSignIn(t.Context(), t, cli, db))
+			})
+		})
+
+		t.Run("jobs", func(t *testing.T) {
+			t.Parallel()
+			t.Skip(sharingRulesSkip)
+
+			env := e2e.NewEnv(t.Context(), t, cli, e2e.StoreSQLite)
+			pulumiSharingRules(t, env)
+		})
 	})
 
 	t.Run("opentofu", func(t *testing.T) {
 		t.Parallel()
-		t.Skip(sharingRulesSkip)
 
 		cli := installShareCLI(t, fetcher, e2e.OpenTofu(), tofuVersions[0])
-		env := e2e.NewEnv(t.Context(), t, cli, e2e.StoreSQLite)
-		tofuSharingRules(t, env)
+
+		t.Run("reader", func(t *testing.T) {
+			t.Parallel()
+			eachShareStore(t, func(t *testing.T, db e2e.Store) {
+				t.Helper()
+
+				tofuOutputsReader(t, e2e.NewEnvWithSignIn(t.Context(), t, cli, db))
+			})
+		})
+
+		t.Run("jobs", func(t *testing.T) {
+			t.Parallel()
+			t.Skip(sharingRulesSkip)
+
+			env := e2e.NewEnv(t.Context(), t, cli, e2e.StoreSQLite)
+			tofuSharingRules(t, env)
+		})
 	})
+}
+
+// eachShareStore runs fn once for each store under test, as a parallel subtest
+// that skips a store the run has no database for.
+func eachShareStore(t *testing.T, fn func(t *testing.T, db e2e.Store)) {
+	t.Helper()
+
+	databases, err := e2e.Databases()
+	if err != nil {
+		t.Fatalf("stores: %v", err)
+	}
+
+	for _, db := range databases {
+		t.Run(string(db), func(t *testing.T) {
+			t.Parallel()
+			skipWithoutStore(t, db)
+			fn(t, db)
+		})
+	}
 }
 
 // shareCall is one request to the API of the server in a sharing step.
@@ -618,7 +667,13 @@ func shareAPI(ctx context.Context, t *testing.T, env *e2e.Env, c shareCall) stri
 		token = env.TokenA()
 	}
 
-	status, body, err := env.ServerAPIStatusAs(ctx, token, c.method, c.path, c.body)
+	call := env.ServerAPIStatusAs
+	if strings.HasPrefix(c.path, "/api/stacks/") {
+		// The Pulumi Cloud-compatible API reads the scheme "token".
+		call = env.APIStatusAs
+	}
+
+	status, body, err := call(ctx, token, c.method, c.path, c.body)
 	if err != nil {
 		t.Fatalf("%s: %v", c.name, err)
 	}
@@ -644,6 +699,16 @@ type readerGrants struct {
 	name string
 }
 
+// unitGrantQuery returns the query of the unit-grants routes for the unit
+// reference ref, for example pulumi:acme/web/prod or opentofu:acme/prod: the
+// tool and the name of the unit without its namespace.
+func unitGrantQuery(ref string) string {
+	tool, rest, _ := strings.Cut(ref, ":")
+	_, unit, _ := strings.Cut(rest, "/")
+
+	return "tool=" + url.QueryEscape(tool) + "&unit=" + url.QueryEscape(unit)
+}
+
 // outputReader makes a service principal with a custom role that holds only
 // unit:read-outputs on the unit g.producer, and answers a token of it. With
 // g.writeUnit set, the principal also holds the writer role on that unit, so
@@ -667,14 +732,14 @@ func outputReader(ctx context.Context, t *testing.T, env *e2e.Env, g readerGrant
 	}, &role)
 
 	subject := "principal:" + principal.ID
-	grants := "/api/server/namespaces/" + ns + "/unit-grants?object=" + producer
+	grants := "/api/server/namespaces/" + ns + "/unit-grants?" + unitGrantQuery(producer)
 	principalCall(ctx, t, env, principalStep{
 		http.MethodPost, grants, `{"subject":"` + subject + `","role":"` + role.ID + `"}`, http.StatusCreated,
 	}, nil)
 
 	if writeUnit != "" {
 		principalCall(ctx, t, env, principalStep{
-			http.MethodPost, "/api/server/namespaces/" + ns + "/unit-grants?object=" + writeUnit,
+			http.MethodPost, "/api/server/namespaces/" + ns + "/unit-grants?" + unitGrantQuery(writeUnit),
 			`{"subject":"` + subject + `","role":"writer"}`, http.StatusCreated,
 		}, nil)
 	}
@@ -757,10 +822,6 @@ func checkSharingRuleRefusals(ctx context.Context, t *testing.T, env *e2e.Env, p
 
 // pulumiSharingRules proves the rules for the Pulumi CLI:
 //
-//   - A person with only unit:read-outputs reads the outputs through the
-//     outputs route. The export answers 403, because a stack reference reads
-//     the whole deployment and needs unit:read (the limit that the console
-//     states). A decrypt of a config secret of the producer answers 403.
 //   - A job token reads the producer only when a sharing rule names the unit
 //     of the job and the principal that started the job holds
 //     unit:read-outputs. The decrypt route refuses a ciphertext that is not
@@ -783,29 +844,8 @@ func pulumiSharingRules(t *testing.T, env *e2e.Env) {
 	}
 
 	consumer := "pulumi:" + shareStack(shareConsumer)
-	reader := outputReader(ctx, t, env, readerGrants{
-		e2e.Namespace, "pulumi:" + shareStack(shareProducer), consumer, "output-reader",
-	})
 	stackPath := "/api/stacks/" + shareStack(shareProducer)
 	configSecret := producerConfigCiphertext(t, env)
-
-	for _, c := range []shareCall{
-		{
-			"read outputs only", reader, http.MethodGet,
-			sharingAPI + e2e.Namespace + "/units/" + producerID + "/outputs", "", http.StatusOK,
-		},
-		{"export needs read state", reader, http.MethodGet, stackPath + "/export", "", http.StatusForbidden},
-		{
-			"no decrypt of a config secret", reader, http.MethodPost, stackPath + "/decrypt",
-			`{"ciphertext":` + strconv.Quote(configSecret) + `}`, http.StatusForbidden,
-		},
-	} {
-		shareAPI(ctx, t, env, c)
-	}
-
-	env.Step(ctx, t, withEnv(failStep("a stack reference of a person needs read state",
-		outputContains("403"), "up", "--yes", "--non-interactive", "--stack", shareStack(shareConsumer)),
-		"PULUMI_ACCESS_TOKEN="+reader))
 
 	// Only this test passes a job token in PULUMI_ACCESS_TOKEN, to drive the
 	// CLI with it. The launcher never puts a job token in an environment
@@ -1018,8 +1058,6 @@ func tofuSharingRules(t *testing.T, env *e2e.Env) {
 		"apply", "-input=false", "-auto-approve", "-no-color"), "TFE_TOKEN="+reader))
 
 	env.StepIn(ctx, t, dir, step("share init consumer", nil, "init", "-input=false", "-no-color"))
-	env.StepIn(ctx, t, dir, withEnv(failStep("terraform_remote_state of a person needs read state",
-		outputContains("403"), "plan", "-input=false", "-no-color"), tofuTokenConfig(t, env.Host(), reader)))
 
 	env.CreateNamespace(ctx, t, e2e.Namespace2)
 
@@ -1099,9 +1137,9 @@ type encryptedTarget struct {
 //
 //   - A job token of another namespace gets 404 with the body of a workspace
 //     that does not exist, on each route that it calls.
-//   - A job token of the producer namespace and a principal with
-//     unit:read-outputs and not unit:read get 409, with a message that names
-//     the client encryption.
+//   - A job token of the producer namespace gets 409, with a message that
+//     names the client encryption. A person with unit:read-outputs and not
+//     unit:read gets the same answer, which tofuOutputsReader proves.
 //   - The administrator, who holds unit:read, still reads the outputs.
 func checkEncryptedProducer(ctx context.Context, t *testing.T, env *e2e.Env, target encryptedTarget) {
 	t.Helper()
@@ -1131,9 +1169,6 @@ func checkEncryptedProducer(ctx context.Context, t *testing.T, env *e2e.Env, tar
 	})
 
 	sameJob := jobTokenOf(t, e2e.Namespace, sameConsumer)
-	reader := outputReader(ctx, t, env, readerGrants{
-		e2e.Namespace, "opentofu:" + e2e.Namespace + "/" + shareEncrypted, "", "encrypted-output-reader",
-	})
 
 	for _, c := range []shareCall{
 		{"a job token of the namespace reads no outputs of a client-encrypted state", sameJob, http.MethodGet, outputs, "", http.StatusConflict},
@@ -1141,7 +1176,6 @@ func checkEncryptedProducer(ctx context.Context, t *testing.T, env *e2e.Env, tar
 			"a job token of the namespace downloads no client-encrypted state", sameJob, http.MethodGet,
 			"/api/v2/state-versions/" + version + "/download", "", http.StatusConflict,
 		},
-		{"a person with read outputs only reads no client-encrypted state", reader, http.MethodGet, outputs, "", http.StatusConflict},
 	} {
 		if err := checkEncryptedByClient(shareAPI(ctx, t, env, c)); err != nil {
 			t.Fatalf("%s: %v", c.name, err)
@@ -1512,4 +1546,286 @@ func checkSettingAudit(ctx context.Context, t *testing.T, env *e2e.Env) {
 	if outcomes["success"] != 1 || outcomes["denied"] != 1 {
 		t.Fatalf("the audit log holds the setting entries %v, want one success and one denied", outcomes)
 	}
+}
+
+// neutralOutputs is the answer of the tool-neutral outputs route.
+type neutralOutputs struct {
+	Tool    string          `json:"tool"`
+	UnitID  string          `json:"unitId"`
+	StateID string          `json:"stateId"`
+	Outputs []neutralOutput `json:"outputs"`
+}
+
+// neutralOutput is one output of neutralOutputs.
+type neutralOutput struct {
+	Name   string          `json:"name"`
+	Secret bool            `json:"secret"`
+	Value  json.RawMessage `json:"value"`
+}
+
+// neutralWant is what checkNeutralOutputs expects: the tool and the unit ID,
+// the plain outputs with their JSON values, and the names of the secret outputs.
+type neutralWant struct {
+	tool    string
+	unitID  string
+	plain   map[string]string
+	secrets []string
+}
+
+// checkNeutralOutputs proves the answer of the outputs route for a unit: the
+// tool, the unit ID, a state ID, the plain outputs with their values, and each
+// secret output with its mark and no value. The answer never holds the secret
+// value of the scenario.
+func checkNeutralOutputs(t *testing.T, body string, want neutralWant) {
+	t.Helper()
+
+	var doc neutralOutputs
+	if err := json.Unmarshal([]byte(body), &doc); err != nil {
+		t.Fatalf("decode the outputs answer: %v: %s", err, body)
+	}
+
+	if doc.Tool != want.tool || doc.UnitID != want.unitID || doc.StateID == "" {
+		t.Fatalf("outputs answer = %s, want the tool %q, the unit %q and a state ID", body, want.tool, want.unitID)
+	}
+
+	if len(doc.Outputs) != len(want.plain)+len(want.secrets) {
+		t.Fatalf(
+			"outputs answer holds %d outputs, want %d: %s",
+			len(doc.Outputs),
+			len(want.plain)+len(want.secrets),
+			body,
+		)
+	}
+
+	for i := range doc.Outputs {
+		checkNeutralOutput(t, want, &doc.Outputs[i])
+	}
+
+	if strings.Contains(body, shareSecret) {
+		t.Fatalf("the outputs answer holds a secret value: %s", body)
+	}
+}
+
+// checkNeutralOutput proves one output of the answer.
+func checkNeutralOutput(t *testing.T, want neutralWant, output *neutralOutput) {
+	t.Helper()
+
+	value, isPlain := want.plain[output.Name]
+	if isPlain {
+		if output.Secret || string(output.Value) != value {
+			t.Errorf("plain output %q = %+v, want the value %s", output.Name, *output, value)
+		}
+
+		return
+	}
+
+	if !slices.Contains(want.secrets, output.Name) || !output.Secret || len(output.Value) != 0 {
+		t.Errorf("output %q = %+v, want a secret with no value", output.Name, *output)
+	}
+}
+
+// pulumiOutputsReader proves the person who reads outputs only, for the
+// Pulumi CLI:
+//
+//   - The outputs route answers 200 with the plain output and the secret output
+//     as a mark with no value.
+//   - The export answers 403, because a stack reference reads the whole
+//     deployment and needs unit:read. A decrypt of a config secret of the
+//     producer answers 403.
+//   - A stack reference of the CLI, run with that person's token, fails with 403.
+//   - A person with unit:read-outputs on another unit gets the 404 of an
+//     unknown unit on the outputs route.
+func pulumiOutputsReader(t *testing.T, env *e2e.Env) {
+	t.Helper()
+
+	ctx := t.Context()
+	pulumiShareSetup(ctx, t, env)
+
+	producerID, _, err := env.StackID(ctx, e2e.Namespace, e2e.Project, shareProducer)
+	if err != nil || producerID == "" {
+		t.Fatalf("producer stack ID: %v", err)
+	}
+
+	consumer := "pulumi:" + shareStack(shareConsumer)
+	reader := outputReader(ctx, t, env, readerGrants{
+		e2e.Namespace, "pulumi:" + shareStack(shareProducer), consumer, "output-reader",
+	})
+	stackPath := "/api/stacks/" + shareStack(shareProducer)
+	outputsPath := sharingAPI + e2e.Namespace + "/units/" + producerID + "/outputs"
+
+	body := shareAPI(
+		ctx,
+		t,
+		env,
+		shareCall{"read outputs only", reader, http.MethodGet, outputsPath, "", http.StatusOK},
+	)
+	checkNeutralOutputs(t, body, neutralWant{
+		tool: "pulumi", unitID: producerID, plain: map[string]string{"vpcId": `"` + shareVPC + `"`},
+		secrets: []string{"dbPassword"},
+	})
+
+	adminBody := shareAPI(
+		ctx,
+		t,
+		env,
+		shareCall{"the administrator reads outputs", "", http.MethodGet, outputsPath, "", http.StatusOK},
+	)
+	checkNeutralOutputs(t, adminBody, neutralWant{
+		tool: "pulumi", unitID: producerID, plain: map[string]string{"vpcId": `"` + shareVPC + `"`},
+		secrets: []string{"dbPassword"},
+	})
+
+	configSecret := producerConfigCiphertext(t, env)
+
+	for _, c := range []shareCall{
+		{"export needs read state", reader, http.MethodGet, stackPath + "/export", "", http.StatusForbidden},
+		{"stack read needs read state", reader, http.MethodGet, stackPath, "", http.StatusForbidden},
+		{
+			"no decrypt of a config secret", reader, http.MethodPost, stackPath + "/decrypt",
+			`{"ciphertext":` + strconv.Quote(configSecret) + `}`, http.StatusForbidden,
+		},
+	} {
+		shareAPI(ctx, t, env, c)
+	}
+
+	env.Step(ctx, t, withEnv(failStep("a stack reference of a person needs read state",
+		outputContains("403"), "up", "--yes", "--non-interactive", "--stack", shareStack(shareConsumer)),
+		"PULUMI_ACCESS_TOKEN="+reader))
+
+	// The reader holds unit:read-outputs on the consumer unit too, but a
+	// person with that action on the consumer only sees no producer.
+	other := outputReader(ctx, t, env, readerGrants{
+		e2e.Namespace, consumer, "", "other-reader",
+	})
+	shareAPI(ctx, t, env, shareCall{
+		"outputs of a unit with no grant answer as an unknown unit", other, http.MethodGet, outputsPath, "",
+		http.StatusNotFound,
+	})
+	shareAPI(ctx, t, env, shareCall{
+		"outputs of a unit that does not exist", reader, http.MethodGet,
+		sharingAPI + e2e.Namespace + "/units/stk-nosuchstack0000/outputs", "", http.StatusNotFound,
+	})
+}
+
+// tofuOutputsReader proves the person who reads outputs only, for OpenTofu:
+//
+//   - The outputs route and the TFE routes of outputs answer 200. The list
+//     shows a sensitive output as null, and the route of one sensitive output
+//     answers 403 without unit:read-secrets.
+//   - An output of an old state version answers 403: it needs unit:read.
+//   - The current state version, its download and the state version list
+//     answer 403. The data source terraform_remote_state of that person fails
+//     before it reads them: the person holds no namespace:read, so the read of
+//     the organization answers 404 (the limit that the console states).
+//   - A state that the client encrypted answers 409 to that person on both
+//     outputs routes, and the administrator still reads it.
+func tofuOutputsReader(t *testing.T, env *e2e.Env) {
+	t.Helper()
+
+	ctx := t.Context()
+	dir := tofuShareSetup(ctx, t, env)
+	producerID := env.WorkspaceIDByName(ctx, t, e2e.Workspace)
+	reader := outputReader(ctx, t, env, readerGrants{
+		e2e.Namespace, "opentofu:" + e2e.Namespace + "/" + e2e.Workspace, "", "output-reader",
+	})
+	oldVersion := currentStateVersion(ctx, t, env, "", producerID)
+
+	env.WriteTofuConfig(t, tofuProducerConfig(env.Host())+"\nresource \"terraform_data\" \"anchor\" {}\n")
+	env.Step(ctx, t, step("share apply producer again", nil, "apply", "-input=false", "-auto-approve", "-no-color"))
+
+	version := currentStateVersion(ctx, t, env, "", producerID)
+	if version == oldVersion {
+		t.Fatal("the second apply made no new state version of the producer")
+	}
+
+	workspaces := "/api/v2/workspaces/" + producerID
+
+	body := shareAPI(ctx, t, env, shareCall{
+		"read outputs only",
+		reader,
+		http.MethodGet,
+		sharingAPI + e2e.Namespace + "/units/" + producerID + "/outputs",
+		"",
+		http.StatusOK,
+	})
+	checkNeutralOutputs(t, body, neutralWant{
+		tool: "opentofu", unitID: producerID, plain: map[string]string{"vpc_id": `"` + shareVPC + `"`},
+		secrets: []string{"db_password"},
+	})
+
+	list := shareAPI(ctx, t, env, shareCall{
+		"the list of outputs", reader, http.MethodGet, workspaces + "/current-state-version-outputs", "", http.StatusOK,
+	})
+	if !strings.Contains(list, shareVPC) || strings.Contains(list, shareSecret) {
+		t.Fatalf("the list of outputs must hold the plain value and no secret: %s", list)
+	}
+
+	for _, c := range []shareCall{
+		{"a plain output", reader, http.MethodGet, "/api/v2/state-version-outputs/" + version + ".vpc_id", "", http.StatusOK},
+		{
+			"a sensitive output needs read secrets", reader, http.MethodGet,
+			"/api/v2/state-version-outputs/" + version + ".db_password", "", http.StatusForbidden,
+		},
+		{
+			"an output of an old state version needs read state", reader, http.MethodGet,
+			"/api/v2/state-version-outputs/" + oldVersion + ".vpc_id", "", http.StatusForbidden,
+		},
+		{"the current state version needs read state", reader, http.MethodGet, workspaces + "/current-state-version", "", http.StatusForbidden},
+		{"a download needs read state", reader, http.MethodGet, "/api/v2/state-versions/" + version + "/download", "", http.StatusForbidden},
+		{
+			"the state version list needs read state", reader, http.MethodGet,
+			"/api/v2/state-versions?filter[organization][name]=" + e2e.Namespace + "&filter[workspace][name]=" + e2e.Workspace,
+			"", http.StatusForbidden,
+		},
+		{
+			"the administrator reads a sensitive output", "", http.MethodGet,
+			"/api/v2/state-version-outputs/" + version + ".db_password", "", http.StatusOK,
+		},
+	} {
+		shareAPI(ctx, t, env, c)
+	}
+
+	env.StepIn(ctx, t, dir, step("share init consumer", nil, "init", "-input=false", "-no-color"))
+	env.StepIn(ctx, t, dir, withEnv(failStep("terraform_remote_state of a person needs read state",
+		outputContains("not found"), "plan", "-input=false", "-no-color"), tofuTokenConfig(t, env.Host(), reader)))
+
+	checkEncryptedReader(ctx, t, env)
+}
+
+// checkEncryptedReader proves that a person with unit:read-outputs and not
+// unit:read gets 409 from both outputs routes for a workspace whose state the
+// client encrypted, with a message that names the client encryption, and that
+// the administrator reads the outputs.
+func checkEncryptedReader(ctx context.Context, t *testing.T, env *e2e.Env) {
+	t.Helper()
+
+	dir := writeShareConfig(t, tofuEncryptedProducerConfig(env.Host()))
+	env.StepIn(ctx, t, dir, step("share init client-encrypted producer", nil, "init", "-input=false", "-no-color"))
+	env.StepIn(ctx, t, dir, step("share apply client-encrypted producer", nil,
+		"apply", "-input=false", "-auto-approve", "-no-color"))
+
+	encryptedID := env.WorkspaceIDByName(ctx, t, shareEncrypted)
+	reader := outputReader(ctx, t, env, readerGrants{
+		e2e.Namespace, "opentofu:" + e2e.Namespace + "/" + shareEncrypted, "", "encrypted-output-reader",
+	})
+
+	for _, c := range []shareCall{
+		{
+			"a person with read outputs only reads no client-encrypted state", reader, http.MethodGet,
+			"/api/v2/workspaces/" + encryptedID + "/current-state-version-outputs", "", http.StatusConflict,
+		},
+		{
+			"the outputs route refuses a client-encrypted state too", reader, http.MethodGet,
+			sharingAPI + e2e.Namespace + "/units/" + encryptedID + "/outputs", "", http.StatusConflict,
+		},
+	} {
+		if !strings.Contains(shareAPI(ctx, t, env, c), "client") {
+			t.Fatalf("%s: the 409 does not name the client encryption", c.name)
+		}
+	}
+
+	shareAPI(ctx, t, env, shareCall{
+		"the administrator reads the outputs of a client-encrypted state", "", http.MethodGet,
+		"/api/v2/workspaces/" + encryptedID + "/current-state-version-outputs", "", http.StatusOK,
+	})
 }

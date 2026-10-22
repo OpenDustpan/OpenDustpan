@@ -120,6 +120,7 @@ func newSharingFixture(t *testing.T, routeAuthz, serviceAuthz identity.Authorize
 
 	handler, err := apiinventory.NewHandler(apiinventory.Config{
 		OutputSharing:  testOutputSharing(t, settings, nsStore, serviceAuthz),
+		Outputs:        nil,
 		Views:          nil,
 		Namespaces:     nsSvc,
 		Units:          &memReader{entries: map[namespace.Name][]coreinventory.Entry{}, err: nil},
@@ -424,6 +425,7 @@ func TestOutputSharingFailsClosedOnABadStoredValue(t *testing.T) {
 
 	handler, err := apiinventory.NewHandler(apiinventory.Config{
 		OutputSharing:  broken,
+		Outputs:        nil,
 		Views:          nil,
 		Namespaces:     mustNamespaces(t, nsStore),
 		Units:          &memReader{entries: map[namespace.Name][]coreinventory.Entry{}, err: nil},
