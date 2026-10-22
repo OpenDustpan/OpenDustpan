@@ -2732,7 +2732,7 @@ func newServerHandler(
 		return nil, err
 	}
 
-	gates, err := newGateConfigService(cfg, deps.services.namespaces)
+	gates, err := newGateConfigService(cfg, deps.services.namespaces, principals)
 	if err != nil {
 		return nil, err
 	}
