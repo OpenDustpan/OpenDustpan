@@ -94,10 +94,11 @@ func NewReplayer(now func() time.Time, cliVersion string) *Replayer {
 	return &Replayer{now: now, cliVersion: cliVersion}
 }
 
-// Replay applies the entries to the base deployment and writes the deployment
-// that results to out. entries is a batch body (DecodeEntries); the entries are
-// applied in the order of the body, as the replayer of the CLI does (ADR 43,
-// decision 6.6).
+// Replay applies the entries of batches to the base deployment and writes the
+// deployment that results to out. Each batch is a batch body (DecodeEntries),
+// in the order the update sent them; the entries are applied in that order,
+// batch by batch and in the order of each body, as the replayer of the CLI
+// does (ADR 43, decision 6.6). The bounds count the entries of all batches.
 //
 // The replay runs in three steps. First it reads the whole entry stream, and
 // applies each entry as it is read. Then the first pass reads the base for the
@@ -105,7 +106,7 @@ func NewReplayer(now func() time.Time, cliVersion string) *Replayer {
 // writes the output to out, which is never held in full. The resources of the
 // update are held in memory, because they are the replay state. The base
 // resources are held one at a time.
-func (r *Replayer) Replay(ctx context.Context, openBase OpenBase, entries io.Reader, out io.Writer) error {
+func (r *Replayer) Replay(ctx context.Context, openBase OpenBase, batches [][]byte, out io.Writer) error {
 	state := newReplayState(openBase, r)
 	decode := func(entry JournalEntry) error {
 		if err := state.countEntry(entry); err != nil {
@@ -114,13 +115,15 @@ func (r *Replayer) Replay(ctx context.Context, openBase OpenBase, entries io.Rea
 		return state.apply(ctx, entry)
 	}
 
-	if err := DecodeEntries(entries, journalVersion, decode); err != nil {
-		// A bound error already names its counts and its limit, so it passes
-		// through without a second prefix.
-		if errors.Is(err, ErrTooManyEntries) || errors.Is(err, ErrNewStateTooLarge) {
-			return err
+	for _, batch := range batches {
+		if err := DecodeEntries(bytes.NewReader(batch), journalVersion, decode); err != nil {
+			// A bound error already names its counts and its limit, so it
+			// passes through without a second prefix.
+			if errors.Is(err, ErrTooManyEntries) || errors.Is(err, ErrNewStateTooLarge) {
+				return err
+			}
+			return fmt.Errorf("pulumijournal: replay entries: %w", err)
 		}
-		return fmt.Errorf("pulumijournal: replay entries: %w", err)
 	}
 
 	scan, err := state.scanBase(ctx, state.base)
