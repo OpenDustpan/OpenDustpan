@@ -45,6 +45,7 @@ import (
 	"sync"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/api/apidesc"
 	auditapi "opendustpan.org/opendustpan/internal/api/audit"
 	inventoryapi "opendustpan.org/opendustpan/internal/api/inventory"
 	contextapi "opendustpan.org/opendustpan/internal/api/objectcontext"
@@ -796,6 +797,11 @@ func NewServer(opts ...Option) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	// A handler that reads a name the API description does not hold logs the
+	// error through the logger of the server. Set it only after the settings
+	// pass, so that a NewServer that fails changes nothing.
+	apidesc.SetLogger(cfg.logger)
 
 	if cacheErr := wrapBlobCache(cfg); cacheErr != nil {
 		return nil, cacheErr
