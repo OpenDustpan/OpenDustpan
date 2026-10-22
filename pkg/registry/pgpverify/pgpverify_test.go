@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/registry/pgpfixture"
 	"opendustpan.org/opendustpan/pkg/registry"
-	"opendustpan.org/opendustpan/pkg/registry/pgpfixture"
 	"opendustpan.org/opendustpan/pkg/registry/pgpverify"
 	"opendustpan.org/opendustpan/pkg/registry/registrytest"
 )

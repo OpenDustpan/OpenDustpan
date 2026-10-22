@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/ident"
+	"opendustpan.org/opendustpan/internal/scopeaudit"
 	"opendustpan.org/opendustpan/internal/token"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/blob"
@@ -20,7 +21,6 @@ import (
 	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/manuallock"
 	"opendustpan.org/opendustpan/pkg/namespace"
-	"opendustpan.org/opendustpan/pkg/scopeaudit"
 	"opendustpan.org/opendustpan/pkg/secret"
 )
 

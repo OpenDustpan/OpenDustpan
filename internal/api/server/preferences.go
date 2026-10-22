@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 
+	"opendustpan.org/opendustpan/internal/api/apidesc"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/preferences"
@@ -195,7 +196,7 @@ func preferencesETag(d preferences.Document) string {
 // of a read gives it, or *, which matches the preferences of any person. A
 // value that is neither gives errPreferencesIfMatch.
 func preferencesIfMatch(r *http.Request) (*int64, error) {
-	raw := strings.TrimSpace(r.Header.Get("If-Match"))
+	raw := strings.TrimSpace(apidesc.Header(r, "If-Match"))
 	if raw == "" || raw == "*" {
 		return nil, nil //nolint:nilnil // No version means no precondition.
 	}
@@ -405,7 +406,7 @@ func (h *Handler) refusePatch(w http.ResponseWriter, r *http.Request, p identity
 // mergePatchContentType reports whether the Content-Type of r is the merge
 // patch type, with no parameter or with charset=utf-8 only.
 func mergePatchContentType(r *http.Request) bool {
-	mediaType, params, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
+	mediaType, params, err := mime.ParseMediaType(apidesc.Header(r, "Content-Type"))
 	if err != nil || mediaType != mergePatchType {
 		return false
 	}

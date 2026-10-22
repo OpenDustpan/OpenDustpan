@@ -215,7 +215,7 @@ func keyOfPattern(pattern string) string {
 
 	return apidesc.Operation{
 		ID: "", Method: method, Path: path, Tags: nil, Actions: nil, ActionObjects: nil, Public: false,
-		IdempotencyKey: false, IfMatch: false, IfMatchRequired: false, ETag: false, Bodies: nil,
+		IdempotencyKey: false, IfMatch: false, IfMatchRequired: false, ETag: false, Query: nil, Bodies: nil,
 	}.Key()
 }
 

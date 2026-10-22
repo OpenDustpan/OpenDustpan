@@ -15,10 +15,13 @@ import (
 	"net/http"
 	"strings"
 
+	"opendustpan.org/opendustpan/internal/api/apidesc"
 	"opendustpan.org/opendustpan/internal/api/idempotent"
 	"opendustpan.org/opendustpan/internal/api/refusal"
 	"opendustpan.org/opendustpan/internal/denylimit"
 	"opendustpan.org/opendustpan/internal/errcode"
+	"opendustpan.org/opendustpan/internal/registry/releasecheck"
+	"opendustpan.org/opendustpan/internal/registry/service"
 	"opendustpan.org/opendustpan/internal/sessionauth"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/idempotency"
@@ -26,8 +29,6 @@ import (
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/registry"
-	"opendustpan.org/opendustpan/pkg/registry/releasecheck"
-	"opendustpan.org/opendustpan/pkg/registry/service"
 )
 
 // ErrMissingDependency reports a Config without a required dependency.
@@ -137,7 +138,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // no header uses the console session cookie, and the bool reports that the
 // cookie signed it in.
 func (h *Handler) authenticate(r *http.Request) (identity.Principal, bool, error) {
-	header := r.Header.Get("Authorization")
+	header := apidesc.Header(r, "Authorization")
 	if header == "" {
 		p, _, err := h.sessions.Authenticate(r)
 

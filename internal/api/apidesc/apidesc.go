@@ -66,6 +66,9 @@ type Operation struct {
 	IfMatchRequired bool
 	// ETag is true for a route whose answer holds the ETag header.
 	ETag bool
+	// Query lists the query parameters that the route reads. A handler gets
+	// the value of a declared name only, through QueryOf.
+	Query []QueryParam
 	// Bodies names the body of the request and the body of the success
 	// answer. It is nil for a route that names none, and Build refuses that.
 	Bodies *Bodies
@@ -105,6 +108,10 @@ func (o Operation) Validate() error {
 	}
 
 	if err := validateActions(o); err != nil {
+		return err
+	}
+
+	if err := validateQuery(o); err != nil {
 		return err
 	}
 
@@ -310,13 +317,55 @@ type Drift struct {
 	Unrouted []string
 	// Mismatch holds the keys of the operations that exist in both lists but
 	// differ in their ID, their path, their tags, their actions, the object
-	// kinds of their actions, their public flag or their header flags.
+	// kinds of their actions, their public flag, their header flags or their
+	// query parameters.
 	Mismatch []string
+	// patterns maps each key of the three lists to the exact pattern of the
+	// route, or of the operation when no route has the key.
+	patterns map[string]string
 }
 
 // Empty reports whether the route table and the description agree.
 func (d Drift) Empty() bool {
 	return len(d.Undescribed) == 0 && len(d.Unrouted) == 0 && len(d.Mismatch) == 0
+}
+
+// Problems returns one line for each key of the drift. Each line names the
+// exact pattern, what differs and the one command that writes the
+// description again.
+func (d Drift) Problems() []string {
+	out := make([]string, 0, len(d.Undescribed)+len(d.Unrouted)+len(d.Mismatch))
+
+	for _, key := range d.Undescribed {
+		out = append(out, fmt.Sprintf(
+			"%s is served, and the description has no operation for it: give the route a label, then run %s",
+			d.pattern(key), FixCommand,
+		))
+	}
+
+	for _, key := range d.Unrouted {
+		out = append(out, fmt.Sprintf(
+			"%s is in the description, and no route serves it: run %s", d.pattern(key), FixCommand,
+		))
+	}
+
+	for _, key := range d.Mismatch {
+		out = append(out, fmt.Sprintf(
+			"%s differs between the route and the description: run %s", d.pattern(key), FixCommand,
+		))
+	}
+
+	return out
+}
+
+// pattern returns the exact pattern of a key, or the key when Diff did not
+// record one.
+func (d Drift) pattern(key string) string {
+	if p, ok := d.patterns[key]; ok {
+		return p
+	}
+
+	return key
 }
 
 // Diff compares the routes with the described operations. It fails closed:
@@ -334,9 +383,16 @@ func Diff(routes, described []Operation) (Drift, error) {
 		return Drift{}, fmt.Errorf("description: %w", err)
 	}
 
-	var d Drift
+	d := Drift{Undescribed: nil, Unrouted: nil, Mismatch: nil, patterns: map[string]string{}}
 
-	for key, route := range routeByKey {
+	for key := range describedByKey {
+		d.patterns[key] = Pattern(describedByKey[key].Method, describedByKey[key].Path)
+	}
+
+	for key := range routeByKey {
+		route := routeByKey[key]
+		d.patterns[key] = Pattern(route.Method, route.Path)
+
 		doc, ok := describedByKey[key]
 		if !ok {
 			d.Undescribed = append(d.Undescribed, key)
@@ -376,6 +432,7 @@ func sameOperation(a, b Operation) bool {
 		a.IfMatchRequired == b.IfMatchRequired &&
 		a.ETag == b.ETag &&
 		slices.Equal(a.Tags, b.Tags) &&
+		slices.Equal(sortedQuery(a.Query), sortedQuery(b.Query)) &&
 		sameActions(a.Actions, b.Actions) &&
 		maps.Equal(a.ActionObjects, b.ActionObjects)
 }
@@ -386,7 +443,9 @@ func index(ops []Operation) (map[string]Operation, error) {
 	byKey := make(map[string]Operation, len(ops))
 	byID := make(map[string]string, len(ops))
 
-	for _, op := range ops {
+	for i := range ops {
+		op := &ops[i]
+
 		if err := op.Validate(); err != nil {
 			return nil, err
 		}
@@ -401,7 +460,7 @@ func index(ops []Operation) (map[string]Operation, error) {
 		}
 
 		byID[op.ID] = key
-		byKey[key] = op
+		byKey[key] = *op
 	}
 
 	return byKey, nil

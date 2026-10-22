@@ -31,6 +31,8 @@ type Label struct {
 	// to, except the actions that the row lists as namespace actions. It is
 	// one of the constants Kind...
 	Object string
+	// Query lists the query parameters that the route reads.
+	Query []QueryParam
 	// Bodies names the body of the request and the body of the success
 	// answer.
 	Bodies *Bodies
@@ -41,7 +43,7 @@ type Label struct {
 func Name(id string, tags ...string) Label {
 	return Label{
 		ID: id, Tags: tags, IdempotencyKey: false, IfMatch: false, IfMatchRequired: false, ETag: false,
-		Object: "", Bodies: nil,
+		Object: "", Query: nil, Bodies: nil,
 	}
 }
 
@@ -58,6 +60,16 @@ func (l Label) On(kind string) Label {
 // and a DELETE send no request, and take NoBody.
 func (l Label) WithBodies(request, response Body) Label {
 	l.Bodies = &Bodies{Request: request, Response: response}
+
+	return l
+}
+
+// WithQuery returns the label for a route that reads the query parameters.
+// A handler reads a parameter through QueryOf, which gives the value of a
+// declared name only, so the description lists each parameter that the
+// handler reads.
+func (l Label) WithQuery(params ...QueryParam) Label {
+	l.Query = append(slices.Clone(l.Query), params...)
 
 	return l
 }
@@ -167,6 +179,7 @@ func Collect(rows []Row, labels map[string]Label) []Operation {
 			IfMatch:         label.IfMatch,
 			IfMatchRequired: label.IfMatchRequired,
 			ETag:            label.ETag,
+			Query:           sortedQuery(label.Query),
 			Bodies:          copyBodies(label.Bodies),
 		})
 	}
