@@ -434,13 +434,26 @@ func insertStackTags(ctx context.Context, q *db.Queries, id string, tags map[str
 // RenameStack implements stack.Store. It renames the stack without moving its
 // history, checkpoint or events: child rows key on the stable stack ID. The
 // inventory keeps one entry for the same stack ID, under the new name, in the
-// same transaction.
+// same transaction. It returns ErrNotFound if no live stack has oldRef, and
+// ErrUpdateConflict while a mutating update of the stack runs.
 func (s *Store) RenameStack(
 	ctx context.Context, oldRef stack.Ref, newName stack.Name, fence namespace.Fence,
 ) error {
 	return s.inFencedTx(ctx, fence, func(q *db.Queries) error {
 		if newName == oldRef.Stack {
 			return confirmStackPresent(ctx, q, oldRef)
+		}
+
+		// A running update addresses the stack by its name. A rename under it
+		// would leave the update with a name that no stack has: its checkpoint
+		// saves would fail and the stack would stay locked by the update.
+		stackID, err := stackIDFor(ctx, q, oldRef)
+		if err != nil {
+			return err
+		}
+
+		if err := refuseRunningStack(ctx, q, stackID); err != nil {
+			return err
 		}
 
 		if err := rejectTakenName(ctx, q, oldRef, newName); err != nil {
