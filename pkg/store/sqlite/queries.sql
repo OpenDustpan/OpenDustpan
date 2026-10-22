@@ -653,6 +653,23 @@ JOIN namespaces AS n ON n.name = w.namespace
 WHERE w.namespace = ? AND w.deleted_at_ms IS NULL
 ORDER BY w.name;
 
+-- name: CountWorkspacePage :one
+-- The count of the live workspaces of a namespace whose name holds the
+-- search, for the total of a workspace page.
+SELECT COUNT(*)
+FROM workspaces AS w
+WHERE w.namespace = sqlc.arg(namespace) AND w.deleted_at_ms IS NULL AND instr(w.name, sqlc.arg(name_contains)) > 0;
+
+-- name: ReadWorkspacePage :many
+-- One page of the live workspaces of a namespace whose name holds the search,
+-- in the order of ReadWorkspaces.
+SELECT sqlc.embed(w), n.id AS namespace_id
+FROM workspaces AS w
+JOIN namespaces AS n ON n.name = w.namespace
+WHERE w.namespace = sqlc.arg(namespace) AND w.deleted_at_ms IS NULL AND instr(w.name, sqlc.arg(name_contains)) > 0
+ORDER BY w.name
+LIMIT sqlc.arg(page_limit) OFFSET sqlc.arg(page_offset);
+
 -- name: SaveWorkspace :execrows
 -- A compare-and-swap: it changes nothing unless the stored revision is the
 -- one the caller read. The current state pointer stays: only FinalizeStateVersion moves it.

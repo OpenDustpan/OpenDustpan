@@ -661,6 +661,23 @@ JOIN namespaces AS n ON n.name = w.namespace
 WHERE w.namespace = $1 AND w.deleted_at_ms IS NULL
 ORDER BY w.name;
 
+-- name: CountWorkspacePage :one
+-- The count of the live workspaces of a namespace whose name holds the
+-- search, for the total of a workspace page.
+SELECT COUNT(*)
+FROM workspaces AS w
+WHERE w.namespace = sqlc.arg(namespace) AND w.deleted_at_ms IS NULL AND strpos(w.name, sqlc.arg(name_contains)) > 0;
+
+-- name: ReadWorkspacePage :many
+-- One page of the live workspaces of a namespace whose name holds the search,
+-- in the order of ReadWorkspaces.
+SELECT sqlc.embed(w), n.id AS namespace_id
+FROM workspaces AS w
+JOIN namespaces AS n ON n.name = w.namespace
+WHERE w.namespace = sqlc.arg(namespace) AND w.deleted_at_ms IS NULL AND strpos(w.name, sqlc.arg(name_contains)) > 0
+ORDER BY w.name
+LIMIT sqlc.arg(page_limit) OFFSET sqlc.arg(page_offset);
+
 -- name: LockWorkspaceForFinalize :one
 -- Locks the workspace row so two finalizes on one workspace cannot both pass
 -- the serial check.
