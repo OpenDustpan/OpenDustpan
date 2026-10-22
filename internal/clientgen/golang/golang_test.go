@@ -211,7 +211,7 @@ func hostileModel() *model.API {
 		ID: "getThing", Method: model.MethodGet, Path: "/api/dustpan/v1/things/{thing_id}",
 		Tags: nil, Summary: evil, Description: evil, Actions: []string{"unit:read"}, Public: false,
 		Parameters: []model.Parameter{param}, Body: nil,
-		Result:         model.Response{Status: 0, Type: &result, ETag: false},
+		Result:         model.Response{Statuses: []int{200}, Type: &result, ETag: false},
 		IdempotencyKey: false, IfMatch: model.IfMatchNone, Page: nil,
 	}
 

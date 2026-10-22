@@ -236,6 +236,9 @@ type operationView struct {
 	Idempotent   bool
 	IfMatch      string
 	ETag         bool
+	// Statuses are the success statuses as Go integer literals, joined with
+	// commas.
+	Statuses string
 }
 
 // newData checks the options, and builds the views of the model.

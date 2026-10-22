@@ -100,7 +100,7 @@ func goodOperation() apidesc.Operation {
 		IfMatchRequired: false,
 		ETag:            false,
 		Query:           nil,
-		Status:          0,
+		Statuses:        []int{200},
 		Bodies:          &apidesc.Bodies{Request: apidesc.NoBody, Response: apidesc.NoBody},
 	}
 }

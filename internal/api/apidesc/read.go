@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
 	"slices"
 	"strconv"
@@ -135,7 +136,7 @@ func readOperation(path, method string, raw json.RawMessage) (Operation, error) 
 	op := Operation{
 		ID: shape.OperationID, Method: upper, Path: path, Tags: shape.Tags, Actions: nil, ActionObjects: nil,
 		Public: false, IdempotencyKey: false, IfMatch: false, IfMatchRequired: false, ETag: false,
-		Query: nil, Status: 0, Bodies: nil,
+		Query: nil, Statuses: nil, Bodies: nil,
 	}
 
 	readActions(&op, shape.Actions)
@@ -148,61 +149,58 @@ func readOperation(path, method string, raw json.RawMessage) (Operation, error) 
 		return Operation{}, err
 	}
 
-	status, success, err := readSuccess(path, method, shape.Responses)
+	statuses, etag, err := readSuccess(path, method, shape.Responses)
 	if err != nil {
 		return Operation{}, err
 	}
 
-	op.Status = status
-	op.ETag = success.Headers["ETag"].Ref == "#/components/headers/"+etagName
+	op.Statuses = statuses
+	op.ETag = etag
 
 	return op, nil
 }
 
-// readSuccess returns the success status and the success answer of an
-// operation. The key is 2XX or a status from 200 to 299, and an operation
-// has exactly one. The status of 2XX is zero.
-func readSuccess(path, method string, responses map[string]responseShape) (int, responseShape, error) {
+// readSuccess returns the success statuses of an operation in ascending
+// order, and whether its success answers hold the ETag header. Each key is an
+// exact status from 200 to 299 in canonical form. The key 2XX and any other
+// range are refused. The success answers of one operation must agree on the
+// ETag header.
+func readSuccess(path, method string, responses map[string]responseShape) ([]int, bool, error) {
 	var (
-		status  int
-		success responseShape
-		found   bool
+		statuses []int
+		etag     bool
 	)
 
-	for key, response := range responses {
+	for _, key := range slices.Sorted(maps.Keys(responses)) {
 		if key == "default" {
 			continue
 		}
 
-		code := 0
-
-		if key != "2XX" {
-			n, err := strconv.Atoi(key)
-			if err != nil || n < http.StatusOK || n >= http.StatusMultipleChoices {
-				return 0, responseShape{}, fmt.Errorf(
-					"%w: %s %s has the response key %q", ErrInvalidDocument, strings.ToUpper(method), path, key,
-				)
-			}
-
-			code = n
-		}
-
-		if found {
-			return 0, responseShape{}, fmt.Errorf(
-				"%w: %s %s has more than one success response", ErrInvalidDocument, strings.ToUpper(method), path,
+		n, err := strconv.Atoi(key)
+		if err != nil || strconv.Itoa(n) != key || n < http.StatusOK || n >= http.StatusMultipleChoices {
+			return nil, false, fmt.Errorf(
+				"%w: %s %s has the response key %q", ErrInvalidDocument, strings.ToUpper(method), path, key,
 			)
 		}
 
-		status, success, found = code, response, true
+		has := responses[key].Headers["ETag"].Ref == "#/components/headers/"+etagName
+		if len(statuses) > 0 && has != etag {
+			return nil, false, fmt.Errorf(
+				"%w: %s %s has success responses that disagree on the ETag header",
+				ErrInvalidDocument, strings.ToUpper(method), path,
+			)
+		}
+
+		statuses, etag = append(statuses, n), has
 	}
 
-	if !found {
-		return 0, responseShape{}, fmt.Errorf(
+	if len(statuses) == 0 {
+		return nil, false, fmt.Errorf(
 			"%w: %s %s has no success response", ErrInvalidDocument, strings.ToUpper(method), path,
 		)
 	}
 
-	return status, success, nil
+	return statuses, etag, nil
 }
 
 // readActions sets the actions and their object kinds, in the order of the

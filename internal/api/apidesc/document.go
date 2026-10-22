@@ -315,17 +315,22 @@ func operationObject(op Operation) object {
 		success["headers"] = object{"ETag": object{keyRef: refHeaders + etagName}}
 	}
 
+	responses := object{
+		"default": object{
+			keyDescription: "The request failed.",
+			keyContent:     object{mediaJSON: object{keySchema: object{keyRef: refSchemas + errorSchema}}},
+		},
+	}
+
+	for _, status := range op.Statuses {
+		responses[strconv.Itoa(status)] = success
+	}
+
 	out := object{
 		"operationId": op.ID,
 		"tags":        stringsAsAny(op.Tags),
 		actionsKey:    actionList(op),
-		"responses": object{
-			successKey(op.Status): success,
-			"default": object{
-				keyDescription: "The request failed.",
-				keyContent:     object{mediaJSON: object{keySchema: object{keyRef: refSchemas + errorSchema}}},
-			},
-		},
+		"responses":   responses,
 	}
 
 	if len(params) > 0 {
@@ -342,16 +347,6 @@ func operationObject(op Operation) object {
 	}
 
 	return out
-}
-
-// successKey returns the key of the success answer: the exact status, or 2XX
-// for an operation with more than one success status.
-func successKey(status int) string {
-	if status == 0 {
-		return "2XX"
-	}
-
-	return strconv.Itoa(status)
 }
 
 // requestBody returns the body of the request of a method that sends one, or

@@ -81,7 +81,7 @@ func openIPAllowFixture(t *testing.T) (*sqlite.Store, *namespace.Service) {
 // cfg.
 func newIPAllowHandler(
 	t *testing.T, st *sqlite.Store, nss *namespace.Service, cfg ipHandlerConfig,
-) *apiserver.Handler {
+) testHandler {
 	t.Helper()
 
 	rules := cfg.rules
@@ -96,7 +96,7 @@ func newIPAllowHandler(
 
 	signIn, sessions := signInOf(t, st)
 
-	handler, err := apiserver.NewHandler(apiserver.Config{
+	handler, err := newCheckedHandler(t, apiserver.Config{
 		Preferences:      nil,
 		GitHost:          nil,
 		Idempotency:      nil,
@@ -141,7 +141,7 @@ func newIPAllowHandler(
 
 // allowAllIPAllowHandler builds a Handler over a fresh fixture that allows
 // every action, with the feature switch on.
-func allowAllIPAllowHandler(t *testing.T) (*sqlite.Store, *apiserver.Handler) {
+func allowAllIPAllowHandler(t *testing.T) (*sqlite.Store, testHandler) {
 	t.Helper()
 
 	st, nss := openIPAllowFixture(t)
@@ -203,7 +203,7 @@ func (call ipCall) withToken(token string) ipCall {
 }
 
 // serveIPAllowlist serves call and answers it.
-func serveIPAllowlist(t *testing.T, h *apiserver.Handler, call ipCall) *httptest.ResponseRecorder {
+func serveIPAllowlist(t *testing.T, h testHandler, call ipCall) *httptest.ResponseRecorder {
 	t.Helper()
 
 	var reader io.Reader = http.NoBody

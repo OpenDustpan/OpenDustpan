@@ -69,11 +69,11 @@ type Operation struct {
 	// Query lists the query parameters that the route reads. A handler gets
 	// the value of a declared name only, through QueryOf.
 	Query []QueryParam
-	// Status is the status code of the success answer, for example 200 or
-	// 204. Zero means that the route has more than one success status, for
-	// example 201 for a first write and 200 for a replacement, and the
-	// description gives the key 2XX.
-	Status int
+	// Statuses are the status codes that the success answer can have, in
+	// ascending order, for example [204], or [200, 201] for a route that
+	// answers 201 for a first write and 200 for a replacement. A route has at
+	// least one. The description gives one key for each code.
+	Statuses []int
 	// Bodies names the body of the request and the body of the success
 	// answer. It is nil for a route that names none, and Build refuses that.
 	Bodies *Bodies
@@ -127,19 +127,33 @@ func (o Operation) Validate() error {
 	return validateObjects(o)
 }
 
-// validateStatus refuses a success status outside 200 to 299, and a 204 for
+// validateStatus refuses an empty set of success statuses, a status outside
+// 200 to 299, a duplicate, a set that is not in ascending order, and a 204 for
 // a route that names a body in its answer.
 func validateStatus(o Operation) error {
-	if o.Status != 0 && (o.Status < http.StatusOK || o.Status >= http.StatusMultipleChoices) {
-		return fmt.Errorf(
-			"%w: success status %d of %s %s is not a 2xx status", ErrInvalidOperation, o.Status, o.Method, o.Path,
-		)
+	if len(o.Statuses) == 0 {
+		return fmt.Errorf("%w: %s %s has no success status", ErrInvalidOperation, o.Method, o.Path)
 	}
 
-	if o.Status == http.StatusNoContent && o.bodies().Response.kind == bodyTyped {
-		return fmt.Errorf(
-			"%w: %s %s answers 204 and names a body for the answer", ErrInvalidOperation, o.Method, o.Path,
-		)
+	for i, status := range o.Statuses {
+		if status < http.StatusOK || status >= http.StatusMultipleChoices {
+			return fmt.Errorf(
+				"%w: success status %d of %s %s is not a 2xx status", ErrInvalidOperation, status, o.Method, o.Path,
+			)
+		}
+
+		if i > 0 && status <= o.Statuses[i-1] {
+			return fmt.Errorf(
+				"%w: success status %d of %s %s is a duplicate or is out of order",
+				ErrInvalidOperation, status, o.Method, o.Path,
+			)
+		}
+
+		if status == http.StatusNoContent && o.bodies().Response.kind == bodyTyped {
+			return fmt.Errorf(
+				"%w: %s %s answers 204 and names a body for the answer", ErrInvalidOperation, o.Method, o.Path,
+			)
+		}
 	}
 
 	return nil
@@ -454,7 +468,7 @@ func sameOperation(a, b Operation) bool {
 	return a.ID == b.ID &&
 		a.Path == b.Path &&
 		a.Public == b.Public &&
-		a.Status == b.Status &&
+		slices.Equal(a.Statuses, b.Statuses) &&
 		a.IdempotencyKey == b.IdempotencyKey &&
 		a.IfMatch == b.IfMatch &&
 		a.IfMatchRequired == b.IfMatchRequired &&

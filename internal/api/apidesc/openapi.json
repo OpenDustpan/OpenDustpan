@@ -2878,7 +2878,22 @@
           "required": true
         },
         "responses": {
-          "2XX": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GitHostApp"
+                }
+              }
+            },
+            "description": "The request succeeded.",
+            "headers": {
+              "ETag": {
+                "$ref": "#/components/headers/ETag"
+              }
+            }
+          },
+          "201": {
             "content": {
               "application/json": {
                 "schema": {
@@ -3073,7 +3088,22 @@
           "required": true
         },
         "responses": {
-          "2XX": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GitHostInstallation"
+                }
+              }
+            },
+            "description": "The request succeeded.",
+            "headers": {
+              "ETag": {
+                "$ref": "#/components/headers/ETag"
+              }
+            }
+          },
+          "201": {
             "content": {
               "application/json": {
                 "schema": {

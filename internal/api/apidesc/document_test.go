@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"maps"
 	"net/http"
 	"regexp"
 	"slices"
@@ -23,18 +24,19 @@ var pep440 = regexp.MustCompile(`^(0|[1-9]\d*)(\.(0|[1-9]\d*))*$`)
 // sampleOperations returns a list that uses every feature of the document.
 func sampleOperations() []apidesc.Operation {
 	list := op("GET", "/api/dustpan/v1/namespaces/{namespace}/things", "thing:read")
-	list.ID, list.Tags, list.Status = "listThings", []string{"things"}, http.StatusOK
+	list.ID, list.Tags, list.Statuses = "listThings", []string{"things"}, []int{http.StatusOK}
 
 	create := op("POST", "/api/dustpan/v1/namespaces/{namespace}/things", "thing:write")
 	create.ID, create.Tags, create.IdempotencyKey, create.ETag = "createThing", []string{"things"}, true, true
-	create.Status = http.StatusCreated
+	create.Statuses = []int{http.StatusCreated}
 
 	update := op("PATCH", "/api/dustpan/v1/namespaces/{namespace}/things/{thing_id}", "thing:write")
 	update.ID, update.Tags, update.IfMatch, update.ETag = "updateThing", []string{"things", "extra"}, true, true
+	update.Statuses = []int{http.StatusOK, http.StatusCreated}
 
 	remove := op("DELETE", "/api/dustpan/v1/namespaces/{namespace}/things/{thing_id}", "thing:delete")
 	remove.ID, remove.Tags, remove.IfMatchRequired = "deleteThing", []string{"things"}, true
-	remove.Status = http.StatusNoContent
+	remove.Statuses = []int{http.StatusNoContent}
 
 	open := publicOp("/api/dustpan/v1/openapi.json")
 	open.ID, open.Tags = "getApiDescription", []string{"description"}
@@ -133,20 +135,21 @@ func TestBuildWritesTheExactSuccessKey(t *testing.T) {
 	}
 
 	built := decodedBytes(t, doc)
-	want := map[string]string{
-		"/api/dustpan/v1/namespaces/{namespace}/things get":               "200",
-		"/api/dustpan/v1/namespaces/{namespace}/things post":              "201",
-		"/api/dustpan/v1/namespaces/{namespace}/things/{thing_id} patch":  "2XX",
-		"/api/dustpan/v1/namespaces/{namespace}/things/{thing_id} delete": "204",
+	want := map[string][]string{
+		"/api/dustpan/v1/namespaces/{namespace}/things get":               {"200"},
+		"/api/dustpan/v1/namespaces/{namespace}/things post":              {"201"},
+		"/api/dustpan/v1/namespaces/{namespace}/things/{thing_id} patch":  {"200", "201"},
+		"/api/dustpan/v1/namespaces/{namespace}/things/{thing_id} delete": {"204"},
 	}
 
-	for key, wantKey := range want {
+	for key, wantKeys := range want {
 		path, method, _ := strings.Cut(key, " ")
 
 		responses := member[map[string]any](t, built, "paths", path, method, "responses")
 
-		if _, ok := responses[wantKey]; !ok || len(responses) != 2 {
-			t.Errorf("%s: responses = %v, want the keys %s and default", key, responses, wantKey)
+		got := slices.Sorted(maps.Keys(responses))
+		if !slices.Equal(got, append(slices.Clone(wantKeys), "default")) {
+			t.Errorf("%s: response keys = %v, want %v and default", key, got, wantKeys)
 		}
 	}
 }
@@ -668,13 +671,47 @@ func TestReadFailsClosed(t *testing.T) {
 		"other format version":       bytes.Replace(good, []byte(`"3.1.0"`), []byte(`"3.0.3"`), 1),
 		"other description version":  bytes.Replace(good, []byte(`"`+apidesc.DocumentVersion+`"`), []byte(`"9.9.9"`), 1),
 		"success status outside 2xx": bytes.Replace(good, []byte(`"200": {`), []byte(`"302": {`), 1),
-		"two success answers":        bytes.Replace(good, []byte(`"default": {`), []byte(`"201": {`), 1),
+		"key 2XX":                    bytes.Replace(good, []byte(`"200": {`), []byte(`"2XX": {`), 1),
+		"range key":                  bytes.Replace(good, []byte(`"200": {`), []byte(`"20X": {`), 1),
+		"signed key":                 bytes.Replace(good, []byte(`"200": {`), []byte(`"+200": {`), 1),
+		"padded key":                 bytes.Replace(good, []byte(`"200": {`), []byte(`"0200": {`), 1),
+		"error status key":           bytes.Replace(good, []byte(`"default": {`), []byte(`"404": {`), 1),
 		"no success answer":          bytes.Replace(good, []byte(`"200": {`), []byte(`"default": {`), 1),
 	} {
 		ops, readErr := apidesc.Read(doc)
 		if !errors.Is(readErr, apidesc.ErrInvalidDocument) || ops != nil {
 			t.Errorf("%s: Read() = %d operations, %v; want ErrInvalidDocument", name, len(ops), readErr)
 		}
+	}
+}
+
+// TestReadRefusesSuccessAnswersThatDisagreeOnTheETag proves that Read refuses
+// an operation whose success answers differ in the ETag header, because a
+// client would then read one flag from two answers.
+func TestReadRefusesSuccessAnswersThatDisagreeOnTheETag(t *testing.T) {
+	t.Parallel()
+
+	good, err := apidesc.Build(sampleOperations())
+	if err != nil {
+		t.Fatalf("Build() = %v", err)
+	}
+
+	var doc map[string]any
+	if err = json.Unmarshal(good, &doc); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+
+	path := "/api/dustpan/v1/namespaces/{namespace}/things/{thing_id}"
+	responses := member[map[string]any](t, doc, "paths", path, "patch", "responses")
+	responses["201"] = map[string]any{"description": "The request succeeded."}
+
+	changed, err := json.Marshal(doc)
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+
+	if _, err = apidesc.Read(changed); !errors.Is(err, apidesc.ErrInvalidDocument) {
+		t.Errorf("Read() = %v, want ErrInvalidDocument", err)
 	}
 }
 

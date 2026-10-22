@@ -20,6 +20,7 @@ import (
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/api/apidesc/apidesctest"
 	"opendustpan.org/opendustpan/internal/api/idempotent"
 	apiregistry "opendustpan.org/opendustpan/internal/api/registry"
 	"opendustpan.org/opendustpan/internal/registry/pgpfixture"
@@ -104,7 +105,10 @@ func (testAuthz) ListObjects(_ context.Context, p identity.Principal, _ identity
 
 type fixture struct {
 	handler *apiregistry.Handler
-	store   *sqlite.Store
+	// served is the handler that the tests call: it fails a test when a
+	// handler answers a success status that the description does not give.
+	served http.Handler
+	store  *sqlite.Store
 }
 
 func newFixture(t *testing.T, deny ...identity.Action) fixture {
@@ -186,7 +190,7 @@ func newFixtureWithAuthorizer(t *testing.T, override identity.Authorizer, deny .
 		t.Fatalf("handler: %v", err)
 	}
 
-	return fixture{handler: handler, store: store}
+	return fixture{handler: handler, served: apidesctest.CheckStatus(t, handler), store: store}
 }
 
 const base = "/api/dustpan/v1/namespaces/acme/registry"
@@ -227,7 +231,7 @@ func (f fixture) do(t *testing.T, r request) response {
 	}
 
 	rec := httptest.NewRecorder()
-	f.handler.ServeHTTP(rec, req)
+	f.served.ServeHTTP(rec, req)
 
 	return response{code: rec.Code, body: rec.Body.String(), header: rec.Header()}
 }

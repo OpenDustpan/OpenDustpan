@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -20,7 +21,7 @@ const baseOperation = `"/api/dustpan/v1/things/{thing_id}": {
     "tags": ["things"],
     "parameters": [{"in": "path", "name": "thing_id", "required": true, "schema": {"type": "string"}}],
     "responses": {
-     "2XX": {"description": "ok", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Thing"}}}},
+     "200": {"description": "ok", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Thing"}}}},
      "default": {"description": "err", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorResponse"}}}}
     },
     "x-dustpan-actions": [{"action": "unit:read", "object": "unit"}]
@@ -101,27 +102,44 @@ func checkBaseOperation(t *testing.T, op model.Operation) {
 		t.Errorf("parameters: %+v", op.Parameters)
 	}
 
-	if op.Result.Type == nil || op.Result.Type.Ref != "Thing" || op.Result.Status != 0 {
+	if op.Result.Type == nil || op.Result.Type.Ref != "Thing" || !slices.Equal(op.Result.Statuses, []int{200}) {
 		t.Errorf("result: %+v", op.Result)
 	}
 }
 
 // TestParseReadsTheExactSuccessStatus checks that an exact success key gives
-// its status, and that the key 2XX gives zero.
+// its status, and that two keys with the same answer give both statuses in
+// ascending order.
 func TestParseReadsTheExactSuccessStatus(t *testing.T) {
 	t.Parallel()
 
-	for key, want := range map[string]int{"2XX": 0, "200": 200, "201": 201, "202": 202, "204": 204} {
-		doc := change(t, `"2XX": {"description": "ok", "content"`, `"`+key+`": {"description": "ok", "content"`)
+	for key, want := range map[string][]int{"200": {200}, "201": {201}, "202": {202}, "204": {204}} {
+		doc := change(t, `"200": {"description": "ok", "content"`, `"`+key+`": {"description": "ok", "content"`)
 
 		api, err := clientgen.NewParser().Parse(doc)
 		if err != nil {
 			t.Fatalf("%s: parse: %v", key, err)
 		}
 
-		if got := api.Operations[0].Result.Status; got != want {
-			t.Errorf("%s: status = %d, want %d", key, got, want)
+		if got := api.Operations[0].Result.Statuses; !slices.Equal(got, want) {
+			t.Errorf("%s: statuses = %v, want %v", key, got, want)
 		}
+	}
+
+	both := change(
+		t,
+		`"200": {"description": "ok", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Thing"}}}},`,
+		`"201": {"description": "ok", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Thing"}}}},
+     "200": {"description": "ok", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Thing"}}}},`,
+	)
+
+	api, err := clientgen.NewParser().Parse(both)
+	if err != nil {
+		t.Fatalf("two keys: parse: %v", err)
+	}
+
+	if got := api.Operations[0].Result.Statuses; !slices.Equal(got, []int{200, 201}) {
+		t.Errorf("two keys: statuses = %v, want [200 201]", got)
 	}
 }
 
@@ -272,11 +290,25 @@ func TestParseRefuses(t *testing.T) {
 			"security",
 		},
 		{
-			"two success answers",
+			"success answers with different bodies",
 			`"default": {`,
-			`"200": {"description": "x"}, "default": {`,
+			`"201": {"description": "x"}, "default": {`,
+			clientgen.ErrInvalidDescription,
+			"201",
+		},
+		{
+			"success key 2XX",
+			`"200": {"description": "ok", "content"`,
+			`"2XX": {"description": "ok", "content"`,
 			clientgen.ErrUnsupported,
 			"2XX",
+		},
+		{
+			"success key outside 2xx",
+			`"default": {`,
+			`"302": {"description": "x"}, "default": {`,
+			clientgen.ErrUnsupported,
+			"302",
 		},
 		{
 			"default answer that is not the error schema",
@@ -287,8 +319,8 @@ func TestParseRefuses(t *testing.T) {
 		},
 		{
 			"response header other than ETag",
-			`"2XX": {"description": "ok",`,
-			`"2XX": {"description": "ok", "headers": {"X-Other": {"description": "x"}},`,
+			`"200": {"description": "ok",`,
+			`"200": {"description": "ok", "headers": {"X-Other": {"description": "x"}},`,
 			clientgen.ErrUnsupported,
 			"X-Other",
 		},
