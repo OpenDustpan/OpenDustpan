@@ -535,6 +535,7 @@ func emptySpec() job.Spec {
 	return job.Spec{
 		Unit:      identity.Object{},
 		Operation: "",
+		Purpose:   "",
 		Executor:  "",
 		Location:  job.Location{Connection: "", Repository: "", Ref: "", Directory: "", Revision: ""},
 		Steps:     nil,
@@ -552,4 +553,12 @@ func noJob() job.Job {
 		Agent: "", AgentMode: "", BreakGlass: nil, Delivery: nil, Closed: nil, Verification: job.VerificationNone,
 		IdempotencyKey: "", RequestHash: "", Version: 0, CreatedAt: time.Time{}, UpdatedAt: time.Time{},
 	}
+}
+
+// Decode returns the job that the row r holds. It returns ErrDamaged for a row
+// whose body names another namespace or another unit than the row, and the
+// error of the decoder for a body that does not decode. The drift store reads a
+// job with it, so that it never trusts a row that the job store would refuse.
+func Decode(r *Row) (job.Job, error) {
+	return jobOf(r)
 }

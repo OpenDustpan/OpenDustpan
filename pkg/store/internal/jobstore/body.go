@@ -58,6 +58,7 @@ type editBody struct {
 type specBody struct {
 	Unit      unitBody     `json:"unit"`
 	Operation string       `json:"operation"`
+	Purpose   string       `json:"purpose"`
 	Executor  string       `json:"executor"`
 	Location  locationBody `json:"location"`
 	Steps     []stepBody   `json:"steps"`
@@ -209,7 +210,8 @@ func decodeUnit(b unitBody) (identity.Object, error) {
 
 func encodeSpec(s *job.Spec) specBody {
 	out := specBody{
-		Unit: encodeUnit(s.Unit), Operation: string(s.Operation), Executor: string(s.Executor),
+		Unit: encodeUnit(s.Unit), Operation: string(s.Operation), Purpose: string(s.Purpose),
+		Executor: string(s.Executor),
 		Location: locationBody(s.Location), Steps: nil, Pool: s.Pool, Profile: s.Profile, Edits: nil,
 		Delivery: string(s.Delivery),
 	}
@@ -243,7 +245,8 @@ func decodeSpec(b *specBody) (job.Spec, error) {
 	}
 
 	out := job.Spec{
-		Unit: unit, Operation: job.Operation(b.Operation), Executor: job.ExecutorKind(b.Executor),
+		Unit: unit, Operation: job.Operation(b.Operation), Purpose: job.Purpose(b.Purpose),
+		Executor: job.ExecutorKind(b.Executor),
 		Location: job.Location(b.Location), Steps: nil, Pool: b.Pool, Profile: b.Profile, Edits: nil,
 		Delivery: job.Delivery(b.Delivery),
 	}

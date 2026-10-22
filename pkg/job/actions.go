@@ -81,7 +81,7 @@ func StartRequirements(spec Spec, bg *BreakGlass) ([]Requirement, error) {
 		return nil, fmt.Errorf("%w: the object of a job must be a unit", ErrInvalid)
 	}
 
-	action, err := startAction(spec.Executor, spec.Operation)
+	action, err := startActionFor(spec.Executor, spec.Operation, spec.Purpose)
 	if err != nil {
 		return nil, err
 	}
@@ -119,6 +119,29 @@ func RequestRequirements(req *StartRequest, unit identity.Object) []Requirement 
 	}
 
 	return reqs
+}
+
+// startActionFor returns the action that starts a job of op and purpose p
+// through k. A drift check needs the action of a plan, because it changes
+// nothing: it returns ErrUnsupported for a drift check through write-back and
+// ErrInvalid for a drift check of an operation other than refresh.
+func startActionFor(k ExecutorKind, op Operation, p Purpose) (identity.Action, error) {
+	if p != PurposeDriftCheck {
+		return startAction(k, op)
+	}
+
+	if _, err := startAction(k, op); err != nil {
+		return "", err
+	}
+
+	switch {
+	case k != ExecutorRunner:
+		return "", fmt.Errorf("%w: a %s runs on a runner, not through %s", ErrUnsupported, p, k)
+	case op != OperationRefresh:
+		return "", fmt.Errorf("%w: a %s has the operation %s, not %s", ErrInvalid, p, OperationRefresh, op)
+	default:
+		return ActionUnitRunPlan, nil
+	}
 }
 
 // startAction returns the action that starts a job of op through k.
