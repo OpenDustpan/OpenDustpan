@@ -266,7 +266,7 @@ func runningJob(t *testing.T, id job.ID) job.Job {
 	return job.Job{
 		ID: id,
 		Spec: job.Spec{
-			Unit: unitOf(t, "acme", testUnit), Operation: job.OperationApply, Executor: job.ExecutorRunner,
+			Unit: unitOf(t, "acme", testUnit), Operation: job.OperationApply, Purpose: "", Executor: job.ExecutorRunner,
 			Location: job.Location{
 				Connection: "", Repository: "acme/infra", Ref: "main", Directory: "net", Revision: "abc123",
 			},
@@ -618,6 +618,25 @@ func TestJobDocument(t *testing.T) {
 
 	if strings.Contains(body, "0001-01-01") {
 		t.Errorf("body holds a zero time: %s", body)
+	}
+}
+
+// TestJobDocumentShowsThePurpose proves that a drift check says so in its
+// document, and that a job with no purpose leaves the member out.
+func TestJobDocumentShowsThePurpose(t *testing.T) {
+	t.Parallel()
+
+	for purpose, want := range map[job.Purpose]bool{job.PurposeDriftCheck: true, job.PurposeNone: false} {
+		j := runningJob(t, testJob)
+		j.Spec.Purpose = purpose
+
+		handler := newHandler(t, newAuthorizer(holdsBoth()...), newFakeJobs(j))
+		rec := serve(t, handler, request{method: http.MethodGet, path: jobPath("acme", testJob), token: testToken})
+
+		if got := strings.Contains(rec.Body.String(), `"purpose":"drift-check"`); got != want ||
+			(!want && strings.Contains(rec.Body.String(), `"purpose"`)) {
+			t.Errorf("purpose %q: body = %s, want the purpose member = %t", purpose, rec.Body.String(), want)
+		}
 	}
 }
 

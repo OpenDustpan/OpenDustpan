@@ -260,6 +260,7 @@ func spec(unit identity.Object, op job.Operation) job.Spec {
 	return job.Spec{
 		Unit:      unit,
 		Operation: op,
+		Purpose:   "",
 		Executor:  job.ExecutorRunner,
 		Location: job.Location{
 			Connection: "github", Repository: "acme/infra", Ref: mainRef, Directory: "network", Revision: "abc123",

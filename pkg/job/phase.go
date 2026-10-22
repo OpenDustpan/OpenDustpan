@@ -14,13 +14,34 @@ import (
 //	runner      refresh    [apply]
 //	write-back  apply      [deliver]
 //
+// A drift check (PurposeDriftCheck) is the operation refresh with the one
+// phase plan. See PhasesFor.
+//
 // An apply and a destroy plan first, so that a person can read the plan and
 // a gate can bind its approvals to it. It returns ErrUnsupported for a
 // write-back of another operation, and ErrInvalid for an unknown executor or
 // operation.
 func DefaultPhases(k ExecutorKind, op Operation) ([]PhaseKind, error) {
-	if _, err := startAction(k, op); err != nil {
+	return PhasesFor(k, op, PurposeNone)
+}
+
+// PhasesFor returns the phases of a job of op and purpose p through k. With
+// no purpose it is DefaultPhases. A drift check has the one phase plan: it
+// reads the real resources and changes none, so it never holds the unit. It
+// returns ErrUnsupported for a drift check through write-back, and ErrInvalid
+// for a drift check of an operation other than refresh, and for an unknown
+// purpose.
+func PhasesFor(k ExecutorKind, op Operation, p Purpose) ([]PhaseKind, error) {
+	if !p.Valid() {
+		return nil, fmt.Errorf("%w: unknown purpose %q", ErrInvalid, p)
+	}
+
+	if _, err := startActionFor(k, op, p); err != nil {
 		return nil, err
+	}
+
+	if p == PurposeDriftCheck {
+		return []PhaseKind{PhasePlan}, nil
 	}
 
 	if k == ExecutorWriteBack {
