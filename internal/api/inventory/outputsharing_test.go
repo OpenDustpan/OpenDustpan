@@ -145,10 +145,7 @@ func newSharingFixture(t *testing.T, routeAuthz, serviceAuthz identity.Authorize
 		t.Fatalf("inventory handler: %v", err)
 	}
 
-	return sharingFixture{
-		lockFixture: lockFixture{handler: handler, store: nil, audit: auditStore},
-		settings:    settings,
-	}
+	return sharingFixture{handler: handler, store: nil, audit: auditStore, settings: settings}
 }
 
 // TestOutputSharingRoutesDeclareActions proves the rows of the setting: a read
@@ -182,7 +179,13 @@ func TestOutputSharingRoutesDeclareActions(t *testing.T) {
 
 		obj, err := route.Resolve(nil, routeRequest(t, route, "test-token"))
 		if err != nil || obj.String() != "acme" || !obj.IsNamespace() {
-			t.Errorf("route %s %s object = %q, %v, want the namespace acme", route.Method, route.Path, obj.String(), err)
+			t.Errorf(
+				"route %s %s object = %q, %v, want the namespace acme",
+				route.Method,
+				route.Path,
+				obj.String(),
+				err,
+			)
 		}
 
 		probeRoute(t, f.handler, route)
@@ -230,11 +233,19 @@ func TestOutputSharingRoundTrip(t *testing.T) {
 		t.Fatalf("read after the change = %s, want namespace", rec.Body.String())
 	}
 
-	if len(f.settings.entries) != 1 {
-		t.Fatalf("the change wrote %d audit entries, want 1", len(f.settings.entries))
+	checkSettingEntry(t, f.settings.entries)
+}
+
+// checkSettingEntry fails the test unless entries is the one audit entry of
+// the change of acme by alice to namespace.
+func checkSettingEntry(t *testing.T, entries []audit.Entry) {
+	t.Helper()
+
+	if len(entries) != 1 {
+		t.Fatalf("the change wrote %d audit entries, want 1", len(entries))
 	}
 
-	e := f.settings.entries[0]
+	e := entries[0]
 	if e.Subject != "alice" || e.Namespace != "acme" || e.Object != "acme" || e.Action != "unit:manage-sharing" ||
 		len(e.Changes) != 1 || e.Changes[0].New != "namespace" {
 		t.Fatalf("audit entry = %+v, want the change of acme by alice", e)

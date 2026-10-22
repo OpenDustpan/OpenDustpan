@@ -1,6 +1,8 @@
 package sqlite_test
 
 import (
+	"database/sql"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -52,9 +54,11 @@ func outputShareHarness(t *testing.T) outputsharetest.Harness {
 		Audited: func(t *testing.T, ns string) []string {
 			t.Helper()
 
-			var actions []string
-			for _, e := range allAuditEntries(t, s, namespace.Name(ns)) {
-				actions = append(actions, e.Action)
+			entries := allAuditEntries(t, s, namespace.Name(ns))
+			actions := make([]string, 0, len(entries))
+
+			for i := range entries {
+				actions = append(actions, entries[i].Action)
 			}
 
 			return actions
@@ -63,16 +67,14 @@ func outputShareHarness(t *testing.T) outputsharetest.Harness {
 		SettingRaw: func(t *testing.T, ns namespace.Name, value string) {
 			t.Helper()
 
-			setSettingRow(t, path, ns, value, true)
+			plantSettingRow(t, path, ns, value)
 		},
 	}
 }
 
-// setSettingRow writes value as the output sharing setting of ns with direct
-// SQL. With ignoreCheck, the connection turns the CHECK constraints off, as
-// a row of another version could hold such a value. It returns the error of
-// the write.
-func setSettingRow(t *testing.T, path string, ns namespace.Name, value string, ignoreCheck bool) error {
+// rawSettingDB opens the database at path with direct SQL, on one
+// connection, because a pragma holds for one connection only.
+func rawSettingDB(t *testing.T, path string) *sql.DB {
 	t.Helper()
 
 	conn, err := openRawDB(path)
@@ -80,28 +82,48 @@ func setSettingRow(t *testing.T, path string, ns namespace.Name, value string, i
 		t.Fatalf("open raw database: %v", err)
 	}
 
-	// A pragma holds for one connection only.
 	conn.SetMaxOpenConns(1)
 
-	defer func() {
+	t.Cleanup(func() {
 		if closeErr := conn.Close(); closeErr != nil {
 			t.Errorf("close raw database: %v", closeErr)
 		}
-	}()
+	})
 
-	if ignoreCheck {
-		if _, execErr := conn.ExecContext(t.Context(), `PRAGMA ignore_check_constraints = ON`); execErr != nil {
-			t.Fatalf("ignore check constraints: %v", execErr)
-		}
+	return conn
+}
+
+// storeSettingRow writes value as the output sharing setting of ns with direct
+// SQL, with the CHECK of the column on, and returns the error of the write.
+func storeSettingRow(t *testing.T, path string, ns namespace.Name, value string) error {
+	t.Helper()
+
+	_, err := rawSettingDB(t, path).ExecContext(t.Context(),
+		`UPDATE namespaces SET output_sharing_default = ? WHERE name = ?`, value, ns.String())
+	if err != nil {
+		return fmt.Errorf("update the output sharing setting: %w", err)
 	}
 
-	_, err = conn.ExecContext(t.Context(),
+	return nil
+}
+
+// plantSettingRow writes value as the output sharing setting of ns with direct
+// SQL and the CHECK constraints off, as a row of another version could hold
+// such a value.
+func plantSettingRow(t *testing.T, path string, ns namespace.Name, value string) {
+	t.Helper()
+
+	conn := rawSettingDB(t, path)
+
+	if _, err := conn.ExecContext(t.Context(), `PRAGMA ignore_check_constraints = ON`); err != nil {
+		t.Fatalf("ignore check constraints: %v", err)
+	}
+
+	_, err := conn.ExecContext(t.Context(),
 		`UPDATE namespaces SET output_sharing_default = ? WHERE name = ?`, value, ns.String())
-	if ignoreCheck && err != nil {
+	if err != nil {
 		t.Fatalf("plant the output sharing setting %q: %v", value, err)
 	}
-
-	return err
 }
 
 func TestOutputShareConformance(t *testing.T) {
@@ -120,14 +142,14 @@ func TestOutputSharingDefaultColumnRefusesAnotherValue(t *testing.T) {
 	ensureNamespace(t, s, "acme")
 
 	for _, bad := range []string{"", "everyone", "Nobody", "namespace "} {
-		err := setSettingRow(t, path, "acme", bad, false)
+		err := storeSettingRow(t, path, "acme", bad)
 		if err == nil || !strings.Contains(err.Error(), "CHECK") {
 			t.Fatalf("store the setting %q = %v, want the refusal of the CHECK of the column", bad, err)
 		}
 	}
 
 	for _, good := range []string{"namespace", "nobody"} {
-		if err := setSettingRow(t, path, "acme", good, false); err != nil {
+		if err := storeSettingRow(t, path, "acme", good); err != nil {
 			t.Fatalf("store the setting %q: %v", good, err)
 		}
 	}

@@ -135,7 +135,12 @@ func (s *Service) SetSetting(
 
 // authorize checks that p may do action on the namespace ns. It fails
 // closed: an error of the Authorizer denies.
-func (s *Service) authorize(ctx context.Context, p identity.Principal, action identity.Action, ns namespace.Name) error {
+func (s *Service) authorize(
+	ctx context.Context,
+	p identity.Principal,
+	action identity.Action,
+	ns namespace.Name,
+) error {
 	if err := s.authorizer.Authorize(ctx, p, action, identity.NamespaceObject(ns)); err != nil {
 		return fmt.Errorf("authorize %s on %s: %w", action, ns, err)
 	}

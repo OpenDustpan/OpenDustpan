@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"testing"
 	"time"
 
@@ -56,11 +57,18 @@ func (fakeNamespaces) GetNamespace(_ context.Context, name namespace.Name) (name
 	}, nil
 }
 
-func (fakeNamespaces) SetOverrides(_ context.Context, _ namespace.Name, _ namespace.Overrides, _ namespace.Fence) error {
+func (fakeNamespaces) SetOverrides(
+	_ context.Context,
+	_ namespace.Name,
+	_ namespace.Overrides,
+	_ namespace.Fence,
+) error {
 	return nil
 }
 
-func (fakeNamespaces) ListNamespaces(_ context.Context) ([]namespace.Namespace, error) { return nil, nil }
+func (fakeNamespaces) ListNamespaces(_ context.Context) ([]namespace.Namespace, error) {
+	return nil, nil
+}
 
 func (fakeNamespaces) Ping(_ context.Context) error { return nil }
 
@@ -84,7 +92,11 @@ func (d *denyAuthorizer) Authorize(
 
 // newService returns a service over settings with an authorizer that denies
 // the actions in deny.
-func newService(t *testing.T, settings *fakeSettings, deny ...identity.Action) (*outputsharesvc.Service, *denyAuthorizer) {
+func newService(
+	t *testing.T,
+	settings *fakeSettings,
+	deny ...identity.Action,
+) (*outputsharesvc.Service, *denyAuthorizer) {
 	t.Helper()
 
 	authz := &denyAuthorizer{deny: map[identity.Action]bool{}, calls: nil}
@@ -101,6 +113,15 @@ func newService(t *testing.T, settings *fakeSettings, deny ...identity.Action) (
 	}
 
 	return svc, authz
+}
+
+// alice returns the principal of the calls: a person who is not an
+// administrator.
+func alice() identity.Principal {
+	return identity.Principal{
+		TemporaryExpiresAt: time.Time{}, TokenExpiresAt: time.Time{}, Subject: "alice", DisplayName: "alice",
+		TokenID: "", Kind: "", Credential: "", JobID: "", Admin: false, TemporaryAdministrator: false,
+	}
 }
 
 // hostileEntry is an audit entry of a caller that names another namespace,
@@ -131,21 +152,22 @@ func TestNewRefusesAMissingPort(t *testing.T) {
 	}
 }
 
-// TestSettingNeedsNamespaceRead proves that the read checks namespace:read on
-// the namespace itself, and reads no setting for a denied caller.
+// TestSettingNeedsNamespaceRead proves that the service checks the action
+// namespace:read on the namespace itself, and asks the store nothing for a
+// denied caller.
 func TestSettingNeedsNamespaceRead(t *testing.T) {
 	t.Parallel()
 
 	settings := &fakeSettings{err: nil, value: outputshare.DefaultNamespace, entries: nil, fences: nil, reads: 0}
 	svc, authz := newService(t, settings, identity.ActionNamespaceRead)
 
-	_, err := svc.Setting(t.Context(), identity.Principal{Subject: "alice"}, "acme")
+	_, err := svc.Setting(t.Context(), alice(), "acme")
 	if !errors.Is(err, identity.ErrDenied) {
 		t.Fatalf("Setting = %v, want identity.ErrDenied", err)
 	}
 
 	if settings.reads != 0 {
-		t.Fatalf("a denied read read the store %d times, want none", settings.reads)
+		t.Fatalf("a denied call asked the store %d times, want none", settings.reads)
 	}
 
 	if len(authz.calls) != 1 || authz.calls[0] != "namespace:read acme" {
@@ -154,7 +176,7 @@ func TestSettingNeedsNamespaceRead(t *testing.T) {
 
 	allowed, _ := newService(t, settings)
 
-	got, err := allowed.Setting(t.Context(), identity.Principal{Subject: "alice"}, "acme")
+	got, err := allowed.Setting(t.Context(), alice(), "acme")
 	if err != nil || got != outputshare.DefaultNamespace {
 		t.Fatalf("Setting = %q, %v, want namespace", got, err)
 	}
@@ -169,7 +191,7 @@ func TestSetSettingNeedsManageSharing(t *testing.T) {
 	settings := &fakeSettings{err: nil, value: outputshare.DefaultNobody, entries: nil, fences: nil, reads: 0}
 	svc, authz := newService(t, settings, identity.ActionUnitManageSharing)
 
-	err := svc.SetSetting(t.Context(), identity.Principal{Subject: "alice"}, "acme",
+	err := svc.SetSetting(t.Context(), alice(), "acme",
 		outputshare.DefaultNamespace, hostileEntry())
 	if !errors.Is(err, identity.ErrDenied) {
 		t.Fatalf("SetSetting = %v, want identity.ErrDenied", err)
@@ -194,7 +216,7 @@ func TestSetSettingRefusesAnInvalidValue(t *testing.T) {
 		settings := &fakeSettings{err: nil, value: outputshare.DefaultNobody, entries: nil, fences: nil, reads: 0}
 		svc, _ := newService(t, settings)
 
-		err := svc.SetSetting(t.Context(), identity.Principal{Subject: "alice"}, "acme", bad, hostileEntry())
+		err := svc.SetSetting(t.Context(), alice(), "acme", bad, hostileEntry())
 		if !errors.Is(err, outputshare.ErrInvalid) {
 			t.Fatalf("SetSetting(%q) = %v, want ErrInvalid", bad, err)
 		}
@@ -215,7 +237,7 @@ func TestSetSettingStampsTheAuditEntry(t *testing.T) {
 	settings := &fakeSettings{err: nil, value: outputshare.DefaultNobody, entries: nil, fences: nil, reads: 0}
 	svc, _ := newService(t, settings)
 
-	err := svc.SetSetting(t.Context(), identity.Principal{Subject: "alice"}, "acme",
+	err := svc.SetSetting(t.Context(), alice(), "acme",
 		outputshare.DefaultNamespace, hostileEntry())
 	if err != nil {
 		t.Fatalf("SetSetting: %v", err)
@@ -225,20 +247,38 @@ func TestSetSettingStampsTheAuditEntry(t *testing.T) {
 		t.Fatalf("the change wrote %d entries, want 1", len(settings.entries))
 	}
 
-	e := settings.entries[0]
-	if e.Namespace != "acme" || e.Object != "acme" || e.Action != "unit:manage-sharing" ||
-		e.Kind != audit.KindChange || e.Outcome != audit.OutcomeSuccess || e.Subject != "alice" ||
-		!e.At.Equal(time.UnixMilli(1_790_000_000_000)) {
-		t.Fatalf("audit entry = %+v, want the change of acme by alice", e)
-	}
-
-	if len(e.Changes) != 1 || e.Changes[0].Key != outputsharesvc.SettingKey || e.Changes[0].Old == nil ||
-		*e.Changes[0].Old != "nobody" || e.Changes[0].New != "namespace" {
-		t.Fatalf("audit changes = %+v, want nobody to namespace", e.Changes)
-	}
+	checkStampedEntry(t, settings.entries[0])
 
 	if want := (namespace.Fence{Namespace: "acme", FailoverVersion: 7}); settings.fences[0] != want {
 		t.Fatalf("fence = %+v, want %+v", settings.fences[0], want)
+	}
+}
+
+// checkStampedEntry fails the test unless e is the entry of the change of
+// acme by alice from nobody to namespace.
+func checkStampedEntry(t *testing.T, e audit.Entry) {
+	t.Helper()
+
+	got := []string{
+		e.Namespace.String(), e.Object, e.Action, string(e.Kind), string(e.Outcome), e.Subject,
+		e.At.UTC().Format(time.RFC3339Nano),
+	}
+	want := []string{
+		"acme", "acme", "unit:manage-sharing", string(audit.KindChange), string(audit.OutcomeSuccess), "alice",
+		time.UnixMilli(1_790_000_000_000).UTC().Format(time.RFC3339Nano),
+	}
+
+	if !slices.Equal(got, want) {
+		t.Fatalf("audit entry fields = %q, want %q", got, want)
+	}
+
+	if len(e.Changes) != 1 {
+		t.Fatalf("audit changes = %+v, want one", e.Changes)
+	}
+
+	c := e.Changes[0]
+	if c.Key != outputsharesvc.SettingKey || c.Old == nil || *c.Old != "nobody" || c.New != "namespace" {
+		t.Fatalf("audit change = %+v, want nobody to namespace", c)
 	}
 }
 
@@ -252,7 +292,7 @@ func TestSetSettingFailsClosedOnAStoreError(t *testing.T) {
 	}
 	svc, _ := newService(t, settings)
 
-	err := svc.SetSetting(t.Context(), identity.Principal{Subject: "alice"}, "acme",
+	err := svc.SetSetting(t.Context(), alice(), "acme",
 		outputshare.DefaultNamespace, hostileEntry())
 	if !errors.Is(err, outputshare.ErrInvalid) {
 		t.Fatalf("SetSetting = %v, want the error of the store", err)

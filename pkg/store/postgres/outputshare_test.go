@@ -1,6 +1,7 @@
 package postgres_test
 
 import (
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -41,9 +42,7 @@ func outputShareHarness(base string) outputsharetest.Factory {
 			SettingRaw: func(t *testing.T, ns namespace.Name, value string) {
 				t.Helper()
 
-				if err := setSettingRow(t, schemaURL, ns, value, true); err != nil {
-					t.Fatalf("plant the output sharing setting %q: %v", value, err)
-				}
+				plantSettingRow(t, schemaURL, ns, value)
 			},
 		}
 	}
@@ -53,19 +52,19 @@ func outputShareHarness(base string) outputsharetest.Factory {
 func auditActionsOf(t *testing.T, s *postgres.Store, ns namespace.Name) []string {
 	t.Helper()
 
-	var actions []string
-	for _, e := range allAuditEntries(t, s, ns) {
-		actions = append(actions, e.Action)
+	entries := allAuditEntries(t, s, ns)
+	actions := make([]string, 0, len(entries))
+
+	for i := range entries {
+		actions = append(actions, entries[i].Action)
 	}
 
 	return actions
 }
 
-// setSettingRow writes value as the output sharing setting of ns in the
-// schema that schemaURL names, with direct SQL. With dropCheck, it first
-// drops the CHECK of the column in that schema, as a row of another version
-// could hold such a value. It returns the error of the write.
-func setSettingRow(t *testing.T, schemaURL string, ns namespace.Name, value string, dropCheck bool) error {
+// rawSettingConn connects to the schema that schemaURL names with direct SQL.
+// The caller closes the connection with closeSettingConn.
+func rawSettingConn(t *testing.T, schemaURL string) *pgx.Conn {
 	t.Helper()
 
 	conn, err := pgx.Connect(t.Context(), schemaURL)
@@ -73,23 +72,55 @@ func setSettingRow(t *testing.T, schemaURL string, ns namespace.Name, value stri
 		t.Fatalf("connect: %v", err)
 	}
 
-	defer func() {
-		if closeErr := conn.Close(t.Context()); closeErr != nil {
-			t.Errorf("close: %v", closeErr)
-		}
-	}()
+	return conn
+}
 
-	if dropCheck {
-		const drop = `ALTER TABLE namespaces DROP CONSTRAINT IF EXISTS namespaces_output_sharing_default_check`
-		if _, execErr := conn.Exec(t.Context(), drop); execErr != nil {
-			t.Fatalf("drop the check of the output sharing setting: %v", execErr)
-		}
+// closeSettingConn closes conn and reports an error of the close.
+func closeSettingConn(t *testing.T, conn *pgx.Conn) {
+	t.Helper()
+
+	if err := conn.Close(t.Context()); err != nil {
+		t.Errorf("close: %v", err)
+	}
+}
+
+// storeSettingRow writes value as the output sharing setting of ns with direct
+// SQL, with the CHECK of the column in place, and returns the error of the
+// write.
+func storeSettingRow(t *testing.T, schemaURL string, ns namespace.Name, value string) error {
+	t.Helper()
+
+	conn := rawSettingConn(t, schemaURL)
+	defer closeSettingConn(t, conn)
+
+	_, err := conn.Exec(t.Context(),
+		`UPDATE namespaces SET output_sharing_default = $1 WHERE name = $2`, value, ns.String())
+	if err != nil {
+		return fmt.Errorf("update the output sharing setting: %w", err)
 	}
 
-	_, err = conn.Exec(t.Context(),
-		`UPDATE namespaces SET output_sharing_default = $1 WHERE name = $2`, value, ns.String())
+	return nil
+}
 
-	return err
+// plantSettingRow drops the CHECK of the column in the schema that schemaURL
+// names and writes value as the output sharing setting of ns, as a row of
+// another version could hold such a value.
+func plantSettingRow(t *testing.T, schemaURL string, ns namespace.Name, value string) {
+	t.Helper()
+
+	conn := rawSettingConn(t, schemaURL)
+	defer closeSettingConn(t, conn)
+
+	const drop = `ALTER TABLE namespaces DROP CONSTRAINT IF EXISTS namespaces_output_sharing_default_check`
+	if _, err := conn.Exec(t.Context(), drop); err != nil {
+		t.Fatalf("drop the check of the output sharing setting: %v", err)
+	}
+
+	_, err := conn.Exec(t.Context(),
+		`UPDATE namespaces SET output_sharing_default = $1 WHERE name = $2`, value, ns.String())
+	if err != nil {
+		t.Fatalf("plant the output sharing setting %q: %v", value, err)
+	}
 }
 
 func TestOutputShareConformance(t *testing.T) {
@@ -119,14 +150,14 @@ func TestOutputSharingDefaultColumnRefusesAnotherValue(t *testing.T) {
 	ensureNamespace(t, s, "acme")
 
 	for _, bad := range []string{"", "everyone", "Nobody", "namespace "} {
-		err := setSettingRow(t, schemaURL, "acme", bad, false)
+		err := storeSettingRow(t, schemaURL, "acme", bad)
 		if err == nil || !strings.Contains(err.Error(), "namespaces_output_sharing_default_check") {
 			t.Fatalf("store the setting %q = %v, want the refusal of the CHECK of the column", bad, err)
 		}
 	}
 
 	for _, good := range []string{"namespace", "nobody"} {
-		if err := setSettingRow(t, schemaURL, "acme", good, false); err != nil {
+		if err := storeSettingRow(t, schemaURL, "acme", good); err != nil {
 			t.Fatalf("store the setting %q: %v", good, err)
 		}
 	}

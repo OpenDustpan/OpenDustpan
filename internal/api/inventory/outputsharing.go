@@ -23,7 +23,8 @@ const outputSharingPath = namespacePath + "/output-sharing"
 // errOutputSharingBody names the body that a change of the setting needs. Its
 // text is the error of the 400 answer.
 var errOutputSharingBody = errors.New(
-	`invalid output sharing body: provide {"newUnitDefault":"nobody"} or {"newUnitDefault":"namespace"}`)
+	`invalid output sharing body: provide {"newUnitDefault":"nobody"} or {"newUnitDefault":"namespace"}`,
+)
 
 // outputSharingDocument is the output sharing setting of a namespace on the
 // wire. NewUnitDefault is the sharing rule that a new unit of the namespace
@@ -71,7 +72,8 @@ func (h *Handler) getOutputSharing(w http.ResponseWriter, r *http.Request, p ide
 
 	d, err := h.outputSharing.Setting(ctx, p, obj.Namespace())
 	if err != nil {
-		h.writeOutputSharingFailure(w, r, p, identity.ActionNamespaceRead, obj, err)
+		denial := refusal.Denial{Action: identity.ActionNamespaceRead, Object: obj, Reason: "", Window: 0}
+		h.writeOutputSharingFailure(w, r, p, denial, err)
 
 		return
 	}
@@ -96,7 +98,8 @@ func (h *Handler) putOutputSharing(w http.ResponseWriter, r *http.Request, p ide
 	entry := auditEntry(r, p, obj, identity.ActionUnitManageSharing, "")
 
 	if err := h.outputSharing.SetSetting(ctx, p, obj.Namespace(), d, entry); err != nil {
-		h.writeOutputSharingFailure(w, r, p, identity.ActionUnitManageSharing, obj, err)
+		denial := refusal.Denial{Action: identity.ActionUnitManageSharing, Object: obj, Reason: "", Window: 0}
+		h.writeOutputSharingFailure(w, r, p, denial, err)
 
 		return
 	}
@@ -106,12 +109,13 @@ func (h *Handler) putOutputSharing(w http.ResponseWriter, r *http.Request, p ide
 
 // writeOutputSharingFailure answers the error of a setting route. A refusal
 // of the service writes an audit entry of the outcome denied: the route check
-// has allowed the request, so the middleware has not recorded it.
+// has allowed the request, so the middleware has not recorded it. d holds the
+// action and the object of the route.
 func (h *Handler) writeOutputSharingFailure(
-	w http.ResponseWriter, r *http.Request, p identity.Principal, action identity.Action, obj identity.Object, err error,
+	w http.ResponseWriter, r *http.Request, p identity.Principal, d refusal.Denial, err error,
 ) {
 	if errors.Is(err, identity.ErrDenied) {
-		h.guard.Record(r.Context(), r, p, refusal.Denial{Action: action, Object: obj, Reason: "", Window: 0})
+		h.guard.Record(r.Context(), r, p, d)
 	}
 
 	h.writeError(r.Context(), w, err)

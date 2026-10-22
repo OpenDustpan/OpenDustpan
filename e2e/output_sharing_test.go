@@ -1503,8 +1503,8 @@ func checkSettingAudit(ctx context.Context, t *testing.T, env *e2e.Env) {
 
 	outcomes := map[string]int{}
 
-	for _, e := range listing.Entries {
-		if e.Action == "unit:manage-sharing" && e.Object == e2e.Namespace {
+	for i := range listing.Entries {
+		if e := &listing.Entries[i]; e.Action == "unit:manage-sharing" && e.Object == e2e.Namespace {
 			outcomes[e.Outcome]++
 		}
 	}

@@ -311,7 +311,7 @@ func readNamespaceRow(t *testing.T, id any) (int, error) {
 }
 
 // readNamespaceRowWith writes one namespaces row with the id value id and the
-// output sharing setting setting to a table file and reads the file back. It
+// value setting of the output sharing setting to a table file and reads the file back. It
 // returns the number of rows that reached the caller and the error of the
 // read.
 func readNamespaceRowWith(t *testing.T, id, setting any) (int, error) {
@@ -415,21 +415,35 @@ func TestReadPortableOutputSharingDefault(t *testing.T) {
 			t.Parallel()
 
 			rows, err := readNamespaceRowWith(t, id, tc.setting)
-			if tc.want && (err != nil || rows != 1) {
-				t.Fatalf("read: rows = %d, err = %v, want 1 row", rows, err)
-			}
-
 			if tc.want {
-				return
-			}
-
-			if !errors.Is(err, backup.ErrCorrupt) || !errors.Is(err, outputshare.ErrInvalid) {
-				t.Fatalf("read: err = %v, want ErrCorrupt and outputshare.ErrInvalid", err)
-			}
-
-			if rows != 0 {
-				t.Fatalf("read: %d rows reached the caller, want none", rows)
+				checkSettingKept(t, rows, err)
+			} else {
+				checkSettingRefused(t, rows, err)
 			}
 		})
+	}
+}
+
+// checkSettingKept fails the test unless the read of one namespaces row gave
+// that row with no error.
+func checkSettingKept(t *testing.T, rows int, err error) {
+	t.Helper()
+
+	if err != nil || rows != 1 {
+		t.Fatalf("read: rows = %d, err = %v, want 1 row", rows, err)
+	}
+}
+
+// checkSettingRefused fails the test unless the read of one namespaces row
+// gave no row and an error that wraps ErrCorrupt and outputshare.ErrInvalid.
+func checkSettingRefused(t *testing.T, rows int, err error) {
+	t.Helper()
+
+	if !errors.Is(err, backup.ErrCorrupt) || !errors.Is(err, outputshare.ErrInvalid) {
+		t.Fatalf("read: err = %v, want ErrCorrupt and outputshare.ErrInvalid", err)
+	}
+
+	if rows != 0 {
+		t.Fatalf("read: %d rows reached the caller, want none", rows)
 	}
 }
