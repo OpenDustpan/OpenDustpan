@@ -10,10 +10,10 @@ import (
 
 	registryapi "opendustpan.org/opendustpan/internal/api/registry"
 	"opendustpan.org/opendustpan/internal/api/tfe"
+	"opendustpan.org/opendustpan/internal/registry/service"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/registry"
 	"opendustpan.org/opendustpan/pkg/registry/pgpverify"
-	"opendustpan.org/opendustpan/pkg/registry/service"
 )
 
 // WithRegistry sets the stores of the private registry: the releases and the
