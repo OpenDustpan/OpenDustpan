@@ -44,7 +44,12 @@ func testLastSiteAdministrator(t *testing.T, d *delegation) {
 	wantLastSiteAdministrator(t, "disable of the last site administrator",
 		d.principals.DisablePrincipal(ctx, managePrincipals, bootstrap(), admin.ID))
 
-	_, err := d.access.RevokeByID(ctx, changeEntry(bootstrap(), identity.ActionServerManageAccess), bootstrap(), grant.ID)
+	_, err := d.access.RevokeByID(
+		ctx,
+		changeEntry(bootstrap(), identity.ActionServerManageAccess),
+		bootstrap(),
+		grant.ID,
+	)
 	wantLastSiteAdministrator(t, "revoke of the last site-administrator grant", err)
 
 	// Every refused change left the administrator as it was.
@@ -108,7 +113,12 @@ func testLastSiteAdministratorGroup(t *testing.T, d *delegation) {
 		d.principals.DeletePrincipal(ctx, changeEntry(bootstrap(), identity.ActionServerManagePrincipals),
 			bootstrap(), admin.ID))
 
-	_, err := d.access.RevokeByID(ctx, changeEntry(bootstrap(), identity.ActionServerManageAccess), bootstrap(), grant.ID)
+	_, err := d.access.RevokeByID(
+		ctx,
+		changeEntry(bootstrap(), identity.ActionServerManageAccess),
+		bootstrap(),
+		grant.ID,
+	)
 	wantLastSiteAdministrator(t, "revoke of the grant of the group", err)
 
 	// A direct grant to the same person is a second path: the group can go.

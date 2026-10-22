@@ -333,28 +333,21 @@ func endRecordTx(ctx context.Context, e audit.Entry, subject access.Subject, end
 	at := codec.Millis(e.At)
 
 	return guardSiteAdministrator(ctx, func(q *db.Queries) error {
-		return endRecordRows(ctx, q, e, subject, end, at)
+		n, err := end.record(q, at)
+		if err != nil {
+			return fmt.Errorf("end record: %w", err)
+		}
+
+		if n == 0 {
+			return principal.ErrNotFound
+		}
+
+		if err := end.members(q, at); err != nil {
+			return fmt.Errorf("end memberships: %w", err)
+		}
+
+		return revokeGrantsOf(ctx, q, subject, e)
 	})
-}
-
-// endRecordRows ends the record, the memberships and the grants of subject.
-func endRecordRows(
-	ctx context.Context, q *db.Queries, e audit.Entry, subject access.Subject, end ending, at int64,
-) error {
-	n, err := end.record(q, at)
-	if err != nil {
-		return fmt.Errorf("end record: %w", err)
-	}
-
-	if n == 0 {
-		return principal.ErrNotFound
-	}
-
-	if err := end.members(q, at); err != nil {
-		return fmt.Errorf("end memberships: %w", err)
-	}
-
-	return revokeGrantsOf(ctx, q, subject, e)
 }
 
 // CreateGroup implements principal.Store.
@@ -842,8 +835,8 @@ func guardSiteAdministrator(ctx context.Context, change func(q *db.Queries) erro
 			return fmt.Errorf("count site administrators: %w", err)
 		}
 
-		if err := change(q); err != nil {
-			return err
+		if changeErr := change(q); changeErr != nil {
+			return changeErr
 		}
 
 		if before == 0 {

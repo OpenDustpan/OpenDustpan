@@ -63,7 +63,9 @@ var (
 	// installation with no site administrator: the delete or the disable of
 	// the last one, or the end of the last grant, membership or group that
 	// gives the role.
-	ErrLastSiteAdministrator = errors.New("cannot remove the last site administrator: give the site-administrator role to a second person first")
+	ErrLastSiteAdministrator = errors.New(
+		"cannot remove the last site administrator: give the site-administrator role to a second person first",
+	)
 	// ErrEscalation reports a grant that gives more than the granter holds
 	// on its object.
 	ErrEscalation = errors.New("grant gives more than the granter holds")

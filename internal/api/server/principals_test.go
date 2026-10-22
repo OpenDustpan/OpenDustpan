@@ -1178,7 +1178,12 @@ func TestLastSiteAdministratorIsKept(t *testing.T) {
 		body   string
 	}{
 		{"delete", http.MethodDelete, func(admin string) string { return "/api/server/principals/" + admin }, ""},
-		{"disable", http.MethodPost, func(admin string) string { return "/api/server/principals/" + admin + "/disable" }, ""},
+		{
+			"disable",
+			http.MethodPost,
+			func(admin string) string { return "/api/server/principals/" + admin + "/disable" },
+			"",
+		},
 	}
 
 	for _, tc := range cases {
@@ -1200,7 +1205,10 @@ func TestLastSiteAdministratorIsKept(t *testing.T) {
 			}
 
 			entry := storetest.ServerChange(time.Unix(0, 0), "@server")
-			if err := st.CreateGrant(t.Context(), grant, namespace.Fence{}, entry, nil); err != nil {
+			fence := namespace.Fence{Namespace: "", FailoverVersion: 0}
+
+			err := st.CreateGrant(t.Context(), grant, fence, entry, nil)
+			if err != nil {
 				t.Fatalf("create grant: %v", err)
 			}
 
