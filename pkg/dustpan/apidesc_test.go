@@ -578,6 +578,7 @@ func hostileOperation(change func(o *apidesc.Operation)) apidesc.Operation {
 		IfMatchRequired: false,
 		ETag:            false,
 		Query:           nil,
+		Statuses:        []int{200},
 		Bodies:          &apidesc.Bodies{Request: apidesc.NoBody, Response: apidesc.NoBody},
 	}
 	change(&o)

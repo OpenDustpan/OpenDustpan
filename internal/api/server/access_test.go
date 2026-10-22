@@ -74,7 +74,7 @@ type grantListDoc struct {
 type accessFixture struct {
 	store    *sqlite.Store
 	sessions *session.Sessions
-	handler  *apiserver.Handler
+	handler  testHandler
 }
 
 // newAccessFixture builds a handler whose authorizer and access service
@@ -155,7 +155,7 @@ func newAccessFixtureWith(t *testing.T, entries func(st *sqlite.Store) auditStor
 		t.Fatalf("sessions: %v", err)
 	}
 
-	handler, err := apiserver.NewHandler(apiserver.Config{
+	handler, err := newCheckedHandler(t, apiserver.Config{
 		Preferences:      nil,
 		GitHost:          nil,
 		Idempotency:      nil,

@@ -72,10 +72,10 @@ func newFakeMaintenance(state maintenance.State) *fakeMaintenance {
 
 // newMaintenanceHandler builds a Handler with fakeMaintenance, so the
 // maintenance tests drive the routes without a database.
-func newMaintenanceHandler(t *testing.T, fake *fakeMaintenance) *apiserver.Handler {
+func newMaintenanceHandler(t *testing.T, fake *fakeMaintenance) testHandler {
 	t.Helper()
 
-	handler, err := apiserver.NewHandler(apiserver.Config{
+	handler, err := newCheckedHandler(t, apiserver.Config{
 		Preferences:      nil,
 		GitHost:          nil,
 		Idempotency:      nil,
@@ -119,7 +119,7 @@ func newMaintenanceHandler(t *testing.T, fake *fakeMaintenance) *apiserver.Handl
 // serveMaintenance sends one installation API request with the test token and
 // returns its status and body.
 func serveMaintenance(
-	t *testing.T, handler *apiserver.Handler, method, path, body string,
+	t *testing.T, handler testHandler, method, path, body string,
 ) (int, string) {
 	t.Helper()
 

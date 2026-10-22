@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/api/apidesc/apidesctest"
 	driftapi "opendustpan.org/opendustpan/internal/api/drift"
 	"opendustpan.org/opendustpan/pkg/drift"
 	"opendustpan.org/opendustpan/pkg/graph"
@@ -258,6 +259,9 @@ func (a *recordingAuthorizer) seen() []string {
 // rig holds the handler and the fakes behind it.
 type rig struct {
 	handler *driftapi.Handler
+	// served is the handler that the tests call: it fails a test when a
+	// handler answers a success status that the description does not give.
+	served  http.Handler
 	authz   *recordingAuthorizer
 	results *fakeResults
 	checker *fakeChecker
@@ -292,7 +296,13 @@ func newRig(t *testing.T, authz *recordingAuthorizer, opts ...rigOption) *rig {
 		t.Fatalf("handler: %v", err)
 	}
 
-	return &rig{handler: handler, authz: authz, results: results, checker: checker}
+	return &rig{
+		handler: handler,
+		served:  apidesctest.CheckStatus(t, handler),
+		authz:   authz,
+		results: results,
+		checker: checker,
+	}
 }
 
 // request is one call of a test: the method, the path, the token and the body.
@@ -314,7 +324,7 @@ func (r *rig) serve(t *testing.T, q request) *httptest.ResponseRecorder {
 	}
 
 	rec := httptest.NewRecorder()
-	r.handler.ServeHTTP(rec, req)
+	r.served.ServeHTTP(rec, req)
 
 	return rec
 }

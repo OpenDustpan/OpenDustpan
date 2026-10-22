@@ -7,14 +7,18 @@ import (
 )
 
 // errorCases returns the bodies of the cases of the group errors.
+// mediaJSON is the media type of every body that the harness sends or injects.
+const mediaJSON = "application/json"
+
 func errorCases() map[string]caseFunc {
 	return map[string]caseFunc{
-		"errors/error-shape-is-decoded":                      errorShapeIsDecoded,
-		"errors/forbidden-error-is-decoded":                  forbiddenIsDecoded,
-		"errors/response-with-wrong-type-is-rejected":        wrongTypeIsRejected,
-		"errors/response-without-required-field-is-rejected": missingFieldIsRejected,
-		"errors/response-with-null-required-is-rejected":     nullRequiredIsRejected,
-		"errors/error-body-that-is-not-json":                 errorBodyNotJSON,
+		"errors/error-shape-is-decoded":                             errorShapeIsDecoded,
+		"errors/forbidden-error-is-decoded":                         forbiddenIsDecoded,
+		"errors/response-with-wrong-type-is-rejected":               wrongTypeIsRejected,
+		"errors/response-without-required-field-is-rejected":        missingFieldIsRejected,
+		"errors/response-with-null-required-is-rejected":            nullRequiredIsRejected,
+		"errors/error-body-that-is-not-json":                        errorBodyNotJSON,
+		"errors/success-status-outside-the-description-is-rejected": undescribedSuccessStatus,
 	}
 }
 
@@ -48,7 +52,7 @@ func invalidAnswer(ctx context.Context, env Env, body string) error {
 	}
 
 	f := faultOf(FaultStatus, opCapabilities)
-	f.Status, f.ContentType, f.Body = http.StatusOK, "application/json", []byte(body)
+	f.Status, f.ContentType, f.Body = http.StatusOK, mediaJSON, []byte(body)
 	env.Proxy.Inject(f)
 
 	res, err := env.Adapter.Call(ctx, callOf(opCapabilities, nil))
@@ -75,6 +79,42 @@ func nullRequiredIsRejected(ctx context.Context, env Env) error {
 
 func missingFieldIsRejected(ctx context.Context, env Env) error {
 	return invalidAnswer(ctx, env, `{"installationKind": "dev"}`)
+}
+
+// undescribedSuccessStatus injects a 202 and a 204 for getCapabilities, which
+// the description answers with 200 only. The 202 holds the true body, so that
+// only the status is wrong. The client must reject both.
+func undescribedSuccessStatus(ctx context.Context, env Env) error {
+	if err := need(env, opCapabilities); err != nil {
+		return err
+	}
+
+	want, err := get(ctx, env, capabilitiesPath, withoutToken)
+	if err != nil {
+		return err
+	}
+
+	for _, status := range []int{http.StatusAccepted, http.StatusNoContent} {
+		f := faultOf(FaultStatus, opCapabilities)
+		f.Status, f.ContentType = status, mediaJSON
+
+		if status == http.StatusAccepted {
+			f.Body = want.body
+		}
+
+		env.Proxy.Inject(f)
+
+		res, callErr := env.Adapter.Call(ctx, callOf(opCapabilities, nil))
+		if callErr != nil {
+			return callErr
+		}
+
+		if res.Error == nil || !res.Error.Invalid || res.Body != nil {
+			return failf("want an invalid-answer error and no body for status %d, got %+v", status, res)
+		}
+	}
+
+	return nil
 }
 
 func errorBodyNotJSON(ctx context.Context, env Env) error {
