@@ -28,8 +28,8 @@ func (h *Handler) rules() tofuunit.Rules {
 
 // appendDownloadAudit writes the audit entry of a state read: the action
 // unit:read-secrets, with the kind reveal for a person and tool-operation for
-// any other caller. A nil audit store writes no entry. It returns the append
-// error, so the read answers no content when the entry is lost.
+// any other caller. It returns the append error, so the read answers no
+// content when the entry is lost.
 func (h *Handler) appendDownloadAudit(
 	r *http.Request, p identity.Principal, obj identity.Object, version string,
 ) error {
@@ -51,8 +51,8 @@ func (h *Handler) recordOverride(
 }
 
 // appendOverrideAudit writes the audit entry of one allowed override: the
-// action and the unit (ADR 44, decision 7). A nil audit store writes no entry.
-// It returns the append error, so the write is refused when the entry is lost.
+// action and the unit. It returns the append error, so the write is refused
+// when the entry is lost.
 func (h *Handler) appendOverrideAudit(
 	r *http.Request, p identity.Principal, obj identity.Object, action identity.Action, version string,
 ) error {

@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"embed"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -12,6 +13,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -254,12 +256,19 @@ type archiveSet struct {
 func buildSet(t *testing.T, sg pgpfixture.Signer) archiveSet {
 	t.Helper()
 
+	return buildSetFor(t, sg, providerName)
+}
+
+// buildSetFor builds the archive set of version 1.0.0 of the provider name.
+func buildSetFor(t *testing.T, sg pgpfixture.Signer, name string) archiveSet {
+	t.Helper()
+
 	s := archiveSet{sums: nil, sig: nil, archive: map[string][]byte{}, names: nil}
 
 	var sums strings.Builder
 
 	for _, p := range []string{"linux_amd64", "darwin_arm64"} {
-		file := fmt.Sprintf("terraform-provider-%s_%s_%s.zip", providerName, providerVersion, p)
+		file := fmt.Sprintf("terraform-provider-%s_%s_%s.zip", name, providerVersion, p)
 		data := []byte("zip bytes of " + file)
 		sum := sha256.Sum256(data)
 		fmt.Fprintf(&sums, "%s  %s\n", hex.EncodeToString(sum[:]), file)
@@ -323,17 +332,24 @@ func (f fixture) stage(t *testing.T, ns string, data []byte) string {
 func (f fixture) publishBody(t *testing.T, s archiveSet) []byte {
 	t.Helper()
 
+	return f.publishBodyFor(t, s, providerName)
+}
+
+// publishBodyFor makes the publish body of s for the provider name.
+func (f fixture) publishBodyFor(t *testing.T, s archiveSet, name string) []byte {
+	t.Helper()
+
 	files := make([]map[string]string, 0, 2+len(s.names))
 	files = append(
 		files,
 		map[string]string{
 			"role":   "sums",
-			"name":   releasecheck.SumsName(providerName, providerVersion),
+			"name":   releasecheck.SumsName(name, providerVersion),
 			"upload": f.stage(t, "acme", s.sums),
 		},
 		map[string]string{
 			"role":   "signature",
-			"name":   releasecheck.SignatureName(providerName, providerVersion),
+			"name":   releasecheck.SignatureName(name, providerVersion),
 			"upload": f.stage(t, "acme", s.sig),
 		},
 	)
@@ -714,5 +730,165 @@ func TestNewHandlerNeedsItsDependencies(t *testing.T) {
 	})
 	if err == nil {
 		t.Error("NewHandler accepted an empty config")
+	}
+}
+
+// providerPage is the part of a provider list that the tests read.
+type providerPage struct {
+	Providers     []providerWire `json:"providers"`
+	NextPageToken string         `json:"nextPageToken"`
+}
+
+type providerWire struct {
+	Namespace string `json:"namespace"`
+	Name      string `json:"name"`
+}
+
+// pageNames returns the names of a provider page, and fails on a bad answer.
+func pageNames(t *testing.T, got response) ([]string, string) {
+	t.Helper()
+
+	wantCode(t, "list providers", got, http.StatusOK)
+
+	var page providerPage
+	if err := json.Unmarshal([]byte(got.body), &page); err != nil {
+		t.Fatalf("list providers answer = %q, %v", got.body, err)
+	}
+
+	if !strings.Contains(got.body, `"providers":[`) {
+		t.Fatalf("providers must be an array, never null: %s", got.body)
+	}
+
+	names := make([]string, 0, len(page.Providers))
+	for _, p := range page.Providers {
+		if p.Namespace != "acme" {
+			t.Errorf("provider %q is in namespace %q, want acme", p.Name, p.Namespace)
+		}
+
+		names = append(names, p.Name)
+	}
+
+	return names, page.NextPageToken
+}
+
+func TestListProviders(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	sg := pgpfixture.NewSigner(t)
+	f.trust(t, "acme", sg)
+
+	// Published out of order: the list is ordered by name.
+	for _, name := range []string{"vault", "payments", "dns"} {
+		body := f.publishBodyFor(t, buildSetFor(t, sg, name), name)
+		wantCode(t, "publish "+name, f.call(t, "admin", http.MethodPut,
+			base+"/providers/"+name+"/versions/"+providerVersion, body), http.StatusOK)
+	}
+
+	providers := base + "/providers"
+	tokenOf := func(name string) string { return base64.RawURLEncoding.EncodeToString([]byte(name)) }
+
+	tests := []struct {
+		name       string
+		query      string
+		wantNames  []string
+		wantCursor string
+	}{
+		{"all on one page", "", []string{"dns", "payments", "vault"}, ""},
+		{"first page of two", "?pageSize=2", []string{"dns", "payments"}, tokenOf("payments")},
+		{"second page", "?pageSize=2&pageToken=" + tokenOf("payments"), []string{"vault"}, ""},
+		{"page of one", "?pageSize=1&pageToken=" + tokenOf("dns"), []string{"payments"}, tokenOf("payments")},
+		{"exact fit has no token", "?pageSize=3", []string{"dns", "payments", "vault"}, ""},
+		{"token of a name not listed", "?pageToken=" + tokenOf("e"), []string{"payments", "vault"}, ""},
+		{"token past the end", "?pageToken=" + tokenOf("zzz"), []string{}, ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			names, token := pageNames(t, f.call(t, "reader", http.MethodGet, providers+tt.query, nil))
+			if !slices.Equal(names, tt.wantNames) || token != tt.wantCursor {
+				t.Errorf("page = %v, token %q; want %v, token %q", names, token, tt.wantNames, tt.wantCursor)
+			}
+		})
+	}
+
+	t.Run("an empty namespace", func(t *testing.T) {
+		t.Parallel()
+
+		got := f.call(t, "admin", http.MethodGet,
+			"/api/dustpan/v1/namespaces/beta/registry/providers", nil)
+		wantCode(t, "list", got, http.StatusOK)
+
+		if !strings.Contains(got.body, `"providers":[]`) || !strings.Contains(got.body, `"nextPageToken":""`) {
+			t.Errorf("empty namespace answer = %s", got.body)
+		}
+	})
+
+	t.Run("a namespace that does not exist", func(t *testing.T) {
+		t.Parallel()
+
+		wantCode(t, "list", f.call(t, "admin", http.MethodGet,
+			"/api/dustpan/v1/namespaces/gamma/registry/providers", nil), http.StatusNotFound)
+	})
+
+	t.Run("a caller that cannot read", func(t *testing.T) {
+		t.Parallel()
+
+		for _, subject := range []string{"publisher", "keyholder"} {
+			got := f.call(t, subject, http.MethodGet, providers, nil)
+			wantCode(t, subject, got, http.StatusForbidden)
+
+			if strings.Contains(got.body, "payments") {
+				t.Errorf("a refusal for %s names a provider: %s", subject, got.body)
+			}
+		}
+
+		wantCode(t, "no token", f.call(t, "", http.MethodGet, providers, nil), http.StatusUnauthorized)
+	})
+}
+
+// TestListProvidersHostileQuery sends hostile page sizes and tokens straight to
+// the handler. The token is untrusted input, so each value must answer 400
+// and none may reach the store.
+func TestListProvidersHostileQuery(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	enc := base64.RawURLEncoding.EncodeToString
+
+	tests := []struct {
+		name  string
+		query string
+	}{
+		{"zero page size", "?pageSize=0"},
+		{"negative page size", "?pageSize=-1"},
+		{"page size over the maximum", "?pageSize=1001"},
+		{"page size that is not a number", "?pageSize=ten"},
+		{"huge page size", "?pageSize=99999999999999999999"},
+		{"token that is not base64", "?pageToken=%25%25%25"},
+		{"padded base64", "?pageToken=" + url.QueryEscape(base64.URLEncoding.EncodeToString([]byte("ab")))},
+		{"path traversal", "?pageToken=" + enc([]byte("../../etc/passwd"))},
+		{"separator in the name", "?pageToken=" + enc([]byte("a/b"))},
+		{"upper case name", "?pageToken=" + enc([]byte("Payments"))},
+		{"control characters", "?pageToken=" + enc([]byte("a\r\nb"))},
+		{"null byte", "?pageToken=" + enc([]byte("a\x00b"))},
+		{"SQL text", "?pageToken=" + enc([]byte("x' OR '1'='1"))},
+		{"name over the length limit", "?pageToken=" + enc([]byte(strings.Repeat("a", 300)))},
+		{"token over the length limit", "?pageToken=" + strings.Repeat("A", 100000)},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := f.call(t, "reader", http.MethodGet, base+"/providers"+tt.query, nil)
+			wantCode(t, tt.name, got, http.StatusBadRequest)
+
+			if !strings.Contains(got.body, `"errorCode"`) {
+				t.Errorf("answer has no error code: %s", got.body)
+			}
+		})
 	}
 }

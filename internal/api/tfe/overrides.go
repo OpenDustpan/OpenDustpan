@@ -67,8 +67,9 @@ func overrideSwitchesOf(ov namespace.Overrides) overrideSwitchesBody {
 }
 
 // allowance returns the overrides that the caller may use on the workspace
-// id for one request. It refuses nothing: the domain refuses an override that
-// the result does not allow (ADR 44, decisions 4, 5 and 8).
+// id for one request: the switch of the namespace, narrowed by the switch of
+// the workspace, and each override action that the caller holds. It refuses
+// nothing: the domain refuses an override that the result does not allow.
 func (h *Handler) allowance(
 	ctx context.Context, p identity.Principal, id workspace.ID, obj identity.Object,
 ) (namespace.Overrides, error) {
@@ -81,9 +82,8 @@ func (h *Handler) allowance(
 }
 
 // appendOverrideAudit writes the audit entry of one allowed override: the
-// action, the unit, and the version it wrote (ADR 44, decision 7). A nil audit
-// store writes no entry. It returns the append error, so the route answers
-// 500 when the entry is lost.
+// action, the unit, and the version it wrote. It returns the append error, so
+// the route answers 500 when the entry is lost.
 func (h *Handler) appendOverrideAudit(
 	r *http.Request, p identity.Principal, obj identity.Object, action identity.Action, version string,
 ) error {

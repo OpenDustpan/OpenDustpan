@@ -116,8 +116,26 @@ func (m *memStore) List(_ context.Context, a registry.Address) ([]registry.Relea
 	return out, nil
 }
 
-func (m *memStore) Addresses(context.Context, namespace.Name, registry.Kind) ([]registry.Address, error) {
-	return nil, nil
+func (m *memStore) Addresses(_ context.Context, ns namespace.Name, kind registry.Kind) ([]registry.Address, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	seen := map[registry.Address]bool{}
+	out := []registry.Address{}
+
+	for k := range m.releases {
+		a := m.releases[k].Address
+		if a.Namespace == ns && a.Kind == kind && !seen[a] {
+			seen[a] = true
+			out = append(out, a)
+		}
+	}
+
+	slices.SortFunc(out, func(x, y registry.Address) int {
+		return strings.Compare(x.Name+"/"+x.System, y.Name+"/"+y.System)
+	})
+
+	return out, nil
 }
 
 func (m *memStore) AddKey(_ context.Context, k registry.KeyRecord, _ namespace.Fence, e audit.Entry) error {
