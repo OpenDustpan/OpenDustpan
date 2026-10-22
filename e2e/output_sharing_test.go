@@ -619,6 +619,9 @@ type readerGrants struct {
 	// writeUnit is a unit on which the principal holds the writer role, or
 	// "" for none.
 	writeUnit string
+	// name is the subject of the principal and the name of its role and its
+	// token. Each principal of one run has a name of its own.
+	name string
 }
 
 // outputReader makes a service principal with a custom role that holds only
@@ -628,18 +631,18 @@ type readerGrants struct {
 func outputReader(ctx context.Context, t *testing.T, env *e2e.Env, g readerGrants) string {
 	t.Helper()
 
-	ns, producer, writeUnit := g.ns, g.producer, g.writeUnit
+	ns, producer, writeUnit, name := g.ns, g.producer, g.writeUnit, strconv.Quote(g.name)
 
 	var principal e2ePrincipal
 	principalCall(ctx, t, env, principalStep{
-		http.MethodPost, "/api/server/principals", `{"subject":"output-reader","kind":"service"}`, http.StatusCreated,
+		http.MethodPost, "/api/server/principals", `{"subject":` + name + `,"kind":"service"}`, http.StatusCreated,
 	}, &principal)
 
 	var role struct {
 		ID string `json:"id"`
 	}
 	principalCall(ctx, t, env, principalStep{
-		http.MethodPost, "/api/server/roles", `{"name":"output-reader","actions":["unit:read-outputs"]}`,
+		http.MethodPost, "/api/server/roles", `{"name":` + name + `,"actions":["unit:read-outputs"]}`,
 		http.StatusCreated,
 	}, &role)
 
@@ -660,7 +663,7 @@ func outputReader(ctx context.Context, t *testing.T, env *e2e.Env, g readerGrant
 		Token e2eToken `json:"token"`
 	}
 	principalCall(ctx, t, env, principalStep{
-		http.MethodPost, "/api/server/principals/" + principal.ID + "/tokens", `{"name":"output-reader"}`,
+		http.MethodPost, "/api/server/principals/" + principal.ID + "/tokens", `{"name":` + name + `}`,
 		http.StatusCreated,
 	}, &created)
 
@@ -689,8 +692,9 @@ type ruleTarget struct {
 }
 
 // sharingRule saves a sharing rule on the unit r.producerID of the namespace
-// r.ns that names r.consumer, and answers the rule ID.
-func sharingRule(ctx context.Context, t *testing.T, env *e2e.Env, r ruleTarget) string {
+// r.ns that names r.consumer, and fails the test when the answer has no rule
+// ID.
+func sharingRule(ctx context.Context, t *testing.T, env *e2e.Env, r ruleTarget) {
 	t.Helper()
 
 	ns, producerID, consumer := r.ns, r.producerID, r.consumer
@@ -708,8 +712,6 @@ func sharingRule(ctx context.Context, t *testing.T, env *e2e.Env, r ruleTarget) 
 	if err := json.Unmarshal([]byte(body), &rule); err != nil || rule.ID == "" {
 		t.Fatalf("sharing rule answer %q has no id: %v", body, err)
 	}
-
-	return rule.ID
 }
 
 // checkSharingRuleRefusals proves that a rule never names a principal or a
@@ -756,6 +758,8 @@ func checkSharingRuleRefusals(ctx context.Context, t *testing.T, env *e2e.Env, p
 //   - The stack read and the export that such a job token gets hold no tag
 //     and no resource other than the root stack resource. The export of a
 //     version and the update history refuse it.
+//   - A job token of another namespace with no rule gets the answer of a
+//     stack that does not exist on the stack read and on the export.
 func pulumiSharingRules(t *testing.T, env *e2e.Env) {
 	t.Helper()
 
@@ -769,7 +773,9 @@ func pulumiSharingRules(t *testing.T, env *e2e.Env) {
 	}
 
 	consumer := "pulumi:" + shareStack(shareConsumer)
-	reader := outputReader(ctx, t, env, readerGrants{e2e.Namespace, "pulumi:" + shareStack(shareProducer), consumer})
+	reader := outputReader(ctx, t, env, readerGrants{
+		e2e.Namespace, "pulumi:" + shareStack(shareProducer), consumer, "output-reader",
+	})
 	stackPath := "/api/stacks/" + shareStack(shareProducer)
 	configSecret := producerConfigCiphertext(t, env)
 
@@ -816,6 +822,12 @@ func pulumiSharingRules(t *testing.T, env *e2e.Env) {
 	} {
 		shareAPI(ctx, t, env, c)
 	}
+
+	// A job of a stack of another namespace, with no rule that names it,
+	// gets the answer of a stack that does not exist.
+	env.CreateNamespace(ctx, t, e2e.Namespace2)
+	crossJob := jobTokenOf(t, e2e.Namespace2, "pulumi:"+e2e.Namespace2+"/"+e2e.Project+"/"+shareConsumer)
+	checkHiddenProducer(ctx, t, env, crossJob, pulumiHiddenPairs())
 }
 
 // pulumiShareAnchor is the Pulumi program of the anchor stack: one plain
@@ -973,8 +985,11 @@ func producerConfigCiphertext(t *testing.T, env *e2e.Env) string {
 //     each read answers 404, as for a workspace that does not exist.
 //   - The download that such a job token gets holds the outputs and no
 //     resource, and a state version that is not current is refused.
-//   - A grant of unit:manage-sharing on the installation saves no rule whose
-//     consumer is in another namespace.
+//   - A grant of unit:manage-sharing on the installation saves a rule whose
+//     consumer is in the namespace, and no rule whose consumer is in another
+//     namespace.
+//   - A read of outputs only of a producer whose state the client encrypted
+//     fails closed: 404 across namespaces and 409 in the namespace.
 func tofuSharingRules(t *testing.T, env *e2e.Env) {
 	t.Helper()
 
@@ -984,7 +999,7 @@ func tofuSharingRules(t *testing.T, env *e2e.Env) {
 		ctx,
 		t,
 		env,
-		readerGrants{e2e.Namespace, "opentofu:" + e2e.Namespace + "/" + e2e.Workspace, ""},
+		readerGrants{e2e.Namespace, "opentofu:" + e2e.Namespace + "/" + e2e.Workspace, "", "output-reader"},
 	)
 
 	outputsDir := writeShareConfig(t, tofuOutputsConfig(env.Host()))
@@ -1021,7 +1036,7 @@ func tofuSharingRules(t *testing.T, env *e2e.Env) {
 
 	env.StepIn(ctx, t, crossDir, withEnv(failStep("a job token across namespaces with no rule",
 		outputContains("404"), "plan", "-input=false", "-no-color"), tofuTokenConfig(t, env.Host(), jobToken)))
-	checkHiddenProducer(ctx, t, env, jobToken, producerID)
+	checkHiddenProducer(ctx, t, env, jobToken, tofuHiddenPairs(ctx, t, env, producerID))
 	checkOperatorSavesNoCrossRule(ctx, t, env, producerID, crossConsumer)
 	sharingRule(ctx, t, env, ruleTarget{e2e.Namespace, producerID, crossConsumer})
 	env.StepIn(ctx, t, crossDir, withEnv(step("a job token across namespaces with a rule",
@@ -1031,6 +1046,101 @@ func tofuSharingRules(t *testing.T, env *e2e.Env) {
 		name: "a job token across namespaces downloads no old state version", token: jobToken,
 		method: http.MethodGet, path: "/api/v2/state-versions/" + oldVersion + "/download", body: "",
 		want: http.StatusNotFound,
+	})
+	checkEncryptedProducer(ctx, t, env, encryptedTarget{crossConsumer: crossConsumer, crossJob: jobToken})
+}
+
+// shareEncrypted is the name of the workspace whose state the client encrypts.
+const shareEncrypted = "encrypted-producer"
+
+// tofuEncryptedProducerConfig is the configuration of a producer workspace
+// whose state the client encrypts, with the outputs of tofuProducerConfig.
+func tofuEncryptedProducerConfig(host string) string {
+	return fmt.Sprintf(`terraform {
+  cloud {
+    hostname     = %q
+    organization = %q
+    workspaces {
+      name = %q
+    }
+  }
+`, host, e2e.Namespace, shareEncrypted) + importEncryptionBlock() + fmt.Sprintf(`}
+
+output "vpc_id" {
+  value = %q
+}
+
+output "db_password" {
+  value     = %q
+  sensitive = true
+}
+`, shareVPC, shareSecret)
+}
+
+// encryptedTarget is the consumer of another namespace and its job token that
+// checkEncryptedProducer uses.
+type encryptedTarget struct {
+	crossConsumer string
+	crossJob      string
+}
+
+// checkEncryptedProducer proves that a read of outputs only of a producer whose
+// state the client encrypted fails closed, also with a rule and every grant:
+//
+//   - A job token of another namespace gets 404 with the body of a workspace
+//     that does not exist, on each route that it calls.
+//   - A job token of the producer namespace and a principal with
+//     unit:read-outputs and not unit:read get 409, with a message that names
+//     the client encryption.
+//   - The administrator, who holds unit:read, still reads the outputs.
+func checkEncryptedProducer(ctx context.Context, t *testing.T, env *e2e.Env, target encryptedTarget) {
+	t.Helper()
+
+	dir := writeShareConfig(t, tofuEncryptedProducerConfig(env.Host()))
+	env.StepIn(ctx, t, dir, step("share init client-encrypted producer", nil, "init", "-input=false", "-no-color"))
+	env.StepIn(ctx, t, dir, step("share apply client-encrypted producer", nil,
+		"apply", "-input=false", "-auto-approve", "-no-color"))
+
+	encryptedID := env.WorkspaceIDByName(ctx, t, shareEncrypted)
+	sameConsumer := "opentofu:" + e2e.Namespace + "/" + shareConsumer
+
+	sharingRule(ctx, t, env, ruleTarget{e2e.Namespace, encryptedID, target.crossConsumer})
+	sharingRule(ctx, t, env, ruleTarget{e2e.Namespace, encryptedID, sameConsumer})
+
+	byName := "/api/v2/organizations/" + e2e.Namespace + "/workspaces/"
+	workspaces := "/api/v2/workspaces/"
+	unknownID := "ws-nosuchworkspace0"
+	version := currentStateVersion(ctx, t, env, "", encryptedID)
+	outputs := workspaces + encryptedID + "/current-state-version-outputs"
+
+	checkHiddenProducer(ctx, t, env, target.crossJob, []hiddenPair{
+		{byName + shareEncrypted, byName + "no-such-workspace"},
+		{workspaces + encryptedID + "/current-state-version", workspaces + unknownID + "/current-state-version"},
+		{"/api/v2/state-versions/" + version + "/download", "/api/v2/state-versions/sv-nosuchversion000/download"},
+		{outputs, workspaces + unknownID + "/current-state-version-outputs"},
+	})
+
+	sameJob := jobTokenOf(t, e2e.Namespace, sameConsumer)
+	reader := outputReader(ctx, t, env, readerGrants{
+		e2e.Namespace, "opentofu:" + e2e.Namespace + "/" + shareEncrypted, "", "encrypted-output-reader",
+	})
+
+	for _, c := range []shareCall{
+		{"a job token of the namespace reads no outputs of a client-encrypted state", sameJob, http.MethodGet, outputs, "", http.StatusConflict},
+		{
+			"a job token of the namespace downloads no client-encrypted state", sameJob, http.MethodGet,
+			"/api/v2/state-versions/" + version + "/download", "", http.StatusConflict,
+		},
+		{"a person with read outputs only reads no client-encrypted state", reader, http.MethodGet, outputs, "", http.StatusConflict},
+	} {
+		if err := checkEncryptedByClient(shareAPI(ctx, t, env, c)); err != nil {
+			t.Fatalf("%s: %v", c.name, err)
+		}
+	}
+
+	shareAPI(ctx, t, env, shareCall{
+		name: "the administrator reads the outputs of a client-encrypted state", token: "", method: http.MethodGet,
+		path: outputs, body: "", want: http.StatusOK,
 	})
 }
 
@@ -1061,30 +1171,70 @@ type shareResourceID struct {
 	ID string `json:"id"`
 }
 
+// hiddenPair is a route of the producer and the same route of a unit that
+// does not exist.
+type hiddenPair struct {
+	known   string
+	unknown string
+}
+
 // checkHiddenProducer proves that a job token of another namespace with no
-// rule gets the same answer for the producer as for a workspace that does
-// not exist, on each route that terraform_remote_state calls.
-func checkHiddenProducer(ctx context.Context, t *testing.T, env *e2e.Env, token, producerID string) {
+// rule gets the same answer for the producer as for a unit that does not
+// exist, on each route of pairs: the same status (404) and the same body.
+func checkHiddenProducer(ctx context.Context, t *testing.T, env *e2e.Env, token string, pairs []hiddenPair) {
 	t.Helper()
 
-	byName := "/api/v2/organizations/" + e2e.Namespace + "/workspaces/"
-
-	for _, pair := range [][2]string{
-		{byName + e2e.Workspace, byName + "no-such-workspace"},
-		{"/api/v2/workspaces/" + producerID + "/current-state-version", "/api/v2/workspaces/ws-nosuchworkspace0/current-state-version"},
-	} {
+	for _, pair := range pairs {
 		known := shareAPI(ctx, t, env, shareCall{
 			name: "a job token across namespaces reads the producer with no rule", token: token,
-			method: http.MethodGet, path: pair[0], body: "", want: http.StatusNotFound,
+			method: http.MethodGet, path: pair.known, body: "", want: http.StatusNotFound,
 		})
 		unknown := shareAPI(ctx, t, env, shareCall{
-			name: "a job token across namespaces reads an unknown workspace", token: token,
-			method: http.MethodGet, path: pair[1], body: "", want: http.StatusNotFound,
+			name: "a job token across namespaces reads a unit that does not exist", token: token,
+			method: http.MethodGet, path: pair.unknown, body: "", want: http.StatusNotFound,
 		})
 
 		if known != unknown {
-			t.Fatalf("%s answers %q, and an unknown workspace answers %q; want the same body", pair[0], known, unknown)
+			t.Fatalf("%s answers %q, and a unit that does not exist answers %q; want the same body",
+				pair.known, known, unknown)
 		}
+	}
+}
+
+// tofuHiddenPairs are the routes of the OpenTofu producer that a job token
+// of another namespace calls: the routes of terraform_remote_state, and the
+// outputs route.
+func tofuHiddenPairs(ctx context.Context, t *testing.T, env *e2e.Env, producerID string) []hiddenPair {
+	t.Helper()
+
+	byName := "/api/v2/organizations/" + e2e.Namespace + "/workspaces/"
+	workspaces := "/api/v2/workspaces/"
+	unknownID := "ws-nosuchworkspace0"
+	version := currentStateVersion(ctx, t, env, "", producerID)
+
+	return []hiddenPair{
+		{byName + e2e.Workspace, byName + "no-such-workspace"},
+		{workspaces + producerID + "/current-state-version", workspaces + unknownID + "/current-state-version"},
+		{
+			"/api/v2/state-versions/" + version + "/download",
+			"/api/v2/state-versions/sv-nosuchversion000/download",
+		},
+		{
+			workspaces + producerID + "/current-state-version-outputs",
+			workspaces + unknownID + "/current-state-version-outputs",
+		},
+	}
+}
+
+// pulumiHiddenPairs are the routes of the Pulumi producer that a stack
+// reference of another namespace calls.
+func pulumiHiddenPairs() []hiddenPair {
+	known := "/api/stacks/" + shareStack(shareProducer)
+	unknown := "/api/stacks/" + shareStack("no-such-stack")
+
+	return []hiddenPair{
+		{known, unknown},
+		{known + "/export", unknown + "/export"},
 	}
 }
 
@@ -1135,8 +1285,9 @@ func stateOf(t *testing.T, body string) shareState {
 }
 
 // checkOperatorSavesNoCrossRule proves that a principal with a grant of
-// unit:manage-sharing on the installation only saves no rule whose consumer
-// is in another namespace.
+// unit:manage-sharing on the installation only saves a rule whose consumer is
+// in the producer namespace, and no rule whose consumer is in another
+// namespace.
 func checkOperatorSavesNoCrossRule(ctx context.Context, t *testing.T, env *e2e.Env, producerID, consumer string) {
 	t.Helper()
 
@@ -1166,6 +1317,30 @@ func checkOperatorSavesNoCrossRule(ctx context.Context, t *testing.T, env *e2e.E
 		http.StatusCreated,
 	}, &created)
 
+	// The positive control: the same grant saves a rule whose consumer is in
+	// the producer namespace, so the refusal below is for the other
+	// namespace only. The test removes the rule, so the next steps see no
+	// rule of the operator.
+	ruleBody := shareAPI(ctx, t, env, shareCall{
+		name: "an operator saves a rule in the namespace", token: created.Token.Secret, method: http.MethodPost,
+		path: sharingAPI + e2e.Namespace + "/units/" + producerID + "/sharing-rules",
+		body: `{"consumer":` + strconv.Quote(e2e.Namespace) + `}`, want: http.StatusCreated,
+	})
+
+	var rule struct {
+		ID string `json:"id"`
+	}
+
+	if err := json.Unmarshal([]byte(ruleBody), &rule); err != nil || rule.ID == "" {
+		t.Fatalf("the rule of the operator has no id: %v", err)
+	}
+
+	shareAPI(ctx, t, env, shareCall{
+		name: "an operator removes the rule in the namespace", token: created.Token.Secret,
+		method: http.MethodDelete,
+		path:   sharingAPI + e2e.Namespace + "/units/" + producerID + "/sharing-rules/" + rule.ID,
+		body:   "", want: http.StatusNoContent,
+	})
 	shareAPI(ctx, t, env, shareCall{
 		name: "an operator saves no rule across namespaces", token: created.Token.Secret, method: http.MethodPost,
 		path: sharingAPI + e2e.Namespace + "/units/" + producerID + "/sharing-rules",

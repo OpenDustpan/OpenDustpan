@@ -13,13 +13,16 @@
 // started the job holds unit:read-outputs on the producer.
 //
 // The package is tool-neutral. A unit is a unit reference: the tool, the
-// namespace and the tool's own name. The package never reads a state, and it
-// has no type that exists for one tool only.
+// namespace and the tool's own name. The package never reads a state: the
+// States port tells the checker the ID of the latest state of a unit and
+// whether the server can read that state. The package has no type that
+// exists for one tool only.
 package outputshare
 
 import (
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -49,6 +52,14 @@ var (
 	// another namespace, or a job whose unit the checker could not read. A
 	// tool adapter answers it exactly as a producer that does not exist.
 	ErrUnknownProducer = errors.New("producer not found")
+	// ErrClientEncrypted reports a read of outputs only that the checker refused,
+	// because the client encrypted the latest state of the producer. The
+	// server cannot read such a state, so it cannot answer the outputs only.
+	// A tool adapter answers 409 to a caller of the producer namespace.
+	ErrClientEncrypted = errors.New("state of the producer is encrypted by the client")
+	// ErrUnknownAttachment reports an attachment reference that names no
+	// saved attachment of a profile block outputs/opendustpan.
+	ErrUnknownAttachment = errors.New("attachment of the profile block not found")
 )
 
 // Bounds of a sharing rule.
@@ -57,6 +68,9 @@ const (
 	MaxIDBytes = 64
 	// MaxRulesPerProducer is the most rules that one producer object has.
 	MaxRulesPerProducer = 100
+	// MaxBlockBytes is the longest name of a profile block in an attachment
+	// reference.
+	MaxBlockBytes = 100
 )
 
 // ID is the ID of a sharing rule. The server makes it, and it is unique in
@@ -78,6 +92,60 @@ func (id ID) Validate() error {
 	}
 
 	return nil
+}
+
+// AttachmentRef is a reference to one block outputs/opendustpan of a saved
+// revision of a profile. The profile service puts it in a ReadRequest for an
+// open of the block by a job. It is not trusted: the checker reads the
+// attachment that it names through the Attachments port, and checks it.
+type AttachmentRef struct {
+	// Profile is the stable ID of the profile.
+	Profile string
+	// Block is the name of the block in the document of the revision.
+	Block string
+	// Revision is the number of the saved revision, 1 or more.
+	Revision int
+}
+
+// IsZero reports whether r names no attachment.
+func (r AttachmentRef) IsZero() bool {
+	return r == AttachmentRef{Profile: "", Block: "", Revision: 0}
+}
+
+// Validate returns an error that wraps ErrInvalid when r is not a reference
+// to an attachment: a profile ID or a block name that is empty, too long or
+// has a byte that is not in the allowlist, or a revision below 1.
+func (r AttachmentRef) Validate() error {
+	if !validRefPart(r.Profile, MaxIDBytes, "") {
+		return fmt.Errorf("%w: the profile ID of the attachment reference", ErrInvalid)
+	}
+
+	if !validRefPart(r.Block, MaxBlockBytes, "._") {
+		return fmt.Errorf("%w: the block name of the attachment reference", ErrInvalid)
+	}
+
+	if r.Revision < 1 {
+		return fmt.Errorf("%w: the revision %d of the attachment reference is below 1", ErrInvalid, r.Revision)
+	}
+
+	return nil
+}
+
+// validRefPart reports whether s has 1 to limit bytes from a-z, 0-9, "-" and
+// the bytes of extra.
+func validRefPart(s string, limit int, extra string) bool {
+	if s == "" || len(s) > limit {
+		return false
+	}
+
+	for i := range len(s) {
+		c := s[i]
+		if (c < 'a' || c > 'z') && (c < '0' || c > '9') && c != '-' && !strings.ContainsRune(extra, rune(c)) {
+			return false
+		}
+	}
+
+	return true
 }
 
 // Default is the namespace setting that decides the sharing rule of a new

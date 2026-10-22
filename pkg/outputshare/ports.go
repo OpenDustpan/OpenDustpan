@@ -84,8 +84,15 @@ type Store interface {
 	// another namespace matches a rule that names its unit or its collection
 	// by name. Of several matches it returns the one with the lowest ID.
 	//
-	// It returns ErrNoRule when no rule matches, and ErrInvalid when a
-	// placement fails Placement.Validate. A stored rule that fails
+	// A producer whose unit has no stable ID is a producer that the adapter
+	// could not resolve. Find runs the same query for it and returns
+	// ErrNoRule, because a stored rule never names a unit of its namespace
+	// with no stable ID. So an unknown producer takes the same work as a
+	// known one.
+	//
+	// It returns ErrNoRule when no rule matches, and ErrInvalid when the
+	// consumer fails Placement.Validate, or the producer fails it for a
+	// reason other than a unit with no stable ID. A stored rule that fails
 	// Rule.Validate never matches.
 	Find(ctx context.Context, producer, consumer Placement) (Rule, error)
 	// Setting returns the output sharing setting of the namespace ns. A
@@ -107,7 +114,9 @@ type ReadKind string
 // The kinds of a read.
 const (
 	// ReadByPrincipal is a read with the token or the session of a principal.
-	// The grants of the principal decide. No sharing rule applies.
+	// The grants of the principal decide. No sharing rule applies. A direct
+	// open of the profile block outputs/opendustpan is a read by the
+	// principal.
 	ReadByPrincipal ReadKind = "principal"
 	// ReadByJob is a read with a job token of a job of another unit. A
 	// sharing rule must name the unit of the job, and the principal that
@@ -116,45 +125,50 @@ const (
 	ReadByJob ReadKind = "job"
 	// ReadByAttachment is an open of the profile block outputs/opendustpan by
 	// a job of another unit. A sharing rule must name the unit of the job,
-	// and the attachment authority (ReadRequest.Authority) must hold the
-	// actions. The grants of the starter of the job do not count.
+	// and the attachment authority must hold the actions. The checker reads
+	// the authority from the saved attachment that ReadRequest.Attachment
+	// names. The grants of the starter of the job do not count.
 	ReadByAttachment ReadKind = "attachment"
 )
 
-// ReadRequest is one read of the outputs of a unit.
+// ReadRequest is one read of the outputs of a unit. No field of it gives a
+// grant: the checker reads each principal, each grant, the attachment and the
+// latest state through its ports.
 type ReadRequest struct {
 	// Caller is the principal of the request, with its credential and its
 	// job-ID claim.
 	Caller identity.Principal
 	// Producer is the unit whose outputs the caller reads, as the tool
-	// adapter resolved it from the route.
+	// adapter resolved it from the route. When the route names a unit that
+	// does not exist, the adapter still calls the checker, with the unit
+	// reference of the route, no stable ID and no collection, so that an
+	// unknown producer takes the same path as a known one.
 	Producer Placement
-	// Authority is the ID of the attachment authority of an open of the
-	// profile block outputs/opendustpan: the principal that made the
-	// attachment, or the blueprint publisher of a Catalog attachment, as the
-	// saved revision of the profile holds it. Only the profile service sets
-	// it. A tool adapter leaves it empty, and never sets it from a value of
-	// the request.
+	// Attachment names the saved attachment of an open of the profile block
+	// outputs/opendustpan by a job. Only the profile service sets it, from
+	// the revision that the job opens. A tool adapter leaves it zero. The
+	// checker does not trust it: it reads the attachment through the
+	// Attachments port, and denies unless the attachment is attached to the
+	// unit of the job and its block names the producer.
 	//
-	// For a job token, a set Authority makes the read a ReadByAttachment:
-	// the grants of the authority decide check 2, and the producer must be in
-	// the namespace of the unit of the job. For a principal, a direct open,
-	// the authority is the caller: an Authority that is not the ID of the
-	// caller is refused with ErrInvalid.
-	Authority string
+	// For a job token, a set Attachment makes the read a ReadByAttachment.
+	// For a principal, a set Attachment is refused with ErrInvalid: a direct
+	// open is a read by the principal with the grants of the caller.
+	Attachment AttachmentRef
+	// Latest is the ID of the state that the route answers, as State.ID
+	// names it: the current state version, or the version of the latest
+	// checkpoint. The checker reads the latest state of the producer through
+	// the States port and denies with CheckLatest when Latest is empty or is
+	// not the ID of that state. A route that reads an older state, such as an
+	// old state version, an export of a version or the history of updates,
+	// checks unit:read itself and does not call the checker.
+	Latest string
 	// Secrets is true when the route cannot answer without a secret output,
 	// as the decrypt of a secret output. A caller without unit:read-secrets
 	// is then denied by CheckSecrets. When it is false, such a caller gets a
 	// decision with Secrets false, and the answer leaves out each secret
 	// output.
 	Secrets bool
-	// Latest is true when the route answers the latest state of the
-	// producer: the current state version, or the latest checkpoint. A
-	// request with Latest false is denied by CheckLatest. A route that reads
-	// an older state, such as an old state version, an export of a version
-	// or the history of updates, checks unit:read itself and does not call
-	// the checker.
-	Latest bool
 }
 
 // Decision is the answer of an allowed read.
@@ -169,8 +183,19 @@ type Decision struct {
 	Secrets bool
 }
 
-// The checks of a read that a DeniedError can name.
+// The checks of a read that a DeniedError can name. When more than one check
+// fails, the error names the first of them in this order.
 const (
+	// CheckCaller is the check that the caller, its job, and the principal
+	// whose grants decide (the starter, the last saver of the trigger or the
+	// attachment authority) are known and active.
+	CheckCaller = "caller"
+	// CheckProducer is the check that the producer of the route exists.
+	CheckProducer = "producer"
+	// CheckAttachment is the check that the attachment of a ReadByAttachment
+	// is a saved attachment of the unit of the job whose block names the
+	// producer.
+	CheckAttachment = "attachment"
 	// CheckRule is the check that a sharing rule names the unit of the job.
 	CheckRule = "sharing-rule"
 	// CheckGrant is the check that the principal holds unit:read-outputs on
@@ -180,13 +205,12 @@ const (
 	// CheckSecrets is the check that the principal holds unit:read-secrets on
 	// the producer for a read of a secret output.
 	CheckSecrets = "secrets"
-	// CheckCaller is the check that the caller, its job, and the principal
-	// whose grants decide (the starter, the last saver of the trigger or the
-	// attachment authority) are known and active.
-	CheckCaller = "caller"
 	// CheckLatest is the check that the read is of the latest state of the
 	// producer.
 	CheckLatest = "latest-state"
+	// CheckClientEncrypted is the check that the server can read the latest
+	// state of the producer. A state that the client encrypted fails it.
+	CheckClientEncrypted = "client-encrypted"
 )
 
 // DeniedError is a read that a check denied. It names the check, the
@@ -195,16 +219,25 @@ const (
 // producer namespace. A tool adapter never puts it in an answer to a job of
 // another namespace.
 //
-// A denial of a read by a job of the producer namespace, and of a read by a
-// principal, wraps identity.ErrDenied: the adapter answers 403. A hidden
-// denial wraps ErrUnknownProducer and not identity.ErrDenied: the adapter
-// answers it exactly as a producer that does not exist (404, the same body),
-// so that a job cannot probe for the units of another namespace.
+// It unwraps to exactly one sentinel, and never to its cause:
+//   - A hidden denial (IsHidden) unwraps to ErrUnknownProducer only. The
+//     adapter answers it exactly as a producer that does not exist (404, the
+//     same body), so that a job cannot probe for the units of another
+//     namespace.
+//   - A denial by CheckProducer unwraps to ErrUnknownProducer only.
+//   - A denial by CheckClientEncrypted unwraps to ErrClientEncrypted only.
+//     The adapter answers 409 with a message that names the reason.
+//   - Each other denial unwraps to identity.ErrDenied only. The adapter
+//     answers 403.
+//
+// The cause stays in the field Err for the audit entry. So a cause that
+// wraps identity.ErrDenied, as the error of identity.Authorizer does, cannot
+// make a hidden denial match identity.ErrDenied.
 type DeniedError struct {
-	// Err is the cause, for example ErrNoRule. It can be nil.
+	// Err is the cause, for example ErrNoRule. It can be nil. Unwrap does not
+	// return it.
 	Err error
-	// Check is one of CheckRule, CheckGrant, CheckSecrets, CheckCaller and
-	// CheckLatest.
+	// Check is one of the Check constants.
 	Check string
 	// Producer is the unit whose outputs the caller asked for.
 	Producer identity.Object
@@ -236,7 +269,7 @@ func (e *DeniedError) Error() string {
 //
 // Defense in depth: the checker sets Hidden for a read by a job of another
 // namespace too; the namespace comparison stays, so that a checker that
-// forgets the flag cannot make a denial across namespaces answer 403.
+// forgets the flag cannot make a denial across namespaces answer 403 or 409.
 func (e *DeniedError) IsHidden() bool {
 	if e.Hidden {
 		return true
@@ -245,14 +278,78 @@ func (e *DeniedError) IsHidden() bool {
 	return e.Consumer.Namespace() != "" && e.Consumer.Namespace() != e.Producer.Namespace()
 }
 
-// Unwrap returns the cause and identity.ErrDenied, or ErrUnknownProducer for
-// a hidden denial, so that errors.Is finds both.
-func (e *DeniedError) Unwrap() []error {
-	if e.IsHidden() {
-		return []error{ErrUnknownProducer, e.Err}
+// Unwrap returns the one sentinel of the denial: ErrUnknownProducer for a
+// hidden denial and for CheckProducer, ErrClientEncrypted for
+// CheckClientEncrypted, and identity.ErrDenied for each other check. It never
+// returns the cause.
+func (e *DeniedError) Unwrap() error {
+	switch {
+	case e.IsHidden(), e.Check == CheckProducer:
+		return ErrUnknownProducer
+	case e.Check == CheckClientEncrypted:
+		return ErrClientEncrypted
+	default:
+		return identity.ErrDenied
 	}
+}
 
-	return []error{identity.ErrDenied, e.Err}
+// Attachment is a saved attachment of a profile block outputs/opendustpan,
+// as the Attachments port reads it from the saved revision.
+type Attachment struct {
+	// Unit is the unit that the revision of the profile is attached to, with
+	// its stable ID.
+	Unit identity.Object
+	// Producer is the unit that the block names, with the stable ID that the
+	// save of the revision resolved.
+	Producer identity.Object
+	// Authority is the principal ID of the attachment authority: the
+	// principal that made the attachment, or the blueprint publisher of a
+	// Catalog attachment.
+	Authority string
+}
+
+// Attachments reads the saved attachments of the profile block
+// outputs/opendustpan for the checker. The profile store serves it. It is the
+// only source of the attachment authority: no caller passes an authority to
+// the checker.
+type Attachments interface {
+	// Attachment returns the attachment that ref names in the namespace ns:
+	// the block ref.Block of the saved revision ref.Revision of the profile
+	// ref.Profile. It returns ErrInvalid when ref fails
+	// AttachmentRef.Validate, and ErrUnknownAttachment for an unknown
+	// profile, revision or block, for a block that is not of the provider
+	// outputs/opendustpan, and for a revision that is attached to no unit.
+	//
+	// The port does not compare the attachment with the read. The checker
+	// compares Unit with the unit of the job and Producer with the producer,
+	// by stable ID.
+	Attachment(ctx context.Context, ns namespace.Name, ref AttachmentRef) (Attachment, error)
+}
+
+// State is the latest state of a unit, as the States port tells it to the
+// checker.
+type State struct {
+	// ID names the latest state: the ID of the current state version, or the
+	// version of the latest checkpoint in decimal. It is empty for a unit
+	// with no state.
+	ID string
+	// ClientEncrypted is true when the client encrypted the latest state, so
+	// that the server cannot read its outputs or reduce it. A tool whose client never
+	// encrypts the state always answers false.
+	ClientEncrypted bool
+}
+
+// States tells the checker the latest state of a unit. The store of each tool
+// serves it.
+type States interface {
+	// Latest returns the latest state of the unit u. It looks up u by its
+	// reference (tool, namespace and name), and also by its stable ID when u
+	// has one. It returns ErrUnknownProducer when no unit has that reference,
+	// when the stable ID names another unit, and for a reference with no
+	// stable ID, after the same lookup, so that an unknown producer takes the
+	// same work as a known one. It returns ErrInvalid for an object that is
+	// not a unit.
+	Latest(ctx context.Context, u identity.Object) (State, error)
 }
 
 // Checker decides each read of the outputs of a unit. Each tool adapter calls
@@ -260,7 +357,8 @@ func (e *DeniedError) Unwrap() []error {
 // answer outputs only, and, for a job token of another unit, the routes that
 // answer a whole state, which then answer the root outputs only. The profile
 // service calls it for each open of the profile block outputs/opendustpan.
-// No adapter decides a read of outputs without it.
+// No adapter decides a read of outputs without it. An adapter calls it also
+// when the route names a producer that does not exist.
 //
 // For a read by a principal, the checker allows the read when the principal
 // holds unit:read-outputs on the producer, and unit:read-secrets for a secret
@@ -270,27 +368,48 @@ func (e *DeniedError) Unwrap() []error {
 //
 // For a read by a job token, the checker reads the job of the claim and its
 // unit, and the principal whose grants decide check 2: the attachment
-// authority when ReadRequest.Authority is set, else the last saver of the
-// trigger that started the job, else the principal that started it. It
-// allows the read only when both checks pass at this call: Store.Find returns
-// a rule that names the unit of the job, and that principal holds
-// unit:read-outputs on the producer with its own current grants, and
-// unit:read-secrets for a secret output. A job of the producer itself is not
-// a read of another unit and does not reach the checker.
+// authority of the saved attachment that ReadRequest.Attachment names, else
+// the last saver of the trigger that started the job, else the principal that
+// started it. It allows the read only when every check passes at this call:
+//   - For a ReadByAttachment, the Attachments port returns the attachment,
+//     its Unit is the unit of the job and its Producer is the producer, by
+//     stable ID, and the producer is in the namespace of the unit of the job.
+//   - Store.Find returns a rule that names the unit of the job.
+//   - That principal holds unit:read-outputs on the producer with its own
+//     current grants, and unit:read-secrets for a secret output.
+//
+// For each kind, the checker also reads the latest state of the producer
+// through the States port. It denies with CheckLatest when ReadRequest.Latest
+// is not the ID of that state. It denies with CheckClientEncrypted when the
+// client encrypted the state and the caller reads outputs only: a job token,
+// or a principal that does not hold unit:read on the producer. The server cannot answer the
+// outputs only of a state that the client encrypted. A principal that holds
+// unit:read reads such a state as before. The checker reads that grant
+// itself. A job of the producer itself is not a read of another unit and
+// does not reach the checker.
+//
+// The checker runs each check and each port call of the kind of the read
+// before it decides, also after a check fails and also for a producer that
+// does not exist. So an unknown producer and a hidden denial run the same
+// code, call the same ports and write the same audit entry, and the work does
+// not tell them apart.
 //
 // The checker fails closed. A job, a starter, a saver or an authority that is
-// missing, deleted or disabled denies. A request with Latest false denies. An
-// error of a port denies. Each denial writes an audit entry in the producer
-// namespace only, with the check that denied, the producer and the unit of
-// the job. For a job of another namespace, the entry names the unit of the
-// job by its reference, the namespace of the job gets no entry, and the
-// denial is hidden (DeniedError.IsHidden).
+// missing, deleted or disabled denies. An unknown or mismatched attachment
+// denies. A stale or empty Latest denies. An error of a port denies. Each
+// denial writes one audit entry in the producer namespace (the namespace of
+// the route) only, with the check that denied, the producer and the unit of
+// the job, when that namespace exists. For a job of another namespace, the
+// entry names the unit of the job by its reference, the namespace of the job
+// gets no entry, and the denial is hidden (DeniedError.IsHidden).
 type Checker interface {
 	// CheckRead returns the decision for req. It returns a *DeniedError when
-	// a check denies: it wraps identity.ErrDenied, or ErrUnknownProducer
-	// when it is hidden. It returns ErrInvalid when req.Producer fails
-	// Placement.Validate or req.Authority is set on a read by a principal
-	// that is not the authority, and an error of a port that it could not
-	// read. On each error the caller answers no output.
+	// a check denies. The error unwraps to one sentinel only, as
+	// DeniedError says. It returns ErrInvalid when req.Producer holds no
+	// unit reference, when a producer with a stable ID fails
+	// Placement.Validate, when req.Attachment is set on a read by a
+	// principal, and when req.Attachment fails AttachmentRef.Validate. It
+	// returns an error of a port that it could not read. On each error the
+	// caller answers no output.
 	CheckRead(ctx context.Context, req ReadRequest) (Decision, error)
 }

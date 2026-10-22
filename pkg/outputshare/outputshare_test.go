@@ -2,6 +2,7 @@ package outputshare_test
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -203,12 +204,17 @@ func TestDeniedError(t *testing.T) {
 	}
 
 	var err error = byJob
-	if !errors.Is(err, identity.ErrDenied) || !errors.Is(err, outputshare.ErrNoRule) {
-		t.Fatalf("errors.Is(%v) misses identity.ErrDenied or ErrNoRule", err)
+	if !errors.Is(err, identity.ErrDenied) {
+		t.Fatalf("errors.Is(%v, identity.ErrDenied) = false", err)
 	}
 
-	if errors.Is(err, outputshare.ErrUnknownProducer) {
-		t.Fatalf("a denial of a job of the producer namespace %v is hidden", err)
+	if errors.Is(err, outputshare.ErrNoRule) || errors.Is(err, outputshare.ErrUnknownProducer) {
+		t.Fatalf("a denial of a job of the producer namespace %v unwraps to its cause or is hidden", err)
+	}
+
+	var denied *outputshare.DeniedError
+	if !errors.As(fmt.Errorf("check: %w", err), &denied) || !errors.Is(denied.Err, outputshare.ErrNoRule) {
+		t.Fatal("the cause is not in the field Err of a wrapped denial")
 	}
 
 	for _, want := range []string{producer.String(), consumer.String(), outputshare.CheckRule} {
@@ -226,13 +232,61 @@ func TestDeniedError(t *testing.T) {
 	}
 }
 
+// TestDeniedErrorSentinel sends a denial of each check, with a cause that
+// wraps each other sentinel, and proves that the denial unwraps to its one
+// sentinel only, so that the order of the errors.Is tests of an adapter
+// cannot change the answer.
+func TestDeniedErrorSentinel(t *testing.T) {
+	t.Parallel()
+
+	producer := unitObject(t, "opentofu", acme, "network")
+	sameNS := unitObject(t, "opentofu", acme, "web")
+	sentinels := []error{identity.ErrDenied, outputshare.ErrUnknownProducer, outputshare.ErrClientEncrypted}
+
+	for _, tc := range []struct {
+		name     string
+		check    string
+		consumer identity.Object
+		want     error
+	}{
+		{"a principal denied by the grant check", outputshare.CheckGrant, identity.Object{}, identity.ErrDenied},
+		{"a job of the namespace with no rule", outputshare.CheckRule, sameNS, identity.ErrDenied},
+		{"a job of the namespace with a stale state", outputshare.CheckLatest, sameNS, identity.ErrDenied},
+		{"a job of the namespace with a bad attachment", outputshare.CheckAttachment, sameNS, identity.ErrDenied},
+		{"a principal on a client-encrypted state", outputshare.CheckClientEncrypted, identity.Object{}, outputshare.ErrClientEncrypted},
+		{"a job of the namespace on a client-encrypted state", outputshare.CheckClientEncrypted, sameNS, outputshare.ErrClientEncrypted},
+		{"a principal on an unknown producer", outputshare.CheckProducer, identity.Object{}, outputshare.ErrUnknownProducer},
+		{"a job of the namespace on an unknown producer", outputshare.CheckProducer, sameNS, outputshare.ErrUnknownProducer},
+	} {
+		for _, cause := range sentinels {
+			t.Run(tc.name+" with the cause "+cause.Error(), func(t *testing.T) {
+				t.Parallel()
+
+				denied := &outputshare.DeniedError{
+					Err: fmt.Errorf("%w: from a port", cause), Check: tc.check, Producer: producer,
+					Consumer: tc.consumer, Hidden: false,
+				}
+
+				for _, sentinel := range sentinels {
+					if got := errors.Is(denied, sentinel); got != errors.Is(sentinel, tc.want) {
+						t.Fatalf("errors.Is(%v, %v) = %t", denied, sentinel, got)
+					}
+				}
+			})
+		}
+	}
+}
+
 // TestDeniedErrorHidden sends each denial that must answer as an unknown
-// producer, and proves that it never wraps identity.ErrDenied, so that an
-// adapter cannot answer 403 for it.
+// producer, with a cause that wraps identity.ErrDenied or ErrClientEncrypted as
+// the error of identity.Authorizer does, and proves that it unwraps only to
+// ErrUnknownProducer, so that an adapter cannot answer 403 or 409 for it.
 func TestDeniedErrorHidden(t *testing.T) {
 	t.Parallel()
 
 	producer := unitObject(t, "pulumi", acme, "net/prod")
+	other := unitObject(t, "opentofu", beta, "web")
+	denied := fmt.Errorf("%w: no grant of unit:read-outputs", identity.ErrDenied)
 
 	for _, tc := range []struct {
 		name   string
@@ -242,32 +296,139 @@ func TestDeniedErrorHidden(t *testing.T) {
 			"a job of another namespace, with no flag",
 			&outputshare.DeniedError{
 				Err: outputshare.ErrNoRule, Check: outputshare.CheckRule, Producer: producer,
-				Consumer: unitObject(t, "opentofu", beta, "web"), Hidden: false,
+				Consumer: other, Hidden: false,
 			},
 		},
 		{
 			"a job of another namespace denied by the grant check",
 			&outputshare.DeniedError{
-				Err: nil, Check: outputshare.CheckGrant, Producer: producer,
-				Consumer: unitObject(t, "opentofu", beta, "web"), Hidden: true,
+				Err: nil, Check: outputshare.CheckGrant, Producer: producer, Consumer: other, Hidden: true,
+			},
+		},
+		{
+			"a grant check whose cause wraps identity.ErrDenied, with no flag",
+			&outputshare.DeniedError{
+				Err: denied, Check: outputshare.CheckGrant, Producer: producer, Consumer: other, Hidden: false,
+			},
+		},
+		{
+			"a grant check whose cause wraps identity.ErrDenied, with the flag",
+			&outputshare.DeniedError{
+				Err: denied, Check: outputshare.CheckGrant, Producer: producer, Consumer: other, Hidden: true,
+			},
+		},
+		{
+			"a secrets check whose cause wraps identity.ErrDenied",
+			&outputshare.DeniedError{
+				Err: denied, Check: outputshare.CheckSecrets, Producer: producer, Consumer: other, Hidden: false,
+			},
+		},
+		{
+			"a client-encrypted state for a job of another namespace",
+			&outputshare.DeniedError{
+				Err: fmt.Errorf("%w: envelope", outputshare.ErrClientEncrypted), Check: outputshare.CheckClientEncrypted,
+				Producer: producer, Consumer: other, Hidden: false,
+			},
+		},
+		{
+			"an unknown producer for a job of another namespace",
+			&outputshare.DeniedError{
+				Err: denied, Check: outputshare.CheckProducer, Producer: producer, Consumer: other, Hidden: true,
 			},
 		},
 		{
 			"a job whose unit the checker could not read",
 			&outputshare.DeniedError{
-				Err: nil, Check: outputshare.CheckCaller, Producer: producer, Consumer: identity.Object{}, Hidden: true,
+				Err: denied, Check: outputshare.CheckCaller, Producer: producer, Consumer: identity.Object{}, Hidden: true,
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			checkOnlyUnknownProducer(t, tc.denied)
+		})
+	}
+}
+
+// checkOnlyUnknownProducer fails t when denied is not hidden, or when it
+// unwraps to anything other than ErrUnknownProducer.
+func checkOnlyUnknownProducer(t *testing.T, denied *outputshare.DeniedError) {
+	t.Helper()
+
+	if !denied.IsHidden() {
+		t.Fatal("IsHidden() = false, want true")
+	}
+
+	err := fmt.Errorf("read: %w", denied)
+	if !errors.Is(err, outputshare.ErrUnknownProducer) {
+		t.Fatalf("errors.Is(%v, ErrUnknownProducer) = false", err)
+	}
+
+	for _, never := range []error{identity.ErrDenied, outputshare.ErrClientEncrypted, outputshare.ErrNoRule} {
+		if errors.Is(err, never) {
+			t.Fatalf("errors.Is(%v, %v) = true, want only ErrUnknownProducer", err, never)
+		}
+	}
+
+	if unwrapped := errors.Unwrap(denied); !errors.Is(unwrapped, outputshare.ErrUnknownProducer) ||
+		errors.Unwrap(unwrapped) != nil {
+		t.Fatalf("Unwrap() = %v, want ErrUnknownProducer and nothing under it", unwrapped)
+	}
+}
+
+// TestAttachmentRefValidate sends each attachment reference that is not
+// valid, and proves that Validate refuses it and does not change it.
+func TestAttachmentRefValidate(t *testing.T) {
+	t.Parallel()
+
+	good := outputshare.AttachmentRef{Profile: "prf-0a1b", Block: "network.vpc", Revision: 3}
+
+	if err := good.Validate(); err != nil {
+		t.Fatalf("Validate(%+v) = %v", good, err)
+	}
+
+	if good.IsZero() || !(outputshare.AttachmentRef{Profile: "", Block: "", Revision: 0}).IsZero() {
+		t.Fatal("IsZero is wrong")
+	}
+
+	for _, tc := range []struct {
+		name string
+		ref  outputshare.AttachmentRef
+	}{
+		{"zero", outputshare.AttachmentRef{Profile: "", Block: "", Revision: 0}},
+		{"no profile", outputshare.AttachmentRef{Profile: "", Block: good.Block, Revision: 3}},
+		{"no block", outputshare.AttachmentRef{Profile: good.Profile, Block: "", Revision: 3}},
+		{"revision 0", outputshare.AttachmentRef{Profile: good.Profile, Block: good.Block, Revision: 0}},
+		{"negative revision", outputshare.AttachmentRef{Profile: good.Profile, Block: good.Block, Revision: -1}},
+		{"profile with a slash", outputshare.AttachmentRef{Profile: "prf-1/../2", Block: good.Block, Revision: 3}},
+		{"profile with a dot", outputshare.AttachmentRef{Profile: "prf.1", Block: good.Block, Revision: 3}},
+		{"profile with an upper case byte", outputshare.AttachmentRef{Profile: "PRF-1", Block: good.Block, Revision: 3}},
+		{
+			"profile too long",
+			outputshare.AttachmentRef{
+				Profile: strings.Repeat("p", outputshare.MaxIDBytes+1), Block: good.Block, Revision: 3,
+			},
+		},
+		{"block with a slash", outputshare.AttachmentRef{Profile: good.Profile, Block: "a/b", Revision: 3}},
+		{"block with a CR LF", outputshare.AttachmentRef{Profile: good.Profile, Block: "a\r\nb", Revision: 3}},
+		{"block with a NUL", outputshare.AttachmentRef{Profile: good.Profile, Block: "a\x00", Revision: 3}},
+		{
+			"block too long",
+			outputshare.AttachmentRef{
+				Profile: good.Profile, Block: strings.Repeat("b", outputshare.MaxBlockBytes+1), Revision: 3,
 			},
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			if !tc.denied.IsHidden() {
-				t.Fatal("IsHidden() = false, want true")
+			before := tc.ref
+			if err := tc.ref.Validate(); !errors.Is(err, outputshare.ErrInvalid) {
+				t.Fatalf("Validate(%q) = %v, want ErrInvalid", tc.ref.Profile+"|"+tc.ref.Block, err)
 			}
 
-			if !errors.Is(tc.denied, outputshare.ErrUnknownProducer) || errors.Is(tc.denied, identity.ErrDenied) {
-				t.Fatalf("errors.Is(%v): want ErrUnknownProducer and not identity.ErrDenied", tc.denied)
+			if tc.ref != before {
+				t.Fatal("Validate changed the reference")
 			}
 		})
 	}

@@ -1,6 +1,6 @@
 // Package outputsharetest is the conformance suite of the ports of package
-// outputshare: Store and Checker, and the rule that the SQL adapter of a tool
-// store writes when it makes a unit. A new adapter runs Run with a Factory.
+// outputshare: Store, Checker, Attachments and States, and the rule that the
+// SQL adapter of a tool store writes when it makes a unit. A new adapter runs Run with a Factory.
 //
 // No adapter implements the ports yet. Each case names one behavior and is
 // skipped with the reason Pending until the slice that adds the first adapter
@@ -25,8 +25,14 @@ const Pending = "no adapter implements the output sharing ports yet; " +
 type Harness struct {
 	// Store keeps the rules and the setting.
 	Store outputshare.Store
-	// Checker decides each read.
+	// Checker decides each read. It reads the attachments and the latest
+	// states through Attachments and States.
 	Checker outputshare.Checker
+	// Attachments reads the saved attachments of the profile block
+	// outputs/opendustpan.
+	Attachments outputshare.Attachments
+	// States tells the latest state of a unit.
+	States outputshare.States
 	// Namespace makes the namespace name and returns its current fence.
 	Namespace func(t *testing.T, name string) namespace.Fence
 	// Unit makes a unit of the tool in the namespace, in the collection when
@@ -42,6 +48,13 @@ type Harness struct {
 	// Authority makes the attachment authority of an open of the profile
 	// block outputs/opendustpan and returns its principal ID.
 	Authority func(t *testing.T, ns namespace.Name) string
+	// Attach saves a revision of a profile with one block
+	// outputs/opendustpan that names the producer, made by the authority,
+	// attaches it to the unit, and returns the reference of the block.
+	Attach func(t *testing.T, unit, producer outputshare.Placement, authority string) outputshare.AttachmentRef
+	// SaveState saves a new latest state of the unit, encrypted by the client
+	// when encrypted is true, and returns its ID as State.ID names it.
+	SaveState func(t *testing.T, unit outputshare.Placement, encrypted bool) string
 	// Grant gives the principal the action on the object.
 	Grant func(t *testing.T, principal string, action identity.Action, object identity.Object)
 	// Job starts a job of the unit for the starter principal and returns the
@@ -52,6 +65,10 @@ type Harness struct {
 	// Audited is an optional hook: it returns the audit entries of the
 	// namespace, oldest first. A case that needs it skips when it is nil.
 	Audited func(t *testing.T, ns string) []string
+	// Calls is an optional hook: it returns the port calls that the checker
+	// made since the last call of Calls, in order, each as the port and the
+	// method with no argument. A case that needs it skips when it is nil.
+	Calls func(t *testing.T) []string
 	// StoreRaw is an optional hook: it writes the rule into the store with
 	// no Validate, as a row of another version or a restore would. A case
 	// that needs it skips when it is nil.
@@ -100,7 +117,10 @@ func Names() []string {
 
 // allCases returns the cases of the suite. Each call returns a new slice.
 func allCases() []suiteCase {
-	return slices.Concat(storeCases(), newUnitCases(), checkerCases(), attachmentCases())
+	return slices.Concat(
+		storeCases(), newUnitCases(), checkerCases(), hiddenCases(), latestCases(), attachmentCases(),
+		attachmentsCases(), statesCases(),
+	)
 }
 
 // storeCases are the behaviors of Store.
@@ -140,6 +160,7 @@ func storeCases() []suiteCase {
 		{nil, "store: find matches a consumer of another namespace by its reference"},
 		{nil, "store: find after a move of the consumer to another collection"},
 		{nil, "store: find returns ErrNoRule when no rule matches"},
+		{nil, "store: find of a producer with no stable ID runs the same query and returns ErrNoRule"},
 		{nil, "store: find never matches a stored row that fails Validate"},
 		{nil, "store: find refuses an invalid placement"},
 		{nil, "store: the setting is nobody for a namespace that never set it"},
@@ -180,18 +201,89 @@ func checkerCases() []suiteCase {
 		{nil, "checker: a job that ended denies"},
 		{nil, "checker: a job of another namespace reads only with a rule that names its unit or collection"},
 		{nil, "checker: a job of another namespace never matches a namespace rule"},
-		{nil, "checker: a job of another namespace with no rule answers ErrUnknownProducer, not identity.ErrDenied"},
-		{nil, "checker: a job of another namespace whose starter has no grant answers ErrUnknownProducer"},
-		{nil, "checker: a hidden denial writes its audit entry in the producer namespace only"},
-		{nil, "checker: a hidden denial writes no audit entry in the namespace of the job"},
 		{nil, "checker: a job of the producer namespace with no rule answers identity.ErrDenied"},
-		{nil, "checker: a job whose unit cannot be read gives a hidden denial"},
-		{nil, "checker: a request that is not of the latest state is denied by the latest-state check"},
 		{nil, "checker: a principal with unit:read-outputs and unit:read-secrets gets no right to decrypt"},
 		{nil, "checker: a stored rule that fails Validate denies"},
 		{nil, "checker: an error of a port denies"},
+		{nil, "checker: an error of a port whose text wraps identity.ErrDenied unwraps to one sentinel only"},
 		{nil, "checker: each denial writes an audit entry with the check, the producer and the unit of the job"},
+		{nil, "checker: of several failed checks the denial names the first in the order of the checks"},
 		{nil, "checker: an invalid producer placement is refused"},
+		{nil, "checker: a producer reference that is not a unit is refused with ErrInvalid"},
+		{nil, "checker: an unknown producer for a principal answers ErrUnknownProducer and not identity.ErrDenied"},
+		{nil, "checker: an unknown producer for a job of the producer namespace answers ErrUnknownProducer"},
+	}
+}
+
+// hiddenCases are the behaviors of the checker for a read by a job of another
+// namespace: a denial and an unknown producer answer the same, and take the
+// same work.
+func hiddenCases() []suiteCase {
+	return []suiteCase{
+		{nil, "hidden: a job of another namespace with no rule answers ErrUnknownProducer, not identity.ErrDenied"},
+		{nil, "hidden: a job of another namespace whose starter has no grant answers ErrUnknownProducer"},
+		{nil, "hidden: a grant check whose cause wraps identity.ErrDenied unwraps to ErrUnknownProducer only"},
+		{nil, "hidden: a secret output without unit:read-secrets answers ErrUnknownProducer only"},
+		{nil, "hidden: a job whose unit cannot be read gives a hidden denial"},
+		{nil, "hidden: a hidden denial writes its audit entry in the producer namespace only"},
+		{nil, "hidden: a hidden denial writes no audit entry in the namespace of the job"},
+		{nil, "hidden: an unknown producer answers ErrUnknownProducer only, as a hidden denial"},
+		{
+			nil,
+			"hidden: an unknown producer and a hidden denial each write one audit entry of the same kind " +
+				"in the namespace of the route",
+		},
+		{nil, "hidden: an unknown producer and a hidden denial make the same port calls in the same order"},
+		{nil, "hidden: a denial by the rule check and by the grant check make the same port calls"},
+		{
+			nil,
+			"hidden: an unknown producer in a namespace that does not exist writes no audit entry and answers ErrUnknownProducer",
+		},
+		{nil, "hidden: the audit entry names the unit of the job by its reference and never by a stable ID"},
+	}
+}
+
+// latestCases are the behaviors of the checker for the latest state of the
+// producer: the state ID of the request and a state that the client
+// encrypted.
+func latestCases() []suiteCase {
+	return []suiteCase{
+		{nil, "latest: a request with the ID of the latest state reads"},
+		{nil, "latest: a request with no state ID is denied by the latest-state check"},
+		{nil, "latest: a request with the ID of an older state is denied by the latest-state check"},
+		{nil, "latest: a request with the ID of a state of another unit is denied by the latest-state check"},
+		{nil, "latest: a new state between two reads makes the old ID stale"},
+		{nil, "latest: an error of the states port denies"},
+		{
+			nil,
+			"client-encrypted: the state refuses a job of the producer namespace with a rule and every grant with ErrClientEncrypted",
+		},
+		{
+			nil,
+			"client-encrypted: the state refuses a job of another namespace with a rule and every grant with ErrUnknownProducer only",
+		},
+		{nil, "client-encrypted: the state refuses an open of the profile block by a job"},
+		{
+			nil,
+			"client-encrypted: each refusal writes an audit entry in the producer namespace with the client-encrypted check",
+		},
+		{
+			nil,
+			"client-encrypted: a refusal of a job of another namespace writes no audit entry in the namespace of the job",
+		},
+		{
+			nil,
+			"client-encrypted: a principal without the grant is denied by the grant check before the client-encrypted check",
+		},
+		{
+			nil,
+			"client-encrypted: a principal with unit:read and unit:read-outputs reads a client-encrypted state as before",
+		},
+		{
+			nil,
+			"client-encrypted: a principal with unit:read-outputs and not unit:read is refused with ErrClientEncrypted",
+		},
+		{nil, "client-encrypted: a plain state after a client-encrypted state reads again"},
 	}
 }
 
@@ -206,8 +298,49 @@ func attachmentCases() []suiteCase {
 		{nil, "attachment: a secret output needs unit:read-secrets of the authority"},
 		{nil, "attachment: an authority that is deleted or disabled denies"},
 		{nil, "attachment: a job open of a producer of another namespace is denied and hidden"},
-		{nil, "attachment: a direct open uses the grants of the caller"},
-		{nil, "attachment: a direct open with an authority that is not the caller is refused"},
+		{nil, "attachment: an unknown profile, revision or block is denied by the attachment check"},
+		{nil, "attachment: an attachment of another unit is denied by the attachment check"},
+		{nil, "attachment: an attachment whose block names another producer is denied by the attachment check"},
+		{
+			nil,
+			"attachment: an escalation with the attachment of an administrator on another unit is denied and audited",
+		},
+		{
+			nil,
+			"attachment: an escalation with the reference of a block that names the producer from a profile of another unit is denied",
+		},
+		{nil, "attachment: the checker denies a mismatch that the attachments port answers"},
+		{nil, "attachment: an error of the attachments port denies"},
+		{nil, "attachment: a reference that fails Validate is refused with ErrInvalid"},
+		{nil, "attachment: a read by a principal with an attachment reference is refused with ErrInvalid"},
+		{nil, "attachment: a direct open is a read by the principal with the grants of the caller"},
 		{nil, "attachment: the decision names the kind attachment and the rule"},
+	}
+}
+
+// attachmentsCases are the behaviors of Attachments.
+func attachmentsCases() []suiteCase {
+	return []suiteCase{
+		{nil, "attachments: a saved attachment answers its unit, its producer and its authority"},
+		{nil, "attachments: the producer has the stable ID that the save resolved"},
+		{nil, "attachments: an unknown profile, revision or block answers ErrUnknownAttachment"},
+		{nil, "attachments: a block of another provider answers ErrUnknownAttachment"},
+		{nil, "attachments: a revision that is attached to no unit answers ErrUnknownAttachment"},
+		{nil, "attachments: a profile of another namespace answers ErrUnknownAttachment"},
+		{nil, "attachments: a reference that fails Validate answers ErrInvalid"},
+	}
+}
+
+// statesCases are the behaviors of States.
+func statesCases() []suiteCase {
+	return []suiteCase{
+		{nil, "states: latest answers the ID of the latest state of a unit of each tool"},
+		{nil, "states: latest after a new state answers the new ID"},
+		{nil, "states: latest of a unit with no state answers an empty ID"},
+		{nil, "states: latest of a state that the client encrypted is client-encrypted"},
+		{nil, "states: latest of an unknown unit answers ErrUnknownProducer"},
+		{nil, "states: latest of a reference with no stable ID answers ErrUnknownProducer after the same lookup"},
+		{nil, "states: latest of a stable ID that names another unit answers ErrUnknownProducer"},
+		{nil, "states: latest of an object that is not a unit answers ErrInvalid"},
 	}
 }

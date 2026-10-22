@@ -96,6 +96,26 @@ So no CLI version reads outputs only. Each read path reads a whole state.
      namespace only. It names the check, the producer and the unit of the
      job by its reference. The namespace of the job gets no entry, and no
      answer to the job names the check or the producer.
+   - In the port, such a denial unwraps to `outputshare.ErrUnknownProducer`
+     only. It never unwraps to `identity.ErrDenied`, also when its cause is
+     an error of `identity.Authorizer` that wraps `identity.ErrDenied`. The
+     cause stays in a field of the error for the audit entry. So the order in
+     which an adapter tests the errors cannot turn the 404 into a 403.
+   - **An unknown producer takes the same work as a hidden denial.** The
+     answer is not the only signal: a job can repeat a request many times
+     and measure the time. So a tool adapter calls the `Checker` also when
+     the route names a producer that does not exist, with the reference of
+     the route and no stable ID. The `Checker` runs each check and each port
+     call of the read before it decides, also after a check fails and also
+     for an unknown producer: it reads the job and the principal whose
+     grants decide, runs `Store.Find`, the grant lookups and the read of the
+     latest state, and then writes one audit entry of the same kind in the
+     namespace of the route, when that namespace exists. So an unknown
+     producer and a hidden denial run the same code and write the same audit
+     entry, and the work does not depend on which check fails. This also
+     records each probe in the audit log of the namespace that it probes.
+     The suite proves the same port calls and the same audit entry. It does
+     not measure time.
 
    This decision supersedes ADR 216 decision 8 and ADR 220 decision 12 for
    sharing rules. For each point of ADR 216 decision 8:
@@ -157,11 +177,26 @@ So no CLI version reads outputs only. Each read path reads a whole state.
    - For an open of the profile block `outputs/opendustpan` by a job, the
      attachment authority (ADR 207 decision 7): the principal that made the
      attachment, or the blueprint publisher of a Catalog attachment. The
-     grants of the starter do not count. The profile service passes the
-     authority to the `Checker` in `ReadRequest.Authority`, from the saved
-     revision of the profile. A tool adapter never sets it. For a direct
-     open, the authority is the caller, and the `Checker` refuses an
-     authority that is not the caller.
+     grants of the starter do not count.
+
+   No caller gives the `Checker` a principal whose grants decide. For an
+   open of the profile block, the profile service passes only a reference
+   to the saved attachment (`ReadRequest.Attachment`: the profile, the
+   revision and the block). The `Checker` does not trust the reference. It
+   reads the attachment through the small port `outputshare.Attachments`,
+   which the profile store serves, and takes the authority from the saved
+   revision. It denies with the check `attachment` unless the revision is
+   attached to the unit of the job and the block names this producer, both
+   by stable ID. So a job, an SDK caller or an adapter that copies a value by
+   mistake cannot read with the grants of another principal: a reference to
+   the attachment of an administrator on another unit, or to a block that
+   names another producer, denies, and the denial goes to the audit log. A
+   direct open is a read by the principal with the grants of the caller, and
+   the `Checker` refuses an attachment reference on a read by a principal.
+   We chose a reference and a port over a type that only the profile
+   package can make. Go cannot stop another package from making a value of
+   an exported type of `pkg/outputshare`, and a type of `pkg/profile` in the
+   port would make `pkg/outputshare` import the profile package.
 
    For each of them, check 2 uses `unit:read-outputs` in place of
    `unit:read`. Each other part of ADR 207 decision 7 and ADR 267 decision 14
@@ -215,7 +250,13 @@ So no CLI version reads outputs only. Each read path reads a whole state.
    **The routes that a CLI calls with a job token of another unit.** Each
    route below declares `unit:read` for a principal, as before. For a job
    token of another unit, it declares `unit:read-outputs` on the producer
-   and calls the `Checker` in place of the grant check, with `Latest` true.
+   and calls the `Checker` in place of the grant check, with
+   `ReadRequest.Latest` set to the ID of the state that it answers (the
+   state version, or the version of the checkpoint). The `Checker` reads the
+   latest state of the producer through the port `outputshare.States`, and
+   denies when the ID is empty or is not that of the latest state. So the
+   caller does not declare that the read is of the latest state: the
+   `Checker` compares it.
    It answers only the fields in the table. Each other field is left out or
    has its zero value: no stack tags, no VCS settings, no variables, no
    resource count, no lock holder.
@@ -235,16 +276,57 @@ So no CLI version reads outputs only. Each read path reads a whole state.
 
    **The reduced documents.** A secret or sensitive output is left out when
    `Decision.Secrets` is false.
-   - Pulumi: the deployment keeps the `manifest` and `secrets_providers`, so
-     that the CLI can decrypt. Its `resources` hold only the root
-     `pulumi:pulumi:Stack` resource, with its `urn`, `type` and `outputs`,
-     and no `inputs`. It has no other resource and no `pending_operations`.
+   - Pulumi: the export envelope keeps `version` (3, the version of the
+     deployment) and `features` when the checkpoint has it. The deployment
+     keeps the `manifest` and `secrets_providers`, so that the CLI can
+     decrypt. Its `resources` hold only the root `pulumi:pulumi:Stack`
+     resource, with its `urn`, `type`, `"custom": false` and `outputs`, and
+     no `inputs`. The server writes `custom` and does not depend on the
+     default of the CLI. The deployment has no other resource and no
+     `pending_operations`.
    - OpenTofu: `version`, `terraform_version`, `serial`, `lineage`,
      `outputs`, and `resources: []`. No `check_results`.
 
    The e2e step of each slice reads the answer that the CLI gets and asserts
    that it holds no other resource. A CLI that succeeds proves only that the
    answer is compatible, not that it is reduced.
+
+   The reduced documents have no proof from a CLI yet. The e2e steps "a job
+   token with a rule" (Pulumi) and "a job token across namespaces with a
+   rule" (OpenTofu) skip until the harness has a job token. Each reduced
+   document is compatible only when the slice that removes the skip runs
+   its step on each supported CLI version: 3.200.0, 3.250.0 and the latest
+   Pulumi, and 1.11, 1.12 and the latest OpenTofu. If a CLI version needs
+   a field that this ADR leaves out, that slice adds it under the rule of
+   the route table above.
+
+   **Client-encrypted OpenTofu state fails closed.** The server cannot read
+   an envelope that the client encrypted (`meta`, `encrypted_data`,
+   `encryption_version`, ADR 255), so it cannot reduce it to the root
+   outputs. An answer of the envelope as it is would give the whole state
+   to a consumer that has the key. So when the latest state of the producer
+   is client-encrypted, the `Checker` refuses each read of outputs only,
+   with the check `client-encrypted`, after all other checks:
+   - A job of another namespace gets the hidden 404, the same as for a
+     producer that does not exist (decision 3).
+   - A job of the producer namespace, and a principal that holds
+     `unit:read-outputs` and not `unit:read` on the producer, get 409, with
+     a message that names the reason: the client encrypted the state of the
+     producer. This is the answer of the reveal of ADR 255.
+   - A principal that holds `unit:read` on the producer is not an
+     outputs-only caller. It reads the state and the outputs as before: the
+     download answers the envelope, and the outputs routes answer what they
+     answer today. The `Checker` reads that grant itself.
+   - Each refusal writes an audit entry in the producer namespace, and none
+     in the namespace of the job.
+
+   The refusal covers `download`, `current-state-version`, the outputs
+   routes and an open of the profile block. So the row of
+   `current-state-version` needs no `md5` or `size` for such a producer.
+   The port `outputshare.States` tells the `Checker` that the client
+   encrypted the state (`State.ClientEncrypted`). A tool whose client never
+   encrypts the state answers false. The word is not "sealed", which the
+   glossary keeps for the encryption by the server.
 
    **The latest state only.** Decision 1 reads the outputs of the latest
    state. An outputs-only caller is a job token of another unit, or a
@@ -296,7 +378,11 @@ So no CLI version reads outputs only. Each read path reads a whole state.
     setting. Of the built-in roles, only `admin` holds it. A namespace can
     give it to others with a custom role.
 11. **The ports.** The package `pkg/outputshare` holds the tool-neutral ports:
-    `Store` (rules and the setting) and `Checker` (each read). The rule of a
+    `Store` (rules and the setting), `Checker` (each read), and the two
+    small ports that the `Checker` reads: `Attachments` (the saved
+    attachment of an open of the profile block, which the profile store
+    serves) and `States` (the ID of the latest state of a unit, and whether
+    the client encrypted it, which the store of each tool serves). The rule of a
     new unit is a write inside the SQL adapters (decision 4), not a port. `pkg/outputshare/outputsharetest` holds their
     conformance suite. The service goes to `internal/outputsharesvc` (ADR
     272). The port of decision 6 names ciphertext, which only the Pulumi CLI
@@ -310,8 +396,13 @@ So no CLI version reads outputs only. Each read path reads a whole state.
       route, so that `unit:manage-sharing` on one unit does not reach a rule
       of another unit or of the namespace.
     - The checker runs `Rule.Validate` on each rule that it reads, and checks
-      both conditions at each read, with the current grants. It denies a
-      read that is not of the latest state.
+      both conditions at each read, with the current grants. It reads the
+      latest state itself and denies a read of another state, and of a
+      state that the client encrypted. It reads the attachment authority
+      itself from the saved attachment, and denies an attachment of
+      another unit or of another producer.
+    - A hidden denial unwraps to one sentinel only, so an adapter cannot
+      answer it with 403.
     - The answer to a job token holds the root outputs only.
     - The decrypt route checks each ciphertext against the outputs.
     - An unknown value, a missing starter or an error of a port denies, and
@@ -326,6 +417,19 @@ So no CLI version reads outputs only. Each read path reads a whole state.
   package. ADR 213 says that the job token never goes in an environment
   variable.
 - Typed output contracts, in a new RFC.
+- A refusal on the consumer side. A rule only gives a read: it cannot push
+  data into the consumer, and a job reads another namespace only when its
+  own code names the producer. So the model of decision 3, where the
+  producer decides alone, does not hurt the consumer namespace. But that
+  namespace cannot stop its jobs from reading other namespaces, and it
+  cannot see which shares reach it. A later decision can add a setting of
+  the consumer namespace, for example
+  `outputSharing.crossNamespaceReads: allow | deny`. The `Checker` reads it
+  at read time as one more condition that must pass, so it can only narrow
+  a read. It writes nothing in the producer namespace and tells nothing
+  about the producer. Its refusal writes the audit entry in the consumer
+  namespace. It changes no stored rule, so it can come later. The product
+  manager decided on 22 October 2026 not to add it now.
 
 ## Consequences
 
