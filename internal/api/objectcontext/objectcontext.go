@@ -20,6 +20,7 @@ import (
 
 	"opendustpan.org/opendustpan/internal/api/refusal"
 	"opendustpan.org/opendustpan/internal/denylimit"
+	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/internal/sessionauth"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/collection"
@@ -92,6 +93,8 @@ type Handler struct {
 // Sessions is required.
 func NewHandler(cfg Config) (*Handler, error) {
 	switch {
+	case cfg.Audit == nil:
+		return nil, fmt.Errorf("%w: audit store", ErrMissingDependency)
 	case cfg.Namespaces == nil:
 		return nil, fmt.Errorf("%w: namespace service", ErrMissingDependency)
 	case cfg.Units == nil:
@@ -110,6 +113,11 @@ func NewHandler(cfg Config) (*Handler, error) {
 		return nil, fmt.Errorf("%w: logger", ErrMissingDependency)
 	}
 
+	recorder, err := refusal.New(cfg.Authorizer, cfg.Audit, cfg.Namespaces, cfg.Logger, cfg.OnAuditFailure)
+	if err != nil {
+		return nil, fmt.Errorf("denial recorder: %w", err)
+	}
+
 	h := &Handler{
 		namespaces:  cfg.Namespaces,
 		units:       cfg.Units,
@@ -120,12 +128,10 @@ func NewHandler(cfg Config) (*Handler, error) {
 		authn:       cfg.Authenticator,
 		sessions:    cfg.Sessions,
 		authz:       cfg.Authorizer,
-		guard: refusal.New(cfg.Authorizer, cfg.Audit, cfg.Namespaces, cfg.Logger, cfg.OnAuditFailure).
-			WithLimiter(cfg.DenialLimiter).
-			WithSurface("context"),
-		logger: cfg.Logger,
-		mux:    newPatternMux(),
-		routes: nil,
+		guard:       recorder.WithLimiter(cfg.DenialLimiter).WithSurface("context"),
+		logger:      cfg.Logger,
+		mux:         newPatternMux(),
+		routes:      nil,
 	}
 
 	h.routes = h.buildRoutes()
@@ -174,6 +180,14 @@ type errorResponse struct {
 	Code    int    `json:"code"`
 }
 
+// codedErrorResponse is errorResponse with the stable machine code of a 403.
+// The fields of errorResponse keep their names and their meaning.
+type codedErrorResponse struct {
+	Message   string `json:"message"`
+	Code      int    `json:"code"`
+	ErrorCode string `json:"errorCode"`
+}
+
 // errNotFound is the one answer for an unknown namespace, an unknown unit, a
 // unit of another namespace, a purged unit, and an object that the caller
 // cannot read. The answer never tells that the object exists.
@@ -197,6 +211,14 @@ func (h *Handler) writeError(ctx context.Context, w http.ResponseWriter, err err
 
 	if errors.Is(err, namespace.ErrFenced) {
 		h.logger.WarnContext(ctx, "write fenced", slog.String("error", err.Error()))
+	}
+
+	if status == http.StatusForbidden {
+		if code := errcode.Forbidden(err); code != "" {
+			h.writeJSON(ctx, w, status, codedErrorResponse{Code: status, Message: message, ErrorCode: code})
+
+			return
+		}
 	}
 
 	h.writeJSON(ctx, w, status, errorResponse{Code: status, Message: message})

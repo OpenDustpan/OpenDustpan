@@ -712,6 +712,83 @@
         ],
         "type": "object"
       },
+      "DriftCheck": {
+        "properties": {
+          "jobId": {
+            "type": "string"
+          },
+          "unit": {
+            "$ref": "#/components/schemas/DriftUnit"
+          }
+        },
+        "required": [
+          "jobId",
+          "unit"
+        ],
+        "type": "object"
+      },
+      "DriftCheckLocation": {
+        "properties": {
+          "connection": {
+            "type": "string"
+          },
+          "directory": {
+            "type": "string"
+          },
+          "ref": {
+            "type": "string"
+          },
+          "repository": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "DriftResource": {
+        "properties": {
+          "address": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "address",
+          "kind"
+        ],
+        "type": "object"
+      },
+      "DriftStatus": {
+        "enum": [
+          "drifted",
+          "in-sync",
+          "unknown"
+        ],
+        "type": "string"
+      },
+      "DriftUnit": {
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "tool": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "tool"
+        ],
+        "type": "object"
+      },
       "ErrorResponse": {
         "properties": {
           "code": {
@@ -724,7 +801,7 @@
             "type": "object"
           },
           "errorCode": {
-            "description": "A stable code for a program.",
+            "description": "A stable code for a program. A 403 for a missing permission, an address outside the IP allowlist, a missing CSRF header or a request from another site has one: access.denied, access.ip-not-allowed, session.csrf or session.other-site.",
             "type": "string"
           },
           "message": {
@@ -1008,6 +1085,9 @@
             "type": "array"
           },
           "pool": {
+            "type": "string"
+          },
+          "purpose": {
             "type": "string"
           },
           "reason": {
@@ -1612,6 +1692,24 @@
         ],
         "type": "object"
       },
+      "ListRegistryProvidersResponse": {
+        "properties": {
+          "nextPageToken": {
+            "type": "string"
+          },
+          "providers": {
+            "items": {
+              "$ref": "#/components/schemas/RegistryProvider"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "nextPageToken",
+          "providers"
+        ],
+        "type": "object"
+      },
       "ListUnitsResponse": {
         "properties": {
           "nextPageToken": {
@@ -2135,6 +2233,21 @@
         ],
         "type": "object"
       },
+      "RegistryProvider": {
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "namespace": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "namespace"
+        ],
+        "type": "object"
+      },
       "ReplaceNotificationSinkRequest": {
         "properties": {
           "name": {
@@ -2175,6 +2288,20 @@
           "size",
           "upload"
         ],
+        "type": "object"
+      },
+      "StartDriftCheckRequest": {
+        "properties": {
+          "location": {
+            "$ref": "#/components/schemas/DriftCheckLocation"
+          },
+          "pool": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          }
+        },
         "type": "object"
       },
       "StartJobRequest": {
@@ -2310,6 +2437,46 @@
           "states",
           "tool",
           "unitID"
+        ],
+        "type": "object"
+      },
+      "UnitDrift": {
+        "properties": {
+          "checkedAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "jobId": {
+            "type": "string"
+          },
+          "resources": {
+            "items": {
+              "$ref": "#/components/schemas/DriftResource"
+            },
+            "type": "array"
+          },
+          "status": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DriftStatus"
+              },
+              {
+                "type": "string"
+              }
+            ]
+          },
+          "truncated": {
+            "type": "boolean"
+          },
+          "unit": {
+            "$ref": "#/components/schemas/DriftUnit"
+          }
+        },
+        "required": [
+          "resources",
+          "status",
+          "truncated",
+          "unit"
         ],
         "type": "object"
       },
@@ -5209,6 +5376,52 @@
         ]
       }
     },
+    "/api/dustpan/v1/namespaces/{namespace}/registry/providers": {
+      "get": {
+        "operationId": "listRegistryProviders",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "namespace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "2XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListRegistryProvidersResponse"
+                }
+              }
+            },
+            "description": "The request succeeded."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The request failed."
+          }
+        },
+        "tags": [
+          "registry"
+        ],
+        "x-dustpan-actions": [
+          {
+            "action": "registry:read",
+            "object": "namespace"
+          }
+        ]
+      }
+    },
     "/api/dustpan/v1/namespaces/{namespace}/registry/providers/{name}/versions": {
       "get": {
         "operationId": "listProviderReleases",
@@ -5998,6 +6211,136 @@
         ]
       }
     },
+    "/api/dustpan/v1/namespaces/{namespace}/units/{unit_id}/drift": {
+      "get": {
+        "operationId": "getUnitDrift",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "namespace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "unit_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "2XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnitDrift"
+                }
+              }
+            },
+            "description": "The request succeeded."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The request failed."
+          }
+        },
+        "tags": [
+          "drift"
+        ],
+        "x-dustpan-actions": [
+          {
+            "action": "namespace:read",
+            "object": "namespace"
+          },
+          {
+            "action": "unit:read",
+            "object": "unit"
+          }
+        ]
+      }
+    },
+    "/api/dustpan/v1/namespaces/{namespace}/units/{unit_id}/drift-checks": {
+      "post": {
+        "operationId": "startDriftCheck",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "namespace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "unit_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StartDriftCheckRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "2XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DriftCheck"
+                }
+              }
+            },
+            "description": "The request succeeded."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The request failed."
+          }
+        },
+        "tags": [
+          "drift"
+        ],
+        "x-dustpan-actions": [
+          {
+            "action": "namespace:read",
+            "object": "namespace"
+          },
+          {
+            "action": "unit:read",
+            "object": "unit"
+          },
+          {
+            "action": "unit:run-plan",
+            "object": "unit"
+          }
+        ]
+      }
+    },
     "/api/dustpan/v1/namespaces/{namespace}/views": {
       "get": {
         "operationId": "listViews",
@@ -6319,6 +6662,9 @@
     },
     {
       "name": "description"
+    },
+    {
+      "name": "drift"
     },
     {
       "name": "git-host"

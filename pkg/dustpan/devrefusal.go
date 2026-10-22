@@ -2,11 +2,10 @@ package dustpan
 
 import (
 	"context"
-	"sync"
+	"fmt"
 	"time"
 
 	"opendustpan.org/opendustpan/internal/api/refusal"
-	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/session"
@@ -26,37 +25,36 @@ const (
 )
 
 // devRefusalState holds the one recorder of the refused dev sign-ins. The
-// guards are built before the namespace service and the metrics exist, so the
-// recorder is built at the first refusal, from what bind set by then.
+// guards are built before the namespace service and the metrics exist, so bind
+// builds the recorder later, before the server takes requests.
 type devRefusalState struct {
-	once       sync.Once
-	rec        *refusal.Recorder
-	namespaces refusal.Namespaces
-	onFailure  func()
+	rec *refusal.Recorder
 }
 
-// bind sets the namespace reader and the failure counter of the recorder. It
-// must run before the server takes requests. The recorder needs the reader
-// because the shared limiter also holds the counts of keys of other
-// principals, and the shutdown flush of such a count is an entry in the
-// namespace of that key.
-func (d *devRefusalState) bind(namespaces refusal.Namespaces, onFailure func()) {
-	d.namespaces, d.onFailure = namespaces, onFailure
+// bind builds the recorder, from the audit store of cfg, the namespace reader
+// and the failure counter. It must run before the server takes requests. The
+// recorder needs the reader because the shared limiter also holds the counts
+// of keys of other principals, and the shutdown flush of such a count is an
+// entry in the namespace of that key. It answers ErrMissingOption when cfg has
+// no audit store.
+func (d *devRefusalState) bind(cfg *settings, namespaces refusal.Namespaces, onFailure func()) error {
+	entries, err := auditStoreOf(cfg)
+	if err != nil {
+		return err
+	}
+
+	rec, err := refusal.New(nil, entries, namespaces, cfg.logger, onFailure)
+	if err != nil {
+		return fmt.Errorf("dev sign-in refusal recorder: %w", err)
+	}
+
+	d.rec = rec.WithLimiter(cfg.denialLimiter).WithSurface(devRefusalSurface)
+
+	return nil
 }
 
-// recorder answers the one recorder of cfg.
-func (d *devRefusalState) recorder(cfg *settings) *refusal.Recorder {
-	d.once.Do(func() {
-		var entries audit.Store
-		if st, ok := cfg.namespaceStore.(audit.Store); ok {
-			entries = st
-		}
-
-		d.rec = refusal.New(nil, entries, d.namespaces, cfg.logger, d.onFailure).
-			WithLimiter(cfg.denialLimiter).
-			WithSurface(devRefusalSurface)
-	})
-
+// recorder answers the one recorder of cfg, or nil before bind ran.
+func (d *devRefusalState) recorder() *refusal.Recorder {
 	return d.rec
 }
 
@@ -66,9 +64,8 @@ func (d *devRefusalState) recorder(cfg *settings) *refusal.Recorder {
 // each hour and the others are counted. When the table of the limiter is full,
 // a refusal uses the overflow slot, which has a window of one minute, so the
 // bound of one entry each hour does not hold then. The entry goes in the
-// installation scope, through the audit store of the namespace store. A store
-// with no audit support writes nothing. The shutdown flush of the shared
-// limiter writes the counts that are left. All guards of cfg share one
+// installation scope, through the audit store of the namespace store. The
+// shutdown flush of the shared limiter writes the counts that are left. All guards of cfg share one
 // recorder.
 func devRefusalAudit(cfg *settings) func(ctx context.Context, subject string) {
 	state := cfg.devRefusal
@@ -97,7 +94,16 @@ func devRefusalAudit(cfg *settings) func(ctx context.Context, subject string) {
 		// record of the refusal.
 		ctx = context.WithoutCancel(ctx)
 
-		state.recorder(cfg).Record(ctx, nil, person, refusal.Denial{
+		rec := state.recorder()
+		if rec == nil {
+			// bind runs before the server takes requests, so this is a bug. The
+			// refusal still stands; the log keeps the loss visible.
+			cfg.logger.ErrorContext(ctx, "dev sign-in refusal has no audit recorder")
+
+			return
+		}
+
+		rec.Record(ctx, nil, person, refusal.Denial{
 			Action: session.ActionSignIn,
 			Object: identity.ServerObject(),
 			Reason: devRefusalReason,

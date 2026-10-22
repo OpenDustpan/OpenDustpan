@@ -97,6 +97,26 @@ func (s *Sender) Send(ctx context.Context, m notify.Message) error {
 		return fmt.Errorf("%w: %w", notify.ErrPermanent, err)
 	}
 
+	// Defense in depth: the sink service checks the URL and the host when a
+	// person saves a sink and before a test. These checks stay so that a caller
+	// of the sender that skips the service, or a sink that a restore left
+	// behind, cannot send to a URL that the egress rules refuse or to a host
+	// that is not the target of the sink. The dial guard is another layer.
+	// The text of these errors can repeat the address, so the sender keeps the
+	// class and drops the text.
+	if egress.CheckURL(m.To, egress.HTTPSOnly) != nil {
+		return fmt.Errorf("post webhook: %w: the URL is not allowed", egress.ErrRefused)
+	}
+
+	host, err := notify.WebhookHost(m.To)
+	if err != nil {
+		return fmt.Errorf("post webhook: %w", egress.ErrRefused)
+	}
+
+	if host != m.Sink.Target {
+		return fmt.Errorf("post webhook: %w: the host of the URL is not the target of the sink", egress.ErrRefused)
+	}
+
 	// Defense in depth: Service.Create, Service.Replace and Service.Test check
 	// the port too. This check stays so that a caller of the sender that skips
 	// them cannot reach a port that the operator did not allow. The dial guard

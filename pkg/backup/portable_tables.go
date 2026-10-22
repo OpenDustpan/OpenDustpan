@@ -31,6 +31,8 @@ const (
 	portColDisabledAtMs  = "disabled_at_ms"
 	portColSource        = "source"
 	portColKind          = "kind"
+	portColScopeID       = "scope_id"
+	portColWrapperID     = "wrapper_id"
 	portColSubject       = "subject"
 	portColDeletedName   = "deleted_name"
 	portColTool          = "tool"
@@ -45,7 +47,9 @@ const (
 	portColAtMs          = "at_ms"
 	portColScopeKey      = "scope_key"
 	portColSeq           = "seq"
+	portColSHA256Text    = "sha256"
 	portColOwner         = "owner"
+	portColJobID         = "job_id"
 	portColBody          = "body"
 )
 
@@ -196,7 +200,7 @@ func portableSpec() []PortableTable {
 			Columns: []Column{
 				{Name: portColNamespace, Kind: KindText},
 				{Name: portColStackID, Kind: KindText},
-				{Name: "wrapper_id", Kind: KindText},
+				{Name: portColWrapperID, Kind: KindText},
 				{Name: "ciphertext", Kind: KindBytes},
 				{Name: portColCreatedAtMs, Kind: KindTime},
 			},
@@ -253,7 +257,7 @@ func portableSpec() []PortableTable {
 			OrderBy: []string{portColNamespaceID, portColSeq},
 			Columns: []Column{
 				{Name: portColNamespaceID, Kind: KindText},
-				{Name: "seq", Kind: KindInteger},
+				{Name: portColSeq, Kind: KindInteger},
 				{Name: portColAtMs, Kind: KindTime},
 				{Name: portColTool, Kind: KindText},
 				{Name: portColUnitID, Kind: KindText},
@@ -460,7 +464,7 @@ func portableSpec() []PortableTable {
 				{Name: "object_id", Kind: KindText},
 				{Name: "fence_version", Kind: KindInteger},
 				{Name: "principal_kind", Kind: KindText},
-				{Name: "job_id", Kind: KindText},
+				{Name: portColJobID, Kind: KindText},
 				{Name: portColReason, Kind: KindText},
 			},
 		},
@@ -587,8 +591,8 @@ func portableSpec() []PortableTable {
 			Table:   TableInstallationSecretKeys,
 			OrderBy: []string{"scope_id"},
 			Columns: []Column{
-				{Name: "scope_id", Kind: KindText},
-				{Name: "wrapper_id", Kind: KindText},
+				{Name: portColScopeID, Kind: KindText},
+				{Name: portColWrapperID, Kind: KindText},
 				{Name: "ciphertext", Kind: KindBytes},
 				{Name: portColCreatedAtMs, Kind: KindTime},
 			},
@@ -703,12 +707,15 @@ func portableSpec() []PortableTable {
 		portableBlameTables(),
 		portableRunnerTables(),
 		portableJobTables(),
+		portableJobArtifactTables(),
 		portableProfileTables(),
 		portableManualLockTables(),
 		portablePreferenceTables(),
 		portableSavedViewTables(),
+		portableDriftTables(),
 		portableGitHostTables(),
 		portableRegistryTables(),
 		portableSinkTables(),
+		portableItemKeyTables(),
 	)
 }

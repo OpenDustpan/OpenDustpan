@@ -650,8 +650,8 @@ func checkRestoreFile(ctx context.Context, path string, want backup.Summary) (ba
 		return backup.Summary{}, fmt.Errorf("check staged backup: %w", idsErr)
 	}
 
-	if viewsErr := checkStagedSavedViews(ctx, conn); viewsErr != nil {
-		return backup.Summary{}, fmt.Errorf("check staged backup: %w", viewsErr)
+	if ownedErr := checkStagedOwnedRows(ctx, conn); ownedErr != nil {
+		return backup.Summary{}, fmt.Errorf("check staged backup: %w", ownedErr)
 	}
 
 	if featureErr := checkStagedFeatureRows(ctx, conn); featureErr != nil {
@@ -939,7 +939,8 @@ func summarizeConn(ctx context.Context, conn *sql.DB) (backup.Summary, error) {
 	wrappers, err := stringColumn(
 		ctx,
 		conn,
-		`SELECT wrapper_id FROM secret_keys UNION SELECT wrapper_id FROM installation_secret_keys ORDER BY wrapper_id`,
+		`SELECT wrapper_id FROM secret_keys UNION SELECT wrapper_id FROM installation_secret_keys
+		UNION SELECT wrapper_id FROM item_keys WHERE shredded_at_ms = 0 ORDER BY wrapper_id`,
 	)
 	if err != nil {
 		return backup.Summary{}, err
@@ -1031,7 +1032,8 @@ func countRows(ctx context.Context, conn *sql.DB, table string) (int64, error) {
 
 // blobRefs reads the blob references of a snapshot: the content key, size and
 // MD5 of every finalized state version that names content, with the blob key, size and
-// MD5 of every checkpoint kept in blobs and every journal batch, ordered by key. Size and MD5 stay
+// MD5 of every checkpoint kept in blobs and every journal batch, and the wrapped key blob of every item key that is not
+// shredded, ordered by key. Size and MD5 stay
 // those of the plain bytes, as the state version stores them; sealed versions
 // mark their references sealed, so the backup opens them to check and stores
 // the sealed bytes. A pending version has no committed content, so the backup
@@ -1042,6 +1044,9 @@ func blobRefs(ctx context.Context, conn *sql.DB) ([]backup.BlobRef, error) {
 		SELECT blob_key AS content_key, blob_size AS size, blob_md5 AS md5, 0 AS sealed FROM checkpoints
 		UNION ALL
 		SELECT blob_key AS content_key, size AS size, md5 AS md5, 0 AS sealed FROM update_journal
+		UNION ALL
+		SELECT 'namespaces/' || namespace_id || '/item-keys/' || id || '/v' || CAST(blob_version AS TEXT) AS content_key,
+			blob_size AS size, blob_md5 AS md5, 0 AS sealed FROM item_keys WHERE shredded_at_ms = 0
 		ORDER BY content_key`
 
 	rows, err := conn.QueryContext(ctx, query)
@@ -1185,9 +1190,13 @@ func (s *Store) createRestoreConflict(ctx context.Context, id backup.RestoreID) 
 }
 
 // checkStagedFeatureRows checks the rows of the staged features that have rules
-// of their own: the registry, the Git host connections and the notification
-// sinks.
+// of their own: the drift results, the registry, the Git host connections and
+// the notification sinks.
 func checkStagedFeatureRows(ctx context.Context, conn *sql.DB) error {
+	if err := checkStagedDriftResults(ctx, conn); err != nil {
+		return err
+	}
+
 	if err := checkStagedRegistry(ctx, conn); err != nil {
 		return err
 	}

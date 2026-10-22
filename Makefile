@@ -8,7 +8,7 @@
 #   python3       any 3.x, standard library only (for docs-lint)
 # nilaway and govulncheck need no install: go run builds the pinned versions below.
 
-.PHONY: regenerate-baseline check fmt lint nilaway vuln semgrep trivy trivy-canary trufflehog licenses docs-lint chart-lint test test-nocache test-postgres test-s3 bench load e2e upgrade-test crash-test soak faults generate build image-smoke compose-smoke demo checks-agent
+.PHONY: regenerate-baseline check fmt lint nilaway vuln semgrep trivy trivy-canary trufflehog licenses docs-lint chart-lint test test-nocache test-postgres test-s3 bench load e2e upgrade-test crash-test soak faults generate build image-smoke compose-smoke demo checks-agent clients-conformance
 
 check: lint lint-journal-build nilaway vuln semgrep trivy trufflehog licenses docs-lint test bench journal-guard journal-test ## Everything CI checks.
 
@@ -89,7 +89,8 @@ trivy-canary: ## Trivy license canary: the gate must flag the GPL fixture in tes
 # .trufflehog-exclude-paths.txt lists files that are known false positives,
 # one regular expression per line. Each entry needs the owner's approval.
 # Today it holds one vendored agent skill, where a Markdown link that names a
-# file looks like a credential to a detector.
+# file looks like a credential to a detector, and six test files whose fake
+# URLs with a user name and a password test the masking of credentials.
 trufflehog: ## TruffleHog: verified secrets in the Git history.
 	trufflehog git file://. --results=verified,unknown --fail --no-update --exclude-paths=.trufflehog-exclude-paths.txt
 
@@ -118,15 +119,40 @@ docs-lint: ## ASD-STE100 structural rules and banned words for README, CLAUDE.md
 chart-lint: ## Lint and render the Helm chart (helm lint, helm template, kubeconform). Needs helm and kubeconform; not part of check.
 	./scripts/chart-lint.sh
 
-test: ## Go tests; the PostgreSQL suite is skipped unless DUSTPAN_TEST_POSTGRES_URL is set. A package whose code, files and environment did not change gives its cached result.
-	go test -race ./...
+# The store packages run for more than 10 minutes, the default limit of go test,
+# on a CI runner with 4 cores. GO_TEST_TIMEOUT is the limit for each package.
+GO_TEST_TIMEOUT := 20m
 
-test-nocache: ## Go tests as in test, but every package runs again. CI runs this on main every 2 hours to find flaky tests.
-	go test -race -count=1 ./...
+test: ## Go tests; the PostgreSQL suite is skipped unless DUSTPAN_TEST_POSTGRES_URL is set. A package whose code, files and environment did not change gives its cached result.
+	go test -race -timeout $(GO_TEST_TIMEOUT) ./...
+
+test-nocache: ## Go tests as in test, but every package runs again. CI does the same on main every 2 hours, with test-ci-other and test-ci-store, to find flaky tests.
+	go test -race -count=1 -timeout $(GO_TEST_TIMEOUT) ./...
+
+# CI runs the two store packages in jobs of their own, one for each package, so
+# that they do not share the 4 cores of a runner with each other or with the
+# other packages. GO_TEST_COUNT=-count=1 runs every package again, as the
+# schedule of CI does.
+STORE_TEST_PKGS := opendustpan.org/opendustpan/pkg/store/sqlite opendustpan.org/opendustpan/pkg/store/postgres
+GO_TEST_COUNT ?=
+
+# STORE_TEST_TIMEOUT is the limit of test-ci-store only, sized for one store
+# package on a CI runner: pkg/store/postgres alone took more than 20 minutes
+# there. It is not a fix of that time, and GO_TEST_TIMEOUT stays the limit of
+# every other target.
+STORE_TEST_TIMEOUT := 30m
+
+test-ci-other: ## Go tests as in test, without the two store packages; the go job of CI runs it.
+	go list ./... >/dev/null
+	go test -race $(GO_TEST_COUNT) -timeout $(GO_TEST_TIMEOUT) $$(go list ./... | grep -v -x -F $(addprefix -e ,$(STORE_TEST_PKGS)))
+
+test-ci-store: ## Go tests of one store package, STORE=sqlite or STORE=postgres; each store job of CI runs it.
+	@case "$(STORE)" in sqlite|postgres) ;; *) echo "set STORE=sqlite or STORE=postgres"; exit 1 ;; esac
+	go test -race $(GO_TEST_COUNT) -timeout $(STORE_TEST_TIMEOUT) ./pkg/store/$(STORE)/
 
 test-postgres: ## Go tests including PostgreSQL (needs DUSTPAN_TEST_POSTGRES_URL).
 	@test -n "$$DUSTPAN_TEST_POSTGRES_URL" || (echo "set DUSTPAN_TEST_POSTGRES_URL" && exit 1)
-	go test -race -count=1 ./pkg/store/postgres/...
+	go test -race -count=1 -timeout $(GO_TEST_TIMEOUT) ./pkg/store/postgres/...
 
 bench: ## Fast benchmarks (delta apply, gzip, checkpoint store) with one iteration each; proves they compile and run.
 	go test -run '^$$' -bench . -benchtime 1x ./pkg/stack/ ./pkg/store/sqlite/
@@ -140,6 +166,9 @@ test-s3: ## Go tests in pkg/blob/s3 against a live S3-compatible server (needs D
 
 e2e: ## Drive real Pulumi CLI and OpenTofu versions against the server (downloads CLIs; see e2e/doc.go). Not part of check; CI runs it as its own job.
 	go test -tags e2e -race -count=1 -parallel 16 -timeout 60m ./e2e/...
+
+clients-conformance: ## Build the server, generate the Go client from the description that the server serves, and run the client conformance suite on it. Not part of check.
+	DUSTPAN_TEST_CLIENTGEN_CONFORMANCE=1 go test -race -count=1 -timeout 15m -run TestGoClientConformance ./internal/clientgen/conformance/
 
 checks-agent: ## Sync the branch with main, then run generate, check, e2e and a TruffleHog scan of the branch commits with cleanup (SYNC=merge|rebase|none, SKIP="steps", CLEAN_CACHE=1 also deletes the e2e CLI cache).
 	./scripts/checks-agent.sh

@@ -14,6 +14,7 @@ import (
 	"time"
 
 	auditapi "opendustpan.org/opendustpan/internal/api/audit"
+	driftapi "opendustpan.org/opendustpan/internal/api/drift"
 	inventoryapi "opendustpan.org/opendustpan/internal/api/inventory"
 	jobsapi "opendustpan.org/opendustpan/internal/api/jobs"
 	notificationsapi "opendustpan.org/opendustpan/internal/api/notifications"
@@ -30,6 +31,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/collection"
+	"opendustpan.org/opendustpan/pkg/drift"
 	"opendustpan.org/opendustpan/pkg/egress"
 	"opendustpan.org/opendustpan/pkg/forge"
 	"opendustpan.org/opendustpan/pkg/gate"
@@ -92,47 +94,15 @@ func ServedRoutes(tb testing.TB) []RouteRef {
 	profileRoutes := coverageProfileRoutes(tb)
 	sinkRoutes := coverageSinkRoutes(tb)
 	jobRoutes := coverageJobRoutes(tb, namespaces)
+	driftRoutes := coverageDriftRoutes(tb, namespaces)
 	registryRoutes := coverageRegistryRoutes(tb)
 	server := coverageServerRoutes(tb)
 
-	out := make(
-		[]RouteRef,
-		0,
-		len(
-			pulumi,
-		)+len(
-			tfe,
-		)+len(
-			tofuHTTP,
-		)+len(
-			inventory,
-		)+len(
-			auditRoutes,
-		)+len(
-			contextRoutes,
-		)+len(
-			profileRoutes,
-		)+len(
-			sinkRoutes,
-		)+len(
-			jobRoutes,
-		)+len(
-			registryRoutes,
-		)+len(
-			server,
-		)+probeRouteCount,
+	out := slices.Concat(
+		pulumi, tfe, tofuHTTP, inventory, auditRoutes, contextRoutes, profileRoutes, sinkRoutes, jobRoutes,
+		driftRoutes, registryRoutes, server,
 	)
-	out = append(out, pulumi...)
-	out = append(out, tfe...)
-	out = append(out, tofuHTTP...)
-	out = append(out, inventory...)
-	out = append(out, auditRoutes...)
-	out = append(out, contextRoutes...)
-	out = append(out, profileRoutes...)
-	out = append(out, sinkRoutes...)
-	out = append(out, jobRoutes...)
-	out = append(out, registryRoutes...)
-	out = append(out, server...)
+	out = slices.Grow(out, probeRouteCount)
 
 	// The probes live on the root mux, not in any adapter table.
 	out = append(out,
@@ -288,7 +258,7 @@ func coveragePulumiRoutes(tb testing.TB, namespaces *namespace.Service) []RouteR
 		// The gate is irrelevant here: no request is ever served.
 		MaxBodyBytesInFlight: 0,
 		Gate:                 nil,
-		Audit:                nil,
+		Audit:                coverageAuditStore{},
 		OnAuditFailure:       nil,
 		DenialLimiter:        nil,
 	})
@@ -441,7 +411,7 @@ func coverageTFERoutes(tb testing.TB, namespaces *namespace.Service) []RouteRef 
 		BaseURL:        baseurl.Resolver{},
 		Gate:           nil,
 		MaxStateBytes:  0,
-		Audit:          nil,
+		Audit:          coverageAuditStore{},
 		OnAuditFailure: nil,
 		DenialLimiter:  nil,
 		Registry: &tfeapi.RegistryConfig{
@@ -471,7 +441,7 @@ func coverageTofuHTTPRoutes(tb testing.TB, namespaces *namespace.Service) []Rout
 		Logger:         slog.New(slog.DiscardHandler),
 		Workspaces:     coverageTofuHTTPWorkspaces{},
 		Namespaces:     namespaces,
-		Audit:          nil,
+		Audit:          coverageAuditStore{},
 		Gate:           nil,
 		OnAuditFailure: nil,
 		DenialLimiter:  nil,
@@ -734,7 +704,7 @@ func coverageInventoryRoutes(tb testing.TB, namespaces *namespace.Service) []Rou
 		Sessions:      nil,
 		Logger:        slog.New(slog.DiscardHandler),
 		Now:           nil,
-		Audit:         nil, OnAuditFailure: nil, DenialLimiter: nil,
+		Audit:         coverageAuditStore{}, OnAuditFailure: nil, DenialLimiter: nil,
 		StateGuard: nil,
 	})
 	if err != nil {
@@ -766,7 +736,7 @@ func coverageContextRoutes(tb testing.TB, namespaces *namespace.Service) []Route
 		Authorizer:    coverageAuthorizer{},
 		Sessions:      nil,
 		Logger:        slog.New(slog.DiscardHandler),
-		Audit:         nil, OnAuditFailure: nil, DenialLimiter: nil,
+		Audit:         coverageAuditStore{}, OnAuditFailure: nil, DenialLimiter: nil,
 	})
 	if err != nil {
 		tb.Fatalf("context handler: %v", err)
@@ -792,7 +762,7 @@ func coverageJobRoutes(tb testing.TB, namespaces *namespace.Service) []RouteRef 
 		Starter:        struct{ job.Starter }{nil},
 		Authenticator:  coverageAuthenticator{},
 		Authorizer:     coverageAuthorizer{},
-		Audit:          nil,
+		Audit:          coverageAuditStore{},
 		OnAuditFailure: nil,
 		DenialLimiter:  nil,
 		Sessions:       nil,
@@ -800,6 +770,37 @@ func coverageJobRoutes(tb testing.TB, namespaces *namespace.Service) []RouteRef 
 	})
 	if err != nil {
 		tb.Fatalf("jobs handler: %v", err)
+	}
+
+	routes := handler.Routes()
+	out := make([]RouteRef, 0, len(routes))
+
+	for _, route := range routes {
+		out = append(out, RouteRef{Method: route.Method, Path: route.Path})
+	}
+
+	return out
+}
+
+// coverageDriftRoutes returns the drift adapter's route table.
+func coverageDriftRoutes(tb testing.TB, namespaces *namespace.Service) []RouteRef {
+	tb.Helper()
+
+	handler, err := driftapi.NewHandler(driftapi.Config{
+		Namespaces:     namespaces,
+		Units:          coverageReader{},
+		Results:        struct{ drift.Store }{nil},
+		Checker:        struct{ drift.Checker }{nil},
+		Authenticator:  coverageAuthenticator{},
+		Authorizer:     coverageAuthorizer{},
+		Audit:          coverageAuditStore{},
+		OnAuditFailure: nil,
+		DenialLimiter:  nil,
+		Sessions:       nil,
+		Logger:         slog.New(slog.DiscardHandler),
+	})
+	if err != nil {
+		tb.Fatalf("drift handler: %v", err)
 	}
 
 	routes := handler.Routes()
@@ -838,7 +839,7 @@ func coverageProfileRoutes(tb testing.TB) []RouteRef {
 		Idempotency:   nil,
 		Logger:        slog.New(slog.DiscardHandler),
 		Now:           nil,
-		Audit:         nil, Namespaces: nil, OnAuditFailure: nil, DenialLimiter: nil,
+		Audit:         coverageAuditStore{}, Namespaces: nil, OnAuditFailure: nil, DenialLimiter: nil,
 	})
 	if err != nil {
 		tb.Fatalf("profile handler: %v", err)
@@ -879,7 +880,7 @@ func coverageSinkRoutes(tb testing.TB) []RouteRef {
 		Sessions:       nil,
 		Idempotency:    nil,
 		Logger:         slog.New(slog.DiscardHandler),
-		Audit:          nil,
+		Audit:          coverageAuditStore{},
 		Namespaces:     nil,
 		OnAuditFailure: nil,
 		DenialLimiter:  nil,
@@ -1085,6 +1086,12 @@ func (coverageAuditStore) Append(
 	return zero, nil
 }
 
+func (coverageAuditStore) AppendServer(_ context.Context, _ audit.Entry) (audit.Entry, error) {
+	var zero audit.Entry
+
+	return zero, nil
+}
+
 func (coverageAuditStore) List(
 	_ context.Context, _ namespace.Name, _ audit.Page,
 ) (audit.Listing, error) {
@@ -1249,7 +1256,7 @@ func coverageServerRoutes(tb testing.TB) []RouteRef {
 		Principals:       nil,
 		Access:           nil,
 		Tokens:           nil,
-		Audit:            nil,
+		Audit:            coverageAuditStore{},
 		OnAuditFailure:   nil,
 		DeletedUnits:     nil,
 		AuditChain:       nil,
@@ -1378,6 +1385,7 @@ func CoverageAllowlist() []AllowEntry {
 		auditSinkAllowEntries(),
 		manualLockAllowEntries(),
 		jobAllowEntries(),
+		driftAllowEntries(),
 		preferencesAllowEntries(),
 		savedViewAllowEntries(),
 		gitHostAllowEntries(),
@@ -2444,6 +2452,29 @@ func jobAllowEntries() []AllowEntry {
 	}
 }
 
+// driftAllowEntries covers the routes that start a drift check and read the
+// latest drift result of a unit. No CLI calls them: the console and the clients
+// of the API do. The harness steps of TestDriftAPI call each of them through
+// the API: a read before any check, a start, the same start again, the refusals
+// of a start, and the reads of a person who may not read the unit.
+func driftAllowEntries() []AllowEntry {
+	const (
+		test = "TestDriftAPI"
+		why  = "Console and client route: no CLI calls it. The harness steps of TestDriftAPI call it through the API."
+	)
+
+	return []AllowEntry{
+		{
+			Method: http.MethodPost, Path: "/api/dustpan/v1/namespaces/{namespace}/units/{unit_id}/drift-checks",
+			CoveringTest: test, Reason: why,
+		},
+		{
+			Method: http.MethodGet, Path: "/api/dustpan/v1/namespaces/{namespace}/units/{unit_id}/drift",
+			CoveringTest: test, Reason: why,
+		},
+	}
+}
+
 // savedViewAllowEntries covers the routes of the saved views. No CLI calls
 // them: the console and the clients of the API do. The steps of
 // TestSavedViewsAPI call each of them with the personal token of a person.
@@ -2596,9 +2627,17 @@ func coverageRegistryRoutes(tb testing.TB) []RouteRef {
 	}
 
 	handler, err := registryapi.NewHandler(registryapi.Config{
-		Service: svc, Authenticator: coverageAuthenticator{}, Authorizer: coverageAuthorizer{},
-		MaxUploadBytes: registryservice.DefaultMaxArchiveBytes, Audit: nil, Namespaces: nil, OnAuditFailure: nil,
-		DenialLimiter: nil, Sessions: nil, Idempotency: nil, Logger: slog.New(slog.DiscardHandler),
+		Service:        svc,
+		Authenticator:  coverageAuthenticator{},
+		Authorizer:     coverageAuthorizer{},
+		MaxUploadBytes: registryservice.DefaultMaxArchiveBytes,
+		Audit:          coverageAuditStore{},
+		Namespaces:     nil,
+		OnAuditFailure: nil,
+		DenialLimiter:  nil,
+		Sessions:       nil,
+		Idempotency:    nil,
+		Logger:         slog.New(slog.DiscardHandler),
 	})
 	if err != nil {
 		tb.Fatalf("registry handler: %v", err)
@@ -2637,6 +2676,7 @@ func registryAllowEntries() []AllowEntry {
 	return []AllowEntry{
 		{Method: http.MethodPost, Path: base + "/uploads", CoveringTest: test, Reason: why},
 		{Method: http.MethodPut, Path: base + "/providers/{name}/versions/{version}", CoveringTest: test, Reason: why},
+		{Method: http.MethodGet, Path: base + "/providers", CoveringTest: test, Reason: why},
 		{Method: http.MethodGet, Path: base + "/providers/{name}/versions", CoveringTest: test, Reason: why},
 		{Method: http.MethodGet, Path: base + "/providers/{name}/versions/{version}", CoveringTest: test, Reason: why},
 		{Method: http.MethodPost, Path: base + "/keys", CoveringTest: test, Reason: why},

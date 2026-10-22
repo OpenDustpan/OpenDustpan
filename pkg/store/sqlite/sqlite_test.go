@@ -21,6 +21,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/accesstoken/accesstokentest"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/audit/audittest"
+	blobfs "opendustpan.org/opendustpan/pkg/blob/fs"
 	"opendustpan.org/opendustpan/pkg/durable"
 	"opendustpan.org/opendustpan/pkg/idempotency"
 	"opendustpan.org/opendustpan/pkg/idempotency/idempotencytest"
@@ -638,6 +639,33 @@ func TestSecretsConformance(t *testing.T) {
 		t.Helper()
 
 		return open(t)
+	})
+}
+
+func TestItemKeysConformance(t *testing.T) {
+	t.Parallel()
+
+	secrettest.RunItemKeys(t, func(t *testing.T) secrettest.ItemKeyStore {
+		t.Helper()
+
+		return open(t)
+	})
+}
+
+func TestItemSealerConformance(t *testing.T) {
+	t.Parallel()
+
+	secrettest.RunItemSealer(t, func(t *testing.T) *secrettest.SealerRig {
+		t.Helper()
+
+		blobs, err := blobfs.Open(t.TempDir())
+		if err != nil {
+			t.Fatalf("open blob store: %v", err)
+		}
+
+		t.Cleanup(func() { _ = blobs.Close() }) //nolint:errcheck // Test cleanup.
+
+		return secrettest.NewSealerRig(t, open(t), blobs)
 	})
 }
 

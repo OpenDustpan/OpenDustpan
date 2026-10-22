@@ -1,0 +1,318 @@
+package client
+
+// This file is the hand-written transport of the client. The generator does
+// not write it. The generated operations call do and read the request type.
+
+import (
+	"bytes"
+	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"mime"
+	"net/http"
+	"net/url"
+	"strings"
+)
+
+// maxResponseBytes is the largest answer that the client reads.
+const maxResponseBytes = 16 << 20
+
+// maxErrorTextBytes is the part of an error body, that is not JSON, that the
+// client keeps in the message of an error.
+const maxErrorTextBytes = 512
+
+// ErrInvalidResponse means that the server answered with a success status and
+// a body that does not match the schema of the description.
+var ErrInvalidResponse = errors.New("opendustpan: the answer does not match the description")
+
+// ErrOption means that a call option does not fit the operation, for example
+// an If-Match value for an operation that does not take it.
+var ErrOption = errors.New("opendustpan: the option does not fit the operation")
+
+// ErrBody means that an operation needs a body and the call gave none.
+var ErrBody = errors.New("opendustpan: the operation needs a body")
+
+type ifMatchMode int
+
+const (
+	ifMatchNone ifMatchMode = iota
+	ifMatchOptional
+	ifMatchRequired
+)
+
+// request is what a generated operation gives to do.
+type request struct {
+	operation    string
+	method       string
+	path         string
+	query        url.Values
+	body         any
+	bodySet      bool
+	bodyRequired bool
+	mediaType    string
+	public       bool
+	idempotent   bool
+	ifMatch      ifMatchMode
+	etag         bool
+}
+
+// Client calls the API of one server.
+type Client struct {
+	base      string
+	host      string
+	token     string
+	http      *http.Client
+	userAgent string
+}
+
+// Option configures New.
+type Option func(*Client)
+
+// WithToken sets the access token. The client sends it to the base URL only.
+func WithToken(token string) Option { return func(c *Client) { c.token = token } }
+
+// WithHTTPClient sets the HTTP client. The default client drops the
+// Authorization header on a redirect to another host. A client that the caller
+// gives keeps its own redirect policy.
+func WithHTTPClient(h *http.Client) Option { return func(c *Client) { c.http = h } }
+
+// New returns a client for the server at baseURL.
+func New(baseURL string, opts ...Option) (*Client, error) {
+	u, err := url.Parse(baseURL)
+	if err != nil {
+		return nil, fmt.Errorf("opendustpan: base URL: %w", err)
+	}
+
+	if (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.RawQuery != "" || u.Fragment != "" {
+		return nil, fmt.Errorf("opendustpan: base URL %q must be http or https with a host and no query", baseURL)
+	}
+
+	c := &Client{
+		base: strings.TrimRight(u.String(), "/"), host: u.Host,
+		userAgent: "opendustpan-client-go/" + Version + " (description " + DescriptionVersion + "; server " + ServerRelease + ")",
+	}
+
+	c.http = &http.Client{CheckRedirect: c.checkRedirect}
+
+	for _, o := range opts {
+		o(c)
+	}
+
+	return c, nil
+}
+
+// checkRedirect keeps the token away from another host.
+func (c *Client) checkRedirect(req *http.Request, via []*http.Request) error {
+	if len(via) >= 10 {
+		return errors.New("opendustpan: too many redirects")
+	}
+
+	if req.URL.Host != c.host {
+		req.Header.Del("Authorization")
+	}
+
+	return nil
+}
+
+// CallOption changes one call.
+type CallOption func(*callConfig)
+
+type callConfig struct {
+	idempotencyKey string
+	ifMatch        string
+}
+
+// WithIdempotencyKey sets the Idempotency-Key of a call. Without it, a call
+// that takes the header gets a new random key.
+func WithIdempotencyKey(key string) CallOption {
+	return func(c *callConfig) { c.idempotencyKey = key }
+}
+
+// WithIfMatch sets the If-Match header of a call to an ETag that an earlier
+// answer gave.
+func WithIfMatch(etag string) CallOption {
+	return func(c *callConfig) { c.ifMatch = etag }
+}
+
+// Response is what the client knows of the HTTP answer.
+type Response struct {
+	Status int
+	ETag   string
+	Header http.Header
+}
+
+// Error is an error answer of the server.
+type Error struct {
+	Status int
+	Body   ErrorResponse
+}
+
+// Error implements error.
+func (e *Error) Error() string {
+	if e.Body.ErrorCode != nil {
+		return fmt.Sprintf("opendustpan: %d %s (%s)", e.Status, e.Body.Message, *e.Body.ErrorCode)
+	}
+
+	return fmt.Sprintf("opendustpan: %d %s", e.Status, e.Body.Message)
+}
+
+// do sends the request and reads the answer into out.
+func (c *Client) do(ctx context.Context, req *request, opts []CallOption, out any) (*Response, error) {
+	var cfg callConfig
+	for _, o := range opts {
+		o(&cfg)
+	}
+
+	httpReq, err := c.build(ctx, req, &cfg)
+	if err != nil {
+		return nil, err
+	}
+
+	httpResp, err := c.http.Do(httpReq)
+	if err != nil {
+		return nil, fmt.Errorf("opendustpan: %s: %w", req.operation, err)
+	}
+
+	defer httpResp.Body.Close() //nolint:errcheck // The answer is read already.
+
+	body, err := io.ReadAll(io.LimitReader(httpResp.Body, maxResponseBytes+1))
+	if err != nil {
+		return nil, fmt.Errorf("opendustpan: %s: read the answer: %w", req.operation, err)
+	}
+
+	resp := &Response{Status: httpResp.StatusCode, ETag: httpResp.Header.Get("ETag"), Header: httpResp.Header}
+
+	if len(body) > maxResponseBytes {
+		return resp, fmt.Errorf("%w: %s: the answer is longer than %d bytes", ErrInvalidResponse, req.operation, maxResponseBytes)
+	}
+
+	if httpResp.StatusCode < 200 || httpResp.StatusCode > 299 {
+		return resp, errorOf(httpResp, body)
+	}
+
+	if out == nil {
+		return resp, nil
+	}
+
+	if !isJSON(httpResp.Header.Get("Content-Type")) {
+		return resp, fmt.Errorf("%w: %s: the content type is %q", ErrInvalidResponse, req.operation, httpResp.Header.Get("Content-Type"))
+	}
+
+	if err = json.Unmarshal(body, out); err != nil {
+		return resp, fmt.Errorf("%w: %s: %w", ErrInvalidResponse, req.operation, err)
+	}
+
+	return resp, nil
+}
+
+// build makes the HTTP request.
+func (c *Client) build(ctx context.Context, req *request, cfg *callConfig) (*http.Request, error) {
+	if cfg.ifMatch != "" && req.ifMatch == ifMatchNone {
+		return nil, fmt.Errorf("%w: %s does not take If-Match", ErrOption, req.operation)
+	}
+
+	if cfg.idempotencyKey != "" && !req.idempotent {
+		return nil, fmt.Errorf("%w: %s does not take an Idempotency-Key", ErrOption, req.operation)
+	}
+
+	target := c.base + req.path
+	if len(req.query) > 0 {
+		target += "?" + req.query.Encode()
+	}
+
+	var payload io.Reader
+
+	if req.bodySet {
+		raw, err := json.Marshal(req.body)
+		if err != nil {
+			return nil, fmt.Errorf("opendustpan: %s: encode the body: %w", req.operation, err)
+		}
+
+		payload = bytes.NewReader(raw)
+	} else if req.bodyRequired {
+		return nil, fmt.Errorf("%w: %s", ErrBody, req.operation)
+	}
+
+	httpReq, err := http.NewRequestWithContext(ctx, req.method, target, payload)
+	if err != nil {
+		return nil, fmt.Errorf("opendustpan: %s: %w", req.operation, err)
+	}
+
+	if err = c.setHeaders(httpReq, req, cfg); err != nil {
+		return nil, err
+	}
+
+	return httpReq, nil
+}
+
+// setHeaders sets the headers of a request.
+func (c *Client) setHeaders(httpReq *http.Request, req *request, cfg *callConfig) error {
+	httpReq.Header.Set("Accept", "application/json")
+	httpReq.Header.Set("User-Agent", c.userAgent)
+
+	if req.bodySet {
+		httpReq.Header.Set("Content-Type", req.mediaType)
+	}
+
+	if !req.public && c.token != "" {
+		httpReq.Header.Set("Authorization", "Bearer "+c.token)
+	}
+
+	if req.idempotent {
+		key := cfg.idempotencyKey
+		if key == "" {
+			var err error
+			if key, err = newKey(); err != nil {
+				return err
+			}
+		}
+
+		httpReq.Header.Set("Idempotency-Key", key)
+	}
+
+	if cfg.ifMatch != "" {
+		httpReq.Header.Set("If-Match", cfg.ifMatch)
+	}
+
+	return nil
+}
+
+// newKey makes a random Idempotency-Key of 32 hexadecimal characters.
+func newKey() (string, error) {
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return "", fmt.Errorf("opendustpan: make an Idempotency-Key: %w", err)
+	}
+
+	return hex.EncodeToString(b[:]), nil
+}
+
+// isJSON says that a Content-Type header names JSON.
+func isJSON(contentType string) bool {
+	media, _, err := mime.ParseMediaType(contentType)
+
+	return err == nil && media == "application/json"
+}
+
+// errorOf makes the error of an error answer. A body that is not the error
+// shape gives an error with the status and the start of the text.
+func errorOf(httpResp *http.Response, body []byte) error {
+	e := &Error{Status: httpResp.StatusCode}
+
+	if isJSON(httpResp.Header.Get("Content-Type")) && json.Unmarshal(body, &e.Body) == nil {
+		return e
+	}
+
+	text := body
+	if len(text) > maxErrorTextBytes {
+		text = text[:maxErrorTextBytes]
+	}
+
+	e.Body = ErrorResponse{Code: int64(httpResp.StatusCode), Message: strings.TrimSpace(string(text))}
+
+	return e
+}

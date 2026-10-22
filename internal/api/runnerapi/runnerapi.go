@@ -112,26 +112,37 @@ type Handler struct {
 	routes     []Route
 }
 
+// validate returns ErrMissingDependency when cfg lacks a required dependency.
+func (cfg Config) validate() error {
+	switch {
+	case cfg.Audit == nil:
+		return fmt.Errorf("%w: audit store", ErrMissingDependency)
+	case cfg.Namespaces == nil:
+		return fmt.Errorf("%w: namespace service", ErrMissingDependency)
+	case cfg.Pools == nil:
+		return fmt.Errorf("%w: runner pool store", ErrMissingDependency)
+	case cfg.Members == nil:
+		return fmt.Errorf("%w: runner member store", ErrMissingDependency)
+	case cfg.Handoffs == nil:
+		return fmt.Errorf("%w: runner session store", ErrMissingDependency)
+	case cfg.Authenticator == nil:
+		return fmt.Errorf("%w: authenticator", ErrMissingDependency)
+	case cfg.Authorizer == nil:
+		return fmt.Errorf("%w: authorizer", ErrMissingDependency)
+	case cfg.Logger == nil:
+		return fmt.Errorf("%w: logger", ErrMissingDependency)
+	case cfg.ServerURL == "":
+		return fmt.Errorf("%w: server URL", ErrMissingDependency)
+	}
+
+	return nil
+}
+
 // NewHandler returns a Handler. Every Config field except Claimer, Sweeps,
 // Operations, Sessions, Now and PollInterval is required.
 func NewHandler(cfg Config) (*Handler, error) {
-	switch {
-	case cfg.Namespaces == nil:
-		return nil, fmt.Errorf("%w: namespace service", ErrMissingDependency)
-	case cfg.Pools == nil:
-		return nil, fmt.Errorf("%w: runner pool store", ErrMissingDependency)
-	case cfg.Members == nil:
-		return nil, fmt.Errorf("%w: runner member store", ErrMissingDependency)
-	case cfg.Handoffs == nil:
-		return nil, fmt.Errorf("%w: runner session store", ErrMissingDependency)
-	case cfg.Authenticator == nil:
-		return nil, fmt.Errorf("%w: authenticator", ErrMissingDependency)
-	case cfg.Authorizer == nil:
-		return nil, fmt.Errorf("%w: authorizer", ErrMissingDependency)
-	case cfg.Logger == nil:
-		return nil, fmt.Errorf("%w: logger", ErrMissingDependency)
-	case cfg.ServerURL == "":
-		return nil, fmt.Errorf("%w: server URL", ErrMissingDependency)
+	if err := cfg.validate(); err != nil {
+		return nil, err
 	}
 
 	now := cfg.Now
@@ -142,6 +153,11 @@ func NewHandler(cfg Config) (*Handler, error) {
 	interval := cfg.PollInterval
 	if interval <= 0 {
 		interval = defaultPollInterval
+	}
+
+	recorder, err := refusal.New(cfg.Authorizer, cfg.Audit, cfg.Namespaces, cfg.Logger, cfg.OnAuditFailure)
+	if err != nil {
+		return nil, fmt.Errorf("denial recorder: %w", err)
 	}
 
 	h := &Handler{
@@ -156,16 +172,14 @@ func NewHandler(cfg Config) (*Handler, error) {
 		authz:      cfg.Authorizer,
 		sessions:   cfg.Sessions,
 		logger:     cfg.Logger,
-		guard: refusal.New(cfg.Authorizer, cfg.Audit, cfg.Namespaces, cfg.Logger, cfg.OnAuditFailure).
-			WithLimiter(cfg.DenialLimiter).
-			WithSurface("runner"),
-		release:   cfg.Release,
-		serverURL: cfg.ServerURL,
-		now:       now,
-		interval:  interval,
-		polls:     sync.Map{},
-		mux:       newPatternMux(),
-		routes:    nil,
+		guard:      recorder.WithLimiter(cfg.DenialLimiter).WithSurface("runner"),
+		release:    cfg.Release,
+		serverURL:  cfg.ServerURL,
+		now:        now,
+		interval:   interval,
+		polls:      sync.Map{},
+		mux:        newPatternMux(),
+		routes:     nil,
 	}
 
 	h.routes = h.buildRoutes()

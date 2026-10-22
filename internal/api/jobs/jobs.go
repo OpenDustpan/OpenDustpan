@@ -15,6 +15,7 @@ import (
 
 	"opendustpan.org/opendustpan/internal/api/refusal"
 	"opendustpan.org/opendustpan/internal/denylimit"
+	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/internal/sessionauth"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/idempotency"
@@ -77,6 +78,8 @@ type Handler struct {
 // required.
 func NewHandler(cfg Config) (*Handler, error) {
 	switch {
+	case cfg.Audit == nil:
+		return nil, fmt.Errorf("%w: audit store", ErrMissingDependency)
 	case cfg.Namespaces == nil:
 		return nil, fmt.Errorf("%w: namespace service", ErrMissingDependency)
 	case cfg.Jobs == nil:
@@ -89,18 +92,21 @@ func NewHandler(cfg Config) (*Handler, error) {
 		return nil, fmt.Errorf("%w: logger", ErrMissingDependency)
 	}
 
+	recorder, err := refusal.New(cfg.Authorizer, cfg.Audit, cfg.Namespaces, cfg.Logger, cfg.OnAuditFailure)
+	if err != nil {
+		return nil, fmt.Errorf("denial recorder: %w", err)
+	}
+
 	h := &Handler{
 		namespaces: cfg.Namespaces,
 		jobs:       cfg.Jobs,
 		starter:    cfg.Starter,
 		authn:      cfg.Authenticator,
 		sessions:   cfg.Sessions,
-		guard: refusal.New(cfg.Authorizer, cfg.Audit, cfg.Namespaces, cfg.Logger, cfg.OnAuditFailure).
-			WithLimiter(cfg.DenialLimiter).
-			WithSurface("jobs"),
-		logger: cfg.Logger,
-		mux:    newPatternMux(),
-		routes: nil,
+		guard:      recorder.WithLimiter(cfg.DenialLimiter).WithSurface("jobs"),
+		logger:     cfg.Logger,
+		mux:        newPatternMux(),
+		routes:     nil,
 	}
 
 	h.routes = h.buildRoutes()
@@ -200,9 +206,9 @@ func classify(err error) errorResponse {
 	case errors.Is(err, identity.ErrUnauthenticated):
 		return errorResponse{Code: http.StatusUnauthorized, ErrorCode: "", Message: "unauthenticated"}
 	case errors.Is(err, sessionauth.ErrCSRF), errors.Is(err, sessionauth.ErrOtherSite):
-		return errorResponse{Code: http.StatusForbidden, ErrorCode: "", Message: err.Error()}
+		return errorResponse{Code: http.StatusForbidden, ErrorCode: errcode.Forbidden(err), Message: err.Error()}
 	case errors.Is(err, identity.ErrDenied):
-		return errorResponse{Code: http.StatusForbidden, ErrorCode: "", Message: unitCannotBeStated}
+		return errorResponse{Code: http.StatusForbidden, ErrorCode: errcode.Forbidden(err), Message: unitCannotBeStated}
 	case errors.Is(err, errNotFound), errors.Is(err, namespace.ErrNotFound), errors.Is(err, job.ErrNotFound):
 		return errorResponse{Code: http.StatusNotFound, ErrorCode: "", Message: errNotFound.Error()}
 	case errors.Is(err, namespace.ErrNotHome):

@@ -17,10 +17,17 @@ import (
 // Harness is one fresh, empty store for one subtest. Namespace makes the
 // namespace called name and returns its current fence. Audit returns the
 // audit entries of a namespace, oldest first.
+//
+// Seed writes views directly to the storage of the store, with no fence, no
+// audit entry and no limit check, in one transaction. The namespace of each
+// view exists already. The limit cases use it to fill a namespace up to one
+// view below a limit, and then write the last views through Store. An adapter
+// can leave Seed nil: the cases then fill the namespace through Store.
 type Harness struct {
 	Store     savedview.Store
 	Namespace func(t *testing.T, name string) namespace.Fence
 	Audit     func(t *testing.T, ns string) []audit.Entry
+	Seed      func(t *testing.T, views []savedview.View)
 }
 
 // Factory returns a fresh harness for one subtest.

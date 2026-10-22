@@ -307,6 +307,8 @@ How-to guides:
   and what a refusal looks like.
 - [Set and read context](docs/guides/context.md): the owners, the on-call
   text and the other context of a namespace and of a unit.
+- [Check a workspace for drift](docs/guides/drift-checks.md): start a drift check
+  of an OpenTofu workspace and read its latest drift result.
 - [Save and open a view of the unit list](docs/guides/saved-views.md): store
   the labels and references of a unit list under a name, and open the view
   again.
@@ -338,6 +340,9 @@ Reference:
   of a journaled update.
 - [Preferences API](docs/reference/preferences-api.md): the routes that read
   and change the preferences of a person.
+- [Error codes of a 403 answer](docs/reference/forbidden-error-codes.md): the
+  stable codes that tell a missing permission, the IP allowlist and the session
+  checks apart.
 - [Registry API](docs/reference/registry-api.md): the routes that publish a provider,
   manage signing keys, and the routes that OpenTofu reads.
 - [Notification destinations API](docs/reference/notification-destinations-api.md):

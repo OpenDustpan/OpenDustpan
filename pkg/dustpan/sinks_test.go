@@ -270,8 +270,15 @@ func TestSinkSenderOptionReplacesTheBuiltInSender(t *testing.T) {
 
 	// The server seals the key: the store holds no plaintext of it.
 	sealed, err := f.store.NotificationSinks().SinkSecrets(t.Context(), "acme", made.ID)
-	if err != nil || len(sealed) != 1 || strings.Contains(string(sealed[0].Ciphertext()), made.SigningKey) {
-		t.Fatalf("stored secret = %d items (%v), want one sealed item", len(sealed), err)
+	if err != nil || len(sealed) != 2 {
+		t.Fatalf("stored secrets = %d items (%v), want the sealed URL and the sealed key", len(sealed), err)
+	}
+
+	for _, item := range sealed {
+		if strings.Contains(string(item.Ciphertext()), made.SigningKey) ||
+			strings.Contains(string(item.Ciphertext()), "hooks.example.com/dustpan") {
+			t.Fatal("the store holds the key or the URL in plaintext")
+		}
 	}
 
 	checkSinkAudit(t, f, made.SigningKey)
