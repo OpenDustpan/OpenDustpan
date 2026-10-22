@@ -89,7 +89,10 @@ stores the canonical form of the key, not the bytes that you sent.
 ### Errors
 
 The error body is `{"code": 422, "message": "...", "errorCode": "..."}`. The
-text names the file or the field that fails and holds no byte of a key.
+text names the file or the field that fails and holds no byte of a key. The
+API also answers the shared codes of the tool-neutral APIs (see
+[the error codes of the tool-neutral APIs](tool-neutral-error-codes.md)), for
+example `server.internal` for a 500.
 
 | Status | `errorCode` | Cause |
 | --- | --- | --- |

@@ -8,23 +8,19 @@ package registry
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
-	"strings"
 
 	"opendustpan.org/opendustpan/internal/api/idempotent"
+	"opendustpan.org/opendustpan/internal/api/problem"
 	"opendustpan.org/opendustpan/internal/api/refusal"
+	"opendustpan.org/opendustpan/internal/api/route"
 	"opendustpan.org/opendustpan/internal/denylimit"
-	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/internal/sessionauth"
 	"opendustpan.org/opendustpan/pkg/audit"
-	"opendustpan.org/opendustpan/pkg/idempotency"
 	"opendustpan.org/opendustpan/pkg/identity"
-	"opendustpan.org/opendustpan/pkg/maintenance"
-	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/registry"
 	"opendustpan.org/opendustpan/pkg/registry/releasecheck"
 	"opendustpan.org/opendustpan/pkg/registry/service"
@@ -34,8 +30,6 @@ import (
 var ErrMissingDependency = errors.New("missing dependency")
 
 const (
-	tokenScheme  = "token "
-	bearerScheme = "Bearer "
 	// v1Prefix is the prefix of the tool-neutral REST API.
 	v1Prefix = "/api/dustpan/v1"
 	// channelHeader says where a request came from, for the audit entry.
@@ -81,7 +75,7 @@ type Handler struct {
 	idem     *idempotent.Middleware
 	logger   *slog.Logger
 	maxFile  int64
-	mux      *patternMux
+	mux      *route.Mux
 	routes   []Route
 }
 
@@ -111,13 +105,13 @@ func NewHandler(cfg Config) (*Handler, error) {
 		idem:     cfg.Idempotency,
 		logger:   cfg.Logger,
 		maxFile:  cfg.MaxUploadBytes,
-		mux:      newPatternMux(),
+		mux:      route.NewMux(),
 		routes:   nil,
 	}
 
 	h.routes = h.buildRoutes()
-	for _, route := range h.routes {
-		h.mux.HandleFunc(route.Method+" "+route.Path, h.enforce(route))
+	for _, rt := range h.routes {
+		h.mux.HandleFunc(rt.Pattern(), h.enforce(rt))
 	}
 
 	return h, nil
@@ -128,138 +122,11 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	h.mux.ServeHTTP(w, r)
 }
 
-// authenticate resolves the Authorization header to a principal. A request with
-// no header uses the console session cookie, and the bool reports that the
-// cookie signed it in.
-func (h *Handler) authenticate(r *http.Request) (identity.Principal, bool, error) {
-	header := r.Header.Get("Authorization")
-	if header == "" {
-		p, _, err := h.sessions.Authenticate(r)
-
-		return p, err == nil, err
-	}
-
-	raw, ok := strings.CutPrefix(header, tokenScheme)
-	if !ok {
-		raw, ok = strings.CutPrefix(header, bearerScheme)
-	}
-
-	if !ok || raw == "" {
-		return identity.Principal{}, false, identity.ErrUnauthenticated
-	}
-
-	p, err := h.authn.AuthenticateToken(r.Context(), raw)
-
-	return p, false, err
-}
-
-// errorResponse is the error body of the tool-neutral APIs. ErrorCode is a
-// stable machine code.
-type errorResponse struct {
-	Message   string `json:"message"`
-	Code      int    `json:"code"`
-	ErrorCode string `json:"errorCode,omitempty"`
-}
-
-// statusError is an error with a fixed answer.
-type statusError struct {
-	status  int
-	code    string
-	message string
-}
-
-func (e *statusError) Error() string { return e.message }
-
-func badRequest(code, message string) error {
-	return &statusError{status: http.StatusBadRequest, code: code, message: message}
-}
-
+// writeError answers err through the shared error module. The classifier of
+// this API answers the errors of the registry first; the shared classes
+// answer the rest, and an error that none of them knows is a 500.
 func (h *Handler) writeError(ctx context.Context, w http.ResponseWriter, err error) {
-	pr := classify(err)
-	if pr.status == http.StatusInternalServerError {
-		// The log names the status only: the text may hold driver detail.
-		h.logger.ErrorContext(ctx, "request failed", slog.Int("status", pr.status))
-	}
-
-	if errors.Is(err, namespace.ErrFenced) {
-		h.logger.WarnContext(ctx, "write fenced", slog.String("error", err.Error()))
-	}
-
-	w.Header().Set("Cache-Control", "no-store")
-	h.writeJSON(ctx, w, pr.status, errorResponse{Code: pr.status, Message: pr.message, ErrorCode: pr.code})
-}
-
-// problem is the answer to an error: a status, a stable code and a message that
-// is safe to show callers.
-type problem struct {
-	status  int
-	code    string
-	message string
-}
-
-func classify(err error) problem {
-	if pr, ok := classifyAuth(err); ok {
-		return pr
-	}
-
-	if se, ok := errors.AsType[*statusError](err); ok {
-		return problem{status: se.status, code: se.code, message: se.message}
-	}
-
-	if ie, ok := errors.AsType[*idempotent.Error](err); ok {
-		return problem{status: ie.Status, code: ie.Code, message: ie.Message}
-	}
-
-	if errors.Is(err, idempotency.ErrLost) {
-		return problem{
-			status: http.StatusConflict, code: idempotent.CodeInProgress,
-			message: "a newer request took this Idempotency-Key before this request ended: retry later",
-		}
-	}
-
-	if pr, ok := classifyNamespace(err); ok {
-		return pr
-	}
-
-	return classifyRegistry(err)
-}
-
-func classifyNamespace(err error) (problem, bool) {
-	switch {
-	case errors.Is(err, namespace.ErrInvalidName):
-		return problem{status: http.StatusBadRequest, code: "namespace.invalid-name", message: err.Error()}, true
-	case errors.Is(err, namespace.ErrNotFound):
-		return problem{status: http.StatusNotFound, code: "namespace.not-found", message: "namespace not found"}, true
-	case errors.Is(err, namespace.ErrFenced):
-		return problem{
-			status:  http.StatusConflict,
-			code:    "namespace.fenced",
-			message: namespace.ErrFenced.Error(),
-		}, true
-	case errors.Is(err, namespace.ErrNotHome):
-		return problem{
-			status: http.StatusMisdirectedRequest, code: "namespace.not-home",
-			message: "namespace is not homed in this region",
-		}, true
-	case errors.Is(err, maintenance.ErrInMaintenance):
-		return problem{
-			status: http.StatusServiceUnavailable, code: "maintenance.in-maintenance",
-			message: maintenance.ErrInMaintenance.Error() + ": try again later",
-		}, true
-	default:
-		return problem{status: 0, code: "", message: ""}, false
-	}
-}
-
-// classifyRegistry maps the errors of the registry. The text of a refusal names
-// the field or the file that fails, and holds no byte of a key.
-func classifyRegistry(err error) problem {
-	status, code := registryStatus(err)
-	if status == http.StatusInternalServerError {
-		return problem{status: status, code: code, message: "internal error"}
-	}
-
-	return problem{status: status, code: code, message: err.Error()}
+	problem.Writer{Logger: h.logger, Classify: classifyRegistry}.Write(ctx, w, err)
 }
 
 // registryProblem maps one error of the registry to its answer.
@@ -290,41 +157,20 @@ var registryProblems = []registryProblem{
 	{service.ErrBadRequest, "registry.invalid", http.StatusBadRequest},
 }
 
-// registryStatus returns the status and the stable code of a registry error,
-// and 500 for an error that it does not know.
-func registryStatus(err error) (int, string) {
+// classifyRegistry answers the errors of the registry. The text of a refusal
+// names the field or the file that fails, and holds no byte of a key.
+func classifyRegistry(err error) (problem.Problem, bool) {
 	for _, p := range registryProblems {
 		if errors.Is(err, p.err) {
-			return p.status, p.code
+			return problem.Problem{
+				Status: p.status, Code: p.code, Message: err.Error(), Args: nil, RetryAfter: 0, Reauthenticate: "",
+			}, true
 		}
 	}
 
-	return http.StatusInternalServerError, ""
-}
-
-func classifyAuth(err error) (problem, bool) {
-	switch {
-	case errors.Is(err, identity.ErrRateLimited):
-		return problem{
-			status: http.StatusTooManyRequests, code: "auth.rate-limited",
-			message: "too many failed sign-ins from this address: try again later",
-		}, true
-	case errors.Is(err, identity.ErrUnauthenticated):
-		return problem{status: http.StatusUnauthorized, code: "auth.unauthenticated", message: "unauthenticated"}, true
-	case errors.Is(err, sessionauth.ErrCSRF), errors.Is(err, sessionauth.ErrOtherSite):
-		return problem{status: http.StatusForbidden, code: errcode.Forbidden(err), message: err.Error()}, true
-	case errors.Is(err, identity.ErrDenied):
-		return problem{status: http.StatusForbidden, code: errcode.Forbidden(err), message: "forbidden"}, true
-	default:
-		return problem{status: 0, code: "", message: ""}, false
-	}
+	return problem.Pass()
 }
 
 func (h *Handler) writeJSON(ctx context.Context, w http.ResponseWriter, status int, body any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-
-	if err := json.NewEncoder(w).Encode(body); err != nil {
-		h.logger.WarnContext(ctx, "write response failed", slog.String("error", err.Error()))
-	}
+	problem.WriteJSON(ctx, h.logger, w, status, body)
 }

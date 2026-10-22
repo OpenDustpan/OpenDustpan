@@ -6,14 +6,16 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"mime"
 	"net/http"
 	"time"
 
 	"opendustpan.org/opendustpan/internal/api/idempotent"
+	"opendustpan.org/opendustpan/internal/api/problem"
+	"opendustpan.org/opendustpan/internal/api/route"
 	"opendustpan.org/opendustpan/internal/clientip"
 	"opendustpan.org/opendustpan/internal/requestid"
+	"opendustpan.org/opendustpan/internal/sessionauth"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/idempotency"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -130,7 +132,7 @@ func callerOf(r *http.Request, p identity.Principal) *service.Caller {
 	by := audit.Entry{
 		At: time.Time{}, Namespace: "", Subject: "", IDPSubject: "", TokenID: "", Action: "", Object: "",
 		Version: "", ValuePath: "", ValueCount: nil, Changes: nil, SourceIP: clientip.String(r),
-		UserAgent: truncateUserAgent(r.UserAgent()), Channel: audit.NormalizeChannel(r.Header.Get(channelHeader)),
+		UserAgent: truncateUserAgent(r.UserAgent()), Channel: sessionauth.AuditChannel(r, channelHeader),
 		Kind: audit.KindChange, Outcome: audit.OutcomeSuccess, RequestID: requestid.FromContext(r.Context()),
 		ObjectID: "", PrevHash: "", Hash: "", Sequence: 0, FenceVersion: 0, Reason: "", PrincipalKind: string(p.Kind),
 		JobID: p.JobID,
@@ -147,30 +149,26 @@ func callerOf(r *http.Request, p identity.Principal) *service.Caller {
 	return &service.Caller{Principal: p, By: by}
 }
 
+// truncateUserAgent caps s at audit.MaxUserAgentLen bytes.
 func truncateUserAgent(s string) string {
 	if len(s) <= audit.MaxUserAgentLen {
 		return s
 	}
 
-	return s[:audit.MaxUserAgentLen]
+	// Cut on a UTF-8 rune boundary, so a multi-byte rune is never split and
+	// the entry keeps valid UTF-8.
+	cut := audit.MaxUserAgentLen
+	for cut > 0 && s[cut]&0xC0 == 0x80 {
+		cut--
+	}
+
+	return s[:cut]
 }
 
 // readBody decodes one JSON object into v. It refuses an unknown field, a
 // second value and a body over the limit.
 func readBody(w http.ResponseWriter, r *http.Request, v any) error {
-	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxBodyBytes))
-	if err != nil {
-		return badRequest("request.body-invalid", "the request body is not readable or is over 2 MiB")
-	}
-
-	dec := json.NewDecoder(bytes.NewReader(body))
-	dec.DisallowUnknownFields()
-
-	if err = dec.Decode(v); err != nil || dec.More() {
-		return badRequest("request.body-invalid", "the request body must be one JSON object with known fields")
-	}
-
-	return nil
+	return route.DecodeBody(w, r, maxBodyBytes, v)
 }
 
 // uploadMediaType is the media type of the body of an upload.
@@ -185,10 +183,10 @@ func (h *Handler) stage(w http.ResponseWriter, r *http.Request, p identity.Princ
 	// it is read.
 	mediaType, _, typeErr := mime.ParseMediaType(r.Header.Get("Content-Type"))
 	if typeErr != nil || mediaType != uploadMediaType {
-		h.writeError(ctx, w, &statusError{
-			status: http.StatusUnsupportedMediaType, code: "request.content-type-unsupported",
-			message: "send the file with the header Content-Type: " + uploadMediaType,
-		})
+		h.writeError(ctx, w, problem.Fixed(
+			http.StatusUnsupportedMediaType, "request.content-type-unsupported",
+			"send the file with the header Content-Type: "+uploadMediaType,
+		))
 
 		return
 	}
