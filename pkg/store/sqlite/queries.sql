@@ -83,18 +83,25 @@ FROM stacks
 WHERE namespace = ? AND project = ? AND deleted_at_ms IS NULL
 ORDER BY name;
 
--- name: ListStackPage :many
--- One page of the live stacks of the namespaces, after the cursor, in the
--- order of the primary key: namespace, project, name. The namespaces are a
--- JSON array of strings. every_project is 1 to match every project. The first
--- page has an empty cursor.
+-- name: ListStackPageInNamespace :many
+-- One page of the live stacks of a namespace after a project and a name, in
+-- the order of the primary key. The cursor is a range of the key, so the read
+-- starts at the cursor.
 SELECT namespace, project, name, id, version, created_at_ms, updated_at_ms
 FROM stacks
-WHERE namespace IN (SELECT j.value FROM json_each(CAST(sqlc.arg(namespaces_json) AS TEXT)) AS j)
-  AND deleted_at_ms IS NULL
-  AND (CAST(sqlc.arg(every_project) AS INTEGER) = 1 OR project = sqlc.arg(project))
-  AND (namespace, project, name) > (sqlc.arg(after_namespace), sqlc.arg(after_project), sqlc.arg(after_name))
-ORDER BY namespace, project, name
+WHERE namespace = sqlc.arg(namespace) AND deleted_at_ms IS NULL
+  AND (project, name) > (sqlc.arg(after_project), sqlc.arg(after_name))
+ORDER BY project, name
+LIMIT sqlc.arg(page_limit);
+
+-- name: ListStackPageInProject :many
+-- One page of the live stacks of a project after a name, in the order of the
+-- primary key.
+SELECT namespace, project, name, id, version, created_at_ms, updated_at_ms
+FROM stacks
+WHERE namespace = sqlc.arg(namespace) AND project = sqlc.arg(project) AND deleted_at_ms IS NULL
+  AND name > sqlc.arg(after_name)
+ORDER BY name
 LIMIT sqlc.arg(page_limit);
 
 -- name: ListStackTagsOfStacks :many

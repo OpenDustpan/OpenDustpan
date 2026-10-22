@@ -4,34 +4,30 @@ import (
 	"context"
 	"fmt"
 
-	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/stack"
 	"opendustpan.org/opendustpan/pkg/store/internal/codec"
 	"opendustpan.org/opendustpan/pkg/store/postgres/internal/db"
 )
 
-// QueryStacks implements stack.Store with one page query in the order of the
-// primary key, and one tag query for the stacks of the page.
+// QueryStacks implements stack.Store. It reads the range of each namespace of
+// q in the order of the page, with a range of the primary key, until the page
+// is full, then the tags of the stacks of the page in one query.
 func (s *Store) QueryStacks(ctx context.Context, q stack.PageQuery) ([]stack.Stack, error) {
-	if len(q.Namespaces) == 0 {
-		return []stack.Stack{}, nil
-	}
+	limit := q.PageLimit()
+	rows := []codec.StackRow{}
 
-	after := stack.PageCursor{Namespace: "", Project: "", Name: ""}
-	if q.After != nil {
-		after = *q.After
-	}
+	for _, r := range q.Ranges() {
+		need := limit - len(rows)
+		if need == 0 {
+			break
+		}
 
-	rows, err := s.queries.ListStackPage(ctx, db.ListStackPageParams{
-		Namespaces:     namespaceStrings(q.Namespaces),
-		Project:        q.Project.String(),
-		AfterNamespace: after.Namespace.String(),
-		AfterProject:   after.Project.String(),
-		AfterName:      after.Name.String(),
-		PageLimit:      int32(q.PageLimit()), //nolint:gosec // PageLimit is at most MaxPageLimit.
-	})
-	if err != nil {
-		return nil, fmt.Errorf("select stack page: %w", err)
+		part, err := s.stackRange(ctx, r, q.Project, need)
+		if err != nil {
+			return nil, err
+		}
+
+		rows = append(rows, part...)
 	}
 
 	if len(rows) == 0 {
@@ -48,12 +44,6 @@ func (s *Store) QueryStacks(ctx context.Context, q stack.PageQuery) ([]stack.Sta
 		return nil, fmt.Errorf("select stack page tags: %w", err)
 	}
 
-	return stackPageOf(rows, tagRows), nil
-}
-
-// stackPageOf converts the rows of one stack page and their tag rows into
-// stacks.
-func stackPageOf(rows []db.ListStackPageRow, tagRows []db.StackTag) []stack.Stack {
 	tags := make(map[string]map[string]string, len(rows))
 
 	for _, t := range tagRows {
@@ -65,9 +55,51 @@ func stackPageOf(rows []db.ListStackPageRow, tagRows []db.StackTag) []stack.Stac
 	}
 
 	out := make([]stack.Stack, 0, len(rows))
+	for i := range rows {
+		out = append(out, codec.FromStackRow(rows[i], tags[rows[i].ID]))
+	}
 
+	return out, nil
+}
+
+// stackRange reads at most need stacks of the range r. A project that is
+// not empty keeps the stacks of that project only.
+func (s *Store) stackRange(
+	ctx context.Context, r stack.NamespaceRange, project stack.ProjectName, need int,
+) ([]codec.StackRow, error) {
+	var rows []db.ListStackPageInNamespaceRow
+
+	if project == "" {
+		got, err := s.queries.ListStackPageInNamespace(ctx, db.ListStackPageInNamespaceParams{
+			Namespace:    r.Namespace.String(),
+			AfterProject: r.AfterProject.String(),
+			AfterName:    r.AfterName.String(),
+			PageLimit:    int32(need), //nolint:gosec // need is at most MaxPageLimit.
+		})
+		if err != nil {
+			return nil, fmt.Errorf("select stack page: %w", err)
+		}
+
+		rows = got
+	} else {
+		got, err := s.queries.ListStackPageInProject(ctx, db.ListStackPageInProjectParams{
+			Namespace: r.Namespace.String(),
+			Project:   project.String(),
+			AfterName: r.AfterName.String(),
+			PageLimit: int32(need), //nolint:gosec // need is at most MaxPageLimit.
+		})
+		if err != nil {
+			return nil, fmt.Errorf("select stack page: %w", err)
+		}
+
+		for i := range got {
+			rows = append(rows, db.ListStackPageInNamespaceRow(got[i]))
+		}
+	}
+
+	out := make([]codec.StackRow, 0, len(rows))
 	for _, row := range rows {
-		out = append(out, codec.FromStackRow(codec.StackRow{
+		out = append(out, codec.StackRow{
 			Namespace:   row.Namespace,
 			Project:     row.Project,
 			Name:        row.Name,
@@ -75,18 +107,8 @@ func stackPageOf(rows []db.ListStackPageRow, tagRows []db.StackTag) []stack.Stac
 			Version:     row.Version,
 			CreatedAtMs: row.CreatedAtMs,
 			UpdatedAtMs: row.UpdatedAtMs,
-		}, tags[row.ID]))
+		})
 	}
 
-	return out
-}
-
-// namespaceStrings returns the names as strings.
-func namespaceStrings(names []namespace.Name) []string {
-	out := make([]string, len(names))
-	for i := range names {
-		out[i] = names[i].String()
-	}
-
-	return out
+	return out, nil
 }

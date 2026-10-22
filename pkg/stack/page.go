@@ -39,6 +39,51 @@ func (q PageQuery) PageLimit() int {
 	return min(max(q.Limit, 1), MaxPageLimit)
 }
 
+// NamespaceRange is the part of a page in one namespace: the stacks of
+// Namespace after AfterProject and AfterName, in the order of project, then
+// name. With the project filter of the query, only AfterName counts.
+type NamespaceRange struct {
+	Namespace    namespace.Name
+	AfterProject ProjectName
+	AfterName    Name
+}
+
+// Ranges returns the part of the page of q in each namespace, in the order of
+// the page: each namespace of q once, in byte order, from the
+// namespace of the cursor on. A store reads each range with a range of its
+// index on namespace, project and name, until the page is full.
+func (q PageQuery) Ranges() []NamespaceRange {
+	names := slices.Clone(q.Namespaces)
+	slices.Sort(names)
+	names = slices.Compact(names)
+
+	out := make([]NamespaceRange, 0, len(names))
+
+	for _, ns := range names {
+		r := NamespaceRange{Namespace: ns, AfterProject: "", AfterName: ""}
+
+		switch {
+		case q.After == nil || ns > q.After.Namespace:
+			// The range starts at the first stack of the namespace.
+		case ns < q.After.Namespace:
+			continue
+		case q.Project == "":
+			r.AfterProject, r.AfterName = q.After.Project, q.After.Name
+		case q.After.Project == q.Project:
+			r.AfterName = q.After.Name
+		case q.After.Project > q.Project:
+			continue
+		default:
+			// The cursor is before the project: the range starts at the
+			// first stack of the project.
+		}
+
+		out = append(out, r)
+	}
+
+	return out
+}
+
 // CursorOf returns the cursor of the page that starts after st.
 func CursorOf(st Stack) PageCursor {
 	return PageCursor{Namespace: st.Ref.Namespace, Project: st.Ref.Project, Name: st.Ref.Stack}

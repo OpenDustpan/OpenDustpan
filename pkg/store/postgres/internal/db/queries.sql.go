@@ -12818,26 +12818,23 @@ func (q *Queries) ListSignInProviders(ctx context.Context) ([]SignInProvider, er
 	return items, nil
 }
 
-const listStackPage = `-- name: ListStackPage :many
+const listStackPageInNamespace = `-- name: ListStackPageInNamespace :many
 SELECT namespace, project, name, id, version, created_at_ms, updated_at_ms
 FROM stacks
-WHERE namespace = ANY($1::text[]) AND deleted_at_ms IS NULL
-  AND ($2::text = '' OR project = $2::text)
-  AND (namespace, project, name) > ($3::text, $4::text, $5::text)
-ORDER BY namespace, project, name
-LIMIT $6
+WHERE namespace = $1 AND deleted_at_ms IS NULL
+  AND (project, name) > ($2, $3)
+ORDER BY project, name
+LIMIT $4
 `
 
-type ListStackPageParams struct {
-	Namespaces     []string
-	Project        string
-	AfterNamespace string
-	AfterProject   string
-	AfterName      string
-	PageLimit      int32
+type ListStackPageInNamespaceParams struct {
+	Namespace    string
+	AfterProject string
+	AfterName    string
+	PageLimit    int32
 }
 
-type ListStackPageRow struct {
+type ListStackPageInNamespaceRow struct {
 	Namespace   string
 	Project     string
 	Name        string
@@ -12847,14 +12844,12 @@ type ListStackPageRow struct {
 	UpdatedAtMs int64
 }
 
-// One page of the live stacks of the namespaces, after the cursor, in the
-// order of the primary key: namespace, project, name. An empty project matches
-// every project. The first page has an empty cursor.
-func (q *Queries) ListStackPage(ctx context.Context, arg ListStackPageParams) ([]ListStackPageRow, error) {
-	rows, err := q.db.Query(ctx, listStackPage,
-		arg.Namespaces,
-		arg.Project,
-		arg.AfterNamespace,
+// One page of the live stacks of a namespace after a project and a name, in
+// the order of the primary key. The cursor is a range of the key, so the read
+// starts at the cursor.
+func (q *Queries) ListStackPageInNamespace(ctx context.Context, arg ListStackPageInNamespaceParams) ([]ListStackPageInNamespaceRow, error) {
+	rows, err := q.db.Query(ctx, listStackPageInNamespace,
+		arg.Namespace,
 		arg.AfterProject,
 		arg.AfterName,
 		arg.PageLimit,
@@ -12863,9 +12858,70 @@ func (q *Queries) ListStackPage(ctx context.Context, arg ListStackPageParams) ([
 		return nil, err
 	}
 	defer rows.Close()
-	var items []ListStackPageRow
+	var items []ListStackPageInNamespaceRow
 	for rows.Next() {
-		var i ListStackPageRow
+		var i ListStackPageInNamespaceRow
+		if err := rows.Scan(
+			&i.Namespace,
+			&i.Project,
+			&i.Name,
+			&i.ID,
+			&i.Version,
+			&i.CreatedAtMs,
+			&i.UpdatedAtMs,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listStackPageInProject = `-- name: ListStackPageInProject :many
+SELECT namespace, project, name, id, version, created_at_ms, updated_at_ms
+FROM stacks
+WHERE namespace = $1 AND project = $2 AND deleted_at_ms IS NULL
+  AND name > $3
+ORDER BY name
+LIMIT $4
+`
+
+type ListStackPageInProjectParams struct {
+	Namespace string
+	Project   string
+	AfterName string
+	PageLimit int32
+}
+
+type ListStackPageInProjectRow struct {
+	Namespace   string
+	Project     string
+	Name        string
+	ID          string
+	Version     int64
+	CreatedAtMs int64
+	UpdatedAtMs int64
+}
+
+// One page of the live stacks of a project after a name, in the order of the
+// primary key.
+func (q *Queries) ListStackPageInProject(ctx context.Context, arg ListStackPageInProjectParams) ([]ListStackPageInProjectRow, error) {
+	rows, err := q.db.Query(ctx, listStackPageInProject,
+		arg.Namespace,
+		arg.Project,
+		arg.AfterName,
+		arg.PageLimit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListStackPageInProjectRow
+	for rows.Next() {
+		var i ListStackPageInProjectRow
 		if err := rows.Scan(
 			&i.Namespace,
 			&i.Project,
