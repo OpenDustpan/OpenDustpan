@@ -61,36 +61,58 @@ pkg/                   the public SDK: dustpan, the port packages and the confor
   secret/              domain: per-scope envelope encryption (first user: the Pulumi CLI's service secrets provider)
   workspace/           domain (OpenTofu): workspaces, locks, state versions (RFC 1)
   identity/            ports: Authenticator, Authorizer; bootstrap StaticToken, AdminOnly
-  blob/                port: object storage; blob/fs and blob/s3 adapters; blob/blobtest suite
-  scopeaudit/          helper: the audit recorder for the refusals of the scoped blob views, shared by stack, workspace and secret
+  principal/           domain: the principals and the groups of an installation
+  access/              domain: roles, grants and the decision of what a principal can do on an object
+  accesstoken/         domain: the access tokens that the server issues to principals
+  session/             domain: the console sessions that the server issues after a sign-in
+  tempadmin/           domain: temporary administrators of an installation
+  ipallow/             domain: per-namespace IP allowlists
+  audit/               domain: the tool-neutral audit log, with a hash chain for each namespace
+  collection/          domain: collections, named sets of units in one namespace
+  maintenance/         domain: the installation state (normal operation or maintenance mode for a restore)
+  installation/        domain: the installation kind, the marker of the command that made the data
+  durable/             domain: durable operations, units of background work that survive the stop of an instance
+  idempotency/         domain: the replay records of the Idempotency-Key header
+  manuallock/          domain: manual locks that a person puts on a unit, a collection or a namespace
+  profile/             domain: profiles, named sets of config, secrets and credentials with numbered revisions
+  breakglass/          domain: the review after use of each break-glass
+  notify/              domain: the notification model; notify/chat, notify/sinks and notify/webhook are the built-in senders
+  logsink/             port: structured log records; logsink/file, objectstore, slogsink, syslog and webhook are the built-in sinks
+  egress/              domain: the rules for outbound requests to an address that a principal gives
+  blob/                port: object storage; blob/fs, blob/s3 and blob/cache adapters; blob/blobtest suite
   backup/              domain: backup ports (export, import, registry) and the table list
   history/             domain: unit history, redaction, item keys of history items, tombstones, retention
-  dependency/          domain: dependency edges between units, dependents window, safe delete
   job/                 domain: jobs, phases, gates, executors (write-back, runners) on durable operations
   runner/              domain: runner pools, runners, claims and the runner protocol (runner/protocol)
-  launcher/            domain: the launcher contract (a static binary that runs the steps of one claim)
-  source/              domain: source snapshots, the source policy and checks of fetched code
-  agent/               domain: Dusty, the built-in agent: runs, turns, tools, the MCP endpoint
   objectcontext/       domain: context on every object and the context read API
   graph/               domain: the unit graph, blast radius and focus view
-  unmanaged/           domain: the resource index, Sweep and findings of unmanaged resources
   drift/               domain: drift checks, the drift result and status, the drift schedule setting (RFC 25)
   trigger/             domain: run triggers that start a plan (review request push, schedule, follows unit), the cycle rule (RFC 24)
   outputshare/         domain: sharing rules, the output sharing setting of a namespace and the read check of outputs (RFC 15)
-  cron/                helper: the 5-field UTC cron parser and the schedule presets, standard library only
   savedview/           domain: saved views, a named query of the unit list (RFC 100)
   preferences/         domain: the preferences of a person (theme, language, formats, time zone), the merge patch and its checks
-  stepup/              ports: the step-up of a person in the CLI (step-up keys, challenges, credentials, TOTP), with no adapter yet
-  registry/            domain: the private registry, with the address, the release and the store port (RFC 101)
-  unitimport/          domain: imports of units from a source, the import ledger and the move check
+  registry/            domain: the private registry: the address, the release and the store port; registry/pgpverify checks signatures
   gate/                domain: gates, access limits, approval rules, facts and decision records
   gate/cedargo/        adapter: the linked Cedar engine (cedar-go) of the gate engine port; gate/gatetest holds its suite
   gate/jobgate/        adapter: the job.Decider that turns approval defaults into the approval gates of a job
   forge/               domain: the Forge port, forge connections and their errors; forge/forgetest holds the conformance suite
+  forge/github/        adapter: the forge for GitHub
   store/               SQL adapters: sqlite/, postgres/; storetest/ conformance suite (the adapters move to internal/store/)
+  <domain>/<domain>test/ the conformance suite of a port (for example stack/stacktest)
 internal/              code that is not part of the SDK
-  <domain>svc/         the service of each split domain package (for example stacksvc); the ports stay in pkg/<domain>
-  store/, blob/, ...   the built-in adapters. pkg/dustpan has a constructor for each (OpenSQLite, OpenPostgres, FileBlobs, S3Blobs)
+  <domain>svc/         the service of each split domain package (for example stacksvc); no split exists yet, the ports stay in pkg/<domain>
+  agent/, dependency/, launcher/, source/, stepup/, unmanaged/, unitimport/, scopeaudit/, cron/
+                       domain packages and helpers that the SDK port closure does not reach
+  calendar/, catalog/, chatops/, cost/, freeze/, incident/, oncall/, policy/, quota/
+                       features with their own package and suite (<name>test/)
+  registry/            the registry service (service/), the release check (releasecheck/) and the signature fixture (pgpfixture/)
+  egress/egresshttp/   the HTTP client that applies the egress rules
+  breakglass/, graph/, history/, store/, blob/, notify/
+                       test helpers (breakglasstest, graphtest, historytest, storefault, blobfault) and notify/chat
+  authgate/, errcode/, oauth/, sessionauth/, token/, ident/, ...
+                       helpers shared across packages (sign-in failure windows, error codes, OAuth, tokens, identifiers)
+  pulumijournal/       the decoder and the replayer of the Pulumi update journal
+  cli/, clientgen/     the command-line client and the generator of API clients
   api/pulumi/          HTTP adapter for the Pulumi Cloud-compatible API (also used by the console)
   api/tfe/             HTTP adapter for the TFE-compatible API (OpenTofu)
   api/inventory/       HTTP adapter for the tool-neutral inventory API (also used by the console)
@@ -98,7 +120,8 @@ internal/              code that is not part of the SDK
   api/jobs/            HTTP adapter for the tool-neutral jobs API
   api/server/          HTTP adapter for the tool-neutral installation API (backups, metrics)
   api/runnerapi/       HTTP adapter for the runner protocol (/runner/v1) and the runner management API
-  metrics/, token/...  helpers shared across packages
+  metrics/, pgtest/, servertest/, ...
+                       metrics, the PostgreSQL test database and the test server
 load/                  load harness that replays recorded CLI traffic (make load); not part of make check
 e2e/                   end-to-end suite driving real CLI binaries of every supported tool (make e2e)
 deploy/helm/           the Helm chart in opendustpan/ (templates, values, schema, ci/ profiles); charttest/ holds its golden-file tests (make chart-lint)
@@ -132,9 +155,11 @@ The web console lives in its own repository, `OpenDustpan/console` (ADR 8).
 
 ## Backend rules (Go)
 
-- Domain packages (`namespace`, `stack`, `secret`, `workspace`, `identity`, `blob`, `backup`,
-  `history`, `dependency`, `job`, `runner`, `launcher`, `source`, `agent`, `objectcontext`, `graph`,
-  `unmanaged`, `drift`, `trigger`, `outputshare`, `savedview`, `registry`, `unitimport`, `preferences`, `stepup`, `gate`, `forge`) never import
+- Domain packages (the `pkg/` packages that the `domain` rule of `.golangci.yml` lists, for example
+  `namespace`, `stack`, `secret`, `workspace`, `identity`, `backup`, `history`, `job`, `runner`,
+  `objectcontext`, `graph`, `drift`, `trigger`, `outputshare`, `savedview`, `registry`, `preferences`,
+  `gate`, `forge`, and the ones in `internal/` that the rule lists, for example `agent`, `dependency`,
+  `launcher`, `source`, `stepup`, `unmanaged`, `unitimport`) never import
   `net/http`, `database/sql`, drivers, `pkg/store/...` or `internal/api/...`. depguard enforces this.
 - Define each port in the `pkg/` package of its domain. Put the service that
   uses the port in `internal/<domain>svc`. Keep ports small, and document them
