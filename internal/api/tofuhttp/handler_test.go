@@ -1042,3 +1042,24 @@ func TestRefusedFirstRequestCreatesNoUnit(t *testing.T) {
 		})
 	}
 }
+
+// TestLockedBodyNamesTheRefusingLock proves that a refused LOCK answers with
+// the lock that the refusal names, also when a later read of the unit would
+// see another lock: the answer and the refusal come from one revision.
+func TestLockedBodyNamesTheRefusingLock(t *testing.T) {
+	t.Parallel()
+
+	units := newFakeUnits(true)
+	units.ws.Lock = workspace.Lock{LockedAt: time.Now().UTC(), ID: "lock-now", Holder: "carol", Reason: ""}
+	units.lockErr = &workspace.LockRefusedError{
+		Lock: workspace.Lock{LockedAt: time.Now().UTC(), ID: "lock-dana", Holder: "dana", Reason: ""},
+		Err:  workspace.ErrLocked,
+	}
+
+	rec := do(newTestHandler(t, units), "LOCK", unitPath, lockBody("lock-two", "bob"), bearer(userToken))
+	if rec.Code != http.StatusLocked {
+		t.Fatalf("LOCK of a held unit: status %d, want 423", rec.Code)
+	}
+
+	assertLockBody(t, rec.Body.Bytes(), "lock-dana", "dana")
+}
