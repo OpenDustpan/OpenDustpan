@@ -138,10 +138,8 @@ func dropSchemaAtCleanup(tb testing.TB, base, name string) {
 		}()
 
 		for _, schema := range []string{name, name + "_control"} {
-			if _, execErr := conn.Exec(
-				ctx,
-				"DROP SCHEMA IF EXISTS "+pgx.Identifier{schema}.Sanitize()+" CASCADE",
-			); execErr != nil {
+			drop := "DROP SCHEMA IF EXISTS " + pgx.Identifier{schema}.Sanitize() + " CASCADE"
+			if _, execErr := conn.Exec(ctx, drop); execErr != nil {
 				tb.Errorf("drop schema %s: %v", schema, execErr)
 			}
 		}
