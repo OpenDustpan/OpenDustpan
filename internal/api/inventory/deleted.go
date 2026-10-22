@@ -174,10 +174,9 @@ func decodeCursor(s string) (*coreinventory.DeletedCursor, error) {
 	return &coreinventory.DeletedCursor{Tool: w.Tool, Name: w.Name, UnitID: w.UnitID}, nil
 }
 
-// intQuery parses the query value name as an int from low to limit. An empty
-// value is 0.
-func intQuery(r *http.Request, name string, low, limit int) (int, error) {
-	raw := r.URL.Query().Get(name)
+// intQuery parses the query value raw of the parameter name as an int from low
+// to limit. An empty value is 0.
+func intQuery(raw, name string, low, limit int) (int, error) {
 	if raw == "" {
 		return 0, nil
 	}
@@ -193,23 +192,25 @@ func intQuery(r *http.Request, name string, low, limit int) (int, error) {
 // deletedQuery builds the store query of a list request for ns. It does not
 // set the read scope.
 func (h *Handler) deletedQuery(r *http.Request, ns namespace.Name) (coreinventory.DeletedQuery, error) {
-	limit, err := intQuery(r, "pageSize", 1, coreinventory.MaxDeletedPageSize)
+	limit, err := intQuery(queryOf(r).Get("pageSize"), "pageSize", 1, coreinventory.MaxDeletedPageSize)
 	if err != nil {
 		return coreinventory.DeletedQuery{}, err
 	}
 
-	days, err := intQuery(r, "purgeWithinDays", 0, maxPurgeWithinDays)
+	days, err := intQuery(queryOf(r).Get("purgeWithinDays"), "purgeWithinDays", 0, maxPurgeWithinDays)
 	if err != nil {
 		return coreinventory.DeletedQuery{}, err
 	}
 
-	cursor, err := decodeCursor(r.URL.Query().Get("pageToken"))
+	query := queryOf(r)
+
+	cursor, err := decodeCursor(query.Get("pageToken"))
 	if err != nil {
 		return coreinventory.DeletedQuery{}, err
 	}
 
 	var before time.Time
-	if r.URL.Query().Has("purgeWithinDays") {
+	if query.Has("purgeWithinDays") {
 		before = h.now().Add(time.Duration(days) * day)
 	}
 
@@ -217,8 +218,8 @@ func (h *Handler) deletedQuery(r *http.Request, ns namespace.Name) (coreinventor
 		PurgeBefore: before,
 		After:       cursor,
 		Namespace:   ns,
-		Tool:        toolCode(r.URL.Query().Get("tool")),
-		NamePrefix:  r.URL.Query().Get("namePrefix"),
+		Tool:        toolCode(query.Get("tool")),
+		NamePrefix:  query.Get("namePrefix"),
 		UnitIDs:     nil,
 		Limit:       limit,
 		Restricted:  false,
@@ -477,7 +478,7 @@ func changeEntry(r *http.Request, p identity.Principal, obj identity.Object, act
 		ValueCount:    nil,
 		Changes:       nil,
 		SourceIP:      clientip.String(r),
-		UserAgent:     truncateUserAgent(r.UserAgent()),
+		UserAgent:     truncateUserAgent(userAgent(r)),
 		Channel:       sessionauth.AuditChannel(r, channelHeader),
 		Kind:          audit.KindChange,
 		Outcome:       audit.OutcomeSuccess,

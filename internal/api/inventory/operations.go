@@ -2,6 +2,7 @@ package inventory
 
 import (
 	"net/http"
+	"slices"
 
 	"opendustpan.org/opendustpan/internal/api/apidesc"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -28,9 +29,24 @@ const (
 var operationLabels = map[string]apidesc.Label{
 	apidesc.Pattern(http.MethodGet, namespacePath+"/units"): apidesc.Name("listUnits", tagUnits).
 		On(apidesc.KindNamespace).
+		WithQuery(append(slices.Clone(unitPageQuery),
+			apidesc.StringParam("label", "Keeps the units with this label, as key=value. All label values must match.").
+				Repeat(),
+			apidesc.StringParam("reference", "Keeps the unit with this reference in the namespace.").Repeat(),
+			apidesc.StringParam("state", "Keeps the units in this state. One of the states must match.").Repeat(),
+			apidesc.IntegerParam("at", "Lists the units as they were at this time, in Unix milliseconds. "+
+				"It takes no filter and no page token."),
+		)...).
 		WithBodies(apidesc.NoBody, unitList),
 	apidesc.Pattern(http.MethodGet, namespacePath+"/deleted-units"): apidesc.Name("listDeletedUnits", tagUnits).
 		On(apidesc.KindNamespace).
+		WithQuery(
+			apidesc.IntegerParam("pageSize", "The largest number of deleted units on the page."),
+			apidesc.StringParam("pageToken", "The nextPageToken of the page before."),
+			apidesc.StringParam("tool", "Keeps the units of this tool."),
+			apidesc.StringParam("namePrefix", "Keeps the units whose name starts with this text."),
+			apidesc.IntegerParam("purgeWithinDays", "Keeps the units that the server purges within this number of days."),
+		).
 		WithBodies(apidesc.NoBody, apidesc.Typed[listDeletedUnitsResponse](
 			"ListDeletedUnitsResponse", apidesc.Named[deletedUnitEntry]("DeletedUnit"),
 		)),
@@ -92,7 +108,23 @@ var operationLabels = map[string]apidesc.Label{
 		WithBodies(apidesc.NoBody, apidesc.NoBody),
 	apidesc.Pattern(http.MethodGet, viewPath+"/units"): apidesc.Name("listViewUnits", tagViews).
 		On(apidesc.KindNamespace).
+		WithQuery(unitPageQuery...).
 		WithBodies(apidesc.NoBody, unitList),
+}
+
+// unitPageQuery is the query of a page of units: the unit list and the units
+// of a view.
+//
+//nolint:gochecknoglobals // Fixed values; Go has no constant slices.
+var unitPageQuery = []apidesc.QueryParam{
+	apidesc.IntegerParam("pageSize", "The largest number of units on the page."),
+	apidesc.StringParam("pageToken", "The nextPageToken of the page before, for the same query."),
+}
+
+// queryOf returns the query of a request, as the label of its route allows
+// the handler to read it.
+func queryOf(r *http.Request) apidesc.Query {
+	return apidesc.QueryOf(r, operationLabels)
 }
 
 // The bodies that several routes share. The types of the bodies are the types
@@ -145,4 +177,9 @@ func (h *Handler) Operations() []apidesc.Operation {
 	}
 
 	return apidesc.Collect(rows, operationLabels)
+}
+
+// userAgent returns the User-Agent header of a request, for the audit record.
+func userAgent(r *http.Request) string {
+	return apidesc.Header(r, "User-Agent")
 }
