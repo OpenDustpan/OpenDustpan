@@ -7,7 +7,10 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"strconv"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"go.uber.org/goleak"
@@ -37,9 +40,11 @@ func (o ownDatabase) Run() int {
 
 	ctx := context.Background()
 
+	dropStaleTestDatabases(ctx, base, time.Now())
+
 	db, err := createTestDatabase(ctx, base)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "make the test database: %v; the role of %s needs CREATEDB\n", err, envURL)
+		fmt.Fprintf(os.Stderr, "make the test database: %v\n", err)
 
 		return 1
 	}
@@ -64,6 +69,81 @@ func (o ownDatabase) Run() int {
 	return code
 }
 
+// testDatabasePrefix starts the name of each test database. The Unix time of
+// its creation and a random suffix follow.
+const testDatabasePrefix = "dustpan_test_"
+
+// staleTestDatabaseAge is the age after which a test database counts as left
+// by a test binary that crashed. It is far above the time limit of a test run.
+const staleTestDatabaseAge = 2 * time.Hour
+
+// dropStaleTestDatabases drops the test databases older than
+// staleTestDatabaseAge that have no connection. A test binary that crashed
+// does not drop its database, and the next run removes it here. A database
+// with a connection or a young age can belong to a run on the same server
+// now, so it stays. A failure here does not fail the package: the stale
+// database is only disk.
+func dropStaleTestDatabases(ctx context.Context, base string, now time.Time) {
+	conn, err := pgx.Connect(ctx, base)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "list stale test databases: %v\n", err)
+
+		return
+	}
+
+	defer func() {
+		_ = conn.Close(ctx) //nolint:errcheck // Cleanup of stale data only.
+	}()
+
+	rows, err := conn.Query(ctx, `SELECT d.datname FROM pg_database AS d
+		WHERE starts_with(d.datname, $1)
+		AND NOT EXISTS (SELECT 1 FROM pg_stat_activity AS a WHERE a.datname = d.datname)`, testDatabasePrefix)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "list stale test databases: %v\n", err)
+
+		return
+	}
+
+	names, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "list stale test databases: %v\n", err)
+
+		return
+	}
+
+	for _, name := range names {
+		if !staleTestDatabase(name, now) {
+			continue
+		}
+
+		// No FORCE: a run that connected after the list keeps its database.
+		if _, dropErr := conn.Exec(ctx, "DROP DATABASE IF EXISTS "+pgx.Identifier{name}.Sanitize()); dropErr != nil {
+			fmt.Fprintf(os.Stderr, "drop stale test database %s: %v\n", name, dropErr)
+		}
+	}
+}
+
+// staleTestDatabase reports whether name is a test database made more than
+// staleTestDatabaseAge before now. A name that does not parse is not stale.
+func staleTestDatabase(name string, now time.Time) bool {
+	rest, ok := strings.CutPrefix(name, testDatabasePrefix)
+	if !ok {
+		return false
+	}
+
+	created, _, ok := strings.Cut(rest, "_")
+	if !ok {
+		return false
+	}
+
+	unix, err := strconv.ParseInt(created, 10, 64)
+	if err != nil {
+		return false
+	}
+
+	return now.Sub(time.Unix(unix, 0)) > staleTestDatabaseAge
+}
+
 // testDatabase is the database of the test binary: its name, and a URL of
 // the server that names it.
 type testDatabase struct {
@@ -79,7 +159,7 @@ func createTestDatabase(ctx context.Context, base string) (testDatabase, error) 
 		return testDatabase{}, fmt.Errorf("random database name: %w", err)
 	}
 
-	name := "dustpan_test_" + hex.EncodeToString(suffix)
+	name := testDatabasePrefix + strconv.FormatInt(time.Now().Unix(), 10) + "_" + hex.EncodeToString(suffix)
 
 	u, err := url.Parse(base)
 	if err != nil {
