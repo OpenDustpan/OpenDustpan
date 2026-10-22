@@ -749,6 +749,18 @@ func TestNamespacePagingConformance(t *testing.T) {
 	})
 }
 
+// TestUnitQueryConformance runs the unit page suite: one page of the units
+// of a namespace in the order of the unit ID, with the filters in the query.
+func TestUnitQueryConformance(t *testing.T) {
+	t.Parallel()
+
+	storetest.RunUnitQuery(t, func(t *testing.T) storetest.Store {
+		t.Helper()
+
+		return open(t)
+	})
+}
+
 func TestBackupConformance(t *testing.T) {
 	t.Parallel()
 
