@@ -3,6 +3,7 @@ package gate_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -28,23 +29,27 @@ func (fakeNamespaces) Get(_ context.Context, name namespace.Name) (namespace.Nam
 	}, nil
 }
 
-// fakeGroups holds the groups platform (5 members), ops (1 member) and empty
-// (no member). A name with a character that a group name cannot hold is not
-// valid, and any other name names no group.
+// fakeGroups holds the groups platform (5 enabled members, 3 of them persons),
+// ops (1 member, a person) and empty (no member). A name with a character that
+// a group name cannot hold is not valid, and any other name names no group.
 type fakeGroups struct{}
 
-func (fakeGroups) GroupMembers(_ context.Context, name string) (int64, error) {
-	members := map[string]int64{"platform": 5, "ops": 1, "empty": 0}
+func (fakeGroups) GroupMembers(_ context.Context, name string) (gate.MemberCounts, error) {
+	members := map[string]gate.MemberCounts{
+		"platform": {Enabled: 5, Persons: 3},
+		"ops":      {Enabled: 1, Persons: 1},
+		"empty":    {Enabled: 0, Persons: 0},
+	}
 
 	if strings.ContainsAny(name, "<>/ ") {
-		return 0, gate.ErrInvalid
+		return gate.MemberCounts{}, gate.ErrInvalid
 	}
 
 	if n, ok := members[strings.ToLower(name)]; ok {
 		return n, nil
 	}
 
-	return 0, gate.ErrNotFound
+	return gate.MemberCounts{}, gate.ErrNotFound
 }
 
 // write records the last write that reached a store.
@@ -594,5 +599,48 @@ func TestConfigServiceAnyApproveHolderHasNoBound(t *testing.T) {
 
 	if _, err := svc.PutApprovalDefault(t.Context(), def, 0, callerEntry()); err != nil {
 		t.Fatalf("default with no approver and count 10 = %v, want stored", err)
+	}
+}
+
+// TestConfigServiceCountsOnlyPersonsForAFreshWindow proves which members count.
+// A group of 5 enabled members, 3 of them persons, can give 5 approvals when the
+// approval needs no fresh authentication, because a service principal with the
+// approve action can sign. A window of any length, also 0, needs a fresh
+// authentication, which only a person gives, so the group gives 3.
+func TestConfigServiceCountsOnlyPersonsForAFreshWindow(t *testing.T) {
+	t.Parallel()
+
+	scope := gate.NamespaceScope("acme")
+	windows := []struct {
+		name  string
+		fresh gate.FreshAuth
+	}{
+		{"none", gate.NoFreshAuth()},
+		{"new sign-in at each approval", gate.FreshAuth{Set: true, Seconds: 0}},
+		{"a window of 5 minutes", gate.FreshAuth{Set: true, Seconds: 300}},
+	}
+
+	for _, w := range windows {
+		for _, count := range []int{3, 4, 5, 6} {
+			t.Run(fmt.Sprintf("%s, count %d", w.name, count), func(t *testing.T) {
+				t.Parallel()
+
+				svc, _ := newConfigService(t)
+
+				def := goodDefault(scope)
+				def.Count, def.FreshAuth = count, w.fresh
+
+				_, err := svc.PutApprovalDefault(t.Context(), def, 0, callerEntry())
+
+				limit := 5
+				if w.fresh.Set {
+					limit = 3
+				}
+
+				if count <= limit && err != nil || count > limit && !errors.Is(err, gate.ErrApprovers) {
+					t.Fatalf("count %d with %s = %v; the group gives %d", count, w.name, err, limit)
+				}
+			})
+		}
 	}
 }
