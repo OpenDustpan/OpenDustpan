@@ -8,8 +8,8 @@ import (
 	"github.com/ProtonMail/go-crypto/openpgp"
 	"github.com/ProtonMail/go-crypto/openpgp/packet"
 
+	"opendustpan.org/opendustpan/internal/registry/pgpfixture"
 	"opendustpan.org/opendustpan/pkg/registry"
-	"opendustpan.org/opendustpan/pkg/registry/pgpfixture"
 )
 
 // signatureOf returns a signature packet with the fields that checkPolicy

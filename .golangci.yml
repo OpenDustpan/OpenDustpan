@@ -151,6 +151,7 @@ linters:
             - "**/internal/unmanaged/**"
             - "**/pkg/drift/**"
             - "**/pkg/trigger/**"
+            - "**/pkg/outputshare/**"
             - "**/pkg/savedview/**"
             - "**/pkg/preferences/**"
             - "**/internal/stepup/**"
@@ -492,7 +493,7 @@ linters:
     rules:
       # Tests may use numeric literals and longer table-driven functions. The
       # conformance suites are tests that adapters import, so the same applies.
-      - path: (_test\.go$|^pkg/store/storetest/|^pkg/blob/blobtest/|^pkg/secret/secrettest/|^pkg/audit/audittest/|^pkg/principal/principaltest/|^pkg/accesstoken/accesstokentest/|^pkg/session/sessiontest/|^pkg/access/accesstest/|^pkg/durable/durabletest/|^pkg/history/historytest/|^pkg/inventory/inventorytest/|^internal/dependency/dependencytest/|^pkg/stack/stackhistorytest/|^pkg/workspace/workspacehistorytest/|^internal/agent/agenttest/|^pkg/graph/graphtest/|^pkg/objectcontext/objectcontexttest/|^internal/unmanaged/unmanagedtest/|^pkg/runner/runnertest/|^internal/calendar/calendartest/|^internal/freeze/freezetest/|^pkg/breakglass/breakglasstest/|^internal/oncall/oncalltest/|^internal/cost/costtest/|^pkg/notify/notifytest/|^internal/chatops/chatopstest/|^internal/incident/incidenttest/|^internal/catalog/catalogtest/|^internal/policy/policytest/|^internal/quota/quotatest/|^pkg/gate/gatetest/|^internal/unitimport/unitimporttest/|^pkg/forge/forgetest/|^pkg/preferences/preferencestest/)
+      - path: (_test\.go$|^pkg/store/storetest/|^pkg/blob/blobtest/|^pkg/secret/secrettest/|^pkg/audit/audittest/|^pkg/principal/principaltest/|^pkg/accesstoken/accesstokentest/|^pkg/session/sessiontest/|^pkg/access/accesstest/|^pkg/durable/durabletest/|^internal/history/historytest/|^pkg/inventory/inventorytest/|^internal/dependency/dependencytest/|^pkg/stack/stackhistorytest/|^pkg/workspace/workspacehistorytest/|^internal/agent/agenttest/|^internal/graph/graphtest/|^pkg/objectcontext/objectcontexttest/|^internal/unmanaged/unmanagedtest/|^pkg/runner/runnertest/|^internal/calendar/calendartest/|^internal/freeze/freezetest/|^internal/breakglass/breakglasstest/|^internal/oncall/oncalltest/|^internal/cost/costtest/|^pkg/notify/notifytest/|^internal/chatops/chatopstest/|^internal/incident/incidenttest/|^internal/catalog/catalogtest/|^internal/policy/policytest/|^internal/quota/quotatest/|^pkg/gate/gatetest/|^internal/unitimport/unitimporttest/|^pkg/forge/forgetest/|^pkg/preferences/preferencestest/)
         linters:
           - mnd
           - funlen

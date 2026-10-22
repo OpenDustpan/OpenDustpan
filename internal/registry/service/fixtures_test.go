@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/registry/pgpfixture"
 	"opendustpan.org/opendustpan/internal/registry/releasecheck"
 	"opendustpan.org/opendustpan/internal/registry/service"
 	"opendustpan.org/opendustpan/pkg/audit"
@@ -21,7 +22,6 @@ import (
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/registry"
-	"opendustpan.org/opendustpan/pkg/registry/pgpfixture"
 	"opendustpan.org/opendustpan/pkg/registry/pgpverify"
 )
 

@@ -8,7 +8,7 @@ import (
 	"github.com/ProtonMail/go-crypto/openpgp"
 	"github.com/ProtonMail/go-crypto/openpgp/packet"
 
-	"opendustpan.org/opendustpan/pkg/registry/pgpfixture"
+	"opendustpan.org/opendustpan/internal/registry/pgpfixture"
 )
 
 // TestSignerAtUsesTheGivenTime proves that a key made with NewSignerAt, its

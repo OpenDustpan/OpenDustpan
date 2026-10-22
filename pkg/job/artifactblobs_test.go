@@ -8,9 +8,9 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"opendustpan.org/opendustpan/internal/blob/blobfault"
 	"opendustpan.org/opendustpan/internal/scopeaudit"
 	"opendustpan.org/opendustpan/pkg/blob"
-	"opendustpan.org/opendustpan/pkg/blob/blobfault"
 	blobfs "opendustpan.org/opendustpan/pkg/blob/fs"
 	"opendustpan.org/opendustpan/pkg/job"
 	"opendustpan.org/opendustpan/pkg/namespace"
