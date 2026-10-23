@@ -74,7 +74,9 @@ func TestTemplateGolden(t *testing.T) {
 
 // TestTemplateRefused renders values that the chart refuses, and expects the
 // helm error to name each setting that is wrong. The default values are one
-// case: an install with no Secret names fails.
+// case: an install with no Secret names fails. Helm versions write the path
+// of a schema error in different forms, so each wanted text is a group of
+// forms, and one match of the group is enough.
 func TestTemplateRefused(t *testing.T) {
 	t.Parallel()
 
@@ -90,13 +92,18 @@ func TestTemplateRefused(t *testing.T) {
 		name     string
 		useBase  bool
 		set      []string
-		wantText []string
+		wantText [][]string
 	}{
 		{
-			name:     "default values",
-			useBase:  false,
-			set:      nil,
-			wantText: []string{"/database/existingSecret/name", "/keyEncryptionKey/existingSecret/name"},
+			name:    "default values",
+			useBase: false,
+			set:     nil,
+			wantText: [][]string{
+				// Helm v3.18.6 and later write the path as a JSON pointer,
+				// earlier versions write it with dots.
+				{"/database/existingSecret/name", "database.existingSecret.name:"},
+				{"/keyEncryptionKey/existingSecret/name", "keyEncryptionKey.existingSecret.name:"},
+			},
 		},
 		{
 			name:    "database and key in one Secret and key",
@@ -105,7 +112,7 @@ func TestTemplateRefused(t *testing.T) {
 				"--set", "keyEncryptionKey.existingSecret.name=db",
 				"--set", "keyEncryptionKey.existingSecret.key=database-url",
 			},
-			wantText: []string{"name the same Secret and key"},
+			wantText: [][]string{{"name the same Secret and key"}},
 		},
 		{
 			name:    "backup token is the admin token",
@@ -118,7 +125,7 @@ func TestTemplateRefused(t *testing.T) {
 				"--set", "backup.schedule.tokenSecret.name=adm",
 				"--set", "backup.schedule.tokenSecret.key=admin-token",
 			},
-			wantText: []string{"backup.schedule.tokenSecret names the same Secret and key"},
+			wantText: [][]string{{"backup.schedule.tokenSecret names the same Secret and key"}},
 		},
 		{
 			name:    "metrics token is the admin token",
@@ -129,7 +136,7 @@ func TestTemplateRefused(t *testing.T) {
 				"--set", "metrics.serviceMonitor.tokenSecret.name=adm",
 				"--set", "metrics.serviceMonitor.tokenSecret.key=admin-token",
 			},
-			wantText: []string{"metrics.serviceMonitor.tokenSecret names the same Secret and key"},
+			wantText: [][]string{{"metrics.serviceMonitor.tokenSecret names the same Secret and key"}},
 		},
 	}
 
@@ -149,13 +156,24 @@ func TestTemplateRefused(t *testing.T) {
 				t.Fatalf("helm template succeeded, want an error with %q", tc.wantText)
 			}
 
-			for _, want := range tc.wantText {
-				if !strings.Contains(res.stderr, want) {
-					t.Errorf("helm error = %q, want text %q", res.stderr, want)
+			for _, forms := range tc.wantText {
+				if !containsAny(res.stderr, forms) {
+					t.Errorf("helm error = %q, want one of %q", res.stderr, forms)
 				}
 			}
 		})
 	}
+}
+
+// containsAny reports whether s contains at least one of texts.
+func containsAny(s string, texts []string) bool {
+	for _, text := range texts {
+		if strings.Contains(s, text) {
+			return true
+		}
+	}
+
+	return false
 }
 
 func requireHelm(t *testing.T) string {
