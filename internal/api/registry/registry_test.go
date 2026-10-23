@@ -897,6 +897,20 @@ func TestListProvidersHostileQuery(t *testing.T) {
 	}
 }
 
+// TestProviderPageTokenLengthCap proves that a page token over the length limit
+// answers 400 by its length alone. The name in the token is valid, and the
+// base64 decoder ignores line breaks, so only the length refuses the token.
+func TestProviderPageTokenLengthCap(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	enc := base64.RawURLEncoding.EncodeToString
+
+	token := strings.Repeat("\n", 4096) + enc([]byte("payments"))
+	got := f.call(t, "reader", http.MethodGet, base+"/providers?pageToken="+url.QueryEscape(token), nil)
+	wantCode(t, "a valid name over the length limit", got, http.StatusBadRequest)
+}
+
 // TestPublishRepeatReplaysTheFirstRelease proves that the replay of a repeat
 // publish answers what the live repeat answered: the first release, with the
 // first publisher. A repeat of the same content changes nothing, so its stored
