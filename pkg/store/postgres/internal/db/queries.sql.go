@@ -1804,7 +1804,7 @@ SELECT $1, p.id, $2, $3, $4,
   $5::bigint, $6::bigint, $7
 FROM principals p
 JOIN temp_admins t ON t.principal_id = p.id
-WHERE p.id = $8 AND p.deleted_at_ms IS NULL AND p.disabled_at_ms IS NULL
+WHERE p.id = $8 AND COALESCE(p.deleted_at_ms, -1) = -1 AND p.disabled_at_ms IS NULL
   AND p.kind = 'person' AND p.namespace = ''
   AND p.created_at_ms <= $5::bigint
   AND p.created_at_ms >= $5::bigint - $9::bigint
@@ -1831,6 +1831,8 @@ type CreateFirstHostTokenParams struct {
 // enabled person of the installation with no token of any status, made in
 // the window before the time of the token and not after it, and a record
 // names the principal that works past the time and the expiry of the token.
+// The live check is COALESCE(p.deleted_at_ms, -1) = -1, not IS NULL, so no
+// partial index of the live rows can serve this lookup by ID.
 func (q *Queries) CreateFirstHostToken(ctx context.Context, arg CreateFirstHostTokenParams) (int64, error) {
 	result, err := q.db.Exec(ctx, createFirstHostToken,
 		arg.ID,
@@ -3107,7 +3109,7 @@ func (q *Queries) DeletePersonPreferences(ctx context.Context, principalID strin
 
 const deletePrincipal = `-- name: DeletePrincipal :execrows
 UPDATE principals SET deleted_at_ms = $1
-WHERE id = $2 AND namespace = $3 AND deleted_at_ms IS NULL
+WHERE id = $2 AND namespace = $3 AND COALESCE(deleted_at_ms, -1) = -1
 `
 
 type DeletePrincipalParams struct {
@@ -3116,6 +3118,8 @@ type DeletePrincipalParams struct {
 	Namespace   string
 }
 
+// The live check is COALESCE(deleted_at_ms, -1) = -1, not IS NULL, so no
+// partial index of the live rows can serve this lookup by ID.
 func (q *Queries) DeletePrincipal(ctx context.Context, arg DeletePrincipalParams) (int64, error) {
 	result, err := q.db.Exec(ctx, deletePrincipal, arg.DeletedAtMs, arg.ID, arg.Namespace)
 	if err != nil {
@@ -4134,7 +4138,7 @@ SELECT t.id, t.principal_id, t.name, t.kind, t.digest, t.created_at_ms, t.expire
 FROM access_tokens t
 JOIN principals p ON p.id = t.principal_id
 CROSS JOIN access_token_policy ap
-WHERE t.digest = $1 AND p.deleted_at_ms IS NULL AND ap.id = 1
+WHERE t.digest = $1 AND COALESCE(p.deleted_at_ms, -1) = -1 AND ap.id = 1
 `
 
 type GetAccessTokenByDigestRow struct {
@@ -4166,6 +4170,8 @@ type GetAccessTokenByDigestRow struct {
 
 // The token, its owner and the token policy of the installation in one read,
 // so a policy change applies to the next lookup on every instance.
+// The live check is COALESCE(p.deleted_at_ms, -1) = -1, not IS NULL, so no
+// partial index of the live rows can serve this lookup by ID.
 func (q *Queries) GetAccessTokenByDigest(ctx context.Context, digest string) (GetAccessTokenByDigestRow, error) {
 	row := q.db.QueryRow(ctx, getAccessTokenByDigest, digest)
 	var i GetAccessTokenByDigestRow
@@ -5168,7 +5174,7 @@ func (q *Queries) GetGitHostRegistration(ctx context.Context, kind string) (GitH
 
 const getGrant = `-- name: GetGrant :one
 SELECT id, subject, subject_kind, subject_id, role, object, target, object_kind, namespace, condition, created_at_ms, created_by
-FROM grants WHERE id = $1 AND revoked_at_ms IS NULL
+FROM grants WHERE id = $1 AND COALESCE(revoked_at_ms, -1) = -1
 `
 
 type GetGrantRow struct {
@@ -5186,6 +5192,8 @@ type GetGrantRow struct {
 	CreatedBy   string
 }
 
+// The live check is COALESCE(revoked_at_ms, -1) = -1, not IS NULL, so no
+// partial index of the live rows can serve this lookup by ID.
 func (q *Queries) GetGrant(ctx context.Context, id string) (GetGrantRow, error) {
 	row := q.db.QueryRow(ctx, getGrant, id)
 	var i GetGrantRow
@@ -5957,7 +5965,7 @@ func (q *Queries) GetLatestDurableHeartbeat(ctx context.Context) (DurableHeartbe
 const getLiveProfileByID = `-- name: GetLiveProfileByID :one
 SELECT namespace_id, id, name, latest, created_by, created_at_ms, updated_at_ms, deleted_at_ms
 FROM profiles
-WHERE namespace_id = $1 AND id = $2 AND deleted_at_ms = 0
+WHERE namespace_id = $1 AND id = $2 AND COALESCE(deleted_at_ms, -1) = 0
 `
 
 type GetLiveProfileByIDParams struct {
@@ -5965,6 +5973,8 @@ type GetLiveProfileByIDParams struct {
 	ID          string
 }
 
+// The live check is COALESCE(deleted_at_ms, -1) = 0, not deleted_at_ms = 0, so
+// no partial index of the live rows can serve this lookup by ID.
 func (q *Queries) GetLiveProfileByID(ctx context.Context, arg GetLiveProfileByIDParams) (Profile, error) {
 	row := q.db.QueryRow(ctx, getLiveProfileByID, arg.NamespaceID, arg.ID)
 	var i Profile
@@ -6883,7 +6893,7 @@ FROM sessions s
 JOIN principals p ON p.id = s.principal_id
 CROSS JOIN session_policy sp
 CROSS JOIN access_token_policy ap
-WHERE s.digest = $1 AND p.deleted_at_ms IS NULL AND sp.id = 1 AND ap.id = 1
+WHERE s.digest = $1 AND COALESCE(p.deleted_at_ms, -1) = -1 AND sp.id = 1 AND ap.id = 1
 `
 
 type GetSessionByDigestRow struct {
@@ -6916,6 +6926,8 @@ type GetSessionByDigestRow struct {
 // rule of the inactivity disable, as in GetAccessTokenByDigest. The session
 // policy and the account part of the token policy come from the same read,
 // so a policy change applies to the next lookup on every instance.
+// The live check is COALESCE(p.deleted_at_ms, -1) = -1, not IS NULL, so no
+// partial index of the live rows can serve this lookup by ID.
 func (q *Queries) GetSessionByDigest(ctx context.Context, digest string) (GetSessionByDigestRow, error) {
 	row := q.db.QueryRow(ctx, getSessionByDigest, digest)
 	var i GetSessionByDigestRow
@@ -14101,7 +14113,7 @@ func (q *Queries) LockWritesExclusive(ctx context.Context, class int32) error {
 const markProfileDeleted = `-- name: MarkProfileDeleted :execrows
 UPDATE profiles
 SET deleted_at_ms = $1
-WHERE namespace_id = $2 AND id = $3 AND deleted_at_ms = 0
+WHERE namespace_id = $2 AND id = $3 AND COALESCE(deleted_at_ms, -1) = 0
   AND (CAST($4 AS BIGINT) = 0 OR latest = CAST($4 AS BIGINT))
 `
 
@@ -14114,6 +14126,8 @@ type MarkProfileDeletedParams struct {
 
 // Frees the name of a live profile. A non-zero if_latest must be the newest
 // revision.
+// The live check is COALESCE(deleted_at_ms, -1) = 0, not deleted_at_ms = 0, so
+// no partial index of the live rows can serve this lookup by ID.
 func (q *Queries) MarkProfileDeleted(ctx context.Context, arg MarkProfileDeletedParams) (int64, error) {
 	result, err := q.db.Exec(ctx, markProfileDeleted,
 		arg.DeletedAtMs,
@@ -14188,7 +14202,7 @@ func (q *Queries) MoveNotificationSinkSecret(ctx context.Context, arg MoveNotifi
 const moveProfileLatest = `-- name: MoveProfileLatest :execrows
 UPDATE profiles
 SET latest = $1, updated_at_ms = $2
-WHERE namespace_id = $3 AND id = $4 AND deleted_at_ms = 0
+WHERE namespace_id = $3 AND id = $4 AND COALESCE(deleted_at_ms, -1) = 0
   AND latest = $5
 `
 
@@ -14202,6 +14216,8 @@ type MoveProfileLatestParams struct {
 
 // Moves the newest revision from base to next. It changes no row when the
 // newest revision is another.
+// The live check is COALESCE(deleted_at_ms, -1) = 0, not deleted_at_ms = 0, so
+// no partial index of the live rows can serve this lookup by ID.
 func (q *Queries) MoveProfileLatest(ctx context.Context, arg MoveProfileLatestParams) (int64, error) {
 	result, err := q.db.Exec(ctx, moveProfileLatest,
 		arg.Next,
@@ -15389,7 +15405,7 @@ func (q *Queries) RevokeAccessToken(ctx context.Context, arg RevokeAccessTokenPa
 }
 
 const revokeGrant = `-- name: RevokeGrant :execrows
-UPDATE grants SET revoked_at_ms = $1, revoked_by = $2 WHERE id = $3 AND revoked_at_ms IS NULL
+UPDATE grants SET revoked_at_ms = $1, revoked_by = $2 WHERE id = $3 AND COALESCE(revoked_at_ms, -1) = -1
 `
 
 type RevokeGrantParams struct {
@@ -15398,6 +15414,8 @@ type RevokeGrantParams struct {
 	ID          string
 }
 
+// The live check is COALESCE(revoked_at_ms, -1) = -1, not IS NULL, so no
+// partial index of the live rows can serve this lookup by ID.
 func (q *Queries) RevokeGrant(ctx context.Context, arg RevokeGrantParams) (int64, error) {
 	result, err := q.db.Exec(ctx, revokeGrant, arg.RevokedAtMs, arg.RevokedBy, arg.ID)
 	if err != nil {
@@ -15500,7 +15518,7 @@ func (q *Queries) RoleIDByNameKey(ctx context.Context, nameKey string) (string, 
 
 const rolesByIDs = `-- name: RolesByIDs :many
 SELECT id, name, description, actions, created_at_ms, updated_at_ms FROM roles
-WHERE id = ANY($1::text[]) AND deleted_at_ms IS NULL
+WHERE id = ANY($1::text[]) AND COALESCE(deleted_at_ms, -1) = -1
 `
 
 type RolesByIDsRow struct {
@@ -15512,6 +15530,8 @@ type RolesByIDsRow struct {
 	UpdatedAtMs int64
 }
 
+// The live check is COALESCE(deleted_at_ms, -1) = -1, not IS NULL, so no
+// partial index of the live rows can serve this lookup by ID.
 func (q *Queries) RolesByIDs(ctx context.Context, ids []string) ([]RolesByIDsRow, error) {
 	rows, err := q.db.Query(ctx, rolesByIDs, ids)
 	if err != nil {
@@ -17057,7 +17077,7 @@ func (q *Queries) UpdateNotificationSink(ctx context.Context, arg UpdateNotifica
 
 const updatePrincipal = `-- name: UpdatePrincipal :execrows
 UPDATE principals SET display_name = $1, updated_at_ms = $2
-WHERE id = $3 AND namespace = $4 AND deleted_at_ms IS NULL
+WHERE id = $3 AND namespace = $4 AND COALESCE(deleted_at_ms, -1) = -1
 `
 
 type UpdatePrincipalParams struct {
@@ -17067,6 +17087,8 @@ type UpdatePrincipalParams struct {
 	Namespace   string
 }
 
+// The live check is COALESCE(deleted_at_ms, -1) = -1, not IS NULL, so no
+// partial index of the live rows can serve this lookup by ID.
 func (q *Queries) UpdatePrincipal(ctx context.Context, arg UpdatePrincipalParams) (int64, error) {
 	result, err := q.db.Exec(ctx, updatePrincipal,
 		arg.DisplayName,

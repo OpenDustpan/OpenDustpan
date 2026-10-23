@@ -1368,12 +1368,16 @@ WHERE deleted_at_ms IS NULL
 SELECT namespace FROM principals WHERE id = $1 AND deleted_at_ms IS NULL;
 
 -- name: UpdatePrincipal :execrows
+-- The live check is COALESCE(deleted_at_ms, -1) = -1, not IS NULL, so no
+-- partial index of the live rows can serve this lookup by ID.
 UPDATE principals SET display_name = $1, updated_at_ms = $2
-WHERE id = $3 AND namespace = $4 AND deleted_at_ms IS NULL;
+WHERE id = $3 AND namespace = $4 AND COALESCE(deleted_at_ms, -1) = -1;
 
 -- name: DeletePrincipal :execrows
+-- The live check is COALESCE(deleted_at_ms, -1) = -1, not IS NULL, so no
+-- partial index of the live rows can serve this lookup by ID.
 UPDATE principals SET deleted_at_ms = $1
-WHERE id = $2 AND namespace = $3 AND deleted_at_ms IS NULL;
+WHERE id = $2 AND namespace = $3 AND COALESCE(deleted_at_ms, -1) = -1;
 
 -- name: EndMembershipsOfPrincipal :exec
 UPDATE group_members SET removed_at_ms = $1
@@ -1490,8 +1494,10 @@ SELECT id, name, description, actions, created_at_ms, updated_at_ms FROM roles
 WHERE id = $1 AND deleted_at_ms IS NULL;
 
 -- name: RolesByIDs :many
+-- The live check is COALESCE(deleted_at_ms, -1) = -1, not IS NULL, so no
+-- partial index of the live rows can serve this lookup by ID.
 SELECT id, name, description, actions, created_at_ms, updated_at_ms FROM roles
-WHERE id = ANY(@ids::text[]) AND deleted_at_ms IS NULL;
+WHERE id = ANY(@ids::text[]) AND COALESCE(deleted_at_ms, -1) = -1;
 
 -- name: RoleIDByNameKey :one
 SELECT id FROM roles WHERE name_key COLLATE "C" = @name_key::text AND deleted_at_ms IS NULL;
@@ -1517,8 +1523,10 @@ VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
 ON CONFLICT DO NOTHING;
 
 -- name: GetGrant :one
+-- The live check is COALESCE(revoked_at_ms, -1) = -1, not IS NULL, so no
+-- partial index of the live rows can serve this lookup by ID.
 SELECT id, subject, subject_kind, subject_id, role, object, target, object_kind, namespace, condition, created_at_ms, created_by
-FROM grants WHERE id = $1 AND revoked_at_ms IS NULL;
+FROM grants WHERE id = $1 AND COALESCE(revoked_at_ms, -1) = -1;
 
 -- name: ListGrantsOn :many
 -- One page of the current grants on a target, with the name and the kind of
@@ -1546,7 +1554,9 @@ WHERE target = @target AND revoked_at_ms IS NULL
   AND (@role::text = '' OR role = @role::text);
 
 -- name: RevokeGrant :execrows
-UPDATE grants SET revoked_at_ms = $1, revoked_by = $2 WHERE id = $3 AND revoked_at_ms IS NULL;
+-- The live check is COALESCE(revoked_at_ms, -1) = -1, not IS NULL, so no
+-- partial index of the live rows can serve this lookup by ID.
+UPDATE grants SET revoked_at_ms = $1, revoked_by = $2 WHERE id = $3 AND COALESCE(revoked_at_ms, -1) = -1;
 
 -- name: GrantsOn :many
 SELECT id, subject, subject_kind, subject_id, role, object, target, object_kind, namespace, condition, created_at_ms, created_by
@@ -1815,6 +1825,8 @@ FROM access_tokens WHERE id = $1;
 -- name: GetAccessTokenByDigest :one
 -- The token, its owner and the token policy of the installation in one read,
 -- so a policy change applies to the next lookup on every instance.
+-- The live check is COALESCE(p.deleted_at_ms, -1) = -1, not IS NULL, so no
+-- partial index of the live rows can serve this lookup by ID.
 SELECT t.id, t.principal_id, t.name, t.kind, t.digest, t.created_at_ms, t.expires_at_ms, t.last_used_at_ms,
   t.revoked_at_ms, t.replaced_by, t.created_by, t.disabled_at_ms, p.subject, p.display_name, p.kind AS principal_kind,
   p.disabled_at_ms AS principal_disabled_at_ms, p.break_glass AS principal_break_glass,
@@ -1829,7 +1841,7 @@ SELECT t.id, t.principal_id, t.name, t.kind, t.digest, t.created_at_ms, t.expire
 FROM access_tokens t
 JOIN principals p ON p.id = t.principal_id
 CROSS JOIN access_token_policy ap
-WHERE t.digest = $1 AND p.deleted_at_ms IS NULL AND ap.id = 1;
+WHERE t.digest = $1 AND COALESCE(p.deleted_at_ms, -1) = -1 AND ap.id = 1;
 
 -- name: ListAccessTokens :many
 SELECT id, principal_id, name, kind, created_at_ms, expires_at_ms, last_used_at_ms, revoked_at_ms, replaced_by, created_by, disabled_at_ms
@@ -2243,6 +2255,8 @@ FROM sessions WHERE id = $1;
 -- rule of the inactivity disable, as in GetAccessTokenByDigest. The session
 -- policy and the account part of the token policy come from the same read,
 -- so a policy change applies to the next lookup on every instance.
+-- The live check is COALESCE(p.deleted_at_ms, -1) = -1, not IS NULL, so no
+-- partial index of the live rows can serve this lookup by ID.
 SELECT s.id, s.principal_id, s.digest, s.provider, s.created_at_ms, s.last_seen_at_ms, s.auth_time_ms, s.ended_at_ms,
   s.end_reason, s.source_ip, s.user_agent, p.subject, p.display_name, p.kind AS principal_kind,
   p.disabled_at_ms AS principal_disabled_at_ms, p.break_glass AS principal_break_glass,
@@ -2258,7 +2272,7 @@ FROM sessions s
 JOIN principals p ON p.id = s.principal_id
 CROSS JOIN session_policy sp
 CROSS JOIN access_token_policy ap
-WHERE s.digest = $1 AND p.deleted_at_ms IS NULL AND sp.id = 1 AND ap.id = 1;
+WHERE s.digest = $1 AND COALESCE(p.deleted_at_ms, -1) = -1 AND sp.id = 1 AND ap.id = 1;
 
 -- name: TouchSession :exec
 -- An idle or expired session keeps its last use: seen_after_ms and
@@ -2325,12 +2339,14 @@ FROM temp_admins ORDER BY expires_at_ms, principal_id;
 -- enabled person of the installation with no token of any status, made in
 -- the window before the time of the token and not after it, and a record
 -- names the principal that works past the time and the expiry of the token.
+-- The live check is COALESCE(p.deleted_at_ms, -1) = -1, not IS NULL, so no
+-- partial index of the live rows can serve this lookup by ID.
 INSERT INTO access_tokens (id, principal_id, name, kind, digest, created_at_ms, expires_at_ms, created_by)
 SELECT sqlc.arg('id'), p.id, sqlc.arg('name'), sqlc.arg('kind'), sqlc.arg('digest'),
   sqlc.arg('created_at_ms')::bigint, sqlc.arg('expires_at_ms')::bigint, sqlc.arg('created_by')
 FROM principals p
 JOIN temp_admins t ON t.principal_id = p.id
-WHERE p.id = sqlc.arg('principal_id') AND p.deleted_at_ms IS NULL AND p.disabled_at_ms IS NULL
+WHERE p.id = sqlc.arg('principal_id') AND COALESCE(p.deleted_at_ms, -1) = -1 AND p.disabled_at_ms IS NULL
   AND p.kind = 'person' AND p.namespace = ''
   AND p.created_at_ms <= sqlc.arg('created_at_ms')::bigint
   AND p.created_at_ms >= sqlc.arg('created_at_ms')::bigint - sqlc.arg('window_ms')::bigint
@@ -3435,9 +3451,11 @@ INSERT INTO profile_revisions (
 );
 
 -- name: GetLiveProfileByID :one
+-- The live check is COALESCE(deleted_at_ms, -1) = 0, not deleted_at_ms = 0, so
+-- no partial index of the live rows can serve this lookup by ID.
 SELECT namespace_id, id, name, latest, created_by, created_at_ms, updated_at_ms, deleted_at_ms
 FROM profiles
-WHERE namespace_id = sqlc.arg(namespace_id) AND id = sqlc.arg(id) AND deleted_at_ms = 0;
+WHERE namespace_id = sqlc.arg(namespace_id) AND id = sqlc.arg(id) AND COALESCE(deleted_at_ms, -1) = 0;
 
 -- name: GetLiveProfileByName :one
 SELECT namespace_id, id, name, latest, created_by, created_at_ms, updated_at_ms, deleted_at_ms
@@ -3479,17 +3497,21 @@ LIMIT sqlc.arg(page_limit);
 -- name: MoveProfileLatest :execrows
 -- Moves the newest revision from base to next. It changes no row when the
 -- newest revision is another.
+-- The live check is COALESCE(deleted_at_ms, -1) = 0, not deleted_at_ms = 0, so
+-- no partial index of the live rows can serve this lookup by ID.
 UPDATE profiles
 SET latest = sqlc.arg(next), updated_at_ms = sqlc.arg(updated_at_ms)
-WHERE namespace_id = sqlc.arg(namespace_id) AND id = sqlc.arg(id) AND deleted_at_ms = 0
+WHERE namespace_id = sqlc.arg(namespace_id) AND id = sqlc.arg(id) AND COALESCE(deleted_at_ms, -1) = 0
   AND latest = sqlc.arg(base);
 
 -- name: MarkProfileDeleted :execrows
 -- Frees the name of a live profile. A non-zero if_latest must be the newest
 -- revision.
+-- The live check is COALESCE(deleted_at_ms, -1) = 0, not deleted_at_ms = 0, so
+-- no partial index of the live rows can serve this lookup by ID.
 UPDATE profiles
 SET deleted_at_ms = sqlc.arg(deleted_at_ms)
-WHERE namespace_id = sqlc.arg(namespace_id) AND id = sqlc.arg(id) AND deleted_at_ms = 0
+WHERE namespace_id = sqlc.arg(namespace_id) AND id = sqlc.arg(id) AND COALESCE(deleted_at_ms, -1) = 0
   AND (CAST(sqlc.arg(if_latest) AS BIGINT) = 0 OR latest = CAST(sqlc.arg(if_latest) AS BIGINT));
 
 -- name: InsertManualLock :execrows
