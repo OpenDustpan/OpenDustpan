@@ -2286,6 +2286,10 @@ func checkRunningHistoryEntry(t *testing.T, id stack.UpdateID, expiry int64, got
 		t.Fatalf("checkpointBytes = %d, want 0 before any checkpoint", got.CheckpointBytes)
 	}
 
+	if got.EndTime != 0 {
+		t.Fatalf("endTime = %d, want 0 for a running update", got.EndTime)
+	}
+
 	if expiry <= 0 {
 		t.Fatalf("seed lease expiry = %d, want above 0", expiry)
 	}

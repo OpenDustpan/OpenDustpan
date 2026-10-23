@@ -361,6 +361,76 @@ func TestRestoreCommandFailedRestore(t *testing.T) {
 }
 
 //nolint:paralleltest // The command reads process environment, so this test sets it and runs in order.
+func TestRestoreCommandActiveWorkNamesForce(t *testing.T) {
+	const activeWork = "cannot enter maintenance mode while work is active: opentofu:acme/b"
+
+	tests := []struct {
+		name       string
+		extra      []string
+		row        string
+		wantSuffix func(server string) string
+	}{
+		{
+			name:  "active work without force",
+			extra: nil,
+			row:   activeWork,
+			wantSuffix: func(server string) string {
+				return ": end that work, or run opendustpan restore --server " + server +
+					" --backup " + restoreBackupTestID + " --force to cancel it"
+			},
+		},
+		{
+			name:  "active work with force",
+			extra: []string{"--force"},
+			row:   activeWork,
+			wantSuffix: func(server string) string {
+				return ": run opendustpan restore --server " + server + " --backup " + restoreBackupTestID + " again"
+			},
+		},
+		{
+			name:  "other failure",
+			extra: nil,
+			row:   "backup is corrupt",
+			wantSuffix: func(server string) string {
+				return ": run opendustpan restore --server " + server + " --backup " + restoreBackupTestID + " again"
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			script := restoreScript{
+				startStatus: http.StatusAccepted,
+				startBody:   `{"id":"` + restoreTestID + `"}`,
+				states: []restoreStatusResponse{
+					{
+						ID:          restoreTestID,
+						State:       "failed",
+						BackupID:    restoreBackupTestID,
+						PreBackupID: restorePreTestID,
+						Error:       tt.row,
+						Manifest:    nil,
+						Warnings:    nil,
+						DevData:     nil,
+					},
+				},
+			}
+			fake := newRestoreFakeServer(t, "test-token", script)
+
+			_, err := runRestoreClient(t, fake.server.URL, "test-token", tt.extra...)
+			if err == nil {
+				t.Fatal("failed restore succeeded, want an error for exit code 1")
+			}
+
+			want := tt.wantSuffix(fake.server.URL)
+			if !strings.HasSuffix(err.Error(), want) {
+				t.Fatalf("restore error = %v, want it to end with %q", err, want)
+			}
+		})
+	}
+}
+
+//nolint:paralleltest // The command reads process environment, so this test sets it and runs in order.
 func TestRestoreCommandStartConflict(t *testing.T) {
 	script := restoreScript{
 		startStatus: http.StatusConflict,
