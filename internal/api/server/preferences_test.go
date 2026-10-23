@@ -876,12 +876,41 @@ func TestPreferencesIfMatchMustBeOneVersion(t *testing.T) {
 
 	e := newPrefsEnv(t)
 
-	for _, header := range []string{`0`, `"x"`, `"-1"`, `W/"0"`, `"0", "1"`, `""`, `"`} {
+	for _, header := range []string{`0`, `"x"`, `"-1"`, `W/"x"`, `W/0`, `W/""`, `"0", "1"`, `""`, `"`} {
 		got := e.patchIf(t, `{"theme":"terminal"}`, header)
 		checkRefusal(t, got, http.StatusBadRequest, "preferences.if-match-invalid")
 	}
 
 	if got := e.get(t, tokenTester).doc(t); got.Theme != "default" {
 		t.Errorf("theme = %q after refused patches, want default", got.Theme)
+	}
+}
+
+// TestPreferencesWeakIfMatchNeverMatches proves that a weak tag in If-Match
+// never matches, because If-Match uses strong comparison: the PATCH answers
+// 412, changes nothing and writes no entry, also when the weak tag holds the
+// current version.
+func TestPreferencesWeakIfMatchNeverMatches(t *testing.T) {
+	t.Parallel()
+
+	e := newPrefsEnv(t)
+
+	if got := e.get(t, tokenTester).header.Get("ETag"); got != `"0"` {
+		t.Fatalf("ETag of the defaults = %q, want \"0\"", got)
+	}
+
+	entries := len(e.prefsEntries(t)) + len(e.prefsRefusals(t))
+
+	for _, header := range []string{`W/"0"`, `W/"123"`} {
+		got := e.patchIf(t, `{"theme":"terminal"}`, header)
+		checkRefusal(t, got, http.StatusPreconditionFailed, "preferences.precondition-failed")
+	}
+
+	if got := e.get(t, tokenTester).doc(t); got.Theme != "default" {
+		t.Errorf("theme = %q after a weak If-Match, want default", got.Theme)
+	}
+
+	if n := len(e.prefsEntries(t)) + len(e.prefsRefusals(t)); n != entries {
+		t.Errorf("entries = %d after a weak If-Match, want %d", n, entries)
 	}
 }
