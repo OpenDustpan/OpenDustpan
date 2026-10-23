@@ -26,6 +26,7 @@ import (
 	"opendustpan.org/opendustpan/internal/baseurl"
 	"opendustpan.org/opendustpan/internal/bodygate"
 	"opendustpan.org/opendustpan/internal/denylimit"
+	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/internal/sessionauth"
 	"opendustpan.org/opendustpan/internal/token"
 	"opendustpan.org/opendustpan/pkg/audit"
@@ -374,18 +375,11 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	header := w.Header()
-	header.Del("Content-Length")
-	header.Set("Content-Type", jsonAPIMediaType)
-	w.WriteHeader(http.StatusNotFound)
-
-	doc := jsonAPIDocument{
-		Errors: []jsonAPIError{{Status: "404", Code: "", Title: notFoundTitle, Detail: notFoundTitle, Meta: nil}},
-	}
-
-	if err := json.NewEncoder(w).Encode(doc); err != nil {
-		h.logger.WarnContext(r.Context(), "write response failed", slog.String("error", err.Error()))
-	}
+	w.Header().Del("Content-Length")
+	h.writeClassError(r.Context(), w, errorClass{
+		status: http.StatusNotFound, title: notFoundTitle, detail: notFoundTitle,
+		code: errcode.ServerRouteNotFound, args: nil,
+	})
 }
 
 // ExternalBaseURL returns the external base URL for r: the --public-url
@@ -396,17 +390,19 @@ func (h *Handler) ExternalBaseURL(r *http.Request) string {
 
 // notFoundWriter swallows the default 404 of the mux, so ServeHTTP can
 // replace it with a JSON:API error. A 404 that already carries the JSON:API
-// media type comes from a route handler and passes through untouched.
+// media type, or the JSON media type of the registry protocol, comes from a
+// route handler and passes through untouched.
 type notFoundWriter struct {
 	http.ResponseWriter
 
 	notFound bool
 }
 
-// WriteHeader swallows a 404 without the JSON:API media type and records
-// it. Every other status passes through.
+// WriteHeader swallows a 404 without the JSON:API or the JSON media type and
+// records it. Every other status passes through.
 func (c *notFoundWriter) WriteHeader(status int) {
-	if status == http.StatusNotFound && c.Header().Get("Content-Type") != jsonAPIMediaType {
+	media := c.Header().Get("Content-Type")
+	if status == http.StatusNotFound && media != jsonAPIMediaType && media != registryMediaType {
 		c.notFound = true
 
 		return
