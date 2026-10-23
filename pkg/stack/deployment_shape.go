@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 )
 
 // secretsProvidersMember is the member of a deployment that holds the state of
@@ -30,29 +31,34 @@ func deploymentFieldKind(name string) (jsontext.Kind, bool) {
 // errDeploymentShape is the cause of a deployment that the CLI cannot read.
 var errDeploymentShape = errors.New("the deployment cannot be read")
 
+// envelopeMember is the member of the versioned envelope of a sequenced save
+// that holds the deployment.
+const envelopeMember = "deployment"
+
 // checkDeploymentShape returns an error that matches ErrInvalidUpdate when
 // deployment is not a JSON object, when a known member of it has the wrong
 // JSON type, when an entry of resources or pending_operations is not an
-// object, or when other data follows the object. It reads the inner
-// deployment of a sequenced save, which a versioned envelope wraps. It streams
-// the bytes and builds no tree, and it reads no secret value. It does not
-// refuse a repeated member, because the CLI accepts one.
+// object, or when other data follows the object. It streams the bytes once,
+// builds no tree, and reads no secret value. It does not refuse a repeated
+// member, because the CLI accepts one.
+//
+// A sequenced save can wrap its deployment in a versioned envelope. The same
+// pass then checks each deployment that the envelope holds: the reads serve
+// one of them (see innerDeploymentBytes), or the envelope itself when it holds
+// none.
 //
 // The caller checks the size first, so the scan reads at most the size limit.
 func checkDeploymentShape(deployment []byte, seq int64) error {
-	inner := innerDeploymentBytes(deployment, seq)
+	// The decoder reads a bytes.Buffer in place, so the scan does not copy
+	// the deployment.
+	dec := jsontext.NewDecoder(bytes.NewBuffer(deployment), jsontext.AllowDuplicateNames(true))
 
-	dec := jsontext.NewDecoder(bytes.NewReader(inner), jsontext.AllowDuplicateNames(true))
-
-	if dec.PeekKind() != jsontext.KindBeginObject {
-		return deploymentShapeError("it is not a JSON object")
+	check := checkDeploymentMember
+	if seq > 0 {
+		check = checkEnvelopeMember
 	}
 
-	if _, err := dec.ReadToken(); err != nil {
-		return deploymentShapeError("it is not valid JSON")
-	}
-
-	if err := checkDeploymentMembers(dec); err != nil {
+	if err := checkObjectMembers(dec, check); err != nil {
 		return err
 	}
 
@@ -63,9 +69,18 @@ func checkDeploymentShape(deployment []byte, seq int64) error {
 	return nil
 }
 
-// checkDeploymentMembers reads the members of the open object that dec streams
-// up to its end and checks the known ones.
-func checkDeploymentMembers(dec *jsontext.Decoder) error {
+// checkObjectMembers reads the object that dec streams up to its end, and
+// calls check for each member with the name of the member, before its value.
+// check reads the value.
+func checkObjectMembers(dec *jsontext.Decoder, check func(*jsontext.Decoder, string) error) error {
+	if dec.PeekKind() != jsontext.KindBeginObject {
+		return deploymentShapeError("it is not a JSON object")
+	}
+
+	if _, err := dec.ReadToken(); err != nil {
+		return deploymentShapeError("it is not valid JSON")
+	}
+
 	for {
 		tok, err := dec.ReadToken()
 		if err != nil {
@@ -76,10 +91,25 @@ func checkDeploymentMembers(dec *jsontext.Decoder) error {
 			return nil
 		}
 
-		if err := checkDeploymentMember(dec, tok.String()); err != nil {
+		if err := check(dec, tok.String()); err != nil {
 			return err
 		}
 	}
+}
+
+// checkEnvelopeMember checks the member name of the object of a sequenced
+// save, which can be a versioned envelope, and reads the value. The value of a
+// member with the name of envelopeMember, in any case, must be a deployment
+// object: encoding/json matches that name in any case, so innerDeploymentBytes
+// can serve any of these members. Any other member gets the check of a member
+// of a deployment, because the reads serve the envelope itself when it holds
+// no deployment.
+func checkEnvelopeMember(dec *jsontext.Decoder, name string) error {
+	if strings.EqualFold(name, envelopeMember) {
+		return checkObjectMembers(dec, checkDeploymentMember)
+	}
+
+	return checkDeploymentMember(dec, name)
 }
 
 // checkDeploymentMember checks the value of the member name that dec streams,
