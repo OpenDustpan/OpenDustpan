@@ -138,15 +138,44 @@ func allCases() []suiteCase {
 	return slices.Concat(
 		storeCases(),
 		newUnitCases(),
-		checkerCases(),
-		principalCases(),
-		hiddenCases(),
-		latestCases(),
-		latestStateCases(),
+		withToolStores(checkerCases()),
+		withToolStores(principalCases()),
+		withToolStores(hiddenCases()),
+		withToolStores(latestCases()),
+		withToolStores(latestStateCases()),
 		attachmentCases(),
 		attachmentsCases(),
-		statesCases(),
+		withToolStores(statesCases()),
 	)
+}
+
+// withToolStores wraps each case so that it skips when the harness has no
+// unit, no checker or no States port. A harness of one store alone, with no
+// tool stores, runs the cases of the rules and the setting only.
+func withToolStores(cases []suiteCase) []suiteCase {
+	out := make([]suiteCase, 0, len(cases))
+
+	for _, tc := range cases {
+		if tc.test == nil {
+			out = append(out, tc)
+
+			continue
+		}
+
+		run := tc.test
+
+		out = append(out, suiteCase{name: tc.name, test: func(t *testing.T, h Harness) {
+			t.Helper()
+
+			if h.Unit == nil || h.Checker == nil || h.States == nil {
+				t.Skip("the harness has no stores of the tools")
+			}
+
+			run(t, h)
+		}})
+	}
+
+	return out
 }
 
 // storeCases are the behaviors of Store.

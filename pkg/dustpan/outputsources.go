@@ -97,18 +97,21 @@ func (s stackOutputs) Outputs(ctx context.Context, u identity.Object, stateID st
 		return nil, fmt.Errorf("%w: stack %q", outputshare.ErrUnknownProducer, u)
 	}
 
-	cp, err := s.updates.Export(ctx, ref)
+	// The state ID comes from the rows. The blob of the checkpoint is read
+	// once, for the version that the ID names, so a checkpoint that a new
+	// update saves in between is not mixed in.
+	version, err := s.updates.LatestStateVersion(ctx, ref)
 	if err != nil {
 		return nil, fmt.Errorf("read the latest checkpoint of %q: %w", u, err)
 	}
 
-	update, err := s.updates.Get(ctx, ref, cp.Update)
-	if err != nil {
-		return nil, fmt.Errorf("read the update of the latest checkpoint of %q: %w", u, err)
+	if stack.StateID(st.ID, version) != stateID {
+		return nil, outputsharesvc.ErrStateMoved
 	}
 
-	if stack.StateID(st.ID, update.Version) != stateID {
-		return nil, outputsharesvc.ErrStateMoved
+	cp, err := s.updates.ExportVersion(ctx, ref, version)
+	if err != nil {
+		return nil, fmt.Errorf("read the checkpoint of %q: %w", u, err)
 	}
 
 	return stackRootOutputs(cp.Deployment)

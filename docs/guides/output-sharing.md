@@ -41,6 +41,10 @@ The route answers the root outputs of the latest state of one stack or
 workspace. It needs `unit:read-outputs` on the unit, and no other action. A
 person who holds only that action reads the outputs through this route.
 
+The latest state of a stack is the last checkpoint that an update saved. While
+an update runs, the route does not answer the changes that the update has not
+saved as a checkpoint yet.
+
 ```sh
 curl -sS -H "Authorization: Bearer $TOKEN" \
   https://dustpan.example.com/api/dustpan/v1/namespaces/acme/units/$UNIT_ID/outputs
@@ -70,9 +74,8 @@ curl -sS -H "Authorization: Bearer $TOKEN" \
 | Status | Cause |
 | --- | --- |
 | 404 | The unit does not exist, the unit is in another namespace than the path, or the caller does not hold `unit:read-outputs` on the unit. The three answers are the same. |
-| 403 | The caller holds `unit:read-outputs`, and the latest state changed after the check. Send the request again. |
 | 409 | The client encrypted the state of the workspace, and the caller does not hold `unit:read`. The server cannot read the outputs of such a state. A caller with `unit:read` reads the workspace as before. |
-| 409 | A new state came in while the server read the outputs. Send the request again. |
+| 409 | A new state came in while the server checked or read the outputs. Send the request again. |
 
 ## What a person with only `unit:read-outputs` can read
 
@@ -83,6 +86,11 @@ curl -sS -H "Authorization: Bearer $TOKEN" \
 | `GET /api/v2/state-version-outputs/{id}` of the current state version (OpenTofu) | 200 for a plain output. A sensitive output needs `unit:read-secrets` and answers 403 without it. |
 | `GET /api/v2/state-version-outputs/{id}` of an older state version | 403. An older state can hold a value that the owner rotated, so this route needs `unit:read`, and `unit:read-secrets` for a sensitive output. |
 | Every route that answers a whole state: the export of a stack, the current state version, the download and the list of state versions | 403 |
+
+For OpenTofu, the 403 applies to every other route of the workspace, not only
+to the routes of the state. A person who holds `unit:read-outputs` and no
+other action on the workspace gets 403 where a person with no action on it
+gets 404.
 
 An OpenTofu `terraform_remote_state` data source and a Pulumi stack reference
 read the whole state of the other unit. They need `unit:read` on it for a

@@ -201,3 +201,42 @@ func TestNewReaderNeedsItsPorts(t *testing.T) {
 		})
 	}
 }
+
+// movingStates answers the state of the inner port, and then moves the inner
+// port to a new state, as a save of a state between two reads does.
+type movingStates struct {
+	inner *scriptedStates
+}
+
+func (m movingStates) Latest(ctx context.Context, u identity.Object) (outputshare.State, error) {
+	state, err := m.inner.Latest(ctx, u)
+
+	m.inner.mu.Lock()
+	m.inner.state.ID = "state-after-the-race"
+	m.inner.mu.Unlock()
+
+	return state, err
+}
+
+// TestReaderAnswersARaceOfTheLatestCheckAsAMovedState proves that a state that
+// comes in between the read of the reader and the read of the checker answers
+// ErrStateMoved and not a denial, and that the source reads nothing.
+func TestReaderAnswersARaceOfTheLatestCheckAsAMovedState(t *testing.T) {
+	t.Parallel()
+
+	_, rig, source := newReaderRig(t)
+
+	reader, err := outputsharesvc.NewReader(outputsharesvc.ReaderConfig{
+		States: movingStates{inner: rig.states}, Checker: rig.checker,
+		Sources: map[string]outputsharesvc.Source{"opentofu": source},
+	})
+	if err != nil {
+		t.Fatalf("NewReader: %v", err)
+	}
+
+	res, err := reader.Read(t.Context(), personRequest(latestID, false).Caller, producerAcme().Unit)
+	if !errors.Is(err, outputsharesvc.ErrStateMoved) || errors.Is(err, identity.ErrDenied) ||
+		len(res.Outputs) != 0 || source.reads != 0 {
+		t.Fatalf("Read = %+v, %v, %d source reads; want ErrStateMoved, no denial, no read", res, err, source.reads)
+	}
+}

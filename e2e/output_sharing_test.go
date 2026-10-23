@@ -1605,6 +1605,15 @@ func checkNeutralOutputs(t *testing.T, body string, want neutralWant) {
 	if strings.Contains(body, shareSecret) {
 		t.Fatalf("the outputs answer holds a secret value: %s", body)
 	}
+
+	// The checkpoint of the Pulumi CLI holds a secret as a ciphertext, and
+	// the state of OpenTofu holds none. Neither shape reaches a reader of
+	// outputs only.
+	for _, marker := range []string{"ciphertext", "4dabf18193072939515e3"} {
+		if strings.Contains(body, marker) {
+			t.Fatalf("the outputs answer holds ciphertext (%q): %s", marker, body)
+		}
+	}
 }
 
 // checkNeutralOutput proves one output of the answer.

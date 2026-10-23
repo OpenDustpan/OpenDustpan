@@ -776,6 +776,25 @@ func (s *Updates) Export(ctx context.Context, ref Ref) (Checkpoint, error) {
 	return innerDeployment(resolved), nil
 }
 
+// LatestStateVersion returns the version of the update that saved the stack's
+// latest checkpoint, or ErrNoState. It reads the checkpoint row and the update
+// row and never the blob of the checkpoint, so it costs the same for a small
+// and for a large deployment. A journaled update that still runs counts only
+// after it saved a checkpoint: the batches of its journal are not replayed.
+func (s *Updates) LatestStateVersion(ctx context.Context, ref Ref) (int64, error) {
+	cp, err := s.checkpoints.LatestCheckpoint(ctx, ref)
+	if err != nil {
+		return 0, fmt.Errorf("latest state of %s: %w", ref, err)
+	}
+
+	u, err := s.Get(ctx, ref, cp.Update)
+	if err != nil {
+		return 0, err
+	}
+
+	return u.Version, nil
+}
+
 // ExportVersion returns the checkpoint of the stack's update with the given
 // version, or ErrNoState when no such update exists or it has no checkpoint.
 // It never falls back to an older version. While a journaled update runs, a

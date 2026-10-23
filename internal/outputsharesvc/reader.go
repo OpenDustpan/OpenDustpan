@@ -105,6 +105,14 @@ func (r *Reader) Read(ctx context.Context, p identity.Principal, unit identity.O
 	}
 
 	if _, err := r.checker.CheckRead(ctx, req); err != nil {
+		// A denial of the latest-state check, when this read saw a state,
+		// means that a new state came in between the two reads of it. It
+		// answers as a moved state and not as a denial.
+		var denied *outputshare.DeniedError
+		if latest != "" && errors.As(err, &denied) && denied.Check == outputshare.CheckLatest {
+			return Result{}, fmt.Errorf("check the read of outputs: %w", ErrStateMoved)
+		}
+
 		return Result{}, fmt.Errorf("check the read of outputs: %w", err)
 	}
 

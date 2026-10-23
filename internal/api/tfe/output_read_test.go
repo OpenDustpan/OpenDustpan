@@ -3,6 +3,7 @@ package tfe_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -398,5 +399,44 @@ func TestStateVersionListOutputsOnlyIsForbidden(t *testing.T) {
 				checkJSONAPIError(t, rec, tt.want)
 			})
 		}
+	}
+}
+
+// unknownProducerStates answers every read of a latest state with the error
+// of a producer that the check refuses, as a workspace deleted between the
+// resolve of the route and the check does.
+type unknownProducerStates struct{}
+
+func (unknownProducerStates) Latest(context.Context, identity.Object) (outputshare.State, error) {
+	return outputshare.State{ID: "", ClientEncrypted: false},
+		fmt.Errorf("read of the outputs of opentofu:acme/web denied by the producer check: %w",
+			outputshare.ErrUnknownProducer)
+}
+
+// TestOutputRoutesAnswerAHiddenProducerAsAnUnknownWorkspace proves that the
+// 404 of a producer that the check refuses has the whole body of the 404 of a
+// workspace that does not exist: no detail names the check or the producer.
+func TestOutputRoutesAnswerAHiddenProducerAsAnUnknownWorkspace(t *testing.T) {
+	t.Parallel()
+
+	authz := selectiveAuthorizer{deny: nil}
+	hidden := newOutputHandler(t, authz, newTestOutputCheckerWith(t, authz, unknownProducerStates{}))
+	plain := newOutputHandler(t, authz, newTestOutputCheckerWith(t, authz, stubStates{
+		workspaces: stubWorkspaces{}, encrypted: "",
+	}))
+
+	hiddenRec := httptest.NewRecorder()
+	hidden.ServeHTTP(hiddenRec, stateRequest(t, "/api/v2/workspaces/ws-test123/current-state-version-outputs"))
+
+	missingRec := httptest.NewRecorder()
+	plain.ServeHTTP(missingRec, stateRequest(t, "/api/v2/workspaces/ws-missing/current-state-version-outputs"))
+
+	if hiddenRec.Code != http.StatusNotFound || missingRec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d and %d, want 404 for both", hiddenRec.Code, missingRec.Code)
+	}
+
+	if hiddenRec.Body.String() != missingRec.Body.String() {
+		t.Errorf("hidden body = %q, want the body of an unknown workspace %q",
+			hiddenRec.Body.String(), missingRec.Body.String())
 	}
 }

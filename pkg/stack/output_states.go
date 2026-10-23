@@ -75,7 +75,7 @@ func (s *OutputStates) Latest(ctx context.Context, u identity.Object) (outputsha
 		return outputshare.State{}, fmt.Errorf("%w: stack %q", outputshare.ErrUnknownProducer, u)
 	}
 
-	cp, err := s.updates.Export(ctx, ref)
+	version, err := s.updates.LatestStateVersion(ctx, ref)
 	if errors.Is(err, ErrNoState) {
 		return outputshare.State{ID: "", ClientEncrypted: false}, nil
 	}
@@ -84,10 +84,5 @@ func (s *OutputStates) Latest(ctx context.Context, u identity.Object) (outputsha
 		return outputshare.State{}, fmt.Errorf("read the latest checkpoint of %q: %w", u, err)
 	}
 
-	update, err := s.updates.Get(ctx, ref, cp.Update)
-	if err != nil {
-		return outputshare.State{}, fmt.Errorf("read the update of the latest checkpoint of %q: %w", u, err)
-	}
-
-	return outputshare.State{ID: StateID(st.ID, update.Version), ClientEncrypted: false}, nil
+	return outputshare.State{ID: StateID(st.ID, version), ClientEncrypted: false}, nil
 }
