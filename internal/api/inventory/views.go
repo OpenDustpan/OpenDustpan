@@ -67,20 +67,22 @@ func newViews(cfg *ViewsConfig) (*views, error) {
 
 // classifyView maps the errors of the saved view routes. The 403 for a caller
 // who is not a person has one text for every kind of principal.
-func classifyView(err error) (int, string, bool) {
+func classifyView(err error) (failure, bool) {
 	switch {
 	case errors.Is(err, savedview.ErrNotPerson):
-		return http.StatusForbidden, savedview.ErrNotPerson.Error(), true
+		return uncoded(http.StatusForbidden, savedview.ErrNotPerson.Error()), true
 	case errors.Is(err, savedview.ErrNotFound):
-		return http.StatusNotFound, savedview.ErrNotFound.Error(), true
+		return uncoded(http.StatusNotFound, savedview.ErrNotFound.Error()), true
 	case errors.Is(err, savedview.ErrInvalid), errors.Is(err, errViewBody):
-		return http.StatusBadRequest, err.Error(), true
+		return uncoded(http.StatusBadRequest, err.Error()), true
 	case errors.Is(err, errViewIdempotencyKey):
-		return http.StatusBadRequest, err.Error(), true
+		return uncoded(http.StatusBadRequest, err.Error()), true
 	case errors.Is(err, savedview.ErrExists), errors.Is(err, savedview.ErrLimit):
-		return http.StatusConflict, err.Error(), true
+		return uncoded(http.StatusConflict, err.Error()), true
 	default:
-		return 0, "", false
+		var none failure
+
+		return none, false
 	}
 }
 
