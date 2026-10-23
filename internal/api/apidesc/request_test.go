@@ -139,7 +139,7 @@ func TestUndeclaredReadIsLoggedOnce(t *testing.T) {
 
 	var buf bytes.Buffer
 
-	report := apidesc.NewMisuseLog(slog.New(slog.NewTextHandler(&buf, nil)))
+	report := apidesc.NewReporter(slog.New(slog.NewTextHandler(&buf, nil)))
 
 	for range 3 {
 		report.ReportInServer("query parameter", "GET /api/dustpan/v1/things", "evil")
