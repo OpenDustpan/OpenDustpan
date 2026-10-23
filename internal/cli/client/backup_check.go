@@ -92,7 +92,7 @@ func BackupCheck(ctx context.Context, args []string, stdout, stderr io.Writer) e
 	if server == "" {
 		return fmt.Errorf(
 			"%w: set --server (%s) to the server base URL and run opendustpan backup check again",
-			ErrBackupNeedsServer,
+			ErrBackupCheckNeedsServer,
 			BackupServerEnvVar,
 		)
 	}

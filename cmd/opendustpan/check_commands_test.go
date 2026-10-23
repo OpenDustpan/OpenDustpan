@@ -414,7 +414,7 @@ func TestUpgradeCheckUsage(t *testing.T) {
 		{
 			"upgrade check without a server",
 			[]string{"upgrade", "check"},
-			errBackupNeedsServer,
+			errUpgradeCheckNeedsServer,
 		},
 	}
 
@@ -552,7 +552,7 @@ func TestBackupCheckUsage(t *testing.T) {
 		{
 			"check without a server",
 			[]string{"backup", "check", "--backup", "bkp-test00000000000001"},
-			errBackupNeedsServer,
+			errBackupCheckNeedsServer,
 		},
 		{
 			"check with a positional argument",
@@ -736,6 +736,27 @@ func TestUpgradeCheckKeyWarning(t *testing.T) {
 			if !strings.Contains(out, name) {
 				t.Fatalf("%s: key warning lacks %q:\n%s", tc.name, name, out)
 			}
+		}
+	}
+}
+
+// TestCheckCommandsNameThemselvesWithoutServer proves that upgrade check and
+// backup check, run without --server, name their own command first.
+func TestCheckCommandsNameThemselvesWithoutServer(t *testing.T) {
+	t.Setenv(backupServerEnvVar, "")
+
+	for _, tc := range []struct {
+		want string
+		args []string
+	}{
+		{args: []string{"upgrade", "check"}, want: "upgrade check needs --server: "},
+		{args: []string{"backup", "check", "--backup", "bkp-test00000000000001"}, want: "backup check needs --server: "},
+	} {
+		var stdout, stderr bytes.Buffer
+
+		err := run(t.Context(), tc.args, &stdout, &stderr)
+		if err == nil || !strings.HasPrefix(err.Error(), tc.want) {
+			t.Errorf("run %v: err = %v, want a text that starts with %q", tc.args, err, tc.want)
 		}
 	}
 }
