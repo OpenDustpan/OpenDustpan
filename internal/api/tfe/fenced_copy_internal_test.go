@@ -21,7 +21,7 @@ func TestWriteErrorFencedCopy(t *testing.T) {
 	t.Parallel()
 
 	fencedBody := fmt.Sprintf(
-		"{\"errors\":[{\"status\":\"409\",\"title\":%q,\"detail\":%q}]}\n",
+		"{\"errors\":[{\"status\":\"409\",\"code\":\"namespace.fenced\",\"title\":%q,\"detail\":%q}]}\n",
 		titleConflict,
 		namespace.ErrFenced.Error(),
 	)

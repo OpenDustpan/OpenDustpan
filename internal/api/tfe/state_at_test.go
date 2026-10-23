@@ -140,8 +140,8 @@ func TestStateAtFilterAndPaging(t *testing.T) {
 }
 
 // TestStateAtErrors proves the exact error documents of the route: 404 for a
-// time before the first state version, with the text that names the first
-// one, and 422 for a time that is not Unix milliseconds.
+// time before the first state version, with the text and the argument that
+// name the first one, and 422 for a time that is not Unix milliseconds.
 func TestStateAtErrors(t *testing.T) {
 	t.Parallel()
 
@@ -151,6 +151,10 @@ func TestStateAtErrors(t *testing.T) {
 		status int
 		title  string
 		detail string
+		// code is the error code, or "" for none.
+		code string
+		// meta is the JSON of the meta member, or "" for none.
+		meta string
 	}{
 		{
 			name:   "before the first state version",
@@ -158,16 +162,20 @@ func TestStateAtErrors(t *testing.T) {
 			status: http.StatusNotFound,
 			title:  "not found",
 			detail: "workspace has no state at that time: the first state version of acme/web is at 1970-01-01T00:00:01Z (1000 ms)",
+			code:   "workspace.no-state-at",
+			meta:   `{"args":{"firstAt":"1970-01-01T00:00:01Z"}}`,
 		},
 		{
 			name: "a time that is not a number", target: "/state-at/yesterday", status: http.StatusUnprocessableEntity,
 			title:  "unprocessable",
 			detail: `the time "yesterday" in the path is not Unix milliseconds`,
+			code:   "", meta: "",
 		},
 		{
 			name: "a negative time", target: "/state-at/-1", status: http.StatusUnprocessableEntity,
 			title:  "unprocessable",
 			detail: `the time "-1" in the path is not Unix milliseconds`,
+			code:   "", meta: "",
 		},
 	}
 
@@ -177,8 +185,17 @@ func TestStateAtErrors(t *testing.T) {
 
 			rec := resourceResponse(t, "/api/v2/workspaces/ws-test123"+tc.target, tc.status)
 
-			want := `{"errors":[{"status":"` + strconv.Itoa(tc.status) +
-				`","title":"` + tc.title + `","detail":` + quote(tc.detail) + `}]}`
+			want := `{"errors":[{"status":"` + strconv.Itoa(tc.status) + `"`
+			if tc.code != "" {
+				want += `,"code":"` + tc.code + `"`
+			}
+
+			want += `,"title":"` + tc.title + `","detail":` + quote(tc.detail)
+			if tc.meta != "" {
+				want += `,"meta":` + tc.meta
+			}
+
+			want += `}]}`
 			if got := strings.TrimSpace(rec.Body.String()); got != want {
 				t.Fatalf("error body = %s, want %s", got, want)
 			}

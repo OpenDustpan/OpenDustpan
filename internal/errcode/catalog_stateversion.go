@@ -6,6 +6,15 @@ const (
 	// StateVersionBusy means that the server has no room for the body of a state version now. The caller tries again
 	// after the Retry-After time.
 	StateVersionBusy = "state-version.busy"
+	// StateVersionBudgetTooSmall means that the body of the state version can never fit the body budget of the server.
+	StateVersionBudgetTooSmall = "state-version.budget-too-small"
+	// StateVersionNotFound means that the state version does not exist or is not finalized.
+	StateVersionNotFound = "state-version.not-found"
+	// StateVersionResourceNotFound means that the state version has no resource or value at the address or the path of
+	// the request.
+	StateVersionResourceNotFound = "state-version.resource-not-found"
+	// StateVersionTooLarge means that the body or the outputs of the state version are over the size limit.
+	StateVersionTooLarge = "state-version.too-large"
 )
 
 // stateVersionSpecs are the codes of the state versions of the TFE-compatible API.
@@ -14,6 +23,26 @@ func stateVersionSpecs() []Spec {
 		{
 			Code:    StateVersionBusy,
 			Meaning: "the server has no room for the body of a state version now; try again after the Retry-After time",
+			Args:    nil,
+		},
+		{
+			Code:    StateVersionBudgetTooSmall,
+			Meaning: "the body of the state version can never fit the body budget of the server",
+			Args:    nil,
+		},
+		{
+			Code:    StateVersionNotFound,
+			Meaning: "the state version does not exist or is not finalized",
+			Args:    nil,
+		},
+		{
+			Code:    StateVersionResourceNotFound,
+			Meaning: "the state version has no resource or value at the address or the path of the request",
+			Args:    nil,
+		},
+		{
+			Code:    StateVersionTooLarge,
+			Meaning: "the body or the outputs of the state version are over the size limit",
 			Args:    nil,
 		},
 	}
