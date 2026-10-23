@@ -110,6 +110,12 @@ func (a *Authorizer) Authorize(
 	action identity.Action,
 	obj identity.Object,
 ) error {
+	// The namespace service principal is decided before every other rule,
+	// also before the administrator shortcut, and reads no store.
+	if identity.IsNamespaceServiceSubject(p.Subject) {
+		return authorizeNamespaceService(p, action, obj)
+	}
+
 	if p.Admin {
 		return nil
 	}
@@ -135,6 +141,29 @@ func (a *Authorizer) Authorize(
 	return nil
 }
 
+// authorizeNamespaceService decides an action of a principal with the subject
+// of a namespace service principal. The principal holds one action,
+// identity.ActionUnitRunPlan, on the units of its own namespace. Every other
+// case is denied: another credential, the administrator flag, a malformed
+// subject, another action, another namespace and an object that is not a
+// unit.
+func authorizeNamespaceService(p identity.Principal, action identity.Action, obj identity.Object) error {
+	ns, valid := identity.NamespaceServiceOf(p.Subject)
+
+	// Defense in depth: the principal API and the token services refuse this
+	// subject too; this rule stays so that a principal that came from
+	// another path never gets an action, also with Admin set.
+	allowed := valid && p.IsNamespaceService() &&
+		action == identity.ActionUnitRunPlan &&
+		obj.IsUnit() && obj.Namespace() == ns
+
+	if !allowed {
+		return deny(p, action, obj)
+	}
+
+	return nil
+}
+
 // deny returns the error of a refused action.
 func deny(p identity.Principal, action identity.Action, obj identity.Object) error {
 	return fmt.Errorf("%w: %s may not %s on %q", identity.ErrDenied, p.Subject, action, obj.String())
@@ -154,6 +183,12 @@ type Access struct {
 // holds every classified action through no grant.
 func (a *Authorizer) Explain(ctx context.Context, p identity.Principal, obj identity.Object) (Access, error) {
 	out := Access{Object: obj, Actions: nil, Grants: nil}
+
+	// The namespace service principal holds no stored grant: it explains
+	// no action, also with the administrator flag set.
+	if identity.IsNamespaceServiceSubject(p.Subject) {
+		return out, nil
+	}
 
 	if p.Admin {
 		for action := range families {
@@ -218,6 +253,12 @@ func (a *Authorizer) ScopeExact() bool {
 // object.
 func (a *Authorizer) ListObjects(ctx context.Context, p identity.Principal, action identity.Action) (Scope, error) {
 	none := Scope{Namespaces: nil, Collections: nil, Units: nil, Principals: nil, All: false}
+
+	// The namespace service principal has no scope here: the rule of its one
+	// action is a decision on one object, not a list of grants.
+	if identity.IsNamespaceServiceSubject(p.Subject) {
+		return none, nil
+	}
 
 	if p.Admin {
 		none.All = true
@@ -617,6 +658,13 @@ func principalNamespaceOf(
 // deleted has none.
 func (a *Authorizer) subjectsOf(ctx context.Context, p identity.Principal) ([]Subject, error) {
 	if p.Subject == "" {
+		return nil, nil
+	}
+
+	// Defense in depth: the callers above handle this subject before they
+	// call here; this check stays so that a new caller never reads the
+	// stores for a namespace service principal, which has no record.
+	if identity.IsNamespaceServiceSubject(p.Subject) {
 		return nil, nil
 	}
 

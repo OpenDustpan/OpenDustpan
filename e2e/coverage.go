@@ -25,6 +25,7 @@ import (
 	serverapi "opendustpan.org/opendustpan/internal/api/server"
 	tfeapi "opendustpan.org/opendustpan/internal/api/tfe"
 	tofuhttpapi "opendustpan.org/opendustpan/internal/api/tofuhttp"
+	triggersapi "opendustpan.org/opendustpan/internal/api/triggers"
 	"opendustpan.org/opendustpan/internal/baseurl"
 	"opendustpan.org/opendustpan/internal/outputsharesvc"
 	registryservice "opendustpan.org/opendustpan/internal/registry/service"
@@ -55,6 +56,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/stack"
 	"opendustpan.org/opendustpan/pkg/stack/stacktest"
 	"opendustpan.org/opendustpan/pkg/store/schema"
+	"opendustpan.org/opendustpan/pkg/trigger"
 	"opendustpan.org/opendustpan/pkg/workspace"
 )
 
@@ -97,12 +99,13 @@ func ServedRoutes(tb testing.TB) []RouteRef {
 	sinkRoutes := coverageSinkRoutes(tb)
 	jobRoutes := coverageJobRoutes(tb, namespaces)
 	driftRoutes := coverageDriftRoutes(tb, namespaces)
+	triggerRoutes := coverageTriggerRoutes(tb, namespaces)
 	registryRoutes := coverageRegistryRoutes(tb)
 	server := coverageServerRoutes(tb)
 
 	out := slices.Concat(
 		pulumi, tfe, tofuHTTP, inventory, auditRoutes, contextRoutes, profileRoutes, sinkRoutes, jobRoutes,
-		driftRoutes, registryRoutes, server,
+		driftRoutes, triggerRoutes, registryRoutes, server,
 	)
 	out = slices.Grow(out, probeRouteCount)
 
@@ -485,6 +488,14 @@ func (coverageTofuHTTPWorkspaces) Create(_ context.Context, _ workspace.Ref) (wo
 	return workspace.Workspace{}, workspace.ErrNotFound
 }
 
+func (coverageTofuHTTPWorkspaces) AdmitFirstWrite(_ context.Context, _ workspace.Ref, _ workspace.StreamInput) error {
+	return workspace.ErrNotFound
+}
+
+func (coverageTofuHTTPWorkspaces) AdmitFirstLock(_ context.Context, _ workspace.Ref, _ workspace.LockRequest) error {
+	return workspace.ErrNotFound
+}
+
 func (coverageTofuHTTPWorkspaces) LockWithIDForJob(
 	_ context.Context, _ workspace.ID, _ workspace.LockRequest,
 ) (workspace.Workspace, error) {
@@ -844,6 +855,46 @@ func coverageJobRoutes(tb testing.TB, namespaces *namespace.Service) []RouteRef 
 	})
 	if err != nil {
 		tb.Fatalf("jobs handler: %v", err)
+	}
+
+	routes := handler.Routes()
+	out := make([]RouteRef, 0, len(routes))
+
+	for _, route := range routes {
+		out = append(out, RouteRef{Method: route.Method, Path: route.Path})
+	}
+
+	return out
+}
+
+// coverageTriggerRoutes returns the trigger adapter's route table.
+func coverageTriggerRoutes(tb testing.TB, namespaces *namespace.Service) []RouteRef {
+	tb.Helper()
+
+	manager, err := trigger.NewManager(trigger.ManagerConfig{
+		Store: struct{ trigger.Store }{nil}, Dispatcher: struct{ trigger.Dispatcher }{nil},
+		Authorizer: coverageAuthorizer{}, Savers: struct{ trigger.SaverCheck }{nil},
+		Units: struct{ trigger.Units }{nil}, Fences: struct{ trigger.Fences }{nil}, Now: nil, NewID: nil,
+	})
+	if err != nil {
+		tb.Fatalf("trigger manager: %v", err)
+	}
+
+	handler, err := triggersapi.NewHandler(triggersapi.Config{
+		Namespaces:     namespaces,
+		Units:          coverageReader{},
+		Store:          struct{ trigger.Store }{nil},
+		Manager:        manager,
+		Authenticator:  coverageAuthenticator{},
+		Authorizer:     coverageAuthorizer{},
+		Audit:          coverageAuditStore{},
+		OnAuditFailure: nil,
+		DenialLimiter:  nil,
+		Sessions:       nil,
+		Logger:         slog.New(slog.DiscardHandler),
+	})
+	if err != nil {
+		tb.Fatalf("triggers handler: %v", err)
 	}
 
 	routes := handler.Routes()
@@ -1470,6 +1521,7 @@ func CoverageAllowlist() []AllowEntry {
 		manualLockAllowEntries(),
 		jobAllowEntries(),
 		driftAllowEntries(),
+		triggerAllowEntries(),
 		outputSharingAllowEntries(),
 		preferencesAllowEntries(),
 		savedViewAllowEntries(),
@@ -2535,6 +2587,39 @@ func jobAllowEntries() []AllowEntry {
 			CoveringTest: test, Reason: why,
 		},
 	}
+}
+
+// triggerAllowEntries covers the routes of the run triggers. No CLI calls them:
+// the console and the clients of the API do. The steps of TestRunTriggers call
+// each of them with the personal token of a person, on a unit that the real
+// OpenTofu CLI made.
+func triggerAllowEntries() []AllowEntry {
+	const (
+		base = "/api/dustpan/v1/namespaces/{namespace}/units/{unit_id}/triggers"
+		one  = base + "/{trigger_id}"
+	)
+
+	return allowRoutes(
+		"TestRunTriggers",
+		"Console and client route: no CLI calls it. The steps of TestRunTriggers call it with the token of a person.",
+		RouteRef{Method: http.MethodGet, Path: base},
+		RouteRef{Method: http.MethodPost, Path: base},
+		RouteRef{Method: http.MethodGet, Path: one},
+		RouteRef{Method: http.MethodPut, Path: one},
+		RouteRef{Method: http.MethodDelete, Path: one},
+		RouteRef{Method: http.MethodPost, Path: one + "/fire"},
+	)
+}
+
+// allowRoutes builds the allow entries of routes that one test covers for one
+// reason.
+func allowRoutes(test, reason string, routes ...RouteRef) []AllowEntry {
+	out := make([]AllowEntry, 0, len(routes))
+	for _, r := range routes {
+		out = append(out, AllowEntry{Method: r.Method, Path: r.Path, CoveringTest: test, Reason: reason})
+	}
+
+	return out
 }
 
 // driftAllowEntries covers the routes that start a drift check and read the

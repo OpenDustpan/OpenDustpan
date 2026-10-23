@@ -118,6 +118,7 @@ func pgCopyTables() []pgCopyTable {
 	tables = append(tables, pgCopyGitHostTables()...)
 	tables = append(tables, pgCopyRegistryTables()...)
 	tables = append(tables, pgCopySinkTables()...)
+	tables = append(tables, pgCopyTriggerTables()...)
 	tables = append(tables, pgCopyItemKeyTables()...)
 
 	return tables
@@ -1740,8 +1741,8 @@ func (s *Store) createRestoreConflict(ctx context.Context, id backup.RestoreID) 
 }
 
 // checkStagedFeatureRows checks the rows of the staged features that have rules
-// of their own: the drift results, the registry, the Git host connections and
-// the notification sinks.
+// of their own: the drift results, the registry, the Git host connections,
+// the notification sinks and the triggers.
 func checkStagedFeatureRows(ctx context.Context, pool *pgxpool.Pool, staging string) error {
 	if err := checkStagedDriftResults(ctx, pool, staging); err != nil {
 		return err
@@ -1755,5 +1756,9 @@ func checkStagedFeatureRows(ctx context.Context, pool *pgxpool.Pool, staging str
 		return err
 	}
 
-	return checkStagedSinks(ctx, pool, staging)
+	if err := checkStagedSinks(ctx, pool, staging); err != nil {
+		return err
+	}
+
+	return checkStagedTriggers(ctx, pool, staging)
 }

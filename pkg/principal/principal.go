@@ -30,6 +30,7 @@ import (
 	"unicode/utf8"
 
 	"opendustpan.org/opendustpan/internal/ident"
+	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
 )
 
@@ -319,6 +320,19 @@ func ValidateSubject(s string) error {
 			ErrReservedSubject, s, DevSubjectPrefix)
 	}
 
+	return refuseNamespaceServiceSubject(s)
+}
+
+// refuseNamespaceServiceSubject returns ErrReservedSubject for a subject that
+// starts with identity.NamespaceServicePrefix, in any case. Only the server
+// builds the namespace service principal, in its own process, and no record
+// holds it.
+func refuseNamespaceServiceSubject(s string) error {
+	if identity.IsNamespaceServiceSubject(s) {
+		return fmt.Errorf("%w: %q starts with %q, which only the namespace service principal of the server uses",
+			ErrReservedSubject, s, identity.NamespaceServicePrefix)
+	}
+
 	return nil
 }
 
@@ -334,7 +348,7 @@ func checkSubjectForm(s string) error {
 		return fmt.Errorf("%w: %q can be read as the subject of a bootstrap admin token", ErrReservedSubject, s)
 	}
 
-	return nil
+	return refuseNamespaceServiceSubject(s)
 }
 
 // Subjects of the dev sign-in of opendustpan dev. The prefix is reserved:
@@ -447,6 +461,13 @@ func validateText(field, s string, maxLen int) error {
 // principal that is not a person is marked as a break-glass account.
 func (p Principal) Validate() error {
 	if err := ValidateSubject(p.Subject); err != nil {
+		return err
+	}
+
+	// Defense in depth: ValidateSubject refuses this subject too; this check
+	// stays so that a change to that function never lets a record with the
+	// subject of the namespace service principal through Validate.
+	if err := refuseNamespaceServiceSubject(p.Subject); err != nil {
 		return err
 	}
 

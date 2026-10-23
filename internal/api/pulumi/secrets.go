@@ -10,9 +10,6 @@ import (
 	"net/http"
 	"time"
 
-	"opendustpan.org/opendustpan/internal/clientip"
-	"opendustpan.org/opendustpan/internal/requestid"
-	"opendustpan.org/opendustpan/internal/sessionauth"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/secret"
@@ -356,16 +353,6 @@ func (h *Handler) drainAuditBody(w http.ResponseWriter, r *http.Request) bool {
 	return true
 }
 
-// auditDetail groups what one audit entry records: the action, the state
-// version, the value path, the count of values and the kind of access.
-type auditDetail struct {
-	action     string
-	version    string
-	valuePath  string
-	valueCount *int64
-	kind       audit.Kind
-}
-
 // appendRevealAudit writes one audit entry for a third-party decryption that
 // the Pulumi CLI reports: the action unit:decrypt with the kind reveal, so
 // a reader never confuses it with a tool operation. A failed append writes
@@ -374,12 +361,14 @@ type auditDetail struct {
 func (h *Handler) appendRevealAudit(r *http.Request, p identity.Principal, obj identity.Object) {
 	ctx := r.Context()
 
-	entry := h.newAuditEntry(r, p, obj, auditDetail{
+	entry := requestEntry(ctx, r, p, obj, auditDetail{
+		at:         time.Now().UTC(),
 		action:     string(identity.ActionUnitDecrypt),
 		version:    "",
 		valuePath:  "",
 		valueCount: nil,
 		kind:       audit.KindReveal,
+		outcome:    audit.OutcomeSuccess,
 	})
 
 	if err := h.appendEntry(ctx, entry); err != nil {
@@ -399,53 +388,17 @@ func (h *Handler) appendToolOperationAudit(
 ) error {
 	valueCount := int64(count)
 
-	entry := h.newAuditEntry(r, p, obj, auditDetail{
+	entry := requestEntry(r.Context(), r, p, obj, auditDetail{
+		at:         time.Now().UTC(),
 		action:     string(identity.ActionUnitDecrypt),
 		version:    "",
 		valuePath:  "",
 		valueCount: &valueCount,
 		kind:       audit.KindToolOperation,
+		outcome:    audit.OutcomeSuccess,
 	})
 
 	return h.appendEntry(r.Context(), entry)
-}
-
-// newAuditEntry builds one audit entry for the request: who acted, what
-// happened and where it came from, with the given action, version, value
-// path, value count and kind. The store assigns the sequence, the previous hash and the
-// hash on append.
-func (h *Handler) newAuditEntry(
-	r *http.Request, p identity.Principal, obj identity.Object, detail auditDetail,
-) audit.Entry {
-	ctx := r.Context()
-
-	return audit.Entry{
-		At:            time.Now().UTC(),
-		Namespace:     obj.Namespace(),
-		Subject:       p.Subject,
-		IDPSubject:    "",
-		TokenID:       p.TokenID,
-		Action:        detail.action,
-		Object:        obj.String(),
-		Version:       detail.version,
-		ValuePath:     detail.valuePath,
-		ValueCount:    detail.valueCount,
-		Changes:       nil,
-		SourceIP:      clientip.String(r),
-		UserAgent:     truncateUserAgent(r.UserAgent()),
-		Channel:       sessionauth.AuditChannel(r, channelHeader),
-		Kind:          detail.kind,
-		Outcome:       audit.OutcomeSuccess,
-		RequestID:     requestid.FromContext(ctx),
-		ObjectID:      obj.UnitID(),
-		PrevHash:      "",
-		Hash:          "",
-		Sequence:      0,
-		FenceVersion:  0,
-		Reason:        "",
-		PrincipalKind: string(p.Kind),
-		JobID:         p.JobID,
-	}
 }
 
 // appendEntry writes e in its namespace with the fence check of the

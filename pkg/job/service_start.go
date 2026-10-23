@@ -57,24 +57,12 @@ func checkRequest(a Actor, req *StartRequest) (SourceKind, error) {
 		return "", fmt.Errorf("%w: a job token cannot start a job", identity.ErrDenied)
 	}
 
-	if !req.Operation.Valid() {
-		return "", fmt.Errorf("%w: unknown operation %q", ErrInvalid, req.Operation)
+	err := checkKinds(req)
+	if err != nil {
+		return "", err
 	}
 
-	if req.Executor != "" && !req.Executor.Valid() {
-		return "", fmt.Errorf("%w: unknown executor %q", ErrInvalid, req.Executor)
-	}
-
-	if !req.Purpose.Valid() {
-		return "", fmt.Errorf("%w: unknown purpose %q", ErrInvalid, req.Purpose)
-	}
-
-	if req.Purpose == PurposeDriftCheck && req.Operation != OperationRefresh {
-		return "", fmt.Errorf("%w: a %s has the operation %s, not %s", ErrInvalid, req.Purpose, OperationRefresh,
-			req.Operation)
-	}
-
-	err := checkText(req)
+	err = checkText(req)
 	if err != nil {
 		return "", err
 	}
@@ -84,7 +72,40 @@ func checkRequest(a Actor, req *StartRequest) (SourceKind, error) {
 		return "", err
 	}
 
-	return sourceOf(a, req.Source)
+	source, err := sourceOf(a, req.Source)
+	if err != nil {
+		return "", err
+	}
+
+	err = checkTrigger(a, source, req.Trigger)
+	if err != nil {
+		return "", err
+	}
+
+	return source, nil
+}
+
+// checkKinds checks the operation, the executor and the purpose of req, and that
+// a drift check is a refresh.
+func checkKinds(req *StartRequest) error {
+	if !req.Operation.Valid() {
+		return fmt.Errorf("%w: unknown operation %q", ErrInvalid, req.Operation)
+	}
+
+	if req.Executor != "" && !req.Executor.Valid() {
+		return fmt.Errorf("%w: unknown executor %q", ErrInvalid, req.Executor)
+	}
+
+	if !req.Purpose.Valid() {
+		return fmt.Errorf("%w: unknown purpose %q", ErrInvalid, req.Purpose)
+	}
+
+	if req.Purpose == PurposeDriftCheck && req.Operation != OperationRefresh {
+		return fmt.Errorf("%w: a %s has the operation %s, not %s", ErrInvalid, req.Purpose, OperationRefresh,
+			req.Operation)
+	}
+
+	return nil
 }
 
 // checkText checks the idempotency key and the reason of req.
@@ -438,7 +459,8 @@ func (s *service) newJob(a Actor, c *decided) Job {
 	j := Job{
 		ID: s.newID(), Spec: c.spec, State: StateQueued, Wait: WaitNone, Reason: "",
 		Phases: make([]Phase, len(c.kinds)), Current: 0, StartedBy: a.Principal.Subject, Source: c.source,
-		Agent: a.Agent, AgentMode: a.Mode, BreakGlass: c.bg, Delivery: nil, Closed: nil,
+		Agent: a.Agent, AgentMode: a.Mode, BreakGlass: c.bg, Trigger: copyTrigger(c.req.Trigger), Delivery: nil,
+		Closed:       nil,
 		Verification: VerificationNone, IdempotencyKey: scopedKey(a.Principal.Subject, c.req.IdempotencyKey),
 		RequestHash: requestHash(c.req), Version: 0, CreatedAt: time.Time{}, UpdatedAt: time.Time{},
 	}
@@ -452,6 +474,18 @@ func (s *service) newJob(a Actor, c *decided) Job {
 	}
 
 	return j
+}
+
+// copyTrigger returns a copy of ref, so that the job never shares memory with
+// the request.
+func copyTrigger(ref *TriggerRef) *TriggerRef {
+	if ref == nil {
+		return nil
+	}
+
+	c := *ref
+
+	return &c
 }
 
 // scopedKey returns the key that the store keeps for the idempotency key of
@@ -507,6 +541,13 @@ func requestHash(req *StartRequest) string {
 		put(req.BreakGlass.Reason)
 	} else {
 		put("")
+	}
+
+	// The trigger joins the hash when there is one, so a request without a
+	// trigger keeps its hash.
+	if req.Trigger != nil {
+		put(req.Trigger.ID)
+		put(req.Trigger.Saver)
 	}
 
 	for i := range req.Edits {
@@ -574,6 +615,13 @@ func startChanges(a Actor, j *Job) []audit.Change {
 		changes = append(changes, audit.Change{
 			Key: "freeze", Old: nil, New: j.BreakGlass.Freeze, Layer: "", TakesEffect: "",
 		})
+	}
+
+	if j.Trigger != nil {
+		changes = append(changes,
+			audit.Change{Key: "trigger", Old: nil, New: j.Trigger.ID, Layer: "", TakesEffect: ""},
+			audit.Change{Key: "trigger-saver", Old: nil, New: j.Trigger.Saver, Layer: "", TakesEffect: ""},
+		)
 	}
 
 	return changes

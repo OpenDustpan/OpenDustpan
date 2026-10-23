@@ -413,7 +413,7 @@ func actorOf(subject string) job.Actor {
 func (r *rig) plan(key string) job.StartRequest {
 	return job.StartRequest{
 		Unit: r.unit, Operation: job.OperationPlan, Purpose: "", Executor: "", Location: emptyLocation(), Pool: "",
-		Edits: nil, Delivery: "", Source: "", IdempotencyKey: key, Reason: "", BreakGlass: nil,
+		Edits: nil, Delivery: "", Source: "", IdempotencyKey: key, Reason: "", BreakGlass: nil, Trigger: nil,
 		Channel: audit.ChannelAPI, SourceIP: "192.0.2.7", UserAgent: "test", RequestID: "req-1",
 	}
 }
