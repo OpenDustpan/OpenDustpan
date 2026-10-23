@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 
+	"opendustpan.org/opendustpan/internal/api/apidesc"
 	"opendustpan.org/opendustpan/internal/sessionauth"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/trigger"
@@ -196,7 +197,7 @@ func (h *Handler) enforce(route Route) http.HandlerFunc {
 		// A write with the key would silently lose its replay protection: the
 		// routes of this API take no key, except the fire route, so the server
 		// refuses the header elsewhere.
-		if r.Method != http.MethodGet && !route.IdempotencyKey && len(r.Header.Values(idempotencyHeader)) > 0 {
+		if r.Method != http.MethodGet && !route.IdempotencyKey && len(apidesc.HeaderValues(r, idempotencyHeader)) > 0 {
 			h.writeError(ctx, w, errKeyUnsupported)
 
 			return

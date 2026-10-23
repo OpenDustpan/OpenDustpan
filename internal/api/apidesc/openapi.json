@@ -3005,7 +3005,7 @@
   "info": {
     "description": "The tool-neutral REST API of an OpenDustpan server. The description covers the paths under /api/dustpan/v1/ only. A body has the schema of the Go type that the route names.",
     "title": "OpenDustpan REST API",
-    "version": "0.3.0"
+    "version": "0.4.0"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -7013,7 +7013,7 @@
           }
         ],
         "responses": {
-          "2XX": {
+          "200": {
             "content": {
               "application/json": {
                 "schema": {
@@ -7079,7 +7079,7 @@
           "required": true
         },
         "responses": {
-          "2XX": {
+          "200": {
             "content": {
               "application/json": {
                 "schema": {
@@ -7153,7 +7153,7 @@
           }
         ],
         "responses": {
-          "2XX": {
+          "204": {
             "description": "The request succeeded."
           },
           "default": {
@@ -7214,7 +7214,7 @@
           }
         ],
         "responses": {
-          "2XX": {
+          "200": {
             "content": {
               "application/json": {
                 "schema": {
@@ -7288,7 +7288,7 @@
           "required": true
         },
         "responses": {
-          "2XX": {
+          "200": {
             "content": {
               "application/json": {
                 "schema": {
@@ -7375,7 +7375,7 @@
           "required": true
         },
         "responses": {
-          "2XX": {
+          "200": {
             "content": {
               "application/json": {
                 "schema": {

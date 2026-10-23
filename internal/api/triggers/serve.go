@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"strings"
 
+	"opendustpan.org/opendustpan/internal/api/apidesc"
 	"opendustpan.org/opendustpan/internal/api/refusal"
 	"opendustpan.org/opendustpan/internal/clientip"
 	"opendustpan.org/opendustpan/internal/cron"
@@ -239,7 +240,7 @@ func (h *Handler) fireTrigger(w http.ResponseWriter, r *http.Request, p identity
 // idempotencyKey returns the key of the request, or "" for a request with no
 // key. A key that is not valid, or a second key, is an error.
 func idempotencyKey(r *http.Request) (string, error) {
-	values := r.Header.Values(idempotencyHeader)
+	values := apidesc.HeaderValues(r, idempotencyHeader)
 
 	switch len(values) {
 	case 0:
@@ -282,7 +283,7 @@ func requestInfo(r *http.Request) trigger.RequestInfo {
 	return trigger.RequestInfo{
 		Channel:   sessionauth.AuditChannel(r, channelHeader),
 		SourceIP:  clientip.String(r),
-		UserAgent: truncate(r.UserAgent(), audit.MaxUserAgentLen),
+		UserAgent: truncate(apidesc.Header(r, "User-Agent"), audit.MaxUserAgentLen),
 		RequestID: requestid.FromContext(r.Context()),
 	}
 }
