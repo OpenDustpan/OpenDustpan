@@ -68,9 +68,22 @@ type Options struct {
 	// from. The client carries it in its metadata and in its user agent,
 	// next to the description version.
 	ServerRelease string
+	// ServerCommit is the Git commit of the server that the description comes
+	// from, as 40 lowercase hexadecimal digits, or "development" for a run
+	// that is not a release. A client can carry it in its metadata. A
+	// template set that has no use for it ignores it.
+	ServerCommit string
+	// Description is the bytes of the description. A client can carry a copy,
+	// so that a user can compute the digest again. A template set that has no
+	// use for it ignores it.
+	Description []byte
 	// GeneratorVersion is the version of the generator. It goes into the
 	// header of each generated file.
 	GeneratorVersion string
+	// DescriptionSHA256 is the SHA-256 of the bytes of the description, in
+	// lowercase hexadecimal. A client can carry it as a pin of the
+	// description. A template set that has no use for it ignores it.
+	DescriptionSHA256 string
 }
 
 // File is one generated file.

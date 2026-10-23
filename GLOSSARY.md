@@ -61,6 +61,23 @@ _Copy says_: "collection", with the things it holds: "a collection of stacks and
 A rule of a namespace that matches a Pulumi project and a stack-name pattern. It names the collection of a new stack that the Pulumi CLI makes (ADR 61).
 _Avoid_: Routing rule, assignment rule
 
+**Sharing rule**:
+A rule of the producer namespace that lets the jobs of named units read the root outputs of a producer (ADR 273). Its producer is a unit, a collection or a namespace. Its consumer is a unit, a collection, or the namespace of the producer. It can name a unit or a collection of another namespace, never a whole other namespace, and never a principal. A job token reads the outputs of another unit only when two checks pass. A sharing rule names the unit of the job, and the principal whose grants decide holds `unit:read-outputs` on the producer. That principal is one of three (ADR 273 decision 5). It is the principal that started the job, or the last saver of the trigger that started the job. For an open of the profile block `outputs/opendustpan`, it is the attachment authority. A sharing rule gives a person nothing: a person reads outputs with a grant of `unit:read-outputs`.
+_Avoid_: Remote state sharing (except when naming the HCP Terraform feature), output grant, share, output-sharing rule (in new text)
+_Copy says_: "sharing rule", with "who can read the outputs" where it helps. The `unit:read-outputs` and `unit:manage-sharing` action names stay in the API.
+
+**Producer**:
+The unit whose outputs another unit reads, in the language of output sharing (ADR 273). The producer holds its sharing rules and decides who reads.
+_Avoid_: Source unit (in new text about output sharing), upstream
+
+**Consumer**:
+The unit that reads the outputs of a producer, in the language of output sharing (ADR 273). A sharing rule names it as a unit, as its collection or as its namespace.
+_Avoid_: Dependent (that is the side of a dependency edge), downstream, reader
+
+**Output sharing default**:
+The namespace setting `outputSharing.newUnitDefault` that decides the sharing rule of a new unit (ADR 273). The value `nobody` is the default and gives a new unit no rule. The value `namespace` gives it one rule that names its namespace. A change of the setting changes no rule of a unit that exists.
+_Avoid_: Sharing policy, default visibility
+
 **Label**:
 A key and a value on a unit, for views and filters. A label never grants access and never puts a unit into a collection (ADR 51). A label change needs `unit:edit-labels` and writes no state (ADR 223 decision 11). A key has 1 to 128 characters: letters, digits and `.`, `_`, `:`, `/` and `-`. A value has 0 to 256 characters of valid UTF-8 and no control character. The label filter of the unit list accepts only this form. A Pulumi stack tag outside this form still shows in the list as a label.
 _Avoid_: Tag (except when naming a tool's own field), attribute
@@ -258,6 +275,17 @@ _Avoid_: Recovery, load, import
 
 **Control table**:
 A table that a restore does not replace (ADR 72, decision 5). The live rows stay across the swap. The installation, backups, restores and durable operation tables are control tables. The claim tokens of durable operations only grow, and an older token from a backup would let a stale holder write.
+
+**Table list**:
+The one declaration of every built-in table: its name, class, columns, row order and the tables that a foreign key needs first (ADR 274). Backup, restore, portable backup and dev data read it. It lives in `internal/store/tables`. The format types of a backup stay in `pkg/backup`.
+_Avoid_: Table registry (a registry is also the private registry)
+
+**Store runner**:
+The part of a SQL dialect that opens a read and a write on its database (`sqlstore.Runner`, ADR 274). It holds the one writer of SQLite and the maintenance gate. It is not a runner of a job (see Runner).
+_Avoid_: Runner (alone: a runner is also the process that claims work for a pool)
+
+**Maintenance gate**:
+The lock that a write holds while it runs, so that entering maintenance mode waits for each write in flight (ADR 274). Each dialect holds it in its own way. PostgreSQL uses an advisory lock.
 
 **Deleted unit**:
 A unit after a delete through its tool (ADR 47). It leaves every list and its name is free at once. OpenDustpan keeps its state, history, secrets and grants until a purge. The inventory API lists the deleted units of a namespace, and a restore of a deleted unit brings one back with its stable ID.
@@ -776,6 +804,10 @@ _Avoid_: Template (Pulumi templates copy code), no-code module, product, offerin
 Work that OpenDustpan asks an executor to do on one unit (ADR 100 decision 19). Its unit is a unit reference with the stable unit ID set, so a rename of the unit keeps its jobs. A change to many units is many jobs. A job has one of four tool-neutral operations: `plan`, `apply`, `destroy` or `refresh`. Each tool maps them to its own commands, and user-facing text keeps the words of the tool. A job is a list of phases. The server fixes the spec of a job at start. A later change of the unit settings or of the branch does not change it.
 _Avoid_: Task, deployment, run (without a tool), operation (alone: name the operation of the job or the durable operation)
 
+**Job purpose**:
+The field `purpose` of the job spec. It says why a job runs when its operation alone does not say. `drift-check` is the only value. The server fixes it at start, and it selects the phase list of the operation: a drift check has the one phase `plan`. A job with no purpose has the phases of its operation. The purpose never changes what the policy sees: the policy gets the spec with the purpose.
+_Avoid_: Job type, job kind (a kind names a phase or a durable operation)
+
 **Executor**:
 The way a job runs: write-back or runners (ADR 100 decision 19). The port `job.Executor` names the kind, `write-back` or `runner`, and gives the phases of a spec (ADR 101 decision 1). It also undoes what a job left open after a cancel, a rejection or an expiry. Both executors call the same progress ports, `job.Claimer` and `job.Recorder`. So both meet the same rules for claims, cancel, steps, logs and plans.
 _Avoid_: Launcher (that is the program of a runner that starts each step)
@@ -824,12 +856,32 @@ _Avoid_: Source (that is the backend of a unit before an import), repository (al
 The plan that one plan phase of a job keeps, with an ID that has the prefix `pln-` (ADR 102). It has two parts. `plan-display` is the readable JSON plan that the console shows. `plan-apply` is the plan that the apply phase reads, for example an OpenTofu plan file. Only the runner of the apply phase of the same job reads `plan-apply`, and no person can download it. Each part is one blob with a kind, a size, the SHA-256 of the plaintext and a flag `secret`. The plan records the one state version that it read. It does not change after `PutPlan`. Its own item key seals it, and the server keeps it 400 days from its creation by default (ADR 152). A gate can bind approvals to it. A stale plan never applies: the job goes back to its plan phase. A `pulumi preview` from a workstation is not a stored plan (ADR 152 decision 12).
 _Avoid_: Plan file (that is the `plan-apply` part for OpenTofu), preview, saved plan
 
+**Plan reserve**:
+The first of the two writes that store a plan (`job.RecordStore.ReservePlan`). In one transaction it records the plan row and the record of its item key. The plan has no part and nobody can read it. The parts seal after the reserve, because the sealer reads the committed record of the key. The second write, `PutPlan`, adds the parts. A plan reserve that nobody fills stays as a row with no part, and the retention sweep deletes it.
+_Avoid_: Draft plan, pending plan
+
+**Chunk reserve and `confirm`**:
+The two writes around the blob of a log chunk (`ReserveLogChunk` and `ConfirmLogChunk`). The reserve records the sequence number, the SHA-256 and the size of the chunk before its blob exists. The second write counts the chunk in the log after the blob is stored. A crash between the two leaves no counted chunk without a blob. A retry with the same sequence number and the same hash changes nothing. Another hash for a reserved sequence number is a conflict.
+_Avoid_: Two-phase commit (the blob store is not part of a transaction), staging
+
+**Step key**:
+The name of the record of one step under one claim (`job.StepKey`). It has three parts: the phase of the job, the token of the claim and the name of the step. A holder with another claim token has another key. So the records of two holders of one phase stay apart.
+_Avoid_: Step ID
+
+**Log version**:
+One numbered copy of the log of a step, with an ID that has the prefix `jlv-`. A step has one log version at first. A log replacement makes a new version and keeps the old one until its retention ends. One item key seals all chunks of one log version.
+_Avoid_: Revision, log copy
+
+**Log chunk**:
+One part of a log version, up to `job.MaxLogChunk` bytes, with a sequence number that starts at 0. Each chunk is one sealed blob. A reader joins the chunks in the order of their sequence numbers. A closed log version has the SHA-256 and the size of its whole plaintext, which the reader checks at the end.
+_Avoid_: Log line, log page, segment
+
 **Break-glass (job)**:
 A reason in a start request that lets a job start during an active freeze (ADR 103 decision 6). Without it, the start fails with `ErrFrozen`. It needs `namespace:break-freeze` on the namespace. That action is in another family than `namespace:manage-freezes`, so a principal that can end a freeze does not also get break-glass. The job keeps the break-glass and the freeze ID. The audit entry of the start has the kind `override`. An agent cannot ask for break-glass (ADR 103 decision 7).
 _Avoid_: Freeze override, bypass
 
 **Job token**:
-An access token that the server makes for the steps of a runner phase, at the claim of the phase (ADR 100 decision 20). It is a token of the principal that started the job. The server limits it to the unit of the job, and it has the expiry of the claim. It reads the outputs of another unit only when two checks pass (ADR 213 decision 1). An output-sharing rule names the unit of the job, and the principal can read the outputs. The token of a job that only plans decrypts the secrets of its own unit only when the principal that started the job has `unit:read-secrets`. It also decrypts them when the commit comes from a protected branch. It writes only its lock or lease and the events of the plan (ADR 213 decision 2). It carries the job-ID claim. The launcher gives it to the tool (ADR 133, ADR 134). OpenTofu gets it through its credentials helper, and the Pulumi CLI through a file of mode 0600. It never goes in an environment variable. A job token of a job that ended authenticates nothing.
+An access token that the server makes for the steps of a runner phase, at the claim of the phase (ADR 100 decision 20). It is a token of the principal that started the job. The server limits it to the unit of the job, and it has the expiry of the claim. It reads the outputs of another unit only when two checks pass (ADR 213 decision 1, ADR 273 decision 5). A sharing rule names the unit of the job, and the principal whose grants decide holds `unit:read-outputs` on the producer. That principal is the principal that started the job, or the last saver of the trigger that started the job. For an open of the profile block `outputs/opendustpan`, it is the attachment authority. The token of a job that only plans decrypts the secrets of its own unit only when the principal that started the job has `unit:read-secrets`. It also decrypts them when the commit comes from a protected branch. It writes only its lock or lease and the events of the plan (ADR 213 decision 2). It carries the job-ID claim. The launcher gives it to the tool (ADR 133, ADR 134). OpenTofu gets it through its credentials helper, and the Pulumi CLI through a file of mode 0600. It never goes in an environment variable. A job token of a job that ended authenticates nothing.
 _Avoid_: Runner token (the credential of a runner is the runner key)
 
 **Job-ID claim**:
@@ -1313,8 +1365,8 @@ _Avoid_: Grace period, undo window
 ### Context, graph and Sweep
 
 **Sweep**:
-The feature that finds unmanaged resources, and one run of it (ADR 163). A sweep is a cloud sweep or a state check. The console shows both kinds together. As the name of the feature, write Sweep. The Go names of `pkg/unmanaged` keep "scan", for example `Scan` and `ScanStore`, because they are internal.
-_Avoid_: Scan (except in the Go names of `pkg/unmanaged`), discovery, crawl, sweep for anything but the Sweep feature (write "retention expiry" or "orphan cleanup")
+The feature that finds unmanaged resources, and one run of it (ADR 163). A sweep is a cloud sweep or a state check. The console shows both kinds together. As the name of the feature, write Sweep. The Go names of `internal/unmanaged` keep "scan", for example `Scan` and `ScanStore`, because they are internal.
+_Avoid_: Scan (except in the Go names of `internal/unmanaged`), discovery, crawl, sweep for anything but the Sweep feature (write "retention expiry" or "orphan cleanup")
 
 **Cloud sweep**:
 A sweep that reads the cloud on a runner of the team, never in the server (ADR 164). A runner of a pool of the purpose `sweeps` claims the sweep and runs the command of its sweep target. The command runs with the workload identity of the runner host. The runner uploads a sweep report, and the server matches it against the resource index. Only a cloud sweep can find a resource that is not in any unit. A sweep is not a job, and the server holds no cloud credential for it.

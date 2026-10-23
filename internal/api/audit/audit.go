@@ -72,16 +72,21 @@ type Handler struct {
 // Sessions is required.
 func NewHandler(cfg Config) (*Handler, error) {
 	switch {
-	case cfg.Namespaces == nil:
-		return nil, fmt.Errorf("%w: namespace service", ErrMissingDependency)
 	case cfg.Entries == nil:
 		return nil, fmt.Errorf("%w: audit store", ErrMissingDependency)
+	case cfg.Namespaces == nil:
+		return nil, fmt.Errorf("%w: namespace service", ErrMissingDependency)
 	case cfg.Authenticator == nil:
 		return nil, fmt.Errorf("%w: authenticator", ErrMissingDependency)
 	case cfg.Authorizer == nil:
 		return nil, fmt.Errorf("%w: authorizer", ErrMissingDependency)
 	case cfg.Logger == nil:
 		return nil, fmt.Errorf("%w: logger", ErrMissingDependency)
+	}
+
+	recorder, err := refusal.New(cfg.Authorizer, cfg.Entries, cfg.Namespaces, cfg.Logger, cfg.OnAuditFailure)
+	if err != nil {
+		return nil, fmt.Errorf("denial recorder: %w", err)
 	}
 
 	h := &Handler{
@@ -91,12 +96,10 @@ func NewHandler(cfg Config) (*Handler, error) {
 		authn:      cfg.Authenticator,
 		sessions:   cfg.Sessions,
 		authz:      cfg.Authorizer,
-		guard: refusal.New(cfg.Authorizer, cfg.Entries, cfg.Namespaces, cfg.Logger, cfg.OnAuditFailure).
-			WithLimiter(cfg.DenialLimiter).
-			WithSurface("audit"),
-		logger: cfg.Logger,
-		mux:    routekit.NewMux(),
-		routes: nil,
+		guard:      recorder.WithLimiter(cfg.DenialLimiter).WithSurface("audit"),
+		logger:     cfg.Logger,
+		mux:        routekit.NewMux(),
+		routes:     nil,
 	}
 
 	h.routes = h.buildRoutes()
@@ -406,7 +409,7 @@ var errNoEntryReader = errors.New("this server cannot read one audit entry: list
 // values read the defaults of the audit port; values above the maximum read
 // the maximum.
 func parsePage(r *http.Request) (audit.Page, error) {
-	query := r.URL.Query()
+	query := queryOf(r)
 
 	page := audit.Page{Number: 1, Size: audit.DefaultPageSize}
 

@@ -214,8 +214,20 @@ func keyOfPattern(pattern string) string {
 	}
 
 	return apidesc.Operation{
-		ID: "", Method: method, Path: path, Tags: nil, Actions: nil, ActionObjects: nil, Public: false,
-		IdempotencyKey: false, IfMatch: false, IfMatchRequired: false, ETag: false, Bodies: nil,
+		ID:              "",
+		Method:          method,
+		Path:            path,
+		Tags:            nil,
+		Actions:         nil,
+		ActionObjects:   nil,
+		Public:          false,
+		IdempotencyKey:  false,
+		IfMatch:         false,
+		IfMatchRequired: false,
+		ETag:            false,
+		Query:           nil,
+		Statuses:        []int{200},
+		Bodies:          nil,
 	}.Key()
 }
 

@@ -169,13 +169,13 @@ func readBackupCheck(
 			"%w %s: %s: check the server log and run opendustpan backup check again",
 			ErrBackupRead,
 			id,
-			decodeBackupError(resp),
+			decodeErrorAnswer(resp),
 		)
 	}
 
 	var answer CheckBackupAnswer
 
-	if err := decodeCappedJSON(resp.Body, &answer); err != nil {
+	if err := decodeCappedJSON(resp.Body, MaxClientBodyBytes, &answer); err != nil {
 		return none, fmt.Errorf(
 			"%w %s: %w: check the server log and run opendustpan backup check again",
 			ErrBackupRead,

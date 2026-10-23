@@ -27,6 +27,16 @@ func (f fakeInventory) ListUnits(_ context.Context, _ namespace.Name) ([]invento
 	return f.entries, f.err
 }
 
+// QueryUnits implements inventory.Reader over the entries of ListUnits.
+func (f fakeInventory) QueryUnits(ctx context.Context, q inventory.UnitQuery) ([]inventory.Entry, error) {
+	all, err := f.ListUnits(ctx, q.Namespace)
+	if err != nil {
+		return nil, err
+	}
+
+	return inventory.PageUnits(all, q), nil
+}
+
 func (f fakeInventory) GetUnit(_ context.Context, unitID string) (inventory.Entry, error) {
 	if f.err != nil {
 		return inventory.Entry{}, f.err

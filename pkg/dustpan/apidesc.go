@@ -36,6 +36,7 @@ func (a adapters) allHandlers() []namedHandler {
 		{"profiles", a.profiles},
 		{"sinks", a.sinks},
 		{"jobs", a.jobs},
+		{"drift", a.drift},
 		{"registry", a.registry},
 		{"pulumi", a.pulumi},
 		{"tfe", a.tfe},
@@ -171,7 +172,9 @@ func describeHandlers(handlers []namedHandler) ([]apidesc.Operation, error) {
 
 	ops := joinOperations(handlers)
 
-	for _, op := range ops {
+	for i := range ops {
+		op := &ops[i]
+
 		if err := op.Validate(); err != nil {
 			return nil, fmt.Errorf("api description: %w", err)
 		}

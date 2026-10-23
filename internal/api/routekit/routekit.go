@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"strings"
 
+	"opendustpan.org/opendustpan/internal/api/apidesc"
 	"opendustpan.org/opendustpan/internal/api/problem"
 	"opendustpan.org/opendustpan/internal/api/refusal"
 	"opendustpan.org/opendustpan/internal/sessionauth"
@@ -44,7 +45,7 @@ type Guard struct {
 // WithCaller. Any other scheme, and an empty token, answer
 // identity.ErrUnauthenticated.
 func (g Guard) Authenticate(r *http.Request) (identity.Principal, *sessionauth.Caller, error) {
-	header := r.Header.Get("Authorization")
+	header := apidesc.Header(r, "Authorization")
 	if header == "" {
 		p, caller, err := g.Sessions.Authenticate(r)
 		if err != nil {
