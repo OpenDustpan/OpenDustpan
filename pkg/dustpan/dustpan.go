@@ -802,11 +802,6 @@ func NewServer(opts ...Option) (*Server, error) {
 		return nil, err
 	}
 
-	// A handler that reads a name the API description does not hold logs the
-	// error through the logger of the server. Set it only after the settings
-	// pass, so that a NewServer that fails changes nothing.
-	apidesc.SetLogger(cfg.logger)
-
 	if cacheErr := wrapBlobCache(cfg); cacheErr != nil {
 		return nil, cacheErr
 	}
@@ -3019,6 +3014,16 @@ func withRequestCache(next http.Handler) http.Handler {
 	})
 }
 
+// withMisuseReporter puts the reporter of the server on the context of each
+// request. A handler that reads a name that the API description does not hold
+// logs the error through it, so the error goes to the logger of this server,
+// also when one process runs more than one server.
+func withMisuseReporter(rep *apidesc.Reporter, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		next.ServeHTTP(w, r.WithContext(apidesc.WithReporter(r.Context(), rep)))
+	})
+}
+
 // accessStores is a namespace store that also keeps roles, grants and
 // principals. Both SQL adapters are one.
 type accessStores interface {
@@ -4075,9 +4080,9 @@ func routes(a adapters, cfg *settings, observed *metrics.ServerMetrics) (routeHa
 	gated := withAuditChainGate(mux, a.chain, cfg.logger)
 
 	return routeHandlers{
-		served: withRequestCache(withRequestLog(
+		served: withMisuseReporter(apidesc.NewReporter(cfg.logger), withRequestCache(withRequestLog(
 			gateComponents(gated, cfg.components), addr, cfg.logger, cfg.authenticator, observed,
-		)),
+		))),
 		ungated: gated,
 		root:    mux,
 	}, nil

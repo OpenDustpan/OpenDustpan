@@ -85,3 +85,18 @@ func (e *BoundError) Error() string {
 func (e *BoundError) Unwrap() error {
 	return e.Cause
 }
+
+// ReplayLimit names the bound, the counted value and the limit of a
+// BoundError. It is the same type as stack.ReplayLimit.
+type ReplayLimit = struct {
+	Bound string
+	Count int64
+	Limit int64
+}
+
+// ReplayBound returns the bound, the counted value and the limit. It
+// satisfies stack.ReplayBound without importing that package, so the server
+// can name the bound in its answer.
+func (e *BoundError) ReplayBound() ReplayLimit {
+	return ReplayLimit{Bound: e.Bound, Count: e.Count, Limit: e.Limit}
+}

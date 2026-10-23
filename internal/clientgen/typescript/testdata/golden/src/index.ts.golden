@@ -2,7 +2,6 @@
 
 export * from "./client.js";
 export * from "./decoders.js";
-export * from "./description.js";
 export * from "./errors.js";
 export * from "./execute.js";
 export { createFetchTransport, defaultMaxResponseBytes, pathSegment } from "./fetch-transport.js";

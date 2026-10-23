@@ -166,6 +166,22 @@ func setETag(w http.ResponseWriter, j *job.Job) {
 	w.Header().Set("ETag", `"v`+strconv.FormatInt(j.Version, 10)+`"`)
 }
 
+// answerLocation maps a code location to its wire shape. A repository that
+// job.CheckRepository refuses is answered empty.
+//
+// Defense in depth: the job service and the planner refuse such a repository
+// at the start, so no new job holds one. This check stays so that a record
+// from before that check, or from another writer of the store, never gives a
+// caller the password or the user name that a repository URL can hold.
+func answerLocation(l job.Location) locationResponse {
+	out := locationResponse(l)
+	if job.CheckRepository(l.Repository) != nil {
+		out.Repository = ""
+	}
+
+	return out
+}
+
 // toJobResponse maps a job to its wire shape.
 func toJobResponse(j *job.Job) jobResponse {
 	out := jobResponse{
@@ -180,7 +196,7 @@ func toJobResponse(j *job.Job) jobResponse {
 		State:        string(j.State),
 		Wait:         string(j.Wait),
 		Reason:       j.Reason,
-		Location:     locationResponse(j.Spec.Location),
+		Location:     answerLocation(j.Spec.Location),
 		Pool:         j.Spec.Pool,
 		Steps:        make([]stepResponse, 0, len(j.Spec.Steps)),
 		Phases:       make([]phaseResponse, 0, len(j.Phases)),

@@ -11,11 +11,30 @@ import (
 
 // QueryStacks implements stack.Store. It reads the range of each namespace of
 // q in the order of the page, with a range of the primary key, until the page
-// is full, then the tags of the stacks of the page in one query.
+// is full, then the tags of the stacks of the page in one query. All the
+// statements run in one read transaction, so the tags belong to the same state
+// as the stacks.
 func (s *Store) QueryStacks(ctx context.Context, q stack.PageQuery) ([]stack.Stack, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
+	var out []stack.Stack
+
+	err := s.inReadTx(ctx, func(qtx *db.Queries) error {
+		page, err := s.queryStackPage(ctx, qtx, q)
+		out = page
+
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return out, nil
+}
+
+// queryStackPage reads the page of q and its tags through qtx.
+func (s *Store) queryStackPage(ctx context.Context, qtx *db.Queries, q stack.PageQuery) ([]stack.Stack, error) {
 	limit := q.PageLimit()
 	rows := []codec.StackRow{}
 
@@ -25,7 +44,7 @@ func (s *Store) QueryStacks(ctx context.Context, q stack.PageQuery) ([]stack.Sta
 			break
 		}
 
-		part, err := s.stackRange(ctx, r, q, need)
+		part, err := stackRange(ctx, qtx, r, q, need)
 		if err != nil {
 			return nil, err
 		}
@@ -37,12 +56,16 @@ func (s *Store) QueryStacks(ctx context.Context, q stack.PageQuery) ([]stack.Sta
 		return []stack.Stack{}, nil
 	}
 
+	if s.betweenPageReads != nil {
+		s.betweenPageReads(ctx)
+	}
+
 	ids := make([]string, len(rows))
 	for i := range rows {
 		ids[i] = rows[i].ID
 	}
 
-	tagRows, err := s.queries.ListStackTagsOfStacks(ctx, ids)
+	tagRows, err := qtx.ListStackTagsOfStacks(ctx, ids)
 	if err != nil {
 		return nil, fmt.Errorf("select stack page tags: %w", err)
 	}
@@ -65,11 +88,11 @@ func (s *Store) QueryStacks(ctx context.Context, q stack.PageQuery) ([]stack.Sta
 	return out, nil
 }
 
-// stackRange reads at most need stacks of the range r that pass the project
-// and the tag filter of q. A project that is not empty keeps the stacks of
-// that project only.
-func (s *Store) stackRange(
-	ctx context.Context, r stack.NamespaceRange, q stack.PageQuery, need int,
+// stackRange reads through qtx at most need stacks of the range r that pass
+// the project and the tag filter of q. A project that is not empty keeps the
+// stacks of that project only.
+func stackRange(
+	ctx context.Context, qtx *db.Queries, r stack.NamespaceRange, q stack.PageQuery, need int,
 ) ([]codec.StackRow, error) {
 	var rows []db.ListStackPageInNamespaceRow
 
@@ -84,7 +107,7 @@ func (s *Store) stackRange(
 	}
 
 	if q.Project == "" {
-		got, err := s.queries.ListStackPageInNamespace(ctx, db.ListStackPageInNamespaceParams{
+		got, err := qtx.ListStackPageInNamespace(ctx, db.ListStackPageInNamespaceParams{
 			Namespace:    r.Namespace.String(),
 			AfterProject: r.AfterProject.String(),
 			AfterName:    r.AfterName.String(),
@@ -99,7 +122,7 @@ func (s *Store) stackRange(
 
 		rows = got
 	} else {
-		got, err := s.queries.ListStackPageInProject(ctx, db.ListStackPageInProjectParams{
+		got, err := qtx.ListStackPageInProject(ctx, db.ListStackPageInProjectParams{
 			Namespace:  r.Namespace.String(),
 			Project:    q.Project.String(),
 			AfterName:  r.AfterName.String(),

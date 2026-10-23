@@ -790,17 +790,21 @@ WHERE w.namespace = sqlc.arg(namespace) AND w.deleted_at_ms IS NULL AND strpos(w
 -- One page of the live workspaces of a namespace whose name holds the search,
 -- in the order of ReadWorkspaces. The inner query finds the names of the page
 -- in the index of the live workspace names alone, so an offset skips index
--- entries and no table rows. The outer query reads the rows of the page.
+-- entries and no table rows. The outer query reads the rows of the page by
+-- name = ANY of that array, so the names are in the index condition of each
+-- plan. A join on the names let a plan with no table statistics read all the
+-- live workspaces of the namespace for each name of the page.
 SELECT sqlc.embed(w), n.id AS namespace_id
-FROM (
-    SELECT p.name
-    FROM workspaces AS p
-    WHERE p.namespace = sqlc.arg(namespace) AND p.deleted_at_ms IS NULL AND strpos(p.name, sqlc.arg(name_contains)) > 0
-    ORDER BY p.name
-    LIMIT sqlc.arg(page_limit) OFFSET sqlc.arg(page_offset)
-) AS page
-JOIN workspaces AS w ON w.namespace = sqlc.arg(namespace) AND w.name = page.name AND w.deleted_at_ms IS NULL
+FROM workspaces AS w
 JOIN namespaces AS n ON n.name = w.namespace
+WHERE w.namespace = sqlc.arg(namespace) AND w.deleted_at_ms IS NULL
+    AND w.name = ANY (ARRAY(
+        SELECT p.name
+        FROM workspaces AS p
+        WHERE p.namespace = sqlc.arg(namespace) AND p.deleted_at_ms IS NULL AND strpos(p.name, sqlc.arg(name_contains)) > 0
+        ORDER BY p.name
+        LIMIT sqlc.arg(page_limit) OFFSET sqlc.arg(page_offset)
+    ))
 ORDER BY w.name;
 
 -- name: LockWorkspaceForFinalize :one
@@ -1488,6 +1492,21 @@ FROM group_members m JOIN principal_groups g ON g.id = m.group_id
 WHERE m.principal_id = @principal_id AND m.removed_at_ms IS NULL
   AND g.name_key COLLATE "C" >= @low::text
   AND (@high::text = '' OR g.name_key COLLATE "C" < @high::text);
+
+-- name: LockNamespaceCreatesShared :exec
+-- A create of a workspace takes this lock, in the shared form, before it reads
+-- the manual lock of its namespace. The put of a manual lock on a namespace
+-- takes the exclusive form. So a lock that commits while a create runs is
+-- either read by the create or waits until the create ends: no create commits
+-- under a lock that it did not read. The key holds the schema, so databases that
+-- hold several schemas do not wait for each other.
+SELECT pg_advisory_xact_lock_shared(
+  hashtextextended('namespace-creates:' || current_schema() || ':' || sqlc.arg(namespace)::text, 0));
+
+-- name: LockNamespaceCreatesExclusive :exec
+-- Takes the exclusive form of the lock of LockNamespaceCreatesShared.
+SELECT pg_advisory_xact_lock(
+  hashtextextended('namespace-creates:' || current_schema() || ':' || sqlc.arg(namespace)::text, 0));
 
 -- name: LockServerAuditScope :exec
 -- Orders the appends of the audit scope @server, which has no namespace row
