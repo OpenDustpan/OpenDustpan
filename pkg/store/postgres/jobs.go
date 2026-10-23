@@ -190,7 +190,9 @@ func (t *jobTx) UpdateJob(ctx context.Context, r jobstore.Row, prev int64) (bool
 }
 
 // jobIndexError turns the unique violation of an index of the jobs table
-// into the error of its rule, and wraps any other error of the driver.
+// into the error of its rule, and wraps any other error of the driver. A
+// unique violation of another index is job.ErrConflict. It keeps the text of
+// the driver error, but not the error itself, so no caller can reach it.
 func jobIndexError(what string, err error) error {
 	if err == nil {
 		return nil
@@ -208,7 +210,7 @@ func jobIndexError(what string, err error) error {
 	case "jobs_key":
 		return jobstore.ErrKeyIndex
 	default:
-		return fmt.Errorf("%s: %w: %w", what, job.ErrConflict, err)
+		return fmt.Errorf("%s: %w: %s", what, job.ErrConflict, err.Error())
 	}
 }
 

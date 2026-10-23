@@ -194,23 +194,46 @@ func preferencesETag(d preferences.Document) string {
 // preferencesIfMatch returns the version of the If-Match header, and whether
 // the request sent one. The header holds one version in quotes, as the ETag
 // of a read gives it, or *, which matches the preferences of any person. A
-// value that is neither gives errPreferencesIfMatch.
+// weak tag, W/ and then one version in quotes, gives errPreferencesChanged,
+// because it never matches. A value that is neither gives errPreferencesIfMatch.
 func preferencesIfMatch(r *http.Request) (*int64, error) {
 	raw := strings.TrimSpace(apidesc.Header(r, "If-Match"))
 	if raw == "" || raw == "*" {
 		return nil, nil //nolint:nilnil // No version means no precondition.
 	}
 
-	if len(raw) < 3 || raw[0] != '"' || raw[len(raw)-1] != '"' {
-		return nil, errPreferencesIfMatch
+	if weak, ok := strings.CutPrefix(raw, "W/"); ok {
+		if _, err := quotedVersion(weak); err != nil {
+			return nil, err
+		}
+
+		// If-Match uses strong comparison, and a weak tag never matches in
+		// strong comparison. So the precondition is false, also when the
+		// version is the current one.
+		return nil, errPreferencesChanged
 	}
 
-	v, err := strconv.ParseInt(raw[1:len(raw)-1], 10, 64)
-	if err != nil || v < 0 {
-		return nil, errPreferencesIfMatch
+	v, err := quotedVersion(raw)
+	if err != nil {
+		return nil, err
 	}
 
 	return &v, nil
+}
+
+// quotedVersion returns the version of s, one version in quotes, as the ETag
+// of a read gives it. It returns errPreferencesIfMatch for any other value.
+func quotedVersion(s string) (int64, error) {
+	if len(s) < 3 || s[0] != '"' || s[len(s)-1] != '"' {
+		return 0, errPreferencesIfMatch
+	}
+
+	v, err := strconv.ParseInt(s[1:len(s)-1], 10, 64)
+	if err != nil || v < 0 {
+		return 0, errPreferencesIfMatch
+	}
+
+	return v, nil
 }
 
 // nullable returns nil for the empty text, which is the null of a field.
