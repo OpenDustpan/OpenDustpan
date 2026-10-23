@@ -79,19 +79,26 @@ func RunLiveMarkers(t *testing.T, newStore LiveMarkerFactory) {
 	}
 }
 
+// markerRef names the marker of one row.
+type markerRef struct {
+	table  string
+	column string
+	id     string
+}
+
 // setMarker stores value in the marker of the row id and fails the test on an
 // error.
-func setMarker(t *testing.T, s LiveMarkerStore, table, column, id string, v liveMarkerValue) {
+func setMarker(t *testing.T, s LiveMarkerStore, ref markerRef, v liveMarkerValue) {
 	t.Helper()
 
-	if err := s.SetMarker(t.Context(), table, column, id, v.value); err != nil {
-		t.Fatalf("set %s.%s of %q to %s: %v", table, column, id, v.name, err)
+	if err := s.SetMarker(t.Context(), ref.table, ref.column, ref.id, v.value); err != nil {
+		t.Fatalf("set %s.%s of %q to %s: %v", ref.table, ref.column, ref.id, v.name, err)
 	}
 }
 
 // wantLive fails the test unless found matches the value: only NULL reads as
 // live.
-func wantLive(t *testing.T, what string, v liveMarkerValue, err error, notFound error) {
+func wantLive(t *testing.T, what string, v liveMarkerValue, err, notFound error) {
 	t.Helper()
 
 	switch {
@@ -101,6 +108,7 @@ func wantLive(t *testing.T, what string, v liveMarkerValue, err error, notFound 
 		t.Fatalf("%s with the marker %s: found, want %v", what, v.name, notFound)
 	case !v.live && !errors.Is(err, notFound):
 		t.Fatalf("%s with the marker %s: err = %v, want %v", what, v.name, err, notFound)
+	default:
 	}
 }
 
@@ -109,7 +117,7 @@ func testMarkerPrincipalToken(t *testing.T, s LiveMarkerStore, v liveMarkerValue
 
 	revMustPrincipal(t, s, revPerson, principal.KindPerson)
 	revMustToken(t, s, revToken(revPersonalToken, revPerson, accesstoken.KindPersonal), 3)
-	setMarker(t, s, "principals", "deleted_at_ms", revPerson, v)
+	setMarker(t, s, markerRef{table: "principals", column: "deleted_at_ms", id: revPerson}, v)
 
 	_, err := s.GetTokenByDigest(t.Context(), revDigest(3))
 	wantLive(t, "token by digest", v, err, accesstoken.ErrNotFound)
@@ -120,7 +128,7 @@ func testMarkerPrincipalSession(t *testing.T, s LiveMarkerStore, v liveMarkerVal
 
 	revMustPrincipal(t, s, revPerson, principal.KindPerson)
 	revMustSession(t, s, revSessionOne, revPerson, 1)
-	setMarker(t, s, "principals", "deleted_at_ms", revPerson, v)
+	setMarker(t, s, markerRef{table: "principals", column: "deleted_at_ms", id: revPerson}, v)
 
 	_, err := s.GetSessionByDigest(t.Context(), revDigest(1))
 	wantLive(t, "session by digest", v, err, session.ErrNotFound)
@@ -131,7 +139,7 @@ func testMarkerGrantRead(t *testing.T, s LiveMarkerStore, v liveMarkerValue) {
 
 	revMustPrincipal(t, s, revPerson, principal.KindPerson)
 	revMustGrant(t, s, revGrantServer, identity.ServerObject(), revNoFence())
-	setMarker(t, s, "grants", "revoked_at_ms", revGrantServer, v)
+	setMarker(t, s, markerRef{table: "grants", column: "revoked_at_ms", id: revGrantServer}, v)
 
 	_, err := s.GetGrant(t.Context(), revGrantServer)
 	wantLive(t, "grant by ID", v, err, access.ErrNotFound)
@@ -142,7 +150,7 @@ func testMarkerGrantRevoke(t *testing.T, s LiveMarkerStore, v liveMarkerValue) {
 
 	revMustPrincipal(t, s, revPerson, principal.KindPerson)
 	revMustGrant(t, s, revGrantServer, identity.ServerObject(), revNoFence())
-	setMarker(t, s, "grants", "revoked_at_ms", revGrantServer, v)
+	setMarker(t, s, markerRef{table: "grants", column: "revoked_at_ms", id: revGrantServer}, v)
 
 	err := s.RevokeGrant(t.Context(), revGrantServer, revNoFence(), revEntry("grant:"+revGrantServer, revAt(5)), nil)
 	wantLive(t, "revoke of a grant by ID", v, err, access.ErrNotFound)
@@ -160,7 +168,7 @@ func testMarkerRole(t *testing.T, s LiveMarkerStore, v liveMarkerValue) {
 		t.Fatalf("create role: %v", err)
 	}
 
-	setMarker(t, s, "roles", "deleted_at_ms", role.ID, v)
+	setMarker(t, s, markerRef{table: "roles", column: "deleted_at_ms", id: role.ID}, v)
 
 	got, err := s.GetRoles(t.Context(), []string{role.ID})
 	if err != nil {
@@ -177,7 +185,7 @@ func testMarkerWorkspace(t *testing.T, s LiveMarkerStore, v liveMarkerValue) {
 
 	ns := newWorkspaceNamespace(t, s, "acme")
 	w := createTestWorkspace(t, s, ns, "network")
-	setMarker(t, s, "workspaces", "deleted_at_ms", string(w.ID), v)
+	setMarker(t, s, markerRef{table: "workspaces", column: "deleted_at_ms", id: string(w.ID)}, v)
 
 	_, err := s.GetWorkspaceByID(t.Context(), w.ID)
 	wantLive(t, "workspace by ID", v, err, workspace.ErrNotFound)
