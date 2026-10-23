@@ -52,7 +52,7 @@ func (f *backupCheckFlags) register(fs *flag.FlagSet) {
 
 // CheckBackupAnswer is the server answer the backup check reads: whether the
 // configured target holds every object the manifest names with the recorded
-// size, with the first missing or short object in Error.
+// size and checksum, with the first missing, short or changed object in Error.
 type CheckBackupAnswer struct {
 	ID       string `json:"id"`
 	Complete bool   `json:"complete"`
@@ -62,8 +62,8 @@ type CheckBackupAnswer struct {
 // BackupCheck runs `opendustpan backup check --server <url> --backup <id>`:
 // it asks the server to check the backup in its configured target and prints
 // one verdict. It opens no database and reads no target or key. It exits 0
-// when the backup is complete, else it returns the first missing or short
-// object by key with exit 1.
+// when the backup is complete, else it returns the first missing, short or
+// changed object by key with exit 1.
 func BackupCheck(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	var f backupCheckFlags
 
