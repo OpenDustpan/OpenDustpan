@@ -14,6 +14,21 @@ func WithPrincipalForTest(ctx context.Context, p identity.Principal) context.Con
 	return withPrincipal(ctx, p)
 }
 
+// ErrInvalidBodyForTest is the error of a request body that is not valid JSON.
+var ErrInvalidBodyForTest = errInvalidBody
+
+// ErrOverrideSwitchesBodyForTest is the error of a switch change without the
+// body that it needs.
+var ErrOverrideSwitchesBodyForTest = errOverrideSwitchesBody
+
+// ErrInvalidNamespaceBodyForTest is the error of a namespace create body that
+// is not valid JSON.
+var ErrInvalidNamespaceBodyForTest = errInvalidNamespaceBody
+
+// ErrNamespaceCursorForTest is the error of a cursor that does not decode to a
+// namespace name.
+var ErrNamespaceCursorForTest = errNamespaceCursor
+
 // ClassifyForTest returns the status and the message that the error
 // responses of the handlers give for err.
 func ClassifyForTest(err error) (int, string) {
