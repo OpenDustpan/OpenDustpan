@@ -66,6 +66,14 @@ type Operation struct {
 	IfMatchRequired bool
 	// ETag is true for a route whose answer holds the ETag header.
 	ETag bool
+	// Query lists the query parameters that the route reads. A handler gets
+	// the value of a declared name only, through QueryOf.
+	Query []QueryParam
+	// Statuses are the status codes that the success answer can have, in
+	// ascending order, for example [204], or [200, 201] for a route that
+	// answers 201 for a first write and 200 for a replacement. A route has at
+	// least one. The description gives one key for each code.
+	Statuses []int
 	// Bodies names the body of the request and the body of the success
 	// answer. It is nil for a route that names none, and Build refuses that.
 	Bodies *Bodies
@@ -90,6 +98,10 @@ func (o Operation) Validate() error {
 		return err
 	}
 
+	if err := validateStatus(o); err != nil {
+		return err
+	}
+
 	if o.IfMatch && o.IfMatchRequired {
 		return fmt.Errorf(
 			"%w: %s %s sets If-Match as optional and as required", ErrInvalidOperation, o.Method, o.Path,
@@ -108,7 +120,43 @@ func (o Operation) Validate() error {
 		return err
 	}
 
+	if err := validateQuery(o); err != nil {
+		return err
+	}
+
 	return validateObjects(o)
+}
+
+// validateStatus refuses an empty set of success statuses, a status outside
+// 200 to 299, a duplicate, a set that is not in ascending order, and a 204 for
+// a route that names a body in its answer.
+func validateStatus(o Operation) error {
+	if len(o.Statuses) == 0 {
+		return fmt.Errorf("%w: %s %s has no success status", ErrInvalidOperation, o.Method, o.Path)
+	}
+
+	for i, status := range o.Statuses {
+		if status < http.StatusOK || status >= http.StatusMultipleChoices {
+			return fmt.Errorf(
+				"%w: success status %d of %s %s is not a 2xx status", ErrInvalidOperation, status, o.Method, o.Path,
+			)
+		}
+
+		if i > 0 && status <= o.Statuses[i-1] {
+			return fmt.Errorf(
+				"%w: success status %d of %s %s is a duplicate or is out of order",
+				ErrInvalidOperation, status, o.Method, o.Path,
+			)
+		}
+
+		if status == http.StatusNoContent && o.bodies().Response.kind == bodyTyped {
+			return fmt.Errorf(
+				"%w: %s %s answers 204 and names a body for the answer", ErrInvalidOperation, o.Method, o.Path,
+			)
+		}
+	}
+
+	return nil
 }
 
 // validateObjects refuses an action without an object kind, an object kind
@@ -310,13 +358,55 @@ type Drift struct {
 	Unrouted []string
 	// Mismatch holds the keys of the operations that exist in both lists but
 	// differ in their ID, their path, their tags, their actions, the object
-	// kinds of their actions, their public flag or their header flags.
+	// kinds of their actions, their public flag, their header flags or their
+	// query parameters.
 	Mismatch []string
+	// patterns maps each key of the three lists to the exact pattern of the
+	// route, or of the operation when no route has the key.
+	patterns map[string]string
 }
 
 // Empty reports whether the route table and the description agree.
 func (d Drift) Empty() bool {
 	return len(d.Undescribed) == 0 && len(d.Unrouted) == 0 && len(d.Mismatch) == 0
+}
+
+// Problems returns one line for each key of the drift. Each line names the
+// exact pattern, what differs and the one command that writes the
+// description again.
+func (d Drift) Problems() []string {
+	out := make([]string, 0, len(d.Undescribed)+len(d.Unrouted)+len(d.Mismatch))
+
+	for _, key := range d.Undescribed {
+		out = append(out, fmt.Sprintf(
+			"%s is served, and the description has no operation for it: give the route a label, then run %s",
+			d.pattern(key), FixCommand,
+		))
+	}
+
+	for _, key := range d.Unrouted {
+		out = append(out, fmt.Sprintf(
+			"%s is in the description, and no route serves it: run %s", d.pattern(key), FixCommand,
+		))
+	}
+
+	for _, key := range d.Mismatch {
+		out = append(out, fmt.Sprintf(
+			"%s differs between the route and the description: run %s", d.pattern(key), FixCommand,
+		))
+	}
+
+	return out
+}
+
+// pattern returns the exact pattern of a key, or the key when Diff did not
+// record one.
+func (d Drift) pattern(key string) string {
+	if p, ok := d.patterns[key]; ok {
+		return p
+	}
+
+	return key
 }
 
 // Diff compares the routes with the described operations. It fails closed:
@@ -334,9 +424,16 @@ func Diff(routes, described []Operation) (Drift, error) {
 		return Drift{}, fmt.Errorf("description: %w", err)
 	}
 
-	var d Drift
+	d := Drift{Undescribed: nil, Unrouted: nil, Mismatch: nil, patterns: map[string]string{}}
 
-	for key, route := range routeByKey {
+	for key := range describedByKey {
+		d.patterns[key] = Pattern(describedByKey[key].Method, describedByKey[key].Path)
+	}
+
+	for key := range routeByKey {
+		route := routeByKey[key]
+		d.patterns[key] = Pattern(route.Method, route.Path)
+
 		doc, ok := describedByKey[key]
 		if !ok {
 			d.Undescribed = append(d.Undescribed, key)
@@ -371,11 +468,13 @@ func sameOperation(a, b Operation) bool {
 	return a.ID == b.ID &&
 		a.Path == b.Path &&
 		a.Public == b.Public &&
+		slices.Equal(a.Statuses, b.Statuses) &&
 		a.IdempotencyKey == b.IdempotencyKey &&
 		a.IfMatch == b.IfMatch &&
 		a.IfMatchRequired == b.IfMatchRequired &&
 		a.ETag == b.ETag &&
 		slices.Equal(a.Tags, b.Tags) &&
+		slices.Equal(sortedQuery(a.Query), sortedQuery(b.Query)) &&
 		sameActions(a.Actions, b.Actions) &&
 		maps.Equal(a.ActionObjects, b.ActionObjects)
 }
@@ -386,7 +485,9 @@ func index(ops []Operation) (map[string]Operation, error) {
 	byKey := make(map[string]Operation, len(ops))
 	byID := make(map[string]string, len(ops))
 
-	for _, op := range ops {
+	for i := range ops {
+		op := &ops[i]
+
 		if err := op.Validate(); err != nil {
 			return nil, err
 		}
@@ -401,7 +502,7 @@ func index(ops []Operation) (map[string]Operation, error) {
 		}
 
 		byID[op.ID] = key
-		byKey[key] = op
+		byKey[key] = *op
 	}
 
 	return byKey, nil

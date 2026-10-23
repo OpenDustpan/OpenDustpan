@@ -5,7 +5,7 @@ import (
 	"testing"
 
 	"opendustpan.org/opendustpan/internal/api/apidesc/headertest"
-	"opendustpan.org/opendustpan/pkg/registry/pgpfixture"
+	"opendustpan.org/opendustpan/internal/registry/pgpfixture"
 )
 
 // TestHeaderFlagsMatchTheHandler proves that the header flags of each
@@ -67,6 +67,13 @@ func TestHeaderFlagsMatchTheHandler(t *testing.T) {
 			body := f.publishBody(t, buildSet(t, sg))
 
 			return probe(t, f, http.MethodPut, versionTarget, body)
+		},
+		"listRegistryProviders": func(t *testing.T) headertest.Probe {
+			t.Helper()
+
+			f, _ := released(t)
+
+			return probe(t, f, http.MethodGet, base+"/providers", nil)
 		},
 		"listProviderReleases": func(t *testing.T) headertest.Probe {
 			t.Helper()

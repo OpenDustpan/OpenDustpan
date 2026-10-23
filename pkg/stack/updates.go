@@ -17,13 +17,13 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/ident"
+	"opendustpan.org/opendustpan/internal/scopeaudit"
 	"opendustpan.org/opendustpan/internal/token"
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/collection"
 	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/manuallock"
 	"opendustpan.org/opendustpan/pkg/namespace"
-	"opendustpan.org/opendustpan/pkg/scopeaudit"
 )
 
 const (
@@ -898,6 +898,7 @@ func (s *Updates) Active(ctx context.Context, ref Ref) (Update, error) {
 }
 
 // History returns the stack's updates, newest first. Previews are not history.
+// It returns ErrNotFound when the stack does not exist.
 func (s *Updates) History(ctx context.Context, ref Ref, page Page) ([]Update, error) {
 	if page.Limit <= 0 {
 		page.Limit = defaultPageSize
@@ -905,6 +906,17 @@ func (s *Updates) History(ctx context.Context, ref Ref, page Page) ([]Update, er
 
 	page.Limit = min(page.Limit, maxPageSize)
 	page.Offset = max(page.Offset, 0)
+
+	// The store answers an empty list for a stack that does not exist, so the
+	// service reads the stack first: a caller must not read "no updates" for
+	// "no such stack".
+	//
+	// Defense in depth: the route reads the stack before it calls History, so
+	// it answers with the error of the stack route. This check stays so that a
+	// new caller cannot read an empty history for a stack that is missing.
+	if _, err := s.stacks.GetStack(ctx, ref); err != nil {
+		return nil, fmt.Errorf("history of %s: %w", ref, err)
+	}
 
 	list, err := s.updates.ListUpdates(ctx, ref, page)
 	if err != nil {
@@ -1447,7 +1459,8 @@ func (s *Updates) validate(in CheckpointInput) error {
 	case len(in.Deployment) > s.maxCheckpoints:
 		return fmt.Errorf("%w: checkpoint of %d bytes, limit %d", ErrTooLarge, len(in.Deployment), s.maxCheckpoints)
 	default:
-		return nil
+		// The size is within the limit, so the scan of the shape is bounded.
+		return checkDeploymentShape(in.Deployment, in.Sequence)
 	}
 }
 

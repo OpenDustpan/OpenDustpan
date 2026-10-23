@@ -18,6 +18,7 @@ import (
 
 	"opendustpan.org/opendustpan/internal/authgate"
 	"opendustpan.org/opendustpan/internal/ident"
+	"opendustpan.org/opendustpan/internal/pgtest"
 	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/access/accesstest"
 	"opendustpan.org/opendustpan/pkg/accesstoken/accesstokentest"
@@ -802,6 +803,23 @@ func TestNamespacePagingConformance(t *testing.T) {
 	}
 
 	storetest.RunNamespacePaging(t, func(t *testing.T) storetest.PagingStore {
+		t.Helper()
+
+		return open(t, base)
+	})
+}
+
+// TestUnitQueryConformance runs the unit page suite: one page of the units
+// of a namespace in the order of the unit ID, with the filters in the query.
+func TestUnitQueryConformance(t *testing.T) {
+	t.Parallel()
+
+	base := os.Getenv(envURL)
+	if base == "" {
+		t.Skipf("set %s to run the PostgreSQL conformance suite", envURL)
+	}
+
+	storetest.RunUnitQuery(t, func(t *testing.T) storetest.Store {
 		t.Helper()
 
 		return open(t, base)
@@ -1669,8 +1687,19 @@ func TestRenameKeepsTags(t *testing.T) {
 	}
 }
 
-// isolatedURL creates a fresh schema and returns base with search_path set to it.
+// isolatedURL returns a URL for a migrated schema in a database of its own,
+// cloned from the template that TestMain migrates one time. The clone is
+// dropped when the test ends. A test that needs to see the migrations run, or
+// to plant data before them, calls emptySchemaURL.
 func isolatedURL(tb testing.TB, base string) string {
+	tb.Helper()
+
+	return pgtest.MigratedURL(tb, base)
+}
+
+// emptySchemaURL creates a fresh, empty schema and returns base with
+// search_path set to it.
+func emptySchemaURL(tb testing.TB, base string) string {
 	tb.Helper()
 
 	suffix := make([]byte, 8)

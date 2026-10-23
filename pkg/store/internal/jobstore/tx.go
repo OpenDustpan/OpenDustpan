@@ -17,6 +17,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/job"
 	"opendustpan.org/opendustpan/pkg/manuallock"
 	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/secret"
 )
 
 // ErrHolderIndex is what a Tx returns from InsertJob or UpdateJob when the
@@ -187,6 +188,13 @@ type Tx interface {
 
 	// AppendAudit appends the entries to the audit chain of the namespace.
 	AppendAudit(ctx context.Context, e []audit.Entry) error
+
+	ArtifactTx
+
+	// ItemKeys returns the item key part of this transaction, under fence, so
+	// that the record of the item key of a new plan or log version commits
+	// with its row.
+	ItemKeys(fence namespace.Fence) secret.ItemKeyTx
 }
 
 // Runner opens the transactions of an adapter.
@@ -199,4 +207,49 @@ type Runner interface {
 	Write(ctx context.Context, fence namespace.Fence, fn func(Tx) error) error
 	// Read runs fn in one read transaction.
 	Read(ctx context.Context, fn func(Tx) error) error
+}
+
+// PlanRow is one stored plan: the lookup row of job_plans. Body is the JSON of
+// the plan.
+type PlanRow struct {
+	ID        string
+	Job       job.ID
+	Body      string
+	CreatedMs int64
+}
+
+// LogRow is one stored log version: the lookup row of job_logs. It names the
+// step record that holds the version.
+type LogRow struct {
+	ID        string
+	Job       job.ID
+	Phase     int
+	Step      string
+	Token     int64
+	CreatedMs int64
+}
+
+// ArtifactTx reads and writes the rows of plans, log versions and log chunks
+// of one transaction. The Tx of every adapter implements it.
+type ArtifactTx interface {
+	// InsertPlan stores a plan row of the namespace ns.
+	InsertPlan(ctx context.Context, ns namespace.Name, r PlanRow) error
+	// UpdatePlan replaces the body of the plan row r.ID of the namespace ns.
+	UpdatePlan(ctx context.Context, ns namespace.Name, r PlanRow) error
+	// Plan returns the plan row id of the namespace ns, and false when none
+	// exists.
+	Plan(ctx context.Context, ns namespace.Name, id string) (PlanRow, bool, error)
+	// InsertLog stores a log version row of the namespace ns.
+	InsertLog(ctx context.Context, ns namespace.Name, r LogRow) error
+	// Log returns the log version row id of the namespace ns, and false when
+	// none exists.
+	Log(ctx context.Context, ns namespace.Name, id string) (LogRow, bool, error)
+	// Chunk returns the row of the chunk seq of the log version, and false
+	// when none exists.
+	Chunk(ctx context.Context, ns namespace.Name, log string, seq int) (job.ChunkRow, bool, error)
+	// InsertChunk stores the row of a chunk that is not confirmed. A row that
+	// exists stays as it is.
+	InsertChunk(ctx context.Context, ns namespace.Name, log string, seq int, c job.ChunkRow) error
+	// ConfirmChunk marks the row of the chunk as confirmed.
+	ConfirmChunk(ctx context.Context, ns namespace.Name, log string, seq int) error
 }
