@@ -64,7 +64,7 @@ func dispatchPlan(t *testing.T, e *env, pool string, unit identity.Object) job.J
 	j := job.Job{
 		ID: job.ID(ident.NewID(job.IDPrefix)),
 		Spec: job.Spec{
-			Unit: unit, Operation: job.OperationPlan, Executor: job.ExecutorRunner,
+			Unit: unit, Operation: job.OperationPlan, Purpose: "", Executor: job.ExecutorRunner,
 			Location: job.Location{
 				Connection: "github", Repository: "acme/infra", Ref: "main", Directory: "network", Revision: "abc123",
 			},
@@ -156,7 +156,7 @@ func checkRunning(t *testing.T, e *env, id job.ID, runnerID string) {
 func newJobEnv(t *testing.T, open func(t *testing.T) stores) *env {
 	t.Helper()
 
-	return newEnvWith(t, 0, open, func(s stores) job.Claimer {
+	return newEnvWith(t, open, func(s stores) job.Claimer {
 		return job.NewClaimer(s.jobs, s.operations, s.namespaces)
 	})
 }

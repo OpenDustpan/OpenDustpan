@@ -146,7 +146,7 @@ func testLifecycles() map[string]coreinventory.Lifecycle {
 // deletedFixture is a handler over one seeded acme namespace, its deleted
 // units and a recording Pulumi lifecycle.
 type deletedFixture struct {
-	handler *apiinventory.Handler
+	handler testHandler
 	pulumi  *memLifecycle
 }
 
@@ -199,9 +199,10 @@ func buildGuardedFixture(t *testing.T, spec guardSpec) deletedFixture {
 
 	pulumi := &memLifecycle{err: lifecycleErr, calls: nil}
 
-	handler, err := apiinventory.NewHandler(apiinventory.Config{
-		Views: nil,
-		Audit: nil, OnAuditFailure: nil, Locks: nil, PublicURL: "",
+	handler, err := newCheckedHandler(t, apiinventory.Config{
+		OutputSharing: nil,
+		Views:         nil,
+		Audit:         newTestAudit(), OnAuditFailure: nil, Locks: nil, PublicURL: "",
 		Moves:      nil,
 		Namespaces: namespaces,
 		Units:      &memReader{entries: map[namespace.Name][]coreinventory.Entry{}, err: nil},

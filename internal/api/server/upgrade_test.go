@@ -27,7 +27,7 @@ type upgradeCheckDoc struct {
 
 // readUpgradeCheck reads the upgrade check and returns its status and
 // document, failing the test when the body is not the upgrade check shape.
-func readUpgradeCheck(t *testing.T, handler *apiserver.Handler) (int, upgradeCheckDoc) {
+func readUpgradeCheck(t *testing.T, handler testHandler) (int, upgradeCheckDoc) {
 	t.Helper()
 
 	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/server/upgrade-check", http.NoBody)
@@ -154,7 +154,7 @@ func (s stubSchema) AppliedMigrations(_ context.Context) ([]schema.AppliedMigrat
 func TestUpgradeCheckEmptyVersionDefaultsDev(t *testing.T) {
 	t.Parallel()
 
-	handler, err := apiserver.NewHandler(apiserver.Config{
+	handler, err := newCheckedHandler(t, apiserver.Config{
 		Preferences:      nil,
 		GitHost:          nil,
 		Idempotency:      nil,
@@ -178,7 +178,7 @@ func TestUpgradeCheckEmptyVersionDefaultsDev(t *testing.T) {
 		Principals:       nil,
 		Access:           nil,
 		Tokens:           nil,
-		Audit:            nil,
+		Audit:            newTestAudit(),
 		OnAuditFailure:   nil,
 		DeletedUnits:     nil,
 		AuditChain:       nil,
@@ -217,7 +217,7 @@ func TestUpgradeCheckEmptyVersionDefaultsDev(t *testing.T) {
 func TestUpgradeCheckAnswersSchemaMinimum(t *testing.T) {
 	t.Parallel()
 
-	handler, err := apiserver.NewHandler(apiserver.Config{
+	handler, err := newCheckedHandler(t, apiserver.Config{
 		Preferences:      nil,
 		GitHost:          nil,
 		Idempotency:      nil,
@@ -243,7 +243,7 @@ func TestUpgradeCheckAnswersSchemaMinimum(t *testing.T) {
 		Principals:       nil,
 		Access:           nil,
 		Tokens:           nil,
-		Audit:            nil,
+		Audit:            newTestAudit(),
 		OnAuditFailure:   nil,
 		DeletedUnits:     nil,
 		AuditChain:       nil,
@@ -274,7 +274,7 @@ func TestUpgradeCheckAnswersSchemaMinimum(t *testing.T) {
 func TestUpgradeCheckWithoutSchema(t *testing.T) {
 	t.Parallel()
 
-	handler, err := apiserver.NewHandler(apiserver.Config{
+	handler, err := newCheckedHandler(t, apiserver.Config{
 		Preferences:      nil,
 		GitHost:          nil,
 		Idempotency:      nil,
@@ -296,7 +296,7 @@ func TestUpgradeCheckWithoutSchema(t *testing.T) {
 		Principals:       nil,
 		Access:           nil,
 		Tokens:           nil,
-		Audit:            nil,
+		Audit:            newTestAudit(),
 		OnAuditFailure:   nil,
 		DeletedUnits:     nil,
 		AuditChain:       nil,
@@ -356,7 +356,7 @@ func TestUpgradeCheckNeedsToken(t *testing.T) {
 func TestUpgradeCheckAnswersKeyEncryptionKey(t *testing.T) {
 	t.Parallel()
 
-	handler, err := apiserver.NewHandler(apiserver.Config{
+	handler, err := newCheckedHandler(t, apiserver.Config{
 		Preferences:      nil,
 		GitHost:          nil,
 		Idempotency:      nil,
@@ -380,7 +380,7 @@ func TestUpgradeCheckAnswersKeyEncryptionKey(t *testing.T) {
 		Principals:       nil,
 		Access:           nil,
 		Tokens:           nil,
-		Audit:            nil,
+		Audit:            newTestAudit(),
 		OnAuditFailure:   nil,
 		DeletedUnits:     nil,
 		AuditChain:       nil,
@@ -418,7 +418,7 @@ func (s stubJournal) CountRunningJournaledUpdates(_ context.Context) (int64, err
 // newJournalHandler builds an upgrade check handler with the stub schema of
 // one migration and the given journaled count. A negative count wires no
 // journal reporter, so the check answers 0 as a store without the count does.
-func newJournalHandler(t *testing.T, journaled int64) *apiserver.Handler {
+func newJournalHandler(t *testing.T, journaled int64) testHandler {
 	t.Helper()
 
 	cfg := apiserver.Config{
@@ -445,7 +445,7 @@ func newJournalHandler(t *testing.T, journaled int64) *apiserver.Handler {
 		Principals:       nil,
 		Access:           nil,
 		Tokens:           nil,
-		Audit:            nil,
+		Audit:            newTestAudit(),
 		OnAuditFailure:   nil,
 		DeletedUnits:     nil,
 		IPAllowlists:     nil,
@@ -462,7 +462,7 @@ func newJournalHandler(t *testing.T, journaled int64) *apiserver.Handler {
 		cfg.Journal = stubJournal{count: journaled}
 	}
 
-	handler, err := apiserver.NewHandler(cfg)
+	handler, err := newCheckedHandler(t, cfg)
 	if err != nil {
 		t.Fatalf("handler: %v", err)
 	}

@@ -1568,6 +1568,9 @@ func TestListObjectsWithinAuthorize(t *testing.T) {
 				identitytest.CheckListWithinAuthorize(t.Context(), t, identitytest.ListCheck{
 					Authorizer: authz, Principal: p, Action: action, Every: every,
 				})
+				identitytest.CheckExactScope(t.Context(), t, identitytest.ListCheck{
+					Authorizer: authz, Principal: p, Action: action, Every: every,
+				})
 			}
 		}
 	}
@@ -1665,4 +1668,98 @@ func TestBuiltInRolesHoldTheNotificationAction(t *testing.T) {
 			t.Errorf("%s holds %s = %t, want %t", tt.role, manage, got, tt.want)
 		}
 	}
+}
+
+// TestBuiltInRolesHoldTheOutputSharingActions proves that each built-in role
+// that holds unit:read also holds unit:read-outputs, so that no holder of a
+// built-in role loses a read of outputs, and that of the namespace roles only
+// the administrator manages the sharing rules and the setting.
+func TestBuiltInRolesHoldTheOutputSharingActions(t *testing.T) {
+	t.Parallel()
+
+	read, manage := identity.ActionUnitReadOutputs, identity.ActionUnitManageSharing
+
+	for _, action := range []identity.Action{read, manage} {
+		if family, ok := access.FamilyOf(action); !ok || family != access.FamilyData {
+			t.Fatalf("family of %s = %q, %t, want the data family", action, family, ok)
+		}
+	}
+
+	tests := []struct {
+		role       string
+		wantRead   bool
+		wantManage bool
+	}{
+		{access.RoleViewer, true, false},
+		{access.RoleSecretViewer, true, false},
+		{access.RoleAuditor, true, false},
+		{access.RoleWriter, true, false},
+		{access.RoleMaintainer, true, false},
+		{access.RoleAdmin, true, true},
+		{access.RoleAccountAdministrator, true, true},
+		{access.RoleSiteAdministrator, true, true},
+		{access.RoleTokenManager, false, false},
+		{access.RoleInstallationOperator, false, false},
+	}
+
+	for _, tt := range tests {
+		r, ok := access.BuiltInRole(tt.role)
+		if !ok {
+			t.Fatalf("no built-in role %q", tt.role)
+		}
+
+		if got := slices.Contains(r.Actions, read); got != tt.wantRead {
+			t.Errorf("%s holds %s = %t, want %t", tt.role, read, got, tt.wantRead)
+		}
+
+		if got := slices.Contains(r.Actions, manage); got != tt.wantManage {
+			t.Errorf("%s holds %s = %t, want %t", tt.role, manage, got, tt.wantManage)
+		}
+	}
+
+	for _, r := range access.BuiltInRoles() {
+		if r.Has(identity.ActionUnitRead) && !r.Has(read) {
+			t.Errorf("%s holds %s and not %s", r.ID, identity.ActionUnitRead, read)
+		}
+	}
+}
+
+// TestCustomRoleWithUnitReadOnlyDoesNotReadOutputs proves that a custom role
+// that holds unit:read and not unit:read-outputs is denied unit:read-outputs
+// on a unit, a collection and a namespace, whereas it still reads the unit.
+// No action implies another one.
+func TestCustomRoleWithUnitReadOnlyDoesNotReadOutputs(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	ctx := t.Context()
+
+	r, err := f.svc.CreateRole(ctx, testEntry(), admin(), access.RoleInput{
+		Name: "reader", Description: "Reads units only",
+		Actions: []identity.Action{identity.ActionUnitRead},
+	})
+	if err != nil {
+		t.Fatalf("create role: %v", err)
+	}
+
+	p := f.person(t, "reader")
+	web := unitObject(t, "acme", "web/prod")
+	payments := identity.CollectionObject("acme", "payments")
+	f.units[web.String()] = "payments"
+
+	f.grant(t, prn("reader"), r.ID, identity.NamespaceObject("acme"))
+	f.grant(t, prn("reader"), r.ID, payments)
+	f.grant(t, prn("reader"), r.ID, web)
+
+	read := identity.ActionUnitRead
+	outputs := identity.ActionUnitReadOutputs
+
+	assertChecks(t, f.authz, p, []check{
+		{web, read, true},
+		{web, outputs, false},
+		{payments, read, true},
+		{payments, outputs, false},
+		{identity.NamespaceObject("acme"), read, true},
+		{identity.NamespaceObject("acme"), outputs, false},
+	})
 }

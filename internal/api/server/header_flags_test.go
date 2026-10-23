@@ -17,10 +17,12 @@ import (
 func checkHeaderFlags(t *testing.T, ops []apidesc.Operation, scenarios map[string]headertest.Scenario) {
 	t.Helper()
 
-	for _, op := range ops {
+	for i := range ops {
+		op := &ops[i]
+
 		scenario, ok := scenarios[op.ID]
 		if !ok {
-			if headertest.Flagged(op) || headertest.Writes(op) {
+			if headertest.Flagged(*op) || headertest.Writes(*op) {
 				t.Errorf("%s sets a header flag or writes, and has no scenario", op.ID)
 			}
 
@@ -32,7 +34,7 @@ func checkHeaderFlags(t *testing.T, ops []apidesc.Operation, scenarios map[strin
 
 			// The installation adapter ignores a key on a route that does not
 			// take it, so the test does not check for a refusal.
-			headertest.Check(t, op, scenario, headertest.Options{RefusesKey: false})
+			headertest.Check(t, *op, scenario, headertest.Options{RefusesKey: false})
 		})
 	}
 }

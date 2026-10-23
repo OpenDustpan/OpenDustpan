@@ -210,7 +210,7 @@ func TestTwoRunnersClaimOnePhase(t *testing.T) {
 		t.Run(b.name, func(t *testing.T) {
 			t.Parallel()
 
-			twoRunnersClaimOnePhase(t, newEnvOn(t, 0, b.open))
+			twoRunnersClaimOnePhase(t, newEnvOn(t, b.open))
 		})
 	}
 }
@@ -262,7 +262,7 @@ func TestLapsedLeaseMakesThePhaseClaimable(t *testing.T) {
 		t.Run(b.name, func(t *testing.T) {
 			t.Parallel()
 
-			lapsedLeaseMakesThePhaseClaimable(t, newEnvOn(t, 200*time.Millisecond, b.open))
+			lapsedLeaseMakesThePhaseClaimable(t, newEnvOn(t, b.open))
 		})
 	}
 }
@@ -286,7 +286,7 @@ func lapsedLeaseMakesThePhaseClaimable(t *testing.T, e *env) {
 		t.Fatal("first poll = 204, want work")
 	}
 
-	pause(t, 400*time.Millisecond)
+	e.lapse(old.Operation)
 
 	taken := second.poll(2 * time.Second)
 	if taken == nil || taken.Operation != old.Operation || taken.Token != old.Token+1 {
@@ -333,8 +333,8 @@ func TestReplicasClaimOnePhase(t *testing.T) {
 	schemaURL := newSchema(t)
 	first, second := openPostgresAt(t, schemaURL), openPostgresAt(t, schemaURL)
 
-	e := newEnvOn(t, 0, func(*testing.T) stores { return first })
-	_, replica, _ := serve(t, second, serveOptions{lease: 0, now: nil, authz: identity.AdminOnly{}, claimer: nil})
+	e := newEnvOn(t, func(*testing.T) stores { return first })
+	_, replica, _ := serve(t, second, serveOptions{now: nil, authz: identity.AdminOnly{}, claimer: nil})
 
 	pool := e.createPool()
 	servers := []*env{e, {t: t, store: second, server: replica, handler: nil, claimer: nil, fence: e.fence, clock: nil}}

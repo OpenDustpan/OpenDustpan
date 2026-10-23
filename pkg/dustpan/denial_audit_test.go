@@ -104,6 +104,13 @@ func TestDeniedRequestsAreAudited(t *testing.T) {
 			scope: "acme", wantAction: "",
 		},
 		{
+			name: "OpenTofu HTTP backend",
+			call: deniedCall{
+				method: http.MethodPost, target: "/tofu/state/acme/net", body: `{"version":4}`, scheme: "Bearer",
+			},
+			scope: "acme", wantAction: "",
+		},
+		{
 			name:  "installation API",
 			call:  deniedCall{method: http.MethodGet, target: "/api/server/principals", body: "", scheme: "Bearer"},
 			scope: "@server", wantAction: "",
@@ -248,8 +255,12 @@ func checkLimiterEntries(t *testing.T, st chainStore) {
 		Window: time.Minute, MaxKeys: 3, MaxFlush: 0, MaxKeysPerPrincipal: 0, Now: func() time.Time { return now },
 	})
 	failures := 0
-	rec := refusal.New(denyEverything{}, st, svc, slog.New(slog.DiscardHandler), func() { failures++ }).
-		WithLimiter(lim)
+	recorder, err := refusal.New(denyEverything{}, st, svc, slog.New(slog.DiscardHandler), func() { failures++ })
+	if err != nil {
+		t.Fatalf("refusal.New: %v", err)
+	}
+
+	rec := recorder.WithLimiter(lim)
 
 	deny := func(subject, ns string) {
 		p := identity.Principal{

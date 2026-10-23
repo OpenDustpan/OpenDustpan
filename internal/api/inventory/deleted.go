@@ -187,10 +187,9 @@ func decodeCursor(s, fingerprint string) (*coreinventory.DeletedCursor, error) {
 	return &coreinventory.DeletedCursor{Tool: w.Tool, Name: w.Name, UnitID: w.UnitID}, nil
 }
 
-// intQuery parses the query value name as an int from low to limit. An empty
-// value is 0.
-func intQuery(r *http.Request, name string, low, limit int) (int, error) {
-	raw := r.URL.Query().Get(name)
+// intQuery parses the query value raw of the parameter name as an int from low
+// to limit. An empty value is 0.
+func intQuery(raw, name string, low, limit int) (int, error) {
 	if raw == "" {
 		return 0, nil
 	}
@@ -221,18 +220,19 @@ func deletedFingerprint(ns namespace.Name, tool, namePrefix, purgeWithin string)
 // deletedQuery builds the store query of a list request for ns and the
 // fingerprint of its filters. It does not set the read scope.
 func (h *Handler) deletedQuery(r *http.Request, ns namespace.Name) (coreinventory.DeletedQuery, string, error) {
-	limit, err := intQuery(r, "pageSize", 1, coreinventory.MaxDeletedPageSize)
+	limit, err := intQuery(queryOf(r).Get("pageSize"), "pageSize", 1, coreinventory.MaxDeletedPageSize)
 	if err != nil {
 		return coreinventory.DeletedQuery{}, "", err
 	}
 
-	days, err := intQuery(r, "purgeWithinDays", 0, maxPurgeWithinDays)
+	days, err := intQuery(queryOf(r).Get("purgeWithinDays"), "purgeWithinDays", 0, maxPurgeWithinDays)
 	if err != nil {
 		return coreinventory.DeletedQuery{}, "", err
 	}
 
-	tool, prefix := toolCode(r.URL.Query().Get("tool")), r.URL.Query().Get("namePrefix")
-	purgeWithin := r.URL.Query().Has("purgeWithinDays")
+	query := queryOf(r)
+	tool, prefix := toolCode(query.Get("tool")), query.Get("namePrefix")
+	purgeWithin := query.Has("purgeWithinDays")
 
 	window := ""
 	if purgeWithin {
@@ -241,7 +241,7 @@ func (h *Handler) deletedQuery(r *http.Request, ns namespace.Name) (coreinventor
 
 	fingerprint := deletedFingerprint(ns, tool, prefix, window)
 
-	cursor, err := decodeCursor(r.URL.Query().Get("pageToken"), fingerprint)
+	cursor, err := decodeCursor(query.Get("pageToken"), fingerprint)
 	if err != nil {
 		return coreinventory.DeletedQuery{}, "", err
 	}
@@ -515,7 +515,7 @@ func changeEntry(r *http.Request, p identity.Principal, obj identity.Object, act
 		ValueCount:    nil,
 		Changes:       nil,
 		SourceIP:      clientip.String(r),
-		UserAgent:     truncateUserAgent(r.UserAgent()),
+		UserAgent:     truncateUserAgent(userAgent(r)),
 		Channel:       sessionauth.AuditChannel(r, channelHeader),
 		Kind:          audit.KindChange,
 		Outcome:       audit.OutcomeSuccess,
