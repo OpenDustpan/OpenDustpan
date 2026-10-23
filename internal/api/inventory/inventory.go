@@ -736,22 +736,26 @@ func classifyCollection(err error) (failure, bool) {
 // write to an HTTP status and a message safe to show callers.
 func classifyChange(err error) failure {
 	switch {
-	case errors.Is(err, errInvalidQuery), errors.Is(err, errInvalidBody):
-		return uncoded(http.StatusBadRequest, err.Error())
+	case errors.Is(err, errInvalidQuery):
+		return fail(http.StatusBadRequest, err.Error(), errcode.RequestInvalidQuery)
+	case errors.Is(err, errInvalidBody):
+		return fail(http.StatusBadRequest, err.Error(), errcode.RequestBodyInvalid)
 	case errors.Is(err, errNoHistory):
-		return uncoded(http.StatusNotImplemented, err.Error())
+		return fail(http.StatusNotImplemented, err.Error(), errcode.UnitHistoryUnavailable)
 	case errors.Is(err, coreinventory.ErrInvalidName):
-		return uncoded(http.StatusBadRequest, "invalid unit name: use the name rules of the tool")
+		return fail(http.StatusBadRequest, "invalid unit name: use the name rules of the tool", errcode.UnitInvalidName)
 	case errors.Is(err, coreinventory.ErrNotFound):
-		return uncoded(http.StatusNotFound, "deleted unit not found")
+		return fail(http.StatusNotFound, "deleted unit not found", errcode.UnitDeletedNotFound)
 	case errors.Is(err, coreinventory.ErrNameTaken):
-		return uncoded(http.StatusConflict, "a live unit holds the name: send a new name in the restore body")
+		return fail(http.StatusConflict, "a live unit holds the name: send a new name in the restore body",
+			errcode.UnitNameTaken)
 	case errors.Is(err, namespace.ErrFenced):
-		return uncoded(http.StatusConflict, namespace.ErrFenced.Error())
+		return fail(http.StatusConflict, namespace.ErrFenced.Error(), errcode.NamespaceFenced)
 	case errors.Is(err, namespace.ErrNotHome):
-		return uncoded(http.StatusMisdirectedRequest, "namespace is not homed in this region")
+		return fail(http.StatusMisdirectedRequest, "namespace is not homed in this region", errcode.NamespaceNotHome)
 	case errors.Is(err, maintenance.ErrInMaintenance):
-		return uncoded(http.StatusServiceUnavailable, maintenance.ErrInMaintenance.Error()+": try again later")
+		return fail(http.StatusServiceUnavailable, maintenance.ErrInMaintenance.Error()+": try again later",
+			errcode.MaintenanceInMaintenance)
 	default:
 		return classifyManualLock(err)
 	}
