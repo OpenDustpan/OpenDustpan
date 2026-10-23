@@ -368,6 +368,15 @@ func (stubWorkspaces) List(_ context.Context, ns namespace.Name) ([]workspace.Wo
 	return []workspace.Workspace{ws}, nil
 }
 
+func (stubWorkspaces) Query(ctx context.Context, q workspace.ListQuery) (workspace.ListPage, error) {
+	all, err := stubWorkspaces{}.List(ctx, q.Namespace)
+	if err != nil {
+		return workspace.ListPage{}, err
+	}
+
+	return workspace.PageWorkspaces(all, q), nil
+}
+
 func (stubWorkspaces) LockForJob(
 	_ context.Context, id workspace.ID, holder, _, _ string,
 ) (workspace.Workspace, error) {
@@ -1727,6 +1736,15 @@ func (errorWorkspaces) GetByID(_ context.Context, _ workspace.ID) (workspace.Wor
 
 func (errorWorkspaces) List(_ context.Context, _ namespace.Name) ([]workspace.Workspace, error) {
 	return nil, errTestInternal
+}
+
+func (errorWorkspaces) Query(ctx context.Context, q workspace.ListQuery) (workspace.ListPage, error) {
+	all, err := errorWorkspaces{}.List(ctx, q.Namespace)
+	if err != nil {
+		return workspace.ListPage{}, err
+	}
+
+	return workspace.PageWorkspaces(all, q), nil
 }
 
 func (errorWorkspaces) LockForJob(

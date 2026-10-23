@@ -166,12 +166,12 @@ func sendAuditChain(ctx context.Context, client *http.Client, call auditChainCal
 	}()
 
 	if resp.StatusCode != http.StatusOK {
-		return none, fmt.Errorf("%w: %s", ErrAuditChainRequest, decodeBackupError(resp))
+		return none, fmt.Errorf("%w: %s", ErrAuditChainRequest, decodeErrorAnswer(resp))
 	}
 
 	var answer AuditChainAnswer
 
-	if err := decodeCappedJSON(resp.Body, &answer); err != nil {
+	if err := decodeCappedJSON(resp.Body, MaxClientBodyBytes, &answer); err != nil {
 		return none, fmt.Errorf("%w: %w: check the server log and %s", ErrAuditChainRequest, err, call.rerun)
 	}
 

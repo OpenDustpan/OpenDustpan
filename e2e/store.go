@@ -178,8 +178,11 @@ func dropSchema(ctx context.Context, tb testing.TB, base, schema string) {
 		}
 	}()
 
-	_, err = conn.Exec(ctx, "DROP SCHEMA "+pgx.Identifier{schema}.Sanitize()+" CASCADE")
-	if err != nil {
-		tb.Errorf("drop schema: %v", err)
+	// The store keeps its control tables in a second schema, <name>_control.
+	for _, name := range []string{schema, schema + "_control"} {
+		_, err = conn.Exec(ctx, "DROP SCHEMA IF EXISTS "+pgx.Identifier{name}.Sanitize()+" CASCADE")
+		if err != nil {
+			tb.Errorf("drop schema %s: %v", name, err)
+		}
 	}
 }

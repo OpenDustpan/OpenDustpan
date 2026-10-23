@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/api/apidesc"
 	"opendustpan.org/opendustpan/internal/clientip"
 	"opendustpan.org/opendustpan/internal/denylimit"
 	"opendustpan.org/opendustpan/internal/requestid"
@@ -522,7 +523,7 @@ func deniedEntry(
 	// no user agent and the default channel.
 	var userAgent, channel string
 	if req != nil {
-		userAgent, channel = req.UserAgent(), req.Header.Get(channelHeader)
+		userAgent, channel = apidesc.Header(req, "User-Agent"), apidesc.Header(req, channelHeader)
 	}
 
 	return audit.Entry{

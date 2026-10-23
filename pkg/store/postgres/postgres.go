@@ -20,9 +20,11 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -59,6 +61,15 @@ type Store struct {
 	// Tests set it to prove the live access tables stay locked across that
 	// window. Nil in production.
 	keepAccessHook func(ctx context.Context, tx pgx.Tx, live string)
+	// betweenProfileReads, when set, runs once in the next read of a profile
+	// revision, between the read of the profile and the read of the revision,
+	// inside the snapshot. Tests run a restore swap there. Nil in production.
+	// The read takes it with an atomic swap, so a read on another goroutine
+	// cannot race the test that sets it.
+	betweenProfileReads atomic.Pointer[func()]
+	// snapshotBegin is the statement that starts a snapshot read: BEGIN, then
+	// the lock that makes the read wait for a restore swap (see inSnapshotTx).
+	snapshotBegin string
 	// beforeLockDelete, when set, runs in the removal of a manual lock between
 	// the read of the lock and the delete, inside the transaction. Tests change
 	// the lock there to reach the changed-lock check. Nil in production.
@@ -168,6 +179,7 @@ func Open(ctx context.Context, url string, opts ...Option) (*Store, error) {
 
 	s := &Store{
 		pool: pool, queries: db.New(pool), stagingMu: sync.Mutex{}, stagingSchema: "", keepAccessHook: nil,
+		betweenProfileReads: atomic.Pointer[func()]{}, snapshotBegin: snapshotBeginQuery(live),
 		beforeLockDelete: nil, stateLockWait: 0,
 		binaryVersion: "", gate: nil, kind: "", noMigrate: false, logger: slog.New(slog.DiscardHandler),
 	}
@@ -308,9 +320,10 @@ func (s *Store) CreateStack(ctx context.Context, st stack.Stack, fence namespace
 	})
 }
 
-// GetStack implements stack.Store.
+// GetStack implements stack.Store. One statement reads the stack and its
+// tags, so the read needs no transaction.
 func (s *Store) GetStack(ctx context.Context, ref stack.Ref) (stack.Stack, error) {
-	row, err := s.queries.GetStack(ctx, db.GetStackParams{
+	row, err := s.queries.GetStackWithTags(ctx, db.GetStackWithTagsParams{
 		Namespace: ref.Namespace.String(),
 		Project:   ref.Project.String(),
 		Name:      ref.Stack.String(),
@@ -320,12 +333,19 @@ func (s *Store) GetStack(ctx context.Context, ref stack.Ref) (stack.Stack, error
 	}
 
 	if err != nil {
-		return stack.Stack{}, fmt.Errorf("select stack: %w", err)
+		return stack.Stack{}, fmt.Errorf("select stack: %w", readConflict(err))
 	}
 
-	tags, err := stackTags(ctx, s.queries, row.ID)
-	if err != nil {
-		return stack.Stack{}, err
+	// The query builds both arrays from the same rows in the same order, so
+	// arrays of two lengths are a corrupt row.
+	if len(row.TagNames) != len(row.TagValues) {
+		return stack.Stack{}, fmt.Errorf("%w: stack %q has %d tag names and %d tag values",
+			codec.ErrCorruptRow, row.ID, len(row.TagNames), len(row.TagValues))
+	}
+
+	tags := make(map[string]string, len(row.TagNames))
+	for i, name := range row.TagNames {
+		tags[name] = row.TagValues[i]
 	}
 
 	st := codec.FromStackRow(codec.StackRow{
@@ -402,21 +422,6 @@ func insertStackTags(ctx context.Context, q *db.Queries, id string, tags map[str
 	}
 
 	return nil
-}
-
-// stackTags reads the tag rows of one stack ID into a map.
-func stackTags(ctx context.Context, q *db.Queries, id string) (map[string]string, error) {
-	rows, err := q.GetStackTags(ctx, id)
-	if err != nil {
-		return nil, fmt.Errorf("select stack tags: %w", err)
-	}
-
-	tags := make(map[string]string, len(rows))
-	for _, row := range rows {
-		tags[row.Name] = row.Value
-	}
-
-	return tags, nil
 }
 
 // RenameStack implements stack.Store. It renames the stack without moving its
@@ -712,8 +717,27 @@ func softDeleteStack(
 // ListStacks implements stack.Store. Tags come from one query for the whole
 // namespace, not one query per stack.
 func (s *Store) ListStacks(ctx context.Context, filter stack.Filter) ([]stack.Stack, error) {
+	var out []stack.Stack
+
+	// One snapshot, so the stacks and their tags come from one state.
+	err := s.inSnapshotTx(ctx, func(q *db.Queries) error {
+		var err error
+
+		out, err = listStacks(ctx, q, filter)
+
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return out, nil
+}
+
+// listStacks is ListStacks on the queries of one snapshot.
+func listStacks(ctx context.Context, q *db.Queries, filter stack.Filter) ([]stack.Stack, error) {
 	if filter.Project == "" {
-		rows, err := s.queries.ListStacksInNamespace(ctx, filter.Namespace.String())
+		rows, err := q.ListStacksInNamespace(ctx, filter.Namespace.String())
 		if err != nil {
 			return nil, fmt.Errorf("select stacks: %w", err)
 		}
@@ -724,7 +748,7 @@ func (s *Store) ListStacks(ctx context.Context, filter stack.Filter) ([]stack.St
 			return out, nil
 		}
 
-		tags, err := stackTagMap(ctx, s.queries, filter.Namespace.String())
+		tags, err := stackTagMap(ctx, q, filter.Namespace.String())
 		if err != nil {
 			return nil, err
 		}
@@ -744,7 +768,7 @@ func (s *Store) ListStacks(ctx context.Context, filter stack.Filter) ([]stack.St
 		return out, nil
 	}
 
-	rows, err := s.queries.ListStacksInProject(ctx, db.ListStacksInProjectParams{
+	rows, err := q.ListStacksInProject(ctx, db.ListStacksInProjectParams{
 		Namespace: filter.Namespace.String(),
 		Project:   filter.Project.String(),
 	})
@@ -758,7 +782,7 @@ func (s *Store) ListStacks(ctx context.Context, filter stack.Filter) ([]stack.St
 		return out, nil
 	}
 
-	tags, err := stackTagMap(ctx, s.queries, filter.Namespace.String())
+	tags, err := stackTagMap(ctx, q, filter.Namespace.String())
 	if err != nil {
 		return nil, err
 	}
@@ -947,20 +971,82 @@ func readWritable(ctx context.Context, tx pgx.Tx, readSQL string, fenceName *str
 
 // inSnapshotTx runs fn in a REPEATABLE READ, read-only transaction, so each
 // read of fn sees one snapshot: a page and its total agree.
+//
+// The snapshot alone does not protect the read from a restore swap. The read
+// names its tables through the search path, and PostgreSQL resolves a name
+// with the latest catalog, not with the snapshot. So the transaction first
+// takes the swap lock in ACCESS SHARE mode, in the same message as BEGIN and
+// before any statement that takes the snapshot (a LOCK statement takes no
+// snapshot). The swap takes the same lock in ACCESS EXCLUSIVE mode before it
+// touches a live table (see lockSwap). So the read and the swap never overlap:
+//
+//   - A read that started first holds the lock, and the swap waits for the
+//     read to end. The swap holds no live table while it waits, so the read
+//     can lock its tables in any order without a deadlock.
+//   - A read that starts during the swap waits for the swap to commit, and
+//     then takes its snapshot. It sees the committed result of the swap, with
+//     the changes that the swap itself made.
+//
+// A read with one statement needs neither the transaction nor the lock: run
+// it on the pool. The SQLite adapter needs no such lock, because its swap
+// and its reads hold the same mutex of the store.
 func (s *Store) inSnapshotTx(ctx context.Context, fn func(q *db.Queries) error) error {
-	opts := pgx.TxOptions{
-		IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly, DeferrableMode: pgx.NotDeferrable, BeginQuery: "",
-		CommitQuery: "",
-	}
-
-	err := pgx.BeginTxFunc(ctx, s.pool, opts, func(tx pgx.Tx) error {
+	return s.inSnapshotConn(ctx, func(tx pgx.Tx) error {
 		return fn(s.queries.WithTx(tx))
 	})
+}
+
+// inSnapshotConn is inSnapshotTx for a read that also runs a hand-written
+// statement: fn gets the transaction itself.
+func (s *Store) inSnapshotConn(ctx context.Context, fn func(tx pgx.Tx) error) error {
+	err := pgx.BeginTxFunc(ctx, s.pool, s.snapshotOptions(), fn)
 	if err != nil {
-		return fmt.Errorf("snapshot transaction: %w", err)
+		return fmt.Errorf("snapshot transaction: %w", readConflict(err))
 	}
 
 	return nil
+}
+
+// snapshotOptions returns the options of a snapshot read: a REPEATABLE READ,
+// read-only transaction that takes the swap lock before its snapshot (see
+// inSnapshotTx). Every REPEATABLE READ read of the store uses them.
+func (s *Store) snapshotOptions() pgx.TxOptions {
+	// BeginQuery replaces the isolation and access fields: snapshotBegin
+	// starts the same REPEATABLE READ, read-only transaction.
+	return pgx.TxOptions{
+		IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly, DeferrableMode: pgx.NotDeferrable,
+		BeginQuery: s.snapshotBegin, CommitQuery: "",
+	}
+}
+
+// snapshotBeginQuery returns the statement that starts a snapshot read on the
+// live schema live: BEGIN, then the swap lock in ACCESS SHARE mode. pgx sends
+// a statement with no arguments in the simple protocol, so the two
+// statements go in one message and cost no extra round trip. If the lock
+// statement fails (for example, the context ends while it waits for a swap),
+// pgx closes the connection and does not roll it back. The read fails closed.
+func snapshotBeginQuery(live string) string {
+	return "BEGIN READ ONLY ISOLATION LEVEL REPEATABLE READ; " +
+		"LOCK TABLE " + swapLockTable(live) + " IN ACCESS SHARE MODE"
+}
+
+// SQLSTATE codes of a transaction that PostgreSQL ended to resolve a
+// conflict. The same call can work when the caller tries again.
+const (
+	deadlockDetected     = "40P01"
+	serializationFailure = "40001"
+)
+
+// readConflict returns namespace.ErrUnavailable, with no driver text, when err
+// is a deadlock or a serialization failure, and err otherwise. Callers report
+// namespace.ErrUnavailable as a temporary failure, so the client tries again.
+func readConflict(err error) error {
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) && (pgErr.Code == deadlockDetected || pgErr.Code == serializationFailure) {
+		return fmt.Errorf("read ended by a conflict with another transaction: %w", namespace.ErrUnavailable)
+	}
+
+	return err
 }
 
 // inFencedTx runs fn in a write transaction that first takes the shared write

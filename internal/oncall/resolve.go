@@ -5,7 +5,7 @@ import (
 	"slices"
 	"time"
 
-	"opendustpan.org/opendustpan/pkg/calendar"
+	"opendustpan.org/opendustpan/internal/calendar"
 )
 
 // Timeline returns the shifts of s in the range that starts at from and

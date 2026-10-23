@@ -14,6 +14,9 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"go.uber.org/goleak"
+
+	"opendustpan.org/opendustpan/internal/pgtest"
+	"opendustpan.org/opendustpan/pkg/store/postgres"
 )
 
 // TestMain fails the package when a test leaves a goroutine running.
@@ -21,10 +24,12 @@ func TestMain(m *testing.M) {
 	goleak.VerifyTestMain(ownDatabase{m: m})
 }
 
-// ownDatabase runs the tests of the package in a database of their own. Each
-// test makes its own schema, and about 4,000 schemas stay after one run. One
-// DROP DATABASE at the end removes them as files, which costs much less
-// server time than one DROP SCHEMA for each test.
+// ownDatabase runs the tests of the package in a database of their own. A
+// test that needs an empty schema makes its own schema there, and about 1,000
+// schemas stay after one run. One DROP DATABASE at the end removes them as
+// files, which costs much less server time than one DROP SCHEMA for each
+// test. A test that needs a migrated schema gets a clone of a template
+// database that this binary migrates one time.
 type ownDatabase struct {
 	m *testing.M
 }
@@ -55,34 +60,58 @@ func (o ownDatabase) Run() int {
 		return 1
 	}
 
+	template := db.name + "_tpl"
+	if tplErr := pgtest.BuildTemplate(ctx, base, template, migrateTemplate); tplErr != nil {
+		fmt.Fprintf(os.Stderr, "make the template database: %v\n", tplErr)
+
+		return 1
+	}
+
+	if setErr := os.Setenv(pgtest.TemplateEnv, template); setErr != nil {
+		fmt.Fprintf(os.Stderr, "set %s: %v\n", pgtest.TemplateEnv, setErr)
+
+		return 1
+	}
+
 	code := o.m.Run()
 
 	// A CI service container is thrown away after the job, with its
-	// database. The drop then only costs time: about 150 s to delete the
-	// files of about 4,000 schemas. Any other value than "1" drops.
-	if os.Getenv(skipFinalDropEnv) == "1" {
+	// databases. The drop then only costs time: about 150 s to delete the
+	// files of about 1,000 schemas. Any other value than "1" drops.
+	if os.Getenv(pgtest.SkipFinalDropEnv) == "1" {
 		return code
 	}
 
-	drop := "DROP DATABASE IF EXISTS " + pgx.Identifier{db.name}.Sanitize() + " WITH (FORCE)"
-	if dropErr := execOn(ctx, base, drop); dropErr != nil {
-		fmt.Fprintf(os.Stderr, "drop the test database %s: %v\n", db.name, dropErr)
+	// A clone that its test could not drop stays. A failure here does not
+	// fail the package: the clones are only disk, and the next run removes
+	// the stale ones.
+	failed, sweepErr := pgtest.DropClones(ctx, base, template, func(format string, args ...any) {
+		fmt.Fprintf(os.Stderr, format+"\n", args...)
+	})
+	if sweepErr != nil {
+		fmt.Fprintf(os.Stderr, "drop the remaining clones: %v\n", sweepErr)
+	}
 
-		if code == 0 {
-			code = 1
+	if failed > 0 {
+		fmt.Fprintf(os.Stderr, "could not drop %d clones\n", failed)
+	}
+
+	for _, name := range []string{template, db.name} {
+		drop := "DROP DATABASE IF EXISTS " + pgx.Identifier{name}.Sanitize() + " WITH (FORCE)"
+		if dropErr := execOn(ctx, base, drop); dropErr != nil {
+			fmt.Fprintf(os.Stderr, "drop the test database %s: %v\n", name, dropErr)
+
+			if code == 0 {
+				code = 1
+			}
 		}
 	}
 
 	return code
 }
 
-// skipFinalDropEnv names the variable that keeps the test database after the
-// tests. CI sets it to "1" for a PostgreSQL server that it throws away after
-// the job. A stale database on any other server is dropped by a later run.
-const skipFinalDropEnv = "DUSTPAN_TEST_SKIP_FINAL_DROP"
-
-// testDatabasePrefix starts the name of each test database. The Unix time of
-// its creation and a random suffix follow.
+// testDatabasePrefix starts the name of each test database, the template and
+// the clones. The Unix time of its creation and a random suffix follow.
 const testDatabasePrefix = "dustpan_test_"
 
 // staleTestDatabaseAge is the age after which a test database counts as left
@@ -201,6 +230,19 @@ func execOn(ctx context.Context, dbURL, stmt string) error {
 	if _, execErr := conn.Exec(ctx, stmt); execErr != nil {
 		return fmt.Errorf("exec: %w", execErr)
 	}
+
+	return nil
+}
+
+// migrateTemplate opens the store at dbURL, which applies the migrations, and closes
+// it.
+func migrateTemplate(ctx context.Context, dbURL string) error {
+	s, err := postgres.Open(ctx, dbURL)
+	if err != nil {
+		return fmt.Errorf("open store: %w", err)
+	}
+
+	s.Close() //nolint:contextcheck // Close takes no context, and the store has no other work.
 
 	return nil
 }

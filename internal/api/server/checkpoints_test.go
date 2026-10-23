@@ -48,10 +48,10 @@ func (c *clockEpochs) Now() time.Time {
 }
 
 // newEpochHandler builds a Handler with epochs and the audit store st.
-func newEpochHandler(t *testing.T, epochs apiserver.CheckpointEpochs, st *sqlite.Store) *apiserver.Handler {
+func newEpochHandler(t *testing.T, epochs apiserver.CheckpointEpochs, st *sqlite.Store) testHandler {
 	t.Helper()
 
-	handler, err := apiserver.NewHandler(apiserver.Config{
+	handler, err := newCheckedHandler(t, apiserver.Config{
 		Preferences:      nil,
 		GitHost:          nil,
 		Idempotency:      nil,

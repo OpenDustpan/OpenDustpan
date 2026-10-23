@@ -44,10 +44,10 @@ var errSweepRead = errors.New("pq: read failed on 10.0.0.7")
 // may be nil, and which denies the actions in deny.
 func newSweepHandler(
 	t *testing.T, sweeper apiserver.DeletedUnitSweeper, deny map[identity.Action]bool,
-) *apiserver.Handler {
+) testHandler {
 	t.Helper()
 
-	handler, err := apiserver.NewHandler(apiserver.Config{
+	handler, err := newCheckedHandler(t, apiserver.Config{
 		Preferences:      nil,
 		GitHost:          nil,
 		Idempotency:      nil,
