@@ -60,6 +60,11 @@ const (
 var (
 	// ErrBackupNeedsServer reports a backup run without --server.
 	ErrBackupNeedsServer = errors.New("backup needs --server")
+	// ErrBackupCheckNeedsServer reports a backup check run without --server.
+	ErrBackupCheckNeedsServer = errors.New("backup check needs --server")
+	// ErrUpgradeCheckNeedsServer reports an upgrade check run without
+	// --server.
+	ErrUpgradeCheckNeedsServer = errors.New("upgrade check needs --server")
 	// ErrBackupFailed reports a backup that left running without success.
 	ErrBackupFailed = errors.New("backup failed")
 	// ErrBackupNoToken reports a backup run without an admin token.

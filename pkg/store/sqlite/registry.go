@@ -66,29 +66,35 @@ func (r registryStore) Publish(ctx context.Context, rel registry.Release, fence 
 	}
 
 	return r.s.inFencedTx(ctx, fence, func(q *db.Queries) error {
-		repeat, pubErr := publishRegistryRelease(ctx, q, rel, archives)
+		result, repeat, pubErr := publishRegistryRelease(ctx, q, rel, archives)
 		if pubErr != nil {
 			return pubErr
 		}
 
 		// A repeat of a published version changes nothing and writes no audit
-		// entry. It still finishes the idempotency record of its request.
+		// entry. It still finishes the idempotency record of its request, with
+		// the stored release: the first publisher and time, as the live answer
+		// of the repeat shows them.
 		if !repeat {
 			if _, auditErr := appendAuditEntry(ctx, q, e); auditErr != nil {
 				return fmt.Errorf("append audit entry: %w", auditErr)
 			}
 		}
 
-		return finishCompletion(ctx, q, rel)
+		return finishCompletion(ctx, q, result)
 	})
 }
 
 // publishRegistryRelease writes rel in the open transaction. The write lock of
 // the transaction is held, so no other publish runs between the read and the
 // insert.
+// It returns the release that the store holds after the write: rel for a new
+// release, or the stored release and true for a repeat of the same content.
 func publishRegistryRelease(
 	ctx context.Context, q *db.Queries, rel registry.Release, archives string,
-) (bool, error) {
+) (registry.Release, bool, error) {
+	var none registry.Release
+
 	// The key check is in the transaction of the write. Defense in depth: the
 	// service checks the key before it copies the files. This check stays so
 	// that a key removed after that check cannot sign a new release, and so that
@@ -99,11 +105,11 @@ func publishRegistryRelease(
 			Namespace: rel.Address.Namespace.String(), Fingerprint: rel.KeyFingerprint,
 		})
 		if errors.Is(keyErr, sql.ErrNoRows) {
-			return false, registry.ErrKeyNotFound
+			return none, false, registry.ErrKeyNotFound
 		}
 
 		if keyErr != nil {
-			return false, fmt.Errorf("select registry key: %w", keyErr)
+			return none, false, fmt.Errorf("select registry key: %w", keyErr)
 		}
 	}
 
@@ -123,12 +129,12 @@ func publishRegistryRelease(
 		// A stored row that fails its checks is never the same content: the
 		// publish does not claim it.
 		if relErr == nil && stored.SameContent(rel) {
-			return true, nil
+			return stored, true, nil
 		}
 
-		return false, registry.ErrVersionExists
+		return none, false, registry.ErrVersionExists
 	case !errors.Is(err, sql.ErrNoRows):
-		return false, fmt.Errorf("select registry release: %w", err)
+		return none, false, fmt.Errorf("select registry release: %w", err)
 	}
 
 	n, err := q.InsertRegistryRelease(ctx, db.InsertRegistryReleaseParams{
@@ -150,14 +156,14 @@ func publishRegistryRelease(
 		PublishedAtMs: codec.Millis(rel.PublishedAt),
 	})
 	if err != nil {
-		return false, fmt.Errorf("insert registry release: %w", err)
+		return none, false, fmt.Errorf("insert registry release: %w", err)
 	}
 
 	if n == 0 {
-		return false, registry.ErrVersionExists
+		return none, false, registry.ErrVersionExists
 	}
 
-	return false, nil
+	return rel, false, nil
 }
 
 // Get implements registry.Store.

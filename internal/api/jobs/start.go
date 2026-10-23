@@ -15,10 +15,10 @@ import (
 	"opendustpan.org/opendustpan/internal/api/apidesc"
 	"opendustpan.org/opendustpan/internal/api/refusal"
 	"opendustpan.org/opendustpan/internal/clientip"
+	"opendustpan.org/opendustpan/internal/driftsvc"
 	"opendustpan.org/opendustpan/internal/requestid"
 	"opendustpan.org/opendustpan/internal/sessionauth"
 	"opendustpan.org/opendustpan/pkg/audit"
-	"opendustpan.org/opendustpan/pkg/drift"
 	"opendustpan.org/opendustpan/pkg/idempotency"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/job"
@@ -198,12 +198,12 @@ func idempotencyKey(r *http.Request) (string, error) {
 
 		// The keys of drift checks share the key space of the jobs. The server
 		// makes them, so a caller key with the prefix is refused.
-		if len(k) >= len(drift.CheckKeyPrefix) &&
-			strings.EqualFold(string(k[:len(drift.CheckKeyPrefix)]), drift.CheckKeyPrefix) {
+		if len(k) >= len(driftsvc.CheckKeyPrefix) &&
+			strings.EqualFold(string(k[:len(driftsvc.CheckKeyPrefix)]), driftsvc.CheckKeyPrefix) {
 			return "", fmt.Errorf(
 				"%w: the prefix %q is reserved for the server",
 				idempotency.ErrInvalidKey,
-				drift.CheckKeyPrefix,
+				driftsvc.CheckKeyPrefix,
 			)
 		}
 

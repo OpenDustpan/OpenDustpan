@@ -1,4 +1,7 @@
-package drift
+// Package driftsvc is the service of drift checks: it starts the drift check
+// that a person asks for, through the job service. The ports stay in package
+// drift.
+package driftsvc
 
 import (
 	"context"
@@ -8,6 +11,7 @@ import (
 	"strconv"
 	"time"
 
+	"opendustpan.org/opendustpan/pkg/drift"
 	"opendustpan.org/opendustpan/pkg/job"
 )
 
@@ -23,13 +27,13 @@ type Service struct {
 	now     func() time.Time
 }
 
-var _ Checker = (*Service)(nil)
+var _ drift.Checker = (*Service)(nil)
 
 // NewService returns the Service over starter. now is the clock, and time.Now
 // when nil. It returns ErrInvalid for a nil starter.
 func NewService(starter JobStarter, now func() time.Time) (*Service, error) {
 	if starter == nil {
-		return nil, fmt.Errorf("%w: a drift check needs a job service", ErrInvalid)
+		return nil, fmt.Errorf("%w: a drift check needs a job service", drift.ErrInvalid)
 	}
 
 	if now == nil {
@@ -39,13 +43,13 @@ func NewService(starter JobStarter, now func() time.Time) (*Service, error) {
 	return &Service{starter: starter, now: now}, nil
 }
 
-// Check implements Checker. The job is the operation refresh with the purpose
-// drift check, and the source kind is api: only a feature of the server may
-// set another source kind. The service takes the runner pool and the code
+// Check implements drift.Checker. The job is the operation refresh with the
+// purpose drift check, and the source kind is api: only a feature of the server
+// may set another source kind. The service takes the runner pool and the code
 // location from the request or from the defaults of the job service.
-func (s *Service) Check(ctx context.Context, actor job.Actor, req CheckRequest) (job.ID, error) {
+func (s *Service) Check(ctx context.Context, actor job.Actor, req drift.CheckRequest) (job.ID, error) {
 	if !req.Unit.IsUnit() {
-		return "", fmt.Errorf("%w: a drift check needs a unit", ErrInvalid)
+		return "", fmt.Errorf("%w: a drift check needs a unit", drift.ErrInvalid)
 	}
 
 	j, err := s.starter.Start(ctx, actor, job.StartRequest{
