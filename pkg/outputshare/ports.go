@@ -447,8 +447,11 @@ type Outputs interface {
 	// It returns ErrInvalid for an object that is not a unit. It returns
 	// ErrUnknownProducer when no unit has the reference, when the stable ID
 	// names another unit, for a reference that no unit can have, and for a
-	// unit that is deleted during the read. It returns ErrStateMoved when the
-	// latest state is not stateID, also when the unit has no state now.
+	// unit that is deleted during the read, also when the delete runs after the
+	// lookup and before the read of the state: the stores read a missing unit
+	// as no state, so the adapter looks the unit up again to tell the two
+	// apart. It returns ErrStateMoved when the latest state is not stateID,
+	// also when the unit still exists and has no state now.
 	Outputs(ctx context.Context, u identity.Object, stateID string) ([]Output, error)
 }
 

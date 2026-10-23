@@ -67,6 +67,9 @@ func (g *grantAuthorizer) grant(subject string, action identity.Action, object i
 type outputShareStore interface {
 	namespace.Store
 	audit.Store
+	stack.UpdateStore
+	stack.CheckpointStore
+	workspace.StateStore
 	// OutputSharingSettings returns the port of the setting.
 	OutputSharingSettings() outputshare.Settings
 }
@@ -146,6 +149,7 @@ type outputShareRig struct {
 	checker *outputsharesvc.Checker
 	states  outputsharesvc.ToolStates
 	outputs toolOutputs
+	race    *readRace
 	mu      sync.Mutex
 	serials map[string]int64
 }
@@ -155,6 +159,13 @@ func newOutputShareRig(t *testing.T, dialect string) *outputShareRig {
 	t.Helper()
 
 	opts, st := outputShareOptions(t, dialect)
+
+	race := &readRace{mu: sync.Mutex{}, armed: false, left: 0, fired: false, hook: nil}
+	opts = append(opts,
+		dustpan.WithUpdateStore(raceUpdates{UpdateStore: st, race: race}),
+		dustpan.WithCheckpointStore(raceCheckpoints{CheckpointStore: st, race: race}),
+		dustpan.WithStateStore(raceStates{StateStore: st, race: race}),
+	)
 
 	svc, err := dustpan.NewToolServices(opts...)
 	if err != nil {
@@ -181,7 +192,7 @@ func newOutputShareRig(t *testing.T, dialect string) *outputShareRig {
 	}
 
 	return &outputShareRig{
-		t: t, svc: svc, store: st, authz: authz, checker: checker, states: states, outputs: outputs,
+		t: t, svc: svc, store: st, authz: authz, checker: checker, states: states, outputs: outputs, race: race,
 		mu: sync.Mutex{}, serials: map[string]int64{},
 	}
 }
@@ -189,28 +200,29 @@ func newOutputShareRig(t *testing.T, dialect string) *outputShareRig {
 // harness returns the harness of the suite over the rig.
 func (r *outputShareRig) harness() outputsharetest.Harness {
 	return outputsharetest.Harness{
-		Store:       nil,
-		Settings:    r.store.OutputSharingSettings(),
-		Attachments: nil,
-		UnitFault:   nil,
-		Authority:   nil,
-		Profile:     nil,
-		Attach:      nil,
-		Job:         nil,
-		Disable:     nil,
-		Calls:       nil,
-		StoreRaw:    nil,
-		SettingRaw:  nil,
-		Checker:     r.checker,
-		States:      r.states,
-		Outputs:     r.outputs,
-		SaveOutputs: r.saveOutputs,
-		DeleteUnit:  r.deleteUnit,
-		Namespace:   r.namespace,
-		Unit:        r.unit,
-		SaveState:   r.saveState,
-		Grant:       r.grant,
-		Audited:     r.audited,
+		Store:        nil,
+		Settings:     r.store.OutputSharingSettings(),
+		Attachments:  nil,
+		UnitFault:    nil,
+		Authority:    nil,
+		Profile:      nil,
+		Attach:       nil,
+		Job:          nil,
+		Disable:      nil,
+		Calls:        nil,
+		StoreRaw:     nil,
+		SettingRaw:   nil,
+		Checker:      r.checker,
+		States:       r.states,
+		Outputs:      r.outputs,
+		SaveOutputs:  r.saveOutputs,
+		DeleteUnit:   r.deleteUnit,
+		DeleteOnRead: r.deleteOnRead,
+		Namespace:    r.namespace,
+		Unit:         r.unit,
+		SaveState:    r.saveState,
+		Grant:        r.grant,
+		Audited:      r.audited,
 	}
 }
 
@@ -536,4 +548,138 @@ func TestOutputShareChecker(t *testing.T) {
 			})
 		})
 	}
+}
+
+// readRace runs a hook before the n-th read of a state through the wrapped
+// stores, once, so that a test can delete a unit between the lookup of the
+// unit and that read.
+type readRace struct {
+	mu    sync.Mutex
+	armed bool
+	left  int
+	fired bool
+	hook  func()
+}
+
+// arm sets hook to run before the read-th read from now.
+func (c *readRace) arm(read int, hook func()) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	c.armed, c.left, c.fired, c.hook = true, read, false, hook
+}
+
+// disarm stops the hook and reports whether it ran.
+func (c *readRace) disarm() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	c.armed = false
+
+	return c.fired
+}
+
+// read counts one read of a state, and runs the hook when it is the armed one.
+func (c *readRace) read() {
+	c.mu.Lock()
+
+	if !c.armed {
+		c.mu.Unlock()
+
+		return
+	}
+
+	c.left--
+	if c.left > 0 {
+		c.mu.Unlock()
+
+		return
+	}
+
+	hook := c.hook
+	c.armed, c.fired = false, true
+	c.mu.Unlock()
+
+	hook()
+}
+
+// raceUpdates counts the reads of an update.
+type raceUpdates struct {
+	stack.UpdateStore
+
+	race *readRace
+}
+
+// GetUpdate implements stack.UpdateStore.
+func (u raceUpdates) GetUpdate(ctx context.Context, ref stack.Ref, id stack.UpdateID) (stack.Update, error) {
+	u.race.read()
+
+	v, err := u.UpdateStore.GetUpdate(ctx, ref, id)
+	if err != nil {
+		return stack.Update{}, fmt.Errorf("read a state: %w", err)
+	}
+
+	return v, nil
+}
+
+// raceCheckpoints counts the reads of a checkpoint.
+type raceCheckpoints struct {
+	stack.CheckpointStore
+
+	race *readRace
+}
+
+// LatestCheckpoint implements stack.CheckpointStore.
+func (c raceCheckpoints) LatestCheckpoint(ctx context.Context, ref stack.Ref) (stack.Checkpoint, error) {
+	c.race.read()
+
+	v, err := c.CheckpointStore.LatestCheckpoint(ctx, ref)
+	if err != nil {
+		return stack.Checkpoint{}, fmt.Errorf("read a state: %w", err)
+	}
+
+	return v, nil
+}
+
+// CheckpointByVersion implements stack.CheckpointStore.
+func (c raceCheckpoints) CheckpointByVersion(
+	ctx context.Context, ref stack.Ref, version int64,
+) (stack.Checkpoint, error) {
+	c.race.read()
+
+	v, err := c.CheckpointStore.CheckpointByVersion(ctx, ref, version)
+	if err != nil {
+		return stack.Checkpoint{}, fmt.Errorf("read a state: %w", err)
+	}
+
+	return v, nil
+}
+
+// raceStates counts the reads of the current state of a workspace.
+type raceStates struct {
+	workspace.StateStore
+
+	race *readRace
+}
+
+// CurrentStateVersion implements workspace.StateStore.
+func (s raceStates) CurrentStateVersion(ctx context.Context, id workspace.ID) (workspace.StateVersion, error) {
+	s.race.read()
+
+	v, err := s.StateStore.CurrentStateVersion(ctx, id)
+	if err != nil {
+		return workspace.StateVersion{}, fmt.Errorf("read a state: %w", err)
+	}
+
+	return v, nil
+}
+
+// deleteOnRead arms the stores so that the read-th read of a state first
+// deletes the unit.
+func (r *outputShareRig) deleteOnRead(t *testing.T, unit outputshare.Placement, read int) func() bool {
+	t.Helper()
+
+	r.race.arm(read, func() { r.deleteUnit(t, unit) })
+
+	return r.race.disarm
 }
