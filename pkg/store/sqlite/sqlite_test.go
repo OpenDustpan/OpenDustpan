@@ -1631,6 +1631,12 @@ func TestRevocationConformance(t *testing.T) {
 	})
 }
 
+// errNoMarker reports a marker that the live marker suite hook does not know.
+var errNoMarker = errors.New("no such marker")
+
+// errMarkerRows reports a marker write that did not change exactly one row.
+var errMarkerRows = errors.New("marker write did not change one row")
+
 // liveMarkerStore adds to the store the hook of the live marker suite: a
 // write of a marker value that the ports never write.
 type liveMarkerStore struct {
@@ -1651,7 +1657,7 @@ func (s *liveMarkerStore) SetMarker(ctx context.Context, table, column, id strin
 
 	statement, ok := statements[table+"/"+column]
 	if !ok {
-		return fmt.Errorf("no marker %s.%s", table, column)
+		return fmt.Errorf("%s.%s: %w", table, column, errNoMarker)
 	}
 
 	raw, err := openRawDB(s.path)
@@ -1670,8 +1676,13 @@ func (s *liveMarkerStore) SetMarker(ctx context.Context, table, column, id strin
 		return fmt.Errorf("set the marker: %w", err)
 	}
 
-	if n, rowsErr := res.RowsAffected(); rowsErr != nil || n != 1 {
-		return fmt.Errorf("set the marker: %d rows changed, err = %w", n, rowsErr)
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("count the changed rows: %w", err)
+	}
+
+	if n != 1 {
+		return fmt.Errorf("set the marker: %d rows changed: %w", n, errMarkerRows)
 	}
 
 	return nil

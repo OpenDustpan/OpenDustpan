@@ -2206,6 +2206,12 @@ func TestRevocationConformance(t *testing.T) {
 	})
 }
 
+// errNoMarker reports a marker that the live marker suite hook does not know.
+var errNoMarker = errors.New("no such marker")
+
+// errMarkerRows reports a marker write that did not change exactly one row.
+var errMarkerRows = errors.New("marker write did not change one row")
+
 // liveMarkerStore adds to the store the hook of the live marker suite: a
 // write of a marker value that the ports never write.
 type liveMarkerStore struct {
@@ -2227,7 +2233,7 @@ func (s *liveMarkerStore) SetMarker(ctx context.Context, table, column, id strin
 
 	statement, ok := statements[table+"/"+column]
 	if !ok {
-		return fmt.Errorf("no marker %s.%s", table, column)
+		return fmt.Errorf("%s.%s: %w", table, column, errNoMarker)
 	}
 
 	conn, err := pgx.Connect(ctx, s.url)
@@ -2247,7 +2253,7 @@ func (s *liveMarkerStore) SetMarker(ctx context.Context, table, column, id strin
 	}
 
 	if tag.RowsAffected() != 1 {
-		return fmt.Errorf("set the marker: %d rows changed", tag.RowsAffected())
+		return fmt.Errorf("set the marker: %d rows changed: %w", tag.RowsAffected(), errMarkerRows)
 	}
 
 	return nil
