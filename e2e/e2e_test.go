@@ -3048,6 +3048,11 @@ func pulumiSetupSteps(env *e2e.Env, org, qualified, stackPath string) []e2e.Step
 		step("stack show-name", contains(stackName), "stack", "--show-name"),
 		step("stack tag set", nil, "stack", "tag", "set", "team", "e2e"),
 		step("stack tag ls", tagListed("team", "e2e"), "stack", "tag", "ls"),
+		// The tag filter of stack ls goes to the server as tagName and tagValue.
+		step("stack ls by tag", stackListed, "stack", "ls", "--json", "--all", "--tag", "team=e2e"),
+		step("stack ls by tag name", stackListed, "stack", "ls", "--json", "--all", "--tag", "team"),
+		step("stack ls by a tag that no stack has", noStackListed,
+			"stack", "ls", "--json", "--all", "--tag", "team=e2e-no-such-value"),
 		// The service backend encrypts secrets on the server, per stack.
 		// The list command hides secret values unless asked to show them,
 		// while config get prints the plaintext by design.
@@ -3348,6 +3353,23 @@ func stackListed(r e2e.Result) error {
 	}
 
 	return fmt.Errorf("%w: stack %q not listed: %s", errUnexpected, stackName, r.Stdout)
+}
+
+// noStackListed fails when stack ls --json lists any stack.
+func noStackListed(r e2e.Result) error {
+	var stacks []struct {
+		Name string `json:"name"`
+	}
+
+	if err := json.Unmarshal([]byte(r.Stdout), &stacks); err != nil {
+		return fmt.Errorf("%w: decode stack list: %w", errUnexpected, err)
+	}
+
+	if len(stacks) != 0 {
+		return fmt.Errorf("%w: stack ls listed %d stacks, want none: %s", errUnexpected, len(stacks), r.Stdout)
+	}
+
+	return nil
 }
 
 // historyHidesPreviews fails when the stack history holds any update: a

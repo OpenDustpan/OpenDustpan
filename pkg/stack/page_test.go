@@ -29,30 +29,30 @@ func TestPageRanges(t *testing.T) {
 		want []stack.NamespaceRange
 	}{
 		{
-			name: "the first page", q: stack.PageQuery{After: nil, Project: "", Namespaces: all, Limit: 1},
+			name: "the first page", q: stack.PageQuery{After: nil, Project: "", Tag: nil, Namespaces: all, Limit: 1},
 			want: []stack.NamespaceRange{in("a", "", ""), in("b", "", ""), in("c", "", "")},
 		},
 		{
-			name: "after the cursor", q: stack.PageQuery{After: after, Project: "", Namespaces: all, Limit: 1},
+			name: "after the cursor", q: stack.PageQuery{After: after, Project: "", Tag: nil, Namespaces: all, Limit: 1},
 			want: []stack.NamespaceRange{in("b", "web", "prod"), in("c", "", "")},
 		},
 		{
 			name: "after the cursor in the project",
-			q:    stack.PageQuery{After: after, Project: "web", Namespaces: all, Limit: 1},
+			q:    stack.PageQuery{After: after, Project: "web", Tag: nil, Namespaces: all, Limit: 1},
 			want: []stack.NamespaceRange{in("b", "", "prod"), in("c", "", "")},
 		},
 		{
 			name: "a cursor before the project",
-			q:    stack.PageQuery{After: after, Project: "zed", Namespaces: all, Limit: 1},
+			q:    stack.PageQuery{After: after, Project: "zed", Tag: nil, Namespaces: all, Limit: 1},
 			want: []stack.NamespaceRange{in("b", "", ""), in("c", "", "")},
 		},
 		{
 			name: "a cursor after the project",
-			q:    stack.PageQuery{After: after, Project: "api", Namespaces: all, Limit: 1},
+			q:    stack.PageQuery{After: after, Project: "api", Tag: nil, Namespaces: all, Limit: 1},
 			want: []stack.NamespaceRange{in("c", "", "")},
 		},
 		{
-			name: "no namespace", q: stack.PageQuery{After: nil, Project: "", Namespaces: nil, Limit: 1},
+			name: "no namespace", q: stack.PageQuery{After: nil, Project: "", Tag: nil, Namespaces: nil, Limit: 1},
 			want: []stack.NamespaceRange{},
 		},
 	}
@@ -99,24 +99,61 @@ func TestPageStacks(t *testing.T) {
 		want []string
 	}{
 		{
-			q:    stack.PageQuery{After: nil, Project: "", Namespaces: []namespace.Name{"a", "b"}, Limit: 3},
+			q:    stack.PageQuery{After: nil, Project: "", Tag: nil, Namespaces: []namespace.Name{"a", "b"}, Limit: 3},
 			want: []string{"a/api/dev", "a/web/prod", "b/api/prod"},
 		},
 		{
-			q:    stack.PageQuery{After: after, Project: "", Namespaces: []namespace.Name{"a", "b", "c"}, Limit: 10},
+			q:    stack.PageQuery{After: after, Project: "", Tag: nil, Namespaces: []namespace.Name{"a", "b", "c"}, Limit: 10},
 			want: []string{"b/api/prod", "b/web/prod", "c/web/dev"},
 		},
 		{
-			q:    stack.PageQuery{After: nil, Project: "web", Namespaces: []namespace.Name{"c", "a"}, Limit: 10},
+			q:    stack.PageQuery{After: nil, Project: "web", Tag: nil, Namespaces: []namespace.Name{"c", "a"}, Limit: 10},
 			want: []string{"a/web/prod", "c/web/dev"},
 		},
 		{
-			q:    stack.PageQuery{After: nil, Project: "", Namespaces: []namespace.Name{"a"}, Limit: 0},
+			q:    stack.PageQuery{After: nil, Project: "", Tag: nil, Namespaces: []namespace.Name{"a"}, Limit: 0},
 			want: []string{"a/api/dev"},
 		},
 	} {
 		if got := keys(stack.PageStacks(all, tc.q)); !reflect.DeepEqual(got, tc.want) {
 			t.Fatalf("PageStacks(%+v) = %v, want %v", tc.q, got, tc.want)
+		}
+	}
+}
+
+// TestTagFilterMatches proves that a tag filter keeps a stack with the tag of
+// its name, with any value or with its value, and that a nil filter keeps
+// every stack.
+func TestTagFilterMatches(t *testing.T) {
+	t.Parallel()
+
+	blue := map[string]string{"team": "blue"}
+	empty := map[string]string{"team": ""}
+
+	anyValue := func(name string) *stack.TagFilter {
+		return &stack.TagFilter{Name: name, Value: "", HasValue: false}
+	}
+
+	withValue := func(name, value string) *stack.TagFilter {
+		return &stack.TagFilter{Name: name, Value: value, HasValue: true}
+	}
+
+	for _, tc := range []struct {
+		name   string
+		filter *stack.TagFilter
+		tags   map[string]string
+		want   bool
+	}{
+		{name: "no filter", filter: nil, tags: map[string]string{}, want: true},
+		{name: "a name with any value", filter: anyValue("team"), tags: blue, want: true},
+		{name: "a name and its value", filter: withValue("team", "blue"), tags: blue, want: true},
+		{name: "another value", filter: withValue("team", "red"), tags: blue, want: false},
+		{name: "an empty value", filter: withValue("team", ""), tags: empty, want: true},
+		{name: "an empty value is a value", filter: withValue("team", ""), tags: blue, want: false},
+		{name: "no such tag", filter: anyValue("owner"), tags: blue, want: false},
+	} {
+		if got := tc.filter.Matches(tc.tags); got != tc.want {
+			t.Errorf("%s: Matches(%v) = %v, want %v", tc.name, tc.tags, got, tc.want)
 		}
 	}
 }

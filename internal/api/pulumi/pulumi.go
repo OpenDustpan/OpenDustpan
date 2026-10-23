@@ -492,7 +492,7 @@ func (h *Handler) listStacksIn(
 	}
 
 	h.serveStackPage(ctx, w, r, stackListQuery{
-		organization: ns.String(), project: project, namespaces: []namespace.Name{ns},
+		organization: ns.String(), project: project, tag: nil, namespaces: []namespace.Name{ns},
 	})
 }
 
@@ -525,7 +525,7 @@ func (h *Handler) listStacksAll(
 		readable = append(readable, all[i].Name)
 	}
 
-	h.serveStackPage(ctx, w, r, stackListQuery{organization: "", project: project, namespaces: readable})
+	h.serveStackPage(ctx, w, r, stackListQuery{organization: "", project: project, tag: nil, namespaces: readable})
 }
 
 // summarize converts stacks to the wire shape, never returning nil.
@@ -986,7 +986,8 @@ func classify(err error) (int, string) {
 	switch {
 	case errors.Is(err, errInvalidBody):
 		return http.StatusBadRequest, invalidBodyMessage
-	case errors.Is(err, errRevealPathTooLong), errors.Is(err, errContinuationToken):
+	case errors.Is(err, errRevealPathTooLong), errors.Is(err, errContinuationToken),
+		errors.Is(err, errStackTagFilter):
 		return http.StatusBadRequest, err.Error()
 	case errors.Is(err, namespace.ErrInvalidName), errors.Is(err, stack.ErrInvalidName),
 		errors.Is(err, identity.ErrInvalidObject), errors.Is(err, stack.ErrInvalidUpdate):
