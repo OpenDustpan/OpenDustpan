@@ -2,6 +2,7 @@ package conformance
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"strings"
 )
@@ -12,13 +13,14 @@ const mediaJSON = "application/json"
 
 func errorCases() map[string]caseFunc {
 	return map[string]caseFunc{
-		"errors/error-shape-is-decoded":                             errorShapeIsDecoded,
-		"errors/forbidden-error-is-decoded":                         forbiddenIsDecoded,
-		"errors/response-with-wrong-type-is-rejected":               wrongTypeIsRejected,
-		"errors/response-without-required-field-is-rejected":        missingFieldIsRejected,
-		"errors/response-with-null-required-is-rejected":            nullRequiredIsRejected,
-		"errors/error-body-that-is-not-json":                        errorBodyNotJSON,
-		"errors/success-status-outside-the-description-is-rejected": undescribedSuccessStatus,
+		"errors/error-shape-is-decoded":                                errorShapeIsDecoded,
+		"errors/forbidden-error-is-decoded":                            forbiddenIsDecoded,
+		"errors/response-with-wrong-type-is-rejected":                  wrongTypeIsRejected,
+		"errors/response-without-required-field-is-rejected":           missingFieldIsRejected,
+		"errors/response-with-null-required-is-rejected":               nullRequiredIsRejected,
+		"errors/error-body-that-is-not-json":                           errorBodyNotJSON,
+		"errors/success-status-outside-the-description-is-rejected":    undescribedSuccessStatus,
+		"errors/two-success-statuses-are-accepted-and-others-rejected": twoSuccessStatuses,
 	}
 }
 
@@ -134,6 +136,89 @@ func errorBodyNotJSON(ctx context.Context, env Env) error {
 	e := res.Error
 	if e == nil || e.Code != http.StatusBadGateway || e.Transport || !strings.Contains(e.Message, "bad gateway") {
 		return failf("want a 502 server error with the text, got %+v", e)
+	}
+
+	return nil
+}
+
+// gitHostAppAnswer is a valid answer of putGitHostApp.
+const gitHostAppAnswer = `{"kind": "github", "appID": "1", "apiAddress": "https://api.github.com", "hookID": "2",
+	"privateKey": {"setID": "a", "createdAt": "2026-10-22T19:20:44Z", "set": true},
+	"eventSecret": {"setID": "b", "createdAt": "2026-10-22T19:20:44Z", "set": true},
+	"createdAt": "2026-10-22T19:20:44Z", "updatedAt": "2026-10-22T19:20:44Z", "version": 1}`
+
+// gitHostAppRequest is a valid request body of putGitHostApp.
+const gitHostAppRequest = `{"appID": "1", "apiAddress": "https://api.github.com", "privateKey": "k", "eventSecret": "s"}`
+
+// putAppCall makes the call of putGitHostApp.
+func putAppCall() CallParams {
+	p := callOf(opPutApp, map[string]string{"kind": "github"})
+	p.Body = json.RawMessage(gitHostAppRequest)
+
+	return p
+}
+
+// injectedPut makes the proxy answer the next putGitHostApp call with a status
+// and a body, calls the operation, and returns the result.
+func injectedPut(ctx context.Context, env Env, status int, body string) (CallResult, error) {
+	f := faultOf(FaultStatus, opPutApp)
+	f.Status, f.ContentType, f.Body = status, mediaJSON, []byte(body)
+	env.Proxy.Inject(f)
+
+	return env.Adapter.Call(ctx, putAppCall())
+}
+
+// twoSuccessStatuses checks an operation that the description answers with
+// two success statuses. putGitHostApp answers 201 for a first write and 200
+// for a replacement, so the client must accept both with their body, and must
+// refuse every other 2xx status, also one that holds the true body. The proxy
+// answers in place of the server, so the case needs no Git host.
+func twoSuccessStatuses(ctx context.Context, env Env) error {
+	if err := need(env, opPutApp); err != nil {
+		return err
+	}
+
+	for _, status := range []int{http.StatusOK, http.StatusCreated} {
+		res, err := injectedPut(ctx, env, status, gitHostAppAnswer)
+		if err != nil {
+			return err
+		}
+
+		if res.Error != nil || res.Status != status || !sameJSON(res.Body, []byte(gitHostAppAnswer)) {
+			return failf("want the accepted status %d with the body, got %+v", status, res)
+		}
+	}
+
+	others := []int{
+		http.StatusAccepted, http.StatusNonAuthoritativeInfo, http.StatusNoContent, http.StatusResetContent,
+		http.StatusPartialContent, 299,
+	}
+
+	for _, status := range others {
+		if err := refusedPut(ctx, env, status); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// refusedPut answers putGitHostApp with a 2xx status that the description does
+// not give, and checks that the client refuses it. The answer holds the true
+// body, except for a status that has no body, so that only the status is wrong.
+func refusedPut(ctx context.Context, env Env, status int) error {
+	body := gitHostAppAnswer
+	if status == http.StatusNoContent || status == http.StatusResetContent {
+		body = ""
+	}
+
+	res, err := injectedPut(ctx, env, status, body)
+	if err != nil {
+		return err
+	}
+
+	if res.Error == nil || !res.Error.Invalid || res.Body != nil {
+		return failf("want an invalid-answer error and no body for status %d, got %+v", status, res)
 	}
 
 	return nil

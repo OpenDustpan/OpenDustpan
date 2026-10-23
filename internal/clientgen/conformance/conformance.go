@@ -374,6 +374,7 @@ func Cases() []Case {
 		{Group: GroupErrors, Name: "error-without-error-code", Run: nil},
 		{Group: GroupErrors, Name: "error-body-that-is-not-json", Run: nil},
 		{Group: GroupErrors, Name: "success-status-outside-the-description-is-rejected", Run: nil},
+		{Group: GroupErrors, Name: "two-success-statuses-are-accepted-and-others-rejected", Run: nil},
 		{Group: GroupErrors, Name: "transport-error-is-not-a-server-error", Run: nil},
 		{Group: GroupPagination, Name: "list-follows-next-page-token", Run: nil},
 		{Group: GroupPagination, Name: "empty-next-page-token-ends-the-list", Run: nil},

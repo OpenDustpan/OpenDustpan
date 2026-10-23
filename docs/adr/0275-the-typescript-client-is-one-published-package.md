@@ -31,7 +31,7 @@ The description also has two weak points that the console design found:
 
 ## Decision
 
-Owner decisions:
+Decisions 1 to 6 and 8 are owner decisions. Decision 7 has a mark.
 
 1. **TypeScript is second, after Go and before Python.** This amends
    decision O6. The order of the template sets is Go, TypeScript, Python, and
@@ -73,14 +73,10 @@ Owner decisions:
    operation.** The key of a success answer in `responses` is a status code,
    for example `200`, `201`, `202` or `204`. The description never has the key
    `2XX` or another range.
-8. **`info.version` changes with every change of the description.** A test
-   enforces this. The change that adds the test is a separate change.
-
-PM decision, taken on the owner's behalf:
-
 7. **A route that creates an object on a first write and replaces it later
-   keeps both codes.** `putGitHostApp` and `putGitHostInstallation` answer 201
-   for a first write and 200 for a replacement. The API does not change.
+   keeps both codes (PM decision, taken on the owner's behalf).**
+   `putGitHostApp` and `putGitHostInstallation` answer 201 for a first write
+   and 200 for a replacement. The API does not change.
    RFC 9110 section 9.3.4 says that a PUT that creates a representation must
    answer 201, so the API keeps 201. The description has the keys `200` and
    `201` for these two operations. The success statuses of an operation are a
@@ -88,6 +84,8 @@ PM decision, taken on the owner's behalf:
    generator accept exactly that set, so that a generated client refuses a 202
    or a 204 from these routes. Decision 6 holds for these two operations: the
    description names each code that they answer.
+8. **`info.version` changes with every change of the description.** A test
+   enforces this. The change that adds the test is a separate change.
 
 ## Consequences
 
@@ -109,9 +107,10 @@ PM decision, taken on the owner's behalf:
   only. It returns an invalid-response error for any other 2xx status.
 - The description changes, so `info.version` is `0.3.0`. The major and minor
   parts of the client version follow it, so the Go client is `0.3.x`.
-- The TypeScript template set, the program `cmd/clientgen` and the publish
-  workflow are later changes. Each one has its own gates. The Python template
-  set waits for them.
+- The TypeScript template set is `internal/clientgen/typescript`, and the
+  program is `cmd/clientgen`. The checked-in package is `clients/typescript`,
+  and a check fails when it differs from a fresh run. The publish workflow is
+  a later change. It has its own gates. The Python template set waits for it.
 - RFC 99 is not edited. This ADR is the record of the changes to O6, O7 and
   A3.
 - A change of a template is a change in this repository, a package release,

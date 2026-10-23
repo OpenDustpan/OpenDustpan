@@ -26,6 +26,7 @@ const (
 	opGetProfile   = "getProfile"
 	opCreate       = "createProfile"
 	opRevise       = "createProfileRevision"
+	opPutApp       = "putGitHostApp"
 )
 
 // pathNamespace is the name of the namespace parameter in the paths.
@@ -308,16 +309,29 @@ type fixture struct {
 	// operation is compared like that, because the server answers a signed-in
 	// caller with more members.
 	anonymous bool
+	// injected is an answer that the proxy gives in place of the server, for an
+	// operation that the dev server cannot answer, for example one that needs
+	// a Git host. The client must still send the request and check the answer.
+	injected *Fault
 }
 
 // answerFixture expects an answer, and compares its body with a direct read.
 func answerFixture(params CallParams, status int, compare string) fixture {
-	return fixture{params: params, status: status, errorCode: "", compare: compare, anonymous: false}
+	return fixture{params: params, status: status, errorCode: "", compare: compare, anonymous: false, injected: nil}
 }
 
 // errorFixture expects an error answer.
 func errorFixture(params CallParams, status int, errorCode string) fixture {
-	return fixture{params: params, status: status, errorCode: errorCode, compare: "", anonymous: false}
+	return fixture{params: params, status: status, errorCode: errorCode, compare: "", anonymous: false, injected: nil}
+}
+
+// injectedFixture expects the answer that the proxy gives in place of the
+// server.
+func injectedFixture(params CallParams, status int, body string) fixture {
+	f := faultOf(FaultStatus, params.Operation)
+	f.Status, f.ContentType, f.Body = status, mediaJSON, []byte(body)
+
+	return fixture{params: params, status: status, errorCode: "", compare: "", anonymous: false, injected: &f}
 }
 
 // fixtures returns the call of each operation that the suite knows.
@@ -341,11 +355,17 @@ func fixtures(ctx context.Context, env Env) (map[string]fixture, error) {
 		),
 		opCreate: answerFixture(createCall(env, ""), 0, ""),
 		opRevise: answerFixture(reviseCall(env, etag), 0, ""),
+		// The dev server has no Git host, so the proxy answers in its place.
+		opPutApp: injectedFixture(putAppCall(), http.StatusCreated, gitHostAppAnswer),
 	}, nil
 }
 
 // checkFixture runs one fixture.
 func checkFixture(ctx context.Context, env Env, op string, fx fixture) error {
+	if fx.injected != nil {
+		env.Proxy.Inject(*fx.injected)
+	}
+
 	res, err := env.Adapter.Call(ctx, fx.params)
 	if err != nil {
 		return fmt.Errorf("%s: %w", op, err)
