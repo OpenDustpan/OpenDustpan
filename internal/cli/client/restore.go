@@ -137,6 +137,9 @@ type RestoreStatusResponse struct {
 // of a dev installation.
 const devBackupKind = "dev"
 
+// stateSucceeded is the state of a backup or a restore row that ended well.
+const stateSucceeded = "succeeded"
+
 // devBackupNotice is what the command prints before it starts a restore of a
 // backup of a dev installation. The server decides: it refuses the restore
 // unless it started with the setting that allows it.
@@ -206,7 +209,7 @@ func RestoreCommand(ctx context.Context, args []string, stdout, stderr io.Writer
 		return err
 	}
 
-	if doc.State != "succeeded" {
+	if doc.State != stateSucceeded {
 		return fmt.Errorf(
 			"%w %s: %s: %s",
 			ErrRestoreFailed,
@@ -564,7 +567,8 @@ func restoreFailureHelp(doc RestoreStatusResponse, f restoreFlags, server, id st
 }
 
 // writeRestoreReport prints the ID, the state, the backup taken before it
-// and, when the manifest is present, the SQL size. A check-only restore
+// and, when the manifest is present, the SQL size. A check-only restore that
+// succeeded (a failed one ends with its error line, not with this line)
 // prints that it changed nothing, so the operator knows the live data is
 // untouched.
 //
@@ -585,7 +589,7 @@ func writeRestoreReport(stdout io.Writer, doc RestoreStatusResponse, checkOnly b
 		}
 	}
 
-	if checkOnly {
+	if checkOnly && doc.State == stateSucceeded {
 		if _, err := fmt.Fprintln(stdout, "check only: no data changed"); err != nil {
 			return fmt.Errorf("write output: %w", err)
 		}
