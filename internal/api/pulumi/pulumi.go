@@ -1049,7 +1049,7 @@ func classifyUpdate(err error) (int, string) {
 	case errors.Is(err, stack.ErrUpdateConflict):
 		// The sentence of the sentinel and the command that ends a stuck
 		// update. The context of the wrap names the refused update, not the
-		// one that holds the stack, so it stays in the log.
+		// one that holds the stack, so it is not sent to the caller.
 		return http.StatusConflict, updateConflictMessage
 	case errors.Is(err, stack.ErrWrongUpdateState),
 		errors.Is(err, stack.ErrConcurrentModification), errors.Is(err, stack.ErrInvalidDelta),
