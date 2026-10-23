@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/pkg/stack"
 )
 
@@ -19,7 +20,8 @@ func TestWriteErrorUpdateConflictNamesTheCommand(t *testing.T) {
 
 	const want = "another update of this stack is in progress: wait for it to end, or run pulumi cancel"
 
-	body := fmt.Sprintf("{\"message\":%q,\"code\":%d}\n", want, http.StatusConflict)
+	body := fmt.Sprintf("{\"message\":%q,\"code\":%d,\"errorCode\":%q}\n", want, http.StatusConflict,
+		errcode.UpdateConflict)
 
 	for _, err := range []error{
 		stack.ErrUpdateConflict,
@@ -48,7 +50,8 @@ func TestWriteErrorUpdateConflictNamesTheActiveUpdate(t *testing.T) {
 	const want = "another update of this stack is in progress (update u-active): " +
 		"wait for it to end, or run pulumi cancel"
 
-	body := fmt.Sprintf("{\"message\":%q,\"code\":%d}\n", want, http.StatusConflict)
+	body := fmt.Sprintf("{\"message\":%q,\"code\":%d,\"errorCode\":%q}\n", want, http.StatusConflict,
+		errcode.UpdateConflict)
 	conflict := &stack.UpdateConflictError{Active: "u-active"}
 
 	for _, err := range []error{
