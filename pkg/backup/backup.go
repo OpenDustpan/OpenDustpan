@@ -165,6 +165,7 @@ var Tables = []string{
 	"notification_sinks",
 	"notification_sink_secrets",
 	"notification_sink_refs",
+	"triggers",
 	"item_keys",
 }
 

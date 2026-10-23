@@ -112,6 +112,24 @@ persons and services.
   `server:manage-access` on the installation. The access-review export of
   such a principal lists the holders of `namespace:manage-principal-tokens`
   on its namespace.
+- **Each namespace has a namespace service principal.** The server uses it
+  to start a plan job when no person starts the job, for example for a run
+  trigger. Its subject is `system:namespace-service:<namespace>`, and the
+  audit entries of such a start show that subject. It holds one action,
+  `unit:run-plan`, on the units of its own namespace, and no other action on
+  any other object. The server builds it in its own process and keeps no
+  record of it, so it is not in the principal list and has no grant row.
+  Nobody can act as it. It cannot sign in, and it has no token and no
+  session. No API call changes what it holds:
+  - The server refuses each principal that has a subject with the prefix
+    `system:namespace-service:`, in any case, with 400. This applies to a
+    sign-in through an identity provider too.
+  - The server gives no grant, no group membership and no token to a
+    principal record with such a subject.
+  - The authorizer decides on the subject, the server credential and the
+    namespace of the unit before it reads any grant. A caller with such a
+    subject and any other credential, or with the administrator flag, is
+    denied every action.
 - **Only a site administrator can change the sign-in settings.** The
   action `server:manage-sign-in` changes the session policy with
   `PATCH /api/server/session-policy`: the idle limit (15 minutes by

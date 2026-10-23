@@ -139,13 +139,8 @@ func (c *Checker) Authenticate(r *http.Request) (identity.Principal, Caller, err
 		return identity.Principal{}, none, fmt.Errorf("check session: %w", err)
 	}
 
-	if c.refuse && principal.IsDevSubject(m.Owner.Subject) {
-		if c.onRefused != nil {
-			c.onRefused(r.Context(), m.Owner.Subject)
-		}
-
-		return identity.Principal{}, none, fmt.Errorf("%w: a session of a dev person is not valid on this installation",
-			identity.ErrUnauthenticated)
+	if refuseErr := c.refuseOwner(r.Context(), m.Owner.Subject); refuseErr != nil {
+		return identity.Principal{}, none, refuseErr
 	}
 
 	p := identity.Principal{
@@ -171,6 +166,27 @@ func (c *Checker) Now() time.Time {
 	}
 
 	return time.Now().UTC()
+}
+
+// refuseOwner returns identity.ErrUnauthenticated, wrapped, for the owner of a
+// session that no session can act as. A dev person is refused when the Checker
+// has the option RefuseDevSubjects. The namespace service principal is refused
+// for each kind of installation: the sign-in refuses its subject too.
+func (c *Checker) refuseOwner(ctx context.Context, subject string) error {
+	if c.refuse && principal.IsDevSubject(subject) {
+		if c.onRefused != nil {
+			c.onRefused(ctx, subject)
+		}
+
+		return fmt.Errorf("%w: a session of a dev person is not valid on this installation",
+			identity.ErrUnauthenticated)
+	}
+
+	if identity.IsNamespaceServiceSubject(subject) {
+		return fmt.Errorf("%w: a session cannot act as the namespace service principal", identity.ErrUnauthenticated)
+	}
+
+	return nil
 }
 
 // sameSite reports whether a request with the session cookie may come from
