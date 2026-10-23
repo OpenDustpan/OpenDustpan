@@ -27,12 +27,18 @@ func (rateLimitedAuthenticator) AuthenticateToken(context.Context, string) (iden
 // failingAuthorizer fails with an error that is not a denial.
 type failingAuthorizer struct{}
 
+// errPolicyStore and errRegistryStore are the failures of the test doubles.
+var (
+	errPolicyStore   = errors.New("policy store unavailable")
+	errRegistryStore = errors.New("registry database unavailable")
+)
+
 func (failingAuthorizer) Authorize(context.Context, identity.Principal, identity.Action, identity.Object) error {
-	return errors.New("policy store unavailable")
+	return errPolicyStore
 }
 
 func (failingAuthorizer) ListObjects(context.Context, identity.Principal, identity.Action) (identity.Scope, error) {
-	return identity.Scope{}, errors.New("policy store unavailable")
+	return identity.Scope{}, errPolicyStore
 }
 
 // failingRegistry fails every release listing with an error that is not a
@@ -42,10 +48,10 @@ type failingRegistry struct {
 }
 
 func (failingRegistry) ServableReleases(context.Context, namespace.Name, string) ([]registry.Release, error) {
-	return nil, errors.New("registry database unavailable")
+	return nil, errRegistryStore
 }
 
-var _ tfe.RegistryService = failingRegistry{}
+var _ tfe.RegistryService = failingRegistry{fakeRegistry: nil}
 
 // The texts of the errors member that the registry answers carry.
 const (
@@ -70,11 +76,10 @@ func TestRegistryErrorCodes(t *testing.T) {
 	open := newRegistryFixture(t, registryHost, allowAll())
 	denied := newRegistryFixture(t, registryHost, stubAuthorizer{})
 
-	reg := newFakeRegistry()
-	limited := buildRegistryFixture(t, registryHost, rateLimitedAuthenticator{}, allowAll(), reg, reg)
-	broken := buildRegistryFixture(t, registryHost, tokenAuthenticator{}, failingAuthorizer{}, reg, reg)
-	unavailable := buildRegistryFixture(t, registryHost, tokenAuthenticator{}, allowAll(), reg,
-		failingRegistry{fakeRegistry: reg})
+	limited := buildRegistryFixture(t, registryHost, rateLimitedAuthenticator{}, allowAll(), nil)
+	broken := buildRegistryFixture(t, registryHost, tokenAuthenticator{}, failingAuthorizer{}, nil)
+	unavailable := buildRegistryFixture(t, registryHost, tokenAuthenticator{}, allowAll(),
+		failingRegistry{fakeRegistry: newFakeRegistry()})
 
 	cases := []struct {
 		name   string
