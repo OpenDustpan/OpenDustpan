@@ -45,7 +45,7 @@ func TestRefusedTofuRequestCreatesNoWorkspace(t *testing.T) {
 				lockNamespace(t, f)
 			}
 
-			status, body := tofuDo(t, f, tc.method, "/tofu/state/acme/se1"+tc.query, tc.body)
+			status, body := tofuDoPath(t, f, tc.method, "/tofu/state/acme/se1"+tc.query, tc.body)
 			if status != tc.wantStatus {
 				t.Fatalf("%s answers %d (%s), want %d", tc.method, status, body, tc.wantStatus)
 			}
@@ -79,7 +79,7 @@ func TestFirstTofuLockCreatesTheWorkspace(t *testing.T) {
 	f := newFixture(t)
 	f.createNamespace(t, "acme", region)
 
-	status, body := tofuDo(t, f, "LOCK", "/tofu/state/acme/se1", `{"ID":"z"}`)
+	status, body := tofuDoPath(t, f, "LOCK", "/tofu/state/acme/se1", `{"ID":"z"}`)
 	if status != http.StatusOK {
 		t.Fatalf("LOCK answers %d (%s), want 200", status, body)
 	}
@@ -95,9 +95,9 @@ func TestFirstTofuLockCreatesTheWorkspace(t *testing.T) {
 	}
 }
 
-// tofuDo sends one request to the OpenTofu HTTP backend routes with the
+// tofuDoPath sends one request to the OpenTofu HTTP backend routes with the
 // bearer token of the administrator, and returns the status and the body.
-func tofuDo(t *testing.T, f fixture, method, path, body string) (int, string) {
+func tofuDoPath(t *testing.T, f fixture, method, path, body string) (int, string) {
 	t.Helper()
 
 	req, err := http.NewRequestWithContext(t.Context(), method, f.server.URL+path, strings.NewReader(body))
