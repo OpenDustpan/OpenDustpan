@@ -1,1 +1,5 @@
+state-version.budget-too-small
 state-version.busy
+state-version.not-found
+state-version.resource-not-found
+state-version.too-large

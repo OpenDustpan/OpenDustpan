@@ -1,3 +1,8 @@
 workspace.already-exists
+workspace.changed-concurrently
 workspace.locked
+workspace.no-state
+workspace.no-state-at firstAt:time
 workspace.not-found
+workspace.pending-state-version
+workspace.too-many-pending
