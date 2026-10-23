@@ -1,0 +1,26 @@
+# The error paths of internal/api/notifications that answer without a code of the
+# catalog. This list only shrinks: give a path a code, remove its line and
+# lower the limit. A new error path never goes on this list.
+limit 22
+Handler.writeError: errorResponse{}
+badRequest: statusError{}
+classify: AsType[*idempotent.Error]
+classify: AsType[*statusError]
+classify: idempotency.ErrLost
+classifyAuth: default
+classifyAuth: identity.ErrRateLimited
+classifyAuth: identity.ErrUnauthenticated
+classifyNamespace: default
+classifyNamespace: maintenance.ErrInMaintenance
+classifyNamespace: namespace.ErrFenced
+classifyNamespace: namespace.ErrInvalidName
+classifyNamespace: namespace.ErrNotFound
+classifyNamespace: namespace.ErrNotHome
+classifySink: default
+classifySink: notify.ErrConflict
+classifySink: notify.ErrInvalid
+classifySink: notify.ErrNoURL
+classifySink: notify.ErrNotFound
+classifySink: sinks.ErrNoSender
+classifySink: sinks.ErrPlatformHost
+classifySink: sinks.ErrRateLimited
