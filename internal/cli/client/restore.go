@@ -212,7 +212,7 @@ func RestoreCommand(ctx context.Context, args []string, stdout, stderr io.Writer
 			ErrRestoreFailed,
 			started.ID,
 			restoreFailureText(doc),
-			restoreFailureHelp(doc, f.force, server, id),
+			restoreFailureHelp(doc, f, server, id),
 		)
 	}
 
@@ -567,8 +567,8 @@ func restoreFailureText(doc RestoreStatusResponse) string {
 // restoreFailureHelp answers the one command that helps after a failed
 // restore. A restore without --force that active work stopped gets the
 // --force command. Every other failure gets the same restore command again.
-func restoreFailureHelp(doc RestoreStatusResponse, force bool, server, id string) string {
-	if !force && strings.HasPrefix(strings.TrimSpace(doc.Error), restoreActiveWorkText) {
+func restoreFailureHelp(doc RestoreStatusResponse, f restoreFlags, server, id string) string {
+	if !f.force && strings.HasPrefix(strings.TrimSpace(doc.Error), restoreActiveWorkText) {
 		return fmt.Sprintf(restoreForceHelp, server, id)
 	}
 
