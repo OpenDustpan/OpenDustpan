@@ -1,0 +1,59 @@
+package server
+
+import (
+	"context"
+	"log/slog"
+	"net/http"
+
+	"opendustpan.org/opendustpan/internal/errcode"
+)
+
+// failure is the answer of an error: the HTTP status, a message that is safe
+// to show the caller, and the code of the catalog with its arguments. A
+// failure with an empty code answers without errorCode. Each classify
+// function returns a failure, and writeError writes it.
+type failure struct {
+	status  int
+	message string
+	code    string
+	args    []errcode.Value
+}
+
+// fail returns the failure of status and message with no code. A classify
+// function returns fail(0, "") with false for an error that it does not map.
+func fail(status int, message string) failure {
+	return failure{status: status, message: message, code: "", args: nil}
+}
+
+// failCoded returns the failure of status and message with code, a code of
+// the catalog, and the arguments that the code declares.
+func failCoded(status int, message, code string, args ...errcode.Value) failure {
+	return failure{status: status, message: message, code: code, args: args}
+}
+
+// answer returns the status, the message and the answer of f. When the
+// catalog refuses the code or the arguments of f, it logs the code and
+// returns 500 with server.internal: the adapter has a bug, not the request.
+// The log names the code and the error of the catalog, which hold no value of
+// an argument.
+func (h *Handler) answer(ctx context.Context, f failure) (int, string, errcode.Answer) {
+	a, err := errcode.New(f.code, f.args...)
+	if err != nil {
+		h.logger.ErrorContext(ctx, "error answer has no valid code",
+			slog.String("error_code", f.code), slog.String("error", err.Error()))
+
+		return http.StatusInternalServerError, "internal error", errcode.Internal()
+	}
+
+	return f.status, f.message, a
+}
+
+// writeAnswer writes the error body of status and message with the code and
+// the arguments of a.
+func (h *Handler) writeAnswer(
+	ctx context.Context, w http.ResponseWriter, status int, message string, a errcode.Answer,
+) {
+	h.writeJSON(ctx, w, status, codedResponse{
+		Message: message, Code: status, ErrorCode: a.Code(), ErrorArgs: a.Args(),
+	})
+}

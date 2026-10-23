@@ -143,9 +143,9 @@ func (h *Handler) writeEnterError(ctx context.Context, w http.ResponseWriter, er
 		return
 	}
 
-	status, message := classify(err)
+	f := classify(err)
 
-	h.writeJSON(ctx, w, status, enterRefusedResponse{Code: status, Message: message, Canceled: canceled})
+	h.writeJSON(ctx, w, f.status, enterRefusedResponse{Code: f.status, Message: f.message, Canceled: canceled})
 }
 
 // parseEnterRequest decodes the enter body: the whole body must be one JSON

@@ -452,11 +452,11 @@ func (h *Handler) writeError(ctx context.Context, w http.ResponseWriter, err err
 		return
 	}
 
-	status, message := classify(err)
-	if status == http.StatusInternalServerError {
+	f := classify(err)
+	if f.status == http.StatusInternalServerError {
 		// The log names the status only, never the error text: the text
 		// may hold driver detail, a token, or state (ADR 32 decision 7).
-		h.logger.ErrorContext(ctx, "request failed", slog.Int("status", status))
+		h.logger.ErrorContext(ctx, "request failed", slog.Int("status", f.status))
 	}
 
 	if errors.Is(err, maintenance.ErrInMaintenance) {
@@ -468,72 +468,53 @@ func (h *Handler) writeError(ctx context.Context, w http.ResponseWriter, err err
 	}
 
 	if fresh, ok := errors.AsType[reauthenticateError](err); ok {
-		h.writeJSON(ctx, w, status, reauthenticateResponse{
-			Code: status, Message: message, Reauthenticate: fresh.url, ErrorCode: freshStepRequiredCode,
+		h.writeJSON(ctx, w, f.status, reauthenticateResponse{
+			Code: f.status, Message: f.message, Reauthenticate: fresh.url, ErrorCode: freshStepRequiredCode,
 		})
 
 		return
 	}
 
-	if status == http.StatusForbidden {
-		if code := errcode.Forbidden(err); code != "" {
-			h.writeJSON(ctx, w, status, codedResponse{Code: status, Message: message, ErrorCode: code, ErrorArgs: nil})
-
-			return
-		}
+	if f.status == http.StatusForbidden && f.code == "" {
+		// A 403 that its classify function gives no code gets the code of
+		// its cause, at least access.denied for a missing permission.
+		f.code = errcode.Forbidden(err)
 	}
 
-	h.writeJSON(ctx, w, status, errorResponse{Code: status, Message: message})
+	if f.code == "" {
+		h.writeJSON(ctx, w, f.status, errorResponse{Code: f.status, Message: f.message})
+
+		return
+	}
+
+	status, message, answer := h.answer(ctx, f)
+	h.writeAnswer(ctx, w, status, message, answer)
 }
 
 // classifyIdentity maps the errors of the roles, the grants and the access
 // tokens.
-func classifyIdentity(err error) (int, string, bool) {
-	if status, message, ok := classifyAccess(err); ok {
-		return status, message, true
+func classifyIdentity(err error) (failure, bool) {
+	if f, ok := classifyAccess(err); ok {
+		return f, true
 	}
 
 	return classifyToken(err)
 }
 
-// classify maps domain errors to an HTTP status and a message safe to show
-// callers. Backup errors map in classifyBackup, namespace errors in
-// classifyNamespace and maintenance errors in classifyMaintenance.
-func classify(err error) (int, string) {
-	for _, try := range []func(error) (int, string, bool){
+// classify maps domain errors to their failure: an HTTP status, a message
+// safe to show callers, and the code of the catalog with its arguments. Backup
+// errors map in classifyBackup, namespace errors in classifyNamespace and
+// maintenance errors in classifyMaintenance. The order of the functions is
+// part of the contract: the first function that maps the error decides.
+func classify(err error) failure {
+	for _, try := range []func(error) (failure, bool){
 		classifyMaintenance, classifyNamespace, classifyBackup, classifyPrincipal, classifyIdentity, classifyWorker,
+		classifyIPAllowlist, classifyGateConfig, classifySessionPolicy, classifySignIn, classifyProviders,
+		classifyGitHost, classifyRequest,
 	} {
-		if status, message, ok := try(err); ok {
-			return status, message
+		if f, ok := try(err); ok {
+			return f
 		}
-	}
-
-	if status, message, ok := classifyIPAllowlist(err); ok {
-		return status, message
-	}
-
-	if status, message, ok := classifyGateConfig(err); ok {
-		return status, message
-	}
-
-	if status, message, ok := classifySessionPolicy(err); ok {
-		return status, message
-	}
-
-	if status, message, ok := classifySignIn(err); ok {
-		return status, message
-	}
-
-	if status, message, ok := classifyProviders(err); ok {
-		return status, message
-	}
-
-	if status, message, ok := classifyGitHost(err); ok {
-		return status, message
-	}
-
-	if status, message, ok := classifyRequest(err); ok {
-		return status, message
 	}
 
 	return classifyRegistry(err)
@@ -542,22 +523,22 @@ func classify(err error) (int, string) {
 // classifyRequest maps the caller errors to their status and message: a
 // missing credential answers 401, a denied action 403, and a bad object
 // reference or body 400.
-func classifyRequest(err error) (int, string, bool) {
+func classifyRequest(err error) (failure, bool) {
 	switch {
 	case errors.Is(err, identity.ErrUnauthenticated):
-		return http.StatusUnauthorized, "unauthenticated", true
+		return fail(http.StatusUnauthorized, "unauthenticated"), true
 	case errors.Is(err, identity.ErrDenied):
-		return http.StatusForbidden, "forbidden", true
+		return fail(http.StatusForbidden, "forbidden"), true
 	case errors.Is(err, identity.ErrInvalidObject):
-		return http.StatusBadRequest, err.Error(), true
+		return fail(http.StatusBadRequest, err.Error()), true
 	case errors.Is(err, errInvalidBody):
-		return http.StatusBadRequest, errInvalidBody.Error(), true
+		return fail(http.StatusBadRequest, errInvalidBody.Error()), true
 	case errors.Is(err, errOverrideSwitchesBody):
-		return http.StatusBadRequest, errOverrideSwitchesBody.Error(), true
+		return fail(http.StatusBadRequest, errOverrideSwitchesBody.Error()), true
 	case errors.Is(err, errCheckpointsOff):
-		return http.StatusConflict, errCheckpointsOff.Error(), true
+		return fail(http.StatusConflict, errCheckpointsOff.Error()), true
 	default:
-		return 0, "", false
+		return fail(0, ""), false
 	}
 }
 
@@ -565,22 +546,22 @@ func classifyRequest(err error) (int, string, bool) {
 // status and message. Registry and target failures may hold driver text, so
 // only the sentinel decides the status and the message. A missing backup
 // answers 404 and a second start 409.
-func classifyRegistry(err error) (int, string) {
+func classifyRegistry(err error) failure {
 	switch {
 	case errors.Is(err, backup.ErrAlreadyRunning):
-		return http.StatusConflict, "a backup is already running"
+		return fail(http.StatusConflict, "a backup is already running")
 	case errors.Is(err, backup.ErrRestoreRunning):
-		return http.StatusConflict, "a restore is already running"
+		return fail(http.StatusConflict, "a restore is already running")
 	case errors.Is(err, backup.ErrAlreadyExists):
-		return http.StatusConflict, "backup already exists"
+		return fail(http.StatusConflict, "backup already exists")
 	case errors.Is(err, backup.ErrRestoreExists):
-		return http.StatusConflict, "restore already exists"
+		return fail(http.StatusConflict, "restore already exists")
 	case errors.Is(err, backup.ErrNotFound):
-		return http.StatusNotFound, "backup not found"
+		return fail(http.StatusNotFound, "backup not found")
 	case errors.Is(err, backup.ErrRestoreNotFound):
-		return http.StatusNotFound, "restore not found"
+		return fail(http.StatusNotFound, "restore not found")
 	default:
-		return http.StatusInternalServerError, "internal error"
+		return failCoded(http.StatusInternalServerError, "internal error", errcode.ServerInternal)
 	}
 }
 
@@ -589,31 +570,31 @@ func classifyRegistry(err error) (int, string) {
 // sentinel decides the status and the message. A missing backup answers 404,
 // a second start 409, and a server with no backup target 503 that names the
 // setting.
-func classifyBackup(err error) (int, string, bool) {
+func classifyBackup(err error) (failure, bool) {
 	if text, ok := backup.RefusalText(err); ok {
 		// The refusal of a dev backup carries its own text, which names the
 		// setting that allows it. It holds no driver detail.
-		return http.StatusConflict, text, true
+		return fail(http.StatusConflict, text), true
 	}
 
 	switch {
 	case errors.Is(err, backup.ErrDevBackupRefused):
-		return http.StatusConflict, backup.ErrDevBackupRefused.Error(), true
+		return fail(http.StatusConflict, backup.ErrDevBackupRefused.Error()), true
 	case errors.Is(err, backup.ErrManifestKindInvalid):
-		return http.StatusConflict, backup.ErrManifestKindInvalid.Error(), true
+		return fail(http.StatusConflict, backup.ErrManifestKindInvalid.Error()), true
 	case errors.Is(err, backup.ErrAlreadyRunning):
-		return http.StatusConflict, "a backup is already running", true
+		return fail(http.StatusConflict, "a backup is already running"), true
 	case errors.Is(err, backup.ErrAlreadyExists):
-		return http.StatusConflict, "backup already exists", true
+		return fail(http.StatusConflict, "backup already exists"), true
 	case errors.Is(err, backup.ErrNotFound):
-		return http.StatusNotFound, "backup not found", true
+		return fail(http.StatusNotFound, "backup not found"), true
 	case errors.Is(err, backup.ErrInvalidID):
-		return http.StatusBadRequest, "invalid backup ID: use an ID that opendustpan backup printed", true
+		return fail(http.StatusBadRequest, "invalid backup ID: use an ID that opendustpan backup printed"), true
 	case errors.Is(err, errNoBackupTarget):
 		// No target is a setup problem of the server, not a bad request.
-		return http.StatusServiceUnavailable, errNoBackupTarget.Error() + ": set --backup-target", true
+		return fail(http.StatusServiceUnavailable, errNoBackupTarget.Error()+": set --backup-target"), true
 	default:
-		return 0, "", false
+		return fail(0, ""), false
 	}
 }
 
@@ -621,23 +602,23 @@ func classifyBackup(err error) (int, string, bool) {
 // bad namespace name, body, page or cursor answers 400, a duplicate
 // namespace or a fenced write 409, an unknown namespace 404, and a store without the paging
 // port 501.
-func classifyNamespace(err error) (int, string, bool) {
+func classifyNamespace(err error) (failure, bool) {
 	switch {
 	case errors.Is(err, namespace.ErrInvalidName), errors.Is(err, errInvalidNamespaceBody),
 		errors.Is(err, namespace.ErrInvalidPage), errors.Is(err, errNamespaceCursor):
-		return http.StatusBadRequest, err.Error(), true
+		return fail(http.StatusBadRequest, err.Error()), true
 	case errors.Is(err, namespace.ErrAlreadyExists):
-		return http.StatusConflict, err.Error(), true
+		return fail(http.StatusConflict, err.Error()), true
 	case errors.Is(err, namespace.ErrFenced):
 		// The sentence of the sentinel only: a wrap adds the name of the
 		// operation, which the log holds.
-		return http.StatusConflict, namespace.ErrFenced.Error(), true
+		return fail(http.StatusConflict, namespace.ErrFenced.Error()), true
 	case errors.Is(err, namespace.ErrNotFound):
-		return http.StatusNotFound, err.Error(), true
+		return fail(http.StatusNotFound, err.Error()), true
 	case errors.Is(err, namespace.ErrNoPaging):
-		return http.StatusNotImplemented, err.Error(), true
+		return fail(http.StatusNotImplemented, err.Error()), true
 	default:
-		return 0, "", false
+		return fail(0, ""), false
 	}
 }
 
@@ -649,29 +630,29 @@ func classifyNamespace(err error) (int, string, bool) {
 // principal approves turning the chain off, 403, an approval while the
 // server runs no migration loop answers 503, and an unreadable or
 // unknown stored state answers 500 without driver text.
-func classifyMaintenance(err error) (int, string, bool) {
+func classifyMaintenance(err error) (failure, bool) {
 	switch {
 	case errors.Is(err, maintenance.ErrInvalidState):
-		return http.StatusBadRequest, err.Error(), true
+		return fail(http.StatusBadRequest, err.Error()), true
 	case errors.Is(err, maintenance.ErrActiveWork):
-		return http.StatusConflict, err.Error(), true
+		return fail(http.StatusConflict, err.Error()), true
 	case errors.Is(err, maintenance.ErrHeld):
-		return http.StatusConflict, maintenance.ErrHeld.Error(), true
+		return fail(http.StatusConflict, maintenance.ErrHeld.Error()), true
 	case errors.Is(err, audit.ErrNoChainChange), errors.Is(err, audit.ErrChainMigrating),
 		errors.Is(err, audit.ErrChainChangeWaits):
-		return http.StatusConflict, err.Error(), true
+		return fail(http.StatusConflict, err.Error()), true
 	case errors.Is(err, audit.ErrChainMigrationsStopped):
-		return http.StatusServiceUnavailable, audit.ErrChainMigrationsStopped.Error(), true
+		return fail(http.StatusServiceUnavailable, audit.ErrChainMigrationsStopped.Error()), true
 	case errors.Is(err, audit.ErrChainStepRequired):
-		return http.StatusForbidden, audit.ErrChainStepRequired.Error(), true
+		return fail(http.StatusForbidden, audit.ErrChainStepRequired.Error()), true
 	case errors.Is(err, audit.ErrChainNeedsPerson):
-		return http.StatusForbidden, audit.ErrChainNeedsPerson.Error(), true
+		return fail(http.StatusForbidden, audit.ErrChainNeedsPerson.Error()), true
 	case errors.Is(err, maintenance.ErrInMaintenance):
-		return http.StatusServiceUnavailable, maintenance.ErrInMaintenance.Error() + ": try again later", true
+		return fail(http.StatusServiceUnavailable, maintenance.ErrInMaintenance.Error()+": try again later"), true
 	case errors.Is(err, maintenance.ErrUnavailable):
-		return http.StatusInternalServerError, maintenance.ErrUnavailable.Error(), true
+		return fail(http.StatusInternalServerError, maintenance.ErrUnavailable.Error()), true
 	default:
-		return 0, "", false
+		return fail(0, ""), false
 	}
 }
 
