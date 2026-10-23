@@ -139,9 +139,9 @@ groups:
           summary: An OpenDustpan audit sink falls behind
 ```
 `dustpan_signin_failure_counter_errors_total` counts the failed calls of
-the failure budget that all instances share, with the label `operation`
+the failure budget that all server processes share, with the label `operation`
 (`add` or `prune`).
-While these calls fail, each instance keeps only its own budget.
+While these calls fail, each server process keeps only its own budget.
 `dustpan_config_reloads_total` counts the reloads of the configuration file
 with the label `result` (`success` or `failure`).
 `dustpan_config_last_reload_success` holds 1 when the last reload succeeded,

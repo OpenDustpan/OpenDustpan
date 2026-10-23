@@ -1,12 +1,16 @@
 package registry_test
 
 import (
+	"context"
 	"errors"
+	"io"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/registry"
 )
@@ -406,6 +410,136 @@ func TestStagingKey(t *testing.T) {
 
 	if _, idErr := registry.StagingKey("", upload); !errors.Is(idErr, registry.ErrInvalid) {
 		t.Errorf("StagingKey with no ID = %v, want ErrInvalid", idErr)
+	}
+}
+
+// countStore is a blob.Store that counts its calls and stores nothing.
+type countStore struct {
+	calls atomic.Int64
+}
+
+func (s *countStore) Put(_ context.Context, _ blob.Key, _ io.Reader) error {
+	s.calls.Add(1)
+
+	return nil
+}
+
+func (s *countStore) Get(_ context.Context, _ blob.Key) (io.ReadCloser, error) {
+	s.calls.Add(1)
+
+	return io.NopCloser(strings.NewReader("")), nil
+}
+
+func (s *countStore) Delete(_ context.Context, _ blob.Key) error {
+	s.calls.Add(1)
+
+	return nil
+}
+
+func (s *countStore) List(_ context.Context, _ string) ([]blob.Object, error) {
+	s.calls.Add(1)
+
+	return nil, nil
+}
+
+func (s *countStore) Ping(_ context.Context) error {
+	return nil
+}
+
+func TestKeysInScopedView(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		key  func() (blob.Key, error)
+	}{
+		{name: "content key", key: func() (blob.Key, error) {
+			return registry.BlobKey(nsID, sum)
+		}},
+		{name: "staging key", key: func() (blob.Key, error) {
+			return registry.StagingKey(nsID, "abcdefghij0123456789")
+		}},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			key, err := tc.key()
+			if err != nil {
+				t.Fatalf("key = %v", err)
+			}
+
+			checkOwnView(t, key)
+			checkOtherView(t, key)
+		})
+	}
+}
+
+// checkOwnView checks that the view of the own namespace serves key.
+func checkOwnView(t *testing.T, key blob.Key) {
+	t.Helper()
+
+	store := &countStore{calls: atomic.Int64{}}
+
+	view, err := blob.NewScoped(store, nsID)
+	if err != nil {
+		t.Fatalf("NewScoped = %v", err)
+	}
+
+	if putErr := view.Put(t.Context(), key, strings.NewReader("x")); putErr != nil {
+		t.Errorf("own view: put err = %v, want nil", putErr)
+	}
+
+	rc, getErr := view.Get(t.Context(), key)
+	if getErr != nil {
+		t.Errorf("own view: get err = %v, want nil", getErr)
+	} else if closeErr := rc.Close(); closeErr != nil {
+		t.Errorf("own view: close err = %v, want nil", closeErr)
+	}
+
+	if delErr := view.Delete(t.Context(), key); delErr != nil {
+		t.Errorf("own view: delete err = %v, want nil", delErr)
+	}
+
+	if n := store.calls.Load(); n != 3 {
+		t.Errorf("own view: store calls = %d, want 3", n)
+	}
+}
+
+// checkOtherView checks that the view of another namespace refuses key
+// before any call to the store.
+func checkOtherView(t *testing.T, key blob.Key) {
+	t.Helper()
+
+	store := &countStore{calls: atomic.Int64{}}
+
+	view, err := blob.NewScoped(store, "ns-zzzzzzzzzz0123456789")
+	if err != nil {
+		t.Fatalf("NewScoped = %v", err)
+	}
+
+	if putErr := view.Put(t.Context(), key, strings.NewReader("x")); !errors.Is(putErr, blob.ErrOutOfScope) {
+		t.Errorf("other view: put err = %v, want ErrOutOfScope", putErr)
+	}
+
+	rc, getErr := view.Get(t.Context(), key)
+	if !errors.Is(getErr, blob.ErrOutOfScope) {
+		t.Errorf("other view: get err = %v, want ErrOutOfScope", getErr)
+	}
+
+	if rc != nil {
+		if closeErr := rc.Close(); closeErr != nil {
+			t.Errorf("other view: close err = %v, want nil", closeErr)
+		}
+	}
+
+	if delErr := view.Delete(t.Context(), key); !errors.Is(delErr, blob.ErrOutOfScope) {
+		t.Errorf("other view: delete err = %v, want ErrOutOfScope", delErr)
+	}
+
+	if n := store.calls.Load(); n != 0 {
+		t.Errorf("other view: store calls = %d, want 0", n)
 	}
 }
 

@@ -279,3 +279,46 @@ func TestEnsureProfileWritesTheSeedOnce(t *testing.T) {
 		t.Errorf("the seed profile was posted %d times, want 1", got)
 	}
 }
+
+// TestEnsureProfileRetriesAFailedSeed checks that a failed seed write is not
+// kept: the call after it posts the seed profile again, and the calls after
+// a successful write do not post it again.
+func TestEnsureProfileRetriesAFailedSeed(t *testing.T) {
+	t.Parallel()
+
+	var posts atomic.Int64
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			if posts.Add(1) == 1 {
+				w.WriteHeader(http.StatusInternalServerError)
+
+				return
+			}
+
+			w.WriteHeader(http.StatusCreated)
+
+			return
+		}
+
+		w.Header().Set("ETag", `"1"`)
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(srv.Close)
+
+	_, err := conformance.SeedProfile(t.Context(), srv.URL)
+	if !errors.Is(err, conformance.ErrExpectation) {
+		t.Fatalf("first seed: err = %v, want ErrExpectation", err)
+	}
+
+	for range 2 {
+		etag, err := conformance.SeedProfile(t.Context(), srv.URL)
+		if err != nil || etag != `"1"` {
+			t.Fatalf("seed after a success: etag %q, err %v", etag, err)
+		}
+	}
+
+	if got := posts.Load(); got != 2 {
+		t.Errorf("the seed profile was posted %d times, want 2", got)
+	}
+}

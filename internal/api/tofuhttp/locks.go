@@ -97,6 +97,7 @@ func lockInfoOf(l workspace.Lock) lockInfo {
 const (
 	unitLockRoute       = "/api/inventory/unit-lock"
 	collectionLockRoute = "/api/dustpan/v1/namespaces/%s/collections/%s/lock"
+	namespaceLockRoute  = "/api/dustpan/v1/namespaces/%s/lock"
 )
 
 // lockRemovalRoutes holds the routes that remove a manual lock. Remove is the
@@ -106,11 +107,19 @@ type lockRemovalRoutes struct {
 	Force  string
 }
 
-// manualLockRoutes returns the routes that remove the manual lock of t.
+// manualLockRoutes returns the routes that remove the manual lock of t: the
+// collection lock routes, the namespace lock routes, or else the unit lock
+// routes.
 func manualLockRoutes(t manuallock.Target) lockRemovalRoutes {
 	if t.Kind == manuallock.KindCollection {
 		remove := fmt.Sprintf(collectionLockRoute, url.PathEscape(t.Collection.Namespace.String()),
 			url.PathEscape(t.Collection.Name.String()))
+
+		return lockRemovalRoutes{Remove: remove, Force: remove + "/force-unlock"}
+	}
+
+	if t.Kind == manuallock.KindNamespace {
+		remove := fmt.Sprintf(namespaceLockRoute, url.PathEscape(t.Space.String()))
 
 		return lockRemovalRoutes{Remove: remove, Force: remove + "/force-unlock"}
 	}

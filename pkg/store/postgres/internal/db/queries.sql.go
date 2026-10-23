@@ -1618,6 +1618,33 @@ func (q *Queries) CountSignInProvider(ctx context.Context, providerID string) (i
 	return count, err
 }
 
+const countSiteAdministrators = `-- name: CountSiteAdministrators :one
+SELECT COUNT(*) FROM principals p
+WHERE p.deleted_at_ms IS NULL AND p.disabled_at_ms IS NULL AND p.namespace = '' AND p.kind = 'person'
+  AND EXISTS (
+    SELECT 1 FROM grants g
+    WHERE g.role = $1 AND g.object_kind = 'installation' AND g.revoked_at_ms IS NULL
+      AND ((g.subject_kind = 'principal' AND g.subject_id = p.id)
+        OR (g.subject_kind = 'group' AND EXISTS (
+          SELECT 1 FROM group_members m
+          JOIN principal_groups pg ON pg.id = m.group_id
+          WHERE m.group_id = g.subject_id AND m.principal_id = p.id
+            AND m.removed_at_ms IS NULL AND m.state = 'active' AND pg.deleted_at_ms IS NULL))))
+`
+
+// The principals that can act now with the role $1: a current grant of the
+// role on the installation to the principal, or to a group with an active
+// membership of the principal. A principal that was ended, was disabled or
+// belongs to a namespace does not count. Only a person counts: a service
+// principal can hold the role, but every route that makes a site administrator
+// needs a fresh console session, which only a person has.
+func (q *Queries) CountSiteAdministrators(ctx context.Context, role string) (int64, error) {
+	row := q.db.QueryRow(ctx, countSiteAdministrators, role)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const countStateVersions = `-- name: CountStateVersions :one
 SELECT COUNT(*)
 FROM state_versions

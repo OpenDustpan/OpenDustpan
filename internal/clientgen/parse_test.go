@@ -197,6 +197,20 @@ func TestParseRefuses(t *testing.T) {
 			clientgen.ErrUnsupported,
 			"properties/name",
 		},
+		{
+			"parameter with an any-value schema",
+			`"schema": {"type": "string"}}],`,
+			`"schema": {"description": "any"}}],`,
+			clientgen.ErrUnsupported,
+			"parameters/0/schema",
+		},
+		{
+			"any-value result with a description that is not a string",
+			`{"schema": {"$ref": "#/components/schemas/Thing"}}}},`,
+			`{"schema": {"description": 5}}}},`,
+			clientgen.ErrInvalidDescription,
+			"schema/description",
+		},
 		{"wrong openapi version", `"openapi": "3.1.0"`, `"openapi": "3.0.3"`, clientgen.ErrInvalidDescription, ""},
 		{
 			"operation ID with an underscore",
