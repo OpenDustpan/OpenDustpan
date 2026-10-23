@@ -429,6 +429,21 @@ func TestStatusMapping(t *testing.T) {
 			map[string]string{"X-RateLimit-Remaining": "0"},
 			forge.ErrUnavailable, 0,
 		},
+		{
+			"too many requests with a wait above the cap", 429,
+			map[string]string{"Retry-After": "7200"},
+			forge.ErrUnavailable, time.Hour,
+		},
+		{
+			"too many requests with a wait that overflows", 429,
+			map[string]string{"Retry-After": "9223372036854775807"},
+			forge.ErrUnavailable, time.Hour,
+		},
+		{
+			"forbidden by a rate limit with a reset far in the future", 403,
+			map[string]string{"X-RateLimit-Remaining": "0", "X-RateLimit-Reset": "99999999999"},
+			forge.ErrUnavailable, time.Hour,
+		},
 		{"server error", 500, nil, forge.ErrUnavailable, 0},
 		{"bad gateway", 502, nil, forge.ErrUnavailable, 0},
 		{"another status", 418, nil, forge.ErrUnavailable, 0},
