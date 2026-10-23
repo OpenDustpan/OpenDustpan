@@ -84,3 +84,75 @@ func TestDeniedErrorWithNoCause(t *testing.T) {
 		t.Fatalf("Error() = %q, want %q", got, want)
 	}
 }
+
+// TestStartRefusalNamesTheStartAction proves that a refusal after the plan of
+// the job (the store, for a freeze or a limit, and the policy) is a
+// *job.StartRefusalError that names the start action of the planned job on
+// its unit, keeps the cause for errors.Is, and keeps the text of the cause.
+func TestStartRefusalNamesTheStartAction(t *testing.T) {
+	t.Parallel()
+
+	denyPolicy := func(_ *job.ServiceConfig, r *rig) {
+		r.decider.decision = job.Decision{Allow: false, Reason: "no changes today", Gates: nil, PolicyVersion: "v1"}
+	}
+
+	tests := []struct {
+		name   string
+		op     job.Operation
+		option rigOption
+		cause  error
+		want   identity.Action
+	}{
+		{
+			"a freeze of a destroy", job.OperationDestroy, storeFails(job.ErrFrozen), job.ErrFrozen,
+			job.ActionUnitRunDestroy,
+		},
+		{"a limit of an apply", job.OperationApply, storeFails(job.ErrLimit), job.ErrLimit, job.ActionUnitRunApply},
+		{"the policy of a plan", job.OperationPlan, denyPolicy, job.ErrPolicyDenied, job.ActionUnitRunPlan},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			r := newRig(t, tt.option)
+			r.authz.allow[string(job.ActionUnitRunApply)+" "+r.unit.String()] = true
+			r.authz.allow[string(job.ActionUnitRunDestroy)+" "+r.unit.String()] = true
+
+			req := r.plan("")
+			req.Operation = tt.op
+
+			_, err := r.svc.Start(t.Context(), actorOf("ada"), req)
+
+			refused, ok := errors.AsType[*job.StartRefusalError](err)
+			if !ok || !errors.Is(err, tt.cause) {
+				t.Fatalf("Start = %v, want a *job.StartRefusalError that wraps %v", err, tt.cause)
+			}
+
+			if refused.Action != tt.want || refused.Object.String() != r.unit.String() {
+				t.Fatalf("refusal = %s on %s, want %s on %s", refused.Action, refused.Object.String(), tt.want,
+					r.unit.String())
+			}
+
+			if refused.Err == nil || err.Error() != refused.Err.Error() {
+				t.Fatalf("Error() = %q, want the text of the cause", err.Error())
+			}
+		})
+	}
+}
+
+// TestStartRefusalErrorWithNoCause proves that a StartRefusalError with no
+// Err gives a fixed text and wraps nothing.
+func TestStartRefusalErrorWithNoCause(t *testing.T) {
+	t.Parallel()
+
+	err := &job.StartRefusalError{Action: job.ActionUnitRunApply, Object: identity.NamespaceObject("acme"), Err: nil}
+
+	if got := err.Error(); got != "the start of the job is refused" {
+		t.Fatalf("Error() = %q, want a fixed text", got)
+	}
+
+	if err.Unwrap() != nil {
+		t.Fatalf("Unwrap() = %v, want nil", err.Unwrap())
+	}
+}
