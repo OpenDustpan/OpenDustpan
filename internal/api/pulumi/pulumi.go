@@ -1033,6 +1033,11 @@ func classifySecret(err error) (int, string) {
 	}
 }
 
+// updateConflictMessage answers a call that another update of the stack
+// blocks: the sentence of stack.ErrUpdateConflict and the command that ends a
+// stuck update.
+const updateConflictMessage = "another update of this stack is in progress: wait for it to end, or run pulumi cancel"
+
 // classifyUpdate maps the errors of the update cycle to an HTTP status and a
 // message safe to show callers.
 func classifyUpdate(err error) (int, string) {
@@ -1041,7 +1046,12 @@ func classifyUpdate(err error) (int, string) {
 	}
 
 	switch {
-	case errors.Is(err, stack.ErrUpdateConflict), errors.Is(err, stack.ErrWrongUpdateState),
+	case errors.Is(err, stack.ErrUpdateConflict):
+		// The sentence of the sentinel and the command that ends a stuck
+		// update. The context of the wrap names the refused update, not the
+		// one that holds the stack, so it stays in the log.
+		return http.StatusConflict, updateConflictMessage
+	case errors.Is(err, stack.ErrWrongUpdateState),
 		errors.Is(err, stack.ErrConcurrentModification), errors.Is(err, stack.ErrInvalidDelta),
 		errors.Is(err, stack.ErrCheckpointConflict), errors.Is(err, stack.ErrStaleCheckpoint),
 		errors.Is(err, stack.ErrJournalConflict), errors.Is(err, stack.ErrJournalIncomplete):
