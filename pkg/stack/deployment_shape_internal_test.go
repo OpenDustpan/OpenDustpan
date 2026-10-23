@@ -6,37 +6,47 @@ package stack
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 )
 
 // readableDeployment reports whether the CLI can read deployment by the rules
 // of the shape check. It decodes the whole value with encoding/json, so it
-// does not share code with the streamed scan of checkDeploymentShape.
+// does not share code with the streamed scan of checkDeploymentShape. As in
+// the CLI, a known member name matches in any case.
 func readableDeployment(deployment []byte) bool {
 	var members map[string]json.RawMessage
 	if json.Unmarshal(deployment, &members) != nil || members == nil {
 		return false
 	}
 
-	for _, name := range []string{"manifest", secretsProvidersMember} {
-		if raw, ok := members[name]; ok && raw[0] != '{' && raw[0] != 'n' {
+	for name, raw := range members {
+		if !readableMember(name, raw) {
 			return false
 		}
-	}
-
-	if raw, ok := members["pending_operations"]; ok && !readableEntries(raw) {
-		return false
-	}
-
-	if raw, ok := members["resources"]; ok && !readableResources(raw) {
-		return false
 	}
 
 	return true
 }
 
+// readableMember reports whether raw is a value that the CLI can read for the
+// member name of a deployment.
+func readableMember(name string, raw json.RawMessage) bool {
+	switch {
+	case strings.EqualFold(name, "manifest"), strings.EqualFold(name, secretsProvidersMember):
+		return raw[0] == '{' || raw[0] == 'n'
+	case strings.EqualFold(name, "pending_operations"):
+		return readableEntries(raw)
+	case strings.EqualFold(name, "resources"):
+		return readableResources(raw)
+	default:
+		return true
+	}
+}
+
 // readableResources reports whether raw is null or an array of objects that
-// each have a urn member that is a string.
+// each have a urn member that is a string. The name urn matches in any case,
+// and each member with that name must be a string.
 func readableResources(raw json.RawMessage) bool {
 	if raw[0] == 'n' {
 		return true
@@ -48,12 +58,32 @@ func readableResources(raw json.RawMessage) bool {
 	}
 
 	for _, entry := range entries {
-		if urn, ok := entry["urn"]; !ok || urn[0] != '"' {
+		if !readableURN(entry) {
 			return false
 		}
 	}
 
 	return true
+}
+
+// readableURN reports whether entry has a member urn, in any case, and
+// whether each such member is a string.
+func readableURN(entry map[string]json.RawMessage) bool {
+	found := false
+
+	for name, raw := range entry {
+		if !strings.EqualFold(name, "urn") {
+			continue
+		}
+
+		if raw[0] != '"' {
+			return false
+		}
+
+		found = true
+	}
+
+	return found
 }
 
 // readableEntries reports whether raw is null or an array of objects.
@@ -96,6 +126,9 @@ func FuzzDeploymentShape(f *testing.F) {
 		`{"resources":[{"urn":"urn:pulumi:dev::web::pulumi:pulumi:Stack::web-dev"}]}`,
 		`{"resources":[{"urn":1}]}`,
 		`{"version":3,"deployment":{"resources":[{"type":"x","urn":"u"},{}]}}`,
+		`{"RESOURCES":5}`,
+		`{"resources":[{"URN":"u"}]}`,
+		`{"resources":[{"urn":"u","URN":5}]}`,
 	} {
 		f.Add([]byte(seed), int64(0))
 		f.Add([]byte(seed), int64(1))
