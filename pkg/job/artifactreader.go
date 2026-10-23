@@ -220,7 +220,7 @@ func openLogVersion(
 
 	return &logReader{
 		ctx: ctx, blobs: blobs, sealer: sealer, ns: nsID, job: rec.Job, ref: ref, log: log, cur: nil, closer: nil,
-		next: 0, sum: sha256.New(), done: false, check: closed,
+		next: 0, sum: sha256.New(), done: false, check: closed, end: nil,
 	}, nil
 }
 
@@ -242,6 +242,9 @@ type logReader struct {
 	// check is true for a closed version: the end of the stream checks the
 	// hash of the whole log.
 	check bool
+	// end is the result of the check at the end of the log: io.EOF, or the
+	// error of a hash that does not match. Each later read returns it again.
+	end error
 }
 
 // Read implements io.Reader.
@@ -367,13 +370,18 @@ func (r *logReader) finish() error {
 // the error of the hash check of a closed log.
 func (r *logReader) advance() error {
 	if r.done {
+		if r.end != nil {
+			return r.end
+		}
+
 		return io.EOF
 	}
 
 	if r.next >= r.log.Chunks {
 		r.done = true
+		r.end = r.finish()
 
-		return r.finish()
+		return r.end
 	}
 
 	return r.openChunk()
