@@ -350,9 +350,10 @@ func TestGitConfig(t *testing.T) {
 	}
 }
 
-// TestGitConfigRefusesControlCharacters sends each hostile helper straight to
-// GitConfig, as if the validation of the pool had not run.
-func TestGitConfigRefusesControlCharacters(t *testing.T) {
+// TestGitConfigRefusesUnsafeCharacters sends each hostile helper straight to
+// GitConfig, as if the validation of the pool had not run: a control
+// character, and a character that git reads as syntax in a value.
+func TestGitConfigRefusesUnsafeCharacters(t *testing.T) {
 	t.Parallel()
 
 	for _, helper := range []string{
@@ -363,6 +364,12 @@ func TestGitConfigRefusesControlCharacters(t *testing.T) {
 		"git-credential-x\x00",
 		"git-credential-x\x7f",
 		"/usr/bin/a\x1bb",
+		`/usr/bin/x"y`,
+		`/usr/bin/x\y`,
+		"/usr/bin/x#y",
+		"/usr/bin/x;y",
+		"!sh -c evil",
+		"/usr/bin/x y",
 	} {
 		got, err := launcher.GitConfig(helper)
 		if !errors.Is(err, launcher.ErrUnsafeHelper) || got != nil {
