@@ -17,6 +17,7 @@ import (
 	"opendustpan.org/opendustpan/internal/api/apidesc"
 	"opendustpan.org/opendustpan/internal/api/idempotent"
 	"opendustpan.org/opendustpan/internal/clientip"
+	"opendustpan.org/opendustpan/internal/pagetoken"
 	"opendustpan.org/opendustpan/internal/registry/service"
 	"opendustpan.org/opendustpan/internal/requestid"
 	"opendustpan.org/opendustpan/pkg/audit"
@@ -312,6 +313,12 @@ func parseProviderQuery(r *http.Request, ns namespace.Name) (providerQuery, erro
 	}
 
 	if raw := q.Get("pageToken"); raw != "" {
+		// Defense in depth: the name check below refuses a long name too; this
+		// cap stays so that the decode never reads more than a token can hold.
+		if len(raw) > pagetoken.MaxLen {
+			return providerQuery{}, errProviderPageToken
+		}
+
 		decoded, err := base64.RawURLEncoding.DecodeString(raw)
 		if err != nil {
 			return providerQuery{}, errProviderPageToken
