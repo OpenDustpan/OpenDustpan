@@ -5,3 +5,11 @@
 ^pkg/policy/endpoint_test\.go$
 ^pkg/calendar/calendar_test\.go$
 ^pkg/agent/mask_test\.go$
+# Test fixtures that hold a credential URI on purpose, to prove that the URI is refused.
+^pkg/job/location_test\.go$
+^internal/api/jobs/location_answer_test\.go$
+^internal/api/jobs/location_credentials_test\.go$
+^internal/api/drift/location_credentials_test\.go$
+# Reference docs that name a credential URI in words; the commit 5d81e93 that added the text stays in history.
+^docs/reference/drift-api\.md$
+^docs/reference/jobs-api\.md$
