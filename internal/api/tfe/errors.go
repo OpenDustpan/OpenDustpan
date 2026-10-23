@@ -66,9 +66,8 @@ var errMissingFilter = errors.New("state version list needs filter[organization]
 // jsonAPIError is one entry of a JSON:API error document.
 type jsonAPIError struct {
 	Status string `json:"status"`
-	// Code is the code of the catalog of the error. It is omitted only for an
-	// error path that has no code yet.
-	Code   string `json:"code,omitempty"`
+	// Code is the code of the catalog of the error.
+	Code   string `json:"code"`
 	Title  string `json:"title"`
 	Detail string `json:"detail"`
 	// Meta holds the arguments of the code, and the path that starts a new
@@ -177,15 +176,6 @@ func (h *Handler) writeClassError(ctx context.Context, w http.ResponseWriter, cl
 // catalog refuses is a bug in this adapter: the answer is then 500 with
 // server.internal, and the log names the code.
 func (h *Handler) writeCoded(ctx context.Context, w http.ResponseWriter, class errorClass, reauthenticate string) {
-	if class.code == "" {
-		// An error path that has no code yet answers without one.
-		var none errcode.Answer
-
-		h.writeAnswer(ctx, w, class, none, reauthenticate)
-
-		return
-	}
-
 	answer, err := errcode.New(class.code, class.args...)
 	if err != nil {
 		h.logger.ErrorContext(ctx, "error code failed", slog.String("error_code", class.code))
