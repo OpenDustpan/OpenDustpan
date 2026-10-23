@@ -8,6 +8,7 @@ import (
 	"net/http"
 
 	"opendustpan.org/opendustpan/internal/api/refusal"
+	"opendustpan.org/opendustpan/internal/api/route"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/outputshare"
 )
@@ -50,7 +51,7 @@ func (h *Handler) outputSharingRoutes() []Route {
 		return Route{
 			Method:           method,
 			Path:             outputSharingPath,
-			Scope:            ScopeAuthorized,
+			Scope:            route.ScopeAuthorized,
 			Actions:          []identity.Action{action},
 			Resolve:          resolveCollectionNamespace,
 			NamespaceActions: nil,
