@@ -549,3 +549,60 @@ func TestMaintenanceEnterBusyAnswers503(t *testing.T) {
 		t.Fatalf("busy enter error = %+v, want code 503 and %q", doc, want)
 	}
 }
+
+// TestEnterMaintenanceCanceledWorkRetryAfter proves a forced enter that
+// canceled work before it failed sends the same Retry-After as the other
+// answers that maintenance mode gives. A busy store answers 503 with
+// Retry-After; an error that is not busy sends no Retry-After.
+func TestEnterMaintenanceCanceledWorkRetryAfter(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		err        error
+		wantStatus int
+		wantHeader string
+	}{
+		{
+			name: "busy store",
+			err: &maintenance.CanceledError{
+				Err: maintenance.ErrBusy, Canceled: []string{"pulumi:acme/web/prod"},
+			},
+			wantStatus: http.StatusServiceUnavailable,
+			wantHeader: "30",
+		},
+		{
+			name: "unavailable store",
+			err: &maintenance.CanceledError{
+				Err: maintenance.ErrUnavailable, Canceled: []string{"pulumi:acme/web/prod"},
+			},
+			wantStatus: http.StatusInternalServerError,
+			wantHeader: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			fake := newFakeMaintenance(maintenance.StateNormal)
+			fake.enterErr = fmt.Errorf("enter: %w", tt.err)
+			handler := newMaintenanceHandler(t, fake)
+
+			req := httptest.NewRequestWithContext(t.Context(), http.MethodPost,
+				"/api/server/maintenance/enter", strings.NewReader(`{"force":true}`))
+			req.Header.Set("Authorization", "Bearer test-token")
+
+			rec := httptest.NewRecorder()
+			handler.ServeHTTP(rec, req)
+
+			if rec.Code != tt.wantStatus {
+				t.Fatalf("forced enter answers %d, want %d (%s)", rec.Code, tt.wantStatus, rec.Body.String())
+			}
+
+			if got := rec.Header().Get("Retry-After"); got != tt.wantHeader {
+				t.Fatalf("Retry-After = %q, want %q", got, tt.wantHeader)
+			}
+		})
+	}
+}
