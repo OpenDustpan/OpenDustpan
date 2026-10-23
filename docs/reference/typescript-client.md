@@ -112,6 +112,12 @@ go run ./cmd/clientgen -target typescript -description openapi.json -out clients
 | `-check` | Write nothing. Exit with 1 and list the differences. |
 
 The package records the SHA-256 of the description in `metadata.descriptionSha256`.
-`info.version` alone is not a safe pin. The package also exports `description`,
-the text of the description. The SHA-256 of its UTF-8 bytes is
-`metadata.descriptionSha256`.
+`info.version` alone is not a safe pin. The subpath
+`@opendustpan/client/description` exports `description`, the text of the
+description. The SHA-256 of its UTF-8 bytes is `metadata.descriptionSha256`.
+The root of the package does not export it, so an import of the client does
+not load the text:
+
+```ts
+import { description } from "@opendustpan/client/description";
+```
