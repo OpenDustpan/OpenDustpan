@@ -27,6 +27,8 @@ page is relative to that prefix.
 | `GET /namespaces/{namespace}/lock` | `namespace:read` | The manual lock of the namespace |
 | `DELETE /namespaces/{namespace}/lock` | `unit:lock`, and the caller holds the lock | No body |
 | `POST /namespaces/{namespace}/lock/force-unlock` | `unit:manage` | No body |
+| `GET /namespaces/{namespace}/output-sharing` | `namespace:read` | The output sharing setting of the namespace |
+| `PUT /namespaces/{namespace}/output-sharing` | `unit:manage-sharing` | The new output sharing setting |
 | `POST /namespaces/{namespace}/views` | `view:create`, and the caller is a person | A new saved view |
 | `GET /namespaces/{namespace}/views` | `view:read`, and the caller is a person | The saved views of the caller |
 | `GET /namespaces/{namespace}/views/{view_id}` | `view:read`, and the caller is a person | One saved view of the caller |
@@ -58,6 +60,8 @@ These routes have no path under `/api/dustpan/v1` yet. Use these paths:
 - `POST /api/inventory/unit-lock/force-unlock?unit={unit reference}`, `unit:manage`: end the lock of another person.
 
 The [manual locks guide](../guides/manual-locks.md) describes the lock routes.
+The [output sharing guide](../guides/output-sharing.md) describes the routes of
+the output sharing setting.
 
 The [saved views guide](../guides/saved-views.md) describes the view routes.
 

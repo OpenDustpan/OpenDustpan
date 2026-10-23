@@ -104,10 +104,29 @@ func (h *Handler) Operations() []apidesc.Operation {
 		})
 	}
 
+	return apidesc.Collect(rows, allLabels)
+}
+
+// allLabels joins the labels of the routes of this adapter: the table that
+// Operations and queryOf read.
+//
+//nolint:gochecknoglobals // A fixed table, built once from the two tables above.
+var allLabels = joinLabels()
+
+// joinLabels returns one table with the labels of operationLabels and of
+// gitHostOperationLabels.
+func joinLabels() map[string]apidesc.Label {
 	labels := maps.Clone(operationLabels)
 	maps.Copy(labels, gitHostOperationLabels)
 
-	return apidesc.Collect(rows, labels)
+	return labels
+}
+
+// queryOf returns the query of a request, as the label of its route allows
+// the handler to read it. A route that the unmoved paths still serve is not in
+// the description, and its handler reads every name.
+func queryOf(r *http.Request) apidesc.Query {
+	return apidesc.QueryOf(r, allLabels)
 }
 
 // actionNames returns the actions as text.
@@ -118,4 +137,9 @@ func actionNames(actions []identity.Action) []string {
 	}
 
 	return out
+}
+
+// userAgent returns the User-Agent header of a request, for the audit record.
+func userAgent(r *http.Request) string {
+	return apidesc.Header(r, "User-Agent")
 }

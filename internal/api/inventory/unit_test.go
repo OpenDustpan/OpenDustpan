@@ -90,7 +90,7 @@ func unitEntries() map[namespace.Name][]coreinventory.Entry {
 	}
 }
 
-func newUnitHandler(t *testing.T, authz identity.Authorizer) *apiinventory.Handler {
+func newUnitHandler(t *testing.T, authz identity.Authorizer) testHandler {
 	t.Helper()
 
 	namespaces, err := namespace.NewService(
@@ -104,9 +104,10 @@ func newUnitHandler(t *testing.T, authz identity.Authorizer) *apiinventory.Handl
 		deletedEntry("pulumi", "old/gone", deletedUnitByID, 30),
 	}}
 
-	handler, err := apiinventory.NewHandler(apiinventory.Config{
-		Views: nil,
-		Audit: nil, OnAuditFailure: nil, Locks: nil, Moves: nil,
+	handler, err := newCheckedHandler(t, apiinventory.Config{
+		OutputSharing: nil,
+		Views:         nil,
+		Audit:         newTestAudit(), OnAuditFailure: nil, Locks: nil, Moves: nil,
 		Collections:   testCollectionService(t, homedNamespaceStore{}),
 		Namespaces:    namespaces,
 		Units:         &memReader{entries: unitEntries(), err: nil},

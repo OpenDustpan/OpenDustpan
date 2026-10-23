@@ -3,6 +3,7 @@ package conformance_test
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -12,6 +13,7 @@ import (
 	"opendustpan.org/opendustpan/internal/clientgen"
 	"opendustpan.org/opendustpan/internal/clientgen/conformance"
 	"opendustpan.org/opendustpan/internal/clientgen/conformance/goclient"
+	"opendustpan.org/opendustpan/internal/clientgen/conformance/tsclient"
 )
 
 // envRun turns on the tests that build the server and run it. The make target
@@ -19,18 +21,21 @@ import (
 // two programs and need a few minutes.
 const envRun = "DUSTPAN_TEST_CLIENTGEN_CONFORMANCE"
 
-// goOperations are the operations that the Go client covers in this slice:
-// five reads and two writes, across the caller, namespace and server areas.
-func goOperations() []string {
+// suiteOperations are the operations that the suite calls in this slice: five
+// reads and two writes, across the caller, namespace and server areas, and one
+// write that answers with two success statuses. The Go client covers only
+// these. The TypeScript client has every operation, and the suite calls these.
+func suiteOperations() []string {
 	return []string{
 		"createProfile", "createProfileRevision", "getCapabilities", "getNotificationSink",
-		"getPreferences", "getProfile", "listNotificationSinks",
+		"getPreferences", "getProfile", "listNotificationSinks", "putGitHostApp",
 	}
 }
 
 // requiredCases are the cases that must pass for the first slice: a success, a
-// 404 with an error code, a 403, a conflict on If-Match and two answers that
-// fail validation.
+// 404 with an error code, a 403, a conflict on If-Match, the answers that fail
+// validation, a 2xx status outside the description, and an operation with two
+// success statuses.
 func requiredCases() []string {
 	return []string{
 		"operations/every-operation-is-called",
@@ -40,7 +45,52 @@ func requiredCases() []string {
 		"errors/response-with-wrong-type-is-rejected",
 		"errors/response-without-required-field-is-rejected",
 		"errors/response-with-null-required-is-rejected",
+		"errors/success-status-outside-the-description-is-rejected",
+		"errors/two-success-statuses-are-accepted-and-others-rejected",
 	}
+}
+
+// clientUnderTest says how to build one client and start its adapter.
+type clientUnderTest struct {
+	// transport names the transport of the client in the report.
+	transport string
+	// build writes the client from the description that the server serves, in
+	// dir, and returns the process of its adapter.
+	build func(ctx context.Context, description []byte, release, dir string) (conformance.ProcessOptions, error)
+}
+
+// goClient builds the Go client.
+func goClient() clientUnderTest {
+	return clientUnderTest{transport: "net/http", build: func(
+		ctx context.Context, description []byte, release, dir string,
+	) (conformance.ProcessOptions, error) {
+		built, err := goclient.Build(ctx, goclient.Options{
+			Description: description, Operations: suiteOperations(), ServerRelease: release, Dir: dir,
+		})
+		if err != nil {
+			return conformance.ProcessOptions{}, fmt.Errorf("build the Go client: %w", err)
+		}
+
+		return conformance.ProcessOptions{
+			Path: built.Adapter, Args: nil, Env: conformance.Environ(nil), CallTimeout: 0,
+		}, nil
+	}}
+}
+
+// tsClient builds the TypeScript client.
+func tsClient() clientUnderTest {
+	return clientUnderTest{transport: "fetch", build: func(
+		ctx context.Context, description []byte, release, dir string,
+	) (conformance.ProcessOptions, error) {
+		built, err := tsclient.Build(ctx, tsclient.Options{Description: description, ServerRelease: release, Dir: dir})
+		if err != nil {
+			return conformance.ProcessOptions{}, fmt.Errorf("build the TypeScript client: %w", err)
+		}
+
+		return conformance.ProcessOptions{
+			Path: built.Command, Args: built.Args, Env: tsclient.Environ(), CallTimeout: 0,
+		}, nil
+	}}
 }
 
 // TestGoClientConformance generates the Go client from the description of a
@@ -48,6 +98,22 @@ func requiredCases() []string {
 // standard input and output.
 func TestGoClientConformance(t *testing.T) {
 	t.Parallel()
+
+	runConformance(t, goClient())
+}
+
+// TestTypeScriptClientConformance does the same for the TypeScript client: the
+// package that the generator writes from the description of a real dev server,
+// compiled by tsc, with an adapter that runs it on Node.
+func TestTypeScriptClientConformance(t *testing.T) {
+	t.Parallel()
+
+	runConformance(t, tsClient())
+}
+
+// runConformance runs the suite on one client.
+func runConformance(t *testing.T, c clientUnderTest) {
+	t.Helper()
 
 	if os.Getenv(envRun) == "" {
 		t.Skipf("set %s=1 or run make clients-conformance", envRun)
@@ -60,11 +126,11 @@ func TestGoClientConformance(t *testing.T) {
 
 	t.Cleanup(cancel)
 
-	reportResults(t, conformance.Run(ctx, startSession(ctx, t), conformance.Cases(), 0))
+	reportResults(t, conformance.Run(ctx, startSession(ctx, t, c), conformance.Cases(), 0))
 }
 
 // startSession builds and starts the server, the proxy and the adapter.
-func startSession(ctx context.Context, t *testing.T) conformance.Env {
+func startSession(ctx context.Context, t *testing.T, c clientUnderTest) conformance.Env {
 	t.Helper()
 
 	work := t.TempDir()
@@ -89,15 +155,12 @@ func startSession(ctx context.Context, t *testing.T) conformance.Env {
 		t.Fatalf("get the description: %v", err)
 	}
 
-	built, err := goclient.Build(ctx, goclient.Options{
-		Description: description, Operations: goOperations(), ServerRelease: server.Release(),
-		Dir: filepath.Join(work, "client"),
-	})
+	process, err := c.build(ctx, description, server.Release(), filepath.Join(work, "client"))
 	if err != nil {
-		t.Fatalf("build the Go client: %v", err)
+		t.Fatal(err)
 	}
 
-	api, err := clientgen.NewParser(goOperations()...).Parse(description)
+	api, err := clientgen.NewParser(suiteOperations()...).Parse(description)
 	if err != nil {
 		t.Fatalf("parse the description: %v", err)
 	}
@@ -112,9 +175,7 @@ func startSession(ctx context.Context, t *testing.T) conformance.Env {
 
 	t.Cleanup(func() { closeAll(t, "proxy", proxy.Close) })
 
-	adapter, err := conformance.StartAdapter(ctx, conformance.ProcessOptions{
-		Path: built.Adapter, Args: nil, Env: conformance.Environ(nil), CallTimeout: 0,
-	})
+	adapter, err := conformance.StartAdapter(ctx, process)
 	if err != nil {
 		t.Fatalf("start the adapter: %v", err)
 	}
@@ -130,8 +191,8 @@ func startSession(ctx context.Context, t *testing.T) conformance.Env {
 	}
 
 	env := env(proxy)
-	env.Server, env.Adapter, env.Transport = server, adapter, "net/http"
-	env.Operations, env.Info = goOperations(), info
+	env.Server, env.Adapter, env.Transport = server, adapter, c.transport
+	env.Operations, env.Info = suiteOperations(), info
 
 	return env
 }
