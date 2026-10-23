@@ -2,6 +2,7 @@ package runnerapi_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"log/slog"
 	"net/http"
@@ -174,6 +175,36 @@ func TestManagementActions(t *testing.T) {
 				t.Fatalf("status = %d %s, want %d", rec.Code, rec.Body.String(), tc.wantErr)
 			}
 		})
+	}
+}
+
+// TestPoolCreateNamesTheHelperRule proves that a pool with a git credential
+// helper that the server refuses answers 400 with a text that names the field
+// and the rule, and not only that the request is not valid.
+func TestPoolCreateNamesTheHelperRule(t *testing.T) {
+	t.Parallel()
+
+	for _, helper := range []string{`/usr/bin/x\"y`, "/usr/bin/x#y", "/usr/bin/x;y", "bin/helper", `/usr/bin/x\ny`} {
+		body := `{"name":"prod","purpose":"jobs","gitCredentials":{"mode":"custom","helper":"` + helper + `"}}`
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/runners/acme/pools",
+			strings.NewReader(body))
+		req.Header.Set("Authorization", "token "+adminToken)
+
+		rec := httptest.NewRecorder()
+		handlerWith(t, identity.ActionNamespaceRead, identity.ActionNamespaceManageRunners).ServeHTTP(rec, req)
+
+		var got struct {
+			Message string `json:"message"`
+		}
+
+		if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+			t.Fatalf("helper %q: body %q: %v", helper, rec.Body.String(), err)
+		}
+
+		if rec.Code != http.StatusBadRequest || got.Message != runner.ErrInvalidHelper.Error() {
+			t.Errorf("helper %q: status %d message %q, want 400 and %q", helper, rec.Code, got.Message,
+				runner.ErrInvalidHelper.Error())
+		}
 	}
 }
 
