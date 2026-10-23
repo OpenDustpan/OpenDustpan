@@ -1,6 +1,10 @@
 package dustpan
 
-import "opendustpan.org/opendustpan/internal/api/apidesc"
+import (
+	"reflect"
+
+	"opendustpan.org/opendustpan/internal/api/apidesc"
+)
 
 // RouteSource is the list of the route patterns of one mounted adapter.
 type RouteSource struct {
@@ -80,6 +84,27 @@ func (s *Server) AllHandlerNames() []string {
 
 	for _, h := range s.mounted.allHandlers() {
 		out = append(out, h.name)
+	}
+
+	return out
+}
+
+// HandlerPackages returns the Go package of each adapter that the server
+// mounts, by the name of the adapter.
+func (s *Server) HandlerPackages() map[string]string {
+	out := map[string]string{}
+
+	if s.mounted == nil {
+		return out
+	}
+
+	for _, h := range s.mounted.handlers() {
+		t := reflect.TypeOf(h.handler)
+		for t.Kind() == reflect.Pointer {
+			t = t.Elem()
+		}
+
+		out[h.name] = t.PkgPath()
 	}
 
 	return out

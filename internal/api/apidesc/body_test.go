@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"maps"
+	"net/http"
 	"slices"
 	"strconv"
 	"strings"
@@ -51,6 +52,10 @@ func sampleDocument(t *testing.T, ops ...apidesc.Operation) map[string]map[strin
 // withBodies returns the operation with the request and the answer given.
 func withBodies(o apidesc.Operation, request, response apidesc.Body) apidesc.Operation {
 	o.Bodies = &apidesc.Bodies{Request: request, Response: response}
+
+	if !response.IsNone() {
+		o.Statuses = []int{http.StatusOK}
+	}
 
 	return o
 }
@@ -147,8 +152,8 @@ func TestBuildWritesTheBodies(t *testing.T) {
 	}
 
 	responses := asMap(t, post["responses"])
-	if got := jsonOf(responses["2XX"]); !strings.Contains(got, `"$ref":"#/components/schemas/Thing"`) {
-		t.Errorf("POST 2XX = %s, want a reference to Thing", got)
+	if got := jsonOf(responses["200"]); !strings.Contains(got, `"$ref":"#/components/schemas/Thing"`) {
+		t.Errorf("POST 200 = %s, want a reference to Thing", got)
 	}
 
 	merge := jsonOf(paths["/api/dustpan/v1/things/{thing_id}"]["patch"]["requestBody"])
@@ -162,8 +167,8 @@ func TestBuildWritesTheBodies(t *testing.T) {
 	}
 
 	delResponses := asMap(t, del["responses"])
-	if got := jsonOf(delResponses["2XX"]); got != `{"description":"The request succeeded."}` {
-		t.Errorf("DELETE 2XX = %s, want an answer with no content", got)
+	if got := jsonOf(delResponses["204"]); got != `{"description":"The request succeeded."}` {
+		t.Errorf("DELETE 204 = %s, want an answer with no content", got)
 	}
 }
 

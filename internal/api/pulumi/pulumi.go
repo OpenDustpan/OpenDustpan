@@ -161,25 +161,41 @@ type Handler struct {
 	supportedJournal int
 }
 
+// validate returns ErrMissingDependency when cfg lacks a required dependency.
+func (cfg Config) validate() error {
+	switch {
+	case cfg.Audit == nil:
+		return fmt.Errorf("%w: audit store", ErrMissingDependency)
+	case cfg.Stacks == nil:
+		return fmt.Errorf("%w: stack service", ErrMissingDependency)
+	case cfg.Updates == nil:
+		return fmt.Errorf("%w: update service", ErrMissingDependency)
+	case cfg.Secrets == nil:
+		return fmt.Errorf("%w: secret service", ErrMissingDependency)
+	case cfg.Namespaces == nil:
+		return fmt.Errorf("%w: namespace service", ErrMissingDependency)
+	case cfg.Authenticator == nil:
+		return fmt.Errorf("%w: authenticator", ErrMissingDependency)
+	case cfg.Authorizer == nil:
+		return fmt.Errorf("%w: authorizer", ErrMissingDependency)
+	case cfg.Logger == nil:
+		return fmt.Errorf("%w: logger", ErrMissingDependency)
+	case cfg.CheckpointDeltaCutoff < 0:
+		return fmt.Errorf("%w: %d", ErrInvalidCutoff, cfg.CheckpointDeltaCutoff)
+	}
+
+	return nil
+}
+
 // NewHandler returns a Handler. Every Config field but Sessions is required.
 func NewHandler(cfg Config) (*Handler, error) {
-	switch {
-	case cfg.Stacks == nil:
-		return nil, fmt.Errorf("%w: stack service", ErrMissingDependency)
-	case cfg.Updates == nil:
-		return nil, fmt.Errorf("%w: update service", ErrMissingDependency)
-	case cfg.Secrets == nil:
-		return nil, fmt.Errorf("%w: secret service", ErrMissingDependency)
-	case cfg.Namespaces == nil:
-		return nil, fmt.Errorf("%w: namespace service", ErrMissingDependency)
-	case cfg.Authenticator == nil:
-		return nil, fmt.Errorf("%w: authenticator", ErrMissingDependency)
-	case cfg.Authorizer == nil:
-		return nil, fmt.Errorf("%w: authorizer", ErrMissingDependency)
-	case cfg.Logger == nil:
-		return nil, fmt.Errorf("%w: logger", ErrMissingDependency)
-	case cfg.CheckpointDeltaCutoff < 0:
-		return nil, fmt.Errorf("%w: %d", ErrInvalidCutoff, cfg.CheckpointDeltaCutoff)
+	if err := cfg.validate(); err != nil {
+		return nil, err
+	}
+
+	recorder, err := refusal.New(cfg.Authorizer, cfg.Audit, cfg.Namespaces, cfg.Logger, cfg.OnAuditFailure)
+	if err != nil {
+		return nil, fmt.Errorf("denial recorder: %w", err)
 	}
 
 	h := &Handler{
@@ -197,12 +213,10 @@ func NewHandler(cfg Config) (*Handler, error) {
 		gate:           cfg.Gate,
 		audit:          cfg.Audit,
 		onAuditFailure: cfg.OnAuditFailure,
-		guard: refusal.New(cfg.Authorizer, cfg.Audit, cfg.Namespaces, cfg.Logger,
-			cfg.OnAuditFailure).WithLimiter(cfg.DenialLimiter).
-			WithSurface("pulumi"),
-		mux:         newPatternMux(),
-		routes:      nil,
-		deltaCutoff: cfg.CheckpointDeltaCutoff,
+		guard:          recorder.WithLimiter(cfg.DenialLimiter).WithSurface("pulumi"),
+		mux:            newPatternMux(),
+		routes:         nil,
+		deltaCutoff:    cfg.CheckpointDeltaCutoff,
 
 		disablePulumiJournaling: cfg.DisablePulumiJournaling,
 		supportedJournal:        maxSupportedJournalVersion,
@@ -427,8 +441,9 @@ type listStacksResponse struct {
 
 // listStacks answers GET /api/user/stacks. With an organization it lists the
 // stacks in that namespace. Without one it lists the stacks in every readable
-// namespace, ordered by namespace, project, then stack name. Paging stays
-// trivial: every answer holds all stacks and no continuation token.
+// namespace. The list is ordered by namespace, project, then stack name, in
+// pages of stackPageSize stacks: an answer with a continuationToken has a
+// next page.
 func (h *Handler) listStacks(
 	w http.ResponseWriter, r *http.Request, p identity.Principal, obj identity.Object,
 ) {
@@ -450,7 +465,7 @@ func (h *Handler) listStacks(
 		return
 	}
 
-	h.listStacksAll(ctx, w, p, project)
+	h.listStacksAll(ctx, w, r, p, project)
 }
 
 // listStacksIn lists the stacks in one namespace. The caller must hold
@@ -476,22 +491,14 @@ func (h *Handler) listStacksIn(
 		return
 	}
 
-	stacks, err := h.stacks.List(ctx, stack.Filter{Namespace: ns, Project: project})
-	if err != nil {
-		h.writeError(ctx, w, err)
-
-		return
-	}
-
-	h.writeJSON(ctx, w, http.StatusOK, listStacksResponse{
-		Stacks:            summarize(stacks),
-		ContinuationToken: nil,
+	h.serveStackPage(ctx, w, r, stackListQuery{
+		organization: ns.String(), project: project, namespaces: []namespace.Name{ns},
 	})
 }
 
-// listStacksAll lists the stacks in every readable namespace.
+// listStacksAll lists the stacks in every namespace that p may read.
 func (h *Handler) listStacksAll(
-	ctx context.Context, w http.ResponseWriter, p identity.Principal, project stack.ProjectName,
+	ctx context.Context, w http.ResponseWriter, r *http.Request, p identity.Principal, project stack.ProjectName,
 ) {
 	all, err := h.namespaces.List(ctx)
 	if err != nil {
@@ -500,7 +507,7 @@ func (h *Handler) listStacksAll(
 		return
 	}
 
-	out := []stackSummary{}
+	readable := make([]namespace.Name, 0, len(all))
 
 	for i := range all {
 		obj := identity.NamespaceObject(all[i].Name)
@@ -515,17 +522,10 @@ func (h *Handler) listStacksAll(
 			return
 		}
 
-		stacks, err := h.stacks.List(ctx, stack.Filter{Namespace: all[i].Name, Project: project})
-		if err != nil {
-			h.writeError(ctx, w, err)
-
-			return
-		}
-
-		out = append(out, summarize(stacks)...)
+		readable = append(readable, all[i].Name)
 	}
 
-	h.writeJSON(ctx, w, http.StatusOK, listStacksResponse{Stacks: out, ContinuationToken: nil})
+	h.serveStackPage(ctx, w, r, stackListQuery{organization: "", project: project, namespaces: readable})
 }
 
 // summarize converts stacks to the wire shape, never returning nil.
@@ -986,7 +986,7 @@ func classify(err error) (int, string) {
 	switch {
 	case errors.Is(err, errInvalidBody):
 		return http.StatusBadRequest, invalidBodyMessage
-	case errors.Is(err, errRevealPathTooLong):
+	case errors.Is(err, errRevealPathTooLong), errors.Is(err, errContinuationToken):
 		return http.StatusBadRequest, err.Error()
 	case errors.Is(err, namespace.ErrInvalidName), errors.Is(err, stack.ErrInvalidName),
 		errors.Is(err, identity.ErrInvalidObject), errors.Is(err, stack.ErrInvalidUpdate):

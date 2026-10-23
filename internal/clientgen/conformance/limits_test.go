@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"opendustpan.org/opendustpan/internal/clientgen/conformance"
 	"opendustpan.org/opendustpan/internal/clientgen/model"
@@ -222,5 +223,59 @@ func TestHarnessClientsConnectToLoopbackOnly(t *testing.T) {
 	status, _, err := conformance.DirectGet(t.Context(), live.URL, "/x")
 	if err != nil || status != http.StatusNotFound {
 		t.Errorf("a loopback server should answer: %d %v", status, err)
+	}
+}
+
+// TestDevServerAtCloses checks that Close of a helper with no process returns.
+func TestDevServerAtCloses(t *testing.T) {
+	t.Parallel()
+
+	done := make(chan error, 1)
+
+	go func() { done <- conformance.DevServerAt("http://127.0.0.1:1").Close() }()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Errorf("close: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Close of a DevServerAt helper did not return")
+	}
+}
+
+// TestEnsureProfileWritesTheSeedOnce checks that an Env that no run made still
+// writes the seed profile once: the second call must not post it again.
+func TestEnsureProfileWritesTheSeedOnce(t *testing.T) {
+	t.Parallel()
+
+	var posts atomic.Int64
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			if posts.Add(1) > 1 {
+				w.WriteHeader(http.StatusConflict)
+
+				return
+			}
+
+			w.WriteHeader(http.StatusCreated)
+
+			return
+		}
+
+		w.Header().Set("ETag", `"1"`)
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(srv.Close)
+
+	for range 3 {
+		if _, err := conformance.SeedProfile(t.Context(), srv.URL); err != nil {
+			t.Fatalf("ensure profile: %v", err)
+		}
+	}
+
+	if got := posts.Load(); got != 1 {
+		t.Errorf("the seed profile was posted %d times, want 1", got)
 	}
 }

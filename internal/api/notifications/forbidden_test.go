@@ -3,6 +3,7 @@ package notifications_test
 import (
 	"testing"
 
+	"opendustpan.org/opendustpan/internal/api/apidesc/apidesctest"
 	apinotifications "opendustpan.org/opendustpan/internal/api/notifications"
 	"opendustpan.org/opendustpan/internal/errcode/errcodetest"
 )
@@ -26,7 +27,7 @@ func TestForbiddenCodes(t *testing.T) {
 				t.Fatalf("handler: %v", err)
 			}
 
-			f.handler = h
+			f.handler, f.served = h, apidesctest.CheckStatus(t, h)
 
 			got := f.do(t, get("admin", base))
 
