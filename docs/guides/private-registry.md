@@ -231,9 +231,9 @@ hashes of the checksums file and the signature file.
 - A backup holds the records of the releases and the keys. It does not copy
   the files of the releases yet. Copy the blob store with your own tools until
   a backup does.
-- A signed file address is valid only on the instance that made it, because
-  each instance makes its own signing key at start. Behind one address with
-  several instances, use one instance for the registry, or set one shared key
+- A signed file address is valid only on the server process that made it, because
+  each server process makes its own signing key at start. Behind one address with
+  several server processes, use one server process for the registry, or set one shared key
   with the option `WithRegistryURLKey` of the library.
 - The registry does not copy a provider from a public registry. To use a
   provider that you do not build, keep using the public registry.

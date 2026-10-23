@@ -7,6 +7,7 @@ import (
 	"crypto/cipher"
 	"crypto/md5" //nolint:gosec // The protocol under test uses MD5 for integrity.
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -1017,6 +1018,8 @@ type fixture struct {
 	refusals   *workspacetest.Refusals
 	now        *time.Time
 	ws         workspace.Workspace
+	sealKEK    []byte
+	sealKeyID  string
 }
 
 // stateDir returns the blob directory of the state of the workspace ws in the
@@ -1144,6 +1147,7 @@ func newFixtureWithBlobs(t *testing.T, blobs blob.Store) fixture {
 	return fixture{
 		svc: svc, store: store, namespaces: namespaces, secrets: secrets, blobs: blobs, refusals: refusals,
 		now: &now, ws: ws,
+		sealKEK: nil, sealKeyID: "",
 	}
 }
 
@@ -4404,6 +4408,7 @@ func (m *sealedKeys) ListWrapperIDs(_ context.Context) ([]string, error) {
 type sealedWrapper struct {
 	aead cipher.AEAD
 	id   string
+	kek  []byte
 }
 
 func newSealedWrapper(t *testing.T) *sealedWrapper {
@@ -4424,7 +4429,7 @@ func newSealedWrapper(t *testing.T) *sealedWrapper {
 		t.Fatalf("new GCM: %v", err)
 	}
 
-	return &sealedWrapper{aead: aead, id: "kek-test"}
+	return &sealedWrapper{aead: aead, id: "kek-test", kek: kek}
 }
 
 func (w *sealedWrapper) ID() string { return w.id }
@@ -4478,8 +4483,10 @@ func newSealedFixture(t *testing.T) fixture {
 		t.Fatalf("namespaces: %v", err)
 	}
 
+	wrapper := newSealedWrapper(t)
+
 	secrets, err := secret.NewService(secret.Config{
-		Keys: newSealedKeys(), Wrapper: newSealedWrapper(t), Namespaces: namespaces, Now: nil, MaxBatchBytes: 0,
+		Keys: newSealedKeys(), Wrapper: wrapper, Namespaces: namespaces, Now: nil, MaxBatchBytes: 0,
 	})
 	if err != nil {
 		t.Fatalf("secrets: %v", err)
@@ -4519,6 +4526,7 @@ func newSealedFixture(t *testing.T) fixture {
 	return fixture{
 		svc: svc, store: store, namespaces: namespaces, secrets: secrets, blobs: blobs, refusals: refusals,
 		now: &now, ws: ws,
+		sealKEK: wrapper.kek, sealKeyID: wrapper.id,
 	}
 }
 
@@ -4798,7 +4806,8 @@ type tamperCase struct {
 }
 
 // assertTamperedDownloadFails proves the download of a tampered blob fails
-// with ErrSealedContent and no key, scope or content in the error.
+// with ErrSealedContent and that the error holds no content, no namespace
+// name, no workspace ID, no key ID and no key-encryption key.
 func assertTamperedDownloadFails(t *testing.T, c *tamperCase) {
 	t.Helper()
 
@@ -4830,14 +4839,108 @@ func assertTamperedDownloadFails(t *testing.T, c *tamperCase) {
 		t.Errorf("%s: err = %v, want ErrSealedContent", c.name, err)
 	}
 
-	for _, leaked := range []string{"s3cr3t", "acme", c.f.ws.ID.String(), "kek"} {
-		if strings.Contains(err.Error(), leaked) {
-			t.Errorf("%s: error %q holds %q, want no key, scope or content", c.name, err, leaked)
-		}
+	if len(c.f.sealKEK) == 0 || c.f.sealKeyID == "" {
+		t.Fatalf("%s: fixture has no key-encryption key or key ID, want a sealed fixture", c.name)
+	}
+
+	secrets := []string{
+		"s3cr3t", "acme", c.f.ws.ID.String(), c.f.sealKeyID,
+		string(c.f.sealKEK),
+		hex.EncodeToString(c.f.sealKEK),
+		base64.StdEncoding.EncodeToString(c.f.sealKEK),
+		base64.RawURLEncoding.EncodeToString(c.f.sealKEK),
+	}
+
+	for _, leaked := range leakedSecrets(err.Error(), secrets) {
+		t.Errorf("%s: error %q holds %q, want no key, scope or content", c.name, err, leaked)
 	}
 
 	if closeErr != nil && !errors.Is(closeErr, workspace.ErrSealedContent) {
 		t.Logf("%s: close: %v", c.name, closeErr)
+	}
+}
+
+// leakedSecrets returns each value of secrets that the text holds. An empty
+// value is never a match.
+func leakedSecrets(text string, secrets []string) []string {
+	var leaked []string
+
+	for _, s := range secrets {
+		if s != "" && strings.Contains(text, s) {
+			leaked = append(leaked, s)
+		}
+	}
+
+	return leaked
+}
+
+// TestLeakedSecretsIgnoresRandomID proves that the leak check reports a secret
+// only when the secret is in the text, and not when a random ID holds the
+// letters of a fixed word.
+func TestLeakedSecretsIgnoresRandomID(t *testing.T) {
+	t.Parallel()
+
+	kek := bytes.Repeat([]byte{0x01}, 32)
+	shared := []string{
+		"kek-test",
+		string(kek),
+		hex.EncodeToString(kek),
+		base64.StdEncoding.EncodeToString(kek),
+		base64.RawURLEncoding.EncodeToString(kek),
+	}
+
+	tests := []struct {
+		name    string
+		text    string
+		secrets []string
+		want    []string
+	}{
+		{
+			name:    "random ID holds kek",
+			text:    fmt.Errorf("open state %s: %w", "sv-kekkekkekkekkekkekkekkek", workspace.ErrSealedContent).Error(),
+			secrets: nil,
+			want:    nil,
+		},
+		{
+			name:    "key ID",
+			text:    "open state sv-abc: kek-test",
+			secrets: nil,
+			want:    []string{"kek-test"},
+		},
+		{
+			name:    "hex key",
+			text:    "open state sv-abc: " + hex.EncodeToString(kek),
+			secrets: nil,
+			want:    []string{hex.EncodeToString(kek)},
+		},
+		{
+			name:    "base64 key",
+			text:    "open state sv-abc: " + base64.StdEncoding.EncodeToString(kek),
+			secrets: nil,
+			want:    []string{base64.StdEncoding.EncodeToString(kek), base64.RawURLEncoding.EncodeToString(kek)},
+		},
+		{
+			name:    "empty secret",
+			text:    "open state sv-abc",
+			secrets: []string{""},
+			want:    nil,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			secrets := shared
+			if tc.secrets != nil {
+				secrets = tc.secrets
+			}
+
+			got := leakedSecrets(tc.text, secrets)
+			if !slices.Equal(got, tc.want) {
+				t.Errorf("leakedSecrets(%q) = %q, want %q", tc.text, got, tc.want)
+			}
+		})
 	}
 }
 

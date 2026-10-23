@@ -846,6 +846,8 @@ func TestSafeText(t *testing.T) {
 		{name: "escape", in: "a\x1bb", want: "a\\u001Bb"},
 		{name: "bidi override", in: "a\u202eb", want: "a\\u202Eb"},
 		{name: "line separator", in: "a\u2028b", want: "a\\u2028b"},
+		{name: "paragraph separator", in: "a\u2029b", want: "a\\u2029b"},
+		{name: "next line control", in: "a\u0085b", want: "a\\u0085b"},
 		{name: "bad bytes", in: "a\xffb", want: "a\ufffdb"},
 	}
 

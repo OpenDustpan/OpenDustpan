@@ -92,6 +92,7 @@ func limitFixture(t *testing.T, maxState int64) (fixture, *recordingBlobs) {
 	return fixture{
 		svc: svc, store: store, namespaces: namespaces, secrets: secrets, blobs: rec, refusals: refusals,
 		now: &now, ws: ws,
+		sealKEK: nil, sealKeyID: "",
 	}, rec
 }
 
