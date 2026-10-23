@@ -258,11 +258,13 @@ func NewService(cfg Config) (*Service, error) {
 }
 
 // New returns the namespace that Create stores for name: a new ID, homed in
-// the service's region, at failover version 1, created now. It stores nothing,
-// so a caller can store it with other rows in one transaction.
+// the service's region, at failover version 1, created now. The create time is
+// in UTC at millisecond precision, the precision that the store keeps, so the
+// answer of a create equals a later read. It stores nothing, so a caller can
+// store it with other rows in one transaction.
 func (s *Service) New(name Name) Namespace {
 	return Namespace{
-		CreatedAt:       s.now().UTC(),
+		CreatedAt:       s.now().UTC().Truncate(time.Millisecond),
 		ID:              NewID(),
 		Name:            name,
 		HomeRegion:      s.region,
