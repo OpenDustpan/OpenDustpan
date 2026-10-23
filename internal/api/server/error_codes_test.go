@@ -29,14 +29,7 @@ func TestWriteErrorCodes(t *testing.T) {
 
 	active := &maintenance.ActiveWorkError{Work: []string{"pulumi/acme/web/prod", "opentofu/acme/net"}, Canceled: nil}
 
-	tests := []struct {
-		name    string
-		err     error
-		status  int
-		code    string
-		args    map[string]any
-		message string
-	}{
+	tests := []writeErrorRow{
 		{"unauthenticated", identity.ErrUnauthenticated, http.StatusUnauthorized, errcode.AuthUnauthenticated, nil, ""},
 		{"denied", identity.ErrDenied, http.StatusForbidden, errcode.AccessDenied, nil, ""},
 		{"invalid object", identity.ErrInvalidObject, http.StatusBadRequest, errcode.RequestInvalidObject, nil, ""},
@@ -49,7 +42,14 @@ func TestWriteErrorCodes(t *testing.T) {
 			errcode.RequestBodyInvalid, nil,
 			`invalid override switches body: provide {"allowForcedWrites":true|false,"allowUnlockedWrites":true|false}`,
 		},
-		{"invalid namespace name", namespace.ErrInvalidName, http.StatusBadRequest, errcode.NamespaceInvalidName, nil, ""},
+		{
+			"invalid namespace name",
+			namespace.ErrInvalidName,
+			http.StatusBadRequest,
+			errcode.NamespaceInvalidName,
+			nil,
+			"",
+		},
 		{
 			"invalid namespace body", apiserver.ErrInvalidNamespaceBodyForTest, http.StatusBadRequest,
 			errcode.RequestBodyInvalid, nil, `invalid namespace body: provide {"name":"..."}`,
@@ -72,11 +72,13 @@ func TestWriteErrorCodes(t *testing.T) {
 		{"invalid state", maintenance.ErrInvalidState, http.StatusBadRequest, errcode.MaintenanceInvalidState, nil, ""},
 		{
 			"active work", active, http.StatusConflict, errcode.MaintenanceActiveWork,
-			map[string]any{"workCount": int64(2), "canceledCount": int64(0)}, "",
+			map[string]any{"workCount": int64(2), "canceledCount": int64(0)},
+			"",
 		},
 		{
 			"active work without units", maintenance.ErrActiveWork, http.StatusConflict, errcode.MaintenanceActiveWork,
-			map[string]any{"workCount": int64(0), "canceledCount": int64(0)}, "",
+			map[string]any{"workCount": int64(0), "canceledCount": int64(0)},
+			"",
 		},
 		{"held", maintenance.ErrHeld, http.StatusConflict, errcode.MaintenanceHeld, nil, ""},
 		{
@@ -95,35 +97,57 @@ func TestWriteErrorCodes(t *testing.T) {
 			t.Run(tc.name+"/"+err.Error(), func(t *testing.T) {
 				t.Parallel()
 
-				r := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/server/x", http.NoBody)
-				rec := httptest.NewRecorder()
-				apiserver.WriteErrorForTest(rec, r, err)
-
-				if rec.Code != tc.status {
-					t.Fatalf("status = %d, want %d: %s", rec.Code, tc.status, rec.Body.String())
-				}
-
-				errcodetest.CheckAnswer(t, errcodetest.ShapeCamelCase, tc.status, rec.Body.Bytes(),
-					errcodetest.Want{Code: tc.code, Args: tc.args, RequestBody: nil})
-
-				// Only the rows that name a message check it. The namespace paths answer
-				// the text of the error they got, which is the wrapped text when the error
-				// is wrapped; the request paths answer the sentinel text.
-				if tc.message != "" {
-					var body struct {
-						Message string `json:"message"`
-					}
-
-					if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
-						t.Fatalf("decode %s: %v", rec.Body.String(), err)
-					}
-
-					if body.Message != tc.message && body.Message != err.Error() {
-						t.Fatalf("message = %q, want %q or %q: %s", body.Message, tc.message, err.Error(), rec.Body.String())
-					}
-				}
+				checkWriteErrorRow(t, tc, err)
 			})
 		}
+	}
+}
+
+// writeErrorRow is one row of TestWriteErrorCodes: the error, the status, the
+// code and the arguments that its answer holds, and its message when the row
+// names one.
+type writeErrorRow struct {
+	name    string
+	err     error
+	status  int
+	code    string
+	args    map[string]any
+	message string
+}
+
+// checkWriteErrorRow writes err and checks the status, the code and the
+// arguments of the answer and, when the row names a message, its message.
+func checkWriteErrorRow(t *testing.T, tc writeErrorRow, err error) {
+	t.Helper()
+
+	r := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/server/x", http.NoBody)
+	rec := httptest.NewRecorder()
+	apiserver.WriteErrorForTest(rec, r, err)
+
+	if rec.Code != tc.status {
+		t.Fatalf("status = %d, want %d: %s", rec.Code, tc.status, rec.Body.String())
+	}
+
+	errcodetest.CheckAnswer(t, errcodetest.ShapeCamelCase, tc.status, rec.Body.Bytes(),
+		errcodetest.Want{Code: tc.code, Args: tc.args, RequestBody: nil})
+
+	// Only the rows that name a message check it. The namespace paths answer
+	// the text of the error they got, which is the wrapped text when the error
+	// is wrapped; the request paths answer the sentinel text.
+	if tc.message == "" {
+		return
+	}
+
+	var body struct {
+		Message string `json:"message"`
+	}
+
+	if decodeErr := json.Unmarshal(rec.Body.Bytes(), &body); decodeErr != nil {
+		t.Fatalf("decode %s: %v", rec.Body.String(), decodeErr)
+	}
+
+	if body.Message != tc.message && body.Message != err.Error() {
+		t.Fatalf("message = %q, want %q or %q: %s", body.Message, tc.message, err.Error(), rec.Body.String())
 	}
 }
 
