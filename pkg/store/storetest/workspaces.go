@@ -4050,6 +4050,16 @@ func servicesOver(t *testing.T, s WorkspaceStore, n int) []*workspace.Service {
 	services := make([]*workspace.Service, n)
 	sealer := testSealer(t, nsSvc)
 
+	// The cases build every blob key inside the scope of its namespace, so
+	// no service records an out-of-scope refusal.
+	refusals := workspacetest.NewRefusals()
+
+	t.Cleanup(func() {
+		if got := refusals.All(); len(got) != 0 {
+			t.Errorf("out-of-scope refusals = %+v, want none", got)
+		}
+	})
+
 	for i := range services {
 		svc, err := workspace.NewService(workspace.Config{
 			ManualLocks:        nil,
@@ -4057,7 +4067,7 @@ func servicesOver(t *testing.T, s WorkspaceStore, n int) []*workspace.Service {
 			States:             s,
 			Blobs:              blobs,
 			Namespaces:         nsSvc,
-			OutOfScope:         workspacetest.NewRefusals(),
+			OutOfScope:         refusals,
 			Sealer:             sealer,
 			Logger:             nil,
 			Now:                now,
