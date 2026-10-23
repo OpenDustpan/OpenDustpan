@@ -218,12 +218,13 @@ func decodeNamespaceResponse(
 	resp *http.Response, server, name string,
 ) (namespaceCreateResponse, error) {
 	if resp.StatusCode != http.StatusCreated {
+		hint := "check the server log and run opendustpan namespace create --server " + server + " again"
+
 		return namespaceCreateResponse{}, fmt.Errorf(
-			"%w %q: %s: check the server log and run opendustpan namespace create --server %s again",
+			"%w %q: %s",
 			ErrNamespaceCreate,
 			name,
-			decodeErrorAnswer(resp),
-			server,
+			answerText(resp.StatusCode, decodeErrorAnswer(resp), hint),
 		)
 	}
 

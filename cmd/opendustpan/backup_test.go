@@ -257,8 +257,8 @@ func TestBackupCommandStartConflict(t *testing.T) {
 		t.Fatalf("backup error = %v, want it to name the running backup", err)
 	}
 
-	if !strings.Contains(err.Error(), "opendustpan backup") {
-		t.Fatalf("backup error = %v, want it to name the one command that helps", err)
+	if strings.Contains(err.Error(), "again") {
+		t.Fatalf("backup error = %v, want no retry hint for a refused request", err)
 	}
 }
 
