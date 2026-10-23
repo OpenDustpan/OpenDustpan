@@ -367,7 +367,7 @@ type movedOutOfLockError struct {
 }
 
 func (e *movedOutOfLockError) Error() string {
-	return e.locked.Error() + ": moving it out of the collection needs unit:manage on it"
+	return e.locked.Refusal() + ": moving it out of the collection needs unit:manage on it"
 }
 
 // Is reports whether target is manuallock.ErrLocked.

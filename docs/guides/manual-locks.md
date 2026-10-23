@@ -81,16 +81,19 @@ When the lock goes, the next dispatch takes the queued job.
 ## What the tools print
 
 The text names the stack or workspace in the words of the tool, the holder, the time and the
-reason. The Pulumi CLI prints, for a stack in a locked collection:
+reason. Then it names the route that the holder uses to remove the lock. The Pulumi CLI prints, for a stack in a locked collection:
 
 ```text
-stack acme/web/prod is in collection acme/payments, which has a manual lock by alice since 2026-10-19T10:00:00Z: change window closed
+stack acme/web/prod is in collection acme/payments, which has a manual lock by alice since 2026-10-19T10:00:00Z: change window closed. To remove the lock, the holder sends DELETE /api/dustpan/v1/namespaces/acme/collections/payments/lock.
 ```
 
 For a lock on the stack itself the text starts with `stack acme/web/prod has a
-manual lock by`. For a lock on the namespace it starts with `stack acme/web/prod
-is in namespace acme, which has a manual lock by`. OpenTofu names a `workspace`
-in the same way.
+manual lock by`, and the route is `/api/inventory/unit-lock?unit=pulumi:acme/web/prod`.
+For a lock on the namespace it starts with `stack acme/web/prod
+is in namespace acme, which has a manual lock by`, and the route is
+`/api/dustpan/v1/namespaces/acme/lock`. The TFE-compatible API gives the same
+text with the word `workspace`. A person with `unit:manage` removes a lock of
+another holder with the force-unlock route of the object (see "Remove a lock").
 
 The OpenTofu HTTP backend shows the lock information of the answer 423. This is
 the output of `tofu apply` for a lock of `admin` on the workspace

@@ -562,14 +562,15 @@ func TestLockedErrorNamesTheHolderAndTheReason(t *testing.T) {
 			t.Parallel()
 
 			l := manuallock.Lock{Since: fixedNow(), Target: tc.target, Holder: "alice", Reason: "change window closed"}
-			err := error(&manuallock.LockedError{Lock: l, Noun: tc.noun, Name: tc.object})
+			locked := &manuallock.LockedError{Lock: l, Noun: tc.noun, Name: tc.object}
+			err := error(locked)
 
-			if err.Error() != tc.want {
-				t.Errorf("text = %q, want %q", err.Error(), tc.want)
+			if locked.Refusal() != tc.want {
+				t.Errorf("refusal = %q, want %q", locked.Refusal(), tc.want)
 			}
 
-			if strings.Contains(err.Error(), "unit") {
-				t.Errorf("text = %q: the word unit is not a word of any tool", err.Error())
+			if strings.Contains(locked.Refusal(), "unit") {
+				t.Errorf("refusal = %q: the word unit is not a word of any tool", locked.Refusal())
 			}
 
 			if !errors.Is(err, manuallock.ErrLocked) {
