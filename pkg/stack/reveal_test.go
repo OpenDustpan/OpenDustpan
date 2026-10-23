@@ -63,6 +63,60 @@ func TestSecretsProviderNamesOther(t *testing.T) {
 	}
 }
 
+// TestSecretsProviderReadsLastCopy proves that the last top-level copy of a
+// repeated secrets_providers member gives the provider, as in the Pulumi CLI.
+// The save of a checkpoint accepts a repeated member.
+func TestSecretsProviderReadsLastCopy(t *testing.T) {
+	t.Parallel()
+
+	const (
+		serviceEntry = `{"type":"service"}`
+		localEntry   = `{"type":"passphrase"}`
+	)
+
+	cases := []struct {
+		name        string
+		first, last string
+		want        string
+	}{
+		{name: "two service copies", first: serviceEntry, last: serviceEntry, want: "service"},
+		{name: "two passphrase copies", first: localEntry, last: localEntry, want: "passphrase"},
+		{name: "a service copy, then a passphrase copy", first: serviceEntry, last: localEntry, want: "passphrase"},
+		{name: "a passphrase copy, then a service copy", first: localEntry, last: serviceEntry, want: "service"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			deployment := `{"secrets_providers":` + tc.first + `,"resources":[],"secrets_providers":` + tc.last + `}`
+
+			if got := stack.SecretsProvider([]byte(deployment)); got != tc.want {
+				t.Fatalf("provider = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestSecretCiphertextOfRejectsRepeatedSecretsProviders proves that the
+// reveal lookup refuses a deployment with a repeated secrets_providers
+// member, also when the copies are the same. The reveal never decrypts a
+// value of such a deployment.
+func TestSecretCiphertextOfRejectsRepeatedSecretsProviders(t *testing.T) {
+	t.Parallel()
+
+	secret := revealDeployment("cipher")
+	repeated := strings.Replace(secret, `"resources":`, `"secrets_providers":{"type":"service"},"resources":`, 1)
+
+	if _, _, err := stack.SecretCiphertextOf([]byte(secret), "/resources/0/outputs/password"); err != nil {
+		t.Fatalf("reveal of the deployment with one copy: %v", err)
+	}
+
+	if _, _, err := stack.SecretCiphertextOf([]byte(repeated), "/resources/0/outputs/password"); err == nil {
+		t.Fatal("reveal of a deployment with two copies answered, want an error")
+	}
+}
+
 // TestSecretCiphertextOf proves the ciphertext at a masked path decodes to
 // the stored bytes, and that an unknown path fails closed with a 404
 // sentinel.
