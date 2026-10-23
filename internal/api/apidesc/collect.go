@@ -2,6 +2,7 @@ package apidesc
 
 import (
 	"maps"
+	"net/http"
 	"slices"
 	"strings"
 )
@@ -33,6 +34,10 @@ type Label struct {
 	Object string
 	// Query lists the query parameters that the route reads.
 	Query []QueryParam
+	// Statuses are the status codes of the success answer. An empty list means
+	// the default of the body: 200 for a typed answer and 204 for an answer
+	// with no body.
+	Statuses []int
 	// Bodies names the body of the request and the body of the success
 	// answer.
 	Bodies *Bodies
@@ -43,8 +48,21 @@ type Label struct {
 func Name(id string, tags ...string) Label {
 	return Label{
 		ID: id, Tags: tags, IdempotencyKey: false, IfMatch: false, IfMatchRequired: false, ETag: false,
-		Object: "", Query: nil, Bodies: nil,
+		Object: "", Query: nil, Statuses: nil, Bodies: nil,
 	}
+}
+
+// WithStatus returns the label for a route whose success answer has the given
+// status codes, in place of the default of its body (200 with a body, 204
+// without one). Give one code for a route that always answers the same, for
+// example 201 for a route that creates an object. Give two for a route that
+// answers 201 for the first write of an object and 200 for a replacement. Each
+// call adds codes. Build refuses a code that is not 2xx and a code that the
+// label gives twice.
+func (l Label) WithStatus(statuses ...int) Label {
+	l.Statuses = append(slices.Clone(l.Statuses), statuses...)
+
+	return l
 }
 
 // On returns the label for a route whose actions apply to an object of the
@@ -103,6 +121,20 @@ func (l Label) WithETag() Label {
 	l.ETag = true
 
 	return l
+}
+
+// statuses returns the success statuses of the label in ascending order: the
+// explicit statuses, or the default of the body. A repeated status stays in the
+// list, so that Validate refuses it.
+func (l Label) statuses() []int {
+	switch {
+	case len(l.Statuses) > 0:
+		return slices.Sorted(slices.Values(l.Statuses))
+	case l.Bodies != nil && l.Bodies.Response.kind == bodyNone:
+		return []int{http.StatusNoContent}
+	default:
+		return []int{http.StatusOK}
+	}
 }
 
 // Row is what an adapter knows of one route: the fields that every adapter
@@ -179,6 +211,7 @@ func Collect(rows []Row, labels map[string]Label) []Operation {
 			IfMatch:         label.IfMatch,
 			IfMatchRequired: label.IfMatchRequired,
 			ETag:            label.ETag,
+			Statuses:        label.statuses(),
 			Query:           sortedQuery(label.Query),
 			Bodies:          copyBodies(label.Bodies),
 		})

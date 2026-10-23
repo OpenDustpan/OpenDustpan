@@ -21,6 +21,7 @@ var operationLabels = map[string]apidesc.Label{
 		On(apidesc.KindUnit).
 		WithBodies(apidesc.NoBody, driftDocument),
 	apidesc.Pattern(http.MethodPost, driftChecksURL): apidesc.Name("startDriftCheck", tagDrift).
+		WithStatus(http.StatusAccepted).
 		On(apidesc.KindUnit).
 		WithBodies(startRequest, checkDocument),
 }

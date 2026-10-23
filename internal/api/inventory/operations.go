@@ -14,6 +14,7 @@ const (
 	tagCollections = "collections"
 	tagLocks       = "locks"
 	tagViews       = "views"
+	tagSharing     = "output-sharing"
 )
 
 const (
@@ -57,6 +58,7 @@ var operationLabels = map[string]apidesc.Label{
 			"ListCollectionsResponse", apidesc.Named[collectionEntry]("Collection"),
 		)),
 	apidesc.Pattern(http.MethodPost, namespacePath+"/collections"): apidesc.Name("createCollection", tagCollections).
+		WithStatus(http.StatusCreated).
 		On(apidesc.KindNamespace).
 		WithBodies(apidesc.Typed[createCollectionRequest]("CreateCollectionRequest"), collectionBody),
 	apidesc.Pattern(http.MethodGet, collectionPath): apidesc.Name("getCollection", tagCollections).
@@ -94,7 +96,15 @@ var operationLabels = map[string]apidesc.Label{
 		tagLocks,
 	).On(apidesc.KindNamespace).WithBodies(apidesc.NoBody, apidesc.NoBody),
 
+	apidesc.Pattern(http.MethodGet, outputSharingPath): apidesc.Name("getOutputSharing", tagSharing).
+		On(apidesc.KindNamespace).
+		WithBodies(apidesc.NoBody, outputSharingBody),
+	apidesc.Pattern(http.MethodPut, outputSharingPath): apidesc.Name("setOutputSharing", tagSharing).
+		On(apidesc.KindNamespace).
+		WithBodies(apidesc.Typed[outputSharingRequest]("OutputSharingRequest"), outputSharingBody),
+
 	apidesc.Pattern(http.MethodPost, namespacePath+"/views"): apidesc.Name("createView", tagViews).WithKey().
+		WithStatus(http.StatusCreated).
 		On(apidesc.KindNamespace).
 		WithBodies(apidesc.Typed[createViewBody]("CreateViewRequest", viewNames...), viewBody),
 	apidesc.Pattern(http.MethodGet, namespacePath+"/views"): apidesc.Name("listViews", tagViews).
@@ -144,7 +154,9 @@ var (
 	lockRequestBody = apidesc.Typed[lockRequest]("LockRequest")
 	manualLockBody  = apidesc.Typed[lockEntryDocument]("ManualLock")
 	viewBody        = apidesc.Typed[viewDocument]("View", viewNames...)
-	viewNames       = []apidesc.Declaration{
+	// outputSharingBody is the output sharing setting of a namespace.
+	outputSharingBody = apidesc.Typed[outputSharingDocument]("OutputSharing")
+	viewNames         = []apidesc.Declaration{
 		apidesc.Named[viewQuery]("ViewQuery"),
 		apidesc.Named[viewLabel]("ViewLabel"),
 	}

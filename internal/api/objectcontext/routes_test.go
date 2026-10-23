@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/api/apidesc"
+	"opendustpan.org/opendustpan/internal/api/apidesc/apidesctest"
 	contextapi "opendustpan.org/opendustpan/internal/api/objectcontext"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -247,7 +248,7 @@ func (a *recordingAuthorizer) seen() []string {
 	return slices.Clone(a.checks)
 }
 
-func newHandler(t *testing.T, authz identity.Authorizer, store *fakeStore) *contextapi.Handler {
+func newHandler(t *testing.T, authz identity.Authorizer, store *fakeStore) testHandler {
 	t.Helper()
 
 	namespaces, err := namespace.NewService(namespace.Config{Store: fakeNamespaces{}, Now: nil, Region: "test-region"})
@@ -273,8 +274,20 @@ func newHandler(t *testing.T, authz identity.Authorizer, store *fakeStore) *cont
 		t.Fatalf("handler: %v", err)
 	}
 
-	return handler
+	return testHandler{Handler: handler, served: apidesctest.CheckStatus(t, handler)}
 }
+
+// testHandler is the handler of the adapter with the check of the success
+// statuses on its answers: a test fails when a handler answers a success
+// status that the description does not give.
+type testHandler struct {
+	*contextapi.Handler
+
+	served http.Handler
+}
+
+// ServeHTTP serves with the check.
+func (h testHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) { h.served.ServeHTTP(w, r) }
 
 // request is one call of a test: the method, the path, the token and the body.
 type request struct {

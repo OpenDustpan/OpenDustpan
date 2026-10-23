@@ -24,6 +24,7 @@ var operationLabels = map[string]apidesc.Label{
 		).
 		WithBodies(apidesc.NoBody, apidesc.Typed[listResponse]("ListProfilesResponse", profileNames...)),
 	apidesc.Pattern(http.MethodPost, profilesPath): apidesc.Name("createProfile", tagProfiles).WithETag().
+		WithStatus(http.StatusCreated).
 		On(apidesc.KindNamespace).
 		WithBodies(apidesc.Typed[createBody]("CreateProfileRequest"), profileBody),
 	apidesc.Pattern(http.MethodGet, profilePath): apidesc.Name("getProfile", tagProfiles).WithETag().
@@ -42,6 +43,7 @@ var operationLabels = map[string]apidesc.Label{
 		).
 		WithBodies(apidesc.NoBody, apidesc.Typed[listRevisionsResponse]("ListProfileRevisionsResponse", profileNames...)),
 	apidesc.Pattern(http.MethodPost, revisionsPath): apidesc.Name("createProfileRevision", tagProfiles).
+		WithStatus(http.StatusCreated).
 		WithIfMatchRequired().
 		WithETag().
 		On(apidesc.KindNamespace).

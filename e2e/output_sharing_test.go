@@ -36,8 +36,8 @@ const (
 	tfeProviderVersion = "0.82.0"
 	// sharingRulesSkip is the reason of each step that needs the sharing
 	// rules. Remove it in the slice that serves the routes of the step.
-	sharingRulesSkip = "the server has no unit:read-outputs action, no sharing rules and no " +
-		"namespace setting for output sharing yet; these steps fail until the output sharing slices land"
+	sharingRulesSkip = "the server has no outputs route and no sharing rules yet; " +
+		"these steps fail until the output sharing slices land"
 	// shareFileMode is the mode of the files that the scenarios write.
 	shareFileMode = 0o600
 	// sharingAPI is the prefix of the tool-neutral routes of output sharing.
@@ -559,6 +559,26 @@ func TestOutputSharingRules(t *testing.T) {
 		t.Fatal("each tool needs at least one version in its matrix")
 	}
 
+	t.Run("setting", func(t *testing.T) {
+		t.Parallel()
+
+		databases, err := e2e.Databases()
+		if err != nil {
+			t.Fatalf("stores: %v", err)
+		}
+
+		for _, db := range databases {
+			t.Run(string(db), func(t *testing.T) {
+				t.Parallel()
+				skipWithoutStore(t, db)
+
+				// The grant of the viewer needs a fresh session of the admin.
+				env := e2e.NewEnvWithSignIn(t.Context(), t, e2e.NoCLI(), db)
+				checkOutputSharingSetting(t.Context(), t, env)
+			})
+		}
+	})
+
 	t.Run("pulumi", func(t *testing.T) {
 		t.Parallel()
 		t.Skip(sharingRulesSkip)
@@ -659,15 +679,13 @@ func outputReader(ctx context.Context, t *testing.T, env *e2e.Env, g readerGrant
 		}, nil)
 	}
 
-	var created struct {
-		Token e2eToken `json:"token"`
-	}
+	var created e2eToken
 	principalCall(ctx, t, env, principalStep{
 		http.MethodPost, "/api/server/principals/" + principal.ID + "/tokens", `{"name":` + name + `}`,
 		http.StatusCreated,
 	}, &created)
 
-	return created.Token.Secret
+	return created.Secret
 }
 
 // jobTokenOf answers the job token of a plan job of unit in the namespace ns.
@@ -715,20 +733,12 @@ func sharingRule(ctx context.Context, t *testing.T, env *e2e.Env, r ruleTarget) 
 }
 
 // checkSharingRuleRefusals proves that a rule never names a principal or a
-// whole other namespace, that a second rule for the same consumer conflicts,
-// and that the namespace setting is "nobody" by default.
+// whole other namespace, and that a second rule for the same consumer
+// conflicts.
 func checkSharingRuleRefusals(ctx context.Context, t *testing.T, env *e2e.Env, producerID, consumer string) {
 	t.Helper()
 
 	rules := sharingAPI + e2e.Namespace + "/units/" + producerID + "/sharing-rules"
-
-	body := shareAPI(ctx, t, env, shareCall{
-		name: "read the namespace setting", token: "", method: http.MethodGet,
-		path: sharingAPI + e2e.Namespace + "/output-sharing", body: "", want: http.StatusOK,
-	})
-	if !strings.Contains(body, `"newUnitDefault":"nobody"`) {
-		t.Fatalf("the namespace setting %q is not nobody", body)
-	}
 
 	for _, c := range []shareCall{
 		{"a rule names a principal", "", http.MethodPost, rules, `{"consumer":"principal:p-1"}`, http.StatusBadRequest},
@@ -1309,9 +1319,7 @@ func checkOperatorSavesNoCrossRule(ctx context.Context, t *testing.T, env *e2e.E
 		`{"subject":"principal:` + principal.ID + `","role":"` + role.ID + `"}`, http.StatusCreated,
 	}, nil)
 
-	var created struct {
-		Token e2eToken `json:"token"`
-	}
+	var created e2eToken
 	principalCall(ctx, t, env, principalStep{
 		http.MethodPost, "/api/server/principals/" + principal.ID + "/tokens", `{"name":"sharing-operator"}`,
 		http.StatusCreated,
@@ -1322,7 +1330,7 @@ func checkOperatorSavesNoCrossRule(ctx context.Context, t *testing.T, env *e2e.E
 	// namespace only. The test removes the rule, so the next steps see no
 	// rule of the operator.
 	ruleBody := shareAPI(ctx, t, env, shareCall{
-		name: "an operator saves a rule in the namespace", token: created.Token.Secret, method: http.MethodPost,
+		name: "an operator saves a rule in the namespace", token: created.Secret, method: http.MethodPost,
 		path: sharingAPI + e2e.Namespace + "/units/" + producerID + "/sharing-rules",
 		body: `{"consumer":` + strconv.Quote(e2e.Namespace) + `}`, want: http.StatusCreated,
 	})
@@ -1336,13 +1344,13 @@ func checkOperatorSavesNoCrossRule(ctx context.Context, t *testing.T, env *e2e.E
 	}
 
 	shareAPI(ctx, t, env, shareCall{
-		name: "an operator removes the rule in the namespace", token: created.Token.Secret,
+		name: "an operator removes the rule in the namespace", token: created.Secret,
 		method: http.MethodDelete,
 		path:   sharingAPI + e2e.Namespace + "/units/" + producerID + "/sharing-rules/" + rule.ID,
 		body:   "", want: http.StatusNoContent,
 	})
 	shareAPI(ctx, t, env, shareCall{
-		name: "an operator saves no rule across namespaces", token: created.Token.Secret, method: http.MethodPost,
+		name: "an operator saves no rule across namespaces", token: created.Secret, method: http.MethodPost,
 		path: sharingAPI + e2e.Namespace + "/units/" + producerID + "/sharing-rules",
 		body: `{"consumer":` + strconv.Quote(consumer) + `}`, want: http.StatusForbidden,
 	})
@@ -1362,4 +1370,146 @@ func tofuTokenConfig(t *testing.T, host, token string) string {
 	}
 
 	return "TF_CLI_CONFIG_FILE=" + path
+}
+
+// namespaceViewer makes a service principal that holds the viewer role on the
+// namespace ns, and answers a token of it. The viewer role holds
+// namespace:read and unit:read-outputs, and not unit:manage-sharing.
+func namespaceViewer(ctx context.Context, t *testing.T, env *e2e.Env, ns, name string) string {
+	t.Helper()
+
+	quoted := strconv.Quote(name)
+
+	var principal e2ePrincipal
+	principalCall(ctx, t, env, principalStep{
+		http.MethodPost, "/api/server/principals", `{"subject":` + quoted + `,"kind":"service"}`, http.StatusCreated,
+	}, &principal)
+
+	principalCall(ctx, t, env, principalStep{
+		http.MethodPost, "/api/server/namespaces/" + ns + "/grants",
+		`{"subject":"principal:` + principal.ID + `","role":"viewer"}`, http.StatusCreated,
+	}, nil)
+
+	var created e2eToken
+	principalCall(ctx, t, env, principalStep{
+		http.MethodPost, "/api/server/principals/" + principal.ID + "/tokens", `{"name":` + quoted + `}`,
+		http.StatusCreated,
+	}, &created)
+
+	// An empty token would make shareAPI send the token of the admin.
+	if created.Secret == "" {
+		t.Fatalf("the token of %s has no secret", name)
+	}
+
+	return created.Secret
+}
+
+// wantNewUnitDefault fails the test unless body is the setting with the
+// value want.
+func wantNewUnitDefault(t *testing.T, body, want string) {
+	t.Helper()
+
+	var setting struct {
+		NewUnitDefault string `json:"newUnitDefault"`
+	}
+
+	if err := json.Unmarshal([]byte(body), &setting); err != nil {
+		t.Fatalf("the setting answer %q is not JSON: %v", body, err)
+	}
+
+	if setting.NewUnitDefault != want {
+		t.Fatalf("the setting is %q, want %q", setting.NewUnitDefault, want)
+	}
+}
+
+// checkOutputSharingSetting proves the output sharing setting of a namespace
+// through the API:
+//
+//   - A new namespace reads "nobody": no job of another unit reads the
+//     outputs of a new unit until a person saves a rule.
+//   - A viewer reads the setting, and cannot change it: unit:manage-sharing
+//     is an action of the admin role only.
+//   - A value that is not "nobody" or "namespace" answers 400.
+//   - The admin changes the setting, the read answers the new value, and the
+//     audit log of the namespace holds the change and the refusal.
+func checkOutputSharingSetting(ctx context.Context, t *testing.T, env *e2e.Env) {
+	t.Helper()
+
+	path := sharingAPI + e2e.Namespace + "/output-sharing"
+	viewer := namespaceViewer(ctx, t, env, e2e.Namespace, "sharing-viewer")
+
+	body := shareAPI(ctx, t, env, shareCall{
+		name: "the admin reads the setting of a new namespace", token: "", method: http.MethodGet, path: path,
+		body: "", want: http.StatusOK,
+	})
+	wantNewUnitDefault(t, body, "nobody")
+
+	body = shareAPI(ctx, t, env, shareCall{
+		name: "a viewer reads the setting", token: viewer, method: http.MethodGet, path: path, body: "",
+		want: http.StatusOK,
+	})
+	wantNewUnitDefault(t, body, "nobody")
+
+	for _, c := range []shareCall{
+		{
+			"a viewer cannot change the setting", viewer, http.MethodPut, path, `{"newUnitDefault":"namespace"}`,
+			http.StatusForbidden,
+		},
+		{"a value that is not a value of the setting", "", http.MethodPut, path, `{"newUnitDefault":"everyone"}`, http.StatusBadRequest},
+		{"a body with no value", "", http.MethodPut, path, `{}`, http.StatusBadRequest},
+		{"an unknown namespace", "", http.MethodGet, sharingAPI + "absent/output-sharing", "", http.StatusNotFound},
+	} {
+		shareAPI(ctx, t, env, c)
+	}
+
+	body = shareAPI(ctx, t, env, shareCall{
+		name: "the setting stays after the refusals", token: "", method: http.MethodGet, path: path, body: "",
+		want: http.StatusOK,
+	})
+	wantNewUnitDefault(t, body, "nobody")
+
+	body = shareAPI(ctx, t, env, shareCall{
+		name: "the admin changes the setting", token: "", method: http.MethodPut, path: path,
+		body: `{"newUnitDefault":"namespace"}`, want: http.StatusOK,
+	})
+	wantNewUnitDefault(t, body, "namespace")
+
+	body = shareAPI(ctx, t, env, shareCall{
+		name: "the read answers the new value", token: viewer, method: http.MethodGet, path: path, body: "",
+		want: http.StatusOK,
+	})
+	wantNewUnitDefault(t, body, "namespace")
+
+	checkSettingAudit(ctx, t, env)
+}
+
+// checkSettingAudit proves that the audit log of the namespace holds one
+// change of the setting by the admin and one refusal of the viewer.
+func checkSettingAudit(ctx context.Context, t *testing.T, env *e2e.Env) {
+	t.Helper()
+
+	status, body, err := env.APIStatus(ctx, http.MethodGet, "/api/audit/entries?organization="+e2e.Namespace, "")
+	if err != nil || status != http.StatusOK {
+		t.Fatalf("read the audit log: status %d, %v: %s", status, err, body)
+	}
+
+	var listing struct {
+		Entries []auditListItem `json:"entries"`
+	}
+
+	if err := json.Unmarshal([]byte(body), &listing); err != nil {
+		t.Fatalf("the audit answer is not JSON: %v", err)
+	}
+
+	outcomes := map[string]int{}
+
+	for i := range listing.Entries {
+		if e := &listing.Entries[i]; e.Action == "unit:manage-sharing" && e.Object == e2e.Namespace {
+			outcomes[e.Outcome]++
+		}
+	}
+
+	if outcomes["success"] != 1 || outcomes["denied"] != 1 {
+		t.Fatalf("the audit log holds the setting entries %v, want one success and one denied", outcomes)
+	}
 }

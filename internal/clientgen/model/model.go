@@ -139,8 +139,10 @@ type Body struct {
 
 // Response is the success answer of an operation.
 type Response struct {
-	// Status is the status code, for example 200, or 0 for any 2xx status.
-	Status int
+	// Statuses are the status codes that the success answer can have, in
+	// ascending order, for example [204] or [200, 201]. A client accepts
+	// these codes only.
+	Statuses []int
 	// Type is the type of the body, or nil for an answer with no body.
 	Type *Type
 	// ETag is true for an answer that holds the ETag header.

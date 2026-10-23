@@ -96,7 +96,8 @@ func Generate(opts Options) (Generated, error) {
 
 	files, err := golang.New().Render(api, clientgen.Options{
 		Package: Module, ClientVersion: version, ServerRelease: opts.ServerRelease,
-		GeneratorVersion: clientgen.GeneratorVersion,
+		ServerCommit: "development", Description: nil,
+		GeneratorVersion: clientgen.GeneratorVersion, DescriptionSHA256: "",
 	})
 	if err != nil {
 		return out, fmt.Errorf("render the Go client: %w", err)
