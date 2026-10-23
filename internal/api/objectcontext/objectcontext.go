@@ -265,10 +265,22 @@ func classify(err error) (int, string) {
 	case errors.Is(err, errBody), errors.Is(err, errBodyText), errors.Is(err, errInclude):
 		return http.StatusBadRequest, err.Error()
 	case errors.Is(err, objectcontext.ErrInvalidContext), errors.Is(err, objectcontext.ErrUnknownSection):
-		return http.StatusBadRequest, err.Error()
+		return http.StatusBadRequest, invalidMessage(err)
 	default:
 		return classifyConflict(err)
 	}
+}
+
+// invalidMessage returns the text of a 400 for an invalid context or section.
+// For a *RuleError it is the text of the rule only, so the call chain of the
+// service and the store, which differs between the store adapters, never
+// reaches the client.
+func invalidMessage(err error) string {
+	if rule, ok := errors.AsType[*objectcontext.RuleError](err); ok {
+		return rule.Error()
+	}
+
+	return err.Error()
 }
 
 // classifyConflict maps the errors of a refused write.

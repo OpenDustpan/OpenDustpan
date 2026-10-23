@@ -81,8 +81,8 @@ it, and the server stores it without a decision of its own. For the rules of
   of one member keeps the other. `"terminalSchemes": null` sets both back to
   the default.
 - `updatedAt` cannot change. A body that has it answers 400.
-- A body that is not one JSON object answers 400. So does a body that names
-  one field two times.
+- A body that is not one JSON object answers 400. So does a body that is not
+  valid UTF-8, and a body that names one field two times.
 - A body over 4096 bytes answers 413.
 - Any other `Content-Type` answers 415.
 
@@ -129,7 +129,7 @@ A client selects its text from `errorCode`. An error of a field has
 
 | Status | `errorCode` | When |
 | --- | --- | --- |
-| 400 | `preferences.body-invalid` | The body is not one JSON object, or it names a field two times |
+| 400 | `preferences.body-invalid` | The body is not one JSON object of valid UTF-8, or it names a field two times |
 | 400 | `preferences.field-unknown` | The body has a field that the document does not have |
 | 400 | `preferences.field-read-only` | The body has `updatedAt` |
 | 400 | `preferences.field-invalid` | A value is not allowed. `errorArgs.field` names the field. |

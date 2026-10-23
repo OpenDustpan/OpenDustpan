@@ -37,7 +37,11 @@ The body names only the fields to change. A field that the body leaves out
 does not change. A field with an empty value clears the field. The body must
 name at least one field, and it must not name an unknown field. The body must
 be valid UTF-8. A body with bytes that are not valid UTF-8, or with a lone
-surrogate escape such as `\ud800`, gets 400, and the server stores nothing.
+surrogate escape such as `\ud800`, gets 400, and the server stores nothing. A
+field over its limit, a control character in a text, or a link with an unknown
+`kind` also gets 400. The message names the field and the rule, for example
+`invalid context: summary must be valid UTF-8 of 2048 bytes or fewer, with no
+control character other than a line break or a tab`.
 
 ```sh
 curl -X PATCH -H "Authorization: token $DUSTPAN_TOKEN" \
