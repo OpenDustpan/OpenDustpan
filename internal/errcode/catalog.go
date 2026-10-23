@@ -60,10 +60,14 @@ type Spec struct {
 // Catalog returns every code, in the order of the codes. It is the one place
 // that declares a code. Each adapter takes its codes from here.
 func Catalog() []Spec {
-	var specs []Spec
-	for _, area := range areas() {
-		specs = append(specs, area()...)
+	lists := areas()
+
+	parts := make([][]Spec, 0, len(lists))
+	for _, area := range lists {
+		parts = append(parts, area())
 	}
+
+	specs := slices.Concat(parts...)
 
 	slices.SortFunc(specs, func(a, b Spec) int { return strings.Compare(a.Code, b.Code) })
 
