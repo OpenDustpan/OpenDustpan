@@ -169,13 +169,13 @@ func TestStateAtErrors(t *testing.T) {
 			name: "a time that is not a number", target: "/state-at/yesterday", status: http.StatusUnprocessableEntity,
 			title:  "unprocessable",
 			detail: `the time "yesterday" in the path is not Unix milliseconds`,
-			code:   "", meta: "",
+			code:   "request.invalid-path", meta: "",
 		},
 		{
 			name: "a negative time", target: "/state-at/-1", status: http.StatusUnprocessableEntity,
 			title:  "unprocessable",
 			detail: `the time "-1" in the path is not Unix milliseconds`,
-			code:   "", meta: "",
+			code:   "request.invalid-path", meta: "",
 		},
 	}
 

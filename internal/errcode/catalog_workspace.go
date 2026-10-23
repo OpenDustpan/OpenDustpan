@@ -29,6 +29,11 @@ const (
 	WorkspacePendingStateVersion = "workspace.pending-state-version"
 	// WorkspaceTooManyPending means that the workspace has the largest number of pending state versions.
 	WorkspaceTooManyPending = "workspace.too-many-pending"
+	// WorkspaceInvalidName means that the name of the workspace is not valid.
+	WorkspaceInvalidName = "workspace.invalid-name"
+	// WorkspaceOverrideRefused means that the write needs an override that the workspace, its namespace or the
+	// permissions of the caller do not allow.
+	WorkspaceOverrideRefused = "workspace.override-refused"
 )
 
 // workspaceSpecs are the codes of the workspaces of the TFE-compatible API.
@@ -87,6 +92,16 @@ func workspaceSpecs() []Spec {
 		{
 			Code:    WorkspaceTooManyPending,
 			Meaning: "the workspace has the largest number of pending state versions",
+			Args:    nil,
+		},
+		{
+			Code:    WorkspaceInvalidName,
+			Meaning: "the name of the workspace is not valid",
+			Args:    nil,
+		},
+		{
+			Code:    WorkspaceOverrideRefused,
+			Meaning: "the write needs an override that the workspace, its namespace or the permissions of the caller do not allow",
 			Args:    nil,
 		},
 	}
