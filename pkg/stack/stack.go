@@ -46,8 +46,8 @@ type ProjectName string
 
 // ParseProjectName validates s as a project name.
 func ParseProjectName(s string) (ProjectName, error) {
-	if !ident.Valid(s, maxNameLength) {
-		return "", fmt.Errorf("%w: project %q", ErrInvalidName, s)
+	if err := ident.Check(s, maxNameLength); err != nil {
+		return "", fmt.Errorf("%w: project %w", ErrInvalidName, err)
 	}
 
 	return ProjectName(s), nil
@@ -72,8 +72,8 @@ func (id ID) String() string {
 
 // ParseName validates s as a stack name.
 func ParseName(s string) (Name, error) {
-	if !ident.Valid(s, maxNameLength) {
-		return "", fmt.Errorf("%w: stack %q", ErrInvalidName, s)
+	if err := ident.Check(s, maxNameLength); err != nil {
+		return "", fmt.Errorf("%w: stack %w", ErrInvalidName, err)
 	}
 
 	return Name(s), nil
