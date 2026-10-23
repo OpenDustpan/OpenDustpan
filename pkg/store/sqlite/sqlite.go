@@ -1305,8 +1305,9 @@ func (s *Store) inReadTx(ctx context.Context, fn func(q *db.Queries) error) erro
 //
 // Never start a checked transaction (inTx, inFencedTx or any helper built on
 // them) from inside fn, and never call a Store method that does. The outer
-// transaction holds the shared write lock; the inner one asks for it again,
-// and it queues behind an enter that waits for the outer one: a deadlock.
+// transaction holds the shared gate; the inner one asks for it again, and it
+// queues behind an enter that waits for the outer one. That wait ends only
+// when the context ends, and then the inner call returns the context error.
 // Take the state check once, in the outermost transaction.
 func (s *Store) inFencedTx(ctx context.Context, fence namespace.Fence, fn func(q *db.Queries) error) error {
 	return s.fencedTx(ctx, fence, fn, s.inTx)
