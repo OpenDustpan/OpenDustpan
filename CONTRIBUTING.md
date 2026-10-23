@@ -23,6 +23,10 @@ A change to the architecture starts as an RFC in `docs/rfc/`.
    `leak_test.go` file, as `CLAUDE.md` says.
 4. Use the words in `GLOSSARY.md`. Write docs, errors and messages in the
    style that `CLAUDE.md` sets.
+5. Do not edit `docs/reference/configuration.md` by hand. The setting texts
+   are in `internal/cli/settings.go`. The prose of the page is in
+   `internal/cli/reference.go`. Run `make generate` after a change to either
+   file. `TestConfigurationReference` fails on a hand edit of the page.
 
 Ask in the issue before you add a dependency.
 
