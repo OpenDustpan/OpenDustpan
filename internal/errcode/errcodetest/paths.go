@@ -60,6 +60,8 @@ type Adapter struct {
 //   - a composite literal of one of a.Bodies outside these cases and if
 //     statements, also in the value of a variable;
 //   - a string literal that holds the JSON member "code" or "errors";
+//   - an anonymous struct literal with a member whose JSON name is code,
+//     errorCode or errors, and a map literal with such a key;
 //   - a call of http.Error or http.NotFound.
 //
 // Outside a classify function, a case or an if statement is a path only when
@@ -375,9 +377,7 @@ func (s *scan) literals(name string, body ast.Node) {
 func (s *scan) literal(n ast.Node) string {
 	switch x := n.(type) {
 	case *ast.CompositeLit:
-		if typ, ok := x.Type.(*ast.Ident); ok && slices.Contains(s.bodies, typ.Name) && !s.refers(x) {
-			return typ.Name + "{}"
-		}
+		return s.compositeLit(x)
 	case *ast.BasicLit:
 		if rawJSONError(x) {
 			return "raw JSON"
@@ -388,6 +388,53 @@ func (s *scan) literal(n ast.Node) string {
 	}
 
 	return ""
+}
+
+// compositeLit returns the path of lit when it is an uncoded error body: a
+// literal of one of the bodies, an anonymous struct with a member that
+// bodyMembers names, or a map with such a key. It returns "" otherwise.
+func (s *scan) compositeLit(lit *ast.CompositeLit) string {
+	if s.refers(lit) {
+		return ""
+	}
+
+	switch typ := lit.Type.(type) {
+	case *ast.Ident:
+		if slices.Contains(s.bodies, typ.Name) {
+			return typ.Name + "{}"
+		}
+	case *ast.StructType:
+		if hasBodyMember(typ) {
+			return "anonymous struct"
+		}
+	case *ast.MapType:
+		if hasBodyKey(lit) {
+			return "map literal"
+		}
+	default:
+	}
+
+	return ""
+}
+
+// hasBodyKey reports whether a key of the map literal lit is a string that
+// bodyMembers names.
+func hasBodyKey(lit *ast.CompositeLit) bool {
+	return slices.ContainsFunc(lit.Elts, func(e ast.Expr) bool {
+		kv, ok := e.(*ast.KeyValueExpr)
+		if !ok {
+			return false
+		}
+
+		key, ok := kv.Key.(*ast.BasicLit)
+		if !ok || key.Kind != token.STRING {
+			return false
+		}
+
+		name, err := strconv.Unquote(key.Value)
+
+		return err == nil && slices.Contains(bodyMembers(), name)
+	})
 }
 
 // plainTextError returns the path of call when it is http.Error or

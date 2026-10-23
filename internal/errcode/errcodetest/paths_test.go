@@ -499,6 +499,78 @@ func writeSource(t *testing.T, src string) string {
 	return dir
 }
 
+// TestUncodedPathsLiteralShapes proves that an anonymous struct and a map
+// literal are error bodies when they have a member or a key of an error body.
+func TestUncodedPathsLiteralShapes(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		src  string
+		skip []string
+		want []string
+	}{
+		{
+			name: "an anonymous struct body",
+			src: `func writeAnon() any {
+	return struct {
+		Message string ` + "`json:\"message\"`" + `
+		Code    int    ` + "`json:\"errorCode\"`" + `
+	}{Message: "bad", Code: 400}
+}`,
+			skip: nil,
+			want: []string{"writeAnon: anonymous struct"},
+		},
+		{
+			name: "a map body",
+			src: `func writeMap() any {
+	return map[string]any{"message": "bad", "errorCode": 400}
+}`,
+			skip: nil,
+			want: []string{"writeMap: map literal"},
+		},
+		{
+			name: "a map body and an anonymous struct with a code",
+			src: `func writeCoded() any {
+	_ = struct {
+		Code string ` + "`json:\"errorCode\"`" + `
+	}{Code: errcode.RequestInvalid}
+
+	return map[string]any{"errors": errcode.RequestInvalid}
+}`,
+			skip: nil,
+			want: nil,
+		},
+		{
+			name: "a map and a struct with other members",
+			src: `func other() any {
+	_ = struct {
+		Name string ` + "`json:\"name\"`" + `
+	}{Name: "x"}
+
+	return map[string]any{"name": "x"}
+}`,
+			skip: nil,
+			want: nil,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, err := errcodetest.UncodedPaths(demo(writeSource(t, header+"\n"+tc.src+"\n")), coded())
+			if err != nil {
+				t.Fatalf("UncodedPaths: %v", err)
+			}
+
+			if !slices.Equal(got, tc.want) {
+				t.Fatalf("paths = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 // TestBodyTypes proves that BodyTypes finds each struct type with a field
 // whose JSON name is code, errorCode or errors, also in a nested or an
 // anonymous struct, and no other type.
@@ -556,6 +628,11 @@ func TestBodyTypes(t *testing.T) {
 			name: "field named Code without a tag",
 			src:  "type a struct{ Code int }",
 			want: nil,
+		},
+		{
+			name: "type declared in a function",
+			src:  "func f() {\n\ttype local struct {\n\t\tCode int `json:\"code\"`\n\t}\n}",
+			want: []string{"local"},
 		},
 		{
 			name: "not a struct",

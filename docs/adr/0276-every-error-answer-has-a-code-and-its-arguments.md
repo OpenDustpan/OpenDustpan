@@ -337,11 +337,12 @@ Facts on `main`:
       does that.
     - Each area has a golden file, `internal/errcode/testdata/catalog/<area>.txt`,
       for the codes of the area that no frozen list holds. A file is
-      created, empty, together with `catalog_<area>.go`. A third test fails
-      for a code that is in neither a frozen list nor the golden file of
-      its area, for a line that differs from the catalog, for a line in the
-      file of another area, and for an area without its golden file. So
-      two changes to two areas touch different files.
+      created, empty, together with `catalog_<area>.go`. A third check is two
+      tests. One fails for a code that is in neither a frozen list nor the
+      golden file of its area, for a line that differs from the catalog, and
+      for a line in the file of another area. The other fails for an area
+      without its golden file. So two changes to two areas touch different
+      files.
     - At each tag, the lines of the golden files go into a new frozen list
       `shipped/<tag>.txt` with its pinned hash, and the golden files become
       empty.

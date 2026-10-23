@@ -17,8 +17,8 @@ import (
 func bodyMembers() []string { return []string{"code", "errorCode", "errors"} }
 
 // BodyTypes returns the struct types of the source in dir that have a field
-// with the JSON name code, errorCode or errors, at any depth of the type,
-// sorted. A gate compares them with the Bodies of an adapter, so that a new
+// with the JSON name code, errorCode or errors, at any depth of the type and
+// also when a function declares the type, sorted. A gate compares them with the Bodies of an adapter, so that a new
 // error body type cannot hide its literals from UncodedPaths. Test files are
 // not read.
 func BodyTypes(dir string) ([]string, error) {
@@ -30,18 +30,13 @@ func BodyTypes(dir string) ([]string, error) {
 	var out []string
 
 	for _, f := range files {
-		for _, decl := range f.Decls {
-			d, ok := decl.(*ast.GenDecl)
-			if !ok {
-				continue
+		ast.Inspect(f, func(n ast.Node) bool {
+			if ts, ok := n.(*ast.TypeSpec); ok && hasBodyMember(ts.Type) {
+				out = append(out, ts.Name.Name)
 			}
 
-			for _, spec := range d.Specs {
-				if ts, ok := spec.(*ast.TypeSpec); ok && hasBodyMember(ts.Type) {
-					out = append(out, ts.Name.Name)
-				}
-			}
-		}
+			return true
+		})
 	}
 
 	slices.Sort(out)
