@@ -13,6 +13,9 @@ import (
 // its secrets provider.
 const secretsProvidersMember = "secrets_providers"
 
+// resourcesMember is the member of a deployment that holds its resources.
+const resourcesMember = "resources"
+
 // deploymentFieldKind returns the JSON type that the CLI expects for the
 // member name of a deployment, and false for a member that it does not check.
 // A member with another type makes the CLI fail to read the whole stack. A null
@@ -21,7 +24,7 @@ func deploymentFieldKind(name string) (jsontext.Kind, bool) {
 	switch name {
 	case "manifest", secretsProvidersMember:
 		return jsontext.KindBeginObject, true
-	case "resources", "pending_operations":
+	case resourcesMember, "pending_operations":
 		return jsontext.KindBeginArray, true
 	default:
 		return jsontext.KindInvalid, false
@@ -38,7 +41,8 @@ const envelopeMember = "deployment"
 // checkDeploymentShape returns an error that matches ErrInvalidUpdate when
 // deployment is not a JSON object, when a known member of it has the wrong
 // JSON type, when an entry of resources or pending_operations is not an
-// object, or when other data follows the object. It streams the bytes once,
+// object, when an entry of resources has no urn that is a string, or when
+// other data follows the object. It streams the bytes once,
 // builds no tree, and reads no secret value. It does not refuse a repeated
 // member, because the CLI accepts one.
 //
@@ -152,13 +156,54 @@ func checkDeploymentEntries(dec *jsontext.Decoder, name string) error {
 			return deploymentShapeError(fmt.Sprintf("the entry %d of %s is not an object", index, name))
 		}
 
-		if err := dec.SkipValue(); err != nil {
-			return deploymentShapeError("it is not valid JSON")
+		if err := checkDeploymentEntry(dec, name, index); err != nil {
+			return err
 		}
 	}
 
 	if _, err := dec.ReadToken(); err != nil {
 		return deploymentShapeError("it is not valid JSON")
+	}
+
+	return nil
+}
+
+// checkDeploymentEntry reads the object at index of the array member name that
+// dec streams. An entry of resources must have a urn member that is a string,
+// because the CLI reads each resource by its URN. The text names the index of
+// the entry, never a value.
+func checkDeploymentEntry(dec *jsontext.Decoder, name string, index int) error {
+	if name != resourcesMember {
+		if err := dec.SkipValue(); err != nil {
+			return deploymentShapeError("it is not valid JSON")
+		}
+
+		return nil
+	}
+
+	hasURN := false
+
+	err := checkObjectMembers(dec, func(dec *jsontext.Decoder, member string) error {
+		if member == "urn" {
+			if dec.PeekKind() != jsontext.KindString {
+				return deploymentShapeError(fmt.Sprintf("the urn of the entry %d of resources is not a string", index))
+			}
+
+			hasURN = true
+		}
+
+		if err := dec.SkipValue(); err != nil {
+			return deploymentShapeError("it is not valid JSON")
+		}
+
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+
+	if !hasURN {
+		return deploymentShapeError(fmt.Sprintf("the entry %d of resources has no urn", index))
 	}
 
 	return nil

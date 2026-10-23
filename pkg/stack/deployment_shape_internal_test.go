@@ -24,8 +24,31 @@ func readableDeployment(deployment []byte) bool {
 		}
 	}
 
-	for _, name := range []string{"resources", "pending_operations"} {
-		if raw, ok := members[name]; ok && !readableEntries(raw) {
+	if raw, ok := members["pending_operations"]; ok && !readableEntries(raw) {
+		return false
+	}
+
+	if raw, ok := members["resources"]; ok && !readableResources(raw) {
+		return false
+	}
+
+	return true
+}
+
+// readableResources reports whether raw is null or an array of objects that
+// each have a urn member that is a string.
+func readableResources(raw json.RawMessage) bool {
+	if raw[0] == 'n' {
+		return true
+	}
+
+	var entries []map[string]json.RawMessage
+	if raw[0] != '[' || json.Unmarshal(raw, &entries) != nil {
+		return false
+	}
+
+	for _, entry := range entries {
+		if urn, ok := entry["urn"]; !ok || urn[0] != '"' {
 			return false
 		}
 	}
@@ -70,6 +93,9 @@ func FuzzDeploymentShape(f *testing.F) {
 		`{"version":3,"deployment":{"manifest":[]}}`,
 		`{"version":3}`,
 		`{"version":3,"deployment":"x"}`,
+		`{"resources":[{"urn":"urn:pulumi:dev::web::pulumi:pulumi:Stack::web-dev"}]}`,
+		`{"resources":[{"urn":1}]}`,
+		`{"version":3,"deployment":{"resources":[{"type":"x","urn":"u"},{}]}}`,
 	} {
 		f.Add([]byte(seed), int64(0))
 		f.Add([]byte(seed), int64(1))

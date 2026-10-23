@@ -56,7 +56,12 @@ func shapeCases() []shapeCase {
 		},
 		{name: "a resource that is a number", deployment: `{"resources":[1]}`, sequence: 0, valid: false},
 		{name: "a resource that is null", deployment: `{"resources":[null]}`, sequence: 0, valid: false},
-		{name: "a second resource that is a string", deployment: `{"resources":[{},"x"]}`, sequence: 0, valid: false},
+		{
+			name:       "a second resource that is a string",
+			deployment: `{"resources":[{"urn":"urn:pulumi:dev::web::pulumi:pulumi:Stack::web-dev"},"x"]}`,
+			sequence:   0,
+			valid:      false,
+		},
 		{name: "a resource list that is not closed", deployment: `{"resources":[{}`, sequence: 0, valid: false},
 		{
 			name:       "a pending operation that is a string",
@@ -129,6 +134,33 @@ func shapeCases() []shapeCase {
 		{
 			name:       "an envelope with resources of the wrong type next to the deployment",
 			deployment: `{"version":3,"deployment":{"resources":[]},"resources":1}`,
+			sequence:   1,
+			valid:      false,
+		},
+		{name: "a resource with no urn", deployment: `{"resources":[{}]}`, sequence: 0, valid: false},
+		{
+			name:       "a resource with a urn that is a number",
+			deployment: `{"resources":[{"urn":1}]}`,
+			sequence:   0,
+			valid:      false,
+		},
+		{name: "a resource with a null urn", deployment: `{"resources":[{"urn":null}]}`, sequence: 0, valid: false},
+		{
+			name:       "a second resource with no urn",
+			deployment: `{"resources":[{"urn":"urn:pulumi:dev::web::pulumi:pulumi:Stack::web-dev"},{"type":"x"}]}`,
+			sequence:   0,
+			valid:      false,
+		},
+		{
+			name: "a resource with the urn after other members",
+			deployment: `{"resources":[{"type":"pulumi:pulumi:Stack",` +
+				`"urn":"urn:pulumi:dev::web::pulumi:pulumi:Stack::web-dev"}]}`,
+			sequence: 0,
+			valid:    true,
+		},
+		{
+			name:       "a versioned deployment with a resource with no urn",
+			deployment: `{"version":3,"deployment":{"resources":[{"type":"x"}]}}`,
 			sequence:   1,
 			valid:      false,
 		},
