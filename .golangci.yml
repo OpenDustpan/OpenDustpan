@@ -180,6 +180,10 @@ linters:
             - "**/pkg/logsink/*.go"
             - "**/internal/unitimport/*.go"
             - "**/pkg/installation/**"
+            - "**/internal/cron/**"
+            - "**/pkg/idempotency/**"
+            - "**/pkg/manuallock/**"
+            - "**/pkg/profile/**"
             - "!**/*_test.go"
             - "!**/internal/api/inventory/**"
           deny:
