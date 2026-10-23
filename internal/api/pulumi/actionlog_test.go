@@ -94,7 +94,7 @@ func loggedUpdateFixture(t *testing.T, authz identity.Authorizer, buf *bytes.Buf
 		BaseURL:                 baseurl.Resolver{},
 		MaxBodyBytesInFlight:    0,
 		Gate:                    nil,
-		Audit:                   nil,
+		Audit:                   newTestAudit(),
 		OnAuditFailure:          nil,
 		CheckpointDeltaCutoff:   0,
 		DenialLimiter:           nil,

@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/api/apidesc"
 	"opendustpan.org/opendustpan/internal/api/idempotent"
 	"opendustpan.org/opendustpan/internal/clientip"
 	"opendustpan.org/opendustpan/internal/requestid"
@@ -121,7 +122,7 @@ func actorOf(r *http.Request, p identity.Principal) *profile.Actor {
 	by := audit.Entry{
 		At: time.Time{}, Namespace: "", Subject: "", IDPSubject: "", TokenID: "", Action: "", Object: "",
 		Version: "", ValuePath: "", ValueCount: nil, Changes: nil, SourceIP: clientip.String(r),
-		UserAgent: truncateUserAgent(r.UserAgent()), Channel: audit.NormalizeChannel(r.Header.Get(channelHeader)),
+		UserAgent: truncateUserAgent(userAgent(r)), Channel: audit.NormalizeChannel(apidesc.Header(r, channelHeader)),
 		Kind: audit.KindChange, Outcome: audit.OutcomeSuccess, RequestID: requestid.FromContext(r.Context()),
 		ObjectID: "", PrevHash: "", Hash: "", Sequence: 0, FenceVersion: 0, Reason: "", PrincipalKind: "", JobID: "",
 	}
@@ -336,7 +337,7 @@ func fingerprint(ns namespace.Name, folder string) string {
 }
 
 func pageSizeOf(r *http.Request) (int, error) {
-	raw := r.URL.Query().Get("pageSize")
+	raw := queryOf(r).Get("pageSize")
 	if raw == "" {
 		return defaultPageSize, nil
 	}
@@ -356,7 +357,7 @@ func pageSizeOf(r *http.Request) (int, error) {
 func (h *Handler) list(w http.ResponseWriter, r *http.Request, p identity.Principal, obj identity.Object) {
 	ctx := r.Context()
 	ns := obj.Namespace()
-	folder := r.URL.Query().Get("folder")
+	folder := queryOf(r).Get("folder")
 
 	size, err := pageSizeOf(r)
 	if err != nil {
@@ -365,7 +366,7 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request, p identity.Princi
 		return
 	}
 
-	after, err := decodeToken(r.URL.Query().Get("pageToken"), fingerprint(ns, folder))
+	after, err := decodeToken(queryOf(r).Get("pageToken"), fingerprint(ns, folder))
 	if err != nil {
 		h.writeError(ctx, w, err)
 
@@ -438,7 +439,7 @@ var (
 // for another profile, and a weak tag, answer errPrecondition: If-Match
 // compares tags in the strong way.
 func ifMatch(r *http.Request, got profile.Profile) (int, bool, error) {
-	raw := strings.TrimSpace(r.Header.Get("If-Match"))
+	raw := strings.TrimSpace(apidesc.Header(r, "If-Match"))
 	if raw == "" {
 		return 0, false, nil
 	}
@@ -501,7 +502,7 @@ func (h *Handler) delete(w http.ResponseWriter, r *http.Request, p identity.Prin
 
 	target.Ref = profile.RefByID(got.ID)
 
-	err = h.profiles.Delete(ctx, a, target, profile.Removal{IfLatest: rev, Reason: r.URL.Query().Get("reason")})
+	err = h.profiles.Delete(ctx, a, target, profile.Removal{IfLatest: rev, Reason: queryOf(r).Get("reason")})
 	if err != nil {
 		h.writeError(ctx, w, stale(err))
 
@@ -533,7 +534,7 @@ func (h *Handler) listRevisions(w http.ResponseWriter, r *http.Request, p identi
 
 	before := 0
 
-	if raw := r.URL.Query().Get("pageToken"); raw != "" {
+	if raw := queryOf(r).Get("pageToken"); raw != "" {
 		n, convErr := strconv.Atoi(raw)
 		if convErr != nil || n < 1 {
 			h.writeError(ctx, w, badRequest("request.invalid-query", "pageToken is not valid: start again without it"))
@@ -654,7 +655,7 @@ func (h *Handler) write(w http.ResponseWriter, r *http.Request, p identity.Princ
 func readOptions(r *http.Request, revision string) (profile.ReadOptions, error) {
 	opts := profile.ReadOptions{Fresh: nil, Revision: 0, Reveal: false}
 
-	if raw := r.URL.Query().Get("showSecrets"); raw != "" {
+	if raw := queryOf(r).Get("showSecrets"); raw != "" {
 		b, err := strconv.ParseBool(raw)
 		if err != nil {
 			return opts, badRequest("request.invalid-query", "showSecrets must be true or false")

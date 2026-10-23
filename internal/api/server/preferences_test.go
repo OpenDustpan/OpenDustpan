@@ -77,7 +77,7 @@ func prefsCallerSet() prefsCallers {
 
 // prefsEnv is a handler over a real store, with the preferences callers.
 type prefsEnv struct {
-	h  *apiserver.Handler
+	h  testHandler
 	st *sqlite.Store
 }
 
@@ -804,14 +804,14 @@ func TestPreferencesUnavailable(t *testing.T) {
 		t.Fatalf("namespace service: %v", err)
 	}
 
-	h, err := apiserver.NewHandler(apiserver.Config{
+	h, err := newCheckedHandler(t, apiserver.Config{
 		Preferences: nil,
 		GitHost:     nil,
 		Idempotency: nil,
 		Workers:     nil, InstallationKind: "", Now: nil, TempAdmins: nil, Authenticator: prefsCallerSet(),
 		Authorizer: allowAll{}, Logger: slog.New(slog.DiscardHandler), Namespaces: namespaces, Backups: nil,
 		Restores: nil, Maintenance: newFakeMaintenance(maintenance.StateNormal), Metrics: stubMetrics{},
-		Version: "test", Schema: nil, Journal: nil, Principals: nil, Access: nil, Tokens: nil, Audit: nil,
+		Version: "test", Schema: nil, Journal: nil, Principals: nil, Access: nil, Tokens: nil, Audit: newTestAudit(),
 		OnAuditFailure: nil, DeletedUnits: nil, AuditChain: nil, AuditSinks: nil, IPAllowlists: nil, Gates: nil,
 		SessionPolicy: nil, SignIn: nil, CheckpointEpochs: nil, DenialLimiter: nil,
 	})

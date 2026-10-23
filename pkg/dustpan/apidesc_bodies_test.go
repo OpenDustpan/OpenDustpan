@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -234,7 +235,27 @@ func checkOperationBodies(t *testing.T, op apidesc.Operation, described descript
 
 	where := op.Method + " " + op.Path
 
-	response := described.Responses["2XX"].Content[mediaJSON]
+	var keys []string
+	for key := range described.Responses {
+		if key != "default" {
+			keys = append(keys, key)
+		}
+	}
+
+	slices.Sort(keys)
+
+	want := make([]string, 0, len(op.Statuses))
+	for _, status := range op.Statuses {
+		want = append(want, strconv.Itoa(status))
+	}
+
+	if !slices.Equal(keys, want) {
+		t.Errorf("%s: the description has the success keys %v, want %v", where, keys, want)
+
+		return
+	}
+
+	response := described.Responses[want[0]].Content[mediaJSON]
 	if hasSchema := len(response.Schema) > 0; hasSchema == op.Bodies.Response.IsNone() {
 		t.Errorf("%s: answer schema present %v, NoBody %v", where, hasSchema, op.Bodies.Response.IsNone())
 	}

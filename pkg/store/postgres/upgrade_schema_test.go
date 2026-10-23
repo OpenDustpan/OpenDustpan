@@ -95,7 +95,7 @@ func checkUpgradeSchemaFromTag(t *testing.T, base, tag string) {
 		t.Fatalf("tag %s holds no migrations", tag)
 	}
 
-	upgradedURL := isolatedURL(t, base)
+	upgradedURL := emptySchemaURL(t, base)
 	applyTagMigrations(ctx, t, upgradedURL, tagMigrations)
 
 	upgraded, err := postgres.Open(ctx, upgradedURL)
@@ -105,7 +105,7 @@ func checkUpgradeSchemaFromTag(t *testing.T, base, tag string) {
 
 	upgraded.Close()
 
-	freshURL := isolatedURL(t, base)
+	freshURL := emptySchemaURL(t, base)
 
 	fresh, err := postgres.Open(ctx, freshURL)
 	if err != nil {

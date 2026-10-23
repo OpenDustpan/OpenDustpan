@@ -152,6 +152,10 @@ func (h *Handler) buildRoutes() []Route {
 		routes = append(routes, h.viewRoutes()...)
 	}
 
+	if h.outputSharing != nil {
+		routes = append(routes, h.outputSharingRoutes()...)
+	}
+
 	return routes
 }
 
@@ -221,7 +225,7 @@ func (m *patternMux) Patterns() []string {
 // way the namespace service does, so an invalid value fails closed before
 // authorization.
 func resolveListUnits(_ http.ResponseWriter, r *http.Request) (identity.Object, error) {
-	org := r.URL.Query().Get("organization")
+	org := queryOf(r).Get("organization")
 	if org == "" {
 		return identity.Object{}, errMissingOrganization
 	}

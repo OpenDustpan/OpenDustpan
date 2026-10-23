@@ -587,9 +587,12 @@ func dropSchema(t *testing.T, schemaURL string) {
 	q.Del("search_path")
 	u.RawQuery = q.Encode()
 
-	drop := "DROP SCHEMA " + pgx.Identifier{name}.Sanitize() + " CASCADE"
-	if execErr := execSQL(context.WithoutCancel(t.Context()), u.String(), drop); execErr != nil {
-		t.Errorf("drop schema: %v", execErr)
+	// The store keeps its control tables in a second schema, <name>_control.
+	for _, schema := range []string{name, name + "_control"} {
+		drop := "DROP SCHEMA IF EXISTS " + pgx.Identifier{schema}.Sanitize() + " CASCADE"
+		if execErr := execSQL(context.WithoutCancel(t.Context()), u.String(), drop); execErr != nil {
+			t.Errorf("drop schema %s: %v", schema, execErr)
+		}
 	}
 }
 

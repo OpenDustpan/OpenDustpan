@@ -19,29 +19,34 @@ var _ audit.CheckStore = (*Store)(nil)
 // CheckState implements audit.CheckStore. A database without a result row
 // answers a zero result, and a database without marks answers no marks.
 func (s *Store) CheckState(ctx context.Context) (audit.CheckState, error) {
-	var state audit.CheckState
+	var (
+		state audit.CheckState
+		marks []db.AuditChainMark
+	)
 
-	row, err := s.queries.GetAuditChainCheck(ctx)
+	// One snapshot, so the result and its marks come from one state.
+	err := s.inSnapshotTx(ctx, func(q *db.Queries) error {
+		row, err := q.GetAuditChainCheck(ctx)
 
-	switch {
-	case errors.Is(err, pgx.ErrNoRows):
-		// No check ran yet: the result stays zero.
-	case err != nil:
-		return audit.CheckState{CheckedAt: time.Time{}, Marks: nil, Invalid: 0}, fmt.Errorf(
-			"read audit chain check: %w",
-			err,
-		)
-	default:
-		state.CheckedAt = codec.FromOptionalMillis(row.CheckedAtMs)
-		state.Invalid = int(row.Invalid)
-	}
+		switch {
+		case errors.Is(err, pgx.ErrNoRows):
+			// No check ran yet: the result stays zero.
+		case err != nil:
+			return fmt.Errorf("read audit chain check: %w", err)
+		default:
+			state.CheckedAt = codec.FromOptionalMillis(row.CheckedAtMs)
+			state.Invalid = int(row.Invalid)
+		}
 
-	marks, err := s.queries.ListAuditChainMarks(ctx)
+		marks, err = q.ListAuditChainMarks(ctx)
+		if err != nil {
+			return fmt.Errorf("read audit chain marks: %w", err)
+		}
+
+		return nil
+	})
 	if err != nil {
-		return audit.CheckState{CheckedAt: time.Time{}, Marks: nil, Invalid: 0}, fmt.Errorf(
-			"read audit chain marks: %w",
-			err,
-		)
+		return audit.CheckState{CheckedAt: time.Time{}, Marks: nil, Invalid: 0}, err
 	}
 
 	for _, m := range marks {

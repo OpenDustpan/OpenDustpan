@@ -3,6 +3,7 @@ package dustpan
 import (
 	"context"
 	"errors"
+	"maps"
 	"slices"
 	"strings"
 	"testing"
@@ -53,6 +54,16 @@ func (f namespaceInventory) ListUnits(_ context.Context, ns namespace.Name) ([]i
 	}
 
 	return out, f.err
+}
+
+// QueryUnits implements inventory.Reader over the entries of ListUnits.
+func (f namespaceInventory) QueryUnits(ctx context.Context, q inventory.UnitQuery) ([]inventory.Entry, error) {
+	all, err := f.ListUnits(ctx, q.Namespace)
+	if err != nil {
+		return nil, err
+	}
+
+	return inventory.PageUnits(all, q), nil
 }
 
 func inventoryOf(entries ...inventory.Entry) namespaceInventory {
@@ -179,7 +190,7 @@ type plannerCase struct {
 
 func plannerRequest(unit identity.Object) job.StartRequest {
 	return job.StartRequest{
-		Unit: unit, Operation: job.OperationPlan, Executor: "",
+		Unit: unit, Operation: job.OperationPlan, Purpose: "", Executor: "",
 		Location: job.Location{Connection: "", Repository: "acme/infra", Ref: "main", Directory: "net", Revision: ""},
 		Pool:     "", Edits: nil, Delivery: "", Source: "", IdempotencyKey: "", Reason: "", BreakGlass: nil,
 		Channel: "", SourceIP: "", UserAgent: "", RequestID: "",
@@ -668,5 +679,146 @@ func TestNewJobServiceNeedsTheGateService(t *testing.T) {
 	starter, err := newJobService(svc, new(settings))
 	if starter != nil || err != nil {
 		t.Fatalf("newJobService with no port = %v, %v; want no service", starter, err)
+	}
+}
+
+func driftRequest(unit identity.Object) job.StartRequest {
+	req := plannerRequest(unit)
+	req.Operation, req.Purpose = job.OperationRefresh, job.PurposeDriftCheck
+
+	return req
+}
+
+func TestJobPlannerDriftCheck(t *testing.T) {
+	t.Parallel()
+
+	pools := poolsOf(testPool("pool-1", "acme", "ci", runner.PurposeJobs))
+	p := jobPlanner{pools: pools, connections: nil}
+	unit := jobTestUnit(t, "acme", "web").WithUnitID("ws-1")
+
+	spec, err := p.Plan(t.Context(), unit, new(driftRequest(unit)))
+	if err != nil {
+		t.Fatalf("Plan = %v", err)
+	}
+
+	if spec.Operation != job.OperationRefresh || spec.Purpose != job.PurposeDriftCheck ||
+		spec.Executor != job.ExecutorRunner || spec.Pool != "pool-1" || spec.Changes() || len(spec.Steps) != 2 {
+		t.Fatalf("spec = %+v, want a drift check of web on pool-1 with two steps that changes nothing", spec)
+	}
+
+	// The runner executor accepts the steps of the planner, and the phase list
+	// is the plan phase alone.
+	if validateErr := job.ValidateDriftSteps(spec.Steps); validateErr != nil {
+		t.Fatalf("ValidateDriftSteps of the planned steps = %v", validateErr)
+	}
+
+	kinds, err := job.PhasesFor(spec.Executor, spec.Operation, spec.Purpose)
+	if err != nil || !slices.Equal(kinds, []job.PhaseKind{job.PhasePlan}) {
+		t.Fatalf("PhasesFor = %v, %v; want the plan phase", kinds, err)
+	}
+}
+
+func TestJobPlannerDriftCheckRefusals(t *testing.T) {
+	t.Parallel()
+
+	pools := poolsOf(testPool("pool-1", "acme", "ci", runner.PurposeJobs))
+
+	tests := []struct {
+		name   string
+		change func(*job.StartRequest)
+		want   error
+	}{
+		{"a drift check of a plan", func(q *job.StartRequest) { q.Operation = job.OperationPlan }, job.ErrInvalid},
+		{"a drift check of an apply", func(q *job.StartRequest) { q.Operation = job.OperationApply }, job.ErrInvalid},
+		{"a refresh with no purpose", func(q *job.StartRequest) { q.Purpose = job.PurposeNone }, job.ErrUnsupported},
+		{"write-back", func(q *job.StartRequest) { q.Executor = job.ExecutorWriteBack }, job.ErrUnsupported},
+		{"edits", func(q *job.StartRequest) { q.Edits = []job.FileEdit{{Path: "a.json", Keys: nil}} }, job.ErrInvalid},
+		{"a delivery", func(q *job.StartRequest) { q.Delivery = job.DeliveryDirectPush }, job.ErrInvalid},
+		{
+			"no code location",
+			func(q *job.StartRequest) {
+				q.Location = job.Location{Connection: "", Repository: "", Ref: "", Directory: "", Revision: ""}
+			},
+			job.ErrUnsupported,
+		},
+		{"a tool with no refresh-only plan", nil, job.ErrUnsupported},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			p := jobPlanner{pools: pools, connections: nil}
+			unit := jobTestUnit(t, "acme", "web").WithUnitID("ws-1")
+			req := driftRequest(unit)
+
+			if tt.change != nil {
+				tt.change(&req)
+			} else {
+				pulumi, err := identity.UnitObject("pulumi", "acme", "proj/stack")
+				if err != nil {
+					t.Fatalf("unit object: %v", err)
+				}
+
+				unit, req.Unit = pulumi.WithUnitID("stk-1"), pulumi
+			}
+
+			if _, err := p.Plan(t.Context(), unit, &req); !errors.Is(err, tt.want) {
+				t.Fatalf("Plan = %v, want %v", err, tt.want)
+			}
+		})
+	}
+}
+
+func TestDriftSteps(t *testing.T) {
+	t.Parallel()
+
+	steps, err := driftSteps(opentofuTool)
+	if err != nil || len(steps) != 2 {
+		t.Fatalf("driftSteps(opentofu) = %d steps, %v; want 2", len(steps), err)
+	}
+
+	want := [][]string{
+		{"tofu", "init", "-input=false"},
+		{"tofu", "plan", "-refresh-only", "-input=false", "-out=drift.tfplan"},
+	}
+
+	for i := range steps {
+		checkDriftStep(t, i, &steps[i], want[i])
+	}
+
+	// A caller that changes one result must not change the next one.
+	steps[1].Args[0] = "sh"
+	steps[1].Env["TF_CLI_ARGS"] = "-lock=false"
+
+	again, err := driftSteps(opentofuTool)
+	if err != nil || again[1].Args[0] != "tofu" || len(again[1].Env) != 1 {
+		t.Fatalf("driftSteps after a change = %+v, %v; want fresh steps", again, err)
+	}
+
+	for _, tool := range []string{"pulumi", "", "OpenTofu"} {
+		if _, toolErr := driftSteps(tool); !errors.Is(toolErr, job.ErrUnsupported) {
+			t.Errorf("driftSteps(%q) = %v, want ErrUnsupported", tool, toolErr)
+		}
+	}
+}
+
+// checkDriftStep checks that step i is a plan-phase tool step with the
+// arguments want that changes nothing, sets one variable and leaves no output.
+func checkDriftStep(t *testing.T, i int, s *job.Step, want []string) {
+	t.Helper()
+
+	// No step may carry -lock=false: a check keeps the default state lock.
+	if !slices.Equal(s.Args, want) || slices.Contains(s.Args, "-lock=false") {
+		t.Errorf("step %d args = %v, want %v with the default state lock", i, s.Args, want)
+	}
+
+	if s.Role != job.RoleTool || s.Phase != job.PhasePlan || s.ChangesResources || s.AllowFailure ||
+		len(s.Outputs) != 0 {
+		t.Errorf("step %d = %+v, want a plan-phase tool step that changes nothing and leaves no output", i, *s)
+	}
+
+	if !maps.Equal(s.Env, map[string]string{"TF_IN_AUTOMATION": "1"}) {
+		t.Errorf("step %d env = %v, want TF_IN_AUTOMATION alone", i, s.Env)
 	}
 }

@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"strings"
 
+	"opendustpan.org/opendustpan/internal/api/apidesc"
 	"opendustpan.org/opendustpan/internal/api/refusal"
 	"opendustpan.org/opendustpan/internal/denylimit"
 	"opendustpan.org/opendustpan/internal/errcode"
@@ -78,6 +79,8 @@ type Handler struct {
 // required.
 func NewHandler(cfg Config) (*Handler, error) {
 	switch {
+	case cfg.Audit == nil:
+		return nil, fmt.Errorf("%w: audit store", ErrMissingDependency)
 	case cfg.Namespaces == nil:
 		return nil, fmt.Errorf("%w: namespace service", ErrMissingDependency)
 	case cfg.Jobs == nil:
@@ -90,18 +93,21 @@ func NewHandler(cfg Config) (*Handler, error) {
 		return nil, fmt.Errorf("%w: logger", ErrMissingDependency)
 	}
 
+	recorder, err := refusal.New(cfg.Authorizer, cfg.Audit, cfg.Namespaces, cfg.Logger, cfg.OnAuditFailure)
+	if err != nil {
+		return nil, fmt.Errorf("denial recorder: %w", err)
+	}
+
 	h := &Handler{
 		namespaces: cfg.Namespaces,
 		jobs:       cfg.Jobs,
 		starter:    cfg.Starter,
 		authn:      cfg.Authenticator,
 		sessions:   cfg.Sessions,
-		guard: refusal.New(cfg.Authorizer, cfg.Audit, cfg.Namespaces, cfg.Logger, cfg.OnAuditFailure).
-			WithLimiter(cfg.DenialLimiter).
-			WithSurface("jobs"),
-		logger: cfg.Logger,
-		mux:    newPatternMux(),
-		routes: nil,
+		guard:      recorder.WithLimiter(cfg.DenialLimiter).WithSurface("jobs"),
+		logger:     cfg.Logger,
+		mux:        newPatternMux(),
+		routes:     nil,
 	}
 
 	h.routes = h.buildRoutes()
@@ -123,7 +129,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // reports that the cookie signed it in. A request with an Authorization
 // header never uses the cookie.
 func (h *Handler) authenticate(r *http.Request) (identity.Principal, bool, error) {
-	header := r.Header.Get("Authorization")
+	header := apidesc.Header(r, "Authorization")
 	if header == "" {
 		p, _, err := h.sessions.Authenticate(r)
 

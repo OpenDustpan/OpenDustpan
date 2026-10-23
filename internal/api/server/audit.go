@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/api/apidesc"
 	"opendustpan.org/opendustpan/internal/clientip"
 	"opendustpan.org/opendustpan/internal/requestid"
 	"opendustpan.org/opendustpan/pkg/audit"
@@ -46,7 +47,7 @@ func callerEntry(r *http.Request, p identity.Principal, action identity.Action) 
 		ValueCount:    nil,
 		Changes:       sessionChanges(r),
 		SourceIP:      clientip.String(r),
-		UserAgent:     truncateUserAgent(r.UserAgent()),
+		UserAgent:     truncateUserAgent(userAgent(r)),
 		Channel:       callerChannel(r),
 		Kind:          "",
 		Outcome:       "",
@@ -88,19 +89,15 @@ func callerChannel(r *http.Request) audit.Channel {
 		return audit.ChannelConsole
 	}
 
-	return audit.NormalizeChannel(r.Header.Get(channelHeader))
+	return audit.NormalizeChannel(apidesc.Header(r, channelHeader))
 }
 
 // appendServerChange writes one entry of the kind change in the scope
 // @server for a change that did not happen (ADR 60, decisions 4 and 7),
-// outside any transaction. A nil audit store writes no entry. A lost entry
+// outside any transaction. A lost entry
 // does not change the answer: the server logs it and counts it on the
 // failure metric instead.
 func (h *Handler) appendServerChange(r *http.Request, p identity.Principal, c serverChange) {
-	if h.audit == nil {
-		return
-	}
-
 	entry := callerEntry(r, p, c.action)
 	entry.At = c.at
 	entry.Namespace = audit.ServerScope

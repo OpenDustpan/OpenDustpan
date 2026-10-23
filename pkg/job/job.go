@@ -30,8 +30,10 @@ package job
 
 import (
 	"errors"
+	"fmt"
 	"time"
 
+	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
 )
 
@@ -152,6 +154,26 @@ func (o Operation) WritesState() bool {
 	return o.Valid() && o != OperationPlan
 }
 
+// Purpose tells why a job runs, when its operation alone does not say. The
+// server fixes it at start and a later change of the unit settings never
+// changes it. It selects the phase list of the operation.
+type Purpose string
+
+// The purposes of a job.
+const (
+	// PurposeNone is a job whose operation says all: the default.
+	PurposeNone Purpose = ""
+	// PurposeDriftCheck is a drift check: the operation refresh with the
+	// one phase plan. It changes no resource and writes no state version.
+	PurposeDriftCheck Purpose = "drift-check"
+)
+
+// Valid reports whether p is one of the purposes of this package, with the
+// empty purpose.
+func (p Purpose) Valid() bool {
+	return p == PurposeNone || p == PurposeDriftCheck
+}
+
 // ExecutorKind names the executor of a job.
 type ExecutorKind string
 
@@ -238,8 +260,10 @@ type Spec struct {
 	// (identity.Object.WithUnitID).
 	Unit      identity.Object
 	Operation Operation
-	Executor  ExecutorKind
-	Location  Location
+	// Purpose is empty, or PurposeDriftCheck for a drift check.
+	Purpose  Purpose
+	Executor ExecutorKind
+	Location Location
 	// Steps are the steps of a runner job, resolved by the server at start
 	// from the settings of the unit, its blueprint or the defaults of its
 	// tool. The server sets Step.ChangesResources (see MarkCustomSteps). A
@@ -259,8 +283,13 @@ type Spec struct {
 }
 
 // Changes reports whether a job of s can change resources, state or the
-// code in git: every job but a runner job that only plans.
+// code in git: every job but a runner job that only plans, and a drift
+// check, which has a plan phase only.
 func (s *Spec) Changes() bool {
+	if s.Purpose == PurposeDriftCheck {
+		return false
+	}
+
 	return s.Executor == ExecutorWriteBack || s.Operation != OperationPlan
 }
 
@@ -405,6 +434,64 @@ type DeliveryResult struct {
 	DeliveredAt time.Time
 }
 
+// Limits of the text fields of a DeliveryResult that an executor gives.
+const (
+	maxCommitLen = 128
+	maxBranchLen = 255
+	maxReviewLen = 2048
+)
+
+// Validate returns an error that wraps ErrInvalid for a result that an
+// executor must not record: an unknown delivery kind, no commit or branch,
+// a review request URL on a direct push or none on a review request, a text
+// that is too long or holds a control character, no delivery time, or a merge
+// time (the merge comes later, as EventMerged). The result goes to the audit
+// entry of the delivery, so the text rules are those of an audit reason.
+func (d *DeliveryResult) Validate() error {
+	if err := d.validateTexts(); err != nil {
+		return err
+	}
+
+	switch {
+	case !d.MergedAt.IsZero():
+		return fmt.Errorf("%w: a delivery has no merge time yet", ErrInvalid)
+	case d.DeliveredAt.IsZero():
+		return fmt.Errorf("%w: a delivery needs the time of the commit", ErrInvalid)
+	case audit.ValidateReason(d.AuditReason()) != nil:
+		return fmt.Errorf("%w: the commit, the branch and the review request are too long or hold a control character",
+			ErrInvalid)
+	default:
+		return nil
+	}
+}
+
+// checkBounded returns ErrInvalid unless text has 1 to max bytes.
+func checkBounded(what, text string, limit int) error {
+	if text == "" || len(text) > limit {
+		return fmt.Errorf("%w: a delivery needs a %s of 1 to %d bytes", ErrInvalid, what, limit)
+	}
+
+	return nil
+}
+
+// AuditReason returns the reason of the audit entry of the delivery: the
+// commit, the branch and the review request.
+func (d *DeliveryResult) AuditReason() string {
+	reason := "commit " + d.Commit + " on branch " + d.Branch
+	if d.ReviewRequest != "" {
+		reason += ", review request " + d.ReviewRequest
+	}
+
+	return reason
+}
+
+// Same reports whether d and o hold the same result, with the times compared
+// as instants.
+func (d *DeliveryResult) Same(o *DeliveryResult) bool {
+	return d.Delivery == o.Delivery && d.Commit == o.Commit && d.Branch == o.Branch &&
+		d.ReviewRequest == o.ReviewRequest && d.MergedAt.Equal(o.MergedAt) && d.DeliveredAt.Equal(o.DeliveredAt)
+}
+
 // CloseAfter returns the time after which a final state version closes
 // the job of d: the delivery of a direct push, or the merge of a review
 // request. It returns false for a review request with no known merge,
@@ -490,4 +577,34 @@ type StateVersion struct {
 	// version closes a write-back job. An intermediate write of a run
 	// never does.
 	Final bool
+}
+
+// validateTexts checks the delivery kind and the text fields of d.
+func (d *DeliveryResult) validateTexts() error {
+	if d.Delivery != DeliveryReviewRequest && d.Delivery != DeliveryDirectPush {
+		return fmt.Errorf("%w: unknown delivery %q", ErrInvalid, d.Delivery)
+	}
+
+	if err := checkBounded("commit", d.Commit, maxCommitLen); err != nil {
+		return err
+	}
+
+	if err := checkBounded("branch", d.Branch, maxBranchLen); err != nil {
+		return err
+	}
+
+	return d.validateReview()
+}
+
+// validateReview checks that a review request delivery has a URL and a direct
+// push has none.
+func (d *DeliveryResult) validateReview() error {
+	switch {
+	case d.Delivery == DeliveryDirectPush && d.ReviewRequest != "":
+		return fmt.Errorf("%w: a direct push has no review request", ErrInvalid)
+	case d.Delivery == DeliveryReviewRequest:
+		return checkBounded("review request", d.ReviewRequest, maxReviewLen)
+	default:
+		return nil
+	}
 }

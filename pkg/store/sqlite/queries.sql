@@ -53,6 +53,17 @@ UPDATE namespaces
 SET ip_allowlist = ?
 WHERE name = ?;
 
+-- name: GetNamespaceOutputSharingDefault :one
+SELECT output_sharing_default
+FROM namespaces
+WHERE name = ?;
+
+-- name: SetNamespaceOutputSharingDefault :execrows
+-- Replaces the output sharing setting of one namespace.
+UPDATE namespaces
+SET output_sharing_default = ?
+WHERE name = ?;
+
 -- name: GetFailoverVersion :one
 SELECT failover_version
 FROM namespaces
@@ -82,6 +93,34 @@ SELECT namespace, project, name, id, version, created_at_ms, updated_at_ms
 FROM stacks
 WHERE namespace = ? AND project = ? AND deleted_at_ms IS NULL
 ORDER BY name;
+
+-- name: ListStackPageInNamespace :many
+-- One page of the live stacks of a namespace after a project and a name, in
+-- the order of the primary key. The cursor is a range of the key, so the read
+-- starts at the cursor.
+SELECT namespace, project, name, id, version, created_at_ms, updated_at_ms
+FROM stacks
+WHERE namespace = sqlc.arg(namespace) AND deleted_at_ms IS NULL
+  AND (project, name) > (sqlc.arg(after_project), sqlc.arg(after_name))
+ORDER BY project, name
+LIMIT sqlc.arg(page_limit);
+
+-- name: ListStackPageInProject :many
+-- One page of the live stacks of a project after a name, in the order of the
+-- primary key.
+SELECT namespace, project, name, id, version, created_at_ms, updated_at_ms
+FROM stacks
+WHERE namespace = sqlc.arg(namespace) AND project = sqlc.arg(project) AND deleted_at_ms IS NULL
+  AND name > sqlc.arg(after_name)
+ORDER BY name
+LIMIT sqlc.arg(page_limit);
+
+-- name: ListStackTagsOfStacks :many
+-- Every tag of the stacks with the IDs, for one page of stacks.
+SELECT stack_id, name, value
+FROM stack_tags
+WHERE stack_id IN (sqlc.slice(stack_ids))
+ORDER BY stack_id, name;
 
 -- name: CreateStackTag :exec
 INSERT INTO stack_tags (stack_id, name, value)
@@ -431,6 +470,13 @@ FROM stack_tags AS t
 JOIN stacks AS s ON s.id = t.stack_id
 WHERE t.stack_id = ?;
 
+-- name: ListInventoryLabelsOfUnits :many
+-- Every label of the live units with the IDs, for one page of the unit list.
+SELECT unit_id, label_key, label_value
+FROM inventory_labels
+WHERE unit_id IN (sqlc.slice(unit_ids))
+ORDER BY unit_id, label_key;
+
 -- name: ListInventoryLabels :many
 -- Every label of the live units of a namespace.
 SELECT unit_id, label_key, label_value
@@ -645,6 +691,32 @@ FROM workspaces AS w
 JOIN namespaces AS n ON n.name = w.namespace
 WHERE w.namespace = ? AND w.deleted_at_ms IS NULL
 ORDER BY w.name;
+
+-- name: CountWorkspacePage :one
+-- The count of the live workspaces of a namespace whose name holds the
+-- search, for the total of a workspace page.
+SELECT COUNT(*)
+FROM workspaces AS w
+WHERE w.namespace = sqlc.arg(namespace) AND w.deleted_at_ms IS NULL AND instr(w.name, sqlc.arg(name_contains)) > 0;
+
+-- name: ReadWorkspacePage :many
+-- One page of the live workspaces of a namespace whose name holds the search,
+-- in the order of ReadWorkspaces. The inner query finds the names of the page
+-- in the index of the live workspace names alone, so an offset skips index
+-- entries and no table rows. The CROSS JOIN keeps that order of the joins:
+-- the outer query reads the rows of the page names only.
+SELECT sqlc.embed(w), n.id AS namespace_id
+FROM (
+    SELECT p.name
+    FROM workspaces AS p
+    WHERE p.namespace = sqlc.arg(namespace) AND p.deleted_at_ms IS NULL AND instr(p.name, sqlc.arg(name_contains)) > 0
+    ORDER BY p.name
+    LIMIT sqlc.arg(page_limit) OFFSET sqlc.arg(page_offset)
+) AS page
+CROSS JOIN workspaces AS w
+JOIN namespaces AS n ON n.name = w.namespace
+WHERE w.namespace = sqlc.arg(namespace) AND w.name = page.name AND w.deleted_at_ms IS NULL
+ORDER BY page.name;
 
 -- name: SaveWorkspace :execrows
 -- A compare-and-swap: it changes nothing unless the stored revision is the
@@ -3752,6 +3824,37 @@ WHERE notification_sink_secrets.sink_id = sqlc.arg(sink_id)
   AND notification_sink_secrets.namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace));
 
 
+-- name: GetDriftResult :one
+-- The namespace and the tool are part of the key: a result of another
+-- namespace or another tool reads as no row.
+SELECT d.unit_id, n.name AS namespace, d.tool, d.job_id, d.status, d.checked_at_ms, d.truncated, d.resources_json
+FROM drift_results AS d
+JOIN namespaces AS n ON n.id = d.namespace_id
+WHERE n.name = sqlc.arg(namespace) AND d.unit_id = sqlc.arg(unit_id) AND d.tool = sqlc.arg(tool);
+
+-- name: UpsertDriftResult :execrows
+-- The caller checks the fence, the job and the time in the same transaction.
+-- A row of the same unit ID in another namespace or of another tool is not
+-- replaced: the count is 0. A stored row that is not older is not replaced
+-- either (count 0), so that two writers cannot put an older result over a
+-- newer one.
+INSERT INTO drift_results (unit_id, namespace_id, tool, job_id, status, checked_at_ms, truncated, resources_json)
+VALUES (
+    sqlc.arg(unit_id), (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace)), sqlc.arg(tool),
+    sqlc.arg(job_id), sqlc.arg(status), sqlc.arg(checked_at_ms), sqlc.arg(truncated), sqlc.arg(resources_json)
+)
+ON CONFLICT (unit_id) DO UPDATE SET
+    job_id = excluded.job_id, status = excluded.status, checked_at_ms = excluded.checked_at_ms,
+    truncated = excluded.truncated, resources_json = excluded.resources_json
+WHERE drift_results.namespace_id = excluded.namespace_id AND drift_results.tool = excluded.tool
+  AND drift_results.checked_at_ms < excluded.checked_at_ms;
+
+-- name: DeleteDriftResult :exec
+DELETE FROM drift_results
+WHERE drift_results.unit_id = sqlc.arg(unit_id)
+  AND drift_results.namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace));
+
+
 -- name: InsertItemKey :execrows
 -- The caller checks the fence in the same transaction. A record for the same
 -- item is not written: the caller reads the stored record.
@@ -3796,3 +3899,57 @@ SELECT DISTINCT wrapper_id
 FROM item_keys
 WHERE shredded_at_ms = 0
 ORDER BY wrapper_id;
+
+-- name: InsertJobPlan :exec
+-- The caller checks the fence and the claim in the same transaction.
+INSERT INTO job_plans (id, namespace_id, job_id, body, created_at_ms)
+VALUES (
+    sqlc.arg(id), (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace)), sqlc.arg(job_id),
+    sqlc.arg(body), sqlc.arg(created_at_ms)
+);
+
+-- name: UpdateJobPlanBody :exec
+-- The caller checks the fence and the claim in the same transaction.
+UPDATE job_plans SET body = sqlc.arg(body)
+WHERE job_plans.id = sqlc.arg(id) AND job_plans.namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace));
+
+-- name: GetJobPlan :one
+SELECT p.id, p.job_id, p.body, p.created_at_ms
+FROM job_plans AS p
+JOIN namespaces AS n ON n.id = p.namespace_id
+WHERE n.name = sqlc.arg(namespace) AND p.id = sqlc.arg(id);
+
+-- name: InsertJobLog :exec
+INSERT INTO job_logs (id, namespace_id, job_id, phase, step, token, created_at_ms)
+VALUES (
+    sqlc.arg(id), (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace)), sqlc.arg(job_id),
+    sqlc.arg(phase), sqlc.arg(step), sqlc.arg(token), sqlc.arg(created_at_ms)
+);
+
+-- name: GetJobLog :one
+SELECT l.id, l.job_id, l.phase, l.step, l.token, l.created_at_ms
+FROM job_logs AS l
+JOIN namespaces AS n ON n.id = l.namespace_id
+WHERE n.name = sqlc.arg(namespace) AND l.id = sqlc.arg(id);
+
+-- name: InsertJobLogChunk :exec
+-- The write transaction of the namespace serializes the reserves of a chunk,
+-- so the caller reads the row before it inserts. A row that exists stays.
+INSERT INTO job_log_chunks (log_id, seq, namespace_id, sha256, size, confirmed)
+VALUES (
+    sqlc.arg(log_id), sqlc.arg(seq), (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace)),
+    sqlc.arg(sha256), sqlc.arg(size), 0
+)
+ON CONFLICT (log_id, seq) DO NOTHING;
+
+-- name: GetJobLogChunk :one
+SELECT c.sha256, c.size, c.confirmed
+FROM job_log_chunks AS c
+JOIN namespaces AS n ON n.id = c.namespace_id
+WHERE n.name = sqlc.arg(namespace) AND c.log_id = sqlc.arg(log_id) AND c.seq = sqlc.arg(seq);
+
+-- name: ConfirmJobLogChunk :execrows
+UPDATE job_log_chunks
+SET confirmed = 1
+WHERE job_log_chunks.log_id = sqlc.arg(log_id) AND job_log_chunks.seq = sqlc.arg(seq)
+  AND job_log_chunks.namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace));
