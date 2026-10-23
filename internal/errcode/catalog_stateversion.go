@@ -15,6 +15,19 @@ const (
 	StateVersionResourceNotFound = "state-version.resource-not-found"
 	// StateVersionTooLarge means that the body or the outputs of the state version are over the size limit.
 	StateVersionTooLarge = "state-version.too-large"
+	// StateVersionChecksumMismatch means that the uploaded state does not match its declared MD5.
+	StateVersionChecksumMismatch = "state-version.checksum-mismatch"
+	// StateVersionInvalid means that the state version or its state is not valid.
+	StateVersionInvalid = "state-version.invalid"
+	// StateVersionLineageMismatch means that the lineage of the state differs from the lineage of the current state.
+	StateVersionLineageMismatch = "state-version.lineage-mismatch"
+	// StateVersionRevealPathTooLong means that the value path of the reveal is longer than maxBytes bytes.
+	StateVersionRevealPathTooLong = "state-version.reveal-path-too-long"
+	// StateVersionStaleSerial means that the serial of the state is not newer than the serial of the current state.
+	StateVersionStaleSerial = "state-version.stale-serial"
+	// StateVersionUploadDenied means that the upload capability of the state version is not valid, has expired, or the
+	// state version takes no upload.
+	StateVersionUploadDenied = "state-version.upload-denied"
 )
 
 // stateVersionSpecs are the codes of the state versions of the TFE-compatible API.
@@ -43,6 +56,36 @@ func stateVersionSpecs() []Spec {
 		{
 			Code:    StateVersionTooLarge,
 			Meaning: "the body or the outputs of the state version are over the size limit",
+			Args:    nil,
+		},
+		{
+			Code:    StateVersionChecksumMismatch,
+			Meaning: "the uploaded state does not match its declared MD5",
+			Args:    nil,
+		},
+		{
+			Code:    StateVersionInvalid,
+			Meaning: "the state version or its state is not valid",
+			Args:    nil,
+		},
+		{
+			Code:    StateVersionLineageMismatch,
+			Meaning: "the lineage of the state differs from the lineage of the current state",
+			Args:    nil,
+		},
+		{
+			Code:    StateVersionRevealPathTooLong,
+			Meaning: "the value path of the reveal is longer than maxBytes bytes",
+			Args:    []Arg{{Name: "maxBytes", Kind: KindQuantity}},
+		},
+		{
+			Code:    StateVersionStaleSerial,
+			Meaning: "the serial of the state is not newer than the serial of the current state",
+			Args:    nil,
+		},
+		{
+			Code:    StateVersionUploadDenied,
+			Meaning: "the upload capability of the state version is not valid, has expired, or the state version takes no upload",
 			Args:    nil,
 		},
 	}
