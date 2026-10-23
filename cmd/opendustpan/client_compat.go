@@ -30,7 +30,8 @@ const (
 var (
 	errUsage                     = client.ErrUsage
 	errBackupID                  = client.ErrBackupID
-	errBackupNeedsServer         = client.ErrBackupNeedsServer
+	errBackupCheckNeedsServer    = client.ErrBackupCheckNeedsServer
+	errUpgradeCheckNeedsServer   = client.ErrUpgradeCheckNeedsServer
 	errBackupNoToken             = client.ErrBackupNoToken
 	errBackupRead                = client.ErrBackupRead
 	errResponseTooLarge          = client.ErrResponseTooLarge
