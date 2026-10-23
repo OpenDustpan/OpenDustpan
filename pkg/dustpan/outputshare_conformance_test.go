@@ -3,6 +3,7 @@ package dustpan_test
 import (
 	"context"
 	"crypto/md5" //nolint:gosec // The protocol under test uses MD5 for integrity.
+	"encoding/base64"
 	"encoding/hex"
 	"fmt"
 	"log/slog"
@@ -144,6 +145,7 @@ type outputShareRig struct {
 	authz   *grantAuthorizer
 	checker *outputsharesvc.Checker
 	states  outputsharesvc.ToolStates
+	outputs toolOutputs
 	mu      sync.Mutex
 	serials map[string]int64
 }
@@ -173,9 +175,14 @@ func newOutputShareRig(t *testing.T, dialect string) *outputShareRig {
 		t.Fatalf("checker: %v", err)
 	}
 
+	outputs := toolOutputs{
+		"opentofu": workspace.NewOutputStates(svc.Workspaces),
+		"pulumi":   stack.NewOutputStates(svc.Stacks, svc.Updates),
+	}
+
 	return &outputShareRig{
-		t: t, svc: svc, store: st, authz: authz, checker: checker, states: states, mu: sync.Mutex{},
-		serials: map[string]int64{},
+		t: t, svc: svc, store: st, authz: authz, checker: checker, states: states, outputs: outputs,
+		mu: sync.Mutex{}, serials: map[string]int64{},
 	}
 }
 
@@ -196,6 +203,9 @@ func (r *outputShareRig) harness() outputsharetest.Harness {
 		SettingRaw:  nil,
 		Checker:     r.checker,
 		States:      r.states,
+		Outputs:     r.outputs,
+		SaveOutputs: r.saveOutputs,
+		DeleteUnit:  r.deleteUnit,
 		Namespace:   r.namespace,
 		Unit:        r.unit,
 		SaveState:   r.saveState,
@@ -376,6 +386,129 @@ func (r *outputShareRig) saveWorkspaceState(t *testing.T, unit identity.Object, 
 func (r *outputShareRig) saveStackCheckpoint(t *testing.T, unit identity.Object, serial int64) string {
 	t.Helper()
 
+	return r.saveStackDeployment(t, unit, fmt.Appendf(nil, `{"imported":true,"serial":%d}`, serial))
+}
+
+// saveStackDeployment imports deployment as the latest checkpoint of the
+// stack of the unit and returns its ID as State.ID names it.
+func (r *outputShareRig) saveStackDeployment(t *testing.T, unit identity.Object, deployment []byte) string {
+	t.Helper()
+
+	update, err := r.svc.Updates.Import(t.Context(), r.stackRef(t, unit), "saver", stack.CheckpointInput{
+		Features: nil, Deployment: deployment, SchemaVersion: 1, Sequence: 0, Invalid: false,
+	})
+	if err != nil {
+		t.Fatalf("import checkpoint of %s: %v", unit, err)
+	}
+
+	return stack.StateID(stack.ID(unit.UnitID()), update.Version)
+}
+
+// toolOutputs routes the Outputs port to the port of the tool of the unit, as
+// the reader of the server does.
+type toolOutputs map[string]outputshare.Outputs
+
+// Outputs implements outputshare.Outputs.
+func (o toolOutputs) Outputs(ctx context.Context, u identity.Object, stateID string) ([]outputshare.Output, error) {
+	port, ok := o[u.Tool()]
+	if !ok {
+		return nil, fmt.Errorf("%w: no output source for %q", outputshare.ErrInvalid, u)
+	}
+
+	out, err := port.Outputs(ctx, u, stateID)
+	if err != nil {
+		return nil, fmt.Errorf("outputs of %s: %w", u, err)
+	}
+
+	return out, nil
+}
+
+// hiddenCiphertext is the ciphertext of a secret value in a checkpoint: the
+// base64 of the plain text of the suite.
+func hiddenCiphertext() string {
+	return base64.StdEncoding.EncodeToString([]byte(outputsharetest.OutputHiddenText))
+}
+
+// saveOutputs saves a new latest state of the unit with the root outputs of
+// the suite, and returns its ID as State.ID names it.
+func (r *outputShareRig) saveOutputs(t *testing.T, unit outputshare.Placement) string {
+	t.Helper()
+
+	serial := r.nextSerial(unit.Unit)
+	plain := fmt.Sprintf("%q", outputsharetest.OutputPlainValue)
+	hidden := fmt.Sprintf("%q", outputsharetest.OutputHiddenText)
+
+	switch unit.Unit.Tool() {
+	case "opentofu":
+		content := fmt.Sprintf(`{"serial":%d,"lineage":"lineage-1","outputs":{`+
+			`%q:{"sensitive":false,"value":%s,"type":"string"},`+
+			`%q:{"sensitive":true,"value":%s,"type":"string"},`+
+			`%q:{"sensitive":true,"value":{"name":"web","inner":%s},"type":["object",{}]}}}`,
+			serial, outputsharetest.OutputPlainName, plain, outputsharetest.OutputSecretName, hidden,
+			outputsharetest.OutputNestedName, hidden)
+
+		return r.saveWorkspaceState(t, unit.Unit, serial, content)
+	case "pulumi":
+		sealed := `{"` + stackSigKey + `":"` + stackSecretSig + `","ciphertext":"` + hiddenCiphertext() + `"}`
+		outputs := fmt.Sprintf(`{%q:%s,%q:%s,%q:{"name":"web","inner":%s}}`,
+			outputsharetest.OutputPlainName, plain, outputsharetest.OutputSecretName, sealed,
+			outputsharetest.OutputNestedName, sealed)
+
+		return r.saveStackDeployment(t, unit.Unit, fmt.Appendf(nil,
+			`{"manifest":{"time":"2026-01-01T00:00:00Z","magic":"","version":""},`+
+				`"secrets_providers":{"type":"service"},"resources":[`+
+				`{"urn":"urn:pulumi:prod::web::pulumi:pulumi:Stack::web-prod","type":"pulumi:pulumi:Stack",`+
+				`"outputs":%s}],"serial":%d}`, outputs, serial))
+	default:
+		t.Fatalf("unknown tool %q", unit.Unit.Tool())
+
+		return ""
+	}
+}
+
+// The members of a secret value in a Pulumi checkpoint: the signature key and
+// the signature of a secret.
+const (
+	stackSigKey    = "4dabf18193072939515e22adb298388d"
+	stackSecretSig = "1b47061264138c4ac30d75fd1eb44270"
+)
+
+// deleteUnit deletes the unit, also when it has a state.
+func (r *outputShareRig) deleteUnit(t *testing.T, unit outputshare.Placement) {
+	t.Helper()
+
+	entry := audit.Entry{
+		At: time.Time{}, Namespace: unit.Unit.Namespace(), Subject: "admin", IDPSubject: "", TokenID: "",
+		Action: "unit:manage", Object: unit.Unit.String(), Version: "", ValuePath: "", ValueCount: nil,
+		Changes: nil, SourceIP: "192.0.2.1", UserAgent: "test", Channel: audit.ChannelAPI, Kind: audit.KindChange,
+		Outcome: audit.OutcomeSuccess, RequestID: "", ObjectID: "", PrevHash: "", Hash: "", Sequence: 0,
+		FenceVersion: 0, Reason: "", PrincipalKind: "", JobID: "",
+	}
+
+	switch unit.Unit.Tool() {
+	case "opentofu":
+		name, err := workspace.ParseName(unit.Unit.UnitName())
+		if err != nil {
+			t.Fatalf("workspace name of %s: %v", unit.Unit, err)
+		}
+
+		ref := workspace.Ref{Namespace: unit.Unit.Namespace(), Name: name}
+		if err := r.svc.Workspaces.Delete(t.Context(), ref, entry); err != nil {
+			t.Fatalf("delete %s: %v", unit.Unit, err)
+		}
+	case "pulumi":
+		if err := r.svc.Stacks.ForceDelete(t.Context(), r.stackRef(t, unit.Unit), entry); err != nil {
+			t.Fatalf("delete %s: %v", unit.Unit, err)
+		}
+	default:
+		t.Fatalf("unknown tool %q", unit.Unit.Tool())
+	}
+}
+
+// stackRef returns the reference of the stack of the unit.
+func (r *outputShareRig) stackRef(t *testing.T, unit identity.Object) stack.Ref {
+	t.Helper()
+
 	project, name, _ := strings.Cut(unit.UnitName(), "/")
 
 	ref, err := stack.ParseRef(unit.Namespace().String(), project, name)
@@ -383,15 +516,7 @@ func (r *outputShareRig) saveStackCheckpoint(t *testing.T, unit identity.Object,
 		t.Fatalf("stack ref of %s: %v", unit, err)
 	}
 
-	update, err := r.svc.Updates.Import(t.Context(), ref, "saver", stack.CheckpointInput{
-		Features: nil, Deployment: fmt.Appendf(nil, `{"imported":true,"serial":%d}`, serial), SchemaVersion: 1,
-		Sequence: 0, Invalid: false,
-	})
-	if err != nil {
-		t.Fatalf("import checkpoint of %s: %v", unit, err)
-	}
-
-	return stack.StateID(stack.ID(unit.UnitID()), update.Version)
+	return ref
 }
 
 // TestOutputShareChecker runs the conformance suite of output sharing on the
