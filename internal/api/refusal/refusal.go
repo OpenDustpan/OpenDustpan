@@ -64,9 +64,10 @@ const (
 // not exist. A caller can name any namespace, so all such names count as one.
 const unknownScope = "@unknown"
 
-// writeTimeout bounds the append of the entries of one refusal. The append runs
-// after the request context is done too, so a client that closes the
-// connection cannot make an entry get lost.
+// writeTimeout bounds the append of the entry of one refusal, and, apart from
+// it, the append of the flush entries that the refusal writes after it. The
+// appends run after the request context is done too, so a client that closes
+// the connection cannot make an entry get lost.
 const writeTimeout = 5 * time.Second
 
 // suppressedSubject is the subject of the entries that count denials which
@@ -217,7 +218,9 @@ func (r *Recorder) Record(ctx context.Context, req *http.Request, p identity.Pri
 		Scope:     target.key,
 	}, d.Window)
 
-	r.writeAll(ctx, flushEntries(decision.Flush))
+	// The counts of earlier windows go out after the entry of this refusal,
+	// so a slow store cannot use up the time of that entry.
+	defer r.flushAfter(ctx, decision.Flush)
 
 	if !decision.Write {
 		return
@@ -241,6 +244,20 @@ func (r *Recorder) Record(ctx context.Context, req *http.Request, p identity.Pri
 // ctx is done.
 func (r *Recorder) Flush(ctx context.Context) {
 	r.writeAll(ctx, flushEntries(r.limiter.Drain()))
+}
+
+// flushAfter writes the entries that carry the counts of pending, with a
+// timeout of its own. It does not use the deadline of ctx, so the entry of
+// the refusal and the flush entries each get the full writeTimeout.
+func (r *Recorder) flushAfter(ctx context.Context, pending []denylimit.Pending) {
+	if len(pending) == 0 {
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), writeTimeout)
+	defer cancel()
+
+	r.writeAll(ctx, flushEntries(pending))
 }
 
 // writeAll appends each entry, and stops when ctx is done.
