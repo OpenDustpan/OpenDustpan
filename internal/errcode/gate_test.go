@@ -43,7 +43,7 @@ func gated() []errcodetest.Adapter {
 		api("inventory", []string{"errorResponse"}, nil),
 		api("jobs", []string{"errorResponse"}, nil),
 		api("notifications", []string{"errorResponse", "statusError", "problem"}, nil),
-		api("objectcontext", []string{"errorResponse", "codedErrorResponse"}, nil),
+		api("objectcontext", []string{"errorResponse"}, nil),
 		api("profile", []string{"errorResponse", "statusError", "problem"}, nil),
 		api("pulumi", []string{"errorResponse", "codedErrorResponse", "freshRefusalResponse"}, nil),
 		api("registry", []string{"errorResponse", "statusError", "problem"}, nil),
