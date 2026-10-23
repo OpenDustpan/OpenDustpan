@@ -775,6 +775,20 @@ export interface UnitLock {
   readonly since: string;
 }
 
+export interface UnitOutputEntry {
+  readonly name: string;
+  readonly secret: boolean;
+  /** Any JSON value of a plain output. */
+  readonly value?: unknown;
+}
+
+export interface UnitOutputs {
+  readonly outputs: ReadonlyArray<UnitOutputEntry>;
+  readonly stateId: string;
+  readonly tool: string;
+  readonly unitId: string;
+}
+
 export interface UnitState {
   readonly since: string;
   readonly state: string;

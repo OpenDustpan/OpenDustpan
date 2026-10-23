@@ -49,6 +49,7 @@ import type {
   GetTriggerInput,
   GetUnitContextInput,
   GetUnitDriftInput,
+  GetUnitOutputsInput,
   GetViewInput,
   ListApprovalRulesInput,
   ListCollectionsInput,
@@ -197,6 +198,8 @@ import type {
   Unit,
   UnitDrift,
   UnitLock,
+  UnitOutputEntry,
+  UnitOutputs,
   UnitState,
   UpdateContextRequest,
   UpdatePreferencesRequest,
@@ -391,6 +394,10 @@ export class Client {
 
   getUnitDrift(input: GetUnitDriftInput): Promise<Answer<UnitDrift>> {
     return execute(this.transport, operations.getUnitDrift, input);
+  }
+
+  getUnitOutputs(input: GetUnitOutputsInput): Promise<Answer<UnitOutputs>> {
+    return execute(this.transport, operations.getUnitOutputs, input);
   }
 
   getView(input: GetViewInput): Promise<Answer<View>> {

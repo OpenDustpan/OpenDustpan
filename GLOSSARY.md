@@ -1533,6 +1533,14 @@ _Avoid_: Bot name, persona
 The stable machine code of an API error, for example `workspace.locked` (ADR 182). It is `errorCode` in the camelCase APIs and the JSON:API `code` member in the TFE-compatible API. A code never changes its meaning. The console selects its message by the code and never parses the English text. Not the `code` field of the camelCase error shapes, which is the HTTP status.
 _Avoid_: Error type, error ID, status code (for the machine code)
 
+**Error argument**:
+A value that the text of an API error names, for example the name of a stack or a limit (ADR 276). The answer sends it as a structured field next to the error code. It is `errorArgs` in the camelCase APIs and `meta.args` in the TFE-compatible API. An argument is an identifier, a quantity or a time (an RFC 3339 string in UTC), and never pre-formatted text. The client formats it.
+_Avoid_: Error value, error parameter, error detail
+
+**Uncoded error path**:
+An error path of an HTTP adapter that answers without a code of the catalog (ADR 276). The path is a branch of a mapping function, an element of a table of errors or an error body. A mapping function is a classify function, or another function that tests an error and names an HTTP status of 400 or more. The catalog is in `internal/errcode`. The known list of each adapter holds the uncoded error paths of today, with a limit, and it only shrinks.
+_Avoid_: Legacy error, untyped error
+
 ### Operations
 
 **Incident**:

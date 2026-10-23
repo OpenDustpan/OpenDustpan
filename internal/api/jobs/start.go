@@ -108,9 +108,8 @@ func (h *Handler) startJob(w http.ResponseWriter, r *http.Request, p identity.Pr
 		// refusal of the Authorizer: a policy, an agent mode, a freeze, a
 		// limit and a gate refuse the person too.
 		if reason, ok := refusalReason(err); ok {
-			h.guard.Record(ctx, r, p, refusal.Denial{
-				Action: identity.ActionUnitRunPlan, Object: req.Unit, Reason: reason, Window: 0,
-			})
+			action, object := deniedTarget(err, req.Unit)
+			h.guard.Record(ctx, r, p, refusal.Denial{Action: action, Object: object, Reason: reason, Window: 0})
 		}
 
 		h.writeError(ctx, w, err)
@@ -136,6 +135,27 @@ func (h *Handler) startJob(w http.ResponseWriter, r *http.Request, p identity.Pr
 	}
 
 	h.writeJSON(ctx, w, http.StatusCreated, toJobResponse(&j))
+}
+
+// deniedTarget returns the action and the object of the audit entry of the
+// refusal err of a start on unit: the action and the object that the
+// authorizer refused, for a *job.DeniedError, and else the start of a plan on
+// unit, the action of the route.
+func deniedTarget(err error, unit identity.Object) (identity.Action, identity.Object) {
+	var denied *job.DeniedError
+	if !errors.As(err, &denied) || denied.Action == "" {
+		return identity.ActionUnitRunPlan, unit
+	}
+
+	// Defense in depth: the service checks the actions on the unit of the
+	// request and on its namespace only. This check stays so that a refusal
+	// that names an object of another namespace never writes its entry into
+	// the audit log of that namespace.
+	if denied.Object.Namespace() != unit.Namespace() {
+		return identity.ActionUnitRunPlan, unit
+	}
+
+	return denied.Action, denied.Object
 }
 
 // Reasons of the audit entries of the refusals of a start. The entry never

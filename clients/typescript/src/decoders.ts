@@ -126,6 +126,8 @@ import type {
   Unit,
   UnitDrift,
   UnitLock,
+  UnitOutputEntry,
+  UnitOutputs,
   UnitState,
   UpdateContextRequest,
   UpdatePreferencesRequest,
@@ -996,6 +998,21 @@ export const decodeUnitLock: Decoder<UnitLock> = object<UnitLock>("UnitLock", {
   holder: string,
   operation: string,
   since: string,
+});
+
+/** The validator of UnitOutputEntry. */
+export const decodeUnitOutputEntry: Decoder<UnitOutputEntry> = object<UnitOutputEntry>("UnitOutputEntry", {
+  name: string,
+  secret: boolean,
+  value: optional(anyValue),
+});
+
+/** The validator of UnitOutputs. */
+export const decodeUnitOutputs: Decoder<UnitOutputs> = object<UnitOutputs>("UnitOutputs", {
+  outputs: array(ref(() => decodeUnitOutputEntry)),
+  stateId: string,
+  tool: string,
+  unitId: string,
 });
 
 /** The validator of UnitState. */

@@ -85,6 +85,7 @@ func TestLockRefusedByAManualLock(t *testing.T) {
 					conflictWorkspaces: conflictWorkspaces{stubWorkspaces: stubWorkspaces{}},
 					lock:               lock,
 				},
+				OutputChecker:  nil,
 				BaseURL:        baseurl.Resolver{},
 				Audit:          newTestAudit(),
 				Gate:           nil,

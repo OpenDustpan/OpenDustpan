@@ -697,6 +697,81 @@ func TestWriteRefusalStatuses(t *testing.T) {
 	}
 }
 
+// TestWriteRefusalTexts proves that each cause of a refused write has its own
+// text: a write with no lock says to send LOCK and names the switches, a
+// forced write names the forced-write switches, and a client-encrypted state
+// says why the server cannot fence it. No text of the store reaches the
+// client.
+func TestWriteRefusalTexts(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		err  error
+		want []string
+	}{
+		{
+			name: "no lock and the switch off",
+			err: workspace.NewOverrideRefusedError(
+				workspace.OverrideUnlocked, "store text: secret detail", workspace.ErrNotLocked,
+			),
+			want: []string{
+				"workspace is not locked: send LOCK first",
+				"PUT /api/server/namespaces/{namespace}/override-switches", "unit:write-unlocked",
+			},
+		},
+		{
+			name: "no lock",
+			err:  fmt.Errorf("write acme/web: %w", workspace.ErrNotLocked),
+			want: []string{"workspace is not locked: send LOCK first"},
+		},
+		{
+			name: "forced write",
+			err:  workspace.NewOverrideRefusedError(workspace.OverrideForced, "store text: secret detail"),
+			want: []string{
+				"write refused: a forced write needs the forced-write switch",
+				"PUT /api/v2/workspaces/{id}/override-switches", "unit:write-forced",
+			},
+		},
+		{
+			name: "client-encrypted state",
+			err:  fmt.Errorf("store text: secret detail: %w", workspace.ErrClientEncrypted),
+			want: []string{"the state is encrypted by the client, so the server cannot fence it"},
+		},
+		{
+			name: "another override",
+			err:  workspace.ErrOverrideRefused,
+			want: []string{"write refused: an override is off or not granted"},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			units := newFakeUnits(true)
+			units.writeErr = tc.err
+			h := newTestHandler(t, units)
+
+			rec := do(h, http.MethodPost, unitPath, `{"serial":1,"lineage":"l"}`, bearer(adminToken))
+			if rec.Code != http.StatusForbidden {
+				t.Fatalf("status %d, want 403; body %q", rec.Code, rec.Body.String())
+			}
+
+			body := rec.Body.String()
+			for _, want := range tc.want {
+				if !strings.Contains(body, want) {
+					t.Errorf("body %q, want it to hold %q", body, want)
+				}
+			}
+
+			if strings.Contains(body, "secret detail") {
+				t.Errorf("body %q holds the text of the store", body)
+			}
+		})
+	}
+}
+
 // TestFencedWriteStatuses proves a fenced LOCK answers 503 with a Retry-After
 // time, and a fenced state write answers 409. OpenTofu reads a 409 on LOCK as
 // a lock that another client holds, and it retries a 503, which reads the

@@ -127,11 +127,20 @@ func (b *stateBlobs) deleteRetried(ctx context.Context, ns namespace.ID, ws ID, 
 	return b.refuse(ctx, ns, opDelete, blob.DeleteRetried(ctx, v, key), scopeaudit.PlaceOf(v, key))
 }
 
-// list returns the blobs of the workspace ws, in the namespace with ID ns.
+// list returns the blobs of the workspace ws, in the namespace with ID ns. It
+// returns blob.ErrOutOfScope, and does not call the store, when ws is empty.
 func (b *stateBlobs) list(ctx context.Context, ns namespace.ID, ws ID) ([]blob.Object, error) {
 	v, err := b.view(ns)
 	if err != nil {
 		return nil, err
+	}
+
+	// Defense in depth: the callers take ws from the row of the workspace or
+	// from the blob purge record. This check stays so that a listing never
+	// names a directory that is not the directory of one workspace. It does
+	// not rely on the callers or on the view.
+	if ws == "" {
+		return nil, b.refuse(ctx, ns, opList, blob.ErrOutOfScope, scopeaudit.OutsideUnitDirectory)
 	}
 
 	objects, err := v.List(ctx, workspaceDir(v, ws))

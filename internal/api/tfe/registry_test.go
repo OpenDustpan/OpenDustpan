@@ -134,10 +134,24 @@ func newRegistryFixture(t *testing.T, host string, authz identity.Authorizer) re
 	}
 
 	handler, err := tfe.NewHandler(tfe.Config{
-		Sessions: nil, SessionPolicy: nil, StateGuard: nil,
-		Authenticator: tokenAuthenticator{}, Authorizer: authz, AddressGate: nil, Logger: slog.New(slog.DiscardHandler),
-		Namespaces: newTestNamespaces(t), Workspaces: stubWorkspaces{}, BaseURL: public, Audit: audits, Gate: nil,
-		MaxStateBytes: 0, OnAuditFailure: nil, DenialLimiter: nil,
+		Sessions:      nil,
+		SessionPolicy: nil,
+		StateGuard:    nil,
+		Authenticator: tokenAuthenticator{},
+		Authorizer:    authz,
+		AddressGate:   nil,
+		Logger:        slog.New(slog.DiscardHandler),
+		Namespaces: newTestNamespaces(
+			t,
+		),
+		Workspaces:     stubWorkspaces{},
+		OutputChecker:  nil,
+		BaseURL:        public,
+		Audit:          audits,
+		Gate:           nil,
+		MaxStateBytes:  0,
+		OnAuditFailure: nil,
+		DenialLimiter:  nil,
 		Registry: &tfe.RegistryConfig{
 			Service: reg, Host: host, DefaultPort: "443", URLKey: bytes.Repeat([]byte{7}, 32), URLTTL: 0,
 			Now: func() time.Time { return now },
@@ -635,6 +649,7 @@ func TestNewHandlerRefusesAShortRegistryKey(t *testing.T) {
 			t,
 		),
 		Workspaces:     stubWorkspaces{},
+		OutputChecker:  nil,
 		BaseURL:        baseurl.Resolver{},
 		Audit:          newTestAudit(),
 		Gate:           nil,

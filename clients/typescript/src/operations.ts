@@ -110,6 +110,8 @@ import {
   decodeUnit,
   decodeUnitDrift,
   decodeUnitLock,
+  decodeUnitOutputEntry,
+  decodeUnitOutputs,
   decodeUnitState,
   decodeUpdateContextRequest,
   decodeUpdatePreferencesRequest,
@@ -227,6 +229,8 @@ import type {
   Unit,
   UnitDrift,
   UnitLock,
+  UnitOutputEntry,
+  UnitOutputs,
   UnitState,
   UpdateContextRequest,
   UpdatePreferencesRequest,
@@ -678,6 +682,15 @@ export interface GetUnitContextInput {
 
 /** The input of the operation getUnitDrift. */
 export interface GetUnitDriftInput {
+  readonly path: {
+    readonly namespace: string;
+    readonly unit_id: string;
+  };
+  readonly signal?: AbortSignal;
+}
+
+/** The input of the operation getUnitOutputs. */
+export interface GetUnitOutputsInput {
   readonly path: {
     readonly namespace: string;
     readonly unit_id: string;
@@ -1854,6 +1867,23 @@ export const operations = {
       statuses: [200],
     },
     ref(() => decodeUnitDrift),
+  ),
+  getUnitOutputs: operation<UnitOutputs>(
+    {
+      id: "getUnitOutputs",
+      method: "GET",
+      path: "/api/dustpan/v1/namespaces/{namespace}/units/{unit_id}/outputs",
+      pathParameters: ["namespace", "unit_id"],
+      queryParameters: [],
+      security: "caller",
+      idempotencyKey: "none",
+      ifMatch: "none",
+      requiredQueryParameters: [],
+      requestBody: undefined,
+      requestBodyRequired: false,
+      statuses: [200],
+    },
+    ref(() => decodeUnitOutputs),
   ),
   getView: operation<View>(
     {

@@ -418,6 +418,7 @@ func coverageTFERoutes(tb testing.TB, namespaces *namespace.Service) []RouteRef 
 		Logger:         slog.New(slog.DiscardHandler),
 		Namespaces:     namespaces,
 		Workspaces:     coverageWorkspaces{},
+		OutputChecker:  nil,
 		BaseURL:        baseurl.Resolver{},
 		Gate:           nil,
 		MaxStateBytes:  0,
@@ -714,8 +715,18 @@ func coverageInventoryRoutes(tb testing.TB, namespaces *namespace.Service) []Rou
 		tb.Fatalf("output sharing service: %v", err)
 	}
 
+	outputs, err := outputsharesvc.NewReader(outputsharesvc.ReaderConfig{
+		States:  coverageStates{},
+		Checker: coverageOutputChecker{},
+		Sources: map[string]outputsharesvc.Source{"pulumi": coverageOutputSource{}},
+	})
+	if err != nil {
+		tb.Fatalf("output reader: %v", err)
+	}
+
 	handler, err := inventoryapi.NewHandler(inventoryapi.Config{
 		OutputSharing: sharing,
+		Outputs:       outputs,
 		Views:         coverageViews(tb),
 		Locks:         locks,
 		PublicURL:     "",
@@ -754,6 +765,30 @@ func (coverageOutputSharing) SetSetting(
 	_ context.Context, _ namespace.Name, _ outputshare.Default, _ namespace.Fence, _ audit.Entry,
 ) error {
 	return nil
+}
+
+// coverageStates, coverageOutputChecker and coverageOutputSource let the
+// coverage check build the reader of outputs. They answer nothing: the check
+// only lists the routes.
+type (
+	coverageStates        struct{}
+	coverageOutputChecker struct{}
+	coverageOutputSource  struct{}
+)
+
+func (coverageStates) Latest(_ context.Context, _ identity.Object) (outputshare.State, error) {
+	return outputshare.State{ID: "", ClientEncrypted: false}, nil
+}
+
+//nolint:gocritic // The port passes the request by value.
+func (coverageOutputChecker) CheckRead(_ context.Context, _ outputshare.ReadRequest) (outputshare.Decision, error) {
+	return outputshare.Decision{Kind: "", Rule: "", Secrets: false}, outputshare.ErrUnknownProducer
+}
+
+func (coverageOutputSource) Outputs(
+	_ context.Context, _ identity.Object, _ string,
+) ([]outputsharesvc.Output, error) {
+	return nil, outputshare.ErrUnknownProducer
 }
 
 // coverageContextRoutes returns the context adapter's route table.
@@ -2606,7 +2641,8 @@ func driftAllowEntries() []AllowEntry {
 // of a namespace. No CLI calls them: the console and the clients of the API
 // do. The setting step of TestOutputSharingRules reads the setting of a new
 // namespace, refuses a change by a viewer and a value that is not valid, and
-// changes it as the admin.
+// changes it as the admin. The reader steps of the same test read the outputs
+// of a unit with a principal that holds unit:read-outputs only.
 func outputSharingAllowEntries() []AllowEntry {
 	const (
 		path = "/api/dustpan/v1/namespaces/{namespace}/output-sharing"
@@ -2618,6 +2654,11 @@ func outputSharingAllowEntries() []AllowEntry {
 	return []AllowEntry{
 		{Method: http.MethodGet, Path: path, CoveringTest: test, Reason: why},
 		{Method: http.MethodPut, Path: path, CoveringTest: test, Reason: why},
+		{
+			Method: http.MethodGet, Path: "/api/dustpan/v1/namespaces/{namespace}/units/{unit_id}/outputs",
+			CoveringTest: test, Reason: "Console and client route: no CLI calls it. The reader steps of " + test +
+				" read the outputs of a stack and of a workspace through the API.",
+		},
 	}
 }
 
