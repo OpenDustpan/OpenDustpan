@@ -744,11 +744,13 @@ FROM workspaces
 WHERE namespace = $1 AND name = $2 AND deleted_at_ms IS NULL;
 
 -- name: GetWorkspaceByID :one
+-- The live check is COALESCE(deleted_at_ms, -1) = -1, not IS NULL, so the
+-- partial index workspaces_live_name cannot serve this lookup by ID.
 SELECT id, namespace, name, revision, lock_id, lock_holder, lock_reason,
        locked_at_ms, current_state_version_id, created_at_ms, updated_at_ms, allow_forced_writes, allow_unlocked_writes,
        deleted_at_ms, deleted_name
 FROM workspaces
-WHERE id = $1 AND deleted_at_ms IS NULL;
+WHERE id = $1 AND COALESCE(deleted_at_ms, -1) = -1;
 
 -- name: ReadWorkspace :one
 -- The read behind the store port: the workspace with the ID of its namespace,
@@ -759,10 +761,12 @@ JOIN namespaces AS n ON n.name = w.namespace
 WHERE w.namespace = $1 AND w.name = $2 AND w.deleted_at_ms IS NULL;
 
 -- name: ReadWorkspaceByID :one
+-- The live check is COALESCE(deleted_at_ms, -1) = -1, not IS NULL, so the
+-- partial index workspaces_live_name cannot serve this lookup by ID.
 SELECT sqlc.embed(w), n.id AS namespace_id
 FROM workspaces AS w
 JOIN namespaces AS n ON n.name = w.namespace
-WHERE w.id = $1 AND w.deleted_at_ms IS NULL;
+WHERE w.id = $1 AND COALESCE(w.deleted_at_ms, -1) = -1;
 
 -- name: ReadWorkspaces :many
 SELECT sqlc.embed(w), n.id AS namespace_id
@@ -798,11 +802,13 @@ ORDER BY w.name;
 -- name: LockWorkspaceForFinalize :one
 -- Locks the workspace row so two finalizes on one workspace cannot both pass
 -- the serial check.
+-- The live check is COALESCE(deleted_at_ms, -1) = -1, not IS NULL, so the
+-- partial index workspaces_live_name cannot serve this lookup by ID.
 SELECT id, namespace, name, revision, lock_id, lock_holder, lock_reason,
        locked_at_ms, current_state_version_id, created_at_ms, updated_at_ms, allow_forced_writes, allow_unlocked_writes,
        deleted_at_ms, deleted_name
 FROM workspaces
-WHERE id = $1 AND deleted_at_ms IS NULL
+WHERE id = $1 AND COALESCE(deleted_at_ms, -1) = -1
 FOR UPDATE;
 
 -- name: ListWorkspaces :many
@@ -823,17 +829,21 @@ SET revision = @revision, lock_id = @lock_id, lock_holder = @lock_holder,
 WHERE id = @id AND revision = @expected_revision;
 
 -- name: WorkspaceExists :one
+-- The live check is COALESCE(deleted_at_ms, -1) = -1, not IS NULL, so the
+-- partial index workspaces_live_name cannot serve this lookup by ID.
 SELECT EXISTS (
-    SELECT 1 FROM workspaces WHERE id = $1 AND deleted_at_ms IS NULL
+    SELECT 1 FROM workspaces WHERE id = $1 AND COALESCE(deleted_at_ms, -1) = -1
 );
 
 -- name: SoftDeleteWorkspace :execrows
 -- Moves the name to deleted_name and frees it (ADR 47). A workspace name
 -- cannot hold ":", so "deleted:" and the ID never match a lookup by name. The
 -- revision moves on, so a concurrent compare-and-swap of the row fails.
+-- The live check is COALESCE(deleted_at_ms, -1) = -1, not IS NULL, so the
+-- partial index workspaces_live_name cannot serve this lookup by ID.
 UPDATE workspaces
 SET deleted_name = name, name = 'deleted:' || id, deleted_at_ms = $1, revision = revision + 1
-WHERE id = $2 AND deleted_at_ms IS NULL;
+WHERE id = $2 AND COALESCE(deleted_at_ms, -1) = -1;
 
 -- name: DeleteStateVersionsOfWorkspace :exec
 -- Removes every state version of one workspace, pending and finalized.
@@ -914,11 +924,13 @@ WHERE workspace_id = $1 AND status = 'pending';
 -- name: LockWorkspaceForDeclare :one
 -- Locks the workspace row so concurrent declares cannot both pass the
 -- pending cap.
+-- The live check is COALESCE(deleted_at_ms, -1) = -1, not IS NULL, so the
+-- partial index workspaces_live_name cannot serve this lookup by ID.
 SELECT id, namespace, name, revision, lock_id, lock_holder, lock_reason,
        locked_at_ms, current_state_version_id, created_at_ms, updated_at_ms, allow_forced_writes, allow_unlocked_writes,
        deleted_at_ms, deleted_name
 FROM workspaces
-WHERE id = $1 AND deleted_at_ms IS NULL
+WHERE id = $1 AND COALESCE(deleted_at_ms, -1) = -1
 FOR UPDATE;
 
 -- name: ListStateContentKeys :many
