@@ -5,8 +5,8 @@ import (
 	"errors"
 	"net/http"
 	"net/url"
-	"strconv"
 
+	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/internal/sessionauth"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -84,35 +84,18 @@ func (h *Handler) freshReveal(serve RouteHandler) RouteHandler {
 
 		switch {
 		case errors.Is(err, errFreshStepRequired):
-			h.writeFreshRefusal(ctx, w, http.StatusForbidden, err.Error(), "")
+			h.writeCoded(ctx, w, errorClass{
+				status: http.StatusForbidden, title: titleForbidden, detail: err.Error(),
+				code: errcode.MFAFreshStepRequired, args: nil,
+			}, "")
 		case errors.Is(err, errReauthenticate):
-			h.writeFreshRefusal(ctx, w, http.StatusUnauthorized, err.Error(), path)
+			// meta.reauthenticate holds the path that starts a new sign-in.
+			h.writeCoded(ctx, w, errorClass{
+				status: http.StatusUnauthorized, title: titleUnauthorized, detail: err.Error(),
+				code: errcode.MFAFreshStepRequired, args: nil,
+			}, path)
 		default:
 			h.writeNoStore(ctx, w, err)
 		}
 	}
-}
-
-// writeFreshRefusal answers a refused fresh authentication as a JSON:API
-// error with the error code. For an old sign-in, meta.reauthenticate holds
-// the path that starts a new one.
-func (h *Handler) writeFreshRefusal(
-	ctx context.Context,
-	w http.ResponseWriter,
-	status int,
-	detail, reauthenticate string,
-) {
-	var meta *jsonAPIErrorMeta
-	if reauthenticate != "" {
-		meta = &jsonAPIErrorMeta{Reauthenticate: reauthenticate}
-	}
-
-	title := titleForbidden
-	if status == http.StatusUnauthorized {
-		title = "unauthorized"
-	}
-
-	h.writeJSONAPIDocument(ctx, w, status, jsonAPIError{
-		Status: strconv.Itoa(status), Code: codeFreshStepRequired, Title: title, Detail: detail, Meta: meta,
-	})
 }

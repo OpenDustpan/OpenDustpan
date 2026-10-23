@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/pkg/gate"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -450,12 +451,15 @@ func (h *Handler) restoreStateVersion(
 		if errors.Is(err, workspace.ErrLockedByOther) {
 			holder := h.refusingHolder(ctx, src.Workspace, err)
 			if holder == "" {
-				h.writeConflict(ctx, w, err.Error())
+				h.writeClassError(ctx, w, errorClass{
+					status: http.StatusConflict, title: titleConflict, detail: err.Error(),
+					code: errcode.WorkspaceLocked, args: nil,
+				})
 
 				return
 			}
 
-			h.writeConflict(ctx, w, lockConflictDetail(src.Workspace, holder))
+			h.writeClassError(ctx, w, lockConflict(src.Workspace, holder))
 
 			return
 		}

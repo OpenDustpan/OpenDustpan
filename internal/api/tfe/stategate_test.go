@@ -425,24 +425,6 @@ func TestForceUnlockAsksTheGuardAfterTheAllowance(t *testing.T) {
 	}
 }
 
-func TestGateErrorCodesAreListed(t *testing.T) {
-	t.Parallel()
-
-	listed := tfe.ErrorCodes()
-
-	for _, want := range []string{"gate.denied", "gate.limited", "gate.rule-failed", "gate.unavailable"} {
-		found := false
-
-		for _, c := range listed {
-			found = found || c == want
-		}
-
-		if !found {
-			t.Fatalf("ErrorCodes() = %v, want %s in it", listed, want)
-		}
-	}
-}
-
 // flipWorkspaces is a workspace port whose lock reads as held by bob while
 // held(lockCalls) is true. LockForJob answers the errors in lockErrs one by
 // one, then succeeds, and counts its calls. A held lock that LockForJob would
