@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"slices"
 
+	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/internal/sessionauth"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -613,7 +614,7 @@ func (h *Handler) enforceAuthorized(route Route) http.HandlerFunc {
 		obj, err := route.Resolve(w, r)
 		if err != nil {
 			if isAbsence(err) {
-				h.writeNotFound(ctx, w, notFoundDetail)
+				h.writeClassError(ctx, w, hiddenNotFound())
 			} else {
 				h.writeError(ctx, w, err)
 			}
@@ -669,15 +670,25 @@ func (h *Handler) writeDenied(ctx context.Context, w http.ResponseWriter, req re
 	}
 
 	if hide {
-		h.writeNotFound(ctx, w, notFoundDetail)
+		h.writeClassError(ctx, w, hiddenNotFound())
 
 		return
 	}
 
-	h.writeForbidden(
-		ctx, w,
-		"forbidden: the action "+string(req.action)+" on "+req.object.String()+" was refused",
-	)
+	h.writeClassError(ctx, w, errorClass{
+		status: http.StatusForbidden, title: titleForbidden,
+		detail: "forbidden: the action " + string(req.action) + " on " + req.object.String() + " was refused",
+		code:   errcode.Forbidden(err), args: nil,
+	})
+}
+
+// hiddenNotFound is the 404 of an object that does not exist or that the
+// caller cannot read. The two answers do not differ, also in the code.
+func hiddenNotFound() errorClass {
+	return errorClass{
+		status: http.StatusNotFound, title: notFoundTitle, detail: notFoundDetail,
+		code: errcode.WorkspaceNotFound, args: nil,
+	}
 }
 
 // hidden reports whether p cannot see obj: a unit without unit:read and
