@@ -358,16 +358,11 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	header := w.Header()
-	header.Del("Content-Length")
-	header.Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusNotFound)
+	w.Header().Del("Content-Length")
 
-	doc := errorResponse{Code: http.StatusNotFound, Message: "not found"}
-
-	if err := json.NewEncoder(w).Encode(doc); err != nil {
-		h.logger.WarnContext(r.Context(), "write response failed", slog.String("error", err.Error()))
-	}
+	ctx := r.Context()
+	status, message, answer := h.answer(ctx, failCoded(http.StatusNotFound, "not found", errcode.ServerRouteNotFound))
+	h.writeAnswer(ctx, w, status, message, answer)
 }
 
 // notFoundWriter swallows the default 404 of the mux, so ServeHTTP can
@@ -526,15 +521,15 @@ func classify(err error) failure {
 func classifyRequest(err error) (failure, bool) {
 	switch {
 	case errors.Is(err, identity.ErrUnauthenticated):
-		return fail(http.StatusUnauthorized, "unauthenticated"), true
+		return failCoded(http.StatusUnauthorized, "unauthenticated", errcode.AuthUnauthenticated), true
 	case errors.Is(err, identity.ErrDenied):
-		return fail(http.StatusForbidden, "forbidden"), true
+		return failCoded(http.StatusForbidden, "forbidden", errcode.Forbidden(err)), true
 	case errors.Is(err, identity.ErrInvalidObject):
-		return fail(http.StatusBadRequest, err.Error()), true
+		return failCoded(http.StatusBadRequest, err.Error(), errcode.RequestInvalidObject), true
 	case errors.Is(err, errInvalidBody):
-		return fail(http.StatusBadRequest, errInvalidBody.Error()), true
+		return failCoded(http.StatusBadRequest, errInvalidBody.Error(), errcode.RequestBodyInvalid), true
 	case errors.Is(err, errOverrideSwitchesBody):
-		return fail(http.StatusBadRequest, errOverrideSwitchesBody.Error()), true
+		return failCoded(http.StatusBadRequest, errOverrideSwitchesBody.Error(), errcode.RequestBodyInvalid), true
 	case errors.Is(err, errCheckpointsOff):
 		return fail(http.StatusConflict, errCheckpointsOff.Error()), true
 	default:
@@ -604,17 +599,22 @@ func classifyBackup(err error) (failure, bool) {
 // port 501.
 func classifyNamespace(err error) (failure, bool) {
 	switch {
-	case errors.Is(err, namespace.ErrInvalidName), errors.Is(err, errInvalidNamespaceBody),
-		errors.Is(err, namespace.ErrInvalidPage), errors.Is(err, errNamespaceCursor):
-		return fail(http.StatusBadRequest, err.Error()), true
+	case errors.Is(err, namespace.ErrInvalidName):
+		return failCoded(http.StatusBadRequest, err.Error(), errcode.NamespaceInvalidName), true
+	case errors.Is(err, errInvalidNamespaceBody):
+		return failCoded(http.StatusBadRequest, err.Error(), errcode.RequestBodyInvalid), true
+	case errors.Is(err, namespace.ErrInvalidPage):
+		return failCoded(http.StatusBadRequest, err.Error(), errcode.RequestPageSizeInvalid), true
+	case errors.Is(err, errNamespaceCursor):
+		return failCoded(http.StatusBadRequest, err.Error(), errcode.RequestPageTokenInvalid), true
 	case errors.Is(err, namespace.ErrAlreadyExists):
-		return fail(http.StatusConflict, err.Error()), true
+		return failCoded(http.StatusConflict, err.Error(), errcode.NamespaceAlreadyExists), true
 	case errors.Is(err, namespace.ErrFenced):
 		// The sentence of the sentinel only: a wrap adds the name of the
 		// operation, which the log holds.
-		return fail(http.StatusConflict, namespace.ErrFenced.Error()), true
+		return failCoded(http.StatusConflict, namespace.ErrFenced.Error(), errcode.NamespaceFenced), true
 	case errors.Is(err, namespace.ErrNotFound):
-		return fail(http.StatusNotFound, err.Error()), true
+		return failCoded(http.StatusNotFound, err.Error(), errcode.NamespaceNotFound), true
 	case errors.Is(err, namespace.ErrNoPaging):
 		return fail(http.StatusNotImplemented, err.Error()), true
 	default:
@@ -633,11 +633,11 @@ func classifyNamespace(err error) (failure, bool) {
 func classifyMaintenance(err error) (failure, bool) {
 	switch {
 	case errors.Is(err, maintenance.ErrInvalidState):
-		return fail(http.StatusBadRequest, err.Error()), true
+		return failCoded(http.StatusBadRequest, err.Error(), errcode.MaintenanceInvalidState), true
 	case errors.Is(err, maintenance.ErrActiveWork):
-		return fail(http.StatusConflict, err.Error()), true
+		return failCoded(http.StatusConflict, err.Error(), errcode.MaintenanceActiveWork, activeWorkArgs(err)...), true
 	case errors.Is(err, maintenance.ErrHeld):
-		return fail(http.StatusConflict, maintenance.ErrHeld.Error()), true
+		return failCoded(http.StatusConflict, maintenance.ErrHeld.Error(), errcode.MaintenanceHeld), true
 	case errors.Is(err, audit.ErrNoChainChange), errors.Is(err, audit.ErrChainMigrating),
 		errors.Is(err, audit.ErrChainChangeWaits):
 		return fail(http.StatusConflict, err.Error()), true
@@ -648,11 +648,29 @@ func classifyMaintenance(err error) (failure, bool) {
 	case errors.Is(err, audit.ErrChainNeedsPerson):
 		return fail(http.StatusForbidden, audit.ErrChainNeedsPerson.Error()), true
 	case errors.Is(err, maintenance.ErrInMaintenance):
-		return fail(http.StatusServiceUnavailable, maintenance.ErrInMaintenance.Error()+": try again later"), true
+		return failCoded(http.StatusServiceUnavailable, maintenance.ErrInMaintenance.Error()+": try again later",
+			errcode.MaintenanceInMaintenance), true
 	case errors.Is(err, maintenance.ErrUnavailable):
-		return fail(http.StatusInternalServerError, maintenance.ErrUnavailable.Error()), true
+		return failCoded(http.StatusInternalServerError, maintenance.ErrUnavailable.Error(),
+			errcode.MaintenanceUnavailable), true
 	default:
 		return fail(0, ""), false
+	}
+}
+
+// activeWorkArgs returns the arguments of maintenance.active-work: the number
+// of units with active work and the number of units that a forced enter
+// canceled. An error that does not carry the units gives zero for both.
+func activeWorkArgs(err error) []errcode.Value {
+	var work, canceled int
+
+	if blocked, ok := errors.AsType[*maintenance.ActiveWorkError](err); ok {
+		work, canceled = len(blocked.Work), len(blocked.Canceled)
+	}
+
+	return []errcode.Value{
+		errcode.Quantity("workCount", int64(work)),
+		errcode.Quantity("canceledCount", int64(canceled)),
 	}
 }
 
