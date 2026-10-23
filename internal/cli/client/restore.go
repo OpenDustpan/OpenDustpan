@@ -58,6 +58,15 @@ var (
 // the same restore command against the same server.
 const restoreRerunHelp = "run opendustpan restore --server %s --backup %s again"
 
+// restoreActiveWorkText is the start of the error text that the server
+// stores for a restore that active work stopped from entering maintenance
+// mode.
+const restoreActiveWorkText = "cannot enter maintenance mode while work is active"
+
+// restoreForceHelp names the two ways past active work: end the work, or
+// run the same restore with --force, which cancels it.
+const restoreForceHelp = "end that work, or run opendustpan restore --server %s --backup %s --force to cancel it"
+
 // restoreFlags holds the settings of the restore subcommand.
 type restoreFlags struct {
 	server    string
@@ -199,12 +208,11 @@ func RestoreCommand(ctx context.Context, args []string, stdout, stderr io.Writer
 
 	if doc.State != "succeeded" {
 		return fmt.Errorf(
-			"%w %s: %s: "+restoreRerunHelp,
+			"%w %s: %s: %s",
 			ErrRestoreFailed,
 			started.ID,
 			restoreFailureText(doc),
-			server,
-			id,
+			restoreFailureHelp(doc, f.force, server, id),
 		)
 	}
 
@@ -554,6 +562,17 @@ func restoreFailureText(doc RestoreStatusResponse) string {
 	}
 
 	return "the server reported no error text"
+}
+
+// restoreFailureHelp answers the one command that helps after a failed
+// restore. A restore without --force that active work stopped gets the
+// --force command. Every other failure gets the same restore command again.
+func restoreFailureHelp(doc RestoreStatusResponse, force bool, server, id string) string {
+	if !force && strings.HasPrefix(strings.TrimSpace(doc.Error), restoreActiveWorkText) {
+		return fmt.Sprintf(restoreForceHelp, server, id)
+	}
+
+	return fmt.Sprintf(restoreRerunHelp, server, id)
 }
 
 // writeRestoreReport prints the ID, the state, the backup taken before it
