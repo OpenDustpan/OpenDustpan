@@ -83,7 +83,7 @@ func UpgradeCheck(
 	if server == "" {
 		return fmt.Errorf(
 			"%w: set --server (%s) to the server base URL and run opendustpan upgrade check again",
-			ErrBackupNeedsServer,
+			ErrUpgradeCheckNeedsServer,
 			BackupServerEnvVar,
 		)
 	}
