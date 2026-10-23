@@ -33,7 +33,8 @@ func TestPageRanges(t *testing.T) {
 			want: []stack.NamespaceRange{in("a", "", ""), in("b", "", ""), in("c", "", "")},
 		},
 		{
-			name: "after the cursor", q: stack.PageQuery{After: after, Project: "", Tag: nil, Namespaces: all, Limit: 1},
+			name: "after the cursor",
+			q:    stack.PageQuery{After: after, Project: "", Tag: nil, Namespaces: all, Limit: 1},
 			want: []stack.NamespaceRange{in("b", "web", "prod"), in("c", "", "")},
 		},
 		{
