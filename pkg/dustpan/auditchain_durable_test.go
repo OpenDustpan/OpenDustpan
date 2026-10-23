@@ -14,6 +14,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"opendustpan.org/opendustpan/internal/pgtest"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/blob/fs"
 	"opendustpan.org/opendustpan/pkg/durable"
@@ -252,7 +253,7 @@ func isolatedPostgresURL(t *testing.T, base string) string {
 		t.Fatalf("create schema: %v", execErr)
 	}
 
-	dropSchemaAtCleanup(t, base, name)
+	pgtest.DropSchemaAtCleanup(t, base, name)
 
 	u, err := url.Parse(base)
 	if err != nil {
@@ -264,39 +265,6 @@ func isolatedPostgresURL(t *testing.T, base string) string {
 	u.RawQuery = q.Encode()
 
 	return u.String()
-}
-
-// dropSchemaAtCleanup drops the schema name and its control schema when tb
-// ends. Each test makes its own schema, and a schema that stays fills the
-// disk of the database server.
-// The cleanup runs after the cleanups that close the stores of the schema,
-// because it is registered before them.
-func dropSchemaAtCleanup(tb testing.TB, base, name string) {
-	tb.Helper()
-
-	tb.Cleanup(func() {
-		ctx := context.WithoutCancel(tb.Context())
-
-		conn, err := pgx.Connect(ctx, base)
-		if err != nil {
-			tb.Errorf("connect to drop schema %s: %v", name, err)
-
-			return
-		}
-
-		defer func() {
-			if closeErr := conn.Close(ctx); closeErr != nil {
-				tb.Errorf("close: %v", closeErr)
-			}
-		}()
-
-		for _, schema := range []string{name, name + "_control"} {
-			drop := "DROP SCHEMA IF EXISTS " + pgx.Identifier{schema}.Sanitize() + " CASCADE"
-			if _, execErr := conn.Exec(ctx, drop); execErr != nil {
-				tb.Errorf("drop schema %s: %v", schema, execErr)
-			}
-		}
-	})
 }
 
 // openPostgresChainStore opens a fresh PostgreSQL store that the test closes.
