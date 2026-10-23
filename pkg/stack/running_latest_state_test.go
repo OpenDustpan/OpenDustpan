@@ -96,6 +96,36 @@ func runningLatestCases() []runningLatestCase {
 	}
 }
 
+// checkRunningLatest proves the answers of one case: the version, the
+// deployment that the outputs source reads for it, and no rebuild from the
+// batches.
+func checkRunningLatest(t *testing.T, f *buildFixture, wantVersion int64, wantDeployment []byte) {
+	t.Helper()
+
+	version, err := f.svc.LatestStateVersion(t.Context(), f.ref)
+	if err != nil {
+		t.Fatalf("LatestStateVersion: %v", err)
+	}
+
+	if version != wantVersion {
+		t.Fatalf("LatestStateVersion = %d, want %d", version, wantVersion)
+	}
+
+	// The outputs source reads the deployment through this call.
+	cp, err := f.svc.ExportVersion(t.Context(), f.ref, version)
+	if err != nil {
+		t.Fatalf("ExportVersion(%d): %v", version, err)
+	}
+
+	if !bytes.Equal(cp.Deployment, wantDeployment) {
+		t.Fatalf("ExportVersion(%d) = %s, want the saved checkpoint %s", version, cp.Deployment, wantDeployment)
+	}
+
+	if built := f.replay(t); bytes.Equal(cp.Deployment, built) {
+		t.Fatalf("ExportVersion(%d) rebuilt the state from the batches: %s", version, cp.Deployment)
+	}
+}
+
 // TestRunningUpdateLatestStateIsTheLastSavedCheckpoint proves that while an
 // update runs, the latest state is the last checkpoint that was saved: the
 // version that LatestStateVersion answers, and the deployment that the outputs
@@ -112,29 +142,7 @@ func TestRunningUpdateLatestStateIsTheLastSavedCheckpoint(t *testing.T) {
 			f := newBuildFixture(t, clk, pulumijournal.NewReplayer(clk.Now, ""))
 
 			wantVersion, wantDeployment := tt.start(t, f)
-
-			version, err := f.svc.LatestStateVersion(t.Context(), f.ref)
-			if err != nil {
-				t.Fatalf("LatestStateVersion: %v", err)
-			}
-
-			if version != wantVersion {
-				t.Fatalf("LatestStateVersion = %d, want %d", version, wantVersion)
-			}
-
-			// The outputs source reads the deployment through this call.
-			cp, err := f.svc.ExportVersion(t.Context(), f.ref, version)
-			if err != nil {
-				t.Fatalf("ExportVersion(%d): %v", version, err)
-			}
-
-			if !bytes.Equal(cp.Deployment, wantDeployment) {
-				t.Fatalf("ExportVersion(%d) = %s, want the saved checkpoint %s", version, cp.Deployment, wantDeployment)
-			}
-
-			if built := f.replay(t); bytes.Equal(cp.Deployment, built) {
-				t.Fatalf("ExportVersion(%d) rebuilt the state from the batches: %s", version, cp.Deployment)
-			}
+			checkRunningLatest(t, f, wantVersion, wantDeployment)
 		})
 	}
 }

@@ -95,7 +95,8 @@ func newOutputsFixture(t *testing.T, authz identity.Authorizer) outputsFixture {
 	}
 
 	states := &outputsStates{
-		ids: map[string]bool{"ws-1": true, "stk-1": true}, encrypted: map[string]bool{}, empty: map[string]bool{}, stateID: "state-1",
+		ids: map[string]bool{"ws-1": true, "stk-1": true}, encrypted: map[string]bool{},
+		empty: map[string]bool{}, stateID: "state-1",
 	}
 	source := &outputsSource{mu: sync.Mutex{}, moved: false, reads: 0, stored: []outputsharesvc.Output{
 		{Name: "greeting", Secret: false, Value: json.RawMessage(`"hello"`)},
