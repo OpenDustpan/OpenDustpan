@@ -66,7 +66,7 @@ func providersSpan(deployment []byte) (byteSpan, bool) {
 			return byteSpan{start: 0, end: 0}, false
 		}
 
-		if name != "secrets_providers" {
+		if name != secretsProvidersMember {
 			if skipErr := skipStreamed(dec); skipErr != nil {
 				return byteSpan{start: 0, end: 0}, false
 			}

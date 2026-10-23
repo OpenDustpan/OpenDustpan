@@ -31,7 +31,7 @@ func (s stubAuditSinks) ListAuditSinks(context.Context) ([]audit.SinkStatus, err
 
 // newAuditSinkHandler builds a Handler with the given sink source and the
 // AdminOnly authorizer, so the tests prove the production policy.
-func newAuditSinkHandler(t *testing.T, source apiserver.AuditSinkSource) *apiserver.Handler {
+func newAuditSinkHandler(t *testing.T, source apiserver.AuditSinkSource) testHandler {
 	t.Helper()
 
 	namespaces, err := namespace.NewService(namespace.Config{Store: stubNamespaceStore{}, Now: nil, Region: "test"})
@@ -39,7 +39,7 @@ func newAuditSinkHandler(t *testing.T, source apiserver.AuditSinkSource) *apiser
 		t.Fatalf("namespace service: %v", err)
 	}
 
-	handler, err := apiserver.NewHandler(apiserver.Config{
+	handler, err := newCheckedHandler(t, apiserver.Config{
 		Preferences:      nil,
 		GitHost:          nil,
 		Idempotency:      nil,

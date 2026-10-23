@@ -96,9 +96,10 @@ func subsetRules() map[string]rule {
 		"schemas":             mapOfRule("schema", nil),
 		"componentParameters": mapOfRule("parameter", nil),
 		"securitySchemes":     mapOfRule("securityScheme", nil),
-		// The only scheme in the subset is `type: http` with `scheme: bearer`.
+		// The schemes in the subset are `type: http` with `scheme: bearer`, and
+		// `type: apiKey` in a cookie or a header, with its name.
 		"securityScheme": object(map[string]string{
-			"type": "", "scheme": "", "description": "",
+			"type": "", "scheme": "", "description": "", "in": "", "name": "",
 		}),
 		"schema": object(map[string]string{
 			"$ref": "", "type": "", "properties": "properties",

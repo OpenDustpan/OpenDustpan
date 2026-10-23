@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/ident"
+	"opendustpan.org/opendustpan/internal/scopeaudit"
 	"opendustpan.org/opendustpan/internal/token"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/blob"
@@ -20,7 +21,6 @@ import (
 	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/manuallock"
 	"opendustpan.org/opendustpan/pkg/namespace"
-	"opendustpan.org/opendustpan/pkg/scopeaudit"
 	"opendustpan.org/opendustpan/pkg/secret"
 )
 
@@ -57,6 +57,11 @@ type Store interface {
 	// ListWorkspaces returns the namespace's workspaces, ordered by name; an
 	// empty list if it has none or does not exist.
 	ListWorkspaces(ctx context.Context, ns namespace.Name) ([]Workspace, error)
+	// QueryWorkspaces returns one page of the live workspaces that match q,
+	// in the order of ListWorkspaces, with the count of every match, from
+	// one snapshot. PageWorkspaces defines the result for the list of
+	// ListWorkspaces. A namespace that does not exist reads as an empty page.
+	QueryWorkspaces(ctx context.Context, q ListQuery) (ListPage, error)
 	// SaveWorkspace persists w if the store holds w.Revision-1, else returns
 	// ErrConcurrentModification. It returns ErrNotFound if the workspace does
 	// not exist, namespace.ErrNotFound if the namespace does not exist, or
@@ -591,6 +596,17 @@ func (s *Service) List(ctx context.Context, ns namespace.Name) ([]Workspace, err
 	}
 
 	return list, nil
+}
+
+// Query returns one page of the namespace's workspaces that match q, with the
+// count of every match.
+func (s *Service) Query(ctx context.Context, q ListQuery) (ListPage, error) {
+	page, err := s.workspaces.QueryWorkspaces(ctx, q)
+	if err != nil {
+		return ListPage{}, fmt.Errorf("query workspaces in %q: %w", q.Namespace, err)
+	}
+
+	return page, nil
 }
 
 // Lock locks the workspace for holder, the subject of the calling principal.

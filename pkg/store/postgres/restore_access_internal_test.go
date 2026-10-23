@@ -3,16 +3,14 @@ package postgres
 import (
 	"bytes"
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"io"
-	"net/url"
 	"os"
 	"testing"
 	"time"
 
 	"github.com/jackc/pgx/v5"
 
+	"opendustpan.org/opendustpan/internal/pgtest"
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/store/storetest"
@@ -31,46 +29,12 @@ func testPostgresURL(t *testing.T) string {
 	return base
 }
 
-// openKeepLockStore opens a store in a fresh schema of the database at base.
-// Each test gets its own schema, so the suite can share one database.
+// openKeepLockStore opens a store in a migrated schema of a database of its
+// own, cloned from the template database.
 func openKeepLockStore(t *testing.T, base string) *Store {
 	t.Helper()
 
-	suffix := make([]byte, 8)
-
-	if _, err := rand.Read(suffix); err != nil {
-		t.Fatalf("random schema name: %v", err)
-	}
-
-	name := "test_" + hex.EncodeToString(suffix)
-
-	conn, err := pgx.Connect(t.Context(), base)
-	if err != nil {
-		t.Fatalf("connect: %v", err)
-	}
-
-	defer func() {
-		if closeErr := conn.Close(t.Context()); closeErr != nil {
-			t.Errorf("close: %v", closeErr)
-		}
-	}()
-
-	createQuery := "CREATE SCHEMA " + pgx.Identifier{name}.Sanitize()
-
-	if _, execErr := conn.Exec(t.Context(), createQuery); execErr != nil {
-		t.Fatalf("create schema: %v", execErr)
-	}
-
-	parsed, err := url.Parse(base)
-	if err != nil {
-		t.Fatalf("parse test URL: %v", err)
-	}
-
-	query := parsed.Query()
-	query.Set("search_path", name)
-	parsed.RawQuery = query.Encode()
-
-	s, err := Open(t.Context(), parsed.String())
+	s, err := Open(t.Context(), pgtest.MigratedURL(t, base))
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}

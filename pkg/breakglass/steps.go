@@ -5,7 +5,7 @@ import (
 	"slices"
 	"time"
 
-	"opendustpan.org/opendustpan/pkg/calendar"
+	"opendustpan.org/opendustpan/internal/calendar"
 )
 
 // Bounds of the settings.

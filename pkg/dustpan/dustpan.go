@@ -45,6 +45,7 @@ import (
 	"sync"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/api/apidesc"
 	auditapi "opendustpan.org/opendustpan/internal/api/audit"
 	inventoryapi "opendustpan.org/opendustpan/internal/api/inventory"
 	contextapi "opendustpan.org/opendustpan/internal/api/objectcontext"
@@ -63,6 +64,7 @@ import (
 	"opendustpan.org/opendustpan/internal/metrics"
 	"opendustpan.org/opendustpan/internal/pulumijournal"
 	"opendustpan.org/opendustpan/internal/requestid"
+	"opendustpan.org/opendustpan/internal/scopeaudit"
 	"opendustpan.org/opendustpan/internal/sessionauth"
 	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/accesstoken"
@@ -88,7 +90,6 @@ import (
 	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/profile"
 	"opendustpan.org/opendustpan/pkg/savedview"
-	"opendustpan.org/opendustpan/pkg/scopeaudit"
 	"opendustpan.org/opendustpan/pkg/secret"
 	"opendustpan.org/opendustpan/pkg/session"
 	"opendustpan.org/opendustpan/pkg/stack"
@@ -796,6 +797,11 @@ func NewServer(opts ...Option) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	// A handler that reads a name the API description does not hold logs the
+	// error through the logger of the server. Set it only after the settings
+	// pass, so that a NewServer that fails changes nothing.
+	apidesc.SetLogger(cfg.logger)
 
 	if cacheErr := wrapBlobCache(cfg); cacheErr != nil {
 		return nil, cacheErr
@@ -2669,12 +2675,18 @@ func newInventoryHandler(svc services, cfg *settings, onFailure func()) (http.Ha
 		return nil, err
 	}
 
+	outputSharing, err := newOutputSharingService(cfg)
+	if err != nil {
+		return nil, err
+	}
+
 	handler, err := inventoryapi.NewHandler(inventoryapi.Config{
-		Views:      views,
-		Namespaces: svc.namespaces,
-		Units:      cfg.inventoryReader,
-		Deleted:    deleted,
-		History:    history,
+		Views:         views,
+		OutputSharing: outputSharing,
+		Namespaces:    svc.namespaces,
+		Units:         cfg.inventoryReader,
+		Deleted:       deleted,
+		History:       history,
 		Lifecycles: map[string]inventory.Lifecycle{
 			pulumiTool:   stacks,
 			opentofuTool: workspaces,

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"maps"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -451,6 +452,15 @@ func testRestoreRoundTrip(t *testing.T, newStore RestoreFactory) {
 		t.Fatalf("restored summary rows = %v, want %v", sum2.RowCounts, wantRows)
 	}
 
+	requireTablesRestored(t, sink, again)
+}
+
+// requireTablesRestored proves that every table of the second export holds the
+// rows of the first export. The namespaces table and the sink cursors differ by
+// design.
+func requireTablesRestored(t *testing.T, sink, again *portableSink) {
+	t.Helper()
+
 	for _, table := range backup.Tables {
 		path := backup.PortablePath(table)
 
@@ -460,6 +470,20 @@ func testRestoreRoundTrip(t *testing.T, newStore RestoreFactory) {
 
 		want := sink.files[path].Bytes()
 		got := again.files[path].Bytes()
+
+		// A restore releases the workspace locks, so the two tables that
+		// hold them are compared with the locks of the export cleared.
+		if table == "workspaces" || table == "inventory" {
+			wantRows := releaseWorkspaceLocks(readPortableLines(t, path, want))
+			gotRows := releaseWorkspaceLocks(readPortableLines(t, path, got))
+
+			if !reflect.DeepEqual(gotRows, wantRows) {
+				t.Fatalf("table %q after the restore = %v, want %v with the workspace locks released",
+					table, gotRows, wantRows)
+			}
+
+			continue
+		}
 
 		if !bytes.Equal(got, want) {
 			t.Fatalf("table %q after the restore differs from the export: %d bytes, want %d",
@@ -647,4 +671,31 @@ func verifyBackupNoTear(t *testing.T, src, dst BackupStore, ns namespace.Namespa
 			t.Fatalf("inventory entry of %s = %q, want the stack name", imported[i].Ref, e.Name)
 		}
 	}
+}
+
+// releaseWorkspaceLocks returns rows of the workspaces table or of the
+// inventory table with the lock of every OpenTofu workspace cleared, as a
+// restore leaves them. An adapter may export a zero lock time as null or as
+// 0, so the result holds null for both.
+func releaseWorkspaceLocks(rows []map[string]any) []map[string]any {
+	out := make([]map[string]any, 0, len(rows))
+
+	for _, row := range rows {
+		cleared := maps.Clone(row)
+
+		if _, isWorkspace := cleared["lock_id"]; isWorkspace {
+			cleared["lock_id"] = ""
+			cleared["lock_holder"] = ""
+			cleared["lock_reason"] = ""
+			cleared["locked_at_ms"] = nil
+		} else if cleared["tool"] == workspace.InventoryTool {
+			cleared["lock_holder"] = nil
+			cleared["lock_since_ms"] = nil
+			cleared["lock_operation"] = nil
+		}
+
+		out = append(out, cleared)
+	}
+
+	return out
 }

@@ -5,7 +5,7 @@ import (
 	"testing"
 
 	"opendustpan.org/opendustpan/internal/api/apidesc/headertest"
-	"opendustpan.org/opendustpan/pkg/registry/pgpfixture"
+	"opendustpan.org/opendustpan/internal/registry/pgpfixture"
 )
 
 // TestHeaderFlagsMatchTheHandler proves that the header flags of each
