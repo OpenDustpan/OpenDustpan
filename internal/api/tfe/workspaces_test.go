@@ -15,6 +15,8 @@ import (
 
 	"opendustpan.org/opendustpan/internal/api/tfe"
 	"opendustpan.org/opendustpan/internal/baseurl"
+	"opendustpan.org/opendustpan/internal/errcode"
+	"opendustpan.org/opendustpan/internal/errcode/errcodetest"
 	"opendustpan.org/opendustpan/internal/token"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -596,6 +598,9 @@ func TestCreateWorkspaceDuplicate(t *testing.T) {
 	if got.Status != "422" || got.Title != "invalid attribute" || got.Detail != "Name has already been taken" {
 		t.Fatalf("error = %+v, want 422 invalid attribute Name has already been taken", got)
 	}
+
+	errcodetest.CheckAnswer(t, errcodetest.ShapeJSONAPI, http.StatusUnprocessableEntity, rec.Body.Bytes(),
+		errcodetest.Want{Code: errcode.WorkspaceAlreadyExists, Args: nil, RequestBody: nil})
 }
 
 // TestCreateWorkspaceUnknownOrganization proves a creation in an unknown
