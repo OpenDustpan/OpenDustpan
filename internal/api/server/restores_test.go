@@ -1255,3 +1255,27 @@ func readTarget(t *testing.T, target *blobfs.Store, key blob.Key) string {
 
 	return string(data)
 }
+
+// TestStartRestoreInvalidBackupIDAnswers400 proves that a start with a backup
+// ID that is not valid answers 400 with the text that names the ID rule, and
+// stores no restore row. A restore of such an ID can never succeed, so the
+// route refuses it before it starts.
+func TestStartRestoreInvalidBackupIDAnswers400(t *testing.T) {
+	t.Parallel()
+
+	fix := newRestoreFixture(t)
+
+	const want = "invalid backup ID: use an ID that opendustpan backup printed"
+
+	for _, id := range []string{"../x", "bkp-a/b", "x"} {
+		status, resp := serveRestore(t, fix.handler, http.MethodPost, "/api/server/restores", `{"backupID":"`+id+`"}`)
+		if status != http.StatusBadRequest || !strings.Contains(resp, want) {
+			t.Errorf("POST restores of %q answers %d %s, want 400 that names the ID rule", id, status, resp)
+		}
+	}
+
+	listStatus, listBody := serveRestore(t, fix.handler, http.MethodGet, "/api/server/restores", "")
+	if listStatus != http.StatusOK || strings.Contains(listBody, `"id":"rst-`) {
+		t.Fatalf("GET restores answers %d %s, want 200 with no restore", listStatus, listBody)
+	}
+}

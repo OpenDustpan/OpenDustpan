@@ -50,7 +50,7 @@ type Tx interface {
 	// Put stores r as the result of its unit and replaces an earlier row that
 	// is older. It returns an error that wraps drift.ErrStale when a row of
 	// the unit is not older than r (a concurrent writer stored a newer one
-	// after Latest), and an error that wraps ErrCorrupt when the unit ID
+	// after Latest), and an error that wraps drift.ErrInvalid when the unit ID
 	// belongs to another namespace or another tool.
 	Put(ctx context.Context, r Row) error
 }
