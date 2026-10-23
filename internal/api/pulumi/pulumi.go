@@ -575,14 +575,11 @@ func (h *Handler) writeNamespaceNotFound(
 	ctx context.Context, w http.ResponseWriter, p identity.Principal, ns namespace.Name, err error,
 ) {
 	if errors.Is(err, namespace.ErrNotFound) && ns.String() == p.Subject {
-		h.writeJSON(ctx, w, http.StatusNotFound, errorResponse{
-			Code: http.StatusNotFound,
-			Message: fmt.Sprintf(
-				"Namespace %q does not exist. Run \"pulumi org set-default %s\" to set the default organization.",
-				ns.String(),
-				ns.String(),
-			),
-		})
+		h.writeFailure(ctx, w, coded(http.StatusNotFound, fmt.Sprintf(
+			"Namespace %q does not exist. Run \"pulumi org set-default %s\" to set the default organization.",
+			ns.String(),
+			ns.String(),
+		), errcode.NamespaceNotFound))
 
 		return
 	}
@@ -602,24 +599,14 @@ func (h *Handler) createStack(w http.ResponseWriter, r *http.Request, p identity
 
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxBodyBytes))
 	if err != nil {
-		h.writeJSON(
-			ctx,
-			w,
-			http.StatusBadRequest,
-			errorResponse{Code: http.StatusBadRequest, Message: invalidBodyMessage},
-		)
+		h.writeInvalidBody(ctx, w)
 
 		return
 	}
 
 	req, err := parseCreateStackRequest(body)
 	if err != nil {
-		h.writeJSON(
-			ctx,
-			w,
-			http.StatusBadRequest,
-			errorResponse{Code: http.StatusBadRequest, Message: invalidBodyMessage},
-		)
+		h.writeInvalidBody(ctx, w)
 
 		return
 	}
@@ -654,12 +641,7 @@ func (h *Handler) updateStackTags(w http.ResponseWriter, r *http.Request, _ iden
 
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxBodyBytes))
 	if err != nil {
-		h.writeJSON(
-			ctx,
-			w,
-			http.StatusBadRequest,
-			errorResponse{Code: http.StatusBadRequest, Message: invalidBodyMessage},
-		)
+		h.writeInvalidBody(ctx, w)
 
 		return
 	}
@@ -669,12 +651,7 @@ func (h *Handler) updateStackTags(w http.ResponseWriter, r *http.Request, _ iden
 	// is a removed tag, and an empty object clears every tag.
 	var tags map[string]string
 	if err := json.Unmarshal(body, &tags); err != nil {
-		h.writeJSON(
-			ctx,
-			w,
-			http.StatusBadRequest,
-			errorResponse{Code: http.StatusBadRequest, Message: invalidBodyMessage},
-		)
+		h.writeInvalidBody(ctx, w)
 
 		return
 	}
@@ -824,24 +801,14 @@ func (h *Handler) renameStack(w http.ResponseWriter, r *http.Request, p identity
 
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxBodyBytes))
 	if err != nil {
-		h.writeJSON(
-			ctx,
-			w,
-			http.StatusBadRequest,
-			errorResponse{Code: http.StatusBadRequest, Message: invalidBodyMessage},
-		)
+		h.writeInvalidBody(ctx, w)
 
 		return
 	}
 
 	req, err := parseRenameStackRequest(body)
 	if err != nil {
-		h.writeJSON(
-			ctx,
-			w,
-			http.StatusBadRequest,
-			errorResponse{Code: http.StatusBadRequest, Message: invalidBodyMessage},
-		)
+		h.writeInvalidBody(ctx, w)
 
 		return
 	}
@@ -939,57 +906,110 @@ type errorResponse struct {
 	Code    int    `json:"code"`
 }
 
-// codedErrorResponse is errorResponse with the stable machine code of a 403.
-// The fields of errorResponse keep their names and their meaning.
+// codedErrorResponse is errorResponse with the stable machine code of the
+// error and its arguments. The fields of errorResponse keep their names and
+// their meaning. An answer without a code has no errorCode and no errorArgs.
 type codedErrorResponse struct {
-	Message   string `json:"message"`
-	Code      int    `json:"code"`
-	ErrorCode string `json:"errorCode"`
+	Message   string         `json:"message"`
+	Code      int            `json:"code"`
+	ErrorCode string         `json:"errorCode,omitempty"`
+	ErrorArgs map[string]any `json:"errorArgs,omitempty"`
+}
+
+// failure is the answer of an error: the HTTP status, the message, and the
+// code of the catalog with its answer. err is the error of errcode.New, or
+// nil. A failure without a code answers no errorCode.
+type failure struct {
+	err     error
+	answer  errcode.Answer
+	code    string
+	message string
+	status  int
+}
+
+// coded returns the failure of status and message with code, a code of the
+// catalog, and its arguments args.
+func coded(status int, message, code string, args ...errcode.Value) failure {
+	answer, err := errcode.New(code, args...)
+
+	return failure{err: err, answer: answer, code: code, message: message, status: status}
+}
+
+// uncoded returns the failure of status and message without a code. Each
+// error path that answers it is on the known list of the error code gate.
+func uncoded(status int, message string) failure {
+	return failure{err: nil, answer: errcode.Answer{}, code: "", message: message, status: status}
+}
+
+// writeFailure writes the error body of f. When errcode.New refused the code
+// of f or its arguments, which is a bug in this adapter, it answers 500 with
+// server.internal and logs the code.
+func (h *Handler) writeFailure(ctx context.Context, w http.ResponseWriter, f failure) {
+	if f.err != nil {
+		h.logger.ErrorContext(ctx, "error answer is not valid", slog.String("error_code", f.code))
+		h.writeAnswer(ctx, w, http.StatusInternalServerError, "internal error", errcode.Internal())
+
+		return
+	}
+
+	h.writeAnswer(ctx, w, f.status, f.message, f.answer)
+}
+
+// writeAnswer writes the error body of status and message with the code and
+// the arguments of answer.
+func (h *Handler) writeAnswer(
+	ctx context.Context, w http.ResponseWriter, status int, message string, answer errcode.Answer,
+) {
+	h.writeJSON(ctx, w, status, codedErrorResponse{
+		Message: message, Code: status, ErrorCode: answer.Code(), ErrorArgs: answer.Args(),
+	})
 }
 
 func (h *Handler) writeError(ctx context.Context, w http.ResponseWriter, err error) {
-	status, message := classify(err)
+	f := classify(err)
 
+	if f.status == http.StatusInternalServerError {
+		// The log names the status and the code only, never the error text:
+		// the text may hold driver detail, a token, or state.
+		h.logger.ErrorContext(ctx, "request failed", slog.Int("status", f.status), slog.String("error_code", f.code))
+	} else {
+		h.logRefusal(ctx, err)
+	}
+
+	h.writeFailure(ctx, w, f)
+}
+
+// logRefusal logs a refusal that the operator may need to see: a value that
+// does not decrypt, and a write that a newer failover version fenced.
+func (h *Handler) logRefusal(ctx context.Context, err error) {
 	switch {
-	case status == http.StatusInternalServerError:
-		// The log names the status only, never the error text: the text
-		// may hold driver detail, a token, or state (ADR 32 decision 7).
-		h.logger.ErrorContext(ctx, "request failed", slog.Int("status", status))
 	case errors.Is(err, secret.ErrDecrypt):
 		h.logger.WarnContext(ctx, "decrypt failed", slog.String("error", err.Error()))
 	case errors.Is(err, namespace.ErrFenced):
 		h.logger.WarnContext(ctx, "write fenced", slog.String("error", err.Error()))
 	default:
 	}
-
-	if status == http.StatusForbidden {
-		if code := errcode.Forbidden(err); code != "" {
-			h.writeJSON(ctx, w, status, codedErrorResponse{Code: status, Message: message, ErrorCode: code})
-
-			return
-		}
-	}
-
-	h.writeJSON(ctx, w, status, errorResponse{Code: status, Message: message})
 }
 
 // classifyAuth maps the errors of the authentication and the
-// authorization of a request.
-func classifyAuth(err error) (int, string, bool) {
+// authorization of a request. ok is false for any other error.
+func classifyAuth(err error) (failure, bool) {
 	switch {
 	case errors.Is(err, identity.ErrRateLimited):
-		return http.StatusTooManyRequests, "too many failed sign-ins from this address: try again later", true
+		return coded(http.StatusTooManyRequests, "too many failed sign-ins from this address: try again later",
+			errcode.AuthRateLimited), true
 	case errors.Is(err, identity.ErrUnauthenticated), errors.Is(err, token.ErrInvalid),
 		errors.Is(err, stack.ErrAccessTokenUnchecked):
-		return http.StatusUnauthorized, "unauthenticated", true
-	case errors.Is(err, sessionauth.ErrCSRF), errors.Is(err, sessionauth.ErrOtherSite),
-		errors.Is(err, errSessionUpdate), errors.Is(err, errSessionSecrets):
-		return http.StatusForbidden, err.Error(), true
+		return coded(http.StatusUnauthorized, "unauthenticated", errcode.AuthUnauthenticated), true
+	case errors.Is(err, sessionauth.ErrCSRF), errors.Is(err, sessionauth.ErrOtherSite):
+		return coded(http.StatusForbidden, err.Error(), errcode.Forbidden(err)), true
+	case errors.Is(err, errSessionUpdate), errors.Is(err, errSessionSecrets):
+		return uncoded(http.StatusForbidden, err.Error()), true
 	case errors.Is(err, identity.ErrDenied):
-		return http.StatusForbidden, "forbidden", true
-	default:
-		return 0, "", false
+		return coded(http.StatusForbidden, "forbidden", errcode.Forbidden(err)), true
 	}
+
+	return uncoded(0, ""), false
 }
 
 // classify maps domain errors to an HTTP status and a message safe to show callers.
@@ -1000,34 +1020,23 @@ func classifyAuth(err error) (int, string, bool) {
 // err.Error() branches echo request names, counts, or backend detail that
 // holds no fingerprint; scopes there are the request's own names, not key
 // material.
-func classify(err error) (int, string) {
-	if status, message, ok := classifyAuth(err); ok {
-		return status, message
+func classify(err error) failure {
+	for _, try := range []func(error) (failure, bool){classifyAuth, classifyNamespace, classifyRequest} {
+		if f, ok := try(err); ok {
+			return f
+		}
 	}
 
 	switch {
-	case errors.Is(err, errInvalidBody):
-		return http.StatusBadRequest, invalidBodyMessage
-	case errors.Is(err, errRevealPathTooLong), errors.Is(err, errContinuationToken),
-		errors.Is(err, errStackTagFilter):
-		return http.StatusBadRequest, err.Error()
-	case errors.Is(err, namespace.ErrInvalidName), errors.Is(err, stack.ErrInvalidName),
-		errors.Is(err, identity.ErrInvalidObject), errors.Is(err, stack.ErrInvalidUpdate):
-		return http.StatusBadRequest, err.Error()
-	case errors.Is(err, namespace.ErrNotFound), errors.Is(err, stack.ErrNotFound),
-		errors.Is(err, stack.ErrUpdateNotFound), errors.Is(err, stack.ErrNoState), errors.Is(err, stack.ErrNoStateAt),
-		errors.Is(err, stack.ErrResourceNotFound):
-		return http.StatusNotFound, err.Error()
+	case errors.Is(err, stack.ErrInvalidName), errors.Is(err, stack.ErrInvalidUpdate):
+		return uncoded(http.StatusBadRequest, err.Error())
+	case errors.Is(err, stack.ErrNotFound), errors.Is(err, stack.ErrUpdateNotFound), errors.Is(err, stack.ErrNoState),
+		errors.Is(err, stack.ErrNoStateAt), errors.Is(err, stack.ErrResourceNotFound):
+		return uncoded(http.StatusNotFound, err.Error())
 	case errors.Is(err, stack.ErrHasResources):
-		return http.StatusBadRequest, hasResourcesMessage
-	case errors.Is(err, namespace.ErrFenced):
-		// The copy of the sentinel only: a wrap adds the name of the
-		// operation, which the log holds.
-		return http.StatusConflict, namespace.ErrFenced.Error()
+		return uncoded(http.StatusBadRequest, hasResourcesMessage)
 	case errors.Is(err, stack.ErrAlreadyExists), errors.Is(err, stack.ErrOtherSecretsProvider):
-		return http.StatusConflict, err.Error()
-	case errors.Is(err, namespace.ErrNotHome):
-		return http.StatusMisdirectedRequest, err.Error()
+		return uncoded(http.StatusConflict, err.Error())
 	case errors.Is(err, secret.ErrTooLarge),
 		errors.Is(err, secret.ErrDecrypt),
 		errors.Is(err, secret.ErrKeyNotConfigured):
@@ -1037,21 +1046,61 @@ func classify(err error) (int, string) {
 	}
 }
 
+// classifyNamespace maps the errors of the namespaces. ok is false for any
+// other error.
+func classifyNamespace(err error) (failure, bool) {
+	switch {
+	case errors.Is(err, namespace.ErrInvalidName):
+		return coded(http.StatusBadRequest, err.Error(), errcode.NamespaceInvalidName), true
+	case errors.Is(err, namespace.ErrNotFound):
+		return coded(http.StatusNotFound, err.Error(), errcode.NamespaceNotFound), true
+	case errors.Is(err, namespace.ErrFenced):
+		// The copy of the sentinel only: a wrap adds the name of the
+		// operation, which the log holds.
+		return coded(http.StatusConflict, namespace.ErrFenced.Error(), errcode.NamespaceFenced), true
+	case errors.Is(err, namespace.ErrNotHome):
+		return coded(http.StatusMisdirectedRequest, err.Error(), errcode.NamespaceNotHome), true
+	}
+
+	return uncoded(0, ""), false
+}
+
+// classifyRequest maps the errors of a request that the adapter refuses
+// before a domain package reads it: the body, the reveal path, the query of
+// the stack list and the object reference. ok is false for any other error.
+func classifyRequest(err error) (failure, bool) {
+	switch {
+	case errors.Is(err, errInvalidBody):
+		return coded(http.StatusBadRequest, invalidBodyMessage, errcode.RequestBodyInvalid), true
+	case errors.Is(err, errRevealPathTooLong):
+		return coded(http.StatusBadRequest, err.Error(), errcode.StackRevealPathTooLong,
+			errcode.Quantity("limit", maxRevealPathLen)), true
+	case errors.Is(err, errContinuationToken):
+		return coded(http.StatusBadRequest, err.Error(), errcode.RequestPageTokenInvalid), true
+	case errors.Is(err, errStackTagFilter):
+		return coded(http.StatusBadRequest, err.Error(), errcode.RequestInvalidQuery), true
+	case errors.Is(err, identity.ErrInvalidObject):
+		return coded(http.StatusBadRequest, err.Error(), errcode.RequestInvalidObject), true
+	}
+
+	return uncoded(0, ""), false
+}
+
 // classifySecret maps the secrets errors to an HTTP status and a message
 // safe to show callers: a missing key-encryption key is a 500 that names the
 // setting only, an oversized batch is a 413, a decryption failure a 400 with
 // a fixed message and no detail (ADR 23). A missing key wraps both ErrDecrypt
 // and ErrKeyNotConfigured, so the key check runs before the decrypt check.
-func classifySecret(err error) (int, string) {
+func classifySecret(err error) failure {
 	switch {
 	case errors.Is(err, secret.ErrKeyNotConfigured):
-		return http.StatusInternalServerError, secret.ErrKeyNotConfigured.Error()
+		return uncoded(http.StatusInternalServerError, secret.ErrKeyNotConfigured.Error())
 	case errors.Is(err, secret.ErrTooLarge):
-		return http.StatusRequestEntityTooLarge, err.Error()
+		return uncoded(http.StatusRequestEntityTooLarge, err.Error())
 	case errors.Is(err, secret.ErrDecrypt):
-		return http.StatusBadRequest, decryptFailedMessage
+		return uncoded(http.StatusBadRequest, decryptFailedMessage)
 	default:
-		return http.StatusInternalServerError, "internal error"
+		return coded(http.StatusInternalServerError, "internal error", errcode.ServerInternal)
 	}
 }
 
@@ -1074,41 +1123,43 @@ func updateConflictText(err error) string {
 
 // classifyUpdate maps the errors of the update cycle to an HTTP status and a
 // message safe to show callers.
-func classifyUpdate(err error) (int, string) {
+func classifyUpdate(err error) failure {
 	if manual, ok := errors.AsType[*manuallock.LockedError](err); ok {
-		return http.StatusConflict, manual.Error()
+		return uncoded(http.StatusConflict, manual.Error())
 	}
 
 	switch {
 	case errors.Is(err, stack.ErrUpdateConflict):
-		return http.StatusConflict, updateConflictText(err)
+		return uncoded(http.StatusConflict, updateConflictText(err))
 	case errors.Is(err, stack.ErrWrongUpdateState),
 		errors.Is(err, stack.ErrConcurrentModification), errors.Is(err, stack.ErrInvalidDelta),
 		errors.Is(err, stack.ErrCheckpointConflict), errors.Is(err, stack.ErrStaleCheckpoint),
 		errors.Is(err, stack.ErrJournalConflict), errors.Is(err, stack.ErrJournalIncomplete):
-		return http.StatusConflict, err.Error()
+		return uncoded(http.StatusConflict, err.Error())
 	case errors.Is(err, stack.ErrJournalBatch):
-		return http.StatusBadRequest, err.Error()
+		return uncoded(http.StatusBadRequest, err.Error())
 	case errors.Is(err, stack.ErrLeaseInvalid), errors.Is(err, stack.ErrLeaseExpired):
-		return http.StatusUnauthorized, err.Error()
+		return uncoded(http.StatusUnauthorized, err.Error())
 	case errors.Is(err, stack.ErrTooLarge):
 		// A replay bound refusal answers its one-sentence message, which
 		// names the bound, its limit and the one command that helps,
 		// without the update wrapper prefixes. Any other oversized
 		// request answers the error text itself.
 		if msg, ok := stack.TooLargeMessage(err); ok {
-			return http.StatusRequestEntityTooLarge, msg
+			return uncoded(http.StatusRequestEntityTooLarge, msg)
 		}
 
-		return http.StatusRequestEntityTooLarge, err.Error()
+		return uncoded(http.StatusRequestEntityTooLarge, err.Error())
 	case errors.Is(err, stack.ErrJournalBuildTimeout):
-		return http.StatusServiceUnavailable, err.Error()
+		return uncoded(http.StatusServiceUnavailable, err.Error())
 	case errors.Is(err, maintenance.ErrInMaintenance):
-		return http.StatusServiceUnavailable, maintenance.ErrInMaintenance.Error() + ": try again later"
+		return coded(http.StatusServiceUnavailable, maintenance.ErrInMaintenance.Error()+": try again later",
+			errcode.MaintenanceInMaintenance)
 	case errors.Is(err, namespace.ErrUnavailable):
-		return http.StatusServiceUnavailable, namespace.ErrUnavailable.Error() + ": try again"
+		return coded(http.StatusServiceUnavailable, namespace.ErrUnavailable.Error()+": try again",
+			errcode.NamespaceUnavailable)
 	default:
-		return http.StatusInternalServerError, "internal error"
+		return coded(http.StatusInternalServerError, "internal error", errcode.ServerInternal)
 	}
 }
 
