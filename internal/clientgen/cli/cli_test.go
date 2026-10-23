@@ -269,3 +269,38 @@ func TestHelpExitsWithZero(t *testing.T) {
 		t.Errorf("exit %d\n%s", code, stderr)
 	}
 }
+
+// TestCheckFindsAStrayFile checks that a file with no header under src/ is a
+// difference for -check and stops a write, while a hand-written file outside
+// the paths of the run, such as README.md, is neither.
+func TestCheckFindsAStrayFile(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	args := []string{"-target", "typescript", "-description", syntheticPath, "-out", dir}
+
+	if code, _, stderr := run(t, args...); code != cli.ExitOK {
+		t.Fatalf("write: exit %d\n%s", code, stderr)
+	}
+
+	for name, content := range map[string]string{"src/extra.ts": "export const x = 1;\n", "README.md": "# Client\n"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	code, _, stderr := run(t, append(args, "-check")...)
+	if code != cli.ExitFailed || !strings.Contains(stderr, "stray: src/extra.ts") ||
+		strings.Contains(stderr, "README.md") {
+		t.Errorf("check: exit %d\n%s", code, stderr)
+	}
+
+	code, _, stderr = run(t, args...)
+	if code != cli.ExitFailed || !strings.Contains(stderr, "src/extra.ts") {
+		t.Errorf("write over a stray file: exit %d\n%s", code, stderr)
+	}
+
+	if _, err := os.Stat(filepath.Join(dir, "src", "extra.ts")); err != nil {
+		t.Errorf("the stray file is gone: %v", err)
+	}
+}
