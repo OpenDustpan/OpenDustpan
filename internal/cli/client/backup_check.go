@@ -165,11 +165,13 @@ func readBackupCheck(
 	}()
 
 	if resp.StatusCode != http.StatusOK {
+		const hint = "check the server log and run opendustpan backup check again"
+
 		return none, fmt.Errorf(
-			"%w %s: %s: check the server log and run opendustpan backup check again",
+			"%w %s: %s",
 			ErrBackupRead,
 			id,
-			decodeErrorAnswer(resp),
+			answerText(resp.StatusCode, decodeErrorAnswer(resp), hint),
 		)
 	}
 

@@ -269,7 +269,7 @@ func backupAuth(req *http.Request, token string) {
 }
 
 // startBackup starts a backup and answers its ID. A second start while one
-// runs names the running backup and the one command that helps.
+// runs gives the message of the server, which names the running backup.
 func startBackup(ctx context.Context, client *http.Client, server, token string) (string, error) {
 	endpoint := backupEndpoint(server, "/api/server/backups")
 
@@ -298,12 +298,9 @@ func startBackup(ctx context.Context, client *http.Client, server, token string)
 	}()
 
 	if resp.StatusCode != http.StatusAccepted {
-		return "", fmt.Errorf(
-			"%w: %s: check the server log and "+rerunHelp,
-			ErrBackupStart,
-			decodeErrorAnswer(resp),
-			server,
-		)
+		hint := fmt.Sprintf("check the server log and "+rerunHelp, server)
+
+		return "", fmt.Errorf("%w: %s", ErrBackupStart, answerText(resp.StatusCode, decodeErrorAnswer(resp), hint))
 	}
 
 	var doc backupStartResponse
@@ -354,12 +351,13 @@ func readBackup(
 	}()
 
 	if resp.StatusCode != http.StatusOK {
+		hint := fmt.Sprintf(rerunHelp, server)
+
 		return BackupStatusResponse{}, fmt.Errorf(
-			"%w %s: %s: "+rerunHelp,
+			"%w %s: %s",
 			ErrBackupRead,
 			id,
-			decodeErrorAnswer(resp),
-			server,
+			answerText(resp.StatusCode, decodeErrorAnswer(resp), hint),
 		)
 	}
 

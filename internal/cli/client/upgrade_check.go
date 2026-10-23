@@ -236,11 +236,9 @@ func readUpgradeCheck(
 	}()
 
 	if resp.StatusCode != http.StatusOK {
-		return none, fmt.Errorf(
-			"%w: %s: check the server log and run opendustpan upgrade check again",
-			ErrBackupRead,
-			decodeErrorAnswer(resp),
-		)
+		const hint = "check the server log and run opendustpan upgrade check again"
+
+		return none, fmt.Errorf("%w: %s", ErrBackupRead, answerText(resp.StatusCode, decodeErrorAnswer(resp), hint))
 	}
 
 	var answer UpgradeCheckAnswer
