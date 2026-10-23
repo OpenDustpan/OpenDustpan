@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"slices"
+	"strings"
 	"testing"
 
 	"opendustpan.org/opendustpan/internal/api/pulumi"
@@ -212,6 +213,11 @@ func TestListStacksRefusesBadToken(t *testing.T) {
 			target: "/api/user/stacks?organization=acme&project=p1&continuationToken=" + encodeToken(t, otherProject),
 		},
 		{name: "token of another route", target: org + encodeToken(t, otherRoute)},
+		{name: "a tag filter", target: "/api/user/stacks?organization=acme&tagName=team&continuationToken=" + good},
+		{
+			name:   "another tag value",
+			target: "/api/user/stacks?organization=acme&tagName=team&tagValue=x&continuationToken=" + good,
+		},
 	} {
 		rec := get(t, handler, tc.target)
 
@@ -251,6 +257,83 @@ func TestListStacksAcceptsBoundToken(t *testing.T) {
 	for _, st := range page.Stacks {
 		if st.OrgName != "acme" || st.ProjectName != "p1" {
 			t.Fatalf("page holds %s/%s, want acme/p1 only", st.OrgName, st.ProjectName)
+		}
+	}
+}
+
+// TestListStacksFiltersByTag proves that the stack list keeps the stacks with
+// the tag of tagName, and with the value of tagValue when the query has it,
+// with and without the organization.
+func TestListStacksFiltersByTag(t *testing.T) {
+	t.Parallel()
+
+	nsStore := &memNamespaceStore{namespaces: map[namespace.Name]namespace.Namespace{}}
+	stStore := &memStackStore{stacks: map[stack.Ref]stack.Stack{}}
+	seedNamespaces(t, nsStore, "acme")
+
+	for name, tags := range map[string]map[string]string{
+		"blue":  {"team": "blue"},
+		"empty": {"team": ""},
+		"none":  {},
+		"other": {"owner": "blue"},
+	} {
+		seedStack(t, stStore, "acme", "demo", name)
+
+		ref, err := stack.ParseRef("acme", "demo", name)
+		if err != nil {
+			t.Fatalf("parse ref: %v", err)
+		}
+
+		st := stStore.stacks[ref]
+		st.Tags = tags
+		stStore.stacks[ref] = st
+	}
+
+	handler := newUserHandler(t, nsStore, stStore, selectiveAuthorizer{deny: map[identity.Action]bool{}})
+
+	for _, tc := range []struct {
+		query string
+		want  []string
+	}{
+		{query: "tagName=team&tagValue=blue", want: []string{"acme/demo/blue"}},
+		{query: "tagName=team&tagValue=red", want: nil},
+		{query: "tagName=team", want: []string{"acme/demo/blue", "acme/demo/empty"}},
+		{query: "tagName=team&tagValue=", want: []string{"acme/demo/empty"}},
+		{query: "tagName=owner&tagValue=blue", want: []string{"acme/demo/other"}},
+	} {
+		for _, org := range []string{"organization=acme&", ""} {
+			target := "/api/user/stacks?" + org + tc.query
+
+			if keys, _ := walkStacks(t, handler, target); !slices.Equal(keys, tc.want) {
+				t.Errorf("GET %s lists %v, want %v", target, keys, tc.want)
+			}
+		}
+	}
+}
+
+// TestListStacksRefusesBadTagFilter proves that a tag filter that is not
+// valid answers 400 with the command that helps, and lists no stack.
+func TestListStacksRefusesBadTagFilter(t *testing.T) {
+	t.Parallel()
+
+	handler := manyStacks(t, 3, selectiveAuthorizer{deny: map[identity.Action]bool{}}, "acme")
+
+	for _, target := range []string{
+		"/api/user/stacks?tagValue=blue",
+		"/api/user/stacks?organization=acme&tagValue=blue",
+		"/api/user/stacks?tagName=",
+		"/api/user/stacks?organization=acme&tagName=&tagValue=blue",
+	} {
+		rec := get(t, handler, target)
+
+		var body struct {
+			Message string `json:"message"`
+			Code    int    `json:"code"`
+		}
+
+		if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil || rec.Code != http.StatusBadRequest ||
+			body.Code != http.StatusBadRequest || !strings.Contains(body.Message, "pulumi stack ls --tag name=value") {
+			t.Errorf("GET %s answers %d %s, want 400 that names the command", target, rec.Code, rec.Body.String())
 		}
 	}
 }
