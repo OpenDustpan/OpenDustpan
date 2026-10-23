@@ -108,7 +108,9 @@ func TestRendererConformance(t *testing.T) {
 	chattest.RunRenderer(t, harness)
 }
 
-func TestGovSlackHost(t *testing.T) {
+// TestCheckHostAcceptsPublicAndGovHosts checks that CheckHost accepts the
+// public Slack host and the Slack host for government use.
+func TestCheckHostAcceptsPublicAndGovHosts(t *testing.T) {
 	t.Parallel()
 
 	for _, host := range []string{slack.HostPublic, slack.HostGov} {
@@ -331,7 +333,7 @@ func TestCheck(t *testing.T) {
 func plainHostile() []string {
 	return []string{
 		"@here", "@channel", "#general", "https://evil.example", "evil.example",
-		"<!channel>", "<@U123>", "<https://evil|x>",
+		"<!channel>", "<@U123>", "<https://evil|x>", "@everyone", "ops@evil.example",
 	}
 }
 
@@ -429,7 +431,7 @@ func checkFallback(t *testing.T, fallback, hostile, want string) {
 		t.Errorf("fallback %q holds link or mention markup", fallback)
 	}
 
-	for _, trigger := range []string{"@here", "@channel", "@U123", "#general", "://", "evil.example", hostile} {
+	for _, trigger := range []string{"@here", "@channel", "@everyone", "@U123", "#general", "://", "evil.example", hostile} {
 		if strings.Contains(fallback, trigger) {
 			t.Errorf("fallback %q holds the trigger %q", fallback, trigger)
 		}
