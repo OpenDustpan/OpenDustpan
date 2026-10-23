@@ -190,10 +190,11 @@ type Store interface {
 	// ErrConcurrentModification so the caller recounts once. The check runs
 	// in the same transaction as the delete, so an update that finishes
 	// concurrently cannot drop resources.
-	// It returns ErrNotFound if no live stack has ref, ErrUpdateConflict
-	// while a mutating update of the stack runs, namespace.ErrNotFound if the
-	// namespace does not exist, namespace.ErrFenced if fence is stale, or
-	// audit.ErrInvalidEntry if e fails validation or names another namespace.
+	// It returns ErrNotFound if no live stack has ref, ErrUpdateConflict while
+	// a mutating update of the stack runs (a *UpdateConflictError that names
+	// that update), namespace.ErrNotFound if the namespace does not exist,
+	// namespace.ErrFenced if fence is stale, or audit.ErrInvalidEntry if e
+	// fails validation or names another namespace.
 	// While a manual lock covers the stack, its collection or its namespace,
 	// the error matches ErrUpdateConflict and manuallock.ErrLocked.
 	DeleteStack(
