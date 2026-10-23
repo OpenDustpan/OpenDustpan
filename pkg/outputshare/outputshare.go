@@ -56,7 +56,11 @@ var (
 	// ErrClientEncrypted reports a read of outputs only that the checker refused,
 	// because the client encrypted the latest state of the producer. The
 	// server cannot read such a state, so it cannot answer the outputs only.
-	// A tool adapter answers 409 to a caller of the producer namespace.
+	// A tool adapter answers 409 to a caller of the producer namespace. It is
+	// a denial of one read, not a fact of the state: the fact is the
+	// ErrClientEncrypted of the tool package, for example of pkg/workspace.
+	// This package cannot import a tool package, so the two stay apart, and
+	// an adapter gives both the same error code.
 	ErrClientEncrypted = errors.New("state of the producer is encrypted by the client")
 	// ErrStateMoved reports a read of outputs whose state is not the latest
 	// state of the unit: a new state came in after the check of the read, or
