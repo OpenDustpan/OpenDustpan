@@ -81,12 +81,24 @@ type Principal struct {
 // principal record of the principal package.
 type Kind string
 
-// The kinds of a principal.
+// The kinds of a principal. A new kind goes into Kinds too, so that the
+// audit log and the record of a refusal know it.
 const (
 	KindPerson   Kind = "person"
 	KindService  Kind = "service"
 	KindWorkload Kind = "workload"
 )
+
+// Kinds returns every kind of a principal, in a new slice.
+func Kinds() []Kind {
+	return []Kind{KindPerson, KindService, KindWorkload}
+}
+
+// Known reports whether k is one of Kinds. The comparison is exact, so a
+// kind in another case or with a space is not known.
+func (k Kind) Known() bool {
+	return slices.Contains(Kinds(), k)
+}
 
 // Credential names the kind of credential that authenticated a request.
 type Credential string
