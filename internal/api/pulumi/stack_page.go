@@ -7,6 +7,9 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	"opendustpan.org/opendustpan/internal/pagetoken"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -68,10 +71,16 @@ func (q stackListQuery) fingerprint() string {
 // stackTagFilter reads the tag filter of the stack list from query. The
 // Pulumi CLI sends tagName alone for "--tag name" and tagName with tagValue
 // for "--tag name=value". ok is false when query has no tagName: the list then
-// keeps every stack. An empty tagName, or a tagValue with no tagName, gives
-// errStackTagFilter.
+// keeps every stack. An empty tagName, a tagValue with no tagName, a tagName
+// or a tagValue that the query holds more than one time, and a value that is
+// not UTF-8 text or that holds a control character give errStackTagFilter.
+// It refuses such a value and never changes it.
 func stackTagFilter(query url.Values) (stack.TagFilter, bool, error) {
 	none := stack.TagFilter{Name: "", Value: "", HasValue: false}
+
+	if err := checkTagFilterValues(query); err != nil {
+		return none, false, err
+	}
 
 	if !query.Has("tagName") {
 		if query.Has("tagValue") {
@@ -91,6 +100,28 @@ func stackTagFilter(query url.Values) (stack.TagFilter, bool, error) {
 	}
 
 	return stack.TagFilter{Name: name, Value: query.Get("tagValue"), HasValue: query.Has("tagValue")}, true, nil
+}
+
+// checkTagFilterValues returns errStackTagFilter when query holds tagName or
+// tagValue more than one time, or a value of them that is not UTF-8 text or
+// that holds a control character.
+func checkTagFilterValues(query url.Values) error {
+	for _, key := range []string{"tagName", "tagValue"} {
+		values := query[key]
+		if len(values) > 1 {
+			return fmt.Errorf("%w: send %s at most one time: run pulumi stack ls --tag name=value",
+				errStackTagFilter, key)
+		}
+
+		for _, v := range values {
+			if !utf8.ValidString(v) || strings.ContainsFunc(v, unicode.IsControl) {
+				return fmt.Errorf("%w: %s must be UTF-8 text with no control character: "+
+					"run pulumi stack ls --tag name=value", errStackTagFilter, key)
+			}
+		}
+	}
+
+	return nil
 }
 
 // encodeContinuation returns the token of the page after the stack st.
