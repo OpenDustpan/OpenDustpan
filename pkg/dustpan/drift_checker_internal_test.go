@@ -1,0 +1,220 @@
+package dustpan
+
+import (
+	"sync"
+	"testing"
+	"time"
+
+	"opendustpan.org/opendustpan/internal/driftsvc"
+	"opendustpan.org/opendustpan/internal/ident"
+	"opendustpan.org/opendustpan/pkg/collection"
+	"opendustpan.org/opendustpan/pkg/drift/drifttest"
+	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/job"
+	"opendustpan.org/opendustpan/pkg/manuallock"
+	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/runner"
+	"opendustpan.org/opendustpan/pkg/store/sqlite"
+	"opendustpan.org/opendustpan/pkg/workspace"
+)
+
+// TestDriftCheckerConformance runs the cases of drift.Checker of the drift
+// suite on the drift service over the job service of the server, as the
+// server wires them, on a SQLite store. The suite skips the cases of Store and
+// PolicyStore here: the store adapters run those.
+func TestDriftCheckerConformance(t *testing.T) {
+	t.Parallel()
+
+	drifttest.Run(t, newDriftCheckerHarness)
+}
+
+// testClock is a clock that a case sets.
+type testClock struct {
+	mu  sync.Mutex
+	now time.Time
+}
+
+// Now returns the time that the case set.
+func (c *testClock) Now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	return c.now
+}
+
+// Set sets the time.
+func (c *testClock) Set(at time.Time) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	c.now = at
+}
+
+// newDriftCheckerHarness returns a harness with the drift service of the server
+// over a fresh SQLite store with the namespace acme and one runner pool of acme
+// that runs jobs.
+func newDriftCheckerHarness(t *testing.T) drifttest.Harness {
+	t.Helper()
+
+	created := time.Unix(0, 0).UTC()
+	clock := &testClock{mu: sync.Mutex{}, now: created}
+
+	st := openCollectionStore(t)
+	ns := createCollectionNamespace(t, st, created)
+	createJobPool(t, st, ns, created)
+
+	checker := newDriftChecker(t, st, clock.Now)
+
+	return drifttest.Harness{
+		Store: nil, Policies: nil, Checker: checker,
+		Checks: drifttest.CheckerFixture{
+			Unit: func(t *testing.T, tool, name string) identity.Object {
+				t.Helper()
+
+				return seedUnit(t, st, ns, tool, name)
+			},
+			Actor: func(*testing.T) job.Actor { return driftActor() },
+			Job: func(t *testing.T, id job.ID) job.Job {
+				t.Helper()
+
+				j, err := st.Jobs().Get(t.Context(), id)
+				if err != nil {
+					t.Fatalf("read job %s: %v", id, err)
+				}
+
+				return j
+			},
+			Lock: func(t *testing.T, u identity.Object) {
+				t.Helper()
+
+				lockUnit(t, st, ns, u, created)
+			},
+			SetNow: func(_ *testing.T, at time.Time) { clock.Set(at) },
+		},
+		Namespace: nil, Jobs: drifttest.Jobs{
+			DriftCheck: nil, Running: nil, Failed: nil, Canceled: nil, Plain: nil,
+		},
+		Projection: nil, Notified: nil, Audited: nil,
+	}
+}
+
+// newDriftChecker builds the job service and the drift service as the server
+// does, over st, with the clock now.
+func newDriftChecker(t *testing.T, st *sqlite.Store, now func() time.Time) *driftsvc.Service {
+	t.Helper()
+
+	cfg := defaultSettings()
+	cfg.namespaceStore = st
+	cfg.jobStore = st.Jobs()
+	cfg.inventoryReader = st
+	cfg.runners = st.Runners()
+	cfg.authorizer = identity.AdminOnly{}
+	cfg.now = now
+
+	namespaces, err := namespace.NewService(namespace.Config{Store: st, Now: now, Region: "eu-west"})
+	if err != nil {
+		t.Fatalf("namespace service: %v", err)
+	}
+
+	_, gates, err := newCollectionAndGateServices(cfg, namespaces)
+	if err != nil || gates == nil {
+		t.Fatalf("gate service: %v, %v", gates, err)
+	}
+
+	// The job service reads the namespace service and the gate service only.
+	svc := services{
+		namespaces: namespaces, stacks: nil, updates: nil, secrets: nil, workspaces: nil, manualLocks: nil,
+		tokens: nil, collections: nil, gates: gates, deleted: nil, access: nil, tempAdmins: nil,
+	}
+
+	starter, err := newJobService(svc, cfg)
+	if err != nil || starter == nil {
+		t.Fatalf("job service: %v, %v", starter, err)
+	}
+
+	checker, err := driftsvc.NewService(starter, now)
+	if err != nil {
+		t.Fatalf("drift service: %v", err)
+	}
+
+	return checker
+}
+
+// driftActor returns an administrator who starts a drift check.
+func driftActor() job.Actor {
+	return job.Actor{
+		Principal: identity.Principal{
+			TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{}, Subject: "admin", DisplayName: "",
+			Admin: true, TokenID: "", TokenExpiresAt: time.Time{}, Kind: identity.KindPerson, Credential: "",
+			JobID: "",
+		},
+		Agent: "", Mode: "", ConfirmAuth: "", AuthAt: time.Time{},
+	}
+}
+
+// createJobPool stores the runner pool prod of ns, which runs jobs.
+func createJobPool(t *testing.T, st *sqlite.Store, ns namespace.Namespace, at time.Time) {
+	t.Helper()
+
+	p := runner.Pool{
+		ID: "", Namespace: ns.Name, Name: "prod", Purpose: runner.PurposeJobs, Lease: 0, Concurrency: 0,
+		Isolation: nil, GitCredentials: runner.GitCredentials{Mode: "", Helper: ""}, CreatedAt: at, UpdatedAt: at,
+	}
+
+	if _, err := st.Runners().CreatePool(t.Context(), p, ns.Fence(), nil); err != nil {
+		t.Fatalf("create runner pool: %v", err)
+	}
+}
+
+// seedUnit stores the unit name of tool in ns and returns its reference with
+// no unit ID: an OpenTofu workspace, or a Pulumi stack.
+func seedUnit(t *testing.T, st *sqlite.Store, ns namespace.Namespace, tool, name string) identity.Object {
+	t.Helper()
+
+	if tool == "pulumi" {
+		u := seedStack(t, st, ns, name, "stk-"+name[:3])
+
+		bare, err := identity.UnitObject(u.Tool(), u.Namespace(), u.UnitName())
+		if err != nil {
+			t.Fatalf("unit object: %v", err)
+		}
+
+		return bare
+	}
+
+	wsName, err := workspace.ParseName(name)
+	if err != nil {
+		t.Fatalf("workspace name: %v", err)
+	}
+
+	w := workspace.Workspace{
+		CreatedAt: ns.CreatedAt, UpdatedAt: ns.CreatedAt,
+		Lock: workspace.Lock{LockedAt: time.Time{}, ID: "", Holder: "", Reason: ""},
+		ID:   workspace.ID(ident.NewID("ws-")), Ref: workspace.Ref{Namespace: ns.Name, Name: wsName},
+		NamespaceID: ns.ID, Overrides: namespace.Overrides{Forced: false, Unlocked: false}, Revision: 1,
+	}
+	if createErr := st.CreateWorkspace(t.Context(), w, ns.Fence()); createErr != nil {
+		t.Fatalf("create workspace %q: %v", name, createErr)
+	}
+
+	u, err := identity.UnitObject(tool, ns.Name, name)
+	if err != nil {
+		t.Fatalf("unit object: %v", err)
+	}
+
+	return u
+}
+
+// lockUnit puts a manual lock of admin on the unit u of ns.
+func lockUnit(t *testing.T, st *sqlite.Store, ns namespace.Namespace, u identity.Object, at time.Time) {
+	t.Helper()
+
+	l := manuallock.Lock{
+		Since: at, Holder: "admin", Reason: "freeze",
+		Target: manuallock.UnitTarget(collection.UnitRef{Namespace: ns.Name, Tool: u.Tool(), Name: u.UnitName()}),
+	}
+
+	if err := st.PutLock(t.Context(), l, ns.Fence(), nsChange(at, ns.Name, "lock:"+u.UnitName())); err != nil {
+		t.Fatalf("lock unit %s: %v", u, err)
+	}
+}
