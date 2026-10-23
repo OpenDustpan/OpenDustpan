@@ -18,8 +18,8 @@ func TestRefused(t *testing.T) {
 		want       bool
 	}{
 		{name: "valid text", body: `{"summary":"plain"}`, want: false},
-		{name: "a surrogate pair escape", body: `{"summary":"pager 📟"}`, want: false},
-		{name: "an escape of a letter", body: `{"summary":"A"}`, want: false},
+		{name: "a surrogate pair escape", body: `{"summary":"pager \ud83d\udcdf"}`, want: false},
+		{name: "an escape of a letter", body: `{"summary":"\u0041"}`, want: false},
 		{name: "a raw byte ff", body: "{\"summary\":\"\xff\"}", want: true},
 		{name: "a cut sequence", body: "{\"owners\":[\"team-\xc3\"]}", want: true},
 		{name: "a raw byte ff with a syntax fault", body: "{\"summary\":\"\xff\",}", want: true},
