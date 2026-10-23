@@ -18,6 +18,17 @@ const (
 	WorkspaceNotFound = "workspace.not-found"
 	// WorkspaceNotLocked means that the request needs a locked workspace and the workspace is not locked.
 	WorkspaceNotLocked = "workspace.not-locked"
+	// WorkspaceChangedConcurrently means that another request changed the workspace at the same time.
+	WorkspaceChangedConcurrently = "workspace.changed-concurrently"
+	// WorkspaceNoState means that the workspace has no finalized state version.
+	WorkspaceNoState = "workspace.no-state"
+	// WorkspaceNoStateAt means that the time of the request is before the first finalized state version of the
+	// workspace, at firstAt.
+	WorkspaceNoStateAt = "workspace.no-state-at"
+	// WorkspacePendingStateVersion means that the workspace has a pending state version.
+	WorkspacePendingStateVersion = "workspace.pending-state-version"
+	// WorkspaceTooManyPending means that the workspace has the largest number of pending state versions.
+	WorkspaceTooManyPending = "workspace.too-many-pending"
 )
 
 // workspaceSpecs are the codes of the workspaces of the TFE-compatible API.
@@ -51,6 +62,31 @@ func workspaceSpecs() []Spec {
 		{
 			Code:    WorkspaceNotLocked,
 			Meaning: "the request needs a locked workspace and the workspace is not locked",
+			Args:    nil,
+		},
+		{
+			Code:    WorkspaceChangedConcurrently,
+			Meaning: "another request changed the workspace at the same time",
+			Args:    nil,
+		},
+		{
+			Code:    WorkspaceNoState,
+			Meaning: "the workspace has no finalized state version",
+			Args:    nil,
+		},
+		{
+			Code:    WorkspaceNoStateAt,
+			Meaning: "the time of the request is before the first finalized state version of the workspace, at firstAt",
+			Args:    []Arg{{Name: "firstAt", Kind: KindTime}},
+		},
+		{
+			Code:    WorkspacePendingStateVersion,
+			Meaning: "the workspace has a pending state version",
+			Args:    nil,
+		},
+		{
+			Code:    WorkspaceTooManyPending,
+			Meaning: "the workspace has the largest number of pending state versions",
 			Args:    nil,
 		},
 	}

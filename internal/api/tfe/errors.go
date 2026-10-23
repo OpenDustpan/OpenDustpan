@@ -36,6 +36,9 @@ const titleUnauthorized = "unauthorized"
 // titleBadRequest is the JSON:API title of a 400 answer.
 const titleBadRequest = "bad request"
 
+// titleTooLarge is the JSON:API title of a 413 answer.
+const titleTooLarge = "too large"
+
 // titleInternal is the JSON:API title and detail of a 500 answer.
 const titleInternal = "internal error"
 
@@ -230,17 +233,23 @@ func classifyTooLarge(err error) (errorClass, bool) {
 			code:   errcode.StateVersionBusy,
 			args:   nil,
 		}, true
-	case errors.Is(err, workspace.ErrTooLarge), errors.Is(err, workspace.ErrBudgetTooSmall):
+	case errors.Is(err, workspace.ErrTooLarge):
 		return errorClass{
-			status: http.StatusRequestEntityTooLarge, title: "too large", detail: err.Error(), code: "", args: nil,
+			status: http.StatusRequestEntityTooLarge, title: titleTooLarge, detail: err.Error(),
+			code: errcode.StateVersionTooLarge, args: nil,
+		}, true
+	case errors.Is(err, workspace.ErrBudgetTooSmall):
+		return errorClass{
+			status: http.StatusRequestEntityTooLarge, title: titleTooLarge, detail: err.Error(),
+			code: errcode.StateVersionBudgetTooSmall, args: nil,
 		}, true
 	case errors.Is(err, identity.ErrRateLimited):
-		// A source over its failure budget (ADR 53).
+		// A source over its failure budget.
 		return errorClass{
 			status: http.StatusTooManyRequests,
 			title:  "too many requests",
 			detail: "too many failed sign-ins from this address: try again later",
-			code:   "",
+			code:   errcode.AuthRateLimited,
 			args:   nil,
 		}, true
 	}
@@ -265,14 +274,15 @@ func classifyNamespace(err error) (errorClass, bool) {
 		// The copy of the sentinel only: a wrap adds the name of the
 		// operation, which the log holds.
 		return errorClass{
-			status: http.StatusConflict, title: titleConflict, detail: namespace.ErrFenced.Error(), code: "", args: nil,
+			status: http.StatusConflict, title: titleConflict, detail: namespace.ErrFenced.Error(),
+			code: errcode.NamespaceFenced, args: nil,
 		}, true
 	case errors.Is(err, namespace.ErrNotHome):
 		return errorClass{
 			status: http.StatusMisdirectedRequest,
 			title:  "misdirected request",
 			detail: err.Error(),
-			code:   "",
+			code:   errcode.NamespaceNotHome,
 			args:   nil,
 		}, true
 	case errors.Is(err, maintenance.ErrInMaintenance):
@@ -280,7 +290,7 @@ func classifyNamespace(err error) (errorClass, bool) {
 			status: http.StatusServiceUnavailable,
 			title:  titleServiceUnavailable,
 			detail: maintenance.ErrInMaintenance.Error() + ": try again after the Retry-After time",
-			code:   "",
+			code:   errcode.MaintenanceInMaintenance,
 			args:   nil,
 		}, true
 	case errors.Is(err, namespace.ErrUnavailable):
@@ -288,7 +298,7 @@ func classifyNamespace(err error) (errorClass, bool) {
 			status: http.StatusServiceUnavailable,
 			title:  titleServiceUnavailable,
 			detail: "database unavailable: try again after the Retry-After time",
-			code:   "",
+			code:   errcode.NamespaceUnavailable,
 			args:   nil,
 		}, true
 	}
@@ -334,11 +344,64 @@ func classifyConflict(err error) (errorClass, bool) {
 			status: http.StatusConflict, title: titleConflict, detail: err.Error(),
 			code: errcode.WorkspaceLocked, args: nil,
 		}, true
-	case errors.Is(err, workspace.ErrPendingState),
-		errors.Is(err, workspace.ErrConcurrentModification),
-		errors.Is(err, workspace.ErrTooManyPending):
+	case errors.Is(err, workspace.ErrPendingState):
 		return errorClass{
-			status: http.StatusConflict, title: titleConflict, detail: err.Error(), code: "", args: nil,
+			status: http.StatusConflict, title: titleConflict, detail: err.Error(),
+			code: errcode.WorkspacePendingStateVersion, args: nil,
+		}, true
+	case errors.Is(err, workspace.ErrConcurrentModification):
+		return errorClass{
+			status: http.StatusConflict, title: titleConflict, detail: err.Error(),
+			code: errcode.WorkspaceChangedConcurrently, args: nil,
+		}, true
+	case errors.Is(err, workspace.ErrTooManyPending):
+		return errorClass{
+			status: http.StatusConflict, title: titleConflict, detail: err.Error(),
+			code: errcode.WorkspaceTooManyPending, args: nil,
+		}, true
+	}
+
+	return unclassified(), false
+}
+
+// classifyNotFound maps the errors of an object that does not exist to 404. A
+// time before the first finalized state version names the time of the first
+// one. ok is false for any other error.
+func classifyNotFound(err error) (errorClass, bool) {
+	if before, ok := errors.AsType[*workspace.NoStateAtError](err); ok && !before.First.IsZero() {
+		return errorClass{
+			status: http.StatusNotFound, title: notFoundTitle, detail: err.Error(),
+			code: errcode.WorkspaceNoStateAt, args: []errcode.Value{errcode.Time("firstAt", before.First)},
+		}, true
+	}
+
+	switch {
+	case errors.Is(err, workspace.ErrNotFound):
+		return errorClass{
+			status: http.StatusNotFound, title: notFoundTitle, detail: err.Error(),
+			code: errcode.WorkspaceNotFound, args: nil,
+		}, true
+	case errors.Is(err, namespace.ErrNotFound):
+		return errorClass{
+			status: http.StatusNotFound, title: notFoundTitle, detail: err.Error(),
+			code: errcode.NamespaceNotFound, args: nil,
+		}, true
+	case errors.Is(err, workspace.ErrNoState), errors.Is(err, workspace.ErrNoStateAt):
+		// A time before the first state version of a workspace that has no
+		// finalized state version yet: the workspace has no state.
+		return errorClass{
+			status: http.StatusNotFound, title: notFoundTitle, detail: err.Error(),
+			code: errcode.WorkspaceNoState, args: nil,
+		}, true
+	case errors.Is(err, workspace.ErrStateVersionNotFound):
+		return errorClass{
+			status: http.StatusNotFound, title: notFoundTitle, detail: err.Error(),
+			code: errcode.StateVersionNotFound, args: nil,
+		}, true
+	case errors.Is(err, workspace.ErrResourceNotFound):
+		return errorClass{
+			status: http.StatusNotFound, title: notFoundTitle, detail: err.Error(),
+			code: errcode.StateVersionResourceNotFound, args: nil,
 		}, true
 	}
 
@@ -358,6 +421,10 @@ func classify(err error) errorClass {
 	}
 
 	if class, ok := classifyConflict(err); ok {
+		return class
+	}
+
+	if class, ok := classifyNotFound(err); ok {
 		return class
 	}
 
@@ -387,15 +454,6 @@ func classify(err error) errorClass {
 			code:   "",
 			args:   nil,
 		}
-	case errors.Is(err, workspace.ErrNotFound):
-		return errorClass{
-			status: http.StatusNotFound, title: notFoundTitle, detail: err.Error(),
-			code: errcode.WorkspaceNotFound, args: nil,
-		}
-	case errors.Is(err, namespace.ErrNotFound),
-		errors.Is(err, workspace.ErrNoState), errors.Is(err, workspace.ErrStateVersionNotFound),
-		errors.Is(err, workspace.ErrResourceNotFound), errors.Is(err, workspace.ErrNoStateAt):
-		return errorClass{status: http.StatusNotFound, title: notFoundTitle, detail: err.Error(), code: "", args: nil}
 	case errors.Is(err, errInvalidBody),
 		errors.Is(err, errInvalidQuery),
 		errors.Is(err, audit.ErrInvalidReason),
