@@ -2,16 +2,13 @@ package pulumi
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/base64"
-	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
 	"strconv"
 
+	"opendustpan.org/opendustpan/internal/pagetoken"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/stack"
 )
@@ -65,9 +62,7 @@ func (q stackListQuery) fingerprint() string {
 		}
 	}
 
-	sum := sha256.Sum256([]byte(in))
-
-	return hex.EncodeToString(sum[:8])
+	return pagetoken.Fingerprint(in)
 }
 
 // stackTagFilter reads the tag filter of the stack list from query. The
@@ -100,7 +95,7 @@ func stackTagFilter(query url.Values) (stack.TagFilter, bool, error) {
 
 // encodeContinuation returns the token of the page after the stack st.
 func encodeContinuation(st stack.Stack, fingerprint string) string {
-	raw, err := json.Marshal(continuationWire{
+	token, err := pagetoken.Encode(continuationWire{
 		Namespace:   st.Ref.Namespace.String(),
 		Project:     st.Ref.Project.String(),
 		Stack:       st.Ref.Stack.String(),
@@ -110,7 +105,7 @@ func encodeContinuation(st stack.Stack, fingerprint string) string {
 		return ""
 	}
 
-	return base64.RawURLEncoding.EncodeToString(raw)
+	return token
 }
 
 // decodeContinuation returns the cursor of the token. A token that does not
@@ -119,13 +114,8 @@ func encodeContinuation(st stack.Stack, fingerprint string) string {
 // fingerprint is not keyed, so anyone can compute it; the cursor is bound to
 // the query by its own names as well.
 func decodeContinuation(token string, q stackListQuery) (stack.PageCursor, error) {
-	raw, err := base64.RawURLEncoding.DecodeString(token)
-	if err != nil {
-		return stack.PageCursor{}, errContinuationToken
-	}
-
 	var w continuationWire
-	if jsonErr := json.Unmarshal(raw, &w); jsonErr != nil || w.Fingerprint != q.fingerprint() {
+	if err := pagetoken.Decode(token, &w); err != nil || !pagetoken.SameFingerprint(w.Fingerprint, q.fingerprint()) {
 		return stack.PageCursor{}, errContinuationToken
 	}
 
