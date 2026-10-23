@@ -361,9 +361,11 @@ func replayPlan(live, kind string) ([]replayStep, bool) {
 	case maintenance.RevokedTempAdmin:
 		return tempAdminPlan(schema), true
 	case maintenance.RevokedGrant:
+		// The live check is COALESCE(revoked_at_ms, -1) = -1, not IS NULL, so no
+		// partial index of the live grants can serve this lookup by ID.
 		return []replayStep{
 			{sql: "UPDATE " + schema + ".grants SET revoked_at_ms = $2, revoked_by = $3 " +
-				"WHERE id = $1 AND revoked_at_ms IS NULL", third: thirdActor},
+				"WHERE id = $1 AND COALESCE(revoked_at_ms, -1) = -1", third: thirdActor},
 		}, true
 	case maintenance.RevokedJoinToken:
 		return []replayStep{
