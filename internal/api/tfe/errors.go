@@ -197,6 +197,13 @@ func classifyTooLarge(err error) (errorClass, bool) {
 // not answer to 503. ok is false for any other error.
 func classifyNamespace(err error) (errorClass, bool) {
 	switch {
+	case errors.Is(err, outputshare.ErrUnknownProducer):
+		// The body is the body of a workspace that does not exist. The error
+		// text names the check and the producer, so it never reaches the
+		// caller.
+		return errorClass{
+			status: http.StatusNotFound, title: notFoundTitle, detail: notFoundTitle,
+		}, true
 	case errors.Is(err, namespace.ErrFenced):
 		// The copy of the sentinel only: a wrap adds the name of the
 		// operation, which the log holds.
@@ -291,11 +298,6 @@ func classify(err error) errorClass {
 		return errorClass{status: http.StatusForbidden, title: titleForbidden, detail: err.Error()}
 	case errors.Is(err, identity.ErrDenied), errors.Is(err, workspace.ErrUploadDenied):
 		return errorClass{status: http.StatusForbidden, title: titleForbidden, detail: titleForbidden}
-	case errors.Is(err, outputshare.ErrUnknownProducer):
-		// The body is the body of a workspace that does not exist. The error
-		// text names the check and the producer, so it never reaches the
-		// caller.
-		return errorClass{status: http.StatusNotFound, title: notFoundTitle, detail: notFoundTitle}
 	case errors.Is(err, workspace.ErrNotFound), errors.Is(err, namespace.ErrNotFound),
 		errors.Is(err, workspace.ErrNoState), errors.Is(err, workspace.ErrStateVersionNotFound),
 		errors.Is(err, workspace.ErrResourceNotFound), errors.Is(err, workspace.ErrNoStateAt):
