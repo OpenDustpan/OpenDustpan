@@ -40,6 +40,15 @@ func WriteEnterErrorForTest(w http.ResponseWriter, r *http.Request, err error) {
 	h.writeEnterError(r.Context(), w, err)
 }
 
+// WriteErrorLogForTest writes the error answer of err with logger, so a test
+// can read the log line of the answer.
+func WriteErrorLogForTest(w http.ResponseWriter, r *http.Request, err error, logger *slog.Logger) {
+	var h Handler
+
+	h.logger = logger
+	h.writeError(r.Context(), w, err)
+}
+
 // ServeEmptyForTest serves r with a handler that has no route, so every path
 // answers the 404 of an unknown route.
 func ServeEmptyForTest(w http.ResponseWriter, r *http.Request) {

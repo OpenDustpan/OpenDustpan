@@ -2,6 +2,8 @@ package server
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 
@@ -56,4 +58,27 @@ func (h *Handler) writeAnswer(
 	h.writeJSON(ctx, w, status, codedResponse{
 		Message: message, Code: status, ErrorCode: a.Code(), ErrorArgs: a.Args(),
 	})
+}
+
+// writeCoded writes the answer of f, which has a code of the catalog.
+func (h *Handler) writeCoded(ctx context.Context, w http.ResponseWriter, f failure) {
+	status, message, answer := h.answer(ctx, f)
+	h.writeAnswer(ctx, w, status, message, answer)
+}
+
+// causeType returns the Go type of the first error in the chain of err that
+// is not a plain wrap or a plain text error, for example *fs.PathError, or the
+// type of err when the chain has no such error. A log line names it as the
+// cause of a 500: the type holds no value, so it never holds driver text, a
+// token or state.
+func causeType(err error) string {
+	for e := err; e != nil; e = errors.Unwrap(e) {
+		switch t := fmt.Sprintf("%T", e); t {
+		case "*fmt.wrapError", "*fmt.wrapErrors", "*errors.errorString":
+		default:
+			return t
+		}
+	}
+
+	return fmt.Sprintf("%T", err)
 }
