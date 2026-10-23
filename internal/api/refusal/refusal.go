@@ -541,7 +541,7 @@ func deniedEntry(
 		Sequence:      0,
 		FenceVersion:  0,
 		Reason:        "",
-		PrincipalKind: string(p.Kind),
+		PrincipalKind: principalKind(p.Kind),
 		JobID:         Clean(p.JobID, audit.MaxJobIDLen),
 	}
 }
@@ -557,6 +557,22 @@ func kindOf(action identity.Action) audit.Kind {
 		return audit.KindToolOperation
 	default:
 		return audit.KindChange
+	}
+}
+
+// principalKind returns the kind of the principal for the denied entry. The
+// audit log refuses an entry with a kind that it does not know, so an unknown
+// kind is recorded as no kind. The denial is still written.
+//
+// Defense in depth: audit.Entry.Validate refuses an unknown kind too; this
+// allowlist stays so that a principal from an authenticator outside this
+// repository cannot make the denial entry fail to append.
+func principalKind(k identity.Kind) string {
+	switch k {
+	case identity.KindPerson, identity.KindService, identity.KindWorkload:
+		return string(k)
+	default:
+		return ""
 	}
 }
 
