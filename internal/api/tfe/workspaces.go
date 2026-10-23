@@ -135,11 +135,12 @@ type workspaceCreateRequest struct {
 
 // createRef reads the workspace reference in a create request: the namespace
 // in organization and the name in the body. A missing or bad name fails with
-// a 422 error.
+// a 422 error. A missing name gets the refusal of workspace.ParseName, as a
+// bad name does.
 func createRef(r *http.Request, body []byte) (workspace.Ref, error) {
 	var req workspaceCreateRequest
 
-	if err := json.Unmarshal(body, &req); err != nil || req.Data.Attributes.Name == "" {
+	if err := json.Unmarshal(body, &req); err != nil {
 		return workspace.Ref{}, errInvalidBody
 	}
 

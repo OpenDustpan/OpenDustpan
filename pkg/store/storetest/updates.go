@@ -858,8 +858,13 @@ func testOneRunning(t *testing.T, f fixture) {
 		"u2",
 		stack.Plan{Kind: stack.KindRefresh, DryRun: false, CreatedBy: "", RestoredFrom: 0},
 	)
-	if _, err := f.s.StartUpdate(t.Context(), started(t, blocked), f.fence); !errors.Is(err, stack.ErrUpdateConflict) {
-		t.Fatalf("start a second mutating update: err = %v, want ErrUpdateConflict", err)
+
+	// The refusal names the update that holds the stack, so the caller needs
+	// no second read to show it.
+	_, err := f.s.StartUpdate(t.Context(), started(t, blocked), f.fence)
+	if conflict, ok := errors.AsType[*stack.UpdateConflictError](err); !ok ||
+		!errors.Is(err, stack.ErrUpdateConflict) || conflict.Active != running.ID {
+		t.Fatalf("start a second mutating update: err = %v, want ErrUpdateConflict that names %s", err, running.ID)
 	}
 
 	assertUpdate(t, f, blocked)
@@ -1897,8 +1902,10 @@ func testDeleteDuringRunningUpdate(t *testing.T, f fixture) {
 		stack.EmptyGuard(),
 		inventory.Deletion{Entry: deleteEntry(f.fence.Namespace), PurgeAfter: purgeAt()},
 	)
-	if !errors.Is(deleteErr, stack.ErrUpdateConflict) {
-		t.Fatalf("delete during a running update: err = %v, want ErrUpdateConflict", deleteErr)
+	if conflict, ok := errors.AsType[*stack.UpdateConflictError](deleteErr); !ok ||
+		!errors.Is(deleteErr, stack.ErrUpdateConflict) || conflict.Active != running.ID {
+		t.Fatalf("delete during a running update: err = %v, want ErrUpdateConflict that names %s",
+			deleteErr, running.ID)
 	}
 
 	if _, err := f.s.GetStack(t.Context(), f.ref); err != nil {

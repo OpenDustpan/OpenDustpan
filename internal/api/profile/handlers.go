@@ -3,7 +3,6 @@ package profile
 import (
 	"bytes"
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -17,6 +16,7 @@ import (
 	"opendustpan.org/opendustpan/internal/api/apidesc"
 	"opendustpan.org/opendustpan/internal/api/idempotent"
 	"opendustpan.org/opendustpan/internal/clientip"
+	"opendustpan.org/opendustpan/internal/pagetoken"
 	"opendustpan.org/opendustpan/internal/requestid"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/idempotency"
@@ -390,14 +390,14 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request, p identity.Princi
 	}
 
 	if page.Next != "" {
-		raw, marshalErr := json.Marshal(pageToken{After: string(page.Next), Fingerprint: fingerprint(ns, folder)})
-		if marshalErr != nil {
-			h.writeError(ctx, w, marshalErr)
+		token, encodeErr := pagetoken.Encode(pageToken{After: string(page.Next), Fingerprint: fingerprint(ns, folder)})
+		if encodeErr != nil {
+			h.writeError(ctx, w, encodeErr)
 
 			return
 		}
 
-		resp.NextPageToken = base64.RawURLEncoding.EncodeToString(raw)
+		resp.NextPageToken = token
 	}
 
 	h.writeJSON(ctx, w, http.StatusOK, resp)
@@ -410,13 +410,8 @@ func decodeToken(raw, fp string) (profile.Name, error) {
 
 	bad := badRequest("request.invalid-query", "pageToken does not belong to this query: start again without it")
 
-	data, err := base64.RawURLEncoding.DecodeString(raw)
-	if err != nil {
-		return "", bad
-	}
-
 	var t pageToken
-	if err = json.Unmarshal(data, &t); err != nil || t.Fingerprint != fp {
+	if err := pagetoken.Decode(raw, &t); err != nil || !pagetoken.SameFingerprint(t.Fingerprint, fp) {
 		return "", bad
 	}
 

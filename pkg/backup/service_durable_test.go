@@ -514,7 +514,10 @@ func TestShutdownDuringWriteStepLeavesTheBackupForAnotherWorker(t *testing.T) {
 	waitRow(t, setup.reg, id, backup.StateSucceeded)
 	assertCompleteBackup(t, setup.target, id)
 
-	final, _ := findOperation(t, setup.reg.ops, id)
+	// The runner's Complete lands after the row reads succeeded.
+	final := waitOperation(t, setup.reg.ops, id, "the operation ends", func(o durable.Operation) bool {
+		return o.State.Terminal()
+	})
 	if final.State != durable.StateSucceeded || final.Attempt != 2 || final.Expiries != 0 {
 		t.Fatalf("operation = %s, attempt %d, expiries %d, want succeeded, 2, 0",
 			final.State, final.Attempt, final.Expiries)
