@@ -221,7 +221,7 @@ func classifyManagement(err error) (int, string) {
 	case errors.Is(err, errNotFound), errors.Is(err, runner.ErrNotFound), errors.Is(err, namespace.ErrNotFound):
 		return http.StatusNotFound, errNotFound.Error()
 	case errors.Is(err, runner.ErrInvalid), errors.Is(err, errBadBody):
-		return http.StatusBadRequest, sentenceOf(err, []error{runner.ErrInvalid, errBadBody})
+		return http.StatusBadRequest, sentenceOf(err, []error{runner.ErrInvalidHelper, runner.ErrInvalid, errBadBody})
 	default:
 		return classifyManagementConflict(err)
 	}

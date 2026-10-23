@@ -2,6 +2,7 @@ package runner_test
 
 import (
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -88,6 +89,24 @@ func TestPoolValidate(t *testing.T) {
 			false,
 		},
 		{"unknown git mode", func(p *runner.Pool) { p.GitCredentials.Mode = "ssh" }, false},
+		{"custom helper with a quote", func(p *runner.Pool) {
+			p.GitCredentials = runner.GitCredentials{Mode: runner.GitCredentialsCustom, Helper: `/usr/bin/x"y`}
+		}, false},
+		{"custom helper with a backslash", func(p *runner.Pool) {
+			p.GitCredentials = runner.GitCredentials{Mode: runner.GitCredentialsCustom, Helper: `/usr/bin/x\y`}
+		}, false},
+		{"custom helper with a comment", func(p *runner.Pool) {
+			p.GitCredentials = runner.GitCredentials{Mode: runner.GitCredentialsCustom, Helper: "/usr/bin/x#y"}
+		}, false},
+		{"custom helper bare with a semicolon", func(p *runner.Pool) {
+			p.GitCredentials = runner.GitCredentials{Mode: runner.GitCredentialsCustom, Helper: "git-credential-x;y"}
+		}, false},
+		{"custom helper with a non-ASCII letter", func(p *runner.Pool) {
+			p.GitCredentials = runner.GitCredentials{Mode: runner.GitCredentialsCustom, Helper: "/usr/bin/hélper"}
+		}, false},
+		{"custom helper with dots and underscores", func(p *runner.Pool) {
+			p.GitCredentials = runner.GitCredentials{Mode: runner.GitCredentialsCustom, Helper: "/opt/v_1.2/helper"}
+		}, true},
 	}
 
 	for _, tc := range cases {
@@ -106,6 +125,32 @@ func TestPoolValidate(t *testing.T) {
 				t.Fatalf("Validate = %v, want ErrInvalid", err)
 			}
 		})
+	}
+}
+
+// TestGitCredentialsNameTheHelperRule proves that each refused helper
+// setting wraps ErrInvalidHelper, whose text names the field and the rule.
+func TestGitCredentialsNameTheHelperRule(t *testing.T) {
+	t.Parallel()
+
+	for _, g := range []runner.GitCredentials{
+		{Mode: runner.GitCredentialsCustom, Helper: "/usr/bin/x#y"},
+		{Mode: runner.GitCredentialsCustom, Helper: "git-credential-x\n[core]"},
+		{Mode: runner.GitCredentialsCustom, Helper: "bin/helper"},
+		{Mode: runner.GitCredentialsCustom, Helper: ""},
+		{Mode: runner.GitCredentialsNone, Helper: "git-credential-vault"},
+	} {
+		if err := g.Validate(); !errors.Is(err, runner.ErrInvalidHelper) {
+			t.Errorf("Validate(%+v) = %v, want ErrInvalidHelper", g, err)
+		}
+	}
+
+	if err := (runner.GitCredentials{Mode: "ssh", Helper: ""}).Validate(); errors.Is(err, runner.ErrInvalidHelper) {
+		t.Errorf("Validate of an unknown mode = %v, want an error that names no helper", err)
+	}
+
+	if !strings.Contains(runner.ErrInvalidHelper.Error(), "gitCredentials.helper") {
+		t.Errorf("ErrInvalidHelper = %q, want the name of the field", runner.ErrInvalidHelper)
 	}
 }
 
