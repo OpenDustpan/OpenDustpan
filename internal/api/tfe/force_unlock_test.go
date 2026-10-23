@@ -256,7 +256,7 @@ func TestForceUnlockErrorCodes(t *testing.T) {
 			http.StatusConflict,
 			"workspace.changed-concurrently",
 		},
-		{"invalid reason", audit.ErrInvalidReason, http.StatusUnprocessableEntity, ""},
+		{"invalid reason", audit.ErrInvalidReason, http.StatusUnprocessableEntity, "audit.reason-invalid"},
 	}
 
 	for _, tc := range cases {

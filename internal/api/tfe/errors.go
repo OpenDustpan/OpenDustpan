@@ -39,6 +39,9 @@ const titleBadRequest = "bad request"
 // titleTooLarge is the JSON:API title of a 413 answer.
 const titleTooLarge = "too large"
 
+// titleUnprocessable is the JSON:API title of a 422 answer.
+const titleUnprocessable = "unprocessable"
+
 // titleInternal is the JSON:API title and detail of a 500 answer.
 const titleInternal = "internal error"
 
@@ -408,6 +411,131 @@ func classifyNotFound(err error) (errorClass, bool) {
 	return unclassified(), false
 }
 
+// classifyAccess maps a missing credential to 401 and a refusal to 403. ok is
+// false for any other error.
+func classifyAccess(err error) (errorClass, bool) {
+	switch {
+	case errors.Is(err, identity.ErrUnauthenticated):
+		return errorClass{
+			status: http.StatusUnauthorized, title: titleUnauthorized, detail: "unauthenticated",
+			code: errcode.AuthUnauthenticated, args: nil,
+		}, true
+	case errors.Is(err, workspace.ErrOverrideRefused):
+		// The detail names the switch and the action that allow the override.
+		return errorClass{
+			status: http.StatusForbidden, title: titleForbidden, detail: err.Error(),
+			code: errcode.WorkspaceOverrideRefused, args: nil,
+		}, true
+	case errors.Is(err, sessionauth.ErrCSRF), errors.Is(err, sessionauth.ErrOtherSite):
+		// The detail names the CSRF header that a console session request
+		// lacks, or the other site.
+		return errorClass{
+			status: http.StatusForbidden, title: titleForbidden, detail: err.Error(),
+			code: errcode.Forbidden(err), args: nil,
+		}, true
+	case errors.Is(err, identity.ErrDenied):
+		return errorClass{
+			status: http.StatusForbidden, title: titleForbidden, detail: titleForbidden,
+			code: errcode.Forbidden(err), args: nil,
+		}, true
+	case errors.Is(err, workspace.ErrUploadDenied):
+		return errorClass{
+			status: http.StatusForbidden, title: titleForbidden, detail: titleForbidden,
+			code: errcode.StateVersionUploadDenied, args: nil,
+		}, true
+	}
+
+	return unclassified(), false
+}
+
+// classifyInvalid maps a request that is not valid to 400 or 422: a missing
+// filter, a time in the path, a body, a query, a reason, a reveal path or a
+// reference that is not valid. ok is false for any other error.
+func classifyInvalid(err error) (errorClass, bool) {
+	if timeErr, ok := errors.AsType[*stateAtTimeError](err); ok && timeErr != nil {
+		return errorClass{
+			status: http.StatusUnprocessableEntity, title: titleUnprocessable, detail: err.Error(),
+			code: errcode.RequestInvalidPath, args: nil,
+		}, true
+	}
+
+	switch {
+	case errors.Is(err, errMissingFilter):
+		return errorClass{
+			status: http.StatusBadRequest, title: titleBadRequest, detail: err.Error(),
+			code: errcode.RequestInvalidQuery, args: nil,
+		}, true
+	case errors.Is(err, errInvalidBody):
+		return errorClass{
+			status: http.StatusUnprocessableEntity, title: titleUnprocessable, detail: err.Error(),
+			code: errcode.RequestBodyInvalid, args: nil,
+		}, true
+	case errors.Is(err, errInvalidQuery):
+		return errorClass{
+			status: http.StatusUnprocessableEntity, title: titleUnprocessable, detail: err.Error(),
+			code: errcode.RequestInvalidQuery, args: nil,
+		}, true
+	case errors.Is(err, audit.ErrInvalidReason):
+		return errorClass{
+			status: http.StatusUnprocessableEntity, title: titleUnprocessable, detail: err.Error(),
+			code: errcode.AuditReasonInvalid, args: nil,
+		}, true
+	case errors.Is(err, errRevealPathTooLong):
+		return errorClass{
+			status: http.StatusUnprocessableEntity, title: titleUnprocessable, detail: err.Error(),
+			code: errcode.StateVersionRevealPathTooLong,
+			args: []errcode.Value{errcode.Quantity("maxBytes", maxRevealPathLen)},
+		}, true
+	case errors.Is(err, identity.ErrInvalidObject):
+		return errorClass{
+			status: http.StatusUnprocessableEntity, title: titleUnprocessable, detail: err.Error(),
+			code: errcode.RequestInvalidObject, args: nil,
+		}, true
+	}
+
+	return unclassified(), false
+}
+
+// classifyInvalidState maps a name or a state that is not valid, and a state
+// that does not follow the current state, to 422. ok is false for any other
+// error.
+func classifyInvalidState(err error) (errorClass, bool) {
+	switch {
+	case errors.Is(err, workspace.ErrInvalidName):
+		return errorClass{
+			status: http.StatusUnprocessableEntity, title: titleUnprocessable, detail: err.Error(),
+			code: errcode.WorkspaceInvalidName, args: nil,
+		}, true
+	case errors.Is(err, namespace.ErrInvalidName):
+		return errorClass{
+			status: http.StatusUnprocessableEntity, title: titleUnprocessable, detail: err.Error(),
+			code: errcode.NamespaceInvalidName, args: nil,
+		}, true
+	case errors.Is(err, workspace.ErrInvalidState):
+		return errorClass{
+			status: http.StatusUnprocessableEntity, title: titleUnprocessable, detail: err.Error(),
+			code: errcode.StateVersionInvalid, args: nil,
+		}, true
+	case errors.Is(err, workspace.ErrStaleSerial):
+		return errorClass{
+			status: http.StatusUnprocessableEntity, title: titleUnprocessable, detail: err.Error(),
+			code: errcode.StateVersionStaleSerial, args: nil,
+		}, true
+	case errors.Is(err, workspace.ErrLineageMismatch):
+		return errorClass{
+			status: http.StatusUnprocessableEntity, title: titleUnprocessable, detail: err.Error(),
+			code: errcode.StateVersionLineageMismatch, args: nil,
+		}, true
+	case errors.Is(err, workspace.ErrChecksumMismatch):
+		return errorClass{
+			status: http.StatusUnprocessableEntity, title: titleUnprocessable, detail: err.Error(),
+			code: errcode.StateVersionChecksumMismatch, args: nil,
+		}, true
+	}
+
+	return unclassified(), false
+}
+
 // classify maps domain errors to a status, title, detail and code safe to
 // show callers. Unknown errors map to 500 with a generic detail and the code
 // server.internal.
@@ -428,51 +556,21 @@ func classify(err error) errorClass {
 		return class
 	}
 
-	switch {
-	case errors.Is(err, identity.ErrUnauthenticated):
-		return errorClass{
-			status: http.StatusUnauthorized, title: titleUnauthorized, detail: "unauthenticated", code: "", args: nil,
-		}
-	case errors.Is(err, errMissingFilter):
-		return errorClass{
-			status: http.StatusBadRequest,
-			title:  titleBadRequest,
-			detail: err.Error(),
-			code:   "",
-			args:   nil,
-		}
-	case errors.Is(err, workspace.ErrOverrideRefused), errors.Is(err, sessionauth.ErrCSRF),
-		errors.Is(err, sessionauth.ErrOtherSite):
-		// The detail names the switch and the action that allow the override,
-		// or the CSRF header that a console session request lacks.
-		return errorClass{status: http.StatusForbidden, title: titleForbidden, detail: err.Error(), code: "", args: nil}
-	case errors.Is(err, identity.ErrDenied), errors.Is(err, workspace.ErrUploadDenied):
-		return errorClass{
-			status: http.StatusForbidden,
-			title:  titleForbidden,
-			detail: titleForbidden,
-			code:   "",
-			args:   nil,
-		}
-	case errors.Is(err, errInvalidBody),
-		errors.Is(err, errInvalidQuery),
-		errors.Is(err, audit.ErrInvalidReason),
-		errors.Is(err, errRevealPathTooLong),
-		errors.Is(err, workspace.ErrInvalidName),
-		errors.Is(err, namespace.ErrInvalidName),
-		errors.Is(err, identity.ErrInvalidObject),
-		errors.Is(err, workspace.ErrInvalidState),
-		errors.Is(err, workspace.ErrStaleSerial),
-		errors.Is(err, workspace.ErrLineageMismatch),
-		errors.Is(err, workspace.ErrChecksumMismatch):
-		return errorClass{
-			status: http.StatusUnprocessableEntity, title: "unprocessable", detail: err.Error(), code: "", args: nil,
-		}
-	default:
-		return errorClass{
-			status: http.StatusInternalServerError, title: titleInternal, detail: titleInternal,
-			code: errcode.ServerInternal, args: nil,
-		}
+	if class, ok := classifyAccess(err); ok {
+		return class
+	}
+
+	if class, ok := classifyInvalid(err); ok {
+		return class
+	}
+
+	if class, ok := classifyInvalidState(err); ok {
+		return class
+	}
+
+	return errorClass{
+		status: http.StatusInternalServerError, title: titleInternal, detail: titleInternal,
+		code: errcode.ServerInternal, args: nil,
 	}
 }
 
