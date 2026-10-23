@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"io"
 	"log/slog"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -1262,17 +1263,16 @@ func TestWorkspacePermissionFlags(t *testing.T) {
 }
 
 // TestListPageErrorsNameTheParameter proves that a page value that is not a
-// number of 1 or more answers 422 with a detail that names the parameter and
-// its rule, and does not repeat the value.
+// whole number from 1 to the largest int answers 422 with a detail that names
+// the parameter and its rule, and does not repeat the value.
 func TestListPageErrorsNameTheParameter(t *testing.T) {
 	t.Parallel()
 
 	handler := newPagingHandler(t, allowAll())
 
-	const (
-		size   = "invalid query parameter: page[size] must be a number of 1 or more"
-		number = "invalid query parameter: page[number] must be a number of 1 or more"
-	)
+	rule := " must be a whole number from 1 to " + strconv.Itoa(math.MaxInt)
+	size := "invalid query parameter: page[size]" + rule
+	number := "invalid query parameter: page[number]" + rule
 
 	for _, tc := range []struct{ query, want string }{
 		{query: "page[size]=0", want: size},
