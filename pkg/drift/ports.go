@@ -6,6 +6,7 @@ import (
 
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/graph"
+	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/job"
 	"opendustpan.org/opendustpan/pkg/namespace"
 )
@@ -72,28 +73,49 @@ type PolicyStore interface {
 	EffectivePolicy(ctx context.Context, unit graph.Unit, collection string) (Policy, error)
 }
 
-// Checker starts drift checks through the job service. The REST route and the
-// schedule both call it, so the rules of a job (the gates, the manual lock and
-// the limits of open jobs) apply to a drift check as to any job. A change
-// freeze never holds a drift check, because a freeze holds only the phases
-// that change something.
+// CheckRequest asks for one drift check of a unit that a person starts.
+type CheckRequest struct {
+	// Unit is the unit reference: the tool, the namespace and the name of the
+	// unit. A stable unit ID on it is ignored: the job service finds its own.
+	Unit identity.Object
+	// Location and Pool are empty to take the defaults of the job service. A
+	// request that names them needs the extra actions that job.StartRequest
+	// names.
+	Location job.Location
+	Pool     string
+	// Reason is the text that the caller gives. The audit entry of the start
+	// holds it.
+	Reason string
+	// Channel, SourceIP, UserAgent and RequestID describe the request for the
+	// audit entry. The caller bounds them.
+	Channel   audit.Channel
+	SourceIP  string
+	UserAgent string
+	RequestID string
+}
+
+// Checker starts a drift check that a person asks for, through the job
+// service. The REST route calls it, so the rules of a job (the gates, the
+// manual lock and the limits of open jobs) apply to a drift check as to any
+// job. A change freeze never holds a drift check, because a freeze holds only
+// the phases that change something.
 //
 // The checks that a person starts need no setting. A setting only turns on the
 // checks that start on their own.
-//
-// A drift check needs two fields that job.StartRequest does not have yet: the
-// purpose drift check, and the source kind schedule for Scheduled. The slice
-// that adds the job service routes adds the source kind. The first slice of
-// drift detection adds the purpose.
 type Checker interface {
-	// Check starts a drift check of unit for the principal of actor and
-	// returns the job ID. The unit settings give the runner pool. The idempotency
-	// key is the unit ID and the minute, so a double click gives one job. A
-	// manual lock on the unit does not make Check fail: the job service queues
-	// the job with the wait reason locked. Check returns the other errors of
-	// job.Service.Start, for example job.ErrLimit, job.ErrUnsupported when the
-	// tool of the unit has no refresh-only plan, and job.ErrPolicyDenied.
-	Check(ctx context.Context, actor job.Actor, unit graph.Unit, reason string) (job.ID, error)
+	// Check starts a drift check of req.Unit for the principal of actor and
+	// returns the job ID. The idempotency key is the unit and the minute, so
+	// a double click gives one job. A manual lock on the unit does not make
+	// Check fail: the job service queues the job with the wait reason
+	// locked. Check returns the other errors of job.Service.Start, for
+	// example job.ErrLimit, job.ErrUnsupported when the tool of the unit has
+	// no refresh-only plan, and job.ErrPolicyDenied.
+	Check(ctx context.Context, actor job.Actor, req CheckRequest) (job.ID, error)
+}
+
+// ScheduledChecker starts the drift checks that the schedule owes. The slice
+// of the drift schedule implements it, and no adapter does yet.
+type ScheduledChecker interface {
 	// Scheduled starts the drift check of unit that the schedule owes for
 	// slot. The job has the source kind schedule and the principal of the
 	// schedule. The idempotency key is the unit ID and slot, so two instances

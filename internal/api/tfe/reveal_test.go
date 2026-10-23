@@ -210,7 +210,7 @@ func revealConfig(
 		Namespaces:     newTestNamespaces(t),
 		Workspaces:     revealWorkspaces{stubWorkspaces: stubWorkspaces{}},
 		BaseURL:        baseurl.Resolver{},
-		Audit:          store,
+		Audit:          orTestAudit(store),
 		Gate:           nil,
 		MaxStateBytes:  0,
 		OnAuditFailure: onFail,

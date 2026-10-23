@@ -653,6 +653,14 @@ func (h *Handler) listHistory(w http.ResponseWriter, r *http.Request, _ identity
 		return
 	}
 
+	// A stack that does not exist answers as GET on the stack does: 404 with
+	// the same body, not an empty list.
+	if _, err = h.stacks.Get(ctx, ref); err != nil {
+		h.writeError(ctx, w, err)
+
+		return
+	}
+
 	list, err := h.updates.History(ctx, ref, page)
 	if err != nil {
 		h.writeError(ctx, w, err)
@@ -681,7 +689,8 @@ func (h *Handler) listHistory(w http.ResponseWriter, r *http.Request, _ identity
 
 // exportStack returns the stack's latest checkpoint, or an empty deployment
 // when the stack has no state yet. A preview needs the base snapshot before
-// it runs, so this route serves it on every stack.
+// it runs, so this route serves it on every stack. The state of the service
+// secrets provider names the stack as it is called now, also after a rename.
 func (h *Handler) exportStack(w http.ResponseWriter, r *http.Request, _ identity.Principal, _ identity.Object) {
 	ctx := r.Context()
 
@@ -706,12 +715,16 @@ func (h *Handler) exportStack(w http.ResponseWriter, r *http.Request, _ identity
 		return
 	}
 
-	h.writeJSON(ctx, w, http.StatusOK, exportedDeployment{Deployment: cp.Deployment, Version: cp.SchemaVersion})
+	h.writeJSON(ctx, w, http.StatusOK, exportedDeployment{
+		Deployment: stack.RebindSecretsProvider(cp.Deployment, ref),
+		Version:    cp.SchemaVersion,
+	})
 }
 
 // exportStackVersion returns the checkpoint of one stack version, as
 // `stack export --version N` reads it. It answers 404 when version N does
-// not exist or has no checkpoint, and never falls back to an older one.
+// not exist or has no checkpoint, and never falls back to an older one. The
+// state of the service secrets provider names the stack as it is called now.
 func (h *Handler) exportStackVersion(
 	w http.ResponseWriter, r *http.Request, _ identity.Principal, _ identity.Object,
 ) {
@@ -736,7 +749,10 @@ func (h *Handler) exportStackVersion(
 		return
 	}
 
-	h.writeJSON(ctx, w, http.StatusOK, exportedDeployment{Deployment: cp.Deployment, Version: cp.SchemaVersion})
+	h.writeJSON(ctx, w, http.StatusOK, exportedDeployment{
+		Deployment: stack.RebindSecretsProvider(cp.Deployment, ref),
+		Version:    cp.SchemaVersion,
+	})
 }
 
 // leaseExpiresAt returns the lease expiry of the update in Unix seconds

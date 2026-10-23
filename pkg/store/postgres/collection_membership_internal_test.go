@@ -1,17 +1,13 @@
 package postgres
 
 import (
-	"crypto/rand"
-	"encoding/hex"
 	"errors"
-	"net/url"
 	"os"
 	"testing"
 	"time"
 
-	"github.com/jackc/pgx/v5"
-
 	"opendustpan.org/opendustpan/internal/ident"
+	"opendustpan.org/opendustpan/internal/pgtest"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/collection"
 	"opendustpan.org/opendustpan/pkg/inventory"
@@ -193,9 +189,9 @@ func membershipEntry(at time.Time, ns namespace.Name, action string) audit.Entry
 	}
 }
 
-// membershipURL creates a fresh schema in the database that the environment
-// names, and returns a URL that puts the store in that schema. It skips the
-// test when the environment names no database.
+// membershipURL returns a URL for a migrated schema in a database of its own,
+// cloned from the template database. It skips the test when the environment
+// names no database.
 func membershipURL(t *testing.T) string {
 	t.Helper()
 
@@ -204,36 +200,5 @@ func membershipURL(t *testing.T) string {
 		t.Skipf("set %s to run the PostgreSQL membership tests", membershipURLEnv)
 	}
 
-	suffix := make([]byte, 8)
-	if _, err := rand.Read(suffix); err != nil {
-		t.Fatalf("random schema name: %v", err)
-	}
-
-	name := "membership_" + hex.EncodeToString(suffix)
-
-	conn, err := pgx.Connect(t.Context(), base)
-	if err != nil {
-		t.Fatalf("connect: %v", err)
-	}
-
-	defer func() {
-		if closeErr := conn.Close(t.Context()); closeErr != nil {
-			t.Errorf("close: %v", closeErr)
-		}
-	}()
-
-	if _, execErr := conn.Exec(t.Context(), "CREATE SCHEMA "+pgx.Identifier{name}.Sanitize()); execErr != nil {
-		t.Fatalf("create schema: %v", execErr)
-	}
-
-	u, parseErr := url.Parse(base)
-	if parseErr != nil {
-		t.Fatalf("parse %s: %v", membershipURLEnv, parseErr)
-	}
-
-	q := u.Query()
-	q.Set("search_path", name)
-	u.RawQuery = q.Encode()
-
-	return u.String()
+	return pgtest.MigratedURL(t, base)
 }

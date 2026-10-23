@@ -291,10 +291,6 @@ type revealAudit struct {
 // but never the value, and counts the failure: the caller then answers 500
 // and no value.
 func (h *Handler) appendRevealEntry(ctx context.Context, a revealAudit) bool {
-	if h.audit == nil {
-		return true
-	}
-
 	ns, err := h.namespaces.Get(ctx, a.object.Namespace())
 	if err != nil {
 		h.failAudit(ctx)
