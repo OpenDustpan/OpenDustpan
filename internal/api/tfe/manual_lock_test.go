@@ -55,13 +55,15 @@ func TestLockRefusedByAManualLock(t *testing.T) {
 		{
 			name:   "lock on the unit",
 			target: manuallock.UnitTarget(collection.UnitRef{Namespace: "acme", Tool: "opentofu", Name: "web"}),
-			want:   "workspace acme/web has a manual lock by alice since 2026-10-19T10:00:00Z: change window closed",
+			want: "workspace acme/web has a manual lock by alice since 2026-10-19T10:00:00Z: change window closed. " +
+				"To remove the lock, the holder sends DELETE /api/inventory/unit-lock?unit=opentofu:acme/web.",
 		},
 		{
 			name:   "lock on the collection",
 			target: manuallock.CollectionTarget(collection.Ref{Namespace: "acme", Name: "payments"}),
 			want: "workspace acme/web is in collection acme/payments, which has a manual lock by alice since " +
-				"2026-10-19T10:00:00Z: change window closed",
+				"2026-10-19T10:00:00Z: change window closed. To remove the lock, the holder sends " +
+				"DELETE /api/dustpan/v1/namespaces/acme/collections/payments/lock.",
 		},
 	}
 
@@ -114,7 +116,10 @@ func checkManualDetail(t *testing.T, detail, want string) {
 		t.Errorf("detail = %q, want it to hold %q", detail, want)
 	}
 
-	if strings.Contains(detail, "unit") {
+	// The route that removes the lock may hold the word unit. The text before
+	// it is in the words of the CLI.
+	words, _, _ := strings.Cut(detail, ". To remove the lock")
+	if strings.Contains(words, "unit") {
 		t.Errorf("detail = %q: the CLI shows the word workspace, not unit", detail)
 	}
 
