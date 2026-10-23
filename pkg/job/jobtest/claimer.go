@@ -65,6 +65,10 @@ const (
 	longRenew = time.Hour
 	// lapses is how many short leases pass before a case reads an expiry.
 	lapses = 3
+	// firstLease is the lease of a claim that a case renews. It is long
+	// enough that a slow store cannot expire it before the renew, and the
+	// case waits for its end after the renew.
+	firstLease = expiryWait
 )
 
 // request returns a claim request of owner for the kinds ks.
@@ -160,13 +164,48 @@ func claimAgain(t *testing.T, h Harness, owner string, k durable.Kind) (job.Assi
 	}
 }
 
-// expired waits until the claim c is no longer live on the clock of the
-// store, without a claim by another owner: it claims a kind that holds no
-// operation until the lease passes.
+// expired waits on the local clock until the expiry that the store answered
+// for the claim c has passed, plus lapses polls, without a claim by another
+// owner. On one host the local clock and the clock of the store agree.
 func expired(t *testing.T, c job.PhaseClaim) {
 	t.Helper()
 
 	pause(t, time.Until(c.Claim.ExpiresAt)+lapses*pollEvery)
+}
+
+// lapse makes the claim of a expire: it shortens the lease of the claim to
+// shortLease and waits until the expiry that the store answered has passed,
+// plus lapses polls. A case claims with longRenew and calls lapse after its last write under the
+// claim. So no write of the case needs a short lease to be still live, and
+// a slow store cannot make a claim expire before the case wants it to: a
+// slow store makes the wait longer, not shorter.
+func lapse(t *testing.T, h Harness, a *job.Assignment) {
+	t.Helper()
+
+	shorten(t, h, a)
+	expired(t, a.Claim)
+}
+
+// shorten moves the expiry of the claim of a to shortLease from now, with
+// Renew, and keeps the new claim in a. A case that must request a cancel
+// before the claim expires calls it before the cancel, because Renew
+// refuses a claim with a requested cancel.
+func shorten(t *testing.T, h Harness, a *job.Assignment) {
+	t.Helper()
+
+	pc, err := h.Claimer.Renew(t.Context(), a.Claim, shortLease)
+	if err != nil {
+		t.Fatalf("Renew to a short lease = %v", err)
+	}
+
+	// An adapter that keeps the later expiry would make expired wait for the
+	// first lease, up to the timeout of the test, with no message.
+	if !pc.Claim.ExpiresAt.Before(a.Claim.Claim.ExpiresAt) {
+		t.Fatalf("Renew to %v did not move the expiry earlier: %v after %v", shortLease, pc.Claim.ExpiresAt,
+			a.Claim.Claim.ExpiresAt)
+	}
+
+	a.Claim = pc
 }
 
 // pause waits for d, or until the case ends.
@@ -412,7 +451,7 @@ func testClaimerPlanVersion(t *testing.T, h Harness) {
 
 	j := dispatched(t, h, f, plannedJob{unit: "", op: job.OperationApply, steps: nil})
 
-	a := claim(t, h, runnerOne, shortLease, runnerKind(&j))
+	a := claim(t, h, runnerOne, longRenew, runnerKind(&j))
 	if a.Job.Phases[0].StateVersion != svOne {
 		t.Fatalf("plan phase state version = %q, want %s", a.Job.Phases[0].StateVersion, svOne)
 	}
@@ -536,7 +575,7 @@ func testRenew(t *testing.T, h Harness) {
 
 	f := setUp(t, h)
 	j := dispatched(t, h, f, plannedJob{unit: "", op: job.OperationPlan, steps: nil})
-	a := claim(t, h, runnerOne, shortLease+shortLease, runnerKind(&j))
+	a := claim(t, h, runnerOne, firstLease, runnerKind(&j))
 
 	got, err := h.Claimer.Renew(t.Context(), a.Claim, longRenew)
 	if err != nil {
@@ -551,7 +590,7 @@ func testRenew(t *testing.T, h Harness) {
 	}
 
 	// The old lease is over, and the renewed claim still holds the phase.
-	pause(t, lapses*shortLease)
+	expired(t, a.Claim)
 
 	noWork(t, h, runnerTwo, runnerKind(&j), "of a renewed phase")
 
@@ -567,9 +606,9 @@ func testRenewLost(t *testing.T, h Harness) {
 
 	f := setUp(t, h)
 	j := dispatched(t, h, f, plannedJob{unit: "", op: job.OperationPlan, steps: nil})
-	first := claim(t, h, runnerOne, shortLease, runnerKind(&j))
+	first := claim(t, h, runnerOne, longRenew, runnerKind(&j))
 
-	expired(t, first.Claim)
+	lapse(t, h, &first)
 
 	// The claim ran out and no other claim took the phase.
 	if _, err := h.Claimer.Renew(t.Context(), first.Claim, time.Minute); !errors.Is(err, job.ErrClaimLost) ||
@@ -687,9 +726,9 @@ func testReleaseLost(t *testing.T, h Harness) {
 
 	f := setUp(t, h)
 	j := dispatched(t, h, f, plannedJob{unit: "", op: job.OperationPlan, steps: nil})
-	first := claim(t, h, runnerOne, shortLease, runnerKind(&j))
+	first := claim(t, h, runnerOne, longRenew, runnerKind(&j))
 
-	expired(t, first.Claim)
+	lapse(t, h, &first)
 
 	second, err := claimAgain(t, h, runnerTwo, runnerKind(&j))
 	if err != nil {
@@ -882,9 +921,9 @@ func testFinishLost(t *testing.T, h Harness) {
 
 	f := setUp(t, h)
 	j := dispatched(t, h, f, plannedJob{unit: "", op: job.OperationPlan, steps: nil})
-	first := claim(t, h, runnerOne, shortLease, runnerKind(&j))
+	first := claim(t, h, runnerOne, longRenew, runnerKind(&j))
 
-	expired(t, first.Claim)
+	lapse(t, h, &first)
 
 	second, err := claimAgain(t, h, runnerTwo, runnerKind(&j))
 	if err != nil {
@@ -1020,9 +1059,9 @@ func testClaimerTakeover(t *testing.T, h Harness) {
 
 	f := setUp(t, h)
 	j := dispatched(t, h, f, plannedJob{unit: "", op: job.OperationPlan, steps: nil})
-	first := claim(t, h, runnerOne, shortLease, runnerKind(&j))
+	first := claim(t, h, runnerOne, longRenew, runnerKind(&j))
 
-	expired(t, first.Claim)
+	lapse(t, h, &first)
 
 	second, err := claimAgain(t, h, runnerTwo, runnerKind(&j))
 	if err != nil {
@@ -1060,10 +1099,10 @@ func testTakeoverAfterChange(t *testing.T, h Harness) {
 
 	for i, tc := range tests {
 		j := dispatched(t, h, f, plannedJob{unit: unitName(i), op: job.OperationRefresh, steps: changeSteps()})
-		a := claim(t, h, runnerOne, shortLease, runnerKind(&j))
+		a := claim(t, h, runnerOne, longRenew, runnerKind(&j))
 		record(t, h, &a, tc.record(&a))
 
-		expired(t, a.Claim)
+		lapse(t, h, &a)
 
 		// The phase has no other claimer to take, so the claim fails the phase
 		// and finds no work.
@@ -1099,15 +1138,15 @@ func testTakeoverNoChange(t *testing.T, h Harness) {
 
 	// The claim looks for another phase after it fails the first one.
 	failed := dispatched(t, h, f, plannedJob{unit: "unit-0", op: job.OperationRefresh, steps: changeSteps()})
-	a := claim(t, h, runnerOne, shortLease, runnerKind(&failed))
+	a := claim(t, h, runnerOne, longRenew, runnerKind(&failed))
 	record(t, h, &a, beginApply(&a))
 
 	other := dispatched(t, h, f, plannedJob{unit: "unit-1", op: job.OperationRefresh, steps: changeSteps()})
-	b := claim(t, h, runnerOne, shortLease, runnerKind(&other))
+	b := claim(t, h, runnerOne, longRenew, runnerKind(&other))
 	record(t, h, &b, ended(&b, stepPrepare))
 
-	expired(t, a.Claim)
-	expired(t, b.Claim)
+	lapse(t, h, &a)
+	lapse(t, h, &b)
 
 	got, err := claimAgain(t, h, runnerTwo, runnerKind(&other))
 	if err != nil {
@@ -1152,7 +1191,7 @@ func testTakeoverDeliver(t *testing.T, h Harness) {
 	}
 
 	// A later claim after a release is a claim after the first.
-	b := claim(t, h, "instance-b", shortLease, job.KindWriteBack)
+	b := claim(t, h, "instance-b", longRenew, job.KindWriteBack)
 	if b.Claim.Job != first.ID || !job.NeedsCommitLookup(&b.Job.Phases[0]) {
 		t.Fatalf("second claim = job %s, %d claims; want %s with a commit lookup", b.Claim.Job, b.Job.Phases[0].Claims,
 			first.ID)
@@ -1161,7 +1200,7 @@ func testTakeoverDeliver(t *testing.T, h Harness) {
 	// The commit began, and the instance stopped. The deliver phase has no
 	// step with a spec, so the takeover runs again, with the lookup.
 	record(t, h, &b, begun(&b, job.WriteBackStepCommit))
-	expired(t, b.Claim)
+	lapse(t, h, &b)
 
 	c, err := claimAgain(t, h, "instance-c", job.KindWriteBack)
 	if err != nil {

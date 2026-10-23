@@ -26,6 +26,8 @@ import (
 	tfeapi "opendustpan.org/opendustpan/internal/api/tfe"
 	tofuhttpapi "opendustpan.org/opendustpan/internal/api/tofuhttp"
 	"opendustpan.org/opendustpan/internal/baseurl"
+	"opendustpan.org/opendustpan/internal/outputsharesvc"
+	registryservice "opendustpan.org/opendustpan/internal/registry/service"
 	"opendustpan.org/opendustpan/internal/token"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/blob"
@@ -44,9 +46,9 @@ import (
 	"opendustpan.org/opendustpan/pkg/notify"
 	"opendustpan.org/opendustpan/pkg/notify/sinks"
 	"opendustpan.org/opendustpan/pkg/objectcontext"
+	"opendustpan.org/opendustpan/pkg/outputshare"
 	"opendustpan.org/opendustpan/pkg/profile"
 	"opendustpan.org/opendustpan/pkg/registry"
-	registryservice "opendustpan.org/opendustpan/pkg/registry/service"
 	"opendustpan.org/opendustpan/pkg/savedview"
 	"opendustpan.org/opendustpan/pkg/secret"
 	"opendustpan.org/opendustpan/pkg/session"
@@ -258,7 +260,7 @@ func coveragePulumiRoutes(tb testing.TB, namespaces *namespace.Service) []RouteR
 		// The gate is irrelevant here: no request is ever served.
 		MaxBodyBytesInFlight: 0,
 		Gate:                 nil,
-		Audit:                nil,
+		Audit:                coverageAuditStore{},
 		OnAuditFailure:       nil,
 		DenialLimiter:        nil,
 	})
@@ -322,6 +324,11 @@ func (coverageStackStore) PurgeStack(
 
 func (coverageStackStore) ListStacks(_ context.Context, _ stack.Filter) ([]stack.Stack, error) {
 	return nil, nil
+}
+
+// QueryStacks implements stack.Store over the lists of ListStacks.
+func (coverageStackStore) QueryStacks(ctx context.Context, q stack.PageQuery) ([]stack.Stack, error) {
+	return stack.ListPage(ctx, coverageStackStore{}.ListStacks, q)
 }
 
 func (coverageStackStore) RenameStack(
@@ -411,7 +418,7 @@ func coverageTFERoutes(tb testing.TB, namespaces *namespace.Service) []RouteRef 
 		BaseURL:        baseurl.Resolver{},
 		Gate:           nil,
 		MaxStateBytes:  0,
-		Audit:          nil,
+		Audit:          coverageAuditStore{},
 		OnAuditFailure: nil,
 		DenialLimiter:  nil,
 		Registry: &tfeapi.RegistryConfig{
@@ -441,7 +448,7 @@ func coverageTofuHTTPRoutes(tb testing.TB, namespaces *namespace.Service) []Rout
 		Logger:         slog.New(slog.DiscardHandler),
 		Workspaces:     coverageTofuHTTPWorkspaces{},
 		Namespaces:     namespaces,
-		Audit:          nil,
+		Audit:          coverageAuditStore{},
 		Gate:           nil,
 		OnAuditFailure: nil,
 		DenialLimiter:  nil,
@@ -550,6 +557,15 @@ func (coverageWorkspaces) GetByID(_ context.Context, _ workspace.ID) (workspace.
 
 func (coverageWorkspaces) List(_ context.Context, _ namespace.Name) ([]workspace.Workspace, error) {
 	return nil, nil
+}
+
+func (coverageWorkspaces) Query(ctx context.Context, q workspace.ListQuery) (workspace.ListPage, error) {
+	all, err := coverageWorkspaces{}.List(ctx, q.Namespace)
+	if err != nil {
+		return workspace.ListPage{}, err
+	}
+
+	return workspace.PageWorkspaces(all, q), nil
 }
 
 func (coverageWorkspaces) LockForJob(
@@ -695,7 +711,16 @@ func coverageInventoryRoutes(tb testing.TB, namespaces *namespace.Service) []Rou
 		tb.Fatalf("manual lock service: %v", err)
 	}
 
+	sharing, err := outputsharesvc.New(outputsharesvc.Config{
+		Settings: coverageOutputSharing{}, Namespaces: coverageNamespaceStore{}, Authorizer: identity.AdminOnly{},
+		Now: nil,
+	})
+	if err != nil {
+		tb.Fatalf("output sharing service: %v", err)
+	}
+
 	handler, err := inventoryapi.NewHandler(inventoryapi.Config{
+		OutputSharing: sharing,
 		Views:         coverageViews(tb),
 		Locks:         locks,
 		PublicURL:     "",
@@ -712,7 +737,7 @@ func coverageInventoryRoutes(tb testing.TB, namespaces *namespace.Service) []Rou
 		Sessions:      nil,
 		Logger:        slog.New(slog.DiscardHandler),
 		Now:           nil,
-		Audit:         nil, OnAuditFailure: nil, DenialLimiter: nil,
+		Audit:         coverageAuditStore{}, OnAuditFailure: nil, DenialLimiter: nil,
 		StateGuard: nil,
 	})
 	if err != nil {
@@ -720,6 +745,20 @@ func coverageInventoryRoutes(tb testing.TB, namespaces *namespace.Service) []Rou
 	}
 
 	return inventoryRefs(handler.Routes())
+}
+
+// coverageOutputSharing is an outputshare.Settings that reads nobody and
+// stores nothing. The coverage check only lists the routes.
+type coverageOutputSharing struct{}
+
+func (coverageOutputSharing) Setting(_ context.Context, _ namespace.Name) (outputshare.Default, error) {
+	return outputshare.DefaultNobody, nil
+}
+
+func (coverageOutputSharing) SetSetting(
+	_ context.Context, _ namespace.Name, _ outputshare.Default, _ namespace.Fence, _ audit.Entry,
+) error {
+	return nil
 }
 
 // coverageContextRoutes returns the context adapter's route table.
@@ -744,7 +783,7 @@ func coverageContextRoutes(tb testing.TB, namespaces *namespace.Service) []Route
 		Authorizer:    coverageAuthorizer{},
 		Sessions:      nil,
 		Logger:        slog.New(slog.DiscardHandler),
-		Audit:         nil, OnAuditFailure: nil, DenialLimiter: nil,
+		Audit:         coverageAuditStore{}, OnAuditFailure: nil, DenialLimiter: nil,
 	})
 	if err != nil {
 		tb.Fatalf("context handler: %v", err)
@@ -770,7 +809,7 @@ func coverageJobRoutes(tb testing.TB, namespaces *namespace.Service) []RouteRef 
 		Starter:        struct{ job.Starter }{nil},
 		Authenticator:  coverageAuthenticator{},
 		Authorizer:     coverageAuthorizer{},
-		Audit:          nil,
+		Audit:          coverageAuditStore{},
 		OnAuditFailure: nil,
 		DenialLimiter:  nil,
 		Sessions:       nil,
@@ -801,7 +840,7 @@ func coverageDriftRoutes(tb testing.TB, namespaces *namespace.Service) []RouteRe
 		Checker:        struct{ drift.Checker }{nil},
 		Authenticator:  coverageAuthenticator{},
 		Authorizer:     coverageAuthorizer{},
-		Audit:          nil,
+		Audit:          coverageAuditStore{},
 		OnAuditFailure: nil,
 		DenialLimiter:  nil,
 		Sessions:       nil,
@@ -847,7 +886,7 @@ func coverageProfileRoutes(tb testing.TB) []RouteRef {
 		Idempotency:   nil,
 		Logger:        slog.New(slog.DiscardHandler),
 		Now:           nil,
-		Audit:         nil, Namespaces: nil, OnAuditFailure: nil, DenialLimiter: nil,
+		Audit:         coverageAuditStore{}, Namespaces: nil, OnAuditFailure: nil, DenialLimiter: nil,
 	})
 	if err != nil {
 		tb.Fatalf("profile handler: %v", err)
@@ -888,7 +927,7 @@ func coverageSinkRoutes(tb testing.TB) []RouteRef {
 		Sessions:       nil,
 		Idempotency:    nil,
 		Logger:         slog.New(slog.DiscardHandler),
-		Audit:          nil,
+		Audit:          coverageAuditStore{},
 		Namespaces:     nil,
 		OnAuditFailure: nil,
 		DenialLimiter:  nil,
@@ -1017,6 +1056,16 @@ func (coverageReader) ListUnits(_ context.Context, _ namespace.Name) ([]coreinve
 	return nil, nil
 }
 
+// QueryUnits implements coreinventory.Reader over the entries of ListUnits.
+func (coverageReader) QueryUnits(ctx context.Context, q coreinventory.UnitQuery) ([]coreinventory.Entry, error) {
+	all, err := coverageReader{}.ListUnits(ctx, q.Namespace)
+	if err != nil {
+		return nil, err
+	}
+
+	return coreinventory.PageUnits(all, q), nil
+}
+
 func (coverageReader) GetUnit(_ context.Context, _ string) (coreinventory.Entry, error) {
 	return coreinventory.Entry{}, coreinventory.ErrUnitNotFound
 }
@@ -1089,6 +1138,12 @@ type coverageAuditStore struct{}
 func (coverageAuditStore) Append(
 	_ context.Context, _ namespace.Fence, _ audit.Entry,
 ) (audit.Entry, error) {
+	var zero audit.Entry
+
+	return zero, nil
+}
+
+func (coverageAuditStore) AppendServer(_ context.Context, _ audit.Entry) (audit.Entry, error) {
 	var zero audit.Entry
 
 	return zero, nil
@@ -1258,7 +1313,7 @@ func coverageServerRoutes(tb testing.TB) []RouteRef {
 		Principals:       nil,
 		Access:           nil,
 		Tokens:           nil,
-		Audit:            nil,
+		Audit:            coverageAuditStore{},
 		OnAuditFailure:   nil,
 		DeletedUnits:     nil,
 		AuditChain:       nil,
@@ -1388,6 +1443,7 @@ func CoverageAllowlist() []AllowEntry {
 		manualLockAllowEntries(),
 		jobAllowEntries(),
 		driftAllowEntries(),
+		outputSharingAllowEntries(),
 		preferencesAllowEntries(),
 		savedViewAllowEntries(),
 		gitHostAllowEntries(),
@@ -2477,6 +2533,25 @@ func driftAllowEntries() []AllowEntry {
 	}
 }
 
+// outputSharingAllowEntries covers the routes of the output sharing setting
+// of a namespace. No CLI calls them: the console and the clients of the API
+// do. The setting step of TestOutputSharingRules reads the setting of a new
+// namespace, refuses a change by a viewer and a value that is not valid, and
+// changes it as the admin.
+func outputSharingAllowEntries() []AllowEntry {
+	const (
+		path = "/api/dustpan/v1/namespaces/{namespace}/output-sharing"
+		test = "TestOutputSharingRules"
+		why  = "Console and client route: no CLI calls it. The setting step of " + test +
+			" reads and changes the setting through the API."
+	)
+
+	return []AllowEntry{
+		{Method: http.MethodGet, Path: path, CoveringTest: test, Reason: why},
+		{Method: http.MethodPut, Path: path, CoveringTest: test, Reason: why},
+	}
+}
+
 // savedViewAllowEntries covers the routes of the saved views. No CLI calls
 // them: the console and the clients of the API do. The steps of
 // TestSavedViewsAPI call each of them with the personal token of a person.
@@ -2629,9 +2704,17 @@ func coverageRegistryRoutes(tb testing.TB) []RouteRef {
 	}
 
 	handler, err := registryapi.NewHandler(registryapi.Config{
-		Service: svc, Authenticator: coverageAuthenticator{}, Authorizer: coverageAuthorizer{},
-		MaxUploadBytes: registryservice.DefaultMaxArchiveBytes, Audit: nil, Namespaces: nil, OnAuditFailure: nil,
-		DenialLimiter: nil, Sessions: nil, Idempotency: nil, Logger: slog.New(slog.DiscardHandler),
+		Service:        svc,
+		Authenticator:  coverageAuthenticator{},
+		Authorizer:     coverageAuthorizer{},
+		MaxUploadBytes: registryservice.DefaultMaxArchiveBytes,
+		Audit:          coverageAuditStore{},
+		Namespaces:     nil,
+		OnAuditFailure: nil,
+		DenialLimiter:  nil,
+		Sessions:       nil,
+		Idempotency:    nil,
+		Logger:         slog.New(slog.DiscardHandler),
 	})
 	if err != nil {
 		tb.Fatalf("registry handler: %v", err)

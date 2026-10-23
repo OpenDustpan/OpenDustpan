@@ -118,6 +118,13 @@ func (e Entry) since(s State) (time.Time, bool) {
 	}
 }
 
+// derived reports whether since can find the state s in an entry. A store
+// that filters on the states in its own query keeps this list and since in
+// step.
+func derived(s State) bool {
+	return s == StateLocked
+}
+
 // earlier returns the earlier of two times.
 func earlier(a, b time.Time) time.Time {
 	if b.Before(a) {

@@ -80,7 +80,7 @@ func testLateTrailer(t *testing.T, h Harness) {
 	j.Phases[0].Kind = job.PhaseDeliver
 
 	stored := create(t, h, f, j, dispatchOf(j))
-	claimOp(t, h, "instance-a", job.KindWriteBack, shortLease)
+	first := claimOp(t, h, "instance-a", job.KindWriteBack, longRenew)
 	stored = claimed(t, h, f, &stored, "instance-a")
 
 	// The commit lands, and instance-a stops before it records it. The
@@ -90,6 +90,7 @@ func testLateTrailer(t *testing.T, h Harness) {
 		"a final version before the delivery is known": version(f.unit, "sv-ci", committedAt.Add(time.Second), true),
 	})
 
+	shortenOp(t, h, first.Claim)
 	claimAfterExpiry(t, h, "instance-b", job.KindWriteBack)
 	stored = claimed(t, h, f, &stored, "instance-b")
 
@@ -124,7 +125,7 @@ func testPlanClaimRecordsVersion(t *testing.T, h Harness) {
 	j := newJob(f.unit, job.OperationApply, "")
 	stored := create(t, h, f, j, dispatchOf(j))
 
-	claimOp(t, h, "runner-1", job.RunnerKind(j.Spec.Pool), shortLease)
+	first := claimOp(t, h, "runner-1", job.RunnerKind(j.Spec.Pool), longRenew)
 	stored = claimed(t, h, f, &stored, "runner-1")
 
 	if stored.Phases[0].StateVersion != svOne {
@@ -134,6 +135,7 @@ func testPlanClaimRecordsVersion(t *testing.T, h Harness) {
 	// A state write lands while the claim is lost. The takeover plans again
 	// on the new version.
 	setVersion(t, h, f, svTwo)
+	shortenOp(t, h, first.Claim)
 	claimAfterExpiry(t, h, "runner-2", job.RunnerKind(j.Spec.Pool))
 
 	stored = claimed(t, h, f, &stored, "runner-2")

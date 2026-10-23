@@ -2,9 +2,15 @@ package postgres
 
 import (
 	"context"
+	"crypto/rand"
+	"errors"
 	"fmt"
+	"math/big"
+	"strconv"
+	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/audit"
@@ -139,17 +145,152 @@ func journalRevocation(ctx context.Context, q *db.Queries, rev revocation, e aud
 	return nil
 }
 
-// lockRevocationJournal locks the journal in share mode for the rest of tx.
-// A write to the journal waits until tx ends, and tx waits for the writes in
-// flight, so the replay reads every journaled revocation and no later one
-// lands in the schema that the swap drops.
-func lockRevocationJournal(ctx context.Context, tx pgx.Tx, live string) error {
-	query := "LOCK TABLE " + revocationJournal(live) + " IN SHARE MODE"
-	if _, err := tx.Exec(ctx, query); err != nil {
-		return fmt.Errorf("lock revocation journal: %w", err)
+// lockSwap takes the swap lock in ACCESS EXCLUSIVE mode for the rest of the
+// swap transaction tx. The lock is the revocation journal, in the control
+// schema, which the swap never renames. A swap takes it before it touches a
+// live table:
+//
+//   - A snapshot read takes the same lock in ACCESS SHARE mode before its
+//     snapshot (see inSnapshotTx). So the swap waits for each snapshot read in
+//     flight, while it holds no live table, and a snapshot read that starts
+//     later waits for the swap to commit. A read cannot deadlock with the
+//     swap, and it cannot see the swapped tables without the changes of the
+//     swap.
+//   - A write to the journal waits until tx ends, and tx waits for the writes
+//     in flight, so the replay reads every journaled revocation and no later
+//     one lands in the schema that the swap drops.
+//
+// A waiting ACCESS EXCLUSIVE request makes PostgreSQL queue every later
+// snapshot read behind it. So the swap never waits long: each attempt has a
+// short lock timeout, and a failed attempt leaves the queue. The swap tries
+// again, with backoff and jitter, until ctx ends. Then it returns an error
+// that names the cause: a long snapshot read, for example a backup.
+func lockSwap(ctx context.Context, tx pgx.Tx, live string) error {
+	var previous string
+	if err := tx.QueryRow(ctx, "SELECT current_setting('lock_timeout')").Scan(&previous); err != nil {
+		return fmt.Errorf("read lock timeout: %w", err)
+	}
+
+	query := "LOCK TABLE " + swapLockTable(live) + " IN ACCESS EXCLUSIVE MODE"
+	backoff := swapLockBackoffStart
+
+	for {
+		err := tryLockSwap(ctx, tx, query)
+		if err == nil {
+			// The attempt set the timeout for this transaction. Put the
+			// earlier value back for the rest of the swap.
+			if _, resetErr := tx.Exec(ctx, "SELECT set_config('lock_timeout', $1, true)", previous); resetErr != nil {
+				return fmt.Errorf("restore lock timeout: %w", resetErr)
+			}
+
+			return nil
+		}
+
+		// The context can end inside the attempt, as a wait or as a driver
+		// error. Then the lock is still held by a long read.
+		if ctx.Err() != nil {
+			return errSwapLockBusy(ctx)
+		}
+
+		if !isLockTimeout(err) {
+			return fmt.Errorf("lock restore swap: %w", err)
+		}
+
+		select {
+		case <-time.After(swapJitter(backoff)):
+		case <-ctx.Done():
+			return errSwapLockBusy(ctx)
+		}
+
+		backoff = min(backoff*backoffGrowth, swapLockBackoffMax)
+	}
+}
+
+// swapJitter returns a wait from half of backoff to backoff. The jitter keeps
+// two restores from retrying in step. When the random source fails, it
+// returns half of backoff, with no jitter.
+func swapJitter(backoff time.Duration) time.Duration {
+	half := backoff / backoffJitterDivisor
+
+	n, err := rand.Int(rand.Reader, big.NewInt(int64(half)+1))
+	if err != nil {
+		return half
+	}
+
+	return half + time.Duration(n.Int64())
+}
+
+// errSwapLockBusy returns the error of a swap that did not get the lock
+// before ctx ended.
+func errSwapLockBusy(ctx context.Context) error {
+	return fmt.Errorf("lock restore swap: a snapshot read, for example a backup, holds the lock;"+
+		" wait for it to end, then run the restore again: %w", context.Cause(ctx))
+}
+
+// The timing of the attempts of lockSwap. An attempt waits at most
+// swapLockTimeout, so a snapshot read waits at most that long behind a
+// waiting swap.
+const (
+	swapLockTimeout      = 100 * time.Millisecond
+	swapLockBackoffStart = 50 * time.Millisecond
+	swapLockBackoffMax   = time.Second
+	backoffGrowth        = 2
+	backoffJitterDivisor = 2
+)
+
+// sqlstateLockNotAvailable is the SQLSTATE of a lock wait that ended at the
+// lock timeout.
+const sqlstateLockNotAvailable = "55P03"
+
+// isLockTimeout reports whether err is a lock wait that ended at the lock
+// timeout.
+func isLockTimeout(err error) bool {
+	var pgErr *pgconn.PgError
+
+	return errors.As(err, &pgErr) && pgErr.Code == sqlstateLockNotAvailable
+}
+
+// tryLockSwap runs one attempt of lockSwap in a savepoint, so that a lock
+// timeout does not end tx.
+func tryLockSwap(ctx context.Context, tx pgx.Tx, query string) (err error) {
+	attempt, err := tx.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin lock attempt: %w", err)
+	}
+
+	defer func() {
+		if err != nil {
+			//nolint:errcheck // The attempt failed; its error is the one to report.
+			_ = attempt.Rollback(context.WithoutCancel(ctx))
+		}
+	}()
+
+	timeout := strconv.FormatInt(swapLockTimeout.Milliseconds(), 10) + "ms"
+
+	if _, err = attempt.Exec(ctx, "SELECT set_config('lock_timeout', $1, true)", timeout); err != nil {
+		return fmt.Errorf("set lock timeout: %w", err)
+	}
+
+	if _, err = attempt.Exec(ctx, query); err != nil {
+		return err //nolint:wrapcheck // The caller reads the SQLSTATE.
+	}
+
+	if err = attempt.Commit(ctx); err != nil {
+		return fmt.Errorf("release lock attempt: %w", err)
 	}
 
 	return nil
+}
+
+// swapLockTable returns the qualified name of the table that serves as the
+// swap lock: the revocation journal. The name is qualified, so a table of the
+// same name in the live schema cannot take its place.
+//
+// A future ALTER TABLE of maintenance_revocations takes ACCESS EXCLUSIVE on
+// it, and then every snapshot read waits until that ALTER ends. Keep such a
+// change short, or give the swap lock a table of its own.
+func swapLockTable(live string) string {
+	return revocationJournal(live)
 }
 
 // revocationJournal returns the qualified name of the journal: the table

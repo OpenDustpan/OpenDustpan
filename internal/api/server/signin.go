@@ -313,7 +313,7 @@ func (h *Handler) startSignIn(w http.ResponseWriter, r *http.Request, _ identity
 		return
 	}
 
-	returnPath := r.URL.Query().Get("return")
+	returnPath := queryOf(r).Get("return")
 	if returnPath == "" {
 		returnPath = defaultReturnPath
 	}
@@ -410,12 +410,13 @@ func refused(reason string) (callback, string) {
 // gives, or the reason of a refusal.
 func (h *Handler) callbackIdentity(r *http.Request, provider SignInProvider) (callback, string) {
 	ctx := r.Context()
-	q := r.URL.Query()
+	q := queryOf(r)
 
 	if q.Get("error") != "" {
 		return refused(reasonProviderError)
 	}
 
+	//nolint:forbidigo // An identity provider calls the sign-in callback, which is outside the description.
 	cookie, err := r.Cookie(SignInCookie)
 	if err != nil {
 		return refused(reasonState)
@@ -594,18 +595,16 @@ func (h *Handler) refuseSignIn(w http.ResponseWriter, r *http.Request, rf refusa
 		outcome = audit.OutcomeDenied
 	}
 
-	if h.audit != nil {
-		e := signInEntry(r, subject, idpSubject, session.ActionSignIn)
-		e.At = h.signIn.sessions.Now()
-		e.Namespace = audit.ServerScope
-		e.Kind = audit.KindChange
-		e.Outcome = outcome
-		e.Object = "sign-in-provider:" + providerID
-		e.Changes = []audit.Change{{Key: "reason", Old: nil, New: reason, Layer: "", TakesEffect: ""}}
+	e := signInEntry(r, subject, idpSubject, session.ActionSignIn)
+	e.At = h.signIn.sessions.Now()
+	e.Namespace = audit.ServerScope
+	e.Kind = audit.KindChange
+	e.Outcome = outcome
+	e.Object = "sign-in-provider:" + providerID
+	e.Changes = []audit.Change{{Key: "reason", Old: nil, New: reason, Layer: "", TakesEffect: ""}}
 
-		if _, appendErr := h.audit.AppendServer(ctx, e); appendErr != nil {
-			h.failAudit(ctx)
-		}
+	if _, appendErr := h.audit.AppendServer(ctx, e); appendErr != nil {
+		h.failAudit(ctx)
 	}
 
 	if errors.Is(err, errSignInRefused) {
@@ -622,7 +621,7 @@ func signInEntry(r *http.Request, subject, idpSubject, action string) audit.Entr
 	return audit.Entry{
 		At: time.Time{}, Namespace: "", Subject: subject, IDPSubject: idpSubject, TokenID: "", Action: action,
 		Object: "", Version: "", ValuePath: "", ValueCount: nil, Changes: nil, SourceIP: clientip.String(r),
-		UserAgent: truncateUserAgent(r.UserAgent()), Channel: audit.ChannelConsole, Kind: "", Outcome: "",
+		UserAgent: truncateUserAgent(userAgent(r)), Channel: audit.ChannelConsole, Kind: "", Outcome: "",
 		RequestID: requestid.FromContext(r.Context()), ObjectID: "", PrevHash: "", Hash: "", Sequence: 0,
 		FenceVersion:  0,
 		Reason:        "",

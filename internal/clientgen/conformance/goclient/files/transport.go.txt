@@ -15,6 +15,7 @@ import (
 	"mime"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 )
 
@@ -25,8 +26,9 @@ const maxResponseBytes = 16 << 20
 // client keeps in the message of an error.
 const maxErrorTextBytes = 512
 
-// ErrInvalidResponse means that the server answered with a success status and
-// a body that does not match the schema of the description.
+// ErrInvalidResponse means that the server answered with a success status that
+// the description does not give for the operation, or with a body that does
+// not match the schema of the description.
 var ErrInvalidResponse = errors.New("opendustpan: the answer does not match the description")
 
 // ErrOption means that a call option does not fit the operation, for example
@@ -58,6 +60,7 @@ type request struct {
 	idempotent   bool
 	ifMatch      ifMatchMode
 	etag         bool
+	statuses     []int
 }
 
 // Client calls the API of one server.
@@ -192,6 +195,10 @@ func (c *Client) do(ctx context.Context, req *request, opts []CallOption, out an
 
 	if httpResp.StatusCode < 200 || httpResp.StatusCode > 299 {
 		return resp, errorOf(httpResp, body)
+	}
+
+	if !slices.Contains(req.statuses, httpResp.StatusCode) {
+		return resp, fmt.Errorf("%w: %s: the status is %d", ErrInvalidResponse, req.operation, httpResp.StatusCode)
 	}
 
 	if out == nil {

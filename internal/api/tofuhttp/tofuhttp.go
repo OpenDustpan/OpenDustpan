@@ -87,7 +87,7 @@ type Config struct {
 	Logger        *slog.Logger
 	Workspaces    WorkspaceService
 	Namespaces    NamespaceService
-	// Audit receives the entry of each override a write uses. Nil writes none.
+	// Audit receives the entry of each override a write uses. It is required.
 	Audit audit.Store
 	// Gate bounds concurrent large bodies by bytes held at once.
 	Gate *bodygate.Gate
@@ -140,6 +140,8 @@ type Route struct {
 // NewHandler returns a Handler. Every Config field is required.
 func NewHandler(cfg Config) (*Handler, error) {
 	switch {
+	case cfg.Audit == nil:
+		return nil, fmt.Errorf("%w: audit store", ErrMissingDependency)
 	case cfg.Authenticator == nil:
 		return nil, fmt.Errorf("%w: authenticator", ErrMissingDependency)
 	case cfg.Authorizer == nil:
@@ -152,6 +154,11 @@ func NewHandler(cfg Config) (*Handler, error) {
 		return nil, fmt.Errorf("%w: namespaces", ErrMissingDependency)
 	}
 
+	recorder, err := refusal.New(cfg.Authorizer, cfg.Audit, cfg.Namespaces, cfg.Logger, cfg.OnAuditFailure)
+	if err != nil {
+		return nil, fmt.Errorf("denial recorder: %w", err)
+	}
+
 	h := &Handler{
 		authn:      cfg.Authenticator,
 		authz:      cfg.Authorizer,
@@ -159,12 +166,10 @@ func NewHandler(cfg Config) (*Handler, error) {
 		ws:         cfg.Workspaces,
 		namespaces: cfg.Namespaces,
 		audit:      cfg.Audit,
-		guard: refusal.New(cfg.Authorizer, cfg.Audit, cfg.Namespaces, cfg.Logger,
-			cfg.OnAuditFailure).WithLimiter(cfg.DenialLimiter).
-			WithSurface("tofu-http"),
-		gate:   cfg.Gate,
-		mux:    newPatternMux(),
-		routes: nil,
+		guard:      recorder.WithLimiter(cfg.DenialLimiter).WithSurface("tofu-http"),
+		gate:       cfg.Gate,
+		mux:        newPatternMux(),
+		routes:     nil,
 
 		onAuditFailure: cfg.OnAuditFailure,
 	}

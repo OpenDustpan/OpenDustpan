@@ -88,7 +88,7 @@ type reauthenticateResponse struct {
 // authentication at the identity provider (fresh=1). Another value of the
 // parameter returns errFreshParam.
 func freshParam(r *http.Request) (bool, error) {
-	switch r.URL.Query().Get("fresh") {
+	switch queryOf(r).Get("fresh") {
 	case "":
 		return false, nil
 	case "1":

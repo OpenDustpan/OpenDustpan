@@ -193,6 +193,16 @@ func (m *memStore) ListUnits(_ context.Context, ns namespace.Name) ([]inventory.
 	return out, nil
 }
 
+// QueryUnits implements inventory.Reader over the entries of ListUnits.
+func (m *memStore) QueryUnits(ctx context.Context, q inventory.UnitQuery) ([]inventory.Entry, error) {
+	all, err := m.ListUnits(ctx, q.Namespace)
+	if err != nil {
+		return nil, err
+	}
+
+	return inventory.PageUnits(all, q), nil
+}
+
 // ListDeletedUnits implements inventory.DeletedReader, ordered by tool, then
 // name, then unit ID.
 func (m *memStore) ListDeletedUnits(_ context.Context, ns namespace.Name) ([]inventory.DeletedEntry, error) {
@@ -312,6 +322,16 @@ func (m *memStore) ListWorkspaces(_ context.Context, ns namespace.Name) ([]works
 	})
 
 	return out, nil
+}
+
+// QueryWorkspaces implements workspace.Store over the list of ListWorkspaces.
+func (m *memStore) QueryWorkspaces(ctx context.Context, q workspace.ListQuery) (workspace.ListPage, error) {
+	all, err := m.ListWorkspaces(ctx, q.Namespace)
+	if err != nil {
+		return workspace.ListPage{}, err
+	}
+
+	return workspace.PageWorkspaces(all, q), nil
 }
 
 func (m *memStore) SaveWorkspace(_ context.Context, w workspace.Workspace, fence namespace.Fence) error {
@@ -1571,7 +1591,7 @@ func (f fixture) push(t *testing.T, in workspace.NewState, content string) error
 		f.ws.ID,
 		"alice",
 		in,
-		authority(forcedOnly(), nil),
+		authority(forcedOnly(), noRecord),
 	)
 	if err != nil {
 		return err

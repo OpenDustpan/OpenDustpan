@@ -360,14 +360,37 @@ func (s *Store) CurrentStateVersion(
 func (s *Store) ListStateVersions(
 	ctx context.Context, id workspace.ID, page workspace.Page,
 ) ([]workspace.StateVersion, int, error) {
+	versions := []workspace.StateVersion{}
+
+	var total int
+
+	// One snapshot, so the statements of the read see one state.
+	err := s.inSnapshotTx(ctx, func(q *db.Queries) error {
+		var err error
+
+		versions, total, err = listStateVersionsWith(ctx, q, id, page)
+
+		return err
+	})
+	if err != nil {
+		return nil, 0, err
+	}
+
+	return versions, total, nil
+}
+
+// listStateVersionsWith is ListStateVersions on the queries of one snapshot.
+func listStateVersionsWith(
+	ctx context.Context, q *db.Queries, id workspace.ID, page workspace.Page,
+) ([]workspace.StateVersion, int, error) {
 	page = normalizeStatePage(page)
 
-	total, err := s.queries.CountStateVersions(ctx, id.String())
+	total, err := q.CountStateVersions(ctx, id.String())
 	if err != nil {
 		return nil, 0, fmt.Errorf("count state versions: %w", err)
 	}
 
-	rows, err := s.queries.ListStateVersions(ctx, db.ListStateVersionsParams{
+	rows, err := q.ListStateVersions(ctx, db.ListStateVersionsParams{
 		WorkspaceID: id.String(),
 		Limit:       clampInt32(page.Limit),
 		Offset:      clampInt32(page.Offset),

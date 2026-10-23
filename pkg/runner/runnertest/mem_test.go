@@ -116,12 +116,8 @@ func (m *mem) BumpFence(_ context.Context, fence namespace.Fence) (namespace.Fen
 	return namespace.Fence{Namespace: fence.Namespace, FailoverVersion: m.fences[fence.Namespace]}, nil
 }
 
-// hour is the lease of the claims that Claim makes.
+// hour is the lease of the claims that Takeover makes.
 const hour = time.Hour
-
-func (m *mem) Claim(ctx context.Context, kind durable.Kind, owner string) (durable.Claim, error) {
-	return m.ClaimLease(ctx, kind, owner, hour)
-}
 
 func (m *mem) ClaimLease(
 	_ context.Context, kind durable.Kind, owner string, lease time.Duration,
@@ -137,6 +133,22 @@ func (m *mem) ClaimLease(
 	}
 
 	return durable.Claim{Operation: id, Owner: owner, Token: 1, ExpiresAt: expires}, nil
+}
+
+func (m *mem) Shorten(_ context.Context, c durable.Claim, lease time.Duration) (durable.Claim, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if !liveClaim(m, c) {
+		return durable.Claim{}, durable.ErrClaimLost
+	}
+
+	o := m.ops[c.Operation]
+	o.expires = time.Now().Add(lease)
+	m.ops[c.Operation] = o
+	c.ExpiresAt = o.expires
+
+	return c, nil
 }
 
 func (m *mem) Takeover(_ context.Context, c durable.Claim) (durable.Claim, error) {

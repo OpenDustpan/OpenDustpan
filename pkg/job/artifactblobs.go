@@ -7,9 +7,9 @@ import (
 	"io"
 	"strings"
 
+	"opendustpan.org/opendustpan/internal/scopeaudit"
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/namespace"
-	"opendustpan.org/opendustpan/pkg/scopeaudit"
 )
 
 // artifactDir is the directory, inside the scope of one namespace, of the
