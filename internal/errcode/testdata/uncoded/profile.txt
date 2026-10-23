@@ -1,0 +1,29 @@
+# The error paths of internal/api/profile that answer without a code of the
+# catalog. This list only shrinks: give a path a code, remove its line and
+# lower the limit. A new error path never goes on this list.
+limit 25
+Handler.writeError: errorResponse{}
+badRequest: statusError{}
+classify: AsType[*statusError]
+classifyAuth: AsType[*profile.RoutingError]
+classifyAuth: errFreshStepRequired
+classifyAuth: errReauthenticate
+classifyAuth: identity.ErrRateLimited
+classifyAuth: identity.ErrUnauthenticated
+classifyAuth: problem{}
+classifyAuth: profile.ErrFreshRequired
+classifyNamespace: default
+classifyNamespace: maintenance.ErrInMaintenance
+classifyNamespace: namespace.ErrFenced
+classifyNamespace: namespace.ErrInvalidName
+classifyNamespace: namespace.ErrNotFound
+classifyNamespace: namespace.ErrNotHome
+classifyProfile: default
+classifyProfile: profile.ErrConflict
+classifyProfile: profile.ErrInvalid
+classifyProfile: profile.ErrLimit
+classifyProfile: profile.ErrNotFound
+classifyProfile: profile.ErrSchemaVersion
+errPrecondition: statusError{}
+errPreconditionRequired: statusError{}
+stale: profile.ErrConflict
