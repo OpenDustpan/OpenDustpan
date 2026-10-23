@@ -42,7 +42,6 @@ func TestDecodeRefusesHostileTokens(t *testing.T) {
 
 	for _, tc := range []struct{ name, token string }{
 		{name: "empty", token: ""},
-		{name: "one byte above the limit", token: strings.Repeat("A", pagetoken.MaxLen+1)},
 		{name: "not base64url", token: "%%"},
 		{name: "standard base64 with padding", token: base64.StdEncoding.EncodeToString([]byte(`{"a":"xy"}`))},
 		{name: "not JSON", token: b64([]byte("x"))},
@@ -91,5 +90,48 @@ func TestFingerprint(t *testing.T) {
 	// The SHA-256 of "abc" starts with ba7816bf8f01cfea.
 	if got := pagetoken.Fingerprint("abc"); got != "ba7816bf8f01cfea" {
 		t.Fatalf("Fingerprint(abc) = %q, want ba7816bf8f01cfea", got)
+	}
+}
+
+// tokenOfLength returns a valid token of exactly n characters: the base64url
+// of a JSON object of the wire shape, with a padding string in the After
+// member. n must not be 1 modulo 4, because no unpadded base64url string has
+// that length.
+func tokenOfLength(t *testing.T, n int) string {
+	t.Helper()
+
+	for pad := 0; ; pad++ {
+		raw := []byte(`{"a":"` + strings.Repeat("x", pad) + `"}`)
+		token := base64.RawURLEncoding.EncodeToString(raw)
+
+		if len(token) == n {
+			return token
+		}
+
+		if len(token) > n {
+			t.Fatalf("no valid token of %d characters", n)
+		}
+	}
+}
+
+// TestDecodeCapsTheLength proves the length cap of Decode with valid tokens on
+// both sides of MaxLen. A valid token one step above the cap is refused by the
+// cap alone; a valid token one step below it is not refused by the cap.
+func TestDecodeCapsTheLength(t *testing.T) {
+	t.Parallel()
+
+	// 4098 characters is the first valid length above MaxLen, because 4097
+	// is 1 modulo 4. 4095 is the last valid length below it.
+	above := tokenOfLength(t, pagetoken.MaxLen+2)
+	below := tokenOfLength(t, pagetoken.MaxLen-1)
+
+	var got wire
+
+	if err := pagetoken.Decode(above, &got); !errors.Is(err, pagetoken.ErrInvalid) {
+		t.Errorf("a token of %d characters: Decode = %v, want ErrInvalid", len(above), err)
+	}
+
+	if err := pagetoken.Decode(below, &got); err != nil {
+		t.Errorf("a token of %d characters: Decode = %v, want no error", len(below), err)
 	}
 }
