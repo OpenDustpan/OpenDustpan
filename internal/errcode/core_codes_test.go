@@ -34,6 +34,7 @@ func TestSharedCodes(t *testing.T) {
 			{Name: "since", Kind: errcode.KindTime},
 			{Name: "target", Kind: errcode.KindIdentifier},
 			{Name: "targetKind", Kind: errcode.KindIdentifier},
+			{Name: "unit", Kind: errcode.KindIdentifier},
 		}},
 		{errcode.TokenInvalid, nil},
 		{errcode.SecretKeyNotConfigured, nil},

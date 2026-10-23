@@ -46,7 +46,7 @@ func TestCheckAnswer(t *testing.T) {
 	t.Parallel()
 
 	locked := map[string]any{
-		"holder": "user-1", "since": "2026-10-23T09:30:00Z", "target": "namespace acme", "targetKind": "namespace",
+		"holder": "user-1", "since": "2026-10-23T09:30:00Z", "target": "acme", "targetKind": "namespace", "unit": "acme/web/prod",
 	}
 
 	tests := []struct {
@@ -68,7 +68,7 @@ func TestCheckAnswer(t *testing.T) {
 		{
 			name: "camelCase, arguments", shape: errcodetest.ShapeCamelCase, status: 423,
 			body: `{"code":423,"message":"x","errorCode":"lock.locked","errorArgs":` +
-				`{"holder":"user-1","since":"2026-10-23T09:30:00Z","target":"namespace acme","targetKind":"namespace"}}`,
+				`{"holder":"user-1","since":"2026-10-23T09:30:00Z","target":"acme","targetKind":"namespace","unit":"acme/web/prod"}}`,
 			want:    errcodetest.Want{Code: errcode.LockLocked, Args: locked, RequestBody: nil},
 			request: "",
 			fails:   "",

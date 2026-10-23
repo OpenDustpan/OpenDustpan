@@ -102,6 +102,74 @@ func writeOther(w http.ResponseWriter, other interface{ Name() string }) {
 			want: []string{"writeOther: errorResponse{}", "writeUncoded: errorResponse{}"},
 		},
 		{
+			name: "a body that copies the code of an answer in a field of an answer",
+			src: `type holder struct{ Answer errcode.Answer }
+
+func writeField(w http.ResponseWriter, ie holder) {
+	_ = errorResponse{Code: 409, Message: "x", ErrorCode: ie.Answer.Code()}
+}
+
+func writeVar(w http.ResponseWriter) {
+	var a errcode.Answer
+	_ = errorResponse{Code: 409, Message: "x", ErrorCode: a.Code()}
+}`,
+			skip: nil,
+			want: nil,
+		},
+		{
+			name: "a code call in a case clause that is no member of a body",
+			src: `type other struct{}
+
+func (other) Code() string { return "" }
+
+func classify(err error, r other) (int, string) {
+	switch {
+	case errors.Is(err, stack.ErrNotFound):
+		_ = r.Code()
+		return 404, "stack.whatever"
+	default:
+		return 500, "internal error"
+	}
+}
+
+func writeCase(err error, r other) any {
+	switch {
+	case errors.Is(err, stack.ErrNotFound):
+		_ = r.Code()
+		return errorResponse{Code: 404, Message: "x", ErrorCode: "stack.whatever"}
+	}
+	return nil
+}`,
+			skip: nil,
+			want: []string{"classify: default", "classify: stack.ErrNotFound", "writeCase: errorResponse{}"},
+		},
+		{
+			name: "a code call of a type that is no answer in a body",
+			src: `type other struct{}
+
+func (other) Code() string { return "" }
+
+func writeOther(err error, r other) any {
+	if errors.Is(err, stack.ErrNotFound) {
+		return errorResponse{Code: 404, Message: "x", ErrorCode: r.Code()}
+	}
+	return nil
+}`,
+			skip: nil,
+			want: []string{"writeOther: errorResponse{}"},
+		},
+		{
+			name: "a code call in an if condition with an uncoded fallback",
+			src: `func writeGuard(w http.ResponseWriter, a errcode.Answer) any {
+	if a.Code() == "" {
+		return errorResponse{Code: 500, Message: "x"}
+	}
+	return errorResponse{Code: 409, Message: "x", ErrorCode: a.Code()}
+}`,
+			skip: nil,
+			want: []string{"writeGuard: errorResponse{}"},
+		},
+		{
 			name: "a case that hands the error to another classify function",
 			src: `func classify(err error) (int, string) {
 	switch {

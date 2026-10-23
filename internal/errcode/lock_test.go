@@ -22,10 +22,10 @@ func TestLockedArguments(t *testing.T) {
 		wantTarget string
 		wantKind   string
 	}{
-		{"namespace", manuallock.NamespaceTarget("acme"), "namespace acme", "namespace"},
+		{"namespace", manuallock.NamespaceTarget("acme"), "acme", "namespace"},
 		{
 			"collection", manuallock.CollectionTarget(collection.Ref{Namespace: "acme", Name: "prod"}),
-			"collection acme/prod", "collection",
+			"acme/prod", "collection",
 		},
 		{
 			"unit", manuallock.UnitTarget(collection.UnitRef{Namespace: "acme", Tool: "pulumi", Name: "web/prod"}),
@@ -49,6 +49,7 @@ func TestLockedArguments(t *testing.T) {
 
 			want := map[string]any{
 				"holder": "user-1", "since": "2026-10-23T09:30:00Z", "target": tc.wantTarget, "targetKind": tc.wantKind,
+				"unit": "acme/web/prod",
 			}
 
 			if a.Code() != errcode.LockLocked || len(a.Args()) != len(want) {
