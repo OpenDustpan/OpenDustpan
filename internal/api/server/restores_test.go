@@ -26,7 +26,7 @@ import (
 // restoreFixture is a Handler with a backup service and a restore service
 // over fresh stores, with the services kept for synchronous setup.
 type restoreFixture struct {
-	handler    *apiserver.Handler
+	handler    testHandler
 	namespaces *namespace.Service
 	backups    *backup.Service
 	restores   *backup.RestoreService
@@ -96,7 +96,7 @@ func newRestoreFixtureOver(t *testing.T, stores backupStores, target blob.Store)
 		t.Fatalf("namespace service: %v", err)
 	}
 
-	handler, err := apiserver.NewHandler(apiserver.Config{
+	handler, err := newCheckedHandler(t, apiserver.Config{
 		Preferences:      nil,
 		GitHost:          nil,
 		Idempotency:      nil,
@@ -118,7 +118,7 @@ func newRestoreFixtureOver(t *testing.T, stores backupStores, target blob.Store)
 		Principals:       nil,
 		Access:           nil,
 		Tokens:           nil,
-		Audit:            nil,
+		Audit:            newTestAudit(),
 		OnAuditFailure:   nil,
 		DeletedUnits:     nil,
 		AuditChain:       nil,
@@ -139,7 +139,7 @@ func newRestoreFixtureOver(t *testing.T, stores backupStores, target blob.Store)
 
 // serveRestore sends one installation API request with the test token and
 // returns its status and body.
-func serveRestore(t *testing.T, handler *apiserver.Handler, method, path, body string) (int, string) {
+func serveRestore(t *testing.T, handler testHandler, method, path, body string) (int, string) {
 	t.Helper()
 
 	var reader *strings.Reader
@@ -173,7 +173,7 @@ type startRestoreDoc struct {
 
 // startRestore starts a restore of backupID and returns the restore ID,
 // failing the test on any other status.
-func startRestore(t *testing.T, handler *apiserver.Handler, body string) startRestoreDoc {
+func startRestore(t *testing.T, handler testHandler, body string) startRestoreDoc {
 	t.Helper()
 
 	status, resp := serveRestore(t, handler, http.MethodPost, "/api/server/restores", body)
@@ -214,7 +214,7 @@ const restorePollTimeout = 2 * time.Minute
 
 // waitRestoreState polls one restore until it reaches want or the wait times
 // out, failing the test otherwise.
-func waitRestoreState(t *testing.T, handler *apiserver.Handler, id, want string) getRestoreDoc {
+func waitRestoreState(t *testing.T, handler testHandler, id, want string) getRestoreDoc {
 	t.Helper()
 
 	deadline := time.Now().Add(restorePollTimeout)
@@ -524,7 +524,7 @@ func TestGetRestoreMissingAnswers404(t *testing.T) {
 
 // serveRestoreNoAuth sends one installation API request without credentials
 // and returns its status and body.
-func serveRestoreNoAuth(t *testing.T, handler *apiserver.Handler, method, path, body string) (int, string) {
+func serveRestoreNoAuth(t *testing.T, handler testHandler, method, path, body string) (int, string) {
 	t.Helper()
 
 	var reader *strings.Reader
@@ -569,7 +569,7 @@ func TestRestoreUnknownIDAuthBeforeExistence(t *testing.T) {
 		)
 	}
 
-	denied, err := apiserver.NewHandler(apiserver.Config{
+	denied, err := newCheckedHandler(t, apiserver.Config{
 		Preferences:      nil,
 		GitHost:          nil,
 		Idempotency:      nil,
@@ -593,7 +593,7 @@ func TestRestoreUnknownIDAuthBeforeExistence(t *testing.T) {
 		Principals:       nil,
 		Access:           nil,
 		Tokens:           nil,
-		Audit:            nil,
+		Audit:            newTestAudit(),
 		OnAuditFailure:   nil,
 		DeletedUnits:     nil,
 		AuditChain:       nil,
@@ -720,7 +720,7 @@ type listBackupIDsDoc struct {
 // assertPreBackupSurvivesRestore proves the backup taken before the apply
 // survives the swap (ADR 30 decision 9): the undo source stays readable and
 // listed after the restore.
-func assertPreBackupSurvivesRestore(t *testing.T, handler *apiserver.Handler, preBackupID string) {
+func assertPreBackupSurvivesRestore(t *testing.T, handler testHandler, preBackupID string) {
 	t.Helper()
 
 	preStatus, preBody := serveRestore(t, handler, http.MethodGet, "/api/server/backups/"+preBackupID, "")
@@ -781,7 +781,7 @@ func TestRestoreWithoutTargetAnswers503(t *testing.T) {
 		t.Fatalf("namespace service: %v", err)
 	}
 
-	handler, err := apiserver.NewHandler(apiserver.Config{
+	handler, err := newCheckedHandler(t, apiserver.Config{
 		Preferences:      nil,
 		GitHost:          nil,
 		Idempotency:      nil,
@@ -803,7 +803,7 @@ func TestRestoreWithoutTargetAnswers503(t *testing.T) {
 		Principals:       nil,
 		Access:           nil,
 		Tokens:           nil,
-		Audit:            nil,
+		Audit:            newTestAudit(),
 		OnAuditFailure:   nil,
 		DeletedUnits:     nil,
 		AuditChain:       nil,
@@ -915,7 +915,7 @@ func checkAccessModeAuditEntry(t *testing.T, deny map[identity.Action]bool, want
 		t.Fatalf("namespace service: %v", err)
 	}
 
-	handler, err := apiserver.NewHandler(apiserver.Config{
+	handler, err := newCheckedHandler(t, apiserver.Config{
 		Preferences:      nil,
 		GitHost:          nil,
 		Idempotency:      nil,
@@ -1040,7 +1040,7 @@ func checkRestoreAuditSurvivesSwap(t *testing.T, deny map[identity.Action]bool, 
 		t.Fatalf("namespace service: %v", err)
 	}
 
-	handler, err := apiserver.NewHandler(apiserver.Config{
+	handler, err := newCheckedHandler(t, apiserver.Config{
 		Preferences:      nil,
 		GitHost:          nil,
 		Idempotency:      nil,

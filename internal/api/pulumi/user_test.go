@@ -157,6 +157,11 @@ func (m *memStackStore) ListStacks(_ context.Context, filter stack.Filter) ([]st
 	return out, nil
 }
 
+// QueryStacks implements stack.Store over the lists of ListStacks.
+func (m *memStackStore) QueryStacks(ctx context.Context, q stack.PageQuery) ([]stack.Stack, error) {
+	return stack.ListPage(ctx, m.ListStacks, q)
+}
+
 // denyBeta denies namespace:read on beta and allows everything else.
 type denyBeta struct{}
 
@@ -220,7 +225,7 @@ func newUserHandlerWithSessions(
 		BaseURL:                 baseurl.Resolver{},
 		MaxBodyBytesInFlight:    0,
 		Gate:                    nil,
-		Audit:                   nil,
+		Audit:                   newTestAudit(),
 		OnAuditFailure:          nil,
 		CheckpointDeltaCutoff:   0,
 		DenialLimiter:           nil,

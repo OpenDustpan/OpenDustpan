@@ -123,12 +123,24 @@ func (s *Store) endLock(
 
 // GetLock implements manuallock.Store.
 func (s *Store) GetLock(ctx context.Context, t manuallock.Target) (manuallock.Lock, error) {
-	id, err := manualLockObject(ctx, s.queries, t)
+	var lock manuallock.Lock
+
+	// One snapshot, so the object and its lock come from one state.
+	err := s.inSnapshotTx(ctx, func(q *db.Queries) error {
+		id, err := manualLockObject(ctx, q, t)
+		if err != nil {
+			return err
+		}
+
+		lock, err = readManualLock(ctx, q, t, id)
+
+		return err
+	})
 	if err != nil {
 		return manuallock.Lock{}, err
 	}
 
-	return readManualLock(ctx, s.queries, t, id)
+	return lock, nil
 }
 
 // CoveringLock implements manuallock.Store. The lock of the unit wins over the

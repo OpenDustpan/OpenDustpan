@@ -52,7 +52,7 @@ type listUnitsAtResponse struct {
 // atQuery reads the query value at: a time in Unix milliseconds. The bool is
 // false when the request has no such value.
 func atQuery(r *http.Request) (time.Time, bool, error) {
-	raw := r.URL.Query().Get("at")
+	raw := queryOf(r).Get("at")
 	if raw == "" {
 		return time.Time{}, false, nil
 	}

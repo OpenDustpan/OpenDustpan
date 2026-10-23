@@ -133,7 +133,7 @@ func caller(r *http.Request, p identity.Principal) *sinks.Caller {
 	by := audit.Entry{
 		At: time.Time{}, Namespace: "", Subject: "", IDPSubject: "", TokenID: "", Action: "", Object: "",
 		Version: "", ValuePath: "", ValueCount: nil, Changes: nil, SourceIP: clientip.String(r),
-		UserAgent: truncateUserAgent(r.UserAgent()), Channel: sessionauth.AuditChannel(r, channelHeader),
+		UserAgent: truncateUserAgent(userAgent(r)), Channel: sessionauth.AuditChannel(r, channelHeader),
 		Kind: audit.KindChange, Outcome: audit.OutcomeSuccess, RequestID: requestid.FromContext(r.Context()),
 		ObjectID: "", PrevHash: "", Hash: "", Sequence: 0, FenceVersion: 0, Reason: "", PrincipalKind: "", JobID: "",
 	}

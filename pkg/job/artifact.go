@@ -274,20 +274,15 @@ type PlanUpload struct {
 // historytest.RunRedactor, with historytest.JobArtifactSituations for plans
 // and historytest.JobLogSituations for log versions.
 //
+// The reads are the port ArtifactReader, which ArtifactReads implements over
+// the record store, the blob store and the item keys. The redaction and
+// ReplaceLog need the history model and have no implementation yet.
+//
 // Every write in a namespace checks fence in its transaction, and returns
 // namespace.ErrFenced when it is stale.
 type ArtifactStore interface {
 	history.Redactor
-	// OpenPlanPart returns the plaintext of the part k of the plan with the
-	// ID plan. It returns ErrNotFound for an unknown plan or part, and
-	// secret.ErrShredded for a plan whose item key a redaction shredded.
-	// The caller checks the actions, and masks the readable plan.
-	OpenPlanPart(ctx context.Context, ns namespace.Name, plan string, k OutputKind) (io.ReadCloser, error)
-	// OpenLog returns the plaintext of the log version with the ID version,
-	// its chunks in order. It returns ErrNotFound for an unknown version,
-	// and secret.ErrShredded for a version whose item key a redaction
-	// shredded.
-	OpenLog(ctx context.Context, ns namespace.Name, version string) (io.ReadCloser, error)
+	ArtifactReader
 	// ReplaceLog writes the next version of the log whose current version
 	// is from, with the content body and a new item key, and makes it the
 	// current version. by is the subject of the redaction. It returns

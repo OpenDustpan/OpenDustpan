@@ -1,0 +1,5 @@
+# Runner labels that are not GitHub-hosted labels, for actionlint.
+self-hosted-runner:
+  labels:
+    # The paid Blacksmith runners of the CPU-bound jobs in ci.yml.
+    - blacksmith-8vcpu-ubuntu-2404
