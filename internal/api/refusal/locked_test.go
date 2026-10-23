@@ -1,9 +1,10 @@
-package errcode_test
+package refusal_test
 
 import (
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/api/refusal"
 	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/pkg/collection"
 	"opendustpan.org/opendustpan/pkg/manuallock"
@@ -42,7 +43,7 @@ func TestLockedArguments(t *testing.T) {
 				Noun: "stack", Name: "acme/web/prod",
 			}
 
-			a, err := errcode.Locked(e)
+			a, err := refusal.Locked(e)
 			if err != nil {
 				t.Fatalf("Locked: %v", err)
 			}
@@ -74,7 +75,7 @@ func TestLockedRejectsAnEmptyHolder(t *testing.T) {
 		Since: time.Now(), Target: manuallock.NamespaceTarget("acme"), Holder: "", Reason: "",
 	}
 
-	if _, err := errcode.Locked(&manuallock.LockedError{Lock: lock, Noun: "", Name: ""}); err == nil {
+	if _, err := refusal.Locked(&manuallock.LockedError{Lock: lock, Noun: "", Name: ""}); err == nil {
 		t.Fatal("Locked accepted an empty holder")
 	}
 }
