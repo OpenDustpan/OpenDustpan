@@ -408,7 +408,12 @@ type GrantStore interface {
 	// names the namespace of the grant (the zero fence for the
 	// installation). It returns ErrNotFound when no such grant exists in
 	// that namespace. It runs check, when it is not nil, as a GrantCheck
-	// runs, and returns its error.
+	// runs, and returns its error. It returns ErrLastSiteAdministrator,
+	// and changes nothing, when the end of the grant would leave the
+	// installation with no site administrator. The store counts and
+	// revokes in one transaction, serialized with the changes of
+	// principal.Store that end a site administrator (see the doc of
+	// principal.Store).
 	RevokeGrant(ctx context.Context, id string, fence namespace.Fence, e audit.Entry, check GrantCheck) error
 	// ListGrantsOn returns one page of the current grants on obj that
 	// match the filters of q, ordered by subject then role, each with its
