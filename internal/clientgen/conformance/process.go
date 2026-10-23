@@ -11,9 +11,12 @@ import (
 	"os"
 	"os/exec"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode"
+	"unicode/utf8"
 )
 
 // Time limits of the adapter process.
@@ -28,13 +31,17 @@ const (
 	// readBufferBytes is the size of the buffer of the reader of the output of
 	// the adapter. It holds one message and its line break.
 	readBufferBytes = MaxMessageBytes + 1
+	// MaxRPCMessageBytes bounds the message of an RPCError. The harness cuts a
+	// longer message from the adapter.
+	MaxRPCMessageBytes = 512
 )
 
 // RPCError is an error object of a JSON-RPC 2.0 answer. It wraps
 // ErrRequestRefused: a correct adapter reports a fault of the client in the
 // result, so the answer is a fault of this one request. The framing is still
 // in step, so the session goes on and only the case that sent the request
-// fails.
+// fails. Message is the text from the adapter after rpcMessage: it has no
+// control character and at most MaxRPCMessageBytes bytes.
 type RPCError struct {
 	Code    int
 	Message string
@@ -354,7 +361,7 @@ func (a *ProcessAdapter) decode(line []byte, id int64, method string, out any) e
 	}
 
 	if r.Error != nil {
-		return &RPCError{Code: r.Error.Code, Message: r.Error.Message}
+		return &RPCError{Code: r.Error.Code, Message: rpcMessage(r.Error.Message)}
 	}
 
 	if out == nil {
@@ -366,6 +373,32 @@ func (a *ProcessAdapter) decode(line []byte, id int64, method string, out any) e
 	}
 
 	return nil
+}
+
+// rpcMessage makes the message of a JSON-RPC error safe for a test report.
+// The adapter is not trusted, so a CR or an LF could add a false line to the
+// report. It changes each control or format character, CR and LF included,
+// to a space, and it changes bytes that are not valid UTF-8 to U+FFFD. It
+// cuts a message that is longer than MaxRPCMessageBytes at a rune boundary.
+func rpcMessage(m string) string {
+	m = strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) || unicode.Is(unicode.Cf, r) || unicode.Is(unicode.Zl, r) || unicode.Is(unicode.Zp, r) {
+			return ' '
+		}
+
+		return r
+	}, strings.ToValidUTF8(m, string(utf8.RuneError)))
+
+	if len(m) <= MaxRPCMessageBytes {
+		return m
+	}
+
+	cut := MaxRPCMessageBytes
+	for cut > 0 && !utf8.RuneStart(m[cut]) {
+		cut--
+	}
+
+	return m[:cut]
 }
 
 // tailBuffer keeps the last bytes that are written to it.
