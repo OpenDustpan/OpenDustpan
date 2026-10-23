@@ -63,21 +63,31 @@ const maxNameLength = 90
 // '_', the rule OpenTofu's cloud block and the TFE API share.
 type Name string
 
-// ParseName validates s as a workspace name.
+// ParseName validates s as a workspace name. A refusal states the rule and
+// echoes s as ident.Echo does. An empty s gets the same text as an invalid
+// one.
 func ParseName(s string) (Name, error) {
 	if s == "" || len(s) > maxNameLength {
-		return "", fmt.Errorf("%w: %q", ErrInvalidName, s)
+		return "", nameRuleError(s)
 	}
 
 	for _, c := range []byte(s) {
 		switch {
 		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9', c == '-', c == '_':
 		default:
-			return "", fmt.Errorf("%w: %q", ErrInvalidName, s)
+			return "", nameRuleError(s)
 		}
 	}
 
 	return Name(s), nil
+}
+
+// nameRuleError returns the refusal of the workspace name s: ErrInvalidName,
+// the echo of s and the rule of a workspace name.
+func nameRuleError(s string) error {
+	return fmt.Errorf(
+		"%w: %s: use 1 to %d ASCII letters, digits, - and _", ErrInvalidName, ident.Echo(s), maxNameLength,
+	)
 }
 
 // String returns the name as a plain string.
