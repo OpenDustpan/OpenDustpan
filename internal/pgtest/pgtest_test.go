@@ -348,7 +348,11 @@ func dropSchemas(t *testing.T, base string, schemas []string) {
 		return
 	}
 
-	defer func() { _ = conn.Close(context.Background()) }() //nolint:errcheck // Test cleanup.
+	defer func() {
+		if closeErr := conn.Close(context.Background()); closeErr != nil {
+			t.Logf("close: %v", closeErr)
+		}
+	}()
 
 	for _, schema := range schemas {
 		drop := "DROP SCHEMA IF EXISTS " + pgx.Identifier{schema}.Sanitize() + " CASCADE"
@@ -367,7 +371,11 @@ func countSchemas(t *testing.T, base string, schemas []string) int {
 		t.Fatalf("connect: %v", err)
 	}
 
-	defer func() { _ = conn.Close(t.Context()) }() //nolint:errcheck // Test read.
+	defer func() {
+		if closeErr := conn.Close(t.Context()); closeErr != nil {
+			t.Errorf("close: %v", closeErr)
+		}
+	}()
 
 	var n int
 
