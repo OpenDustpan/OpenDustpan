@@ -7560,9 +7560,11 @@ SELECT id, namespace, name, revision, lock_id, lock_holder, lock_reason,
        locked_at_ms, current_state_version_id, created_at_ms, updated_at_ms, allow_forced_writes, allow_unlocked_writes,
        deleted_at_ms, deleted_name
 FROM workspaces
-WHERE id = $1 AND deleted_at_ms IS NULL
+WHERE id = $1 AND COALESCE(deleted_at_ms, -1) = -1
 `
 
+// The live check is COALESCE(deleted_at_ms, -1) = -1, not IS NULL, so the
+// partial index workspaces_live_name cannot serve this lookup by ID.
 func (q *Queries) GetWorkspaceByID(ctx context.Context, id string) (Workspace, error) {
 	row := q.db.QueryRow(ctx, getWorkspaceByID, id)
 	var i Workspace
@@ -14017,12 +14019,14 @@ SELECT id, namespace, name, revision, lock_id, lock_holder, lock_reason,
        locked_at_ms, current_state_version_id, created_at_ms, updated_at_ms, allow_forced_writes, allow_unlocked_writes,
        deleted_at_ms, deleted_name
 FROM workspaces
-WHERE id = $1 AND deleted_at_ms IS NULL
+WHERE id = $1 AND COALESCE(deleted_at_ms, -1) = -1
 FOR UPDATE
 `
 
 // Locks the workspace row so concurrent declares cannot both pass the
 // pending cap.
+// The live check is COALESCE(deleted_at_ms, -1) = -1, not IS NULL, so the
+// partial index workspaces_live_name cannot serve this lookup by ID.
 func (q *Queries) LockWorkspaceForDeclare(ctx context.Context, id string) (Workspace, error) {
 	row := q.db.QueryRow(ctx, lockWorkspaceForDeclare, id)
 	var i Workspace
@@ -14051,12 +14055,14 @@ SELECT id, namespace, name, revision, lock_id, lock_holder, lock_reason,
        locked_at_ms, current_state_version_id, created_at_ms, updated_at_ms, allow_forced_writes, allow_unlocked_writes,
        deleted_at_ms, deleted_name
 FROM workspaces
-WHERE id = $1 AND deleted_at_ms IS NULL
+WHERE id = $1 AND COALESCE(deleted_at_ms, -1) = -1
 FOR UPDATE
 `
 
 // Locks the workspace row so two finalizes on one workspace cannot both pass
 // the serial check.
+// The live check is COALESCE(deleted_at_ms, -1) = -1, not IS NULL, so the
+// partial index workspaces_live_name cannot serve this lookup by ID.
 func (q *Queries) LockWorkspaceForFinalize(ctx context.Context, id string) (Workspace, error) {
 	row := q.db.QueryRow(ctx, lockWorkspaceForFinalize, id)
 	var i Workspace
@@ -14762,7 +14768,7 @@ const readWorkspaceByID = `-- name: ReadWorkspaceByID :one
 SELECT w.id, w.namespace, w.name, w.revision, w.lock_id, w.lock_holder, w.lock_reason, w.locked_at_ms, w.current_state_version_id, w.created_at_ms, w.updated_at_ms, w.allow_forced_writes, w.allow_unlocked_writes, w.deleted_at_ms, w.deleted_name, n.id AS namespace_id
 FROM workspaces AS w
 JOIN namespaces AS n ON n.name = w.namespace
-WHERE w.id = $1 AND w.deleted_at_ms IS NULL
+WHERE w.id = $1 AND COALESCE(w.deleted_at_ms, -1) = -1
 `
 
 type ReadWorkspaceByIDRow struct {
@@ -14770,6 +14776,8 @@ type ReadWorkspaceByIDRow struct {
 	NamespaceID string
 }
 
+// The live check is COALESCE(deleted_at_ms, -1) = -1, not IS NULL, so the
+// partial index workspaces_live_name cannot serve this lookup by ID.
 func (q *Queries) ReadWorkspaceByID(ctx context.Context, id string) (ReadWorkspaceByIDRow, error) {
 	row := q.db.QueryRow(ctx, readWorkspaceByID, id)
 	var i ReadWorkspaceByIDRow
@@ -16337,7 +16345,7 @@ func (q *Queries) SoftDeleteStack(ctx context.Context, arg SoftDeleteStackParams
 const softDeleteWorkspace = `-- name: SoftDeleteWorkspace :execrows
 UPDATE workspaces
 SET deleted_name = name, name = 'deleted:' || id, deleted_at_ms = $1, revision = revision + 1
-WHERE id = $2 AND deleted_at_ms IS NULL
+WHERE id = $2 AND COALESCE(deleted_at_ms, -1) = -1
 `
 
 type SoftDeleteWorkspaceParams struct {
@@ -16348,6 +16356,8 @@ type SoftDeleteWorkspaceParams struct {
 // Moves the name to deleted_name and frees it (ADR 47). A workspace name
 // cannot hold ":", so "deleted:" and the ID never match a lookup by name. The
 // revision moves on, so a concurrent compare-and-swap of the row fails.
+// The live check is COALESCE(deleted_at_ms, -1) = -1, not IS NULL, so the
+// partial index workspaces_live_name cannot serve this lookup by ID.
 func (q *Queries) SoftDeleteWorkspace(ctx context.Context, arg SoftDeleteWorkspaceParams) (int64, error) {
 	result, err := q.db.Exec(ctx, softDeleteWorkspace, arg.DeletedAtMs, arg.ID)
 	if err != nil {
@@ -17444,10 +17454,12 @@ func (q *Queries) UseRunnerNonce(ctx context.Context, arg UseRunnerNonceParams) 
 
 const workspaceExists = `-- name: WorkspaceExists :one
 SELECT EXISTS (
-    SELECT 1 FROM workspaces WHERE id = $1 AND deleted_at_ms IS NULL
+    SELECT 1 FROM workspaces WHERE id = $1 AND COALESCE(deleted_at_ms, -1) = -1
 )
 `
 
+// The live check is COALESCE(deleted_at_ms, -1) = -1, not IS NULL, so the
+// partial index workspaces_live_name cannot serve this lookup by ID.
 func (q *Queries) WorkspaceExists(ctx context.Context, id string) (bool, error) {
 	row := q.db.QueryRow(ctx, workspaceExists, id)
 	var exists bool
