@@ -1,5 +1,6 @@
-// Package errcode holds the stable machine codes that the HTTP adapters add to
-// an answer, and the one place that decides the code of a 403.
+// Package errcode holds the catalog of the stable machine codes that the HTTP
+// adapters add to an error answer, the arguments of each code, and the one
+// place that decides the code of a 403.
 package errcode
 
 import (

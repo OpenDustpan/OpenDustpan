@@ -1,0 +1,22 @@
+# The error paths of internal/api/jobs that answer without a code of the
+# catalog. This list only shrinks: give a path a code and remove its line.
+# A new error path never goes on this list.
+classify: errNotFound
+classify: identity.ErrRateLimited
+classify: identity.ErrUnauthenticated
+classify: job.ErrNotFound
+classify: maintenance.ErrInMaintenance
+classify: namespace.ErrNotFound
+classify: namespace.ErrNotHome
+classifyJobRefusal: default
+classifyJobRefusal: job.ErrAgentDenied
+classifyJobRefusal: job.ErrFrozen
+classifyJobRefusal: job.ErrGateEnforced
+classifyJobRefusal: job.ErrInvalid
+classifyJobRefusal: job.ErrLimit
+classifyJobRefusal: job.ErrPolicyDenied
+classifyJobRefusal: job.ErrUnsupported
+classifyStart: errBody
+classifyStart: idempotency.ErrInvalidKey
+classifyStart: job.ErrKeyConflict
+classifyStart: namespace.ErrFenced
