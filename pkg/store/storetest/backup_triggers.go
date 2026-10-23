@@ -3,8 +3,8 @@ package storetest
 import (
 	"testing"
 
+	"opendustpan.org/opendustpan/internal/cron"
 	"opendustpan.org/opendustpan/pkg/audit"
-	"opendustpan.org/opendustpan/pkg/cron"
 	"opendustpan.org/opendustpan/pkg/graph"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/trigger"

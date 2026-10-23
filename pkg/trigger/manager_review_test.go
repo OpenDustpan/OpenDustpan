@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"opendustpan.org/opendustpan/pkg/cron"
+	"opendustpan.org/opendustpan/internal/cron"
 	"opendustpan.org/opendustpan/pkg/idempotency"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/trigger"
