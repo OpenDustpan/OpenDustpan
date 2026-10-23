@@ -523,12 +523,12 @@ type workspacePage struct {
 // value that is not a positive integer fails with a 422 error. A size above
 // maxPageSize reads as maxPageSize.
 func parseWorkspacePage(r *http.Request) (workspacePage, error) {
-	number, err := workspacePageValue(r.URL.Query().Get("page[number]"), 1)
+	number, err := workspacePageValue(r.URL.Query().Get("page[number]"), "page[number]", 1)
 	if err != nil {
 		return workspacePage{}, err
 	}
 
-	size, err := workspacePageValue(r.URL.Query().Get("page[size]"), defaultPageSize)
+	size, err := workspacePageValue(r.URL.Query().Get("page[size]"), "page[size]", defaultPageSize)
 	if err != nil {
 		return workspacePage{}, err
 	}
@@ -540,16 +540,17 @@ func parseWorkspacePage(r *http.Request) (workspacePage, error) {
 	return workspacePage{search: r.URL.Query().Get("search[name]"), number: number, size: size}, nil
 }
 
-// workspacePageValue parses one page query value, or returns fallback when
-// the value is missing.
-func workspacePageValue(raw string, fallback int) (int, error) {
+// workspacePageValue parses raw, the value of the page query parameter name,
+// or returns fallback when the value is missing. The error names the
+// parameter and its rule, and does not repeat the value.
+func workspacePageValue(raw, name string, fallback int) (int, error) {
 	if raw == "" {
 		return fallback, nil
 	}
 
 	n, err := strconv.Atoi(raw)
 	if err != nil || n < 1 {
-		return 0, fmt.Errorf("%w: page value %q", errInvalidBody, raw)
+		return 0, fmt.Errorf("%w: %s must be a number of 1 or more", errInvalidQuery, name)
 	}
 
 	return n, nil

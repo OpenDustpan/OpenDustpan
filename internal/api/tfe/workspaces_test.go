@@ -1233,3 +1233,35 @@ func TestWorkspacePermissionFlags(t *testing.T) {
 		}
 	})
 }
+
+// TestListPageErrorsNameTheParameter proves that a page value that is not a
+// number of 1 or more answers 422 with a detail that names the parameter and
+// its rule, and does not repeat the value.
+func TestListPageErrorsNameTheParameter(t *testing.T) {
+	t.Parallel()
+
+	handler := newPagingHandler(t, allowAll())
+
+	const (
+		size   = "invalid query parameter: page[size] must be a number of 1 or more"
+		number = "invalid query parameter: page[number] must be a number of 1 or more"
+	)
+
+	for _, tc := range []struct{ query, want string }{
+		{query: "page[size]=0", want: size},
+		{query: "page[size]=abc", want: size},
+		{query: "page[number]=0", want: number},
+		{query: "page[number]=-3", want: number},
+		{query: "page[number]=99999999999999999999", want: number},
+	} {
+		rec := httptest.NewRecorder()
+		target := "/api/v2/organizations/acme/workspaces?" + tc.query
+		handler.ServeHTTP(rec, workspaceRequest(t, http.MethodGet, target, ""))
+
+		var doc jsonAPIErrorDoc
+		if err := json.Unmarshal(rec.Body.Bytes(), &doc); err != nil || rec.Code != http.StatusUnprocessableEntity ||
+			len(doc.Errors) != 1 || doc.Errors[0].Detail != tc.want {
+			t.Errorf("%s: answer %d %s, want 422 with the detail %q", tc.query, rec.Code, rec.Body.String(), tc.want)
+		}
+	}
+}

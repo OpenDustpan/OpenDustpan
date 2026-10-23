@@ -99,7 +99,9 @@ func (h *Handler) stateResourcePaging(w http.ResponseWriter, r *http.Request) (s
 	if raw := r.URL.Query().Get("page[size]"); raw != "" {
 		n, err := strconv.Atoi(raw)
 		if err != nil || n <= 0 || n > maxResourcePageSize {
-			h.writeError(r.Context(), w, fmt.Errorf("%w: resource page size %q", workspace.ErrInvalidState, raw))
+			h.writeError(r.Context(), w, fmt.Errorf(
+				"%w: page[size] must be a number from 1 to %d", errInvalidQuery, maxResourcePageSize,
+			))
 
 			return "", 0, false
 		}
