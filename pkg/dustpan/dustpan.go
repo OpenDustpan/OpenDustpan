@@ -95,6 +95,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/session"
 	"opendustpan.org/opendustpan/pkg/stack"
 	"opendustpan.org/opendustpan/pkg/tempadmin"
+	"opendustpan.org/opendustpan/pkg/trigger"
 	"opendustpan.org/opendustpan/pkg/workspace"
 )
 
@@ -180,6 +181,7 @@ type settings struct {
 	profileStore         profile.Store
 	sinks                sinkSettings
 	jobStore             job.Store
+	triggerStore         trigger.Store
 	driftStore           drift.Store
 	savedViewStore       savedview.Store
 	gitHost              gitHostSettings
@@ -725,6 +727,7 @@ func defaultSettings() *settings {
 		profileStore:            nil,
 		sinks:                   sinkSettings{store: nil, senders: nil, ports: egress.Ports{}},
 		jobStore:                nil,
+		triggerStore:            nil,
 		driftStore:              nil,
 		savedViewStore:          nil,
 		gitHost:                 gitHostSettings{store: nil, allow: nil, cas: nil, loopback: false, checkLimits: nil},
@@ -838,6 +841,7 @@ func NewServer(opts ...Option) (*Server, error) {
 	}
 
 	wireDevGuard(cfg)
+	wireNamespaceServiceGuard(cfg)
 
 	svc.tempAdmins, err = newTempAdminService(cfg)
 	if err != nil {
@@ -910,6 +914,17 @@ func wireDevGuard(cfg *settings) {
 	}
 
 	cfg.authenticator = principal.RefuseDevSubjects(cfg.authenticator).OnRefused(devRefusalAudit(cfg))
+}
+
+// wireNamespaceServiceGuard makes the authenticator refuse a caller with the
+// subject of a namespace service principal, on every kind of installation.
+// The server builds that principal itself, so no authenticator gives it.
+func wireNamespaceServiceGuard(cfg *settings) {
+	if cfg.authenticator == nil {
+		return
+	}
+
+	cfg.authenticator = principal.RefuseNamespaceServiceSubjects(cfg.authenticator)
 }
 
 // requestOf answers the client address and the request ID that the server
@@ -1217,6 +1232,9 @@ type neutralHandlers struct {
 	sinks http.Handler
 	// jobs is nil when no job store is set.
 	jobs http.Handler
+	// triggers is nil when no trigger store is set, or the server lacks the
+	// job service that a trigger starts a plan through.
+	triggers http.Handler
 	// drift is nil when no drift store is set.
 	drift http.Handler
 	// registry is nil when no registry store is set.
@@ -1259,22 +1277,7 @@ func newNeutralHandlers(
 		return neutralHandlers{}, err
 	}
 
-	// One job service starts the jobs of the jobs API and the drift checks.
-	var starter job.Starter
-
-	if cfg.jobStore != nil {
-		starter, err = newJobService(svc, cfg)
-		if err != nil {
-			return neutralHandlers{}, err
-		}
-	}
-
-	jobs, err := newJobsHandler(svc, cfg, onFailure, starter)
-	if err != nil {
-		return neutralHandlers{}, err
-	}
-
-	drifts, err := newDriftHandler(svc, cfg, onFailure, starter)
+	jobAPIs, err := newJobAndDriftHandlers(svc, cfg, onFailure)
 	if err != nil {
 		return neutralHandlers{}, err
 	}
@@ -1284,12 +1287,51 @@ func newNeutralHandlers(
 		return neutralHandlers{}, err
 	}
 
+	triggers, err := newTriggersHandler(svc, cfg, onFailure)
+	if err != nil {
+		return neutralHandlers{}, err
+	}
+
 	return neutralHandlers{
 		inventory: units, audit: entries, context: contexts, runners: runners, profiles: profiles, sinks: sinks,
-		jobs:     jobs,
-		drift:    drifts,
+		jobs:     jobAPIs.jobs,
+		triggers: triggers,
+		drift:    jobAPIs.drift,
 		registry: registries,
 	}, nil
+}
+
+// jobAPIs holds the jobs API and the drift API, which share one job service.
+type jobAPIs struct {
+	jobs  http.Handler
+	drift http.Handler
+}
+
+// newJobAndDriftHandlers builds the jobs API and the drift API. One job service
+// starts the jobs of the jobs API and the drift checks.
+func newJobAndDriftHandlers(svc services, cfg *settings, onFailure func()) (jobAPIs, error) {
+	var starter job.Starter
+
+	if cfg.jobStore != nil {
+		service, err := newJobService(svc, cfg)
+		if err != nil {
+			return jobAPIs{jobs: nil, drift: nil}, err
+		}
+
+		starter = service
+	}
+
+	jobs, err := newJobsHandler(svc, cfg, onFailure, starter)
+	if err != nil {
+		return jobAPIs{jobs: nil, drift: nil}, err
+	}
+
+	drifts, err := newDriftHandler(svc, cfg, onFailure, starter)
+	if err != nil {
+		return jobAPIs{jobs: nil, drift: nil}, err
+	}
+
+	return jobAPIs{jobs: jobs, drift: drifts}, nil
 }
 
 // newReadiness builds the readiness probe: it pings the store and the blob
@@ -3924,6 +3966,9 @@ func mountAPI(mux *rootMux, a adapters, cfg *settings) error {
 		return withCORS(withMaintenance(h, a.maintenance, shapeInventory, cfg.logger), cfg.allowedOrigins)
 	})
 	mountV1(mux, a.jobs, func(h http.Handler) http.Handler {
+		return withCORS(withMaintenance(h, a.maintenance, shapeInventory, cfg.logger), cfg.allowedOrigins)
+	})
+	mountV1(mux, a.triggers, func(h http.Handler) http.Handler {
 		return withCORS(withMaintenance(h, a.maintenance, shapeInventory, cfg.logger), cfg.allowedOrigins)
 	})
 	mountV1(mux, a.drift, func(h http.Handler) http.Handler {

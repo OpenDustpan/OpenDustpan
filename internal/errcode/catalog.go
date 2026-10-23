@@ -111,6 +111,7 @@ func areas() []func() []Spec {
 		stackSpecs,
 		stateVersionSpecs,
 		tokenSpecs,
+		triggerSpecs,
 		unitSpecs,
 		updateSpecs,
 		upgradeSpecs,

@@ -315,7 +315,7 @@ func (h *Handler) startRequest(r *http.Request, t *target, b *startBody, key str
 
 	return job.StartRequest{
 		Unit: unit, Operation: op, Purpose: "", Executor: "", Location: loc, Pool: b.Pool, Edits: nil, Delivery: "",
-		Source: job.SourceAPI, IdempotencyKey: key, Reason: b.Reason, BreakGlass: nil,
+		Source: job.SourceAPI, IdempotencyKey: key, Reason: b.Reason, BreakGlass: nil, Trigger: nil,
 		Channel:  sessionauth.AuditChannel(r, channelHeader),
 		SourceIP: clientip.String(r), UserAgent: truncate(userAgent(r), audit.MaxUserAgentLen),
 		RequestID: requestid.FromContext(r.Context()),

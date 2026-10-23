@@ -54,6 +54,7 @@ func gated() []errcodetest.Adapter {
 			"errorResponse", "codedResponse", "codedError", "reauthenticateResponse", "enterRefusedResponse",
 		}, nil),
 		api("tfe", []string{"jsonAPIError", "errorClass", "registryErrors"}, nil),
+		api("triggers", []string{"errorResponse"}, nil),
 	}
 }
 

@@ -1215,21 +1215,32 @@ func (s *Service) checkEscalation(
 }
 
 // checkSubject returns principal.ErrNotFound when the subject does not
-// exist, and ErrInvalid for an unknown subject kind.
+// exist, and ErrInvalid for an unknown subject kind. It returns ErrInvalid,
+// wrapped with principal.ErrReservedSubject, for a principal record with the
+// subject of the namespace service principal.
 func (s *Service) checkSubject(ctx context.Context, subject Subject) error {
-	var err error
-
 	switch subject.Kind {
 	case SubjectPrincipal:
-		_, err = s.directory.GetPrincipal(ctx, subject.ID)
+		p, err := s.directory.GetPrincipal(ctx, subject.ID)
+		if err != nil {
+			return fmt.Errorf("grant subject %s: %w", subject.String(), err)
+		}
+
+		// Defense in depth: the principal API refuses this subject, so no
+		// record should have it, and the Authorizer ignores every stored
+		// grant of it. This check stays so that a record from a restore or a
+		// row of another version never takes a grant, and no role, also not
+		// one with unit:run-plan, goes to the namespace service principal.
+		if identity.IsNamespaceServiceSubject(p.Subject) {
+			return fmt.Errorf("%w: %s is the namespace service principal, which takes no grant: %w",
+				ErrInvalid, subject.String(), principal.ErrReservedSubject)
+		}
 	case SubjectGroup:
-		_, err = s.directory.GetGroup(ctx, subject.ID)
+		if _, err := s.directory.GetGroup(ctx, subject.ID); err != nil {
+			return fmt.Errorf("grant subject %s: %w", subject.String(), err)
+		}
 	default:
 		return fmt.Errorf("%w: subject kind %q", ErrInvalid, subject.Kind)
-	}
-
-	if err != nil {
-		return fmt.Errorf("grant subject %s: %w", subject.String(), err)
 	}
 
 	return nil
