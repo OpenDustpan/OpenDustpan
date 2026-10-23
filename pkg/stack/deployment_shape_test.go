@@ -190,6 +190,30 @@ func shapeCases() []shapeCase {
 			sequence:   1,
 			valid:      false,
 		},
+		{
+			name:       "text with a raw byte that is not UTF-8",
+			deployment: "{\"x\":\"a\xffb\"}",
+			sequence:   0,
+			valid:      false,
+		},
+		{
+			name:       "text with a lone surrogate escape",
+			deployment: `{"x":"\ud800"}`,
+			sequence:   0,
+			valid:      false,
+		},
+		{
+			name:       "a versioned deployment with a lone surrogate escape",
+			deployment: `{"deployment":{"x":"\udfff"}}`,
+			sequence:   1,
+			valid:      false,
+		},
+		{
+			name:       "text with a surrogate pair",
+			deployment: `{"x":"😀"}`,
+			sequence:   0,
+			valid:      true,
+		},
 	}
 }
 
