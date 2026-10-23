@@ -2205,3 +2205,69 @@ func TestRevocationConformance(t *testing.T) {
 		return &revocationStore{Store: openURL(t, schemaURL), url: schemaURL}
 	})
 }
+
+// liveMarkerStore adds to the store the hook of the live marker suite: a
+// write of a marker value that the ports never write.
+type liveMarkerStore struct {
+	*revocationStore
+}
+
+var _ storetest.LiveMarkerStore = (*liveMarkerStore)(nil)
+
+// SetMarker implements storetest.LiveMarkerStore. It writes to the schema of
+// this store with another connection, as a restored backup or another tool
+// could.
+func (s *liveMarkerStore) SetMarker(ctx context.Context, table, column, id string, value *int64) (err error) {
+	statements := map[string]string{
+		"principals/deleted_at_ms": `UPDATE principals SET deleted_at_ms = $1 WHERE id = $2`,
+		"grants/revoked_at_ms":     `UPDATE grants SET revoked_at_ms = $1 WHERE id = $2`,
+		"roles/deleted_at_ms":      `UPDATE roles SET deleted_at_ms = $1 WHERE id = $2`,
+		"workspaces/deleted_at_ms": `UPDATE workspaces SET deleted_at_ms = $1 WHERE id = $2`,
+	}
+
+	statement, ok := statements[table+"/"+column]
+	if !ok {
+		return fmt.Errorf("no marker %s.%s", table, column)
+	}
+
+	conn, err := pgx.Connect(ctx, s.url)
+	if err != nil {
+		return fmt.Errorf("connect: %w", err)
+	}
+
+	defer func() {
+		if closeErr := conn.Close(ctx); closeErr != nil {
+			err = errors.Join(err, fmt.Errorf("close: %w", closeErr))
+		}
+	}()
+
+	tag, err := conn.Exec(ctx, statement, value, id)
+	if err != nil {
+		return fmt.Errorf("set the marker: %w", err)
+	}
+
+	if tag.RowsAffected() != 1 {
+		return fmt.Errorf("set the marker: %d rows changed", tag.RowsAffected())
+	}
+
+	return nil
+}
+
+// TestLiveMarkerConformance runs the suite of the live row checks: only a
+// NULL marker reads as live.
+func TestLiveMarkerConformance(t *testing.T) {
+	t.Parallel()
+
+	base := os.Getenv(envURL)
+	if base == "" {
+		t.Skipf("set %s to run the PostgreSQL conformance suite", envURL)
+	}
+
+	storetest.RunLiveMarkers(t, func(t *testing.T) storetest.LiveMarkerStore {
+		t.Helper()
+
+		schemaURL := isolatedURL(t, base)
+
+		return &liveMarkerStore{revocationStore: &revocationStore{Store: openURL(t, schemaURL), url: schemaURL}}
+	})
+}

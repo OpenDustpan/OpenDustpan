@@ -1630,3 +1630,76 @@ func TestRevocationConformance(t *testing.T) {
 		return &revocationStore{Store: s, path: path}
 	})
 }
+
+// liveMarkerStore adds to the store the hook of the live marker suite: a
+// write of a marker value that the ports never write.
+type liveMarkerStore struct {
+	*revocationStore
+}
+
+var _ storetest.LiveMarkerStore = (*liveMarkerStore)(nil)
+
+// SetMarker implements storetest.LiveMarkerStore. It writes to the database
+// file with another handle, as a restored backup or another tool could.
+func (s *liveMarkerStore) SetMarker(ctx context.Context, table, column, id string, value *int64) (err error) {
+	statements := map[string]string{
+		"principals/deleted_at_ms": `UPDATE principals SET deleted_at_ms = ? WHERE id = ?`,
+		"grants/revoked_at_ms":     `UPDATE grants SET revoked_at_ms = ? WHERE id = ?`,
+		"roles/deleted_at_ms":      `UPDATE roles SET deleted_at_ms = ? WHERE id = ?`,
+		"workspaces/deleted_at_ms": `UPDATE workspaces SET deleted_at_ms = ? WHERE id = ?`,
+	}
+
+	statement, ok := statements[table+"/"+column]
+	if !ok {
+		return fmt.Errorf("no marker %s.%s", table, column)
+	}
+
+	raw, err := openRawDB(s.path)
+	if err != nil {
+		return fmt.Errorf("open raw database: %w", err)
+	}
+
+	defer func() {
+		if closeErr := raw.Close(); closeErr != nil {
+			err = errors.Join(err, fmt.Errorf("close raw database: %w", closeErr))
+		}
+	}()
+
+	res, err := raw.ExecContext(ctx, statement, value, id)
+	if err != nil {
+		return fmt.Errorf("set the marker: %w", err)
+	}
+
+	if n, rowsErr := res.RowsAffected(); rowsErr != nil || n != 1 {
+		return fmt.Errorf("set the marker: %d rows changed, err = %w", n, rowsErr)
+	}
+
+	return nil
+}
+
+// TestLiveMarkerConformance runs the suite of the live row checks: only a
+// NULL marker reads as live.
+func TestLiveMarkerConformance(t *testing.T) {
+	t.Parallel()
+
+	storetest.RunLiveMarkers(t, func(t *testing.T) storetest.LiveMarkerStore {
+		t.Helper()
+
+		path := filepath.Join(t.TempDir(), "dustpan.db")
+
+		copyTemplate(t, path)
+
+		s, err := sqlite.Open(t.Context(), path)
+		if err != nil {
+			t.Fatalf("open store: %v", err)
+		}
+
+		t.Cleanup(func() {
+			if err := s.Close(); err != nil {
+				t.Errorf("close store: %v", err)
+			}
+		})
+
+		return &liveMarkerStore{revocationStore: &revocationStore{Store: s, path: path}}
+	})
+}
