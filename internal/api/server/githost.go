@@ -170,61 +170,61 @@ func (h *Handler) keyed(w http.ResponseWriter, r *http.Request, p identity.Princ
 // message that holds no credential and no address. An error that wraps a
 // refusal of the Git host answers a fixed sentence, because the chain can name
 // an internal step.
-func classifyGitHost(err error) (int, string, bool) {
-	for _, try := range []func(error) (int, string, bool){classifyGitHostConflict, classifyGitHostRequest} {
-		if status, message, ok := try(err); ok {
-			return status, message, true
+func classifyGitHost(err error) (failure, bool) {
+	for _, try := range []func(error) (failure, bool){classifyGitHostConflict, classifyGitHostRequest} {
+		if f, ok := try(err); ok {
+			return f, true
 		}
 	}
 
-	return 0, "", false
+	return fail(0, ""), false
 }
 
-func classifyGitHostConflict(err error) (int, string, bool) {
+func classifyGitHostConflict(err error) (failure, bool) {
 	switch {
 	case errors.Is(err, forge.ErrInstallationNotAssigned):
-		return http.StatusConflict, forge.ErrInstallationNotAssigned.Error(), true
+		return fail(http.StatusConflict, forge.ErrInstallationNotAssigned.Error()), true
 	case errors.Is(err, forge.ErrAddressChanged):
-		return http.StatusConflict, "the address of the GitHub App changed after its key was stored: " +
-			"ask the operator to register the app again", true
+		return fail(http.StatusConflict, "the address of the GitHub App changed after its key was stored: "+
+			"ask the operator to register the app again"), true
 	case errors.Is(err, forge.ErrKeyNotOpened):
-		return http.StatusConflict, "the server cannot open the stored key of the GitHub App: " +
-			"ask the operator to register the app again", true
+		return fail(http.StatusConflict, "the server cannot open the stored key of the GitHub App: "+
+			"ask the operator to register the app again"), true
 	case errors.Is(err, forge.ErrAddressRefused):
-		return http.StatusConflict, "the address rules of the server refuse the API address of the GitHub App: " +
-			"ask the operator to change the address or the allowed ranges", true
+		return fail(http.StatusConflict, "the address rules of the server refuse the API address of the GitHub App: "+
+			"ask the operator to change the address or the allowed ranges"), true
 	case errors.Is(err, forge.ErrConnectionExists), errors.Is(err, forge.ErrConnectionLimit),
 		errors.Is(err, forge.ErrDefaultConnection), errors.Is(err, forge.ErrRegistrationInUse):
-		return http.StatusConflict, rootText(err), true
+		return fail(http.StatusConflict, rootText(err)), true
 	case errors.Is(err, forge.ErrVersionConflict):
-		return http.StatusPreconditionFailed, forge.ErrVersionConflict.Error(), true
+		return fail(http.StatusPreconditionFailed, forge.ErrVersionConflict.Error()), true
 	default:
-		return 0, "", false
+		return fail(0, ""), false
 	}
 }
 
-func classifyGitHostRequest(err error) (int, string, bool) {
+func classifyGitHostRequest(err error) (failure, bool) {
 	switch {
 	case errors.Is(err, forge.ErrConnectionNotFound), errors.Is(err, forge.ErrAssignmentNotFound),
 		errors.Is(err, forge.ErrNoRegistration):
-		return http.StatusNotFound, rootText(err), true
+		return fail(http.StatusNotFound, rootText(err)), true
 	case errors.Is(err, forge.ErrInvalid),
 		errors.Is(err, errGitHostAppBody),
 		errors.Is(err, errGitHostInstallationBody),
 		errors.Is(err, errGitHostConnectionBody),
 		errors.Is(err, errGitHostOperatorOwns),
 		errors.Is(err, errGitHostKind):
-		return http.StatusBadRequest, err.Error(), true
+		return fail(http.StatusBadRequest, err.Error()), true
 	case errors.Is(err, errGitHostBodyTooLarge):
-		return http.StatusRequestEntityTooLarge, errGitHostBodyTooLarge.Error(), true
+		return fail(http.StatusRequestEntityTooLarge, errGitHostBodyTooLarge.Error()), true
 	case errors.Is(err, forge.ErrRateLimited):
-		return http.StatusTooManyRequests, "the connection was checked too often: try again later", true
+		return fail(http.StatusTooManyRequests, "the connection was checked too often: try again later"), true
 	case errors.Is(err, forge.ErrAuth):
-		return http.StatusUnprocessableEntity, "GitHub refused the credential of the connection", true
+		return fail(http.StatusUnprocessableEntity, "GitHub refused the credential of the connection"), true
 	case errors.Is(err, forge.ErrUnavailable):
-		return http.StatusServiceUnavailable, "GitHub did not answer: try again later", true
+		return fail(http.StatusServiceUnavailable, "GitHub did not answer: try again later"), true
 	default:
-		return 0, "", false
+		return fail(0, ""), false
 	}
 }
 

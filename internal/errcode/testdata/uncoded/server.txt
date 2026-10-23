@@ -1,7 +1,7 @@
 # The error paths of internal/api/server that answer without a code of the
 # catalog. This list only shrinks: give a path a code, remove its line and
 # lower the limit. A new error path never goes on this list.
-limit 187
+limit 186
 Handler.ServeHTTP: errorResponse{}
 Handler.approveAuditChain: errorResponse{}
 Handler.getAuditChain: errorResponse{}
@@ -129,7 +129,6 @@ classifyRegistry: backup.ErrNotFound
 classifyRegistry: backup.ErrRestoreExists
 classifyRegistry: backup.ErrRestoreNotFound
 classifyRegistry: backup.ErrRestoreRunning
-classifyRegistry: default
 classifyRequest: default
 classifyRequest: errCheckpointsOff
 classifyRequest: errInvalidBody

@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"log/slog"
 	"net/http"
 
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -16,7 +17,18 @@ func WithPrincipalForTest(ctx context.Context, p identity.Principal) context.Con
 // ClassifyForTest returns the status and the message that the error
 // responses of the handlers give for err.
 func ClassifyForTest(err error) (int, string) {
-	return classify(err)
+	f := classify(err)
+
+	return f.status, f.message
+}
+
+// WriteErrorForTest writes the error answer of err, as a handler of the
+// installation API does.
+func WriteErrorForTest(w http.ResponseWriter, r *http.Request, err error) {
+	var h Handler
+
+	h.logger = slog.New(slog.DiscardHandler)
+	h.writeError(r.Context(), w, err)
 }
 
 // DevCodeSignInForTest calls the dev sign-in handler of h directly, as the

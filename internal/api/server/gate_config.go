@@ -574,19 +574,19 @@ func (h *Handler) existingVersion(r *http.Request, stored func() (int64, error))
 // message. The domain text of an invalid or conflicting write names the
 // field or the object and holds no driver detail. A stale fence is a
 // namespace error, which classifyNamespace maps.
-func classifyGateConfig(err error) (int, string, bool) {
+func classifyGateConfig(err error) (failure, bool) {
 	switch {
 	case errors.Is(err, gate.ErrNotFound):
-		return http.StatusNotFound, gateConfigNotFoundMsg, true
+		return fail(http.StatusNotFound, gateConfigNotFoundMsg), true
 	case errors.Is(err, gate.ErrConflict):
-		return http.StatusConflict, "the stored version changed: read it again and retry", true
+		return fail(http.StatusConflict, "the stored version changed: read it again and retry"), true
 	case errors.Is(err, gate.ErrFinal):
-		return http.StatusConflict, err.Error(), true
+		return fail(http.StatusConflict, err.Error()), true
 	case errors.Is(err, gate.ErrInvalid), errors.Is(err, gate.ErrLimit):
-		return http.StatusUnprocessableEntity, err.Error(), true
+		return fail(http.StatusUnprocessableEntity, err.Error()), true
 	case errors.Is(err, gate.ErrUnavailable):
-		return http.StatusServiceUnavailable, "the gate configuration is not available", true
+		return fail(http.StatusServiceUnavailable, "the gate configuration is not available"), true
 	default:
-		return 0, "", false
+		return fail(0, ""), false
 	}
 }

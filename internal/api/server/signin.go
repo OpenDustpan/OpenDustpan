@@ -756,29 +756,29 @@ func noStore(w http.ResponseWriter) {
 }
 
 // classifySignIn maps the errors of the sign-in routes.
-func classifySignIn(err error) (int, string, bool) {
+func classifySignIn(err error) (failure, bool) {
 	switch {
 	case errors.Is(err, errUnknownProvider):
-		return http.StatusNotFound, errUnknownProvider.Error(), true
+		return fail(http.StatusNotFound, errUnknownProvider.Error()), true
 	case errors.Is(err, errProviderDown):
-		return http.StatusBadGateway, errProviderDown.Error(), true
+		return fail(http.StatusBadGateway, errProviderDown.Error()), true
 	case errors.Is(err, errReturnPath):
-		return http.StatusBadRequest, errReturnPath.Error(), true
+		return fail(http.StatusBadRequest, errReturnPath.Error()), true
 	case errors.Is(err, errSignInFailed):
-		return http.StatusBadRequest, errSignInFailed.Error(), true
+		return fail(http.StatusBadRequest, errSignInFailed.Error()), true
 	case errors.Is(err, errNoSession):
-		return http.StatusNotFound, errNoSession.Error(), true
+		return fail(http.StatusNotFound, errNoSession.Error()), true
 	case errors.Is(err, errDevCode), errors.Is(err, errDevKind):
-		return http.StatusForbidden, err.Error(), true
+		return fail(http.StatusForbidden, err.Error()), true
 	case errors.Is(err, errSignInRefused), errors.Is(err, errCSRF), errors.Is(err, errOtherSite):
-		return http.StatusForbidden, err.Error(), true
+		return fail(http.StatusForbidden, err.Error()), true
 	case errors.Is(err, errFreshParam):
-		return http.StatusBadRequest, err.Error(), true
+		return fail(http.StatusBadRequest, err.Error()), true
 	case errors.Is(err, errReauthenticate):
-		return http.StatusUnauthorized, err.Error(), true
+		return fail(http.StatusUnauthorized, err.Error()), true
 	case errors.Is(err, session.ErrEnded):
-		return http.StatusNotFound, errNoSession.Error(), true
+		return fail(http.StatusNotFound, errNoSession.Error()), true
 	default:
-		return 0, "", false
+		return fail(0, ""), false
 	}
 }
