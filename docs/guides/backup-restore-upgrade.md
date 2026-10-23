@@ -36,7 +36,7 @@ A backup holds OpenTofu state that the server encrypted: protect the target.
 
 The two warnings name two risks. Without the key-encryption key, the backup keeps secrets unreadable. It holds OpenTofu state that the server encrypted, so protect the target. Only one backup runs at a time. A second start while one runs answers 409.
 
-A backup keeps running when you start or restart an instance, or when you update the instances one at a time. If the instance that runs the backup stops, another instance continues the backup after the lease ends. The lease is 30 seconds by default. The backup writes each object to the same key again, so the second run replaces the objects of the first run. Any instance answers the state of the backup. A backup that fails ends as `failed` with the error text.
+A backup keeps running when you start or restart a server process, or when you update the server processes one at a time. If the server process that runs the backup stops, another server process continues the backup after the lease ends. The lease is 30 seconds by default. The backup writes each object to the same key again, so the second run replaces the objects of the first run. Any server process answers the state of the backup. A backup that fails ends as `failed` with the error text.
 
 Keep `DUSTPAN_KEY_ENCRYPTION_KEY` apart from the backup target. A backup never holds the key. A lost key still means lost secrets and lost OpenTofu state. Without the key the server cannot open secret values or OpenTofu state after a restore.
 
