@@ -1553,6 +1553,25 @@ ORDER BY target, role;
 SELECT COUNT(*) FROM grants
 WHERE role = $1 AND object_kind IN ('namespace', 'collection', 'unit') AND revoked_at_ms IS NULL;
 
+-- name: CountSiteAdministrators :one
+-- The principals that can act now with the role $1: a current grant of the
+-- role on the installation to the principal, or to a group with an active
+-- membership of the principal. A principal that was ended, was disabled or
+-- belongs to a namespace does not count. Only a person counts: a service
+-- principal can hold the role, but every route that makes a site administrator
+-- needs a fresh console session, which only a person has.
+SELECT COUNT(*) FROM principals p
+WHERE p.deleted_at_ms IS NULL AND p.disabled_at_ms IS NULL AND p.namespace = '' AND p.kind = 'person'
+  AND EXISTS (
+    SELECT 1 FROM grants g
+    WHERE g.role = $1 AND g.object_kind = 'installation' AND g.revoked_at_ms IS NULL
+      AND ((g.subject_kind = 'principal' AND g.subject_id = p.id)
+        OR (g.subject_kind = 'group' AND EXISTS (
+          SELECT 1 FROM group_members m
+          JOIN principal_groups pg ON pg.id = m.group_id
+          WHERE m.group_id = g.subject_id AND m.principal_id = p.id
+            AND m.removed_at_ms IS NULL AND m.state = 'active' AND pg.deleted_at_ms IS NULL))));
+
 -- name: CountRoleGrantsOnPrincipal :one
 SELECT COUNT(*) FROM grants WHERE role = $1 AND object_kind = 'principal' AND revoked_at_ms IS NULL;
 
