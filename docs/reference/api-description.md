@@ -29,7 +29,7 @@ namespace, no setting and no secret.
 | Part | Value |
 | --- | --- |
 | `openapi` | `3.1.0` |
-| `info.version` | The version of the description, for example `0.1.0`. It is not the version of the server. It changes when the description changes. It is valid as a SemVer version and as a PEP 440 version. |
+| `info.version` | The version of the description, for example `0.2.1`. It is not the version of the server. It changes when the description changes. It is valid as a SemVer version and as a PEP 440 version. |
 | `servers` | One relative server, `/` |
 
 The document uses the part of OpenAPI 3.1.0 that maps one to one to 3.0.3, so
@@ -54,7 +54,7 @@ Each operation has these members:
 | `x-dustpan-actions` | The actions that the route declares, each with the kind of the object that it applies to, for example `{"action": "unit:lock", "object": "collection"}`. The kind is `namespace`, `unit`, `collection`, `caller` or `server`. The list is empty for a route that needs no sign-in. |
 | `parameters` | One path parameter for each wildcard of the path. One query parameter for each query value that the route reads. A reference to a shared header parameter when the route takes the header. |
 | `requestBody` | A reference to the schema of the body, for a route that reads a JSON body. A `PATCH` takes `application/merge-patch+json`. A route that reads no body has no `requestBody`. |
-| `responses` | `2XX` for success, with a reference to the schema of the answer when the answer has a body, and `default` for an error |
+| `responses` | One key for each success status code that the route answers, for example `200`, `201`, `202` or `204`. Most routes have one key. A route that answers `201` for a first write and `200` for a replacement has both keys. Each success answer has a reference to the schema of the answer when the answer has a body. A `204` answer has no body. The description never has the key `2XX` or another range. The key `default` is for an error. |
 | `security` | `[]` for a route that needs no sign-in. A route that needs sign-in has no `security` member and uses the default. |
 
 The actions are those that the route declares. A handler can check more, for
@@ -138,7 +138,7 @@ reads them as they are. They are renamed in a later version of the API.
 | `components.parameters.IdempotencyKey` | The `Idempotency-Key` request header: a string of 1 to 255 printable ASCII characters. A route that takes it refers to this parameter. |
 | `components.parameters.IfMatch` | The `If-Match` request header: the `ETag` of the version that the request replaces. A version that does not match answers 412. |
 | `components.parameters.IfMatchRequired` | The same header for a route that answers 428 without it. The parameter has `required: true`. |
-| `components.headers.ETag` | The `ETag` answer header. A route that sends it declares it in its `2XX` answer. |
+| `components.headers.ETag` | The `ETag` answer header. A route that sends it declares it in its success answer. |
 | `components.schemas.ErrorResponse` | The body of an error: `code` (the HTTP status), `message`, and the optional `errorCode` and `errorArgs` |
 
 ## Values that can grow
@@ -189,3 +189,47 @@ To write the checked-in file again after a change of the routes, run:
 ```sh
 go test ./pkg/dustpan -run TestAPIDescriptionGolden -update-api-description
 ```
+
+## Change the version of the description
+
+`info.version` changes with every change of the description. A test in
+`internal/api/apidesc` keeps the file `openapi.pin`. The file holds the
+`info.version` and the SHA-256 of the last committed description. The test
+fails when the bytes of the description differ from the pin and the version
+is the same. It also fails when the version differs and the bytes are the
+same, and when the version does not rise.
+
+After a change of the routes, a contributor does these steps:
+
+1. Raise `DocumentVersion` in `internal/api/apidesc/document.go`. The new
+   version must be higher than the version in `openapi.pin`.
+2. Write the description again:
+
+   ```sh
+   go test ./pkg/dustpan -run TestAPIDescriptionGolden -update-api-description
+   ```
+
+3. Write the pin again. The command refuses to write the pin when the version
+   did not rise:
+
+   ```sh
+   go test ./internal/api/apidesc -run TestVersionFollowsTheDescription -update-description-pin
+   ```
+
+4. Write the golden files of the Go client again. Do this for every change of
+   the version, a patch change too, because the generated files and the
+   metadata of the client hold the full version of the description. Only the
+   major and minor parts of the client version come from the description:
+
+   ```sh
+   go test ./internal/clientgen/golang -run TestRenderGolden -update
+   ```
+
+Commit `document.go`, `openapi.json`, `openapi.pin` and the golden files in
+the same pull request.
+
+Two pull requests that both change the description conflict on `openapi.pin`,
+because both write the two lines of the file. The pull request that merges
+second must raise the version again after it merges `main`. Keep the pin of
+`main` in the conflict, raise `DocumentVersion` above it, and do steps 2 to 4
+again.

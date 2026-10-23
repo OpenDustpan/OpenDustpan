@@ -2675,12 +2675,18 @@ func newInventoryHandler(svc services, cfg *settings, onFailure func()) (http.Ha
 		return nil, err
 	}
 
+	outputSharing, err := newOutputSharingService(cfg)
+	if err != nil {
+		return nil, err
+	}
+
 	handler, err := inventoryapi.NewHandler(inventoryapi.Config{
-		Views:      views,
-		Namespaces: svc.namespaces,
-		Units:      cfg.inventoryReader,
-		Deleted:    deleted,
-		History:    history,
+		Views:         views,
+		OutputSharing: outputSharing,
+		Namespaces:    svc.namespaces,
+		Units:         cfg.inventoryReader,
+		Deleted:       deleted,
+		History:       history,
 		Lifecycles: map[string]inventory.Lifecycle{
 			pulumiTool:   stacks,
 			opentofuTool: workspaces,

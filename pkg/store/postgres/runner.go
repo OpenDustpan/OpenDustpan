@@ -433,16 +433,28 @@ func (r *Runners) JoinTokens(ctx context.Context, pool string) ([]runner.JoinTok
 
 // LookupJoin implements runner.MemberStore.
 func (r *Runners) LookupJoin(ctx context.Context, sum string) (runner.JoinToken, runner.Pool, error) {
-	row, err := r.store.queries.GetRunnerJoinTokenBySHA256(ctx, sum)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return runner.JoinToken{}, runner.Pool{}, runner.ErrNotFound
-	}
+	var (
+		row db.RunnerJoinToken
+		p   runner.Pool
+	)
 
-	if err != nil {
-		return runner.JoinToken{}, runner.Pool{}, fmt.Errorf("select join token: %w", err)
-	}
+	// One snapshot, so the token and its pool come from one state.
+	err := r.store.inSnapshotTx(ctx, func(q *db.Queries) error {
+		var err error
 
-	p, _, err := loadPool(ctx, r.store.queries, row.PoolID)
+		row, err = q.GetRunnerJoinTokenBySHA256(ctx, sum)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return runner.ErrNotFound
+		}
+
+		if err != nil {
+			return fmt.Errorf("select join token: %w", err)
+		}
+
+		p, _, err = loadPool(ctx, q, row.PoolID)
+
+		return err
+	})
 	if err != nil {
 		return runner.JoinToken{}, runner.Pool{}, err
 	}
@@ -1253,33 +1265,45 @@ func renewState(ctx context.Context, q *db.Queries, c durable.Claim, now time.Ti
 
 // Session implements runner.SessionStore.
 func (r *Runners) Session(ctx context.Context, id string) (runner.Session, error) {
-	row, err := r.store.queries.GetRunnerSession(ctx, id)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return runner.Session{}, runner.ErrNotFound
-	}
+	var row db.GetRunnerSessionRow
 
-	if err != nil {
-		return runner.Session{}, fmt.Errorf("select job session: %w", err)
-	}
+	// One snapshot, so the session and its claim come from one state.
+	err := r.store.inSnapshotTx(ctx, func(q *db.Queries) error {
+		var err error
 
-	if row.RunnerRetiredAtMs != 0 {
-		return runner.Session{}, runner.ErrRetired
-	}
+		row, err = q.GetRunnerSession(ctx, id)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return runner.ErrNotFound
+		}
 
-	c := durable.Claim{
-		Operation: durable.ID(row.OperationID),
-		Owner:     row.RunnerID,
-		Token:     row.Token,
-		ExpiresAt: time.Time{},
-	}
+		if err != nil {
+			return fmt.Errorf("select job session: %w", err)
+		}
 
-	_, live, err := liveClaim(ctx, r.store.queries, c)
+		if row.RunnerRetiredAtMs != 0 {
+			return runner.ErrRetired
+		}
+
+		c := durable.Claim{
+			Operation: durable.ID(row.OperationID),
+			Owner:     row.RunnerID,
+			Token:     row.Token,
+			ExpiresAt: time.Time{},
+		}
+
+		_, live, err := liveClaim(ctx, q, c)
+		if err != nil {
+			return err
+		}
+
+		if !live {
+			return runner.ErrClaimLost
+		}
+
+		return nil
+	})
 	if err != nil {
 		return runner.Session{}, err
-	}
-
-	if !live {
-		return runner.Session{}, runner.ErrClaimLost
 	}
 
 	return runner.Session{

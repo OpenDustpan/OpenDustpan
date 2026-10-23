@@ -6,9 +6,10 @@
 #   trivy         v0.75.0  https://trivy.dev/latest/getting-started/installation/
 #   trufflehog    v3.99.2  https://github.com/trufflesecurity/trufflehog#floppy_disk-installation
 #   python3       any 3.x, standard library only (for docs-lint)
+#   node 22 and tsc 6.0.2 (typescript on npm), only for clients-ts-test and clients-conformance
 # nilaway and govulncheck need no install: go run builds the pinned versions below.
 
-.PHONY: regenerate-baseline check fmt lint nilaway vuln semgrep trivy trivy-canary trufflehog licenses docs-lint chart-lint test test-nocache test-postgres test-s3 bench load e2e upgrade-test crash-test soak faults generate build image-smoke compose-smoke demo checks-agent clients-conformance
+.PHONY: regenerate-baseline check fmt lint nilaway vuln semgrep trivy trivy-canary trufflehog licenses docs-lint chart-lint test test-nocache test-postgres test-s3 bench load e2e upgrade-test crash-test soak faults generate build image-smoke compose-smoke demo checks-agent clients-conformance clients-generate clients-check clients-ts-test
 
 check: lint lint-journal-build nilaway vuln semgrep trivy trufflehog licenses docs-lint test bench journal-guard journal-test ## Everything CI checks.
 
@@ -18,6 +19,7 @@ fmt: ## Format Go code (gofumpt, gci, golines).
 lint: ## Strict lint, tidy and generated-code checks for Go.
 	go mod tidy -diff
 	sqlc diff
+	$(MAKE) --no-print-directory clients-check
 	go test ./internal/pulumijournal/internal/gen/ -run TestGenerateMatchesCommittedFile -count=1
 	python3 -I scripts/runner-deps-guard.py --selftest
 	python3 -I scripts/runner-deps-guard.py
@@ -179,8 +181,19 @@ test-s3: ## Go tests in pkg/blob/s3 against a live S3-compatible server (needs D
 e2e: ## Drive real Pulumi CLI and OpenTofu versions against the server (downloads CLIs; see e2e/doc.go). Not part of check; CI runs it as its own job.
 	go test -tags e2e -race -count=1 -parallel 16 -timeout 60m ./e2e/...
 
-clients-conformance: ## Build the server, generate the Go client from the description that the server serves, and run the client conformance suite on it. Not part of check.
-	DUSTPAN_TEST_CLIENTGEN_CONFORMANCE=1 go test -race -count=1 -timeout 15m -run TestGoClientConformance ./internal/clientgen/conformance/
+CLIENTGEN := go run ./cmd/clientgen -target typescript -description internal/api/apidesc/openapi.json -out clients/typescript
+
+clients-generate: ## Regenerate the TypeScript client package in clients/typescript from the API description.
+	$(CLIENTGEN)
+
+clients-check: ## Fail when clients/typescript is not what a fresh run of the generator gives (like sqlc diff). Needs Go only.
+	$(CLIENTGEN) -check
+
+clients-ts-test: ## Compile the TypeScript client strictly and run its tests (needs tsc and Node 22). Not part of check.
+	cd clients/typescript && tsc -p tsconfig.json && node --test "test/*.test.mjs"
+
+clients-conformance: clients-ts-test ## Build the server, generate the Go and TypeScript clients from the description that the server serves, and run the client conformance suite on them. Not part of check.
+	DUSTPAN_TEST_CLIENTGEN_CONFORMANCE=1 go test -race -count=1 -timeout 25m -run 'TestGoClientConformance|TestTypeScriptClientConformance' ./internal/clientgen/conformance/
 
 checks-agent: ## Sync the branch with main, then run generate, check, e2e and a TruffleHog scan of the branch commits with cleanup (SYNC=merge|rebase|none, SKIP="steps", CLEAN_CACHE=1 also deletes the e2e CLI cache).
 	./scripts/checks-agent.sh
@@ -219,6 +232,7 @@ regenerate-baseline: ## Write the baseline migration of each dialect from the mi
 
 generate: ## Regenerate sqlc query code after editing queries.sql or migrations, and the settings reference after editing the CLI declarations.
 	sqlc generate
+	$(CLIENTGEN)
 	go test ./internal/cli/ -run TestConfigurationReference -update -count=1
 	go test ./internal/pulumijournal/internal/gen/ -run TestGenerateMatchesCommittedFile -update -count=1
 

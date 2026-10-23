@@ -154,7 +154,7 @@ func TestStartRouteIsDeclared(t *testing.T) {
 }
 
 // checkPostRoute checks that the handler declares one authorized POST route.
-func checkPostRoute(t *testing.T, h *jobsapi.Handler) {
+func checkPostRoute(t *testing.T, h testHandler) {
 	t.Helper()
 
 	var found *jobsapi.Route

@@ -1,0 +1,48 @@
+{{.Header}}
+
+import {
+  anyValue,
+  array,
+  boolean,
+  closedEnum,
+  dateTime,
+  int64,
+  nullable,
+  number,
+  object,
+  openEnum,
+  optional,
+  record,
+  ref,
+  string,
+} from "./decode.js";
+import type { Decoder } from "./decode.js";
+import type {
+{{- range .Types}}
+  {{.Name}},
+{{- end}}
+} from "./types.js";
+import {
+{{- range .Types}}{{if or .IsClosedEnum .IsOpenEnum}}
+  {{.Name}}Values,
+{{- end}}{{end}}
+} from "./types.js";
+{{range $t := .Types}}
+{{if $t.IsInterface -}}
+/** The validator of {{$t.Name}}. */
+export const decode{{$t.Name}}: Decoder<{{$t.Name}}> = object<{{$t.Name}}>({{tsString $t.Name}}, {
+{{- range $t.Fields}}
+  {{.Name}}: {{if .Optional}}optional({{.Decoder}}){{else}}{{.Decoder}}{{end}},
+{{- end}}
+});
+{{- else if $t.IsRecord -}}
+/** The validator of {{$t.Name}}. */
+export const decode{{$t.Name}}: Decoder<{{$t.Name}}> = record({{$t.RecordDecoder}});
+{{- else if $t.IsClosedEnum -}}
+/** The validator of {{$t.Name}}. It refuses a value that is not in the list. */
+export const decode{{$t.Name}}: Decoder<{{$t.Name}}> = closedEnum({{tsString $t.Name}}, {{$t.Name}}Values);
+{{- else -}}
+/** The validator of {{$t.Name}}. It keeps a value that is not in the list. */
+export const decode{{$t.Name}}: Decoder<{{$t.Name}}> = openEnum<{{$t.Name}}>({{tsString $t.Name}});
+{{- end}}
+{{end}}

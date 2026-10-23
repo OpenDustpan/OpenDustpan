@@ -1,0 +1,17 @@
+{{.Header}}
+{{range $t := .Types}}
+{{jsdoc "" $t.Doc}}{{if $t.IsInterface -}}
+export interface {{$t.Name}} {
+{{- range $t.Fields}}
+{{jsdoc "  " .Doc}}  readonly {{.Name}}{{if .Optional}}?{{end}}: {{.Type}};
+{{- end}}
+}
+{{- else if $t.IsRecord -}}
+export type {{$t.Name}} = Readonly<Record<string, {{$t.RecordType}}>>;
+{{- else -}}
+/** The known values of {{$t.Name}}. */
+export const {{$t.Name}}Values = [{{join $t.Values ", "}}] as const;
+
+export type {{$t.Name}} = (typeof {{$t.Name}}Values)[number]{{if $t.IsOpenEnum}} | (string & {}){{end}};
+{{- end}}
+{{end}}

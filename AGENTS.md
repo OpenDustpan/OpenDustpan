@@ -53,6 +53,7 @@ Do not report work as finished if any of these fail. Say what fails instead.
 ```
 .agents/skills/        agent skills, installed with `npx skills` (see skills-lock.json); .claude/skills/ links here
 cmd/opendustpan/       the binary: flags, env, built-in adapters. Only place that may exit.
+cmd/clientgen/         the client generator: reads openapi.json and writes a client (make clients-generate)
 pkg/                   the public SDK: dustpan, the port packages and the conformance suites (ADR 35, ADR 272)
   dustpan/             the SDK entry point: NewServer + options, routes, probes
   namespace/           domain: namespaces, home region, failover-version fencing
@@ -100,7 +101,7 @@ pkg/                   the public SDK: dustpan, the port packages and the confor
   store/               SQL adapters: sqlite/, postgres/; storetest/ conformance suite (the adapters move to internal/store/)
   <domain>/<domain>test/ the conformance suite of a port (for example stack/stacktest)
 internal/              code that is not part of the SDK
-  <domain>svc/         the service of each split domain package (for example stacksvc); no split exists yet, the ports stay in pkg/<domain>
+  <domain>svc/         the service of each split domain package (for example outputsharesvc); the ports stay in pkg/<domain>
   agent/, dependency/, launcher/, source/, stepup/, unmanaged/, unitimport/, scopeaudit/, cron/
                        domain packages and helpers that the SDK port closure does not reach
   calendar/, catalog/, chatops/, cost/, freeze/, incident/, oncall/, policy/, quota/
@@ -112,7 +113,8 @@ internal/              code that is not part of the SDK
   authgate/, errcode/, oauth/, sessionauth/, token/, ident/, ...
                        helpers shared across packages (sign-in failure windows, error codes, OAuth, tokens, identifiers)
   pulumijournal/       the decoder and the replayer of the Pulumi update journal
-  cli/, clientgen/     the command-line client and the generator of API clients
+  cli/                 the command-line client
+  clientgen/           the client generator: parser, writer, template sets (golang/, typescript/) and the conformance suite
   api/pulumi/          HTTP adapter for the Pulumi Cloud-compatible API (also used by the console)
   api/tfe/             HTTP adapter for the TFE-compatible API (OpenTofu)
   api/inventory/       HTTP adapter for the tool-neutral inventory API (also used by the console)
@@ -122,6 +124,7 @@ internal/              code that is not part of the SDK
   api/runnerapi/       HTTP adapter for the runner protocol (/runner/v1) and the runner management API
   metrics/, pgtest/, servertest/, ...
                        metrics, the PostgreSQL test database and the test server
+clients/typescript/    the generated TypeScript client package; make clients-check fails when it is not what a fresh run gives
 load/                  load harness that replays recorded CLI traffic (make load); not part of make check
 e2e/                   end-to-end suite driving real CLI binaries of every supported tool (make e2e)
 deploy/helm/           the Helm chart in opendustpan/ (templates, values, schema, ci/ profiles); charttest/ holds its golden-file tests (make chart-lint)

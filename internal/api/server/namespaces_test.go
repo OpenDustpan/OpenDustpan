@@ -27,10 +27,10 @@ type namespaceDoc struct {
 // newNamespaceHandler builds a Handler with a SQLite-backed namespace service
 // over a fresh store in region test. The store starts empty, so the first
 // create proves the bootstrap call on an empty installation.
-func newNamespaceHandler(t *testing.T, authz identity.Authorizer) *apiserver.Handler {
+func newNamespaceHandler(t *testing.T, authz identity.Authorizer) testHandler {
 	t.Helper()
 
-	handler, err := apiserver.NewHandler(apiserver.Config{
+	handler, err := newCheckedHandler(t, apiserver.Config{
 		Preferences:      nil,
 		GitHost:          nil,
 		Idempotency:      nil,
@@ -88,7 +88,7 @@ func newTestNamespaces(t *testing.T) *namespace.Service {
 
 // serveNamespace sends one namespace create request with the test token and
 // returns its status and body.
-func serveNamespace(t *testing.T, handler *apiserver.Handler, body string) (int, string) {
+func serveNamespace(t *testing.T, handler testHandler, body string) (int, string) {
 	t.Helper()
 
 	req := httptest.NewRequestWithContext(
@@ -124,7 +124,7 @@ func TestNamespaceRouteDeclaresCreate(t *testing.T) {
 // findNamespaceRoute returns the namespace create route, or false when the
 // table holds none.
 func findNamespaceRoute(
-	t *testing.T, handler *apiserver.Handler,
+	t *testing.T, handler testHandler,
 ) (apiserver.Route, bool) {
 	t.Helper()
 

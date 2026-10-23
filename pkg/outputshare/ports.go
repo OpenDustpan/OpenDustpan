@@ -95,16 +95,32 @@ type Store interface {
 	// reason other than a unit with no stable ID. A stored rule that fails
 	// Rule.Validate never matches.
 	Find(ctx context.Context, producer, consumer Placement) (Rule, error)
+	// Settings keeps the output sharing setting of each namespace.
+	Settings
+}
+
+// Settings keeps the output sharing setting of each namespace. Store embeds
+// it. It is a port of its own, so that the setting can be served apart from
+// the rules.
+type Settings interface {
 	// Setting returns the output sharing setting of the namespace ns. A
 	// namespace that never set it gives DefaultNobody. It returns
-	// namespace.ErrNotFound for an unknown namespace and ErrInvalid for a
-	// stored value that fails Default.Validate, so the caller fails closed.
+	// namespace.ErrNotFound for an unknown namespace, and ErrInvalid for a
+	// namespace name that namespace.ParseName refuses and for a stored value
+	// that fails Default.Validate, so the caller fails closed.
 	Setting(ctx context.Context, ns namespace.Name) (Default, error)
 	// SetSetting stores d as the setting of the namespace ns and appends the
-	// audit entry e in the transaction. It returns ErrInvalid when d fails
-	// Default.Validate, and namespace.ErrFenced. The change applies to the
-	// units that the namespace makes later. It changes no rule of a unit that
-	// exists.
+	// audit entry e in the transaction. When e holds one change, the store
+	// sets the Old value of that change to the value that the write replaces,
+	// read in the same transaction. It returns ErrInvalid when d fails
+	// Default.Validate or when ns fails namespace.ParseName. A valid d
+	// replaces a stored value that fails Default.Validate, and the Old value
+	// of the change then holds the raw stored value, quoted and marked
+	// invalid. It returns
+	// namespace.ErrFenced when the fence is stale or names another namespace
+	// than ns, and namespace.ErrNotFound for an unknown namespace. On every
+	// error the store changes nothing. The change applies to the units that
+	// the namespace makes later. It changes no rule of a unit that exists.
 	SetSetting(ctx context.Context, ns namespace.Name, d Default, fence namespace.Fence, e audit.Entry) error
 }
 

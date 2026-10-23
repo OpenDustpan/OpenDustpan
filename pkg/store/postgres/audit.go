@@ -468,18 +468,33 @@ func auditFenceVersion(ctx context.Context, q *db.Queries, scope namespace.Name)
 func (s *Store) List(ctx context.Context, ns namespace.Name, page audit.Page) (audit.Listing, error) {
 	p := page.Normalized()
 
-	total, err := s.queries.CountAuditEntries(ctx, ns.String())
-	if err != nil {
-		return audit.Listing{}, fmt.Errorf("count audit entries: %w", err)
-	}
+	var (
+		total int64
+		rows  []db.AuditEntry
+	)
 
-	rows, err := s.queries.ListAuditEntries(ctx, db.ListAuditEntriesParams{
-		Namespace: ns.String(),
-		Limit:     clampInt32(p.Size),
-		Offset:    clampInt32(int(p.Offset())),
+	// One snapshot, so the page and the total agree.
+	err := s.inSnapshotTx(ctx, func(q *db.Queries) error {
+		var err error
+
+		total, err = q.CountAuditEntries(ctx, ns.String())
+		if err != nil {
+			return fmt.Errorf("count audit entries: %w", err)
+		}
+
+		rows, err = q.ListAuditEntries(ctx, db.ListAuditEntriesParams{
+			Namespace: ns.String(),
+			Limit:     clampInt32(p.Size),
+			Offset:    clampInt32(int(p.Offset())),
+		})
+		if err != nil {
+			return fmt.Errorf("select audit entries: %w", err)
+		}
+
+		return nil
 	})
 	if err != nil {
-		return audit.Listing{}, fmt.Errorf("select audit entries: %w", err)
+		return audit.Listing{}, err
 	}
 
 	entries := make([]audit.Entry, 0, len(rows))

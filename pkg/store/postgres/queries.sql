@@ -53,6 +53,17 @@ UPDATE namespaces
 SET ip_allowlist = $1
 WHERE name = $2;
 
+-- name: GetNamespaceOutputSharingDefault :one
+SELECT output_sharing_default
+FROM namespaces
+WHERE name = $1;
+
+-- name: SetNamespaceOutputSharingDefault :execrows
+-- Replaces the output sharing setting of one namespace.
+UPDATE namespaces
+SET output_sharing_default = $1
+WHERE name = $2;
+
 -- name: GetNamespaceForShare :one
 -- Reads the namespace row with a shared lock. A switch change waits for the
 -- transaction that reads it, so the switch it reads is the one that commits.
@@ -86,6 +97,17 @@ ON CONFLICT DO NOTHING;
 -- The namespace ID comes from the join, so a caller that reads blobs of the
 -- stack builds their scope without a second read of the namespace.
 SELECT s.namespace, s.project, s.name, s.id, n.id AS namespace_id, s.version, s.created_at_ms, s.updated_at_ms
+FROM stacks AS s
+JOIN namespaces AS n ON n.name = s.namespace
+WHERE s.namespace = $1 AND s.project = $2 AND s.name = $3 AND s.deleted_at_ms IS NULL;
+
+-- name: GetStackWithTags :one
+-- GetStack with the tags of the stack, ordered by name, in one statement, so
+-- the read needs no transaction. The tag names and values are two arrays in
+-- the same order.
+SELECT s.namespace, s.project, s.name, s.id, n.id AS namespace_id, s.version, s.created_at_ms, s.updated_at_ms,
+       ARRAY(SELECT t.name FROM stack_tags AS t WHERE t.stack_id = s.id ORDER BY t.name)::TEXT[] AS tag_names,
+       ARRAY(SELECT t.value FROM stack_tags AS t WHERE t.stack_id = s.id ORDER BY t.name)::TEXT[] AS tag_values
 FROM stacks AS s
 JOIN namespaces AS n ON n.name = s.namespace
 WHERE s.namespace = $1 AND s.project = $2 AND s.name = $3 AND s.deleted_at_ms IS NULL;
@@ -185,13 +207,16 @@ INSERT INTO updates (
 ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15);
 
 -- name: GetUpdate :one
+-- One statement finds the stack by its reference and reads the update, so the
+-- read needs no transaction. No stack and no update both return no row.
 SELECT u.stack_id, u.id, u.kind, u.dry_run, u.status, u.version, u.revision,
        u.lease_digest, u.lease_expires_at_ms, u.created_at_ms, u.started_at_ms, u.ended_at_ms,
        u.created_by, u.restored_from, u.journal_version, u.token_id,
        COALESCE(c.size, 0)::BIGINT AS checkpoint_bytes
 FROM updates AS u
+JOIN stacks AS st ON st.id = u.stack_id
 LEFT JOIN checkpoints AS c ON c.stack_id = u.stack_id AND c.update_id = u.id
-WHERE u.stack_id = $1 AND u.id = $2;
+WHERE st.namespace = @namespace AND st.project = @project AND st.name = @name AND st.deleted_at_ms IS NULL AND u.id = @id;
 
 -- name: SaveUpdate :execrows
 -- A compare-and-swap: it changes nothing unless the stored revision is the
@@ -230,13 +255,16 @@ SET version = $1, updated_at_ms = $2
 WHERE namespace = $3 AND project = $4 AND name = $5 AND deleted_at_ms IS NULL;
 
 -- name: ActiveUpdate :one
+-- One statement finds the stack by its reference and reads the update, so the
+-- read needs no transaction. No stack and no running update both return no row.
 SELECT u.stack_id, u.id, u.kind, u.dry_run, u.status, u.version, u.revision,
        u.lease_digest, u.lease_expires_at_ms, u.created_at_ms, u.started_at_ms, u.ended_at_ms,
        u.created_by, u.restored_from, u.journal_version, u.token_id,
        COALESCE(c.size, 0)::BIGINT AS checkpoint_bytes
 FROM updates AS u
+JOIN stacks AS st ON st.id = u.stack_id
 LEFT JOIN checkpoints AS c ON c.stack_id = u.stack_id AND c.update_id = u.id
-WHERE u.stack_id = $1
+WHERE st.namespace = @namespace AND st.project = @project AND st.name = @name AND st.deleted_at_ms IS NULL
   AND u.status = 'running' AND NOT u.dry_run AND u.kind <> 'preview';
 
 -- name: ListUpdates :many
@@ -281,6 +309,21 @@ JOIN updates AS u ON c.stack_id = u.stack_id AND c.update_id = u.id
 JOIN stacks AS st ON st.id = c.stack_id
 JOIN namespaces AS n ON n.name = st.namespace
 WHERE c.stack_id = $1
+ORDER BY u.version DESC
+LIMIT 1;
+
+-- name: GetLatestCheckpointByRef :one
+-- GetLatestCheckpoint for a stack reference: one statement finds the stack
+-- and reads its checkpoint, so the read needs no transaction. No stack and no
+-- checkpoint both return no row.
+SELECT c.stack_id, n.id AS namespace_id, c.update_id, c.lease_digest, c.schema_version, c.sequence,
+       c.digest, c.invalid, c.features, c.saved_at_ms,
+       c.blob_key, c.size, c.blob_size, c.blob_md5
+FROM checkpoints AS c
+JOIN updates AS u ON c.stack_id = u.stack_id AND c.update_id = u.id
+JOIN stacks AS st ON st.id = c.stack_id
+JOIN namespaces AS n ON n.name = st.namespace
+WHERE st.namespace = @namespace AND st.project = @project AND st.name = @name AND st.deleted_at_ms IS NULL
 ORDER BY u.version DESC
 LIMIT 1;
 
@@ -330,7 +373,21 @@ JOIN stacks AS st ON st.id = c.stack_id
 JOIN namespaces AS n ON n.name = st.namespace
 WHERE c.stack_id = $1 AND c.update_id = $2;
 
+-- name: GetCheckpointByUpdateRef :one
+-- GetCheckpointByUpdate for a stack reference: one statement finds the stack
+-- and reads the checkpoint, so the read needs no transaction. No stack and no
+-- checkpoint both return no row.
+SELECT c.stack_id, n.id AS namespace_id, c.update_id, c.lease_digest, c.schema_version, c.sequence,
+       c.digest, c.invalid, c.features, c.saved_at_ms,
+       c.blob_key, c.size, c.blob_size, c.blob_md5
+FROM checkpoints AS c
+JOIN stacks AS st ON st.id = c.stack_id
+JOIN namespaces AS n ON n.name = st.namespace
+WHERE st.namespace = @namespace AND st.project = @project AND st.name = @name AND st.deleted_at_ms IS NULL AND c.update_id = @update_id;
+
 -- name: GetCheckpointByVersion :one
+-- One statement finds the stack by its reference and reads the checkpoint, so
+-- the read needs no transaction. No stack and no checkpoint both return no row.
 SELECT c.stack_id, n.id AS namespace_id, c.update_id, c.lease_digest, c.schema_version, c.sequence,
        c.digest, c.invalid, c.features, c.saved_at_ms,
        c.blob_key, c.size, c.blob_size, c.blob_md5
@@ -338,7 +395,7 @@ FROM checkpoints AS c
 JOIN updates AS u ON c.stack_id = u.stack_id AND c.update_id = u.id
 JOIN stacks AS st ON st.id = c.stack_id
 JOIN namespaces AS n ON n.name = st.namespace
-WHERE c.stack_id = $1 AND u.version = $2;
+WHERE st.namespace = @namespace AND st.project = @project AND st.name = @name AND st.deleted_at_ms IS NULL AND u.version = @version;
 
 -- name: PutCheckpoint :exec
 INSERT INTO checkpoints (
@@ -362,11 +419,13 @@ ON CONFLICT (stack_id, update_id) DO UPDATE SET
 -- name: ListCheckpointBlobKeys :many
 -- Every blob key the checkpoints of one stack name, ordered. A sweeper
 -- compares this set against the stored objects to find blobs no checkpoint
--- references.
-SELECT blob_key
-FROM checkpoints
-WHERE stack_id = $1
-ORDER BY blob_key;
+-- references. One statement finds the stack by its reference and reads the
+-- keys, so the read needs no transaction. No stack returns no row.
+SELECT c.blob_key
+FROM checkpoints AS c
+JOIN stacks AS st ON st.id = c.stack_id
+WHERE st.namespace = @namespace AND st.project = @project AND st.name = @name AND st.deleted_at_ms IS NULL
+ORDER BY c.blob_key;
 
 -- name: SoftDeleteStack :execrows
 -- Moves the name to deleted_name and frees it (ADR 47). A stack name cannot
@@ -381,11 +440,25 @@ VALUES ($1, $2, $3, $4, $5)
 ON CONFLICT DO NOTHING;
 
 -- name: ListEvents :many
-SELECT sequence, timestamp_ms, payload
-FROM update_events
-WHERE stack_id = $1 AND update_id = $2 AND sequence > $3
-ORDER BY sequence
-LIMIT $4;
+-- One statement finds the stack by its reference, checks the update and reads
+-- the page of events, so the read needs no transaction. No stack and no update
+-- both return no row. An update with no event in the page returns one row
+-- with has_event false.
+SELECT (e.sequence IS NOT NULL)::BOOLEAN AS has_event,
+       COALESCE(e.sequence, 0)::BIGINT AS sequence,
+       COALESCE(e.timestamp_ms, 0)::BIGINT AS timestamp_ms,
+       COALESCE(e.payload, ''::BYTEA)::BYTEA AS payload
+FROM updates AS u
+JOIN stacks AS st ON st.id = u.stack_id
+LEFT JOIN LATERAL (
+    SELECT ev.sequence, ev.timestamp_ms, ev.payload
+    FROM update_events AS ev
+    WHERE ev.stack_id = u.stack_id AND ev.update_id = u.id AND ev.sequence > @after
+    ORDER BY ev.sequence
+    LIMIT @page_limit
+) AS e ON TRUE
+WHERE st.namespace = @namespace AND st.project = @project AND st.name = @name AND st.deleted_at_ms IS NULL AND u.id = @id
+ORDER BY e.sequence;
 
 -- name: CreateSecretKey :execrows
 INSERT INTO secret_keys (namespace, stack_id, wrapper_id, ciphertext, created_at_ms)
