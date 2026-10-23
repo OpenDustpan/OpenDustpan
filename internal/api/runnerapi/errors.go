@@ -32,14 +32,20 @@ const retryAfterSeconds = 5
 type managementError struct {
 	Message string `json:"message"`
 	Code    int    `json:"code"`
+	// ErrorCode is the stable code of the catalog for a program, and ErrorArgs
+	// holds the values that the message names.
+	ErrorCode string         `json:"errorCode,omitempty"`
+	ErrorArgs map[string]any `json:"errorArgs,omitempty"`
 }
 
-// codedManagementError is managementError with the stable machine code of a
-// 403. The fields of managementError keep their names and their meaning.
-type codedManagementError struct {
-	Message   string `json:"message"`
-	Code      int    `json:"code"`
-	ErrorCode string `json:"errorCode"`
+// failure is the answer of the management API to an error before the catalog
+// checks it: the status, the message, the code and the values of the
+// arguments of the code.
+type failure struct {
+	status  int
+	message string
+	code    string
+	args    []errcode.Value
 }
 
 // writeError answers err in the error shape of the scope: the protocol shape
@@ -47,20 +53,11 @@ type codedManagementError struct {
 // management API.
 func (h *Handler) writeError(ctx context.Context, w http.ResponseWriter, scope Scope, err error) {
 	if scope == ScopeAuthorized {
-		status, message := classifyManagement(err)
-		h.logFailure(ctx, status)
+		f := classifyManagement(err)
+		h.logFailure(ctx, f.status)
 		h.logFenced(ctx, err)
-		h.logRefused(ctx, err, message)
-
-		if status == http.StatusForbidden {
-			if code := errcode.Forbidden(err); code != "" {
-				h.writeJSON(ctx, w, status, codedManagementError{Message: message, Code: status, ErrorCode: code})
-
-				return
-			}
-		}
-
-		h.writeJSON(ctx, w, status, managementError{Message: message, Code: status})
+		h.logRefused(ctx, err, f.message)
+		h.writeManagement(ctx, w, f)
 
 		return
 	}
@@ -76,6 +73,41 @@ func (h *Handler) writeError(ctx context.Context, w http.ResponseWriter, scope S
 	}
 
 	h.writeJSON(ctx, w, status, body)
+}
+
+// writeManagement writes f in the error shape of the management API. A code or
+// an argument that the catalog refuses is a bug of this adapter: the answer is
+// then 500 with the code of an internal failure, and the log names the code
+// only, never the error text.
+func (h *Handler) writeManagement(ctx context.Context, w http.ResponseWriter, f failure) {
+	answer, err := errcode.New(f.code, f.args...)
+	if err != nil {
+		h.logger.ErrorContext(ctx, "error code refused", slog.String("code", f.code))
+
+		f = failure{
+			status:  http.StatusInternalServerError,
+			message: internalMessage,
+			code:    errcode.ServerInternal,
+			args:    nil,
+		}
+		answer = errcode.Internal()
+	}
+
+	h.writeAnswer(ctx, w, f.status, f.message, answer)
+}
+
+// writeAnswer writes the error body of the management API for status with
+// message, and with the code and the arguments of answer.
+func (h *Handler) writeAnswer(
+	ctx context.Context,
+	w http.ResponseWriter,
+	status int,
+	message string,
+	answer errcode.Answer,
+) {
+	h.writeJSON(ctx, w, status, managementError{
+		Message: message, Code: status, ErrorCode: answer.Code(), ErrorArgs: answer.Args(),
+	})
 }
 
 // logFenced logs a fenced write with its wrap context, which the answer never
@@ -206,48 +238,92 @@ func classifyProtocolOther(
 // errBadBody reports a body that is not the JSON object of its path.
 var errBadBody = errors.New("the body is not the JSON object of this path")
 
-// classifyManagement maps an error to the status and the message of the
-// management API.
-func classifyManagement(err error) (int, string) {
+// classifyManagement maps an error to the status, the message and the code of
+// the management API.
+func classifyManagement(err error) failure {
 	switch {
 	case errors.Is(err, identity.ErrRateLimited):
-		return http.StatusTooManyRequests, "too many failed sign-ins from this address: try again later"
+		return failure{
+			status:  http.StatusTooManyRequests,
+			message: "too many failed sign-ins from this address: try again later",
+			code:    errcode.AuthRateLimited,
+			args:    nil,
+		}
 	case errors.Is(err, identity.ErrUnauthenticated):
-		return http.StatusUnauthorized, "unauthenticated"
+		return failure{
+			status: http.StatusUnauthorized, message: "unauthenticated", code: errcode.AuthUnauthenticated, args: nil,
+		}
 	case errors.Is(err, sessionauth.ErrCSRF), errors.Is(err, sessionauth.ErrOtherSite):
-		return http.StatusForbidden, sentenceOf(err, []error{sessionauth.ErrCSRF, sessionauth.ErrOtherSite})
+		return failure{
+			status:  http.StatusForbidden,
+			message: sentenceOf(err, []error{sessionauth.ErrCSRF, sessionauth.ErrOtherSite}),
+			code:    errcode.Forbidden(err),
+			args:    nil,
+		}
 	case errors.Is(err, identity.ErrDenied):
-		return http.StatusForbidden, "forbidden"
+		return failure{status: http.StatusForbidden, message: "forbidden", code: errcode.Forbidden(err), args: nil}
 	case errors.Is(err, errNotFound), errors.Is(err, runner.ErrNotFound), errors.Is(err, namespace.ErrNotFound):
-		return http.StatusNotFound, errNotFound.Error()
-	case errors.Is(err, runner.ErrInvalid), errors.Is(err, errBadBody):
-		return http.StatusBadRequest, sentenceOf(err, []error{runner.ErrInvalidHelper, runner.ErrInvalid, errBadBody})
+		return failure{
+			status: http.StatusNotFound, message: errNotFound.Error(), code: errcode.RunnerNotFound, args: nil,
+		}
+	case errors.Is(err, runner.ErrInvalid):
+		return failure{
+			status:  http.StatusBadRequest,
+			message: sentenceOf(err, []error{runner.ErrInvalidHelper, runner.ErrInvalid}),
+			code:    errcode.RunnerInvalid,
+			args:    nil,
+		}
+	case errors.Is(err, errBadBody):
+		return failure{
+			status: http.StatusBadRequest, message: errBadBody.Error(), code: errcode.RequestBodyInvalid, args: nil,
+		}
 	default:
 		return classifyManagementConflict(err)
 	}
 }
 
-// classifyManagementConflict maps the errors of a refused change.
-func classifyManagementConflict(err error) (int, string) {
+// conflict returns the 409 answer of the management API with message and
+// code.
+func conflict(message, code string) failure {
+	return failure{status: http.StatusConflict, message: message, code: code, args: nil}
+}
+
+// classifyManagementConflict maps the errors of a refused change. An error
+// that no case knows answers 500 with no text of the error.
+func classifyManagementConflict(err error) failure {
 	switch {
 	case errors.Is(err, runner.ErrAlreadyExists):
-		return http.StatusConflict, "a runner pool with this name exists: choose another name"
-	case errors.Is(err, runner.ErrImmutable), errors.Is(err, runner.ErrPoolInUse), errors.Is(err, runner.ErrTokenUsed):
-		return http.StatusConflict, sentenceOf(
-			err, []error{runner.ErrImmutable, runner.ErrPoolInUse, runner.ErrTokenUsed},
-		)
+		return conflict("a runner pool with this name exists: choose another name", errcode.RunnerPoolExists)
+	case errors.Is(err, runner.ErrImmutable):
+		return conflict(runner.ErrImmutable.Error(), errcode.RunnerImmutable)
+	case errors.Is(err, runner.ErrPoolInUse):
+		return conflict(runner.ErrPoolInUse.Error(), errcode.RunnerPoolInUse)
+	case errors.Is(err, runner.ErrTokenUsed):
+		return conflict(runner.ErrTokenUsed.Error(), errcode.RunnerTokenUsed)
 	case errors.Is(err, runner.ErrLimit):
-		return http.StatusConflict, runner.ErrLimit.Error()
+		return conflict(runner.ErrLimit.Error(), errcode.RunnerLimit)
 	case errors.Is(err, runner.ErrRetired):
-		return http.StatusConflict, "the runner is retired"
+		return conflict("the runner is retired", errcode.RunnerRetired)
 	case errors.Is(err, namespace.ErrFenced):
-		return http.StatusConflict, namespace.ErrFenced.Error()
+		return conflict(namespace.ErrFenced.Error(), errcode.NamespaceFenced)
 	case errors.Is(err, namespace.ErrNotHome):
-		return http.StatusMisdirectedRequest, "namespace is not homed in this region"
+		return failure{
+			status:  http.StatusMisdirectedRequest,
+			message: "namespace is not homed in this region",
+			code:    errcode.NamespaceNotHome,
+			args:    nil,
+		}
 	case errors.Is(err, maintenance.ErrInMaintenance):
-		return http.StatusServiceUnavailable, maintenance.ErrInMaintenance.Error() + ": try again later"
+		return failure{
+			status:  http.StatusServiceUnavailable,
+			message: maintenance.ErrInMaintenance.Error() + ": try again later",
+			code:    errcode.MaintenanceInMaintenance,
+			args:    nil,
+		}
 	default:
-		return http.StatusInternalServerError, internalMessage
+		return failure{
+			status: http.StatusInternalServerError, message: internalMessage, code: errcode.ServerInternal, args: nil,
+		}
 	}
 }
 
