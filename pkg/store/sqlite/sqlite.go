@@ -233,6 +233,11 @@ type Store struct {
 	// the read of the lock and the delete, inside the transaction. Tests change
 	// the lock there to reach the changed-lock check. Nil in production.
 	beforeLockDelete func(ctx context.Context, q *db.Queries) error
+	// betweenPageReads, when set, runs in QueryStacks and QueryUnits after the
+	// statement of the page and before the statement of its tags or labels,
+	// inside the read transaction. Tests write there to prove that both
+	// statements read one snapshot. Nil in production.
+	betweenPageReads func(ctx context.Context)
 	// guardCancel stops the write-ahead log guard; guardDone closes when the
 	// guard ends. Close waits for the guard before it closes the connection,
 	// so no checkpoint runs on a closed handle.
@@ -400,6 +405,7 @@ func newStore(conn *sql.DB, path string, guard *processGuard) *Store {
 		busyWarned:          false,
 		keepAccessHook:      nil,
 		beforeLockDelete:    nil,
+		betweenPageReads:    nil,
 		binaryVersion:       "",
 		kind:                "",
 		noMigrate:           false,
