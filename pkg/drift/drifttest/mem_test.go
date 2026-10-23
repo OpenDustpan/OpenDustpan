@@ -295,7 +295,10 @@ func TestConformance(t *testing.T) {
 		return drifttest.Harness{
 			Store:    m,
 			Policies: m,
-			Checker:  nil,
+			// The memory reference has no job service. The SDK runs the cases
+			// of Checker with the job service of the server.
+			Checker: nil,
+			Checks:  drifttest.CheckerFixture{Unit: nil, Actor: nil, Job: nil, Lock: nil, SetNow: nil},
 			Namespace: func(_ *testing.T, name string) namespace.Fence {
 				m.mu.Lock()
 				defer m.mu.Unlock()

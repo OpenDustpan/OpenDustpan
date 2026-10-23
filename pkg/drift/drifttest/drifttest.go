@@ -2,10 +2,11 @@
 // Store, PolicyStore and Checker. A new adapter runs Run with a Factory.
 //
 // The cases for Store and PolicyStore are complete and run on the memory
-// reference in this package's tests. The cases for Checker need a job service
-// and wait for the first slice of drift detection. The cases for the inventory
-// projection, the notification and the audit entry run when the harness gives
-// the hook that reads them.
+// reference in this package's tests. The cases for Checker need a job service:
+// the SDK runs them with the job service of the server (see Harness.Checks).
+// The cases of ScheduledChecker and of a change freeze wait for their slice.
+// The cases for the inventory projection, the notification and the audit
+// entry run when the harness gives the hook that reads them.
 package drifttest
 
 import (
@@ -56,10 +57,13 @@ func JobWindow() Window {
 // unit, or drift.StatusUnknown when it holds none. Notified returns the dedupe
 // keys of the drift notifications in the outbox of the namespace. Audited
 // returns the number of audit entries of the namespace.
+// Checks holds the hooks of the cases of Checker: a harness that sets Checker
+// sets each of them.
 type Harness struct {
 	Store      drift.Store
 	Policies   drift.PolicyStore
 	Checker    drift.Checker
+	Checks     CheckerFixture
 	Namespace  func(t *testing.T, name string) namespace.Fence
 	Jobs       Jobs
 	Projection func(t *testing.T, unit graph.Unit) drift.Status
@@ -99,6 +103,10 @@ func Run(t *testing.T, newHarness Factory) {
 				h := newHarness(t)
 				if g.missing(h) {
 					t.Skip("the harness has no " + g.port)
+				}
+
+				if g.port == "Checker" && !h.Checks.complete() {
+					t.Fatal("the harness sets Checker but not each hook of Checks")
 				}
 
 				tc.test(t, h)
