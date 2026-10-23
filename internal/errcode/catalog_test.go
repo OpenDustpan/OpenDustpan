@@ -63,8 +63,8 @@ func checkArgs(t *testing.T, spec errcode.Spec) {
 	}
 }
 
-// TestCatalogIsSorted keeps the catalog in the order of its codes, so that a
-// new code has one place and a review sees it.
+// TestCatalogIsSorted checks that the catalog comes in the order of its
+// codes.
 func TestCatalogIsSorted(t *testing.T) {
 	t.Parallel()
 

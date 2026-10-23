@@ -3,6 +3,7 @@ package errcode
 import (
 	"regexp"
 	"slices"
+	"strings"
 )
 
 // ServerInternal is a 500 that no classify function of the adapter maps.
@@ -59,6 +60,25 @@ type Spec struct {
 // Catalog returns every code, in the order of the codes. It is the one place
 // that declares a code. Each adapter takes its codes from here.
 func Catalog() []Spec {
+	var specs []Spec
+	for _, area := range areas() {
+		specs = append(specs, area()...)
+	}
+
+	slices.SortFunc(specs, func(a, b Spec) int { return strings.Compare(a.Code, b.Code) })
+
+	return specs
+}
+
+// areas returns the spec list of each area. A new area gets its own list in
+// a file catalog_<area>.go and one line here, so that two changes to two
+// areas touch different lists.
+func areas() []func() []Spec {
+	return []func() []Spec{accessSpecs, gateSpecs, serverSpecs, sessionSpecs}
+}
+
+// accessSpecs are the codes of a request that the access rules refuse.
+func accessSpecs() []Spec {
 	return []Spec{
 		{Code: AccessDenied, Meaning: "the caller has no permission for the request", Args: nil},
 		{
@@ -66,13 +86,33 @@ func Catalog() []Spec {
 			Meaning: "the request comes from an address outside the IP allowlist of the namespace",
 			Args:    nil,
 		},
+	}
+}
+
+// gateSpecs are the codes of a request that a gate or an access limit
+// refuses.
+func gateSpecs() []Spec {
+	return []Spec{
 		{Code: GateLimited, Meaning: "an access limit forbids the request", Args: nil},
 		{
 			Code:    GateRuleFailed,
 			Meaning: "a gate or an access limit refused the request because it failed to evaluate",
 			Args:    nil,
 		},
+	}
+}
+
+// serverSpecs are the codes of a failure of the server.
+func serverSpecs() []Spec {
+	return []Spec{
 		{Code: ServerInternal, Meaning: "the server failed with an error that it does not classify", Args: nil},
+	}
+}
+
+// sessionSpecs are the codes of a request with the session cookie that the
+// session checks refuse.
+func sessionSpecs() []Spec {
+	return []Spec{
 		{
 			Code:    SessionCSRF,
 			Meaning: "the request has the session cookie and a missing or wrong CSRF header",

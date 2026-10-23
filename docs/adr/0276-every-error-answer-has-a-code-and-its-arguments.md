@@ -158,7 +158,8 @@ Facts on `main`:
    - `errcode.Spec` declares a code: its meaning and its arguments, each
      with a name and a kind. `errcode.Catalog` returns every spec, in the
      order of the codes. A test checks the grammar, the uniqueness, the
-     camelCase names and the limits.
+     camelCase names and the limits. Each area of codes has its own list,
+     so that two changes to two areas touch different lists.
    - `errcode.New` makes the `errcode.Answer` of a code from typed values:
      `errcode.Identifier`, `errcode.Quantity` and `errcode.Time`. It fails
      for a code outside the catalog, for an argument that the code does
