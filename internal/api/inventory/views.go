@@ -14,6 +14,7 @@ import (
 	"opendustpan.org/opendustpan/internal/api/idempotent"
 	"opendustpan.org/opendustpan/internal/api/refusal"
 	"opendustpan.org/opendustpan/internal/clientip"
+	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/internal/requestid"
 	"opendustpan.org/opendustpan/internal/sessionauth"
 	"opendustpan.org/opendustpan/pkg/audit"
@@ -70,20 +71,24 @@ func newViews(cfg *ViewsConfig) (*views, error) {
 func classifyView(err error) (failure, bool) {
 	switch {
 	case errors.Is(err, savedview.ErrNotPerson):
-		return uncoded(http.StatusForbidden, savedview.ErrNotPerson.Error()), true
+		return fail(http.StatusForbidden, savedview.ErrNotPerson.Error(), errcode.ViewNotPerson), true
 	case errors.Is(err, savedview.ErrNotFound):
-		return uncoded(http.StatusNotFound, savedview.ErrNotFound.Error()), true
-	case errors.Is(err, savedview.ErrInvalid), errors.Is(err, errViewBody):
-		return uncoded(http.StatusBadRequest, err.Error()), true
+		return fail(http.StatusNotFound, savedview.ErrNotFound.Error(), errcode.ViewNotFound), true
+	case errors.Is(err, savedview.ErrInvalid):
+		return fail(http.StatusBadRequest, err.Error(), errcode.ViewInvalid), true
+	case errors.Is(err, errViewBody):
+		return fail(http.StatusBadRequest, err.Error(), errcode.RequestBodyInvalid), true
 	case errors.Is(err, errViewIdempotencyKey):
-		return uncoded(http.StatusBadRequest, err.Error()), true
-	case errors.Is(err, savedview.ErrExists), errors.Is(err, savedview.ErrLimit):
-		return uncoded(http.StatusConflict, err.Error()), true
-	default:
-		var none failure
-
-		return none, false
+		return fail(http.StatusBadRequest, err.Error(), errcode.RequestIdempotencyKeyUnavailable), true
+	case errors.Is(err, savedview.ErrExists):
+		return fail(http.StatusConflict, err.Error(), errcode.ViewAlreadyExists), true
+	case errors.Is(err, savedview.ErrLimit):
+		return fail(http.StatusConflict, err.Error(), errcode.ViewLimit), true
 	}
+
+	var none failure
+
+	return none, false
 }
 
 var (

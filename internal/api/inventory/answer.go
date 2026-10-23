@@ -29,12 +29,6 @@ func fail(status int, message, code string, values ...errcode.Value) failure {
 	return failure{status: status, message: message, code: code, answer: a, err: err}
 }
 
-// uncoded returns the failure of status and message without a code. Only the
-// error paths on the known list of the error-code gate use it.
-func uncoded(status int, message string) failure {
-	return failure{status: status, message: message, code: "", answer: errcode.Answer{}, err: nil}
-}
-
 // writeFailure writes f in the error shape of this API. A failure whose code
 // errcode.New refused answers 500 with server.internal: the refusal is a bug
 // of this adapter, and the log names the code.
