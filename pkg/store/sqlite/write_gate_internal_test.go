@@ -3,6 +3,7 @@ package sqlite
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -159,12 +160,36 @@ func (r *gateRig) holdCheckedWrite() func() {
 		})
 	}()
 
+	var (
+		endOnce sync.Once
+		endErr  error
+	)
+
+	// end lets the held write commit and returns its error. Only the first
+	// call does the work.
+	end := func() error {
+		endOnce.Do(func() {
+			close(free)
+
+			endErr = recvWithin(r.t, done, "the first write to end")
+		})
+
+		return endErr
+	}
+
+	// A test that fails while it holds the write must not leave the write
+	// held. The context of the test has then ended, so the commit fails too:
+	// the cleanup does not report that second failure.
+	r.t.Cleanup(func() {
+		if err := end(); err != nil && !r.t.Failed() {
+			r.t.Errorf("first write = %v, want nil", err)
+		}
+	})
+
 	recvWithin(r.t, entered, "the first write to run")
 
 	return func() {
-		close(free)
-
-		if err := recvWithin(r.t, done, "the first write to end"); err != nil {
+		if err := end(); err != nil {
 			r.t.Errorf("first write = %v, want nil", err)
 		}
 	}
@@ -306,7 +331,7 @@ func TestEnterCanceledInFlight(t *testing.T) {
 	r := newGateRig(t)
 	release := r.holdCheckedWrite()
 
-	ctx, cancel := context.WithCancel(t.Context())
+	ctx, cancel := context.WithTimeout(t.Context(), gateWait)
 	enterRun := r.start(ctx, gateEnters()[0])
 
 	r.waitBlocked("the enter to wait")
