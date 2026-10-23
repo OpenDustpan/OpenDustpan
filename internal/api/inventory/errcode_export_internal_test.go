@@ -47,3 +47,10 @@ var (
 	ErrNoHistory    = errNoHistory
 	ErrLockBody     = errLockBody
 )
+
+// The errors of the saved view routes, for the black-box tests of the error
+// codes.
+var (
+	ErrViewBody           = errViewBody
+	ErrViewIdempotencyKey = errViewIdempotencyKey
+)
