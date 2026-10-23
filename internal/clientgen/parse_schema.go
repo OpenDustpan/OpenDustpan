@@ -452,6 +452,12 @@ func (st *parseState) plainType(ptr string, o object) (model.Type, error) {
 	var zero model.Type
 
 	if isAnyValue(o) {
+		// A field checks its own description after its type, but a result
+		// or a request body has no such step, so this check covers them.
+		if _, err := optionalString(o, ptr, keyDescription); err != nil {
+			return zero, err
+		}
+
 		return anyType(), nil
 	}
 
