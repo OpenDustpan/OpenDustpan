@@ -202,7 +202,15 @@ func TestWriterUsesTheHeaderOfTheLanguage(t *testing.T) {
 	dir := t.TempDir()
 	w := clientgen.NewWriter(hashLanguage{})
 	header := hashLanguage{}.Header(
-		clientgen.Options{Package: "", ClientVersion: "", ServerRelease: "", GeneratorVersion: "0.1.0"},
+		clientgen.Options{
+			Package:           "",
+			ClientVersion:     "",
+			ServerRelease:     "",
+			ServerCommit:      "",
+			Description:       nil,
+			GeneratorVersion:  "0.1.0",
+			DescriptionSHA256: "",
+		},
 		"0.1.0",
 	) + "\n"
 

@@ -244,6 +244,12 @@ func (s *Store) swapStagingSchema(ctx context.Context, staging string) error {
 			return fmt.Errorf("apply staging schema %q over %q: %w", staging, live, backup.ErrCorrupt)
 		}
 
+		// The swap lock comes first, before the swap touches a live table, so
+		// that no snapshot read overlaps the swap.
+		if err := lockSwap(ctx, tx, live); err != nil {
+			return err
+		}
+
 		// The check covers the whole staging area, in the swap transaction,
 		// before the first rename.
 		if err := checkSwapDev(ctx, tx, staging); err != nil {
@@ -251,10 +257,6 @@ func (s *Store) swapStagingSchema(ctx context.Context, staging string) error {
 		}
 
 		previous := live + "_previous"
-
-		if err := lockRevocationJournal(ctx, tx, live); err != nil {
-			return err
-		}
 
 		if _, err := tx.Exec(ctx, "ALTER SCHEMA "+pgIdent(live)+" RENAME TO "+pgIdent(previous)); err != nil {
 			return fmt.Errorf("move live schema aside: %w", err)
@@ -291,6 +293,9 @@ func (s *Store) finishSwap(ctx context.Context, tx pgx.Tx, live, previous, stagi
 		return err
 	}
 
+	// The drop stays in the swap transaction. It waits for each statement in
+	// flight that still reads an old table, so no statement reads the old
+	// tables after the swap commits.
 	if _, err := tx.Exec(ctx, "DROP SCHEMA "+pgIdent(previous)+" CASCADE"); err != nil {
 		return fmt.Errorf("drop previous schema: %w", err)
 	}
@@ -303,15 +308,33 @@ func (s *Store) finishSwap(ctx context.Context, tx pgx.Tx, live, previous, stagi
 }
 
 // fenceRestored increments the failover version of every namespace of the
-// restored schema live and resets the audit sink cursors and leases, in tx.
-// The control tables stay across the swap, so the running restore row of
-// this installation stays readable during the swap and no restored running
-// row needs failing.
+// restored schema live, releases the workspace locks and resets the audit
+// sink cursors and leases, in tx. The control tables stay across the swap,
+// so the running restore row of this installation stays readable during the
+// swap and no restored running row needs failing.
 func fenceRestored(ctx context.Context, tx pgx.Tx, live string) error {
 	fenceNamespaces := "UPDATE " + pgIdent(live) + ".namespaces SET failover_version = failover_version + 1"
 
 	if _, err := tx.Exec(ctx, fenceNamespaces); err != nil {
 		return fmt.Errorf("fence namespaces after restore: %w", err)
+	}
+
+	// The client picks the lock ID of a workspace, so the ID alone cannot tell
+	// a lock from before the restore from a lock after it. The restore
+	// releases every workspace lock, and a client from before the restore
+	// takes a new lock.
+	releaseLocks := "UPDATE " + pgIdent(live) + ".workspaces " +
+		"SET lock_id = '', lock_holder = '', lock_reason = '', locked_at_ms = 0 WHERE lock_id <> ''"
+
+	if _, err := tx.Exec(ctx, releaseLocks); err != nil {
+		return fmt.Errorf("release workspace locks after restore: %w", err)
+	}
+
+	clearInventory := "UPDATE " + pgIdent(live) + ".inventory " +
+		"SET lock_holder = NULL, lock_since_ms = NULL, lock_operation = NULL WHERE tool = $1"
+
+	if _, err := tx.Exec(ctx, clearInventory, inventoryToolOpenTofu); err != nil {
+		return fmt.Errorf("clear workspace inventory locks after restore: %w", err)
 	}
 
 	// The restored log can reuse sequences that a sink already holds, and

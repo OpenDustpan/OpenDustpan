@@ -152,7 +152,7 @@ func newRevealFixtureWithSessions(
 		BaseURL:                 baseurl.Resolver{},
 		MaxBodyBytesInFlight:    0,
 		Gate:                    nil,
-		Audit:                   cfg.store,
+		Audit:                   orTestAudit(cfg.store),
 		OnAuditFailure:          cfg.onFail,
 		CheckpointDeltaCutoff:   0,
 		DenialLimiter:           nil,

@@ -124,7 +124,7 @@ func endAfterTakeover(t *testing.T, h Harness, f fixture, tc *endCall, unit stri
 	t.Helper()
 
 	j := dispatched(t, h, f, plannedJob{unit: unit, op: job.OperationRefresh, steps: changeSteps()})
-	a := claim(t, h, runnerOne, shortLease, runnerKind(&j))
+	a := claim(t, h, runnerOne, longRenew, runnerKind(&j))
 
 	var b job.Assignment
 
@@ -132,7 +132,7 @@ func endAfterTakeover(t *testing.T, h Harness, f fixture, tc *endCall, unit stri
 	// read of A and its end. A takeover finds no record of a step that changes
 	// resources, so it runs the phase.
 	holder := hooked(h, func() {
-		expired(t, a.Claim)
+		lapse(t, h, &a)
 
 		var err error
 
@@ -271,9 +271,9 @@ func takenOver(t *testing.T, h Harness, f fixture, name string) takeover {
 	t.Helper()
 
 	j := dispatched(t, h, f, plannedJob{unit: name, op: job.OperationPlan, steps: nil})
-	first := claim(t, h, runnerOne, shortLease, runnerKind(&j))
+	first := claim(t, h, runnerOne, longRenew, runnerKind(&j))
 
-	expired(t, first.Claim)
+	lapse(t, h, &first)
 
 	second, err := claimAgain(t, h, runnerTwo, runnerKind(&j))
 	if err != nil {
@@ -368,7 +368,7 @@ func testApplyEndAtomic(t *testing.T, h Harness) {
 
 	// A refused audit entry rolls the end back too.
 	bad := entry(f.unit, job.ActionJobRead)
-	bad.Namespace = "other"
+	bad.Namespace = valueOther
 
 	if _, err := h.Jobs.Apply(t.Context(), good, f.fence, []audit.Entry{bad}); err == nil {
 		t.Fatal("Apply with an entry of another namespace = nil, want an error")
@@ -499,7 +499,7 @@ func testClaimAudit(t *testing.T, h Harness) {
 	// A phase that changes resources: the claim writes the entry in its own
 	// transaction, and a takeover is a claim too.
 	apply := dispatched(t, h, f, plannedJob{unit: unitName(1), op: job.OperationRefresh, steps: changeSteps()})
-	a := claim(t, h, runnerOne, shortLease, runnerKind(&apply))
+	a := claim(t, h, runnerOne, longRenew, runnerKind(&apply))
 
 	got := claimEntriesOf(t, h, f)
 	if len(got) != 1 {

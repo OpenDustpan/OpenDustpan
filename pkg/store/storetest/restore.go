@@ -11,8 +11,10 @@ import (
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/installation"
+	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/workspace"
 )
 
 // RestoreStore is every port the restore suite exercises: the backup store
@@ -81,6 +83,7 @@ func RunRestore(t *testing.T, newStore RestoreFactory) {
 		{name: "apply drops the pre-backup row, which is re-recorded after", test: testRestoreApplyReRecordsBackup},
 		{name: "apply without staged data is corrupt", test: testRestoreApplyWithoutStaging},
 		{name: "bump increments every namespace and fences stale writes", test: testRestoreBumpFences},
+		{name: "apply releases the workspace locks of the backup", test: testRestoreApplyReleasesWorkspaceLocks},
 		{name: "export does not tear a concurrent stack write", test: testRestoreExportDoesNotTear},
 		{name: "staging loads a backup without touching live data", test: testRestoreStagingKeepsLive},
 		{name: "staging refuses a backup with an unsealed state version", test: testRestoreStagingRefusesUnsealedState},
@@ -96,6 +99,10 @@ func RunRestore(t *testing.T, newStore RestoreFactory) {
 			test: testRestoreKeepsLiveOnlyPrincipal,
 		},
 		{name: "a restore that keeps access refuses unknown namespaces and units", test: testRestoreKeepAccessMismatch},
+		{
+			name: "a read of the newest profile revision during a restore swap never answers not found",
+			test: testRestoreProfileRevisionDuringSwap,
+		},
 	}
 
 	for _, tc := range cases {
@@ -1305,4 +1312,88 @@ func testRestoreBumpFences(t *testing.T, newStore RestoreFactory) {
 	if err := s.CreateStack(ctx, staleStack, fresh.Fence()); err != nil {
 		t.Fatalf("create stack with the fresh fence: %v", err)
 	}
+}
+
+// testRestoreApplyReleasesWorkspaceLocks proves that a restore releases the
+// lock of a workspace that the backup holds. The client chooses the lock ID,
+// so a client from before the restore could present the same ID and write
+// into the restored data.
+func testRestoreApplyReleasesWorkspaceLocks(t *testing.T, newStore RestoreFactory) {
+	t.Helper()
+
+	ctx := t.Context()
+	src := newStore(t)
+	ns := newNamespace(t, src, "acme")
+
+	locked := lockTestWorkspace(t, src, ns, createTestWorkspace(t, src, ns, "prod"), "alice")
+	free := createTestWorkspace(t, src, ns, "dev")
+
+	ps := portableRestoreStores(t, src, newStore(t))
+
+	// The inventory entry must hold the lock before the restore. Without
+	// this, the check on the restored entry below could pass on its own.
+	if workspaceInventoryLock(t, ps.src, ns.Name, locked.Ref.Name.String()) == nil {
+		t.Fatalf("inventory lock of %s before the restore = none, want one", locked.Ref)
+	}
+
+	sink, sum, files := exportPortable(t, ps.src)
+
+	if _, err := ps.dst.StagePortable(ctx, sink.read, sum, files, StageAs(t, ps.dst)); err != nil {
+		t.Fatalf("stage restore: %v", err)
+	}
+
+	if err := ps.dst.ApplyStaging(ctx); err != nil {
+		t.Fatalf("apply staging area: %v", err)
+	}
+
+	for _, ref := range []workspace.Ref{locked.Ref, free.Ref} {
+		if got := workspaceInventoryLock(t, ps.dst, ns.Name, ref.Name.String()); got != nil {
+			t.Fatalf("inventory lock of %s after restore = %+v, want none", ref, got)
+		}
+	}
+
+	got, err := ps.dst.GetWorkspace(ctx, locked.Ref)
+	if err != nil {
+		t.Fatalf("get restored workspace %s: %v", locked.Ref, err)
+	}
+
+	if got.Lock != clearedLock() {
+		t.Fatalf("lock of %s after restore = %+v, want no lock", locked.Ref, got.Lock)
+	}
+
+	if got.ID != locked.ID {
+		t.Fatalf("workspace ID after restore = %q, want %q", got.ID, locked.ID)
+	}
+
+	other, err := ps.dst.GetWorkspace(ctx, free.Ref)
+	if err != nil {
+		t.Fatalf("get restored workspace %s: %v", free.Ref, err)
+	}
+
+	if other.Lock != clearedLock() {
+		t.Fatalf("lock of %s after restore = %+v, want no lock", free.Ref, other.Lock)
+	}
+}
+
+// workspaceInventoryLock returns the lock on the inventory entry of the
+// OpenTofu workspace name in ns, or nil when the entry holds none. The console
+// reads the lock of a workspace from this entry. It fails the test when the
+// inventory has no such entry.
+func workspaceInventoryLock(t *testing.T, s inventory.Reader, ns namespace.Name, name string) *inventory.Lock {
+	t.Helper()
+
+	entries, err := s.ListUnits(t.Context(), ns)
+	if err != nil {
+		t.Fatalf("list inventory of %q: %v", ns, err)
+	}
+
+	for i := range entries {
+		if entries[i].Tool == "opentofu" && entries[i].Name == name {
+			return entries[i].Lock
+		}
+	}
+
+	t.Fatalf("inventory has no opentofu entry %q in %q", name, ns)
+
+	return nil
 }

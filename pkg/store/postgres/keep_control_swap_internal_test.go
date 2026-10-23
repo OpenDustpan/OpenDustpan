@@ -235,8 +235,10 @@ func TestApplyStagingHoldsDurableWrites(t *testing.T) {
 // errNoDropWait reports a swap that never reached the drop of the old schema.
 var errNoDropWait = errors.New("the swap did not wait at the drop of the old schema")
 
-// waitForDropSchema waits until a session waits for a lock in a DROP SCHEMA
-// statement: the swap holds its copy and its locks there.
+// waitForDropSchema waits until a session of the database of pool waits for a
+// lock in a DROP SCHEMA statement: the swap holds its copy and its locks
+// there. pg_stat_activity shows the sessions of every database on the server,
+// so the query reads only the sessions of this database.
 func waitForDropSchema(ctx context.Context, t *testing.T, pool *pgxpool.Pool) {
 	t.Helper()
 
@@ -245,7 +247,8 @@ func waitForDropSchema(ctx context.Context, t *testing.T, pool *pgxpool.Pool) {
 	for time.Now().Before(deadline) {
 		var waiting int
 
-		query := "SELECT count(*) FROM pg_stat_activity WHERE wait_event_type = 'Lock' AND query LIKE 'DROP SCHEMA%'"
+		query := "SELECT count(*) FROM pg_stat_activity WHERE wait_event_type = 'Lock'" +
+			" AND datname = current_database() AND query LIKE 'DROP SCHEMA%'"
 		if err := pool.QueryRow(ctx, query).Scan(&waiting); err != nil {
 			t.Fatalf("read waiting sessions: %v", err)
 		}

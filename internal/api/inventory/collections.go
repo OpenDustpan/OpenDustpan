@@ -167,7 +167,7 @@ func resolveCollectionPath(_ http.ResponseWriter, r *http.Request) (identity.Obj
 // resolveUnitQuery returns the unit named in the unit query value. The value is
 // required, so a move without it fails with a 400 before authorization runs.
 func resolveUnitQuery(_ http.ResponseWriter, r *http.Request) (identity.Object, error) {
-	raw := r.URL.Query().Get("unit")
+	raw := queryOf(r).Get("unit")
 	if raw == "" {
 		return identity.Object{}, errMissingUnit
 	}
@@ -546,7 +546,7 @@ func auditEntry(
 		ValuePath:     "",
 		ValueCount:    nil,
 		SourceIP:      clientip.String(r),
-		UserAgent:     truncateUserAgent(r.UserAgent()),
+		UserAgent:     truncateUserAgent(userAgent(r)),
 		Channel:       sessionauth.AuditChannel(r, channelHeader),
 		Kind:          audit.KindChange,
 		Outcome:       audit.OutcomeSuccess,

@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/api/apidesc"
 	"opendustpan.org/opendustpan/internal/api/idempotent"
 	"opendustpan.org/opendustpan/internal/api/refusal"
 	"opendustpan.org/opendustpan/internal/denylimit"
@@ -86,6 +87,8 @@ type Handler struct {
 // NewHandler returns a Handler.
 func NewHandler(cfg Config) (*Handler, error) {
 	switch {
+	case cfg.Audit == nil:
+		return nil, fmt.Errorf("%w: audit store", ErrMissingDependency)
 	case cfg.Sinks == nil:
 		return nil, fmt.Errorf("%w: sink service", ErrMissingDependency)
 	case cfg.Authenticator == nil:
@@ -96,13 +99,16 @@ func NewHandler(cfg Config) (*Handler, error) {
 		return nil, fmt.Errorf("%w: logger", ErrMissingDependency)
 	}
 
+	recorder, err := refusal.New(cfg.Authorizer, cfg.Audit, cfg.Namespaces, cfg.Logger, cfg.OnAuditFailure)
+	if err != nil {
+		return nil, fmt.Errorf("denial recorder: %w", err)
+	}
+
 	h := &Handler{
-		sinks: cfg.Sinks,
-		authn: cfg.Authenticator,
-		authz: cfg.Authorizer,
-		guard: refusal.New(cfg.Authorizer, cfg.Audit, cfg.Namespaces, cfg.Logger, cfg.OnAuditFailure).
-			WithLimiter(cfg.DenialLimiter).
-			WithSurface("sinks"),
+		sinks:    cfg.Sinks,
+		authn:    cfg.Authenticator,
+		authz:    cfg.Authorizer,
+		guard:    recorder.WithLimiter(cfg.DenialLimiter).WithSurface("sinks"),
 		sessions: cfg.Sessions,
 		idem:     cfg.Idempotency,
 		logger:   cfg.Logger,
@@ -127,7 +133,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // with no header uses the console session cookie, and the bool reports that
 // the cookie signed it in.
 func (h *Handler) authenticate(r *http.Request) (identity.Principal, bool, error) {
-	header := r.Header.Get("Authorization")
+	header := apidesc.Header(r, "Authorization")
 	if header == "" {
 		p, _, err := h.sessions.Authenticate(r)
 

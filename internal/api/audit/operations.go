@@ -1,6 +1,8 @@
 package audit
 
 import (
+	"net/http"
+
 	"opendustpan.org/opendustpan/internal/api/apidesc"
 )
 
@@ -11,6 +13,13 @@ import (
 //
 //nolint:gochecknoglobals // A fixed table; Go has no constant maps.
 var operationLabels = map[string]apidesc.Label{}
+
+// queryOf returns the query of a request, as the label of its route allows
+// the handler to read it. No route of this adapter is in the description yet,
+// so each handler reads every name.
+func queryOf(r *http.Request) apidesc.Query {
+	return apidesc.QueryOf(r, operationLabels)
+}
 
 // Operations returns the routes of this adapter that the description of the
 // tool-neutral REST API holds: the routes under apidesc.Prefix.

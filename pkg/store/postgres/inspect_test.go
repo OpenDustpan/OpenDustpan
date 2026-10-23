@@ -82,7 +82,7 @@ func TestAppliedMigrations(t *testing.T) {
 func checkAppliedMigrated(t *testing.T) {
 	t.Helper()
 
-	migrated := isolatedURL(t, baseURL(t))
+	migrated := emptySchemaURL(t, baseURL(t))
 
 	s, err := postgres.Open(t.Context(), migrated)
 	if err != nil {
@@ -143,7 +143,7 @@ func checkAppliedRows(t *testing.T, applied []schema.AppliedMigration, wantNames
 func checkAppliedMissingTable(t *testing.T) {
 	t.Helper()
 
-	migrated := isolatedURL(t, baseURL(t))
+	migrated := emptySchemaURL(t, baseURL(t))
 
 	s, err := postgres.Open(t.Context(), migrated)
 	if err != nil {

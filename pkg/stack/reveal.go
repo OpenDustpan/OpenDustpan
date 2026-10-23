@@ -68,7 +68,7 @@ func SecretsProvider(deployment []byte) string {
 			return serviceSecretsProvider
 		}
 
-		if name != "secrets_providers" {
+		if name != secretsProvidersMember {
 			if skipErr := skipStreamed(dec); skipErr != nil {
 				return serviceSecretsProvider
 			}

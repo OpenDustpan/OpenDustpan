@@ -8,9 +8,9 @@ import (
 	"testing"
 	"unicode/utf8"
 
+	"opendustpan.org/opendustpan/internal/notify/chat/chattest"
 	"opendustpan.org/opendustpan/pkg/notify"
 	"opendustpan.org/opendustpan/pkg/notify/chat"
-	"opendustpan.org/opendustpan/pkg/notify/chat/chattest"
 	"opendustpan.org/opendustpan/pkg/notify/chat/slack"
 )
 
