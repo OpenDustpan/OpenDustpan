@@ -30,7 +30,7 @@ const descriptionPath = "../../api/apidesc/openapi.json"
 func coveredOperations() []string {
 	return []string{
 		"createProfile", "createProfileRevision", "getCapabilities", "getNotificationSink",
-		"getPreferences", "getProfile", "listNotificationSinks",
+		"getPreferences", "getProfile", "listNotificationSinks", "putGitHostApp",
 	}
 }
 
@@ -45,7 +45,8 @@ func options() clientgen.Options {
 
 	return clientgen.Options{
 		Package: "opendustpan.org/client", ClientVersion: version, ServerRelease: "0.1.0-test",
-		GeneratorVersion: clientgen.GeneratorVersion,
+		ServerCommit: "development", Description: nil,
+		GeneratorVersion: clientgen.GeneratorVersion, DescriptionSHA256: "",
 	}
 }
 

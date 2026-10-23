@@ -2,6 +2,9 @@ package conformance
 
 import (
 	"context"
+	"errors"
+	"net/http"
+	"slices"
 	"strings"
 )
 
@@ -117,22 +120,44 @@ func tokenStaysOnTheHost(ctx context.Context, env Env) error {
 		return err
 	}
 
+	env.Proxy.Reset()
 	env.Proxy.Inject(faultOf(FaultRedirect, opListSinks))
 
 	// The answer of the second listener is 204 with no body, so the client may
-	// report it as an invalid answer. The case checks only where the token went.
-	if _, err := env.Adapter.Call(ctx, sinksCall()); err != nil {
+	// report it as an invalid answer. The error of the call is not the verdict:
+	// the exchanges are.
+	res, err := env.Adapter.Call(ctx, sinksCall())
+	if err != nil && !errors.Is(err, ErrRequestRefused) {
 		return err
 	}
 
-	other := env.Proxy.OtherExchanges()
-	if len(other) != 1 {
-		return failf("want 1 request on the other host, got %d", len(other))
+	if !hasStatus(env.Proxy.Exchanges(), http.StatusTemporaryRedirect) {
+		// The fault must fire. A run in which the redirect does not happen
+		// proves nothing about the token.
+		return failf("the proxy did not redirect the request, so the case proves nothing")
 	}
 
-	if _, has := other[0].Headers["Authorization"]; has {
-		return failf("the client sent the token to another host after a redirect")
+	other := env.Proxy.OtherExchanges()
+
+	switch len(other) {
+	case 0:
+		// A client may refuse the redirect and send nothing to the other
+		// host. Then the call must fail as a transport error.
+		if err != nil || res.Error == nil || !res.Error.Transport {
+			return failf("want a transport error when the client does not follow the redirect, got %+v", res)
+		}
+	case 1:
+		if _, has := other[0].Headers["Authorization"]; has {
+			return failf("the client sent the token to another host after a redirect")
+		}
+	default:
+		return failf("want at most 1 request on the other host, got %d", len(other))
 	}
 
 	return nil
+}
+
+// hasStatus says whether one of the exchanges got the given status.
+func hasStatus(exchanges []Exchange, status int) bool {
+	return slices.ContainsFunc(exchanges, func(e Exchange) bool { return e.Status == status })
 }
