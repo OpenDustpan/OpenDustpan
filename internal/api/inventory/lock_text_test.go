@@ -48,7 +48,7 @@ func TestLockKeepsASurrogatePair(t *testing.T) {
 
 	f := newLockFixture(t, selectiveAuthorizer{deny: nil})
 
-	rec := f.do(t, "alice", http.MethodPut, lockNamespacePath, `{"reason":"freeze 🔒"}`)
+	rec := f.do(t, "alice", http.MethodPut, lockNamespacePath, `{"reason":"freeze \ud83d\udd12"}`)
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "freeze \U0001F512") {
 		t.Fatalf("lock = %d %s, want 200 with the reason and U+1F512", rec.Code, rec.Body.String())
 	}
