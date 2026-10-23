@@ -173,7 +173,9 @@ func describeHandlers(handlers []namedHandler) ([]apidesc.Operation, error) {
 
 	ops := joinOperations(handlers)
 
-	for _, op := range ops {
+	for i := range ops {
+		op := &ops[i]
+
 		if err := op.Validate(); err != nil {
 			return nil, fmt.Errorf("api description: %w", err)
 		}

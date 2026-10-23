@@ -5,8 +5,8 @@ import (
 	"context"
 	"sync"
 
+	"opendustpan.org/opendustpan/internal/scopeaudit"
 	"opendustpan.org/opendustpan/pkg/namespace"
-	"opendustpan.org/opendustpan/pkg/scopeaudit"
 )
 
 // Refusal is one refusal that Refusals saw.

@@ -27,6 +27,8 @@ import (
 	tofuhttpapi "opendustpan.org/opendustpan/internal/api/tofuhttp"
 	triggersapi "opendustpan.org/opendustpan/internal/api/triggers"
 	"opendustpan.org/opendustpan/internal/baseurl"
+	"opendustpan.org/opendustpan/internal/outputsharesvc"
+	registryservice "opendustpan.org/opendustpan/internal/registry/service"
 	"opendustpan.org/opendustpan/internal/token"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/blob"
@@ -45,9 +47,9 @@ import (
 	"opendustpan.org/opendustpan/pkg/notify"
 	"opendustpan.org/opendustpan/pkg/notify/sinks"
 	"opendustpan.org/opendustpan/pkg/objectcontext"
+	"opendustpan.org/opendustpan/pkg/outputshare"
 	"opendustpan.org/opendustpan/pkg/profile"
 	"opendustpan.org/opendustpan/pkg/registry"
-	registryservice "opendustpan.org/opendustpan/pkg/registry/service"
 	"opendustpan.org/opendustpan/pkg/savedview"
 	"opendustpan.org/opendustpan/pkg/secret"
 	"opendustpan.org/opendustpan/pkg/session"
@@ -327,6 +329,11 @@ func (coverageStackStore) ListStacks(_ context.Context, _ stack.Filter) ([]stack
 	return nil, nil
 }
 
+// QueryStacks implements stack.Store over the lists of ListStacks.
+func (coverageStackStore) QueryStacks(ctx context.Context, q stack.PageQuery) ([]stack.Stack, error) {
+	return stack.ListPage(ctx, coverageStackStore{}.ListStacks, q)
+}
+
 func (coverageStackStore) RenameStack(
 	_ context.Context, _ stack.Ref, _ stack.Name, _ namespace.Fence,
 ) error {
@@ -547,6 +554,15 @@ func (coverageWorkspaces) List(_ context.Context, _ namespace.Name) ([]workspace
 	return nil, nil
 }
 
+func (coverageWorkspaces) Query(ctx context.Context, q workspace.ListQuery) (workspace.ListPage, error) {
+	all, err := coverageWorkspaces{}.List(ctx, q.Namespace)
+	if err != nil {
+		return workspace.ListPage{}, err
+	}
+
+	return workspace.PageWorkspaces(all, q), nil
+}
+
 func (coverageWorkspaces) LockForJob(
 	_ context.Context, _ workspace.ID, _, _, _ string,
 ) (workspace.Workspace, error) {
@@ -690,7 +706,16 @@ func coverageInventoryRoutes(tb testing.TB, namespaces *namespace.Service) []Rou
 		tb.Fatalf("manual lock service: %v", err)
 	}
 
+	sharing, err := outputsharesvc.New(outputsharesvc.Config{
+		Settings: coverageOutputSharing{}, Namespaces: coverageNamespaceStore{}, Authorizer: identity.AdminOnly{},
+		Now: nil,
+	})
+	if err != nil {
+		tb.Fatalf("output sharing service: %v", err)
+	}
+
 	handler, err := inventoryapi.NewHandler(inventoryapi.Config{
+		OutputSharing: sharing,
 		Views:         coverageViews(tb),
 		Locks:         locks,
 		PublicURL:     "",
@@ -715,6 +740,20 @@ func coverageInventoryRoutes(tb testing.TB, namespaces *namespace.Service) []Rou
 	}
 
 	return inventoryRefs(handler.Routes())
+}
+
+// coverageOutputSharing is an outputshare.Settings that reads nobody and
+// stores nothing. The coverage check only lists the routes.
+type coverageOutputSharing struct{}
+
+func (coverageOutputSharing) Setting(_ context.Context, _ namespace.Name) (outputshare.Default, error) {
+	return outputshare.DefaultNobody, nil
+}
+
+func (coverageOutputSharing) SetSetting(
+	_ context.Context, _ namespace.Name, _ outputshare.Default, _ namespace.Fence, _ audit.Entry,
+) error {
+	return nil
 }
 
 // coverageContextRoutes returns the context adapter's route table.
@@ -1050,6 +1089,16 @@ type coverageReader struct{}
 
 func (coverageReader) ListUnits(_ context.Context, _ namespace.Name) ([]coreinventory.Entry, error) {
 	return nil, nil
+}
+
+// QueryUnits implements coreinventory.Reader over the entries of ListUnits.
+func (coverageReader) QueryUnits(ctx context.Context, q coreinventory.UnitQuery) ([]coreinventory.Entry, error) {
+	all, err := coverageReader{}.ListUnits(ctx, q.Namespace)
+	if err != nil {
+		return nil, err
+	}
+
+	return coreinventory.PageUnits(all, q), nil
 }
 
 func (coverageReader) GetUnit(_ context.Context, _ string) (coreinventory.Entry, error) {
@@ -1430,6 +1479,7 @@ func CoverageAllowlist() []AllowEntry {
 		jobAllowEntries(),
 		driftAllowEntries(),
 		triggerAllowEntries(),
+		outputSharingAllowEntries(),
 		preferencesAllowEntries(),
 		savedViewAllowEntries(),
 		gitHostAllowEntries(),
@@ -2549,6 +2599,25 @@ func driftAllowEntries() []AllowEntry {
 			Method: http.MethodGet, Path: "/api/dustpan/v1/namespaces/{namespace}/units/{unit_id}/drift",
 			CoveringTest: test, Reason: why,
 		},
+	}
+}
+
+// outputSharingAllowEntries covers the routes of the output sharing setting
+// of a namespace. No CLI calls them: the console and the clients of the API
+// do. The setting step of TestOutputSharingRules reads the setting of a new
+// namespace, refuses a change by a viewer and a value that is not valid, and
+// changes it as the admin.
+func outputSharingAllowEntries() []AllowEntry {
+	const (
+		path = "/api/dustpan/v1/namespaces/{namespace}/output-sharing"
+		test = "TestOutputSharingRules"
+		why  = "Console and client route: no CLI calls it. The setting step of " + test +
+			" reads and changes the setting through the API."
+	)
+
+	return []AllowEntry{
+		{Method: http.MethodGet, Path: path, CoveringTest: test, Reason: why},
+		{Method: http.MethodPut, Path: path, CoveringTest: test, Reason: why},
 	}
 }
 

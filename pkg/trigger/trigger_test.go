@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"opendustpan.org/opendustpan/pkg/cron"
+	"opendustpan.org/opendustpan/internal/cron"
 	"opendustpan.org/opendustpan/pkg/graph"
 	"opendustpan.org/opendustpan/pkg/trigger"
 )

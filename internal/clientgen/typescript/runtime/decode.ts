@@ -1,0 +1,185 @@
+import { invalidValue } from "./errors.js";
+
+/**
+ * A runtime validator. It gives a value of type T, or throws an ApiError of
+ * kind "invalid" with the JSON path of the first wrong value. It never repairs
+ * a value, and an object validator drops the members that its schema does not
+ * declare.
+ */
+export type Decoder<T> = (value: unknown, path: string) => T;
+
+/** The value that a Decoder gives for a schema with no member. */
+type Absent = undefined;
+
+/** A member that can be absent. Make it with optional. */
+export class OptionalField<T> {
+  readonly decode: Decoder<T>;
+
+  constructor(decode: Decoder<T>) {
+    this.decode = decode;
+  }
+}
+
+/** The decoders of the members of an object type T. */
+export type Fields<T> = {
+  readonly [K in keyof T]-?: unknown extends T[K]
+    ? Decoder<unknown> | OptionalField<unknown>
+    : undefined extends T[K]
+      ? OptionalField<Exclude<T[K], Absent>>
+      : Decoder<T[K]>;
+};
+
+function kindOf(value: unknown): string {
+  if (value === null) {
+    return "null";
+  }
+  if (Array.isArray(value)) {
+    return "an array";
+  }
+  return `a ${typeof value}`;
+}
+
+function wrong(path: string, want: string, value: unknown): never {
+  throw invalidValue(path, `want ${want}, got ${kindOf(value)}`);
+}
+
+/** A JSON string. */
+export const string: Decoder<string> = (value, path) =>
+  typeof value === "string" ? value : wrong(path, "a string", value);
+
+/** A JSON boolean. */
+export const boolean: Decoder<boolean> = (value, path) =>
+  typeof value === "boolean" ? value : wrong(path, "a boolean", value);
+
+/** A JSON number. */
+export const number: Decoder<number> = (value, path) =>
+  typeof value === "number" && Number.isFinite(value) ? value : wrong(path, "a number", value);
+
+/**
+ * An integer. A JavaScript number holds an integer exactly up to 2^53 - 1, so
+ * a larger value is refused: JSON.parse would have rounded it.
+ */
+export const int64: Decoder<number> = (value, path) =>
+  typeof value === "number" && Number.isSafeInteger(value)
+    ? value
+    : wrong(path, "an integer that a number holds exactly", value);
+
+const dateTimePattern =
+  /^(\d{4})-(\d{2})-(\d{2})[Tt](\d{2}):(\d{2}):(\d{2})(?:\.\d+)?(?:[Zz]|[+-](\d{2}):(\d{2}))$/;
+
+function daysIn(year: number, month: number): number {
+  if (month === 2) {
+    return year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0) ? 29 : 28;
+  }
+  return [4, 6, 9, 11].includes(month) ? 30 : 31;
+}
+
+/** A string in the RFC 3339 form of a date and time. The value stays a string. */
+export const dateTime: Decoder<string> = (value, path) => {
+  const m = typeof value === "string" ? dateTimePattern.exec(value) : null;
+  if (m === null) {
+    return wrong(path, "a date and time in the RFC 3339 form", value);
+  }
+  const [year, month, day, hour, minute, second] = m.slice(1, 7).map(Number) as [
+    number, number, number, number, number, number,
+  ];
+  // A leap second is second 60. A "Z" suffix gives no offset.
+  const offsetHour = Number(m[7] ?? 0);
+  const offsetMinute = Number(m[8] ?? 0);
+  const ok =
+    month >= 1 && month <= 12 && day >= 1 && day <= daysIn(year, month) &&
+    hour <= 23 && minute <= 59 && second <= 60 &&
+    offsetHour <= 23 && offsetMinute <= 59;
+  return ok ? (value as string) : wrong(path, "a date and time in the RFC 3339 form", value);
+};
+
+/** Any JSON value. */
+export const anyValue: Decoder<unknown> = (value) => value;
+
+/** The decoder of a value that can be JSON null. */
+export function nullable<T>(decode: Decoder<T>): Decoder<T | null> {
+  return (value, path) => (value === null ? null : decode(value, path));
+}
+
+/** The decoder of a list. */
+export function array<T>(decode: Decoder<T>): Decoder<ReadonlyArray<T>> {
+  return (value, path) => {
+    if (!Array.isArray(value)) {
+      return wrong(path, "an array", value);
+    }
+    return value.map((item, i) => decode(item, `${path}[${i}]`));
+  };
+}
+
+/** The decoder of an object with free keys. */
+export function record<T>(decode: Decoder<T>): Decoder<Readonly<Record<string, T>>> {
+  return (value, path) => {
+    if (typeof value !== "object" || value === null || Array.isArray(value)) {
+      return wrong(path, "an object", value);
+    }
+    // Object.fromEntries defines each key as an own property, also the key
+    // "__proto__", so an answer cannot change the prototype of the result.
+    return Object.fromEntries(
+      Object.entries(value).map(([key, item]) => [key, decode(item, `${path}[${JSON.stringify(key)}]`)]),
+    ) as Readonly<Record<string, T>>;
+  };
+}
+
+/** The decoder of a string that is one of the listed values. */
+export function closedEnum<const V extends readonly string[]>(name: string, values: V): Decoder<V[number]> {
+  return (value, path) => {
+    if (typeof value !== "string") {
+      return wrong(path, `a string (${name})`, value);
+    }
+    if (!values.includes(value)) {
+      throw invalidValue(path, `${JSON.stringify(value)} is not a value of ${name}`);
+    }
+    return value;
+  };
+}
+
+/** The decoder of a string that can be a value that the description does not list yet. */
+export function openEnum<T extends string>(name: string): Decoder<T> {
+  return (value, path) =>
+    typeof value === "string" ? (value as T) : wrong(path, `a string (${name})`, value);
+}
+
+/** Marks a member as one that can be absent. */
+export function optional<T>(decode: Decoder<T>): OptionalField<T> {
+  return new OptionalField(decode);
+}
+
+/**
+ * The decoder of an object. It copies the declared members only. A declared
+ * member that is absent is an error, except an optional one.
+ */
+export function object<T extends object>(name: string, fields: Fields<T>): Decoder<T> {
+  const entries = Object.entries(fields) as Array<[string, Decoder<unknown> | OptionalField<unknown>]>;
+  return (value, path) => {
+    if (typeof value !== "object" || value === null || Array.isArray(value)) {
+      return wrong(path, `an object (${name})`, value);
+    }
+    const out: Record<string, unknown> = {};
+    for (const [key, field] of entries) {
+      const memberPath = `${path}.${key}`;
+      if (!Object.hasOwn(value, key)) {
+        if (field instanceof OptionalField) {
+          continue;
+        }
+        throw invalidValue(memberPath, "the member is missing");
+      }
+      const decode = field instanceof OptionalField ? field.decode : field;
+      out[key] = decode((value as Record<string, unknown>)[key], memberPath);
+    }
+    return out as T;
+  };
+}
+
+/**
+ * The decoder that another decoder gives when called. The generated files use
+ * it for each reference to a schema, so that a schema can refer to itself and
+ * the order of the declarations does not matter.
+ */
+export function ref<T>(get: () => Decoder<T>): Decoder<T> {
+  return (value, path) => get()(value, path);
+}

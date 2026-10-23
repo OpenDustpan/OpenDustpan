@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/api/apidesc"
 	"opendustpan.org/opendustpan/internal/api/idempotent"
 	denials "opendustpan.org/opendustpan/internal/api/refusal"
 	"opendustpan.org/opendustpan/internal/denylimit"
@@ -404,7 +405,7 @@ func (c *notFoundWriter) Write(p []byte) (int, error) {
 // console session cookie. A request with both uses the header and ignores
 // the cookie. The session is nil for a caller with a token.
 func (h *Handler) authenticate(r *http.Request) (identity.Principal, *sessionCaller, error) {
-	header := r.Header.Get("Authorization")
+	header := apidesc.Header(r, "Authorization")
 	if header == "" {
 		return h.authenticateSession(r)
 	}

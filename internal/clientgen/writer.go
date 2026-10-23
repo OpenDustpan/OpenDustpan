@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"os"
 	"path"
+	"slices"
 	"strings"
 )
 
@@ -131,15 +132,32 @@ func writeOne(root *os.Root, lang Language, f File) error {
 	return nil
 }
 
-// removeStale removes the files that carry the header of the language and
-// that the new run does not give. Any other file stays, also a file with the
-// header of another generator.
-func removeStale(root *os.Root, lang Language, want map[string]bool) error {
+// skippedDirs are the directories that staleFiles does not enter. A build
+// writes them, and a compiler keeps the leading comment of a source file, so a
+// compiled file of a generated file also carries the header.
+func skippedDirs() []string { return []string{"node_modules", "dist", ".git"} }
+
+// staleFiles lists the files that carry the header of the language and that
+// the new run does not give. It does not enter the directories of
+// skippedDirs.
+func staleFiles(root *os.Root, lang Language, want map[string]bool) ([]string, error) {
 	var stale []string
 
 	err := fs.WalkDir(root.FS(), ".", func(p string, d fs.DirEntry, walkErr error) error {
-		if walkErr != nil || d.IsDir() || want[p] {
+		if walkErr != nil {
 			return walkErr
+		}
+
+		if d.IsDir() {
+			if slices.Contains(skippedDirs(), d.Name()) {
+				return fs.SkipDir
+			}
+
+			return nil
+		}
+
+		if want[p] {
+			return nil
 		}
 
 		head, readErr := readHead(root, p)
@@ -154,7 +172,20 @@ func removeStale(root *os.Root, lang Language, want map[string]bool) error {
 		return nil
 	})
 	if err != nil {
-		return fmt.Errorf("look for stale files: %w", err)
+		return nil, fmt.Errorf("look for stale files: %w", err)
+	}
+
+	return stale, nil
+}
+
+// removeStale removes the files that carry the header of the language and
+// that the new run does not give. Any other file stays, also a file with the
+// header of another generator. It does not enter the directories of
+// skippedDirs.
+func removeStale(root *os.Root, lang Language, want map[string]bool) error {
+	stale, err := staleFiles(root, lang, want)
+	if err != nil {
+		return err
 	}
 
 	for _, p := range stale {

@@ -9,7 +9,6 @@ import (
 	"strings"
 	"testing"
 
-	apiinventory "opendustpan.org/opendustpan/internal/api/inventory"
 	"opendustpan.org/opendustpan/pkg/identity"
 	coreinventory "opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -35,7 +34,7 @@ func labeledEntries() []coreinventory.Entry {
 }
 
 // newFilterHandler returns a handler over labeledEntries with the public URL.
-func newFilterHandler(t *testing.T, authz identity.Authorizer, publicURL string) *apiinventory.Handler {
+func newFilterHandler(t *testing.T, authz identity.Authorizer, publicURL string) testHandler {
 	t.Helper()
 
 	nsStore := &memNamespaceStore{namespaces: map[namespace.Name]namespace.Namespace{}}
@@ -49,7 +48,7 @@ func newFilterHandler(t *testing.T, authz identity.Authorizer, publicURL string)
 }
 
 // newFilterHandlerFor is newFilterHandler with no public URL.
-func newFilterHandlerFor(t *testing.T, authz identity.Authorizer) *apiinventory.Handler {
+func newFilterHandlerFor(t *testing.T, authz identity.Authorizer) testHandler {
 	t.Helper()
 
 	return newFilterHandler(t, authz, "")
@@ -57,7 +56,7 @@ func newFilterHandlerFor(t *testing.T, authz identity.Authorizer) *apiinventory.
 
 // newOutsideGrammarHandler returns a handler over one unit in acme with the
 // labels labels, whatever their form.
-func newOutsideGrammarHandler(t *testing.T, labels map[string]string) *apiinventory.Handler {
+func newOutsideGrammarHandler(t *testing.T, labels map[string]string) testHandler {
 	t.Helper()
 
 	nsStore := &memNamespaceStore{namespaces: map[namespace.Name]namespace.Namespace{}}
@@ -77,7 +76,7 @@ func newOutsideGrammarHandler(t *testing.T, labels map[string]string) *apiinvent
 
 // getPageFrom fetches the unit list of the namespace ns with the query q and
 // decodes it. A body that is not a page decodes to the zero page.
-func getPageFrom(t *testing.T, handler *apiinventory.Handler, ns, q string) (int, pageBody) {
+func getPageFrom(t *testing.T, handler testHandler, ns, q string) (int, pageBody) {
 	t.Helper()
 
 	target := "/api/dustpan/v1/namespaces/" + ns + "/units"

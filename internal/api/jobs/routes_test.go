@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/api/apidesc"
+	"opendustpan.org/opendustpan/internal/api/apidesc/apidesctest"
 	jobsapi "opendustpan.org/opendustpan/internal/api/jobs"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/durable"
@@ -215,7 +216,7 @@ func (a *recordingAuthorizer) seen() []string {
 	return slices.Clone(a.checks)
 }
 
-func newHandler(t *testing.T, authz identity.Authorizer, jobs job.Store) *jobsapi.Handler {
+func newHandler(t *testing.T, authz identity.Authorizer, jobs job.Store) testHandler {
 	t.Helper()
 
 	return newStartHandler(t, authz, jobs, nil, nil)
@@ -224,7 +225,7 @@ func newHandler(t *testing.T, authz identity.Authorizer, jobs job.Store) *jobsap
 // newStartHandler is newHandler with a job service and an audit store.
 func newStartHandler(
 	t *testing.T, authz identity.Authorizer, jobs job.Store, starter job.Starter, entries audit.Store,
-) *jobsapi.Handler {
+) testHandler {
 	t.Helper()
 
 	// The handler needs an audit store; a test that reads the entries passes its own.
@@ -245,8 +246,20 @@ func newStartHandler(
 		t.Fatalf("handler: %v", err)
 	}
 
-	return handler
+	return testHandler{Handler: handler, served: apidesctest.CheckStatus(t, handler)}
 }
+
+// testHandler is the handler of the adapter with the check of the success
+// statuses on its answers: a test fails when a handler answers a success
+// status that the description does not give.
+type testHandler struct {
+	*jobsapi.Handler
+
+	served http.Handler
+}
+
+// ServeHTTP serves with the check.
+func (h testHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) { h.served.ServeHTTP(w, r) }
 
 // unitOf returns the unit reference of the workspace net in the namespace ns.
 func unitOf(t *testing.T, ns namespace.Name, unitID string) identity.Object {

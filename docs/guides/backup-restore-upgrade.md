@@ -154,7 +154,9 @@ not possible until the server leaves maintenance mode.
 The restore increments the failover version of every namespace. Leases,
 update tokens, locks and upload capabilities from before the restore stop
 working, so no client can write data from before the restore into the
-restored data.
+restored data. The restore also releases every OpenTofu workspace lock that
+the backup holds. A client that holds a lock from before the restore must take
+a new lock and read the restored state before it writes.
 
 The command checks the key before the server writes anything. With no key or
 with another key it stops and names `DUSTPAN_KEY_ENCRYPTION_KEY`. A restore

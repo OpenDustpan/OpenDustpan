@@ -171,7 +171,7 @@ func checkRunning(t *testing.T, e *env, id job.ID, runnerID string) {
 func newJobEnv(t *testing.T, open func(t *testing.T) stores) *env {
 	t.Helper()
 
-	return newEnvWith(t, 0, open, func(s stores) job.Claimer {
+	return newEnvWith(t, open, func(s stores) job.Claimer {
 		return job.NewClaimer(s.jobs, s.operations, s.namespaces)
 	})
 }

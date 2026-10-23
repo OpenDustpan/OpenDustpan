@@ -75,6 +75,7 @@ func portableSpec() []PortableTable {
 				{Name: "allow_unlocked_writes", Kind: KindBool},
 				{Name: "ip_allowlist", Kind: KindText},
 				{Name: "id", Kind: KindText},
+				{Name: portColOutputSharingDefault, Kind: KindText},
 			},
 		},
 		{

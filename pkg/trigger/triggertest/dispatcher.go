@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/audit"
-	"opendustpan.org/opendustpan/pkg/cron"
+	"opendustpan.org/opendustpan/internal/cron"
 	"opendustpan.org/opendustpan/pkg/graph"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/job"

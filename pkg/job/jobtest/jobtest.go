@@ -360,6 +360,25 @@ func claimOp(t *testing.T, h Harness, owner string, k durable.Kind, lease time.D
 	return op
 }
 
+// shortenOp moves the expiry of the claim c of a durable operation to
+// shortLease from now with Extend, after the last write that needs a live
+// claim, and fails at once when the expiry does not move earlier. A case
+// claims with a long lease, so a slow store cannot end the claim before the
+// write: only the wait for the end depends on time.
+func shortenOp(t *testing.T, h Harness, c durable.Claim) {
+	t.Helper()
+
+	shorter, err := h.Durable.Extend(t.Context(), c, shortLease)
+	if err != nil {
+		t.Fatalf("durable Extend to a short lease = %v", err)
+	}
+
+	if !shorter.ExpiresAt.Before(c.ExpiresAt) {
+		t.Fatalf("durable Extend to %v did not move the expiry earlier: %v after %v", shortLease, shorter.ExpiresAt,
+			c.ExpiresAt)
+	}
+}
+
 // claimed applies EventClaim for owner to j.
 func claimed(t *testing.T, h Harness, f fixture, j *job.Job, owner string) job.Job {
 	t.Helper()

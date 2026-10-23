@@ -12,6 +12,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"opendustpan.org/opendustpan/internal/api/apidesc"
 	"opendustpan.org/opendustpan/internal/api/refusal"
 	"opendustpan.org/opendustpan/internal/clientip"
 	"opendustpan.org/opendustpan/internal/requestid"
@@ -184,7 +185,7 @@ func refusalReason(err error) (string, bool) {
 // idempotencyKey returns the key of the request, or "" for a request with no
 // key. A key that is not valid, or a second key, is an error.
 func idempotencyKey(r *http.Request) (string, error) {
-	values := r.Header.Values(idempotencyHeader)
+	values := apidesc.HeaderValues(r, idempotencyHeader)
 
 	switch len(values) {
 	case 0:
@@ -272,7 +273,7 @@ func (h *Handler) startRequest(r *http.Request, t *target, b *startBody, key str
 		Unit: unit, Operation: op, Purpose: "", Executor: "", Location: loc, Pool: b.Pool, Edits: nil, Delivery: "",
 		Source: job.SourceAPI, IdempotencyKey: key, Reason: b.Reason, BreakGlass: nil, Trigger: nil,
 		Channel:  sessionauth.AuditChannel(r, channelHeader),
-		SourceIP: clientip.String(r), UserAgent: truncate(r.UserAgent(), audit.MaxUserAgentLen),
+		SourceIP: clientip.String(r), UserAgent: truncate(userAgent(r), audit.MaxUserAgentLen),
 		RequestID: requestid.FromContext(r.Context()),
 	}, nil
 }

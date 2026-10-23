@@ -17,6 +17,7 @@ import (
 
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/outputshare"
 )
 
 // PortableOpener opens the file at path of a portable backup for reading. The
@@ -183,13 +184,15 @@ func checkManualLockReason(value any) error {
 	return nil
 }
 
-// checkPortableValue runs the check of the column that has one: the ID of a
-// namespace, the reason of a manual lock and the document of the preferences
-// of a person.
+// checkPortableValue runs the check of the column that has one: the ID and
+// the output sharing setting of a namespace, the reason of a manual lock and
+// the document of the preferences of a person.
 func checkPortableValue(table, column string, value any) error {
 	switch {
 	case table == portTableNamespaces && column == "id":
 		return checkNamespaceID(value)
+	case table == portTableNamespaces && column == portColOutputSharingDefault:
+		return checkOutputSharingDefault(value)
 	case table == portTableManualLocks && column == portColReason:
 		return checkManualLockReason(value)
 	case table == TablePersonPreferences && column == portColDocument:
@@ -209,6 +212,31 @@ func checkNamespaceID(value any) error {
 
 	if _, err := namespace.ParseID(id); err != nil {
 		return fmt.Errorf("namespace row has an invalid ID: %w: %w", err, ErrCorrupt)
+	}
+
+	return nil
+}
+
+// portColOutputSharingDefault is the column of the output sharing setting of
+// a namespace.
+const portColOutputSharingDefault = "output_sharing_default"
+
+// checkOutputSharingDefault refuses a namespace row whose output sharing
+// setting is not a value of the setting. It returns ErrCorrupt, wrapped with
+// outputshare.ErrInvalid.
+//
+// Defense in depth: the CHECK of the column refuses such a value at the copy,
+// and the store refuses it at each read. This check stays so that a restored
+// backup fails before it reaches the database.
+func checkOutputSharingDefault(value any) error {
+	d, isText := value.(string)
+	if !isText {
+		d = ""
+	}
+
+	if err := outputshare.Default(d).Validate(); err != nil {
+		return fmt.Errorf("namespace row has an invalid output sharing setting: %w: %w",
+			outputshare.ErrInvalid, ErrCorrupt)
 	}
 
 	return nil

@@ -241,6 +241,12 @@ func (h held) actions() []identity.Action {
 // covers every object. It is the scope of the identity.Authorizer port.
 type Scope = identity.Scope
 
+// ScopeExact reports that the scope is exact: Authorize and ListObjects read
+// the same grants, so a unit in the scope passes Authorize.
+func (a *Authorizer) ScopeExact() bool {
+	return true
+}
+
 // ListObjects returns the scope of the objects where p can do action: one
 // query for the subjects, one for the custom roles and one for the grants
 // of the subjects with a role that holds action. An administrator has every

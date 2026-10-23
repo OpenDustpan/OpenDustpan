@@ -14,8 +14,8 @@ import (
 	"strings"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/egress/egresshttp"
 	"opendustpan.org/opendustpan/pkg/egress"
-	"opendustpan.org/opendustpan/pkg/egress/egresshttp"
 	"opendustpan.org/opendustpan/pkg/forge"
 )
 

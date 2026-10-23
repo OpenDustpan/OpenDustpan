@@ -23,7 +23,7 @@ import (
 	"unicode/utf8"
 
 	"opendustpan.org/opendustpan/pkg/audit"
-	"opendustpan.org/opendustpan/pkg/cron"
+	"opendustpan.org/opendustpan/internal/cron"
 	"opendustpan.org/opendustpan/pkg/graph"
 	"opendustpan.org/opendustpan/pkg/identity"
 )
