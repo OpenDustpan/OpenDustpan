@@ -449,9 +449,11 @@ func (h *Handler) writeError(ctx context.Context, w http.ResponseWriter, err err
 
 	f := classify(err)
 	if f.status == http.StatusInternalServerError {
-		// The log names the status only, never the error text: the text
-		// may hold driver detail, a token, or state (ADR 32 decision 7).
-		h.logger.ErrorContext(ctx, "request failed", slog.Int("status", f.status))
+		// The log names the status, the code and the type of the cause,
+		// never the error text: the text may hold driver detail, a token,
+		// or state.
+		h.logger.ErrorContext(ctx, "request failed", slog.Int("status", f.status),
+			slog.String("error_code", f.code), slog.String("cause", causeType(err)))
 	}
 
 	if errors.Is(err, maintenance.ErrInMaintenance) {
