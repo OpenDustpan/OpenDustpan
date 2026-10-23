@@ -228,17 +228,17 @@ func signInOf(t *testing.T, st *sqlite.Store) (*apiserver.SignIn, storeSessions)
 }
 
 // rememberSessions records s as the sessions of h.
-func rememberSessions(h *apiserver.Handler, s storeSessions) {
-	handlerSessions.Store(h, s)
+func rememberSessions(h testHandler, s storeSessions) {
+	handlerSessions.Store(h.Handler, s)
 }
 
 // startSession adds a new console session of "tester" to req, with a sign-in
 // age old, for the handler h. The handler must have been built with
 // signInOf and rememberSessions.
-func startSession(t *testing.T, h *apiserver.Handler, req *http.Request, age time.Duration) {
+func startSession(t *testing.T, h testHandler, req *http.Request, age time.Duration) {
 	t.Helper()
 
-	s, ok := handlerSessions.Load(h)
+	s, ok := handlerSessions.Load(h.Handler)
 	if !ok {
 		t.Fatal("the handler has no sessions: build it with signInOf and rememberSessions")
 	}

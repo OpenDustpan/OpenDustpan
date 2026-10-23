@@ -261,13 +261,13 @@ func testPlanTakeover(t *testing.T, h RecorderHarness) {
 	}
 
 	j := dispatched(t, h.Harness, f, plannedJob{unit: "", op: job.OperationPlan, steps: nil})
-	first := claimOf(t, h.Harness, runnerOne, shortLease, runnerKind(&j))
+	first := claimOf(t, h.Harness, runnerOne, longRenew, runnerKind(&j))
 
 	if err := h.Domain.SetStateVersion(t.Context(), f.fence, f.unit, svTwo); err != nil {
 		t.Fatalf("SetStateVersion = %v", err)
 	}
 
-	expired(t, first.Claim)
+	lapse(t, h.Harness, first)
 
 	second, err := claimAgainOf(t, h.Harness, runnerTwo, runnerKind(&j))
 	if err != nil {

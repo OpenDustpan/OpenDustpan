@@ -5,7 +5,6 @@ import (
 	"net/http"
 
 	jobsapi "opendustpan.org/opendustpan/internal/api/jobs"
-	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/job"
 )
 
@@ -19,20 +18,15 @@ func WithJobStore(st job.Store) Option {
 }
 
 // newJobsHandler builds the jobs API, or returns nil when no job store is
-// set.
-func newJobsHandler(svc services, cfg *settings, onFailure func()) (http.Handler, error) {
+// set. starter is the job service, or nil when the server lacks a port that it needs.
+func newJobsHandler(svc services, cfg *settings, onFailure func(), starter job.Starter) (http.Handler, error) {
 	if cfg.jobStore == nil {
 		return nil, nil //nolint:nilnil // No jobs API: no job store is set.
 	}
 
-	// A namespace store that keeps no audit entries gives a nil store, and a
-	// refusal then writes no entry.
-	var neutralAudit audit.Store
-	if st, ok := cfg.namespaceStore.(audit.Store); ok {
-		neutralAudit = st
-	}
-
-	starter, err := newJobService(svc, cfg)
+	// A namespace store that keeps no audit entries is an error: a refusal
+	// always writes its entry.
+	neutralAudit, err := auditStoreOf(cfg)
 	if err != nil {
 		return nil, err
 	}

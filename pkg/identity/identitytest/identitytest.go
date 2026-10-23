@@ -196,6 +196,24 @@ func CheckListWithinAuthorize(ctx context.Context, t *testing.T, c ListCheck) {
 	}
 }
 
+// CheckExactScope fails the test when the authorizer of c says that its scope
+// is exact (identity.HasExactScope) and Authorize denies an object that its
+// scope holds. A scope with All set holds each object of c.Every. It passes
+// for an authorizer that does not say so: the callers of such an authorizer
+// check each object. Run it against each authorizer with a principal that is
+// not an administrator and, where the authorizer can give one, a scope with
+// All set, so that a decorator cannot claim an exact scope that it does not
+// have.
+func CheckExactScope(ctx context.Context, t *testing.T, c ListCheck) {
+	t.Helper()
+
+	if !identity.HasExactScope(c.Authorizer) {
+		return
+	}
+
+	CheckListWithinAuthorize(ctx, t, c)
+}
+
 // testSubjects names the principals the suite signs in as.
 const (
 	adminSubject  = "admin"

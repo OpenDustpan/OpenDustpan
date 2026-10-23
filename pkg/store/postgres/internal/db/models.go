@@ -145,6 +145,17 @@ type CollectionMember struct {
 	AssignedAtMs  int64
 }
 
+type DriftResult struct {
+	UnitID        string
+	NamespaceID   string
+	Tool          string
+	JobID         string
+	Status        string
+	CheckedAtMs   int64
+	Truncated     bool
+	ResourcesJson string
+}
+
 type DurableHeartbeat struct {
 	Owner string
 	AtMs  int64
@@ -514,14 +525,15 @@ type ManualLock struct {
 }
 
 type Namespace struct {
-	Name                string
-	HomeRegion          string
-	FailoverVersion     int64
-	CreatedAtMs         int64
-	AllowForcedWrites   bool
-	AllowUnlockedWrites bool
-	IpAllowlist         string
-	ID                  string
+	Name                 string
+	HomeRegion           string
+	FailoverVersion      int64
+	CreatedAtMs          int64
+	AllowForcedWrites    bool
+	AllowUnlockedWrites  bool
+	IpAllowlist          string
+	ID                   string
+	OutputSharingDefault string
 }
 
 type NotificationSink struct {

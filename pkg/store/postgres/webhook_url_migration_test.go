@@ -37,7 +37,7 @@ func TestWebhookURLMigration(t *testing.T) {
 	}
 
 	before := slices.DeleteFunc(all, func(m migrate.Migration) bool { return m.Version >= webhookURLVersion })
-	schemaURL := isolatedURL(t, base)
+	schemaURL := emptySchemaURL(t, base)
 
 	// The migrations after 0103 name tables of the control schema without a
 	// schema name, so the search path of the setup holds both schemas.

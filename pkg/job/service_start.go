@@ -65,6 +65,15 @@ func checkRequest(a Actor, req *StartRequest) (SourceKind, error) {
 		return "", fmt.Errorf("%w: unknown executor %q", ErrInvalid, req.Executor)
 	}
 
+	if !req.Purpose.Valid() {
+		return "", fmt.Errorf("%w: unknown purpose %q", ErrInvalid, req.Purpose)
+	}
+
+	if req.Purpose == PurposeDriftCheck && req.Operation != OperationRefresh {
+		return "", fmt.Errorf("%w: a %s has the operation %s, not %s", ErrInvalid, req.Purpose, OperationRefresh,
+			req.Operation)
+	}
+
 	err := checkText(req)
 	if err != nil {
 		return "", err
@@ -203,7 +212,7 @@ func (s *service) preAuthorize(ctx context.Context, a Actor, unit identity.Objec
 	var denied error
 
 	for _, k := range kinds {
-		action, err := startAction(k, req.Operation)
+		action, err := startActionFor(k, req.Operation, req.Purpose)
 		if err != nil {
 			if len(kinds) == 1 {
 				return err
@@ -475,6 +484,7 @@ func requestHash(req *StartRequest) string {
 
 	put(req.Unit.String())
 	put(string(req.Operation))
+	put(string(req.Purpose))
 	put(string(req.Executor))
 	put(req.Pool)
 
@@ -541,6 +551,12 @@ func startChanges(a Actor, j *Job) []audit.Change {
 		{Key: "job", Old: nil, New: string(j.ID), Layer: "", TakesEffect: ""},
 		{Key: "source", Old: nil, New: string(j.Source), Layer: "", TakesEffect: ""},
 		{Key: "operation", Old: nil, New: string(j.Spec.Operation), Layer: "", TakesEffect: ""},
+	}
+
+	if j.Spec.Purpose != PurposeNone {
+		changes = append(changes, audit.Change{
+			Key: "purpose", Old: nil, New: string(j.Spec.Purpose), Layer: "", TakesEffect: "",
+		})
 	}
 
 	if a.Agent != "" {

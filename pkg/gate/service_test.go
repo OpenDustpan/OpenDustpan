@@ -210,6 +210,18 @@ func (grants) ListObjects(context.Context, identity.Principal, identity.Action) 
 	return identity.Scope{Namespaces: nil, Collections: nil, Units: nil, Principals: nil, All: true}, nil
 }
 
+// TestLimitedAuthorizerScopeNotExact proves that the decorator does not say
+// that its scope is exact: it gives the scope of the grants and checks the
+// access limits for each object.
+func TestLimitedAuthorizerScopeNotExact(t *testing.T) {
+	t.Parallel()
+
+	auth := gate.LimitedAuthorizer(grants{allow: nil}, newService(t))
+	if identity.HasExactScope(auth) {
+		t.Fatal("LimitedAuthorizer says that its scope is exact")
+	}
+}
+
 func TestLimitedAuthorizer(t *testing.T) {
 	t.Parallel()
 

@@ -267,7 +267,7 @@ func newObjectHandler(t *testing.T, authz identity.Authorizer) *tfe.Handler {
 		Namespaces:     newTestNamespaces(t),
 		Workspaces:     stubWorkspaces{},
 		BaseURL:        baseurl.Resolver{},
-		Audit:          nil,
+		Audit:          newTestAudit(),
 		Gate:           nil,
 		MaxStateBytes:  0,
 		OnAuditFailure: nil,
@@ -366,6 +366,15 @@ func (stubWorkspaces) List(_ context.Context, ns namespace.Name) ([]workspace.Wo
 	}
 
 	return []workspace.Workspace{ws}, nil
+}
+
+func (stubWorkspaces) Query(ctx context.Context, q workspace.ListQuery) (workspace.ListPage, error) {
+	all, err := stubWorkspaces{}.List(ctx, q.Namespace)
+	if err != nil {
+		return workspace.ListPage{}, err
+	}
+
+	return workspace.PageWorkspaces(all, q), nil
 }
 
 func (stubWorkspaces) LockForJob(
@@ -891,7 +900,7 @@ func newTestHandler(t *testing.T) *tfe.Handler {
 		Namespaces:     newTestNamespaces(t),
 		Workspaces:     stubWorkspaces{},
 		BaseURL:        baseurl.Resolver{},
-		Audit:          nil,
+		Audit:          newTestAudit(),
 		Gate:           nil,
 		MaxStateBytes:  0,
 		OnAuditFailure: nil,
@@ -917,7 +926,7 @@ func newEnforcingHandler(t *testing.T, authz identity.Authorizer) *tfe.Handler {
 		Namespaces:     newTestNamespaces(t),
 		Workspaces:     stubWorkspaces{},
 		BaseURL:        baseurl.Resolver{},
-		Audit:          nil,
+		Audit:          newTestAudit(),
 		Gate:           nil,
 		MaxStateBytes:  0,
 		OnAuditFailure: nil,
@@ -945,7 +954,7 @@ func newProductionHandler(t *testing.T) *tfe.Handler {
 		Namespaces:     newTestNamespaces(t),
 		Workspaces:     stubWorkspaces{},
 		BaseURL:        baseurl.Resolver{},
-		Audit:          nil,
+		Audit:          newTestAudit(),
 		Gate:           nil,
 		MaxStateBytes:  0,
 		OnAuditFailure: nil,
@@ -1729,6 +1738,15 @@ func (errorWorkspaces) List(_ context.Context, _ namespace.Name) ([]workspace.Wo
 	return nil, errTestInternal
 }
 
+func (errorWorkspaces) Query(ctx context.Context, q workspace.ListQuery) (workspace.ListPage, error) {
+	all, err := errorWorkspaces{}.List(ctx, q.Namespace)
+	if err != nil {
+		return workspace.ListPage{}, err
+	}
+
+	return workspace.PageWorkspaces(all, q), nil
+}
+
 func (errorWorkspaces) LockForJob(
 	_ context.Context, _ workspace.ID, _, _, _ string,
 ) (workspace.Workspace, error) {
@@ -1855,7 +1873,7 @@ func TestErrorHidesInternalDetail(t *testing.T) {
 		Namespaces:     newTestNamespaces(t),
 		Workspaces:     errorWorkspaces{},
 		BaseURL:        baseurl.Resolver{},
-		Audit:          nil,
+		Audit:          newTestAudit(),
 		Gate:           nil,
 		MaxStateBytes:  0,
 		OnAuditFailure: nil,
