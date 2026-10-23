@@ -539,6 +539,31 @@ func TestCreateWorkspaceBadName(t *testing.T) {
 	}
 }
 
+// TestCreateWorkspaceNameStatesTheRule proves that an invalid name and a
+// missing name answer 422 with the same detail: the rule of a workspace name.
+func TestCreateWorkspaceNameStatesTheRule(t *testing.T) {
+	t.Parallel()
+
+	handler := newWorkspaceHandler(t, allowAll())
+
+	const rule = ": use 1 to 90 ASCII letters, digits, - and _"
+
+	for _, tc := range []struct{ body, want string }{
+		{body: createBody("a/b"), want: `invalid workspace name: "a/b"` + rule},
+		{body: `{"data":{"type":"workspaces","attributes":{}}}`, want: `invalid workspace name: ""` + rule},
+	} {
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, workspaceRequest(t, http.MethodPost, "/api/v2/organizations/acme/workspaces", tc.body))
+
+		var doc jsonAPIErrorDoc
+		if err := json.Unmarshal(rec.Body.Bytes(), &doc); err != nil || rec.Code != http.StatusUnprocessableEntity ||
+			len(doc.Errors) != 1 || doc.Errors[0].Detail != tc.want {
+			t.Errorf("create %s answers %d %s, want 422 with the detail %s",
+				tc.body, rec.Code, rec.Body.String(), tc.want)
+		}
+	}
+}
+
 // TestCreateWorkspaceDuplicate proves a duplicate name answers 422 with the
 // detail go-tfe reads.
 func TestCreateWorkspaceDuplicate(t *testing.T) {
@@ -1234,4 +1259,36 @@ func TestWorkspacePermissionFlags(t *testing.T) {
 			t.Fatalf("permissions = %+v, want force-unlock false", perms)
 		}
 	})
+}
+
+// TestListPageErrorsNameTheParameter proves that a page value that is not a
+// number of 1 or more answers 422 with a detail that names the parameter and
+// its rule, and does not repeat the value.
+func TestListPageErrorsNameTheParameter(t *testing.T) {
+	t.Parallel()
+
+	handler := newPagingHandler(t, allowAll())
+
+	const (
+		size   = "invalid query parameter: page[size] must be a number of 1 or more"
+		number = "invalid query parameter: page[number] must be a number of 1 or more"
+	)
+
+	for _, tc := range []struct{ query, want string }{
+		{query: "page[size]=0", want: size},
+		{query: "page[size]=abc", want: size},
+		{query: "page[number]=0", want: number},
+		{query: "page[number]=-3", want: number},
+		{query: "page[number]=99999999999999999999", want: number},
+	} {
+		rec := httptest.NewRecorder()
+		target := "/api/v2/organizations/acme/workspaces?" + tc.query
+		handler.ServeHTTP(rec, workspaceRequest(t, http.MethodGet, target, ""))
+
+		var doc jsonAPIErrorDoc
+		if err := json.Unmarshal(rec.Body.Bytes(), &doc); err != nil || rec.Code != http.StatusUnprocessableEntity ||
+			len(doc.Errors) != 1 || doc.Errors[0].Detail != tc.want {
+			t.Errorf("%s: answer %d %s, want 422 with the detail %q", tc.query, rec.Code, rec.Body.String(), tc.want)
+		}
+	}
 }

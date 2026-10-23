@@ -56,7 +56,8 @@ type UpdateStore interface {
 	// StartUpdate persists the started u and returns it with Version assigned:
 	// one more than the highest version of any update of the stack if
 	// u.Mutates(), else the stack's current version. A mutating u fails with
-	// ErrUpdateConflict while another mutating update of the stack is running.
+	// ErrUpdateConflict while another mutating update of the stack is running:
+	// a *UpdateConflictError that names the running update.
 	// Any u fails with ErrConcurrentModification unless the store holds
 	// u.Revision-1. It keeps the CreatedBy and RestoredFrom of u.
 	StartUpdate(ctx context.Context, u Update, fence namespace.Fence) (Update, error)

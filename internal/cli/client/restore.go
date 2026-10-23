@@ -308,7 +308,7 @@ type startRestoreParams struct {
 }
 
 // startRestore starts a restore and answers its ID. A second start while one
-// runs names the running restore and the one command that helps.
+// runs gives the message of the server, which names the running restore.
 func startRestore(ctx context.Context, params startRestoreParams) (restoreStartResponse, error) {
 	server := params.server
 	id := params.backupID
@@ -358,12 +358,12 @@ func startRestore(ctx context.Context, params startRestoreParams) (restoreStartR
 	}()
 
 	if resp.StatusCode != http.StatusAccepted {
+		hint := fmt.Sprintf("check the server log and "+restoreRerunHelp, server, id)
+
 		return restoreStartResponse{}, fmt.Errorf(
-			"%w: %s: check the server log and "+restoreRerunHelp,
+			"%w: %s",
 			ErrRestoreStart,
-			decodeErrorAnswer(resp),
-			server,
-			id,
+			answerText(resp.StatusCode, decodeErrorAnswer(resp), hint),
 		)
 	}
 
@@ -466,26 +466,14 @@ func readRestore(ctx context.Context, params restoreReadParams) (RestoreStatusRe
 // row wraps ErrRestoreMissing so the wait tells a transient swap gap from
 // other failures; any other status is a plain read failure.
 func restoreStatusError(resp *http.Response, params restoreReadParams) error {
+	hint := fmt.Sprintf(restoreRerunHelp, params.server, params.backupID)
+	text := answerText(resp.StatusCode, decodeErrorAnswer(resp), hint)
+
 	if resp.StatusCode == http.StatusNotFound {
-		return fmt.Errorf(
-			"%w %s: %w: %s: "+restoreRerunHelp,
-			ErrRestoreRead,
-			params.restoreID,
-			ErrRestoreMissing,
-			decodeErrorAnswer(resp),
-			params.server,
-			params.backupID,
-		)
+		return fmt.Errorf("%w %s: %w: %s", ErrRestoreRead, params.restoreID, ErrRestoreMissing, text)
 	}
 
-	return fmt.Errorf(
-		"%w %s: %s: "+restoreRerunHelp,
-		ErrRestoreRead,
-		params.restoreID,
-		decodeErrorAnswer(resp),
-		params.server,
-		params.backupID,
-	)
+	return fmt.Errorf("%w %s: %s", ErrRestoreRead, params.restoreID, text)
 }
 
 // waitRestore polls one restore until it leaves checking and applying and

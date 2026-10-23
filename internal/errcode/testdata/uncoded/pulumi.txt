@@ -1,0 +1,67 @@
+# The error paths of internal/api/pulumi that answer without a code of the
+# catalog. This list only shrinks: give a path a code, remove its line and
+# lower the limit. A new error path never goes on this list.
+limit 63
+Handler.createStack: errorResponse{}
+Handler.createStack: errorResponse{} #2
+Handler.freshReveal: errFreshStepRequired
+Handler.freshReveal: errReauthenticate
+Handler.renameStack: errorResponse{}
+Handler.renameStack: errorResponse{} #2
+Handler.updateStackTags: errorResponse{}
+Handler.updateStackTags: errorResponse{} #2
+Handler.writeBusy: errorResponse{}
+Handler.writeError: errorResponse{}
+Handler.writeError: status == http.StatusInternalServerError
+Handler.writeInvalidBody: errorResponse{}
+Handler.writeNamespaceNotFound: namespace.ErrNotFound
+classify: errContinuationToken
+classify: errInvalidBody
+classify: errRevealPathTooLong
+classify: errStackTagFilter
+classify: identity.ErrInvalidObject
+classify: namespace.ErrFenced
+classify: namespace.ErrInvalidName
+classify: namespace.ErrNotFound
+classify: namespace.ErrNotHome
+classify: stack.ErrAlreadyExists
+classify: stack.ErrHasResources
+classify: stack.ErrInvalidName
+classify: stack.ErrInvalidUpdate
+classify: stack.ErrNoState
+classify: stack.ErrNoStateAt
+classify: stack.ErrNotFound
+classify: stack.ErrOtherSecretsProvider
+classify: stack.ErrResourceNotFound
+classify: stack.ErrUpdateNotFound
+classifyAuth: default
+classifyAuth: errSessionSecrets
+classifyAuth: errSessionUpdate
+classifyAuth: identity.ErrDenied
+classifyAuth: identity.ErrRateLimited
+classifyAuth: identity.ErrUnauthenticated
+classifyAuth: sessionauth.ErrCSRF
+classifyAuth: sessionauth.ErrOtherSite
+classifyAuth: stack.ErrAccessTokenUnchecked
+classifyAuth: token.ErrInvalid
+classifySecret: default
+classifySecret: secret.ErrDecrypt
+classifySecret: secret.ErrKeyNotConfigured
+classifySecret: secret.ErrTooLarge
+classifyUpdate: AsType[*manuallock.LockedError]
+classifyUpdate: default
+classifyUpdate: maintenance.ErrInMaintenance
+classifyUpdate: namespace.ErrUnavailable
+classifyUpdate: stack.ErrCheckpointConflict
+classifyUpdate: stack.ErrConcurrentModification
+classifyUpdate: stack.ErrInvalidDelta
+classifyUpdate: stack.ErrJournalBatch
+classifyUpdate: stack.ErrJournalBuildTimeout
+classifyUpdate: stack.ErrJournalConflict
+classifyUpdate: stack.ErrJournalIncomplete
+classifyUpdate: stack.ErrLeaseExpired
+classifyUpdate: stack.ErrLeaseInvalid
+classifyUpdate: stack.ErrStaleCheckpoint
+classifyUpdate: stack.ErrTooLarge
+classifyUpdate: stack.ErrUpdateConflict
+classifyUpdate: stack.ErrWrongUpdateState

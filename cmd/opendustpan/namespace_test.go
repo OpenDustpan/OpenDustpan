@@ -143,8 +143,8 @@ func TestNamespaceCommandDuplicate(t *testing.T) {
 		t.Fatalf("namespace error = %v, want it to name the duplicate", err)
 	}
 
-	if !strings.Contains(err.Error(), "opendustpan namespace create") {
-		t.Fatalf("namespace error = %v, want it to name the one command that helps", err)
+	if strings.Contains(err.Error(), "again") {
+		t.Fatalf("namespace error = %v, want no retry hint for a refused request", err)
 	}
 }
 

@@ -69,8 +69,8 @@ type Name string
 // ParseName validates s as a namespace name: 1 to 100 characters of ASCII
 // letters, digits, '-', '_' and '.', not starting with '.' or '-'.
 func ParseName(s string) (Name, error) {
-	if !ident.Valid(s, maxNameLength) {
-		return "", fmt.Errorf("%w: %q", ErrInvalidName, s)
+	if err := ident.Check(s, maxNameLength); err != nil {
+		return "", fmt.Errorf("%w: %w", ErrInvalidName, err)
 	}
 
 	return Name(s), nil

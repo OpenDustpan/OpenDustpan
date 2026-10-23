@@ -23,11 +23,12 @@ const (
 
 // ValidateDriftSteps checks the steps of a drift check, after ValidateSteps.
 // A drift check reads the real resources and changes nothing, so every step
-// runs in the plan phase with the role tool, marks no change, and leaves no
-// plan for an apply phase. The check is an allowlist: the steps must be the
-// fixed steps of driftArgv in order, each with the environment
-// TF_IN_AUTOMATION=1 only and no Dir. Any other argument, variable or
-// directory is refused. It returns an error that wraps ErrInvalid and
+// runs in the plan phase with the role tool, marks no change, and uploads no
+// output. The check is an allowlist: the steps must be the fixed steps of
+// driftArgv in order, each with the environment TF_IN_AUTOMATION=1 only, no
+// Dir, no output, no AllowFailure and a timeout of 0, which gives
+// DefaultStepTimeout. Any other argument, variable, directory, output or
+// timeout is refused. It returns an error that wraps ErrInvalid and
 // names the first step that fails.
 //
 // The server gives the steps of a drift check itself and a caller never does.
@@ -61,8 +62,13 @@ func validateDriftStep(s *Step, argv []string) error {
 			s.Name, s.Role)
 	case s.ChangesResources:
 		return fmt.Errorf("%w: step %q of a drift check marks a change", ErrInvalid, s.Name)
-	case slices.ContainsFunc(s.Outputs, func(o Output) bool { return o.Kind == OutputPlanApply }):
-		return fmt.Errorf("%w: step %q of a drift check leaves a plan for an apply phase", ErrInvalid, s.Name)
+	case len(s.Outputs) != 0:
+		return fmt.Errorf("%w: step %q of a drift check has an output", ErrInvalid, s.Name)
+	case s.AllowFailure:
+		return fmt.Errorf("%w: step %q of a drift check lets the phase continue after a failure", ErrInvalid, s.Name)
+	case s.Timeout != 0:
+		return fmt.Errorf("%w: step %q of a drift check sets the timeout %v, not 0 (the default of %v)", ErrInvalid,
+			s.Name, s.Timeout, DefaultStepTimeout)
 	default:
 	}
 

@@ -37,6 +37,10 @@ const notFoundTitle = "not found"
 // to 422.
 var errInvalidBody = errors.New("invalid request body")
 
+// errInvalidQuery reports a query parameter that is not valid. classify maps
+// it to 422, as errInvalidBody.
+var errInvalidQuery = errors.New("invalid query parameter")
+
 // errMissingFilter reports a state version list without its organization or
 // workspace filter. classify maps it to 400.
 var errMissingFilter = errors.New("state version list needs filter[organization][name] and filter[workspace][name]")
@@ -309,6 +313,7 @@ func classify(err error) errorClass {
 			detail: "server is busy: try again after the Retry-After time",
 		}
 	case errors.Is(err, errInvalidBody),
+		errors.Is(err, errInvalidQuery),
 		errors.Is(err, audit.ErrInvalidReason),
 		errors.Is(err, errRevealPathTooLong),
 		errors.Is(err, workspace.ErrInvalidName),

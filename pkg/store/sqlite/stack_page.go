@@ -25,7 +25,7 @@ func (s *Store) QueryStacks(ctx context.Context, q stack.PageQuery) ([]stack.Sta
 			break
 		}
 
-		part, err := s.stackRange(ctx, r, q.Project, need)
+		part, err := s.stackRange(ctx, r, q, need)
 		if err != nil {
 			return nil, err
 		}
@@ -65,18 +65,32 @@ func (s *Store) QueryStacks(ctx context.Context, q stack.PageQuery) ([]stack.Sta
 	return out, nil
 }
 
-// stackRange reads at most need stacks of the range r. A project that is
-// not empty keeps the stacks of that project only.
+// stackRange reads at most need stacks of the range r that pass the project
+// and the tag filter of q. A project that is not empty keeps the stacks of
+// that project only.
 func (s *Store) stackRange(
-	ctx context.Context, r stack.NamespaceRange, project stack.ProjectName, need int,
+	ctx context.Context, r stack.NamespaceRange, q stack.PageQuery, need int,
 ) ([]codec.StackRow, error) {
 	var rows []db.ListStackPageInNamespaceRow
 
-	if project == "" {
+	var tag stack.TagFilter
+	if q.Tag != nil {
+		tag = *q.Tag
+	}
+
+	matchValue := int64(0)
+	if tag.HasValue {
+		matchValue = 1
+	}
+
+	if q.Project == "" {
 		got, err := s.queries.ListStackPageInNamespace(ctx, db.ListStackPageInNamespaceParams{
 			Namespace:    r.Namespace.String(),
 			AfterProject: r.AfterProject.String(),
 			AfterName:    r.AfterName.String(),
+			TagName:      tag.Name,
+			MatchValue:   matchValue,
+			TagValue:     tag.Value,
 			PageLimit:    int64(need),
 		})
 		if err != nil {
@@ -86,10 +100,13 @@ func (s *Store) stackRange(
 		rows = got
 	} else {
 		got, err := s.queries.ListStackPageInProject(ctx, db.ListStackPageInProjectParams{
-			Namespace: r.Namespace.String(),
-			Project:   project.String(),
-			AfterName: r.AfterName.String(),
-			PageLimit: int64(need),
+			Namespace:  r.Namespace.String(),
+			Project:    q.Project.String(),
+			AfterName:  r.AfterName.String(),
+			TagName:    tag.Name,
+			MatchValue: matchValue,
+			TagValue:   tag.Value,
+			PageLimit:  int64(need),
 		})
 		if err != nil {
 			return nil, fmt.Errorf("select stack page: %w", err)

@@ -601,19 +601,18 @@ func activeWorkMessage(err error) string {
 }
 
 // secretRestoreMessage maps key-encryption-key failures to stable text that
-// names the DUSTPAN_KEY_ENCRYPTION_KEY setting but no key material. It
-// reports whether err is such a failure.
+// names the key settings of the server but no key material. The server holds
+// the key and runs the check, so the text says to start the server with the
+// key of the backup. It reports whether err is such a failure.
 func secretRestoreMessage(err error) (string, bool) {
+	const start = "start the server with the key that made the backup " +
+		"(DUSTPAN_KEY_ENCRYPTION_KEY or DUSTPAN_KEY_ENCRYPTION_KEY_FILE)"
+
 	switch {
 	case errors.Is(err, secret.ErrKeyNotConfigured):
-		return "restore backup needs a key for its wrappers: " +
-			"set DUSTPAN_KEY_ENCRYPTION_KEY to the matching key", true
-	case errors.Is(err, secret.ErrWrapperMismatch):
-		return "restore backup key does not match its wrappers: " +
-			"set DUSTPAN_KEY_ENCRYPTION_KEY to the matching key", true
-	case errors.Is(err, secret.ErrDecrypt):
-		return "restore backup key does not open the backup: " +
-			"set DUSTPAN_KEY_ENCRYPTION_KEY to the matching key", true
+		return "the server has no key-encryption key to open the backup: " + start, true
+	case errors.Is(err, secret.ErrWrapperMismatch), errors.Is(err, secret.ErrDecrypt):
+		return "the key of this server does not open the backup: " + start, true
 	default:
 		return "", false
 	}

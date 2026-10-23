@@ -12684,18 +12684,25 @@ func (q *Queries) ListSignInProviders(ctx context.Context) ([]SignInProvider, er
 }
 
 const listStackPageInNamespace = `-- name: ListStackPageInNamespace :many
-SELECT namespace, project, name, id, version, created_at_ms, updated_at_ms
-FROM stacks
-WHERE namespace = ?1 AND deleted_at_ms IS NULL
-  AND (project, name) > (?2, ?3)
-ORDER BY project, name
-LIMIT ?4
+SELECT s.namespace, s.project, s.name, s.id, s.version, s.created_at_ms, s.updated_at_ms
+FROM stacks AS s
+WHERE s.namespace = ?1 AND s.deleted_at_ms IS NULL
+  AND (s.project, s.name) > (?2, ?3)
+  AND (CAST(?4 AS TEXT) = '' OR EXISTS (
+    SELECT 1 FROM stack_tags AS t
+    WHERE t.stack_id = s.id AND t.name = ?4
+      AND (CAST(?5 AS INTEGER) = 0 OR t.value = ?6)))
+ORDER BY s.project, s.name
+LIMIT ?7
 `
 
 type ListStackPageInNamespaceParams struct {
 	Namespace    string
 	AfterProject string
 	AfterName    string
+	TagName      string
+	MatchValue   int64
+	TagValue     string
 	PageLimit    int64
 }
 
@@ -12711,12 +12718,16 @@ type ListStackPageInNamespaceRow struct {
 
 // One page of the live stacks of a namespace after a project and a name, in
 // the order of the primary key. The cursor is a range of the key, so the read
-// starts at the cursor.
+// starts at the cursor. A tag_name that is not empty keeps the stacks that have
+// that tag, and match_value also needs the tag to have the value tag_value.
 func (q *Queries) ListStackPageInNamespace(ctx context.Context, arg ListStackPageInNamespaceParams) ([]ListStackPageInNamespaceRow, error) {
 	rows, err := q.db.QueryContext(ctx, listStackPageInNamespace,
 		arg.Namespace,
 		arg.AfterProject,
 		arg.AfterName,
+		arg.TagName,
+		arg.MatchValue,
+		arg.TagValue,
 		arg.PageLimit,
 	)
 	if err != nil {
@@ -12749,19 +12760,26 @@ func (q *Queries) ListStackPageInNamespace(ctx context.Context, arg ListStackPag
 }
 
 const listStackPageInProject = `-- name: ListStackPageInProject :many
-SELECT namespace, project, name, id, version, created_at_ms, updated_at_ms
-FROM stacks
-WHERE namespace = ?1 AND project = ?2 AND deleted_at_ms IS NULL
-  AND name > ?3
-ORDER BY name
-LIMIT ?4
+SELECT s.namespace, s.project, s.name, s.id, s.version, s.created_at_ms, s.updated_at_ms
+FROM stacks AS s
+WHERE s.namespace = ?1 AND s.project = ?2 AND s.deleted_at_ms IS NULL
+  AND s.name > ?3
+  AND (CAST(?4 AS TEXT) = '' OR EXISTS (
+    SELECT 1 FROM stack_tags AS t
+    WHERE t.stack_id = s.id AND t.name = ?4
+      AND (CAST(?5 AS INTEGER) = 0 OR t.value = ?6)))
+ORDER BY s.name
+LIMIT ?7
 `
 
 type ListStackPageInProjectParams struct {
-	Namespace string
-	Project   string
-	AfterName string
-	PageLimit int64
+	Namespace  string
+	Project    string
+	AfterName  string
+	TagName    string
+	MatchValue int64
+	TagValue   string
+	PageLimit  int64
 }
 
 type ListStackPageInProjectRow struct {
@@ -12775,12 +12793,15 @@ type ListStackPageInProjectRow struct {
 }
 
 // One page of the live stacks of a project after a name, in the order of the
-// primary key.
+// primary key, with the tag filter of ListStackPageInNamespace.
 func (q *Queries) ListStackPageInProject(ctx context.Context, arg ListStackPageInProjectParams) ([]ListStackPageInProjectRow, error) {
 	rows, err := q.db.QueryContext(ctx, listStackPageInProject,
 		arg.Namespace,
 		arg.Project,
 		arg.AfterName,
+		arg.TagName,
+		arg.MatchValue,
+		arg.TagValue,
 		arg.PageLimit,
 	)
 	if err != nil {
@@ -15000,18 +15021,20 @@ func (q *Queries) RotateRunnerKey(ctx context.Context, arg RotateRunnerKeyParams
 	return err
 }
 
-const runningMutatingUpdates = `-- name: RunningMutatingUpdates :one
-SELECT COUNT(*)
+const runningMutatingUpdate = `-- name: RunningMutatingUpdate :one
+SELECT id
 FROM updates
 WHERE stack_id = ?
   AND status = 'running' AND dry_run = 0 AND kind <> 'preview'
 `
 
-func (q *Queries) RunningMutatingUpdates(ctx context.Context, stackID string) (int64, error) {
-	row := q.db.QueryRowContext(ctx, runningMutatingUpdates, stackID)
-	var count int64
-	err := row.Scan(&count)
-	return count, err
+// The ID of the mutating update that runs on a stack. The unique index
+// updates_one_running holds at most one such row for each stack.
+func (q *Queries) RunningMutatingUpdate(ctx context.Context, stackID string) (string, error) {
+	row := q.db.QueryRowContext(ctx, runningMutatingUpdate, stackID)
+	var id string
+	err := row.Scan(&id)
+	return id, err
 }
 
 const runningUpdateAt = `-- name: RunningUpdateAt :one

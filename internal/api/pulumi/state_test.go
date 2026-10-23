@@ -1021,7 +1021,7 @@ func TestStateListFilterPaging(t *testing.T) {
 }
 
 // TestStateListFilterKeepsIncomplete proves the filter keeps the incomplete
-// marker: skipped entries without a URN still mark the page, which holds
+// marker: skipped entries with an empty URN still mark the page, which holds
 // only matching resources.
 func TestStateListFilterKeepsIncomplete(t *testing.T) {
 	t.Parallel()
@@ -1029,7 +1029,7 @@ func TestStateListFilterKeepsIncomplete(t *testing.T) {
 	f := newUpdateFixture(t, allowAll())
 	seedStateVersion(t, f, `{"resources":[{`+
 		`"urn":"`+stateURNStack+`","type":"pulumi:pulumi:Stack","inputs":{},"outputs":{}},`+
-		`{"type":"custom:resource:Type","inputs":{}},`+
+		`{"urn":"","type":"custom:resource:Type","inputs":{}},`+
 		`{"urn":"`+stateURNRef+`","type":"pulumi:pulumi:StackReference","inputs":{},"outputs":{}}]}`)
 
 	body := getStateOK(

@@ -179,7 +179,11 @@ Each change of the setting writes one audit entry in the namespace, in the
 transaction of the change. The entry has the action `unit:manage-sharing`, the
 namespace as its object, and the change of `outputSharing.newUnitDefault` from
 the old value to the new value. A change by a caller without the action
-writes one entry with the outcome `denied`. A read writes no entry.
+writes an entry with the outcome `denied`. When the server refuses the same
+principal and action again within 1 minute, it counts the refusal and writes no
+new entry (see
+[The limit on repeated denials](audit-log.md#the-limit-on-repeated-denials)).
+A read writes no entry.
 
 ## Repair a stored value that is not valid
 

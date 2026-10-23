@@ -448,8 +448,8 @@ func TestRestoreCommandStartConflict(t *testing.T) {
 		t.Fatalf("restore error = %v, want it to name the running restore", err)
 	}
 
-	if !strings.Contains(err.Error(), "opendustpan restore") {
-		t.Fatalf("restore error = %v, want it to name the one command that helps", err)
+	if strings.Contains(err.Error(), "again") {
+		t.Fatalf("restore error = %v, want no retry hint for a refused request", err)
 	}
 }
 
@@ -592,7 +592,7 @@ func TestRestoreCommandUsage(t *testing.T) {
 }
 
 //nolint:paralleltest // The command reads process environment, so this test sets it and runs in order.
-func TestRestoreCommandReadMissingNamesBackup(t *testing.T) {
+func TestRestoreCommandReadMissingHasNoRetryHint(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /api/server/restores", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -625,12 +625,8 @@ func TestRestoreCommandReadMissingNamesBackup(t *testing.T) {
 		t.Fatalf("restore error = %v, want it to name the restore ID", err)
 	}
 
-	if want := "--backup " + restoreBackupTestID; !strings.Contains(err.Error(), want) {
-		t.Fatalf("restore error = %v, want it to suggest %q", err, want)
-	}
-
-	if strings.Contains(err.Error(), "--backup "+restoreTestID) {
-		t.Fatalf("restore error = %v, want the hint to name the backup, not the restore", err)
+	if strings.Contains(err.Error(), "again") {
+		t.Fatalf("restore error = %v, want no retry hint for a 404 answer", err)
 	}
 }
 
