@@ -15,10 +15,10 @@ import (
 // whose inventory store keeps no change log.
 var errNoHistory = errors.New("the inventory store keeps no change log")
 
-// errFilterAt reports a label or reference filter with the at value: the
-// change log keeps no labels.
+// errFilterAt reports a label, reference or state filter with the at value:
+// the view at a time takes no filter.
 var errFilterAt = fmt.Errorf(
-	"%w: the label and reference query values do not work with the at query value", errInvalidQuery,
+	"%w: the label, reference and state query values do not work with the at query value", errInvalidQuery,
 )
 
 // unitAtEntry is one unit in the view at a time. The embedded entry is the
