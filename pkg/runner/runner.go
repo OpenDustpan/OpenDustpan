@@ -32,6 +32,12 @@ import (
 var (
 	// ErrInvalid reports a request with an empty or bad field.
 	ErrInvalid = errors.New("runner request is not valid")
+	// ErrInvalidHelper wraps ErrInvalid for a git credential setting with a
+	// helper that the pool cannot store. Its text names the field and the
+	// rule, so that the answer says what to change.
+	ErrInvalidHelper = fmt.Errorf("%w: gitCredentials.helper must be a bare git-credential- name or a clean "+
+		"absolute path of letters, digits and the characters . _ / -, and needs gitCredentials.mode custom",
+		ErrInvalid)
 	// ErrNotFound reports a pool, a runner or a token that the store does
 	// not know, or that the caller cannot see.
 	ErrNotFound = errors.New("runner pool, runner or token not found")
@@ -354,20 +360,22 @@ type GitCredentials struct {
 	// Mode is empty or GitCredentialsNone for no credential.
 	Mode GitCredentialMode
 	// Helper is the program of GitCredentialsCustom: a bare name that
-	// starts with git-credential-, or a clean absolute path. Git config
-	// gives a helper that starts with '!' to a shell, so such a value is
-	// refused.
+	// starts with git-credential-, or a clean absolute path, of the
+	// characters that HelperRune allows. Git config gives a helper that
+	// starts with '!' to a shell, so such a value is refused.
 	Helper string
 }
 
-// Validate returns an error that wraps ErrInvalid for an unknown mode, a
-// helper with a mode other than GitCredentialsCustom, or a helper that is
-// not a bare git-credential- name or a clean absolute path.
+// Validate returns an error that wraps ErrInvalid for an unknown mode. It
+// returns an error that wraps ErrInvalidHelper for a helper with a mode
+// other than GitCredentialsCustom, or a helper that is not a bare
+// git-credential- name or a clean absolute path of the characters that
+// HelperRune allows.
 func (g GitCredentials) Validate() error {
 	switch g.Mode {
 	case "", GitCredentialsNone, GitCredentialsForge:
 		if g.Helper != "" {
-			return fmt.Errorf("%w: a git credential helper needs the mode %s", ErrInvalid, GitCredentialsCustom)
+			return fmt.Errorf("%w: the mode is %q", ErrInvalidHelper, g.Mode)
 		}
 
 		return nil
@@ -380,20 +388,18 @@ func (g GitCredentials) Validate() error {
 
 // validateHelper checks the program of a custom git credential helper.
 func validateHelper(h string) error {
-	// Defense in depth: launcher.GitConfig refuses a control character too;
-	// this check stays so that a pool never stores a helper that could add a
-	// line to the git configuration of a step.
-	if strings.ContainsFunc(h, isControl) {
-		return fmt.Errorf("%w: git credential helper must not hold a control character", ErrInvalid)
+	// Defense in depth: launcher.GitConfig refuses such a character too; this
+	// check stays so that a pool never stores a helper that could add a line
+	// to the git configuration of a step, or that git reads as another value.
+	if strings.ContainsFunc(h, notHelperRune) {
+		return fmt.Errorf("%w: it holds a character that is not allowed", ErrInvalidHelper)
 	}
 
-	bare := strings.HasPrefix(h, "git-credential-") && len(h) > len("git-credential-") &&
-		!strings.ContainsAny(h, "/ \t!")
-	absolute := strings.HasPrefix(h, "/") && cleanAbs(h) && !strings.ContainsAny(h, " \t!")
+	bare := strings.HasPrefix(h, "git-credential-") && len(h) > len("git-credential-") && !strings.Contains(h, "/")
+	absolute := strings.HasPrefix(h, "/") && cleanAbs(h)
 
 	if !bare && !absolute {
-		return fmt.Errorf("%w: git credential helper %q must be a bare git-credential- name or a clean absolute path",
-			ErrInvalid, h)
+		return fmt.Errorf("%w: it is neither", ErrInvalidHelper)
 	}
 
 	return nil
@@ -415,8 +421,18 @@ func cleanAbs(p string) bool {
 	return true
 }
 
-// isControl reports whether r is a control character of the C0 range
-// (0x00 to 0x1F) or DEL (0x7F).
-func isControl(r rune) bool {
-	return r < 0x20 || r == 0x7f
+// HelperRune reports whether r may be in the program of a git credential
+// helper: an ASCII letter or digit, or one of . _ / -. Git reads a space, a
+// quote, a backslash, '#', ';' and '!' in a configuration value as syntax,
+// and a control character can add a line, so the set holds none of them.
+// The check of a pool and the launcher both use this set.
+func HelperRune(r rune) bool {
+	return r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' ||
+		r == '.' || r == '_' || r == '/' || r == '-'
+}
+
+// notHelperRune reports whether r may not be in the program of a git
+// credential helper.
+func notHelperRune(r rune) bool {
+	return !HelperRune(r)
 }
