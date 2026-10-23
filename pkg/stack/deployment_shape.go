@@ -32,7 +32,8 @@ var errDeploymentShape = errors.New("the deployment cannot be read")
 
 // checkDeploymentShape returns an error that matches ErrInvalidUpdate when
 // deployment is not a JSON object, when a known member of it has the wrong
-// JSON type, or when other data follows the object. It reads the inner
+// JSON type, when an entry of resources or pending_operations is not an
+// object, or when other data follows the object. It reads the inner
 // deployment of a sequenced save, which a versioned envelope wraps. It streams
 // the bytes and builds no tree, and it reads no secret value. It does not
 // refuse a repeated member, because the CLI accepts one.
@@ -75,18 +76,62 @@ func checkDeploymentMembers(dec *jsontext.Decoder) error {
 			return nil
 		}
 
-		name := tok.String()
+		if err := checkDeploymentMember(dec, tok.String()); err != nil {
+			return err
+		}
+	}
+}
 
-		if want, known := deploymentFieldKind(name); known {
-			if got := dec.PeekKind(); got != want && got != jsontext.KindNull {
-				return deploymentShapeError(fmt.Sprintf("the member %s has the wrong type", name))
+// checkDeploymentMember checks the value of the member name that dec streams,
+// when the member is a known one, and reads the value. Each entry of an array
+// member (resources and pending_operations) must be an object, as the CLI
+// reads them.
+func checkDeploymentMember(dec *jsontext.Decoder, name string) error {
+	want, known := deploymentFieldKind(name)
+	got := dec.PeekKind()
+
+	if known && got != want && got != jsontext.KindNull {
+		return deploymentShapeError(fmt.Sprintf("the member %s has the wrong type", name))
+	}
+
+	if known && got == jsontext.KindBeginArray {
+		return checkDeploymentEntries(dec, name)
+	}
+
+	if err := dec.SkipValue(); err != nil {
+		return deploymentShapeError("it is not valid JSON")
+	}
+
+	return nil
+}
+
+// checkDeploymentEntries reads the array of the member name that dec streams
+// and checks that each entry is an object. The text names the member and the
+// index of the entry, never a value.
+func checkDeploymentEntries(dec *jsontext.Decoder, name string) error {
+	if _, err := dec.ReadToken(); err != nil {
+		return deploymentShapeError("it is not valid JSON")
+	}
+
+	for index := 0; dec.PeekKind() != jsontext.KindEndArray; index++ {
+		if kind := dec.PeekKind(); kind != jsontext.KindBeginObject {
+			if kind == jsontext.KindInvalid {
+				return deploymentShapeError("it is not valid JSON")
 			}
+
+			return deploymentShapeError(fmt.Sprintf("the entry %d of %s is not an object", index, name))
 		}
 
 		if err := dec.SkipValue(); err != nil {
 			return deploymentShapeError("it is not valid JSON")
 		}
 	}
+
+	if _, err := dec.ReadToken(); err != nil {
+		return deploymentShapeError("it is not valid JSON")
+	}
+
+	return nil
 }
 
 // deploymentShapeError returns the refusal of a deployment that the CLI cannot
