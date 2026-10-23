@@ -18,7 +18,7 @@ import (
 func TestOpenRefusesSchemaBeforeBaseline(t *testing.T) {
 	t.Parallel()
 
-	migrated := isolatedURL(t, baseURL(t))
+	migrated := emptySchemaURL(t, baseURL(t))
 
 	conn, err := pgx.Connect(t.Context(), migrated)
 	if err != nil {

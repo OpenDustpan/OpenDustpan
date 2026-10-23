@@ -106,6 +106,16 @@ func (m *memReader) ListUnits(_ context.Context, ns namespace.Name) ([]coreinven
 	return out, nil
 }
 
+// QueryUnits implements coreinventory.Reader over the entries of ListUnits.
+func (m *memReader) QueryUnits(ctx context.Context, q coreinventory.UnitQuery) ([]coreinventory.Entry, error) {
+	all, err := m.ListUnits(ctx, q.Namespace)
+	if err != nil {
+		return nil, err
+	}
+
+	return coreinventory.PageUnits(all, q), nil
+}
+
 func (m *memReader) GetUnit(_ context.Context, unitID string) (coreinventory.Entry, error) {
 	if m.err != nil {
 		return coreinventory.Entry{}, m.err
@@ -220,7 +230,7 @@ func (denyUnits) ListObjects(_ context.Context, p identity.Principal, _ identity
 
 func newBehaviorHandler(
 	t *testing.T, nsStore *memNamespaceStore, reader *memReader, authz identity.Authorizer,
-) *apiinventory.Handler {
+) testHandler {
 	t.Helper()
 
 	return newBehaviorHandlerWithSessions(t, nsStore, reader, authz, nil)
@@ -231,7 +241,7 @@ func newBehaviorHandler(
 func newBehaviorHandlerWithSessions(
 	t *testing.T, nsStore *memNamespaceStore, reader *memReader, authz identity.Authorizer,
 	sessions *sessionauth.Checker,
-) *apiinventory.Handler {
+) testHandler {
 	t.Helper()
 
 	return newBehaviorHandlerWith(t, nsStore, reader, authz, behaviorWiring{
@@ -251,8 +261,9 @@ type behaviorWiring struct {
 // newBehaviorHandlerWith is newBehaviorHandlerWithSessions with the
 // session check and the lifecycles of wiring.
 func newBehaviorHandlerWith(
-	t *testing.T, nsStore *memNamespaceStore, reader *memReader, authz identity.Authorizer, wiring behaviorWiring,
-) *apiinventory.Handler {
+	t *testing.T, nsStore *memNamespaceStore, reader coreinventory.Reader, authz identity.Authorizer,
+	wiring behaviorWiring,
+) testHandler {
 	t.Helper()
 
 	namespaces, err := namespace.NewService(
@@ -262,9 +273,10 @@ func newBehaviorHandlerWith(
 		t.Fatalf("namespace service: %v", err)
 	}
 
-	handler, err := apiinventory.NewHandler(apiinventory.Config{
-		Views: nil,
-		Audit: nil, OnAuditFailure: nil, Locks: nil, Moves: nil,
+	handler, err := newCheckedHandler(t, apiinventory.Config{
+		OutputSharing: nil,
+		Views:         nil,
+		Audit:         newTestAudit(), OnAuditFailure: nil, Locks: nil, Moves: nil,
 		Collections:   testCollectionService(t, nsStore),
 		Namespaces:    namespaces,
 		Units:         reader,
@@ -289,7 +301,7 @@ func newBehaviorHandlerWith(
 }
 
 func authorizedGet(
-	t *testing.T, handler *apiinventory.Handler, target, token string,
+	t *testing.T, handler testHandler, target, token string,
 ) *httptest.ResponseRecorder {
 	t.Helper()
 
@@ -424,7 +436,7 @@ func seedEntries(nsStore *memNamespaceStore, reader *memReader) {
 	}
 }
 
-func newSeededHandler(t *testing.T, authz identity.Authorizer) *apiinventory.Handler {
+func newSeededHandler(t *testing.T, authz identity.Authorizer) testHandler {
 	t.Helper()
 
 	nsStore := &memNamespaceStore{namespaces: map[namespace.Name]namespace.Namespace{}}
@@ -956,8 +968,9 @@ func TestNewHandlerRequiresDependencies(t *testing.T) {
 	}
 
 	full := apiinventory.Config{
-		Views: nil,
-		Audit: nil, OnAuditFailure: nil, Locks: nil, Moves: nil,
+		OutputSharing: nil,
+		Views:         nil,
+		Audit:         newTestAudit(), OnAuditFailure: nil, Locks: nil, Moves: nil,
 		Collections:   testCollectionService(t, nsStore),
 		Namespaces:    namespaces,
 		Units:         reader,

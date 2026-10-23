@@ -56,6 +56,13 @@ func (s *Updates) SaveCheckpointDelta(
 		return nil
 	}
 
+	// The CLI hashes the result it wants, so the hash proves nothing about its
+	// shape. A result that the CLI cannot read fails like any invalid delta,
+	// and the CLI then sends the whole deployment, which validate checks.
+	if shapeErr := checkDeploymentShape(result, in.Sequence); shapeErr != nil {
+		return fmt.Errorf("save checkpoint delta of update %s: %w: the result cannot be read", id, ErrInvalidDelta)
+	}
+
 	err = s.storeNewCheckpoint(ctx, checkpointSave{
 		ref: ref, id: id, stackID: save.stackID, fence: save.fence, lease: save.lease,
 		in: CheckpointInput{

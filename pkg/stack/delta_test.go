@@ -35,8 +35,26 @@ func editJSON(start, end int, newText string) string {
 	)
 }
 
+// deltaPrefix and deltaSuffix wrap the text that the delta cases edit into a
+// deployment object: a deployment must be a JSON object.
+const (
+	deltaPrefix = `{"a":"`
+	deltaSuffix = `"}`
+)
+
+// deltaDoc returns the deployment object that holds text.
+func deltaDoc(text string) string {
+	return deltaPrefix + text + deltaSuffix
+}
+
+// innerEdit renders an edit of the text that deltaDoc wraps: the offsets count
+// from the start of that text.
+func innerEdit(start, end int, newText string) string {
+	return editJSON(len(deltaPrefix)+start, len(deltaPrefix)+end, newText)
+}
+
 // deltaBaseText is the saved deployment every delta rule case starts from.
-const deltaBaseText = `abcdef`
+const deltaBaseText = deltaPrefix + `abcdef` + deltaSuffix
 
 // savedDelta starts a mutating update and saves the base deployment, so a
 // delta case applies to known bytes.
@@ -71,7 +89,7 @@ func TestCheckpointDeltaValid(t *testing.T) {
 	f, s := savedDelta(t)
 	ctx := t.Context()
 
-	in := deltaOf(2, `abXYef`, "["+editJSON(2, 4, "XY")+"]")
+	in := deltaOf(2, deltaDoc("abXYef"), "["+innerEdit(2, 4, "XY")+"]")
 	if err := f.svc.SaveCheckpointDelta(ctx, f.ref, s.Update.ID, s.Token, in); err != nil {
 		t.Fatalf("save delta: %v", err)
 	}
@@ -81,8 +99,8 @@ func TestCheckpointDeltaValid(t *testing.T) {
 		t.Fatalf("export: %v", err)
 	}
 
-	if got := string(cp.Deployment); got != `abXYef` {
-		t.Errorf("export = %q, want %q", got, `abXYef`)
+	if got := string(cp.Deployment); got != deltaDoc("abXYef") {
+		t.Errorf("export = %q, want %q", got, deltaDoc("abXYef"))
 	}
 }
 
@@ -93,7 +111,7 @@ func TestCheckpointDeltaOverlapping(t *testing.T) {
 
 	f, s := savedDelta(t)
 
-	edits := "[" + editJSON(1, 3, "X") + "," + editJSON(2, 4, "Y") + "]"
+	edits := "[" + innerEdit(1, 3, "X") + "," + innerEdit(2, 4, "Y") + "]"
 	expectInvalidDelta(t, f, s, deltaOf(2, `aXYdef`, edits), "overlapping edits")
 
 	assertExport(t, f, deltaBaseText)
@@ -108,7 +126,7 @@ func TestCheckpointDeltaOutside(t *testing.T) {
 	ctx := t.Context()
 
 	for _, edits := range []string{
-		"[" + editJSON(4, 9, "X") + "]",
+		"[" + editJSON(10, 19, "X") + "]",
 		"[" + editJSON(-1, 2, "X") + "]",
 		"[" + editJSON(3, 2, "X") + "]",
 	} {
@@ -128,7 +146,7 @@ func TestCheckpointDeltaWrongHash(t *testing.T) {
 	f, s := savedDelta(t)
 	ctx := t.Context()
 
-	in := deltaOf(2, `abXYef`, "["+editJSON(2, 4, "XY")+"]")
+	in := deltaOf(2, deltaDoc("abXYef"), "["+innerEdit(2, 4, "XY")+"]")
 	in.Hash = hex.EncodeToString(make([]byte, sha256.Size))
 
 	if err := f.svc.SaveCheckpointDelta(ctx, f.ref, s.Update.ID, s.Token, in); err == nil ||
@@ -147,7 +165,7 @@ func TestCheckpointDeltaOutOfOrder(t *testing.T) {
 	f, s := savedDelta(t)
 	ctx := t.Context()
 
-	in := deltaOf(3, `abXYef`, "["+editJSON(2, 4, "XY")+"]")
+	in := deltaOf(3, deltaDoc("abXYef"), "["+innerEdit(2, 4, "XY")+"]")
 	if err := f.svc.SaveCheckpointDelta(ctx, f.ref, s.Update.ID, s.Token, in); err == nil ||
 		!errors.Is(err, stack.ErrInvalidDelta) {
 		t.Fatalf("skipped sequence: %v, want ErrInvalidDelta", err)
@@ -164,7 +182,7 @@ func TestCheckpointDeltaRetry(t *testing.T) {
 	f, s := savedDelta(t)
 	ctx := t.Context()
 
-	in := deltaOf(2, `abXYef`, "["+editJSON(2, 4, "XY")+"]")
+	in := deltaOf(2, deltaDoc("abXYef"), "["+innerEdit(2, 4, "XY")+"]")
 	if err := f.svc.SaveCheckpointDelta(ctx, f.ref, s.Update.ID, s.Token, in); err != nil {
 		t.Fatalf("save delta: %v", err)
 	}
@@ -173,7 +191,7 @@ func TestCheckpointDeltaRetry(t *testing.T) {
 		t.Fatalf("retry delta: %v", err)
 	}
 
-	assertExport(t, f, `abXYef`)
+	assertExport(t, f, deltaDoc("abXYef"))
 }
 
 // TestCheckpointDeltaSameSequenceOtherHash proves the same sequence with
@@ -184,18 +202,18 @@ func TestCheckpointDeltaSameSequenceOtherHash(t *testing.T) {
 	f, s := savedDelta(t)
 	ctx := t.Context()
 
-	in := deltaOf(2, `abXYef`, "["+editJSON(2, 4, "XY")+"]")
+	in := deltaOf(2, deltaDoc("abXYef"), "["+innerEdit(2, 4, "XY")+"]")
 	if err := f.svc.SaveCheckpointDelta(ctx, f.ref, s.Update.ID, s.Token, in); err != nil {
 		t.Fatalf("save delta: %v", err)
 	}
 
-	other := deltaOf(2, `abZZef`, "["+editJSON(2, 4, "ZZ")+"]")
+	other := deltaOf(2, deltaDoc("abZZef"), "["+innerEdit(2, 4, "ZZ")+"]")
 	if err := f.svc.SaveCheckpointDelta(ctx, f.ref, s.Update.ID, s.Token, other); err == nil ||
 		!errors.Is(err, stack.ErrInvalidDelta) {
 		t.Fatalf("same sequence, other content: %v, want ErrInvalidDelta", err)
 	}
 
-	assertExport(t, f, `abXYef`)
+	assertExport(t, f, deltaDoc("abXYef"))
 }
 
 // TestCheckpointDeltaOverLimit proves a result above the size limit fails.
@@ -209,13 +227,15 @@ func TestCheckpointDeltaOverLimit(t *testing.T) {
 
 	// The fixture bounds checkpoints by 1024 bytes: a base of 1000
 	// bytes saves, while a delta that grows it past the limit fails.
-	large := strings.Repeat("a", 1000)
+	text := strings.Repeat("a", 990)
+	large := deltaDoc(text)
+
 	if err := f.svc.SaveCheckpoint(ctx, f.ref, s.Update.ID, s.Token, checkpoint(1, large)); err != nil {
 		t.Fatalf("save base: %v", err)
 	}
 
-	grown := large + strings.Repeat("b", 100)
-	edits := "[" + editJSON(len(large), len(large), strings.Repeat("b", 100)) + "]"
+	grown := deltaDoc(text + strings.Repeat("b", 100))
+	edits := "[" + innerEdit(len(text), len(text), strings.Repeat("b", 100)) + "]"
 
 	err := f.svc.SaveCheckpointDelta(ctx, f.ref, s.Update.ID, s.Token, deltaOf(2, grown, edits))
 	if !errors.Is(err, stack.ErrInvalidDelta) {
@@ -235,7 +255,7 @@ func TestCheckpointDeltaWithoutCheckpoint(t *testing.T) {
 
 	s := f.started(t, stack.KindUpdate)
 
-	in := deltaOf(1, deltaBaseText, "["+editJSON(0, 0, deltaBaseText)+"]")
+	in := deltaOf(1, deltaBaseText, "["+innerEdit(0, 0, deltaBaseText)+"]")
 	if err := f.svc.SaveCheckpointDelta(ctx, f.ref, s.Update.ID, s.Token, in); err == nil ||
 		!errors.Is(err, stack.ErrInvalidDelta) {
 		t.Fatalf("delta without checkpoint: %v, want ErrInvalidDelta", err)
@@ -251,7 +271,7 @@ func TestCheckpointDeltaPreview(t *testing.T) {
 
 	s := f.started(t, stack.KindPreview)
 
-	in := deltaOf(1, deltaBaseText, "["+editJSON(0, 0, deltaBaseText)+"]")
+	in := deltaOf(1, deltaBaseText, "["+innerEdit(0, 0, deltaBaseText)+"]")
 	if err := f.svc.SaveCheckpointDelta(ctx, f.ref, s.Update.ID, s.Token, in); !errors.Is(
 		err,
 		stack.ErrWrongUpdateState,
@@ -267,7 +287,7 @@ func TestCheckpointDeltaSchema(t *testing.T) {
 	f, s := savedDelta(t)
 	ctx := t.Context()
 
-	in := deltaOf(2, `abXYef`, "["+editJSON(2, 4, "XY")+"]")
+	in := deltaOf(2, deltaDoc("abXYef"), "["+innerEdit(2, 4, "XY")+"]")
 	in.SchemaVersion = 0
 
 	if err := f.svc.SaveCheckpointDelta(ctx, f.ref, s.Update.ID, s.Token, in); !errors.Is(
@@ -287,17 +307,17 @@ func TestCheckpointDeltaChain(t *testing.T) {
 	f, s := savedDelta(t)
 	ctx := t.Context()
 
-	first := deltaOf(2, `abXYef`, "["+editJSON(2, 4, "XY")+"]")
+	first := deltaOf(2, deltaDoc("abXYef"), "["+innerEdit(2, 4, "XY")+"]")
 	if err := f.svc.SaveCheckpointDelta(ctx, f.ref, s.Update.ID, s.Token, first); err != nil {
 		t.Fatalf("first delta: %v", err)
 	}
 
-	second := deltaOf(3, `abXY`, "["+editJSON(4, 6, "")+"]")
+	second := deltaOf(3, deltaDoc("abXY"), "["+innerEdit(4, 6, "")+"]")
 	if err := f.svc.SaveCheckpointDelta(ctx, f.ref, s.Update.ID, s.Token, second); err != nil {
 		t.Fatalf("second delta: %v", err)
 	}
 
-	assertExport(t, f, `abXY`)
+	assertExport(t, f, deltaDoc("abXY"))
 }
 
 // assertExport proves the stack exports want: a failed delta saves
@@ -323,14 +343,14 @@ func FuzzCheckpointDelta(f *testing.F) {
 
 	seeds := []string{
 		`[]`,
-		"[" + editJSON(2, 4, "XY") + "]",
-		"[" + editJSON(1, 3, "X") + "," + editJSON(2, 4, "Y") + "]",
-		"[" + editJSON(4, 99, "X") + "]",
+		"[" + innerEdit(2, 4, "XY") + "]",
+		"[" + innerEdit(1, 3, "X") + "," + innerEdit(2, 4, "Y") + "]",
+		"[" + innerEdit(4, 99, "X") + "]",
 		`null`,
 		`{}`,
 		`[{"Span":{},"NewText":"x"}]`,
 		`not json`,
-		"[" + editJSON(2, 4, "XY") + "] trailing",
+		"[" + innerEdit(2, 4, "XY") + "] trailing",
 		`[{"span":{"start":{"offset":0},"end":{"offset":6}},"newText":"abcdef"}]`,
 	}
 
@@ -344,11 +364,11 @@ func FuzzCheckpointDelta(f *testing.F) {
 
 		s := fx.started(t, stack.KindUpdate)
 
-		if err := fx.svc.SaveCheckpoint(ctx, fx.ref, s.Update.ID, s.Token, checkpoint(1, `abcdef`)); err != nil {
+		if err := fx.svc.SaveCheckpoint(ctx, fx.ref, s.Update.ID, s.Token, checkpoint(1, deltaBaseText)); err != nil {
 			t.Fatalf("save base: %v", err)
 		}
 
-		in := deltaOf(2, `abcdef`, delta)
+		in := deltaOf(2, deltaBaseText, delta)
 		// The fixed hash only matches deltas that reproduce the base, so
 		// most inputs fail: the point is what they fail with.
 		err := fx.svc.SaveCheckpointDelta(ctx, fx.ref, s.Update.ID, s.Token, in)

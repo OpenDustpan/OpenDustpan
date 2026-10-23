@@ -34,7 +34,7 @@ const (
 // devEnv is a handler over a real store with the dev sign-in, the real access
 // authorizer and the clock that the code and the sessions share.
 type devEnv struct {
-	handler *apiserver.Handler
+	handler testHandler
 	store   *sqlite.Store
 	access  *access.Service
 	limiter *fakeLimiter
@@ -42,7 +42,7 @@ type devEnv struct {
 	// code is the text of the one-time code, empty when the handler has none.
 	code string
 	// rebuild makes a handler over the same store, with the parts changed.
-	rebuild func(devParts) *apiserver.Handler
+	rebuild func(devParts) testHandler
 }
 
 // devEnvOptions are the options of newDevEnv. noCode gives the handler no
@@ -136,7 +136,7 @@ func (d devDeps) accessFor(t *testing.T, parts devParts) *access.Service {
 }
 
 // handler builds a handler over the services with the parts.
-func (d devDeps) handler(t *testing.T, parts devParts) *apiserver.Handler {
+func (d devDeps) handler(t *testing.T, parts devParts) testHandler {
 	t.Helper()
 
 	devAdmin := bootstrapAdmin
@@ -153,7 +153,7 @@ func (d devDeps) handler(t *testing.T, parts devParts) *apiserver.Handler {
 		handlerCode = nil
 	}
 
-	handler, err := apiserver.NewHandler(apiserver.Config{
+	handler, err := newCheckedHandler(t, apiserver.Config{
 		Preferences:      nil,
 		GitHost:          nil,
 		Idempotency:      nil,
@@ -263,7 +263,7 @@ func newDevEnv(t *testing.T, opts devEnvOptions) devEnv {
 
 	return devEnv{
 		handler: handler, store: deps.st, access: deps.grants, limiter: deps.limiter, clock: clock, code: text,
-		rebuild: func(parts devParts) *apiserver.Handler { return deps.handler(t, parts) },
+		rebuild: func(parts devParts) testHandler { return deps.handler(t, parts) },
 	}
 }
 
@@ -671,7 +671,7 @@ func (e devEnv) devWrites(t *testing.T) (bool, int64) {
 }
 
 // postTo sends a POST request with body to the dev sign-in of handler.
-func postTo(t *testing.T, handler *apiserver.Handler, body string) *httptest.ResponseRecorder {
+func postTo(t *testing.T, handler testHandler, body string) *httptest.ResponseRecorder {
 	t.Helper()
 
 	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, devCodeRoute, strings.NewReader(body))
@@ -733,7 +733,7 @@ func TestDevCodeHandlerRefusesOtherKinds(t *testing.T) {
 				t.Context(), http.MethodPost, devCodeRoute, strings.NewReader(codeBody(env.code)),
 			)
 			rec := httptest.NewRecorder()
-			apiserver.DevCodeSignInForTest(env.handler, rec, req)
+			apiserver.DevCodeSignInForTest(env.handler.Handler, rec, req)
 
 			if rec.Code != http.StatusForbidden {
 				t.Fatalf("status = %d, want 403: %s", rec.Code, rec.Body)
