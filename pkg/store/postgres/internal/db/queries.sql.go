@@ -15564,18 +15564,20 @@ func (q *Queries) RotateRunnerKey(ctx context.Context, arg RotateRunnerKeyParams
 	return err
 }
 
-const runningMutatingUpdates = `-- name: RunningMutatingUpdates :one
-SELECT COUNT(*)
+const runningMutatingUpdate = `-- name: RunningMutatingUpdate :one
+SELECT id
 FROM updates
 WHERE stack_id = $1
   AND status = 'running' AND NOT dry_run AND kind <> 'preview'
 `
 
-func (q *Queries) RunningMutatingUpdates(ctx context.Context, stackID string) (int64, error) {
-	row := q.db.QueryRow(ctx, runningMutatingUpdates, stackID)
-	var count int64
-	err := row.Scan(&count)
-	return count, err
+// The ID of the mutating update that runs on a stack. The unique index
+// updates_one_running holds at most one such row for each stack.
+func (q *Queries) RunningMutatingUpdate(ctx context.Context, stackID string) (string, error) {
+	row := q.db.QueryRow(ctx, runningMutatingUpdate, stackID)
+	var id string
+	err := row.Scan(&id)
+	return id, err
 }
 
 const runningUpdateAt = `-- name: RunningUpdateAt :one
