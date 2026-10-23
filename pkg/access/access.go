@@ -59,6 +59,13 @@ var (
 	ErrBuiltIn = errors.New("built-in role")
 	// ErrInUse reports a delete of a custom role that a grant holds.
 	ErrInUse = errors.New("role in use")
+	// ErrLastSiteAdministrator reports a change that would leave the
+	// installation with no site administrator: the delete or the disable of
+	// the last one, or the end of the last grant, membership or group that
+	// gives the role.
+	ErrLastSiteAdministrator = errors.New(
+		"cannot remove the last site administrator: give the site-administrator role to a second person first",
+	)
 	// ErrEscalation reports a grant that gives more than the granter holds
 	// on its object.
 	ErrEscalation = errors.New("grant gives more than the granter holds")
@@ -402,7 +409,12 @@ type GrantStore interface {
 	// names the namespace of the grant (the zero fence for the
 	// installation). It returns ErrNotFound when no such grant exists in
 	// that namespace. It runs check, when it is not nil, as a GrantCheck
-	// runs, and returns its error.
+	// runs, and returns its error. It returns ErrLastSiteAdministrator,
+	// and changes nothing, when the end of the grant would leave the
+	// installation with no site administrator. The store counts and
+	// revokes in one transaction, serialized with the changes of
+	// principal.Store that end a site administrator (see the doc of
+	// principal.Store).
 	RevokeGrant(ctx context.Context, id string, fence namespace.Fence, e audit.Entry, check GrantCheck) error
 	// ListGrantsOn returns one page of the current grants on obj that
 	// match the filters of q, ordered by subject then role, each with its

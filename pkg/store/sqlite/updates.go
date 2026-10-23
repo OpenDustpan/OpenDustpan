@@ -605,15 +605,11 @@ func stackIDFor(ctx context.Context, q *db.Queries, ref stack.Ref) (string, erro
 }
 
 // allocateVersion returns the next version of a stack with no running
-// mutating update, or ErrUpdateConflict.
+// mutating update, or the error of refuseRunningStack, which names the running
+// update.
 func allocateVersion(ctx context.Context, q *db.Queries, stackID string) (int64, error) {
-	running, err := q.RunningMutatingUpdates(ctx, stackID)
-	if err != nil {
-		return 0, fmt.Errorf("count running updates: %w", err)
-	}
-
-	if running > 0 {
-		return 0, stack.ErrUpdateConflict
+	if err := refuseRunningStack(ctx, q, stackID); err != nil {
+		return 0, err
 	}
 
 	highest, err := q.HighestUpdateVersion(ctx, stackID)

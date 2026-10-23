@@ -492,7 +492,7 @@ func (h *Handler) listStacksIn(
 	}
 
 	h.serveStackPage(ctx, w, r, stackListQuery{
-		organization: ns.String(), project: project, namespaces: []namespace.Name{ns},
+		organization: ns.String(), project: project, tag: nil, namespaces: []namespace.Name{ns},
 	})
 }
 
@@ -525,7 +525,7 @@ func (h *Handler) listStacksAll(
 		readable = append(readable, all[i].Name)
 	}
 
-	h.serveStackPage(ctx, w, r, stackListQuery{organization: "", project: project, namespaces: readable})
+	h.serveStackPage(ctx, w, r, stackListQuery{organization: "", project: project, tag: nil, namespaces: readable})
 }
 
 // summarize converts stacks to the wire shape, never returning nil.
@@ -986,7 +986,8 @@ func classify(err error) (int, string) {
 	switch {
 	case errors.Is(err, errInvalidBody):
 		return http.StatusBadRequest, invalidBodyMessage
-	case errors.Is(err, errRevealPathTooLong), errors.Is(err, errContinuationToken):
+	case errors.Is(err, errRevealPathTooLong), errors.Is(err, errContinuationToken),
+		errors.Is(err, errStackTagFilter):
 		return http.StatusBadRequest, err.Error()
 	case errors.Is(err, namespace.ErrInvalidName), errors.Is(err, stack.ErrInvalidName),
 		errors.Is(err, identity.ErrInvalidObject), errors.Is(err, stack.ErrInvalidUpdate):
@@ -1032,6 +1033,23 @@ func classifySecret(err error) (int, string) {
 	}
 }
 
+// updateConflictHint is the command that ends a stuck update. Each answer of
+// stack.ErrUpdateConflict names it.
+const updateConflictHint = "wait for it to end, or run pulumi cancel"
+
+// updateConflictText answers a call that another update of the stack blocks:
+// the sentence of stack.ErrUpdateConflict, the ID of the update that holds the
+// stack when the store names it, and the command that ends a stuck update.
+// The rest of the wrap names the refused update, so it is not sent to the
+// caller.
+func updateConflictText(err error) string {
+	if conflict, ok := errors.AsType[*stack.UpdateConflictError](err); ok {
+		return conflict.Error() + ": " + updateConflictHint
+	}
+
+	return stack.ErrUpdateConflict.Error() + ": " + updateConflictHint
+}
+
 // classifyUpdate maps the errors of the update cycle to an HTTP status and a
 // message safe to show callers.
 func classifyUpdate(err error) (int, string) {
@@ -1040,7 +1058,9 @@ func classifyUpdate(err error) (int, string) {
 	}
 
 	switch {
-	case errors.Is(err, stack.ErrUpdateConflict), errors.Is(err, stack.ErrWrongUpdateState),
+	case errors.Is(err, stack.ErrUpdateConflict):
+		return http.StatusConflict, updateConflictText(err)
+	case errors.Is(err, stack.ErrWrongUpdateState),
 		errors.Is(err, stack.ErrConcurrentModification), errors.Is(err, stack.ErrInvalidDelta),
 		errors.Is(err, stack.ErrCheckpointConflict), errors.Is(err, stack.ErrStaleCheckpoint),
 		errors.Is(err, stack.ErrJournalConflict), errors.Is(err, stack.ErrJournalIncomplete):

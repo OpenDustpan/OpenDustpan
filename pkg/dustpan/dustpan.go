@@ -1124,7 +1124,6 @@ type adapters struct {
 	neutralHandlers
 
 	pulumi      http.Handler
-	profiles    http.Handler
 	tfe         http.Handler
 	tofuHTTP    http.Handler
 	server      http.Handler
@@ -1204,7 +1203,6 @@ func newAdapters(
 	mounted := adapters{
 		neutralHandlers: neutral,
 		pulumi:          api,
-		profiles:        neutral.profiles,
 		tfe:             tfeAPI,
 		tofuHTTP:        tofuHTTPAPI,
 		server:          serverAPI,

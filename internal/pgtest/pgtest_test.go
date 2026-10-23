@@ -279,3 +279,110 @@ func (f *fatalRecorder) Fatalf(format string, args ...any) {
 
 	runtime.Goexit()
 }
+
+func TestDropSchemaAtCleanupDropsBothSchemas(t *testing.T) {
+	t.Parallel()
+
+	base := os.Getenv(envURL)
+	if base == "" {
+		t.Skipf("%s is not set", envURL)
+	}
+
+	suffix := make([]byte, 6)
+	if _, err := rand.Read(suffix); err != nil {
+		t.Fatalf("random name: %v", err)
+	}
+
+	name := "pgtest_drop_" + hex.EncodeToString(suffix)
+	schemas := []string{name, name + "_control"}
+
+	createSchemas(t, base, schemas)
+
+	// The test drops the schemas too when it fails before the check, so a
+	// failed run leaves nothing.
+	t.Cleanup(func() { dropSchemas(t, base, schemas) })
+
+	rec := newRecorder(t)
+	pgtest.DropSchemaAtCleanup(rec, base, name)
+	rec.runCleanups()
+
+	if len(rec.errors) != 0 {
+		t.Fatalf("cleanup errors: %v", rec.errors)
+	}
+
+	if got := countSchemas(t, base, schemas); got != 0 {
+		t.Fatalf("schemas after the cleanup: got %d, want 0", got)
+	}
+}
+
+// createSchemas makes each schema of schemas on the server of base.
+func createSchemas(t *testing.T, base string, schemas []string) {
+	t.Helper()
+
+	conn, err := pgx.Connect(t.Context(), base)
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+
+	for _, schema := range schemas {
+		stmt := "CREATE SCHEMA " + pgx.Identifier{schema}.Sanitize()
+		if _, execErr := conn.Exec(t.Context(), stmt); execErr != nil {
+			t.Fatalf("create schema: %v", execErr)
+		}
+	}
+
+	if closeErr := conn.Close(t.Context()); closeErr != nil {
+		t.Fatalf("close: %v", closeErr)
+	}
+}
+
+// dropSchemas drops each schema of schemas. It logs a failure, so that the
+// cleanup of the test reports it without a second failure.
+func dropSchemas(t *testing.T, base string, schemas []string) {
+	t.Helper()
+
+	conn, err := pgx.Connect(context.Background(), base)
+	if err != nil {
+		t.Logf("connect: %v", err)
+
+		return
+	}
+
+	defer func() {
+		if closeErr := conn.Close(context.Background()); closeErr != nil {
+			t.Logf("close: %v", closeErr)
+		}
+	}()
+
+	for _, schema := range schemas {
+		drop := "DROP SCHEMA IF EXISTS " + pgx.Identifier{schema}.Sanitize() + " CASCADE"
+		if _, execErr := conn.Exec(context.Background(), drop); execErr != nil {
+			t.Logf("drop schema %s: %v", schema, execErr)
+		}
+	}
+}
+
+// countSchemas answers how many of schemas exist on the server of base.
+func countSchemas(t *testing.T, base string, schemas []string) int {
+	t.Helper()
+
+	conn, err := pgx.Connect(t.Context(), base)
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+
+	defer func() {
+		if closeErr := conn.Close(t.Context()); closeErr != nil {
+			t.Errorf("close: %v", closeErr)
+		}
+	}()
+
+	var n int
+
+	query := "SELECT count(*) FROM pg_namespace WHERE nspname = ANY($1)"
+	if err = conn.QueryRow(t.Context(), query, schemas).Scan(&n); err != nil {
+		t.Fatalf("count schemas: %v", err)
+	}
+
+	return n
+}

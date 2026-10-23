@@ -204,7 +204,7 @@ func (s *Store) RevokeGrant(
 
 	rev := revocation{kind: maintenance.RevokedGrant, target: id, endReason: ""}
 
-	return s.inRevokingGrantTx(ctx, fence, e, rev, func(q *db.Queries) error {
+	return s.inRevokingGrantTx(ctx, fence, e, rev, guardSiteAdministrator(ctx, func(q *db.Queries) error {
 		if err := runCheck(ctx, q, check); err != nil {
 			return err
 		}
@@ -225,7 +225,7 @@ func (s *Store) RevokeGrant(
 		}
 
 		return nil
-	})
+	}))
 }
 
 // ListGrantsOn implements access.GrantStore. It reads the page and the

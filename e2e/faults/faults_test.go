@@ -600,7 +600,10 @@ func pgNamespace(name string) namespace.Namespace {
 	}
 }
 
-// randomSchema returns a fresh schema name for one PostgreSQL run.
+// randomSchema returns a fresh schema name for one PostgreSQL run. The name is
+// "fault_" and 16 hex characters from crypto/rand, so it has only [0-9a-f_].
+// It is safe to put in SQL as a quoted identifier. An identifier cannot be a
+// placeholder, so createPGSchema and dropPGSchema concatenate it.
 func randomSchema(t *testing.T) string {
 	t.Helper()
 
@@ -632,6 +635,8 @@ func createPGSchema(t *testing.T, base, schema string) {
 }
 
 // dropPGSchema drops schema on base. It runs at cleanup with a fresh context.
+// IF EXISTS makes the drop idempotent: a setup that failed part way does not
+// make the cleanup fail too.
 func dropPGSchema(schema, base string) {
 	ctx := context.Background()
 

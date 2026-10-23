@@ -92,7 +92,7 @@ func BackupCheck(ctx context.Context, args []string, stdout, stderr io.Writer) e
 	if server == "" {
 		return fmt.Errorf(
 			"%w: set --server (%s) to the server base URL and run opendustpan backup check again",
-			ErrBackupNeedsServer,
+			ErrBackupCheckNeedsServer,
 			BackupServerEnvVar,
 		)
 	}
@@ -165,11 +165,13 @@ func readBackupCheck(
 	}()
 
 	if resp.StatusCode != http.StatusOK {
+		const hint = "check the server log and run opendustpan backup check again"
+
 		return none, fmt.Errorf(
-			"%w %s: %s: check the server log and run opendustpan backup check again",
+			"%w %s: %s",
 			ErrBackupRead,
 			id,
-			decodeErrorAnswer(resp),
+			answerText(resp.StatusCode, decodeErrorAnswer(resp), hint),
 		)
 	}
 

@@ -152,6 +152,26 @@ func (s UpdateStatus) Terminal() bool {
 // UpdateID identifies an update. It is opaque to clients.
 type UpdateID string
 
+// UpdateConflictError reports the mutating update that runs on the stack and
+// blocks the call. It matches ErrUpdateConflict. The store fills it in the
+// transaction that finds the running update, so the caller needs no second
+// read to name that update.
+type UpdateConflictError struct {
+	// Active is the ID of the mutating update that runs on the stack.
+	Active UpdateID
+}
+
+// Error returns the sentence of ErrUpdateConflict and the ID of the update
+// that runs on the stack.
+func (e *UpdateConflictError) Error() string {
+	return fmt.Sprintf("%s (update %s)", ErrUpdateConflict, e.Active)
+}
+
+// Unwrap returns ErrUpdateConflict.
+func (*UpdateConflictError) Unwrap() error {
+	return ErrUpdateConflict
+}
+
 // ParseUpdateID validates s as an update ID.
 func ParseUpdateID(s string) (UpdateID, error) {
 	if !ident.Valid(s, maxUpdateIDLength) {

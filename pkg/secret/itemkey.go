@@ -198,7 +198,8 @@ type ItemKeyTx interface {
 	GetItemKey(ctx context.Context, ref ItemRef) (ItemKey, error)
 	// GetNamespace reads a namespace inside the transaction. The sealer needs
 	// the ID of the namespace to name the key blob, and a read through the
-	// store could wait for the transaction that the caller holds open.
+	// store could wait for the transaction that the caller holds open. It
+	// returns namespace.ErrNotFound for a name that the store does not hold.
 	GetNamespace(ctx context.Context, name namespace.Name) (namespace.Namespace, error)
 }
 

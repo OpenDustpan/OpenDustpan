@@ -30,6 +30,7 @@ import (
 	"strconv"
 	"time"
 
+	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/principal"
@@ -985,7 +986,8 @@ func classifyPrincipal(err error) (int, string, bool) {
 	case errors.Is(err, errBodyTooLarge):
 		return http.StatusRequestEntityTooLarge, err.Error(), true
 	case errors.Is(err, principal.ErrAlreadyExists), errors.Is(err, principal.ErrManagedByDirectory),
-		errors.Is(err, principal.ErrNotDisabled), errors.Is(err, principal.ErrDisabled):
+		errors.Is(err, principal.ErrNotDisabled), errors.Is(err, principal.ErrDisabled),
+		errors.Is(err, access.ErrLastSiteAdministrator):
 		return http.StatusConflict, err.Error(), true
 	case errors.Is(err, principal.ErrNotFound):
 		return http.StatusNotFound, err.Error(), true

@@ -896,3 +896,42 @@ func TestListProvidersHostileQuery(t *testing.T) {
 		})
 	}
 }
+
+// TestPublishRepeatReplaysTheFirstRelease proves that the replay of a repeat
+// publish answers what the live repeat answered: the first release, with the
+// first publisher. A repeat of the same content changes nothing, so its stored
+// answer must not name the caller of the repeat.
+func TestPublishRepeatReplaysTheFirstRelease(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	sg := pgpfixture.NewSigner(t)
+	f.trust(t, "acme", sg)
+
+	s := buildSet(t, sg)
+	target := base + "/providers/payments/versions/1.0.0"
+
+	first := f.do(t, request{
+		token: "publisher", method: http.MethodPut, target: target, body: f.publishBody(t, s),
+		headers: map[string]string{"Idempotency-Key": "first"},
+	})
+	wantCode(t, "publish", first, http.StatusOK)
+
+	repeat := request{
+		token: "admin", method: http.MethodPut, target: target, body: f.publishBody(t, s),
+		headers: map[string]string{"Idempotency-Key": "repeat-1"},
+	}
+
+	live := f.do(t, repeat)
+	wantCode(t, "repeat", live, http.StatusOK)
+
+	var doc publishedWire
+	if err := json.Unmarshal([]byte(live.body), &doc); err != nil || doc.PublishedBy != "publisher" {
+		t.Fatalf("repeat answer = %q, %v, want the first publisher", live.body, err)
+	}
+
+	replay := f.do(t, repeat)
+	if replay.code != http.StatusOK || replay.body != live.body {
+		t.Fatalf("replay of the repeat = %d %s, want the live answer %s", replay.code, replay.body, live.body)
+	}
+}

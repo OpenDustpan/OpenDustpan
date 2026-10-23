@@ -216,6 +216,7 @@ List OpenTofu state versions with
 `POST /api/v2/state-versions/{state_version_id}/actions/restore`.
 Restore a Pulumi checkpoint with
 `POST /api/stacks/{namespace}/{project}/{stack}/restore/{version}`.
+The restore answers 400 when the stored checkpoint of that version is not a deployment that the Pulumi CLI can read. It writes no new version.
 
 `opendustpan backup`, `opendustpan backup check`, `opendustpan restore`,
 `opendustpan upgrade check` and `opendustpan namespace create` are API

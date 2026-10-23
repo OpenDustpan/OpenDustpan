@@ -206,8 +206,21 @@ type Store struct {
 	path string
 	// mu guards conn and queries across the online restore swap: readers
 	// hold it shared, and the swap holds it exclusive while it renames the
-	// database file. Lock order with stagingMu is stagingMu before mu.
+	// database file. Lock order: stagingMu, then mu, then enterGate. No path
+	// takes them in another order.
 	mu sync.RWMutex
+	// enterGate orders an enter of maintenance mode against the checked
+	// writes of this store. A checked write holds it shared for its
+	// transaction (holdWrite). An enter holds it exclusive, so the checked
+	// writes in flight end and the new ones wait. The enter then competes for
+	// the database write lock only with the writes that do not use the gate:
+	// the control path (durable claims, extends and heartbeats, the audit
+	// chain, revocation journaling) and the WAL checkpoint of the guard. Those
+	// stay ungated, because SetState itself is a control write and would
+	// wait for its own hold. Without the gate the enter polls the write lock
+	// against writers that never pause, and it can wait out the whole busy
+	// timeout.
+	enterGate *writeGate
 	// stagingMu guards stagingPath: one staged restore at a time.
 	stagingMu   sync.Mutex
 	stagingPath string
@@ -377,6 +390,7 @@ func newStore(conn *sql.DB, path string, guard *processGuard) *Store {
 		queries:             db.New(conn),
 		path:                path,
 		mu:                  sync.RWMutex{},
+		enterGate:           newWriteGate(),
 		stagingMu:           sync.Mutex{},
 		stagingPath:         "",
 		guardCancel:         nil,
@@ -959,19 +973,20 @@ func (s *Store) ForceDeleteStack(
 	})
 }
 
-// refuseRunningStack returns ErrUpdateConflict while a mutating update of the
-// stack with stackID runs.
+// refuseRunningStack returns a *stack.UpdateConflictError, which matches
+// ErrUpdateConflict and names the running update, while a mutating update of
+// the stack with stackID runs.
 func refuseRunningStack(ctx context.Context, q *db.Queries, stackID string) error {
-	running, err := q.RunningMutatingUpdates(ctx, stackID)
+	active, err := q.RunningMutatingUpdate(ctx, stackID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+
 	if err != nil {
-		return fmt.Errorf("count running updates: %w", err)
+		return fmt.Errorf("read the running update: %w", err)
 	}
 
-	if running > 0 {
-		return stack.ErrUpdateConflict
-	}
-
-	return nil
+	return &stack.UpdateConflictError{Active: stack.UpdateID(active)}
 }
 
 // refuseResourcedStack returns ErrHasResources when the latest checkpoint of
@@ -1175,11 +1190,27 @@ func stackTagMap(ctx context.Context, q *db.Queries, ns string) (map[string]map[
 //
 // Never start a checked transaction (inTx, inFencedTx or any helper built on
 // them) from inside fn, and never call a Store method that does. The outer
-// transaction holds the shared write lock; the inner one asks for it again,
-// and it queues behind an enter that waits for the outer one: a deadlock.
+// transaction holds the shared gate; the inner one asks for it again, and it
+// queues behind an enter that waits for the outer one. That wait ends only
+// when the context ends, and then the inner call returns the context error.
 // Take the state check once, in the outermost transaction.
 func (s *Store) inTx(ctx context.Context, fn func(q *db.Queries) error) error {
+	release, err := s.holdWrite(ctx)
+	if err != nil {
+		return err
+	}
+	defer release()
+
 	return s.runTx(ctx, fn, checkWritable)
+}
+
+// holdWrite takes the shared hold of the enter gate for a checked write and
+// returns the function that releases it. Every path that runs checkWritable
+// calls it before it begins its transaction, so that an enter of maintenance
+// mode can order itself against the write. It returns the error of ctx when
+// ctx ends while the write waits behind an enter, and then holds nothing.
+func (s *Store) holdWrite(ctx context.Context) (func(), error) {
+	return s.enterGate.rlock(ctx)
 }
 
 // inControlTx runs fn in a transaction with no installation state check. The
@@ -1275,8 +1306,9 @@ func (s *Store) inReadTx(ctx context.Context, fn func(q *db.Queries) error) erro
 //
 // Never start a checked transaction (inTx, inFencedTx or any helper built on
 // them) from inside fn, and never call a Store method that does. The outer
-// transaction holds the shared write lock; the inner one asks for it again,
-// and it queues behind an enter that waits for the outer one: a deadlock.
+// transaction holds the shared gate; the inner one asks for it again, and it
+// queues behind an enter that waits for the outer one. That wait ends only
+// when the context ends, and then the inner call returns the context error.
 // Take the state check once, in the outermost transaction.
 func (s *Store) inFencedTx(ctx context.Context, fence namespace.Fence, fn func(q *db.Queries) error) error {
 	return s.fencedTx(ctx, fence, fn, s.inTx)

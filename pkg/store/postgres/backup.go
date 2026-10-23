@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -763,8 +764,30 @@ func (s *Store) liveColumns(ctx context.Context, table string) ([]string, error)
 
 // pgIdent quotes one identifier. Table and column names come from the
 // constant spec above, never from the network.
+//
+// Defense in depth: Open refuses a live schema name that checkIdent refuses,
+// and the other names come from the code. pgIdent still doubles each double
+// quote, so that a name from a new caller that skips checkIdent cannot end
+// the quoted identifier.
 func pgIdent(name string) string {
-	return `"` + name + `"`
+	return `"` + strings.ReplaceAll(name, `"`, `""`) + `"`
+}
+
+// errIdentifier reports a schema, table or column name that is not a plain
+// SQL identifier.
+var errIdentifier = errors.New("name is not a plain SQL identifier")
+
+// plainIdent matches a plain SQL identifier: a letter or an underscore, then
+// letters, digits and underscores.
+var plainIdent = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+
+// checkIdent returns errIdentifier when name is not a plain SQL identifier.
+func checkIdent(name string) error {
+	if !plainIdent.MatchString(name) {
+		return errIdentifier
+	}
+
+	return nil
 }
 
 // inBackupTx runs fn in one transaction with opts, committing on success and

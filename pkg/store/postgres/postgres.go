@@ -157,6 +157,13 @@ func Open(ctx context.Context, url string, opts ...Option) (*Store, error) {
 	}
 
 	live := liveSchemaName(cfg.ConnConfig.RuntimeParams["search_path"])
+
+	// Defense in depth: pgIdent still doubles the quotes of this name, so a
+	// name that this check misses still cannot end the quoted identifier.
+	if identErr := checkIdent(live); identErr != nil {
+		return nil, fmt.Errorf("open postgres store: schema %q of the search path: %w", live, identErr)
+	}
+
 	ctl := live + "_control"
 	cfg.AfterConnect = func(ctx context.Context, conn *pgx.Conn) error {
 		if _, execErr := conn.Exec(ctx, "SET search_path TO "+pgIdent(live)+", "+pgIdent(ctl)); execErr != nil {
@@ -611,19 +618,20 @@ func (s *Store) ForceDeleteStack(
 	})
 }
 
-// refuseRunningStack returns ErrUpdateConflict while a mutating update of the
-// stack with stackID runs. The caller holds the stack lock.
+// refuseRunningStack returns a *stack.UpdateConflictError, which matches
+// ErrUpdateConflict and names the running update, while a mutating update of
+// the stack with stackID runs. The caller holds the stack lock.
 func refuseRunningStack(ctx context.Context, q *db.Queries, stackID string) error {
-	running, err := q.RunningMutatingUpdates(ctx, stackID)
+	active, err := q.RunningMutatingUpdate(ctx, stackID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil
+	}
+
 	if err != nil {
-		return fmt.Errorf("count running updates: %w", err)
+		return fmt.Errorf("read the running update: %w", err)
 	}
 
-	if running > 0 {
-		return stack.ErrUpdateConflict
-	}
-
-	return nil
+	return &stack.UpdateConflictError{Active: stack.UpdateID(active)}
 }
 
 // refuseResourcedStack returns ErrHasResources when the latest checkpoint of

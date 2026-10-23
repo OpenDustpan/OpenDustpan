@@ -304,7 +304,7 @@ The same as a purge. Use "purge" in code and in the API, and "final delete" wher
 _Avoid_: Permanent delete
 
 **Retention expiry**:
-The server task that purges each deleted unit whose retention period ended. It runs one time each hour, the first time one hour after the server starts. `POST /api/dustpan/v1/deleted-units/sweep` runs it at once. It also finishes the blob purge records. It purges without the dependents check, because the retention period was the recovery window of the team (ADR 153). The end of the retention period of a stored plan or a job log is a redaction with the cause `retention` (ADR 152).
+The server task that purges each deleted unit whose retention period ended. It runs one time each hour, the first time one hour after the server starts. `POST /api/server/deleted-units/sweep` runs it at once. It also finishes the blob purge records. It purges without the dependents check, because the retention period was the recovery window of the team (ADR 153). The end of the retention period of a stored plan or a job log is a redaction with the cause `retention` (ADR 152).
 _Avoid_: Retention sweep, sweep (that is the Sweep feature), garbage collection, reaper
 
 **Orphan cleanup**:

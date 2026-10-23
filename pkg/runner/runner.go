@@ -380,6 +380,13 @@ func (g GitCredentials) Validate() error {
 
 // validateHelper checks the program of a custom git credential helper.
 func validateHelper(h string) error {
+	// Defense in depth: launcher.GitConfig refuses a control character too;
+	// this check stays so that a pool never stores a helper that could add a
+	// line to the git configuration of a step.
+	if strings.ContainsFunc(h, isControl) {
+		return fmt.Errorf("%w: git credential helper must not hold a control character", ErrInvalid)
+	}
+
 	bare := strings.HasPrefix(h, "git-credential-") && len(h) > len("git-credential-") &&
 		!strings.ContainsAny(h, "/ \t!")
 	absolute := strings.HasPrefix(h, "/") && cleanAbs(h) && !strings.ContainsAny(h, " \t!")
@@ -406,4 +413,10 @@ func cleanAbs(p string) bool {
 	}
 
 	return true
+}
+
+// isControl reports whether r is a control character of the C0 range
+// (0x00 to 0x1F) or DEL (0x7F).
+func isControl(r rune) bool {
+	return r < 0x20 || r == 0x7f
 }
