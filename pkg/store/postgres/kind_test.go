@@ -76,7 +76,7 @@ func openKindFixture(t *testing.T, claimed installation.Kind) string {
 		t.Skipf("set %s to run the PostgreSQL integration tests", envURL)
 	}
 
-	schemaURL := isolatedURL(t, base)
+	schemaURL := emptySchemaURL(t, base)
 
 	first, err := postgres.Open(t.Context(), schemaURL)
 	if err != nil {

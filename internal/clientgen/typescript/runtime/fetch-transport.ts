@@ -1,0 +1,291 @@
+import { ApiError, requestError, transportError } from "./errors.js";
+import { metadata } from "./metadata.js";
+import type { ApiTransport, OperationAnswer, OperationCall } from "./transport.js";
+
+/** The largest answer, in bytes, that the default transport reads (16 MiB). */
+export const defaultMaxResponseBytes = 16 * 1024 * 1024;
+
+/** The largest number of redirects that the default transport follows. */
+const maxRedirects = 10;
+
+/** The part of an error body that is not JSON that an error message keeps. */
+const maxErrorTextBytes = 512;
+
+/** The options of the default transport. */
+export interface FetchTransportOptions {
+  /**
+   * The base URL of the server, for example https://dustpan.example.com. It is
+   * http or https, has a host and has no query, no fragment and no user
+   * information. The transport sends the token to this origin only.
+   */
+  readonly baseUrl: string;
+  /** The access token. The transport sends it as a bearer token to operations that need a sign-in. */
+  readonly token?: string | undefined;
+  /** The fetch function. The default is the global fetch. */
+  readonly fetch?: typeof globalThis.fetch | undefined;
+  /** The User-Agent header. A browser ignores it. */
+  readonly userAgent?: string | undefined;
+  readonly maxResponseBytes?: number | undefined;
+}
+
+const keyPattern = /^[\x20-\x7e]{1,255}$/;
+const headerValuePattern = /^[\x20-\x7e]*$/;
+
+function parseBase(baseUrl: string): string {
+  let url: URL;
+  try {
+    url = new URL(baseUrl);
+  } catch (error) {
+    throw requestError(`the base URL ${JSON.stringify(baseUrl)} is not a URL`, error);
+  }
+  if (
+    (url.protocol !== "http:" && url.protocol !== "https:") ||
+    url.host === "" ||
+    url.search !== "" ||
+    url.hash !== "" ||
+    url.username !== "" ||
+    url.password !== ""
+  ) {
+    throw requestError(`the base URL ${JSON.stringify(baseUrl)} must be http or https with a host and no query`);
+  }
+  return url.href.replace(/\/+$/, "");
+}
+
+/**
+ * Encodes the value of a path parameter. It refuses an empty value, "." and
+ * "..": a URL parser removes dot segments after the encoding, so such a value
+ * would change the route.
+ */
+export function pathSegment(name: string, value: string): string {
+  if (value === "" || value === "." || value === "..") {
+    throw requestError(`the path parameter ${name} must not be empty, "." or ".."`);
+  }
+  try {
+    return encodeURIComponent(value);
+  } catch (error) {
+    throw requestError(`the path parameter ${name} is not valid text`, error);
+  }
+}
+
+function pathOf(call: OperationCall): string {
+  return call.spec.path.replace(/\{([^}]+)\}/g, (_, name: string) => pathSegment(name, call.path[name] ?? ""));
+}
+
+function headerValue(what: string, value: string, pattern: RegExp): string {
+  // Defense in depth: fetch refuses a header value with a line break too.
+  if (!pattern.test(value)) {
+    throw requestError(`${what} must be printable ASCII`);
+  }
+  return value;
+}
+
+function newKey(): string {
+  return globalThis.crypto.randomUUID();
+}
+
+function requestHeaders(call: OperationCall, token: string | undefined, userAgent: string): Headers {
+  const headers = new Headers({ accept: "application/json", "user-agent": userAgent });
+  if (call.spec.security === "caller" && token !== undefined && token !== "") {
+    headers.set("authorization", `Bearer ${headerValue("the token", token, headerValuePattern)}`);
+  }
+  if (call.spec.requestBody !== undefined && call.body !== undefined) {
+    headers.set("content-type", call.spec.requestBody);
+  }
+  if (call.spec.idempotencyKey !== "none") {
+    headers.set("idempotency-key", headerValue("the Idempotency-Key", call.idempotencyKey ?? newKey(), keyPattern));
+  }
+  if (call.ifMatch !== undefined) {
+    headers.set("if-match", headerValue("If-Match", call.ifMatch, headerValuePattern));
+  }
+  return headers;
+}
+
+function urlOf(base: string, call: OperationCall): string {
+  const query = new URLSearchParams();
+  for (const [name, value] of Object.entries(call.query)) {
+    for (const item of typeof value === "string" ? [value] : (value ?? [])) {
+      query.append(name, item);
+    }
+  }
+  const text = query.toString();
+  return base + pathOf(call) + (text === "" ? "" : `?${text}`);
+}
+
+/** True when the target has the origin and the path prefix of the base URL. */
+function insideBase(base: string, target: URL): boolean {
+  const root = new URL(base);
+  const prefix = root.pathname.replace(/\/+$/, "");
+  return target.origin === root.origin && (target.pathname === prefix || target.pathname.startsWith(`${prefix}/`));
+}
+
+/**
+ * Removes the token from the headers of a hop to another origin.
+ *
+ * Defense in depth: insideBase refuses a target on another origin before this
+ * runs, and this step keeps the token off any such request if that check
+ * changes. Exported so that a test can reach it alone.
+ */
+export function dropTokenOffOrigin(headers: Headers, from: URL, to: URL): void {
+  if (to.origin !== from.origin) {
+    headers.delete("authorization");
+  }
+}
+
+function isRedirect(status: number): boolean {
+  return status === 301 || status === 302 || status === 303 || status === 307 || status === 308;
+}
+
+async function readLimited(response: Response, limit: number): Promise<string> {
+  const reader = response.body?.getReader();
+  if (reader === undefined) {
+    return "";
+  }
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) {
+      break;
+    }
+    size += value.byteLength;
+    if (size > limit) {
+      await reader.cancel();
+      throw new ApiError({
+        kind: "invalid",
+        status: response.status,
+        message: `the answer is longer than ${limit} bytes`,
+      });
+    }
+    chunks.push(value);
+  }
+  const all = new Uint8Array(size);
+  let offset = 0;
+  for (const chunk of chunks) {
+    all.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  try {
+    return new TextDecoder("utf-8", { fatal: true }).decode(all);
+  } catch (error) {
+    throw new ApiError({ kind: "invalid", status: response.status, message: "the answer is not UTF-8 text", cause: error });
+  }
+}
+
+function isJSON(contentType: string | null): boolean {
+  return (contentType ?? "").split(";", 1)[0]?.trim().toLowerCase() === "application/json";
+}
+
+function errorOf(status: number, contentType: string | null, text: string): ApiError {
+  if (isJSON(contentType)) {
+    try {
+      const doc: unknown = JSON.parse(text);
+      if (typeof doc === "object" && doc !== null && !Array.isArray(doc)) {
+        const { message, errorCode, errorArgs } = doc as Record<string, unknown>;
+        if (typeof message === "string") {
+          return new ApiError({
+            kind: "server",
+            status,
+            message,
+            errorCode: typeof errorCode === "string" ? errorCode : undefined,
+            errorArgs:
+              typeof errorArgs === "object" && errorArgs !== null && !Array.isArray(errorArgs)
+                ? (errorArgs as Record<string, unknown>)
+                : undefined,
+          });
+        }
+      }
+    } catch {
+      // The body is not an error document. The message below keeps its text.
+    }
+  }
+  const snippet = text.slice(0, maxErrorTextBytes).trim();
+  return new ApiError({ kind: "server", status, message: snippet === "" ? `status ${status}` : snippet });
+}
+
+async function answerOf(response: Response, limit: number): Promise<OperationAnswer> {
+  const text = await readLimited(response, limit);
+  const { status } = response;
+  if (status < 200 || status > 299) {
+    throw errorOf(status, response.headers.get("content-type"), text);
+  }
+  const etag = response.headers.get("etag") ?? undefined;
+  if (text === "") {
+    return { status, body: undefined, etag };
+  }
+  if (!isJSON(response.headers.get("content-type"))) {
+    throw new ApiError({
+      kind: "invalid",
+      status,
+      message: `the content type is ${JSON.stringify(response.headers.get("content-type") ?? "")}`,
+    });
+  }
+  try {
+    return { status, body: JSON.parse(text) as unknown, etag };
+  } catch (error) {
+    throw new ApiError({ kind: "invalid", status, message: "the answer is not JSON", cause: error });
+  }
+}
+
+/**
+ * Makes the default transport: global fetch, bearer tokens and JSON.
+ *
+ * The transport sends the token to an operation that needs a sign-in, to the
+ * origin of the base URL only. It follows a redirect itself, except in a
+ * browser, and only inside the base URL: a redirect to another origin, or
+ * outside the base path, is a transport error and sends nothing. It reads an
+ * answer up to a size limit. It does not retry.
+ */
+export function createFetchTransport(options: FetchTransportOptions): ApiTransport {
+  const base = parseBase(options.baseUrl);
+  const fetchFn = options.fetch ?? globalThis.fetch;
+  const limit = options.maxResponseBytes ?? defaultMaxResponseBytes;
+  const userAgent =
+    options.userAgent ??
+    `opendustpan-client-ts/${metadata.clientVersion} (description ${metadata.descriptionVersion}; server ${metadata.serverRelease})`;
+
+  return {
+    async send(call) {
+      let url = urlOf(base, call);
+      let method: string = call.spec.method;
+      const headers = requestHeaders(call, options.token, userAgent);
+      let body = call.body === undefined ? undefined : JSON.stringify(call.body);
+      for (let hops = 0; ; hops++) {
+        let response: Response;
+        try {
+          response = await fetchFn(url, { method, headers, body, redirect: "manual", signal: call.signal ?? null });
+        } catch (error) {
+          throw transportError(`${call.spec.id}: ${error instanceof Error ? error.message : String(error)}`, error);
+        }
+        if (response.type === "opaqueredirect") {
+          // A browser hides the target of a manual redirect, so the transport cannot check it.
+          throw transportError(`${call.spec.id}: the server redirected, and a browser does not show where to`);
+        }
+        if (!isRedirect(response.status)) {
+          return answerOf(response, limit);
+        }
+        await response.body?.cancel();
+        const location = response.headers.get("location");
+        if (location === null || hops >= maxRedirects) {
+          throw transportError(`${call.spec.id}: the redirect cannot be followed`);
+        }
+        const next = new URL(location, url);
+        if (next.protocol !== "http:" && next.protocol !== "https:") {
+          throw transportError(`${call.spec.id}: the redirect leaves http and https`);
+        }
+        // The API has no reason to leave its origin or its base path. The
+        // transport sends nothing to such a target and does not accept an
+        // answer from it.
+        if (!insideBase(base, next)) {
+          throw transportError(`${call.spec.id}: the server redirected outside the base URL, and the transport refuses it`);
+        }
+        dropTokenOffOrigin(headers, new URL(url), next);
+        if (response.status === 303 || ((response.status === 301 || response.status === 302) && method === "POST")) {
+          method = "GET";
+          body = undefined;
+          headers.delete("content-type");
+        }
+        url = next.href;
+      }
+    },
+  };
+}

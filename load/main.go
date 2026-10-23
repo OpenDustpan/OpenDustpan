@@ -409,10 +409,14 @@ func openPostgresSchema(
 			}
 		}()
 
-		dropStmt := "DROP SCHEMA " + pgx.Identifier{schema}.Sanitize() + " CASCADE"
+		// The store keeps its control tables in a second schema, <schema>_control.
+		for _, name := range []string{schema, schema + "_control"} {
+			dropStmt := "DROP SCHEMA IF EXISTS " + pgx.Identifier{name}.Sanitize() + " CASCADE"
 
-		if _, err := dropConn.Exec(dropCtx, dropStmt); err != nil {
-			logger.ErrorContext(dropCtx, "drop schema", slog.String("error", err.Error()))
+			if _, err := dropConn.Exec(dropCtx, dropStmt); err != nil {
+				logger.ErrorContext(dropCtx, "drop schema",
+					slog.String("schema", name), slog.String("error", err.Error()))
+			}
 		}
 	}
 

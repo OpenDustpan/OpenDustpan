@@ -503,21 +503,39 @@ func checkNoUnstoredRefusal(ctx context.Context, q *db.Queries, stackID string, 
 func (s *Store) JournalRefusals(
 	ctx context.Context, stackID stack.ID, update stack.UpdateID,
 ) ([]stack.JournalRefusal, error) {
-	rows, err := s.queries.ListJournalRefusals(ctx, db.ListJournalRefusalsParams{
-		StackID:  stackID.String(),
-		UpdateID: update.String(),
+	var (
+		rows  []db.ListJournalRefusalsRow
+		names db.StackRefByIDRow
+	)
+
+	err := s.inSnapshotTx(ctx, func(q *db.Queries) error {
+		var err error
+
+		rows, err = q.ListJournalRefusals(ctx, db.ListJournalRefusalsParams{
+			StackID:  stackID.String(),
+			UpdateID: update.String(),
+		})
+		if err != nil {
+			return fmt.Errorf("select journal refusals: %w", err)
+		}
+
+		if len(rows) == 0 {
+			return nil
+		}
+
+		names, err = q.StackRefByID(ctx, stackID.String())
+		if err != nil {
+			return fmt.Errorf("resolve stack: %w", err)
+		}
+
+		return nil
 	})
 	if err != nil {
-		return nil, fmt.Errorf("select journal refusals: %w", err)
+		return nil, err
 	}
 
 	if len(rows) == 0 {
 		return nil, nil
-	}
-
-	names, err := s.queries.StackRefByID(ctx, stackID.String())
-	if err != nil {
-		return nil, fmt.Errorf("resolve stack: %w", err)
 	}
 
 	ref, err := stack.ParseRef(names.Namespace, names.Project, names.Name)
