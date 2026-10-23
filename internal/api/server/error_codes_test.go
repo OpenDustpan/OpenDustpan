@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"testing"
 
 	apiserver "opendustpan.org/opendustpan/internal/api/server"
@@ -13,6 +14,8 @@ import (
 	"opendustpan.org/opendustpan/internal/errcode/errcodetest"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/maintenance"
+	"opendustpan.org/opendustpan/pkg/namespace"
 )
 
 // errUnclassified is an error that no classify function maps.
@@ -24,6 +27,8 @@ var errUnclassified = errors.New("disk on fire")
 func TestWriteErrorCodes(t *testing.T) {
 	t.Parallel()
 
+	active := &maintenance.ActiveWorkError{Work: []string{"pulumi/acme/web/prod", "opentofu/acme/net"}, Canceled: nil}
+
 	tests := []struct {
 		name   string
 		err    error
@@ -31,7 +36,38 @@ func TestWriteErrorCodes(t *testing.T) {
 		code   string
 		args   map[string]any
 	}{
+		{"unauthenticated", identity.ErrUnauthenticated, http.StatusUnauthorized, errcode.AuthUnauthenticated, nil},
 		{"denied", identity.ErrDenied, http.StatusForbidden, errcode.AccessDenied, nil},
+		{"invalid object", identity.ErrInvalidObject, http.StatusBadRequest, errcode.RequestInvalidObject, nil},
+		{"invalid namespace name", namespace.ErrInvalidName, http.StatusBadRequest, errcode.NamespaceInvalidName, nil},
+		{
+			"invalid namespace page",
+			namespace.ErrInvalidPage,
+			http.StatusBadRequest,
+			errcode.RequestPageSizeInvalid,
+			nil,
+		},
+		{"namespace exists", namespace.ErrAlreadyExists, http.StatusConflict, errcode.NamespaceAlreadyExists, nil},
+		{"fenced", namespace.ErrFenced, http.StatusConflict, errcode.NamespaceFenced, nil},
+		{"namespace not found", namespace.ErrNotFound, http.StatusNotFound, errcode.NamespaceNotFound, nil},
+		{"invalid state", maintenance.ErrInvalidState, http.StatusBadRequest, errcode.MaintenanceInvalidState, nil},
+		{
+			"active work", active, http.StatusConflict, errcode.MaintenanceActiveWork,
+			map[string]any{"workCount": int64(2), "canceledCount": int64(0)},
+		},
+		{
+			"active work without units", maintenance.ErrActiveWork, http.StatusConflict, errcode.MaintenanceActiveWork,
+			map[string]any{"workCount": int64(0), "canceledCount": int64(0)},
+		},
+		{"held", maintenance.ErrHeld, http.StatusConflict, errcode.MaintenanceHeld, nil},
+		{
+			"in maintenance", maintenance.ErrInMaintenance, http.StatusServiceUnavailable,
+			errcode.MaintenanceInMaintenance, nil,
+		},
+		{
+			"state unavailable", maintenance.ErrUnavailable, http.StatusInternalServerError,
+			errcode.MaintenanceUnavailable, nil,
+		},
 		{"unclassified", errUnclassified, http.StatusInternalServerError, errcode.ServerInternal, nil},
 	}
 
@@ -74,4 +110,51 @@ func TestWriteErrorWithoutCode(t *testing.T) {
 		body["message"] != audit.ErrChainMigrationsStopped.Error() {
 		t.Fatalf("answer = %d %s, want 503 with the message and no errorCode", rec.Code, rec.Body.String())
 	}
+}
+
+// TestEnterErrorCodes proves that a forced enter that canceled work answers
+// the code of the active work with its counts, and keeps the list of the
+// canceled units.
+func TestEnterErrorCodes(t *testing.T) {
+	t.Parallel()
+
+	active := &maintenance.ActiveWorkError{
+		Work:     []string{"pulumi/acme/web/prod"},
+		Canceled: []string{"opentofu/acme/net", "opentofu/acme/dns"},
+	}
+
+	r := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/server/maintenance", http.NoBody)
+	rec := httptest.NewRecorder()
+	apiserver.WriteEnterErrorForTest(rec, r, active)
+
+	errcodetest.CheckAnswer(t, errcodetest.ShapeCamelCase, http.StatusConflict, rec.Body.Bytes(), errcodetest.Want{
+		Code:        errcode.MaintenanceActiveWork,
+		Args:        map[string]any{"workCount": int64(1), "canceledCount": int64(2)},
+		RequestBody: nil,
+	})
+
+	var body struct {
+		Canceled []string `json:"canceled"`
+	}
+
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil || !slices.Equal(body.Canceled, active.Canceled) {
+		t.Fatalf("canceled = %v, want %v: %s", body.Canceled, active.Canceled, rec.Body.String())
+	}
+}
+
+// TestUnknownRouteCode proves that a path that no route serves answers 404
+// with the code of an unknown route.
+func TestUnknownRouteCode(t *testing.T) {
+	t.Parallel()
+
+	r := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/server/no-such-route", http.NoBody)
+	rec := httptest.NewRecorder()
+	apiserver.ServeEmptyForTest(rec, r)
+
+	if got := rec.Header().Get("Content-Type"); got != "application/json" {
+		t.Fatalf("Content-Type = %q, want application/json", got)
+	}
+
+	errcodetest.CheckAnswer(t, errcodetest.ShapeCamelCase, http.StatusNotFound, rec.Body.Bytes(),
+		errcodetest.Want{Code: errcode.ServerRouteNotFound, Args: nil, RequestBody: nil})
 }

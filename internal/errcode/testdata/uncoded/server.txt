@@ -1,8 +1,7 @@
 # The error paths of internal/api/server that answer without a code of the
 # catalog. This list only shrinks: give a path a code, remove its line and
 # lower the limit. A new error path never goes on this list.
-limit 186
-Handler.ServeHTTP: errorResponse{}
+limit 168
 Handler.approveAuditChain: errorResponse{}
 Handler.getAuditChain: errorResponse{}
 Handler.sweepDeletedUnits: errorResponse{}
@@ -80,20 +79,8 @@ classifyMaintenance: audit.ErrChainNeedsPerson
 classifyMaintenance: audit.ErrChainStepRequired
 classifyMaintenance: audit.ErrNoChainChange
 classifyMaintenance: default
-classifyMaintenance: maintenance.ErrActiveWork
-classifyMaintenance: maintenance.ErrHeld
-classifyMaintenance: maintenance.ErrInMaintenance
-classifyMaintenance: maintenance.ErrInvalidState
-classifyMaintenance: maintenance.ErrUnavailable
 classifyNamespace: default
-classifyNamespace: errInvalidNamespaceBody
-classifyNamespace: errNamespaceCursor
-classifyNamespace: namespace.ErrAlreadyExists
-classifyNamespace: namespace.ErrFenced
-classifyNamespace: namespace.ErrInvalidName
-classifyNamespace: namespace.ErrInvalidPage
 classifyNamespace: namespace.ErrNoPaging
-classifyNamespace: namespace.ErrNotFound
 classifyPrincipal: access.ErrLastSiteAdministrator
 classifyPrincipal: default
 classifyPrincipal: errBodyTooLarge
@@ -131,11 +118,6 @@ classifyRegistry: backup.ErrRestoreNotFound
 classifyRegistry: backup.ErrRestoreRunning
 classifyRequest: default
 classifyRequest: errCheckpointsOff
-classifyRequest: errInvalidBody
-classifyRequest: errOverrideSwitchesBody
-classifyRequest: identity.ErrDenied
-classifyRequest: identity.ErrInvalidObject
-classifyRequest: identity.ErrUnauthenticated
 classifySessionPolicy: default
 classifySessionPolicy: errSessionPolicyBody
 classifySessionPolicy: session.ErrInvalid
