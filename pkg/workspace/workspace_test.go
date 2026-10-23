@@ -4891,28 +4891,34 @@ func TestLeakedSecretsIgnoresRandomID(t *testing.T) {
 		want    []string
 	}{
 		{
-			name: "random ID holds kek",
-			text: fmt.Errorf("open state %s: %w", "sv-kekkekkekkekkekkekkekkek", workspace.ErrSealedContent).Error(),
+			name:    "random ID holds kek",
+			text:    fmt.Errorf("open state %s: %w", "sv-kekkekkekkekkekkekkekkek", workspace.ErrSealedContent).Error(),
+			secrets: nil,
+			want:    nil,
 		},
 		{
-			name: "key ID",
-			text: "open state sv-abc: kek-test",
-			want: []string{"kek-test"},
+			name:    "key ID",
+			text:    "open state sv-abc: kek-test",
+			secrets: nil,
+			want:    []string{"kek-test"},
 		},
 		{
-			name: "hex key",
-			text: "open state sv-abc: " + hex.EncodeToString(kek),
-			want: []string{hex.EncodeToString(kek)},
+			name:    "hex key",
+			text:    "open state sv-abc: " + hex.EncodeToString(kek),
+			secrets: nil,
+			want:    []string{hex.EncodeToString(kek)},
 		},
 		{
-			name: "base64 key",
-			text: "open state sv-abc: " + base64.StdEncoding.EncodeToString(kek),
-			want: []string{base64.StdEncoding.EncodeToString(kek)},
+			name:    "base64 key",
+			text:    "open state sv-abc: " + base64.StdEncoding.EncodeToString(kek),
+			secrets: nil,
+			want:    []string{base64.StdEncoding.EncodeToString(kek), base64.RawURLEncoding.EncodeToString(kek)},
 		},
 		{
 			name:    "empty secret",
 			text:    "open state sv-abc",
 			secrets: []string{""},
+			want:    nil,
 		},
 	}
 
