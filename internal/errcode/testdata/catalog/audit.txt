@@ -1,1 +1,3 @@
+audit.entry-not-found
+audit.entry-read-unavailable
 audit.reason-invalid
