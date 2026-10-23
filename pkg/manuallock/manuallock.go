@@ -23,7 +23,6 @@ import (
 	"fmt"
 	"strings"
 	"time"
-	"unicode"
 	"unicode/utf8"
 
 	"opendustpan.org/opendustpan/pkg/audit"
@@ -180,14 +179,14 @@ func (l Lock) Detail() string {
 // U+FFFD. The result has no character that moves a cursor, ends a line or
 // changes the direction of the text.
 func SafeText(s string) string {
-	if utf8.ValidString(s) && !strings.ContainsFunc(s, isHiddenRune) {
+	if utf8.ValidString(s) && !strings.ContainsFunc(s, audit.IsHiddenRune) {
 		return s
 	}
 
 	var b strings.Builder
 
 	for _, r := range s {
-		if isHiddenRune(r) {
+		if audit.IsHiddenRune(r) {
 			fmt.Fprintf(&b, "\\u%04X", r)
 
 			continue
@@ -197,12 +196,6 @@ func SafeText(s string) string {
 	}
 
 	return b.String()
-}
-
-// isHiddenRune reports whether r is a control, format, line separator or
-// paragraph separator character.
-func isHiddenRune(r rune) bool {
-	return unicode.IsControl(r) || unicode.In(r, unicode.Cf, unicode.Zl, unicode.Zp)
 }
 
 // LockedError is the error of a request that a manual lock refuses. It
