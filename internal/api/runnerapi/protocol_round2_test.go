@@ -61,7 +61,7 @@ func TestRenewAfterTheSessionWaitReleasesThroughTheClaimer(t *testing.T) {
 func TestHeartbeatListsAClaimWhoseLeaseLapsed(t *testing.T) {
 	t.Parallel()
 
-	e := newEnvOn(t, 200*time.Millisecond, openSQLite)
+	e := newEnvOn(t, openSQLite)
 	pool := e.createPool()
 	r := e.newRunner("builder-1")
 
@@ -76,7 +76,7 @@ func TestHeartbeatListsAClaimWhoseLeaseLapsed(t *testing.T) {
 		t.Fatal("poll = 204, want work")
 	}
 
-	pause(t, 400*time.Millisecond)
+	e.lapse(work.Operation)
 
 	if beat := r.heartbeat(work.Operation); len(beat.Lost) != 1 || beat.Lost[0] != work.Operation {
 		t.Fatalf("heartbeat after the lease passed = %+v, want the claim lost", beat)
@@ -98,7 +98,7 @@ func (failingRecord) RecordClaim(context.Context, durable.Claim, string, int) er
 func TestFailedRecordClaimReleasesTheClaim(t *testing.T) {
 	t.Parallel()
 
-	e := newEnvOn(t, 0, func(t *testing.T) stores {
+	e := newEnvOn(t, func(t *testing.T) stores {
 		t.Helper()
 
 		s := openSQLite(t)

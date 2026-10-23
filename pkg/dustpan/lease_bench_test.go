@@ -376,6 +376,8 @@ func leaseBenchSchemaURL(b *testing.B, base string) string {
 		b.Fatalf("create schema: %v", execErr)
 	}
 
+	dropSchemaAtCleanup(b, base, name)
+
 	u, err := url.Parse(base)
 	if err != nil {
 		b.Fatalf("parse %s: %v", leaseBenchURLEnv, err)

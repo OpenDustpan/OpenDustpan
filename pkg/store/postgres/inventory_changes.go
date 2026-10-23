@@ -134,8 +134,8 @@ func changesOf(ns namespace.Name, rows []db.InventoryChange) []inventory.Change 
 
 // namespaceID returns the stable ID of the namespace called ns, and false
 // when no such namespace exists.
-func (s *Store) namespaceID(ctx context.Context, ns namespace.Name) (string, bool, error) {
-	id, err := s.queries.GetNamespaceID(ctx, ns.String())
+func namespaceID(ctx context.Context, q *db.Queries, ns namespace.Name) (string, bool, error) {
+	id, err := q.GetNamespaceID(ctx, ns.String())
 	if errors.Is(err, pgx.ErrNoRows) {
 		return "", false, nil
 	}
@@ -151,35 +151,67 @@ func (s *Store) namespaceID(ctx context.Context, ns namespace.Name) (string, boo
 func (s *Store) ListChanges(
 	ctx context.Context, ns namespace.Name, until time.Time, after *inventory.ChangeCursor, limit int,
 ) ([]inventory.Change, error) {
-	id, found, err := s.namespaceID(ctx, ns)
-	if err != nil || !found || limit <= 0 {
-		return []inventory.Change{}, err
-	}
+	out := []inventory.Change{}
 
-	var afterSeq int64
-	if after != nil {
-		afterSeq = after.Seq
-	}
+	// One snapshot, so the namespace and its changes come from one state.
+	err := s.inSnapshotTx(ctx, func(q *db.Queries) error {
+		id, found, err := namespaceID(ctx, q, ns)
+		if err != nil || !found || limit <= 0 {
+			return err
+		}
 
-	rows, err := s.queries.ListInventoryChanges(ctx, db.ListInventoryChangesParams{
-		NamespaceID: id, UntilMs: codec.Millis(until), AfterSeq: afterSeq, PageLimit: int32(min(limit, math.MaxInt32)),
+		var afterSeq int64
+		if after != nil {
+			afterSeq = after.Seq
+		}
+
+		rows, err := q.ListInventoryChanges(ctx, db.ListInventoryChangesParams{
+			NamespaceID: id, UntilMs: codec.Millis(until), AfterSeq: afterSeq,
+			PageLimit: int32(min(limit, math.MaxInt32)),
+		})
+		if err != nil {
+			return fmt.Errorf("select inventory changes: %w", err)
+		}
+
+		out = changesOf(ns, rows)
+
+		return nil
 	})
 	if err != nil {
-		return nil, fmt.Errorf("select inventory changes: %w", err)
+		return nil, err
 	}
 
-	return changesOf(ns, rows), nil
+	return out, nil
 }
 
 // boundRows reads, for each unit of ns, the row at the time at and the last
 // row, with the one query that the namespace ID allows.
 func (s *Store) boundRows(ctx context.Context, ns namespace.Name, at time.Time) ([]inventory.Change, error) {
-	id, found, err := s.namespaceID(ctx, ns)
+	var out []inventory.Change
+
+	// One snapshot, so the statements of the read see one state.
+	err := s.inSnapshotTx(ctx, func(q *db.Queries) error {
+		var err error
+
+		out, err = boundRowsWith(ctx, q, ns, at)
+
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return out, nil
+}
+
+// boundRowsWith is boundRows on the queries of one snapshot.
+func boundRowsWith(ctx context.Context, q *db.Queries, ns namespace.Name, at time.Time) ([]inventory.Change, error) {
+	id, found, err := namespaceID(ctx, q, ns)
 	if err != nil || !found {
 		return []inventory.Change{}, err
 	}
 
-	rows, err := s.queries.ListInventoryChangeBounds(ctx, db.ListInventoryChangeBoundsParams{
+	rows, err := q.ListInventoryChangeBounds(ctx, db.ListInventoryChangeBoundsParams{
 		NamespaceID: id, AtMs: codec.Millis(at),
 	})
 	if err != nil {
@@ -213,17 +245,29 @@ func (s *Store) ViewAt(ctx context.Context, ns namespace.Name, at time.Time) (in
 func (s *Store) UnitNames(
 	ctx context.Context, ns namespace.Name, tool, unitID string, at time.Time,
 ) (inventory.Names, error) {
-	id, found, err := s.namespaceID(ctx, ns)
-	if err != nil || !found {
+	out := inventory.Names{AtTime: "", Current: ""}
+
+	// One snapshot, so the namespace and its bounds come from one state.
+	err := s.inSnapshotTx(ctx, func(q *db.Queries) error {
+		id, found, err := namespaceID(ctx, q, ns)
+		if err != nil || !found {
+			return err
+		}
+
+		rows, err := q.ListInventoryUnitBounds(ctx, db.ListInventoryUnitBoundsParams{
+			NamespaceID: id, Tool: tool, UnitID: unitID, AtMs: codec.Millis(at),
+		})
+		if err != nil {
+			return fmt.Errorf("select inventory unit bounds: %w", err)
+		}
+
+		out = inventory.NamesAt(changesOf(ns, rows), tool, unitID, at)
+
+		return nil
+	})
+	if err != nil {
 		return inventory.Names{AtTime: "", Current: ""}, err
 	}
 
-	rows, err := s.queries.ListInventoryUnitBounds(ctx, db.ListInventoryUnitBoundsParams{
-		NamespaceID: id, Tool: tool, UnitID: unitID, AtMs: codec.Millis(at),
-	})
-	if err != nil {
-		return inventory.Names{AtTime: "", Current: ""}, fmt.Errorf("select inventory unit bounds: %w", err)
-	}
-
-	return inventory.NamesAt(changesOf(ns, rows), tool, unitID, at), nil
+	return out, nil
 }

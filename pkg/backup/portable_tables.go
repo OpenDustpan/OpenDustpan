@@ -37,7 +37,6 @@ const (
 	portColDeletedName   = "deleted_name"
 	portColTool          = "tool"
 	portColUnitID        = "unit_id"
-	portColJobID         = "job_id"
 	portColPrincipalID   = "principal_id"
 	portColDigest        = "digest"
 	portColSink          = "sink"
@@ -50,6 +49,7 @@ const (
 	portColSeq           = "seq"
 	portColSHA256Text    = "sha256"
 	portColOwner         = "owner"
+	portColJobID         = "job_id"
 	portColBody          = "body"
 )
 
@@ -75,6 +75,7 @@ func portableSpec() []PortableTable {
 				{Name: "allow_unlocked_writes", Kind: KindBool},
 				{Name: "ip_allowlist", Kind: KindText},
 				{Name: "id", Kind: KindText},
+				{Name: portColOutputSharingDefault, Kind: KindText},
 			},
 		},
 		{
@@ -464,7 +465,7 @@ func portableSpec() []PortableTable {
 				{Name: "object_id", Kind: KindText},
 				{Name: "fence_version", Kind: KindInteger},
 				{Name: "principal_kind", Kind: KindText},
-				{Name: "job_id", Kind: KindText},
+				{Name: portColJobID, Kind: KindText},
 				{Name: portColReason, Kind: KindText},
 			},
 		},
@@ -712,6 +713,7 @@ func portableSpec() []PortableTable {
 		portableManualLockTables(),
 		portablePreferenceTables(),
 		portableSavedViewTables(),
+		portableDriftTables(),
 		portableGitHostTables(),
 		portableRegistryTables(),
 		portableSinkTables(),

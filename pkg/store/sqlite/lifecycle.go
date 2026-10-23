@@ -528,15 +528,8 @@ func (s *Store) purgeUnit(
 
 		e.Changes = append(e.Changes, removed...)
 
-		if err := q.DeleteCollectionMembersOfUnit(ctx, u.id); err != nil {
-			return fmt.Errorf("delete collection membership: %w", err)
-		}
-
-		lockErr := q.DeleteManualLocksOfObject(ctx, db.DeleteManualLocksOfObjectParams{
-			Kind: string(manuallock.KindUnit), ObjectID: u.id,
-		})
-		if lockErr != nil {
-			return fmt.Errorf("delete manual lock: %w", lockErr)
+		if err := deleteUnitLinks(ctx, q, fence.Namespace, u.id); err != nil {
+			return err
 		}
 
 		err := q.InsertBlobPurge(ctx, db.InsertBlobPurgeParams{
@@ -559,6 +552,29 @@ func (s *Store) purgeUnit(
 
 		return appendInventoryChange(ctx, q, purged)
 	})
+}
+
+// deleteUnitLinks deletes the rows that other features keep for the unit unitID
+// of the namespace ns: its collection membership, its manual locks and its
+// latest drift result.
+func deleteUnitLinks(ctx context.Context, q *db.Queries, ns namespace.Name, unitID string) error {
+	if err := q.DeleteCollectionMembersOfUnit(ctx, unitID); err != nil {
+		return fmt.Errorf("delete collection membership: %w", err)
+	}
+
+	err := q.DeleteManualLocksOfObject(ctx, db.DeleteManualLocksOfObjectParams{
+		Kind: string(manuallock.KindUnit), ObjectID: unitID,
+	})
+	if err != nil {
+		return fmt.Errorf("delete manual lock: %w", err)
+	}
+
+	err = q.DeleteDriftResult(ctx, db.DeleteDriftResultParams{UnitID: unitID, Namespace: ns.String()})
+	if err != nil {
+		return fmt.Errorf("delete drift result: %w", err)
+	}
+
+	return nil
 }
 
 // maxBlobPurgeList bounds one list of blob purges.

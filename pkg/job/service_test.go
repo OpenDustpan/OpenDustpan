@@ -184,7 +184,7 @@ func (e svcExecutor) Phases(_ context.Context, spec job.Spec) ([]job.PhaseKind, 
 		return nil, e.err
 	}
 
-	return job.DefaultPhases(e.kind, spec.Operation)
+	return job.PhasesFor(e.kind, spec.Operation, spec.Purpose)
 }
 
 func (svcExecutor) Abandon(context.Context, job.Job) error { return nil }
@@ -323,6 +323,7 @@ func newRig(t *testing.T, opts ...rigOption) *rig {
 				return job.Spec{
 					Unit:      u,
 					Operation: req.Operation,
+					Purpose:   req.Purpose,
 					Executor:  job.ExecutorRunner,
 					Location: job.Location{
 						Connection: "",
@@ -411,7 +412,7 @@ func actorOf(subject string) job.Actor {
 
 func (r *rig) plan(key string) job.StartRequest {
 	return job.StartRequest{
-		Unit: r.unit, Operation: job.OperationPlan, Executor: "", Location: emptyLocation(), Pool: "",
+		Unit: r.unit, Operation: job.OperationPlan, Purpose: "", Executor: "", Location: emptyLocation(), Pool: "",
 		Edits: nil, Delivery: "", Source: "", IdempotencyKey: key, Reason: "", BreakGlass: nil,
 		Channel: audit.ChannelAPI, SourceIP: "192.0.2.7", UserAgent: "test", RequestID: "req-1",
 	}
@@ -714,7 +715,7 @@ func TestStartRefusesWhenPortsFail(t *testing.T) {
 		{"planner changes the operation", "ada", job.ErrInvalid, 1, nil, func(_ *job.ServiceConfig, r *rig) {
 			r.planner.spec = func(u identity.Object, _ *job.StartRequest) job.Spec {
 				return job.Spec{
-					Unit: u, Operation: job.OperationDestroy, Executor: job.ExecutorRunner,
+					Unit: u, Operation: job.OperationDestroy, Purpose: "", Executor: job.ExecutorRunner,
 					Location: emptyLocation(), Steps: nil, Pool: "p", Profile: "", Edits: nil, Delivery: "",
 				}
 			}

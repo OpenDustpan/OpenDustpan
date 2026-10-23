@@ -62,7 +62,7 @@ func newFakeAuditChain(setting audit.ChainSetting) *fakeAuditChain {
 // authorizer that denies deny.
 func newAuditChainHandler(
 	t *testing.T, namespaces *namespace.Service, chain apiserver.AuditChain, deny ...identity.Action,
-) *apiserver.Handler {
+) testHandler {
 	t.Helper()
 
 	denied := map[identity.Action]bool{}
@@ -72,7 +72,7 @@ func newAuditChainHandler(
 
 	sessions := newStoreSessions(t, openRouteTestStore(t))
 
-	handler, err := apiserver.NewHandler(apiserver.Config{
+	handler, err := newCheckedHandler(t, apiserver.Config{
 		Preferences:      nil,
 		GitHost:          nil,
 		Idempotency:      nil,
@@ -93,7 +93,7 @@ func newAuditChainHandler(
 		Principals:       sessions.principals,
 		Access:           nil,
 		Tokens:           nil,
-		Audit:            nil,
+		Audit:            newTestAudit(),
 		OnAuditFailure:   nil,
 		DeletedUnits:     nil,
 		SessionPolicy:    nil,
@@ -117,7 +117,7 @@ func newAuditChainHandler(
 
 // approveAuditChain sends POST /api/server/audit/chain from a console session
 // that signed in just now: the change needs a fresh authentication.
-func approveAuditChain(t *testing.T, handler *apiserver.Handler) (int, string) {
+func approveAuditChain(t *testing.T, handler testHandler) (int, string) {
 	t.Helper()
 
 	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/server/audit/chain", http.NoBody)
