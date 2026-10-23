@@ -213,11 +213,11 @@ func (h *Handler) writeError(ctx context.Context, w http.ResponseWriter, err err
 }
 
 // answer returns the error body with the status, the message and the code of
-// the catalog with its values. A code or a value that the catalog refuses is a
+// the catalog. A code that the catalog refuses, or that declares arguments, is a
 // bug of this package. The body then answers 500 with the code of an internal
 // failure, and the tests of this package find it.
-func answer(status int, code, message string, values ...errcode.Value) errorResponse {
-	a, err := errcode.New(code, values...)
+func answer(status int, code, message string) errorResponse {
+	a, err := errcode.New(code)
 	if err != nil {
 		return internal()
 	}
@@ -289,7 +289,11 @@ func classifyRule(err error) errorResponse {
 	case errors.Is(err, trigger.ErrInvalid):
 		return answer(http.StatusBadRequest, errcode.TriggerInvalid, refusal.Clean(err.Error(), maxMessageBytes))
 	case errors.Is(err, trigger.ErrDisabled):
-		return answer(http.StatusConflict, errcode.TriggerDisabled, "the trigger is off: switch it on before you fire it")
+		return answer(
+			http.StatusConflict,
+			errcode.TriggerDisabled,
+			"the trigger is off: switch it on before you fire it",
+		)
 	case errors.Is(err, namespace.ErrFenced):
 		return answer(http.StatusConflict, errcode.NamespaceFenced, namespace.ErrFenced.Error())
 	}

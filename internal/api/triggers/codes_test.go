@@ -42,33 +42,38 @@ func TestFireErrorsCarryTheirCode(t *testing.T) {
 		status int
 		want   errcodetest.Want
 	}{
-		{"a rate limit", identity.ErrRateLimited, http.StatusTooManyRequests, errcodetest.Want{Code: errcode.AuthRateLimited}},
+		{"a rate limit", identity.ErrRateLimited, http.StatusTooManyRequests, wantCode(errcode.AuthRateLimited)},
 		{
 			"no credential", identity.ErrUnauthenticated, http.StatusUnauthorized,
-			errcodetest.Want{Code: errcode.AuthUnauthenticated},
+			wantCode(errcode.AuthUnauthenticated),
 		},
-		{"a namespace that is gone", namespace.ErrNotFound, http.StatusNotFound, errcodetest.Want{Code: errcode.TriggerNotFound}},
-		{"a trigger that is gone", trigger.ErrNotFound, http.StatusNotFound, errcodetest.Want{Code: errcode.TriggerNotFound}},
-		{"a job that is gone", job.ErrNotFound, http.StatusNotFound, errcodetest.Want{Code: errcode.TriggerNotFound}},
+		{"a namespace that is gone", namespace.ErrNotFound, http.StatusNotFound, wantCode(errcode.TriggerNotFound)},
+		{"a trigger that is gone", trigger.ErrNotFound, http.StatusNotFound, wantCode(errcode.TriggerNotFound)},
+		{"a job that is gone", job.ErrNotFound, http.StatusNotFound, wantCode(errcode.TriggerNotFound)},
 		{
 			"another home region", namespace.ErrNotHome, http.StatusMisdirectedRequest,
-			errcodetest.Want{Code: errcode.NamespaceNotHome},
+			wantCode(errcode.NamespaceNotHome),
 		},
 		{
 			"maintenance mode", maintenance.ErrInMaintenance, http.StatusServiceUnavailable,
-			errcodetest.Want{Code: errcode.MaintenanceInMaintenance},
+			wantCode(errcode.MaintenanceInMaintenance),
 		},
-		{"a fenced write", namespace.ErrFenced, http.StatusConflict, errcodetest.Want{Code: errcode.NamespaceFenced}},
-		{"a job that is not valid", job.ErrInvalid, http.StatusBadRequest, errcodetest.Want{Code: errcode.JobInvalid}},
-		{"a rule of the agent", job.ErrAgentDenied, http.StatusForbidden, errcodetest.Want{Code: errcode.JobAgentDenied}},
+		{"a fenced write", namespace.ErrFenced, http.StatusConflict, wantCode(errcode.NamespaceFenced)},
+		{"a job that is not valid", job.ErrInvalid, http.StatusBadRequest, wantCode(errcode.JobInvalid)},
+		{"a rule of the agent", job.ErrAgentDenied, http.StatusForbidden, wantCode(errcode.JobAgentDenied)},
 		{
 			"a manual lock", lockedFire(), http.StatusConflict,
-			errcodetest.Want{Code: errcode.LockLocked, Args: map[string]any{
+			errcodetest.Want{RequestBody: nil, Code: errcode.LockLocked, Args: map[string]any{
 				"holder": "user-1", "since": "2026-10-23T09:30:00Z", "target": "opentofu:acme/net",
 				"targetKind": "unit", "unit": "acme/net",
 			}},
 		},
-		{"an error that no rule maps", errDatabaseDown, http.StatusInternalServerError, errcodetest.Want{Code: errcode.ServerInternal}},
+		{
+			"an error that no rule maps",
+			errDatabaseDown,
+			http.StatusInternalServerError,
+			wantCode(errcode.ServerInternal),
+		},
 	}
 
 	for _, tt := range tests {
@@ -103,19 +108,16 @@ func TestRouteRefusalsCarryTheirCode(t *testing.T) {
 		code   string
 	}{
 		{
-			"a token that is not valid", request{method: http.MethodGet, path: basePath, token: "wrong"},
+			"a token that is not valid", getAs(basePath, "wrong"),
 			http.StatusUnauthorized, errcode.AuthUnauthenticated,
 		},
 		{
-			"a token that the rate limit stops", request{method: http.MethodGet, path: basePath, token: limitedToken},
+			"a token that the rate limit stops", getAs(basePath, limitedToken),
 			http.StatusTooManyRequests, errcode.AuthRateLimited,
 		},
 		{
 			"a namespace that is not there",
-			request{
-				method: http.MethodGet, token: testToken,
-				path: "/api/dustpan/v1/namespaces/absent/units/" + netID + "/triggers",
-			},
+			getAs("/api/dustpan/v1/namespaces/absent/units/"+netID+"/triggers", testToken),
 			http.StatusNotFound, errcode.TriggerNotFound,
 		},
 		{
@@ -129,19 +131,19 @@ func TestRouteRefusalsCarryTheirCode(t *testing.T) {
 		{
 			"a key that is not valid",
 			request{
-				method: http.MethodPost, path: basePath + "/trg-seed/fire", token: testToken,
+				method: http.MethodPost, path: basePath + "/trg-seed/fire", token: testToken, body: "",
 				header: map[string]string{"Idempotency-Key": "drift-1"},
 			},
 			http.StatusBadRequest, errcode.RequestIdempotencyKeyInvalid,
 		},
 		{
 			"a body that is not valid",
-			request{method: http.MethodPost, path: basePath, token: testToken, body: "[]"},
+			request{method: http.MethodPost, path: basePath, token: testToken, body: "[]", header: nil},
 			http.StatusBadRequest, errcode.RequestBodyInvalid,
 		},
 		{
 			"a field that is not valid",
-			request{method: http.MethodPost, path: basePath, token: testToken, body: `{"kind":"manual"}`},
+			request{method: http.MethodPost, path: basePath, token: testToken, body: `{"kind":"manual"}`, header: nil},
 			http.StatusBadRequest, errcode.TriggerInvalid,
 		},
 	}
@@ -218,7 +220,15 @@ func TestSaverDeniedKeepsItsCode(t *testing.T) {
 		t.Fatalf("status = %d %s, want 403", code, body)
 	}
 
-	errcodetest.CheckAnswer(t, errcodetest.ShapeCamelCase, code, []byte(body), errcodetest.Want{
-		Code: errcode.TriggerSaverDenied,
-	})
+	errcodetest.CheckAnswer(t, errcodetest.ShapeCamelCase, code, []byte(body), wantCode(errcode.TriggerSaverDenied))
+}
+
+// wantCode is the answer of a code with no arguments.
+func wantCode(code string) errcodetest.Want {
+	return errcodetest.Want{Code: code, Args: nil, RequestBody: nil}
+}
+
+// getAs is a read of path with token.
+func getAs(path, token string) request {
+	return request{method: http.MethodGet, path: path, token: token, body: "", header: nil}
 }
