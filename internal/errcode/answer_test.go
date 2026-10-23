@@ -86,7 +86,12 @@ func TestAnswerArgsIsACopy(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 
-	answer.Args()["field"] = "other"
+	args := answer.Args()
+	if args == nil {
+		t.Fatal("Args = nil, want the field argument")
+	}
+
+	args["field"] = "other"
 
 	if got := answer.Args()["field"]; got != "theme" {
 		t.Fatalf("field = %v, want theme", got)
