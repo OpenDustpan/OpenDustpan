@@ -12,7 +12,8 @@ import (
 
 // TestStartDenialNamesTheRefusedAction proves that the audit entry of a
 // refusal of the authorizer names the action and the object that the
-// authorizer refused, and that any other refusal, or a refusal that names an
+// authorizer refused, that a refusal after the plan of the job names the start
+// action of the job, and that any other refusal, or a refusal that names an
 // object of another namespace, names the start of a plan on the unit.
 func TestStartDenialNamesTheRefusedAction(t *testing.T) {
 	t.Parallel()
@@ -29,6 +30,10 @@ func TestStartDenialNamesTheRefusedAction(t *testing.T) {
 
 	denied := func(a identity.Action, o identity.Object) error {
 		return fmt.Errorf("start: %w", &job.DeniedError{Action: a, Object: o, Err: identity.ErrDenied})
+	}
+
+	refused := func(a identity.Action, o identity.Object, cause error) error {
+		return &job.StartRefusalError{Action: a, Object: o, Err: cause}
 	}
 
 	tests := []struct {
@@ -48,6 +53,18 @@ func TestStartDenialNamesTheRefusedAction(t *testing.T) {
 			"opentofu:acme/net",
 		},
 		{"a refusal that is not a denial", job.ErrFrozen, job.ActionUnitRunPlan, "opentofu:acme/net"},
+		{
+			"a freeze of a destroy", refused(job.ActionUnitRunDestroy, net, job.ErrFrozen),
+			job.ActionUnitRunDestroy, "opentofu:acme/net",
+		},
+		{
+			"a limit of an apply", refused(job.ActionUnitRunApply, net, job.ErrLimit),
+			job.ActionUnitRunApply, "opentofu:acme/net",
+		},
+		{
+			"a refusal that names another namespace", refused(job.ActionUnitRunDestroy, other, job.ErrFrozen),
+			job.ActionUnitRunPlan, "opentofu:acme/net",
+		},
 	}
 
 	for _, tt := range tests {
