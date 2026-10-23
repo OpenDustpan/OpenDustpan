@@ -93,7 +93,8 @@ func (m *memSettings) SetSetting(
 // harness returns the harness of the cases of the setting over m.
 func (m *memSettings) harness() outputsharetest.Harness {
 	return outputsharetest.Harness{
-		Store: nil, Checker: nil, Attachments: nil, States: nil, Settings: m,
+		Store: nil, Checker: nil, Attachments: nil, States: nil, Outputs: nil, SaveOutputs: nil, DeleteUnit: nil,
+		Settings: m,
 		Namespace: func(t *testing.T, name string) namespace.Fence {
 			t.Helper()
 

@@ -48,7 +48,7 @@ func outputShareHarness(t *testing.T) outputsharetest.Harness {
 	s, path := openOutputShare(t)
 
 	return outputsharetest.Harness{
-		Store: nil, Checker: nil, Attachments: nil, States: nil,
+		Store: nil, Checker: nil, Attachments: nil, States: nil, Outputs: nil, SaveOutputs: nil, DeleteUnit: nil,
 		Settings: s.OutputSharingSettings(),
 		Namespace: func(t *testing.T, name string) namespace.Fence {
 			t.Helper()

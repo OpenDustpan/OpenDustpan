@@ -1,5 +1,5 @@
 // Package outputsharetest is the conformance suite of the ports of package
-// outputshare: Store, Checker, Attachments and States, and the rule that the
+// outputshare: Store, Checker, Attachments, States and Outputs, and the rule that the
 // SQL adapter of a tool store writes when it makes a unit. A new adapter runs Run with a Factory.
 //
 // The SQL adapters serve the Settings port. Each other case names one
@@ -37,6 +37,9 @@ type Harness struct {
 	Attachments outputshare.Attachments
 	// States tells the latest state of a unit.
 	States outputshare.States
+	// Outputs reads the root outputs of the latest state of a unit. A case
+	// of the Outputs port skips when it is nil.
+	Outputs outputshare.Outputs
 	// Namespace makes the namespace name and returns its current fence.
 	Namespace func(t *testing.T, name string) namespace.Fence
 	// Unit makes a unit of the tool in the namespace, in the collection when
@@ -67,6 +70,14 @@ type Harness struct {
 	// SaveState saves a new latest state of the unit, encrypted by the client
 	// when encrypted is true, and returns its ID as State.ID names it.
 	SaveState func(t *testing.T, unit outputshare.Placement, encrypted bool) string
+	// SaveOutputs is an optional hook: it saves a new latest state of the
+	// unit that holds the root outputs OutputPlainName, OutputSecretName and
+	// OutputNestedName, and returns its ID as State.ID names it. A case of
+	// the Outputs port skips when it is nil.
+	SaveOutputs func(t *testing.T, unit outputshare.Placement) string
+	// DeleteUnit is an optional hook: it deletes the unit, also when the
+	// unit has a state. A case of the Outputs port skips when it is nil.
+	DeleteUnit func(t *testing.T, unit outputshare.Placement)
 	// Grant gives the principal the action on the object.
 	Grant func(t *testing.T, principal string, action identity.Action, object identity.Object)
 	// Job starts a job of the unit for the starter principal and returns the
@@ -146,6 +157,7 @@ func allCases() []suiteCase {
 		attachmentCases(),
 		attachmentsCases(),
 		withToolStores(statesCases()),
+		outputsCases(),
 	)
 }
 
