@@ -630,7 +630,12 @@ func TestMissingBodies(t *testing.T) {
 		{"all gated or ignored", []string{"errorResponse", "registryErrors"}, []string{"devCodeRequest"}, nil},
 		{"a new body type", []string{"errorResponse"}, []string{"devCodeRequest"}, []string{"registryErrors"}},
 		{"nothing ignored", []string{"errorResponse"}, nil, []string{"devCodeRequest", "registryErrors"}},
-		{"a body without a JSON tag", []string{"errorResponse", "registryErrors", "statusError"}, []string{"devCodeRequest"}, nil},
+		{
+			"a body without a JSON tag",
+			[]string{"errorResponse", "registryErrors", "statusError"},
+			[]string{"devCodeRequest"},
+			nil,
+		},
 	}
 
 	for _, tc := range tests {

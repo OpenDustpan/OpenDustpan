@@ -79,7 +79,11 @@ func TestForbiddenOrder(t *testing.T) {
 			errcode.SignInRefused,
 		},
 		{"refusal without a code", errcode.Refusal("", "x"), errcode.AccessDenied},
-		{"refusal with a code that is not in the catalog", errcode.Refusal("sign-in.refsued", "x"), errcode.AccessDenied},
+		{
+			"refusal with a code that is not in the catalog",
+			errcode.Refusal("sign-in.refsued", "x"),
+			errcode.AccessDenied,
+		},
 		{
 			"refusal with an unknown code before a session error",
 			errors.Join(errcode.Refusal("sign-in.refsued", "x"), sessionauth.ErrCSRF),

@@ -10,11 +10,11 @@ import (
 	"strings"
 )
 
-// bodyMembers are the JSON names of the fields that make a struct type an
+// bodyMembers returns the JSON names of the fields that make a struct type an
 // error body: the status or the code of the Pulumi Cloud-compatible shape and
 // the tool-neutral shape, the code of the catalog, and the error list of a
 // JSON:API document.
-var bodyMembers = []string{"code", "errorCode", "errors"}
+func bodyMembers() []string { return []string{"code", "errorCode", "errors"} }
 
 // BodyTypes returns the struct types of the source in dir that have a field
 // with the JSON name code, errorCode or errors, at any depth of the type,
@@ -56,7 +56,7 @@ func hasBodyMember(n ast.Node) bool {
 
 	ast.Inspect(n, func(n ast.Node) bool {
 		field, ok := n.(*ast.Field)
-		if ok && field.Tag != nil && slices.Contains(bodyMembers, jsonName(field.Tag.Value)) {
+		if ok && field.Tag != nil && slices.Contains(bodyMembers(), jsonName(field.Tag.Value)) {
 			found = true
 		}
 

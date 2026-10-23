@@ -335,7 +335,13 @@ func TestNewCodesHaveTheirLine(t *testing.T) {
 		case !isNew:
 			t.Errorf("code %q has no line in %s: add the line %q", spec.Code, areaFile(spec.Code), goldenLine(spec))
 		case line != goldenLine(spec):
-			t.Errorf("code %q is %q in the catalog and %q in %s", spec.Code, goldenLine(spec), line, areaFile(spec.Code))
+			t.Errorf(
+				"code %q is %q in the catalog and %q in %s",
+				spec.Code,
+				goldenLine(spec),
+				line,
+				areaFile(spec.Code),
+			)
 		default:
 		}
 	}
