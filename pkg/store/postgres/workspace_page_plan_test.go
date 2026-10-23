@@ -123,6 +123,10 @@ func pageNames(t *testing.T, conn *pgx.Conn, query string, args ...any) []string
 	return names
 }
 
+// pageNameCondition matches an index condition that holds the namespace and the
+// name of a page row.
+var pageNameCondition = regexp.MustCompile(`Index Cond: \(\(namespace = \$1\) AND \(name = \w+\.name\)\)`)
+
 // TestWorkspacePagePlan seeds one namespace with 1,500 live workspaces and no
 // table statistics, as a fresh or restored database has, and checks that the
 // generic plan of a page reads the rows of the page by their names. A plan
@@ -155,7 +159,7 @@ func TestWorkspacePagePlan(t *testing.T) {
 	query := workspacePageQuery(t)
 
 	plan := genericPlan(t, conn, query)
-	if strings.Contains(plan, "Join Filter") || !strings.Contains(plan, "AND (name = ANY") {
+	if strings.Contains(plan, "Join Filter") || !pageNameCondition.MatchString(plan) {
 		t.Fatalf("plan does not read the page rows by name in the index condition:\n%s", plan)
 	}
 

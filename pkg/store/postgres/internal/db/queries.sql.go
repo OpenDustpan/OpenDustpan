@@ -14829,16 +14829,21 @@ func (q *Queries) ReadWorkspaceByID(ctx context.Context, id string) (ReadWorkspa
 
 const readWorkspacePage = `-- name: ReadWorkspacePage :many
 SELECT w.id, w.namespace, w.name, w.revision, w.lock_id, w.lock_holder, w.lock_reason, w.locked_at_ms, w.current_state_version_id, w.created_at_ms, w.updated_at_ms, w.allow_forced_writes, w.allow_unlocked_writes, w.deleted_at_ms, w.deleted_name, n.id AS namespace_id
-FROM workspaces AS w
+FROM (
+    SELECT p.name
+    FROM workspaces AS p
+    WHERE p.namespace = $1 AND p.deleted_at_ms IS NULL AND strpos(p.name, $2) > 0
+    ORDER BY p.name
+    LIMIT $4 OFFSET $3
+) AS page
+CROSS JOIN LATERAL (
+    SELECT l.id
+    FROM workspaces AS l
+    WHERE l.namespace = $1 AND l.name = page.name AND l.deleted_at_ms IS NULL
+    LIMIT 1
+) AS pick
+JOIN workspaces AS w ON w.id = pick.id
 JOIN namespaces AS n ON n.name = w.namespace
-WHERE w.namespace = $1 AND w.deleted_at_ms IS NULL
-    AND w.name = ANY (ARRAY(
-        SELECT p.name
-        FROM workspaces AS p
-        WHERE p.namespace = $1 AND p.deleted_at_ms IS NULL AND strpos(p.name, $2) > 0
-        ORDER BY p.name
-        LIMIT $4 OFFSET $3
-    ))
 ORDER BY w.name
 `
 
@@ -14857,10 +14862,10 @@ type ReadWorkspacePageRow struct {
 // One page of the live workspaces of a namespace whose name holds the search,
 // in the order of ReadWorkspaces. The inner query finds the names of the page
 // in the index of the live workspace names alone, so an offset skips index
-// entries and no table rows. The outer query reads the rows of the page by
-// name = ANY of that array, so the names are in the index condition of each
-// plan. A join on the names let a plan with no table statistics read all the
-// live workspaces of the namespace for each name of the page.
+// entries and no table rows. A lateral lookup with LIMIT 1 then reads the
+// row of each name of the page by namespace and name in the index, so a plan
+// with no table statistics cannot read all the live workspaces of the
+// namespace for each name of the page, on any supported PostgreSQL version.
 func (q *Queries) ReadWorkspacePage(ctx context.Context, arg ReadWorkspacePageParams) ([]ReadWorkspacePageRow, error) {
 	rows, err := q.db.Query(ctx, readWorkspacePage,
 		arg.Namespace,
