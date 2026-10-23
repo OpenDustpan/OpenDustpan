@@ -94,6 +94,44 @@ func shapeCases() []shapeCase {
 			sequence:   1,
 			valid:      false,
 		},
+		{name: "an envelope with no deployment member", deployment: `{"version":3}`, sequence: 1, valid: true},
+		{name: "a sequenced save with no envelope", deployment: `{"resources":[]}`, sequence: 1, valid: true},
+		{
+			name:       "a sequenced save of resources that are numbers",
+			deployment: `{"resources":[1]}`,
+			sequence:   1,
+			valid:      false,
+		},
+		{
+			name:       "an envelope with the member name in another case",
+			deployment: `{"version":3,"Deployment":{"resources":[1]}}`,
+			sequence:   1,
+			valid:      false,
+		},
+		{
+			name:       "an envelope that ends with a null deployment",
+			deployment: `{"version":3,"deployment":{"resources":[]},"deployment":null}`,
+			sequence:   1,
+			valid:      false,
+		},
+		{
+			name:       "an envelope with data after it",
+			deployment: `{"version":3,"deployment":{"resources":[]}} {}`,
+			sequence:   1,
+			valid:      false,
+		},
+		{
+			name:       "an envelope with a first deployment that the CLI cannot read",
+			deployment: `{"version":3,"deployment":{"resources":[1]},"deployment":{"resources":[]}}`,
+			sequence:   1,
+			valid:      false,
+		},
+		{
+			name:       "an envelope with resources of the wrong type next to the deployment",
+			deployment: `{"version":3,"deployment":{"resources":[]},"resources":1}`,
+			sequence:   1,
+			valid:      false,
+		},
 	}
 }
 
