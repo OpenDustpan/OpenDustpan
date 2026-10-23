@@ -156,7 +156,7 @@ func decodeObject(t *testing.T, rec *httptest.ResponseRecorder) map[string]any {
 	return out
 }
 
-const notFoundBody = `{"message":"unit not found","code":404}` + "\n"
+const notFoundBody = `{"message":"unit not found","code":404,"errorCode":"unit.not-found"}` + "\n"
 
 // TestGetUnitByID is table-driven over the callers and the units of the route.
 func TestGetUnitByID(t *testing.T) {

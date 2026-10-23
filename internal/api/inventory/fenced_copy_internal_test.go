@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/pkg/collection"
 	"opendustpan.org/opendustpan/pkg/namespace"
 )
@@ -59,9 +60,10 @@ func TestWriteErrorFencedCopy(t *testing.T) {
 			err:    collection.ErrAlreadyExists,
 			status: http.StatusConflict,
 			body: fmt.Sprintf(
-				"{\"message\":%q,\"code\":%d}\n",
+				"{\"message\":%q,\"code\":%d,\"errorCode\":%q}\n",
 				collection.ErrAlreadyExists.Error(),
 				http.StatusConflict,
+				errcode.CollectionAlreadyExists,
 			),
 			wrap:   "",
 			fenced: false,
