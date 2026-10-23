@@ -143,7 +143,7 @@ func (s *Service) checkStreamAdmission(
 
 	if auth.Record == nil {
 		if recErr := refuseWithoutRecorder(w, used); recErr != nil {
-			return nil, recErr
+			return noAdmission(), recErr
 		}
 	}
 
