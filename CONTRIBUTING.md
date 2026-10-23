@@ -59,6 +59,20 @@ Say what changed and why, and link the issue. Say how you tested the change.
 A reviewer can ask for changes. When CI is green and the review passes, the
 project owner decides whether it merges.
 
+## Documentation
+
+A change that a user can see includes its page in the user documentation,
+in the same pull request. The user documentation is `README.md`,
+`docs/guides/`, `docs/reference/` and `docs/explanation/`.
+
+The author of a change owns the pages that the change adds or edits. The
+author makes sure that each of these pages agrees with the behavior that
+the change gives.
+
+One maintainer owns the structure and the voice of the documentation: which
+pages exist, how they link to each other, and the style that `CLAUDE.md`
+sets. Ask in the issue before you add, move or remove a page.
+
 ## Governance
 
 The project owner, [@DwaineSaunderson](https://github.com/DwaineSaunderson),
