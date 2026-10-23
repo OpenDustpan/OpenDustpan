@@ -316,6 +316,34 @@ func TestHeartbeatIsRateLimited(t *testing.T) {
 	}
 }
 
+// TestTrackingOpsRecordsAClaim proves that the wrapper of a store that keeps
+// operations records a claim attempt as activity and as a heartbeat.
+func TestTrackingOpsRecordsAClaim(t *testing.T) {
+	t.Parallel()
+
+	st := openTestStore(t)
+	api := newTestWatch(st.DurableOperations(), apiOnly(), beatLease, time.Now)
+	worker, _ := workerOf(api)
+	ops := trackingOps{Store: st.DurableOperations(), watch: worker}
+
+	_, err := ops.Claim(t.Context(), durable.ClaimRequest{
+		Owner: "worker-1", Kinds: []durable.Kind{"none"}, Lease: beatLease, MaxVersions: nil,
+		TakeCanceled: false,
+	})
+	if !errors.Is(err, durable.ErrNoWork) {
+		t.Fatalf("claim = %v, want ErrNoWork", err)
+	}
+
+	if worker.lastActive.Load() == 0 {
+		t.Fatal("the claim attempt did not mark the worker as active")
+	}
+
+	beat, err := st.DurableOperations().LastBeat(t.Context())
+	if err != nil || beat.At.IsZero() {
+		t.Fatalf("LastBeat = %+v, %v; want a beat", beat, err)
+	}
+}
+
 // TestGateComponentsRefusesHostilePaths proves the component gate alone: a
 // process without the api component lets only clean probe and metrics paths
 // reach the next handler. Dot segments, double slashes, trailing slashes and
