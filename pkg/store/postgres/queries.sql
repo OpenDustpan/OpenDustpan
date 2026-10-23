@@ -744,13 +744,14 @@ FROM workspaces
 WHERE namespace = $1 AND name = $2 AND deleted_at_ms IS NULL;
 
 -- name: GetWorkspaceByID :one
--- The live check is COALESCE(deleted_at_ms, -1) = -1, not IS NULL, so the
+-- The live check is num_nulls(deleted_at_ms) = 1, not IS NULL, so the
 -- partial index workspaces_live_name cannot serve this lookup by ID.
+-- Only NULL reads as live: a stored -1 or 0 does not, as with IS NULL.
 SELECT id, namespace, name, revision, lock_id, lock_holder, lock_reason,
        locked_at_ms, current_state_version_id, created_at_ms, updated_at_ms, allow_forced_writes, allow_unlocked_writes,
        deleted_at_ms, deleted_name
 FROM workspaces
-WHERE id = $1 AND COALESCE(deleted_at_ms, -1) = -1;
+WHERE id = $1 AND num_nulls(deleted_at_ms) = 1;
 
 -- name: ReadWorkspace :one
 -- The read behind the store port: the workspace with the ID of its namespace,
@@ -761,12 +762,13 @@ JOIN namespaces AS n ON n.name = w.namespace
 WHERE w.namespace = $1 AND w.name = $2 AND w.deleted_at_ms IS NULL;
 
 -- name: ReadWorkspaceByID :one
--- The live check is COALESCE(deleted_at_ms, -1) = -1, not IS NULL, so the
+-- The live check is num_nulls(deleted_at_ms) = 1, not IS NULL, so the
 -- partial index workspaces_live_name cannot serve this lookup by ID.
+-- Only NULL reads as live: a stored -1 or 0 does not, as with IS NULL.
 SELECT sqlc.embed(w), n.id AS namespace_id
 FROM workspaces AS w
 JOIN namespaces AS n ON n.name = w.namespace
-WHERE w.id = $1 AND COALESCE(w.deleted_at_ms, -1) = -1;
+WHERE w.id = $1 AND num_nulls(w.deleted_at_ms) = 1;
 
 -- name: ReadWorkspaces :many
 SELECT sqlc.embed(w), n.id AS namespace_id
@@ -802,13 +804,14 @@ ORDER BY w.name;
 -- name: LockWorkspaceForFinalize :one
 -- Locks the workspace row so two finalizes on one workspace cannot both pass
 -- the serial check.
--- The live check is COALESCE(deleted_at_ms, -1) = -1, not IS NULL, so the
+-- The live check is num_nulls(deleted_at_ms) = 1, not IS NULL, so the
 -- partial index workspaces_live_name cannot serve this lookup by ID.
+-- Only NULL reads as live: a stored -1 or 0 does not, as with IS NULL.
 SELECT id, namespace, name, revision, lock_id, lock_holder, lock_reason,
        locked_at_ms, current_state_version_id, created_at_ms, updated_at_ms, allow_forced_writes, allow_unlocked_writes,
        deleted_at_ms, deleted_name
 FROM workspaces
-WHERE id = $1 AND COALESCE(deleted_at_ms, -1) = -1
+WHERE id = $1 AND num_nulls(deleted_at_ms) = 1
 FOR UPDATE;
 
 -- name: ListWorkspaces :many
@@ -829,21 +832,23 @@ SET revision = @revision, lock_id = @lock_id, lock_holder = @lock_holder,
 WHERE id = @id AND revision = @expected_revision;
 
 -- name: WorkspaceExists :one
--- The live check is COALESCE(deleted_at_ms, -1) = -1, not IS NULL, so the
+-- The live check is num_nulls(deleted_at_ms) = 1, not IS NULL, so the
 -- partial index workspaces_live_name cannot serve this lookup by ID.
+-- Only NULL reads as live: a stored -1 or 0 does not, as with IS NULL.
 SELECT EXISTS (
-    SELECT 1 FROM workspaces WHERE id = $1 AND COALESCE(deleted_at_ms, -1) = -1
+    SELECT 1 FROM workspaces WHERE id = $1 AND num_nulls(deleted_at_ms) = 1
 );
 
 -- name: SoftDeleteWorkspace :execrows
 -- Moves the name to deleted_name and frees it (ADR 47). A workspace name
 -- cannot hold ":", so "deleted:" and the ID never match a lookup by name. The
 -- revision moves on, so a concurrent compare-and-swap of the row fails.
--- The live check is COALESCE(deleted_at_ms, -1) = -1, not IS NULL, so the
+-- The live check is num_nulls(deleted_at_ms) = 1, not IS NULL, so the
 -- partial index workspaces_live_name cannot serve this lookup by ID.
+-- Only NULL reads as live: a stored -1 or 0 does not, as with IS NULL.
 UPDATE workspaces
 SET deleted_name = name, name = 'deleted:' || id, deleted_at_ms = $1, revision = revision + 1
-WHERE id = $2 AND COALESCE(deleted_at_ms, -1) = -1;
+WHERE id = $2 AND num_nulls(deleted_at_ms) = 1;
 
 -- name: DeleteStateVersionsOfWorkspace :exec
 -- Removes every state version of one workspace, pending and finalized.
@@ -924,13 +929,14 @@ WHERE workspace_id = $1 AND status = 'pending';
 -- name: LockWorkspaceForDeclare :one
 -- Locks the workspace row so concurrent declares cannot both pass the
 -- pending cap.
--- The live check is COALESCE(deleted_at_ms, -1) = -1, not IS NULL, so the
+-- The live check is num_nulls(deleted_at_ms) = 1, not IS NULL, so the
 -- partial index workspaces_live_name cannot serve this lookup by ID.
+-- Only NULL reads as live: a stored -1 or 0 does not, as with IS NULL.
 SELECT id, namespace, name, revision, lock_id, lock_holder, lock_reason,
        locked_at_ms, current_state_version_id, created_at_ms, updated_at_ms, allow_forced_writes, allow_unlocked_writes,
        deleted_at_ms, deleted_name
 FROM workspaces
-WHERE id = $1 AND COALESCE(deleted_at_ms, -1) = -1
+WHERE id = $1 AND num_nulls(deleted_at_ms) = 1
 FOR UPDATE;
 
 -- name: ListStateContentKeys :many
@@ -1368,16 +1374,18 @@ WHERE deleted_at_ms IS NULL
 SELECT namespace FROM principals WHERE id = $1 AND deleted_at_ms IS NULL;
 
 -- name: UpdatePrincipal :execrows
--- The live check is COALESCE(deleted_at_ms, -1) = -1, not IS NULL, so no
+-- The live check is num_nulls(deleted_at_ms) = 1, not IS NULL, so no
 -- partial index of the live rows can serve this lookup by ID.
+-- Only NULL reads as live: a stored -1 or 0 does not, as with IS NULL.
 UPDATE principals SET display_name = $1, updated_at_ms = $2
-WHERE id = $3 AND namespace = $4 AND COALESCE(deleted_at_ms, -1) = -1;
+WHERE id = $3 AND namespace = $4 AND num_nulls(deleted_at_ms) = 1;
 
 -- name: DeletePrincipal :execrows
--- The live check is COALESCE(deleted_at_ms, -1) = -1, not IS NULL, so no
+-- The live check is num_nulls(deleted_at_ms) = 1, not IS NULL, so no
 -- partial index of the live rows can serve this lookup by ID.
+-- Only NULL reads as live: a stored -1 or 0 does not, as with IS NULL.
 UPDATE principals SET deleted_at_ms = $1
-WHERE id = $2 AND namespace = $3 AND COALESCE(deleted_at_ms, -1) = -1;
+WHERE id = $2 AND namespace = $3 AND num_nulls(deleted_at_ms) = 1;
 
 -- name: EndMembershipsOfPrincipal :exec
 UPDATE group_members SET removed_at_ms = $1
@@ -1494,10 +1502,11 @@ SELECT id, name, description, actions, created_at_ms, updated_at_ms FROM roles
 WHERE id = $1 AND deleted_at_ms IS NULL;
 
 -- name: RolesByIDs :many
--- The live check is COALESCE(deleted_at_ms, -1) = -1, not IS NULL, so no
+-- The live check is num_nulls(deleted_at_ms) = 1, not IS NULL, so no
 -- partial index of the live rows can serve this lookup by ID.
+-- Only NULL reads as live: a stored -1 or 0 does not, as with IS NULL.
 SELECT id, name, description, actions, created_at_ms, updated_at_ms FROM roles
-WHERE id = ANY(@ids::text[]) AND COALESCE(deleted_at_ms, -1) = -1;
+WHERE id = ANY(@ids::text[]) AND num_nulls(deleted_at_ms) = 1;
 
 -- name: RoleIDByNameKey :one
 SELECT id FROM roles WHERE name_key COLLATE "C" = @name_key::text AND deleted_at_ms IS NULL;
@@ -1523,10 +1532,11 @@ VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
 ON CONFLICT DO NOTHING;
 
 -- name: GetGrant :one
--- The live check is COALESCE(revoked_at_ms, -1) = -1, not IS NULL, so no
+-- The live check is num_nulls(revoked_at_ms) = 1, not IS NULL, so no
 -- partial index of the live rows can serve this lookup by ID.
+-- Only NULL reads as live: a stored -1 or 0 does not, as with IS NULL.
 SELECT id, subject, subject_kind, subject_id, role, object, target, object_kind, namespace, condition, created_at_ms, created_by
-FROM grants WHERE id = $1 AND COALESCE(revoked_at_ms, -1) = -1;
+FROM grants WHERE id = $1 AND num_nulls(revoked_at_ms) = 1;
 
 -- name: ListGrantsOn :many
 -- One page of the current grants on a target, with the name and the kind of
@@ -1554,9 +1564,10 @@ WHERE target = @target AND revoked_at_ms IS NULL
   AND (@role::text = '' OR role = @role::text);
 
 -- name: RevokeGrant :execrows
--- The live check is COALESCE(revoked_at_ms, -1) = -1, not IS NULL, so no
+-- The live check is num_nulls(revoked_at_ms) = 1, not IS NULL, so no
 -- partial index of the live rows can serve this lookup by ID.
-UPDATE grants SET revoked_at_ms = $1, revoked_by = $2 WHERE id = $3 AND COALESCE(revoked_at_ms, -1) = -1;
+-- Only NULL reads as live: a stored -1 or 0 does not, as with IS NULL.
+UPDATE grants SET revoked_at_ms = $1, revoked_by = $2 WHERE id = $3 AND num_nulls(revoked_at_ms) = 1;
 
 -- name: GrantsOn :many
 SELECT id, subject, subject_kind, subject_id, role, object, target, object_kind, namespace, condition, created_at_ms, created_by
@@ -1825,8 +1836,9 @@ FROM access_tokens WHERE id = $1;
 -- name: GetAccessTokenByDigest :one
 -- The token, its owner and the token policy of the installation in one read,
 -- so a policy change applies to the next lookup on every instance.
--- The live check is COALESCE(p.deleted_at_ms, -1) = -1, not IS NULL, so no
+-- The live check is num_nulls(p.deleted_at_ms) = 1, not IS NULL, so no
 -- partial index of the live rows can serve this lookup by ID.
+-- Only NULL reads as live: a stored -1 or 0 does not, as with IS NULL.
 SELECT t.id, t.principal_id, t.name, t.kind, t.digest, t.created_at_ms, t.expires_at_ms, t.last_used_at_ms,
   t.revoked_at_ms, t.replaced_by, t.created_by, t.disabled_at_ms, p.subject, p.display_name, p.kind AS principal_kind,
   p.disabled_at_ms AS principal_disabled_at_ms, p.break_glass AS principal_break_glass,
@@ -1841,7 +1853,7 @@ SELECT t.id, t.principal_id, t.name, t.kind, t.digest, t.created_at_ms, t.expire
 FROM access_tokens t
 JOIN principals p ON p.id = t.principal_id
 CROSS JOIN access_token_policy ap
-WHERE t.digest = $1 AND COALESCE(p.deleted_at_ms, -1) = -1 AND ap.id = 1;
+WHERE t.digest = $1 AND num_nulls(p.deleted_at_ms) = 1 AND ap.id = 1;
 
 -- name: ListAccessTokens :many
 SELECT id, principal_id, name, kind, created_at_ms, expires_at_ms, last_used_at_ms, revoked_at_ms, replaced_by, created_by, disabled_at_ms
@@ -2255,8 +2267,9 @@ FROM sessions WHERE id = $1;
 -- rule of the inactivity disable, as in GetAccessTokenByDigest. The session
 -- policy and the account part of the token policy come from the same read,
 -- so a policy change applies to the next lookup on every instance.
--- The live check is COALESCE(p.deleted_at_ms, -1) = -1, not IS NULL, so no
+-- The live check is num_nulls(p.deleted_at_ms) = 1, not IS NULL, so no
 -- partial index of the live rows can serve this lookup by ID.
+-- Only NULL reads as live: a stored -1 or 0 does not, as with IS NULL.
 SELECT s.id, s.principal_id, s.digest, s.provider, s.created_at_ms, s.last_seen_at_ms, s.auth_time_ms, s.ended_at_ms,
   s.end_reason, s.source_ip, s.user_agent, p.subject, p.display_name, p.kind AS principal_kind,
   p.disabled_at_ms AS principal_disabled_at_ms, p.break_glass AS principal_break_glass,
@@ -2272,7 +2285,7 @@ FROM sessions s
 JOIN principals p ON p.id = s.principal_id
 CROSS JOIN session_policy sp
 CROSS JOIN access_token_policy ap
-WHERE s.digest = $1 AND COALESCE(p.deleted_at_ms, -1) = -1 AND sp.id = 1 AND ap.id = 1;
+WHERE s.digest = $1 AND num_nulls(p.deleted_at_ms) = 1 AND sp.id = 1 AND ap.id = 1;
 
 -- name: TouchSession :exec
 -- An idle or expired session keeps its last use: seen_after_ms and
@@ -2339,14 +2352,15 @@ FROM temp_admins ORDER BY expires_at_ms, principal_id;
 -- enabled person of the installation with no token of any status, made in
 -- the window before the time of the token and not after it, and a record
 -- names the principal that works past the time and the expiry of the token.
--- The live check is COALESCE(p.deleted_at_ms, -1) = -1, not IS NULL, so no
+-- The live check is num_nulls(p.deleted_at_ms) = 1, not IS NULL, so no
 -- partial index of the live rows can serve this lookup by ID.
+-- Only NULL reads as live: a stored -1 or 0 does not, as with IS NULL.
 INSERT INTO access_tokens (id, principal_id, name, kind, digest, created_at_ms, expires_at_ms, created_by)
 SELECT sqlc.arg('id'), p.id, sqlc.arg('name'), sqlc.arg('kind'), sqlc.arg('digest'),
   sqlc.arg('created_at_ms')::bigint, sqlc.arg('expires_at_ms')::bigint, sqlc.arg('created_by')
 FROM principals p
 JOIN temp_admins t ON t.principal_id = p.id
-WHERE p.id = sqlc.arg('principal_id') AND COALESCE(p.deleted_at_ms, -1) = -1 AND p.disabled_at_ms IS NULL
+WHERE p.id = sqlc.arg('principal_id') AND num_nulls(p.deleted_at_ms) = 1 AND p.disabled_at_ms IS NULL
   AND p.kind = 'person' AND p.namespace = ''
   AND p.created_at_ms <= sqlc.arg('created_at_ms')::bigint
   AND p.created_at_ms >= sqlc.arg('created_at_ms')::bigint - sqlc.arg('window_ms')::bigint
