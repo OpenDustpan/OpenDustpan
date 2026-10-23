@@ -708,6 +708,15 @@ func (p pagingWorkspaces) List(_ context.Context, ns namespace.Name) ([]workspac
 	return append([]workspace.Workspace(nil), p.items...), nil
 }
 
+func (p pagingWorkspaces) Query(ctx context.Context, q workspace.ListQuery) (workspace.ListPage, error) {
+	all, err := p.List(ctx, q.Namespace)
+	if err != nil {
+		return workspace.ListPage{}, err
+	}
+
+	return workspace.PageWorkspaces(all, q), nil
+}
+
 func (p pagingWorkspaces) LockForJob(
 	_ context.Context, _ workspace.ID, _, _, _ string,
 ) (workspace.Workspace, error) {
@@ -812,6 +821,13 @@ func (p pagingWorkspaces) History(
 func newPagingHandler(t *testing.T, authz identity.Authorizer) *tfe.Handler {
 	t.Helper()
 
+	return newPagingHandlerWith(t, authz, newPagingWorkspaces(t))
+}
+
+// newPagingHandlerWith is newPagingHandler over the workspaces ws.
+func newPagingHandlerWith(t *testing.T, authz identity.Authorizer, ws tfe.WorkspaceService) *tfe.Handler {
+	t.Helper()
+
 	handler, err := tfe.NewHandler(tfe.Config{
 		Registry:       nil,
 		Authenticator:  tokenAuthenticator{},
@@ -819,7 +835,7 @@ func newPagingHandler(t *testing.T, authz identity.Authorizer) *tfe.Handler {
 		AddressGate:    nil,
 		Logger:         slog.New(slog.DiscardHandler),
 		Namespaces:     newTestNamespaces(t),
-		Workspaces:     newPagingWorkspaces(t),
+		Workspaces:     ws,
 		BaseURL:        baseurl.Resolver{},
 		Audit:          newTestAudit(),
 		Gate:           nil,

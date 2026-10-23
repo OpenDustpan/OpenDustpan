@@ -1,7 +1,6 @@
 package inventory
 
 import (
-	"cmp"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
@@ -52,7 +51,7 @@ type pageTokenWire struct {
 // parseUnitPage reads the pageSize and pageToken query values of a unit list
 // in the namespace ns with the filter f.
 func parseUnitPage(r *http.Request, ns namespace.Name, f unitFilter) (unitPage, error) {
-	query := r.URL.Query()
+	query := queryOf(r)
 	page := unitPage{size: defaultUnitPageSize, after: ""}
 
 	if raw := query.Get("pageSize"); raw != "" {
@@ -132,13 +131,4 @@ func decodePageToken(token, fingerprint string) (string, error) {
 	}
 
 	return w.After, nil
-}
-
-// sortedByUnitID returns a copy of units in the stable order of the unit list:
-// by unit ID.
-func sortedByUnitID[T any](units []T, id func(T) string) []T {
-	out := slices.Clone(units)
-	slices.SortFunc(out, func(a, b T) int { return cmp.Compare(id(a), id(b)) })
-
-	return out
 }

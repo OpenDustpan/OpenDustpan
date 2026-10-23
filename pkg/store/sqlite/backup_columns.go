@@ -78,6 +78,7 @@ func sqliteBackupTables() []sqliteBackupTable {
 				"allow_unlocked_writes",
 				"ip_allowlist",
 				"id",
+				"output_sharing_default",
 			},
 		},
 		{

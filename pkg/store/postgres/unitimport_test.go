@@ -7,14 +7,14 @@ import (
 	"strings"
 	"testing"
 
+	"opendustpan.org/opendustpan/internal/unitimport"
+	"opendustpan.org/opendustpan/internal/unitimport/unitimporttest"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/history"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/profile"
 	"opendustpan.org/opendustpan/pkg/store/postgres"
 	"opendustpan.org/opendustpan/pkg/store/storetest"
-	"opendustpan.org/opendustpan/pkg/unitimport"
-	"opendustpan.org/opendustpan/pkg/unitimport/unitimporttest"
 )
 
 // importHarness returns the conformance harness over the store of imports of s.

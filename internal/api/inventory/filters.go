@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"net/url"
 	"strings"
 
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -34,7 +33,10 @@ type labelFilter struct {
 // each label, when its reference is one of the references if the filter names
 // any, and when it has any of the states if the filter names any.
 type unitFilter struct {
-	references map[string]struct{}
+	// references maps the string form of each unit reference to the unit. A
+	// reference that does not parse maps to the zero unit, which selects
+	// nothing.
+	references map[string]coreinventory.UnitName
 	states     map[coreinventory.State]struct{}
 	labels     []labelFilter
 }
@@ -66,6 +68,42 @@ func (f unitFilter) matches(e coreinventory.Entry, uobj identity.Object) bool {
 	return true
 }
 
+// query returns the store query of the filter in the namespace ns, from the
+// first unit. The store applies the same filters as matches.
+func (f unitFilter) query(ns namespace.Name) coreinventory.UnitQuery {
+	q := coreinventory.UnitQuery{
+		Namespace:      ns,
+		After:          "",
+		Labels:         make([]coreinventory.UnitLabel, 0, len(f.labels)),
+		Units:          make([]coreinventory.UnitName, 0, len(f.references)),
+		States:         make([]coreinventory.State, 0, len(f.states)),
+		Limit:          0,
+		RestrictUnits:  f.references != nil,
+		RestrictStates: f.states != nil,
+	}
+
+	for _, l := range f.labels {
+		q.Labels = append(q.Labels, coreinventory.UnitLabel{Key: l.key, Value: l.value})
+	}
+
+	for _, u := range f.references {
+		if u != (coreinventory.UnitName{Tool: "", Name: ""}) {
+			q.Units = append(q.Units, u)
+		}
+	}
+
+	for s := range f.states {
+		q.States = append(q.States, s)
+	}
+
+	return q
+}
+
+// unitNameOf returns the tool and the unit name of the unit reference obj.
+func unitNameOf(obj identity.Object) coreinventory.UnitName {
+	return coreinventory.UnitName{Tool: obj.Tool(), Name: obj.UnitName()}
+}
+
 // hasAnyState reports whether the unit e has one of the states in want. It
 // uses the derivation of the entry, the one that the response uses.
 func hasAnyState(e coreinventory.Entry, want map[coreinventory.State]struct{}) bool {
@@ -84,12 +122,12 @@ func hasAnyState(e coreinventory.Entry, want map[coreinventory.State]struct{}) b
 func parseUnitFilter(r *http.Request, ns namespace.Name) (unitFilter, error) {
 	var f unitFilter
 
-	query, err := url.ParseQuery(r.URL.RawQuery)
-	if err != nil {
+	query := queryOf(r)
+	if query.Err() != nil {
 		return unitFilter{}, fmt.Errorf("%w: the query string is not valid", errInvalidQuery)
 	}
 
-	rawLabels := query["label"]
+	rawLabels := query.All("label")
 	if len(rawLabels) > coreinventory.MaxLabelFilters {
 		return unitFilter{}, fmt.Errorf(
 			"%w: send at most %d label query values", errInvalidQuery, coreinventory.MaxLabelFilters,
@@ -105,7 +143,7 @@ func parseUnitFilter(r *http.Request, ns namespace.Name) (unitFilter, error) {
 		f.labels = append(f.labels, pair)
 	}
 
-	rawRefs := query["reference"]
+	rawRefs := query.All("reference")
 	if len(rawRefs) > coreinventory.MaxReferenceFilters {
 		return unitFilter{}, fmt.Errorf(
 			"%w: send at most %d reference query values", errInvalidQuery, coreinventory.MaxReferenceFilters,
@@ -113,7 +151,7 @@ func parseUnitFilter(r *http.Request, ns namespace.Name) (unitFilter, error) {
 	}
 
 	if len(rawRefs) > 0 {
-		f.references = make(map[string]struct{}, len(rawRefs))
+		f.references = make(map[string]coreinventory.UnitName, len(rawRefs))
 	}
 
 	for i, raw := range rawRefs {
@@ -122,10 +160,10 @@ func parseUnitFilter(r *http.Request, ns namespace.Name) (unitFilter, error) {
 			return unitFilter{}, fmt.Errorf("%w: reference query value %d: %w", errInvalidQuery, i+1, err)
 		}
 
-		f.references[obj.String()] = struct{}{}
+		f.references[obj.String()] = unitNameOf(obj)
 	}
 
-	states, stateErr := parseStateFilter(query["state"])
+	states, stateErr := parseStateFilter(query.All("state"))
 	if stateErr != nil {
 		return unitFilter{}, stateErr
 	}

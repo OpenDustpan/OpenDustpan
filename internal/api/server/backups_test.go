@@ -59,7 +59,7 @@ func (g *gateExporter) ExportPortable(
 // backupFixture is a Handler with a SQLite-backed backup service over fresh
 // stores.
 type backupFixture struct {
-	handler *apiserver.Handler
+	handler testHandler
 }
 
 // backupStores groups the stores one backup test service runs over: the
@@ -156,7 +156,7 @@ func newBackupFixture(
 		t.Fatalf("namespace service: %v", err)
 	}
 
-	handler, err := apiserver.NewHandler(apiserver.Config{
+	handler, err := newCheckedHandler(t, apiserver.Config{
 		Preferences:      nil,
 		GitHost:          nil,
 		Idempotency:      nil,
@@ -209,7 +209,7 @@ func quickBackupFixture(t *testing.T, now func() time.Time) backupFixture {
 
 // serveBackup sends one installation API request with the test token and
 // returns its status and body.
-func serveBackup(t *testing.T, handler *apiserver.Handler, method, path string) (int, string) {
+func serveBackup(t *testing.T, handler testHandler, method, path string) (int, string) {
 	t.Helper()
 
 	req := httptest.NewRequestWithContext(t.Context(), method, path, http.NoBody)
@@ -223,7 +223,7 @@ func serveBackup(t *testing.T, handler *apiserver.Handler, method, path string) 
 
 // serveBackupBare sends one installation API request without a token and
 // returns its status and body.
-func serveBackupBare(t *testing.T, handler *apiserver.Handler, method, path string) (int, string) {
+func serveBackupBare(t *testing.T, handler testHandler, method, path string) (int, string) {
 	t.Helper()
 
 	req := httptest.NewRequestWithContext(t.Context(), method, path, http.NoBody)
@@ -261,7 +261,7 @@ type startBackupDoc struct {
 
 // startBackup starts a backup and returns its ID, failing the test on any
 // other status.
-func startBackup(t *testing.T, handler *apiserver.Handler) string {
+func startBackup(t *testing.T, handler testHandler) string {
 	t.Helper()
 
 	status, body := serveBackup(t, handler, http.MethodPost, "/api/server/backups")
@@ -303,7 +303,7 @@ type backupManifest struct {
 }
 
 // readBackup reads one backup, failing the test on any other status.
-func readBackup(t *testing.T, handler *apiserver.Handler, id string) getBackupDoc {
+func readBackup(t *testing.T, handler testHandler, id string) getBackupDoc {
 	t.Helper()
 
 	status, body := serveBackup(t, handler, http.MethodGet, "/api/server/backups/"+id)
@@ -322,7 +322,7 @@ func readBackup(t *testing.T, handler *apiserver.Handler, id string) getBackupDo
 
 // pollBackupSucceeded polls one backup until it succeeds, failing the test
 // when the deadline passes first.
-func pollBackupSucceeded(t *testing.T, handler *apiserver.Handler, id string) getBackupDoc {
+func pollBackupSucceeded(t *testing.T, handler testHandler, id string) getBackupDoc {
 	t.Helper()
 
 	ctx, cancel := context.WithTimeout(t.Context(), pollTimeout)
@@ -583,7 +583,7 @@ func TestBackupWithoutTarget(t *testing.T) {
 		t.Fatalf("namespace service: %v", err)
 	}
 
-	handler, err := apiserver.NewHandler(apiserver.Config{
+	handler, err := newCheckedHandler(t, apiserver.Config{
 		Preferences:      nil,
 		GitHost:          nil,
 		Idempotency:      nil,

@@ -370,6 +370,10 @@ func (plainReader) GetUnit(context.Context, string) (inventory.Entry, error) {
 	return inventory.Entry{}, inventory.ErrUnitNotFound
 }
 
+func (plainReader) QueryUnits(context.Context, inventory.UnitQuery) ([]inventory.Entry, error) {
+	return []inventory.Entry{}, nil
+}
+
 // TestRetentionSweepNeedsItsPorts proves that a server whose inventory
 // reader cannot list the expired units or keep the blob purge records does
 // not start, so that no server keeps deleted units that it never purges.

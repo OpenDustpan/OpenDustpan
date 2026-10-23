@@ -8,7 +8,6 @@ import (
 	"strings"
 	"testing"
 
-	apiinventory "opendustpan.org/opendustpan/internal/api/inventory"
 	"opendustpan.org/opendustpan/pkg/identity"
 )
 
@@ -99,7 +98,7 @@ func TestUnitListPaging(t *testing.T) {
 // checkPages reads one page for each query in pages, each with the token of the
 // page before, and checks the units of each page. The last page has a token
 // when more is true.
-func checkPages(t *testing.T, handler *apiinventory.Handler, pages []string, want [][]string, more bool) {
+func checkPages(t *testing.T, handler testHandler, pages []string, want [][]string, more bool) {
 	t.Helper()
 
 	token := ""
