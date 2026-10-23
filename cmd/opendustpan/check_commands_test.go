@@ -547,7 +547,7 @@ func TestBackupCheckUsage(t *testing.T) {
 		{
 			"check with an invalid id",
 			[]string{"backup", "check", "--server", "http://x", "--backup", "no"},
-			errBackupID,
+			backup.ErrInvalidID,
 		},
 		{
 			"check without a server",

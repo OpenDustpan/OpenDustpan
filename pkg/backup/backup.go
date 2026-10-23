@@ -203,11 +203,12 @@ const backupIDPrefix = "bkp-"
 // longer input is never a real ID.
 const maxBackupIDLength = 128
 
-// ParseID validates s as a backup ID: the bkp- prefix with identifier
-// characters. It returns ErrInvalidID for anything else, so callers answer
-// 400 with a fixed message instead of sending a malformed ID to the target.
+// ParseID validates s as a backup ID: the bkp- prefix and at least one more
+// identifier character. It returns ErrInvalidID for anything else, so callers
+// answer 400 with a fixed message instead of sending a malformed ID to the
+// target.
 func ParseID(s string) (ID, error) {
-	if !ident.Valid(s, maxBackupIDLength) || !strings.HasPrefix(s, backupIDPrefix) {
+	if !ident.Valid(s, maxBackupIDLength) || !strings.HasPrefix(s, backupIDPrefix) || len(s) == len(backupIDPrefix) {
 		return "", fmt.Errorf("%w: %q", ErrInvalidID, s)
 	}
 
