@@ -31,6 +31,25 @@ func WriteErrorForTest(w http.ResponseWriter, r *http.Request, err error) {
 	h.writeError(r.Context(), w, err)
 }
 
+// WriteEnterErrorForTest writes the answer of a failed enter of maintenance
+// mode with err, as the enter handler does.
+func WriteEnterErrorForTest(w http.ResponseWriter, r *http.Request, err error) {
+	var h Handler
+
+	h.logger = slog.New(slog.DiscardHandler)
+	h.writeEnterError(r.Context(), w, err)
+}
+
+// ServeEmptyForTest serves r with a handler that has no route, so every path
+// answers the 404 of an unknown route.
+func ServeEmptyForTest(w http.ResponseWriter, r *http.Request) {
+	var h Handler
+
+	h.logger = slog.New(slog.DiscardHandler)
+	h.mux = newPatternMux()
+	h.ServeHTTP(w, r)
+}
+
 // DevCodeSignInForTest calls the dev sign-in handler of h directly, as the
 // route table would, so a test sees what the handler alone does when its
 // route is not mounted.
