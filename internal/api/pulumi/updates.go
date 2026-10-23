@@ -349,7 +349,8 @@ type updateResults struct {
 // the principal that created the update, never a token. CheckpointBytes is 0
 // when the update saved no checkpoint. LeaseExpiresAt is the lease expiry in
 // Unix seconds while the update runs, and 0 once it ended. RestoredFrom is
-// the stack version a restore copied, and 0 for any other update.
+// the stack version a restore copied, and 0 for any other update. EndTime is 0
+// while the update has not ended.
 type updateInfo struct {
 	Result          string `json:"result"`
 	Kind            string `json:"kind"`
@@ -750,7 +751,7 @@ func (h *Handler) listHistory(w http.ResponseWriter, r *http.Request, _ identity
 			Kind:            string(list[i].Kind),
 			Version:         int(list[i].Version),
 			StartTime:       list[i].StartedAt.Unix(),
-			EndTime:         list[i].EndedAt.Unix(),
+			EndTime:         endTime(list[i]),
 			UpdateID:        list[i].ID.String(),
 			RequestedBy:     list[i].CreatedBy,
 			CheckpointBytes: list[i].CheckpointBytes,
@@ -840,6 +841,17 @@ func leaseExpiresAt(u stack.Update) int64 {
 	}
 
 	return u.Lease.ExpiresAt.Unix()
+}
+
+// endTime returns the end time of the update in Unix seconds, and 0 while
+// the update has not ended. The zero time.Time would give a large negative
+// number, which the Pulumi CLI reads as a duration.
+func endTime(u stack.Update) int64 {
+	if u.EndedAt.IsZero() {
+		return 0
+	}
+
+	return u.EndedAt.Unix()
 }
 
 // updateResult maps an update status to the history wire value. The wire
