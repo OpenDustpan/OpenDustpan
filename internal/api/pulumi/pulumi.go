@@ -496,7 +496,11 @@ func (h *Handler) listStacksIn(
 	})
 }
 
-// listStacksAll lists the stacks in every namespace that p may read.
+// listStacksAll lists the stacks in every namespace where p holds
+// namespace:read and unit:read, the actions that listStacksIn checks for one
+// namespace. So the list with no organization is the union of the lists of
+// each organization. A denial skips the namespace; any other error of the
+// authorizer fails the request.
 func (h *Handler) listStacksAll(
 	ctx context.Context, w http.ResponseWriter, r *http.Request, p identity.Principal, project stack.ProjectName,
 ) {
@@ -510,22 +514,40 @@ func (h *Handler) listStacksAll(
 	readable := make([]namespace.Name, 0, len(all))
 
 	for i := range all {
-		obj := identity.NamespaceObject(all[i].Name)
-
-		if err := h.authz.Authorize(ctx, p, identity.ActionNamespaceRead, obj); err != nil {
-			if errors.Is(err, identity.ErrDenied) {
-				continue
-			}
-
+		ok, err := h.mayListStacksIn(ctx, p, all[i].Name)
+		if err != nil {
 			h.writeError(ctx, w, err)
 
 			return
 		}
 
-		readable = append(readable, all[i].Name)
+		if ok {
+			readable = append(readable, all[i].Name)
+		}
 	}
 
 	h.serveStackPage(ctx, w, r, stackListQuery{organization: "", project: project, tag: nil, namespaces: readable})
+}
+
+// mayListStacksIn reports whether p holds namespace:read and unit:read on the
+// namespace ns. It returns false for a denial, and the error of the
+// authorizer for any other failure.
+func (h *Handler) mayListStacksIn(ctx context.Context, p identity.Principal, ns namespace.Name) (bool, error) {
+	obj := identity.NamespaceObject(ns)
+
+	for _, action := range []identity.Action{identity.ActionNamespaceRead, identity.ActionUnitRead} {
+		err := h.authz.Authorize(ctx, p, action, obj)
+
+		switch {
+		case err == nil:
+		case errors.Is(err, identity.ErrDenied):
+			return false, nil
+		default:
+			return false, fmt.Errorf("authorize %s: %w", action, err)
+		}
+	}
+
+	return true, nil
 }
 
 // summarize converts stacks to the wire shape, never returning nil.
