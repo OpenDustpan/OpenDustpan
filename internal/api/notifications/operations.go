@@ -21,6 +21,7 @@ var operationLabels = map[string]apidesc.Label{
 			"ListNotificationSinksResponse", apidesc.Named[sinkDocument]("NotificationSink"),
 		)),
 	apidesc.Pattern(http.MethodPost, sinksPath): apidesc.Name("createNotificationSink", tagSinks).
+		WithStatus(http.StatusCreated).
 		On(apidesc.KindNamespace).
 		WithBodies(apidesc.Typed[createBody]("CreateNotificationSinkRequest"), apidesc.Typed[createdDocument](
 			"CreatedNotificationSink",
@@ -66,4 +67,9 @@ func (h *Handler) Operations() []apidesc.Operation {
 	}
 
 	return apidesc.Collect(rows, operationLabels)
+}
+
+// userAgent returns the User-Agent header of a request, for the audit record.
+func userAgent(r *http.Request) string {
+	return apidesc.Header(r, "User-Agent")
 }

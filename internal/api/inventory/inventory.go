@@ -17,10 +17,12 @@ import (
 	"strings"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/api/apidesc"
 	"opendustpan.org/opendustpan/internal/api/idempotent"
 	"opendustpan.org/opendustpan/internal/api/refusal"
 	"opendustpan.org/opendustpan/internal/denylimit"
 	"opendustpan.org/opendustpan/internal/errcode"
+	"opendustpan.org/opendustpan/internal/outputsharesvc"
 	"opendustpan.org/opendustpan/internal/sessionauth"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/collection"
@@ -33,6 +35,10 @@ import (
 
 // ErrMissingDependency reports a Config without a required dependency.
 var ErrMissingDependency = errors.New("missing dependency")
+
+// errUnitOrder reports a store page that is not in the order of the unit ID.
+// It is an internal error.
+var errUnitOrder = errors.New("store answered a unit out of order")
 
 // errMissingOrganization reports a list request without the organization
 // query value. classify maps it to the 400 response the console expects.
@@ -66,6 +72,9 @@ type Config struct {
 	// no lock route, so a namespace store that holds no manual locks keeps the
 	// rest of the API unchanged.
 	Locks *manuallock.Service
+	// OutputSharing serves the routes of the output sharing setting of a
+	// namespace. It is optional: nil serves no such route.
+	OutputSharing *outputsharesvc.Service
 	// Moves checks the escalation of a move into a collection. It is required
 	// with Collections: a move with no checker is refused.
 	Moves         MoveChecker
@@ -102,48 +111,60 @@ type Config struct {
 
 // Handler serves the inventory API under /api/inventory/.
 type Handler struct {
-	namespaces  *namespace.Service
-	units       coreinventory.Reader
-	deleted     coreinventory.DeletedReader
-	history     coreinventory.HistoryReader
-	lifecycles  map[string]coreinventory.Lifecycle
-	readScope   DeletedReadScope
-	collections *collection.Service
-	locks       *manuallock.Service
-	moves       MoveChecker
-	views       *views
-	authn       identity.Authenticator
-	sessions    *sessionauth.Checker
-	authz       identity.Authorizer
-	guard       *refusal.Recorder
-	publicURL   *url.URL
-	logger      *slog.Logger
-	now         func() time.Time
-	stateGuard  StateGuard
-	mux         *patternMux
-	routes      []Route
+	namespaces    *namespace.Service
+	units         coreinventory.Reader
+	deleted       coreinventory.DeletedReader
+	history       coreinventory.HistoryReader
+	lifecycles    map[string]coreinventory.Lifecycle
+	readScope     DeletedReadScope
+	collections   *collection.Service
+	locks         *manuallock.Service
+	outputSharing *outputsharesvc.Service
+	moves         MoveChecker
+	views         *views
+	authn         identity.Authenticator
+	sessions      *sessionauth.Checker
+	authz         identity.Authorizer
+	guard         *refusal.Recorder
+	publicURL     *url.URL
+	logger        *slog.Logger
+	now           func() time.Time
+	stateGuard    StateGuard
+	mux           *patternMux
+	routes        []Route
+}
+
+// validate returns ErrMissingDependency when cfg lacks a required dependency.
+func (cfg Config) validate() error {
+	switch {
+	case cfg.Audit == nil:
+		return fmt.Errorf("%w: audit store", ErrMissingDependency)
+	case cfg.Namespaces == nil:
+		return fmt.Errorf("%w: namespace service", ErrMissingDependency)
+	case cfg.Units == nil:
+		return fmt.Errorf("%w: inventory reader", ErrMissingDependency)
+	case cfg.Deleted == nil:
+		return fmt.Errorf("%w: deleted unit reader", ErrMissingDependency)
+	case len(cfg.Lifecycles) == 0:
+		return fmt.Errorf("%w: unit lifecycles", ErrMissingDependency)
+	case cfg.ReadScope == nil:
+		return fmt.Errorf("%w: deleted unit read scope", ErrMissingDependency)
+	case cfg.Authenticator == nil:
+		return fmt.Errorf("%w: authenticator", ErrMissingDependency)
+	case cfg.Authorizer == nil:
+		return fmt.Errorf("%w: authorizer", ErrMissingDependency)
+	case cfg.Logger == nil:
+		return fmt.Errorf("%w: logger", ErrMissingDependency)
+	}
+
+	return nil
 }
 
 // NewHandler returns a Handler. Every Config field except Now, Collections
 // and Sessions is required.
 func NewHandler(cfg Config) (*Handler, error) {
-	switch {
-	case cfg.Namespaces == nil:
-		return nil, fmt.Errorf("%w: namespace service", ErrMissingDependency)
-	case cfg.Units == nil:
-		return nil, fmt.Errorf("%w: inventory reader", ErrMissingDependency)
-	case cfg.Deleted == nil:
-		return nil, fmt.Errorf("%w: deleted unit reader", ErrMissingDependency)
-	case len(cfg.Lifecycles) == 0:
-		return nil, fmt.Errorf("%w: unit lifecycles", ErrMissingDependency)
-	case cfg.ReadScope == nil:
-		return nil, fmt.Errorf("%w: deleted unit read scope", ErrMissingDependency)
-	case cfg.Authenticator == nil:
-		return nil, fmt.Errorf("%w: authenticator", ErrMissingDependency)
-	case cfg.Authorizer == nil:
-		return nil, fmt.Errorf("%w: authorizer", ErrMissingDependency)
-	case cfg.Logger == nil:
-		return nil, fmt.Errorf("%w: logger", ErrMissingDependency)
+	if err := cfg.validate(); err != nil {
+		return nil, err
 	}
 
 	publicURL, err := parsePublicURL(cfg.PublicURL)
@@ -156,29 +177,33 @@ func NewHandler(cfg Config) (*Handler, error) {
 		return nil, err
 	}
 
+	recorder, err := refusal.New(cfg.Authorizer, cfg.Audit, cfg.Namespaces, cfg.Logger, cfg.OnAuditFailure)
+	if err != nil {
+		return nil, fmt.Errorf("denial recorder: %w", err)
+	}
+
 	h := &Handler{
-		views:       viewState,
-		namespaces:  cfg.Namespaces,
-		units:       cfg.Units,
-		deleted:     cfg.Deleted,
-		history:     cfg.History,
-		lifecycles:  cfg.Lifecycles,
-		readScope:   cfg.ReadScope,
-		collections: cfg.Collections,
-		locks:       cfg.Locks,
-		moves:       cfg.Moves,
-		authn:       cfg.Authenticator,
-		sessions:    cfg.Sessions,
-		authz:       cfg.Authorizer,
-		guard: refusal.New(cfg.Authorizer, cfg.Audit, cfg.Namespaces, cfg.Logger, cfg.OnAuditFailure).
-			WithLimiter(cfg.DenialLimiter).
-			WithSurface("inventory"),
-		publicURL:  publicURL,
-		logger:     cfg.Logger,
-		now:        clockOf(cfg.Now),
-		stateGuard: cfg.StateGuard,
-		mux:        newPatternMux(),
-		routes:     nil,
+		views:         viewState,
+		namespaces:    cfg.Namespaces,
+		units:         cfg.Units,
+		deleted:       cfg.Deleted,
+		history:       cfg.History,
+		lifecycles:    cfg.Lifecycles,
+		readScope:     cfg.ReadScope,
+		collections:   cfg.Collections,
+		locks:         cfg.Locks,
+		outputSharing: cfg.OutputSharing,
+		moves:         cfg.Moves,
+		authn:         cfg.Authenticator,
+		sessions:      cfg.Sessions,
+		authz:         cfg.Authorizer,
+		guard:         recorder.WithLimiter(cfg.DenialLimiter).WithSurface("inventory"),
+		publicURL:     publicURL,
+		logger:        cfg.Logger,
+		now:           clockOf(cfg.Now),
+		stateGuard:    cfg.StateGuard,
+		mux:           newPatternMux(),
+		routes:        nil,
 	}
 
 	h.routes = h.buildRoutes()
@@ -340,6 +365,7 @@ func (h *Handler) consoleURL(unitID string) string {
 		return ""
 	}
 
+	//nolint:forbidigo // This builds a link from the configured public URL; no request is read.
 	return h.publicURL.JoinPath("units", url.PathEscape(unitID)).String()
 }
 
@@ -385,7 +411,7 @@ func (h *Handler) listUnits(
 			return
 		}
 
-		if r.URL.Query().Get("pageToken") != "" {
+		if queryOf(r).Get("pageToken") != "" {
 			h.writeError(ctx, w, errPageTokenAt)
 
 			return
@@ -420,14 +446,7 @@ func (h *Handler) serveUnitList(
 		return
 	}
 
-	entries, err := h.units.ListUnits(ctx, ns)
-	if err != nil {
-		h.writeError(ctx, w, err)
-
-		return
-	}
-
-	units, next, err := h.readableUnits(ctx, p, entries, filter, page)
+	units, next, err := h.readableUnits(ctx, p, ns, filter, page)
 	if err != nil {
 		h.writeError(ctx, w, err)
 
@@ -442,49 +461,125 @@ func (h *Handler) serveUnitList(
 	h.writeJSON(ctx, w, http.StatusOK, resp)
 }
 
-// readableUnits returns one page of the wire entries of the units in entries
-// that pass the filter and that the caller may read (unit:read on the
-// reference), in the order of the unit ID. A denied unit is not in the result.
-// The second result is the ID of the last unit of the page when a later page
-// exists, else empty.
+// storePageGrowth is the factor by which each store page of the unit list
+// is larger than the one before.
+const storePageGrowth = 2
+
+// readableUnits returns one page of the wire entries of the units of ns that
+// pass the filter and that the caller may read (unit:read on the reference),
+// in the order of the unit ID. A denied unit is not in the result. The second
+// result is the ID of the last unit of the page when a later page exists,
+// else empty.
+//
+// The store reads the units in pages of the unit ID with the filter in its
+// query. A caller who may read every unit fills the page from the first
+// store page. For a caller who may read fewer units, the loop reads more
+// store pages, each one larger than the one before, until the page is full
+// or the namespace has no more units.
 func (h *Handler) readableUnits(
-	ctx context.Context, p identity.Principal, entries []coreinventory.Entry, filter unitFilter, page unitPage,
+	ctx context.Context, p identity.Principal, ns namespace.Name, filter unitFilter, page unitPage,
 ) ([]unitEntry, string, error) {
-	units := make([]unitEntry, 0, min(len(entries), page.size+1))
+	fill := unitFill{units: make([]unitEntry, 0, page.size+1), after: page.after, size: page.size}
 
-	sorted := sortedByUnitID(entries, func(e coreinventory.Entry) string { return e.UnitID })
+	q := filter.query(ns)
+	q.Limit = page.size + 1
 
-	for i := range sorted {
-		e := &sorted[i]
-		if page.after != "" && e.UnitID <= page.after {
-			continue
-		}
+	for {
+		q.After = fill.after
 
-		uobj, err := unitObject(*e)
+		batch, err := h.units.QueryUnits(ctx, q)
 		if err != nil {
-			return nil, "", err
+			return nil, "", fmt.Errorf("query units: %w", err)
 		}
 
-		if !filter.matches(*e, uobj) {
+		full, err := h.addReadable(ctx, p, filter, &fill, batch)
+
+		switch {
+		case err != nil:
+			return nil, "", err
+		case full:
+			return fill.units, fill.units[len(fill.units)-1].UnitID, nil
+		case len(batch) < q.PageLimit():
+			return fill.units, "", nil
+		}
+
+		q.Limit = min(storePageGrowth*q.Limit, coreinventory.MaxUnitQueryLimit)
+	}
+}
+
+// unitFill is one page of the unit list while the store pages fill it: the
+// wire entries so far, the ID of the last unit that the loop read, and the
+// page size.
+type unitFill struct {
+	units []unitEntry
+	after string
+	size  int
+}
+
+// addReadable appends to the page the wire entries of the units of batch
+// that readableUnit keeps, up to the page size, and moves the cursor of the
+// page to each unit that it reads. It returns true when the page is full and
+// batch holds one more readable unit, so a later page exists.
+func (h *Handler) addReadable(
+	ctx context.Context, p identity.Principal, filter unitFilter, fill *unitFill, batch []coreinventory.Entry,
+) (bool, error) {
+	for i := range batch {
+		e := &batch[i]
+
+		// Defense in depth: the store keeps only the units after the cursor.
+		// This check stays so that a store that answers a unit again cannot
+		// make the loop read the same page forever.
+		if e.UnitID <= fill.after {
+			return false, fmt.Errorf("%w: %q is not after %q", errUnitOrder, e.UnitID, fill.after)
+		}
+
+		fill.after = e.UnitID
+
+		keep, err := h.readableUnit(ctx, p, *e, filter)
+		if err != nil {
+			return false, err
+		}
+
+		if !keep {
 			continue
 		}
 
-		if err := h.authz.Authorize(ctx, p, identity.ActionUnitRead, uobj); err != nil {
-			if errors.Is(err, identity.ErrDenied) {
-				continue
-			}
-
-			return nil, "", fmt.Errorf("authorize %s: %w", identity.ActionUnitRead, err)
+		if len(fill.units) == fill.size {
+			return true, nil
 		}
 
-		if len(units) == page.size {
-			return units, units[len(units)-1].UnitID, nil
-		}
-
-		units = append(units, h.toUnitEntry(*e))
+		fill.units = append(fill.units, h.toUnitEntry(*e))
 	}
 
-	return units, "", nil
+	return false, nil
+}
+
+// readableUnit reports whether the unit e passes the filter and the caller
+// may read it (unit:read on the reference). A denial is not an error.
+func (h *Handler) readableUnit(
+	ctx context.Context, p identity.Principal, e coreinventory.Entry, filter unitFilter,
+) (bool, error) {
+	uobj, err := unitObject(e)
+	if err != nil {
+		return false, err
+	}
+
+	// Defense in depth: the store applies the filter in its query. This
+	// check stays so that a store that answers more units cannot add a unit
+	// that the filter does not select.
+	if !filter.matches(e, uobj) {
+		return false, nil
+	}
+
+	if err := h.authz.Authorize(ctx, p, identity.ActionUnitRead, uobj); err != nil {
+		if errors.Is(err, identity.ErrDenied) {
+			return false, nil
+		}
+
+		return false, fmt.Errorf("authorize %s: %w", identity.ActionUnitRead, err)
+	}
+
+	return true, nil
 }
 
 // unitObject maps one inventory entry to its tool-neutral unit reference. It
@@ -500,7 +595,7 @@ func unitObject(e coreinventory.Entry) (identity.Object, error) {
 // reports that the cookie signed it in. A request with an
 // Authorization header never uses the cookie.
 func (h *Handler) authenticate(r *http.Request) (identity.Principal, bool, error) {
-	header := r.Header.Get("Authorization")
+	header := apidesc.Header(r, "Authorization")
 	if header == "" {
 		p, _, err := h.sessions.Authenticate(r)
 
@@ -585,7 +680,7 @@ func classify(err error) (int, string) {
 	}
 
 	switch {
-	case errors.Is(err, errMissingOrganization):
+	case errors.Is(err, errMissingOrganization), errors.Is(err, errOutputSharingBody):
 		return http.StatusBadRequest, err.Error()
 	case errors.Is(err, namespace.ErrInvalidName), errors.Is(err, identity.ErrInvalidObject):
 		return http.StatusBadRequest, err.Error()

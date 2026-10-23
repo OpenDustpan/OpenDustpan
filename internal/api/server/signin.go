@@ -95,8 +95,8 @@ type OIDCClient interface {
 	Finish(ctx context.Context, code string, p oauth.Pending) (oauth.Identity, error)
 }
 
-// SignInLimiter is the per-address failure limit of the sign-in routes.
-// *authgate.Gate meets it.
+// SignInLimiter is the per-address limit of the sign-in routes. It has its
+// own budget, apart from the token lookups. *authgate.Gate meets it.
 type SignInLimiter interface {
 	// Admit waits or refuses as a failed token lookup of the same address
 	// does. It returns an error that wraps identity.ErrRateLimited.
@@ -273,10 +273,9 @@ func (h *Handler) admitSignIn(ctx context.Context) error {
 	return h.signIn.limiter.Admit(ctx)
 }
 
-// failSignIn spends one unit of the failure budget of the address of the
-// request, as a failed token lookup does. Each start of a sign-in and each
-// failed callback spends one, so the address of a request bounds the
-// sign-in requests that it can store.
+// failSignIn spends one unit of the sign-in budget of the address of the
+// request. Each start of a sign-in and each failed callback spends one, so
+// the address of a request bounds the sign-in requests that it can store.
 func (h *Handler) failSignIn(ctx context.Context) {
 	if h.signIn.limiter != nil {
 		h.signIn.limiter.Fail(ctx)
@@ -286,8 +285,9 @@ func (h *Handler) failSignIn(ctx context.Context) {
 // startSignIn stores a new sign-in request, binds the browser to it with
 // the sign-in cookie, and sends the browser to the identity provider. The
 // query parameter return names where the browser goes after the sign-in:
-// a path of this server. Each start spends one unit of the failure budget
-// of its address, whatever its result.
+// a path of this server. Each start spends one unit of the sign-in budget
+// of its address, whatever its result. The budget is not the one of the
+// token lookups, so sign-ins never slow them.
 func (h *Handler) startSignIn(w http.ResponseWriter, r *http.Request, _ identity.Principal, _ identity.Object) {
 	ctx := r.Context()
 
@@ -313,7 +313,7 @@ func (h *Handler) startSignIn(w http.ResponseWriter, r *http.Request, _ identity
 		return
 	}
 
-	returnPath := r.URL.Query().Get("return")
+	returnPath := queryOf(r).Get("return")
 	if returnPath == "" {
 		returnPath = defaultReturnPath
 	}
@@ -410,12 +410,13 @@ func refused(reason string) (callback, string) {
 // gives, or the reason of a refusal.
 func (h *Handler) callbackIdentity(r *http.Request, provider SignInProvider) (callback, string) {
 	ctx := r.Context()
-	q := r.URL.Query()
+	q := queryOf(r)
 
 	if q.Get("error") != "" {
 		return refused(reasonProviderError)
 	}
 
+	//nolint:forbidigo // An identity provider calls the sign-in callback, which is outside the description.
 	cookie, err := r.Cookie(SignInCookie)
 	if err != nil {
 		return refused(reasonState)
@@ -594,18 +595,16 @@ func (h *Handler) refuseSignIn(w http.ResponseWriter, r *http.Request, rf refusa
 		outcome = audit.OutcomeDenied
 	}
 
-	if h.audit != nil {
-		e := signInEntry(r, subject, idpSubject, session.ActionSignIn)
-		e.At = h.signIn.sessions.Now()
-		e.Namespace = audit.ServerScope
-		e.Kind = audit.KindChange
-		e.Outcome = outcome
-		e.Object = "sign-in-provider:" + providerID
-		e.Changes = []audit.Change{{Key: "reason", Old: nil, New: reason, Layer: "", TakesEffect: ""}}
+	e := signInEntry(r, subject, idpSubject, session.ActionSignIn)
+	e.At = h.signIn.sessions.Now()
+	e.Namespace = audit.ServerScope
+	e.Kind = audit.KindChange
+	e.Outcome = outcome
+	e.Object = "sign-in-provider:" + providerID
+	e.Changes = []audit.Change{{Key: "reason", Old: nil, New: reason, Layer: "", TakesEffect: ""}}
 
-		if _, appendErr := h.audit.AppendServer(ctx, e); appendErr != nil {
-			h.failAudit(ctx)
-		}
+	if _, appendErr := h.audit.AppendServer(ctx, e); appendErr != nil {
+		h.failAudit(ctx)
 	}
 
 	if errors.Is(err, errSignInRefused) {
@@ -622,7 +621,7 @@ func signInEntry(r *http.Request, subject, idpSubject, action string) audit.Entr
 	return audit.Entry{
 		At: time.Time{}, Namespace: "", Subject: subject, IDPSubject: idpSubject, TokenID: "", Action: action,
 		Object: "", Version: "", ValuePath: "", ValueCount: nil, Changes: nil, SourceIP: clientip.String(r),
-		UserAgent: truncateUserAgent(r.UserAgent()), Channel: audit.ChannelConsole, Kind: "", Outcome: "",
+		UserAgent: truncateUserAgent(userAgent(r)), Channel: audit.ChannelConsole, Kind: "", Outcome: "",
 		RequestID: requestid.FromContext(r.Context()), ObjectID: "", PrevHash: "", Hash: "", Sequence: 0,
 		FenceVersion:  0,
 		Reason:        "",

@@ -26,6 +26,7 @@ const (
 	opGetProfile   = "getProfile"
 	opCreate       = "createProfile"
 	opRevise       = "createProfileRevision"
+	opPutApp       = "putGitHostApp"
 )
 
 // pathNamespace is the name of the namespace parameter in the paths.
@@ -113,6 +114,29 @@ type seedState struct {
 //nolint:gochecknoglobals // One shared counter, so that two such Envs never make the same name.
 var fallbackSeed seedState
 
+// fallbackSeeds holds the seed state of each server URL, for an Env that no run
+// made.
+//
+//nolint:gochecknoglobals // One state for each server, so that a second call finds the profile.
+var (
+	fallbackSeedsMu sync.Mutex
+	fallbackSeeds   = map[string]*seedState{}
+)
+
+// fallbackSeedFor returns the shared seed state of a server address.
+func fallbackSeedFor(addr string) *seedState {
+	fallbackSeedsMu.Lock()
+	defer fallbackSeedsMu.Unlock()
+
+	s, ok := fallbackSeeds[addr]
+	if !ok {
+		s = new(seedState)
+		fallbackSeeds[addr] = s
+	}
+
+	return s
+}
+
 // next returns prefix and a number that no earlier call of next returned.
 func (s *seedState) next(prefix string) string {
 	if s == nil {
@@ -153,8 +177,9 @@ type answer struct {
 type authMode int
 
 const (
+	_ authMode = iota // Zero means that nobody chose.
 	// withToken sends the token of the server.
-	withToken authMode = iota
+	withToken
 	// withoutToken sends no Authorization header.
 	withoutToken
 )
@@ -215,7 +240,9 @@ func direct(ctx context.Context, env Env, dr directRequest) (answer, error) {
 func ensureProfile(ctx context.Context, env Env) (string, error) {
 	seed := env.seed
 	if seed == nil {
-		seed = new(seedState)
+		// No run made this Env, so the seed of the server is the shared one for
+		// its URL. A fresh state here would write the profile on each call.
+		seed = fallbackSeedFor(env.Server.URL())
 	}
 
 	seed.once.Do(func() { seed.err = writeSeed(ctx, env) })
@@ -242,7 +269,7 @@ func writeSeed(ctx context.Context, env Env) error {
 		method:      http.MethodPost,
 		path:        profilesPath,
 		auth:        withToken,
-		contentType: "application/json",
+		contentType: mediaJSON,
 		body:        env.profileBody(seedProfile, "schemaVersion: 1\n"),
 	}
 
@@ -282,16 +309,29 @@ type fixture struct {
 	// operation is compared like that, because the server answers a signed-in
 	// caller with more members.
 	anonymous bool
+	// injected is an answer that the proxy gives in place of the server, for an
+	// operation that the dev server cannot answer, for example one that needs
+	// a Git host. The client must still send the request and check the answer.
+	injected *Fault
 }
 
 // answerFixture expects an answer, and compares its body with a direct read.
 func answerFixture(params CallParams, status int, compare string) fixture {
-	return fixture{params: params, status: status, errorCode: "", compare: compare, anonymous: false}
+	return fixture{params: params, status: status, errorCode: "", compare: compare, anonymous: false, injected: nil}
 }
 
 // errorFixture expects an error answer.
 func errorFixture(params CallParams, status int, errorCode string) fixture {
-	return fixture{params: params, status: status, errorCode: errorCode, compare: "", anonymous: false}
+	return fixture{params: params, status: status, errorCode: errorCode, compare: "", anonymous: false, injected: nil}
+}
+
+// injectedFixture expects the answer that the proxy gives in place of the
+// server.
+func injectedFixture(params CallParams, status int, body string) fixture {
+	f := faultOf(FaultStatus, params.Operation)
+	f.Status, f.ContentType, f.Body = status, mediaJSON, []byte(body)
+
+	return fixture{params: params, status: status, errorCode: "", compare: "", anonymous: false, injected: &f}
 }
 
 // fixtures returns the call of each operation that the suite knows.
@@ -315,11 +355,17 @@ func fixtures(ctx context.Context, env Env) (map[string]fixture, error) {
 		),
 		opCreate: answerFixture(createCall(env, ""), 0, ""),
 		opRevise: answerFixture(reviseCall(env, etag), 0, ""),
+		// The dev server has no Git host, so the proxy answers in its place.
+		opPutApp: injectedFixture(putAppCall(), http.StatusCreated, gitHostAppAnswer),
 	}, nil
 }
 
 // checkFixture runs one fixture.
 func checkFixture(ctx context.Context, env Env, op string, fx fixture) error {
+	if fx.injected != nil {
+		env.Proxy.Inject(*fx.injected)
+	}
+
 	res, err := env.Adapter.Call(ctx, fx.params)
 	if err != nil {
 		return fmt.Errorf("%s: %w", op, err)

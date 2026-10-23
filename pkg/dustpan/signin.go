@@ -115,8 +115,8 @@ func newSignIn(cfg *settings, policies *session.Policies, tokens *accesstoken.Se
 		in.DevCode, in.DevAdmin = cfg.devSignIn.Code, cfg.devSignIn.Admin
 	}
 
-	if cfg.gate != nil {
-		in.Limiter = cfg.gate
+	if cfg.signInGate != nil {
+		in.Limiter = cfg.signInGate
 	}
 
 	if stored {

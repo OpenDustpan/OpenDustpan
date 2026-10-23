@@ -12,11 +12,13 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"opendustpan.org/opendustpan/internal/api/apidesc"
 	"opendustpan.org/opendustpan/internal/api/refusal"
 	"opendustpan.org/opendustpan/internal/clientip"
 	"opendustpan.org/opendustpan/internal/requestid"
 	"opendustpan.org/opendustpan/internal/sessionauth"
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/drift"
 	"opendustpan.org/opendustpan/pkg/idempotency"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/job"
@@ -183,7 +185,7 @@ func refusalReason(err error) (string, bool) {
 // idempotencyKey returns the key of the request, or "" for a request with no
 // key. A key that is not valid, or a second key, is an error.
 func idempotencyKey(r *http.Request) (string, error) {
-	values := r.Header.Values(idempotencyHeader)
+	values := apidesc.HeaderValues(r, idempotencyHeader)
 
 	switch len(values) {
 	case 0:
@@ -192,6 +194,17 @@ func idempotencyKey(r *http.Request) (string, error) {
 		k, err := idempotency.ParseKey(values[0])
 		if err != nil {
 			return "", fmt.Errorf("%w: send 1 to %d printable ASCII characters", err, idempotency.MaxKeyLength)
+		}
+
+		// The keys of drift checks share the key space of the jobs. The server
+		// makes them, so a caller key with the prefix is refused.
+		if len(k) >= len(drift.CheckKeyPrefix) &&
+			strings.EqualFold(string(k[:len(drift.CheckKeyPrefix)]), drift.CheckKeyPrefix) {
+			return "", fmt.Errorf(
+				"%w: the prefix %q is reserved for the server",
+				idempotency.ErrInvalidKey,
+				drift.CheckKeyPrefix,
+			)
 		}
 
 		return string(k), nil
@@ -257,10 +270,10 @@ func (h *Handler) startRequest(r *http.Request, t *target, b *startBody, key str
 	}
 
 	return job.StartRequest{
-		Unit: unit, Operation: op, Executor: "", Location: loc, Pool: b.Pool, Edits: nil, Delivery: "",
+		Unit: unit, Operation: op, Purpose: "", Executor: "", Location: loc, Pool: b.Pool, Edits: nil, Delivery: "",
 		Source: job.SourceAPI, IdempotencyKey: key, Reason: b.Reason, BreakGlass: nil,
 		Channel:  sessionauth.AuditChannel(r, channelHeader),
-		SourceIP: clientip.String(r), UserAgent: truncate(r.UserAgent(), audit.MaxUserAgentLen),
+		SourceIP: clientip.String(r), UserAgent: truncate(userAgent(r), audit.MaxUserAgentLen),
 		RequestID: requestid.FromContext(r.Context()),
 	}, nil
 }

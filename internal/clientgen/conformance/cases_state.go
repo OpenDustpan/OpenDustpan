@@ -3,6 +3,7 @@ package conformance
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"regexp"
 )
@@ -160,6 +161,10 @@ func staleIfMatchGives412(ctx context.Context, env Env) error {
 	return wantStatus(res, http.StatusPreconditionFailed)
 }
 
+// codeInvalidParams is the JSON-RPC code that an adapter uses for a call that
+// the client refuses because of its own arguments.
+const codeInvalidParams = -32602
+
 func missingIfMatchGives428(ctx context.Context, env Env) error {
 	if err := need(env, opRevise); err != nil {
 		return err
@@ -169,12 +174,37 @@ func missingIfMatchGives428(ctx context.Context, env Env) error {
 		return err
 	}
 
+	// Only exchanges of the call under test count.
+	env.Proxy.Reset()
+
 	res, err := env.Adapter.Call(ctx, reviseCall(env, ""))
+	if errors.Is(err, ErrRequestRefused) {
+		return refusedBeforeTheServer(env, err)
+	}
+
 	if err != nil {
 		return err
 	}
 
 	return wantStatus(res, http.StatusPreconditionRequired)
+}
+
+// refusedBeforeTheServer accepts the refusal of a client that refuses the
+// call itself, because the operation needs If-Match. The refusal must be an
+// invalid-params error, and the request must not have reached the server. A
+// client that sends the call and then fails does not pass.
+func refusedBeforeTheServer(env Env, err error) error {
+	var rpc *RPCError
+
+	if !errors.As(err, &rpc) || rpc.Code != codeInvalidParams {
+		return failf("want a refusal with code %d, got %v", codeInvalidParams, err)
+	}
+
+	if n := len(env.Proxy.Exchanges()); n != 0 {
+		return failf("the client refused the call after it sent %d request(s) to the server", n)
+	}
+
+	return nil
 }
 
 // wantStatus checks that a call ended with an error of the given status.

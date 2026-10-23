@@ -1,6 +1,6 @@
 # 3. SQL persistence: hand-written per dialect, sqlc for fixed queries
 
-Status: accepted · 2026-10-08
+Status: accepted · 2026-10-08 · two decisions superseded in part by ADR 274
 
 ## Context
 

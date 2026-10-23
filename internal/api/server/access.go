@@ -419,7 +419,7 @@ func resolveUnitQuery(_ http.ResponseWriter, r *http.Request) (identity.Object, 
 		return identity.Object{}, err
 	}
 
-	q := r.URL.Query()
+	q := queryOf(r)
 
 	tool, name := q.Get("tool"), q.Get("unit")
 	if tool == "" || name == "" {
@@ -569,7 +569,7 @@ func listGrants(
 		return failed(""), err
 	}
 
-	q := r.URL.Query()
+	q := queryOf(r)
 
 	page, err := svc.ListGrants(r.Context(), c.obj, access.PageRequest{
 		Cursor: req.Cursor, Holder: q.Get("holder"), Role: q.Get("role"), Limit: req.Limit,

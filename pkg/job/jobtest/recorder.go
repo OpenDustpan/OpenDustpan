@@ -11,13 +11,13 @@ import (
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/scopeaudit"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/durable"
 	"opendustpan.org/opendustpan/pkg/history"
 	"opendustpan.org/opendustpan/pkg/job"
 	"opendustpan.org/opendustpan/pkg/namespace"
-	"opendustpan.org/opendustpan/pkg/scopeaudit"
 	"opendustpan.org/opendustpan/pkg/secret"
 )
 
@@ -469,10 +469,10 @@ func testStepTakeover(t *testing.T, h RecorderHarness) {
 
 	f := setUp(t, h.Harness)
 	j := dispatched(t, h.Harness, f, plannedJob{unit: "unit-0", op: job.OperationPlan, steps: nil})
-	first := claimOf(t, h.Harness, runnerOne, shortLease, runnerKind(&j))
+	first := claimOf(t, h.Harness, runnerOne, longRenew, runnerKind(&j))
 
 	mustBegin(t, h, first, stepPlan)
-	expired(t, first.Claim)
+	lapse(t, h.Harness, first)
 
 	second, err := claimAgainOf(t, h.Harness, runnerTwo, runnerKind(&j))
 	if err != nil {
@@ -598,10 +598,10 @@ func testWritesLost(t *testing.T, h RecorderHarness) {
 
 	for i, w := range writes() {
 		j := dispatched(t, h.Harness, f, plannedJob{unit: unitName(i), op: job.OperationPlan, steps: nil})
-		first := claimOf(t, h.Harness, runnerOne, shortLease, runnerKind(&j))
+		first := claimOf(t, h.Harness, runnerOne, longRenew, runnerKind(&j))
 
 		mustBegin(t, h, first, stepPlan)
-		expired(t, first.Claim)
+		lapse(t, h.Harness, first)
 
 		if _, err := claimAgainOf(t, h.Harness, runnerTwo, runnerKind(&j)); err != nil {
 			t.Fatalf("%s: takeover = %v", w.name, err)

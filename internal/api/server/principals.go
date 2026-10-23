@@ -608,7 +608,7 @@ func decodeChange(w http.ResponseWriter, r *http.Request, dst any, bad error, em
 // pageRequest reads the query parameters limit, cursor and prefix of a
 // list route. A limit that is not a number answers 400.
 func pageRequest(r *http.Request) (principal.PageRequest, error) {
-	q := r.URL.Query()
+	q := queryOf(r)
 	req := principal.PageRequest{Prefix: q.Get("prefix"), Cursor: q.Get("cursor"), Limit: 0}
 
 	if raw := q.Get("limit"); raw != "" {
@@ -667,7 +667,7 @@ func listPrincipals(
 		return failed(""), err
 	}
 
-	page, err := svc.ListPrincipals(r.Context(), req, principal.Kind(r.URL.Query().Get("kind")))
+	page, err := svc.ListPrincipals(r.Context(), req, principal.Kind(queryOf(r).Get("kind")))
 	if err != nil {
 		return failed(""), err
 	}
