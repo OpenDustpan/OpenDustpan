@@ -112,6 +112,7 @@ internal/              code that is not part of the SDK
                        test helpers (breakglasstest, graphtest, historytest, storefault, blobfault) and notify/chat
   authgate/, errcode/, oauth/, sessionauth/, token/, ident/, ...
                        helpers shared across packages (sign-in failure windows, error codes, OAuth, tokens, identifiers)
+  textbody/            the read and the strict decode of a JSON request body, with the check of its text
   pulumijournal/       the decoder and the replayer of the Pulumi update journal
   cli/                 the command-line client
   clientgen/           the client generator: parser, writer, template sets (golang/, typescript/) and the conformance suite
