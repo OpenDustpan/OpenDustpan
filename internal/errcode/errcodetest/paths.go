@@ -433,19 +433,28 @@ func (s *scan) copiesCode(lit *ast.CompositeLit) bool {
 			return false
 		}
 
-		var key string
+		return isCodeMember(kv.Key) && s.answerCode(kv.Value)
+	})
+}
 
-		switch k := kv.Key.(type) {
-		case *ast.Ident:
-			key = k.Name
-		case *ast.BasicLit:
-			key, _ = strconv.Unquote(k.Value)
-		default:
+// isCodeMember reports whether key names the code member of a body: ErrorCode
+// or Code, in any case.
+func isCodeMember(key ast.Expr) bool {
+	var name string
+
+	switch k := key.(type) {
+	case *ast.Ident:
+		name = k.Name
+	case *ast.BasicLit:
+		var err error
+		if name, err = strconv.Unquote(k.Value); err != nil {
 			return false
 		}
+	default:
+		return false
+	}
 
-		return (key == "ErrorCode" || key == "Code" || key == "errorCode" || key == "code") && s.answerCode(kv.Value)
-	})
+	return strings.EqualFold(name, "code") || strings.EqualFold(name, "errorCode")
 }
 
 // answerCode reports whether e is a call of the Code method, with no
@@ -498,7 +507,15 @@ func (s *scan) answerNames(d *ast.FuncDecl) map[string]bool {
 	fields(d.Type.Results)
 	fields(d.Recv)
 
-	ast.Inspect(d.Body, func(n ast.Node) bool {
+	s.varAnswers(d.Body, out)
+
+	return out
+}
+
+// varAnswers adds to out the names that a var declaration in body gives the
+// type errcode.Answer.
+func (s *scan) varAnswers(body *ast.BlockStmt, out map[string]bool) {
+	ast.Inspect(body, func(n ast.Node) bool {
 		if vs, ok := n.(*ast.ValueSpec); ok && s.isAnswerType(vs.Type) {
 			for _, name := range vs.Names {
 				out[name.Name] = true
@@ -507,8 +524,6 @@ func (s *scan) answerNames(d *ast.FuncDecl) map[string]bool {
 
 		return true
 	})
-
-	return out
 }
 
 // isAnswerType reports whether t is errcode.Answer, with the local name of

@@ -46,7 +46,8 @@ func TestCheckAnswer(t *testing.T) {
 	t.Parallel()
 
 	locked := map[string]any{
-		"holder": "user-1", "since": "2026-10-23T09:30:00Z", "target": "acme", "targetKind": "namespace", "unit": "acme/web/prod",
+		"holder": "user-1", "since": "2026-10-23T09:30:00Z", "target": "acme", "targetKind": "namespace",
+		"unit": "acme/web/prod",
 	}
 
 	tests := []struct {

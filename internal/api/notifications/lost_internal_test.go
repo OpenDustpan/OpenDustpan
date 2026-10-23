@@ -2,7 +2,6 @@ package notifications
 
 import (
 	"fmt"
-	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -33,7 +32,7 @@ func TestWriteErrorLostKey(t *testing.T) {
 
 			var h Handler
 
-			h.logger = slog.New(slog.NewTextHandler(io.Discard, nil))
+			h.logger = slog.New(slog.DiscardHandler)
 
 			rec := httptest.NewRecorder()
 			h.writeError(t.Context(), rec, tc.err)
