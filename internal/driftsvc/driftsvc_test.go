@@ -1,4 +1,4 @@
-package drift_test
+package driftsvc_test
 
 import (
 	"context"
@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/driftsvc"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/drift"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -90,10 +91,10 @@ func requestFor(t *testing.T, name string) drift.CheckRequest {
 	}
 }
 
-func newChecker(t *testing.T, starter drift.JobStarter, now time.Time) *drift.Service {
+func newChecker(t *testing.T, starter driftsvc.JobStarter, now time.Time) *driftsvc.Service {
 	t.Helper()
 
-	svc, err := drift.NewService(starter, func() time.Time { return now })
+	svc, err := driftsvc.NewService(starter, func() time.Time { return now })
 	if err != nil {
 		t.Fatalf("NewService = %v", err)
 	}
@@ -104,7 +105,7 @@ func newChecker(t *testing.T, starter drift.JobStarter, now time.Time) *drift.Se
 func TestNewServiceRefusesNoStarter(t *testing.T) {
 	t.Parallel()
 
-	if _, err := drift.NewService(nil, nil); !errors.Is(err, drift.ErrInvalid) {
+	if _, err := driftsvc.NewService(nil, nil); !errors.Is(err, drift.ErrInvalid) {
 		t.Fatalf("NewService(nil) = %v, want ErrInvalid", err)
 	}
 }
