@@ -43,7 +43,7 @@ func queryStackPage(ctx context.Context, qtx *db.Queries, q stack.PageQuery) ([]
 			break
 		}
 
-		part, err := stackRange(ctx, qtx, r, q.Project, need)
+		part, err := stackRange(ctx, qtx, r, q, need)
 		if err != nil {
 			return nil, err
 		}
@@ -83,18 +83,27 @@ func queryStackPage(ctx context.Context, qtx *db.Queries, q stack.PageQuery) ([]
 	return out, nil
 }
 
-// stackRange reads at most need stacks of the range r. A project that is
-// not empty keeps the stacks of that project only.
+// stackRange reads at most need stacks of the range r that pass the project
+// and the tag filter of q. A project that is not empty keeps the stacks of
+// that project only.
 func stackRange(
-	ctx context.Context, qtx *db.Queries, r stack.NamespaceRange, project stack.ProjectName, need int,
+	ctx context.Context, qtx *db.Queries, r stack.NamespaceRange, q stack.PageQuery, need int,
 ) ([]codec.StackRow, error) {
 	var rows []db.ListStackPageInNamespaceRow
 
-	if project == "" {
+	var tag stack.TagFilter
+	if q.Tag != nil {
+		tag = *q.Tag
+	}
+
+	if q.Project == "" {
 		got, err := qtx.ListStackPageInNamespace(ctx, db.ListStackPageInNamespaceParams{
 			Namespace:    r.Namespace.String(),
 			AfterProject: r.AfterProject.String(),
 			AfterName:    r.AfterName.String(),
+			TagName:      tag.Name,
+			MatchValue:   tag.HasValue,
+			TagValue:     tag.Value,
 			PageLimit:    int32(need), //nolint:gosec // need is at most MaxPageLimit.
 		})
 		if err != nil {
@@ -104,10 +113,13 @@ func stackRange(
 		rows = got
 	} else {
 		got, err := qtx.ListStackPageInProject(ctx, db.ListStackPageInProjectParams{
-			Namespace: r.Namespace.String(),
-			Project:   project.String(),
-			AfterName: r.AfterName.String(),
-			PageLimit: int32(need), //nolint:gosec // need is at most MaxPageLimit.
+			Namespace:  r.Namespace.String(),
+			Project:    q.Project.String(),
+			AfterName:  r.AfterName.String(),
+			TagName:    tag.Name,
+			MatchValue: tag.HasValue,
+			TagValue:   tag.Value,
+			PageLimit:  int32(need), //nolint:gosec // need is at most MaxPageLimit.
 		})
 		if err != nil {
 			return nil, fmt.Errorf("select stack page: %w", err)
