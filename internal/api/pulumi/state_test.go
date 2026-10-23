@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/api/pulumi"
+	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/stack"
 )
@@ -1164,17 +1165,12 @@ func TestStateAtResources(t *testing.T) {
 // TestStateAtRefusals proves the refusals of the resource list at a time: a
 // time before the first update names the time of that update, a stack with no
 // checkpoint and an unknown stack answer 404, and a bad time answers a clear
-// error. Each answer has the error shape {"code": <status>, "message": "..."}.
+// error. Each answer has the error shape {"code": <status>, "message": "..."},
+// with the errorCode of the refusal when it has one.
 func TestStateAtRefusals(t *testing.T) {
 	t.Parallel()
 
-	tests := []struct {
-		name    string
-		target  string
-		seed    bool
-		want    int
-		message *regexp.Regexp
-	}{
+	tests := []stateAtRefusal{
 		{
 			name:   "before the first update",
 			target: "/api/stacks/acme/web/prod/state-at/1/resources",
@@ -1183,13 +1179,15 @@ func TestStateAtRefusals(t *testing.T) {
 			message: regexp.MustCompile(
 				`^stack has no state at that time: the first state of acme/web/prod is at \S+ \(\d{13} ms\)$`,
 			),
+			errorCode: errcode.StackNoStateAtTime,
 		},
 		{
-			name:    "a stack with no checkpoint",
-			target:  "/api/stacks/acme/web/prod/state-at/1/resources",
-			seed:    false,
-			want:    http.StatusNotFound,
-			message: regexp.MustCompile(`^stack has no state at that time: acme/web/prod has no checkpoint yet$`),
+			name:      "a stack with no checkpoint",
+			target:    "/api/stacks/acme/web/prod/state-at/1/resources",
+			seed:      false,
+			want:      http.StatusNotFound,
+			message:   regexp.MustCompile(`^stack has no state at that time: acme/web/prod has no checkpoint yet$`),
+			errorCode: errcode.StackNoState,
 		},
 		{
 			name:   "an unknown stack",
@@ -1199,13 +1197,15 @@ func TestStateAtRefusals(t *testing.T) {
 			message: regexp.MustCompile(
 				`^state of acme/web/absent at \S+: get stack acme/web/absent: stack not found$`,
 			),
+			errorCode: errcode.StackNotFound,
 		},
 		{
-			name:    "a time that is not Unix milliseconds",
-			target:  "/api/stacks/acme/web/prod/state-at/yesterday/resources",
-			seed:    true,
-			want:    http.StatusBadRequest,
-			message: regexp.MustCompile(`is not Unix milliseconds`),
+			name:      "a time that is not Unix milliseconds",
+			target:    "/api/stacks/acme/web/prod/state-at/yesterday/resources",
+			seed:      true,
+			want:      http.StatusBadRequest,
+			message:   regexp.MustCompile(`is not Unix milliseconds`),
+			errorCode: "",
 		},
 	}
 
@@ -1220,24 +1220,47 @@ func TestStateAtRefusals(t *testing.T) {
 
 			status, body := f.doUpdate(t, accessRequest(http.MethodGet, tc.target, ""))
 
-			var shape map[string]any
-			if err := json.Unmarshal([]byte(body), &shape); err != nil {
-				t.Fatalf("decode error %q: %v", body, err)
-			}
-
-			message, messageOK := shape["message"].(string)
-			code, codeOK := shape["code"].(float64)
-
-			if !messageOK || !codeOK || status != tc.want || int(code) != tc.want || len(shape) != 2 ||
-				!tc.message.MatchString(message) {
-				t.Errorf(
-					"answer = %d %s, want {\"code\":%d,\"message\":...} matching %q",
-					status,
-					body,
-					tc.want,
-					tc.message,
-				)
-			}
+			checkStateAtRefusal(t, tc, status, body)
 		})
+	}
+}
+
+// stateAtRefusal is one refusal of the resource list at a time.
+type stateAtRefusal struct {
+	name    string
+	target  string
+	seed    bool
+	want    int
+	message *regexp.Regexp
+	// errorCode is the code of the catalog that the answer holds, or "" for
+	// an answer without a code.
+	errorCode string
+}
+
+// checkStateAtRefusal fails the test unless the answer status and body of tc
+// have the error shape {"code": <status>, "message": "..."} with the status
+// tc.want, a message that matches tc.message, and the errorCode tc.errorCode.
+// An answer of a code can hold errorArgs too. An answer without a code has no
+// errorCode.
+func checkStateAtRefusal(t *testing.T, tc stateAtRefusal, status int, body string) {
+	t.Helper()
+
+	var shape map[string]any
+	if err := json.Unmarshal([]byte(body), &shape); err != nil {
+		t.Fatalf("decode error %q: %v", body, err)
+	}
+
+	gotCode := shape["errorCode"]
+	delete(shape, "errorCode")
+	delete(shape, "errorArgs")
+
+	text, textOK := shape["message"].(string)
+	number, numberOK := shape["code"].(float64)
+
+	if !textOK || !numberOK || status != tc.want || int(number) != tc.want || len(shape) != 2 ||
+		!tc.message.MatchString(text) || (tc.errorCode == "" && gotCode != nil) ||
+		(tc.errorCode != "" && gotCode != tc.errorCode) {
+		t.Errorf("answer = %d %s, want {\"code\":%d,\"message\":...} matching %q, errorCode %q",
+			status, body, tc.want, tc.message, tc.errorCode)
 	}
 }
