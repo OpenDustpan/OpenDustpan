@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/internal/token"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/stack"
@@ -969,5 +970,5 @@ func parseEvent(raw json.RawMessage) (stack.Event, error) {
 
 // writeInvalidBody answers a request body that is not valid JSON.
 func (h *Handler) writeInvalidBody(ctx context.Context, w http.ResponseWriter) {
-	h.writeJSON(ctx, w, http.StatusBadRequest, errorResponse{Code: http.StatusBadRequest, Message: invalidBodyMessage})
+	h.writeFailure(ctx, w, coded(http.StatusBadRequest, invalidBodyMessage, errcode.RequestBodyInvalid))
 }
