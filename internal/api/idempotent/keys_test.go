@@ -58,7 +58,7 @@ func replayTwice(t *testing.T, secretID func(any) string) (replayOutcome, int) {
 			t.Error("the replay holds the secret")
 		}
 
-		return replayOutcome{code: refusal.Code, objectID: refusal.ObjectID, status: refusal.Status}, runs
+		return replayOutcome{code: refusal.Answer.Code(), objectID: objectIDOf(refusal), status: refusal.Status}, runs
 	}
 
 	if err != nil {
@@ -113,7 +113,7 @@ func refusalOf(t *testing.T, err error) (string, int) {
 		t.Fatalf("err = %v, want a refusal", err)
 	}
 
-	return refusal.Code, refusal.Status
+	return refusal.Answer.Code(), refusal.Status
 }
 
 func TestRequiredKey(t *testing.T) {
@@ -200,13 +200,13 @@ func TestIfMatchIsPartOfTheRequest(t *testing.T) {
 	}
 
 	_, err = callWith(t, mw, c, ifMatch(`"2"`))
-	if refusal, ok := errors.AsType[*idempotent.Error](err); !ok || refusal.Code != idempotent.CodeReused ||
+	if refusal, ok := errors.AsType[*idempotent.Error](err); !ok || refusal.Answer.Code() != idempotent.CodeReused ||
 		refusal.Status != http.StatusUnprocessableEntity {
 		t.Errorf("another If-Match: err = %v, want 422 %s", err, idempotent.CodeReused)
 	}
 
 	_, err = callWith(t, mw, c, nil)
-	if refusal, ok := errors.AsType[*idempotent.Error](err); !ok || refusal.Code != idempotent.CodeReused {
+	if refusal, ok := errors.AsType[*idempotent.Error](err); !ok || refusal.Answer.Code() != idempotent.CodeReused {
 		t.Errorf("no If-Match: err = %v, want %s", err, idempotent.CodeReused)
 	}
 }
@@ -227,7 +227,7 @@ func TestTheFingerprintFramesQueryAndBody(t *testing.T) {
 	refused := func(err error) bool {
 		refusal, ok := errors.AsType[*idempotent.Error](err)
 
-		return ok && refusal.Code == idempotent.CodeReused
+		return ok && refusal.Answer.Code() == idempotent.CodeReused
 	}
 
 	// The old join put a zero byte between body and query: body "a\x00q" with
@@ -276,7 +276,7 @@ func TestEveryIfMatchValueIsPartOfTheRequest(t *testing.T) {
 	}
 
 	_, err = callWith(t, mw, c, values(`"1"`, `"3"`))
-	if refusal, ok := errors.AsType[*idempotent.Error](err); !ok || refusal.Code != idempotent.CodeReused {
+	if refusal, ok := errors.AsType[*idempotent.Error](err); !ok || refusal.Answer.Code() != idempotent.CodeReused {
 		t.Errorf("another second value: err = %v, want %s", err, idempotent.CodeReused)
 	}
 }
@@ -353,4 +353,14 @@ func TestAnAnswerOverTheLimitIsNotStored(t *testing.T) {
 	if !strings.Contains(out.String(), "over the size limit") {
 		t.Errorf("log = %q, want the size limit", out.String())
 	}
+}
+
+// objectIDOf returns the objectID argument of the answer of refusal.
+func objectIDOf(refusal *idempotent.Error) string {
+	id, ok := refusal.Answer.Args()["objectID"].(string)
+	if !ok {
+		return ""
+	}
+
+	return id
 }

@@ -91,3 +91,7 @@ func Forbidden(err error) string {
 		return ""
 	}
 }
+
+// Internal returns the answer of ServerInternal. It cannot fail, so a caller
+// that has no better answer after New failed uses it.
+func Internal() Answer { return Answer{code: ServerInternal, args: nil} }

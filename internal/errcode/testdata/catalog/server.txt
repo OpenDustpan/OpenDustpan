@@ -1,1 +1,4 @@
 server.internal
+server.component-not-found
+server.method-not-allowed
+server.route-not-found

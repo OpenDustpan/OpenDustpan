@@ -154,15 +154,16 @@ func (h *Handler) writeOutputsError(
 		h.writeError(ctx, w, coreinventory.ErrUnitNotFound)
 	case errors.Is(err, outputshare.ErrClientEncrypted):
 		h.writeJSON(ctx, w, http.StatusConflict, errorResponse{
-			Code: http.StatusConflict, Message: clientEncryptedMessage, ErrorCode: "",
+			Code: http.StatusConflict, Message: clientEncryptedMessage, ErrorCode: "", ErrorArgs: nil,
 		})
 	case errors.Is(err, outputsharesvc.ErrNoState):
 		h.writeJSON(ctx, w, http.StatusNotFound, errorResponse{
-			Code: http.StatusNotFound, Message: fmt.Sprintf("the unit %s has no state yet", obj), ErrorCode: "",
+			Code: http.StatusNotFound, Message: fmt.Sprintf("the unit %s has no state yet", obj),
+			ErrorCode: "", ErrorArgs: nil,
 		})
 	case errors.Is(err, outputsharesvc.ErrStateMoved):
 		h.writeJSON(ctx, w, http.StatusConflict, errorResponse{
-			Code: http.StatusConflict, Message: errOutputsStateMoved, ErrorCode: "",
+			Code: http.StatusConflict, Message: errOutputsStateMoved, ErrorCode: "", ErrorArgs: nil,
 		})
 	default:
 		h.writeError(ctx, w, err)
