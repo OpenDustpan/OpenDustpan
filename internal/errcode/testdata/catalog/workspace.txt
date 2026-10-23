@@ -1,0 +1,3 @@
+workspace.already-exists
+workspace.locked
+workspace.not-found

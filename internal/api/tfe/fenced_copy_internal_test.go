@@ -47,7 +47,7 @@ func TestWriteErrorFencedCopy(t *testing.T) {
 		{
 			name: "not a fence", err: workspace.ErrAlreadyExists,
 			body: fmt.Sprintf(
-				"{\"errors\":[{\"status\":\"409\",\"title\":%q,\"detail\":%q}]}\n",
+				"{\"errors\":[{\"status\":\"409\",\"code\":\"workspace.already-exists\",\"title\":%q,\"detail\":%q}]}\n",
 				titleConflict,
 				workspace.ErrAlreadyExists.Error(),
 			),
