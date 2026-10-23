@@ -18,29 +18,39 @@ const (
 // secrets provider rewritten to name ref: the owner, the project and the stack.
 // The checkpoint keeps the name that the stack had when the CLI saved it. After
 // a rename or a restore under a new name, the CLI would read that name and ask
-// for a stack that does not exist. Only the entry secrets_providers of the
-// deployment changes. Every other byte stays, and no secret is read.
+// for a stack that does not exist. Only the top-level entries
+// secrets_providers of the deployment change: each copy of a repeated entry
+// is rebound. Every other byte stays, and no secret is read.
 //
 // It returns deployment unchanged when the entry is missing, names another
 // provider or has no object state, when the state already names ref, and when
 // deployment does not decode: the caller serves what it holds then.
 func RebindSecretsProvider(deployment []byte, ref Ref) []byte {
-	span, ok := providersSpan(deployment)
-	if !ok {
+	spans, found := providersSpans(deployment)
+	if !found {
 		return deployment
 	}
 
-	rebound, changed := reboundProviders(deployment[span.start:span.end], ref)
-	if !changed {
+	var out []byte
+
+	next := 0
+
+	for _, span := range spans {
+		rebound, changed := reboundProviders(deployment[span.start:span.end], ref)
+		if !changed {
+			continue
+		}
+
+		out = append(out, deployment[next:span.start]...)
+		out = append(out, rebound...)
+		next = span.end
+	}
+
+	if out == nil {
 		return deployment
 	}
 
-	out := make([]byte, 0, len(deployment)-(span.end-span.start)+len(rebound))
-	out = append(out, deployment[:span.start]...)
-	out = append(out, rebound...)
-	out = append(out, deployment[span.end:]...)
-
-	return out
+	return append(out, deployment[next:]...)
 }
 
 // byteSpan is a range of bytes: start is the first byte, end the byte after
@@ -49,26 +59,34 @@ type byteSpan struct {
 	start, end int
 }
 
-// providersSpan finds the value of the member secrets_providers in the
-// top-level object of deployment and returns its byte range. ok is false when
-// deployment is not an object, does not decode, or has no such member.
-func providersSpan(deployment []byte) (byteSpan, bool) {
-	dec := jsontext.NewDecoder(bytes.NewReader(deployment))
+// providersSpans finds the value of each top-level member secrets_providers
+// of deployment, in order, and returns their byte ranges. The save of a
+// checkpoint accepts a repeated member, so there can be more than one. ok is
+// false when deployment is not an object, does not decode, or has no such
+// member.
+func providersSpans(deployment []byte) ([]byteSpan, bool) {
+	dec := jsontext.NewDecoder(bytes.NewReader(deployment), jsontext.AllowDuplicateNames(true))
 
 	open, err := openStreamedObject(dec)
 	if err != nil || !open {
-		return byteSpan{start: 0, end: 0}, false
+		return nil, false
 	}
+
+	var spans []byteSpan
 
 	for {
 		name, end, err := streamedMember(dec)
-		if err != nil || end {
-			return byteSpan{start: 0, end: 0}, false
+		if err != nil {
+			return nil, false
+		}
+
+		if end {
+			return spans, len(spans) > 0
 		}
 
 		if name != secretsProvidersMember {
 			if skipErr := skipStreamed(dec); skipErr != nil {
-				return byteSpan{start: 0, end: 0}, false
+				return nil, false
 			}
 
 			continue
@@ -76,12 +94,11 @@ func providersSpan(deployment []byte) (byteSpan, bool) {
 
 		raw, err := dec.ReadValue()
 		if err != nil {
-			return byteSpan{start: 0, end: 0}, false
+			return nil, false
 		}
 
 		stop := int(dec.InputOffset())
-
-		return byteSpan{start: stop - len(raw), end: stop}, true
+		spans = append(spans, byteSpan{start: stop - len(raw), end: stop})
 	}
 }
 
