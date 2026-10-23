@@ -603,7 +603,7 @@ func classifyBackup(err error) (int, string, bool) {
 	case errors.Is(err, backup.ErrNotFound):
 		return http.StatusNotFound, "backup not found", true
 	case errors.Is(err, backup.ErrInvalidID):
-		return http.StatusBadRequest, "invalid backup ID", true
+		return http.StatusBadRequest, "invalid backup ID: use an ID that opendustpan backup printed", true
 	case errors.Is(err, errNoBackupTarget):
 		// No target is a setup problem of the server, not a bad request.
 		return http.StatusServiceUnavailable, errNoBackupTarget.Error() + ": set --backup-target", true

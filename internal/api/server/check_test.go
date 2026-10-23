@@ -146,9 +146,11 @@ func TestBackupCheckInvalidID(t *testing.T) {
 			t.Fatalf("GET backup %q check answers %d, want %d (%s)", id, status, http.StatusBadRequest, body)
 		}
 
+		const want = "invalid backup ID: use an ID that opendustpan backup printed"
+
 		doc := decodeError(t, body)
-		if doc.Code != http.StatusBadRequest || doc.Message != "invalid backup ID" {
-			t.Fatalf("backup check error = %+v, want code 400 with invalid backup ID", doc)
+		if doc.Code != http.StatusBadRequest || doc.Message != want {
+			t.Fatalf("backup check error = %+v, want code 400 with %q", doc, want)
 		}
 	}
 }
