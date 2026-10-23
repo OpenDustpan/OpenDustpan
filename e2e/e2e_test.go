@@ -14082,7 +14082,7 @@ func wipeSQLiteDestination(ctx context.Context, t *testing.T, env *e2e.Env) {
 }
 
 // wipePostgresDestination drops the PostgreSQL schema the environment serves
-// and recreates it empty, and removes the live blobs. The restore
+// with its control schema, recreates the live schema empty, and removes the live blobs. The restore
 // migrates the empty schema and finds no rows and no blobs: a copied blob
 // that the destination already holds is an error.
 func wipePostgresDestination(ctx context.Context, t *testing.T, env *e2e.Env) {
@@ -14101,13 +14101,19 @@ func wipePostgresDestination(ctx context.Context, t *testing.T, env *e2e.Env) {
 		}
 	}()
 
-	name := pgx.Identifier{schema}.Sanitize()
+	// The store keeps its control tables in a second schema, <name>_control,
+	// and records its migrations in the live schema. Both schemas must go,
+	// or the migration of the empty live schema finds the control tables of
+	// the old installation and fails.
+	for _, schemaName := range []string{schema, schema + "_control"} {
+		name := pgx.Identifier{schemaName}.Sanitize()
 
-	if _, err := conn.Exec(ctx, "DROP SCHEMA "+name+" CASCADE"); err != nil {
-		t.Fatalf("drop schema: %v", err)
+		if _, err := conn.Exec(ctx, "DROP SCHEMA IF EXISTS "+name+" CASCADE"); err != nil {
+			t.Fatalf("drop schema %s: %v", schemaName, err)
+		}
 	}
 
-	if _, err := conn.Exec(ctx, "CREATE SCHEMA "+name); err != nil {
+	if _, err := conn.Exec(ctx, "CREATE SCHEMA "+pgx.Identifier{schema}.Sanitize()); err != nil {
 		t.Fatalf("create schema: %v", err)
 	}
 
