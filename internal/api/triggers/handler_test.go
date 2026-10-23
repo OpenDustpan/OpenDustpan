@@ -302,9 +302,12 @@ func TestCreateRefusals(t *testing.T) {
 			`{"kind":"follows","source":{"id":"` + otherID + `"}}`,
 			nil,
 			http.StatusForbidden,
-			"",
+			"access.denied",
 		},
-		{"a source that does not exist", `{"kind":"follows","source":{"id":"ws-none"}}`, nil, http.StatusForbidden, ""},
+		{
+			"a source that does not exist", `{"kind":"follows","source":{"id":"ws-none"}}`, nil, http.StatusForbidden,
+			"access.denied",
+		},
 		{
 			"a last saver that a start would refuse", scheduleDoc,
 			func(r *rig) { r.savers.err = trigger.ErrSaverDenied }, http.StatusForbidden, "trigger.saver-denied",
@@ -578,13 +581,16 @@ func fireCases() []fireCase {
 			"job.unsupported",
 			"",
 		},
-		{"a denied action", ``, func(r *rig) { r.disp.err = identity.ErrDenied }, http.StatusForbidden, "", ""},
+		{
+			"a denied action", ``, func(r *rig) { r.disp.err = identity.ErrDenied }, http.StatusForbidden,
+			"access.denied", "",
+		},
 		{
 			"a failure of the server",
 			``,
 			func(r *rig) { r.disp.err = errDatabaseDown },
 			http.StatusInternalServerError,
-			"",
+			"server.internal",
 			"",
 		},
 	}

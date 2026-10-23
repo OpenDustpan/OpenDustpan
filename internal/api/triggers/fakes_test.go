@@ -32,6 +32,8 @@ var packageSources embed.FS
 
 const (
 	testToken = "trigger-test-token"
+	// limitedToken is a token that the authenticator refuses with a rate limit.
+	limitedToken = "trigger-limited-token"
 	// ada is the subject of the caller.
 	ada = "user:ada"
 	// netID and appID are the unit IDs of the units net and app in acme.
@@ -324,6 +326,10 @@ func (fences) Fence(_ context.Context, ns namespace.Name) (namespace.Fence, erro
 type tokenAuthenticator struct{}
 
 func (tokenAuthenticator) AuthenticateToken(_ context.Context, token string) (identity.Principal, error) {
+	if token == limitedToken {
+		return identity.Principal{}, identity.ErrRateLimited
+	}
+
 	if token != testToken {
 		return identity.Principal{}, identity.ErrUnauthenticated
 	}

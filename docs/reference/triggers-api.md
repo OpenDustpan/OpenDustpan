@@ -76,8 +76,8 @@ of the job.
 
 ## Errors
 
-The error body has `message`, `code` (the status) and, for a refusal that a
-program can tell, `errorCode`. A refusal of a save that closes a loop of units
+The error body has `message`, `code` (the status) and `errorCode`, the stable
+code of the refusal. A code that has arguments also has `errorArgs`. A refusal of a save that closes a loop of units
 also has `units`: the units of the loop in order, each with `id`, `tool` and
 `name`. The first and the last unit are the same unit.
 
@@ -88,8 +88,15 @@ also has `units`: the units of the loop in order, each with `id`, `tool` and
 | 400 | `request.idempotency-key-unsupported` | A route other than the fire route got an `Idempotency-Key` header |
 | 400 | `request.idempotency-key-invalid` | The `Idempotency-Key` header of a fire is not one valid key |
 | 403 | `trigger.saver-denied` | The person who saves or fires has no principal record that holds the actions of a start, or the last saver lost access. A new principal that has the subject of the last saver does not count as the last saver |
-| 403 | | The caller lacks an action, or the stack or workspace to change does not exist |
-| 404 | | The object does not exist or the caller cannot read it |
+| 401 | `auth.unauthenticated` | The request has no valid credential |
+| 429 | `auth.rate-limited` | Too many sign-ins from the address of the request failed |
+| 403 | `access.denied` | The caller lacks an action, or the stack or workspace to change does not exist |
+| 403 | `access.ip-not-allowed`, `session.csrf`, `session.other-site`, `gate.limited`, `gate.rule-failed` | Another cause of a 403, for example an address outside the IP allowlist of the namespace |
+| 404 | `trigger.not-found` | The namespace, the unit or the trigger does not exist, or the caller cannot read it. One code answers all of these |
+| 421 | `namespace.not-home` | The namespace is not homed in the region of the server |
+| 503 | `maintenance.in-maintenance` | The installation is in maintenance mode |
+| 409 | `lock.locked` | A manual lock refuses the request. `errorArgs` names the `holder`, the time `since`, the `target`, its `targetKind` and the `unit`. It never holds the reason of the lock |
+| 500 | `server.internal` | The server failed with an error that it does not classify |
 | 409 | `trigger.cycle` | The `follows` trigger closes a loop of units |
 | 409 | `trigger.disabled` | A fire of a trigger that is off |
 | 409 | `trigger.fire-conflict` | A second fire with the same key, or without a key in the same minute, with another reason or location |
