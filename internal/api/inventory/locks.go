@@ -8,6 +8,7 @@ import (
 	"net/http"
 
 	"opendustpan.org/opendustpan/internal/api/refusal"
+	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/collection"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -325,21 +326,52 @@ func readLockReason(w http.ResponseWriter, r *http.Request) (string, error) {
 	return *in.Reason, nil
 }
 
-// classifyLock maps the errors of the lock routes to an HTTP status and a
-// message safe to show callers. ok is false for any other error.
+// classifyLock maps the errors of the lock routes to an HTTP status, a
+// message safe to show callers and a code of the catalog. ok is false for any
+// other error.
 func classifyLock(err error) (failure, bool) {
 	switch {
-	case errors.Is(err, manuallock.ErrTargetNotFound), errors.Is(err, manuallock.ErrNotLocked):
-		return uncoded(http.StatusNotFound, err.Error()), true
-	case errors.Is(err, manuallock.ErrAlreadyLocked), errors.Is(err, manuallock.ErrNotHolder),
-		errors.Is(err, manuallock.ErrLockChanged), errors.Is(err, manuallock.ErrLocked):
-		return uncoded(http.StatusConflict, err.Error()), true
-	case errors.Is(err, manuallock.ErrReasonRequired), errors.Is(err, manuallock.ErrInvalidTarget),
-		errors.Is(err, audit.ErrInvalidReason), errors.Is(err, errLockBody):
-		return uncoded(http.StatusBadRequest, err.Error()), true
-	default:
-		var none failure
+	case errors.Is(err, manuallock.ErrTargetNotFound):
+		return fail(http.StatusNotFound, err.Error(), errcode.LockTargetNotFound), true
+	case errors.Is(err, manuallock.ErrNotLocked):
+		return fail(http.StatusNotFound, err.Error(), errcode.LockNotLocked), true
+	case errors.Is(err, manuallock.ErrAlreadyLocked):
+		return fail(http.StatusConflict, err.Error(), errcode.LockAlreadyLocked), true
+	case errors.Is(err, manuallock.ErrNotHolder):
+		return fail(http.StatusConflict, err.Error(), errcode.LockNotHolder), true
+	case errors.Is(err, manuallock.ErrLockChanged):
+		return fail(http.StatusConflict, err.Error(), errcode.LockChanged), true
+	case errors.Is(err, manuallock.ErrLocked):
+		return classifyLocked(err), true
+	case errors.Is(err, manuallock.ErrReasonRequired):
+		return fail(http.StatusBadRequest, err.Error(), errcode.LockReasonRequired), true
+	case errors.Is(err, manuallock.ErrInvalidTarget):
+		return fail(http.StatusBadRequest, err.Error(), errcode.LockInvalidTarget), true
+	case errors.Is(err, audit.ErrInvalidReason):
+		return fail(http.StatusBadRequest, err.Error(), errcode.AuditReasonInvalid), true
+	case errors.Is(err, errLockBody):
+		return fail(http.StatusBadRequest, err.Error(), errcode.RequestBodyInvalid), true
+	}
 
-		return none, false
+	var none failure
+
+	return none, false
+}
+
+// classifyLocked maps a refusal of a manual lock to 409 with the code
+// lock.locked. refusal.Locked reads the holder, the time and the locked object
+// from the *manuallock.LockedError that err carries, and never the reason of
+// the lock. A refusal without that error has no values for the arguments of
+// the code, so it answers 500: every refusal of a manual lock carries one.
+func classifyLocked(err error) failure {
+	locked, ok := errors.AsType[*manuallock.LockedError](err)
+	if !ok || locked == nil {
+		return fail(http.StatusInternalServerError, "internal error", errcode.ServerInternal)
+	}
+
+	a, buildErr := refusal.Locked(locked)
+
+	return failure{
+		status: http.StatusConflict, message: err.Error(), code: errcode.LockLocked, answer: a, err: buildErr,
 	}
 }

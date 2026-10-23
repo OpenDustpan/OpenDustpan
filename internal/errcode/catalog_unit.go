@@ -5,6 +5,14 @@ package errcode
 const (
 	// UnitClientEncrypted means that the client encrypted the state of the unit, so the server cannot read its outputs.
 	UnitClientEncrypted = "unit.client-encrypted"
+	// UnitDeletedNotFound means that the namespace has no deleted unit with the name.
+	UnitDeletedNotFound = "unit.deleted-not-found"
+	// UnitHistoryUnavailable means that the inventory store of the server keeps no change log.
+	UnitHistoryUnavailable = "unit.history-unavailable"
+	// UnitInvalidName means that the name of the unit does not follow the name rules of its tool.
+	UnitInvalidName = "unit.invalid-name"
+	// UnitNameTaken means that a live unit holds the name.
+	UnitNameTaken = "unit.name-taken"
 	// UnitNoCollection means that the unit is in no collection.
 	UnitNoCollection = "unit.no-collection"
 	// UnitNoState means that the unit has no state yet.
@@ -23,6 +31,18 @@ func unitSpecs() []Spec {
 			Meaning: "the client encrypted the state of the unit, so the server cannot read its outputs",
 			Args:    nil,
 		},
+		{Code: UnitDeletedNotFound, Meaning: "the namespace has no deleted unit with the name", Args: nil},
+		{
+			Code:    UnitHistoryUnavailable,
+			Meaning: "the inventory store of the server keeps no change log",
+			Args:    nil,
+		},
+		{
+			Code:    UnitInvalidName,
+			Meaning: "the name of the unit does not follow the name rules of its tool",
+			Args:    nil,
+		},
+		{Code: UnitNameTaken, Meaning: "a live unit holds the name", Args: nil},
 		{Code: UnitNoCollection, Meaning: "the unit is in no collection", Args: nil},
 		{
 			Code:    UnitNoState,

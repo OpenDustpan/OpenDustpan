@@ -1,30 +1,10 @@
 # The error paths of internal/api/inventory that answer without a code of the
 # catalog. This list only shrinks: give a path a code, remove its line and
 # lower the limit. A new error path never goes on this list.
-limit 31
+limit 11
 Handler.guardStateWrite: errorResponse{}
 Handler.guardStateWrite: gate.ErrRuleFailed
 Handler.guardStateWrite: gate.ErrUnavailable
-classifyChange: coreinventory.ErrInvalidName
-classifyChange: coreinventory.ErrNameTaken
-classifyChange: coreinventory.ErrNotFound
-classifyChange: errInvalidBody
-classifyChange: errInvalidQuery
-classifyChange: errNoHistory
-classifyChange: maintenance.ErrInMaintenance
-classifyChange: namespace.ErrFenced
-classifyChange: namespace.ErrNotHome
-classifyLock: audit.ErrInvalidReason
-classifyLock: default
-classifyLock: errLockBody
-classifyLock: manuallock.ErrAlreadyLocked
-classifyLock: manuallock.ErrInvalidTarget
-classifyLock: manuallock.ErrLockChanged
-classifyLock: manuallock.ErrLocked
-classifyLock: manuallock.ErrNotHolder
-classifyLock: manuallock.ErrNotLocked
-classifyLock: manuallock.ErrReasonRequired
-classifyLock: manuallock.ErrTargetNotFound
 classifyView: default
 classifyView: errViewBody
 classifyView: errViewIdempotencyKey
