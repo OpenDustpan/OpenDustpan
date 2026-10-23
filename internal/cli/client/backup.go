@@ -175,7 +175,7 @@ func BackupCommand(ctx context.Context, args []string, stdout, stderr io.Writer)
 		return err
 	}
 
-	if doc.State != "succeeded" {
+	if doc.State != stateSucceeded {
 		return fmt.Errorf(
 			"%w %s: %s: "+rerunHelp,
 			ErrBackupFailed,

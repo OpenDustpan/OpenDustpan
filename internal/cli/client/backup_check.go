@@ -85,7 +85,7 @@ func BackupCheck(ctx context.Context, args []string, stdout, stderr io.Writer) e
 	}
 
 	if _, err := backup.ParseID(id); err != nil {
-		return fmt.Errorf("%w: set --backup to a backup ID like bkp-aaa: %w", ErrBackupID, err)
+		return fmt.Errorf("%w: set --backup to an ID that opendustpan backup printed, like bkp-aaa", err)
 	}
 
 	server := strings.TrimSpace(f.server)
