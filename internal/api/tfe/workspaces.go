@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/pkg/gate"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -292,7 +293,10 @@ func (h *Handler) createWorkspace(
 	ws, err := h.workspaces.Create(ctx, ref)
 	if err != nil {
 		if errors.Is(err, workspace.ErrAlreadyExists) {
-			h.writeUnprocessable(ctx, w, duplicateWorkspaceDetail, duplicateWorkspaceTitle)
+			h.writeClassError(ctx, w, errorClass{
+				status: http.StatusUnprocessableEntity, title: duplicateWorkspaceTitle,
+				detail: duplicateWorkspaceDetail, code: errcode.WorkspaceAlreadyExists, args: nil,
+			})
 
 			return
 		}
