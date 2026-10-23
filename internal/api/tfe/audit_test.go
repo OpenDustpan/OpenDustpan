@@ -134,6 +134,11 @@ func newAuditFixtureFor(t *testing.T, err error, authn identity.Authenticator) a
 		Logger:        logger,
 		Namespaces:    newTestNamespaces(t),
 		Workspaces:    sensitiveOutputsWorkspaces{stubWorkspaces: stubWorkspaces{}},
+		OutputChecker: newTestOutputChecker(
+			t,
+			allowAll(),
+			sensitiveOutputsWorkspaces{stubWorkspaces: stubWorkspaces{}},
+		),
 		BaseURL:       baseurl.Resolver{},
 		Audit:         entries,
 		Gate:          nil,
@@ -142,7 +147,9 @@ func newAuditFixtureFor(t *testing.T, err error, authn identity.Authenticator) a
 			failures++
 		},
 		DenialLimiter: nil,
-		Sessions:      nil, SessionPolicy: nil, StateGuard: nil,
+		Sessions:      nil,
+		SessionPolicy: nil,
+		StateGuard:    nil,
 	})
 	if handlerErr != nil {
 		t.Fatalf("handler: %v", handlerErr)

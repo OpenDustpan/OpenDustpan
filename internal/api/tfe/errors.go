@@ -14,6 +14,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/outputshare"
 	"opendustpan.org/opendustpan/pkg/workspace"
 )
 
@@ -200,6 +201,13 @@ func classifyTooLarge(err error) (errorClass, bool) {
 // not answer to 503. ok is false for any other error.
 func classifyNamespace(err error) (errorClass, bool) {
 	switch {
+	case errors.Is(err, outputshare.ErrUnknownProducer):
+		// The body is the body of a workspace that does not exist. The error
+		// text names the check and the producer, so it never reaches the
+		// caller.
+		return errorClass{
+			status: http.StatusNotFound, title: notFoundTitle, detail: notFoundTitle,
+		}, true
 	case errors.Is(err, namespace.ErrFenced):
 		// The copy of the sentinel only: a wrap adds the name of the
 		// operation, which the log holds.
@@ -234,6 +242,10 @@ func classifyNamespace(err error) (errorClass, bool) {
 // state, a concurrent change. ok is false for any other error.
 func classifyConflict(err error) (errorClass, bool) {
 	switch {
+	case errors.Is(err, outputshare.ErrClientEncrypted):
+		// The detail names the reason and no object: the error of the
+		// checker holds the check and the unit for the audit log.
+		return errorClass{status: http.StatusConflict, title: titleConflict, detail: clientEncryptedDetail}, true
 	case errors.Is(err, workspace.ErrClientEncrypted),
 		errors.Is(err, workspace.ErrAlreadyExists),
 		errors.Is(err, workspace.ErrLocked),
@@ -256,7 +268,7 @@ func errorCode(err error) string {
 		return codeNotLocked
 	case errors.Is(err, workspace.ErrLockMismatch):
 		return codeLockMismatch
-	case errors.Is(err, workspace.ErrClientEncrypted):
+	case errors.Is(err, workspace.ErrClientEncrypted), errors.Is(err, outputshare.ErrClientEncrypted):
 		return codeClientEncrypted
 	default:
 		return ""

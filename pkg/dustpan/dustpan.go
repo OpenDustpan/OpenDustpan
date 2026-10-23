@@ -1418,6 +1418,11 @@ func newTFEHandler(
 		sessionPolicy = policies
 	}
 
+	outputChecker, err := newOutputChecker(cfg, svc)
+	if err != nil {
+		return nil, err
+	}
+
 	handler, err := tfe.NewHandler(tfe.Config{
 		Registry:      registryProtocol,
 		Authenticator: cfg.authenticator,
@@ -1428,6 +1433,7 @@ func newTFEHandler(
 		Logger:        cfg.logger,
 		Namespaces:    svc.namespaces,
 		Workspaces:    svc.workspaces,
+		OutputChecker: outputChecker,
 		BaseURL:       base,
 		Audit:         entries,
 		Gate:          gate,
@@ -2673,7 +2679,7 @@ func newInventoryHandler(svc services, cfg *settings, onFailure func()) (http.Ha
 		return nil, err
 	}
 
-	outputSharing, err := newOutputSharingService(cfg)
+	outputSharing, outputs, err := newOutputSharingParts(cfg, svc)
 	if err != nil {
 		return nil, err
 	}
@@ -2681,6 +2687,7 @@ func newInventoryHandler(svc services, cfg *settings, onFailure func()) (http.Ha
 	handler, err := inventoryapi.NewHandler(inventoryapi.Config{
 		Views:         views,
 		OutputSharing: outputSharing,
+		Outputs:       outputs,
 		Namespaces:    svc.namespaces,
 		Units:         cfg.inventoryReader,
 		Deleted:       deleted,

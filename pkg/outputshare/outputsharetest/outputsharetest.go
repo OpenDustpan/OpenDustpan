@@ -136,9 +136,46 @@ func Names() []string {
 // allCases returns the cases of the suite. Each call returns a new slice.
 func allCases() []suiteCase {
 	return slices.Concat(
-		storeCases(), newUnitCases(), checkerCases(), hiddenCases(), latestCases(), attachmentCases(),
-		attachmentsCases(), statesCases(),
+		storeCases(),
+		newUnitCases(),
+		withToolStores(checkerCases()),
+		withToolStores(principalCases()),
+		withToolStores(hiddenCases()),
+		withToolStores(latestCases()),
+		withToolStores(latestStateCases()),
+		attachmentCases(),
+		attachmentsCases(),
+		withToolStores(statesCases()),
 	)
+}
+
+// withToolStores wraps each case so that it skips when the harness has no
+// unit, no checker or no States port. A harness of one store alone, with no
+// tool stores, runs the cases of the rules and the setting only.
+func withToolStores(cases []suiteCase) []suiteCase {
+	out := make([]suiteCase, 0, len(cases))
+
+	for _, tc := range cases {
+		if tc.test == nil {
+			out = append(out, tc)
+
+			continue
+		}
+
+		run := tc.test
+
+		out = append(out, suiteCase{name: tc.name, test: func(t *testing.T, h Harness) {
+			t.Helper()
+
+			if h.Unit == nil || h.Checker == nil || h.States == nil {
+				t.Skip("the harness has no stores of the tools")
+			}
+
+			run(t, h)
+		}})
+	}
+
+	return out
 }
 
 // storeCases are the behaviors of Store.
@@ -204,10 +241,6 @@ func newUnitCases() []suiteCase {
 // checkerCases are the behaviors of Checker.
 func checkerCases() []suiteCase {
 	return []suiteCase{
-		{nil, "checker: a principal with unit:read-outputs reads the plain outputs"},
-		{nil, "checker: a principal without unit:read-outputs is denied by the grant check"},
-		{nil, "checker: a principal with unit:read but no unit:read-outputs is denied"},
-		{nil, "checker: a secret output needs unit:read-secrets"},
 		{nil, "checker: a rule gives a principal nothing"},
 		{nil, "checker: a job with a rule and a starter with the grant reads"},
 		{nil, "checker: a job with no rule is denied by the rule check"},
@@ -225,10 +258,6 @@ func checkerCases() []suiteCase {
 		{nil, "checker: an error of a port denies"},
 		{nil, "checker: an error of a port whose text wraps identity.ErrDenied unwraps to one sentinel only"},
 		{nil, "checker: each denial writes an audit entry with the check, the producer and the unit of the job"},
-		{nil, "checker: of several failed checks the denial names the first in the order of the checks"},
-		{nil, "checker: an invalid producer placement is refused"},
-		{nil, "checker: a producer reference that is not a unit is refused with ErrInvalid"},
-		{nil, "checker: an unknown producer for a principal answers ErrUnknownProducer and not identity.ErrDenied"},
 		{nil, "checker: an unknown producer for a job of the producer namespace answers ErrUnknownProducer"},
 	}
 }
@@ -266,11 +295,6 @@ func hiddenCases() []suiteCase {
 // encrypted.
 func latestCases() []suiteCase {
 	return []suiteCase{
-		{nil, "latest: a request with the ID of the latest state reads"},
-		{nil, "latest: a request with no state ID is denied by the latest-state check"},
-		{nil, "latest: a request with the ID of an older state is denied by the latest-state check"},
-		{nil, "latest: a request with the ID of a state of another unit is denied by the latest-state check"},
-		{nil, "latest: a new state between two reads makes the old ID stale"},
 		{nil, "latest: an error of the states port denies"},
 		{
 			nil,
@@ -289,19 +313,6 @@ func latestCases() []suiteCase {
 			nil,
 			"client-encrypted: a refusal of a job of another namespace writes no audit entry in the namespace of the job",
 		},
-		{
-			nil,
-			"client-encrypted: a principal without the grant is denied by the grant check before the client-encrypted check",
-		},
-		{
-			nil,
-			"client-encrypted: a principal with unit:read and unit:read-outputs reads a client-encrypted state as before",
-		},
-		{
-			nil,
-			"client-encrypted: a principal with unit:read-outputs and not unit:read is refused with ErrClientEncrypted",
-		},
-		{nil, "client-encrypted: a plain state after a client-encrypted state reads again"},
 	}
 }
 
@@ -405,19 +416,5 @@ func attachmentsCases() []suiteCase {
 		{nil, "attachments: an unknown job and a job of another namespace answer ErrUnknownAttachment"},
 		{nil, "attachments: a profile of another namespace answers ErrUnknownAttachment"},
 		{nil, "attachments: a reference that fails Validate and an empty job answer ErrInvalid"},
-	}
-}
-
-// statesCases are the behaviors of States.
-func statesCases() []suiteCase {
-	return []suiteCase{
-		{nil, "states: latest answers the ID of the latest state of a unit of each tool"},
-		{nil, "states: latest after a new state answers the new ID"},
-		{nil, "states: latest of a unit with no state answers an empty ID"},
-		{nil, "states: latest of a state that the client encrypted is client-encrypted"},
-		{nil, "states: latest of an unknown unit answers ErrUnknownProducer"},
-		{nil, "states: latest of a reference with no stable ID answers ErrUnknownProducer after the same lookup"},
-		{nil, "states: latest of a stable ID that names another unit answers ErrUnknownProducer"},
-		{nil, "states: latest of an object that is not a unit answers ErrInvalid"},
 	}
 }
