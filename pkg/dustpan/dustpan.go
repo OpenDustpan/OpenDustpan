@@ -3888,8 +3888,8 @@ func v1NotFound(w http.ResponseWriter, _ *http.Request) {
 
 // mountV1 registers each path of h under v1Prefix on mux, with wrap around
 // h. A path serves every method that h registers for it, and h answers the
-// methods it does not serve. A nil h or a handler that lists no patterns
-// registers nothing.
+// methods it does not serve, with the 405 of the tool-neutral API. A nil h or
+// a handler that lists no patterns registers nothing.
 //
 // The pattern check sees only the patterns that the handlers list and the
 // patterns of the root mux. A route that a wrapper (the wrap argument or a
@@ -3900,7 +3900,7 @@ func mountV1(mux *rootMux, h http.Handler, wrap func(http.Handler) http.Handler)
 		return
 	}
 
-	wrapped := wrap(h)
+	wrapped := wrap(withJSONMethodNotAllowed(h))
 	seen := map[string]struct{}{}
 
 	for _, pattern := range lister.RegisteredPatterns() {
@@ -3931,12 +3931,15 @@ func mountAPI(mux *rootMux, a adapters, cfg *settings) error {
 	// maintenance routes that end the restore keep serving.
 	mux.Handle(
 		"/api/inventory/",
-		withCORS(withMaintenance(a.inventory, a.maintenance, shapeInventory, cfg.logger), cfg.allowedOrigins),
+		withCORS(
+			withMaintenance(withJSONMethodNotAllowed(a.inventory), a.maintenance, shapeInventory, cfg.logger),
+			cfg.allowedOrigins,
+		),
 	)
 	// The audit API is read-only, so it stays available in maintenance mode
 	// like the installation API: an operator reads the log while the
 	// installation is down for a restore.
-	mux.Handle("/api/audit/", withCORS(a.audit, cfg.allowedOrigins))
+	mux.Handle("/api/audit/", withCORS(withJSONMethodNotAllowed(a.audit), cfg.allowedOrigins))
 	// The runner protocol is outside /api/. A runner sends no cookie and no
 	// Origin header, so it passes no CORS gate. The management API of the
 	// runners is more specific than /api/, so it reaches its own adapter.
@@ -3944,7 +3947,10 @@ func mountAPI(mux *rootMux, a adapters, cfg *settings) error {
 		mux.Handle("/runner/v1/", withMaintenance(a.runners, a.maintenance, shapeRunner, cfg.logger))
 		mux.Handle(
 			"/api/runners/",
-			withCORS(withMaintenance(a.runners, a.maintenance, shapeInventory, cfg.logger), cfg.allowedOrigins),
+			withCORS(
+				withMaintenance(withJSONMethodNotAllowed(a.runners), a.maintenance, shapeInventory, cfg.logger),
+				cfg.allowedOrigins,
+			),
 		)
 	}
 	// The paths of the inventory and the context API under /api/dustpan/v1/
@@ -3991,7 +3997,7 @@ func mountAPI(mux *rootMux, a adapters, cfg *settings) error {
 	// The OpenTofu http backend (ADR 49) answers tool calls under its own
 	// prefix. It is refused in maintenance mode like the other tool adapters.
 	mux.Handle("/tofu/state/", withMaintenance(a.tofuHTTP, a.maintenance, shapeHTTPBackend, cfg.logger))
-	mux.Handle("/api/server/", withCORS(a.server, cfg.allowedOrigins))
+	mux.Handle("/api/server/", withCORS(withJSONMethodNotAllowed(a.server), cfg.allowedOrigins))
 	mux.Handle("/api/", withCORS(withMaintenance(a.pulumi, a.maintenance, shapePulumi, cfg.logger), cfg.allowedOrigins))
 	// Service discovery lives outside /api/v2/, so the root mux serves it
 	// through the TFE adapter. It stays available in maintenance mode: the
