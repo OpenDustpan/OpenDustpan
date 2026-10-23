@@ -49,6 +49,7 @@ func TestDecodeRefusesHostileTokens(t *testing.T) {
 		{name: "a JSON string", token: b64([]byte(`"x"`))},
 		{name: "a member of another type", token: b64([]byte(`{"a":1}`))},
 		{name: "data after the object", token: b64([]byte(`{"a":"x"} {}`))},
+		{name: "a member that the wire struct does not have", token: b64([]byte(`{"a":"x","extra":1}`))},
 	} {
 		var got wire
 
