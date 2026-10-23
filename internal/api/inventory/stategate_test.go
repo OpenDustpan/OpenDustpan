@@ -11,6 +11,8 @@ import (
 	"testing"
 
 	apiinventory "opendustpan.org/opendustpan/internal/api/inventory"
+	"opendustpan.org/opendustpan/internal/errcode"
+	"opendustpan.org/opendustpan/internal/errcode/errcodetest"
 	"opendustpan.org/opendustpan/pkg/gate"
 	"opendustpan.org/opendustpan/pkg/identity"
 )
@@ -66,12 +68,15 @@ func guardRoutes() []guardRoute {
 	}
 }
 
-// guardRefusal is one refusal that the guard can give and the answer it shows.
+// guardRefusal is one refusal that the guard can give and the answer it shows:
+// code is the code in the message, and errorCode the code of the catalog in
+// the answer.
 type guardRefusal struct {
-	name   string
-	err    *gate.RefusalError
-	status int
-	code   string
+	name      string
+	err       *gate.RefusalError
+	status    int
+	code      string
+	errorCode string
 }
 
 func guardRefusals() []guardRefusal {
@@ -80,17 +85,25 @@ func guardRefusals() []guardRefusal {
 	}
 
 	return []guardRefusal{
-		{"deny", refusal(gate.ErrDenied, "gdr-aaaaaaaaaaaaaaaaaaaa"), http.StatusForbidden, "gate.denied"},
-		{"limit", refusal(gate.ErrLimited, "gdr-bbbbbbbbbbbbbbbbbbbb"), http.StatusForbidden, "gate.limited"},
 		{
-			"rule failed",
-			refusal(gate.ErrRuleFailed, "gdr-cccccccccccccccccccc"),
-			http.StatusConflict,
-			"gate.rule-failed",
+			"deny", refusal(gate.ErrDenied, "gdr-aaaaaaaaaaaaaaaaaaaa"), http.StatusForbidden, "gate.denied",
+			errcode.GateDenied,
+		},
+		{
+			"limit", refusal(gate.ErrLimited, "gdr-bbbbbbbbbbbbbbbbbbbb"), http.StatusForbidden, "gate.limited",
+			errcode.GateLimited,
+		},
+		{
+			"rule failed", refusal(gate.ErrRuleFailed, "gdr-cccccccccccccccccccc"), http.StatusConflict,
+			"gate.rule-failed", errcode.GateRuleFailed,
 		},
 		{
 			"engine down", refusal(gate.ErrUnavailable, "gdr-dddddddddddddddddddd"), http.StatusServiceUnavailable,
-			"gate.unavailable",
+			"gate.unavailable", errcode.GateUnavailable,
+		},
+		{
+			"final gate", refusal(gate.ErrFinal, "gdr-eeeeeeeeeeeeeeeeeeee"), http.StatusForbidden, "gate.final",
+			errcode.GateDenied,
 		},
 	}
 }
@@ -188,6 +201,9 @@ func checkRefusalBody(t *testing.T, rec *httptest.ResponseRecorder, rf guardRefu
 		!strings.Contains(body.Message, string(rf.err.Record)) || !strings.Contains(body.Message, rf.code) {
 		t.Fatalf("body = %+v, want code %d, the message, the code %s and the record", body, rf.status, rf.code)
 	}
+
+	errcodetest.CheckAnswer(t, errcodetest.ShapeCamelCase, rf.status, rec.Body.Bytes(),
+		errcodetest.Want{Code: rf.errorCode, Args: nil, RequestBody: nil})
 }
 
 func TestStateGuardRefusalIsInTheToolNeutralShape(t *testing.T) {
