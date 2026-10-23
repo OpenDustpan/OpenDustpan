@@ -307,6 +307,11 @@ How-to guides:
   and what a refusal looks like.
 - [Set and read context](docs/guides/context.md): the owners, the on-call
   text and the other context of a namespace and of a unit.
+- [Check a workspace for drift](docs/guides/drift-checks.md): start a drift check
+  of an OpenTofu workspace and read its latest drift result.
+- [Output sharing](docs/guides/output-sharing.md): the actions that read
+  outputs and manage sharing, and the setting that decides the sharing rule of
+  a new stack or workspace.
 - [Save and open a view of the unit list](docs/guides/saved-views.md): store
   the labels and references of a unit list under a name, and open the view
   again.

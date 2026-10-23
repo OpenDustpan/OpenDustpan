@@ -126,44 +126,44 @@ func (st *parseState) operation(ptr, path, method, id string, o object) (model.O
 	op.ID, op.Method, op.Path = id, model.Method(method), path
 
 	if err := checkKeys(ptr, o, operationKeys()...); err != nil {
-		return op, err
+		return model.Operation{}, err
 	}
 
 	wildcards, err := pathWildcards(ptr, path)
 	if err != nil {
-		return op, err
+		return model.Operation{}, err
 	}
 
 	if op.Tags, err = stringList(o, ptr, "tags"); err != nil {
-		return op, err
+		return model.Operation{}, err
 	}
 
 	if op.Summary, err = optionalString(o, ptr, "summary"); err != nil {
-		return op, err
+		return model.Operation{}, err
 	}
 
 	if op.Description, err = optionalString(o, ptr, keyDescription); err != nil {
-		return op, err
+		return model.Operation{}, err
 	}
 
 	err = st.access(ptr, o, &op)
 	if err != nil {
-		return op, err
+		return model.Operation{}, err
 	}
 
 	err = st.operationParameters(ptr, o, wildcards, &op)
 	if err != nil {
-		return op, err
+		return model.Operation{}, err
 	}
 
 	err = st.operationBody(ptr, o, &op)
 	if err != nil {
-		return op, err
+		return model.Operation{}, err
 	}
 
 	err = st.operationResult(ptr, o, &op)
 	if err != nil {
-		return op, err
+		return model.Operation{}, err
 	}
 
 	err = checkPage(ptr, &op, st.schemas)

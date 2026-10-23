@@ -47,7 +47,9 @@ const (
 	portColAtMs          = "at_ms"
 	portColScopeKey      = "scope_key"
 	portColSeq           = "seq"
+	portColSHA256Text    = "sha256"
 	portColOwner         = "owner"
+	portColJobID         = "job_id"
 	portColBody          = "body"
 )
 
@@ -73,6 +75,7 @@ func portableSpec() []PortableTable {
 				{Name: "allow_unlocked_writes", Kind: KindBool},
 				{Name: "ip_allowlist", Kind: KindText},
 				{Name: "id", Kind: KindText},
+				{Name: portColOutputSharingDefault, Kind: KindText},
 			},
 		},
 		{
@@ -255,7 +258,7 @@ func portableSpec() []PortableTable {
 			OrderBy: []string{portColNamespaceID, portColSeq},
 			Columns: []Column{
 				{Name: portColNamespaceID, Kind: KindText},
-				{Name: "seq", Kind: KindInteger},
+				{Name: portColSeq, Kind: KindInteger},
 				{Name: portColAtMs, Kind: KindTime},
 				{Name: portColTool, Kind: KindText},
 				{Name: portColUnitID, Kind: KindText},
@@ -462,7 +465,7 @@ func portableSpec() []PortableTable {
 				{Name: "object_id", Kind: KindText},
 				{Name: "fence_version", Kind: KindInteger},
 				{Name: "principal_kind", Kind: KindText},
-				{Name: "job_id", Kind: KindText},
+				{Name: portColJobID, Kind: KindText},
 				{Name: portColReason, Kind: KindText},
 			},
 		},
@@ -705,10 +708,12 @@ func portableSpec() []PortableTable {
 		portableBlameTables(),
 		portableRunnerTables(),
 		portableJobTables(),
+		portableJobArtifactTables(),
 		portableProfileTables(),
 		portableManualLockTables(),
 		portablePreferenceTables(),
 		portableSavedViewTables(),
+		portableDriftTables(),
 		portableGitHostTables(),
 		portableRegistryTables(),
 		portableSinkTables(),

@@ -11,9 +11,9 @@ import (
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/history/historytest"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/history"
-	"opendustpan.org/opendustpan/pkg/history/historytest"
 	"opendustpan.org/opendustpan/pkg/job"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/secret"
@@ -186,7 +186,7 @@ func (m *memArtifacts) Seed(
 
 	_, err = m.CreateItemKey(t.Context(), secret.ItemKey{
 		CreatedAt: at, ShreddedAt: time.Time{}, Ref: ref, ID: keyID, WrapperID: "builtin-1",
-		Blob: secret.ItemKeyBlobInfo{MD5: [16]byte{}, Size: 0, Version: 0},
+		Blob: secret.ItemKeyBlobInfo{MD5: [16]byte{1}, Size: 1, Version: 1},
 	}, f)
 	if err != nil {
 		t.Fatalf("create item key: %v", err)

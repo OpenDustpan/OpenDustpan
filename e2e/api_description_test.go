@@ -166,7 +166,7 @@ func checkCapabilitiesSchema(doc descriptionDoc, route descriptionRoute) error {
 		member  = "apiVersion"
 	)
 
-	if got := route.Responses["2XX"].Content["application/json"].Schema.Ref; got != wantRef {
+	if got := route.Responses["200"].Content["application/json"].Schema.Ref; got != wantRef {
 		return fmt.Errorf(
 			"%w: the answer of the capabilities route refers to %q, want %q",
 			errAPIDescription,

@@ -29,7 +29,7 @@ namespace, no setting and no secret.
 | Part | Value |
 | --- | --- |
 | `openapi` | `3.1.0` |
-| `info.version` | The version of the description, for example `0.1.0`. It is not the version of the server. It changes when the description changes. It is valid as a SemVer version and as a PEP 440 version. |
+| `info.version` | The version of the description, for example `0.2.1`. It is not the version of the server. It changes when the description changes. It is valid as a SemVer version and as a PEP 440 version. |
 | `servers` | One relative server, `/` |
 
 The document uses the part of OpenAPI 3.1.0 that maps one to one to 3.0.3, so
@@ -52,9 +52,9 @@ Each operation has these members:
 | `operationId` | A stable name in lowerCamelCase, for example `listUnits`. A generator names an SDK method from it. A change of a path does not change it. No two operations share one. |
 | `tags` | One to three tags. The first tag names the group of the operation. |
 | `x-dustpan-actions` | The actions that the route declares, each with the kind of the object that it applies to, for example `{"action": "unit:lock", "object": "collection"}`. The kind is `namespace`, `unit`, `collection`, `caller` or `server`. The list is empty for a route that needs no sign-in. |
-| `parameters` | One path parameter for each wildcard of the path, and a reference to a shared header parameter when the route takes the header |
+| `parameters` | One path parameter for each wildcard of the path. One query parameter for each query value that the route reads. A reference to a shared header parameter when the route takes the header. |
 | `requestBody` | A reference to the schema of the body, for a route that reads a JSON body. A `PATCH` takes `application/merge-patch+json`. A route that reads no body has no `requestBody`. |
-| `responses` | `2XX` for success, with a reference to the schema of the answer when the answer has a body, and `default` for an error |
+| `responses` | One key for each success status code that the route answers, for example `200`, `201`, `202` or `204`. Most routes have one key. A route that answers `201` for a first write and `200` for a replacement has both keys. Each success answer has a reference to the schema of the answer when the answer has a body. A `204` answer has no body. The description never has the key `2XX` or another range. The key `default` is for an error. |
 | `security` | `[]` for a route that needs no sign-in. A route that needs sign-in has no `security` member and uses the default. |
 
 The actions are those that the route declares. A handler can check more, for
@@ -63,6 +63,49 @@ example an action on an object that it finds from the request.
 A route that takes a file as raw bytes, for example the upload of a provider
 file to the registry, has no `requestBody`, because the description holds JSON
 bodies only.
+
+## Query parameters
+
+A query parameter has `in: query`, a `name` in camelCase, `required`, a
+`description` and a `schema`. The schema is `string`, `integer` with
+`format: int64`, or `boolean`. A parameter that the query can hold more than
+once, for example `label` of `listUnits`, is an array of one of these types.
+A list that pages has `pageSize` and `pageToken`, and its answer has
+`nextPageToken`.
+
+The description lists every query value that a route reads. A server reads no
+other query value of a route in the description. The route that lists the
+units of a view answers 400 to a query value that it does not list.
+
+## Request headers and cookies
+
+The description shows these request values:
+
+| Value | Place in the description |
+| --- | --- |
+| `Authorization` | The security scheme `bearerAuth` |
+| `Content-Type` | The media type of the body |
+| `Idempotency-Key`, `If-Match` | The shared parameters |
+| The cookie `__Host-dustpan_session` | The security scheme `sessionCookie` |
+| `X-Dustpan-Csrf` | The security scheme `csrfHeader` |
+
+A request that uses the session cookie must also send `X-Dustpan-Csrf` when its
+method is not `GET`, `HEAD` or `OPTIONS`. The server ignores the header on the
+other methods. A client that is made from the description can send a write with
+a session of the console.
+
+The server also reads these headers, and the description does not show them,
+because the browser or the proxy sets them, or because they change no answer:
+
+- `Origin` and `Sec-Fetch-Site`: set by the browser. The server uses them to
+  refuse a request with a session that comes from another site.
+- `Forwarded` and `X-Forwarded-For`: set by the proxy that the server trusts.
+  The server reads one of them for the address of the client.
+- `User-Agent` and `Dustpan-Channel`: the server writes them to the audit
+  record only.
+
+The server reads no other request header and no other cookie on a route in the
+description. This covers the code of the routes and the code that they call.
 
 ## Schemas
 
@@ -89,11 +132,13 @@ reads them as they are. They are renamed in a later version of the API.
 
 | Part | Content |
 | --- | --- |
-| `components.securitySchemes.bearerAuth` | The one scheme: an HTTP `Authorization: Bearer` header with an access token. All routes use it except the routes that need no sign-in. |
+| `components.securitySchemes.bearerAuth` | An HTTP `Authorization: Bearer` header with an access token. All routes use it except the routes that need no sign-in. |
+| `components.securitySchemes.sessionCookie` | The cookie `__Host-dustpan_session` of a session of the console. A route accepts it in place of `bearerAuth`, together with `csrfHeader`. |
+| `components.securitySchemes.csrfHeader` | The `X-Dustpan-Csrf` request header: the CSRF value of the session. A request with a session needs it when its method is not `GET`, `HEAD` or `OPTIONS`. Without it, or with a wrong value, the answer is 403 with the `errorCode` `session.csrf`. |
 | `components.parameters.IdempotencyKey` | The `Idempotency-Key` request header: a string of 1 to 255 printable ASCII characters. A route that takes it refers to this parameter. |
 | `components.parameters.IfMatch` | The `If-Match` request header: the `ETag` of the version that the request replaces. A version that does not match answers 412. |
 | `components.parameters.IfMatchRequired` | The same header for a route that answers 428 without it. The parameter has `required: true`. |
-| `components.headers.ETag` | The `ETag` answer header. A route that sends it declares it in its `2XX` answer. |
+| `components.headers.ETag` | The `ETag` answer header. A route that sends it declares it in its success answer. |
 | `components.schemas.ErrorResponse` | The body of an error: `code` (the HTTP status), `message`, and the optional `errorCode` and `errorArgs` |
 
 ## Values that can grow
@@ -120,12 +165,71 @@ because its path holds a wildcard name that the description does not allow.
 A test builds the server with each module on and compares its operations with
 the checked-in description. The test fails when a route has no entry, when an
 entry has no route, and when a path, an `operationId`, a tag, an action, a
-public flag or a header differs. The server does not start when a route under
-`/api/dustpan/v1` has no valid `operationId`, when an action has no object
-kind, or when a route names no body type and does not say that it has no body.
+public flag, a header or a query parameter differs. Each failure names the
+route and the command below.
+
+A handler reads the query, the request headers and the cookies through
+functions that give the values of the declared names only. The linter refuses
+a direct read in the code of the tool-neutral REST API and in the helpers that
+its routes call: the session check, the resolver of the client address and the
+CORS wrapper. A handler cannot read a value that the description does not
+show. A test reads the source of each adapter and checks that every query name
+that it reads is a constant that a label declares.
+
+A read of a name that the description does not hold is an error in the code.
+In a test it panics. In the server it gives an empty value, and the server logs
+the route, the name and the command below once.
+
+The server does not start when a route under `/api/dustpan/v1` has no valid
+`operationId`, when an action has no object kind, or when a route names no body
+type and does not say that it has no body.
 
 To write the checked-in file again after a change of the routes, run:
 
 ```sh
 go test ./pkg/dustpan -run TestAPIDescriptionGolden -update-api-description
 ```
+
+## Change the version of the description
+
+`info.version` changes with every change of the description. A test in
+`internal/api/apidesc` keeps the file `openapi.pin`. The file holds the
+`info.version` and the SHA-256 of the last committed description. The test
+fails when the bytes of the description differ from the pin and the version
+is the same. It also fails when the version differs and the bytes are the
+same, and when the version does not rise.
+
+After a change of the routes, a contributor does these steps:
+
+1. Raise `DocumentVersion` in `internal/api/apidesc/document.go`. The new
+   version must be higher than the version in `openapi.pin`.
+2. Write the description again:
+
+   ```sh
+   go test ./pkg/dustpan -run TestAPIDescriptionGolden -update-api-description
+   ```
+
+3. Write the pin again. The command refuses to write the pin when the version
+   did not rise:
+
+   ```sh
+   go test ./internal/api/apidesc -run TestVersionFollowsTheDescription -update-description-pin
+   ```
+
+4. Write the golden files of the Go client again. Do this for every change of
+   the version, a patch change too, because the generated files and the
+   metadata of the client hold the full version of the description. Only the
+   major and minor parts of the client version come from the description:
+
+   ```sh
+   go test ./internal/clientgen/golang -run TestRenderGolden -update
+   ```
+
+Commit `document.go`, `openapi.json`, `openapi.pin` and the golden files in
+the same pull request.
+
+Two pull requests that both change the description conflict on `openapi.pin`,
+because both write the two lines of the file. The pull request that merges
+second must raise the version again after it merges `main`. Keep the pin of
+`main` in the conflict, raise `DocumentVersion` above it, and do steps 2 to 4
+again.

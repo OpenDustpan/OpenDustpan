@@ -35,7 +35,7 @@ func deliver(t *testing.T, h Harness, f fixture, unit identity.Object, d job.Del
 
 	done := change(&stored, job.EventDelivered)
 	done.Delivery = &job.DeliveryResult{
-		Delivery: d, Commit: "def456", Branch: branch, ReviewRequest: review, MergedAt: time.Time{},
+		Delivery: d, Commit: commitDef, Branch: branch, ReviewRequest: review, MergedAt: time.Time{},
 		DeliveredAt: time.Now().UTC(),
 	}
 	stored = apply(t, h, f, done)

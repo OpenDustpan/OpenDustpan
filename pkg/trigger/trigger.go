@@ -21,7 +21,7 @@ import (
 	"slices"
 	"strings"
 
-	"opendustpan.org/opendustpan/pkg/cron"
+	"opendustpan.org/opendustpan/internal/cron"
 	"opendustpan.org/opendustpan/pkg/graph"
 )
 

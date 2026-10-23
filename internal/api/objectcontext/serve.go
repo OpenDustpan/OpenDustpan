@@ -38,7 +38,7 @@ type readResponse struct {
 func (h *Handler) readContext(w http.ResponseWriter, r *http.Request, p identity.Principal, t target) {
 	ctx := r.Context()
 
-	include, err := parseInclude(r.URL.Query().Get("include"))
+	include, err := parseInclude(queryOf(r).Get("include"))
 	if err != nil {
 		h.writeError(ctx, w, err)
 
@@ -204,7 +204,7 @@ func auditEntry(r *http.Request, p identity.Principal, t target) audit.Entry {
 		ValuePath:     "",
 		ValueCount:    nil,
 		SourceIP:      clientip.String(r),
-		UserAgent:     truncateUserAgent(r.UserAgent()),
+		UserAgent:     truncateUserAgent(userAgent(r)),
 		Channel:       sessionauth.AuditChannel(r, channelHeader),
 		Kind:          audit.KindChange,
 		Outcome:       audit.OutcomeSuccess,
