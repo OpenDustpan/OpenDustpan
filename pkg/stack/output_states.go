@@ -83,7 +83,7 @@ func (s *OutputStates) Outputs(
 
 	version, err := s.updates.LatestStateVersion(ctx, ref)
 	if err != nil {
-		return nil, gone(u, fmt.Errorf("read the latest checkpoint of %q: %w", u, err))
+		return nil, s.gone(ctx, u, fmt.Errorf("read the latest checkpoint of %q: %w", u, err))
 	}
 
 	if StateID(st.ID, version) != stateID {
@@ -92,7 +92,7 @@ func (s *OutputStates) Outputs(
 
 	cp, err := s.updates.ExportVersion(ctx, ref, version)
 	if err != nil {
-		return nil, gone(u, fmt.Errorf("read the checkpoint of %q: %w", u, err))
+		return nil, s.gone(ctx, u, fmt.Errorf("read the checkpoint of %q: %w", u, err))
 	}
 
 	return rootOutputs(cp.Deployment)
@@ -137,18 +137,21 @@ func (s *OutputStates) lookup(ctx context.Context, u identity.Object) (Ref, Stac
 }
 
 // gone returns the error of a read of the checkpoint of u that failed with
-// err. A stack that a delete removed after the lookup is an unknown producer,
-// and a stack with no checkpoint now is a state that moved. Any other error
-// stays as it is.
-func gone(u identity.Object, err error) error {
-	switch {
-	case errors.Is(err, ErrNotFound):
-		return fmt.Errorf("%w: stack %q", outputshare.ErrUnknownProducer, u)
-	case errors.Is(err, ErrNoState):
-		return fmt.Errorf("%w: stack %q has no state", outputshare.ErrStateMoved, u)
-	default:
+// err, after the lookup of u succeeded. The stores read a missing stack as no
+// state, so a stack with no state and a stack that a delete removed give the
+// same error here. Another lookup tells them apart: a stack that is gone is an
+// unknown producer, and a stack that still exists has a state that moved. Any
+// other error stays as it is.
+func (s *OutputStates) gone(ctx context.Context, u identity.Object, err error) error {
+	if !errors.Is(err, ErrNotFound) && !errors.Is(err, ErrNoState) && !errors.Is(err, ErrUpdateNotFound) {
 		return err
 	}
+
+	if _, _, lookupErr := s.lookup(ctx, u); lookupErr != nil {
+		return lookupErr
+	}
+
+	return fmt.Errorf("%w: stack %q has no state", outputshare.ErrStateMoved, u)
 }
 
 // rootOutputs returns the root outputs of the deployment of a checkpoint,

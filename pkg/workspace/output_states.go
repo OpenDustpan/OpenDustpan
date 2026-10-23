@@ -71,11 +71,8 @@ func (s *OutputStates) Outputs(
 	sv, err := s.svc.Current(ctx, ws.ID)
 
 	switch {
-	case errors.Is(err, ErrNotFound):
-		// A delete removed the workspace after the lookup.
-		return nil, fmt.Errorf("%w: workspace %q", outputshare.ErrUnknownProducer, u)
-	case errors.Is(err, ErrNoState):
-		return nil, fmt.Errorf("%w: workspace %q has no state", outputshare.ErrStateMoved, u)
+	case errors.Is(err, ErrNotFound), errors.Is(err, ErrNoState):
+		return nil, s.gone(ctx, u)
 	case err != nil:
 		return nil, fmt.Errorf("read the current state of %q: %w", u, err)
 	case sv.ID.String() != stateID:
@@ -103,6 +100,20 @@ func (s *OutputStates) Outputs(
 	}
 
 	return out, nil
+}
+
+// gone returns the error of a read of the current state of u that found no
+// state, after the lookup of u succeeded. The store reads a missing workspace
+// as no state, so a workspace with no state and a workspace that a delete
+// removed give the same error there. Another lookup tells them apart: a
+// workspace that is gone is an unknown producer, and a workspace that still
+// exists has a state that moved.
+func (s *OutputStates) gone(ctx context.Context, u identity.Object) error {
+	if _, err := s.lookup(ctx, u); err != nil {
+		return err
+	}
+
+	return fmt.Errorf("%w: workspace %q has no state", outputshare.ErrStateMoved, u)
 }
 
 // lookup returns the workspace of the unit u. It looks the workspace up by
