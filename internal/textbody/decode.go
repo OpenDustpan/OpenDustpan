@@ -100,7 +100,8 @@ func Unmarshal(body []byte, v any, opts ...Option) error {
 		opt(&rule)
 	}
 
-	if len(bytes.TrimSpace(body)) == 0 {
+	// JSON whitespace is only space, tab, CR and LF (RFC 8259).
+	if len(bytes.Trim(body, " \t\r\n")) == 0 {
 		if rule.allowEmpty {
 			return nil
 		}
