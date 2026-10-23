@@ -2,6 +2,7 @@ package outputshare
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 
 	"opendustpan.org/opendustpan/pkg/audit"
@@ -398,9 +399,8 @@ type Attachments interface {
 // State is the latest state of a unit, as the States port tells it to the
 // checker.
 type State struct {
-	// ID names the latest state: the ID of the current state version, or the
-	// stable ID of the stack and the version of the latest checkpoint, joined
-	// with a colon. An ID names its unit, so the ID of a state of another unit
+	// ID names the latest state and its unit. The tool of the unit gives
+	// its form. An ID names its unit, so the ID of a state of another unit
 	// never matches. It is empty for a unit with no state.
 	ID string
 	// ClientEncrypted is true when the client encrypted the latest state, so
@@ -420,6 +420,36 @@ type States interface {
 	// same work as a known one. It returns ErrInvalid for an object that is
 	// not a unit.
 	Latest(ctx context.Context, u identity.Object) (State, error)
+}
+
+// Output is one root output of a state of a unit. A secret output has no
+// value: a read of outputs answers its name and its mark only.
+type Output struct {
+	// Name is the name of the output.
+	Name string
+	// Secret is true for an output that the tool marked secret or sensitive.
+	Secret bool
+	// Value is the JSON value of a plain output. It is nil for a secret
+	// output. A secret inside a plain object or list stays a marker of the
+	// tool, with no plain value and no ciphertext.
+	Value json.RawMessage
+}
+
+// Outputs reads the root outputs of the latest state of a unit. The store of
+// each tool serves it, with the same lookup as States.
+type Outputs interface {
+	// Outputs returns the root outputs of the unit u, ordered by name, when
+	// the latest state of u is the state stateID, as State.ID names it. It
+	// looks up u by its reference and compares its stable ID, as Latest does.
+	// A secret output has no value. A state that the client encrypted has no
+	// output that the server can read, so it answers an empty list.
+	//
+	// It returns ErrInvalid for an object that is not a unit. It returns
+	// ErrUnknownProducer when no unit has the reference, when the stable ID
+	// names another unit, for a reference that no unit can have, and for a
+	// unit that is deleted during the read. It returns ErrStateMoved when the
+	// latest state is not stateID, also when the unit has no state now.
+	Outputs(ctx context.Context, u identity.Object, stateID string) ([]Output, error)
 }
 
 // Checker decides each read of the outputs of a unit. Each tool adapter calls

@@ -1,6 +1,10 @@
 package stack
 
-import "strconv"
+import (
+	"strconv"
+
+	"opendustpan.org/opendustpan/pkg/outputshare"
+)
 
 // MaskedPaths returns the masked set of deployment: the value path of each
 // secret in the inputs and outputs of every resource, with the same maskValue
@@ -59,4 +63,10 @@ func resourceElements(doc any) []any {
 	}
 
 	return list
+}
+
+// ParseRootOutputs returns the root outputs of deployment as the Outputs port
+// reads them, so the external tests reach the parse without a store.
+func ParseRootOutputs(deployment []byte) ([]outputshare.Output, error) {
+	return rootOutputs(deployment)
 }
