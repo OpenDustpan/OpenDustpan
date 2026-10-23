@@ -14,6 +14,10 @@ import (
 // has no credential for, or a request outside a tool step.
 var ErrNoCredentials = errors.New("no credential for this host")
 
+// ErrUnsafeHelper reports a git credential helper that holds a control
+// character. Such a value could add a line to the git configuration.
+var ErrUnsafeHelper = errors.New("git credential helper holds a control character")
+
 // Files of the credentials on the memory-backed volume. The launcher writes
 // each with mode 0600 before a step of the role tool, and deletes the
 // directory of the step when the step ends. A step of the role hook gets
@@ -127,10 +131,18 @@ func PulumiCredentials(serverURL, token string) ([]byte, error) {
 // helper, which is an absolute path or a bare git-credential- name. Git
 // then starts it with no shell. With an empty helper, the configuration
 // sets an empty helper list, so a step gets no credential from git
-// configuration of the image.
-func GitConfig(helper string) []byte {
+// configuration of the image. It returns ErrUnsafeHelper, and no
+// configuration, for a helper that holds a control character.
+func GitConfig(helper string) ([]byte, error) {
+	// Defense in depth: runner.GitCredentials.Validate refuses a control
+	// character when a pool is saved; this check stays so that a caller that
+	// skips it cannot add a line to the git configuration.
+	if strings.ContainsFunc(helper, isControl) {
+		return nil, fmt.Errorf("write git configuration: %w", ErrUnsafeHelper)
+	}
+
 	if helper == "" {
-		return []byte("[credential]\n\thelper =\n")
+		return []byte("[credential]\n\thelper =\n"), nil
 	}
 
 	name := helper
@@ -138,7 +150,13 @@ func GitConfig(helper string) []byte {
 		name = strings.TrimPrefix(helper, "git-credential-")
 	}
 
-	return fmt.Appendf(nil, "[credential]\n\thelper =\n\thelper = %s\n", name)
+	return fmt.Appendf(nil, "[credential]\n\thelper =\n\thelper = %s\n", name), nil
+}
+
+// isControl reports whether r is a control character of the C0 range
+// (0x00 to 0x1F) or DEL (0x7F).
+func isControl(r rune) bool {
+	return r < 0x20 || r == 0x7f
 }
 
 // TokenSource is the port through which a helper process asks the
