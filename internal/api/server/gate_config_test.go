@@ -107,7 +107,7 @@ func newGateHandler(t *testing.T, authz identity.Authorizer) (*sqlite.Store, gat
 }
 
 // newGateHandlerWithoutStore builds a handler that mounts no gate route.
-func newGateHandlerWithoutStore(t *testing.T, authz identity.Authorizer) *apiserver.Handler {
+func newGateHandlerWithoutStore(t *testing.T, authz identity.Authorizer) testHandler {
 	t.Helper()
 
 	st, nss := openIPAllowFixture(t)
@@ -119,10 +119,10 @@ func newGateHandlerWithoutStore(t *testing.T, authz identity.Authorizer) *apiser
 // from port, or none when port is nil.
 func gateHandler(
 	t *testing.T, st *sqlite.Store, nss *namespace.Service, authz identity.Authorizer, port apiserver.GateConfig,
-) *apiserver.Handler {
+) testHandler {
 	t.Helper()
 
-	handler, err := apiserver.NewHandler(apiserver.Config{
+	handler, err := newCheckedHandler(t, apiserver.Config{
 		Preferences: nil,
 		GitHost:     nil,
 		Idempotency: nil,

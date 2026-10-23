@@ -5,7 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
+	"net/http"
 	"slices"
+	"strconv"
 	"strings"
 )
 
@@ -57,9 +60,20 @@ type refShape struct {
 // parameterShape is a parameter: a path parameter or a reference to a shared
 // parameter.
 type parameterShape struct {
-	Ref  string `json:"$ref"`
-	Name string `json:"name"`
-	In   string `json:"in"`
+	Ref         string       `json:"$ref"`
+	Name        string       `json:"name"`
+	In          string       `json:"in"`
+	Required    bool         `json:"required"`
+	Description string       `json:"description"`
+	Schema      *schemaShape `json:"schema"`
+}
+
+// schemaShape is the schema of a query parameter: a scalar, or an array of a
+// scalar.
+type schemaShape struct {
+	Type   string       `json:"type"`
+	Format string       `json:"format"`
+	Items  *schemaShape `json:"items"`
 }
 
 // Read returns the operations of a document that Build wrote. It fails
@@ -122,7 +136,7 @@ func readOperation(path, method string, raw json.RawMessage) (Operation, error) 
 	op := Operation{
 		ID: shape.OperationID, Method: upper, Path: path, Tags: shape.Tags, Actions: nil, ActionObjects: nil,
 		Public: false, IdempotencyKey: false, IfMatch: false, IfMatchRequired: false, ETag: false,
-		Bodies: nil,
+		Query: nil, Statuses: nil, Bodies: nil,
 	}
 
 	readActions(&op, shape.Actions)
@@ -135,9 +149,58 @@ func readOperation(path, method string, raw json.RawMessage) (Operation, error) 
 		return Operation{}, err
 	}
 
-	op.ETag = shape.Responses["2XX"].Headers["ETag"].Ref == "#/components/headers/"+etagName
+	statuses, etag, err := readSuccess(path, method, shape.Responses)
+	if err != nil {
+		return Operation{}, err
+	}
+
+	op.Statuses = statuses
+	op.ETag = etag
 
 	return op, nil
+}
+
+// readSuccess returns the success statuses of an operation in ascending
+// order, and whether its success answers hold the ETag header. Each key is an
+// exact status from 200 to 299 in canonical form. The key 2XX and any other
+// range are refused. The success answers of one operation must agree on the
+// ETag header.
+func readSuccess(path, method string, responses map[string]responseShape) ([]int, bool, error) {
+	var (
+		statuses []int
+		etag     bool
+	)
+
+	for _, key := range slices.Sorted(maps.Keys(responses)) {
+		if key == "default" {
+			continue
+		}
+
+		n, err := strconv.Atoi(key)
+		if err != nil || strconv.Itoa(n) != key || n < http.StatusOK || n >= http.StatusMultipleChoices {
+			return nil, false, fmt.Errorf(
+				"%w: %s %s has the response key %q", ErrInvalidDocument, strings.ToUpper(method), path, key,
+			)
+		}
+
+		has := responses[key].Headers["ETag"].Ref == "#/components/headers/"+etagName
+		if len(statuses) > 0 && has != etag {
+			return nil, false, fmt.Errorf(
+				"%w: %s %s has success responses that disagree on the ETag header",
+				ErrInvalidDocument, strings.ToUpper(method), path,
+			)
+		}
+
+		statuses, etag = append(statuses, n), has
+	}
+
+	if len(statuses) == 0 {
+		return nil, false, fmt.Errorf(
+			"%w: %s %s has no success response", ErrInvalidDocument, strings.ToUpper(method), path,
+		)
+	}
+
+	return statuses, etag, nil
 }
 
 // readActions sets the actions and their object kinds, in the order of the
@@ -183,6 +246,13 @@ func readParameters(op *Operation, params []parameterShape) error {
 		case param.Ref == "#/components/parameters/"+ifMatchReqName:
 			op.IfMatchRequired = true
 		case param.Ref == "" && param.In == "path":
+		case param.Ref == "" && param.In == "query":
+			p, err := readQuery(param)
+			if err != nil {
+				return fmt.Errorf("%w: %s %s: %w", ErrInvalidDocument, op.Method, op.Path, err)
+			}
+
+			op.Query = append(op.Query, p)
 		default:
 			return fmt.Errorf(
 				"%w: %s %s has a parameter that Build never writes", ErrInvalidDocument, op.Method, op.Path,
@@ -191,4 +261,41 @@ func readParameters(op *Operation, params []parameterShape) error {
 	}
 
 	return nil
+}
+
+// errQueryShape means that a query parameter has a schema that Build never
+// writes.
+var errQueryShape = errors.New("a query parameter has a schema that Build never writes")
+
+// readQuery reads one query parameter. It refuses a schema that Build never
+// writes: a type with no scalar, an array of an array, and a format other
+// than the one of an integer.
+func readQuery(param parameterShape) (QueryParam, error) {
+	schema := param.Schema
+	if schema == nil {
+		return QueryParam{}, fmt.Errorf("%w: %q", errQueryShape, param.Name)
+	}
+
+	repeated := schema.Type == "array"
+	if repeated {
+		if schema.Format != "" || schema.Items == nil || schema.Items.Items != nil {
+			return QueryParam{}, fmt.Errorf("%w: %q", errQueryShape, param.Name)
+		}
+
+		schema = schema.Items
+	}
+
+	wantFormat := ""
+	if schema.Type == QueryInteger {
+		wantFormat = "int64"
+	}
+
+	if schema.Format != wantFormat {
+		return QueryParam{}, fmt.Errorf("%w: %q", errQueryShape, param.Name)
+	}
+
+	return QueryParam{
+		Name: param.Name, Type: schema.Type, Repeated: repeated, Required: param.Required,
+		Description: param.Description,
+	}, nil
 }

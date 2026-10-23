@@ -2,6 +2,7 @@ package golang
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 
 	"opendustpan.org/opendustpan/internal/clientgen"
@@ -58,6 +59,13 @@ func operationOf(op *model.Operation) (operationView, error) {
 	}
 
 	addResult(&ov, op)
+
+	codes := make([]string, len(op.Result.Statuses))
+	for i, status := range op.Result.Statuses {
+		codes[i] = strconv.Itoa(status)
+	}
+
+	ov.Statuses = strings.Join(codes, ", ")
 
 	return ov, nil
 }

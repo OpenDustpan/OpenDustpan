@@ -98,16 +98,11 @@ func (r jobRunner) Write(ctx context.Context, fence namespace.Fence, fn func(job
 
 // Read implements jobstore.Runner.
 func (r jobRunner) Read(ctx context.Context, fn func(jobstore.Tx) error) error {
-	opts := pgx.TxOptions{
-		IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly, DeferrableMode: pgx.NotDeferrable, BeginQuery: "",
-		CommitQuery: "",
-	}
-
-	err := pgx.BeginTxFunc(ctx, r.s.pool, opts, func(tx pgx.Tx) error {
+	err := pgx.BeginTxFunc(ctx, r.s.pool, r.s.snapshotOptions(), func(tx pgx.Tx) error {
 		return fn(&jobTx{tx: tx, q: r.s.queries.WithTx(tx)})
 	})
 	if err != nil {
-		return fmt.Errorf("snapshot transaction: %w", err)
+		return fmt.Errorf("snapshot transaction: %w", readConflict(err))
 	}
 
 	return nil

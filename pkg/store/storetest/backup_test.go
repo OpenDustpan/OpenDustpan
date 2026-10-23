@@ -335,6 +335,11 @@ func (s *fakeBackupStore) ListStacks(_ context.Context, filter stack.Filter) ([]
 	return out, nil
 }
 
+// QueryStacks implements stack.Store over the lists of ListStacks.
+func (s *fakeBackupStore) QueryStacks(ctx context.Context, q stack.PageQuery) ([]stack.Stack, error) {
+	return stack.ListPage(ctx, s.ListStacks, q)
+}
+
 // DeleteStack implements stack.Store with its children, key and entry.
 // When the latest checkpoint manages resources, it returns
 // ErrHasResources and removes nothing. It ignores the delete guard and
@@ -1291,6 +1296,16 @@ func (s *fakeBackupStore) ListUnits(_ context.Context, ns namespace.Name) ([]inv
 	return out, nil
 }
 
+// QueryUnits implements inventory.Reader over the entries of ListUnits.
+func (s *fakeBackupStore) QueryUnits(ctx context.Context, q inventory.UnitQuery) ([]inventory.Entry, error) {
+	all, err := s.ListUnits(ctx, q.Namespace)
+	if err != nil {
+		return nil, err
+	}
+
+	return inventory.PageUnits(all, q), nil
+}
+
 // CreateWorkspace implements workspace.Store.
 func (s *fakeBackupStore) CreateWorkspace(
 	_ context.Context, w workspace.Workspace, fence namespace.Fence,
@@ -1382,6 +1397,16 @@ func (s *fakeBackupStore) ListWorkspaces(
 	})
 
 	return out, nil
+}
+
+// QueryWorkspaces implements workspace.Store over the list of ListWorkspaces.
+func (s *fakeBackupStore) QueryWorkspaces(ctx context.Context, q workspace.ListQuery) (workspace.ListPage, error) {
+	all, err := s.ListWorkspaces(ctx, q.Namespace)
+	if err != nil {
+		return workspace.ListPage{}, err
+	}
+
+	return workspace.PageWorkspaces(all, q), nil
 }
 
 // SaveWorkspace implements workspace.Store with a revision compare-and-swap.

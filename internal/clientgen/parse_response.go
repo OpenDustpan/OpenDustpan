@@ -1,6 +1,7 @@
 package clientgen
 
 import (
+	"reflect"
 	"regexp"
 	"slices"
 	"strconv"
@@ -9,7 +10,7 @@ import (
 )
 
 // successStatus matches the key of a success answer.
-var successStatus = regexp.MustCompile(`^(2\d\d|2XX)$`)
+var successStatus = regexp.MustCompile(`^2\d\d$`)
 
 // The names of the parts of a paged list.
 const (
@@ -120,19 +121,19 @@ func (st *parseState) operationResult(ptr string, o object, op *model.Operation)
 		return err
 	}
 
-	var success string
+	var success []string
 
 	for _, key := range sortedKeys(responses) {
 		switch {
 		case key == "default":
-		case successStatus.MatchString(key) && success == "":
-			success = key
+		case successStatus.MatchString(key):
+			success = append(success, key)
 		default:
 			return unsupported(ptrJoin(rptr, key), "response status")
 		}
 	}
 
-	if success == "" {
+	if len(success) == 0 {
 		return invalid(rptr, "the operation needs a success answer")
 	}
 
@@ -144,7 +145,49 @@ func (st *parseState) operationResult(ptr string, o object, op *model.Operation)
 		return err
 	}
 
-	return st.successResponse(ptrJoin(rptr, success), success, responses[success], op)
+	return st.successAnswers(rptr, responses, success, op)
+}
+
+// successAnswers reads the success answers, one for each status key in
+// ascending order. A route that answers two codes has one shape of answer. A
+// client reads the answer with one type, so the answers must agree.
+func (st *parseState) successAnswers(rptr string, responses object, keys []string, op *model.Operation) error {
+	for i, key := range keys {
+		var answer model.Response
+
+		if err := st.successResponse(ptrJoin(rptr, key), responses[key], &answer); err != nil {
+			return err
+		}
+
+		status, _ := strconv.Atoi(key) //nolint:errcheck // The key matched three digits.
+
+		if i == 0 {
+			answer.Statuses = []int{status}
+			op.Result = answer
+
+			continue
+		}
+
+		if !sameAnswer(op.Result, answer) {
+			return invalid(
+				ptrJoin(rptr, key), "the success answers of one operation must have the same body and headers",
+			)
+		}
+
+		op.Result.Statuses = append(op.Result.Statuses, status)
+	}
+
+	return nil
+}
+
+// sameAnswer reports whether two success answers have the same body type and
+// the same ETag header.
+func sameAnswer(a, b model.Response) bool {
+	if a.ETag != b.ETag || (a.Type == nil) != (b.Type == nil) {
+		return false
+	}
+
+	return a.Type == nil || reflect.DeepEqual(*a.Type, *b.Type)
 }
 
 // checkErrorResponse checks that the default answer is the error schema.
@@ -173,7 +216,7 @@ func (st *parseState) checkErrorResponse(ptr string, node any) error {
 }
 
 // successResponse reads the success answer.
-func (st *parseState) successResponse(ptr, key string, node any, op *model.Operation) error {
+func (st *parseState) successResponse(ptr string, node any, out *model.Response) error {
 	o, err := asObject(ptr, node)
 	if err != nil {
 		return err
@@ -184,11 +227,7 @@ func (st *parseState) successResponse(ptr, key string, node any, op *model.Opera
 		return err
 	}
 
-	if key != "2XX" {
-		op.Result.Status, _ = strconv.Atoi(key) //nolint:errcheck // The key matched three digits.
-	}
-
-	if op.Result.ETag, err = readHeaders(ptr, o); err != nil {
+	if out.ETag, err = readHeaders(ptr, o); err != nil {
 		return err
 	}
 
@@ -206,7 +245,7 @@ func (st *parseState) successResponse(ptr, key string, node any, op *model.Opera
 		return err
 	}
 
-	op.Result.Type = &t
+	out.Type = &t
 
 	return nil
 }

@@ -19,8 +19,7 @@ var _ workspace.StateAtReader = (*Store)(nil)
 func (s *Store) WorkspaceStateAt(ctx context.Context, id workspace.ID, at time.Time) (workspace.StateAt, error) {
 	// One snapshot, so that the state version and the first finalize time
 	// come from the same state of the database.
-	//nolint:exhaustruct_v5 // A snapshot read sets only isolation and access mode.
-	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
+	tx, err := s.pool.BeginTx(ctx, s.snapshotOptions())
 	if err != nil {
 		return workspace.StateAt{}, fmt.Errorf("begin read transaction: %w", err)
 	}

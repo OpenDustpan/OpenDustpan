@@ -63,7 +63,7 @@ both together.
 | [12](0012-api-edits-and-write-back.md) | API edits, and write-back to git | draft; forge connection credentials and defaults accepted (ADR 213) |
 | [13](0013-policy-and-approvals.md) | Policy and approvals | accepted (ADRs 222 to 230); the points of RFC 77 decided |
 | [14](0014-blueprints.md) | Blueprints, self-service units with validated inputs | accepted |
-| [15](0015-output-sharing.md) | Output sharing between units | draft; output reads of a job, on two paths, accepted (ADR 213) |
+| [15](0015-output-sharing.md) | Output sharing between units | accepted (ADRs 213, 273) |
 | [16](0016-egress-proxy.md) | Egress proxy for jobs, with request rules and credential injection | draft |
 | [17](0017-unit-lifecycle.md) | Stack and workspace lifecycle: delete, rename, move, tags | draft |
 | [18](0018-state-operations.md) | State operations: history, restore, locks and leases | accepted; the manual lock (ADR 213) |
@@ -151,3 +151,4 @@ both together.
 | [101](0101-a-private-registry-for-opentofu-providers-and-modules.md) | A private registry for OpenTofu providers and modules (ADR 269) | discussing |
 | [102](0102-cli-step-up-for-writes-that-need-a-fresh-authentication.md) | A step-up of a person in the CLI for writes that need a fresh authentication | discussing |
 | [103](0103-the-public-sdk-surface.md) | The public SDK surface: what stays in `pkg/`, and the CI check | accepted (ADR 272) |
+| [104](0104-dialect-neutral-store-logic.md) | Dialect-neutral store logic, so that a third SQL dialect can come later | accepted (ADR 274) |

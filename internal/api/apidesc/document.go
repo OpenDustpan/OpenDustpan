@@ -8,13 +8,15 @@ import (
 	"maps"
 	"net/http"
 	"slices"
+	"strconv"
 	"strings"
 )
 
 // DocumentVersion is the version of the description: info.version. It is not
-// the version of a build. It changes when the description changes. It is
-// valid in SemVer and in PEP 440, so each SDK can carry it.
-const DocumentVersion = "0.1.0"
+// the version of a build. It changes when the description changes, and the
+// test of openapi.pin fails when it does not. It is valid in SemVer and in
+// PEP 440, so each SDK can carry it.
+const DocumentVersion = "0.3.0"
 
 // OpenAPIVersion is the version of the OpenAPI format. The document uses the
 // part of 3.1.0 that maps one to one to 3.0.3: a nullable type is
@@ -27,6 +29,8 @@ const OpenAPIVersion = "3.1.0"
 const (
 	errorSchema     = "ErrorResponse"
 	bearerScheme    = "bearerAuth"
+	cookieScheme    = "sessionCookie"
+	csrfScheme      = "csrfHeader"
 	idempotencyName = "IdempotencyKey"
 	ifMatchName     = "IfMatch"
 	ifMatchReqName  = "IfMatchRequired"
@@ -86,7 +90,9 @@ func Build(ops []Operation) ([]byte, error) {
 
 	paths := object{}
 
-	for _, op := range ops {
+	for i := range ops {
+		op := &ops[i]
+
 		if strings.Contains(op.Path, "{$}") || strings.Contains(op.Path, "...}") {
 			return nil, fmt.Errorf(
 				"%w: path %q holds a wildcard that OpenAPI cannot hold",
@@ -101,15 +107,18 @@ func Build(ops []Operation) ([]byte, error) {
 			paths[op.Path] = item
 		}
 
-		item[strings.ToLower(op.Method)] = operationObject(op)
+		item[strings.ToLower(op.Method)] = operationObject(*op)
 	}
 
 	doc := object{
-		"openapi":    OpenAPIVersion,
-		"info":       infoObject(),
-		"servers":    []any{object{"url": "/"}},
-		"tags":       tagList(ops),
-		"security":   []any{object{bearerScheme: []any{}}},
+		"openapi": OpenAPIVersion,
+		"info":    infoObject(),
+		"servers": []any{object{"url": "/"}},
+		"tags":    tagList(ops),
+		"security": []any{
+			object{bearerScheme: []any{}},
+			object{cookieScheme: []any{}, csrfScheme: []any{}},
+		},
 		"paths":      paths,
 		"components": componentsObject(schemas),
 	}
@@ -144,7 +153,9 @@ func infoObject() object {
 func bodySchemas(ops []Operation) (object, error) {
 	var bodies []Body
 
-	for _, op := range ops {
+	for i := range ops {
+		op := &ops[i]
+
 		if err := op.ValidateBodies(); err != nil {
 			return nil, err
 		}
@@ -169,7 +180,17 @@ func componentsObject(bodies object) object {
 		"securitySchemes": object{
 			bearerScheme: object{
 				keyType: "http", "scheme": "bearer",
-				keyDescription: "An access token or a session of the console.",
+				keyDescription: "An access token.",
+			},
+			cookieScheme: object{
+				keyType: "apiKey", "in": "cookie", keyName: SessionCookie,
+				keyDescription: "The session of the console. A request that uses it also sends the csrfHeader scheme.",
+			},
+			csrfScheme: object{
+				keyType: "apiKey", "in": "header", keyName: CSRFHeader,
+				keyDescription: "The CSRF value of the session of the console. A request with the session cookie " +
+					"needs it when its method is not GET, HEAD or OPTIONS. Without it, or with a wrong value, " +
+					"the answer is 403 with the errorCode session.csrf. The server ignores it on the other methods.",
 			},
 		},
 		"parameters": object{
@@ -246,7 +267,9 @@ func errorSchemaObject() object {
 func tagList(ops []Operation) []any {
 	var names []string
 
-	for _, op := range ops {
+	for i := range ops {
+		op := &ops[i]
+
 		for _, tag := range op.Tags {
 			if !slices.Contains(names, tag) {
 				names = append(names, tag)
@@ -267,6 +290,10 @@ func tagList(ops []Operation) []any {
 // operationObject returns the operation object of one operation.
 func operationObject(op Operation) object {
 	params := pathParameters(op.Path)
+
+	for _, p := range sortedQuery(op.Query) {
+		params = append(params, queryParameter(p))
+	}
 
 	if op.IdempotencyKey {
 		params = append(params, object{keyRef: refParameters + idempotencyName})
@@ -289,17 +316,22 @@ func operationObject(op Operation) object {
 		success["headers"] = object{"ETag": object{keyRef: refHeaders + etagName}}
 	}
 
+	responses := object{
+		"default": object{
+			keyDescription: "The request failed.",
+			keyContent:     object{mediaJSON: object{keySchema: object{keyRef: refSchemas + errorSchema}}},
+		},
+	}
+
+	for _, status := range op.Statuses {
+		responses[strconv.Itoa(status)] = success
+	}
+
 	out := object{
 		"operationId": op.ID,
 		"tags":        stringsAsAny(op.Tags),
 		actionsKey:    actionList(op),
-		"responses": object{
-			"2XX": success,
-			"default": object{
-				keyDescription: "The request failed.",
-				keyContent:     object{mediaJSON: object{keySchema: object{keyRef: refSchemas + errorSchema}}},
-			},
-		},
+		"responses":   responses,
 	}
 
 	if len(params) > 0 {

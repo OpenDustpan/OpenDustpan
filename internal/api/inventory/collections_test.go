@@ -240,9 +240,10 @@ func newMoveFixtureFull(
 		locks = lockSvc(nsStore)
 	}
 
-	handler, err := apiinventory.NewHandler(apiinventory.Config{
-		Views: nil,
-		Audit: newTestAudit(), OnAuditFailure: nil, Locks: locks, PublicURL: "",
+	handler, err := newCheckedHandler(t, apiinventory.Config{
+		OutputSharing: nil,
+		Views:         nil,
+		Audit:         newTestAudit(), OnAuditFailure: nil, Locks: locks, PublicURL: "",
 		Namespaces:    nsSvc,
 		Units:         &memReader{entries: map[namespace.Name][]coreinventory.Entry{}, err: nil},
 		Collections:   svc,

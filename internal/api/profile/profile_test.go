@@ -18,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/api/apidesc/apidesctest"
 	"opendustpan.org/opendustpan/internal/api/idempotent"
 	apiprofile "opendustpan.org/opendustpan/internal/api/profile"
 	"opendustpan.org/opendustpan/internal/api/refusal"
@@ -103,7 +104,10 @@ func (testAuthz) ListObjects(_ context.Context, p identity.Principal, _ identity
 
 type fixture struct {
 	handler *apiprofile.Handler
-	store   *sqlite.Store
+	// served is the handler that the tests call: it fails a test when a
+	// handler answers a success status that the description does not give.
+	served http.Handler
+	store  *sqlite.Store
 	// denied holds the actions that testAuthz refuses. A test can add one
 	// while no request runs.
 	denied map[identity.Action]bool
@@ -253,7 +257,13 @@ func buildFixtureWith(
 		t.Fatalf("handler: %v", err)
 	}
 
-	return fixture{handler: handler, store: store, denied: denied, clock: clock}
+	return fixture{
+		handler: handler,
+		served:  apidesctest.CheckStatus(t, handler),
+		store:   store,
+		denied:  denied,
+		clock:   clock,
+	}
 }
 
 const base = "/api/dustpan/v1/namespaces/acme/profiles"
@@ -336,7 +346,7 @@ func (f fixture) do(t *testing.T, r request) response {
 	}
 
 	rec := httptest.NewRecorder()
-	f.handler.ServeHTTP(rec, req)
+	f.served.ServeHTTP(rec, req)
 
 	return response{code: rec.Code, header: rec.Header(), body: rec.Body.String()}
 }
