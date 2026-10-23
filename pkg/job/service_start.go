@@ -200,9 +200,9 @@ func (s *service) unitOf(ctx context.Context, ref identity.Object) (identity.Obj
 }
 
 // preAuthorize returns nil when the principal of a holds the start action of
-// one executor that can do the operation of req, and an error that wraps
-// identity.ErrDenied when it holds none. A request that names an executor is
-// checked for that executor alone.
+// one executor that can do the operation of req, and a *DeniedError for the
+// last action that the authorizer refused when it holds none. A request that
+// names an executor is checked for that executor alone.
 func (s *service) preAuthorize(ctx context.Context, a Actor, unit identity.Object, req *StartRequest) error {
 	kinds := []ExecutorKind{ExecutorRunner, ExecutorWriteBack}
 	if req.Executor != "" {
@@ -227,7 +227,7 @@ func (s *service) preAuthorize(ctx context.Context, a Actor, unit identity.Objec
 		case err == nil:
 			return nil
 		case errors.Is(err, identity.ErrDenied):
-			denied = fmt.Errorf("%w: %s on %s", err, action, unit.String())
+			denied = &DeniedError{Action: action, Object: unit, Err: err}
 		default:
 			return fmt.Errorf("authorize %s: %w", action, err)
 		}
@@ -249,8 +249,8 @@ func (s *service) authorizeFields(ctx context.Context, a Actor, unit identity.Ob
 }
 
 // authorize checks the start actions of spec for the principal of a, and
-// returns an error that wraps identity.ErrDenied for the first one that the
-// authorizer refuses. It fails closed: an error of the authorizer refuses.
+// returns a *DeniedError for the first one that the authorizer refuses. It
+// fails closed: an error of the authorizer refuses.
 func (s *service) authorize(ctx context.Context, a Actor, spec *Spec, req *StartRequest) error {
 	reqs, err := StartRequirements(*spec, req.BreakGlass)
 	if err != nil {
@@ -265,7 +265,8 @@ func (s *service) authorize(ctx context.Context, a Actor, spec *Spec, req *Start
 	return s.authorizeAll(ctx, a, reqs)
 }
 
-// authorizeAll asks the authorizer for each requirement, in order.
+// authorizeAll asks the authorizer for each requirement, in order, and
+// returns a *DeniedError for the first one that the authorizer refuses.
 func (s *service) authorizeAll(ctx context.Context, a Actor, reqs []Requirement) error {
 	for i := range reqs {
 		r := &reqs[i]
@@ -275,7 +276,7 @@ func (s *service) authorizeAll(ctx context.Context, a Actor, reqs []Requirement)
 		switch {
 		case err == nil:
 		case errors.Is(err, identity.ErrDenied):
-			return fmt.Errorf("%w: %s on %s", err, r.Action, r.Object.String())
+			return &DeniedError{Action: r.Action, Object: r.Object, Err: err}
 		default:
 			return fmt.Errorf("authorize %s: %w", r.Action, err)
 		}

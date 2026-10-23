@@ -304,17 +304,27 @@ func limited(h http.Header) bool {
 	return h.Get(headerRetryAfter) != "" || h.Get(headerLimitLeft) == "0"
 }
 
+// maxWait is the longest wait that waitTime returns. The rate limit of
+// GitHub resets each hour, so a longer wait is not a value to trust.
+const maxWait = time.Hour
+
 // waitTime returns the time that GitHub asks the caller to wait, from
-// Retry-After or from the reset time of the rate limit. It returns zero
-// when GitHub gave none.
+// Retry-After or from the reset time of the rate limit, up to maxWait. It
+// returns zero when GitHub gave none.
 func (f *gitHub) waitTime(h http.Header) time.Duration {
 	if s, err := strconv.ParseInt(h.Get(headerRetryAfter), 10, 64); err == nil && s > 0 {
+		// Compare the seconds before the multiplication, because a large
+		// count overflows time.Duration.
+		if s > int64(maxWait/time.Second) {
+			return maxWait
+		}
+
 		return time.Duration(s) * time.Second
 	}
 
 	if reset, err := strconv.ParseInt(h.Get(headerLimitReset), 10, 64); err == nil {
 		if d := time.Unix(reset, 0).Sub(f.o.now()); d > 0 {
-			return d
+			return min(d, maxWait)
 		}
 	}
 

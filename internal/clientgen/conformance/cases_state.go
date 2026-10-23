@@ -179,7 +179,11 @@ func missingIfMatchGives428(ctx context.Context, env Env) error {
 
 	res, err := env.Adapter.Call(ctx, reviseCall(env, ""))
 	if errors.Is(err, ErrRequestRefused) {
-		return refusedBeforeTheServer(env, err)
+		if refusalErr := refusedBeforeTheServer(env, err); refusalErr != nil {
+			return refusalErr
+		}
+
+		return sentWithIfMatch(ctx, env)
 	}
 
 	if err != nil {
@@ -202,6 +206,29 @@ func refusedBeforeTheServer(env Env, err error) error {
 
 	if n := len(env.Proxy.Exchanges()); n != 0 {
 		return failf("the client refused the call after it sent %d request(s) to the server", n)
+	}
+
+	return nil
+}
+
+// sentWithIfMatch is the control of a refusal of the call with no If-Match: the
+// same call with an If-Match value must reach the server. A client that refuses
+// the call for another argument, for example its body, refuses this call too,
+// and does not pass. The value is stale, so the server changes nothing.
+func sentWithIfMatch(ctx context.Context, env Env) error {
+	env.Proxy.Reset()
+
+	_, err := env.Adapter.Call(ctx, reviseCall(env, staleVersionETag))
+	if errors.Is(err, ErrRequestRefused) {
+		return failf("the client refused the call with If-Match too, so the refusal is not for If-Match: %v", err)
+	}
+
+	if err != nil {
+		return err
+	}
+
+	if n := len(env.Proxy.Exchanges()); n == 0 {
+		return failf("the call with If-Match did not reach the server")
 	}
 
 	return nil

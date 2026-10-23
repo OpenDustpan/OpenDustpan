@@ -594,12 +594,11 @@ func kindOf(action identity.Action) audit.Kind {
 // allowlist stays so that a principal from an authenticator outside this
 // repository cannot make the denial entry fail to append.
 func principalKind(k identity.Kind) string {
-	switch k {
-	case identity.KindPerson, identity.KindService, identity.KindWorkload:
+	if k.Known() {
 		return string(k)
-	default:
-		return ""
 	}
+
+	return ""
 }
 
 // truncateUserAgent cuts s to audit.MaxUserAgentLen bytes, at a rune boundary.
