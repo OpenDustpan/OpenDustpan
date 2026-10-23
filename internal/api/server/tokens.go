@@ -482,7 +482,9 @@ func ofPathPrincipal(op tokenOp) tokenOp {
 		case t.PrincipalID != r.PathValue("principal"):
 			err = fmt.Errorf("%w: %q", accesstoken.ErrNotFound, id)
 		case t.Kind != accesstoken.KindService:
-			err = fmt.Errorf("%w: a %s token goes through /api/server/tokens", accesstoken.ErrWrongKind, t.Kind)
+			err = fmt.Errorf("%w: its owner rotates and revokes a %s token through /api/server/caller/tokens/{id}, "+
+				"and an administrator reads and revokes it through /api/server/tokens/{id}", accesstoken.ErrWrongKind,
+				t.Kind)
 		default:
 		}
 

@@ -103,17 +103,23 @@ func checkText(req *StartRequest) error {
 }
 
 // sourceOf returns the source kind of a start: the kind that the caller
-// gave, or the default for the actor.
+// gave, or the default for the actor. The start of an agent has the source
+// kind agent: it returns ErrInvalid when the caller gives another kind for an
+// agent, so that a policy never sees the start of an agent as a start of a
+// person, a schedule or a feature of the server.
 func sourceOf(a Actor, given SourceKind) (SourceKind, error) {
 	switch {
 	case given == "" && a.Agent != "":
 		return SourceAgent, nil
 	case given == "":
 		return SourceAPI, nil
-	case given.Valid():
-		return given, nil
-	default:
+	case !given.Valid():
 		return "", fmt.Errorf("%w: %q is not a source kind", ErrInvalid, given)
+	case a.Agent != "" && given != SourceAgent:
+		return "", fmt.Errorf("%w: the start of an agent has the source kind %s, not %s", ErrInvalid, SourceAgent,
+			given)
+	default:
+		return given, nil
 	}
 }
 

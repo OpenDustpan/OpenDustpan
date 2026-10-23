@@ -18,6 +18,7 @@ import (
 	"opendustpan.org/opendustpan/internal/clientip"
 	"opendustpan.org/opendustpan/internal/pagetoken"
 	"opendustpan.org/opendustpan/internal/requestid"
+	"opendustpan.org/opendustpan/internal/sessionauth"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/idempotency"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -122,7 +123,7 @@ func actorOf(r *http.Request, p identity.Principal) *profile.Actor {
 	by := audit.Entry{
 		At: time.Time{}, Namespace: "", Subject: "", IDPSubject: "", TokenID: "", Action: "", Object: "",
 		Version: "", ValuePath: "", ValueCount: nil, Changes: nil, SourceIP: clientip.String(r),
-		UserAgent: truncateUserAgent(userAgent(r)), Channel: audit.NormalizeChannel(apidesc.Header(r, channelHeader)),
+		UserAgent: truncateUserAgent(userAgent(r)), Channel: sessionauth.AuditChannel(r, channelHeader),
 		Kind: audit.KindChange, Outcome: audit.OutcomeSuccess, RequestID: requestid.FromContext(r.Context()),
 		ObjectID: "", PrevHash: "", Hash: "", Sequence: 0, FenceVersion: 0, Reason: "", PrincipalKind: "", JobID: "",
 	}
@@ -130,12 +131,20 @@ func actorOf(r *http.Request, p identity.Principal) *profile.Actor {
 	return &profile.Actor{Principal: p, By: by}
 }
 
+// truncateUserAgent caps s at audit.MaxUserAgentLen bytes.
 func truncateUserAgent(s string) string {
 	if len(s) <= audit.MaxUserAgentLen {
 		return s
 	}
 
-	return s[:audit.MaxUserAgentLen]
+	// Cut on a UTF-8 rune boundary, so a multi-byte rune is never split and
+	// the entry keeps valid UTF-8.
+	cut := audit.MaxUserAgentLen
+	for cut > 0 && s[cut]&0xC0 == 0x80 {
+		cut--
+	}
+
+	return s[:cut]
 }
 
 // readBody decodes one JSON object into v. It refuses an unknown field, a
