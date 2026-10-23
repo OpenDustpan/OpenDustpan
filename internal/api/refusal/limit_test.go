@@ -520,6 +520,11 @@ func TestSlowFlushKeepsTheEntryOfTheRefusal(t *testing.T) {
 		t.Fatalf("flush deadline %v is not after the deadline of the entry %v: both writes share one budget", bo, ann)
 	}
 
+	if gap := bo.Sub(ann); gap > time.Second {
+		t.Fatalf("flush deadline %v is %v after the deadline of the entry %v, "+
+			"want at most about 1s: the flush has a timeout of its own", bo, gap, ann)
+	}
+
 	if rest := time.Until(ann); rest < 4*time.Second {
 		t.Fatalf("the entry of the refusal has %v left of its write timeout, want about 5s", rest)
 	}
