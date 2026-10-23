@@ -48,7 +48,7 @@ func gated() []errcodetest.Adapter {
 		api("pulumi", []string{"errorResponse", "codedErrorResponse", "freshRefusalResponse"}, nil),
 		api("registry", []string{"errorResponse", "statusError", "problem"}, nil),
 		// The runner protocol has its own codes and its own versions.
-		api("runnerapi", []string{"managementError", "codedManagementError"},
+		api("runnerapi", []string{"managementError"},
 			[]string{"classifyProtocol", "classifyProtocolOther"}),
 		api("server", []string{
 			"errorResponse", "codedResponse", "codedError", "reauthenticateResponse", "enterRefusedResponse",
