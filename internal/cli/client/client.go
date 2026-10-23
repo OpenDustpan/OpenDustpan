@@ -19,7 +19,7 @@ import (
 var ErrUsage = errors.New(
 	"usage: opendustpan --version | opendustpan serve | opendustpan dev | opendustpan health | opendustpan namespace create <name> | " +
 		"opendustpan upgrade check | opendustpan backup check | opendustpan backup | opendustpan restore | " +
-		"opendustpan host create-temp-admin <subject> | " +
+		"opendustpan host create-temp-admin <person> | " +
 		"opendustpan audit-chain status | opendustpan audit-chain approve",
 )
 
