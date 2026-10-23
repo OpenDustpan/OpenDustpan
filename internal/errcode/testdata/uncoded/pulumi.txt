@@ -1,23 +1,11 @@
 # The error paths of internal/api/pulumi that answer without a code of the
 # catalog. This list only shrinks: give a path a code, remove its line and
 # lower the limit. A new error path never goes on this list.
-limit 30
+limit 18
 Handler.writeBusy: errorResponse{}
-classify: stack.ErrAlreadyExists
-classify: stack.ErrHasResources
-classify: stack.ErrInvalidName
 classify: stack.ErrInvalidUpdate
-classify: stack.ErrNoState
-classify: stack.ErrNoStateAt
-classify: stack.ErrNotFound
-classify: stack.ErrOtherSecretsProvider
-classify: stack.ErrResourceNotFound
 classify: stack.ErrUpdateNotFound
-classifyAuth: errSessionSecrets
 classifyAuth: errSessionUpdate
-classifySecret: secret.ErrDecrypt
-classifySecret: secret.ErrKeyNotConfigured
-classifySecret: secret.ErrTooLarge
 classifyUpdate: AsType[*manuallock.LockedError]
 classifyUpdate: stack.ErrCheckpointConflict
 classifyUpdate: stack.ErrConcurrentModification

@@ -981,8 +981,10 @@ func classifyAuth(err error) (failure, bool) {
 		return coded(http.StatusUnauthorized, "unauthenticated", errcode.AuthUnauthenticated), true
 	case errors.Is(err, sessionauth.ErrCSRF), errors.Is(err, sessionauth.ErrOtherSite):
 		return coded(http.StatusForbidden, err.Error(), errcode.Forbidden(err)), true
-	case errors.Is(err, errSessionUpdate), errors.Is(err, errSessionSecrets):
+	case errors.Is(err, errSessionUpdate):
 		return uncoded(http.StatusForbidden, err.Error()), true
+	case errors.Is(err, errSessionSecrets):
+		return coded(http.StatusForbidden, err.Error(), errcode.SecretConsoleSession), true
 	case errors.Is(err, identity.ErrDenied):
 		return coded(http.StatusForbidden, "forbidden", errcode.Forbidden(err)), true
 	}
@@ -999,22 +1001,19 @@ func classifyAuth(err error) (failure, bool) {
 // holds no fingerprint; scopes there are the request's own names, not key
 // material.
 func classify(err error) failure {
-	for _, try := range []func(error) (failure, bool){classifyAuth, classifyNamespace, classifyRequest} {
+	for _, try := range []func(error) (failure, bool){
+		classifyAuth, classifyNamespace, classifyRequest, classifyStack,
+	} {
 		if f, ok := try(err); ok {
 			return f
 		}
 	}
 
 	switch {
-	case errors.Is(err, stack.ErrInvalidName), errors.Is(err, stack.ErrInvalidUpdate):
+	case errors.Is(err, stack.ErrInvalidUpdate):
 		return uncoded(http.StatusBadRequest, err.Error())
-	case errors.Is(err, stack.ErrNotFound), errors.Is(err, stack.ErrUpdateNotFound), errors.Is(err, stack.ErrNoState),
-		errors.Is(err, stack.ErrNoStateAt), errors.Is(err, stack.ErrResourceNotFound):
+	case errors.Is(err, stack.ErrUpdateNotFound):
 		return uncoded(http.StatusNotFound, err.Error())
-	case errors.Is(err, stack.ErrHasResources):
-		return uncoded(http.StatusBadRequest, hasResourcesMessage)
-	case errors.Is(err, stack.ErrAlreadyExists), errors.Is(err, stack.ErrOtherSecretsProvider):
-		return uncoded(http.StatusConflict, err.Error())
 	case errors.Is(err, secret.ErrTooLarge),
 		errors.Is(err, secret.ErrDecrypt),
 		errors.Is(err, secret.ErrKeyNotConfigured):
@@ -1038,6 +1037,38 @@ func classifyNamespace(err error) (failure, bool) {
 		return coded(http.StatusConflict, namespace.ErrFenced.Error(), errcode.NamespaceFenced), true
 	case errors.Is(err, namespace.ErrNotHome):
 		return coded(http.StatusMisdirectedRequest, err.Error(), errcode.NamespaceNotHome), true
+	}
+
+	return uncoded(0, ""), false
+}
+
+// classifyStack maps the errors of the stacks. ok is false for any other
+// error.
+func classifyStack(err error) (failure, bool) {
+	switch {
+	case errors.Is(err, stack.ErrInvalidName):
+		return coded(http.StatusBadRequest, err.Error(), errcode.StackInvalidName), true
+	case errors.Is(err, stack.ErrNotFound):
+		return coded(http.StatusNotFound, err.Error(), errcode.StackNotFound), true
+	case errors.Is(err, stack.ErrNoState):
+		return coded(http.StatusNotFound, err.Error(), errcode.StackNoState), true
+	case errors.Is(err, stack.ErrNoStateAt):
+		// A stack with a first state names its time. A stack with no
+		// checkpoint yet has no state at all.
+		if at, ok := errors.AsType[*stack.NoStateAtError](err); ok && !at.First.IsZero() {
+			return coded(http.StatusNotFound, err.Error(), errcode.StackNoStateAtTime,
+				errcode.Time("first", at.First)), true
+		}
+
+		return coded(http.StatusNotFound, err.Error(), errcode.StackNoState), true
+	case errors.Is(err, stack.ErrResourceNotFound):
+		return coded(http.StatusNotFound, err.Error(), errcode.StackResourceNotFound), true
+	case errors.Is(err, stack.ErrHasResources):
+		return coded(http.StatusBadRequest, hasResourcesMessage, errcode.StackHasResources), true
+	case errors.Is(err, stack.ErrAlreadyExists):
+		return coded(http.StatusConflict, err.Error(), errcode.StackAlreadyExists), true
+	case errors.Is(err, stack.ErrOtherSecretsProvider):
+		return coded(http.StatusConflict, err.Error(), errcode.StackOtherSecretsProvider), true
 	}
 
 	return uncoded(0, ""), false
@@ -1072,11 +1103,11 @@ func classifyRequest(err error) (failure, bool) {
 func classifySecret(err error) failure {
 	switch {
 	case errors.Is(err, secret.ErrKeyNotConfigured):
-		return uncoded(http.StatusInternalServerError, secret.ErrKeyNotConfigured.Error())
+		return coded(http.StatusInternalServerError, secret.ErrKeyNotConfigured.Error(), errcode.SecretKeyNotConfigured)
 	case errors.Is(err, secret.ErrTooLarge):
-		return uncoded(http.StatusRequestEntityTooLarge, err.Error())
+		return coded(http.StatusRequestEntityTooLarge, err.Error(), errcode.SecretTooLarge)
 	case errors.Is(err, secret.ErrDecrypt):
-		return uncoded(http.StatusBadRequest, decryptFailedMessage)
+		return coded(http.StatusBadRequest, decryptFailedMessage, errcode.SecretNotDecrypted)
 	default:
 		return coded(http.StatusInternalServerError, "internal error", errcode.ServerInternal)
 	}
