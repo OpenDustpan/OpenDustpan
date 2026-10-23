@@ -973,9 +973,9 @@ func (s *Store) ForceDeleteStack(
 	})
 }
 
-// refuseRunningStack returns a *stack.UpdateConflictError, which matches
-// ErrUpdateConflict and names the running update, while a mutating update of
-// the stack with stackID runs.
+// refuseRunningStack returns the error of stack.RunningUpdateConflict, which
+// matches ErrUpdateConflict and names the running update when its ID is
+// valid, while a mutating update of the stack with stackID runs.
 func refuseRunningStack(ctx context.Context, q *db.Queries, stackID string) error {
 	active, err := q.RunningMutatingUpdate(ctx, stackID)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -986,7 +986,7 @@ func refuseRunningStack(ctx context.Context, q *db.Queries, stackID string) erro
 		return fmt.Errorf("read the running update: %w", err)
 	}
 
-	return &stack.UpdateConflictError{Active: stack.UpdateID(active)}
+	return stack.RunningUpdateConflict(active)
 }
 
 // refuseResourcedStack returns ErrHasResources when the latest checkpoint of

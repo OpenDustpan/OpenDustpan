@@ -207,7 +207,8 @@ type Store interface {
 	// ForceDeleteStack soft-deletes the stack identified by ref at the time
 	// e.At and appends e, as DeleteStack does, even when the latest checkpoint
 	// manages resources. It returns ErrNotFound if no live stack has ref,
-	// ErrUpdateConflict while a mutating update of the stack runs,
+	// ErrUpdateConflict while a mutating update of the stack runs (a
+	// *UpdateConflictError that names that update),
 	// namespace.ErrNotFound if the namespace does not exist,
 	// namespace.ErrFenced if fence is stale, or audit.ErrInvalidEntry if e
 	// fails validation or names another namespace. While a manual lock covers
