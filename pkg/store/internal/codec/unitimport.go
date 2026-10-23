@@ -5,10 +5,10 @@ import (
 	"fmt"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/unitimport"
 	"opendustpan.org/opendustpan/pkg/history"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/secret"
-	"opendustpan.org/opendustpan/pkg/unitimport"
 )
 
 // ImportRow is the column representation of an import. NamespaceID is the

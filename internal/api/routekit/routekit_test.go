@@ -12,6 +12,7 @@ import (
 	"opendustpan.org/opendustpan/internal/api/refusal"
 	"opendustpan.org/opendustpan/internal/api/routekit"
 	"opendustpan.org/opendustpan/internal/sessionauth"
+	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
 )
@@ -67,11 +68,27 @@ func (a authorizer) Authorize(
 	}
 }
 
-func guard(seen *[]string, authz authorizer) routekit.Guard {
+// auditStore accepts each refusal entry and keeps none of them.
+type auditStore struct {
+	audit.Store
+}
+
+func (auditStore) Append(_ context.Context, _ namespace.Fence, e audit.Entry) (audit.Entry, error) {
+	return e, nil
+}
+
+func guard(t *testing.T, seen *[]string, authz authorizer) routekit.Guard {
+	t.Helper()
+
+	recorder, err := refusal.New(authz, auditStore{Store: nil}, nil, slog.New(slog.DiscardHandler), nil)
+	if err != nil {
+		t.Fatalf("refusal.New: %v", err)
+	}
+
 	return routekit.Guard{
 		Tokens:   tokens{Authenticator: nil, seen: seen},
 		Sessions: nil,
-		Refusals: refusal.New(authz, nil, nil, slog.New(slog.DiscardHandler), nil),
+		Refusals: recorder,
 	}
 }
 
@@ -130,7 +147,7 @@ func checkScheme(t *testing.T, tc schemeCase) {
 		r.Header.Set("Authorization", tc.header)
 	}
 
-	p, caller, err := guard(&seen, newAuthorizer(nil, nil)).Authenticate(r)
+	p, caller, err := guard(t, &seen, newAuthorizer(nil, nil)).Authenticate(r)
 	if !errors.Is(err, tc.want) {
 		t.Fatalf("Authenticate(%q) error = %v, want %v", tc.header, err, tc.want)
 	}
@@ -164,20 +181,20 @@ func TestAuthorizeAll(t *testing.T) {
 	r := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/x", http.NoBody)
 
 	all := newAuthorizer(map[identity.Action]bool{actions[0]: true, actions[1]: true}, nil)
-	if err := guard(new([]string), all).AuthorizeAll(r, p, obj, actions); err != nil || len(*all.asked) != 2 {
+	if err := guard(t, new([]string), all).AuthorizeAll(r, p, obj, actions); err != nil || len(*all.asked) != 2 {
 		t.Fatalf("AuthorizeAll = %v after %d checks, want nil after 2", err, len(*all.asked))
 	}
 
 	first := newAuthorizer(nil, nil)
 
-	err := guard(new([]string), first).AuthorizeAll(r, p, obj, actions)
+	err := guard(t, new([]string), first).AuthorizeAll(r, p, obj, actions)
 	if err == nil || !errors.Is(err, identity.ErrDenied) || len(*first.asked) != 1 ||
 		!strings.Contains(err.Error(), string(actions[0])) {
 		t.Fatalf("AuthorizeAll = %v after %d checks, want the first refusal after 1", err, len(*first.asked))
 	}
 
 	down := newAuthorizer(nil, errAuthzDown)
-	if err := guard(new([]string), down).AuthorizeAll(r, p, obj, actions); !errors.Is(err, errAuthzDown) {
+	if err := guard(t, new([]string), down).AuthorizeAll(r, p, obj, actions); !errors.Is(err, errAuthzDown) {
 		t.Fatalf("AuthorizeAll with a failing authorizer = %v, want its error", err)
 	}
 }

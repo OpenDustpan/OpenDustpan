@@ -1932,3 +1932,22 @@ func (m *memUpdates) withSize(u stack.Update) stack.Update {
 
 	return u
 }
+
+// TestHistoryOfMissingStack proves that History answers ErrNotFound for a
+// stack that does not exist, and an empty list for a stack with no update.
+func TestHistoryOfMissingStack(t *testing.T) {
+	t.Parallel()
+
+	f := newUpdates(t)
+	ghost := stack.Ref{Namespace: f.ref.Namespace, Project: f.ref.Project, Stack: "ghost"}
+
+	_, err := f.svc.History(t.Context(), ghost, stack.Page{Limit: 0, Offset: 0})
+	if !errors.Is(err, stack.ErrNotFound) {
+		t.Fatalf("history of a missing stack = %v, want stack.ErrNotFound", err)
+	}
+
+	list, err := f.svc.History(t.Context(), f.ref, stack.Page{Limit: 0, Offset: 0})
+	if err != nil || len(list) != 0 {
+		t.Fatalf("history of a stack with no update = %v, %v, want an empty list", list, err)
+	}
+}

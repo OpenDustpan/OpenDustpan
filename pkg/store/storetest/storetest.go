@@ -124,7 +124,7 @@ func Run(t *testing.T, newStore Factory) {
 		},
 	}
 
-	for _, tc := range cases {
+	for _, tc := range slices.Concat(cases, stackPageCases()) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			tc.test(t, newStore(t))

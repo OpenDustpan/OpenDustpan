@@ -31,8 +31,9 @@ const (
 	failureLongWindow = time.Minute
 	// failureShortWindow ends many times inside the edge case.
 	failureShortWindow = 20 * time.Millisecond
-	// failureEdgeRun is how long the edge case adds misses.
-	failureEdgeRun = 150 * time.Millisecond
+	// failureEdgeWait is the longest time the edge case waits for the clock
+	// of the store to pass the end of a short window.
+	failureEdgeWait = 10 * time.Second
 	// failureSkew is the clock offset of the instances in the skew case.
 	failureSkew = time.Hour
 	// failureAdds is the count of concurrent adds.
@@ -168,23 +169,27 @@ func testFailuresWindowEdge(t *testing.T, h SignInFailureHarness) {
 	t.Helper()
 
 	s := h.Open(t, 0)
-	stop := time.Now().Add(failureEdgeRun)
+	first := addFailure(t, s, "192.0.2.1", failureShortWindow)
+	got := []authgate.FailureCount{first}
 
-	var got []authgate.FailureCount
+	// The case adds misses until the clock of the store passes the end of
+	// the first window, so the result does not depend on how many adds a
+	// slow store answers in some wall-clock time. The deadline only stops
+	// a store whose clock does not move.
+	deadline := time.Now().Add(failureEdgeWait)
 
-	for time.Now().Before(stop) {
+	for got[len(got)-1].At.Before(first.End) {
+		if time.Now().After(deadline) {
+			t.Fatalf("the clock of the store did not pass %v within %v", first.End, failureEdgeWait)
+		}
+
 		got = append(got, addFailure(t, s, "192.0.2.1", failureShortWindow))
 	}
 
 	wantRuns(t, got)
 
-	windows := map[int64]bool{}
-	for _, c := range got {
-		windows[c.End.UnixMilli()] = true
-	}
-
-	if len(windows) < 2 {
-		t.Fatalf("adds over %v saw %d windows of %v, want 2 or more", failureEdgeRun, len(windows), failureShortWindow)
+	if last := got[len(got)-1]; !last.End.After(first.End) || last.Count != 1 {
+		t.Fatalf("add after the end of the window %v = %+v, want count 1 in a later window", first.End, last)
 	}
 }
 

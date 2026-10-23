@@ -64,7 +64,7 @@ func (homedNamespaceStore) Ping(_ context.Context) error {
 	return nil
 }
 
-func newTestHandler(t *testing.T) *apiinventory.Handler {
+func newTestHandler(t *testing.T) testHandler {
 	t.Helper()
 
 	nsStore := &memNamespaceStore{namespaces: map[namespace.Name]namespace.Namespace{}}
@@ -80,9 +80,10 @@ func newTestHandler(t *testing.T) *apiinventory.Handler {
 		t.Fatalf("namespace service: %v", err)
 	}
 
-	handler, err := apiinventory.NewHandler(apiinventory.Config{
-		Views: testViewsConfig(t),
-		Audit: nil, OnAuditFailure: nil, Locks: nil, Moves: nil,
+	handler, err := newCheckedHandler(t, apiinventory.Config{
+		OutputSharing: nil,
+		Views:         testViewsConfig(t),
+		Audit:         newTestAudit(), OnAuditFailure: nil, Locks: nil, Moves: nil,
 		Collections:   testCollectionService(t, nsStore),
 		Namespaces:    namespaces,
 		Units:         &memReader{entries: map[namespace.Name][]coreinventory.Entry{}, err: nil},
@@ -108,7 +109,7 @@ func newTestHandler(t *testing.T) *apiinventory.Handler {
 
 // newEnforcingHandler builds a Handler whose namespace reads succeed, so the
 // enforcement tests can tell authorization apart from backend failures.
-func newEnforcingHandler(t *testing.T, authz identity.Authorizer) *apiinventory.Handler {
+func newEnforcingHandler(t *testing.T, authz identity.Authorizer) testHandler {
 	t.Helper()
 
 	namespaces, err := namespace.NewService(
@@ -118,9 +119,10 @@ func newEnforcingHandler(t *testing.T, authz identity.Authorizer) *apiinventory.
 		t.Fatalf("namespace service: %v", err)
 	}
 
-	handler, err := apiinventory.NewHandler(apiinventory.Config{
-		Views: nil,
-		Audit: nil, OnAuditFailure: nil, Locks: nil, Moves: nil,
+	handler, err := newCheckedHandler(t, apiinventory.Config{
+		OutputSharing: nil,
+		Views:         nil,
+		Audit:         newTestAudit(), OnAuditFailure: nil, Locks: nil, Moves: nil,
 		Collections:   testCollectionService(t, homedNamespaceStore{}),
 		Namespaces:    namespaces,
 		Units:         &memReader{entries: enforcingUnitEntries(), err: nil},
@@ -292,7 +294,7 @@ func checkAuthorizedRoute(t *testing.T, route apiinventory.Route, public map[str
 
 // probeRoute checks that a declared route is registered: a request without a
 // token must fail closed, never with 404.
-func probeRoute(t *testing.T, handler *apiinventory.Handler, route apiinventory.Route) {
+func probeRoute(t *testing.T, handler testHandler, route apiinventory.Route) {
 	t.Helper()
 
 	req := routeRequest(t, route, "")

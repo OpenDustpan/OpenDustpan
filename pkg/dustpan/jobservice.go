@@ -252,21 +252,12 @@ type jobPlanner struct {
 
 // Plan implements job.Planner.
 func (p jobPlanner) Plan(ctx context.Context, unit identity.Object, req *job.StartRequest) (job.Spec, error) {
-	if req.Operation != job.OperationPlan {
-		return job.Spec{}, fmt.Errorf("%w: this server starts plan jobs only, not %s", job.ErrUnsupported,
-			req.Operation)
+	err := checkPlanRequest(req)
+	if err != nil {
+		return job.Spec{}, err
 	}
 
-	if req.Executor != "" && req.Executor != job.ExecutorRunner {
-		return job.Spec{}, fmt.Errorf("%w: this server starts jobs on runners only, not through %s",
-			job.ErrUnsupported, req.Executor)
-	}
-
-	if len(req.Edits) > 0 || req.Delivery != "" {
-		return job.Spec{}, fmt.Errorf("%w: edits and a delivery are for write-back jobs", job.ErrInvalid)
-	}
-
-	steps, err := planSteps(unit.Tool())
+	steps, err := stepsOf(unit.Tool(), req.Purpose)
 	if err != nil {
 		return job.Spec{}, err
 	}
@@ -282,9 +273,40 @@ func (p jobPlanner) Plan(ctx context.Context, unit identity.Object, req *job.Sta
 	}
 
 	return job.Spec{
-		Unit: unit, Operation: job.OperationPlan, Executor: job.ExecutorRunner, Location: req.Location,
-		Steps: steps, Pool: poolID, Profile: "", Edits: nil, Delivery: "",
+		Unit: unit, Operation: req.Operation, Purpose: req.Purpose, Executor: job.ExecutorRunner,
+		Location: req.Location, Steps: steps, Pool: poolID, Profile: "", Edits: nil, Delivery: "",
 	}, nil
+}
+
+// checkPlanRequest returns the refusal of a request that this planner cannot
+// start: another operation than a plan, or a refresh for a drift check, another
+// executor than runners, and the fields of a write-back job.
+func checkPlanRequest(req *job.StartRequest) error {
+	driftCheck := req.Purpose == job.PurposeDriftCheck
+
+	switch {
+	case driftCheck && req.Operation != job.OperationRefresh:
+		return fmt.Errorf("%w: a %s has the operation %s, not %s", job.ErrInvalid, req.Purpose,
+			job.OperationRefresh, req.Operation)
+	case !driftCheck && req.Operation != job.OperationPlan:
+		return fmt.Errorf("%w: this server starts plan jobs only, not %s", job.ErrUnsupported, req.Operation)
+	case req.Executor != "" && req.Executor != job.ExecutorRunner:
+		return fmt.Errorf("%w: this server starts jobs on runners only, not through %s", job.ErrUnsupported,
+			req.Executor)
+	case len(req.Edits) > 0 || req.Delivery != "":
+		return fmt.Errorf("%w: edits and a delivery are for write-back jobs", job.ErrInvalid)
+	default:
+		return nil
+	}
+}
+
+// stepsOf returns the fixed steps for the tool and the purpose.
+func stepsOf(tool string, purpose job.Purpose) ([]job.Step, error) {
+	if purpose != job.PurposeDriftCheck {
+		return planSteps(tool)
+	}
+
+	return driftSteps(tool)
 }
 
 // checkLocation checks the code location of a start in the namespace ns.
@@ -362,32 +384,52 @@ func (p jobPlanner) poolID(ctx context.Context, ns namespace.Name, name string) 
 // finds it on its PATH.
 const tofuProgram = "tofu"
 
+// The words of the OpenTofu steps that this server starts.
+const (
+	tofuInit       = "init"
+	tofuPlan       = "plan"
+	tofuNoInput    = "-input=false"
+	tofuAutomation = "TF_IN_AUTOMATION"
+)
+
 // planSteps returns the default steps of a plan for the tool. Only the tools
 // with a plan step list here start a job.
 func planSteps(tool string) ([]job.Step, error) {
 	switch tool {
-	case "opentofu":
-		return []job.Step{
-			{
-				Name:             "init",
-				Role:             job.RoleTool,
-				Phase:            job.PhasePlan,
-				Args:             []string{tofuProgram, "init", "-input=false"},
-				Env:              map[string]string{"TF_IN_AUTOMATION": "1"},
-				Dir:              "",
-				Timeout:          0,
-				AllowFailure:     false,
-				ChangesResources: false,
-				Outputs:          nil,
-			},
-			{
-				Name: "plan", Role: job.RoleTool, Phase: job.PhasePlan,
-				Args: []string{tofuProgram, "plan", "-input=false", "-out=tfplan"},
-				Env:  map[string]string{"TF_IN_AUTOMATION": "1"}, Dir: "", Timeout: 0, AllowFailure: false,
-				ChangesResources: false, Outputs: []job.Output{{Kind: job.OutputPlanApply, Path: "tfplan"}},
-			},
-		}, nil
+	case opentofuTool:
+		initStep := tofuStep(tofuInit, tofuInit, tofuNoInput)
+		planStep := tofuStep(tofuPlan, tofuPlan, tofuNoInput, "-out=tfplan")
+		planStep.Outputs = []job.Output{{Kind: job.OutputPlanApply, Path: "tfplan"}}
+
+		return []job.Step{initStep, planStep}, nil
 	default:
 		return nil, fmt.Errorf("%w: this server has no default plan steps for the tool %q", job.ErrUnsupported, tool)
+	}
+}
+
+// driftSteps returns the fixed steps of a drift check for the tool: a
+// refresh-only plan. It sets no variable, passes no argument that a caller
+// chose, and keeps the default state lock: no -lock=false, so a check that
+// cannot get the lock fails and the last result stays. The plan file stays in
+// the checkout of the runner, which a later step reduces to a summary.
+func driftSteps(tool string) ([]job.Step, error) {
+	switch tool {
+	case opentofuTool:
+		return []job.Step{
+			tofuStep(tofuInit, tofuInit, tofuNoInput),
+			tofuStep(tofuPlan, tofuPlan, "-refresh-only", tofuNoInput, "-out=drift.tfplan"),
+		}, nil
+	default:
+		return nil, fmt.Errorf("%w: this server has no drift check steps for the tool %q", job.ErrUnsupported, tool)
+	}
+}
+
+// tofuStep returns a plan-phase tool step that runs the OpenTofu program with
+// args. It changes no resource and leaves no output.
+func tofuStep(name string, args ...string) job.Step {
+	return job.Step{
+		Name: name, Role: job.RoleTool, Phase: job.PhasePlan, Args: append([]string{tofuProgram}, args...),
+		Env: map[string]string{tofuAutomation: "1"}, Dir: "", Timeout: 0, AllowFailure: false,
+		ChangesResources: false, Outputs: nil,
 	}
 }

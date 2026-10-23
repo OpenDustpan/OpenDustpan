@@ -1,6 +1,7 @@
 package apidesc_test
 
 import (
+	"errors"
 	"slices"
 	"strings"
 	"testing"
@@ -38,6 +39,61 @@ func TestCollectSkipsOnlyTheExactUndescribedRoutes(t *testing.T) {
 	got := apidesc.Collect(rows, nil)
 	if len(got) != 1 || got[0].Path != path+"/extra" {
 		t.Fatalf("Collect() = %v, want the one route %s/extra", got, path)
+	}
+}
+
+// TestLabelStatuses proves the success statuses that a label gives: the
+// default of the body, the codes in ascending order, and an error at Build
+// for a code that the label gives twice or that is not a 2xx code.
+func TestLabelStatuses(t *testing.T) {
+	t.Parallel()
+
+	row := apidesc.Row{
+		Method: "PUT", Path: "/api/dustpan/v1/things", Actions: []string{"thing:write"}, NamespaceActions: nil,
+		Public: false, IdempotencyKey: false,
+	}
+
+	typed := apidesc.Typed[struct{}]("Thing")
+	label := apidesc.Name("putThing", "things").On(apidesc.KindServer)
+
+	tests := []struct {
+		name    string
+		label   apidesc.Label
+		want    []int
+		refused bool
+	}{
+		{"default with a body", label.WithBodies(apidesc.NoBody, typed), []int{200}, false},
+		{"default with no body", label.WithBodies(apidesc.NoBody, apidesc.NoBody), []int{204}, false},
+		{"one code", label.WithStatus(202).WithBodies(apidesc.NoBody, typed), []int{202}, false},
+		{"two codes in order", label.WithStatus(201, 200).WithBodies(apidesc.NoBody, typed), []int{200, 201}, false},
+		{
+			"two calls add codes",
+			label.WithStatus(201).WithStatus(200).WithBodies(apidesc.NoBody, typed),
+			[]int{200, 201},
+			false,
+		},
+		{"a repeated code", label.WithStatus(200).WithStatus(200, 201).WithBodies(apidesc.NoBody, typed), nil, true},
+		{"a code outside 2xx", label.WithStatus(200, 302).WithBodies(apidesc.NoBody, typed), nil, true},
+	}
+
+	for _, tt := range tests {
+		ops := apidesc.Collect([]apidesc.Row{row}, map[string]apidesc.Label{"PUT /api/dustpan/v1/things": tt.label})
+		if len(ops) != 1 {
+			t.Fatalf("%s: Collect() = %d operations, want 1", tt.name, len(ops))
+		}
+
+		_, err := apidesc.Build(ops)
+		if tt.refused {
+			if !errors.Is(err, apidesc.ErrInvalidOperation) {
+				t.Errorf("%s: Build() = %v, want ErrInvalidOperation", tt.name, err)
+			}
+
+			continue
+		}
+
+		if err != nil || !slices.Equal(ops[0].Statuses, tt.want) {
+			t.Errorf("%s: statuses = %v, err = %v, want %v", tt.name, ops[0].Statuses, err, tt.want)
+		}
 	}
 }
 
