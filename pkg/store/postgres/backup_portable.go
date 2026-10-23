@@ -28,10 +28,9 @@ func (s *Store) ExportPortable(
 		sum   backup.Summary
 	)
 
-	//nolint:exhaustruct_v5 // The export needs only isolation and access mode; deferrable stays off.
-	opts := pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly}
-
-	err := inBackupTx(ctx, s.pool, opts, func(tx pgx.Tx) error {
+	// The export reads every table in one snapshot, so it takes the swap lock
+	// before the snapshot like every other snapshot read.
+	err := inBackupTx(ctx, s.pool, s.snapshotOptions(), func(tx pgx.Tx) error {
 		var counts map[string]int64
 
 		var err error

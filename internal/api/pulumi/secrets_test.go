@@ -179,6 +179,11 @@ func (m *mapStackStore) ListStacks(_ context.Context, filter stack.Filter) ([]st
 	return out, nil
 }
 
+// QueryStacks implements stack.Store over the lists of ListStacks.
+func (m *mapStackStore) QueryStacks(ctx context.Context, q stack.PageQuery) ([]stack.Stack, error) {
+	return stack.ListPage(ctx, m.ListStacks, q)
+}
+
 func (m *mapStackStore) DeleteStack(
 	_ context.Context,
 	ref stack.Ref,
@@ -361,7 +366,7 @@ func buildSecretFixture(
 		BaseURL:                 baseurl.Resolver{},
 		MaxBodyBytesInFlight:    0,
 		Gate:                    nil,
-		Audit:                   cfg.store,
+		Audit:                   orTestAudit(cfg.store),
 		OnAuditFailure:          cfg.onFail,
 		CheckpointDeltaCutoff:   0,
 		DenialLimiter:           nil,
@@ -1137,7 +1142,7 @@ func TestSecretsMissingKey(t *testing.T) {
 		BaseURL:                 baseurl.Resolver{},
 		MaxBodyBytesInFlight:    0,
 		Gate:                    nil,
-		Audit:                   nil,
+		Audit:                   newTestAudit(),
 		OnAuditFailure:          nil,
 		CheckpointDeltaCutoff:   0,
 		DenialLimiter:           nil,
@@ -1184,6 +1189,11 @@ func (m *failingStackStore) GetStack(_ context.Context, _ stack.Ref) (stack.Stac
 
 func (m *failingStackStore) ListStacks(_ context.Context, _ stack.Filter) ([]stack.Stack, error) {
 	panic("failingStackStore.ListStacks is not used")
+}
+
+// QueryStacks implements stack.Store over the lists of ListStacks.
+func (m *failingStackStore) QueryStacks(ctx context.Context, q stack.PageQuery) ([]stack.Stack, error) {
+	return stack.ListPage(ctx, m.ListStacks, q)
 }
 
 func (m *failingStackStore) DeleteStack(
@@ -1566,7 +1576,7 @@ func newKeylessSecretFixture(t *testing.T) (secretFixture, string) {
 		BaseURL:                 baseurl.Resolver{},
 		MaxBodyBytesInFlight:    0,
 		Gate:                    nil,
-		Audit:                   nil,
+		Audit:                   newTestAudit(),
 		OnAuditFailure:          nil,
 		CheckpointDeltaCutoff:   0,
 		DenialLimiter:           nil,
@@ -1777,7 +1787,7 @@ func newLoggedSecretsHandler(
 		BaseURL:                 baseurl.Resolver{},
 		MaxBodyBytesInFlight:    0,
 		Gate:                    nil,
-		Audit:                   nil,
+		Audit:                   newTestAudit(),
 		OnAuditFailure:          nil,
 		CheckpointDeltaCutoff:   0,
 		DenialLimiter:           nil,
@@ -1957,7 +1967,7 @@ func newSecretFixtureWithLogger(t *testing.T, logged *bytes.Buffer) secretFixtur
 		BaseURL:                 baseurl.Resolver{},
 		MaxBodyBytesInFlight:    0,
 		Gate:                    nil,
-		Audit:                   nil,
+		Audit:                   newTestAudit(),
 		OnAuditFailure:          nil,
 		CheckpointDeltaCutoff:   0,
 		DenialLimiter:           nil,
@@ -2010,7 +2020,7 @@ func newFailingHandler(t *testing.T, err error) *pulumi.Handler {
 		BaseURL:                 baseurl.Resolver{},
 		MaxBodyBytesInFlight:    0,
 		Gate:                    nil,
-		Audit:                   nil,
+		Audit:                   newTestAudit(),
 		OnAuditFailure:          nil,
 		CheckpointDeltaCutoff:   0,
 		DenialLimiter:           nil,

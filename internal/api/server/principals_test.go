@@ -96,7 +96,7 @@ var principalSessions sync.Map
 
 // newPrincipalHandler builds a Handler with principals as its principal
 // service. Nil principals means a store that keeps none.
-func newPrincipalHandler(t *testing.T, principals *principal.Service) *apiserver.Handler {
+func newPrincipalHandler(t *testing.T, principals *principal.Service) testHandler {
 	t.Helper()
 
 	return newAuditedPrincipalHandler(t, principals, nil)
@@ -106,8 +106,12 @@ func newPrincipalHandler(t *testing.T, principals *principal.Service) *apiserver
 // principal service and entries as its audit store of the scope @server.
 func newAuditedPrincipalHandler(
 	t *testing.T, principals *principal.Service, entries audit.ServerStore,
-) *apiserver.Handler {
+) testHandler {
 	t.Helper()
+
+	if entries == nil {
+		entries = newTestAudit()
+	}
 
 	var signIn *apiserver.SignIn
 
@@ -116,7 +120,7 @@ func newAuditedPrincipalHandler(
 		signIn = stored.signIn()
 	}
 
-	handler, err := apiserver.NewHandler(apiserver.Config{
+	handler, err := newCheckedHandler(t, apiserver.Config{
 		Preferences:      nil,
 		GitHost:          nil,
 		Idempotency:      nil,
@@ -171,12 +175,12 @@ type apiCall struct {
 
 // call sends one request with the test token and returns its status and
 // body.
-func call(t *testing.T, handler *apiserver.Handler, c apiCall) (int, string) {
+func call(t *testing.T, handler testHandler, c apiCall) (int, string) {
 	t.Helper()
 
 	req := httptest.NewRequestWithContext(t.Context(), c.method, c.path, strings.NewReader(c.body))
 
-	if _, hasSessions := handlerSessions.Load(handler); hasSessions && needsFreshSession(c.method, c.path) {
+	if _, hasSessions := handlerSessions.Load(handler.Handler); hasSessions && needsFreshSession(c.method, c.path) {
 		// An access token never gives the fresh authentication that a change
 		// of group membership needs.
 		startSession(t, handler, req, 0)
@@ -192,7 +196,7 @@ func call(t *testing.T, handler *apiserver.Handler, c apiCall) (int, string) {
 
 // mustCall sends c and fails unless it answers c.want. It decodes a JSON
 // answer into out when out is not nil.
-func mustCall(t *testing.T, handler *apiserver.Handler, c apiCall, out any) {
+func mustCall(t *testing.T, handler testHandler, c apiCall, out any) {
 	t.Helper()
 
 	status, got := call(t, handler, c)
@@ -260,7 +264,7 @@ func TestPrincipalLifeCycle(t *testing.T) {
 }
 
 // createLifeCyclePrincipals creates a person and a service.
-func createLifeCyclePrincipals(t *testing.T, h *apiserver.Handler) lifeCyclePrincipals {
+func createLifeCyclePrincipals(t *testing.T, h testHandler) lifeCyclePrincipals {
 	t.Helper()
 
 	var alice, deploy principalDoc
@@ -292,7 +296,7 @@ type lifeCyclePrincipals struct {
 }
 
 // addLifeCycleMembers puts both principals in group and reads the members.
-func addLifeCycleMembers(t *testing.T, h *apiserver.Handler, group groupDoc, alice, deploy principalDoc) {
+func addLifeCycleMembers(t *testing.T, h testHandler, group groupDoc, alice, deploy principalDoc) {
 	t.Helper()
 
 	path := "/api/server/groups/" + group.ID + "/members"
@@ -315,7 +319,7 @@ func addLifeCycleMembers(t *testing.T, h *apiserver.Handler, group groupDoc, ali
 }
 
 // changeLifeCyclePrincipal renames alice and reads her groups.
-func changeLifeCyclePrincipal(t *testing.T, h *apiserver.Handler, group groupDoc, alice principalDoc) {
+func changeLifeCyclePrincipal(t *testing.T, h testHandler, group groupDoc, alice principalDoc) {
 	t.Helper()
 
 	var changed principalDoc
@@ -338,7 +342,7 @@ func changeLifeCyclePrincipal(t *testing.T, h *apiserver.Handler, group groupDoc
 }
 
 // deleteLifeCycleRecords deletes the group, then alice, and lists the rest.
-func deleteLifeCycleRecords(t *testing.T, h *apiserver.Handler, group groupDoc, alice, deploy principalDoc) {
+func deleteLifeCycleRecords(t *testing.T, h testHandler, group groupDoc, alice, deploy principalDoc) {
 	t.Helper()
 
 	mustCall(t, h, apiCall{http.MethodDelete, "/api/server/groups/" + group.ID, "", http.StatusNoContent}, nil)
@@ -987,7 +991,7 @@ func TestPrincipalListFailsWhenTempAdminReadFails(t *testing.T) {
 
 	svc := newTestPrincipals(t)
 
-	handler, err := apiserver.NewHandler(apiserver.Config{
+	handler, err := newCheckedHandler(t, apiserver.Config{
 		Preferences:      nil,
 		GitHost:          nil,
 		Idempotency:      nil,
@@ -999,7 +1003,7 @@ func TestPrincipalListFailsWhenTempAdminReadFails(t *testing.T) {
 		Journal:          nil,
 		Access:           nil,
 		Tokens:           nil,
-		Audit:            nil,
+		Audit:            newTestAudit(),
 		IPAllowlists:     nil,
 		Gates:            nil,
 		SessionPolicy:    nil,
@@ -1076,7 +1080,7 @@ func TestTempAdminFlagFollowsThePrincipalID(t *testing.T) {
 
 	records := []tempadmin.TempAdmin{}
 
-	handler, err := apiserver.NewHandler(apiserver.Config{
+	handler, err := newCheckedHandler(t, apiserver.Config{
 		Preferences:      nil,
 		GitHost:          nil,
 		Idempotency:      nil,
@@ -1088,7 +1092,7 @@ func TestTempAdminFlagFollowsThePrincipalID(t *testing.T) {
 		Journal:          nil,
 		Access:           nil,
 		Tokens:           nil,
-		Audit:            nil,
+		Audit:            newTestAudit(),
 		IPAllowlists:     nil,
 		Gates:            nil,
 		SessionPolicy:    nil,

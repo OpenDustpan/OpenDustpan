@@ -2,6 +2,7 @@ package golang
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 
 	"opendustpan.org/opendustpan/internal/clientgen"
@@ -50,14 +51,21 @@ func operationOf(op *model.Operation) (operationView, error) {
 	), op.Result.ETag
 
 	if err := addParameters(&ov, op); err != nil {
-		return ov, err
+		return operationView{}, err
 	}
 
 	if err := addBody(&ov, op); err != nil {
-		return ov, err
+		return operationView{}, err
 	}
 
 	addResult(&ov, op)
+
+	codes := make([]string, len(op.Result.Statuses))
+	for i, status := range op.Result.Statuses {
+		codes[i] = strconv.Itoa(status)
+	}
+
+	ov.Statuses = strings.Join(codes, ", ")
 
 	return ov, nil
 }
@@ -120,7 +128,10 @@ func addParameters(ov *operationView, op *model.Operation) error {
 		}
 
 		p := pathParams[name]
-		ident := camel(name)
+		ident, err := camel(name)
+		if err != nil {
+			return err
+		}
 
 		// The adapter reads a path parameter from a string of the message, so
 		// this template set writes string path parameters only.

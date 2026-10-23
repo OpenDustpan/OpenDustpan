@@ -52,8 +52,9 @@ type SinkLeaser interface {
 	// AcquireSinkLease takes or renews the lease of sink for holder for ttl
 	// from the database clock, in one transaction. It answers the live
 	// claim of the sink: a new claim with a higher token when no claim is
-	// live, the same claim with a later expiry when the caller already
-	// holds it. It answers durable.ErrNoWork, and changes nothing, while
+	// live, the same claim with the expiry moved to the database clock
+	// plus ttl when the caller already holds it, also when that expiry is
+	// earlier than the one before. It answers durable.ErrNoWork, and changes nothing, while
 	// another instance holds a live claim. It reports ErrInvalidSinkLease
 	// for an unusable sink name, an empty holder or a non-positive ttl.
 	AcquireSinkLease(ctx context.Context, sink, holder string, ttl time.Duration) (durable.Claim, error)
