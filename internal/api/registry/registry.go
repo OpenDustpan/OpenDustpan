@@ -162,9 +162,10 @@ func (h *Handler) authenticate(r *http.Request) (identity.Principal, bool, error
 // errorResponse is the error body of the tool-neutral APIs. ErrorCode is a
 // stable machine code.
 type errorResponse struct {
-	Message   string `json:"message"`
-	Code      int    `json:"code"`
-	ErrorCode string `json:"errorCode,omitempty"`
+	Message   string         `json:"message"`
+	Code      int            `json:"code"`
+	ErrorCode string         `json:"errorCode,omitempty"`
+	ErrorArgs map[string]any `json:"errorArgs,omitempty"`
 }
 
 // statusError is an error with a fixed answer.
@@ -181,6 +182,19 @@ func badRequest(code, message string) error {
 }
 
 func (h *Handler) writeError(ctx context.Context, w http.ResponseWriter, err error) {
+	if errors.Is(err, idempotency.ErrLost) {
+		err = idempotent.Lost()
+	}
+
+	if ie, ok := errors.AsType[*idempotent.Error](err); ok {
+		w.Header().Set("Cache-Control", "no-store")
+		h.writeJSON(ctx, w, ie.Status, errorResponse{
+			Code: ie.Status, Message: ie.Message, ErrorCode: ie.Answer.Code(), ErrorArgs: ie.Answer.Args(),
+		})
+
+		return
+	}
+
 	pr := classify(err)
 	if pr.status == http.StatusInternalServerError {
 		// The log names the status only: the text may hold driver detail.
@@ -192,7 +206,9 @@ func (h *Handler) writeError(ctx context.Context, w http.ResponseWriter, err err
 	}
 
 	w.Header().Set("Cache-Control", "no-store")
-	h.writeJSON(ctx, w, pr.status, errorResponse{Code: pr.status, Message: pr.message, ErrorCode: pr.code})
+	h.writeJSON(ctx, w, pr.status, errorResponse{
+		Code: pr.status, Message: pr.message, ErrorCode: pr.code, ErrorArgs: nil,
+	})
 }
 
 // problem is the answer to an error: a status, a stable code and a message that
@@ -210,17 +226,6 @@ func classify(err error) problem {
 
 	if se, ok := errors.AsType[*statusError](err); ok {
 		return problem{status: se.status, code: se.code, message: se.message}
-	}
-
-	if ie, ok := errors.AsType[*idempotent.Error](err); ok {
-		return problem{status: ie.Status, code: ie.Code, message: ie.Message}
-	}
-
-	if errors.Is(err, idempotency.ErrLost) {
-		return problem{
-			status: http.StatusConflict, code: idempotent.CodeInProgress,
-			message: "a newer request took this Idempotency-Key before this request ended: retry later",
-		}
 	}
 
 	if pr, ok := classifyNamespace(err); ok {

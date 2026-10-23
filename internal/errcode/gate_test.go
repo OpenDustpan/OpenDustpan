@@ -34,7 +34,7 @@ func gated() []errcodetest.Adapter {
 			Name: "dustpan",
 			Dir:  dustpanDir,
 			Bodies: []string{
-				"maintenancePulumiError", "maintenanceInventoryError", "maintenanceTFEError",
+				"maintenancePulumiError", "maintenanceInventoryError", "maintenanceTFEError", "routeError",
 			},
 			// OpenTofu fixes the plain text errors of the HTTP backend. The
 			// runner protocol has its own codes and its own versions.

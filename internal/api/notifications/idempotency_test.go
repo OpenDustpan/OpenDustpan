@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 
+	"opendustpan.org/opendustpan/internal/errcode"
+	"opendustpan.org/opendustpan/internal/errcode/errcodetest"
 	"opendustpan.org/opendustpan/pkg/idempotency"
 )
 
@@ -41,6 +43,12 @@ func TestIdempotentCreateNeverRepeatsTheKey(t *testing.T) {
 		t.Fatalf("replay: %d %s, want 409 request.idempotency-key-replayed-secret naming %s and no key",
 			again.code, again.body, made.ID)
 	}
+
+	errcodetest.CheckAnswer(t, errcodetest.ShapeCamelCase, http.StatusConflict, []byte(again.body),
+		errcodetest.Want{
+			Code: errcode.RequestIdempotencyKeyReplayedSecret, Args: map[string]any{"objectID": made.ID},
+			RequestBody: []byte(body),
+		})
 
 	if n := f.countSinks(t); n != 1 {
 		t.Errorf("sinks after a replay = %d, want 1", n)

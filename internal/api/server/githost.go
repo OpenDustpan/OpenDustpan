@@ -265,14 +265,3 @@ func retryAfterSeconds(err error) (string, bool) {
 
 	return strconv.FormatInt(min(max(seconds, 1), maxRetryAfterSeconds), 10), true
 }
-
-// idempotencyArgs returns the arguments of the error code of a refusal of the
-// Idempotency-Key middleware: the ID of the object that the first request made,
-// when the refusal names one. It never holds a value of the request.
-func idempotencyArgs(e *idempotent.Error) map[string]any {
-	if e.ObjectID == "" {
-		return nil
-	}
-
-	return map[string]any{"objectID": e.ObjectID}
-}

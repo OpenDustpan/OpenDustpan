@@ -79,8 +79,6 @@ func classifyView(err error) (int, string, bool) {
 		return http.StatusBadRequest, err.Error(), true
 	case errors.Is(err, savedview.ErrExists), errors.Is(err, savedview.ErrLimit):
 		return http.StatusConflict, err.Error(), true
-	case errors.Is(err, idempotency.ErrLost):
-		return http.StatusConflict, "a newer request took this Idempotency-Key before this request ended: retry later", true
 	default:
 		return 0, "", false
 	}

@@ -86,6 +86,22 @@ func TestUncodedPaths(t *testing.T) {
 			want: nil,
 		},
 		{
+			name: "a body that copies the code of an answer",
+			src: `func write(w http.ResponseWriter, status int, answer errcode.Answer) {
+	_ = errorResponse{Code: status, Message: "x", ErrorCode: answer.Code()}
+}
+
+func writeUncoded(w http.ResponseWriter, code func() string) {
+	_ = errorResponse{Code: 500, Message: "x", ErrorCode: code()}
+}
+
+func writeOther(w http.ResponseWriter, other interface{ Name() string }) {
+	_ = errorResponse{Code: 500, Message: "x", ErrorCode: other.Name()}
+}`,
+			skip: nil,
+			want: []string{"writeOther: errorResponse{}", "writeUncoded: errorResponse{}"},
+		},
+		{
 			name: "a case that hands the error to another classify function",
 			src: `func classify(err error) (int, string) {
 	switch {
@@ -317,6 +333,108 @@ func tfeError() string {
 				"methodNotAllowed: http.Error", "methodNotAllowed: http.NotFound",
 				"notFound: raw JSON", "tfeError: raw JSON",
 			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			dir := writeSource(t, header+"\n"+tc.src+"\n")
+
+			a := demo(dir)
+			a.Skip = tc.skip
+
+			got, err := errcodetest.UncodedPaths(a, coded())
+			if err != nil {
+				t.Fatalf("UncodedPaths: %v", err)
+			}
+
+			if !slices.Equal(got, tc.want) {
+				t.Fatalf("paths = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestUncodedPathsAnswerCode proves that a call of Code counts as a code only
+// as the code member of a body, on an errcode.Answer.
+func TestUncodedPathsAnswerCode(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		src  string
+		skip []string
+		want []string
+	}{
+		{
+			name: "a body that copies the code of an answer in a field of an answer",
+			src: `type holder struct{ Answer errcode.Answer }
+
+func writeField(w http.ResponseWriter, ie holder) {
+	_ = errorResponse{Code: 409, Message: "x", ErrorCode: ie.Answer.Code()}
+}
+
+func writeVar(w http.ResponseWriter) {
+	var a errcode.Answer
+	_ = errorResponse{Code: 409, Message: "x", ErrorCode: a.Code()}
+}`,
+			skip: nil,
+			want: nil,
+		},
+		{
+			name: "a code call in a case clause that is no member of a body",
+			src: `type other struct{}
+
+func (other) Code() string { return "" }
+
+func classify(err error, r other) (int, string) {
+	switch {
+	case errors.Is(err, stack.ErrNotFound):
+		_ = r.Code()
+		return 404, "stack.whatever"
+	default:
+		return 500, "internal error"
+	}
+}
+
+func writeCase(err error, r other) any {
+	switch {
+	case errors.Is(err, stack.ErrNotFound):
+		_ = r.Code()
+		return errorResponse{Code: 404, Message: "x", ErrorCode: "stack.whatever"}
+	}
+	return nil
+}`,
+			skip: nil,
+			want: []string{"classify: default", "classify: stack.ErrNotFound", "writeCase: errorResponse{}"},
+		},
+		{
+			name: "a code call of a type that is no answer in a body",
+			src: `type other struct{}
+
+func (other) Code() string { return "" }
+
+func writeOther(err error, r other) any {
+	if errors.Is(err, stack.ErrNotFound) {
+		return errorResponse{Code: 404, Message: "x", ErrorCode: r.Code()}
+	}
+	return nil
+}`,
+			skip: nil,
+			want: []string{"writeOther: errorResponse{}"},
+		},
+		{
+			name: "a code call in an if condition with an uncoded fallback",
+			src: `func writeGuard(w http.ResponseWriter, a errcode.Answer) any {
+	if a.Code() == "" {
+		return errorResponse{Code: 500, Message: "x"}
+	}
+	return errorResponse{Code: 409, Message: "x", ErrorCode: a.Code()}
+}`,
+			skip: nil,
+			want: []string{"writeGuard: errorResponse{}"},
 		},
 	}
 

@@ -79,7 +79,7 @@ func UncodedPaths(a Adapter, coded []string) ([]string, error) {
 	}
 
 	s := scan{
-		bodies: a.Bodies, coded: coded, local: "", classify: false,
+		bodies: a.Bodies, coded: coded, local: "", classify: false, answers: nil,
 		types: map[string]bool{}, funcs: map[string]bool{}, branches: map[ast.Node]bool{}, paths: nil,
 	}
 
@@ -192,6 +192,9 @@ type scan struct {
 	// classify is true in a classify function, where each branch that tests
 	// an error is a path.
 	classify bool
+	// answers are the names in the current function that have the type
+	// errcode.Answer: a parameter, a result or a variable.
+	answers  map[string]bool
 	types    map[string]bool
 	funcs    map[string]bool
 	branches map[ast.Node]bool
@@ -252,6 +255,7 @@ func (s *scan) function(d *ast.FuncDecl, skip []string) {
 		return
 	}
 
+	s.answers = s.answerNames(d)
 	s.classify = strings.HasPrefix(d.Name.Name, classifyPrefix)
 	if s.classify || (len(errorTargets(d.Body)) > 0 && errorStatus(d.Body)) {
 		s.branchPaths(name, d.Body)
@@ -394,7 +398,7 @@ func (s *scan) literal(n ast.Node) string {
 // literal of one of the bodies, an anonymous struct with a member that
 // bodyMembers names, or a map with such a key. It returns "" otherwise.
 func (s *scan) compositeLit(lit *ast.CompositeLit) string {
-	if s.refers(lit) {
+	if s.refers(lit) || s.copiesCode(lit) {
 		return ""
 	}
 
@@ -415,6 +419,119 @@ func (s *scan) compositeLit(lit *ast.CompositeLit) string {
 	}
 
 	return ""
+}
+
+// copiesCode reports whether the code member of the body literal lit
+// (ErrorCode or Code) holds the Code method of an errcode.Answer. New is the
+// only way to make an Answer with a code, so a body that copies the code of an
+// Answer has a code of the catalog. No other call counts, and no other place:
+// a condition, a case clause or a table element that calls Code is not coded.
+func (s *scan) copiesCode(lit *ast.CompositeLit) bool {
+	return slices.ContainsFunc(lit.Elts, func(e ast.Expr) bool {
+		kv, ok := e.(*ast.KeyValueExpr)
+		if !ok {
+			return false
+		}
+
+		return isCodeMember(kv.Key) && s.answerCode(kv.Value)
+	})
+}
+
+// isCodeMember reports whether key names the code member of a body: ErrorCode
+// or Code, in any case.
+func isCodeMember(key ast.Expr) bool {
+	var name string
+
+	switch k := key.(type) {
+	case *ast.Ident:
+		name = k.Name
+	case *ast.BasicLit:
+		var err error
+		if name, err = strconv.Unquote(k.Value); err != nil {
+			return false
+		}
+	default:
+		return false
+	}
+
+	return strings.EqualFold(name, "code") || strings.EqualFold(name, "errorCode")
+}
+
+// answerCode reports whether e is a call of the Code method, with no
+// argument, of an errcode.Answer: a name that answerNames found, or a
+// selector that ends in .Answer.
+func (s *scan) answerCode(e ast.Expr) bool {
+	call, ok := e.(*ast.CallExpr)
+	if !ok || len(call.Args) != 0 {
+		return false
+	}
+
+	sel, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok || sel.Sel.Name != "Code" {
+		return false
+	}
+
+	switch x := sel.X.(type) {
+	case *ast.Ident:
+		return s.answers[x.Name]
+	case *ast.SelectorExpr:
+		return x.Sel.Name == "Answer"
+	default:
+		return false
+	}
+}
+
+// answerNames returns the names in d, in its parameters, results and var
+// declarations, that have the type Answer of the errcode package.
+func (s *scan) answerNames(d *ast.FuncDecl) map[string]bool {
+	out := map[string]bool{}
+	if s.local == "" {
+		return out
+	}
+
+	fields := func(l *ast.FieldList) {
+		if l == nil {
+			return
+		}
+
+		for _, f := range l.List {
+			if s.isAnswerType(f.Type) {
+				for _, n := range f.Names {
+					out[n.Name] = true
+				}
+			}
+		}
+	}
+
+	fields(d.Type.Params)
+	fields(d.Type.Results)
+	fields(d.Recv)
+
+	s.varAnswers(d.Body, out)
+
+	return out
+}
+
+// varAnswers adds to out the names that a var declaration in body gives the
+// type errcode.Answer.
+func (s *scan) varAnswers(body *ast.BlockStmt, out map[string]bool) {
+	ast.Inspect(body, func(n ast.Node) bool {
+		if vs, ok := n.(*ast.ValueSpec); ok && s.isAnswerType(vs.Type) {
+			for _, name := range vs.Names {
+				out[name.Name] = true
+			}
+		}
+
+		return true
+	})
+}
+
+// isAnswerType reports whether t is errcode.Answer, with the local name of
+// the import.
+func (s *scan) isAnswerType(t ast.Expr) bool {
+	sel, ok := t.(*ast.SelectorExpr)
+
+	return ok && isPackage(sel.X, s.local) && sel.Sel.Name == "Answer"
 }
 
 // hasBodyKey reports whether a key of the map literal lit is a string that
