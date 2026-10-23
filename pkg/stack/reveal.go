@@ -50,21 +50,29 @@ type providersDoc struct {
 // SecretsProvider returns the secrets provider type of deployment: the type
 // of its secrets_providers entry, or the service provider when the
 // deployment names none. Older deployments hold no provider entry and read
-// with the service provider. It streams the deployment to the entry and
-// skips every other value, so no tree of the deployment is built. A
-// deployment that does not decode reads as the service provider.
+// with the service provider. The save of a checkpoint accepts a repeated
+// top-level entry, and the Pulumi CLI reads the last copy, so the last copy
+// gives the type. It streams the deployment and skips every other value, so
+// no tree of the deployment is built. A deployment that does not decode reads
+// as the service provider.
 func SecretsProvider(deployment []byte) string {
-	dec := jsontext.NewDecoder(bytes.NewReader(deployment))
+	dec := jsontext.NewDecoder(bytes.NewReader(deployment), jsontext.AllowDuplicateNames(true))
 
 	open, err := openStreamedObject(dec)
 	if err != nil || !open {
 		return serviceSecretsProvider
 	}
 
+	provider := serviceSecretsProvider
+
 	for {
 		name, end, err := streamedMember(dec)
-		if err != nil || end {
+		if err != nil {
 			return serviceSecretsProvider
+		}
+
+		if end {
+			return provider
 		}
 
 		if name != secretsProvidersMember {
@@ -75,7 +83,7 @@ func SecretsProvider(deployment []byte) string {
 			continue
 		}
 
-		return streamedProviderType(dec)
+		provider = streamedProviderType(dec)
 	}
 }
 
