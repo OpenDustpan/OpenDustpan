@@ -93,11 +93,36 @@ func TestUnmarshalRefuses(t *testing.T) {
 	}{
 		{name: "an empty body", body: ``, opts: nil, want: textbody.ErrEmpty},
 		{name: "a body of spaces", body: " \n\t ", opts: nil, want: textbody.ErrEmpty},
-		{name: "a form feed with AllowEmpty", body: "\f", opts: []textbody.Option{textbody.AllowEmpty()}, want: textbody.ErrJSON},
-		{name: "a vertical tab with AllowEmpty", body: "\v", opts: []textbody.Option{textbody.AllowEmpty()}, want: textbody.ErrJSON},
-		{name: "a no-break space with AllowEmpty", body: "\u00a0", opts: []textbody.Option{textbody.AllowEmpty()}, want: textbody.ErrJSON},
-		{name: "a next line with AllowEmpty", body: "\u0085", opts: []textbody.Option{textbody.AllowEmpty()}, want: textbody.ErrJSON},
-		{name: "a line separator with AllowEmpty", body: "\u2028", opts: []textbody.Option{textbody.AllowEmpty()}, want: textbody.ErrJSON},
+		{
+			name: "a form feed with AllowEmpty",
+			body: "\f",
+			opts: []textbody.Option{textbody.AllowEmpty()},
+			want: textbody.ErrJSON,
+		},
+		{
+			name: "a vertical tab with AllowEmpty",
+			body: "\v",
+			opts: []textbody.Option{textbody.AllowEmpty()},
+			want: textbody.ErrJSON,
+		},
+		{
+			name: "a no-break space with AllowEmpty",
+			body: "\u00a0",
+			opts: []textbody.Option{textbody.AllowEmpty()},
+			want: textbody.ErrJSON,
+		},
+		{
+			name: "a next line with AllowEmpty",
+			body: "\u0085",
+			opts: []textbody.Option{textbody.AllowEmpty()},
+			want: textbody.ErrJSON,
+		},
+		{
+			name: "a line separator with AllowEmpty",
+			body: "\u2028",
+			opts: []textbody.Option{textbody.AllowEmpty()},
+			want: textbody.ErrJSON,
+		},
 		{name: "a raw byte ff", body: "{\"summary\":\"" + secretMark + "\xff\"}", opts: nil, want: textbody.ErrText},
 		{name: "a cut sequence", body: "{\"summary\":\"" + secretMark + "\xc3\"}", opts: nil, want: textbody.ErrText},
 		{
@@ -174,10 +199,20 @@ func TestUnmarshalAccepts(t *testing.T) {
 		want string
 	}{
 		{name: "plain text", body: `{"summary":"plain"}`, opts: nil, want: "plain"},
-		{name: "a surrogate pair escape", body: `{"summary":"pager \ud83d\udcdf"}`, opts: nil, want: "pager \U0001F4DF"},
+		{
+			name: "a surrogate pair escape",
+			body: `{"summary":"pager \ud83d\udcdf"}`,
+			opts: nil,
+			want: "pager \U0001F4DF",
+		},
 		{name: "spaces after the value", body: "{\"summary\":\"a\"}\n", opts: nil, want: "a"},
 		{name: "an empty body that is allowed", body: ``, opts: []textbody.Option{textbody.AllowEmpty()}, want: "kept"},
-		{name: "JSON whitespace that is allowed", body: " \t\r\n", opts: []textbody.Option{textbody.AllowEmpty()}, want: "kept"},
+		{
+			name: "JSON whitespace that is allowed",
+			body: " \t\r\n",
+			opts: []textbody.Option{textbody.AllowEmpty()},
+			want: "kept",
+		},
 		{
 			name: "an unknown field that is allowed",
 			body: `{"summary":"a","owner":"b"}`, opts: []textbody.Option{textbody.AllowUnknownFields()}, want: "a",
