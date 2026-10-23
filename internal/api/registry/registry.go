@@ -18,12 +18,12 @@ import (
 	"opendustpan.org/opendustpan/internal/api/refusal"
 	"opendustpan.org/opendustpan/internal/api/route"
 	"opendustpan.org/opendustpan/internal/denylimit"
+	"opendustpan.org/opendustpan/internal/registry/releasecheck"
+	"opendustpan.org/opendustpan/internal/registry/service"
 	"opendustpan.org/opendustpan/internal/sessionauth"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/registry"
-	"opendustpan.org/opendustpan/pkg/registry/releasecheck"
-	"opendustpan.org/opendustpan/pkg/registry/service"
 )
 
 // ErrMissingDependency reports a Config without a required dependency.
@@ -82,6 +82,8 @@ type Handler struct {
 // NewHandler returns a Handler.
 func NewHandler(cfg Config) (*Handler, error) {
 	switch {
+	case cfg.Audit == nil:
+		return nil, fmt.Errorf("%w: audit store", ErrMissingDependency)
 	case cfg.Service == nil:
 		return nil, fmt.Errorf("%w: registry service", ErrMissingDependency)
 	case cfg.Authenticator == nil:
@@ -94,13 +96,16 @@ func NewHandler(cfg Config) (*Handler, error) {
 		return nil, fmt.Errorf("%w: upload limit", ErrMissingDependency)
 	}
 
+	recorder, err := refusal.New(cfg.Authorizer, cfg.Audit, cfg.Namespaces, cfg.Logger, cfg.OnAuditFailure)
+	if err != nil {
+		return nil, fmt.Errorf("denial recorder: %w", err)
+	}
+
 	h := &Handler{
-		service: cfg.Service,
-		authn:   cfg.Authenticator,
-		authz:   cfg.Authorizer,
-		guard: refusal.New(cfg.Authorizer, cfg.Audit, cfg.Namespaces, cfg.Logger, cfg.OnAuditFailure).
-			WithLimiter(cfg.DenialLimiter).
-			WithSurface("registry"),
+		service:  cfg.Service,
+		authn:    cfg.Authenticator,
+		authz:    cfg.Authorizer,
+		guard:    recorder.WithLimiter(cfg.DenialLimiter).WithSurface("registry"),
 		sessions: cfg.Sessions,
 		idem:     cfg.Idempotency,
 		logger:   cfg.Logger,

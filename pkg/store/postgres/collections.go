@@ -204,20 +204,26 @@ func setUnitCollection(ctx context.Context, q *db.Queries, m collection.Move, e 
 
 // UnitCollection implements collection.Store.
 func (s *Store) UnitCollection(ctx context.Context, unit collection.UnitRef) (collection.Ref, error) {
-	unitID, err := s.queries.GetInventoryUnit(ctx, db.GetInventoryUnitParams{
-		Namespace: unit.Namespace.String(),
-		Tool:      unit.Tool,
-		Name:      unit.Name,
+	var name collection.Name
+
+	err := s.inSnapshotTx(ctx, func(q *db.Queries) error {
+		unitID, err := q.GetInventoryUnit(ctx, db.GetInventoryUnitParams{
+			Namespace: unit.Namespace.String(),
+			Tool:      unit.Tool,
+			Name:      unit.Name,
+		})
+		if errors.Is(err, pgx.ErrNoRows) {
+			return collection.ErrUnitNotFound
+		}
+
+		if err != nil {
+			return fmt.Errorf("select inventory unit: %w", err)
+		}
+
+		name, err = currentUnitCollection(ctx, q, unitID)
+
+		return err
 	})
-	if errors.Is(err, pgx.ErrNoRows) {
-		return collection.Ref{}, collection.ErrUnitNotFound
-	}
-
-	if err != nil {
-		return collection.Ref{}, fmt.Errorf("select inventory unit: %w", err)
-	}
-
-	name, err := currentUnitCollection(ctx, s.queries, unitID)
 	if err != nil {
 		return collection.Ref{}, err
 	}

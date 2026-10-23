@@ -79,6 +79,8 @@ type Handler struct {
 // NewHandler returns a Handler.
 func NewHandler(cfg Config) (*Handler, error) {
 	switch {
+	case cfg.Audit == nil:
+		return nil, fmt.Errorf("%w: audit store", ErrMissingDependency)
 	case cfg.Sinks == nil:
 		return nil, fmt.Errorf("%w: sink service", ErrMissingDependency)
 	case cfg.Authenticator == nil:
@@ -89,13 +91,16 @@ func NewHandler(cfg Config) (*Handler, error) {
 		return nil, fmt.Errorf("%w: logger", ErrMissingDependency)
 	}
 
+	recorder, err := refusal.New(cfg.Authorizer, cfg.Audit, cfg.Namespaces, cfg.Logger, cfg.OnAuditFailure)
+	if err != nil {
+		return nil, fmt.Errorf("denial recorder: %w", err)
+	}
+
 	h := &Handler{
-		sinks: cfg.Sinks,
-		authn: cfg.Authenticator,
-		authz: cfg.Authorizer,
-		guard: refusal.New(cfg.Authorizer, cfg.Audit, cfg.Namespaces, cfg.Logger, cfg.OnAuditFailure).
-			WithLimiter(cfg.DenialLimiter).
-			WithSurface("sinks"),
+		sinks:    cfg.Sinks,
+		authn:    cfg.Authenticator,
+		authz:    cfg.Authorizer,
+		guard:    recorder.WithLimiter(cfg.DenialLimiter).WithSurface("sinks"),
 		sessions: cfg.Sessions,
 		idem:     cfg.Idempotency,
 		logger:   cfg.Logger,

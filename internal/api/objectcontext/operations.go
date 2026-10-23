@@ -25,6 +25,7 @@ const (
 var operationLabels = map[string]apidesc.Label{
 	apidesc.Pattern(http.MethodGet, namespaceContextPath): apidesc.Name("getNamespaceContext", tagContext).
 		On(apidesc.KindNamespace).
+		WithQuery(includeQuery).
 		WithBodies(apidesc.NoBody, contextDocument),
 	apidesc.Pattern(http.MethodPatch, namespaceContextPath): apidesc.Name("updateNamespaceContext", tagContext).
 		On(apidesc.KindNamespace).
@@ -34,6 +35,7 @@ var operationLabels = map[string]apidesc.Label{
 		WithBodies(apidesc.NoBody, apidesc.NoBody),
 	apidesc.Pattern(http.MethodGet, unitContextPath): apidesc.Name("getUnitContext", tagContext).
 		On(apidesc.KindUnit).
+		WithQuery(includeQuery).
 		WithBodies(apidesc.NoBody, contextDocument),
 	apidesc.Pattern(http.MethodPatch, unitContextPath): apidesc.Name("updateUnitContext", tagContext).
 		On(apidesc.KindUnit).
@@ -41,6 +43,20 @@ var operationLabels = map[string]apidesc.Label{
 	apidesc.Pattern(http.MethodDelete, unitContextPath): apidesc.Name("deleteUnitContext", tagContext).
 		On(apidesc.KindUnit).
 		WithBodies(apidesc.NoBody, apidesc.NoBody),
+}
+
+// includeQuery is the query parameter of a read of the context that names the
+// sections of the answer.
+//
+//nolint:gochecknoglobals // A fixed value; Go has no constant structs.
+var includeQuery = apidesc.StringParam(
+	"include", "The sections of the answer, separated by commas. Without it, the answer holds the default sections.",
+)
+
+// queryOf returns the query of a request, as the label of its route allows
+// the handler to read it.
+func queryOf(r *http.Request) apidesc.Query {
+	return apidesc.QueryOf(r, operationLabels)
 }
 
 // The bodies that several routes share.
@@ -146,4 +162,9 @@ func (h *Handler) Operations() []apidesc.Operation {
 	}
 
 	return apidesc.Collect(rows, operationLabels)
+}
+
+// userAgent returns the User-Agent header of a request, for the audit record.
+func userAgent(r *http.Request) string {
+	return apidesc.Header(r, "User-Agent")
 }

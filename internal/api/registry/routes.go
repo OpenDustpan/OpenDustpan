@@ -34,12 +34,13 @@ type Route struct {
 }
 
 const (
-	registryPath = v1Prefix + "/namespaces/{namespace}/registry"
-	uploadsPath  = registryPath + "/uploads"
-	versionsPath = registryPath + "/providers/{name}/versions"
-	versionPath  = versionsPath + "/{version}"
-	keysPath     = registryPath + "/keys"
-	keyPath      = keysPath + "/{fingerprint}"
+	registryPath  = v1Prefix + "/namespaces/{namespace}/registry"
+	uploadsPath   = registryPath + "/uploads"
+	providersPath = registryPath + "/providers"
+	versionsPath  = registryPath + "/providers/{name}/versions"
+	versionPath   = versionsPath + "/{version}"
+	keysPath      = registryPath + "/keys"
+	keyPath       = keysPath + "/{fingerprint}"
 )
 
 // buildRoutes returns the route table. It is the single source of the patterns
@@ -54,6 +55,7 @@ func (h *Handler) buildRoutes() []Route {
 		// hold in memory, so this route declares that it takes no key.
 		h.plainRoute(http.MethodPost, uploadsPath, publish, h.stage),
 		h.keyedRoute(http.MethodPut, versionPath, publish, h.publish, releaseAnswer),
+		h.readRoute(providersPath, read, h.listProviders),
 		h.readRoute(versionsPath, read, h.listReleases),
 		h.readRoute(versionPath, read, h.getRelease),
 		h.keyedRoute(http.MethodPost, keysPath, keys, h.addKey, keyAnswer),

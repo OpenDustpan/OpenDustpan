@@ -200,6 +200,24 @@ func (s *Store) ResourceHistory(
 func (s *Store) ItemChanges(
 	ctx context.Context, id workspace.ID, sv workspace.StateVersionID,
 ) (workspace.ItemBlame, error) {
+	var out workspace.ItemBlame
+
+	// One snapshot, so the statements of the read see one state.
+	err := s.inSnapshotTx(ctx, func(q *db.Queries) error {
+		var err error
+
+		out, err = itemChangesWith(ctx, q, id, sv)
+
+		return err
+	})
+
+	return out, err
+}
+
+// itemChangesWith is ItemChanges on the queries of one snapshot.
+func itemChangesWith(
+	ctx context.Context, q *db.Queries, id workspace.ID, sv workspace.StateVersionID,
+) (workspace.ItemBlame, error) {
 	out := workspace.ItemBlame{
 		Workspace:      id,
 		StateVersion:   sv,
@@ -210,7 +228,7 @@ func (s *Store) ItemChanges(
 		LineageChanged: false,
 	}
 
-	item, err := s.queries.GetWorkspaceBlameItem(ctx, db.GetWorkspaceBlameItemParams{
+	item, err := q.GetWorkspaceBlameItem(ctx, db.GetWorkspaceBlameItemParams{
 		WorkspaceID: id.String(), StateVersionID: sv.String(),
 	})
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -221,7 +239,7 @@ func (s *Store) ItemChanges(
 		return workspace.ItemBlame{}, fmt.Errorf("select blame item: %w", err)
 	}
 
-	rows, err := s.queries.ListWorkspaceResourceChangesOfItem(ctx, db.ListWorkspaceResourceChangesOfItemParams{
+	rows, err := q.ListWorkspaceResourceChangesOfItem(ctx, db.ListWorkspaceResourceChangesOfItemParams{
 		WorkspaceID: id.String(), StateVersionID: sv.String(),
 	})
 	if err != nil {

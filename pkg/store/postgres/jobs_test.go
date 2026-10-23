@@ -11,6 +11,7 @@ import (
 
 	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/pkg/audit"
+	blobfs "opendustpan.org/opendustpan/pkg/blob/fs"
 	"opendustpan.org/opendustpan/pkg/collection"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/inventory"
@@ -258,5 +259,39 @@ func TestJobConformance(t *testing.T) {
 			Jobs: j, Durable: ops, Freezes: j, Claimer: job.NewClaimer(j, ops, s), Namespaces: s,
 			Domain: &jobDomain{s: s},
 		}
+	})
+}
+
+func TestRecorderConformance(t *testing.T) {
+	t.Parallel()
+
+	base := os.Getenv(envURL)
+	if base == "" {
+		t.Skipf("set %s to run the PostgreSQL conformance suite", envURL)
+	}
+
+	jobtest.RunRecorder(t, func(t *testing.T) jobtest.RecorderHarness {
+		t.Helper()
+
+		s := open(t, base)
+		j := s.Jobs()
+		ops := s.DurableOperationsPort()
+
+		blobs, err := blobfs.Open(t.TempDir())
+		if err != nil {
+			t.Fatalf("open blob store: %v", err)
+		}
+
+		t.Cleanup(func() { _ = blobs.Close() }) //nolint:errcheck // Test cleanup.
+
+		return jobtest.NewRecorderHarness(t, jobtest.RecorderParts{
+			Harness: jobtest.Harness{
+				Jobs: j, Durable: ops, Freezes: j, Claimer: job.NewClaimer(j, ops, s), Namespaces: s,
+				Domain: &jobDomain{s: s},
+			},
+			Records:  j,
+			ItemKeys: s,
+			Blobs:    blobs,
+		})
 	})
 }

@@ -142,41 +142,43 @@ linters:
             - "**/pkg/collection/**"
             - "**/pkg/maintenance/**"
             - "**/pkg/durable/**"
-            - "**/pkg/agent/**"
+            - "**/internal/agent/**"
             - "**/pkg/job/**"
             - "**/pkg/history/**"
-            - "**/pkg/dependency/**"
+            - "**/internal/dependency/**"
             - "**/pkg/graph/**"
             - "**/pkg/objectcontext/**"
-            - "**/pkg/unmanaged/**"
+            - "**/internal/unmanaged/**"
             - "**/pkg/drift/**"
             - "**/pkg/trigger/**"
+            - "**/pkg/outputshare/**"
             - "**/pkg/savedview/**"
             - "**/pkg/preferences/**"
-            - "**/pkg/stepup/**"
+            - "**/internal/stepup/**"
             - "**/pkg/registry/**"
+            - "**/internal/registry/**"
             - "**/pkg/runner/**"
-            - "**/pkg/launcher/**"
-            - "**/pkg/source/**"
+            - "**/internal/launcher/**"
+            - "**/internal/source/**"
             - "**/pkg/forge/*.go"
-            - "**/pkg/scopeaudit/**"
-            - "**/pkg/calendar/**"
-            - "**/pkg/freeze/**"
+            - "**/internal/scopeaudit/**"
+            - "**/internal/calendar/**"
+            - "**/internal/freeze/**"
             - "**/pkg/breakglass/**"
             - "**/pkg/tempadmin/**"
-            - "**/pkg/oncall/**"
-            - "**/pkg/cost/**"
+            - "**/internal/oncall/**"
+            - "**/internal/cost/**"
             - "**/pkg/notify/*.go"
             - "**/pkg/egress/*.go"
-            - "**/pkg/chatops/**"
-            - "**/pkg/incident/**"
-            - "**/pkg/catalog/**"
-            - "**/pkg/policy/**"
+            - "**/internal/chatops/**"
+            - "**/internal/incident/**"
+            - "**/internal/catalog/**"
+            - "**/internal/policy/**"
             - "**/pkg/gate/**"
-            - "**/pkg/quota/**"
+            - "**/internal/quota/**"
             - "**/pkg/blob/*.go"
             - "**/pkg/logsink/*.go"
-            - "**/pkg/unitimport/*.go"
+            - "**/internal/unitimport/*.go"
             - "**/pkg/installation/**"
             - "!**/*_test.go"
             - "!**/internal/api/inventory/**"
@@ -313,6 +315,20 @@ linters:
           msg: Only cmd/ may exit; return errors everywhere else.
         - pattern: ^time\.Sleep$
           msg: Use a timer with context cancellation.
+        # The query and the headers of a request in the tool-neutral REST
+        # API: a handler reads them through apidesc, which allows only the
+        # names that the API description declares for the route. The
+        # exclusions below limit these patterns to the packages of that API.
+        # String and Redacted give back the raw query as part of the URL.
+        - pattern: ^url\.URL\.(Query|RawQuery|ForceQuery|RequestURI|String|Redacted)$
+          pkg: ^net/url$
+          msg: Read the query through apidesc.QueryOf, which allows only the declared names.
+        - pattern: ^url\.ParseQuery$
+          pkg: ^net/url$
+          msg: Read the query through apidesc.QueryOf, which allows only the declared names.
+        - pattern: ^http\.Request\.(Header|Form|PostForm|MultipartForm|RequestURI|Trailer|FormValue|PostFormValue|FormFile|ParseForm|ParseMultipartForm|MultipartReader|UserAgent|Referer|Cookie|Cookies|CookiesNamed|BasicAuth)$
+          pkg: ^net/http$
+          msg: Read the query through apidesc.QueryOf and the headers through apidesc.Header, which allow only the declared names.
       analyze-types: true
 
     funlen:
@@ -491,12 +507,25 @@ linters:
     rules:
       # Tests may use numeric literals and longer table-driven functions. The
       # conformance suites are tests that adapters import, so the same applies.
-      - path: (_test\.go$|^pkg/store/storetest/|^pkg/blob/blobtest/|^pkg/secret/secrettest/|^pkg/audit/audittest/|^pkg/principal/principaltest/|^pkg/accesstoken/accesstokentest/|^pkg/session/sessiontest/|^pkg/access/accesstest/|^pkg/durable/durabletest/|^pkg/history/historytest/|^pkg/inventory/inventorytest/|^pkg/dependency/dependencytest/|^pkg/stack/stackhistorytest/|^pkg/workspace/workspacehistorytest/|^pkg/agent/agenttest/|^pkg/graph/graphtest/|^pkg/objectcontext/objectcontexttest/|^pkg/unmanaged/unmanagedtest/|^pkg/runner/runnertest/|^pkg/calendar/calendartest/|^pkg/freeze/freezetest/|^pkg/breakglass/breakglasstest/|^pkg/oncall/oncalltest/|^pkg/cost/costtest/|^pkg/notify/notifytest/|^pkg/chatops/chatopstest/|^pkg/incident/incidenttest/|^pkg/catalog/catalogtest/|^pkg/policy/policytest/|^pkg/quota/quotatest/|^pkg/gate/gatetest/|^pkg/unitimport/unitimporttest/|^pkg/forge/forgetest/|^pkg/preferences/preferencestest/)
+      - path: (_test\.go$|^pkg/store/storetest/|^pkg/blob/blobtest/|^pkg/secret/secrettest/|^pkg/audit/audittest/|^pkg/principal/principaltest/|^pkg/accesstoken/accesstokentest/|^pkg/session/sessiontest/|^pkg/access/accesstest/|^pkg/durable/durabletest/|^internal/history/historytest/|^pkg/inventory/inventorytest/|^internal/dependency/dependencytest/|^pkg/stack/stackhistorytest/|^pkg/workspace/workspacehistorytest/|^internal/agent/agenttest/|^internal/graph/graphtest/|^pkg/objectcontext/objectcontexttest/|^internal/unmanaged/unmanagedtest/|^pkg/runner/runnertest/|^internal/calendar/calendartest/|^internal/freeze/freezetest/|^internal/breakglass/breakglasstest/|^internal/oncall/oncalltest/|^internal/cost/costtest/|^pkg/notify/notifytest/|^internal/chatops/chatopstest/|^internal/incident/incidenttest/|^internal/catalog/catalogtest/|^internal/policy/policytest/|^internal/quota/quotatest/|^pkg/gate/gatetest/|^internal/unitimport/unitimporttest/|^pkg/forge/forgetest/|^pkg/preferences/preferencestest/)
         linters:
           - mnd
           - funlen
           - dupl
           - goconst
+      # The ban on direct reads of the query and the headers covers the
+      # adapters of the tool-neutral REST API and the helpers that they call.
+      # The tool-compatible APIs and the runner protocol keep their own wire
+      # formats, and apidesc is the one place that reads the raw request.
+      - path-except: ^(internal/api/(audit|drift|idempotent|inventory|jobs|notifications|objectcontext|profile|refusal|registry|route|server)/|internal/(sessionauth|clientip)/|pkg/dustpan/web\.go$)
+        linters:
+          - forbidigo
+        text: through apidesc
+      # A test builds requests and reads answers; it serves no route.
+      - path: _test\.go$
+        linters:
+          - forbidigo
+        text: through apidesc
       # The binary entry point is the only place allowed to exit.
       - path: ^cmd/
         linters:

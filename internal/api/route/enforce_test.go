@@ -96,7 +96,8 @@ func TestEnforceOrder(t *testing.T) {
 				rec  recorder
 			)
 
-			h := route.Enforce(guard(&seen, newAuthorizer(nil, nil)), rec.write, rec.stepsFor(tc.resolve, tc.authorize))
+			g := guard(t, &seen, newAuthorizer(nil, nil))
+			h := route.Enforce(g, rec.write, rec.stepsFor(tc.resolve, tc.authorize))
 			serve(t, h, tc.header)
 
 			if !slices.Equal(rec.steps, tc.want) {
@@ -119,7 +120,7 @@ func TestEnforcePublic(t *testing.T) {
 	steps := rec.stepsFor(nil, nil)
 	steps.Scope = route.ScopePublic
 
-	serve(t, route.Enforce(guard(&seen, newAuthorizer(nil, nil)), rec.write, steps), "token good")
+	serve(t, route.Enforce(guard(t, &seen, newAuthorizer(nil, nil)), rec.write, steps), "token good")
 
 	if !slices.Equal(rec.steps, []string{"serve::"}) || len(seen) != 0 {
 		t.Fatalf("steps = %v, tokens = %v; want only serve with no principal and no token read", rec.steps, seen)
@@ -160,7 +161,7 @@ func TestEnforceFailsClosed(t *testing.T) {
 			steps := rec.stepsFor(nil, nil)
 			change(&steps)
 
-			serve(t, route.Enforce(guard(&seen, newAuthorizer(nil, nil)), rec.write, steps), "token good")
+			serve(t, route.Enforce(guard(t, &seen, newAuthorizer(nil, nil)), rec.write, steps), "token good")
 
 			if !slices.Equal(rec.steps, []string{"error"}) || rec.written == nil || len(seen) != 0 {
 				t.Fatalf("steps = %v, error = %v, tokens = %v; want only the error", rec.steps, rec.written, seen)
@@ -187,7 +188,7 @@ func TestAuthorizeAllRefusesNoAction(t *testing.T) {
 			authz := newAuthorizer(nil, nil)
 			r := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/x", http.NoBody)
 
-			err := guard(&seen, authz).AuthorizeAll(r, p, identity.NamespaceObject(namespace.Name("acme")), actions)
+			err := guard(t, &seen, authz).AuthorizeAll(r, p, identity.NamespaceObject(namespace.Name("acme")), actions)
 			if err == nil || len(*authz.asked) != 0 {
 				t.Fatalf("err = %v, asked = %v; want a refusal and no question", err, *authz.asked)
 			}
@@ -204,7 +205,7 @@ func TestStepsOfWalksTheActions(t *testing.T) {
 	var seen []string
 
 	authz := newAuthorizer(map[identity.Action]bool{identity.ActionNamespaceRead: true}, nil)
-	g := guard(&seen, authz)
+	g := guard(t, &seen, authz)
 	obj := identity.NamespaceObject(namespace.Name("acme"))
 
 	rt := route.Route[identity.Object]{

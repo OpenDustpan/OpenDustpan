@@ -3,24 +3,29 @@ package registry
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"mime"
 	"net/http"
+	"sort"
+	"strconv"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/api/apidesc"
 	"opendustpan.org/opendustpan/internal/api/idempotent"
 	"opendustpan.org/opendustpan/internal/api/problem"
 	"opendustpan.org/opendustpan/internal/api/route"
 	"opendustpan.org/opendustpan/internal/clientip"
+	"opendustpan.org/opendustpan/internal/registry/service"
 	"opendustpan.org/opendustpan/internal/requestid"
 	"opendustpan.org/opendustpan/internal/sessionauth"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/idempotency"
 	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/registry"
-	"opendustpan.org/opendustpan/pkg/registry/service"
 )
 
 // maxBodyBytes bounds a JSON request body: a release names at most 66 files and
@@ -72,6 +77,19 @@ type releaseDocument struct {
 
 type listReleasesResponse struct {
 	Releases []releaseDocument `json:"releases"`
+}
+
+// providerDocument is one provider of a namespace in a list.
+type providerDocument struct {
+	Namespace string `json:"namespace"`
+	Name      string `json:"name"`
+}
+
+// listProvidersResponse is one page of GET .../registry/providers. Providers
+// is never null. NextPageToken is empty on the last page.
+type listProvidersResponse struct {
+	Providers     []providerDocument `json:"providers"`
+	NextPageToken string             `json:"nextPageToken"`
 }
 
 type keyBody struct {
@@ -132,7 +150,7 @@ func callerOf(r *http.Request, p identity.Principal) *service.Caller {
 	by := audit.Entry{
 		At: time.Time{}, Namespace: "", Subject: "", IDPSubject: "", TokenID: "", Action: "", Object: "",
 		Version: "", ValuePath: "", ValueCount: nil, Changes: nil, SourceIP: clientip.String(r),
-		UserAgent: truncateUserAgent(r.UserAgent()), Channel: sessionauth.AuditChannel(r, channelHeader),
+		UserAgent: truncateUserAgent(userAgent(r)), Channel: sessionauth.AuditChannel(r, channelHeader),
 		Kind: audit.KindChange, Outcome: audit.OutcomeSuccess, RequestID: requestid.FromContext(r.Context()),
 		ObjectID: "", PrevHash: "", Hash: "", Sequence: 0, FenceVersion: 0, Reason: "", PrincipalKind: string(p.Kind),
 		JobID: p.JobID,
@@ -181,7 +199,7 @@ func (h *Handler) stage(w http.ResponseWriter, r *http.Request, p identity.Princ
 	// Only raw bytes are a file. A body with another media type, for example a
 	// form that curl sends with --data-binary and no header, is refused before
 	// it is read.
-	mediaType, _, typeErr := mime.ParseMediaType(r.Header.Get("Content-Type"))
+	mediaType, _, typeErr := mime.ParseMediaType(apidesc.Header(r, "Content-Type"))
 	if typeErr != nil || mediaType != uploadMediaType {
 		h.writeError(ctx, w, problem.Fixed(
 			http.StatusUnsupportedMediaType, "request.content-type-unsupported",
@@ -249,6 +267,101 @@ func (h *Handler) publish(w http.ResponseWriter, r *http.Request, p identity.Pri
 	}
 
 	h.send(ctx, w, releaseAnswer(obj), rel)
+}
+
+const (
+	// defaultProviderPage is the page size when the request has no pageSize.
+	defaultProviderPage = 100
+	// maxProviderPage is the largest page size a request may ask for.
+	maxProviderPage = 1000
+)
+
+var (
+	errProviderPageSize = problem.BadRequest(
+		"request.page-size-invalid", "invalid page size: pageSize is a number from 1 to 1000",
+	)
+	errProviderPageToken = problem.BadRequest(
+		"request.page-token-invalid", "invalid page token: provide the nextPageToken of the page before",
+	)
+)
+
+// providerQuery is one validated list request: the page size and the name
+// after which the page starts. After is empty for the first page.
+type providerQuery struct {
+	pageSize int
+	after    string
+}
+
+// parseProviderQuery reads the pageSize and the pageToken. The token is the
+// base64url form of a provider name. It is untrusted input: it is checked
+// against the same rules as the name of a provider, and a value that fails is
+// refused, never repaired.
+func parseProviderQuery(r *http.Request, ns namespace.Name) (providerQuery, error) {
+	q := queryOf(r)
+	out := providerQuery{pageSize: defaultProviderPage, after: ""}
+
+	if raw := q.Get("pageSize"); raw != "" {
+		n, err := strconv.Atoi(raw)
+		if err != nil || n < 1 || n > maxProviderPage {
+			return providerQuery{}, errProviderPageSize
+		}
+
+		out.pageSize = n
+	}
+
+	if raw := q.Get("pageToken"); raw != "" {
+		decoded, err := base64.RawURLEncoding.DecodeString(raw)
+		if err != nil {
+			return providerQuery{}, errProviderPageToken
+		}
+
+		addr := registry.Address{Namespace: ns, Kind: registry.KindProvider, Name: string(decoded), System: ""}
+		if addr.Validate() != nil {
+			return providerQuery{}, errProviderPageToken
+		}
+
+		out.after = addr.Name
+	}
+
+	return out, nil
+}
+
+// listProviders serves GET .../registry/providers: one page of the providers
+// of the namespace that have at least one release, ordered by name. A bad
+// pageSize or pageToken answers 400.
+func (h *Handler) listProviders(w http.ResponseWriter, r *http.Request, _ identity.Principal, obj identity.Object) {
+	ctx := r.Context()
+
+	query, err := parseProviderQuery(r, obj.Namespace())
+	if err != nil {
+		h.writeError(ctx, w, err)
+
+		return
+	}
+
+	names, err := h.service.Providers(ctx, obj.Namespace())
+	if err != nil {
+		h.writeError(ctx, w, err)
+
+		return
+	}
+
+	// The names are in order, so the page starts at the first name after the
+	// token. A token that names no provider still pages from where the name
+	// would be.
+	start := sort.Search(len(names), func(i int) bool { return names[i] > query.after })
+	end := min(start+query.pageSize, len(names))
+	page := listProvidersResponse{Providers: make([]providerDocument, 0, end-start), NextPageToken: ""}
+
+	for _, name := range names[start:end] {
+		page.Providers = append(page.Providers, providerDocument{Namespace: obj.Namespace().String(), Name: name})
+	}
+
+	if end < len(names) {
+		page.NextPageToken = base64.RawURLEncoding.EncodeToString([]byte(names[end-1]))
+	}
+
+	h.writeJSON(ctx, w, http.StatusOK, page)
 }
 
 // listReleases serves GET .../registry/providers/{name}/versions.

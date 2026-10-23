@@ -8,9 +8,9 @@ import (
 	"strconv"
 	"strings"
 
+	"opendustpan.org/opendustpan/internal/scopeaudit"
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/namespace"
-	"opendustpan.org/opendustpan/pkg/scopeaudit"
 )
 
 // pulumiDir is the directory of the stack blobs inside the blob scope of a

@@ -5,7 +5,9 @@ apply, a destroy or a refresh. The jobs API lets a person or a client start a
 plan job, read a job, its phases and the records of its phases.
 
 This version starts plan jobs of OpenTofu workspaces on runners. No route
-cancels, approves or lists jobs yet.
+cancels, approves or lists jobs yet. The [drift API](drift-api.md) starts a drift
+check, which is a job with the operation `refresh` and the purpose `drift-check`.
+The job document has the field `purpose` for such a job.
 
 ## Paths
 
