@@ -1,18 +1,20 @@
 # The error paths of internal/api/pulumi that answer without a code of the
-# catalog. This list only shrinks: give a path a code and remove its line.
-# A new error path never goes on this list.
+# catalog. This list only shrinks: give a path a code, remove its line and
+# lower the limit. A new error path never goes on this list.
+limit 62
 Handler.createStack: errorResponse{}
 Handler.createStack: errorResponse{} #2
-Handler.freshReveal: freshRefusalResponse{}
-Handler.freshReveal: freshRefusalResponse{} #2
+Handler.freshReveal: errFreshStepRequired
+Handler.freshReveal: errReauthenticate
 Handler.renameStack: errorResponse{}
 Handler.renameStack: errorResponse{} #2
 Handler.updateStackTags: errorResponse{}
 Handler.updateStackTags: errorResponse{} #2
 Handler.writeBusy: errorResponse{}
 Handler.writeError: errorResponse{}
+Handler.writeError: status == http.StatusInternalServerError
 Handler.writeInvalidBody: errorResponse{}
-Handler.writeNamespaceNotFound: errorResponse{}
+Handler.writeNamespaceNotFound: namespace.ErrNotFound
 classify: errContinuationToken
 classify: errInvalidBody
 classify: errRevealPathTooLong

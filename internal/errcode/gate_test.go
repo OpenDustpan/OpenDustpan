@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -15,6 +16,10 @@ import (
 // apiDir is the directory of the HTTP adapters, from this package.
 const apiDir = "../api"
 
+// dustpanDir is the SDK entry point, which answers the errors of the router,
+// of a missing component and of maintenance mode, from this package.
+const dustpanDir = "../../pkg/dustpan"
+
 // knownDir holds one list of the known uncoded error paths for each adapter.
 const knownDir = "testdata/uncoded"
 
@@ -22,31 +27,42 @@ const knownDir = "testdata/uncoded"
 // catalog.
 func gated() []errcodetest.Adapter {
 	return []errcodetest.Adapter{
-		{Name: "audit", Bodies: []string{"errorResponse", "codedErrorResponse"}, Skip: nil},
-		{Name: "drift", Bodies: []string{"errorResponse"}, Skip: nil},
-		{Name: "inventory", Bodies: []string{"errorResponse"}, Skip: nil},
-		{Name: "jobs", Bodies: []string{"errorResponse"}, Skip: nil},
-		{Name: "notifications", Bodies: []string{"errorResponse"}, Skip: nil},
-		{Name: "objectcontext", Bodies: []string{"errorResponse", "codedErrorResponse"}, Skip: nil},
-		{Name: "profile", Bodies: []string{"errorResponse"}, Skip: nil},
-		{Name: "pulumi", Bodies: []string{"errorResponse", "codedErrorResponse", "freshRefusalResponse"}, Skip: nil},
-		{Name: "registry", Bodies: []string{"errorResponse"}, Skip: nil},
+		api("audit", []string{"errorResponse", "codedErrorResponse"}, nil),
+		api("drift", []string{"errorResponse"}, nil),
 		{
-			Name:   "runnerapi",
-			Bodies: []string{"managementError", "codedManagementError"},
-			// The runner protocol has its own codes and its own versions.
-			Skip: []string{"classifyProtocol", "classifyProtocolOther"},
+			Name: "dustpan",
+			Dir:  dustpanDir,
+			Bodies: []string{
+				"maintenancePulumiError", "maintenanceInventoryError", "maintenanceTFEError",
+			},
+			// OpenTofu fixes the plain text errors of the HTTP backend. The
+			// runner protocol has its own codes and its own versions.
+			Skip: []string{"writeMaintenanceHTTPBackend", "writeMaintenanceRunner"},
 		},
-		{
-			Name:   "server",
-			Bodies: []string{"errorResponse", "codedResponse", "reauthenticateResponse", "enterRefusedResponse"},
-			Skip:   nil,
-		},
-		{Name: "tfe", Bodies: []string{"jsonAPIError"}, Skip: nil},
+		api("inventory", []string{"errorResponse"}, nil),
+		api("jobs", []string{"errorResponse"}, nil),
+		api("notifications", []string{"errorResponse", "statusError", "problem"}, nil),
+		api("objectcontext", []string{"errorResponse", "codedErrorResponse"}, nil),
+		api("profile", []string{"errorResponse", "statusError", "problem"}, nil),
+		api("pulumi", []string{"errorResponse", "codedErrorResponse", "freshRefusalResponse"}, nil),
+		api("registry", []string{"errorResponse", "statusError", "problem"}, nil),
+		// The runner protocol has its own codes and its own versions.
+		api("runnerapi", []string{"managementError", "codedManagementError"},
+			[]string{"classifyProtocol", "classifyProtocolOther"}),
+		api("server", []string{
+			"errorResponse", "codedResponse", "codedError", "reauthenticateResponse", "enterRefusedResponse",
+		}, nil),
+		api("tfe", []string{"jsonAPIError", "errorClass"}, nil),
 	}
 }
 
-// ungated lists each directory of apiDir that is not a gated adapter, and why.
+// api returns the gated adapter of the directory name of apiDir.
+func api(name string, bodies, skip []string) errcodetest.Adapter {
+	return errcodetest.Adapter{Name: name, Dir: filepath.Join(apiDir, name), Bodies: bodies, Skip: skip}
+}
+
+// ungated lists each directory of apiDir that is not a gated adapter, and
+// each subdirectory of a gated adapter, and why.
 func ungated() map[string]string {
 	return map[string]string{
 		"apidesc":       "the API description; it writes no error answer",
@@ -69,8 +85,11 @@ func TestEveryAdapterIsGated(t *testing.T) {
 	}
 
 	listed := map[string]bool{}
+
 	for _, a := range gated() {
-		listed[a.Name] = true
+		if filepath.Dir(a.Dir) == apiDir {
+			listed[a.Name] = true
+		}
 	}
 
 	for name := range ungated() {
@@ -105,16 +124,23 @@ func TestEveryAdapterIsGated(t *testing.T) {
 func TestErrorPathsHaveCodes(t *testing.T) {
 	t.Parallel()
 
+	coded, err := errcodetest.CodedNames(".")
+	if err != nil {
+		t.Fatalf("coded names: %v", err)
+	}
+
 	for _, a := range gated() {
 		t.Run(a.Name, func(t *testing.T) {
 			t.Parallel()
 
-			got, err := errcodetest.UncodedPaths(filepath.Join(apiDir, a.Name), a)
+			got, err := errcodetest.UncodedPaths(a, coded)
 			if err != nil {
 				t.Fatalf("scan: %v", err)
 			}
 
-			checkKnown(t, a.Name, got, readKnown(t, a.Name))
+			limit, known := readKnown(t, a.Name)
+			checkKnown(t, a.Name, got, known)
+			checkLimit(t, a.Name, limit, known)
 		})
 	}
 }
@@ -138,13 +164,34 @@ func checkKnown(t *testing.T, adapter string, got, known []string) {
 	}
 }
 
+// checkLimit fails when the known list of the adapter has more or fewer
+// paths than its limit. A path that gets a code lowers the limit in the same
+// change, so the limit only goes down, and a higher limit is a line of the
+// diff that a review sees.
+func checkLimit(t *testing.T, adapter string, limit int, known []string) {
+	t.Helper()
+
+	file := filepath.Join(knownDir, adapter+".txt")
+
+	switch {
+	case limit < 0:
+		t.Errorf("%s has no line %q: add it with the number of its paths", file, limitPrefix+"<n>")
+	case len(known) > limit:
+		t.Errorf("%s has %d paths and the limit %d: a new error path gets a code, the limit never grows",
+			file, len(known), limit)
+	case len(known) < limit:
+		t.Errorf("%s has %d paths and the limit %d: lower the limit to %d", file, len(known), limit, len(known))
+	default:
+	}
+}
+
 // TestKnownListsAreSorted keeps each known list sorted and without repeats, so
 // that two changes to one list merge in a predictable way.
 func TestKnownListsAreSorted(t *testing.T) {
 	t.Parallel()
 
 	for _, a := range gated() {
-		known := readKnown(t, a.Name)
+		_, known := readKnown(t, a.Name)
 
 		if !slices.IsSorted(known) || len(slices.Compact(slices.Clone(known))) != len(known) {
 			t.Errorf("the known list of %s is not sorted or has a repeat", a.Name)
@@ -152,9 +199,13 @@ func TestKnownListsAreSorted(t *testing.T) {
 	}
 }
 
-// readKnown returns the paths of the known list of the adapter. A missing
-// file is an empty list. A line that starts with "#" is a comment.
-func readKnown(t *testing.T, adapter string) []string {
+// limitPrefix starts the line of a known list that holds its limit.
+const limitPrefix = "limit "
+
+// readKnown returns the limit and the paths of the known list of the adapter.
+// A missing file is an empty list with the limit 0. A line that starts with
+// "#" is a comment. The limit is -1 when the file has no limit line.
+func readKnown(t *testing.T, adapter string) (int, []string) {
 	t.Helper()
 
 	root, err := os.OpenRoot(knownDir)
@@ -170,21 +221,53 @@ func readKnown(t *testing.T, adapter string) []string {
 
 	data, err := root.ReadFile(adapter + ".txt")
 	if errors.Is(err, fs.ErrNotExist) {
-		return nil
+		return 0, nil
 	}
 
 	if err != nil {
 		t.Fatalf("read the known list of %s: %v", adapter, err)
 	}
 
+	limit := -1
+
 	var out []string
 
 	for line := range strings.Lines(string(data)) {
 		line = strings.TrimSpace(line)
-		if line != "" && !strings.HasPrefix(line, "#") {
+
+		switch {
+		case line == "" || strings.HasPrefix(line, "#"):
+		case strings.HasPrefix(line, limitPrefix):
+			limit, err = strconv.Atoi(strings.TrimPrefix(line, limitPrefix))
+			if err != nil || limit < 0 {
+				t.Fatalf("the known list of %s has the limit line %q: want a number of 0 or more", adapter, line)
+			}
+		default:
 			out = append(out, line)
 		}
 	}
 
-	return out
+	return limit, out
+}
+
+// TestGatedAdaptersHaveNoUngatedPackage fails for a subdirectory of a gated
+// adapter that holds Go source other than tests, unless ungated names it with
+// a reason. The scan reads one directory, so a package under it is not
+// gated.
+func TestGatedAdaptersHaveNoUngatedPackage(t *testing.T) {
+	t.Parallel()
+
+	for _, a := range gated() {
+		dirs, err := errcodetest.SourceDirs(a.Dir)
+		if err != nil {
+			t.Fatalf("source directories of %s: %v", a.Name, err)
+		}
+
+		for _, dir := range dirs {
+			if _, ok := ungated()[filepath.ToSlash(filepath.Join(a.Name, dir))]; !ok {
+				t.Errorf("package %s of the gated adapter %s is not gated: gate it, or add %q with a reason to ungated",
+					dir, a.Name, filepath.ToSlash(filepath.Join(a.Name, dir)))
+			}
+		}
+	}
 }

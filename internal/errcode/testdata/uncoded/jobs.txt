@@ -1,7 +1,10 @@
 # The error paths of internal/api/jobs that answer without a code of the
-# catalog. This list only shrinks: give a path a code and remove its line.
-# A new error path never goes on this list.
+# catalog. This list only shrinks: give a path a code, remove its line and
+# lower the limit. A new error path never goes on this list.
+limit 21
 classify: errNotFound
+classify: errorResponse{}
+classify: errorResponse{} #2
 classify: identity.ErrRateLimited
 classify: identity.ErrUnauthenticated
 classify: job.ErrNotFound

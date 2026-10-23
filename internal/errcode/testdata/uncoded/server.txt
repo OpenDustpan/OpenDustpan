@@ -1,11 +1,12 @@
 # The error paths of internal/api/server that answer without a code of the
-# catalog. This list only shrinks: give a path a code and remove its line.
-# A new error path never goes on this list.
+# catalog. This list only shrinks: give a path a code, remove its line and
+# lower the limit. A new error path never goes on this list.
+limit 188
 Handler.ServeHTTP: errorResponse{}
 Handler.approveAuditChain: errorResponse{}
 Handler.getAuditChain: errorResponse{}
 Handler.sweepDeletedUnits: errorResponse{}
-Handler.sweepDeletedUnits: errorResponse{} #2
+Handler.sweepDeletedUnits: inventory.ErrSweepRunning
 Handler.writeEnterError: enterRefusedResponse{}
 Handler.writeError: codedResponse{}
 Handler.writeError: codedResponse{} #2
@@ -173,3 +174,19 @@ classifyToken: errTokenBody
 classifyToken: errTokenQuery
 classifyToken: identity.ErrRateLimited
 classifyWorker: ErrNoWorker
+errFreshStepRequired: codedError{}
+errGitHostIdempotencyKey: codedError{}
+errGitHostIdempotencyOff: codedError{}
+errGitHostNoRegistration: codedError{}
+errGitHostNotAssigned: codedError{}
+errPreferencesBody: codedError{}
+errPreferencesChanged: codedError{}
+errPreferencesIfMatch: codedError{}
+errPreferencesMediaType: codedError{}
+errPreferencesNotPerson: codedError{}
+errPreferencesPersonGone: codedError{}
+errPreferencesReadOnly: codedError{}
+errPreferencesTooLarge: codedError{}
+errPreferencesUnavailable: codedError{}
+errPreferencesUnknownField: codedError{}
+preferencesError: As(&field)

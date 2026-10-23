@@ -29,34 +29,43 @@ const (
 	SessionCSRF = "session.csrf"
 	// SessionOtherSite is a request with the session cookie from another site.
 	SessionOtherSite = "session.other-site"
+	// SignInRefused is a sign-in that the server refuses for a reason that is
+	// not a missing permission.
+	SignInRefused = "sign-in.refused"
+	// AccessNoAction is a request on a route that declares no authorization
+	// action for its object. The server refuses it and never falls back to
+	// another action.
+	AccessNoAction = "access.no-action"
 )
 
-// errNoCode marks a refusal that wraps identity.ErrDenied but is not a missing
-// permission.
-var errNoCode = errors.New("refusal without a code")
-
-type refusal struct{ reason string }
+type refusal struct{ code, reason string }
 
 func (r refusal) Error() string { return identity.ErrDenied.Error() + ": " + r.reason }
 
-func (refusal) Unwrap() []error { return []error{identity.ErrDenied, errNoCode} }
+func (refusal) Unwrap() error { return identity.ErrDenied }
 
 // Refusal returns an error that answers 403 like identity.ErrDenied, with the
-// text "permission denied: " and reason, and that has no code. Use it for a
-// refusal that is not a missing permission, such as a refused sign-in: a person
-// who gets access.denied needs a grant, and this person does not. Every other
-// error that wraps identity.ErrDenied gets access.denied, so check each new one.
-func Refusal(reason string) error { return refusal{reason: reason} }
+// text "permission denied: " and reason, and with code in place of
+// access.denied. Use it for a refusal that is not a missing permission, such
+// as a refused sign-in: a person who gets access.denied needs a grant, and
+// this person does not. code is a code of the catalog, for example
+// SignInRefused. Every other error that wraps identity.ErrDenied gets
+// access.denied, so check each new one.
+func Refusal(code, reason string) error { return refusal{code: code, reason: reason} }
 
 // Forbidden returns the code of a 403 that err causes, or "" when err is none
-// of these causes. The order is part of the contract. The session errors and
-// the allowlist error wrap identity.ErrDenied, so they come before it, as in
-// the classify functions of the adapters, which pick the message in the same
+// of these causes. It never returns "" for an error that wraps
+// identity.ErrDenied. The order is part of the contract. A refusal of Refusal
+// comes first, because it names its own code. The session errors and the
+// allowlist error wrap identity.ErrDenied, so they come before it, as in the
+// classify functions of the adapters, which pick the message in the same
 // order.
 func Forbidden(err error) string {
+	if r, ok := errors.AsType[refusal](err); ok {
+		return r.code
+	}
+
 	switch {
-	case errors.Is(err, errNoCode):
-		return ""
 	case errors.Is(err, sessionauth.ErrCSRF):
 		return SessionCSRF
 	case errors.Is(err, sessionauth.ErrOtherSite):

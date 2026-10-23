@@ -1,8 +1,10 @@
 package errcode_test
 
 import (
+	"os"
 	"regexp"
 	"slices"
+	"strings"
 	"testing"
 
 	"opendustpan.org/opendustpan/internal/errcode"
@@ -121,6 +123,7 @@ func TestForbiddenAnswersCatalogCodes(t *testing.T) {
 	for _, code := range []string{
 		errcode.AccessDenied, errcode.AccessIPNotAllowed, errcode.GateLimited,
 		errcode.GateRuleFailed, errcode.SessionCSRF, errcode.SessionOtherSite,
+		errcode.SignInRefused, errcode.AccessNoAction,
 	} {
 		spec, ok := errcode.Lookup(code)
 		if !ok {
@@ -185,5 +188,98 @@ func TestLookupUnknown(t *testing.T) {
 
 	if _, ok := errcode.Lookup("stack.unknown-code"); ok {
 		t.Fatal("Lookup found a code that is not in the catalog")
+	}
+}
+
+// goldenFile holds one line for each code of the catalog: the code, then the
+// name and the kind of each argument. At the first tag, it becomes the first
+// list of shipped codes.
+const goldenFile = "testdata/catalog.txt"
+
+// TestCatalogKeepsEveryCode fails when a line of the golden file is not in the
+// catalog, when the catalog gives a code other arguments than its line, and
+// when a code of the catalog has no line. The console reads these codes, so a
+// code never goes away and never changes: a new code adds its line.
+func TestCatalogKeepsEveryCode(t *testing.T) {
+	t.Parallel()
+
+	golden := readGolden(t)
+
+	catalog := map[string]string{}
+	for _, spec := range errcode.Catalog() {
+		catalog[spec.Code] = goldenLine(spec)
+	}
+
+	for code, want := range golden {
+		got, ok := catalog[code]
+
+		switch {
+		case !ok:
+			t.Errorf("code %q of %s is not in the catalog: a code is never removed or renamed", code, goldenFile)
+		case got != want:
+			t.Errorf("code %q is %q in the catalog and %q in %s: the arguments of a code never change",
+				code, got, want, goldenFile)
+		default:
+		}
+	}
+
+	for code, line := range catalog {
+		if _, ok := golden[code]; !ok {
+			t.Errorf("code %q has no line in %s: add the line %q", code, goldenFile, line)
+		}
+	}
+}
+
+// readGolden returns the lines of the golden file by their code.
+func readGolden(t *testing.T) map[string]string {
+	t.Helper()
+
+	data, err := os.ReadFile(goldenFile)
+	if err != nil {
+		t.Fatalf("read %s: %v", goldenFile, err)
+	}
+
+	golden := map[string]string{}
+
+	for line := range strings.Lines(string(data)) {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+
+		code, _, _ := strings.Cut(line, " ")
+		if _, seen := golden[code]; seen {
+			t.Errorf("%s: code %q has two lines", goldenFile, code)
+		}
+
+		golden[code] = line
+	}
+
+	return golden
+}
+
+// goldenLine returns the line of spec in the golden file.
+func goldenLine(spec errcode.Spec) string {
+	parts := make([]string, 0, 1+len(spec.Args))
+	parts = append(parts, spec.Code)
+
+	for _, arg := range spec.Args {
+		parts = append(parts, arg.Name+":"+kindName(arg.Kind))
+	}
+
+	return strings.Join(parts, " ")
+}
+
+// kindName returns the name of a kind in the golden file.
+func kindName(k errcode.Kind) string {
+	switch k {
+	case errcode.KindIdentifier:
+		return "identifier"
+	case errcode.KindQuantity:
+		return "quantity"
+	case errcode.KindTime:
+		return "time"
+	default:
+		return "unknown"
 	}
 }

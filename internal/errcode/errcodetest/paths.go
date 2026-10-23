@@ -12,6 +12,8 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+
+	"opendustpan.org/opendustpan/internal/errcode"
 )
 
 // errcodePath is the import path of the catalog.
@@ -28,40 +30,56 @@ var (
 
 // Adapter names one HTTP adapter for the error code gate.
 type Adapter struct {
-	// Name is the directory of the adapter under internal/api.
+	// Name is the name of the known list of the adapter.
 	Name string
+	// Dir is the directory of the adapter.
+	Dir string
 	// Bodies are the types of the error bodies that the adapter writes
-	// outside its classify functions.
+	// outside its mapping functions.
 	Bodies []string
 	// Skip are the functions that answer a fixed shape of another protocol,
 	// which has its own codes. A method is "Type.method".
 	Skip []string
 }
 
-// UncodedPaths returns the error paths of the adapter a in dir that name no
-// code of the catalog, sorted. Test files are not read.
+// UncodedPaths returns the error paths of the adapter a that name no code of
+// the catalog, sorted. coded are the names in the errcode package that give a
+// path a code (see CodedNames). Test files are not read.
 //
-// An error path is one of these:
-//   - a case of a switch in a classify function, when the switch has a
-//     case that calls errors.Is, errors.As or errors.AsType: one path for
-//     each error that the case names, or the case itself, or "default";
-//   - a case of a type switch in a classify function;
-//   - an if statement in a classify function whose condition calls errors.Is,
-//     errors.As or errors.AsType;
-//   - a composite literal of one of a.Bodies outside the classify functions.
+// A mapping function is a classify function, or a function that calls
+// errors.Is, errors.As or errors.AsType and names an HTTP status of 400 or
+// more. An error path is one of these:
+//   - a case of a switch in a mapping function, when the switch has a case
+//     that calls errors.Is, errors.As or errors.AsType: one path for each
+//     error that the case names, or the case itself, or "default";
+//   - a case of a type switch in a mapping function;
+//   - an if statement in a mapping function whose init or condition calls
+//     errors.Is, errors.As or errors.AsType;
+//   - an element of a table, a composite literal whose elements each hold a
+//     sentinel error and an HTTP status of 400 or more;
+//   - a composite literal of one of a.Bodies outside these cases and if
+//     statements, also in the value of a variable;
+//   - a string literal that holds the JSON member "code" or "errors";
+//   - a call of http.Error or http.NotFound.
 //
-// A path has a code when its case or its if statement, or its literal or the
-// condition of an if statement around it, refers to the errcode package. A
-// case or an if statement that calls another classify function hands its
-// error on, and is no path. A path is "<function>: <error>", with " #n" for
-// the n-th path of the same text.
-func UncodedPaths(dir string, a Adapter) ([]string, error) {
-	files, err := parseDir(dir)
+// Outside a classify function, a case or an if statement is a path only when
+// its body names an HTTP status of 400 or more. A path has a code when its
+// case, its if statement, its element or its literal names one of coded. A
+// literal in the body of an if statement whose init or condition names one of
+// coded has a code; a literal in its else branch does not. A case or an if
+// statement that calls another classify function hands its error on, and is
+// no path. A path is "<function>: <error>", with " #n" for the n-th path of
+// the same text.
+func UncodedPaths(a Adapter, coded []string) ([]string, error) {
+	files, err := parseDir(a.Dir)
 	if err != nil {
 		return nil, err
 	}
 
-	s := scan{bodies: a.Bodies, types: map[string]bool{}, funcs: map[string]bool{}, paths: nil}
+	s := scan{
+		bodies: a.Bodies, coded: coded, local: "", classify: false,
+		types: map[string]bool{}, funcs: map[string]bool{}, branches: map[ast.Node]bool{}, paths: nil,
+	}
 
 	for _, f := range files {
 		s.file(f, a.Skip)
@@ -80,6 +98,58 @@ func UncodedPaths(dir string, a Adapter) ([]string, error) {
 	}
 
 	return numbered(s.paths), nil
+}
+
+// CodedNames returns the names in the errcode package that give an error
+// path a code: New, Forbidden, and each constant of the source in dir whose
+// value is a code of the catalog. Any other name of the package, for example
+// Valid or KindIdentifier, gives no code.
+func CodedNames(dir string) ([]string, error) {
+	files, err := parseDir(dir)
+	if err != nil {
+		return nil, err
+	}
+
+	names := []string{"New", "Forbidden"}
+
+	for _, f := range files {
+		for _, decl := range f.Decls {
+			if d, ok := decl.(*ast.GenDecl); ok && d.Tok == token.CONST {
+				names = append(names, codeConstants(d)...)
+			}
+		}
+	}
+
+	slices.Sort(names)
+
+	return names, nil
+}
+
+// codeConstants returns the constants of d whose value is a code of the
+// catalog.
+func codeConstants(d *ast.GenDecl) []string {
+	var out []string
+
+	for _, spec := range d.Specs {
+		vs, ok := spec.(*ast.ValueSpec)
+		if !ok || len(vs.Names) != len(vs.Values) {
+			continue
+		}
+
+		for i, name := range vs.Names {
+			lit, ok := vs.Values[i].(*ast.BasicLit)
+			if !ok || lit.Kind != token.STRING {
+				continue
+			}
+
+			value, err := strconv.Unquote(lit.Value)
+			if _, known := errcode.Lookup(value); err == nil && known {
+				out = append(out, name.Name)
+			}
+		}
+	}
+
+	return out
 }
 
 // parseDir parses the Go files of dir that are not tests, in the order of
@@ -114,21 +184,29 @@ func parseDir(dir string) ([]*ast.File, error) {
 // scan collects the uncoded paths of one adapter.
 type scan struct {
 	bodies []string
-	types  map[string]bool
-	funcs  map[string]bool
-	paths  []string
+	coded  []string
+	// local is the name under which the current file imports the catalog.
+	local string
+	// classify is true in a classify function, where each branch that tests
+	// an error is a path.
+	classify bool
+	types    map[string]bool
+	funcs    map[string]bool
+	branches map[ast.Node]bool
+	paths    []string
 }
 
 // file adds the paths of f, without the functions of skip.
 func (s *scan) file(f *ast.File, skip []string) {
-	local := errcodeName(f)
+	s.local = errcodeName(f)
 
 	for _, decl := range f.Decls {
 		switch d := decl.(type) {
 		case *ast.GenDecl:
 			s.typeNames(d)
+			s.varTables(d)
 		case *ast.FuncDecl:
-			s.function(d, local, skip)
+			s.function(d, skip)
 		default:
 		}
 	}
@@ -143,8 +221,28 @@ func (s *scan) typeNames(d *ast.GenDecl) {
 	}
 }
 
+// varTables adds the uncoded elements of the tables that d declares.
+func (s *scan) varTables(d *ast.GenDecl) {
+	for _, spec := range d.Specs {
+		vs, ok := spec.(*ast.ValueSpec)
+		if !ok {
+			continue
+		}
+
+		for i, value := range vs.Values {
+			name := "_"
+			if i < len(vs.Names) {
+				name = vs.Names[i].Name
+			}
+
+			s.tables(name, value)
+			s.literals(name, value)
+		}
+	}
+}
+
 // function adds the paths of d, unless skip names it.
-func (s *scan) function(d *ast.FuncDecl, local string, skip []string) {
+func (s *scan) function(d *ast.FuncDecl, skip []string) {
 	name := funcName(d)
 	s.funcs[name] = true
 
@@ -152,29 +250,29 @@ func (s *scan) function(d *ast.FuncDecl, local string, skip []string) {
 		return
 	}
 
-	if strings.HasPrefix(d.Name.Name, classifyPrefix) {
-		s.classify(name, d.Body, local)
-	} else {
-		s.literals(name, d.Body, local)
+	s.classify = strings.HasPrefix(d.Name.Name, classifyPrefix)
+	if s.classify || (len(errorTargets(d.Body)) > 0 && errorStatus(d.Body)) {
+		s.branchPaths(name, d.Body)
 	}
+
+	s.tables(name, d.Body)
+	s.literals(name, d.Body)
 }
 
-// classify adds the uncoded branches of the classify function name.
-func (s *scan) classify(name string, body *ast.BlockStmt, local string) {
+// branchPaths adds the uncoded branches of the mapping function name. Outside
+// a classify function, a branch counts only when its body names an error
+// status.
+func (s *scan) branchPaths(name string, body *ast.BlockStmt) {
 	ast.Inspect(body, func(n ast.Node) bool {
 		switch st := n.(type) {
 		case *ast.SwitchStmt:
 			if st.Tag == nil && hasErrorsCase(st.Body) {
-				s.cases(name, st.Body, local, caseTargets)
+				s.cases(name, st.Body, caseTargets)
 			}
 		case *ast.TypeSwitchStmt:
-			s.cases(name, st.Body, local, typeTargets)
+			s.cases(name, st.Body, typeTargets)
 		case *ast.IfStmt:
-			targets := append(errorTargets(st.Init), errorTargets(st.Cond)...)
-			if len(targets) > 0 && !delegates(st.Body) &&
-				!refers(st.Init, local) && !refers(st.Cond, local) && !refers(st.Body, local) {
-				s.add(name, targets)
-			}
+			s.ifPath(name, st)
 		default:
 		}
 
@@ -182,21 +280,73 @@ func (s *scan) classify(name string, body *ast.BlockStmt, local string) {
 	})
 }
 
-// cases adds the uncoded clauses of a switch body. targets gives the errors
-// that a clause names.
-func (s *scan) cases(name string, body *ast.BlockStmt, local string, targets func(*ast.CaseClause) []string) {
-	for _, stmt := range body.List {
-		clause, ok := stmt.(*ast.CaseClause)
-		if !ok || delegates(clause) || refers(clause, local) {
-			continue
-		}
+// ifPath adds the if statement st of name when it tests an error and has no
+// code.
+func (s *scan) ifPath(name string, st *ast.IfStmt) {
+	targets := append(errorTargets(st.Init), errorTargets(st.Cond)...)
+	if len(targets) == 0 || delegates(st.Body) || (!s.classify && !errorStatus(st.Body)) {
+		return
+	}
 
-		s.add(name, targets(clause))
+	s.branches[st.Body] = true
+
+	if !s.refers(st.Init) && !s.refers(st.Cond) && !s.refers(st.Body) {
+		s.add(name, targets)
 	}
 }
 
-// literals adds the uncoded error bodies of the function name.
-func (s *scan) literals(name string, body *ast.BlockStmt, local string) {
+// cases adds the uncoded clauses of a switch body. targets gives the errors
+// that a clause names.
+func (s *scan) cases(name string, body *ast.BlockStmt, targets func(*ast.CaseClause) []string) {
+	for _, stmt := range body.List {
+		clause, ok := stmt.(*ast.CaseClause)
+		if !ok || delegates(clause) || (!s.classify && !errorStatus(clause)) {
+			continue
+		}
+
+		s.branches[clause] = true
+
+		if !s.refers(clause) {
+			s.add(name, targets(clause))
+		}
+	}
+}
+
+// tables adds the uncoded elements of each table in n, under the name owner.
+func (s *scan) tables(owner string, n ast.Node) {
+	ast.Inspect(n, func(n ast.Node) bool {
+		lit, ok := n.(*ast.CompositeLit)
+		if !ok || len(lit.Elts) == 0 {
+			return true
+		}
+
+		elems := make([]*ast.CompositeLit, 0, len(lit.Elts))
+
+		for _, e := range lit.Elts {
+			elem, ok := e.(*ast.CompositeLit)
+			if !ok || !hasSentinel(elem) || !errorStatus(elem) {
+				return true
+			}
+
+			elems = append(elems, elem)
+		}
+
+		for _, elem := range elems {
+			s.branches[elem] = true
+
+			if !s.refers(elem) {
+				s.add(owner, []string{elementName(elem)})
+			}
+		}
+
+		return false
+	})
+}
+
+// literals adds the uncoded error bodies, raw JSON error bodies and plain
+// text errors in body, the body of the function name or the value of the
+// variable name, that no branch or table holds.
+func (s *scan) literals(name string, body ast.Node) {
 	var stack []ast.Node
 
 	ast.Inspect(body, func(n ast.Node) bool {
@@ -208,20 +358,62 @@ func (s *scan) literals(name string, body *ast.BlockStmt, local string) {
 
 		stack = append(stack, n)
 
-		lit, ok := n.(*ast.CompositeLit)
-		if !ok {
+		if s.inBranch(stack) || s.guarded(stack) {
 			return true
 		}
 
-		typ, ok := lit.Type.(*ast.Ident)
-		if !ok || !slices.Contains(s.bodies, typ.Name) || refers(lit, local) || guarded(stack, local) {
-			return true
+		if path := s.literal(n); path != "" {
+			s.add(name, []string{path})
 		}
-
-		s.add(name, []string{typ.Name + "{}"})
 
 		return true
 	})
+}
+
+// literal returns the path of n when n is an uncoded error body, a raw JSON
+// error body or a plain text error, and "" when it is none of these.
+func (s *scan) literal(n ast.Node) string {
+	switch x := n.(type) {
+	case *ast.CompositeLit:
+		if typ, ok := x.Type.(*ast.Ident); ok && slices.Contains(s.bodies, typ.Name) && !s.refers(x) {
+			return typ.Name + "{}"
+		}
+	case *ast.BasicLit:
+		if rawJSONError(x) {
+			return "raw JSON"
+		}
+	case *ast.CallExpr:
+		return plainTextError(x)
+	default:
+	}
+
+	return ""
+}
+
+// plainTextError returns the path of call when it is http.Error or
+// http.NotFound, and "" for any other call.
+func plainTextError(call *ast.CallExpr) string {
+	sel, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok || !isPackage(sel.X, "http") || (sel.Sel.Name != "Error" && sel.Sel.Name != "NotFound") {
+		return ""
+	}
+
+	return "http." + sel.Sel.Name
+}
+
+// rawJSONError reports whether lit is a string that holds the JSON member
+// "code" or "errors" of an error body.
+func rawJSONError(lit *ast.BasicLit) bool {
+	if lit.Kind != token.STRING {
+		return false
+	}
+
+	value, err := strconv.Unquote(lit.Value)
+	if err != nil {
+		return false
+	}
+
+	return strings.Contains(value, `"code"`) || strings.Contains(value, `"errors"`)
 }
 
 // add adds one path for each target of the function name.
@@ -231,16 +423,130 @@ func (s *scan) add(name string, targets []string) {
 	}
 }
 
-// guarded reports whether an if statement in stack has an init or a
-// condition that refers to the errcode package.
-func guarded(stack []ast.Node, local string) bool {
-	for _, n := range stack {
-		if st, ok := n.(*ast.IfStmt); ok && (refers(st.Init, local) || refers(st.Cond, local)) {
+// inBranch reports whether a branch or a table element in stack is a path
+// already, coded or not.
+func (s *scan) inBranch(stack []ast.Node) bool {
+	return slices.ContainsFunc(stack, func(n ast.Node) bool { return s.branches[n] })
+}
+
+// guarded reports whether stack is in the body of an if statement whose init
+// or condition names a code. The else branch of that if statement is not
+// guarded.
+func (s *scan) guarded(stack []ast.Node) bool {
+	for i, n := range stack {
+		st, ok := n.(*ast.IfStmt)
+		if !ok || i+1 >= len(stack) || stack[i+1] != st.Body {
+			continue
+		}
+
+		if s.refers(st.Init) || s.refers(st.Cond) {
 			return true
 		}
 	}
 
 	return false
+}
+
+// refers reports whether n names one of the coded names of the errcode
+// package.
+func (s *scan) refers(n ast.Node) bool {
+	if s.local == "" || isNil(n) {
+		return false
+	}
+
+	found := false
+
+	ast.Inspect(n, func(n ast.Node) bool {
+		if sel, ok := n.(*ast.SelectorExpr); ok && isPackage(sel.X, s.local) && slices.Contains(s.coded, sel.Sel.Name) {
+			found = true
+		}
+
+		return !found
+	})
+
+	return found
+}
+
+// errorStatus reports whether n names an HTTP status of 400 or more, as a
+// constant of net/http.
+func errorStatus(n ast.Node) bool {
+	if isNil(n) {
+		return false
+	}
+
+	found := false
+
+	ast.Inspect(n, func(n ast.Node) bool {
+		if sel, ok := n.(*ast.SelectorExpr); ok && isPackage(sel.X, "http") && isErrorStatus(sel.Sel.Name) {
+			found = true
+		}
+
+		return !found
+	})
+
+	return found
+}
+
+// isErrorStatus reports whether name is a status constant of net/http of 400
+// or more. The constants below 400 are few and fixed, so the check lists them.
+func isErrorStatus(name string) bool {
+	below := []string{
+		"StatusContinue", "StatusSwitchingProtocols", "StatusProcessing", "StatusEarlyHints",
+		"StatusOK", "StatusCreated", "StatusAccepted", "StatusNonAuthoritativeInfo", "StatusNoContent",
+		"StatusResetContent", "StatusPartialContent", "StatusMultiStatus", "StatusAlreadyReported", "StatusIMUsed",
+		"StatusMultipleChoices", "StatusMovedPermanently", "StatusFound", "StatusSeeOther", "StatusNotModified",
+		"StatusUseProxy", "StatusTemporaryRedirect", "StatusPermanentRedirect", "StatusText",
+	}
+
+	return strings.HasPrefix(name, "Status") && !slices.Contains(below, name)
+}
+
+// hasSentinel reports whether n names a sentinel error, a name that starts
+// with "Err" or "err" followed by a capital letter.
+func hasSentinel(n ast.Node) bool {
+	found := false
+
+	ast.Inspect(n, func(n ast.Node) bool {
+		var name string
+
+		switch x := n.(type) {
+		case *ast.SelectorExpr:
+			name = x.Sel.Name
+		case *ast.Ident:
+			name = x.Name
+		default:
+			return !found
+		}
+
+		if sentinelName(name) {
+			found = true
+		}
+
+		return !found
+	})
+
+	return found
+}
+
+// sentinelName reports whether name has the form of a sentinel error.
+func sentinelName(name string) bool {
+	rest, ok := strings.CutPrefix(name, "Err")
+	if !ok {
+		rest, ok = strings.CutPrefix(name, "err")
+	}
+
+	return ok && rest != "" && rest[0] >= 'A' && rest[0] <= 'Z'
+}
+
+// elementName returns the error that a table element names: its first
+// element.
+func elementName(elem *ast.CompositeLit) string {
+	first := elem.Elts[0]
+	if kv, ok := first.(*ast.KeyValueExpr); ok {
+		first = kv.Value
+	}
+
+	return types.ExprString(first)
 }
 
 // hasErrorsCase reports whether a case of the switch body calls errors.Is,
@@ -320,7 +626,7 @@ func errorTargets(n ast.Node) []string {
 func callTarget(call *ast.CallExpr) string {
 	switch fun := call.Fun.(type) {
 	case *ast.SelectorExpr:
-		if !isErrors(fun.X) || len(call.Args) != 2 {
+		if !isPackage(fun.X, "errors") || len(call.Args) != 2 {
 			return ""
 		}
 
@@ -333,7 +639,7 @@ func callTarget(call *ast.CallExpr) string {
 			return ""
 		}
 	case *ast.IndexExpr:
-		if sel, ok := fun.X.(*ast.SelectorExpr); ok && isErrors(sel.X) && sel.Sel.Name == "AsType" {
+		if sel, ok := fun.X.(*ast.SelectorExpr); ok && isPackage(sel.X, "errors") && sel.Sel.Name == "AsType" {
 			return "AsType[" + types.ExprString(fun.Index) + "]"
 		}
 
@@ -343,11 +649,11 @@ func callTarget(call *ast.CallExpr) string {
 	}
 }
 
-// isErrors reports whether e is the errors package.
-func isErrors(e ast.Expr) bool {
+// isPackage reports whether e is the package that the file names as name.
+func isPackage(e ast.Expr, name string) bool {
 	id, ok := e.(*ast.Ident)
 
-	return ok && id.Name == "errors"
+	return ok && id.Name == name
 }
 
 // delegates reports whether n calls a classify function.
@@ -357,28 +663,6 @@ func delegates(n ast.Node) bool {
 	ast.Inspect(n, func(n ast.Node) bool {
 		if call, ok := n.(*ast.CallExpr); ok {
 			if id, ok := call.Fun.(*ast.Ident); ok && strings.HasPrefix(id.Name, classifyPrefix) {
-				found = true
-			}
-		}
-
-		return !found
-	})
-
-	return found
-}
-
-// refers reports whether n names something of the errcode package, which the
-// file imports as local.
-func refers(n ast.Node, local string) bool {
-	if local == "" || isNil(n) {
-		return false
-	}
-
-	found := false
-
-	ast.Inspect(n, func(n ast.Node) bool {
-		if sel, ok := n.(*ast.SelectorExpr); ok {
-			if id, ok := sel.X.(*ast.Ident); ok && id.Name == local {
 				found = true
 			}
 		}

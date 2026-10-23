@@ -3,6 +3,7 @@ package errcode_test
 import (
 	"encoding/json"
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -32,7 +33,7 @@ func lockedAt() time.Time {
 func TestSpecAnswer(t *testing.T) {
 	t.Parallel()
 
-	answer, err := lockSpec().Answer(
+	answer, err := errcode.SpecAnswer(lockSpec(),
 		errcode.Identifier("workspace", "prod"),
 		errcode.Quantity("waiting", 3),
 		errcode.Time("lockedAt", lockedAt()),
@@ -41,14 +42,66 @@ func TestSpecAnswer(t *testing.T) {
 		t.Fatalf("Answer: %v", err)
 	}
 
-	body, err := json.Marshal(answer)
+	if got := answer.Code(); got != "workspace.locked" {
+		t.Fatalf("code = %q, want workspace.locked", got)
+	}
+
+	body, err := json.Marshal(answer.Args())
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
 
-	want := `{"code":"workspace.locked","args":{"lockedAt":"2026-10-23T09:30:00.125Z","waiting":3,"workspace":"prod"}}`
+	want := `{"lockedAt":"2026-10-23T09:30:00.125Z","waiting":3,"workspace":"prod"}`
 	if string(body) != want {
-		t.Fatalf("answer = %s, want %s", body, want)
+		t.Fatalf("args = %s, want %s", body, want)
+	}
+}
+
+// TestAnswerHasNoWireFields proves that an answer has no exported field and
+// so no JSON form of its own: the adapter copies the code and the arguments
+// to the fields of its shape, which have other names in each shape.
+func TestAnswerHasNoWireFields(t *testing.T) {
+	t.Parallel()
+
+	typ := reflect.TypeFor[errcode.Answer]()
+
+	for field := range typ.Fields() {
+		if field.IsExported() {
+			t.Errorf("Answer has the exported field %s", field.Name)
+		}
+	}
+
+	if typ.Implements(reflect.TypeFor[json.Marshaler]()) {
+		t.Error("Answer has a JSON form of its own")
+	}
+}
+
+// TestAnswerArgsIsACopy proves that a change to the map of Args does not
+// change the answer.
+func TestAnswerArgsIsACopy(t *testing.T) {
+	t.Parallel()
+
+	answer, err := errcode.New(errcode.PreferencesFieldInvalid, errcode.Identifier("field", "theme"))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	answer.Args()["field"] = "other"
+
+	if got := answer.Args()["field"]; got != "theme" {
+		t.Fatalf("field = %v, want theme", got)
+	}
+}
+
+// TestZeroAnswerHasNoCode proves that an answer that New did not make has no
+// code, so an adapter cannot send a code that is not in the catalog.
+func TestZeroAnswerHasNoCode(t *testing.T) {
+	t.Parallel()
+
+	var answer errcode.Answer
+
+	if answer.Code() != "" || answer.Args() != nil {
+		t.Fatalf("zero answer = %q %v, want no code and no arguments", answer.Code(), answer.Args())
 	}
 }
 
@@ -60,7 +113,7 @@ func TestSpecAnswerWithoutArgs(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 
-	if answer.Code != errcode.AccessDenied || answer.Args != nil {
+	if answer.Code() != errcode.AccessDenied || answer.Args() != nil {
 		t.Fatalf("answer = %+v, want the code and no arguments", answer)
 	}
 }
@@ -116,7 +169,7 @@ func TestSpecAnswerRefuses(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			if _, err := lockSpec().Answer(tc.values...); !errors.Is(err, tc.want) {
+			if _, err := errcode.SpecAnswer(lockSpec(), tc.values...); !errors.Is(err, tc.want) {
 				t.Fatalf("Answer error = %v, want %v", err, tc.want)
 			}
 		})
@@ -126,7 +179,7 @@ func TestSpecAnswerRefuses(t *testing.T) {
 func TestSpecAnswerAtTheLimits(t *testing.T) {
 	t.Parallel()
 
-	answer, err := lockSpec().Answer(
+	answer, err := errcode.SpecAnswer(lockSpec(),
 		errcode.Identifier("workspace", strings.Repeat("é", errcode.MaxIdentifier)),
 		errcode.Quantity("waiting", -errcode.MaxQuantity),
 		errcode.Time("lockedAt", lockedAt()),
@@ -135,7 +188,7 @@ func TestSpecAnswerAtTheLimits(t *testing.T) {
 		t.Fatalf("Answer at the limits: %v", err)
 	}
 
-	if got := answer.Args["waiting"]; got != int64(-errcode.MaxQuantity) {
+	if got := answer.Args()["waiting"]; got != int64(-errcode.MaxQuantity) {
 		t.Fatalf("waiting = %v, want %d", got, -errcode.MaxQuantity)
 	}
 }
@@ -162,7 +215,7 @@ func TestSpecAnswerRefusesTooManyArgs(t *testing.T) {
 		values = append(values, errcode.Quantity(name, int64(i)))
 	}
 
-	if _, err := spec.Answer(values...); !errors.Is(err, errcode.ErrTooManyArgs) {
+	if _, err := errcode.SpecAnswer(spec, values...); !errors.Is(err, errcode.ErrTooManyArgs) {
 		t.Fatalf("Answer error = %v, want %v", err, errcode.ErrTooManyArgs)
 	}
 }

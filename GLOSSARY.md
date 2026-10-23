@@ -1528,7 +1528,7 @@ A value that the text of an API error names, for example the name of a stack or 
 _Avoid_: Error value, error parameter, error detail
 
 **Uncoded error path**:
-A case of a classify function, or an error body of an HTTP adapter, that answers without a code of the catalog (ADR 276). The catalog is in `internal/errcode`. The known list of each adapter holds the uncoded error paths of today, and it only shrinks.
+An error path of an HTTP adapter that answers without a code of the catalog (ADR 276). The path is a branch of a mapping function, an element of a table of errors or an error body. A mapping function is a classify function, or another function that tests an error and names an HTTP status of 400 or more. The catalog is in `internal/errcode`. The known list of each adapter holds the uncoded error paths of today, with a limit, and it only shrinks.
 _Avoid_: Legacy error, untyped error
 
 ### Operations

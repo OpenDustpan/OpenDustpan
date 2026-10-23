@@ -6,9 +6,6 @@ import (
 	"strings"
 )
 
-// ServerInternal is a 500 that no classify function of the adapter maps.
-const ServerInternal = "server.internal"
-
 // grammar is the form of a code: two or more lowercase segments that dots
 // join, with hyphens between the words of a segment.
 var grammar = regexp.MustCompile(`^[a-z][a-z0-9]*(-[a-z0-9]+)*(\.[a-z][a-z0-9]*(-[a-z0-9]+)*)+$`)
@@ -74,55 +71,29 @@ func Catalog() []Spec {
 	return specs
 }
 
-// areas returns the spec list of each area. A new area gets its own list in
-// a file catalog_<area>.go and one line here, so that two changes to two
-// areas touch different lists.
+// areas returns the spec list of each area, one area on each line. A new
+// area gets its own list in a file catalog_<area>.go and its own line here,
+// so that two changes to two areas touch different lists.
 func areas() []func() []Spec {
-	return []func() []Spec{accessSpecs, gateSpecs, serverSpecs, sessionSpecs}
-}
-
-// accessSpecs are the codes of a request that the access rules refuse.
-func accessSpecs() []Spec {
-	return []Spec{
-		{Code: AccessDenied, Meaning: "the caller has no permission for the request", Args: nil},
-		{
-			Code:    AccessIPNotAllowed,
-			Meaning: "the request comes from an address outside the IP allowlist of the namespace",
-			Args:    nil,
-		},
-	}
-}
-
-// gateSpecs are the codes of a request that a gate or an access limit
-// refuses.
-func gateSpecs() []Spec {
-	return []Spec{
-		{Code: GateLimited, Meaning: "an access limit forbids the request", Args: nil},
-		{
-			Code:    GateRuleFailed,
-			Meaning: "a gate or an access limit refused the request because it failed to evaluate",
-			Args:    nil,
-		},
-	}
-}
-
-// serverSpecs are the codes of a failure of the server.
-func serverSpecs() []Spec {
-	return []Spec{
-		{Code: ServerInternal, Meaning: "the server failed with an error that it does not classify", Args: nil},
-	}
-}
-
-// sessionSpecs are the codes of a request with the session cookie that the
-// session checks refuse.
-func sessionSpecs() []Spec {
-	return []Spec{
-		{
-			Code:    SessionCSRF,
-			Meaning: "the request has the session cookie and a missing or wrong CSRF header",
-			Args:    nil,
-		},
-		{Code: SessionOtherSite, Meaning: "the request has the session cookie and comes from another site", Args: nil},
+	return []func() []Spec{
+		accessSpecs,
+		authSpecs,
+		driftSpecs,
+		gateSpecs,
+		gitHostSpecs,
+		jobSpecs,
+		maintenanceSpecs,
+		mfaSpecs,
+		namespaceSpecs,
+		preferencesSpecs,
+		profileSpecs,
+		registrySpecs,
+		requestSpecs,
+		serverSpecs,
+		sessionSpecs,
+		signInSpecs,
+		sinkSpecs,
+		workspaceSpecs,
 	}
 }
 

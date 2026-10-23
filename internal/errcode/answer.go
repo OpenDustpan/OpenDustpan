@@ -3,6 +3,7 @@ package errcode
 import (
 	"errors"
 	"fmt"
+	"maps"
 	"time"
 	"unicode"
 	"unicode/utf8"
@@ -19,7 +20,7 @@ const (
 	MaxQuantity = 1<<53 - 1
 )
 
-// The errors of Spec.Answer and New. Each one is a bug in the adapter that
+// The errors of New. Each one is a bug in the adapter that
 // builds the answer, not in the request.
 var (
 	ErrUnknownCode   = errors.New("the code is not in the catalog")
@@ -59,37 +60,52 @@ func Time(name string, value time.Time) Value {
 	return Value{name: name, kind: KindTime, text: "", number: 0, at: value}
 }
 
-// Answer is the code and the arguments of one error answer. The adapter
-// writes Code to the code field of its shape and Args to the arguments field.
-// Args holds a string for an identifier and a time, an int64 for a quantity,
-// and is nil for a code without arguments.
+// Answer is the code and the arguments of one error answer. New is the only
+// way to make an answer with a code, so an answer always holds a code of the
+// catalog and the arguments that the code declares. The adapter copies Code
+// to the code field of its shape and Args to its arguments field. Answer has
+// no JSON form of its own: the names of these fields differ in each shape.
 type Answer struct {
-	Code string         `json:"code"`
-	Args map[string]any `json:"args,omitempty"`
+	code string
+	args map[string]any
+}
+
+// Code returns the code of the answer.
+func (a Answer) Code() string { return a.code }
+
+// Args returns a copy of the arguments of the answer: a string for an
+// identifier and a time, an int64 for a quantity. It returns nil for a code
+// without arguments.
+func (a Answer) Args() map[string]any {
+	if a.args == nil {
+		return nil
+	}
+
+	return maps.Clone(a.args)
 }
 
 // New returns the answer of the catalog code with values. It fails when the
-// catalog does not have the code, or for the reasons of Spec.Answer.
+// catalog does not have the code, and unless values give each declared
+// argument exactly once, with its kind and a valid value.
 func New(code string, values ...Value) (Answer, error) {
 	spec, ok := Lookup(code)
 	if !ok {
-		return Answer{Code: "", Args: nil}, fmt.Errorf("%w: %q", ErrUnknownCode, code)
+		return Answer{code: "", args: nil}, fmt.Errorf("%w: %q", ErrUnknownCode, code)
 	}
 
-	return spec.Answer(values...)
+	return spec.answer(values...)
 }
 
-// Answer returns the answer of s with values. It fails unless values give
-// each declared argument exactly once, with its kind and a valid value.
-func (s Spec) Answer(values ...Value) (Answer, error) {
-	none := Answer{Code: "", Args: nil}
+// answer returns the answer of s with values.
+func (s Spec) answer(values ...Value) (Answer, error) {
+	none := Answer{code: "", args: nil}
 
 	if len(s.Args) > MaxArgs {
 		return none, fmt.Errorf("%w: %s has %d", ErrTooManyArgs, s.Code, len(s.Args))
 	}
 
 	if len(s.Args) == 0 && len(values) == 0 {
-		return Answer{Code: s.Code, Args: nil}, nil
+		return Answer{code: s.Code, args: nil}, nil
 	}
 
 	args := make(map[string]any, len(values))
@@ -122,7 +138,7 @@ func (s Spec) Answer(values ...Value) (Answer, error) {
 		}
 	}
 
-	return Answer{Code: s.Code, Args: args}, nil
+	return Answer{code: s.Code, args: args}, nil
 }
 
 // arg returns the declared argument name.

@@ -7,6 +7,7 @@ import (
 	"slices"
 	"testing"
 
+	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/internal/errcode/errcodetest"
 )
 
@@ -15,6 +16,7 @@ const header = `package demo
 
 import (
 	"errors"
+	"net/http"
 
 	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/pkg/stack"
@@ -27,9 +29,23 @@ type errorResponse struct {
 }
 `
 
-// demo returns the adapter of the test sources.
-func demo() errcodetest.Adapter {
-	return errcodetest.Adapter{Name: "demo", Bodies: []string{"errorResponse"}, Skip: nil}
+// demo returns the adapter of the test sources in dir.
+func demo(dir string) errcodetest.Adapter {
+	return errcodetest.Adapter{Name: "demo", Dir: dir, Bodies: []string{"errorResponse"}, Skip: nil}
+}
+
+// coded are the names of the errcode package that give a path of the test
+// sources a code.
+func coded() []string {
+	return []string{
+		"Forbidden",
+		"New",
+		"RequestInvalid",
+		"ServerInternal",
+		"StackBusy",
+		"StackNoState",
+		"StackNotFound",
+	}
 }
 
 func TestUncodedPaths(t *testing.T) {
@@ -191,6 +207,117 @@ func badBody() any {
 			skip: nil,
 			want: []string{"classify: stack.ErrNotFound", "classify: write"},
 		},
+		{
+			name: "a name of the errcode package that is no code",
+			src: `func classify(err error) (int, string, bool) {
+	switch {
+	case errors.Is(err, stack.ErrNotFound):
+		return 404, err.Error(), errcode.Valid("x")
+	default:
+		return 500, "internal error", errcode.KindIdentifier == 0
+	}
+}`,
+			skip: nil,
+			want: []string{"classify: default", "classify: stack.ErrNotFound"},
+		},
+		{
+			name: "the else branch of a coded if statement has no code",
+			src: `type Handler struct{}
+
+func (h *Handler) writeError(err error) any {
+	if answer, err := errcode.New(errcode.StackNotFound); err == nil {
+		return errorResponse{Code: 404, Message: "not found", ErrorCode: answer.Code()}
+	} else {
+		return errorResponse{Code: 500, Message: "internal error"}
+	}
+}`,
+			skip: nil,
+			want: []string{"Handler.writeError: errorResponse{}"},
+		},
+		{
+			name: "a mapping function with another name",
+			src: `func preferencesError(err error) (int, string) {
+	switch {
+	case errors.Is(err, stack.ErrNotFound):
+		return http.StatusNotFound, "not found"
+	case errors.Is(err, stack.ErrBusy):
+		return http.StatusServiceUnavailable, errcode.StackBusy
+	}
+
+	if errors.Is(err, stack.ErrNoState) {
+		return http.StatusConflict, "no state"
+	}
+
+	if errors.Is(err, stack.ErrTooLarge) {
+		return 0, ""
+	}
+
+	return http.StatusInternalServerError, "internal error"
+}`,
+			skip: nil,
+			want: []string{"preferencesError: stack.ErrNoState", "preferencesError: stack.ErrNotFound"},
+		},
+		{
+			name: "a function that tests an error and names no error status",
+			src: `func readAll(err error) int {
+	if errors.Is(err, stack.ErrNotFound) {
+		return http.StatusOK
+	}
+	return http.StatusNoContent
+}`,
+			skip: nil,
+			want: nil,
+		},
+		{
+			name: "a table of errors and statuses",
+			src: `var problems = []struct {
+	err    error
+	code   string
+	status int
+}{
+	{stack.ErrNotFound, "stack.not-found", http.StatusNotFound},
+	{stack.ErrBusy, errcode.StackBusy, http.StatusServiceUnavailable},
+	{err: stack.ErrNoState, code: "stack.no-state", status: http.StatusConflict},
+}
+
+var routes = []struct {
+	method string
+	status int
+}{
+	{http.MethodGet, http.StatusNotFound},
+}`,
+			skip: nil,
+			want: []string{"problems: stack.ErrNoState", "problems: stack.ErrNotFound"},
+		},
+		{
+			name: "an error body in the value of a variable",
+			src: `var (
+	errBusy  = &errorResponse{Code: 503, Message: "busy"}
+	errCoded = &errorResponse{Code: 404, Message: "not found", ErrorCode: errcode.StackNotFound}
+)`,
+			skip: nil,
+			want: []string{"errBusy: errorResponse{}"},
+		},
+		{
+			name: "a raw JSON error body and a plain text error",
+			src: `func notFound(w http.ResponseWriter) {
+	_, _ = w.Write([]byte(` + "`" + `{"code":404,"message":"not found"}` + "`" + `))
+}
+
+func methodNotAllowed(w http.ResponseWriter) {
+	http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	http.NotFound(w, nil)
+}
+
+func tfeError() string {
+	return "{\"errors\":[]}"
+}`,
+			skip: nil,
+			want: []string{
+				"methodNotAllowed: http.Error", "methodNotAllowed: http.NotFound",
+				"notFound: raw JSON", "tfeError: raw JSON",
+			},
+		},
 	}
 
 	for _, tc := range tests {
@@ -199,10 +326,10 @@ func badBody() any {
 
 			dir := writeSource(t, header+"\n"+tc.src+"\n")
 
-			a := demo()
+			a := demo(dir)
 			a.Skip = tc.skip
 
-			got, err := errcodetest.UncodedPaths(dir, a)
+			got, err := errcodetest.UncodedPaths(a, coded())
 			if err != nil {
 				t.Fatalf("UncodedPaths: %v", err)
 			}
@@ -241,7 +368,7 @@ func classify(err error) (int, string) {
 }
 `
 
-	got, err := errcodetest.UncodedPaths(writeSource(t, src), demo())
+	got, err := errcodetest.UncodedPaths(demo(writeSource(t, src)), coded())
 	if err != nil {
 		t.Fatalf("UncodedPaths: %v", err)
 	}
@@ -270,7 +397,7 @@ func classify(err error) int {
 		t.Fatalf("write: %v", err)
 	}
 
-	got, err := errcodetest.UncodedPaths(dir, demo())
+	got, err := errcodetest.UncodedPaths(demo(dir), coded())
 	if err != nil {
 		t.Fatalf("UncodedPaths: %v", err)
 	}
@@ -285,9 +412,10 @@ func classify(err error) int {
 func TestUncodedPathsNeedsTheBodies(t *testing.T) {
 	t.Parallel()
 
-	a := errcodetest.Adapter{Name: "demo", Bodies: []string{"errorResponse", "renamedBody"}, Skip: nil}
+	a := demo(writeSource(t, header))
+	a.Bodies = []string{"errorResponse", "renamedBody"}
 
-	_, err := errcodetest.UncodedPaths(writeSource(t, header), a)
+	_, err := errcodetest.UncodedPaths(a, coded())
 	if !errors.Is(err, errcodetest.ErrBodyMissing) {
 		t.Fatalf("error = %v, want %v", err, errcodetest.ErrBodyMissing)
 	}
@@ -298,9 +426,10 @@ func TestUncodedPathsNeedsTheBodies(t *testing.T) {
 func TestUncodedPathsNeedsTheSkippedFunctions(t *testing.T) {
 	t.Parallel()
 
-	a := errcodetest.Adapter{Name: "demo", Bodies: []string{"errorResponse"}, Skip: []string{"classifyGone"}}
+	a := demo(writeSource(t, header))
+	a.Skip = []string{"classifyGone"}
 
-	_, err := errcodetest.UncodedPaths(writeSource(t, header), a)
+	_, err := errcodetest.UncodedPaths(a, coded())
 	if !errors.Is(err, errcodetest.ErrSkipMissing) {
 		t.Fatalf("error = %v, want %v", err, errcodetest.ErrSkipMissing)
 	}
@@ -309,8 +438,52 @@ func TestUncodedPathsNeedsTheSkippedFunctions(t *testing.T) {
 func TestUncodedPathsRefusesBadSource(t *testing.T) {
 	t.Parallel()
 
-	if _, err := errcodetest.UncodedPaths(writeSource(t, "package demo\nfunc {"), demo()); err == nil {
+	if _, err := errcodetest.UncodedPaths(demo(writeSource(t, "package demo\nfunc {")), coded()); err == nil {
 		t.Fatal("UncodedPaths accepted a file that does not parse")
+	}
+}
+
+// TestCodedNames proves that only New, Forbidden and the constants that hold
+// a code of the catalog give a path a code.
+func TestCodedNames(t *testing.T) {
+	t.Parallel()
+
+	src := `package errcode
+
+const (
+	AccessDenied = "access.denied"
+	NotACode     = "stack.no-such-code"
+	MaxArgs      = 8
+)
+
+const ServerInternal = "server.internal"
+
+func Valid(string) bool { return true }
+`
+
+	got, err := errcodetest.CodedNames(writeSource(t, src))
+	if err != nil {
+		t.Fatalf("CodedNames: %v", err)
+	}
+
+	if want := []string{"AccessDenied", "Forbidden", "New", "ServerInternal"}; !slices.Equal(got, want) {
+		t.Fatalf("names = %q, want %q", got, want)
+	}
+}
+
+// TestCodedNamesOfTheCatalog proves that every code of the catalog has a
+// constant that gives a path a code.
+func TestCodedNamesOfTheCatalog(t *testing.T) {
+	t.Parallel()
+
+	names, err := errcodetest.CodedNames("..")
+	if err != nil {
+		t.Fatalf("CodedNames: %v", err)
+	}
+
+	// New and Forbidden, and one constant for each code.
+	if got, want := len(names), len(errcode.Catalog())+2; got != want {
+		t.Fatalf("%d coded names, want %d: %q", got, want, names)
 	}
 }
 
