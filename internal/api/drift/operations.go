@@ -21,6 +21,7 @@ var operationLabels = map[string]apidesc.Label{
 		On(apidesc.KindUnit).
 		WithBodies(apidesc.NoBody, driftDocument),
 	apidesc.Pattern(http.MethodPost, driftChecksURL): apidesc.Name("startDriftCheck", tagDrift).
+		WithStatus(http.StatusAccepted).
 		On(apidesc.KindUnit).
 		WithBodies(startRequest, checkDocument),
 }
@@ -78,4 +79,9 @@ func (h *Handler) Operations() []apidesc.Operation {
 	}
 
 	return apidesc.Collect(rows, operationLabels)
+}
+
+// userAgent returns the User-Agent header of a request, for the audit record.
+func userAgent(r *http.Request) string {
+	return apidesc.Header(r, "User-Agent")
 }

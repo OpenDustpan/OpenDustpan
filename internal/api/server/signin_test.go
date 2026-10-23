@@ -72,7 +72,7 @@ func (l *fakeLimiter) count() int {
 // signInEnv is a handler with one OpenID Connect provider, the test
 // provider behind it, and the store under both.
 type signInEnv struct {
-	handler *apiserver.Handler
+	handler testHandler
 	idp     *oauthtest.Provider
 	store   *sqlite.Store
 	limiter *fakeLimiter
@@ -218,7 +218,7 @@ func newSignInEnvWith(t *testing.T, opts signInEnvOptions) signInEnv {
 
 	grants, allowlists := newSignInAccess(t, st, namespaces, clock)
 
-	handler, err := apiserver.NewHandler(apiserver.Config{
+	handler, err := newCheckedHandler(t, apiserver.Config{
 		Preferences:      nil,
 		GitHost:          nil,
 		Idempotency:      nil,
@@ -1100,7 +1100,7 @@ func TestSignInProviderDown(t *testing.T) {
 		t.Fatalf("principals: %v", err)
 	}
 
-	handler, err := apiserver.NewHandler(apiserver.Config{
+	handler, err := newCheckedHandler(t, apiserver.Config{
 		Preferences:      nil,
 		GitHost:          nil,
 		Idempotency:      nil,

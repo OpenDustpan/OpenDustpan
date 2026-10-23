@@ -632,7 +632,7 @@ func (h *Handler) writeStateOutputs(ctx context.Context, w http.ResponseWriter, 
 	h.writeJSON(ctx, w, http.StatusOK, stateVersionOutputListDocument{
 		Data: outputs,
 		Meta: workspaceListMeta{
-			Pagination: paginate(workspacePage{number: 1, size: len(outputs)}, len(outputs), pages),
+			Pagination: paginate(workspacePage{search: "", number: 1, size: len(outputs)}, len(outputs), pages),
 		},
 	})
 }
@@ -746,7 +746,7 @@ func (h *Handler) listStateVersions(
 	h.writeJSON(ctx, w, http.StatusOK, stateVersionListDocument{
 		Data: items,
 		Meta: workspaceListMeta{
-			Pagination: paginate(workspacePage{number: page.number, size: size}, total, pages),
+			Pagination: paginate(workspacePage{search: "", number: page.number, size: size}, total, pages),
 		},
 	})
 }

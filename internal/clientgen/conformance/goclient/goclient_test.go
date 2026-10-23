@@ -5,6 +5,7 @@ import (
 	"os"
 	"testing"
 
+	"opendustpan.org/opendustpan/internal/clientgen"
 	"opendustpan.org/opendustpan/internal/clientgen/conformance/goclient"
 )
 
@@ -36,7 +37,12 @@ func TestGenerateIsDeterministic(t *testing.T) {
 		t.Fatalf("generate again: %v", err)
 	}
 
-	if first.ClientVersion != "0.1.0" {
+	wantVersion, err := clientgen.ClientVersion(first.DescriptionVersion, 0)
+	if err != nil {
+		t.Fatalf("client version: %v", err)
+	}
+
+	if first.ClientVersion != wantVersion {
 		t.Errorf("the client takes the major and minor version of the description: %s", first.ClientVersion)
 	}
 

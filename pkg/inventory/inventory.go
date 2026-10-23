@@ -86,9 +86,11 @@ func (e Entry) Reference() string {
 // Reader is the persistence port for the inventory projection. ListUnits returns
 // the entries of one namespace, ordered by tool, then name. A namespace with
 // no units reads as an empty list, as does a namespace that does not exist.
-// GetUnit returns one live unit by its stable ID. Implementations report
-// storage failures without a dedicated value.
+// GetUnit returns one live unit by its stable ID. QueryUnits returns one page
+// of the units of a namespace, as UnitQuerier defines it. Implementations
+// report storage failures without a dedicated value.
 type Reader interface {
+	UnitQuerier
 	// ListUnits returns the inventory entries of ns, ordered by tool, then name.
 	ListUnits(ctx context.Context, ns namespace.Name) ([]Entry, error)
 	// GetUnit returns the live unit with the stable ID unitID. The ID is

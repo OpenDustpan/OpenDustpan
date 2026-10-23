@@ -525,14 +525,15 @@ type ManualLock struct {
 }
 
 type Namespace struct {
-	Name                string
-	HomeRegion          string
-	FailoverVersion     int64
-	CreatedAtMs         int64
-	AllowForcedWrites   bool
-	AllowUnlockedWrites bool
-	IpAllowlist         string
-	ID                  string
+	Name                 string
+	HomeRegion           string
+	FailoverVersion      int64
+	CreatedAtMs          int64
+	AllowForcedWrites    bool
+	AllowUnlockedWrites  bool
+	IpAllowlist          string
+	ID                   string
+	OutputSharingDefault string
 }
 
 type NotificationSink struct {

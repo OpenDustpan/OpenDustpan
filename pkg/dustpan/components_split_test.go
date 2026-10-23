@@ -12,11 +12,12 @@ import (
 	"opendustpan.org/opendustpan/pkg/maintenance"
 )
 
-// chainOperations lists the audit chain operations of the store.
-func chainOperations(t *testing.T, ops durable.Store) []durable.Operation {
+// chainOperations lists the operations of kind in the store, or every
+// operation for the empty kind.
+func chainOperations(t *testing.T, ops durable.Store, kind durable.Kind) []durable.Operation {
 	t.Helper()
 
-	all, err := ops.List(t.Context(), durable.Filter{Kind: "", States: nil, Limit: 0})
+	all, err := ops.List(t.Context(), durable.Filter{Kind: kind, States: nil, Limit: 0})
 	if err != nil {
 		t.Fatalf("list operations: %v", err)
 	}
@@ -50,10 +51,14 @@ func TestSplitTopologyWorkerFinishesWhatAPIStarted(t *testing.T) {
 	// Nobody runs the worker component yet: the operation exists and waits.
 	pause(t, time.Second)
 
-	ops := chainOperations(t, st.DurableOperations())
+	// The api process claims no tick of a job schedule, so the store holds
+	// no operation of another kind.
+	ops := chainOperations(t, st.DurableOperations(), "")
 	if len(ops) != 1 || ops[0].State != durable.StatePending || ops[0].Attempt != 0 {
 		t.Fatalf("operations after the approval = %+v, want one pending operation that nothing claimed", ops)
 	}
+
+	chainKind := ops[0].Kind
 
 	if rec, err := st.ChainRecord(t.Context()); err != nil || rec.State == audit.ChainStateOff {
 		t.Fatalf("chain record = %+v, %v; want the state not changed by the api process", rec, err)
@@ -68,7 +73,10 @@ func TestSplitTopologyWorkerFinishesWhatAPIStarted(t *testing.T) {
 	waitForRecord(t, st, func(rec audit.ChainRecord) bool { return rec.State == audit.ChainStateOff && !rec.Pending })
 	waitForMaintenance(t, st, maintenance.StateNormal)
 
-	ops = chainOperations(t, st.DurableOperations())
+	// The worker also claims the ticks of the job schedules, each after a
+	// random first delay, so the case reads only the operations of the
+	// chain change.
+	ops = chainOperations(t, st.DurableOperations(), chainKind)
 	if len(ops) != 1 || ops[0].State != durable.StateSucceeded || ops[0].Attempt != 1 {
 		t.Fatalf("operations after the worker started = %+v, want one succeeded operation with one claim", ops)
 	}

@@ -8,12 +8,12 @@ import (
 	"slices"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/unitimport"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/history"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/store/internal/codec"
 	"opendustpan.org/opendustpan/pkg/store/sqlite/internal/db"
-	"opendustpan.org/opendustpan/pkg/unitimport"
 )
 
 var (

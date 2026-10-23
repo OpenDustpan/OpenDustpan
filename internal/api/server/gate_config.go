@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/api/apidesc"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/gate"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -175,7 +176,7 @@ func decodeGateBody(w http.ResponseWriter, r *http.Request, v any) error {
 // request sent one. The header holds one quoted version, as the ETag of a
 // read gives it. A value that is not one version is errInvalidBody.
 func ifMatch(r *http.Request) (int64, bool, error) {
-	raw := r.Header.Get("If-Match")
+	raw := apidesc.Header(r, "If-Match")
 	if raw == "" {
 		return 0, false, nil
 	}
