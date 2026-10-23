@@ -187,8 +187,12 @@ type errorResponse struct {
 
 // errNotFound is the one answer for an unknown namespace, an unknown unit, a
 // unit of another namespace, a purged unit, and an object that the caller
-// cannot read. The answer never tells that the object exists.
-var errNotFound = errors.New("not found")
+// cannot read. The answer never tells that the object exists, so it names no
+// value of the path. It names the mistake that people make most: a unit name
+// in place of the unit ID.
+var errNotFound = errors.New("not found: no namespace or unit that you can read has this path. " +
+	"A unit path takes the unit ID (stk-... or ws-...), not the name. " +
+	"To list the unit IDs, send GET /api/dustpan/v1/namespaces/{namespace}/units")
 
 // errBody names the body that a context write needs.
 var errBody = errors.New(

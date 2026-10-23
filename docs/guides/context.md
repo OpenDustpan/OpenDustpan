@@ -121,6 +121,10 @@ A route answers 404 in each of these cases, with the same body:
 - The caller does not hold `namespace:read` on the namespace.
 - The caller does not hold the read action of the object.
 
+The body names no value of the path. Its message says that a unit path takes
+the unit ID (`stk-...` or `ws-...`) and not the name, and that
+`GET /api/dustpan/v1/namespaces/{namespace}/units` lists the unit IDs.
+
 So an answer never tells a caller that an object exists. A caller that can
 read the object but does not hold the set action gets 403 on a `PATCH` or a
 `DELETE`.
