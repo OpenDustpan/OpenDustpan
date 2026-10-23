@@ -55,6 +55,24 @@ func TestPoolValidate(t *testing.T) {
 		{"custom helper shell form", func(p *runner.Pool) {
 			p.GitCredentials = runner.GitCredentials{Mode: runner.GitCredentialsCustom, Helper: "!f() { echo; }; f"}
 		}, false},
+		{"custom helper with a newline", func(p *runner.Pool) {
+			p.GitCredentials = runner.GitCredentials{
+				Mode:   runner.GitCredentialsCustom,
+				Helper: "git-credential-x\n[core]\nsshCommand=evil",
+			}
+		}, false},
+		{"custom helper absolute with a carriage return", func(p *runner.Pool) {
+			p.GitCredentials = runner.GitCredentials{Mode: runner.GitCredentialsCustom, Helper: "/usr/bin/helper\r"}
+		}, false},
+		{"custom helper with NUL", func(p *runner.Pool) {
+			p.GitCredentials = runner.GitCredentials{Mode: runner.GitCredentialsCustom, Helper: "git-credential-x\x00"}
+		}, false},
+		{"custom helper with DEL", func(p *runner.Pool) {
+			p.GitCredentials = runner.GitCredentials{Mode: runner.GitCredentialsCustom, Helper: "git-credential-x\x7f"}
+		}, false},
+		{"custom helper absolute with ESC", func(p *runner.Pool) {
+			p.GitCredentials = runner.GitCredentials{Mode: runner.GitCredentialsCustom, Helper: "/usr/bin/a\x1bb"}
+		}, false},
 		{"custom helper relative", func(p *runner.Pool) {
 			p.GitCredentials = runner.GitCredentials{Mode: runner.GitCredentialsCustom, Helper: "bin/helper"}
 		}, false},
