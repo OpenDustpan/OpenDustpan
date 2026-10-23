@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -46,6 +47,10 @@ func outputsCases() []suiteCase {
 		{testOutputsMoved, "outputs: a state ID that is not the latest answers ErrStateMoved, also with no state"},
 		{testOutputsOtherUnit, "outputs: a stable ID of another unit answers ErrUnknownProducer"},
 		{testOutputsDeleted, "outputs: a unit that is deleted after the check answers ErrUnknownProducer"},
+		{
+			testOutputsDeletedDuringRead,
+			"outputs: a unit that is deleted between the lookup and a read of its state answers ErrUnknownProducer",
+		},
 		{testOutputsNotAUnit, "outputs: an object that is not a unit answers ErrInvalid"},
 		{
 			testOutputsEmpty,
@@ -66,7 +71,7 @@ func withOutputs(cases []suiteCase) []suiteCase {
 			t.Helper()
 
 			if h.Unit == nil || h.Outputs == nil || h.SaveOutputs == nil || h.SaveState == nil ||
-				h.DeleteUnit == nil {
+				h.DeleteUnit == nil || h.DeleteOnRead == nil {
 				t.Skip("the harness has no Outputs port of the tools")
 			}
 
@@ -225,6 +230,51 @@ func testOutputsDeleted(t *testing.T, h Harness) {
 		h.DeleteUnit(t, unit)
 
 		wantOutputsErr(t, h, unit.Unit, id, outputshare.ErrUnknownProducer)
+	})
+}
+
+// maxStateReads bounds the reads of a state in one call of the port. It stops
+// the loop of testOutputsDeletedDuringRead if a hook always fires.
+const maxStateReads = 8
+
+// testOutputsDeletedDuringRead proves that a unit that a delete removes after
+// the lookup, at any read of its state, answers ErrUnknownProducer. The stores
+// read a missing unit as no state, so the port looks the unit up again to tell
+// the two apart. The case moves the delete to each read in turn, until the
+// call makes no more reads.
+func testOutputsDeletedDuringRead(t *testing.T, h Harness) {
+	t.Helper()
+
+	eachTool(t, h, func(t *testing.T, tool string, _ outputshare.Placement) {
+		t.Helper()
+
+		fired := 0
+
+		for read := 1; read <= maxStateReads; read++ {
+			unit := h.Unit(t, tool, acme, fmt.Sprintf("race%d", read), "")
+			id := h.SaveOutputs(t, unit)
+			didFire := h.DeleteOnRead(t, unit, read)
+
+			got, err := h.Outputs.Outputs(t.Context(), unit.Unit, id)
+			if !didFire() {
+				if err != nil {
+					t.Fatalf("Outputs of %s with no delete = %+v, %v; want no error", unit.Unit, got, err)
+				}
+
+				break
+			}
+
+			fired++
+
+			if !errors.Is(err, outputshare.ErrUnknownProducer) || len(got) != 0 {
+				t.Fatalf("Outputs of %s deleted at read %d = %+v, %v; want %v and no output",
+					unit.Unit, read, got, err, outputshare.ErrUnknownProducer)
+			}
+		}
+
+		if fired == 0 {
+			t.Fatalf("the delete hook never fired for %s", tool)
+		}
 	})
 }
 

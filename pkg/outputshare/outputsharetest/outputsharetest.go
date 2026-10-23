@@ -78,6 +78,13 @@ type Harness struct {
 	// DeleteUnit is an optional hook: it deletes the unit, also when the
 	// unit has a state. A case of the Outputs port skips when it is nil.
 	DeleteUnit func(t *testing.T, unit outputshare.Placement)
+	// DeleteOnRead is an optional hook: it arms the stores of the tool so
+	// that the read-th read of a state, counted from 1 from the next call of
+	// the Outputs port, first deletes the unit, as a delete that runs between
+	// the lookup of the unit and that read. The returned function tells
+	// whether the read happened, and disarms the hook. A case of the Outputs
+	// port skips when it is nil.
+	DeleteOnRead func(t *testing.T, unit outputshare.Placement, read int) (fired func() bool)
 	// Grant gives the principal the action on the object.
 	Grant func(t *testing.T, principal string, action identity.Action, object identity.Object)
 	// Job starts a job of the unit for the starter principal and returns the
