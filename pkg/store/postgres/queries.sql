@@ -238,8 +238,10 @@ SET status = @status, version = @version, revision = @revision,
 WHERE stack_id = @stack_id AND id = @id
   AND revision = @expected_revision;
 
--- name: RunningMutatingUpdates :one
-SELECT COUNT(*)
+-- name: RunningMutatingUpdate :one
+-- The ID of the mutating update that runs on a stack. The unique index
+-- updates_one_running holds at most one such row for each stack.
+SELECT id
 FROM updates
 WHERE stack_id = $1
   AND status = 'running' AND NOT dry_run AND kind <> 'preview';
