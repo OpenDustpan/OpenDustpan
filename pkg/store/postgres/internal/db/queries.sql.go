@@ -1804,7 +1804,7 @@ SELECT $1, p.id, $2, $3, $4,
   $5::bigint, $6::bigint, $7
 FROM principals p
 JOIN temp_admins t ON t.principal_id = p.id
-WHERE p.id = $8 AND COALESCE(p.deleted_at_ms, -1) = -1 AND p.disabled_at_ms IS NULL
+WHERE p.id = $8 AND num_nulls(p.deleted_at_ms) = 1 AND p.disabled_at_ms IS NULL
   AND p.kind = 'person' AND p.namespace = ''
   AND p.created_at_ms <= $5::bigint
   AND p.created_at_ms >= $5::bigint - $9::bigint
@@ -1831,8 +1831,9 @@ type CreateFirstHostTokenParams struct {
 // enabled person of the installation with no token of any status, made in
 // the window before the time of the token and not after it, and a record
 // names the principal that works past the time and the expiry of the token.
-// The live check is COALESCE(p.deleted_at_ms, -1) = -1, not IS NULL, so no
+// The live check is num_nulls(p.deleted_at_ms) = 1, not IS NULL, so no
 // partial index of the live rows can serve this lookup by ID.
+// Only NULL reads as live: a stored -1 or 0 does not, as with IS NULL.
 func (q *Queries) CreateFirstHostToken(ctx context.Context, arg CreateFirstHostTokenParams) (int64, error) {
 	result, err := q.db.Exec(ctx, createFirstHostToken,
 		arg.ID,
@@ -3109,7 +3110,7 @@ func (q *Queries) DeletePersonPreferences(ctx context.Context, principalID strin
 
 const deletePrincipal = `-- name: DeletePrincipal :execrows
 UPDATE principals SET deleted_at_ms = $1
-WHERE id = $2 AND namespace = $3 AND COALESCE(deleted_at_ms, -1) = -1
+WHERE id = $2 AND namespace = $3 AND num_nulls(deleted_at_ms) = 1
 `
 
 type DeletePrincipalParams struct {
@@ -3118,8 +3119,9 @@ type DeletePrincipalParams struct {
 	Namespace   string
 }
 
-// The live check is COALESCE(deleted_at_ms, -1) = -1, not IS NULL, so no
+// The live check is num_nulls(deleted_at_ms) = 1, not IS NULL, so no
 // partial index of the live rows can serve this lookup by ID.
+// Only NULL reads as live: a stored -1 or 0 does not, as with IS NULL.
 func (q *Queries) DeletePrincipal(ctx context.Context, arg DeletePrincipalParams) (int64, error) {
 	result, err := q.db.Exec(ctx, deletePrincipal, arg.DeletedAtMs, arg.ID, arg.Namespace)
 	if err != nil {
@@ -4138,7 +4140,7 @@ SELECT t.id, t.principal_id, t.name, t.kind, t.digest, t.created_at_ms, t.expire
 FROM access_tokens t
 JOIN principals p ON p.id = t.principal_id
 CROSS JOIN access_token_policy ap
-WHERE t.digest = $1 AND COALESCE(p.deleted_at_ms, -1) = -1 AND ap.id = 1
+WHERE t.digest = $1 AND num_nulls(p.deleted_at_ms) = 1 AND ap.id = 1
 `
 
 type GetAccessTokenByDigestRow struct {
@@ -4170,8 +4172,9 @@ type GetAccessTokenByDigestRow struct {
 
 // The token, its owner and the token policy of the installation in one read,
 // so a policy change applies to the next lookup on every instance.
-// The live check is COALESCE(p.deleted_at_ms, -1) = -1, not IS NULL, so no
+// The live check is num_nulls(p.deleted_at_ms) = 1, not IS NULL, so no
 // partial index of the live rows can serve this lookup by ID.
+// Only NULL reads as live: a stored -1 or 0 does not, as with IS NULL.
 func (q *Queries) GetAccessTokenByDigest(ctx context.Context, digest string) (GetAccessTokenByDigestRow, error) {
 	row := q.db.QueryRow(ctx, getAccessTokenByDigest, digest)
 	var i GetAccessTokenByDigestRow
@@ -5174,7 +5177,7 @@ func (q *Queries) GetGitHostRegistration(ctx context.Context, kind string) (GitH
 
 const getGrant = `-- name: GetGrant :one
 SELECT id, subject, subject_kind, subject_id, role, object, target, object_kind, namespace, condition, created_at_ms, created_by
-FROM grants WHERE id = $1 AND COALESCE(revoked_at_ms, -1) = -1
+FROM grants WHERE id = $1 AND num_nulls(revoked_at_ms) = 1
 `
 
 type GetGrantRow struct {
@@ -5192,8 +5195,9 @@ type GetGrantRow struct {
 	CreatedBy   string
 }
 
-// The live check is COALESCE(revoked_at_ms, -1) = -1, not IS NULL, so no
+// The live check is num_nulls(revoked_at_ms) = 1, not IS NULL, so no
 // partial index of the live rows can serve this lookup by ID.
+// Only NULL reads as live: a stored -1 or 0 does not, as with IS NULL.
 func (q *Queries) GetGrant(ctx context.Context, id string) (GetGrantRow, error) {
 	row := q.db.QueryRow(ctx, getGrant, id)
 	var i GetGrantRow
@@ -6893,7 +6897,7 @@ FROM sessions s
 JOIN principals p ON p.id = s.principal_id
 CROSS JOIN session_policy sp
 CROSS JOIN access_token_policy ap
-WHERE s.digest = $1 AND COALESCE(p.deleted_at_ms, -1) = -1 AND sp.id = 1 AND ap.id = 1
+WHERE s.digest = $1 AND num_nulls(p.deleted_at_ms) = 1 AND sp.id = 1 AND ap.id = 1
 `
 
 type GetSessionByDigestRow struct {
@@ -6926,8 +6930,9 @@ type GetSessionByDigestRow struct {
 // rule of the inactivity disable, as in GetAccessTokenByDigest. The session
 // policy and the account part of the token policy come from the same read,
 // so a policy change applies to the next lookup on every instance.
-// The live check is COALESCE(p.deleted_at_ms, -1) = -1, not IS NULL, so no
+// The live check is num_nulls(p.deleted_at_ms) = 1, not IS NULL, so no
 // partial index of the live rows can serve this lookup by ID.
+// Only NULL reads as live: a stored -1 or 0 does not, as with IS NULL.
 func (q *Queries) GetSessionByDigest(ctx context.Context, digest string) (GetSessionByDigestRow, error) {
 	row := q.db.QueryRow(ctx, getSessionByDigest, digest)
 	var i GetSessionByDigestRow
@@ -7572,11 +7577,12 @@ SELECT id, namespace, name, revision, lock_id, lock_holder, lock_reason,
        locked_at_ms, current_state_version_id, created_at_ms, updated_at_ms, allow_forced_writes, allow_unlocked_writes,
        deleted_at_ms, deleted_name
 FROM workspaces
-WHERE id = $1 AND COALESCE(deleted_at_ms, -1) = -1
+WHERE id = $1 AND num_nulls(deleted_at_ms) = 1
 `
 
-// The live check is COALESCE(deleted_at_ms, -1) = -1, not IS NULL, so the
+// The live check is num_nulls(deleted_at_ms) = 1, not IS NULL, so the
 // partial index workspaces_live_name cannot serve this lookup by ID.
+// Only NULL reads as live: a stored -1 or 0 does not, as with IS NULL.
 func (q *Queries) GetWorkspaceByID(ctx context.Context, id string) (Workspace, error) {
 	row := q.db.QueryRow(ctx, getWorkspaceByID, id)
 	var i Workspace
@@ -14031,14 +14037,15 @@ SELECT id, namespace, name, revision, lock_id, lock_holder, lock_reason,
        locked_at_ms, current_state_version_id, created_at_ms, updated_at_ms, allow_forced_writes, allow_unlocked_writes,
        deleted_at_ms, deleted_name
 FROM workspaces
-WHERE id = $1 AND COALESCE(deleted_at_ms, -1) = -1
+WHERE id = $1 AND num_nulls(deleted_at_ms) = 1
 FOR UPDATE
 `
 
 // Locks the workspace row so concurrent declares cannot both pass the
 // pending cap.
-// The live check is COALESCE(deleted_at_ms, -1) = -1, not IS NULL, so the
+// The live check is num_nulls(deleted_at_ms) = 1, not IS NULL, so the
 // partial index workspaces_live_name cannot serve this lookup by ID.
+// Only NULL reads as live: a stored -1 or 0 does not, as with IS NULL.
 func (q *Queries) LockWorkspaceForDeclare(ctx context.Context, id string) (Workspace, error) {
 	row := q.db.QueryRow(ctx, lockWorkspaceForDeclare, id)
 	var i Workspace
@@ -14067,14 +14074,15 @@ SELECT id, namespace, name, revision, lock_id, lock_holder, lock_reason,
        locked_at_ms, current_state_version_id, created_at_ms, updated_at_ms, allow_forced_writes, allow_unlocked_writes,
        deleted_at_ms, deleted_name
 FROM workspaces
-WHERE id = $1 AND COALESCE(deleted_at_ms, -1) = -1
+WHERE id = $1 AND num_nulls(deleted_at_ms) = 1
 FOR UPDATE
 `
 
 // Locks the workspace row so two finalizes on one workspace cannot both pass
 // the serial check.
-// The live check is COALESCE(deleted_at_ms, -1) = -1, not IS NULL, so the
+// The live check is num_nulls(deleted_at_ms) = 1, not IS NULL, so the
 // partial index workspaces_live_name cannot serve this lookup by ID.
+// Only NULL reads as live: a stored -1 or 0 does not, as with IS NULL.
 func (q *Queries) LockWorkspaceForFinalize(ctx context.Context, id string) (Workspace, error) {
 	row := q.db.QueryRow(ctx, lockWorkspaceForFinalize, id)
 	var i Workspace
@@ -14784,7 +14792,7 @@ const readWorkspaceByID = `-- name: ReadWorkspaceByID :one
 SELECT w.id, w.namespace, w.name, w.revision, w.lock_id, w.lock_holder, w.lock_reason, w.locked_at_ms, w.current_state_version_id, w.created_at_ms, w.updated_at_ms, w.allow_forced_writes, w.allow_unlocked_writes, w.deleted_at_ms, w.deleted_name, n.id AS namespace_id
 FROM workspaces AS w
 JOIN namespaces AS n ON n.name = w.namespace
-WHERE w.id = $1 AND COALESCE(w.deleted_at_ms, -1) = -1
+WHERE w.id = $1 AND num_nulls(w.deleted_at_ms) = 1
 `
 
 type ReadWorkspaceByIDRow struct {
@@ -14792,8 +14800,9 @@ type ReadWorkspaceByIDRow struct {
 	NamespaceID string
 }
 
-// The live check is COALESCE(deleted_at_ms, -1) = -1, not IS NULL, so the
+// The live check is num_nulls(deleted_at_ms) = 1, not IS NULL, so the
 // partial index workspaces_live_name cannot serve this lookup by ID.
+// Only NULL reads as live: a stored -1 or 0 does not, as with IS NULL.
 func (q *Queries) ReadWorkspaceByID(ctx context.Context, id string) (ReadWorkspaceByIDRow, error) {
 	row := q.db.QueryRow(ctx, readWorkspaceByID, id)
 	var i ReadWorkspaceByIDRow
@@ -15405,7 +15414,7 @@ func (q *Queries) RevokeAccessToken(ctx context.Context, arg RevokeAccessTokenPa
 }
 
 const revokeGrant = `-- name: RevokeGrant :execrows
-UPDATE grants SET revoked_at_ms = $1, revoked_by = $2 WHERE id = $3 AND COALESCE(revoked_at_ms, -1) = -1
+UPDATE grants SET revoked_at_ms = $1, revoked_by = $2 WHERE id = $3 AND num_nulls(revoked_at_ms) = 1
 `
 
 type RevokeGrantParams struct {
@@ -15414,8 +15423,9 @@ type RevokeGrantParams struct {
 	ID          string
 }
 
-// The live check is COALESCE(revoked_at_ms, -1) = -1, not IS NULL, so no
+// The live check is num_nulls(revoked_at_ms) = 1, not IS NULL, so no
 // partial index of the live rows can serve this lookup by ID.
+// Only NULL reads as live: a stored -1 or 0 does not, as with IS NULL.
 func (q *Queries) RevokeGrant(ctx context.Context, arg RevokeGrantParams) (int64, error) {
 	result, err := q.db.Exec(ctx, revokeGrant, arg.RevokedAtMs, arg.RevokedBy, arg.ID)
 	if err != nil {
@@ -15518,7 +15528,7 @@ func (q *Queries) RoleIDByNameKey(ctx context.Context, nameKey string) (string, 
 
 const rolesByIDs = `-- name: RolesByIDs :many
 SELECT id, name, description, actions, created_at_ms, updated_at_ms FROM roles
-WHERE id = ANY($1::text[]) AND COALESCE(deleted_at_ms, -1) = -1
+WHERE id = ANY($1::text[]) AND num_nulls(deleted_at_ms) = 1
 `
 
 type RolesByIDsRow struct {
@@ -15530,8 +15540,9 @@ type RolesByIDsRow struct {
 	UpdatedAtMs int64
 }
 
-// The live check is COALESCE(deleted_at_ms, -1) = -1, not IS NULL, so no
+// The live check is num_nulls(deleted_at_ms) = 1, not IS NULL, so no
 // partial index of the live rows can serve this lookup by ID.
+// Only NULL reads as live: a stored -1 or 0 does not, as with IS NULL.
 func (q *Queries) RolesByIDs(ctx context.Context, ids []string) ([]RolesByIDsRow, error) {
 	rows, err := q.db.Query(ctx, rolesByIDs, ids)
 	if err != nil {
@@ -16367,7 +16378,7 @@ func (q *Queries) SoftDeleteStack(ctx context.Context, arg SoftDeleteStackParams
 const softDeleteWorkspace = `-- name: SoftDeleteWorkspace :execrows
 UPDATE workspaces
 SET deleted_name = name, name = 'deleted:' || id, deleted_at_ms = $1, revision = revision + 1
-WHERE id = $2 AND COALESCE(deleted_at_ms, -1) = -1
+WHERE id = $2 AND num_nulls(deleted_at_ms) = 1
 `
 
 type SoftDeleteWorkspaceParams struct {
@@ -16378,8 +16389,9 @@ type SoftDeleteWorkspaceParams struct {
 // Moves the name to deleted_name and frees it (ADR 47). A workspace name
 // cannot hold ":", so "deleted:" and the ID never match a lookup by name. The
 // revision moves on, so a concurrent compare-and-swap of the row fails.
-// The live check is COALESCE(deleted_at_ms, -1) = -1, not IS NULL, so the
+// The live check is num_nulls(deleted_at_ms) = 1, not IS NULL, so the
 // partial index workspaces_live_name cannot serve this lookup by ID.
+// Only NULL reads as live: a stored -1 or 0 does not, as with IS NULL.
 func (q *Queries) SoftDeleteWorkspace(ctx context.Context, arg SoftDeleteWorkspaceParams) (int64, error) {
 	result, err := q.db.Exec(ctx, softDeleteWorkspace, arg.DeletedAtMs, arg.ID)
 	if err != nil {
@@ -17079,7 +17091,7 @@ func (q *Queries) UpdateNotificationSink(ctx context.Context, arg UpdateNotifica
 
 const updatePrincipal = `-- name: UpdatePrincipal :execrows
 UPDATE principals SET display_name = $1, updated_at_ms = $2
-WHERE id = $3 AND namespace = $4 AND COALESCE(deleted_at_ms, -1) = -1
+WHERE id = $3 AND namespace = $4 AND num_nulls(deleted_at_ms) = 1
 `
 
 type UpdatePrincipalParams struct {
@@ -17089,8 +17101,9 @@ type UpdatePrincipalParams struct {
 	Namespace   string
 }
 
-// The live check is COALESCE(deleted_at_ms, -1) = -1, not IS NULL, so no
+// The live check is num_nulls(deleted_at_ms) = 1, not IS NULL, so no
 // partial index of the live rows can serve this lookup by ID.
+// Only NULL reads as live: a stored -1 or 0 does not, as with IS NULL.
 func (q *Queries) UpdatePrincipal(ctx context.Context, arg UpdatePrincipalParams) (int64, error) {
 	result, err := q.db.Exec(ctx, updatePrincipal,
 		arg.DisplayName,
@@ -17478,12 +17491,13 @@ func (q *Queries) UseRunnerNonce(ctx context.Context, arg UseRunnerNonceParams) 
 
 const workspaceExists = `-- name: WorkspaceExists :one
 SELECT EXISTS (
-    SELECT 1 FROM workspaces WHERE id = $1 AND COALESCE(deleted_at_ms, -1) = -1
+    SELECT 1 FROM workspaces WHERE id = $1 AND num_nulls(deleted_at_ms) = 1
 )
 `
 
-// The live check is COALESCE(deleted_at_ms, -1) = -1, not IS NULL, so the
+// The live check is num_nulls(deleted_at_ms) = 1, not IS NULL, so the
 // partial index workspaces_live_name cannot serve this lookup by ID.
+// Only NULL reads as live: a stored -1 or 0 does not, as with IS NULL.
 func (q *Queries) WorkspaceExists(ctx context.Context, id string) (bool, error) {
 	row := q.db.QueryRow(ctx, workspaceExists, id)
 	var exists bool
