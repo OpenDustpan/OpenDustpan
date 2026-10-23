@@ -94,12 +94,12 @@ func RunHealth(ctx context.Context, args []string, stdout, stderr io.Writer) err
 	}
 
 	if status < 200 || status > 299 {
+		const hint = "check the server log and run opendustpan health again"
+
 		return fmt.Errorf(
-			"%w: GET %s answered %d %s: check the server log and run opendustpan health again",
+			"%w: %s",
 			ErrHealthNotReady,
-			url,
-			status,
-			body,
+			answerText(status, fmt.Sprintf("GET %s answered %d %s", url, status, body), hint),
 		)
 	}
 
