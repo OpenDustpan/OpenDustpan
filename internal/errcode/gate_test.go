@@ -3,6 +3,7 @@ package errcode_test
 import (
 	"errors"
 	"io/fs"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -52,7 +53,61 @@ func gated() []errcodetest.Adapter {
 		api("server", []string{
 			"errorResponse", "codedResponse", "codedError", "reauthenticateResponse", "enterRefusedResponse",
 		}, nil),
-		api("tfe", []string{"jsonAPIError", "errorClass"}, nil),
+		api("tfe", []string{"jsonAPIError", "errorClass", "registryErrors"}, nil),
+	}
+}
+
+// notBodies lists, for each gated adapter, the struct types with a JSON field
+// code, errorCode or errors that are no error body of the adapter, and why.
+// Every other such type must be in the Bodies of its adapter.
+func notBodies() map[string]map[string]string {
+	return map[string]map[string]string{
+		"dustpan": {
+			"maintenanceRunnerError": "the 503 of the runner protocol, which has its own codes and its own versions",
+			"maintenanceTFEDocument": "the JSON:API document around maintenanceTFEError, which is gated",
+		},
+		"server": {
+			"devCodeRequest":     "the request body of the dev sign-in; code is the sign-in code",
+			"restoreWarningJSON": "a warning in the report of a restore that succeeded; it is no error answer",
+		},
+		"tfe": {
+			"jsonAPIDocument": "the JSON:API document around jsonAPIError, which is gated",
+		},
+	}
+}
+
+// TestEveryBodyTypeIsGated fails for a struct type of a gated adapter with a
+// JSON field code, errorCode or errors that is neither in the Bodies of the
+// adapter nor in notBodies, so that a new error body type cannot hide its
+// literals from the gate. It also fails for a name of notBodies that is no
+// such type, or that is in Bodies too.
+func TestEveryBodyTypeIsGated(t *testing.T) {
+	t.Parallel()
+
+	names := map[string]bool{}
+
+	for _, a := range gated() {
+		names[a.Name] = true
+
+		ignored := slices.Sorted(maps.Keys(notBodies()[a.Name]))
+
+		missing, err := errcodetest.MissingBodies(a, ignored)
+		if err != nil {
+			t.Errorf("body types of %s: %v", a.Name, err)
+
+			continue
+		}
+
+		for _, name := range missing {
+			t.Errorf("type %s of the gated adapter %s has a JSON field code, errorCode or errors: "+
+				"add it to the Bodies of the adapter, or to notBodies with a reason", name, a.Name)
+		}
+	}
+
+	for name := range notBodies() {
+		if !names[name] {
+			t.Errorf("notBodies names %q, which is no gated adapter: remove it", name)
+		}
 	}
 }
 

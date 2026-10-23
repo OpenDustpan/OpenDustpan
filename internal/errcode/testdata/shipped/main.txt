@@ -1,9 +1,9 @@
-# Every code of the catalog, with the name and the kind of each argument.
-# A line is never removed and never changed: a new code adds its line. At the
-# first tag, this file becomes the first list of shipped codes.
+# The codes that main sent before the catalog, with the name and the kind of
+# each argument. This file is frozen: its SHA-256 is pinned in a test. The
+# catalog keeps each code of a line, and each argument of the line with its
+# kind. A code of the catalog may have more arguments than its line.
 access.denied
 access.ip-not-allowed
-access.no-action
 auth.rate-limited
 auth.unauthenticated
 drift.start-conflict
@@ -70,10 +70,8 @@ request.page-size-invalid
 request.page-token-invalid
 request.precondition-failed
 request.precondition-required
-server.internal
 session.csrf
 session.other-site
-sign-in.refused
 sink.conflict
 sink.invalid
 sink.no-sender

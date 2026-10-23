@@ -1,7 +1,11 @@
 package errcode_test
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"io/fs"
 	"os"
+	"path/filepath"
 	"regexp"
 	"slices"
 	"strings"
@@ -191,55 +195,230 @@ func TestLookupUnknown(t *testing.T) {
 	}
 }
 
-// goldenFile holds one line for each code of the catalog: the code, then the
-// name and the kind of each argument. At the first tag, it becomes the first
-// list of shipped codes.
-const goldenFile = "testdata/catalog.txt"
+// shippedDir holds the frozen lists of shipped codes, one file for each
+// release, and newDir holds the golden file of each area for the codes that
+// no release shipped yet.
+const (
+	shippedDir = "testdata/shipped"
+	newDir     = "testdata/catalog"
+)
 
-// TestCatalogKeepsEveryCode fails when a line of the golden file is not in the
-// catalog, when the catalog gives a code other arguments than its line, and
-// when a code of the catalog has no line. The console reads these codes, so a
-// code never goes away and never changes: a new code adds its line.
-func TestCatalogKeepsEveryCode(t *testing.T) {
+// shippedHashes pins the SHA-256 of each file of shippedDir. A shipped file
+// never changes: a release adds a new file and its hash here.
+func shippedHashes() map[string]string {
+	return map[string]string{
+		"main.txt": "622e08d9521289c808594cb96246814d3d9cb6d78ebea96ab3994451259d5dfb",
+	}
+}
+
+// TestShippedFilesAreFrozen fails for a file of shippedDir whose SHA-256 is
+// not its pinned hash, for a file without a pinned hash, and for a pinned
+// hash without a file. So a test cannot change a shipped line and the catalog
+// together.
+func TestShippedFilesAreFrozen(t *testing.T) {
 	t.Parallel()
 
-	golden := readGolden(t)
+	files := readDir(t, shippedDir)
+	pins := shippedHashes()
 
-	catalog := map[string]string{}
-	for _, spec := range errcode.Catalog() {
-		catalog[spec.Code] = goldenLine(spec)
-	}
+	for name, data := range files {
+		want, ok := pins[name]
+		if !ok {
+			t.Errorf("%s/%s has no pinned hash: add it to shippedHashes", shippedDir, name)
 
-	for code, want := range golden {
-		got, ok := catalog[code]
+			continue
+		}
 
-		switch {
-		case !ok:
-			t.Errorf("code %q of %s is not in the catalog: a code is never removed or renamed", code, goldenFile)
-		case got != want:
-			t.Errorf("code %q is %q in the catalog and %q in %s: the arguments of a code never change",
-				code, got, want, goldenFile)
-		default:
+		sum := sha256.Sum256(data)
+		if got := hex.EncodeToString(sum[:]); got != want {
+			t.Errorf("%s/%s hash = %s, want %s: a shipped file never changes", shippedDir, name, got, want)
 		}
 	}
 
-	for code, line := range catalog {
-		if _, ok := golden[code]; !ok {
-			t.Errorf("code %q has no line in %s: add the line %q", code, goldenFile, line)
+	for name := range pins {
+		if _, ok := files[name]; !ok {
+			t.Errorf("the pinned file %s/%s is gone: a shipped file is never removed", shippedDir, name)
 		}
 	}
 }
 
-// readGolden returns the lines of the golden file by their code.
-func readGolden(t *testing.T) map[string]string {
-	t.Helper()
+// TestShippedCodesStay fails when a code of a shipped file is not in the
+// catalog, and when the catalog does not give the code each argument of its
+// line with the same kind. A code may gain arguments, so the catalog may give
+// it more arguments than its line.
+func TestShippedCodesStay(t *testing.T) {
+	t.Parallel()
 
-	data, err := os.ReadFile(goldenFile)
-	if err != nil {
-		t.Fatalf("read %s: %v", goldenFile, err)
+	shipped := shippedLines(t)
+	if len(shipped) == 0 {
+		t.Fatalf("%s holds no code", shippedDir)
 	}
 
-	golden := map[string]string{}
+	for code, line := range shipped {
+		spec, ok := errcode.Lookup(code)
+		if !ok {
+			t.Errorf("shipped code %q is not in the catalog: a code is never removed or renamed", code)
+
+			continue
+		}
+
+		if lost := lostArgs(line, goldenLine(spec)); len(lost) > 0 {
+			t.Errorf("shipped code %q lost the arguments %q: an argument is never removed and never changes its kind",
+				code, lost)
+		}
+	}
+}
+
+// lostArgs returns the arguments of the golden line want that the golden line
+// got does not have with the same kind.
+func lostArgs(want, got string) []string {
+	have := strings.Fields(got)[1:]
+
+	var lost []string
+
+	for _, arg := range strings.Fields(want)[1:] {
+		if !slices.Contains(have, arg) {
+			lost = append(lost, arg)
+		}
+	}
+
+	return lost
+}
+
+func TestLostArgs(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name, want, got string
+		lost            []string
+	}{
+		{"same", "a.b x:identifier", "a.b x:identifier", nil},
+		{"no arguments", "a.b", "a.b", nil},
+		{"gained an argument", "a.b x:identifier", "a.b x:identifier y:quantity", nil},
+		{"gained the first argument", "a.b", "a.b y:quantity", nil},
+		{"other order", "a.b x:identifier y:time", "a.b y:time x:identifier", nil},
+		{"removed", "a.b x:identifier", "a.b", []string{"x:identifier"}},
+		{"renamed", "a.b x:identifier", "a.b z:identifier", []string{"x:identifier"}},
+		{"other kind", "a.b x:identifier", "a.b x:quantity", []string{"x:identifier"}},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := lostArgs(tc.want, tc.got); !slices.Equal(got, tc.lost) {
+				t.Fatalf("lostArgs(%q, %q) = %q, want %q", tc.want, tc.got, got, tc.lost)
+			}
+		})
+	}
+}
+
+// TestNewCodesHaveTheirLine fails for a code of the catalog that no shipped
+// file holds and that has no line, or another line, in the golden file of its
+// area, for a line of a golden file that is not in the catalog, and for a line
+// in the golden file of another area. Each area has its own file, so that two
+// changes to two areas touch different files.
+func TestNewCodesHaveTheirLine(t *testing.T) {
+	t.Parallel()
+
+	shipped := shippedLines(t)
+	golden := newLines(t)
+
+	for _, spec := range errcode.Catalog() {
+		_, isShipped := shipped[spec.Code]
+		line, isNew := golden[spec.Code]
+
+		switch {
+		case isShipped && isNew:
+			t.Errorf("code %q is shipped: remove its line from %s", spec.Code, areaFile(spec.Code))
+		case isShipped:
+		case !isNew:
+			t.Errorf("code %q has no line in %s: add the line %q", spec.Code, areaFile(spec.Code), goldenLine(spec))
+		case line != goldenLine(spec):
+			t.Errorf("code %q is %q in the catalog and %q in %s", spec.Code, goldenLine(spec), line, areaFile(spec.Code))
+		default:
+		}
+	}
+
+	for code := range golden {
+		if _, ok := errcode.Lookup(code); !ok {
+			t.Errorf("code %q of %s is not in the catalog", code, areaFile(code))
+		}
+	}
+}
+
+// TestEveryAreaHasAGoldenFile fails for a file catalog_<area>.go without the
+// golden file of its area, and for a golden file without the list of its
+// area. An area name drops its hyphens in the name of its Go file.
+func TestEveryAreaHasAGoldenFile(t *testing.T) {
+	t.Parallel()
+
+	sources, err := filepath.Glob("catalog_*.go")
+	if err != nil {
+		t.Fatalf("glob: %v", err)
+	}
+
+	lists := map[string]bool{}
+
+	for _, source := range sources {
+		if !strings.HasSuffix(source, "_test.go") {
+			lists[strings.TrimSuffix(strings.TrimPrefix(source, "catalog_"), ".go")] = true
+		}
+	}
+
+	for name := range readDir(t, newDir) {
+		area := strings.TrimSuffix(name, ".txt")
+
+		if !lists[strings.ReplaceAll(area, "-", "")] {
+			t.Errorf("%s/%s has no file catalog_%s.go", newDir, name, strings.ReplaceAll(area, "-", ""))
+		}
+
+		delete(lists, strings.ReplaceAll(area, "-", ""))
+	}
+
+	for list := range lists {
+		t.Errorf("catalog_%s.go has no golden file in %s: add it, empty", list, newDir)
+	}
+}
+
+// areaFile returns the golden file of the area of code.
+func areaFile(code string) string {
+	area, _, _ := strings.Cut(code, ".")
+
+	return newDir + "/" + area + ".txt"
+}
+
+// shippedLines returns the lines of every shipped file by their code.
+func shippedLines(t *testing.T) map[string]string {
+	t.Helper()
+
+	out := map[string]string{}
+
+	for name, data := range readDir(t, shippedDir) {
+		addLines(t, shippedDir+"/"+name, data, "", out)
+	}
+
+	return out
+}
+
+// newLines returns the lines of the golden file of each area by their code.
+func newLines(t *testing.T) map[string]string {
+	t.Helper()
+
+	out := map[string]string{}
+
+	for name, data := range readDir(t, newDir) {
+		addLines(t, newDir+"/"+name, data, strings.TrimSuffix(name, ".txt"), out)
+	}
+
+	return out
+}
+
+// addLines adds the lines of data, the file name, to out by their code. A
+// line that starts with "#" is a comment. When area is not "", each code of
+// the file must be of that area. A code may have one line only.
+func addLines(t *testing.T, name string, data []byte, area string, out map[string]string) {
+	t.Helper()
 
 	for line := range strings.Lines(string(data)) {
 		line = strings.TrimSpace(line)
@@ -248,17 +427,58 @@ func readGolden(t *testing.T) map[string]string {
 		}
 
 		code, _, _ := strings.Cut(line, " ")
-		if _, seen := golden[code]; seen {
-			t.Errorf("%s: code %q has two lines", goldenFile, code)
+		if lineArea, _, _ := strings.Cut(code, "."); area != "" && lineArea != area {
+			t.Errorf("%s: code %q belongs in %s", name, code, areaFile(code))
 		}
 
-		golden[code] = line
-	}
+		if _, seen := out[code]; seen {
+			t.Errorf("%s: code %q has two lines", name, code)
+		}
 
-	return golden
+		out[code] = line
+	}
 }
 
-// goldenLine returns the line of spec in the golden file.
+// readDir returns the content of each .txt file of dir by its name.
+func readDir(t *testing.T, dir string) map[string][]byte {
+	t.Helper()
+
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		t.Fatalf("open %s: %v", dir, err)
+	}
+
+	defer func() {
+		if closeErr := root.Close(); closeErr != nil {
+			t.Errorf("close %s: %v", dir, closeErr)
+		}
+	}()
+
+	entries, err := fs.ReadDir(root.FS(), ".")
+	if err != nil {
+		t.Fatalf("read %s: %v", dir, err)
+	}
+
+	out := map[string][]byte{}
+
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".txt") {
+			continue
+		}
+
+		data, err := root.ReadFile(e.Name())
+		if err != nil {
+			t.Fatalf("read %s/%s: %v", dir, e.Name(), err)
+		}
+
+		out[e.Name()] = data
+	}
+
+	return out
+}
+
+// goldenLine returns the line of spec in a golden file: the code, then the
+// name and the kind of each argument.
 func goldenLine(spec errcode.Spec) string {
 	parts := make([]string, 0, 1+len(spec.Args))
 	parts = append(parts, spec.Code)

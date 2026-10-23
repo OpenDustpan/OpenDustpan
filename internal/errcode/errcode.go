@@ -49,8 +49,10 @@ func (refusal) Unwrap() error { return identity.ErrDenied }
 // access.denied. Use it for a refusal that is not a missing permission, such
 // as a refused sign-in: a person who gets access.denied needs a grant, and
 // this person does not. code is a code of the catalog, for example
-// SignInRefused. Every other error that wraps identity.ErrDenied gets
-// access.denied, so check each new one.
+// SignInRefused. A code that is not in the catalog is ignored, and Forbidden
+// gives the error the code of its other causes, at least access.denied. Every
+// other error that wraps identity.ErrDenied gets access.denied, so check each
+// new one.
 func Refusal(code, reason string) error { return refusal{code: code, reason: reason} }
 
 // Forbidden returns the code of a 403 that err causes, or "" when err is none
@@ -59,10 +61,15 @@ func Refusal(code, reason string) error { return refusal{code: code, reason: rea
 // comes first, because it names its own code. The session errors and the
 // allowlist error wrap identity.ErrDenied, so they come before it, as in the
 // classify functions of the adapters, which pick the message in the same
-// order.
+// order. A refusal whose code is not in the catalog counts as no refusal.
 func Forbidden(err error) string {
+	// Defense in depth: Refusal stores any string, and the review of each
+	// caller does not stop a typo. A code that is not in the catalog gets the
+	// other causes, so that a denial never answers "" or an unknown code.
 	if r, ok := errors.AsType[refusal](err); ok {
-		return r.code
+		if _, known := Lookup(r.code); known {
+			return r.code
+		}
 	}
 
 	switch {

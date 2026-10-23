@@ -44,12 +44,14 @@ Facts on `main`:
   `request.idempotency-key-replayed-secret`. The other APIs send the code
   without its argument today.
 - `errcode.Refusal` answers 403 like a missing permission and has no code.
-  The installation API uses it for a refused sign-in and for a route with
-  no authorization action for its object. The audit API uses it for a
-  route with no action for the installation.
+  It has three calls. The installation API uses it for a refused sign-in
+  and for a route with no authorization action for its object. The audit
+  API uses it for a route with no action for the installation.
+- The catalog holds 83 codes: the 80 codes that `main` sends, and the new
+  codes `sign-in.refused`, `access.no-action` and `server.internal`.
 - Most error answers have no code. A scan of the mapping functions, the
   tables of errors and statuses and the error bodies of the adapters and of
-  `pkg/dustpan` finds 549 error paths without a code of the catalog.
+  `pkg/dustpan` finds 551 error paths without a code of the catalog.
 - The registry and the frozen list of shipped codes of ADR 182 decision 7
   do not exist yet.
 - The owner text of the decision said that times are Unix milliseconds. In
@@ -73,6 +75,14 @@ Facts on `main`:
 
    The runner management API is a tool-neutral API. It gets codes of the
    catalog.
+
+   The provider registry protocol of the TFE-compatible adapter is not a
+   third such protocol. Its error document is `{"errors": ["<text>"]}`, and
+   the protocol does not fix other members of that document. So its six
+   error answers get codes, in members next to `errors`, like every other
+   answer of the TFE-compatible API. Until then, they are on the known list
+   of that adapter. `make e2e` must show that OpenTofu accepts the new
+   members before that change lands.
 2. **The names of the codes (owner).** A code is a dotted string in the
    form of the existing 403 codes. The grammar and the length are those of
    ADR 182 decision 1. A code has the form `<area>.<reason>`:
@@ -228,8 +238,11 @@ Facts on `main`:
      failure is a bug in the adapter, and the tests of the adapter find it
      first.
    - `errcode.Refusal` takes a code of the catalog. `errcode.Forbidden`
-     gives the code of the refusal, and it never gives no code for an error
-     that wraps `identity.ErrDenied`. A refused sign-in answers
+     gives the code of the refusal only when the catalog has it. For an
+     empty code or a code that is not in the catalog, it continues to the
+     other causes, so the error gets at least `access.denied`. So it never
+     gives no code, and never a code outside the catalog, for an error that
+     wraps `identity.ErrDenied`. A refused sign-in answers
      `sign-in.refused`. A route with no authorization action for its object
      answers `access.no-action`. These two codes join the six 403 codes.
 
@@ -285,6 +298,13 @@ Facts on `main`:
    of the migration change different files. When each list is empty, the
    known lists go away.
 
+   The scan finds a body literal only when its type is an error body of
+   the adapter. So a further test reads each struct type of a gated
+   adapter. It fails for a type with a field whose JSON name is `code`,
+   `errorCode` or `errors` that is neither an error body of the adapter
+   nor on a short list of other types, each with a reason. A request body
+   with a field `code` is an example of such another type.
+
    A second test fails for a directory of `internal/api` that is not
    gated and is not on the ungated list with a reason. The ungated list
    holds the API description, the helpers of the adapters and the OpenTofu
@@ -297,23 +317,42 @@ Facts on `main`:
    kinds. The TypeScript client gets the codes as a union type, and the
    arguments of each code as a type.
 10. **A code is a contract (owner).** A code never changes its meaning. The
-    frozen list of shipped codes of ADR 182 decision 7 holds the codes and
-    the arguments of each tag. It starts at the first tag.
+    frozen lists of shipped codes of ADR 182 decision 7 hold the codes and
+    the arguments that `main` sent before the catalog, and those that each
+    tag sends. Each line holds a code, then the name and the kind of each
+    argument.
 
-    Until the first tag, `internal/errcode/testdata/catalog.txt` holds one
-    line for each code of the catalog: the code, then the name and the kind
-    of each argument. A test fails when a line is not in the catalog, when
-    the catalog gives a code other arguments than its line, and when a code
-    has no line. So the file only grows: a new code adds its line, and a
-    rename or a removal fails the test. At the first tag, the file becomes
-    the first list in `internal/errcode/shipped/`.
+    - `internal/errcode/testdata/shipped/` holds the frozen lists. The
+      first list, `main.txt`, holds the 80 codes that `main` sends before
+      the catalog. A test pins the SHA-256 of each file, as the test of the
+      frozen migrations does. It fails when a file changes, when a file is
+      removed, and when a file has no pinned hash.
+    - A second test fails when a code of a frozen list is not in the
+      catalog, and when the catalog does not give the code each argument
+      of its line with the same kind. The catalog may give a code more
+      arguments than its line, because decision 3 lets a code gain
+      arguments. So the test enforces that a shipped code is never removed
+      or renamed, and that it never loses an argument or changes the kind
+      of an argument. It cannot test the meaning of a code: the review
+      does that.
+    - Each area has a golden file, `internal/errcode/testdata/catalog/<area>.txt`,
+      for the codes of the area that no frozen list holds. A file is
+      created, empty, together with `catalog_<area>.go`. A third test fails
+      for a code that is in neither a frozen list nor the golden file of
+      its area, for a line that differs from the catalog, for a line in the
+      file of another area, and for an area without its golden file. So
+      two changes to two areas touch different files.
+    - At each tag, the lines of the golden files go into a new frozen list
+      `shipped/<tag>.txt` with its pinned hash, and the golden files become
+      empty.
 
 ## Consequences
 
 - The design pull request adds this ADR, the catalog types, every code that
   `main` sends today, `sign-in.refused`, `access.no-action` and
-  `server.internal` in the catalog, the golden file of the catalog, the gate
-  and the known lists. It changes no adapter, except that the two calls of
+  `server.internal` in the catalog: 83 codes. It adds the frozen list of
+  the 80 shipped codes, the golden file of each area, the gate and the
+  known lists. It changes no adapter, except that the three calls of
   `errcode.Refusal` now give a code.
 - Later pull requests give the codes, one adapter or one group of
   adapters at a time. Each removes the lines of its paths from the known

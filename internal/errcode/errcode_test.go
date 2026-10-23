@@ -78,6 +78,13 @@ func TestForbiddenOrder(t *testing.T) {
 			errors.Join(errcode.Refusal(errcode.SignInRefused, "x"), gate.ErrLimited),
 			errcode.SignInRefused,
 		},
+		{"refusal without a code", errcode.Refusal("", "x"), errcode.AccessDenied},
+		{"refusal with a code that is not in the catalog", errcode.Refusal("sign-in.refsued", "x"), errcode.AccessDenied},
+		{
+			"refusal with an unknown code before a session error",
+			errors.Join(errcode.Refusal("sign-in.refsued", "x"), sessionauth.ErrCSRF),
+			errcode.SessionCSRF,
+		},
 		{"no cause", errOther, ""},
 		{"unauthenticated", identity.ErrUnauthenticated, ""},
 	}
@@ -124,6 +131,10 @@ func TestForbiddenAlwaysCodesADenial(t *testing.T) {
 		{"route without an action", fmt.Errorf("route: %w", errcode.Refusal(errcode.AccessNoAction, "no action"))},
 		{"limited", limitedRefusal(gate.ErrLimited)},
 		{"csrf", errors.Join(identity.ErrDenied, sessionauth.ErrCSRF)},
+		{"refusal without a code", errcode.Refusal("", "x")},
+		{"refusal with a code that is not in the catalog", errcode.Refusal("sign-in.refsued", "x")},
+		{"refusal with a code that is not valid", errcode.Refusal("Not A Code", "x")},
+		{"wrapped refusal without a code", fmt.Errorf("route: %w", errcode.Refusal("", "x"))},
 	}
 
 	for _, tc := range tests {

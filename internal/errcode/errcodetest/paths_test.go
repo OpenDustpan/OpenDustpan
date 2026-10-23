@@ -498,3 +498,175 @@ func writeSource(t *testing.T, src string) string {
 
 	return dir
 }
+
+// TestBodyTypes proves that BodyTypes finds each struct type with a field
+// whose JSON name is code, errorCode or errors, also in a nested or an
+// anonymous struct, and no other type.
+func TestBodyTypes(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		src  string
+		want []string
+	}{
+		{
+			name: "code",
+			src:  "type a struct {\n\tCode int `json:\"code\"`\n}",
+			want: []string{"a"},
+		},
+		{
+			name: "errorCode with options",
+			src:  "type a struct {\n\tErrorCode string `json:\"errorCode,omitempty\"`\n}",
+			want: []string{"a"},
+		},
+		{
+			name: "errors",
+			src:  "type registryErrors struct {\n\tErrors []string `json:\"errors\"`\n}",
+			want: []string{"registryErrors"},
+		},
+		{
+			name: "other tags too",
+			src:  "type a struct {\n\tCode int `yaml:\"c\" json:\"code\"`\n}",
+			want: []string{"a"},
+		},
+		{
+			name: "nested struct",
+			src:  "type a struct {\n\tError struct {\n\t\tCode int `json:\"code\"`\n\t} `json:\"error\"`\n}",
+			want: []string{"a"},
+		},
+		{
+			name: "type group",
+			src:  "type (\n\ta struct{ X int }\n\tb struct {\n\t\tCode int `json:\"code\"`\n\t}\n)",
+			want: []string{"b"},
+		},
+		{
+			name: "sorted",
+			src: "type z struct {\n\tCode int `json:\"code\"`\n}\n" +
+				"type m struct {\n\tErrors []int `json:\"errors\"`\n}",
+			want: []string{"m", "z"},
+		},
+		{
+			name: "other JSON names",
+			src: "type a struct {\n\tCode int `json:\"statusCode\"`\n\tB int `json:\"codes\"`\n" +
+				"\tC int `json:\"-\"`\n\tD int\n\tE int `yaml:\"code\"`\n}",
+			want: nil,
+		},
+		{
+			name: "field named Code without a tag",
+			src:  "type a struct{ Code int }",
+			want: nil,
+		},
+		{
+			name: "not a struct",
+			src:  "type a int",
+			want: nil,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, err := errcodetest.BodyTypes(writeSource(t, "package demo\n\n"+tc.src+"\n"))
+			if err != nil {
+				t.Fatalf("BodyTypes: %v", err)
+			}
+
+			if !slices.Equal(got, tc.want) {
+				t.Fatalf("types = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestBodyTypesSkipsTests proves that a type of a test file is no body type.
+func TestBodyTypesSkipsTests(t *testing.T) {
+	t.Parallel()
+
+	dir := writeSource(t, "package demo\n")
+
+	test := "package demo\n\ntype a struct {\n\tCode int `json:\"code\"`\n}\n"
+	if err := os.WriteFile(filepath.Join(dir, "demo_test.go"), []byte(test), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	got, err := errcodetest.BodyTypes(dir)
+	if err != nil {
+		t.Fatalf("BodyTypes: %v", err)
+	}
+
+	if len(got) != 0 {
+		t.Fatalf("types = %q, want none", got)
+	}
+}
+
+func TestBodyTypesRefusesBadSource(t *testing.T) {
+	t.Parallel()
+
+	if _, err := errcodetest.BodyTypes(writeSource(t, "package demo\ntype {")); err == nil {
+		t.Fatal("BodyTypes accepted a file that does not parse")
+	}
+}
+
+// TestMissingBodies proves that a body type that is neither in the Bodies of
+// the adapter nor ignored is missing, so that its literals cannot hide from
+// UncodedPaths.
+func TestMissingBodies(t *testing.T) {
+	t.Parallel()
+
+	src := "package demo\n\n" +
+		"type errorResponse struct {\n\tCode int `json:\"code\"`\n}\n" +
+		"type registryErrors struct {\n\tErrors []string `json:\"errors\"`\n}\n" +
+		"type devCodeRequest struct {\n\tCode string `json:\"code\"`\n}\n" +
+		"type statusError struct{ status int }\n"
+
+	tests := []struct {
+		name    string
+		bodies  []string
+		ignored []string
+		want    []string
+	}{
+		{"all gated or ignored", []string{"errorResponse", "registryErrors"}, []string{"devCodeRequest"}, nil},
+		{"a new body type", []string{"errorResponse"}, []string{"devCodeRequest"}, []string{"registryErrors"}},
+		{"nothing ignored", []string{"errorResponse"}, nil, []string{"devCodeRequest", "registryErrors"}},
+		{"a body without a JSON tag", []string{"errorResponse", "registryErrors", "statusError"}, []string{"devCodeRequest"}, nil},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			a := demo(writeSource(t, src))
+			a.Bodies = tc.bodies
+
+			got, err := errcodetest.MissingBodies(a, tc.ignored)
+			if err != nil {
+				t.Fatalf("MissingBodies: %v", err)
+			}
+
+			if !slices.Equal(got, tc.want) {
+				t.Fatalf("missing = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestMissingBodiesNeedsTheIgnoredTypes fails when an ignored type is gone or
+// is no body type, so that the ignore list cannot keep a stale name.
+func TestMissingBodiesNeedsTheIgnoredTypes(t *testing.T) {
+	t.Parallel()
+
+	src := "package demo\n\ntype errorResponse struct {\n\tCode int `json:\"code\"`\n}\ntype other struct{ X int }\n"
+
+	for _, ignored := range []string{"renamedRequest", "other", "errorResponse"} {
+		t.Run(ignored, func(t *testing.T) {
+			t.Parallel()
+
+			_, err := errcodetest.MissingBodies(demo(writeSource(t, src)), []string{ignored})
+			if !errors.Is(err, errcodetest.ErrIgnoreStale) {
+				t.Fatalf("error = %v, want %v", err, errcodetest.ErrIgnoreStale)
+			}
+		})
+	}
+}
