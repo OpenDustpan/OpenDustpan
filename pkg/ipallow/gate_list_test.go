@@ -284,9 +284,13 @@ func TestGateExactScopeWithinAuthorize(t *testing.T) {
 		}}}
 		gate := ipallow.Gate{Next: next, Rules: f.rules, Enabled: enabled, IncludeBootstrap: false}
 
-		identitytest.CheckExactScope(clientip.WithAddr(t.Context(), netip.MustParseAddr("192.0.2.10")), t, identitytest.ListCheck{
-			Authorizer: gate, Principal: userPrincipal("alice"), Action: identity.ActionUnitRead,
-			Every: []identity.Object{identity.NamespaceObject("acme"), unit},
-		})
+		identitytest.CheckExactScope(
+			clientip.WithAddr(t.Context(), netip.MustParseAddr("192.0.2.10")),
+			t,
+			identitytest.ListCheck{
+				Authorizer: gate, Principal: userPrincipal("alice"), Action: identity.ActionUnitRead,
+				Every: []identity.Object{identity.NamespaceObject("acme"), unit},
+			},
+		)
 	}
 }
