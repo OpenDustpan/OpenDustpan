@@ -508,3 +508,44 @@ func TestNewHandlerRequiresMaintenance(t *testing.T) {
 		t.Fatal("NewHandler without maintenance succeeded")
 	}
 }
+
+// TestMaintenanceEnterBusyAnswers503 proves an enter that the writes in
+// flight kept waiting past the bound of the store answers 503 with
+// Retry-After and a text that names the cause and the next step, without
+// store text.
+func TestMaintenanceEnterBusyAnswers503(t *testing.T) {
+	t.Parallel()
+
+	fake := newFakeMaintenance(maintenance.StateNormal)
+	fake.enterErr = fmt.Errorf("set installation state %q: store installation state sqlite database: waited 30s: %w",
+		maintenance.StateMaintenance, maintenance.ErrBusy)
+	handler := newMaintenanceHandler(t, fake)
+
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/server/maintenance/enter", http.NoBody)
+	req.Header.Set("Authorization", "Bearer test-token")
+
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("busy enter answers %d, want 503 (%s)", rec.Code, rec.Body.String())
+	}
+
+	if got := rec.Header().Get("Retry-After"); got != "30" {
+		t.Fatalf("Retry-After = %q, want 30", got)
+	}
+
+	var doc struct {
+		Code    int    `json:"code"`
+		Message string `json:"message"`
+	}
+
+	if err := json.Unmarshal(rec.Body.Bytes(), &doc); err != nil {
+		t.Fatalf("decode 503 of a busy enter: %v (%s)", err, rec.Body.String())
+	}
+
+	want := "cannot enter maintenance mode: the writes in flight did not end in time: try again later"
+	if doc.Code != http.StatusServiceUnavailable || doc.Message != want {
+		t.Fatalf("busy enter error = %+v, want code 503 and %q", doc, want)
+	}
+}

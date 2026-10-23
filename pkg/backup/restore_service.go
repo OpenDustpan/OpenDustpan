@@ -809,6 +809,7 @@ func isLogSentinel(err error) bool {
 		errors.Is(err, installation.ErrUnavailable),
 		errors.Is(err, maintenance.ErrActiveWork),
 		errors.Is(err, maintenance.ErrUnavailable),
+		errors.Is(err, maintenance.ErrBusy),
 		errors.Is(err, maintenance.ErrInvalidState),
 		errors.Is(err, maintenance.ErrStateChanged),
 		errors.Is(err, secret.ErrDecrypt),
