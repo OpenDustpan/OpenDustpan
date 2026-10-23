@@ -4,11 +4,13 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -491,8 +493,10 @@ func waitForPostgresMaintenance(t *testing.T, st *postgres.Store, want maintenan
 
 // TestRunnerTakeoverCompletesTheMigration proves that when one instance
 // stops during the migration, another instance completes it: the first
-// runner blocks in its step, its context ends, and the second runner runs
-// the step once and ends the operation succeeded.
+// runner blocks in its step, its context ends, it releases its claim, and
+// the second runner runs the step once and ends the operation succeeded.
+// The lease is long, so the takeover can come only from the release, not
+// from an expiry.
 func TestRunnerTakeoverCompletesTheMigration(t *testing.T) {
 	t.Parallel()
 
@@ -505,11 +509,22 @@ func TestRunnerTakeoverCompletesTheMigration(t *testing.T) {
 	stopBlocking := runBlockingRunner(t, store, kind)
 	stopBlocking()
 
+	waitTakeoverReleased(t, store, op.ID)
+
 	runs := runTakeoverRunner(t, store, kind)
 	waitTakeoverSucceeded(t, store, op.ID)
 
-	if runs() != 1 {
-		t.Fatalf("second runner ran the step %d times, want 1", runs())
+	if n := runs.Load(); n != 1 {
+		t.Fatalf("second runner ran the step %d times, want 1", n)
+	}
+
+	got, err := store.Get(t.Context(), op.ID)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+
+	if got.Attempt != 2 || got.Expiries != 0 {
+		t.Fatalf("operation = %+v, want attempt 2 and no expiry: a takeover after a release", got)
 	}
 }
 
@@ -535,13 +550,18 @@ func takeoverSteps(kind durable.Kind, run durable.StepFunc) []durable.KindSpec {
 	}}
 }
 
+// takeoverRunnerLease is the lease of the runners of the takeover test. It
+// is longer than the test, so no renewal deadline and no expiry can end a
+// claim on a slow machine.
+const takeoverRunnerLease = time.Minute
+
 // takeoverRunnerConfig answers the runner config of owner with kinds.
 func takeoverRunnerConfig(store durable.Store, owner string, kinds []durable.KindSpec) durable.RunnerConfig {
 	return durable.RunnerConfig{
 		Store:        store,
 		Owner:        owner,
 		Kinds:        kinds,
-		Lease:        300 * time.Millisecond,
+		Lease:        takeoverRunnerLease,
 		RenewEvery:   0,
 		PollEvery:    0,
 		MaxAttempts:  0,
@@ -593,16 +613,17 @@ func runBlockingRunner(t *testing.T, store durable.Store, kind durable.Kind) fun
 	}
 }
 
-// runTakeoverRunner runs the second runner once, and answers the count of
-// its step runs.
-func runTakeoverRunner(t *testing.T, store durable.Store, kind durable.Kind) func() int {
+// runTakeoverRunner runs the second runner until it runs an operation, and
+// answers the count of its step runs. It tries again while the store has no
+// work for it, until chainWait passes.
+func runTakeoverRunner(t *testing.T, store durable.Store, kind durable.Kind) *atomic.Int64 {
 	t.Helper()
 
-	var runs int
+	var runs atomic.Int64
 
 	second, err := durable.NewRunner(takeoverRunnerConfig(store, "second", takeoverSteps(kind,
 		func(context.Context, durable.StepContext) ([]byte, error) {
-			runs++
+			runs.Add(1)
 
 			return []byte("done"), nil
 		})))
@@ -610,11 +631,49 @@ func runTakeoverRunner(t *testing.T, store durable.Store, kind durable.Kind) fun
 		t.Fatalf("new runner: %v", err)
 	}
 
-	if err := second.RunOnce(t.Context()); err != nil {
-		t.Fatalf("RunOnce: %v", err)
-	}
+	deadline := time.Now().Add(chainWait)
 
-	return func() int { return runs }
+	for {
+		err := second.RunOnce(t.Context())
+		if err == nil {
+			return &runs
+		}
+
+		if !errors.Is(err, durable.ErrNoWork) {
+			t.Fatalf("RunOnce: %v", err)
+		}
+
+		if time.Now().After(deadline) {
+			t.Fatalf("RunOnce after %s: %v, want an operation to run", chainWait, err)
+		}
+
+		pauseChain(t)
+	}
+}
+
+// waitTakeoverReleased waits until the operation id is pending with no
+// claim: the first runner released it at its stop.
+func waitTakeoverReleased(t *testing.T, store durable.Store, id durable.ID) {
+	t.Helper()
+
+	deadline := time.Now().Add(chainWait)
+
+	for {
+		got, err := store.Get(t.Context(), id)
+		if err != nil {
+			t.Fatalf("get: %v", err)
+		}
+
+		if got.State == durable.StatePending && got.Claim.Owner == "" && got.Claim.Token == 0 {
+			return
+		}
+
+		if time.Now().After(deadline) {
+			t.Fatalf("operation after %s = %+v, want pending with no claim", chainWait, got)
+		}
+
+		pauseChain(t)
+	}
 }
 
 // waitTakeoverSucceeded waits until the operation id ends succeeded.
