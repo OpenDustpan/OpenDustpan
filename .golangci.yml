@@ -184,6 +184,7 @@ linters:
             - "**/pkg/idempotency/**"
             - "**/pkg/manuallock/**"
             - "**/pkg/profile/**"
+            - "**/internal/*svc/**"
             - "!**/*_test.go"
             - "!**/internal/api/inventory/**"
           deny:
