@@ -195,7 +195,8 @@ row or a fault in the server, not a mistake of the client.
 
 ## Denial entries
 
-Each request that the server refuses because the principal does not hold the action writes one entry with the outcome `denied`.
+Each request that the server refuses because the principal does not hold the action writes an entry with the outcome `denied`.
+Repeated refusals in a window of 1 minute write one entry and a count (see [The limit on repeated denials](#the-limit-on-repeated-denials)).
 Every API writes it. These are the Pulumi Cloud-compatible API, the TFE-compatible API, the OpenTofu HTTP backend, the inventory, context, audit, profile and runner APIs, and the installation API.
 A list that shows only the items that the principal may read does not write an entry for each item that it leaves out.
 The entry is in the scope of the object. An object with no namespace, or with a namespace that does not exist, writes the entry in the scope `@server`. For a namespace that does not exist, the `reason` ends with `(namespace NAME does not exist)`.
