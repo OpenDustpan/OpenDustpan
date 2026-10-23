@@ -97,7 +97,7 @@ func TestStartTrigger(t *testing.T) {
 				a.Agent = "dusty"
 
 				return a
-			}, job.SourceAPI, ref, job.ErrAgentDenied,
+			}, job.SourceAPI, ref, job.ErrInvalid,
 		},
 		{
 			"a start with a trigger that is not valid", adaActor, "",

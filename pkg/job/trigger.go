@@ -120,6 +120,9 @@ func checkManualSource(a Actor, source SourceKind) error {
 	case source != SourceAPI:
 		return fmt.Errorf("%w: a manual start by a trigger has the source api", ErrInvalid)
 	case a.Agent != "":
+		// Defense in depth: Start refuses the source kind api for an agent
+		// before it checks the trigger; this check stays so that a new
+		// caller cannot skip it.
 		return fmt.Errorf("%w: an agent cannot fire a trigger", ErrAgentDenied)
 	default:
 		return nil
