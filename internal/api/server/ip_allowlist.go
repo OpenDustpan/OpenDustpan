@@ -226,17 +226,16 @@ func (h *Handler) removeIPAllowlist(
 // message: a bad body or list answers 400 with the error text, and a change
 // while the feature is off answers 409 that names the setting. A lost audit
 // entry fails closed with 500 through the default branch of classify.
-func classifyIPAllowlist(err error) (int, string, bool) {
+func classifyIPAllowlist(err error) (failure, bool) {
 	switch {
 	case errors.Is(err, errIPAllowlistBody):
-		return http.StatusBadRequest, errIPAllowlistBody.Error(), true
+		return fail(http.StatusBadRequest, errIPAllowlistBody.Error()), true
 	case errors.Is(err, ipallow.ErrInvalidList):
-		return http.StatusBadRequest, err.Error(), true
+		return fail(http.StatusBadRequest, err.Error()), true
 	case errors.Is(err, ipallow.ErrDisabled):
-		return http.StatusConflict,
-			"IP allowlists are off for this installation: start the server with --ip-allowlists",
-			true
+		return fail(http.StatusConflict,
+			"IP allowlists are off for this installation: start the server with --ip-allowlists"), true
 	default:
-		return 0, "", false
+		return fail(0, ""), false
 	}
 }
