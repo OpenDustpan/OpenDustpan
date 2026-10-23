@@ -592,7 +592,7 @@ When you know the cause, start a new epoch.
 The server then checks only the checkpoints that it signs after this time.
 
 ```sh
-curl -X POST -H "Authorization: token $DUSTPAN_ADMIN_TOKEN" \
+curl -X POST -H "Authorization: Bearer $DUSTPAN_ADMIN_TOKEN" \
   https://dustpan.example/api/server/audit/checkpoint-epochs
 ```
 
