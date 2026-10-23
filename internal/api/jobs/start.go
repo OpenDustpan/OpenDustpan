@@ -256,6 +256,15 @@ func (h *Handler) startRequest(r *http.Request, t *target, b *startBody, key str
 			job.ErrInvalid, refusal.Clean(b.Operation, maxOperationEcho))
 	}
 
+	// Defense in depth: the planner of the job service checks the whole code
+	// location. This check stays so that a repository with credentials is
+	// refused at the boundary, before any other layer holds it.
+	if l := b.Location; l != nil {
+		if err := job.CheckRepository(l.Repository); err != nil {
+			return job.StartRequest{}, fmt.Errorf("location: %w", err)
+		}
+	}
+
 	// The pool and the code location decide which hosts run which code. The
 	// body may name them, and the service then checks the extra actions:
 	// namespace:manage-runners for a pool and unit:define-steps for a
