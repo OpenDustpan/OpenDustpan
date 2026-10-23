@@ -12,6 +12,8 @@ import (
 
 	"opendustpan.org/opendustpan/internal/api/tfe"
 	"opendustpan.org/opendustpan/internal/baseurl"
+	"opendustpan.org/opendustpan/internal/errcode"
+	"opendustpan.org/opendustpan/internal/errcode/errcodetest"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/workspace"
@@ -290,6 +292,52 @@ func (lockedRestoreWorkspaces) Restore(
 	_ context.Context, _ workspace.ID, _ workspace.StateVersionID, _ string,
 ) (workspace.StateVersion, error) {
 	return workspace.StateVersion{}, fmt.Errorf("%w: held by alice", workspace.ErrLockedByOther)
+}
+
+// unheldRestoreWorkspaces answers ErrLockedByOther while GetByID reports no
+// held lock, so the handler has no holder to name in the 409 detail.
+type unheldRestoreWorkspaces struct {
+	stubWorkspaces
+}
+
+func (unheldRestoreWorkspaces) Restore(
+	_ context.Context, _ workspace.ID, _ workspace.StateVersionID, _ string,
+) (workspace.StateVersion, error) {
+	return workspace.StateVersion{}, fmt.Errorf("%w: no holder known", workspace.ErrLockedByOther)
+}
+
+// TestRestoreLockedByOtherWithoutHolder proves a restore that the service
+// refuses as locked by another principal, with no known holder, answers
+// workspace.locked with no arguments.
+func TestRestoreLockedByOtherWithoutHolder(t *testing.T) {
+	t.Parallel()
+
+	handler, err := tfe.NewHandler(tfe.Config{
+		Registry:       nil,
+		Authenticator:  tokenAuthenticator{},
+		Authorizer:     allowAll(),
+		AddressGate:    nil,
+		Logger:         slog.New(slog.DiscardHandler),
+		Namespaces:     newTestNamespaces(t),
+		Workspaces:     unheldRestoreWorkspaces{stubWorkspaces: stubWorkspaces{}},
+		OutputChecker:  nil,
+		BaseURL:        baseurl.Resolver{},
+		Audit:          newTestAudit(),
+		Gate:           nil,
+		MaxStateBytes:  0,
+		OnAuditFailure: nil,
+		DenialLimiter:  nil,
+		Sessions:       nil, SessionPolicy: nil, StateGuard: nil,
+	})
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, restoreRequest(t, "sv-test123"))
+
+	errcodetest.CheckAnswer(t, errcodetest.ShapeJSONAPI, http.StatusConflict, rec.Body.Bytes(),
+		errcodetest.Want{Code: errcode.WorkspaceLocked, Args: nil, RequestBody: nil})
 }
 
 // TestRestoreLockedByOther proves a restore while another principal holds the
