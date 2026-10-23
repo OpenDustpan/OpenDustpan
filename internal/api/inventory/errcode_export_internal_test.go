@@ -38,3 +38,12 @@ var (
 	ErrCollectionBody      = errCollectionBody
 	ErrMoveBody            = errMoveBody
 )
+
+// The errors of the deleted-unit and the lock routes, for the black-box tests
+// of the error codes.
+var (
+	ErrInvalidQuery = errInvalidQuery
+	ErrInvalidBody  = errInvalidBody
+	ErrNoHistory    = errNoHistory
+	ErrLockBody     = errLockBody
+)

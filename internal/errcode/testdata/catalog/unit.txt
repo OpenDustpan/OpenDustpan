@@ -1,4 +1,8 @@
 unit.client-encrypted
+unit.deleted-not-found
+unit.history-unavailable
+unit.invalid-name
+unit.name-taken
 unit.no-collection
 unit.no-state unit:identifier
 unit.not-found

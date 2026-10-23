@@ -375,6 +375,12 @@ func (e *movedOutOfLockError) Is(target error) bool {
 	return target == manuallock.ErrLocked
 }
 
+// Unwrap returns the refusal of the lock, so that the answer reads the holder,
+// the time and the locked collection from it.
+func (e *movedOutOfLockError) Unwrap() error {
+	return e.locked
+}
+
 // checkMoveOutOfLock refuses a move of unit out of the collection from while a
 // manual lock of that collection covers the unit, unless the caller holds
 // unit:manage on the unit. The move ends the coverage of the collection lock,
