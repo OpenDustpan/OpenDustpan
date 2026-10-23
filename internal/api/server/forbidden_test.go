@@ -20,7 +20,7 @@ import (
 
 // forbiddenHandler builds a Handler whose Authorizer refuses every action with
 // err.
-func forbiddenHandler(t *testing.T, err error) *apiserver.Handler {
+func forbiddenHandler(t *testing.T, err error) testHandler {
 	t.Helper()
 
 	namespaces, nsErr := namespace.NewService(namespace.Config{Store: stubNamespaceStore{}, Now: nil, Region: "test"})
@@ -28,7 +28,7 @@ func forbiddenHandler(t *testing.T, err error) *apiserver.Handler {
 		t.Fatalf("namespace service: %v", nsErr)
 	}
 
-	handler, newErr := apiserver.NewHandler(apiserver.Config{
+	handler, newErr := newCheckedHandler(t, apiserver.Config{
 		Preferences:      nil,
 		GitHost:          nil,
 		Idempotency:      nil,

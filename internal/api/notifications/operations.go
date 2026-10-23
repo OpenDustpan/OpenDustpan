@@ -21,6 +21,7 @@ var operationLabels = map[string]apidesc.Label{
 			"ListNotificationSinksResponse", apidesc.Named[sinkDocument]("NotificationSink"),
 		)),
 	apidesc.Pattern(http.MethodPost, sinksPath): apidesc.Name("createNotificationSink", tagSinks).
+		WithStatus(http.StatusCreated).
 		On(apidesc.KindNamespace).
 		WithBodies(apidesc.Typed[createBody]("CreateNotificationSinkRequest"), apidesc.Typed[createdDocument](
 			"CreatedNotificationSink",

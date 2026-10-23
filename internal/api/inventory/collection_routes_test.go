@@ -25,7 +25,7 @@ func isCollectionRoute(route apiinventory.Route) bool {
 
 // newCollectionRouteHandler returns a handler with the collections of the acme
 // namespace: "old" holds the unit pulumi:acme/web/prod, and "payments" is empty.
-func newCollectionRouteHandler(t *testing.T, authz identity.Authorizer) *apiinventory.Handler {
+func newCollectionRouteHandler(t *testing.T, authz identity.Authorizer) testHandler {
 	t.Helper()
 
 	nsStore := &memNamespaceStore{namespaces: map[namespace.Name]namespace.Namespace{}}
@@ -50,7 +50,7 @@ func newCollectionRouteHandler(t *testing.T, authz identity.Authorizer) *apiinve
 		t.Fatalf("namespace service: %v", err)
 	}
 
-	handler, err := apiinventory.NewHandler(apiinventory.Config{
+	handler, err := newCheckedHandler(t, apiinventory.Config{
 		OutputSharing: nil,
 		Outputs:       nil,
 		Views:         nil,

@@ -240,7 +240,7 @@ func newMoveFixtureFull(
 		locks = lockSvc(nsStore)
 	}
 
-	handler, err := apiinventory.NewHandler(apiinventory.Config{
+	handler, err := newCheckedHandler(t, apiinventory.Config{
 		OutputSharing: nil,
 		Outputs:       nil,
 		Views:         nil,

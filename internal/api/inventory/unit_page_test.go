@@ -9,7 +9,6 @@ import (
 	"sync"
 	"testing"
 
-	apiinventory "opendustpan.org/opendustpan/internal/api/inventory"
 	"opendustpan.org/opendustpan/pkg/identity"
 	coreinventory "opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -54,7 +53,7 @@ func (r *recordingReader) recorded() []coreinventory.UnitQuery {
 
 // manyUnits returns a reader of n Pulumi stacks of acme, unit-000 and up,
 // the even ones with the label team=a, and a handler over it with authz.
-func manyUnits(t *testing.T, n int, authz identity.Authorizer) (*recordingReader, *apiinventory.Handler) {
+func manyUnits(t *testing.T, n int, authz identity.Authorizer) (*recordingReader, testHandler) {
 	t.Helper()
 
 	nsStore := &memNamespaceStore{namespaces: map[namespace.Name]namespace.Namespace{}}

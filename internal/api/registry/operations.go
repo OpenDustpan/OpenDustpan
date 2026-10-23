@@ -19,6 +19,7 @@ var operationLabels = map[string]apidesc.Label{
 	// application/octet-stream. The description holds JSON bodies only, so it
 	// does not show this body.
 	apidesc.Pattern(http.MethodPost, uploadsPath): apidesc.Name("stageRegistryUpload", tagRegistry).
+		WithStatus(http.StatusCreated).
 		On(apidesc.KindNamespace).
 		WithBodies(apidesc.NoBody, apidesc.Typed[stagedDocument]("StagedUpload")),
 	apidesc.Pattern(http.MethodPut, versionPath): apidesc.Name("publishProviderRelease", tagRegistry).
@@ -43,6 +44,7 @@ var operationLabels = map[string]apidesc.Label{
 		On(apidesc.KindNamespace).
 		WithBodies(apidesc.NoBody, releaseBody),
 	apidesc.Pattern(http.MethodPost, keysPath): apidesc.Name("addRegistryKey", tagRegistry).
+		WithStatus(http.StatusCreated).
 		On(apidesc.KindNamespace).
 		WithBodies(apidesc.Typed[keyBody]("AddRegistryKeyRequest"), keyResponse),
 	apidesc.Pattern(http.MethodGet, keysPath): apidesc.Name("listRegistryKeys", tagRegistry).

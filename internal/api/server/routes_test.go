@@ -193,7 +193,7 @@ func (stubNamespaceStore) ListNamespaces(_ context.Context) ([]namespace.Namespa
 
 func (stubNamespaceStore) Ping(_ context.Context) error { return nil }
 
-func newTestHandler(t *testing.T) *apiserver.Handler {
+func newTestHandler(t *testing.T) testHandler {
 	t.Helper()
 
 	return newServiceBackedHandler(t, stubAuthenticator{}, stubAuthorizer{}, failedSeed())
@@ -202,7 +202,7 @@ func newTestHandler(t *testing.T) *apiserver.Handler {
 // newEnforcingHandler builds a Handler whose authorization the caller
 // controls, so the enforcement tests can tell authorization apart from
 // backend failures.
-func newEnforcingHandler(t *testing.T, authz identity.Authorizer) *apiserver.Handler {
+func newEnforcingHandler(t *testing.T, authz identity.Authorizer) testHandler {
 	t.Helper()
 
 	return newServiceBackedHandler(t, tokenAuthenticator{}, authz, failedSeed())
@@ -247,7 +247,7 @@ func newServiceBackedHandler(
 	authn identity.Authenticator,
 	authz identity.Authorizer,
 	seeds ...backup.Record,
-) *apiserver.Handler {
+) testHandler {
 	t.Helper()
 
 	handler, _ := newServiceBackedHandlerOf(t, authn, authz, seeds...)
@@ -262,7 +262,7 @@ func newServiceBackedHandlerOf(
 	authn identity.Authenticator,
 	authz identity.Authorizer,
 	seeds ...backup.Record,
-) (*apiserver.Handler, *sqlite.Store) {
+) (testHandler, *sqlite.Store) {
 	t.Helper()
 
 	st := openRouteTestStore(t)
@@ -303,7 +303,7 @@ func newServiceBackedHandlerOf(
 		t.Fatalf("make dev sign-in code: %v", err)
 	}
 
-	handler, err := apiserver.NewHandler(apiserver.Config{
+	handler, err := newCheckedHandler(t, apiserver.Config{
 		Workers:          nil,
 		InstallationKind: "",
 		Now:              nil,
@@ -975,7 +975,7 @@ func checkAuthorizedRoute(t *testing.T, route apiserver.Route, public map[string
 
 // probeRoute checks that a declared route is registered: a request without a
 // token must fail closed, never with 404.
-func probeRoute(t *testing.T, handler *apiserver.Handler, route apiserver.Route) {
+func probeRoute(t *testing.T, handler testHandler, route apiserver.Route) {
 	t.Helper()
 
 	req := routeRequest(t, route, "")
@@ -1441,7 +1441,7 @@ func checkAuthorizedRouteObject(t *testing.T, route apiserver.Route) {
 }
 
 // sameRoute returns the row of h with the method and the path of route.
-func sameRoute(t *testing.T, h *apiserver.Handler, route apiserver.Route) apiserver.Route {
+func sameRoute(t *testing.T, h testHandler, route apiserver.Route) apiserver.Route {
 	t.Helper()
 
 	for _, r := range h.Routes() {
@@ -1654,7 +1654,7 @@ func TestNewHandlerKeepsBackupService(t *testing.T) {
 		t.Fatalf("namespace service: %v", err)
 	}
 
-	handler, err := apiserver.NewHandler(apiserver.Config{
+	handler, err := newCheckedHandler(t, apiserver.Config{
 		Preferences:      nil,
 		GitHost:          nil,
 		Idempotency:      nil,
@@ -1696,7 +1696,7 @@ func TestNewHandlerKeepsBackupService(t *testing.T) {
 		t.Fatal("handler keeps another backup service, want the configured one")
 	}
 
-	without, err := apiserver.NewHandler(apiserver.Config{
+	without, err := newCheckedHandler(t, apiserver.Config{
 		Preferences:      nil,
 		GitHost:          nil,
 		Idempotency:      nil,

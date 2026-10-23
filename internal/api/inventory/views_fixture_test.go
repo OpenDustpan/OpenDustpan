@@ -191,7 +191,7 @@ func (a *scriptedAuthorizer) calls() []recordedCall {
 
 // viewFixture is a handler with saved views over a real SQLite store.
 type viewFixture struct {
-	handler *apiinventory.Handler
+	handler testHandler
 	store   *sqlite.Store
 	people  *viewPeople
 	authz   *scriptedAuthorizer
@@ -277,7 +277,7 @@ func newViewFixtureWith(t *testing.T, opts viewFixtureOptions) *viewFixture {
 
 	reader := &memReader{entries: map[namespace.Name][]coreinventory.Entry{"acme": labeledEntries()}, err: nil}
 
-	handler, err := apiinventory.NewHandler(apiinventory.Config{
+	handler, err := newCheckedHandler(t, apiinventory.Config{
 		OutputSharing: nil,
 		Outputs:       nil,
 		Views:         &apiinventory.ViewsConfig{Service: service, Principals: people, Idempotency: idem},

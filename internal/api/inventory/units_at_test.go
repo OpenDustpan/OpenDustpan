@@ -91,7 +91,7 @@ type unitsAtBody struct {
 
 func newHistoryHandler(
 	t *testing.T, history coreinventory.HistoryReader, authz identity.Authorizer,
-) *apiinventory.Handler {
+) testHandler {
 	t.Helper()
 
 	return newHistoryHandlerWithURL(t, history, authz, "")
@@ -101,7 +101,7 @@ func newHistoryHandler(
 // server.
 func newHistoryHandlerWithURL(
 	t *testing.T, history coreinventory.HistoryReader, authz identity.Authorizer, publicURL string,
-) *apiinventory.Handler {
+) testHandler {
 	t.Helper()
 
 	nsStore := &memNamespaceStore{namespaces: map[namespace.Name]namespace.Namespace{}}
@@ -112,7 +112,7 @@ func newHistoryHandlerWithURL(
 		t.Fatalf("namespace service: %v", err)
 	}
 
-	handler, err := apiinventory.NewHandler(apiinventory.Config{
+	handler, err := newCheckedHandler(t, apiinventory.Config{
 		OutputSharing: nil,
 		Outputs:       nil,
 		Views:         nil,
@@ -140,7 +140,7 @@ func newHistoryHandlerWithURL(
 	return handler
 }
 
-func getUnitsAt(t *testing.T, handler *apiinventory.Handler, at string) (*httptest.ResponseRecorder, unitsAtBody) {
+func getUnitsAt(t *testing.T, handler testHandler, at string) (*httptest.ResponseRecorder, unitsAtBody) {
 	t.Helper()
 
 	rec := authorizedGet(t, handler, "/api/dustpan/v1/namespaces/acme/units?at="+at, "test-token")
@@ -287,7 +287,7 @@ func TestListUnitsAtErrors(t *testing.T) {
 	withoutHistory := newHistoryHandler(t, nil, selectiveAuthorizer{deny: nil})
 
 	cases := []struct {
-		handler *apiinventory.Handler
+		handler testHandler
 		name    string
 		at      string
 		want    int

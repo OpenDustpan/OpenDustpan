@@ -31,7 +31,7 @@ type sessionPolicyDoc struct {
 // newSessionPolicyHandler builds a Handler over a fresh SQLite store whose
 // session policy routes run with authz. The store keeps the audit log of
 // @server.
-func newSessionPolicyHandler(t *testing.T, authz identity.Authorizer) (*sqlite.Store, *apiserver.Handler) {
+func newSessionPolicyHandler(t *testing.T, authz identity.Authorizer) (*sqlite.Store, testHandler) {
 	t.Helper()
 
 	st := openRouteTestStore(t)
@@ -46,7 +46,7 @@ func newSessionPolicyHandler(t *testing.T, authz identity.Authorizer) (*sqlite.S
 		t.Fatalf("session policy service: %v", err)
 	}
 
-	handler, err := apiserver.NewHandler(apiserver.Config{
+	handler, err := newCheckedHandler(t, apiserver.Config{
 		Preferences:      nil,
 		GitHost:          nil,
 		Idempotency:      nil,
@@ -89,7 +89,7 @@ func newSessionPolicyHandler(t *testing.T, authz identity.Authorizer) (*sqlite.S
 
 // serveSessionPolicy sends one request to the session policy route with
 // the test token.
-func serveSessionPolicy(t *testing.T, h *apiserver.Handler, method, body string) *httptest.ResponseRecorder {
+func serveSessionPolicy(t *testing.T, h testHandler, method, body string) *httptest.ResponseRecorder {
 	t.Helper()
 
 	var reader io.Reader = http.NoBody

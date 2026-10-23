@@ -230,7 +230,7 @@ func (denyUnits) ListObjects(_ context.Context, p identity.Principal, _ identity
 
 func newBehaviorHandler(
 	t *testing.T, nsStore *memNamespaceStore, reader *memReader, authz identity.Authorizer,
-) *apiinventory.Handler {
+) testHandler {
 	t.Helper()
 
 	return newBehaviorHandlerWithSessions(t, nsStore, reader, authz, nil)
@@ -241,7 +241,7 @@ func newBehaviorHandler(
 func newBehaviorHandlerWithSessions(
 	t *testing.T, nsStore *memNamespaceStore, reader *memReader, authz identity.Authorizer,
 	sessions *sessionauth.Checker,
-) *apiinventory.Handler {
+) testHandler {
 	t.Helper()
 
 	return newBehaviorHandlerWith(t, nsStore, reader, authz, behaviorWiring{
@@ -263,7 +263,7 @@ type behaviorWiring struct {
 func newBehaviorHandlerWith(
 	t *testing.T, nsStore *memNamespaceStore, reader coreinventory.Reader, authz identity.Authorizer,
 	wiring behaviorWiring,
-) *apiinventory.Handler {
+) testHandler {
 	t.Helper()
 
 	namespaces, err := namespace.NewService(
@@ -273,7 +273,7 @@ func newBehaviorHandlerWith(
 		t.Fatalf("namespace service: %v", err)
 	}
 
-	handler, err := apiinventory.NewHandler(apiinventory.Config{
+	handler, err := newCheckedHandler(t, apiinventory.Config{
 		OutputSharing: nil,
 		Outputs:       nil,
 		Views:         nil,
@@ -302,7 +302,7 @@ func newBehaviorHandlerWith(
 }
 
 func authorizedGet(
-	t *testing.T, handler *apiinventory.Handler, target, token string,
+	t *testing.T, handler testHandler, target, token string,
 ) *httptest.ResponseRecorder {
 	t.Helper()
 
@@ -437,7 +437,7 @@ func seedEntries(nsStore *memNamespaceStore, reader *memReader) {
 	}
 }
 
-func newSeededHandler(t *testing.T, authz identity.Authorizer) *apiinventory.Handler {
+func newSeededHandler(t *testing.T, authz identity.Authorizer) testHandler {
 	t.Helper()
 
 	nsStore := &memNamespaceStore{namespaces: map[namespace.Name]namespace.Namespace{}}
