@@ -1,37 +1,10 @@
 # The error paths of internal/api/inventory that answer without a code of the
 # catalog. This list only shrinks: give a path a code, remove its line and
 # lower the limit. A new error path never goes on this list.
-limit 58
+limit 31
 Handler.guardStateWrite: errorResponse{}
 Handler.guardStateWrite: gate.ErrRuleFailed
 Handler.guardStateWrite: gate.ErrUnavailable
-Handler.writeError: errorResponse{}
-Handler.writeOutputsError: outputshare.ErrClientEncrypted
-Handler.writeOutputsError: outputsharesvc.ErrNoState
-Handler.writeOutputsError: outputsharesvc.ErrStateMoved
-classify: collection.ErrAlreadyExists
-classify: collection.ErrCollectionChanged
-classify: collection.ErrInvalidName
-classify: collection.ErrMoveOutOfLockedCollection
-classify: collection.ErrNoCollection
-classify: collection.ErrNotEmpty
-classify: collection.ErrNotFound
-classify: collection.ErrUnitNotFound
-classify: coreinventory.ErrUnitNotFound
-classify: errCollectionBody
-classify: errMissingOrganization
-classify: errMissingUnit
-classify: errMoveBody
-classify: errOutputSharingBody
-classify: identity.ErrInvalidObject
-classify: namespace.ErrInvalidName
-classify: namespace.ErrNotFound
-classifyAuth: default
-classifyAuth: identity.ErrDenied
-classifyAuth: identity.ErrRateLimited
-classifyAuth: identity.ErrUnauthenticated
-classifyAuth: sessionauth.ErrCSRF
-classifyAuth: sessionauth.ErrOtherSite
 classifyChange: coreinventory.ErrInvalidName
 classifyChange: coreinventory.ErrNameTaken
 classifyChange: coreinventory.ErrNotFound
