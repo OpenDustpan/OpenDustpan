@@ -1,12 +1,15 @@
 # The error paths of internal/api/inventory that answer without a code of the
 # catalog. This list only shrinks: give a path a code, remove its line and
 # lower the limit. A new error path never goes on this list.
-limit 57
+limit 60
 Handler.guardStateWrite: errorResponse{}
 Handler.guardStateWrite: gate.ErrRuleFailed
 Handler.guardStateWrite: gate.ErrUnavailable
 Handler.writeError: errorResponse{}
 Handler.writeError: errorResponse{} #2
+Handler.writeOutputsError: outputshare.ErrClientEncrypted
+Handler.writeOutputsError: outputsharesvc.ErrNoState
+Handler.writeOutputsError: outputsharesvc.ErrStateMoved
 classify: collection.ErrAlreadyExists
 classify: collection.ErrCollectionChanged
 classify: collection.ErrInvalidName

@@ -260,13 +260,13 @@ func checkJSONAPINotFound(t *testing.T, body, target string) {
 }
 
 // TestStateDiffDenied proves the diff route needs unit:read: a caller
-// without it answers the 404 of an unknown state version, so the answer
-// does not tell that the unit exists.
+// without it and without unit:read-outputs answers the 404 of an unknown state
+// version, so the answer does not tell that the unit exists.
 func TestStateDiffDenied(t *testing.T) {
 	t.Parallel()
 
 	handler := newStateHandler(t, selectiveAuthorizer{
-		deny: map[identity.Action]bool{identity.ActionUnitRead: true},
+		deny: map[identity.Action]bool{identity.ActionUnitRead: true, identity.ActionUnitReadOutputs: true},
 	})
 
 	rec := httptest.NewRecorder()

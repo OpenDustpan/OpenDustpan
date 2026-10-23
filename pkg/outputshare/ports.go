@@ -399,8 +399,9 @@ type Attachments interface {
 // checker.
 type State struct {
 	// ID names the latest state: the ID of the current state version, or the
-	// version of the latest checkpoint in decimal. It is empty for a unit
-	// with no state.
+	// stable ID of the stack and the version of the latest checkpoint, joined
+	// with a colon. An ID names its unit, so the ID of a state of another unit
+	// never matches. It is empty for a unit with no state.
 	ID string
 	// ClientEncrypted is true when the client encrypted the latest state, so
 	// that the server cannot read its outputs or reduce it. A tool whose client never
