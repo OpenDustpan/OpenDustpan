@@ -1,6 +1,6 @@
 # 35. The SDK lives in pkg/, internal code in internal/
 
-Status: accepted · 2026-10-11 · supersedes ADR 2
+Status: accepted · 2026-10-11 · supersedes ADR 2 · decision 1 superseded in part by ADR 272
 
 ## Context
 

@@ -17,6 +17,7 @@ import (
 	"slices"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/api/apidesc"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/principal"
@@ -27,9 +28,9 @@ const (
 	// Cookie is the name of the session cookie. The prefix __Host- makes
 	// the browser refuse a cookie that is not Secure, that has a Domain, or
 	// whose Path is not "/".
-	Cookie = "__Host-dustpan_session"
+	Cookie = apidesc.SessionCookie
 	// CSRFHeader is the header that carries the CSRF value of the session.
-	CSRFHeader = "X-Dustpan-Csrf"
+	CSRFHeader = apidesc.CSRFHeader
 )
 
 // Errors of the cookie check. Each wraps identity.ErrDenied.
@@ -111,12 +112,12 @@ func (c *Checker) Authenticate(r *http.Request) (identity.Principal, Caller, err
 		return identity.Principal{}, none, identity.ErrUnauthenticated
 	}
 
-	cookie, err := r.Cookie(Cookie)
-	if err != nil {
+	value, found := apidesc.Cookie(r, Cookie)
+	if !found {
 		return identity.Principal{}, none, identity.ErrUnauthenticated
 	}
 
-	secret, err := session.ParseSecret(cookie.Value)
+	secret, err := session.ParseSecret(value)
 	if err != nil {
 		return identity.Principal{}, none, identity.ErrUnauthenticated
 	}
@@ -125,7 +126,7 @@ func (c *Checker) Authenticate(r *http.Request) (identity.Principal, Caller, err
 		return identity.Principal{}, none, ErrOtherSite
 	}
 
-	if changesState(r.Method) && !session.CheckCSRF(secret, r.Header.Get(CSRFHeader)) {
+	if changesState(r.Method) && !session.CheckCSRF(secret, apidesc.Header(r, CSRFHeader)) {
 		return identity.Principal{}, none, ErrCSRF
 	}
 
@@ -176,11 +177,11 @@ func (c *Checker) Now() time.Time {
 // where it comes from: its Origin header, when present, must be an allowed
 // origin; without one, the browser must not mark it as cross-site.
 func (c *Checker) sameSite(r *http.Request) bool {
-	if origin := r.Header.Get("Origin"); origin != "" {
+	if origin := apidesc.Header(r, "Origin"); origin != "" {
 		return slices.Contains(c.origins, origin)
 	}
 
-	return r.Header.Get("Sec-Fetch-Site") != "cross-site"
+	return apidesc.Header(r, "Sec-Fetch-Site") != "cross-site"
 }
 
 // changesState reports whether a request with method can change state:
@@ -219,7 +220,7 @@ func AuditChannel(r *http.Request, header string) audit.Channel {
 		return audit.ChannelConsole
 	}
 
-	return audit.NormalizeChannel(r.Header.Get(header))
+	return audit.NormalizeChannel(apidesc.Header(r, header))
 }
 
 // SignIn is the authentication at the identity provider of the session

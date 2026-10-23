@@ -7,6 +7,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
+	"math"
 	"net/http"
 	"strconv"
 	"strings"
@@ -333,6 +335,26 @@ func (h *Handler) listWorkspaces(
 		return
 	}
 
+	every, err := h.readsEveryUnit(ctx, p, ns)
+	if err != nil {
+		h.writeError(ctx, w, err)
+
+		return
+	}
+
+	if every {
+		served, pageErr := h.listWorkspacePage(ctx, w, p, ns, page)
+		if pageErr != nil {
+			h.writeError(ctx, w, pageErr)
+
+			return
+		}
+
+		if served {
+			return
+		}
+	}
+
 	all, err := h.workspaces.List(ctx, ns)
 	if err != nil {
 		h.writeError(ctx, w, err)
@@ -340,14 +362,103 @@ func (h *Handler) listWorkspaces(
 		return
 	}
 
-	visible, err := h.filterReadable(ctx, p, filterWorkspaces(all, r.URL.Query().Get("search[name]")))
+	visible, err := h.filterReadable(ctx, p, filterWorkspaces(all, page.search))
 	if err != nil {
 		h.writeError(ctx, w, err)
 
 		return
 	}
 
-	h.writeWorkspaceList(ctx, w, p, visible, page)
+	h.writeWorkspaceList(ctx, w, p, workspace.ListPage{Workspaces: pageOf(visible, page), Total: len(visible)}, page)
+}
+
+// readsEveryUnit reports whether the scope of unit:read of p holds every unit
+// of ns: a grant on the installation or on the namespace, from an authorizer
+// whose scope is exact. The list of such a caller pages and counts in the
+// store. Any other caller, and any caller of an authorizer that does not say
+// that its scope is exact, lists every workspace and checks each one: the
+// count of the store holds the workspaces that the scope names, not the
+// workspaces that Authorize allows.
+func (h *Handler) readsEveryUnit(ctx context.Context, p identity.Principal, ns namespace.Name) (bool, error) {
+	// Defense in depth: the page check below drops a denied workspace too.
+	// This check stays so that the count of the page cannot show a workspace
+	// that the page leaves out.
+	if !identity.HasExactScope(h.authz) {
+		return false, nil
+	}
+
+	// Defense in depth: the authorizer says that its scope is exact, and the
+	// route authorizes namespace:read first. This check of unit:read on the
+	// namespace stays so that a scope with All set, or an authorizer that
+	// refuses the units of ns, cannot take the store path and show the count
+	// of the store. A refusal sends the caller to the check of each workspace.
+	authErr := h.authz.Authorize(ctx, p, identity.ActionUnitRead, identity.NamespaceObject(ns))
+	if authErr != nil {
+		if errors.Is(authErr, identity.ErrDenied) {
+			return false, nil
+		}
+
+		return false, fmt.Errorf("authorize unit:read on namespace %q: %w", ns, authErr)
+	}
+
+	scope, err := h.authz.ListObjects(ctx, p, identity.ActionUnitRead)
+	if err != nil {
+		return false, fmt.Errorf("list readable units: %w", err)
+	}
+
+	if scope.All {
+		return true, nil
+	}
+
+	for i := range scope.Namespaces {
+		if scope.Namespaces[i].Namespace() == ns {
+			return true, nil
+		}
+	}
+
+	return false, nil
+}
+
+// listWorkspacePage writes one page of the workspaces of ns whose name holds
+// the search of the page, for a caller who may read every unit of ns. The
+// store reads the page and the count. It reports false, and writes nothing,
+// when the check of unit:read drops a workspace of the page: the count of the
+// store then holds workspaces that the caller may not read, and the caller of
+// this function lists with the check of each workspace.
+func (h *Handler) listWorkspacePage(
+	ctx context.Context, w http.ResponseWriter, p identity.Principal, ns namespace.Name, page workspacePage,
+) (bool, error) {
+	offset := math.MaxInt
+	if page.number-1 <= (math.MaxInt-page.size)/page.size {
+		offset = (page.number - 1) * page.size
+	}
+
+	got, err := h.workspaces.Query(ctx, workspace.ListQuery{
+		Namespace: ns, NameContains: page.search, Offset: offset, Limit: page.size,
+	})
+	if err != nil {
+		return false, err
+	}
+
+	// Defense in depth: the scope of the caller holds every unit of ns, and
+	// the authorizer says that its scope is exact. This check stays so that
+	// an authorizer whose scope and decisions differ cannot show a workspace
+	// that the caller may not read, and cannot show its count.
+	visible, err := h.filterReadable(ctx, p, got.Workspaces)
+	if err != nil {
+		return false, err
+	}
+
+	if len(visible) != len(got.Workspaces) {
+		h.logger.WarnContext(ctx, "workspace page holds a denied workspace: listing with a check of each workspace",
+			slog.String("namespace", ns.String()))
+
+		return false, nil
+	}
+
+	h.writeWorkspaceList(ctx, w, p, workspace.ListPage{Workspaces: visible, Total: got.Total}, page)
+
+	return true, nil
 }
 
 // filterReadable keeps the workspaces the caller may unit:read. A denied
@@ -394,8 +505,10 @@ func filterWorkspaces(all []workspace.Workspace, search string) []workspace.Work
 	return kept
 }
 
-// workspacePage holds one list page request: the page number and size.
+// workspacePage holds one list page request: the page number and size, and
+// the search[name] value.
 type workspacePage struct {
+	search string
 	number int
 	size   int
 }
@@ -419,7 +532,7 @@ func parseWorkspacePage(r *http.Request) (workspacePage, error) {
 		size = maxPageSize
 	}
 
-	return workspacePage{number: number, size: size}, nil
+	return workspacePage{search: r.URL.Query().Get("search[name]"), number: number, size: size}, nil
 }
 
 // workspacePageValue parses one page query value, or returns fallback when
@@ -452,18 +565,11 @@ func (h *Handler) writeWorkspace(
 	h.writeJSON(ctx, w, status, workspaceDocument{Data: doc})
 }
 
-// writeWorkspaceList writes one page of the workspace list with the
-// meta.pagination object go-tfe reads. The start and end stay within the
-// list without overflow: page number and size come from the caller.
-func (h *Handler) writeWorkspaceList(
-	ctx context.Context, w http.ResponseWriter, p identity.Principal, all []workspace.Workspace, page workspacePage,
-) {
+// pageOf returns the workspaces of the page in all. The start and the end of
+// the page stay within the list without overflow: the page number and size
+// come from the caller.
+func pageOf(all []workspace.Workspace, page workspacePage) []workspace.Workspace {
 	total := len(all)
-
-	pages := 0
-	if total > 0 {
-		pages = (total-1)/page.size + 1
-	}
 
 	start := total
 	if page.number-1 <= total/page.size {
@@ -475,21 +581,37 @@ func (h *Handler) writeWorkspaceList(
 		end = start + page.size
 	}
 
-	items := make([]workspaceResource, 0, end-start)
+	return all[start:end]
+}
 
-	for i := range all[start:end] {
-		doc, err := h.workspaceDocument(ctx, p, all[start+i])
+// writeWorkspaceList writes the workspaces of one page of the workspace list
+// with the meta.pagination object go-tfe reads. list.Total is the count of
+// the workspaces on every page.
+func (h *Handler) writeWorkspaceList(
+	ctx context.Context, w http.ResponseWriter, p identity.Principal, list workspace.ListPage, page workspacePage,
+) {
+	items, total := list.Workspaces, list.Total
+
+	pages := 0
+	if total > 0 {
+		pages = (total-1)/page.size + 1
+	}
+
+	docs := make([]workspaceResource, 0, len(items))
+
+	for i := range items {
+		doc, err := h.workspaceDocument(ctx, p, items[i])
 		if err != nil {
 			h.writeError(ctx, w, err)
 
 			return
 		}
 
-		items = append(items, doc)
+		docs = append(docs, doc)
 	}
 
 	h.writeJSON(ctx, w, http.StatusOK, workspaceListDocument{
-		Data: items,
+		Data: docs,
 		Meta: workspaceListMeta{Pagination: paginate(page, total, pages)},
 	})
 }

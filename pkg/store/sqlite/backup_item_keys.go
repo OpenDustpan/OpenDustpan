@@ -7,6 +7,7 @@ import (
 
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/store/internal/codec"
+	"opendustpan.org/opendustpan/pkg/store/internal/jobstore"
 )
 
 // sqliteItemKeyBackupTables holds the backup columns of the item key table,
@@ -30,7 +31,11 @@ func checkStagedOwnedRows(ctx context.Context, conn *sql.DB) error {
 		return err
 	}
 
-	return checkStagedItemKeys(ctx, conn)
+	if err := checkStagedItemKeys(ctx, conn); err != nil {
+		return err
+	}
+
+	return checkStagedJobArtifacts(ctx, conn)
 }
 
 // checkStagedItemKeys checks each item key row of a staged backup with the
@@ -81,6 +86,64 @@ FROM item_keys AS k LEFT JOIN namespaces AS n ON n.id = k.namespace_id`
 
 	if rowsErr := rows.Err(); rowsErr != nil {
 		return fmt.Errorf("read staged item keys: %w", backup.ErrExportRead)
+	}
+
+	return nil
+}
+
+// checkStagedJobArtifacts checks the rows of plans, log versions and log chunks
+// of a staged backup: each row names a namespace that the backup holds, and
+// each plan body is the plan of its row. A row that fails makes the backup
+// corrupt. It returns backup.ErrCorrupt.
+//
+// Defense in depth: the store checks a plan again when it reads it. This check
+// stays so that a bad row fails the restore and does not wait for a reader.
+func checkStagedJobArtifacts(ctx context.Context, conn *sql.DB) error {
+	for _, table := range []string{"job_logs", "job_log_chunks"} {
+		var orphans int64
+
+		query := "SELECT COUNT(*) FROM " + table + " AS t LEFT JOIN namespaces AS n ON n.id = t.namespace_id " +
+			"WHERE n.id IS NULL"
+		if err := conn.QueryRowContext(ctx, query).Scan(&orphans); err != nil {
+			return fmt.Errorf("read staged %s: %w", table, backup.ErrExportRead)
+		}
+
+		if orphans > 0 {
+			return fmt.Errorf("staged %s has %d rows with no namespace: %w", table, orphans, backup.ErrCorrupt)
+		}
+	}
+
+	rows, err := conn.QueryContext(ctx, `SELECT p.id, n.id, p.body FROM job_plans AS p
+LEFT JOIN namespaces AS n ON n.id = p.namespace_id`)
+	if err != nil {
+		return fmt.Errorf("read staged plans: %w", backup.ErrExportRead)
+	}
+
+	defer func() {
+		_ = rows.Close() //nolint:errcheck // Read-only check handle.
+	}()
+
+	for rows.Next() {
+		var (
+			id, body string
+			ns       sql.NullString
+		)
+
+		if scanErr := rows.Scan(&id, &ns, &body); scanErr != nil {
+			return fmt.Errorf("read staged plans: %w", backup.ErrExportRead)
+		}
+
+		if !ns.Valid {
+			return fmt.Errorf("staged plan %q has no namespace: %w", id, backup.ErrCorrupt)
+		}
+
+		if bodyErr := jobstore.CheckPlanBody(id, body); bodyErr != nil {
+			return fmt.Errorf("staged plan %q is not valid: %w: %w", id, bodyErr, backup.ErrCorrupt)
+		}
+	}
+
+	if rowsErr := rows.Err(); rowsErr != nil {
+		return fmt.Errorf("read staged plans: %w", backup.ErrExportRead)
 	}
 
 	return nil

@@ -31,9 +31,9 @@ func testClaimEventBound(t *testing.T, h Harness) {
 
 	f := setUp(t, h)
 	j := dispatched(t, h, f, plannedJob{unit: "", op: job.OperationRefresh, steps: changeSteps()})
-	a := claim(t, h, runnerOne, shortLease, runnerKind(&j))
+	a := claim(t, h, runnerOne, longRenew, runnerKind(&j))
 
-	expired(t, a.Claim)
+	lapse(t, h, &a)
 
 	b, err := claimAgain(t, h, runnerTwo, runnerKind(&j))
 	if err != nil {
@@ -112,9 +112,9 @@ func testClaimTwoTakeovers(t *testing.T, h Harness) {
 	f := setUp(t, h)
 	j := dispatched(t, h, f, plannedJob{unit: "", op: job.OperationRefresh, steps: changeSteps()})
 	kind := runnerKind(&j)
-	a := claim(t, h, runnerOne, shortLease, kind)
+	a := claim(t, h, runnerOne, longRenew, kind)
 
-	expired(t, a.Claim)
+	lapse(t, h, &a)
 
 	var (
 		c      job.Assignment
@@ -197,11 +197,15 @@ func testExpiryDuringCancel(t *testing.T, h Harness) {
 		spec := newJobWithSteps(unit, job.OperationRefresh, changeSteps())
 		first := create(t, h, onUnit, spec, dispatchOf(spec))
 
-		a := claim(t, h, runnerOne, shortLease, runnerKind(&first))
+		a := claim(t, h, runnerOne, longRenew, runnerKind(&first))
 
 		if tc.changed {
 			record(t, h, &a, beginApply(&a))
 		}
+
+		// Renew refuses a claim with a requested cancel, so the lease gets
+		// short before the cancel.
+		shorten(t, h, &a)
 
 		canceling := cancelJob(t, h, f, first.ID)
 		if canceling.State != job.StateCanceling {

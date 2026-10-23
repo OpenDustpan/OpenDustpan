@@ -549,43 +549,57 @@ func testDevStrip(t *testing.T, newStore DevDataFactory) {
 
 	base := newDevExport(t, newStore)
 
+	// Each case has its own target store and reads base only, so the cases
+	// run at the same time.
 	for _, tc := range devStripCases() {
-		export := tc.add(t, base)
-		dst := newStore(t, installation.KindProduction)
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 
-		export.mustStage(t, dst)
-
-		detected, err := dst.StripDevStaged(t.Context(), backup.DevStripDetect)
-		if err != nil {
-			t.Fatalf("%s: detect: %v", tc.name, err)
-		}
-
-		assertDevReport(t, tc, detected)
-
-		removed, err := dst.StripDevStaged(t.Context(), backup.DevStripRemove)
-		if err != nil {
-			t.Fatalf("%s: remove: %v", tc.name, err)
-		}
-
-		assertDevReport(t, tc, removed)
-
-		// After the removal the staged data holds no dev row.
-		again, err := dst.StripDevStaged(t.Context(), backup.DevStripDetect)
-		if err != nil {
-			t.Fatalf("%s: detect after the removal: %v", tc.name, err)
-		}
-
-		if again.HasDev() {
-			t.Fatalf("%s: dev data after the removal: %+v", tc.name, again)
-		}
-
-		// The swap takes the cleaned data, and the rows of other people stay.
-		if applyErr := dst.ApplyStaging(t.Context()); applyErr != nil {
-			t.Fatalf("%s: apply after the strip: %v", tc.name, applyErr)
-		}
-
-		assertAfterStrip(t, tc, dst)
+			checkDevStrip(t, newStore, base, tc)
+		})
 	}
+}
+
+// checkDevStrip stages the export of tc into a fresh production store, strips
+// it in both modes, swaps it in and checks the rows that stay.
+func checkDevStrip(t *testing.T, newStore DevDataFactory, base *devExport, tc devStripCase) {
+	t.Helper()
+
+	export := tc.add(t, base)
+	dst := newStore(t, installation.KindProduction)
+
+	export.mustStage(t, dst)
+
+	detected, err := dst.StripDevStaged(t.Context(), backup.DevStripDetect)
+	if err != nil {
+		t.Fatalf("%s: detect: %v", tc.name, err)
+	}
+
+	assertDevReport(t, tc, detected)
+
+	removed, err := dst.StripDevStaged(t.Context(), backup.DevStripRemove)
+	if err != nil {
+		t.Fatalf("%s: remove: %v", tc.name, err)
+	}
+
+	assertDevReport(t, tc, removed)
+
+	// After the removal the staged data holds no dev row.
+	again, err := dst.StripDevStaged(t.Context(), backup.DevStripDetect)
+	if err != nil {
+		t.Fatalf("%s: detect after the removal: %v", tc.name, err)
+	}
+
+	if again.HasDev() {
+		t.Fatalf("%s: dev data after the removal: %+v", tc.name, again)
+	}
+
+	// The swap takes the cleaned data, and the rows of other people stay.
+	if applyErr := dst.ApplyStaging(t.Context()); applyErr != nil {
+		t.Fatalf("%s: apply after the strip: %v", tc.name, applyErr)
+	}
+
+	assertAfterStrip(t, tc, dst)
 }
 
 // assertDevReport compares a report with the want of the case.
@@ -1014,9 +1028,13 @@ func testDevStripHostileBodies(t *testing.T, newStore DevDataFactory) {
 		for _, kind := range []string{kindRule, kindDefault, kindOwnerRle} {
 			label := name + " (" + kind + ")"
 
-			// A subtest closes its stores when it ends, so the number of cases
-			// does not decide how many connections the suite holds.
+			// A subtest closes its stores when it ends, and -parallel caps the
+			// subtests that run at once, so the number of cases does not decide
+			// how many connections the suite holds. The cases share base only
+			// to read it: with returns a copy.
 			t.Run(label, func(t *testing.T) {
+				t.Parallel()
+
 				checkHostileApproversBody(
 					t,
 					newStore,
@@ -1059,15 +1077,23 @@ func testDevSwapRefuses(t *testing.T, newStore DevDataFactory) {
 
 	base := newDevExport(t, newStore)
 
-	swaps := map[string]func(DevDataStore) error{
-		"plain": func(dst DevDataStore) error { return applyPlain(t, dst) },
-		"keep":  func(dst DevDataStore) error { return applyKeeping(t, dst) },
+	swaps := map[string]func(*testing.T, DevDataStore) error{
+		"plain": applyPlain,
+		"keep":  applyKeeping,
 	}
 
+	// Each case has its own target store and reads base only, so the cases
+	// run at the same time.
 	for _, tc := range devSwapCases() {
 		for kind, swap := range swaps {
-			dst := newStore(t, installation.KindProduction)
-			checkSwapRefused(t, tc.name+" ("+kind+")", dst, tc.add(t, base), swap)
+			name := tc.name + " (" + kind + ")"
+
+			t.Run(name, func(t *testing.T) {
+				t.Parallel()
+
+				dst := newStore(t, installation.KindProduction)
+				checkSwapRefused(t, name, dst, tc.add(t, base), func(dst DevDataStore) error { return swap(t, dst) })
+			})
 		}
 	}
 }

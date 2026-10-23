@@ -9,7 +9,6 @@ import (
 	"testing"
 	"time"
 
-	apiinventory "opendustpan.org/opendustpan/internal/api/inventory"
 	coreinventory "opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/namespace"
 )
@@ -44,7 +43,7 @@ func lockCombinationEntries() []coreinventory.Entry {
 	}
 }
 
-func newStateHandler(t *testing.T, entries []coreinventory.Entry) *apiinventory.Handler {
+func newStateHandler(t *testing.T, entries []coreinventory.Entry) testHandler {
 	t.Helper()
 
 	nsStore := &memNamespaceStore{namespaces: map[namespace.Name]namespace.Namespace{}}

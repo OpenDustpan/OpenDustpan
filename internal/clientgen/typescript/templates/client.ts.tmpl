@@ -1,0 +1,30 @@
+{{.Header}}
+
+import { execute } from "./execute.js";
+import type { Answer } from "./execute.js";
+import { operations } from "./operations.js";
+import type {
+{{- range .Operations}}
+  {{.Input}},
+{{- end}}
+} from "./operations.js";
+import type { ApiTransport } from "./transport.js";
+import type {
+{{- range .Types}}
+  {{.Name}},
+{{- end}}
+} from "./types.js";
+
+/** A typed client. Each method calls one operation through the transport and checks the answer. */
+export class Client {
+  readonly transport: ApiTransport;
+
+  constructor(transport: ApiTransport) {
+    this.transport = transport;
+  }
+{{range $op := .Operations}}
+{{jsdoc "  " $op.Doc}}  {{$op.ID}}(input: {{$op.Input}}{{if $op.InputOptional}} = {}{{end}}): Promise<Answer<{{$op.Result}}>> {
+    return execute(this.transport, operations.{{$op.ID}}, input);
+  }
+{{end -}}
+}

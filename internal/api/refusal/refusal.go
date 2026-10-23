@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/api/apidesc"
 	"opendustpan.org/opendustpan/internal/clientip"
 	"opendustpan.org/opendustpan/internal/denylimit"
 	"opendustpan.org/opendustpan/internal/requestid"
@@ -22,6 +23,10 @@ import (
 
 // channelHeader names the request header that tells the channel of a request.
 const channelHeader = "Dustpan-Channel"
+
+// ErrNoStore reports that New got no audit store. A recorder with no store
+// would let a refusal pass with no entry, so New fails closed.
+var ErrNoStore = errors.New("refusal recorder needs an audit store")
 
 // errNoServerStore reports that the audit store cannot write the scope of the
 // installation.
@@ -71,7 +76,8 @@ const suppressedSubject = "denial-limiter"
 // Recorder asks the Authorizer and writes one audit entry of the outcome
 // denied for each refusal, within the bound of its limiter: for one principal,
 // action, object kind and namespace it writes the first refusal of each
-// window, and counts the others. A nil store writes no entry.
+// window, and counts the others. A Recorder always has a store: New refuses
+// a nil store, so no refusal goes unrecorded.
 type Recorder struct {
 	authz      identity.Authorizer
 	store      audit.Store
@@ -118,14 +124,21 @@ func (r *Recorder) WithSurface(name string) *Recorder {
 }
 
 // New returns a Recorder. OnFailure runs when an append fails. Nil means no
-// counter.
+// counter. It returns ErrNoStore when store is nil.
 func New(
 	authz identity.Authorizer,
 	store audit.Store,
 	namespaces Namespaces,
 	logger *slog.Logger,
 	onFailure func(),
-) *Recorder {
+) (*Recorder, error) {
+	// Defense in depth: every adapter and NewServer check for a nil store
+	// too; this check stays so that a new caller cannot build a recorder
+	// that drops refusals.
+	if store == nil {
+		return nil, ErrNoStore
+	}
+
 	return &Recorder{
 		authz:      authz,
 		store:      store,
@@ -136,7 +149,7 @@ func New(
 		limiter: denylimit.New(
 			denylimit.Config{Window: 0, MaxKeys: 0, MaxFlush: 0, Now: nil, MaxKeysPerPrincipal: 0},
 		),
-	}
+	}, nil
 }
 
 // Authorize asks the Authorizer whether p may do action on obj, and returns
@@ -178,7 +191,7 @@ func (r *Recorder) Record(ctx context.Context, req *http.Request, p identity.Pri
 	// A guest has no subject. The adapters authenticate a caller before they
 	// check its routes, so a guest reaches here only through a bug, and it
 	// writes nothing.
-	if p.Subject == "" || r.store == nil {
+	if p.Subject == "" {
 		return
 	}
 
@@ -227,10 +240,6 @@ func (r *Recorder) Record(ctx context.Context, req *http.Request, p identity.Pri
 // context that has a short timeout. Flush returns after the writes ended or
 // ctx is done.
 func (r *Recorder) Flush(ctx context.Context) {
-	if r.store == nil {
-		return
-	}
-
 	r.writeAll(ctx, flushEntries(r.limiter.Drain()))
 }
 
@@ -514,7 +523,7 @@ func deniedEntry(
 	// no user agent and the default channel.
 	var userAgent, channel string
 	if req != nil {
-		userAgent, channel = req.UserAgent(), req.Header.Get(channelHeader)
+		userAgent, channel = apidesc.Header(req, "User-Agent"), apidesc.Header(req, channelHeader)
 	}
 
 	return audit.Entry{

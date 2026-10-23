@@ -34,7 +34,7 @@ func TestNamespaceIDBackfill(t *testing.T) {
 	}
 
 	before := slices.DeleteFunc(all, func(m migrate.Migration) bool { return m.Version >= namespaceIDVersion })
-	schemaURL := isolatedURL(t, base)
+	schemaURL := emptySchemaURL(t, base)
 
 	applyTagMigrations(ctx, t, schemaURL, before)
 

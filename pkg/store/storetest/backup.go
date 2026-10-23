@@ -282,6 +282,7 @@ func seedBackupStore(t *testing.T, s BackupStore) backupSeed {
 	profiles := seedBackupProfiles(t, s, acme)
 	seedBackupGate(t, s, acme)
 	seedBackupSavedViews(t, s, acme)
+	seedBackupDrift(t, s, acme)
 	seedBackupGitHost(t, s, acme)
 	seedBackupSinks(t, s, acme)
 	seedBackupItemKeys(t, s, acme)
@@ -508,6 +509,26 @@ func seedBackupSinks(t *testing.T, s BackupStore, acme namespace.Namespace) {
 
 	chat.Version, chat.SecretRefs = 1, []string{"itm-seedchat2"}
 	put(chat, "https://hooks.slack.com/services/T0/B0/seed-two")
+}
+
+// DriftSeeder is the capability of a backup store that can write a drift result
+// of a unit. The store of a SQL adapter needs direct SQL for the job that the
+// result names, so the test package of the adapter implements it.
+type DriftSeeder interface {
+	// SeedDriftResult records one drift result of a unit in ns, with one changed
+	// resource.
+	SeedDriftResult(t *testing.T, ns namespace.Namespace)
+}
+
+// seedBackupDrift writes one drift result in the namespace acme, when s can. A
+// store with no drift seeder skips it: the fake of this package's own tests is
+// one.
+func seedBackupDrift(t *testing.T, s BackupStore, acme namespace.Namespace) {
+	t.Helper()
+
+	if seeder, ok := s.(DriftSeeder); ok {
+		seeder.SeedDriftResult(t, acme)
+	}
 }
 
 // seedBackupGate writes one gate that reads a path set, so the store holds a
