@@ -30,45 +30,64 @@ func TestWriteErrorCodes(t *testing.T) {
 	active := &maintenance.ActiveWorkError{Work: []string{"pulumi/acme/web/prod", "opentofu/acme/net"}, Canceled: nil}
 
 	tests := []struct {
-		name   string
-		err    error
-		status int
-		code   string
-		args   map[string]any
+		name    string
+		err     error
+		status  int
+		code    string
+		args    map[string]any
+		message string
 	}{
-		{"unauthenticated", identity.ErrUnauthenticated, http.StatusUnauthorized, errcode.AuthUnauthenticated, nil},
-		{"denied", identity.ErrDenied, http.StatusForbidden, errcode.AccessDenied, nil},
-		{"invalid object", identity.ErrInvalidObject, http.StatusBadRequest, errcode.RequestInvalidObject, nil},
-		{"invalid namespace name", namespace.ErrInvalidName, http.StatusBadRequest, errcode.NamespaceInvalidName, nil},
+		{"unauthenticated", identity.ErrUnauthenticated, http.StatusUnauthorized, errcode.AuthUnauthenticated, nil, ""},
+		{"denied", identity.ErrDenied, http.StatusForbidden, errcode.AccessDenied, nil, ""},
+		{"invalid object", identity.ErrInvalidObject, http.StatusBadRequest, errcode.RequestInvalidObject, nil, ""},
+		{
+			"invalid body", apiserver.ErrInvalidBodyForTest, http.StatusBadRequest, errcode.RequestBodyInvalid, nil,
+			"invalid JSON body",
+		},
+		{
+			"invalid override switches body", apiserver.ErrOverrideSwitchesBodyForTest, http.StatusBadRequest,
+			errcode.RequestBodyInvalid, nil,
+			`invalid override switches body: provide {"allowForcedWrites":true|false,"allowUnlockedWrites":true|false}`,
+		},
+		{"invalid namespace name", namespace.ErrInvalidName, http.StatusBadRequest, errcode.NamespaceInvalidName, nil, ""},
+		{
+			"invalid namespace body", apiserver.ErrInvalidNamespaceBodyForTest, http.StatusBadRequest,
+			errcode.RequestBodyInvalid, nil, `invalid namespace body: provide {"name":"..."}`,
+		},
 		{
 			"invalid namespace page",
 			namespace.ErrInvalidPage,
 			http.StatusBadRequest,
 			errcode.RequestPageSizeInvalid,
 			nil,
+			"",
 		},
-		{"namespace exists", namespace.ErrAlreadyExists, http.StatusConflict, errcode.NamespaceAlreadyExists, nil},
-		{"fenced", namespace.ErrFenced, http.StatusConflict, errcode.NamespaceFenced, nil},
-		{"namespace not found", namespace.ErrNotFound, http.StatusNotFound, errcode.NamespaceNotFound, nil},
-		{"invalid state", maintenance.ErrInvalidState, http.StatusBadRequest, errcode.MaintenanceInvalidState, nil},
+		{
+			"invalid namespace cursor", apiserver.ErrNamespaceCursorForTest, http.StatusBadRequest,
+			errcode.RequestPageTokenInvalid, nil, "invalid cursor: provide the nextCursor of the page before",
+		},
+		{"namespace exists", namespace.ErrAlreadyExists, http.StatusConflict, errcode.NamespaceAlreadyExists, nil, ""},
+		{"fenced", namespace.ErrFenced, http.StatusConflict, errcode.NamespaceFenced, nil, ""},
+		{"namespace not found", namespace.ErrNotFound, http.StatusNotFound, errcode.NamespaceNotFound, nil, ""},
+		{"invalid state", maintenance.ErrInvalidState, http.StatusBadRequest, errcode.MaintenanceInvalidState, nil, ""},
 		{
 			"active work", active, http.StatusConflict, errcode.MaintenanceActiveWork,
-			map[string]any{"workCount": int64(2), "canceledCount": int64(0)},
+			map[string]any{"workCount": int64(2), "canceledCount": int64(0)}, "",
 		},
 		{
 			"active work without units", maintenance.ErrActiveWork, http.StatusConflict, errcode.MaintenanceActiveWork,
-			map[string]any{"workCount": int64(0), "canceledCount": int64(0)},
+			map[string]any{"workCount": int64(0), "canceledCount": int64(0)}, "",
 		},
-		{"held", maintenance.ErrHeld, http.StatusConflict, errcode.MaintenanceHeld, nil},
+		{"held", maintenance.ErrHeld, http.StatusConflict, errcode.MaintenanceHeld, nil, ""},
 		{
 			"in maintenance", maintenance.ErrInMaintenance, http.StatusServiceUnavailable,
-			errcode.MaintenanceInMaintenance, nil,
+			errcode.MaintenanceInMaintenance, nil, "",
 		},
 		{
 			"state unavailable", maintenance.ErrUnavailable, http.StatusInternalServerError,
-			errcode.MaintenanceUnavailable, nil,
+			errcode.MaintenanceUnavailable, nil, "",
 		},
-		{"unclassified", errUnclassified, http.StatusInternalServerError, errcode.ServerInternal, nil},
+		{"unclassified", errUnclassified, http.StatusInternalServerError, errcode.ServerInternal, nil, ""},
 	}
 
 	for _, tc := range tests {
@@ -86,6 +105,23 @@ func TestWriteErrorCodes(t *testing.T) {
 
 				errcodetest.CheckAnswer(t, errcodetest.ShapeCamelCase, tc.status, rec.Body.Bytes(),
 					errcodetest.Want{Code: tc.code, Args: tc.args, RequestBody: nil})
+
+				// Only the rows that name a message check it. The namespace paths answer
+				// the text of the error they got, which is the wrapped text when the error
+				// is wrapped; the request paths answer the sentinel text.
+				if tc.message != "" {
+					var body struct {
+						Message string `json:"message"`
+					}
+
+					if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+						t.Fatalf("decode %s: %v", rec.Body.String(), err)
+					}
+
+					if body.Message != tc.message && body.Message != err.Error() {
+						t.Fatalf("message = %q, want %q or %q: %s", body.Message, tc.message, err.Error(), rec.Body.String())
+					}
+				}
 			})
 		}
 	}
