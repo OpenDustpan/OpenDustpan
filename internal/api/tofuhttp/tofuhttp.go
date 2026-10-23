@@ -375,6 +375,41 @@ func classifyAccess(err error) (int, string, bool) {
 	}
 }
 
+// The texts of a refused write or unlock. Each names the cause and the step
+// that helps. They are fixed texts, so no text of the store reaches the
+// client.
+const (
+	notLockedText = "workspace is not locked: send LOCK first (OpenTofu sends it when locking is on). " +
+		"To write without the lock, turn on the unlocked-write switch of the namespace " +
+		"(PUT /api/server/namespaces/{namespace}/override-switches) and of the workspace " +
+		"(PUT /api/v2/workspaces/{id}/override-switches), and hold unit:write-unlocked"
+	forcedText = "write refused: a forced write needs the forced-write switch of the namespace " +
+		"(PUT /api/server/namespaces/{namespace}/override-switches) and of the workspace " +
+		"(PUT /api/v2/workspaces/{id}/override-switches) on, and unit:write-forced"
+	clientEncryptedText = "unlock refused: the state is encrypted by the client, so the server cannot fence it. " +
+		"Let the run that holds the lock finish, or force-unlock with unit:write-forced and both " +
+		"forced-write switches on"
+	overrideText = "write refused: an override is off or not granted"
+)
+
+// refusedWriteText returns the text of a 403 for a write or an unlock that
+// the lock or an override refuses: the client-encrypted state, the forced
+// write, the write without the lock, or else the general text.
+func refusedWriteText(err error) string {
+	override, _ := workspace.RefusedOverride(err)
+
+	switch {
+	case errors.Is(err, workspace.ErrClientEncrypted):
+		return clientEncryptedText
+	case override == workspace.OverrideForced:
+		return forcedText
+	case override == workspace.OverrideUnlocked, errors.Is(err, workspace.ErrNotLocked):
+		return notLockedText
+	default:
+		return overrideText
+	}
+}
+
 // classifyState maps the errors of a state write to a status. ok is false for
 // any other error.
 func classifyState(err error) (int, string, bool) {
@@ -388,7 +423,7 @@ func classifyState(err error) (int, string, bool) {
 		return http.StatusConflict, "state conflicts with the current state or lock", true
 	case errors.Is(err, workspace.ErrNotLocked), errors.Is(err, workspace.ErrOverrideRefused),
 		errors.Is(err, workspace.ErrClientEncrypted):
-		return http.StatusForbidden, "write refused: an override is off or not granted", true
+		return http.StatusForbidden, refusedWriteText(err), true
 	case errors.Is(err, workspace.ErrChecksumMismatch), errors.Is(err, workspace.ErrInvalidState):
 		return http.StatusBadRequest, "invalid state", true
 	case errors.Is(err, workspace.ErrTooLarge):
