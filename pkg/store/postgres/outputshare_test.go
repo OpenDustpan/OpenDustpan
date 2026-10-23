@@ -30,7 +30,7 @@ func outputShareHarness(base string) outputsharetest.Factory {
 		s := openURL(t, schemaURL)
 
 		return outputsharetest.Harness{
-			Store: nil, Checker: nil, Attachments: nil, States: nil,
+			Store: nil, Checker: nil, Attachments: nil, States: nil, Outputs: nil, SaveOutputs: nil, DeleteUnit: nil,
 			Settings: s.OutputSharingSettings(),
 			Namespace: func(t *testing.T, name string) namespace.Fence {
 				t.Helper()
