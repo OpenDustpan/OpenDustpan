@@ -712,6 +712,83 @@
         ],
         "type": "object"
       },
+      "DriftCheck": {
+        "properties": {
+          "jobId": {
+            "type": "string"
+          },
+          "unit": {
+            "$ref": "#/components/schemas/DriftUnit"
+          }
+        },
+        "required": [
+          "jobId",
+          "unit"
+        ],
+        "type": "object"
+      },
+      "DriftCheckLocation": {
+        "properties": {
+          "connection": {
+            "type": "string"
+          },
+          "directory": {
+            "type": "string"
+          },
+          "ref": {
+            "type": "string"
+          },
+          "repository": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "DriftResource": {
+        "properties": {
+          "address": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "address",
+          "kind"
+        ],
+        "type": "object"
+      },
+      "DriftStatus": {
+        "enum": [
+          "drifted",
+          "in-sync",
+          "unknown"
+        ],
+        "type": "string"
+      },
+      "DriftUnit": {
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "tool": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "tool"
+        ],
+        "type": "object"
+      },
       "ErrorResponse": {
         "properties": {
           "code": {
@@ -1008,6 +1085,9 @@
             "type": "array"
           },
           "pool": {
+            "type": "string"
+          },
+          "purpose": {
             "type": "string"
           },
           "reason": {
@@ -1612,6 +1692,24 @@
         ],
         "type": "object"
       },
+      "ListRegistryProvidersResponse": {
+        "properties": {
+          "nextPageToken": {
+            "type": "string"
+          },
+          "providers": {
+            "items": {
+              "$ref": "#/components/schemas/RegistryProvider"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "nextPageToken",
+          "providers"
+        ],
+        "type": "object"
+      },
       "ListUnitsResponse": {
         "properties": {
           "nextPageToken": {
@@ -1742,6 +1840,28 @@
         "required": [
           "delivered",
           "message"
+        ],
+        "type": "object"
+      },
+      "OutputSharing": {
+        "properties": {
+          "newUnitDefault": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "newUnitDefault"
+        ],
+        "type": "object"
+      },
+      "OutputSharingRequest": {
+        "properties": {
+          "newUnitDefault": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "newUnitDefault"
         ],
         "type": "object"
       },
@@ -2135,6 +2255,21 @@
         ],
         "type": "object"
       },
+      "RegistryProvider": {
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "namespace": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "namespace"
+        ],
+        "type": "object"
+      },
       "ReplaceNotificationSinkRequest": {
         "properties": {
           "name": {
@@ -2175,6 +2310,20 @@
           "size",
           "upload"
         ],
+        "type": "object"
+      },
+      "StartDriftCheckRequest": {
+        "properties": {
+          "location": {
+            "$ref": "#/components/schemas/DriftCheckLocation"
+          },
+          "pool": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          }
+        },
         "type": "object"
       },
       "StartJobRequest": {
@@ -2310,6 +2459,46 @@
           "states",
           "tool",
           "unitID"
+        ],
+        "type": "object"
+      },
+      "UnitDrift": {
+        "properties": {
+          "checkedAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "jobId": {
+            "type": "string"
+          },
+          "resources": {
+            "items": {
+              "$ref": "#/components/schemas/DriftResource"
+            },
+            "type": "array"
+          },
+          "status": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DriftStatus"
+              },
+              {
+                "type": "string"
+              }
+            ]
+          },
+          "truncated": {
+            "type": "boolean"
+          },
+          "unit": {
+            "$ref": "#/components/schemas/DriftUnit"
+          }
+        },
+        "required": [
+          "resources",
+          "status",
+          "truncated",
+          "unit"
         ],
         "type": "object"
       },
@@ -2532,16 +2721,28 @@
     },
     "securitySchemes": {
       "bearerAuth": {
-        "description": "An access token or a session of the console.",
+        "description": "An access token.",
         "scheme": "bearer",
         "type": "http"
+      },
+      "csrfHeader": {
+        "description": "The CSRF value of the session of the console. A request with the session cookie needs it when its method is not GET, HEAD or OPTIONS. Without it, or with a wrong value, the answer is 403 with the errorCode session.csrf. The server ignores it on the other methods.",
+        "in": "header",
+        "name": "X-Dustpan-Csrf",
+        "type": "apiKey"
+      },
+      "sessionCookie": {
+        "description": "The session of the console. A request that uses it also sends the csrfHeader scheme.",
+        "in": "cookie",
+        "name": "__Host-dustpan_session",
+        "type": "apiKey"
       }
     }
   },
   "info": {
     "description": "The tool-neutral REST API of an OpenDustpan server. The description covers the paths under /api/dustpan/v1/ only. A body has the schema of the Go type that the route names.",
     "title": "OpenDustpan REST API",
-    "version": "0.1.0"
+    "version": "0.3.0"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -2549,7 +2750,7 @@
       "get": {
         "operationId": "getCapabilities",
         "responses": {
-          "2XX": {
+          "200": {
             "content": {
               "application/json": {
                 "schema": {
@@ -2597,7 +2798,7 @@
           }
         ],
         "responses": {
-          "2XX": {
+          "204": {
             "description": "The request succeeded."
           },
           "default": {
@@ -2634,7 +2835,7 @@
           }
         ],
         "responses": {
-          "2XX": {
+          "200": {
             "content": {
               "application/json": {
                 "schema": {
@@ -2699,7 +2900,22 @@
           "required": true
         },
         "responses": {
-          "2XX": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GitHostApp"
+                }
+              }
+            },
+            "description": "The request succeeded.",
+            "headers": {
+              "ETag": {
+                "$ref": "#/components/headers/ETag"
+              }
+            }
+          },
+          "201": {
             "content": {
               "application/json": {
                 "schema": {
@@ -2740,7 +2956,7 @@
       "get": {
         "operationId": "listGitHostInstallations",
         "responses": {
-          "2XX": {
+          "200": {
             "content": {
               "application/json": {
                 "schema": {
@@ -2792,7 +3008,7 @@
           }
         ],
         "responses": {
-          "2XX": {
+          "204": {
             "description": "The request succeeded."
           },
           "default": {
@@ -2829,7 +3045,7 @@
           }
         ],
         "responses": {
-          "2XX": {
+          "200": {
             "content": {
               "application/json": {
                 "schema": {
@@ -2894,7 +3110,22 @@
           "required": true
         },
         "responses": {
-          "2XX": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GitHostInstallation"
+                }
+              }
+            },
+            "description": "The request succeeded.",
+            "headers": {
+              "ETag": {
+                "$ref": "#/components/headers/ETag"
+              }
+            }
+          },
+          "201": {
             "content": {
               "application/json": {
                 "schema": {
@@ -2935,7 +3166,7 @@
       "get": {
         "operationId": "getPreferences",
         "responses": {
-          "2XX": {
+          "200": {
             "content": {
               "application/json": {
                 "schema": {
@@ -2989,7 +3220,7 @@
           "required": true
         },
         "responses": {
-          "2XX": {
+          "200": {
             "content": {
               "application/json": {
                 "schema": {
@@ -3043,7 +3274,7 @@
           }
         ],
         "responses": {
-          "2XX": {
+          "204": {
             "description": "The request succeeded."
           },
           "default": {
@@ -3080,7 +3311,7 @@
           }
         ],
         "responses": {
-          "2XX": {
+          "200": {
             "content": {
               "application/json": {
                 "schema": {
@@ -3142,7 +3373,7 @@
           "required": true
         },
         "responses": {
-          "2XX": {
+          "200": {
             "content": {
               "application/json": {
                 "schema": {
@@ -3193,7 +3424,7 @@
           }
         ],
         "responses": {
-          "2XX": {
+          "200": {
             "content": {
               "application/json": {
                 "schema": {
@@ -3250,7 +3481,7 @@
           }
         ],
         "responses": {
-          "2XX": {
+          "204": {
             "description": "The request succeeded."
           },
           "default": {
@@ -3295,7 +3526,7 @@
           }
         ],
         "responses": {
-          "2XX": {
+          "200": {
             "content": {
               "application/json": {
                 "schema": {
@@ -3365,7 +3596,7 @@
           "required": true
         },
         "responses": {
-          "2XX": {
+          "200": {
             "content": {
               "application/json": {
                 "schema": {
@@ -3416,7 +3647,7 @@
           }
         ],
         "responses": {
-          "2XX": {
+          "200": {
             "content": {
               "application/json": {
                 "schema": {
@@ -3470,7 +3701,7 @@
           "required": true
         },
         "responses": {
-          "2XX": {
+          "201": {
             "content": {
               "application/json": {
                 "schema": {
@@ -3524,7 +3755,7 @@
           }
         ],
         "responses": {
-          "2XX": {
+          "204": {
             "description": "The request succeeded."
           },
           "default": {
@@ -3569,7 +3800,7 @@
           }
         ],
         "responses": {
-          "2XX": {
+          "200": {
             "content": {
               "application/json": {
                 "schema": {
@@ -3623,7 +3854,7 @@
           }
         ],
         "responses": {
-          "2XX": {
+          "204": {
             "description": "The request succeeded."
           },
           "default": {
@@ -3668,7 +3899,7 @@
           }
         ],
         "responses": {
-          "2XX": {
+          "200": {
             "content": {
               "application/json": {
                 "schema": {
@@ -3730,7 +3961,7 @@
           "required": true
         },
         "responses": {
-          "2XX": {
+          "200": {
             "content": {
               "application/json": {
                 "schema": {
@@ -3784,7 +4015,7 @@
           }
         ],
         "responses": {
-          "2XX": {
+          "204": {
             "description": "The request succeeded."
           },
           "default": {
@@ -3823,7 +4054,7 @@
           }
         ],
         "responses": {
-          "2XX": {
+          "204": {
             "description": "The request succeeded."
           },
           "default": {
@@ -3861,10 +4092,19 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "description": "The sections of the answer, separated by commas. Without it, the answer holds the default sections.",
+            "in": "query",
+            "name": "include",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
-          "2XX": {
+          "200": {
             "content": {
               "application/json": {
                 "schema": {
@@ -3918,7 +4158,7 @@
           "required": true
         },
         "responses": {
-          "2XX": {
+          "200": {
             "content": {
               "application/json": {
                 "schema": {
@@ -3965,10 +4205,57 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "description": "Keeps the units whose name starts with this text.",
+            "in": "query",
+            "name": "namePrefix",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The largest number of deleted units on the page.",
+            "in": "query",
+            "name": "pageSize",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "The nextPageToken of the page before.",
+            "in": "query",
+            "name": "pageToken",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Keeps the units that the server purges within this number of days.",
+            "in": "query",
+            "name": "purgeWithinDays",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Keeps the units of this tool.",
+            "in": "query",
+            "name": "tool",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
-          "2XX": {
+          "200": {
             "content": {
               "application/json": {
                 "schema": {
@@ -4014,7 +4301,7 @@
           }
         ],
         "responses": {
-          "2XX": {
+          "200": {
             "content": {
               "application/json": {
                 "schema": {
@@ -4071,7 +4358,7 @@
           "required": true
         },
         "responses": {
-          "2XX": {
+          "201": {
             "content": {
               "application/json": {
                 "schema": {
@@ -4136,7 +4423,7 @@
           }
         ],
         "responses": {
-          "2XX": {
+          "204": {
             "description": "The request succeeded."
           },
           "default": {
@@ -4181,7 +4468,7 @@
           }
         ],
         "responses": {
-          "2XX": {
+          "200": {
             "content": {
               "application/json": {
                 "schema": {
@@ -4240,7 +4527,7 @@
           }
         ],
         "responses": {
-          "2XX": {
+          "200": {
             "content": {
               "application/json": {
                 "schema": {
@@ -4300,7 +4587,7 @@
           }
         ],
         "responses": {
-          "2XX": {
+          "200": {
             "content": {
               "application/json": {
                 "schema": {
@@ -4364,7 +4651,7 @@
           "required": true
         },
         "responses": {
-          "2XX": {
+          "201": {
             "content": {
               "application/json": {
                 "schema": {
@@ -4427,7 +4714,7 @@
           }
         ],
         "responses": {
-          "2XX": {
+          "200": {
             "content": {
               "application/json": {
                 "schema": {
@@ -4482,7 +4769,7 @@
           }
         ],
         "responses": {
-          "2XX": {
+          "204": {
             "description": "The request succeeded."
           },
           "default": {
@@ -4519,7 +4806,7 @@
           }
         ],
         "responses": {
-          "2XX": {
+          "200": {
             "content": {
               "application/json": {
                 "schema": {
@@ -4573,7 +4860,7 @@
           "required": true
         },
         "responses": {
-          "2XX": {
+          "200": {
             "content": {
               "application/json": {
                 "schema": {
@@ -4619,7 +4906,7 @@
           }
         ],
         "responses": {
-          "2XX": {
+          "204": {
             "description": "The request succeeded."
           },
           "default": {
@@ -4644,9 +4931,9 @@
         ]
       }
     },
-    "/api/dustpan/v1/namespaces/{namespace}/profiles": {
+    "/api/dustpan/v1/namespaces/{namespace}/output-sharing": {
       "get": {
-        "operationId": "listProfiles",
+        "operationId": "getOutputSharing",
         "parameters": [
           {
             "in": "path",
@@ -4658,7 +4945,135 @@
           }
         ],
         "responses": {
-          "2XX": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OutputSharing"
+                }
+              }
+            },
+            "description": "The request succeeded."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The request failed."
+          }
+        },
+        "tags": [
+          "output-sharing"
+        ],
+        "x-dustpan-actions": [
+          {
+            "action": "namespace:read",
+            "object": "namespace"
+          }
+        ]
+      },
+      "put": {
+        "operationId": "setOutputSharing",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "namespace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OutputSharingRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OutputSharing"
+                }
+              }
+            },
+            "description": "The request succeeded."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The request failed."
+          }
+        },
+        "tags": [
+          "output-sharing"
+        ],
+        "x-dustpan-actions": [
+          {
+            "action": "unit:manage-sharing",
+            "object": "namespace"
+          }
+        ]
+      }
+    },
+    "/api/dustpan/v1/namespaces/{namespace}/profiles": {
+      "get": {
+        "operationId": "listProfiles",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "namespace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Keeps the profiles in this folder.",
+            "in": "query",
+            "name": "folder",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The largest number of profiles on the page.",
+            "in": "query",
+            "name": "pageSize",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "The nextPageToken of the page before, for the same folder.",
+            "in": "query",
+            "name": "pageToken",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
             "content": {
               "application/json": {
                 "schema": {
@@ -4715,7 +5130,7 @@
           "required": true
         },
         "responses": {
-          "2XX": {
+          "201": {
             "content": {
               "application/json": {
                 "schema": {
@@ -4773,6 +5188,15 @@
             }
           },
           {
+            "description": "Why the profile is deleted. The audit record holds it.",
+            "in": "query",
+            "name": "reason",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
             "$ref": "#/components/parameters/IdempotencyKey"
           },
           {
@@ -4780,7 +5204,7 @@
           }
         ],
         "responses": {
-          "2XX": {
+          "204": {
             "description": "The request succeeded."
           },
           "default": {
@@ -4822,10 +5246,19 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "description": "Shows the values of the secrets. The caller needs the permission to reveal them.",
+            "in": "query",
+            "name": "showSecrets",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
           }
         ],
         "responses": {
-          "2XX": {
+          "200": {
             "content": {
               "application/json": {
                 "schema": {
@@ -4881,10 +5314,29 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "description": "The largest number of revisions on the page.",
+            "in": "query",
+            "name": "pageSize",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "The nextPageToken of the page before.",
+            "in": "query",
+            "name": "pageToken",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
-          "2XX": {
+          "200": {
             "content": {
               "application/json": {
                 "schema": {
@@ -4952,7 +5404,7 @@
           "required": true
         },
         "responses": {
-          "2XX": {
+          "201": {
             "content": {
               "application/json": {
                 "schema": {
@@ -5016,10 +5468,19 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "description": "Shows the values of the secrets. The caller needs the permission to reveal them.",
+            "in": "query",
+            "name": "showSecrets",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
           }
         ],
         "responses": {
-          "2XX": {
+          "200": {
             "content": {
               "application/json": {
                 "schema": {
@@ -5070,7 +5531,7 @@
           }
         ],
         "responses": {
-          "2XX": {
+          "200": {
             "content": {
               "application/json": {
                 "schema": {
@@ -5127,7 +5588,7 @@
           "required": true
         },
         "responses": {
-          "2XX": {
+          "201": {
             "content": {
               "application/json": {
                 "schema": {
@@ -5184,7 +5645,7 @@
           }
         ],
         "responses": {
-          "2XX": {
+          "204": {
             "description": "The request succeeded."
           },
           "default": {
@@ -5204,6 +5665,71 @@
         "x-dustpan-actions": [
           {
             "action": "registry:manage-keys",
+            "object": "namespace"
+          }
+        ]
+      }
+    },
+    "/api/dustpan/v1/namespaces/{namespace}/registry/providers": {
+      "get": {
+        "operationId": "listRegistryProviders",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "namespace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The largest number of providers on the page.",
+            "in": "query",
+            "name": "pageSize",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "The nextPageToken of the page before.",
+            "in": "query",
+            "name": "pageToken",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListRegistryProvidersResponse"
+                }
+              }
+            },
+            "description": "The request succeeded."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The request failed."
+          }
+        },
+        "tags": [
+          "registry"
+        ],
+        "x-dustpan-actions": [
+          {
+            "action": "registry:read",
             "object": "namespace"
           }
         ]
@@ -5231,7 +5757,7 @@
           }
         ],
         "responses": {
-          "2XX": {
+          "200": {
             "content": {
               "application/json": {
                 "schema": {
@@ -5293,7 +5819,7 @@
           }
         ],
         "responses": {
-          "2XX": {
+          "200": {
             "content": {
               "application/json": {
                 "schema": {
@@ -5366,7 +5892,7 @@
           "required": true
         },
         "responses": {
-          "2XX": {
+          "200": {
             "content": {
               "application/json": {
                 "schema": {
@@ -5412,7 +5938,7 @@
           }
         ],
         "responses": {
-          "2XX": {
+          "201": {
             "content": {
               "application/json": {
                 "schema": {
@@ -5458,7 +5984,7 @@
           }
         ],
         "responses": {
-          "2XX": {
+          "200": {
             "content": {
               "application/json": {
                 "schema": {
@@ -5515,7 +6041,7 @@
           "required": true
         },
         "responses": {
-          "2XX": {
+          "201": {
             "content": {
               "application/json": {
                 "schema": {
@@ -5572,7 +6098,7 @@
           }
         ],
         "responses": {
-          "2XX": {
+          "204": {
             "description": "The request succeeded."
           },
           "default": {
@@ -5617,7 +6143,7 @@
           }
         ],
         "responses": {
-          "2XX": {
+          "200": {
             "content": {
               "application/json": {
                 "schema": {
@@ -5682,7 +6208,7 @@
           "required": true
         },
         "responses": {
-          "2XX": {
+          "200": {
             "content": {
               "application/json": {
                 "schema": {
@@ -5739,7 +6265,7 @@
           }
         ],
         "responses": {
-          "2XX": {
+          "200": {
             "content": {
               "application/json": {
                 "schema": {
@@ -5782,10 +6308,75 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "description": "Lists the units as they were at this time, in Unix milliseconds. It takes no filter and no page token.",
+            "in": "query",
+            "name": "at",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Keeps the units with this label, as key=value. All label values must match.",
+            "in": "query",
+            "name": "label",
+            "required": false,
+            "schema": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          },
+          {
+            "description": "The largest number of units on the page.",
+            "in": "query",
+            "name": "pageSize",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "The nextPageToken of the page before, for the same query.",
+            "in": "query",
+            "name": "pageToken",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Keeps the unit with this reference in the namespace.",
+            "in": "query",
+            "name": "reference",
+            "required": false,
+            "schema": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          },
+          {
+            "description": "Keeps the units in this state. One of the states must match.",
+            "in": "query",
+            "name": "state",
+            "required": false,
+            "schema": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
           }
         ],
         "responses": {
-          "2XX": {
+          "200": {
             "content": {
               "application/json": {
                 "schema": {
@@ -5839,7 +6430,7 @@
           }
         ],
         "responses": {
-          "2XX": {
+          "204": {
             "description": "The request succeeded."
           },
           "default": {
@@ -5889,10 +6480,19 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "description": "The sections of the answer, separated by commas. Without it, the answer holds the default sections.",
+            "in": "query",
+            "name": "include",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
-          "2XX": {
+          "200": {
             "content": {
               "application/json": {
                 "schema": {
@@ -5958,7 +6558,7 @@
           "required": true
         },
         "responses": {
-          "2XX": {
+          "200": {
             "content": {
               "application/json": {
                 "schema": {
@@ -5998,6 +6598,136 @@
         ]
       }
     },
+    "/api/dustpan/v1/namespaces/{namespace}/units/{unit_id}/drift": {
+      "get": {
+        "operationId": "getUnitDrift",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "namespace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "unit_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnitDrift"
+                }
+              }
+            },
+            "description": "The request succeeded."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The request failed."
+          }
+        },
+        "tags": [
+          "drift"
+        ],
+        "x-dustpan-actions": [
+          {
+            "action": "namespace:read",
+            "object": "namespace"
+          },
+          {
+            "action": "unit:read",
+            "object": "unit"
+          }
+        ]
+      }
+    },
+    "/api/dustpan/v1/namespaces/{namespace}/units/{unit_id}/drift-checks": {
+      "post": {
+        "operationId": "startDriftCheck",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "namespace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "unit_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StartDriftCheckRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DriftCheck"
+                }
+              }
+            },
+            "description": "The request succeeded."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The request failed."
+          }
+        },
+        "tags": [
+          "drift"
+        ],
+        "x-dustpan-actions": [
+          {
+            "action": "namespace:read",
+            "object": "namespace"
+          },
+          {
+            "action": "unit:read",
+            "object": "unit"
+          },
+          {
+            "action": "unit:run-plan",
+            "object": "unit"
+          }
+        ]
+      }
+    },
     "/api/dustpan/v1/namespaces/{namespace}/views": {
       "get": {
         "operationId": "listViews",
@@ -6012,7 +6742,7 @@
           }
         ],
         "responses": {
-          "2XX": {
+          "200": {
             "content": {
               "application/json": {
                 "schema": {
@@ -6069,7 +6799,7 @@
           "required": true
         },
         "responses": {
-          "2XX": {
+          "201": {
             "content": {
               "application/json": {
                 "schema": {
@@ -6126,7 +6856,7 @@
           }
         ],
         "responses": {
-          "2XX": {
+          "204": {
             "description": "The request succeeded."
           },
           "default": {
@@ -6171,7 +6901,7 @@
           }
         ],
         "responses": {
-          "2XX": {
+          "200": {
             "content": {
               "application/json": {
                 "schema": {
@@ -6222,10 +6952,29 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "description": "The largest number of units on the page.",
+            "in": "query",
+            "name": "pageSize",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "The nextPageToken of the page before, for the same query.",
+            "in": "query",
+            "name": "pageToken",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
-          "2XX": {
+          "200": {
             "content": {
               "application/json": {
                 "schema": {
@@ -6265,7 +7014,7 @@
       "get": {
         "operationId": "getApiDescription",
         "responses": {
-          "2XX": {
+          "200": {
             "content": {
               "application/json": {
                 "schema": {
@@ -6297,6 +7046,10 @@
   "security": [
     {
       "bearerAuth": []
+    },
+    {
+      "csrfHeader": [],
+      "sessionCookie": []
     }
   ],
   "servers": [
@@ -6321,6 +7074,9 @@
       "name": "description"
     },
     {
+      "name": "drift"
+    },
+    {
       "name": "git-host"
     },
     {
@@ -6331,6 +7087,9 @@
     },
     {
       "name": "notification-sinks"
+    },
+    {
+      "name": "output-sharing"
     },
     {
       "name": "preferences"

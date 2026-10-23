@@ -146,6 +146,11 @@ func (stubStackStore) ListStacks(_ context.Context, _ stack.Filter) ([]stack.Sta
 	return nil, nil
 }
 
+// QueryStacks implements stack.Store over the lists of ListStacks.
+func (stubStackStore) QueryStacks(ctx context.Context, q stack.PageQuery) ([]stack.Stack, error) {
+	return stack.ListPage(ctx, stubStackStore{}.ListStacks, q)
+}
+
 func (stubStackStore) RenameStack(
 	_ context.Context, _ stack.Ref, _ stack.Name, _ namespace.Fence,
 ) error {
@@ -265,6 +270,11 @@ func (*recordingStackStore) PurgeStack(
 
 func (s *recordingStackStore) ListStacks(_ context.Context, _ stack.Filter) ([]stack.Stack, error) {
 	return nil, nil
+}
+
+// QueryStacks implements stack.Store over the lists of ListStacks.
+func (s *recordingStackStore) QueryStacks(ctx context.Context, q stack.PageQuery) ([]stack.Stack, error) {
+	return stack.ListPage(ctx, s.ListStacks, q)
 }
 
 // stubAuthenticator denies every token. The declaration and resolver tests
@@ -441,7 +451,7 @@ func newTestHandlerWithBaseURL(t *testing.T, base baseurl.Resolver) *pulumi.Hand
 		BaseURL:                 base,
 		MaxBodyBytesInFlight:    0,
 		Gate:                    nil,
-		Audit:                   nil,
+		Audit:                   newTestAudit(),
 		OnAuditFailure:          nil,
 		CheckpointDeltaCutoff:   0,
 		DenialLimiter:           nil,
@@ -508,7 +518,7 @@ func newAuditedEnforcingHandler(
 		BaseURL:                 baseurl.Resolver{},
 		MaxBodyBytesInFlight:    0,
 		Gate:                    nil,
-		Audit:                   entries,
+		Audit:                   orTestAudit(entries),
 		OnAuditFailure:          nil,
 		DenialLimiter:           nil,
 		CheckpointDeltaCutoff:   0,
@@ -1624,7 +1634,7 @@ func newDeleteHandlerWithAudit(
 		BaseURL:                 baseurl.Resolver{},
 		MaxBodyBytesInFlight:    0,
 		Gate:                    nil,
-		Audit:                   auditStore,
+		Audit:                   orTestAudit(auditStore),
 		OnAuditFailure:          nil,
 		CheckpointDeltaCutoff:   0,
 		DenialLimiter:           nil,

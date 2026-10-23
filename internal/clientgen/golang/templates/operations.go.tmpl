@@ -56,6 +56,7 @@ type {{$op.QueryType}} struct {
 		idempotent: {{$op.Idempotent}},
 		ifMatch:    {{$op.IfMatch}},
 		etag:       {{$op.ETag}},
+		statuses:   []int{ {{- $op.Statuses -}} },
 	}
 {{if eq $op.ResultKind "none"}}
 	return c.do(ctx, req, opts, nil)

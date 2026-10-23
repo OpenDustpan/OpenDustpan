@@ -10,10 +10,10 @@ import (
 	"fmt"
 	"io"
 
+	"opendustpan.org/opendustpan/internal/scopeaudit"
 	"opendustpan.org/opendustpan/internal/token"
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/namespace"
-	"opendustpan.org/opendustpan/pkg/scopeaudit"
 )
 
 // ErrJournalConflict is returned when a batch holds a sequence ID that is stored

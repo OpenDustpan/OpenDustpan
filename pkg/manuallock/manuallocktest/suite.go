@@ -96,6 +96,7 @@ func Run(t *testing.T, newStore Factory) {
 		{name: "a deleted collection takes its lock with it", test: testCollectionDeleteDropsLock},
 		{name: "a Pulumi stack keeps its lock through a rename", test: testStackRename},
 		{name: "the inventory shows the lock as a flag", test: testInventoryFlag},
+		{name: "the locked state filter of a unit page keeps the locked units", test: testQueryUnitsLocked},
 		{name: "a tool lock never changes a manual lock", test: testToolLockIndependent},
 		{name: "lock a namespace and read the lock", test: testLockNamespace},
 		{name: "a namespace lock covers each unit, also a unit made later", test: testNamespaceLockCovers},

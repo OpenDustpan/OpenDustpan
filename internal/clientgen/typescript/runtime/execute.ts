@@ -1,0 +1,156 @@
+import type { Decoder } from "./decode.js";
+import { ApiError, invalidValue, requestError, transportError } from "./errors.js";
+import type { ApiTransport, Operation, OperationSpec, OperationAnswer, OperationCall, QueryValue } from "./transport.js";
+
+/** A query value that a caller gives. A number or a boolean goes out as text. */
+export type QueryInput = string | number | boolean | ReadonlyArray<string | number | boolean> | undefined;
+
+/** What a caller gives to one call. The generated input types narrow it. */
+export interface CallInput {
+  readonly path?: Readonly<Record<string, string>>;
+  readonly query?: Readonly<Record<string, QueryInput>>;
+  readonly body?: unknown;
+  readonly ifMatch?: string;
+  readonly idempotencyKey?: string;
+  readonly signal?: AbortSignal;
+}
+
+/** The checked answer of one call. */
+export interface Answer<O> {
+  /** The success status. It is one of the statuses that the description gives. */
+  readonly status: number;
+  readonly etag: string | undefined;
+  readonly body: O;
+}
+
+function queryText(name: string, value: unknown): string {
+  // Defense in depth: the input type allows scalars only, and a JavaScript
+  // caller can give anything.
+  if (typeof value === "number" && !Number.isFinite(value)) {
+    throw requestError(`the query parameter ${JSON.stringify(name)} must be a finite number`);
+  }
+  if (typeof value !== "string" && typeof value !== "number" && typeof value !== "boolean") {
+    throw requestError(`the query parameter ${JSON.stringify(name)} must be text, a number or a boolean`);
+  }
+  return String(value);
+}
+
+function queryOf(op: Operation<unknown>, input: CallInput): Record<string, QueryValue> {
+  const declared = op.spec.queryParameters;
+  const out: Record<string, QueryValue> = {};
+  for (const [name, value] of Object.entries(input.query ?? {})) {
+    if (!declared.includes(name)) {
+      throw requestError(`${op.spec.id}: the operation has no query parameter ${JSON.stringify(name)}`);
+    }
+    if (value === undefined) {
+      continue;
+    }
+    out[name] = Array.isArray(value) ? value.map((item) => queryText(name, item)) : queryText(name, value);
+  }
+  return out;
+}
+
+function callOf(op: Operation<unknown>, input: CallInput): OperationCall {
+  const { spec } = op;
+  const path = input.path ?? {};
+  for (const name of spec.pathParameters) {
+    if (!Object.hasOwn(path, name)) {
+      throw requestError(`${spec.id}: the path parameter ${name} is missing`);
+    }
+  }
+  if (input.ifMatch !== undefined && spec.ifMatch === "none") {
+    throw requestError(`${spec.id}: the operation does not take If-Match`);
+  }
+  // Defense in depth: the input type requires the value too, and a JavaScript
+  // caller does not get that check.
+  if (input.ifMatch === undefined && spec.ifMatch === "required") {
+    throw requestError(`${spec.id}: the operation needs If-Match`);
+  }
+  if (input.idempotencyKey !== undefined && spec.idempotencyKey === "none") {
+    throw requestError(`${spec.id}: the operation does not take an Idempotency-Key`);
+  }
+  if (spec.requestBody !== undefined && input.body === undefined && spec.requestBodyRequired) {
+    throw requestError(`${spec.id}: the operation needs a body`);
+  }
+  if (spec.requestBody === undefined && input.body !== undefined) {
+    throw requestError(`${spec.id}: the operation takes no body`);
+  }
+  const query = queryOf(op, input);
+  for (const name of spec.requiredQueryParameters) {
+    const given = query[name];
+    if (given === undefined || (Array.isArray(given) && given.length === 0)) {
+      throw requestError(`${spec.id}: the query parameter ${JSON.stringify(name)} is missing`);
+    }
+  }
+  return {
+    spec,
+    path,
+    query,
+    body: input.body,
+    ifMatch: input.ifMatch,
+    idempotencyKey: input.idempotencyKey,
+    signal: input.signal,
+  };
+}
+
+async function send(transport: ApiTransport, call: OperationCall): Promise<OperationAnswer> {
+  try {
+    return await transport.send(call);
+  } catch (error) {
+    if (error instanceof ApiError) {
+      throw error;
+    }
+    // Defense in depth: the transport should throw ApiError, and a transport
+    // that throws anything else must not leak its own error type to a caller.
+    throw transportError(`${call.spec.id}: ${error instanceof Error ? error.message : String(error)}`, error);
+  }
+}
+
+function decodeBody<O>(op: Operation<O>, answer: OperationAnswer): O {
+  const { decode } = op;
+  if (decode === undefined) {
+    return undefined as O;
+  }
+  if (answer.body === undefined) {
+    throw invalidValue("$", "the answer has no body", answer.status);
+  }
+  try {
+    return decode(answer.body, "$");
+  } catch (error) {
+    if (error instanceof ApiError && error.kind === "invalid") {
+      throw error.withStatus(answer.status);
+    }
+    throw error;
+  }
+}
+
+/**
+ * Calls one operation and checks the answer. The answer is valid when its
+ * status is one of the success statuses of the operation and its body matches
+ * the schema. An answer with any other status is invalid, also a 2xx one.
+ */
+export async function execute<O>(
+  transport: ApiTransport,
+  op: Operation<O>,
+  input: CallInput = {},
+): Promise<Answer<O>> {
+  const answer = await send(transport, callOf(op, input));
+  if (!op.spec.statuses.includes(answer.status)) {
+    throw invalidValue(
+      "$",
+      `the status ${answer.status} is not a success status of ${op.spec.id} (${op.spec.statuses.join(", ")})`,
+      answer.status,
+    );
+  }
+  return { status: answer.status, etag: answer.etag, body: decodeBody(op, answer) };
+}
+
+/** Makes the entry of one operation. The generated table calls it. */
+export function operation<O>(spec: OperationSpec, decode: Decoder<O> | undefined): Operation<O> {
+  // The table is shared by every caller, so a caller cannot change it.
+  Object.freeze(spec.statuses);
+  Object.freeze(spec.pathParameters);
+  Object.freeze(spec.queryParameters);
+  Object.freeze(spec.requiredQueryParameters);
+  return Object.freeze({ spec: Object.freeze(spec), decode });
+}

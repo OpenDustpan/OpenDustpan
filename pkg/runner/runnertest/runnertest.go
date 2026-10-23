@@ -46,12 +46,16 @@ type Domain interface {
 	// BumpFence increments the failover version of the namespace of fence,
 	// as a failover does, and returns the new fence.
 	BumpFence(ctx context.Context, fence namespace.Fence) (namespace.Fence, error)
-	// Claim starts a durable operation of kind and claims it for owner,
-	// as the runner protocol does at a poll, and returns the claim.
-	Claim(ctx context.Context, kind durable.Kind, owner string) (durable.Claim, error)
-	// ClaimLease is Claim with the lease of the claim. A claim is live
-	// only while its lease did not pass on the clock of the database.
+	// ClaimLease starts a durable operation of kind and claims it for owner
+	// with lease, as the runner protocol does at a poll, and returns the
+	// claim. A claim is live only while its lease did not pass on the clock
+	// of the database.
 	ClaimLease(ctx context.Context, kind durable.Kind, owner string, lease time.Duration) (durable.Claim, error)
+	// Shorten sets the expiry of the live claim c to the time of the
+	// database plus lease, also when that is earlier than the expiry of c,
+	// and returns the claim. A case claims with a long lease, does its
+	// writes, and then shortens the lease to let the claim pass.
+	Shorten(ctx context.Context, c durable.Claim, lease time.Duration) (durable.Claim, error)
 	// Takeover expires the claim c and claims its operation again, as a
 	// takeover does, and returns the new claim.
 	Takeover(ctx context.Context, c durable.Claim) (durable.Claim, error)
