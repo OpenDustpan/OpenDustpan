@@ -6,6 +6,7 @@ package stack
 
 import (
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 )
@@ -182,4 +183,29 @@ func BenchmarkDeploymentShapeSequenced1M(b *testing.B) {
 // iteration: the large load harness checkpoint.
 func BenchmarkDeploymentShapeSequenced4M(b *testing.B) {
 	benchShape(b, 4194304, 1)
+}
+
+// TestDeploymentShapeRefusesTextThatIsNotUTF8 pins the strict text rule of
+// the check: a raw byte that is not UTF-8 and a lone surrogate escape are
+// refused, in a deployment and in the envelope of a sequenced save, and a
+// surrogate pair passes.
+func TestDeploymentShapeRefusesTextThatIsNotUTF8(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name string
+		body string
+		seq  int64
+		ok   bool
+	}{
+		{name: "a raw byte that is not UTF-8", body: "{\"x\":\"a\xffb\"}", seq: 0, ok: false},
+		{name: "a lone surrogate escape", body: `{"x":"\ud800"}`, seq: 0, ok: false},
+		{name: "a lone surrogate escape in the envelope", body: `{"deployment":{"x":"\udfff"}}`, seq: 1, ok: false},
+		{name: "a surrogate pair", body: `{"x":"😀"}`, seq: 0, ok: true},
+	} {
+		err := checkDeploymentShape([]byte(tc.body), tc.seq)
+		if tc.ok != (err == nil) || (err != nil && !errors.Is(err, ErrInvalidUpdate)) {
+			t.Errorf("%s: checkDeploymentShape = %v, want ok %t or ErrInvalidUpdate", tc.name, err, tc.ok)
+		}
+	}
 }
