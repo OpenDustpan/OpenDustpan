@@ -82,6 +82,7 @@ func newGate(t *testing.T, next identity.Authenticator, c *clock, o gateOptions)
 		Now:           c.Now,
 		Failures:      nil,
 		Window:        0,
+		Scope:         "",
 		CounterErrors: nil,
 		Burst:         3,
 		Refill:        time.Second,
@@ -143,6 +144,7 @@ func TestNewNeedsNext(t *testing.T) {
 		Now:           nil,
 		Failures:      nil,
 		Window:        0,
+		Scope:         "",
 		CounterErrors: nil,
 		Burst:         0,
 		Refill:        0,
@@ -429,5 +431,54 @@ func TestAdmitAndFailWithoutRequestState(t *testing.T) {
 
 	if err := g.Admit(canceled(t)); err != nil {
 		t.Fatalf("admit with no request state: %v", err)
+	}
+}
+
+// scopedCounter is a FailureCounter that keeps the count of each key.
+type scopedCounter struct {
+	counts map[string]int64
+	mu     sync.Mutex
+}
+
+func (c *scopedCounter) AddFailure(
+	_ context.Context, source string, length time.Duration,
+) (authgate.FailureCount, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	c.counts[source]++
+
+	return authgate.FailureCount{At: time.Time{}, End: time.Time{}.Add(length), Count: c.counts[source]}, nil
+}
+
+func (c *scopedCounter) PruneFailures(context.Context, time.Duration) (int64, error) { return 0, nil }
+
+func (c *scopedCounter) PruneFailuresAt(context.Context, time.Time, time.Duration) (int64, error) {
+	return 0, nil
+}
+
+func TestScopesKeepSeparateSharedCounts(t *testing.T) {
+	t.Parallel()
+
+	counter := &scopedCounter{counts: map[string]int64{}, mu: sync.Mutex{}}
+
+	for _, scope := range []string{"", "signin"} {
+		g, err := authgate.New(authgate.Config{
+			Next: &countingAuthenticator{lookups: atomic.Int64{}}, Failures: counter, Scope: scope,
+			Charge: nil, Logger: nil, Now: nil, Window: 0, CounterErrors: nil, Burst: 0, Refill: 0, Penalty: 0,
+			MaxWaiting: 0, MaxSources: 0,
+		})
+		if err != nil {
+			t.Fatalf("new gate: %v", err)
+		}
+
+		g.Fail(authgate.WithRequest(t.Context(), "192.0.2.1"))
+	}
+
+	counter.mu.Lock()
+	defer counter.mu.Unlock()
+
+	if counter.counts["192.0.2.1"] != 1 || counter.counts["signin|192.0.2.1"] != 1 || len(counter.counts) != 2 {
+		t.Fatalf("counts = %v, want one under the source and one under the scope and source", counter.counts)
 	}
 }

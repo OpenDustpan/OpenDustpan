@@ -154,7 +154,7 @@ func TestStartRouteIsDeclared(t *testing.T) {
 }
 
 // checkPostRoute checks that the handler declares one authorized POST route.
-func checkPostRoute(t *testing.T, h *jobsapi.Handler) {
+func checkPostRoute(t *testing.T, h testHandler) {
 	t.Helper()
 
 	var found *jobsapi.Route
@@ -181,7 +181,9 @@ func checkPostRoute(t *testing.T, h *jobsapi.Handler) {
 func checkStartOperation(t *testing.T, ops []apidesc.Operation) {
 	t.Helper()
 
-	for _, op := range ops {
+	for i := range ops {
+		op := &ops[i]
+
 		if op.ID != "startJob" {
 			continue
 		}
@@ -399,6 +401,8 @@ func TestStartRefusesABadKey(t *testing.T) {
 		{"a control character", []string{"Idempotency-Key", "a\tb"}},
 		{"not ASCII", []string{"Idempotency-Key", "schlüssel"}},
 		{"two keys", []string{"Idempotency-Key", "a", "Idempotency-Key", "b"}},
+		{"the prefix of a drift check", []string{"Idempotency-Key", "drift-" + strings.Repeat("0", 32) + "-1"}},
+		{"the prefix of a drift check in upper case", []string{"Idempotency-Key", "DRIFT-x"}},
 	}
 
 	for _, tt := range tests {

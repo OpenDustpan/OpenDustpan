@@ -25,6 +25,8 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+
+	"opendustpan.org/opendustpan/internal/api/apidesc"
 )
 
 // maxForwardedHops caps the trusted entries of one header walk. A walk that
@@ -259,7 +261,7 @@ func (r *Resolver) Resolve(req *http.Request) netip.Addr {
 		return peer
 	}
 
-	lines := req.Header.Values(r.headerKey())
+	lines := apidesc.HeaderValues(req, r.headerKey())
 	if len(lines) == 0 {
 		return netip.Addr{}
 	}
@@ -297,7 +299,7 @@ func (r *Resolver) TrustedPeerWithoutHeader(req *http.Request) bool {
 		return false
 	}
 
-	return len(req.Header.Values(r.headerKey())) == 0
+	return len(apidesc.HeaderValues(req, r.headerKey())) == 0
 }
 
 // headerKey returns the wire name of the header the resolver reads.

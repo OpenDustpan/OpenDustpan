@@ -171,7 +171,7 @@ func (f hostForge) Check(context.Context) (forge.Account, error) {
 
 // hostEnv is a handler over a fresh store with acme and beta.
 type hostEnv struct {
-	handler *apiserver.Handler
+	handler testHandler
 	store   *sqlite.Store
 	opener  *hostOpener
 	// refuseAddress makes the address rules of the service refuse every address.
@@ -247,7 +247,15 @@ func newHostEnvWrapped(
 
 	st, nss := openIPAllowFixture(t)
 	env := &hostEnv{
-		handler: nil, store: st, opener: nil, refuseAddress: &atomic.Bool{}, mu: sync.Mutex{}, refused: nil,
+		handler: testHandler{
+			Handler: nil,
+			served:  nil,
+		},
+		store:         st,
+		opener:        nil,
+		refuseAddress: &atomic.Bool{},
+		mu:            sync.Mutex{},
+		refused:       nil,
 	}
 	opener := &hostOpener{mu: sync.Mutex{}, opened: 0, checkErr: nil, openErr: nil}
 
@@ -319,7 +327,7 @@ func buildHostEnv(t *testing.T, parts hostParts, authz identity.Authorizer) *hos
 	// session with a recent sign-in: an access token never gives one.
 	signIn, sessions := signInOf(t, st)
 
-	handler, err := apiserver.NewHandler(apiserver.Config{
+	handler, err := newCheckedHandler(t, apiserver.Config{
 		Preferences:      nil,
 		GitHost:          svc,
 		Idempotency:      mw,

@@ -68,7 +68,7 @@ func newSharedGate(
 
 	g, err := authgate.New(authgate.Config{
 		Next: &countingAuthenticator{lookups: atomic.Int64{}}, Charge: chargeBad, Logger: nil, Now: c.Now,
-		Failures: failures, Window: 0, CounterErrors: errs.add,
+		Failures: failures, Window: 0, CounterErrors: errs.add, Scope: "",
 		Burst: 3, Refill: time.Second, Penalty: time.Hour, MaxWaiting: 0, MaxSources: 0,
 	})
 	if err != nil {
@@ -319,7 +319,7 @@ func TestGoneClientLogsNoCounterWarning(t *testing.T) {
 	g, err := authgate.New(authgate.Config{
 		Next: &countingAuthenticator{lookups: atomic.Int64{}}, Charge: chargeBad,
 		Logger: slog.New(slog.NewTextHandler(&lockedWriter{w: &logs, mu: sync.Mutex{}}, nil)), Now: newClock().Now,
-		Failures: brokenCounter{}, Window: 0, CounterErrors: errs.add,
+		Failures: brokenCounter{}, Window: 0, CounterErrors: errs.add, Scope: "",
 		Burst: 3, Refill: time.Second, Penalty: time.Hour, MaxWaiting: 0, MaxSources: 0,
 	})
 	if err != nil {
@@ -403,7 +403,7 @@ func TestConcurrentLookupsReserveTheBudget(t *testing.T) {
 	for _, next := range nexts {
 		g, err := authgate.New(authgate.Config{
 			Next: next, Charge: chargeBad, Logger: nil, Now: c.Now,
-			Failures: failures, Window: 0, CounterErrors: nil,
+			Failures: failures, Window: 0, CounterErrors: nil, Scope: "",
 			Burst: 3, Refill: time.Second, Penalty: time.Hour, MaxWaiting: perGate, MaxSources: 0,
 		})
 		if err != nil {
@@ -568,7 +568,7 @@ func TestNewRefusesAWindowUnderOneMillisecond(t *testing.T) {
 
 	_, err := authgate.New(authgate.Config{
 		Next: &countingAuthenticator{lookups: atomic.Int64{}}, Charge: nil, Logger: nil, Now: nil,
-		Failures: nil, Window: 500 * time.Microsecond, CounterErrors: nil,
+		Failures: nil, Window: 500 * time.Microsecond, CounterErrors: nil, Scope: "",
 		Burst: 0, Refill: 0, Penalty: 0, MaxWaiting: 0, MaxSources: 0,
 	})
 	if !errors.Is(err, authgate.ErrInvalidWindow) {
@@ -590,7 +590,7 @@ func TestConcurrentValidLookupsAreNeverLimited(t *testing.T) {
 
 	g, err := authgate.New(authgate.Config{
 		Next: next, Charge: chargeBad, Logger: nil, Now: c.Now,
-		Failures: authgatetest.NewMemory(c.Now), Window: 0, CounterErrors: nil,
+		Failures: authgatetest.NewMemory(c.Now), Window: 0, CounterErrors: nil, Scope: "",
 		Burst: 3, Refill: time.Second, Penalty: time.Hour, MaxWaiting: 1, MaxSources: 0,
 	})
 	if err != nil {
@@ -648,7 +648,7 @@ func TestPanicInTheStoreGivesBackTheUnit(t *testing.T) {
 
 	g, err := authgate.New(authgate.Config{
 		Next:   &panicAuthenticator{countingAuthenticator{lookups: atomic.Int64{}}},
-		Charge: chargeBad, Logger: nil, Now: c.Now, Failures: nil, Window: 0, CounterErrors: nil,
+		Charge: chargeBad, Logger: nil, Now: c.Now, Failures: nil, Window: 0, CounterErrors: nil, Scope: "",
 		Burst: 3, Refill: time.Second, Penalty: time.Hour, MaxWaiting: 0, MaxSources: 0,
 	})
 	if err != nil {
@@ -697,7 +697,7 @@ func TestRefillKeepsLookupsInFlightWithinTheBurst(t *testing.T) {
 	next := &blockingAuthenticator{started: make(chan struct{}, 4), release: make(chan struct{})}
 
 	g, err := authgate.New(authgate.Config{
-		Next: next, Charge: chargeBad, Logger: nil, Now: c.Now, Failures: nil, Window: 0, CounterErrors: nil,
+		Next: next, Charge: chargeBad, Logger: nil, Now: c.Now, Failures: nil, Window: 0, CounterErrors: nil, Scope: "",
 		Burst: 3, Refill: time.Second, Penalty: time.Hour, MaxWaiting: 0, MaxSources: 0,
 	})
 	if err != nil {
@@ -776,7 +776,7 @@ func TestWaiterWakesWhenMissesInFlightResolve(t *testing.T) {
 	next := &blockingAuthenticator{started: make(chan struct{}, 4), release: make(chan struct{})}
 
 	g, err := authgate.New(authgate.Config{
-		Next: next, Charge: chargeBad, Logger: nil, Now: c.Now, Failures: nil, Window: 0, CounterErrors: nil,
+		Next: next, Charge: chargeBad, Logger: nil, Now: c.Now, Failures: nil, Window: 0, CounterErrors: nil, Scope: "",
 		Burst: 3, Refill: time.Hour, Penalty: penalty, MaxWaiting: 0, MaxSources: 0,
 	})
 	if err != nil {
