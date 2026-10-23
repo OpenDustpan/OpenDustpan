@@ -83,6 +83,10 @@ var (
 		status: http.StatusPreconditionFailed, code: "preferences.precondition-failed", args: nil,
 		message: preferences.ErrPreconditionFailed.Error(),
 	}
+	errPreferencesWeakTag = &codedError{
+		status: http.StatusPreconditionFailed, code: "preferences.precondition-failed", args: nil,
+		message: "If-Match holds a weak tag, which never matches: send the ETag of a read as it is",
+	}
 	errPreferencesReadOnly = &codedError{
 		status: http.StatusBadRequest, code: "preferences.field-read-only",
 		args:    map[string]any{"field": preferences.FieldUpdatedAt},
@@ -192,15 +196,24 @@ func preferencesETag(d preferences.Document) string {
 }
 
 // preferencesIfMatch returns the version of the If-Match header, and whether
-// the request sent one. The header holds one version in quotes, as the ETag
-// of a read gives it, or *, which matches the preferences of any person. A
-// weak tag, W/ and then one version in quotes, gives errPreferencesChanged,
-// because it never matches. A value that is neither gives errPreferencesIfMatch.
+// the request sent one. A request with no If-Match header has no
+// precondition. The header holds one version in quotes, as the ETag of a read
+// gives it, or *, which matches the preferences of any person. A weak tag, W/
+// and then one version in quotes, gives errPreferencesWeakTag, because it
+// never matches. An empty value, a second header and any other value give
+// errPreferencesIfMatch: a client that builds the header from an empty
+// variable must not lose its precondition without an error.
 func preferencesIfMatch(r *http.Request) (*int64, error) {
-	raw := strings.TrimSpace(apidesc.Header(r, "If-Match"))
-	if raw == "" || raw == "*" {
-		return nil, nil //nolint:nilnil // No version means no precondition.
+	values := apidesc.HeaderValues(r, "If-Match")
+	if len(values) == 0 || (len(values) == 1 && strings.TrimSpace(values[0]) == "*") {
+		return nil, nil //nolint:nilnil // No header, or *, means no precondition.
 	}
+
+	if len(values) > 1 {
+		return nil, errPreferencesIfMatch
+	}
+
+	raw := strings.TrimSpace(values[0])
 
 	if weak, ok := strings.CutPrefix(raw, "W/"); ok {
 		if _, err := quotedVersion(weak); err != nil {
@@ -210,7 +223,7 @@ func preferencesIfMatch(r *http.Request) (*int64, error) {
 		// If-Match uses strong comparison, and a weak tag never matches in
 		// strong comparison. So the precondition is false, also when the
 		// version is the current one.
-		return nil, errPreferencesChanged
+		return nil, errPreferencesWeakTag
 	}
 
 	v, err := quotedVersion(raw)
@@ -408,10 +421,10 @@ func readPreferencesPatch(w http.ResponseWriter, r *http.Request, p identity.Pri
 // a change (a store in maintenance mode answers 503) writes none, and a change
 // that the If-Match header refuses with 412 writes none.
 func (h *Handler) refusePatch(w http.ResponseWriter, r *http.Request, p identity.Principal, err error) {
-	// A request with an outdated If-Match changes nothing and is no failure of
-	// the caller, so it writes no entry.
+	// A request with an outdated If-Match, or with a weak tag, changes nothing
+	// and is no failure of the caller, so it writes no entry. Both answer 412.
 	coded, ok := errors.AsType[*codedError](err)
-	if ok && coded.status < http.StatusInternalServerError && !errors.Is(err, errPreferencesChanged) {
+	if ok && coded.status < http.StatusInternalServerError && coded.status != http.StatusPreconditionFailed {
 		outcome := audit.OutcomeFailure
 		if errors.Is(err, errPreferencesNotPerson) {
 			outcome = audit.OutcomeDenied
