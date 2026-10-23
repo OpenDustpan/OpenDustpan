@@ -290,6 +290,39 @@ func TestJobPlannerPools(t *testing.T) {
 	})
 }
 
+// TestJobPlannerNoPoolNamesTheNextStep proves that the refusal of a namespace
+// with no runner pool for jobs names the route that makes a pool and the
+// setting that the route needs, and that the drift check answer, which the
+// API cuts at 300 bytes, holds the whole text also for the longest namespace
+// name.
+func TestJobPlannerNoPoolNamesTheNextStep(t *testing.T) {
+	t.Parallel()
+
+	ns := strings.Repeat("a", 100)
+	sweeper := testPool("pool-s", ns, "sweeper", runner.PurposeSweeps)
+
+	for _, pools := range []fakePools{poolsOf(), poolsOf(sweeper)} {
+		p := jobPlanner{pools: pools, connections: nil}
+		unit := jobTestUnit(t, ns, "web").WithUnitID("ws-1")
+		req := plannerRequest(unit)
+
+		_, err := p.Plan(t.Context(), unit, &req)
+		if !errors.Is(err, job.ErrUnsupported) {
+			t.Fatalf("Plan = %v, want ErrUnsupported", err)
+		}
+
+		for _, want := range []string{"POST /api/runners/{namespace}/pools", "purpose jobs", "DUSTPAN_PUBLIC_URL"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("Plan = %v, want a text that has %q", err, want)
+			}
+		}
+
+		if answer := "start drift check: plan job: " + err.Error(); len(answer) > 300 {
+			t.Errorf("the drift check answer has %d bytes, want 300 or fewer: %s", len(answer), answer)
+		}
+	}
+}
+
 func TestJobPlannerLocation(t *testing.T) {
 	t.Parallel()
 
