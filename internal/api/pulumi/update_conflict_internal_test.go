@@ -37,3 +37,33 @@ func TestWriteErrorUpdateConflictNamesTheCommand(t *testing.T) {
 		}
 	}
 }
+
+// TestWriteErrorUpdateConflictNamesTheActiveUpdate proves that a refusal that
+// names the update that holds the stack answers 409 with the ID of that
+// update, the sentence of the sentinel and the command that ends a stuck
+// update. The ID of the refused update stays out of the answer.
+func TestWriteErrorUpdateConflictNamesTheActiveUpdate(t *testing.T) {
+	t.Parallel()
+
+	const want = "another update of this stack is in progress (update u-active): " +
+		"wait for it to end, or run pulumi cancel"
+
+	body := fmt.Sprintf("{\"message\":%q,\"code\":%d}\n", want, http.StatusConflict)
+	conflict := &stack.UpdateConflictError{Active: "u-active"}
+
+	for _, err := range []error{
+		conflict,
+		fmt.Errorf("start update u-refused of acme/demo/dev: transaction: %w", conflict),
+	} {
+		var h Handler
+
+		h.logger = slog.New(slog.DiscardHandler)
+
+		rec := httptest.NewRecorder()
+		h.writeError(t.Context(), rec, err)
+
+		if rec.Code != http.StatusConflict || rec.Body.String() != body {
+			t.Errorf("writeError(%v) = %d %q, want 409 %q", err, rec.Code, rec.Body.String(), body)
+		}
+	}
+}
