@@ -2051,6 +2051,29 @@ func TestParseName(t *testing.T) {
 	}
 }
 
+// TestParseNameStatesTheRule proves that a refused workspace name gives the
+// rule of a workspace name and an echo of at most 40 characters, and that an
+// empty name gives the same text as an invalid one.
+func TestParseNameStatesTheRule(t *testing.T) {
+	t.Parallel()
+
+	const rule = "use 1 to 90 ASCII letters, digits, - and _"
+
+	for _, tc := range []struct{ in, want string }{
+		{in: "", want: `invalid workspace name: "": ` + rule},
+		{in: "a/b", want: `invalid workspace name: "a/b": ` + rule},
+		{
+			in:   strings.Repeat("a", 91),
+			want: `invalid workspace name: "` + strings.Repeat("a", 40) + `"... (cut, 91 characters): ` + rule,
+		},
+	} {
+		_, err := workspace.ParseName(tc.in)
+		if !errors.Is(err, workspace.ErrInvalidName) || err.Error() != tc.want {
+			t.Errorf("ParseName(%.50q) = %v, want %s", tc.in, err, tc.want)
+		}
+	}
+}
+
 // recordingBlobs wraps a blob store and records every deleted key, so tests
 // prove a failed upload leaves no blob behind.
 type recordingBlobs struct {

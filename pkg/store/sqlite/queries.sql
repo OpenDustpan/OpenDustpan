@@ -97,22 +97,31 @@ ORDER BY name;
 -- name: ListStackPageInNamespace :many
 -- One page of the live stacks of a namespace after a project and a name, in
 -- the order of the primary key. The cursor is a range of the key, so the read
--- starts at the cursor.
-SELECT namespace, project, name, id, version, created_at_ms, updated_at_ms
-FROM stacks
-WHERE namespace = sqlc.arg(namespace) AND deleted_at_ms IS NULL
-  AND (project, name) > (sqlc.arg(after_project), sqlc.arg(after_name))
-ORDER BY project, name
+-- starts at the cursor. A tag_name that is not empty keeps the stacks that have
+-- that tag, and match_value also needs the tag to have the value tag_value.
+SELECT s.namespace, s.project, s.name, s.id, s.version, s.created_at_ms, s.updated_at_ms
+FROM stacks AS s
+WHERE s.namespace = sqlc.arg(namespace) AND s.deleted_at_ms IS NULL
+  AND (s.project, s.name) > (sqlc.arg(after_project), sqlc.arg(after_name))
+  AND (CAST(sqlc.arg(tag_name) AS TEXT) = '' OR EXISTS (
+    SELECT 1 FROM stack_tags AS t
+    WHERE t.stack_id = s.id AND t.name = sqlc.arg(tag_name)
+      AND (CAST(sqlc.arg(match_value) AS INTEGER) = 0 OR t.value = sqlc.arg(tag_value))))
+ORDER BY s.project, s.name
 LIMIT sqlc.arg(page_limit);
 
 -- name: ListStackPageInProject :many
 -- One page of the live stacks of a project after a name, in the order of the
--- primary key.
-SELECT namespace, project, name, id, version, created_at_ms, updated_at_ms
-FROM stacks
-WHERE namespace = sqlc.arg(namespace) AND project = sqlc.arg(project) AND deleted_at_ms IS NULL
-  AND name > sqlc.arg(after_name)
-ORDER BY name
+-- primary key, with the tag filter of ListStackPageInNamespace.
+SELECT s.namespace, s.project, s.name, s.id, s.version, s.created_at_ms, s.updated_at_ms
+FROM stacks AS s
+WHERE s.namespace = sqlc.arg(namespace) AND s.project = sqlc.arg(project) AND s.deleted_at_ms IS NULL
+  AND s.name > sqlc.arg(after_name)
+  AND (CAST(sqlc.arg(tag_name) AS TEXT) = '' OR EXISTS (
+    SELECT 1 FROM stack_tags AS t
+    WHERE t.stack_id = s.id AND t.name = sqlc.arg(tag_name)
+      AND (CAST(sqlc.arg(match_value) AS INTEGER) = 0 OR t.value = sqlc.arg(tag_value))))
+ORDER BY s.name
 LIMIT sqlc.arg(page_limit);
 
 -- name: ListStackTagsOfStacks :many
@@ -190,8 +199,10 @@ SET status = @status, version = @version, revision = @revision,
 WHERE stack_id = @stack_id AND id = @id
   AND revision = @expected_revision;
 
--- name: RunningMutatingUpdates :one
-SELECT COUNT(*)
+-- name: RunningMutatingUpdate :one
+-- The ID of the mutating update that runs on a stack. The unique index
+-- updates_one_running holds at most one such row for each stack.
+SELECT id
 FROM updates
 WHERE stack_id = ?
   AND status = 'running' AND dry_run = 0 AND kind <> 'preview';

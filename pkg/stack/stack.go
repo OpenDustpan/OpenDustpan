@@ -46,8 +46,8 @@ type ProjectName string
 
 // ParseProjectName validates s as a project name.
 func ParseProjectName(s string) (ProjectName, error) {
-	if !ident.Valid(s, maxNameLength) {
-		return "", fmt.Errorf("%w: project %q", ErrInvalidName, s)
+	if err := ident.Check(s, maxNameLength); err != nil {
+		return "", fmt.Errorf("%w: project %w", ErrInvalidName, err)
 	}
 
 	return ProjectName(s), nil
@@ -72,8 +72,8 @@ func (id ID) String() string {
 
 // ParseName validates s as a stack name.
 func ParseName(s string) (Name, error) {
-	if !ident.Valid(s, maxNameLength) {
-		return "", fmt.Errorf("%w: stack %q", ErrInvalidName, s)
+	if err := ident.Check(s, maxNameLength); err != nil {
+		return "", fmt.Errorf("%w: stack %w", ErrInvalidName, err)
 	}
 
 	return Name(s), nil
@@ -190,10 +190,11 @@ type Store interface {
 	// ErrConcurrentModification so the caller recounts once. The check runs
 	// in the same transaction as the delete, so an update that finishes
 	// concurrently cannot drop resources.
-	// It returns ErrNotFound if no live stack has ref, ErrUpdateConflict
-	// while a mutating update of the stack runs, namespace.ErrNotFound if the
-	// namespace does not exist, namespace.ErrFenced if fence is stale, or
-	// audit.ErrInvalidEntry if e fails validation or names another namespace.
+	// It returns ErrNotFound if no live stack has ref, ErrUpdateConflict while
+	// a mutating update of the stack runs (a *UpdateConflictError that names
+	// that update), namespace.ErrNotFound if the namespace does not exist,
+	// namespace.ErrFenced if fence is stale, or audit.ErrInvalidEntry if e
+	// fails validation or names another namespace.
 	// While a manual lock covers the stack, its collection or its namespace,
 	// the error matches ErrUpdateConflict and manuallock.ErrLocked.
 	DeleteStack(

@@ -21,13 +21,14 @@ import (
 
 // deleteEmptyDeployment holds no managed resources: only the automatic
 // stack resource.
-const deleteEmptyDeployment = `{"resources":[{"type":"pulumi:pulumi:Stack"}]}`
+const deleteEmptyDeployment = `{"resources":[` +
+	`{"urn":"urn:pulumi:dev::web::pulumi:pulumi:Stack::web-dev","type":"pulumi:pulumi:Stack"}]}`
 
 // deleteResourcedDeployment holds the automatic stack resource and one
 // managed resource, so the stack counts as having resources.
 const deleteResourcedDeployment = `{"resources":[` +
-	`{"type":"pulumi:pulumi:Stack"},` +
-	`{"type":"custom:resource:Type"}]}`
+	`{"urn":"urn:pulumi:dev::web::pulumi:pulumi:Stack::web-dev","type":"pulumi:pulumi:Stack"},` +
+	`{"urn":"urn:pulumi:dev::web::custom:resource:Type::res","type":"custom:resource:Type"}]}`
 
 // errDeleteCheckpointBoom fails checkpoint reads in the delete-guard tests.
 var errDeleteCheckpointBoom = errors.New("checkpoint boom")
@@ -895,7 +896,7 @@ func TestDeleteAfterVerbatimThenDelta(t *testing.T) {
 		wantErr error
 	}{
 		{name: "empty", inner: `{"resources":[]}`, wantErr: nil},
-		{name: "resourced", inner: `{"resources":[{"type":"custom:resource:Type"}]}`, wantErr: stack.ErrHasResources},
+		{name: "resourced", inner: deleteResourcedDeployment, wantErr: stack.ErrHasResources},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -922,7 +923,7 @@ func TestDeleteAfterPlainCheckpoint(t *testing.T) {
 		wantErr    error
 	}{
 		{name: "empty", deployment: `{"resources":[]}`, wantErr: nil},
-		{name: "resourced", deployment: `{"resources":[{"type":"custom:resource:Type"}]}`, wantErr: stack.ErrHasResources},
+		{name: "resourced", deployment: deleteResourcedDeployment, wantErr: stack.ErrHasResources},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()

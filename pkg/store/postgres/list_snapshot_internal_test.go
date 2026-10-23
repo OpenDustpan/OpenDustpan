@@ -36,7 +36,7 @@ func TestListReadsWaitForTheSwapLock(t *testing.T) {
 			return err
 		}},
 		{name: "stack list", read: func(ctx context.Context, s *Store) error {
-			q := stack.PageQuery{After: nil, Project: "", Namespaces: []namespace.Name{"locked"}, Limit: 10}
+			q := stack.PageQuery{After: nil, Project: "", Tag: nil, Namespaces: []namespace.Name{"locked"}, Limit: 10}
 			_, err := s.QueryStacks(ctx, q)
 
 			return err
