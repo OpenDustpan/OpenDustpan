@@ -158,9 +158,13 @@ restored data. The restore also releases every OpenTofu workspace lock that
 the backup holds. A client that holds a lock from before the restore must take
 a new lock and read the restored state before it writes.
 
-The command checks the key before the server writes anything. With no key or
-with another key it stops and names `DUSTPAN_KEY_ENCRYPTION_KEY`. A restore
-with a wrong key leaves the live data unchanged.
+The server checks the key that it started with before it writes anything. The
+`opendustpan restore` command does not read `DUSTPAN_KEY_ENCRYPTION_KEY`. When
+the server has no key, or its key does not open the backup, the restore stops,
+names the key settings of the server, and leaves the live data unchanged. To
+restore a backup on a new server, start that server with the key of the server
+that made the backup (`DUSTPAN_KEY_ENCRYPTION_KEY` or
+`DUSTPAN_KEY_ENCRYPTION_KEY_FILE`), then run the restore.
 
 The command refuses a backup of another schema version. The error names both
 versions. Restore into the same schema version only. To change version, upgrade
