@@ -170,6 +170,10 @@ of the run.
 
 The list of tested versions is in [`e2e/tool.go`](e2e/tool.go).
 
+The lowest tested version of each tool is the lowest supported version:
+Pulumi CLI 3.200.0 and OpenTofu 1.11.14. An older version may work, but no
+test drives it. Use a supported version, or a later one.
+
 ## What the server stores
 
 | Data | Where | Protection |
