@@ -365,7 +365,13 @@ func (p jobPlanner) poolID(ctx context.Context, ns namespace.Name, name string) 
 		case 1:
 			return pools[0].ID, nil
 		case 0:
-			return "", fmt.Errorf("%w: the namespace has no runner pool for jobs", job.ErrUnsupported)
+			// The next step: the route that makes a pool, and the setting
+			// without which the server does not serve that route. The text
+			// holds no name, so an API answer that keeps 300 bytes of it
+			// always holds the whole step.
+			return "", fmt.Errorf("%w: the namespace has no runner pool for jobs: make one with POST "+
+				"/api/runners/{namespace}/pools and the purpose jobs (this route needs DUSTPAN_PUBLIC_URL)",
+				job.ErrUnsupported)
 		default:
 			return "", fmt.Errorf("%w: the namespace has more than one runner pool for jobs, so there is no "+
 				"default pool", job.ErrUnsupported)
