@@ -250,7 +250,12 @@ func TestForceUnlockErrorCodes(t *testing.T) {
 		{"lock mismatch", workspace.ErrLockMismatch, http.StatusConflict, "workspace.lock-mismatch"},
 		{"client encrypted", workspace.ErrClientEncrypted, http.StatusConflict, "workspace.client-encrypted"},
 		{"locked by another", workspace.ErrLockedByOther, http.StatusConflict, "workspace.locked"},
-		{"concurrent change", workspace.ErrConcurrentModification, http.StatusConflict, ""},
+		{
+			"concurrent change",
+			workspace.ErrConcurrentModification,
+			http.StatusConflict,
+			"workspace.changed-concurrently",
+		},
 		{"invalid reason", audit.ErrInvalidReason, http.StatusUnprocessableEntity, ""},
 	}
 

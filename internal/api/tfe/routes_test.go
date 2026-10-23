@@ -716,7 +716,7 @@ func stubReadStateAt(ctx context.Context, req workspace.StateAtRequest) (workspa
 	case ms < stubStateAtFirst:
 		return workspace.StateAtRead{}, fmt.Errorf(
 			"%w: the first state version of acme/web is at 1970-01-01T00:00:01Z (%d ms)",
-			workspace.ErrNoStateAt, stubStateAtFirst,
+			&workspace.NoStateAtError{First: time.UnixMilli(stubStateAtFirst).UTC()}, stubStateAtFirst,
 		)
 	case ms >= 3000:
 		id, finalized = "sv-encrypted123", 3000
