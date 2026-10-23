@@ -129,23 +129,25 @@ func newFakeRegistry() *fakeRegistry {
 func newRegistryFixture(t *testing.T, host string, authz identity.Authorizer) registryFixture {
 	t.Helper()
 
-	reg := newFakeRegistry()
-
-	return buildRegistryFixture(t, host, tokenAuthenticator{}, authz, reg, reg)
+	return buildRegistryFixture(t, host, tokenAuthenticator{}, authz, nil)
 }
 
 // buildRegistryFixture builds a handler with the authenticator authn, the
-// Authorizer authz and the registry service svc. reg is the fake registry
-// that the fixture reports as its own.
+// Authorizer authz and the registry service svc. A nil svc is the fake
+// registry of the fixture, which the fixture reports as reg.
 func buildRegistryFixture(
 	t *testing.T,
 	host string,
 	authn identity.Authenticator,
 	authz identity.Authorizer,
-	reg *fakeRegistry,
 	svc tfe.RegistryService,
 ) registryFixture {
 	t.Helper()
+
+	reg := newFakeRegistry()
+	if svc == nil {
+		svc = reg
+	}
 
 	audits := &memAuditStore{entries: nil, err: nil, mu: sync.Mutex{}}
 	now := time.Date(2026, 10, 21, 9, 0, 0, 0, time.UTC)
