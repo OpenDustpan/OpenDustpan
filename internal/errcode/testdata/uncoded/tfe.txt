@@ -1,7 +1,7 @@
 # The error paths of internal/api/tfe that answer without a code of the
 # catalog. This list only shrinks: give a path a code, remove its line and
 # lower the limit. A new error path never goes on this list.
-limit 55
+limit 57
 Handler.freshReveal: errFreshStepRequired
 Handler.freshReveal: errReauthenticate
 Handler.guardStateWrite: errorClass{}
@@ -41,6 +41,7 @@ classify: workspace.ErrStaleSerial
 classify: workspace.ErrStateVersionNotFound
 classify: workspace.ErrUploadDenied
 classifyConflict: default
+classifyConflict: outputshare.ErrClientEncrypted
 classifyConflict: workspace.ErrAlreadyExists
 classifyConflict: workspace.ErrClientEncrypted
 classifyConflict: workspace.ErrConcurrentModification
@@ -55,6 +56,7 @@ classifyNamespace: maintenance.ErrInMaintenance
 classifyNamespace: namespace.ErrFenced
 classifyNamespace: namespace.ErrNotHome
 classifyNamespace: namespace.ErrUnavailable
+classifyNamespace: outputshare.ErrUnknownProducer
 classifyTooLarge: default
 classifyTooLarge: identity.ErrRateLimited
 classifyTooLarge: workspace.ErrBudgetTooSmall

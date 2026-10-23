@@ -114,6 +114,7 @@ func newSwitchedHandler(
 		Logger:         slog.New(slog.DiscardHandler),
 		Namespaces:     svc,
 		Workspaces:     ws,
+		OutputChecker:  nil,
 		BaseURL:        baseurl.Resolver{},
 		Audit:          newTestAudit(),
 		Gate:           nil,
