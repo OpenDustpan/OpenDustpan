@@ -7,6 +7,7 @@ import (
 	"slices"
 	"testing"
 
+	"opendustpan.org/opendustpan/internal/clientip"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/identity/identitytest"
 	"opendustpan.org/opendustpan/pkg/ipallow"
@@ -283,7 +284,7 @@ func TestGateExactScopeWithinAuthorize(t *testing.T) {
 		}}}
 		gate := ipallow.Gate{Next: next, Rules: f.rules, Enabled: enabled, IncludeBootstrap: false}
 
-		identitytest.CheckExactScope(ctxWithAddr(netip.MustParseAddr("192.0.2.10")), t, identitytest.ListCheck{
+		identitytest.CheckExactScope(clientip.WithAddr(t.Context(), netip.MustParseAddr("192.0.2.10")), t, identitytest.ListCheck{
 			Authorizer: gate, Principal: userPrincipal("alice"), Action: identity.ActionUnitRead,
 			Every: []identity.Object{identity.NamespaceObject("acme"), unit},
 		})
