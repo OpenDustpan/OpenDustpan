@@ -1176,7 +1176,7 @@ func TestStateAtRefusals(t *testing.T) {
 			seed:      true,
 			want:      http.StatusBadRequest,
 			message:   regexp.MustCompile(`is not Unix milliseconds`),
-			errorCode: "",
+			errorCode: errcode.UpdateInvalid,
 		},
 	}
 

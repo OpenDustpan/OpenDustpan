@@ -896,7 +896,7 @@ type codedErrorResponse struct {
 
 // failure is the answer of an error: the HTTP status, the message, and the
 // code of the catalog with its answer. err is the error of errcode.New, or
-// nil. A failure without a code answers no errorCode.
+// nil.
 type failure struct {
 	err     error
 	answer  errcode.Answer
@@ -913,10 +913,11 @@ func coded(status int, message, code string, args ...errcode.Value) failure {
 	return failure{err: err, answer: answer, code: code, message: message, status: status}
 }
 
-// uncoded returns the failure of status and message without a code. Each
-// error path that answers it is on the known list of the error code gate.
-func uncoded(status int, message string) failure {
-	return failure{err: nil, answer: errcode.Answer{}, code: "", message: message, status: status}
+// unmatched returns the failure of a classify function that does not know
+// the error. Its caller gets false with it and tries the next classify
+// function.
+func unmatched() failure {
+	return failure{err: nil, answer: errcode.Answer{}, code: "", message: "", status: 0}
 }
 
 // writeFailure writes the error body of f. When errcode.New refused the code
@@ -982,14 +983,14 @@ func classifyAuth(err error) (failure, bool) {
 	case errors.Is(err, sessionauth.ErrCSRF), errors.Is(err, sessionauth.ErrOtherSite):
 		return coded(http.StatusForbidden, err.Error(), errcode.Forbidden(err)), true
 	case errors.Is(err, errSessionUpdate):
-		return uncoded(http.StatusForbidden, err.Error()), true
+		return coded(http.StatusForbidden, err.Error(), errcode.UpdateConsoleSession), true
 	case errors.Is(err, errSessionSecrets):
 		return coded(http.StatusForbidden, err.Error(), errcode.SecretConsoleSession), true
 	case errors.Is(err, identity.ErrDenied):
 		return coded(http.StatusForbidden, "forbidden", errcode.Forbidden(err)), true
 	}
 
-	return uncoded(0, ""), false
+	return unmatched(), false
 }
 
 // classify maps domain errors to an HTTP status and a message safe to show callers.
@@ -1011,9 +1012,9 @@ func classify(err error) failure {
 
 	switch {
 	case errors.Is(err, stack.ErrInvalidUpdate):
-		return uncoded(http.StatusBadRequest, err.Error())
+		return coded(http.StatusBadRequest, err.Error(), errcode.UpdateInvalid)
 	case errors.Is(err, stack.ErrUpdateNotFound):
-		return uncoded(http.StatusNotFound, err.Error())
+		return coded(http.StatusNotFound, err.Error(), errcode.UpdateNotFound)
 	case errors.Is(err, secret.ErrTooLarge),
 		errors.Is(err, secret.ErrDecrypt),
 		errors.Is(err, secret.ErrKeyNotConfigured):
@@ -1039,7 +1040,7 @@ func classifyNamespace(err error) (failure, bool) {
 		return coded(http.StatusMisdirectedRequest, err.Error(), errcode.NamespaceNotHome), true
 	}
 
-	return uncoded(0, ""), false
+	return unmatched(), false
 }
 
 // classifyStack maps the errors of the stacks. ok is false for any other
@@ -1071,7 +1072,7 @@ func classifyStack(err error) (failure, bool) {
 		return coded(http.StatusConflict, err.Error(), errcode.StackOtherSecretsProvider), true
 	}
 
-	return uncoded(0, ""), false
+	return unmatched(), false
 }
 
 // classifyRequest maps the errors of a request that the adapter refuses
@@ -1092,7 +1093,7 @@ func classifyRequest(err error) (failure, bool) {
 		return coded(http.StatusBadRequest, err.Error(), errcode.RequestInvalidObject), true
 	}
 
-	return uncoded(0, ""), false
+	return unmatched(), false
 }
 
 // classifySecret maps the secrets errors to an HTTP status and a message
@@ -1130,37 +1131,41 @@ func updateConflictText(err error) string {
 	return stack.ErrUpdateConflict.Error() + ": " + updateConflictHint
 }
 
-// classifyUpdate maps the errors of the update cycle to an HTTP status and a
-// message safe to show callers.
+// classifyUpdate maps the errors of the update cycle to an HTTP status, a
+// message safe to show callers and a code. A manual lock comes first: the
+// refusal of a manual lock also wraps stack.ErrUpdateConflict.
 func classifyUpdate(err error) failure {
 	if manual, ok := errors.AsType[*manuallock.LockedError](err); ok {
-		return uncoded(http.StatusConflict, manual.Error())
+		answer, aerr := refusal.Locked(manual)
+
+		return failure{
+			err: aerr, answer: answer, code: errcode.LockLocked, message: manual.Error(), status: http.StatusConflict,
+		}
+	}
+
+	for _, try := range []func(error) (failure, bool){classifyUpdateState, classifyJournal} {
+		if f, ok := try(err); ok {
+			return f
+		}
 	}
 
 	switch {
-	case errors.Is(err, stack.ErrUpdateConflict):
-		return uncoded(http.StatusConflict, updateConflictText(err))
-	case errors.Is(err, stack.ErrWrongUpdateState),
-		errors.Is(err, stack.ErrConcurrentModification), errors.Is(err, stack.ErrInvalidDelta),
-		errors.Is(err, stack.ErrCheckpointConflict), errors.Is(err, stack.ErrStaleCheckpoint),
-		errors.Is(err, stack.ErrJournalConflict), errors.Is(err, stack.ErrJournalIncomplete):
-		return uncoded(http.StatusConflict, err.Error())
-	case errors.Is(err, stack.ErrJournalBatch):
-		return uncoded(http.StatusBadRequest, err.Error())
-	case errors.Is(err, stack.ErrLeaseInvalid), errors.Is(err, stack.ErrLeaseExpired):
-		return uncoded(http.StatusUnauthorized, err.Error())
+	case errors.Is(err, stack.ErrLeaseInvalid):
+		return coded(http.StatusUnauthorized, err.Error(), errcode.UpdateLeaseInvalid)
+	case errors.Is(err, stack.ErrLeaseExpired):
+		return coded(http.StatusUnauthorized, err.Error(), errcode.UpdateLeaseExpired)
 	case errors.Is(err, stack.ErrTooLarge):
 		// A replay bound refusal answers its one-sentence message, which
 		// names the bound, its limit and the one command that helps,
 		// without the update wrapper prefixes. Any other oversized
 		// request answers the error text itself.
 		if msg, ok := stack.TooLargeMessage(err); ok {
-			return uncoded(http.StatusRequestEntityTooLarge, msg)
+			return coded(http.StatusRequestEntityTooLarge, msg, errcode.UpdateTooLarge)
 		}
 
-		return uncoded(http.StatusRequestEntityTooLarge, err.Error())
+		return coded(http.StatusRequestEntityTooLarge, err.Error(), errcode.UpdateTooLarge)
 	case errors.Is(err, stack.ErrJournalBuildTimeout):
-		return uncoded(http.StatusServiceUnavailable, err.Error())
+		return coded(http.StatusServiceUnavailable, err.Error(), errcode.JournalBuildTimeout)
 	case errors.Is(err, maintenance.ErrInMaintenance):
 		return coded(http.StatusServiceUnavailable, maintenance.ErrInMaintenance.Error()+": try again later",
 			errcode.MaintenanceInMaintenance)
@@ -1170,6 +1175,43 @@ func classifyUpdate(err error) failure {
 	default:
 		return coded(http.StatusInternalServerError, "internal error", errcode.ServerInternal)
 	}
+}
+
+// classifyUpdateState maps the errors of an update that another update
+// blocks, or that changed or holds another state than the request needs. ok is
+// false for any other error.
+func classifyUpdateState(err error) (failure, bool) {
+	switch {
+	case errors.Is(err, stack.ErrUpdateConflict):
+		return coded(http.StatusConflict, updateConflictText(err), errcode.UpdateConflict), true
+	case errors.Is(err, stack.ErrWrongUpdateState):
+		return coded(http.StatusConflict, err.Error(), errcode.UpdateWrongState), true
+	case errors.Is(err, stack.ErrConcurrentModification):
+		return coded(http.StatusConflict, err.Error(), errcode.UpdateConcurrentModification), true
+	case errors.Is(err, stack.ErrInvalidDelta):
+		return coded(http.StatusConflict, err.Error(), errcode.UpdateDeltaInvalid), true
+	case errors.Is(err, stack.ErrCheckpointConflict):
+		return coded(http.StatusConflict, err.Error(), errcode.UpdateCheckpointConflict), true
+	case errors.Is(err, stack.ErrStaleCheckpoint):
+		return coded(http.StatusConflict, err.Error(), errcode.UpdateCheckpointStale), true
+	}
+
+	return unmatched(), false
+}
+
+// classifyJournal maps the errors of the update journal. ok is false for any
+// other error.
+func classifyJournal(err error) (failure, bool) {
+	switch {
+	case errors.Is(err, stack.ErrJournalConflict):
+		return coded(http.StatusConflict, err.Error(), errcode.JournalConflict), true
+	case errors.Is(err, stack.ErrJournalIncomplete):
+		return coded(http.StatusConflict, err.Error(), errcode.JournalIncomplete), true
+	case errors.Is(err, stack.ErrJournalBatch):
+		return coded(http.StatusBadRequest, err.Error(), errcode.JournalBatchInvalid), true
+	}
+
+	return unmatched(), false
 }
 
 func (h *Handler) writeJSON(ctx context.Context, w http.ResponseWriter, status int, body any) {
