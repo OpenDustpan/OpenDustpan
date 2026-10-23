@@ -15,6 +15,8 @@ import (
 	"opendustpan.org/opendustpan/internal/api/tfe"
 	"opendustpan.org/opendustpan/internal/baseurl"
 	"opendustpan.org/opendustpan/internal/bodygate"
+	"opendustpan.org/opendustpan/internal/errcode"
+	"opendustpan.org/opendustpan/internal/errcode/errcodetest"
 	"opendustpan.org/opendustpan/internal/token"
 	"opendustpan.org/opendustpan/pkg/workspace"
 )
@@ -124,6 +126,8 @@ func TestGateBusyAnswers503(t *testing.T) {
 		)
 
 		checkBusy(t, rec)
+		errcodetest.CheckAnswer(t, errcodetest.ShapeJSONAPI, http.StatusServiceUnavailable, rec.Body.Bytes(),
+			errcodetest.Want{Code: errcode.StateVersionBusy, Args: nil, RequestBody: nil})
 
 		if called {
 			t.Fatal("full gate reached the Upload service")
