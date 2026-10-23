@@ -199,6 +199,12 @@ var errBody = errors.New(
 	`invalid request body: send a JSON object with at least one of "summary", "runbook", "owners", "onCall" and "links"`,
 )
 
+// errBodyText is the answer for a body that is not valid UTF-8 or that holds
+// a lone surrogate escape. The server refuses the text and does not change it.
+var errBodyText = errors.New(
+	`invalid request body: send valid UTF-8 text, with no invalid byte and no lone surrogate escape such as \ud800`,
+)
+
 // errInclude names the include value that the read route needs.
 var errInclude = errors.New("invalid include query parameter: send section names separated by commas")
 
@@ -256,7 +262,7 @@ func classify(err error) (int, string) {
 		return http.StatusNotFound, errNotFound.Error()
 	case errors.Is(err, objectcontext.ErrNotFound):
 		return http.StatusNotFound, "no API context to clear"
-	case errors.Is(err, errBody), errors.Is(err, errInclude):
+	case errors.Is(err, errBody), errors.Is(err, errBodyText), errors.Is(err, errInclude):
 		return http.StatusBadRequest, err.Error()
 	case errors.Is(err, objectcontext.ErrInvalidContext), errors.Is(err, objectcontext.ErrUnknownSection):
 		return http.StatusBadRequest, err.Error()
