@@ -43,6 +43,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/netip"
+	"strings"
 	"sync"
 	"time"
 
@@ -111,6 +112,19 @@ var ErrInvalidWindow = errors.New("authgate: the failure window must be 1 ms or 
 // ErrMissingNext reports a Config without Next.
 var ErrMissingNext = errors.New("authgate: missing next authenticator")
 
+// ErrInvalidScope reports a Config with a Scope that is not empty and not
+// made of the letters a to z only.
+var ErrInvalidScope = errors.New("authgate: the scope must be empty or the letters a to z")
+
+// unknownSource is the budget key of a source that holds the scope
+// separator. All such sources share one budget. The key is the separator
+// itself, so no source that is not mapped to it can have the same key.
+const unknownSource = scopeSeparator
+
+// scopeSeparator joins the scope and the source in the key of the shared
+// count. A scope cannot hold it.
+const scopeSeparator = "|"
+
 // Config holds the settings of a Gate. Zero values take the defaults.
 type Config struct {
 	// Next resolves the tokens. Required.
@@ -137,6 +151,11 @@ type Config struct {
 	// OperationPrune, each time a call of Failures fails. Nil counts
 	// nothing.
 	CounterErrors func(operation string)
+	// Scope names the budget in the shared count. Gates with different
+	// scopes keep separate counts for one source, so the misses of one gate
+	// never spend the budget of another. Empty is the scope of the token
+	// lookups.
+	Scope string
 	// Burst is the count of misses that a source can have at once.
 	Burst int
 	// Refill is the time that gives a source back one miss.
@@ -158,6 +177,7 @@ type Gate struct {
 	logger     *slog.Logger
 	now        func() time.Time
 	failures   FailureCounter
+	scope      string
 	errors     func(operation string)
 	sources    map[string]*list.Element
 	recent     *list.List
@@ -199,6 +219,10 @@ func New(cfg Config) (*Gate, error) {
 		return nil, ErrMissingNext
 	}
 
+	if !validScope(cfg.Scope) {
+		return nil, ErrInvalidScope
+	}
+
 	burst := positiveOr(cfg.Burst, DefaultBurst)
 	refill := positiveOr(cfg.Refill, DefaultRefill)
 
@@ -213,6 +237,7 @@ func New(cfg Config) (*Gate, error) {
 		logger:     cfg.Logger,
 		now:        cfg.Now,
 		failures:   cfg.Failures,
+		scope:      cfg.Scope,
 		errors:     cfg.CounterErrors,
 		sources:    map[string]*list.Element{},
 		recent:     list.New(),
@@ -244,6 +269,17 @@ func New(cfg Config) (*Gate, error) {
 	}
 
 	return g, nil
+}
+
+// validScope reports whether scope is empty or made of the letters a to z.
+func validScope(scope string) bool {
+	for _, r := range scope {
+		if r < 'a' || r > 'z' {
+			return false
+		}
+	}
+
+	return true
 }
 
 // positiveOr returns v, or fallback when v is not above zero.
@@ -279,8 +315,16 @@ func WithRequest(ctx context.Context, source string) context.Context {
 }
 
 // sourceKey returns the budget key of the address source: an IPv4 address
-// as it is, an IPv6 address as its /64, and any other text as it is.
+// as it is, an IPv6 address as its /64, a text with the scope separator as
+// the one unknown source, and any other text as it is.
 func sourceKey(source string) string {
+	// Defense in depth: the counter key adds the scope in front of the source
+	// with a separator, and this check keeps a source from forging another
+	// scope. It does not rely on the scope check of New.
+	if strings.Contains(source, scopeSeparator) {
+		return unknownSource
+	}
+
 	addr, err := netip.ParseAddr(source)
 	if err != nil {
 		return source
@@ -582,7 +626,7 @@ func (g *Gate) countShared(ctx context.Context, source string) {
 	callCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), counterTimeout)
 	defer cancel()
 
-	count, err := g.failures.AddFailure(callCtx, source, g.window)
+	count, err := g.failures.AddFailure(callCtx, g.counterSource(source), g.window)
 	if err != nil {
 		g.counterFailed(ctx, OperationAdd, err)
 	} else if float64(count.Count) >= g.burst {
@@ -590,6 +634,18 @@ func (g *Gate) countShared(ctx context.Context, source string) {
 	}
 
 	g.prune(callCtx, ctx)
+}
+
+// counterSource returns the key of source in the shared count: source as it
+// is for the scope of the token lookups, else the scope and source. A scope
+// has a separator that a source cannot hold, so no source of one scope
+// meets a source of another.
+func (g *Gate) counterSource(source string) string {
+	if g.scope == "" {
+		return source
+	}
+
+	return g.scope + scopeSeparator + source
 }
 
 // spendLocal uses one unit of the budget of source in this process.

@@ -34,7 +34,7 @@ func fault(kind conformance.FaultKind, op string) conformance.Fault {
 func route(id string, method model.Method, path string) model.Operation {
 	return model.Operation{
 		ID: id, Method: method, Path: path, Tags: nil, Summary: "", Description: "", Actions: nil, Public: false,
-		Parameters: nil, Body: nil, Result: model.Response{Status: 0, Type: nil, ETag: false},
+		Parameters: nil, Body: nil, Result: model.Response{Statuses: []int{204}, Type: nil, ETag: false},
 		IdempotencyKey: false, IfMatch: model.IfMatchNone, Page: nil,
 	}
 }

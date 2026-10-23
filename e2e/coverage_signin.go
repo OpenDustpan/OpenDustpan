@@ -20,9 +20,9 @@ import (
 )
 
 // coverageSignInRoutes returns the sign-in rows of the installation route
-// table, with the routes of the sign-in providers of the API. The sign-in needs a principal store and a session store,
-// so the
-// table comes from a handler over a temporary SQLite store.
+// table, with the routes of the sign-in providers of the API. The sign-in needs
+// a principal store and a session store, so the table comes from a handler over
+// a temporary SQLite store.
 func coverageSignInRoutes(tb testing.TB) []RouteRef {
 	tb.Helper()
 
@@ -39,6 +39,66 @@ func coverageSignInRoutes(tb testing.TB) []RouteRef {
 		}
 	})
 
+	principals, sessions := coverageSignInServices(tb, st)
+
+	admin := coverageProviderAdmin(tb, st)
+
+	// A one-time code mounts the dev sign-in route, so the route table holds it.
+	code, _, err := devcode.Make(nil)
+	if err != nil {
+		tb.Fatalf("make dev sign-in code: %v", err)
+	}
+
+	handler, err := serverapi.NewHandler(serverapi.Config{
+		Preferences:    nil,
+		GitHost:        nil,
+		Idempotency:    nil,
+		Workers:        nil,
+		TempAdmins:     nil,
+		Now:            nil,
+		Authenticator:  coverageAuthenticator{},
+		Authorizer:     coverageAuthorizer{},
+		Logger:         slog.New(slog.DiscardHandler),
+		Namespaces:     coverageNamespaces(tb),
+		Backups:        nil,
+		Restores:       nil,
+		Maintenance:    coverageMaintenance{},
+		Metrics:        coverageMetrics{},
+		Version:        "test",
+		Schema:         coverageSchema{},
+		Journal:        nil,
+		Principals:     principals,
+		Access:         nil,
+		Tokens:         nil,
+		Audit:          coverageAuditStore{},
+		OnAuditFailure: nil,
+		DeletedUnits:   nil,
+		AuditSinks:     nil,
+		AuditChain:     nil,
+		IPAllowlists:   nil,
+		Gates:          nil,
+		SessionPolicy:  nil,
+		SignIn: &serverapi.SignIn{
+			OnDevRefused: nil,
+			Sessions:     sessions, Limiter: nil, Stored: nil, Admin: admin, Providers: nil, Origins: nil,
+			DevCode: code, DevAdmin: identity.Principal{}, //nolint:exhaustruct_v5 // The coverage test calls no route.
+		},
+		CheckpointEpochs: nil,
+		InstallationKind: installation.KindDev,
+		DenialLimiter:    nil,
+	})
+	if err != nil {
+		tb.Fatalf("server handler with the sign-in: %v", err)
+	}
+
+	return signInRows(handler)
+}
+
+// coverageSignInServices returns the principal service and the session service
+// over st.
+func coverageSignInServices(tb testing.TB, st *sqlite.Store) (*principal.Service, *session.Sessions) {
+	tb.Helper()
+
 	principals, err := principal.NewService(principal.Config{
 		TempAdmins: nil,
 		Store:      st, Guard: principal.AdminOnlyGuard{}, Namespaces: nil, Tokens: nil, Now: nil, NewID: nil,
@@ -54,39 +114,11 @@ func coverageSignInRoutes(tb testing.TB) []RouteRef {
 		tb.Fatalf("session service: %v", err)
 	}
 
-	admin := coverageProviderAdmin(tb, st)
+	return principals, sessions
+}
 
-	// A one-time code mounts the dev sign-in route, so the route table holds it.
-	code, _, err := devcode.Make(nil)
-	if err != nil {
-		tb.Fatalf("make dev sign-in code: %v", err)
-	}
-
-	handler, err := serverapi.NewHandler(serverapi.Config{
-		Preferences:   nil,
-		GitHost:       nil,
-		Idempotency:   nil,
-		Workers:       nil,
-		TempAdmins:    nil,
-		Now:           nil,
-		Authenticator: coverageAuthenticator{}, Authorizer: coverageAuthorizer{}, Logger: slog.New(slog.DiscardHandler),
-		Namespaces: coverageNamespaces(tb), Backups: nil, Restores: nil, Maintenance: coverageMaintenance{},
-		Metrics: coverageMetrics{}, Version: "test", Schema: coverageSchema{}, Journal: nil, Principals: principals,
-		Access: nil, Tokens: nil, Audit: nil, OnAuditFailure: nil, DeletedUnits: nil, AuditSinks: nil, AuditChain: nil,
-		IPAllowlists: nil, Gates: nil, SessionPolicy: nil,
-		SignIn: &serverapi.SignIn{
-			OnDevRefused: nil,
-			Sessions:     sessions, Limiter: nil, Stored: nil, Admin: admin, Providers: nil, Origins: nil,
-			DevCode: code, DevAdmin: identity.Principal{}, //nolint:exhaustruct_v5 // The coverage test calls no route.
-		},
-		CheckpointEpochs: nil,
-		InstallationKind: installation.KindDev,
-		DenialLimiter:    nil,
-	})
-	if err != nil {
-		tb.Fatalf("server handler with the sign-in: %v", err)
-	}
-
+// signInRows keeps the sign-in rows of the route table of handler.
+func signInRows(handler *serverapi.Handler) []RouteRef {
 	var out []RouteRef
 
 	for _, ref := range serverRefs(handler.Routes()) {

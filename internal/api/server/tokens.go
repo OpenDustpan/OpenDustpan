@@ -663,7 +663,7 @@ func tokenPageOf(page accesstoken.Page, now time.Time) tokenListResponse {
 
 // tokenPageRequest reads the query parameters of the list routes.
 func tokenPageRequest(r *http.Request) (accesstoken.PageRequest, error) {
-	q := r.URL.Query()
+	q := queryOf(r)
 	req := accesstoken.PageRequest{
 		PrincipalID: q.Get("principal"), Cursor: q.Get("cursor"), Filter: accesstoken.FilterAll, Limit: 0,
 	}

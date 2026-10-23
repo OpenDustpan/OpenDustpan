@@ -57,7 +57,7 @@ func newMetricsHandler(
 	t *testing.T,
 	authn identity.Authenticator,
 	metrics apiserver.MetricsWriter,
-) *apiserver.Handler {
+) testHandler {
 	t.Helper()
 
 	namespaces, err := namespace.NewService(namespace.Config{Store: stubNamespaceStore{}, Now: nil, Region: "test"})
@@ -65,7 +65,7 @@ func newMetricsHandler(
 		t.Fatalf("namespace service: %v", err)
 	}
 
-	handler, err := apiserver.NewHandler(apiserver.Config{
+	handler, err := newCheckedHandler(t, apiserver.Config{
 		Preferences:      nil,
 		GitHost:          nil,
 		Idempotency:      nil,
@@ -87,7 +87,7 @@ func newMetricsHandler(
 		Principals:       nil,
 		Access:           nil,
 		Tokens:           nil,
-		Audit:            nil,
+		Audit:            newTestAudit(),
 		OnAuditFailure:   nil,
 		DeletedUnits:     nil,
 		AuditChain:       nil,

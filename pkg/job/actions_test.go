@@ -77,6 +77,7 @@ func newSpec(unit identity.Object, op job.Operation, k job.ExecutorKind) job.Spe
 	return job.Spec{
 		Unit:      unit,
 		Operation: op,
+		Purpose:   "",
 		Executor:  k,
 		Location:  job.Location{Connection: "", Repository: "", Ref: "", Directory: "", Revision: ""},
 		Steps:     nil,

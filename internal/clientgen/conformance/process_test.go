@@ -330,7 +330,7 @@ func TestProcessAdapterGetsNoSecret(t *testing.T) {
 	}
 
 	if info.Client != "" {
-		t.Errorf("the adapter saw the secret: %q", info.Client)
+		t.Errorf("the adapter saw the secret: the value has %d bytes", len(info.Client))
 	}
 
 	if err = a.Close(); err != nil {
@@ -347,7 +347,9 @@ func TestProcessAdapterGetsNoSecret(t *testing.T) {
 
 	info, err = b.Initialize(t.Context(), initParams())
 	if err != nil || info.Client != "canary-value" {
-		t.Errorf("the listed variable should reach the adapter: %+v %v", info, err)
+		t.Errorf(
+			"the listed variable should reach the adapter: the value has %d bytes, error %v", len(info.Client), err,
+		)
 	}
 
 	if err = b.Close(); err != nil {

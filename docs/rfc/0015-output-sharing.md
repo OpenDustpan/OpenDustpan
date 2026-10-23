@@ -1,13 +1,15 @@
 ---
 rfc: 15
 title: Output sharing between units
-status: draft
+status: accepted
 created: 2026-10-10
+adr: 213, 273
 ---
 
 # RFC 15. Output sharing between units
 
-Status: draft. The action names and the sharing model are proposals.
+Status: accepted
+([ADR 273](../adr/0273-output-sharing-rules-and-the-read-outputs-action.md)).
 
 ## Problem
 
@@ -157,4 +159,31 @@ token needs a sharing rule that names the unit of the job and the grants of
 the principal that started the job. A profile block `outputs/opendustpan`
 needs the sharing rule and the `unit:read` of the authority of the profile
 attachment. The server answers a job-token read with the root outputs only,
-and records the edge with the evidence `job`. The other questions stay open.
+and records the edge with the evidence `job`. ADR 273 answers the other questions.
+
+Accepted as
+[ADR 273](../adr/0273-output-sharing-rules-and-the-read-outputs-action.md)
+on 2026-10-22. The owner and the product manager decided the open questions
+(15.1 to 15.7):
+
+1. **15.1:** a separate action `unit:read-outputs`, with sharing rules on the
+   unit that produces the outputs.
+2. **15.2:** a caller that can only read outputs decrypts only ciphertext that
+   the root outputs of the latest checkpoint hold (answer 1 of "Secret
+   outputs").
+3. **15.3:** the action covers only the routes that read outputs. A stack
+   reference and `terraform_remote_state` read a whole state, so on a
+   workstation they need read state. The console states the limit.
+4. **15.4:** a rule across namespaces names units or a collection of the other
+   namespace, never a principal and never a whole namespace. The producer
+   decides alone.
+5. **15.5:** a job token reads only what a rule names, limited to the grants
+   of the principal that started the job.
+6. **15.6:** a namespace setting decides the rule of a new unit. The default
+   is `nobody`.
+7. **15.7:** OpenDustpan supports Pulumi reads of OpenTofu outputs where e2e
+   passes. Typed output contracts get their own RFC.
+
+The e2e run of 22 October 2026 found that no CLI version reads outputs only.
+ADR 273 gives the routes of each version. The option "specific principals"
+of the proposal is dropped: a principal reads outputs with a grant.

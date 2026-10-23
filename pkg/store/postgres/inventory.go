@@ -276,12 +276,7 @@ func (s *Store) QueryDeletedUnits(ctx context.Context, q inventory.DeletedQuery)
 
 	// One REPEATABLE READ snapshot for the count and the page, so the total
 	// agrees with the rows.
-	opts := pgx.TxOptions{
-		IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly, DeferrableMode: pgx.NotDeferrable, BeginQuery: "",
-		CommitQuery: "",
-	}
-
-	err := pgx.BeginTxFunc(ctx, s.pool, opts, func(tx pgx.Tx) error {
+	err := pgx.BeginTxFunc(ctx, s.pool, s.snapshotOptions(), func(tx pgx.Tx) error {
 		var readErr error
 
 		page, readErr = queryDeletedPage(ctx, tx, q)
@@ -289,7 +284,7 @@ func (s *Store) QueryDeletedUnits(ctx context.Context, q inventory.DeletedQuery)
 		return readErr
 	})
 	if err != nil {
-		return inventory.DeletedPage{}, fmt.Errorf("deleted inventory snapshot: %w", err)
+		return inventory.DeletedPage{}, fmt.Errorf("deleted inventory snapshot: %w", readConflict(err))
 	}
 
 	return page, nil
@@ -464,12 +459,24 @@ func (s *Store) ListDeletedUnits(ctx context.Context, ns namespace.Name) ([]inve
 // ListUnits implements inventory.Reader: entries of one namespace, ordered by
 // tool, then name. A namespace with no units reads as an empty list.
 func (s *Store) ListUnits(ctx context.Context, ns namespace.Name) ([]inventory.Entry, error) {
-	rows, err := s.queries.ListInventory(ctx, ns.String())
-	if err != nil {
-		return nil, fmt.Errorf("select inventory: %w", err)
-	}
+	var (
+		rows   []db.ListInventoryRow
+		labels map[string]map[string]string
+	)
 
-	labels, err := s.inventoryLabels(ctx, ns)
+	// One snapshot, so the entries and their labels come from one state.
+	err := s.inSnapshotTx(ctx, func(q *db.Queries) error {
+		var err error
+
+		rows, err = q.ListInventory(ctx, ns.String())
+		if err != nil {
+			return fmt.Errorf("select inventory: %w", err)
+		}
+
+		labels, err = inventoryLabels(ctx, q, ns)
+
+		return err
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -493,18 +500,33 @@ func (s *Store) ListUnits(ctx context.Context, ns namespace.Name) ([]inventory.E
 // GetUnit implements inventory.Reader: the live unit with the stable ID
 // unitID, or inventory.ErrUnitNotFound. A deleted unit is not a live unit.
 func (s *Store) GetUnit(ctx context.Context, unitID string) (inventory.Entry, error) {
-	row, err := s.queries.GetInventoryEntryByUnitID(ctx, unitID)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return inventory.Entry{}, inventory.ErrUnitNotFound
-	}
+	var (
+		row       db.GetInventoryEntryByUnitIDRow
+		labelRows []db.ListInventoryUnitLabelsRow
+	)
 
-	if err != nil {
-		return inventory.Entry{}, fmt.Errorf("select inventory unit: %w", err)
-	}
+	// One snapshot, so the entry and its labels come from one state.
+	err := s.inSnapshotTx(ctx, func(q *db.Queries) error {
+		var err error
 
-	labelRows, err := s.queries.ListInventoryUnitLabels(ctx, unitID)
+		row, err = q.GetInventoryEntryByUnitID(ctx, unitID)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return inventory.ErrUnitNotFound
+		}
+
+		if err != nil {
+			return fmt.Errorf("select inventory unit: %w", err)
+		}
+
+		labelRows, err = q.ListInventoryUnitLabels(ctx, unitID)
+		if err != nil {
+			return fmt.Errorf("select inventory unit labels: %w", err)
+		}
+
+		return nil
+	})
 	if err != nil {
-		return inventory.Entry{}, fmt.Errorf("select inventory unit labels: %w", err)
+		return inventory.Entry{}, err
 	}
 
 	entry := inventoryEntry(db.ListInventoryRow(row))
@@ -519,8 +541,8 @@ func (s *Store) GetUnit(ctx context.Context, unitID string) (inventory.Entry, er
 
 // inventoryLabels reads the labels of every live unit of ns from the
 // projection, keyed by unit ID.
-func (s *Store) inventoryLabels(ctx context.Context, ns namespace.Name) (map[string]map[string]string, error) {
-	rows, err := s.queries.ListInventoryLabels(ctx, ns.String())
+func inventoryLabels(ctx context.Context, q *db.Queries, ns namespace.Name) (map[string]map[string]string, error) {
+	rows, err := q.ListInventoryLabels(ctx, ns.String())
 	if err != nil {
 		return nil, fmt.Errorf("select inventory labels: %w", err)
 	}
@@ -608,8 +630,7 @@ func (s *Store) GetDeletedUnitFacts(
 ) (inventory.DeletedFacts, error) {
 	// One snapshot, so that the entry, the collection and the labels come from
 	// the same state of the database.
-	//nolint:exhaustruct_v5 // A snapshot read sets only isolation and access mode.
-	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
+	tx, err := s.pool.BeginTx(ctx, s.snapshotOptions())
 	if err != nil {
 		return inventory.DeletedFacts{}, fmt.Errorf("begin read transaction: %w", err)
 	}

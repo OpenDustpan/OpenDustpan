@@ -326,7 +326,7 @@ func RunWorkspace(t *testing.T, newStore WorkspaceFactory) {
 		},
 	}
 
-	for _, tc := range slices.Concat(cases, releaseAuditCases()) {
+	for _, tc := range slices.Concat(cases, releaseAuditCases(), workspacePageCases()) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			tc.test(t, newStore(t))
