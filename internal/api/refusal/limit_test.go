@@ -611,3 +611,50 @@ func TestSurfacesAreSeparateKeys(t *testing.T) {
 		t.Fatalf("tracked keys = %d and entries = %d, want 2 and 2", lim.Len(), len(store.entries))
 	}
 }
+
+// TestUnknownPrincipalKindIsRecordedAsNoKind checks that a refusal of a
+// principal of a kind that the audit log does not know still writes a valid
+// entry, with no kind.
+func TestUnknownPrincipalKindIsRecordedAsNoKind(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		kind identity.Kind
+		want string
+	}{
+		{kind: "robot", want: ""},
+		{kind: "Person", want: ""},
+		{kind: "person\n", want: ""},
+		{kind: "", want: ""},
+		{kind: identity.KindPerson, want: audit.PrincipalKindPerson},
+		{kind: identity.KindService, want: audit.PrincipalKindService},
+		{kind: identity.KindWorkload, want: audit.PrincipalKindWorkload},
+	}
+
+	for _, tc := range cases {
+		t.Run(fmt.Sprintf("%q", tc.kind), func(t *testing.T) {
+			t.Parallel()
+
+			store, failures := newFakeStore(nil), 0
+			rec := newRecorder(t, store, nil, &failures)
+
+			p := person("bo@example.com")
+			p.Kind = tc.kind
+
+			deny(t, rec, request(t, "/api/x"), p, identity.NamespaceObject("team"))
+
+			if len(store.entries) != 1 || failures != 0 {
+				t.Fatalf("wrote %d entries and counted %d failures, want 1 and 0", len(store.entries), failures)
+			}
+
+			e := store.entries[0]
+			if e.PrincipalKind != tc.want {
+				t.Fatalf("principal kind = %q, want %q", e.PrincipalKind, tc.want)
+			}
+
+			if err := e.Validate(); err != nil {
+				t.Fatalf("the denied entry is not valid: %v", err)
+			}
+		})
+	}
+}
