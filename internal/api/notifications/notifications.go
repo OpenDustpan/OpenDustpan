@@ -165,106 +165,121 @@ type errorResponse struct {
 
 // statusError is an error with a fixed answer.
 type statusError struct {
-	status  int
-	code    string
-	message string
+	problem problem
 }
 
-func (e *statusError) Error() string { return e.message }
-
-func badRequest(code, message string) error {
-	return &statusError{status: http.StatusBadRequest, code: code, message: message}
-}
+func (e *statusError) Error() string { return e.problem.message }
 
 func (h *Handler) writeError(ctx context.Context, w http.ResponseWriter, err error) {
 	if errors.Is(err, idempotency.ErrLost) {
 		err = idempotent.Lost()
 	}
 
+	w.Header().Set("Cache-Control", "no-store")
+
 	if ie, ok := errors.AsType[*idempotent.Error](err); ok {
-		w.Header().Set("Cache-Control", "no-store")
-		h.writeJSON(ctx, w, ie.Status, errorResponse{
-			Code: ie.Status, Message: ie.Message, ErrorCode: ie.Answer.Code(), ErrorArgs: ie.Answer.Args(),
-		})
+		h.writeAnswer(ctx, w, ie.Status, ie.Message, ie.Answer)
 
 		return
 	}
 
 	pr := classify(err)
-	if pr.status == http.StatusInternalServerError {
-		// The log names the status only: the text may hold driver detail or a
-		// secret.
-		h.logger.ErrorContext(ctx, "request failed", slog.Int("status", pr.status))
+	if se, ok := errors.AsType[*statusError](err); ok {
+		pr = se.problem
 	}
 
 	if errors.Is(err, namespace.ErrFenced) {
 		h.logger.WarnContext(ctx, "write fenced", slog.String("error", err.Error()))
 	}
 
-	w.Header().Set("Cache-Control", "no-store")
-
-	var args map[string]any
-
 	if limited, ok := errors.AsType[*sinks.RateLimitedError](err); ok {
-		// The wait is whole seconds, rounded up, and at least 1.
-		wait := max(1, int((limited.RetryAfter+time.Second-1)/time.Second))
-		w.Header().Set("Retry-After", strconv.Itoa(wait))
-
-		args = map[string]any{"retryAfterSeconds": wait}
+		w.Header().Set("Retry-After", strconv.FormatInt(retryAfterSeconds(limited), 10))
 	}
 
-	h.writeJSON(ctx, w, pr.status, errorResponse{
-		Code: pr.status, Message: pr.message, ErrorCode: pr.code, ErrorArgs: args,
+	answer, codeErr := errcode.New(pr.code, pr.values...)
+	if codeErr != nil {
+		// A code or a value that the catalog refuses is a bug of this adapter.
+		// The log names the code only.
+		h.logger.ErrorContext(ctx, "error code refused", slog.String("error_code", pr.code))
+
+		pr = problem{
+			status: http.StatusInternalServerError, code: errcode.ServerInternal, values: nil,
+			message: "internal error",
+		}
+		answer = errcode.Internal()
+	}
+
+	if pr.status == http.StatusInternalServerError {
+		// The log names the status only: the text may hold driver detail or a
+		// secret.
+		h.logger.ErrorContext(ctx, "request failed", slog.Int("status", pr.status))
+	}
+
+	h.writeAnswer(ctx, w, pr.status, pr.message, answer)
+}
+
+// writeAnswer writes the error body of status and message with the code and
+// the arguments of answer.
+func (h *Handler) writeAnswer(
+	ctx context.Context, w http.ResponseWriter, status int, message string, answer errcode.Answer,
+) {
+	h.writeJSON(ctx, w, status, errorResponse{
+		Code: status, Message: message, ErrorCode: answer.Code(), ErrorArgs: answer.Args(),
 	})
 }
 
-// problem is the answer to an error: a status, a stable code and a message
-// that is safe to show callers. The message of a sink error is fixed text: it
-// never holds the URL, a secret or the text of a network error.
+// retryAfterSeconds returns the wait of a refused test in whole seconds,
+// rounded up, and at least 1.
+func retryAfterSeconds(limited *sinks.RateLimitedError) int64 {
+	return int64(max(1, (limited.RetryAfter+time.Second-1)/time.Second))
+}
+
+// problem is the answer to an error: a status, a code of the catalog with the
+// values of its arguments, and a message that is safe to show callers. The
+// message of a sink error is fixed text: it never holds the URL, a secret or
+// the text of a network error.
 type problem struct {
 	status  int
 	code    string
+	values  []errcode.Value
 	message string
 }
 
+// classify maps err to its answer: first the errors of the caller, then the
+// errors of the namespace, then the errors of the sink service.
 func classify(err error) problem {
-	if pr, ok := classifyAuth(err); ok {
-		return pr
-	}
-
-	if se, ok := errors.AsType[*statusError](err); ok {
-		return problem{status: se.status, code: se.code, message: se.message}
-	}
-
-	if pr, ok := classifyNamespace(err); ok {
-		return pr
-	}
-
-	return classifySink(err)
+	return classifyAuth(err)
 }
 
-func classifyNamespace(err error) (problem, bool) {
+// classifyNamespace maps the errors of the namespace and of maintenance mode.
+// Any other error goes on to classifySink.
+func classifyNamespace(err error) problem {
 	switch {
 	case errors.Is(err, namespace.ErrInvalidName):
-		return problem{status: http.StatusBadRequest, code: "namespace.invalid-name", message: err.Error()}, true
+		return problem{
+			status: http.StatusBadRequest, code: errcode.NamespaceInvalidName, values: nil, message: err.Error(),
+		}
 	case errors.Is(err, namespace.ErrNotFound):
-		return problem{status: http.StatusNotFound, code: "namespace.not-found", message: "namespace not found"}, true
+		return problem{
+			status: http.StatusNotFound, code: errcode.NamespaceNotFound, values: nil, message: "namespace not found",
+		}
 	case errors.Is(err, namespace.ErrFenced):
 		return problem{
-			status: http.StatusConflict, code: "namespace.fenced", message: namespace.ErrFenced.Error(),
-		}, true
+			status: http.StatusConflict, code: errcode.NamespaceFenced, values: nil,
+			message: namespace.ErrFenced.Error(),
+		}
 	case errors.Is(err, namespace.ErrNotHome):
 		return problem{
-			status: http.StatusMisdirectedRequest, code: "namespace.not-home",
+			status: http.StatusMisdirectedRequest, code: errcode.NamespaceNotHome, values: nil,
 			message: "namespace is not homed in this region",
-		}, true
+		}
 	case errors.Is(err, maintenance.ErrInMaintenance):
 		return problem{
-			status: http.StatusServiceUnavailable, code: "maintenance.in-maintenance",
+			status: http.StatusServiceUnavailable, code: errcode.MaintenanceInMaintenance, values: nil,
 			message: maintenance.ErrInMaintenance.Error() + ": try again later",
-		}, true
+		}
 	default:
-		return problem{status: 0, code: "", message: ""}, false
+		return classifySink(err)
 	}
 }
 
@@ -272,37 +287,48 @@ func classifyNamespace(err error) (problem, bool) {
 // is fixed: an error of the service can wrap the host of a URL, and a request
 // must never learn more than it sent.
 func classifySink(err error) problem {
+	if limited, ok := errors.AsType[*sinks.RateLimitedError](err); ok {
+		return problem{
+			status: http.StatusTooManyRequests, code: errcode.SinkTestRateLimited,
+			values:  []errcode.Value{errcode.Quantity("retryAfterSeconds", retryAfterSeconds(limited))},
+			message: "too many tests of this notification destination or namespace: try again later",
+		}
+	}
+
 	switch {
 	case errors.Is(err, notify.ErrNotFound):
 		return problem{
-			status: http.StatusNotFound, code: "sink.not-found", message: "notification destination not found",
+			status: http.StatusNotFound, code: errcode.SinkNotFound, values: nil,
+			message: "notification destination not found",
 		}
 	case errors.Is(err, notify.ErrConflict):
 		return problem{
-			status: http.StatusConflict, code: "sink.conflict",
+			status: http.StatusConflict, code: errcode.SinkConflict, values: nil,
 			message: "the notification destination changed since you read it: read it again and send the new version",
 		}
 	case errors.Is(err, sinks.ErrNoSender):
 		return problem{
-			status: http.StatusUnprocessableEntity, code: "sink.no-sender",
+			status: http.StatusUnprocessableEntity, code: errcode.SinkNoSender, values: nil,
 			message: "this server cannot send to this kind of notification destination",
 		}
 	case errors.Is(err, notify.ErrNoURL):
 		return problem{
-			status: http.StatusUnprocessableEntity, code: "sink.no-url",
+			status: http.StatusUnprocessableEntity, code: errcode.SinkNoURL, values: nil,
 			message: "the notification destination has no URL that the server can use: set the URL again",
 		}
-	case errors.Is(err, sinks.ErrRateLimited):
-		return problem{
-			status: http.StatusTooManyRequests, code: "sink.test-rate-limited",
-			message: "too many tests of this notification destination or namespace: try again later",
-		}
 	case errors.Is(err, sinks.ErrPlatformHost):
-		return problem{status: http.StatusBadRequest, code: "sink.platform-host", message: platformHostText(err)}
+		return problem{
+			status: http.StatusBadRequest, code: errcode.SinkPlatformHost, values: nil, message: platformHostText(err),
+		}
 	case errors.Is(err, notify.ErrInvalid):
-		return problem{status: http.StatusBadRequest, code: "sink.invalid", message: invalidText(err)}
+		return problem{
+			status: http.StatusBadRequest, code: errcode.SinkInvalid, values: nil, message: invalidText(err),
+		}
 	default:
-		return problem{status: http.StatusInternalServerError, code: "", message: "internal error"}
+		return problem{
+			status: http.StatusInternalServerError, code: errcode.ServerInternal, values: nil,
+			message: "internal error",
+		}
 	}
 }
 
@@ -327,21 +353,25 @@ func invalidText(err error) string {
 	return "the notification destination is not valid: check the kind, the platform, the name and the target"
 }
 
-func classifyAuth(err error) (problem, bool) {
+// classifyAuth maps the errors of the caller: a missing or a refused credential
+// and a refused action. Any other error goes on to classifyNamespace.
+func classifyAuth(err error) problem {
 	switch {
 	case errors.Is(err, identity.ErrRateLimited):
 		return problem{
-			status: http.StatusTooManyRequests, code: "auth.rate-limited",
+			status: http.StatusTooManyRequests, code: errcode.AuthRateLimited, values: nil,
 			message: "too many failed sign-ins from this address: try again later",
-		}, true
+		}
 	case errors.Is(err, identity.ErrUnauthenticated):
-		return problem{status: http.StatusUnauthorized, code: "auth.unauthenticated", message: "unauthenticated"}, true
+		return problem{
+			status: http.StatusUnauthorized, code: errcode.AuthUnauthenticated, values: nil, message: "unauthenticated",
+		}
 	case errors.Is(err, sessionauth.ErrCSRF), errors.Is(err, sessionauth.ErrOtherSite):
-		return problem{status: http.StatusForbidden, code: errcode.Forbidden(err), message: err.Error()}, true
+		return problem{status: http.StatusForbidden, code: errcode.Forbidden(err), values: nil, message: err.Error()}
 	case errors.Is(err, identity.ErrDenied):
-		return problem{status: http.StatusForbidden, code: errcode.Forbidden(err), message: "forbidden"}, true
+		return problem{status: http.StatusForbidden, code: errcode.Forbidden(err), values: nil, message: "forbidden"}
 	default:
-		return problem{status: 0, code: "", message: ""}, false
+		return classifyNamespace(err)
 	}
 }
 
