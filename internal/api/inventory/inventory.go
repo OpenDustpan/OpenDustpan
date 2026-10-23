@@ -26,6 +26,7 @@ import (
 	"opendustpan.org/opendustpan/internal/sessionauth"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/collection"
+	"opendustpan.org/opendustpan/pkg/idempotency"
 	"opendustpan.org/opendustpan/pkg/identity"
 	coreinventory "opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/maintenance"
@@ -621,14 +622,21 @@ func (h *Handler) authenticate(r *http.Request) (identity.Principal, bool, error
 type errorResponse struct {
 	Message string `json:"message"`
 	Code    int    `json:"code"`
-	// ErrorCode is a stable machine code. Only the Idempotency-Key refusals
-	// set it.
+	// ErrorCode is a stable machine code.
 	ErrorCode string `json:"errorCode,omitempty"`
+	// ErrorArgs are the arguments of the code.
+	ErrorArgs map[string]any `json:"errorArgs,omitempty"`
 }
 
 func (h *Handler) writeError(ctx context.Context, w http.ResponseWriter, err error) {
+	if errors.Is(err, idempotency.ErrLost) {
+		err = idempotent.Lost()
+	}
+
 	if ie, ok := errors.AsType[*idempotent.Error](err); ok {
-		h.writeJSON(ctx, w, ie.Status, errorResponse{Code: ie.Status, Message: ie.Message, ErrorCode: ie.Code})
+		h.writeJSON(ctx, w, ie.Status, errorResponse{
+			Code: ie.Status, Message: ie.Message, ErrorCode: ie.Answer.Code(), ErrorArgs: ie.Answer.Args(),
+		})
 
 		return
 	}
@@ -649,7 +657,9 @@ func (h *Handler) writeError(ctx context.Context, w http.ResponseWriter, err err
 		code = errcode.Forbidden(err)
 	}
 
-	h.writeJSON(ctx, w, status, errorResponse{Code: status, Message: message, ErrorCode: code})
+	h.writeJSON(ctx, w, status, errorResponse{
+		Code: status, Message: message, ErrorCode: code, ErrorArgs: nil,
+	})
 }
 
 // classifyAuth maps the errors of the authentication and the

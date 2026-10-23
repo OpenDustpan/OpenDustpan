@@ -1,7 +1,7 @@
 # The error paths of internal/api/server that answer without a code of the
 # catalog. This list only shrinks: give a path a code, remove its line and
 # lower the limit. A new error path never goes on this list.
-limit 188
+limit 187
 Handler.ServeHTTP: errorResponse{}
 Handler.approveAuditChain: errorResponse{}
 Handler.getAuditChain: errorResponse{}
@@ -9,7 +9,6 @@ Handler.sweepDeletedUnits: errorResponse{}
 Handler.sweepDeletedUnits: inventory.ErrSweepRunning
 Handler.writeEnterError: enterRefusedResponse{}
 Handler.writeError: codedResponse{}
-Handler.writeError: codedResponse{} #2
 Handler.writeError: errorResponse{}
 Handler.writeError: reauthenticateResponse{}
 classifyAccess: access.ErrAlreadyExists

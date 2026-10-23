@@ -1,12 +1,10 @@
 # The error paths of internal/api/profile that answer without a code of the
 # catalog. This list only shrinks: give a path a code, remove its line and
 # lower the limit. A new error path never goes on this list.
-limit 27
+limit 25
 Handler.writeError: errorResponse{}
 badRequest: statusError{}
-classify: AsType[*idempotent.Error]
 classify: AsType[*statusError]
-classify: idempotency.ErrLost
 classifyAuth: AsType[*profile.RoutingError]
 classifyAuth: errFreshStepRequired
 classifyAuth: errReauthenticate

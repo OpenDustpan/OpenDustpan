@@ -508,6 +508,15 @@ func (s *scan) refers(n ast.Node) bool {
 			found = true
 		}
 
+		// The Code method of an errcode.Answer. New is the only way to make an
+		// Answer with a code, so a body that copies the code of an Answer has a
+		// code of the catalog.
+		if call, ok := n.(*ast.CallExpr); ok && len(call.Args) == 0 {
+			if sel, ok := call.Fun.(*ast.SelectorExpr); ok && sel.Sel.Name == "Code" {
+				found = true
+			}
+		}
+
 		return !found
 	})
 

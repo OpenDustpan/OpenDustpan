@@ -61,6 +61,7 @@ import (
 	"opendustpan.org/opendustpan/internal/clientip"
 	"opendustpan.org/opendustpan/internal/denylimit"
 	"opendustpan.org/opendustpan/internal/devsignin"
+	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/internal/metrics"
 	"opendustpan.org/opendustpan/internal/pulumijournal"
 	"opendustpan.org/opendustpan/internal/requestid"
@@ -3826,14 +3827,9 @@ func (m *rootMux) handleMounted(path string, handler http.Handler) {
 // v1NotFound answers 404 for a path under v1Prefix that no handler serves, in
 // the error shape of the tool-neutral API.
 func v1NotFound(w http.ResponseWriter, _ *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusNotFound)
-
-	body := []byte(`{"code":404,"message":"not found: no route at this path"}` + "\n")
-	if _, err := w.Write(body); err != nil {
-		// The client has gone; there is nothing to report.
-		return
-	}
+	writeRouteError(
+		w, http.StatusNotFound, "not found: no route at this path", routeAnswer(errcode.ServerRouteNotFound),
+	)
 }
 
 // mountV1 registers each path of h under v1Prefix on mux, with wrap around

@@ -26,6 +26,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/forge"
+	"opendustpan.org/opendustpan/pkg/idempotency"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/installation"
 	"opendustpan.org/opendustpan/pkg/ipallow"
@@ -431,9 +432,13 @@ type errorResponse struct {
 const maintenanceRetryAfter = "30"
 
 func (h *Handler) writeError(ctx context.Context, w http.ResponseWriter, err error) {
+	if errors.Is(err, idempotency.ErrLost) {
+		err = idempotent.Lost()
+	}
+
 	if ie, ok := errors.AsType[*idempotent.Error](err); ok {
 		h.writeJSON(ctx, w, ie.Status, codedResponse{
-			Message: ie.Message, Code: ie.Status, ErrorCode: ie.Code, ErrorArgs: idempotencyArgs(ie),
+			Message: ie.Message, Code: ie.Status, ErrorCode: ie.Answer.Code(), ErrorArgs: ie.Answer.Args(),
 		})
 
 		return

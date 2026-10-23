@@ -177,6 +177,19 @@ func badRequest(code, message string) error {
 }
 
 func (h *Handler) writeError(ctx context.Context, w http.ResponseWriter, err error) {
+	if errors.Is(err, idempotency.ErrLost) {
+		err = idempotent.Lost()
+	}
+
+	if ie, ok := errors.AsType[*idempotent.Error](err); ok {
+		w.Header().Set("Cache-Control", "no-store")
+		h.writeJSON(ctx, w, ie.Status, errorResponse{
+			Code: ie.Status, Message: ie.Message, ErrorCode: ie.Answer.Code(), ErrorArgs: ie.Answer.Args(),
+		})
+
+		return
+	}
+
 	pr := classify(err)
 	if pr.status == http.StatusInternalServerError {
 		// The log names the status only: the text may hold driver detail or a
@@ -221,17 +234,6 @@ func classify(err error) problem {
 
 	if se, ok := errors.AsType[*statusError](err); ok {
 		return problem{status: se.status, code: se.code, message: se.message}
-	}
-
-	if ie, ok := errors.AsType[*idempotent.Error](err); ok {
-		return problem{status: ie.Status, code: ie.Code, message: ie.Message}
-	}
-
-	if errors.Is(err, idempotency.ErrLost) {
-		return problem{
-			status: http.StatusConflict, code: idempotent.CodeInProgress,
-			message: "a newer request took this Idempotency-Key before this request ended: retry later",
-		}
 	}
 
 	if pr, ok := classifyNamespace(err); ok {

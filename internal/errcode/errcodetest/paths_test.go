@@ -86,6 +86,22 @@ func TestUncodedPaths(t *testing.T) {
 			want: nil,
 		},
 		{
+			name: "a body that copies the code of an answer",
+			src: `func write(w http.ResponseWriter, status int, answer errcode.Answer) {
+	_ = errorResponse{Code: status, Message: "x", ErrorCode: answer.Code()}
+}
+
+func writeUncoded(w http.ResponseWriter, code func() string) {
+	_ = errorResponse{Code: 500, Message: "x", ErrorCode: code()}
+}
+
+func writeOther(w http.ResponseWriter, other interface{ Name() string }) {
+	_ = errorResponse{Code: 500, Message: "x", ErrorCode: other.Name()}
+}`,
+			skip: nil,
+			want: []string{"writeOther: errorResponse{}", "writeUncoded: errorResponse{}"},
+		},
+		{
 			name: "a case that hands the error to another classify function",
 			src: `func classify(err error) (int, string) {
 	switch {

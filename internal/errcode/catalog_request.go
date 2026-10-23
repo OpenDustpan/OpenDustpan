@@ -14,6 +14,8 @@ const (
 	// RequestIdempotencyKeyReplayedSecret means that the request replays a request whose answer holds a secret, which
 	// the server does not keep.
 	RequestIdempotencyKeyReplayedSecret = "request.idempotency-key-replayed-secret"
+	// RequestIdempotencyKeyLost means that a newer request took the Idempotency-Key before this request ended.
+	RequestIdempotencyKeyLost = "request.idempotency-key-lost"
 	// RequestIdempotencyKeyRequired means that the route needs the Idempotency-Key header.
 	RequestIdempotencyKeyRequired = "request.idempotency-key-required"
 	// RequestIdempotencyKeyReused means that the Idempotency-Key was used for another request.
@@ -22,6 +24,8 @@ const (
 	RequestIdempotencyKeyUnavailable = "request.idempotency-key-unavailable"
 	// RequestIdempotencyKeyUnsupported means that the route does not take the Idempotency-Key header.
 	RequestIdempotencyKeyUnsupported = "request.idempotency-key-unsupported"
+	// RequestInvalidObject means that a namespace or unit reference in the request is malformed.
+	RequestInvalidObject = "request.invalid-object"
 	// RequestInvalidPath means that a value in the path of the request is not valid.
 	RequestInvalidPath = "request.invalid-path"
 	// RequestInvalidQuery means that a query parameter of the request is not valid.
@@ -61,6 +65,11 @@ func requestSpecs() []Spec {
 			Meaning: "the request replays a request whose answer holds a secret, which the server does not keep",
 			Args:    []Arg{{Name: "objectID", Kind: KindIdentifier}},
 		},
+		{
+			Code:    RequestIdempotencyKeyLost,
+			Meaning: "a newer request took the Idempotency-Key before this request ended",
+			Args:    nil,
+		},
 		{Code: RequestIdempotencyKeyRequired, Meaning: "the route needs the Idempotency-Key header", Args: nil},
 		{Code: RequestIdempotencyKeyReused, Meaning: "the Idempotency-Key was used for another request", Args: nil},
 		{
@@ -73,6 +82,7 @@ func requestSpecs() []Spec {
 			Meaning: "the route does not take the Idempotency-Key header",
 			Args:    nil,
 		},
+		{Code: RequestInvalidObject, Meaning: "a namespace or unit reference in the request is malformed", Args: nil},
 		{Code: RequestInvalidPath, Meaning: "a value in the path of the request is not valid", Args: nil},
 		{Code: RequestInvalidQuery, Meaning: "a query parameter of the request is not valid", Args: nil},
 		{Code: RequestPageSizeInvalid, Meaning: "the page size is not valid", Args: nil},

@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/internal/metrics"
 )
 
@@ -190,7 +191,10 @@ func (rd *readiness) ServeOne(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	http.NotFound(w, r)
+	writeRouteError(
+		w, http.StatusNotFound, "not found: this process does not run this component",
+		routeAnswer(errcode.ServerComponentNotFound),
+	)
 }
 
 // readinessDoc is the body of the readiness probe. Failed names the checks
