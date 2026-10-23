@@ -177,9 +177,7 @@ type Archive struct {
 // BlobKey returns the content key of the bytes with the given SHA-256 in the
 // namespace with ID id: "namespaces/<id>/registry/sha256/<hash>". The key
 // starts with the prefix of the namespace. The scoped view of the blob port
-// must serve it and refuse the key of another namespace. The blob port does
-// not have that view yet, so until it exists the namespace-ID prefix is the
-// only guard.
+// serves it and refuses it in the view of another namespace.
 //
 // A blob under this key exists only after a publish passed every check, and
 // a caller reads it only through a published release. The upload writes to
