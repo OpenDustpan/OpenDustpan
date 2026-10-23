@@ -143,8 +143,9 @@ func (h *Handler) getOutputs(w http.ResponseWriter, r *http.Request, p identity.
 // written the audit entry of its own denial, so the handler writes none. A
 // producer that does not exist answers as an unknown unit. A state that the
 // client encrypted answers 409 with the reason. A state that moved answers 409.
+// A unit with no state answers 404 with a message that names the unit.
 func (h *Handler) writeOutputsError(
-	w http.ResponseWriter, r *http.Request, _ identity.Principal, _ identity.Object, err error,
+	w http.ResponseWriter, r *http.Request, _ identity.Principal, obj identity.Object, err error,
 ) {
 	ctx := r.Context()
 
@@ -154,6 +155,10 @@ func (h *Handler) writeOutputsError(
 	case errors.Is(err, outputshare.ErrClientEncrypted):
 		h.writeJSON(ctx, w, http.StatusConflict, errorResponse{
 			Code: http.StatusConflict, Message: clientEncryptedMessage, ErrorCode: "",
+		})
+	case errors.Is(err, outputsharesvc.ErrNoState):
+		h.writeJSON(ctx, w, http.StatusNotFound, errorResponse{
+			Code: http.StatusNotFound, Message: fmt.Sprintf("the unit %s has no state yet", obj), ErrorCode: "",
 		})
 	case errors.Is(err, outputsharesvc.ErrStateMoved):
 		h.writeJSON(ctx, w, http.StatusConflict, errorResponse{

@@ -15,6 +15,11 @@ import (
 // answers no output. A new request reads the new state.
 var ErrStateMoved = errors.New("latest state changed during the read")
 
+// ErrNoState reports that the unit exists and has no state yet, for example a
+// stack or a workspace that no update or upload has written to. The read
+// answers this before the checker runs, so it writes no denial entry.
+var ErrNoState = errors.New("unit has no state yet")
+
 // Output is one root output of the latest state of a unit. A secret output has
 // no value: the read of outputs answers the name and the mark only.
 type Output struct {
@@ -81,7 +86,8 @@ func NewReader(cfg ReaderConfig) (*Reader, error) {
 // principal.
 //
 // It returns the *outputshare.DeniedError of the checker for a denied read,
-// ErrStateMoved when a new state came in between, and an error that wraps
+// ErrNoState when the unit has no state yet, ErrStateMoved when a new state
+// came in between, and an error that wraps
 // outputshare.ErrInvalid for a unit that has no source for its tool.
 func (r *Reader) Read(ctx context.Context, p identity.Principal, unit identity.Object) (Result, error) {
 	source, ok := r.sources[unit.Tool()]
@@ -92,7 +98,14 @@ func (r *Reader) Read(ctx context.Context, p identity.Principal, unit identity.O
 	// A states port that fails gives an empty ID. The checker reads the state
 	// again and denies, with its own audit entry.
 	latest := ""
+
 	if state, err := r.states.Latest(ctx, unit); err == nil {
+		// The unit exists and the port answered, so the caller learns nothing
+		// new from the answer. Normal condition, not a denial.
+		if state.ID == "" {
+			return Result{}, fmt.Errorf("read the outputs of %s: %w", unit, ErrNoState)
+		}
+
 		latest = state.ID
 	}
 

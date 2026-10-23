@@ -25,7 +25,9 @@ import (
 type outputsStates struct {
 	ids       map[string]bool
 	encrypted map[string]bool
-	stateID   string
+	// empty holds the units that exist and have no state yet.
+	empty   map[string]bool
+	stateID string
 }
 
 func (s *outputsStates) Latest(_ context.Context, u identity.Object) (outputshare.State, error) {
@@ -35,6 +37,10 @@ func (s *outputsStates) Latest(_ context.Context, u identity.Object) (outputshar
 
 	if !s.ids[u.UnitID()] {
 		return outputshare.State{}, outputshare.ErrUnknownProducer
+	}
+
+	if s.empty[u.UnitID()] {
+		return outputshare.State{ID: "", ClientEncrypted: false}, nil
 	}
 
 	return outputshare.State{ID: s.stateID, ClientEncrypted: s.encrypted[u.UnitID()]}, nil
@@ -89,7 +95,7 @@ func newOutputsFixture(t *testing.T, authz identity.Authorizer) outputsFixture {
 	}
 
 	states := &outputsStates{
-		ids: map[string]bool{"ws-1": true, "stk-1": true}, encrypted: map[string]bool{}, stateID: "state-1",
+		ids: map[string]bool{"ws-1": true, "stk-1": true}, encrypted: map[string]bool{}, empty: map[string]bool{}, stateID: "state-1",
 	}
 	source := &outputsSource{mu: sync.Mutex{}, moved: false, reads: 0, stored: []outputsharesvc.Output{
 		{Name: "greeting", Secret: false, Value: json.RawMessage(`"hello"`)},
@@ -389,5 +395,50 @@ func TestOutputsRouteDeniesAUnitTheStatesPortDoesNotKnow(t *testing.T) {
 	rec := f.get(t, outputsPulumi)
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, want 404: %s", rec.Code, rec.Body.String())
+	}
+}
+
+// TestOutputsRouteAnswersAUnitWithNoState proves that a stack or a workspace
+// that has no state yet answers 404 with a message that names the unit and
+// says that it has no state, to a caller who holds unit:read-outputs, and that
+// the request writes no denial entry and does not call the source.
+func TestOutputsRouteAnswersAUnitWithNoState(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		target string
+		unitID string
+		unit   string
+	}{
+		{name: "a Pulumi stack", target: outputsPulumi, unitID: "stk-1", unit: "pulumi:acme/web/prod"},
+		{name: "an OpenTofu workspace", target: outputsTofu, unitID: "ws-1", unit: "opentofu:acme/prod"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			f := newOutputsFixture(t, selectiveAuthorizer{deny: nil})
+			f.states.empty[tt.unitID] = true
+
+			rec := f.get(t, tt.target)
+			if rec.Code != http.StatusNotFound {
+				t.Fatalf("status = %d, want 404: %s", rec.Code, rec.Body.String())
+			}
+
+			body := rec.Body.String()
+			if !strings.Contains(body, tt.unit) || !strings.Contains(body, "has no state yet") {
+				t.Errorf("body = %s, want the unit %q and %q", body, tt.unit, "has no state yet")
+			}
+
+			if f.source.reads != 0 {
+				t.Errorf("a unit with no state called the source %d times", f.source.reads)
+			}
+
+			if n := len(f.audit.entries); n != 0 {
+				t.Errorf("a unit with no state wrote %d audit entries, want 0", n)
+			}
+		})
 	}
 }

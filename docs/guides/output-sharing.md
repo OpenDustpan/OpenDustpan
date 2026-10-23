@@ -74,6 +74,7 @@ curl -sS -H "Authorization: Bearer $TOKEN" \
 | Status | Cause |
 | --- | --- |
 | 404 | The unit does not exist, the unit is in another namespace than the path, or the caller does not hold `unit:read-outputs` on the unit. The three answers are the same. |
+| 404 | The caller holds `unit:read-outputs`, and the stack or workspace has no state yet because no update or upload has written one. The message names the unit and says that it has no state yet. The request writes no denial entry. |
 | 409 | The client encrypted the state of the workspace, and the caller does not hold `unit:read`. The server cannot read the outputs of such a state. A caller with `unit:read` reads the workspace as before. |
 | 409 | A new state came in while the server checked or read the outputs. Send the request again. |
 

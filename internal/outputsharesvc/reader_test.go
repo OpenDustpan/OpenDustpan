@@ -112,7 +112,7 @@ func refusalCases() []refusalCase {
 				r.authz.errs = map[identity.Action]error{identity.ActionUnitRead: identity.ErrDenied}
 			}
 		}),
-		refusalRow("a unit with no state", identity.ErrDenied, func(c *refusalCase) {
+		refusalRow("a unit with no state", outputsharesvc.ErrNoState, func(c *refusalCase) {
 			c.setup = func(r *checkerRig) { r.states.state = outputshare.State{ID: "", ClientEncrypted: false} }
 		}),
 		refusalRow("a tool with no source", outputshare.ErrInvalid, func(c *refusalCase) {
