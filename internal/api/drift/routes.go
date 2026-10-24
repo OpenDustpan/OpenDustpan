@@ -9,6 +9,7 @@ import (
 	"opendustpan.org/opendustpan/internal/sessionauth"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/ipallow"
+	"opendustpan.org/opendustpan/pkg/namespace"
 )
 
 // Scope names how a route is protected. Every route declares one explicitly
@@ -153,6 +154,12 @@ func (h *Handler) enforce(route Route) http.HandlerFunc {
 			r = r.WithContext(ctx)
 		}
 
+		if err = h.checkAddress(ctx, r, p); err != nil {
+			h.writeError(ctx, w, err)
+
+			return
+		}
+
 		t, err := h.resolveUnit(r)
 		if err != nil {
 			h.writeError(ctx, w, err)
@@ -168,6 +175,35 @@ func (h *Handler) enforce(route Route) http.HandlerFunc {
 
 		route.Serve(w, r, p, &t)
 	}
+}
+
+// checkAddress refuses a client address that is outside the IP allowlist of
+// the namespace in the path, before any lookup of the namespace or of the
+// unit. The answer is the same 403 for a name that exists and for a name that
+// does not exist, so it does not tell whether the unit exists. Every other
+// result, also an invalid name, continues: the checks after the lookup give
+// the answer, as before.
+//
+// Defense in depth: authorizeRoute checks the allowlist again on the found
+// namespace. This check stays so that the order of the lookup never decides
+// the answer.
+func (h *Handler) checkAddress(
+	ctx context.Context, r *http.Request, p identity.Principal,
+) error {
+	action := identity.ActionNamespaceRead
+
+	// An invalid name names no namespace and has no allowlist: the lookup that
+	// follows answers 404 for it.
+	var err error
+	if name, parseErr := namespace.ParseName(r.PathValue("namespace")); parseErr == nil {
+		err = h.guard.Authorize(ctx, r, p, action, identity.NamespaceObject(name))
+	}
+
+	if errors.Is(err, ipallow.ErrAddressNotAllowed) {
+		return fmt.Errorf("authorize %s: %w", action, err)
+	}
+
+	return nil
 }
 
 // authorizeRoute runs the checks of route for p on t. It returns errNotFound
