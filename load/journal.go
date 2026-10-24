@@ -130,6 +130,12 @@ func journalBatch(stackName string, first, entries int) []byte {
 	return []byte(sb.String())
 }
 
+// journalGzipped answers whether the harness gzips a batch body: the CLI gzips
+// a batch of journalGzipFrom bytes or more and sends a smaller one as is.
+func journalGzipped(body []byte) bool {
+	return len(body) >= journalGzipFrom
+}
+
 // appendJournal sends one batch and answers its latency.
 func (t *target) appendJournal(
 	ctx context.Context, stackName string, upd journaledUpdate, body []byte,
@@ -138,7 +144,7 @@ func (t *target) appendJournal(
 		stacksPath + t.ns + "/" + loadProject + "/" + stackName + updatePath + "/" + upd.id + journalPath,
 	)
 
-	opts := sendOptions{userAgent: journalUserAgent, gzipBody: len(body) >= journalGzipFrom}
+	opts := sendOptions{userAgent: journalUserAgent, gzipBody: journalGzipped(body)}
 
 	start := time.Now()
 
@@ -248,7 +254,7 @@ func (t *target) measureJournal(ctx context.Context, entries []int, batches int)
 		}
 
 		if !supported {
-			return JournalResult{Supported: false, Runs: nil}, nil
+			return JournalResult{Supported: false, Runs: []JournalRunResult{}}, nil
 		}
 
 		out.Supported = true
