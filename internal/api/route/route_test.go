@@ -247,6 +247,52 @@ func TestDecodeBody(t *testing.T) {
 	}
 }
 
+// TestDecodeBodyMiBLimit checks that a body over a limit of 1 MiB answers with
+// the text that names the limit in MiB, and holds no part of the body.
+func TestDecodeBodyMiBLimit(t *testing.T) {
+	t.Parallel()
+
+	type doc struct {
+		Name string `json:"name"`
+	}
+
+	body := `{"name":"` + strings.Repeat("a", 1<<20) + `"}`
+	r := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/x", strings.NewReader(body))
+
+	var got doc
+
+	err := route.DecodeBody(httptest.NewRecorder(), r, 1<<20, &got)
+	if err == nil || !strings.Contains(err.Error(), "over 1 MiB") || strings.Contains(err.Error(), "aaaa") {
+		t.Fatalf("DecodeBody error %v, want the fixed text with over 1 MiB and no part of the body", err)
+	}
+
+	checkBadBodyCode(t, err)
+}
+
+// TestMutating checks which methods change data.
+func TestMutating(t *testing.T) {
+	t.Parallel()
+
+	cases := map[string]bool{
+		http.MethodGet:    false,
+		http.MethodHead:   false,
+		http.MethodPost:   true,
+		http.MethodPut:    true,
+		http.MethodPatch:  true,
+		http.MethodDelete: true,
+	}
+
+	for method, want := range cases {
+		t.Run(method, func(t *testing.T) {
+			t.Parallel()
+
+			if got := route.Mutating(method); got != want {
+				t.Fatalf("Mutating(%q) = %t, want %t", method, got, want)
+			}
+		})
+	}
+}
+
 // checkBadBodyCode checks that err answers 400 with the code of the catalog
 // for a body that is not valid.
 func checkBadBodyCode(t *testing.T, err error) {
