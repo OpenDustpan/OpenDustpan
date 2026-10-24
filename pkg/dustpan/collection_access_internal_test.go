@@ -1,6 +1,7 @@
 package dustpan
 
 import (
+	"context"
 	"errors"
 	"path/filepath"
 	"strings"
@@ -144,7 +145,11 @@ func openCollectionStore(t *testing.T) *sqlite.Store {
 }
 
 // createCollectionNamespace stores the namespace acme and returns it.
-func createCollectionNamespace(t *testing.T, st *sqlite.Store, at time.Time) namespace.Namespace {
+func createCollectionNamespace(
+	t *testing.T, st interface {
+		CreateNamespace(ctx context.Context, ns namespace.Namespace) error
+	}, at time.Time,
+) namespace.Namespace {
 	t.Helper()
 
 	ns := namespace.Namespace{
@@ -238,7 +243,11 @@ func nsChange(at time.Time, ns namespace.Name, object string) audit.Entry {
 
 // seedStack stores the Pulumi stack name in ns with the stable ID id, and
 // returns the unit object with that ID.
-func seedStack(t *testing.T, st *sqlite.Store, ns namespace.Namespace, name, id string) identity.Object {
+func seedStack(
+	t *testing.T, st interface {
+		CreateStack(ctx context.Context, s stack.Stack, fence namespace.Fence) error
+	}, ns namespace.Namespace, name, id string,
+) identity.Object {
 	t.Helper()
 
 	project, stackName, _ := strings.Cut(name, "/")
