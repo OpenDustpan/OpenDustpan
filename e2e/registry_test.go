@@ -241,6 +241,7 @@ func runRegistryOnStore(t *testing.T, cli e2e.Install, store e2e.Store) {
 	}
 
 	sc.publishGood(ctx, t)
+	sc.answerNotFound(ctx, t)
 	sc.refuseHostileReleases(ctx, t)
 	sc.removeASecondKey(ctx, t)
 	sc.removeTheKey(ctx, t)
@@ -434,7 +435,81 @@ func (sc *registryScenario) removeTheKey(ctx context.Context, t *testing.T) {
 		t.Fatalf("remove the key = %d %s", resp.Status, resp.Body)
 	}
 
+	const name = "registry init after the key was removed"
+
 	fresh := sc.env.WriteRegistryProject(t, "project-removed", fmt.Sprintf(registryConfig, sc.address, "1.0.0"))
-	sc.env.StepIn(ctx, t, fresh,
-		failStep("registry init after the key was removed", nil, "init", "-input=false", "-no-color"))
+	sc.env.StepIn(ctx, t, fresh, failStep(name, sc.checkRefusedList(name), "init", "-input=false", "-no-color"))
+}
+
+// registryNotFoundBody checks the 404 body of a registry route: the errors
+// member of the protocol, a list of strings, and next to it the code of the
+// catalog in the code member, with no arguments and none of the camelCase
+// members.
+func registryNotFoundBody(body string) error {
+	var doc struct {
+		Errors []string        `json:"errors"`
+		Code   string          `json:"code"`
+		Meta   json.RawMessage `json:"meta"`
+	}
+
+	if err := json.Unmarshal([]byte(body), &doc); err != nil {
+		return fmt.Errorf("%w: the 404 body is not a registry error document: %s", errUnexpected, body)
+	}
+
+	if len(doc.Errors) != 1 || doc.Errors[0] != "not found" || doc.Code != "registry.not-found" ||
+		doc.Meta != nil || strings.Contains(body, "errorCode") || strings.Contains(body, "errorArgs") {
+		return fmt.Errorf("%w: the 404 body = %s, want one text and the code registry.not-found", errUnexpected, body)
+	}
+
+	return nil
+}
+
+// answerNotFound proves that a registry route answers 404 for a provider that
+// the namespace does not hold, with the media type and the document of the
+// registry protocol.
+func (sc *registryScenario) answerNotFound(ctx context.Context, t *testing.T) {
+	t.Helper()
+
+	resp, err := sc.env.ServerAPIStatusTyped(ctx, e2e.TypedRequest{
+		Token: sc.env.TokenA(), Method: http.MethodGet,
+		Path:        "/v1/providers/" + e2e.Namespace + "/unknown/versions",
+		ContentType: "", Body: "", IfMatch: "",
+	})
+	if err != nil {
+		t.Fatalf("GET the versions of an unknown provider: %v", err)
+	}
+
+	if resp.Status != http.StatusNotFound || resp.Header.Get("Content-Type") != "application/json" {
+		t.Fatalf("versions of an unknown provider = %d %q %s, want 404 application/json",
+			resp.Status, resp.Header.Get("Content-Type"), resp.Body)
+	}
+
+	if err := registryNotFoundBody(resp.Body); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// checkRefusedList proves that the version list, which init asked for in the
+// step, answered 404 with the registry error document.
+func (sc *registryScenario) checkRefusedList(name string) func(e2e.Result) error {
+	return func(e2e.Result) error {
+		versions := "/v1/providers/" + e2e.Namespace + "/payments/versions"
+
+		entries := sc.env.Recorder.Entries()
+
+		for i := range entries {
+			e := &entries[i]
+			if e.Step != name || e.Method != http.MethodGet || e.Path != versions {
+				continue
+			}
+
+			if e.Status != http.StatusNotFound {
+				return fmt.Errorf("%w: the version list answered %d, want 404", errUnexpected, e.Status)
+			}
+
+			return registryNotFoundBody(e.ResponseBody)
+		}
+
+		return fmt.Errorf("%w: init never asked for the version list", errUnexpected)
+	}
 }
