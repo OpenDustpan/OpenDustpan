@@ -63,7 +63,7 @@ func (h *Handler) postState(w http.ResponseWriter, r *http.Request, c call) {
 		return h.ws.AdmitFirstWrite(ctx, c.ref, in)
 	})
 	if err != nil {
-		h.writeError(ctx, w, err)
+		h.writeFirstRefusal(ctx, w, err, h.writeError)
 
 		return
 	}

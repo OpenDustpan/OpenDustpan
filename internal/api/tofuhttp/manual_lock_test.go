@@ -230,3 +230,79 @@ func TestStateWriteRefusedByAManualLock(t *testing.T) {
 		})
 	}
 }
+
+// TestFirstRequestRefusedByANamespaceLock proves a first LOCK or POST for a
+// workspace that does not exist yet answers 423 with the lock info of the
+// manual lock of the namespace. The service refuses it in the admit check or in
+// the create, and both answer the same lock info as for a workspace that
+// exists. No workspace is made.
+func TestFirstRequestRefusedByANamespaceLock(t *testing.T) {
+	t.Parallel()
+
+	held := manuallock.Lock{
+		Since:  time.Date(2026, time.October, 19, 10, 0, 0, 0, time.UTC),
+		Target: manuallock.NamespaceTarget("acme"),
+		Holder: "alice",
+		Reason: "change window closed",
+	}
+	refusal := fmt.Errorf("%w: %w", workspace.ErrLocked, &manuallock.LockedError{
+		Lock: held, Noun: "workspace", Name: "acme/web",
+	})
+
+	cases := []struct {
+		name      string
+		method    string
+		body      string
+		admitErr  error
+		createErr error
+	}{
+		{
+			name: "LOCK refused by the admit check", method: "LOCK", body: lockBody(lockOne, "ci"),
+			admitErr: refusal, createErr: nil,
+		},
+		{
+			name: "LOCK refused by the create", method: "LOCK", body: lockBody(lockOne, "ci"),
+			admitErr: nil, createErr: refusal,
+		},
+		{
+			name: "POST refused by the admit check", method: http.MethodPost, body: `{"serial":1,"lineage":"l"}`,
+			admitErr: refusal, createErr: nil,
+		},
+		{
+			name: "POST refused by the create", method: http.MethodPost, body: `{"serial":1,"lineage":"l"}`,
+			admitErr: nil, createErr: refusal,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			units := newFakeUnits(false)
+			units.admitErr = tc.admitErr
+			units.createErr = tc.createErr
+			h := newTestHandler(t, units)
+
+			rec := do(h, tc.method, unitPath, tc.body, bearer(adminToken))
+			if rec.Code != http.StatusLocked {
+				t.Fatalf("status = %d, want %d: %s", rec.Code, http.StatusLocked, rec.Body.String())
+			}
+
+			if got := rec.Header().Get("Content-Type"); got != "application/json" {
+				t.Errorf("Content-Type = %q, want application/json", got)
+			}
+
+			checkManualInfo(t, rec.Body.Bytes(), manualInfoWant{
+				who:    "alice",
+				remove: "/api/dustpan/v1/namespaces/acme/lock",
+				force:  "/api/dustpan/v1/namespaces/acme/lock/force-unlock",
+				text: "workspace acme/web is in namespace acme, which has a manual lock " +
+					"by alice since 2026-10-19T10:00:00Z: change window closed",
+			})
+
+			if units.exists {
+				t.Errorf("a refused first %s made the workspace", tc.method)
+			}
+		})
+	}
+}
