@@ -18,7 +18,7 @@ const maxStateFilters = 9
 var (
 	errLabelFormat        = errors.New("use key=value")
 	errLabelKey           = errors.New("the key has 1 to 128 characters: letters, digits and . _ : / -")
-	errLabelValue         = errors.New("the value has at most 256 characters and no control character")
+	errLabelValue         = errors.New("the value has at most 256 characters: letters, digits and . _ : / -")
 	errReferenceFormat    = errors.New("use a unit reference, for example pulumi:acme/web/prod")
 	errReferenceNamespace = errors.New("the reference must name the namespace of the path")
 )

@@ -79,7 +79,7 @@ The namespace setting `outputSharing.newUnitDefault` that decides the sharing ru
 _Avoid_: Sharing policy, default visibility
 
 **Label**:
-A key and a value on a unit, for views and filters. A label never grants access and never puts a unit into a collection (ADR 51). A label change needs `unit:edit-labels` and writes no state (ADR 223 decision 11). A key has 1 to 128 characters: letters, digits and `.`, `_`, `:`, `/` and `-`. A value has 0 to 256 characters of valid UTF-8 and no control character. The label filter of the unit list accepts only this form. A Pulumi stack tag outside this form still shows in the list as a label.
+A key and a value on a unit, for views and filters. A label never grants access and never puts a unit into a collection (ADR 51). A label change needs `unit:edit-labels` and writes no state (ADR 223 decision 11). A key has 1 to 128 characters: letters, digits and `.`, `_`, `:`, `/` and `-`. A value has 0 to 256 characters from the same ASCII set: no space and no other character, as a Kubernetes label value. The label filter of the unit list, the labels of a saved view and every label write accept only this form. A Pulumi stack tag outside this form still shows in the list as a label. Text outside labels, such as documentation and the input of a blueprint web form, can hold any Unicode character.
 _Avoid_: Tag (except when naming a tool's own field), attribute
 
 **Unit state**:
