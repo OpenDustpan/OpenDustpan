@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/api/idempotent"
+	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/pkg/forge"
 	"opendustpan.org/opendustpan/pkg/idempotency"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -62,19 +63,19 @@ var (
 // gitHostCoded are the errors with a stable machine code.
 var (
 	errGitHostIdempotencyKey = &codedError{
-		status: http.StatusBadRequest, code: "request.idempotency-key-unsupported", args: nil,
+		status: http.StatusBadRequest, code: errcode.RequestIdempotencyKeyUnsupported, args: nil,
 		message: "this route does not take the Idempotency-Key header: send the request without it",
 	}
 	errGitHostIdempotencyOff = &codedError{
-		status: http.StatusBadRequest, code: "request.idempotency-key-unavailable", args: nil,
+		status: http.StatusBadRequest, code: errcode.RequestIdempotencyKeyUnavailable, args: nil,
 		message: "the Idempotency-Key header is not available on this server: send the request without it",
 	}
 	errGitHostNoRegistration = &codedError{
-		status: http.StatusConflict, code: "git-host.app-not-registered", args: nil,
+		status: http.StatusConflict, code: errcode.GitHostAppNotRegistered, args: nil,
 		message: "the operator has not registered the GitHub App: ask the operator to register it",
 	}
 	errGitHostNotAssigned = &codedError{
-		status: http.StatusConflict, code: "git-host.installation-not-assigned", args: nil,
+		status: http.StatusConflict, code: errcode.GitHostInstallationNotAssigned, args: nil,
 		message: "the operator did not assign this installation to this namespace: ask the operator to assign it",
 	}
 )

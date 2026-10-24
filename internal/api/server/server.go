@@ -440,8 +440,11 @@ func (h *Handler) writeError(ctx context.Context, w http.ResponseWriter, err err
 	}
 
 	if coded, ok := errors.AsType[*codedError](err); ok {
-		h.writeJSON(ctx, w, coded.status, codedResponse{
-			Message: coded.message, Code: coded.status, ErrorCode: coded.code, ErrorArgs: coded.args,
+		// The catalog checks the code and the arguments. When it refuses,
+		// the bug is in the server and not in the request, so the answer is
+		// the internal error.
+		h.writeCoded(ctx, w, failure{
+			status: coded.status, message: coded.message, code: coded.code, args: coded.args,
 		})
 
 		return
