@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"slices"
+	"unicode"
 
 	"opendustpan.org/opendustpan/internal/devsignin"
 	"opendustpan.org/opendustpan/pkg/backup"
@@ -115,9 +117,10 @@ func principalStoreOf(cfg *settings) principal.Store {
 }
 
 // warnDevPrincipals logs one warning that names the dev people (principals
-// with a subject that starts with principal.DevSubjectPrefix) of a server
-// that is not of the kind dev. The authenticator refuses them. The warning
-// does not stop the start, and a failed read only logs the failure.
+// with a subject that starts with principal.DevSubjectPrefix, in any case of
+// its ASCII letters) of a server that is not of the kind dev. The
+// authenticator refuses them. The warning does not stop the start, and a
+// failed read only logs the failure.
 func (s *Server) warnDevPrincipals(ctx context.Context) {
 	if s.kind.kind == installation.KindDev || s.kind.principals == nil {
 		return
@@ -138,29 +141,67 @@ func (s *Server) warnDevPrincipals(ctx context.Context) {
 		return
 	}
 
-	req := principal.PageRequest{Prefix: principal.DevSubjectPrefix, Cursor: "", Limit: maxDevWarned}
+	var (
+		total    int64
+		subjects []string
+	)
 
-	page, err := svc.ListPrincipals(ctx, req, "")
-	if err != nil {
-		s.logger.WarnContext(ctx, "dev people check failed", slog.String("reason", err.Error()))
+	for _, prefix := range devPrefixCases() {
+		req := principal.PageRequest{Prefix: prefix, Cursor: "", Limit: maxDevWarned}
 
+		page, listErr := svc.ListPrincipals(ctx, req, "")
+		if listErr != nil {
+			s.logger.WarnContext(ctx, "dev people check failed", slog.String("reason", listErr.Error()))
+
+			return
+		}
+
+		total += page.Total
+
+		for i := range page.Items {
+			// A subject comes from the database, which a restore may fill from a
+			// backup. Clean it before it reaches the log.
+			clean, _ := backup.CleanSubject(page.Items[i].Subject)
+			subjects = append(subjects, clean)
+		}
+	}
+
+	if len(subjects) == 0 {
 		return
 	}
 
-	if len(page.Items) == 0 {
-		return
-	}
-
-	subjects := make([]string, 0, len(page.Items))
-
-	for i := range page.Items {
-		// A subject comes from the database, which a restore may fill from a
-		// backup. Clean it before it reaches the log.
-		clean, _ := backup.CleanSubject(page.Items[i].Subject)
-		subjects = append(subjects, clean)
-	}
+	slices.Sort(subjects)
+	subjects = subjects[:min(len(subjects), maxDevWarned)]
 
 	s.logger.WarnContext(ctx,
 		"this installation holds people that opendustpan dev made; the server refuses their sessions and tokens",
-		slog.Int64("count", page.Total), slog.Any("subjects", subjects))
+		slog.Int64("count", total), slog.Any("subjects", subjects))
+}
+
+// devPrefixCases returns each ASCII case form of principal.DevSubjectPrefix,
+// in byte order: "DEV:" first and "dev:" last. The authenticator refuses a
+// subject with the prefix in any case (see principal.IsDevSubject), but the
+// prefix of ListPrincipals compares bytes exactly, so the warning reads each
+// form.
+func devPrefixCases() []string {
+	forms := []string{""}
+
+	for _, c := range principal.DevSubjectPrefix {
+		lower, upper := string(unicode.ToLower(c)), string(unicode.ToUpper(c))
+		next := make([]string, 0, len(forms)+len(forms))
+
+		for _, form := range forms {
+			next = append(next, form+upper)
+
+			if lower != upper {
+				next = append(next, form+lower)
+			}
+		}
+
+		forms = next
+	}
+
+	slices.Sort(forms)
+
+	return forms
 }

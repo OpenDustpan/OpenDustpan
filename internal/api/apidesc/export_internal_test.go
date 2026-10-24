@@ -1,23 +1,9 @@
 package apidesc
 
-import (
-	"log/slog"
-	"net/http"
-)
-
-// MisuseLog is the report of the server, for a test.
-type MisuseLog = misuseLog
-
-// NewMisuseLog returns a report that writes to the logger.
-func NewMisuseLog(l *slog.Logger) *MisuseLog {
-	m := new(MisuseLog)
-	m.logger.Store(l)
-
-	return m
-}
+import "net/http"
 
 // ReportInServer reports in the mode of the server.
-func (m *misuseLog) ReportInServer(kind, route, name string) {
+func (m *Reporter) ReportInServer(kind, route, name string) {
 	m.report(modeLog, kind, route, name, FixCommand)
 }
 

@@ -82,6 +82,10 @@ func (m *mem) Record(_ context.Context, r drift.Result, fence namespace.Fence) (
 		return none, err
 	}
 
+	if err := m.checkUnitID(r.Unit); err != nil {
+		return none, err
+	}
+
 	prev, had := m.latest[r.Unit]
 	if m.used[r.JobID] || (had && !r.CheckedAt.After(prev.CheckedAt)) {
 		return none, drift.ErrStale
@@ -245,6 +249,18 @@ func (m *mem) checkJob(r drift.Result) error {
 	return nil
 }
 
+// checkUnitID refuses a unit whose ID holds the result of another namespace
+// or another tool. It must run with m.mu held.
+func (m *mem) checkUnitID(unit graph.Unit) error {
+	for held := range m.latest {
+		if held.ID == unit.ID && held != unit {
+			return fmt.Errorf("%w: unit ID %q belongs to another namespace or another tool", drift.ErrInvalid, unit.ID)
+		}
+	}
+
+	return nil
+}
+
 // mintJob makes a job of the given kind and returns its ID.
 func (m *mem) mintJob(unit graph.Unit, kind jobKind) job.ID {
 	m.mu.Lock()
@@ -279,7 +295,10 @@ func TestConformance(t *testing.T) {
 		return drifttest.Harness{
 			Store:    m,
 			Policies: m,
-			Checker:  nil,
+			// The memory reference has no job service. The SDK runs the cases
+			// of Checker with the job service of the server.
+			Checker: nil,
+			Checks:  drifttest.CheckerFixture{Unit: nil, Actor: nil, Job: nil, Lock: nil, SetNow: nil},
 			Namespace: func(_ *testing.T, name string) namespace.Fence {
 				m.mu.Lock()
 				defer m.mu.Unlock()

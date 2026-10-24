@@ -264,9 +264,18 @@ type Redactor interface {
 
 // LedgerObject returns the blob key of the ledger object of the redaction
 // id in a backup target: redactions/<id>.json. The shred operation writes it
-// one time in each target before it deletes a blob there. id must be valid.
-func LedgerObject(id RedactionID) blob.Key {
-	return blob.Key("redactions/" + string(id) + ".json")
+// one time in each target before it deletes a blob there. It returns an error
+// that wraps blob.ErrInvalidKey when the key is not a valid blob key.
+func LedgerObject(id RedactionID) (blob.Key, error) {
+	// Defense in depth: a redaction ID comes from NewRedactionID or from the
+	// store; this check stays so that an ID that skipped those layers cannot
+	// build a key that the blob store refuses or that leaves redactions/.
+	key, err := blob.ParseKey("redactions/" + string(id) + ".json")
+	if err != nil {
+		return "", fmt.Errorf("ledger object of a redaction: %w", err)
+	}
+
+	return key, nil
 }
 
 // LedgerRecord is the content of a ledger object. Restore and the backup

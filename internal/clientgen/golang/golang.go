@@ -116,6 +116,12 @@ func (language) Header(opts clientgen.Options, descriptionVersion string) string
 // IsGenerated implements clientgen.Language.
 func (language) IsGenerated(head []byte) bool { return generatedHeader.Match(head) }
 
+// Owned implements clientgen.Language. The Go client shares its package and
+// the directory of its adapter with hand-written files (the transport and the
+// main package of the adapter), so the run owns no path, and a file that the
+// run does not give is stale only by its header.
+func (language) Owned(string) bool { return false }
+
 // funcs are the encoders that a template calls. A value from the description
 // goes into source through one of them only.
 func funcs() template.FuncMap {

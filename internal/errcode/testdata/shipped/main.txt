@@ -1,0 +1,84 @@
+# The codes that main sent before the catalog, with the name and the kind of
+# each argument. This file is frozen: its SHA-256 is pinned in a test. The
+# catalog keeps each code of a line, and each argument of the line with its
+# kind. A code of the catalog may have more arguments than its line.
+access.denied
+access.ip-not-allowed
+auth.rate-limited
+auth.unauthenticated
+drift.start-conflict
+gate.denied
+gate.limited
+gate.rule-failed
+gate.unavailable
+git-host.app-not-registered
+git-host.installation-not-assigned
+job.agent-denied
+job.frozen
+job.gate-enforced
+job.invalid
+job.limit
+job.policy-denied
+job.unsupported
+maintenance.in-maintenance
+mfa.fresh-step-required
+namespace.fenced
+namespace.invalid-name
+namespace.not-found
+namespace.not-home
+preferences.body-invalid
+preferences.body-too-large
+preferences.field-invalid field:identifier
+preferences.field-read-only field:identifier
+preferences.field-unknown
+preferences.if-match-invalid
+preferences.media-type-unsupported
+preferences.person-not-found
+preferences.person-required
+preferences.precondition-failed
+preferences.unavailable
+profile.conflict
+profile.invalid
+profile.limit
+profile.not-found
+profile.routing-change-needs-open
+profile.schema-version
+registry.archive-set-refused
+registry.invalid
+registry.key-exists
+registry.key-invalid
+registry.key-limit
+registry.no-keys
+registry.not-found
+registry.not-staged
+registry.signature-invalid
+registry.signature-untrusted-key
+registry.too-large
+registry.version-exists
+request.body-invalid
+request.content-type-unsupported
+request.idempotency-key-in-progress
+request.idempotency-key-invalid
+request.idempotency-key-replayed-secret objectID:identifier
+request.idempotency-key-required
+request.idempotency-key-reused
+request.idempotency-key-unavailable
+request.idempotency-key-unsupported
+request.invalid-path
+request.invalid-query
+request.page-size-invalid
+request.page-token-invalid
+request.precondition-failed
+request.precondition-required
+session.csrf
+session.other-site
+sink.conflict
+sink.invalid
+sink.no-sender
+sink.no-url
+sink.not-found
+sink.platform-host
+sink.test-rate-limited retryAfterSeconds:quantity
+workspace.client-encrypted
+workspace.lock-mismatch
+workspace.not-locked

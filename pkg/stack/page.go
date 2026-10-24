@@ -24,14 +24,37 @@ type PageCursor struct {
 // PageQuery selects one page of the live stacks of the namespaces in
 // Namespaces, ordered by namespace, project, then name. An empty Namespaces
 // matches nothing. An empty Project matches every project. After keeps the
-// stacks after the cursor in that order; nil starts at the first stack.
+// stacks after the cursor in that order; nil starts at the first stack. Tag
+// keeps the stacks that the tag filter matches; nil keeps every stack.
 // Limit is the largest number of stacks to read: zero or less means one, and
 // a value above MaxPageLimit means MaxPageLimit.
 type PageQuery struct {
 	After      *PageCursor
 	Project    ProjectName
+	Tag        *TagFilter
 	Namespaces []namespace.Name
 	Limit      int
+}
+
+// TagFilter selects the stacks that have the tag Name. When HasValue is true,
+// the tag must also have the value Value, which can be empty. When HasValue
+// is false, any value matches.
+type TagFilter struct {
+	Name     string
+	Value    string
+	HasValue bool
+}
+
+// Matches reports whether a stack with tags passes f. A nil f matches every
+// stack.
+func (f *TagFilter) Matches(tags map[string]string) bool {
+	if f == nil {
+		return true
+	}
+
+	value, ok := tags[f.Name]
+
+	return ok && (!f.HasValue || value == f.Value)
 }
 
 // PageLimit returns the limit of q after the floor and the cap.
@@ -98,8 +121,8 @@ func compareCursor(c, d PageCursor) int {
 }
 
 // PageStacks returns the page of q from all, in any order: the stacks of the
-// namespaces and the project of q, after the cursor, ordered by namespace,
-// project, then name in byte order. It defines what QueryStacks answers. A
+// namespaces, the project and the tag filter of q, after the cursor, ordered
+// by namespace, project, then name in byte order. It defines what QueryStacks answers. A
 // SQL store compares the names in the collation of its text columns, as
 // ListStacks orders them; the conformance suite uses names on which both
 // orders agree.
@@ -119,6 +142,7 @@ func PageStacks(all []Stack, q PageQuery) []Stack {
 		switch {
 		case !slices.Contains(q.Namespaces, st.Ref.Namespace):
 		case q.Project != "" && st.Ref.Project != q.Project:
+		case !q.Tag.Matches(st.Tags):
 		case q.After != nil && compareCursor(CursorOf(st), *q.After) <= 0:
 		default:
 			out = append(out, st)

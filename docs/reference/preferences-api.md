@@ -99,7 +99,8 @@ person that never changed a preference has the version `"0"`.
 When the version is not the current one, the server answers 412 and changes
 nothing. It writes no audit entry. Use this to not overwrite a change that
 another device made after your read. A request with no `If-Match` header
-always applies. `If-Match: *` also always applies. A value that is not one
+always applies. `If-Match: *` also always applies. A weak tag, for example
+`W/"5"`, never matches, so it answers 412. Any other value that is not one
 version in quotes answers 400.
 
 ```sh
@@ -138,7 +139,7 @@ A client selects its text from `errorCode`. An error of a field has
 | 403 | `access.denied` | The caller lacks the action |
 | 403 | `access.ip-not-allowed` | The client address is outside the IP allowlist of the namespace |
 | 413 | `preferences.body-too-large` | The body is over 4096 bytes |
-| 412 | `preferences.precondition-failed` | `If-Match` holds a version that is not the current one |
+| 412 | `preferences.precondition-failed` | `If-Match` holds a version that is not the current one, or a weak tag |
 | 415 | `preferences.media-type-unsupported` | The content type is not `application/merge-patch+json` |
 | 501 | `preferences.unavailable` | The store of the server keeps no preferences |
 | 503 | | The server is in maintenance mode, for a `PATCH` |

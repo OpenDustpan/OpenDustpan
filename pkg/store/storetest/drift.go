@@ -62,9 +62,12 @@ func driftHarness(b DriftBackend) drifttest.Harness {
 	}
 
 	return drifttest.Harness{
-		Store:     b.Drift,
-		Policies:  nil,
+		Store:    b.Drift,
+		Policies: nil,
+		// The store has no job service. The SDK runs the cases of Checker with
+		// the job service of the server, on the SQLite store.
 		Checker:   nil,
+		Checks:    drifttest.CheckerFixture{Unit: nil, Actor: nil, Job: nil, Lock: nil, SetNow: nil},
 		Namespace: b.Namespace,
 		Jobs: drifttest.Jobs{
 			DriftCheck: func(t *testing.T, u graph.Unit) job.ID {
@@ -136,6 +139,7 @@ func storeDriftJob(t *testing.T, b DriftBackend, u graph.Unit, purpose job.Purpo
 		}},
 		Current: 0, StartedBy: "al", Source: job.SourceAPI, Agent: "", AgentMode: "", BreakGlass: nil, Delivery: nil,
 		Closed: nil, Verification: job.VerificationNone, IdempotencyKey: "", RequestHash: "", Version: 0,
+		Trigger:   nil,
 		CreatedAt: time.Time{}, UpdatedAt: time.Time{},
 	}
 

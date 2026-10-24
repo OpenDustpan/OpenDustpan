@@ -118,13 +118,37 @@ type registryFixture struct {
 	clock   *time.Time
 }
 
-func newRegistryFixture(t *testing.T, host string, authz identity.Authorizer) registryFixture {
-	t.Helper()
-
-	reg := &fakeRegistry{
+// newFakeRegistry returns the fake registry of acme/payments with its files.
+func newFakeRegistry() *fakeRegistry {
+	return &fakeRegistry{
 		mu: sync.Mutex{}, keyGone: false,
 		files: map[string][]byte{zipHash: []byte("zip"), sumsHash: []byte("sums"), sigHash: []byte("sig")},
 	}
+}
+
+func newRegistryFixture(t *testing.T, host string, authz identity.Authorizer) registryFixture {
+	t.Helper()
+
+	return buildRegistryFixture(t, host, tokenAuthenticator{}, authz, nil)
+}
+
+// buildRegistryFixture builds a handler with the authenticator authn, the
+// Authorizer authz and the registry service svc. A nil svc is the fake
+// registry of the fixture, which the fixture reports as reg.
+func buildRegistryFixture(
+	t *testing.T,
+	host string,
+	authn identity.Authenticator,
+	authz identity.Authorizer,
+	svc tfe.RegistryService,
+) registryFixture {
+	t.Helper()
+
+	reg := newFakeRegistry()
+	if svc == nil {
+		svc = reg
+	}
+
 	audits := &memAuditStore{entries: nil, err: nil, mu: sync.Mutex{}}
 	now := time.Date(2026, 10, 21, 9, 0, 0, 0, time.UTC)
 
@@ -134,12 +158,26 @@ func newRegistryFixture(t *testing.T, host string, authz identity.Authorizer) re
 	}
 
 	handler, err := tfe.NewHandler(tfe.Config{
-		Sessions: nil, SessionPolicy: nil, StateGuard: nil,
-		Authenticator: tokenAuthenticator{}, Authorizer: authz, AddressGate: nil, Logger: slog.New(slog.DiscardHandler),
-		Namespaces: newTestNamespaces(t), Workspaces: stubWorkspaces{}, BaseURL: public, Audit: audits, Gate: nil,
-		MaxStateBytes: 0, OnAuditFailure: nil, DenialLimiter: nil,
+		Sessions:      nil,
+		SessionPolicy: nil,
+		StateGuard:    nil,
+		Authenticator: authn,
+		Authorizer:    authz,
+		AddressGate:   nil,
+		Logger:        slog.New(slog.DiscardHandler),
+		Namespaces: newTestNamespaces(
+			t,
+		),
+		Workspaces:     stubWorkspaces{},
+		OutputChecker:  nil,
+		BaseURL:        public,
+		Audit:          audits,
+		Gate:           nil,
+		MaxStateBytes:  0,
+		OnAuditFailure: nil,
+		DenialLimiter:  nil,
 		Registry: &tfe.RegistryConfig{
-			Service: reg, Host: host, DefaultPort: "443", URLKey: bytes.Repeat([]byte{7}, 32), URLTTL: 0,
+			Service: svc, Host: host, DefaultPort: "443", URLKey: bytes.Repeat([]byte{7}, 32), URLTTL: 0,
 			Now: func() time.Time { return now },
 		},
 	})
@@ -635,6 +673,7 @@ func TestNewHandlerRefusesAShortRegistryKey(t *testing.T) {
 			t,
 		),
 		Workspaces:     stubWorkspaces{},
+		OutputChecker:  nil,
 		BaseURL:        baseurl.Resolver{},
 		Audit:          newTestAudit(),
 		Gate:           nil,

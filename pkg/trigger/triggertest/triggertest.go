@@ -24,30 +24,20 @@ import (
 	"opendustpan.org/opendustpan/pkg/trigger"
 )
 
-// Versions makes the state versions that Dispatcher.Upstream checks. Each
-// function writes a state version of unit in the store of the adapter and
-// returns its ID.
-type Versions struct {
-	// Final writes a final state version: the last version of a run.
-	Final func(t *testing.T, unit graph.Unit) string
-	// Intermediate writes a state version that is not final: a write inside a
-	// run.
-	Intermediate func(t *testing.T, unit graph.Unit) string
-}
-
 // Harness is one fresh, empty set of ports for one subtest. Dispatcher starts
-// its plans through the Starter that the Factory received. Namespace makes
-// the namespace name and returns its current fence. Audited is an optional
-// hook: a case that needs it skips when it is nil. It returns the number of
-// audit entries of the namespace. StoreRaw is another optional hook: it
-// writes tr into the store without Validate and without the cycle check, as
+// its plans through the Starter that the Factory received, and Doubles holds the
+// doubles behind it: the harness builds the Dispatcher with Doubles.Dispatcher.
+// Namespace makes the namespace name and returns its current fence. Audited is
+// an optional hook: a case that needs it skips when it is nil. It returns the
+// number of audit entries of the namespace. StoreRaw is another optional hook:
+// it writes tr into the store without Validate and without the cycle check, as
 // a row of another version or a restore would. A case that needs it skips when
 // it is nil.
 type Harness struct {
 	Store      trigger.Store
 	Dispatcher trigger.Dispatcher
+	Doubles    *Doubles
 	Namespace  func(t *testing.T, name string) namespace.Fence
-	Versions   Versions
 	Audited    func(t *testing.T, ns string) int
 	StoreRaw   func(t *testing.T, tr trigger.Trigger)
 }
@@ -176,15 +166,23 @@ const (
 	otherZoneOffset = 3600
 	// concurrentRounds is the number of rounds of the case with two saves at once.
 	concurrentRounds = 50
+	// three is the count in the cases with three starts or three refusals.
+	three = 3
 	// oneDay is the distance of two slots of a daily schedule.
 	oneDay = 24 * time.Hour
 )
+
+// toolOpenTofu is the tool of the units of the fixtures.
+const toolOpenTofu = "opentofu"
 
 // The namespace of the fixtures, and the epoch of at.
 const (
 	acme     namespace.Name = "acme"
 	other    namespace.Name = "other"
 	fixtureT                = 1_800_000_000_000
+	// ada and grace are the subjects of two savers.
+	ada   = "user:ada"
+	grace = "user:grace"
 )
 
 // at returns the time of the fixtures, plus n minutes.
@@ -194,7 +192,7 @@ func at(n int) time.Time {
 
 // unit returns a valid unit of namespace ns with ID id.
 func unit(ns namespace.Name, id string) graph.Unit {
-	return graph.Unit{Namespace: ns, Tool: "opentofu", ID: id}
+	return graph.Unit{Namespace: ns, Tool: toolOpenTofu, ID: id}
 }
 
 // stale returns a fence that does not match the one the store holds.
@@ -221,6 +219,7 @@ func followsTrigger(id trigger.ID, u, src graph.Unit) trigger.Trigger {
 		Frequency: noFrequency(),
 		Source:    src,
 		Enabled:   true,
+		LastSaver: ada, LastSaverID: SaverIDOf(ada),
 	}
 }
 
@@ -229,6 +228,7 @@ func scheduleTrigger(id trigger.ID, u graph.Unit) trigger.Trigger {
 	return trigger.Trigger{
 		ID: id, Unit: u, Kind: trigger.KindSchedule,
 		Frequency: trigger.Frequency{Preset: cron.PresetDaily, Cron: ""}, Source: noUnit(), Enabled: true,
+		LastSaver: ada, LastSaverID: SaverIDOf(ada),
 	}
 }
 
@@ -241,6 +241,7 @@ func reviewTrigger(id trigger.ID, u graph.Unit) trigger.Trigger {
 		Frequency: noFrequency(),
 		Source:    noUnit(),
 		Enabled:   true,
+		LastSaver: ada, LastSaverID: SaverIDOf(ada),
 	}
 }
 
@@ -268,16 +269,16 @@ func auditOf(action string) audit.Entry {
 		Action:        action,
 		IDPSubject:    "",
 		TokenID:       "",
-		Object:        "",
+		Object:        "opentofu:acme/a",
 		Version:       "",
 		ValuePath:     "",
 		ValueCount:    nil,
 		Changes:       nil,
 		SourceIP:      "",
 		UserAgent:     "",
-		Channel:       "",
-		Kind:          "",
-		Outcome:       "",
+		Channel:       audit.ChannelAPI,
+		Kind:          audit.KindChange,
+		Outcome:       audit.OutcomeSuccess,
 		RequestID:     "",
 		ObjectID:      "",
 		PrevHash:      "",
@@ -311,4 +312,9 @@ func ActorOf(subject string) job.Actor {
 		ConfirmAuth: "",
 		AuthAt:      time.Time{},
 	}
+}
+
+// noLocation returns the zero code location, for a start that names none.
+func noLocation() job.Location {
+	return job.Location{Connection: "", Repository: "", Ref: "", Directory: "", Revision: ""}
 }

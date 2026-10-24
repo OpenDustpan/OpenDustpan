@@ -78,7 +78,7 @@ func agreementReplay(t *testing.T, prior, referrer string) error {
 	return pulumijournal.NewReplayer(now, cliVersion).Replay(
 		t.Context(),
 		open,
-		strings.NewReader(entries),
+		[][]byte{[]byte(entries)},
 		&out,
 	)
 }

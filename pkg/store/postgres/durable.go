@@ -367,6 +367,16 @@ func (d *DurableOperations) Release(ctx context.Context, c durable.Claim) error 
 	return nil
 }
 
+// GiveBack implements durable.Store.
+func (d *DurableOperations) GiveBack(ctx context.Context, c durable.Claim) error {
+	err := d.end(ctx, c, giveBackEnd)
+	if err != nil {
+		return fmt.Errorf("give back durable operation %s: %w", c.Operation, err)
+	}
+
+	return nil
+}
+
 // Cancel implements durable.Store.
 func (d *DurableOperations) Cancel(ctx context.Context, id durable.ID) error {
 	err := d.store.inControlTx(ctx, func(q *db.Queries) error {
@@ -488,6 +498,15 @@ func releaseEnd(row db.DurableOperation, now int64) (db.EndDurableClaimParams, e
 	}
 
 	return endParams(row, durable.StatePending, row.LastError, now, now), nil
+}
+
+// giveBackEnd is the rule of durable.Store.GiveBack.
+func giveBackEnd(row db.DurableOperation, now int64) (db.EndDurableClaimParams, error) {
+	if row.CancelRequested {
+		return db.EndDurableClaimParams{}, durable.ErrCanceled
+	}
+
+	return releaseEnd(row, now)
 }
 
 // endParams returns the end of the claim of row with the next state, the
