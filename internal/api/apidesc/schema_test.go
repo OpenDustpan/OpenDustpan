@@ -630,6 +630,10 @@ func TestReflectorRefusesWhatItCannotTell(t *testing.T) {
 			"an open enum with no value",
 			apidesc.Typed[inner]("Inner", apidesc.DeclareOpenEnum[texty]("Kind")),
 		},
+		{
+			"an open enum with a value twice",
+			apidesc.Typed[withKind]("WithKind", apidesc.DeclareOpenEnum[kindName]("KindName", "onCall", "onCall")),
+		},
 	}
 
 	for _, tt := range tests {

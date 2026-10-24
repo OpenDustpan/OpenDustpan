@@ -19,6 +19,8 @@ import (
 	"net/http"
 	"time"
 
+	denials "opendustpan.org/opendustpan/internal/api/refusal"
+	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -155,6 +157,16 @@ func (h *Handler) getBackup(w http.ResponseWriter, r *http.Request, _ identity.P
 	}
 
 	manifest, err := h.backups.ReadManifest(ctx, id)
+	if errors.Is(err, backup.ErrCorrupt) {
+		// The stored manifest is missing, cut or of another format. The
+		// answer gives the cause that the check route gives, so the caller
+		// can act without a second request.
+		h.writeCoded(ctx, w, failCoded(http.StatusConflict, denials.Clean(err.Error(), maxCauseBytes),
+			errcode.BackupCorrupt, errcode.Identifier("backup", id.String())))
+
+		return
+	}
+
 	if err != nil {
 		h.writeError(ctx, w, err)
 
@@ -165,6 +177,10 @@ func (h *Handler) getBackup(w http.ResponseWriter, r *http.Request, _ identity.P
 
 	h.writeJSON(ctx, w, http.StatusOK, doc)
 }
+
+// maxCauseBytes is the largest length, in bytes, of the cause of a corrupt
+// backup in an answer.
+const maxCauseBytes = 512
 
 // summarizeBackup renders one backup row for the list.
 func summarizeBackup(record backup.Record) backupSummaryJSON {

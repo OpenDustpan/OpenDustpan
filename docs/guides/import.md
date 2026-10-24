@@ -1,6 +1,6 @@
 # Import state into OpenDustpan
 
-An import moves the state of a unit from a source into OpenDustpan. A source is the backend that holds the state before the import. A unit is one deployable instance with its own state. A Pulumi stack is a unit. An OpenTofu workspace is a unit.
+An import moves the state of a Pulumi stack or an OpenTofu workspace from a source into OpenDustpan. A source is the backend that holds the state before the import.
 
 This guide covers Pulumi sources and OpenTofu sources. It follows the steps that the e2e suite ran. Each command below matches a step in that suite.
 

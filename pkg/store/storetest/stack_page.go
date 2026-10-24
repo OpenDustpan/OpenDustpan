@@ -25,6 +25,7 @@ func stackPageCases() []struct {
 		{name: "a stack page skips a stack deleted between pages", test: testStackPageDeleted},
 		{name: "a stack page pages a project filter", test: testStackPageProject},
 		{name: "a stack page reads the limit after the floor and the cap", test: testStackPageLimit},
+		{name: "a stack page pages a tag filter", test: testStackPageTag},
 	}
 }
 
@@ -143,7 +144,7 @@ func testStackPageBoundaries(t *testing.T, s Store) {
 	createStackRefs(t, s, b, [2]string{"web", "prod"})
 	createStackRefs(t, s, a, [2]string{"web", "prod"}, [2]string{"api", "prod"}, [2]string{"api", "dev"})
 
-	q := stack.PageQuery{After: nil, Project: "", Namespaces: []namespace.Name{c.Name, a.Name}, Limit: 0}
+	q := stack.PageQuery{After: nil, Project: "", Tag: nil, Namespaces: []namespace.Name{c.Name, a.Name}, Limit: 0}
 
 	keys, sizes := walkStackPages(t, s, q, 2)
 
@@ -166,7 +167,7 @@ func testStackPageTies(t *testing.T, s Store) {
 		createStackRefs(t, s, ns, [2]string{"x", "prod"}, [2]string{"y", "prod"}, [2]string{"x", "dev"})
 	}
 
-	q := stack.PageQuery{After: nil, Project: "", Namespaces: []namespace.Name{a.Name, b.Name}, Limit: 0}
+	q := stack.PageQuery{After: nil, Project: "", Tag: nil, Namespaces: []namespace.Name{a.Name, b.Name}, Limit: 0}
 
 	keys, _ := walkStackPages(t, s, q, 1)
 
@@ -189,11 +190,11 @@ func testStackPageEmpty(t *testing.T, s Store) {
 	last := stack.PageCursor{Namespace: full.Name, Project: "web", Name: "prod"}
 
 	for i, q := range []stack.PageQuery{
-		{After: nil, Project: "", Namespaces: nil, Limit: 10},
-		{After: nil, Project: "", Namespaces: []namespace.Name{empty.Name}, Limit: 10},
-		{After: nil, Project: "", Namespaces: []namespace.Name{"missing"}, Limit: 10},
-		{After: &last, Project: "", Namespaces: []namespace.Name{full.Name}, Limit: 10},
-		{After: nil, Project: "api", Namespaces: []namespace.Name{full.Name}, Limit: 10},
+		{After: nil, Project: "", Tag: nil, Namespaces: nil, Limit: 10},
+		{After: nil, Project: "", Tag: nil, Namespaces: []namespace.Name{empty.Name}, Limit: 10},
+		{After: nil, Project: "", Tag: nil, Namespaces: []namespace.Name{"missing"}, Limit: 10},
+		{After: &last, Project: "", Tag: nil, Namespaces: []namespace.Name{full.Name}, Limit: 10},
+		{After: nil, Project: "api", Tag: nil, Namespaces: []namespace.Name{full.Name}, Limit: 10},
 	} {
 		if got := checkStackPage(t, s, q); len(got) != 0 {
 			t.Fatalf("query %d = %v, want none", i, stackKeys(got))
@@ -222,7 +223,7 @@ func testStackPageDeleted(t *testing.T, s Store) {
 		[2]string{"web", "e"},
 	)
 
-	q := stack.PageQuery{After: nil, Project: "", Namespaces: []namespace.Name{ns.Name}, Limit: 2}
+	q := stack.PageQuery{After: nil, Project: "", Tag: nil, Namespaces: []namespace.Name{ns.Name}, Limit: 2}
 
 	first := checkStackPage(t, s, q)
 	if !slices.Equal(stackKeys(first), []string{"acme/web/a", "acme/web/b"}) {
@@ -258,7 +259,7 @@ func testStackPageProject(t *testing.T, s Store) {
 			[2]string{"webx", "dev"})
 	}
 
-	q := stack.PageQuery{After: nil, Project: "web", Namespaces: []namespace.Name{a.Name, b.Name}, Limit: 0}
+	q := stack.PageQuery{After: nil, Project: "web", Tag: nil, Namespaces: []namespace.Name{a.Name, b.Name}, Limit: 0}
 
 	keys, _ := walkStackPages(t, s, q, 2)
 
@@ -276,9 +277,69 @@ func testStackPageLimit(t *testing.T, s Store) {
 	createStackRefs(t, s, ns, [2]string{"web", "a"}, [2]string{"web", "b"}, [2]string{"web", "c"})
 
 	for _, tc := range []struct{ limit, want int }{{0, 1}, {-3, 1}, {stack.MaxPageLimit + 1, 3}} {
-		q := stack.PageQuery{After: nil, Project: "", Namespaces: []namespace.Name{ns.Name}, Limit: tc.limit}
+		q := stack.PageQuery{After: nil, Project: "", Tag: nil, Namespaces: []namespace.Name{ns.Name}, Limit: tc.limit}
 		if got := checkStackPage(t, s, q); len(got) != tc.want {
 			t.Fatalf("limit %d read %d stacks, want %d", tc.limit, len(got), tc.want)
+		}
+	}
+}
+
+// testStackPageTag pages a tag filter, with and without a project. A name
+// alone keeps every stack with the tag, a name with a value keeps the stacks
+// with that value, an empty value is a value, and a filter that no stack
+// matches gives an empty page.
+func testStackPageTag(t *testing.T, s Store) {
+	t.Helper()
+
+	ns := newNamespace(t, s, "acme")
+
+	for _, tc := range []struct {
+		tags map[string]string
+		name string
+	}{
+		{name: "blue", tags: map[string]string{"team": "blue"}},
+		{name: "blue2", tags: map[string]string{"team": "blue", "tier": "1"}},
+		{name: "empty", tags: map[string]string{"team": ""}},
+		{name: "none", tags: map[string]string{}},
+		{name: "owner", tags: map[string]string{"owner": "blue"}},
+	} {
+		st := newStack(ns.Name, "web", tc.name)
+		st.Tags = tc.tags
+
+		if err := s.CreateStack(t.Context(), st, ns.Fence()); err != nil {
+			t.Fatalf("create stack %s: %v", st.Ref, err)
+		}
+	}
+
+	for _, tc := range []struct {
+		want []string
+		tag  stack.TagFilter
+	}{
+		{
+			tag:  stack.TagFilter{Name: "team", Value: "", HasValue: false},
+			want: []string{"acme/web/blue", "acme/web/blue2", "acme/web/empty"},
+		},
+		{
+			tag:  stack.TagFilter{Name: "team", Value: "blue", HasValue: true},
+			want: []string{"acme/web/blue", "acme/web/blue2"},
+		},
+		{tag: stack.TagFilter{Name: "team", Value: "", HasValue: true}, want: []string{"acme/web/empty"}},
+		{tag: stack.TagFilter{Name: "team", Value: "red", HasValue: true}, want: nil},
+		{tag: stack.TagFilter{Name: "owner", Value: "blue", HasValue: true}, want: []string{"acme/web/owner"}},
+	} {
+		for _, project := range []stack.ProjectName{"", "web"} {
+			q := stack.PageQuery{
+				After:      nil,
+				Project:    project,
+				Tag:        &tc.tag,
+				Namespaces: []namespace.Name{ns.Name},
+				Limit:      0,
+			}
+
+			keys, _ := walkStackPages(t, s, q, 2)
+			if !slices.Equal(keys, tc.want) {
+				t.Fatalf("walk of tag %+v in project %q = %v, want %v", tc.tag, project, keys, tc.want)
+			}
 		}
 	}
 }

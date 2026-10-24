@@ -1186,6 +1186,43 @@ func (e *Env) APIStatus(ctx context.Context, method, path, body string) (int, st
 	return resp.Status, resp.Body, err
 }
 
+// APIStatusAs sends one request to the Pulumi Cloud-compatible API with token
+// in the scheme "token" that the Pulumi CLI sends, and returns its status and
+// body. Steps that use an access token that the server issued use it.
+func (e *Env) APIStatusAs(ctx context.Context, token, method, path, body string) (int, string, error) {
+	var reader io.Reader
+	if body != "" {
+		reader = strings.NewReader(body)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, method, e.URL+path, reader)
+	if err != nil {
+		return 0, "", fmt.Errorf("build %s %s: %w", method, path, err)
+	}
+
+	req.Header.Set("Authorization", "token "+token)
+
+	if body != "" {
+		req.Header.Set("Content-Type", "application/json")
+	}
+
+	resp, err := e.client.Do(req)
+	if err != nil {
+		return 0, "", fmt.Errorf("%s %s: %w", method, path, err)
+	}
+
+	defer func() {
+		_ = resp.Body.Close() //nolint:errcheck // The body was read to completion below.
+	}()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return 0, "", fmt.Errorf("read %s %s: %w", method, path, err)
+	}
+
+	return resp.StatusCode, string(respBody), nil
+}
+
 // APIResponse is the status, headers and body of one harness request.
 // Reveal checks read the headers: the value must travel with
 // Cache-Control: no-store.

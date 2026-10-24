@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"log/slog"
 	"net/http"
 
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -13,10 +14,64 @@ func WithPrincipalForTest(ctx context.Context, p identity.Principal) context.Con
 	return withPrincipal(ctx, p)
 }
 
+// ErrInvalidBodyForTest is the error of a request body that is not valid JSON.
+var ErrInvalidBodyForTest = errInvalidBody
+
+// ErrOverrideSwitchesBodyForTest is the error of a switch change without the
+// body that it needs.
+var ErrOverrideSwitchesBodyForTest = errOverrideSwitchesBody
+
+// ErrInvalidNamespaceBodyForTest is the error of a namespace create body that
+// is not valid JSON.
+var ErrInvalidNamespaceBodyForTest = errInvalidNamespaceBody
+
+// ErrNamespaceCursorForTest is the error of a cursor that does not decode to a
+// namespace name.
+var ErrNamespaceCursorForTest = errNamespaceCursor
+
 // ClassifyForTest returns the status and the message that the error
 // responses of the handlers give for err.
 func ClassifyForTest(err error) (int, string) {
-	return classify(err)
+	f := classify(err)
+
+	return f.status, f.message
+}
+
+// WriteErrorForTest writes the error answer of err, as a handler of the
+// installation API does.
+func WriteErrorForTest(w http.ResponseWriter, r *http.Request, err error) {
+	var h Handler
+
+	h.logger = slog.New(slog.DiscardHandler)
+	h.writeError(r.Context(), w, err)
+}
+
+// WriteEnterErrorForTest writes the answer of a failed enter of maintenance
+// mode with err, as the enter handler does.
+func WriteEnterErrorForTest(w http.ResponseWriter, r *http.Request, err error) {
+	var h Handler
+
+	h.logger = slog.New(slog.DiscardHandler)
+	h.writeEnterError(r.Context(), w, err)
+}
+
+// WriteErrorLogForTest writes the error answer of err with logger, so a test
+// can read the log line of the answer.
+func WriteErrorLogForTest(w http.ResponseWriter, r *http.Request, err error, logger *slog.Logger) {
+	var h Handler
+
+	h.logger = logger
+	h.writeError(r.Context(), w, err)
+}
+
+// ServeEmptyForTest serves r with a handler that has no route, so every path
+// answers the 404 of an unknown route.
+func ServeEmptyForTest(w http.ResponseWriter, r *http.Request) {
+	var h Handler
+
+	h.logger = slog.New(slog.DiscardHandler)
+	h.mux = newPatternMux()
+	h.ServeHTTP(w, r)
 }
 
 // DevCodeSignInForTest calls the dev sign-in handler of h directly, as the

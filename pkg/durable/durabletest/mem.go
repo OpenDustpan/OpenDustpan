@@ -489,6 +489,13 @@ func (s memStore) Release(_ context.Context, c durable.Claim) error {
 	})
 }
 
+func (s memStore) GiveBack(_ context.Context, c durable.Claim) error {
+	return s.end(c, refuseOnCancel, func(op *durable.Operation, now time.Time) {
+		op.State = durable.StatePending
+		op.NotBefore = now
+	})
+}
+
 func (s memStore) Cancel(_ context.Context, id durable.ID) error {
 	s.db.mu.Lock()
 	defer s.db.mu.Unlock()

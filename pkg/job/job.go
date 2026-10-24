@@ -357,6 +357,11 @@ type Job struct {
 	AgentMode AgentMode
 	// BreakGlass is set when the job started through an active freeze.
 	BreakGlass *BreakGlass
+	// Trigger names the run trigger that started the job, or is nil for a job
+	// that no trigger started. The server sets it from StartRequest.Trigger.
+	// A read of the output of another unit, by a job that a trigger started,
+	// finds the last saver of the trigger by this record.
+	Trigger *TriggerRef
 	// Delivery is the result of the deliver phase of a write-back job.
 	Delivery *DeliveryResult
 	// Closed is the state version that ended a write-back job.

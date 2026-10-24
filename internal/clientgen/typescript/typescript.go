@@ -158,6 +158,13 @@ func (language) IsGenerated(head []byte) bool {
 	return sourceHeader.Match(head) || jsonHeader.Match(head)
 }
 
+// Owned implements clientgen.Language. The run gives the whole of src/, and
+// package.json and tsconfig.json: the compiler builds every file of src/ into
+// the package, so a file there that the run does not give would ship.
+func (language) Owned(path string) bool {
+	return path == pathPackage || path == pathTSConfig || strings.HasPrefix(path, srcDir)
+}
+
 // funcs are the encoders that a template calls. A value from the description
 // goes into source through one of them only.
 func funcs() template.FuncMap {

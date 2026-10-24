@@ -105,6 +105,7 @@ func newUnitHandler(t *testing.T, authz identity.Authorizer) testHandler {
 
 	handler, err := newCheckedHandler(t, apiinventory.Config{
 		OutputSharing: nil,
+		Outputs:       nil,
 		Views:         nil,
 		Audit:         newTestAudit(), OnAuditFailure: nil, Locks: nil, Moves: nil,
 		Collections:   testCollectionService(t, homedNamespaceStore{}),
@@ -155,7 +156,7 @@ func decodeObject(t *testing.T, rec *httptest.ResponseRecorder) map[string]any {
 	return out
 }
 
-const notFoundBody = `{"message":"unit not found","code":404}` + "\n"
+const notFoundBody = `{"message":"unit not found","code":404,"errorCode":"unit.not-found"}` + "\n"
 
 // TestGetUnitByID is table-driven over the callers and the units of the route.
 func TestGetUnitByID(t *testing.T) {

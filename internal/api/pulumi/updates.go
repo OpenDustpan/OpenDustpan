@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/internal/token"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/stack"
@@ -119,33 +120,17 @@ type deltaCheckpointRequest struct {
 // its client sent it, through the same blob-first path as saveCheckpoint.
 // The sequence number makes retried saves idempotent. A sequence number below
 // 1 answers 409 and saves nothing, so the CLI falls back to a full save.
-func (h *Handler) saveCheckpointVerbatim(
-	w http.ResponseWriter, r *http.Request, _ identity.Principal, _ identity.Object,
-) {
+func (h *Handler) saveCheckpointVerbatim(w http.ResponseWriter, r *http.Request, call LeaseCall) {
 	ctx := r.Context()
 
-	tok, _, ok := h.leaseToken(w, r)
-	if !ok {
-		return
-	}
+	var req verbatimCheckpointRequest
 
-	ref, id, ok := h.updateTarget(w, r)
-	if !ok {
-		return
-	}
-
-	limit := int64(h.updates.MaxCheckpointBytes())
-	releaseHold, ok := h.hold(w, r, limit)
+	releaseHold, ok := h.decodeCheckpoint(w, r, &req)
 	if !ok {
 		return
 	}
 
 	defer releaseHold()
-
-	var req verbatimCheckpointRequest
-	if !h.decodeLargeBody(w, r, limit, &req) {
-		return
-	}
 
 	if req.SequenceNumber < 1 {
 		h.writeError(ctx, w, fmt.Errorf("%w: checkpoint sequence %d", stack.ErrInvalidDelta, req.SequenceNumber))
@@ -161,7 +146,7 @@ func (h *Handler) saveCheckpointVerbatim(
 		Invalid:       false,
 	}
 
-	if err := h.updates.SaveCheckpoint(ctx, ref, id, tok, in); err != nil {
+	if err := h.updates.SaveCheckpoint(ctx, call.Ref, call.ID, call.Token, in); err != nil {
 		h.writeError(ctx, w, err)
 
 		return
@@ -176,33 +161,17 @@ func (h *Handler) saveCheckpointVerbatim(
 // nothing, so the CLI falls back to a full verbatim save. A delta whose
 // result is over the checkpoint size limit answers 409 too: the verbatim
 // fallback then meets the normal limit.
-func (h *Handler) saveCheckpointDelta(
-	w http.ResponseWriter, r *http.Request, _ identity.Principal, _ identity.Object,
-) {
+func (h *Handler) saveCheckpointDelta(w http.ResponseWriter, r *http.Request, call LeaseCall) {
 	ctx := r.Context()
 
-	tok, _, ok := h.leaseToken(w, r)
-	if !ok {
-		return
-	}
+	var req deltaCheckpointRequest
 
-	ref, id, ok := h.updateTarget(w, r)
-	if !ok {
-		return
-	}
-
-	limit := int64(h.updates.MaxCheckpointBytes())
-	releaseHold, ok := h.hold(w, r, limit)
+	releaseHold, ok := h.decodeCheckpoint(w, r, &req)
 	if !ok {
 		return
 	}
 
 	defer releaseHold()
-
-	var req deltaCheckpointRequest
-	if !h.decodeLargeBody(w, r, limit, &req) {
-		return
-	}
 
 	in := stack.DeltaInput{
 		SchemaVersion: req.Version,
@@ -211,7 +180,7 @@ func (h *Handler) saveCheckpointDelta(
 		Delta:         []byte(req.DeploymentDelta),
 	}
 
-	if err := h.updates.SaveCheckpointDelta(ctx, ref, id, tok, in); err != nil {
+	if err := h.updates.SaveCheckpointDelta(ctx, call.Ref, call.ID, call.Token, in); err != nil {
 		h.writeError(ctx, w, err)
 
 		return
@@ -252,18 +221,14 @@ func (h *Handler) importStack(w http.ResponseWriter, r *http.Request, p identity
 		return
 	}
 
-	limit := int64(h.updates.MaxCheckpointBytes())
-	releaseHold, ok := h.hold(w, r, limit)
+	var req importStackRequest
+
+	releaseHold, ok := h.decodeCheckpoint(w, r, &req)
 	if !ok {
 		return
 	}
 
 	defer releaseHold()
-
-	var req importStackRequest
-	if !h.decodeLargeBody(w, r, limit, &req) {
-		return
-	}
 
 	in := stack.CheckpointInput{
 		Features:      req.Features,
@@ -349,7 +314,8 @@ type updateResults struct {
 // the principal that created the update, never a token. CheckpointBytes is 0
 // when the update saved no checkpoint. LeaseExpiresAt is the lease expiry in
 // Unix seconds while the update runs, and 0 once it ended. RestoredFrom is
-// the stack version a restore copied, and 0 for any other update.
+// the stack version a restore copied, and 0 for any other update. EndTime is 0
+// while the update has not ended.
 type updateInfo struct {
 	Result          string `json:"result"`
 	Kind            string `json:"kind"`
@@ -502,18 +468,8 @@ func (h *Handler) startOffer(w http.ResponseWriter, r *http.Request) (startUpdat
 
 // renewLease extends the update's lease. The lease token arrives in the
 // Authorization header, not in the deprecated body field.
-func (h *Handler) renewLease(w http.ResponseWriter, r *http.Request, _ identity.Principal, _ identity.Object) {
+func (h *Handler) renewLease(w http.ResponseWriter, r *http.Request, call LeaseCall) {
 	ctx := r.Context()
-
-	tok, raw, ok := h.leaseToken(w, r)
-	if !ok {
-		return
-	}
-
-	ref, id, ok := h.updateTarget(w, r)
-	if !ok {
-		return
-	}
 
 	body, ok := h.readBody(w, r)
 	if !ok {
@@ -528,37 +484,32 @@ func (h *Handler) renewLease(w http.ResponseWriter, r *http.Request, _ identity.
 		return
 	}
 
-	u, err := h.updates.Renew(ctx, ref, id, tok, time.Duration(req.Duration)*time.Second)
+	u, err := h.updates.Renew(ctx, call.Ref, call.ID, call.Token, time.Duration(req.Duration)*time.Second)
 	if err != nil {
 		h.writeError(ctx, w, err)
 
 		return
 	}
 
-	h.writeJSON(ctx, w, http.StatusOK, renewLeaseResponse{TokenExpiration: u.Lease.ExpiresAt.Unix(), Token: raw})
+	h.writeJSON(
+		ctx,
+		w,
+		http.StatusOK,
+		renewLeaseResponse{TokenExpiration: u.Lease.ExpiresAt.Unix(), Token: call.Token.Reveal()},
+	)
 }
 
 // recordEvents stores a batch of engine events for the update. Retried
 // events repeat their sequence and are stored once.
-func (h *Handler) recordEvents(w http.ResponseWriter, r *http.Request, _ identity.Principal, _ identity.Object) {
+func (h *Handler) recordEvents(w http.ResponseWriter, r *http.Request, call LeaseCall) {
 	ctx := r.Context()
-
-	tok, _, ok := h.leaseToken(w, r)
-	if !ok {
-		return
-	}
-
-	ref, id, ok := h.updateTarget(w, r)
-	if !ok {
-		return
-	}
 
 	events, ok := h.readEvents(w, r)
 	if !ok {
 		return
 	}
 
-	if err := h.updates.AppendEvents(ctx, ref, id, tok, events); err != nil {
+	if err := h.updates.AppendEvents(ctx, call.Ref, call.ID, call.Token, events); err != nil {
 		h.writeError(ctx, w, err)
 
 		return
@@ -569,18 +520,8 @@ func (h *Handler) recordEvents(w http.ResponseWriter, r *http.Request, _ identit
 
 // completeUpdate ends the update with the status its client reports.
 // Repeating the status the update already ended with succeeds.
-func (h *Handler) completeUpdate(w http.ResponseWriter, r *http.Request, _ identity.Principal, _ identity.Object) {
+func (h *Handler) completeUpdate(w http.ResponseWriter, r *http.Request, call LeaseCall) {
 	ctx := r.Context()
-
-	tok, _, ok := h.leaseToken(w, r)
-	if !ok {
-		return
-	}
-
-	ref, id, ok := h.updateTarget(w, r)
-	if !ok {
-		return
-	}
 
 	body, ok := h.readBody(w, r)
 	if !ok {
@@ -602,7 +543,7 @@ func (h *Handler) completeUpdate(w http.ResponseWriter, r *http.Request, _ ident
 		return
 	}
 
-	if _, err := h.updates.Complete(ctx, ref, id, tok, status); err != nil {
+	if _, err := h.updates.Complete(ctx, call.Ref, call.ID, call.Token, status); err != nil {
 		h.writeError(ctx, w, err)
 
 		return
@@ -650,31 +591,17 @@ func (h *Handler) cancelUpdate(w http.ResponseWriter, r *http.Request, p identit
 // limit bounds the whole wire body here; the domain bounds the deployment
 // inside it, so a body just over the limit answers 413 here even when its
 // deployment alone would fit.
-func (h *Handler) saveCheckpoint(w http.ResponseWriter, r *http.Request, _ identity.Principal, _ identity.Object) {
+func (h *Handler) saveCheckpoint(w http.ResponseWriter, r *http.Request, call LeaseCall) {
 	ctx := r.Context()
 
-	tok, _, ok := h.leaseToken(w, r)
-	if !ok {
-		return
-	}
+	var req checkpointRequest
 
-	ref, id, ok := h.updateTarget(w, r)
-	if !ok {
-		return
-	}
-
-	limit := int64(h.updates.MaxCheckpointBytes())
-	releaseHold, ok := h.hold(w, r, limit)
+	releaseHold, ok := h.decodeCheckpoint(w, r, &req)
 	if !ok {
 		return
 	}
 
 	defer releaseHold()
-
-	var req checkpointRequest
-	if !h.decodeLargeBody(w, r, limit, &req) {
-		return
-	}
 
 	in := stack.CheckpointInput{
 		Features:      req.Features,
@@ -684,7 +611,7 @@ func (h *Handler) saveCheckpoint(w http.ResponseWriter, r *http.Request, _ ident
 		Invalid:       req.IsInvalid,
 	}
 
-	if err := h.updates.SaveCheckpoint(ctx, ref, id, tok, in); err != nil {
+	if err := h.updates.SaveCheckpoint(ctx, call.Ref, call.ID, call.Token, in); err != nil {
 		h.writeError(ctx, w, err)
 
 		return
@@ -750,7 +677,7 @@ func (h *Handler) listHistory(w http.ResponseWriter, r *http.Request, _ identity
 			Kind:            string(list[i].Kind),
 			Version:         int(list[i].Version),
 			StartTime:       list[i].StartedAt.Unix(),
-			EndTime:         list[i].EndedAt.Unix(),
+			EndTime:         endTime(list[i]),
 			UpdateID:        list[i].ID.String(),
 			RequestedBy:     list[i].CreatedBy,
 			CheckpointBytes: list[i].CheckpointBytes,
@@ -840,6 +767,17 @@ func leaseExpiresAt(u stack.Update) int64 {
 	}
 
 	return u.Lease.ExpiresAt.Unix()
+}
+
+// endTime returns the end time of the update in Unix seconds, and 0 while
+// the update has not ended. The zero time.Time would give a large negative
+// number, which the Pulumi CLI reads as a duration.
+func endTime(u stack.Update) int64 {
+	if u.EndedAt.IsZero() {
+		return 0
+	}
+
+	return u.EndedAt.Unix()
 }
 
 // updateResult maps an update status to the history wire value. The wire
@@ -932,22 +870,22 @@ func (h *Handler) updateTarget(w http.ResponseWriter, r *http.Request) (stack.Re
 
 // leaseToken reads the update lease token from the Authorization header. A
 // missing or malformed token answers 401 without touching any store.
-func (h *Handler) leaseToken(w http.ResponseWriter, r *http.Request) (token.Token, string, bool) {
+func (h *Handler) leaseToken(w http.ResponseWriter, r *http.Request) (token.Token, bool) {
 	raw, ok := strings.CutPrefix(r.Header.Get("Authorization"), updateTokenScheme)
 	if !ok || raw == "" {
 		h.writeError(r.Context(), w, identity.ErrUnauthenticated)
 
-		return token.Token{}, "", false
+		return token.Token{}, false
 	}
 
 	tok, err := token.Parse(raw)
 	if err != nil {
 		h.writeError(r.Context(), w, err)
 
-		return token.Token{}, "", false
+		return token.Token{}, false
 	}
 
-	return tok, raw, true
+	return tok, true
 }
 
 // readBody reads at most maxBodyBytes request bytes. An oversized body answers
@@ -1032,5 +970,5 @@ func parseEvent(raw json.RawMessage) (stack.Event, error) {
 
 // writeInvalidBody answers a request body that is not valid JSON.
 func (h *Handler) writeInvalidBody(ctx context.Context, w http.ResponseWriter) {
-	h.writeJSON(ctx, w, http.StatusBadRequest, errorResponse{Code: http.StatusBadRequest, Message: invalidBodyMessage})
+	h.writeFailure(ctx, w, coded(http.StatusBadRequest, invalidBodyMessage, errcode.RequestBodyInvalid))
 }

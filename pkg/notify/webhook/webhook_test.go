@@ -761,6 +761,8 @@ func TestHostMustBeTheTarget(t *testing.T) {
 		{"host the allowlist refuses", "https://hooks.example.com:/ops", "hooks.example.com:"},
 		{"loopback with its own target", "https://127.0.0.1/ops", "127.0.0.1"},
 		{"does not parse", "https://hooks.example.com/%zz", "hooks.example.com"},
+		{"URL host with a trailing dot", "https://hooks.example.com./ops", "hooks.example.com"},
+		{"URL host and target with a trailing dot", "https://hooks.example.com./ops", "hooks.example.com."},
 	}
 
 	for _, tt := range tests {
@@ -777,6 +779,42 @@ func TestHostMustBeTheTarget(t *testing.T) {
 
 			if n := len(r.requests()); n != 0 {
 				t.Fatalf("the test server got %d requests, want 0", n)
+			}
+		})
+	}
+}
+
+// TestHostInUpperCaseSends checks that the host check of the sender ignores
+// the case of the host in the URL: the target is in lower case, and a URL
+// with the same host in upper case or mixed case sends.
+func TestHostInUpperCaseSends(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		to   string
+	}{
+		{"upper case", "https://HOOKS.EXAMPLE.COM/ops"},
+		{"mixed case", "https://Hooks.Example.com/ops"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			r := newReceiver(t)
+			r.set(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) })
+
+			m := message([]byte(canary))
+			m.To = tt.to
+			m.Sink.Target = "hooks.example.com"
+
+			if err := r.sender(t).Send(t.Context(), m); err != nil {
+				t.Fatalf("Send = %v, want no error", err)
+			}
+
+			if n := len(r.requests()); n != 1 {
+				t.Fatalf("the test server got %d requests, want 1", n)
 			}
 		})
 	}
