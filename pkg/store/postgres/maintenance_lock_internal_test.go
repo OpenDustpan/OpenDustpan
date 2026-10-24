@@ -79,7 +79,7 @@ func TestWriteWaitsForEnterAndReadsItsState(t *testing.T) {
 		t.Fatalf("begin: %v", err)
 	}
 
-	if err = lockWritesExclusive(ctx, s.queries.WithTx(tx), 0, false); err != nil {
+	if err = lockWritesExclusive(ctx, s.queries.WithTx(tx), 0, maintenance.ErrUnavailable); err != nil {
 		t.Fatalf("take the exclusive lock: %v", err)
 	}
 
