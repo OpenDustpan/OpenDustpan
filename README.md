@@ -163,6 +163,10 @@ The end-to-end suite drives each version below against the server, on SQLite
 and on PostgreSQL, on Linux in CI. `latest` is the newest release on the day
 of the run.
 
+PostgreSQL 18 is the minimum supported version. CI runs the store tests and
+the end-to-end suite on PostgreSQL 18 only. An earlier version is not tested,
+and the query plans that the store tests check can differ on it.
+
 | Tool | Tested versions | What works | What does not work yet |
 | --- | --- | --- | --- |
 | Pulumi CLI | 3.200.0, 3.250.0, latest | `login`, `up`, `preview`, `refresh`, `destroy`, `cancel`, `stack export`, `stack import`, config secrets, `stack rename`, `stack rm`, `stack tag set` | Pulumi Cloud features outside the state backend |
