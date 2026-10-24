@@ -1,6 +1,7 @@
 package identity
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"time"
@@ -84,4 +85,63 @@ func (p Principal) IsNamespaceService() bool {
 	_, ok := NamespaceServiceOf(p.Subject)
 
 	return ok && p.Credential == CredentialServer && p.Kind == KindService
+}
+
+// NamespaceServiceRule decides every check of a principal whose subject has
+// the form of the subject of a namespace service principal, and asks Next for
+// every other principal. Such a principal holds one action,
+// ActionUnitRunPlan, on the units of its own namespace, and only when
+// IsNamespaceService holds. Every other check of such a subject is denied,
+// also with the Admin flag set, and Next never sees it.
+//
+// Defense in depth: the built-in authorizer of grants applies the same rule,
+// and the principal API refuses the subject. This decorator stays so that an
+// Authorizer of an embedder that does not know the rule, for example one that
+// allows by the Admin flag, never gives such a principal more.
+type NamespaceServiceRule struct {
+	Next Authorizer
+}
+
+var _ Authorizer = NamespaceServiceRule{Next: nil}
+
+// Authorize implements Authorizer.
+func (r NamespaceServiceRule) Authorize(ctx context.Context, p Principal, action Action, obj Object) error {
+	if !IsNamespaceServiceSubject(p.Subject) {
+		return r.Next.Authorize(ctx, p, action, obj)
+	}
+
+	ns, valid := NamespaceServiceOf(p.Subject)
+
+	allowed := valid && p.IsNamespaceService() &&
+		action == ActionUnitRunPlan &&
+		obj.IsUnit() && obj.Namespace() == ns
+
+	if !allowed {
+		return fmt.Errorf("%w: %s may not %s on %q", ErrDenied, p.Subject, action, obj.String())
+	}
+
+	return nil
+}
+
+// ListObjects gives a principal with the subject of a namespace service
+// principal no object: its one action is a decision on one object, not a list
+// of grants. It asks Next for every other principal.
+func (r NamespaceServiceRule) ListObjects(ctx context.Context, p Principal, action Action) (Scope, error) {
+	if IsNamespaceServiceSubject(p.Subject) {
+		return Scope{Namespaces: nil, Collections: nil, Units: nil, Principals: nil, All: false}, nil
+	}
+
+	scope, err := r.Next.ListObjects(ctx, p, action)
+	if err != nil {
+		return Scope{Namespaces: nil, Collections: nil, Units: nil, Principals: nil, All: false}, fmt.Errorf(
+			"list objects: %w", err,
+		)
+	}
+
+	return scope, nil
+}
+
+// ScopeExact reports that the scope is exact when the scope of Next is exact.
+func (r NamespaceServiceRule) ScopeExact() bool {
+	return HasExactScope(r.Next)
 }

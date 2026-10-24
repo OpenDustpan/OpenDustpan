@@ -955,6 +955,15 @@ type Authenticator interface {
 }
 
 // Authorizer decides whether a principal may perform an action on an object.
+//
+// The server builds a namespace service principal itself (see
+// NamespaceService). It holds one action, ActionUnitRunPlan, on the units of
+// its own namespace. An Authorizer must never allow it more, also with the
+// Admin flag set, and must deny every principal whose subject has the form of
+// such a subject but for which IsNamespaceService does not hold. The server
+// puts NamespaceServiceRule around every Authorizer, so that rule holds also
+// for an Authorizer that does not know it. An Authorizer that decides these
+// principals itself runs identitytest.RunNamespaceService.
 type Authorizer interface {
 	// Authorize returns nil if allowed and an error wrapping ErrDenied otherwise.
 	Authorize(ctx context.Context, p Principal, action Action, obj Object) error
