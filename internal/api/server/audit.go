@@ -47,7 +47,7 @@ func callerEntry(r *http.Request, p identity.Principal, action identity.Action) 
 		ValueCount:    nil,
 		Changes:       sessionChanges(r),
 		SourceIP:      clientip.String(r),
-		UserAgent:     truncateUserAgent(userAgent(r)),
+		UserAgent:     audit.TruncateUserAgent(userAgent(r)),
 		Channel:       callerChannel(r),
 		Kind:          "",
 		Outcome:       "",
@@ -156,19 +156,4 @@ func (h *Handler) failAudit(ctx context.Context) {
 	if h.onAuditFailure != nil {
 		h.onAuditFailure()
 	}
-}
-
-// truncateUserAgent caps s at audit.MaxUserAgentLen bytes on a UTF-8 rune
-// boundary, so a multi-byte rune is never split.
-func truncateUserAgent(s string) string {
-	if len(s) <= audit.MaxUserAgentLen {
-		return s
-	}
-
-	cut := audit.MaxUserAgentLen
-	for cut > 0 && s[cut]&0xC0 == 0x80 {
-		cut--
-	}
-
-	return s[:cut]
 }
