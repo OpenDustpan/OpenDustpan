@@ -1,6 +1,7 @@
 package runnerapi
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/base64"
 	"errors"
@@ -13,6 +14,7 @@ import (
 
 	"opendustpan.org/opendustpan/internal/sessionauth"
 	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/ipallow"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/runner"
 	"opendustpan.org/opendustpan/pkg/runner/protocol"
@@ -83,6 +85,10 @@ func (h *Handler) checkAuthorized(r *http.Request, route Route, c *call) (*http.
 		r = r.WithContext(sessionauth.WithSession(ctx))
 	}
 
+	if addrErr := h.checkAddress(ctx, r, p); addrErr != nil {
+		return r, addrErr
+	}
+
 	ns, err := h.namespaces.Get(ctx, namespace.Name(r.PathValue("namespace")))
 	if errors.Is(err, namespace.ErrNotFound) {
 		return r, errNotFound
@@ -95,7 +101,9 @@ func (h *Handler) checkAuthorized(r *http.Request, route Route, c *call) (*http.
 	obj := identity.NamespaceObject(ns.Name)
 
 	if err = h.guard.Authorize(ctx, r, p, identity.ActionNamespaceRead, obj); err != nil {
-		if errors.Is(err, identity.ErrDenied) {
+		// An address outside the IP allowlist answers 403 with its own code,
+		// as on the other routes of the namespace.
+		if errors.Is(err, identity.ErrDenied) && !errors.Is(err, ipallow.ErrAddressNotAllowed) {
 			return r, errNotFound
 		}
 
@@ -116,6 +124,32 @@ func (h *Handler) checkAuthorized(r *http.Request, route Route, c *call) (*http.
 	c.principal, c.ns, c.body = p, ns, body
 
 	return r, nil
+}
+
+// checkAddress refuses a client address that is outside the IP allowlist of
+// the namespace in the path, before the lookup of the namespace. The answer is
+// the same 403 for a namespace that exists and for one that does not exist.
+// Every other result, also an invalid name, continues: the checks after the
+// lookup give the answer, as before.
+//
+// Defense in depth: checkAuthorized checks the allowlist again on the found
+// namespace. This check stays so that the order of the lookup never decides
+// the answer.
+func (h *Handler) checkAddress(ctx context.Context, r *http.Request, p identity.Principal) error {
+	action := identity.ActionNamespaceRead
+
+	// An invalid name names no namespace and has no allowlist: the lookup that
+	// follows answers 404 for it.
+	var err error
+	if name, parseErr := namespace.ParseName(r.PathValue("namespace")); parseErr == nil {
+		err = h.guard.Authorize(ctx, r, p, action, identity.NamespaceObject(name))
+	}
+
+	if errors.Is(err, ipallow.ErrAddressNotAllowed) {
+		return fmt.Errorf("authorize %s: %w", action, err)
+	}
+
+	return nil
 }
 
 // authenticate resolves the "Authorization: token <t>" or the
