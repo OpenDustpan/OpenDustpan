@@ -21,6 +21,7 @@ import (
 	"opendustpan.org/opendustpan/internal/pagetoken"
 	"opendustpan.org/opendustpan/internal/registry/service"
 	"opendustpan.org/opendustpan/internal/requestid"
+	"opendustpan.org/opendustpan/internal/sessionauth"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/idempotency"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -150,7 +151,7 @@ func callerOf(r *http.Request, p identity.Principal) *service.Caller {
 	by := audit.Entry{
 		At: time.Time{}, Namespace: "", Subject: "", IDPSubject: "", TokenID: "", Action: "", Object: "",
 		Version: "", ValuePath: "", ValueCount: nil, Changes: nil, SourceIP: clientip.String(r),
-		UserAgent: truncateUserAgent(userAgent(r)), Channel: audit.NormalizeChannel(apidesc.Header(r, channelHeader)),
+		UserAgent: audit.TruncateUserAgent(userAgent(r)), Channel: sessionauth.AuditChannel(r, channelHeader),
 		Kind: audit.KindChange, Outcome: audit.OutcomeSuccess, RequestID: requestid.FromContext(r.Context()),
 		ObjectID: "", PrevHash: "", Hash: "", Sequence: 0, FenceVersion: 0, Reason: "", PrincipalKind: string(p.Kind),
 		JobID: p.JobID,
@@ -165,14 +166,6 @@ func callerOf(r *http.Request, p identity.Principal) *service.Caller {
 	}
 
 	return &service.Caller{Principal: p, By: by}
-}
-
-func truncateUserAgent(s string) string {
-	if len(s) <= audit.MaxUserAgentLen {
-		return s
-	}
-
-	return s[:audit.MaxUserAgentLen]
 }
 
 // readBody decodes one JSON object into v. It refuses an unknown field, a

@@ -99,8 +99,25 @@ const (
 )
 
 // MaxUserAgentLen caps the user agent that an entry keeps, in bytes. The
-// HTTP adapter truncates longer values before it appends.
+// HTTP adapter truncates longer values with TruncateUserAgent before it
+// appends.
 const MaxUserAgentLen = 512
+
+// TruncateUserAgent cuts s to at most MaxUserAgentLen bytes on a UTF-8 rune
+// boundary, so a multi-byte rune is never split and the entry keeps valid
+// UTF-8. A shorter s is returned unchanged.
+func TruncateUserAgent(s string) string {
+	if len(s) <= MaxUserAgentLen {
+		return s
+	}
+
+	cut := MaxUserAgentLen
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+
+	return s[:cut]
+}
 
 // The values of Entry.PrincipalKind. They equal the kinds of a principal
 // record.
