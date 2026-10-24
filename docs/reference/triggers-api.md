@@ -46,7 +46,7 @@ and the code `request.idempotency-key-unsupported`.
 | `unit` | `id` (the stable ID), `tool` (`Pulumi` or `OpenTofu`) and `name` of the unit that the trigger starts |
 | `kind` | `review-request-push`, `schedule` or `follows` |
 | `frequency` | For `schedule`: `preset` or `cron` |
-| `source` | For `follows`: `id`, `tool` and `name` of the source unit. `name` is empty when the inventory no longer knows the unit. |
+| `source` | For `follows`: `id`, `tool` and `name` of the source unit. `name` is empty when the inventory no longer knows the unit, or when you do not hold `unit:read` on the source. |
 | `enabled` | `false` for a trigger that starts nothing |
 | `lastSaver` | The subject of the person who saved the trigger last |
 | `needsNewSave` | `true` when the last saver no longer holds the actions of a start. Save the trigger again. |
@@ -78,8 +78,10 @@ of the job.
 
 The error body has `message`, `code` (the status) and `errorCode`, the stable
 code of the refusal. A code that has arguments also has `errorArgs`. A refusal of a save that closes a loop of units
-also has `units`: the units of the loop in order, each with `id`, `tool` and
-`name`. The first and the last unit are the same unit.
+also has `units`: the units of the loop that you can read, in order, each with
+`id`, `tool` and `name`. A unit on which you do not hold `unit:read` is not in
+`units`, and `message` gives only the number of such units. The first and the
+last unit of a loop are the same unit.
 
 | Status | `errorCode` | Cause |
 | --- | --- | --- |
