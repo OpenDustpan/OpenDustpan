@@ -36,6 +36,12 @@ func TestAddressOutsideTheAllowlistAnswers403(t *testing.T) {
 	for _, q := range []struct{ method, path, body string }{
 		{method: http.MethodGet, path: "/api/runners/acme/pools", body: ""},
 		{method: http.MethodPost, path: "/api/runners/acme/pools", body: `{"name":"p1","purpose":"jobs"}`},
+		// A pool that does not exist and a namespace that does not exist answer
+		// the same 403: the refusal does not tell whether the object exists.
+		{method: http.MethodGet, path: "/api/runners/acme/pools/absent", body: ""},
+		{method: http.MethodGet, path: "/api/runners/absent/pools", body: ""},
+		{method: http.MethodPost, path: "/api/runners/absent/pools", body: `{"name":"p1","purpose":"jobs"}`},
+		{method: http.MethodGet, path: "/api/runners/absent/pools/absent", body: ""},
 	} {
 		req := httptest.NewRequestWithContext(t.Context(), q.method, q.path, strings.NewReader(q.body))
 		req.Header.Set("Authorization", "token "+adminToken)
