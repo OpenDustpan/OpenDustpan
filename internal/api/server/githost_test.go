@@ -359,10 +359,9 @@ func TestGitHostConnectionConflicts(t *testing.T) {
 	wantHost(t, e.send(t, http.MethodPost, hostConnectionsPath, createBody("101")), http.StatusConflict)
 }
 
-// TestGitHostConnectionTakesNothingThatTheOperatorOwns sends each field that
-// only the operator sets, straight to the create route.
-// TestGitHostIfMatchInvalidCodes proves that a bad If-Match header on the app
-// and on a connection answers the If-Match code.
+// TestGitHostIfMatchInvalidCodes proves that a bad If-Match header on each
+// git-host route that reads one answers the If-Match code and its message.
+// The subtests share one environment, so they run in turn.
 func TestGitHostIfMatchInvalidCodes(t *testing.T) {
 	t.Parallel()
 
@@ -374,29 +373,68 @@ func TestGitHostIfMatchInvalidCodes(t *testing.T) {
 
 	conn := decodeHost[connectionDoc](t, created)
 
-	tests := []hostCall{
+	tests := []struct {
+		name string
+		call hostCall
+	}{
 		{
-			headers: map[string]string{"If-Match": "abc"},
-			method:  http.MethodPut, target: hostAppPath, body: hostAppBody(),
+			name: "app PUT",
+			call: hostCall{
+				headers: map[string]string{"If-Match": "abc"},
+				method:  http.MethodPut, target: hostAppPath, body: hostAppBody(),
+			},
 		},
 		{
-			headers: map[string]string{"If-Match": `"0"`},
-			method:  http.MethodPut, target: hostAppPath, body: hostAppBody(),
+			name: "app DELETE",
+			call: hostCall{
+				headers: map[string]string{"If-Match": "abc"},
+				method:  http.MethodDelete, target: hostAppPath, body: "",
+			},
 		},
 		{
-			headers: map[string]string{"If-Match": "abc"},
-			method:  http.MethodDelete, target: hostConnectionsPath + "/" + conn.ID, body: "",
+			name: "installation assign",
+			call: hostCall{
+				headers: map[string]string{"If-Match": "abc"},
+				method:  http.MethodPut, target: hostInstallationsPath + "/101", body: `{"namespace":"acme"}`,
+			},
+		},
+		{
+			name: "installation unassign",
+			call: hostCall{
+				headers: map[string]string{"If-Match": "abc"},
+				method:  http.MethodDelete, target: hostInstallationsPath + "/101", body: "",
+			},
+		},
+		{
+			name: "connection DELETE",
+			call: hostCall{
+				headers: map[string]string{"If-Match": "abc"},
+				method:  http.MethodDelete, target: hostConnectionsPath + "/" + conn.ID, body: "",
+			},
+		},
+		{
+			name: "connection make-default",
+			call: hostCall{
+				headers: map[string]string{"If-Match": `"0"`},
+				method:  http.MethodPost, target: hostConnectionsPath + "/" + conn.ID + "/make-default", body: "",
+			},
 		},
 	}
 
-	for _, c := range tests {
-		r := e.do(t, c)
-		wantHost(t, r, http.StatusBadRequest)
-		errcodetest.CheckAnswer(t, errcodetest.ShapeCamelCase, http.StatusBadRequest, []byte(r.body),
-			errcodetest.Want{Code: errcode.RequestIfMatchInvalid, Args: nil, RequestBody: nil})
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := e.do(t, tt.call)
+
+			wantHost(t, r, http.StatusBadRequest)
+			errcodetest.CheckAnswer(t, errcodetest.ShapeCamelCase, http.StatusBadRequest, []byte(r.body),
+				errcodetest.Want{Code: errcode.RequestIfMatchInvalid, Args: nil, RequestBody: nil})
+			wantMessage(t, []byte(r.body), ifMatchInvalidMessage)
+		})
 	}
 }
 
+// TestGitHostConnectionTakesNothingThatTheOperatorOwns sends each field that
+// only the operator sets, straight to the create route.
 func TestGitHostConnectionTakesNothingThatTheOperatorOwns(t *testing.T) {
 	t.Parallel()
 
