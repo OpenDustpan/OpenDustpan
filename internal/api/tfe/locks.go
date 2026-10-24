@@ -311,9 +311,21 @@ func (h *Handler) forceUnlockWorkspace(
 		return
 	}
 
-	holder := h.lockHolder(ctx, id)
+	// One read gives the holder for the log and the switches of the
+	// allowance. The domain reads the workspace again in its transaction.
+	ws, err := h.workspaces.GetByID(ctx, id)
+	if err != nil {
+		h.writeError(ctx, w, err)
 
-	allow, err := h.allowance(ctx, p, id, obj)
+		return
+	}
+
+	holder := ""
+	if ws.Lock.Locked() {
+		holder = ws.Lock.Holder
+	}
+
+	allow, err := h.rules().Allowance(ctx, p, ws, obj)
 	if err != nil {
 		h.writeError(ctx, w, err)
 
