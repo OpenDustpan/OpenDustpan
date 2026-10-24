@@ -14,6 +14,7 @@ import (
 
 	"opendustpan.org/opendustpan/internal/api/refusal"
 	"opendustpan.org/opendustpan/internal/denylimit"
+	"opendustpan.org/opendustpan/internal/sessionauth"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -717,6 +718,53 @@ func TestSurfacesAreSeparateKeys(t *testing.T) {
 
 	if lim.Len() != 2 || len(store.entries) != 2 {
 		t.Fatalf("tracked keys = %d and entries = %d, want 2 and 2", lim.Len(), len(store.entries))
+	}
+}
+
+// TestChannelOfTheRequest checks the channel of a refusal entry: a request
+// that a session signed in is the console whatever its header says, a token
+// request keeps its declared channel, and an unknown or missing header and
+// no request at all are the API.
+func TestChannelOfTheRequest(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name    string
+		session bool
+		header  string
+		want    audit.Channel
+	}{
+		{"session without a header", true, "", audit.ChannelConsole},
+		{"session that declares api", true, "api", audit.ChannelConsole},
+		{"token that declares the console", false, "console", audit.ChannelConsole},
+		{"token without a header", false, "", audit.ChannelAPI},
+		{"token with a hostile header", false, "console\r\nX-Injected: 1", audit.ChannelAPI},
+	}
+
+	for i, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			store, failures := newFakeStore(nil), 0
+			rec := newRecorder(t, store, nil, &failures)
+
+			req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/x", http.NoBody)
+			if tc.session {
+				req = req.WithContext(sessionauth.WithSession(req.Context()))
+			}
+
+			if tc.header != "" {
+				req.Header["Dustpan-Channel"] = []string{tc.header}
+			}
+
+			rec.Record(t.Context(), req, person(fmt.Sprintf("p%d@example.com", i)), refusal.Denial{
+				Action: identity.ActionUnitManage, Object: identity.NamespaceObject("team"), Reason: "no", Window: 0,
+			})
+
+			if len(store.entries) != 1 || store.entries[0].Channel != tc.want {
+				t.Fatalf("entries = %+v, want one with the channel %q", store.entries, tc.want)
+			}
+		})
 	}
 }
 

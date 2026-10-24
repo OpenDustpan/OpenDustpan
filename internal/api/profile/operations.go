@@ -94,7 +94,7 @@ func (h *Handler) Operations() []apidesc.Operation {
 
 		rows = append(rows, apidesc.Row{
 			Method: route.Method, Path: route.Path, Actions: actions, NamespaceActions: nil,
-			Public: route.Scope == ScopePublic, IdempotencyKey: route.IdempotencyKey,
+			Public: false, IdempotencyKey: route.IdempotencyKey,
 		})
 	}
 

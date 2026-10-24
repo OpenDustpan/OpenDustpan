@@ -13,11 +13,10 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
-	"strings"
 
-	"opendustpan.org/opendustpan/internal/api/apidesc"
 	"opendustpan.org/opendustpan/internal/api/problem"
 	"opendustpan.org/opendustpan/internal/api/refusal"
+	"opendustpan.org/opendustpan/internal/api/routekit"
 	"opendustpan.org/opendustpan/internal/denylimit"
 	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/internal/sessionauth"
@@ -32,8 +31,6 @@ var ErrMissingDependency = errors.New("missing dependency")
 // errMissingOrganization reports a request without the organization query
 // value. classify maps it to the 400 response the console expects.
 var errMissingOrganization = errors.New("missing organization query parameter")
-
-const tokenScheme = "token "
 
 // Config holds the dependencies of a Handler.
 type Config struct {
@@ -68,7 +65,7 @@ type Handler struct {
 	authz      identity.Authorizer
 	guard      *refusal.Recorder
 	logger     *slog.Logger
-	mux        *patternMux
+	mux        *routekit.Mux
 	routes     []Route
 }
 
@@ -102,7 +99,7 @@ func NewHandler(cfg Config) (*Handler, error) {
 		authz:      cfg.Authorizer,
 		guard:      recorder.WithLimiter(cfg.DenialLimiter).WithSurface("audit"),
 		logger:     cfg.Logger,
-		mux:        newPatternMux(),
+		mux:        routekit.NewMux(),
 		routes:     nil,
 	}
 
@@ -436,28 +433,6 @@ func parsePage(r *http.Request) (audit.Page, error) {
 	}
 
 	return page.Normalized(), nil
-}
-
-// authenticate resolves the "Authorization: token <t>" header to a principal.
-// A request with no Authorization header uses the console session cookie,
-// and the bool reports that the cookie signed it in. A request with an
-// Authorization header never uses the cookie.
-func (h *Handler) authenticate(r *http.Request) (identity.Principal, bool, error) {
-	header := apidesc.Header(r, "Authorization")
-	if header == "" {
-		p, _, err := h.sessions.Authenticate(r)
-
-		return p, err == nil, err
-	}
-
-	raw, ok := strings.CutPrefix(header, tokenScheme)
-	if !ok || raw == "" {
-		return identity.Principal{}, false, identity.ErrUnauthenticated
-	}
-
-	p, err := h.authn.AuthenticateToken(r.Context(), raw)
-
-	return p, false, err
 }
 
 // writeError answers err through the shared error module of the
