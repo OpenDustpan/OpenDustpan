@@ -25,6 +25,8 @@ import (
 	"opendustpan.org/opendustpan/pkg/dustpan"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/inventory"
+	"opendustpan.org/opendustpan/pkg/ipallow"
+	"opendustpan.org/opendustpan/pkg/job"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/secret"
 	"opendustpan.org/opendustpan/pkg/stack"
@@ -116,14 +118,14 @@ func runHarness(ctx context.Context, args []string) error {
 	cfg.Token = harnessToken()
 	cfg.Store = storeName()
 
-	urls, cleanup, err := openServers(ctx, logger, dir, *ns)
+	served, cleanup, err := openServers(ctx, logger, dir, *ns)
 	if err != nil {
 		return err
 	}
 
 	defer cleanup(context.WithoutCancel(ctx))
 
-	report, err := Execute(ctx, cfg, urls)
+	report, err := Execute(ctx, cfg, served)
 	if err != nil {
 		return err
 	}
@@ -169,6 +171,10 @@ type ports struct {
 	workspaces  workspace.Store
 	states      workspace.StateStore
 	units       inventory.Reader
+	jobs        job.Store
+	runners     dustpan.RunnerStores
+	durable     dustpan.DurableStore
+	allowlists  ipallow.Store
 }
 
 // portsOfSQLite answers the ports of one SQLite handle.
@@ -183,6 +189,10 @@ func portsOfSQLite(store *sqlite.Store) ports {
 		workspaces:  store,
 		states:      store,
 		units:       store,
+		jobs:        store.Jobs(),
+		runners:     store.Runners(),
+		durable:     store.DurableOperations(),
+		allowlists:  store,
 	}
 }
 
@@ -198,22 +208,45 @@ func portsOfPostgres(store *postgres.Store) ports {
 		workspaces:  store,
 		states:      store,
 		units:       store,
+		jobs:        store.Jobs(),
+		runners:     store.Runners(),
+		durable:     store.DurableOperations(),
+		allowlists:  store,
 	}
 }
 
 // harnessRegion is the region the harness servers are authoritative for.
 const harnessRegion = namespace.Region("eu-west")
 
+// servers is what openServers starts: the URLs of the instances, the URL of
+// the server that checks IP allowlists, and the fixtures that the access
+// steps read.
+type servers struct {
+	// urls are the instances of the installation, without IP allowlists.
+	urls []string
+	// gateURL is a server over the first instance's store that checks IP
+	// allowlists, also for the bootstrap token the harness signs with.
+	gateURL string
+	// listNS has an IP allowlist that holds the client. denyNS has one that
+	// refuses it.
+	listNS string
+	denyNS string
+	// jobID, listJobID and denyJobID name one job in each namespace.
+	jobID     string
+	listJobID string
+	denyJobID string
+}
+
 // openServers starts one SQLite instance, or two PostgreSQL instances on the
-// same URL, and answers their URLs with a cleanup func. The instances share
-// one blob directory and one key-encryption key, as several instances of one
-// installation do, so a write through one instance reads back through the
-// other.
+// same URL, with the server that checks IP allowlists, and answers their URLs
+// with a cleanup func. The instances share one blob directory and one
+// key-encryption key, as several instances of one installation do, so a
+// write through one instance reads back through the other.
 func openServers(
 	ctx context.Context,
 	logger *slog.Logger,
 	dir, ns string,
-) ([]string, func(context.Context), error) {
+) (servers, func(context.Context), error) {
 	var cleanups []func(context.Context)
 
 	cleanup := func(cleanupCtx context.Context) {
@@ -222,10 +255,10 @@ func openServers(
 		}
 	}
 
-	onErr := func(ctx context.Context, err error) ([]string, func(context.Context), error) {
+	onErr := func(ctx context.Context, err error) (servers, func(context.Context), error) {
 		cleanup(ctx)
 
-		return nil, func(context.Context) {}, err
+		return servers{}, func(context.Context) {}, err
 	}
 
 	instances := 1
@@ -257,7 +290,8 @@ func openServers(
 		cleanups = append(cleanups, one.cleanup)
 	}
 
-	if err := createLoadNamespace(ctx, served[0].ports.namespaces, ns); err != nil {
+	fixtures, err := seedFixtures(ctx, served[0].ports, ns)
+	if err != nil {
 		return onErr(ctx, err)
 	}
 
@@ -266,19 +300,62 @@ func openServers(
 		return onErr(ctx, err)
 	}
 
-	urls := make([]string, 0, instances)
+	running, serveErr := serveAll(served, wrapper)
+	cleanups = append(cleanups, running.closers...)
 
-	for i := range served {
-		instanceURL, closeServer, serveErr := serveInstance(served[i], wrapper)
-		if serveErr != nil {
-			return onErr(ctx, serveErr)
-		}
-
-		urls = append(urls, instanceURL)
-		cleanups = append(cleanups, closeServer)
+	if serveErr != nil {
+		return onErr(ctx, serveErr)
 	}
 
-	return urls, cleanup, nil
+	fixtures.urls = running.urls
+	fixtures.gateURL = running.gateURL
+
+	return fixtures, cleanup, nil
+}
+
+// running holds the servers that serveAll started: the instance URLs, the URL
+// of the server that checks IP allowlists, and the funcs that close them.
+type running struct {
+	urls    []string
+	gateURL string
+	closers []func(context.Context)
+}
+
+// serveAll serves every instance, then the server that checks IP allowlists
+// over the first instance. On an error it answers the servers it started, so
+// the caller closes them.
+func serveAll(served []instance, wrapper *secret.BuiltinWrapper) (running, error) {
+	var out running
+
+	for i := range served {
+		instanceURL, closeServer, err := serveInstance(served[i], wrapper)
+		if err != nil {
+			return out, err
+		}
+
+		out.urls = append(out.urls, instanceURL)
+		out.closers = append(out.closers, closeServer)
+	}
+
+	gateURL, closeGate, err := serveInstance(served[0], wrapper, gateOptions(served[0].ports)...)
+	if err != nil {
+		return out, err
+	}
+
+	out.gateURL = gateURL
+	out.closers = append(out.closers, closeGate)
+
+	return out, nil
+}
+
+// gateOptions answers the options that turn IP allowlists on for the
+// bootstrap token of the harness too.
+func gateOptions(p ports) []dustpan.Option {
+	return []dustpan.Option{
+		dustpan.WithIPAllowlistStore(p.allowlists),
+		dustpan.WithIPAllowlists(true),
+		dustpan.WithIPAllowlistsIncludeBootstrap(true),
+	}
 }
 
 // instance is one serving instance: its ports and blob store with cleanup.
@@ -476,8 +553,13 @@ func newHarnessWrapper() (*secret.BuiltinWrapper, error) {
 }
 
 // serveInstance builds the server for one instance and answers its test URL.
-// wrapper is the key-encryption key that all instances share.
-func serveInstance(served instance, wrapper *secret.BuiltinWrapper) (string, func(context.Context), error) {
+// wrapper is the key-encryption key that all instances share. extra options
+// follow the options every server gets.
+func serveInstance(
+	served instance,
+	wrapper *secret.BuiltinWrapper,
+	extra ...dustpan.Option,
+) (string, func(context.Context), error) {
 	noop := func(context.Context) {}
 
 	authn, err := identity.NewStaticToken("load", harnessToken())
@@ -485,7 +567,12 @@ func serveInstance(served instance, wrapper *secret.BuiltinWrapper) (string, fun
 		return "", noop, fmt.Errorf("authenticator: %w", err)
 	}
 
-	srv, err := dustpan.NewServer(
+	// The public URL is the address of the server itself: the OpenTofu upload
+	// URL and the runner protocol name it. The listener exists before the
+	// server starts, so its address is known here.
+	ts := httptest.NewUnstartedServer(nil)
+
+	opts := []dustpan.Option{
 		dustpan.WithRegion(harnessRegion),
 		dustpan.WithNamespaceStore(served.ports.namespaces),
 		dustpan.WithStackStore(served.ports.stacks),
@@ -499,12 +586,21 @@ func serveInstance(served instance, wrapper *secret.BuiltinWrapper) (string, fun
 		dustpan.WithBlobStore(served.blobs),
 		dustpan.WithInventoryReader(served.ports.units),
 		dustpan.WithAuthenticator(authn),
-	)
+		dustpan.WithDurableStore(served.ports.durable),
+		dustpan.WithJobStore(served.ports.jobs),
+		dustpan.WithRunners(served.ports.runners),
+		dustpan.WithPublicURL("http://" + ts.Listener.Addr().String()),
+	}
+
+	srv, err := dustpan.NewServer(append(opts, extra...)...)
 	if err != nil {
+		ts.Close()
+
 		return "", noop, fmt.Errorf("new server: %w", err)
 	}
 
-	ts := httptest.NewServer(srv.Handler())
+	ts.Config.Handler = srv.Handler()
+	ts.Start()
 
 	return ts.URL, testServerCloser(ts), nil
 }

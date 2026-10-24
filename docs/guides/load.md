@@ -8,6 +8,7 @@ It follows ADR 40.
 The harness starts its own server and replays recorded CLI request sequences.
 It needs no real CLI at run time.
 It measures checkpoint saves, stack imports, lock contention, update contention, database latency, and list latency.
+It also measures journaled updates, and the runner and jobs routes with and without an IP allowlist.
 It writes the result as one JSON report for the nightly budget job.
 
 With SQLite (the default) the harness runs one instance.
@@ -45,6 +46,18 @@ The store migrates the schema on open, and each run uses a fresh schema.
 Set `DUSTPAN_LOAD_TOKEN` to override the test token.
 The default token is test-only and never leaves the local process.
 
+## Measure journaled updates
+
+The release build answers journal version 0 for every update, so the Pulumi CLI saves checkpoints and the server takes no journal batch.
+In that build the harness reports `journal.supported` as `false` and sends no batch.
+Build the harness with the `journalrecording` tag to measure journaled updates:
+
+```sh
+go run -tags journalrecording ./load -out /tmp/load-report.json
+```
+
+Use the tag for the nightly run, so that the report holds the journal timings.
+
 ## Cost in `make check`
 
 The smoke test in `load/` adds about 2 seconds.
@@ -80,6 +93,8 @@ Top-level fields of `Report`:
 | `namespaceUpdates` | Update starts on many stacks in one namespace at once, see below |
 | `database` | Multi-instance result, see below |
 | `lists` | List latency result, see below |
+| `journal` | Journaled update result, see below |
+| `access` | Runner route and jobs route result, see below |
 
 Each entry of `checkpoints` holds one body size:
 
@@ -148,10 +163,70 @@ With one instance `secondP50Ms` stays 0 and `secondPresent` stays false.
 | `workspaceListFullMs` | Time to walk all workspace pages |
 | `inventoryMs` | Time of the inventory read |
 
+`journal` holds the journaled update runs.
+Each run starts one update that offers journaling, sends the batches in order, and completes the update.
+A batch holds an entry that opens and an entry that ends each resource, so 2 entries are 1 resource of about 1 KiB.
+The harness gzips a batch of 1 KiB or more, as the Pulumi CLI does.
+
+| Field | Meaning |
+| --- | --- |
+| `supported` | True when the server chose a journal version above 0 |
+| `runs` | One entry for each entry count, see below |
+
+Each entry of `runs` holds one entry count:
+
+| Field | Meaning |
+| --- | --- |
+| `entriesPerBatch` | Journal entries in one batch: 2, 20 and 200 by default |
+| `batches` | Batches sent in the run |
+| `batchBytes` | Size of one batch before gzip |
+| `sentBytes` | Total batch bytes before gzip |
+| `appendP50Ms` | Median time of one batch append |
+| `appendMaxMs` | Longest batch append |
+| `appendTotalMs` | Sum of the append times |
+| `completeMs` | Time to complete the update, which builds the checkpoint from the batches |
+| `peakAllocBytes` | Peak heap bytes sampled during the appends |
+
+`access` holds the runner route and the jobs route.
+The runner route lists the runner pools of a namespace.
+The jobs route reads one queued job.
+Both routes run the namespace read check, which includes the IP allowlist check.
+The harness times each route in four states:
+
+| State | Server | Namespace |
+| --- | --- | --- |
+| `gateOff` | IP allowlists off | The run namespace |
+| `gateNoList` | IP allowlists on, also for the bootstrap token | The run namespace, with no list |
+| `gateList` | IP allowlists on | A namespace with a list of `listEntries` entries that holds the client |
+| `gateRefused` | IP allowlists on | A namespace with a list that does not hold the client |
+
+The refused request gets the answer of a route that must not tell that the object exists.
+`refusedStatus` holds that status.
+The refused timing covers the coded error answer and the audit entry of a refusal.
+
+| Field | Meaning |
+| --- | --- |
+| `requests` | Requests in each timing, after 10 warm-up requests |
+| `listEntries` | Entries in the list that holds the client |
+| `runnerRoute`, `jobsRoute` | One entry for each route, see below |
+
+Each route entry holds `method`, `path`, `refusedStatus`, and these medians in milliseconds:
+
+| Field | Meaning |
+| --- | --- |
+| `gateOffP50Ms` | Median with IP allowlists off |
+| `gateNoListP50Ms` | Median with IP allowlists on and no list |
+| `gateListP50Ms` | Median with a list that holds the client |
+| `gateRefusedP50Ms` | Median of a refused request |
+
+The harness sends the requests one at a time from the local process.
+So the medians show the cost on the server and not the load of many clients.
+
 ## What this guide does not cover
 
 These items are not part of the harness:
 
 - Budget thresholds for the nightly job.
 - Real CLI runs against the harness server.
+- Runner protocol routes that need a joined runner, and the start of a job through a pool.
 - Fault injection and crash testing.
