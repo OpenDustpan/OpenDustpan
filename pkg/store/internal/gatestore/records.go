@@ -3,6 +3,7 @@ package gatestore
 import (
 	"context"
 	"crypto/sha256"
+	"encoding"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -22,6 +23,12 @@ type Records struct {
 }
 
 var _ gate.Records = (*Records)(nil)
+
+// The decision record stores the schema version in its text form.
+var (
+	_ encoding.TextMarshaler   = gate.SchemaVersion{Subject: "", Major: 0, Minor: 0}
+	_ encoding.TextUnmarshaler = (*gate.SchemaVersion)(nil)
+)
 
 // checkRecord returns gate.ErrInvalid for a record whose ID or namespace is
 // not valid, or whose fence is not the fence of its namespace.
