@@ -261,7 +261,7 @@ func TestDecodeBodyMiBLimit(t *testing.T) {
 
 	var got doc
 
-	err := routekit.DecodeBody(httptest.NewRecorder(), r, 1<<20, &got)
+	err := route.DecodeBody(httptest.NewRecorder(), r, 1<<20, &got)
 	if err == nil || !strings.Contains(err.Error(), "over 1 MiB") || strings.Contains(err.Error(), "aaaa") {
 		t.Fatalf("DecodeBody error %v, want the fixed text with over 1 MiB and no part of the body", err)
 	}
@@ -286,7 +286,7 @@ func TestMutating(t *testing.T) {
 		t.Run(method, func(t *testing.T) {
 			t.Parallel()
 
-			if got := routekit.Mutating(method); got != want {
+			if got := route.Mutating(method); got != want {
 				t.Fatalf("Mutating(%q) = %t, want %t", method, got, want)
 			}
 		})
