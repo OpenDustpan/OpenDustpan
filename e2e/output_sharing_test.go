@@ -1838,4 +1838,11 @@ func checkEncryptedReader(ctx context.Context, t *testing.T, env *e2e.Env) {
 		"the administrator reads the outputs of a client-encrypted state", "", http.MethodGet,
 		"/api/v2/workspaces/" + encryptedID + "/current-state-version-outputs", "", http.StatusOK,
 	})
+
+	if !strings.Contains(shareAPI(ctx, t, env, shareCall{
+		"the outputs route refuses a client-encrypted state also for the administrator", "", http.MethodGet,
+		sharingAPI + e2e.Namespace + "/units/" + encryptedID + "/outputs", "", http.StatusConflict,
+	}), "unit.client-encrypted") {
+		t.Fatal("the 409 of the outputs route for the administrator has no code unit.client-encrypted")
+	}
 }
