@@ -259,13 +259,19 @@ func (s *service) StartOnce(ctx context.Context, a Actor, req StartRequest) (Job
 	}
 
 	// Fail closed on the gates that this version cannot evaluate. The caller
-	// holds the start actions, so the answer names the gate.
+	// holds the start actions, so the answer names the gate. From here on a
+	// refusal names the start action of the planned job.
 	err = s.checkGates(ctx, unit)
 	if err != nil {
-		return Job{}, false, err
+		return Job{}, false, startRefusal(&spec, err)
 	}
 
-	return s.create(ctx, a, source, &req, spec)
+	j, created, err := s.create(ctx, a, source, &req, spec)
+	if err != nil {
+		return Job{}, false, startRefusal(&spec, err)
+	}
+
+	return j, created, nil
 }
 
 // checkPlanned returns ErrInvalid when the spec that the planner built is for

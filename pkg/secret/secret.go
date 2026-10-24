@@ -380,17 +380,13 @@ func (s *Service) unwrapDataKey(ctx context.Context, scope Scope, create bool) (
 		return nil, fmt.Errorf("%w for %s: %w", ErrDecrypt, scope, ErrKeyNotConfigured)
 	}
 
-	if stored.WrapperID != s.wrapper.ID() {
-		return nil, fmt.Errorf("%w: key for %s is wrapped by %q, server holds %q",
-			ErrDecrypt, scope, stored.WrapperID, s.wrapper.ID())
-	}
-
-	key, err := s.wrapper.Unwrap(ctx, stored.Ciphertext, scope.aad())
-	if err != nil {
-		return nil, fmt.Errorf("unwrap key for %s: %w", scope, err)
-	}
-
-	return key, nil
+	return unwrapKey(
+		ctx,
+		s.wrapper,
+		sealedKey{wrapperID: stored.WrapperID, ciphertext: stored.Ciphertext},
+		scope.aad(),
+		"key for "+scope.String(),
+	)
 }
 
 func (s *Service) createKey(ctx context.Context, scope Scope) (WrappedKey, error) {
@@ -403,16 +399,9 @@ func (s *Service) createKey(ctx context.Context, scope Scope) (WrappedKey, error
 		return WrappedKey{}, fmt.Errorf("create key for %s: %w", scope, err)
 	}
 
-	key := make([]byte, dataKeyBytes)
-	defer clear(key)
-
-	if _, err = rand.Read(key); err != nil {
-		return WrappedKey{}, fmt.Errorf("generate key: %w", err)
-	}
-
-	wrapped, err := s.wrapper.Wrap(ctx, key, scope.aad())
+	wrapped, err := wrapNewKey(ctx, s.wrapper, scope.aad(), "key for "+scope.String())
 	if err != nil {
-		return WrappedKey{}, fmt.Errorf("wrap key for %s: %w", scope, err)
+		return WrappedKey{}, err
 	}
 
 	stored, err := s.keys.CreateKey(ctx, WrappedKey{

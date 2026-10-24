@@ -6,7 +6,6 @@ import (
 	"io"
 	"net/http"
 
-	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/stack"
 )
 
@@ -16,18 +15,8 @@ import (
 // it, gzipped or not. A batch over the journal batch bound answers 413, and the
 // CLI splits it. A batch with one entry may hold up to the checkpoint bound,
 // because the CLI cannot split one entry.
-func (h *Handler) journalEntries(w http.ResponseWriter, r *http.Request, _ identity.Principal, _ identity.Object) {
+func (h *Handler) journalEntries(w http.ResponseWriter, r *http.Request, call LeaseCall) {
 	ctx := r.Context()
-
-	tok, _, ok := h.leaseToken(w, r)
-	if !ok {
-		return
-	}
-
-	ref, id, ok := h.updateTarget(w, r)
-	if !ok {
-		return
-	}
 
 	limit := int64(h.updates.MaxJournalBatchBytes())
 	readLimit := int64(h.updates.MaxCheckpointBytes())
@@ -44,11 +33,15 @@ func (h *Handler) journalEntries(w http.ResponseWriter, r *http.Request, _ ident
 		return
 	}
 
+	// Defense in depth: the journal writer of the update service refuses a
+	// large batch with more than one entry too; this check stays so that the
+	// adapter answers 413 before the service decodes the body, and so that a
+	// service without that check cannot take one.
 	if int64(len(body)) > limit && !h.singleEntry(w, r, body, limit) {
 		return
 	}
 
-	if err := h.updates.AppendJournal(ctx, ref, id, tok, body); err != nil {
+	if err := h.updates.AppendJournal(ctx, call.Ref, call.ID, call.Token, body); err != nil {
 		h.writeError(ctx, w, err)
 
 		return

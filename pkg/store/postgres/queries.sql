@@ -790,17 +790,21 @@ WHERE w.namespace = sqlc.arg(namespace) AND w.deleted_at_ms IS NULL AND strpos(w
 -- One page of the live workspaces of a namespace whose name holds the search,
 -- in the order of ReadWorkspaces. The inner query finds the names of the page
 -- in the index of the live workspace names alone, so an offset skips index
--- entries and no table rows. The outer query reads the rows of the page.
+-- entries and no table rows. The outer query reads the rows of the page by
+-- name = ANY of that array, so the names are in the index condition of each
+-- plan. A join on the names let a plan with no table statistics read all the
+-- live workspaces of the namespace for each name of the page.
 SELECT sqlc.embed(w), n.id AS namespace_id
-FROM (
-    SELECT p.name
-    FROM workspaces AS p
-    WHERE p.namespace = sqlc.arg(namespace) AND p.deleted_at_ms IS NULL AND strpos(p.name, sqlc.arg(name_contains)) > 0
-    ORDER BY p.name
-    LIMIT sqlc.arg(page_limit) OFFSET sqlc.arg(page_offset)
-) AS page
-JOIN workspaces AS w ON w.namespace = sqlc.arg(namespace) AND w.name = page.name AND w.deleted_at_ms IS NULL
+FROM workspaces AS w
 JOIN namespaces AS n ON n.name = w.namespace
+WHERE w.namespace = sqlc.arg(namespace) AND w.deleted_at_ms IS NULL
+    AND w.name = ANY (ARRAY(
+        SELECT p.name
+        FROM workspaces AS p
+        WHERE p.namespace = sqlc.arg(namespace) AND p.deleted_at_ms IS NULL AND strpos(p.name, sqlc.arg(name_contains)) > 0
+        ORDER BY p.name
+        LIMIT sqlc.arg(page_limit) OFFSET sqlc.arg(page_offset)
+    ))
 ORDER BY w.name;
 
 -- name: LockWorkspaceForFinalize :one
@@ -1488,6 +1492,21 @@ FROM group_members m JOIN principal_groups g ON g.id = m.group_id
 WHERE m.principal_id = @principal_id AND m.removed_at_ms IS NULL
   AND g.name_key COLLATE "C" >= @low::text
   AND (@high::text = '' OR g.name_key COLLATE "C" < @high::text);
+
+-- name: LockNamespaceCreatesShared :exec
+-- A create of a workspace takes this lock, in the shared form, before it reads
+-- the manual lock of its namespace. The put of a manual lock on a namespace
+-- takes the exclusive form. So a lock that commits while a create runs is
+-- either read by the create or waits until the create ends: no create commits
+-- under a lock that it did not read. The key holds the schema, so databases that
+-- hold several schemas do not wait for each other.
+SELECT pg_advisory_xact_lock_shared(
+  hashtextextended('namespace-creates:' || current_schema() || ':' || sqlc.arg(namespace)::text, 0));
+
+-- name: LockNamespaceCreatesExclusive :exec
+-- Takes the exclusive form of the lock of LockNamespaceCreatesShared.
+SELECT pg_advisory_xact_lock(
+  hashtextextended('namespace-creates:' || current_schema() || ':' || sqlc.arg(namespace)::text, 0));
 
 -- name: LockServerAuditScope :exec
 -- Orders the appends of the audit scope @server, which has no namespace row
@@ -4124,7 +4143,6 @@ WHERE installation_id = sqlc.arg(installation_id) AND (sqlc.arg(if_version)::big
 DELETE FROM git_host_installations
 WHERE installation_id = sqlc.arg(installation_id) AND (sqlc.arg(if_version)::bigint = 0 OR version = sqlc.arg(if_version)::bigint);
 
-
 -- name: GetNotificationSink :one
 -- The caller compares the namespace of the row with the scope of the request.
 SELECT k.id, n.name AS namespace, k.kind, k.name, k.platform, k.target, k.created_by, k.version
@@ -4206,6 +4224,62 @@ DELETE FROM notification_sink_secrets
 WHERE notification_sink_secrets.sink_id = sqlc.arg(sink_id)
   AND notification_sink_secrets.namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace));
 
+-- name: UpsertTrigger :execrows
+-- The caller checks the fence in the same transaction. A row that exists keeps
+-- its unit, its kind and its creation time.
+INSERT INTO triggers (
+    namespace_id, id, unit_tool, unit_id, kind, preset, cron, source_namespace, source_tool, source_unit_id, enabled,
+    last_saver_subject, last_saver_id, created_at_ms, updated_at_ms
+)
+SELECT
+    n.id, sqlc.arg(id), sqlc.arg(unit_tool), sqlc.arg(unit_id), sqlc.arg(kind), sqlc.arg(preset), sqlc.arg(cron),
+    sqlc.arg(source_namespace), sqlc.arg(source_tool), sqlc.arg(source_unit_id), sqlc.arg(enabled)::bigint,
+    sqlc.arg(last_saver_subject), sqlc.arg(last_saver_id), sqlc.arg(created_at_ms)::bigint, sqlc.arg(updated_at_ms)::bigint
+FROM namespaces AS n
+WHERE n.name = sqlc.arg(namespace)
+ON CONFLICT (namespace_id, id) DO UPDATE SET
+    preset = excluded.preset, cron = excluded.cron, source_namespace = excluded.source_namespace,
+    source_tool = excluded.source_tool, source_unit_id = excluded.source_unit_id, enabled = excluded.enabled,
+    last_saver_subject = excluded.last_saver_subject, last_saver_id = excluded.last_saver_id,
+    updated_at_ms = GREATEST(triggers.updated_at_ms, excluded.updated_at_ms);
+
+-- name: GetTrigger :one
+SELECT n.name AS namespace, t.id, t.unit_tool, t.unit_id, t.kind, t.preset, t.cron, t.source_namespace,
+    t.source_tool, t.source_unit_id, t.enabled, t.last_saver_subject, t.last_saver_id, t.created_at_ms, t.updated_at_ms
+FROM triggers AS t
+JOIN namespaces AS n ON n.id = t.namespace_id
+WHERE n.name = sqlc.arg(namespace) AND t.id = sqlc.arg(id);
+
+-- name: ListTriggersOfUnit :many
+SELECT n.name AS namespace, t.id, t.unit_tool, t.unit_id, t.kind, t.preset, t.cron, t.source_namespace,
+    t.source_tool, t.source_unit_id, t.enabled, t.last_saver_subject, t.last_saver_id, t.created_at_ms, t.updated_at_ms
+FROM triggers AS t
+JOIN namespaces AS n ON n.id = t.namespace_id
+WHERE n.name = sqlc.arg(namespace) AND t.unit_tool = sqlc.arg(unit_tool) AND t.unit_id = sqlc.arg(unit_id)
+ORDER BY t.id COLLATE "C";
+
+-- name: ListTriggerFollowers :many
+SELECT n.name AS namespace, t.id, t.unit_tool, t.unit_id, t.kind, t.preset, t.cron, t.source_namespace,
+    t.source_tool, t.source_unit_id, t.enabled, t.last_saver_subject, t.last_saver_id, t.created_at_ms, t.updated_at_ms
+FROM triggers AS t
+JOIN namespaces AS n ON n.id = t.namespace_id
+WHERE n.name = sqlc.arg(namespace) AND t.kind = 'follows' AND t.enabled = 1
+  AND t.source_namespace = sqlc.arg(source_namespace) AND t.source_tool = sqlc.arg(source_tool)
+  AND t.source_unit_id = sqlc.arg(source_unit_id)
+ORDER BY t.id COLLATE "C";
+
+-- name: ListEnabledFollowTriggers :many
+SELECT n.name AS namespace, t.id, t.unit_tool, t.unit_id, t.kind, t.preset, t.cron, t.source_namespace,
+    t.source_tool, t.source_unit_id, t.enabled, t.last_saver_subject, t.last_saver_id, t.created_at_ms, t.updated_at_ms
+FROM triggers AS t
+JOIN namespaces AS n ON n.id = t.namespace_id
+WHERE n.name = sqlc.arg(namespace) AND t.kind = 'follows' AND t.enabled = 1
+ORDER BY t.id COLLATE "C";
+
+-- name: DeleteTrigger :execrows
+DELETE FROM triggers
+WHERE triggers.id = sqlc.arg(id)
+  AND triggers.namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace));
 
 -- name: GetDriftResult :one
 -- The namespace and the tool are part of the key: a result of another
@@ -4236,7 +4310,6 @@ WHERE drift_results.namespace_id = excluded.namespace_id AND drift_results.tool 
 DELETE FROM drift_results
 WHERE drift_results.unit_id = sqlc.arg(unit_id)
   AND drift_results.namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace));
-
 
 -- name: InsertItemKey :execrows
 -- The caller checks the fence in the same transaction. A record for the same

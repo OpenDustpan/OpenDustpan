@@ -40,6 +40,7 @@ func recordJob() *job.Job {
 	return &job.Job{
 		ID: "job-1", State: job.StateRunning, Current: 0, Wait: job.WaitNone, Reason: "", StartedBy: "", Source: "",
 		Agent: "", AgentMode: "", BreakGlass: nil, Delivery: nil, Closed: nil, Verification: job.VerificationNone,
+		Trigger:        nil,
 		IdempotencyKey: "", RequestHash: "", Version: 0, CreatedAt: time.Time{}, UpdatedAt: time.Time{},
 		Spec: job.Spec{
 			Unit:      identity.Object{},

@@ -913,6 +913,24 @@ type TempAdmin struct {
 	EndedAtMs   pgtype.Int8
 }
 
+type Trigger struct {
+	NamespaceID      string
+	ID               string
+	UnitTool         string
+	UnitID           string
+	Kind             string
+	Preset           string
+	Cron             string
+	SourceNamespace  string
+	SourceTool       string
+	SourceUnitID     string
+	Enabled          int64
+	LastSaverSubject string
+	LastSaverID      string
+	CreatedAtMs      int64
+	UpdatedAtMs      int64
+}
+
 type UnitFinalVersion struct {
 	UnitID      string
 	NamespaceID string

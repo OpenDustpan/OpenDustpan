@@ -30,21 +30,36 @@ func outputShareHarness(base string) outputsharetest.Factory {
 		s := openURL(t, schemaURL)
 
 		return outputsharetest.Harness{
-			Store: nil, Checker: nil, Attachments: nil, States: nil,
-			Settings: s.OutputSharingSettings(),
+			Store:        nil,
+			Checker:      nil,
+			Attachments:  nil,
+			States:       nil,
+			Outputs:      nil,
+			SaveOutputs:  nil,
+			DeleteUnit:   nil,
+			DeleteOnRead: nil,
+			Settings:     s.OutputSharingSettings(),
 			Namespace: func(t *testing.T, name string) namespace.Fence {
 				t.Helper()
 
 				return ensureNamespace(t, s, namespace.Name(name))
 			},
-			Unit: nil, UnitFault: nil, Authority: nil, Profile: nil, Attach: nil, SaveState: nil, Grant: nil,
-			Job: nil, Disable: nil,
+			Unit:      nil,
+			UnitFault: nil,
+			Authority: nil,
+			Profile:   nil,
+			Attach:    nil,
+			SaveState: nil,
+			Grant:     nil,
+			Job:       nil,
+			Disable:   nil,
 			Audited: func(t *testing.T, ns string) []string {
 				t.Helper()
 
 				return auditActionsOf(t, s, namespace.Name(ns))
 			},
-			Calls: nil, StoreRaw: nil,
+			Calls:    nil,
+			StoreRaw: nil,
 			SettingRaw: func(t *testing.T, ns namespace.Name, value string) {
 				t.Helper()
 

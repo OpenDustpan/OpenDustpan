@@ -108,7 +108,7 @@ func loggedUpdateFixture(t *testing.T, authz identity.Authorizer, buf *bytes.Buf
 		t.Fatalf("parse ref: %v", err)
 	}
 
-	return updateFixture{handler: handler, updates: updates, ref: ref}
+	return updateFixture{handler: handler, updates: updates, ref: ref, mem: nil}
 }
 
 // decodeActionLog proves buf holds exactly one log line and returns it.

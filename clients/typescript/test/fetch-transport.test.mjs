@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { ApiError, Client, createFetchTransport, dropTokenOffOrigin, metadata, operations, pathSegment } from "../dist/index.js";
+import * as root from "../dist/index.js";
+import { ApiError, Client, createFetchTransport, metadata, operations, pathSegment } from "../dist/index.js";
+import { dropTokenOffOrigin } from "../dist/fetch-transport.js";
 
 const capabilities = { apiVersion: "1", installationKind: "dev" };
 const json = { "content-type": "application/json" };
@@ -357,6 +359,13 @@ test("the operation table agrees with the transport on the use of keys", () => {
   assert.equal(operations.createProfile.spec.idempotencyKey, "optional");
   assert.equal(operations.getCapabilities.spec.idempotencyKey, "none");
   assert.equal(operations.getCapabilities.spec.security, "public");
+});
+
+test("the root export has the transport but not the step that drops the token", () => {
+  assert.equal(typeof root.createFetchTransport, "function");
+  assert.equal(typeof root.pathSegment, "function");
+  assert.equal(typeof root.defaultMaxResponseBytes, "number");
+  assert.equal("dropTokenOffOrigin" in root, false);
 });
 
 // Defense in depth: the redirect check refuses another origin before this

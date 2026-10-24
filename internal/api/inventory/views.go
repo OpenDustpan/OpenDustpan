@@ -14,6 +14,7 @@ import (
 	"opendustpan.org/opendustpan/internal/api/idempotent"
 	"opendustpan.org/opendustpan/internal/api/refusal"
 	"opendustpan.org/opendustpan/internal/clientip"
+	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/internal/requestid"
 	"opendustpan.org/opendustpan/internal/sessionauth"
 	"opendustpan.org/opendustpan/pkg/audit"
@@ -67,23 +68,27 @@ func newViews(cfg *ViewsConfig) (*views, error) {
 
 // classifyView maps the errors of the saved view routes. The 403 for a caller
 // who is not a person has one text for every kind of principal.
-func classifyView(err error) (int, string, bool) {
+func classifyView(err error) (failure, bool) {
 	switch {
 	case errors.Is(err, savedview.ErrNotPerson):
-		return http.StatusForbidden, savedview.ErrNotPerson.Error(), true
+		return fail(http.StatusForbidden, savedview.ErrNotPerson.Error(), errcode.ViewNotPerson), true
 	case errors.Is(err, savedview.ErrNotFound):
-		return http.StatusNotFound, savedview.ErrNotFound.Error(), true
-	case errors.Is(err, savedview.ErrInvalid), errors.Is(err, errViewBody):
-		return http.StatusBadRequest, err.Error(), true
+		return fail(http.StatusNotFound, savedview.ErrNotFound.Error(), errcode.ViewNotFound), true
+	case errors.Is(err, savedview.ErrInvalid):
+		return fail(http.StatusBadRequest, err.Error(), errcode.ViewInvalid), true
+	case errors.Is(err, errViewBody):
+		return fail(http.StatusBadRequest, err.Error(), errcode.RequestBodyInvalid), true
 	case errors.Is(err, errViewIdempotencyKey):
-		return http.StatusBadRequest, err.Error(), true
-	case errors.Is(err, savedview.ErrExists), errors.Is(err, savedview.ErrLimit):
-		return http.StatusConflict, err.Error(), true
-	case errors.Is(err, idempotency.ErrLost):
-		return http.StatusConflict, "a newer request took this Idempotency-Key before this request ended: retry later", true
-	default:
-		return 0, "", false
+		return fail(http.StatusBadRequest, err.Error(), errcode.RequestIdempotencyKeyUnavailable), true
+	case errors.Is(err, savedview.ErrExists):
+		return fail(http.StatusConflict, err.Error(), errcode.ViewAlreadyExists), true
+	case errors.Is(err, savedview.ErrLimit):
+		return fail(http.StatusConflict, err.Error(), errcode.ViewLimit), true
 	}
+
+	var none failure
+
+	return none, false
 }
 
 var (

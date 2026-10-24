@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"io"
 	"log/slog"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -14,6 +15,8 @@ import (
 
 	"opendustpan.org/opendustpan/internal/api/tfe"
 	"opendustpan.org/opendustpan/internal/baseurl"
+	"opendustpan.org/opendustpan/internal/errcode"
+	"opendustpan.org/opendustpan/internal/errcode/errcodetest"
 	"opendustpan.org/opendustpan/internal/token"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -102,6 +105,7 @@ func newWorkspaceHandler(t *testing.T, authz identity.Authorizer) *tfe.Handler {
 		Logger:         slog.New(slog.DiscardHandler),
 		Namespaces:     newTestNamespaces(t),
 		Workspaces:     stubWorkspaces{},
+		OutputChecker:  newTestOutputChecker(t, authz, stubWorkspaces{}),
 		BaseURL:        baseurl.Resolver{},
 		Audit:          newTestAudit(),
 		Gate:           nil,
@@ -594,6 +598,9 @@ func TestCreateWorkspaceDuplicate(t *testing.T) {
 	if got.Status != "422" || got.Title != "invalid attribute" || got.Detail != "Name has already been taken" {
 		t.Fatalf("error = %+v, want 422 invalid attribute Name has already been taken", got)
 	}
+
+	errcodetest.CheckAnswer(t, errcodetest.ShapeJSONAPI, http.StatusUnprocessableEntity, rec.Body.Bytes(),
+		errcodetest.Want{Code: errcode.WorkspaceAlreadyExists, Args: nil, RequestBody: nil})
 }
 
 // TestCreateWorkspaceUnknownOrganization proves a creation in an unknown
@@ -861,6 +868,7 @@ func newPagingHandlerWith(t *testing.T, authz identity.Authorizer, ws tfe.Worksp
 		Logger:         slog.New(slog.DiscardHandler),
 		Namespaces:     newTestNamespaces(t),
 		Workspaces:     ws,
+		OutputChecker:  nil,
 		BaseURL:        baseurl.Resolver{},
 		Audit:          newTestAudit(),
 		Gate:           nil,
@@ -1260,17 +1268,16 @@ func TestWorkspacePermissionFlags(t *testing.T) {
 }
 
 // TestListPageErrorsNameTheParameter proves that a page value that is not a
-// number of 1 or more answers 422 with a detail that names the parameter and
-// its rule, and does not repeat the value.
+// whole number from 1 to the largest int answers 422 with a detail that names
+// the parameter and its rule, and does not repeat the value.
 func TestListPageErrorsNameTheParameter(t *testing.T) {
 	t.Parallel()
 
 	handler := newPagingHandler(t, allowAll())
 
-	const (
-		size   = "invalid query parameter: page[size] must be a number of 1 or more"
-		number = "invalid query parameter: page[number] must be a number of 1 or more"
-	)
+	rule := " must be a whole number from 1 to " + strconv.Itoa(math.MaxInt)
+	size := "invalid query parameter: page[size]" + rule
+	number := "invalid query parameter: page[number]" + rule
 
 	for _, tc := range []struct{ query, want string }{
 		{query: "page[size]=0", want: size},

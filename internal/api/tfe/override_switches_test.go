@@ -12,6 +12,8 @@ import (
 
 	"opendustpan.org/opendustpan/internal/api/tfe"
 	"opendustpan.org/opendustpan/internal/baseurl"
+	"opendustpan.org/opendustpan/internal/errcode"
+	"opendustpan.org/opendustpan/internal/errcode/errcodetest"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/workspace"
@@ -114,6 +116,7 @@ func newSwitchedHandler(
 		Logger:         slog.New(slog.DiscardHandler),
 		Namespaces:     svc,
 		Workspaces:     ws,
+		OutputChecker:  nil,
 		BaseURL:        baseurl.Resolver{},
 		Audit:          newTestAudit(),
 		Gate:           nil,
@@ -238,6 +241,9 @@ func TestOverrideSwitchesChangeNeedsBothFields(t *testing.T) {
 			if rec.Code != http.StatusBadRequest {
 				t.Fatalf("PUT %s answers %d, want 400: %s", tt.body, rec.Code, rec.Body.String())
 			}
+
+			errcodetest.CheckAnswer(t, errcodetest.ShapeJSONAPI, http.StatusBadRequest, rec.Body.Bytes(),
+				errcodetest.Want{Code: errcode.RequestBodyInvalid, Args: nil, RequestBody: nil})
 
 			mu.Lock()
 			defer mu.Unlock()

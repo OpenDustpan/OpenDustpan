@@ -15,8 +15,9 @@
 // The package is tool-neutral. A unit is a unit reference: the tool, the
 // namespace and the tool's own name. The package never reads a state: the
 // States port tells the checker the ID of the latest state of a unit and
-// whether the server can read that state. The package has no type that
-// exists for one tool only.
+// whether the server can read that state, and the Outputs port gives the root
+// outputs of that state. The package has no type that exists for one tool
+// only.
 package outputshare
 
 import (
@@ -55,8 +56,17 @@ var (
 	// ErrClientEncrypted reports a read of outputs only that the checker refused,
 	// because the client encrypted the latest state of the producer. The
 	// server cannot read such a state, so it cannot answer the outputs only.
-	// A tool adapter answers 409 to a caller of the producer namespace.
+	// A tool adapter answers 409 to a caller of the producer namespace. It is
+	// a denial of one read, not a fact of the state: the fact is the
+	// ErrClientEncrypted of the tool package, for example of pkg/workspace.
+	// This package cannot import a tool package, so the two stay apart, and
+	// an adapter gives both the same error code.
 	ErrClientEncrypted = errors.New("state of the producer is encrypted by the client")
+	// ErrStateMoved reports a read of outputs whose state is not the latest
+	// state of the unit: a new state came in after the check of the read, or
+	// the unit has no state now. The read fails closed and answers no output.
+	// A new request reads the new state.
+	ErrStateMoved = errors.New("latest state changed during the read")
 	// ErrUnknownAttachment reports an attachment reference that the spec of the
 	// job does not hold: no such attachment, revision or block
 	// outputs/opendustpan reached through that attachment.
