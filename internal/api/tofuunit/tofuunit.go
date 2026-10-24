@@ -146,7 +146,7 @@ func Entry(r *http.Request, p identity.Principal, obj identity.Object, detail De
 		ValueCount:    nil,
 		Changes:       nil,
 		SourceIP:      clientip.String(r),
-		UserAgent:     truncateUserAgent(r.UserAgent()),
+		UserAgent:     audit.TruncateUserAgent(r.UserAgent()),
 		Channel:       audit.NormalizeChannel(r.Header.Get(ChannelHeader)),
 		Kind:          detail.Kind,
 		Outcome:       detail.Outcome,
@@ -194,19 +194,4 @@ func (u Rules) Append(ctx context.Context, entry audit.Entry) error {
 	_, err = u.Audit.Append(ctx, ns.Fence(), entry)
 
 	return err
-}
-
-// truncateUserAgent caps s at audit.MaxUserAgentLen bytes on a UTF-8 rune
-// boundary, so a multi-byte rune is never split.
-func truncateUserAgent(s string) string {
-	if len(s) <= audit.MaxUserAgentLen {
-		return s
-	}
-
-	cut := audit.MaxUserAgentLen
-	for cut > 0 && s[cut]&0xC0 == 0x80 {
-		cut--
-	}
-
-	return s[:cut]
 }

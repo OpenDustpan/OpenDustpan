@@ -221,6 +221,9 @@ type Store struct {
 	// against writers that never pause, and it can wait out the whole busy
 	// timeout.
 	enterGate *writeGate
+	// enterWait bounds the wait of an enter for enterGate: maxEnterWait.
+	// Tests make it short.
+	enterWait time.Duration
 	// stagingMu guards stagingPath: one staged restore at a time.
 	stagingMu   sync.Mutex
 	stagingPath string
@@ -396,6 +399,7 @@ func newStore(conn *sql.DB, path string, guard *processGuard) *Store {
 		path:                path,
 		mu:                  sync.RWMutex{},
 		enterGate:           newWriteGate(),
+		enterWait:           maxEnterWait,
 		stagingMu:           sync.Mutex{},
 		stagingPath:         "",
 		guardCancel:         nil,

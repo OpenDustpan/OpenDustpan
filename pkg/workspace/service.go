@@ -2834,7 +2834,7 @@ func (s *Service) refuseManualLock(ctx context.Context, w Workspace, jobID strin
 	return fmt.Errorf(
 		"%w: %w",
 		ErrLocked,
-		&manuallock.LockedError{Lock: l, Noun: lockNounWorkspace, Name: w.Ref.String()},
+		&manuallock.LockedError{Lock: l, Unit: newUnitRef(w.Ref), Noun: lockNounWorkspace, Name: w.Ref.String()},
 	)
 }
 
@@ -2868,7 +2868,7 @@ func (s *Service) refuseNewUnitManualLock(ctx context.Context, ref Ref, jobID st
 	return fmt.Errorf(
 		"%w: %w",
 		ErrLocked,
-		&manuallock.LockedError{Lock: l, Noun: lockNounWorkspace, Name: ref.String()},
+		&manuallock.LockedError{Lock: l, Unit: newUnitRef(ref), Noun: lockNounWorkspace, Name: ref.String()},
 	)
 }
 
@@ -2894,6 +2894,7 @@ func (s *Service) refuseUnderNamespaceLock(ctx context.Context, ns namespace.Nam
 	}
 
 	return fmt.Errorf("%w: %w", ErrLocked, &manuallock.LockedError{
-		Lock: l, Noun: lockNounWorkspace, Name: ns.String() + "/" + name,
+		Lock: l, Unit: collection.UnitRef{Namespace: ns, Tool: InventoryTool, Name: name},
+		Noun: lockNounWorkspace, Name: ns.String() + "/" + name,
 	})
 }

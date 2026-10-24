@@ -551,7 +551,9 @@ func checkRoute(t *testing.T, rc *routeCase, held int) {
 		t.Fatalf("status = %d %s, want %d", rec.Code, rec.Body.String(), want)
 	}
 
-	wantChecks := rc.checks[:min(held+1, len(rc.checks))]
+	// The namespace read of the path runs once before the lookup, for the IP
+	// allowlist, and once more with the other checks.
+	wantChecks := append([]string{rc.checks[0]}, rc.checks[:min(held+1, len(rc.checks))]...)
 	if got := r.authz.seen(); !slices.Equal(got, wantChecks) {
 		t.Errorf("checks = %q, want %q, in order", got, wantChecks)
 	}
@@ -596,14 +598,24 @@ func TestUnknownObjectsAnswerAlike(t *testing.T) {
 					rec.Body.String())
 			}
 
-			// The namespace read is the one check that may run, for a namespace that exists.
-			if got := r.authz.seen(); len(got) != 0 {
-				t.Errorf("%s %s: checks = %q, want none for an object that does not exist", suffix.method, path, got)
-			}
+			onlyNamespaceReads(t, suffix.method+" "+path, r.authz.seen())
 
 			if r.checker.calls() != 0 || r.results.reads != 0 {
 				t.Errorf("%s %s reached the checker or the store", suffix.method, path)
 			}
+		}
+	}
+}
+
+// onlyNamespaceReads fails the test when a check other than the namespace read
+// of the path ran. That one read runs for the IP allowlist, before the lookup.
+// No check names a unit that does not exist.
+func onlyNamespaceReads(t *testing.T, label string, seen []string) {
+	t.Helper()
+
+	for _, got := range seen {
+		if !strings.HasPrefix(got, "namespace:read ") {
+			t.Errorf("%s: check %q ran for an object that does not exist", label, got)
 		}
 	}
 }

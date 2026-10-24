@@ -63,6 +63,7 @@ func TestCoreErrorCodes(t *testing.T) {
 			Since: since, Holder: "user-1", Reason: "release freeze",
 			Target: manuallock.UnitTarget(collection.UnitRef{Namespace: "acme", Tool: "opentofu", Name: "web"}),
 		},
+		Unit: collection.UnitRef{Namespace: "acme", Tool: "opentofu", Name: "web"},
 		Noun: "workspace", Name: "acme/web",
 	}
 
@@ -114,8 +115,8 @@ func TestCoreErrorCodes(t *testing.T) {
 		{
 			"manual lock", fmt.Errorf("%w: %w", workspace.ErrLocked, manual), http.StatusConflict,
 			errcodetest.Want{Code: errcode.LockLocked, Args: map[string]any{
-				"holder": "user-1", "since": "2026-10-23T09:30:00Z", "target": "opentofu:acme/web",
-				"targetKind": "unit", "unit": "acme/web",
+				"holder": "user-1", "since": "2026-10-23T09:30:00Z", "lockedKind": "workspace",
+				"locked": "acme/web", "refusedKind": "workspace", "refused": "acme/web",
 			}, RequestBody: nil},
 		},
 	})
@@ -173,8 +174,8 @@ func TestLockRoutesAnswerCodes(t *testing.T) {
 	rec := lockAnswer(t, manual, "/api/v2/workspaces/ws-test123/actions/lock")
 	errcodetest.CheckAnswer(t, errcodetest.ShapeJSONAPI, http.StatusConflict, rec.Body.Bytes(), errcodetest.Want{
 		Code: errcode.LockLocked, Args: map[string]any{
-			"holder": "alice", "since": "2026-10-19T10:00:00Z", "target": "acme/payments",
-			"targetKind": "collection", "unit": "acme/web",
+			"holder": "alice", "since": "2026-10-19T10:00:00Z", "lockedKind": "collection",
+			"locked": "acme/payments", "refusedKind": "workspace", "refused": "acme/web",
 		},
 		RequestBody: []byte(`{"data":{}}`),
 	})

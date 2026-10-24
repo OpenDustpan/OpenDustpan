@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"time"
 
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/store/sqlite/internal/db"
@@ -141,21 +142,35 @@ func (s *Store) SetStateIf(ctx context.Context, expected, next maintenance.State
 	return nil
 }
 
+// maxEnterWait bounds the wait of an enter of maintenance mode for the
+// checked writes in flight. The guide of backup and restore names this value.
+const maxEnterWait = 30 * time.Second
+
 // lockEnter holds enterGate exclusive when next is maintenance mode, so that
 // the checked writes in flight end and no new one starts until the enter
-// ends. It returns the function that releases the gate. It returns an error
-// for both the context error and maintenance.ErrUnavailable when ctx ends
-// during the wait. A move back to normal takes no gate: no writer is refused
-// then, and none competes for the lock.
+// ends. It returns the function that releases the gate. It returns
+// maintenance.ErrBusy when the writes in flight do not end within
+// s.enterWait, and an error for both the context error and
+// maintenance.ErrUnavailable when ctx ends during the wait. A move back to
+// normal takes no gate: no writer is refused then, and none competes for the
+// lock.
 func (s *Store) lockEnter(ctx context.Context, next maintenance.State) (func(), error) {
 	if next != maintenance.StateMaintenance {
 		return func() {}, nil
 	}
 
-	unlock, err := s.enterGate.lock(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("store installation state sqlite database: %w: %w", err, maintenance.ErrUnavailable)
+	wait, cancel := context.WithTimeoutCause(ctx, s.enterWait, maintenance.ErrBusy)
+	defer cancel()
+
+	unlock, err := s.enterGate.lock(wait)
+	if err == nil {
+		return unlock, nil
 	}
 
-	return unlock, nil
+	if ctx.Err() == nil && errors.Is(context.Cause(wait), maintenance.ErrBusy) {
+		return nil, fmt.Errorf("store installation state sqlite database: waited %s: %w", s.enterWait,
+			maintenance.ErrBusy)
+	}
+
+	return nil, fmt.Errorf("store installation state sqlite database: %w: %w", err, maintenance.ErrUnavailable)
 }

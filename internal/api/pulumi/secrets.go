@@ -465,21 +465,6 @@ func (h *Handler) appendEntry(ctx context.Context, e audit.Entry) error {
 	return err
 }
 
-// truncateUserAgent caps s at audit.MaxUserAgentLen bytes on a UTF-8 rune
-// boundary, so a multi-byte rune is never split.
-func truncateUserAgent(s string) string {
-	if len(s) <= audit.MaxUserAgentLen {
-		return s
-	}
-
-	cut := audit.MaxUserAgentLen
-	for cut > 0 && s[cut]&0xC0 == 0x80 {
-		cut--
-	}
-
-	return s[:cut]
-}
-
 // failAudit records a lost audit entry: one log line with no secret and no
 // value, and one count on the failure metric through the wired callback. It
 // names no error text: the text may hold driver detail (ADR 32 decision 7).
