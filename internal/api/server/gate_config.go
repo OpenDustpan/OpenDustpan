@@ -56,6 +56,13 @@ const (
 	gateConfigNotFoundMsg = "no such approval rule or approval default"
 )
 
+// errIfMatchInvalid answers an If-Match header that is not one version in
+// quotes. The header is part of the request, so the answer has its own code.
+var errIfMatchInvalid = &codedError{
+	status: http.StatusBadRequest, code: errcode.RequestIfMatchInvalid, args: nil,
+	message: `If-Match must be one stored version in quotes, for example "1"`,
+}
+
 // approversBody is the approvers of a default or a rule on the wire.
 //
 // Contract: never remove or rename these fields. The console reads only this
@@ -175,7 +182,7 @@ func decodeGateBody(w http.ResponseWriter, r *http.Request, v any) error {
 
 // ifMatch returns the version of the If-Match header, and whether the
 // request sent one. The header holds one quoted version, as the ETag of a
-// read gives it. A value that is not one version is errInvalidBody.
+// read gives it. A value that is not one version is errIfMatchInvalid.
 func ifMatch(r *http.Request) (int64, bool, error) {
 	raw := apidesc.Header(r, "If-Match")
 	if raw == "" {
@@ -184,7 +191,7 @@ func ifMatch(r *http.Request) (int64, bool, error) {
 
 	v, err := strconv.ParseInt(strings.Trim(raw, `"`), 10, 64)
 	if err != nil || v < 1 {
-		return 0, false, errInvalidBody
+		return 0, false, errIfMatchInvalid
 	}
 
 	return v, true, nil
