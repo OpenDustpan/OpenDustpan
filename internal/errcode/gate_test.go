@@ -60,6 +60,9 @@ func gated() []errcodetest.Adapter {
 		// The package writes no error answer. It is gated with no body type
 		// and no known list, so a new answer in it needs a code.
 		api("tofuunit", nil, nil),
+		// The package writes no error answer: DecodeBody returns an error of
+		// the shared error module to the gated writer of each adapter.
+		api("routekit", nil, nil),
 		api("triggers", []string{"errorResponse"}, nil),
 	}
 }
