@@ -200,9 +200,10 @@ The harness times each route in four states:
 | `gateList` | IP allowlists on | A namespace with a list of `listEntries` entries that holds the client |
 | `gateRefused` | IP allowlists on | A namespace with a list that does not hold the client |
 
-The refused request gets the answer of a route that must not tell that the object exists.
-`refusedStatus` holds that status.
-The refused timing covers the coded 404 answer only.
+The refused request gets the same answer on both routes: status 403 with the error code `access.ip-not-allowed`.
+`refusedStatus` and `refusedCode` hold that status and code.
+A different answer ends the run.
+The refused timing covers that answer only.
 The server writes an audit entry only for the first refusal of a principal, action and scope in a window.
 The timed requests therefore write no audit entry.
 
@@ -212,7 +213,7 @@ The timed requests therefore write no audit entry.
 | `listEntries` | Entries in the list that holds the client |
 | `runnerRoute`, `jobsRoute` | One entry for each route, see below |
 
-Each route entry holds `method`, `path`, `refusedStatus`, and these medians in milliseconds:
+Each route entry holds `method`, `path`, `refusedStatus`, `refusedCode`, and these medians in milliseconds:
 
 | Field | Meaning |
 | --- | --- |
