@@ -377,6 +377,49 @@ func TestEntryFillsRequestFacts(t *testing.T) {
 	}
 }
 
+// TestEntryCutsUserAgent pins the cut of the user agent that Entry keeps: an
+// over-long value is cut to the shared limit, and a rune that straddles the
+// limit is dropped whole.
+func TestEntryCutsUserAgent(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		ua   string
+		want int
+	}{
+		{"short unchanged", "tofu/1.0", len("tofu/1.0")},
+		{"ascii cut to the limit", strings.Repeat("a", audit.MaxUserAgentLen+100), audit.MaxUserAgentLen},
+		{
+			"rune straddling the limit dropped",
+			strings.Repeat("a", audit.MaxUserAgentLen-1) + "é",
+			audit.MaxUserAgentLen - 1,
+		},
+	}
+
+	_, obj, p := fixture(t)
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			r := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/x", http.NoBody)
+			r.Header.Set("User-Agent", tt.ua)
+
+			e := tofuunit.Entry(r, p, obj, tofuunit.Detail{
+				At: time.Unix(1700000000, 0).UTC(), Action: identity.ActionUnitReadSecrets,
+				Version: "", ValuePath: "",
+				Kind: audit.KindReveal, Outcome: audit.OutcomeSuccess, Reason: "why",
+			})
+
+			if len(e.UserAgent) != tt.want || !utf8.ValidString(e.UserAgent) {
+				t.Errorf("user agent is %d bytes, valid UTF-8 %t; want %d bytes of valid UTF-8",
+					len(e.UserAgent), utf8.ValidString(e.UserAgent), tt.want)
+			}
+		})
+	}
+}
+
 // TestReadKind checks that only a person reads with the kind reveal.
 func TestReadKind(t *testing.T) {
 	t.Parallel()

@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/ident"
+	"opendustpan.org/opendustpan/pkg/collection"
 	"opendustpan.org/opendustpan/pkg/manuallock"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/workspace"
@@ -48,6 +49,11 @@ func testCreateUnderNamespaceLock(t *testing.T, s Store) {
 	var locked *manuallock.LockedError
 	if !errors.As(err, &locked) || locked.Lock.Holder != alice || locked.Lock.Reason != "freeze" {
 		t.Fatalf("create under a namespace lock = %v, want the lock of %q for %q", err, alice, "freeze")
+	}
+
+	want := collection.UnitRef{Namespace: f.ns.Name, Tool: workspace.InventoryTool, Name: w.Ref.Name.String()}
+	if locked.Unit != want {
+		t.Fatalf("refused unit = %v, want %v", locked.Unit, want)
 	}
 
 	if _, getErr := s.GetWorkspace(t.Context(), w.Ref); !errors.Is(getErr, workspace.ErrNotFound) {

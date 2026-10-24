@@ -76,6 +76,10 @@ var (
 	// stored. Store adapters translate driver failures to it, so callers
 	// never see driver text.
 	ErrUnavailable = errors.New("installation state unavailable")
+	// ErrBusy reports an enter of maintenance mode that waited for the
+	// writes in flight for the bound of the store, and gave up. The state
+	// did not change. The caller tries again later.
+	ErrBusy = errors.New("cannot enter maintenance mode: the writes in flight did not end in time")
 )
 
 // State is the installation state: normal or maintenance.
@@ -110,13 +114,17 @@ type Store interface {
 	GetState(ctx context.Context) (State, error)
 	// SetState stores state in the seeded row. It reports ErrInvalidState
 	// for any other value and ErrUnavailable when the state cannot be
-	// stored, also when the row is missing: it never creates the row.
+	// stored, also when the row is missing: it never creates the row. A
+	// store that waits for the writes in flight before it enters maintenance
+	// mode bounds that wait, and reports ErrBusy and changes nothing when the
+	// bound ends first.
 	SetState(ctx context.Context, state State) error
 	// SetStateIf stores next only when the stored state is expected: one
 	// compare-and-set, so enters on several instances of one database stay
 	// ordered. It reports ErrStateChanged when the stored state is not
 	// expected and changes nothing, ErrInvalidState for any other expected
-	// or next value, and ErrUnavailable when the state cannot be stored.
+	// or next value, and ErrUnavailable when the state cannot be stored. It
+	// reports ErrBusy as SetState does.
 	SetStateIf(ctx context.Context, expected, next State) error
 }
 

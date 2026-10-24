@@ -474,6 +474,9 @@ func refuseUnderNamespaceLock(ctx context.Context, q *db.Queries, ref workspace.
 	}
 
 	return fmt.Errorf("%w: %w", workspace.ErrLocked, &manuallock.LockedError{
-		Lock: lock, Noun: "workspace", Name: ref.String(),
+		Lock: lock,
+		Unit: collection.UnitRef{Namespace: ref.Namespace, Tool: workspace.InventoryTool, Name: ref.Name.String()},
+		Noun: "workspace",
+		Name: ref.String(),
 	})
 }

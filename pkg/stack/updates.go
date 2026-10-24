@@ -1783,9 +1783,11 @@ func refuseManualLock(ctx context.Context, locks ManualLocks, ref Ref, jobID str
 		return nil
 	}
 
-	l, err := locks.CoveringFor(ctx, collection.UnitRef{
+	unit := collection.UnitRef{
 		Namespace: ref.Namespace, Tool: InventoryTool, Name: ref.Project.String() + "/" + ref.Stack.String(),
-	}, jobID)
+	}
+
+	l, err := locks.CoveringFor(ctx, unit, jobID)
 	if errors.Is(err, manuallock.ErrNotLocked) {
 		return nil
 	}
@@ -1794,5 +1796,7 @@ func refuseManualLock(ctx context.Context, locks ManualLocks, ref Ref, jobID str
 		return fmt.Errorf("read manual lock of %s: %w", ref, err)
 	}
 
-	return fmt.Errorf("%w: %w", ErrUpdateConflict, &manuallock.LockedError{Lock: l, Noun: "stack", Name: ref.String()})
+	return fmt.Errorf("%w: %w", ErrUpdateConflict, &manuallock.LockedError{
+		Lock: l, Unit: unit, Noun: "stack", Name: ref.String(),
+	})
 }

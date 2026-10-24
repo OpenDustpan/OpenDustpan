@@ -166,7 +166,7 @@ func (h *Handler) entry(
 	return audit.Entry{
 		At: at, Namespace: ns, Subject: subject, IDPSubject: "", TokenID: "", Action: string(rule.Action),
 		Object: identity.NamespaceObject(ns).String(), Version: "", ValuePath: "", ValueCount: nil,
-		Changes: nil, SourceIP: clientip.String(r), UserAgent: truncateUserAgent(r.UserAgent()),
+		Changes: nil, SourceIP: clientip.String(r), UserAgent: audit.TruncateUserAgent(r.UserAgent()),
 		Channel: sessionauth.AuditChannel(r, channelHeader), Kind: rule.Kind, Outcome: audit.OutcomeSuccess,
 		RequestID: requestid.FromContext(r.Context()), ObjectID: "", PrevHash: "", Hash: "", Sequence: 0,
 		FenceVersion: 0, PrincipalKind: "", JobID: "", Reason: "",
@@ -788,27 +788,6 @@ func newSecret(prefix string) (string, error) {
 	}
 
 	return prefix + hex.EncodeToString(b[:]), nil
-}
-
-// truncateUserAgent caps s at audit.MaxUserAgentLen bytes, at a rune
-// boundary.
-func truncateUserAgent(s string) string {
-	if len(s) <= audit.MaxUserAgentLen {
-		return s
-	}
-
-	cut := audit.MaxUserAgentLen
-	for cut > 0 && !runeStart(s[cut]) {
-		cut--
-	}
-
-	return s[:cut]
-}
-
-func runeStart(b byte) bool {
-	const continuationMask, continuationBits = 0xC0, 0x80
-
-	return b&continuationMask != continuationBits
 }
 
 // sha256Hex returns the hex SHA-256 of s.
