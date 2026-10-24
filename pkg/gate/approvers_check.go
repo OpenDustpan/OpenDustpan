@@ -45,10 +45,13 @@ func (s *ConfigService) checkApprovers(ctx context.Context, a Approvers, count i
 		return nil
 	}
 
-	return fmt.Errorf(
-		"%w: count %d is more than the number of people who can approve (%d): lower the count or add approvers",
-		ErrApprovers, count, people,
-	)
+	return &ApproversError{
+		Reason: ApproversCountAbove, Count: int64(count), People: people,
+		detail: fmt.Sprintf(
+			"count %d is more than the number of people who can approve (%d): lower the count or add approvers",
+			count, people,
+		),
+	}
 }
 
 // countUsers checks the user names and returns how many different users they
@@ -86,11 +89,11 @@ func (s *ConfigService) countGroupMembers(ctx context.Context, groups []string, 
 
 		switch {
 		case errors.Is(err, ErrInvalid):
-			return 0, fmt.Errorf(
-				"%w: the group name %q is not valid: use letters, digits, '-', '_' and '.'", ErrApprovers, group,
-			)
+			return 0, newApproversError(ApproversGroupInvalid,
+				fmt.Sprintf("the group name %q is not valid: use letters, digits, '-', '_' and '.'", group))
 		case errors.Is(err, ErrNotFound):
-			return 0, fmt.Errorf("%w: the group %q does not exist: make the group first", ErrApprovers, group)
+			return 0, newApproversError(ApproversGroupMissing,
+				fmt.Sprintf("the group %q does not exist: make the group first", group))
 		case err != nil:
 			return 0, fmt.Errorf("read the group %q: %w", group, err)
 		default:
@@ -112,12 +115,14 @@ func (s *ConfigService) countGroupMembers(ctx context.Context, groups []string, 
 // characters that an API subject cannot, so the check is not stricter.
 func checkUserName(name string) error {
 	if strings.TrimSpace(name) != name {
-		return fmt.Errorf("%w: the user name %q starts or ends with white space", ErrApprovers, name)
+		return newApproversError(ApproversUserInvalid,
+			fmt.Sprintf("the user name %q starts or ends with white space", name))
 	}
 
 	for _, c := range name {
 		if unicode.IsControl(c) || unicode.Is(unicode.Cf, c) {
-			return fmt.Errorf("%w: the user name %q holds a control or format character", ErrApprovers, name)
+			return newApproversError(ApproversUserInvalid,
+				fmt.Sprintf("the user name %q holds a control or format character", name))
 		}
 	}
 

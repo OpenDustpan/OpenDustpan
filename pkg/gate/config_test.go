@@ -644,3 +644,52 @@ func TestConfigServiceCountsOnlyPersonsForAFreshWindow(t *testing.T) {
 		}
 	}
 }
+
+// TestConfigServiceApproversReasons proves that each refusal names its reason,
+// and that a count refusal names the number of people who can approve.
+func TestConfigServiceApproversReasons(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		approvers gate.Approvers
+		count     int
+		reason    gate.ApproversReason
+		people    int64
+	}{
+		{
+			"group name not valid", gate.Approvers{Groups: []string{"<b>x</b>"}, Users: nil, UnitOwners: false}, 1,
+			gate.ApproversGroupInvalid, 0,
+		},
+		{
+			"group missing", gate.Approvers{Groups: []string{"nogroup"}, Users: nil, UnitOwners: false}, 1,
+			gate.ApproversGroupMissing, 0,
+		},
+		{
+			"user not valid", gate.Approvers{Groups: nil, Users: []string{"a\x07b"}, UnitOwners: false}, 1,
+			gate.ApproversUserInvalid, 0,
+		},
+		{
+			"count above", gate.Approvers{Groups: nil, Users: []string{"alice", "bob"}, UnitOwners: false}, 3,
+			gate.ApproversCountAbove, 2,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			svc, _ := newConfigService(t)
+
+			def := goodDefault(gate.NamespaceScope("acme"))
+			def.Approvers, def.Count = tt.approvers, tt.count
+
+			_, err := svc.PutApprovalDefault(t.Context(), def, 0, callerEntry())
+
+			got, ok := errors.AsType[*gate.ApproversError](err)
+			if !ok || !errors.Is(err, gate.ErrApprovers) || got.Reason != tt.reason || got.People != tt.people {
+				t.Fatalf("error = %v, want reason %d with %d people", err, tt.reason, tt.people)
+			}
+		})
+	}
+}
