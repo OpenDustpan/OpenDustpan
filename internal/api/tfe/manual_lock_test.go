@@ -36,7 +36,12 @@ func (m manualLockedWorkspaces) LockForJob(
 		return workspace.Workspace{}, workspace.ErrNotFound
 	}
 
-	refusal := &manuallock.LockedError{Lock: m.lock, Noun: "workspace", Name: "acme/web"}
+	refusal := &manuallock.LockedError{
+		Lock: m.lock,
+		Unit: collection.UnitRef{Namespace: "acme", Tool: "opentofu", Name: "web"},
+		Noun: "workspace",
+		Name: "acme/web",
+	}
 
 	return workspace.Workspace{}, fmt.Errorf("%w: %w", workspace.ErrLocked, refusal)
 }

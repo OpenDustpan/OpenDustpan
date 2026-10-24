@@ -428,7 +428,7 @@ func (h *Handler) checkMoveOutOfLock(
 		h.recordMoveOutRefusal(r, p, obj, reasonMoveOutNeedsManage)
 
 		return "", &movedOutOfLockError{locked: &manuallock.LockedError{
-			Lock: l, Noun: "", Name: unit.Namespace.String() + "/" + unit.Name,
+			Lock: l, Unit: unit, Noun: "", Name: unit.Namespace.String() + "/" + unit.Name,
 		}}
 	}
 

@@ -160,6 +160,12 @@ func checkLockedError(t *testing.T, err error) {
 			t.Errorf("err = %q, want it to name %q", err, want)
 		}
 	}
+
+	manual, ok := errors.AsType[*manuallock.LockedError](err)
+	if !ok || manual == nil || manual.Unit.Namespace != "acme" || manual.Unit.Tool != workspace.InventoryTool ||
+		manual.Unit.Name == "" {
+		t.Errorf("refusal %v names no refused workspace of acme", err)
+	}
 }
 
 // TestLockRequestsMeetTheManualLock proves both lock requests of OpenTofu fail

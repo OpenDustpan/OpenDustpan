@@ -85,8 +85,8 @@ func TestManualLockRefusalsHaveTheirArguments(t *testing.T) {
 			"acme/prod", "collection",
 		},
 		{
-			"unit", manuallock.UnitTarget(collection.UnitRef{Namespace: "acme", Tool: "pulumi", Name: "web/prod"}),
-			"pulumi:acme/web/prod", "unit",
+			"stack", manuallock.UnitTarget(collection.UnitRef{Namespace: "acme", Tool: "pulumi", Name: "web/prod"}),
+			"acme/web/prod", "stack",
 		},
 	}
 
@@ -98,12 +98,13 @@ func TestManualLockRefusalsHaveTheirArguments(t *testing.T) {
 				name: "locked",
 				err: &manuallock.LockedError{
 					Lock: manuallock.Lock{Since: since, Target: tc.target, Holder: "alice", Reason: "change window"},
+					Unit: collection.UnitRef{Namespace: "acme", Tool: "pulumi", Name: "web/prod"},
 					Noun: "unit", Name: "acme/web/prod",
 				},
 				status: http.StatusConflict,
 				want: errcodetest.Want{Code: errcode.LockLocked, Args: map[string]any{
-					"holder": "alice", "since": "2026-10-19T10:00:00Z", "target": tc.wantTarget,
-					"targetKind": tc.wantKind, "unit": "acme/web/prod",
+					"holder": "alice", "since": "2026-10-19T10:00:00Z", "lockedKind": tc.wantKind,
+					"locked": tc.wantTarget, "refusedKind": "stack", "refused": "acme/web/prod",
 				}, RequestBody: nil},
 			}})
 		})
@@ -125,8 +126,8 @@ func TestMoveOutOfALockedCollectionAnswersLockLocked(t *testing.T) {
 
 	errcodetest.CheckAnswer(t, errcodetest.ShapeCamelCase, http.StatusConflict, rec.Body.Bytes(), errcodetest.Want{
 		Code: errcode.LockLocked, Args: map[string]any{
-			"holder": "alice", "since": "2026-10-19T10:00:00Z", "target": "acme/old",
-			"targetKind": "collection", "unit": "acme/web/prod",
+			"holder": "alice", "since": "2026-10-19T10:00:00Z", "lockedKind": "collection", "locked": "acme/old",
+			"refusedKind": "stack", "refused": "acme/web/prod",
 		}, RequestBody: nil,
 	})
 }

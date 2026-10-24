@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"opendustpan.org/opendustpan/pkg/collection"
 	"opendustpan.org/opendustpan/pkg/durable"
 	"opendustpan.org/opendustpan/pkg/job"
 	"opendustpan.org/opendustpan/pkg/manuallock"
@@ -114,7 +115,11 @@ func checkManualLock(ctx context.Context, tx Tx, j *job.Job) error {
 	return fmt.Errorf(
 		"%w: %w",
 		job.ErrLocked,
-		&manuallock.LockedError{Lock: locks[0], Noun: "unit", Name: unit.String()},
+		&manuallock.LockedError{
+			Lock: locks[0],
+			Unit: collection.UnitRef{Namespace: unit.Namespace(), Tool: unit.Tool(), Name: unit.UnitName()},
+			Noun: "unit", Name: unit.String(),
+		},
 	)
 }
 

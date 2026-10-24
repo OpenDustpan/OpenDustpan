@@ -1,7 +1,7 @@
 lock.already-locked
 lock.changed
 lock.invalid-target
-lock.locked holder:identifier since:time target:identifier targetKind:identifier unit:identifier
+lock.locked holder:identifier since:time lockedKind:identifier locked:identifier refusedKind:identifier refused:identifier
 lock.not-holder
 lock.not-locked
 lock.reason-required

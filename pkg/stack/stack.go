@@ -13,6 +13,7 @@ import (
 
 	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/collection"
 	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/manuallock"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -680,5 +681,10 @@ func refuseRestoreUnderNamespaceLock(ctx context.Context, locks ManualLocks, ns 
 		return fmt.Errorf("read manual lock of namespace %s: %w", ns, err)
 	}
 
-	return &manuallock.LockedError{Lock: l, Noun: "stack", Name: ns.String() + "/" + id.String()}
+	// A deleted stack has no live name yet, so the refused unit names its
+	// stable ID.
+	return &manuallock.LockedError{
+		Lock: l, Unit: collection.UnitRef{Namespace: ns, Tool: InventoryTool, Name: id.String()},
+		Noun: "stack", Name: ns.String() + "/" + id.String(),
+	}
 }
