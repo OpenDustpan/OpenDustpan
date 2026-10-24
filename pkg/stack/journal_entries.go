@@ -66,7 +66,8 @@ type BatchReader interface {
 // recordsChanged reports whether a stored batch of the update holds an entry
 // that changes the replay records: a write entry must come before all of
 // them. Verify returns whether the batch holds an entry that changes the
-// records, and an error when the batch cannot replay.
+// records, and an error when the batch cannot replay. Verify is not nil when
+// ReadBatch returns no error: the journal writer refuses a summary without it.
 type BatchSummary = struct {
 	Entries     int
 	SequenceIDs []int64
@@ -122,7 +123,8 @@ type JournalRow struct {
 	// after the retry check and before the write, with the operation IDs of the
 	// stored rows and the flag. It returns whether the batch holds such an entry,
 	// so the store sets the flag in the same transaction as the write. A nil Verify
-	// skips the check. A non-nil error refuses the batch with ErrJournalBatch.
+	// refuses the batch with ErrJournalBatch, so a row is never stored
+	// unchecked. A non-nil error refuses the batch with ErrJournalBatch.
 	Verify func(known []int64, recordsChanged bool) (changed bool, err error)
 }
 
@@ -136,11 +138,12 @@ type JournalStore interface {
 	// it returns retried true and writes nothing. A sequence ID stored with a
 	// different SHA-256, or a batch that is only partly stored, returns
 	// ErrJournalConflict. The blob must already be in the blob store. A row with a
-	// Verify function that returns an error is refused with ErrJournalBatch. When
-	// Verify reports that the batch holds an entry that changes the replay records,
-	// the flag of the update is set in the same transaction as the write. When
-	// the row reports a rebuilt base state entry, the operation IDs of earlier
-	// batches are cleared in the same transaction, so the known set starts
+	// nil Verify, or with a Verify function that returns an error, is refused
+	// with ErrJournalBatch. When Verify reports that the batch holds an entry
+	// that changes the replay records, the flag of the update is set in the
+	// same transaction as the write. When the row reports a rebuilt base state
+	// entry, the operation IDs of earlier batches are cleared in the same
+	// transaction, so the known set starts
 	// again from this batch.
 	PutJournalRow(ctx context.Context, row JournalRow, fence namespace.Fence) (retried bool, err error)
 	// JournalKeys returns the blob keys of the batches of the update, in arrival
@@ -500,7 +503,8 @@ func (j *JournalEntries) Append(ctx context.Context, batch JournalBatch, fence n
 // does not hold exactly one entry, with a *batchLimitError: the CLI cannot
 // split one entry. A body that does not decode has more than one entry for
 // this check. Any other refusal of the reader is wrapped in ErrJournalBatch,
-// and its summary keeps the sequence IDs that the reader found.
+// and its summary keeps the sequence IDs that the reader found. A summary
+// that breaks the rules of BatchSummary is refused by checkSummary.
 func (j *JournalEntries) readBatch(content []byte, version int) (BatchSummary, error) {
 	var none BatchSummary
 
@@ -520,7 +524,21 @@ func (j *JournalEntries) readBatch(content []byte, version int) (BatchSummary, e
 		return summary, fmt.Errorf("%w: %w", ErrJournalBatch, err)
 	}
 
-	return summary, nil
+	return summary, checkSummary(summary)
+}
+
+// checkSummary refuses a summary that the batch reader returned without an
+// error but that breaks the rules of BatchSummary: a summary with no Verify.
+// The refusal wraps ErrJournalBatch.
+func checkSummary(summary BatchSummary) error {
+	// Defense in depth: the store refuses a row with a nil Verify too. This
+	// check stays so that a batch reader that returns no entry check never
+	// writes a blob, and does not rely on the store adapter.
+	if summary.Verify == nil {
+		return fmt.Errorf("%w: the batch reader returned no entry check", ErrJournalBatch)
+	}
+
+	return nil
 }
 
 // recorded stores the refusal of a batch that Append did not store, then
