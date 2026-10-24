@@ -158,7 +158,7 @@ func (h *Handler) writeOutputsError(
 	case errors.Is(err, outputsharesvc.ErrNoState):
 		h.writeFailure(ctx, w, fail(http.StatusNotFound, fmt.Sprintf("the unit %s has no state yet", obj),
 			errcode.UnitNoState, errcode.Identifier("unit", obj.String())))
-	case errors.Is(err, outputsharesvc.ErrStateMoved):
+	case errors.Is(err, outputshare.ErrStateMoved):
 		h.writeFailure(ctx, w, fail(http.StatusConflict, errOutputsStateMoved, errcode.UnitStateMoved))
 	default:
 		h.writeError(ctx, w, err)

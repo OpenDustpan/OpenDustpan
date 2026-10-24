@@ -726,7 +726,7 @@ func coverageInventoryRoutes(tb testing.TB, namespaces *namespace.Service) []Rou
 	outputs, err := outputsharesvc.NewReader(outputsharesvc.ReaderConfig{
 		States:  coverageStates{},
 		Checker: coverageOutputChecker{},
-		Sources: map[string]outputsharesvc.Source{"pulumi": coverageOutputSource{}},
+		Sources: map[string]outputshare.Outputs{"pulumi": coverageOutputSource{}},
 	})
 	if err != nil {
 		tb.Fatalf("output reader: %v", err)
@@ -795,7 +795,7 @@ func (coverageOutputChecker) CheckRead(_ context.Context, _ outputshare.ReadRequ
 
 func (coverageOutputSource) Outputs(
 	_ context.Context, _ identity.Object, _ string,
-) ([]outputsharesvc.Output, error) {
+) ([]outputshare.Output, error) {
 	return nil, outputshare.ErrUnknownProducer
 }
 
