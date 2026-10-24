@@ -52,7 +52,7 @@ func (f *backupCheckFlags) register(fs *flag.FlagSet) {
 
 // CheckBackupAnswer is the server answer the backup check reads: whether the
 // configured target holds every object the manifest names with the recorded
-// size, with the first missing or short object in Error.
+// size and checksum, with the first missing, short or changed object in Error.
 type CheckBackupAnswer struct {
 	ID       string `json:"id"`
 	Complete bool   `json:"complete"`
@@ -62,8 +62,8 @@ type CheckBackupAnswer struct {
 // BackupCheck runs `opendustpan backup check --server <url> --backup <id>`:
 // it asks the server to check the backup in its configured target and prints
 // one verdict. It opens no database and reads no target or key. It exits 0
-// when the backup is complete, else it returns the first missing or short
-// object by key with exit 1.
+// when the backup is complete, else it returns the first missing, short or
+// changed object by key with exit 1.
 func BackupCheck(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	var f backupCheckFlags
 
@@ -85,14 +85,14 @@ func BackupCheck(ctx context.Context, args []string, stdout, stderr io.Writer) e
 	}
 
 	if _, err := backup.ParseID(id); err != nil {
-		return fmt.Errorf("%w: set --backup to a backup ID like bkp-aaa: %w", ErrBackupID, err)
+		return fmt.Errorf("%w: set --backup to an ID that opendustpan backup printed, like bkp-aaa", err)
 	}
 
 	server := strings.TrimSpace(f.server)
 	if server == "" {
 		return fmt.Errorf(
 			"%w: set --server (%s) to the server base URL and run opendustpan backup check again",
-			ErrBackupNeedsServer,
+			ErrBackupCheckNeedsServer,
 			BackupServerEnvVar,
 		)
 	}
@@ -165,11 +165,13 @@ func readBackupCheck(
 	}()
 
 	if resp.StatusCode != http.StatusOK {
+		const hint = "check the server log and run opendustpan backup check again"
+
 		return none, fmt.Errorf(
-			"%w %s: %s: check the server log and run opendustpan backup check again",
+			"%w %s: %s",
 			ErrBackupRead,
 			id,
-			decodeErrorAnswer(resp),
+			answerText(resp.StatusCode, decodeErrorAnswer(resp), hint),
 		)
 	}
 

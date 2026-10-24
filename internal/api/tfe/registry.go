@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/api/refusal"
+	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/registry"
@@ -212,18 +213,46 @@ func resolveRegistryNamespace(_ http.ResponseWriter, r *http.Request) (identity.
 	return identity.NamespaceObject(ns), nil
 }
 
-// registryErrors is the error document of the registry protocol.
+// registryMediaType is the media type of every answer of the registry
+// protocol, errors included.
+const registryMediaType = "application/json"
+
+// registryErrors is the error document of the registry protocol. The protocol
+// fixes only errors. ErrorCode and ErrorArgs hold the code of the catalog and
+// its arguments, with the names of the other tool-neutral answers.
 type registryErrors struct {
-	Errors []string `json:"errors"`
+	Errors    []string       `json:"errors"`
+	ErrorCode string         `json:"errorCode"`
+	ErrorArgs map[string]any `json:"errorArgs,omitempty"`
 }
 
-// writeRegistryError answers in the form of the registry protocol.
-func (h *Handler) writeRegistryError(ctx context.Context, w http.ResponseWriter, status int, text string) {
-	w.Header().Set("Content-Type", "application/json")
+// writeRegistryError answers in the form of the registry protocol, with the
+// code of the catalog. A code that the catalog refuses is a bug in this
+// adapter: the answer is then 500 with server.internal, and the log names the
+// code.
+func (h *Handler) writeRegistryError(ctx context.Context, w http.ResponseWriter, status int, text, code string) {
+	answer, err := errcode.New(code)
+	if err != nil {
+		h.logger.ErrorContext(ctx, "error code failed", slog.String("error_code", code))
+		h.writeRegistryAnswer(ctx, w, http.StatusInternalServerError, titleInternal, errcode.Internal())
+
+		return
+	}
+
+	h.writeRegistryAnswer(ctx, w, status, text, answer)
+}
+
+// writeRegistryAnswer writes the error document of the registry protocol with
+// text, and the code and the arguments of answer.
+func (h *Handler) writeRegistryAnswer(
+	ctx context.Context, w http.ResponseWriter, status int, text string, answer errcode.Answer,
+) {
+	w.Header().Set("Content-Type", registryMediaType)
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(status)
 
-	if err := json.NewEncoder(w).Encode(registryErrors{Errors: []string{text}}); err != nil {
+	body := registryErrors{Errors: []string{text}, ErrorCode: answer.Code(), ErrorArgs: answer.Args()}
+	if err := json.NewEncoder(w).Encode(body); err != nil {
 		h.logger.WarnContext(ctx, "write response failed", slog.String("error", err.Error()))
 	}
 }
@@ -231,7 +260,7 @@ func (h *Handler) writeRegistryError(ctx context.Context, w http.ResponseWriter,
 // registryNotFound answers every request that names nothing the caller may
 // know: an unknown host, namespace, provider, version or file.
 func (h *Handler) registryNotFound(ctx context.Context, w http.ResponseWriter) {
-	h.writeRegistryError(ctx, w, http.StatusNotFound, notFoundDetail)
+	h.writeRegistryError(ctx, w, http.StatusNotFound, notFoundDetail, errcode.RegistryNotFound)
 }
 
 // denyHost answers a request for another host: it writes an audit entry for the
@@ -303,12 +332,13 @@ func (h *Handler) writeRegistryAuthError(ctx context.Context, w http.ResponseWri
 			w,
 			http.StatusTooManyRequests,
 			"too many failed sign-ins from this address: try again later",
+			errcode.AuthRateLimited,
 		)
 
 		return
 	}
 
-	h.writeRegistryError(ctx, w, http.StatusUnauthorized, "unauthenticated")
+	h.writeRegistryError(ctx, w, http.StatusUnauthorized, "unauthenticated", errcode.AuthUnauthenticated)
 }
 
 // registryAuthorize authorizes every declared action of route on obj. It
@@ -330,12 +360,12 @@ func (h *Handler) registryAuthorize(
 // fails closed.
 func (h *Handler) writeRegistryDenial(ctx context.Context, w http.ResponseWriter, err error) {
 	if errors.Is(err, identity.ErrDenied) {
-		h.writeRegistryError(ctx, w, http.StatusForbidden, "forbidden")
+		h.writeRegistryError(ctx, w, http.StatusForbidden, titleForbidden, errcode.Forbidden(err))
 
 		return
 	}
 
-	h.writeRegistryError(ctx, w, http.StatusInternalServerError, "internal error")
+	h.writeRegistryError(ctx, w, http.StatusInternalServerError, titleInternal, errcode.ServerInternal)
 }
 
 // enforceSigned serves the file route of the registry protocol. The host check
@@ -422,12 +452,12 @@ func (h *Handler) registryServiceError(ctx context.Context, w http.ResponseWrite
 		h.registryNotFound(ctx, w)
 	default:
 		h.logger.ErrorContext(ctx, "registry request failed")
-		h.writeRegistryError(ctx, w, http.StatusInternalServerError, "internal error")
+		h.writeRegistryError(ctx, w, http.StatusInternalServerError, titleInternal, errcode.ServerInternal)
 	}
 }
 
 func (h *Handler) writeRegistryJSON(ctx context.Context, w http.ResponseWriter, body any) {
-	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Content-Type", registryMediaType)
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(http.StatusOK)
 

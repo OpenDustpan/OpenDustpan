@@ -81,8 +81,8 @@ it, and the server stores it without a decision of its own. For the rules of
   of one member keeps the other. `"terminalSchemes": null` sets both back to
   the default.
 - `updatedAt` cannot change. A body that has it answers 400.
-- A body that is not one JSON object answers 400. So does a body that names
-  one field two times.
+- A body that is not one JSON object answers 400. So does a body that is not
+  valid UTF-8, and a body that names one field two times.
 - A body over 4096 bytes answers 413.
 - Any other `Content-Type` answers 415.
 
@@ -99,8 +99,10 @@ person that never changed a preference has the version `"0"`.
 When the version is not the current one, the server answers 412 and changes
 nothing. It writes no audit entry. Use this to not overwrite a change that
 another device made after your read. A request with no `If-Match` header
-always applies. `If-Match: *` also always applies. A value that is not one
-version in quotes answers 400.
+always applies. `If-Match: *` also always applies. A weak tag, for example
+`W/"5"`, never matches, so it answers 412. An empty `If-Match` header, two
+`If-Match` headers and any other value that is not one version in quotes
+answer 400.
 
 ```sh
 curl -i "$SERVER/api/dustpan/v1/me/preferences" -H "Authorization: Bearer $TOKEN"
@@ -128,17 +130,17 @@ A client selects its text from `errorCode`. An error of a field has
 
 | Status | `errorCode` | When |
 | --- | --- | --- |
-| 400 | `preferences.body-invalid` | The body is not one JSON object, or it names a field two times |
+| 400 | `preferences.body-invalid` | The body is not one JSON object of valid UTF-8, or it names a field two times |
 | 400 | `preferences.field-unknown` | The body has a field that the document does not have |
 | 400 | `preferences.field-read-only` | The body has `updatedAt` |
 | 400 | `preferences.field-invalid` | A value is not allowed. `errorArgs.field` names the field. |
-| 400 | `preferences.if-match-invalid` | `If-Match` is not one version in quotes, or `*` |
+| 400 | `preferences.if-match-invalid` | `If-Match` is empty, is sent twice, or is not one version in quotes or `*` |
 | 401 | | No valid token |
 | 403 | `preferences.person-required` | The caller is not a person |
 | 403 | `access.denied` | The caller lacks the action |
 | 403 | `access.ip-not-allowed` | The client address is outside the IP allowlist of the namespace |
 | 413 | `preferences.body-too-large` | The body is over 4096 bytes |
-| 412 | `preferences.precondition-failed` | `If-Match` holds a version that is not the current one |
+| 412 | `preferences.precondition-failed` | `If-Match` holds a version that is not the current one, or a weak tag |
 | 415 | `preferences.media-type-unsupported` | The content type is not `application/merge-patch+json` |
 | 501 | `preferences.unavailable` | The store of the server keeps no preferences |
 | 503 | | The server is in maintenance mode, for a `PATCH` |

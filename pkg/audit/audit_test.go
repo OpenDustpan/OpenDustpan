@@ -456,6 +456,49 @@ func TestValidateReason(t *testing.T) {
 	}
 }
 
+// TestValidateRefusesHiddenRunesInTheObject proves that an entry with a
+// control character, a format character or a line or paragraph separator in
+// its object or its object ID is refused, and that other text is accepted.
+func TestValidateRefusesHiddenRunesInTheObject(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name     string
+		object   string
+		objectID string
+		invalid  bool
+	}{
+		{"plain reference", "pulumi:acme/web/prod", "", false},
+		{"letter that is not ASCII", "pulumi:acme/équipe", "stk_1", false},
+		{"object with right-to-left override", "pulumi:acme/web/\u202eprod", "", true},
+		{"object with left-to-right isolate", "pulumi:acme/web/\u2066prod", "", true},
+		{"object with zero width space", "pulumi:acme/web/\u200bprod", "", true},
+		{"object with line separator", "pulumi:acme/web/a b", "", true},
+		{"object with paragraph separator", "pulumi:acme/web/a b", "", true},
+		{"object with line break", "pulumi:acme/web/a\nb", "", true},
+		{"object with bell", "pulumi:acme/web/a\x07b", "", true},
+		{"object with NUL", "pulumi:acme/web/a\x00b", "", true},
+		{"object with C1 control", "pulumi:acme/web/a\u0085b", "", true},
+		{"object ID with right-to-left override", "pulumi:acme/web/prod", "stk_\u202e1", true},
+		{"object ID with line break", "pulumi:acme/web/prod", "stk_\n1", true},
+		{"object ID with zero width space", "pulumi:acme/web/prod", "stk_\u200b1", true},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			e := testEntry()
+			e.Object, e.ObjectID = tc.object, tc.objectID
+
+			err := e.Validate()
+			if tc.invalid != errors.Is(err, audit.ErrInvalidEntry) {
+				t.Fatalf("validate error = %v, want invalid = %t", err, tc.invalid)
+			}
+		})
+	}
+}
+
 // TestValidateChecksThePrincipalFields proves that an entry accepts the three
 // kinds of a principal record and no kind, and refuses any other kind and a
 // job ID that is too long.

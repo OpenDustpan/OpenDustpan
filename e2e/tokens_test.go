@@ -238,6 +238,11 @@ func checkTokenReads(ctx context.Context, t *testing.T, env *e2e.Env, deploy e2e
 	}
 }
 
+// oldTokenEndMargin is the time from the second rotation to the end time
+// of its old token. It is longer than a slow request on a loaded machine, so
+// the end time is never in the past when the server reads it.
+const oldTokenEndMargin = 10 * time.Second
+
 // checkTokenRotation rotates the token with no end time: both tokens sign
 // in during the overlap. It answers the new token.
 func checkTokenRotation(ctx context.Context, t *testing.T, env *e2e.Env, created e2eToken) e2eToken {
@@ -264,10 +269,10 @@ func checkTokenRotation(ctx context.Context, t *testing.T, env *e2e.Env, created
 		http.MethodPost, "/api/server/service-tokens/" + created.ID + "/rotate", `{}`, http.StatusConflict,
 	}, nil)
 
-	// An end time of now ends the old token of a second rotation at once. The
+	// An end time soon after now ends the old token of a second rotation. The
 	// sign-in of the session can wait for a penalty, so it runs first.
 	send := env.FreshAdminSession(ctx, t)
-	now := time.Now().Add(time.Second).UTC().Format(time.RFC3339Nano)
+	endsAt := time.Now().Add(oldTokenEndMargin).UTC()
 
 	var second struct {
 		Token e2eToken `json:"token"`
@@ -275,7 +280,7 @@ func checkTokenRotation(ctx context.Context, t *testing.T, env *e2e.Env, created
 
 	status, body := send(e2e.SessionRequest{
 		Method: http.MethodPost, Path: "/api/server/service-tokens/" + rot.Token.ID + "/rotate",
-		Body: `{"oldTokenEndsAt":"` + now + `"}`,
+		Body: `{"oldTokenEndsAt":"` + endsAt.Format(time.RFC3339Nano) + `"}`,
 	})
 	if status != http.StatusCreated {
 		t.Fatalf("second rotation answers %d, want 201 (%s)", status, body)
@@ -285,17 +290,29 @@ func checkTokenRotation(ctx context.Context, t *testing.T, env *e2e.Env, created
 		t.Fatalf("decode the second rotation %q: %v", body, err)
 	}
 
-	waitTokenRefused(ctx, t, env, rot.Token.Secret)
+	// The old token signs in until its end time.
+	checkTokenSignIn(ctx, t, env, rot.Token.Secret, http.StatusForbidden)
+
+	waitTokenRefused(ctx, t, env, rot.Token.Secret, endsAt)
 	checkTokenSignIn(ctx, t, env, second.Token.Secret, http.StatusForbidden)
 
 	return second.Token
 }
 
 // waitTokenRefused waits until the server refuses secret with 401, for a
-// token whose end time is near. It polls every 250 milliseconds, so the
-// failed sign-ins stay inside the budget of the authentication gate.
-func waitTokenRefused(ctx context.Context, t *testing.T, env *e2e.Env, secret string) {
+// token whose end time is endsAt. It waits until endsAt, then polls every 250
+// milliseconds for at most 10 seconds, so the failed sign-ins stay inside the
+// budget of the authentication gate.
+func waitTokenRefused(ctx context.Context, t *testing.T, env *e2e.Env, secret string, endsAt time.Time) {
 	t.Helper()
+
+	wait := time.NewTimer(time.Until(endsAt))
+	select {
+	case <-ctx.Done():
+		wait.Stop()
+		t.Fatal("test ended while waiting for the end time of the old token")
+	case <-wait.C:
+	}
 
 	deadline := time.Now().Add(10 * time.Second)
 

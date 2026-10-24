@@ -35,6 +35,19 @@ func decodeCappedJSON(r io.Reader, limit int64, doc any) error {
 	return nil
 }
 
+// answerText returns the text of a server answer with an unexpected status:
+// message, which holds the status and the message of the server once, and
+// then hint, the step that can help. A 4xx answer has its cause in the
+// request: the same command fails again and the server log adds nothing, so
+// the text of a 4xx answer has no hint.
+func answerText(status int, message, hint string) string {
+	if status >= http.StatusBadRequest && status < http.StatusInternalServerError {
+		return message
+	}
+
+	return message + ": " + hint
+}
+
 // decodeErrorAnswer reads an error body of the installation API: the
 // message, or the text of the body when it is not JSON. It answers the status
 // alone when the body is empty, when the body is larger than

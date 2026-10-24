@@ -188,7 +188,8 @@ func refusalReason(err error) (string, bool) {
 
 // readStartBody reads and decodes the optional body. An empty body is no body.
 // It refuses a body above maxStartBody bytes, an unknown field, a value that
-// is null, and data after the document.
+// is null, data after the document, and a repository that
+// job.CheckRepository refuses.
 func readStartBody(w http.ResponseWriter, r *http.Request) (*startBody, error) {
 	raw, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxStartBody))
 	if err != nil {
@@ -209,6 +210,15 @@ func readStartBody(w http.ResponseWriter, r *http.Request) (*startBody, error) {
 
 	if _, err := dec.Token(); !errors.Is(err, io.EOF) {
 		return nil, fmt.Errorf("%w: send one JSON object only", errBody)
+	}
+
+	// Defense in depth: the planner of the job service checks the whole code
+	// location. This check stays so that a repository with credentials is
+	// refused at the boundary, before any other layer holds it.
+	if body.Location != nil {
+		if err := job.CheckRepository(body.Location.Repository); err != nil {
+			return nil, fmt.Errorf("location: %w", err)
+		}
 	}
 
 	return &body, nil

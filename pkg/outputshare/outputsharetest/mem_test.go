@@ -93,7 +93,15 @@ func (m *memSettings) SetSetting(
 // harness returns the harness of the cases of the setting over m.
 func (m *memSettings) harness() outputsharetest.Harness {
 	return outputsharetest.Harness{
-		Store: nil, Checker: nil, Attachments: nil, States: nil, Settings: m,
+		Store:        nil,
+		Checker:      nil,
+		Attachments:  nil,
+		States:       nil,
+		Outputs:      nil,
+		SaveOutputs:  nil,
+		DeleteUnit:   nil,
+		DeleteOnRead: nil,
+		Settings:     m,
 		Namespace: func(t *testing.T, name string) namespace.Fence {
 			t.Helper()
 
@@ -106,8 +114,15 @@ func (m *memSettings) harness() outputsharetest.Harness {
 
 			return namespace.Fence{Namespace: namespace.Name(name), FailoverVersion: 3}
 		},
-		Unit: nil, UnitFault: nil, Authority: nil, Profile: nil, Attach: nil, SaveState: nil, Grant: nil, Job: nil,
-		Disable: nil,
+		Unit:      nil,
+		UnitFault: nil,
+		Authority: nil,
+		Profile:   nil,
+		Attach:    nil,
+		SaveState: nil,
+		Grant:     nil,
+		Job:       nil,
+		Disable:   nil,
 		Audited: func(t *testing.T, ns string) []string {
 			t.Helper()
 
@@ -116,7 +131,8 @@ func (m *memSettings) harness() outputsharetest.Harness {
 
 			return append([]string(nil), m.spaces[namespace.Name(ns)].audited...)
 		},
-		Calls: nil, StoreRaw: nil,
+		Calls:    nil,
+		StoreRaw: nil,
 		SettingRaw: func(t *testing.T, ns namespace.Name, value string) {
 			t.Helper()
 

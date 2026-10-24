@@ -10,8 +10,7 @@ import (
 	"net/http"
 	"time"
 
-	"opendustpan.org/opendustpan/internal/clientip"
-	"opendustpan.org/opendustpan/internal/requestid"
+	"opendustpan.org/opendustpan/internal/api/tofuunit"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/workspace"
@@ -32,10 +31,6 @@ const (
 	// The audit entry keeps the path, so a longer path is refused instead
 	// of stored.
 	maxRevealPathLen = 1024
-	// revealChannelHeader declares where a request comes from: "api" or
-	// "console". The audit entry records it as declared; unknown values
-	// are "api".
-	revealChannelHeader = "Dustpan-Channel"
 	// revealResourceType is the JSON:API type of the reveal call.
 	revealResourceType = "state-version-reveals"
 	// noStoreValue is the Cache-Control of every reveal answer: a revealed
@@ -106,31 +101,9 @@ func (h *Handler) revealStateValue(
 
 	id := workspace.StateVersionID(r.PathValue("state_version_id"))
 
-	sv, err := h.workspaces.ReadState(ctx, id)
-	if err != nil {
-		h.writeNoStore(ctx, w, err)
-
-		return
-	}
-
-	// The sealed state opens as a stream: decode from it directly, so no
-	// reveal ever reads the whole state into memory.
-	open := func() (io.ReadCloser, error) {
-		content, openErr := h.workspaces.Open(ctx, sv)
-		if openErr != nil {
-			return nil, openErr
-		}
-
-		return &logCloseReader{
-			ReadCloser: content,
-
-			warn: func(closeErr error) {
-				h.logger.WarnContext(ctx, "close state content failed", slog.String("error", closeErr.Error()))
-			},
-		}, nil
-	}
-
-	value, _, err := workspace.RevealValueFromOpener(open, sv.SensitiveMarks, path)
+	// The domain opens the sealed state as a stream for each pass of the
+	// lookup, so no reveal ever reads the whole state into memory.
+	value, err := workspace.RevealVersion(ctx, h.workspaces, id, path, h.logger)
 	if err != nil {
 		// A path outside the masked set answers 404 with no audit entry
 		// and no value, so a caller cannot probe paths. A client-encrypted
@@ -166,25 +139,6 @@ func (h *Handler) revealStateValue(
 			Attributes: revealAttributes{Path: path, Value: value},
 		},
 	})
-}
-
-// logCloseReader wraps a state stream and logs a close failure. The lookup
-// closes the stream; the log keeps the warning the direct close had.
-type logCloseReader struct {
-	io.ReadCloser
-
-	warn func(closeErr error)
-}
-
-// Close closes the wrapped stream, logs a failure, and returns it.
-func (r *logCloseReader) Close() error {
-	if err := r.ReadCloser.Close(); err != nil {
-		r.warn(err)
-
-		return err //nolint:wrapcheck // Close returns the exact stream error so the lookup joins it.
-	}
-
-	return nil
 }
 
 // errRevealAuditFailed reports a failed audit append before a reveal answer.
@@ -261,75 +215,19 @@ type revealAuditEntry struct {
 // but never the value, and counts the failure: the caller then answers 500
 // and no value.
 func (h *Handler) appendRevealEntry(ctx context.Context, a revealAuditEntry) bool {
-	ns, err := h.namespaces.Get(ctx, a.object.Namespace())
-	if err != nil {
-		h.failRevealAudit(ctx)
+	entry := tofuunit.Entry(a.request, a.principal, a.object, tofuunit.Detail{
+		At: time.Now().UTC(), Action: identity.ActionUnitReadSecrets, Version: a.version, ValuePath: a.path,
+		Kind: audit.KindReveal, Outcome: a.outcome, Reason: "",
+	})
 
-		return false
-	}
-
-	entry := audit.Entry{
-		At:            time.Now().UTC(),
-		Namespace:     a.object.Namespace(),
-		Subject:       a.principal.Subject,
-		IDPSubject:    "",
-		TokenID:       a.principal.TokenID,
-		Action:        string(identity.ActionUnitReadSecrets),
-		Object:        a.object.String(),
-		Version:       a.version,
-		ValuePath:     a.path,
-		ValueCount:    nil,
-		Changes:       nil,
-		SourceIP:      clientip.String(a.request),
-		UserAgent:     truncateRevealUserAgent(a.request.UserAgent()),
-		Channel:       audit.NormalizeChannel(a.request.Header.Get(revealChannelHeader)),
-		Kind:          audit.KindReveal,
-		Outcome:       a.outcome,
-		RequestID:     requestid.FromContext(ctx),
-		ObjectID:      a.object.UnitID(),
-		PrevHash:      "",
-		Hash:          "",
-		Sequence:      0,
-		FenceVersion:  0,
-		Reason:        "",
-		PrincipalKind: string(a.principal.Kind),
-		JobID:         a.principal.JobID,
-	}
-
-	if _, err := h.audit.Append(ctx, ns.Fence(), entry); err != nil {
+	if err := h.rules().Append(ctx, entry); err != nil {
 		h.logger.ErrorContext(ctx, "audit append failed", slog.String("path", a.path))
-		h.failRevealAudit(ctx)
+		h.failAudit(ctx)
 
 		return false
 	}
 
 	return true
-}
-
-// failRevealAudit records a lost audit entry: one log line with no secret
-// and no value, and one count on the failure metric through the wired
-// callback. It names no error text: the text may hold driver detail.
-func (h *Handler) failRevealAudit(ctx context.Context) {
-	h.logger.ErrorContext(ctx, "audit append failed")
-
-	if h.onAuditFailure != nil {
-		h.onAuditFailure()
-	}
-}
-
-// truncateRevealUserAgent caps s at audit.MaxUserAgentLen bytes on a UTF-8
-// rune boundary, so a multi-byte rune is never split.
-func truncateRevealUserAgent(s string) string {
-	if len(s) <= audit.MaxUserAgentLen {
-		return s
-	}
-
-	cut := audit.MaxUserAgentLen
-	for cut > 0 && s[cut]&0xC0 == 0x80 {
-		cut--
-	}
-
-	return s[:cut]
 }
 
 // writeNoStore answers err with Cache-Control: no-store, so no reveal

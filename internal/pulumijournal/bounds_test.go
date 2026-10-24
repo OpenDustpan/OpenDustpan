@@ -21,7 +21,7 @@ func boundReplayer(t *testing.T, base string, entries []byte) error {
 		return io.NopCloser(strings.NewReader(base)), nil
 	}
 	var out bytes.Buffer
-	return pulumijournal.NewReplayer(now, "3.268.0").Replay(t.Context(), open, bytes.NewReader(entries), &out)
+	return pulumijournal.NewReplayer(now, "3.268.0").Replay(t.Context(), open, [][]byte{entries}, &out)
 }
 
 // beginOnlyEntries returns a batch body with n begin entries and no states.
@@ -265,7 +265,7 @@ func TestReplayRefusesCanceledContext(t *testing.T) {
 		return io.NopCloser(strings.NewReader(`{"resources":[]}`)), nil
 	}
 	var out bytes.Buffer
-	err := pulumijournal.NewReplayer(now, "3.268.0").Replay(ctx, open, bytes.NewReader(benchCreateEntries(10)), &out)
+	err := pulumijournal.NewReplayer(now, "3.268.0").Replay(ctx, open, [][]byte{benchCreateEntries(10)}, &out)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("replay with a canceled context: err = %v, want context.Canceled", err)
 	}

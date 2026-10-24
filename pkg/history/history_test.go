@@ -146,7 +146,12 @@ func TestLedgerHoldsNoReason(t *testing.T) {
 		t.Errorf("ledger = %+v, want the fields of %+v", l, r)
 	}
 
-	if got := history.LedgerObject(r.ID).String(); got != "redactions/"+string(r.ID)+".json" {
+	got, err := history.LedgerObject(r.ID)
+	if err != nil {
+		t.Fatalf("ledger object: %v", err)
+	}
+
+	if got.String() != "redactions/"+string(r.ID)+".json" {
 		t.Errorf("ledger object = %q", got)
 	}
 }

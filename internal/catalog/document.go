@@ -78,7 +78,7 @@ func (h *Home) Validate() error {
 	case h.Delivery != "" && h.Delivery != job.DeliveryReviewRequest && h.Delivery != job.DeliveryDirectPush:
 		return fmt.Errorf("%w: delivery %q", ErrInvalid, h.Delivery)
 	default:
-		return nil
+		return checkRepository("a home in git", h.Repository)
 	}
 }
 

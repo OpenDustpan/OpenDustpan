@@ -53,9 +53,17 @@ func (h *Handler) postState(w http.ResponseWriter, r *http.Request, c call) {
 		return
 	}
 
-	ws, err := h.workspaceOf(ctx, c)
+	in := workspace.StreamInput{
+		Holder: c.principal.Subject,
+		LockID: r.URL.Query().Get("ID"),
+		MD5:    sum,
+	}
+
+	ws, err := h.workspaceOf(ctx, c, func(ctx context.Context) error {
+		return h.ws.AdmitFirstWrite(ctx, c.ref, in)
+	})
 	if err != nil {
-		h.writeError(ctx, w, err)
+		h.writeFirstRefusal(ctx, w, err, h.writeError)
 
 		return
 	}
@@ -67,24 +75,18 @@ func (h *Handler) postState(w http.ResponseWriter, r *http.Request, c call) {
 		return
 	}
 
-	allow, err := h.allowance(ctx, c.principal, ws, obj)
+	allow, err := h.rules().Allowance(ctx, c.principal, ws, obj)
 	if err != nil {
 		h.writeError(ctx, w, err)
 
 		return
 	}
 
-	in := workspace.StreamInput{
-		Holder: c.principal.Subject,
-		LockID: r.URL.Query().Get("ID"),
-		MD5:    sum,
-	}
-
 	auth := workspace.StreamAuthority{Allow: allow, Record: h.recordOverride(r, c.principal, obj)}
 
 	_, err = h.ws.WriteState(ctx, ws.ID, in, auth, r.Body)
 	if err != nil {
-		h.recordOverrideRefusal(ctx, r, c.principal, obj, err)
+		h.rules().RecordOverrideRefusal(ctx, r, c.principal, obj, err)
 		h.writeStateRefusal(ctx, w, c, err)
 
 		return
@@ -109,14 +111,7 @@ func (h *Handler) writeStateRefusal(ctx context.Context, w http.ResponseWriter, 
 	case errors.Is(refusal, workspace.ErrLocked), errors.Is(refusal, workspace.ErrLockedByOther):
 		h.writeHeld(ctx, w, c, refusal)
 	case errors.Is(refusal, workspace.ErrLockMismatch):
-		current, err := h.ws.Get(ctx, c.ref)
-		if err != nil {
-			h.writeError(ctx, w, refusal)
-
-			return
-		}
-
-		h.writeConflict(w, current.Lock)
+		h.writeHeldOrConflict(ctx, w, c, refusal)
 	default:
 		h.writeError(ctx, w, refusal)
 	}
@@ -153,7 +148,7 @@ func (h *Handler) forceUnlockWorkspace(w http.ResponseWriter, r *http.Request, c
 		return
 	}
 
-	if !h.permits(ctx, c.principal, identity.ActionUnitWriteForced, obj) {
+	if !h.rules().Permits(ctx, c.principal, identity.ActionUnitWriteForced, obj) {
 		h.writeError(
 			ctx,
 			w,
@@ -163,7 +158,7 @@ func (h *Handler) forceUnlockWorkspace(w http.ResponseWriter, r *http.Request, c
 		return
 	}
 
-	allow, err := h.allowance(ctx, c.principal, ws, obj)
+	allow, err := h.rules().Allowance(ctx, c.principal, ws, obj)
 	if err != nil {
 		h.writeError(ctx, w, err)
 
@@ -193,7 +188,7 @@ func (h *Handler) forceUnlockWorkspace(w http.ResponseWriter, r *http.Request, c
 	}
 
 	if err != nil {
-		h.recordOverrideRefusal(ctx, r, c.principal, obj, err)
+		h.rules().RecordOverrideRefusal(ctx, r, c.principal, obj, err)
 		h.writeError(ctx, w, err)
 
 		return

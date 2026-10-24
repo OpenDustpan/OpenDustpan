@@ -56,6 +56,12 @@ func (s *Store) SetState(ctx context.Context, state maintenance.State) error {
 
 	var n int64
 
+	unlock, lockErr := s.lockEnter(ctx, state)
+	if lockErr != nil {
+		return lockErr
+	}
+	defer unlock()
+
 	err := s.inControlTx(ctx, func(q *db.Queries) error {
 		if err := clearJournalOnEnter(ctx, q, state); err != nil {
 			return err
@@ -97,6 +103,12 @@ func (s *Store) SetStateIf(ctx context.Context, expected, next maintenance.State
 
 	var changed int64
 
+	unlock, lockErr := s.lockEnter(ctx, next)
+	if lockErr != nil {
+		return lockErr
+	}
+	defer unlock()
+
 	err := s.inControlTx(ctx, func(q *db.Queries) error {
 		if err := clearJournalOnEnter(ctx, q, next); err != nil {
 			return err
@@ -127,4 +139,23 @@ func (s *Store) SetStateIf(ctx context.Context, expected, next maintenance.State
 	}
 
 	return nil
+}
+
+// lockEnter holds enterGate exclusive when next is maintenance mode, so that
+// the checked writes in flight end and no new one starts until the enter
+// ends. It returns the function that releases the gate. It returns an error
+// for both the context error and maintenance.ErrUnavailable when ctx ends
+// during the wait. A move back to normal takes no gate: no writer is refused
+// then, and none competes for the lock.
+func (s *Store) lockEnter(ctx context.Context, next maintenance.State) (func(), error) {
+	if next != maintenance.StateMaintenance {
+		return func() {}, nil
+	}
+
+	unlock, err := s.enterGate.lock(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("store installation state sqlite database: %w: %w", err, maintenance.ErrUnavailable)
+	}
+
+	return unlock, nil
 }

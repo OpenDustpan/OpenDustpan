@@ -34,6 +34,37 @@ func testCreateGet(t *testing.T, h Harness) {
 	}
 }
 
+func testCreateTrigger(t *testing.T, h Harness) {
+	t.Helper()
+
+	f := setUp(t, h)
+
+	withRef := newJob(f.unit, job.OperationPlan, "")
+	withRef.Trigger = &job.TriggerRef{ID: "trg-1", Saver: "user:ada"}
+	withRef.Source = job.SourceTrigger
+
+	plain := create(t, h, f, newJob(f.unit, job.OperationPlan, ""), nil)
+	stored := create(t, h, f, withRef, nil)
+
+	for _, tt := range []struct {
+		name string
+		id   job.ID
+		want *job.TriggerRef
+	}{
+		{"a job that a trigger started", stored.ID, &job.TriggerRef{ID: "trg-1", Saver: "user:ada"}},
+		{"a job that no trigger started", plain.ID, nil},
+	} {
+		got, err := h.Jobs.Get(t.Context(), tt.id)
+		if err != nil {
+			t.Fatalf("%s: Get = %v", tt.name, err)
+		}
+
+		if (got.Trigger == nil) != (tt.want == nil) || (tt.want != nil && *got.Trigger != *tt.want) {
+			t.Errorf("%s: trigger = %+v, want %+v", tt.name, got.Trigger, tt.want)
+		}
+	}
+}
+
 func testGetUnknown(t *testing.T, h Harness) {
 	t.Helper()
 

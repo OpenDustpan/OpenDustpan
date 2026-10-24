@@ -32,7 +32,8 @@ import (
 var (
 	// ErrInvalidObject reports an object reference that fails validation.
 	ErrInvalidObject = errors.New("invalid context object")
-	// ErrInvalidContext reports a field value out of its bounds.
+	// ErrInvalidContext reports a field value out of its bounds. A
+	// *RuleError wraps it and names the rule that the value breaks.
 	ErrInvalidContext = errors.New("invalid context")
 	// ErrFieldFromCode reports an API write of a field that the output of
 	// the same object sets. The code is the home of that field. The error
@@ -294,20 +295,45 @@ func (f Fields) Set() []Field {
 	return out
 }
 
-// Validate reports whether each field of f is in its bounds. It returns
-// ErrInvalidContext otherwise.
+// RuleError reports a field value out of its bounds. Rule names the field
+// and the rule that the value breaks, in words that a person can act on. It
+// matches ErrInvalidContext with errors.Is.
+type RuleError struct {
+	Rule string
+}
+
+// Error implements error.
+func (e *RuleError) Error() string {
+	return ErrInvalidContext.Error() + ": " + e.Rule
+}
+
+// Is reports whether target is ErrInvalidContext.
+func (e *RuleError) Is(target error) bool {
+	return target == ErrInvalidContext
+}
+
+// breaks returns a *RuleError with the rule that the text of rule and args
+// gives.
+func breaks(rule string, args ...any) error {
+	return &RuleError{Rule: fmt.Sprintf(rule, args...)}
+}
+
+// Validate reports whether each field of f is in its bounds. It returns a
+// *RuleError, which matches ErrInvalidContext, otherwise.
 func (f Fields) Validate() error {
 	switch {
 	case !validMultilineText(f.Summary, MaxSummaryBytes):
-		return fmt.Errorf("%w: summary", ErrInvalidContext)
+		return breaks("summary must be valid UTF-8 of %d bytes or fewer, "+
+			"with no control character other than a line break or a tab", MaxSummaryBytes)
 	case !validMultilineText(f.Runbook, MaxRunbookBytes):
-		return fmt.Errorf("%w: runbook", ErrInvalidContext)
+		return breaks("runbook must be valid UTF-8 of %d bytes or fewer, "+
+			"with no control character other than a line break or a tab", MaxRunbookBytes)
 	case !validText(f.OnCall, MaxOnCallBytes):
-		return fmt.Errorf("%w: on-call", ErrInvalidContext)
+		return breaks("onCall must be valid UTF-8 of %d bytes or fewer, with no control character", MaxOnCallBytes)
 	case len(f.Owners) > MaxOwners:
-		return fmt.Errorf("%w: more than %d owners", ErrInvalidContext, MaxOwners)
+		return breaks("owners must have %d entries or fewer", MaxOwners)
 	case len(f.Links) > MaxLinks:
-		return fmt.Errorf("%w: more than %d links", ErrInvalidContext, MaxLinks)
+		return breaks("links must have %d entries or fewer", MaxLinks)
 	}
 
 	for _, o := range f.Owners {
@@ -326,20 +352,21 @@ func (f Fields) Validate() error {
 }
 
 // Validate reports whether l has a title, an http or https URL and a known
-// kind. It returns ErrInvalidContext otherwise.
+// kind. It returns a *RuleError, which matches ErrInvalidContext, otherwise.
 func (l Link) Validate() error {
 	switch {
 	case strings.TrimSpace(l.Title) == "" || !validText(l.Title, MaxLinkTitleBytes):
-		return fmt.Errorf("%w: each link needs a title", ErrInvalidContext)
+		return breaks("each link needs a title of 1 to %d bytes, with no control character", MaxLinkTitleBytes)
 	case len(l.URL) > MaxURLBytes || !webURL(l.URL):
-		return fmt.Errorf("%w: each link needs an http or https URL", ErrInvalidContext)
+		return breaks("each link needs an http or https URL of %d bytes or fewer", MaxURLBytes)
 	}
 
 	switch l.Kind {
 	case "", LinkDocs, LinkRunbook, LinkDashboard, LinkRepository, LinkOther:
 		return nil
 	default:
-		return fmt.Errorf("%w: link kind %q", ErrInvalidContext, l.Kind)
+		return breaks("link kind %q must be one of %s, %s, %s, %s and %s", l.Kind,
+			LinkDocs, LinkRunbook, LinkDashboard, LinkRepository, LinkOther)
 	}
 }
 
@@ -366,18 +393,19 @@ type Owner struct {
 // ParseOwner parses one owner. "group:<name>" names a group and
 // "principal:<ID>" names a principal; the server resolves both, so the graph
 // and a list by owner can use them. Other text is an owner of the kind text.
-// It returns ErrInvalidContext for an empty owner, an owner above
-// MaxOwnerBytes or control characters, and for a group or principal with an
-// invalid name.
+// It returns a *RuleError, which matches ErrInvalidContext, for an empty
+// owner, an owner above MaxOwnerBytes or control characters, and for a group
+// or principal with an invalid name.
 func ParseOwner(s string) (Owner, error) {
 	if strings.TrimSpace(s) == "" || !validText(s, MaxOwnerBytes) {
-		return Owner{}, fmt.Errorf("%w: owner %q", ErrInvalidContext, s)
+		return Owner{}, breaks("owner %q must be valid UTF-8 of 1 to %d bytes, with no control character",
+			s, MaxOwnerBytes)
 	}
 
 	for _, k := range []OwnerKind{OwnerGroup, OwnerPrincipal} {
 		if v, ok := strings.CutPrefix(s, string(k)+":"); ok {
 			if !ident.Valid(v, maxNameLength) {
-				return Owner{}, fmt.Errorf("%w: owner %q", ErrInvalidContext, s)
+				return Owner{}, breaks("owner %q must name a %s with a valid name after %q", s, k, string(k)+":")
 			}
 
 			return Owner{Kind: k, Value: v}, nil

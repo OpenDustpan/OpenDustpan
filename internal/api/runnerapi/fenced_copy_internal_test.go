@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/runner"
 	"opendustpan.org/opendustpan/pkg/runner/protocol"
@@ -45,7 +46,10 @@ func TestWriteErrorFencedCopy(t *testing.T) {
 	}
 
 	managementBody, err := json.Marshal(
-		managementError{Message: namespace.ErrFenced.Error(), Code: http.StatusConflict},
+		managementError{
+			Message: namespace.ErrFenced.Error(), Code: http.StatusConflict, ErrorCode: errcode.NamespaceFenced,
+			ErrorArgs: nil,
+		},
 	)
 	if err != nil {
 		t.Fatalf("marshal management error: %v", err)
@@ -61,7 +65,12 @@ func TestWriteErrorFencedCopy(t *testing.T) {
 	}
 
 	otherManagementBody, err := json.Marshal(
-		managementError{Message: "the runner is retired", Code: http.StatusConflict},
+		managementError{
+			Message:   "the runner is retired",
+			Code:      http.StatusConflict,
+			ErrorCode: errcode.RunnerRetired,
+			ErrorArgs: nil,
+		},
 	)
 	if err != nil {
 		t.Fatalf("marshal management error: %v", err)

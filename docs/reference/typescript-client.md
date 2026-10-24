@@ -93,6 +93,12 @@ make clients-check      # fail if the files differ from a fresh run
 make clients-ts-test    # compile with tsc and run the tests, needs Node 22 and tsc
 ```
 
+The generator owns `src/`, `package.json` and `tsconfig.json`. A file there
+that a run does not give, also a file without the header, makes
+`make clients-check` fail with `stray: <path>`, and `make clients-generate`
+refuses to write until you remove the file. Other files, for example
+`README.md` and `test/`, stay as they are.
+
 `make clients-check` is part of `make lint`. The program has a stable command
 line:
 
@@ -112,6 +118,12 @@ go run ./cmd/clientgen -target typescript -description openapi.json -out clients
 | `-check` | Write nothing. Exit with 1 and list the differences. |
 
 The package records the SHA-256 of the description in `metadata.descriptionSha256`.
-`info.version` alone is not a safe pin. The package also exports `description`,
-the text of the description. The SHA-256 of its UTF-8 bytes is
-`metadata.descriptionSha256`.
+`info.version` alone is not a safe pin. The subpath
+`@opendustpan/client/description` exports `description`, the text of the
+description. The SHA-256 of its UTF-8 bytes is `metadata.descriptionSha256`.
+The root of the package does not export it, so an import of the client does
+not load the text:
+
+```ts
+import { description } from "@opendustpan/client/description";
+```

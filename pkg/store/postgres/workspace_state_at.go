@@ -21,7 +21,7 @@ func (s *Store) WorkspaceStateAt(ctx context.Context, id workspace.ID, at time.T
 	// come from the same state of the database.
 	tx, err := s.pool.BeginTx(ctx, s.snapshotOptions())
 	if err != nil {
-		return workspace.StateAt{}, fmt.Errorf("begin read transaction: %w", err)
+		return workspace.StateAt{}, fmt.Errorf("begin read transaction: %w", readConflict(err))
 	}
 
 	defer func() {
@@ -38,7 +38,7 @@ func (s *Store) WorkspaceStateAt(ctx context.Context, id workspace.ID, at time.T
 	}
 
 	if err != nil {
-		return workspace.StateAt{}, fmt.Errorf("select workspace: %w", err)
+		return workspace.StateAt{}, fmt.Errorf("select workspace: %w", readConflict(err))
 	}
 
 	row, err := q.WorkspaceStateAt(ctx, db.WorkspaceStateAtParams{
@@ -49,7 +49,7 @@ func (s *Store) WorkspaceStateAt(ctx context.Context, id workspace.ID, at time.T
 	}
 
 	if err != nil {
-		return workspace.StateAt{}, fmt.Errorf("select state version: %w", err)
+		return workspace.StateAt{}, fmt.Errorf("select state version: %w", readConflict(err))
 	}
 
 	return workspace.StateAt{
@@ -68,7 +68,7 @@ func noWorkspaceStateAt(ctx context.Context, q *db.Queries, id workspace.ID) err
 	}
 
 	if err != nil {
-		return fmt.Errorf("select first state version: %w", err)
+		return fmt.Errorf("select first state version: %w", readConflict(err))
 	}
 
 	return &workspace.NoStateAtError{First: codec.FromMillis(first)}

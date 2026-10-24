@@ -14,7 +14,8 @@ const InventoryTool = "pulumi"
 // ExportAt returns the checkpoint that held the state of the stack at the time
 // at, and the StateAt that names its update. A time before the first
 // checkpoint returns ErrNoStateAt, and its text names the end time of the
-// first update that saved a checkpoint. When an update ran at the time, the
+// first update that saved a checkpoint. For a stack with a checkpoint, the
+// error also holds the *NoStateAtError with that time. When an update ran at the time, the
 // StateAt names it in Running, and the checkpoint is still the one of the
 // update before it. The checkpoint is the deployment as ExportVersion
 // returns it.
@@ -39,7 +40,7 @@ func (s *Updates) ExportAt(ctx context.Context, ref Ref, at time.Time) (Checkpoi
 
 		return Checkpoint{}, StateAt{}, fmt.Errorf(
 			"%w: the first state of %s is at %s (%d ms)",
-			ErrNoStateAt, ref, none.First.UTC().Format(time.RFC3339), none.First.UnixMilli(),
+			none, ref, none.First.UTC().Format(time.RFC3339), none.First.UnixMilli(),
 		)
 	}
 

@@ -229,6 +229,12 @@ func parseStartRestoreRequest(w http.ResponseWriter, r *http.Request) (startRest
 
 	req.BackupID = strings.TrimSpace(req.BackupID)
 
+	// A restore of an ID that is not a backup ID can never succeed, so the
+	// route refuses it before the restore service makes a restore row.
+	if _, err := backup.ParseID(req.BackupID); err != nil {
+		return startRestoreRequest{}, err
+	}
+
 	return req, nil
 }
 

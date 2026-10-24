@@ -16,6 +16,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/store/internal/codec"
 	"opendustpan.org/opendustpan/pkg/store/internal/jobstore"
 	"opendustpan.org/opendustpan/pkg/store/postgres/internal/db"
+	"opendustpan.org/opendustpan/pkg/workspace"
 )
 
 var _ manuallock.Store = (*Store)(nil)
@@ -31,6 +32,15 @@ func (s *Store) PutLock(ctx context.Context, l manuallock.Lock, fence namespace.
 		id, err := manualLockObject(ctx, q, l.Target)
 		if err != nil {
 			return err
+		}
+
+		// A create of a workspace reads the manual lock of its namespace under
+		// the shared form of this lock, so this put waits for a create that
+		// runs, and a create that starts later reads the new lock.
+		if l.Target.Kind == manuallock.KindNamespace {
+			if lockErr := q.LockNamespaceCreatesExclusive(ctx, l.Target.Namespace().String()); lockErr != nil {
+				return fmt.Errorf("lock the creates of namespace %q: %w", l.Target.Namespace(), lockErr)
+			}
 		}
 
 		n, err := q.InsertManualLock(ctx, db.InsertManualLockParams{
@@ -445,4 +455,41 @@ func (s *Store) deleteHeldLock(
 	}
 
 	return nil
+}
+
+// refuseUnderNamespaceLock returns an error that matches workspace.ErrLocked
+// and manuallock.ErrLocked while a manual lock covers the namespace of ref. The
+// create of a workspace calls it in its transaction, so a lock that commits
+// before the create is never missed. A new workspace is in no collection and
+// has no lock of its own, so only the lock of the namespace covers it. The
+// request passes when passFrom, the start of the phase of its job, is not zero
+// and is before the start of the lock: the phase of a job runs to its end.
+//
+// Defense in depth: workspace.Service.Create checks the same lock before it
+// calls the store. This check does not rely on that one, and it also refuses
+// a lock that commits between that check and the create.
+func refuseUnderNamespaceLock(ctx context.Context, q *db.Queries, ref workspace.Ref, passFrom time.Time) error {
+	target := manuallock.NamespaceTarget(ref.Namespace)
+
+	id, err := manualLockObject(ctx, q, target)
+	if err != nil {
+		return err
+	}
+
+	lock, err := readManualLock(ctx, q, target, id)
+	if errors.Is(err, manuallock.ErrNotLocked) {
+		return nil
+	}
+
+	if err != nil {
+		return err
+	}
+
+	if !passFrom.IsZero() && passFrom.Before(lock.Since) {
+		return nil
+	}
+
+	return fmt.Errorf("%w: %w", workspace.ErrLocked, &manuallock.LockedError{
+		Lock: lock, Noun: "workspace", Name: ref.String(),
+	})
 }

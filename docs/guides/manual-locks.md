@@ -81,16 +81,19 @@ When the lock goes, the next dispatch takes the queued job.
 ## What the tools print
 
 The text names the stack or workspace in the words of the tool, the holder, the time and the
-reason. The Pulumi CLI prints, for a stack in a locked collection:
+reason. Then it names the route that the holder uses to remove the lock. The Pulumi CLI prints, for a stack in a locked collection:
 
 ```text
-stack acme/web/prod is in collection acme/payments, which has a manual lock by alice since 2026-10-19T10:00:00Z: change window closed
+stack acme/web/prod is in collection acme/payments, which has a manual lock by alice since 2026-10-19T10:00:00Z: change window closed. To remove the lock, the holder sends DELETE /api/dustpan/v1/namespaces/acme/collections/payments/lock.
 ```
 
 For a lock on the stack itself the text starts with `stack acme/web/prod has a
-manual lock by`. For a lock on the namespace it starts with `stack acme/web/prod
-is in namespace acme, which has a manual lock by`. OpenTofu names a `workspace`
-in the same way.
+manual lock by`, and the route is `/api/inventory/unit-lock?unit=pulumi:acme/web/prod`.
+For a lock on the namespace it starts with `stack acme/web/prod
+is in namespace acme, which has a manual lock by`, and the route is
+`/api/dustpan/v1/namespaces/acme/lock`. The TFE-compatible API gives the same
+text with the word `workspace`. A person with `unit:manage` removes a lock of
+another holder with the force-unlock route of the object (see "Remove a lock").
 
 The OpenTofu HTTP backend shows the lock information of the answer 423. This is
 the output of `tofu apply` for a lock of `admin` on the workspace
@@ -130,6 +133,10 @@ A manual lock is on one stack, one workspace, one collection or one namespace.
   that moment. One that leaves the collection is not covered any more.
 - A lock on a namespace covers each stack and workspace of the namespace, in a
   collection or not, and each one that someone creates later.
+- While a namespace has a lock, the server creates no OpenTofu workspace in it.
+  The first `LOCK` or `POST` of a new workspace answers 423, and the server
+  creates nothing. A job whose phase started before the lock can still create
+  its workspace, as it can still lock the workspaces that exist.
 - A stack or workspace can have its own lock, be in a locked collection and be in
   a locked namespace. The nearest lock shows first: its own lock, then the lock
   of its collection, then the lock of its namespace. Removing the nearest lock
@@ -160,7 +167,9 @@ force-unlock.
 ## Take a lock
 
 The body gives the reason. The reason is required and has at most 500
-characters. It has no line break and no other control character.
+characters. It has no line break and no other control character. The body must
+be valid UTF-8, with no lone surrogate escape such as `\ud800`. The server
+refuses such a body with 400 and does not change the text.
 
 For a stack or workspace, `PUT /api/inventory/unit-lock?unit=<unit reference>`:
 

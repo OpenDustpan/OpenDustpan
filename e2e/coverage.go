@@ -25,6 +25,7 @@ import (
 	serverapi "opendustpan.org/opendustpan/internal/api/server"
 	tfeapi "opendustpan.org/opendustpan/internal/api/tfe"
 	tofuhttpapi "opendustpan.org/opendustpan/internal/api/tofuhttp"
+	triggersapi "opendustpan.org/opendustpan/internal/api/triggers"
 	"opendustpan.org/opendustpan/internal/baseurl"
 	"opendustpan.org/opendustpan/internal/outputsharesvc"
 	registryservice "opendustpan.org/opendustpan/internal/registry/service"
@@ -55,6 +56,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/stack"
 	"opendustpan.org/opendustpan/pkg/stack/stacktest"
 	"opendustpan.org/opendustpan/pkg/store/schema"
+	"opendustpan.org/opendustpan/pkg/trigger"
 	"opendustpan.org/opendustpan/pkg/workspace"
 )
 
@@ -97,12 +99,13 @@ func ServedRoutes(tb testing.TB) []RouteRef {
 	sinkRoutes := coverageSinkRoutes(tb)
 	jobRoutes := coverageJobRoutes(tb, namespaces)
 	driftRoutes := coverageDriftRoutes(tb, namespaces)
+	triggerRoutes := coverageTriggerRoutes(tb, namespaces)
 	registryRoutes := coverageRegistryRoutes(tb)
 	server := coverageServerRoutes(tb)
 
 	out := slices.Concat(
 		pulumi, tfe, tofuHTTP, inventory, auditRoutes, contextRoutes, profileRoutes, sinkRoutes, jobRoutes,
-		driftRoutes, registryRoutes, server,
+		driftRoutes, triggerRoutes, registryRoutes, server,
 	)
 	out = slices.Grow(out, probeRouteCount)
 
@@ -415,6 +418,7 @@ func coverageTFERoutes(tb testing.TB, namespaces *namespace.Service) []RouteRef 
 		Logger:         slog.New(slog.DiscardHandler),
 		Namespaces:     namespaces,
 		Workspaces:     coverageWorkspaces{},
+		OutputChecker:  nil,
 		BaseURL:        baseurl.Resolver{},
 		Gate:           nil,
 		MaxStateBytes:  0,
@@ -482,6 +486,14 @@ func (coverageTofuHTTPWorkspaces) GetByID(_ context.Context, _ workspace.ID) (wo
 
 func (coverageTofuHTTPWorkspaces) Create(_ context.Context, _ workspace.Ref) (workspace.Workspace, error) {
 	return workspace.Workspace{}, workspace.ErrNotFound
+}
+
+func (coverageTofuHTTPWorkspaces) AdmitFirstWrite(_ context.Context, _ workspace.Ref, _ workspace.StreamInput) error {
+	return workspace.ErrNotFound
+}
+
+func (coverageTofuHTTPWorkspaces) AdmitFirstLock(_ context.Context, _ workspace.Ref, _ workspace.LockRequest) error {
+	return workspace.ErrNotFound
 }
 
 func (coverageTofuHTTPWorkspaces) LockWithIDForJob(
@@ -711,8 +723,18 @@ func coverageInventoryRoutes(tb testing.TB, namespaces *namespace.Service) []Rou
 		tb.Fatalf("output sharing service: %v", err)
 	}
 
+	outputs, err := outputsharesvc.NewReader(outputsharesvc.ReaderConfig{
+		States:  coverageStates{},
+		Checker: coverageOutputChecker{},
+		Sources: map[string]outputshare.Outputs{"pulumi": coverageOutputSource{}},
+	})
+	if err != nil {
+		tb.Fatalf("output reader: %v", err)
+	}
+
 	handler, err := inventoryapi.NewHandler(inventoryapi.Config{
 		OutputSharing: sharing,
+		Outputs:       outputs,
 		Views:         coverageViews(tb),
 		Locks:         locks,
 		PublicURL:     "",
@@ -751,6 +773,30 @@ func (coverageOutputSharing) SetSetting(
 	_ context.Context, _ namespace.Name, _ outputshare.Default, _ namespace.Fence, _ audit.Entry,
 ) error {
 	return nil
+}
+
+// coverageStates, coverageOutputChecker and coverageOutputSource let the
+// coverage check build the reader of outputs. They answer nothing: the check
+// only lists the routes.
+type (
+	coverageStates        struct{}
+	coverageOutputChecker struct{}
+	coverageOutputSource  struct{}
+)
+
+func (coverageStates) Latest(_ context.Context, _ identity.Object) (outputshare.State, error) {
+	return outputshare.State{ID: "", ClientEncrypted: false}, nil
+}
+
+//nolint:gocritic // The port passes the request by value.
+func (coverageOutputChecker) CheckRead(_ context.Context, _ outputshare.ReadRequest) (outputshare.Decision, error) {
+	return outputshare.Decision{Kind: "", Rule: "", Secrets: false}, outputshare.ErrUnknownProducer
+}
+
+func (coverageOutputSource) Outputs(
+	_ context.Context, _ identity.Object, _ string,
+) ([]outputshare.Output, error) {
+	return nil, outputshare.ErrUnknownProducer
 }
 
 // coverageContextRoutes returns the context adapter's route table.
@@ -809,6 +855,46 @@ func coverageJobRoutes(tb testing.TB, namespaces *namespace.Service) []RouteRef 
 	})
 	if err != nil {
 		tb.Fatalf("jobs handler: %v", err)
+	}
+
+	routes := handler.Routes()
+	out := make([]RouteRef, 0, len(routes))
+
+	for _, route := range routes {
+		out = append(out, RouteRef{Method: route.Method, Path: route.Path})
+	}
+
+	return out
+}
+
+// coverageTriggerRoutes returns the trigger adapter's route table.
+func coverageTriggerRoutes(tb testing.TB, namespaces *namespace.Service) []RouteRef {
+	tb.Helper()
+
+	manager, err := trigger.NewManager(trigger.ManagerConfig{
+		Store: struct{ trigger.Store }{nil}, Dispatcher: struct{ trigger.Dispatcher }{nil},
+		Authorizer: coverageAuthorizer{}, Savers: struct{ trigger.SaverCheck }{nil},
+		Units: struct{ trigger.Units }{nil}, Fences: struct{ trigger.Fences }{nil}, Now: nil, NewID: nil,
+	})
+	if err != nil {
+		tb.Fatalf("trigger manager: %v", err)
+	}
+
+	handler, err := triggersapi.NewHandler(triggersapi.Config{
+		Namespaces:     namespaces,
+		Units:          coverageReader{},
+		Store:          struct{ trigger.Store }{nil},
+		Manager:        manager,
+		Authenticator:  coverageAuthenticator{},
+		Authorizer:     coverageAuthorizer{},
+		Audit:          coverageAuditStore{},
+		OnAuditFailure: nil,
+		DenialLimiter:  nil,
+		Sessions:       nil,
+		Logger:         slog.New(slog.DiscardHandler),
+	})
+	if err != nil {
+		tb.Fatalf("triggers handler: %v", err)
 	}
 
 	routes := handler.Routes()
@@ -1435,6 +1521,7 @@ func CoverageAllowlist() []AllowEntry {
 		manualLockAllowEntries(),
 		jobAllowEntries(),
 		driftAllowEntries(),
+		triggerAllowEntries(),
 		outputSharingAllowEntries(),
 		preferencesAllowEntries(),
 		savedViewAllowEntries(),
@@ -2502,6 +2589,39 @@ func jobAllowEntries() []AllowEntry {
 	}
 }
 
+// triggerAllowEntries covers the routes of the run triggers. No CLI calls them:
+// the console and the clients of the API do. The steps of TestRunTriggers call
+// each of them with the personal token of a person, on a unit that the real
+// OpenTofu CLI made.
+func triggerAllowEntries() []AllowEntry {
+	const (
+		base = "/api/dustpan/v1/namespaces/{namespace}/units/{unit_id}/triggers"
+		one  = base + "/{trigger_id}"
+	)
+
+	return allowRoutes(
+		"TestRunTriggers",
+		"Console and client route: no CLI calls it. The steps of TestRunTriggers call it with the token of a person.",
+		RouteRef{Method: http.MethodGet, Path: base},
+		RouteRef{Method: http.MethodPost, Path: base},
+		RouteRef{Method: http.MethodGet, Path: one},
+		RouteRef{Method: http.MethodPut, Path: one},
+		RouteRef{Method: http.MethodDelete, Path: one},
+		RouteRef{Method: http.MethodPost, Path: one + "/fire"},
+	)
+}
+
+// allowRoutes builds the allow entries of routes that one test covers for one
+// reason.
+func allowRoutes(test, reason string, routes ...RouteRef) []AllowEntry {
+	out := make([]AllowEntry, 0, len(routes))
+	for _, r := range routes {
+		out = append(out, AllowEntry{Method: r.Method, Path: r.Path, CoveringTest: test, Reason: reason})
+	}
+
+	return out
+}
+
 // driftAllowEntries covers the routes that start a drift check and read the
 // latest drift result of a unit. No CLI calls them: the console and the clients
 // of the API do. The harness steps of TestDriftAPI call each of them through
@@ -2529,7 +2649,8 @@ func driftAllowEntries() []AllowEntry {
 // of a namespace. No CLI calls them: the console and the clients of the API
 // do. The setting step of TestOutputSharingRules reads the setting of a new
 // namespace, refuses a change by a viewer and a value that is not valid, and
-// changes it as the admin.
+// changes it as the admin. The reader steps of the same test read the outputs
+// of a unit with a principal that holds unit:read-outputs only.
 func outputSharingAllowEntries() []AllowEntry {
 	const (
 		path = "/api/dustpan/v1/namespaces/{namespace}/output-sharing"
@@ -2541,6 +2662,11 @@ func outputSharingAllowEntries() []AllowEntry {
 	return []AllowEntry{
 		{Method: http.MethodGet, Path: path, CoveringTest: test, Reason: why},
 		{Method: http.MethodPut, Path: path, CoveringTest: test, Reason: why},
+		{
+			Method: http.MethodGet, Path: "/api/dustpan/v1/namespaces/{namespace}/units/{unit_id}/outputs",
+			CoveringTest: test, Reason: "Console and client route: no CLI calls it. The reader steps of " + test +
+				" read the outputs of a stack and of a workspace through the API.",
+		},
 	}
 }
 
