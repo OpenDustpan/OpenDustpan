@@ -117,7 +117,7 @@ func (h *Handler) listTriggers(w http.ResponseWriter, r *http.Request, p identit
 
 	out := listResponse{Triggers: make([]triggerResponse, 0, len(list))}
 	for i := range list {
-		out.Triggers = append(out.Triggers, h.toResponse(r, &list[i], t))
+		out.Triggers = append(out.Triggers, h.toResponse(r, p, &list[i], t))
 	}
 
 	h.writeJSON(ctx, w, http.StatusOK, out)
@@ -134,7 +134,7 @@ func (h *Handler) getTrigger(w http.ResponseWriter, r *http.Request, p identity.
 		return
 	}
 
-	h.writeJSON(ctx, w, http.StatusOK, h.toResponse(r, &got, t))
+	h.writeJSON(ctx, w, http.StatusOK, h.toResponse(r, p, &got, t))
 }
 
 // createTrigger answers POST .../units/{unit_id}/triggers with the trigger that
@@ -158,7 +158,7 @@ func (h *Handler) createTrigger(w http.ResponseWriter, r *http.Request, p identi
 	}
 
 	w.Header().Set("Location", triggerLocation(t, got.ID))
-	h.writeJSON(ctx, w, http.StatusCreated, h.toResponse(r, &got, t))
+	h.writeJSON(ctx, w, http.StatusCreated, h.toResponse(r, p, &got, t))
 }
 
 // replaceTrigger answers PUT .../triggers/{trigger_id} with the trigger that the
@@ -181,7 +181,7 @@ func (h *Handler) replaceTrigger(w http.ResponseWriter, r *http.Request, p ident
 		return
 	}
 
-	h.writeJSON(ctx, w, http.StatusOK, h.toResponse(r, &got, t))
+	h.writeJSON(ctx, w, http.StatusOK, h.toResponse(r, p, &got, t))
 }
 
 // deleteTrigger answers DELETE .../triggers/{trigger_id} with 204.
@@ -396,9 +396,9 @@ func (h *Handler) saveInput(w http.ResponseWriter, r *http.Request, t *target) (
 	return in, nil
 }
 
-// toResponse maps a trigger to its wire shape. t is the target of the request:
-// its unit is the unit of the trigger.
-func (h *Handler) toResponse(r *http.Request, got *trigger.Trigger, t *target) triggerResponse {
+// toResponse maps a trigger to its wire shape for the caller p. t is the target
+// of the request: its unit is the unit of the trigger.
+func (h *Handler) toResponse(r *http.Request, p identity.Principal, got *trigger.Trigger, t *target) triggerResponse {
 	out := triggerResponse{
 		ID: string(got.ID), Namespace: got.Unit.Namespace.String(),
 		Unit: unitResponse{ID: t.unit.UnitID, Tool: toolLabel(t.unit.Tool), Name: t.unit.Name},
@@ -411,16 +411,21 @@ func (h *Handler) toResponse(r *http.Request, got *trigger.Trigger, t *target) t
 	}
 
 	if got.Kind == trigger.KindFollows {
-		out.Source = h.sourceResponse(r, got.Source)
+		out.Source = h.sourceResponse(r, p, got.Source)
 	}
 
 	return out
 }
 
 // sourceResponse describes the source unit of a follows trigger. A source that
-// the inventory no longer knows has its ID only.
-func (h *Handler) sourceResponse(r *http.Request, source graph.Unit) *unitResponse {
+// the inventory no longer knows, and a source that p cannot read, have their ID
+// and tool only.
+func (h *Handler) sourceResponse(r *http.Request, p identity.Principal, source graph.Unit) *unitResponse {
 	out := &unitResponse{ID: source.ID, Tool: toolLabel(source.Tool), Name: ""}
+
+	if !h.manager.CanRead(r.Context(), p, source) {
+		return out
+	}
 
 	if e, err := h.units.GetUnit(r.Context(), source.ID); err == nil && e.Namespace == source.Namespace {
 		out.Tool, out.Name = toolLabel(e.Tool), e.Name
@@ -430,15 +435,38 @@ func (h *Handler) sourceResponse(r *http.Request, source graph.Unit) *unitRespon
 }
 
 // cycleUnits describes the units of a loop in order, for the answer of a
-// refused save.
+// refused save. It answers only the units that the manager marked readable for
+// the caller.
+//
+// Defense in depth: the manager gives no name to a unit that the caller cannot
+// read. This check stays so that a cycle error that did not pass the manager
+// names no unit, and it does not rely on the manager.
 func cycleUnits(cycle *trigger.CycleError) []unitResponse {
 	out := make([]unitResponse, 0, len(cycle.Path))
 
 	for _, u := range cycle.Path {
+		if !cycle.Readable[u] {
+			continue
+		}
+
 		out = append(out, unitResponse{ID: u.ID, Tool: toolLabel(u.Tool), Name: cycle.Names[u]})
 	}
 
 	return out
+}
+
+// cycleMessage is the message of the answer of a refused save that closes a
+// loop. A cycle error with no readable marks names no unit.
+//
+// Defense in depth: the manager marks the units that the caller may read. This
+// check stays so that a cycle error that did not pass the manager names no
+// unit, and it does not rely on the manager.
+func cycleMessage(cycle *trigger.CycleError) string {
+	if cycle.Readable == nil {
+		return trigger.ErrCycle.Error()
+	}
+
+	return refusal.Clean(cycle.Error(), maxMessageBytes)
 }
 
 // toolLabel maps a stored lowercase tool code to the tool label of the

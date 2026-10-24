@@ -153,6 +153,14 @@ func (m *Manager) SaverOK(ctx context.Context, t *Trigger) bool {
 	return m.savers.CheckStart(ctx, *t) == nil
 }
 
+// CanRead reports whether caller holds unit:read on unit. A refusal, a unit
+// that is gone and a failed check all report false.
+func (m *Manager) CanRead(ctx context.Context, caller identity.Principal, unit graph.Unit) bool {
+	_, err := m.readable(ctx, caller, unit)
+
+	return err == nil
+}
+
 // Replace saves the trigger id of the namespace in.Namespace again. The unit
 // and the kind do not change. The caller becomes the last saver, and so takes
 // over the trigger. It returns the errors of Create, and ErrNotFound for an
@@ -365,7 +373,7 @@ func (m *Manager) save(ctx context.Context, c *saveCall) (Trigger, error) {
 
 	err = t.Validate()
 	if err != nil {
-		return Trigger{}, m.named(ctx, err)
+		return Trigger{}, m.named(ctx, c.caller, err)
 	}
 
 	// The saver must be able to start the trigger later: a principal with
@@ -384,7 +392,7 @@ func (m *Manager) save(ctx context.Context, c *saveCall) (Trigger, error) {
 
 	err = m.store.Put(ctx, t, fence, m.entry(c.caller, c.info, &t, obj, c.reason))
 	if err != nil {
-		return Trigger{}, m.named(ctx, fmt.Errorf("save trigger %s: %w", t.ID, err))
+		return Trigger{}, m.named(ctx, c.caller, fmt.Errorf("save trigger %s: %w", t.ID, err))
 	}
 
 	return t, nil
@@ -551,22 +559,33 @@ func notFound(err error) error {
 }
 
 // named fills the names of the units of a cycle error with the names that the
-// tool of each unit uses. Any other error passes unchanged.
-func (m *Manager) named(ctx context.Context, err error) error {
+// tool of each unit uses, and marks the units that caller may read. A unit that
+// caller cannot read, a unit that is gone and a failed check get no name and
+// no mark, so the answer names no unit that caller cannot read. Any other
+// error passes unchanged.
+func (m *Manager) named(ctx context.Context, caller identity.Principal, err error) error {
 	var cycle *CycleError
 	if !errors.As(err, &cycle) {
 		return err
 	}
 
 	names := make(map[graph.Unit]string, len(cycle.Path))
+	readable := make(map[graph.Unit]bool, len(cycle.Path))
 
 	for _, u := range cycle.Path {
-		if obj, lookup := m.units.Object(ctx, u); lookup == nil && obj.UnitName() != "" {
+		obj, check := m.readable(ctx, caller, u)
+		if check != nil {
+			continue
+		}
+
+		readable[u] = true
+
+		if obj.UnitName() != "" {
 			names[u] = obj.UnitName()
 		}
 	}
 
-	return &CycleError{Path: cycle.Path, Names: names}
+	return &CycleError{Path: cycle.Path, Names: names, Readable: readable}
 }
 
 // entry returns the audit entry of a save of t by caller.
