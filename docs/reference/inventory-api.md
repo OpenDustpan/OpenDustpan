@@ -29,6 +29,7 @@ page is relative to that prefix.
 | `POST /namespaces/{namespace}/lock/force-unlock` | `unit:manage` | No body |
 | `GET /namespaces/{namespace}/output-sharing` | `namespace:read` | The output sharing setting of the namespace |
 | `PUT /namespaces/{namespace}/output-sharing` | `unit:manage-sharing` | The new output sharing setting |
+| `GET /namespaces/{namespace}/units/{unit_id}/outputs` | `unit:read-outputs` | The root outputs of the latest state of the unit |
 | `POST /namespaces/{namespace}/views` | `view:create`, and the caller is a person | A new saved view |
 | `GET /namespaces/{namespace}/views` | `view:read`, and the caller is a person | The saved views of the caller |
 | `GET /namespaces/{namespace}/views/{view_id}` | `view:read`, and the caller is a person | One saved view of the caller |
@@ -61,7 +62,7 @@ These routes have no path under `/api/dustpan/v1` yet. Use these paths:
 
 The [manual locks guide](../guides/manual-locks.md) describes the lock routes.
 The [output sharing guide](../guides/output-sharing.md) describes the routes of
-the output sharing setting.
+the output sharing setting and the route that reads the outputs of a unit.
 
 The [saved views guide](../guides/saved-views.md) describes the view routes.
 

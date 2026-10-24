@@ -1,6 +1,7 @@
 package apidesc
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"maps"
@@ -9,7 +10,6 @@ import (
 	"slices"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"testing"
 )
 
@@ -27,13 +27,16 @@ const FixCommand = "go test ./pkg/dustpan -run TestAPIDescriptionGolden -update-
 // the handler. In a test it panics, so that the test of the route finds it,
 // with the name, the route and the command that fixes the description. In the
 // server it gives the empty value, as if the request did not hold the name,
-// and logs the error once for each route and name.
+// and logs the error once for each route and name, through the Reporter on
+// the context of the request.
 type Query struct {
 	route  string
 	values url.Values
 	err    error
 	// mode says what a read of an undeclared name does.
 	mode misuseMode
+	// reporter logs a read of an undeclared name in the server.
+	reporter *Reporter
 	// declared holds the names that the handler may read. It is nil for a
 	// route that the description does not hold.
 	declared []string
@@ -52,7 +55,9 @@ func QueryOf(r *http.Request, labels map[string]Label) Query {
 func newQuery(r *http.Request, labels map[string]Label, mode misuseMode) Query {
 	// The one place that reads the raw query of the tool-neutral REST API.
 	values, err := url.ParseQuery(r.URL.RawQuery)
-	q := Query{route: r.Pattern, values: values, err: err, mode: mode, declared: nil}
+	q := Query{
+		route: r.Pattern, values: values, err: err, mode: mode, reporter: reporterOf(r.Context()), declared: nil,
+	}
 
 	label, described := labels[r.Pattern]
 
@@ -162,7 +167,7 @@ func (q Query) allow(name string) bool {
 		return true
 	}
 
-	misuses.report(q.mode, "query parameter", q.route, name,
+	q.reporter.report(q.mode, "query parameter", q.route, name,
 		"add it with WithQuery, then run "+FixCommand)
 
 	return false
@@ -186,24 +191,48 @@ func defaultMode() misuseMode {
 	return modeLog
 }
 
-// misuseLog reports a read of a name that the description does not hold.
-type misuseLog struct {
-	logger atomic.Pointer[slog.Logger]
+// Reporter reports the reads of names that the description does not hold,
+// for one server: it logs one error for each kind, route and name through the
+// logger of that server. A server puts its Reporter on the context of each
+// request with WithReporter, so two servers in one process never share the
+// logger or the names already reported.
+type Reporter struct {
+	logger *slog.Logger
 	seen   sync.Map
 }
 
-// misuses is the report of the server. SetLogger gives it the logger.
-//
-//nolint:gochecknoglobals // The handlers have no logger of their own; SetLogger injects the one of the server.
-var misuses misuseLog
+// NewReporter returns a Reporter that logs through l, or through the default
+// logger of slog when l is nil.
+func NewReporter(l *slog.Logger) *Reporter {
+	if l == nil {
+		l = slog.Default()
+	}
 
-// SetLogger sets the logger for the reads of names that the description does
-// not hold. Without it the reports go to the default logger of slog.
-func SetLogger(l *slog.Logger) { misuses.logger.Store(l) }
+	return &Reporter{logger: l, seen: sync.Map{}}
+}
+
+// reporterKey is the context key of the Reporter of a request.
+type reporterKey struct{}
+
+// WithReporter returns a copy of ctx that holds r.
+func WithReporter(ctx context.Context, r *Reporter) context.Context {
+	return context.WithValue(ctx, reporterKey{}, r)
+}
+
+// reporterOf returns the Reporter that ctx holds. A context with none gets a
+// new Reporter on the default logger of slog, which keeps no names: it logs
+// each read.
+func reporterOf(ctx context.Context) *Reporter {
+	if r, ok := ctx.Value(reporterKey{}).(*Reporter); ok && r != nil {
+		return r
+	}
+
+	return NewReporter(nil)
+}
 
 // report panics in modePanic. Otherwise it logs one error for each
 // kind, route and name.
-func (m *misuseLog) report(mode misuseMode, kind, route, name, fix string) {
+func (m *Reporter) report(mode misuseMode, kind, route, name, fix string) {
 	if mode == modePanic {
 		panic(fmt.Sprintf(
 			"apidesc: the handler of %q reads the %s %q, and the description does not hold it: %s",
@@ -215,12 +244,7 @@ func (m *misuseLog) report(mode misuseMode, kind, route, name, fix string) {
 		return
 	}
 
-	logger := m.logger.Load()
-	if logger == nil {
-		logger = slog.Default()
-	}
-
-	logger.Error("A handler reads a name that the API description does not hold. The server ignores the name.",
+	m.logger.Error("A handler reads a name that the API description does not hold. The server ignores the name.",
 		slog.String("kind", kind), slog.String("route", route), slog.String("name", name), slog.String("fix", fix))
 }
 
@@ -300,7 +324,7 @@ func HeaderValues(r *http.Request, name string) []string {
 // list gives false.
 func Cookie(r *http.Request, name string) (string, bool) {
 	if _, ok := requestCookies[name]; !ok {
-		misuses.report(defaultMode(), "request cookie", r.Pattern, name,
+		reporterOf(r.Context()).report(defaultMode(), "request cookie", r.Pattern, name,
 			"give it a place in the description and add it to the list of request cookies, then run "+FixCommand)
 
 		return "", false
@@ -322,7 +346,7 @@ func allowHeader(r *http.Request, name string) bool {
 		return true
 	}
 
-	misuses.report(defaultMode(), "request header", r.Pattern, name,
+	reporterOf(r.Context()).report(defaultMode(), "request header", r.Pattern, name,
 		"give it a place in the description and add it to the list of request headers, then run "+FixCommand)
 
 	return false

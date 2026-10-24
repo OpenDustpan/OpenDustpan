@@ -49,9 +49,21 @@ func TestForbiddenOrder(t *testing.T) {
 		},
 		{"csrf before other site", errors.Join(sessionauth.ErrOtherSite, sessionauth.ErrCSRF), errcode.SessionCSRF},
 		{"csrf before allowlist", errors.Join(ipallow.ErrAddressNotAllowed, sessionauth.ErrCSRF), errcode.SessionCSRF},
-		{"refusal that is not a permission", errcode.Refusal("sign-in refused"), ""},
-		{"wrapped refusal", fmt.Errorf("route: %w", errcode.Refusal("no action")), ""},
-		{"refusal with a session error", errors.Join(errcode.Refusal("x"), sessionauth.ErrCSRF), ""},
+		{
+			"refusal that is not a permission",
+			errcode.Refusal(errcode.SignInRefused, "sign-in refused"),
+			errcode.SignInRefused,
+		},
+		{
+			"wrapped refusal",
+			fmt.Errorf("route: %w", errcode.Refusal(errcode.AccessNoAction, "no action")),
+			errcode.AccessNoAction,
+		},
+		{
+			"refusal before a session error",
+			errors.Join(errcode.Refusal(errcode.SignInRefused, "x"), sessionauth.ErrCSRF),
+			errcode.SignInRefused,
+		},
 		{"access limit", gate.ErrLimited, errcode.GateLimited},
 		{"access limit that wraps a permission", limitedRefusal(gate.ErrLimited), errcode.GateLimited},
 		{"limit that failed to evaluate", limitedRefusal(gate.ErrRuleFailed), errcode.GateRuleFailed},
@@ -63,8 +75,19 @@ func TestForbiddenOrder(t *testing.T) {
 		{"csrf before access limit", errors.Join(gate.ErrLimited, sessionauth.ErrCSRF), errcode.SessionCSRF},
 		{
 			"refusal that is not a permission before access limit",
-			errors.Join(errcode.Refusal("x"), gate.ErrLimited),
-			"",
+			errors.Join(errcode.Refusal(errcode.SignInRefused, "x"), gate.ErrLimited),
+			errcode.SignInRefused,
+		},
+		{"refusal without a code", errcode.Refusal("", "x"), errcode.AccessDenied},
+		{
+			"refusal with a code that is not in the catalog",
+			errcode.Refusal("sign-in.refsued", "x"),
+			errcode.AccessDenied,
+		},
+		{
+			"refusal with an unknown code before a session error",
+			errors.Join(errcode.Refusal("sign-in.refsued", "x"), sessionauth.ErrCSRF),
+			errcode.SessionCSRF,
 		},
 		{"no cause", errOther, ""},
 		{"unauthenticated", identity.ErrUnauthenticated, ""},
@@ -86,7 +109,7 @@ func TestForbiddenOrder(t *testing.T) {
 func TestRefusalKeepsTheDeniedText(t *testing.T) {
 	t.Parallel()
 
-	err := errcode.Refusal("sign-in refused")
+	err := errcode.Refusal(errcode.SignInRefused, "sign-in refused")
 
 	if !errors.Is(err, identity.ErrDenied) {
 		t.Fatal("Refusal does not match identity.ErrDenied")
@@ -94,5 +117,38 @@ func TestRefusalKeepsTheDeniedText(t *testing.T) {
 
 	if got, want := err.Error(), "permission denied: sign-in refused"; got != want {
 		t.Fatalf("text = %q, want %q", got, want)
+	}
+}
+
+// TestForbiddenAlwaysCodesADenial proves that every error that wraps
+// identity.ErrDenied gets a code of the catalog, so that no 403 answers
+// without a code.
+func TestForbiddenAlwaysCodesADenial(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		err  error
+	}{
+		{"denied", identity.ErrDenied},
+		{"refused sign-in", errcode.Refusal(errcode.SignInRefused, "sign-in refused")},
+		{"route without an action", fmt.Errorf("route: %w", errcode.Refusal(errcode.AccessNoAction, "no action"))},
+		{"limited", limitedRefusal(gate.ErrLimited)},
+		{"csrf", errors.Join(identity.ErrDenied, sessionauth.ErrCSRF)},
+		{"refusal without a code", errcode.Refusal("", "x")},
+		{"refusal with a code that is not in the catalog", errcode.Refusal("sign-in.refsued", "x")},
+		{"refusal with a code that is not valid", errcode.Refusal("Not A Code", "x")},
+		{"wrapped refusal without a code", fmt.Errorf("route: %w", errcode.Refusal("", "x"))},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			code := errcode.Forbidden(tc.err)
+			if _, ok := errcode.Lookup(code); !ok {
+				t.Fatalf("Forbidden(%v) = %q, want a code of the catalog", tc.err, code)
+			}
+		})
 	}
 }

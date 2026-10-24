@@ -23,14 +23,17 @@ import (
 	"strings"
 
 	"opendustpan.org/opendustpan/internal/api/refusal"
+	"opendustpan.org/opendustpan/internal/api/tofuunit"
 	"opendustpan.org/opendustpan/internal/baseurl"
 	"opendustpan.org/opendustpan/internal/bodygate"
 	"opendustpan.org/opendustpan/internal/denylimit"
+	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/internal/sessionauth"
 	"opendustpan.org/opendustpan/internal/token"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/outputshare"
 	"opendustpan.org/opendustpan/pkg/workspace"
 )
 
@@ -40,8 +43,6 @@ var ErrMissingDependency = errors.New("missing dependency")
 const (
 	// bearerScheme is the Authorization scheme the adapter reads.
 	bearerScheme = "Bearer "
-	// unitTool names this API's tool in unit references.
-	unitTool = "opentofu"
 	// maxBodyBytes bounds a body the resolver reads before the handler.
 	maxBodyBytes = 1 << 20
 )
@@ -226,6 +227,11 @@ type Config struct {
 	// Workspaces serves the workspace and state routes. It is required:
 	// routes by ID resolve the ID through it.
 	Workspaces WorkspaceService
+	// OutputChecker decides each read of outputs on the outputs routes. It is
+	// optional so that a store without the output sharing ports still serves
+	// the rest of the API. With nil, the outputs routes answer 500 and no
+	// output: they fail closed.
+	OutputChecker outputshare.Checker
 	// BaseURL reports the external base URL for a request, for absolute
 	// URLs. The zero value derives it from each request.
 	BaseURL baseurl.Resolver
@@ -274,6 +280,7 @@ type Handler struct {
 	logger         *slog.Logger
 	namespaces     *namespace.Service
 	workspaces     WorkspaceService
+	outputs        outputshare.Checker
 	baseURL        baseurl.Resolver
 	audit          audit.Store
 	onAuditFailure func()
@@ -327,6 +334,7 @@ func NewHandler(cfg Config) (*Handler, error) {
 		logger:         cfg.Logger,
 		namespaces:     cfg.Namespaces,
 		workspaces:     cfg.Workspaces,
+		outputs:        cfg.OutputChecker,
 		baseURL:        cfg.BaseURL,
 		audit:          cfg.Audit,
 		onAuditFailure: cfg.OnAuditFailure,
@@ -366,18 +374,11 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	header := w.Header()
-	header.Del("Content-Length")
-	header.Set("Content-Type", jsonAPIMediaType)
-	w.WriteHeader(http.StatusNotFound)
-
-	doc := jsonAPIDocument{
-		Errors: []jsonAPIError{{Status: "404", Code: "", Title: notFoundTitle, Detail: notFoundTitle, Meta: nil}},
-	}
-
-	if err := json.NewEncoder(w).Encode(doc); err != nil {
-		h.logger.WarnContext(r.Context(), "write response failed", slog.String("error", err.Error()))
-	}
+	w.Header().Del("Content-Length")
+	h.writeClassError(r.Context(), w, errorClass{
+		status: http.StatusNotFound, title: notFoundTitle, detail: notFoundTitle,
+		code: errcode.ServerRouteNotFound, args: nil,
+	})
 }
 
 // ExternalBaseURL returns the external base URL for r: the --public-url
@@ -388,17 +389,19 @@ func (h *Handler) ExternalBaseURL(r *http.Request) string {
 
 // notFoundWriter swallows the default 404 of the mux, so ServeHTTP can
 // replace it with a JSON:API error. A 404 that already carries the JSON:API
-// media type comes from a route handler and passes through untouched.
+// media type, or the JSON media type of the registry protocol, comes from a
+// route handler and passes through untouched.
 type notFoundWriter struct {
 	http.ResponseWriter
 
 	notFound bool
 }
 
-// WriteHeader swallows a 404 without the JSON:API media type and records
-// it. Every other status passes through.
+// WriteHeader swallows a 404 without the JSON:API or the JSON media type and
+// records it. Every other status passes through.
 func (c *notFoundWriter) WriteHeader(status int) {
-	if status == http.StatusNotFound && c.Header().Get("Content-Type") != jsonAPIMediaType {
+	media := c.Header().Get("Content-Type")
+	if status == http.StatusNotFound && media != jsonAPIMediaType && media != registryMediaType {
 		c.notFound = true
 
 		return
@@ -528,5 +531,5 @@ func (h *Handler) authenticate(r *http.Request) (identity.Principal, error) {
 // unitObject maps a namespace and workspace name to its tool-neutral unit
 // reference.
 func unitObject(ns workspace.Ref) (identity.Object, error) {
-	return identity.UnitObject(unitTool, ns.Namespace, ns.Name.String())
+	return tofuunit.Object(ns)
 }

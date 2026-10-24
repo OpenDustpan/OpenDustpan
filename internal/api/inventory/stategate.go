@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strings"
 
+	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/pkg/gate"
 	"opendustpan.org/opendustpan/pkg/identity"
 )
@@ -31,7 +32,8 @@ type stateCheck struct {
 // false, the answer is written in the error shape of this API: a refusal by a
 // gate or an access limit answers 403, a gate in error 409, and an engine that
 // does not answer 503. The message holds the message of each gate, the error
-// code and the ID of the decision record.
+// code and the ID of the decision record, and the answer carries the code of
+// the catalog.
 func (h *Handler) guardStateWrite(
 	w http.ResponseWriter, r *http.Request, p identity.Principal, obj identity.Object, check stateCheck,
 ) bool {
@@ -70,17 +72,21 @@ func (h *Handler) guardStateWrite(
 	h.logger.InfoContext(ctx, "state write refused",
 		slog.String("object", obj.String()), slog.String("code", code), slog.String("record", string(refusal.Record)))
 
-	status := http.StatusForbidden
+	// A final gate is a gate that refuses the write, so its refusal answers
+	// gate.denied. The message keeps its own code.
+	status, answerCode := http.StatusForbidden, errcode.GateDenied
 
 	switch {
+	case errors.Is(refusal, gate.ErrLimited):
+		answerCode = errcode.GateLimited
 	case errors.Is(refusal, gate.ErrRuleFailed):
-		status = http.StatusConflict
+		status, answerCode = http.StatusConflict, errcode.GateRuleFailed
 	case errors.Is(refusal, gate.ErrUnavailable):
-		status = http.StatusServiceUnavailable
+		status, answerCode = http.StatusServiceUnavailable, errcode.GateUnavailable
 	default:
 	}
 
-	h.problems().WriteProblem(ctx, w, fail(status, code, refusalMessage(refusal, code)))
+	h.writeFailure(ctx, w, fail(status, refusalMessage(refusal, code), answerCode))
 
 	return false
 }

@@ -7,9 +7,9 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
-	"regexp"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"opendustpan.org/opendustpan/internal/api/tfe"
@@ -84,6 +84,7 @@ func newWriteHandlerWithAuthz(t *testing.T, ws tfe.WorkspaceService, authz ident
 		Logger:         slog.New(slog.DiscardHandler),
 		Namespaces:     newTestNamespaces(t),
 		Workspaces:     ws,
+		OutputChecker:  nil,
 		BaseURL:        baseurl.Resolver{},
 		Audit:          newTestAudit(),
 		Gate:           nil,
@@ -249,9 +250,14 @@ func TestForceUnlockErrorCodes(t *testing.T) {
 		{"not locked", workspace.ErrNotLocked, http.StatusConflict, "workspace.not-locked"},
 		{"lock mismatch", workspace.ErrLockMismatch, http.StatusConflict, "workspace.lock-mismatch"},
 		{"client encrypted", workspace.ErrClientEncrypted, http.StatusConflict, "workspace.client-encrypted"},
-		{"locked by another", workspace.ErrLockedByOther, http.StatusConflict, ""},
-		{"concurrent change", workspace.ErrConcurrentModification, http.StatusConflict, ""},
-		{"invalid reason", audit.ErrInvalidReason, http.StatusUnprocessableEntity, ""},
+		{"locked by another", workspace.ErrLockedByOther, http.StatusConflict, "workspace.locked"},
+		{
+			"concurrent change",
+			workspace.ErrConcurrentModification,
+			http.StatusConflict,
+			"workspace.changed-concurrently",
+		},
+		{"invalid reason", audit.ErrInvalidReason, http.StatusUnprocessableEntity, "audit.reason-invalid"},
 	}
 
 	for _, tc := range cases {
@@ -410,29 +416,36 @@ func TestWorkspaceDocumentHoldsTheLockID(t *testing.T) {
 	}
 }
 
-// TestErrorCodesAreValid proves that every machine code of the API has the
-// form of a code and that no code repeats.
-func TestErrorCodesAreValid(t *testing.T) {
+// countingForceUnlock counts the reads of a workspace by ID.
+type countingForceUnlock struct {
+	recordingForceUnlock
+
+	reads *atomic.Int64
+}
+
+func (c countingForceUnlock) GetByID(ctx context.Context, id workspace.ID) (workspace.Workspace, error) {
+	c.reads.Add(1)
+
+	return c.recordingForceUnlock.GetByID(ctx, id)
+}
+
+// TestForceUnlockReadsTheWorkspaceTwice proves that a force-unlock reads the
+// workspace once to resolve its unit and once for the holder and the
+// override switches. The domain reads it again in its own transaction.
+func TestForceUnlockReadsTheWorkspaceTwice(t *testing.T) {
 	t.Parallel()
 
-	pattern := regexp.MustCompile(`^[a-z][a-z0-9]*(-[a-z0-9]+)*(\.[a-z][a-z0-9]*(-[a-z0-9]+)*)+$`)
-	seen := map[string]bool{}
+	ws := countingForceUnlock{recordingForceUnlock: newRecordingForceUnlock(nil), reads: new(atomic.Int64)}
+	handler := newWriteHandlerWithAuthz(t, ws, allowAll())
 
-	for _, code := range tfe.ErrorCodes() {
-		if !pattern.MatchString(code) || len(code) < 3 || len(code) > 64 {
-			t.Errorf("code %q does not have the form of a code", code)
-		}
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, workspaceRequest(t, http.MethodPost, forceUnlockTarget, ""))
 
-		if seen[code] {
-			t.Errorf("code %q is listed twice", code)
-		}
-
-		seen[code] = true
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", rec.Code, rec.Body.String())
 	}
 
-	for _, want := range []string{"workspace.not-locked", "workspace.lock-mismatch", "workspace.client-encrypted"} {
-		if !seen[want] {
-			t.Errorf("code %q is not listed", want)
-		}
+	if got := ws.reads.Load(); got != 2 {
+		t.Fatalf("reads of the workspace = %d, want 2", got)
 	}
 }

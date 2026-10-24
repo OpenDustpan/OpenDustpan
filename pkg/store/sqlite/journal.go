@@ -248,10 +248,14 @@ func lowestOf(seqs []int64) int64 {
 // holds an entry that changes the replay records. It runs in the same transaction
 // as the write, so the list and the flag it reads are the ones that the write
 // follows. It returns whether the batch holds such an entry.
-// A refusal wraps ErrJournalBatch.
+// A row with no Verify is refused. A refusal wraps ErrJournalBatch.
 func verifyJournalRow(ctx context.Context, q *db.Queries, stackID string, row stack.JournalRow) (bool, error) {
+	// Defense in depth: the journal writer refuses a batch with no entry check
+	// before it calls the store. This check stays so that a new caller of
+	// PutJournalRow cannot store a batch without the reference and write-order
+	// checks.
 	if row.Verify == nil {
-		return false, nil
+		return false, fmt.Errorf("%w: the journal row has no entry check", stack.ErrJournalBatch)
 	}
 
 	state, err := q.JournalState(ctx, db.JournalStateParams{StackID: stackID, ID: row.Update.String()})

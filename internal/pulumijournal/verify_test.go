@@ -2,6 +2,7 @@ package pulumijournal_test
 
 import (
 	"errors"
+	"fmt"
 	"strconv"
 	"strings"
 	"testing"
@@ -12,7 +13,30 @@ import (
 
 // The compile-time check fails the build when the verifier stops satisfying the
 // port of the update store.
-var _ stack.BatchVerifier = pulumijournal.Verifier{}
+var _ stack.BatchReader = pulumijournal.Verifier{}
+
+// TestBoundErrorNamesItsBound checks that the update service reads the
+// bound, the count and the limit of a replay bound refusal, so its answer
+// names them.
+func TestBoundErrorNamesItsBound(t *testing.T) {
+	t.Parallel()
+
+	// The assignment fails the build when a bound refusal stops satisfying the
+	// ReplayBound of the update service, for example after a change of the
+	// fields of stack.ReplayLimit.
+	var bound stack.ReplayBound = &pulumijournal.BoundError{Bound: "entries", Count: 12, Limit: 10, Cause: nil}
+
+	err := fmt.Errorf("replay: %w", bound)
+
+	message, ok := stack.ReplayBoundMessage(err)
+	if !ok {
+		t.Fatal("ReplayBoundMessage reports no bound, want the bound of the refusal")
+	}
+
+	if !strings.Contains(message, "12 entries") || !strings.Contains(message, "limit of 10") {
+		t.Fatalf("message = %q, want the count, the bound and the limit", message)
+	}
+}
 
 // entryJSON returns one journal entry with the given kind, sequence ID and operation
 // ID. The reference, when set, is the removeNew member.

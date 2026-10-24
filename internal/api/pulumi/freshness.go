@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/url"
 
+	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/internal/sessionauth"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -98,12 +99,12 @@ func (h *Handler) freshReveal(serve RouteHandler) RouteHandler {
 			h.writeJSON(ctx, w, http.StatusForbidden, freshRefusalResponse{
 				Message:        err.Error(),
 				Reauthenticate: "",
-				ErrorCode:      sessionauth.FreshStepRequiredCode,
+				ErrorCode:      errcode.MFAFreshStepRequired,
 				Code:           http.StatusForbidden,
 			})
 		case errors.Is(err, errReauthenticate):
 			h.writeJSON(ctx, w, http.StatusUnauthorized, freshRefusalResponse{
-				Message: err.Error(), Reauthenticate: path, ErrorCode: sessionauth.FreshStepRequiredCode,
+				Message: err.Error(), Reauthenticate: path, ErrorCode: errcode.MFAFreshStepRequired,
 				Code: http.StatusUnauthorized,
 			})
 		default:

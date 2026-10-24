@@ -149,6 +149,10 @@ type backendConfig struct {
 	// signIn turns on the console sign-in through a test OpenID provider
 	// when it is not nil.
 	signIn *binarySignIn
+	// publicURL passes --public-url with this value when it is set and signIn
+	// is nil, so the provider registry of an OpenTofu run answers on the
+	// host of the recording proxy. The sign-in passes its own public URL.
+	publicURL string
 }
 
 // pemCertificate is the PEM block type of a certificate.
@@ -534,6 +538,10 @@ func serveArgs(cfg backendConfig, port string) []string {
 		args = append(args, "--audit-chain", cfg.auditChain)
 	}
 
+	if cfg.publicURL != "" && cfg.signIn == nil {
+		args = append(args, "--public-url", cfg.publicURL)
+	}
+
 	return append(args, cfg.signIn.args()...)
 }
 
@@ -685,6 +693,7 @@ func (e *Env) MigrateDatabase(ctx context.Context, tb testing.TB, dbURL string) 
 		tokens:            e.backendCfg.tokens,
 		deltaCutoff:       0,
 		auditChain:        "",
+		publicURL:         "",
 	}
 
 	handle := launchBinaryBackend(ctx, tb, cfg, "0")
@@ -1109,6 +1118,7 @@ func binaryBackendConfig(in envInput, bin, dbURL string, setup blobSetup, cert b
 		ipAllowlists:      in.ipAllowlists,
 		auditChain:        "",
 		signIn:            nil,
+		publicURL:         "",
 	}
 }
 
@@ -1129,6 +1139,7 @@ func newBinaryEnv(ctx context.Context, in envInput) *Env {
 
 	reserved := reserveRecordingProxy(tb, in.rec, in.journalRefuser, in.journalCap)
 	signIn := binarySignInSetup(tb, in, reserved, &cfg)
+	cfg.publicURL = binaryPublicURL(in, reserved)
 
 	handle, backendURL := startBinaryBackend(ctx, tb, cfg)
 

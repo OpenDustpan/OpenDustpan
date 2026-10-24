@@ -24,7 +24,9 @@ type Store interface {
 	// so a repeated Record sends nothing twice.
 	//
 	// It returns:
-	//   - ErrInvalid when r.Validate fails.
+	//   - ErrInvalid when r.Validate fails, and when the unit ID of r.Unit
+	//     holds the result of another namespace or another tool (for example
+	//     after a restore or a move).
 	//   - namespace.ErrFenced when the fence is stale or belongs to another
 	//     namespace than r.Unit.
 	//   - ErrJobMismatch when r.JobID is not a job of r.Unit with the purpose

@@ -3,7 +3,6 @@ package profile
 import (
 	"bytes"
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -18,7 +17,10 @@ import (
 	"opendustpan.org/opendustpan/internal/api/problem"
 	"opendustpan.org/opendustpan/internal/api/routekit"
 	"opendustpan.org/opendustpan/internal/clientip"
+	"opendustpan.org/opendustpan/internal/errcode"
+	"opendustpan.org/opendustpan/internal/pagetoken"
 	"opendustpan.org/opendustpan/internal/requestid"
+	"opendustpan.org/opendustpan/internal/sessionauth"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/idempotency"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -123,7 +125,7 @@ func actorOf(r *http.Request, p identity.Principal) *profile.Actor {
 	by := audit.Entry{
 		At: time.Time{}, Namespace: "", Subject: "", IDPSubject: "", TokenID: "", Action: "", Object: "",
 		Version: "", ValuePath: "", ValueCount: nil, Changes: nil, SourceIP: clientip.String(r),
-		UserAgent: truncateUserAgent(userAgent(r)), Channel: audit.NormalizeChannel(apidesc.Header(r, channelHeader)),
+		UserAgent: truncateUserAgent(userAgent(r)), Channel: sessionauth.AuditChannel(r, channelHeader),
 		Kind: audit.KindChange, Outcome: audit.OutcomeSuccess, RequestID: requestid.FromContext(r.Context()),
 		ObjectID: "", PrevHash: "", Hash: "", Sequence: 0, FenceVersion: 0, Reason: "", PrincipalKind: "", JobID: "",
 	}
@@ -131,12 +133,20 @@ func actorOf(r *http.Request, p identity.Principal) *profile.Actor {
 	return &profile.Actor{Principal: p, By: by}
 }
 
+// truncateUserAgent caps s at audit.MaxUserAgentLen bytes.
 func truncateUserAgent(s string) string {
 	if len(s) <= audit.MaxUserAgentLen {
 		return s
 	}
 
-	return s[:audit.MaxUserAgentLen]
+	// Cut on a UTF-8 rune boundary, so a multi-byte rune is never split and
+	// the entry keeps valid UTF-8.
+	cut := audit.MaxUserAgentLen
+	for cut > 0 && s[cut]&0xC0 == 0x80 {
+		cut--
+	}
+
+	return s[:cut]
 }
 
 // targetOf reads the profile of the path in the namespace of obj. A name of
@@ -328,7 +338,7 @@ func pageSizeOf(r *http.Request) (int, error) {
 	n, err := strconv.Atoi(raw)
 	if err != nil || n < 1 || n > maxPageSize {
 		return 0, problem.BadRequest(
-			"request.invalid-query",
+			errcode.RequestInvalidQuery,
 			fmt.Sprintf("pageSize must be a number from 1 to %d", maxPageSize),
 		)
 	}
@@ -373,14 +383,14 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request, p identity.Princi
 	}
 
 	if page.Next != "" {
-		raw, marshalErr := json.Marshal(pageToken{After: string(page.Next), Fingerprint: fingerprint(ns, folder)})
-		if marshalErr != nil {
-			h.writeError(ctx, w, marshalErr)
+		token, encodeErr := pagetoken.Encode(pageToken{After: string(page.Next), Fingerprint: fingerprint(ns, folder)})
+		if encodeErr != nil {
+			h.writeError(ctx, w, encodeErr)
 
 			return
 		}
 
-		resp.NextPageToken = base64.RawURLEncoding.EncodeToString(raw)
+		resp.NextPageToken = token
 	}
 
 	h.writeJSON(ctx, w, http.StatusOK, resp)
@@ -392,17 +402,12 @@ func decodeToken(raw, fp string) (profile.Name, error) {
 	}
 
 	bad := problem.BadRequest(
-		"request.invalid-query",
+		errcode.RequestInvalidQuery,
 		"pageToken does not belong to this query: start again without it",
 	)
 
-	data, err := base64.RawURLEncoding.DecodeString(raw)
-	if err != nil {
-		return "", bad
-	}
-
 	var t pageToken
-	if err = json.Unmarshal(data, &t); err != nil || t.Fingerprint != fp {
+	if err := pagetoken.Decode(raw, &t); err != nil || !pagetoken.SameFingerprint(t.Fingerprint, fp) {
 		return "", bad
 	}
 
@@ -412,12 +417,12 @@ func decodeToken(raw, fp string) (profile.Name, error) {
 var (
 	errPrecondition = problem.Fixed(
 		http.StatusPreconditionFailed,
-		"request.precondition-failed",
+		errcode.RequestPreconditionFailed,
 		"If-Match does not match the profile: read it again and send the new ETag",
 	)
 	errPreconditionRequired = problem.Fixed(
 		http.StatusPreconditionRequired,
-		"request.precondition-required",
+		errcode.RequestPreconditionRequired,
 		"send the ETag that you read in If-Match",
 	)
 )
@@ -451,7 +456,7 @@ func ifMatch(r *http.Request, got profile.Profile) (int, bool, error) {
 // stale turns a conflict of a write that carries If-Match into 412.
 func stale(err error) error {
 	if errors.Is(err, profile.ErrConflict) {
-		return problem.Fixed(http.StatusPreconditionFailed, "request.precondition-failed", err.Error())
+		return problem.Fixed(http.StatusPreconditionFailed, errcode.RequestPreconditionFailed, err.Error())
 	}
 
 	return err
@@ -524,7 +529,7 @@ func (h *Handler) listRevisions(w http.ResponseWriter, r *http.Request, p identi
 			h.writeError(
 				ctx,
 				w,
-				problem.BadRequest("request.invalid-query", "pageToken is not valid: start again without it"),
+				problem.BadRequest(errcode.RequestInvalidQuery, "pageToken is not valid: start again without it"),
 			)
 
 			return
@@ -646,7 +651,7 @@ func readOptions(r *http.Request, revision string) (profile.ReadOptions, error) 
 	if raw := queryOf(r).Get("showSecrets"); raw != "" {
 		b, err := strconv.ParseBool(raw)
 		if err != nil {
-			return opts, problem.BadRequest("request.invalid-query", "showSecrets must be true or false")
+			return opts, problem.BadRequest(errcode.RequestInvalidQuery, "showSecrets must be true or false")
 		}
 
 		opts.Reveal = b
@@ -655,7 +660,10 @@ func readOptions(r *http.Request, revision string) (profile.ReadOptions, error) 
 	if revision != "" && revision != "latest" {
 		n, err := strconv.Atoi(revision)
 		if err != nil || n < 1 {
-			return opts, problem.BadRequest("request.invalid-path", "revision must be a number of 1 or more, or latest")
+			return opts, problem.BadRequest(
+				errcode.RequestInvalidPath,
+				"revision must be a number of 1 or more, or latest",
+			)
 		}
 
 		opts.Revision = n

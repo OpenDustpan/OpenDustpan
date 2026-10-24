@@ -1,10 +1,10 @@
 package pulumi
 
 import (
-	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -17,18 +17,7 @@ const (
 	defaultStateLimit = 100
 	// maxStateLimit bounds one page of the resource list.
 	maxStateLimit = 500
-	// latestVersionName addresses the latest checkpoint of a stack in the
-	// state routes.
-	latestVersionName = "latest"
 )
-
-// stateTarget is the stack and the checkpoint version a state route reads:
-// an explicit version, or the latest checkpoint.
-type stateTarget struct {
-	ref     stack.Ref
-	version int64
-	latest  bool
-}
 
 // stateResourceItem is one entry of the masked resource list.
 type stateResourceItem struct {
@@ -117,6 +106,7 @@ func (h *Handler) stateRoutes() []Route {
 			Actions: []identity.Action{identity.ActionUnitRead},
 			Resolve: resolveGetStack,
 			Serve:   h.listStateResources,
+			Lease:   nil,
 		},
 		{
 			Method:  http.MethodGet,
@@ -125,6 +115,7 @@ func (h *Handler) stateRoutes() []Route {
 			Actions: []identity.Action{identity.ActionUnitRead},
 			Resolve: resolveGetStack,
 			Serve:   h.getStateResource,
+			Lease:   nil,
 		},
 		{
 			Method:  http.MethodGet,
@@ -133,6 +124,7 @@ func (h *Handler) stateRoutes() []Route {
 			Actions: []identity.Action{identity.ActionUnitRead},
 			Resolve: resolveGetStack,
 			Serve:   h.getStateOutputs,
+			Lease:   nil,
 		},
 	}
 
@@ -146,6 +138,7 @@ func (h *Handler) stateRoutes() []Route {
 		Actions: []identity.Action{identity.ActionUnitRead},
 		Resolve: resolveGetStack,
 		Serve:   h.diffState,
+		Lease:   nil,
 	}
 
 	at := Route{
@@ -155,6 +148,7 @@ func (h *Handler) stateRoutes() []Route {
 		Actions: []identity.Action{identity.ActionUnitRead},
 		Resolve: resolveGetStack,
 		Serve:   h.listStateAtResources,
+		Lease:   nil,
 	}
 
 	return []Route{versioned[0], versioned[1], versioned[2], diff, at, h.revealRoute()}
@@ -163,94 +157,76 @@ func (h *Handler) stateRoutes() []Route {
 // stateTargetOf parses the stack reference and the version of a state
 // request: "latest" or a non-negative integer. It writes the error and
 // reports false when either fails.
-func (h *Handler) stateTargetOf(w http.ResponseWriter, r *http.Request) (stateTarget, bool) {
-	var zero stateTarget
+func (h *Handler) stateTargetOf(w http.ResponseWriter, r *http.Request) (stack.Ref, stack.StateSelector, bool) {
+	var (
+		noRef stack.Ref
+		noSel stack.StateSelector
+	)
 
 	ref, ok := h.updateRef(w, r)
 	if !ok {
-		return zero, false
+		return noRef, noSel, false
 	}
 
-	raw := r.PathValue("version")
-
-	if raw == latestVersionName {
-		return stateTarget{ref: ref, version: 0, latest: true}, true
-	}
-
-	version, err := stack.ParseStackVersion(raw)
+	sel, err := stack.ParseStateSelector(r.PathValue("version"))
 	if err != nil {
 		h.writeError(r.Context(), w, err)
 
-		return zero, false
+		return noRef, noSel, false
 	}
 
-	return stateTarget{ref: ref, version: version, latest: false}, true
+	return ref, sel, true
 }
 
-// stateCurrent returns the checkpoint the target names: the latest one, or
-// the one of the explicit version. It writes the error and reports false
-// when the version has no checkpoint.
+// stateCurrent returns the state that sel names, with its version. It writes
+// the error and reports false when the version has no checkpoint.
 func (h *Handler) stateCurrent(
-	w http.ResponseWriter, r *http.Request, target stateTarget,
-) (stack.Checkpoint, bool) {
-	var zero stack.Checkpoint
-
-	var (
-		cp  stack.Checkpoint
-		err error
-	)
-
-	if target.latest {
-		cp, err = h.updates.Export(r.Context(), target.ref)
-	} else {
-		cp, err = h.updates.ExportVersion(r.Context(), target.ref, target.version)
-	}
-
+	w http.ResponseWriter, r *http.Request, ref stack.Ref, sel stack.StateSelector,
+) (stack.SelectedState, bool) {
+	st, err := h.updates.SelectState(r.Context(), ref, sel)
 	if err != nil {
 		h.writeError(r.Context(), w, err)
 
-		return zero, false
+		var none stack.SelectedState
+
+		return none, false
+	}
+
+	return st, true
+}
+
+// stateCheckpoint returns the checkpoint that sel names, for a read that
+// needs no version: it does not read the update that saved the checkpoint.
+// It writes the error and reports false when the version has no checkpoint.
+func (h *Handler) stateCheckpoint(
+	w http.ResponseWriter, r *http.Request, ref stack.Ref, sel stack.StateSelector,
+) (stack.Checkpoint, bool) {
+	cp, err := h.updates.SelectCheckpoint(r.Context(), ref, sel)
+	if err != nil {
+		h.writeError(r.Context(), w, err)
+
+		var none stack.Checkpoint
+
+		return none, false
 	}
 
 	return cp, true
 }
 
-// statePrevious returns the deployment of the version before the target, or
-// nil when there is none: the first version, or a previous version without
-// a checkpoint. It writes the error and reports false when the lookup
+// statePrevious returns the deployment of the version before current, or nil
+// when there is none. It writes the error and reports false when the lookup
 // itself fails.
 func (h *Handler) statePrevious(
-	w http.ResponseWriter, r *http.Request, target stateTarget, current stack.Checkpoint,
+	w http.ResponseWriter, r *http.Request, ref stack.Ref, current stack.SelectedState,
 ) ([]byte, bool) {
-	version := target.version
-
-	if target.latest {
-		u, err := h.updates.Get(r.Context(), target.ref, current.Update)
-		if err != nil {
-			h.writeError(r.Context(), w, err)
-
-			return nil, false
-		}
-
-		version = u.Version
-	}
-
-	if version <= 1 {
-		return nil, true
-	}
-
-	prev, err := h.updates.ExportVersion(r.Context(), target.ref, version-1)
+	prev, err := h.updates.PreviousDeployment(r.Context(), ref, current)
 	if err != nil {
-		if errors.Is(err, stack.ErrNoState) {
-			return nil, true
-		}
-
 		h.writeError(r.Context(), w, err)
 
 		return nil, false
 	}
 
-	return prev.Deployment, true
+	return prev, true
 }
 
 // statePaging reads the cursor and limit query values of a resource list
@@ -302,7 +278,7 @@ func (h *Handler) listStateResources(
 	w http.ResponseWriter, r *http.Request, _ identity.Principal, _ identity.Object,
 ) {
 	ctx := r.Context()
-	target, ok := h.stateTargetOf(w, r)
+	ref, sel, ok := h.stateTargetOf(w, r)
 	if !ok {
 		return
 	}
@@ -314,17 +290,17 @@ func (h *Handler) listStateResources(
 
 	filter := r.URL.Query().Get("filter[q]")
 
-	current, ok := h.stateCurrent(w, r, target)
+	current, ok := h.stateCurrent(w, r, ref, sel)
 	if !ok {
 		return
 	}
 
-	previous, ok := h.statePrevious(w, r, target, current)
+	previous, ok := h.statePrevious(w, r, ref, current)
 	if !ok {
 		return
 	}
 
-	page, err := stack.ListStateResources(current.Deployment, previous, cursor, limit, filter)
+	page, err := stack.ListStateResources(current.Checkpoint.Deployment, previous, cursor, limit, filter)
 	if err != nil {
 		h.writeError(ctx, w, err)
 
@@ -371,11 +347,33 @@ type stateAtResourcesResponse struct {
 	CurrentName string              `json:"currentName,omitempty"`
 }
 
-// parseStateAt reads the time of a state-at request: Unix milliseconds.
+// stateAtTimeError reports a time in the path of a state-at read that is not
+// Unix milliseconds. It matches stack.ErrInvalidUpdate with errors.Is, so it
+// answers 400, but its text names the read and not an update.
+type stateAtTimeError struct {
+	raw string
+}
+
+// Error implements error. It quotes at most 40 characters of the time.
+func (e *stateAtTimeError) Error() string {
+	return fmt.Sprintf("time %.40q in the path is not Unix milliseconds: send a number such as 1792754840074", e.raw)
+}
+
+// Is reports whether target is stack.ErrInvalidUpdate.
+func (e *stateAtTimeError) Is(target error) bool {
+	return target == stack.ErrInvalidUpdate
+}
+
+// parseStateAt reads the time of a state-at request: Unix milliseconds, as
+// ASCII digits only. A sign such as "+5" is refused.
 func parseStateAt(raw string) (time.Time, error) {
+	if raw == "" || strings.Trim(raw, "0123456789") != "" {
+		return time.Time{}, &stateAtTimeError{raw: raw}
+	}
+
 	ms, err := strconv.ParseInt(raw, 10, 64)
-	if err != nil || ms < 0 {
-		return time.Time{}, fmt.Errorf("%w: time %q is not Unix milliseconds", stack.ErrInvalidUpdate, raw)
+	if err != nil {
+		return time.Time{}, &stateAtTimeError{raw: raw}
 	}
 
 	return time.UnixMilli(ms).UTC(), nil
@@ -413,9 +411,9 @@ func (h *Handler) listStateAtResources(
 		return
 	}
 
-	target := stateTarget{ref: ref, version: int64(found.Version), latest: false}
+	selected := stack.SelectedState{Checkpoint: current, Version: int64(found.Version)}
 
-	previous, ok := h.statePrevious(w, r, target, current)
+	previous, ok := h.statePrevious(w, r, ref, selected)
 	if !ok {
 		return
 	}
@@ -458,13 +456,12 @@ func (h *Handler) getStateResource(
 	w http.ResponseWriter, r *http.Request, _ identity.Principal, _ identity.Object,
 ) {
 	ctx := r.Context()
-	target, ok := h.stateTargetOf(w, r)
-
+	ref, sel, ok := h.stateTargetOf(w, r)
 	if !ok {
 		return
 	}
 
-	current, ok := h.stateCurrent(w, r, target)
+	current, ok := h.stateCheckpoint(w, r, ref, sel)
 	if !ok {
 		return
 	}
@@ -494,41 +491,22 @@ func (h *Handler) getStateResource(
 func (h *Handler) diffCheckpointOf(
 	w http.ResponseWriter, r *http.Request, ref stack.Ref, name, raw string,
 ) (stack.Checkpoint, bool) {
-	var zero stack.Checkpoint
+	var none stack.Checkpoint
 
 	if raw == "" {
 		h.writeError(r.Context(), w, invalidDiffVersion(name, raw))
 
-		return zero, false
+		return none, false
 	}
 
-	var (
-		cp  stack.Checkpoint
-		err error
-	)
-
-	if raw == latestVersionName {
-		cp, err = h.updates.Export(r.Context(), ref)
-	} else {
-		var version int64
-
-		version, err = stack.ParseStackVersion(raw)
-		if err != nil {
-			h.writeError(r.Context(), w, err)
-
-			return zero, false
-		}
-
-		cp, err = h.updates.ExportVersion(r.Context(), ref, version)
-	}
-
+	sel, err := stack.ParseStateSelector(raw)
 	if err != nil {
 		h.writeError(r.Context(), w, err)
 
-		return zero, false
+		return none, false
 	}
 
-	return cp, true
+	return h.stateCheckpoint(w, r, ref, sel)
 }
 
 // invalidDiffVersion reports a missing or empty diff side.
@@ -623,13 +601,12 @@ func (h *Handler) getStateOutputs(
 	w http.ResponseWriter, r *http.Request, _ identity.Principal, _ identity.Object,
 ) {
 	ctx := r.Context()
-	target, ok := h.stateTargetOf(w, r)
-
+	ref, sel, ok := h.stateTargetOf(w, r)
 	if !ok {
 		return
 	}
 
-	current, ok := h.stateCurrent(w, r, target)
+	current, ok := h.stateCheckpoint(w, r, ref, sel)
 	if !ok {
 		return
 	}

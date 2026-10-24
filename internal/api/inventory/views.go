@@ -15,6 +15,7 @@ import (
 	"opendustpan.org/opendustpan/internal/api/problem"
 	"opendustpan.org/opendustpan/internal/api/refusal"
 	"opendustpan.org/opendustpan/internal/clientip"
+	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/internal/requestid"
 	"opendustpan.org/opendustpan/internal/sessionauth"
 	"opendustpan.org/opendustpan/pkg/audit"
@@ -71,22 +72,24 @@ func newViews(cfg *ViewsConfig) (*views, error) {
 func classifyView(err error) (problem.Problem, bool) {
 	switch {
 	case errors.Is(err, savedview.ErrNotPerson):
-		return fail(http.StatusForbidden, "view.not-person", savedview.ErrNotPerson.Error()), true
+		return fail(http.StatusForbidden, savedview.ErrNotPerson.Error(), errcode.ViewNotPerson), true
 	case errors.Is(err, savedview.ErrNotFound):
-		return fail(http.StatusNotFound, "view.not-found", savedview.ErrNotFound.Error()), true
+		return fail(http.StatusNotFound, savedview.ErrNotFound.Error(), errcode.ViewNotFound), true
 	case errors.Is(err, savedview.ErrInvalid):
-		return fail(http.StatusBadRequest, "view.invalid", err.Error()), true
+		return fail(http.StatusBadRequest, err.Error(), errcode.ViewInvalid), true
 	case errors.Is(err, errViewBody):
-		return fail(http.StatusBadRequest, "request.body-invalid", err.Error()), true
+		return fail(http.StatusBadRequest, err.Error(), errcode.RequestBodyInvalid), true
 	case errors.Is(err, errViewIdempotencyKey):
-		return fail(http.StatusBadRequest, "request.idempotency-key-unavailable", err.Error()), true
+		return fail(http.StatusBadRequest, err.Error(), errcode.RequestIdempotencyKeyUnavailable), true
 	case errors.Is(err, savedview.ErrExists):
-		return fail(http.StatusConflict, "view.exists", err.Error()), true
+		return fail(http.StatusConflict, err.Error(), errcode.ViewAlreadyExists), true
 	case errors.Is(err, savedview.ErrLimit):
-		return fail(http.StatusConflict, "view.limit", err.Error()), true
-	default:
-		return problem.Pass()
+		return fail(http.StatusConflict, err.Error(), errcode.ViewLimit), true
 	}
+
+	var none problem.Problem
+
+	return none, false
 }
 
 var (

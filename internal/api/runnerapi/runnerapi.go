@@ -81,7 +81,8 @@ type Config struct {
 	// ServerURL is the public URL of the server, as a runner writes it in
 	// the join challenge.
 	ServerURL string
-	// Now is the clock of this instance. Nil takes time.Now.
+	// Now is the clock of this instance. Nil takes time.Now. The handler uses
+	// each time in UTC at millisecond precision.
 	Now func() time.Time
 	// PollInterval is the time between two tries of a claim in a long poll.
 	// Zero takes five seconds.
@@ -145,10 +146,15 @@ func NewHandler(cfg Config) (*Handler, error) {
 		return nil, err
 	}
 
-	now := cfg.Now
-	if now == nil {
-		now = time.Now
+	clock := cfg.Now
+	if clock == nil {
+		clock = time.Now
 	}
+
+	// The store keeps a time at millisecond precision. The clock of the
+	// handler gives the same precision, so the answer of a create or a change
+	// holds the time that a later read gives.
+	now := func() time.Time { return clock().UTC().Truncate(time.Millisecond) }
 
 	interval := cfg.PollInterval
 	if interval <= 0 {

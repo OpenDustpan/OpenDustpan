@@ -46,8 +46,8 @@ type ProjectName string
 
 // ParseProjectName validates s as a project name.
 func ParseProjectName(s string) (ProjectName, error) {
-	if !ident.Valid(s, maxNameLength) {
-		return "", fmt.Errorf("%w: project %q", ErrInvalidName, s)
+	if err := ident.Check(s, maxNameLength); err != nil {
+		return "", fmt.Errorf("%w: project %w", ErrInvalidName, err)
 	}
 
 	return ProjectName(s), nil
@@ -72,8 +72,8 @@ func (id ID) String() string {
 
 // ParseName validates s as a stack name.
 func ParseName(s string) (Name, error) {
-	if !ident.Valid(s, maxNameLength) {
-		return "", fmt.Errorf("%w: stack %q", ErrInvalidName, s)
+	if err := ident.Check(s, maxNameLength); err != nil {
+		return "", fmt.Errorf("%w: stack %w", ErrInvalidName, err)
 	}
 
 	return Name(s), nil
@@ -190,10 +190,11 @@ type Store interface {
 	// ErrConcurrentModification so the caller recounts once. The check runs
 	// in the same transaction as the delete, so an update that finishes
 	// concurrently cannot drop resources.
-	// It returns ErrNotFound if no live stack has ref, ErrUpdateConflict
-	// while a mutating update of the stack runs, namespace.ErrNotFound if the
-	// namespace does not exist, namespace.ErrFenced if fence is stale, or
-	// audit.ErrInvalidEntry if e fails validation or names another namespace.
+	// It returns ErrNotFound if no live stack has ref, ErrUpdateConflict while
+	// a mutating update of the stack runs (a *UpdateConflictError that names
+	// that update), namespace.ErrNotFound if the namespace does not exist,
+	// namespace.ErrFenced if fence is stale, or audit.ErrInvalidEntry if e
+	// fails validation or names another namespace.
 	// While a manual lock covers the stack, its collection or its namespace,
 	// the error matches ErrUpdateConflict and manuallock.ErrLocked.
 	DeleteStack(
@@ -206,7 +207,8 @@ type Store interface {
 	// ForceDeleteStack soft-deletes the stack identified by ref at the time
 	// e.At and appends e, as DeleteStack does, even when the latest checkpoint
 	// manages resources. It returns ErrNotFound if no live stack has ref,
-	// ErrUpdateConflict while a mutating update of the stack runs,
+	// ErrUpdateConflict while a mutating update of the stack runs (a
+	// *UpdateConflictError that names that update),
 	// namespace.ErrNotFound if the namespace does not exist,
 	// namespace.ErrFenced if fence is stale, or audit.ErrInvalidEntry if e
 	// fails validation or names another namespace. While a manual lock covers
@@ -223,8 +225,13 @@ type Store interface {
 	// RenameStack changes the stack name of oldRef to newName if fence matches
 	// the namespace's current failover version. The stack ID and every child
 	// row stay with the stack. It returns ErrNotFound for a missing stack,
-	// ErrAlreadyExists for a taken name, namespace.ErrNotFound for a missing
-	// namespace or namespace.ErrFenced for a stale fence.
+	// ErrAlreadyExists for a taken name, ErrUpdateConflict while a mutating
+	// update of the stack runs (a *UpdateConflictError that names that
+	// update), namespace.ErrNotFound for a missing namespace or
+	// namespace.ErrFenced for a stale fence. The adapter checks for the running
+	// update in the transaction of the rename, after it locks the stack, so an
+	// update that starts at the same time cannot run under a name that no
+	// stack has.
 	RenameStack(ctx context.Context, oldRef Ref, newName Name, fence namespace.Fence) error
 }
 
@@ -584,8 +591,9 @@ func (s *Service) UpdateTags(
 // Rename changes the stack name of oldRef to newName and returns the renamed
 // stack. The stack ID stays the same. The write is fenced on the namespace's
 // failover version and only allowed in its home region. It returns
-// ErrUpdateConflict, matching manuallock.ErrLocked, while a manual lock covers
-// the stack.
+// ErrUpdateConflict while a mutating update of the stack runs (a
+// *UpdateConflictError that names that update), and ErrUpdateConflict,
+// matching manuallock.ErrLocked, while a manual lock covers the stack.
 func (s *Service) Rename(ctx context.Context, oldRef Ref, newName Name) (Stack, error) {
 	ns, err := s.namespaces.WritableHere(ctx, oldRef.Namespace)
 	if err != nil {

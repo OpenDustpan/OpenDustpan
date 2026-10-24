@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/api/apidesc"
+	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/pkg/idempotency"
 )
 
@@ -33,17 +34,19 @@ const Header = "Idempotency-Key"
 // ReplayedHeader is the answer header of a replay.
 const ReplayedHeader = "Idempotent-Replayed"
 
-// Error codes of the refusals of the middleware.
+// Error codes of the refusals of the middleware. They are the codes of the
+// catalog.
 const (
-	CodeInvalidKey = "request.idempotency-key-invalid"
-	CodeRequired   = "request.idempotency-key-required"
+	CodeInvalidKey = errcode.RequestIdempotencyKeyInvalid
+	CodeRequired   = errcode.RequestIdempotencyKeyRequired
 	// CodeReplayedSecret answers a replay of a route whose answer holds a
 	// secret. The server never keeps the secret, so the replay names the
 	// object that the first request made.
-	CodeReplayedSecret = "request.idempotency-key-replayed-secret"
-	CodeReused         = "request.idempotency-key-reused"
-	CodeInProgress     = "request.idempotency-key-in-progress"
-	CodeBody           = "request.body-invalid"
+	CodeReplayedSecret = errcode.RequestIdempotencyKeyReplayedSecret
+	CodeReused         = errcode.RequestIdempotencyKeyReused
+	CodeInProgress     = errcode.RequestIdempotencyKeyInProgress
+	CodeLost           = errcode.RequestIdempotencyKeyLost
+	CodeBody           = errcode.RequestBodyInvalid
 )
 
 // storeTimeout bounds the calls that end a request: a client that gives up
@@ -63,18 +66,44 @@ var storedHeaders = []string{"Content-Type", "Etag", "Location", "Cache-Control"
 var ErrMissingDependency = errors.New("missing dependency")
 
 // Error is a refusal of the middleware. The adapter writes it in its own
-// error shape.
+// error shape: Answer gives the code and the arguments.
 type Error struct {
-	Code    string
+	Answer  errcode.Answer
 	Message string
-	// ObjectID is the ID of the object that the first request made. It is
-	// set for CodeReplayedSecret only.
-	ObjectID string
-	Status   int
+	// cause is the failure of errcode.New when the refusal answers
+	// server.internal in place of its own code, or nil. Handle logs it.
+	cause  error
+	Status int
 }
 
 // Error implements error.
 func (e *Error) Error() string { return e.Message }
+
+// refuse returns the refusal with the status, the text and the catalog code
+// with its values. A code or a value that the catalog refuses is a bug of this
+// package. The refusal then answers 500 with the code of an internal failure
+// and keeps the failure as its cause, which Handle logs.
+func refuse(status int, code, message string, values ...errcode.Value) *Error {
+	answer, err := errcode.New(code, values...)
+	if err != nil {
+		return &Error{
+			Status: http.StatusInternalServerError, Message: "internal error", Answer: errcode.Internal(),
+			cause: fmt.Errorf("answer %s: %w", code, err),
+		}
+	}
+
+	return &Error{Status: status, Message: message, Answer: answer, cause: nil}
+}
+
+// Lost returns the refusal for a request whose pending record another request
+// took: the store reports idempotency.ErrLost. An adapter writes it in place
+// of that error.
+func Lost() *Error {
+	return refuse(
+		http.StatusConflict, CodeLost,
+		"a newer request took this Idempotency-Key before this request ended: retry later",
+	)
+}
 
 // Config holds the dependencies of a Middleware.
 type Config struct {
@@ -146,8 +175,20 @@ type Call struct {
 //
 // Handle returns an *Error for a refusal, and another error when the store
 // fails. It returns nil when it wrote the answer: a replay, or the answer of
-// c.Serve.
+// c.Serve. A refusal whose code the catalog refuses answers 500 with the code
+// of an internal failure, and Handle logs the code and the cause.
 func (m *Middleware) Handle(w http.ResponseWriter, r *http.Request, c Call) error {
+	err := m.serveCall(w, r, c)
+	if refusal, ok := errors.AsType[*Error](err); ok && refusal != nil && refusal.cause != nil {
+		m.logger.ErrorContext(r.Context(), "idempotent refusal has no catalog answer: answered server.internal",
+			slog.String("error", refusal.cause.Error()))
+	}
+
+	return err
+}
+
+// serveCall is Handle without the log of a refusal that has no catalog answer.
+func (m *Middleware) serveCall(w http.ResponseWriter, r *http.Request, c Call) error {
 	key, err := keyOf(r)
 	if err != nil {
 		return err
@@ -155,10 +196,10 @@ func (m *Middleware) Handle(w http.ResponseWriter, r *http.Request, c Call) erro
 
 	if key == "" {
 		if c.Required {
-			return &Error{
-				Status: http.StatusBadRequest, Code: CodeRequired, ObjectID: "",
-				Message: "this route needs the Idempotency-Key header: send a new random key",
-			}
+			return refuse(
+				http.StatusBadRequest, CodeRequired,
+				"this route needs the Idempotency-Key header: send a new random key",
+			)
 		}
 
 		c.Serve(w, r)
@@ -186,13 +227,14 @@ func (m *Middleware) Handle(w http.ResponseWriter, r *http.Request, c Call) erro
 	switch res.Outcome {
 	case idempotency.Replayed:
 		if id, secret := res.Answer.Headers[replayObjectHeader]; secret {
-			return &Error{
-				Status: http.StatusConflict, Code: CodeReplayedSecret, ObjectID: id,
-				Message: fmt.Sprintf(
+			return refuse(
+				http.StatusConflict, CodeReplayedSecret,
+				fmt.Sprintf(
 					"the first request with this Idempotency-Key made the object %s and answered a secret that the "+
 						"server does not keep: read the object, or send a new key to make another", id,
 				),
-			}
+				errcode.Identifier("objectID", id),
+			)
 		}
 
 		w.Header().Set(ReplayedHeader, "true")
@@ -200,15 +242,15 @@ func (m *Middleware) Handle(w http.ResponseWriter, r *http.Request, c Call) erro
 
 		return nil
 	case idempotency.Reused:
-		return &Error{
-			Status: http.StatusUnprocessableEntity, Code: CodeReused, ObjectID: "",
-			Message: "this Idempotency-Key was used with another request: send a new key for a new request",
-		}
+		return refuse(
+			http.StatusUnprocessableEntity, CodeReused,
+			"this Idempotency-Key was used with another request: send a new key for a new request",
+		)
 	case idempotency.InProgress:
-		return &Error{
-			Status: http.StatusConflict, Code: CodeInProgress, ObjectID: "",
-			Message: "the first request with this Idempotency-Key has not ended: retry later",
-		}
+		return refuse(
+			http.StatusConflict, CodeInProgress,
+			"the first request with this Idempotency-Key has not ended: retry later",
+		)
 	case idempotency.Started:
 		m.run(w, r, ref, res.Token, c)
 
@@ -228,21 +270,15 @@ func keyOf(r *http.Request) (idempotency.Key, error) {
 		return "", nil
 	case 1:
 	default:
-		return "", &Error{
-			Status: http.StatusBadRequest, Code: CodeInvalidKey, ObjectID: "",
-			Message: "send the Idempotency-Key header one time",
-		}
+		return "", refuse(http.StatusBadRequest, CodeInvalidKey, "send the Idempotency-Key header one time")
 	}
 
 	key, err := idempotency.ParseKey(values[0])
 	if err != nil {
-		return "", &Error{
-			Status: http.StatusBadRequest, Code: CodeInvalidKey, ObjectID: "",
-			Message: fmt.Sprintf(
-				"the Idempotency-Key must have 1 to %d printable ASCII characters",
-				idempotency.MaxKeyLength,
-			),
-		}
+		return "", refuse(
+			http.StatusBadRequest, CodeInvalidKey,
+			fmt.Sprintf("the Idempotency-Key must have 1 to %d printable ASCII characters", idempotency.MaxKeyLength),
+		)
 	}
 
 	return key, nil
@@ -256,10 +292,9 @@ func (m *Middleware) readBody(w http.ResponseWriter, r *http.Request) ([]byte, e
 
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, m.max))
 	if err != nil {
-		return nil, &Error{
-			Status: http.StatusBadRequest, Code: CodeBody, ObjectID: "",
-			Message: "the request body is not readable or is over the size limit",
-		}
+		return nil, refuse(
+			http.StatusBadRequest, CodeBody, "the request body is not readable or is over the size limit",
+		)
 	}
 
 	r.Body = io.NopCloser(bytes.NewReader(body))

@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -117,6 +118,7 @@ func pgCopyTables() []pgCopyTable {
 	tables = append(tables, pgCopyGitHostTables()...)
 	tables = append(tables, pgCopyRegistryTables()...)
 	tables = append(tables, pgCopySinkTables()...)
+	tables = append(tables, pgCopyTriggerTables()...)
 	tables = append(tables, pgCopyItemKeyTables()...)
 
 	return tables
@@ -762,8 +764,30 @@ func (s *Store) liveColumns(ctx context.Context, table string) ([]string, error)
 
 // pgIdent quotes one identifier. Table and column names come from the
 // constant spec above, never from the network.
+//
+// Defense in depth: Open refuses a live schema name that checkIdent refuses,
+// and the other names come from the code. pgIdent still doubles each double
+// quote, so that a name from a new caller that skips checkIdent cannot end
+// the quoted identifier.
 func pgIdent(name string) string {
-	return `"` + name + `"`
+	return pgx.Identifier{name}.Sanitize()
+}
+
+// errIdentifier reports a schema, table or column name that is not a plain
+// SQL identifier.
+var errIdentifier = errors.New("name is not a plain SQL identifier")
+
+// plainIdent matches a plain SQL identifier: a letter or an underscore, then
+// letters, digits and underscores.
+var plainIdent = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+
+// checkIdent returns errIdentifier when name is not a plain SQL identifier.
+func checkIdent(name string) error {
+	if !plainIdent.MatchString(name) {
+		return errIdentifier
+	}
+
+	return nil
 }
 
 // inBackupTx runs fn in one transaction with opts, committing on success and
@@ -1717,8 +1741,8 @@ func (s *Store) createRestoreConflict(ctx context.Context, id backup.RestoreID) 
 }
 
 // checkStagedFeatureRows checks the rows of the staged features that have rules
-// of their own: the drift results, the registry, the Git host connections and
-// the notification sinks.
+// of their own: the drift results, the registry, the Git host connections,
+// the notification sinks and the triggers.
 func checkStagedFeatureRows(ctx context.Context, pool *pgxpool.Pool, staging string) error {
 	if err := checkStagedDriftResults(ctx, pool, staging); err != nil {
 		return err
@@ -1732,5 +1756,9 @@ func checkStagedFeatureRows(ctx context.Context, pool *pgxpool.Pool, staging str
 		return err
 	}
 
-	return checkStagedSinks(ctx, pool, staging)
+	if err := checkStagedSinks(ctx, pool, staging); err != nil {
+		return err
+	}
+
+	return checkStagedTriggers(ctx, pool, staging)
 }

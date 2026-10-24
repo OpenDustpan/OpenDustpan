@@ -1,16 +1,13 @@
 package inventory
 
 import (
-	"crypto/sha256"
-	"encoding/base64"
-	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"slices"
 	"strconv"
 	"strings"
 
+	"opendustpan.org/opendustpan/internal/pagetoken"
 	"opendustpan.org/opendustpan/pkg/namespace"
 )
 
@@ -96,37 +93,30 @@ func queryFingerprint(ns namespace.Name, f unitFilter) string {
 	// The order of the query values does not change the query.
 	slices.Sort(parts)
 
-	sum := sha256.Sum256([]byte(strings.Join(parts, "\n")))
-
-	return hex.EncodeToString(sum[:8])
+	return pagetoken.Fingerprint(strings.Join(parts, "\n"))
 }
 
 // encodePageToken returns the opaque token for the page that starts after the
 // unit after, in the query with the fingerprint fingerprint.
 func encodePageToken(after, fingerprint string) string {
-	raw, err := json.Marshal(pageTokenWire{After: after, Fingerprint: fingerprint})
+	token, err := pagetoken.Encode(pageTokenWire{After: after, Fingerprint: fingerprint})
 	if err != nil {
 		return ""
 	}
 
-	return base64.RawURLEncoding.EncodeToString(raw)
+	return token
 }
 
 // decodePageToken returns the unit ID after which the page of the token
 // starts. A token that does not decode, or that another query made, gives
 // errPageToken.
 func decodePageToken(token, fingerprint string) (string, error) {
-	raw, err := base64.RawURLEncoding.DecodeString(token)
-	if err != nil {
-		return "", errPageToken
-	}
-
 	var w pageTokenWire
-	if err := json.Unmarshal(raw, &w); err != nil {
+	if err := pagetoken.Decode(token, &w); err != nil {
 		return "", errPageToken
 	}
 
-	if w.After == "" || w.Fingerprint != fingerprint {
+	if w.After == "" || !pagetoken.SameFingerprint(w.Fingerprint, fingerprint) {
 		return "", errPageToken
 	}
 
