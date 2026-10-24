@@ -111,7 +111,7 @@ func newGuardedHandler(t *testing.T, ws tfe.WorkspaceService, guard tfe.StateGua
 	h, err := tfe.NewHandler(tfe.Config{
 		Registry:      nil,
 		Authenticator: tokenAuthenticator{}, Authorizer: allowAll(), AddressGate: nil,
-		Logger: slog.New(slog.DiscardHandler), Namespaces: newTestNamespaces(t), Workspaces: ws,
+		Logger: slog.New(slog.DiscardHandler), Namespaces: newTestNamespaces(t), Workspaces: ws, OutputChecker: nil,
 		BaseURL: baseurl.Resolver{}, Audit: newTestAudit(), OnAuditFailure: nil, DenialLimiter: nil, Gate: nil,
 		MaxStateBytes: 0, Sessions: nil, SessionPolicy: nil, StateGuard: guard,
 	})
@@ -422,24 +422,6 @@ func TestForceUnlockAsksTheGuardAfterTheAllowance(t *testing.T) {
 
 	if len(guard.seen) != 0 {
 		t.Fatalf("the guard saw %d checks before the allowance, want none", len(guard.seen))
-	}
-}
-
-func TestGateErrorCodesAreListed(t *testing.T) {
-	t.Parallel()
-
-	listed := tfe.ErrorCodes()
-
-	for _, want := range []string{"gate.denied", "gate.limited", "gate.rule-failed", "gate.unavailable"} {
-		found := false
-
-		for _, c := range listed {
-			found = found || c == want
-		}
-
-		if !found {
-			t.Fatalf("ErrorCodes() = %v, want %s in it", listed, want)
-		}
 	}
 }
 

@@ -766,6 +766,16 @@ A rule of one unit that starts a plan of that unit on its own (ADR 267). It has 
 _Avoid_: Run trigger (except for the TFE-compatible object of that name), webhook (an inbound webhook is another idea), automation, hook
 _Copy says_: "trigger". On the page of one tool, that tool's own words: "plan" for OpenTofu and "preview" for the Pulumi CLI.
 
+**Last saver**:
+The person who saved a trigger last. The server sets it from the sign-in of the caller at each save, and a client never sends it. Each start that a trigger makes checks that the last saver still holds the actions of a start. The read of an output by a job that a trigger started uses the current grants of the last saver. A last saver whose principal is missing, deleted or disabled gets nothing. A trigger whose last saver lost access needs a new save.
+_Avoid_: Owner of the trigger, creator
+_Copy says_: "last saver".
+
+**Namespace service principal**:
+The built-in principal of a namespace for a start that no person makes. Its subject is `system:namespace-service:<namespace>`. It holds `unit:run-plan` on the units of its own namespace and no other action. It has no token and no session, and no grant changes what it holds. It appears as the subject in the audit entry of a start by a trigger.
+_Avoid_: Trigger user, robot, bot account
+_Copy says_: "namespace service principal".
+
 **Follows trigger**:
 A trigger of the kind `follows`. It names a source unit. After the source applies, a plan of the unit of the trigger starts. A unit of one tool can follow a unit of another tool. The server refuses a cycle of follows triggers when a person saves one. A follows trigger is a declared dependency edge (ADR 153).
 _Avoid_: Downstream run, chained run, pipeline, dependency (an edge that a read of outputs makes is a dependency, ADR 153)
@@ -1522,6 +1532,14 @@ _Avoid_: Bot name, persona
 **Error code**:
 The stable machine code of an API error, for example `workspace.locked` (ADR 182). It is `errorCode` in the camelCase APIs and the JSON:API `code` member in the TFE-compatible API. A code never changes its meaning. The console selects its message by the code and never parses the English text. Not the `code` field of the camelCase error shapes, which is the HTTP status.
 _Avoid_: Error type, error ID, status code (for the machine code)
+
+**Error argument**:
+A value that the text of an API error names, for example the name of a stack or a limit (ADR 276). The answer sends it as a structured field next to the error code. It is `errorArgs` in the camelCase APIs and `meta.args` in the TFE-compatible API. An argument is an identifier, a quantity or a time (an RFC 3339 string in UTC), and never pre-formatted text. The client formats it.
+_Avoid_: Error value, error parameter, error detail
+
+**Uncoded error path**:
+An error path of an HTTP adapter that answers without a code of the catalog (ADR 276). The path is a branch of a mapping function, an element of a table of errors or an error body. A mapping function is a classify function, or another function that tests an error and names an HTTP status of 400 or more. The catalog is in `internal/errcode`. The known list of each adapter holds the uncoded error paths of today, with a limit, and it only shrinks.
+_Avoid_: Legacy error, untyped error
 
 ### Operations
 

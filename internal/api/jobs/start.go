@@ -108,9 +108,8 @@ func (h *Handler) startJob(w http.ResponseWriter, r *http.Request, p identity.Pr
 		// refusal of the Authorizer: a policy, an agent mode, a freeze, a
 		// limit and a gate refuse the person too.
 		if reason, ok := refusalReason(err); ok {
-			h.guard.Record(ctx, r, p, refusal.Denial{
-				Action: identity.ActionUnitRunPlan, Object: req.Unit, Reason: reason, Window: 0,
-			})
+			action, object := deniedTarget(err, req.Unit)
+			h.guard.Record(ctx, r, p, refusal.Denial{Action: action, Object: object, Reason: reason, Window: 0})
 		}
 
 		h.writeError(ctx, w, err)
@@ -136,6 +135,42 @@ func (h *Handler) startJob(w http.ResponseWriter, r *http.Request, p identity.Pr
 	}
 
 	h.writeJSON(ctx, w, http.StatusCreated, toJobResponse(&j))
+}
+
+// deniedTarget returns the action and the object of the audit entry of the
+// refusal err of a start on unit: the action and the object that the
+// authorizer refused, for a *job.DeniedError, the start action of the planned
+// job on its unit, for a *job.StartRefusalError, and else the start of a plan
+// on unit, the action of the route.
+func deniedTarget(err error, unit identity.Object) (identity.Action, identity.Object) {
+	action, object := refusedTarget(err)
+	if action == "" {
+		return identity.ActionUnitRunPlan, unit
+	}
+
+	// Defense in depth: the service checks the actions on the unit of the
+	// request and on its namespace only, and plans the job on that unit. This
+	// check stays so that a refusal that names an object of another namespace
+	// never writes its entry into the audit log of that namespace.
+	if object.Namespace() != unit.Namespace() {
+		return identity.ActionUnitRunPlan, unit
+	}
+
+	return action, object
+}
+
+// refusedTarget returns the action and the object that the typed refusal in
+// err names, and an empty action when err holds none.
+func refusedTarget(err error) (identity.Action, identity.Object) {
+	if denied, ok := errors.AsType[*job.DeniedError](err); ok {
+		return denied.Action, denied.Object
+	}
+
+	if refused, ok := errors.AsType[*job.StartRefusalError](err); ok {
+		return refused.Action, refused.Object
+	}
+
+	return "", identity.Object{}
 }
 
 // Reasons of the audit entries of the refusals of a start. The entry never
@@ -256,6 +291,15 @@ func (h *Handler) startRequest(r *http.Request, t *target, b *startBody, key str
 			job.ErrInvalid, refusal.Clean(b.Operation, maxOperationEcho))
 	}
 
+	// Defense in depth: the planner of the job service checks the whole code
+	// location. This check stays so that a repository with credentials is
+	// refused at the boundary, before any other layer holds it.
+	if l := b.Location; l != nil {
+		if err := job.CheckRepository(l.Repository); err != nil {
+			return job.StartRequest{}, fmt.Errorf("location: %w", err)
+		}
+	}
+
 	// The pool and the code location decide which hosts run which code. The
 	// body may name them, and the service then checks the extra actions:
 	// namespace:manage-runners for a pool and unit:define-steps for a
@@ -271,7 +315,7 @@ func (h *Handler) startRequest(r *http.Request, t *target, b *startBody, key str
 
 	return job.StartRequest{
 		Unit: unit, Operation: op, Purpose: "", Executor: "", Location: loc, Pool: b.Pool, Edits: nil, Delivery: "",
-		Source: job.SourceAPI, IdempotencyKey: key, Reason: b.Reason, BreakGlass: nil,
+		Source: job.SourceAPI, IdempotencyKey: key, Reason: b.Reason, BreakGlass: nil, Trigger: nil,
 		Channel:  sessionauth.AuditChannel(r, channelHeader),
 		SourceIP: clientip.String(r), UserAgent: truncate(userAgent(r), audit.MaxUserAgentLen),
 		RequestID: requestid.FromContext(r.Context()),

@@ -57,24 +57,12 @@ func checkRequest(a Actor, req *StartRequest) (SourceKind, error) {
 		return "", fmt.Errorf("%w: a job token cannot start a job", identity.ErrDenied)
 	}
 
-	if !req.Operation.Valid() {
-		return "", fmt.Errorf("%w: unknown operation %q", ErrInvalid, req.Operation)
+	err := checkKinds(req)
+	if err != nil {
+		return "", err
 	}
 
-	if req.Executor != "" && !req.Executor.Valid() {
-		return "", fmt.Errorf("%w: unknown executor %q", ErrInvalid, req.Executor)
-	}
-
-	if !req.Purpose.Valid() {
-		return "", fmt.Errorf("%w: unknown purpose %q", ErrInvalid, req.Purpose)
-	}
-
-	if req.Purpose == PurposeDriftCheck && req.Operation != OperationRefresh {
-		return "", fmt.Errorf("%w: a %s has the operation %s, not %s", ErrInvalid, req.Purpose, OperationRefresh,
-			req.Operation)
-	}
-
-	err := checkText(req)
+	err = checkText(req)
 	if err != nil {
 		return "", err
 	}
@@ -84,7 +72,40 @@ func checkRequest(a Actor, req *StartRequest) (SourceKind, error) {
 		return "", err
 	}
 
-	return sourceOf(a, req.Source)
+	source, err := sourceOf(a, req.Source)
+	if err != nil {
+		return "", err
+	}
+
+	err = checkTrigger(a, source, req.Trigger)
+	if err != nil {
+		return "", err
+	}
+
+	return source, nil
+}
+
+// checkKinds checks the operation, the executor and the purpose of req, and that
+// a drift check is a refresh.
+func checkKinds(req *StartRequest) error {
+	if !req.Operation.Valid() {
+		return fmt.Errorf("%w: unknown operation %q", ErrInvalid, req.Operation)
+	}
+
+	if req.Executor != "" && !req.Executor.Valid() {
+		return fmt.Errorf("%w: unknown executor %q", ErrInvalid, req.Executor)
+	}
+
+	if !req.Purpose.Valid() {
+		return fmt.Errorf("%w: unknown purpose %q", ErrInvalid, req.Purpose)
+	}
+
+	if req.Purpose == PurposeDriftCheck && req.Operation != OperationRefresh {
+		return fmt.Errorf("%w: a %s has the operation %s, not %s", ErrInvalid, req.Purpose, OperationRefresh,
+			req.Operation)
+	}
+
+	return nil
 }
 
 // checkText checks the idempotency key and the reason of req.
@@ -103,17 +124,23 @@ func checkText(req *StartRequest) error {
 }
 
 // sourceOf returns the source kind of a start: the kind that the caller
-// gave, or the default for the actor.
+// gave, or the default for the actor. The start of an agent has the source
+// kind agent: it returns ErrInvalid when the caller gives another kind for an
+// agent, so that a policy never sees the start of an agent as a start of a
+// person, a schedule or a feature of the server.
 func sourceOf(a Actor, given SourceKind) (SourceKind, error) {
 	switch {
 	case given == "" && a.Agent != "":
 		return SourceAgent, nil
 	case given == "":
 		return SourceAPI, nil
-	case given.Valid():
-		return given, nil
-	default:
+	case !given.Valid():
 		return "", fmt.Errorf("%w: %q is not a source kind", ErrInvalid, given)
+	case a.Agent != "" && given != SourceAgent:
+		return "", fmt.Errorf("%w: the start of an agent has the source kind %s, not %s", ErrInvalid, SourceAgent,
+			given)
+	default:
+		return given, nil
 	}
 }
 
@@ -200,9 +227,9 @@ func (s *service) unitOf(ctx context.Context, ref identity.Object) (identity.Obj
 }
 
 // preAuthorize returns nil when the principal of a holds the start action of
-// one executor that can do the operation of req, and an error that wraps
-// identity.ErrDenied when it holds none. A request that names an executor is
-// checked for that executor alone.
+// one executor that can do the operation of req, and a *DeniedError for the
+// last action that the authorizer refused when it holds none. A request that
+// names an executor is checked for that executor alone.
 func (s *service) preAuthorize(ctx context.Context, a Actor, unit identity.Object, req *StartRequest) error {
 	kinds := []ExecutorKind{ExecutorRunner, ExecutorWriteBack}
 	if req.Executor != "" {
@@ -227,7 +254,7 @@ func (s *service) preAuthorize(ctx context.Context, a Actor, unit identity.Objec
 		case err == nil:
 			return nil
 		case errors.Is(err, identity.ErrDenied):
-			denied = fmt.Errorf("%w: %s on %s", err, action, unit.String())
+			denied = &DeniedError{Action: action, Object: unit, Err: err}
 		default:
 			return fmt.Errorf("authorize %s: %w", action, err)
 		}
@@ -249,8 +276,8 @@ func (s *service) authorizeFields(ctx context.Context, a Actor, unit identity.Ob
 }
 
 // authorize checks the start actions of spec for the principal of a, and
-// returns an error that wraps identity.ErrDenied for the first one that the
-// authorizer refuses. It fails closed: an error of the authorizer refuses.
+// returns a *DeniedError for the first one that the authorizer refuses. It
+// fails closed: an error of the authorizer refuses.
 func (s *service) authorize(ctx context.Context, a Actor, spec *Spec, req *StartRequest) error {
 	reqs, err := StartRequirements(*spec, req.BreakGlass)
 	if err != nil {
@@ -265,7 +292,8 @@ func (s *service) authorize(ctx context.Context, a Actor, spec *Spec, req *Start
 	return s.authorizeAll(ctx, a, reqs)
 }
 
-// authorizeAll asks the authorizer for each requirement, in order.
+// authorizeAll asks the authorizer for each requirement, in order, and
+// returns a *DeniedError for the first one that the authorizer refuses.
 func (s *service) authorizeAll(ctx context.Context, a Actor, reqs []Requirement) error {
 	for i := range reqs {
 		r := &reqs[i]
@@ -275,7 +303,7 @@ func (s *service) authorizeAll(ctx context.Context, a Actor, reqs []Requirement)
 		switch {
 		case err == nil:
 		case errors.Is(err, identity.ErrDenied):
-			return fmt.Errorf("%w: %s on %s", err, r.Action, r.Object.String())
+			return &DeniedError{Action: r.Action, Object: r.Object, Err: err}
 		default:
 			return fmt.Errorf("authorize %s: %w", r.Action, err)
 		}
@@ -431,7 +459,8 @@ func (s *service) newJob(a Actor, c *decided) Job {
 	j := Job{
 		ID: s.newID(), Spec: c.spec, State: StateQueued, Wait: WaitNone, Reason: "",
 		Phases: make([]Phase, len(c.kinds)), Current: 0, StartedBy: a.Principal.Subject, Source: c.source,
-		Agent: a.Agent, AgentMode: a.Mode, BreakGlass: c.bg, Delivery: nil, Closed: nil,
+		Agent: a.Agent, AgentMode: a.Mode, BreakGlass: c.bg, Trigger: copyTrigger(c.req.Trigger), Delivery: nil,
+		Closed:       nil,
 		Verification: VerificationNone, IdempotencyKey: scopedKey(a.Principal.Subject, c.req.IdempotencyKey),
 		RequestHash: requestHash(c.req), Version: 0, CreatedAt: time.Time{}, UpdatedAt: time.Time{},
 	}
@@ -445,6 +474,18 @@ func (s *service) newJob(a Actor, c *decided) Job {
 	}
 
 	return j
+}
+
+// copyTrigger returns a copy of ref, so that the job never shares memory with
+// the request.
+func copyTrigger(ref *TriggerRef) *TriggerRef {
+	if ref == nil {
+		return nil
+	}
+
+	c := *ref
+
+	return &c
 }
 
 // scopedKey returns the key that the store keeps for the idempotency key of
@@ -500,6 +541,13 @@ func requestHash(req *StartRequest) string {
 		put(req.BreakGlass.Reason)
 	} else {
 		put("")
+	}
+
+	// The trigger joins the hash when there is one, so a request without a
+	// trigger keeps its hash.
+	if req.Trigger != nil {
+		put(req.Trigger.ID)
+		put(req.Trigger.Saver)
 	}
 
 	for i := range req.Edits {
@@ -567,6 +615,13 @@ func startChanges(a Actor, j *Job) []audit.Change {
 		changes = append(changes, audit.Change{
 			Key: "freeze", Old: nil, New: j.BreakGlass.Freeze, Layer: "", TakesEffect: "",
 		})
+	}
+
+	if j.Trigger != nil {
+		changes = append(changes,
+			audit.Change{Key: "trigger", Old: nil, New: j.Trigger.ID, Layer: "", TakesEffect: ""},
+			audit.Change{Key: "trigger-saver", Old: nil, New: j.Trigger.Saver, Layer: "", TakesEffect: ""},
+		)
 	}
 
 	return changes

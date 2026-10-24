@@ -3,6 +3,7 @@ package sqlite
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -43,9 +44,9 @@ const unitLockedFilter = ` AND (COALESCE(i.lock_holder, '') <> '' OR i.lock_sinc
     OR ul.holder IS NOT NULL OR cl.holder IS NOT NULL OR nl.holder IS NOT NULL)`
 
 // QueryUnits implements inventory.UnitQuerier with one page query and one
-// label query for the units of the page. The filters are in the WHERE
-// clause, so the statement reads only the rows of the page and the rows that
-// the filters skip.
+// label query for the units of the page, in one read transaction. The filters
+// are in the WHERE clause, so the statement reads only the rows of the page
+// and the rows that the filters skip.
 func (s *Store) QueryUnits(ctx context.Context, q inventory.UnitQuery) ([]inventory.Entry, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -54,9 +55,29 @@ func (s *Store) QueryUnits(ctx context.Context, q inventory.UnitQuery) ([]invent
 		return []inventory.Entry{}, nil
 	}
 
+	tx, err := s.conn.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelDefault, ReadOnly: true})
+	if err != nil {
+		return nil, fmt.Errorf("begin read transaction: %w", err)
+	}
+
+	page, err := s.queryUnitPage(ctx, tx, q)
+	if err != nil {
+		return nil, errors.Join(err, rollback(tx))
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("commit read transaction: %w", err)
+	}
+
+	return page, nil
+}
+
+// queryUnitPage reads the page of q and its labels in tx, so the labels
+// belong to the same state as the rows that the label filter selected.
+func (s *Store) queryUnitPage(ctx context.Context, tx *sql.Tx, q inventory.UnitQuery) ([]inventory.Entry, error) {
 	query, args := unitPageQuery(q)
 
-	rows, err := s.conn.QueryContext(ctx, query, args...)
+	rows, err := tx.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("select inventory page: %w", err)
 	}
@@ -70,6 +91,10 @@ func (s *Store) QueryUnits(ctx context.Context, q inventory.UnitQuery) ([]invent
 		return page, nil
 	}
 
+	if s.betweenPageReads != nil {
+		s.betweenPageReads(ctx)
+	}
+
 	ids := make([]string, len(page))
 	byUnit := make(map[string]map[string]string, len(page))
 
@@ -78,7 +103,7 @@ func (s *Store) QueryUnits(ctx context.Context, q inventory.UnitQuery) ([]invent
 		byUnit[page[i].UnitID] = map[string]string{}
 	}
 
-	labels, err := s.queries.ListInventoryLabelsOfUnits(ctx, ids)
+	labels, err := s.queries.WithTx(tx).ListInventoryLabelsOfUnits(ctx, ids)
 	if err != nil {
 		return nil, fmt.Errorf("select inventory page labels: %w", err)
 	}

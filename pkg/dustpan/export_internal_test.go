@@ -4,6 +4,10 @@ import (
 	"reflect"
 
 	"opendustpan.org/opendustpan/internal/api/apidesc"
+	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/stack"
+	"opendustpan.org/opendustpan/pkg/workspace"
 )
 
 // RouteSource is the list of the route patterns of one mounted adapter.
@@ -108,4 +112,35 @@ func (s *Server) HandlerPackages() map[string]string {
 	}
 
 	return out
+}
+
+// ToolServices holds the domain services of the tools that newServices builds.
+// The conformance suite of output sharing uses them to make units and states
+// through the same code as a server.
+type ToolServices struct {
+	Namespaces *namespace.Service
+	Stacks     *stack.Service
+	Updates    *stack.Updates
+	Workspaces *workspace.Service
+}
+
+// NewToolServices builds the domain services from opts as a server does, with
+// an authorizer that only an administrator passes, and returns the services
+// of the tools.
+func NewToolServices(opts ...Option) (ToolServices, error) {
+	cfg := defaultSettings()
+	for _, opt := range opts {
+		opt(cfg)
+	}
+
+	cfg.authorizer = identity.AdminOnly{}
+
+	svc, err := newServices(cfg, nil)
+	if err != nil {
+		return ToolServices{}, err
+	}
+
+	return ToolServices{
+		Namespaces: svc.namespaces, Stacks: svc.stacks, Updates: svc.updates, Workspaces: svc.workspaces,
+	}, nil
 }

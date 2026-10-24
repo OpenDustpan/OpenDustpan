@@ -8,13 +8,10 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
-	"net/url"
-	"strings"
 	"time"
 
 	"opendustpan.org/opendustpan/internal/api/refusal"
 	"opendustpan.org/opendustpan/internal/bodygate"
-	"opendustpan.org/opendustpan/pkg/collection"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/manuallock"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -92,64 +89,17 @@ func lockInfoOf(l workspace.Lock) lockInfo {
 	}
 }
 
-// The routes of the lock API that remove a manual lock. The backend names them
-// in the lock info, because `tofu force-unlock` cannot remove a manual lock.
-const (
-	unitLockRoute       = "/api/inventory/unit-lock"
-	collectionLockRoute = "/api/dustpan/v1/namespaces/%s/collections/%s/lock"
-	namespaceLockRoute  = "/api/dustpan/v1/namespaces/%s/lock"
-)
-
-// lockRemovalRoutes holds the routes that remove a manual lock. Remove is the
-// route of the holder. Force is the route of a person with unit:manage.
-type lockRemovalRoutes struct {
-	Remove string
-	Force  string
-}
-
-// manualLockRoutes returns the routes that remove the manual lock of t: the
-// collection lock routes, the namespace lock routes, or else the unit lock
-// routes.
-func manualLockRoutes(t manuallock.Target) lockRemovalRoutes {
-	if t.Kind == manuallock.KindCollection {
-		remove := fmt.Sprintf(collectionLockRoute, url.PathEscape(t.Collection.Namespace.String()),
-			url.PathEscape(t.Collection.Name.String()))
-
-		return lockRemovalRoutes{Remove: remove, Force: remove + "/force-unlock"}
-	}
-
-	if t.Kind == manuallock.KindNamespace {
-		remove := fmt.Sprintf(namespaceLockRoute, url.PathEscape(t.Space.String()))
-
-		return lockRemovalRoutes{Remove: remove, Force: remove + "/force-unlock"}
-	}
-
-	unit := unitQueryValue(t.Unit)
-
-	return lockRemovalRoutes{
-		Remove: unitLockRoute + "?unit=" + unit,
-		Force:  unitLockRoute + "/force-unlock?unit=" + unit,
-	}
-}
-
-// unitQueryValue escapes the unit reference for a query. A colon and a slash
-// are legal in a query, so they stay readable for the person who copies the
-// route. Every other reserved character stays escaped.
-func unitQueryValue(u collection.UnitRef) string {
-	return strings.NewReplacer("%3A", ":", "%2F", "/").Replace(url.QueryEscape(u.String()))
-}
-
 // manualLockInfo returns the lock info of a manual lock. The backend shows ID
 // and Info to the user, so both say that a manual lock blocks the run and name
 // the route that removes it, after plain words. The ID is not a tool lock ID:
 // `tofu force-unlock` cannot use it.
 func manualLockInfo(e *manuallock.LockedError) lockInfo {
-	routes := manualLockRoutes(e.Lock.Target)
+	routes := e.Lock.Target.RemovalRoutes()
 
 	return lockInfo{
 		ID:        "A manual lock blocks this run. To remove it, send `DELETE " + routes.Remove + "`.",
 		Operation: "manual lock",
-		Info: e.Error() + ". `tofu force-unlock` does not remove a manual lock. " +
+		Info: e.Refusal() + ". `tofu force-unlock` does not remove a manual lock. " +
 			"The holder sends `DELETE " + routes.Remove + "`. A person with unit:manage sends `POST " + routes.Force + "`.",
 		Who:     manuallock.SafeText(e.Lock.Holder),
 		Version: "",
@@ -194,16 +144,20 @@ func (h *Handler) lockWorkspace(w http.ResponseWriter, r *http.Request, c call) 
 		return
 	}
 
-	ws, err := h.workspaceOf(ctx, c)
+	req := workspace.LockRequest{
+		Holder: c.principal.Subject, Reason: info.Info, LockID: info.ID, JobID: c.principal.JobTokenID(),
+	}
+
+	ws, err := h.workspaceOf(ctx, c, func(ctx context.Context) error {
+		return h.ws.AdmitFirstLock(ctx, c.ref, req)
+	})
 	if err != nil {
 		h.writeLockError(ctx, w, err)
 
 		return
 	}
 
-	_, err = h.ws.LockWithIDForJob(ctx, ws.ID, workspace.LockRequest{
-		Holder: c.principal.Subject, Reason: info.Info, LockID: info.ID, JobID: c.principal.JobTokenID(),
-	})
+	_, err = h.ws.LockWithIDForJob(ctx, ws.ID, req)
 	if errors.Is(err, workspace.ErrLocked) || errors.Is(err, workspace.ErrConcurrentModification) {
 		h.writeHeld(ctx, w, c, err)
 
@@ -245,26 +199,49 @@ func (h *Handler) writeHeld(ctx context.Context, w http.ResponseWriter, c call, 
 		return
 	}
 
-	current, err := h.ws.Get(ctx, c.ref)
-	if err != nil || !current.Lock.Locked() {
+	lock, err := h.refusingLock(ctx, c, refused)
+	if err != nil || !lock.Locked() {
 		h.writeError(ctx, w, refused)
 
 		return
 	}
 
-	h.writeLocked(w, current.Lock)
+	h.writeLocked(w, lock)
 }
 
-// workspaceOf returns the workspace of the call, creating it on first use. Two
-// first requests can both find it missing: the create that loses answers
-// ErrAlreadyExists, and the workspace is read again, so it is not a 500.
-func (h *Handler) workspaceOf(ctx context.Context, c call) (workspace.Workspace, error) {
+// refusingLock returns the lock that refused the call. The domain names that
+// lock in its refusal, as the refusing revision held it. A refusal without
+// one, such as a lost compare-and-swap of the store, reads the workspace
+// again.
+func (h *Handler) refusingLock(ctx context.Context, c call, refused error) (workspace.Lock, error) {
+	if lock, ok := workspace.RefusingLock(refused); ok {
+		return lock, nil
+	}
+
+	current, err := h.ws.Get(ctx, c.ref)
+	if err != nil {
+		return workspace.Lock{}, err
+	}
+
+	return current.Lock, nil
+}
+
+// workspaceOf returns the workspace of the call, creating it on first use. A
+// first request creates the workspace only when the request is admitted: the
+// caller holds unit:manage on the unit, and admit, which runs the checks of the
+// request against a workspace that does not exist yet, returns nil. A refused
+// request leaves no workspace. Two first requests can both find the workspace
+// missing: the create that loses answers ErrAlreadyExists, and the workspace is
+// read again, so it is not a 500.
+func (h *Handler) workspaceOf(
+	ctx context.Context, c call, admit func(ctx context.Context) error,
+) (workspace.Workspace, error) {
 	ws, err := h.ws.Get(ctx, c.ref)
 	if !errors.Is(err, workspace.ErrNotFound) {
 		return ws, err
 	}
 
-	ws, err = h.createWorkspace(ctx, c)
+	ws, err = h.createWorkspace(ctx, c, admit)
 	if errors.Is(err, workspace.ErrAlreadyExists) {
 		return h.ws.Get(ctx, c.ref)
 	}
@@ -273,8 +250,11 @@ func (h *Handler) workspaceOf(ctx context.Context, c call) (workspace.Workspace,
 }
 
 // createWorkspace creates the workspace of the path for a first LOCK or POST, after the caller
-// holds unit:manage on its unit.
-func (h *Handler) createWorkspace(ctx context.Context, c call) (workspace.Workspace, error) {
+// holds unit:manage on its unit and admit returns nil. The caller authorizes
+// first, so a caller without the action learns nothing from the checks of admit.
+func (h *Handler) createWorkspace(
+	ctx context.Context, c call, admit func(ctx context.Context) error,
+) (workspace.Workspace, error) {
 	obj, err := unitObject(c.ref)
 	if err != nil {
 		return workspace.Workspace{}, err
@@ -284,7 +264,14 @@ func (h *Handler) createWorkspace(ctx context.Context, c call) (workspace.Worksp
 		return workspace.Workspace{}, fmt.Errorf("authorize %s: %w", identity.ActionUnitManage, authErr)
 	}
 
-	return h.ws.Create(ctx, c.ref)
+	if admitErr := admit(ctx); admitErr != nil {
+		return workspace.Workspace{}, admitErr
+	}
+
+	// The job of the token, if any, decides whether a manual lock of the
+	// namespace applies to the create: the phase of a job that started before
+	// the lock passes it, as it does for the LOCK that follows.
+	return h.ws.Create(workspace.WithJob(ctx, c.principal.JobTokenID()), c.ref)
 }
 
 // unlockWorkspace serves UNLOCK. The lock ID of the body must be the current
@@ -375,12 +362,12 @@ func (h *Handler) writeConflict(w http.ResponseWriter, held workspace.Lock) {
 // writeHeldOrConflict answers a refused UNLOCK with the lock that holds the
 // workspace now, as 409.
 func (h *Handler) writeHeldOrConflict(ctx context.Context, w http.ResponseWriter, c call, refused error) {
-	current, err := h.ws.Get(ctx, c.ref)
+	lock, err := h.refusingLock(ctx, c, refused)
 	if err != nil {
 		h.writeError(ctx, w, refused)
 
 		return
 	}
 
-	h.writeConflict(w, current.Lock)
+	h.writeConflict(w, lock)
 }

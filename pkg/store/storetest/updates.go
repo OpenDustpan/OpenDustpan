@@ -110,6 +110,8 @@ func RunUpdates(t *testing.T, newStore UpdatesFactory) {
 		{name: "canceled or failed update keeps its checkpoint", test: testCheckpointKeepsAfterEnd},
 		{name: "children of a deleted stack are not reachable by name", test: testDeletedStackChildrenUnreachable},
 		{name: "delete during a running update is ErrUpdateConflict", test: testDeleteDuringRunningUpdate},
+		{name: "rename during a running update is ErrUpdateConflict", test: testRenameDuringRunningUpdate},
+		{name: "rename races a new update and exactly one wins", test: testRenameRaceWithNewUpdate},
 		{name: "delete without force refuses a stack with resources", test: testDeleteRefusesResources},
 		{name: "delete with force removes a stack with resources", test: testDeleteWithForceRemovesResources},
 		{name: "delete without force follows the latest checkpoint", test: testDeleteFollowsLatestCheckpoint},
@@ -1884,6 +1886,139 @@ func testDeletedStackChildrenUnreachable(t *testing.T, f fixture) {
 
 	if _, err := f.s.ListEvents(t.Context(), f.ref, u.ID, -1, 100); !errors.Is(err, stack.ErrUpdateNotFound) {
 		t.Errorf("events after delete: err = %v, want ErrUpdateNotFound", err)
+	}
+}
+
+// testRenameDuringRunningUpdate checks that a rename waits for the stack lock:
+// while a mutating update runs it fails with ErrUpdateConflict and changes
+// nothing, so the update keeps its stack.
+func testRenameDuringRunningUpdate(t *testing.T, f fixture) {
+	t.Helper()
+
+	newRef := stack.Ref{Namespace: f.ref.Namespace, Project: f.ref.Project, Stack: "renamed"}
+
+	running := f.run(t, f.ref, "u1", mutating())
+
+	renameErr := f.s.RenameStack(t.Context(), f.ref, "renamed", f.fence)
+	if !errors.Is(renameErr, stack.ErrUpdateConflict) {
+		t.Fatalf("rename during a running update: err = %v, want ErrUpdateConflict", renameErr)
+	}
+
+	if _, err := f.s.GetStack(t.Context(), f.ref); err != nil {
+		t.Errorf("get stack after a refused rename: %v", err)
+	}
+
+	if _, err := f.s.GetStack(t.Context(), newRef); !errors.Is(err, stack.ErrNotFound) {
+		t.Errorf("get new name after a refused rename: err = %v, want ErrNotFound", err)
+	}
+
+	if _, err := f.s.ActiveUpdate(t.Context(), f.ref); err != nil {
+		t.Errorf("active update after a refused rename: %v", err)
+	}
+
+	f.end(t, running, stack.StatusSucceeded)
+
+	if err := f.s.RenameStack(t.Context(), f.ref, "renamed", f.fence); err != nil {
+		t.Errorf("rename after the update ended: %v", err)
+	}
+}
+
+// renameRaceRounds is the number of stacks that testRenameRaceWithNewUpdate
+// races. One round hits one interleaving, so many rounds make a missing lock
+// show on a store that runs the two writes at the same time.
+const renameRaceRounds = 40
+
+// testRenameRaceWithNewUpdate starts a mutating update and renames the same
+// stack at the same time, once per round. Exactly one of the two wins: if the
+// start wins, the rename refuses and the update keeps its stack name. If the
+// rename wins, the start finds no stack and no update is left under any name.
+// Both never win, because the update would run under a name that no stack has.
+func testRenameRaceWithNewUpdate(t *testing.T, f fixture) {
+	t.Helper()
+
+	for round := range renameRaceRounds {
+		name := fmt.Sprintf("race-%d", round)
+		st := newStack(f.ref.Namespace, f.ref.Project.String(), name)
+
+		if err := f.s.CreateStack(t.Context(), st, f.fence); err != nil {
+			t.Fatalf("create stack %s: %v", st.Ref, err)
+		}
+
+		u := f.create(t, st.Ref, fmt.Sprintf("racer-%d", round), mutating())
+		newRef := stack.Ref{Namespace: st.Ref.Namespace, Project: st.Ref.Project, Stack: stack.Name(name + "-renamed")}
+
+		var (
+			startErr  error
+			renameErr error
+			wg        sync.WaitGroup
+			gate      = make(chan struct{})
+		)
+
+		wg.Go(func() {
+			<-gate
+
+			_, startErr = f.s.StartUpdate(t.Context(), started(t, u), f.fence)
+		})
+		wg.Go(func() {
+			<-gate
+
+			renameErr = f.s.RenameStack(t.Context(), st.Ref, newRef.Stack, f.fence)
+		})
+
+		close(gate)
+		wg.Wait()
+
+		checkRenameRace(t, f, renameRace{oldRef: st.Ref, newRef: newRef, startErr: startErr, renameErr: renameErr})
+	}
+}
+
+// renameRace is the outcome of one round of testRenameRaceWithNewUpdate.
+type renameRace struct {
+	startErr  error
+	renameErr error
+	oldRef    stack.Ref
+	newRef    stack.Ref
+}
+
+// checkRenameRace proves that a rename and a concurrent start of a mutating
+// update of the same stack never both succeed, and that the loser changed
+// nothing.
+func checkRenameRace(t *testing.T, f fixture, r renameRace) {
+	t.Helper()
+
+	oldRef, newRef, startErr, renameErr := r.oldRef, r.newRef, r.startErr, r.renameErr
+
+	switch {
+	case startErr == nil && renameErr == nil:
+		t.Fatalf("rename of %s and update start both succeeded: the update runs under a name that no stack has", oldRef)
+	case startErr == nil:
+		if !errors.Is(renameErr, stack.ErrUpdateConflict) {
+			t.Fatalf("rename lost to the update start: err = %v, want ErrUpdateConflict", renameErr)
+		}
+
+		if _, err := f.s.GetStack(t.Context(), oldRef); err != nil {
+			t.Fatalf("get stack %s after a refused rename: %v", oldRef, err)
+		}
+
+		if _, err := f.s.GetStack(t.Context(), newRef); !errors.Is(err, stack.ErrNotFound) {
+			t.Fatalf("get %s after a refused rename: err = %v, want ErrNotFound", newRef, err)
+		}
+
+		if _, err := f.s.ActiveUpdate(t.Context(), oldRef); err != nil {
+			t.Fatalf("active update of %s after a refused rename: %v", oldRef, err)
+		}
+	case renameErr == nil:
+		checkUpdateLost(t, startErr)
+
+		if _, err := f.s.GetStack(t.Context(), newRef); err != nil {
+			t.Fatalf("get stack %s after the rename: %v", newRef, err)
+		}
+
+		if _, err := f.s.ActiveUpdate(t.Context(), newRef); !errors.Is(err, stack.ErrUpdateNotFound) {
+			t.Fatalf("active update of %s after a lost start: err = %v, want ErrUpdateNotFound", newRef, err)
+		}
+	default:
+		t.Fatalf("start err = %v, rename err = %v; want one side to win", startErr, renameErr)
 	}
 }
 

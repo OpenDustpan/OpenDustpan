@@ -167,6 +167,7 @@ func stepCases() []recorderCase {
 		{"steps: a second end with the same exit code changes nothing, another is ErrConflict", testStepEndTwice},
 		{"steps: during a cancel a begin is ErrCanceled and an end is recorded", testStepCancel},
 		{"steps: the steps of an earlier claim stay after a takeover", testStepTakeover},
+		{"steps: after a takeover a begin of a step that the replaced claim ended is new", testStepTakeoverEnded},
 		{"steps: the steps of a deliver phase are commit and review-request", testStepDeliver},
 	}
 }
@@ -494,6 +495,41 @@ func testStepTakeover(t *testing.T, h RecorderHarness) {
 	got := stepsOf(t, h, second)
 	if len(got) != 2 || got[0].Token != first.Claim.Claim.Token || got[1].Token != second.Claim.Claim.Token {
 		t.Fatalf("records after a takeover = %+v, want one under each token", got)
+	}
+}
+
+// testStepTakeoverEnded proves that the record of a step is per claim. The
+// new claim runs the phase again from its first step, so its begin of a step
+// that the replaced claim ended is a new record, not durable.ErrStepDone.
+func testStepTakeoverEnded(t *testing.T, h RecorderHarness) {
+	t.Helper()
+
+	f := setUp(t, h.Harness)
+	j := dispatched(t, h.Harness, f, plannedJob{unit: "unit-ended", op: job.OperationPlan, steps: nil})
+	first := claimOf(t, h.Harness, runnerOne, longRenew, runnerKind(&j))
+
+	mustBegin(t, h, first, stepPlan)
+	mustEnd(t, h, first, stepPlan, 0)
+	lapse(t, h.Harness, first)
+
+	second, err := claimAgainOf(t, h.Harness, runnerThree, runnerKind(&j))
+	if err != nil {
+		t.Fatalf("takeover = %v", err)
+	}
+
+	if err := h.Recorder.BeginStep(t.Context(), second.Claim, stepPlan); err != nil {
+		t.Fatalf("BeginStep by the new claim of a step that the replaced claim ended = %v, want nil", err)
+	}
+
+	mustEnd(t, h, second, stepPlan, 0)
+
+	got := stepsOf(t, h, second)
+	if len(got) != 2 || got[0].Token != first.Claim.Claim.Token || got[1].Token != second.Claim.Claim.Token {
+		t.Fatalf("records after a takeover = %+v, want one under each token", got)
+	}
+
+	if got[0].FinishedAt.IsZero() || got[1].FinishedAt.IsZero() {
+		t.Fatalf("records after a takeover = %+v, want both ended", got)
 	}
 }
 

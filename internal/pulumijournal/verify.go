@@ -2,11 +2,12 @@ package pulumijournal
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 )
 
-// Verifier checks a journal batch when it arrives. It satisfies
-// stack.BatchVerifier without importing that package. Each entry must pass
+// Verifier checks a journal batch when it arrives. Its ReadBatch satisfies
+// stack.BatchReader without importing that package. Each entry must pass
 // the rules of decision 5.5, which DecodeEntries applies. Each entry must also
 // be one that the replayer can apply, and each reference to an earlier entry must
 // name an operation that the update holds or an earlier entry of the batch. A
@@ -38,35 +39,98 @@ func (Verifier) VerifyBatch(
 ) (bool, error) {
 	check := newBatchCheck(known, recordsChanged)
 
-	// A write entry (kind 5) must come before every entry that changes the replay
-	// records (upstream backend/journal.go of github.com/pulumi/pulumi/pkg/v3
-	// v3.268.0, lines 295 to 298, expects that order).
-	err := DecodeEntries(bytes.NewReader(body), version, func(entry JournalEntry) error {
-		if err := replayable(entry); err != nil {
-			return err
-		}
-
-		if err := check.writeOrder(entry); err != nil {
-			return err
-		}
-
-		check.noteRecords(entry)
-		check.trackCompletion(entry)
-
-		if err := check.references(entry); err != nil {
-			return err
-		}
-
-		check.trackRemoval(entry)
-		check.trackRebuild(entry)
-
-		return nil
-	})
+	err := DecodeEntries(bytes.NewReader(body), version, check.entry)
 	if err != nil {
 		return false, err
 	}
 
 	return check.changed, nil
+}
+
+// BatchSummary is a journal batch that ReadBatch decoded: the number of its
+// entries, their sequence IDs in the order of the body, the completed
+// operations after its last rebuilt base state entry, whether it holds such
+// an entry, and the check of its entries against the stored state of the
+// update. It is an alias of an unnamed struct type of standard types, the same
+// type as stack.BatchSummary, so ReadBatch satisfies stack.BatchReader
+// without importing that package.
+type BatchSummary = struct {
+	Entries     int
+	SequenceIDs []int64
+	Operations  []int64
+	HasRebuild  bool
+	Verify      func(known []int64, recordsChanged bool) (changed bool, err error)
+}
+
+// ReadBatch decodes body once, with the checks of DecodeEntries and the
+// negotiated version, and returns its summary. Verify runs the checks of
+// VerifyBatch on the entries of that one decode, so the store checks the
+// batch against the stored state in its transaction without a second decode.
+// ReadBatch refuses a sequence ID that appears twice with ErrSequenceID. On a
+// refusal, the summary holds every sequence ID that a plain JSON read of the
+// body finds, also one that is not valid or appears twice, so the record of
+// the refusal names them. Verify is nil.
+func (Verifier) ReadBatch(body []byte, version int) (BatchSummary, error) {
+	var (
+		entries []JournalEntry
+		seqs    []int64
+		ops     []int64
+		rebuild bool
+	)
+
+	seen := make(map[int64]bool)
+
+	err := DecodeEntries(bytes.NewReader(body), version, func(entry JournalEntry) error {
+		if seen[entry.SequenceID] {
+			return fmt.Errorf("entry %s: the sequence ID appears twice: %w", entryLabel(entry), ErrSequenceID)
+		}
+
+		seen[entry.SequenceID] = true
+		seqs = append(seqs, entry.SequenceID)
+		entries = append(entries, entry)
+
+		switch {
+		case entry.Kind == JournalEntryKindRebuiltBaseState:
+			// The replay drops its records, so the earlier operations are no
+			// longer names that later entries can use.
+			ops, rebuild = ops[:0], true
+		case completed(entry):
+			ops = append(ops, entry.OperationID)
+		default:
+			// Any other entry names no operation that later entries can use.
+		}
+
+		return nil
+	})
+
+	summary := BatchSummary{Entries: len(entries), SequenceIDs: seqs, Operations: ops, HasRebuild: rebuild, Verify: nil}
+	if err != nil {
+		summary.SequenceIDs = readableSequences(body)
+
+		return summary, err
+	}
+
+	if summary.SequenceIDs == nil {
+		summary.SequenceIDs = []int64{}
+	}
+
+	if summary.Operations == nil {
+		summary.Operations = []int64{}
+	}
+
+	summary.Verify = func(known []int64, recordsChanged bool) (bool, error) {
+		check := newBatchCheck(known, recordsChanged)
+
+		for i := range entries {
+			if err := check.entry(entries[i]); err != nil {
+				return false, err
+			}
+		}
+
+		return check.changed, nil
+	}
+
+	return summary, nil
 }
 
 // batchCheck holds the verifier state for one batch: the completed operations
@@ -89,6 +153,33 @@ func newBatchCheck(known []int64, stored bool) *batchCheck {
 	}
 
 	return &batchCheck{held: held, removed: make(map[int64]bool), stored: stored, changed: false}
+}
+
+// entry runs the checks of one entry, in the order of the body, and records
+// what later entries need. A write entry (kind 5) must come before every entry
+// that changes the replay records (upstream backend/journal.go of
+// github.com/pulumi/pulumi/pkg/v3 v3.268.0, lines 295 to 298, expects that
+// order).
+func (c *batchCheck) entry(entry JournalEntry) error {
+	if err := replayable(entry); err != nil {
+		return err
+	}
+
+	if err := c.writeOrder(entry); err != nil {
+		return err
+	}
+
+	c.noteRecords(entry)
+	c.trackCompletion(entry)
+
+	if err := c.references(entry); err != nil {
+		return err
+	}
+
+	c.trackRemoval(entry)
+	c.trackRebuild(entry)
+
+	return nil
 }
 
 // writeOrder refuses a write entry after an entry that changes the records, in
@@ -204,4 +295,31 @@ func references(entry JournalEntry) []int64 {
 	}
 
 	return refs
+}
+
+// readableSequences returns the sequence IDs of every entry of body that a
+// plain JSON read finds, in the order of the body, with no check of their
+// values. It returns nil for a body that is not a JSON object with entries.
+func readableSequences(body []byte) []int64 {
+	var batch sequenceBatch
+	if err := json.Unmarshal(body, &batch); err != nil {
+		return nil
+	}
+
+	seqs := make([]int64, 0, len(batch.Entries))
+	for _, entry := range batch.Entries {
+		seqs = append(seqs, entry.SequenceID)
+	}
+
+	return seqs
+}
+
+// sequenceBatch is the part of a batch body that readableSequences reads.
+type sequenceBatch struct {
+	Entries []sequenceEntry `json:"entries"`
+}
+
+// sequenceEntry is the sequence ID of one entry of a sequenceBatch.
+type sequenceEntry struct {
+	SequenceID int64 `json:"sequenceID"`
 }

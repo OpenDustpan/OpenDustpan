@@ -81,7 +81,8 @@ func checkManualLockBody(t *testing.T, body string, lock manuallock.Lock) {
 	}
 
 	want := "stack acme/web/prod is in collection acme/payments, which has a manual lock by alice since " +
-		lock.Since.UTC().Format(time.RFC3339) + ": change window closed"
+		lock.Since.UTC().Format(time.RFC3339) + ": change window closed. To remove the lock, the holder sends " +
+		"DELETE /api/dustpan/v1/namespaces/acme/collections/payments/lock."
 	if failure.Message != want {
 		t.Errorf("message = %q, want %q", failure.Message, want)
 	}

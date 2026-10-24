@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/pkg/gate"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -142,22 +143,8 @@ type stateVersionOutputDocument struct {
 	Data stateVersionOutputResource `json:"data"`
 }
 
-// storedOutputs is the json-state-outputs document the client sent at
-// create: the JSON rendering of the root outputs, kept opaque in the state
-// version. Each entry holds the cty value and its cty type in JSON form.
-// The CLI sends the flat map of outputs at the top level; the wrapped form
-// with an "outputs" key stays accepted for versions stored before the flat
-// shape was served.
-type storedOutputs struct {
-	Outputs map[string]storedOutput `json:"outputs"`
-}
-
 // storedOutput is one entry of the stored outputs document.
-type storedOutput struct {
-	Sensitive bool            `json:"sensitive"`
-	Value     json.RawMessage `json:"value"`
-	Type      json.RawMessage `json:"type"`
-}
+type storedOutput = workspace.StoredOutput
 
 // outputID mints the ID of the output called name of sv.
 func outputID(sv workspace.StateVersion, name string) string {
@@ -180,25 +167,7 @@ func parseOutputID(id string) (workspace.StateVersionID, string, error) {
 // outputs by name. It accepts the flat map the CLI sends and the wrapped
 // form with an "outputs" key. Anything else fails.
 func parseStoredOutputs(raw []byte) (map[string]storedOutput, error) {
-	var wrapped storedOutputs
-
-	// A flat document with an output named "outputs" does not decode as the
-	// wrapped form: its entries are not outputs. It is read as flat below.
-	if err := json.Unmarshal(raw, &wrapped); err == nil && wrapped.Outputs != nil {
-		return wrapped.Outputs, nil
-	}
-
-	var flat map[string]storedOutput
-
-	if err := json.Unmarshal(raw, &flat); err != nil {
-		return nil, fmt.Errorf("decode stored outputs: %w", err)
-	}
-
-	if flat == nil {
-		return map[string]storedOutput{}, nil
-	}
-
-	return flat, nil
+	return workspace.ParseStoredOutputs(raw)
 }
 
 // stateOutputs renders the stored outputs of sv as TFE output resources,
@@ -480,14 +449,17 @@ func (h *Handler) restoreStateVersion(
 	restored, err := h.workspaces.Restore(ctx, src.Workspace, from, p.Subject)
 	if err != nil {
 		if errors.Is(err, workspace.ErrLockedByOther) {
-			holder := h.lockHolder(ctx, src.Workspace)
+			holder := h.refusingHolder(ctx, src.Workspace, err)
 			if holder == "" {
-				h.writeConflict(ctx, w, err.Error())
+				h.writeClassError(ctx, w, errorClass{
+					status: http.StatusConflict, title: titleConflict, detail: err.Error(),
+					code: errcode.WorkspaceLocked, args: nil,
+				})
 
 				return
 			}
 
-			h.writeConflict(ctx, w, lockConflictDetail(src.Workspace, holder))
+			h.writeClassError(ctx, w, lockConflict(src.Workspace, holder))
 
 			return
 		}
@@ -521,9 +493,10 @@ func (h *Handler) restoreStateVersion(
 
 // readCurrentOutputs serves GET
 // /api/v2/workspaces/{id}/current-state-version-outputs. A workspace without
-// state answers 404.
+// state answers 404. The output sharing checker decides the read after the
+// route table needed unit:read-outputs.
 func (h *Handler) readCurrentOutputs(
-	w http.ResponseWriter, r *http.Request, _ identity.Principal, _ identity.Object,
+	w http.ResponseWriter, r *http.Request, p identity.Principal, obj identity.Object,
 ) {
 	ctx := r.Context()
 
@@ -534,11 +507,23 @@ func (h *Handler) readCurrentOutputs(
 		return
 	}
 
+	// The list leaves out the value of a secret output, so it needs no
+	// unit:read-secrets.
+	read := outputRead{obj: obj, workspace: sv.Workspace, version: sv.ID, secrets: false}
+	if err := h.authorizeOutputRead(ctx, r, p, read); err != nil {
+		h.writeError(ctx, w, err)
+
+		return
+	}
+
 	h.writeStateOutputs(ctx, w, sv)
 }
 
 // readStateOutput serves GET /api/v2/state-version-outputs/{output_id}. An
-// unknown output answers 404. A sensitive output writes one audit entry of
+// unknown output answers 404. The read of an output of the current state
+// version goes through the output sharing checker, which needs
+// unit:read-secrets for a sensitive output. The read of an older state version
+// needs unit:read, and unit:read-secrets for a sensitive output. A sensitive output writes one audit entry of
 // the kind tool-operation with the value path of the output before it
 // answers: a failed append answers 500 with no value (ADR 41 decision 5). A
 // non-sensitive output writes no entry.
@@ -571,6 +556,13 @@ func (h *Handler) readStateOutput(
 	for _, output := range outputs {
 		if output.Attributes.Name != name {
 			continue
+		}
+
+		read := outputRead{obj: obj, workspace: sv.Workspace, version: sv.ID, secrets: output.Attributes.Sensitive}
+		if err := h.authorizeOutputRead(ctx, r, p, read); err != nil {
+			h.writeError(ctx, w, err)
+
+			return
 		}
 
 		if output.Attributes.Sensitive {

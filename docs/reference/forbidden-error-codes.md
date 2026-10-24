@@ -1,6 +1,6 @@
 # Error codes of a 403 answer
 
-A request that the server refuses with the status 403 has one of six causes
+A request that the server refuses with the status 403 has one of eight causes
 that a program can tell apart. The answer has the stable field `errorCode` for
 each cause. The `message` and the status stay as they were. A program selects
 its action from `errorCode` and never from the text of `message`.
@@ -10,11 +10,13 @@ its action from `errorCode` and never from the text of `message`.
 | `errorCode` | The cause | The `message` |
 | --- | --- | --- |
 | `access.denied` | The caller lacks a permission for the action on the object. | `forbidden` |
+| `access.no-action` | The route declares no permission for the object of the request, so the server refuses the request. A grant does not help. | `forbidden` |
 | `access.ip-not-allowed` | The client address is outside the IP allowlist of the namespace. | `forbidden` |
 | `gate.limited` | An access limit forbids the action on the object. | `forbidden` |
 | `gate.rule-failed` | An access limit failed to evaluate, so the server refuses the action. | `forbidden` |
 | `session.csrf` | A request with the session cookie has no `X-Dustpan-CSRF` header, or the header is wrong. | `permission denied: the X-Dustpan-CSRF header is missing or wrong` |
 | `session.other-site` | A request with the session cookie comes from another site. | `permission denied: a request with the session cookie comes from another site` |
+| `sign-in.refused` | The server refuses the sign-in, for example because no principal matches the person. A grant does not help. | `permission denied: sign-in refused` and the reason |
 
 A code never changes its meaning, and the server never removes it. The text of
 `message` can change, so a program must not match on it.
@@ -25,7 +27,8 @@ send the request from an allowed address. A person who gets `access.denied`
 needs a grant.
 
 When a request has more than one cause, the code follows this order:
-`session.csrf`, `session.other-site`, `access.ip-not-allowed`, `gate.limited`,
+`sign-in.refused` and `access.no-action`, then `session.csrf`,
+`session.other-site`, `access.ip-not-allowed`, `gate.limited`,
 `gate.rule-failed`, `access.denied`. The `message` follows the same order.
 
 ## The body
@@ -54,8 +57,7 @@ table.
 Some 403 answers have no code from this table because their cause is another
 one. Examples are a change that needs a fresh authentication
 (`mfa.fresh-step-required`), a refused start of a job (the codes
-`job.policy-denied`, `job.agent-denied` and `job.gate-enforced`), a refused
-sign-in (the person needs no grant), a preferences request of a caller that is
+`job.policy-denied`, `job.agent-denied` and `job.gate-enforced`), a preferences request of a caller that is
 not a person (`preferences.person-required`), and an answer to a runner
 (`retired`). Those answers keep their own code or have none.
 

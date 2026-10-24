@@ -1,0 +1,4 @@
+maintenance.active-work workCount:quantity canceledCount:quantity
+maintenance.held
+maintenance.invalid-state
+maintenance.unavailable

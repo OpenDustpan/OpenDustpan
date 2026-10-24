@@ -182,11 +182,11 @@ func limitSeconds(seconds *int64) (*time.Duration, error) {
 // classifySessionPolicy maps the session policy errors to their status and
 // message: a bad body or limits out of range answer 400 with the error
 // text.
-func classifySessionPolicy(err error) (int, string, bool) {
+func classifySessionPolicy(err error) (failure, bool) {
 	switch {
 	case errors.Is(err, errSessionPolicyBody), errors.Is(err, session.ErrInvalid):
-		return http.StatusBadRequest, err.Error(), true
+		return fail(http.StatusBadRequest, err.Error()), true
 	default:
-		return 0, "", false
+		return fail(0, ""), false
 	}
 }

@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"path"
 	"strings"
+
+	"opendustpan.org/opendustpan/internal/errcode"
 )
 
 // Component names a part of the server that a process runs.
@@ -124,14 +126,10 @@ func WithComponents(c Components) Option {
 // componentNotFound answers 404 on a route that a process without the api
 // component does not serve.
 func componentNotFound(w http.ResponseWriter, _ *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusNotFound)
-
-	body := []byte(`{"code":404,"message":"not found: this process does not run the api component"}` + "\n")
-	if _, err := w.Write(body); err != nil {
-		// The client has gone; there is nothing to report.
-		return
-	}
+	writeRouteError(
+		w, http.StatusNotFound, "not found: this process does not run the api component",
+		routeAnswer(errcode.ServerComponentNotFound),
+	)
 }
 
 // metricsPath is the route of the metrics. A process without the api

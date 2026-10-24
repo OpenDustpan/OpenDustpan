@@ -181,10 +181,28 @@ func testLastSiteAdministratorCountsPersons(t *testing.T, d *delegation) {
 	}
 }
 
+// AuditWriteHolder is an optional DelegationStore capability for the parallel
+// case of the last site administrator. A store that runs one write at a time
+// does not implement it.
+type AuditWriteHolder interface {
+	DelegationStore
+	// HoldAuditWrites makes each audit append of the store wait until release
+	// runs. Reads of the store do not wait. release can run more than once.
+	HoldAuditWrites(t *testing.T) (release func())
+	// WaitForLockWaiters returns when n transactions of the store wait for a
+	// lock.
+	WaitForLockWaiters(t *testing.T, n int)
+}
+
 // testLastSiteAdministratorParallel proves that two removals of two site
 // administrators that run at the same time leave one: exactly one of them is
 // refused. The store serializes the writes, and each count reads the commit of
 // the write before it.
+//
+// When the store is an AuditWriteHolder, the case holds the audit appends
+// until both removals wait for a lock. A removal appends its audit entry after
+// its counts. So when the store does not serialize the removals, both count
+// before either one commits, and the case fails.
 func testLastSiteAdministratorParallel(t *testing.T, d *delegation) {
 	t.Helper()
 
@@ -201,6 +219,13 @@ func testLastSiteAdministratorParallel(t *testing.T, d *delegation) {
 
 	targets := []string{first.ID, second.ID}
 
+	release := func() {}
+
+	holder, holds := d.st.(AuditWriteHolder)
+	if holds {
+		release = holder.HoldAuditWrites(t)
+	}
+
 	for i := range targets {
 		wg.Go(func() {
 			<-start
@@ -210,6 +235,12 @@ func testLastSiteAdministratorParallel(t *testing.T, d *delegation) {
 	}
 
 	close(start)
+
+	if holds {
+		holder.WaitForLockWaiters(t, len(targets))
+	}
+
+	release()
 	wg.Wait()
 
 	refused := 0
