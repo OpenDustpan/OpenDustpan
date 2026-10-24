@@ -43,8 +43,9 @@ var providerIDPattern = regexp.MustCompile(`[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-
 // Run runs the conformance suite on the replayers that newReplayer returns,
 // one for each test. corpus holds one folder for each case: base.json, the
 // batch files batch-0001.json, batch-0002.json and so on in arrival order,
-// and export.json.
-func Run(t *testing.T, newReplayer func() stack.JournalReplayer, corpus fs.FS) {
+// and export.json. overBound is an update whose replay passes one of the
+// bounds of the replayer; its Export is not read.
+func Run(t *testing.T, newReplayer func() stack.JournalReplayer, corpus fs.FS, overBound Case) {
 	t.Helper()
 
 	cases := LoadCorpus(t, corpus)
@@ -91,6 +92,12 @@ func Run(t *testing.T, newReplayer func() stack.JournalReplayer, corpus fs.FS) {
 		t.Parallel()
 
 		testBadBatch(t, newReplayer(), first)
+	})
+
+	t.Run("replay past a bound", func(t *testing.T) {
+		t.Parallel()
+
+		testOverBound(t, newReplayer(), overBound)
 	})
 }
 
@@ -426,6 +433,37 @@ func testBadBatch(t *testing.T, r stack.JournalReplayer, c Case) {
 
 	if _, err := replay(t.Context(), r, o, batches); err == nil {
 		t.Fatal("err = nil, want a refusal of the batch")
+	}
+
+	if n := o.counts(); n.closed != n.opened {
+		t.Fatalf("base readers: %d opened, %d closed; want all closed", n.opened, n.closed)
+	}
+}
+
+// testOverBound checks that the replay of c, which passes a bound of the
+// replayer, returns an error that holds a stack.ReplayBound with the name of
+// the bound and a count over a limit that is not zero, so that the server
+// answers 413 and names the bound. It also checks that the replay closes each
+// base reader that it opens.
+func testOverBound(t *testing.T, r stack.JournalReplayer, c Case) {
+	t.Helper()
+
+	o := &opener{base: c.Base, mu: sync.Mutex{}, opened: 0, closed: 0}
+
+	_, err := replay(t.Context(), r, o, c.Batches)
+
+	bound, ok := errors.AsType[stack.ReplayBound](err)
+	if !ok || bound == nil {
+		t.Fatalf("err = %v, want an error that holds a stack.ReplayBound", err)
+	}
+
+	limit := bound.ReplayBound()
+	if limit.Bound == "" || limit.Limit <= 0 || limit.Count <= limit.Limit {
+		t.Fatalf("bound = %+v, want the name of the bound and a count over a limit that is not zero", limit)
+	}
+
+	if _, named := stack.ReplayBoundMessage(err); !named {
+		t.Fatalf("ReplayBoundMessage(%v) reports no bound, want the message of the answer", err)
 	}
 
 	if n := o.counts(); n.closed != n.opened {

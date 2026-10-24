@@ -21,7 +21,12 @@ var _ stack.BatchReader = pulumijournal.Verifier{}
 func TestBoundErrorNamesItsBound(t *testing.T) {
 	t.Parallel()
 
-	err := fmt.Errorf("replay: %w", &pulumijournal.BoundError{Bound: "entries", Count: 12, Limit: 10, Cause: nil})
+	// The assignment fails the build when a bound refusal stops satisfying the
+	// ReplayBound of the update service, for example after a change of the
+	// fields of stack.ReplayLimit.
+	var bound stack.ReplayBound = &pulumijournal.BoundError{Bound: "entries", Count: 12, Limit: 10, Cause: nil}
+
+	err := fmt.Errorf("replay: %w", bound)
 
 	message, ok := stack.ReplayBoundMessage(err)
 	if !ok {

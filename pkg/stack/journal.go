@@ -41,7 +41,10 @@ type ReplayBound interface {
 // ReplayLimit names the bound that a replay passed, the counted value and the
 // limit. It is an alias of an unnamed struct type of standard types, so an
 // implementation of ReplayBound declares the same type and needs no import of
-// this package.
+// this package. A change of the fields breaks every implementation without a
+// compile error in the implementation itself, so each implementation asserts
+// in a test file that its error satisfies ReplayBound, and the conformance
+// suite in replayertest replays an update past a bound.
 type ReplayLimit = struct {
 	Bound string
 	Count int64
