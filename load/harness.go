@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"compress/gzip"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -40,6 +41,17 @@ const (
 	defaultContentionAttempts = 64
 	defaultHTTPTimeoutSecs    = 120
 	defaultTFEPageSize        = 100
+)
+
+// Default journal and access run dimensions. A batch holds a begin and a
+// success entry for each resource, so 2 entries are one resource, 20 a small
+// program and 200 a program of 100 resources.
+const (
+	defaultJournalSmall   = 2
+	defaultJournalMid     = 20
+	defaultJournalBig     = 200
+	defaultJournalBatches = 20
+	defaultAccessRequests = 200
 )
 
 // Default body sizes in bytes.
@@ -86,6 +98,13 @@ type Config struct {
 	ListReps           int    `json:"listReps"`
 	SeedWorkers        int    `json:"seedWorkers"`
 	ContentionAttempts int    `json:"contentionAttempts"`
+	// JournalEntries lists the entry counts of the journal batches, one
+	// journaled update for each.
+	JournalEntries []int `json:"journalEntries"`
+	// JournalBatches is the batch count of each journaled update.
+	JournalBatches int `json:"journalBatches"`
+	// AccessRequests is the request count of each access timing.
+	AccessRequests int `json:"accessRequests"`
 }
 
 // DefaultConfig answers the nightly run: 10,000 units and three body sizes.
@@ -102,6 +121,9 @@ func DefaultConfig() Config {
 		ListReps:           defaultListReps,
 		SeedWorkers:        defaultSeedWorkers,
 		ContentionAttempts: defaultContentionAttempts,
+		JournalEntries:     []int{defaultJournalSmall, defaultJournalMid, defaultJournalBig},
+		JournalBatches:     defaultJournalBatches,
+		AccessRequests:     defaultAccessRequests,
 	}
 }
 
@@ -157,6 +179,52 @@ type ListResult struct {
 	InventoryMs         float64 `json:"inventoryMs"`
 }
 
+// JournalResult holds the journaled update runs. Supported is false when the
+// server answers journal version 0 for every update, as the release build
+// does: the batches are then not sent and Runs stays empty. Build the harness
+// with the journalrecording tag to measure them.
+type JournalResult struct {
+	Supported bool               `json:"supported"`
+	Runs      []JournalRunResult `json:"runs"`
+}
+
+// JournalRunResult holds one journaled update: batches of one entry count
+// sent in order, then the complete of the update.
+type JournalRunResult struct {
+	EntriesPerBatch int     `json:"entriesPerBatch"`
+	Batches         int     `json:"batches"`
+	BatchBytes      int     `json:"batchBytes"`
+	SentBytes       int     `json:"sentBytes"`
+	AppendP50Ms     float64 `json:"appendP50Ms"`
+	AppendMaxMs     float64 `json:"appendMaxMs"`
+	AppendTotalMs   float64 `json:"appendTotalMs"`
+	CompleteMs      float64 `json:"completeMs"`
+	PeakAllocBytes  uint64  `json:"peakAllocBytes"`
+}
+
+// AccessResult holds the runner route and the jobs route timed on the server
+// without IP allowlists, and on the server with them with no list on the
+// namespace, with a list that holds the client, and with a list that does not.
+type AccessResult struct {
+	Requests    int         `json:"requests"`
+	ListEntries int         `json:"listEntries"`
+	RunnerRoute AccessRoute `json:"runnerRoute"`
+	JobsRoute   AccessRoute `json:"jobsRoute"`
+}
+
+// AccessRoute holds the median latency of one route in the four states.
+// RefusedStatus is the status the route answered to the refused request: the
+// route answers 404 where it must not tell that the object exists.
+type AccessRoute struct {
+	Method           string  `json:"method"`
+	Path             string  `json:"path"`
+	GateOffP50Ms     float64 `json:"gateOffP50Ms"`
+	GateNoListP50Ms  float64 `json:"gateNoListP50Ms"`
+	GateListP50Ms    float64 `json:"gateListP50Ms"`
+	GateRefusedP50Ms float64 `json:"gateRefusedP50Ms"`
+	RefusedStatus    int     `json:"refusedStatus"`
+}
+
 // Report is the machine-readable harness output. Times are milliseconds.
 // PeakAllocBytes values are process heap bytes sampled while the server runs
 // in-process, so they cover the server and the client together.
@@ -174,6 +242,8 @@ type Report struct {
 	NamespaceUpdates UpdateResult       `json:"namespaceUpdates"`
 	Database         DatabaseResult     `json:"database"`
 	Lists            ListResult         `json:"lists"`
+	Journal          JournalResult      `json:"journal"`
+	Access           AccessResult       `json:"access"`
 }
 
 // target is one harness run: the server URLs it measures with its credentials.
@@ -182,6 +252,8 @@ type target struct {
 	token  string
 	ns     string
 	client *http.Client
+	// served holds the gated server and the fixtures of the access steps.
+	served servers
 }
 
 // newTarget answers the run target for urls with the harness credentials.
@@ -192,6 +264,9 @@ func newTarget(urls []string, token, ns string) target {
 		ns:    ns,
 		client: &http.Client{
 			Timeout: defaultHTTPTimeoutSecs * time.Second,
+		},
+		served: servers{
+			urls: nil, gateURL: "", listNS: "", denyNS: "", jobID: "", listJobID: "", denyJobID: "",
 		},
 	}
 }
@@ -215,6 +290,14 @@ type request struct {
 	body      []byte
 }
 
+// sendOptions are the header options of a request that few calls use.
+type sendOptions struct {
+	// userAgent sets the User-Agent header when not empty.
+	userAgent string
+	// gzipBody sends the body gzipped, with Content-Encoding gzip.
+	gzipBody bool
+}
+
 // response is one harness HTTP answer with its full body.
 type response struct {
 	status int
@@ -224,10 +307,25 @@ type response struct {
 // do sends one request and answers its status with the full body. The body
 // stays small: the harness reads only its own bounded server answers.
 func (t *target) do(ctx context.Context, req request) (response, error) {
+	return t.send(ctx, req, sendOptions{userAgent: "", gzipBody: false})
+}
+
+// send sends one request with opts and answers its status with the full body.
+func (t *target) send(ctx context.Context, req request, opts sendOptions) (response, error) {
 	var reader io.Reader
 
 	if len(req.body) > 0 {
-		reader = bytes.NewReader(req.body)
+		sent := req.body
+
+		if opts.gzipBody {
+			var err error
+
+			if sent, err = gzipBytes(req.body); err != nil {
+				return response{}, err
+			}
+		}
+
+		reader = bytes.NewReader(sent)
 	}
 
 	httpReq, err := http.NewRequestWithContext(ctx, req.method, req.url, reader)
@@ -241,6 +339,14 @@ func (t *target) do(ctx context.Context, req request) (response, error) {
 
 	if len(req.body) > 0 {
 		httpReq.Header.Set(contentTypeHeader, req.mediaType)
+	}
+
+	if opts.gzipBody {
+		httpReq.Header.Set("Content-Encoding", "gzip")
+	}
+
+	if opts.userAgent != "" {
+		httpReq.Header.Set("User-Agent", opts.userAgent)
 	}
 
 	resp, err := t.client.Do(httpReq)
@@ -260,6 +366,23 @@ func (t *target) do(ctx context.Context, req request) (response, error) {
 	}
 
 	return response{status: resp.StatusCode, body: data}, nil
+}
+
+// gzipBytes answers body gzipped.
+func gzipBytes(body []byte) ([]byte, error) {
+	var buf bytes.Buffer
+
+	zw := gzip.NewWriter(&buf)
+
+	if _, err := zw.Write(body); err != nil {
+		return nil, fmt.Errorf("gzip body: %w", err)
+	}
+
+	if err := zw.Close(); err != nil {
+		return nil, fmt.Errorf("gzip body: %w", err)
+	}
+
+	return buf.Bytes(), nil
 }
 
 // check answers an error when status is not want, with a body prefix.

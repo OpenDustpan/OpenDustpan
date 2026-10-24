@@ -39,7 +39,7 @@ func TestInstancesShareStorage(t *testing.T) {
 	ctx := t.Context()
 	ns := "load-topology"
 
-	urls, cleanup, err := openServers(ctx, slog.New(slog.DiscardHandler), t.TempDir(), ns)
+	served, cleanup, err := openServers(ctx, slog.New(slog.DiscardHandler), t.TempDir(), ns)
 	if err != nil {
 		t.Fatalf("open servers: %v", err)
 	}
@@ -48,11 +48,11 @@ func TestInstancesShareStorage(t *testing.T) {
 		cleanup(context.WithoutCancel(ctx))
 	})
 
-	if len(urls) != 2 {
-		t.Fatalf("instances = %d, want 2", len(urls))
+	if len(served.urls) != 2 {
+		t.Fatalf("instances = %d, want 2", len(served.urls))
 	}
 
-	fx := newTarget(urls, harnessToken(), ns)
+	fx := newTarget(served.urls, harnessToken(), ns)
 
 	id, err := fx.createWorkspace(ctx, "shared-ws")
 	if err != nil {
