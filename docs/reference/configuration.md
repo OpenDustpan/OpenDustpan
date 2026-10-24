@@ -275,7 +275,7 @@ the steps.
 
 | Flag | Environment | Default |
 | --- | --- | --- |
-| `--database` | `DUSTPAN_DATABASE` | `sqlite:dustpan.db` (or `postgres://...`) |
+| `--database` | `DUSTPAN_DATABASE` | `sqlite:dustpan.db` (or `postgres://...` for PostgreSQL 18 or later) |
 | `--reason` | (none) | (none) |
 | `--recovery-mode` | `DUSTPAN_RECOVERY_MODE` | `bootstrap`: recovery through the bootstrap administrator or the host command. `signed-request`: recovery with a request signed with an offline operator key. `none`: no break-glass, the operator restores from a backup, and the host command refuses to run |
 | (none) | `DUSTPAN_DISABLE_HOST_RECOVERY` | (none: the host command is on). Set `true` or `1` in the environment of the operator account to turn it off. `false`, `0` and an empty value keep it on. The host command refuses any other value |

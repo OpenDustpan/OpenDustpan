@@ -125,7 +125,7 @@ var Settings = []*Setting{
 	stringSetting(
 		"database", "DUSTPAN_DATABASE", "sqlite:dustpan.db",
 		"sqlite:<path> or postgres://... (DUSTPAN_DATABASE)",
-		"`sqlite:dustpan.db` (or `postgres://...`)",
+		"`sqlite:dustpan.db` (or `postgres://...` for PostgreSQL 18 or later)",
 	).WithFile("database").WithSensitive().WithNoPasswordInFile(),
 	stringSetting(
 		"region", "DUSTPAN_REGION", "local",
