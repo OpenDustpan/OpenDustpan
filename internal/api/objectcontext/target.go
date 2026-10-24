@@ -25,7 +25,7 @@ type target struct {
 
 // resolveNamespace finds the namespace of the path. A name that is not valid
 // and a namespace that does not exist answer errNotFound alike.
-func (h *Handler) resolveNamespace(r *http.Request) (target, error) {
+func (h *Handler) resolveNamespace(_ http.ResponseWriter, r *http.Request) (target, error) {
 	ns, err := h.findNamespace(r)
 	if err != nil {
 		return target{}, err
@@ -60,7 +60,7 @@ func (h *Handler) findNamespace(r *http.Request) (namespace.Namespace, error) {
 // namespace of the path, live or soft-deleted. The unit ID is unique in the
 // installation, so the path holds no tool. A unit of another namespace, an
 // unknown unit and a purged unit answer errNotFound alike.
-func (h *Handler) resolveUnitByID(r *http.Request) (target, error) {
+func (h *Handler) resolveUnitByID(_ http.ResponseWriter, r *http.Request) (target, error) {
 	ns, err := h.findNamespace(r)
 	if err != nil {
 		return target{}, err

@@ -9,6 +9,7 @@ import (
 
 	"opendustpan.org/opendustpan/internal/api/problem"
 	"opendustpan.org/opendustpan/internal/api/refusal"
+	"opendustpan.org/opendustpan/internal/api/route"
 	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/internal/textbody"
 	"opendustpan.org/opendustpan/pkg/audit"
@@ -56,12 +57,12 @@ func (h *Handler) lockRoutes() []Route {
 		return Route{
 			Method:           method,
 			Path:             path,
-			Scope:            ScopeAuthorized,
+			Scope:            route.ScopeAuthorized,
 			Actions:          []identity.Action{action},
 			Resolve:          resolveUnitQuery,
+			Serve:            serve,
 			NamespaceActions: nil,
 			DeniedAsNotFound: false,
-			Serve:            serve,
 		}
 	}
 
@@ -69,12 +70,12 @@ func (h *Handler) lockRoutes() []Route {
 		return Route{
 			Method:           method,
 			Path:             path,
-			Scope:            ScopeAuthorized,
+			Scope:            route.ScopeAuthorized,
 			Actions:          []identity.Action{action},
 			Resolve:          resolveCollectionPath,
+			Serve:            serve,
 			NamespaceActions: nil,
 			DeniedAsNotFound: false,
-			Serve:            serve,
 		}
 	}
 
@@ -82,12 +83,12 @@ func (h *Handler) lockRoutes() []Route {
 		return Route{
 			Method:           method,
 			Path:             path,
-			Scope:            ScopeAuthorized,
+			Scope:            route.ScopeAuthorized,
 			Actions:          []identity.Action{action},
 			Resolve:          resolveCollectionNamespace,
+			Serve:            serve,
 			NamespaceActions: nil,
 			DeniedAsNotFound: false,
-			Serve:            serve,
 		}
 	}
 

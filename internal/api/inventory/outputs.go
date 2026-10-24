@@ -7,6 +7,7 @@ import (
 	"net/http"
 
 	"opendustpan.org/opendustpan/internal/api/apidesc"
+	"opendustpan.org/opendustpan/internal/api/route"
 	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/internal/outputsharesvc"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -63,7 +64,7 @@ func (h *Handler) outputRoutes() []Route {
 	return []Route{{
 		Method:           http.MethodGet,
 		Path:             outputsPath,
-		Scope:            ScopeAuthorized,
+		Scope:            route.ScopeAuthorized,
 		Actions:          []identity.Action{identity.ActionUnitReadOutputs},
 		NamespaceActions: nil,
 		Resolve:          h.resolveOutputsUnit,

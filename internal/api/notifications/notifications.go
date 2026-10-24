@@ -14,7 +14,7 @@ import (
 	"opendustpan.org/opendustpan/internal/api/idempotent"
 	"opendustpan.org/opendustpan/internal/api/problem"
 	"opendustpan.org/opendustpan/internal/api/refusal"
-	"opendustpan.org/opendustpan/internal/api/routekit"
+	"opendustpan.org/opendustpan/internal/api/route"
 	"opendustpan.org/opendustpan/internal/denylimit"
 	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/internal/sessionauth"
@@ -72,7 +72,7 @@ type Handler struct {
 	sessions *sessionauth.Checker
 	idem     *idempotent.Middleware
 	logger   *slog.Logger
-	mux      *routekit.Mux
+	mux      *route.Mux
 	routes   []Route
 }
 
@@ -104,13 +104,13 @@ func NewHandler(cfg Config) (*Handler, error) {
 		sessions: cfg.Sessions,
 		idem:     cfg.Idempotency,
 		logger:   cfg.Logger,
-		mux:      routekit.NewMux(),
+		mux:      route.NewMux(),
 		routes:   nil,
 	}
 
 	h.routes = h.buildRoutes()
-	for _, route := range h.routes {
-		h.mux.HandleFunc(route.Method+" "+route.Path, h.enforce(route))
+	for _, rt := range h.routes {
+		h.mux.HandleFunc(rt.Method+" "+rt.Path, h.enforce(rt))
 	}
 
 	return h, nil
