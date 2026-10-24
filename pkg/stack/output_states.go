@@ -21,7 +21,8 @@ var errNoProject = errors.New("stack name holds no project")
 // of the stack id at version: the stable ID of the stack, a colon, and the
 // version in decimal. The version alone would repeat in every stack, so the ID
 // names the stack too, and the ID of a checkpoint of another stack never
-// matches.
+// matches. The reads of the checkpoint go by the name of the stack, so
+// OutputStates looks the stack up again after them.
 func StateID(id ID, version int64) string {
 	return id.String() + ":" + strconv.FormatInt(version, 10)
 }
@@ -47,7 +48,8 @@ func NewOutputStates(stacks *Service, updates *Updates) *OutputStates {
 }
 
 // Latest implements outputshare.States. It looks the stack up by its
-// reference, and then compares the stable ID. A reference with no stable ID
+// reference, and then compares the stable ID. It looks the stack up again
+// after the read of the checkpoint, because the read goes by name. A reference with no stable ID
 // is an unknown producer, after the same lookup as a known one. A stack with
 // no state answers the zero State.
 func (s *OutputStates) Latest(ctx context.Context, u identity.Object) (outputshare.State, error) {
@@ -57,19 +59,25 @@ func (s *OutputStates) Latest(ctx context.Context, u identity.Object) (outputsha
 	}
 
 	version, err := s.updates.LatestStateVersion(ctx, ref)
-	if errors.Is(err, ErrNoState) {
-		return outputshare.State{ID: "", ClientEncrypted: false}, nil
+	noState := errors.Is(err, ErrNoState)
+
+	if err != nil && !noState {
+		return outputshare.State{}, fmt.Errorf("read the latest checkpoint of %q: %w", u, err)
 	}
 
-	if err != nil {
-		return outputshare.State{}, fmt.Errorf("read the latest checkpoint of %q: %w", u, err)
+	if recheckErr := s.recheck(ctx, u); recheckErr != nil {
+		return outputshare.State{}, recheckErr
+	}
+
+	if noState {
+		return outputshare.State{ID: "", ClientEncrypted: false}, nil
 	}
 
 	return outputshare.State{ID: StateID(st.ID, version), ClientEncrypted: false}, nil
 }
 
 // Outputs implements outputshare.Outputs. It looks the stack up as Latest
-// does. It reads the blob of the checkpoint once, for the version that
+// does, before the reads and after them. It reads the blob of the checkpoint once, for the version that
 // stateID names, so a checkpoint that a new update saves in between is not
 // mixed in. The checkpoint holds a secret output as ciphertext, and the read
 // answers it as secret with no value: the server decrypts nothing here.
@@ -95,7 +103,22 @@ func (s *OutputStates) Outputs(
 		return nil, s.gone(ctx, u, fmt.Errorf("read the checkpoint of %q: %w", u, err))
 	}
 
+	if recheckErr := s.recheck(ctx, u); recheckErr != nil {
+		return nil, recheckErr
+	}
+
 	return rootOutputs(cp.Deployment)
+}
+
+// recheck looks the stack of u up again, after a read of its checkpoint by
+// name. A delete and a create of the same name between the lookup and the read
+// leave a stack with another stable ID, and the read then answered the
+// checkpoint of that stack. The second lookup gives ErrUnknownProducer in that
+// case, as the first lookup does for a stable ID of another stack.
+func (s *OutputStates) recheck(ctx context.Context, u identity.Object) error {
+	_, _, err := s.lookup(ctx, u)
+
+	return err
 }
 
 // lookup returns the reference and the stack of the unit u. It looks the
