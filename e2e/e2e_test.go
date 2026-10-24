@@ -11673,13 +11673,21 @@ func sqliteServerPath(t *testing.T, env *e2e.Env) string {
 	return path
 }
 
+// serverSQLiteBusyMillis is how long a statement on the server database waits
+// for another connection to release the file, in milliseconds.
+const serverSQLiteBusyMillis = "10000"
+
 // openServerSQLite opens a direct handle on the SQLite file at path. The
 // caller stops the server before it opens the file, except in the old and
 // fresh cases, which edit the file while the server runs.
 func openServerSQLite(t *testing.T, path string) *sql.DB {
 	t.Helper()
 
-	conn, err := sql.Open("sqlite", "file:"+path)
+	// The busy timeout makes a statement wait while another connection holds
+	// the file, for example the server that a test just stopped or the
+	// server that still runs in the old and fresh cases, and not fail with
+	// SQLITE_BUSY at once.
+	conn, err := sql.Open("sqlite", "file:"+path+"?_pragma=busy_timeout("+serverSQLiteBusyMillis+")")
 	if err != nil {
 		t.Fatalf("open server database: %v", err)
 	}
