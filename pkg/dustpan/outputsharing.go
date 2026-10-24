@@ -5,6 +5,8 @@ import (
 
 	"opendustpan.org/opendustpan/internal/outputsharesvc"
 	"opendustpan.org/opendustpan/pkg/outputshare"
+	"opendustpan.org/opendustpan/pkg/stack"
+	"opendustpan.org/opendustpan/pkg/workspace"
 )
 
 // OutputSharingSettingsStore is a namespace store that also keeps the output
@@ -36,4 +38,74 @@ func newOutputSharingService(cfg *settings) (*outputsharesvc.Service, error) {
 	}
 
 	return svc, nil
+}
+
+// newOutputStates returns the States port over the stores of both tools.
+func newOutputStates(svc services) outputsharesvc.ToolStates {
+	return outputsharesvc.ToolStates{
+		opentofuTool: workspace.NewOutputStates(svc.workspaces),
+		pulumiTool:   stack.NewOutputStates(svc.stacks, svc.updates),
+	}
+}
+
+// newOutputChecker builds the checker of the read of outputs on the services
+// of both tools. Each adapter that answers outputs asks it.
+func newOutputChecker(cfg *settings, svc services) (*outputsharesvc.Checker, error) {
+	entries, err := auditStoreOf(cfg)
+	if err != nil {
+		return nil, err
+	}
+
+	checker, err := outputsharesvc.NewChecker(outputsharesvc.CheckerConfig{
+		Authorizer: cfg.authorizer,
+		States:     newOutputStates(svc),
+		Namespaces: svc.namespaces,
+		Audit:      entries,
+		Logger:     cfg.logger,
+		Now:        cfg.now,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("output checker: %w", err)
+	}
+
+	return checker, nil
+}
+
+// newOutputReader builds the reader of the root outputs of a unit, for the
+// tool-neutral outputs route.
+func newOutputReader(cfg *settings, svc services) (*outputsharesvc.Reader, error) {
+	checker, err := newOutputChecker(cfg, svc)
+	if err != nil {
+		return nil, err
+	}
+
+	reader, err := outputsharesvc.NewReader(outputsharesvc.ReaderConfig{
+		States:  newOutputStates(svc),
+		Checker: checker,
+		Sources: map[string]outputshare.Outputs{
+			opentofuTool: workspace.NewOutputStates(svc.workspaces),
+			pulumiTool:   stack.NewOutputStates(svc.stacks, svc.updates),
+		},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("output reader: %w", err)
+	}
+
+	return reader, nil
+}
+
+// newOutputSharingParts builds the service of the output sharing setting and
+// the reader of outputs for the inventory API.
+func newOutputSharingParts(cfg *settings, svc services) (*outputsharesvc.Service, *outputsharesvc.Reader, error) {
+	sharing, err := newOutputSharingService(cfg)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	outputs, err := newOutputReader(cfg, svc)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	return sharing, outputs, nil
 }

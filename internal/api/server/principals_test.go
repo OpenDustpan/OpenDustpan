@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -15,9 +16,11 @@ import (
 	"time"
 
 	apiserver "opendustpan.org/opendustpan/internal/api/server"
+	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/maintenance"
+	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/store/sqlite"
 	"opendustpan.org/opendustpan/pkg/store/storetest"
@@ -1164,4 +1167,74 @@ func (allowAllGuard) CheckGroupGrants(context.Context, identity.Principal, strin
 
 func (allowAllGuard) CheckPrincipalGrants(context.Context, identity.Principal, string) error {
 	return nil
+}
+
+// TestLastSiteAdministratorIsKept proves that each principal route that could end the
+// last site administrator answers 409 with a JSON error, changes nothing, and
+// leaves the administrator as it was.
+func TestLastSiteAdministratorIsKept(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name   string
+		method string
+		path   func(admin string) string
+		body   string
+	}{
+		{"delete", http.MethodDelete, func(admin string) string { return "/api/server/principals/" + admin }, ""},
+		{
+			"disable",
+			http.MethodPost,
+			func(admin string) string { return "/api/server/principals/" + admin + "/disable" },
+			"",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			principals, st := newTestPrincipalStore(t)
+			h := newPrincipalHandler(t, principals)
+
+			var admin principalDoc
+			mustCall(t, h, apiCall{
+				http.MethodPost, "/api/server/principals", `{"subject":"root","kind":"person"}`, http.StatusCreated,
+			}, &admin)
+
+			grant := access.Grant{
+				CreatedAt: time.Unix(0, 0), Condition: nil, Object: identity.ServerObject(), ID: "grt-last",
+				Role: access.RoleSiteAdministrator, CreatedBy: "test",
+				Subject: access.Subject{Kind: access.SubjectPrincipal, ID: admin.ID},
+			}
+
+			entry := storetest.ServerChange(time.Unix(0, 0), "@server")
+			fence := namespace.Fence{Namespace: "", FailoverVersion: 0}
+
+			err := st.CreateGrant(t.Context(), grant, fence, entry, nil)
+			if err != nil {
+				t.Fatalf("create grant: %v", err)
+			}
+
+			status, body := call(t, h, apiCall{tc.method, tc.path(admin.ID), tc.body, http.StatusConflict})
+			if status != http.StatusConflict || !strings.Contains(body, "last site administrator") {
+				t.Fatalf("%s answers %d %q, want 409 and the last site administrator error", tc.name, status, body)
+			}
+
+			mustCall(t, h, apiCall{http.MethodGet, "/api/server/principals/" + admin.ID, "", http.StatusOK}, nil)
+		})
+	}
+}
+
+// TestLastSiteAdministratorErrorIsConflict proves that the grant routes
+// answer 409 when a revoke would end the last site administrator.
+func TestLastSiteAdministratorErrorIsConflict(t *testing.T) {
+	t.Parallel()
+
+	err := fmt.Errorf("revoke grant: %w", access.ErrLastSiteAdministrator)
+
+	status, message := apiserver.ClassifyForTest(err)
+	if status != http.StatusConflict || !strings.Contains(message, "last site administrator") {
+		t.Fatalf("classified as %d %q, want 409 and the last site administrator error", status, message)
+	}
 }

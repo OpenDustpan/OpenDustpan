@@ -199,9 +199,8 @@ func (d *Destination) Clear() {
 
 // OpenDestination opens the sealed secret items of s, for a send. A chat
 // sink gives its URL, and a webhook sink its URL and its signing keys. The
-// URL must have the host s.Target: the host is what a person approved. An email sink has no secret item and gives an
-// empty
-// Destination.
+// URL must have the host s.Target: the host is what a person approved. An
+// email sink has no secret item and gives an empty Destination.
 //
 // It fails closed. It returns an error that matches ErrNoURL, and also
 // secret.ErrDecrypt when the sealer refused a value, for an item that is

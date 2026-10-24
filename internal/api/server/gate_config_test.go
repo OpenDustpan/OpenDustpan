@@ -3,6 +3,7 @@ package server_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -17,6 +18,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/session"
 	"opendustpan.org/opendustpan/pkg/store/sqlite"
 )
@@ -799,7 +801,9 @@ func TestGateConfigDeniedWriteKeepsDefault(t *testing.T) {
 		t.Fatalf("namespace service: %v", err)
 	}
 
-	svc, err := gate.NewConfigService(gate.ConfigServiceConfig{Store: handler.env.store, Namespaces: nss, Now: nil})
+	svc, err := gate.NewConfigService(gate.ConfigServiceConfig{
+		Store: handler.env.store, Namespaces: nss, Approvers: testApprovers{}, Now: nil,
+	})
 	if err != nil {
 		t.Fatalf("gate config service: %v", err)
 	}
@@ -939,4 +943,91 @@ func TestGateConfigRefusesAccessTokenWrites(t *testing.T) {
 	if failures != len(refused) {
 		t.Fatalf("failure entries = %d, want %d", failures, len(refused))
 	}
+}
+
+// TestApprovalDefaultRefusesApproversThatCannotBeMet proves that a default
+// whose approvers cannot give the count it asks for answers 422, and that the
+// namespace keeps no default. The cases are a group name that is not valid, a
+// group that does not exist, and a count above the people who can approve.
+func TestApprovalDefaultRefusesApproversThatCannotBeMet(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		body string
+	}{
+		{"group name that is not valid", `{"count":1,"approvers":{"groups":["<b>x</b>"],"users":[]}}`},
+		{"group that does not exist", `{"count":1,"approvers":{"groups":["nogroup"],"users":[]}}`},
+		{"user name with a control character", `{"count":1,"approvers":{"groups":[],"users":["bo\u0007b"]}}`},
+		{"count above the named users", `{"count":10,"approvers":{"groups":[],"users":["alice"],"unitOwners":false}}`},
+		{"count above users and group members", `{"count":10,"approvers":{"groups":["platform"],"users":["alice"]}}`},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			_, h := newGateHandler(t, adminGates())
+			target := gateBase + "acme" + gateDefault
+
+			rec := serveGate(t, h, gateCall{http.MethodPut, target, tc.body, ""})
+			wantStatus(t, rec, http.StatusUnprocessableEntity)
+			wantStatus(t, serveGate(t, h, gateCall{http.MethodGet, target, "", ""}), http.StatusNotFound)
+		})
+	}
+}
+
+// TestApprovalDefaultAcceptsApproversThatCanBeMet proves the cases next to the
+// refusals: a count that the approvers can give, the unit owners, and no
+// approver at all (any holder of the approve action).
+func TestApprovalDefaultAcceptsApproversThatCanBeMet(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		body string
+	}{
+		{"count within the named users", `{"count":2,"approvers":{"groups":[],"users":["alice","bob"]}}`},
+		{"count within a group", `{"count":3,"approvers":{"groups":["platform"],"users":[]}}`},
+		{
+			"count above the list with the unit owners",
+			`{"count":5,"approvers":{"groups":[],"users":["alice"],"unitOwners":true}}`,
+		},
+		{"count with no approver named", `{"count":4,"approvers":{}}`},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			_, h := newGateHandler(t, adminGates())
+
+			wantStatus(
+				t,
+				serveGate(t, h, gateCall{http.MethodPut, gateBase + "acme" + gateDefault, tc.body, ""}),
+				http.StatusOK,
+			)
+		})
+	}
+}
+
+// testApprovers is the group directory of the gate tests: the groups ops,
+// platform, finance, sre and x exist, each with enabled members that are all
+// persons, as many as below. Any other valid name names no group, and a name
+// that is not valid is refused.
+type testApprovers struct{}
+
+// GroupMembers implements gate.ApproverDirectory.
+func (testApprovers) GroupMembers(_ context.Context, name string) (gate.MemberCounts, error) {
+	members := map[string]int64{"ops": 10, "platform": 5, "finance": 5, "sre": 5, "x": 10}
+
+	if err := principal.ValidateGroupName(name); err != nil {
+		return gate.MemberCounts{Enabled: 0, Persons: 0}, fmt.Errorf("%w: %w", gate.ErrInvalid, err)
+	}
+
+	if n, ok := members[name]; ok {
+		return gate.MemberCounts{Enabled: n, Persons: n}, nil
+	}
+
+	return gate.MemberCounts{Enabled: 0, Persons: 0}, fmt.Errorf("%w: group %q", gate.ErrNotFound, name)
 }

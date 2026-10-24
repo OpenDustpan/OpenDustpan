@@ -58,14 +58,16 @@ func (s *Service) ReadStateAt(ctx context.Context, id ID, req StateAtRequest) (S
 
 	found, err := s.stateAt.WorkspaceStateAt(ctx, id, req.At)
 
+	// The error wraps the NoStateAtError, so that an adapter reads the time of
+	// the first state version from its field and never from the text.
 	if none, ok := errors.AsType[*NoStateAtError](err); ok {
 		if none.First.IsZero() {
-			return StateAtRead{}, fmt.Errorf("%w: %s has no state version yet", ErrNoStateAt, w.Ref)
+			return StateAtRead{}, fmt.Errorf("%w: %s has no state version yet", none, w.Ref)
 		}
 
 		return StateAtRead{}, fmt.Errorf(
 			"%w: the first state version of %s is at %s (%d ms)",
-			ErrNoStateAt, w.Ref, none.First.UTC().Format(time.RFC3339), none.First.UnixMilli(),
+			none, w.Ref, none.First.UTC().Format(time.RFC3339), none.First.UnixMilli(),
 		)
 	}
 

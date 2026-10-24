@@ -175,7 +175,7 @@ func portableOpener(ctx context.Context, target blob.Store, id ID) PortableOpene
 		reader, err := target.Get(ctx, key)
 		if err != nil {
 			if isNotFound(err) {
-				return nil, fmt.Errorf("backup is incomplete: object %q is missing: %w", key, ErrCorrupt)
+				return nil, &MissingObjectError{Key: key}
 			}
 
 			return nil, fmt.Errorf("read backup object %q: %w", key, err)
@@ -195,7 +195,7 @@ func copyRestoreBlob(ctx context.Context, target, dest blob.Store, ref ManifestB
 	reader, err := target.Get(ctx, source)
 	if err != nil {
 		if isNotFound(err) {
-			return fmt.Errorf("backup is incomplete: object %q is missing: %w", source, ErrCorrupt)
+			return &MissingObjectError{Key: source}
 		}
 
 		return fmt.Errorf("read backup object %q: %w", source, err)

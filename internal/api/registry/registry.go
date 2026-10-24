@@ -18,6 +18,7 @@ import (
 	"opendustpan.org/opendustpan/internal/api/refusal"
 	"opendustpan.org/opendustpan/internal/api/route"
 	"opendustpan.org/opendustpan/internal/denylimit"
+	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/internal/registry/releasecheck"
 	"opendustpan.org/opendustpan/internal/registry/service"
 	"opendustpan.org/opendustpan/internal/sessionauth"
@@ -146,34 +147,45 @@ type registryProblem struct {
 //
 //nolint:gochecknoglobals // A fixed table; Go has no constant slices.
 var registryProblems = []registryProblem{
-	{registry.ErrNotFound, "registry.not-found", http.StatusNotFound},
-	{registry.ErrKeyNotFound, "registry.not-found", http.StatusNotFound},
-	{service.ErrNotStaged, "registry.not-staged", http.StatusNotFound},
-	{service.ErrTooLarge, "registry.too-large", http.StatusRequestEntityTooLarge},
-	{registry.ErrVersionExists, "registry.version-exists", http.StatusConflict},
-	{registry.ErrKeyExists, "registry.key-exists", http.StatusConflict},
-	{registry.ErrBadSignature, "registry.signature-invalid", http.StatusUnprocessableEntity},
-	{registry.ErrUntrustedKey, "registry.signature-untrusted-key", http.StatusUnprocessableEntity},
-	{releasecheck.ErrRefused, "registry.archive-set-refused", http.StatusUnprocessableEntity},
-	{service.ErrNoKeys, "registry.no-keys", http.StatusUnprocessableEntity},
-	{registry.ErrKeyLimit, "registry.key-limit", http.StatusUnprocessableEntity},
-	{registry.ErrBadKey, "registry.key-invalid", http.StatusBadRequest},
-	{registry.ErrInvalid, "registry.invalid", http.StatusBadRequest},
-	{service.ErrBadRequest, "registry.invalid", http.StatusBadRequest},
+	{registry.ErrNotFound, errcode.RegistryNotFound, http.StatusNotFound},
+	{registry.ErrKeyNotFound, errcode.RegistryNotFound, http.StatusNotFound},
+	{service.ErrNotStaged, errcode.RegistryNotStaged, http.StatusNotFound},
+	{service.ErrTooLarge, errcode.RegistryTooLarge, http.StatusRequestEntityTooLarge},
+	{registry.ErrVersionExists, errcode.RegistryVersionExists, http.StatusConflict},
+	{registry.ErrKeyExists, errcode.RegistryKeyExists, http.StatusConflict},
+	{registry.ErrBadSignature, errcode.RegistrySignatureInvalid, http.StatusUnprocessableEntity},
+	{registry.ErrUntrustedKey, errcode.RegistrySignatureUntrustedKey, http.StatusUnprocessableEntity},
+	{releasecheck.ErrRefused, errcode.RegistryArchiveSetRefused, http.StatusUnprocessableEntity},
+	{service.ErrNoKeys, errcode.RegistryNoKeys, http.StatusUnprocessableEntity},
+	{registry.ErrKeyLimit, errcode.RegistryKeyLimit, http.StatusUnprocessableEntity},
+	{registry.ErrBadKey, errcode.RegistryKeyInvalid, http.StatusBadRequest},
+	{registry.ErrInvalid, errcode.RegistryInvalid, http.StatusBadRequest},
+	{service.ErrBadRequest, errcode.RegistryInvalid, http.StatusBadRequest},
 }
 
 // classifyRegistry answers the errors of the registry. The text of a refusal
 // names the field or the file that fails, and holds no byte of a key.
 func classifyRegistry(err error) (problem.Problem, bool) {
-	for _, p := range registryProblems {
-		if errors.Is(err, p.err) {
-			return problem.Problem{
-				Status: p.status, Code: p.code, Message: err.Error(), Args: nil, RetryAfter: 0, Reauthenticate: "",
-			}, true
+	rp := registryProblemOf(err)
+	if rp == nil {
+		return problem.Pass()
+	}
+
+	return problem.Problem{
+		Status: rp.status, Code: rp.code, Values: nil, Message: err.Error(), RetryAfter: 0, Reauthenticate: "",
+	}, true
+}
+
+// registryProblemOf returns the element of registryProblems for err, or nil
+// for an error that the table does not hold.
+func registryProblemOf(err error) *registryProblem {
+	for i := range registryProblems {
+		if errors.Is(err, registryProblems[i].err) {
+			return &registryProblems[i]
 		}
 	}
 
-	return problem.Pass()
+	return nil
 }
 
 func (h *Handler) writeJSON(ctx context.Context, w http.ResponseWriter, status int, body any) {

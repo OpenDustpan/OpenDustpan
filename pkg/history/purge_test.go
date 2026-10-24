@@ -3,6 +3,7 @@ package history_test
 import (
 	"errors"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -125,8 +126,71 @@ func TestTombstoneLedger(t *testing.T) {
 		t.Errorf("ledger = %+v, want the fields of %+v", l, tb)
 	}
 
-	if got := history.TombstoneObject(tb.ID).String(); got != "tombstones/"+string(tb.ID)+".json" {
+	got, err := history.TombstoneObject(tb.ID)
+	if err != nil {
+		t.Fatalf("tombstone object: %v", err)
+	}
+
+	if got.String() != "tombstones/"+string(tb.ID)+".json" {
 		t.Errorf("tombstone object = %q", got)
+	}
+}
+
+// TestObjectKeysKeepTheStoredFormat checks that a valid ID gives the same key
+// as the key format that is already stored. Blob keys are stored data, so the
+// text of a valid key must not change.
+func TestObjectKeysKeepTheStoredFormat(t *testing.T) {
+	t.Parallel()
+
+	ids := []string{
+		"rdx-abc",
+		"rdx-a.b_c-d",
+		"rdx-0",
+		"rdx-" + strings.Repeat("a", 492),
+		string(history.NewRedactionID()),
+	}
+
+	for _, id := range ids {
+		ledger, err := history.LedgerObject(history.RedactionID(id))
+		if err != nil {
+			t.Errorf("LedgerObject(%q) err = %v, want nil", id, err)
+		} else if want := "redactions/" + id + ".json"; ledger.String() != want {
+			t.Errorf("LedgerObject(%q) = %q, want %q", id, ledger, want)
+		}
+
+		tombstone, err := history.TombstoneObject(history.TombstoneID(strings.Replace(id, "rdx-", "tmb-", 1)))
+		if err != nil {
+			t.Errorf("TombstoneObject(%q) err = %v, want nil", id, err)
+		} else if want := "tombstones/" + strings.Replace(id, "rdx-", "tmb-", 1) + ".json"; tombstone.String() != want {
+			t.Errorf("TombstoneObject(%q) = %q, want %q", id, tombstone, want)
+		}
+	}
+}
+
+// TestLedgerObjectsRefuseBadIDs sends each bad ID straight to the key
+// constructors, as if the ID had not come from the store or a new ID.
+func TestLedgerObjectsRefuseBadIDs(t *testing.T) {
+	t.Parallel()
+
+	ids := []string{
+		"rdx-ABC",
+		"../x",
+		"a//b",
+		"rdx-a b",
+		"rdx-" + strings.Repeat("a", 493),
+		strings.Repeat("a", 600),
+	}
+
+	for _, id := range ids {
+		ledger, err := history.LedgerObject(history.RedactionID(id))
+		if !errors.Is(err, blob.ErrInvalidKey) || ledger != "" {
+			t.Errorf("LedgerObject(%q) = %q, %v, want blob.ErrInvalidKey", id, ledger, err)
+		}
+
+		tombstone, err := history.TombstoneObject(history.TombstoneID(id))
+		if !errors.Is(err, blob.ErrInvalidKey) || tombstone != "" {
+			t.Errorf("TombstoneObject(%q) = %q, %v, want blob.ErrInvalidKey", id, tombstone, err)
+		}
 	}
 }
 

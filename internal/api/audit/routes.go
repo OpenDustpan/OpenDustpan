@@ -131,7 +131,7 @@ func (h *Handler) enforce(rt Route) http.HandlerFunc {
 				// A route with no installation action refuses the installation
 				// object. It never falls back to a namespace action.
 				if len(rt.ServerActions) == 0 {
-					return errcode.Refusal(rt.Path + " has no action for the installation")
+					return errcode.Refusal(errcode.AccessNoAction, rt.Path+" has no action for the installation")
 				}
 
 				actions = rt.ServerActions

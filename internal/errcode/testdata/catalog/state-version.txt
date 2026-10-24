@@ -1,0 +1,11 @@
+state-version.budget-too-small
+state-version.busy
+state-version.checksum-mismatch
+state-version.invalid
+state-version.lineage-mismatch
+state-version.not-found
+state-version.resource-not-found
+state-version.reveal-path-too-long maxBytes:quantity
+state-version.stale-serial
+state-version.too-large
+state-version.upload-denied

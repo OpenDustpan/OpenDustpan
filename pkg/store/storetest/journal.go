@@ -51,9 +51,12 @@ func journalRow(t *testing.T, s UpdatesStore, u stack.Update, sha byte, seqs ...
 		SequenceIDs:  seqs,
 		OperationIDs: ops,
 		HasRebuild:   false,
-		Verify:       nil,
+		Verify:       acceptEntries,
 	}
 }
+
+// acceptEntries is the entry check of a journal row that accepts every batch.
+func acceptEntries([]int64, bool) (bool, error) { return false, nil }
 
 // runJournaled creates and starts a mutating update with journal version 1, so it
 // saves journal batches.
@@ -332,6 +335,27 @@ func testJournalVerify(t *testing.T, f fixture) {
 
 	if retried, err := f.s.PutJournalRow(t.Context(), accepted, f.fence); err != nil || retried {
 		t.Fatalf("accepted batch: retried %t, err %v; want stored", retried, err)
+	}
+}
+
+// testJournalRefusesNilVerify shows that a row with no entry check is refused
+// with ErrJournalBatch and stores nothing, so its sequence stays free.
+func testJournalRefusesNilVerify(t *testing.T, f fixture) {
+	t.Helper()
+
+	u := f.runJournaled(t, f.ref, "u1")
+
+	unchecked := journalRow(t, f.s, u, 1, 1)
+	unchecked.Verify = nil
+
+	if _, err := f.s.PutJournalRow(t.Context(), unchecked, f.fence); !errors.Is(err, stack.ErrJournalBatch) {
+		t.Fatalf("row with no entry check: err = %v, want ErrJournalBatch", err)
+	}
+
+	// The refused row stored nothing, so sequence 1 is still free.
+	free := journalRow(t, f.s, u, 2, 1)
+	if retried, err := f.s.PutJournalRow(t.Context(), free, f.fence); err != nil || retried {
+		t.Fatalf("sequence 1 after a refusal: retried %t, err %v; want stored", retried, err)
 	}
 }
 
@@ -987,6 +1011,9 @@ func testJournalKeysFollowRename(t *testing.T, f fixture) {
 	}
 
 	id := mustStackID(t, f.s, f.ref)
+
+	// A rename waits until the update ends.
+	f.end(t, u, stack.StatusSucceeded)
 
 	if err := f.s.RenameStack(t.Context(), f.ref, "renamed", f.fence); err != nil {
 		t.Fatalf("rename: %v", err)

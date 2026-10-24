@@ -35,7 +35,13 @@ namespace. It needs the action `namespace:set-context` on the namespace. The
 
 The body names only the fields to change. A field that the body leaves out
 does not change. A field with an empty value clears the field. The body must
-name at least one field, and it must not name an unknown field.
+name at least one field, and it must not name an unknown field. The body must
+be valid UTF-8. A body with bytes that are not valid UTF-8, or with a lone
+surrogate escape such as `\ud800`, gets 400, and the server stores nothing. A
+field over its limit, a control character in a text, or a link with an unknown
+`kind` also gets 400. The message names the field and the rule, for example
+`invalid context: summary must be valid UTF-8 of 2048 bytes or fewer, with no
+control character other than a line break or a tab`.
 
 ```sh
 curl -X PATCH -H "Authorization: token $DUSTPAN_TOKEN" \
@@ -114,6 +120,10 @@ A route answers 404 in each of these cases, with the same body:
 - The unit does not exist, or it is in another namespace.
 - The caller does not hold `namespace:read` on the namespace.
 - The caller does not hold the read action of the object.
+
+The body names no value of the path. Its message says that a unit path takes
+the unit ID (`stk-...` or `ws-...`) and not the name, and that
+`GET /api/dustpan/v1/namespaces/{namespace}/units` lists the unit IDs.
 
 So an answer never tells a caller that an object exists. A caller that can
 read the object but does not hold the set action gets 403 on a `PATCH` or a

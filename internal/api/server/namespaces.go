@@ -28,7 +28,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"net/http"
 	"slices"
@@ -141,26 +140,23 @@ func (h *Handler) createNamespace(w http.ResponseWriter, r *http.Request, p iden
 
 // storeNamespace stores the namespace name. With an access service, the
 // namespace, the namespace-admin grant of the creator and the audit entry
-// commit together.
+// commit together. It does not wrap the error: the error of either service
+// already starts with "create namespace" and the name, and the 400 and 409
+// answers send its text.
 func (h *Handler) storeNamespace(
 	r *http.Request,
 	p identity.Principal,
 	name namespace.Name,
 ) (namespace.Namespace, error) {
 	if h.access == nil {
-		ns, err := h.namespaces.Create(r.Context(), name)
-		if err != nil {
-			return namespace.Namespace{}, fmt.Errorf("create namespace: %w", err)
-		}
-
-		return ns, nil
+		return h.namespaces.Create(r.Context(), name)
 	}
 
 	ns := h.namespaces.New(name)
 
 	e := callerEntry(r, p, identity.ActionServerCreateNamespace)
 	if _, err := h.access.CreateNamespace(r.Context(), e, p, ns); err != nil {
-		return namespace.Namespace{}, fmt.Errorf("create namespace: %w", err)
+		return namespace.Namespace{}, err
 	}
 
 	return ns, nil

@@ -18,6 +18,7 @@ import (
 	"opendustpan.org/opendustpan/internal/api/refusal"
 	"opendustpan.org/opendustpan/internal/api/route"
 	"opendustpan.org/opendustpan/internal/denylimit"
+	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/internal/sessionauth"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -434,28 +435,30 @@ func parsePage(r *http.Request) (audit.Page, error) {
 	return page.Normalized(), nil
 }
 
+// writeError answers err through the shared error module of the
+// tool-neutral APIs, with the classes of the audit routes.
 func (h *Handler) writeError(ctx context.Context, w http.ResponseWriter, err error) {
-	problem.Writer{Logger: h.logger, Classify: classify}.Write(ctx, w, err)
+	problem.Writer{Logger: h.logger, Classify: requestErrors}.Write(ctx, w, err)
 }
 
-// classify maps the errors of the audit routes to an answer that is safe to
-// show callers. The shared module answers the rest.
-func classify(err error) (problem.Problem, bool) {
+// requestErrors maps the errors of the request and of the read of the audit
+// log. The shared module answers the rest.
+func requestErrors(err error) (problem.Problem, bool) {
 	switch {
-	case errors.Is(err, errMissingOrganization):
-		return fail(http.StatusBadRequest, "request.namespace-missing", err.Error()), true
-	case errors.Is(err, errInvalidPage):
-		return fail(http.StatusBadRequest, "request.invalid-query", err.Error()), true
+	case errors.Is(err, errMissingOrganization), errors.Is(err, errInvalidPage):
+		return fail(http.StatusBadRequest, errcode.RequestInvalidQuery, err.Error()), true
 	case errors.Is(err, errInvalidSequence):
-		return fail(http.StatusBadRequest, "request.invalid-path", err.Error()), true
+		return fail(http.StatusBadRequest, errcode.RequestInvalidPath, err.Error()), true
+	case errors.Is(err, namespace.ErrInvalidName):
+		return fail(http.StatusBadRequest, errcode.NamespaceInvalidName, err.Error()), true
 	case errors.Is(err, identity.ErrInvalidObject):
-		return fail(http.StatusBadRequest, "request.object-invalid", err.Error()), true
+		return fail(http.StatusBadRequest, errcode.RequestInvalidObject, err.Error()), true
 	case errors.Is(err, namespace.ErrNotFound):
-		return fail(http.StatusNotFound, "namespace.not-found", err.Error()), true
+		return fail(http.StatusNotFound, errcode.NamespaceNotFound, err.Error()), true
 	case errors.Is(err, audit.ErrEntryNotFound):
-		return fail(http.StatusNotFound, "audit.entry-not-found", err.Error()), true
+		return fail(http.StatusNotFound, errcode.AuditEntryNotFound, err.Error()), true
 	case errors.Is(err, errNoEntryReader):
-		return fail(http.StatusNotImplemented, "audit.no-entry-reader", err.Error()), true
+		return fail(http.StatusNotImplemented, errcode.AuditEntryReadUnavailable, err.Error()), true
 	default:
 		return problem.Pass()
 	}
@@ -463,7 +466,9 @@ func classify(err error) (problem.Problem, bool) {
 
 // fail returns an answer with no arguments.
 func fail(status int, code, message string) problem.Problem {
-	return problem.Problem{Status: status, Code: code, Message: message, Args: nil, RetryAfter: 0, Reauthenticate: ""}
+	return problem.Problem{
+		Status: status, Code: code, Values: nil, Message: message, RetryAfter: 0, Reauthenticate: "",
+	}
 }
 
 func (h *Handler) writeJSON(ctx context.Context, w http.ResponseWriter, status int, body any) {

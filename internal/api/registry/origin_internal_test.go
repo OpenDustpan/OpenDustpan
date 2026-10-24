@@ -7,7 +7,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"opendustpan.org/opendustpan/internal/api/problem"
+	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/internal/sessionauth"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -58,15 +58,15 @@ func TestCallerChannel(t *testing.T) {
 }
 
 // TestEveryClassHasACode checks that each error that this API classifies
-// answers with a valid stable code, and that an error it does not know
+// answers with a code of the catalog, and that an error it does not know
 // passes to the shared classes.
 func TestEveryClassHasACode(t *testing.T) {
 	t.Parallel()
 
 	for _, rp := range registryProblems {
 		p, ok := classifyRegistry(fmt.Errorf("wrapped: %w", rp.err))
-		if !ok || !problem.ValidCode(p.Code) || p.Status != rp.status {
-			t.Errorf("%v: classified %t with status %d and code %q, want %d and a valid code",
+		if !ok || !codeInCatalog(p.Code) || p.Status != rp.status {
+			t.Errorf("%v: classified %t with status %d and code %q, want %d and a code of the catalog",
 				rp.err, ok, p.Status, p.Code, rp.status)
 		}
 	}
@@ -74,4 +74,11 @@ func TestEveryClassHasACode(t *testing.T) {
 	if _, ok := classifyRegistry(errUnknown); ok {
 		t.Error("an unknown error was classified, want it passed to the shared classes")
 	}
+}
+
+// codeInCatalog reports whether code is in the catalog.
+func codeInCatalog(code string) bool {
+	_, ok := errcode.Lookup(code)
+
+	return ok
 }

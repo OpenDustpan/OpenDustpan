@@ -164,8 +164,11 @@ func timeZone(value string) error {
 // zoneShape reports whether value has the shape of an IANA zone name: 1 to 64
 // bytes of ASCII letters, digits and the characters / _ + -, in segments with
 // no empty segment. A zone name has no dot, so a segment of dots, a file
-// extension and a relative path never pass. It also refuses names that only
-// some hosts have, so that every host gives the same answer.
+// extension and a relative path never pass. It also refuses some names that
+// only some hosts have. The answer can still differ by host: time.LoadLocation
+// reads the zone files of the host before the embedded database, so a host can
+// know a name that the embedded database does not, and a file system that
+// ignores case can accept a name in the wrong case.
 func zoneShape(value string) bool {
 	if value == "" || len(value) > maxTimeZoneLen {
 		return false

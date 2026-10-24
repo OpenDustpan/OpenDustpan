@@ -18,6 +18,8 @@ import (
 	"opendustpan.org/opendustpan/internal/api/problem"
 	"opendustpan.org/opendustpan/internal/api/route"
 	"opendustpan.org/opendustpan/internal/clientip"
+	"opendustpan.org/opendustpan/internal/errcode"
+	"opendustpan.org/opendustpan/internal/pagetoken"
 	"opendustpan.org/opendustpan/internal/registry/service"
 	"opendustpan.org/opendustpan/internal/requestid"
 	"opendustpan.org/opendustpan/internal/sessionauth"
@@ -202,7 +204,7 @@ func (h *Handler) stage(w http.ResponseWriter, r *http.Request, p identity.Princ
 	mediaType, _, typeErr := mime.ParseMediaType(apidesc.Header(r, "Content-Type"))
 	if typeErr != nil || mediaType != uploadMediaType {
 		h.writeError(ctx, w, problem.Fixed(
-			http.StatusUnsupportedMediaType, "request.content-type-unsupported",
+			http.StatusUnsupportedMediaType, errcode.RequestContentTypeUnsupported,
 			"send the file with the header Content-Type: "+uploadMediaType,
 		))
 
@@ -278,10 +280,10 @@ const (
 
 var (
 	errProviderPageSize = problem.BadRequest(
-		"request.page-size-invalid", "invalid page size: pageSize is a number from 1 to 1000",
+		errcode.RequestPageSizeInvalid, "invalid page size: pageSize is a number from 1 to 1000",
 	)
 	errProviderPageToken = problem.BadRequest(
-		"request.page-token-invalid", "invalid page token: provide the nextPageToken of the page before",
+		errcode.RequestPageTokenInvalid, "invalid page token: provide the nextPageToken of the page before",
 	)
 )
 
@@ -310,6 +312,12 @@ func parseProviderQuery(r *http.Request, ns namespace.Name) (providerQuery, erro
 	}
 
 	if raw := q.Get("pageToken"); raw != "" {
+		// Defense in depth: the name check below refuses a long name too; this
+		// cap stays so that the decode never reads more than a token can hold.
+		if len(raw) > pagetoken.MaxLen {
+			return providerQuery{}, errProviderPageToken
+		}
+
 		decoded, err := base64.RawURLEncoding.DecodeString(raw)
 		if err != nil {
 			return providerQuery{}, errProviderPageToken

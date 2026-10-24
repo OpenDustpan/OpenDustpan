@@ -22,7 +22,7 @@ func (s *Store) StateAt(ctx context.Context, id stack.ID, at time.Time) (stack.S
 	// end time come from the same state of the database.
 	tx, err := s.pool.BeginTx(ctx, s.snapshotOptions())
 	if err != nil {
-		return stack.StateAt{}, fmt.Errorf("begin read transaction: %w", err)
+		return stack.StateAt{}, fmt.Errorf("begin read transaction: %w", readConflict(err))
 	}
 
 	defer func() {
@@ -39,7 +39,7 @@ func (s *Store) StateAt(ctx context.Context, id stack.ID, at time.Time) (stack.S
 	}
 
 	if err != nil {
-		return stack.StateAt{}, fmt.Errorf("select stack: %w", err)
+		return stack.StateAt{}, fmt.Errorf("select stack: %w", readConflict(err))
 	}
 
 	atMs := codec.Millis(at)
@@ -50,14 +50,14 @@ func (s *Store) StateAt(ctx context.Context, id stack.ID, at time.Time) (stack.S
 	}
 
 	if err != nil {
-		return stack.StateAt{}, fmt.Errorf("select state update: %w", err)
+		return stack.StateAt{}, fmt.Errorf("select state update: %w", readConflict(err))
 	}
 
 	running, err := q.RunningUpdateAt(ctx, db.RunningUpdateAtParams{
 		StackID: id.String(), StartedAtMs: atMs, Version: row.Version,
 	})
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
-		return stack.StateAt{}, fmt.Errorf("select running update: %w", err)
+		return stack.StateAt{}, fmt.Errorf("select running update: %w", readConflict(err))
 	}
 
 	return stack.StateAt{
@@ -77,7 +77,7 @@ func noStateAt(ctx context.Context, q *db.Queries, id stack.ID) error {
 	}
 
 	if err != nil {
-		return fmt.Errorf("select first state update: %w", err)
+		return fmt.Errorf("select first state update: %w", readConflict(err))
 	}
 
 	return &stack.NoStateAtError{First: codec.FromMillis(first)}

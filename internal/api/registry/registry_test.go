@@ -897,3 +897,56 @@ func TestListProvidersHostileQuery(t *testing.T) {
 		})
 	}
 }
+
+// TestProviderPageTokenLengthCap proves that a page token over the length limit
+// answers 400 by its length alone. The name in the token is valid, and the
+// base64 decoder ignores line breaks, so only the length refuses the token.
+func TestProviderPageTokenLengthCap(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	enc := base64.RawURLEncoding.EncodeToString
+
+	token := strings.Repeat("\n", 4096) + enc([]byte("payments"))
+	got := f.call(t, "reader", http.MethodGet, base+"/providers?pageToken="+url.QueryEscape(token), nil)
+	wantCode(t, "a valid name over the length limit", got, http.StatusBadRequest)
+}
+
+// TestPublishRepeatReplaysTheFirstRelease proves that the replay of a repeat
+// publish answers what the live repeat answered: the first release, with the
+// first publisher. A repeat of the same content changes nothing, so its stored
+// answer must not name the caller of the repeat.
+func TestPublishRepeatReplaysTheFirstRelease(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	sg := pgpfixture.NewSigner(t)
+	f.trust(t, "acme", sg)
+
+	s := buildSet(t, sg)
+	target := base + "/providers/payments/versions/1.0.0"
+
+	first := f.do(t, request{
+		token: "publisher", method: http.MethodPut, target: target, body: f.publishBody(t, s),
+		headers: map[string]string{"Idempotency-Key": "first"},
+	})
+	wantCode(t, "publish", first, http.StatusOK)
+
+	repeat := request{
+		token: "admin", method: http.MethodPut, target: target, body: f.publishBody(t, s),
+		headers: map[string]string{"Idempotency-Key": "repeat-1"},
+	}
+
+	live := f.do(t, repeat)
+	wantCode(t, "repeat", live, http.StatusOK)
+
+	var doc publishedWire
+	if err := json.Unmarshal([]byte(live.body), &doc); err != nil || doc.PublishedBy != "publisher" {
+		t.Fatalf("repeat answer = %q, %v, want the first publisher", live.body, err)
+	}
+
+	replay := f.do(t, repeat)
+	if replay.code != http.StatusOK || replay.body != live.body {
+		t.Fatalf("replay of the repeat = %d %s, want the live answer %s", replay.code, replay.body, live.body)
+	}
+}

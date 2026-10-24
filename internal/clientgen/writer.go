@@ -54,6 +54,15 @@ func (w dirWriter) Write(dir string, files []File) error {
 
 	defer root.Close() //nolint:errcheck // Nothing was written through the close.
 
+	other, err := otherFiles(root, w.lang, want)
+	if err != nil {
+		return err
+	}
+
+	if len(other.stray) > 0 {
+		return fmt.Errorf("%w: %s: remove it", ErrStray, strings.Join(other.stray, ", "))
+	}
+
 	for _, f := range files {
 		if err := writeOne(root, w.lang, f); err != nil {
 			return err
@@ -132,16 +141,25 @@ func writeOne(root *os.Root, lang Language, f File) error {
 	return nil
 }
 
-// skippedDirs are the directories that staleFiles does not enter. A build
+// skippedDirs are the directories that otherFiles does not enter. A build
 // writes them, and a compiler keeps the leading comment of a source file, so a
 // compiled file of a generated file also carries the header.
 func skippedDirs() []string { return []string{"node_modules", "dist", ".git"} }
 
-// staleFiles lists the files that carry the header of the language and that
-// the new run does not give. It does not enter the directories of
-// skippedDirs.
-func staleFiles(root *os.Root, lang Language, want map[string]bool) ([]string, error) {
-	var stale []string
+// others are the files in the output directory that the new run does not
+// give, in the order of the walk.
+type others struct {
+	// stale files carry the header of the language.
+	stale []string
+	// stray files have no such header and lie in a path that the language
+	// owns.
+	stray []string
+}
+
+// otherFiles lists the files that the new run does not give. It does not
+// enter the directories of skippedDirs.
+func otherFiles(root *os.Root, lang Language, want map[string]bool) (others, error) {
+	var out others
 
 	err := fs.WalkDir(root.FS(), ".", func(p string, d fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
@@ -165,30 +183,36 @@ func staleFiles(root *os.Root, lang Language, want map[string]bool) ([]string, e
 			return readErr
 		}
 
-		if lang.IsGenerated(head) {
-			stale = append(stale, p)
+		switch {
+		case lang.IsGenerated(head):
+			out.stale = append(out.stale, p)
+		case lang.Owned(p):
+			out.stray = append(out.stray, p)
+		default:
+			// A file with no header outside the owned paths is hand-written,
+			// and it stays.
 		}
 
 		return nil
 	})
 	if err != nil {
-		return nil, fmt.Errorf("look for stale files: %w", err)
+		return others{stale: nil, stray: nil}, fmt.Errorf("look for stale files: %w", err)
 	}
 
-	return stale, nil
+	return out, nil
 }
 
 // removeStale removes the files that carry the header of the language and
 // that the new run does not give. Any other file stays, also a file with the
-// header of another generator. It does not enter the directories of
-// skippedDirs.
+// header of another generator, and a stray file. It does not enter the
+// directories of skippedDirs.
 func removeStale(root *os.Root, lang Language, want map[string]bool) error {
-	stale, err := staleFiles(root, lang, want)
+	other, err := otherFiles(root, lang, want)
 	if err != nil {
 		return err
 	}
 
-	for _, p := range stale {
+	for _, p := range other.stale {
 		if err = root.Remove(p); err != nil {
 			return fmt.Errorf("remove %s: %w", p, err)
 		}

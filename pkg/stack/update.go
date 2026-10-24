@@ -152,6 +152,48 @@ func (s UpdateStatus) Terminal() bool {
 // UpdateID identifies an update. It is opaque to clients.
 type UpdateID string
 
+// UpdateConflictError reports the mutating update that runs on the stack and
+// blocks the call. It matches ErrUpdateConflict. The store fills it in the
+// transaction that finds the running update, so the caller needs no second
+// read to name that update.
+type UpdateConflictError struct {
+	// Active is the ID of the mutating update that runs on the stack.
+	Active UpdateID
+}
+
+// Error returns the sentence of ErrUpdateConflict and the ID of the update
+// that runs on the stack. An ID that ParseUpdateID refuses is left out.
+func (e *UpdateConflictError) Error() string {
+	// Defense in depth: RunningUpdateConflict parses the ID too; this check
+	// stays so that an error that a caller builds by hand never puts an ID
+	// that is not valid into the text of an answer.
+	if _, err := ParseUpdateID(string(e.Active)); err != nil {
+		return ErrUpdateConflict.Error()
+	}
+
+	return fmt.Sprintf("%s (update %s)", ErrUpdateConflict, e.Active)
+}
+
+// RunningUpdateConflict returns the error of a call that a running mutating
+// update blocks, for the ID that a store read from the row of that update.
+// It returns a *UpdateConflictError that names the update when ParseUpdateID
+// accepts id. For any other id it returns an error that matches
+// ErrUpdateConflict and names no update: a row from a restore or from another
+// version can hold any text, and the text of the error reaches the client.
+func RunningUpdateConflict(id string) error {
+	active, err := ParseUpdateID(id)
+	if err != nil {
+		return fmt.Errorf("%w (the running update has an ID that is not valid)", ErrUpdateConflict)
+	}
+
+	return &UpdateConflictError{Active: active}
+}
+
+// Unwrap returns ErrUpdateConflict.
+func (*UpdateConflictError) Unwrap() error {
+	return ErrUpdateConflict
+}
+
 // ParseUpdateID validates s as an update ID.
 func ParseUpdateID(s string) (UpdateID, error) {
 	if !ident.Valid(s, maxUpdateIDLength) {

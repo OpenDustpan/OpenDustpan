@@ -23,9 +23,29 @@ import (
 	"opendustpan.org/opendustpan/pkg/store/sqlite"
 )
 
-// pollTimeout bounds a backup poll: a test backup of a small database ends
-// well before it.
+// pollTimeout bounds a backup or restore poll when the test binary runs with
+// no deadline (-timeout 0).
 const pollTimeout = 60 * time.Second
+
+// pollGrace is the time that a poll leaves before the deadline of the test
+// binary, so a run that does not end fails the test with its state and not
+// with the panic of the timeout.
+const pollGrace = 30 * time.Second
+
+// pollContext returns the context of a poll of a backup or restore run. The
+// run starves for CPU on a loaded host, so the poll waits on the state of the
+// run and not on a fixed time: it ends pollGrace before the deadline of the
+// test binary (-timeout). With no deadline, it ends after pollTimeout.
+func pollContext(t *testing.T) (context.Context, context.CancelFunc) {
+	t.Helper()
+
+	deadline, ok := t.Deadline()
+	if !ok {
+		return context.WithTimeout(t.Context(), pollTimeout)
+	}
+
+	return context.WithDeadline(t.Context(), deadline.Add(-pollGrace))
+}
 
 // pollInterval sets how often a backup poll reads the row.
 const pollInterval = 10 * time.Millisecond
@@ -325,7 +345,7 @@ func readBackup(t *testing.T, handler testHandler, id string) getBackupDoc {
 func pollBackupSucceeded(t *testing.T, handler testHandler, id string) getBackupDoc {
 	t.Helper()
 
-	ctx, cancel := context.WithTimeout(t.Context(), pollTimeout)
+	ctx, cancel := pollContext(t)
 	defer cancel()
 
 	timer := time.NewTimer(pollInterval)
@@ -351,7 +371,7 @@ func pollBackupSucceeded(t *testing.T, handler testHandler, id string) getBackup
 func waitGateEntered(t *testing.T, gate *gateExporter) {
 	t.Helper()
 
-	ctx, cancel := context.WithTimeout(t.Context(), pollTimeout)
+	ctx, cancel := pollContext(t)
 	defer cancel()
 
 	select {

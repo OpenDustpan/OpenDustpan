@@ -47,6 +47,18 @@ func inprocessPublicURL(in envInput, ts *httptest.Server) string {
 	return "https://" + ts.Listener.Addr().String()
 }
 
+// binaryPublicURL returns the public URL of a server binary that OpenTofu
+// talks to: the URL of the recording proxy in front of it, as
+// inprocessPublicURL gives the URL of the in-process server. A run with the
+// sign-in sets the public URL through the sign-in.
+func binaryPublicURL(in envInput, proxy *recordingProxy) string {
+	if in.cli.Tool != ToolTofu || in.signIn {
+		return ""
+	}
+
+	return proxy.publicURL()
+}
+
 // WriteRegistryProject writes main.tf in a directory of its own, apart from the
 // cloud-block part, and returns the directory. The part holds the providers
 // that the test installs from the registry of the server.
