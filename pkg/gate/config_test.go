@@ -658,19 +658,27 @@ func TestConfigServiceApproversReasons(t *testing.T) {
 		people    int64
 	}{
 		{
-			"group name not valid", gate.Approvers{Groups: []string{"<b>x</b>"}, Users: nil, UnitOwners: false}, 1,
+			"group name not valid",
+			gate.Approvers{Groups: []string{"<b>x</b>"}, Users: nil, UnitOwners: false},
+			1,
 			gate.ApproversGroupInvalid, 0,
 		},
 		{
-			"group missing", gate.Approvers{Groups: []string{"nogroup"}, Users: nil, UnitOwners: false}, 1,
+			"group missing",
+			gate.Approvers{Groups: []string{"nogroup"}, Users: nil, UnitOwners: false},
+			1,
 			gate.ApproversGroupMissing, 0,
 		},
 		{
-			"user not valid", gate.Approvers{Groups: nil, Users: []string{"a\x07b"}, UnitOwners: false}, 1,
+			"user not valid",
+			gate.Approvers{Groups: nil, Users: []string{"a\x07b"}, UnitOwners: false},
+			1,
 			gate.ApproversUserInvalid, 0,
 		},
 		{
-			"count above", gate.Approvers{Groups: nil, Users: []string{"alice", "bob"}, UnitOwners: false}, 3,
+			"count above",
+			gate.Approvers{Groups: nil, Users: []string{"alice", "bob"}, UnitOwners: false},
+			3,
 			gate.ApproversCountAbove, 2,
 		},
 	}
