@@ -8,7 +8,6 @@ import (
 	"context"
 	"errors"
 	"log/slog"
-	"net/http"
 	"os"
 	"path/filepath"
 	"testing"
@@ -89,7 +88,7 @@ func TestHarnessSmoke(t *testing.T) {
 		t.Fatalf("no lock won: %+v", report.WorkspaceLocks)
 	}
 
-	checkUpdateRuns(t, report, cfg.ContentionAttempts)
+	checkUpdateRuns(t, &report, cfg.ContentionAttempts)
 	checkJournal(t, report.Journal, cfg)
 	checkAccess(t, report.Access)
 
@@ -152,7 +151,7 @@ func TestRecordedFixtures(t *testing.T) {
 
 // checkUpdateRuns checks both update runs: on one stack the stack lock lets
 // one update start, and on one stack per attempt every update starts.
-func checkUpdateRuns(t *testing.T, report Report, attempts int) {
+func checkUpdateRuns(t *testing.T, report *Report, attempts int) {
 	t.Helper()
 
 	if report.UpdateConflicts.Started != 1 {
@@ -200,14 +199,25 @@ func checkJournal(t *testing.T, got JournalResult, cfg Config) {
 func checkAccess(t *testing.T, got AccessResult) {
 	t.Helper()
 
-	for _, route := range []AccessRoute{got.RunnerRoute, got.JobsRoute} {
+	routes := []struct {
+		route AccessRoute
+		want  expectation
+	}{
+		{route: got.RunnerRoute, want: refusedRoutes().runner},
+		{route: got.JobsRoute, want: refusedRoutes().jobs},
+	}
+
+	for _, r := range routes {
+		route := r.route
+
 		if route.GateOffP50Ms <= 0 || route.GateNoListP50Ms <= 0 || route.GateListP50Ms <= 0 ||
 			route.GateRefusedP50Ms <= 0 {
 			t.Fatalf("access timing missing: %+v", route)
 		}
 
-		if route.RefusedStatus != http.StatusNotFound && route.RefusedStatus != http.StatusForbidden {
-			t.Fatalf("refused status = %d, want 404 or 403: %+v", route.RefusedStatus, route)
+		if route.RefusedStatus != r.want.status || route.RefusedCode != r.want.code {
+			t.Fatalf("refused answer = %d %q, want %d %q: %+v", route.RefusedStatus, route.RefusedCode,
+				r.want.status, r.want.code, route)
 		}
 	}
 
@@ -229,18 +239,26 @@ func TestRefusalComesFromTheList(t *testing.T) {
 	deny := accessPathsOf(served.denyNS, served.denyJobID)
 	allowed := accessPathsOf(served.listNS, served.listJobID)
 
-	for _, path := range []string{deny.runner, deny.jobs} {
-		if _, err := fx.timeGet(ctx, served.urls[0]+path, 1, []int{http.StatusOK}); err != nil {
-			t.Fatalf("%s without IP allowlists: %v", path, err)
+	refused := []struct {
+		path string
+		want expectation
+	}{
+		{path: deny.runner, want: refusedRoutes().runner},
+		{path: deny.jobs, want: refusedRoutes().jobs},
+	}
+
+	for _, route := range refused {
+		if _, err := fx.timeGet(ctx, served.urls[0]+route.path, 1, okAnswer()); err != nil {
+			t.Fatalf("%s without IP allowlists: %v", route.path, err)
 		}
 
-		if _, err := fx.timeGet(ctx, served.gateURL+path, 1, refusedStatuses()); err != nil {
-			t.Fatalf("%s with the refusing list: %v", path, err)
+		if _, err := fx.timeGet(ctx, served.gateURL+route.path, 1, route.want); err != nil {
+			t.Fatalf("%s with the refusing list: %v", route.path, err)
 		}
 	}
 
 	for _, path := range []string{allowed.runner, allowed.jobs} {
-		if _, err := fx.timeGet(ctx, served.gateURL+path, 1, []int{http.StatusOK}); err != nil {
+		if _, err := fx.timeGet(ctx, served.gateURL+path, 1, okAnswer()); err != nil {
 			t.Fatalf("%s with the list that holds the client: %v", path, err)
 		}
 	}
