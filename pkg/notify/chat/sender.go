@@ -14,9 +14,9 @@ import (
 	"unicode/utf8"
 
 	"opendustpan.org/opendustpan/internal/egress/egresshttp"
+	"opendustpan.org/opendustpan/internal/notify/post"
 	"opendustpan.org/opendustpan/pkg/egress"
 	"opendustpan.org/opendustpan/pkg/notify"
-	"opendustpan.org/opendustpan/pkg/notify/internal/post"
 )
 
 // SendTimeout is the longest time of one send, as a deadline on the context
