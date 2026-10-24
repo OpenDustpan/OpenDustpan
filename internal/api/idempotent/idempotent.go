@@ -70,7 +70,10 @@ var ErrMissingDependency = errors.New("missing dependency")
 type Error struct {
 	Answer  errcode.Answer
 	Message string
-	Status  int
+	// cause is the failure of errcode.New when the refusal answers
+	// server.internal in place of its own code, or nil. Handle logs it.
+	cause  error
+	Status int
 }
 
 // Error implements error.
@@ -78,17 +81,18 @@ func (e *Error) Error() string { return e.Message }
 
 // refuse returns the refusal with the status, the text and the catalog code
 // with its values. A code or a value that the catalog refuses is a bug of this
-// package. The refusal then answers 500 with the code of an internal failure,
-// and the tests of this package find it.
+// package. The refusal then answers 500 with the code of an internal failure
+// and keeps the failure as its cause, which Handle logs.
 func refuse(status int, code, message string, values ...errcode.Value) *Error {
 	answer, err := errcode.New(code, values...)
 	if err != nil {
 		return &Error{
 			Status: http.StatusInternalServerError, Message: "internal error", Answer: errcode.Internal(),
+			cause: fmt.Errorf("answer %s: %w", code, err),
 		}
 	}
 
-	return &Error{Status: status, Message: message, Answer: answer}
+	return &Error{Status: status, Message: message, Answer: answer, cause: nil}
 }
 
 // Lost returns the refusal for a request whose pending record another request
@@ -171,8 +175,20 @@ type Call struct {
 //
 // Handle returns an *Error for a refusal, and another error when the store
 // fails. It returns nil when it wrote the answer: a replay, or the answer of
-// c.Serve.
+// c.Serve. A refusal whose code the catalog refuses answers 500 with the code
+// of an internal failure, and Handle logs the code and the cause.
 func (m *Middleware) Handle(w http.ResponseWriter, r *http.Request, c Call) error {
+	err := m.serveCall(w, r, c)
+	if refusal, ok := errors.AsType[*Error](err); ok && refusal != nil && refusal.cause != nil {
+		m.logger.ErrorContext(r.Context(), "idempotent refusal has no catalog answer: answered server.internal",
+			slog.String("error", refusal.cause.Error()))
+	}
+
+	return err
+}
+
+// serveCall is Handle without the log of a refusal that has no catalog answer.
+func (m *Middleware) serveCall(w http.ResponseWriter, r *http.Request, c Call) error {
 	key, err := keyOf(r)
 	if err != nil {
 		return err
