@@ -366,7 +366,9 @@ func NewHandler(cfg Config) (*Handler, error) {
 // answers 404 as a JSON:API error, so callers can tell it reached this
 // adapter.
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	catch := &notFoundWriter{ResponseWriter: w, notFound: false}
+	catch := &notFoundWriter{
+		ResponseWriter: w, notFound: false, registry: strings.HasPrefix(r.URL.Path, registryPrefix),
+	}
 
 	h.mux.ServeHTTP(catch, r)
 
@@ -389,19 +391,23 @@ func (h *Handler) ExternalBaseURL(r *http.Request) string {
 
 // notFoundWriter swallows the default 404 of the mux, so ServeHTTP can
 // replace it with a JSON:API error. A 404 that already carries the JSON:API
-// media type, or the JSON media type of the registry protocol, comes from a
-// route handler and passes through untouched.
+// media type comes from a route handler and passes through untouched. So does
+// a 404 with the JSON media type of the registry protocol, but only on a path
+// of that protocol: on any other path the JSON:API 404 replaces it.
 type notFoundWriter struct {
 	http.ResponseWriter
 
 	notFound bool
+	registry bool
 }
 
 // WriteHeader swallows a 404 without the JSON:API or the JSON media type and
 // records it. Every other status passes through.
 func (c *notFoundWriter) WriteHeader(status int) {
 	media := c.Header().Get("Content-Type")
-	if status == http.StatusNotFound && media != jsonAPIMediaType && media != registryMediaType {
+	passes := media == jsonAPIMediaType || (c.registry && media == registryMediaType)
+
+	if status == http.StatusNotFound && !passes {
 		c.notFound = true
 
 		return
