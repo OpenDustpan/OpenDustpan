@@ -3,7 +3,6 @@ package secret
 import (
 	"context"
 	"crypto/cipher"
-	"crypto/rand"
 	"errors"
 	"fmt"
 	"time"
@@ -190,14 +189,15 @@ func (s *InstallationSecrets) dataKey(ctx context.Context, id string, create boo
 	default:
 	}
 
-	if stored.WrapperID != s.wrapper.ID() {
-		return nil, fmt.Errorf("%w: key for installation scope %s is wrapped by %q, server holds %q",
-			ErrDecrypt, id, stored.WrapperID, s.wrapper.ID())
-	}
-
-	key, err := s.wrapper.Unwrap(ctx, stored.Ciphertext, installationAAD(id))
+	key, err := unwrapKey(
+		ctx,
+		s.wrapper,
+		sealedKey{wrapperID: stored.WrapperID, ciphertext: stored.Ciphertext},
+		installationAAD(id),
+		"key for installation scope "+id,
+	)
 	if err != nil {
-		return nil, fmt.Errorf("unwrap key for installation scope %s: %w", id, err)
+		return nil, err
 	}
 
 	defer clear(key)
@@ -206,16 +206,9 @@ func (s *InstallationSecrets) dataKey(ctx context.Context, id string, create boo
 }
 
 func (s *InstallationSecrets) createKey(ctx context.Context, scope Scope) (WrappedKey, error) {
-	key := make([]byte, dataKeyBytes)
-	defer clear(key)
-
-	if _, err := rand.Read(key); err != nil {
-		return WrappedKey{}, fmt.Errorf("generate key: %w", err)
-	}
-
-	wrapped, err := s.wrapper.Wrap(ctx, key, installationAAD(scope.ID))
+	wrapped, err := wrapNewKey(ctx, s.wrapper, installationAAD(scope.ID), "key for installation scope "+scope.ID)
 	if err != nil {
-		return WrappedKey{}, fmt.Errorf("wrap key for installation scope %s: %w", scope.ID, err)
+		return WrappedKey{}, err
 	}
 
 	stored, err := s.keys.CreateInstallationKey(ctx, WrappedKey{

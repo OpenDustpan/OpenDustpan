@@ -43,7 +43,7 @@ These query values filter and page the list:
   of days or less, from 0 to 3650. A unit whose retention period has ended
   also matches.
 - `pageSize`: the page size, from 1 to 500. The default (missing) is 50.
-- `pageToken`: the `nextPageToken` value of the previous page.
+- `pageToken`: the `nextPageToken` value of the previous page. Send it with the same `tool`, `namePrefix` and `purgeWithinDays` values. A `pageToken` from a list with other filters answers 400. The `pageSize` can change from page to page.
 
 ```sh
 curl -H "Authorization: token $DUSTPAN_ADMIN_TOKEN" \

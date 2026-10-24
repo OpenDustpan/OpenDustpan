@@ -625,6 +625,29 @@ func checkRouteScope(t *testing.T, route pulumi.Route, public map[string]bool) {
 	default:
 		t.Fatalf("route %q declares no scope", pattern)
 	}
+
+	checkRouteHandler(t, route)
+}
+
+// checkRouteHandler fails for a route with the wrong handler: a lease route
+// sets only Lease, so it never runs without a parsed lease, and every other
+// route sets only Serve.
+func checkRouteHandler(t *testing.T, route pulumi.Route) {
+	t.Helper()
+
+	pattern := route.Method + " " + route.Path
+
+	if route.Scope == pulumi.ScopeUpdateLease {
+		if route.Lease == nil || route.Serve != nil {
+			t.Fatalf("lease route %q: want Lease set and Serve nil", pattern)
+		}
+
+		return
+	}
+
+	if route.Serve == nil || route.Lease != nil {
+		t.Fatalf("route %q: want Serve set and Lease nil", pattern)
+	}
 }
 
 // checkPublicRoute fails for a public route that is not on the public list

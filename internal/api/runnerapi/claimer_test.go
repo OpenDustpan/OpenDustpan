@@ -74,13 +74,28 @@ func dispatchPlan(t *testing.T, e *env, pool string, unit identity.Object) job.J
 			}},
 			Pool: pool, Profile: "prf-default", Edits: nil, Delivery: "",
 		},
-		State: job.StateQueued, Wait: job.WaitNone, Reason: "", Phases: []job.Phase{{
+		State:  job.StateQueued,
+		Wait:   job.WaitNone,
+		Reason: "",
+		Phases: []job.Phase{{
 			Kind: job.PhasePlan, Operation: "", Claims: 0, Executor: "", Steps: nil, StateVersion: "", Plan: nil,
 			Gates: nil, Approvals: nil, StartedAt: time.Time{}, FinishedAt: time.Time{},
 		}},
-		Current: 0, StartedBy: "ada", Source: job.SourceAPI, Agent: "", AgentMode: "", BreakGlass: nil,
-		Delivery: nil, Closed: nil, Verification: job.VerificationNone, IdempotencyKey: "", RequestHash: "",
-		Version: 0, CreatedAt: time.Time{}, UpdatedAt: time.Time{},
+		Current:        0,
+		StartedBy:      "ada",
+		Source:         job.SourceAPI,
+		Agent:          "",
+		AgentMode:      "",
+		BreakGlass:     nil,
+		Trigger:        nil,
+		Delivery:       nil,
+		Closed:         nil,
+		Verification:   job.VerificationNone,
+		IdempotencyKey: "",
+		RequestHash:    "",
+		Version:        0,
+		CreatedAt:      time.Time{},
+		UpdatedAt:      time.Time{},
 	}
 
 	start := &durable.StartRequest{Key: job.PhaseKey(j.ID, 0), Kind: job.RunnerKind(pool), Version: 1, Input: nil}

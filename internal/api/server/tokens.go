@@ -482,7 +482,9 @@ func ofPathPrincipal(op tokenOp) tokenOp {
 		case t.PrincipalID != r.PathValue("principal"):
 			err = fmt.Errorf("%w: %q", accesstoken.ErrNotFound, id)
 		case t.Kind != accesstoken.KindService:
-			err = fmt.Errorf("%w: a %s token goes through /api/server/tokens", accesstoken.ErrWrongKind, t.Kind)
+			err = fmt.Errorf("%w: its owner rotates and revokes a %s token through /api/server/caller/tokens/{id}, "+
+				"and an administrator reads and revokes it through /api/server/tokens/{id}", accesstoken.ErrWrongKind,
+				t.Kind)
 		default:
 		}
 
@@ -779,25 +781,25 @@ func tokenObject(r *http.Request, svc *accesstoken.Service) string {
 // token, answer 400; an unknown token or principal 404; a token that ended
 // 409; and a store with no token port 501. The domain wraps each sentinel
 // with the ID or the value it acted on, never with driver text or a secret.
-func classifyToken(err error) (int, string, bool) {
+func classifyToken(err error) (failure, bool) {
 	switch {
 	case errors.Is(err, identity.ErrRateLimited):
-		return http.StatusTooManyRequests, "too many failed sign-ins from this address: try again later", true
+		return fail(http.StatusTooManyRequests, "too many failed sign-ins from this address: try again later"), true
 	case errors.Is(err, errTokenBody), errors.Is(err, errRotateBody), errors.Is(err, errTokenQuery),
 		errors.Is(err, errPolicyBody), errors.Is(err, errBreakGlassGone), errors.Is(err, errPrincipalTokenBody),
 		errors.Is(err, accesstoken.ErrInvalid), errors.Is(err, accesstoken.ErrNoTokenForKind):
-		return http.StatusBadRequest, err.Error(), true
+		return fail(http.StatusBadRequest, err.Error()), true
 	case errors.Is(err, accesstoken.ErrNotFound), errors.Is(err, accesstoken.ErrPrincipalNotFound):
-		return http.StatusNotFound, err.Error(), true
+		return fail(http.StatusNotFound, err.Error()), true
 	case errors.Is(err, accesstoken.ErrWrongKind):
-		return http.StatusBadRequest, err.Error(), true
+		return fail(http.StatusBadRequest, err.Error()), true
 	case errors.Is(err, accesstoken.ErrNoOwnPrincipal), errors.Is(err, accesstoken.ErrSignInRequired):
-		return http.StatusForbidden, err.Error(), true
+		return fail(http.StatusForbidden, err.Error()), true
 	case errors.Is(err, accesstoken.ErrEnded), errors.Is(err, accesstoken.ErrAlreadyExists):
-		return http.StatusConflict, err.Error(), true
+		return fail(http.StatusConflict, err.Error()), true
 	case errors.Is(err, errNoTokenStore):
-		return http.StatusNotImplemented, err.Error(), true
+		return fail(http.StatusNotImplemented, err.Error()), true
 	default:
-		return 0, "", false
+		return fail(0, ""), false
 	}
 }

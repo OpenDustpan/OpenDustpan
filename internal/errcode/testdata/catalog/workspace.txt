@@ -1,0 +1,10 @@
+workspace.already-exists
+workspace.changed-concurrently
+workspace.invalid-name
+workspace.locked
+workspace.no-state
+workspace.no-state-at firstAt:time
+workspace.not-found
+workspace.override-refused
+workspace.pending-state-version
+workspace.too-many-pending

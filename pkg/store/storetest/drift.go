@@ -136,6 +136,7 @@ func storeDriftJob(t *testing.T, b DriftBackend, u graph.Unit, purpose job.Purpo
 		}},
 		Current: 0, StartedBy: "al", Source: job.SourceAPI, Agent: "", AgentMode: "", BreakGlass: nil, Delivery: nil,
 		Closed: nil, Verification: job.VerificationNone, IdempotencyKey: "", RequestHash: "", Version: 0,
+		Trigger:   nil,
 		CreatedAt: time.Time{}, UpdatedAt: time.Time{},
 	}
 

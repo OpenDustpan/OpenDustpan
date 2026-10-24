@@ -201,20 +201,27 @@ func SafeText(s string) string {
 // LockedError is the error of a request that a manual lock refuses. It
 // matches ErrLocked. The tool that refuses the request sets Noun to its own
 // word for the unit, for example "stack" or "workspace", and Name to the name
-// of the unit in that tool. The text names the unit, the holder and the
-// reason.
+// of the unit in that tool. The text names the unit, the holder, the reason
+// and the route that removes the lock.
 type LockedError struct {
 	Lock Lock
 	Noun string
 	Name string
 }
 
-// Error returns the text of the refusal. A lock on the unit gives
-// "<noun> <name> has a manual lock by ...". A lock on the collection of the
-// unit gives "<noun> <name> is in collection <ref>, which has a manual lock
-// by ...". A lock on the namespace gives "<noun> <name> is in namespace
-// <name>, which has a manual lock by ...".
+// Error returns the text of the refusal (Refusal), then the route of the
+// holder that removes the lock: ". To remove the lock, the holder sends
+// DELETE <route>.".
 func (e *LockedError) Error() string {
+	return e.Refusal() + ". To remove the lock, the holder sends DELETE " + e.Lock.Target.RemovalRoutes().Remove + "."
+}
+
+// Refusal returns the text of the refusal with no route. A lock on the unit
+// gives "<noun> <name> has a manual lock by ...". A lock on the collection of
+// the unit gives "<noun> <name> is in collection <ref>, which has a manual
+// lock by ...". A lock on the namespace gives "<noun> <name> is in namespace
+// <name>, which has a manual lock by ...". The text ends with the reason.
+func (e *LockedError) Refusal() string {
 	noun := e.Noun
 	if noun == "" {
 		noun = "stack or workspace"

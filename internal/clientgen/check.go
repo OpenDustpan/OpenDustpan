@@ -12,9 +12,11 @@ import (
 // Diff compares generated files with the files in a directory, and writes
 // nothing. It returns one line for each difference, in the order of the paths:
 // a file that is missing, a file with other content, and a file with the
-// header of the language that the new run does not give. A file without the
-// header is not a difference, as in Write. A directory that does not exist
-// has every file missing. The result is empty when Write would change nothing.
+// header of the language that the new run does not give, and a stray file: a
+// file without the header that the new run does not give, in a path that the
+// language owns (Language.Owned). Any other file without the header is not a
+// difference, as in Write. A directory that does not exist has every file
+// missing. The result is empty when Write would change nothing.
 func Diff(lang Language, dir string, files []File) ([]string, error) {
 	want, err := checkPaths(files)
 	if err != nil {
@@ -45,13 +47,17 @@ func Diff(lang Language, dir string, files []File) ([]string, error) {
 		}
 	}
 
-	stale, err := staleFiles(root, lang, want)
+	other, err := otherFiles(root, lang, want)
 	if err != nil {
 		return nil, err
 	}
 
-	for _, p := range stale {
+	for _, p := range other.stale {
 		out = append(out, "stale: "+p)
+	}
+
+	for _, p := range other.stray {
+		out = append(out, "stray: "+p)
 	}
 
 	slices.Sort(out)

@@ -1345,37 +1345,14 @@ func pulumiScenario(t *testing.T, env *e2e.Env) {
 		),
 	)
 
-	// A second update cannot start while one runs: hold the stack lock
-	// through the API, prove the CLI reports the conflict, then release it.
-	// The stack is the renamed one, which up, refresh and destroy ran on.
-	held := env.StartHeldUpdate(ctx, t, org, e2e.Project, "renamed")
-	// The running update holds the stack lock: the inventory entry of the
-	// stack holds it with the holder and the update kind.
-	checkInventoryLock(ctx, t, env, lockedUnit{
-		ref:       "pulumi:" + org + "/" + e2e.Project + "/renamed",
-		holder:    e2e.Subject,
-		operation: "update",
-	})
-	env.Step(ctx, t, failStep(
-		"second up while one runs",
-		outputContains("another update of this stack is in progress"),
-		"up", "--yes", "--non-interactive",
-	))
-	env.Step(ctx, t, failStep(
-		"stack import while one runs",
-		outputContains("another update of this stack is in progress"),
-		"stack", "import", "--file", importPath,
-	))
-	env.EndHeldUpdate(ctx, t, held, "cancelled") //nolint:misspell // The CLI's wire value; it must not change.
-	// The ended update releases the lock: the inventory entry holds none.
-	checkInventoryUnlockedByID(ctx, t, env, "pulumi:"+org+"/"+e2e.Project+"/renamed")
+	heldUpdateBlocksTheStack(ctx, t, env, org, importPath)
 
 	// A crashed CLI leaves its update running: hold the stack through the
 	// API as the orphaned update, save the up's checkpoint with the crash
 	// marker as the engine left it, prove the next up is blocked, cancel
 	// through the CLI in a second process, prove the checkpoint survived
 	// cancel, then up works.
-	held = env.StartHeldUpdate(ctx, t, org, e2e.Project, "renamed")
+	held := env.StartHeldUpdate(ctx, t, org, e2e.Project, "renamed")
 	env.SaveHeldCheckpoint(ctx, t, held, exported.Stdout)
 	env.Step(ctx, t, failStep(
 		"up blocked after crash",
@@ -14082,7 +14059,7 @@ func wipeSQLiteDestination(ctx context.Context, t *testing.T, env *e2e.Env) {
 }
 
 // wipePostgresDestination drops the PostgreSQL schema the environment serves
-// and recreates it empty, and removes the live blobs. The restore
+// with its control schema, recreates the live schema empty, and removes the live blobs. The restore
 // migrates the empty schema and finds no rows and no blobs: a copied blob
 // that the destination already holds is an error.
 func wipePostgresDestination(ctx context.Context, t *testing.T, env *e2e.Env) {
@@ -14101,13 +14078,19 @@ func wipePostgresDestination(ctx context.Context, t *testing.T, env *e2e.Env) {
 		}
 	}()
 
-	name := pgx.Identifier{schema}.Sanitize()
+	// The store keeps its control tables in a second schema, <name>_control,
+	// and records its migrations in the live schema. Both schemas must go,
+	// or the migration of the empty live schema finds the control tables of
+	// the old installation and fails.
+	for _, schemaName := range []string{schema, schema + "_control"} {
+		name := pgx.Identifier{schemaName}.Sanitize()
 
-	if _, err := conn.Exec(ctx, "DROP SCHEMA "+name+" CASCADE"); err != nil {
-		t.Fatalf("drop schema: %v", err)
+		if _, err := conn.Exec(ctx, "DROP SCHEMA IF EXISTS "+name+" CASCADE"); err != nil {
+			t.Fatalf("drop schema %s: %v", schemaName, err)
+		}
 	}
 
-	if _, err := conn.Exec(ctx, "CREATE SCHEMA "+name); err != nil {
+	if _, err := conn.Exec(ctx, "CREATE SCHEMA "+pgx.Identifier{schema}.Sanitize()); err != nil {
 		t.Fatalf("create schema: %v", err)
 	}
 
@@ -15119,4 +15102,50 @@ func tofuContextScenario(t *testing.T, env *e2e.Env) {
 	}
 
 	contextScenario(t, env, "opentofu", id)
+}
+
+// renameRefusedWhileUpdateRuns proves that the CLI cannot rename a stack
+// while an update of the stack runs: the server answers 409, as it does for a
+// second update.
+func renameRefusedWhileUpdateRuns(ctx context.Context, t *testing.T, env *e2e.Env) {
+	t.Helper()
+
+	env.Step(ctx, t, failStep(
+		"stack rename while one runs",
+		outputContains("another update of this stack is in progress"),
+		"stack", "rename", "renamed-while-running",
+	))
+}
+
+// heldUpdateBlocksTheStack holds an update through the API and proves that
+// a second update, an import and a rename each answer 409 while it runs, that
+// the inventory shows the lock, and that the lock goes when the update ends.
+func heldUpdateBlocksTheStack(ctx context.Context, t *testing.T, env *e2e.Env, org, importPath string) {
+	t.Helper()
+
+	// A second update cannot start while one runs: hold the stack lock
+	// through the API, prove the CLI reports the conflict, then release it.
+	// The stack is the renamed one, which up, refresh and destroy ran on.
+	held := env.StartHeldUpdate(ctx, t, org, e2e.Project, "renamed")
+	// The running update holds the stack lock: the inventory entry of the
+	// stack holds it with the holder and the update kind.
+	checkInventoryLock(ctx, t, env, lockedUnit{
+		ref:       "pulumi:" + org + "/" + e2e.Project + "/renamed",
+		holder:    e2e.Subject,
+		operation: "update",
+	})
+	env.Step(ctx, t, failStep(
+		"second up while one runs",
+		outputContains("another update of this stack is in progress"),
+		"up", "--yes", "--non-interactive",
+	))
+	env.Step(ctx, t, failStep(
+		"stack import while one runs",
+		outputContains("another update of this stack is in progress"),
+		"stack", "import", "--file", importPath,
+	))
+	renameRefusedWhileUpdateRuns(ctx, t, env)
+	env.EndHeldUpdate(ctx, t, held, "cancelled") //nolint:misspell // The CLI's wire value; it must not change.
+	// The ended update releases the lock: the inventory entry holds none.
+	checkInventoryUnlockedByID(ctx, t, env, "pulumi:"+org+"/"+e2e.Project+"/renamed")
 }

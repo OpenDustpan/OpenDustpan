@@ -240,7 +240,7 @@ func (h *Handler) enforceAuthorized(route Route) http.HandlerFunc {
 				h.writeError(
 					ctx,
 					w,
-					errcode.Refusal(route.Path+" has no action for the installation"),
+					errcode.Refusal(errcode.AccessNoAction, route.Path+" has no action for the installation"),
 				)
 
 				return

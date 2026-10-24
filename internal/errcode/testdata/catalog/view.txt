@@ -1,0 +1,5 @@
+view.already-exists
+view.invalid
+view.limit
+view.not-found
+view.not-person

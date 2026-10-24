@@ -11,6 +11,8 @@ import (
 	"testing"
 
 	apiserver "opendustpan.org/opendustpan/internal/api/server"
+	"opendustpan.org/opendustpan/internal/errcode"
+	"opendustpan.org/opendustpan/internal/errcode/errcodetest"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/maintenance"
 )
@@ -548,6 +550,9 @@ func TestMaintenanceEnterBusyAnswers503(t *testing.T) {
 	if doc.Code != http.StatusServiceUnavailable || doc.Message != want {
 		t.Fatalf("busy enter error = %+v, want code 503 and %q", doc, want)
 	}
+
+	errcodetest.CheckAnswer(t, errcodetest.ShapeCamelCase, http.StatusServiceUnavailable, rec.Body.Bytes(),
+		errcodetest.Want{Code: errcode.MaintenanceBusy, Args: nil, RequestBody: nil})
 }
 
 // TestEnterMaintenanceCanceledWorkRetryAfter proves a forced enter that
@@ -562,6 +567,7 @@ func TestEnterMaintenanceCanceledWorkRetryAfter(t *testing.T) {
 		err        error
 		wantStatus int
 		wantHeader string
+		wantCode   string
 	}{
 		{
 			name: "busy store",
@@ -570,6 +576,7 @@ func TestEnterMaintenanceCanceledWorkRetryAfter(t *testing.T) {
 			},
 			wantStatus: http.StatusServiceUnavailable,
 			wantHeader: "30",
+			wantCode:   errcode.MaintenanceBusy,
 		},
 		{
 			name: "unavailable store",
@@ -578,6 +585,7 @@ func TestEnterMaintenanceCanceledWorkRetryAfter(t *testing.T) {
 			},
 			wantStatus: http.StatusInternalServerError,
 			wantHeader: "",
+			wantCode:   errcode.MaintenanceUnavailable,
 		},
 	}
 
@@ -603,6 +611,9 @@ func TestEnterMaintenanceCanceledWorkRetryAfter(t *testing.T) {
 			if got := rec.Header().Get("Retry-After"); got != tt.wantHeader {
 				t.Fatalf("Retry-After = %q, want %q", got, tt.wantHeader)
 			}
+
+			errcodetest.CheckAnswer(t, errcodetest.ShapeCamelCase, tt.wantStatus, rec.Body.Bytes(),
+				errcodetest.Want{Code: tt.wantCode, Args: nil, RequestBody: nil})
 		})
 	}
 }

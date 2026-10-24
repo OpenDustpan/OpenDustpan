@@ -29,13 +29,13 @@ func TestClassifyNamespaceSentinels(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			status, message := classify(fmt.Errorf("create stack: %w", tc.err))
-			if status != tc.want {
-				t.Fatalf("classify answers %d, want %d", status, tc.want)
+			f := classify(fmt.Errorf("create stack: %w", tc.err))
+			if f.status != tc.want {
+				t.Fatalf("classify answers %d, want %d", f.status, tc.want)
 			}
 
-			if !strings.Contains(message, tc.err.Error()) {
-				t.Fatalf("message = %q, want it to hold %q", message, tc.err.Error())
+			if !strings.Contains(f.message, tc.err.Error()) {
+				t.Fatalf("message = %q, want it to hold %q", f.message, tc.err.Error())
 			}
 		})
 	}

@@ -33,6 +33,7 @@ type jobResponse struct {
 	Agent        string            `json:"agent,omitempty"`
 	AgentMode    string            `json:"agentMode,omitempty"`
 	BreakGlass   *breakGlassBody   `json:"breakGlass,omitempty"`
+	Trigger      *triggerResponse  `json:"trigger,omitempty"`
 	Delivery     *deliveryResponse `json:"delivery,omitempty"`
 	Closed       *closedResponse   `json:"closed,omitempty"`
 	Verification string            `json:"verification,omitempty"`
@@ -124,6 +125,13 @@ type approvalResponse struct {
 	At      time.Time `json:"at"`
 }
 
+// triggerResponse names the run trigger that started the job, and the subject
+// of its last saver at the start.
+type triggerResponse struct {
+	ID    string `json:"id"`
+	Saver string `json:"saver"`
+}
+
 type breakGlassBody struct {
 	Reason string `json:"reason"`
 	Freeze string `json:"freeze"`
@@ -158,6 +166,22 @@ func setETag(w http.ResponseWriter, j *job.Job) {
 	w.Header().Set("ETag", `"v`+strconv.FormatInt(j.Version, 10)+`"`)
 }
 
+// answerLocation maps a code location to its wire shape. A repository that
+// job.CheckRepository refuses is answered empty.
+//
+// Defense in depth: the job service and the planner refuse such a repository
+// at the start, so no new job holds one. This check stays so that a record
+// from before that check, or from another writer of the store, never gives a
+// caller the password or the user name that a repository URL can hold.
+func answerLocation(l job.Location) locationResponse {
+	out := locationResponse(l)
+	if job.CheckRepository(l.Repository) != nil {
+		out.Repository = ""
+	}
+
+	return out
+}
+
 // toJobResponse maps a job to its wire shape.
 func toJobResponse(j *job.Job) jobResponse {
 	out := jobResponse{
@@ -172,7 +196,7 @@ func toJobResponse(j *job.Job) jobResponse {
 		State:        string(j.State),
 		Wait:         string(j.Wait),
 		Reason:       j.Reason,
-		Location:     locationResponse(j.Spec.Location),
+		Location:     answerLocation(j.Spec.Location),
 		Pool:         j.Spec.Pool,
 		Steps:        make([]stepResponse, 0, len(j.Spec.Steps)),
 		Phases:       make([]phaseResponse, 0, len(j.Phases)),
@@ -182,6 +206,7 @@ func toJobResponse(j *job.Job) jobResponse {
 		Agent:        j.Agent,
 		AgentMode:    string(j.AgentMode),
 		BreakGlass:   nil,
+		Trigger:      nil,
 		Delivery:     nil,
 		Closed:       nil,
 		Verification: string(j.Verification),
@@ -204,6 +229,10 @@ func toJobResponse(j *job.Job) jobResponse {
 	if j.BreakGlass != nil {
 		bg := breakGlassBody(*j.BreakGlass)
 		out.BreakGlass = &bg
+	}
+
+	if j.Trigger != nil {
+		out.Trigger = &triggerResponse{ID: j.Trigger.ID, Saver: j.Trigger.Saver}
 	}
 
 	if d := j.Delivery; d != nil {
