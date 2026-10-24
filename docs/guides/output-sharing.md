@@ -75,7 +75,7 @@ curl -sS -H "Authorization: Bearer $TOKEN" \
 | --- | --- |
 | 404 | The unit does not exist, the unit is in another namespace than the path, or the caller does not hold `unit:read-outputs` on the unit. The three answers are the same. |
 | 404 | The caller holds `unit:read-outputs`, and the stack or workspace has no state yet because no update or upload has written one. The message names the unit and says that it has no state yet. The request writes no denial entry. |
-| 409 | The client encrypted the state of the workspace, and the caller does not hold `unit:read`. The server cannot read the outputs of such a state. A caller with `unit:read` reads the workspace as before. |
+| 409 | The client encrypted the state of the workspace. The server cannot read the outputs of such a state. It answers 409 with the code `unit.client-encrypted` to every caller, also to a caller that holds `unit:read`. It never answers an empty list for such a state. |
 | 409 | A new state came in while the server checked or read the outputs. Send the request again. |
 
 ## What a person with only `unit:read-outputs` can read
@@ -106,10 +106,14 @@ state as before.
 ### A state that the client encrypted
 
 OpenTofu can encrypt the state on the client. The server cannot read such a
-state, so it cannot reduce it to its outputs. A person who holds
-`unit:read-outputs` and not `unit:read` gets 409 from the two outputs routes of
-a workspace with such a state. A person who holds `unit:read` reads the state
-as before.
+state, so it cannot reduce it to its outputs.
+
+- `GET /api/dustpan/v1/namespaces/{namespace}/units/{unit_id}/outputs` answers
+  409 to every caller for a workspace with such a state, also to a person who
+  holds `unit:read`.
+- The outputs routes of the TFE-compatible API answer 409 to a person who
+  holds `unit:read-outputs` and not `unit:read`. A person who holds
+  `unit:read` reads the state as before.
 
 ### Audit
 

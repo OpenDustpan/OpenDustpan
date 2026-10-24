@@ -279,6 +279,7 @@ func outputsCases() []outputsCase {
 		}),
 		outputsRow("unit:read holder, client-encrypted state", outputsTofu, func(c *outputsCase) {
 			c.encrypted = "ws-1"
+			c.want = http.StatusConflict
 		}),
 		outputsRow("a state that moved during the read", outputsTofu, func(c *outputsCase) {
 			c.moved = true

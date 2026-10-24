@@ -54,12 +54,16 @@ func NewReader(cfg ReaderConfig) (*Reader, error) {
 
 // Read returns the outputs of the latest state of the unit for the principal
 // p. The unit carries its stable ID. The principal needs the actions that the
-// checker needs: unit:read-outputs on the unit and, when the client encrypted
-// the state, unit:read too. The answer holds no secret value, for any
-// principal.
+// checker needs: unit:read-outputs on the unit. The answer holds no secret
+// value, for any principal. A state that the client encrypted has no output
+// that the server can read, so Read refuses it for every principal, also for
+// a principal that holds unit:read: an empty list would read as a state with
+// no output.
 //
 // It returns the *outputshare.DeniedError of the checker for a denied read,
-// ErrNoState when the unit has no state yet, outputshare.ErrStateMoved when a
+// an error that wraps outputshare.ErrClientEncrypted for a state that the
+// client encrypted, ErrNoState when the unit has no state yet,
+// outputshare.ErrStateMoved when a
 // new state came in between, outputshare.ErrUnknownProducer when the unit is
 // gone, and an error that wraps outputshare.ErrInvalid for a unit that has no
 // source for its tool. The errors of the source pass through, wrapped.
@@ -72,6 +76,7 @@ func (r *Reader) Read(ctx context.Context, p identity.Principal, unit identity.O
 	// A states port that fails gives an empty ID. The checker reads the state
 	// again and denies, with its own audit entry.
 	latest := ""
+	encrypted := false
 
 	if state, err := r.states.Latest(ctx, unit); err == nil {
 		// The unit exists and the port answered, so the caller learns nothing
@@ -81,6 +86,7 @@ func (r *Reader) Read(ctx context.Context, p identity.Principal, unit identity.O
 		}
 
 		latest = state.ID
+		encrypted = state.ClientEncrypted
 	}
 
 	req := outputshare.ReadRequest{
@@ -101,6 +107,14 @@ func (r *Reader) Read(ctx context.Context, p identity.Principal, unit identity.O
 		}
 
 		return Result{}, fmt.Errorf("check the read of outputs: %w", err)
+	}
+
+	// The checker allows a principal with unit:read to read a state that the
+	// client encrypted, because a route that answers the whole state needs
+	// that. The outputs route has no output to answer for such a state, so it
+	// refuses after the checker: a denied principal gets the denial first.
+	if encrypted {
+		return Result{}, fmt.Errorf("read the outputs of %s: %w", unit, outputshare.ErrClientEncrypted)
 	}
 
 	outputs, err := source.Outputs(ctx, unit, latest)

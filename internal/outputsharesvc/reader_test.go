@@ -112,6 +112,17 @@ func refusalCases() []refusalCase {
 				r.authz.errs = map[identity.Action]error{identity.ActionUnitRead: identity.ErrDenied}
 			}
 		}),
+		refusalRow("a client-encrypted state, unit:read holder", outputshare.ErrClientEncrypted,
+			func(c *refusalCase) {
+				c.setup = func(r *checkerRig) { r.states.state.ClientEncrypted = true }
+			}),
+		refusalRow("a client-encrypted state and no grant: the denial comes first", identity.ErrDenied,
+			func(c *refusalCase) {
+				c.setup = func(r *checkerRig) {
+					r.states.state.ClientEncrypted = true
+					r.authz.errs = map[identity.Action]error{identity.ActionUnitReadOutputs: identity.ErrDenied}
+				}
+			}),
 		refusalRow("a unit with no state", outputsharesvc.ErrNoState, func(c *refusalCase) {
 			c.setup = func(r *checkerRig) { r.states.state = outputshare.State{ID: "", ClientEncrypted: false} }
 		}),
