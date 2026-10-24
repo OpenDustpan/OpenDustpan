@@ -58,8 +58,10 @@ func (s *OutputStates) Latest(ctx context.Context, u identity.Object) (outputsha
 
 // Outputs implements outputshare.Outputs. It looks the workspace up as Latest
 // does, and reads the outputs that the current state version stores. A
-// sensitive output has no value. The server stores no output for a state that
-// the client encrypted, so such a state answers an empty list.
+// sensitive output has no value. A state that the client encrypted returns
+// ErrClientEncrypted: the server cannot read its outputs, and an empty list
+// would read as a state with no output. The inventory API answers that error
+// with 409 for every caller.
 func (s *OutputStates) Outputs(
 	ctx context.Context, u identity.Object, stateID string,
 ) ([]outputshare.Output, error) {

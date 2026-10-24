@@ -1,6 +1,7 @@
 package inventory_test
 
 import (
+	"encoding/json"
 	"net/http"
 	"testing"
 
@@ -8,6 +9,26 @@ import (
 	"opendustpan.org/opendustpan/internal/errcode/errcodetest"
 	"opendustpan.org/opendustpan/pkg/identity"
 )
+
+// clientEncryptedText is the message of the 409 answer for a client-encrypted
+// state. It tells the caller where to read the outputs.
+const clientEncryptedText = "the client encrypted the state of the unit, " +
+	"so the server cannot read its outputs: read them with the tool that holds the encryption key"
+
+// checkClientEncryptedMessage checks that the body of a 409 answer carries the
+// message of a client-encrypted state.
+func checkClientEncryptedMessage(t *testing.T, body []byte) {
+	t.Helper()
+
+	var got errorBody
+	if err := json.Unmarshal(body, &got); err != nil {
+		t.Fatalf("error body = %s: %v", body, err)
+	}
+
+	if got.Message != clientEncryptedText {
+		t.Errorf("message = %q, want %q", got.Message, clientEncryptedText)
+	}
+}
 
 // TestOutputsOfAClientEncryptedStateAnswer409ForEveryCaller proves that the
 // outputs route answers 409 unit.client-encrypted for a state that the client
@@ -60,6 +81,10 @@ func TestOutputsOfAClientEncryptedStateAnswer409ForEveryCaller(t *testing.T) {
 
 			errcodetest.CheckAnswer(t, errcodetest.ShapeCamelCase, tc.status, rec.Body.Bytes(),
 				errcodetest.Want{Code: tc.code, Args: nil, RequestBody: nil})
+
+			if tc.status == http.StatusConflict {
+				checkClientEncryptedMessage(t, rec.Body.Bytes())
+			}
 
 			if f.source.reads != 0 {
 				t.Errorf("a refused read called the source %d times", f.source.reads)
