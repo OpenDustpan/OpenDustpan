@@ -127,7 +127,7 @@ func TestOutputReadErrorsHaveCodes(t *testing.T) {
 			"no state", outputsharesvc.ErrNoState, http.StatusNotFound,
 			errcodetest.Want{Code: errcode.UnitNoState, Args: map[string]any{"unit": unit}, RequestBody: nil},
 		},
-		{"state moved", outputsharesvc.ErrStateMoved, http.StatusConflict, code(errcode.UnitStateMoved)},
+		{"state moved", outputshare.ErrStateMoved, http.StatusConflict, code(errcode.UnitStateMoved)},
 		{"unknown producer", outputshare.ErrUnknownProducer, http.StatusNotFound, code(errcode.UnitNotFound)},
 	}
 

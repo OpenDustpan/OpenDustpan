@@ -143,7 +143,7 @@ func (h *Handler) getOutputs(w http.ResponseWriter, r *http.Request, p identity.
 // writeOutputsError answers the error of a read of outputs. The checker has
 // written the audit entry of its own denial, so the handler writes none. A
 // producer that does not exist answers as an unknown unit. A state that the
-// client encrypted answers 409 with the reason. A state that moved answers 409.
+// client encrypted answers 409 with the reason, for every caller. A state that moved answers 409.
 // A unit with no state answers 404 with a message that names the unit.
 func (h *Handler) writeOutputsError(
 	w http.ResponseWriter, r *http.Request, _ identity.Principal, obj identity.Object, err error,
@@ -158,14 +158,15 @@ func (h *Handler) writeOutputsError(
 	case errors.Is(err, outputsharesvc.ErrNoState):
 		h.writeFailure(ctx, w, fail(http.StatusNotFound, fmt.Sprintf("the unit %s has no state yet", obj),
 			errcode.UnitNoState, errcode.Identifier("unit", obj.String())))
-	case errors.Is(err, outputsharesvc.ErrStateMoved):
+	case errors.Is(err, outputshare.ErrStateMoved):
 		h.writeFailure(ctx, w, fail(http.StatusConflict, errOutputsStateMoved, errcode.UnitStateMoved))
 	default:
 		h.writeError(ctx, w, err)
 	}
 }
 
-// clientEncryptedMessage is the 409 message of a read of outputs only from a
-// state that the client encrypted. It names the reason and no object.
+// clientEncryptedMessage is the 409 message of a read of outputs from a state
+// that the client encrypted, for every caller. It names the reason and no
+// object.
 const clientEncryptedMessage = "the client encrypted the state of the unit, " +
-	"so the server cannot answer its outputs only; read the state with unit:read"
+	"so the server cannot read its outputs: read them with the tool that holds the encryption key"

@@ -359,7 +359,7 @@ func (h *Handler) stateWriteRoutes() []Route {
 			// resolver limit. A caller without the lock gets 409.
 			Scope:   ScopeAuthorized,
 			Actions: []identity.Action{identity.ActionUnitWrite},
-			Resolve: h.resolveStateVersionWorkspace,
+			Resolve: h.workspaceIn("id"),
 			Serve:   h.createStateVersion,
 		},
 		{
@@ -487,26 +487,46 @@ func resolveWorkspace(_ http.ResponseWriter, r *http.Request) (identity.Object, 
 	return unitObject(workspace.Ref{Namespace: ns, Name: name})
 }
 
-// resolveWorkspaceID returns the unit for the workspace ID in the path
+// resolveWorkspaceID returns the unit for the workspace ID in the id path
 // value. It reads the body once with http.MaxBytesReader and restores r.Body
-// before returning, so the handler can read it again. The current GET handler
-// reads no body; the restore keeps the shared shape for future lock POSTs on
-// the same ID. An unknown ID fails with absence, which the wrapper answers as
-// 403 for a caller without rights and 404 otherwise.
+// before returning, so the handler can read it again. An unknown ID fails
+// with absence, which the wrapper answers as 403 for a caller without rights
+// and 404 otherwise.
 func (h *Handler) resolveWorkspaceID(w http.ResponseWriter, r *http.Request) (identity.Object, error) {
-	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxBodyBytes))
-	if err != nil {
-		return identity.Object{}, errInvalidBody
+	return restoreBody(h.workspaceIn("id"))(w, r)
+}
+
+// workspaceIn returns the resolver of the unit of the workspace whose ID is
+// the path value named value. It reads no body. An unknown ID fails with
+// absence, which the wrapper answers as 403 for a caller without rights and
+// 404 otherwise.
+func (h *Handler) workspaceIn(value string) ObjectResolver {
+	return func(_ http.ResponseWriter, r *http.Request) (identity.Object, error) {
+		ws, err := h.workspaces.GetByID(r.Context(), workspace.ID(r.PathValue(value)))
+		if err != nil {
+			return identity.Object{}, err
+		}
+
+		return unitObject(ws.Ref)
 	}
+}
 
-	r.Body = io.NopCloser(bytes.NewReader(body))
+// restoreBody returns next behind a read of the body: it reads the body once
+// with http.MaxBytesReader and the shared resolver limit, and restores r.Body,
+// so the handler can read it again. A route whose body can be larger than the
+// limit, such as a state version create, reads its own body and uses next
+// alone.
+func restoreBody(next ObjectResolver) ObjectResolver {
+	return func(w http.ResponseWriter, r *http.Request) (identity.Object, error) {
+		body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxBodyBytes))
+		if err != nil {
+			return identity.Object{}, errInvalidBody
+		}
 
-	ws, err := h.workspaces.GetByID(r.Context(), workspace.ID(r.PathValue("id")))
-	if err != nil {
-		return identity.Object{}, err
+		r.Body = io.NopCloser(bytes.NewReader(body))
+
+		return next(w, r)
 	}
-
-	return unitObject(ws.Ref)
 }
 
 // stateAtRoute returns the route of the masked state of a workspace at a
@@ -520,38 +540,9 @@ func (h *Handler) stateAtRoute() Route {
 		Path:    "/api/v2/workspaces/{workspace_id}/state-at/{at}",
 		Scope:   ScopeAuthorized,
 		Actions: []identity.Action{identity.ActionUnitRead},
-		Resolve: h.resolveStateAtWorkspace,
+		Resolve: h.workspaceIn("workspace_id"),
 		Serve:   h.readStateAt,
 	}
-}
-
-// resolveStateAtWorkspace returns the unit for the workspace ID in the
-// workspace_id path value. An unknown ID fails with absence, which the
-// wrapper answers as 403 for a caller without rights and 404 otherwise.
-func (h *Handler) resolveStateAtWorkspace(_ http.ResponseWriter, r *http.Request) (identity.Object, error) {
-	ws, err := h.workspaces.GetByID(r.Context(), workspace.ID(r.PathValue("workspace_id")))
-	if err != nil {
-		return identity.Object{}, err
-	}
-
-	return unitObject(ws.Ref)
-}
-
-// resolveStateVersionWorkspace returns the unit for the workspace ID in the
-// path value, without reading the body: the state version create body holds
-// the base64 outputs document and is far larger than the shared resolver
-// limit, so the create handler reads it. An unknown ID fails with absence,
-// which the wrapper answers as 403 for a caller without rights and 404
-// otherwise.
-func (h *Handler) resolveStateVersionWorkspace(
-	_ http.ResponseWriter, r *http.Request,
-) (identity.Object, error) {
-	ws, err := h.workspaces.GetByID(r.Context(), workspace.ID(r.PathValue("id")))
-	if err != nil {
-		return identity.Object{}, err
-	}
-
-	return unitObject(ws.Ref)
 }
 
 // enforce wraps one route table row. Public and upload routes run

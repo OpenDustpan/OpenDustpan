@@ -47,7 +47,7 @@ func checkObject(ctx context.Context, target blob.Store, key blob.Key, want obje
 	reader, err := target.Get(ctx, key)
 	if err != nil {
 		if errors.Is(err, blob.ErrNotFound) {
-			return fmt.Errorf("backup is incomplete: object %q is missing: %w", key, ErrCorrupt)
+			return &MissingObjectError{Key: key}
 		}
 
 		return fmt.Errorf("read backup object %q: %w", key, err)

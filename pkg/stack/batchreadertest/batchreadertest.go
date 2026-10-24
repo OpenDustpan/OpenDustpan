@@ -1,6 +1,7 @@
 // Package batchreadertest holds the conformance suite of stack.BatchReader.
-// Its input is journal batch bodies of version 1, as the Pulumi CLI sends
-// them, also hostile bodies that the reader must refuse.
+// Its input is journal batch bodies of versions 1 and 2, as the Pulumi CLI
+// sends them, also hostile bodies that the reader must refuse. A body with no
+// entries is valid.
 package batchreadertest
 
 import (
@@ -11,8 +12,13 @@ import (
 	"opendustpan.org/opendustpan/pkg/stack"
 )
 
-// version is the journal version of the bodies of the suite.
-const version = 1
+// version is the journal version of the bodies of the suite, except for the
+// cases of testVersions. versionTwo is the journal version that adds the state
+// migration entry.
+const (
+	version    = 1
+	versionTwo = 2
+)
 
 // Run runs the conformance suite on the batch reader r. r must be safe for
 // use by more than one goroutine, because the cases run in parallel.
@@ -35,6 +41,12 @@ func Run(t *testing.T, r stack.BatchReader) {
 		t.Parallel()
 
 		testVerify(t, r)
+	})
+
+	t.Run("journal versions", func(t *testing.T) {
+		t.Parallel()
+
+		testVersions(t, r)
 	})
 }
 
@@ -66,11 +78,18 @@ func write(seq, op string) string {
 		`"newSnapshot":{"manifest":{"time":"2026-01-01T00:00:00Z","magic":"","version":""},"resources":[]}}`
 }
 
+// versioned returns an entry of kind with the entry version v and the
+// sequence ID and the operation ID 1, each a JSON number.
+func versioned(v, kind string) string {
+	return `{"version":` + v + `,"kind":` + kind + `,"sequenceID":1,"operationID":1,"removeOld":null,"removeNew":null}`
+}
+
 // Entry kinds of the bodies of the suite.
 const (
-	kindBegin   = "0"
-	kindFailure = "2"
-	kindRebuild = "7"
+	kindBegin     = "0"
+	kindFailure   = "2"
+	kindRebuild   = "7"
+	kindMigration = "10"
 )
 
 // batch wraps entries in a batch body.
@@ -235,6 +254,53 @@ func testVerify(t *testing.T, r stack.BatchReader) {
 
 		if err == nil && changed != tt.wantChanged {
 			t.Errorf("%s: changed = %t, want %t", tt.name, changed, tt.wantChanged)
+		}
+	}
+}
+
+// testVersions checks the entry versions against the negotiated journal
+// version: an entry version must be from 1 to the negotiated version, and a
+// state migration entry needs version 2. A body with no entries is valid at
+// each version.
+func testVersions(t *testing.T, r stack.BatchReader) {
+	t.Helper()
+
+	tests := []struct {
+		name       string
+		body       []byte
+		negotiated int
+		wantErr    bool
+	}{
+		{name: "empty body at version 2", body: []byte(`{}`), negotiated: versionTwo, wantErr: false},
+		{
+			name: "version 1 entry at version 2", body: batch(completed("1", "5")),
+			negotiated: versionTwo, wantErr: false,
+		},
+		{
+			name: "state migration entry at version 2", body: batch(versioned("2", kindMigration)),
+			negotiated: versionTwo, wantErr: false,
+		},
+		{
+			name: "version 2 entry at version 1", body: batch(versioned("2", kindBegin)),
+			negotiated: version, wantErr: true,
+		},
+		{name: "entry version zero", body: batch(versioned("0", kindBegin)), negotiated: version, wantErr: true},
+		{
+			name: "state migration entry of version 1", body: batch(versioned("1", kindMigration)),
+			negotiated: versionTwo, wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		summary, err := r.ReadBatch(tt.body, tt.negotiated)
+		if (err != nil) != tt.wantErr {
+			t.Errorf("%s: read batch: err = %v, want an error %t", tt.name, err, tt.wantErr)
+
+			continue
+		}
+
+		if err == nil && summary.Verify == nil {
+			t.Errorf("%s: Verify = nil, want the entry check", tt.name)
 		}
 	}
 }

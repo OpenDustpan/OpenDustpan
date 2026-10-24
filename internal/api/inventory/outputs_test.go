@@ -47,22 +47,28 @@ func (s *outputsStates) Latest(_ context.Context, u identity.Object) (outputshar
 }
 
 // outputsSource answers the outputs of a unit, with the value of a secret
-// output set, as a source that forgets to leave it out.
+// output set, as a source that forgets to leave it out. A source with fail set
+// answers that error.
 type outputsSource struct {
 	mu     sync.Mutex
 	moved  bool
+	fail   error
 	reads  int
-	stored []outputsharesvc.Output
+	stored []outputshare.Output
 }
 
-func (s *outputsSource) Outputs(_ context.Context, _ identity.Object, _ string) ([]outputsharesvc.Output, error) {
+func (s *outputsSource) Outputs(_ context.Context, _ identity.Object, _ string) ([]outputshare.Output, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	s.reads++
 
 	if s.moved {
-		return nil, outputsharesvc.ErrStateMoved
+		return nil, outputshare.ErrStateMoved
+	}
+
+	if s.fail != nil {
+		return nil, s.fail
 	}
 
 	return s.stored, nil
@@ -98,7 +104,7 @@ func newOutputsFixture(t *testing.T, authz identity.Authorizer) outputsFixture {
 		ids: map[string]bool{"ws-1": true, "stk-1": true}, encrypted: map[string]bool{},
 		empty: map[string]bool{}, stateID: "state-1",
 	}
-	source := &outputsSource{mu: sync.Mutex{}, moved: false, reads: 0, stored: []outputsharesvc.Output{
+	source := &outputsSource{mu: sync.Mutex{}, moved: false, fail: nil, reads: 0, stored: []outputshare.Output{
 		{Name: "greeting", Secret: false, Value: json.RawMessage(`"hello"`)},
 		{Name: "token", Secret: true, Value: json.RawMessage(`"s3cr3t"`)},
 	}}
@@ -114,7 +120,7 @@ func newOutputsFixture(t *testing.T, authz identity.Authorizer) outputsFixture {
 
 	reader, err := outputsharesvc.NewReader(outputsharesvc.ReaderConfig{
 		States: states, Checker: checker,
-		Sources: map[string]outputsharesvc.Source{"opentofu": source, "pulumi": source},
+		Sources: map[string]outputshare.Outputs{"opentofu": source, "pulumi": source},
 	})
 	if err != nil {
 		t.Fatalf("reader: %v", err)
@@ -273,6 +279,7 @@ func outputsCases() []outputsCase {
 		}),
 		outputsRow("unit:read holder, client-encrypted state", outputsTofu, func(c *outputsCase) {
 			c.encrypted = "ws-1"
+			c.want = http.StatusConflict
 		}),
 		outputsRow("a state that moved during the read", outputsTofu, func(c *outputsCase) {
 			c.moved = true

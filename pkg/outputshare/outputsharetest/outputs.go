@@ -54,7 +54,7 @@ func outputsCases() []suiteCase {
 		{testOutputsNotAUnit, "outputs: an object that is not a unit answers ErrInvalid"},
 		{
 			testOutputsEmpty,
-			"outputs: a state with no root output, and a state that the client encrypted, answer an empty list",
+			"outputs: a state with no root output answers an empty list, and a state that the client encrypted answers ErrClientEncrypted",
 		},
 	})
 }
@@ -287,8 +287,8 @@ func testOutputsNotAUnit(t *testing.T, h Harness) {
 }
 
 // testOutputsEmpty proves that a state with no root output answers an empty
-// list, and that a state that the client encrypted answers an empty list too:
-// the server stores no output of it.
+// list, and that a state that the client encrypted answers ErrClientEncrypted
+// and no list: the server cannot read its outputs.
 func testOutputsEmpty(t *testing.T, h Harness) {
 	t.Helper()
 
@@ -305,8 +305,8 @@ func testOutputsEmpty(t *testing.T, h Harness) {
 		}
 
 		got, err = h.Outputs.Outputs(t.Context(), unit.Unit, h.SaveState(t, unit, true))
-		if err != nil || got == nil || len(got) != 0 {
-			t.Fatalf("Outputs of a client-encrypted state = %+v, %v; want an empty list", got, err)
+		if !errors.Is(err, outputshare.ErrClientEncrypted) || got != nil {
+			t.Fatalf("Outputs of a client-encrypted state = %+v, %v; want ErrClientEncrypted", got, err)
 		}
 	})
 }

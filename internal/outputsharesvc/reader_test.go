@@ -13,7 +13,7 @@ import (
 
 // recordingSource returns the outputs that the test set and counts the reads.
 type recordingSource struct {
-	outputs []outputsharesvc.Output
+	outputs []outputshare.Output
 	err     error
 	reads   int
 	gotID   string
@@ -23,7 +23,7 @@ func (s *recordingSource) Outputs(
 	_ context.Context,
 	_ identity.Object,
 	stateID string,
-) ([]outputsharesvc.Output, error) {
+) ([]outputshare.Output, error) {
 	s.reads++
 	s.gotID = stateID
 
@@ -34,13 +34,13 @@ func newReaderRig(t *testing.T) (*outputsharesvc.Reader, *checkerRig, *recording
 	t.Helper()
 
 	rig := newCheckerRig(t)
-	source := &recordingSource{outputs: []outputsharesvc.Output{
+	source := &recordingSource{outputs: []outputshare.Output{
 		{Name: "a", Secret: false, Value: json.RawMessage(`1`)},
 		{Name: "b", Secret: true, Value: json.RawMessage(`"leak"`)},
 	}, err: nil, reads: 0, gotID: ""}
 
 	reader, err := outputsharesvc.NewReader(outputsharesvc.ReaderConfig{
-		States: rig.states, Checker: rig.checker, Sources: map[string]outputsharesvc.Source{"opentofu": source},
+		States: rig.states, Checker: rig.checker, Sources: map[string]outputshare.Outputs{"opentofu": source},
 	})
 	if err != nil {
 		t.Fatalf("NewReader: %v", err)
@@ -112,6 +112,17 @@ func refusalCases() []refusalCase {
 				r.authz.errs = map[identity.Action]error{identity.ActionUnitRead: identity.ErrDenied}
 			}
 		}),
+		refusalRow("a client-encrypted state, unit:read holder", outputshare.ErrClientEncrypted,
+			func(c *refusalCase) {
+				c.setup = func(r *checkerRig) { r.states.state.ClientEncrypted = true }
+			}),
+		refusalRow("a client-encrypted state and no grant: the denial comes first", identity.ErrDenied,
+			func(c *refusalCase) {
+				c.setup = func(r *checkerRig) {
+					r.states.state.ClientEncrypted = true
+					r.authz.errs = map[identity.Action]error{identity.ActionUnitReadOutputs: identity.ErrDenied}
+				}
+			}),
 		refusalRow("a unit with no state", outputsharesvc.ErrNoState, func(c *refusalCase) {
 			c.setup = func(r *checkerRig) { r.states.state = outputshare.State{ID: "", ClientEncrypted: false} }
 		}),
@@ -151,10 +162,10 @@ func TestReaderPassesAMovedState(t *testing.T) {
 	t.Parallel()
 
 	reader, _, source := newReaderRig(t)
-	source.err = outputsharesvc.ErrStateMoved
+	source.err = outputshare.ErrStateMoved
 
 	res, err := reader.Read(t.Context(), personRequest(latestID, false).Caller, producerAcme().Unit)
-	if !errors.Is(err, outputsharesvc.ErrStateMoved) || len(res.Outputs) != 0 {
+	if !errors.Is(err, outputshare.ErrStateMoved) || len(res.Outputs) != 0 {
 		t.Fatalf("Read = %+v, %v; want ErrStateMoved and no output", res, err)
 	}
 }
@@ -186,8 +197,8 @@ func TestNewReaderNeedsItsPorts(t *testing.T) {
 	source := &recordingSource{outputs: nil, err: nil, reads: 0, gotID: ""}
 
 	tests := map[string]outputsharesvc.ReaderConfig{
-		"states":  {States: nil, Checker: rig.checker, Sources: map[string]outputsharesvc.Source{"x": source}},
-		"checker": {States: rig.states, Checker: nil, Sources: map[string]outputsharesvc.Source{"x": source}},
+		"states":  {States: nil, Checker: rig.checker, Sources: map[string]outputshare.Outputs{"x": source}},
+		"checker": {States: rig.states, Checker: nil, Sources: map[string]outputshare.Outputs{"x": source}},
 		"sources": {States: rig.states, Checker: rig.checker, Sources: nil},
 	}
 
@@ -228,14 +239,14 @@ func TestReaderAnswersARaceOfTheLatestCheckAsAMovedState(t *testing.T) {
 
 	reader, err := outputsharesvc.NewReader(outputsharesvc.ReaderConfig{
 		States: movingStates{inner: rig.states}, Checker: rig.checker,
-		Sources: map[string]outputsharesvc.Source{"opentofu": source},
+		Sources: map[string]outputshare.Outputs{"opentofu": source},
 	})
 	if err != nil {
 		t.Fatalf("NewReader: %v", err)
 	}
 
 	res, err := reader.Read(t.Context(), personRequest(latestID, false).Caller, producerAcme().Unit)
-	if !errors.Is(err, outputsharesvc.ErrStateMoved) || errors.Is(err, identity.ErrDenied) ||
+	if !errors.Is(err, outputshare.ErrStateMoved) || errors.Is(err, identity.ErrDenied) ||
 		len(res.Outputs) != 0 || source.reads != 0 {
 		t.Fatalf("Read = %+v, %v, %d source reads; want ErrStateMoved, no denial, no read", res, err, source.reads)
 	}

@@ -117,6 +117,30 @@ func TestCreateRefusedByANamespaceLock(t *testing.T) {
 	}
 }
 
+// TestCreateRefusedWhenTheLockReadFails proves that Create fails closed when
+// the manual lock of the namespace cannot be read: it returns the read error,
+// it does not call the store, and it makes no workspace.
+func TestCreateRefusedWhenTheLockReadFails(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	store := &passStore{memStore: f.store, mu: sync.Mutex{}, passes: nil}
+	svc := serviceOver(t, f, store, failing(errManualLockRead))
+	ref := freshRef(t)
+
+	if _, err := svc.Create(t.Context(), ref); !errors.Is(err, errManualLockRead) {
+		t.Fatalf("Create = %v, want the read error of the manual lock", err)
+	}
+
+	if len(store.passes) != 0 {
+		t.Fatalf("the store was called %d times, want none", len(store.passes))
+	}
+
+	if _, getErr := svc.Get(t.Context(), ref); !errors.Is(getErr, workspace.ErrNotFound) {
+		t.Fatalf("Get after a refused create = %v, want ErrNotFound", getErr)
+	}
+}
+
 // checkRefusedCreate checks that err is the refusal of a manual lock, that the
 // service did not call the store, and that no workspace ref exists.
 func checkRefusedCreate(t *testing.T, svc *workspace.Service, store *passStore, ref workspace.Ref, err error) {

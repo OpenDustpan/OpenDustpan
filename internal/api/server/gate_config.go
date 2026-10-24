@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/api/apidesc"
+	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/gate"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -582,11 +583,42 @@ func classifyGateConfig(err error) (failure, bool) {
 		return fail(http.StatusConflict, "the stored version changed: read it again and retry"), true
 	case errors.Is(err, gate.ErrFinal):
 		return fail(http.StatusConflict, err.Error()), true
+	case errors.Is(err, gate.ErrApprovers):
+		return classifyApprovers(err)
 	case errors.Is(err, gate.ErrInvalid), errors.Is(err, gate.ErrLimit):
 		return fail(http.StatusUnprocessableEntity, err.Error()), true
 	case errors.Is(err, gate.ErrUnavailable):
 		return fail(http.StatusServiceUnavailable, "the gate configuration is not available"), true
 	default:
 		return fail(0, ""), false
+	}
+}
+
+// approvers returns the *gate.ApproversError in the chain of err, or an
+// error with no reason when the chain has none.
+func approvers(err error) *gate.ApproversError {
+	if e, ok := errors.AsType[*gate.ApproversError](err); ok {
+		return e
+	}
+
+	return &gate.ApproversError{Reason: 0, Count: 0, People: 0}
+}
+
+// classifyApprovers maps an error that matches gate.ErrApprovers to its status
+// and its code. The message names the reason.
+func classifyApprovers(err error) (failure, bool) {
+	switch approvers(err).Reason {
+	case gate.ApproversGroupInvalid:
+		return failCoded(http.StatusUnprocessableEntity, err.Error(), errcode.GateApproversGroupInvalid), true
+	case gate.ApproversGroupMissing:
+		return failCoded(http.StatusUnprocessableEntity, err.Error(), errcode.GateApproversGroupMissing), true
+	case gate.ApproversUserInvalid:
+		return failCoded(http.StatusUnprocessableEntity, err.Error(), errcode.GateApproversUserInvalid), true
+	case gate.ApproversCountAbove:
+		return failCoded(http.StatusUnprocessableEntity, err.Error(), errcode.GateApproversCountAbove,
+			errcode.Quantity("people", approvers(err).People)), true
+	default:
+		// No reason: only a bug makes this error. Fail closed.
+		return failCoded(http.StatusInternalServerError, "internal error", errcode.ServerInternal), true
 	}
 }

@@ -23,6 +23,7 @@ import (
 	"strings"
 
 	"opendustpan.org/opendustpan/internal/api/refusal"
+	"opendustpan.org/opendustpan/internal/api/tofuunit"
 	"opendustpan.org/opendustpan/internal/baseurl"
 	"opendustpan.org/opendustpan/internal/bodygate"
 	"opendustpan.org/opendustpan/internal/denylimit"
@@ -42,8 +43,6 @@ var ErrMissingDependency = errors.New("missing dependency")
 const (
 	// bearerScheme is the Authorization scheme the adapter reads.
 	bearerScheme = "Bearer "
-	// unitTool names this API's tool in unit references.
-	unitTool = "opentofu"
 	// maxBodyBytes bounds a body the resolver reads before the handler.
 	maxBodyBytes = 1 << 20
 )
@@ -532,5 +531,5 @@ func (h *Handler) authenticate(r *http.Request) (identity.Principal, error) {
 // unitObject maps a namespace and workspace name to its tool-neutral unit
 // reference.
 func unitObject(ns workspace.Ref) (identity.Object, error) {
-	return identity.UnitObject(unitTool, ns.Namespace, ns.Name.String())
+	return tofuunit.Object(ns)
 }

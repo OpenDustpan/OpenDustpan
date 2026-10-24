@@ -53,6 +53,10 @@ var (
 	// ErrInvalid reports a gate, a limit, a rule, a path set, a setting or
 	// an identifier that is not valid.
 	ErrInvalid = errors.New("the gate configuration is not valid")
+	// ErrApprovers reports approvers that no one can meet: a group name that
+	// is not valid, a group that does not exist, a user name that is not a
+	// name, or a count above the people who can approve.
+	ErrApprovers = errors.New("the approvers cannot be met")
 	// ErrLimit reports a write above a limit of its scope, a condition
 	// above its size limit, or a fact document that does not fit.
 	ErrLimit = errors.New("a gate limit is exceeded")

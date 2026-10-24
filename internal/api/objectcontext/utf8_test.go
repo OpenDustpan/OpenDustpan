@@ -3,21 +3,22 @@ package objectcontext_test
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 	"testing"
 )
 
 // TestPatchRefusesInvalidUTF8 proves that a PATCH body with bytes that are
-// not valid UTF-8 answers 400 and writes nothing. Before the check, the JSON
-// decode replaced each bad byte with U+FFFD and the server stored the
-// changed text.
+// not valid UTF-8, or with a lone surrogate escape, answers 400 and writes
+// nothing. Before the check, the JSON decode replaced each bad byte and each
+// lone surrogate with U+FFFD and the server stored the changed text.
 func TestPatchRefusesInvalidUTF8(t *testing.T) {
 	t.Parallel()
 
 	const (
 		nsPath   = "/api/dustpan/v1/namespaces/acme/context"
 		unitPath = "/api/dustpan/v1/namespaces/acme/units/" + testUnitID + "/context"
-		want     = `invalid request body: send a JSON object with at least one of "summary", ` +
-			`"runbook", "owners", "onCall" and "links"`
+		want     = `invalid request body: send valid UTF-8 text, with no invalid byte ` +
+			`and no lone surrogate escape such as \ud800`
 	)
 
 	holds := []string{
@@ -33,6 +34,9 @@ func TestPatchRefusesInvalidUTF8(t *testing.T) {
 		{name: "a runbook with a surrogate in UTF-8", path: nsPath, body: "{\"runbook\":\"\xed\xa0\x80\"}"},
 		{name: "an on-call text of a unit", path: unitPath, body: "{\"onCall\":\"pager-\xff\"}"},
 		{name: "a bad byte outside the strings", path: unitPath, body: "{\"summary\":\"ok\"}\xff"},
+		{name: "a lone high surrogate escape", path: nsPath, body: `{"summary":"lone \ud800"}`},
+		{name: "a lone low surrogate escape", path: nsPath, body: `{"runbook":"lone \udc00"}`},
+		{name: "a high surrogate escape and a letter", path: unitPath, body: `{"owners":["team-\ud83dx"]}`},
 	}
 
 	for _, tc := range cases {
@@ -62,5 +66,27 @@ func TestPatchRefusesInvalidUTF8(t *testing.T) {
 				t.Errorf("store writes = %d, want 0", n)
 			}
 		})
+	}
+}
+
+// TestPatchKeepsASurrogatePair proves that the check of the escapes refuses
+// only a lone surrogate: a pair of escapes is one character, and the PATCH
+// stores it.
+func TestPatchKeepsASurrogatePair(t *testing.T) {
+	t.Parallel()
+
+	store := newFakeStore()
+	holds := []string{"namespace:read acme", "namespace:set-context acme"}
+	rec := serve(t, newHandler(t, newAuthorizer(holds...), store), request{
+		method: http.MethodPatch, path: "/api/dustpan/v1/namespaces/acme/context", token: testToken,
+		body: `{"summary":"pager \ud83d\udcdf"}`,
+	})
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d %s, want 200", rec.Code, rec.Body.String())
+	}
+
+	if !strings.Contains(rec.Body.String(), "pager \U0001F4DF") {
+		t.Errorf("answer = %s, want the summary with U+1F4DF", rec.Body.String())
 	}
 }

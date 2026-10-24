@@ -18,6 +18,7 @@ import (
 	"strings"
 
 	"opendustpan.org/opendustpan/internal/api/refusal"
+	"opendustpan.org/opendustpan/internal/api/tofuunit"
 	"opendustpan.org/opendustpan/internal/bodygate"
 	"opendustpan.org/opendustpan/internal/denylimit"
 	"opendustpan.org/opendustpan/pkg/audit"
@@ -29,10 +30,6 @@ import (
 
 // ErrMissingDependency reports a Config without a required dependency.
 var ErrMissingDependency = errors.New("missing dependency")
-
-// unitTool names this adapter's tool in unit references. The console shows
-// one tool for both OpenTofu adapters (ADR 49, decision 11).
-const unitTool = "opentofu"
 
 // WorkspaceService is the workspace use cases that the http backend routes
 // need. workspace.Service implements it.
@@ -297,7 +294,7 @@ func parseRef(r *http.Request) (workspace.Ref, error) {
 
 // unitObject maps a workspace reference to its tool-neutral unit reference.
 func unitObject(ref workspace.Ref) (identity.Object, error) {
-	return identity.UnitObject(unitTool, ref.Namespace, ref.Name.String())
+	return tofuunit.Object(ref)
 }
 
 // writeError answers an error with a plain status and a message that holds no

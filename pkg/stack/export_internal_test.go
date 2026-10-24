@@ -70,3 +70,9 @@ func resourceElements(doc any) []any {
 func ParseRootOutputs(deployment []byte) ([]outputshare.Output, error) {
 	return rootOutputs(deployment)
 }
+
+// MapReplayBound returns the error that the build of update id gives for the
+// replay error err.
+func MapReplayBound(id UpdateID, err error) error {
+	return new(Updates).mapReplayBound(id, err)
+}

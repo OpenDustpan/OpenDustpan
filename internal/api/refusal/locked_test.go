@@ -67,7 +67,9 @@ func TestLockedArguments(t *testing.T) {
 }
 
 // TestLockedRejectsAnEmptyHolder fails when a lock with no holder gives an
-// answer: the adapter then answers server.internal.
+// answer, or when the refusal gives an answer with no code: the answer is
+// then server.internal, so an adapter that ignores the error still sends a
+// code.
 func TestLockedRejectsAnEmptyHolder(t *testing.T) {
 	t.Parallel()
 
@@ -75,7 +77,12 @@ func TestLockedRejectsAnEmptyHolder(t *testing.T) {
 		Since: time.Now(), Target: manuallock.NamespaceTarget("acme"), Holder: "", Reason: "",
 	}
 
-	if _, err := refusal.Locked(&manuallock.LockedError{Lock: lock, Noun: "", Name: ""}); err == nil {
+	a, err := refusal.Locked(&manuallock.LockedError{Lock: lock, Noun: "", Name: ""})
+	if err == nil {
 		t.Fatal("Locked accepted an empty holder")
+	}
+
+	if a.Code() != errcode.ServerInternal {
+		t.Fatalf("answer code = %q, want %q", a.Code(), errcode.ServerInternal)
 	}
 }

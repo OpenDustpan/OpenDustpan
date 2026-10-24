@@ -82,9 +82,9 @@ func newOutputReader(cfg *settings, svc services) (*outputsharesvc.Reader, error
 	reader, err := outputsharesvc.NewReader(outputsharesvc.ReaderConfig{
 		States:  newOutputStates(svc),
 		Checker: checker,
-		Sources: map[string]outputsharesvc.Source{
-			opentofuTool: workspaceOutputs{workspaces: svc.workspaces},
-			pulumiTool:   stackOutputs{stacks: svc.stacks, updates: svc.updates},
+		Sources: map[string]outputshare.Outputs{
+			opentofuTool: workspace.NewOutputStates(svc.workspaces),
+			pulumiTool:   stack.NewOutputStates(svc.stacks, svc.updates),
 		},
 	})
 	if err != nil {

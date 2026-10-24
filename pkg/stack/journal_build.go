@@ -84,18 +84,13 @@ func (s *Updates) buildJournalCheckpoint(
 	return s.builtCheckpoint(ref, u, out.Bytes())
 }
 
-// mapReplayBound maps a replay bound error to ErrTooLarge with a clear
-// message, so the handler answers 413. The message names the bound, its
-// limit and the one command that helps. Any other error passes through with
-// the update ID.
+// mapReplayBound maps a replay bound error to ErrTooLarge, so the handler
+// answers 413 with the message of ReplayBoundMessage. The error text names
+// the bound, its limit and the same command that helps as the answer. Any
+// other error passes through with the update ID.
 func (s *Updates) mapReplayBound(id UpdateID, err error) error {
 	if bound, ok := errors.AsType[ReplayBound](err); ok && bound != nil {
-		return fmt.Errorf(
-			"build checkpoint of update %s: %w: %w: split the update into smaller updates and run `pulumi up` again",
-			id,
-			ErrTooLarge,
-			err,
-		)
+		return fmt.Errorf("build checkpoint of update %s: %w: %w: %s", id, ErrTooLarge, err, tooLargeRemedy)
 	}
 	return fmt.Errorf("build checkpoint of update %s: %w", id, err)
 }
@@ -113,8 +108,8 @@ func ReplayBoundMessage(err error) (string, bool) {
 	limit := bound.ReplayBound()
 
 	return fmt.Sprintf(
-		"This update has %d %s, more than the limit of %d: run `pulumi up` with fewer resources.",
-		limit.Count, limit.Bound, limit.Limit,
+		"This update has %d %s, more than the limit of %d: %s.",
+		limit.Count, limit.Bound, limit.Limit, tooLargeRemedy,
 	), true
 }
 

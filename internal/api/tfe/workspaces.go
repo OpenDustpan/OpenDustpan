@@ -290,7 +290,11 @@ func (h *Handler) createWorkspace(
 		return
 	}
 
-	ws, err := h.workspaces.Create(ctx, ref)
+	// The job of a job token decides whether a manual lock of the namespace
+	// applies to the create: the phase of a job that started before the lock
+	// passes it, as on the OpenTofu HTTP backend. Any other token passes no
+	// job.
+	ws, err := h.workspaces.Create(workspace.WithJob(ctx, p.JobTokenID()), ref)
 	if err != nil {
 		if errors.Is(err, workspace.ErrAlreadyExists) {
 			h.writeClassError(ctx, w, errorClass{

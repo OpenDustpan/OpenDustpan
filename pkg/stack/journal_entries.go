@@ -35,16 +35,20 @@ var ErrJournalKey = errors.New("journal blob key does not belong to the update")
 // one a batch would be stored unchecked, so the writer is never built without it.
 var ErrNilVerifier = errors.New("journal writer needs a batch reader")
 
-// ErrJournalBatch is returned for a batch body that has no entries, an entry with a
-// sequence ID of 0 or less, or a sequence ID that the batch holds twice.
+// ErrJournalBatch is returned for a batch body that the batch reader refuses, for
+// example an entry with a sequence ID of 0 or less or a sequence ID that the
+// batch holds twice, and for a summary that breaks the rules of BatchSummary.
+// A batch with no entries is valid: Append stores nothing for it.
 var ErrJournalBatch = errors.New("journal batch is malformed")
 
 // BatchReader decodes one journal batch once, before the server stores it.
 // version is the journal version that the server negotiated for the update.
 // ReadBatch returns the summary of the batch, or an error when the batch does
 // not decode, has a sequence ID that is not positive or that appears twice, or
-// breaks a rule of the entries. On an error, the summary holds the sequence
-// IDs that a plain read of the body finds, so the refusal record names them.
+// breaks a rule of the entries. A body with no entries, such as {} or an empty
+// entries list, is valid: its summary has no entries and a Verify that is not
+// nil. On an error, the summary holds the sequence IDs that a plain read of
+// the body finds, so the refusal record names them.
 //
 // The types are standard types: BatchSummary is an alias of an unnamed struct
 // type, so an implementation declares the same struct type and needs no
@@ -389,6 +393,12 @@ func hasJournalGap(seqs []int64) bool {
 	return int64(len(seqs)) != highest
 }
 
+// tooLargeRemedy is the one command that helps after a size refusal of a
+// journaled update. The error text and the answer of a journal batch over its
+// bound and of a replay past a bound end with it, so the log and the answer
+// give the same remedy.
+const tooLargeRemedy = "run `pulumi up` with fewer resources"
+
 // batchLimitError reports a journal batch over MaxJournalBatchBytes. Its
 // Error text keeps the update wrapper for the log, and Message is the one
 // sentence the server answers. It wraps ErrTooLarge.
@@ -400,9 +410,8 @@ type batchLimitError struct {
 // Error returns the refusal with the batch size and the batch bound.
 func (e *batchLimitError) Error() string {
 	return fmt.Sprintf(
-		"%v: journal batch of %d bytes exceeds the limit of %d bytes: "+
-			"split the change into smaller updates and run `pulumi up` again",
-		ErrTooLarge, e.size, e.limit,
+		"%v: journal batch of %d bytes exceeds the limit of %d bytes: %s",
+		ErrTooLarge, e.size, e.limit, tooLargeRemedy,
 	)
 }
 
@@ -418,8 +427,8 @@ func BatchOverLimit(size, limit int) error {
 // Message returns the one-sentence answer for the batch refusal.
 func (e *batchLimitError) Message() string {
 	return fmt.Sprintf(
-		"This journal batch has %d bytes, more than the limit of %d bytes: run `pulumi up` with fewer resources.",
-		e.size, e.limit,
+		"This journal batch has %d bytes, more than the limit of %d bytes: %s.",
+		e.size, e.limit, tooLargeRemedy,
 	)
 }
 

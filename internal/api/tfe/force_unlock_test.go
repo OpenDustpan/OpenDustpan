@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"opendustpan.org/opendustpan/internal/api/tfe"
@@ -412,5 +413,39 @@ func TestWorkspaceDocumentHoldsTheLockID(t *testing.T) {
 				t.Fatalf("lock-id = %s (%v), want %q", raw, err, tc.want)
 			}
 		})
+	}
+}
+
+// countingForceUnlock counts the reads of a workspace by ID.
+type countingForceUnlock struct {
+	recordingForceUnlock
+
+	reads *atomic.Int64
+}
+
+func (c countingForceUnlock) GetByID(ctx context.Context, id workspace.ID) (workspace.Workspace, error) {
+	c.reads.Add(1)
+
+	return c.recordingForceUnlock.GetByID(ctx, id)
+}
+
+// TestForceUnlockReadsTheWorkspaceTwice proves that a force-unlock reads the
+// workspace once to resolve its unit and once for the holder and the
+// override switches. The domain reads it again in its own transaction.
+func TestForceUnlockReadsTheWorkspaceTwice(t *testing.T) {
+	t.Parallel()
+
+	ws := countingForceUnlock{recordingForceUnlock: newRecordingForceUnlock(nil), reads: new(atomic.Int64)}
+	handler := newWriteHandlerWithAuthz(t, ws, allowAll())
+
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, workspaceRequest(t, http.MethodPost, forceUnlockTarget, ""))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+
+	if got := ws.reads.Load(); got != 2 {
+		t.Fatalf("reads of the workspace = %d, want 2", got)
 	}
 }

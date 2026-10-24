@@ -69,7 +69,7 @@ func TestDeleteWorkspace(t *testing.T) {
 
 			handler, err := tfe.NewHandler(tfe.Config{
 				Registry:       nil,
-				Authenticator:  tokenAuthenticator{},
+				Authenticator:  storedTokenAuthenticator{},
 				Authorizer:     allowAll(),
 				AddressGate:    nil,
 				Logger:         slog.New(slog.DiscardHandler),
@@ -126,4 +126,22 @@ func checkPassedChangeEntry(t *testing.T, entries []audit.Entry, object string) 
 		got.Object != object || got.Namespace != "acme" || got.Outcome != audit.OutcomeSuccess {
 		t.Fatalf("audit entry = %+v, want a change by unit:manage on %s", got, object)
 	}
+
+	if got.TokenID != storedTokenID {
+		t.Fatalf("token ID of the entry = %q, want the token of the request %q", got.TokenID, storedTokenID)
+	}
+}
+
+// storedTokenID is the ID of the stored access token of the test token.
+const storedTokenID = "tok-delete-1"
+
+// storedTokenAuthenticator signs in the test token as a stored access token
+// with an ID, so an entry can show which token acted.
+type storedTokenAuthenticator struct{}
+
+func (storedTokenAuthenticator) AuthenticateToken(ctx context.Context, raw string) (identity.Principal, error) {
+	p, err := tokenAuthenticator{}.AuthenticateToken(ctx, raw)
+	p.TokenID = storedTokenID
+
+	return p, err
 }
