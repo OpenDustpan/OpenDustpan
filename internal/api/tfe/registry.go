@@ -258,7 +258,7 @@ func (h *Handler) writeRegistryAnswer(
 	w.WriteHeader(status)
 
 	body := registryErrors{Errors: []string{text}, Code: answer.Code(), Meta: nil}
-	if args := answer.Args(); args != nil {
+	if args := answer.Args(); len(args) > 0 {
 		body.Meta = &registryErrorMeta{Args: args}
 	}
 
