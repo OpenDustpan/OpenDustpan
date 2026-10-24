@@ -853,7 +853,9 @@ func NewServer(opts ...Option) (*Server, error) {
 
 // wireTokens puts the stored access tokens behind the configured
 // authenticator, and lets every authenticated person list and revoke its
-// own personal tokens with no grant (ADR 53, decision 3).
+// own personal tokens with no grant. The namespace service rule decides the
+// principals that the server builds before the self actions and the
+// configured authorizer, so no authorizer of an embedder can widen them.
 func wireTokens(cfg *settings, tokens *accesstoken.Service) error {
 	authn, err := gatedAuthenticator(cfg, tokens)
 	if err != nil {
@@ -861,11 +863,11 @@ func wireTokens(cfg *settings, tokens *accesstoken.Service) error {
 	}
 
 	cfg.authenticator = authn
-	cfg.authorizer = allowlistGate(identity.SelfAllowed{
+	cfg.authorizer = allowlistGate(identity.NamespaceServiceRule{Next: identity.SelfAllowed{
 		Next: cfg.authorizer, Actions: []identity.Action{
 			identity.ActionTokenManageOwn, identity.ActionCallerManagePreferences,
 		},
-	}, cfg.ipAllowlists)
+	}}, cfg.ipAllowlists)
 
 	return nil
 }
