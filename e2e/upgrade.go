@@ -336,7 +336,8 @@ func (e *Env) TryServe(ctx context.Context, tb testing.TB, binPath string) Binar
 	tb.Cleanup(func() {
 		_ = cmd.Process.Kill() //nolint:errcheck // The probe process ends with the kill signal.
 		select {
-		case <-done:
+		case killErr := <-done:
+			_ = killErr // The kill signal ends the process, so Wait reports it.
 		default:
 		}
 	})
@@ -352,7 +353,8 @@ func (e *Env) TryServe(ctx context.Context, tb testing.TB, binPath string) Binar
 
 		if probeHealth(ctx, e.backendPort) {
 			_ = cmd.Process.Kill() //nolint:errcheck // The started probe server ends here.
-			<-done
+			killErr := <-done
+			_ = killErr // The kill signal ends the process, so Wait reports it.
 
 			return BinaryResult{Stdout: stdout.String(), Stderr: stderr.String(), ExitCode: 0}
 		}
@@ -362,7 +364,8 @@ func (e *Env) TryServe(ctx context.Context, tb testing.TB, binPath string) Binar
 		case <-ctx.Done():
 			timer.Stop()
 			_ = cmd.Process.Kill() //nolint:errcheck // The context ends the probe.
-			<-done
+			killErr := <-done
+			_ = killErr // The kill signal ends the process, so Wait reports it.
 
 			tb.Fatalf("context done while probing the old binary")
 
@@ -372,7 +375,8 @@ func (e *Env) TryServe(ctx context.Context, tb testing.TB, binPath string) Binar
 	}
 
 	_ = cmd.Process.Kill() //nolint:errcheck // A start without the check never exits itself.
-	<-done
+	killErr := <-done
+	_ = killErr // The kill signal ends the process, so Wait reports it.
 
 	return BinaryResult{Stdout: stdout.String(), Stderr: stderr.String(), ExitCode: 0}
 }

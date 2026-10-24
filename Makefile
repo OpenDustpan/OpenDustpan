@@ -1,6 +1,6 @@
 # Local gates. CI runs the same checks (.github/workflows/ci.yml).
 # Tool versions are pinned here and in CI; install the matching binaries:
-#   golangci-lint v2.14.0  https://golangci-lint.run/welcome/install/
+#   golangci-lint v2.15.0  https://golangci-lint.run/welcome/install/
 #   sqlc          v1.31.1  https://docs.sqlc.dev/en/latest/overview/install.html
 #   semgrep       1.178.0  https://semgrep.dev/docs/getting-started/quickstart
 #   trivy         v0.75.0  https://trivy.dev/latest/getting-started/installation/

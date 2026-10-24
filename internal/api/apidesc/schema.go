@@ -242,19 +242,25 @@ func (r *reflector) schemaFor(t reflect.Type) (object, error) {
 	}
 
 	if t.Kind() == reflect.Struct && t.PkgPath() != "" && t.Name() != "" {
-		name, err := r.structName(t)
-		if err != nil {
-			return nil, err
-		}
-
-		if defineErr := r.defineOnce(name, t); defineErr != nil {
-			return nil, defineErr
-		}
-
-		return object{keyRef: refSchemas + name}, nil
+		return r.namedStructRef(t)
 	}
 
 	return r.define(t)
+}
+
+// namedStructRef defines the schema of a named struct type, unless it is
+// there, and returns the reference to it.
+func (r *reflector) namedStructRef(t reflect.Type) (object, error) {
+	name, err := r.structName(t)
+	if err != nil {
+		return nil, err
+	}
+
+	if defineErr := r.defineOnce(name, t); defineErr != nil {
+		return nil, defineErr
+	}
+
+	return object{keyRef: refSchemas + name}, nil
 }
 
 // declaredUse returns the schema for a use of a declared type: the declared
