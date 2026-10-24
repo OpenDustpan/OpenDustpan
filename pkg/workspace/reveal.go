@@ -2,11 +2,13 @@ package workspace
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"encoding/json/jsontext"
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"slices"
 	"strconv"
 	"strings"
@@ -40,46 +42,6 @@ const (
 	moduleFieldName = "module"
 )
 
-// MaskedPaths returns the masked set of state: the value path of each marker
-// of every resource instance, masked with marks. With no kept marks for the
-// version, every attribute value is a marker.
-func MaskedPaths(state []byte, marks SensitiveMarks) ([]string, error) {
-	doc, err := decodeState(state)
-	if err != nil {
-		return nil, err
-	}
-
-	entries, _ := tofuStateResources(doc)
-
-	var masked []string
-
-	for _, entry := range entries {
-		for i, instance := range tofuInstances(entry.obj) {
-			_, paths := maskTofuInstance(
-				instance, entry.index, i, tofuInstanceAddress(entry.obj, instance), marks,
-			)
-			masked = append(masked, paths...)
-		}
-	}
-
-	if masked == nil {
-		masked = []string{}
-	}
-
-	return masked, nil
-}
-
-// RevealValue returns the plain value at path of state, and the masked set
-// holding the path. The path must be in the masked set, else it fails with
-// ErrResourceNotFound, so a caller cannot probe paths. A state the client
-// encrypted fails with ErrClientEncrypted. It streams the state to the path
-// and keeps no more than one resource instance in memory.
-func RevealValue(state []byte, marks SensitiveMarks, path string) (any, []string, error) {
-	return RevealValueFromOpener(func() (io.ReadCloser, error) {
-		return io.NopCloser(bytes.NewReader(state)), nil
-	}, marks, path)
-}
-
 // Limit: a reveal that needs the full instance decodes the one target
 // instance in full, into a map that maskTofuInstance walks. It refuses an
 // instance over 4 MiB, and a lookup whose sensitive_attributes run over
@@ -101,11 +63,74 @@ const (
 	revealMarksLimit = 1 << 20
 )
 
-// StateOpener opens the content of one finalized state version. The lookup calls it once for each pass, and each call
+// stateOpener opens the content of one finalized state version. The lookup calls it once for each pass, and each call
 // must return the same bytes from the start. The caller does not close the result: the lookup does.
-type StateOpener func() (io.ReadCloser, error)
+type stateOpener func() (io.ReadCloser, error)
 
-// RevealValueFromOpener returns the plain value at path of the state that
+// VersionReader reads finalized state versions. Service implements it.
+type VersionReader interface {
+	// ReadState returns the finalized state version with id, or
+	// ErrStateVersionNotFound.
+	ReadState(ctx context.Context, id StateVersionID) (StateVersion, error)
+	// Open returns the content of sv. The caller closes it.
+	Open(ctx context.Context, sv StateVersion) (io.ReadCloser, error)
+}
+
+// RevealVersion returns the plain value at path of the finalized state
+// version id, which versions reads. The path must be in the masked set of the
+// version, with the sensitive marks that the version keeps, else it fails
+// with ErrResourceNotFound, so a caller cannot probe paths. A state the client
+// encrypted fails with ErrClientEncrypted. It opens the content once for each
+// pass of the lookup and decodes from the stream, so no reveal reads the
+// whole state into memory. A failed close of the content does not fail the
+// lookup: logger names it, with no value.
+func RevealVersion(
+	ctx context.Context, versions VersionReader, id StateVersionID, path string, logger *slog.Logger,
+) (any, error) {
+	sv, err := versions.ReadState(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+
+	open := func() (io.ReadCloser, error) {
+		content, openErr := versions.Open(ctx, sv)
+		if openErr != nil {
+			return nil, openErr
+		}
+
+		return &warnOnClose{ReadCloser: content, warn: func(closeErr error) {
+			if logger != nil {
+				logger.WarnContext(ctx, "close state content failed", slog.String("error", closeErr.Error()))
+			}
+		}}, nil
+	}
+
+	value, _, err := revealFromOpener(open, sv.SensitiveMarks, path)
+
+	return value, err
+}
+
+// warnOnClose logs a failed close of the content of a state version. The
+// lookup closes each pass; the log keeps the warning, and the error still
+// reaches the lookup, which joins it.
+type warnOnClose struct {
+	io.ReadCloser
+
+	warn func(closeErr error)
+}
+
+// Close closes the content, logs a failure, and returns it.
+func (c *warnOnClose) Close() error {
+	if err := c.ReadCloser.Close(); err != nil {
+		c.warn(err)
+
+		return fmt.Errorf("close state content: %w", err)
+	}
+
+	return nil
+}
+
+// revealFromOpener returns the plain value at path of the state that
 // open serves, and the masked set holding the path. The path must be in the
 // masked set, else it fails with ErrResourceNotFound, so a caller cannot
 // probe paths. A state the client encrypted fails with ErrClientEncrypted.
@@ -118,8 +143,8 @@ type StateOpener func() (io.ReadCloser, error)
 // write-once so the passes read the same bytes, and each pass decrypts the
 // stream again (about 3x CPU). A failed open fails as an open state error. A
 // close error does not fail the lookup. The opener logs it.
-func RevealValueFromOpener(
-	open StateOpener, marks SensitiveMarks, path string,
+func revealFromOpener(
+	open stateOpener, marks SensitiveMarks, path string,
 ) (any, []string, error) {
 	target, shapeOK := parseRevealTarget(path, marks)
 	if !shapeOK {
@@ -172,7 +197,7 @@ func RevealValueFromOpener(
 // withPass opens the state, runs fn on its stream, and closes the stream
 // before the next pass starts. A close error does not fail the pass. The
 // opener logs it.
-func withPass(open StateOpener, fn func(*jsontext.Decoder) error) error {
+func withPass(open stateOpener, fn func(*jsontext.Decoder) error) error {
 	stream, err := open()
 	if err != nil {
 		return fmt.Errorf("open state: %w", err)
@@ -189,7 +214,7 @@ func withPass(open StateOpener, fn func(*jsontext.Decoder) error) error {
 // marks every leaf of the attributes is masked, so the walk below the
 // attributes is physical, with no dynamic wrapper rule. It answers the leaf
 // at the path, or fails with ErrResourceNotFound.
-func revealNoMarks(open StateOpener, target revealTarget, path string) (any, []string, error) {
+func revealNoMarks(open stateOpener, target revealTarget, path string) (any, []string, error) {
 	base := "/resources/" + strconv.Itoa(target.resource) +
 		"/instances/" + strconv.Itoa(target.position) + "/attributes"
 
@@ -422,7 +447,7 @@ func revealNoMarksElement(dec *jsontext.Decoder, index int) (bool, error) {
 // revealWithMarks answers a reveal with marks from the stream when the
 // pointer layout is not entangled, else with the full decode.
 func revealWithMarks(
-	open StateOpener, target revealTarget, path string, info instanceInfo, address string,
+	open stateOpener, target revealTarget, path string, info instanceInfo, address string,
 ) (any, []string, error) {
 	pointers := instancePointers(info, address, target.marks)
 	if len(pointers) == 0 || !isAttributesContainer(info) {
@@ -449,7 +474,7 @@ func isAttributesContainer(info instanceInfo) bool {
 
 // revealPointerScan runs pass A of the marks lookup.
 func revealPointerScan(
-	open StateOpener, target revealTarget, pointers []revealPointer,
+	open stateOpener, target revealTarget, pointers []revealPointer,
 ) (pointerScan, error) {
 	var scan pointerScan
 
@@ -467,7 +492,7 @@ func revealPointerScan(
 
 // revealStreamedAnswer runs pass B of the marks lookup and answers it.
 func revealStreamedAnswer(
-	open StateOpener, target revealTarget, path string, scan pointerScan,
+	open stateOpener, target revealTarget, path string, scan pointerScan,
 ) (any, []string, error) {
 	base := revealBase(target)
 	secrets := revealSecrets(scan.applied)
@@ -518,7 +543,7 @@ func revealSecrets(applied []appliedPointer) map[digest]struct{} {
 
 // revealTargetScan runs pass B of the marks lookup.
 func revealTargetScan(
-	open StateOpener, target revealTarget, secrets map[digest]struct{},
+	open stateOpener, target revealTarget, secrets map[digest]struct{},
 ) (targetResult, error) {
 	var res targetResult
 
@@ -538,7 +563,7 @@ func revealTargetScan(
 // the target instance in full, as before. It refuses an instance over the
 // fallback limit.
 func revealFullDecode(
-	open StateOpener, marks SensitiveMarks, path string, info instanceInfo,
+	open stateOpener, marks SensitiveMarks, path string, info instanceInfo,
 ) (any, []string, error) {
 	if info.size > revealFallbackLimit {
 		return nil, nil, fmt.Errorf(

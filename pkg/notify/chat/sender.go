@@ -16,11 +16,15 @@ import (
 	"opendustpan.org/opendustpan/internal/egress/egresshttp"
 	"opendustpan.org/opendustpan/pkg/egress"
 	"opendustpan.org/opendustpan/pkg/notify"
+	"opendustpan.org/opendustpan/pkg/notify/internal/post"
 )
 
 // SendTimeout is the longest time of one send, as a deadline on the context
 // of the request. The timeout of the client is a second layer above it.
 const SendTimeout = 10 * time.Second
+
+// op names a send in the error texts.
+const op = "post chat message"
 
 // DefaultProduct is the product name of a message when no option sets one.
 const DefaultProduct = "OpenDustpan"
@@ -160,7 +164,7 @@ func (s *Sender) Send(ctx context.Context, m notify.Message) error {
 
 	resp, err := s.client.Do(httpReq.WithContext(ctx))
 	if err != nil {
-		return transportError(ctx, err)
+		return post.TransportError(ctx, op, err)
 	}
 
 	defer func() { _ = resp.Body.Close() }() //nolint:errcheck // The status decides the result.
@@ -196,33 +200,18 @@ func (s *Sender) renderer(
 // refuse, to a port that the operator did not allow, or to a host that is not
 // the target of the sink.
 func (s *Sender) checkTarget(m notify.Message, r Renderer) (*url.URL, error) {
-	// The text of these errors can repeat the address of the URL, so the sender
-	// keeps the class and drops the text.
-	if egress.CheckURL(m.To, egress.HTTPSOnly) != nil {
-		return nil, fmt.Errorf("post chat message: %w: the URL is not allowed", egress.ErrRefused)
+	if err := post.CheckTarget(op, m.To, m.Sink.Target, s.ports, notify.ChatHost); err != nil {
+		return nil, err
 	}
 
-	if egress.CheckPort(m.To, s.ports) != nil {
-		return nil, fmt.Errorf("post chat message: %w: the port is not allowed", egress.ErrRefused)
-	}
-
-	host, err := notify.ChatHost(m.To)
-	if err != nil {
-		return nil, fmt.Errorf("post chat message: %w", egress.ErrRefused)
-	}
-
-	if host != m.Sink.Target {
-		return nil, fmt.Errorf("post chat message: %w: the host of the URL is not the target of the sink",
-			egress.ErrRefused)
-	}
-
-	if err = r.CheckHost(host); err != nil {
-		return nil, fmt.Errorf("post chat message: %w: the host is not a host of the platform", egress.ErrRefused)
+	// CheckTarget read the host and found it is the target of the sink.
+	if err := r.CheckHost(m.Sink.Target); err != nil {
+		return nil, fmt.Errorf("%s: %w: the host is not a host of the platform", op, egress.ErrRefused)
 	}
 
 	u, err := url.Parse(m.To)
 	if err != nil || u == nil {
-		return nil, fmt.Errorf("post chat message: %w", egress.ErrRefused)
+		return nil, fmt.Errorf("%s: %w", op, egress.ErrRefused)
 	}
 
 	return u, nil
@@ -272,51 +261,23 @@ func checkRequest(req Request) error {
 	}
 }
 
-// transportError maps the error of a request that got no answer. It drops the
-// text of err, which can repeat the URL and the resolved address, and keeps
-// the class.
-func transportError(ctx context.Context, err error) error {
-	switch {
-	case errors.Is(err, egresshttp.ErrDialRefused):
-		// A refusal of the dial guard is a failed connection, so that an
-		// answer does not tell a name that resolves to a private address from
-		// a name that does not resolve.
-		return fmt.Errorf("post chat message: %w: the request failed", notify.ErrTemporary)
-	case errors.Is(err, egress.ErrRefused):
-		return fmt.Errorf("post chat message: %w", egress.ErrRefused)
-	case ctx.Err() != nil:
-		return fmt.Errorf("post chat message: %w: %w", notify.ErrTemporary, ctx.Err())
-	default:
-		return fmt.Errorf("post chat message: %w: the request failed", notify.ErrTemporary)
-	}
-}
-
 // answer maps the answer of the platform.
 func (s *Sender) answer(r Renderer, resp *http.Response) error {
 	code := resp.StatusCode
 
 	body, readErr := egresshttp.ReadBody(resp)
 
-	switch {
-	case code >= http.StatusOK && code < http.StatusMultipleChoices:
-		if readErr != nil {
-			// An answer that is too large, or that breaks off, is not an answer
-			// of the platform. Another attempt could post the message twice.
-			return fmt.Errorf("post chat message: status %d: %w: the answer cannot be read", code, notify.ErrPermanent)
-		}
-
-		return checkAnswer(r, code, body)
-	case code == http.StatusRequestTimeout, code == http.StatusTooManyRequests, code >= http.StatusInternalServerError:
-		if wait, ok := notify.ParseRetryAfter(resp.Header.Get("Retry-After"), s.now()); ok {
-			return fmt.Errorf("post chat message: status %d: %w", code, &notify.RetryAfterError{Wait: wait})
-		}
-
-		return fmt.Errorf("post chat message: status %d: %w", code, notify.ErrTemporary)
-	case code >= http.StatusMultipleChoices:
-		return fmt.Errorf("post chat message: status %d: %w", code, notify.ErrPermanent)
-	default:
-		return fmt.Errorf("post chat message: status %d: %w", code, notify.ErrTemporary)
+	if code < http.StatusOK || code >= http.StatusMultipleChoices {
+		return post.StatusError(op, resp, s.now())
 	}
+
+	if readErr != nil {
+		// An answer that is too large, or that breaks off, is not an answer
+		// of the platform. Another attempt could post the message twice.
+		return fmt.Errorf("%s: status %d: %w: the answer cannot be read", op, code, notify.ErrPermanent)
+	}
+
+	return checkAnswer(r, code, body)
 }
 
 // checkAnswer asks the renderer about a 2xx answer, and keeps only the class
@@ -329,10 +290,10 @@ func checkAnswer(r Renderer, code int, body []byte) error {
 	case err == nil:
 		return nil
 	case errors.Is(err, notify.ErrTemporary):
-		return fmt.Errorf("post chat message: status %d: %w: the platform refused the message", code,
+		return fmt.Errorf("%s: status %d: %w: the platform refused the message", op, code,
 			notify.ErrTemporary)
 	default:
-		return fmt.Errorf("post chat message: status %d: %w: the platform refused the message", code,
+		return fmt.Errorf("%s: status %d: %w: the platform refused the message", op, code,
 			notify.ErrPermanent)
 	}
 }

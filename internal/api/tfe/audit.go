@@ -5,22 +5,22 @@ import (
 	"net/http"
 	"time"
 
-	"opendustpan.org/opendustpan/internal/clientip"
-	"opendustpan.org/opendustpan/internal/requestid"
+	"opendustpan.org/opendustpan/internal/api/tofuunit"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
 )
 
-// channelHeader is the request header that declares where a request comes
-// from: "api" or "console". The audit entry records it as declared; unknown
-// values are "api".
-const channelHeader = "Dustpan-Channel"
+// rules returns the override and audit rules of OpenTofu units, which this
+// API shares with the OpenTofu http backend.
+func (h *Handler) rules() tofuunit.Rules {
+	return tofuunit.Rules{Authz: h.authz, Namespaces: h.namespaces, Audit: h.audit, Guard: h.guard}
+}
 
 // appendToolOperationAudit writes one audit entry for a route that answers a
 // plain secret value to the CLI: the action unit:read-secrets with the kind
 // tool-operation, so a reader never confuses it with a person who asked to
 // see a secret value. It returns the append error, so the route answers 500
-// with no secret value when it cannot record the entry (ADR 41 decision 5).
+// with no secret value when it cannot record the entry.
 func (h *Handler) appendToolOperationAudit(
 	r *http.Request, p identity.Principal, obj identity.Object, version, valuePath string,
 ) error {
@@ -39,12 +39,7 @@ func (h *Handler) appendToolOperationAudit(
 func (h *Handler) appendDownloadAudit(
 	r *http.Request, p identity.Principal, obj identity.Object, version string,
 ) error {
-	kind := audit.KindToolOperation
-	if p.ActsAsPerson() {
-		kind = audit.KindReveal
-	}
-
-	return h.appendReadAudit(r, p, obj, readEntry{version: version, valuePath: "", kind: kind})
+	return h.appendReadAudit(r, p, obj, readEntry{version: version, valuePath: "", kind: tofuunit.ReadKind(p)})
 }
 
 // readEntry holds the fields of the audit entry of a read of secret values
@@ -59,44 +54,10 @@ type readEntry struct {
 func (h *Handler) appendReadAudit(
 	r *http.Request, p identity.Principal, obj identity.Object, re readEntry,
 ) error {
-	ctx := r.Context()
-
-	entry := audit.Entry{
-		At:            time.Now().UTC(),
-		Namespace:     obj.Namespace(),
-		Subject:       p.Subject,
-		IDPSubject:    "",
-		TokenID:       p.TokenID,
-		Action:        string(identity.ActionUnitReadSecrets),
-		Object:        obj.String(),
-		Version:       re.version,
-		ValuePath:     re.valuePath,
-		ValueCount:    nil,
-		Changes:       nil,
-		SourceIP:      clientip.String(r),
-		UserAgent:     audit.TruncateUserAgent(r.UserAgent()),
-		Channel:       audit.NormalizeChannel(r.Header.Get(channelHeader)),
-		Kind:          re.kind,
-		Outcome:       audit.OutcomeSuccess,
-		RequestID:     requestid.FromContext(ctx),
-		ObjectID:      obj.UnitID(),
-		PrevHash:      "",
-		Hash:          "",
-		Sequence:      0,
-		FenceVersion:  0,
-		Reason:        "",
-		PrincipalKind: string(p.Kind),
-		JobID:         p.JobID,
-	}
-
-	ns, err := h.namespaces.Get(ctx, entry.Namespace)
-	if err != nil {
-		return err
-	}
-
-	_, err = h.audit.Append(ctx, ns.Fence(), entry)
-
-	return err
+	return h.rules().Append(r.Context(), tofuunit.Entry(r, p, obj, tofuunit.Detail{
+		At: time.Now().UTC(), Action: identity.ActionUnitReadSecrets, Version: re.version, ValuePath: re.valuePath,
+		Kind: re.kind, Outcome: audit.OutcomeSuccess, Reason: "",
+	}))
 }
 
 // changeEntry returns the audit entry of the kind change for a change of a
@@ -104,33 +65,10 @@ func (h *Handler) appendReadAudit(
 // change, so the change and its entry commit together or not at all (fail
 // closed). The service stamps the time of the change on it.
 func changeEntry(r *http.Request, p identity.Principal, obj identity.Object, action identity.Action) audit.Entry {
-	return audit.Entry{
-		At:            time.Time{},
-		Namespace:     obj.Namespace(),
-		Subject:       p.Subject,
-		IDPSubject:    "",
-		TokenID:       "",
-		Action:        string(action),
-		Object:        obj.String(),
-		Version:       "",
-		ValuePath:     "",
-		ValueCount:    nil,
-		Changes:       nil,
-		SourceIP:      clientip.String(r),
-		UserAgent:     audit.TruncateUserAgent(r.UserAgent()),
-		Channel:       audit.NormalizeChannel(r.Header.Get(channelHeader)),
-		Kind:          audit.KindChange,
-		Outcome:       audit.OutcomeSuccess,
-		RequestID:     requestid.FromContext(r.Context()),
-		ObjectID:      obj.UnitID(),
-		PrevHash:      "",
-		Hash:          "",
-		Sequence:      0,
-		FenceVersion:  0,
-		Reason:        "",
-		PrincipalKind: string(p.Kind),
-		JobID:         p.JobID,
-	}
+	return tofuunit.Entry(r, p, obj, tofuunit.Detail{
+		At: time.Time{}, Action: action, Version: "", ValuePath: "",
+		Kind: audit.KindChange, Outcome: audit.OutcomeSuccess, Reason: "",
+	})
 }
 
 // failAudit records a lost audit entry: one log line with no secret and no

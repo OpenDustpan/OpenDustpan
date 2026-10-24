@@ -251,9 +251,15 @@ func newRevealHandlerFrom(t *testing.T, cfg tfe.Config) *tfe.Handler {
 func revealResultPath(t *testing.T) string {
 	t.Helper()
 
-	masked, err := workspace.MaskedPaths([]byte(stubResourceState()), stubResourceMarks())
-	if err != nil {
-		t.Fatalf("masked paths: %v", err)
+	var masked []string
+
+	for _, address := range stubResourceAddresses() {
+		detail, err := workspace.ReadStateResource([]byte(stubResourceState()), stubResourceMarks(), address)
+		if err != nil {
+			t.Fatalf("masked read of %s: %v", address, err)
+		}
+
+		masked = append(masked, detail.Masked...)
 	}
 
 	for _, path := range masked {
@@ -985,4 +991,9 @@ func checkRevealRefusal(t *testing.T, tc revealFresh, rec *httptest.ResponseReco
 	if strings.Contains(rec.Body.String(), "pw-s3cr3t") {
 		t.Fatalf("refusal holds the secret value: %s", rec.Body.String())
 	}
+}
+
+// stubResourceAddresses names the resource instances of the stub state.
+func stubResourceAddresses() []string {
+	return []string{"terraform_data.smoke", "random_password.pw"}
 }

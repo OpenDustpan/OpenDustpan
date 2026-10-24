@@ -8,6 +8,7 @@ import (
 	"io"
 	"maps"
 	"strings"
+	"unicode/utf8"
 )
 
 // Patch is a JSON merge patch of the preferences, by flat field name. A nil
@@ -27,6 +28,12 @@ func Text(s string) *string { return new(s) }
 func ParsePatch(body []byte) (Patch, error) {
 	if len(body) > MaxBodyBytes {
 		return nil, ErrBodyTooLarge
+	}
+
+	// encoding/json replaces each invalid UTF-8 byte with U+FFFD, so a bad
+	// byte in a name would answer as an unknown field. Refuse the body first.
+	if !utf8.Valid(body) {
+		return nil, ErrInvalidBody
 	}
 
 	members, err := objectMembers(body)

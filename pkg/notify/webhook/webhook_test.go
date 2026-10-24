@@ -464,6 +464,43 @@ func TestLargeAnswerIsRead(t *testing.T) {
 	}
 }
 
+// TestSendStopsAtTheDeadline checks that a receiver that does not answer
+// fails the send with ErrTemporary at the deadline of the send, below the
+// timeout of the client.
+func TestSendStopsAtTheDeadline(t *testing.T) {
+	t.Parallel()
+
+	r := newReceiver(t)
+	release := make(chan struct{})
+
+	r.set(func(http.ResponseWriter, *http.Request) { <-release })
+	t.Cleanup(func() { close(release) })
+
+	s := r.sender(t)
+	s.SetTimeoutForTest(100 * time.Millisecond)
+
+	start := time.Now()
+
+	err := s.Send(t.Context(), message([]byte(canary)))
+	if !errors.Is(err, notify.ErrTemporary) || errors.Is(err, notify.ErrPermanent) {
+		t.Fatalf("Send = %v, want ErrTemporary", err)
+	}
+
+	if took := time.Since(start); took > 5*time.Second {
+		t.Errorf("Send took %s, want about the deadline of 100 ms", took)
+	}
+}
+
+// TestSendTimeout checks the deadline of one send: the same as the chat
+// sender.
+func TestSendTimeout(t *testing.T) {
+	t.Parallel()
+
+	if webhook.SendTimeout != 10*time.Second {
+		t.Fatalf("SendTimeout = %s, want 10s", webhook.SendTimeout)
+	}
+}
+
 // TestNoCanaryInErrors sends under each failure and checks that the text
 // of the error repeats no secret, no token of the URL, no address and no
 // text of the answer.

@@ -187,12 +187,22 @@ type errorResponse struct {
 
 // errNotFound is the one answer for an unknown namespace, an unknown unit, a
 // unit of another namespace, a purged unit, and an object that the caller
-// cannot read. The answer never tells that the object exists.
-var errNotFound = errors.New("not found")
+// cannot read. The answer never tells that the object exists, so it names no
+// value of the path. It names the mistake that people make most: a unit name
+// in place of the unit ID.
+var errNotFound = errors.New("not found: no namespace or unit that you can read has this path. " +
+	"A unit path takes the unit ID (stk-... or ws-...), not the name. " +
+	"To list the unit IDs, send GET /api/dustpan/v1/namespaces/{namespace}/units")
 
 // errBody names the body that a context write needs.
 var errBody = errors.New(
 	`invalid request body: send a JSON object with at least one of "summary", "runbook", "owners", "onCall" and "links"`,
+)
+
+// errBodyText is the answer for a body that is not valid UTF-8 or that holds
+// a lone surrogate escape. The server refuses the text and does not change it.
+var errBodyText = errors.New(
+	`invalid request body: send valid UTF-8 text, with no invalid byte and no lone surrogate escape such as \ud800`,
 )
 
 // errInclude names the include value that the read route needs.
@@ -241,17 +251,29 @@ func classify(err error) failure {
 		return fail(http.StatusNotFound, errNotFound.Error(), errcode.ContextObjectNotFound)
 	case errors.Is(err, objectcontext.ErrNotFound):
 		return fail(http.StatusNotFound, "no API context to clear", errcode.ContextNotSet)
-	case errors.Is(err, errBody):
+	case errors.Is(err, errBody), errors.Is(err, errBodyText):
 		return fail(http.StatusBadRequest, err.Error(), errcode.RequestBodyInvalid)
 	case errors.Is(err, errInclude):
 		return fail(http.StatusBadRequest, err.Error(), errcode.RequestInvalidQuery)
 	case errors.Is(err, objectcontext.ErrInvalidContext):
-		return fail(http.StatusBadRequest, err.Error(), errcode.ContextInvalid)
+		return fail(http.StatusBadRequest, invalidMessage(err), errcode.ContextInvalid)
 	case errors.Is(err, objectcontext.ErrUnknownSection):
-		return fail(http.StatusBadRequest, err.Error(), errcode.ContextUnknownSection)
+		return fail(http.StatusBadRequest, invalidMessage(err), errcode.ContextUnknownSection)
 	default:
 		return classifyConflict(err)
 	}
+}
+
+// invalidMessage returns the text of a 400 for an invalid context or section.
+// For a *RuleError it is the text of the rule only, so the call chain of the
+// service and the store, which differs between the store adapters, never
+// reaches the client.
+func invalidMessage(err error) string {
+	if rule, ok := errors.AsType[*objectcontext.RuleError](err); ok {
+		return rule.Error()
+	}
+
+	return err.Error()
 }
 
 // classifyConflict maps the errors of a refused write.

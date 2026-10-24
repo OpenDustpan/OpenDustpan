@@ -66,7 +66,8 @@ func (h *Handler) getState(w http.ResponseWriter, r *http.Request, c call) {
 	}
 
 	if err := h.appendDownloadAudit(c.request, c.principal, obj, sv.ID.String()); err != nil {
-		h.logger.ErrorContext(ctx, "audit append failed", slog.String("error", err.Error()))
+		// The log names no error text: the text may hold driver detail.
+		h.logger.ErrorContext(ctx, "audit append failed")
 
 		if h.onAuditFailure != nil {
 			h.onAuditFailure()

@@ -51,8 +51,13 @@ func TestContextErrorsHaveCodes(t *testing.T) {
 		},
 		{"no API context", objectcontext.ErrNotFound, http.StatusNotFound, code(errcode.ContextNotSet)},
 		{"body", apicontext.ErrBody, http.StatusBadRequest, code(errcode.RequestBodyInvalid)},
+		{"body text", apicontext.ErrBodyText, http.StatusBadRequest, code(errcode.RequestBodyInvalid)},
 		{"include", apicontext.ErrInclude, http.StatusBadRequest, code(errcode.RequestInvalidQuery)},
 		{"invalid context", objectcontext.ErrInvalidContext, http.StatusBadRequest, code(errcode.ContextInvalid)},
+		{
+			"rule error", &objectcontext.RuleError{Rule: "summary must be valid UTF-8"}, http.StatusBadRequest,
+			code(errcode.ContextInvalid),
+		},
 		{
 			"unknown section", objectcontext.ErrUnknownSection, http.StatusBadRequest,
 			code(errcode.ContextUnknownSection),

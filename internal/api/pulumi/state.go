@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -346,11 +347,33 @@ type stateAtResourcesResponse struct {
 	CurrentName string              `json:"currentName,omitempty"`
 }
 
-// parseStateAt reads the time of a state-at request: Unix milliseconds.
+// stateAtTimeError reports a time in the path of a state-at read that is not
+// Unix milliseconds. It matches stack.ErrInvalidUpdate with errors.Is, so it
+// answers 400, but its text names the read and not an update.
+type stateAtTimeError struct {
+	raw string
+}
+
+// Error implements error. It quotes at most 40 characters of the time.
+func (e *stateAtTimeError) Error() string {
+	return fmt.Sprintf("time %.40q in the path is not Unix milliseconds: send a number such as 1792754840074", e.raw)
+}
+
+// Is reports whether target is stack.ErrInvalidUpdate.
+func (e *stateAtTimeError) Is(target error) bool {
+	return target == stack.ErrInvalidUpdate
+}
+
+// parseStateAt reads the time of a state-at request: Unix milliseconds, as
+// ASCII digits only. A sign such as "+5" is refused.
 func parseStateAt(raw string) (time.Time, error) {
+	if raw == "" || strings.Trim(raw, "0123456789") != "" {
+		return time.Time{}, &stateAtTimeError{raw: raw}
+	}
+
 	ms, err := strconv.ParseInt(raw, 10, 64)
-	if err != nil || ms < 0 {
-		return time.Time{}, fmt.Errorf("%w: time %q is not Unix milliseconds", stack.ErrInvalidUpdate, raw)
+	if err != nil {
+		return time.Time{}, &stateAtTimeError{raw: raw}
 	}
 
 	return time.UnixMilli(ms).UTC(), nil
