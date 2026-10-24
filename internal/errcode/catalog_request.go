@@ -24,6 +24,8 @@ const (
 	RequestIdempotencyKeyUnavailable = "request.idempotency-key-unavailable"
 	// RequestIdempotencyKeyUnsupported means that the route does not take the Idempotency-Key header.
 	RequestIdempotencyKeyUnsupported = "request.idempotency-key-unsupported"
+	// RequestIfMatchInvalid means that the If-Match header is not one version in quotes.
+	RequestIfMatchInvalid = "request.if-match-invalid"
 	// RequestInvalidObject means that a namespace or unit reference in the request is malformed.
 	RequestInvalidObject = "request.invalid-object"
 	// RequestInvalidPath means that a value in the path of the request is not valid.
@@ -82,6 +84,7 @@ func requestSpecs() []Spec {
 			Meaning: "the route does not take the Idempotency-Key header",
 			Args:    nil,
 		},
+		{Code: RequestIfMatchInvalid, Meaning: "the If-Match header is not one version in quotes", Args: nil},
 		{Code: RequestInvalidObject, Meaning: "a namespace or unit reference in the request is malformed", Args: nil},
 		{Code: RequestInvalidPath, Meaning: "a value in the path of the request is not valid", Args: nil},
 		{Code: RequestInvalidQuery, Meaning: "a query parameter of the request is not valid", Args: nil},
