@@ -20,5 +20,6 @@ func WriteError(ctx context.Context, w http.ResponseWriter, err error) {
 var (
 	ErrNotFound = errNotFound
 	ErrBody     = errBody
+	ErrBodyText = errBodyText
 	ErrInclude  = errInclude
 )
