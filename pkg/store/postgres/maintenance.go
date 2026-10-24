@@ -54,7 +54,7 @@ func (s *Store) SetState(ctx context.Context, state maintenance.State) error {
 	var changed int64
 
 	err := s.inControlTx(ctx, func(q *db.Queries) error {
-		if err := lockWritesExclusive(ctx, q, s.stateLockWait); err != nil {
+		if err := lockWritesExclusive(ctx, q, s.stateLockWait, state == maintenance.StateMaintenance); err != nil {
 			return err
 		}
 
@@ -91,9 +91,11 @@ const stateLockTimeout = 10 * time.Second
 // transaction. It waits until every write transaction in flight has ended, and
 // it holds back every later write until this transaction commits. A write that
 // comes after the commit reads the new state. The wait ends after
-// stateLockTimeout, and the call then reports maintenance.ErrUnavailable, so
-// a stuck write cannot block the other writes without limit.
-func lockWritesExclusive(ctx context.Context, q *db.Queries, wait time.Duration) error {
+// stateLockTimeout. When entering is true, the call then reports
+// maintenance.ErrBusy, so a stuck write cannot block the other writes without
+// limit and the caller may try again. A leave that times out, and every other
+// failure, reports maintenance.ErrUnavailable.
+func lockWritesExclusive(ctx context.Context, q *db.Queries, wait time.Duration, entering bool) error {
 	if wait <= 0 {
 		wait = stateLockTimeout
 	}
@@ -103,16 +105,21 @@ func lockWritesExclusive(ctx context.Context, q *db.Queries, wait time.Duration)
 	}
 
 	if err := q.LockWritesExclusive(ctx, writeLockClass); err != nil {
+		if entering && ctx.Err() == nil && isLockTimeout(err) {
+			return fmt.Errorf("store installation state postgres database: waited %s: %w", wait, maintenance.ErrBusy)
+		}
+
 		return fmt.Errorf("store installation state postgres database: %w", maintenance.ErrUnavailable)
 	}
 
 	return nil
 }
 
-// unavailable keeps err when it already wraps maintenance.ErrUnavailable, and
-// otherwise reports maintenance.ErrUnavailable without driver text.
+// unavailable keeps err when it already wraps maintenance.ErrBusy or
+// maintenance.ErrUnavailable, and otherwise reports maintenance.ErrUnavailable
+// without driver text.
 func unavailable(err error) error {
-	if errors.Is(err, maintenance.ErrUnavailable) {
+	if errors.Is(err, maintenance.ErrBusy) || errors.Is(err, maintenance.ErrUnavailable) {
 		return err
 	}
 
@@ -136,7 +143,7 @@ func (s *Store) SetStateIf(ctx context.Context, expected, next maintenance.State
 	var changed int64
 
 	err := s.inControlTx(ctx, func(q *db.Queries) error {
-		if err := lockWritesExclusive(ctx, q, s.stateLockWait); err != nil {
+		if err := lockWritesExclusive(ctx, q, s.stateLockWait, next == maintenance.StateMaintenance); err != nil {
 			return err
 		}
 

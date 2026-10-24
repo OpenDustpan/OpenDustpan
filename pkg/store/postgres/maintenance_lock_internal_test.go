@@ -79,7 +79,7 @@ func TestWriteWaitsForEnterAndReadsItsState(t *testing.T) {
 		t.Fatalf("begin: %v", err)
 	}
 
-	if err = lockWritesExclusive(ctx, s.queries.WithTx(tx), 0); err != nil {
+	if err = lockWritesExclusive(ctx, s.queries.WithTx(tx), 0, false); err != nil {
 		t.Fatalf("take the exclusive lock: %v", err)
 	}
 
@@ -109,7 +109,7 @@ func newLockNamespace() namespace.Namespace {
 
 // TestEnterGivesUpWhenAWriteDoesNotEnd proves that an enter does not wait
 // without limit for a write transaction that holds the shared write lock: it
-// reports maintenance.ErrUnavailable after the lock timeout, changes nothing,
+// reports maintenance.ErrBusy after the lock timeout, changes nothing,
 // and a leave and a later enter work after the write ends.
 func TestEnterGivesUpWhenAWriteDoesNotEnd(t *testing.T) {
 	t.Parallel()
@@ -133,8 +133,8 @@ func TestEnterGivesUpWhenAWriteDoesNotEnd(t *testing.T) {
 		},
 		"SetState": func() error { return s.SetState(ctx, maintenance.StateMaintenance) },
 	} {
-		if err = run(); !errors.Is(err, maintenance.ErrUnavailable) {
-			t.Fatalf("%s while a write does not end: err = %v, want ErrUnavailable", name, err)
+		if err = run(); !errors.Is(err, maintenance.ErrBusy) || errors.Is(err, maintenance.ErrUnavailable) {
+			t.Fatalf("%s while a write does not end: err = %v, want ErrBusy", name, err)
 		}
 	}
 

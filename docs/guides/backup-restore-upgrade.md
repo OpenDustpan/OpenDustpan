@@ -146,8 +146,8 @@ refuses writes in its next request. A write that is already in progress
 ends before the enter returns. A server that cannot read the installation
 state refuses the write.
 
-On SQLite, the enter waits up to 30 seconds for the writes in progress to
-end. If they do not end in that time, the enter answers 503 with
+The enter waits for the writes in progress to end: up to 30 seconds on SQLite
+and up to 10 seconds on PostgreSQL. If they do not end in that time, the enter answers 503 with
 `Retry-After: 30` and the message `cannot enter maintenance mode: the writes
 in flight did not end in time: try again later`, and the installation stays
 in normal mode. Run the command again.
