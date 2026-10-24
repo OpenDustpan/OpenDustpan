@@ -4,6 +4,7 @@ import (
 	"net/http"
 
 	"opendustpan.org/opendustpan/internal/api/apidesc"
+	"opendustpan.org/opendustpan/internal/api/route"
 )
 
 // tagRegistry is the tag of every operation of this adapter.
@@ -76,15 +77,15 @@ func queryOf(r *http.Request) apidesc.Query {
 func (h *Handler) Operations() []apidesc.Operation {
 	rows := make([]apidesc.Row, 0, len(h.routes))
 
-	for _, route := range h.routes {
-		actions := make([]string, 0, len(route.Actions))
-		for _, action := range route.Actions {
+	for _, rt := range h.routes {
+		actions := make([]string, 0, len(rt.Actions))
+		for _, action := range rt.Actions {
 			actions = append(actions, string(action))
 		}
 
 		rows = append(rows, apidesc.Row{
-			Method: route.Method, Path: route.Path, Actions: actions, NamespaceActions: nil,
-			Public: route.Scope == ScopePublic, IdempotencyKey: route.IdempotencyKey,
+			Method: rt.Method, Path: rt.Path, Actions: actions, NamespaceActions: nil,
+			Public: rt.Scope == route.ScopePublic, IdempotencyKey: rt.IdempotencyKey,
 		})
 	}
 
