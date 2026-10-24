@@ -39,11 +39,13 @@ func TestApproverRefusalCodes(t *testing.T) {
 		},
 		{
 			"count above the named users", `{"count":3,"approvers":{"users":["alice"]}}`,
-			errcode.GateApproversCountAbove, map[string]any{"people": int64(1)},
+			errcode.GateApproversCountAbove,
+			map[string]any{"people": int64(1)},
 		},
 		{
 			"count above users and group members", `{"count":10,"approvers":{"groups":["platform"],"users":["alice"]}}`,
-			errcode.GateApproversCountAbove, map[string]any{"people": int64(6)},
+			errcode.GateApproversCountAbove,
+			map[string]any{"people": int64(6)},
 		},
 	}
 
