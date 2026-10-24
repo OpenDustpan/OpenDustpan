@@ -428,7 +428,7 @@ func (h *Handler) checkMoveOutOfLock(
 		h.recordMoveOutRefusal(r, p, obj, reasonMoveOutNeedsManage)
 
 		return "", &movedOutOfLockError{locked: &manuallock.LockedError{
-			Lock: l, Noun: "", Name: unit.Namespace.String() + "/" + unit.Name,
+			Lock: l, Unit: unit, Noun: "", Name: unit.Namespace.String() + "/" + unit.Name,
 		}}
 	}
 
@@ -552,7 +552,7 @@ func auditEntry(
 		ValuePath:     "",
 		ValueCount:    nil,
 		SourceIP:      clientip.String(r),
-		UserAgent:     truncateUserAgent(userAgent(r)),
+		UserAgent:     audit.TruncateUserAgent(userAgent(r)),
 		Channel:       sessionauth.AuditChannel(r, channelHeader),
 		Kind:          audit.KindChange,
 		Outcome:       audit.OutcomeSuccess,

@@ -678,7 +678,7 @@ func refuseRestoreUnderLock(
 		return fmt.Errorf("read manual lock of restored %s: %w", noun, err)
 	}
 
-	return &manuallock.LockedError{Lock: l, Noun: noun, Name: unit.Namespace.String() + "/" + name}
+	return &manuallock.LockedError{Lock: l, Unit: unit, Noun: noun, Name: unit.Namespace.String() + "/" + name}
 }
 
 // deleteRefusal names what a refused delete says: base is the error of the
@@ -713,7 +713,7 @@ func refuseDeleteUnderLock(ctx context.Context, q *db.Queries, unit collection.U
 	}
 
 	return fmt.Errorf("%w: %w", refusal.base, &manuallock.LockedError{
-		Lock: l, Noun: refusal.noun, Name: unit.Namespace.String() + "/" + refusal.name,
+		Lock: l, Unit: unit, Noun: refusal.noun, Name: unit.Namespace.String() + "/" + refusal.name,
 	})
 }
 
