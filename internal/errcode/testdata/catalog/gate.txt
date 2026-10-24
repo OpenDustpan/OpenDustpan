@@ -1,4 +1,5 @@
 gate.approvers-count-above people:quantity
 gate.approvers-group-invalid
 gate.approvers-group-missing
+gate.approvers-unmet
 gate.approvers-user-invalid
