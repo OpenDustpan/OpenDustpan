@@ -223,6 +223,7 @@ type AccessRoute struct {
 	GateListP50Ms    float64 `json:"gateListP50Ms"`
 	GateRefusedP50Ms float64 `json:"gateRefusedP50Ms"`
 	RefusedStatus    int     `json:"refusedStatus"`
+	RefusedCode      string  `json:"refusedCode"`
 }
 
 // Report is the machine-readable harness output. Times are milliseconds.

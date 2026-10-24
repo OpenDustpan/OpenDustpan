@@ -2,10 +2,10 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
-	"slices"
 	"strconv"
 	"time"
 )
@@ -42,23 +42,33 @@ func refusingPrefixes() []string {
 	return []string{"203.0.113.0/24", "198.51.100.0/24"}
 }
 
+// errAccessAnswer reports a route answer that differs from the expected one.
+var errAccessAnswer = errors.New("access answer differs from the expected one")
+
 // errBadJournalEntries reports a journal batch entry count that is not a
 // positive even number: each resource is a begin and a success entry.
 var errBadJournalEntries = errors.New("journal entries per batch must be an even number, at least 2")
 
 // routeTiming is one GET timed requests times: the median latency with the
-// status of the last answer.
+// status and the error code of the last answer.
 type routeTiming struct {
 	p50    float64
 	status int
+	code   string
+}
+
+// expectation is the one answer that a route gives to a request: its status
+// and, when code is set, the errorCode of its body.
+type expectation struct {
+	status int
+	code   string
 }
 
 // timeGet sends GET url requests times after a warm-up and answers the median
-// latency with the last status. A status other than want, or one of the two
-// refusals when refused is set, ends the run.
-func (t *target) timeGet(ctx context.Context, url string, requests int, want []int) (routeTiming, error) {
+// latency with the last answer. An answer other than want ends the run.
+func (t *target) timeGet(ctx context.Context, url string, requests int, want expectation) (routeTiming, error) {
 	samples := make([]float64, 0, requests)
-	last := 0
+	var last routeTiming
 
 	for i := range accessWarmup + requests {
 		start := time.Now()
@@ -72,23 +82,47 @@ func (t *target) timeGet(ctx context.Context, url string, requests int, want []i
 			return routeTiming{}, err
 		}
 
-		if !statusIn(resp.status, want) {
-			return routeTiming{}, check(http.MethodGet, url, resp.status, want[0], resp.body)
+		got := errorCodeOf(resp.body)
+
+		if resp.status != want.status {
+			return routeTiming{}, check(http.MethodGet, url, resp.status, want.status, resp.body)
 		}
 
-		last = resp.status
+		if want.code != "" && got != want.code {
+			return routeTiming{}, fmt.Errorf(
+				"%w: %s %s: error code %q, want %q, body %.256s",
+				errAccessAnswer, http.MethodGet, url, got, want.code,
+				string(resp.body[:min(len(resp.body), accessBodyPrefix)]),
+			)
+		}
+
+		last = routeTiming{p50: 0, status: resp.status, code: got}
 
 		if i >= accessWarmup {
 			samples = append(samples, ms(took))
 		}
 	}
 
-	return routeTiming{p50: p50(samples), status: last}, nil
+	last.p50 = p50(samples)
+
+	return last, nil
 }
 
-// statusIn reports whether status is one of want.
-func statusIn(status int, want []int) bool {
-	return slices.Contains(want, status)
+// accessBodyPrefix is the number of body bytes that an error message shows.
+const accessBodyPrefix = 256
+
+// errorCodeOf answers the errorCode of an error body. A body without one
+// answers "", which matches no expectation with a code: the check fails closed.
+func errorCodeOf(body []byte) string {
+	var answer struct {
+		ErrorCode string `json:"errorCode"`
+	}
+
+	if err := json.Unmarshal(body, &answer); err != nil {
+		return ""
+	}
+
+	return answer.ErrorCode
 }
 
 // accessPaths holds the two paths of one namespace.
@@ -106,15 +140,35 @@ func accessPathsOf(ns, id string) accessPaths {
 	}
 }
 
-// refusedStatuses answers the statuses of a route to a request that the list
-// refuses: the namespace read check answers 404, and the IP allowlist check
-// answers 403 on the routes that main now guards with it.
-func refusedStatuses() []int {
-	return []int{http.StatusNotFound, http.StatusForbidden}
+// okAnswer is the answer of a route to a request that the list allows.
+func okAnswer() expectation {
+	return expectation{status: http.StatusOK, code: ""}
 }
 
-// routeFn times one route on one server and answers its median and status.
-type routeFn func(base, path string, want []int) (routeTiming, error)
+// routeExpect holds the expected answer of each access route.
+type routeExpect struct {
+	runner expectation
+	jobs   expectation
+}
+
+// okRoutes are the expected answers of both routes when the list allows the
+// request.
+func okRoutes() routeExpect {
+	return routeExpect{runner: okAnswer(), jobs: okAnswer()}
+}
+
+// refusedRoutes are the expected answers of both routes to a request that the
+// list refuses. Each one is the answer that the server gives on main: the IP
+// allowlist check answers 403 with access.ip-not-allowed.
+func refusedRoutes() routeExpect {
+	return routeExpect{
+		runner: expectation{status: http.StatusForbidden, code: "access.ip-not-allowed"},
+		jobs:   expectation{status: http.StatusForbidden, code: "access.ip-not-allowed"},
+	}
+}
+
+// routeFn times one route on one server and answers its median and answer.
+type routeFn func(base, path string, want expectation) (routeTiming, error)
 
 // measureAccess times the runner route and the jobs route on the server
 // without IP allowlists, and on the server with them with no list on the
@@ -123,28 +177,26 @@ type routeFn func(base, path string, want []int) (routeTiming, error)
 // never locked out of the namespace it measures in.
 func (t *target) measureAccess(ctx context.Context, requests int) (AccessResult, error) {
 	srv := t.served
-	run := func(base, path string, want []int) (routeTiming, error) {
+	run := func(base, path string, want expectation) (routeTiming, error) {
 		return t.timeGet(ctx, base+path, requests, want)
 	}
 
-	ok := []int{http.StatusOK}
-
-	off, err := t.timeBoth(run, t.urls[0], accessPathsOf(t.ns, srv.jobID), ok)
+	off, err := t.timeBoth(run, t.urls[0], accessPathsOf(t.ns, srv.jobID), okRoutes())
 	if err != nil {
 		return AccessResult{}, err
 	}
 
-	noList, err := t.timeBoth(run, srv.gateURL, accessPathsOf(t.ns, srv.jobID), ok)
+	noList, err := t.timeBoth(run, srv.gateURL, accessPathsOf(t.ns, srv.jobID), okRoutes())
 	if err != nil {
 		return AccessResult{}, err
 	}
 
-	listed, err := t.timeBoth(run, srv.gateURL, accessPathsOf(srv.listNS, srv.listJobID), ok)
+	listed, err := t.timeBoth(run, srv.gateURL, accessPathsOf(srv.listNS, srv.listJobID), okRoutes())
 	if err != nil {
 		return AccessResult{}, err
 	}
 
-	refused, err := t.timeBoth(run, srv.gateURL, accessPathsOf(srv.denyNS, srv.denyJobID), refusedStatuses())
+	refused, err := t.timeBoth(run, srv.gateURL, accessPathsOf(srv.denyNS, srv.denyJobID), refusedRoutes())
 	if err != nil {
 		return AccessResult{}, err
 	}
@@ -168,13 +220,13 @@ type bothTimings struct {
 }
 
 // timeBoth times the runner route and the jobs route at base.
-func (t *target) timeBoth(run routeFn, base string, paths accessPaths, want []int) (bothTimings, error) {
-	runnerTiming, err := run(base, paths.runner, want)
+func (t *target) timeBoth(run routeFn, base string, paths accessPaths, want routeExpect) (bothTimings, error) {
+	runnerTiming, err := run(base, paths.runner, want.runner)
 	if err != nil {
 		return bothTimings{}, err
 	}
 
-	jobsTiming, err := run(base, paths.jobs, want)
+	jobsTiming, err := run(base, paths.jobs, want.jobs)
 	if err != nil {
 		return bothTimings{}, err
 	}
@@ -200,6 +252,7 @@ func accessRouteOf(path string, states routeStates) AccessRoute {
 		GateListP50Ms:    states.listed.p50,
 		GateRefusedP50Ms: states.refused.p50,
 		RefusedStatus:    states.refused.status,
+		RefusedCode:      states.refused.code,
 	}
 }
 
