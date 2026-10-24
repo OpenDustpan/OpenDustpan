@@ -332,13 +332,48 @@ func TestApprovalDefaultIfMatchCodes(t *testing.T) {
 		code string
 		msg  string
 	}{
-		{"not a number", gateCall{http.MethodPut, target, platformDefault, `abc`}, errcode.RequestIfMatchInvalid, ifMatchInvalidMessage},
-		{"quoted word", gateCall{http.MethodPut, target, platformDefault, `"zzz"`}, errcode.RequestIfMatchInvalid, ifMatchInvalidMessage},
-		{"zero version", gateCall{http.MethodPut, target, platformDefault, `"0"`}, errcode.RequestIfMatchInvalid, ifMatchInvalidMessage},
-		{"negative version", gateCall{http.MethodPut, target, platformDefault, `"-3"`}, errcode.RequestIfMatchInvalid, ifMatchInvalidMessage},
-		{"quoted empty", gateCall{http.MethodPut, target, platformDefault, `""`}, errcode.RequestIfMatchInvalid, ifMatchInvalidMessage},
-		{"delete not a number", gateCall{http.MethodDelete, target, "", `abc`}, errcode.RequestIfMatchInvalid, ifMatchInvalidMessage},
-		{"bad body, good header", gateCall{http.MethodPut, target, `not json`, `"1"`}, errcode.RequestBodyInvalid, "invalid JSON body"},
+		{
+			"not a number",
+			gateCall{http.MethodPut, target, platformDefault, `abc`},
+			errcode.RequestIfMatchInvalid,
+			ifMatchInvalidMessage,
+		},
+		{
+			"quoted word",
+			gateCall{http.MethodPut, target, platformDefault, `"zzz"`},
+			errcode.RequestIfMatchInvalid,
+			ifMatchInvalidMessage,
+		},
+		{
+			"zero version",
+			gateCall{http.MethodPut, target, platformDefault, `"0"`},
+			errcode.RequestIfMatchInvalid,
+			ifMatchInvalidMessage,
+		},
+		{
+			"negative version",
+			gateCall{http.MethodPut, target, platformDefault, `"-3"`},
+			errcode.RequestIfMatchInvalid,
+			ifMatchInvalidMessage,
+		},
+		{
+			"quoted empty",
+			gateCall{http.MethodPut, target, platformDefault, `""`},
+			errcode.RequestIfMatchInvalid,
+			ifMatchInvalidMessage,
+		},
+		{
+			"delete not a number",
+			gateCall{http.MethodDelete, target, "", `abc`},
+			errcode.RequestIfMatchInvalid,
+			ifMatchInvalidMessage,
+		},
+		{
+			"bad body, good header",
+			gateCall{http.MethodPut, target, `not json`, `"1"`},
+			errcode.RequestBodyInvalid,
+			"invalid JSON body",
+		},
 	}
 
 	for _, tt := range tests {
