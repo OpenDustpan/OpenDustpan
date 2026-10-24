@@ -13,6 +13,8 @@ import (
 	"time"
 
 	apiserver "opendustpan.org/opendustpan/internal/api/server"
+	"opendustpan.org/opendustpan/internal/errcode"
+	"opendustpan.org/opendustpan/internal/errcode/errcodetest"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/gate"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -306,6 +308,56 @@ func TestApprovalDefaultVersionPrecondition(t *testing.T) {
 		if got.Version != tt.version {
 			t.Fatalf("%s: stored version = %d, want %d", tt.name, got.Version, tt.version)
 		}
+	}
+}
+
+// TestApprovalDefaultIfMatchCodes proves that an If-Match header that is not
+// one version in quotes answers its own code, and that a bad body with a
+// good header still answers the body code.
+func TestApprovalDefaultIfMatchCodes(t *testing.T) {
+	t.Parallel()
+
+	_, h := newGateHandler(t, adminGates())
+	target := gateBase + "acme" + gateDefault
+
+	wantStatus(
+		t,
+		serveGate(t, h, gateCall{http.MethodPut, target, platformDefault, ""}),
+		http.StatusOK,
+	)
+
+	tests := []struct {
+		name string
+		call gateCall
+		code string
+	}{
+		{"not a number", gateCall{http.MethodPut, target, platformDefault, `abc`}, errcode.RequestIfMatchInvalid},
+		{"quoted word", gateCall{http.MethodPut, target, platformDefault, `"zzz"`}, errcode.RequestIfMatchInvalid},
+		{"zero version", gateCall{http.MethodPut, target, platformDefault, `"0"`}, errcode.RequestIfMatchInvalid},
+		{"negative version", gateCall{http.MethodPut, target, platformDefault, `"-3"`}, errcode.RequestIfMatchInvalid},
+		{"quoted empty", gateCall{http.MethodPut, target, platformDefault, `""`}, errcode.RequestIfMatchInvalid},
+		{"delete not a number", gateCall{http.MethodDelete, target, "", `abc`}, errcode.RequestIfMatchInvalid},
+		{"bad body, good header", gateCall{http.MethodPut, target, `not json`, `"1"`}, errcode.RequestBodyInvalid},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			rec := serveGate(t, h, tt.call)
+
+			wantStatus(t, rec, http.StatusBadRequest)
+			errcodetest.CheckAnswer(t, errcodetest.ShapeCamelCase, http.StatusBadRequest, rec.Body.Bytes(),
+				errcodetest.Want{Code: tt.code, Args: nil, RequestBody: nil})
+		})
+	}
+
+	var got defaultDoc
+
+	decodeGateJSON(t, serveGate(t, h, gateCall{http.MethodGet, target, "", ""}), &got)
+
+	if got.Version != 1 {
+		t.Fatalf("stored version = %d, want 1: a refused write changed the default", got.Version)
 	}
 }
 

@@ -7,6 +7,8 @@ import (
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/errcode"
+	"opendustpan.org/opendustpan/internal/errcode/errcodetest"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/forge"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -359,6 +361,42 @@ func TestGitHostConnectionConflicts(t *testing.T) {
 
 // TestGitHostConnectionTakesNothingThatTheOperatorOwns sends each field that
 // only the operator sets, straight to the create route.
+// TestGitHostIfMatchInvalidCodes proves that a bad If-Match header on the app
+// and on a connection answers the If-Match code.
+func TestGitHostIfMatchInvalidCodes(t *testing.T) {
+	t.Parallel()
+
+	e := newHostEnv(t, hostAllowAll())
+	e.register(t)
+
+	created := e.send(t, http.MethodPost, hostConnectionsPath, createBody("101"))
+	wantHost(t, created, http.StatusCreated)
+
+	conn := decodeHost[connectionDoc](t, created)
+
+	tests := []hostCall{
+		{
+			headers: map[string]string{"If-Match": "abc"},
+			method:  http.MethodPut, target: hostAppPath, body: hostAppBody(),
+		},
+		{
+			headers: map[string]string{"If-Match": `"0"`},
+			method:  http.MethodPut, target: hostAppPath, body: hostAppBody(),
+		},
+		{
+			headers: map[string]string{"If-Match": "abc"},
+			method:  http.MethodDelete, target: hostConnectionsPath + "/" + conn.ID, body: "",
+		},
+	}
+
+	for _, c := range tests {
+		r := e.do(t, c)
+		wantHost(t, r, http.StatusBadRequest)
+		errcodetest.CheckAnswer(t, errcodetest.ShapeCamelCase, http.StatusBadRequest, []byte(r.body),
+			errcodetest.Want{Code: errcode.RequestIfMatchInvalid, Args: nil, RequestBody: nil})
+	}
+}
+
 func TestGitHostConnectionTakesNothingThatTheOperatorOwns(t *testing.T) {
 	t.Parallel()
 

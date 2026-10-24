@@ -166,7 +166,8 @@ audit log. A read works with an access token.
 
 | Status | Cause |
 | --- | --- |
-| 400 | The body is not one JSON object, holds an unknown field, or is larger than 64 KiB. The `If-Match` value is not one version. |
+| 400 | The body is not one JSON object, holds an unknown field, or is larger than 64 KiB. The error code is `request.body-invalid`. |
+| 400 | The `If-Match` value is not one version in quotes, for example `abc` or `"0"`. The error code is `request.if-match-invalid`. |
 | 401 | The request has no valid credential, or a console session must sign in again. |
 | 403 | The caller lacks the action on this namespace, or a change came with an access token. |
 | 404 | The namespace, the default or the rule does not exist. |
