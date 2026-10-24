@@ -20,9 +20,8 @@ var errNoProject = errors.New("stack name holds no project")
 // StateID returns the ID that outputshare.State.ID holds for the checkpoint
 // of the stack id at version: the stable ID of the stack, a colon, and the
 // version in decimal. The version alone would repeat in every stack, so the ID
-// names the stack too, and the ID of a checkpoint of another stack never
-// matches. The reads of the checkpoint go by the name of the stack, so
-// OutputStates looks the stack up again after them.
+// names the stack too. The reads of the checkpoint go by the name of the stack,
+// so OutputStates looks the stack up again after them.
 func StateID(id ID, version int64) string {
 	return id.String() + ":" + strconv.FormatInt(version, 10)
 }
@@ -114,7 +113,10 @@ func (s *OutputStates) Outputs(
 // name. A delete and a create of the same name between the lookup and the read
 // leave a stack with another stable ID, and the read then answered the
 // checkpoint of that stack. The second lookup gives ErrUnknownProducer in that
-// case, as the first lookup does for a stable ID of another stack.
+// case, as the first lookup does for a stable ID of another stack. Two lookups
+// cannot detect a delete and a restore of the same stable ID inside one read,
+// because both lookups then see the same ID. Only a read keyed by the stable ID
+// would close that case.
 func (s *OutputStates) recheck(ctx context.Context, u identity.Object) error {
 	_, _, err := s.lookup(ctx, u)
 
