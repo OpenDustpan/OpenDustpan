@@ -509,3 +509,28 @@ func kindName(k errcode.Kind) string {
 		return "unknown"
 	}
 }
+
+// TestArgumentNamesHaveOneForm checks the names of the arguments over the
+// whole catalog: a name has one kind in every code, and the name of a time
+// ends in At, or is since. So a client formats an argument by its name, and
+// one concept does not get two names, such as first and firstAt.
+func TestArgumentNamesHaveOneForm(t *testing.T) {
+	t.Parallel()
+
+	kinds := map[string]errcode.Kind{}
+	codes := map[string]string{}
+
+	for _, spec := range errcode.Catalog() {
+		for _, arg := range spec.Args {
+			if kind, seen := kinds[arg.Name]; seen && kind != arg.Kind {
+				t.Errorf("argument %q of %s has another kind than in %s", arg.Name, spec.Code, codes[arg.Name])
+			}
+
+			kinds[arg.Name], codes[arg.Name] = arg.Kind, spec.Code
+
+			if arg.Kind == errcode.KindTime && arg.Name != "since" && !strings.HasSuffix(arg.Name, "At") {
+				t.Errorf("time argument %q of %s: end the name in At", arg.Name, spec.Code)
+			}
+		}
+	}
+}

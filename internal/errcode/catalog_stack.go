@@ -26,7 +26,7 @@ const (
 	// hold.
 	StackResourceNotFound = "stack.resource-not-found"
 	// StackRevealPathTooLong is a reveal request whose value path is longer
-	// than the limit.
+	// than maxBytes bytes.
 	StackRevealPathTooLong = "stack.reveal-path-too-long"
 )
 
@@ -47,8 +47,8 @@ func stackSpecs() []Spec {
 		{Code: StackNoState, Meaning: "the stack has no state", Args: nil},
 		{
 			Code:    StackNoStateAtTime,
-			Meaning: "the stack has no state at the time of the request; first is the time of its first state",
-			Args:    []Arg{{Name: "first", Kind: KindTime}},
+			Meaning: "the stack has no state at the time of the request; firstAt is the time of its first state",
+			Args:    []Arg{{Name: "firstAt", Kind: KindTime}},
 		},
 		{Code: StackNotFound, Meaning: "the stack does not exist", Args: nil},
 		{
@@ -59,8 +59,8 @@ func stackSpecs() []Spec {
 		{Code: StackResourceNotFound, Meaning: "the state of the stack has no such resource", Args: nil},
 		{
 			Code:    StackRevealPathTooLong,
-			Meaning: "the value path of the reveal request is longer than the limit, in bytes",
-			Args:    []Arg{{Name: "limit", Kind: KindQuantity}},
+			Meaning: "the value path of the reveal request is longer than maxBytes bytes",
+			Args:    []Arg{{Name: "maxBytes", Kind: KindQuantity}},
 		},
 	}
 }
