@@ -1,10 +1,7 @@
 package backup
 
 import (
-	"bytes"
 	"context"
-	"crypto/md5" //nolint:gosec // The manifest records MD5 per ADR 30, for integrity, not security.
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -1321,9 +1318,9 @@ func (s *RestoreService) copyBlob(ctx context.Context, ref ManifestBlob) error {
 // verifyLiveBlob checks that the live store already holds ref with the size
 // and checksum of the manifest. It writes nothing.
 func (s *RestoreService) verifyLiveBlob(ctx context.Context, ref ManifestBlob) error {
-	wantMD5, err := hex.DecodeString(ref.MD5)
-	if err != nil || len(wantMD5) != md5.Size {
-		return fmt.Errorf("%w: blob %q MD5 %q", ErrCorrupt, ref.Key, ref.MD5)
+	check, err := newObjectCheck(ref.Key, blobWant(ref))
+	if err != nil {
+		return err
 	}
 
 	key, err := blob.ParseKey(ref.Key)
@@ -1336,9 +1333,7 @@ func (s *RestoreService) verifyLiveBlob(ctx context.Context, ref ManifestBlob) e
 		return fmt.Errorf("read live blob %q: %w", ref.Key, err)
 	}
 
-	counter := &md5SizeWriter{hash: md5.New(), size: 0} //nolint:gosec // The manifest records MD5, for integrity.
-
-	_, copyErr := io.Copy(io.Discard, io.TeeReader(reader, counter))
+	_, copyErr := io.Copy(check, reader)
 	closeErr := reader.Close()
 
 	if copyErr != nil {
@@ -1349,9 +1344,8 @@ func (s *RestoreService) verifyLiveBlob(ctx context.Context, ref ManifestBlob) e
 		return fmt.Errorf("close live blob %q: %w", ref.Key, closeErr)
 	}
 
-	if counter.size != ref.Size || !bytes.Equal(counter.hash.Sum(nil), wantMD5) {
-		return fmt.Errorf("%w: live blob %q holds %d bytes, the manifest names %d",
-			ErrCorrupt, ref.Key, counter.size, ref.Size)
+	if verifyErr := check.verify(ref.Key); verifyErr != nil {
+		return fmt.Errorf("live blob: %w", verifyErr)
 	}
 
 	return nil
