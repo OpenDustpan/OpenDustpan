@@ -21,6 +21,13 @@ import (
 // (a retry with the same content), or writes the row with the next arrival number
 // and one sequence row for each sequence ID.
 func (s *Store) PutJournalRow(ctx context.Context, row stack.JournalRow, fence namespace.Fence) (bool, error) {
+	// Defense in depth: the journal writer and the batch reader refuse these
+	// sequence IDs too. This check stays so that a new caller cannot store a
+	// row with no sequence ID, and it does not rely on the writer or the reader.
+	if err := stack.CheckJournalSequenceIDs(row.SequenceIDs); err != nil {
+		return false, err
+	}
+
 	retried := false
 	err := s.inFencedTx(ctx, fence, func(q *db.Queries) error {
 		stackID, err := stackIDFor(ctx, q, row.Ref)
