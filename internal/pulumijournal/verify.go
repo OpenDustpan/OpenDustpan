@@ -66,10 +66,12 @@ type BatchSummary = struct {
 // negotiated version, and returns its summary. Verify runs the checks of
 // VerifyBatch on the entries of that one decode, so the store checks the
 // batch against the stored state in its transaction without a second decode.
-// ReadBatch refuses a sequence ID that appears twice with ErrSequenceID. On a
-// refusal, the summary holds every sequence ID that a plain JSON read of the
-// body finds, also one that is not valid or appears twice, so the record of
-// the refusal names them. Verify is nil.
+// ReadBatch refuses a sequence ID that appears twice with ErrSequenceID. A body
+// with no entries is valid, as DecodeEntries reads it: its summary has no
+// entries and a Verify that accepts it. On a refusal, the summary holds every
+// sequence ID that a plain JSON read of the body finds, also one that is not
+// valid or appears twice, so the record of the refusal names them. Verify is
+// nil.
 func (Verifier) ReadBatch(body []byte, version int) (BatchSummary, error) {
 	var (
 		entries []JournalEntry
