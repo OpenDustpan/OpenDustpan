@@ -24,14 +24,16 @@ const preferencesPath = "/api/dustpan/v1/me/preferences"
 // and the CORS allowlist together guard against a change from another site.
 const mergePatchType = "application/merge-patch+json"
 
-// codedError is an error with its status, its stable machine code and the
-// arguments of the code. The code has the form <area>.<reason>. An argument
-// names a field of the document and never holds a value from the request.
+// codedError is an error with its status, its code of the catalog and the
+// values of the arguments of the code. The code has the form <area>.<reason>.
+// writeError builds the answer with errcode.New, so the catalog checks the
+// code and its arguments. An argument names a field of the document and never
+// holds a value from the request.
 type codedError struct {
 	status  int
 	code    string
 	message string
-	args    map[string]any
+	args    []errcode.Value
 }
 
 func (e *codedError) Error() string { return e.message }
@@ -49,31 +51,31 @@ type codedResponse struct {
 // The errors of the preferences routes that no domain sentinel carries.
 var (
 	errPreferencesUnavailable = &codedError{
-		status: http.StatusNotImplemented, code: "preferences.unavailable", args: nil,
+		status: http.StatusNotImplemented, code: errcode.PreferencesUnavailable, args: nil,
 		message: "the store of this server keeps no preferences",
 	}
 	errPreferencesNotPerson = &codedError{
-		status: http.StatusForbidden, code: "preferences.person-required", args: nil,
+		status: http.StatusForbidden, code: errcode.PreferencesPersonRequired, args: nil,
 		message: "preferences belong to a person: sign in as a person to read or change them",
 	}
 	errPreferencesPersonGone = &codedError{
-		status: http.StatusNotFound, code: "preferences.person-not-found", args: nil,
+		status: http.StatusNotFound, code: errcode.PreferencesPersonNotFound, args: nil,
 		message: "the person of this request does not exist",
 	}
 	errPreferencesMediaType = &codedError{
-		status: http.StatusUnsupportedMediaType, code: "preferences.media-type-unsupported", args: nil,
+		status: http.StatusUnsupportedMediaType, code: errcode.PreferencesMediaTypeUnsupported, args: nil,
 		message: "content type must be " + mergePatchType,
 	}
 	errPreferencesTooLarge = &codedError{
-		status: http.StatusRequestEntityTooLarge, code: "preferences.body-too-large", args: nil,
+		status: http.StatusRequestEntityTooLarge, code: errcode.PreferencesBodyTooLarge, args: nil,
 		message: preferences.ErrBodyTooLarge.Error(),
 	}
 	errPreferencesBody = &codedError{
-		status: http.StatusBadRequest, code: "preferences.body-invalid", args: nil,
+		status: http.StatusBadRequest, code: errcode.PreferencesBodyInvalid, args: nil,
 		message: preferences.ErrInvalidBody.Error(),
 	}
 	errPreferencesUnknownField = &codedError{
-		status: http.StatusBadRequest, code: "preferences.field-unknown", args: nil,
+		status: http.StatusBadRequest, code: errcode.PreferencesFieldUnknown, args: nil,
 		message: preferences.ErrUnknownField.Error(),
 	}
 	errPreferencesIfMatch = &codedError{
@@ -89,8 +91,8 @@ var (
 		message: "If-Match holds a weak tag, which never matches: send the ETag of a read as it is",
 	}
 	errPreferencesReadOnly = &codedError{
-		status: http.StatusBadRequest, code: "preferences.field-read-only",
-		args:    map[string]any{"field": preferences.FieldUpdatedAt},
+		status: http.StatusBadRequest, code: errcode.PreferencesFieldReadOnly,
+		args:    []errcode.Value{errcode.Identifier("field", preferences.FieldUpdatedAt)},
 		message: preferences.ErrReadOnlyField.Error(),
 	}
 )
@@ -105,8 +107,8 @@ func preferencesError(err error) error {
 	switch {
 	case errors.As(err, &field):
 		return &codedError{
-			status: http.StatusBadRequest, code: "preferences.field-invalid",
-			args: map[string]any{"field": field.Field}, message: field.Error(),
+			status: http.StatusBadRequest, code: errcode.PreferencesFieldInvalid,
+			args: []errcode.Value{errcode.Identifier("field", field.Field)}, message: field.Error(),
 		}
 	case errors.Is(err, preferences.ErrBodyTooLarge):
 		return errPreferencesTooLarge
