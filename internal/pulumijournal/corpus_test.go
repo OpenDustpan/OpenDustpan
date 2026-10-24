@@ -5,9 +5,11 @@ import (
 	"cmp"
 	"context"
 	"encoding/json/v2"
+	"fmt"
 	"io"
 	"os"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -53,7 +55,42 @@ func TestReplayerConformance(t *testing.T) {
 
 	replayertest.Run(t, func() stack.JournalReplayer {
 		return pulumijournal.NewReplayer(corpusNow, cliVersion)
-	}, openCorpus(t).FS())
+	}, openCorpus(t).FS(), newStatesOverBound())
+}
+
+// newStatesOverBound returns an update whose new states pass
+// MaxNewStateBytesPerUpdate with the bound of the package: five success
+// entries, each with a state of 7 MiB, on a base with no resources.
+func newStatesOverBound() replayertest.Case {
+	const (
+		states     = 5
+		stateBytes = 7 << 20
+	)
+
+	blob := strings.Repeat("a", stateBytes)
+
+	var b strings.Builder
+
+	b.WriteString(`{"entries":[`)
+
+	for i := range states {
+		if i > 0 {
+			b.WriteString(",")
+		}
+
+		fmt.Fprintf(&b, `{"version":1,"kind":1,"sequenceID":%d,"operationID":%d,"removeOld":null,"removeNew":null,`+
+			`"state":{"urn":"urn:pulumi:dev::p::t:index:R::r%d","custom":true,"type":"t:index:R","id":"r%d",`+
+			`"outputs":{"blob":%q}}}`, i+1, i+1, i, i, blob)
+	}
+
+	b.WriteString(`]}`)
+
+	return replayertest.Case{
+		Name:    "new states over the bound",
+		Base:    []byte(`{"resources":[]}`),
+		Batches: [][]byte{[]byte(b.String())},
+		Export:  nil,
+	}
 }
 
 // corpusEntries decodes each batch body in order and returns the entries in
