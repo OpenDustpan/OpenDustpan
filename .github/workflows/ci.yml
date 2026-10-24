@@ -78,7 +78,7 @@ jobs:
         run: sqlc diff
       - uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
         with:
-          version: v2.15.0
+          version: v2.14.0
           skip-cache: ${{ startsWith(runner.name, 'github-actions-runner') }}
       # The journal recording build needs a second lint run, because some
       # files are left out of that build and one run cannot hold both. The
@@ -90,7 +90,7 @@ jobs:
       # unpack an old 145 MB copy over the cache on the disk.
       - uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
         with:
-          version: v2.15.0
+          version: v2.14.0
           install-only: true
           skip-cache: true
       - name: Lint the journal recording build
