@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/api/apidesc"
+	"opendustpan.org/opendustpan/internal/api/route"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/objectcontext"
 )
@@ -134,29 +135,29 @@ type entryWire struct {
 func (h *Handler) Operations() []apidesc.Operation {
 	rows := make([]apidesc.Row, 0, len(h.routes))
 
-	for _, route := range h.routes {
+	for _, rt := range h.routes {
 		// The wrapper reads the namespace of the path before the reads on the
 		// object, for each route that is not public.
 		var namespaceActions []string
 
-		actions := make([]string, 0, len(route.Reads)+len(route.Actions)+1)
+		actions := make([]string, 0, len(rt.Reads)+len(rt.Actions)+1)
 
-		if route.Scope != ScopePublic {
+		if rt.Scope != route.ScopePublic {
 			namespaceActions = []string{string(identity.ActionNamespaceRead)}
 			actions = append(actions, namespaceActions...)
 		}
 
-		for _, action := range route.Reads {
+		for _, action := range rt.Reads {
 			actions = append(actions, string(action))
 		}
 
-		for _, action := range route.Actions {
+		for _, action := range rt.Actions {
 			actions = append(actions, string(action))
 		}
 
 		rows = append(rows, apidesc.Row{
-			Method: route.Method, Path: route.Path, Actions: actions, NamespaceActions: namespaceActions,
-			Public: route.Scope == ScopePublic, IdempotencyKey: false,
+			Method: rt.Method, Path: rt.Path, Actions: actions, NamespaceActions: namespaceActions,
+			Public: rt.Scope == route.ScopePublic, IdempotencyKey: false,
 		})
 	}
 

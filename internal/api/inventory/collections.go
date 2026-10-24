@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/api/refusal"
+	"opendustpan.org/opendustpan/internal/api/route"
 	"opendustpan.org/opendustpan/internal/clientip"
 	"opendustpan.org/opendustpan/internal/requestid"
 	"opendustpan.org/opendustpan/internal/sessionauth"
@@ -46,12 +47,12 @@ func (h *Handler) collectionRoutes() []Route {
 	return append(h.collectionPathRoutes(), Route{
 		Method:           http.MethodPut,
 		Path:             "/api/inventory/unit-collection",
-		Scope:            ScopeAuthorized,
+		Scope:            route.ScopeAuthorized,
 		Actions:          []identity.Action{identity.ActionUnitMove},
 		Resolve:          resolveUnitQuery,
+		Serve:            h.moveUnit,
 		NamespaceActions: nil,
 		DeniedAsNotFound: false,
-		Serve:            h.moveUnit,
 	})
 }
 
@@ -62,42 +63,42 @@ func (h *Handler) collectionPathRoutes() []Route {
 		{
 			Method:           http.MethodGet,
 			Path:             v1Prefix + "/namespaces/{namespace}/collections",
-			Scope:            ScopeAuthorized,
+			Scope:            route.ScopeAuthorized,
 			Actions:          []identity.Action{identity.ActionCollectionRead},
 			Resolve:          resolveCollectionNamespace,
+			Serve:            h.listCollections,
 			NamespaceActions: nil,
 			DeniedAsNotFound: false,
-			Serve:            h.listCollections,
 		},
 		{
 			Method:           http.MethodPost,
 			Path:             v1Prefix + "/namespaces/{namespace}/collections",
-			Scope:            ScopeAuthorized,
+			Scope:            route.ScopeAuthorized,
 			Actions:          []identity.Action{identity.ActionCollectionCreate},
 			Resolve:          resolveCollectionNamespace,
+			Serve:            h.createCollection,
 			NamespaceActions: nil,
 			DeniedAsNotFound: false,
-			Serve:            h.createCollection,
 		},
 		{
 			Method:           http.MethodGet,
 			Path:             v1Prefix + "/namespaces/{namespace}/collections/{collection}",
-			Scope:            ScopeAuthorized,
+			Scope:            route.ScopeAuthorized,
 			Actions:          []identity.Action{identity.ActionCollectionRead},
 			Resolve:          resolveCollectionPath,
+			Serve:            h.readCollection,
 			NamespaceActions: nil,
 			DeniedAsNotFound: false,
-			Serve:            h.readCollection,
 		},
 		{
 			Method:           http.MethodDelete,
 			Path:             v1Prefix + "/namespaces/{namespace}/collections/{collection}",
-			Scope:            ScopeAuthorized,
+			Scope:            route.ScopeAuthorized,
 			Actions:          []identity.Action{identity.ActionCollectionDelete},
 			Resolve:          resolveCollectionPath,
+			Serve:            h.deleteCollection,
 			NamespaceActions: nil,
 			DeniedAsNotFound: false,
-			Serve:            h.deleteCollection,
 		},
 	}
 }

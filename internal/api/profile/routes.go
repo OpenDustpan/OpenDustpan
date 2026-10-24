@@ -6,43 +6,29 @@ import (
 
 	"opendustpan.org/opendustpan/internal/api/idempotent"
 	"opendustpan.org/opendustpan/internal/api/problem"
-	"opendustpan.org/opendustpan/internal/api/routekit"
+	"opendustpan.org/opendustpan/internal/api/route"
 	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
 )
 
-// Scope names how a route is protected. Every route declares one explicitly
-// and the route test enforces the meaning of each value.
-type Scope int
-
-const (
-	// ScopeAuthorized needs a signed-in principal and the Authorizer to allow
-	// every declared action on the resolved object before the handler runs.
-	// It is the only scope: this API has no route that serves without
-	// sign-in, so its description marks no route public.
-	ScopeAuthorized Scope = iota + 1
-)
-
-// ObjectResolver returns the authorization object for a request.
-type ObjectResolver func(w http.ResponseWriter, r *http.Request) (identity.Object, error)
-
 // RouteHandler serves a route after the registration wrapper has
 // authenticated and authorized it.
-type RouteHandler func(w http.ResponseWriter, r *http.Request, p identity.Principal, obj identity.Object)
+type RouteHandler = func(w http.ResponseWriter, r *http.Request, p identity.Principal, obj identity.Object)
 
-// Route declares one endpoint: its ServeMux pattern, how it is protected,
-// the actions it needs and how to serve it.
+// Route declares one endpoint: the shared row (its ServeMux pattern, its
+// scope, the actions it needs, its resolver and its handler) and the fields
+// of the Idempotency-Key. Every route has the scope route.ScopeAuthorized:
+// this API has no route that serves without sign-in, so its description
+// marks no route public.
+//
+// The Actions of the row list the actions that the wrapper authorizes before
+// the handler runs. A handler can need more: a read with showSecrets also
+// needs profile:open, and a save that changes where secrets go also needs
+// profile:open. The service checks those with the same authorizer.
 type Route struct {
-	Method string
-	Path   string
-	Scope  Scope
-	// Actions lists the actions the wrapper authorizes before the handler
-	// runs. A handler can need more: a read with showSecrets also needs
-	// profile:open, and a save that changes where secrets go also needs
-	// profile:open. The service checks those with the same authorizer.
-	Actions []identity.Action
-	Resolve ObjectResolver
+	route.Route[identity.Object]
+
 	// IdempotencyKey says that the route takes the Idempotency-Key header.
 	// A request with the header to a route that does not take it answers
 	// 400, so the server never ignores a key without an error.
@@ -50,7 +36,6 @@ type Route struct {
 	// Answer makes the answer of a route that takes the key from the result
 	// of its write. It is nil for a route that does not take the key.
 	Answer func(obj identity.Object) answerFunc
-	Serve  RouteHandler
 }
 
 const (
@@ -85,8 +70,9 @@ func (h *Handler) buildRoutes() []Route {
 // Idempotency-Key header.
 func (*Handler) readRoute(path string, actions []identity.Action, serve RouteHandler) Route {
 	return Route{
-		Method: http.MethodGet, Path: path, Scope: ScopeAuthorized, Actions: actions, Resolve: resolveNamespace,
-		IdempotencyKey: false, Answer: nil, Serve: serve,
+		Method: http.MethodGet, Path: path, Scope: route.ScopeAuthorized, Actions: actions,
+		Resolve: resolveNamespace, Serve: serve,
+		IdempotencyKey: false, Answer: nil,
 	}
 }
 
@@ -96,17 +82,18 @@ func (*Handler) keyedRoute(
 	method, path string, actions []identity.Action, serve RouteHandler, answer func(identity.Object) answerFunc,
 ) Route {
 	return Route{
-		Method: method, Path: path, Scope: ScopeAuthorized, Actions: actions, Resolve: resolveNamespace,
-		IdempotencyKey: true, Answer: answer, Serve: serve,
+		Method: method, Path: path, Scope: route.ScopeAuthorized, Actions: actions,
+		Resolve: resolveNamespace, Serve: serve,
+		IdempotencyKey: true, Answer: answer,
 	}
 }
 
 // Routes returns a copy of the route table.
 func (h *Handler) Routes() []Route {
 	out := make([]Route, len(h.routes))
-	for i, route := range h.routes {
-		out[i] = route
-		out[i].Actions = append([]identity.Action(nil), route.Actions...)
+	for i, rt := range h.routes {
+		out[i] = rt
+		out[i].Actions = append([]identity.Action(nil), rt.Actions...)
 	}
 
 	return out
@@ -132,57 +119,38 @@ func resolveNamespace(_ http.ResponseWriter, r *http.Request) (identity.Object, 
 
 // kit returns the route steps that this API shares with the other
 // tool-neutral APIs.
-func (h *Handler) kit() routekit.Guard {
-	return routekit.Guard{Tokens: h.authn, Sessions: h.sessions, Refusals: h.guard}
+func (h *Handler) kit() route.Guard {
+	return route.Guard{Tokens: h.authn, Sessions: h.sessions, Refusals: h.guard}
 }
 
-// enforce wraps one route table row. It authenticates, resolves the object,
-// authorizes every declared action on it, and only then runs the handler.
-func (h *Handler) enforce(route Route) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		ctx := r.Context()
-
-		p, caller, err := h.kit().Authenticate(r)
-		if err != nil {
-			h.writeError(ctx, w, err)
-
-			return
-		}
-
-		ctx = routekit.WithCaller(ctx, caller)
-		r = r.WithContext(ctx)
-
-		obj, err := route.Resolve(w, r)
-		if err != nil {
-			h.writeError(ctx, w, err)
+// enforce wraps one route table row in the shared wrapper: it
+// authenticates, resolves the object, authorizes every declared action on it,
+// and only then runs the handler. A mutating request with the
+// Idempotency-Key header goes to the keyed path after the same checks, so a
+// caller who lost the action gets 403 and never the stored answer.
+func (h *Handler) enforce(rt Route) http.HandlerFunc {
+	steps := route.StepsOf(h.kit(), rt.Route, route.Self)
+	steps.Serve = func(w http.ResponseWriter, r *http.Request, p identity.Principal, obj identity.Object) {
+		if route.Mutating(r.Method) && idempotent.Present(r) {
+			h.serveKeyed(w, r, rt, p, obj)
 
 			return
 		}
 
-		if err = h.kit().AuthorizeAll(r, p, obj, route.Actions); err != nil {
-			h.writeError(ctx, w, err)
-
-			return
-		}
-
-		if routekit.Mutating(r.Method) && idempotent.Present(r) {
-			h.serveKeyed(w, r, route, p, obj)
-
-			return
-		}
-
-		route.Serve(w, r, p, obj)
+		rt.Serve(w, r, p, obj)
 	}
+
+	return route.Enforce(h.kit(), h.writeError, steps)
 }
 
 // serveKeyed serves a mutating request that has the Idempotency-Key header.
 // The caller has authorized it: a replay never skips the check of the action.
 func (h *Handler) serveKeyed(
-	w http.ResponseWriter, r *http.Request, route Route, p identity.Principal, obj identity.Object,
+	w http.ResponseWriter, r *http.Request, rt Route, p identity.Principal, obj identity.Object,
 ) {
 	ctx := r.Context()
 
-	if !route.IdempotencyKey || h.idem == nil {
+	if !rt.IdempotencyKey || h.idem == nil {
 		h.writeError(ctx, w, errIdempotencyKey)
 
 		return
@@ -190,10 +158,10 @@ func (h *Handler) serveKeyed(
 
 	err := h.idem.Handle(w, r, idempotent.Call{
 		Principal:    p.Subject,
-		Build:        route.Answer(obj),
+		Build:        rt.Answer(obj),
 		SecretAnswer: nil,
 		Required:     false,
-		Serve:        func(w http.ResponseWriter, r *http.Request) { route.Serve(w, r, p, obj) },
+		Serve:        func(w http.ResponseWriter, r *http.Request) { rt.Serve(w, r, p, obj) },
 	})
 	if err != nil {
 		h.writeError(ctx, w, err)

@@ -86,15 +86,15 @@ var (
 func (h *Handler) Operations() []apidesc.Operation {
 	rows := make([]apidesc.Row, 0, len(h.routes))
 
-	for _, route := range h.routes {
-		actions := make([]string, 0, len(route.Actions))
-		for _, action := range route.Actions {
+	for _, rt := range h.routes {
+		actions := make([]string, 0, len(rt.Actions))
+		for _, action := range rt.Actions {
 			actions = append(actions, string(action))
 		}
 
 		rows = append(rows, apidesc.Row{
-			Method: route.Method, Path: route.Path, Actions: actions, NamespaceActions: nil,
-			Public: false, IdempotencyKey: route.IdempotencyKey,
+			Method: rt.Method, Path: rt.Path, Actions: actions, NamespaceActions: nil,
+			Public: false, IdempotencyKey: rt.IdempotencyKey,
 		})
 	}
 

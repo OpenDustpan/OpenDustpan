@@ -3,7 +3,7 @@ package profile_test
 import (
 	"testing"
 
-	apiprofile "opendustpan.org/opendustpan/internal/api/profile"
+	"opendustpan.org/opendustpan/internal/api/route"
 )
 
 // TestNoRouteIsPublic proves that the description of this API matches what
@@ -13,9 +13,9 @@ func TestNoRouteIsPublic(t *testing.T) {
 
 	f := newFixture(t)
 
-	for _, route := range f.handler.Routes() {
-		if route.Scope != apiprofile.ScopeAuthorized {
-			t.Errorf("route %s %s has the scope %d, want ScopeAuthorized", route.Method, route.Path, route.Scope)
+	for _, rt := range f.handler.Routes() {
+		if rt.Scope != route.ScopeAuthorized {
+			t.Errorf("route %s %s has the scope %d, want ScopeAuthorized", rt.Method, rt.Path, rt.Scope)
 		}
 	}
 

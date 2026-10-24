@@ -1,14 +1,16 @@
-// Package routekit holds the request steps that every tool-neutral API runs
-// before a handler: the authentication of the credential, the authorization
-// of each declared action at the point of use, the strict JSON body reader,
-// and the ServeMux that records each pattern for the route test. Each API
-// keeps its route table, its resolvers and the order of its own checks.
-package routekit
+// Package route holds the route table row and the enforcement wrapper that
+// the HTTP APIs share: the authentication of the credential, the
+// authorization of each declared action at the point of use, the fixed order
+// of these steps, the strict JSON body reader, and the ServeMux that records
+// each pattern for the route test. Each API keeps its route table, its
+// resolvers, and the authorization rules that only it has.
+package route
 
 import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -89,16 +91,26 @@ func WithCaller(ctx context.Context, caller *sessionauth.Caller) context.Context
 	})
 }
 
+// errNoAction is the refusal of an authorization with no action to check.
+var errNoAction = errors.New("the route declares no action to authorize")
+
 // AuthorizeAll authorizes each action on obj for p, in order, at the point of
 // use, and returns the first refusal. The recorder writes the refusal to the
-// audit log. A route with no action passes; the route test refuses such a
-// route.
+// audit log. An empty list is refused with errNoAction, an error that no class
+// knows, so the request answers 500.
 func (g Guard) AuthorizeAll(
 	r *http.Request,
 	p identity.Principal,
 	obj identity.Object,
 	actions []identity.Action,
 ) error {
+	// Defense in depth: Enforce and the route test of each API refuse a row
+	// with no action too; this check stays so that a new caller with an empty
+	// list never passes without a check.
+	if len(actions) == 0 {
+		return errNoAction
+	}
+
 	for _, action := range actions {
 		if err := g.Refusals.Authorize(r.Context(), r, p, action, obj); err != nil {
 			return fmt.Errorf("authorize %s: %w", action, err)
