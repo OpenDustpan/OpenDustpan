@@ -100,8 +100,9 @@ When the version is not the current one, the server answers 412 and changes
 nothing. It writes no audit entry. Use this to not overwrite a change that
 another device made after your read. A request with no `If-Match` header
 always applies. `If-Match: *` also always applies. A weak tag, for example
-`W/"5"`, never matches, so it answers 412. Any other value that is not one
-version in quotes answers 400.
+`W/"5"`, never matches, so it answers 412. An empty `If-Match` header, two
+`If-Match` headers and any other value that is not one version in quotes
+answer 400.
 
 ```sh
 curl -i "$SERVER/api/dustpan/v1/me/preferences" -H "Authorization: Bearer $TOKEN"
@@ -133,7 +134,7 @@ A client selects its text from `errorCode`. An error of a field has
 | 400 | `preferences.field-unknown` | The body has a field that the document does not have |
 | 400 | `preferences.field-read-only` | The body has `updatedAt` |
 | 400 | `preferences.field-invalid` | A value is not allowed. `errorArgs.field` names the field. |
-| 400 | `preferences.if-match-invalid` | `If-Match` is not one version in quotes, or `*` |
+| 400 | `preferences.if-match-invalid` | `If-Match` is empty, is sent twice, or is not one version in quotes or `*` |
 | 401 | | No valid token |
 | 403 | `preferences.person-required` | The caller is not a person |
 | 403 | `access.denied` | The caller lacks the action |
