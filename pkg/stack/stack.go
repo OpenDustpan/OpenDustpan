@@ -225,8 +225,13 @@ type Store interface {
 	// RenameStack changes the stack name of oldRef to newName if fence matches
 	// the namespace's current failover version. The stack ID and every child
 	// row stay with the stack. It returns ErrNotFound for a missing stack,
-	// ErrAlreadyExists for a taken name, namespace.ErrNotFound for a missing
-	// namespace or namespace.ErrFenced for a stale fence.
+	// ErrAlreadyExists for a taken name, ErrUpdateConflict while a mutating
+	// update of the stack runs (a *UpdateConflictError that names that
+	// update), namespace.ErrNotFound for a missing namespace or
+	// namespace.ErrFenced for a stale fence. The adapter checks for the running
+	// update in the transaction of the rename, after it locks the stack, so an
+	// update that starts at the same time cannot run under a name that no
+	// stack has.
 	RenameStack(ctx context.Context, oldRef Ref, newName Name, fence namespace.Fence) error
 }
 
@@ -586,8 +591,9 @@ func (s *Service) UpdateTags(
 // Rename changes the stack name of oldRef to newName and returns the renamed
 // stack. The stack ID stays the same. The write is fenced on the namespace's
 // failover version and only allowed in its home region. It returns
-// ErrUpdateConflict, matching manuallock.ErrLocked, while a manual lock covers
-// the stack.
+// ErrUpdateConflict while a mutating update of the stack runs (a
+// *UpdateConflictError that names that update), and ErrUpdateConflict,
+// matching manuallock.ErrLocked, while a manual lock covers the stack.
 func (s *Service) Rename(ctx context.Context, oldRef Ref, newName Name) (Stack, error) {
 	ns, err := s.namespaces.WritableHere(ctx, oldRef.Namespace)
 	if err != nil {
