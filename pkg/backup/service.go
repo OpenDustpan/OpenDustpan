@@ -1412,9 +1412,18 @@ func parseManifest(id ID, data []byte) (Manifest, error) {
 	}
 
 	// The descriptors name the objects that Check, restore and the key peek
-	// read. Check their names here, before any object is opened. The row counts
-	// are checked when the data is staged, in both dialects.
+	// read. Check their names here, before any object is opened. The rows of
+	// each table file are counted again when the data is staged, in both
+	// dialects.
 	if _, err := indexPortableDescriptors(manifest.SQLFiles); err != nil {
+		return Manifest{}, fmt.Errorf("backup %s has a corrupt manifest: %w", id, err)
+	}
+
+	// Defense in depth: staging counts the rows that it loads and compares
+	// them with the row counts. This check stays so that backup check, which
+	// loads nothing, refuses a manifest whose totals do not match its table
+	// files, and so that a restore refuses it before it opens an object.
+	if err := checkManifestPins(manifest); err != nil {
 		return Manifest{}, fmt.Errorf("backup %s has a corrupt manifest: %w", id, err)
 	}
 

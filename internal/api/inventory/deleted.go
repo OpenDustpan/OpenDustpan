@@ -515,7 +515,7 @@ func changeEntry(r *http.Request, p identity.Principal, obj identity.Object, act
 		ValueCount:    nil,
 		Changes:       nil,
 		SourceIP:      clientip.String(r),
-		UserAgent:     truncateUserAgent(userAgent(r)),
+		UserAgent:     audit.TruncateUserAgent(userAgent(r)),
 		Channel:       sessionauth.AuditChannel(r, channelHeader),
 		Kind:          audit.KindChange,
 		Outcome:       audit.OutcomeSuccess,
@@ -529,26 +529,4 @@ func changeEntry(r *http.Request, p identity.Principal, obj identity.Object, act
 		PrincipalKind: "",
 		JobID:         "",
 	}
-}
-
-// truncateUserAgent caps s at audit.MaxUserAgentLen bytes, at a rune
-// boundary.
-func truncateUserAgent(s string) string {
-	if len(s) <= audit.MaxUserAgentLen {
-		return s
-	}
-
-	cut := audit.MaxUserAgentLen
-	for cut > 0 && !utf8RuneStart(s[cut]) {
-		cut--
-	}
-
-	return s[:cut]
-}
-
-// utf8RuneStart reports whether b starts a UTF-8 sequence.
-func utf8RuneStart(b byte) bool {
-	const continuationMask, continuationBits = 0xC0, 0x80
-
-	return b&continuationMask != continuationBits
 }

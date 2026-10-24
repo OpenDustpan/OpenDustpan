@@ -65,6 +65,7 @@ The `Location` header names the job.
 | 400 | `request.body-invalid` | The body or the header is not valid. |
 | 400 | `job.invalid` | The pool or the location is not valid, or the reason is not valid. |
 | 403 | | The caller lacks an action. |
+| 403 | `access.ip-not-allowed` | The client address is outside the IP allowlist of the namespace. The read of the drift status answers this code too. |
 | 403 | `job.policy-denied`, `job.gate-enforced`, `job.agent-denied` | A rule of the server refuses the start. |
 | 409 | `job.frozen`, `namespace.fenced` | A freeze or a failover refuses the start. |
 | 409 | `drift.start-conflict` | The same caller started a drift check of this workspace in the same minute with another pool, location or reason. Wait one minute, or send the same request again. |

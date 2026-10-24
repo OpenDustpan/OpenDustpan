@@ -109,6 +109,12 @@ func writeRestoreManifest(
 
 	files := sqlPartAllFiles(in.db)
 
+	// The descriptor of each table file names the rows of the dump, as the
+	// row counts of the manifest do.
+	for i := range files {
+		files[i].Rows = in.dump.Rows[files[i].Table]
+	}
+
 	for _, table := range backup.Tables {
 		target.storeObject(t, sqlPartAllKey(id, table), in.db)
 	}

@@ -61,7 +61,10 @@ func TestRemovalRoutesNameTheLockAPI(t *testing.T) {
 				Since:  time.Date(2026, time.October, 19, 10, 0, 0, 0, time.UTC),
 				Target: tc.target, Holder: "alice", Reason: "change window closed",
 			}
-			e := &manuallock.LockedError{Lock: l, Noun: "workspace", Name: "acme/web"}
+			e := &manuallock.LockedError{
+				Lock: l, Unit: collection.UnitRef{Namespace: "acme", Tool: "opentofu", Name: "web"},
+				Noun: "workspace", Name: "acme/web",
+			}
 
 			want := e.Refusal() + ". To remove the lock, the holder sends DELETE " + tc.remove + "."
 			if e.Error() != want {

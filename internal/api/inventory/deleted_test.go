@@ -17,6 +17,7 @@ import (
 
 	apiinventory "opendustpan.org/opendustpan/internal/api/inventory"
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/collection"
 	"opendustpan.org/opendustpan/pkg/identity"
 	coreinventory "opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/manuallock"
@@ -654,6 +655,7 @@ func TestRestoreUnitErrors(t *testing.T) {
 					Since:  time.Date(2026, time.October, 9, 9, 0, 0, 0, time.UTC),
 					Target: manuallock.NamespaceTarget("acme"), Holder: "alice", Reason: "freeze",
 				},
+				Unit: collection.UnitRef{Namespace: "acme", Tool: "pulumi", Name: "web/prod"},
 				Noun: "stack", Name: "acme/web/prod",
 			},
 			want: http.StatusConflict,

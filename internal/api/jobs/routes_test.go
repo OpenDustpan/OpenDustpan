@@ -507,7 +507,9 @@ func TestRouteEnforcesTheChecks(t *testing.T) {
 				t.Fatalf("status = %d %s, want %d", rec.Code, rec.Body.String(), want)
 			}
 
-			wantChecks := checks[:min(held+1, len(checks))]
+			// The namespace read of the path runs once before the lookup, for the
+			// IP allowlist, and once more with the other checks.
+			wantChecks := append([]string{checks[0]}, checks[:min(held+1, len(checks))]...)
 			if got := authz.seen(); !slices.Equal(got, wantChecks) {
 				t.Errorf("checks = %q, want %q, in order", got, wantChecks)
 			}
@@ -572,8 +574,12 @@ func TestUnknownObjectsAnswerAlike(t *testing.T) {
 		}
 	}
 
-	if got := authz.seen(); len(got) != 0 {
-		t.Errorf("checks = %q, want none for a job that does not exist", got)
+	// Only the namespace read of the path may run, for the IP allowlist. No
+	// check names a job that does not exist.
+	for _, got := range authz.seen() {
+		if !strings.HasPrefix(got, "namespace:read ") {
+			t.Errorf("check %q ran for a job that does not exist, want the namespace read only", got)
+		}
 	}
 }
 

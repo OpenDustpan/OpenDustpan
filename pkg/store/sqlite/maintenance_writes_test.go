@@ -3,6 +3,7 @@ package sqlite_test
 import (
 	"path/filepath"
 	"testing"
+	"time"
 
 	"opendustpan.org/opendustpan/pkg/audit/audittest"
 	"opendustpan.org/opendustpan/pkg/store/sqlite"
@@ -120,5 +121,26 @@ func TestAuditCheckSavesPassInMaintenance(t *testing.T) {
 		t.Helper()
 
 		return open(t)
+	})
+}
+
+// TestEnterBusyConformance runs the busy case of an enter: a write in flight
+// that outlasts the bound of the store makes the enter report ErrBusy.
+func TestEnterBusyConformance(t *testing.T) {
+	t.Parallel()
+
+	storetest.RunEnterBusy(t, func(t *testing.T) (storetest.Store, storetest.BusyHarness) {
+		t.Helper()
+
+		s := open(t)
+		sqlite.SetEnterWaitForTest(s, 50*time.Millisecond)
+
+		return s, storetest.BusyHarness{
+			Hold: func(t *testing.T) func() {
+				t.Helper()
+
+				return sqlite.HoldCheckedWriteForTest(t, s)
+			},
+		}
 	})
 }

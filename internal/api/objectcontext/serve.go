@@ -215,7 +215,7 @@ func auditEntry(r *http.Request, p identity.Principal, t target) audit.Entry {
 		ValuePath:     "",
 		ValueCount:    nil,
 		SourceIP:      clientip.String(r),
-		UserAgent:     truncateUserAgent(userAgent(r)),
+		UserAgent:     audit.TruncateUserAgent(userAgent(r)),
 		Channel:       sessionauth.AuditChannel(r, channelHeader),
 		Kind:          audit.KindChange,
 		Outcome:       audit.OutcomeSuccess,
