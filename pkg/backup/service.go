@@ -960,7 +960,8 @@ func (w *targetWriter) abortOpen(err error) bool {
 	w.once.Do(func() {
 		acted = true
 		_ = w.pipe.CloseWithError(err) // PipeWriter.CloseWithError always returns nil.
-		<-w.done
+		putErr := <-w.done
+		_ = putErr // The abort error ends the Put, so the Put reports it.
 	})
 
 	return acted

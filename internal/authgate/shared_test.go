@@ -734,7 +734,9 @@ func TestRefillKeepsLookupsInFlightWithinTheBurst(t *testing.T) {
 	case <-next.started:
 		t.Error("lookup with the burst in flight after a refill reached the store, want a wait")
 		close(next.release)
-		<-done
+		if err := <-done; err != nil {
+			t.Logf("lookup after the release: %v", err)
+		}
 	}
 
 	wg.Wait()
