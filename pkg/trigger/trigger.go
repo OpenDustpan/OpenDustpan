@@ -296,7 +296,7 @@ func (t Trigger) validateSource() error {
 	}
 
 	if t.Source == t.Unit {
-		return &CycleError{Path: []graph.Unit{t.Unit, t.Unit}, Names: nil}
+		return &CycleError{Path: []graph.Unit{t.Unit, t.Unit}, Names: nil, Readable: nil}
 	}
 
 	return nil
@@ -313,14 +313,34 @@ type CycleError struct {
 	// "stack" or "workspace" words. Error uses the unit ID for a unit with no
 	// entry.
 	Names map[graph.Unit]string
+	// Readable maps a unit of Path to true when the caller of the save may read
+	// it. The Manager fills it. When Readable is not nil, Error gives no unit ID
+	// and no name for a unit with no true entry: it counts the unit as a unit
+	// that the caller cannot read. An adapter answers a unit of Path only when
+	// Readable holds true for it, and answers no unit when Readable is nil.
+	Readable map[graph.Unit]bool
 }
 
-// Error names the path. It shows at most MaxPathShown units, by name or by unit ID.
+// Error names the path. It shows at most MaxPathShown units, by name or by unit
+// ID. When Readable is not nil, each run of units that the caller cannot read
+// shows as their number only.
 func (e *CycleError) Error() string {
 	shown := e.Path[:min(len(e.Path), MaxPathShown)]
 	ids := make([]string, 0, len(shown))
+	hidden := 0
 
 	for _, u := range shown {
+		if e.Readable != nil && !e.Readable[u] {
+			hidden++
+
+			continue
+		}
+
+		if hidden > 0 {
+			ids = append(ids, unreadable(hidden))
+			hidden = 0
+		}
+
 		name, ok := e.Names[u]
 		if !ok || name == "" {
 			name = u.ID
@@ -329,12 +349,25 @@ func (e *CycleError) Error() string {
 		ids = append(ids, name)
 	}
 
+	if hidden > 0 {
+		ids = append(ids, unreadable(hidden))
+	}
+
 	more := ""
 	if len(e.Path) > len(shown) {
 		more = fmt.Sprintf(" (%d more)", len(e.Path)-len(shown))
 	}
 
 	return fmt.Sprintf("%v: %s%s", ErrCycle, strings.Join(ids, " -> "), more)
+}
+
+// unreadable names n units of a loop that the caller cannot read.
+func unreadable(n int) string {
+	if n == 1 {
+		return "1 unit that you cannot read"
+	}
+
+	return fmt.Sprintf("%d units that you cannot read", n)
 }
 
 // Unwrap lets errors.Is(err, ErrCycle) report true.
@@ -372,7 +405,7 @@ func CheckCycle(existing []Trigger, t Trigger) error {
 	// The new edge is source -> unit. A loop exists when the source can be
 	// reached from the unit.
 	if path, ok := findPath(next, t.Unit, t.Source); ok {
-		return &CycleError{Path: append([]graph.Unit{t.Source}, path...), Names: nil}
+		return &CycleError{Path: append([]graph.Unit{t.Source}, path...), Names: nil, Readable: nil}
 	}
 
 	return nil

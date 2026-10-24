@@ -427,12 +427,12 @@ func TestCycleErrorNames(t *testing.T) {
 
 	path := []graph.Unit{unit("a"), unit("b"), unit("a")}
 
-	plain := &trigger.CycleError{Path: path, Names: nil}
+	plain := &trigger.CycleError{Path: path, Names: nil, Readable: nil}
 	if got, want := plain.Error(), "trigger closes a loop of units: a -> b -> a"; got != want {
 		t.Errorf("Error() = %q, want %q", got, want)
 	}
 
-	named := &trigger.CycleError{Path: path, Names: map[graph.Unit]string{unit("a"): "stack prod"}}
+	named := &trigger.CycleError{Path: path, Names: map[graph.Unit]string{unit("a"): "stack prod"}, Readable: nil}
 	if got, want := named.Error(), "trigger closes a loop of units: stack prod -> b -> stack prod"; got != want {
 		t.Errorf("Error() = %q, want %q", got, want)
 	}

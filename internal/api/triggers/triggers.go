@@ -275,7 +275,7 @@ func classifyRule(err error) errorResponse {
 
 	switch {
 	case errors.As(err, &cycle):
-		body := answer(http.StatusConflict, errcode.TriggerCycle, refusal.Clean(cycle.Error(), maxMessageBytes))
+		body := answer(http.StatusConflict, errcode.TriggerCycle, cycleMessage(cycle))
 		body.Units = cycleUnits(cycle)
 
 		return body
