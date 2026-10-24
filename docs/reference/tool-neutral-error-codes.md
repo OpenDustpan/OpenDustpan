@@ -55,7 +55,7 @@ Each error answer has the header `Cache-Control: no-store`.
 | 400 | `lock.reason-required` | A lock needs a reason |
 | 400 | `lock.invalid-target` | The lock target is not valid |
 | 400 | `audit.reason-invalid` | The reason is not valid |
-| 403 | `view.not-person` | Only a person has saved views: sign in as a person |
+| 403 | `view.not-person` | The caller is not a person: sign in as a person to use saved views |
 | 403 | `gate.denied`, `gate.limited` | A gate or an access limit refused a state write |
 | 404 | `unit.not-found` | No unit, no unit that the caller may read, or the unit is not in the collection |
 | 404 | `unit.deleted-not-found` | No deleted unit with this name |
