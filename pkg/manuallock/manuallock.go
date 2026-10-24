@@ -202,9 +202,13 @@ func SafeText(s string) string {
 // matches ErrLocked. The tool that refuses the request sets Noun to its own
 // word for the unit, for example "stack" or "workspace", and Name to the name
 // of the unit in that tool. The text names the unit, the holder, the reason
-// and the route that removes the lock.
+// and the route that removes the lock. Unit is the refused unit as a typed
+// reference: the answer of the refusal reads it, never Name. A restore of a
+// deleted unit by its stable ID sets Unit.Name to that ID, because the unit
+// has no live name yet.
 type LockedError struct {
 	Lock Lock
+	Unit collection.UnitRef
 	Noun string
 	Name string
 }

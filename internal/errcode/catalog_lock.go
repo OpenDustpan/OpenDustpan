@@ -33,13 +33,14 @@ func lockSpecs() []Spec {
 		},
 		{
 			Code:    LockLocked,
-			Meaning: "a manual lock on the unit, its collection or its namespace refuses the request",
+			Meaning: "a manual lock on the stack or workspace, its collection or its namespace refuses the request",
 			Args: []Arg{
 				{Name: "holder", Kind: KindIdentifier},
 				{Name: "since", Kind: KindTime},
-				{Name: "target", Kind: KindIdentifier},
-				{Name: "targetKind", Kind: KindIdentifier},
-				{Name: "unit", Kind: KindIdentifier},
+				{Name: "lockedKind", Kind: KindIdentifier},
+				{Name: "locked", Kind: KindIdentifier},
+				{Name: "refusedKind", Kind: KindIdentifier},
+				{Name: "refused", Kind: KindIdentifier},
 			},
 		},
 		{Code: LockNotHolder, Meaning: "another principal holds the manual lock", Args: nil},
