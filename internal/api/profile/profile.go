@@ -199,7 +199,11 @@ func profileErrors(err error) (problem.Problem, bool) {
 func freshErrors(err error) (problem.Problem, bool) {
 	switch {
 	case errors.Is(err, errFreshStepRequired), errors.Is(err, profile.ErrFreshRequired):
-		return profileProblem(http.StatusForbidden, errcode.MFAFreshStepRequired, sessionauth.FreshStepRequiredMessage), true
+		return profileProblem(
+			http.StatusForbidden,
+			errcode.MFAFreshStepRequired,
+			sessionauth.FreshStepRequiredMessage,
+		), true
 	case errors.Is(err, errReauthenticate):
 		p := profileProblem(http.StatusUnauthorized, errcode.MFAFreshStepRequired, err.Error())
 

@@ -123,7 +123,10 @@ func readBody(w http.ResponseWriter, r *http.Request, v any) error {
 	dec.DisallowUnknownFields()
 
 	if err = dec.Decode(v); err != nil || dec.More() {
-		return problem.BadRequest(errcode.RequestBodyInvalid, "the request body must be one JSON object with known fields")
+		return problem.BadRequest(
+			errcode.RequestBodyInvalid,
+			"the request body must be one JSON object with known fields",
+		)
 	}
 
 	return nil

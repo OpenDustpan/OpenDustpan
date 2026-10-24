@@ -161,7 +161,10 @@ func readBody(w http.ResponseWriter, r *http.Request, v any) error {
 	dec.DisallowUnknownFields()
 
 	if err = dec.Decode(v); err != nil || dec.More() {
-		return problem.BadRequest(errcode.RequestBodyInvalid, "the request body must be one JSON object with known fields")
+		return problem.BadRequest(
+			errcode.RequestBodyInvalid,
+			"the request body must be one JSON object with known fields",
+		)
 	}
 
 	return nil
@@ -355,7 +358,10 @@ func pageSizeOf(r *http.Request) (int, error) {
 
 	n, err := strconv.Atoi(raw)
 	if err != nil || n < 1 || n > maxPageSize {
-		return 0, problem.BadRequest(errcode.RequestInvalidQuery, fmt.Sprintf("pageSize must be a number from 1 to %d", maxPageSize))
+		return 0, problem.BadRequest(
+			errcode.RequestInvalidQuery,
+			fmt.Sprintf("pageSize must be a number from 1 to %d", maxPageSize),
+		)
 	}
 
 	return n, nil
@@ -416,7 +422,10 @@ func decodeToken(raw, fp string) (profile.Name, error) {
 		return "", nil
 	}
 
-	bad := problem.BadRequest(errcode.RequestInvalidQuery, "pageToken does not belong to this query: start again without it")
+	bad := problem.BadRequest(
+		errcode.RequestInvalidQuery,
+		"pageToken does not belong to this query: start again without it",
+	)
 
 	var t pageToken
 	if err := pagetoken.Decode(raw, &t); err != nil || !pagetoken.SameFingerprint(t.Fingerprint, fp) {
@@ -427,8 +436,16 @@ func decodeToken(raw, fp string) (profile.Name, error) {
 }
 
 var (
-	errPrecondition         = problem.Fixed(http.StatusPreconditionFailed, errcode.RequestPreconditionFailed, "If-Match does not match the profile: read it again and send the new ETag")
-	errPreconditionRequired = problem.Fixed(http.StatusPreconditionRequired, errcode.RequestPreconditionRequired, "send the ETag that you read in If-Match")
+	errPrecondition = problem.Fixed(
+		http.StatusPreconditionFailed,
+		errcode.RequestPreconditionFailed,
+		"If-Match does not match the profile: read it again and send the new ETag",
+	)
+	errPreconditionRequired = problem.Fixed(
+		http.StatusPreconditionRequired,
+		errcode.RequestPreconditionRequired,
+		"send the ETag that you read in If-Match",
+	)
 )
 
 // ifMatch reads the If-Match header against the profile got. It returns the
@@ -530,7 +547,11 @@ func (h *Handler) listRevisions(w http.ResponseWriter, r *http.Request, p identi
 	if raw := queryOf(r).Get("pageToken"); raw != "" {
 		n, convErr := strconv.Atoi(raw)
 		if convErr != nil || n < 1 {
-			h.writeError(ctx, w, problem.BadRequest(errcode.RequestInvalidQuery, "pageToken is not valid: start again without it"))
+			h.writeError(
+				ctx,
+				w,
+				problem.BadRequest(errcode.RequestInvalidQuery, "pageToken is not valid: start again without it"),
+			)
 
 			return
 		}
@@ -660,7 +681,10 @@ func readOptions(r *http.Request, revision string) (profile.ReadOptions, error) 
 	if revision != "" && revision != "latest" {
 		n, err := strconv.Atoi(revision)
 		if err != nil || n < 1 {
-			return opts, problem.BadRequest(errcode.RequestInvalidPath, "revision must be a number of 1 or more, or latest")
+			return opts, problem.BadRequest(
+				errcode.RequestInvalidPath,
+				"revision must be a number of 1 or more, or latest",
+			)
 		}
 
 		opts.Revision = n

@@ -217,7 +217,6 @@ func TestRetryAfter(t *testing.T) {
 				want,
 			)
 		}
-
 	}
 }
 

@@ -283,7 +283,10 @@ func (h *Handler) serveKeyed(
 }
 
 // errIdempotencyKey is the answer to a key on a route that does not take it.
-var errIdempotencyKey = problem.BadRequest(errcode.RequestIdempotencyKeyUnsupported, "this route does not take the Idempotency-Key header: send the request without it")
+var errIdempotencyKey = problem.BadRequest(
+	errcode.RequestIdempotencyKeyUnsupported,
+	"this route does not take the Idempotency-Key header: send the request without it",
+)
 
 // mutating reports whether the method changes data.
 func mutating(method string) bool {
