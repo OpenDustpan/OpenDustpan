@@ -37,13 +37,24 @@ func TestAddressOutsideTheAllowlistAnswers403(t *testing.T) {
 		}
 	}
 
+	// A job that exists, a job that does not exist, a job in a namespace that
+	// does not exist and a malformed job ID all answer the same 403: the
+	// refusal does not tell whether the object exists.
 	read := newHandler(t, addressRefused{}, newFakeJobs(runningJob(t, testJob)))
-	rec := serve(t, read, request{method: http.MethodGet, path: jobPath("acme", testJob), token: testToken})
-	errcodetest.Check(t, rec.Code, rec.Body.Bytes(), want("read a job"))
+
+	for _, path := range []string{
+		jobPath("acme", testJob),
+		jobPath("acme", "job-unknownunknownunknow"),
+		jobPath("absent", testJob),
+		jobPath("absent", "job-unknownunknownunknow"),
+	} {
+		rec := serve(t, read, request{method: http.MethodGet, path: path, token: testToken})
+		errcodetest.Check(t, rec.Code, rec.Body.Bytes(), want("read "+path))
+	}
 
 	starter := newFakeStarter(t)
 	start := newStartHandler(t, addressRefused{}, newFakeJobs(), starter, nil)
-	rec = post(t, start, testToken, goodBody)
+	rec := post(t, start, testToken, goodBody)
 	errcodetest.Check(t, rec.Code, rec.Body.Bytes(), want("start a job"))
 
 	if starter.calls() != 0 {
