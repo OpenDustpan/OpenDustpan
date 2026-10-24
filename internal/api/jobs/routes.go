@@ -10,6 +10,7 @@ import (
 	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/internal/sessionauth"
 	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/ipallow"
 	"opendustpan.org/opendustpan/pkg/job"
 	"opendustpan.org/opendustpan/pkg/namespace"
 )
@@ -295,6 +296,11 @@ func readRefusal(action identity.Action, err error) error {
 	switch {
 	case err == nil:
 		return nil
+	case errors.Is(err, ipallow.ErrAddressNotAllowed):
+		// An address outside the IP allowlist answers 403 with its own code,
+		// as on the other routes of the namespace. The refusal names no
+		// object, so it does not tell whether the object exists.
+		return fmt.Errorf("authorize %s: %w", action, err)
 	case errors.Is(err, identity.ErrDenied):
 		return errNotFound
 	default:
