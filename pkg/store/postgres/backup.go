@@ -770,7 +770,7 @@ func (s *Store) liveColumns(ctx context.Context, table string) ([]string, error)
 // quote, so that a name from a new caller that skips checkIdent cannot end
 // the quoted identifier.
 func pgIdent(name string) string {
-	return `"` + strings.ReplaceAll(name, `"`, `""`) + `"`
+	return pgx.Identifier{name}.Sanitize()
 }
 
 // errIdentifier reports a schema, table or column name that is not a plain
