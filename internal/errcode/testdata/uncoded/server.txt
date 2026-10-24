@@ -1,13 +1,12 @@
 # The error paths of internal/api/server that answer without a code of the
 # catalog. This list only shrinks: give a path a code, remove its line and
 # lower the limit. A new error path never goes on this list.
-limit 166
+limit 151
 Handler.approveAuditChain: errorResponse{}
 Handler.getAuditChain: errorResponse{}
 Handler.sweepDeletedUnits: errorResponse{}
 Handler.sweepDeletedUnits: inventory.ErrSweepRunning
 Handler.writeEnterError: enterRefusedResponse{}
-Handler.writeError: codedResponse{}
 Handler.writeError: errorResponse{}
 Handler.writeError: reauthenticateResponse{}
 classifyAccess: access.ErrAlreadyExists
@@ -154,17 +153,3 @@ classifyToken: errTokenBody
 classifyToken: errTokenQuery
 classifyToken: identity.ErrRateLimited
 classifyWorker: ErrNoWorker
-errFreshStepRequired: codedError{}
-errGitHostIdempotencyKey: codedError{}
-errGitHostIdempotencyOff: codedError{}
-errGitHostNoRegistration: codedError{}
-errGitHostNotAssigned: codedError{}
-errPreferencesBody: codedError{}
-errPreferencesMediaType: codedError{}
-errPreferencesNotPerson: codedError{}
-errPreferencesPersonGone: codedError{}
-errPreferencesReadOnly: codedError{}
-errPreferencesTooLarge: codedError{}
-errPreferencesUnavailable: codedError{}
-errPreferencesUnknownField: codedError{}
-preferencesError: As(&field)
