@@ -422,32 +422,23 @@ type trackingStore struct {
 
 // Claim records the attempt and claims through the wrapped store.
 func (t trackingStore) Claim(ctx context.Context, req durable.ClaimRequest) (durable.Operation, error) {
-	t.watch.touch()
-	t.watch.beatIfDue(ctx)
-
-	op, err := t.DurableStore.Claim(ctx, req)
-	if err != nil {
-		return op, fmt.Errorf("claim: %w", err)
-	}
-
-	return op, nil
+	return t.ops().Claim(ctx, req)
 }
 
 // Extend records the renewal and extends through the wrapped store.
 func (t trackingStore) Extend(ctx context.Context, c durable.Claim, lease time.Duration) (durable.Claim, error) {
-	t.watch.touch()
-	t.watch.beatIfDue(ctx)
-
-	claim, err := t.DurableStore.Extend(ctx, c, lease)
-	if err != nil {
-		return claim, fmt.Errorf("extend: %w", err)
-	}
-
-	return claim, nil
+	return t.ops().Extend(ctx, c, lease)
 }
 
-// trackingOps is trackingStore for a store that keeps operations only: it
-// records each claim and each renewal in the same way.
+// ops returns the wrapper of the operations of the store. trackingOps holds
+// the one copy of the claim and renew tracking.
+func (t trackingStore) ops() trackingOps {
+	return trackingOps{Store: t.DurableStore, watch: t.watch}
+}
+
+// trackingOps wraps a store that keeps operations and records each claim and
+// each renewal as a sign that the claim loop runs, in this process and, as a
+// heartbeat, in the store. trackingStore uses it for the full durable store.
 type trackingOps struct {
 	durable.Store
 

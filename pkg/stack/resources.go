@@ -9,10 +9,6 @@ import (
 	"strings"
 )
 
-// rootStackType is the type of the automatic stack resource. A deployment
-// with only this resource holds no managed resources.
-const rootStackType = "pulumi:pulumi:Stack"
-
 // errNotDeployment reports text that is not a deployment object with a
 // resources array. The count maps every decode failure to a count, so this
 // error never escapes the package.
@@ -177,7 +173,7 @@ func isManagedResource(dec *json.Decoder) (bool, error) {
 		return false, err
 	}
 
-	return typ != rootStackType, nil
+	return typ != stackResourceType, nil
 }
 
 // resourceType reads the value of the type key dec points at: the text, or

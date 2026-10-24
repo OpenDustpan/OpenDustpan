@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -13,6 +14,7 @@ import (
 	"sync"
 	"testing"
 
+	"opendustpan.org/opendustpan/internal/pulumijournal"
 	"opendustpan.org/opendustpan/internal/token"
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -122,7 +124,7 @@ func (f *fakeRows) PutJournalRow(_ context.Context, row stack.JournalRow, _ name
 }
 
 // newEntries returns a writer for a test, and fails the test when it is refused.
-func newEntries(t *testing.T, blobs blob.Store, rows stack.JournalStore, v stack.BatchVerifier) *stack.JournalEntries {
+func newEntries(t *testing.T, blobs blob.Store, rows stack.JournalStore, v stack.BatchReader) *stack.JournalEntries {
 	t.Helper()
 
 	entries, err := stack.NewJournalEntries(blobs, rows, v, 0, stacktest.NewRefusals())
@@ -178,13 +180,73 @@ func (f *fakeRows) JournalSequences(
 	return out, nil
 }
 
-// allowAll is a verifier that accepts every batch.
+// fakeBatch is the part of a batch body that the fake batch readers read.
+type fakeBatch struct {
+	Entries []fakeEntry `json:"entries"`
+}
+
+// fakeEntry is the sequence ID of one entry of a fakeBatch.
+type fakeEntry struct {
+	SequenceID int64 `json:"sequenceID"`
+}
+
+// errFakeBatch is the refusal of the fake batch readers.
+var errFakeBatch = errors.New("fake batch reader: the batch is malformed")
+
+// readIDs is the decode of the fake batch readers: the sequence IDs of a JSON
+// body, each positive and once, with no check of the entries. The real reader
+// has its own tests.
+func readIDs(body []byte) (stack.BatchSummary, error) {
+	var batch fakeBatch
+
+	summary := stack.BatchSummary{
+		Entries:     0,
+		SequenceIDs: []int64{},
+		Operations:  []int64{},
+		HasRebuild:  false,
+		Verify:      nil,
+	}
+
+	if err := json.Unmarshal(body, &batch); err != nil {
+		return summary, errFakeBatch
+	}
+
+	seen := make(map[int64]bool)
+	refused := false
+
+	for _, entry := range batch.Entries {
+		refused = refused || entry.SequenceID <= 0 || seen[entry.SequenceID]
+		seen[entry.SequenceID] = true
+		summary.SequenceIDs = append(summary.SequenceIDs, entry.SequenceID)
+	}
+
+	summary.Entries = len(batch.Entries)
+
+	if refused {
+		return summary, errFakeBatch
+	}
+
+	return summary, nil
+}
+
+// allowAll is a batch reader that reads the sequence IDs and accepts every
+// batch against the stored state.
 type allowAll struct{}
 
-func (allowAll) VerifyBatch([]byte, int, []int64, bool) (bool, error) { return false, nil }
+func (allowAll) ReadBatch(body []byte, _ int) (stack.BatchSummary, error) {
+	summary, err := readIDs(body)
+	if err != nil {
+		return summary, err
+	}
 
-// recordVerifier records the arguments of each call and answers err.
-type recordVerifier struct {
+	summary.Verify = func([]int64, bool) (bool, error) { return false, nil }
+
+	return summary, nil
+}
+
+// recordReader records the arguments of each call, and its Verify answers
+// changed and err.
+type recordReader struct {
 	body           []byte
 	known          []int64
 	version        int
@@ -193,18 +255,23 @@ type recordVerifier struct {
 	err            error
 }
 
-func (v *recordVerifier) VerifyBatch(
-	body []byte,
-	version int,
-	known []int64,
-	recordsChanged bool,
-) (bool, error) {
+func (v *recordReader) ReadBatch(body []byte, version int) (stack.BatchSummary, error) {
 	v.body = body
 	v.version = version
-	v.known = known
-	v.recordsChanged = recordsChanged
 
-	return v.changed, v.err
+	summary, err := readIDs(body)
+	if err != nil {
+		return summary, err
+	}
+
+	summary.Verify = func(known []int64, recordsChanged bool) (bool, error) {
+		v.known = known
+		v.recordsChanged = recordsChanged
+
+		return v.changed, v.err
+	}
+
+	return summary, nil
 }
 
 // batchBody returns a journal batch body with the given sequence IDs.
@@ -250,37 +317,6 @@ func journalBatchFor(body []byte) stack.JournalBatch {
 // fence returns a fence for the journal tests.
 func fence() namespace.Fence {
 	return namespace.Fence{Namespace: "acme", FailoverVersion: 1}
-}
-
-// TestJournalAppendDropsOperationsBeforeRebuild checks that a batch that holds
-// a rebuilt base state entry keeps only the completed operations after the
-// last such entry, and reports the rebuild, so the store starts the known
-// set again from this batch.
-func TestJournalAppendDropsOperationsBeforeRebuild(t *testing.T) {
-	t.Parallel()
-
-	state := `{"urn":"urn:a","custom":true,"type":"t:mod:T","id":"x"}`
-	body := []byte(`{"entries":[` +
-		`{"sequenceID":1,"operationID":5,"kind":1,"state":` + state + `},` +
-		`{"sequenceID":2,"operationID":6,"kind":7},` +
-		`{"sequenceID":3,"operationID":8,"kind":1,"state":` + state + `}]}`)
-
-	blobs := newFakeBlobs()
-	rows := &fakeRows{err: nil, rows: nil, keys: nil, refusals: nil, running: false, retried: false, calls: nil}
-	entries := newEntries(t, blobs, rows, allowAll{})
-
-	if err := entries.Append(t.Context(), journalBatchFor(body), fence()); err != nil {
-		t.Fatalf("append: %v", err)
-	}
-
-	row := rows.rows[0]
-	if !row.HasRebuild {
-		t.Fatal("HasRebuild = false, want true for a batch with a rebuild entry")
-	}
-
-	if fmt.Sprint(row.OperationIDs) != "[8]" {
-		t.Fatalf("operation IDs = %v, want [8]", row.OperationIDs)
-	}
 }
 
 // TestJournalAppendWritesBlobBeforeRow checks the order of the write: the blob
@@ -422,8 +458,9 @@ func TestJournalAppendRefusesOtherBlobContent(t *testing.T) {
 }
 
 // TestJournalAppendRefusesMalformedBatch checks the batch shape: entries, positive
-// sequence IDs, and no sequence ID twice. A malformed batch writes no blob and
-// no row, but its refusal is recorded with the sequence IDs the server read.
+// sequence IDs, and no sequence ID twice, with the batch reader of the
+// server. A malformed batch writes no blob and no row, but its refusal is
+// recorded with the sequence IDs the server read.
 func TestJournalAppendRefusesMalformedBatch(t *testing.T) {
 	t.Parallel()
 
@@ -439,7 +476,7 @@ func TestJournalAppendRefusesMalformedBatch(t *testing.T) {
 	for name, tc := range cases {
 		blobs := newFakeBlobs()
 		rows := &fakeRows{err: nil, rows: nil, keys: nil, refusals: nil, running: false, retried: false, calls: nil}
-		entries := newEntries(t, blobs, rows, allowAll{})
+		entries := newEntries(t, blobs, rows, pulumijournal.Verifier{})
 
 		if err := entries.Append(t.Context(), journalBatchFor(tc.body), fence()); !errors.Is(
 			err, stack.ErrJournalBatch,
@@ -512,7 +549,7 @@ func TestJournalAppendAcceptsEmptyBatch(t *testing.T) {
 func TestJournalAppendPassesTheBatchToTheVerifier(t *testing.T) {
 	t.Parallel()
 
-	verifier := &recordVerifier{err: nil, body: nil, known: nil, version: 0, recordsChanged: false, changed: false}
+	verifier := &recordReader{err: nil, body: nil, known: nil, version: 0, recordsChanged: false, changed: false}
 	entries := newEntries(t,
 		newFakeBlobs(),
 		&fakeRows{err: nil, rows: nil, keys: nil, refusals: nil, running: false, retried: false, calls: nil},
@@ -541,7 +578,7 @@ func TestJournalAppendDeletesBlobOnVerifierRefusal(t *testing.T) {
 	t.Parallel()
 
 	blobs := newFakeBlobs()
-	verifier := &recordVerifier{
+	verifier := &recordReader{
 		err: io.ErrUnexpectedEOF, body: nil, known: nil, version: 0, recordsChanged: false, changed: false,
 	}
 	entries := newEntries(

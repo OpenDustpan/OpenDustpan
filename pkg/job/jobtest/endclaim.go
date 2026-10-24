@@ -37,6 +37,10 @@ func endClaimCases() []suiteCase {
 		{"end: the claim of a phase that changes resources writes the audit entry of runner:claim", testClaimAudit},
 		{"end: a claim of an operation whose job cannot run it ends the operation", testClaimEndsUnrunnable},
 		{"end: a step record needs the live claim of the phase", testStepRecordClaim},
+		{
+			"end: a cancel just before a give-back leaves the operation to the claim after the expiry",
+			testGiveBackCancelBetween,
+		},
 	}
 }
 

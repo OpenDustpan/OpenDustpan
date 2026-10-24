@@ -23,7 +23,6 @@ import (
 	"fmt"
 	"strings"
 	"time"
-	"unicode"
 	"unicode/utf8"
 
 	"opendustpan.org/opendustpan/pkg/audit"
@@ -180,14 +179,14 @@ func (l Lock) Detail() string {
 // U+FFFD. The result has no character that moves a cursor, ends a line or
 // changes the direction of the text.
 func SafeText(s string) string {
-	if utf8.ValidString(s) && !strings.ContainsFunc(s, isHiddenRune) {
+	if utf8.ValidString(s) && !strings.ContainsFunc(s, audit.IsHiddenRune) {
 		return s
 	}
 
 	var b strings.Builder
 
 	for _, r := range s {
-		if isHiddenRune(r) {
+		if audit.IsHiddenRune(r) {
 			fmt.Fprintf(&b, "\\u%04X", r)
 
 			continue
@@ -199,29 +198,30 @@ func SafeText(s string) string {
 	return b.String()
 }
 
-// isHiddenRune reports whether r is a control, format, line separator or
-// paragraph separator character.
-func isHiddenRune(r rune) bool {
-	return unicode.IsControl(r) || unicode.In(r, unicode.Cf, unicode.Zl, unicode.Zp)
-}
-
 // LockedError is the error of a request that a manual lock refuses. It
 // matches ErrLocked. The tool that refuses the request sets Noun to its own
 // word for the unit, for example "stack" or "workspace", and Name to the name
-// of the unit in that tool. The text names the unit, the holder and the
-// reason.
+// of the unit in that tool. The text names the unit, the holder, the reason
+// and the route that removes the lock.
 type LockedError struct {
 	Lock Lock
 	Noun string
 	Name string
 }
 
-// Error returns the text of the refusal. A lock on the unit gives
-// "<noun> <name> has a manual lock by ...". A lock on the collection of the
-// unit gives "<noun> <name> is in collection <ref>, which has a manual lock
-// by ...". A lock on the namespace gives "<noun> <name> is in namespace
-// <name>, which has a manual lock by ...".
+// Error returns the text of the refusal (Refusal), then the route of the
+// holder that removes the lock: ". To remove the lock, the holder sends
+// DELETE <route>.".
 func (e *LockedError) Error() string {
+	return e.Refusal() + ". To remove the lock, the holder sends DELETE " + e.Lock.Target.RemovalRoutes().Remove + "."
+}
+
+// Refusal returns the text of the refusal with no route. A lock on the unit
+// gives "<noun> <name> has a manual lock by ...". A lock on the collection of
+// the unit gives "<noun> <name> is in collection <ref>, which has a manual
+// lock by ...". A lock on the namespace gives "<noun> <name> is in namespace
+// <name>, which has a manual lock by ...". The text ends with the reason.
+func (e *LockedError) Refusal() string {
 	noun := e.Noun
 	if noun == "" {
 		noun = "stack or workspace"

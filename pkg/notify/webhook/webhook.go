@@ -108,6 +108,9 @@ func (s *Sender) Send(ctx context.Context, m notify.Message) error {
 		return fmt.Errorf("post webhook: %w: the URL is not allowed", egress.ErrRefused)
 	}
 
+	// WebhookHost runs egress.CheckURL again. The direct call above stays,
+	// so that the egress check of the sender does not depend on how
+	// WebhookHost works.
 	host, err := notify.WebhookHost(m.To)
 	if err != nil {
 		return fmt.Errorf("post webhook: %w", egress.ErrRefused)

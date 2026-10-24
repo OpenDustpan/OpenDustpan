@@ -402,7 +402,7 @@ func (h *Handler) enforceAuthorized(route Route) http.HandlerFunc {
 
 		actions := route.ActionsOn(obj)
 		if len(actions) == 0 {
-			h.writeError(ctx, w, errcode.Refusal(fmt.Sprintf("%s %s needs no action on %q",
+			h.writeError(ctx, w, errcode.Refusal(errcode.AccessNoAction, fmt.Sprintf("%s %s needs no action on %q",
 				route.Method, route.Path, obj.String())))
 
 			return

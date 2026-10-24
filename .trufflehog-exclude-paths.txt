@@ -5,3 +5,10 @@
 ^pkg/policy/endpoint_test\.go$
 ^pkg/calendar/calendar_test\.go$
 ^pkg/agent/mask_test\.go$
+# test fixtures and a doc example that hold a fake credential URI to show that it is refused; history of an open branch
+^docs/reference/drift-api\.md$
+^docs/reference/jobs-api\.md$
+^internal/api/drift/location_credentials_test\.go$
+^internal/api/jobs/location_answer_test\.go$
+^internal/api/jobs/location_credentials_test\.go$
+^pkg/job/location_test\.go$

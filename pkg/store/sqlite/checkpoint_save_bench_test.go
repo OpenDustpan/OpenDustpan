@@ -96,6 +96,10 @@ type benchSaveFixture struct {
 	store *sqlite.Store
 	ref   stack.Ref
 	fence namespace.Fence
+
+	// nsID and stackID are the IDs that the checkpoint blob keys hold.
+	nsID    namespace.ID
+	stackID stack.ID
 }
 
 // openBenchSaveStore returns a fresh store in a temporary directory with one
@@ -135,13 +139,15 @@ func openBenchSaveStore(b *testing.B) *benchSaveFixture {
 		b.Fatalf("parse ref: %v", err)
 	}
 
+	stackID := stack.ID(ident.NewID("stk-"))
+
 	st := stack.Stack{
 		NamespaceID: "",
 		CreatedAt:   now,
 		UpdatedAt:   now,
 		Tags:        map[string]string{},
 		Ref:         ref,
-		ID:          stack.ID(ident.NewID("stk-")),
+		ID:          stackID,
 		Version:     0,
 	}
 
@@ -149,7 +155,7 @@ func openBenchSaveStore(b *testing.B) *benchSaveFixture {
 		b.Fatalf("create stack: %v", err)
 	}
 
-	return &benchSaveFixture{store: s, ref: ref, fence: ns.Fence()}
+	return &benchSaveFixture{store: s, ref: ref, fence: ns.Fence(), nsID: ns.ID, stackID: stackID}
 }
 
 // startBenchUpdate creates and starts update id of the fixture stack and
@@ -216,12 +222,23 @@ func (f *benchSaveFixture) endBenchUpdate(b *testing.B, u stack.Update) {
 }
 
 // benchCheckpoint returns the checkpoint save of u with sequence seq holding
-// deployment. The blob key mirrors the save path: the content lives in the
-// blob store, so the SQL row keeps metadata only, while the removed count
-// scanned the full deployment bytes.
-func benchCheckpoint(u stack.Update, seq int64, deployment []byte, digest [sha256.Size]byte) stack.Checkpoint {
+// deployment. The blob key has the form that the save path builds,
+// namespaces/<namespace ID>/pulumi/<stack ID>/<update ID>/<sequence>, which
+// the store checks before it writes the row. The content lives in the blob
+// store, so the SQL row keeps metadata only, while the removed count scanned
+// the full deployment bytes.
+func (f *benchSaveFixture) benchCheckpoint(
+	u stack.Update,
+	seq int64,
+	deployment []byte,
+	digest [sha256.Size]byte,
+) stack.Checkpoint {
+	dir := "namespaces/" + f.nsID.String() + "/pulumi/" + f.stackID.String() + "/" + u.ID.String() + "/"
+	key := blob.Key(dir + strconv.FormatInt(seq, 10))
+
 	return stack.Checkpoint{
-		NamespaceID: "", StackID: "",
+		NamespaceID:   "",
+		StackID:       "",
 		SavedAt:       time.Now().UTC(),
 		Features:      []string{"deltaCheckpointUploadsV2", "verbatim"},
 		Deployment:    deployment,
@@ -232,7 +249,7 @@ func benchCheckpoint(u stack.Update, seq int64, deployment []byte, digest [sha25
 		Sequence:      seq,
 		Digest:        digest,
 		Invalid:       false,
-		BlobKey:       blob.Key("namespaces/ns-bench/pulumi/bench/" + u.ID.String() + "/" + strconv.FormatInt(seq, 10)),
+		BlobKey:       key,
 		BlobSize:      0,
 		BlobMD5:       [md5.Size]byte{},
 	}
@@ -254,7 +271,7 @@ func benchFullSave(b *testing.B, managed int) {
 	b.ResetTimer()
 
 	for b.Loop() {
-		if err := f.store.PutCheckpoint(ctx, benchCheckpoint(running, 0, deployment, digest), f.fence); err != nil {
+		if err := f.store.PutCheckpoint(ctx, f.benchCheckpoint(running, 0, deployment, digest), f.fence); err != nil {
 			b.Fatalf("save checkpoint: %v", err)
 		}
 	}
@@ -283,7 +300,7 @@ func benchDeltaSave(b *testing.B, managed int) {
 		serial++
 		b.StartTimer()
 
-		saveErr := f.store.PutCheckpoint(ctx, benchCheckpoint(running, 1, deployment, digest), f.fence)
+		saveErr := f.store.PutCheckpoint(ctx, f.benchCheckpoint(running, 1, deployment, digest), f.fence)
 		if saveErr != nil {
 			b.Fatalf("save checkpoint: %v", saveErr)
 		}

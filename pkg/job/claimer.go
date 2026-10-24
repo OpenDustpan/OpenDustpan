@@ -494,30 +494,22 @@ func (c *DurableClaimer) endOperation(ctx context.Context, claim durable.Claim, 
 	return nil
 }
 
-// giveBack releases the claim of an operation that the claimer cannot run
-// now, and returns cause. The release uses the context of endContext, so a
+// giveBack gives back the claim of an operation that the claimer cannot run
+// now, and returns cause. The give-back uses the context of endContext, so a
 // canceled request does not leave the lease on the operation, and a database
 // that hangs does not hold the poll for longer than endTimeout.
 //
-// It does not release an operation with a requested cancel: that release
+// It does not give back an operation with a requested cancel: a release
 // would end the operation canceled and leave the job canceling with no
-// operation. The claim then expires, and the next Claim takes the operation
-// again.
+// operation. The store checks the cancel and writes in one transaction, so
+// a cancel that arrives during the give-back cannot do that either. The claim
+// then expires, and the next Claim takes the operation again.
 func (c *DurableClaimer) giveBack(ctx context.Context, claim durable.Claim, cause error) error {
 	ctx, cancel := endContext(ctx)
 	defer cancel()
 
-	op, err := c.operations.Get(ctx, claim.Operation)
-	if errors.Is(err, durable.ErrNotFound) || (err == nil && op.CancelRequested) {
-		return cause
-	}
-
-	if err != nil {
-		return errors.Join(cause, claimError(err))
-	}
-
-	err = c.operations.Release(ctx, claim)
-	if err != nil && !errors.Is(err, durable.ErrClaimLost) {
+	err := c.operations.GiveBack(ctx, claim)
+	if err != nil && !errors.Is(err, durable.ErrClaimLost) && !errors.Is(err, durable.ErrCanceled) {
 		return errors.Join(cause, claimError(err))
 	}
 

@@ -162,117 +162,141 @@ func (h *Handler) authenticate(r *http.Request) (identity.Principal, bool, error
 // errorResponse is the error body of the tool-neutral APIs. ErrorCode is a
 // stable machine code.
 type errorResponse struct {
-	Message   string `json:"message"`
-	Code      int    `json:"code"`
-	ErrorCode string `json:"errorCode,omitempty"`
+	Message   string         `json:"message"`
+	Code      int            `json:"code"`
+	ErrorCode string         `json:"errorCode,omitempty"`
+	ErrorArgs map[string]any `json:"errorArgs,omitempty"`
 }
 
 // statusError is an error with a fixed answer.
 type statusError struct {
-	status  int
-	code    string
-	message string
+	problem problem
 }
 
-func (e *statusError) Error() string { return e.message }
-
-func badRequest(code, message string) error {
-	return &statusError{status: http.StatusBadRequest, code: code, message: message}
-}
+func (e *statusError) Error() string { return e.problem.message }
 
 func (h *Handler) writeError(ctx context.Context, w http.ResponseWriter, err error) {
+	if errors.Is(err, idempotency.ErrLost) {
+		err = idempotent.Lost()
+	}
+
+	w.Header().Set("Cache-Control", "no-store")
+
+	if ie, ok := errors.AsType[*idempotent.Error](err); ok {
+		h.writeAnswer(ctx, w, ie.Status, ie.Message, ie.Answer)
+
+		return
+	}
+
 	pr := classify(err)
-	if pr.status == http.StatusInternalServerError {
-		// The log names the status only: the text may hold driver detail.
-		h.logger.ErrorContext(ctx, "request failed", slog.Int("status", pr.status))
+	if se, ok := errors.AsType[*statusError](err); ok {
+		pr = se.problem
 	}
 
 	if errors.Is(err, namespace.ErrFenced) {
 		h.logger.WarnContext(ctx, "write fenced", slog.String("error", err.Error()))
 	}
 
-	w.Header().Set("Cache-Control", "no-store")
-	h.writeJSON(ctx, w, pr.status, errorResponse{Code: pr.status, Message: pr.message, ErrorCode: pr.code})
+	answer, codeErr := errcode.New(pr.code, pr.values...)
+	if codeErr != nil {
+		// A code or a value that the catalog refuses is a bug of this adapter.
+		// The log names the code only.
+		h.logger.ErrorContext(ctx, "error code refused", slog.String("error_code", pr.code))
+
+		pr = problem{
+			status: http.StatusInternalServerError, code: errcode.ServerInternal, values: nil,
+			message: "internal error",
+		}
+		answer = errcode.Internal()
+	}
+
+	if pr.status == http.StatusInternalServerError {
+		// The log names the status only: the text may hold driver detail.
+		h.logger.ErrorContext(ctx, "request failed", slog.Int("status", pr.status))
+	}
+
+	h.writeAnswer(ctx, w, pr.status, pr.message, answer)
 }
 
-// problem is the answer to an error: a status, a stable code and a message that
-// is safe to show callers.
+// writeAnswer writes the error body of status and message with the code and
+// the arguments of answer.
+func (h *Handler) writeAnswer(
+	ctx context.Context, w http.ResponseWriter, status int, message string, answer errcode.Answer,
+) {
+	h.writeJSON(ctx, w, status, errorResponse{
+		Code: status, Message: message, ErrorCode: answer.Code(), ErrorArgs: answer.Args(),
+	})
+}
+
+// problem is the answer to an error: a status, a code of the catalog with the
+// values of its arguments, and a message that is safe to show callers.
 type problem struct {
 	status  int
 	code    string
+	values  []errcode.Value
 	message string
 }
 
+// classify maps err to its answer: first the errors of the caller, then the
+// errors of the namespace, then the errors of the registry.
 func classify(err error) problem {
-	if pr, ok := classifyAuth(err); ok {
-		return pr
-	}
-
-	if se, ok := errors.AsType[*statusError](err); ok {
-		return problem{status: se.status, code: se.code, message: se.message}
-	}
-
-	if ie, ok := errors.AsType[*idempotent.Error](err); ok {
-		return problem{status: ie.Status, code: ie.Code, message: ie.Message}
-	}
-
-	if errors.Is(err, idempotency.ErrLost) {
-		return problem{
-			status: http.StatusConflict, code: idempotent.CodeInProgress,
-			message: "a newer request took this Idempotency-Key before this request ended: retry later",
-		}
-	}
-
-	if pr, ok := classifyNamespace(err); ok {
-		return pr
-	}
-
-	return classifyRegistry(err)
+	return classifyAuth(err)
 }
 
-func classifyNamespace(err error) (problem, bool) {
+// classifyNamespace maps the errors of the namespace and of maintenance mode.
+// Any other error goes on to classifyRegistry.
+func classifyNamespace(err error) problem {
 	switch {
 	case errors.Is(err, namespace.ErrInvalidName):
-		return problem{status: http.StatusBadRequest, code: "namespace.invalid-name", message: err.Error()}, true
+		return problem{
+			status: http.StatusBadRequest, code: errcode.NamespaceInvalidName, values: nil, message: err.Error(),
+		}
 	case errors.Is(err, namespace.ErrNotFound):
-		return problem{status: http.StatusNotFound, code: "namespace.not-found", message: "namespace not found"}, true
+		return problem{
+			status: http.StatusNotFound, code: errcode.NamespaceNotFound, values: nil, message: "namespace not found",
+		}
 	case errors.Is(err, namespace.ErrFenced):
 		return problem{
-			status:  http.StatusConflict,
-			code:    "namespace.fenced",
+			status: http.StatusConflict, code: errcode.NamespaceFenced, values: nil,
 			message: namespace.ErrFenced.Error(),
-		}, true
+		}
 	case errors.Is(err, namespace.ErrNotHome):
 		return problem{
-			status: http.StatusMisdirectedRequest, code: "namespace.not-home",
+			status: http.StatusMisdirectedRequest, code: errcode.NamespaceNotHome, values: nil,
 			message: "namespace is not homed in this region",
-		}, true
+		}
 	case errors.Is(err, maintenance.ErrInMaintenance):
 		return problem{
-			status: http.StatusServiceUnavailable, code: "maintenance.in-maintenance",
+			status: http.StatusServiceUnavailable, code: errcode.MaintenanceInMaintenance, values: nil,
 			message: maintenance.ErrInMaintenance.Error() + ": try again later",
-		}, true
+		}
 	default:
-		return problem{status: 0, code: "", message: ""}, false
+		return classifyRegistry(err)
 	}
 }
 
 // classifyRegistry maps the errors of the registry. The text of a refusal names
 // the field or the file that fails, and holds no byte of a key.
 func classifyRegistry(err error) problem {
-	status, code := registryStatus(err)
-	if status == http.StatusInternalServerError {
-		return problem{status: status, code: code, message: "internal error"}
+	p := registryProblemOf(err)
+	if p == nil {
+		return problem{
+			status: http.StatusInternalServerError, code: errcode.ServerInternal, values: nil,
+			message: "internal error",
+		}
 	}
 
-	return problem{status: status, code: code, message: err.Error()}
+	pr := p.problem
+	pr.message = err.Error()
+
+	return pr
 }
 
-// registryProblem maps one error of the registry to its answer.
+// registryProblem maps one error of the registry to its answer. The message
+// of the answer is the text of the error.
 type registryProblem struct {
-	err    error
-	code   string
-	status int
+	err     error
+	problem problem
 }
 
 // registryProblems lists the errors of the registry with their answers. The
@@ -280,49 +304,81 @@ type registryProblem struct {
 //
 //nolint:gochecknoglobals // A fixed table; Go has no constant slices.
 var registryProblems = []registryProblem{
-	{registry.ErrNotFound, "registry.not-found", http.StatusNotFound},
-	{registry.ErrKeyNotFound, "registry.not-found", http.StatusNotFound},
-	{service.ErrNotStaged, "registry.not-staged", http.StatusNotFound},
-	{service.ErrTooLarge, "registry.too-large", http.StatusRequestEntityTooLarge},
-	{registry.ErrVersionExists, "registry.version-exists", http.StatusConflict},
-	{registry.ErrKeyExists, "registry.key-exists", http.StatusConflict},
-	{registry.ErrBadSignature, "registry.signature-invalid", http.StatusUnprocessableEntity},
-	{registry.ErrUntrustedKey, "registry.signature-untrusted-key", http.StatusUnprocessableEntity},
-	{releasecheck.ErrRefused, "registry.archive-set-refused", http.StatusUnprocessableEntity},
-	{service.ErrNoKeys, "registry.no-keys", http.StatusUnprocessableEntity},
-	{registry.ErrKeyLimit, "registry.key-limit", http.StatusUnprocessableEntity},
-	{registry.ErrBadKey, "registry.key-invalid", http.StatusBadRequest},
-	{registry.ErrInvalid, "registry.invalid", http.StatusBadRequest},
-	{service.ErrBadRequest, "registry.invalid", http.StatusBadRequest},
+	{err: registry.ErrNotFound, problem: problem{
+		status: http.StatusNotFound, code: errcode.RegistryNotFound, values: nil, message: "",
+	}},
+	{err: registry.ErrKeyNotFound, problem: problem{
+		status: http.StatusNotFound, code: errcode.RegistryNotFound, values: nil, message: "",
+	}},
+	{err: service.ErrNotStaged, problem: problem{
+		status: http.StatusNotFound, code: errcode.RegistryNotStaged, values: nil, message: "",
+	}},
+	{err: service.ErrTooLarge, problem: problem{
+		status: http.StatusRequestEntityTooLarge, code: errcode.RegistryTooLarge, values: nil, message: "",
+	}},
+	{err: registry.ErrVersionExists, problem: problem{
+		status: http.StatusConflict, code: errcode.RegistryVersionExists, values: nil, message: "",
+	}},
+	{err: registry.ErrKeyExists, problem: problem{
+		status: http.StatusConflict, code: errcode.RegistryKeyExists, values: nil, message: "",
+	}},
+	{err: registry.ErrBadSignature, problem: problem{
+		status: http.StatusUnprocessableEntity, code: errcode.RegistrySignatureInvalid, values: nil, message: "",
+	}},
+	{err: registry.ErrUntrustedKey, problem: problem{
+		status: http.StatusUnprocessableEntity, code: errcode.RegistrySignatureUntrustedKey, values: nil, message: "",
+	}},
+	{err: releasecheck.ErrRefused, problem: problem{
+		status: http.StatusUnprocessableEntity, code: errcode.RegistryArchiveSetRefused, values: nil, message: "",
+	}},
+	{err: service.ErrNoKeys, problem: problem{
+		status: http.StatusUnprocessableEntity, code: errcode.RegistryNoKeys, values: nil, message: "",
+	}},
+	{err: registry.ErrKeyLimit, problem: problem{
+		status: http.StatusUnprocessableEntity, code: errcode.RegistryKeyLimit, values: nil, message: "",
+	}},
+	{err: registry.ErrBadKey, problem: problem{
+		status: http.StatusBadRequest, code: errcode.RegistryKeyInvalid, values: nil, message: "",
+	}},
+	{err: registry.ErrInvalid, problem: problem{
+		status: http.StatusBadRequest, code: errcode.RegistryInvalid, values: nil, message: "",
+	}},
+	{err: service.ErrBadRequest, problem: problem{
+		status: http.StatusBadRequest, code: errcode.RegistryInvalid, values: nil, message: "",
+	}},
 }
 
-// registryStatus returns the status and the stable code of a registry error,
-// and 500 for an error that it does not know.
-func registryStatus(err error) (int, string) {
-	for _, p := range registryProblems {
-		if errors.Is(err, p.err) {
-			return p.status, p.code
+// registryProblemOf returns the element of registryProblems for err, or nil for
+// an error that the table does not hold.
+func registryProblemOf(err error) *registryProblem {
+	for i := range registryProblems {
+		if errors.Is(err, registryProblems[i].err) {
+			return &registryProblems[i]
 		}
 	}
 
-	return http.StatusInternalServerError, ""
+	return nil
 }
 
-func classifyAuth(err error) (problem, bool) {
+// classifyAuth maps the errors of the caller: a missing or a refused credential
+// and a refused action. Any other error goes on to classifyNamespace.
+func classifyAuth(err error) problem {
 	switch {
 	case errors.Is(err, identity.ErrRateLimited):
 		return problem{
-			status: http.StatusTooManyRequests, code: "auth.rate-limited",
+			status: http.StatusTooManyRequests, code: errcode.AuthRateLimited, values: nil,
 			message: "too many failed sign-ins from this address: try again later",
-		}, true
+		}
 	case errors.Is(err, identity.ErrUnauthenticated):
-		return problem{status: http.StatusUnauthorized, code: "auth.unauthenticated", message: "unauthenticated"}, true
+		return problem{
+			status: http.StatusUnauthorized, code: errcode.AuthUnauthenticated, values: nil, message: "unauthenticated",
+		}
 	case errors.Is(err, sessionauth.ErrCSRF), errors.Is(err, sessionauth.ErrOtherSite):
-		return problem{status: http.StatusForbidden, code: errcode.Forbidden(err), message: err.Error()}, true
+		return problem{status: http.StatusForbidden, code: errcode.Forbidden(err), values: nil, message: err.Error()}
 	case errors.Is(err, identity.ErrDenied):
-		return problem{status: http.StatusForbidden, code: errcode.Forbidden(err), message: "forbidden"}, true
+		return problem{status: http.StatusForbidden, code: errcode.Forbidden(err), values: nil, message: "forbidden"}
 	default:
-		return problem{status: 0, code: "", message: ""}, false
+		return classifyNamespace(err)
 	}
 }
 

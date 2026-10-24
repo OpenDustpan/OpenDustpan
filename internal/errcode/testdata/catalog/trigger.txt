@@ -1,0 +1,6 @@
+trigger.cycle
+trigger.disabled
+trigger.fire-conflict
+trigger.invalid
+trigger.not-found
+trigger.saver-denied

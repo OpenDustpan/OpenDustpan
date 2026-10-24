@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/installation"
 	"opendustpan.org/opendustpan/pkg/principal"
@@ -91,9 +92,26 @@ func warnServer(t *testing.T, kind installation.Kind, subjects ...string) (*Serv
 	}
 
 	for _, subject := range subjects {
-		switch subject {
-		case principal.DevAdminSubject:
+		switch {
+		case subject == principal.DevAdminSubject:
 			_, _, err = svc.SignInDevAdministrator(t.Context(), adminEntry(), "Dev administrator")
+		case principal.IsDevSubject(subject):
+			// The service refuses every case of the dev prefix, as a sign-in
+			// does. A row of another version or of a restore can still hold
+			// one, so the case writes it through the store.
+			entry := adminEntry()
+			entry.Namespace = audit.ServerScope
+			entry.At = time.Now()
+			entry.Action = string(identity.ActionServerManagePrincipals)
+			entry.Object = "principal:prn-" + subject
+			entry.Kind = audit.KindChange
+			entry.Outcome = audit.OutcomeSuccess
+
+			err = st.CreatePrincipal(t.Context(), principal.Principal{
+				CreatedAt: entry.At, UpdatedAt: entry.At, DisabledAt: time.Time{}, ID: "prn-" + subject,
+				Subject: subject, DisplayName: "", Kind: principal.KindPerson, Source: principal.SourceLocal,
+				Namespace: "", GroupCount: 0, BreakGlass: false,
+			}, entry)
 		default:
 			_, err = svc.CreatePrincipal(t.Context(), adminEntry(), principal.Input{
 				Subject: subject, DisplayName: "", Kind: principal.KindPerson,
@@ -136,6 +154,10 @@ func TestWarnDevPrincipals(t *testing.T) {
 		{name: "no kind", kind: "", subjects: dev, want: dev},
 		{name: "dev kind", kind: installation.KindDev, subjects: dev, want: nil},
 		{name: "no dev person", kind: installation.KindProduction, subjects: []string{"alice", "developer"}, want: nil},
+		{
+			name: "dev people in other cases", kind: installation.KindProduction,
+			subjects: []string{"alice", "Dev:x", "DEV:admin"}, want: []string{"DEV:admin", "Dev:x"},
+		},
 	}
 
 	for _, tt := range tests {

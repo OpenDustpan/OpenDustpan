@@ -338,9 +338,42 @@ func TestGitConfig(t *testing.T) {
 	}
 
 	for _, tc := range cases {
-		got := string(launcher.GitConfig(tc.helper))
+		b, err := launcher.GitConfig(tc.helper)
+		if err != nil {
+			t.Fatalf("GitConfig(%q) error = %v", tc.helper, err)
+		}
+
+		got := string(b)
 		if got != tc.want || strings.Contains(got, "!") {
 			t.Errorf("GitConfig(%q) = %q, want %q", tc.helper, got, tc.want)
+		}
+	}
+}
+
+// TestGitConfigRefusesUnsafeCharacters sends each hostile helper straight to
+// GitConfig, as if the validation of the pool had not run: a control
+// character, and a character that git reads as syntax in a value.
+func TestGitConfigRefusesUnsafeCharacters(t *testing.T) {
+	t.Parallel()
+
+	for _, helper := range []string{
+		"git-credential-x\n[core]\nsshCommand=evil",
+		"/usr/bin/a\nhelper = /tmp/evil",
+		"/usr/bin/helper\r",
+		"\n",
+		"git-credential-x\x00",
+		"git-credential-x\x7f",
+		"/usr/bin/a\x1bb",
+		`/usr/bin/x"y`,
+		`/usr/bin/x\y`,
+		"/usr/bin/x#y",
+		"/usr/bin/x;y",
+		"!sh -c evil",
+		"/usr/bin/x y",
+	} {
+		got, err := launcher.GitConfig(helper)
+		if !errors.Is(err, launcher.ErrUnsafeHelper) || got != nil {
+			t.Errorf("GitConfig(%q) = %q, %v, want no configuration and ErrUnsafeHelper", helper, got, err)
 		}
 	}
 }

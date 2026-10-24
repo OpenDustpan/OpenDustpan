@@ -202,7 +202,7 @@ func TestRefusals(t *testing.T) {
 		err := mw.Handle(httptest.NewRecorder(), req, plainCall(noAnswer, serve))
 
 		refusal, ok := errors.AsType[*idempotent.Error](err)
-		if !ok || refusal.Code != tc.code || refusal.Status != tc.status {
+		if !ok || refusal.Answer.Code() != tc.code || refusal.Status != tc.status {
 			t.Errorf("%s: err = %v, want %d %s", name, err, tc.status, tc.code)
 		}
 	}
@@ -212,7 +212,7 @@ func TestRefusals(t *testing.T) {
 	req.Header.Set(idempotent.Header, "k1")
 
 	err := mw.Handle(httptest.NewRecorder(), req, plainCall(noAnswer, serve))
-	if refusal, ok := errors.AsType[*idempotent.Error](err); !ok || refusal.Code != idempotent.CodeReused {
+	if refusal, ok := errors.AsType[*idempotent.Error](err); !ok || refusal.Answer.Code() != idempotent.CodeReused {
 		t.Errorf("another query: err = %v, want %s", err, idempotent.CodeReused)
 	}
 }

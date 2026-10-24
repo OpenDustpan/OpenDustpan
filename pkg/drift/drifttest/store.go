@@ -31,6 +31,7 @@ func storeCases() []suiteCase {
 		{"store: a delete removes the result and is idempotent", testStoreDelete},
 		{"store: a unit with no result is not found", testGetNotFound},
 		{"store: the result of one unit does not reach another unit", testStoreIsolation},
+		{"store: a unit ID of another namespace or tool is refused", testRecordUnitIDOfAnotherScope},
 		{"store: the inventory projection follows the status", testProjection},
 		{"store: one notification for a change into drifted, none for a repeat", testNotification},
 	}
@@ -528,5 +529,34 @@ func testNotification(t *testing.T, h Harness) {
 
 	if got := h.Notified(t, "acme"); len(got) != want {
 		t.Errorf("notifications after a refused record = %v, want still %d", got, want)
+	}
+}
+
+// testRecordUnitIDOfAnotherScope proves that a result for a unit ID that holds
+// the result of another namespace or another tool fails with ErrInvalid, for
+// example after a restore or a move, and that the stored result stays.
+func testRecordUnitIDOfAnotherScope(t *testing.T, h Harness) {
+	t.Helper()
+
+	acme := h.Namespace(t, "acme")
+	beta := h.Namespace(t, "beta")
+	u := unit("acme", "wsp-1")
+
+	_, err := h.Store.Record(t.Context(), result(u, h.Jobs.DriftCheck(t, u), 1, "x"), acme)
+	must(t, "record", err)
+
+	other := unit("beta", "wsp-1")
+	_, err = h.Store.Record(t.Context(), result(other, h.Jobs.DriftCheck(t, other), minute2, "y"), beta)
+	wantErr(t, "record of the unit ID in another namespace", err, drift.ErrInvalid)
+
+	tool := graph.Unit{Namespace: "acme", Tool: "pulumi", ID: "wsp-1"}
+	_, err = h.Store.Record(t.Context(), result(tool, h.Jobs.DriftCheck(t, tool), minute3, "z"), acme)
+	wantErr(t, "record of the unit ID of another tool", err, drift.ErrInvalid)
+
+	got, err := h.Store.GetLatest(t.Context(), u)
+	must(t, "get", err)
+
+	if !got.CheckedAt.Equal(at(1)) {
+		t.Fatalf("stored result checked at %v, want the first result at %v", got.CheckedAt, at(1))
 	}
 }

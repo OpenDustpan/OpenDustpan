@@ -11,13 +11,14 @@ import (
 	"strings"
 )
 
-// Reveal of one secret value (ADR 41 decisions 4, 5 and 7): the caller names
-// a value path of a checkpoint deployment, the server answers the plain value
-// only when the path is in the masked set of the masked state read. The
-// masked set here is the union of the masked paths of every resource, built
-// with the same maskValue as the read, so no second masking path exists. The
-// reveal lookup streams the deployment to the path and decodes only the value
-// there, so no tree of the whole deployment is built.
+// Reveal of one secret value: the caller names a value path of a checkpoint
+// deployment, and the server answers the plain value only when the path is in
+// the masked set of the masked state read. The reveal lookup streams the deployment to the path and decodes only the
+// value
+// there, so no tree of the whole deployment is built. It decides that the
+// value is a secret with secretSignature, the check of the masked read too.
+// The masked read builds a tree and the lookup streams, so the tests hold the
+// two to the same answer for every path of the masked set.
 
 // ErrOtherSecretsProvider reports a stack whose deployment names another
 // secrets provider than the service provider. The server cannot decrypt it.
@@ -50,21 +51,29 @@ type providersDoc struct {
 // SecretsProvider returns the secrets provider type of deployment: the type
 // of its secrets_providers entry, or the service provider when the
 // deployment names none. Older deployments hold no provider entry and read
-// with the service provider. It streams the deployment to the entry and
-// skips every other value, so no tree of the deployment is built. A
-// deployment that does not decode reads as the service provider.
+// with the service provider. The save of a checkpoint accepts a repeated
+// top-level entry, and the Pulumi CLI reads the last copy, so the last copy
+// gives the type. It streams the deployment and skips every other value, so
+// no tree of the deployment is built. A deployment that does not decode reads
+// as the service provider.
 func SecretsProvider(deployment []byte) string {
-	dec := jsontext.NewDecoder(bytes.NewReader(deployment))
+	dec := jsontext.NewDecoder(bytes.NewReader(deployment), jsontext.AllowDuplicateNames(true))
 
 	open, err := openStreamedObject(dec)
 	if err != nil || !open {
 		return serviceSecretsProvider
 	}
 
+	provider := serviceSecretsProvider
+
 	for {
 		name, end, err := streamedMember(dec)
-		if err != nil || end {
+		if err != nil {
 			return serviceSecretsProvider
+		}
+
+		if end {
+			return provider
 		}
 
 		if name != secretsProvidersMember {
@@ -75,7 +84,7 @@ func SecretsProvider(deployment []byte) string {
 			continue
 		}
 
-		return streamedProviderType(dec)
+		provider = streamedProviderType(dec)
 	}
 }
 
@@ -95,65 +104,6 @@ func streamedProviderType(dec *jsontext.Decoder) string {
 	}
 
 	return providers.Type
-}
-
-// MaskedPaths returns the masked set of deployment: the value path of each
-// secret in the inputs and outputs of every resource. It uses the same
-// maskValue as the read, so the reveal check and the read agree.
-func MaskedPaths(deployment []byte) ([]string, error) {
-	doc, err := decodeDeployment(deployment)
-	if err != nil {
-		return nil, err
-	}
-
-	list := resourceElements(doc)
-
-	var masked []string
-
-	for index, elem := range list {
-		obj, ok := elem.(map[string]any)
-		if !ok || resourceField(obj, "urn") == "" {
-			continue
-		}
-
-		inputs := obj["inputs"]
-		if inputs == nil {
-			inputs = map[string]any{}
-		}
-
-		outputs := obj["outputs"]
-		if outputs == nil {
-			outputs = map[string]any{}
-		}
-
-		base := "/resources/" + strconv.Itoa(index)
-
-		maskValue(inputs, base+"/inputs", &masked)
-		maskValue(outputs, base+"/outputs", &masked)
-	}
-
-	if masked == nil {
-		masked = []string{}
-	}
-
-	return masked, nil
-}
-
-// resourceElements returns the elements of the resources array of doc, or nil
-// when doc has no such array. The positions of the elements are the indices
-// the reveal path names.
-func resourceElements(doc any) []any {
-	top, ok := doc.(map[string]any)
-	if !ok {
-		return nil
-	}
-
-	list, ok := top["resources"].([]any)
-	if !ok {
-		return nil
-	}
-
-	return list
 }
 
 // splitRevealPath splits an absolute JSON Pointer path into unescaped
@@ -680,7 +630,7 @@ func (w *objectWalk) visit(dec *jsontext.Decoder, name string) error {
 			return err
 		}
 
-		w.signed = w.signed || text == secretSigValue
+		w.signed = w.signed || secretSignature(text)
 
 		return nil
 	default:
@@ -797,7 +747,7 @@ func scanSecretMember(dec *jsontext.Decoder, name string, fields *secretFields) 
 		var text string
 
 		text, err = streamedText(dec)
-		fields.signed = text == secretSigValue
+		fields.signed = secretSignature(text)
 	case ciphertextField:
 		fields.cipher, err = streamedText(dec)
 	case "value":

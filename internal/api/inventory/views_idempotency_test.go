@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 
+	"opendustpan.org/opendustpan/internal/errcode"
+	"opendustpan.org/opendustpan/internal/errcode/errcodetest"
 	"opendustpan.org/opendustpan/pkg/identity"
 )
 
@@ -39,6 +41,12 @@ func TestViewCreateReplayKeepsTheIDAndNotTheView(t *testing.T) {
 		!strings.Contains(replay.body, "request.idempotency-key-replayed-secret") {
 		t.Fatalf("replay = %d (%s), want 409, the code and the ID %s", replay.status, replay.body, id)
 	}
+
+	errcodetest.CheckAnswer(t, errcodetest.ShapeCamelCase, http.StatusConflict, []byte(replay.body),
+		errcodetest.Want{
+			Code: errcode.RequestIdempotencyKeyReplayedSecret, Args: map[string]any{"objectID": id},
+			RequestBody: []byte(payments),
+		})
 
 	// The answer of the replay holds the ID and no part of the view.
 	if strings.Contains(replay.body, "Payments") || strings.Contains(replay.body, "payments") {

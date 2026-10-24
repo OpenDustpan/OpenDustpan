@@ -157,6 +157,13 @@ func Open(ctx context.Context, url string, opts ...Option) (*Store, error) {
 	}
 
 	live := liveSchemaName(cfg.ConnConfig.RuntimeParams["search_path"])
+
+	// Defense in depth: pgIdent still doubles the quotes of this name, so a
+	// name that this check misses still cannot end the quoted identifier.
+	if identErr := checkIdent(live); identErr != nil {
+		return nil, fmt.Errorf("open postgres store: schema %q of the search path: %w", live, identErr)
+	}
+
 	ctl := live + "_control"
 	cfg.AfterConnect = func(ctx context.Context, conn *pgx.Conn) error {
 		if _, execErr := conn.Exec(ctx, "SET search_path TO "+pgIdent(live)+", "+pgIdent(ctl)); execErr != nil {
@@ -427,7 +434,8 @@ func insertStackTags(ctx context.Context, q *db.Queries, id string, tags map[str
 // RenameStack implements stack.Store. It renames the stack without moving its
 // history, checkpoint or events: child rows key on the stable stack ID. The
 // inventory keeps one entry for the same stack ID, under the new name, in the
-// same transaction.
+// same transaction. It returns ErrNotFound if no live stack has oldRef, and
+// ErrUpdateConflict while a mutating update of the stack runs.
 func (s *Store) RenameStack(
 	ctx context.Context, oldRef stack.Ref, newName stack.Name, fence namespace.Fence,
 ) error {
@@ -436,7 +444,7 @@ func (s *Store) RenameStack(
 			return confirmStackPresent(ctx, q, oldRef)
 		}
 
-		if err := rejectTakenName(ctx, q, oldRef, newName); err != nil {
+		if err := refuseRename(ctx, q, oldRef, newName); err != nil {
 			return err
 		}
 
@@ -481,6 +489,32 @@ func (s *Store) RenameStack(
 			unitWrite{unitID: row.ID, atMs: row.UpdatedAtMs, kind: inventory.ChangeRenamed},
 		)
 	})
+}
+
+// refuseRename returns ErrNotFound when no live stack has oldRef,
+// ErrUpdateConflict while a mutating update of the stack runs, and
+// ErrAlreadyExists when newName names a stack of the same project. A running
+// update addresses the stack by its name. A rename under it would leave the
+// update with a name that no stack has: its checkpoint saves would fail and
+// the stack would stay locked by the update.
+func refuseRename(ctx context.Context, q *db.Queries, oldRef stack.Ref, newName stack.Name) error {
+	// The stack lock serializes this check with StartUpdate. Without it, a
+	// start could commit between the count and the rename, and the update
+	// would run under a name that no stack has.
+	locked, err := lockStack(ctx, q, oldRef)
+	if errors.Is(err, stack.ErrUpdateNotFound) {
+		return stack.ErrNotFound
+	}
+
+	if err != nil {
+		return err
+	}
+
+	if runErr := refuseRunningStack(ctx, q, locked.ID); runErr != nil {
+		return runErr
+	}
+
+	return rejectTakenName(ctx, q, oldRef, newName)
 }
 
 // confirmStackPresent returns nil when ref exists and ErrNotFound otherwise.
@@ -611,19 +645,21 @@ func (s *Store) ForceDeleteStack(
 	})
 }
 
-// refuseRunningStack returns ErrUpdateConflict while a mutating update of the
-// stack with stackID runs. The caller holds the stack lock.
+// refuseRunningStack returns the error of stack.RunningUpdateConflict, which
+// matches ErrUpdateConflict and names the running update when its ID is
+// valid, while a mutating update of the stack with stackID runs. The caller
+// holds the stack lock.
 func refuseRunningStack(ctx context.Context, q *db.Queries, stackID string) error {
-	running, err := q.RunningMutatingUpdates(ctx, stackID)
+	active, err := q.RunningMutatingUpdate(ctx, stackID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil
+	}
+
 	if err != nil {
-		return fmt.Errorf("count running updates: %w", err)
+		return fmt.Errorf("read the running update: %w", err)
 	}
 
-	if running > 0 {
-		return stack.ErrUpdateConflict
-	}
-
-	return nil
+	return stack.RunningUpdateConflict(active)
 }
 
 // refuseResourcedStack returns ErrHasResources when the latest checkpoint of

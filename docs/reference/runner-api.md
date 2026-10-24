@@ -45,7 +45,7 @@ never changes. The body of `POST /pools` has these fields:
 | `lease` | The lease of a claim, in milliseconds, from 30 000 to 600 000. Zero takes 90 000. |
 | `concurrency` | The phases that one runner runs at a time, from 1 to 64. Zero takes 1. |
 | `isolation` | The isolation kinds that a runner may use. An empty list allows every kind but `process`. |
-| `gitCredentials` | `mode` (`none`, `forge` or `custom`) and `helper` |
+| `gitCredentials` | `mode` (`none`, `forge` or `custom`) and `helper`. Only the mode `custom` takes a `helper`: a bare name that starts with `git-credential-`, or a clean absolute path, of letters, digits and the characters `.` `_` `/` `-`. Another helper fails with 400. |
 
 `PATCH /pools/{pool}` takes the same fields, and every field is optional. A
 field that the body leaves out keeps its value. A `purpose` that differs from
