@@ -249,7 +249,7 @@ func writeTestTableFile(
 			Path:    path,
 			SHA256:  hex.EncodeToString(digest[:]),
 			Columns: nil,
-			Rows:    0,
+			Rows:    sum.RowCounts[table],
 			Size:    int64(len(data)),
 		})
 	}
@@ -699,6 +699,10 @@ func assertBackupObjects(
 // two blobs must write.
 func wantManifest(now time.Time, id backup.ID, sql, first, second []byte) backup.Manifest {
 	files := sqlPartAllFiles(sql)
+	for i := range files {
+		files[i].Rows = testSummary().RowCounts[files[i].Table]
+	}
+
 	sqlSize, sqlSHA := sqlPartAggregate(files)
 	firstMD5 := md5.Sum(first)   //nolint:gosec // The test recomputes the MD5 the manifest records.
 	secondMD5 := md5.Sum(second) //nolint:gosec // The test recomputes the MD5 the manifest records.

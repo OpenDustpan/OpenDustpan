@@ -11,6 +11,8 @@ import (
 	"testing"
 
 	apiserver "opendustpan.org/opendustpan/internal/api/server"
+	"opendustpan.org/opendustpan/internal/errcode"
+	"opendustpan.org/opendustpan/internal/errcode/errcodetest"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/maintenance"
 )
@@ -506,5 +508,112 @@ func TestNewHandlerRequiresMaintenance(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("NewHandler without maintenance succeeded")
+	}
+}
+
+// TestMaintenanceEnterBusyAnswers503 proves an enter that the writes in
+// flight kept waiting past the bound of the store answers 503 with
+// Retry-After and a text that names the cause and the next step, without
+// store text.
+func TestMaintenanceEnterBusyAnswers503(t *testing.T) {
+	t.Parallel()
+
+	fake := newFakeMaintenance(maintenance.StateNormal)
+	fake.enterErr = fmt.Errorf("set installation state %q: store installation state sqlite database: waited 30s: %w",
+		maintenance.StateMaintenance, maintenance.ErrBusy)
+	handler := newMaintenanceHandler(t, fake)
+
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/server/maintenance/enter", http.NoBody)
+	req.Header.Set("Authorization", "Bearer test-token")
+
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("busy enter answers %d, want 503 (%s)", rec.Code, rec.Body.String())
+	}
+
+	if got := rec.Header().Get("Retry-After"); got != "30" {
+		t.Fatalf("Retry-After = %q, want 30", got)
+	}
+
+	var doc struct {
+		Code    int    `json:"code"`
+		Message string `json:"message"`
+	}
+
+	if err := json.Unmarshal(rec.Body.Bytes(), &doc); err != nil {
+		t.Fatalf("decode 503 of a busy enter: %v (%s)", err, rec.Body.String())
+	}
+
+	want := "cannot enter maintenance mode: the writes in flight did not end in time: try again later"
+	if doc.Code != http.StatusServiceUnavailable || doc.Message != want {
+		t.Fatalf("busy enter error = %+v, want code 503 and %q", doc, want)
+	}
+
+	errcodetest.CheckAnswer(t, errcodetest.ShapeCamelCase, http.StatusServiceUnavailable, rec.Body.Bytes(),
+		errcodetest.Want{Code: errcode.MaintenanceBusy, Args: nil, RequestBody: nil})
+}
+
+// TestEnterMaintenanceCanceledWorkRetryAfter proves a forced enter that
+// canceled work before it failed sends the same Retry-After as the other
+// answers that maintenance mode gives. A busy store answers 503 with
+// Retry-After; an error that is not busy sends no Retry-After.
+func TestEnterMaintenanceCanceledWorkRetryAfter(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		err        error
+		wantStatus int
+		wantHeader string
+		wantCode   string
+	}{
+		{
+			name: "busy store",
+			err: &maintenance.CanceledError{
+				Err: maintenance.ErrBusy, Canceled: []string{"pulumi:acme/web/prod"},
+			},
+			wantStatus: http.StatusServiceUnavailable,
+			wantHeader: "30",
+			wantCode:   errcode.MaintenanceBusy,
+		},
+		{
+			name: "unavailable store",
+			err: &maintenance.CanceledError{
+				Err: maintenance.ErrUnavailable, Canceled: []string{"pulumi:acme/web/prod"},
+			},
+			wantStatus: http.StatusInternalServerError,
+			wantHeader: "",
+			wantCode:   errcode.MaintenanceUnavailable,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			fake := newFakeMaintenance(maintenance.StateNormal)
+			fake.enterErr = fmt.Errorf("enter: %w", tt.err)
+			handler := newMaintenanceHandler(t, fake)
+
+			req := httptest.NewRequestWithContext(t.Context(), http.MethodPost,
+				"/api/server/maintenance/enter", strings.NewReader(`{"force":true}`))
+			req.Header.Set("Authorization", "Bearer test-token")
+
+			rec := httptest.NewRecorder()
+			handler.ServeHTTP(rec, req)
+
+			if rec.Code != tt.wantStatus {
+				t.Fatalf("forced enter answers %d, want %d (%s)", rec.Code, tt.wantStatus, rec.Body.String())
+			}
+
+			if got := rec.Header().Get("Retry-After"); got != tt.wantHeader {
+				t.Fatalf("Retry-After = %q, want %q", got, tt.wantHeader)
+			}
+
+			errcodetest.CheckAnswer(t, errcodetest.ShapeCamelCase, tt.wantStatus, rec.Body.Bytes(),
+				errcodetest.Want{Code: tt.wantCode, Args: nil, RequestBody: nil})
+		})
 	}
 }

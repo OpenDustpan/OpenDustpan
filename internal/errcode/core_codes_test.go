@@ -32,9 +32,10 @@ func TestSharedCodes(t *testing.T) {
 		{errcode.LockLocked, []errcode.Arg{
 			{Name: "holder", Kind: errcode.KindIdentifier},
 			{Name: "since", Kind: errcode.KindTime},
-			{Name: "target", Kind: errcode.KindIdentifier},
-			{Name: "targetKind", Kind: errcode.KindIdentifier},
-			{Name: "unit", Kind: errcode.KindIdentifier},
+			{Name: "lockedKind", Kind: errcode.KindIdentifier},
+			{Name: "locked", Kind: errcode.KindIdentifier},
+			{Name: "refusedKind", Kind: errcode.KindIdentifier},
+			{Name: "refused", Kind: errcode.KindIdentifier},
 		}},
 		{errcode.TokenInvalid, nil},
 		{errcode.SecretKeyNotConfigured, nil},

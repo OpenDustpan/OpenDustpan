@@ -27,6 +27,7 @@ func lockedFire() error {
 			Target: manuallock.UnitTarget(collection.UnitRef{Namespace: "acme", Tool: "opentofu", Name: "net"}),
 			Holder: "user-1", Reason: "secret reason",
 		},
+		Unit: collection.UnitRef{Namespace: "acme", Tool: "opentofu", Name: "net"},
 		Noun: "workspace", Name: "acme/net",
 	})
 }
@@ -64,8 +65,8 @@ func TestFireErrorsCarryTheirCode(t *testing.T) {
 		{
 			"a manual lock", lockedFire(), http.StatusConflict,
 			errcodetest.Want{RequestBody: nil, Code: errcode.LockLocked, Args: map[string]any{
-				"holder": "user-1", "since": "2026-10-23T09:30:00Z", "target": "opentofu:acme/net",
-				"targetKind": "unit", "unit": "acme/net",
+				"holder": "user-1", "since": "2026-10-23T09:30:00Z", "lockedKind": "workspace", "locked": "acme/net",
+				"refusedKind": "workspace", "refused": "acme/net",
 			}},
 		},
 		{

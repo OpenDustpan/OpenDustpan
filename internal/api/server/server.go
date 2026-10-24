@@ -423,7 +423,8 @@ type errorResponse struct {
 }
 
 // maintenanceRetryAfter is the Retry-After value, in seconds, of an
-// installation API write that maintenance mode refused.
+// installation API write that maintenance mode refused, and of an enter of
+// maintenance mode that the writes in flight kept waiting.
 const maintenanceRetryAfter = "30"
 
 func (h *Handler) writeError(ctx context.Context, w http.ResponseWriter, err error) {
@@ -456,7 +457,7 @@ func (h *Handler) writeError(ctx context.Context, w http.ResponseWriter, err err
 			slog.String("error_code", f.code), slog.String("cause", causeType(err)))
 	}
 
-	if errors.Is(err, maintenance.ErrInMaintenance) {
+	if errors.Is(err, maintenance.ErrInMaintenance) || errors.Is(err, maintenance.ErrBusy) {
 		w.Header().Set("Retry-After", maintenanceRetryAfter)
 	}
 
@@ -630,8 +631,9 @@ func classifyNamespace(err error) (failure, bool) {
 // holds maintenance mode answers 409, a refused approval of an audit chain
 // change answers 409 or, without a fresh MFA step or when a service
 // principal approves turning the chain off, 403, an approval while the
-// server runs no migration loop answers 503, and an unreadable or
-// unknown stored state answers 500 without driver text.
+// server runs no migration loop answers 503, an enter that the writes in
+// flight kept waiting past the bound of the store answers 503, and an
+// unreadable or unknown stored state answers 500 without driver text.
 func classifyMaintenance(err error) (failure, bool) {
 	switch {
 	case errors.Is(err, maintenance.ErrInvalidState):
@@ -652,6 +654,9 @@ func classifyMaintenance(err error) (failure, bool) {
 	case errors.Is(err, maintenance.ErrInMaintenance):
 		return failCoded(http.StatusServiceUnavailable, maintenance.ErrInMaintenance.Error()+": try again later",
 			errcode.MaintenanceInMaintenance), true
+	case errors.Is(err, maintenance.ErrBusy):
+		return failCoded(http.StatusServiceUnavailable, maintenance.ErrBusy.Error()+": try again later",
+			errcode.MaintenanceBusy), true
 	case errors.Is(err, maintenance.ErrUnavailable):
 		return failCoded(http.StatusInternalServerError, maintenance.ErrUnavailable.Error(),
 			errcode.MaintenanceUnavailable), true
