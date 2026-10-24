@@ -6,7 +6,6 @@ package profile
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -16,15 +15,13 @@ import (
 
 	"opendustpan.org/opendustpan/internal/api/apidesc"
 	"opendustpan.org/opendustpan/internal/api/idempotent"
+	"opendustpan.org/opendustpan/internal/api/problem"
 	"opendustpan.org/opendustpan/internal/api/refusal"
 	"opendustpan.org/opendustpan/internal/denylimit"
 	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/internal/sessionauth"
 	"opendustpan.org/opendustpan/pkg/audit"
-	"opendustpan.org/opendustpan/pkg/idempotency"
 	"opendustpan.org/opendustpan/pkg/identity"
-	"opendustpan.org/opendustpan/pkg/maintenance"
-	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/profile"
 )
 
@@ -161,204 +158,72 @@ func (h *Handler) authenticate(r *http.Request) (identity.Principal, *sessionaut
 	return p, nil, err
 }
 
-// errorResponse is the error body of the tool-neutral APIs. ErrorCode is a
-// stable machine code.
-type errorResponse struct {
-	Message string `json:"message"`
-	Code    int    `json:"code"`
-	// ErrorCode is a stable machine code.
-	ErrorCode string `json:"errorCode,omitempty"`
-	// ErrorArgs are the arguments of the code.
-	ErrorArgs map[string]any `json:"errorArgs,omitempty"`
-	// Reauthenticate is the path that starts a new sign-in, for the refusal
-	// of an old sign-in.
-	Reauthenticate string `json:"reauthenticate,omitempty"`
-}
-
-// statusError is an error with a fixed answer.
-type statusError struct {
-	problem problem
-}
-
-func (e *statusError) Error() string { return e.problem.message }
-
+// writeError answers err through the shared error module of the
+// tool-neutral APIs, with the classes of the profile service.
 func (h *Handler) writeError(ctx context.Context, w http.ResponseWriter, err error) {
-	if errors.Is(err, idempotency.ErrLost) {
-		err = idempotent.Lost()
-	}
-
-	w.Header().Set("Cache-Control", "no-store")
-
-	if ie, ok := errors.AsType[*idempotent.Error](err); ok {
-		h.writeJSON(ctx, w, ie.Status, answerBody(ie.Status, ie.Message, ie.Answer, ""))
-
-		return
-	}
-
-	pr := classify(err)
-	if se, ok := errors.AsType[*statusError](err); ok {
-		pr = se.problem
-	}
-
-	if errors.Is(err, namespace.ErrFenced) {
-		h.logger.WarnContext(ctx, "write fenced", slog.String("error", err.Error()))
-	}
-
-	answer, codeErr := errcode.New(pr.code, pr.values...)
-	if codeErr != nil {
-		// A code or a value that the catalog refuses is a bug of this adapter.
-		// The log names the code only.
-		h.logger.ErrorContext(ctx, "error code refused", slog.String("error_code", pr.code))
-
-		pr = problem{
-			status: http.StatusInternalServerError, code: errcode.ServerInternal, values: nil,
-			message: "internal error",
-		}
-		answer = errcode.Internal()
-	}
-
-	if pr.status == http.StatusInternalServerError {
-		// The log names the status only: the text may hold driver detail.
-		h.logger.ErrorContext(ctx, "request failed", slog.Int("status", pr.status))
-	}
-
-	var reauthenticate string
-	if old, ok := errors.AsType[reauthenticateError](err); ok {
-		reauthenticate = old.path
-	}
-
-	h.writeJSON(ctx, w, pr.status, answerBody(pr.status, pr.message, answer, reauthenticate))
+	problem.Writer{Logger: h.logger, Classify: profileErrors}.Write(ctx, w, err)
 }
 
-// answerBody returns the error body of status and message with the code and
-// the arguments of answer. reauthenticate is the path that starts a new
-// sign-in, or "".
-func answerBody(status int, message string, answer errcode.Answer, reauthenticate string) errorResponse {
-	return errorResponse{
-		Code: status, Message: message, ErrorCode: answer.Code(), ErrorArgs: answer.Args(),
-		Reauthenticate: reauthenticate,
+// profileErrors maps the errors of the profile service and of the fresh
+// sign-in that a profile change needs. It runs before the shared classes
+// other than the credential refusals, so a routing refusal, which wraps
+// identity.ErrDenied, keeps its own code.
+func profileErrors(err error) (problem.Problem, bool) {
+	if p, ok := freshErrors(err); ok {
+		return p, true
 	}
-}
 
-// problem is the answer to an error: a status, a code of the catalog with the
-// values of its arguments, and a message that is safe to show callers.
-type problem struct {
-	status  int
-	code    string
-	values  []errcode.Value
-	message string
-}
-
-// classify maps err to its answer: first the errors of the caller, then the
-// errors of the namespace, then the errors of the profile service.
-func classify(err error) problem {
-	return classifyAuth(err)
-}
-
-// classifyNamespace maps the errors of the namespace and of maintenance mode.
-// Any other error goes on to classifyProfile.
-func classifyNamespace(err error) problem {
-	switch {
-	case errors.Is(err, namespace.ErrInvalidName):
-		return problem{
-			status: http.StatusBadRequest, code: errcode.NamespaceInvalidName, values: nil, message: err.Error(),
-		}
-	case errors.Is(err, namespace.ErrNotFound):
-		return problem{
-			status: http.StatusNotFound, code: errcode.NamespaceNotFound, values: nil, message: "namespace not found",
-		}
-	case errors.Is(err, namespace.ErrFenced):
-		return problem{
-			status: http.StatusConflict, code: errcode.NamespaceFenced, values: nil,
-			message: namespace.ErrFenced.Error(),
-		}
-	case errors.Is(err, namespace.ErrNotHome):
-		return problem{
-			status: http.StatusMisdirectedRequest, code: errcode.NamespaceNotHome, values: nil,
-			message: "namespace is not homed in this region",
-		}
-	case errors.Is(err, maintenance.ErrInMaintenance):
-		return problem{
-			status: http.StatusServiceUnavailable, code: errcode.MaintenanceInMaintenance, values: nil,
-			message: maintenance.ErrInMaintenance.Error() + ": try again later",
-		}
-	default:
-		return classifyProfile(err)
+	if routing, ok := errors.AsType[*profile.RoutingError](err); ok {
+		return profileProblem(http.StatusForbidden, errcode.ProfileRoutingChangeNeedsOpen, routing.Error()), true
 	}
-}
 
-// classifyProfile maps the errors of the profile service.
-func classifyProfile(err error) problem {
 	switch {
 	case errors.Is(err, profile.ErrNotFound):
-		return problem{status: http.StatusNotFound, code: errcode.ProfileNotFound, values: nil, message: err.Error()}
+		return profileProblem(http.StatusNotFound, errcode.ProfileNotFound, err.Error()), true
 	case errors.Is(err, profile.ErrSchemaVersion):
-		return problem{
-			status: http.StatusUnprocessableEntity, code: errcode.ProfileSchemaVersion, values: nil,
-			message: err.Error(),
-		}
+		return profileProblem(http.StatusUnprocessableEntity, errcode.ProfileSchemaVersion, err.Error()), true
 	case errors.Is(err, profile.ErrLimit):
-		return problem{
-			status: http.StatusUnprocessableEntity, code: errcode.ProfileLimit, values: nil, message: err.Error(),
-		}
+		return profileProblem(http.StatusUnprocessableEntity, errcode.ProfileLimit, err.Error()), true
 	case errors.Is(err, profile.ErrInvalid):
-		return problem{status: http.StatusBadRequest, code: errcode.ProfileInvalid, values: nil, message: err.Error()}
+		return profileProblem(http.StatusBadRequest, errcode.ProfileInvalid, err.Error()), true
 	case errors.Is(err, profile.ErrConflict):
-		return problem{status: http.StatusConflict, code: errcode.ProfileConflict, values: nil, message: err.Error()}
+		return profileProblem(http.StatusConflict, errcode.ProfileConflict, err.Error()), true
 	default:
-		return problem{
-			status: http.StatusInternalServerError, code: errcode.ServerInternal, values: nil,
-			message: "internal error",
-		}
+		return problem.Pass()
 	}
 }
 
-// classifyAuth maps the errors of the caller: a missing or a refused
-// credential, a missing fresh sign-in and a refused action. Any other error
-// goes on to classifyNamespace.
-func classifyAuth(err error) problem {
-	if routing, ok := errors.AsType[*profile.RoutingError](err); ok {
-		return problem{
-			status: http.StatusForbidden, code: errcode.ProfileRoutingChangeNeedsOpen, values: nil,
-			message: routing.Error(),
-		}
-	}
-
+// freshErrors maps the errors of the fresh sign-in check: a request with no
+// console session, or a reveal with no fresh authentication check, fails
+// closed.
+func freshErrors(err error) (problem.Problem, bool) {
 	switch {
-	case errors.Is(err, identity.ErrRateLimited):
-		return problem{
-			status: http.StatusTooManyRequests, code: errcode.AuthRateLimited, values: nil,
-			message: "too many failed sign-ins from this address: try again later",
-		}
-	case errors.Is(err, identity.ErrUnauthenticated):
-		return problem{
-			status: http.StatusUnauthorized, code: errcode.AuthUnauthenticated, values: nil, message: "unauthenticated",
-		}
-	case errors.Is(err, sessionauth.ErrCSRF), errors.Is(err, sessionauth.ErrOtherSite):
-		return problem{status: http.StatusForbidden, code: errcode.Forbidden(err), values: nil, message: err.Error()}
 	case errors.Is(err, errFreshStepRequired), errors.Is(err, profile.ErrFreshRequired):
-		// A request with no console session, or a reveal with no fresh
-		// authentication check: fail closed.
-		return problem{
-			status: http.StatusForbidden, code: errcode.MFAFreshStepRequired, values: nil,
-			message: sessionauth.FreshStepRequiredMessage,
-		}
+		return profileProblem(
+			http.StatusForbidden,
+			errcode.MFAFreshStepRequired,
+			sessionauth.FreshStepRequiredMessage,
+		), true
 	case errors.Is(err, errReauthenticate):
-		return problem{
-			status: http.StatusUnauthorized, code: errcode.MFAFreshStepRequired, values: nil, message: err.Error(),
+		p := profileProblem(http.StatusUnauthorized, errcode.MFAFreshStepRequired, err.Error())
+
+		if old, ok := errors.AsType[reauthenticateError](err); ok {
+			p.Reauthenticate = old.path
 		}
-	case errors.Is(err, identity.ErrDenied):
-		return problem{status: http.StatusForbidden, code: errcode.Forbidden(err), values: nil, message: "forbidden"}
+
+		return p, true
 	default:
-		return classifyNamespace(err)
+		return problem.Pass()
+	}
+}
+
+// profileAnswer returns the answer of a profile error with no arguments.
+func profileProblem(status int, code, message string) problem.Problem {
+	return problem.Problem{
+		Status: status, Code: code, Values: nil, Message: message, RetryAfter: 0, Reauthenticate: "",
 	}
 }
 
 func (h *Handler) writeJSON(ctx context.Context, w http.ResponseWriter, status int, body any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-
-	if err := json.NewEncoder(w).Encode(body); err != nil {
-		h.logger.WarnContext(ctx, "write response failed", slog.String("error", err.Error()))
-	}
+	problem.WriteJSON(ctx, h.logger, w, status, body)
 }
