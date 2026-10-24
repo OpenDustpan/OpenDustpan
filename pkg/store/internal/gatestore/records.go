@@ -24,7 +24,9 @@ type Records struct {
 
 var _ gate.Records = (*Records)(nil)
 
-// The decision record stores the schema version in its text form.
+// These assertions do not catch a regression: pkg/gate/id.go already asserts the same interfaces.
+// They make musttag see the text form of gate.SchemaVersion when it runs on a package set
+// without pkg/gate. That is why this file imports encoding.
 var (
 	_ encoding.TextMarshaler   = gate.SchemaVersion{Subject: "", Major: 0, Minor: 0}
 	_ encoding.TextUnmarshaler = (*gate.SchemaVersion)(nil)
