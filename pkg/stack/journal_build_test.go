@@ -255,10 +255,11 @@ func (m *journalMemStore) storeJournalRow(row stack.JournalRow) (bool, error) {
 
 // verifyJournalRow runs the row's verifier against the operations the update
 // already holds, and sets the records flag of the update when the batch changes
-// the records. A row without a verifier passes.
+// the records. A row without a verifier is refused with ErrJournalBatch, as
+// the stores refuse it.
 func (m *journalMemStore) verifyJournalRow(row stack.JournalRow) error {
 	if row.Verify == nil {
-		return nil
+		return fmt.Errorf("journal row with no entry check: %w", stack.ErrJournalBatch)
 	}
 
 	var known []int64
