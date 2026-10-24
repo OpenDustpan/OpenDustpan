@@ -479,7 +479,7 @@ func TestStateResourceDenied(t *testing.T) {
 	t.Parallel()
 
 	handler := newStateHandler(t, selectiveAuthorizer{
-		deny: map[identity.Action]bool{identity.ActionUnitRead: true},
+		deny: map[identity.Action]bool{identity.ActionUnitRead: true, identity.ActionUnitReadOutputs: true},
 	})
 
 	for _, target := range []string{
@@ -493,6 +493,23 @@ func TestStateResourceDenied(t *testing.T) {
 		// state version.
 		if rec.Code != http.StatusNotFound {
 			t.Errorf("GET %s answers %d, want %d", target, rec.Code, http.StatusNotFound)
+		}
+	}
+}
+
+// TestResourcePageSizeErrorNamesTheParameter proves that a resource page size
+// outside its range answers 422 with a detail that names the parameter and the
+// range, and does not repeat the value.
+func TestResourcePageSizeErrorNamesTheParameter(t *testing.T) {
+	t.Parallel()
+
+	const want = `"detail":"invalid query parameter: page[size] must be a number from 1 to 500"`
+
+	for _, size := range []string{"0", "501", "many"} {
+		target := "/api/v2/state-versions/sv-test123/resources?page[size]=" + size
+		body := resourceBody(t, target, http.StatusUnprocessableEntity)
+		if !strings.Contains(body, want) {
+			t.Errorf("page[size]=%s: body = %s, want %s", size, body, want)
 		}
 	}
 }

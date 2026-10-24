@@ -15,6 +15,7 @@ import (
 	"time"
 
 	apiserver "opendustpan.org/opendustpan/internal/api/server"
+	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/internal/oauth"
 	"opendustpan.org/opendustpan/internal/oauth/oauthtest"
 	"opendustpan.org/opendustpan/pkg/access"
@@ -966,9 +967,9 @@ func TestSignInWithoutAutoCreate(t *testing.T) {
 	}
 
 	// A refused sign-in is not a missing permission: a grant does not help,
-	// so the answer must not carry access.denied.
-	if strings.Contains(rec.Body.String(), "errorCode") {
-		t.Errorf("a refused sign-in answers a code: %s", rec.Body.String())
+	// so the answer carries sign-in.refused, not access.denied.
+	if !strings.Contains(rec.Body.String(), `"errorCode":"`+errcode.SignInRefused+`"`) {
+		t.Errorf("a refused sign-in answers another code than %s: %s", errcode.SignInRefused, rec.Body.String())
 	}
 
 	if reason, outcome := e.refusedReason(t); reason != "no principal" || outcome != audit.OutcomeDenied {

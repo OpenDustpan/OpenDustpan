@@ -8,11 +8,18 @@ import (
 	"net/url"
 	"path"
 	"strings"
+
+	"opendustpan.org/opendustpan/pkg/runner"
 )
 
 // ErrNoCredentials reports a helper request for a host that the launcher
 // has no credential for, or a request outside a tool step.
 var ErrNoCredentials = errors.New("no credential for this host")
+
+// ErrUnsafeHelper reports a git credential helper that holds a character
+// that runner.HelperRune does not allow. Such a value could add a line to
+// the git configuration, or git could read it as another value.
+var ErrUnsafeHelper = errors.New("git credential helper holds a character that is not allowed")
 
 // Files of the credentials on the memory-backed volume. The launcher writes
 // each with mode 0600 before a step of the role tool, and deletes the
@@ -127,10 +134,20 @@ func PulumiCredentials(serverURL, token string) ([]byte, error) {
 // helper, which is an absolute path or a bare git-credential- name. Git
 // then starts it with no shell. With an empty helper, the configuration
 // sets an empty helper list, so a step gets no credential from git
-// configuration of the image.
-func GitConfig(helper string) []byte {
+// configuration of the image. It returns ErrUnsafeHelper, and no
+// configuration, for a helper that holds a character that
+// runner.HelperRune does not allow.
+func GitConfig(helper string) ([]byte, error) {
+	// Defense in depth: runner.GitCredentials.Validate refuses such a
+	// character when a pool is saved; this check stays so that a caller that
+	// skips it, or a pool row from another version, cannot add a line to the
+	// git configuration or change how git reads the value.
+	if strings.ContainsFunc(helper, func(r rune) bool { return !runner.HelperRune(r) }) {
+		return nil, fmt.Errorf("write git configuration: %w", ErrUnsafeHelper)
+	}
+
 	if helper == "" {
-		return []byte("[credential]\n\thelper =\n")
+		return []byte("[credential]\n\thelper =\n"), nil
 	}
 
 	name := helper
@@ -138,7 +155,7 @@ func GitConfig(helper string) []byte {
 		name = strings.TrimPrefix(helper, "git-credential-")
 	}
 
-	return fmt.Appendf(nil, "[credential]\n\thelper =\n\thelper = %s\n", name)
+	return fmt.Appendf(nil, "[credential]\n\thelper =\n\thelper = %s\n", name), nil
 }
 
 // TokenSource is the port through which a helper process asks the

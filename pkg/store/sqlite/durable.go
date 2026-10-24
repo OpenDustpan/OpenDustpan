@@ -431,6 +431,11 @@ func (o *DurableOperations) Release(ctx context.Context, c durable.Claim) error 
 	return o.store.endAttempt(ctx, c, releaseEnd)
 }
 
+// GiveBack implements durable.Store.
+func (o *DurableOperations) GiveBack(ctx context.Context, c durable.Claim) error {
+	return o.store.endAttempt(ctx, c, giveBackEnd)
+}
+
 // endRule returns the row of the end of a claim at now, or the error that
 // stops the end.
 type endRule func(row db.DurableOperation, now int64) (db.DurableOperation, error)
@@ -477,6 +482,15 @@ func releaseEnd(row db.DurableOperation, now int64) (db.DurableOperation, error)
 	row.NotBeforeMs = now
 
 	return clearClaim(row, now), nil
+}
+
+// giveBackEnd is the rule of durable.Store.GiveBack.
+func giveBackEnd(row db.DurableOperation, now int64) (db.DurableOperation, error) {
+	if row.CancelRequested {
+		return row, durable.ErrCanceled
+	}
+
+	return releaseEnd(row, now)
 }
 
 // Cancel implements durable.Store.
@@ -532,8 +546,8 @@ func cancelDurable(ctx context.Context, q *db.Queries, id durable.ID) error {
 	return writeDurable(ctx, q, row)
 }
 
-// endAttempt runs the checks that Complete, Fail and Release share, then
-// writes the row that end returns. An error from end changes nothing.
+// endAttempt runs the checks that Complete, Fail, Release and GiveBack share,
+// then writes the row that end returns. An error from end changes nothing.
 func (s *Store) endAttempt(ctx context.Context, c durable.Claim, end endRule) error {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

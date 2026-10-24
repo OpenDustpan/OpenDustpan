@@ -10,9 +10,6 @@ import (
 	"net/http"
 	"time"
 
-	"opendustpan.org/opendustpan/internal/clientip"
-	"opendustpan.org/opendustpan/internal/requestid"
-	"opendustpan.org/opendustpan/internal/sessionauth"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/secret"
@@ -52,6 +49,10 @@ type secretsCall struct {
 	crypt  func(context.Context, secret.Scope, [][]byte) ([][]byte, error)
 	decode func(*json.Decoder) ([][]byte, error)
 	answer func(in, out [][]byte) any
+	// none is the answer of a body with no value, or nil when such a body
+	// goes to crypt like any other body. A route with none answers it before
+	// it reads a key, and writes no audit entry: it opens no value.
+	none any
 }
 
 // serveSecrets serves one encrypt or decrypt route: it resolves the scope of
@@ -81,6 +82,12 @@ func (h *Handler) serveSecrets(
 
 	values, ok := h.decodeSecrets(w, r, limit, op.decode)
 	if !ok {
+		return
+	}
+
+	if op.none != nil && len(values) == 0 {
+		h.writeJSON(ctx, w, http.StatusOK, op.none)
+
 		return
 	}
 
@@ -176,21 +183,56 @@ func decodeSingles(field string) func(*json.Decoder) ([][]byte, error) {
 }
 
 // decodeBatch returns a decoder for a body with base64 values in field. A
-// body without the field answers 400 through writeInvalidBody.
+// body without the field, or with null in it, answers 400 through
+// writeInvalidBody.
 func decodeBatch(field string) func(*json.Decoder) ([][]byte, error) {
 	return func(dec *json.Decoder) ([][]byte, error) {
-		var doc map[string][][]byte
-		if err := dec.Decode(&doc); err != nil {
-			return nil, fmt.Errorf("decode secrets body: %w", err)
+		values, err := readBatch(dec, field)
+		if err != nil {
+			return nil, err
 		}
 
-		values, ok := doc[field]
-		if !ok || values == nil {
+		if values == nil {
 			return nil, fmt.Errorf("%w: missing %q", errInvalidBody, field)
 		}
 
 		return values, nil
 	}
+}
+
+// decodeBatchOrNull returns a decoder like decodeBatch that reads null in
+// field as a list with no value: some versions of the Pulumi CLI send null for
+// a batch with no value. A body without the field answers 400.
+func decodeBatchOrNull(field string) func(*json.Decoder) ([][]byte, error) {
+	return func(dec *json.Decoder) ([][]byte, error) {
+		values, err := readBatch(dec, field)
+		if err != nil {
+			return nil, err
+		}
+
+		if values == nil {
+			return [][]byte{}, nil
+		}
+
+		return values, nil
+	}
+}
+
+// readBatch decodes a body with base64 values in field. It returns nil values
+// for null in field, and an error that wraps errInvalidBody for a body without
+// the field.
+func readBatch(dec *json.Decoder, field string) ([][]byte, error) {
+	var doc map[string][][]byte
+	if err := dec.Decode(&doc); err != nil {
+		return nil, fmt.Errorf("decode secrets body: %w", err)
+	}
+
+	values, ok := doc[field]
+	if !ok {
+		return nil, fmt.Errorf("%w: missing %q", errInvalidBody, field)
+	}
+
+	return values, nil
 }
 
 // answerSingle returns an answer with the single output value in field. An
@@ -232,6 +274,7 @@ func (h *Handler) encryptValue(
 		crypt:  h.secrets.Encrypt,
 		decode: decodeSingles("plaintext"),
 		answer: answerSingle("ciphertext"),
+		none:   nil,
 	}, nil)
 }
 
@@ -244,6 +287,7 @@ func (h *Handler) batchEncrypt(
 		crypt:  h.secrets.Encrypt,
 		decode: decodeBatch("plaintexts"),
 		answer: answerBatch("ciphertexts"),
+		none:   nil,
 	}, nil)
 }
 
@@ -261,16 +305,19 @@ func (h *Handler) decryptValue(
 			crypt:  h.secrets.Decrypt,
 			decode: decodeSingles("ciphertext"),
 			answer: answerSingle("plaintext"),
+			none:   nil,
 		},
 		func(count int) error { return h.appendToolOperationAudit(r, p, obj, count) },
 	)
 }
 
 // batchDecrypt opens each ciphertext made by batchEncrypt for the same stack.
-// The server always serves it: the CLI has no fallback. It writes one audit
-// entry of the kind tool-operation before it answers: a failed append
-// answers 500 with no secret value. Any failure fails the batch as a whole
-// with a 400 without detail.
+// The server always serves it: the CLI has no fallback. A batch with no
+// ciphertext (an empty list or null) answers no plaintext, before a key read
+// and with no audit entry. Any other batch writes one audit entry of the kind
+// tool-operation before it answers: a failed append answers 500 with no
+// secret value. Any failure fails the batch as a whole with a 400 without
+// detail.
 func (h *Handler) batchDecrypt(
 	w http.ResponseWriter, r *http.Request, p identity.Principal, obj identity.Object,
 ) {
@@ -279,8 +326,9 @@ func (h *Handler) batchDecrypt(
 		r,
 		secretsCall{
 			crypt:  h.secrets.Decrypt,
-			decode: decodeBatch("ciphertexts"),
+			decode: decodeBatchOrNull("ciphertexts"),
 			answer: answerBatchDecrypt,
+			none:   map[string]map[string][]byte{"plaintexts": {}},
 		},
 		func(count int) error { return h.appendToolOperationAudit(r, p, obj, count) },
 	)
@@ -356,16 +404,6 @@ func (h *Handler) drainAuditBody(w http.ResponseWriter, r *http.Request) bool {
 	return true
 }
 
-// auditDetail groups what one audit entry records: the action, the state
-// version, the value path, the count of values and the kind of access.
-type auditDetail struct {
-	action     string
-	version    string
-	valuePath  string
-	valueCount *int64
-	kind       audit.Kind
-}
-
 // appendRevealAudit writes one audit entry for a third-party decryption that
 // the Pulumi CLI reports: the action unit:decrypt with the kind reveal, so
 // a reader never confuses it with a tool operation. A failed append writes
@@ -374,12 +412,14 @@ type auditDetail struct {
 func (h *Handler) appendRevealAudit(r *http.Request, p identity.Principal, obj identity.Object) {
 	ctx := r.Context()
 
-	entry := h.newAuditEntry(r, p, obj, auditDetail{
+	entry := requestEntry(ctx, r, p, obj, auditDetail{
+		at:         time.Now().UTC(),
 		action:     string(identity.ActionUnitDecrypt),
 		version:    "",
 		valuePath:  "",
 		valueCount: nil,
 		kind:       audit.KindReveal,
+		outcome:    audit.OutcomeSuccess,
 	})
 
 	if err := h.appendEntry(ctx, entry); err != nil {
@@ -399,53 +439,17 @@ func (h *Handler) appendToolOperationAudit(
 ) error {
 	valueCount := int64(count)
 
-	entry := h.newAuditEntry(r, p, obj, auditDetail{
+	entry := requestEntry(r.Context(), r, p, obj, auditDetail{
+		at:         time.Now().UTC(),
 		action:     string(identity.ActionUnitDecrypt),
 		version:    "",
 		valuePath:  "",
 		valueCount: &valueCount,
 		kind:       audit.KindToolOperation,
+		outcome:    audit.OutcomeSuccess,
 	})
 
 	return h.appendEntry(r.Context(), entry)
-}
-
-// newAuditEntry builds one audit entry for the request: who acted, what
-// happened and where it came from, with the given action, version, value
-// path, value count and kind. The store assigns the sequence, the previous hash and the
-// hash on append.
-func (h *Handler) newAuditEntry(
-	r *http.Request, p identity.Principal, obj identity.Object, detail auditDetail,
-) audit.Entry {
-	ctx := r.Context()
-
-	return audit.Entry{
-		At:            time.Now().UTC(),
-		Namespace:     obj.Namespace(),
-		Subject:       p.Subject,
-		IDPSubject:    "",
-		TokenID:       p.TokenID,
-		Action:        detail.action,
-		Object:        obj.String(),
-		Version:       detail.version,
-		ValuePath:     detail.valuePath,
-		ValueCount:    detail.valueCount,
-		Changes:       nil,
-		SourceIP:      clientip.String(r),
-		UserAgent:     truncateUserAgent(r.UserAgent()),
-		Channel:       sessionauth.AuditChannel(r, channelHeader),
-		Kind:          detail.kind,
-		Outcome:       audit.OutcomeSuccess,
-		RequestID:     requestid.FromContext(ctx),
-		ObjectID:      obj.UnitID(),
-		PrevHash:      "",
-		Hash:          "",
-		Sequence:      0,
-		FenceVersion:  0,
-		Reason:        "",
-		PrincipalKind: string(p.Kind),
-		JobID:         p.JobID,
-	}
 }
 
 // appendEntry writes e in its namespace with the fence check of the

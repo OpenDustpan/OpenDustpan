@@ -405,9 +405,25 @@ func CheckPatch(output *Entry, p Patch) error {
 
 	for _, f := range values.Set() {
 		if slices.Contains(fromCode, f) {
-			return fmt.Errorf("%w: %s", ErrFieldFromCode, f)
+			return &FieldFromCodeError{Field: f}
 		}
 	}
 
 	return nil
+}
+
+// FieldFromCodeError reports an API write of Field, which the output of the
+// same object sets. It matches ErrFieldFromCode with errors.Is.
+type FieldFromCodeError struct {
+	Field Field
+}
+
+// Error returns the text of ErrFieldFromCode and the field.
+func (e *FieldFromCodeError) Error() string {
+	return ErrFieldFromCode.Error() + ": " + string(e.Field)
+}
+
+// Is reports whether target is ErrFieldFromCode.
+func (e *FieldFromCodeError) Is(target error) bool {
+	return target == ErrFieldFromCode
 }

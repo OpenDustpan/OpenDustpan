@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	driftapi "opendustpan.org/opendustpan/internal/api/drift"
+	"opendustpan.org/opendustpan/internal/driftsvc"
 	"opendustpan.org/opendustpan/pkg/drift"
 	"opendustpan.org/opendustpan/pkg/job"
 )
@@ -35,7 +36,7 @@ func newDriftHandler(svc services, cfg *settings, onFailure func(), starter job.
 	var checker drift.Checker
 
 	if starter != nil {
-		service, serviceErr := drift.NewService(starter, cfg.now)
+		service, serviceErr := driftsvc.NewService(starter, cfg.now)
 		if serviceErr != nil {
 			return nil, fmt.Errorf("drift service: %w", serviceErr)
 		}

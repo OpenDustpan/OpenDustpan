@@ -76,6 +76,12 @@ func (r jobRunner) Write(ctx context.Context, fence namespace.Fence, fn func(job
 	r.s.mu.RLock()
 	defer r.s.mu.RUnlock()
 
+	release, err := r.s.holdWrite(ctx)
+	if err != nil {
+		return err
+	}
+	defer release()
+
 	return r.s.jobTx(ctx, false, func(tx *sql.Tx, q *db.Queries) error {
 		if err := checkWritable(ctx, q); err != nil {
 			return err
@@ -208,7 +214,9 @@ func (t *jobTx) UpdateJob(ctx context.Context, r jobstore.Row, prev int64) (bool
 }
 
 // jobIndexError turns the unique violation of an index of the jobs table
-// into the error of its rule, and wraps any other error of the driver.
+// into the error of its rule, and wraps any other error of the driver. A
+// unique violation of another index is job.ErrConflict. It keeps the text of
+// the driver error, but not the error itself, so no caller can reach it.
 func jobIndexError(what string, err error) error {
 	switch {
 	case err == nil:
@@ -218,7 +226,7 @@ func jobIndexError(what string, err error) error {
 	case isUniqueViolation(err) && strings.Contains(err.Error(), "jobs.idempotency_key"):
 		return jobstore.ErrKeyIndex
 	case isUniqueViolation(err):
-		return fmt.Errorf("%s: %w: %w", what, job.ErrConflict, err)
+		return fmt.Errorf("%s: %w: %s", what, job.ErrConflict, err.Error())
 	default:
 		return fmt.Errorf("%s: %w", what, err)
 	}

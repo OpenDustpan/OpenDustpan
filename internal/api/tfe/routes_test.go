@@ -266,6 +266,7 @@ func newObjectHandler(t *testing.T, authz identity.Authorizer) *tfe.Handler {
 		Logger:         slog.New(slog.DiscardHandler),
 		Namespaces:     newTestNamespaces(t),
 		Workspaces:     stubWorkspaces{},
+		OutputChecker:  newTestOutputChecker(t, authz, stubWorkspaces{}),
 		BaseURL:        baseurl.Resolver{},
 		Audit:          newTestAudit(),
 		Gate:           nil,
@@ -715,7 +716,7 @@ func stubReadStateAt(ctx context.Context, req workspace.StateAtRequest) (workspa
 	case ms < stubStateAtFirst:
 		return workspace.StateAtRead{}, fmt.Errorf(
 			"%w: the first state version of acme/web is at 1970-01-01T00:00:01Z (%d ms)",
-			workspace.ErrNoStateAt, stubStateAtFirst,
+			&workspace.NoStateAtError{First: time.UnixMilli(stubStateAtFirst).UTC()}, stubStateAtFirst,
 		)
 	case ms >= 3000:
 		id, finalized = "sv-encrypted123", 3000
@@ -899,6 +900,7 @@ func newTestHandler(t *testing.T) *tfe.Handler {
 		Logger:         slog.New(slog.DiscardHandler),
 		Namespaces:     newTestNamespaces(t),
 		Workspaces:     stubWorkspaces{},
+		OutputChecker:  newTestOutputChecker(t, stubAuthorizer{}, stubWorkspaces{}),
 		BaseURL:        baseurl.Resolver{},
 		Audit:          newTestAudit(),
 		Gate:           nil,
@@ -925,6 +927,7 @@ func newEnforcingHandler(t *testing.T, authz identity.Authorizer) *tfe.Handler {
 		Logger:         slog.New(slog.DiscardHandler),
 		Namespaces:     newTestNamespaces(t),
 		Workspaces:     stubWorkspaces{},
+		OutputChecker:  newTestOutputChecker(t, authz, stubWorkspaces{}),
 		BaseURL:        baseurl.Resolver{},
 		Audit:          newTestAudit(),
 		Gate:           nil,
@@ -953,6 +956,7 @@ func newProductionHandler(t *testing.T) *tfe.Handler {
 		Logger:         slog.New(slog.DiscardHandler),
 		Namespaces:     newTestNamespaces(t),
 		Workspaces:     stubWorkspaces{},
+		OutputChecker:  newTestOutputChecker(t, stubAuthorizer{}, stubWorkspaces{}),
 		BaseURL:        baseurl.Resolver{},
 		Audit:          newTestAudit(),
 		Gate:           nil,
@@ -1872,6 +1876,7 @@ func TestErrorHidesInternalDetail(t *testing.T) {
 		Logger:         slog.New(slog.DiscardHandler),
 		Namespaces:     newTestNamespaces(t),
 		Workspaces:     errorWorkspaces{},
+		OutputChecker:  nil,
 		BaseURL:        baseurl.Resolver{},
 		Audit:          newTestAudit(),
 		Gate:           nil,

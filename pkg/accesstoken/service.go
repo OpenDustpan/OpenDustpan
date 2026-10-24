@@ -165,6 +165,13 @@ func (s *Service) Create(
 		return Token{}, Secret{}, fmt.Errorf("create access token: %w", err)
 	}
 
+	// Defense in depth: the principal API refuses this subject, so no record
+	// should have it. This check stays so that a record from a restore or a
+	// row of another version never gets a token.
+	if refuseErr := refuseNamespaceServiceOwner(p.Subject); refuseErr != nil {
+		return Token{}, Secret{}, fmt.Errorf("create access token: %w", refuseErr)
+	}
+
 	kind, err := KindFor(p.Kind)
 	if err != nil {
 		return Token{}, Secret{}, err
@@ -630,6 +637,15 @@ func (s *Service) AuthenticateToken(ctx context.Context, raw string) (identity.P
 			identity.ErrUnauthenticated)
 	}
 
+	// Defense in depth: no token is made for this subject, and the
+	// authenticator chain of the server refuses it too. This check stays so
+	// that a token row of another version never acts as the namespace
+	// service principal.
+	if identity.IsNamespaceServiceSubject(m.Owner.Subject) {
+		return identity.Principal{}, fmt.Errorf("%w: an access token cannot act as the namespace service principal",
+			identity.ErrUnauthenticated)
+	}
+
 	if err := s.checkPolicyActive(ctx, m, now); err != nil {
 		return identity.Principal{}, err
 	}
@@ -875,15 +891,28 @@ func (s *Service) newToken(spec tokenSpec) (issued, error) {
 }
 
 // checkRotateOwner returns ErrPrincipalNotFound when the principal of t
-// was deleted.
+// was deleted, and the error of refuseNamespaceServiceOwner when it is the
+// namespace service principal.
 func (s *Service) checkRotateOwner(ctx context.Context, t Token) error {
-	_, err := s.principals.GetPrincipal(ctx, t.PrincipalID)
+	p, err := s.principals.GetPrincipal(ctx, t.PrincipalID)
 	if errors.Is(err, principal.ErrNotFound) {
 		return fmt.Errorf("%w: %q", ErrPrincipalNotFound, t.PrincipalID)
 	}
 
 	if err != nil {
 		return fmt.Errorf("read principal: %w", err)
+	}
+
+	return refuseNamespaceServiceOwner(p.Subject)
+}
+
+// refuseNamespaceServiceOwner returns ErrNoTokenForKind, wrapped with
+// principal.ErrReservedSubject, for a principal record with the subject of
+// the namespace service principal: it has no token.
+func refuseNamespaceServiceOwner(subject string) error {
+	if identity.IsNamespaceServiceSubject(subject) {
+		return fmt.Errorf("%w: the namespace service principal gets no access token: %w",
+			ErrNoTokenForKind, principal.ErrReservedSubject)
 	}
 
 	return nil

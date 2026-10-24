@@ -25,7 +25,8 @@ const (
 	// key, and masking leaves them alone.
 	secretSigValue = "1b47061264138c4ac30d75fd1eb44270"
 	// stackResourceType is the type of the automatic stack resource. Its
-	// outputs are the stack outputs.
+	// outputs are the stack outputs, and a deployment with only this
+	// resource holds no managed resources.
 	stackResourceType = "pulumi:pulumi:Stack"
 	// maxStateLimit bounds one page of the resource list.
 	maxStateLimit = 500
@@ -123,7 +124,13 @@ func isSecret(v any) bool {
 
 	text, ok := obj[secretSigKey].(string)
 
-	return ok && text == secretSigValue
+	return ok && secretSignature(text)
+}
+
+// secretSignature reports whether text, the value under the signature key,
+// marks a secret. The masked read and the reveal lookup both decide with it.
+func secretSignature(text string) bool {
+	return text == secretSigValue
 }
 
 // maskValue copies v with each secret replaced by a marker for base, and

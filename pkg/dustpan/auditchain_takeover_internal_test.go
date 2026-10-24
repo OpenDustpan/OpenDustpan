@@ -16,6 +16,10 @@ import (
 // waits only briefly for the expiry of a holder that stopped.
 const takeoverLease = 300 * time.Millisecond
 
+// takeoverHeldLease is the lease of a claim while the test writes under it.
+// A slow machine cannot end it before the test shortens it to takeoverLease.
+const takeoverHeldLease = time.Hour
+
 // TestRunnerTakeoverCompletesChainMigration proves that when one holder
 // claims the audit chain migration and stops without releasing it, another
 // holder completes it after the lease expires: the second holder runs the
@@ -124,7 +128,7 @@ func claimAndRecordTakeoverStep(
 	t.Helper()
 
 	claimed, claimErr := chain.durableOps.Claim(t.Context(), durable.ClaimRequest{
-		Owner: "old", Kinds: []durable.Kind{auditChainKind}, MaxVersions: nil, Lease: takeoverLease,
+		Owner: "old", Kinds: []durable.Kind{auditChainKind}, MaxVersions: nil, Lease: takeoverHeldLease,
 		TakeCanceled: false,
 	})
 	if claimErr != nil {
@@ -147,6 +151,17 @@ func claimAndRecordTakeoverStep(
 	recordErr := chain.durableOps.RecordStep(t.Context(), claimed.Claim.Step(auditChainStep), nil)
 	if recordErr != nil {
 		t.Fatalf("record the migration step: %v", recordErr)
+	}
+
+	// The writes are done. Shorten the lease, so the claim ends soon, and
+	// check that the expiry moved earlier.
+	shortened, extendErr := chain.durableOps.Extend(t.Context(), claimed.Claim, takeoverLease)
+	if extendErr != nil {
+		t.Fatalf("shorten the lease: %v", extendErr)
+	}
+
+	if !shortened.ExpiresAt.Before(claimed.Claim.ExpiresAt) {
+		t.Fatalf("expiry after the shorter lease = %v, want before %v", shortened.ExpiresAt, claimed.Claim.ExpiresAt)
 	}
 }
 
@@ -209,7 +224,7 @@ func runTakeoverChainRunner(t *testing.T, chain *auditChain) *atomic.Int32 {
 				},
 			}},
 		}},
-		Lease:        takeoverLease,
+		Lease:        takeoverHeldLease,
 		RenewEvery:   0,
 		PollEvery:    0,
 		MaxAttempts:  0,

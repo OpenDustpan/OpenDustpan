@@ -102,11 +102,15 @@ func faultOf(kind FaultKind, op string) Fault {
 }
 
 // seedState holds what one run of the harness shares: the profile that the
-// harness writes once, and a counter that makes names and documents.
+// harness writes until one write succeeds, and a counter that makes names and
+// documents.
 type seedState struct {
-	once sync.Once
-	err  error
-	n    atomic.Int64
+	// mu serializes the seed write.
+	mu sync.Mutex
+	// written says that a seed write succeeded. A failed write leaves it
+	// false, so that the next call tries again.
+	written bool
+	n       atomic.Int64
 }
 
 // fallbackSeed counts for an Env that no run made.
@@ -135,6 +139,25 @@ func fallbackSeedFor(addr string) *seedState {
 	}
 
 	return s
+}
+
+// write runs writeSeed until one call succeeds. It does not keep the error
+// of a failed call, so that the next call tries again.
+func (s *seedState) write(ctx context.Context, env Env) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.written {
+		return nil
+	}
+
+	if err := writeSeed(ctx, env); err != nil {
+		return err
+	}
+
+	s.written = true
+
+	return nil
 }
 
 // next returns prefix and a number that no earlier call of next returned.
@@ -245,10 +268,8 @@ func ensureProfile(ctx context.Context, env Env) (string, error) {
 		seed = fallbackSeedFor(env.Server.URL())
 	}
 
-	seed.once.Do(func() { seed.err = writeSeed(ctx, env) })
-
-	if seed.err != nil {
-		return "", seed.err
+	if err := seed.write(ctx, env); err != nil {
+		return "", err
 	}
 
 	got, err := get(ctx, env, profilesPath+"/"+seedProfile, withToken)

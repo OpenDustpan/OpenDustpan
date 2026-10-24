@@ -205,27 +205,20 @@ type getRestoreDoc struct {
 	Manifest    *backup.Manifest `json:"manifest"`
 }
 
-// restorePollTimeout bounds the wait for a restore to leave checking and
-// applying. A restore takes a pre-backup, stages the backup with migrations and
-// swaps the data. Under full-suite CPU load that takes longer than pollTimeout,
-// which the backup tests use. The wait still ends, so a restore that never
-// moves fails the test.
-const restorePollTimeout = 2 * time.Minute
-
-// waitRestoreState polls one restore until it reaches want or the wait times
-// out, failing the test otherwise.
+// waitRestoreState polls one restore until it reaches want or the poll
+// context of pollContext ends, failing the test otherwise.
 func waitRestoreState(t *testing.T, handler testHandler, id, want string) getRestoreDoc {
 	t.Helper()
 
-	deadline := time.Now().Add(restorePollTimeout)
+	ctx, cancel := pollContext(t)
+	defer cancel()
 
-	for time.Now().Before(deadline) {
+	for ctx.Err() == nil {
 		status, body := serveRestore(t, handler, http.MethodGet, "/api/server/restores/"+id, "")
 
 		if status != http.StatusOK {
 			select {
-			case <-t.Context().Done():
-				t.Fatalf("restore %s: %v", id, t.Context().Err())
+			case <-ctx.Done():
 			case <-time.After(pollInterval):
 			}
 
@@ -247,8 +240,7 @@ func waitRestoreState(t *testing.T, handler testHandler, id, want string) getRes
 		}
 
 		select {
-		case <-t.Context().Done():
-			t.Fatalf("restore %s: %v", id, t.Context().Err())
+		case <-ctx.Done():
 		case <-time.After(pollInterval):
 		}
 	}
@@ -1254,4 +1246,28 @@ func readTarget(t *testing.T, target *blobfs.Store, key blob.Key) string {
 	}
 
 	return string(data)
+}
+
+// TestStartRestoreInvalidBackupIDAnswers400 proves that a start with a backup
+// ID that is not valid answers 400 with the text that names the ID rule, and
+// stores no restore row. A restore of such an ID can never succeed, so the
+// route refuses it before it starts.
+func TestStartRestoreInvalidBackupIDAnswers400(t *testing.T) {
+	t.Parallel()
+
+	fix := newRestoreFixture(t)
+
+	const want = "invalid backup ID: use an ID that opendustpan backup printed"
+
+	for _, id := range []string{"../x", "bkp-a/b", "x"} {
+		status, resp := serveRestore(t, fix.handler, http.MethodPost, "/api/server/restores", `{"backupID":"`+id+`"}`)
+		if status != http.StatusBadRequest || !strings.Contains(resp, want) {
+			t.Errorf("POST restores of %q answers %d %s, want 400 that names the ID rule", id, status, resp)
+		}
+	}
+
+	listStatus, listBody := serveRestore(t, fix.handler, http.MethodGet, "/api/server/restores", "")
+	if listStatus != http.StatusOK || strings.Contains(listBody, `"id":"rst-`) {
+		t.Fatalf("GET restores answers %d %s, want 200 with no restore", listStatus, listBody)
+	}
 }

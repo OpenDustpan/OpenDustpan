@@ -285,6 +285,7 @@ func seedBackupStore(t *testing.T, s BackupStore) backupSeed {
 	seedBackupDrift(t, s, acme)
 	seedBackupGitHost(t, s, acme)
 	seedBackupSinks(t, s, acme)
+	seedBackupTriggers(t, s, acme)
 	seedBackupItemKeys(t, s, acme)
 
 	return backupSeed{

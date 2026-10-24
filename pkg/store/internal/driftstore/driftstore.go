@@ -50,7 +50,7 @@ type Tx interface {
 	// Put stores r as the result of its unit and replaces an earlier row that
 	// is older. It returns an error that wraps drift.ErrStale when a row of
 	// the unit is not older than r (a concurrent writer stored a newer one
-	// after Latest), and an error that wraps ErrCorrupt when the unit ID
+	// after Latest), and an error that wraps drift.ErrInvalid when the unit ID
 	// belongs to another namespace or another tool.
 	Put(ctx context.Context, r Row) error
 }
@@ -190,8 +190,10 @@ func Record(ctx context.Context, tx Tx, r *drift.Result) (drift.Transition, erro
 
 // previous returns the status of the stored result of r.Unit, or
 // drift.StatusUnknown when it has none. It returns drift.ErrStale when r is not
-// newer. A stored row that fails its checks counts as none: the new result has
-// passed validation, so it replaces the bad row.
+// newer. A stored row that fails its checks counts as none. The new result has
+// passed validation, so Put replaces the bad row when the time of the row is
+// older than r.CheckedAt. Put does not replace a bad row with a time that is
+// not older, and Record then returns drift.ErrStale.
 func previous(ctx context.Context, tx Tx, r *drift.Result) (drift.Status, error) {
 	row, ok, err := tx.Latest(ctx, r.Unit)
 	if err != nil {

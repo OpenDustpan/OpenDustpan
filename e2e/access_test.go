@@ -129,6 +129,7 @@ func runAccessOnStore(t *testing.T, cli e2e.Install, store e2e.Store) {
 	}, nil)
 
 	checkSubjectDeleteRevokes(ctx, t, env, bob)
+	checkLastSiteAdministratorKept(ctx, t, env)
 	checkMemberSignsIn(ctx, t, env)
 }
 
@@ -746,4 +747,50 @@ func withoutFreshAdmin(list e2eGrantList) e2eGrantList {
 	list.Grants = kept
 
 	return list
+}
+
+// checkLastSiteAdministratorKept makes sure that exactly one person holds the
+// site-administrator role on the installation, and sees that the server
+// refuses each change that leaves the installation with no site
+// administrator: the delete and the disable of the person, and the revoke of
+// the grant. The person is the one holder that the harness made, or a new
+// person when the installation has none. It skips when the installation has
+// more than one site administrator, because then the changes work.
+func checkLastSiteAdministratorKept(ctx context.Context, t *testing.T, env *e2e.Env) {
+	t.Helper()
+
+	var holders e2eGrantList
+	principalCall(ctx, t, env, principalStep{
+		http.MethodGet, "/api/server/grants?role=site-administrator", "", http.StatusOK,
+	}, &holders)
+
+	var grant e2eGrant
+
+	switch {
+	case holders.Total == 0:
+		var admin e2ePrincipal
+		principalCall(ctx, t, env, principalStep{
+			http.MethodPost, "/api/server/principals", `{"subject":"last-admin","kind":"person"}`, http.StatusCreated,
+		}, &admin)
+		principalCall(ctx, t, env, principalStep{
+			http.MethodPost, "/api/server/grants",
+			`{"subject":"principal:` + admin.ID + `","role":"site-administrator"}`, http.StatusCreated,
+		}, &grant)
+	case holders.Total == 1 && strings.HasPrefix(holders.Grants[0].Subject, "principal:"):
+		grant = holders.Grants[0]
+	default:
+		t.Logf("skip the last site administrator check: %d holders of the role", holders.Total)
+
+		return
+	}
+
+	admin := strings.TrimPrefix(grant.Subject, "principal:")
+
+	for _, step := range []principalStep{
+		{http.MethodDelete, "/api/server/principals/" + admin, "", http.StatusConflict},
+		{http.MethodPost, "/api/server/principals/" + admin + "/disable", "", http.StatusConflict},
+		{http.MethodDelete, "/api/server/grants/" + grant.ID, "", http.StatusConflict},
+	} {
+		principalCall(ctx, t, env, step, nil)
+	}
 }

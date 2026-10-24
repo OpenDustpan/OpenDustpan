@@ -1,0 +1,12 @@
+update.checkpoint-conflict
+update.checkpoint-stale
+update.concurrent-modification
+update.conflict
+update.console-session
+update.delta-invalid
+update.invalid
+update.lease-expired
+update.lease-invalid
+update.not-found
+update.too-large
+update.wrong-state

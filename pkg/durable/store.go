@@ -98,11 +98,23 @@ type Store interface {
 	// canceled instead, and returns nil.
 	Release(ctx context.Context, c Claim) error
 
+	// GiveBack returns the operation of c to pending without a failure, as
+	// Release does, but only while no cancel is requested. It checks in
+	// this order, and returns the error of the first check that fails:
+	// ErrClaimLost when c is not the live claim, and ErrCanceled when a
+	// cancel is requested. On an error it changes nothing. The check and
+	// the write are one transaction, so a cancel cannot arrive between
+	// them. A holder whose own records must see the end of a canceled
+	// operation calls it: after ErrCanceled the operation stays running
+	// with its cancel until the claim expires, and a Claim with
+	// TakeCanceled then gives it to a holder that ends both.
+	GiveBack(ctx context.Context, c Claim) error
+
 	// Cancel stops the operation id. A pending operation ends canceled at
 	// once. A running operation records the request. Its holder then gets
-	// ErrCanceled from Extend, RecordStep, a step write of another port and
-	// Complete, which change nothing. Fail, Release, or a claim after the
-	// expiry ends the operation canceled. A second cancel changes nothing. It
+	// ErrCanceled from Extend, RecordStep, a step write of another port,
+	// Complete and GiveBack, which change nothing. Fail, Release, or a claim
+	// after the expiry ends the operation canceled. A second cancel changes nothing. It
 	// returns ErrNotFound for an unknown ID, and ErrFinished for an
 	// operation that succeeded or failed.
 	Cancel(ctx context.Context, id ID) error
