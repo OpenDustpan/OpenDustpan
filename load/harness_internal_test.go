@@ -6,7 +6,9 @@ package main
 
 import (
 	"context"
+	"errors"
 	"log/slog"
+	"net/http"
 	"os"
 	"path/filepath"
 	"testing"
@@ -27,6 +29,9 @@ func smokeConfig() Config {
 	cfg.ListReps = 2
 	cfg.SeedWorkers = 4
 	cfg.ContentionAttempts = 8
+	cfg.JournalEntries = []int{2, 6}
+	cfg.JournalBatches = 3
+	cfg.AccessRequests = 5
 
 	return cfg
 }
@@ -35,13 +40,13 @@ func smokeConfig() Config {
 const smokeCheckpointBytes = 8192
 
 // openSmokeServer starts one SQLite instance for the smoke run.
-func openSmokeServer(t *testing.T, ns string) []string {
+func openSmokeServer(t *testing.T, ns string) servers {
 	t.Helper()
 
 	ctx := t.Context()
 	logger := slog.New(slog.DiscardHandler)
 
-	urls, cleanup, err := openServers(ctx, logger, t.TempDir(), ns)
+	served, cleanup, err := openServers(ctx, logger, t.TempDir(), ns)
 	if err != nil {
 		t.Fatalf("open servers: %v", err)
 	}
@@ -50,16 +55,16 @@ func openSmokeServer(t *testing.T, ns string) []string {
 		cleanup(context.WithoutCancel(ctx))
 	})
 
-	return urls
+	return served
 }
 
 func TestHarnessSmoke(t *testing.T) {
 	t.Parallel()
 
 	cfg := smokeConfig()
-	urls := openSmokeServer(t, cfg.Namespace)
+	served := openSmokeServer(t, cfg.Namespace)
 
-	report, err := Execute(t.Context(), cfg, urls)
+	report, err := Execute(t.Context(), cfg, served)
 	if err != nil {
 		t.Fatalf("run harness: %v", err)
 	}
@@ -85,6 +90,8 @@ func TestHarnessSmoke(t *testing.T) {
 	}
 
 	checkUpdateRuns(t, report, cfg.ContentionAttempts)
+	checkJournal(t, report.Journal, cfg)
+	checkAccess(t, report.Access)
 
 	wantInstances := 1
 	if os.Getenv(postgresURLEnv) != "" {
@@ -103,8 +110,8 @@ func TestRecordedFixtures(t *testing.T) {
 	t.Parallel()
 
 	ctx := t.Context()
-	urls := openSmokeServer(t, "load-fixtures")
-	fx := newTarget(urls, harnessToken(), "load-fixtures")
+	served := openSmokeServer(t, "load-fixtures")
+	fx := newTarget(served.urls, harnessToken(), "load-fixtures")
 
 	deployment, deploymentErr := os.ReadFile(filepath.Join("testdata", "deployment.json"))
 	if deploymentErr != nil {
@@ -155,5 +162,102 @@ func checkUpdateRuns(t *testing.T, report Report, attempts int) {
 	if report.NamespaceUpdates.Started != attempts {
 		t.Fatalf("namespace updates started = %d, want %d: %+v",
 			report.NamespaceUpdates.Started, attempts, report.NamespaceUpdates)
+	}
+}
+
+// checkJournal checks the journal runs. A release build answers journal
+// version 0 and the harness then sends no batch; a build with the
+// journalrecording tag runs one update for each entry count.
+func checkJournal(t *testing.T, got JournalResult, cfg Config) {
+	t.Helper()
+
+	if !got.Supported {
+		if len(got.Runs) != 0 {
+			t.Fatalf("journal runs = %d without support, want 0", len(got.Runs))
+		}
+
+		return
+	}
+
+	if len(got.Runs) != len(cfg.JournalEntries) {
+		t.Fatalf("journal runs = %d, want %d", len(got.Runs), len(cfg.JournalEntries))
+	}
+
+	for i, run := range got.Runs {
+		if run.EntriesPerBatch != cfg.JournalEntries[i] || run.Batches != cfg.JournalBatches {
+			t.Fatalf("journal run %d = %+v, want %d entries in %d batches",
+				i, run, cfg.JournalEntries[i], cfg.JournalBatches)
+		}
+
+		if run.AppendP50Ms <= 0 || run.CompleteMs <= 0 || run.BatchBytes <= 0 {
+			t.Fatalf("journal run %d not measured: %+v", i, run)
+		}
+	}
+}
+
+// checkAccess checks that every access timing ran and that the refused
+// requests were refused.
+func checkAccess(t *testing.T, got AccessResult) {
+	t.Helper()
+
+	for _, route := range []AccessRoute{got.RunnerRoute, got.JobsRoute} {
+		if route.GateOffP50Ms <= 0 || route.GateNoListP50Ms <= 0 || route.GateListP50Ms <= 0 ||
+			route.GateRefusedP50Ms <= 0 {
+			t.Fatalf("access timing missing: %+v", route)
+		}
+
+		if route.RefusedStatus != http.StatusNotFound && route.RefusedStatus != http.StatusForbidden {
+			t.Fatalf("refused status = %d, want 404 or 403: %+v", route.RefusedStatus, route)
+		}
+	}
+
+	if got.ListEntries != len(allowlistPrefixes()) {
+		t.Fatalf("list entries = %d, want %d", got.ListEntries, len(allowlistPrefixes()))
+	}
+}
+
+// TestRefusalComesFromTheList proves the refused timing measures the list:
+// the deny namespace answers 200 on the server without IP allowlists, and
+// the same request is refused on the server that checks them, while the list
+// namespace, whose list holds the client, is allowed there.
+func TestRefusalComesFromTheList(t *testing.T) {
+	t.Parallel()
+
+	ctx := t.Context()
+	served := openSmokeServer(t, "load-refusal")
+	fx := newTarget(served.urls, harnessToken(), "load-refusal")
+	deny := accessPathsOf(served.denyNS, served.denyJobID)
+	allowed := accessPathsOf(served.listNS, served.listJobID)
+
+	for _, path := range []string{deny.runner, deny.jobs} {
+		if _, err := fx.timeGet(ctx, served.urls[0]+path, 1, []int{http.StatusOK}); err != nil {
+			t.Fatalf("%s without IP allowlists: %v", path, err)
+		}
+
+		if _, err := fx.timeGet(ctx, served.gateURL+path, 1, refusedStatuses()); err != nil {
+			t.Fatalf("%s with the refusing list: %v", path, err)
+		}
+	}
+
+	for _, path := range []string{allowed.runner, allowed.jobs} {
+		if _, err := fx.timeGet(ctx, served.gateURL+path, 1, []int{http.StatusOK}); err != nil {
+			t.Fatalf("%s with the list that holds the client: %v", path, err)
+		}
+	}
+}
+
+func TestJournalEntriesValid(t *testing.T) {
+	t.Parallel()
+
+	for _, ok := range [][]int{nil, {2}, {2, 20, 200}} {
+		if err := journalEntriesValid(ok); err != nil {
+			t.Fatalf("journalEntriesValid(%v) = %v, want nil", ok, err)
+		}
+	}
+
+	for _, bad := range [][]int{{0}, {1}, {3}, {-2}, {2, 5}} {
+		if err := journalEntriesValid(bad); !errors.Is(err, errBadJournalEntries) {
+			t.Fatalf("journalEntriesValid(%v) = %v, want errBadJournalEntries", bad, err)
+		}
 	}
 }
