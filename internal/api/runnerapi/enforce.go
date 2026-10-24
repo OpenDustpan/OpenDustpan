@@ -13,6 +13,7 @@ import (
 
 	"opendustpan.org/opendustpan/internal/sessionauth"
 	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/ipallow"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/runner"
 	"opendustpan.org/opendustpan/pkg/runner/protocol"
@@ -95,7 +96,10 @@ func (h *Handler) checkAuthorized(r *http.Request, route Route, c *call) (*http.
 	obj := identity.NamespaceObject(ns.Name)
 
 	if err = h.guard.Authorize(ctx, r, p, identity.ActionNamespaceRead, obj); err != nil {
-		if errors.Is(err, identity.ErrDenied) {
+		// An address outside the IP allowlist answers 403 with its own code,
+		// as on the other routes of the namespace. The refusal names no
+		// object, so it does not tell whether the pool exists.
+		if errors.Is(err, identity.ErrDenied) && !errors.Is(err, ipallow.ErrAddressNotAllowed) {
 			return r, errNotFound
 		}
 
