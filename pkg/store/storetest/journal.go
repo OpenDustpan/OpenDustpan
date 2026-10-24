@@ -359,6 +359,43 @@ func testJournalRefusesNilVerify(t *testing.T, f fixture) {
 	}
 }
 
+// testJournalRefusesBadSequenceIDs sends rows with hostile sequence IDs straight
+// to the store: no sequence ID, a sequence ID of 0, a negative sequence ID and a
+// sequence ID that appears twice. Each is refused with ErrJournalBatch and stores
+// nothing, so sequence 1 stays free.
+func testJournalRefusesBadSequenceIDs(t *testing.T, f fixture) {
+	t.Helper()
+
+	u := f.runJournaled(t, f.ref, "u1")
+
+	for _, tc := range []struct {
+		name string
+		seqs []int64
+	}{
+		{name: "nil", seqs: nil},
+		{name: "empty", seqs: []int64{}},
+		{name: "zero", seqs: []int64{0}},
+		{name: "negative", seqs: []int64{-1}},
+		{name: "zero after a valid ID", seqs: []int64{1, 0}},
+		{name: "repeated", seqs: []int64{1, 1}},
+	} {
+		row := journalRow(t, f.s, u, 1, 1)
+		row.SequenceIDs = tc.seqs
+		row.OperationIDs = make([]int64, len(tc.seqs))
+
+		retried, err := f.s.PutJournalRow(t.Context(), row, f.fence)
+		if !errors.Is(err, stack.ErrJournalBatch) || retried {
+			t.Fatalf("%s sequence IDs: retried %t, err %v; want ErrJournalBatch", tc.name, retried, err)
+		}
+	}
+
+	// The refused rows stored nothing, so sequence 1 is still free.
+	free := journalRow(t, f.s, u, 2, 1)
+	if retried, err := f.s.PutJournalRow(t.Context(), free, f.fence); err != nil || retried {
+		t.Fatalf("sequence 1 after the refusals: retried %t, err %v; want stored", retried, err)
+	}
+}
+
 // journalBeginBody returns a batch body with one begin entry (kind 0) with the
 // given sequence and operation IDs. A begin entry changes the replay records.
 func journalBeginBody(seq, op int64) []byte {

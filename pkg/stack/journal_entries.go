@@ -141,14 +141,16 @@ type JournalStore interface {
 	// sequence ID of the row is stored with the same SHA-256, the batch is a retry:
 	// it returns retried true and writes nothing. A sequence ID stored with a
 	// different SHA-256, or a batch that is only partly stored, returns
-	// ErrJournalConflict. The blob must already be in the blob store. A row with a
-	// nil Verify, or with a Verify function that returns an error, is refused
-	// with ErrJournalBatch. When Verify reports that the batch holds an entry
-	// that changes the replay records, the flag of the update is set in the
-	// same transaction as the write. When the row reports a rebuilt base state
-	// entry, the operation IDs of earlier batches are cleared in the same
-	// transaction, so the known set starts
-	// again from this batch.
+	// ErrJournalConflict. The blob must already be in the blob store. A row with
+	// no sequence ID, with a sequence ID that is 0 or less, or with a sequence ID
+	// that appears twice is refused with ErrJournalBatch before any read or
+	// write. A row with a nil Verify, or with a Verify function that returns an
+	// error, is refused with ErrJournalBatch. When Verify reports that the
+	// batch holds an entry that changes the replay records, the flag of the
+	// update is set in the same transaction as the write. When the row reports
+	// a rebuilt base state entry, the operation IDs of earlier batches are
+	// cleared in the same transaction, so the known set starts again from this
+	// batch.
 	PutJournalRow(ctx context.Context, row JournalRow, fence namespace.Fence) (retried bool, err error)
 	// JournalKeys returns the blob keys of the batches of the update, in arrival
 	// order. It is keyed by the stack ID, as the blob keys are. A missing update
@@ -567,6 +569,23 @@ func checkSummary(summary BatchSummary) error {
 	}
 
 	return checkSequenceIDs(summary.SequenceIDs)
+}
+
+// CheckJournalSequenceIDs refuses the sequence IDs of a journal row: an empty
+// list, a sequence ID that is 0 or less, or a sequence ID that appears twice.
+// The refusal wraps ErrJournalBatch. The store adapters call it before they
+// read or write a row.
+//
+// Defense in depth: the journal writer stores no empty batch and the batch
+// reader refuses these sequence IDs too. This check stays so that a new caller
+// of PutJournalRow cannot store such a row, and it does not rely on the writer
+// or the reader.
+func CheckJournalSequenceIDs(seqs []int64) error {
+	if len(seqs) == 0 {
+		return fmt.Errorf("%w: the journal row has no sequence ID", ErrJournalBatch)
+	}
+
+	return checkSequenceIDs(seqs)
 }
 
 // checkSequenceIDs refuses a sequence ID that is 0 or less, or that appears
