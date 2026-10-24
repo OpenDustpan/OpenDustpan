@@ -132,7 +132,6 @@ func TestUnitListFilters(t *testing.T) {
 		{name: "label matches no unit", query: "label=team%3Dnobody", want: []string{}},
 		{name: "same key, two values", query: "label=team%3Dplatform&label=team%3Dpayments", want: []string{}},
 		{name: "empty value", query: "label=team%3D", want: []string{}},
-		{name: "value with equals sign", query: "label=team%3Da%3Db", want: []string{}},
 		{name: "one reference", query: "reference=pulumi:acme/web/dev", want: []string{"pulumi:acme/web/dev"}},
 		{
 			name: "two references", query: "reference=pulumi:acme/web/dev&reference=opentofu:acme/dns",
@@ -188,6 +187,8 @@ func TestUnitListFilterErrors(t *testing.T) {
 		{name: "label key too long", query: "label=" + strings.Repeat("k", 129) + "%3Dv"},
 		{name: "label value too long", query: "label=k%3D" + strings.Repeat("v", 257)},
 		{name: "label value with a control character", query: "label=k%3Da%0Ab"},
+		{name: "label value with an equals sign", query: "label=team%3Da%3Db"},
+		{name: "label value with a space", query: "label=team%3Da%20b"},
 		{name: "eleven labels", query: strings.Join(tooManyLabels, "&")},
 		{name: "reference is not a unit", query: "reference=acme"},
 		{name: "reference without a tool", query: "reference=acme/web/dev"},

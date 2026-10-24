@@ -83,7 +83,11 @@ func TestQueryValidate(t *testing.T) {
 		{"empty query", labels(), true},
 		{"one label", labels(savedview.Label{Key: "team", Value: "payments"}), true},
 		{"empty value", labels(savedview.Label{Key: "team", Value: ""}), true},
-		{"value with equals sign", labels(savedview.Label{Key: "k", Value: "a=b"}), true},
+		{"value with every allowed character", labels(savedview.Label{Key: "k", Value: "a.b_c:d/e-F9"}), true},
+		{"value with equals sign", labels(savedview.Label{Key: "k", Value: "a=b"}), false},
+		{"value with a space", labels(savedview.Label{Key: "k", Value: "a b"}), false},
+		{"value not ASCII", labels(savedview.Label{Key: "k", Value: "équipe"}), false},
+		{"value with a right-to-left override", labels(savedview.Label{Key: "k", Value: "a\u202eb"}), false},
 		{"one reference", refs("pulumi:acme/web/prod"), true},
 		{
 			"repeated label, as the unit list accepts",

@@ -131,7 +131,7 @@ func validateLabels(labels []Label) error {
 
 		if !inventory.ValidLabelValue(l.Value) {
 			return fmt.Errorf(
-				"%w: label %d: the value has at most %d characters and no control character",
+				"%w: label %d: the value has at most %d characters: letters, digits and . _ : / -",
 				ErrInvalid, i+1, MaxLabelValueLen,
 			)
 		}

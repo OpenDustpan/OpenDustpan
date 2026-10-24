@@ -23,9 +23,11 @@ list:
 | `references` | A list of unit references in the namespace of the view, for example `pulumi:acme/web/prod`. A unit must be one of them. | 20 references |
 
 A label key has 1 to 128 characters: letters, digits and the characters
-`. _ : / -`. A label value has at most 256 characters and no control
-character. A reference holds the tool of the unit. If a unit moves to another
-tool, it no longer matches the reference. A label filter still matches it.
+`. _ : / -`. A label value has at most 256 characters from the same set. A
+value with a space or with another character, for example `é`, fails with
+400 and the code `view.invalid`. A reference holds the tool of the unit. If a
+unit moves to another tool, it no longer matches the reference. A label filter
+still matches it.
 
 A name has 1 to 128 characters. It has no control character, no hidden
 character and no space at the start or at the end. The name is unique for
