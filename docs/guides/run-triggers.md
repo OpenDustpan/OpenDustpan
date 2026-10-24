@@ -96,7 +96,9 @@ that starts with `trg-`.
 A `follows` trigger that closes a loop is refused with 409 and the code
 `trigger.cycle`. A loop is a chain of `follows` triggers that leads back to the
 first stack or workspace, also across tools. The answer lists the units of the
-loop in order, with the name that the tool of each unit uses. A trigger that is
+loop in order, with the name that the tool of each unit uses. A stack or
+workspace that you cannot read is not in the list: the message gives only the
+number of such units. A trigger that is
 off closes no loop. When you switch it on, the server checks it again.
 
 ## Delete a trigger
