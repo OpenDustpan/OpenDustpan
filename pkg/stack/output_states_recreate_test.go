@@ -48,48 +48,94 @@ func (m *swappingStacks) GetStack(ctx context.Context, ref stack.Ref) (stack.Sta
 func TestOutputStatesRefuseARecreatedStack(t *testing.T) {
 	t.Parallel()
 
-	tests := []struct {
-		name string
-		// swapAfter is the number of lookups that see the first stable ID.
-		swapAfter int64
-		wantErr   error
-	}{
-		{"the stable ID stays", 100, nil},
-		{"the stable ID changes after the first lookup", 1, outputshare.ErrUnknownProducer},
+	tests := []recreateCase{
+		{"the stable ID stays", false, 100, nil},
+		{"the stable ID changes after the first lookup", false, 1, outputshare.ErrUnknownProducer},
+		{"no state, the ID stays", true, 100, nil},
+		{"no state, the ID changes", true, 1, outputshare.ErrUnknownProducer},
 	}
 
 	for _, tt := range tests {
-		for _, read := range []string{"latest", "outputs"} {
+		reads := []string{"latest", "outputs"}
+		if tt.noState {
+			reads = []string{"latest"}
+		}
+
+		for _, read := range reads {
 			t.Run(tt.name+" on "+read, func(t *testing.T) {
 				t.Parallel()
 
-				f := newUpdates(t)
-				saveFirstCheckpoint(t, f)
-
-				states := recreatingStates(t, f, tt.swapAfter)
-
-				unit, err := identity.UnitObject("pulumi", f.ref.Namespace, "web/dev")
-				if err != nil {
-					t.Fatalf("unit object: %v", err)
-				}
-
-				unit = unit.WithUnitID("stk-test")
-
-				var got error
-
-				switch read {
-				case "latest":
-					_, got = states.Latest(t.Context(), unit)
-				default:
-					_, got = states.Outputs(t.Context(), unit, stack.StateID("stk-test", 1))
-				}
-
-				if !errors.Is(got, tt.wantErr) {
-					t.Fatalf("%s error = %v, want %v", read, got, tt.wantErr)
-				}
+				checkRecreatedStack(t, tt, read)
 			})
 		}
 	}
+}
+
+// recreateCase is one row of TestOutputStatesRefuseARecreatedStack.
+type recreateCase struct {
+	name string
+	// noState is true when no update saves a checkpoint. Only Latest runs
+	// these rows: Outputs answers a stack with no state through gone.
+	noState bool
+	// swapAfter is the number of lookups that see the first stable ID.
+	swapAfter int64
+	wantErr   error
+}
+
+// checkRecreatedStack runs read on the stack of a fixture, with the stable ID
+// that changes after tc.swapAfter lookups. A noState stack has no checkpoint,
+// and then Latest answers the zero State when the ID stays.
+func checkRecreatedStack(t *testing.T, tc recreateCase, read string) {
+	t.Helper()
+
+	f := newUpdates(t)
+	if !tc.noState {
+		saveFirstCheckpoint(t, f)
+	}
+
+	states := recreatingStates(t, f, tc.swapAfter)
+
+	unit, err := identity.UnitObject("pulumi", f.ref.Namespace, "web/dev")
+	if err != nil {
+		t.Fatalf("unit object: %v", err)
+	}
+
+	unit = unit.WithUnitID("stk-test")
+
+	gotState, got := readOnce(t.Context(), states, unit, read)
+
+	if !errors.Is(got, tc.wantErr) {
+		t.Fatalf("%s error = %v, want %v", read, got, tc.wantErr)
+	}
+
+	zero := outputshare.State{ID: "", ClientEncrypted: false}
+	if tc.noState && tc.wantErr == nil && gotState != zero {
+		t.Fatalf("latest state = %+v, want the zero State", gotState)
+	}
+}
+
+// readOnce runs the read named by read on unit. For "latest" it returns the
+// State of the read, and for "outputs" it asks for the version of the first
+// checkpoint.
+func readOnce(
+	ctx context.Context, states *stack.OutputStates, unit identity.Object, read string,
+) (outputshare.State, error) {
+	zero := outputshare.State{ID: "", ClientEncrypted: false}
+
+	if read == "latest" {
+		st, err := states.Latest(ctx, unit)
+		if err != nil {
+			return zero, fmt.Errorf("latest: %w", err)
+		}
+
+		return st, nil
+	}
+
+	if _, err := states.Outputs(ctx, unit, stack.StateID("stk-test", 1)); err != nil {
+		return zero, fmt.Errorf("outputs: %w", err)
+	}
+
+	return zero, nil
 }
 
 // recreatingStates returns the OutputStates over the checkpoints of f, with a
