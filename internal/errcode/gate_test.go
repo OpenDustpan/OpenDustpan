@@ -42,9 +42,12 @@ func gated() []errcodetest.Adapter {
 		},
 		api("inventory", []string{"errorResponse"}, nil),
 		api("jobs", []string{"errorResponse"}, nil),
-		api("notifications", []string{"errorResponse", "statusError", "problem"}, nil),
+		api("notifications", nil, nil),
 		api("objectcontext", []string{"errorResponse"}, nil),
-		api("profile", []string{"errorResponse", "statusError", "problem"}, nil),
+		// The shared error module of the tool-neutral APIs. Its answers have no
+		// known list, so a new answer in it needs a code.
+		api("problem", []string{"Body"}, nil),
+		api("profile", nil, nil),
 		api("pulumi", []string{"errorResponse", "codedErrorResponse", "freshRefusalResponse"}, nil),
 		api("registry", []string{"errorResponse", "statusError", "problem"}, nil),
 		// The runner protocol has its own codes and its own versions.

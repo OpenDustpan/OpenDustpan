@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/api/idempotent"
+	"opendustpan.org/opendustpan/internal/api/problem"
 	"opendustpan.org/opendustpan/internal/clientip"
 	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/internal/requestid"
@@ -114,20 +115,17 @@ func toDocument(s *notify.Sink) sinkDocument {
 func readBody(w http.ResponseWriter, r *http.Request, v any) error {
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxBodyBytes))
 	if err != nil {
-		return &statusError{problem: problem{
-			status: http.StatusBadRequest, code: errcode.RequestBodyInvalid, values: nil,
-			message: "the request body is not readable or is over 64 KiB",
-		}}
+		return problem.BadRequest(errcode.RequestBodyInvalid, "the request body is not readable or is over 64 KiB")
 	}
 
 	dec := json.NewDecoder(bytes.NewReader(body))
 	dec.DisallowUnknownFields()
 
 	if err = dec.Decode(v); err != nil || dec.More() {
-		return &statusError{problem: problem{
-			status: http.StatusBadRequest, code: errcode.RequestBodyInvalid, values: nil,
-			message: "the request body must be one JSON object with known fields",
-		}}
+		return problem.BadRequest(
+			errcode.RequestBodyInvalid,
+			"the request body must be one JSON object with known fields",
+		)
 	}
 
 	return nil
@@ -309,12 +307,7 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request, p identity.Prin
 	}
 
 	if body.Kind == nil || body.Name == nil {
-		h.writeError(ctx, w, &statusError{problem: problem{
-			status:  http.StatusBadRequest,
-			code:    errcode.SinkInvalid,
-			values:  nil,
-			message: "send the fields kind and name",
-		}})
+		h.writeError(ctx, w, problem.BadRequest(errcode.SinkInvalid, "send the fields kind and name"))
 
 		return
 	}
@@ -356,12 +349,7 @@ func (h *Handler) replace(w http.ResponseWriter, r *http.Request, p identity.Pri
 	}
 
 	if body.Version == nil || body.Name == nil {
-		h.writeError(ctx, w, &statusError{problem: problem{
-			status:  http.StatusBadRequest,
-			code:    errcode.SinkInvalid,
-			values:  nil,
-			message: "send the fields version and name",
-		}})
+		h.writeError(ctx, w, problem.BadRequest(errcode.SinkInvalid, "send the fields version and name"))
 
 		return
 	}
