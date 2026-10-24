@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"opendustpan.org/opendustpan/internal/api/tfe"
@@ -62,9 +64,14 @@ const (
 // registryErrorWire is the error document of the registry protocol: the
 // errors of the protocol, and the code of the catalog next to them.
 type registryErrorWire struct {
-	Errors    []string       `json:"errors"`
-	ErrorCode string         `json:"errorCode"`
-	ErrorArgs map[string]any `json:"errorArgs"`
+	Errors []string               `json:"errors"`
+	Code   string                 `json:"code"`
+	Meta   *registryErrorMetaWire `json:"meta"`
+}
+
+// registryErrorMetaWire is the meta member of the registry error document.
+type registryErrorMetaWire struct {
+	Args map[string]any `json:"args"`
 }
 
 // TestRegistryErrorCodes proves that each error answer of the registry
@@ -135,20 +142,35 @@ func TestRegistryErrorCodes(t *testing.T) {
 				t.Fatalf("status = %d, want %d: %s", rec.Code, tc.status, rec.Body.String())
 			}
 
-			var doc registryErrorWire
-			if err := json.Unmarshal(rec.Body.Bytes(), &doc); err != nil {
-				t.Fatalf("decode: %v: %s", err, rec.Body.String())
-			}
-
-			if _, ok := errcode.Lookup(doc.ErrorCode); !ok || doc.ErrorCode != tc.code || len(doc.Errors) != 1 ||
-				doc.ErrorArgs != nil {
-				t.Fatalf("answer = %s, want one error, the code %s and no arguments", rec.Body.String(), tc.code)
-			}
-
-			if doc.Errors[0] != tc.text {
-				t.Fatalf("errors = %q, want %q", doc.Errors[0], tc.text)
-			}
+			checkRegistryAnswer(t, rec, tc.text, tc.code)
 		})
+	}
+}
+
+// checkRegistryAnswer proves that rec holds the error document of the registry
+// protocol with the one error text, the code want and no arguments.
+func checkRegistryAnswer(t *testing.T, rec *httptest.ResponseRecorder, text, want string) {
+	t.Helper()
+
+	if got := rec.Header().Get("Content-Type"); got != "application/json" {
+		t.Fatalf("content type = %q, want application/json", got)
+	}
+
+	var doc registryErrorWire
+	if err := json.Unmarshal(rec.Body.Bytes(), &doc); err != nil {
+		t.Fatalf("decode: %v: %s", err, rec.Body.String())
+	}
+
+	if _, ok := errcode.Lookup(doc.Code); !ok || doc.Code != want || len(doc.Errors) != 1 || doc.Meta != nil {
+		t.Fatalf("answer = %s, want one error, the code %s and no arguments", rec.Body.String(), want)
+	}
+
+	if doc.Errors[0] != text {
+		t.Fatalf("errors = %q, want %q", doc.Errors[0], text)
+	}
+
+	if strings.Contains(rec.Body.String(), "errorCode") || strings.Contains(rec.Body.String(), "errorArgs") {
+		t.Fatalf("answer = %s, want no errorCode and no errorArgs member", rec.Body.String())
 	}
 }
 
