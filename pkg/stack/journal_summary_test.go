@@ -40,6 +40,41 @@ func TestJournalAppendRefusesABadSummary(t *testing.T) {
 				Entries: 2, SequenceIDs: []int64{1, 2}, Operations: []int64{}, HasRebuild: false, Verify: nil,
 			},
 		},
+		{
+			name: "more entries than sequence IDs",
+			summary: stack.BatchSummary{
+				Entries: 3, SequenceIDs: []int64{1, 2}, Operations: []int64{}, HasRebuild: false,
+				Verify: acceptEntries,
+			},
+		},
+		{
+			name: "more operations than entries",
+			summary: stack.BatchSummary{
+				Entries: 2, SequenceIDs: []int64{1, 2}, Operations: []int64{7, 8, 9}, HasRebuild: false,
+				Verify: acceptEntries,
+			},
+		},
+		{
+			name: "sequence ID zero",
+			summary: stack.BatchSummary{
+				Entries: 2, SequenceIDs: []int64{0, 1}, Operations: []int64{}, HasRebuild: false,
+				Verify: acceptEntries,
+			},
+		},
+		{
+			name: "negative sequence ID",
+			summary: stack.BatchSummary{
+				Entries: 2, SequenceIDs: []int64{1, -3}, Operations: []int64{}, HasRebuild: false,
+				Verify: acceptEntries,
+			},
+		},
+		{
+			name: "repeated sequence ID",
+			summary: stack.BatchSummary{
+				Entries: 2, SequenceIDs: []int64{2, 2}, Operations: []int64{}, HasRebuild: false,
+				Verify: acceptEntries,
+			},
+		},
 	}
 
 	for _, tt := range tests {
