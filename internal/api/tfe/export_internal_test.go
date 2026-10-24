@@ -3,6 +3,7 @@ package tfe
 import (
 	"net/http"
 
+	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/pkg/identity"
 )
 
@@ -72,4 +73,18 @@ func NewHandlerWithRoutes(cfg Config, extra func(*Handler) []Route) (*Handler, e
 	h.routes = append(h.routes, routes...)
 
 	return h, nil
+}
+
+// HandleForTest registers handler at pattern on the mux of h, after the route
+// table. Only tests reach it.
+func (h *Handler) HandleForTest(pattern string, handler http.HandlerFunc) {
+	h.mux.HandleFunc(pattern, handler)
+}
+
+// HandleRegistryAnswerForTest registers a route at pattern that answers with
+// the registry error document of answer. Only tests reach it.
+func (h *Handler) HandleRegistryAnswerForTest(pattern string, answer errcode.Answer) {
+	h.mux.HandleFunc(pattern, func(w http.ResponseWriter, r *http.Request) {
+		h.writeRegistryAnswer(r.Context(), w, http.StatusBadRequest, "fixture", answer)
+	})
 }

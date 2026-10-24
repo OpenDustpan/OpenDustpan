@@ -137,6 +137,16 @@ that signed the release. An address is valid for 15 minutes, for one file of
 one release. The file route serves the file only for a valid signature, and
 only for a file that the release names.
 
+An error of a protocol route answers with the registry error document. The
+media type is `application/json`, and the document has three members. The
+`errors` member is a list of strings with the text for a person. The `code`
+member holds the code of the error catalog, for example `registry.not-found`,
+and a client reads the cause from it, not from the text. The `meta` member is
+an object with the member `args`. It is present only for a code that has
+arguments: a code without arguments has no `meta` member. A path under
+`/v1/providers/` that no route serves answers in the same document, with the
+code `server.route-not-found`.
+
 The list of versions leaves out a release whose key the namespace removed, so
 a client selects an older release that it can download. A signed address stays
 valid for its 15 minutes after the removal of the key.

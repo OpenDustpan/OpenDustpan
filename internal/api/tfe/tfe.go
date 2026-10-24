@@ -377,6 +377,15 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Del("Content-Length")
+
+	// A path of the registry protocol answers in the registry error document, so
+	// that a client of the protocol meets one error shape.
+	if catch.registry {
+		h.writeRegistryError(r.Context(), w, http.StatusNotFound, notFoundDetail, errcode.ServerRouteNotFound)
+
+		return
+	}
+
 	h.writeClassError(r.Context(), w, errorClass{
 		status: http.StatusNotFound, title: notFoundTitle, detail: notFoundTitle,
 		code: errcode.ServerRouteNotFound, args: nil,
