@@ -389,6 +389,12 @@ func hasJournalGap(seqs []int64) bool {
 	return int64(len(seqs)) != highest
 }
 
+// tooLargeRemedy is the one command that helps after a size refusal of a
+// journaled update. The error text and the answer of a journal batch over its
+// bound and of a replay past a bound end with it, so the log and the answer
+// give the same remedy.
+const tooLargeRemedy = "run `pulumi up` with fewer resources"
+
 // batchLimitError reports a journal batch over MaxJournalBatchBytes. Its
 // Error text keeps the update wrapper for the log, and Message is the one
 // sentence the server answers. It wraps ErrTooLarge.
@@ -400,9 +406,8 @@ type batchLimitError struct {
 // Error returns the refusal with the batch size and the batch bound.
 func (e *batchLimitError) Error() string {
 	return fmt.Sprintf(
-		"%v: journal batch of %d bytes exceeds the limit of %d bytes: "+
-			"split the change into smaller updates and run `pulumi up` again",
-		ErrTooLarge, e.size, e.limit,
+		"%v: journal batch of %d bytes exceeds the limit of %d bytes: %s",
+		ErrTooLarge, e.size, e.limit, tooLargeRemedy,
 	)
 }
 
@@ -418,8 +423,8 @@ func BatchOverLimit(size, limit int) error {
 // Message returns the one-sentence answer for the batch refusal.
 func (e *batchLimitError) Message() string {
 	return fmt.Sprintf(
-		"This journal batch has %d bytes, more than the limit of %d bytes: run `pulumi up` with fewer resources.",
-		e.size, e.limit,
+		"This journal batch has %d bytes, more than the limit of %d bytes: %s.",
+		e.size, e.limit, tooLargeRemedy,
 	)
 }
 
