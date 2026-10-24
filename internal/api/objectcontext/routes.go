@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"net/http"
 
-	"opendustpan.org/opendustpan/internal/sessionauth"
+	"opendustpan.org/opendustpan/internal/api/routekit"
 	"opendustpan.org/opendustpan/pkg/identity"
 )
 
@@ -133,33 +133,10 @@ func (h *Handler) RegisteredPatterns() []string {
 	return h.mux.Patterns()
 }
 
-// patternMux is an http.ServeMux that records every pattern registered on
-// it, so the route test can list every served route.
-type patternMux struct {
-	servemux *http.ServeMux
-
-	patterns []string
-}
-
-// newPatternMux returns a patternMux ready to register routes.
-func newPatternMux() *patternMux {
-	return &patternMux{servemux: http.NewServeMux(), patterns: nil}
-}
-
-// HandleFunc registers pattern and records it.
-func (m *patternMux) HandleFunc(pattern string, handler func(http.ResponseWriter, *http.Request)) {
-	m.patterns = append(m.patterns, pattern)
-	m.servemux.HandleFunc(pattern, handler)
-}
-
-// ServeHTTP implements http.Handler.
-func (m *patternMux) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	m.servemux.ServeHTTP(w, r)
-}
-
-// Patterns returns a copy of the recorded patterns.
-func (m *patternMux) Patterns() []string {
-	return append([]string(nil), m.patterns...)
+// kit returns the route steps that this API shares with the other
+// tool-neutral APIs.
+func (h *Handler) kit() routekit.Guard {
+	return routekit.Guard{Tokens: h.authn, Sessions: h.sessions, Refusals: h.guard}
 }
 
 // enforce wraps one route table row: it authenticates, finds the object,
@@ -168,17 +145,15 @@ func (h *Handler) enforce(route Route) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
 
-		p, session, err := h.authenticate(r)
+		p, caller, err := h.kit().Authenticate(r)
 		if err != nil {
 			h.writeError(ctx, w, err)
 
 			return
 		}
 
-		if session {
-			ctx = sessionauth.WithSession(ctx)
-			r = r.WithContext(ctx)
-		}
+		ctx = routekit.WithCaller(ctx, caller)
+		r = r.WithContext(ctx)
 
 		t, err := route.Resolve(r)
 		if err != nil {
