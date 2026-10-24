@@ -528,14 +528,53 @@ func (j *JournalEntries) readBatch(content []byte, version int) (BatchSummary, e
 }
 
 // checkSummary refuses a summary that the batch reader returned without an
-// error but that breaks the rules of BatchSummary: a summary with no Verify.
-// The refusal wraps ErrJournalBatch.
+// error but that breaks the rules of BatchSummary: a summary with no Verify,
+// an entry count that is not the number of sequence IDs, more operations than
+// entries, or a sequence ID that is not positive or that appears twice. The
+// refusal wraps ErrJournalBatch.
 func checkSummary(summary BatchSummary) error {
 	// Defense in depth: the store refuses a row with a nil Verify too. This
 	// check stays so that a batch reader that returns no entry check never
 	// writes a blob, and does not rely on the store adapter.
 	if summary.Verify == nil {
 		return fmt.Errorf("%w: the batch reader returned no entry check", ErrJournalBatch)
+	}
+
+	// Defense in depth: the batch reader refuses these batches too. These
+	// checks stay because the sequence IDs come from the request body and name
+	// the blob key, the row and the gap check of the update.
+	if summary.Entries != len(summary.SequenceIDs) {
+		return fmt.Errorf(
+			"%w: the batch has %d entries and %d sequence IDs",
+			ErrJournalBatch, summary.Entries, len(summary.SequenceIDs),
+		)
+	}
+
+	if len(summary.Operations) > summary.Entries {
+		return fmt.Errorf(
+			"%w: the batch has %d entries and %d operations",
+			ErrJournalBatch, summary.Entries, len(summary.Operations),
+		)
+	}
+
+	return checkSequenceIDs(summary.SequenceIDs)
+}
+
+// checkSequenceIDs refuses a sequence ID that is 0 or less, or that appears
+// twice in seqs. The refusal wraps ErrJournalBatch.
+func checkSequenceIDs(seqs []int64) error {
+	seen := make(map[int64]bool, len(seqs))
+
+	for _, seq := range seqs {
+		if seq <= 0 {
+			return fmt.Errorf("%w: sequence ID %d is not positive", ErrJournalBatch, seq)
+		}
+
+		if seen[seq] {
+			return fmt.Errorf("%w: sequence ID %d appears twice", ErrJournalBatch, seq)
+		}
+
+		seen[seq] = true
 	}
 
 	return nil
