@@ -92,8 +92,9 @@ FROM item_keys AS k LEFT JOIN namespaces AS n ON n.id = k.namespace_id`
 }
 
 // checkStagedJobArtifacts checks the rows of plans, log versions and log chunks
-// of a staged backup: each row names a namespace that the backup holds, and
-// each plan body is the plan of its row. A row that fails makes the backup
+// of a staged backup: each row names a namespace that the backup holds, each
+// chunk row belongs to a log version of its namespace and has the rules of a
+// reserve, and each plan body is the plan of its row. A row that fails makes the backup
 // corrupt. It returns backup.ErrCorrupt.
 //
 // Defense in depth: the store checks a plan again when it reads it. This check
@@ -111,6 +112,10 @@ func checkStagedJobArtifacts(ctx context.Context, conn *sql.DB) error {
 		if orphans > 0 {
 			return fmt.Errorf("staged %s has %d rows with no namespace: %w", table, orphans, backup.ErrCorrupt)
 		}
+	}
+
+	if err := checkStagedLogChunks(ctx, conn); err != nil {
+		return err
 	}
 
 	rows, err := conn.QueryContext(ctx, `SELECT p.id, n.id, p.body FROM job_plans AS p
@@ -144,6 +149,50 @@ LEFT JOIN namespaces AS n ON n.id = p.namespace_id`)
 
 	if rowsErr := rows.Err(); rowsErr != nil {
 		return fmt.Errorf("read staged plans: %w", backup.ErrExportRead)
+	}
+
+	return nil
+}
+
+// checkStagedLogChunks checks each log chunk row of a staged backup: the row
+// names a log version of the same namespace, and its number, size and hash
+// have the rules of a reserve. It returns backup.ErrCorrupt.
+//
+// Defense in depth: a reader checks the hash of a log again. This check stays
+// so that a bad row fails the restore and does not wait for a reader.
+func checkStagedLogChunks(ctx context.Context, conn *sql.DB) error {
+	rows, err := conn.QueryContext(ctx, `SELECT c.log_id, c.seq, c.sha256, c.size, l.id FROM job_log_chunks AS c
+LEFT JOIN job_logs AS l ON l.id = c.log_id AND l.namespace_id = c.namespace_id`)
+	if err != nil {
+		return fmt.Errorf("read staged log chunks: %w", backup.ErrExportRead)
+	}
+
+	defer func() {
+		_ = rows.Close() //nolint:errcheck // Read-only check handle.
+	}()
+
+	for rows.Next() {
+		var (
+			logID, sha string
+			seq, size  int64
+			log        sql.NullString
+		)
+
+		if scanErr := rows.Scan(&logID, &seq, &sha, &size, &log); scanErr != nil {
+			return fmt.Errorf("read staged log chunks: %w", backup.ErrExportRead)
+		}
+
+		if !log.Valid {
+			return fmt.Errorf("staged chunk %d of log %q has no log version: %w", seq, logID, backup.ErrCorrupt)
+		}
+
+		if chunkErr := jobstore.CheckChunkRow(logID, seq, size, sha); chunkErr != nil {
+			return fmt.Errorf("staged chunk %d of log %q is not valid: %w: %w", seq, logID, chunkErr, backup.ErrCorrupt)
+		}
+	}
+
+	if rowsErr := rows.Err(); rowsErr != nil {
+		return fmt.Errorf("read staged log chunks: %w", backup.ErrExportRead)
 	}
 
 	return nil
