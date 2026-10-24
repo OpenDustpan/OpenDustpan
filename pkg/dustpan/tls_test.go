@@ -639,7 +639,9 @@ func runUntilListening(t *testing.T, srv *dustpan.Server, logs *logSink) {
 	}
 
 	cancel()
-	<-done
+	if err := <-done; err != nil {
+		t.Logf("server stop: %v", err)
+	}
 	t.Fatal("server did not start in time")
 }
 

@@ -314,7 +314,8 @@ func (a *ProcessAdapter) roundTrip(ctx context.Context, method string, params, o
 		}
 	case <-ctx.Done():
 		a.kill()
-		<-written
+		writeErr := <-written
+		_ = writeErr // The kill closes the pipe, so the write reports it.
 
 		return fmt.Errorf("write %s: %w", method, ctx.Err())
 	}
