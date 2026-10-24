@@ -104,14 +104,22 @@ type Writer struct {
 	Classify Classifier
 }
 
-// Write answers err. A 500 logs its status only, never the error text: the
-// text may hold driver detail, a token or state. A fenced write logs its
-// wrap, which names the write. A code or a value that the catalog refuses
-// logs the code and answers server.internal. Every error answer carries
-// Cache-Control: no-store.
+// Write answers err. A fenced write logs its wrap, which names the write.
+// Every error answer carries Cache-Control: no-store. WriteProblem holds the
+// rest.
 func (wr Writer) Write(ctx context.Context, w http.ResponseWriter, err error) {
-	p := wr.Problem(err)
+	if errors.Is(err, namespace.ErrFenced) {
+		wr.Logger.WarnContext(ctx, "write fenced", slog.String("error", err.Error()))
+	}
 
+	wr.WriteProblem(ctx, w, wr.Problem(err))
+}
+
+// WriteProblem writes the answer p, for a route that builds its own answer.
+// A 500 logs its status only, never the error text: the text may hold driver
+// detail, a token or state. A code or a value that the catalog refuses logs
+// the code and answers server.internal.
+func (wr Writer) WriteProblem(ctx context.Context, w http.ResponseWriter, p Problem) {
 	var (
 		made    errcode.Answer
 		codeErr error
@@ -129,10 +137,6 @@ func (wr Writer) Write(ctx context.Context, w http.ResponseWriter, err error) {
 
 	if p.Status == http.StatusInternalServerError {
 		wr.Logger.ErrorContext(ctx, "request failed", slog.Int("status", p.Status))
-	}
-
-	if errors.Is(err, namespace.ErrFenced) {
-		wr.Logger.WarnContext(ctx, "write fenced", slog.String("error", err.Error()))
 	}
 
 	w.Header().Set("Cache-Control", "no-store")
@@ -255,10 +259,7 @@ func Idempotency(err error) (Problem, bool) {
 	}
 
 	if ie, ok := errors.AsType[*idempotent.Error](err); ok {
-		p := answer(ie.Status, ie.Answer.Code(), ie.Message)
-		p.answer = ie.Answer
-
-		return p, true
+		return Built(ie.Status, ie.Message, ie.Answer.Code(), ie.Answer, nil), true
 	}
 
 	return Pass()
@@ -286,6 +287,18 @@ func Namespace(err error) (Problem, bool) {
 	default:
 		return Pass()
 	}
+}
+
+// Built returns the answer of status and message for an answer a that
+// errcode.New made, with the error of that call. A refused answer keeps the
+// code and no values, so the writer logs the code and answers server.internal.
+func Built(status int, message, code string, a errcode.Answer, err error) Problem {
+	p := answer(status, code, message)
+	if err == nil {
+		p.answer = a
+	}
+
+	return p
 }
 
 // answer returns a Problem whose code takes no argument.

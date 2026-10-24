@@ -28,7 +28,7 @@ const knownDir = "testdata/uncoded"
 // catalog.
 func gated() []errcodetest.Adapter {
 	return []errcodetest.Adapter{
-		api("audit", []string{"errorResponse"}, nil),
+		api("audit", nil, nil),
 		api("drift", []string{"errorResponse"}, nil),
 		{
 			Name: "dustpan",
@@ -40,10 +40,10 @@ func gated() []errcodetest.Adapter {
 			// runner protocol has its own codes and its own versions.
 			Skip: []string{"writeMaintenanceHTTPBackend", "writeMaintenanceRunner"},
 		},
-		api("inventory", []string{"errorResponse"}, nil),
+		api("inventory", nil, nil),
 		api("jobs", []string{"errorResponse"}, nil),
 		api("notifications", nil, nil),
-		api("objectcontext", []string{"errorResponse"}, nil),
+		api("objectcontext", nil, nil),
 		// The shared error module of the tool-neutral APIs. Its answers have no
 		// known list, so a new answer in it needs a code.
 		api("problem", []string{"Body"}, nil),

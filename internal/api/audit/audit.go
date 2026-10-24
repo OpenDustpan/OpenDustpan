@@ -8,7 +8,6 @@ package audit
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -17,6 +16,7 @@ import (
 	"strings"
 
 	"opendustpan.org/opendustpan/internal/api/apidesc"
+	"opendustpan.org/opendustpan/internal/api/problem"
 	"opendustpan.org/opendustpan/internal/api/refusal"
 	"opendustpan.org/opendustpan/internal/denylimit"
 	"opendustpan.org/opendustpan/internal/errcode"
@@ -460,104 +460,42 @@ func (h *Handler) authenticate(r *http.Request) (identity.Principal, bool, error
 	return p, false, err
 }
 
-// errorResponse is the error body of the tool-neutral APIs. ErrorCode is a
-// stable machine code of the catalog, and ErrorArgs are its arguments.
-type errorResponse struct {
-	Message   string         `json:"message"`
-	Code      int            `json:"code"`
-	ErrorCode string         `json:"errorCode"`
-	ErrorArgs map[string]any `json:"errorArgs,omitempty"`
-}
-
+// writeError answers err through the shared error module of the
+// tool-neutral APIs, with the classes of the audit routes.
 func (h *Handler) writeError(ctx context.Context, w http.ResponseWriter, err error) {
-	pr := classify(err)
-
-	answer, codeErr := errcode.New(pr.code)
-	if codeErr != nil {
-		// A code that the catalog refuses is a bug of this adapter. The log
-		// names the code only.
-		h.logger.ErrorContext(ctx, "error code refused", slog.String("error_code", pr.code))
-
-		pr = problem{status: http.StatusInternalServerError, code: errcode.ServerInternal, message: "internal error"}
-		answer = errcode.Internal()
-	}
-
-	if pr.status == http.StatusInternalServerError {
-		// The log names the status only, never the error text: the text
-		// may hold driver detail, a token, or state.
-		h.logger.ErrorContext(ctx, "request failed", slog.Int("status", pr.status))
-	}
-
-	h.writeAnswer(ctx, w, pr.status, pr.message, answer)
+	problem.Writer{Logger: h.logger, Classify: requestErrors}.Write(ctx, w, err)
 }
 
-// writeAnswer writes the error body of status and message with the code and
-// the arguments of answer.
-func (h *Handler) writeAnswer(
-	ctx context.Context, w http.ResponseWriter, status int, message string, answer errcode.Answer,
-) {
-	h.writeJSON(ctx, w, status, errorResponse{
-		Message: message, Code: status, ErrorCode: answer.Code(), ErrorArgs: answer.Args(),
-	})
-}
-
-// problem is the answer to an error: a status, a code of the catalog and a
-// message that is safe to show callers.
-type problem struct {
-	status  int
-	code    string
-	message string
-}
-
-// classify maps domain errors to their answer: first the errors of the
-// caller, then the errors of the request.
-func classify(err error) problem {
-	switch {
-	case errors.Is(err, identity.ErrRateLimited):
-		return problem{
-			status:  http.StatusTooManyRequests,
-			code:    errcode.AuthRateLimited,
-			message: "too many failed sign-ins from this address: try again later",
-		}
-	case errors.Is(err, identity.ErrUnauthenticated):
-		return problem{status: http.StatusUnauthorized, code: errcode.AuthUnauthenticated, message: "unauthenticated"}
-	case errors.Is(err, sessionauth.ErrCSRF), errors.Is(err, sessionauth.ErrOtherSite):
-		return problem{status: http.StatusForbidden, code: errcode.Forbidden(err), message: err.Error()}
-	case errors.Is(err, identity.ErrDenied):
-		return problem{status: http.StatusForbidden, code: errcode.Forbidden(err), message: "forbidden"}
-	default:
-		return classifyRequest(err)
-	}
-}
-
-// classifyRequest maps the errors of the request and of the read of the audit
-// log.
-func classifyRequest(err error) problem {
+// requestErrors maps the errors of the request and of the read of the audit
+// log. The shared module answers the rest.
+func requestErrors(err error) (problem.Problem, bool) {
 	switch {
 	case errors.Is(err, errMissingOrganization), errors.Is(err, errInvalidPage):
-		return problem{status: http.StatusBadRequest, code: errcode.RequestInvalidQuery, message: err.Error()}
+		return fail(http.StatusBadRequest, errcode.RequestInvalidQuery, err.Error()), true
 	case errors.Is(err, errInvalidSequence):
-		return problem{status: http.StatusBadRequest, code: errcode.RequestInvalidPath, message: err.Error()}
+		return fail(http.StatusBadRequest, errcode.RequestInvalidPath, err.Error()), true
 	case errors.Is(err, namespace.ErrInvalidName):
-		return problem{status: http.StatusBadRequest, code: errcode.NamespaceInvalidName, message: err.Error()}
+		return fail(http.StatusBadRequest, errcode.NamespaceInvalidName, err.Error()), true
 	case errors.Is(err, identity.ErrInvalidObject):
-		return problem{status: http.StatusBadRequest, code: errcode.RequestInvalidObject, message: err.Error()}
+		return fail(http.StatusBadRequest, errcode.RequestInvalidObject, err.Error()), true
 	case errors.Is(err, namespace.ErrNotFound):
-		return problem{status: http.StatusNotFound, code: errcode.NamespaceNotFound, message: err.Error()}
+		return fail(http.StatusNotFound, errcode.NamespaceNotFound, err.Error()), true
 	case errors.Is(err, audit.ErrEntryNotFound):
-		return problem{status: http.StatusNotFound, code: errcode.AuditEntryNotFound, message: err.Error()}
+		return fail(http.StatusNotFound, errcode.AuditEntryNotFound, err.Error()), true
 	case errors.Is(err, errNoEntryReader):
-		return problem{status: http.StatusNotImplemented, code: errcode.AuditEntryReadUnavailable, message: err.Error()}
+		return fail(http.StatusNotImplemented, errcode.AuditEntryReadUnavailable, err.Error()), true
 	default:
-		return problem{status: http.StatusInternalServerError, code: errcode.ServerInternal, message: "internal error"}
+		return problem.Pass()
+	}
+}
+
+// fail returns an answer with no arguments.
+func fail(status int, code, message string) problem.Problem {
+	return problem.Problem{
+		Status: status, Code: code, Values: nil, Message: message, RetryAfter: 0, Reauthenticate: "",
 	}
 }
 
 func (h *Handler) writeJSON(ctx context.Context, w http.ResponseWriter, status int, body any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-
-	if err := json.NewEncoder(w).Encode(body); err != nil {
-		h.logger.WarnContext(ctx, "write response failed", slog.String("error", err.Error()))
-	}
+	problem.WriteJSON(ctx, h.logger, w, status, body)
 }
