@@ -54,7 +54,7 @@ func requestEntry(
 		ValueCount:    detail.valueCount,
 		Changes:       nil,
 		SourceIP:      clientip.String(r),
-		UserAgent:     truncateUserAgent(r.UserAgent()),
+		UserAgent:     audit.TruncateUserAgent(r.UserAgent()),
 		Channel:       sessionauth.AuditChannel(r, channelHeader),
 		Kind:          detail.kind,
 		Outcome:       detail.outcome,

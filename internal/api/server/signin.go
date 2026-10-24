@@ -621,7 +621,7 @@ func signInEntry(r *http.Request, subject, idpSubject, action string) audit.Entr
 	return audit.Entry{
 		At: time.Time{}, Namespace: "", Subject: subject, IDPSubject: idpSubject, TokenID: "", Action: action,
 		Object: "", Version: "", ValuePath: "", ValueCount: nil, Changes: nil, SourceIP: clientip.String(r),
-		UserAgent: truncateUserAgent(userAgent(r)), Channel: audit.ChannelConsole, Kind: "", Outcome: "",
+		UserAgent: audit.TruncateUserAgent(userAgent(r)), Channel: audit.ChannelConsole, Kind: "", Outcome: "",
 		RequestID: requestid.FromContext(r.Context()), ObjectID: "", PrevHash: "", Hash: "", Sequence: 0,
 		FenceVersion:  0,
 		Reason:        "",
