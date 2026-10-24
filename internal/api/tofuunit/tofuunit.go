@@ -195,4 +195,3 @@ func (u Rules) Append(ctx context.Context, entry audit.Entry) error {
 
 	return err
 }
-

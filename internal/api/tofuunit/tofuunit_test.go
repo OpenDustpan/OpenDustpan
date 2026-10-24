@@ -390,7 +390,11 @@ func TestEntryCutsUserAgent(t *testing.T) {
 	}{
 		{"short unchanged", "tofu/1.0", len("tofu/1.0")},
 		{"ascii cut to the limit", strings.Repeat("a", audit.MaxUserAgentLen+100), audit.MaxUserAgentLen},
-		{"rune straddling the limit dropped", strings.Repeat("a", audit.MaxUserAgentLen-1) + "é", audit.MaxUserAgentLen - 1},
+		{
+			"rune straddling the limit dropped",
+			strings.Repeat("a", audit.MaxUserAgentLen-1) + "é",
+			audit.MaxUserAgentLen - 1,
+		},
 	}
 
 	_, obj, p := fixture(t)
@@ -404,6 +408,7 @@ func TestEntryCutsUserAgent(t *testing.T) {
 
 			e := tofuunit.Entry(r, p, obj, tofuunit.Detail{
 				At: time.Unix(1700000000, 0).UTC(), Action: identity.ActionUnitReadSecrets,
+				Version: "", ValuePath: "",
 				Kind: audit.KindReveal, Outcome: audit.OutcomeSuccess, Reason: "why",
 			})
 
