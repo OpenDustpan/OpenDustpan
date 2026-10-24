@@ -36,8 +36,8 @@ namespace. It needs the action `namespace:set-context` on the namespace. The
 The body names only the fields to change. A field that the body leaves out
 does not change. A field with an empty value clears the field. The body must
 name at least one field, and it must not name an unknown field. The body must
-be valid UTF-8. A body with bytes that are not valid UTF-8 gets 400, and the
-server stores nothing.
+be valid UTF-8. A body with bytes that are not valid UTF-8, or with a lone
+surrogate escape such as `\ud800`, gets 400, and the server stores nothing.
 
 ```sh
 curl -X PATCH -H "Authorization: token $DUSTPAN_TOKEN" \

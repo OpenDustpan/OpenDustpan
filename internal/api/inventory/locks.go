@@ -9,6 +9,7 @@ import (
 
 	"opendustpan.org/opendustpan/internal/api/refusal"
 	"opendustpan.org/opendustpan/internal/errcode"
+	"opendustpan.org/opendustpan/internal/textbody"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/collection"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -25,6 +26,13 @@ const maxLockBodyBytes = 8192
 // errLockBody names the body that a manual lock needs. Its text is the error of
 // the 400 answer.
 var errLockBody = errors.New(`invalid lock body: provide {"reason":"<why the object is locked>"}`)
+
+// errLockText is the answer for a lock body that is not valid UTF-8 or that
+// holds a lone surrogate escape. The server refuses the reason and does not
+// change it.
+var errLockText = errors.New(
+	`invalid lock body: send the reason as valid UTF-8 text, with no invalid byte and no lone surrogate escape such as \ud800`,
+)
 
 // unitLockPath is the route of the manual lock of one unit. The unit query
 // value names the unit.
@@ -306,6 +314,13 @@ func readLockReason(w http.ResponseWriter, r *http.Request) (string, error) {
 		return "", errLockBody
 	}
 
+	// encoding/json replaces each invalid UTF-8 byte and each lone surrogate
+	// escape with U+FFFD, so the check of the reason could never see what the
+	// client sent. Refuse the body here, before the decode changes it.
+	if textbody.Refused(body) {
+		return "", errLockText
+	}
+
 	dec := json.NewDecoder(bytes.NewReader(body))
 	dec.DisallowUnknownFields()
 
@@ -349,7 +364,7 @@ func classifyLock(err error) (failure, bool) {
 		return fail(http.StatusBadRequest, err.Error(), errcode.LockInvalidTarget), true
 	case errors.Is(err, audit.ErrInvalidReason):
 		return fail(http.StatusBadRequest, err.Error(), errcode.AuditReasonInvalid), true
-	case errors.Is(err, errLockBody):
+	case errors.Is(err, errLockBody), errors.Is(err, errLockText):
 		return fail(http.StatusBadRequest, err.Error(), errcode.RequestBodyInvalid), true
 	}
 

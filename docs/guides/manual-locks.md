@@ -167,7 +167,9 @@ force-unlock.
 ## Take a lock
 
 The body gives the reason. The reason is required and has at most 500
-characters. It has no line break and no other control character.
+characters. It has no line break and no other control character. The body must
+be valid UTF-8, with no lone surrogate escape such as `\ud800`. The server
+refuses such a body with 400 and does not change the text.
 
 For a stack or workspace, `PUT /api/inventory/unit-lock?unit=<unit reference>`:
 

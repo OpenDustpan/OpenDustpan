@@ -51,6 +51,7 @@ func TestContextErrorsHaveCodes(t *testing.T) {
 		},
 		{"no API context", objectcontext.ErrNotFound, http.StatusNotFound, code(errcode.ContextNotSet)},
 		{"body", apicontext.ErrBody, http.StatusBadRequest, code(errcode.RequestBodyInvalid)},
+		{"body text", apicontext.ErrBodyText, http.StatusBadRequest, code(errcode.RequestBodyInvalid)},
 		{"include", apicontext.ErrInclude, http.StatusBadRequest, code(errcode.RequestInvalidQuery)},
 		{"invalid context", objectcontext.ErrInvalidContext, http.StatusBadRequest, code(errcode.ContextInvalid)},
 		{
