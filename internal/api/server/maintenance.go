@@ -147,6 +147,13 @@ func (h *Handler) writeEnterError(ctx context.Context, w http.ResponseWriter, er
 	}
 
 	f := classify(err)
+
+	// Defense in depth: writeError sets the same header for the same errors;
+	// this answer uses its own writer, so it sets the header here too.
+	if errors.Is(err, maintenance.ErrInMaintenance) || errors.Is(err, maintenance.ErrBusy) {
+		w.Header().Set("Retry-After", maintenanceRetryAfter)
+	}
+
 	if f.code == "" {
 		h.writeJSON(ctx, w, f.status, enterRefusedResponse{
 			Code: f.status, Message: f.message, Canceled: canceled, ErrorCode: "", ErrorArgs: nil,
@@ -156,6 +163,7 @@ func (h *Handler) writeEnterError(ctx context.Context, w http.ResponseWriter, er
 	}
 
 	status, message, answer := h.answer(ctx, f)
+
 	h.writeJSON(ctx, w, status, enterRefused(status, message, canceled, answer))
 }
 
