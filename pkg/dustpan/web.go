@@ -14,6 +14,7 @@ import (
 
 	"opendustpan.org/opendustpan/internal/api/apidesc"
 	"opendustpan.org/opendustpan/internal/api/idempotent"
+	"opendustpan.org/opendustpan/internal/errcode"
 )
 
 // consoleHandler serves a built single-page app from dir, for GET and HEAD
@@ -35,7 +36,9 @@ func consoleHandler(dir string) (http.Handler, error) {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet && r.Method != http.MethodHead {
 			w.Header().Set("Allow", "GET, HEAD")
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			writeRouteError(
+				w, http.StatusMethodNotAllowed, "method not allowed", routeAnswer(errcode.ServerMethodNotAllowed),
+			)
 
 			return
 		}

@@ -197,6 +197,7 @@ func RunItemSealer(t *testing.T, newRig SealerFactory) {
 		{name: "a shredded key answers before any blob read", test: testSealerShredded},
 		{name: "a wrapped key blob of another item does not unwrap", test: testSealerSwappedBlob},
 		{name: "a wrapped key blob of another namespace does not unwrap", test: testSealerOtherNamespaceBlob},
+		{name: "only the blob version of the record is read", test: testSealerRecordVersion},
 		{name: "another key-encryption key does not open", test: testSealerForeignWrapper},
 		{name: "no key-encryption key fails closed", test: testSealerUnkeyed},
 		{name: "a malformed reference is refused", test: testSealerBadRef},
@@ -782,6 +783,44 @@ func testSealerOtherNamespaceBlob(t *testing.T, r *SealerRig) {
 		err, secret.ErrDecrypt,
 	) {
 		t.Errorf("open with a wrapped key of another namespace err = %v, want ErrDecrypt", err)
+	}
+}
+
+func testSealerRecordVersion(t *testing.T, r *SealerRig) {
+	t.Helper()
+
+	a := sealerRef(t, "unit-one", secret.ItemKindPlan, "pln-1")
+	b := sealerRef(t, "unit-one", secret.ItemKindPlan, "pln-2")
+	ka, kb := mustNewKey(t, r, a), mustNewKey(t, r, b)
+	sealed := sealItem(t, r, a, sealerBinding(), []byte("content of pln-1"))
+
+	// A later version of the key blob of pln-1 that the record does not name:
+	// the wrapped key of pln-2, then bytes that are not a wrapped key.
+	named := blobOf(t, r, r.Acme.ID, ka).String()
+	later := blob.Key(strings.TrimSuffix(named, "/v1") + "/v2")
+
+	for _, data := range [][]byte{readBlob(t, r, blobOf(t, r, r.Acme.ID, kb)), []byte("not a wrapped key")} {
+		if err := r.Blobs.Delete(t.Context(), later); err != nil {
+			t.Fatalf("delete %s: %v", later, err)
+		}
+
+		if err := r.Blobs.Put(t.Context(), later, bytes.NewReader(data)); err != nil {
+			t.Fatalf("put %s: %v", later, err)
+		}
+
+		got, err := openSealed(t.Context(), r.Sealer, a, sealerBinding(), sealed)
+		if err != nil || string(got) != "content of pln-1" {
+			t.Errorf("open with a later blob version present = %q, %v, want the content", got, err)
+		}
+	}
+
+	// With the blob of the record gone, the later version does not stand in.
+	if err := r.Blobs.Delete(t.Context(), blob.Key(named)); err != nil {
+		t.Fatalf("delete %s: %v", named, err)
+	}
+
+	if _, err := openSealed(t.Context(), r.Sealer, a, sealerBinding(), sealed); !errors.Is(err, secret.ErrKeyNotFound) {
+		t.Errorf("open with the blob of the record gone err = %v, want ErrKeyNotFound", err)
 	}
 }
 

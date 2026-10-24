@@ -61,6 +61,7 @@ import (
 	"opendustpan.org/opendustpan/internal/clientip"
 	"opendustpan.org/opendustpan/internal/denylimit"
 	"opendustpan.org/opendustpan/internal/devsignin"
+	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/internal/metrics"
 	"opendustpan.org/opendustpan/internal/pulumijournal"
 	"opendustpan.org/opendustpan/internal/requestid"
@@ -94,6 +95,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/session"
 	"opendustpan.org/opendustpan/pkg/stack"
 	"opendustpan.org/opendustpan/pkg/tempadmin"
+	"opendustpan.org/opendustpan/pkg/trigger"
 	"opendustpan.org/opendustpan/pkg/workspace"
 )
 
@@ -179,6 +181,7 @@ type settings struct {
 	profileStore         profile.Store
 	sinks                sinkSettings
 	jobStore             job.Store
+	triggerStore         trigger.Store
 	driftStore           drift.Store
 	savedViewStore       savedview.Store
 	gitHost              gitHostSettings
@@ -724,6 +727,7 @@ func defaultSettings() *settings {
 		profileStore:            nil,
 		sinks:                   sinkSettings{store: nil, senders: nil, ports: egress.Ports{}},
 		jobStore:                nil,
+		triggerStore:            nil,
 		driftStore:              nil,
 		savedViewStore:          nil,
 		gitHost:                 gitHostSettings{store: nil, allow: nil, cas: nil, loopback: false, checkLimits: nil},
@@ -798,11 +802,6 @@ func NewServer(opts ...Option) (*Server, error) {
 		return nil, err
 	}
 
-	// A handler that reads a name the API description does not hold logs the
-	// error through the logger of the server. Set it only after the settings
-	// pass, so that a NewServer that fails changes nothing.
-	apidesc.SetLogger(cfg.logger)
-
 	if cacheErr := wrapBlobCache(cfg); cacheErr != nil {
 		return nil, cacheErr
 	}
@@ -842,6 +841,7 @@ func NewServer(opts ...Option) (*Server, error) {
 	}
 
 	wireDevGuard(cfg)
+	wireNamespaceServiceGuard(cfg)
 
 	svc.tempAdmins, err = newTempAdminService(cfg)
 	if err != nil {
@@ -914,6 +914,17 @@ func wireDevGuard(cfg *settings) {
 	}
 
 	cfg.authenticator = principal.RefuseDevSubjects(cfg.authenticator).OnRefused(devRefusalAudit(cfg))
+}
+
+// wireNamespaceServiceGuard makes the authenticator refuse a caller with the
+// subject of a namespace service principal, on every kind of installation.
+// The server builds that principal itself, so no authenticator gives it.
+func wireNamespaceServiceGuard(cfg *settings) {
+	if cfg.authenticator == nil {
+		return
+	}
+
+	cfg.authenticator = principal.RefuseNamespaceServiceSubjects(cfg.authenticator)
 }
 
 // requestOf answers the client address and the request ID that the server
@@ -1109,7 +1120,6 @@ type adapters struct {
 	neutralHandlers
 
 	pulumi      http.Handler
-	profiles    http.Handler
 	tfe         http.Handler
 	tofuHTTP    http.Handler
 	server      http.Handler
@@ -1189,7 +1199,6 @@ func newAdapters(
 	mounted := adapters{
 		neutralHandlers: neutral,
 		pulumi:          api,
-		profiles:        neutral.profiles,
 		tfe:             tfeAPI,
 		tofuHTTP:        tofuHTTPAPI,
 		server:          serverAPI,
@@ -1223,6 +1232,9 @@ type neutralHandlers struct {
 	sinks http.Handler
 	// jobs is nil when no job store is set.
 	jobs http.Handler
+	// triggers is nil when no trigger store is set, or the server lacks the
+	// job service that a trigger starts a plan through.
+	triggers http.Handler
 	// drift is nil when no drift store is set.
 	drift http.Handler
 	// registry is nil when no registry store is set.
@@ -1265,22 +1277,7 @@ func newNeutralHandlers(
 		return neutralHandlers{}, err
 	}
 
-	// One job service starts the jobs of the jobs API and the drift checks.
-	var starter job.Starter
-
-	if cfg.jobStore != nil {
-		starter, err = newJobService(svc, cfg)
-		if err != nil {
-			return neutralHandlers{}, err
-		}
-	}
-
-	jobs, err := newJobsHandler(svc, cfg, onFailure, starter)
-	if err != nil {
-		return neutralHandlers{}, err
-	}
-
-	drifts, err := newDriftHandler(svc, cfg, onFailure, starter)
+	jobAPIs, err := newJobAndDriftHandlers(svc, cfg, onFailure)
 	if err != nil {
 		return neutralHandlers{}, err
 	}
@@ -1290,12 +1287,51 @@ func newNeutralHandlers(
 		return neutralHandlers{}, err
 	}
 
+	triggers, err := newTriggersHandler(svc, cfg, onFailure)
+	if err != nil {
+		return neutralHandlers{}, err
+	}
+
 	return neutralHandlers{
 		inventory: units, audit: entries, context: contexts, runners: runners, profiles: profiles, sinks: sinks,
-		jobs:     jobs,
-		drift:    drifts,
+		jobs:     jobAPIs.jobs,
+		triggers: triggers,
+		drift:    jobAPIs.drift,
 		registry: registries,
 	}, nil
+}
+
+// jobAPIs holds the jobs API and the drift API, which share one job service.
+type jobAPIs struct {
+	jobs  http.Handler
+	drift http.Handler
+}
+
+// newJobAndDriftHandlers builds the jobs API and the drift API. One job service
+// starts the jobs of the jobs API and the drift checks.
+func newJobAndDriftHandlers(svc services, cfg *settings, onFailure func()) (jobAPIs, error) {
+	var starter job.Starter
+
+	if cfg.jobStore != nil {
+		service, err := newJobService(svc, cfg)
+		if err != nil {
+			return jobAPIs{jobs: nil, drift: nil}, err
+		}
+
+		starter = service
+	}
+
+	jobs, err := newJobsHandler(svc, cfg, onFailure, starter)
+	if err != nil {
+		return jobAPIs{jobs: nil, drift: nil}, err
+	}
+
+	drifts, err := newDriftHandler(svc, cfg, onFailure, starter)
+	if err != nil {
+		return jobAPIs{jobs: nil, drift: nil}, err
+	}
+
+	return jobAPIs{jobs: jobs, drift: drifts}, nil
 }
 
 // newReadiness builds the readiness probe: it pings the store and the blob
@@ -1420,6 +1456,11 @@ func newTFEHandler(
 		sessionPolicy = policies
 	}
 
+	outputChecker, err := newOutputChecker(cfg, svc)
+	if err != nil {
+		return nil, err
+	}
+
 	handler, err := tfe.NewHandler(tfe.Config{
 		Registry:      registryProtocol,
 		Authenticator: cfg.authenticator,
@@ -1430,6 +1471,7 @@ func newTFEHandler(
 		Logger:        cfg.logger,
 		Namespaces:    svc.namespaces,
 		Workspaces:    svc.workspaces,
+		OutputChecker: outputChecker,
 		BaseURL:       base,
 		Audit:         entries,
 		Gate:          gate,
@@ -2675,7 +2717,7 @@ func newInventoryHandler(svc services, cfg *settings, onFailure func()) (http.Ha
 		return nil, err
 	}
 
-	outputSharing, err := newOutputSharingService(cfg)
+	outputSharing, outputs, err := newOutputSharingParts(cfg, svc)
 	if err != nil {
 		return nil, err
 	}
@@ -2683,6 +2725,7 @@ func newInventoryHandler(svc services, cfg *settings, onFailure func()) (http.Ha
 	handler, err := inventoryapi.NewHandler(inventoryapi.Config{
 		Views:         views,
 		OutputSharing: outputSharing,
+		Outputs:       outputs,
 		Namespaces:    svc.namespaces,
 		Units:         cfg.inventoryReader,
 		Deleted:       deleted,
@@ -2787,7 +2830,7 @@ func newServerHandler(
 		return nil, err
 	}
 
-	gates, err := newGateConfigService(cfg, deps.services.namespaces)
+	gates, err := newGateConfigService(cfg, deps.services.namespaces, principals)
 	if err != nil {
 		return nil, err
 	}
@@ -2968,6 +3011,16 @@ func newPrincipalService(cfg *settings, grants *access.Service) (*principal.Serv
 func withRequestCache(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		next.ServeHTTP(w, r.WithContext(access.WithRequestCache(r.Context())))
+	})
+}
+
+// withMisuseReporter puts the reporter of the server on the context of each
+// request. A handler that reads a name that the API description does not hold
+// logs the error through it, so the error goes to the logger of this server,
+// also when one process runs more than one server.
+func withMisuseReporter(rep *apidesc.Reporter, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		next.ServeHTTP(w, r.WithContext(apidesc.WithReporter(r.Context(), rep)))
 	})
 }
 
@@ -3828,20 +3881,15 @@ func (m *rootMux) handleMounted(path string, handler http.Handler) {
 // v1NotFound answers 404 for a path under v1Prefix that no handler serves, in
 // the error shape of the tool-neutral API.
 func v1NotFound(w http.ResponseWriter, _ *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusNotFound)
-
-	body := []byte(`{"code":404,"message":"not found: no route at this path"}` + "\n")
-	if _, err := w.Write(body); err != nil {
-		// The client has gone; there is nothing to report.
-		return
-	}
+	writeRouteError(
+		w, http.StatusNotFound, "not found: no route at this path", routeAnswer(errcode.ServerRouteNotFound),
+	)
 }
 
 // mountV1 registers each path of h under v1Prefix on mux, with wrap around
 // h. A path serves every method that h registers for it, and h answers the
-// methods it does not serve. A nil h or a handler that lists no patterns
-// registers nothing.
+// methods it does not serve, with the 405 of the tool-neutral API. A nil h or
+// a handler that lists no patterns registers nothing.
 //
 // The pattern check sees only the patterns that the handlers list and the
 // patterns of the root mux. A route that a wrapper (the wrap argument or a
@@ -3852,7 +3900,7 @@ func mountV1(mux *rootMux, h http.Handler, wrap func(http.Handler) http.Handler)
 		return
 	}
 
-	wrapped := wrap(h)
+	wrapped := wrap(withJSONMethodNotAllowed(h))
 	seen := map[string]struct{}{}
 
 	for _, pattern := range lister.RegisteredPatterns() {
@@ -3883,12 +3931,15 @@ func mountAPI(mux *rootMux, a adapters, cfg *settings) error {
 	// maintenance routes that end the restore keep serving.
 	mux.Handle(
 		"/api/inventory/",
-		withCORS(withMaintenance(a.inventory, a.maintenance, shapeInventory, cfg.logger), cfg.allowedOrigins),
+		withCORS(
+			withMaintenance(withJSONMethodNotAllowed(a.inventory), a.maintenance, shapeInventory, cfg.logger),
+			cfg.allowedOrigins,
+		),
 	)
 	// The audit API is read-only, so it stays available in maintenance mode
 	// like the installation API: an operator reads the log while the
 	// installation is down for a restore.
-	mux.Handle("/api/audit/", withCORS(a.audit, cfg.allowedOrigins))
+	mux.Handle("/api/audit/", withCORS(withJSONMethodNotAllowed(a.audit), cfg.allowedOrigins))
 	// The runner protocol is outside /api/. A runner sends no cookie and no
 	// Origin header, so it passes no CORS gate. The management API of the
 	// runners is more specific than /api/, so it reaches its own adapter.
@@ -3896,7 +3947,10 @@ func mountAPI(mux *rootMux, a adapters, cfg *settings) error {
 		mux.Handle("/runner/v1/", withMaintenance(a.runners, a.maintenance, shapeRunner, cfg.logger))
 		mux.Handle(
 			"/api/runners/",
-			withCORS(withMaintenance(a.runners, a.maintenance, shapeInventory, cfg.logger), cfg.allowedOrigins),
+			withCORS(
+				withMaintenance(withJSONMethodNotAllowed(a.runners), a.maintenance, shapeInventory, cfg.logger),
+				cfg.allowedOrigins,
+			),
 		)
 	}
 	// The paths of the inventory and the context API under /api/dustpan/v1/
@@ -3920,6 +3974,9 @@ func mountAPI(mux *rootMux, a adapters, cfg *settings) error {
 	mountV1(mux, a.jobs, func(h http.Handler) http.Handler {
 		return withCORS(withMaintenance(h, a.maintenance, shapeInventory, cfg.logger), cfg.allowedOrigins)
 	})
+	mountV1(mux, a.triggers, func(h http.Handler) http.Handler {
+		return withCORS(withMaintenance(h, a.maintenance, shapeInventory, cfg.logger), cfg.allowedOrigins)
+	})
 	mountV1(mux, a.drift, func(h http.Handler) http.Handler {
 		return withCORS(withMaintenance(h, a.maintenance, shapeInventory, cfg.logger), cfg.allowedOrigins)
 	})
@@ -3940,7 +3997,7 @@ func mountAPI(mux *rootMux, a adapters, cfg *settings) error {
 	// The OpenTofu http backend (ADR 49) answers tool calls under its own
 	// prefix. It is refused in maintenance mode like the other tool adapters.
 	mux.Handle("/tofu/state/", withMaintenance(a.tofuHTTP, a.maintenance, shapeHTTPBackend, cfg.logger))
-	mux.Handle("/api/server/", withCORS(a.server, cfg.allowedOrigins))
+	mux.Handle("/api/server/", withCORS(withJSONMethodNotAllowed(a.server), cfg.allowedOrigins))
 	mux.Handle("/api/", withCORS(withMaintenance(a.pulumi, a.maintenance, shapePulumi, cfg.logger), cfg.allowedOrigins))
 	// Service discovery lives outside /api/v2/, so the root mux serves it
 	// through the TFE adapter. It stays available in maintenance mode: the
@@ -4029,9 +4086,9 @@ func routes(a adapters, cfg *settings, observed *metrics.ServerMetrics) (routeHa
 	gated := withAuditChainGate(mux, a.chain, cfg.logger)
 
 	return routeHandlers{
-		served: withRequestCache(withRequestLog(
+		served: withMisuseReporter(apidesc.NewReporter(cfg.logger), withRequestCache(withRequestLog(
 			gateComponents(gated, cfg.components), addr, cfg.logger, cfg.authenticator, observed,
-		)),
+		))),
 		ungated: gated,
 		root:    mux,
 	}, nil

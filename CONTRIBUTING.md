@@ -23,6 +23,10 @@ A change to the architecture starts as an RFC in `docs/rfc/`.
    `leak_test.go` file, as `CLAUDE.md` says.
 4. Use the words in `GLOSSARY.md`. Write docs, errors and messages in the
    style that `CLAUDE.md` sets.
+5. Do not edit `docs/reference/configuration.md` by hand. The setting texts
+   are in `internal/cli/settings.go`. The prose of the page is in
+   `internal/cli/reference.go`. Run `make generate` after a change to either
+   file. `TestConfigurationReference` fails on a hand edit of the page.
 
 Ask in the issue before you add a dependency.
 
@@ -54,6 +58,20 @@ request.
 Say what changed and why, and link the issue. Say how you tested the change.
 A reviewer can ask for changes. When CI is green and the review passes, the
 project owner decides whether it merges.
+
+## Documentation
+
+A change that a user can see includes its page in the user documentation,
+in the same pull request. The user documentation is `README.md`,
+`docs/guides/`, `docs/reference/` and `docs/explanation/`.
+
+The author of a change owns the pages that the change adds or edits. The
+author makes sure that each of these pages agrees with the behavior that
+the change gives.
+
+One maintainer owns the structure and the voice of the documentation: which
+pages exist, how they link to each other, and the style that `CLAUDE.md`
+sets. Ask in the issue before you add, move or remove a page.
 
 ## Governance
 
@@ -91,11 +109,14 @@ These rules follow the
 
 ### How the project itself uses AI
 
-Agent sessions do most of the maintainer work on OpenDustpan. Every commit
-that an agent writes carries a `Co-Authored-By` trailer that names it. Every
-change passes CI, a security review and a review by a second session before
-a merge. The rules above also apply to these agents. The `Co-Authored-By`
-trailer is their disclosure. Until 2026-10-22, an agent signs off each commit
+Agent sessions do most of the maintainer work on OpenDustpan. Each commit
+that an agent writes on its pull request branch carries a `Co-Authored-By`
+trailer. The trailer names the agent tool. It never names a model or a model
+version. Do not put a model name in a commit message, a pull request title or
+a pull request body. Every change passes CI, a security review and a review
+by a second session before a merge. The rules above also apply to these
+agents. The `Co-Authored-By` trailer is their disclosure. Until 2026-10-22,
+an agent signs off each commit
 with its own commit author identity. The project owner decides the rule for
 agent sign-off after that date. An agent pastes the output of its checks into
 the description of each pull request that it opens.

@@ -19,6 +19,7 @@ import (
 	"opendustpan.org/opendustpan/internal/api/apidesc"
 	"opendustpan.org/opendustpan/internal/api/problem"
 	"opendustpan.org/opendustpan/internal/api/refusal"
+	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/internal/sessionauth"
 	"opendustpan.org/opendustpan/pkg/identity"
 )
@@ -130,7 +131,7 @@ func Mutating(method string) bool {
 func DecodeBody(w http.ResponseWriter, r *http.Request, limit int64, v any) error {
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, limit))
 	if err != nil {
-		return problem.BadRequest("request.body-invalid",
+		return problem.BadRequest(errcode.RequestBodyInvalid,
 			"the request body is not readable or is over "+sizeText(limit))
 	}
 
@@ -138,7 +139,10 @@ func DecodeBody(w http.ResponseWriter, r *http.Request, limit int64, v any) erro
 	dec.DisallowUnknownFields()
 
 	if err = dec.Decode(v); err != nil || dec.More() {
-		return problem.BadRequest("request.body-invalid", "the request body must be one JSON object with known fields")
+		return problem.BadRequest(
+			errcode.RequestBodyInvalid,
+			"the request body must be one JSON object with known fields",
+		)
 	}
 
 	return nil

@@ -20,6 +20,7 @@ import (
 	"io"
 	"net/http"
 
+	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/maintenance"
 )
@@ -68,9 +69,11 @@ type enterMaintenanceResponse struct {
 // starting: the error shape, and the unit references that the forced attempts
 // canceled before it gave up.
 type enterRefusedResponse struct {
-	Code     int      `json:"code"`
-	Message  string   `json:"message"`
-	Canceled []string `json:"canceled"`
+	Code      int            `json:"code"`
+	Message   string         `json:"message"`
+	Canceled  []string       `json:"canceled"`
+	ErrorCode string         `json:"errorCode,omitempty"`
+	ErrorArgs map[string]any `json:"errorArgs,omitempty"`
 }
 
 // getMaintenance answers the installation state.
@@ -143,9 +146,25 @@ func (h *Handler) writeEnterError(ctx context.Context, w http.ResponseWriter, er
 		return
 	}
 
-	status, message := classify(err)
+	f := classify(err)
+	if f.code == "" {
+		h.writeJSON(ctx, w, f.status, enterRefusedResponse{
+			Code: f.status, Message: f.message, Canceled: canceled, ErrorCode: "", ErrorArgs: nil,
+		})
 
-	h.writeJSON(ctx, w, status, enterRefusedResponse{Code: status, Message: message, Canceled: canceled})
+		return
+	}
+
+	status, message, answer := h.answer(ctx, f)
+	h.writeJSON(ctx, w, status, enterRefused(status, message, canceled, answer))
+}
+
+// enterRefused returns the refusal of an enter that canceled work, with the
+// code and the arguments of a.
+func enterRefused(status int, message string, canceled []string, a errcode.Answer) enterRefusedResponse {
+	return enterRefusedResponse{
+		Code: status, Message: message, Canceled: canceled, ErrorCode: a.Code(), ErrorArgs: a.Args(),
+	}
 }
 
 // parseEnterRequest decodes the enter body: the whole body must be one JSON

@@ -1,0 +1,8 @@
+runner.immutable
+runner.invalid
+runner.limit
+runner.not-found
+runner.pool-exists
+runner.pool-in-use
+runner.retired
+runner.token-used

@@ -8,6 +8,7 @@ import (
 
 	apitaudit "opendustpan.org/opendustpan/internal/api/audit"
 	"opendustpan.org/opendustpan/internal/api/route"
+	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/internal/errcode/errcodetest"
 	"opendustpan.org/opendustpan/pkg/identity"
 )
@@ -40,11 +41,11 @@ func TestForbiddenCodes(t *testing.T) {
 	}
 }
 
-// TestNoInstallationActionHasNoCode proves that a route with no installation
-// action refuses the installation object with 403 and no machine code, as the
-// refusal of the server routes does. No row of the route table is such a
-// route, so the test gives the wrapper one.
-func TestNoInstallationActionHasNoCode(t *testing.T) {
+// TestNoInstallationActionCode proves that a route with no installation
+// action refuses the installation object with 403 and the code
+// access.no-action, as the refusal of the server routes does. No row of the
+// route table is such a route, so the test gives the wrapper one.
+func TestNoInstallationActionCode(t *testing.T) {
 	t.Parallel()
 
 	h, _ := newEnforcingHandler(t, errcodetest.Authorizer{Err: nil})
@@ -74,7 +75,7 @@ func TestNoInstallationActionHasNoCode(t *testing.T) {
 		t.Fatalf("answer is not JSON: %v: %s", err, rec.Body.String())
 	}
 
-	if code, present := got["errorCode"]; present {
-		t.Fatalf("errorCode = %v, want none: %s", code, rec.Body.String())
+	if code := got["errorCode"]; code != errcode.AccessNoAction {
+		t.Fatalf("errorCode = %v, want %s: %s", code, errcode.AccessNoAction, rec.Body.String())
 	}
 }

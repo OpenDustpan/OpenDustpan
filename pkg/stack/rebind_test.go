@@ -114,6 +114,58 @@ func TestRebindSecretsProvider(t *testing.T) {
 	}
 }
 
+// TestRebindSecretsProviderRebindsEveryCopy proves that each top-level copy of
+// a repeated secrets_providers member is rebound. The save of a checkpoint
+// accepts a repeated member, and the Pulumi CLI reads the last copy, so the
+// last copy must name the stack too.
+func TestRebindSecretsProviderRebindsEveryCopy(t *testing.T) {
+	t.Parallel()
+
+	ref := stack.Ref{Namespace: "dev", Project: "sec", Stack: "f2"}
+
+	const (
+		stale = `{"type":"service","state":{"owner":"dev","project":"sec","stack":"f"}}`
+		local = `{"type":"passphrase","state":{"salt":"v1:abc"}}`
+	)
+
+	cases := []struct {
+		name       string
+		deployment string
+		wantNew    int
+	}{
+		{
+			name:       "two service provider copies",
+			deployment: `{"secrets_providers":` + stale + `,"resources":[],"secrets_providers":` + stale + `}`,
+			wantNew:    2,
+		},
+		{
+			name:       "a passphrase copy, then a service provider copy",
+			deployment: `{"secrets_providers":` + local + `,"resources":[],"secrets_providers":` + stale + `}`,
+			wantNew:    1,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := stack.RebindSecretsProvider([]byte(tc.deployment), ref)
+
+			if n := bytes.Count(got, []byte(`"stack":"f2"`)); n != tc.wantNew {
+				t.Fatalf("copies that name the stack f2 = %d, want %d: %s", n, tc.wantNew, got)
+			}
+
+			if bytes.Contains(got, []byte(`"stack":"f"}`)) {
+				t.Fatalf("a copy still names the old stack f: %s", got)
+			}
+
+			if !json.Valid(got) {
+				t.Fatalf("deployment is not JSON: %s", got)
+			}
+		})
+	}
+}
+
 // checkRebound checks that got is JSON, that its provider state holds want and
 // that the resources are as they were.
 func checkRebound(t *testing.T, got []byte, want map[string]string, resources string) {

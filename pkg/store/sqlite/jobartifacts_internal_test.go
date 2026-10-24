@@ -5,8 +5,11 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"opendustpan.org/opendustpan/pkg/backup"
+	"opendustpan.org/opendustpan/pkg/job"
+	"opendustpan.org/opendustpan/pkg/namespace"
 )
 
 // planBodyJSON returns the stored body of a plan with the given parts.
@@ -38,6 +41,10 @@ func stagedPlanCases() []struct{ name, body string } {
 			planBodyJSON("pln-1", part("plan-display", strings.ToUpper(artifactHash), 1)),
 		},
 		{"a part with a negative size", planBodyJSON("pln-1", part("plan-display", artifactHash, -1))},
+		{"a part above the size limit", planBodyJSON("pln-1", part("plan-display", artifactHash, job.MaxPlanPart+1))},
+		{"a plan with one kind twice", planBodyJSON("pln-1", `[`+
+			`{"kind":"plan-display","size":1,"sha256":"`+artifactHash+`","secret":false},`+
+			`{"kind":"plan-display","size":1,"sha256":"`+artifactHash+`","secret":false}]`)},
 	}
 }
 
@@ -136,5 +143,76 @@ VALUES ('jlv-1', 0, 'ns-gone', 'x', 1, 0)`,
 				t.Fatalf("check = %v, want ErrCorrupt", err)
 			}
 		})
+	}
+}
+
+// TestCheckStagedLogChunks proves the restore check of the log chunk rows: a
+// chunk row must name a log version of its own namespace and have the rules
+// of a reserve.
+func TestCheckStagedLogChunks(t *testing.T) {
+	t.Parallel()
+
+	chunk := func(logID, ns string, seq, size int64, sha string) string {
+		return fmt.Sprintf(`INSERT INTO job_log_chunks (log_id, seq, namespace_id, sha256, size, confirmed)
+VALUES ('%s', %d, (SELECT id FROM namespaces WHERE name = '%s'), '%s', %d, 1)`, logID, seq, ns, sha, size)
+	}
+
+	cases := []struct {
+		name, insert string
+		ok           bool
+	}{
+		{name: "a chunk that the store wrote", insert: chunk("jlv-1", "acme", 0, 1, artifactHash), ok: true},
+		{
+			name:   "a chunk at the limits",
+			insert: chunk("jlv-1", "acme", job.MaxLogChunks-1, job.MaxLogChunk, artifactHash), ok: true,
+		},
+		{name: "a hash that is not a SHA-256", insert: chunk("jlv-1", "acme", 0, 1, "xyz"), ok: false},
+		{name: "an upper case hash", insert: chunk("jlv-1", "acme", 0, 1, strings.ToUpper(artifactHash)), ok: false},
+		{
+			name:   "a size above the chunk limit",
+			insert: chunk("jlv-1", "acme", 0, job.MaxLogChunk+1, artifactHash), ok: false,
+		},
+		{
+			name:   "a number at the chunk count limit",
+			insert: chunk("jlv-1", "acme", job.MaxLogChunks, 1, artifactHash),
+			ok:     false,
+		},
+		{name: "a log version that does not exist", insert: chunk("jlv-gone", "acme", 0, 1, artifactHash), ok: false},
+		{name: "a log version of another namespace", insert: chunk("jlv-1", "other", 0, 1, artifactHash), ok: false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			s := openInternalTemplated(t)
+			seedItemKey(t, s)
+			createOtherNamespace(t, s)
+			execWithoutKeys(t, s, `INSERT INTO job_logs (id, namespace_id, job_id, phase, step, token, created_at_ms)
+VALUES ('jlv-1', (SELECT id FROM namespaces WHERE name = 'acme'), 'job-1', 0, 'plan', 1, 1)`)
+			execWithoutKeys(t, s, tc.insert)
+
+			err := checkStagedJobArtifacts(t.Context(), s.conn)
+			if tc.ok && err != nil {
+				t.Fatalf("check = %v, want nil", err)
+			}
+
+			if !tc.ok && !errors.Is(err, backup.ErrCorrupt) {
+				t.Fatalf("check = %v, want ErrCorrupt", err)
+			}
+		})
+	}
+}
+
+// createOtherNamespace creates the namespace "other".
+func createOtherNamespace(t *testing.T, s *Store) {
+	t.Helper()
+
+	ns := namespace.Namespace{
+		ID: namespace.NewID(), CreatedAt: time.UnixMilli(1_700_000_000_000).UTC(), Name: "other", HomeRegion: "eu-west",
+		FailoverVersion: 1, Overrides: namespace.Overrides{Forced: false, Unlocked: false},
+	}
+	if err := s.CreateNamespace(t.Context(), ns); err != nil {
+		t.Fatalf("create namespace: %v", err)
 	}
 }

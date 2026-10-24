@@ -16,6 +16,7 @@ import (
 	"opendustpan.org/opendustpan/internal/api/problem"
 	"opendustpan.org/opendustpan/internal/api/route"
 	"opendustpan.org/opendustpan/internal/clientip"
+	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/internal/requestid"
 	"opendustpan.org/opendustpan/internal/sessionauth"
 	"opendustpan.org/opendustpan/pkg/audit"
@@ -298,7 +299,7 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request, p identity.Prin
 	}
 
 	if body.Kind == nil || body.Name == nil {
-		h.writeError(ctx, w, problem.BadRequest("sink.invalid", "send the fields kind and name"))
+		h.writeError(ctx, w, problem.BadRequest(errcode.SinkInvalid, "send the fields kind and name"))
 
 		return
 	}
@@ -340,7 +341,7 @@ func (h *Handler) replace(w http.ResponseWriter, r *http.Request, p identity.Pri
 	}
 
 	if body.Version == nil || body.Name == nil {
-		h.writeError(ctx, w, problem.BadRequest("sink.invalid", "send the fields version and name"))
+		h.writeError(ctx, w, problem.BadRequest(errcode.SinkInvalid, "send the fields version and name"))
 
 		return
 	}

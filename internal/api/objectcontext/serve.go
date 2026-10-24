@@ -12,6 +12,7 @@ import (
 	"opendustpan.org/opendustpan/internal/clientip"
 	"opendustpan.org/opendustpan/internal/requestid"
 	"opendustpan.org/opendustpan/internal/sessionauth"
+	"opendustpan.org/opendustpan/internal/textbody"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/objectcontext"
@@ -159,12 +160,22 @@ type patchBody struct {
 	Links   *[]objectcontext.Link `dustpan:"optional" json:"links"`
 }
 
-// readPatch decodes a PATCH body. It refuses an unknown field, a body that is
-// not one object, and a body that changes no field.
+// readPatch decodes a PATCH body. It refuses a body that is not valid UTF-8
+// or that holds a lone surrogate escape, an unknown field, a body that is not
+// one object, and a body that changes no field.
 func readPatch(w http.ResponseWriter, r *http.Request) (objectcontext.Patch, error) {
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxBodyBytes))
 	if err != nil {
 		return objectcontext.Patch{}, errBody
+	}
+
+	// encoding/json replaces each invalid UTF-8 byte and each lone surrogate
+	// escape with U+FFFD, so the check of the text fields could never see
+	// what the client sent. Refuse the body here, before the decode changes it.
+	// Defense in depth: Fields.Validate checks for valid UTF-8 too; this check
+	// stays so that a decode that changes the text cannot hide it from it.
+	if textbody.Refused(body) {
+		return objectcontext.Patch{}, errBodyText
 	}
 
 	dec := json.NewDecoder(bytes.NewReader(body))

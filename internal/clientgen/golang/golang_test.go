@@ -637,3 +637,15 @@ func TestIsGeneratedReadsTheFirstLineOnly(t *testing.T) {
 		})
 	}
 }
+
+// TestOwnsNoPath checks that the Go client owns no path: its package and the
+// directory of its adapter hold hand-written files too.
+func TestOwnsNoPath(t *testing.T) {
+	t.Parallel()
+
+	for _, path := range []string{"models.go", "transport.go", "cmd/conformance-adapter/main.go"} {
+		if golang.New().Owned(path) {
+			t.Errorf("Owned(%q) = true, want false", path)
+		}
+	}
+}

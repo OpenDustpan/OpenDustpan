@@ -116,6 +116,14 @@ func (h *Handler) buildRoutes() []Route {
 		},
 	}
 
+	return slices.Concat(routes, h.optionalRoutes())
+}
+
+// optionalRoutes returns the rows of the routes that exist only when the
+// handler has the service of the route.
+func (h *Handler) optionalRoutes() []Route {
+	var routes []Route
+
 	if h.collections != nil {
 		routes = append(routes, h.collectionRoutes()...)
 	}
@@ -130,6 +138,10 @@ func (h *Handler) buildRoutes() []Route {
 
 	if h.outputSharing != nil {
 		routes = append(routes, h.outputSharingRoutes()...)
+	}
+
+	if h.outputs != nil {
+		routes = append(routes, h.outputRoutes()...)
 	}
 
 	return routes

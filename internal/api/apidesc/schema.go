@@ -109,12 +109,18 @@ func (r *reflector) declareEnum(d Declaration) error {
 	}
 
 	values := make([]any, len(e.values))
+	seen := make(map[string]bool, len(e.values))
 
 	for i, v := range e.values {
 		if !enumValue.MatchString(v) {
 			return fmt.Errorf("%w: enum %s: value %q is not camelCase with separators", ErrInvalidBody, e.name, v)
 		}
 
+		if seen[v] {
+			return fmt.Errorf("%w: enum %s: value %q is listed twice", ErrInvalidBody, e.name, v)
+		}
+
+		seen[v] = true
 		values[i] = v
 	}
 

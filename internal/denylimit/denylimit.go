@@ -21,7 +21,9 @@ import (
 )
 
 // Default bounds. The values keep one principal to one entry for each action,
-// object kind and scope for each minute, and the table to a few hundred kilobytes.
+// object kind and scope for each minute. At usual key lengths the table holds a
+// few hundred kilobytes. When each key string has its maximum length of 255
+// bytes, the table can hold a few megabytes.
 const (
 	DefaultWindow   = time.Minute
 	DefaultMaxKeys  = 4096

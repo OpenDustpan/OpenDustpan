@@ -78,7 +78,9 @@ func TestReadStateAtWithoutReader(t *testing.T) {
 
 // TestReadStateAtBeforeFirstVersion proves the text of ErrNoStateAt: a
 // workspace without a state version says so, and a time before the first
-// state version names its finalize time in RFC 3339 and in milliseconds.
+// state version names its finalize time in RFC 3339 and in milliseconds. The
+// error is a NoStateAtError with that time, so that an adapter reads the time
+// from its field and not from the text.
 func TestReadStateAtBeforeFirstVersion(t *testing.T) {
 	t.Parallel()
 
@@ -108,6 +110,10 @@ func TestReadStateAtBeforeFirstVersion(t *testing.T) {
 			got, err := svc.ReadStateAt(t.Context(), f.ws.ID, stateAtRequest(first.Add(-time.Hour)))
 			if !errors.Is(err, workspace.ErrNoStateAt) || !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("state at: err = %v, want ErrNoStateAt with %q", err, tc.want)
+			}
+
+			if none, ok := errors.AsType[*workspace.NoStateAtError](err); !ok || !none.First.Equal(tc.first) {
+				t.Fatalf("state at: err = %#v, want a NoStateAtError with First %s", err, tc.first)
 			}
 
 			if got.Version.ID != "" || got.State.StateVersion != "" || got.Opaque {

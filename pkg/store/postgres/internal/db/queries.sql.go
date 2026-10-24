@@ -1618,6 +1618,33 @@ func (q *Queries) CountSignInProvider(ctx context.Context, providerID string) (i
 	return count, err
 }
 
+const countSiteAdministrators = `-- name: CountSiteAdministrators :one
+SELECT COUNT(*) FROM principals p
+WHERE p.deleted_at_ms IS NULL AND p.disabled_at_ms IS NULL AND p.namespace = '' AND p.kind = 'person'
+  AND EXISTS (
+    SELECT 1 FROM grants g
+    WHERE g.role = $1 AND g.object_kind = 'installation' AND g.revoked_at_ms IS NULL
+      AND ((g.subject_kind = 'principal' AND g.subject_id = p.id)
+        OR (g.subject_kind = 'group' AND EXISTS (
+          SELECT 1 FROM group_members m
+          JOIN principal_groups pg ON pg.id = m.group_id
+          WHERE m.group_id = g.subject_id AND m.principal_id = p.id
+            AND m.removed_at_ms IS NULL AND m.state = 'active' AND pg.deleted_at_ms IS NULL))))
+`
+
+// The principals that can act now with the role $1: a current grant of the
+// role on the installation to the principal, or to a group with an active
+// membership of the principal. A principal that was ended, was disabled or
+// belongs to a namespace does not count. Only a person counts: a service
+// principal can hold the role, but every route that makes a site administrator
+// needs a fresh console session, which only a person has.
+func (q *Queries) CountSiteAdministrators(ctx context.Context, role string) (int64, error) {
+	row := q.db.QueryRow(ctx, countSiteAdministrators, role)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const countStateVersions = `-- name: CountStateVersions :one
 SELECT COUNT(*)
 FROM state_versions
@@ -1777,7 +1804,7 @@ SELECT $1, p.id, $2, $3, $4,
   $5::bigint, $6::bigint, $7
 FROM principals p
 JOIN temp_admins t ON t.principal_id = p.id
-WHERE p.id = $8 AND p.deleted_at_ms IS NULL AND p.disabled_at_ms IS NULL
+WHERE p.id = $8 AND num_nulls(p.deleted_at_ms) = 1 AND p.disabled_at_ms IS NULL
   AND p.kind = 'person' AND p.namespace = ''
   AND p.created_at_ms <= $5::bigint
   AND p.created_at_ms >= $5::bigint - $9::bigint
@@ -1804,6 +1831,9 @@ type CreateFirstHostTokenParams struct {
 // enabled person of the installation with no token of any status, made in
 // the window before the time of the token and not after it, and a record
 // names the principal that works past the time and the expiry of the token.
+// The live check is num_nulls(p.deleted_at_ms) = 1, not IS NULL, so no
+// partial index of the live rows can serve this lookup by ID.
+// Only NULL reads as live: a stored -1 or 0 does not, as with IS NULL.
 func (q *Queries) CreateFirstHostToken(ctx context.Context, arg CreateFirstHostTokenParams) (int64, error) {
 	result, err := q.db.Exec(ctx, createFirstHostToken,
 		arg.ID,
@@ -3080,7 +3110,7 @@ func (q *Queries) DeletePersonPreferences(ctx context.Context, principalID strin
 
 const deletePrincipal = `-- name: DeletePrincipal :execrows
 UPDATE principals SET deleted_at_ms = $1
-WHERE id = $2 AND namespace = $3 AND deleted_at_ms IS NULL
+WHERE id = $2 AND namespace = $3 AND num_nulls(deleted_at_ms) = 1
 `
 
 type DeletePrincipalParams struct {
@@ -3089,6 +3119,9 @@ type DeletePrincipalParams struct {
 	Namespace   string
 }
 
+// The live check is num_nulls(deleted_at_ms) = 1, not IS NULL, so no
+// partial index of the live rows can serve this lookup by ID.
+// Only NULL reads as live: a stored -1 or 0 does not, as with IS NULL.
 func (q *Queries) DeletePrincipal(ctx context.Context, arg DeletePrincipalParams) (int64, error) {
 	result, err := q.db.Exec(ctx, deletePrincipal, arg.DeletedAtMs, arg.ID, arg.Namespace)
 	if err != nil {
@@ -3284,6 +3317,25 @@ DELETE FROM temp_admins WHERE principal_id = $1
 
 func (q *Queries) DeleteTempAdmin(ctx context.Context, principalID string) (int64, error) {
 	result, err := q.db.Exec(ctx, deleteTempAdmin, principalID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const deleteTrigger = `-- name: DeleteTrigger :execrows
+DELETE FROM triggers
+WHERE triggers.id = $1
+  AND triggers.namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = $2)
+`
+
+type DeleteTriggerParams struct {
+	ID        string
+	Namespace string
+}
+
+func (q *Queries) DeleteTrigger(ctx context.Context, arg DeleteTriggerParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteTrigger, arg.ID, arg.Namespace)
 	if err != nil {
 		return 0, err
 	}
@@ -4107,7 +4159,7 @@ SELECT t.id, t.principal_id, t.name, t.kind, t.digest, t.created_at_ms, t.expire
 FROM access_tokens t
 JOIN principals p ON p.id = t.principal_id
 CROSS JOIN access_token_policy ap
-WHERE t.digest = $1 AND p.deleted_at_ms IS NULL AND ap.id = 1
+WHERE t.digest = $1 AND num_nulls(p.deleted_at_ms) = 1 AND ap.id = 1
 `
 
 type GetAccessTokenByDigestRow struct {
@@ -4139,6 +4191,9 @@ type GetAccessTokenByDigestRow struct {
 
 // The token, its owner and the token policy of the installation in one read,
 // so a policy change applies to the next lookup on every instance.
+// The live check is num_nulls(p.deleted_at_ms) = 1, not IS NULL, so no
+// partial index of the live rows can serve this lookup by ID.
+// Only NULL reads as live: a stored -1 or 0 does not, as with IS NULL.
 func (q *Queries) GetAccessTokenByDigest(ctx context.Context, digest string) (GetAccessTokenByDigestRow, error) {
 	row := q.db.QueryRow(ctx, getAccessTokenByDigest, digest)
 	var i GetAccessTokenByDigestRow
@@ -5141,7 +5196,7 @@ func (q *Queries) GetGitHostRegistration(ctx context.Context, kind string) (GitH
 
 const getGrant = `-- name: GetGrant :one
 SELECT id, subject, subject_kind, subject_id, role, object, target, object_kind, namespace, condition, created_at_ms, created_by
-FROM grants WHERE id = $1 AND revoked_at_ms IS NULL
+FROM grants WHERE id = $1 AND num_nulls(revoked_at_ms) = 1
 `
 
 type GetGrantRow struct {
@@ -5159,6 +5214,9 @@ type GetGrantRow struct {
 	CreatedBy   string
 }
 
+// The live check is num_nulls(revoked_at_ms) = 1, not IS NULL, so no
+// partial index of the live rows can serve this lookup by ID.
+// Only NULL reads as live: a stored -1 or 0 does not, as with IS NULL.
 func (q *Queries) GetGrant(ctx context.Context, id string) (GetGrantRow, error) {
 	row := q.db.QueryRow(ctx, getGrant, id)
 	var i GetGrantRow
@@ -5930,7 +5988,7 @@ func (q *Queries) GetLatestDurableHeartbeat(ctx context.Context) (DurableHeartbe
 const getLiveProfileByID = `-- name: GetLiveProfileByID :one
 SELECT namespace_id, id, name, latest, created_by, created_at_ms, updated_at_ms, deleted_at_ms
 FROM profiles
-WHERE namespace_id = $1 AND id = $2 AND deleted_at_ms = 0
+WHERE namespace_id = $1 AND id = $2 AND COALESCE(deleted_at_ms, -1) = 0
 `
 
 type GetLiveProfileByIDParams struct {
@@ -5938,6 +5996,8 @@ type GetLiveProfileByIDParams struct {
 	ID          string
 }
 
+// The live check is COALESCE(deleted_at_ms, -1) = 0, not deleted_at_ms = 0, so
+// no partial index of the live rows can serve this lookup by ID.
 func (q *Queries) GetLiveProfileByID(ctx context.Context, arg GetLiveProfileByIDParams) (Profile, error) {
 	row := q.db.QueryRow(ctx, getLiveProfileByID, arg.NamespaceID, arg.ID)
 	var i Profile
@@ -6856,7 +6916,7 @@ FROM sessions s
 JOIN principals p ON p.id = s.principal_id
 CROSS JOIN session_policy sp
 CROSS JOIN access_token_policy ap
-WHERE s.digest = $1 AND p.deleted_at_ms IS NULL AND sp.id = 1 AND ap.id = 1
+WHERE s.digest = $1 AND num_nulls(p.deleted_at_ms) = 1 AND sp.id = 1 AND ap.id = 1
 `
 
 type GetSessionByDigestRow struct {
@@ -6889,6 +6949,9 @@ type GetSessionByDigestRow struct {
 // rule of the inactivity disable, as in GetAccessTokenByDigest. The session
 // policy and the account part of the token policy come from the same read,
 // so a policy change applies to the next lookup on every instance.
+// The live check is num_nulls(p.deleted_at_ms) = 1, not IS NULL, so no
+// partial index of the live rows can serve this lookup by ID.
+// Only NULL reads as live: a stored -1 or 0 does not, as with IS NULL.
 func (q *Queries) GetSessionByDigest(ctx context.Context, digest string) (GetSessionByDigestRow, error) {
 	row := q.db.QueryRow(ctx, getSessionByDigest, digest)
 	var i GetSessionByDigestRow
@@ -7234,6 +7297,60 @@ func (q *Queries) GetTempAdminBySubject(ctx context.Context, subject string) (Te
 	return i, err
 }
 
+const getTrigger = `-- name: GetTrigger :one
+SELECT n.name AS namespace, t.id, t.unit_tool, t.unit_id, t.kind, t.preset, t.cron, t.source_namespace,
+    t.source_tool, t.source_unit_id, t.enabled, t.last_saver_subject, t.last_saver_id, t.created_at_ms, t.updated_at_ms
+FROM triggers AS t
+JOIN namespaces AS n ON n.id = t.namespace_id
+WHERE n.name = $1 AND t.id = $2
+`
+
+type GetTriggerParams struct {
+	Namespace string
+	ID        string
+}
+
+type GetTriggerRow struct {
+	Namespace        string
+	ID               string
+	UnitTool         string
+	UnitID           string
+	Kind             string
+	Preset           string
+	Cron             string
+	SourceNamespace  string
+	SourceTool       string
+	SourceUnitID     string
+	Enabled          int64
+	LastSaverSubject string
+	LastSaverID      string
+	CreatedAtMs      int64
+	UpdatedAtMs      int64
+}
+
+func (q *Queries) GetTrigger(ctx context.Context, arg GetTriggerParams) (GetTriggerRow, error) {
+	row := q.db.QueryRow(ctx, getTrigger, arg.Namespace, arg.ID)
+	var i GetTriggerRow
+	err := row.Scan(
+		&i.Namespace,
+		&i.ID,
+		&i.UnitTool,
+		&i.UnitID,
+		&i.Kind,
+		&i.Preset,
+		&i.Cron,
+		&i.SourceNamespace,
+		&i.SourceTool,
+		&i.SourceUnitID,
+		&i.Enabled,
+		&i.LastSaverSubject,
+		&i.LastSaverID,
+		&i.CreatedAtMs,
+		&i.UpdatedAtMs,
+	)
+	return i, err
+}
+
 const getUnitCollection = `-- name: GetUnitCollection :one
 SELECT c.name
 FROM collection_members AS m
@@ -7533,9 +7650,12 @@ SELECT id, namespace, name, revision, lock_id, lock_holder, lock_reason,
        locked_at_ms, current_state_version_id, created_at_ms, updated_at_ms, allow_forced_writes, allow_unlocked_writes,
        deleted_at_ms, deleted_name
 FROM workspaces
-WHERE id = $1 AND deleted_at_ms IS NULL
+WHERE id = $1 AND num_nulls(deleted_at_ms) = 1
 `
 
+// The live check is num_nulls(deleted_at_ms) = 1, not IS NULL, so the
+// partial index workspaces_live_name cannot serve this lookup by ID.
+// Only NULL reads as live: a stored -1 or 0 does not, as with IS NULL.
 func (q *Queries) GetWorkspaceByID(ctx context.Context, id string) (Workspace, error) {
 	row := q.db.QueryRow(ctx, getWorkspaceByID, id)
 	var i Workspace
@@ -8649,6 +8769,7 @@ type InsertJobLogParams struct {
 	CreatedAtMs int64
 }
 
+// The caller checks the fence and the claim in the same transaction.
 func (q *Queries) InsertJobLog(ctx context.Context, arg InsertJobLogParams) error {
 	_, err := q.db.Exec(ctx, insertJobLog,
 		arg.ID,
@@ -10257,6 +10378,69 @@ func (q *Queries) ListDurableSteps(ctx context.Context, ids []string) ([]Durable
 			&i.Seq,
 			&i.Result,
 			&i.DoneAtMs,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listEnabledFollowTriggers = `-- name: ListEnabledFollowTriggers :many
+SELECT n.name AS namespace, t.id, t.unit_tool, t.unit_id, t.kind, t.preset, t.cron, t.source_namespace,
+    t.source_tool, t.source_unit_id, t.enabled, t.last_saver_subject, t.last_saver_id, t.created_at_ms, t.updated_at_ms
+FROM triggers AS t
+JOIN namespaces AS n ON n.id = t.namespace_id
+WHERE n.name = $1 AND t.kind = 'follows' AND t.enabled = 1
+ORDER BY t.id COLLATE "C"
+`
+
+type ListEnabledFollowTriggersRow struct {
+	Namespace        string
+	ID               string
+	UnitTool         string
+	UnitID           string
+	Kind             string
+	Preset           string
+	Cron             string
+	SourceNamespace  string
+	SourceTool       string
+	SourceUnitID     string
+	Enabled          int64
+	LastSaverSubject string
+	LastSaverID      string
+	CreatedAtMs      int64
+	UpdatedAtMs      int64
+}
+
+func (q *Queries) ListEnabledFollowTriggers(ctx context.Context, namespace string) ([]ListEnabledFollowTriggersRow, error) {
+	rows, err := q.db.Query(ctx, listEnabledFollowTriggers, namespace)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListEnabledFollowTriggersRow
+	for rows.Next() {
+		var i ListEnabledFollowTriggersRow
+		if err := rows.Scan(
+			&i.Namespace,
+			&i.ID,
+			&i.UnitTool,
+			&i.UnitID,
+			&i.Kind,
+			&i.Preset,
+			&i.Cron,
+			&i.SourceNamespace,
+			&i.SourceTool,
+			&i.SourceUnitID,
+			&i.Enabled,
+			&i.LastSaverSubject,
+			&i.LastSaverID,
+			&i.CreatedAtMs,
+			&i.UpdatedAtMs,
 		); err != nil {
 			return nil, err
 		}
@@ -13066,18 +13250,25 @@ func (q *Queries) ListSignInProviders(ctx context.Context) ([]SignInProvider, er
 }
 
 const listStackPageInNamespace = `-- name: ListStackPageInNamespace :many
-SELECT namespace, project, name, id, version, created_at_ms, updated_at_ms
-FROM stacks
-WHERE namespace = $1 AND deleted_at_ms IS NULL
-  AND (project, name) > ($2, $3)
-ORDER BY project, name
-LIMIT $4
+SELECT s.namespace, s.project, s.name, s.id, s.version, s.created_at_ms, s.updated_at_ms
+FROM stacks AS s
+WHERE s.namespace = $1 AND s.deleted_at_ms IS NULL
+  AND (s.project, s.name) > ($2, $3)
+  AND ($4::text = '' OR EXISTS (
+    SELECT 1 FROM stack_tags AS t
+    WHERE t.stack_id = s.id AND t.name = $4::text
+      AND (NOT $5::boolean OR t.value = $6::text)))
+ORDER BY s.project, s.name
+LIMIT $7
 `
 
 type ListStackPageInNamespaceParams struct {
 	Namespace    string
 	AfterProject string
 	AfterName    string
+	TagName      string
+	MatchValue   bool
+	TagValue     string
 	PageLimit    int32
 }
 
@@ -13093,12 +13284,16 @@ type ListStackPageInNamespaceRow struct {
 
 // One page of the live stacks of a namespace after a project and a name, in
 // the order of the primary key. The cursor is a range of the key, so the read
-// starts at the cursor.
+// starts at the cursor. A tag_name that is not empty keeps the stacks that have
+// that tag, and match_value also needs the tag to have the value tag_value.
 func (q *Queries) ListStackPageInNamespace(ctx context.Context, arg ListStackPageInNamespaceParams) ([]ListStackPageInNamespaceRow, error) {
 	rows, err := q.db.Query(ctx, listStackPageInNamespace,
 		arg.Namespace,
 		arg.AfterProject,
 		arg.AfterName,
+		arg.TagName,
+		arg.MatchValue,
+		arg.TagValue,
 		arg.PageLimit,
 	)
 	if err != nil {
@@ -13128,19 +13323,26 @@ func (q *Queries) ListStackPageInNamespace(ctx context.Context, arg ListStackPag
 }
 
 const listStackPageInProject = `-- name: ListStackPageInProject :many
-SELECT namespace, project, name, id, version, created_at_ms, updated_at_ms
-FROM stacks
-WHERE namespace = $1 AND project = $2 AND deleted_at_ms IS NULL
-  AND name > $3
-ORDER BY name
-LIMIT $4
+SELECT s.namespace, s.project, s.name, s.id, s.version, s.created_at_ms, s.updated_at_ms
+FROM stacks AS s
+WHERE s.namespace = $1 AND s.project = $2 AND s.deleted_at_ms IS NULL
+  AND s.name > $3
+  AND ($4::text = '' OR EXISTS (
+    SELECT 1 FROM stack_tags AS t
+    WHERE t.stack_id = s.id AND t.name = $4::text
+      AND (NOT $5::boolean OR t.value = $6::text)))
+ORDER BY s.name
+LIMIT $7
 `
 
 type ListStackPageInProjectParams struct {
-	Namespace string
-	Project   string
-	AfterName string
-	PageLimit int32
+	Namespace  string
+	Project    string
+	AfterName  string
+	TagName    string
+	MatchValue bool
+	TagValue   string
+	PageLimit  int32
 }
 
 type ListStackPageInProjectRow struct {
@@ -13154,12 +13356,15 @@ type ListStackPageInProjectRow struct {
 }
 
 // One page of the live stacks of a project after a name, in the order of the
-// primary key.
+// primary key, with the tag filter of ListStackPageInNamespace.
 func (q *Queries) ListStackPageInProject(ctx context.Context, arg ListStackPageInProjectParams) ([]ListStackPageInProjectRow, error) {
 	rows, err := q.db.Query(ctx, listStackPageInProject,
 		arg.Namespace,
 		arg.Project,
 		arg.AfterName,
+		arg.TagName,
+		arg.MatchValue,
+		arg.TagValue,
 		arg.PageLimit,
 	)
 	if err != nil {
@@ -13448,6 +13653,152 @@ func (q *Queries) ListTempAdmins(ctx context.Context) ([]TempAdmin, error) {
 			&i.CreatedBy,
 			&i.Reason,
 			&i.EndedAtMs,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listTriggerFollowers = `-- name: ListTriggerFollowers :many
+SELECT n.name AS namespace, t.id, t.unit_tool, t.unit_id, t.kind, t.preset, t.cron, t.source_namespace,
+    t.source_tool, t.source_unit_id, t.enabled, t.last_saver_subject, t.last_saver_id, t.created_at_ms, t.updated_at_ms
+FROM triggers AS t
+JOIN namespaces AS n ON n.id = t.namespace_id
+WHERE n.name = $1 AND t.kind = 'follows' AND t.enabled = 1
+  AND t.source_namespace = $2 AND t.source_tool = $3
+  AND t.source_unit_id = $4
+ORDER BY t.id COLLATE "C"
+`
+
+type ListTriggerFollowersParams struct {
+	Namespace       string
+	SourceNamespace string
+	SourceTool      string
+	SourceUnitID    string
+}
+
+type ListTriggerFollowersRow struct {
+	Namespace        string
+	ID               string
+	UnitTool         string
+	UnitID           string
+	Kind             string
+	Preset           string
+	Cron             string
+	SourceNamespace  string
+	SourceTool       string
+	SourceUnitID     string
+	Enabled          int64
+	LastSaverSubject string
+	LastSaverID      string
+	CreatedAtMs      int64
+	UpdatedAtMs      int64
+}
+
+func (q *Queries) ListTriggerFollowers(ctx context.Context, arg ListTriggerFollowersParams) ([]ListTriggerFollowersRow, error) {
+	rows, err := q.db.Query(ctx, listTriggerFollowers,
+		arg.Namespace,
+		arg.SourceNamespace,
+		arg.SourceTool,
+		arg.SourceUnitID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListTriggerFollowersRow
+	for rows.Next() {
+		var i ListTriggerFollowersRow
+		if err := rows.Scan(
+			&i.Namespace,
+			&i.ID,
+			&i.UnitTool,
+			&i.UnitID,
+			&i.Kind,
+			&i.Preset,
+			&i.Cron,
+			&i.SourceNamespace,
+			&i.SourceTool,
+			&i.SourceUnitID,
+			&i.Enabled,
+			&i.LastSaverSubject,
+			&i.LastSaverID,
+			&i.CreatedAtMs,
+			&i.UpdatedAtMs,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listTriggersOfUnit = `-- name: ListTriggersOfUnit :many
+SELECT n.name AS namespace, t.id, t.unit_tool, t.unit_id, t.kind, t.preset, t.cron, t.source_namespace,
+    t.source_tool, t.source_unit_id, t.enabled, t.last_saver_subject, t.last_saver_id, t.created_at_ms, t.updated_at_ms
+FROM triggers AS t
+JOIN namespaces AS n ON n.id = t.namespace_id
+WHERE n.name = $1 AND t.unit_tool = $2 AND t.unit_id = $3
+ORDER BY t.id COLLATE "C"
+`
+
+type ListTriggersOfUnitParams struct {
+	Namespace string
+	UnitTool  string
+	UnitID    string
+}
+
+type ListTriggersOfUnitRow struct {
+	Namespace        string
+	ID               string
+	UnitTool         string
+	UnitID           string
+	Kind             string
+	Preset           string
+	Cron             string
+	SourceNamespace  string
+	SourceTool       string
+	SourceUnitID     string
+	Enabled          int64
+	LastSaverSubject string
+	LastSaverID      string
+	CreatedAtMs      int64
+	UpdatedAtMs      int64
+}
+
+func (q *Queries) ListTriggersOfUnit(ctx context.Context, arg ListTriggersOfUnitParams) ([]ListTriggersOfUnitRow, error) {
+	rows, err := q.db.Query(ctx, listTriggersOfUnit, arg.Namespace, arg.UnitTool, arg.UnitID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListTriggersOfUnitRow
+	for rows.Next() {
+		var i ListTriggersOfUnitRow
+		if err := rows.Scan(
+			&i.Namespace,
+			&i.ID,
+			&i.UnitTool,
+			&i.UnitID,
+			&i.Kind,
+			&i.Preset,
+			&i.Cron,
+			&i.SourceNamespace,
+			&i.SourceTool,
+			&i.SourceUnitID,
+			&i.Enabled,
+			&i.LastSaverSubject,
+			&i.LastSaverID,
+			&i.CreatedAtMs,
+			&i.UpdatedAtMs,
 		); err != nil {
 			return nil, err
 		}
@@ -13858,6 +14209,33 @@ func (q *Queries) LockGateRefusal(ctx context.Context, lockKey string) error {
 	return err
 }
 
+const lockNamespaceCreatesExclusive = `-- name: LockNamespaceCreatesExclusive :exec
+SELECT pg_advisory_xact_lock(
+  hashtextextended('namespace-creates:' || current_schema() || ':' || $1::text, 0))
+`
+
+// Takes the exclusive form of the lock of LockNamespaceCreatesShared.
+func (q *Queries) LockNamespaceCreatesExclusive(ctx context.Context, namespace string) error {
+	_, err := q.db.Exec(ctx, lockNamespaceCreatesExclusive, namespace)
+	return err
+}
+
+const lockNamespaceCreatesShared = `-- name: LockNamespaceCreatesShared :exec
+SELECT pg_advisory_xact_lock_shared(
+  hashtextextended('namespace-creates:' || current_schema() || ':' || $1::text, 0))
+`
+
+// A create of a workspace takes this lock, in the shared form, before it reads
+// the manual lock of its namespace. The put of a manual lock on a namespace
+// takes the exclusive form. So a lock that commits while a create runs is
+// either read by the create or waits until the create ends: no create commits
+// under a lock that it did not read. The key holds the schema, so databases that
+// hold several schemas do not wait for each other.
+func (q *Queries) LockNamespaceCreatesShared(ctx context.Context, namespace string) error {
+	_, err := q.db.Exec(ctx, lockNamespaceCreatesShared, namespace)
+	return err
+}
+
 const lockPersonPreferences = `-- name: LockPersonPreferences :one
 SELECT p.id, pp.document, pp.updated_at_ms
 FROM principals AS p
@@ -13969,12 +14347,15 @@ SELECT id, namespace, name, revision, lock_id, lock_holder, lock_reason,
        locked_at_ms, current_state_version_id, created_at_ms, updated_at_ms, allow_forced_writes, allow_unlocked_writes,
        deleted_at_ms, deleted_name
 FROM workspaces
-WHERE id = $1 AND deleted_at_ms IS NULL
+WHERE id = $1 AND num_nulls(deleted_at_ms) = 1
 FOR UPDATE
 `
 
 // Locks the workspace row so concurrent declares cannot both pass the
 // pending cap.
+// The live check is num_nulls(deleted_at_ms) = 1, not IS NULL, so the
+// partial index workspaces_live_name cannot serve this lookup by ID.
+// Only NULL reads as live: a stored -1 or 0 does not, as with IS NULL.
 func (q *Queries) LockWorkspaceForDeclare(ctx context.Context, id string) (Workspace, error) {
 	row := q.db.QueryRow(ctx, lockWorkspaceForDeclare, id)
 	var i Workspace
@@ -14003,12 +14384,15 @@ SELECT id, namespace, name, revision, lock_id, lock_holder, lock_reason,
        locked_at_ms, current_state_version_id, created_at_ms, updated_at_ms, allow_forced_writes, allow_unlocked_writes,
        deleted_at_ms, deleted_name
 FROM workspaces
-WHERE id = $1 AND deleted_at_ms IS NULL
+WHERE id = $1 AND num_nulls(deleted_at_ms) = 1
 FOR UPDATE
 `
 
 // Locks the workspace row so two finalizes on one workspace cannot both pass
 // the serial check.
+// The live check is num_nulls(deleted_at_ms) = 1, not IS NULL, so the
+// partial index workspaces_live_name cannot serve this lookup by ID.
+// Only NULL reads as live: a stored -1 or 0 does not, as with IS NULL.
 func (q *Queries) LockWorkspaceForFinalize(ctx context.Context, id string) (Workspace, error) {
 	row := q.db.QueryRow(ctx, lockWorkspaceForFinalize, id)
 	var i Workspace
@@ -14047,7 +14431,7 @@ func (q *Queries) LockWritesExclusive(ctx context.Context, class int32) error {
 const markProfileDeleted = `-- name: MarkProfileDeleted :execrows
 UPDATE profiles
 SET deleted_at_ms = $1
-WHERE namespace_id = $2 AND id = $3 AND deleted_at_ms = 0
+WHERE namespace_id = $2 AND id = $3 AND COALESCE(deleted_at_ms, -1) = 0
   AND (CAST($4 AS BIGINT) = 0 OR latest = CAST($4 AS BIGINT))
 `
 
@@ -14060,6 +14444,8 @@ type MarkProfileDeletedParams struct {
 
 // Frees the name of a live profile. A non-zero if_latest must be the newest
 // revision.
+// The live check is COALESCE(deleted_at_ms, -1) = 0, not deleted_at_ms = 0, so
+// no partial index of the live rows can serve this lookup by ID.
 func (q *Queries) MarkProfileDeleted(ctx context.Context, arg MarkProfileDeletedParams) (int64, error) {
 	result, err := q.db.Exec(ctx, markProfileDeleted,
 		arg.DeletedAtMs,
@@ -14134,7 +14520,7 @@ func (q *Queries) MoveNotificationSinkSecret(ctx context.Context, arg MoveNotifi
 const moveProfileLatest = `-- name: MoveProfileLatest :execrows
 UPDATE profiles
 SET latest = $1, updated_at_ms = $2
-WHERE namespace_id = $3 AND id = $4 AND deleted_at_ms = 0
+WHERE namespace_id = $3 AND id = $4 AND COALESCE(deleted_at_ms, -1) = 0
   AND latest = $5
 `
 
@@ -14148,6 +14534,8 @@ type MoveProfileLatestParams struct {
 
 // Moves the newest revision from base to next. It changes no row when the
 // newest revision is another.
+// The live check is COALESCE(deleted_at_ms, -1) = 0, not deleted_at_ms = 0, so
+// no partial index of the live rows can serve this lookup by ID.
 func (q *Queries) MoveProfileLatest(ctx context.Context, arg MoveProfileLatestParams) (int64, error) {
 	result, err := q.db.Exec(ctx, moveProfileLatest,
 		arg.Next,
@@ -14714,7 +15102,7 @@ const readWorkspaceByID = `-- name: ReadWorkspaceByID :one
 SELECT w.id, w.namespace, w.name, w.revision, w.lock_id, w.lock_holder, w.lock_reason, w.locked_at_ms, w.current_state_version_id, w.created_at_ms, w.updated_at_ms, w.allow_forced_writes, w.allow_unlocked_writes, w.deleted_at_ms, w.deleted_name, n.id AS namespace_id
 FROM workspaces AS w
 JOIN namespaces AS n ON n.name = w.namespace
-WHERE w.id = $1 AND w.deleted_at_ms IS NULL
+WHERE w.id = $1 AND num_nulls(w.deleted_at_ms) = 1
 `
 
 type ReadWorkspaceByIDRow struct {
@@ -14722,6 +15110,9 @@ type ReadWorkspaceByIDRow struct {
 	NamespaceID string
 }
 
+// The live check is num_nulls(deleted_at_ms) = 1, not IS NULL, so the
+// partial index workspaces_live_name cannot serve this lookup by ID.
+// Only NULL reads as live: a stored -1 or 0 does not, as with IS NULL.
 func (q *Queries) ReadWorkspaceByID(ctx context.Context, id string) (ReadWorkspaceByIDRow, error) {
 	row := q.db.QueryRow(ctx, readWorkspaceByID, id)
 	var i ReadWorkspaceByIDRow
@@ -14748,15 +15139,16 @@ func (q *Queries) ReadWorkspaceByID(ctx context.Context, id string) (ReadWorkspa
 
 const readWorkspacePage = `-- name: ReadWorkspacePage :many
 SELECT w.id, w.namespace, w.name, w.revision, w.lock_id, w.lock_holder, w.lock_reason, w.locked_at_ms, w.current_state_version_id, w.created_at_ms, w.updated_at_ms, w.allow_forced_writes, w.allow_unlocked_writes, w.deleted_at_ms, w.deleted_name, n.id AS namespace_id
-FROM (
-    SELECT p.name
-    FROM workspaces AS p
-    WHERE p.namespace = $1 AND p.deleted_at_ms IS NULL AND strpos(p.name, $2) > 0
-    ORDER BY p.name
-    LIMIT $4 OFFSET $3
-) AS page
-JOIN workspaces AS w ON w.namespace = $1 AND w.name = page.name AND w.deleted_at_ms IS NULL
+FROM workspaces AS w
 JOIN namespaces AS n ON n.name = w.namespace
+WHERE w.namespace = $1 AND w.deleted_at_ms IS NULL
+    AND w.name = ANY (ARRAY(
+        SELECT p.name
+        FROM workspaces AS p
+        WHERE p.namespace = $1 AND p.deleted_at_ms IS NULL AND strpos(p.name, $2) > 0
+        ORDER BY p.name
+        LIMIT $4 OFFSET $3
+    ))
 ORDER BY w.name
 `
 
@@ -14775,7 +15167,10 @@ type ReadWorkspacePageRow struct {
 // One page of the live workspaces of a namespace whose name holds the search,
 // in the order of ReadWorkspaces. The inner query finds the names of the page
 // in the index of the live workspace names alone, so an offset skips index
-// entries and no table rows. The outer query reads the rows of the page.
+// entries and no table rows. The outer query reads the rows of the page by
+// name = ANY of that array, so the names are in the index condition of each
+// plan. A join on the names let a plan with no table statistics read all the
+// live workspaces of the namespace for each name of the page.
 func (q *Queries) ReadWorkspacePage(ctx context.Context, arg ReadWorkspacePageParams) ([]ReadWorkspacePageRow, error) {
 	rows, err := q.db.Query(ctx, readWorkspacePage,
 		arg.Namespace,
@@ -15333,7 +15728,7 @@ func (q *Queries) RevokeAccessToken(ctx context.Context, arg RevokeAccessTokenPa
 }
 
 const revokeGrant = `-- name: RevokeGrant :execrows
-UPDATE grants SET revoked_at_ms = $1, revoked_by = $2 WHERE id = $3 AND revoked_at_ms IS NULL
+UPDATE grants SET revoked_at_ms = $1, revoked_by = $2 WHERE id = $3 AND num_nulls(revoked_at_ms) = 1
 `
 
 type RevokeGrantParams struct {
@@ -15342,6 +15737,9 @@ type RevokeGrantParams struct {
 	ID          string
 }
 
+// The live check is num_nulls(revoked_at_ms) = 1, not IS NULL, so no
+// partial index of the live rows can serve this lookup by ID.
+// Only NULL reads as live: a stored -1 or 0 does not, as with IS NULL.
 func (q *Queries) RevokeGrant(ctx context.Context, arg RevokeGrantParams) (int64, error) {
 	result, err := q.db.Exec(ctx, revokeGrant, arg.RevokedAtMs, arg.RevokedBy, arg.ID)
 	if err != nil {
@@ -15444,7 +15842,7 @@ func (q *Queries) RoleIDByNameKey(ctx context.Context, nameKey string) (string, 
 
 const rolesByIDs = `-- name: RolesByIDs :many
 SELECT id, name, description, actions, created_at_ms, updated_at_ms FROM roles
-WHERE id = ANY($1::text[]) AND deleted_at_ms IS NULL
+WHERE id = ANY($1::text[]) AND num_nulls(deleted_at_ms) = 1
 `
 
 type RolesByIDsRow struct {
@@ -15456,6 +15854,9 @@ type RolesByIDsRow struct {
 	UpdatedAtMs int64
 }
 
+// The live check is num_nulls(deleted_at_ms) = 1, not IS NULL, so no
+// partial index of the live rows can serve this lookup by ID.
+// Only NULL reads as live: a stored -1 or 0 does not, as with IS NULL.
 func (q *Queries) RolesByIDs(ctx context.Context, ids []string) ([]RolesByIDsRow, error) {
 	rows, err := q.db.Query(ctx, rolesByIDs, ids)
 	if err != nil {
@@ -15508,18 +15909,20 @@ func (q *Queries) RotateRunnerKey(ctx context.Context, arg RotateRunnerKeyParams
 	return err
 }
 
-const runningMutatingUpdates = `-- name: RunningMutatingUpdates :one
-SELECT COUNT(*)
+const runningMutatingUpdate = `-- name: RunningMutatingUpdate :one
+SELECT id
 FROM updates
 WHERE stack_id = $1
   AND status = 'running' AND NOT dry_run AND kind <> 'preview'
 `
 
-func (q *Queries) RunningMutatingUpdates(ctx context.Context, stackID string) (int64, error) {
-	row := q.db.QueryRow(ctx, runningMutatingUpdates, stackID)
-	var count int64
-	err := row.Scan(&count)
-	return count, err
+// The ID of the mutating update that runs on a stack. The unique index
+// updates_one_running holds at most one such row for each stack.
+func (q *Queries) RunningMutatingUpdate(ctx context.Context, stackID string) (string, error) {
+	row := q.db.QueryRow(ctx, runningMutatingUpdate, stackID)
+	var id string
+	err := row.Scan(&id)
+	return id, err
 }
 
 const runningUpdateAt = `-- name: RunningUpdateAt :one
@@ -16289,7 +16692,7 @@ func (q *Queries) SoftDeleteStack(ctx context.Context, arg SoftDeleteStackParams
 const softDeleteWorkspace = `-- name: SoftDeleteWorkspace :execrows
 UPDATE workspaces
 SET deleted_name = name, name = 'deleted:' || id, deleted_at_ms = $1, revision = revision + 1
-WHERE id = $2 AND deleted_at_ms IS NULL
+WHERE id = $2 AND num_nulls(deleted_at_ms) = 1
 `
 
 type SoftDeleteWorkspaceParams struct {
@@ -16300,6 +16703,9 @@ type SoftDeleteWorkspaceParams struct {
 // Moves the name to deleted_name and frees it (ADR 47). A workspace name
 // cannot hold ":", so "deleted:" and the ID never match a lookup by name. The
 // revision moves on, so a concurrent compare-and-swap of the row fails.
+// The live check is num_nulls(deleted_at_ms) = 1, not IS NULL, so the
+// partial index workspaces_live_name cannot serve this lookup by ID.
+// Only NULL reads as live: a stored -1 or 0 does not, as with IS NULL.
 func (q *Queries) SoftDeleteWorkspace(ctx context.Context, arg SoftDeleteWorkspaceParams) (int64, error) {
 	result, err := q.db.Exec(ctx, softDeleteWorkspace, arg.DeletedAtMs, arg.ID)
 	if err != nil {
@@ -16999,7 +17405,7 @@ func (q *Queries) UpdateNotificationSink(ctx context.Context, arg UpdateNotifica
 
 const updatePrincipal = `-- name: UpdatePrincipal :execrows
 UPDATE principals SET display_name = $1, updated_at_ms = $2
-WHERE id = $3 AND namespace = $4 AND deleted_at_ms IS NULL
+WHERE id = $3 AND namespace = $4 AND num_nulls(deleted_at_ms) = 1
 `
 
 type UpdatePrincipalParams struct {
@@ -17009,6 +17415,9 @@ type UpdatePrincipalParams struct {
 	Namespace   string
 }
 
+// The live check is num_nulls(deleted_at_ms) = 1, not IS NULL, so no
+// partial index of the live rows can serve this lookup by ID.
+// Only NULL reads as live: a stored -1 or 0 does not, as with IS NULL.
 func (q *Queries) UpdatePrincipal(ctx context.Context, arg UpdatePrincipalParams) (int64, error) {
 	result, err := q.db.Exec(ctx, updatePrincipal,
 		arg.DisplayName,
@@ -17316,6 +17725,68 @@ func (q *Queries) UpsertPersonPreferences(ctx context.Context, arg UpsertPersonP
 	return err
 }
 
+const upsertTrigger = `-- name: UpsertTrigger :execrows
+INSERT INTO triggers (
+    namespace_id, id, unit_tool, unit_id, kind, preset, cron, source_namespace, source_tool, source_unit_id, enabled,
+    last_saver_subject, last_saver_id, created_at_ms, updated_at_ms
+)
+SELECT
+    n.id, $1, $2, $3, $4, $5, $6,
+    $7, $8, $9, $10::bigint,
+    $11, $12, $13::bigint, $14::bigint
+FROM namespaces AS n
+WHERE n.name = $15
+ON CONFLICT (namespace_id, id) DO UPDATE SET
+    preset = excluded.preset, cron = excluded.cron, source_namespace = excluded.source_namespace,
+    source_tool = excluded.source_tool, source_unit_id = excluded.source_unit_id, enabled = excluded.enabled,
+    last_saver_subject = excluded.last_saver_subject, last_saver_id = excluded.last_saver_id,
+    updated_at_ms = GREATEST(triggers.updated_at_ms, excluded.updated_at_ms)
+`
+
+type UpsertTriggerParams struct {
+	ID               string
+	UnitTool         string
+	UnitID           string
+	Kind             string
+	Preset           string
+	Cron             string
+	SourceNamespace  string
+	SourceTool       string
+	SourceUnitID     string
+	Enabled          int64
+	LastSaverSubject string
+	LastSaverID      string
+	CreatedAtMs      int64
+	UpdatedAtMs      int64
+	Namespace        string
+}
+
+// The caller checks the fence in the same transaction. A row that exists keeps
+// its unit, its kind and its creation time.
+func (q *Queries) UpsertTrigger(ctx context.Context, arg UpsertTriggerParams) (int64, error) {
+	result, err := q.db.Exec(ctx, upsertTrigger,
+		arg.ID,
+		arg.UnitTool,
+		arg.UnitID,
+		arg.Kind,
+		arg.Preset,
+		arg.Cron,
+		arg.SourceNamespace,
+		arg.SourceTool,
+		arg.SourceUnitID,
+		arg.Enabled,
+		arg.LastSaverSubject,
+		arg.LastSaverID,
+		arg.CreatedAtMs,
+		arg.UpdatedAtMs,
+		arg.Namespace,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const upsertUnitCollection = `-- name: UpsertUnitCollection :exec
 INSERT INTO collection_members (unit_id, namespace, collection_key, assigned_at_ms)
 VALUES ($1, $2, $3, $4)
@@ -17396,10 +17867,13 @@ func (q *Queries) UseRunnerNonce(ctx context.Context, arg UseRunnerNonceParams) 
 
 const workspaceExists = `-- name: WorkspaceExists :one
 SELECT EXISTS (
-    SELECT 1 FROM workspaces WHERE id = $1 AND deleted_at_ms IS NULL
+    SELECT 1 FROM workspaces WHERE id = $1 AND num_nulls(deleted_at_ms) = 1
 )
 `
 
+// The live check is num_nulls(deleted_at_ms) = 1, not IS NULL, so the
+// partial index workspaces_live_name cannot serve this lookup by ID.
+// Only NULL reads as live: a stored -1 or 0 does not, as with IS NULL.
 func (q *Queries) WorkspaceExists(ctx context.Context, id string) (bool, error) {
 	row := q.db.QueryRow(ctx, workspaceExists, id)
 	var exists bool

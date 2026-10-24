@@ -178,6 +178,7 @@ func newStateHandlerWithBaseURL(t *testing.T, base baseurl.Resolver) *tfe.Handle
 		Logger:         slog.New(slog.DiscardHandler),
 		Namespaces:     newTestNamespaces(t),
 		Workspaces:     stubWorkspaces{},
+		OutputChecker:  nil,
 		BaseURL:        base,
 		Audit:          newTestAudit(),
 		Gate:           nil,
@@ -194,9 +195,9 @@ func newStateHandlerWithBaseURL(t *testing.T, base baseurl.Resolver) *tfe.Handle
 }
 
 // TestStateRoutesDeclareActionsAndObjects proves each state route declares
-// its actions and resolves the unit opentofu:acme/web. Reads need unit:read.
-// The download and the single output route also need unit:read-secrets, as
-// they answer plain secret values.
+// its actions and resolves the unit opentofu:acme/web. Reads need unit:read,
+// except the two outputs routes, which need unit:read-outputs. The download
+// also needs unit:read-secrets, as it answers plain secret values.
 func TestStateRoutesDeclareActionsAndObjects(t *testing.T) {
 	t.Parallel()
 
@@ -249,7 +250,7 @@ func TestStateRoutesDeclareActionsAndObjects(t *testing.T) {
 			method:  http.MethodGet,
 			target:  "/api/v2/workspaces/ws-test123/current-state-version-outputs",
 			body:    "",
-			actions: []identity.Action{identity.ActionUnitRead},
+			actions: []identity.Action{identity.ActionUnitReadOutputs},
 			object:  "opentofu:acme/web",
 			isUnit:  true,
 		},
@@ -259,7 +260,7 @@ func TestStateRoutesDeclareActionsAndObjects(t *testing.T) {
 			method:  http.MethodGet,
 			target:  "/api/v2/state-version-outputs/sv-test123.greeting",
 			body:    "",
-			actions: []identity.Action{identity.ActionUnitRead, identity.ActionUnitReadSecrets},
+			actions: []identity.Action{identity.ActionUnitReadOutputs},
 			object:  "opentofu:acme/web",
 			isUnit:  true,
 		},
@@ -812,6 +813,7 @@ func newListStateHandler(t *testing.T) *tfe.Handler {
 		Logger:         slog.New(slog.DiscardHandler),
 		Namespaces:     newTestNamespaces(t),
 		Workspaces:     listStateWorkspaces{stubWorkspaces: stubWorkspaces{}, versions: versions},
+		OutputChecker:  nil,
 		BaseURL:        baseurl.Resolver{},
 		Audit:          newTestAudit(),
 		Gate:           nil,
@@ -968,14 +970,18 @@ func TestListStateVersionsAddedAttributes(t *testing.T) {
 }
 
 // TestListStateVersionsDeniedHidesExistence proves a caller without
-// unit:read answers the same 404 for an existing and an unknown workspace, so
-// the route never tells whether the filtered workspace exists.
+// unit:read and without unit:read-outputs answers the same 404 for an existing
+// and an unknown workspace, so the route never tells whether the filtered
+// workspace exists. A caller with unit:read-outputs only knows that the
+// workspace exists and gets 403, which TestStateVersionListOutputsOnlyIsForbidden proves.
 func TestListStateVersionsDeniedHidesExistence(t *testing.T) {
 	t.Parallel()
 
 	handler := newStateHandler(
 		t,
-		selectiveAuthorizer{deny: map[identity.Action]bool{identity.ActionUnitRead: true}},
+		selectiveAuthorizer{deny: map[identity.Action]bool{
+			identity.ActionUnitRead: true, identity.ActionUnitReadOutputs: true,
+		}},
 	)
 
 	for _, tc := range []struct {
@@ -1101,13 +1107,16 @@ func newSensitiveStateHandler(t *testing.T) *tfe.Handler {
 	t.Helper()
 
 	handler, err := tfe.NewHandler(tfe.Config{
-		Registry:       nil,
-		Authenticator:  tokenAuthenticator{},
-		Authorizer:     allowAll(),
-		AddressGate:    nil,
-		Logger:         slog.New(slog.DiscardHandler),
-		Namespaces:     newTestNamespaces(t),
-		Workspaces:     sensitiveOutputsWorkspaces{stubWorkspaces: stubWorkspaces{}},
+		Registry:      nil,
+		Authenticator: tokenAuthenticator{},
+		Authorizer:    allowAll(),
+		AddressGate:   nil,
+		Logger:        slog.New(slog.DiscardHandler),
+		Namespaces:    newTestNamespaces(t),
+		Workspaces:    sensitiveOutputsWorkspaces{stubWorkspaces: stubWorkspaces{}},
+		OutputChecker: newTestOutputChecker(
+			t, allowAll(), sensitiveOutputsWorkspaces{stubWorkspaces: stubWorkspaces{}},
+		),
 		BaseURL:        baseurl.Resolver{},
 		Audit:          newTestAudit(),
 		Gate:           nil,
@@ -1217,14 +1226,19 @@ func TestOutputsListHidesSensitiveValues(t *testing.T) {
 func TestStateSecretsNeedReadSecrets(t *testing.T) {
 	t.Parallel()
 
+	noSecrets := selectiveAuthorizer{deny: map[identity.Action]bool{identity.ActionUnitReadSecrets: true}}
+
 	handler, err := tfe.NewHandler(tfe.Config{
-		Registry:       nil,
-		Authenticator:  tokenAuthenticator{},
-		Authorizer:     selectiveAuthorizer{deny: map[identity.Action]bool{identity.ActionUnitReadSecrets: true}},
-		AddressGate:    nil,
-		Logger:         slog.New(slog.DiscardHandler),
-		Namespaces:     newTestNamespaces(t),
-		Workspaces:     sensitiveOutputsWorkspaces{stubWorkspaces: stubWorkspaces{}},
+		Registry:      nil,
+		Authenticator: tokenAuthenticator{},
+		Authorizer:    noSecrets,
+		AddressGate:   nil,
+		Logger:        slog.New(slog.DiscardHandler),
+		Namespaces:    newTestNamespaces(t),
+		Workspaces:    sensitiveOutputsWorkspaces{stubWorkspaces: stubWorkspaces{}},
+		OutputChecker: newTestOutputChecker(
+			t, noSecrets, sensitiveOutputsWorkspaces{stubWorkspaces: stubWorkspaces{}},
+		),
 		BaseURL:        baseurl.Resolver{},
 		Audit:          newTestAudit(),
 		Gate:           nil,

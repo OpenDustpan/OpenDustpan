@@ -54,9 +54,9 @@ const AuditAction = "preferences-changed"
 // Sentinel errors. The text of each error is fixed and holds no value from a
 // request.
 var (
-	// ErrInvalidBody means a patch is not one JSON object, or it names a
-	// field two times.
-	ErrInvalidBody = errors.New("body must be one JSON object that names no field two times")
+	// ErrInvalidBody means a patch is not one JSON object of valid UTF-8, or
+	// it names a field two times.
+	ErrInvalidBody = errors.New("body must be one JSON object of valid UTF-8 text that names no field two times")
 	// ErrBodyTooLarge means a patch is longer than MaxBodyBytes.
 	ErrBodyTooLarge = errors.New("body must be 4096 bytes or fewer")
 	// ErrUnknownField means a patch names a field that the document does not

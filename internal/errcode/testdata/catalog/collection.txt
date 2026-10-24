@@ -1,0 +1,6 @@
+collection.already-exists
+collection.changed
+collection.invalid-name
+collection.move-out-locked
+collection.not-empty
+collection.not-found

@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strings"
 
+	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/runner/protocol"
 )
@@ -166,8 +167,9 @@ func chainGateShape(r *http.Request) (errorShape, bool) {
 // maintenancePulumiError is the error body the Pulumi CLI expects, as in the
 // Pulumi adapter.
 type maintenancePulumiError struct {
-	Message string `json:"message"`
-	Code    int    `json:"code"`
+	Message   string `json:"message"`
+	Code      int    `json:"code"`
+	ErrorCode string `json:"errorCode"`
 }
 
 // writeMaintenancePulumi answers 503 with Retry-After in the Pulumi shape.
@@ -177,8 +179,9 @@ func writeMaintenancePulumi(ctx context.Context, w http.ResponseWriter, logger *
 	w.WriteHeader(http.StatusServiceUnavailable)
 
 	doc := maintenancePulumiError{
-		Code:    http.StatusServiceUnavailable,
-		Message: message,
+		Code:      http.StatusServiceUnavailable,
+		Message:   message,
+		ErrorCode: errcode.MaintenanceInMaintenance,
 	}
 
 	if err := json.NewEncoder(w).Encode(doc); err != nil {
@@ -190,8 +193,9 @@ func writeMaintenancePulumi(ctx context.Context, w http.ResponseWriter, logger *
 // inventory adapter. It matches the Pulumi shape today, and stays its own
 // type: the console contract may change without the CLI one.
 type maintenanceInventoryError struct {
-	Message string `json:"message"`
-	Code    int    `json:"code"`
+	Message   string `json:"message"`
+	Code      int    `json:"code"`
+	ErrorCode string `json:"errorCode"`
 }
 
 // writeMaintenanceInventory answers 503 with Retry-After in the inventory shape.
@@ -201,8 +205,9 @@ func writeMaintenanceInventory(ctx context.Context, w http.ResponseWriter, logge
 	w.WriteHeader(http.StatusServiceUnavailable)
 
 	doc := maintenanceInventoryError{
-		Code:    http.StatusServiceUnavailable,
-		Message: message,
+		Code:      http.StatusServiceUnavailable,
+		Message:   message,
+		ErrorCode: errcode.MaintenanceInMaintenance,
 	}
 
 	if err := json.NewEncoder(w).Encode(doc); err != nil {
@@ -214,6 +219,7 @@ func writeMaintenanceInventory(ctx context.Context, w http.ResponseWriter, logge
 // TFE-compatible adapter.
 type maintenanceTFEError struct {
 	Status string `json:"status"`
+	Code   string `json:"code"`
 	Title  string `json:"title"`
 	Detail string `json:"detail"`
 }
@@ -239,6 +245,7 @@ func writeMaintenanceTFE(ctx context.Context, w http.ResponseWriter, logger *slo
 
 	doc := maintenanceTFEDocument{Errors: []maintenanceTFEError{{
 		Status: "503",
+		Code:   errcode.MaintenanceInMaintenance,
 		Title:  "maintenance",
 		Detail: message,
 	}}}

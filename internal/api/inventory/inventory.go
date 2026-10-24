@@ -20,6 +20,7 @@ import (
 	"opendustpan.org/opendustpan/internal/api/refusal"
 	"opendustpan.org/opendustpan/internal/api/route"
 	"opendustpan.org/opendustpan/internal/denylimit"
+	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/internal/outputsharesvc"
 	"opendustpan.org/opendustpan/internal/sessionauth"
 	"opendustpan.org/opendustpan/pkg/audit"
@@ -66,6 +67,9 @@ type Config struct {
 	// OutputSharing serves the routes of the output sharing setting of a
 	// namespace. It is optional: nil serves no such route.
 	OutputSharing *outputsharesvc.Service
+	// Outputs serves the route that reads the root outputs of a unit. It is
+	// optional: nil serves no such route.
+	Outputs *outputsharesvc.Reader
 	// Moves checks the escalation of a move into a collection. It is required
 	// with Collections: a move with no checker is refused.
 	Moves         MoveChecker
@@ -111,6 +115,7 @@ type Handler struct {
 	collections   *collection.Service
 	locks         *manuallock.Service
 	outputSharing *outputsharesvc.Service
+	outputs       *outputsharesvc.Reader
 	moves         MoveChecker
 	views         *views
 	authn         identity.Authenticator
@@ -184,6 +189,7 @@ func NewHandler(cfg Config) (*Handler, error) {
 		collections:   cfg.Collections,
 		locks:         cfg.Locks,
 		outputSharing: cfg.OutputSharing,
+		outputs:       cfg.Outputs,
 		moves:         cfg.Moves,
 		authn:         cfg.Authenticator,
 		sessions:      cfg.Sessions,
@@ -580,20 +586,19 @@ func unitObject(e coreinventory.Entry) (identity.Object, error) {
 	return identity.UnitObject(e.Tool, e.Namespace, e.Name)
 }
 
+// writeError answers err through the shared error module of the
+// tool-neutral APIs, with the classes of the inventory routes.
 func (h *Handler) writeError(ctx context.Context, w http.ResponseWriter, err error) {
-	h.problems().Write(ctx, w, err)
+	problem.Writer{Logger: h.logger, Classify: classify}.Write(ctx, w, err)
 }
 
-// problems returns the error writer of this API.
-func (h *Handler) problems() problem.Writer {
-	return problem.Writer{Logger: h.logger, Classify: classify}
-}
-
-// classify maps the errors of the inventory domain to an answer that is safe
+// classify maps the errors of the inventory routes to an answer that is safe
 // to show callers. The shared module answers the rest.
 func classify(err error) (problem.Problem, bool) {
-	for _, c := range []problem.Classifier{classifyView, classifyUnit, classifyCollection, classifyChange, classifyLock} {
-		if p, ok := c(err); ok {
+	for _, try := range []func(error) (problem.Problem, bool){
+		classifyView, classifyRequest, classifyCollection, classifyChange, classifyLock,
+	} {
+		if p, ok := try(err); ok {
 			return p, true
 		}
 	}
@@ -601,79 +606,81 @@ func classify(err error) (problem.Problem, bool) {
 	return problem.Pass()
 }
 
-// classifyUnit maps the errors of the unit list.
-func classifyUnit(err error) (problem.Problem, bool) {
+// classifyRequest maps the errors of a request that names a value that is not
+// valid, or a namespace or a unit that does not exist.
+func classifyRequest(err error) (problem.Problem, bool) {
 	switch {
-	case errors.Is(err, errMissingOrganization), errors.Is(err, errOutputSharingBody):
-		return fail(http.StatusBadRequest, "request.namespace-missing", err.Error()), true
+	case errors.Is(err, errMissingOrganization), errors.Is(err, errMissingUnit):
+		return fail(http.StatusBadRequest, err.Error(), errcode.RequestInvalidQuery), true
+	case errors.Is(err, errOutputSharingBody), errors.Is(err, errCollectionBody), errors.Is(err, errMoveBody):
+		return fail(http.StatusBadRequest, err.Error(), errcode.RequestBodyInvalid), true
+	case errors.Is(err, namespace.ErrInvalidName):
+		return fail(http.StatusBadRequest, err.Error(), errcode.NamespaceInvalidName), true
 	case errors.Is(err, identity.ErrInvalidObject):
-		return fail(http.StatusBadRequest, "request.object-invalid", err.Error()), true
+		return fail(http.StatusBadRequest, err.Error(), errcode.RequestInvalidObject), true
 	case errors.Is(err, namespace.ErrNotFound):
-		return fail(http.StatusNotFound, "namespace.not-found", err.Error()), true
+		return fail(http.StatusNotFound, err.Error(), errcode.NamespaceNotFound), true
 	case errors.Is(err, coreinventory.ErrUnitNotFound):
-		return fail(http.StatusNotFound, "unit.not-found", "unit not found"), true
-	case errors.Is(err, errMissingUnit):
-		return fail(http.StatusBadRequest, "request.unit-missing", err.Error()), true
-	default:
-		return problem.Pass()
+		return fail(http.StatusNotFound, "unit not found", errcode.UnitNotFound), true
+	case errors.Is(err, collection.ErrUnitNotFound):
+		return fail(http.StatusNotFound, err.Error(), errcode.UnitNotFound), true
 	}
+
+	var none problem.Problem
+
+	return none, false
 }
 
-// classifyCollection maps the errors of the collections.
+// classifyCollection maps the errors of the collections of units.
 func classifyCollection(err error) (problem.Problem, bool) {
 	switch {
 	case errors.Is(err, collection.ErrInvalidName):
-		return fail(http.StatusBadRequest, "collection.invalid-name", err.Error()), true
+		return fail(http.StatusBadRequest, err.Error(), errcode.CollectionInvalidName), true
 	case errors.Is(err, collection.ErrNotFound):
-		return fail(http.StatusNotFound, "collection.not-found", err.Error()), true
-	case errors.Is(err, collection.ErrUnitNotFound):
-		return fail(http.StatusNotFound, "collection.unit-not-found", err.Error()), true
+		return fail(http.StatusNotFound, err.Error(), errcode.CollectionNotFound), true
 	case errors.Is(err, collection.ErrAlreadyExists):
-		return fail(http.StatusConflict, "collection.exists", err.Error()), true
+		return fail(http.StatusConflict, err.Error(), errcode.CollectionAlreadyExists), true
 	case errors.Is(err, collection.ErrNotEmpty):
-		return fail(http.StatusConflict, "collection.not-empty", err.Error()), true
+		return fail(http.StatusConflict, err.Error(), errcode.CollectionNotEmpty), true
 	case errors.Is(err, collection.ErrCollectionChanged):
-		return fail(http.StatusConflict, "collection.changed", err.Error()), true
+		return fail(http.StatusConflict, err.Error(), errcode.CollectionChanged), true
 	case errors.Is(err, collection.ErrNoCollection):
-		return fail(http.StatusConflict, "collection.none", err.Error()), true
+		return fail(http.StatusConflict, err.Error(), errcode.UnitNoCollection), true
 	case errors.Is(err, collection.ErrMoveOutOfLockedCollection):
-		return fail(http.StatusConflict, "collection.locked", err.Error()), true
-	case errors.Is(err, errCollectionBody), errors.Is(err, errMoveBody):
-		return fail(http.StatusBadRequest, "request.body-invalid", err.Error()), true
-	default:
-		return problem.Pass()
+		return fail(http.StatusConflict, err.Error(), errcode.CollectionMoveOutLocked), true
 	}
+
+	var none problem.Problem
+
+	return none, false
 }
 
-// classifyChange maps the errors of the deleted-unit routes and of the unit
-// list at a time.
+// classifyChange maps the errors of the deleted-unit routes and of a fenced
+// write to an HTTP status and a message safe to show callers.
 func classifyChange(err error) (problem.Problem, bool) {
 	switch {
 	case errors.Is(err, errInvalidQuery):
-		return fail(http.StatusBadRequest, "request.invalid-query", err.Error()), true
+		return fail(http.StatusBadRequest, err.Error(), errcode.RequestInvalidQuery), true
 	case errors.Is(err, errInvalidBody):
-		return fail(http.StatusBadRequest, "request.body-invalid", err.Error()), true
+		return fail(http.StatusBadRequest, err.Error(), errcode.RequestBodyInvalid), true
 	case errors.Is(err, errNoHistory):
-		return fail(http.StatusNotImplemented, "inventory.no-history", err.Error()), true
+		return fail(http.StatusNotImplemented, err.Error(), errcode.UnitHistoryUnavailable), true
 	case errors.Is(err, coreinventory.ErrInvalidName):
 		return fail(
 			http.StatusBadRequest,
-			"unit.invalid-name",
 			"invalid unit name: use the name rules of the tool",
+			errcode.UnitInvalidName,
 		), true
 	case errors.Is(err, coreinventory.ErrNotFound):
-		return fail(http.StatusNotFound, "unit.deleted-not-found", "deleted unit not found"), true
+		return fail(http.StatusNotFound, "deleted unit not found", errcode.UnitDeletedNotFound), true
 	case errors.Is(err, coreinventory.ErrNameTaken):
-		return fail(http.StatusConflict, "unit.name-taken",
-			"a live unit holds the name: send a new name in the restore body"), true
-	default:
-		return problem.Pass()
+		return fail(http.StatusConflict, "a live unit holds the name: send a new name in the restore body",
+			errcode.UnitNameTaken), true
 	}
-}
 
-// fail returns an answer with no arguments.
-func fail(status int, code, message string) problem.Problem {
-	return problem.Problem{Status: status, Code: code, Message: message, Args: nil, RetryAfter: 0, Reauthenticate: ""}
+	var none problem.Problem
+
+	return none, false
 }
 
 func (h *Handler) writeJSON(ctx context.Context, w http.ResponseWriter, status int, body any) {
