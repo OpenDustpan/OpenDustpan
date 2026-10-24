@@ -8,11 +8,12 @@ import (
 	"net/http"
 	"testing"
 
+	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/pkg/stack"
 )
 
 // checkConflictBody checks that a refused complete answers 409 with the exact
-// error shape: {"code":409,"message":"complete update <id> of <ref>: ..."}.
+// error shape: {"code":409,"message":"complete update <id> of <ref>: ...","errorCode":"journal.incomplete"}.
 func checkConflictBody(t *testing.T, ref stack.Ref, id stack.UpdateID, status int, resp string) {
 	t.Helper()
 
@@ -27,8 +28,12 @@ func checkConflictBody(t *testing.T, ref stack.Ref, id stack.UpdateID, status in
 
 	want := fmt.Sprintf("complete update %s of %s: %s", id, ref, stack.ErrJournalIncomplete)
 
-	if len(decoded) != 2 || decoded["code"] != float64(http.StatusConflict) || decoded["message"] != want {
-		t.Fatalf("error body = %s, want {\"code\":409,\"message\":%q}", resp, want)
+	if len(decoded) != 3 || decoded["code"] != float64(http.StatusConflict) || decoded["message"] != want ||
+		decoded["errorCode"] != errcode.JournalIncomplete {
+		t.Fatalf(
+			"error body = %s, want {\"code\":409,\"message\":%q,\"errorCode\":%q}",
+			resp, want, errcode.JournalIncomplete,
+		)
 	}
 }
 
