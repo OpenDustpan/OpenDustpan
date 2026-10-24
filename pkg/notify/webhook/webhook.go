@@ -17,7 +17,6 @@ package webhook
 import (
 	"bytes"
 	"context"
-	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -26,17 +25,26 @@ import (
 	"opendustpan.org/opendustpan/internal/egress/egresshttp"
 	"opendustpan.org/opendustpan/pkg/egress"
 	"opendustpan.org/opendustpan/pkg/notify"
+	"opendustpan.org/opendustpan/pkg/notify/internal/post"
 )
 
 // contentType is the media type of the body.
 const contentType = "application/json"
 
+// op names a send in the error texts.
+const op = "post webhook"
+
+// SendTimeout is the longest time of one send, as a deadline on the context
+// of the request. The timeout of the client is a second layer above it.
+const SendTimeout = 10 * time.Second
+
 // Sender posts notifications to webhook sinks. It is safe for concurrent
 // use. Call Close when done, to close the idle connections.
 type Sender struct {
-	client *http.Client
-	now    func() time.Time
-	ports  egress.Ports
+	client  *http.Client
+	now     func() time.Time
+	ports   egress.Ports
+	timeout time.Duration
 }
 
 var _ notify.Sender = (*Sender)(nil)
@@ -64,7 +72,7 @@ func New(opts ...Option) *Sender {
 }
 
 func newSender(c *http.Client, now func() time.Time) *Sender {
-	return &Sender{client: c, now: now, ports: egress.Ports{}}
+	return &Sender{client: c, now: now, ports: egress.Ports{}, timeout: SendTimeout}
 }
 
 // Close closes the idle connections of the sender.
@@ -86,7 +94,8 @@ func (s *Sender) Kind() notify.SinkKind { return notify.SinkWebhook }
 //     other than 408 and 429 or any other answer that will not change;
 //   - a *notify.RetryAfterError for an answer 408, 429 or 5xx with a
 //     Retry-After header that notify.ParseRetryAfter reads;
-//   - notify.ErrTemporary for every other failure.
+//   - notify.ErrTemporary for every other failure, also a send that passes
+//     SendTimeout.
 func (s *Sender) Send(ctx context.Context, m notify.Message) error {
 	if m.Sink.Kind != notify.SinkWebhook {
 		return fmt.Errorf("%w: the message is for a %q sink, not a webhook", notify.ErrPermanent, m.Sink.Kind)
@@ -97,36 +106,14 @@ func (s *Sender) Send(ctx context.Context, m notify.Message) error {
 		return fmt.Errorf("%w: %w", notify.ErrPermanent, err)
 	}
 
-	// Defense in depth: the sink service checks the URL and the host when a
-	// person saves a sink and before a test. These checks stay so that a caller
-	// of the sender that skips the service, or a sink that a restore left
-	// behind, cannot send to a URL that the egress rules refuse or to a host
-	// that is not the target of the sink. The dial guard is another layer.
-	// The text of these errors can repeat the address, so the sender keeps the
-	// class and drops the text.
-	if egress.CheckURL(m.To, egress.HTTPSOnly) != nil {
-		return fmt.Errorf("post webhook: %w: the URL is not allowed", egress.ErrRefused)
+	// Defense in depth: the sink service and the dial guard check the target
+	// too. CheckTarget names the layers it does not rely on.
+	if refused := post.CheckTarget(op, m.To, m.Sink.Target, s.ports, notify.WebhookHost); refused != nil {
+		return refused
 	}
 
-	// WebhookHost runs egress.CheckURL again. The direct call above stays,
-	// so that the egress check of the sender does not depend on how
-	// WebhookHost works.
-	host, err := notify.WebhookHost(m.To)
-	if err != nil {
-		return fmt.Errorf("post webhook: %w", egress.ErrRefused)
-	}
-
-	if host != m.Sink.Target {
-		return fmt.Errorf("post webhook: %w: the host of the URL is not the target of the sink", egress.ErrRefused)
-	}
-
-	// Defense in depth: Service.Create, Service.Replace and Service.Test check
-	// the port too. This check stays so that a caller of the sender that skips
-	// them cannot reach a port that the operator did not allow. The dial guard
-	// is another layer: it checks the address, not the port.
-	if err = egress.CheckPort(m.To, s.ports); err != nil {
-		return fmt.Errorf("post webhook: %w", err)
-	}
+	ctx, cancel := context.WithTimeout(ctx, s.timeout)
+	defer cancel()
 
 	req, err := s.request(ctx, m, body)
 	if err != nil {
@@ -135,7 +122,7 @@ func (s *Sender) Send(ctx context.Context, m notify.Message) error {
 
 	resp, err := s.client.Do(req)
 	if err != nil {
-		return transportError(ctx, err)
+		return post.TransportError(ctx, op, err)
 	}
 
 	// The status decides the result. Read a bounded part of the body, so
@@ -143,7 +130,7 @@ func (s *Sender) Send(ctx context.Context, m notify.Message) error {
 	_, _ = egresshttp.ReadBody(resp) //nolint:errcheck // The status decides the result.
 	_ = resp.Body.Close()            //nolint:errcheck // The status decides the result.
 
-	return s.statusError(resp)
+	return post.StatusError(op, resp, s.now())
 }
 
 // request builds the signed POST of m.
@@ -168,45 +155,4 @@ func (s *Sender) request(ctx context.Context, m notify.Message, body []byte) (*h
 	req.Header.Set(notify.HeaderSignature, sig)
 
 	return req, nil
-}
-
-// transportError maps the error of a request that got no answer. It drops
-// the text of err, which can repeat the URL and the resolved address, and
-// keeps the class.
-func transportError(ctx context.Context, err error) error {
-	switch {
-	case errors.Is(err, egresshttp.ErrDialRefused):
-		// The dial guard refused the resolved address. Say it is a failed
-		// connection: a refusal here would tell a name that resolves to a
-		// private address from a name that does not resolve.
-		return fmt.Errorf("post webhook: %w: the request failed", notify.ErrTemporary)
-	case errors.Is(err, egress.ErrRefused):
-		return fmt.Errorf("post webhook: %w", egress.ErrRefused)
-	case ctx.Err() != nil:
-		return fmt.Errorf("post webhook: %w: %w", notify.ErrTemporary, ctx.Err())
-	default:
-		return fmt.Errorf("post webhook: %w: the request failed", notify.ErrTemporary)
-	}
-}
-
-// statusError maps the answer of the receiver, and returns nil for 2xx.
-func (s *Sender) statusError(resp *http.Response) error {
-	code := resp.StatusCode
-
-	switch {
-	case code >= http.StatusOK && code < http.StatusMultipleChoices:
-		return nil
-	case code == http.StatusRequestTimeout, code == http.StatusTooManyRequests, code >= http.StatusInternalServerError:
-		if wait, ok := notify.ParseRetryAfter(resp.Header.Get("Retry-After"), s.now()); ok {
-			return fmt.Errorf("post webhook: status %d: %w", code, &notify.RetryAfterError{Wait: wait})
-		}
-
-		return fmt.Errorf("post webhook: status %d: %w", code, notify.ErrTemporary)
-	case code >= http.StatusMultipleChoices:
-		// A 4xx other than 408 and 429, and a 3xx that the client did not
-		// follow, will not change on the next attempt.
-		return fmt.Errorf("post webhook: status %d: %w", code, notify.ErrPermanent)
-	default:
-		return fmt.Errorf("post webhook: status %d: %w", code, notify.ErrTemporary)
-	}
 }
