@@ -10,9 +10,9 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/egress/egresshttp"
+	"opendustpan.org/opendustpan/internal/notify/post"
 	"opendustpan.org/opendustpan/pkg/egress"
 	"opendustpan.org/opendustpan/pkg/notify"
-	"opendustpan.org/opendustpan/pkg/notify/internal/post"
 )
 
 // markedURL is a URL with a marker in its path. No error may repeat it.
