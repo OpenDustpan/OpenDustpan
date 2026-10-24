@@ -258,7 +258,7 @@ func (s *Store) EnablePrincipal(ctx context.Context, id string, e audit.Entry) e
 func (s *Store) DisablePrincipal(ctx context.Context, id string, e audit.Entry) error {
 	rev := revocation{kind: maintenance.RevokedPrincipal, target: id, endReason: ""}
 
-	return s.inRevokingTx(ctx, e, rev, func(q *db.Queries) error {
+	return s.inRevokingTx(ctx, e, rev, guardSiteAdministrator(ctx, func(q *db.Queries) error {
 		n, err := q.DisablePrincipal(ctx, db.DisablePrincipalParams{DisabledAtMs: codec.Millis(e.At), ID: id})
 		if err != nil {
 			return fmt.Errorf("disable principal: %w", err)
@@ -278,7 +278,7 @@ func (s *Store) DisablePrincipal(ctx context.Context, id string, e audit.Entry) 
 		}
 
 		return principal.ErrDisabled
-	})
+	}))
 }
 
 // ending ends one record and then its memberships, at the time at.
@@ -332,7 +332,7 @@ func (s *Store) endRecord(ctx context.Context, e audit.Entry, subject access.Sub
 func endRecordTx(ctx context.Context, e audit.Entry, subject access.Subject, end ending) func(q *db.Queries) error {
 	at := codec.Millis(e.At)
 
-	return func(q *db.Queries) error {
+	return guardSiteAdministrator(ctx, func(q *db.Queries) error {
 		n, err := end.record(q, at)
 		if err != nil {
 			return fmt.Errorf("end record: %w", err)
@@ -347,7 +347,7 @@ func endRecordTx(ctx context.Context, e audit.Entry, subject access.Subject, end
 		}
 
 		return revokeGrantsOf(ctx, q, subject, e)
-	}
+	})
 }
 
 // CreateGroup implements principal.Store.
@@ -593,7 +593,7 @@ func localGroup(ctx context.Context, q *db.Queries, groupID string) error {
 // RemoveMember implements principal.Store. It ends the membership in the
 // transaction of the entry.
 func (s *Store) RemoveMember(ctx context.Context, groupID, principalID string, e audit.Entry) error {
-	return s.inAuditedTx(ctx, e, func(q *db.Queries) error {
+	return s.inAuditedTx(ctx, e, guardSiteAdministrator(ctx, func(q *db.Queries) error {
 		if err := localGroup(ctx, q, groupID); err != nil {
 			return err
 		}
@@ -612,7 +612,7 @@ func (s *Store) RemoveMember(ctx context.Context, groupID, principalID string, e
 		}
 
 		return nil
-	})
+	}))
 }
 
 // ListMembers implements principal.Store. It reads the group, the page and
@@ -820,4 +820,46 @@ func isUniqueViolation(err error) bool {
 	var pgErr *pgconn.PgError
 
 	return errors.As(err, &pgErr) && pgErr.Code == uniqueViolation
+}
+
+// guardSiteAdministrator returns the body of a transaction that runs change,
+// which ends a principal, a membership or a grant, and returns
+// access.ErrLastSiteAdministrator when the change takes the last site
+// administrator. The count runs in the transaction of the change, so a change
+// that commits first is in the count. An installation with no site
+// administrator before the change refuses nothing.
+//
+// The guard is correct only because its callers take the lock of the server
+// audit scope (LockServerAuditScope, a transaction-level advisory lock) before
+// they run change, and so before the first count. That lock serializes two
+// removals of two administrators, and under READ COMMITTED the second count
+// reads a new snapshot after the lock, so it sees the commit of the first. A
+// new caller in a transaction that does not take this lock would make the guard
+// race: take the lock first.
+func guardSiteAdministrator(ctx context.Context, change func(q *db.Queries) error) func(q *db.Queries) error {
+	return func(q *db.Queries) error {
+		before, err := q.CountSiteAdministrators(ctx, access.RoleSiteAdministrator)
+		if err != nil {
+			return fmt.Errorf("count site administrators: %w", err)
+		}
+
+		if changeErr := change(q); changeErr != nil {
+			return changeErr
+		}
+
+		if before == 0 {
+			return nil
+		}
+
+		after, err := q.CountSiteAdministrators(ctx, access.RoleSiteAdministrator)
+		if err != nil {
+			return fmt.Errorf("count site administrators: %w", err)
+		}
+
+		if after == 0 {
+			return access.ErrLastSiteAdministrator
+		}
+
+		return nil
+	}
 }

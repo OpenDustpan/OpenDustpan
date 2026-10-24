@@ -478,21 +478,21 @@ func staticProviderOf(p SignInProvider) providerResponse {
 
 // classifyProviders maps the sign-in provider errors to their status and
 // message.
-func classifyProviders(err error) (int, string, bool) {
+func classifyProviders(err error) (failure, bool) {
 	switch {
 	case errors.Is(err, errProviderCreateBody), errors.Is(err, errProviderChangeBody),
 		errors.Is(err, session.ErrInvalidProvider):
-		return http.StatusBadRequest, err.Error(), true
+		return fail(http.StatusBadRequest, err.Error()), true
 	case errors.Is(err, session.ErrProviderNotFound):
-		return http.StatusNotFound, "sign-in provider not found", true
+		return fail(http.StatusNotFound, "sign-in provider not found"), true
 	case errors.Is(err, session.ErrProviderStatic), errors.Is(err, session.ErrProviderInUse),
 		errors.Is(err, session.ErrIssuerChanged), errors.Is(err, session.ErrProviderChanged),
 		errors.Is(err, session.ErrProviderExists):
-		return http.StatusConflict, err.Error(), true
+		return fail(http.StatusConflict, err.Error()), true
 	case errors.Is(err, secret.ErrKeyNotConfigured):
-		return http.StatusConflict, secret.ErrKeyNotConfigured.Error(), true
+		return fail(http.StatusConflict, secret.ErrKeyNotConfigured.Error()), true
 	default:
-		return 0, "", false
+		return fail(0, ""), false
 	}
 }
 

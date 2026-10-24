@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"slices"
 
+	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/internal/sessionauth"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -235,8 +236,9 @@ func (h *Handler) lockRoutes() []Route {
 // stateRoutes returns the state read routes: the current state version, one
 // state version, its download, its outputs, the state version list, and the
 // masked resource list with one masked resource (ADR 41 decisions 1 to 3, 8
-// and 9). Every route needs unit:read. The download and the single output
-// route also need unit:read-secrets, as they answer plain secret values.
+// and 9). Every route needs unit:read, except the two outputs routes, which
+// need unit:read-outputs. The download also needs unit:read-secrets, as it
+// answers plain secret values.
 func (h *Handler) stateRoutes() []Route {
 	routes := []Route{
 		{
@@ -286,22 +288,27 @@ func (h *Handler) stateRoutes() []Route {
 		{
 			Method: http.MethodGet,
 			Path:   "/api/v2/workspaces/{id}/current-state-version-outputs",
-			// A state read needs unit:read on opentofu:<namespace>/<name>.
-			// The resolver maps the ID to the unit. A workspace without
-			// state answers 404.
+			// A read of the outputs needs unit:read-outputs on
+			// opentofu:<namespace>/<name>, and unit:read does not imply it.
+			// The handler then asks the output sharing checker. The
+			// resolver maps the ID to the unit. A workspace without state
+			// answers 404.
 			Scope:   ScopeAuthorized,
-			Actions: []identity.Action{identity.ActionUnitRead},
+			Actions: []identity.Action{identity.ActionUnitReadOutputs},
 			Resolve: h.resolveWorkspaceID,
 			Serve:   h.readCurrentOutputs,
 		},
 		{
 			Method: http.MethodGet,
 			Path:   "/api/v2/state-version-outputs/{output_id}",
-			// A single output answers a plain secret value, so it needs
-			// unit:read and unit:read-secrets. The resolver maps the output
-			// to the unit of its workspace. Unknown outputs answer 404.
+			// A single output needs unit:read-outputs. The handler then asks
+			// the output sharing checker for the current state version, which
+			// needs unit:read-secrets for a secret output. An output of an
+			// older state version needs unit:read, and unit:read-secrets for
+			// a secret output. The resolver maps the output to the unit of its
+			// workspace. Unknown outputs answer 404.
 			Scope:   ScopeAuthorized,
-			Actions: []identity.Action{identity.ActionUnitRead, identity.ActionUnitReadSecrets},
+			Actions: []identity.Action{identity.ActionUnitReadOutputs},
 			Resolve: h.resolveStateOutputID,
 			Serve:   h.readStateOutput,
 		},
@@ -598,7 +605,7 @@ func (h *Handler) enforceAuthorized(route Route) http.HandlerFunc {
 		obj, err := route.Resolve(w, r)
 		if err != nil {
 			if isAbsence(err) {
-				h.writeNotFound(ctx, w, notFoundDetail)
+				h.writeClassError(ctx, w, hiddenNotFound())
 			} else {
 				h.writeError(ctx, w, err)
 			}
@@ -654,40 +661,57 @@ func (h *Handler) writeDenied(ctx context.Context, w http.ResponseWriter, req re
 	}
 
 	if hide {
-		h.writeNotFound(ctx, w, notFoundDetail)
+		h.writeClassError(ctx, w, hiddenNotFound())
 
 		return
 	}
 
-	h.writeForbidden(
-		ctx, w,
-		"forbidden: the action "+string(req.action)+" on "+req.object.String()+" was refused",
-	)
+	h.writeClassError(ctx, w, errorClass{
+		status: http.StatusForbidden, title: titleForbidden,
+		detail: "forbidden: the action " + string(req.action) + " on " + req.object.String() + " was refused",
+		code:   errcode.Forbidden(err), args: nil,
+	})
 }
 
-// hidden reports whether p cannot read obj: a unit without unit:read, or a
-// namespace without namespace:read. Any other object is never hidden. It
-// returns the error of a read check that fails for another reason than a
-// refusal.
-func (h *Handler) hidden(ctx context.Context, p identity.Principal, obj identity.Object) (bool, error) {
-	read := identity.ActionNamespaceRead
-	if obj.IsUnit() {
-		read = identity.ActionUnitRead
+// hiddenNotFound is the 404 of an object that does not exist or that the
+// caller cannot read. The two answers do not differ, also in the code.
+func hiddenNotFound() errorClass {
+	return errorClass{
+		status: http.StatusNotFound, title: notFoundTitle, detail: notFoundDetail,
+		code: errcode.WorkspaceNotFound, args: nil,
 	}
+}
 
+// hidden reports whether p cannot see obj: a unit without unit:read and
+// without unit:read-outputs, or a namespace without namespace:read. A principal
+// that reads the outputs of a unit knows that the unit exists, so a refusal of
+// a route that answers more than the outputs is a 403 for it. Any other object
+// is never hidden. It returns the error of a read check that fails for another
+// reason than a refusal.
+func (h *Handler) hidden(ctx context.Context, p identity.Principal, obj identity.Object) (bool, error) {
 	if obj.IsServer() || obj.IsCaller() || obj.Namespace() == "" {
 		return false, nil
 	}
 
-	err := h.authz.Authorize(ctx, p, read, obj)
-	switch {
-	case err == nil:
-		return false, nil
-	case errors.Is(err, identity.ErrDenied):
-		return true, nil
-	default:
-		return false, fmt.Errorf("authorize %s: %w", read, err)
+	reads := []identity.Action{identity.ActionNamespaceRead}
+	if obj.IsUnit() {
+		reads = []identity.Action{identity.ActionUnitRead, identity.ActionUnitReadOutputs}
 	}
+
+	for _, read := range reads {
+		err := h.authz.Authorize(ctx, p, read, obj)
+
+		switch {
+		case err == nil:
+			return false, nil
+		case errors.Is(err, identity.ErrDenied):
+			continue
+		default:
+			return false, fmt.Errorf("authorize %s: %w", read, err)
+		}
+	}
+
+	return true, nil
 }
 
 // isAbsence reports whether err means the resolver found nothing: an unknown

@@ -48,7 +48,10 @@ var (
 	ErrUnsealedState = errors.New("state version is not sealed")
 	// ErrClientEncrypted reports a state version the client encrypted: the
 	// server keeps the envelope but cannot read the resources inside it. The
-	// resource routes answer 409, while the outputs list still works.
+	// resource routes answer 409, while the outputs list still works. It is a
+	// fact of the state. The checker of output reads refuses such a read with
+	// outputshare.ErrClientEncrypted, a denial of one read; an adapter gives
+	// both the same error code.
 	ErrClientEncrypted = errors.New("state is encrypted-by-client")
 	// ErrResourceNotFound reports that a state holds no resource with the
 	// given address.

@@ -304,7 +304,7 @@ func TestSwapWaitingForLongReadDoesNotStopNewReads(t *testing.T) {
 func checkSwapDoesNotQueueReads(t *testing.T, path swapPath) {
 	t.Helper()
 
-	const readBound = 2 * time.Second
+	const readBound = 5 * swapLockTimeout
 
 	ctx := t.Context()
 	s, _ := stageOwnExport(t)

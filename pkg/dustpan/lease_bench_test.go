@@ -14,6 +14,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"opendustpan.org/opendustpan/internal/pgtest"
 	"opendustpan.org/opendustpan/pkg/accesstoken"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/blob/fs"
@@ -376,7 +377,7 @@ func leaseBenchSchemaURL(b *testing.B, base string) string {
 		b.Fatalf("create schema: %v", execErr)
 	}
 
-	dropSchemaAtCleanup(b, base, name)
+	pgtest.DropSchemaAtCleanup(b, base, name)
 
 	u, err := url.Parse(base)
 	if err != nil {

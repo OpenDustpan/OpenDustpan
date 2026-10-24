@@ -165,7 +165,7 @@ func DeclareString[T any]() Declaration {
 // DeclareOpenEnum states that T is a string whose value set can grow. The
 // description holds the schema name with the values that exist today, and a
 // use of T is anyOf the schema and any string, so that a client keeps a value
-// it does not know.
+// it does not know. A value that is listed twice is refused.
 func DeclareOpenEnum[T ~string](name string, values ...string) Declaration {
 	return Declaration{
 		typ:    reflect.TypeFor[T](),

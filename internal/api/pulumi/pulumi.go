@@ -492,11 +492,15 @@ func (h *Handler) listStacksIn(
 	}
 
 	h.serveStackPage(ctx, w, r, stackListQuery{
-		organization: ns.String(), project: project, namespaces: []namespace.Name{ns},
+		organization: ns.String(), project: project, tag: nil, namespaces: []namespace.Name{ns},
 	})
 }
 
-// listStacksAll lists the stacks in every namespace that p may read.
+// listStacksAll lists the stacks in every namespace where p holds
+// namespace:read and unit:read, the actions that listStacksIn checks for one
+// namespace. So the list with no organization is the union of the lists of
+// each organization. A denial skips the namespace; any other error of the
+// authorizer fails the request.
 func (h *Handler) listStacksAll(
 	ctx context.Context, w http.ResponseWriter, r *http.Request, p identity.Principal, project stack.ProjectName,
 ) {
@@ -510,22 +514,40 @@ func (h *Handler) listStacksAll(
 	readable := make([]namespace.Name, 0, len(all))
 
 	for i := range all {
-		obj := identity.NamespaceObject(all[i].Name)
-
-		if err := h.authz.Authorize(ctx, p, identity.ActionNamespaceRead, obj); err != nil {
-			if errors.Is(err, identity.ErrDenied) {
-				continue
-			}
-
+		ok, err := h.mayListStacksIn(ctx, p, all[i].Name)
+		if err != nil {
 			h.writeError(ctx, w, err)
 
 			return
 		}
 
-		readable = append(readable, all[i].Name)
+		if ok {
+			readable = append(readable, all[i].Name)
+		}
 	}
 
-	h.serveStackPage(ctx, w, r, stackListQuery{organization: "", project: project, namespaces: readable})
+	h.serveStackPage(ctx, w, r, stackListQuery{organization: "", project: project, tag: nil, namespaces: readable})
+}
+
+// mayListStacksIn reports whether p holds namespace:read and unit:read on the
+// namespace ns. It returns false for a denial, and the error of the
+// authorizer for any other failure.
+func (h *Handler) mayListStacksIn(ctx context.Context, p identity.Principal, ns namespace.Name) (bool, error) {
+	obj := identity.NamespaceObject(ns)
+
+	for _, action := range []identity.Action{identity.ActionNamespaceRead, identity.ActionUnitRead} {
+		err := h.authz.Authorize(ctx, p, action, obj)
+
+		switch {
+		case err == nil:
+		case errors.Is(err, identity.ErrDenied):
+			return false, nil
+		default:
+			return false, fmt.Errorf("authorize %s: %w", action, err)
+		}
+	}
+
+	return true, nil
 }
 
 // summarize converts stacks to the wire shape, never returning nil.
@@ -553,14 +575,11 @@ func (h *Handler) writeNamespaceNotFound(
 	ctx context.Context, w http.ResponseWriter, p identity.Principal, ns namespace.Name, err error,
 ) {
 	if errors.Is(err, namespace.ErrNotFound) && ns.String() == p.Subject {
-		h.writeJSON(ctx, w, http.StatusNotFound, errorResponse{
-			Code: http.StatusNotFound,
-			Message: fmt.Sprintf(
-				"Namespace %q does not exist. Run \"pulumi org set-default %s\" to set the default organization.",
-				ns.String(),
-				ns.String(),
-			),
-		})
+		h.writeFailure(ctx, w, coded(http.StatusNotFound, fmt.Sprintf(
+			"Namespace %q does not exist. Run \"pulumi org set-default %s\" to set the default organization.",
+			ns.String(),
+			ns.String(),
+		), errcode.NamespaceNotFound))
 
 		return
 	}
@@ -580,24 +599,14 @@ func (h *Handler) createStack(w http.ResponseWriter, r *http.Request, p identity
 
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxBodyBytes))
 	if err != nil {
-		h.writeJSON(
-			ctx,
-			w,
-			http.StatusBadRequest,
-			errorResponse{Code: http.StatusBadRequest, Message: invalidBodyMessage},
-		)
+		h.writeInvalidBody(ctx, w)
 
 		return
 	}
 
 	req, err := parseCreateStackRequest(body)
 	if err != nil {
-		h.writeJSON(
-			ctx,
-			w,
-			http.StatusBadRequest,
-			errorResponse{Code: http.StatusBadRequest, Message: invalidBodyMessage},
-		)
+		h.writeInvalidBody(ctx, w)
 
 		return
 	}
@@ -632,12 +641,7 @@ func (h *Handler) updateStackTags(w http.ResponseWriter, r *http.Request, _ iden
 
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxBodyBytes))
 	if err != nil {
-		h.writeJSON(
-			ctx,
-			w,
-			http.StatusBadRequest,
-			errorResponse{Code: http.StatusBadRequest, Message: invalidBodyMessage},
-		)
+		h.writeInvalidBody(ctx, w)
 
 		return
 	}
@@ -647,12 +651,7 @@ func (h *Handler) updateStackTags(w http.ResponseWriter, r *http.Request, _ iden
 	// is a removed tag, and an empty object clears every tag.
 	var tags map[string]string
 	if err := json.Unmarshal(body, &tags); err != nil {
-		h.writeJSON(
-			ctx,
-			w,
-			http.StatusBadRequest,
-			errorResponse{Code: http.StatusBadRequest, Message: invalidBodyMessage},
-		)
+		h.writeInvalidBody(ctx, w)
 
 		return
 	}
@@ -802,24 +801,14 @@ func (h *Handler) renameStack(w http.ResponseWriter, r *http.Request, p identity
 
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxBodyBytes))
 	if err != nil {
-		h.writeJSON(
-			ctx,
-			w,
-			http.StatusBadRequest,
-			errorResponse{Code: http.StatusBadRequest, Message: invalidBodyMessage},
-		)
+		h.writeInvalidBody(ctx, w)
 
 		return
 	}
 
 	req, err := parseRenameStackRequest(body)
 	if err != nil {
-		h.writeJSON(
-			ctx,
-			w,
-			http.StatusBadRequest,
-			errorResponse{Code: http.StatusBadRequest, Message: invalidBodyMessage},
-		)
+		h.writeInvalidBody(ctx, w)
 
 		return
 	}
@@ -917,57 +906,113 @@ type errorResponse struct {
 	Code    int    `json:"code"`
 }
 
-// codedErrorResponse is errorResponse with the stable machine code of a 403.
-// The fields of errorResponse keep their names and their meaning.
+// codedErrorResponse is errorResponse with the stable machine code of the
+// error and its arguments. The fields of errorResponse keep their names and
+// their meaning. An answer without a code has no errorCode and no errorArgs.
 type codedErrorResponse struct {
-	Message   string `json:"message"`
-	Code      int    `json:"code"`
-	ErrorCode string `json:"errorCode"`
+	Message   string         `json:"message"`
+	Code      int            `json:"code"`
+	ErrorCode string         `json:"errorCode,omitempty"`
+	ErrorArgs map[string]any `json:"errorArgs,omitempty"`
+}
+
+// failure is the answer of an error: the HTTP status, the message, and the
+// code of the catalog with its answer. err is the error of errcode.New, or
+// nil.
+type failure struct {
+	err     error
+	answer  errcode.Answer
+	code    string
+	message string
+	status  int
+}
+
+// coded returns the failure of status and message with code, a code of the
+// catalog, and its arguments args.
+func coded(status int, message, code string, args ...errcode.Value) failure {
+	answer, err := errcode.New(code, args...)
+
+	return failure{err: err, answer: answer, code: code, message: message, status: status}
+}
+
+// unmatched returns the failure of a classify function that does not know
+// the error. Its caller gets false with it and tries the next classify
+// function.
+func unmatched() failure {
+	return failure{err: nil, answer: errcode.Answer{}, code: "", message: "", status: 0}
+}
+
+// writeFailure writes the error body of f. When errcode.New refused the code
+// of f or its arguments, which is a bug in this adapter, it answers 500 with
+// server.internal and logs the code.
+func (h *Handler) writeFailure(ctx context.Context, w http.ResponseWriter, f failure) {
+	if f.err != nil {
+		h.logger.ErrorContext(ctx, "error answer is not valid", slog.String("error_code", f.code))
+		h.writeAnswer(ctx, w, http.StatusInternalServerError, "internal error", errcode.Internal())
+
+		return
+	}
+
+	h.writeAnswer(ctx, w, f.status, f.message, f.answer)
+}
+
+// writeAnswer writes the error body of status and message with the code and
+// the arguments of answer.
+func (h *Handler) writeAnswer(
+	ctx context.Context, w http.ResponseWriter, status int, message string, answer errcode.Answer,
+) {
+	h.writeJSON(ctx, w, status, codedErrorResponse{
+		Message: message, Code: status, ErrorCode: answer.Code(), ErrorArgs: answer.Args(),
+	})
 }
 
 func (h *Handler) writeError(ctx context.Context, w http.ResponseWriter, err error) {
-	status, message := classify(err)
+	f := classify(err)
 
+	if f.status == http.StatusInternalServerError {
+		// The log names the status and the code only, never the error text:
+		// the text may hold driver detail, a token, or state.
+		h.logger.ErrorContext(ctx, "request failed", slog.Int("status", f.status), slog.String("error_code", f.code))
+	} else {
+		h.logRefusal(ctx, err)
+	}
+
+	h.writeFailure(ctx, w, f)
+}
+
+// logRefusal logs a refusal that the operator may need to see: a value that
+// does not decrypt, and a write that a newer failover version fenced.
+func (h *Handler) logRefusal(ctx context.Context, err error) {
 	switch {
-	case status == http.StatusInternalServerError:
-		// The log names the status only, never the error text: the text
-		// may hold driver detail, a token, or state (ADR 32 decision 7).
-		h.logger.ErrorContext(ctx, "request failed", slog.Int("status", status))
 	case errors.Is(err, secret.ErrDecrypt):
 		h.logger.WarnContext(ctx, "decrypt failed", slog.String("error", err.Error()))
 	case errors.Is(err, namespace.ErrFenced):
 		h.logger.WarnContext(ctx, "write fenced", slog.String("error", err.Error()))
 	default:
 	}
-
-	if status == http.StatusForbidden {
-		if code := errcode.Forbidden(err); code != "" {
-			h.writeJSON(ctx, w, status, codedErrorResponse{Code: status, Message: message, ErrorCode: code})
-
-			return
-		}
-	}
-
-	h.writeJSON(ctx, w, status, errorResponse{Code: status, Message: message})
 }
 
 // classifyAuth maps the errors of the authentication and the
-// authorization of a request.
-func classifyAuth(err error) (int, string, bool) {
+// authorization of a request. ok is false for any other error.
+func classifyAuth(err error) (failure, bool) {
 	switch {
 	case errors.Is(err, identity.ErrRateLimited):
-		return http.StatusTooManyRequests, "too many failed sign-ins from this address: try again later", true
+		return coded(http.StatusTooManyRequests, "too many failed sign-ins from this address: try again later",
+			errcode.AuthRateLimited), true
 	case errors.Is(err, identity.ErrUnauthenticated), errors.Is(err, token.ErrInvalid),
 		errors.Is(err, stack.ErrAccessTokenUnchecked):
-		return http.StatusUnauthorized, "unauthenticated", true
-	case errors.Is(err, sessionauth.ErrCSRF), errors.Is(err, sessionauth.ErrOtherSite),
-		errors.Is(err, errSessionUpdate), errors.Is(err, errSessionSecrets):
-		return http.StatusForbidden, err.Error(), true
+		return coded(http.StatusUnauthorized, "unauthenticated", errcode.AuthUnauthenticated), true
+	case errors.Is(err, sessionauth.ErrCSRF), errors.Is(err, sessionauth.ErrOtherSite):
+		return coded(http.StatusForbidden, err.Error(), errcode.Forbidden(err)), true
+	case errors.Is(err, errSessionUpdate):
+		return coded(http.StatusForbidden, err.Error(), errcode.UpdateConsoleSession), true
+	case errors.Is(err, errSessionSecrets):
+		return coded(http.StatusForbidden, err.Error(), errcode.SecretConsoleSession), true
 	case errors.Is(err, identity.ErrDenied):
-		return http.StatusForbidden, "forbidden", true
-	default:
-		return 0, "", false
+		return coded(http.StatusForbidden, "forbidden", errcode.Forbidden(err)), true
 	}
+
+	return unmatched(), false
 }
 
 // classify maps domain errors to an HTTP status and a message safe to show callers.
@@ -978,33 +1023,20 @@ func classifyAuth(err error) (int, string, bool) {
 // err.Error() branches echo request names, counts, or backend detail that
 // holds no fingerprint; scopes there are the request's own names, not key
 // material.
-func classify(err error) (int, string) {
-	if status, message, ok := classifyAuth(err); ok {
-		return status, message
+func classify(err error) failure {
+	for _, try := range []func(error) (failure, bool){
+		classifyAuth, classifyNamespace, classifyRequest, classifyStack,
+	} {
+		if f, ok := try(err); ok {
+			return f
+		}
 	}
 
 	switch {
-	case errors.Is(err, errInvalidBody):
-		return http.StatusBadRequest, invalidBodyMessage
-	case errors.Is(err, errRevealPathTooLong), errors.Is(err, errContinuationToken):
-		return http.StatusBadRequest, err.Error()
-	case errors.Is(err, namespace.ErrInvalidName), errors.Is(err, stack.ErrInvalidName),
-		errors.Is(err, identity.ErrInvalidObject), errors.Is(err, stack.ErrInvalidUpdate):
-		return http.StatusBadRequest, err.Error()
-	case errors.Is(err, namespace.ErrNotFound), errors.Is(err, stack.ErrNotFound),
-		errors.Is(err, stack.ErrUpdateNotFound), errors.Is(err, stack.ErrNoState), errors.Is(err, stack.ErrNoStateAt),
-		errors.Is(err, stack.ErrResourceNotFound):
-		return http.StatusNotFound, err.Error()
-	case errors.Is(err, stack.ErrHasResources):
-		return http.StatusBadRequest, hasResourcesMessage
-	case errors.Is(err, namespace.ErrFenced):
-		// The copy of the sentinel only: a wrap adds the name of the
-		// operation, which the log holds.
-		return http.StatusConflict, namespace.ErrFenced.Error()
-	case errors.Is(err, stack.ErrAlreadyExists), errors.Is(err, stack.ErrOtherSecretsProvider):
-		return http.StatusConflict, err.Error()
-	case errors.Is(err, namespace.ErrNotHome):
-		return http.StatusMisdirectedRequest, err.Error()
+	case errors.Is(err, stack.ErrInvalidUpdate):
+		return coded(http.StatusBadRequest, err.Error(), errcode.UpdateInvalid)
+	case errors.Is(err, stack.ErrUpdateNotFound):
+		return coded(http.StatusNotFound, err.Error(), errcode.UpdateNotFound)
 	case errors.Is(err, secret.ErrTooLarge),
 		errors.Is(err, secret.ErrDecrypt),
 		errors.Is(err, secret.ErrKeyNotConfigured):
@@ -1014,60 +1046,194 @@ func classify(err error) (int, string) {
 	}
 }
 
+// classifyNamespace maps the errors of the namespaces. ok is false for any
+// other error.
+func classifyNamespace(err error) (failure, bool) {
+	switch {
+	case errors.Is(err, namespace.ErrInvalidName):
+		return coded(http.StatusBadRequest, err.Error(), errcode.NamespaceInvalidName), true
+	case errors.Is(err, namespace.ErrNotFound):
+		return coded(http.StatusNotFound, err.Error(), errcode.NamespaceNotFound), true
+	case errors.Is(err, namespace.ErrFenced):
+		// The copy of the sentinel only: a wrap adds the name of the
+		// operation, which the log holds.
+		return coded(http.StatusConflict, namespace.ErrFenced.Error(), errcode.NamespaceFenced), true
+	case errors.Is(err, namespace.ErrNotHome):
+		return coded(http.StatusMisdirectedRequest, err.Error(), errcode.NamespaceNotHome), true
+	}
+
+	return unmatched(), false
+}
+
+// classifyStack maps the errors of the stacks. ok is false for any other
+// error.
+func classifyStack(err error) (failure, bool) {
+	switch {
+	case errors.Is(err, stack.ErrInvalidName):
+		return coded(http.StatusBadRequest, err.Error(), errcode.StackInvalidName), true
+	case errors.Is(err, stack.ErrNotFound):
+		return coded(http.StatusNotFound, err.Error(), errcode.StackNotFound), true
+	case errors.Is(err, stack.ErrNoState):
+		return coded(http.StatusNotFound, err.Error(), errcode.StackNoState), true
+	case errors.Is(err, stack.ErrNoStateAt):
+		// A stack with a first state names its time. A stack with no
+		// checkpoint yet has no state at all.
+		if at, ok := errors.AsType[*stack.NoStateAtError](err); ok && !at.First.IsZero() {
+			return coded(http.StatusNotFound, err.Error(), errcode.StackNoStateAtTime,
+				errcode.Time("first", at.First)), true
+		}
+
+		return coded(http.StatusNotFound, err.Error(), errcode.StackNoState), true
+	case errors.Is(err, stack.ErrResourceNotFound):
+		return coded(http.StatusNotFound, err.Error(), errcode.StackResourceNotFound), true
+	case errors.Is(err, stack.ErrHasResources):
+		return coded(http.StatusBadRequest, hasResourcesMessage, errcode.StackHasResources), true
+	case errors.Is(err, stack.ErrAlreadyExists):
+		return coded(http.StatusConflict, err.Error(), errcode.StackAlreadyExists), true
+	case errors.Is(err, stack.ErrOtherSecretsProvider):
+		return coded(http.StatusConflict, err.Error(), errcode.StackOtherSecretsProvider), true
+	}
+
+	return unmatched(), false
+}
+
+// classifyRequest maps the errors of a request that the adapter refuses
+// before a domain package reads it: the body, the reveal path, the query of
+// the stack list and the object reference. ok is false for any other error.
+func classifyRequest(err error) (failure, bool) {
+	switch {
+	case errors.Is(err, errInvalidBody):
+		return coded(http.StatusBadRequest, invalidBodyMessage, errcode.RequestBodyInvalid), true
+	case errors.Is(err, errRevealPathTooLong):
+		return coded(http.StatusBadRequest, err.Error(), errcode.StackRevealPathTooLong,
+			errcode.Quantity("limit", maxRevealPathLen)), true
+	case errors.Is(err, errContinuationToken):
+		return coded(http.StatusBadRequest, err.Error(), errcode.RequestPageTokenInvalid), true
+	case errors.Is(err, errStackTagFilter):
+		return coded(http.StatusBadRequest, err.Error(), errcode.RequestInvalidQuery), true
+	case errors.Is(err, identity.ErrInvalidObject):
+		return coded(http.StatusBadRequest, err.Error(), errcode.RequestInvalidObject), true
+	}
+
+	return unmatched(), false
+}
+
 // classifySecret maps the secrets errors to an HTTP status and a message
 // safe to show callers: a missing key-encryption key is a 500 that names the
 // setting only, an oversized batch is a 413, a decryption failure a 400 with
 // a fixed message and no detail (ADR 23). A missing key wraps both ErrDecrypt
 // and ErrKeyNotConfigured, so the key check runs before the decrypt check.
-func classifySecret(err error) (int, string) {
+func classifySecret(err error) failure {
 	switch {
 	case errors.Is(err, secret.ErrKeyNotConfigured):
-		return http.StatusInternalServerError, secret.ErrKeyNotConfigured.Error()
+		return coded(http.StatusInternalServerError, secret.ErrKeyNotConfigured.Error(), errcode.SecretKeyNotConfigured)
 	case errors.Is(err, secret.ErrTooLarge):
-		return http.StatusRequestEntityTooLarge, err.Error()
+		return coded(http.StatusRequestEntityTooLarge, err.Error(), errcode.SecretTooLarge)
 	case errors.Is(err, secret.ErrDecrypt):
-		return http.StatusBadRequest, decryptFailedMessage
+		return coded(http.StatusBadRequest, decryptFailedMessage, errcode.SecretNotDecrypted)
 	default:
-		return http.StatusInternalServerError, "internal error"
+		return coded(http.StatusInternalServerError, "internal error", errcode.ServerInternal)
 	}
 }
 
-// classifyUpdate maps the errors of the update cycle to an HTTP status and a
-// message safe to show callers.
-func classifyUpdate(err error) (int, string) {
+// updateConflictHint is the command that ends a stuck update. Each answer of
+// stack.ErrUpdateConflict names it.
+const updateConflictHint = "wait for it to end, or run pulumi cancel"
+
+// updateConflictText answers a call that another update of the stack blocks:
+// the sentence of stack.ErrUpdateConflict, the ID of the update that holds the
+// stack when the store names it, and the command that ends a stuck update.
+// The rest of the wrap names the refused update, so it is not sent to the
+// caller.
+func updateConflictText(err error) string {
+	if conflict, ok := errors.AsType[*stack.UpdateConflictError](err); ok {
+		return conflict.Error() + ": " + updateConflictHint
+	}
+
+	return stack.ErrUpdateConflict.Error() + ": " + updateConflictHint
+}
+
+// classifyUpdate maps the errors of the update cycle to an HTTP status, a
+// message safe to show callers and a code. A manual lock comes first: the
+// refusal of a manual lock also wraps stack.ErrUpdateConflict.
+func classifyUpdate(err error) failure {
 	if manual, ok := errors.AsType[*manuallock.LockedError](err); ok {
-		return http.StatusConflict, manual.Error()
+		answer, aerr := refusal.Locked(manual)
+
+		return failure{
+			err: aerr, answer: answer, code: errcode.LockLocked, message: manual.Error(), status: http.StatusConflict,
+		}
+	}
+
+	for _, try := range []func(error) (failure, bool){classifyUpdateState, classifyJournal} {
+		if f, ok := try(err); ok {
+			return f
+		}
 	}
 
 	switch {
-	case errors.Is(err, stack.ErrUpdateConflict), errors.Is(err, stack.ErrWrongUpdateState),
-		errors.Is(err, stack.ErrConcurrentModification), errors.Is(err, stack.ErrInvalidDelta),
-		errors.Is(err, stack.ErrCheckpointConflict), errors.Is(err, stack.ErrStaleCheckpoint),
-		errors.Is(err, stack.ErrJournalConflict), errors.Is(err, stack.ErrJournalIncomplete):
-		return http.StatusConflict, err.Error()
-	case errors.Is(err, stack.ErrJournalBatch):
-		return http.StatusBadRequest, err.Error()
-	case errors.Is(err, stack.ErrLeaseInvalid), errors.Is(err, stack.ErrLeaseExpired):
-		return http.StatusUnauthorized, err.Error()
+	case errors.Is(err, stack.ErrLeaseInvalid):
+		return coded(http.StatusUnauthorized, err.Error(), errcode.UpdateLeaseInvalid)
+	case errors.Is(err, stack.ErrLeaseExpired):
+		return coded(http.StatusUnauthorized, err.Error(), errcode.UpdateLeaseExpired)
 	case errors.Is(err, stack.ErrTooLarge):
 		// A replay bound refusal answers its one-sentence message, which
 		// names the bound, its limit and the one command that helps,
 		// without the update wrapper prefixes. Any other oversized
 		// request answers the error text itself.
 		if msg, ok := stack.TooLargeMessage(err); ok {
-			return http.StatusRequestEntityTooLarge, msg
+			return coded(http.StatusRequestEntityTooLarge, msg, errcode.UpdateTooLarge)
 		}
 
-		return http.StatusRequestEntityTooLarge, err.Error()
+		return coded(http.StatusRequestEntityTooLarge, err.Error(), errcode.UpdateTooLarge)
 	case errors.Is(err, stack.ErrJournalBuildTimeout):
-		return http.StatusServiceUnavailable, err.Error()
+		return coded(http.StatusServiceUnavailable, err.Error(), errcode.JournalBuildTimeout)
 	case errors.Is(err, maintenance.ErrInMaintenance):
-		return http.StatusServiceUnavailable, maintenance.ErrInMaintenance.Error() + ": try again later"
+		return coded(http.StatusServiceUnavailable, maintenance.ErrInMaintenance.Error()+": try again later",
+			errcode.MaintenanceInMaintenance)
 	case errors.Is(err, namespace.ErrUnavailable):
-		return http.StatusServiceUnavailable, namespace.ErrUnavailable.Error() + ": try again"
+		return coded(http.StatusServiceUnavailable, namespace.ErrUnavailable.Error()+": try again",
+			errcode.NamespaceUnavailable)
 	default:
-		return http.StatusInternalServerError, "internal error"
+		return coded(http.StatusInternalServerError, "internal error", errcode.ServerInternal)
 	}
+}
+
+// classifyUpdateState maps the errors of an update that another update
+// blocks, or that changed or holds another state than the request needs. ok is
+// false for any other error.
+func classifyUpdateState(err error) (failure, bool) {
+	switch {
+	case errors.Is(err, stack.ErrUpdateConflict):
+		return coded(http.StatusConflict, updateConflictText(err), errcode.UpdateConflict), true
+	case errors.Is(err, stack.ErrWrongUpdateState):
+		return coded(http.StatusConflict, err.Error(), errcode.UpdateWrongState), true
+	case errors.Is(err, stack.ErrConcurrentModification):
+		return coded(http.StatusConflict, err.Error(), errcode.UpdateConcurrentModification), true
+	case errors.Is(err, stack.ErrInvalidDelta):
+		return coded(http.StatusConflict, err.Error(), errcode.UpdateDeltaInvalid), true
+	case errors.Is(err, stack.ErrCheckpointConflict):
+		return coded(http.StatusConflict, err.Error(), errcode.UpdateCheckpointConflict), true
+	case errors.Is(err, stack.ErrStaleCheckpoint):
+		return coded(http.StatusConflict, err.Error(), errcode.UpdateCheckpointStale), true
+	}
+
+	return unmatched(), false
+}
+
+// classifyJournal maps the errors of the update journal. ok is false for any
+// other error.
+func classifyJournal(err error) (failure, bool) {
+	switch {
+	case errors.Is(err, stack.ErrJournalConflict):
+		return coded(http.StatusConflict, err.Error(), errcode.JournalConflict), true
+	case errors.Is(err, stack.ErrJournalIncomplete):
+		return coded(http.StatusConflict, err.Error(), errcode.JournalIncomplete), true
+	case errors.Is(err, stack.ErrJournalBatch):
+		return coded(http.StatusBadRequest, err.Error(), errcode.JournalBatchInvalid), true
+	}
+
+	return unmatched(), false
 }
 
 func (h *Handler) writeJSON(ctx context.Context, w http.ResponseWriter, status int, body any) {

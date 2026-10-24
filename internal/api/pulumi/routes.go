@@ -3,12 +3,14 @@ package pulumi
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"strings"
 
 	"opendustpan.org/opendustpan/internal/sessionauth"
+	"opendustpan.org/opendustpan/internal/token"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -46,6 +48,22 @@ type ObjectResolver func(w http.ResponseWriter, r *http.Request) (identity.Objec
 // resolved object.
 type RouteHandler func(w http.ResponseWriter, r *http.Request, p identity.Principal, obj identity.Object)
 
+// LeaseCall is the update that a lease route acts on, as the registration
+// wrapper read it from the request: the lease token, the stack and the update
+// ID. A lease handler never parses them again. The token redacts itself in
+// every format and log value, so a LeaseCall never shows the token; a handler
+// that must send the token back calls Token.Reveal.
+type LeaseCall struct {
+	Token token.Token
+	Ref   stack.Ref
+	ID    stack.UpdateID
+}
+
+// LeaseHandler serves a lease route after the registration wrapper has
+// parsed its lease token and update, and checked the address gate when one is
+// configured. The update service checks the lease itself.
+type LeaseHandler func(w http.ResponseWriter, r *http.Request, call LeaseCall)
+
 // Route declares one endpoint: its ServeMux pattern, how it is protected,
 // the actions it needs, how to resolve the object of each action from the
 // request, and how to serve it. NewHandler registers every route from the
@@ -67,7 +85,11 @@ type Route struct {
 	// routes set it.
 	Resolve ObjectResolver
 	// Serve handles the request after the wrapper has enforced the row.
+	// Every route sets it, except lease routes.
 	Serve RouteHandler
+	// Lease handles a lease route after the wrapper has parsed its
+	// lease. Only lease routes set it, instead of Serve.
+	Lease LeaseHandler
 }
 
 // buildRoutes returns the route table. It is the single source of the
@@ -96,7 +118,8 @@ func (h *Handler) updateJournalRoutes() []Route {
 			Scope:   ScopeUpdateLease,
 			Actions: []identity.Action{identity.ActionUnitWrite},
 			Resolve: resolveGetStack,
-			Serve:   h.journalEntries,
+			Serve:   nil,
+			Lease:   h.journalEntries,
 		},
 	}
 }
@@ -111,6 +134,7 @@ func (h *Handler) baseRoutes() []Route {
 			Actions: nil,
 			Resolve: nil,
 			Serve:   h.capabilities,
+			Lease:   nil,
 		},
 		{
 			Method: http.MethodGet,
@@ -124,6 +148,7 @@ func (h *Handler) baseRoutes() []Route {
 			Actions: []identity.Action{identity.ActionCallerRead},
 			Resolve: resolveCurrentUser,
 			Serve:   h.currentUser,
+			Lease:   nil,
 		},
 		{
 			Method: http.MethodGet,
@@ -136,6 +161,7 @@ func (h *Handler) baseRoutes() []Route {
 			Actions: []identity.Action{identity.ActionCallerRead},
 			Resolve: resolveCurrentUser,
 			Serve:   h.defaultOrganization,
+			Lease:   nil,
 		},
 		{
 			Method: http.MethodGet,
@@ -150,6 +176,7 @@ func (h *Handler) baseRoutes() []Route {
 			Actions: []identity.Action{identity.ActionCallerRead},
 			Resolve: resolveListStacks,
 			Serve:   h.listStacks,
+			Lease:   nil,
 		},
 	}
 }
@@ -164,6 +191,7 @@ func (h *Handler) stackRoutes() []Route {
 			Actions: []identity.Action{identity.ActionUnitManage},
 			Resolve: resolveCreateStack,
 			Serve:   h.createStack,
+			Lease:   nil,
 		},
 		{
 			Method:  http.MethodGet,
@@ -172,6 +200,7 @@ func (h *Handler) stackRoutes() []Route {
 			Actions: []identity.Action{identity.ActionUnitRead},
 			Resolve: resolveGetStack,
 			Serve:   h.getStack,
+			Lease:   nil,
 		},
 		{
 			Method:  http.MethodDelete,
@@ -180,6 +209,7 @@ func (h *Handler) stackRoutes() []Route {
 			Actions: []identity.Action{identity.ActionUnitManage},
 			Resolve: resolveGetStack,
 			Serve:   h.deleteStack,
+			Lease:   nil,
 		},
 		{
 			Method: http.MethodPost,
@@ -191,6 +221,7 @@ func (h *Handler) stackRoutes() []Route {
 			Actions: []identity.Action{identity.ActionUnitManage},
 			Resolve: resolveGetStack,
 			Serve:   h.renameStack,
+			Lease:   nil,
 		},
 		{
 			Method: http.MethodPatch,
@@ -202,6 +233,7 @@ func (h *Handler) stackRoutes() []Route {
 			Actions: []identity.Action{identity.ActionUnitWrite},
 			Resolve: resolveGetStack,
 			Serve:   h.updateStackTags,
+			Lease:   nil,
 		},
 	}
 }
@@ -220,6 +252,7 @@ func (h *Handler) secretRoutes() []Route {
 			Actions: []identity.Action{identity.ActionUnitEncrypt},
 			Resolve: resolveGetStack,
 			Serve:   h.refuseSession(errSessionSecrets, h.encryptValue),
+			Lease:   nil,
 		},
 		{
 			Method:  http.MethodPost,
@@ -228,6 +261,7 @@ func (h *Handler) secretRoutes() []Route {
 			Actions: []identity.Action{identity.ActionUnitEncrypt},
 			Resolve: resolveGetStack,
 			Serve:   h.refuseSession(errSessionSecrets, h.batchEncrypt),
+			Lease:   nil,
 		},
 		{
 			Method:  http.MethodPost,
@@ -236,6 +270,7 @@ func (h *Handler) secretRoutes() []Route {
 			Actions: []identity.Action{identity.ActionUnitDecrypt},
 			Resolve: resolveGetStack,
 			Serve:   h.refuseSession(errSessionSecrets, h.decryptValue),
+			Lease:   nil,
 		},
 		{
 			Method:  http.MethodPost,
@@ -244,6 +279,7 @@ func (h *Handler) secretRoutes() []Route {
 			Actions: []identity.Action{identity.ActionUnitDecrypt},
 			Resolve: resolveGetStack,
 			Serve:   h.refuseSession(errSessionSecrets, h.batchDecrypt),
+			Lease:   nil,
 		},
 		{
 			Method:  http.MethodPost,
@@ -252,6 +288,7 @@ func (h *Handler) secretRoutes() []Route {
 			Actions: []identity.Action{identity.ActionUnitDecrypt},
 			Resolve: resolveGetStack,
 			Serve:   h.refuseSession(errSessionSecrets, h.logDecryption),
+			Lease:   nil,
 		},
 		{
 			Method:  http.MethodPost,
@@ -260,6 +297,7 @@ func (h *Handler) secretRoutes() []Route {
 			Actions: []identity.Action{identity.ActionUnitDecrypt},
 			Resolve: resolveGetStack,
 			Serve:   h.refuseSession(errSessionSecrets, h.logBatchDecryption),
+			Lease:   nil,
 		},
 	}
 }
@@ -288,6 +326,7 @@ func (h *Handler) updateCreateRoutes() []Route {
 			Actions: []identity.Action{identity.ActionUnitWrite},
 			Resolve: resolveGetStack,
 			Serve:   h.refuseSession(errSessionUpdate, h.createUpdateHandler(k.kind)),
+			Lease:   nil,
 		})
 	}
 
@@ -317,6 +356,7 @@ func (h *Handler) updateLeaseRoutes() []Route {
 			Actions: []identity.Action{identity.ActionUnitWrite},
 			Resolve: resolveGetStack,
 			Serve:   h.refuseSession(errSessionUpdate, h.startUpdate),
+			Lease:   nil,
 		},
 		{
 			Method:  http.MethodPost,
@@ -324,7 +364,8 @@ func (h *Handler) updateLeaseRoutes() []Route {
 			Scope:   ScopeUpdateLease,
 			Actions: []identity.Action{identity.ActionUnitWrite},
 			Resolve: resolveGetStack,
-			Serve:   h.renewLease,
+			Serve:   nil,
+			Lease:   h.renewLease,
 		},
 		{
 			Method:  http.MethodPost,
@@ -332,7 +373,8 @@ func (h *Handler) updateLeaseRoutes() []Route {
 			Scope:   ScopeUpdateLease,
 			Actions: []identity.Action{identity.ActionUnitWrite},
 			Resolve: resolveGetStack,
-			Serve:   h.recordEvents,
+			Serve:   nil,
+			Lease:   h.recordEvents,
 		},
 		{
 			Method:  http.MethodPost,
@@ -340,7 +382,8 @@ func (h *Handler) updateLeaseRoutes() []Route {
 			Scope:   ScopeUpdateLease,
 			Actions: []identity.Action{identity.ActionUnitWrite},
 			Resolve: resolveGetStack,
-			Serve:   h.completeUpdate,
+			Serve:   nil,
+			Lease:   h.completeUpdate,
 		},
 	}
 }
@@ -358,7 +401,8 @@ func (h *Handler) updateCheckpointRoutes() []Route {
 			Scope:   ScopeUpdateLease,
 			Actions: []identity.Action{identity.ActionUnitWrite},
 			Resolve: resolveGetStack,
-			Serve:   h.saveCheckpoint,
+			Serve:   nil,
+			Lease:   h.saveCheckpoint,
 		},
 		{
 			// The first save of an update with the delta capability is a
@@ -369,7 +413,8 @@ func (h *Handler) updateCheckpointRoutes() []Route {
 			Scope:   ScopeUpdateLease,
 			Actions: []identity.Action{identity.ActionUnitWrite},
 			Resolve: resolveGetStack,
-			Serve:   h.saveCheckpointVerbatim,
+			Serve:   nil,
+			Lease:   h.saveCheckpointVerbatim,
 		},
 		{
 			// Later saves with the delta capability carry only the edits
@@ -380,7 +425,8 @@ func (h *Handler) updateCheckpointRoutes() []Route {
 			Scope:   ScopeUpdateLease,
 			Actions: []identity.Action{identity.ActionUnitWrite},
 			Resolve: resolveGetStack,
-			Serve:   h.saveCheckpointDelta,
+			Serve:   nil,
+			Lease:   h.saveCheckpointDelta,
 		},
 	}
 }
@@ -396,6 +442,7 @@ func (h *Handler) updateReadRoutes() []Route {
 			Actions: []identity.Action{identity.ActionUnitRead},
 			Resolve: resolveGetStack,
 			Serve:   h.getUpdate,
+			Lease:   nil,
 		},
 		{
 			Method:  http.MethodGet,
@@ -404,6 +451,7 @@ func (h *Handler) updateReadRoutes() []Route {
 			Actions: []identity.Action{identity.ActionUnitRead},
 			Resolve: resolveGetStack,
 			Serve:   h.listHistory,
+			Lease:   nil,
 		},
 		{
 			Method:  http.MethodGet,
@@ -412,6 +460,7 @@ func (h *Handler) updateReadRoutes() []Route {
 			Actions: []identity.Action{identity.ActionUnitRead},
 			Resolve: resolveGetStack,
 			Serve:   h.exportStack,
+			Lease:   nil,
 		},
 	}
 }
@@ -428,6 +477,7 @@ func (h *Handler) updateImportExportRoutes() []Route {
 			Actions: []identity.Action{identity.ActionUnitWrite},
 			Resolve: resolveGetStack,
 			Serve:   h.importStack,
+			Lease:   nil,
 		},
 		{
 			Method:  http.MethodGet,
@@ -436,6 +486,7 @@ func (h *Handler) updateImportExportRoutes() []Route {
 			Actions: []identity.Action{identity.ActionUnitRead},
 			Resolve: resolveGetStack,
 			Serve:   h.exportStackVersion,
+			Lease:   nil,
 		},
 	}
 }
@@ -452,6 +503,7 @@ func (h *Handler) updateCancelRoute() Route {
 		Actions: []identity.Action{identity.ActionUnitWrite},
 		Resolve: resolveGetStack,
 		Serve:   h.cancelUpdate,
+		Lease:   nil,
 	}
 }
 
@@ -466,6 +518,7 @@ func (h *Handler) updateRestoreRoute() Route {
 		Actions: []identity.Action{identity.ActionUnitWrite},
 		Resolve: resolveGetStack,
 		Serve:   h.restoreStack,
+		Lease:   nil,
 	}
 }
 
@@ -635,16 +688,25 @@ func (h *Handler) enforcePublic(route Route) http.HandlerFunc {
 
 // enforceLease serves a lease route: the update lease token stands in for the
 // declared actions, so the Authorizer does not run. The checks run in order:
-// the scheme check, Resolve, the token check, the address gate, then the
-// handler. The address gate runs after the token check, so a caller without
-// the token gets the same answer whether or not the namespace has a list.
-// The update service checks the access token that started the update.
+// the scheme check, Resolve, the parse of the token and the update, the
+// address gate, then the handler. The address gate runs after the token
+// check, so a caller without the token gets the same answer whether or not
+// the namespace has a list. The update service checks the lease and the
+// access token that started the update.
 func (h *Handler) enforceLease(route Route) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
 
 		if _, ok := strings.CutPrefix(r.Header.Get("Authorization"), updateTokenScheme); !ok {
 			h.writeError(ctx, w, identity.ErrUnauthenticated)
+
+			return
+		}
+
+		if route.Lease == nil {
+			// Fail closed: a lease row without a lease handler is a bug in
+			// the table, and the route test refuses it too.
+			h.writeError(ctx, w, errNoLeaseHandler)
 
 			return
 		}
@@ -656,38 +718,54 @@ func (h *Handler) enforceLease(route Route) http.HandlerFunc {
 			return
 		}
 
-		if !h.checkLeaseAddress(w, r, obj) {
+		call, ok := h.leaseCall(w, r)
+		if !ok {
 			return
 		}
 
-		var guest identity.Principal
+		if !h.checkLeaseAddress(w, r, obj, call) {
+			return
+		}
 
-		route.Serve(w, r, guest, obj)
+		route.Lease(w, r, call)
 	}
 }
 
-// checkLeaseAddress verifies the lease token of the update in r, then checks
-// the client address against the allowlist of the namespace of obj. It writes
-// the error answer and returns false on failure. Without a gate it returns
-// true and reads no store.
-func (h *Handler) checkLeaseAddress(w http.ResponseWriter, r *http.Request, obj identity.Object) bool {
+// errNoLeaseHandler is the internal error of a lease route without a lease
+// handler.
+var errNoLeaseHandler = errors.New("lease route has no lease handler")
+
+// leaseCall parses the lease token and the update of a lease route. A
+// missing or malformed token answers 401 and a malformed update path 4xx.
+// leaseCall itself reads no store; the resolver of the route ran before it.
+func (h *Handler) leaseCall(w http.ResponseWriter, r *http.Request) (LeaseCall, bool) {
+	var none LeaseCall
+
+	tok, ok := h.leaseToken(w, r)
+	if !ok {
+		return none, false
+	}
+
+	ref, id, ok := h.updateTarget(w, r)
+	if !ok {
+		return none, false
+	}
+
+	return LeaseCall{Token: tok, Ref: ref, ID: id}, true
+}
+
+// checkLeaseAddress verifies the lease of call, then checks the client
+// address against the allowlist of the namespace of obj. It writes the error
+// answer and returns false on failure. Without a gate it returns true and
+// reads no store.
+func (h *Handler) checkLeaseAddress(w http.ResponseWriter, r *http.Request, obj identity.Object, call LeaseCall) bool {
 	if h.addressGate == nil {
 		return true
 	}
 
 	ctx := r.Context()
 
-	tok, _, ok := h.leaseToken(w, r)
-	if !ok {
-		return false
-	}
-
-	ref, id, ok := h.updateTarget(w, r)
-	if !ok {
-		return false
-	}
-
-	if err := h.updates.CheckLease(ctx, ref, id, tok); err != nil {
+	if err := h.updates.CheckLease(ctx, call.Ref, call.ID, call.Token); err != nil {
 		h.writeError(ctx, w, err)
 
 		return false

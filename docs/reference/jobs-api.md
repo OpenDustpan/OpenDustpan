@@ -41,7 +41,7 @@ steps or the profile of a job. The server sets them.
 | `unit` | `tool` (`opentofu`) and `name`: the workspace to plan. The name has no control character. |
 | `operation` | `plan`. Any other operation fails with 422 and the code `job.unsupported`. |
 | `pool` | Optional. The name of a runner pool of the namespace. The pool runs jobs, not sweeps. With no pool, the server uses the only pool of the namespace that runs jobs. A namespace with no such pool, or with more than one, fails the start with 422 and the code `job.unsupported`. A request that names a pool also needs `namespace:manage-runners` on the namespace. |
-| `location` | Where the program and the config are in git. Give `repository` and `ref`. The fields `connection`, `directory` and `revision` are optional. The directory is relative and stays in the repository. The revision is a commit ID. A request with no location fails with 422 and the code `job.unsupported`, because the server keeps no code location of a workspace yet. A request that names a location also needs `unit:define-steps` on the workspace. A `connection` must belong to the namespace. The server keeps no connections in this version, so a request that names one gets the same 403 as a refused workspace. |
+| `location` | Where the program and the config are in git. Give `repository` and `ref`. The fields `connection`, `directory` and `revision` are optional. The directory is relative and stays in the repository. The revision is a commit ID. The `repository` is a path such as `acme/infra`, or an `https://` URL with no user name, password, query or fragment. Any other form fails with 400 and the code `job.invalid`. The error does not repeat the value. Other forms include `ssh://`, `file://`, `git@host:r.git`, and an `https://` URL with a user name or a password. The credential helper of the runner pool gives the credentials for the code. A request with no location fails with 422 and the code `job.unsupported`, because the server keeps no code location of a workspace yet. A request that names a location also needs `unit:define-steps` on the workspace. A `connection` must belong to the namespace. The server keeps no connections in this version, so a request that names one gets the same 403 as a refused workspace. |
 | `reason` | Optional text for the audit entry. It has at most 500 characters and no control character. |
 
 The job service does these checks in this order, and fails closed at each one:
@@ -136,7 +136,7 @@ The `errorCode` is a stable code for a program.
 | `state` | `queued`, `awaiting-approval`, `dispatched`, `running`, `canceling`, `awaiting-state`, `succeeded`, `failed`, `canceled`, `rejected` or `expired` |
 | `wait` | Why a queued job does not dispatch: `unit-busy`, `frozen` or `locked`. The field is not there when nothing holds the job. |
 | `reason` | Why a job that ended did end. The field is not there for a job that runs. |
-| `location` | Where the program and the config of the stack or workspace are in git: `connection`, `repository`, `ref`, `directory` and `revision` |
+| `location` | Where the program and the config of the stack or workspace are in git: `connection`, `repository`, `ref`, `directory` and `revision`. A stored `repository` that the server does not accept is answered empty, so the answer never holds credentials. |
 | `pool` | The runner pool of a runner job |
 | `steps` | The steps of a runner job. Each step has `name`, `role`, `phase` and `changesResources`. |
 | `phases` | The phases of the job, in order (see below) |
@@ -144,6 +144,7 @@ The `errorCode` is a stable code for a program.
 | `startedBy`, `agent`, `agentMode` | Who started the job, and the agent that acted for them |
 | `source` | Where the start came from: `api`, `agent`, `catalog`, `forge`, `schedule` or `trigger` |
 | `breakGlass` | `reason` and `freeze`, when the job started through an active change freeze |
+| `trigger` | `id` of the trigger that started the job, and `saver`, the subject of its last saver at the start. The field is not there when no trigger started the job. See the [triggers guide](../guides/run-triggers.md). |
 | `delivery` | The result of the deliver phase of a write-back job |
 | `closed` | The state version that ended a write-back job |
 | `verification` | `pending`, `verified` or `unverified`, after the job closed |

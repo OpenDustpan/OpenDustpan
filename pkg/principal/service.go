@@ -199,6 +199,10 @@ func (s *Service) UpdatePrincipal(ctx context.Context, e audit.Entry, id string,
 		return Principal{}, fmt.Errorf("update principal %q: %w", id, err)
 	}
 
+	if err := refuseNamespaceServiceSubject(p.Subject); err != nil {
+		return Principal{}, fmt.Errorf("update principal %q: %w", id, err)
+	}
+
 	if c.DisplayName != nil {
 		p.DisplayName = *c.DisplayName
 		if p.DisplayName == "" {
@@ -234,6 +238,10 @@ func (s *Service) DeletePrincipal(ctx context.Context, e audit.Entry, caller ide
 		return fmt.Errorf("delete principal %q: %w", id, err)
 	}
 
+	if err = refuseNamespaceServiceSubject(p.Subject); err != nil {
+		return fmt.Errorf("delete principal %q: %w", id, err)
+	}
+
 	if p.Namespace == "" {
 		err = s.store.DeletePrincipal(ctx, id, change(e, s.Now(), Ref(id)))
 	} else {
@@ -257,6 +265,10 @@ func (s *Service) EnablePrincipal(
 		return fmt.Errorf("enable principal %q: %w", id, err)
 	}
 
+	if err := s.refuseServiceRecord(ctx, id); err != nil {
+		return fmt.Errorf("enable principal %q: %w", id, err)
+	}
+
 	if err := s.store.EnablePrincipal(ctx, id, change(e, s.Now(), Ref(id))); err != nil {
 		return fmt.Errorf("enable principal %q: %w", id, err)
 	}
@@ -276,6 +288,10 @@ func (s *Service) DisablePrincipal(
 	ctx context.Context, e audit.Entry, caller identity.Principal, id string,
 ) error {
 	if err := s.checkPrincipal(ctx, caller, id); err != nil {
+		return fmt.Errorf("disable principal %q: %w", id, err)
+	}
+
+	if err := s.refuseServiceRecord(ctx, id); err != nil {
 		return fmt.Errorf("disable principal %q: %w", id, err)
 	}
 
@@ -416,18 +432,9 @@ func (s *Service) AddMember(
 		return Membership{}, fmt.Errorf("add principal %q to group %q: %w", principalID, groupID, err)
 	}
 
-	kind := Kind("")
-	if p, err := s.store.GetPrincipal(ctx, principalID); err != nil {
-		if !errors.Is(err, ErrNotFound) {
-			return Membership{}, fmt.Errorf("add principal %q to group %q: %w", principalID, groupID, err)
-		}
-	} else {
-		if p.Namespace != "" {
-			return Membership{}, fmt.Errorf("add principal %q to group %q: %w: a principal of a namespace cannot be "+
-				"a member of a group, because a group belongs to the whole installation", principalID, groupID, ErrInvalid)
-		}
-
-		kind = p.Kind
+	kind, kindErr := s.memberKind(ctx, principalID)
+	if kindErr != nil {
+		return Membership{}, fmt.Errorf("add principal %q to group %q: %w", principalID, groupID, kindErr)
 	}
 
 	m := Membership{
@@ -578,6 +585,14 @@ func (s *Service) SignInPrincipal(ctx context.Context, e audit.Entry, in SignInI
 		)
 	}
 
+	// Defense in depth: Validate refuses the subject of the namespace service
+	// principal too, but only for a principal that this call makes. This
+	// check runs before the read, so a record of another version never signs
+	// in.
+	if err := refuseNamespaceServiceSubject(in.Subject); err != nil {
+		return Principal{}, false, err
+	}
+
 	return s.signIn(ctx, e, in, Principal.Validate)
 }
 
@@ -638,6 +653,51 @@ func (s *Service) signIn(
 	}
 
 	return p, true, nil
+}
+
+// memberKind returns the kind of the principal with the ID principalID, for
+// the add of a member, and empty when no such principal exists: the store
+// refuses the membership then. It refuses a principal that cannot be a
+// member of a group: a principal of a namespace, and a record with the
+// subject of the namespace service principal.
+func (s *Service) memberKind(ctx context.Context, principalID string) (Kind, error) {
+	p, err := s.store.GetPrincipal(ctx, principalID)
+	if errors.Is(err, ErrNotFound) {
+		return "", nil
+	}
+
+	if err != nil {
+		return "", err
+	}
+
+	if refuseErr := refuseNamespaceServiceSubject(p.Subject); refuseErr != nil {
+		return "", refuseErr
+	}
+
+	if p.Namespace != "" {
+		return "", fmt.Errorf("%w: a principal of a namespace cannot be a member of a group, "+
+			"because a group belongs to the whole installation", ErrInvalid)
+	}
+
+	return p.Kind, nil
+}
+
+// refuseServiceRecord returns ErrReservedSubject when the principal with the
+// ID id exists and has the subject of a namespace service principal. No record
+// should have it, so no API changes one that a restore or a row of another
+// version put in the store. An unknown principal returns nil: the store
+// reports it.
+func (s *Service) refuseServiceRecord(ctx context.Context, id string) error {
+	p, err := s.store.GetPrincipal(ctx, id)
+	if errors.Is(err, ErrNotFound) {
+		return nil
+	}
+
+	if err != nil {
+		return fmt.Errorf("get principal %q: %w", id, err)
+	}
+
+	return refuseNamespaceServiceSubject(p.Subject)
 }
 
 // checkGroup asks the Guard whether caller may change who holds the grants

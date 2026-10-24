@@ -50,6 +50,10 @@ type fakeUnits struct {
 	writeErr error
 	// lockErr, when set, is what LockWithIDForJob answers.
 	lockErr error
+	// admitErr, when set, is what AdmitFirstWrite and AdmitFirstLock answer.
+	admitErr error
+	// created counts the calls of Create that made the unit.
+	created int
 	// lockJobs holds the job ID of each lock request.
 	lockJobs []string
 	// forced holds the audit entry template of each force-unlock.
@@ -78,6 +82,8 @@ func newFakeUnits(exists bool) *fakeUnits {
 		createErr: nil,
 		writeErr:  nil,
 		lockErr:   nil,
+		admitErr:  nil,
+		created:   0,
 		lockJobs:  nil,
 		forced:    nil,
 	}
@@ -116,8 +122,19 @@ func (f *fakeUnits) Create(_ context.Context, _ workspace.Ref) (workspace.Worksp
 	}
 
 	f.exists = true
+	f.created++
 
 	return f.ws, nil
+}
+
+// AdmitFirstWrite answers admitErr, or nil.
+func (f *fakeUnits) AdmitFirstWrite(_ context.Context, _ workspace.Ref, _ workspace.StreamInput) error {
+	return f.admitErr
+}
+
+// AdmitFirstLock answers admitErr, or nil.
+func (f *fakeUnits) AdmitFirstLock(_ context.Context, _ workspace.Ref, _ workspace.LockRequest) error {
+	return f.admitErr
 }
 
 // LockWithIDForJob takes the lock under lockID, or answers ErrLocked. It keeps
@@ -697,6 +714,81 @@ func TestWriteRefusalStatuses(t *testing.T) {
 	}
 }
 
+// TestWriteRefusalTexts proves that each cause of a refused write has its own
+// text: a write with no lock says to send LOCK and names the switches, a
+// forced write names the forced-write switches, and a client-encrypted state
+// says why the server cannot fence it. No text of the store reaches the
+// client.
+func TestWriteRefusalTexts(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		err  error
+		want []string
+	}{
+		{
+			name: "no lock and the switch off",
+			err: workspace.NewOverrideRefusedError(
+				workspace.OverrideUnlocked, "store text: secret detail", workspace.ErrNotLocked,
+			),
+			want: []string{
+				"workspace is not locked: send LOCK first",
+				"PUT /api/server/namespaces/{namespace}/override-switches", "unit:write-unlocked",
+			},
+		},
+		{
+			name: "no lock",
+			err:  fmt.Errorf("write acme/web: %w", workspace.ErrNotLocked),
+			want: []string{"workspace is not locked: send LOCK first"},
+		},
+		{
+			name: "forced write",
+			err:  workspace.NewOverrideRefusedError(workspace.OverrideForced, "store text: secret detail"),
+			want: []string{
+				"write refused: a forced write needs the forced-write switch",
+				"PUT /api/v2/workspaces/{id}/override-switches", "unit:write-forced",
+			},
+		},
+		{
+			name: "client-encrypted state",
+			err:  fmt.Errorf("store text: secret detail: %w", workspace.ErrClientEncrypted),
+			want: []string{"the state is encrypted by the client, so the server cannot fence it"},
+		},
+		{
+			name: "another override",
+			err:  workspace.ErrOverrideRefused,
+			want: []string{"write refused: an override is off or not granted"},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			units := newFakeUnits(true)
+			units.writeErr = tc.err
+			h := newTestHandler(t, units)
+
+			rec := do(h, http.MethodPost, unitPath, `{"serial":1,"lineage":"l"}`, bearer(adminToken))
+			if rec.Code != http.StatusForbidden {
+				t.Fatalf("status %d, want 403; body %q", rec.Code, rec.Body.String())
+			}
+
+			body := rec.Body.String()
+			for _, want := range tc.want {
+				if !strings.Contains(body, want) {
+					t.Errorf("body %q, want it to hold %q", body, want)
+				}
+			}
+
+			if strings.Contains(body, "secret detail") {
+				t.Errorf("body %q holds the text of the store", body)
+			}
+		})
+	}
+}
+
 // TestFencedWriteStatuses proves a fenced LOCK answers 503 with a Retry-After
 // time, and a fenced state write answers 409. OpenTofu reads a 409 on LOCK as
 // a lock that another client holds, and it retries a 503, which reads the
@@ -888,4 +980,86 @@ func TestRefusedUnlockedWriteIsAudited(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestRefusedFirstRequestCreatesNoUnit proves that the handler creates the unit
+// for a first LOCK or POST only when the admission checks of the service pass:
+// a refusal answers its status and the unit does not exist.
+func TestRefusedFirstRequestCreatesNoUnit(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name   string
+		method string
+		path   string
+		body   string
+		refuse error
+		want   int
+	}{
+		{
+			"POST with no lock",
+			http.MethodPost,
+			unitPath,
+			`{"serial":1,"lineage":"l"}`,
+			workspace.ErrOverrideRefused,
+			http.StatusForbidden,
+		},
+		{
+			"POST that names a lock",
+			http.MethodPost,
+			unitPath + "?ID=x",
+			`{"serial":1,"lineage":"l"}`,
+			workspace.ErrLockMismatch,
+			http.StatusConflict,
+		},
+		{"LOCK under a manual lock", "LOCK", unitPath, lockBody(lockOne, "ci"), workspace.ErrLocked, http.StatusLocked},
+		{
+			"LOCK with a bad lock ID",
+			"LOCK",
+			unitPath,
+			lockBody("a b", "ci"),
+			workspace.ErrInvalidLockID,
+			http.StatusBadRequest,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			units := newFakeUnits(false)
+			units.admitErr = tc.refuse
+			h := newTestHandler(t, units)
+
+			rec := do(h, tc.method, tc.path, tc.body, bearer(adminToken))
+			if rec.Code != tc.want {
+				t.Fatalf("%s: status %d, want %d: %s", tc.method, rec.Code, tc.want, rec.Body.String())
+			}
+
+			if units.exists || units.created != 0 {
+				t.Fatalf("a refused %s created the unit (created %d)", tc.method, units.created)
+			}
+		})
+	}
+}
+
+// TestLockedBodyNamesTheRefusingLock proves that a refused LOCK answers with
+// the lock that the refusal names, also when a later read of the unit would
+// see another lock: the answer and the refusal come from one revision.
+func TestLockedBodyNamesTheRefusingLock(t *testing.T) {
+	t.Parallel()
+
+	units := newFakeUnits(true)
+	units.ws.Lock = workspace.Lock{LockedAt: time.Now().UTC(), ID: "lock-now", Holder: "carol", Reason: ""}
+	units.lockErr = &workspace.LockRefusedError{
+		Lock: workspace.Lock{LockedAt: time.Now().UTC(), ID: "lock-dana", Holder: "dana", Reason: ""},
+		Err:  workspace.ErrLocked,
+	}
+
+	rec := do(newTestHandler(t, units), "LOCK", unitPath, lockBody("lock-two", "bob"), bearer(userToken))
+	if rec.Code != http.StatusLocked {
+		t.Fatalf("LOCK of a held unit: status %d, want 423", rec.Code)
+	}
+
+	assertLockBody(t, rec.Body.Bytes(), "lock-dana", "dana")
 }

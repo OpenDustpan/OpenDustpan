@@ -44,3 +44,9 @@ type SettingWrite struct {
 func WriteSettingInTx(ctx context.Context, s *Store, w SettingWrite) error {
 	return outputSharingSettings{s: s}.writeSetting(ctx, w.Namespace, w.Value, w.Fence, w.Entry)
 }
+
+// SetBetweenPageReads sets the hook that QueryStacks and QueryUnits run after
+// the statement of the page and before the statement of its tags or labels.
+func SetBetweenPageReads(s *Store, hook func(ctx context.Context)) {
+	s.betweenPageReads = hook
+}

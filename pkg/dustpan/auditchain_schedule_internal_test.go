@@ -15,6 +15,7 @@ import (
 
 	"opendustpan.org/opendustpan/internal/metrics"
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/store/sqlite"
 )
@@ -55,6 +56,58 @@ func newInstanceChain(t *testing.T, st *sqlite.Store) *auditChain {
 	}
 
 	return chain
+}
+
+// errBlobList is the failure of failingListBlobs.
+var errBlobList = errors.New("blob list fails")
+
+// failingListBlobs is a blob store whose List fails. It counts the calls of
+// List, so a test can prove that it read the epochs.
+type failingListBlobs struct {
+	blob.Store
+
+	lists *atomic.Int64
+}
+
+func (b failingListBlobs) List(context.Context, string) ([]blob.Object, error) {
+	b.lists.Add(1)
+
+	return nil, errBlobList
+}
+
+// TestAuditChainGaugeKeepsTheMarksWhenTheEpochCannotBeRead proves that a
+// scrape that cannot read the current checkpoint epoch keeps the alarm: the
+// gauge counts the marks of the newest epoch, and a stored result of 0 does
+// not clear it.
+func TestAuditChainGaugeKeepsTheMarksWhenTheEpochCannotBeRead(t *testing.T) {
+	t.Parallel()
+
+	st := openScheduleChainStore(t)
+	chain := newInstanceChain(t, st)
+
+	mark := audit.CheckMark{At: time.Time{}, Scope: "acme", Sequence: 3, Epoch: 1}
+	if err := st.SaveCheckMark(t.Context(), mark); err != nil {
+		t.Fatalf("save mark: %v", err)
+	}
+
+	lists := &atomic.Int64{}
+	chain.checkpoints = audit.NewCheckpoints(audit.CheckpointsConfig{
+		Blobs:   failingListBlobs{Store: openTestBlobs(t), lists: lists},
+		Entries: st,
+		Signer:  newTestCheckpointSigner(t),
+		Marks:   st,
+		Now:     nil,
+	})
+
+	chain.storeResult(t.Context(), 0)
+
+	if got := metricLine(t, chain); !strings.Contains(got, "dustpan_audit_chain_invalid 1") {
+		t.Fatalf("metrics with an epoch that cannot be read:\n%s\nwant one invalid scope: the mark stands", got)
+	}
+
+	if lists.Load() == 0 {
+		t.Fatal("the scrape did not list the epochs, so the test did not reach the failed read")
+	}
 }
 
 // TestJobSchedulesRunAuditChainCheckOncePerTick proves that two instances on

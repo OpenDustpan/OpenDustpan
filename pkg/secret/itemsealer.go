@@ -3,7 +3,6 @@ package secret
 import (
 	"context"
 	"crypto/md5" //nolint:gosec // Integrity checksum of the manifest, not security: the AEAD tag authenticates the blob.
-	"crypto/rand"
 	"errors"
 	"fmt"
 	"io"
@@ -188,6 +187,8 @@ func (s *ItemKeySealer) openItemKey(ctx context.Context, ref ItemRef) ([]byte, e
 		return nil, fmt.Errorf("item key of %s: %w", ref, ErrKeyNotConfigured)
 	}
 
+	// Defense in depth: unwrapKey checks the wrapper ID too. This check stays
+	// so that a key of another wrapper reads no namespace and no blob.
 	if rec.WrapperID != s.wrapper.ID() {
 		return nil, fmt.Errorf("%w: key of %s is wrapped by %q, server holds %q",
 			ErrDecrypt, ref, rec.WrapperID, s.wrapper.ID())
@@ -212,12 +213,13 @@ func (s *ItemKeySealer) openItemKey(ctx context.Context, ref ItemRef) ([]byte, e
 		return nil, fmt.Errorf("item key blob of %s: %w", ref, err)
 	}
 
-	key, err := s.wrapper.Unwrap(ctx, wrapped, ref.aad())
-	if err != nil {
-		return nil, fmt.Errorf("unwrap item key of %s: %w", ref, err)
-	}
-
-	return key, nil
+	return unwrapKey(
+		ctx,
+		s.wrapper,
+		sealedKey{wrapperID: rec.WrapperID, ciphertext: wrapped},
+		ref.aad(),
+		"item key of "+ref.String(),
+	)
 }
 
 // createItemKey makes a new item key for ref and stores its blob and, through
@@ -228,16 +230,9 @@ func (s *ItemKeySealer) createItemKey(ctx context.Context, tx ItemKeyTx, ref Ite
 		return ItemKey{}, fmt.Errorf("new item key of %s: %w", ref, err)
 	}
 
-	key := make([]byte, dataKeyBytes)
-	defer clear(key)
-
-	if _, err = rand.Read(key); err != nil {
-		return ItemKey{}, fmt.Errorf("generate item key: %w", err)
-	}
-
-	wrapped, err := s.wrapper.Wrap(ctx, key, ref.aad())
+	wrapped, err := wrapNewKey(ctx, s.wrapper, ref.aad(), "item key of "+ref.String())
 	if err != nil {
-		return ItemKey{}, fmt.Errorf("wrap item key of %s: %w", ref, err)
+		return ItemKey{}, err
 	}
 
 	id := NewItemKeyID()

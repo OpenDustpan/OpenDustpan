@@ -224,6 +224,47 @@ func TestUnitListFilterErrors(t *testing.T) {
 	}
 }
 
+// TestUnitListFilterAtMessage checks that a label, reference or state filter
+// with the at value answers 400 with a message that names each of them.
+func TestUnitListFilterAtMessage(t *testing.T) {
+	t.Parallel()
+
+	const want = "invalid query parameter: the label, reference and state query values do not work with the at query value"
+
+	cases := []struct {
+		name  string
+		query string
+	}{
+		{name: "label with the at value", query: "label=app%3Dweb&at=1"},
+		{name: "reference with the at value", query: "reference=pulumi:acme/web/dev&at=1"},
+		{name: "state with the at value", query: "state=locked&at=1"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			handler := newFilterHandler(t, selectiveAuthorizer{deny: nil}, "")
+
+			rec := authorizedGet(t, handler, "/api/dustpan/v1/namespaces/acme/units?"+tc.query, "test-token")
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, want 400: %s", rec.Code, rec.Body.String())
+			}
+
+			var body errorBody
+			if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+				t.Fatalf("error body = %s: %v", rec.Body.String(), err)
+			}
+			if body.Code != http.StatusBadRequest {
+				t.Fatalf("code = %d, want 400", body.Code)
+			}
+			if body.Message != want {
+				t.Fatalf("message = %q, want %q", body.Message, want)
+			}
+		})
+	}
+}
+
 // TestUnitListFilterKeepsAuthorization checks that a filter never shows a
 // unit that the caller may not read, and that a filter by reference does not
 // tell a forbidden unit from a missing one.
