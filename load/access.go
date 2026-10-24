@@ -107,10 +107,10 @@ func accessPathsOf(ns, id string) accessPaths {
 }
 
 // refusedStatuses answers the statuses of a route to a request that the list
-// refuses. The namespace read check answers 404, so the refusal does not tell
-// that the object exists.
+// refuses: the namespace read check answers 404, and the IP allowlist check
+// answers 403 on the routes that main now guards with it.
 func refusedStatuses() []int {
-	return []int{http.StatusNotFound}
+	return []int{http.StatusNotFound, http.StatusForbidden}
 }
 
 // routeFn times one route on one server and answers its median and status.
