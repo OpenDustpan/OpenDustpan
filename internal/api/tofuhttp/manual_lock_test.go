@@ -36,6 +36,12 @@ func TestLockRefusedByAManualLock(t *testing.T) {
 		Lock: heldUnit, Noun: "workspace", Name: "acme/web",
 	})
 
+	heldNamespace := held
+	heldNamespace.Target = manuallock.NamespaceTarget("acme")
+	manualNamespace := fmt.Errorf("%w: %w", workspace.ErrLocked, &manuallock.LockedError{
+		Lock: heldNamespace, Noun: "workspace", Name: "acme/web",
+	})
+
 	cases := []struct {
 		name    string
 		lockErr error
@@ -59,6 +65,16 @@ func TestLockRefusedByAManualLock(t *testing.T) {
 				remove: "/api/inventory/unit-lock?unit=opentofu:acme/web",
 				force:  "/api/inventory/unit-lock/force-unlock?unit=opentofu:acme/web",
 				text:   "workspace acme/web has a manual lock by alice since 2026-10-19T10:00:00Z: change window closed",
+			},
+		},
+		{
+			name: "manual lock on the namespace", lockErr: manualNamespace, want: http.StatusLocked,
+			info: manualInfoWant{
+				who:    "alice",
+				remove: "/api/dustpan/v1/namespaces/acme/lock",
+				force:  "/api/dustpan/v1/namespaces/acme/lock/force-unlock",
+				text: "workspace acme/web is in namespace acme, which has a manual lock " +
+					"by alice since 2026-10-19T10:00:00Z: change window closed",
 			},
 		},
 		{

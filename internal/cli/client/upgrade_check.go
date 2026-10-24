@@ -83,7 +83,7 @@ func UpgradeCheck(
 	if server == "" {
 		return fmt.Errorf(
 			"%w: set --server (%s) to the server base URL and run opendustpan upgrade check again",
-			ErrBackupNeedsServer,
+			ErrUpgradeCheckNeedsServer,
 			BackupServerEnvVar,
 		)
 	}
@@ -236,11 +236,9 @@ func readUpgradeCheck(
 	}()
 
 	if resp.StatusCode != http.StatusOK {
-		return none, fmt.Errorf(
-			"%w: %s: check the server log and run opendustpan upgrade check again",
-			ErrBackupRead,
-			decodeErrorAnswer(resp),
-		)
+		const hint = "check the server log and run opendustpan upgrade check again"
+
+		return none, fmt.Errorf("%w: %s", ErrBackupRead, answerText(resp.StatusCode, decodeErrorAnswer(resp), hint))
 	}
 
 	var answer UpgradeCheckAnswer

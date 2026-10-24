@@ -25,12 +25,12 @@ func TestClassifyUpdateAnswers503OnJournalBuildTimeout(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			if status, _ := classifyUpdate(tc.err); status != http.StatusServiceUnavailable {
-				t.Fatalf("classifyUpdate answers %d, want %d", status, http.StatusServiceUnavailable)
+			if f := classifyUpdate(tc.err); f.status != http.StatusServiceUnavailable {
+				t.Fatalf("classifyUpdate answers %d, want %d", f.status, http.StatusServiceUnavailable)
 			}
 
-			if status, _ := classify(tc.err); status != http.StatusServiceUnavailable {
-				t.Fatalf("classify answers %d, want %d", status, http.StatusServiceUnavailable)
+			if f := classify(tc.err); f.status != http.StatusServiceUnavailable {
+				t.Fatalf("classify answers %d, want %d", f.status, http.StatusServiceUnavailable)
 			}
 		})
 	}

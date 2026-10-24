@@ -4,26 +4,18 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/jackc/pgx/v5"
-
 	"opendustpan.org/opendustpan/pkg/store/postgres/internal/db"
 	"opendustpan.org/opendustpan/pkg/workspace"
 )
 
 // QueryWorkspaces implements workspace.Store with one count and one page
-// query in one REPEATABLE READ snapshot, so the total agrees with the page.
-// The search compares characters exactly, as strings.Contains does.
+// query in one snapshot read (see inSnapshotTx), so the total agrees with the
+// page and a restore swap cannot run between them. The search compares
+// characters exactly, as strings.Contains does.
 func (s *Store) QueryWorkspaces(ctx context.Context, q workspace.ListQuery) (workspace.ListPage, error) {
 	page := workspace.ListPage{Workspaces: []workspace.Workspace{}, Total: 0}
 
-	opts := pgx.TxOptions{
-		IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly, DeferrableMode: pgx.NotDeferrable, BeginQuery: "",
-		CommitQuery: "",
-	}
-
-	err := pgx.BeginTxFunc(ctx, s.pool, opts, func(tx pgx.Tx) error {
-		qtx := s.queries.WithTx(tx)
-
+	err := s.inSnapshotTx(ctx, func(qtx *db.Queries) error {
 		total, err := qtx.CountWorkspacePage(ctx, db.CountWorkspacePageParams{
 			Namespace: q.Namespace.String(), NameContains: q.NameContains,
 		})

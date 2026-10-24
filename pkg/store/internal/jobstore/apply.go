@@ -160,6 +160,11 @@ func bindClaim(ctx context.Context, tx Tx, cur *job.Job, c *job.Change) error {
 		return err
 	}
 
+	// Defense in depth: the claimer reads the job, checks that its current
+	// phase names the operation of the claim, and sends the version that it
+	// read, and applyIn refuses another version with job.ErrConflict before
+	// this point. So the claimer never reaches this check. It stays so that
+	// a new caller of Apply cannot bind a claim to a job at another phase.
 	if cur.Current >= len(cur.Phases) || cur.Phases[cur.Current].Operation != string(c.Claim.Operation) {
 		return fmt.Errorf("%w: %w: job %s is not at the phase of operation %s", job.ErrClaimLost,
 			durable.ErrClaimLost, cur.ID, c.Claim.Operation)

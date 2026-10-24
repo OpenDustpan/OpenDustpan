@@ -988,6 +988,9 @@ func testJournalKeysFollowRename(t *testing.T, f fixture) {
 
 	id := mustStackID(t, f.s, f.ref)
 
+	// A rename waits until the update ends.
+	f.end(t, u, stack.StatusSucceeded)
+
 	if err := f.s.RenameStack(t.Context(), f.ref, "renamed", f.fence); err != nil {
 		t.Fatalf("rename: %v", err)
 	}

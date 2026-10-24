@@ -25,6 +25,12 @@ func pauseFor(t *testing.T, d time.Duration) {
 	}
 }
 
+// heldLease is the lease of a claim that a test holds while it waits in real
+// time. It is far longer than any stall of a loaded machine, so the claim
+// never ends before the test lets it end. The heartbeat has its own period,
+// beatLease.
+const heldLease = time.Hour
+
 // beatWait is a wait that is past 2 lease periods.
 const beatWait = 2*beatLease + 250*time.Millisecond
 
@@ -99,7 +105,9 @@ func TestNoWorkerRefusesAfterTwoLeasesAndNotBefore(t *testing.T) {
 
 // TestBusyWorkerGivesNoRefusal proves that a worker that holds one long job
 // and only renews its claim keeps the gate open, while other work waits
-// unclaimed longer than 2 lease periods.
+// unclaimed longer than 2 lease periods. The claim has a long lease: a stall
+// of the test on a loaded machine must not end the claim, because the case
+// tests the heartbeat and not the end of a claim.
 func TestBusyWorkerGivesNoRefusal(t *testing.T) {
 	t.Parallel()
 
@@ -113,7 +121,7 @@ func TestBusyWorkerGivesNoRefusal(t *testing.T) {
 	_, tracked := workerOf(api)
 
 	claim, err := tracked.Claim(t.Context(), durable.ClaimRequest{
-		Owner: "worker-1", Kinds: []durable.Kind{"any"}, Lease: beatLease, MaxVersions: map[durable.Kind]int{"any": 0},
+		Owner: "worker-1", Kinds: []durable.Kind{"any"}, Lease: heldLease, MaxVersions: map[durable.Kind]int{"any": 0},
 		TakeCanceled: false,
 	})
 	if err != nil {
@@ -128,7 +136,7 @@ func TestBusyWorkerGivesNoRefusal(t *testing.T) {
 	for time.Now().Before(deadline) {
 		pauseFor(t, beatLease/8)
 
-		held, err = tracked.Extend(t.Context(), held, beatLease)
+		held, err = tracked.Extend(t.Context(), held, heldLease)
 		if err != nil {
 			t.Fatalf("extend: %v", err)
 		}
@@ -305,6 +313,34 @@ func TestHeartbeatIsRateLimited(t *testing.T) {
 	second, err := st.DurableOperations().LastBeat(t.Context())
 	if err != nil || !second.At.Equal(first.At) {
 		t.Fatalf("LastBeat after a second attempt = %+v, %v; want the first beat %v", second, err, first.At)
+	}
+}
+
+// TestTrackingOpsRecordsAClaim proves that the wrapper of a store that keeps
+// operations records a claim attempt as activity and as a heartbeat.
+func TestTrackingOpsRecordsAClaim(t *testing.T) {
+	t.Parallel()
+
+	st := openTestStore(t)
+	api := newTestWatch(st.DurableOperations(), apiOnly(), beatLease, time.Now)
+	worker, _ := workerOf(api)
+	ops := trackingOps{Store: st.DurableOperations(), watch: worker}
+
+	_, err := ops.Claim(t.Context(), durable.ClaimRequest{
+		Owner: "worker-1", Kinds: []durable.Kind{"none"}, Lease: beatLease, MaxVersions: nil,
+		TakeCanceled: false,
+	})
+	if !errors.Is(err, durable.ErrNoWork) {
+		t.Fatalf("claim = %v, want ErrNoWork", err)
+	}
+
+	if worker.lastActive.Load() == 0 {
+		t.Fatal("the claim attempt did not mark the worker as active")
+	}
+
+	beat, err := st.DurableOperations().LastBeat(t.Context())
+	if err != nil || beat.At.IsZero() {
+		t.Fatalf("LastBeat = %+v, %v; want a beat", beat, err)
 	}
 }
 

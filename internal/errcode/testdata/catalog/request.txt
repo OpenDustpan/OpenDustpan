@@ -1,0 +1,2 @@
+request.idempotency-key-lost
+request.invalid-object

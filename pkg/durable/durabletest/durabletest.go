@@ -150,6 +150,8 @@ func Run(t *testing.T, newHarness Factory) {
 		{"extend to a shorter lease moves the expiry earlier", testExtendShorter},
 		{"a release by a non-holder changes nothing", testReleaseByNonHolder},
 		{"a release returns the operation to pending", testRelease},
+		{"a give-back returns the operation to pending, and a non-holder changes nothing", testGiveBack},
+		{"a give-back during a cancel is ErrCanceled and changes nothing", testGiveBackCanceled},
 		{"a recorded step stays done after a takeover", testStepDoneAfterTakeover},
 		{"complete ends the operation succeeded", testComplete},
 		{"a final failure ends the operation failed with its error", testFinalFailure},
@@ -725,6 +727,83 @@ func testRelease(t *testing.T, h Harness) {
 	if again.Claim.Token <= held.Claim.Token || again.Attempt != 2 {
 		t.Fatalf("claim after a release = %+v (attempt %d), want a token above %d and attempt 2", again.Claim,
 			again.Attempt, held.Claim.Token)
+	}
+}
+
+func testGiveBack(t *testing.T, h Harness) {
+	t.Helper()
+
+	a, b := h.Open(t, 0), h.Open(t, 0)
+	mustStart(t, a, "k", kindA)
+	held := mustClaim(t, a, ownerA, longLease, kindA)
+
+	forged := held.Claim
+	forged.Token++
+	forged.Owner = ownerB
+
+	if err := b.GiveBack(t.Context(), forged); !errors.Is(err, durable.ErrClaimLost) {
+		t.Fatalf("GiveBack with a token that is not live: error = %v, want ErrClaimLost", err)
+	}
+
+	mustBeUnchanged(t, b, held, "a give-back by a non-holder")
+
+	if err := a.GiveBack(t.Context(), held.Claim); err != nil {
+		t.Fatalf("GiveBack by the holder: %v", err)
+	}
+
+	got := mustGet(t, b, held.ID)
+	if got.State != durable.StatePending || !noClaim(got.Claim) || got.Attempt != 1 || got.Failures != 0 {
+		t.Fatalf("operation after a give-back = %+v, want pending, no claim, attempt 1, no failure", got)
+	}
+
+	if err := a.GiveBack(t.Context(), held.Claim); !errors.Is(err, durable.ErrClaimLost) {
+		t.Fatalf("second GiveBack of one claim: error = %v, want ErrClaimLost", err)
+	}
+
+	again := mustClaim(t, b, ownerB, longLease, kindA)
+	if again.Claim.Token <= held.Claim.Token || again.Attempt != 2 {
+		t.Fatalf("claim after a give-back = %+v (attempt %d), want a token above %d and attempt 2", again.Claim,
+			again.Attempt, held.Claim.Token)
+	}
+}
+
+// testGiveBackCanceled checks that GiveBack refuses an operation with a
+// requested cancel and leaves it to the claim after the expiry, and that a
+// non-holder gets ErrClaimLost before ErrCanceled.
+func testGiveBackCanceled(t *testing.T, h Harness) {
+	t.Helper()
+
+	a, b := h.Open(t, 0), h.Open(t, 0)
+	mustStart(t, a, "k", kindA)
+	held := mustClaim(t, a, ownerA, longLease, kindA)
+
+	if err := b.Cancel(t.Context(), held.ID); err != nil {
+		t.Fatalf("Cancel of a running operation: %v", err)
+	}
+
+	forged := held.Claim
+	forged.Token++
+
+	if err := b.GiveBack(t.Context(), forged); !errors.Is(err, durable.ErrClaimLost) {
+		t.Fatalf("GiveBack with a token that is not live during a cancel: error = %v, want ErrClaimLost", err)
+	}
+
+	if err := a.GiveBack(t.Context(), held.Claim); !errors.Is(err, durable.ErrCanceled) {
+		t.Fatalf("GiveBack after Cancel: error = %v, want ErrCanceled", err)
+	}
+
+	got := mustGet(t, b, held.ID)
+	if got.State != durable.StateRunning || !got.CancelRequested || !sameClaim(got.Claim, held.Claim) ||
+		got.Failures != 0 {
+		t.Fatalf("operation after a refused give-back = %+v, want running with its claim and the cancel", got)
+	}
+
+	if err := a.Release(t.Context(), held.Claim); err != nil {
+		t.Fatalf("Release after a refused give-back: %v", err)
+	}
+
+	if got := mustGet(t, b, held.ID); got.State != durable.StateCanceled {
+		t.Fatalf("state after the release = %s, want canceled", got.State)
 	}
 }
 

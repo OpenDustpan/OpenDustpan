@@ -484,6 +484,9 @@ type updateFixture struct {
 	handler *pulumi.Handler
 	updates *stack.Updates
 	ref     stack.Ref
+	// mem is the update store of the fixture, or nil for a fixture that
+	// builds its own store.
+	mem *memUpdateStore
 }
 
 // newUpdateFixture builds a Handler whose update routes work end to end.
@@ -621,7 +624,7 @@ func newUpdateFixtureWithAuthenticator(
 		t.Fatalf("parse ref: %v", err)
 	}
 
-	return updateFixture{handler: handler, updates: updates, ref: ref}
+	return updateFixture{handler: handler, updates: updates, ref: ref, mem: mem}
 }
 
 // allowAll authorizes every action.
@@ -1121,7 +1124,7 @@ func updateRoute(t *testing.T, handler *pulumi.Handler, pattern string) pulumi.R
 
 	t.Fatalf("route %q is not declared", pattern)
 
-	return pulumi.Route{Method: "", Path: "", Scope: 0, Actions: nil, Resolve: nil, Serve: nil}
+	return pulumi.Route{Method: "", Path: "", Scope: 0, Actions: nil, Resolve: nil, Serve: nil, Lease: nil}
 }
 
 // accessTarget holds the target and body for an access-authed update route.
@@ -2284,6 +2287,10 @@ func checkRunningHistoryEntry(t *testing.T, id stack.UpdateID, expiry int64, got
 
 	if got.CheckpointBytes != 0 {
 		t.Fatalf("checkpointBytes = %d, want 0 before any checkpoint", got.CheckpointBytes)
+	}
+
+	if got.EndTime != 0 {
+		t.Fatalf("endTime = %d, want 0 for a running update", got.EndTime)
 	}
 
 	if expiry <= 0 {

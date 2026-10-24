@@ -103,6 +103,10 @@ var operationLabels = map[string]apidesc.Label{
 		On(apidesc.KindNamespace).
 		WithBodies(apidesc.Typed[outputSharingRequest]("OutputSharingRequest"), outputSharingBody),
 
+	apidesc.Pattern(http.MethodGet, outputsPath): apidesc.Name("getUnitOutputs", tagOutputs).
+		On(apidesc.KindUnit).
+		WithBodies(apidesc.NoBody, outputsBody),
+
 	apidesc.Pattern(http.MethodPost, namespacePath+"/views"): apidesc.Name("createView", tagViews).WithKey().
 		WithStatus(http.StatusCreated).
 		On(apidesc.KindNamespace).

@@ -71,6 +71,60 @@ func TestLocationValidate(t *testing.T) {
 	}
 }
 
+// TestLocationValidateRepository proves the forms of a repository that
+// Validate accepts: a path, or an https URL with no credentials, query or
+// fragment.
+func TestLocationValidateRepository(t *testing.T) {
+	t.Parallel()
+
+	tests := map[string]struct {
+		repository string
+		ok         bool
+	}{
+		"a path":                              {"acme/infra", true},
+		"an https URL":                        {"https://git.example.com/acme/infra.git", true},
+		"an https URL with a port":            {"https://git.example.com:8443/acme/infra", true},
+		"an https URL with a password":        {"https://user:hunter2@git.example.com/acme/infra.git", false},
+		"an https URL with a user name":       {"https://user@git.example.com/acme/infra.git", false},
+		"an https URL with an empty password": {"https://user:@git.example.com/acme/infra.git", false},
+		"an http URL":                         {"http://git.example.com/acme/infra.git", false},
+		"a file URL":                          {"file:///etc", false},
+		"an ssh URL":                          {"ssh://git.example.com/acme/infra.git", false},
+		"an ssh URL with a user name":         {"ssh://git@git.example.com/acme/infra.git", false},
+		"a git URL":                           {"git://git.example.com/acme/infra.git", false},
+		"an scp-like address":                 {"git@git.example.com:acme/infra.git", false},
+		"a path with a colon":                 {"file:/etc", false},
+		"a path with an at sign":              {"acme@infra", false},
+		"an https URL with no host":           {"https:///acme/infra.git", false},
+		"an https URL with a query":           {"https://git.example.com/acme/infra.git?x=1", false},
+		"an https URL with an empty query":    {"https://git.example.com/acme/infra.git?", false},
+		"an https URL with a fragment":        {"https://git.example.com/acme/infra.git#main", false},
+		"an https URL with an empty fragment": {"https://git.example.com/acme/infra.git#", false},
+		"an upper case scheme":                {"HTTPS://git.example.com/acme/infra.git", false},
+	}
+
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			l := job.Location{Connection: "", Repository: tt.repository, Ref: "main", Directory: "", Revision: ""}
+
+			err := l.Validate()
+			if tt.ok && err != nil {
+				t.Fatalf("Validate = %v, want nil", err)
+			}
+
+			if !tt.ok && !errors.Is(err, job.ErrInvalid) {
+				t.Fatalf("Validate = %v, want ErrInvalid", err)
+			}
+
+			if err != nil && (strings.Contains(err.Error(), "hunter2") || strings.Contains(err.Error(), "example")) {
+				t.Fatalf("Validate = %v, want an error with no part of the repository", err)
+			}
+		})
+	}
+}
+
 func TestSourceKinds(t *testing.T) {
 	t.Parallel()
 

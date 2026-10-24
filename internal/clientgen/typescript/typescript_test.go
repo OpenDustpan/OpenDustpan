@@ -761,3 +761,21 @@ func TestPackageCarriesTheDescriptionAndTheCommit(t *testing.T) {
 		t.Error("metadata.ts does not name the server commit")
 	}
 }
+
+// TestOwnedPaths checks the paths that a run of the TypeScript client owns:
+// src/, package.json and tsconfig.json, and no hand-written path next to them.
+func TestOwnedPaths(t *testing.T) {
+	t.Parallel()
+
+	lang := typescript.New()
+
+	for path, want := range map[string]bool{
+		"package.json": true, "tsconfig.json": true, "src/index.ts": true, "src/extra.ts": true,
+		"src/sub/x.ts": true, "README.md": false, ".gitignore": false, "test/client.test.mjs": false,
+		"adapter.mjs": false, "srcx/a.ts": false, "package-lock.json": false,
+	} {
+		if got := lang.Owned(path); got != want {
+			t.Errorf("Owned(%q) = %t, want %t", path, got, want)
+		}
+	}
+}

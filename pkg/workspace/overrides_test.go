@@ -246,13 +246,13 @@ func noOverrides() namespace.Overrides {
 	return namespace.Overrides{Forced: false, Unlocked: false}
 }
 
-// authority returns the caller's side of a declare: the overrides it may use
-// and the callback that records each override it uses.
 // noRecord is a record callback that writes no entry. A test that checks a
 // refusal of the store passes it, because a write that uses an override
 // needs a callback.
 func noRecord(workspace.Override) error { return nil }
 
+// authority returns the caller's side of a declare: the overrides it may use
+// and the callback that records each override it uses.
 func authority(allow namespace.Overrides, record func(workspace.Override) error) workspace.Authority {
 	return workspace.Authority{Allow: allow, Record: record}
 }

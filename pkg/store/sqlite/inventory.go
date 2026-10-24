@@ -392,14 +392,14 @@ func (s *Store) GetDeletedUnit(
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	return s.deletedUnit(ctx, ns, tool, unitID)
+	return deletedUnit(ctx, s.queries, ns, tool, unitID)
 }
 
-// deletedUnit reads one deleted unit. The caller holds the read lock.
-func (s *Store) deletedUnit(
-	ctx context.Context, ns namespace.Name, tool, unitID string,
+// deletedUnit reads one deleted unit with q. The caller holds the read lock.
+func deletedUnit(
+	ctx context.Context, q *db.Queries, ns namespace.Name, tool, unitID string,
 ) (inventory.DeletedEntry, error) {
-	row, err := s.queries.GetDeletedInventory(ctx, db.GetDeletedInventoryParams{
+	row, err := q.GetDeletedInventory(ctx, db.GetDeletedInventoryParams{
 		Namespace: ns.String(), Tool: tool, UnitID: unitID,
 	})
 	if errors.Is(err, sql.ErrNoRows) {
@@ -571,33 +571,42 @@ func inventoryLock(row db.ListInventoryRow) *inventory.Lock {
 func (s *Store) GetDeletedUnitFacts(
 	ctx context.Context, ns namespace.Name, tool, unitID string,
 ) (inventory.DeletedFacts, error) {
-	// One lock over all reads: the entry, the collection and the labels come
-	// from the same state of the database.
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	if _, err := s.deletedUnit(ctx, ns, tool, unitID); err != nil {
-		return inventory.DeletedFacts{}, err
-	}
-
+	// One read-only transaction over all reads, so that the entry, the
+	// collection and the labels come from one snapshot of the database. The
+	// read lock only guards the connection across a restore swap: writers take
+	// it shared too, so it does not give a snapshot.
 	facts := inventory.DeletedFacts{Collection: "", Labels: map[string]string{}}
 
-	name, err := s.queries.GetUnitCollection(ctx, unitID)
-	switch {
-	case errors.Is(err, sql.ErrNoRows):
-	case err != nil:
-		return inventory.DeletedFacts{}, fmt.Errorf("select collection of deleted unit: %w", err)
-	default:
-		facts.Collection = name
-	}
+	err := s.inReadTx(ctx, func(q *db.Queries) error {
+		if _, err := deletedUnit(ctx, q, ns, tool, unitID); err != nil {
+			return err
+		}
 
-	tags, err := s.queries.GetStackTags(ctx, unitID)
+		name, err := q.GetUnitCollection(ctx, unitID)
+		switch {
+		case errors.Is(err, sql.ErrNoRows):
+		case err != nil:
+			return fmt.Errorf("select collection of deleted unit: %w", err)
+		default:
+			facts.Collection = name
+		}
+
+		tags, err := q.GetStackTags(ctx, unitID)
+		if err != nil {
+			return fmt.Errorf("select labels of deleted unit: %w", err)
+		}
+
+		for _, t := range tags {
+			facts.Labels[t.Name] = t.Value
+		}
+
+		return nil
+	})
 	if err != nil {
-		return inventory.DeletedFacts{}, fmt.Errorf("select labels of deleted unit: %w", err)
-	}
-
-	for _, t := range tags {
-		facts.Labels[t.Name] = t.Value
+		return inventory.DeletedFacts{}, err
 	}
 
 	return facts, nil

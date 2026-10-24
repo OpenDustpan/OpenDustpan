@@ -402,7 +402,7 @@ func newMemSealer(tb testing.TB, namespaces *namespace.Service) *secret.Service 
 
 	secrets, secretsErr := secret.NewService(secret.Config{
 		Keys:          newSealedKeys(),
-		Wrapper:       &sealedWrapper{aead: aead, id: "kek-mem"},
+		Wrapper:       &sealedWrapper{aead: aead, id: "kek-mem", kek: nil},
 		Namespaces:    namespaces,
 		Now:           nil,
 		MaxBatchBytes: 0,

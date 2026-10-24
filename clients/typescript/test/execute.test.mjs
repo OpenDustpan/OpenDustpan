@@ -243,7 +243,15 @@ test("a query value that is not text, a finite number or a boolean is refused", 
 
 test("the package carries the description that its digest names", async () => {
   const { createHash } = await import("node:crypto");
-  const { description, metadata } = await import("../dist/index.js");
+  const { metadata } = await import("../dist/index.js");
+  const { description } = await import("@opendustpan/client/description");
   assert.equal(createHash("sha256").update(new TextEncoder().encode(description)).digest("hex"), metadata.descriptionSha256);
   assert.match(metadata.serverCommit, /^(development|[0-9a-f]{40})$/);
+});
+
+test("the description is a subpath export and not in the root", async () => {
+  const root = await import("@opendustpan/client");
+  assert.equal("description" in root, false);
+  const sub = await import("@opendustpan/client/description");
+  assert.equal(typeof sub.description, "string");
 });
