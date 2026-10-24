@@ -48,7 +48,12 @@ const (
 type Store interface {
 	// CreateWorkspace persists a new w. It returns ErrAlreadyExists,
 	// namespace.ErrNotFound if the namespace does not exist, or
-	// namespace.ErrFenced if fence is stale.
+	// namespace.ErrFenced if fence is stale. A store that keeps manual locks
+	// returns an error that matches ErrLocked and manuallock.ErrLocked, and
+	// wraps a *manuallock.LockedError, while a manual lock covers the namespace
+	// of w. It reads the lock in the transaction of the create. LockPassFrom
+	// of ctx gives the start of the phase of the job of the request: a lock
+	// that started after a pass that is not zero does not refuse the create.
 	CreateWorkspace(ctx context.Context, w Workspace, fence namespace.Fence) error
 	// GetWorkspace returns the workspace called ref, or ErrNotFound.
 	GetWorkspace(ctx context.Context, ref Ref) (Workspace, error)
@@ -425,13 +430,25 @@ func (s *Service) Create(ctx context.Context, ref Ref) (Workspace, error) {
 	w.ID = ID(ident.NewID("ws-"))
 	w.NamespaceID = n.ID
 
-	// The store refuses the create while the namespace has a manual lock, in
-	// the transaction of the create. The phase of the job of the request, if it
-	// has one, decides whether the lock applies to it, as it does for the lock
-	// request that follows the create.
-	if s.manual != nil {
-		ctx = WithLockPass(ctx, s.manual.PhaseStart(ctx, newUnitRef(ref), JobFrom(ctx)))
+	// Defense in depth: the store refuses the create too while the namespace
+	// has a manual lock, in the transaction of the create. This check stays so
+	// that a store adapter that does not read the manual locks cannot create a
+	// workspace in a locked namespace. The phase of the job of the request, if
+	// it has one, decides whether the lock applies to it, as it does for the
+	// lock request that follows the create.
+	if err := s.refuseNewUnitManualLock(ctx, ref, JobFrom(ctx)); err != nil {
+		return Workspace{}, fmt.Errorf("create workspace %s: %w", ref, err)
 	}
+
+	// The lock pass of the store always comes from this service, never from
+	// the caller: a pass that the caller put in ctx is replaced. With no manual
+	// lock service, the pass is the zero time, which passes no lock.
+	pass := time.Time{}
+	if s.manual != nil {
+		pass = s.manual.PhaseStart(ctx, newUnitRef(ref), JobFrom(ctx))
+	}
+
+	ctx = WithLockPass(ctx, pass)
 
 	if err := s.workspaces.CreateWorkspace(ctx, w, fence); err != nil {
 		return Workspace{}, fmt.Errorf("create workspace %s: %w", ref, err)
