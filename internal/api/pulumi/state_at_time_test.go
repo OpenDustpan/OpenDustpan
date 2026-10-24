@@ -5,6 +5,8 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+
+	"opendustpan.org/opendustpan/internal/errcode"
 )
 
 // TestStateAtNamesTheTimeOfTheRead proves that a state-at read with a time
@@ -34,7 +36,8 @@ func TestStateAtNamesTheTimeOfTheRead(t *testing.T) {
 				"/api/stacks/acme/web/prod/state-at/"+tc.at+"/resources", ""))
 
 			var got struct {
-				Message string `json:"message"`
+				Message   string `json:"message"`
+				ErrorCode string `json:"errorCode"`
 			}
 			if err := json.Unmarshal([]byte(body), &got); err != nil {
 				t.Fatalf("decode %q: %v", body, err)
@@ -42,6 +45,10 @@ func TestStateAtNamesTheTimeOfTheRead(t *testing.T) {
 
 			if status != http.StatusBadRequest || got.Message != tc.want {
 				t.Errorf("answer = %d %q, want 400 %q", status, got.Message, tc.want)
+			}
+
+			if got.ErrorCode != errcode.UpdateInvalid {
+				t.Errorf("errorCode = %q, want %q", got.ErrorCode, errcode.UpdateInvalid)
 			}
 		})
 	}
