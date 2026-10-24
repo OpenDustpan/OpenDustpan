@@ -157,15 +157,16 @@ func runTofuHTTPOnStore(t *testing.T, cli e2e.Install, store e2e.Store) {
 
 	tofuNotHomeScenario(t, env, backendEnv)
 
-	runTofuHTTPRefusedCreatesNothing(t, env)
+	runTofuHTTPRefusedCreatesNothing(t, env, backendEnv)
 }
 
 // runTofuHTTPRefusedCreatesNothing proves that a POST or a LOCK that the server
 // refuses leaves no workspace: the unit list of the namespace does not name
 // the workspace that the requests used. The refusals are a POST with no lock, a
 // POST that names a lock nobody holds, and a LOCK under a manual lock of the
-// namespace.
-func runTofuHTTPRefusedCreatesNothing(t *testing.T, env *e2e.Env) {
+// namespace. The LOCK under the manual lock answers the lock info of that lock,
+// and apply on the new workspace prints it.
+func runTofuHTTPRefusedCreatesNothing(t *testing.T, env *e2e.Env, backendEnv []string) {
 	t.Helper()
 
 	ctx := t.Context()
@@ -193,6 +194,19 @@ func runTofuHTTPRefusedCreatesNothing(t *testing.T, env *e2e.Env) {
 		t.Fatalf("LOCK under the manual lock: status %d, body %q, err %v, want 423", status, body, err)
 	}
 
+	// The backend reads the body of a 423 as lock info: string fields with
+	// PascalCase keys.
+	var info map[string]string
+	if err := json.Unmarshal([]byte(body), &info); err != nil {
+		t.Fatalf("LOCK under the manual lock: body %q is not lock info: %v", body, err)
+	}
+
+	if !strings.HasPrefix(info["ID"], "A manual lock blocks this run.") {
+		t.Fatalf("LOCK under the manual lock: lock ID %q, want the lock info of the manual lock", info["ID"])
+	}
+
+	runTofuHTTPNewWorkspaceUnderNamespaceLock(t, env, backendEnv, env.URL+path)
+
 	bootstrapCall(t, env, http.MethodDelete, nsLock, "")
 
 	units := bootstrapCall(
@@ -205,6 +219,45 @@ func runTofuHTTPRefusedCreatesNothing(t *testing.T, env *e2e.Env) {
 	if strings.Contains(units, "refused-first") {
 		t.Fatalf("the unit list names the workspace of the refused requests: %s", units)
 	}
+}
+
+// runTofuHTTPNewWorkspaceUnderNamespaceLock proves with the real CLI that
+// apply on a workspace that does not exist yet stops on the manual lock of the
+// namespace and prints its lock info: the plain words, the route that removes
+// the lock, and the reason. The caller holds the namespace lock.
+func runTofuHTTPNewWorkspaceUnderNamespaceLock(t *testing.T, env *e2e.Env, backendEnv []string, address string) {
+	t.Helper()
+
+	ctx := t.Context()
+	dir := t.TempDir()
+	writeTofuHTTPConfig(t, dir, address)
+
+	env.StepIn(ctx, t, dir, e2e.StepSpec{
+		Check: nil, Name: "init http backend for a new workspace under the namespace lock",
+		Args: []string{"init", "-input=false", "-no-color"},
+		Env:  backendEnv, Stdin: "", Fail: false, Redact: false,
+	})
+
+	env.StepIn(ctx, t, dir, e2e.StepSpec{
+		Check: func(r e2e.Result) error {
+			out := r.Stdout + r.Stderr
+			for _, want := range []string{
+				"Error acquiring the state lock",
+				"A manual lock blocks this run.",
+				"`DELETE /api/dustpan/v1/namespaces/" + e2e.Namespace + "/lock`",
+				"freeze",
+			} {
+				if !strings.Contains(out, want) {
+					return fmt.Errorf("%w: apply output lacks %q: %s", errUnexpected, want, out)
+				}
+			}
+
+			return nil
+		},
+		Name: "apply on a new workspace under the namespace lock",
+		Args: []string{"apply", "-input=false", "-auto-approve", "-no-color"},
+		Env:  backendEnv, Stdin: "", Fail: true, Redact: false,
+	})
 }
 
 // bootstrapCall sends one installation API request with the bootstrap token and
