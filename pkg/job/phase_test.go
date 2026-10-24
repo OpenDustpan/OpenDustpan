@@ -369,6 +369,7 @@ func jobIn(s job.State, d *job.DeliveryResult) job.Job {
 		Agent:          "",
 		AgentMode:      "",
 		BreakGlass:     nil,
+		Trigger:        nil,
 		Delivery:       d,
 		Closed:         nil,
 		Verification:   job.VerificationNone,

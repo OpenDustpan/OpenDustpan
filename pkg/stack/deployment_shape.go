@@ -16,19 +16,29 @@ const secretsProvidersMember = "secrets_providers"
 // resourcesMember is the member of a deployment that holds its resources.
 const resourcesMember = "resources"
 
-// deploymentFieldKind returns the JSON type that the CLI expects for the
-// member name of a deployment, and false for a member that it does not check.
-// A member with another type makes the CLI fail to read the whole stack. A null
-// value reads as a missing member.
-func deploymentFieldKind(name string) (jsontext.Kind, bool) {
-	switch name {
-	case "manifest", secretsProvidersMember:
-		return jsontext.KindBeginObject, true
-	case resourcesMember, "pending_operations":
-		return jsontext.KindBeginArray, true
-	default:
-		return jsontext.KindInvalid, false
+// urnMember is the member of a resource that holds its URN.
+const urnMember = "urn"
+
+// deploymentFieldKind returns the name and the JSON type that the CLI expects
+// for the member name of a deployment, and false for a member that it does not
+// check. The CLI decodes with encoding/json, which matches a member name in
+// any case, so a known name matches in any case too, and the returned name is
+// the known one. A member with another type makes the CLI fail to read the
+// whole stack. A null value reads as a missing member.
+func deploymentFieldKind(name string) (string, jsontext.Kind, bool) {
+	for _, known := range []string{"manifest", secretsProvidersMember} {
+		if strings.EqualFold(name, known) {
+			return known, jsontext.KindBeginObject, true
+		}
 	}
+
+	for _, known := range []string{resourcesMember, "pending_operations"} {
+		if strings.EqualFold(name, known) {
+			return known, jsontext.KindBeginArray, true
+		}
+	}
+
+	return name, jsontext.KindInvalid, false
 }
 
 // errDeploymentShape is the cause of a deployment that the CLI cannot read.
@@ -55,6 +65,13 @@ const envelopeMember = "deployment"
 func checkDeploymentShape(deployment []byte, seq int64) error {
 	// The decoder reads a bytes.Buffer in place, so the scan does not copy
 	// the deployment.
+	//
+	// The decoder refuses text that is not valid UTF-8 and a lone surrogate
+	// escape such as \ud800. The decoder of the CLI reads both, but the CLI
+	// never writes them, because its encoder replaces invalid UTF-8. The
+	// check stays strict on purpose: a stored deployment then holds only text
+	// that every reader decodes to the same value, and a client that is not
+	// the CLI gets a refusal instead of a state that reads back changed.
 	dec := jsontext.NewDecoder(bytes.NewBuffer(deployment), jsontext.AllowDuplicateNames(true))
 
 	check := checkDeploymentMember
@@ -121,15 +138,15 @@ func checkEnvelopeMember(dec *jsontext.Decoder, name string) error {
 // member (resources and pending_operations) must be an object, as the CLI
 // reads them.
 func checkDeploymentMember(dec *jsontext.Decoder, name string) error {
-	want, known := deploymentFieldKind(name)
+	known, want, isKnown := deploymentFieldKind(name)
 	got := dec.PeekKind()
 
-	if known && got != want && got != jsontext.KindNull {
-		return deploymentShapeError(fmt.Sprintf("the member %s has the wrong type", name))
+	if isKnown && got != want && got != jsontext.KindNull {
+		return deploymentShapeError(fmt.Sprintf("the member %s has the wrong type", known))
 	}
 
-	if known && got == jsontext.KindBeginArray {
-		return checkDeploymentEntries(dec, name)
+	if isKnown && got == jsontext.KindBeginArray {
+		return checkDeploymentEntries(dec, known)
 	}
 
 	if err := dec.SkipValue(); err != nil {
@@ -170,8 +187,9 @@ func checkDeploymentEntries(dec *jsontext.Decoder, name string) error {
 
 // checkDeploymentEntry reads the object at index of the array member name that
 // dec streams. An entry of resources must have a urn member that is a string,
-// because the CLI reads each resource by its URN. The text names the index of
-// the entry, never a value.
+// because the CLI reads each resource by its URN. As in the CLI, the name urn
+// matches in any case, and each member with that name must be a string. The
+// text names the index of the entry, never a value.
 func checkDeploymentEntry(dec *jsontext.Decoder, name string, index int) error {
 	if name != resourcesMember {
 		if err := dec.SkipValue(); err != nil {
@@ -184,7 +202,7 @@ func checkDeploymentEntry(dec *jsontext.Decoder, name string, index int) error {
 	hasURN := false
 
 	err := checkObjectMembers(dec, func(dec *jsontext.Decoder, member string) error {
-		if member == "urn" {
+		if strings.EqualFold(member, urnMember) {
 			if dec.PeekKind() != jsontext.KindString {
 				return deploymentShapeError(fmt.Sprintf("the urn of the entry %d of resources is not a string", index))
 			}

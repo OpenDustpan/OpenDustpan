@@ -225,6 +225,15 @@ func (g *gateRun) remove(id string) {
 func tofuStateWriteGateScenario(t *testing.T, env *e2e.Env) {
 	t.Helper()
 
+	// The steps write gates and read decision records through the store of the
+	// in-process server. The server binary holds its database open, so in the
+	// binary mode the steps do not run, and the rest of the scenario still does.
+	if e2e.UseBinaryServer() {
+		t.Log("skip the state.write gate steps: gate writes need the in-process server")
+
+		return
+	}
+
 	wsID := env.WorkspaceID(t.Context(), t)
 	g := &gateRun{
 		t: t, env: env, ns: namespace.Name(e2e.Namespace), lockPath: "/api/v2/workspaces/" + wsID + "/actions/lock",
@@ -376,6 +385,12 @@ func (g *gateRun) noGate() {
 func restoreGateSteps(
 	ctx context.Context, env *e2e.Env, target func() unitTarget, operation, name string,
 ) []e2e.StepSpec {
+	// The steps write a gate through the store of the in-process server. The
+	// server binary holds its database open, so the binary mode runs none.
+	if e2e.UseBinaryServer() {
+		return nil
+	}
+
 	id := gate.ID("deleted-" + operation + "-e2e")
 	ns := namespace.Name(e2e.Namespace)
 	// The gate holds for the collection of the deleted unit only, so the

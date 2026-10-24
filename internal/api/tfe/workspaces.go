@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/pkg/gate"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -292,7 +293,10 @@ func (h *Handler) createWorkspace(
 	ws, err := h.workspaces.Create(ctx, ref)
 	if err != nil {
 		if errors.Is(err, workspace.ErrAlreadyExists) {
-			h.writeUnprocessable(ctx, w, duplicateWorkspaceDetail, duplicateWorkspaceTitle)
+			h.writeClassError(ctx, w, errorClass{
+				status: http.StatusUnprocessableEntity, title: duplicateWorkspaceTitle,
+				detail: duplicateWorkspaceDetail, code: errcode.WorkspaceAlreadyExists, args: nil,
+			})
 
 			return
 		}
@@ -543,7 +547,8 @@ func parseWorkspacePage(r *http.Request) (workspacePage, error) {
 
 // workspacePageValue parses raw, the value of the page query parameter name,
 // or returns fallback when the value is missing. The error names the
-// parameter and its rule, and does not repeat the value.
+// parameter and its rule, with the largest number that the server reads, and
+// does not repeat the value.
 func workspacePageValue(raw, name string, fallback int) (int, error) {
 	if raw == "" {
 		return fallback, nil
@@ -551,7 +556,7 @@ func workspacePageValue(raw, name string, fallback int) (int, error) {
 
 	n, err := strconv.Atoi(raw)
 	if err != nil || n < 1 {
-		return 0, fmt.Errorf("%w: %s must be a number of 1 or more", errInvalidQuery, name)
+		return 0, fmt.Errorf("%w: %s must be a whole number from 1 to %d", errInvalidQuery, name, math.MaxInt)
 	}
 
 	return n, nil

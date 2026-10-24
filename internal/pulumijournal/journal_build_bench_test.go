@@ -125,7 +125,7 @@ func benchBuild(b *testing.B, base string, entries []byte) {
 
 	var out bytes.Buffer
 	r := pulumijournal.NewReplayer(now, "3.268.0")
-	if err := r.Replay(context.Background(), open, bytes.NewReader(entries), &out); err != nil {
+	if err := r.Replay(context.Background(), open, [][]byte{entries}, &out); err != nil {
 		b.Fatalf("replay: %v", err)
 	}
 

@@ -46,6 +46,9 @@ type Store interface {
 	// transactions retries a serialization failure inside Put, so the caller
 	// sees only nil or ErrCycle, and never a serialization error.
 	//
+	// A stored follows trigger that fails Validate takes no part in the check
+	// for a loop, because no plan starts for it. It does not make Put fail.
+	//
 	// On every error the store changes nothing. Put does not check access. The
 	// caller checks the actions on the unit, and on the source unit of a
 	// follows trigger.
@@ -54,6 +57,13 @@ type Store interface {
 	// returns ErrInvalid for an ID or a namespace that fails validation. Get
 	// does not check access.
 	Get(ctx context.Context, ns namespace.Name, id ID) (Trigger, error)
+	// Stored returns the trigger id of the namespace ns as the row holds it,
+	// with no check of the rules of a trigger. Only a delete uses it: Get
+	// refuses a row that fails its checks, and such a row must still be found
+	// to be removed. The caller treats every field as untrusted. It returns
+	// ErrNotFound for an unknown trigger and ErrInvalid for an ID or a
+	// namespace that fails validation. Stored does not check access.
+	Stored(ctx context.Context, ns namespace.Name, id ID) (Trigger, error)
 	// List returns the triggers of unit, ordered by ID. A unit with no trigger
 	// gives an empty list and no error. It returns ErrInvalid for a unit that
 	// fails validation.
@@ -63,8 +73,9 @@ type Store interface {
 	// error. It returns ErrInvalid for a unit that fails validation.
 	Followers(ctx context.Context, source graph.Unit) ([]Trigger, error)
 	// Delete removes the trigger id of the namespace ns and appends the audit
-	// entry e in the transaction. It returns ErrNotFound for an unknown
-	// trigger, ErrInvalid, and namespace.ErrFenced. The purge of a unit calls
+	// entry e in the transaction. It removes a row that fails its checks too.
+	// It returns ErrNotFound for an unknown trigger, ErrInvalid, and
+	// namespace.ErrFenced. The purge of a unit calls
 	// it for each trigger of the unit, and for each trigger that follows the
 	// unit.
 	Delete(ctx context.Context, ns namespace.Name, id ID, fence namespace.Fence, e audit.Entry) error
@@ -82,6 +93,24 @@ type PlanRequest struct {
 	// Reason is the text for the audit entry of the start. It names the
 	// trigger and the cause.
 	Reason string
+	// Source is the source kind of the job. It is empty for a manual fire,
+	// and the job then keeps the source kind of the caller (api). Else it is
+	// schedule, forge or trigger by the kind of the trigger, and the start is
+	// the start of the namespace service principal.
+	Source job.SourceKind
+	// Saver is the subject of the last saver of the trigger. The job records
+	// it with the trigger ID, and the audit entry of the start names it.
+	Saver string
+	// Location is the code location of the plan, or the zero value to take the
+	// location of the unit settings. Only a manual fire sets it: the caller
+	// names the location, and the job service checks the extra action for it
+	// as for any start by that caller. A start that no person makes never
+	// carries a location, because the namespace service principal holds no
+	// action for one.
+	Location job.Location
+	// Request describes the request of a manual fire, for the audit entry of the
+	// job start. It is the zero value for a start that no person makes.
+	Request RequestInfo
 }
 
 // Starter starts one plan job of a unit through the job service. It is the
@@ -116,9 +145,8 @@ type Outcome struct {
 }
 
 // Dispatcher fires triggers. The schedule, the end of a job and the REST route
-// call it. It starts plans through the Starter and nothing else, and it
-// checks nothing about the people who set the triggers: the Store caller did
-// that at save. A start that the job service refuses is an error of that start.
+// call it. It starts plans through the Starter and nothing else. A start that
+// the job service refuses is an error of that start.
 //
 // Defense in depth: each method runs Trigger.Validate on the trigger that it
 // reads, and fails closed with ErrInvalid. A stored row that another version
@@ -132,6 +160,13 @@ type Outcome struct {
 // source use the current grants of the last saver of the trigger, and the
 // server denies when that saver is missing, deleted or disabled. A manual
 // fire uses the actor of the caller.
+//
+// Before each start, the dispatcher checks that the last saver of the trigger
+// still holds the settings action and the start action on the unit (SaverCheck).
+// A saver that lost access, or whose principal is missing, deleted or
+// disabled, gets no start: the dispatcher writes an audit entry of the refusal
+// and returns an error that wraps ErrSaverDenied. The check applies to a manual
+// fire as well, so a trigger that nobody maintains starts nothing.
 //
 // The kind review-request-push has no method yet. It joins when the Forge
 // port exists.
@@ -157,8 +192,11 @@ type Dispatcher interface {
 	Upstream(ctx context.Context, applied Applied) ([]Outcome, error)
 	// Manual starts the plan of a trigger now, for the principal of actor. A
 	// person uses it to test a trigger. The idempotency key is
-	// ManualKey(req.Trigger, actor, req.Now), so a double click gives one job
-	// and two people who fire one trigger in one minute give two. It
+	// req.IdempotencyKey when the caller sent one. Else it is
+	// ManualKey(req.Trigger, actor, req.Now), so a double click inside one
+	// minute gives one job and two people who fire one trigger in one minute
+	// give two. A double click across a minute boundary gives two jobs, unless
+	// the caller sent a key. It
 	// returns ErrNotFound, ErrDisabled, ErrInvalid, and the errors of
 	// Starter.StartPlan.
 	Manual(ctx context.Context, actor job.Actor, req ManualRequest) (job.ID, error)
@@ -174,6 +212,14 @@ type ManualRequest struct {
 	Now time.Time
 	// Reason is the text of the person for the audit entry of the start.
 	Reason string
+	// Location is the code location of the plan, or the zero value. The job
+	// service checks the extra action of a location for the caller.
+	Location job.Location
+	// IdempotencyKey is the key that the caller sent, or empty. A key that the
+	// job service refuses fails the start.
+	IdempotencyKey string
+	// Request describes the request, for the audit entry of the job start.
+	Request RequestInfo
 }
 
 // Applied is the event that the source of a follows trigger has applied. The

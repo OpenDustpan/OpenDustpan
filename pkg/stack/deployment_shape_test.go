@@ -158,11 +158,61 @@ func shapeCases() []shapeCase {
 			sequence: 0,
 			valid:    true,
 		},
+		{name: "a member in upper case of a wrong type", deployment: `{"RESOURCES":5}`, sequence: 0, valid: false},
+		{name: "a member in mixed case of a wrong type", deployment: `{"Manifest":[]}`, sequence: 0, valid: false},
+		{
+			name:       "a known member with a long s and the wrong type",
+			deployment: "{\"re\xc5\xbfources\":5}",
+			sequence:   0,
+			valid:      false,
+		},
+		{
+			name:       "a resource with the urn in upper case",
+			deployment: `{"resources":[{"URN":"urn:pulumi:dev::web::pulumi:pulumi:Stack::web-dev"}]}`,
+			sequence:   0,
+			valid:      true,
+		},
+		{
+			name:       "a resource with a urn, then a URN that is a number",
+			deployment: `{"resources":[{"urn":"urn:pulumi:dev::web::pulumi:pulumi:Stack::web-dev","URN":5}]}`,
+			sequence:   0,
+			valid:      false,
+		},
+		{
+			name:       "a resource with a URN that is a number, then a urn",
+			deployment: `{"resources":[{"URN":5,"urn":"urn:pulumi:dev::web::pulumi:pulumi:Stack::web-dev"}]}`,
+			sequence:   0,
+			valid:      false,
+		},
 		{
 			name:       "a versioned deployment with a resource with no urn",
 			deployment: `{"version":3,"deployment":{"resources":[{"type":"x"}]}}`,
 			sequence:   1,
 			valid:      false,
+		},
+		{
+			name:       "text with a raw byte that is not UTF-8",
+			deployment: "{\"x\":\"a\xffb\"}",
+			sequence:   0,
+			valid:      false,
+		},
+		{
+			name:       "text with a lone surrogate escape",
+			deployment: `{"x":"\ud800"}`,
+			sequence:   0,
+			valid:      false,
+		},
+		{
+			name:       "a versioned deployment with a lone surrogate escape",
+			deployment: `{"deployment":{"x":"\udfff"}}`,
+			sequence:   1,
+			valid:      false,
+		},
+		{
+			name:       "text with a surrogate pair",
+			deployment: `{"x":"😀"}`,
+			sequence:   0,
+			valid:      true,
 		},
 	}
 }

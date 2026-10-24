@@ -118,6 +118,7 @@ func Run(t *testing.T, newHarness Factory) {
 
 	cases := slices.Concat([]suiteCase{
 		{"create stores a queued job and get returns it", testCreateGet},
+		{"create keeps the trigger reference of a job, and a job with none reads back with none", testCreateTrigger},
 		{"get of an unknown ID is ErrNotFound", testGetUnknown},
 		{"two creates with one key and one spec give one job", testCreateKeyOnce},
 		{"a key with another spec conflicts", testCreateKeyConflict},
@@ -238,6 +239,7 @@ func newJob(unit identity.Object, op job.Operation, key string) *job.Job {
 		Agent:          "",
 		AgentMode:      "",
 		BreakGlass:     nil,
+		Trigger:        nil,
 		Delivery:       nil,
 		Closed:         nil,
 		Verification:   job.VerificationNone,

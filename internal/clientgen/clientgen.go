@@ -46,6 +46,11 @@ var ErrInvalidName = errors.New("clientgen: name is not valid")
 // holds "..", or is outside the output directory.
 var ErrUnsafePath = errors.New("clientgen: file path is not safe")
 
+// ErrStray means that a path that the language owns (Language.Owned) holds a
+// file that the run does not give and that has no generated header. The
+// writer never removes such a file: a person removes it.
+var ErrStray = errors.New("clientgen: a path that the run owns holds a file that the run does not give")
+
 // Parser reads an API description into the model.
 //
 // Parse returns ErrInvalidDescription, ErrUnsupported or ErrInvalidName,
@@ -114,6 +119,11 @@ type Language interface {
 	// does not match. The writer calls it to find the files that it may
 	// replace or remove.
 	IsGenerated(head []byte) bool
+	// Owned says whether a run of the language owns path, a path relative to
+	// the output directory with forward slashes: every file there must be a
+	// file that the run gives. A file there that the run does not give is
+	// stray, also when it has no header.
+	Owned(path string) bool
 }
 
 // Writer writes generated files under one output directory.
@@ -121,7 +131,10 @@ type Language interface {
 // Write returns ErrUnsafePath, wrapped, for a path outside the directory. It
 // removes a file with the header of the language (Language.IsGenerated) that
 // the new run does not give. It never changes a file that has no such header,
-// also not a generated file of another generator.
+// also not a generated file of another generator. It returns ErrStray,
+// wrapped, and writes nothing, when a path that the language owns
+// (Language.Owned) holds a file with no such header that the run does not
+// give.
 type Writer interface {
 	Write(dir string, files []File) error
 }

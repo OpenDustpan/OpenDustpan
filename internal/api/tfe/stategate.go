@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strings"
 
+	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/pkg/gate"
 	"opendustpan.org/opendustpan/pkg/identity"
 )
@@ -17,12 +18,6 @@ import (
 // it. A nil error lets the write go on. Any error refuses it.
 type StateGuard interface {
 	GuardStateWrite(ctx context.Context, w gate.StateWrite) (gate.Decision, error)
-}
-
-// gateErrorCodes lists the machine codes that a refusal by a gate or an
-// access limit gives. They are the codes of pkg/gate.
-func gateErrorCodes() []string {
-	return []string{"gate.denied", "gate.limited", "gate.rule-failed", "gate.unavailable"}
 }
 
 // stateCheck says what a route writes: the action that the route needs and the
@@ -76,9 +71,21 @@ func (h *Handler) guardStateWrite(
 	code, _ := gate.Code(refusal)
 	h.logger.InfoContext(ctx, "state write refused",
 		slog.String("object", obj.String()), slog.String("code", code), slog.String("record", string(refusal.Record)))
-	h.writeClassError(ctx, w, errorClass{
+
+	var answer errcode.Answer
+
+	answer, err = errcode.New(code)
+	if err != nil {
+		h.logger.ErrorContext(ctx, "error code failed", slog.String("error_code", code))
+		h.writeInternal(ctx, w)
+
+		return false
+	}
+
+	h.writeAnswer(ctx, w, errorClass{
 		status: http.StatusForbidden, title: titleForbidden, detail: refusalDetail(refusal, code),
-	}, code)
+		code: answer.Code(), args: nil,
+	}, answer, "")
 
 	return false
 }

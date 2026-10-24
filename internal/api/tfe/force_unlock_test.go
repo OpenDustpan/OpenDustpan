@@ -7,7 +7,6 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
-	"regexp"
 	"strings"
 	"sync"
 	"testing"
@@ -84,6 +83,7 @@ func newWriteHandlerWithAuthz(t *testing.T, ws tfe.WorkspaceService, authz ident
 		Logger:         slog.New(slog.DiscardHandler),
 		Namespaces:     newTestNamespaces(t),
 		Workspaces:     ws,
+		OutputChecker:  nil,
 		BaseURL:        baseurl.Resolver{},
 		Audit:          newTestAudit(),
 		Gate:           nil,
@@ -249,9 +249,14 @@ func TestForceUnlockErrorCodes(t *testing.T) {
 		{"not locked", workspace.ErrNotLocked, http.StatusConflict, "workspace.not-locked"},
 		{"lock mismatch", workspace.ErrLockMismatch, http.StatusConflict, "workspace.lock-mismatch"},
 		{"client encrypted", workspace.ErrClientEncrypted, http.StatusConflict, "workspace.client-encrypted"},
-		{"locked by another", workspace.ErrLockedByOther, http.StatusConflict, ""},
-		{"concurrent change", workspace.ErrConcurrentModification, http.StatusConflict, ""},
-		{"invalid reason", audit.ErrInvalidReason, http.StatusUnprocessableEntity, ""},
+		{"locked by another", workspace.ErrLockedByOther, http.StatusConflict, "workspace.locked"},
+		{
+			"concurrent change",
+			workspace.ErrConcurrentModification,
+			http.StatusConflict,
+			"workspace.changed-concurrently",
+		},
+		{"invalid reason", audit.ErrInvalidReason, http.StatusUnprocessableEntity, "audit.reason-invalid"},
 	}
 
 	for _, tc := range cases {
@@ -407,32 +412,5 @@ func TestWorkspaceDocumentHoldsTheLockID(t *testing.T) {
 				t.Fatalf("lock-id = %s (%v), want %q", raw, err, tc.want)
 			}
 		})
-	}
-}
-
-// TestErrorCodesAreValid proves that every machine code of the API has the
-// form of a code and that no code repeats.
-func TestErrorCodesAreValid(t *testing.T) {
-	t.Parallel()
-
-	pattern := regexp.MustCompile(`^[a-z][a-z0-9]*(-[a-z0-9]+)*(\.[a-z][a-z0-9]*(-[a-z0-9]+)*)+$`)
-	seen := map[string]bool{}
-
-	for _, code := range tfe.ErrorCodes() {
-		if !pattern.MatchString(code) || len(code) < 3 || len(code) > 64 {
-			t.Errorf("code %q does not have the form of a code", code)
-		}
-
-		if seen[code] {
-			t.Errorf("code %q is listed twice", code)
-		}
-
-		seen[code] = true
-	}
-
-	for _, want := range []string{"workspace.not-locked", "workspace.lock-mismatch", "workspace.client-encrypted"} {
-		if !seen[want] {
-			t.Errorf("code %q is not listed", want)
-		}
 	}
 }

@@ -974,26 +974,26 @@ func removeMember(
 // a store with no principal port 501. A membership change of a group that a
 // directory keeps answers 409, and the message names the directory. The domain wraps each sentinel with
 // the ID or the name it acted on, never with driver text.
-func classifyPrincipal(err error) (int, string, bool) {
+func classifyPrincipal(err error) (failure, bool) {
 	switch {
 	case errors.Is(err, errPrincipalBody), errors.Is(err, errPrincipalChangeBody),
 		errors.Is(err, errGroupBody), errors.Is(err, errGroupChangeBody), errors.Is(err, errMemberBody),
 		errors.Is(err, errNamespacePrincipalBody):
-		return http.StatusBadRequest, err.Error(), true
+		return fail(http.StatusBadRequest, err.Error()), true
 	case errors.Is(err, principal.ErrInvalid), errors.Is(err, principal.ErrReservedSubject),
 		errors.Is(err, errPageQuery):
-		return http.StatusBadRequest, err.Error(), true
+		return fail(http.StatusBadRequest, err.Error()), true
 	case errors.Is(err, errBodyTooLarge):
-		return http.StatusRequestEntityTooLarge, err.Error(), true
+		return fail(http.StatusRequestEntityTooLarge, err.Error()), true
 	case errors.Is(err, principal.ErrAlreadyExists), errors.Is(err, principal.ErrManagedByDirectory),
 		errors.Is(err, principal.ErrNotDisabled), errors.Is(err, principal.ErrDisabled),
 		errors.Is(err, access.ErrLastSiteAdministrator):
-		return http.StatusConflict, err.Error(), true
+		return fail(http.StatusConflict, err.Error()), true
 	case errors.Is(err, principal.ErrNotFound):
-		return http.StatusNotFound, err.Error(), true
+		return fail(http.StatusNotFound, err.Error()), true
 	case errors.Is(err, errNoPrincipalStore):
-		return http.StatusNotImplemented, err.Error(), true
+		return fail(http.StatusNotImplemented, err.Error()), true
 	default:
-		return 0, "", false
+		return fail(0, ""), false
 	}
 }

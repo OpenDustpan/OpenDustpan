@@ -5,6 +5,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -215,6 +216,14 @@ func TestValidateDriftSteps(t *testing.T) {
 
 			return s
 		}},
+		{"a readable plan output", func(s []job.Step) []job.Step {
+			s[1].Outputs = []job.Output{{Kind: job.OutputPlanDisplay, Path: "drift.json"}}
+
+			return s
+		}},
+		{"AllowFailure", func(s []job.Step) []job.Step { s[0].AllowFailure = true; return s }},
+		{"a timeout", func(s []job.Step) []job.Step { s[1].Timeout = time.Minute; return s }},
+		{"the longest timeout", func(s []job.Step) []job.Step { s[1].Timeout = job.MaxStepTimeout; return s }},
 		{"TF_CLI_ARGS", func(s []job.Step) []job.Step { s[1].Env["TF_CLI_ARGS"] = "-lock=false"; return s }},
 		{"tf_cli_args in lower case", func(s []job.Step) []job.Step { s[1].Env["tf_cli_args_plan"] = "-x"; return s }},
 		{"TF_DATA_DIR", func(s []job.Step) []job.Step { s[1].Env["TF_DATA_DIR"] = "/tmp/x"; return s }},

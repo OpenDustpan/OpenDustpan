@@ -170,6 +170,10 @@ of the run.
 
 The list of tested versions is in [`e2e/tool.go`](e2e/tool.go).
 
+The lowest tested version of each tool is the lowest supported version:
+Pulumi CLI 3.200.0 and OpenTofu 1.11.14. An older version may work, but no
+test drives it. Use a supported version, or a later one.
+
 ## What the server stores
 
 | Data | Where | Protection |
@@ -310,6 +314,8 @@ How-to guides:
   text and the other context of a namespace and of a unit.
 - [Check a workspace for drift](docs/guides/drift-checks.md): start a drift check
   of an OpenTofu workspace and read its latest drift result.
+- [Run triggers](docs/guides/run-triggers.md): save a trigger on a stack or a
+  workspace, fire it by hand, and see what the server checks.
 - [Output sharing](docs/guides/output-sharing.md): the actions that read
   outputs and manage sharing, and the setting that decides the sharing rule of
   a new stack or workspace.

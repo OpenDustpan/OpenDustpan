@@ -261,20 +261,53 @@ func (s *Service) CoveringFor(ctx context.Context, unit collection.UnitRef, jobI
 		return Lock{}, ErrNotLocked
 	}
 
+	return s.afterPhase(ctx, locks, unit, jobID)
+}
+
+// NamespaceLockFor is CoveringFor for a unit that does not exist yet. A new
+// unit has no inventory row, so it is in no collection and has no lock of its
+// own: only the lock of its namespace covers it. A job whose phase on the unit
+// started before that lock passes it, as it does in CoveringFor.
+func (s *Service) NamespaceLockFor(ctx context.Context, unit collection.UnitRef, jobID string) (Lock, error) {
+	lock, err := s.NamespaceLock(ctx, unit.Namespace)
+	if err != nil {
+		return Lock{}, err
+	}
+
+	return s.afterPhase(ctx, []Lock{lock}, unit, jobID)
+}
+
+// PhaseStart returns when the current phase of the job jobID on the unit
+// started, for a caller that keeps a manual lock in a transaction of its own
+// and applies the rule of CoveringFor there: the phase passes a lock that came
+// after it. It returns the zero time, which passes no lock, for an empty job
+// ID, for a service without a phase clock and for a clock that fails. The
+// answer fails closed in the same way as CoveringFor.
+func (s *Service) PhaseStart(ctx context.Context, unit collection.UnitRef, jobID string) time.Time {
 	if jobID == "" || s.phases == nil {
+		return time.Time{}
+	}
+
+	started, err := s.phases.PhaseStartedAt(ctx, jobID, unit)
+	if err != nil {
+		return time.Time{}
+	}
+
+	return started
+}
+
+// afterPhase applies the rule of the job to locks, which cover unit and are not
+// empty. Without a job it answers the first lock. The request passes only on a
+// positive answer of the clock: a clock that fails or answers zero leaves the
+// lock in place. The phase passes only when it started before every lock that
+// covers the unit, so a new lock on a wider object never lifts a refusal that an
+// older lock gives.
+func (s *Service) afterPhase(ctx context.Context, locks []Lock, unit collection.UnitRef, jobID string) (Lock, error) {
+	started := s.PhaseStart(ctx, unit, jobID)
+	if started.IsZero() {
 		return locks[0], nil
 	}
 
-	// The request passes only on a positive answer: a clock that fails or answers
-	// zero leaves the lock in place.
-	started, clockErr := s.phases.PhaseStartedAt(ctx, jobID, unit)
-	if clockErr != nil || started.IsZero() {
-		return locks[0], nil //nolint:nilerr // Fail closed: a clock that fails or answers zero keeps the lock.
-	}
-
-	// The phase passes only when it started before every lock that covers the
-	// unit, so a new lock on a wider object never lifts a refusal that an older
-	// lock gives.
 	for i := range locks {
 		if !started.Before(locks[i].Since) {
 			return locks[i], nil
