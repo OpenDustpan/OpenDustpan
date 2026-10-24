@@ -222,6 +222,15 @@ func deleteUnderLock(t *testing.T, f *fixture, scope lockScope, tool deleteTool,
 		t.Fatalf("delete under the %s lock: err = %v, want ErrLocked and %v", scope.name, err, tool.sentinel)
 	}
 
+	if locked, ok := errors.AsType[*manuallock.LockedError](err); !ok || locked == nil || locked.Unit != unit.unit {
+		t.Fatalf(
+			"delete under the %s lock: err = %v, want a refusal that names the unit %v",
+			scope.name,
+			err,
+			unit.unit,
+		)
+	}
+
 	if after := auditEntryCount(t, f); after != before {
 		t.Errorf("audit entries after the refused delete = %d, want %d", after, before)
 	}

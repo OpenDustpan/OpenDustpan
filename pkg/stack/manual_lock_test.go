@@ -206,6 +206,10 @@ func checkRefusal(t *testing.T, err error, locks *fakeManualLocks) {
 	if len(locks.asked) != 1 || locks.asked[0] != wantUnit {
 		t.Errorf("unit asked = %v, want [%v]", locks.asked, wantUnit)
 	}
+
+	if manual, ok := errors.AsType[*manuallock.LockedError](err); !ok || manual == nil || manual.Unit != wantUnit {
+		t.Errorf("refused unit of %v, want %v", err, wantUnit)
+	}
 }
 
 // TestStartWithoutAManualLock proves a stack that no manual lock covers starts
