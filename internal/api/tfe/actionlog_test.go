@@ -43,6 +43,7 @@ func loggedTFEHandler(t *testing.T, stores tfe.WorkspaceService, buf *bytes.Buff
 		Logger:         logger,
 		Namespaces:     newTestNamespaces(t),
 		Workspaces:     stores,
+		OutputChecker:  nil,
 		BaseURL:        baseurl.Resolver{},
 		Audit:          newTestAudit(),
 		Gate:           nil,

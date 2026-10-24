@@ -179,14 +179,10 @@ func (h *Handler) authenticate(r *http.Request) (identity.Principal, bool, error
 type errorResponse struct {
 	Message string `json:"message"`
 	Code    int    `json:"code"`
-}
-
-// codedErrorResponse is errorResponse with the stable machine code of a 403.
-// The fields of errorResponse keep their names and their meaning.
-type codedErrorResponse struct {
-	Message   string `json:"message"`
-	Code      int    `json:"code"`
-	ErrorCode string `json:"errorCode"`
+	// ErrorCode is a stable machine code of the catalog.
+	ErrorCode string `json:"errorCode,omitempty"`
+	// ErrorArgs are the arguments of the code.
+	ErrorArgs map[string]any `json:"errorArgs,omitempty"`
 }
 
 // errNotFound is the one answer for an unknown namespace, an unknown unit, a
@@ -209,63 +205,56 @@ var errBodyText = errors.New(
 var errInclude = errors.New("invalid include query parameter: send section names separated by commas")
 
 func (h *Handler) writeError(ctx context.Context, w http.ResponseWriter, err error) {
-	status, message := classify(err)
-	if status == http.StatusInternalServerError {
-		// The log names the status only, never the error text: the text may
-		// hold driver detail, a token, or state.
-		h.logger.ErrorContext(ctx, "request failed", slog.Int("status", status))
-	}
-
 	if errors.Is(err, namespace.ErrFenced) {
 		h.logger.WarnContext(ctx, "write fenced", slog.String("error", err.Error()))
 	}
 
-	if status == http.StatusForbidden {
-		if code := errcode.Forbidden(err); code != "" {
-			h.writeJSON(ctx, w, status, codedErrorResponse{Code: status, Message: message, ErrorCode: code})
-
-			return
-		}
-	}
-
-	h.writeJSON(ctx, w, status, errorResponse{Code: status, Message: message})
+	h.writeFailure(ctx, w, classify(err))
 }
 
 // classifyAuth maps the errors of the sign-in and the authorization of a
 // request.
-func classifyAuth(err error) (int, string, bool) {
+func classifyAuth(err error) (failure, bool) {
 	switch {
 	case errors.Is(err, identity.ErrRateLimited):
-		return http.StatusTooManyRequests, "too many failed sign-ins from this address: try again later", true
+		return fail(http.StatusTooManyRequests, "too many failed sign-ins from this address: try again later",
+			errcode.AuthRateLimited), true
 	case errors.Is(err, identity.ErrUnauthenticated):
-		return http.StatusUnauthorized, "unauthenticated", true
+		return fail(http.StatusUnauthorized, "unauthenticated", errcode.AuthUnauthenticated), true
 	case errors.Is(err, sessionauth.ErrCSRF), errors.Is(err, sessionauth.ErrOtherSite):
-		return http.StatusForbidden, err.Error(), true
+		return fail(http.StatusForbidden, err.Error(), errcode.Forbidden(err)), true
 	case errors.Is(err, identity.ErrDenied):
-		return http.StatusForbidden, "forbidden", true
-	default:
-		return 0, "", false
+		return fail(http.StatusForbidden, "forbidden", errcode.Forbidden(err)), true
 	}
+
+	var none failure
+
+	return none, false
 }
 
-// classify maps errors to an HTTP status and a message safe to show callers.
-func classify(err error) (int, string) {
-	if status, message, ok := classifyAuth(err); ok {
-		return status, message
+// classify maps errors to an HTTP status, a message safe to show callers and
+// a code of the catalog.
+func classify(err error) failure {
+	if f, ok := classifyAuth(err); ok {
+		return f
 	}
 
 	switch {
 	case errors.Is(err, errNotFound), errors.Is(err, namespace.ErrNotFound):
-		return http.StatusNotFound, errNotFound.Error()
+		return fail(http.StatusNotFound, errNotFound.Error(), errcode.ContextObjectNotFound)
 	case errors.Is(err, objectcontext.ErrInvalidObject):
 		// A purge removed the unit after the route resolved it.
-		return http.StatusNotFound, errNotFound.Error()
+		return fail(http.StatusNotFound, errNotFound.Error(), errcode.ContextObjectNotFound)
 	case errors.Is(err, objectcontext.ErrNotFound):
-		return http.StatusNotFound, "no API context to clear"
-	case errors.Is(err, errBody), errors.Is(err, errBodyText), errors.Is(err, errInclude):
-		return http.StatusBadRequest, err.Error()
-	case errors.Is(err, objectcontext.ErrInvalidContext), errors.Is(err, objectcontext.ErrUnknownSection):
-		return http.StatusBadRequest, invalidMessage(err)
+		return fail(http.StatusNotFound, "no API context to clear", errcode.ContextNotSet)
+	case errors.Is(err, errBody), errors.Is(err, errBodyText):
+		return fail(http.StatusBadRequest, err.Error(), errcode.RequestBodyInvalid)
+	case errors.Is(err, errInclude):
+		return fail(http.StatusBadRequest, err.Error(), errcode.RequestInvalidQuery)
+	case errors.Is(err, objectcontext.ErrInvalidContext):
+		return fail(http.StatusBadRequest, invalidMessage(err), errcode.ContextInvalid)
+	case errors.Is(err, objectcontext.ErrUnknownSection):
+		return fail(http.StatusBadRequest, invalidMessage(err), errcode.ContextUnknownSection)
 	default:
 		return classifyConflict(err)
 	}
@@ -284,21 +273,37 @@ func invalidMessage(err error) string {
 }
 
 // classifyConflict maps the errors of a refused write.
-func classifyConflict(err error) (int, string) {
+func classifyConflict(err error) failure {
 	switch {
 	case errors.Is(err, objectcontext.ErrFieldFromCode):
-		return http.StatusConflict, err.Error() + ": change it in the opendustpan output of the unit"
+		return classifyFieldFromCode(err)
 	case errors.Is(err, objectcontext.ErrUnitDeleted):
-		return http.StatusConflict, "the unit is deleted: restore it before you change its context"
+		return fail(http.StatusConflict, "the unit is deleted: restore it before you change its context",
+			errcode.ContextUnitDeleted)
 	case errors.Is(err, namespace.ErrFenced):
-		return http.StatusConflict, namespace.ErrFenced.Error()
+		return fail(http.StatusConflict, namespace.ErrFenced.Error(), errcode.NamespaceFenced)
 	case errors.Is(err, namespace.ErrNotHome):
-		return http.StatusMisdirectedRequest, "namespace is not homed in this region"
+		return fail(http.StatusMisdirectedRequest, "namespace is not homed in this region", errcode.NamespaceNotHome)
 	case errors.Is(err, maintenance.ErrInMaintenance):
-		return http.StatusServiceUnavailable, maintenance.ErrInMaintenance.Error() + ": try again later"
+		return fail(http.StatusServiceUnavailable, maintenance.ErrInMaintenance.Error()+": try again later",
+			errcode.MaintenanceInMaintenance)
 	default:
-		return http.StatusInternalServerError, "internal error"
+		return fail(http.StatusInternalServerError, "internal error", errcode.ServerInternal)
 	}
+}
+
+// classifyFieldFromCode maps the write of a field that the output of the code
+// sets to 409 with the code context.field-from-code and the field. A refusal
+// without the field has no value for the argument, so it answers 500: the
+// service always names the field.
+func classifyFieldFromCode(err error) failure {
+	field, ok := errors.AsType[*objectcontext.FieldFromCodeError](err)
+	if !ok || field == nil {
+		return fail(http.StatusInternalServerError, "internal error", errcode.ServerInternal)
+	}
+
+	return fail(http.StatusConflict, err.Error()+": change it in the opendustpan output of the unit",
+		errcode.ContextFieldFromCode, errcode.Identifier("field", string(field.Field)))
 }
 
 func (h *Handler) writeJSON(ctx context.Context, w http.ResponseWriter, status int, body any) {

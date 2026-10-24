@@ -99,7 +99,7 @@ type deadlineReplayer struct {
 }
 
 func (d deadlineReplayer) Replay(
-	ctx context.Context, _ func(context.Context) (io.ReadCloser, error), _ io.Reader, _ io.Writer,
+	ctx context.Context, _ func(context.Context) (io.ReadCloser, error), _ [][]byte, _ io.Writer,
 ) error {
 	if deadline, ok := ctx.Deadline(); ok {
 		select {
@@ -172,7 +172,7 @@ type signalReplayer struct {
 }
 
 func (s signalReplayer) Replay(
-	ctx context.Context, _ func(context.Context) (io.ReadCloser, error), _ io.Reader, _ io.Writer,
+	ctx context.Context, _ func(context.Context) (io.ReadCloser, error), _ [][]byte, _ io.Writer,
 ) error {
 	select {
 	case s.started <- struct{}{}:

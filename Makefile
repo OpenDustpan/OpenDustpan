@@ -176,10 +176,10 @@ load: ## Run the load harness against a self-started server and write load-repor
 
 test-s3: ## Go tests in pkg/blob/s3 against a live S3-compatible server (needs DUSTPAN_TEST_S3_*).
 	@test -n "$$DUSTPAN_TEST_S3_ENDPOINT" && test -n "$$DUSTPAN_TEST_S3_BUCKET" && test -n "$$DUSTPAN_TEST_S3_ACCESS_KEY" && test -n "$$DUSTPAN_TEST_S3_SECRET_KEY" || (echo "set DUSTPAN_TEST_S3_ENDPOINT, DUSTPAN_TEST_S3_BUCKET, DUSTPAN_TEST_S3_ACCESS_KEY and DUSTPAN_TEST_S3_SECRET_KEY" && exit 1)
-	go test -race -count=1 ./pkg/blob/s3/...
+	go test $(RACE_TEST_FLAGS) -count=1 ./pkg/blob/s3/...
 
 e2e: ## Drive real Pulumi CLI and OpenTofu versions against the server (downloads CLIs; see e2e/doc.go). Not part of check; CI runs it as its own job.
-	go test -tags e2e -race -count=1 -parallel 16 -timeout 60m ./e2e/...
+	go test -tags e2e $(RACE_TEST_FLAGS) -count=1 -parallel 16 -timeout 60m ./e2e/...
 
 CLIENTGEN := go run ./cmd/clientgen -target typescript -description internal/api/apidesc/openapi.json -out clients/typescript
 
@@ -193,7 +193,7 @@ clients-ts-test: ## Compile the TypeScript client strictly and run its tests (ne
 	cd clients/typescript && tsc -p tsconfig.json && node --test "test/*.test.mjs"
 
 clients-conformance: clients-ts-test ## Build the server, generate the Go and TypeScript clients from the description that the server serves, and run the client conformance suite on them. Not part of check.
-	DUSTPAN_TEST_CLIENTGEN_CONFORMANCE=1 go test -race -count=1 -timeout 25m -run 'TestGoClientConformance|TestTypeScriptClientConformance' ./internal/clientgen/conformance/
+	DUSTPAN_TEST_CLIENTGEN_CONFORMANCE=1 go test $(RACE_TEST_FLAGS) -count=1 -timeout 25m -run 'TestGoClientConformance|TestTypeScriptClientConformance' ./internal/clientgen/conformance/
 
 checks-agent: ## Sync the branch with main, then run generate, check, e2e and a TruffleHog scan of the branch commits with cleanup (SYNC=merge|rebase|none, SKIP="steps", CLEAN_CACHE=1 also deletes the e2e CLI cache).
 	./scripts/checks-agent.sh
@@ -202,16 +202,16 @@ checks-agent: ## Sync the branch with main, then run generate, check, e2e and a 
 # as a service container) and downloads no binary.
 faults: ## Run Toxiproxy network fault tests against a self-started server (downloads toxiproxy-server unless TOXIPROXY_URL is set; test-only, never ships). Not part of check.
 	if [ -z "$$TOXIPROXY_URL" ]; then TOXIPROXY_BIN="$$(./scripts/toxiproxy.sh)" && export TOXIPROXY_BIN; fi && \
-	go test -tags faults -race -count=1 -timeout 20m ./e2e/faults/...
+	go test -tags faults $(RACE_TEST_FLAGS) -count=1 -timeout 20m ./e2e/faults/...
 
 e2e-journal: ## Drive the real Pulumi CLI through the journal route on the recording build (ADR 43, work item 9). Not part of check.
-	E2E_PULUMI_VERSIONS=3.268.0 go test -tags "e2e journalrecording" -race -count=1 -run 'TestPulumiJournalingOn|TestPulumiJournalRefusalCancel|TestPulumiJournalingOnVersion|TestPulumiJournalStateMigration' -timeout 60m ./e2e/...
+	E2E_PULUMI_VERSIONS=3.268.0 go test -tags "e2e journalrecording" $(RACE_TEST_FLAGS) -count=1 -run 'TestPulumiJournalingOn|TestPulumiJournalRefusalCancel|TestPulumiJournalingOnVersion|TestPulumiJournalStateMigration' -timeout 60m ./e2e/...
 
 upgrade-test: ## Restart the current binary on the same database and check data, secrets and the held lock survive (downloads CLIs; empty-database case without a v* tag, previous-tag case with one). Not part of check.
-	E2E_SERVER=binary go test -tags "e2e upgrade" -race -count=1 -v -timeout 20m ./e2e/ -run TestUpgrade
+	E2E_SERVER=binary go test -tags "e2e upgrade" $(RACE_TEST_FLAGS) -count=1 -v -timeout 20m ./e2e/ -run TestUpgrade
 
 crash-test: ## Stop the server binary with SIGKILL during a Pulumi checkpoint save, an OpenTofu upload and a lock, then check recovery on the same database and blobs (downloads CLIs; PostgreSQL with DUSTPAN_TEST_POSTGRES_URL). Not part of check.
-	E2E_SERVER=binary go test -tags e2e -race -count=1 -v -timeout 20m ./e2e/ -run TestBinaryCrash
+	E2E_SERVER=binary go test -tags e2e $(RACE_TEST_FLAGS) -count=1 -v -timeout 20m ./e2e/ -run TestBinaryCrash
 
 SOAK_DURATION ?= 30m
 SOAK_PULUMI ?= 4
@@ -223,7 +223,7 @@ CONSOLE_REF ?= b86703e174223d12fb211ad65b5f5ed0d71b896d
 DEMO_PORT ?= 8080
 
 soak: ## Run concurrent real Pulumi CLI and OpenTofu processes against one server binary for SOAK_DURATION (default 30m; SOAK_DURATION=60s for a smoke check), with SOAK_PULUMI and SOAK_TOFU workers each (default 4) writing CSV and Markdown reports to SOAK_REPORT_DIR (SQLite default; PostgreSQL with DUSTPAN_TEST_POSTGRES_URL). Not part of check; see docs/guides/soak.md.
-	SOAK_DURATION=$(SOAK_DURATION) SOAK_PULUMI=$(SOAK_PULUMI) SOAK_TOFU=$(SOAK_TOFU) SOAK_REPORT_DIR=$(SOAK_REPORT_DIR) E2E_SERVER=binary go test -tags "e2e soak" -race -count=1 -v -timeout 60m ./e2e/ -run TestSoak
+	SOAK_DURATION=$(SOAK_DURATION) SOAK_PULUMI=$(SOAK_PULUMI) SOAK_TOFU=$(SOAK_TOFU) SOAK_REPORT_DIR=$(SOAK_REPORT_DIR) E2E_SERVER=binary go test -tags "e2e soak" $(RACE_TEST_FLAGS) -count=1 -v -timeout 60m ./e2e/ -run TestSoak
 
 BASELINE_REF ?= origin/main
 
@@ -237,7 +237,7 @@ generate: ## Regenerate sqlc query code after editing queries.sql or migrations,
 	go test ./internal/pulumijournal/internal/gen/ -run TestGenerateMatchesCommittedFile -update -count=1
 
 journal-test: ## Journal route tests of the recording build. No CLI download; part of check.
-	go test -tags journalrecording -race -count=1 ./internal/api/pulumi/ ./pkg/dustpan/
+	go test -tags journalrecording $(RACE_TEST_FLAGS) -count=1 ./internal/api/pulumi/ ./pkg/dustpan/
 
 journal-guard: ## Refuse a release build that uses the journalrecording tag (ADR 43, work item 9).
 	@if grep -rq journalrecording Dockerfile .github/workflows scripts 2>/dev/null || \
@@ -255,4 +255,4 @@ image-smoke: ## Build the container image and run the local smoke test (needs do
 	./scripts/smoke-image.sh
 
 compose-smoke: ## Start the stack of deploy/compose and drive the real Pulumi CLI and OpenTofu against it (needs docker with compose and openssl; not part of check).
-	E2E_COMPOSE=1 go test -tags e2e -race -count=1 -timeout 30m -run '^TestComposeQuickstart$$' ./e2e/...
+	E2E_COMPOSE=1 go test -tags e2e $(RACE_TEST_FLAGS) -count=1 -timeout 30m -run '^TestComposeQuickstart$$' ./e2e/...

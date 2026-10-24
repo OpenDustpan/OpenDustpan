@@ -1,6 +1,6 @@
 # 182. Stable error codes for API errors
 
-Status: accepted · 2026-10-18. Accepts the "Errors from the server" section of RFC 11. Route paths superseded in part by ADR 210. Decision 5 superseded in part by ADR 234
+Status: accepted · 2026-10-18. Accepts the "Errors from the server" section of RFC 11. Route paths superseded in part by ADR 210. Decision 5 superseded in part by ADR 234. Decisions 4 and 7 superseded in part by ADR 276
 
 ## Context
 

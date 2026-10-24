@@ -64,6 +64,7 @@ func newWriteHandler(t *testing.T, ws tfe.WorkspaceService, base baseurl.Resolve
 		Logger:         slog.New(slog.DiscardHandler),
 		Namespaces:     newTestNamespaces(t),
 		Workspaces:     ws,
+		OutputChecker:  newTestOutputChecker(t, allowAll(), ws),
 		BaseURL:        base,
 		Audit:          newTestAudit(),
 		Gate:           nil,

@@ -8,8 +8,10 @@ import (
 )
 
 // TestSuiteOverAMemorySettingsStore runs the suite with a Settings in
-// memory. The cases of the setting run on it. Each other case is pending, so
-// it skips before it asks for a harness: the factory fails such a case.
+// memory. The cases of the setting run on it. A pending case skips before it
+// asks for a harness. A case of the checker, of the States port or of the
+// Outputs port needs the stores of the tools, so the factory skips it: the
+// server tests run it.
 func TestSuiteOverAMemorySettingsStore(t *testing.T) {
 	t.Parallel()
 
@@ -18,6 +20,12 @@ func TestSuiteOverAMemorySettingsStore(t *testing.T) {
 
 		if !strings.HasPrefix(t.Name(), "TestSuiteOverAMemorySettingsStore/store:_") ||
 			!strings.Contains(t.Name(), "setting") {
+			for _, prefix := range []string{"checker:", "latest:", "client-encrypted:", "states:", "outputs:"} {
+				if strings.HasPrefix(strings.TrimPrefix(t.Name(), "TestSuiteOverAMemorySettingsStore/"), prefix) {
+					t.Skip("the case needs the stores of the tools")
+				}
+			}
+
 			t.Fatal("a pending case asked for a harness")
 		}
 

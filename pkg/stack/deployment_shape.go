@@ -65,6 +65,13 @@ const envelopeMember = "deployment"
 func checkDeploymentShape(deployment []byte, seq int64) error {
 	// The decoder reads a bytes.Buffer in place, so the scan does not copy
 	// the deployment.
+	//
+	// The decoder refuses text that is not valid UTF-8 and a lone surrogate
+	// escape such as \ud800. The decoder of the CLI reads both, but the CLI
+	// never writes them, because its encoder replaces invalid UTF-8. The
+	// check stays strict on purpose: a stored deployment then holds only text
+	// that every reader decodes to the same value, and a client that is not
+	// the CLI gets a refusal instead of a state that reads back changed.
 	dec := jsontext.NewDecoder(bytes.NewBuffer(deployment), jsontext.AllowDuplicateNames(true))
 
 	check := checkDeploymentMember

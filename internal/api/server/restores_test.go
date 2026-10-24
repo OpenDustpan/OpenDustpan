@@ -205,27 +205,20 @@ type getRestoreDoc struct {
 	Manifest    *backup.Manifest `json:"manifest"`
 }
 
-// restorePollTimeout bounds the wait for a restore to leave checking and
-// applying. A restore takes a pre-backup, stages the backup with migrations and
-// swaps the data. Under full-suite CPU load that takes longer than pollTimeout,
-// which the backup tests use. The wait still ends, so a restore that never
-// moves fails the test.
-const restorePollTimeout = 2 * time.Minute
-
-// waitRestoreState polls one restore until it reaches want or the wait times
-// out, failing the test otherwise.
+// waitRestoreState polls one restore until it reaches want or the poll
+// context of pollContext ends, failing the test otherwise.
 func waitRestoreState(t *testing.T, handler testHandler, id, want string) getRestoreDoc {
 	t.Helper()
 
-	deadline := time.Now().Add(restorePollTimeout)
+	ctx, cancel := pollContext(t)
+	defer cancel()
 
-	for time.Now().Before(deadline) {
+	for ctx.Err() == nil {
 		status, body := serveRestore(t, handler, http.MethodGet, "/api/server/restores/"+id, "")
 
 		if status != http.StatusOK {
 			select {
-			case <-t.Context().Done():
-				t.Fatalf("restore %s: %v", id, t.Context().Err())
+			case <-ctx.Done():
 			case <-time.After(pollInterval):
 			}
 
@@ -247,8 +240,7 @@ func waitRestoreState(t *testing.T, handler testHandler, id, want string) getRes
 		}
 
 		select {
-		case <-t.Context().Done():
-			t.Fatalf("restore %s: %v", id, t.Context().Err())
+		case <-ctx.Done():
 		case <-time.After(pollInterval):
 		}
 	}

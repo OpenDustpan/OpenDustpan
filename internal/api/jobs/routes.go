@@ -75,8 +75,11 @@ type Route struct {
 	// and the handler writes the audit entry of a refusal.
 	Writes []identity.Action
 	// IdempotencyKey says that the route takes the Idempotency-Key header.
-	// A request with the header to a route that does not take it answers
-	// 400, so the server never ignores a key without an error.
+	// The wrapper does not check the header: the handler of a route with the
+	// flag reads it. A read without the flag ignores the header, because a
+	// read has no effect to repeat. A write without the flag must refuse the
+	// header with 400 in its handler, so that the server never ignores a key
+	// without an error. TestHeaderFlagsMatchTheHandler checks the write case.
 	IdempotencyKey bool
 	// ETag says that the answer holds the ETag header: the version of the
 	// job, in quotes.

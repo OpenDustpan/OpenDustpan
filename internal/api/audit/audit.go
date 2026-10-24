@@ -460,61 +460,96 @@ func (h *Handler) authenticate(r *http.Request) (identity.Principal, bool, error
 	return p, false, err
 }
 
-// errorResponse is the error body the console expects, as in the API the
-// console reads today.
+// errorResponse is the error body of the tool-neutral APIs. ErrorCode is a
+// stable machine code of the catalog, and ErrorArgs are its arguments.
 type errorResponse struct {
-	Message string `json:"message"`
-	Code    int    `json:"code"`
-}
-
-// codedErrorResponse is errorResponse with the stable machine code of a 403.
-// The fields of errorResponse keep their names and their meaning.
-type codedErrorResponse struct {
-	Message   string `json:"message"`
-	Code      int    `json:"code"`
-	ErrorCode string `json:"errorCode"`
+	Message   string         `json:"message"`
+	Code      int            `json:"code"`
+	ErrorCode string         `json:"errorCode"`
+	ErrorArgs map[string]any `json:"errorArgs,omitempty"`
 }
 
 func (h *Handler) writeError(ctx context.Context, w http.ResponseWriter, err error) {
-	status, message := classify(err)
-	if status == http.StatusInternalServerError {
+	pr := classify(err)
+
+	answer, codeErr := errcode.New(pr.code)
+	if codeErr != nil {
+		// A code that the catalog refuses is a bug of this adapter. The log
+		// names the code only.
+		h.logger.ErrorContext(ctx, "error code refused", slog.String("error_code", pr.code))
+
+		pr = problem{status: http.StatusInternalServerError, code: errcode.ServerInternal, message: "internal error"}
+		answer = errcode.Internal()
+	}
+
+	if pr.status == http.StatusInternalServerError {
 		// The log names the status only, never the error text: the text
-		// may hold driver detail, a token, or state (ADR 32 decision 7).
-		h.logger.ErrorContext(ctx, "request failed", slog.Int("status", status))
+		// may hold driver detail, a token, or state.
+		h.logger.ErrorContext(ctx, "request failed", slog.Int("status", pr.status))
 	}
 
-	if status == http.StatusForbidden {
-		if code := errcode.Forbidden(err); code != "" {
-			h.writeJSON(ctx, w, status, codedErrorResponse{Code: status, Message: message, ErrorCode: code})
-
-			return
-		}
-	}
-
-	h.writeJSON(ctx, w, status, errorResponse{Code: status, Message: message})
+	h.writeAnswer(ctx, w, pr.status, pr.message, answer)
 }
 
-// classify maps domain errors to an HTTP status and a message safe to show callers.
-func classify(err error) (int, string) {
+// writeAnswer writes the error body of status and message with the code and
+// the arguments of answer.
+func (h *Handler) writeAnswer(
+	ctx context.Context, w http.ResponseWriter, status int, message string, answer errcode.Answer,
+) {
+	h.writeJSON(ctx, w, status, errorResponse{
+		Message: message, Code: status, ErrorCode: answer.Code(), ErrorArgs: answer.Args(),
+	})
+}
+
+// problem is the answer to an error: a status, a code of the catalog and a
+// message that is safe to show callers.
+type problem struct {
+	status  int
+	code    string
+	message string
+}
+
+// classify maps domain errors to their answer: first the errors of the
+// caller, then the errors of the request.
+func classify(err error) problem {
 	switch {
 	case errors.Is(err, identity.ErrRateLimited):
-		return http.StatusTooManyRequests, "too many failed sign-ins from this address: try again later"
+		return problem{
+			status:  http.StatusTooManyRequests,
+			code:    errcode.AuthRateLimited,
+			message: "too many failed sign-ins from this address: try again later",
+		}
 	case errors.Is(err, identity.ErrUnauthenticated):
-		return http.StatusUnauthorized, "unauthenticated"
+		return problem{status: http.StatusUnauthorized, code: errcode.AuthUnauthenticated, message: "unauthenticated"}
 	case errors.Is(err, sessionauth.ErrCSRF), errors.Is(err, sessionauth.ErrOtherSite):
-		return http.StatusForbidden, err.Error()
+		return problem{status: http.StatusForbidden, code: errcode.Forbidden(err), message: err.Error()}
 	case errors.Is(err, identity.ErrDenied):
-		return http.StatusForbidden, "forbidden"
-	case errors.Is(err, errMissingOrganization), errors.Is(err, errInvalidPage), errors.Is(err, errInvalidSequence):
-		return http.StatusBadRequest, err.Error()
-	case errors.Is(err, namespace.ErrInvalidName), errors.Is(err, identity.ErrInvalidObject):
-		return http.StatusBadRequest, err.Error()
-	case errors.Is(err, namespace.ErrNotFound), errors.Is(err, audit.ErrEntryNotFound):
-		return http.StatusNotFound, err.Error()
-	case errors.Is(err, errNoEntryReader):
-		return http.StatusNotImplemented, err.Error()
+		return problem{status: http.StatusForbidden, code: errcode.Forbidden(err), message: "forbidden"}
 	default:
-		return http.StatusInternalServerError, "internal error"
+		return classifyRequest(err)
+	}
+}
+
+// classifyRequest maps the errors of the request and of the read of the audit
+// log.
+func classifyRequest(err error) problem {
+	switch {
+	case errors.Is(err, errMissingOrganization), errors.Is(err, errInvalidPage):
+		return problem{status: http.StatusBadRequest, code: errcode.RequestInvalidQuery, message: err.Error()}
+	case errors.Is(err, errInvalidSequence):
+		return problem{status: http.StatusBadRequest, code: errcode.RequestInvalidPath, message: err.Error()}
+	case errors.Is(err, namespace.ErrInvalidName):
+		return problem{status: http.StatusBadRequest, code: errcode.NamespaceInvalidName, message: err.Error()}
+	case errors.Is(err, identity.ErrInvalidObject):
+		return problem{status: http.StatusBadRequest, code: errcode.RequestInvalidObject, message: err.Error()}
+	case errors.Is(err, namespace.ErrNotFound):
+		return problem{status: http.StatusNotFound, code: errcode.NamespaceNotFound, message: err.Error()}
+	case errors.Is(err, audit.ErrEntryNotFound):
+		return problem{status: http.StatusNotFound, code: errcode.AuditEntryNotFound, message: err.Error()}
+	case errors.Is(err, errNoEntryReader):
+		return problem{status: http.StatusNotImplemented, code: errcode.AuditEntryReadUnavailable, message: err.Error()}
+	default:
+		return problem{status: http.StatusInternalServerError, code: errcode.ServerInternal, message: "internal error"}
 	}
 }
 

@@ -52,9 +52,9 @@ func Encode(wire any) (string, error) {
 
 // Decode reads token into wire, a pointer to the wire struct of the adapter.
 // It reads at most MaxLen bytes, and it refuses a token that is not base64url,
-// a token that is not one JSON object, and a member of another type. On an
-// error the caller must not use wire. The caller checks the fingerprint and
-// the cursor.
+// a token that is not one JSON object, a member that the wire struct does not
+// have, and a member of another type. On an error the caller must not use
+// wire. The caller checks the fingerprint and the cursor.
 func Decode(token string, wire any) error {
 	if token == "" || len(token) > MaxLen {
 		return ErrInvalid
@@ -66,6 +66,8 @@ func Decode(token string, wire any) error {
 	}
 
 	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.DisallowUnknownFields()
+
 	if err = dec.Decode(wire); err != nil {
 		return ErrInvalid
 	}

@@ -3323,6 +3323,25 @@ func (q *Queries) DeleteTempAdmin(ctx context.Context, principalID string) (int6
 	return result.RowsAffected(), nil
 }
 
+const deleteTrigger = `-- name: DeleteTrigger :execrows
+DELETE FROM triggers
+WHERE triggers.id = $1
+  AND triggers.namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = $2)
+`
+
+type DeleteTriggerParams struct {
+	ID        string
+	Namespace string
+}
+
+func (q *Queries) DeleteTrigger(ctx context.Context, arg DeleteTriggerParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteTrigger, arg.ID, arg.Namespace)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const deleteUnitContext = `-- name: DeleteUnitContext :exec
 DELETE FROM object_context
 WHERE namespace_id = $1 AND object_kind IN ('unit', 'resource') AND object_id = $2
@@ -7278,6 +7297,60 @@ func (q *Queries) GetTempAdminBySubject(ctx context.Context, subject string) (Te
 	return i, err
 }
 
+const getTrigger = `-- name: GetTrigger :one
+SELECT n.name AS namespace, t.id, t.unit_tool, t.unit_id, t.kind, t.preset, t.cron, t.source_namespace,
+    t.source_tool, t.source_unit_id, t.enabled, t.last_saver_subject, t.last_saver_id, t.created_at_ms, t.updated_at_ms
+FROM triggers AS t
+JOIN namespaces AS n ON n.id = t.namespace_id
+WHERE n.name = $1 AND t.id = $2
+`
+
+type GetTriggerParams struct {
+	Namespace string
+	ID        string
+}
+
+type GetTriggerRow struct {
+	Namespace        string
+	ID               string
+	UnitTool         string
+	UnitID           string
+	Kind             string
+	Preset           string
+	Cron             string
+	SourceNamespace  string
+	SourceTool       string
+	SourceUnitID     string
+	Enabled          int64
+	LastSaverSubject string
+	LastSaverID      string
+	CreatedAtMs      int64
+	UpdatedAtMs      int64
+}
+
+func (q *Queries) GetTrigger(ctx context.Context, arg GetTriggerParams) (GetTriggerRow, error) {
+	row := q.db.QueryRow(ctx, getTrigger, arg.Namespace, arg.ID)
+	var i GetTriggerRow
+	err := row.Scan(
+		&i.Namespace,
+		&i.ID,
+		&i.UnitTool,
+		&i.UnitID,
+		&i.Kind,
+		&i.Preset,
+		&i.Cron,
+		&i.SourceNamespace,
+		&i.SourceTool,
+		&i.SourceUnitID,
+		&i.Enabled,
+		&i.LastSaverSubject,
+		&i.LastSaverID,
+		&i.CreatedAtMs,
+		&i.UpdatedAtMs,
+	)
+	return i, err
+}
+
 const getUnitCollection = `-- name: GetUnitCollection :one
 SELECT c.name
 FROM collection_members AS m
@@ -10304,6 +10377,69 @@ func (q *Queries) ListDurableSteps(ctx context.Context, ids []string) ([]Durable
 			&i.Seq,
 			&i.Result,
 			&i.DoneAtMs,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listEnabledFollowTriggers = `-- name: ListEnabledFollowTriggers :many
+SELECT n.name AS namespace, t.id, t.unit_tool, t.unit_id, t.kind, t.preset, t.cron, t.source_namespace,
+    t.source_tool, t.source_unit_id, t.enabled, t.last_saver_subject, t.last_saver_id, t.created_at_ms, t.updated_at_ms
+FROM triggers AS t
+JOIN namespaces AS n ON n.id = t.namespace_id
+WHERE n.name = $1 AND t.kind = 'follows' AND t.enabled = 1
+ORDER BY t.id COLLATE "C"
+`
+
+type ListEnabledFollowTriggersRow struct {
+	Namespace        string
+	ID               string
+	UnitTool         string
+	UnitID           string
+	Kind             string
+	Preset           string
+	Cron             string
+	SourceNamespace  string
+	SourceTool       string
+	SourceUnitID     string
+	Enabled          int64
+	LastSaverSubject string
+	LastSaverID      string
+	CreatedAtMs      int64
+	UpdatedAtMs      int64
+}
+
+func (q *Queries) ListEnabledFollowTriggers(ctx context.Context, namespace string) ([]ListEnabledFollowTriggersRow, error) {
+	rows, err := q.db.Query(ctx, listEnabledFollowTriggers, namespace)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListEnabledFollowTriggersRow
+	for rows.Next() {
+		var i ListEnabledFollowTriggersRow
+		if err := rows.Scan(
+			&i.Namespace,
+			&i.ID,
+			&i.UnitTool,
+			&i.UnitID,
+			&i.Kind,
+			&i.Preset,
+			&i.Cron,
+			&i.SourceNamespace,
+			&i.SourceTool,
+			&i.SourceUnitID,
+			&i.Enabled,
+			&i.LastSaverSubject,
+			&i.LastSaverID,
+			&i.CreatedAtMs,
+			&i.UpdatedAtMs,
 		); err != nil {
 			return nil, err
 		}
@@ -13527,6 +13663,152 @@ func (q *Queries) ListTempAdmins(ctx context.Context) ([]TempAdmin, error) {
 	return items, nil
 }
 
+const listTriggerFollowers = `-- name: ListTriggerFollowers :many
+SELECT n.name AS namespace, t.id, t.unit_tool, t.unit_id, t.kind, t.preset, t.cron, t.source_namespace,
+    t.source_tool, t.source_unit_id, t.enabled, t.last_saver_subject, t.last_saver_id, t.created_at_ms, t.updated_at_ms
+FROM triggers AS t
+JOIN namespaces AS n ON n.id = t.namespace_id
+WHERE n.name = $1 AND t.kind = 'follows' AND t.enabled = 1
+  AND t.source_namespace = $2 AND t.source_tool = $3
+  AND t.source_unit_id = $4
+ORDER BY t.id COLLATE "C"
+`
+
+type ListTriggerFollowersParams struct {
+	Namespace       string
+	SourceNamespace string
+	SourceTool      string
+	SourceUnitID    string
+}
+
+type ListTriggerFollowersRow struct {
+	Namespace        string
+	ID               string
+	UnitTool         string
+	UnitID           string
+	Kind             string
+	Preset           string
+	Cron             string
+	SourceNamespace  string
+	SourceTool       string
+	SourceUnitID     string
+	Enabled          int64
+	LastSaverSubject string
+	LastSaverID      string
+	CreatedAtMs      int64
+	UpdatedAtMs      int64
+}
+
+func (q *Queries) ListTriggerFollowers(ctx context.Context, arg ListTriggerFollowersParams) ([]ListTriggerFollowersRow, error) {
+	rows, err := q.db.Query(ctx, listTriggerFollowers,
+		arg.Namespace,
+		arg.SourceNamespace,
+		arg.SourceTool,
+		arg.SourceUnitID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListTriggerFollowersRow
+	for rows.Next() {
+		var i ListTriggerFollowersRow
+		if err := rows.Scan(
+			&i.Namespace,
+			&i.ID,
+			&i.UnitTool,
+			&i.UnitID,
+			&i.Kind,
+			&i.Preset,
+			&i.Cron,
+			&i.SourceNamespace,
+			&i.SourceTool,
+			&i.SourceUnitID,
+			&i.Enabled,
+			&i.LastSaverSubject,
+			&i.LastSaverID,
+			&i.CreatedAtMs,
+			&i.UpdatedAtMs,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listTriggersOfUnit = `-- name: ListTriggersOfUnit :many
+SELECT n.name AS namespace, t.id, t.unit_tool, t.unit_id, t.kind, t.preset, t.cron, t.source_namespace,
+    t.source_tool, t.source_unit_id, t.enabled, t.last_saver_subject, t.last_saver_id, t.created_at_ms, t.updated_at_ms
+FROM triggers AS t
+JOIN namespaces AS n ON n.id = t.namespace_id
+WHERE n.name = $1 AND t.unit_tool = $2 AND t.unit_id = $3
+ORDER BY t.id COLLATE "C"
+`
+
+type ListTriggersOfUnitParams struct {
+	Namespace string
+	UnitTool  string
+	UnitID    string
+}
+
+type ListTriggersOfUnitRow struct {
+	Namespace        string
+	ID               string
+	UnitTool         string
+	UnitID           string
+	Kind             string
+	Preset           string
+	Cron             string
+	SourceNamespace  string
+	SourceTool       string
+	SourceUnitID     string
+	Enabled          int64
+	LastSaverSubject string
+	LastSaverID      string
+	CreatedAtMs      int64
+	UpdatedAtMs      int64
+}
+
+func (q *Queries) ListTriggersOfUnit(ctx context.Context, arg ListTriggersOfUnitParams) ([]ListTriggersOfUnitRow, error) {
+	rows, err := q.db.Query(ctx, listTriggersOfUnit, arg.Namespace, arg.UnitTool, arg.UnitID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListTriggersOfUnitRow
+	for rows.Next() {
+		var i ListTriggersOfUnitRow
+		if err := rows.Scan(
+			&i.Namespace,
+			&i.ID,
+			&i.UnitTool,
+			&i.UnitID,
+			&i.Kind,
+			&i.Preset,
+			&i.Cron,
+			&i.SourceNamespace,
+			&i.SourceTool,
+			&i.SourceUnitID,
+			&i.Enabled,
+			&i.LastSaverSubject,
+			&i.LastSaverID,
+			&i.CreatedAtMs,
+			&i.UpdatedAtMs,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listUnitGateObjectKeys = `-- name: ListUnitGateObjectKeys :many
 SELECT kind, id, scope_key
 FROM gate_objects
@@ -13923,6 +14205,33 @@ SELECT pg_advisory_xact_lock(hashtextextended($1::text, 0))
 // namespace, so two refusals of one key at the same time share one record.
 func (q *Queries) LockGateRefusal(ctx context.Context, lockKey string) error {
 	_, err := q.db.Exec(ctx, lockGateRefusal, lockKey)
+	return err
+}
+
+const lockNamespaceCreatesExclusive = `-- name: LockNamespaceCreatesExclusive :exec
+SELECT pg_advisory_xact_lock(
+  hashtextextended('namespace-creates:' || current_schema() || ':' || $1::text, 0))
+`
+
+// Takes the exclusive form of the lock of LockNamespaceCreatesShared.
+func (q *Queries) LockNamespaceCreatesExclusive(ctx context.Context, namespace string) error {
+	_, err := q.db.Exec(ctx, lockNamespaceCreatesExclusive, namespace)
+	return err
+}
+
+const lockNamespaceCreatesShared = `-- name: LockNamespaceCreatesShared :exec
+SELECT pg_advisory_xact_lock_shared(
+  hashtextextended('namespace-creates:' || current_schema() || ':' || $1::text, 0))
+`
+
+// A create of a workspace takes this lock, in the shared form, before it reads
+// the manual lock of its namespace. The put of a manual lock on a namespace
+// takes the exclusive form. So a lock that commits while a create runs is
+// either read by the create or waits until the create ends: no create commits
+// under a lock that it did not read. The key holds the schema, so databases that
+// hold several schemas do not wait for each other.
+func (q *Queries) LockNamespaceCreatesShared(ctx context.Context, namespace string) error {
+	_, err := q.db.Exec(ctx, lockNamespaceCreatesShared, namespace)
 	return err
 }
 
@@ -14829,15 +15138,16 @@ func (q *Queries) ReadWorkspaceByID(ctx context.Context, id string) (ReadWorkspa
 
 const readWorkspacePage = `-- name: ReadWorkspacePage :many
 SELECT w.id, w.namespace, w.name, w.revision, w.lock_id, w.lock_holder, w.lock_reason, w.locked_at_ms, w.current_state_version_id, w.created_at_ms, w.updated_at_ms, w.allow_forced_writes, w.allow_unlocked_writes, w.deleted_at_ms, w.deleted_name, n.id AS namespace_id
-FROM (
-    SELECT p.name
-    FROM workspaces AS p
-    WHERE p.namespace = $1 AND p.deleted_at_ms IS NULL AND strpos(p.name, $2) > 0
-    ORDER BY p.name
-    LIMIT $4 OFFSET $3
-) AS page
-JOIN workspaces AS w ON w.namespace = $1 AND w.name = page.name AND w.deleted_at_ms IS NULL
+FROM workspaces AS w
 JOIN namespaces AS n ON n.name = w.namespace
+WHERE w.namespace = $1 AND w.deleted_at_ms IS NULL
+    AND w.name = ANY (ARRAY(
+        SELECT p.name
+        FROM workspaces AS p
+        WHERE p.namespace = $1 AND p.deleted_at_ms IS NULL AND strpos(p.name, $2) > 0
+        ORDER BY p.name
+        LIMIT $4 OFFSET $3
+    ))
 ORDER BY w.name
 `
 
@@ -14856,7 +15166,10 @@ type ReadWorkspacePageRow struct {
 // One page of the live workspaces of a namespace whose name holds the search,
 // in the order of ReadWorkspaces. The inner query finds the names of the page
 // in the index of the live workspace names alone, so an offset skips index
-// entries and no table rows. The outer query reads the rows of the page.
+// entries and no table rows. The outer query reads the rows of the page by
+// name = ANY of that array, so the names are in the index condition of each
+// plan. A join on the names let a plan with no table statistics read all the
+// live workspaces of the namespace for each name of the page.
 func (q *Queries) ReadWorkspacePage(ctx context.Context, arg ReadWorkspacePageParams) ([]ReadWorkspacePageRow, error) {
 	rows, err := q.db.Query(ctx, readWorkspacePage,
 		arg.Namespace,
@@ -17409,6 +17722,68 @@ type UpsertPersonPreferencesParams struct {
 func (q *Queries) UpsertPersonPreferences(ctx context.Context, arg UpsertPersonPreferencesParams) error {
 	_, err := q.db.Exec(ctx, upsertPersonPreferences, arg.PrincipalID, arg.Document, arg.UpdatedAtMs)
 	return err
+}
+
+const upsertTrigger = `-- name: UpsertTrigger :execrows
+INSERT INTO triggers (
+    namespace_id, id, unit_tool, unit_id, kind, preset, cron, source_namespace, source_tool, source_unit_id, enabled,
+    last_saver_subject, last_saver_id, created_at_ms, updated_at_ms
+)
+SELECT
+    n.id, $1, $2, $3, $4, $5, $6,
+    $7, $8, $9, $10::bigint,
+    $11, $12, $13::bigint, $14::bigint
+FROM namespaces AS n
+WHERE n.name = $15
+ON CONFLICT (namespace_id, id) DO UPDATE SET
+    preset = excluded.preset, cron = excluded.cron, source_namespace = excluded.source_namespace,
+    source_tool = excluded.source_tool, source_unit_id = excluded.source_unit_id, enabled = excluded.enabled,
+    last_saver_subject = excluded.last_saver_subject, last_saver_id = excluded.last_saver_id,
+    updated_at_ms = GREATEST(triggers.updated_at_ms, excluded.updated_at_ms)
+`
+
+type UpsertTriggerParams struct {
+	ID               string
+	UnitTool         string
+	UnitID           string
+	Kind             string
+	Preset           string
+	Cron             string
+	SourceNamespace  string
+	SourceTool       string
+	SourceUnitID     string
+	Enabled          int64
+	LastSaverSubject string
+	LastSaverID      string
+	CreatedAtMs      int64
+	UpdatedAtMs      int64
+	Namespace        string
+}
+
+// The caller checks the fence in the same transaction. A row that exists keeps
+// its unit, its kind and its creation time.
+func (q *Queries) UpsertTrigger(ctx context.Context, arg UpsertTriggerParams) (int64, error) {
+	result, err := q.db.Exec(ctx, upsertTrigger,
+		arg.ID,
+		arg.UnitTool,
+		arg.UnitID,
+		arg.Kind,
+		arg.Preset,
+		arg.Cron,
+		arg.SourceNamespace,
+		arg.SourceTool,
+		arg.SourceUnitID,
+		arg.Enabled,
+		arg.LastSaverSubject,
+		arg.LastSaverID,
+		arg.CreatedAtMs,
+		arg.UpdatedAtMs,
+		arg.Namespace,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const upsertUnitCollection = `-- name: UpsertUnitCollection :exec

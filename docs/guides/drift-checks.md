@@ -33,8 +33,8 @@ notification of a change of the drift status come in later versions.
 
 A drift check needs the action `unit:run-plan` on the workspace. It also needs
 `namespace:read` on the namespace and `unit:read` on the workspace. The
-bootstrap administrator token holds these actions. A built-in role does not
-hold `unit:run-plan` yet.
+bootstrap administrator token holds these actions. Of the built-in roles,
+`admin`, `account-administrator` and `site-administrator` hold them.
 
 A caller that cannot read the workspace gets the answer 404 for both routes. The
 answer is the same as for a workspace that does not exist. A caller that can read

@@ -75,6 +75,7 @@ func TestDeleteWorkspace(t *testing.T) {
 				Logger:         slog.New(slog.DiscardHandler),
 				Namespaces:     newTestNamespaces(t),
 				Workspaces:     recordingDeleter{stubWorkspaces: stubWorkspaces{}, entries: &passed},
+				OutputChecker:  nil,
 				BaseURL:        baseurl.Resolver{},
 				Audit:          appended,
 				OnAuditFailure: nil,

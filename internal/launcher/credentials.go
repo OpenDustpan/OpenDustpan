@@ -8,15 +8,18 @@ import (
 	"net/url"
 	"path"
 	"strings"
+
+	"opendustpan.org/opendustpan/pkg/runner"
 )
 
 // ErrNoCredentials reports a helper request for a host that the launcher
 // has no credential for, or a request outside a tool step.
 var ErrNoCredentials = errors.New("no credential for this host")
 
-// ErrUnsafeHelper reports a git credential helper that holds a control
-// character. Such a value could add a line to the git configuration.
-var ErrUnsafeHelper = errors.New("git credential helper holds a control character")
+// ErrUnsafeHelper reports a git credential helper that holds a character
+// that runner.HelperRune does not allow. Such a value could add a line to
+// the git configuration, or git could read it as another value.
+var ErrUnsafeHelper = errors.New("git credential helper holds a character that is not allowed")
 
 // Files of the credentials on the memory-backed volume. The launcher writes
 // each with mode 0600 before a step of the role tool, and deletes the
@@ -132,12 +135,14 @@ func PulumiCredentials(serverURL, token string) ([]byte, error) {
 // then starts it with no shell. With an empty helper, the configuration
 // sets an empty helper list, so a step gets no credential from git
 // configuration of the image. It returns ErrUnsafeHelper, and no
-// configuration, for a helper that holds a control character.
+// configuration, for a helper that holds a character that
+// runner.HelperRune does not allow.
 func GitConfig(helper string) ([]byte, error) {
-	// Defense in depth: runner.GitCredentials.Validate refuses a control
+	// Defense in depth: runner.GitCredentials.Validate refuses such a
 	// character when a pool is saved; this check stays so that a caller that
-	// skips it cannot add a line to the git configuration.
-	if strings.ContainsFunc(helper, isControl) {
+	// skips it, or a pool row from another version, cannot add a line to the
+	// git configuration or change how git reads the value.
+	if strings.ContainsFunc(helper, func(r rune) bool { return !runner.HelperRune(r) }) {
 		return nil, fmt.Errorf("write git configuration: %w", ErrUnsafeHelper)
 	}
 
@@ -151,12 +156,6 @@ func GitConfig(helper string) ([]byte, error) {
 	}
 
 	return fmt.Appendf(nil, "[credential]\n\thelper =\n\thelper = %s\n", name), nil
-}
-
-// isControl reports whether r is a control character of the C0 range
-// (0x00 to 0x1F) or DEL (0x7F).
-func isControl(r rune) bool {
-	return r < 0x20 || r == 0x7f
 }
 
 // TokenSource is the port through which a helper process asks the

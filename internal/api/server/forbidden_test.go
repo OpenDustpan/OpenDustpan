@@ -1,12 +1,12 @@
 package server_test
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 
 	apiserver "opendustpan.org/opendustpan/internal/api/server"
@@ -86,19 +86,29 @@ func TestForbiddenCodes(t *testing.T) {
 	}
 }
 
-// TestForbiddenWithoutCode proves that a 403 that wraps identity.ErrDenied but
-// is not a missing permission answers with no code. access.denied means that
-// the caller needs a grant, and these callers do not.
-func TestForbiddenWithoutCode(t *testing.T) {
+// TestForbiddenRefusalCodes proves that a 403 that wraps identity.ErrDenied but
+// is not a missing permission answers with the code of its refusal, not with
+// access.denied: access.denied means that the caller needs a grant, and these
+// callers do not.
+func TestForbiddenRefusalCodes(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
 		name string
 		err  error
+		want string
 	}{
-		{"sign-in refused", errcode.Refusal("sign-in refused")},
-		{"wrapped sign-in refused", fmt.Errorf("callback: %w", errcode.Refusal("sign-in refused"))},
-		{"route with no action", errcode.Refusal("GET /x needs no action")},
+		{"sign-in refused", errcode.Refusal(errcode.SignInRefused, "sign-in refused"), errcode.SignInRefused},
+		{
+			"wrapped sign-in refused",
+			fmt.Errorf("callback: %w", errcode.Refusal(errcode.SignInRefused, "sign-in refused")),
+			errcode.SignInRefused,
+		},
+		{
+			"route with no action",
+			errcode.Refusal(errcode.AccessNoAction, "GET /x needs no action"),
+			errcode.AccessNoAction,
+		},
 	}
 
 	for _, tc := range tests {
@@ -112,8 +122,16 @@ func TestForbiddenWithoutCode(t *testing.T) {
 				t.Fatalf("status = %d, want 403: %s", rec.Code, rec.Body.String())
 			}
 
-			if strings.Contains(rec.Body.String(), "errorCode") {
-				t.Fatalf("the answer has a code: %s", rec.Body.String())
+			var got struct {
+				ErrorCode string `json:"errorCode"`
+			}
+
+			if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+				t.Fatalf("answer is not JSON: %v: %s", err, rec.Body.String())
+			}
+
+			if got.ErrorCode != tc.want {
+				t.Fatalf("errorCode = %q, want %q: %s", got.ErrorCode, tc.want, rec.Body.String())
 			}
 		})
 	}

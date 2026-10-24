@@ -101,18 +101,21 @@ func (s *callCountingStore) callCount() int {
 	return s.calls
 }
 
-// refusalLog is an OutOfScopeRecorder that keeps the refusals.
+// refusalLog is an OutOfScopeRecorder that keeps the refusals and their
+// places.
 type refusalLog struct {
-	mu  sync.Mutex
-	got []string
-	err error
+	mu     sync.Mutex
+	got    []string
+	places []scopeaudit.Where
+	err    error
 }
 
-func (l *refusalLog) RecordOutOfScope(_ context.Context, ns namespace.ID, op string, _ scopeaudit.Where) error {
+func (l *refusalLog) RecordOutOfScope(_ context.Context, ns namespace.ID, op string, where scopeaudit.Where) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
 	l.got = append(l.got, ns.String()+" "+op)
+	l.places = append(l.places, where)
 
 	return l.err
 }
@@ -124,11 +127,18 @@ func (l *refusalLog) all() []string {
 	return append([]string(nil), l.got...)
 }
 
+func (l *refusalLog) allPlaces() []scopeaudit.Where {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	return append([]scopeaudit.Where(nil), l.places...)
+}
+
 func newScopeBlobs(t *testing.T) (*stateBlobs, *callCountingStore, *refusalLog) {
 	t.Helper()
 
 	store := &callCountingStore{mu: sync.Mutex{}, objects: map[blob.Key][]byte{}, calls: 0}
-	refusals := &refusalLog{mu: sync.Mutex{}, got: nil, err: nil}
+	refusals := &refusalLog{mu: sync.Mutex{}, got: nil, places: nil, err: nil}
 
 	return &stateBlobs{store: store, refusals: refusals}, store, refusals
 }
@@ -315,6 +325,34 @@ func TestStateBlobsListRefusesHostileWorkspaces(t *testing.T) {
 				t.Errorf("refusals = %v, want %v", got, want)
 			}
 		})
+	}
+}
+
+// TestStateBlobsListRefusesNoWorkspace sends an empty workspace ID straight to
+// the list of the state blobs, as if the callers had passed it: the list is
+// refused before the store, and the refusal is recorded. The place of the
+// record shows that the check of the list refused it, not the view.
+func TestStateBlobsListRefusesNoWorkspace(t *testing.T) {
+	t.Parallel()
+
+	b, store, refusals := newScopeBlobs(t)
+
+	listed, err := b.list(t.Context(), acmeID, "")
+	if !errors.Is(err, blob.ErrOutOfScope) || len(listed) != 0 {
+		t.Fatalf("list = %v, %v, want no blobs and %v", listed, err, blob.ErrOutOfScope)
+	}
+
+	if n := store.callCount(); n != 0 {
+		t.Errorf("calls that reached the store = %d, want 0", n)
+	}
+
+	if got, want := refusals.all(), []string{acmeID.String() + " " + opList}; !slices.Equal(got, want) {
+		t.Errorf("refusals = %v, want %v", got, want)
+	}
+
+	want := []scopeaudit.Where{scopeaudit.OutsideUnitDirectory}
+	if got := refusals.allPlaces(); !slices.Equal(got, want) {
+		t.Errorf("places of the refusals = %v, want %v", got, want)
 	}
 }
 

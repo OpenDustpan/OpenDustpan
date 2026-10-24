@@ -4,6 +4,7 @@ import (
 	"net/http"
 
 	"opendustpan.org/opendustpan/internal/bodygate"
+	"opendustpan.org/opendustpan/internal/errcode"
 )
 
 // hold reserves the bytes of one large body. It answers 503 with Retry-After
@@ -36,11 +37,8 @@ func (h *Handler) holdLease(w http.ResponseWriter, r *http.Request, n int64) (*b
 // writeBusy answers a large body that arrived while the gate is full.
 func (h *Handler) writeBusy(w http.ResponseWriter, r *http.Request) {
 	bodygate.SetRetryAfter(w)
-	h.writeJSONAPIError(
-		r.Context(),
-		w,
-		http.StatusServiceUnavailable,
-		"service unavailable",
-		"server is busy: try again in one second",
-	)
+	h.writeClassError(r.Context(), w, errorClass{
+		status: http.StatusServiceUnavailable, title: titleServiceUnavailable,
+		detail: "server is busy: try again in one second", code: errcode.StateVersionBusy, args: nil,
+	})
 }

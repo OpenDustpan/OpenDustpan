@@ -21,6 +21,7 @@ import (
 	apiserver "opendustpan.org/opendustpan/internal/api/server"
 	apitfe "opendustpan.org/opendustpan/internal/api/tfe"
 	apitofuhttp "opendustpan.org/opendustpan/internal/api/tofuhttp"
+	apitriggers "opendustpan.org/opendustpan/internal/api/triggers"
 )
 
 // TestEveryAdapterNeedsAnAuditStore builds each adapter with no audit store.
@@ -91,6 +92,11 @@ func TestEveryAdapterNeedsAnAuditStore(t *testing.T) {
 			apiserver.ErrMissingDependency,
 		},
 		{"tfe", zeroConfig(apitfe.NewHandler), apitfe.ErrMissingDependency},
+		{
+			"triggers",
+			zeroConfig(apitriggers.NewHandler),
+			apitriggers.ErrMissingDependency,
+		},
 		{
 			"tofu http",
 			zeroConfig(apitofuhttp.NewHandler),

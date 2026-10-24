@@ -313,6 +313,7 @@ func runningJob(t *testing.T, id job.ID) job.Job {
 		Agent:          "",
 		AgentMode:      "",
 		BreakGlass:     nil,
+		Trigger:        nil,
 		Delivery:       nil,
 		Closed:         nil,
 		Verification:   job.VerificationNone,

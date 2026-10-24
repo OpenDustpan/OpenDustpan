@@ -154,9 +154,19 @@ func (h *Handler) authenticate(r *http.Request) (identity.Principal, bool, error
 type errorResponse struct {
 	Message string `json:"message"`
 	Code    int    `json:"code"`
-	// ErrorCode is a stable code for a program. A refusal of a request to
-	// start a job sets it.
-	ErrorCode string `json:"errorCode,omitempty"`
+	// ErrorCode is the stable code of the catalog for a program, and ErrorArgs
+	// holds the values that the message names.
+	ErrorCode string         `json:"errorCode,omitempty"`
+	ErrorArgs map[string]any `json:"errorArgs,omitempty"`
+}
+
+// failure is the answer to an error before the catalog checks it: the status,
+// the message, the code and the values of the arguments of the code.
+type failure struct {
+	status  int
+	message string
+	code    string
+	args    []errcode.Value
 }
 
 // errNotFound is the one answer for an unknown namespace, an unknown job, a
@@ -165,109 +175,145 @@ type errorResponse struct {
 var errNotFound = errors.New("not found")
 
 func (h *Handler) writeError(ctx context.Context, w http.ResponseWriter, err error) {
-	body := classify(err)
-	if body.Code == http.StatusInternalServerError {
+	f := classify(err)
+
+	answer, codeErr := errcode.New(f.code, f.args...)
+	if codeErr != nil {
+		// A code outside the catalog or a wrong argument is a bug of this
+		// adapter. The log names the code only, never the error text.
+		h.logger.ErrorContext(ctx, "error code refused", slog.String("code", f.code))
+
+		f = failure{
+			status:  http.StatusInternalServerError,
+			message: internalMessage,
+			code:    errcode.ServerInternal,
+			args:    nil,
+		}
+		answer = errcode.Internal()
+	}
+
+	if f.status == http.StatusInternalServerError {
 		// The log names the status only, never the error text: the text may
 		// hold driver detail, a token, or state.
-		h.logger.ErrorContext(ctx, "request failed", slog.Int("status", body.Code))
+		h.logger.ErrorContext(ctx, "request failed", slog.Int("status", f.status))
 	}
 
-	h.writeJSON(ctx, w, body.Code, body)
+	h.writeAnswer(ctx, w, f.status, f.message, answer)
 }
 
-// Codes of the refusals of a request to start a job.
+// writeAnswer writes the error body of status with message, and with the code
+// and the arguments of answer.
+func (h *Handler) writeAnswer(
+	ctx context.Context,
+	w http.ResponseWriter,
+	status int,
+	message string,
+	answer errcode.Answer,
+) {
+	h.writeJSON(ctx, w, status, errorResponse{
+		Message: message, Code: status, ErrorCode: answer.Code(), ErrorArgs: answer.Args(),
+	})
+}
+
 const (
-	codeInvalid        = "job.invalid"
-	codeUnsupported    = "job.unsupported"
-	codePolicyDenied   = "job.policy-denied"
-	codeFrozen         = "job.frozen"
-	codeLimit          = "job.limit"
-	codeAgentDenied    = "job.agent-denied"
-	codeKeyConflict    = "request.idempotency-key-reused"
-	codeKeyInvalid     = "request.idempotency-key-invalid"
-	codeBodyInvalid    = "request.body-invalid"
-	codeGateEnforced   = "job.gate-enforced"
-	codeFenced         = "namespace.fenced"
 	maxMessageBytes    = 300
 	unitCannotBeStated = "forbidden"
+	internalMessage    = "internal error"
 )
 
-// classify maps errors to an HTTP status, a stable code and a message safe to
-// show callers. A refusal of the job service shows its own text, which the
-// service and its ports write without detail of a driver or a secret. The
+// classify maps errors to an HTTP status, a code of the catalog and a message
+// safe to show callers. A refusal of the job service shows its own text, which
+// the service and its ports write without detail of a driver or a secret. The
 // text is cut and cleaned before it leaves.
-func classify(err error) errorResponse {
+func classify(err error) failure {
 	switch {
 	case errors.Is(err, identity.ErrRateLimited):
-		return errorResponse{
-			Code:      http.StatusTooManyRequests,
-			ErrorCode: "",
-			Message:   "too many failed sign-ins from this address: try again later",
+		return failure{
+			status:  http.StatusTooManyRequests,
+			message: "too many failed sign-ins from this address: try again later",
+			code:    errcode.AuthRateLimited,
+			args:    nil,
 		}
 	case errors.Is(err, identity.ErrUnauthenticated):
-		return errorResponse{Code: http.StatusUnauthorized, ErrorCode: "", Message: "unauthenticated"}
+		return failure{
+			status: http.StatusUnauthorized, message: "unauthenticated", code: errcode.AuthUnauthenticated, args: nil,
+		}
 	case errors.Is(err, sessionauth.ErrCSRF), errors.Is(err, sessionauth.ErrOtherSite):
-		return errorResponse{Code: http.StatusForbidden, ErrorCode: errcode.Forbidden(err), Message: err.Error()}
+		return failure{status: http.StatusForbidden, message: err.Error(), code: errcode.Forbidden(err), args: nil}
 	case errors.Is(err, identity.ErrDenied):
-		return errorResponse{Code: http.StatusForbidden, ErrorCode: errcode.Forbidden(err), Message: unitCannotBeStated}
+		return failure{
+			status:  http.StatusForbidden,
+			message: unitCannotBeStated,
+			code:    errcode.Forbidden(err),
+			args:    nil,
+		}
 	case errors.Is(err, errNotFound), errors.Is(err, namespace.ErrNotFound), errors.Is(err, job.ErrNotFound):
-		return errorResponse{Code: http.StatusNotFound, ErrorCode: "", Message: errNotFound.Error()}
+		return failure{
+			status: http.StatusNotFound, message: errNotFound.Error(), code: errcode.JobNotFound, args: nil,
+		}
 	case errors.Is(err, namespace.ErrNotHome):
-		return errorResponse{
-			Code:      http.StatusMisdirectedRequest,
-			ErrorCode: "",
-			Message:   "namespace is not homed in this region",
+		return failure{
+			status:  http.StatusMisdirectedRequest,
+			message: "namespace is not homed in this region",
+			code:    errcode.NamespaceNotHome,
+			args:    nil,
 		}
 	case errors.Is(err, maintenance.ErrInMaintenance):
-		return errorResponse{
-			Code:      http.StatusServiceUnavailable,
-			ErrorCode: "",
-			Message:   maintenance.ErrInMaintenance.Error() + ": try again later",
+		return failure{
+			status:  http.StatusServiceUnavailable,
+			message: maintenance.ErrInMaintenance.Error() + ": try again later",
+			code:    errcode.MaintenanceInMaintenance,
+			args:    nil,
 		}
+	default:
+		return classifyStart(err)
 	}
-
-	if status, code, ok := classifyStart(err); ok {
-		return errorResponse{Code: status, ErrorCode: code, Message: refusal.Clean(err.Error(), maxMessageBytes)}
-	}
-
-	return errorResponse{Code: http.StatusInternalServerError, ErrorCode: "", Message: "internal error"}
 }
 
-// classifyStart maps the refusals of the job service.
-func classifyStart(err error) (int, string, bool) {
+// refused returns the answer to a refusal of the job service: its own text,
+// cut and cleaned, with status and code.
+func refused(err error, status int, code string) failure {
+	return failure{status: status, message: refusal.Clean(err.Error(), maxMessageBytes), code: code, args: nil}
+}
+
+// classifyStart maps the refusals of a request to start a job.
+func classifyStart(err error) failure {
 	switch {
 	case errors.Is(err, errBody):
-		return http.StatusBadRequest, codeBodyInvalid, true
+		return refused(err, http.StatusBadRequest, errcode.RequestBodyInvalid)
 	case errors.Is(err, idempotency.ErrInvalidKey):
-		return http.StatusBadRequest, codeKeyInvalid, true
+		return refused(err, http.StatusBadRequest, errcode.RequestIdempotencyKeyInvalid)
 	case errors.Is(err, job.ErrKeyConflict):
-		return http.StatusUnprocessableEntity, codeKeyConflict, true
+		return refused(err, http.StatusUnprocessableEntity, errcode.RequestIdempotencyKeyReused)
 	case errors.Is(err, namespace.ErrFenced):
-		return http.StatusConflict, codeFenced, true
+		return refused(err, http.StatusConflict, errcode.NamespaceFenced)
 	default:
 		return classifyJobRefusal(err)
 	}
 }
 
-// classifyJobRefusal maps the refusals that the rules of a job give.
-func classifyJobRefusal(err error) (int, string, bool) {
+// classifyJobRefusal maps the refusals that the rules of a job give. An error
+// that no case knows answers 500 with no text of the error.
+func classifyJobRefusal(err error) failure {
 	switch {
 	case errors.Is(err, job.ErrInvalid):
-		return http.StatusBadRequest, codeInvalid, true
+		return refused(err, http.StatusBadRequest, errcode.JobInvalid)
 	case errors.Is(err, job.ErrUnsupported):
-		return http.StatusUnprocessableEntity, codeUnsupported, true
+		return refused(err, http.StatusUnprocessableEntity, errcode.JobUnsupported)
 	case errors.Is(err, job.ErrPolicyDenied):
-		return http.StatusForbidden, codePolicyDenied, true
+		return refused(err, http.StatusForbidden, errcode.JobPolicyDenied)
 	case errors.Is(err, job.ErrGateEnforced):
-		return http.StatusForbidden, codeGateEnforced, true
+		return refused(err, http.StatusForbidden, errcode.JobGateEnforced)
 	case errors.Is(err, job.ErrAgentDenied):
-		return http.StatusForbidden, codeAgentDenied, true
+		return refused(err, http.StatusForbidden, errcode.JobAgentDenied)
 	case errors.Is(err, job.ErrFrozen):
-		return http.StatusConflict, codeFrozen, true
+		return refused(err, http.StatusConflict, errcode.JobFrozen)
 	case errors.Is(err, job.ErrLimit):
-		return http.StatusTooManyRequests, codeLimit, true
+		return refused(err, http.StatusTooManyRequests, errcode.JobLimit)
 	default:
-		return 0, "", false
+		return failure{
+			status: http.StatusInternalServerError, message: internalMessage, code: errcode.ServerInternal, args: nil,
+		}
 	}
 }
 
