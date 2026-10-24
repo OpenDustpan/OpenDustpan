@@ -128,16 +128,29 @@ func (f budgetFixture) spend(t *testing.T, tc budgetCase) {
 	}
 }
 
-// lookupValid looks up the valid token from the address. Over the budget,
-// the lookup waits the penalty of one second, so the deadline ends it first.
-// Within it, the store read answers.
+// tokenLimited reports whether the address has spent the budget of the token
+// lookups. It reads the budget through the gate with a context that is
+// already done, so no timer decides the result: the gate answers
+// identity.ErrRateLimited over the budget and nil within it, and the same
+// wait of the gate serves the token lookups.
+func (f budgetFixture) tokenLimited(t *testing.T) bool {
+	t.Helper()
+
+	err := f.cfg.gate.Admit(canceledContext(t))
+	if err != nil && !errors.Is(err, identity.ErrRateLimited) {
+		t.Fatalf("token admit: err = %v, want nil or ErrRateLimited", err)
+	}
+
+	return err != nil
+}
+
+// lookupValid looks up the valid token from the address. Call it only within
+// the budget. The context has no deadline, so the speed of the store does not
+// change the result.
 func (f budgetFixture) lookupValid(t *testing.T) error {
 	t.Helper()
 
-	ctx, cancel := context.WithTimeout(t.Context(), 500*time.Millisecond)
-	defer cancel()
-
-	_, err := f.chain.AuthenticateToken(authgate.WithRequest(ctx, budgetAddress), f.valid)
+	_, err := f.chain.AuthenticateToken(authgate.WithRequest(t.Context(), budgetAddress), f.valid)
 
 	return err
 }
@@ -170,14 +183,15 @@ func TestSignInBudgetIsApartFromTokenLookups(t *testing.T) {
 			f := newBudgetFixture(t)
 			f.spend(t, tc)
 
-			err := f.lookupValid(t)
-			if limited := errors.Is(err, identity.ErrRateLimited); limited != tc.tokenLimited {
-				t.Errorf("valid token lookup: err = %v, want limited = %v", err, tc.tokenLimited)
-			} else if !limited && err != nil {
-				t.Errorf("valid token lookup: err = %v, want nil", err)
+			if limited := f.tokenLimited(t); limited != tc.tokenLimited {
+				t.Errorf("token budget: limited = %v, want %v", limited, tc.tokenLimited)
+			} else if !limited {
+				if err := f.lookupValid(t); err != nil {
+					t.Errorf("valid token lookup: err = %v, want nil", err)
+				}
 			}
 
-			err = f.cfg.signInGate.Admit(canceledContext(t))
+			err := f.cfg.signInGate.Admit(canceledContext(t))
 			if limited := errors.Is(err, identity.ErrRateLimited); limited != tc.signInLimited {
 				t.Errorf("sign-in admit: err = %v, want limited = %v", err, tc.signInLimited)
 			}
@@ -189,7 +203,7 @@ func TestSignInBudgetIsApartFromTokenLookups(t *testing.T) {
 // of the sign-in routes is not the gate of the token lookups. Many sign-in
 // starts from one address spend the limiter of newSignIn, and a valid token
 // lookup from that address then passes at once. With the token gate as the
-// limiter, the same starts spend the token budget, and the lookup waits.
+// limiter, the same starts spend the token budget, and the budget reads as spent.
 func TestSignInRoutesUseTheirOwnGate(t *testing.T) {
 	t.Parallel()
 
@@ -217,6 +231,10 @@ func TestSignInRoutesUseTheirOwnGate(t *testing.T) {
 
 	if err = in.Limiter.Admit(canceledContext(t)); !errors.Is(err, identity.ErrRateLimited) {
 		t.Fatalf("sign-in admit after 100 starts: err = %v, want ErrRateLimited", err)
+	}
+
+	if f.tokenLimited(t) {
+		t.Fatal("token budget after 100 sign-in starts: limited, want not limited")
 	}
 
 	if err = f.lookupValid(t); err != nil {
