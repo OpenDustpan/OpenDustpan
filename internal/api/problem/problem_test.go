@@ -316,3 +316,58 @@ func TestInternalHasCode(t *testing.T) {
 		t.Fatalf("code = %q, want %q", got.ErrorCode, errcode.ServerInternal)
 	}
 }
+
+// TestEveryAnswerHasACode checks that every shared class and the 500 answer
+// with a code of the catalog.
+func TestEveryAnswerHasACode(t *testing.T) {
+	t.Parallel()
+
+	errs := []error{
+		identity.ErrRateLimited, identity.ErrUnauthenticated, sessionauth.ErrCSRF, sessionauth.ErrOtherSite,
+		identity.ErrDenied, idempotency.ErrLost, namespace.ErrInvalidName, namespace.ErrNotFound,
+		namespace.ErrFenced, namespace.ErrNotHome, maintenance.ErrInMaintenance, errDriver,
+	}
+
+	for _, err := range errs {
+		p := problem.Writer{Logger: nil, Classify: nil}.Problem(err)
+		if _, ok := errcode.Lookup(p.Code); !ok {
+			t.Errorf("%v: code %q is not in the catalog", err, p.Code)
+		}
+	}
+
+	if got := problem.Internal().Code; got != errcode.ServerInternal {
+		t.Errorf("internal code = %q, want %q", got, errcode.ServerInternal)
+	}
+}
+
+// TestWriteProblem checks that a route that builds its own answer gets the
+// same headers, body and log rules as an answer of Write.
+func TestWriteProblem(t *testing.T) {
+	t.Parallel()
+
+	var buf bytes.Buffer
+
+	wr := problem.Writer{Logger: slog.New(slog.NewTextHandler(&buf, nil)), Classify: nil}
+	rec := httptest.NewRecorder()
+
+	var p problem.Problem
+
+	p.Status, p.Code, p.Message = http.StatusNotFound, errcode.SinkNotFound, "gone"
+
+	wr.WriteProblem(t.Context(), rec, p)
+
+	got := body(t, rec)
+	if rec.Code != http.StatusNotFound || got.ErrorCode != errcode.SinkNotFound ||
+		rec.Header().Get("Cache-Control") != "no-store" {
+		t.Fatalf("answer %d %+v, header %v", rec.Code, got, rec.Header())
+	}
+
+	rec = httptest.NewRecorder()
+	p.Status = http.StatusInternalServerError
+
+	wr.WriteProblem(t.Context(), rec, p)
+
+	if !strings.Contains(buf.String(), "status=500") {
+		t.Fatalf("log %q, want the 500 status", buf.String())
+	}
+}

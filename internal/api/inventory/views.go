@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/api/idempotent"
+	"opendustpan.org/opendustpan/internal/api/problem"
 	"opendustpan.org/opendustpan/internal/api/refusal"
 	"opendustpan.org/opendustpan/internal/clientip"
 	"opendustpan.org/opendustpan/internal/errcode"
@@ -68,7 +69,7 @@ func newViews(cfg *ViewsConfig) (*views, error) {
 
 // classifyView maps the errors of the saved view routes. The 403 for a caller
 // who is not a person has one text for every kind of principal.
-func classifyView(err error) (failure, bool) {
+func classifyView(err error) (problem.Problem, bool) {
 	switch {
 	case errors.Is(err, savedview.ErrNotPerson):
 		return fail(http.StatusForbidden, savedview.ErrNotPerson.Error(), errcode.ViewNotPerson), true
@@ -86,7 +87,7 @@ func classifyView(err error) (failure, bool) {
 		return fail(http.StatusConflict, err.Error(), errcode.ViewLimit), true
 	}
 
-	var none failure
+	var none problem.Problem
 
 	return none, false
 }

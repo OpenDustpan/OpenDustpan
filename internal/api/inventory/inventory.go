@@ -8,7 +8,6 @@ package inventory
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -18,7 +17,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/api/apidesc"
-	"opendustpan.org/opendustpan/internal/api/idempotent"
+	"opendustpan.org/opendustpan/internal/api/problem"
 	"opendustpan.org/opendustpan/internal/api/refusal"
 	"opendustpan.org/opendustpan/internal/denylimit"
 	"opendustpan.org/opendustpan/internal/errcode"
@@ -26,10 +25,8 @@ import (
 	"opendustpan.org/opendustpan/internal/sessionauth"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/collection"
-	"opendustpan.org/opendustpan/pkg/idempotency"
 	"opendustpan.org/opendustpan/pkg/identity"
 	coreinventory "opendustpan.org/opendustpan/pkg/inventory"
-	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/manuallock"
 	"opendustpan.org/opendustpan/pkg/namespace"
 )
@@ -622,70 +619,29 @@ func (h *Handler) authenticate(r *http.Request) (identity.Principal, bool, error
 	return p, false, err
 }
 
-// errorResponse is the error body the console expects, as in the API the
-// console reads today.
-type errorResponse struct {
-	Message string `json:"message"`
-	Code    int    `json:"code"`
-	// ErrorCode is a stable machine code.
-	ErrorCode string `json:"errorCode,omitempty"`
-	// ErrorArgs are the arguments of the code.
-	ErrorArgs map[string]any `json:"errorArgs,omitempty"`
-}
-
+// writeError answers err through the shared error module of the
+// tool-neutral APIs, with the classes of the inventory routes.
 func (h *Handler) writeError(ctx context.Context, w http.ResponseWriter, err error) {
-	if errors.Is(err, idempotency.ErrLost) {
-		err = idempotent.Lost()
-	}
-
-	if ie, ok := errors.AsType[*idempotent.Error](err); ok {
-		h.writeAnswer(ctx, w, ie.Status, ie.Message, ie.Answer)
-
-		return
-	}
-
-	if errors.Is(err, namespace.ErrFenced) {
-		h.logger.WarnContext(ctx, "write fenced", slog.String("error", err.Error()))
-	}
-
-	h.writeFailure(ctx, w, classify(err))
+	problem.Writer{Logger: h.logger, Classify: classify}.Write(ctx, w, err)
 }
 
-// classifyAuth maps the errors of the authentication and the
-// authorization of a request.
-func classifyAuth(err error) (failure, bool) {
-	switch {
-	case errors.Is(err, identity.ErrRateLimited):
-		return fail(http.StatusTooManyRequests, "too many failed sign-ins from this address: try again later",
-			errcode.AuthRateLimited), true
-	case errors.Is(err, identity.ErrUnauthenticated):
-		return fail(http.StatusUnauthorized, "unauthenticated", errcode.AuthUnauthenticated), true
-	case errors.Is(err, sessionauth.ErrCSRF), errors.Is(err, sessionauth.ErrOtherSite):
-		return fail(http.StatusForbidden, err.Error(), errcode.Forbidden(err)), true
-	case errors.Is(err, identity.ErrDenied):
-		return fail(http.StatusForbidden, "forbidden", errcode.Forbidden(err)), true
-	}
-
-	var none failure
-
-	return none, false
-}
-
-// classify maps domain errors to an HTTP status, a message safe to show
-// callers, and a code of the catalog.
-func classify(err error) failure {
-	for _, try := range []func(error) (failure, bool){classifyAuth, classifyView, classifyRequest, classifyCollection} {
-		if f, ok := try(err); ok {
-			return f
+// classify maps the errors of the inventory routes to an answer that is safe
+// to show callers. The shared module answers the rest.
+func classify(err error) (problem.Problem, bool) {
+	for _, try := range []func(error) (problem.Problem, bool){
+		classifyView, classifyRequest, classifyCollection, classifyChange, classifyLock,
+	} {
+		if p, ok := try(err); ok {
+			return p, true
 		}
 	}
 
-	return classifyChange(err)
+	return problem.Pass()
 }
 
 // classifyRequest maps the errors of a request that names a value that is not
 // valid, or a namespace or a unit that does not exist.
-func classifyRequest(err error) (failure, bool) {
+func classifyRequest(err error) (problem.Problem, bool) {
 	switch {
 	case errors.Is(err, errMissingOrganization), errors.Is(err, errMissingUnit):
 		return fail(http.StatusBadRequest, err.Error(), errcode.RequestInvalidQuery), true
@@ -703,13 +659,13 @@ func classifyRequest(err error) (failure, bool) {
 		return fail(http.StatusNotFound, err.Error(), errcode.UnitNotFound), true
 	}
 
-	var none failure
+	var none problem.Problem
 
 	return none, false
 }
 
 // classifyCollection maps the errors of the collections of units.
-func classifyCollection(err error) (failure, bool) {
+func classifyCollection(err error) (problem.Problem, bool) {
 	switch {
 	case errors.Is(err, collection.ErrInvalidName):
 		return fail(http.StatusBadRequest, err.Error(), errcode.CollectionInvalidName), true
@@ -727,55 +683,39 @@ func classifyCollection(err error) (failure, bool) {
 		return fail(http.StatusConflict, err.Error(), errcode.CollectionMoveOutLocked), true
 	}
 
-	var none failure
+	var none problem.Problem
 
 	return none, false
 }
 
 // classifyChange maps the errors of the deleted-unit routes and of a fenced
 // write to an HTTP status and a message safe to show callers.
-func classifyChange(err error) failure {
+func classifyChange(err error) (problem.Problem, bool) {
 	switch {
 	case errors.Is(err, errInvalidQuery):
-		return fail(http.StatusBadRequest, err.Error(), errcode.RequestInvalidQuery)
+		return fail(http.StatusBadRequest, err.Error(), errcode.RequestInvalidQuery), true
 	case errors.Is(err, errInvalidBody):
-		return fail(http.StatusBadRequest, err.Error(), errcode.RequestBodyInvalid)
+		return fail(http.StatusBadRequest, err.Error(), errcode.RequestBodyInvalid), true
 	case errors.Is(err, errNoHistory):
-		return fail(http.StatusNotImplemented, err.Error(), errcode.UnitHistoryUnavailable)
+		return fail(http.StatusNotImplemented, err.Error(), errcode.UnitHistoryUnavailable), true
 	case errors.Is(err, coreinventory.ErrInvalidName):
-		return fail(http.StatusBadRequest, "invalid unit name: use the name rules of the tool", errcode.UnitInvalidName)
+		return fail(
+			http.StatusBadRequest,
+			"invalid unit name: use the name rules of the tool",
+			errcode.UnitInvalidName,
+		), true
 	case errors.Is(err, coreinventory.ErrNotFound):
-		return fail(http.StatusNotFound, "deleted unit not found", errcode.UnitDeletedNotFound)
+		return fail(http.StatusNotFound, "deleted unit not found", errcode.UnitDeletedNotFound), true
 	case errors.Is(err, coreinventory.ErrNameTaken):
 		return fail(http.StatusConflict, "a live unit holds the name: send a new name in the restore body",
-			errcode.UnitNameTaken)
-	case errors.Is(err, namespace.ErrFenced):
-		return fail(http.StatusConflict, namespace.ErrFenced.Error(), errcode.NamespaceFenced)
-	case errors.Is(err, namespace.ErrNotHome):
-		return fail(http.StatusMisdirectedRequest, "namespace is not homed in this region", errcode.NamespaceNotHome)
-	case errors.Is(err, maintenance.ErrInMaintenance):
-		return fail(http.StatusServiceUnavailable, maintenance.ErrInMaintenance.Error()+": try again later",
-			errcode.MaintenanceInMaintenance)
-	default:
-		return classifyManualLock(err)
-	}
-}
-
-// classifyManualLock maps the errors of the manual lock routes. Any other error
-// is an internal error.
-func classifyManualLock(err error) failure {
-	if f, ok := classifyLock(err); ok {
-		return f
+			errcode.UnitNameTaken), true
 	}
 
-	return fail(http.StatusInternalServerError, "internal error", errcode.ServerInternal)
+	var none problem.Problem
+
+	return none, false
 }
 
 func (h *Handler) writeJSON(ctx context.Context, w http.ResponseWriter, status int, body any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-
-	if err := json.NewEncoder(w).Encode(body); err != nil {
-		h.logger.WarnContext(ctx, "write response failed", slog.String("error", err.Error()))
-	}
+	problem.WriteJSON(ctx, h.logger, w, status, body)
 }
