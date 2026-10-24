@@ -886,6 +886,34 @@ func TestPreferencesIfMatchMustBeOneVersion(t *testing.T) {
 	}
 }
 
+// TestPreferencesEmptyIfMatchIsRefused proves that an If-Match header with an
+// empty value, or two If-Match headers, answer 400 and change nothing: a
+// client that builds the header from an empty variable does not lose its
+// precondition without an error.
+func TestPreferencesEmptyIfMatchIsRefused(t *testing.T) {
+	t.Parallel()
+
+	e := newPrefsEnv(t)
+
+	for _, values := range [][]string{{""}, {"  "}, {`"0"`, `"0"`}} {
+		req := httptest.NewRequestWithContext(testContext(t), http.MethodPatch, prefsPath,
+			strings.NewReader(`{"theme":"terminal"}`))
+		req.Header.Set("Authorization", "Bearer "+tokenTester)
+		req.Header.Set("Content-Type", prefsPatchType)
+		req.Header["If-Match"] = values
+
+		rec := httptest.NewRecorder()
+		e.h.ServeHTTP(rec, req)
+
+		got := response{status: rec.Code, header: rec.Header(), body: rec.Body.String()}
+		checkRefusal(t, got, http.StatusBadRequest, "preferences.if-match-invalid")
+	}
+
+	if got := e.get(t, tokenTester).doc(t); got.Theme != "default" {
+		t.Errorf("theme = %q after refused patches, want default", got.Theme)
+	}
+}
+
 // TestPreferencesWeakIfMatchNeverMatches proves that a weak tag in If-Match
 // never matches, because If-Match uses strong comparison: the PATCH answers
 // 412, changes nothing and writes no entry, also when the weak tag holds the
@@ -904,6 +932,10 @@ func TestPreferencesWeakIfMatchNeverMatches(t *testing.T) {
 	for _, header := range []string{`W/"0"`, `W/"123"`} {
 		got := e.patchIf(t, `{"theme":"terminal"}`, header)
 		checkRefusal(t, got, http.StatusPreconditionFailed, "preferences.precondition-failed")
+
+		if msg := got.errorOf(t).Message; !strings.Contains(msg, "weak tag") {
+			t.Errorf("message = %q, want a text that names the weak tag", msg)
+		}
 	}
 
 	if got := e.get(t, tokenTester).doc(t); got.Theme != "default" {
