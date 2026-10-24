@@ -64,13 +64,13 @@ The table files use one encoding for both databases. A backup of SQLite restores
 
 ## Check a backup
 
-Check a backup with the check command. It asks the server to check the backup in its configured target. The check reads the manifest, every table file and every blob, and compares each object with the size and checksum that the manifest names. The token comes from `DUSTPAN_ADMIN_TOKEN` or from the file in `DUSTPAN_ADMIN_TOKEN_FILE`. It never comes from a flag.
+Check a backup with the check command. It asks the server to check the backup in its configured target. The check reads the manifest, every table file and every blob, and compares each object with the size and checksum that the manifest names. It also compares the totals of the manifest with its `sqlFiles` entries. `sqlSize` must equal the sum of the file sizes, and `sqlSha256` must equal the SHA-256 of the entries. Each value of `rowCounts` must equal the row count of the entry of its table. The token comes from `DUSTPAN_ADMIN_TOKEN` or from the file in `DUSTPAN_ADMIN_TOKEN_FILE`. It never comes from a flag.
 
 ```sh
 opendustpan backup check --server https://dustpan.example --ca-file ca.pem --backup bkp-aaa
 ```
 
-The command takes only `--server`, `--ca-file` and `--backup`. A complete backup prints `backup bkp-aaa is complete` and exits with status 0. A broken backup exits with status 1 and names the first missing object by key.
+The command takes only `--server`, `--ca-file` and `--backup`. A complete backup prints `backup bkp-aaa is complete` and exits with status 0. A broken backup exits with status 1 and names the first missing object by key, or the total that does not match.
 
 ## Restore a backup
 
