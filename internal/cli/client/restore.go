@@ -32,6 +32,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/cli"
+	"opendustpan.org/opendustpan/pkg/backup"
 )
 
 // Sentinel errors of the restore subcommand. Each error text names what
@@ -66,6 +67,12 @@ const restoreActiveWorkText = "cannot enter maintenance mode while work is activ
 // restoreForceHelp names the two ways past active work: end the work, or
 // run the same restore with --force, which cancels it.
 const restoreForceHelp = "end that work, or run opendustpan restore --server %s --backup %s --force to cancel it"
+
+// restoreCorruptHelp names the one command that helps after a restore of a
+// backup with corrupt data: the check of the backup, which names each missing
+// or bad object. A second run of the same restore fails in the same way.
+const restoreCorruptHelp = "run opendustpan backup check --server %s --backup %s to find each missing or bad object, " +
+	"or restore another backup"
 
 // restoreFlags holds the settings of the restore subcommand.
 type restoreFlags struct {
@@ -557,10 +564,15 @@ func restoreFailureText(doc RestoreStatusResponse) string {
 
 // restoreFailureHelp answers the one command that helps after a failed
 // restore. A restore without --force that active work stopped gets the
-// --force command. Every other failure gets the same restore command again.
+// --force command. A restore of a backup with corrupt data gets the backup
+// check command. Every other failure gets the same restore command again.
 func restoreFailureHelp(doc RestoreStatusResponse, f restoreFlags, server, id string) string {
 	if !f.force && strings.HasPrefix(strings.TrimSpace(doc.Error), restoreActiveWorkText) {
 		return fmt.Sprintf(restoreForceHelp, server, id)
+	}
+
+	if strings.HasSuffix(strings.TrimSpace(doc.Error), backup.ErrCorrupt.Error()) {
+		return fmt.Sprintf(restoreCorruptHelp, server, id)
 	}
 
 	return fmt.Sprintf(restoreRerunHelp, server, id)
