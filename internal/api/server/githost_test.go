@@ -361,7 +361,7 @@ func TestGitHostConnectionConflicts(t *testing.T) {
 
 // TestGitHostIfMatchInvalidCodes proves that a bad If-Match header on each
 // git-host route that reads one answers the If-Match code and its message.
-// The subtests share one environment, so they run in turn.
+// The subtests share one environment and only read refusals from it.
 func TestGitHostIfMatchInvalidCodes(t *testing.T) {
 	t.Parallel()
 
@@ -423,6 +423,8 @@ func TestGitHostIfMatchInvalidCodes(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
 			r := e.do(t, tt.call)
 
 			wantHost(t, r, http.StatusBadRequest)
