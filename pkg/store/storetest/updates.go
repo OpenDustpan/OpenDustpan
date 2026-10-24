@@ -130,6 +130,7 @@ func RunUpdates(t *testing.T, newStore UpdatesFactory) {
 		{name: "journal stores one copy of a batch sent twice at once", test: testJournalConcurrentRetry},
 		{name: "journal check sees the stored operations and refusals store nothing", test: testJournalVerify},
 		{name: "journal refuses a row with no entry check", test: testJournalRefusesNilVerify},
+		{name: "journal refuses a row with bad sequence IDs", test: testJournalRefusesBadSequenceIDs},
 		{name: "journal refuses a write after a stored change", test: testJournalRefusesWriteAfterStoredChange},
 		{name: "journal refuses a reference to a begun-only operation", test: testJournalBegunRefusal},
 		{
