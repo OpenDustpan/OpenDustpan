@@ -1,31 +1,85 @@
 package dustpan
 
 import (
+	"context"
+	"os"
 	"sync"
 	"testing"
 	"time"
 
 	"opendustpan.org/opendustpan/internal/driftsvc"
 	"opendustpan.org/opendustpan/internal/ident"
+	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/collection"
 	"opendustpan.org/opendustpan/pkg/drift/drifttest"
 	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/job"
 	"opendustpan.org/opendustpan/pkg/manuallock"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/runner"
-	"opendustpan.org/opendustpan/pkg/store/sqlite"
+	"opendustpan.org/opendustpan/pkg/stack"
+	"opendustpan.org/opendustpan/pkg/store/postgres"
 	"opendustpan.org/opendustpan/pkg/workspace"
 )
 
 // TestDriftCheckerConformance runs the cases of drift.Checker of the drift
 // suite on the drift service over the job service of the server, as the
-// server wires them, on a SQLite store. The suite skips the cases of Store and
-// PolicyStore here: the store adapters run those.
+// server wires them, on a SQLite store and on a PostgreSQL store. The suite
+// skips the cases of Store and PolicyStore here: the store adapters run those.
 func TestDriftCheckerConformance(t *testing.T) {
 	t.Parallel()
 
-	drifttest.Run(t, newDriftCheckerHarness)
+	t.Run("sqlite", func(t *testing.T) {
+		t.Parallel()
+
+		drifttest.Run(t, func(t *testing.T) drifttest.Harness {
+			t.Helper()
+
+			st := openCollectionStore(t)
+
+			return newDriftCheckerHarness(t, checkerBackend{store: st, jobs: st.Jobs(), runners: st.Runners()})
+		})
+	})
+
+	t.Run("postgres", func(t *testing.T) {
+		t.Parallel()
+
+		base := os.Getenv(groupPostgresEnv)
+		if base == "" {
+			t.Skipf("set %s to run the PostgreSQL case", groupPostgresEnv)
+		}
+
+		drifttest.Run(t, func(t *testing.T) drifttest.Harness {
+			t.Helper()
+
+			st, err := postgres.Open(t.Context(), newGroupSchema(t, base))
+			if err != nil {
+				t.Fatalf("open store: %v", err)
+			}
+
+			t.Cleanup(st.Close)
+
+			return newDriftCheckerHarness(t, checkerBackend{store: st, jobs: st.Jobs(), runners: st.Runners()})
+		})
+	})
+}
+
+// checkerStore is what the drift checker harness needs of a store. Both SQL
+// adapters implement it.
+type checkerStore interface {
+	namespace.Store
+	inventory.Reader
+	CreateStack(ctx context.Context, s stack.Stack, fence namespace.Fence) error
+	CreateWorkspace(ctx context.Context, w workspace.Workspace, fence namespace.Fence) error
+	PutLock(ctx context.Context, l manuallock.Lock, fence namespace.Fence, e audit.Entry) error
+}
+
+// checkerBackend is one store with its job store and its runner stores.
+type checkerBackend struct {
+	store   checkerStore
+	jobs    job.Store
+	runners RunnerStores
 }
 
 // testClock is a clock that a case sets.
@@ -51,19 +105,19 @@ func (c *testClock) Set(at time.Time) {
 }
 
 // newDriftCheckerHarness returns a harness with the drift service of the server
-// over a fresh SQLite store with the namespace acme and one runner pool of acme
+// over the fresh store of b with the namespace acme and one runner pool of acme
 // that runs jobs.
-func newDriftCheckerHarness(t *testing.T) drifttest.Harness {
+func newDriftCheckerHarness(t *testing.T, b checkerBackend) drifttest.Harness {
 	t.Helper()
 
 	created := time.Unix(0, 0).UTC()
 	clock := &testClock{mu: sync.Mutex{}, now: created}
 
-	st := openCollectionStore(t)
+	st := b.store
 	ns := createCollectionNamespace(t, st, created)
-	createJobPool(t, st, ns, created)
+	createJobPool(t, b.runners, ns, created)
 
-	checker := newDriftChecker(t, st, clock.Now)
+	checker := newDriftChecker(t, b, clock.Now)
 
 	return drifttest.Harness{
 		Store: nil, Policies: nil, Checker: checker,
@@ -77,7 +131,7 @@ func newDriftCheckerHarness(t *testing.T) drifttest.Harness {
 			Job: func(t *testing.T, id job.ID) job.Job {
 				t.Helper()
 
-				j, err := st.Jobs().Get(t.Context(), id)
+				j, err := b.jobs.Get(t.Context(), id)
 				if err != nil {
 					t.Fatalf("read job %s: %v", id, err)
 				}
@@ -99,19 +153,19 @@ func newDriftCheckerHarness(t *testing.T) drifttest.Harness {
 }
 
 // newDriftChecker builds the job service and the drift service as the server
-// does, over st, with the clock now.
-func newDriftChecker(t *testing.T, st *sqlite.Store, now func() time.Time) *driftsvc.Service {
+// does, over the stores of b, with the clock now.
+func newDriftChecker(t *testing.T, b checkerBackend, now func() time.Time) *driftsvc.Service {
 	t.Helper()
 
 	cfg := defaultSettings()
-	cfg.namespaceStore = st
-	cfg.jobStore = st.Jobs()
-	cfg.inventoryReader = st
-	cfg.runners = st.Runners()
+	cfg.namespaceStore = b.store
+	cfg.jobStore = b.jobs
+	cfg.inventoryReader = b.store
+	cfg.runners = b.runners
 	cfg.authorizer = identity.AdminOnly{}
 	cfg.now = now
 
-	namespaces, err := namespace.NewService(namespace.Config{Store: st, Now: now, Region: "eu-west"})
+	namespaces, err := namespace.NewService(namespace.Config{Store: b.store, Now: now, Region: "eu-west"})
 	if err != nil {
 		t.Fatalf("namespace service: %v", err)
 	}
@@ -153,7 +207,7 @@ func driftActor() job.Actor {
 }
 
 // createJobPool stores the runner pool prod of ns, which runs jobs.
-func createJobPool(t *testing.T, st *sqlite.Store, ns namespace.Namespace, at time.Time) {
+func createJobPool(t *testing.T, pools runner.PoolStore, ns namespace.Namespace, at time.Time) {
 	t.Helper()
 
 	p := runner.Pool{
@@ -161,14 +215,14 @@ func createJobPool(t *testing.T, st *sqlite.Store, ns namespace.Namespace, at ti
 		Isolation: nil, GitCredentials: runner.GitCredentials{Mode: "", Helper: ""}, CreatedAt: at, UpdatedAt: at,
 	}
 
-	if _, err := st.Runners().CreatePool(t.Context(), p, ns.Fence(), nil); err != nil {
+	if _, err := pools.CreatePool(t.Context(), p, ns.Fence(), nil); err != nil {
 		t.Fatalf("create runner pool: %v", err)
 	}
 }
 
 // seedUnit stores the unit name of tool in ns and returns its reference with
 // no unit ID: an OpenTofu workspace, or a Pulumi stack.
-func seedUnit(t *testing.T, st *sqlite.Store, ns namespace.Namespace, tool, name string) identity.Object {
+func seedUnit(t *testing.T, st checkerStore, ns namespace.Namespace, tool, name string) identity.Object {
 	t.Helper()
 
 	if tool == "pulumi" {
@@ -206,7 +260,7 @@ func seedUnit(t *testing.T, st *sqlite.Store, ns namespace.Namespace, tool, name
 }
 
 // lockUnit puts a manual lock of admin on the unit u of ns.
-func lockUnit(t *testing.T, st *sqlite.Store, ns namespace.Namespace, u identity.Object, at time.Time) {
+func lockUnit(t *testing.T, st checkerStore, ns namespace.Namespace, u identity.Object, at time.Time) {
 	t.Helper()
 
 	l := manuallock.Lock{
