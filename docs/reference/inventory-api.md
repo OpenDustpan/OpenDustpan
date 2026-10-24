@@ -204,3 +204,9 @@ answer: the unit is not in the list.
 curl -H "Authorization: Bearer $DUSTPAN_TOKEN" \
   "https://dustpan.example/api/dustpan/v1/namespaces/acme/units?label=app=web&label=team=payments&pageSize=50"
 ```
+
+## Error codes
+
+Each error answer has the field `errorCode` and the header
+`Cache-Control: no-store`. The codes are in
+[Error codes of the tool-neutral APIs](tool-neutral-error-codes.md).
