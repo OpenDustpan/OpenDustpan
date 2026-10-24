@@ -1,6 +1,12 @@
 package backup
 
-import "crypto"
+import (
+	"context"
+	"crypto"
+	"io"
+
+	"opendustpan.org/opendustpan/pkg/blob"
+)
 
 // CheckObjectBytes runs the object check of one manifest entry on data: the
 // hash function h, the hex sum and the size that the manifest records. The
@@ -16,4 +22,19 @@ func CheckObjectBytes(h crypto.Hash, sum string, size int64, data []byte) error 
 	}
 
 	return check.verify("test-object")
+}
+
+// PutRestoreBlobForTest runs putRestoreBlob: it copies one blob of a restore
+// into dest and refuses a copy that does not match ref.
+func PutRestoreBlobForTest(ctx context.Context, dest blob.Store, ref ManifestBlob, reader io.Reader) error {
+	return putRestoreBlob(ctx, dest, ref, reader)
+}
+
+// VerifyLiveBlobForTest runs verifyLiveBlob: it checks that the live store
+// holds ref with the size and checksum of the manifest.
+func VerifyLiveBlobForTest(ctx context.Context, live blob.Store, ref ManifestBlob) error {
+	var s RestoreService
+	s.blobs = live
+
+	return s.verifyLiveBlob(ctx, ref)
 }
