@@ -117,6 +117,8 @@ func TestParsePatchRefusals(t *testing.T) {
 			want: preferences.ErrInvalidValue,
 		},
 		{name: "a trailing comma", body: `{"theme":"terminal",}`, want: preferences.ErrInvalidBody},
+		{name: "a bad byte in a name", body: "{\"th\xffeme\":\"terminal\"}", want: preferences.ErrInvalidBody},
+		{name: "a bad byte in a value", body: "{\"theme\":\"terminal\xff\"}", want: preferences.ErrInvalidBody},
 		{name: "updatedAt", body: `{"updatedAt":1}`, want: preferences.ErrReadOnlyField},
 		{name: "updatedAt null", body: `{"updatedAt":null}`, want: preferences.ErrReadOnlyField},
 		{name: "updatedAt with a bad field", body: `{"nope":1,"updatedAt":1}`, want: preferences.ErrReadOnlyField},
