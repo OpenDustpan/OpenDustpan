@@ -186,11 +186,13 @@ curl -H "Authorization: Bearer $DUSTPAN_TOKEN" \
 
 URL-encode the value of a query value: `&`, `#`, `+`, `%` and spaces. The
 server splits a `label` value at the first equals sign, so `label=team=payments`
-works, and a value can hold an equals sign.
+works. A label value cannot hold an equals sign.
 
-A label key and a label value follow the grammar in `GLOSSARY.md` under
-"Label". A label outside this grammar shows in the list, but a filter cannot
-select it.
+A label key has 1 to 128 characters and a label value has 0 to 256
+characters. Both use only letters, digits and `. _ : / -`, with no space. A
+`label` value outside this form fails with 400 and the code
+`request.invalid-query`. A label outside this form, for example a Pulumi stack
+tag with a space, shows in the list, but a filter cannot select it.
 
 The server answers 400 for a `label`, a `reference` or a `state` value that is
 not valid, for more values than the limit, for a `reference` in another namespace, for a
