@@ -80,6 +80,10 @@ func TestWriteErrorCodes(t *testing.T) {
 			map[string]any{"workCount": int64(0), "canceledCount": int64(0)},
 			"",
 		},
+		{
+			"busy", maintenance.ErrBusy, http.StatusServiceUnavailable, errcode.MaintenanceBusy, nil,
+			"cannot enter maintenance mode: the writes in flight did not end in time: try again later",
+		},
 		{"held", maintenance.ErrHeld, http.StatusConflict, errcode.MaintenanceHeld, nil, ""},
 		{
 			"in maintenance", maintenance.ErrInMaintenance, http.StatusServiceUnavailable,

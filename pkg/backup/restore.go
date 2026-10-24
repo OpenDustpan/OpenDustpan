@@ -215,13 +215,13 @@ func copyRestoreBlob(ctx context.Context, target, dest blob.Store, ref ManifestB
 	return nil
 }
 
-// putRestoreBlob Puts the bytes of reader under the key of ref while it
-// hashes them with MD5 and counts them. On a mismatch it deletes the copied
-// object.
+// putRestoreBlob Puts the bytes of reader under the key of ref while the
+// object check hashes them with MD5 and counts them. On a mismatch it deletes
+// the copied object.
 func putRestoreBlob(ctx context.Context, dest blob.Store, ref ManifestBlob, reader io.Reader) error {
-	wantMD5, err := hex.DecodeString(ref.MD5)
-	if err != nil || len(wantMD5) != md5.Size {
-		return fmt.Errorf("%w: blob %q MD5 %q", ErrCorrupt, ref.Key, ref.MD5)
+	check, err := newObjectCheck(ref.Key, blobWant(ref))
+	if err != nil {
+		return err
 	}
 
 	destKey, err := blob.ParseKey(ref.Key)
@@ -229,20 +229,17 @@ func putRestoreBlob(ctx context.Context, dest blob.Store, ref ManifestBlob, read
 		return fmt.Errorf("restore blob key %q: %w", ref.Key, err)
 	}
 
-	counter := &md5SizeWriter{hash: md5.New(), size: 0} //nolint:gosec // The manifest records MD5, for integrity.
-
-	if err := dest.Put(ctx, destKey, io.TeeReader(reader, counter)); err != nil {
+	if err := dest.Put(ctx, destKey, io.TeeReader(reader, check)); err != nil {
 		return fmt.Errorf("copy blob %q: %w", ref.Key, err)
 	}
 
-	if counter.size != ref.Size || !bytes.Equal(counter.hash.Sum(nil), wantMD5) {
+	if verifyErr := check.verify(ref.Key); verifyErr != nil {
 		if delErr := dest.Delete(ctx, destKey); delErr != nil {
-			return fmt.Errorf("%w: blob %q does not match the manifest: %w",
-				ErrCorrupt, ref.Key, delErr)
+			return errors.Join(verifyErr, fmt.Errorf("delete blob %q that does not match the manifest: %w",
+				ref.Key, delErr))
 		}
 
-		return fmt.Errorf("%w: blob %q holds %d bytes, the manifest names %d",
-			ErrCorrupt, ref.Key, counter.size, ref.Size)
+		return verifyErr
 	}
 
 	return nil

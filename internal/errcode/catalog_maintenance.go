@@ -5,6 +5,9 @@ package errcode
 const (
 	// MaintenanceActiveWork means that updates or runs are active, so the installation cannot enter maintenance mode.
 	MaintenanceActiveWork = "maintenance.active-work"
+	// MaintenanceBusy means that the writes in flight did not end within the wait of the store, so the installation
+	// did not enter maintenance mode.
+	MaintenanceBusy = "maintenance.busy"
 	// MaintenanceHeld means that maintenance mode stays until the change of the audit chain ends.
 	MaintenanceHeld = "maintenance.held"
 	// MaintenanceInMaintenance means that the installation is in maintenance mode.
@@ -25,6 +28,12 @@ func maintenanceSpecs() []Spec {
 				{Name: "workCount", Kind: KindQuantity},
 				{Name: "canceledCount", Kind: KindQuantity},
 			},
+		},
+		{
+			Code: MaintenanceBusy,
+			Meaning: "the writes in flight did not end within the wait of the store, " +
+				"so the installation did not enter maintenance mode",
+			Args: nil,
 		},
 		{Code: MaintenanceHeld, Meaning: "maintenance mode stays until the change of the audit chain ends", Args: nil},
 		{Code: MaintenanceInMaintenance, Meaning: "the installation is in maintenance mode", Args: nil},
