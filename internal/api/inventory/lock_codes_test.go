@@ -57,6 +57,7 @@ func TestChangeAndLockErrorsHaveCodes(t *testing.T) {
 		{"invalid target", manuallock.ErrInvalidTarget, http.StatusBadRequest, code(errcode.LockInvalidTarget)},
 		{"invalid reason", audit.ErrInvalidReason, http.StatusBadRequest, code(errcode.AuditReasonInvalid)},
 		{"lock body", apiinventory.ErrLockBody, http.StatusBadRequest, code(errcode.RequestBodyInvalid)},
+		{"lock text", apiinventory.ErrLockText, http.StatusBadRequest, code(errcode.RequestBodyInvalid)},
 		{
 			"locked without the lock", manuallock.ErrLocked, http.StatusInternalServerError,
 			code(errcode.ServerInternal),

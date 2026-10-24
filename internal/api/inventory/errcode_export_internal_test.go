@@ -46,6 +46,7 @@ var (
 	ErrInvalidBody  = errInvalidBody
 	ErrNoHistory    = errNoHistory
 	ErrLockBody     = errLockBody
+	ErrLockText     = errLockText
 )
 
 // The errors of the saved view routes, for the black-box tests of the error
