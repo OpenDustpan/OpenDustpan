@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"mime"
 	"net/http"
 	"sort"
@@ -16,6 +15,8 @@ import (
 
 	"opendustpan.org/opendustpan/internal/api/apidesc"
 	"opendustpan.org/opendustpan/internal/api/idempotent"
+	"opendustpan.org/opendustpan/internal/api/problem"
+	"opendustpan.org/opendustpan/internal/api/route"
 	"opendustpan.org/opendustpan/internal/clientip"
 	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/internal/pagetoken"
@@ -171,25 +172,7 @@ func callerOf(r *http.Request, p identity.Principal) *service.Caller {
 // readBody decodes one JSON object into v. It refuses an unknown field, a
 // second value and a body over the limit.
 func readBody(w http.ResponseWriter, r *http.Request, v any) error {
-	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxBodyBytes))
-	if err != nil {
-		return &statusError{problem: problem{
-			status: http.StatusBadRequest, code: errcode.RequestBodyInvalid, values: nil,
-			message: "the request body is not readable or is over 2 MiB",
-		}}
-	}
-
-	dec := json.NewDecoder(bytes.NewReader(body))
-	dec.DisallowUnknownFields()
-
-	if err = dec.Decode(v); err != nil || dec.More() {
-		return &statusError{problem: problem{
-			status: http.StatusBadRequest, code: errcode.RequestBodyInvalid, values: nil,
-			message: "the request body must be one JSON object with known fields",
-		}}
-	}
-
-	return nil
+	return route.DecodeBody(w, r, maxBodyBytes, v)
 }
 
 // uploadMediaType is the media type of the body of an upload.
@@ -204,10 +187,10 @@ func (h *Handler) stage(w http.ResponseWriter, r *http.Request, p identity.Princ
 	// it is read.
 	mediaType, _, typeErr := mime.ParseMediaType(apidesc.Header(r, "Content-Type"))
 	if typeErr != nil || mediaType != uploadMediaType {
-		h.writeError(ctx, w, &statusError{problem: problem{
-			status: http.StatusUnsupportedMediaType, code: errcode.RequestContentTypeUnsupported, values: nil,
-			message: "send the file with the header Content-Type: " + uploadMediaType,
-		}})
+		h.writeError(ctx, w, problem.Fixed(
+			http.StatusUnsupportedMediaType, errcode.RequestContentTypeUnsupported,
+			"send the file with the header Content-Type: "+uploadMediaType,
+		))
 
 		return
 	}
@@ -280,14 +263,12 @@ const (
 )
 
 var (
-	errProviderPageSize = &statusError{problem: problem{
-		status: http.StatusBadRequest, code: errcode.RequestPageSizeInvalid, values: nil,
-		message: "invalid page size: pageSize is a number from 1 to 1000",
-	}}
-	errProviderPageToken = &statusError{problem: problem{
-		status: http.StatusBadRequest, code: errcode.RequestPageTokenInvalid, values: nil,
-		message: "invalid page token: provide the nextPageToken of the page before",
-	}}
+	errProviderPageSize = problem.BadRequest(
+		errcode.RequestPageSizeInvalid, "invalid page size: pageSize is a number from 1 to 1000",
+	)
+	errProviderPageToken = problem.BadRequest(
+		errcode.RequestPageTokenInvalid, "invalid page token: provide the nextPageToken of the page before",
+	)
 )
 
 // providerQuery is one validated list request: the page size and the name
