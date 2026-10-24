@@ -55,7 +55,7 @@ Each error answer has the header `Cache-Control: no-store`.
 | 400 | `lock.reason-required` | A lock needs a reason |
 | 400 | `lock.invalid-target` | The lock target is not valid |
 | 400 | `audit.reason-invalid` | The reason is not valid |
-| 403 | `view.not-person` | Only a person can have saved views |
+| 403 | `view.not-person` | The caller is not a person: sign in as a person to use saved views |
 | 403 | `gate.denied`, `gate.limited` | A gate or an access limit refused a state write |
 | 404 | `unit.not-found` | No unit, no unit that the caller may read, or the unit is not in the collection |
 | 404 | `unit.deleted-not-found` | No deleted unit with this name |
@@ -90,7 +90,7 @@ Each error answer has the header `Cache-Control: no-store`.
 | 404 | `context.object-not-found` | No object, or no object that the caller may read |
 | 404 | `context.not-set` | The object has no context from the API to clear |
 | 409 | `context.field-from-code` | The field comes from the code of the unit: change it in the `opendustpan` output |
-| 409 | `context.unit-deleted` | The unit is deleted: restore it first |
+| 409 | `context.unit-deleted` | The unit is in the deleted state: restore it first |
 
 ## Audit API
 
