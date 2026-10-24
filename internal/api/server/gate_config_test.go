@@ -330,14 +330,15 @@ func TestApprovalDefaultIfMatchCodes(t *testing.T) {
 		name string
 		call gateCall
 		code string
+		msg  string
 	}{
-		{"not a number", gateCall{http.MethodPut, target, platformDefault, `abc`}, errcode.RequestIfMatchInvalid},
-		{"quoted word", gateCall{http.MethodPut, target, platformDefault, `"zzz"`}, errcode.RequestIfMatchInvalid},
-		{"zero version", gateCall{http.MethodPut, target, platformDefault, `"0"`}, errcode.RequestIfMatchInvalid},
-		{"negative version", gateCall{http.MethodPut, target, platformDefault, `"-3"`}, errcode.RequestIfMatchInvalid},
-		{"quoted empty", gateCall{http.MethodPut, target, platformDefault, `""`}, errcode.RequestIfMatchInvalid},
-		{"delete not a number", gateCall{http.MethodDelete, target, "", `abc`}, errcode.RequestIfMatchInvalid},
-		{"bad body, good header", gateCall{http.MethodPut, target, `not json`, `"1"`}, errcode.RequestBodyInvalid},
+		{"not a number", gateCall{http.MethodPut, target, platformDefault, `abc`}, errcode.RequestIfMatchInvalid, ifMatchInvalidMessage},
+		{"quoted word", gateCall{http.MethodPut, target, platformDefault, `"zzz"`}, errcode.RequestIfMatchInvalid, ifMatchInvalidMessage},
+		{"zero version", gateCall{http.MethodPut, target, platformDefault, `"0"`}, errcode.RequestIfMatchInvalid, ifMatchInvalidMessage},
+		{"negative version", gateCall{http.MethodPut, target, platformDefault, `"-3"`}, errcode.RequestIfMatchInvalid, ifMatchInvalidMessage},
+		{"quoted empty", gateCall{http.MethodPut, target, platformDefault, `""`}, errcode.RequestIfMatchInvalid, ifMatchInvalidMessage},
+		{"delete not a number", gateCall{http.MethodDelete, target, "", `abc`}, errcode.RequestIfMatchInvalid, ifMatchInvalidMessage},
+		{"bad body, good header", gateCall{http.MethodPut, target, `not json`, `"1"`}, errcode.RequestBodyInvalid, "invalid JSON body"},
 	}
 
 	for _, tt := range tests {
@@ -349,6 +350,7 @@ func TestApprovalDefaultIfMatchCodes(t *testing.T) {
 			wantStatus(t, rec, http.StatusBadRequest)
 			errcodetest.CheckAnswer(t, errcodetest.ShapeCamelCase, http.StatusBadRequest, rec.Body.Bytes(),
 				errcodetest.Want{Code: tt.code, Args: nil, RequestBody: nil})
+			wantMessage(t, rec.Body.Bytes(), tt.msg)
 		})
 	}
 
@@ -358,6 +360,76 @@ func TestApprovalDefaultIfMatchCodes(t *testing.T) {
 
 	if got.Version != 1 {
 		t.Fatalf("stored version = %d, want 1: a refused write changed the default", got.Version)
+	}
+}
+
+// ifMatchInvalidMessage is the message of an answer to an If-Match header that
+// is not one version in quotes.
+const ifMatchInvalidMessage = `If-Match must be one stored version in quotes, for example "1"`
+
+// wantMessage fails the test unless the message of the answer body is want.
+// The code check does not read the message, so each test that expects one
+// reads it here.
+func wantMessage(t *testing.T, body []byte, want string) {
+	t.Helper()
+
+	var got struct {
+		Message string `json:"message"`
+	}
+
+	if err := json.Unmarshal(body, &got); err != nil {
+		t.Fatalf("answer is not JSON: %v: %s", err, body)
+	}
+
+	if got.Message != want {
+		t.Fatalf("message = %q, want %q: %s", got.Message, want, body)
+	}
+}
+
+// TestApprovalRuleIfMatchCodes proves that a bad If-Match header on the PUT and
+// the DELETE of an approval rule answers the If-Match code and its message, and
+// that the refused writes leave the rule at its version.
+func TestApprovalRuleIfMatchCodes(t *testing.T) {
+	t.Parallel()
+
+	_, h := newGateHandler(t, adminGates())
+	rule := gateBase + "acme" + gateRulesURL + "/ops"
+	ruleBody := `{"count":1,"approvers":{"groups":["ops"]}}`
+
+	if rec := serveGate(t, h, gateCall{http.MethodPut, rule, ruleBody, ""}); rec.Code >= http.StatusBadRequest {
+		t.Fatalf("create the rule: %d: %s", rec.Code, rec.Body.String())
+	}
+
+	tests := []struct {
+		name string
+		call gateCall
+	}{
+		{"put not a number", gateCall{http.MethodPut, rule, ruleBody, `abc`}},
+		{"put quoted word", gateCall{http.MethodPut, rule, ruleBody, `"zzz"`}},
+		{"put zero version", gateCall{http.MethodPut, rule, ruleBody, `"0"`}},
+		{"delete not a number", gateCall{http.MethodDelete, rule, "", `abc`}},
+		{"delete negative version", gateCall{http.MethodDelete, rule, "", `"-3"`}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			rec := serveGate(t, h, tt.call)
+
+			wantStatus(t, rec, http.StatusBadRequest)
+			errcodetest.CheckAnswer(t, errcodetest.ShapeCamelCase, http.StatusBadRequest, rec.Body.Bytes(),
+				errcodetest.Want{Code: errcode.RequestIfMatchInvalid, Args: nil, RequestBody: nil})
+			wantMessage(t, rec.Body.Bytes(), ifMatchInvalidMessage)
+		})
+	}
+
+	var got ruleDoc
+
+	decodeGateJSON(t, serveGate(t, h, gateCall{http.MethodGet, rule, "", ""}), &got)
+
+	if got.Version != 1 {
+		t.Fatalf("stored version = %d, want 1: a refused write changed the rule", got.Version)
 	}
 }
 
