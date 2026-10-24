@@ -9,12 +9,13 @@ import (
 	"testing"
 
 	apinotifications "opendustpan.org/opendustpan/internal/api/notifications"
+	"opendustpan.org/opendustpan/internal/api/route"
 	"opendustpan.org/opendustpan/pkg/identity"
 )
 
 // routeTarget fills the path values of a route.
-func routeTarget(route apinotifications.Route) string {
-	return strings.NewReplacer("{namespace}", "acme", "{sink_id}", "snk-aaaaaaaaaaaaaaaaaaaa").Replace(route.Path)
+func routeTarget(rt apinotifications.Route) string {
+	return strings.NewReplacer("{namespace}", "acme", "{sink_id}", "snk-aaaaaaaaaaaaaaaaaaaa").Replace(rt.Path)
 }
 
 // TestRoutesDeclareActions proves that each route is authorized, declares its
@@ -25,15 +26,15 @@ func TestRoutesDeclareActions(t *testing.T) {
 	f := newFixture(t)
 	byPattern := map[string]apinotifications.Route{}
 
-	for _, route := range f.handler.Routes() {
-		pattern := route.Method + " " + route.Path
+	for _, rt := range f.handler.Routes() {
+		pattern := rt.Method + " " + rt.Path
 		if _, dup := byPattern[pattern]; dup {
 			t.Fatalf("duplicate route %q", pattern)
 		}
 
-		byPattern[pattern] = route
+		byPattern[pattern] = rt
 
-		checkRouteDeclaration(t, pattern, route)
+		checkRouteDeclaration(t, pattern, rt)
 	}
 
 	// The routes of the design: the list and the get, the create, the replace,
@@ -58,20 +59,20 @@ func TestRoutesDeclareActions(t *testing.T) {
 }
 
 // checkRouteDeclaration checks one row of the route table.
-func checkRouteDeclaration(t *testing.T, pattern string, route apinotifications.Route) {
+func checkRouteDeclaration(t *testing.T, pattern string, rt apinotifications.Route) {
 	t.Helper()
 
-	if route.Scope != apinotifications.ScopeAuthorized || len(route.Actions) == 0 || route.Resolve == nil {
+	if rt.Scope != route.ScopeAuthorized || len(rt.Actions) == 0 || rt.Resolve == nil {
 		t.Fatalf("route %q must be authorized with actions and a resolver", pattern)
 	}
 
-	mutating := route.Method != http.MethodGet
-	if route.IdempotencyKey != mutating || (route.Answer != nil) != mutating {
+	mutating := rt.Method != http.MethodGet
+	if rt.IdempotencyKey != mutating || (rt.Answer != nil) != mutating {
 		t.Errorf("route %q: takes the key = %t, has an answer = %t, want both %t",
-			pattern, route.IdempotencyKey, route.Answer != nil, mutating)
+			pattern, rt.IdempotencyKey, rt.Answer != nil, mutating)
 	}
 
-	if has := slices.Contains(route.Actions, identity.ActionNamespaceManageNotifications); has != mutating {
+	if has := slices.Contains(rt.Actions, identity.ActionNamespaceManageNotifications); has != mutating {
 		t.Errorf("route %q: manage-notifications = %t, want %t", pattern, has, mutating)
 	}
 }
@@ -99,8 +100,8 @@ func checkServedPatterns(t *testing.T, f fixture, byPattern map[string]apinotifi
 func checkNoTokenFailsClosed(t *testing.T, f fixture, byPattern map[string]apinotifications.Route) {
 	t.Helper()
 
-	for pattern, route := range byPattern {
-		got := f.do(t, send("", route.Method, routeTarget(route), ""))
+	for pattern, rt := range byPattern {
+		got := f.do(t, send("", rt.Method, routeTarget(rt), ""))
 		wantCode(t, "route "+pattern+" without a token", got, http.StatusUnauthorized)
 	}
 
@@ -124,14 +125,14 @@ func replaceNamespace(patterns []string) []string {
 func TestRoutesEnforceDeclaredActions(t *testing.T) {
 	t.Parallel()
 
-	for _, route := range newFixture(t).handler.Routes() {
-		for _, denied := range route.Actions {
-			t.Run(route.Method+" "+route.Path+" without "+string(denied), func(t *testing.T) {
+	for _, rt := range newFixture(t).handler.Routes() {
+		for _, denied := range rt.Actions {
+			t.Run(rt.Method+" "+rt.Path+" without "+string(denied), func(t *testing.T) {
 				t.Parallel()
 
 				f := newFixture(t, denied)
 
-				got := f.do(t, send("admin", route.Method, routeTarget(route), "{}"))
+				got := f.do(t, send("admin", rt.Method, routeTarget(rt), "{}"))
 				wantCode(t, fmt.Sprintf("with %s denied", denied), got, http.StatusForbidden)
 
 				if f.hook.count() != 0 {

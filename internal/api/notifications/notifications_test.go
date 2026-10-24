@@ -750,11 +750,11 @@ func TestRefusedPlatformHostHasItsOwnCode(t *testing.T) {
 func TestPermissionsAreOnTheNamespace(t *testing.T) {
 	t.Parallel()
 
-	for _, route := range newFixture(t).handler.Routes() {
-		for _, a := range route.Actions {
+	for _, rt := range newFixture(t).handler.Routes() {
+		for _, a := range rt.Actions {
 			if a != identity.ActionNamespaceRead && a != identity.ActionNamespaceManageNotifications {
 				t.Errorf("route %s %s declares %q, want the namespace read or manage-notifications action",
-					route.Method, route.Path, a)
+					rt.Method, rt.Path, a)
 			}
 		}
 	}

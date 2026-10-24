@@ -1,4 +1,4 @@
-package routekit_test
+package route_test
 
 import (
 	"testing"

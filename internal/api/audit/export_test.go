@@ -16,7 +16,7 @@ var (
 )
 
 // ServeRoute returns the enforcement wrapper of route.
-func (h *Handler) ServeRoute(route Route) http.HandlerFunc { return h.enforce(route) }
+func (h *Handler) ServeRoute(rt Route) http.HandlerFunc { return h.enforce(rt) }
 
 // WriteError writes the answer of err as a handler of the API does, so the
 // external tests check the code of an error that no request of the test

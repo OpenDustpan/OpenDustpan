@@ -635,15 +635,15 @@ func TestLockRoutesDeclareActions(t *testing.T) {
 	f := newLockFixture(t, selectiveAuthorizer{deny: nil})
 
 	byPattern := map[string]apiinventory.Route{}
-	for _, route := range f.handler.Routes() {
-		pattern := route.Method + " " + route.Path
+	for _, rt := range f.handler.Routes() {
+		pattern := rt.Method + " " + rt.Path
 		if _, dup := byPattern[pattern]; dup {
 			t.Fatalf("duplicate route %q", pattern)
 		}
 
-		byPattern[pattern] = route
+		byPattern[pattern] = rt
 
-		checkRouteScope(t, route, map[string]bool{})
+		checkRouteScope(t, rt, map[string]bool{})
 	}
 
 	for _, pattern := range f.handler.RegisteredPatterns() {
@@ -668,18 +668,18 @@ func TestLockRoutesDeclareActions(t *testing.T) {
 	}
 
 	for pattern, action := range want {
-		route, ok := byPattern[pattern]
+		rt, ok := byPattern[pattern]
 		if !ok {
 			t.Errorf("route %q is not served", pattern)
 
 			continue
 		}
 
-		if len(route.Actions) != 1 || route.Actions[0] != action {
-			t.Errorf("route %q actions = %v, want [%s]", pattern, route.Actions, action)
+		if len(rt.Actions) != 1 || rt.Actions[0] != action {
+			t.Errorf("route %q actions = %v, want [%s]", pattern, rt.Actions, action)
 		}
 
-		probeRoute(t, f.handler, route)
+		probeRoute(t, f.handler, rt)
 	}
 }
 
@@ -689,10 +689,10 @@ func TestLockRoutesDeclareActions(t *testing.T) {
 func TestNoLockRoutesWithoutTheService(t *testing.T) {
 	t.Parallel()
 
-	for _, route := range newTestHandler(t).Routes() {
-		if strings.Contains(route.Path, "unit-lock") || strings.HasSuffix(route.Path, "/lock") ||
-			strings.Contains(route.Path, "/lock/") {
-			t.Errorf("route %q is served without the lock service", route.Method+" "+route.Path)
+	for _, rt := range newTestHandler(t).Routes() {
+		if strings.Contains(rt.Path, "unit-lock") || strings.HasSuffix(rt.Path, "/lock") ||
+			strings.Contains(rt.Path, "/lock/") {
+			t.Errorf("route %q is served without the lock service", rt.Method+" "+rt.Path)
 		}
 	}
 }

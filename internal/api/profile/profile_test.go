@@ -22,6 +22,7 @@ import (
 	"opendustpan.org/opendustpan/internal/api/idempotent"
 	apiprofile "opendustpan.org/opendustpan/internal/api/profile"
 	"opendustpan.org/opendustpan/internal/api/refusal"
+	"opendustpan.org/opendustpan/internal/api/route"
 	"opendustpan.org/opendustpan/internal/denylimit"
 	"opendustpan.org/opendustpan/internal/sessionauth"
 	"opendustpan.org/opendustpan/pkg/audit"
@@ -783,10 +784,10 @@ func TestAuthentication(t *testing.T) {
 }
 
 // routeTarget fills the path values of a route.
-func routeTarget(route apiprofile.Route) string {
+func routeTarget(rt apiprofile.Route) string {
 	return strings.NewReplacer(
 		"{namespace}", "acme", "{profile}", "prf-aaaaaaaaaaaaaaaaaaaa", "{revision}", "1",
-	).Replace(route.Path)
+	).Replace(rt.Path)
 }
 
 func TestRoutesDeclareActions(t *testing.T) {
@@ -795,22 +796,22 @@ func TestRoutesDeclareActions(t *testing.T) {
 	f := newFixture(t)
 	byPattern := map[string]apiprofile.Route{}
 
-	for _, route := range f.handler.Routes() {
-		pattern := route.Method + " " + route.Path
+	for _, rt := range f.handler.Routes() {
+		pattern := rt.Method + " " + rt.Path
 		if _, dup := byPattern[pattern]; dup {
 			t.Fatalf("duplicate route %q", pattern)
 		}
 
-		byPattern[pattern] = route
+		byPattern[pattern] = rt
 
-		if route.Scope != apiprofile.ScopeAuthorized || len(route.Actions) == 0 || route.Resolve == nil {
+		if rt.Scope != route.ScopeAuthorized || len(rt.Actions) == 0 || rt.Resolve == nil {
 			t.Fatalf("route %q must be authorized with actions and a resolver", pattern)
 		}
 
-		if mutating := route.Method != http.MethodGet; route.IdempotencyKey != mutating ||
-			(route.Answer != nil) != mutating {
+		if mutating := rt.Method != http.MethodGet; rt.IdempotencyKey != mutating ||
+			(rt.Answer != nil) != mutating {
 			t.Errorf("route %q: takes the key = %t, has an answer = %t, want both %t",
-				pattern, route.IdempotencyKey, route.Answer != nil, mutating)
+				pattern, rt.IdempotencyKey, rt.Answer != nil, mutating)
 		}
 	}
 
@@ -820,9 +821,9 @@ func TestRoutesDeclareActions(t *testing.T) {
 		}
 	}
 
-	for pattern, route := range byPattern {
+	for pattern, rt := range byPattern {
 		// A request without a token fails closed with 401, never 404.
-		got := f.do(t, send("", route.Method, routeTarget(route), ""))
+		got := f.do(t, send("", rt.Method, routeTarget(rt), ""))
 		wantCode(t, "route "+pattern+" without a token", got, http.StatusUnauthorized)
 	}
 }
@@ -830,14 +831,14 @@ func TestRoutesDeclareActions(t *testing.T) {
 func TestRoutesEnforceDeclaredActions(t *testing.T) {
 	t.Parallel()
 
-	for _, route := range newFixture(t).handler.Routes() {
-		t.Run(route.Method+" "+route.Path, func(t *testing.T) {
+	for _, rt := range newFixture(t).handler.Routes() {
+		t.Run(rt.Method+" "+rt.Path, func(t *testing.T) {
 			t.Parallel()
 
-			f := newFixture(t, route.Actions...)
+			f := newFixture(t, rt.Actions...)
 
-			got := f.do(t, send("admin", route.Method, routeTarget(route), "{}"))
-			wantCode(t, fmt.Sprintf("with %v denied", route.Actions), got, http.StatusForbidden)
+			got := f.do(t, send("admin", rt.Method, routeTarget(rt), "{}"))
+			wantCode(t, fmt.Sprintf("with %v denied", rt.Actions), got, http.StatusForbidden)
 		})
 	}
 }

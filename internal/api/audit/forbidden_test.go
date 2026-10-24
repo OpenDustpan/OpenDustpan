@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	apitaudit "opendustpan.org/opendustpan/internal/api/audit"
+	"opendustpan.org/opendustpan/internal/api/route"
 	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/internal/errcode/errcodetest"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -17,18 +18,18 @@ import (
 func TestForbiddenCodes(t *testing.T) {
 	t.Parallel()
 
-	for _, route := range newTestHandler(t).Routes() {
-		if route.Scope == apitaudit.ScopePublic {
+	for _, rt := range newTestHandler(t).Routes() {
+		if rt.Scope == route.ScopePublic {
 			continue
 		}
 
 		for _, cause := range errcodetest.Causes(t) {
-			t.Run(route.Method+" "+route.Path+" "+cause.Name, func(t *testing.T) {
+			t.Run(rt.Method+" "+rt.Path+" "+cause.Name, func(t *testing.T) {
 				t.Parallel()
 
 				h, _ := newEnforcingHandler(t, errcodetest.Authorizer{Err: cause.Err})
 				rec := httptest.NewRecorder()
-				h.ServeHTTP(rec, routeRequest(t, route, "test-token"))
+				h.ServeHTTP(rec, routeRequest(t, rt, "test-token"))
 
 				if rec.Code != http.StatusForbidden {
 					t.Fatalf("status = %d %s, want 403", rec.Code, rec.Body.String())
@@ -48,20 +49,22 @@ func TestNoInstallationActionCode(t *testing.T) {
 	t.Parallel()
 
 	h, _ := newEnforcingHandler(t, errcodetest.Authorizer{Err: nil})
-	route := apitaudit.Route{
-		Method: http.MethodGet, Path: "/x", Scope: apitaudit.ScopeAuthorized,
-		Actions:       []identity.Action{identity.ActionNamespaceReadAudit},
+	rt := apitaudit.Route{
+		Route: route.Route[identity.Object]{
+			Method: http.MethodGet, Path: "/x", Scope: route.ScopeAuthorized,
+			Actions: []identity.Action{identity.ActionNamespaceReadAudit},
+			Resolve: func(http.ResponseWriter, *http.Request) (identity.Object, error) {
+				return identity.ServerObject(), nil
+			},
+			Serve: func(http.ResponseWriter, *http.Request, identity.Principal, identity.Object) {
+				t.Error("the route served a request that has no installation action")
+			},
+		},
 		ServerActions: nil,
-		Resolve: func(http.ResponseWriter, *http.Request) (identity.Object, error) {
-			return identity.ServerObject(), nil
-		},
-		Serve: func(http.ResponseWriter, *http.Request, identity.Principal, identity.Object) {
-			t.Error("the route served a request that has no installation action")
-		},
 	}
 
 	rec := httptest.NewRecorder()
-	h.ServeRoute(route).ServeHTTP(rec, routeRequest(t, route, "test-token"))
+	h.ServeRoute(rt).ServeHTTP(rec, routeRequest(t, rt, "test-token"))
 
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("status = %d, want 403: %s", rec.Code, rec.Body.String())

@@ -19,7 +19,7 @@ func TestHeaderFlagsMatchTheHandler(t *testing.T) {
 	byPattern := make(map[string]*routeCase, len(cases))
 
 	for i := range cases {
-		byPattern[cases[i].route.Method+" "+cases[i].route.Path] = &cases[i]
+		byPattern[cases[i].rt.Method+" "+cases[i].rt.Path] = &cases[i]
 	}
 
 	ops := newHandler(t, newAuthorizer(), newFakeStore()).Operations()
@@ -52,7 +52,7 @@ func scenarioOf(rc *routeCase) headertest.Scenario {
 		h := newHandler(t, newAuthorizer(rc.checks...), newFakeStore())
 
 		send := func(headers map[string]string) headertest.Answer {
-			req := httptest.NewRequestWithContext(t.Context(), rc.route.Method, rc.path, strings.NewReader(rc.body))
+			req := httptest.NewRequestWithContext(t.Context(), rc.rt.Method, rc.path, strings.NewReader(rc.body))
 			req.Header.Set("Authorization", "token "+testToken)
 
 			for k, v := range headers {

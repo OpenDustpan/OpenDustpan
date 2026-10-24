@@ -455,13 +455,13 @@ func TestRouteDeclaresNamespaceRead(t *testing.T) {
 
 	handler := newSeededHandler(t, selectiveAuthorizer{deny: map[identity.Action]bool{}})
 
-	for _, route := range handler.Routes() {
-		if route.Method+" "+route.Path != "GET /api/dustpan/v1/namespaces/{namespace}/units" {
+	for _, rt := range handler.Routes() {
+		if rt.Method+" "+rt.Path != "GET /api/dustpan/v1/namespaces/{namespace}/units" {
 			continue
 		}
 
-		if len(route.Actions) != 1 || route.Actions[0] != identity.ActionNamespaceRead {
-			t.Fatalf("actions = %v, want [namespace:read]", route.Actions)
+		if len(rt.Actions) != 1 || rt.Actions[0] != identity.ActionNamespaceRead {
+			t.Fatalf("actions = %v, want [namespace:read]", rt.Actions)
 		}
 
 		return

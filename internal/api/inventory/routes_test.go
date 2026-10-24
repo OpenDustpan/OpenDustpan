@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	apiinventory "opendustpan.org/opendustpan/internal/api/inventory"
+	"opendustpan.org/opendustpan/internal/api/route"
 	"opendustpan.org/opendustpan/pkg/identity"
 	coreinventory "opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -184,15 +185,15 @@ func TestRoutesDeclareActions(t *testing.T) {
 	}
 
 	byPattern := map[string]apiinventory.Route{}
-	for _, route := range handler.Routes() {
-		pattern := route.Method + " " + route.Path
+	for _, rt := range handler.Routes() {
+		pattern := rt.Method + " " + rt.Path
 		if _, dup := byPattern[pattern]; dup {
 			t.Fatalf("duplicate route %q", pattern)
 		}
 
-		byPattern[pattern] = route
+		byPattern[pattern] = rt
 
-		checkRouteScope(t, route, public)
+		checkRouteScope(t, rt, public)
 	}
 
 	for _, pattern := range handler.RegisteredPatterns() {
@@ -201,8 +202,8 @@ func TestRoutesDeclareActions(t *testing.T) {
 		}
 	}
 
-	for _, route := range byPattern {
-		probeRoute(t, handler, route)
+	for _, rt := range byPattern {
+		probeRoute(t, handler, rt)
 	}
 }
 
@@ -239,16 +240,16 @@ func TestNoMuxBypass(t *testing.T) {
 
 // checkRouteScope fails for a route that is neither public nor authorized
 // with actions and a resolver.
-func checkRouteScope(t *testing.T, route apiinventory.Route, public map[string]bool) {
+func checkRouteScope(t *testing.T, rt apiinventory.Route, public map[string]bool) {
 	t.Helper()
 
-	pattern := route.Method + " " + route.Path
+	pattern := rt.Method + " " + rt.Path
 
-	switch route.Scope {
-	case apiinventory.ScopePublic:
-		checkPublicRoute(t, route, public)
-	case apiinventory.ScopeAuthorized:
-		checkAuthorizedRoute(t, route, public)
+	switch rt.Scope {
+	case route.ScopePublic:
+		checkPublicRoute(t, rt, public)
+	case route.ScopeAuthorized:
+		checkAuthorizedRoute(t, rt, public)
 	default:
 		t.Fatalf("route %q declares no scope", pattern)
 	}
@@ -256,79 +257,79 @@ func checkRouteScope(t *testing.T, route apiinventory.Route, public map[string]b
 
 // checkPublicRoute fails for a public route that is not on the public list
 // or that declares actions or a resolver.
-func checkPublicRoute(t *testing.T, route apiinventory.Route, public map[string]bool) {
+func checkPublicRoute(t *testing.T, rt apiinventory.Route, public map[string]bool) {
 	t.Helper()
 
-	pattern := route.Method + " " + route.Path
+	pattern := rt.Method + " " + rt.Path
 
 	if !public[pattern] {
 		t.Fatalf("route %q is public but not on the public list", pattern)
 	}
 
-	if len(route.Actions) != 0 {
+	if len(rt.Actions) != 0 {
 		t.Fatalf("public route %q declares actions", pattern)
 	}
 
-	if route.Resolve != nil {
+	if rt.Resolve != nil {
 		t.Fatalf("public route %q declares a resolver", pattern)
 	}
 }
 
 // checkAuthorizedRoute fails for an authorized route that is on the public
 // list or that declares no action or no resolver.
-func checkAuthorizedRoute(t *testing.T, route apiinventory.Route, public map[string]bool) {
+func checkAuthorizedRoute(t *testing.T, rt apiinventory.Route, public map[string]bool) {
 	t.Helper()
 
-	pattern := route.Method + " " + route.Path
+	pattern := rt.Method + " " + rt.Path
 
 	if public[pattern] {
 		t.Fatalf("route %q is on the public list but declares actions", pattern)
 	}
 
-	if len(route.Actions) == 0 {
+	if len(rt.Actions) == 0 {
 		t.Fatalf("route %q declares no action", pattern)
 	}
 
-	if route.Resolve == nil {
+	if rt.Resolve == nil {
 		t.Fatalf("route %q declares actions but no resolver", pattern)
 	}
 }
 
 // probeRoute checks that a declared route is registered: a request without a
 // token must fail closed, never with 404.
-func probeRoute(t *testing.T, handler testHandler, route apiinventory.Route) {
+func probeRoute(t *testing.T, handler testHandler, rt apiinventory.Route) {
 	t.Helper()
 
-	req := routeRequest(t, route, "")
+	req := routeRequest(t, rt, "")
 	rec := httptest.NewRecorder()
 
 	handler.ServeHTTP(rec, req)
 
 	if rec.Code == http.StatusNotFound {
-		t.Fatalf("route %q is declared but not served", route.Method+" "+route.Path)
+		t.Fatalf("route %q is declared but not served", rt.Method+" "+rt.Path)
 	}
 }
 
 // routeRequest builds a valid request for route: the organization query
 // value where the route reads it. token is sent as the Authorization header
 // when not empty.
-func routeRequest(t *testing.T, route apiinventory.Route, token string) *http.Request {
+func routeRequest(t *testing.T, rt apiinventory.Route, token string) *http.Request {
 	t.Helper()
 
-	path := strings.NewReplacer("{tool}", "pulumi", "{unitID}", seededUnitID, "{namespace}", "acme").Replace(route.Path)
+	path := strings.NewReplacer("{tool}", "pulumi", "{unitID}", seededUnitID, "{namespace}", "acme").Replace(rt.Path)
 	target := path
 
-	if !strings.Contains(route.Path, "{namespace}") {
+	if !strings.Contains(rt.Path, "{namespace}") {
 		target += "?organization=acme"
 	}
 
-	req := httptest.NewRequestWithContext(t.Context(), route.Method, target, http.NoBody)
+	req := httptest.NewRequestWithContext(t.Context(), rt.Method, target, http.NoBody)
 
-	if strings.Contains(route.Path, "{namespace}") {
+	if strings.Contains(rt.Path, "{namespace}") {
 		req.SetPathValue("namespace", "acme")
 	}
 
-	if strings.Contains(route.Path, "{unitID}") {
+	if strings.Contains(rt.Path, "{unitID}") {
 		req.SetPathValue("tool", "pulumi")
 		req.SetPathValue("unitID", seededUnitID)
 	}
@@ -343,8 +344,8 @@ func routeRequest(t *testing.T, route apiinventory.Route, token string) *http.Re
 // expectedObject is the object wire form that route resolves for
 // routeRequest, and whether it is a unit: the deleted unit for the routes
 // with a unit ID in the path, else the namespace.
-func expectedObject(route apiinventory.Route) (string, bool) {
-	if strings.Contains(route.Path, "{unitID}") {
+func expectedObject(rt apiinventory.Route) (string, bool) {
+	if strings.Contains(rt.Path, "{unitID}") {
 		return "pulumi:acme/web/prod", true
 	}
 
@@ -359,14 +360,14 @@ func TestRoutesEnforceAuthorization(t *testing.T) {
 
 	handler := newTestHandler(t)
 
-	for _, route := range handler.Routes() {
-		if isCollectionRoute(route) {
+	for _, rt := range handler.Routes() {
+		if isCollectionRoute(rt) {
 			continue
 		}
 
-		t.Run(route.Method+" "+route.Path, func(t *testing.T) {
+		t.Run(rt.Method+" "+rt.Path, func(t *testing.T) {
 			t.Parallel()
-			checkRouteEnforcement(t, route)
+			checkRouteEnforcement(t, rt)
 		})
 	}
 }
@@ -374,14 +375,14 @@ func TestRoutesEnforceAuthorization(t *testing.T) {
 // checkRouteEnforcement proves one route enforces its row: it answers 200
 // or 204 when allowed, and an authorized route answers 403 when its actions are
 // denied.
-func checkRouteEnforcement(t *testing.T, route apiinventory.Route) {
+func checkRouteEnforcement(t *testing.T, rt apiinventory.Route) {
 	t.Helper()
 
-	if route.Scope == apiinventory.ScopePublic {
+	if rt.Scope == route.ScopePublic {
 		allowed := newEnforcingHandler(t, selectiveAuthorizer{deny: map[identity.Action]bool{}})
 
 		rec := httptest.NewRecorder()
-		allowed.ServeHTTP(rec, routeRequest(t, route, ""))
+		allowed.ServeHTTP(rec, routeRequest(t, rt, ""))
 
 		if rec.Code != http.StatusOK {
 			t.Fatalf("public route answers %d, want %d", rec.Code, http.StatusOK)
@@ -393,7 +394,7 @@ func checkRouteEnforcement(t *testing.T, route apiinventory.Route) {
 	allowed := newEnforcingHandler(t, selectiveAuthorizer{deny: map[identity.Action]bool{}})
 
 	rec := httptest.NewRecorder()
-	allowed.ServeHTTP(rec, routeRequest(t, route, "test-token"))
+	allowed.ServeHTTP(rec, routeRequest(t, rt, "test-token"))
 
 	if rec.Code != http.StatusOK && rec.Code != http.StatusNoContent {
 		t.Fatalf("allowed request answers %d, want %d or %d (%s)",
@@ -401,23 +402,23 @@ func checkRouteEnforcement(t *testing.T, route apiinventory.Route) {
 	}
 
 	deny := map[identity.Action]bool{}
-	for _, action := range route.Actions {
+	for _, action := range rt.Actions {
 		deny[action] = true
 	}
 
-	for _, action := range route.NamespaceActions {
+	for _, action := range rt.NamespaceActions {
 		deny[action] = true
 	}
 
 	wantDenied := http.StatusForbidden
-	if route.DeniedAsNotFound {
+	if rt.DeniedAsNotFound {
 		wantDenied = http.StatusNotFound
 	}
 
 	denied := newEnforcingHandler(t, selectiveAuthorizer{deny: deny})
 
 	rec = httptest.NewRecorder()
-	denied.ServeHTTP(rec, routeRequest(t, route, "test-token"))
+	denied.ServeHTTP(rec, routeRequest(t, rt, "test-token"))
 
 	if rec.Code != wantDenied {
 		t.Fatalf("denied request answers %d, want %d", rec.Code, wantDenied)
@@ -488,40 +489,40 @@ func TestRoutesAuthorizeDeclaredObject(t *testing.T) {
 
 	handler := newEnforcingHandler(t, &recordingAuthorizer{calls: nil})
 
-	for _, route := range handler.Routes() {
-		if isCollectionRoute(route) {
+	for _, rt := range handler.Routes() {
+		if isCollectionRoute(rt) {
 			continue
 		}
 
-		t.Run(route.Method+" "+route.Path, func(t *testing.T) {
+		t.Run(rt.Method+" "+rt.Path, func(t *testing.T) {
 			t.Parallel()
-			checkRouteObject(t, route)
+			checkRouteObject(t, rt)
 		})
 	}
 }
 
 // checkRouteObject proves one route authorizes its declared actions on its
 // resolved object.
-func checkRouteObject(t *testing.T, route apiinventory.Route) {
+func checkRouteObject(t *testing.T, rt apiinventory.Route) {
 	t.Helper()
 
-	if route.Scope == apiinventory.ScopePublic {
-		checkPublicRouteObject(t, route)
+	if rt.Scope == route.ScopePublic {
+		checkPublicRouteObject(t, rt)
 
 		return
 	}
 
-	checkAuthorizedRouteObject(t, route)
+	checkAuthorizedRouteObject(t, rt)
 }
 
 // checkPublicRouteObject proves a public route serves without sign-in.
-func checkPublicRouteObject(t *testing.T, route apiinventory.Route) {
+func checkPublicRouteObject(t *testing.T, rt apiinventory.Route) {
 	t.Helper()
 
 	allowed := newEnforcingHandler(t, &recordingAuthorizer{calls: nil})
 
 	rec := httptest.NewRecorder()
-	allowed.ServeHTTP(rec, routeRequest(t, route, ""))
+	allowed.ServeHTTP(rec, routeRequest(t, rt, ""))
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("public route answers %d, want %d", rec.Code, http.StatusOK)
@@ -531,12 +532,12 @@ func checkPublicRouteObject(t *testing.T, route apiinventory.Route) {
 // checkAuthorizedRouteObject proves an authorized route asks for its declared
 // actions on its resolved object: the recorder sees each action on it, and
 // denying it answers 403.
-func checkAuthorizedRouteObject(t *testing.T, route apiinventory.Route) {
+func checkAuthorizedRouteObject(t *testing.T, rt apiinventory.Route) {
 	t.Helper()
 
-	expected, unit := expectedObject(route)
+	expected, unit := expectedObject(rt)
 
-	obj, err := route.Resolve(httptest.NewRecorder(), routeRequest(t, route, "test-token"))
+	obj, err := rt.Resolve(httptest.NewRecorder(), routeRequest(t, rt, "test-token"))
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
@@ -549,14 +550,14 @@ func checkAuthorizedRouteObject(t *testing.T, route apiinventory.Route) {
 	allowed := newEnforcingHandler(t, recorder)
 
 	rec := httptest.NewRecorder()
-	allowed.ServeHTTP(rec, routeRequest(t, route, "test-token"))
+	allowed.ServeHTTP(rec, routeRequest(t, rt, "test-token"))
 
 	if rec.Code != http.StatusOK && rec.Code != http.StatusNoContent {
 		t.Fatalf("allowed request answers %d, want %d or %d (%s)",
 			rec.Code, http.StatusOK, http.StatusNoContent, rec.Body.String())
 	}
 
-	for _, action := range route.Actions {
+	for _, action := range rt.Actions {
 		if !containsCall(recorder.calls, recordedCall{action: action, object: expected}) {
 			t.Fatalf("route never asks %s on %q (calls %v)", action, expected, recorder.calls)
 		}
@@ -564,21 +565,21 @@ func checkAuthorizedRouteObject(t *testing.T, route apiinventory.Route) {
 
 	nsObject := identity.NamespaceObject("acme").String()
 
-	for _, action := range route.NamespaceActions {
+	for _, action := range rt.NamespaceActions {
 		if !containsCall(recorder.calls, recordedCall{action: action, object: nsObject}) {
 			t.Fatalf("route never asks %s on %q (calls %v)", action, nsObject, recorder.calls)
 		}
 	}
 
 	wantDenied := http.StatusForbidden
-	if route.DeniedAsNotFound {
+	if rt.DeniedAsNotFound {
 		wantDenied = http.StatusNotFound
 	}
 
 	denied := newEnforcingHandler(t, denyObjectAuthorizer{deny: expected})
 
 	rec = httptest.NewRecorder()
-	denied.ServeHTTP(rec, routeRequest(t, route, "test-token"))
+	denied.ServeHTTP(rec, routeRequest(t, rt, "test-token"))
 
 	if rec.Code != wantDenied {
 		t.Fatalf("request denied on %q answers %d, want %d", expected, rec.Code, wantDenied)

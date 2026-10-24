@@ -13,7 +13,7 @@ import (
 
 	"opendustpan.org/opendustpan/internal/api/idempotent"
 	"opendustpan.org/opendustpan/internal/api/problem"
-	"opendustpan.org/opendustpan/internal/api/routekit"
+	"opendustpan.org/opendustpan/internal/api/route"
 	"opendustpan.org/opendustpan/internal/clientip"
 	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/internal/requestid"
@@ -278,7 +278,7 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request, p identity.Prin
 	ctx := r.Context()
 
 	var body createBody
-	if err := routekit.DecodeBody(w, r, maxBodyBytes, &body); err != nil {
+	if err := route.DecodeBody(w, r, maxBodyBytes, &body); err != nil {
 		h.writeError(ctx, w, err)
 
 		return
@@ -320,7 +320,7 @@ func (h *Handler) replace(w http.ResponseWriter, r *http.Request, p identity.Pri
 	ctx := r.Context()
 
 	var body replaceBody
-	if err := routekit.DecodeBody(w, r, maxBodyBytes, &body); err != nil {
+	if err := route.DecodeBody(w, r, maxBodyBytes, &body); err != nil {
 		h.writeError(ctx, w, err)
 
 		return

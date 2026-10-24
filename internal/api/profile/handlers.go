@@ -15,7 +15,7 @@ import (
 	"opendustpan.org/opendustpan/internal/api/apidesc"
 	"opendustpan.org/opendustpan/internal/api/idempotent"
 	"opendustpan.org/opendustpan/internal/api/problem"
-	"opendustpan.org/opendustpan/internal/api/routekit"
+	"opendustpan.org/opendustpan/internal/api/route"
 	"opendustpan.org/opendustpan/internal/clientip"
 	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/internal/pagetoken"
@@ -155,7 +155,7 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request, p identity.Prin
 	ctx := r.Context()
 
 	var body createBody
-	if err := routekit.DecodeBody(w, r, maxBodyBytes, &body); err != nil {
+	if err := route.DecodeBody(w, r, maxBodyBytes, &body); err != nil {
 		h.writeError(ctx, w, err)
 
 		return
@@ -560,7 +560,7 @@ func (h *Handler) save(w http.ResponseWriter, r *http.Request, p identity.Princi
 	ctx := r.Context()
 
 	var body saveBody
-	if err := routekit.DecodeBody(w, r, maxBodyBytes, &body); err != nil {
+	if err := route.DecodeBody(w, r, maxBodyBytes, &body); err != nil {
 		h.writeError(ctx, w, err)
 
 		return
