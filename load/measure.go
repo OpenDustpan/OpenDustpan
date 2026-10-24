@@ -1138,11 +1138,44 @@ func (t *target) measureDatabase(ctx context.Context) (DatabaseResult, error) {
 	}, nil
 }
 
+// seedAndList seeds the units and reads the lists with the full store. It
+// answers the seed time with the list result.
+func (t *target) seedAndList(ctx context.Context, cfg Config) (time.Duration, ListResult, error) {
+	seedStart := time.Now()
+
+	if err := t.seedUnits(ctx, cfg.Units, cfg.SeedWorkers); err != nil {
+		return 0, ListResult{}, err
+	}
+
+	seedTook := time.Since(seedStart)
+
+	lists, err := t.measureLists(ctx, cfg.Units, cfg.ListReps)
+
+	return seedTook, lists, err
+}
+
+// measureRoutes runs the journaled update steps and the access steps.
+func (t *target) measureRoutes(ctx context.Context, cfg Config) (JournalResult, AccessResult, error) {
+	journal, err := t.measureJournal(ctx, cfg.JournalEntries, cfg.JournalBatches)
+	if err != nil {
+		return JournalResult{}, AccessResult{}, err
+	}
+
+	access, err := t.measureAccess(ctx, cfg.AccessRequests)
+
+	return journal, access, err
+}
+
 // Execute replays the recorded sequences and answers the report.
-func Execute(ctx context.Context, cfg Config, urls []string) (Report, error) {
+func Execute(ctx context.Context, cfg Config, srv servers) (Report, error) {
 	start := time.Now()
 
-	t := newTarget(urls, cfg.Token, cfg.Namespace)
+	if err := journalEntriesValid(cfg.JournalEntries); err != nil {
+		return Report{}, err
+	}
+
+	t := newTarget(srv.urls, cfg.Token, cfg.Namespace)
+	t.served = srv
 
 	checkpoints, checkpointsErr := t.measureCheckpoints(ctx, cfg.CheckpointSizes)
 	if checkpointsErr != nil {
@@ -1164,15 +1197,7 @@ func Execute(ctx context.Context, cfg Config, urls []string) (Report, error) {
 		return Report{}, namespaceErr
 	}
 
-	seedStart := time.Now()
-
-	if seedErr := t.seedUnits(ctx, cfg.Units, cfg.SeedWorkers); seedErr != nil {
-		return Report{}, seedErr
-	}
-
-	seedTook := time.Since(seedStart)
-
-	lists, listsErr := t.measureLists(ctx, cfg.Units, cfg.ListReps)
+	seedTook, lists, listsErr := t.seedAndList(ctx, cfg)
 	if listsErr != nil {
 		return Report{}, listsErr
 	}
@@ -1185,6 +1210,11 @@ func Execute(ctx context.Context, cfg Config, urls []string) (Report, error) {
 	database, databaseErr := t.measureDatabase(ctx)
 	if databaseErr != nil {
 		return Report{}, databaseErr
+	}
+
+	journal, access, routesErr := t.measureRoutes(ctx, cfg)
+	if routesErr != nil {
+		return Report{}, routesErr
 	}
 
 	return Report{
@@ -1201,5 +1231,7 @@ func Execute(ctx context.Context, cfg Config, urls []string) (Report, error) {
 		NamespaceUpdates: namespaceUpdates,
 		Database:         database,
 		Lists:            lists,
+		Journal:          journal,
+		Access:           access,
 	}, nil
 }
