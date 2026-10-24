@@ -43,6 +43,7 @@ var jobSchema = apidesc.Typed[jobResponse](
 	apidesc.Named[gateResponse]("JobGate"),
 	apidesc.Named[approvalResponse]("JobApproval"),
 	apidesc.Named[breakGlassBody]("JobBreakGlass"),
+	apidesc.Named[triggerResponse]("JobTrigger"),
 	apidesc.Named[deliveryResponse]("JobDelivery"),
 	apidesc.Named[closedResponse]("JobClosed"),
 )

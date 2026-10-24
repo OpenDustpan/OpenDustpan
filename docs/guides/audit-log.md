@@ -195,7 +195,8 @@ row or a fault in the server, not a mistake of the client.
 
 ## Denial entries
 
-Each request that the server refuses because the principal does not hold the action writes one entry with the outcome `denied`.
+Each request that the server refuses because the principal does not hold the action writes an entry with the outcome `denied`.
+Repeated refusals in a window of 1 minute write one entry and a count (see [The limit on repeated denials](#the-limit-on-repeated-denials)).
 Every API writes it. These are the Pulumi Cloud-compatible API, the TFE-compatible API, the OpenTofu HTTP backend, the inventory, context, audit, profile and runner APIs, and the installation API.
 A list that shows only the items that the principal may read does not write an entry for each item that it leaves out.
 The entry is in the scope of the object. An object with no namespace, or with a namespace that does not exist, writes the entry in the scope `@server`. For a namespace that does not exist, the `reason` ends with `(namespace NAME does not exist)`.
@@ -393,7 +394,7 @@ It prints where to approve and ends with an error.
 
 The approval writes an entry in `@server` with the kind `change`, the action `server:set-audit-chain` and the value path `/audit/chain/on` or `/audit/chain/off`.
 Then the server migrates the log in the background.
-It waits 4 seconds, so every instance refuses requests.
+It waits 4 seconds, so every server process refuses requests.
 It writes one entry in each scope that holds entries:
 
 - **On:** a start entry with the action `server:start-audit-chain`.
@@ -404,19 +405,19 @@ It writes one entry in each scope that holds entries:
   Its hash links to the entry before it, so the chain ends with a chained entry.
   Later entries hold an empty `prevHash` and an empty `hash`.
 
-Then the server stores the new state, waits 4 seconds so every instance can see it, and leaves maintenance mode.
+Then the server stores the new state, waits 4 seconds so every server process can see it, and leaves maintenance mode.
 `opendustpan audit-chain status --server https://dustpan.example` shows `the migration runs` until then.
 A migration that stops before it ends keeps the old state, so the change waits for an approval again.
 A restart with the stored setting cancels a waiting change.
 The installation then leaves maintenance mode.
 Approve a waiting change in the console.
 
-While a change waits or migrates, every instance answers 503 on most routes.
+While a change waits or migrates, every server process answers 503 on most routes.
 The probes, GET of the metrics route, GET and POST of the audit chain route, the maintenance routes and the console files stay available.
 The server refuses a restore while a change waits, and refuses an approval while a restore runs.
-An instance whose setting differs from the stored state also answers 503 on most routes, also after another instance approved the change.
-The maintenance routes stay available, so an operator can clear stale active work on an instance whose setting differs.
-Restart each instance with the stored setting.
+A server process whose setting differs from the stored state also answers 503 on most routes, also after another server process approved the change.
+The maintenance routes stay available, so an operator can clear stale active work on a server process whose setting differs.
+Restart each server process with the stored setting.
 
 The server computes the digest of a start entry over each earlier entry in order of sequence.
 For each entry, the next digest is the hex SHA-256 of four parts joined with the unit separator (0x1F).
@@ -459,14 +460,14 @@ A restore that stops after the swap gets the comparison at the next start.
 A restore trusts the audit log in the backup: signed checkpoints (see below) protect a backup.
 
 The server checks the chain of every namespace and of `@server` at start and every hour.
-One instance runs each check, as the schedule `audit-chain-check`.
-The instance stores the result in the database.
-Each instance reads the stored result when Prometheus scrapes it, so all instances export the same value.
+One server process runs each check, as the schedule `audit-chain-check`.
+The server process stores the result in the database.
+Each server process reads the stored result when Prometheus scrapes it, so all server processes export the same value.
 `dustpan_audit_chain_invalid` holds the larger of two counts.
 The first count is the scopes that do not match in the stored result.
 The second count is the scopes with a stored mark in the current epoch.
 A check that ends late cannot clear the alarm while a mark stands.
-When an instance cannot read the stored result, it exports 1, adds one to `dustpan_audit_chain_read_errors_total` and logs a warning at most once each minute.
+When a server process cannot read the stored result, it exports 1, adds one to `dustpan_audit_chain_read_errors_total` and logs a warning at most once each minute.
 A database fault never shows as a good chain.
 When `dustpan_audit_chain_read_errors_total` increases together with `dustpan_audit_chain_invalid`, look for a database fault before you look for tampering.
 When a database read, a blob read or a checkpoint write fails, the server does not check that scope.
@@ -526,23 +527,23 @@ At each check, the server does these steps for each scope whose chain matches:
    The checkpoint holds the scope, the sequence, the epoch, the hash, the time, the key ID and the signature.
    The key ID is the first 16 hexadecimal characters of the SHA-256 hash of the public key.
 3. It writes the checkpoint to the blob store under `audit-checkpoints/<epoch>/<scope in hexadecimal>/<sequence>.json`.
-   A key holds one checkpoint and the server never writes it again, so two instances write it once.
+   A key holds one checkpoint and the server never writes it again, so two server processes write it once.
 
 A scope with a checkpoint that does not match counts in `dustpan_audit_chain_invalid`, and the server logs the scope and the sequence.
 The server never signs a scope whose chain or checkpoints do not match.
 Once a checkpoint does not match, later checks fail until a new epoch starts.
-The instance that finds the mismatch stores a mark in the database.
-Every instance reads the mark before it signs, so a mismatch that one instance finds stops signing of that scope. A mark of one scope does not stop the signing of another scope.
+The server process that finds the mismatch stores a mark in the database.
+Every server process reads the mark before it signs, so a mismatch that one server process finds stops signing of that scope. A mark of one scope does not stop the signing of another scope.
 Other scopes keep signing and each gets its own check, so `dustpan_audit_chain_invalid` stays the count of scopes that do not match.
-The mark stays across a restart of any instance, and only a new epoch ends it.
-When an instance cannot read the mark, it signs nothing, counts the scope as invalid and logs the error.
-When an instance cannot store a mark, it keeps the mark in memory and signs nothing for that scope.
+The mark stays across a restart of any server process, and only a new epoch ends it.
+When a server process cannot read the mark, it signs nothing, counts the scope as invalid and logs the error.
+When a server process cannot store a mark, it keeps the mark in memory and signs nothing for that scope.
 It stores the mark at its next check.
 When a stored checkpoint holds another hash, the write fails and the scope stays invalid.
 The server lists the stored checkpoints of a scope first, and then reads the last entry of the scope.
 The log only grows.
 So a stored checkpoint above the last entry shows a cut log.
-It never shows a checkpoint that another instance stored a moment ago.
+It never shows a checkpoint that another server process stored a moment ago.
 While a change of the chain waits or migrates, the server checks the checkpoints but signs none.
 
 The server logs the key ID and the public key in base64 at start.
@@ -552,8 +553,8 @@ Keep the blob store apart from the database: give the two stores different crede
 If the blob store has object lock, turn it on for the prefix `audit-checkpoints/`.
 An entry is safe from a rewrite only after a checkpoint signs it, so the window is at most one hour.
 A person who can delete checkpoints can hide a rewrite of the entries that came before the next checkpoint.
-Each instance remembers the newest checkpoint that matched, so a later check finds deleted checkpoints.
-An instance forgets this at a restart, so without object lock only later checks find a deletion from before a restart.
+Each server process remembers the newest checkpoint that matched, so a later check finds deleted checkpoints.
+A server process forgets this at a restart, so without object lock only later checks find a deletion from before a restart.
 
 ### Epochs
 
@@ -586,20 +587,20 @@ The server does not start when the file holds a line that is not a 32-byte Ed255
 
 ### Clear the alarm
 
-A checkpoint that does not match keeps `dustpan_audit_chain_invalid` above zero, and the stored mark keeps every instance from signing that scope.
+A checkpoint that does not match keeps `dustpan_audit_chain_invalid` above zero, and the stored mark keeps every server process from signing that scope.
 First find the cause: compare the entries of the scope with your audit log sinks and with the backups.
 When you know the cause, start a new epoch.
 The server then checks only the checkpoints that it signs after this time.
 
 ```sh
-curl -X POST -H "Authorization: token $DUSTPAN_ADMIN_TOKEN" \
+curl -X POST -H "Authorization: Bearer $DUSTPAN_ADMIN_TOKEN" \
   https://dustpan.example/api/server/audit/checkpoint-epochs
 ```
 
 The request needs the action `server:manage-audit`.
 It answers 201 with the number of the new epoch, and it writes a change entry in the scope `@server`.
 It answers 409 when signed checkpoints are off.
-Each instance reads the new epoch at its next check.
+Each server process reads the new epoch at its next check.
 A mark from an older epoch stops nothing in the new epoch.
 
 ## What the chain protects against
@@ -693,7 +694,7 @@ The full entry stays in the server audit log, and the chain check on the server 
 The server reads the new entries of each scope in order and writes them to the sink in one batch.
 It moves the cursor of the sink only after the sink accepted the batch.
 A failed batch stays, and the server sends it again with a longer wait each time, up to 5 minutes.
-While its lease holds, one instance ships a sink. After the server loses the lease or a round fails, a sink can receive an entry twice. Delivery is at least once.
+While its lease holds, one server process ships a sink. After the server loses the lease or a round fails, a sink can receive an entry twice. Delivery is at least once.
 Drop duplicates by `scope` and `sequence`.
 A batch in one scope that fails does not stop the other scopes.
 The server sends a batch every 5 seconds to a file, syslog or a webhook, and every minute to object storage.

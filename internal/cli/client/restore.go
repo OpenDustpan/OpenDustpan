@@ -32,6 +32,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/cli"
+	"opendustpan.org/opendustpan/pkg/backup"
 )
 
 // Sentinel errors of the restore subcommand. Each error text names what
@@ -57,6 +58,21 @@ var (
 // restoreRerunHelp names the one command that helps after a restore error:
 // the same restore command against the same server.
 const restoreRerunHelp = "run opendustpan restore --server %s --backup %s again"
+
+// restoreActiveWorkText is the start of the error text that the server
+// stores for a restore that active work stopped from entering maintenance
+// mode.
+const restoreActiveWorkText = "cannot enter maintenance mode while work is active"
+
+// restoreForceHelp names the two ways past active work: end the work, or
+// run the same restore with --force, which cancels it.
+const restoreForceHelp = "end that work, or run opendustpan restore --server %s --backup %s --force to cancel it"
+
+// restoreCorruptHelp names the one command that helps after a restore of a
+// backup with corrupt data: the check of the backup, which names each missing
+// or bad object. A second run of the same restore fails in the same way.
+const restoreCorruptHelp = "run opendustpan backup check --server %s --backup %s to find each missing or bad object, " +
+	"or restore another backup"
 
 // restoreFlags holds the settings of the restore subcommand.
 type restoreFlags struct {
@@ -128,6 +144,9 @@ type RestoreStatusResponse struct {
 // of a dev installation.
 const devBackupKind = "dev"
 
+// stateSucceeded is the state of a backup or a restore row that ended well.
+const stateSucceeded = "succeeded"
+
 // devBackupNotice is what the command prints before it starts a restore of a
 // backup of a dev installation. The server decides: it refuses the restore
 // unless it started with the setting that allows it.
@@ -197,14 +216,13 @@ func RestoreCommand(ctx context.Context, args []string, stdout, stderr io.Writer
 		return err
 	}
 
-	if doc.State != "succeeded" {
+	if doc.State != stateSucceeded {
 		return fmt.Errorf(
-			"%w %s: %s: "+restoreRerunHelp,
+			"%w %s: %s: %s",
 			ErrRestoreFailed,
 			started.ID,
 			restoreFailureText(doc),
-			server,
-			id,
+			restoreFailureHelp(doc, f, server, id),
 		)
 	}
 
@@ -300,7 +318,7 @@ type startRestoreParams struct {
 }
 
 // startRestore starts a restore and answers its ID. A second start while one
-// runs names the running restore and the one command that helps.
+// runs gives the message of the server, which names the running restore.
 func startRestore(ctx context.Context, params startRestoreParams) (restoreStartResponse, error) {
 	server := params.server
 	id := params.backupID
@@ -350,12 +368,12 @@ func startRestore(ctx context.Context, params startRestoreParams) (restoreStartR
 	}()
 
 	if resp.StatusCode != http.StatusAccepted {
+		hint := fmt.Sprintf("check the server log and "+restoreRerunHelp, server, id)
+
 		return restoreStartResponse{}, fmt.Errorf(
-			"%w: %s: check the server log and "+restoreRerunHelp,
+			"%w: %s",
 			ErrRestoreStart,
-			decodeErrorAnswer(resp),
-			server,
-			id,
+			answerText(resp.StatusCode, decodeErrorAnswer(resp), hint),
 		)
 	}
 
@@ -458,26 +476,14 @@ func readRestore(ctx context.Context, params restoreReadParams) (RestoreStatusRe
 // row wraps ErrRestoreMissing so the wait tells a transient swap gap from
 // other failures; any other status is a plain read failure.
 func restoreStatusError(resp *http.Response, params restoreReadParams) error {
+	hint := fmt.Sprintf(restoreRerunHelp, params.server, params.backupID)
+	text := answerText(resp.StatusCode, decodeErrorAnswer(resp), hint)
+
 	if resp.StatusCode == http.StatusNotFound {
-		return fmt.Errorf(
-			"%w %s: %w: %s: "+restoreRerunHelp,
-			ErrRestoreRead,
-			params.restoreID,
-			ErrRestoreMissing,
-			decodeErrorAnswer(resp),
-			params.server,
-			params.backupID,
-		)
+		return fmt.Errorf("%w %s: %w: %s", ErrRestoreRead, params.restoreID, ErrRestoreMissing, text)
 	}
 
-	return fmt.Errorf(
-		"%w %s: %s: "+restoreRerunHelp,
-		ErrRestoreRead,
-		params.restoreID,
-		decodeErrorAnswer(resp),
-		params.server,
-		params.backupID,
-	)
+	return fmt.Errorf("%w %s: %s", ErrRestoreRead, params.restoreID, text)
 }
 
 // waitRestore polls one restore until it leaves checking and applying and
@@ -556,8 +562,25 @@ func restoreFailureText(doc RestoreStatusResponse) string {
 	return "the server reported no error text"
 }
 
+// restoreFailureHelp answers the one command that helps after a failed
+// restore. A restore without --force that active work stopped gets the
+// --force command. A restore of a backup with corrupt data gets the backup
+// check command. Every other failure gets the same restore command again.
+func restoreFailureHelp(doc RestoreStatusResponse, f restoreFlags, server, id string) string {
+	if !f.force && strings.HasPrefix(strings.TrimSpace(doc.Error), restoreActiveWorkText) {
+		return fmt.Sprintf(restoreForceHelp, server, id)
+	}
+
+	if strings.HasSuffix(strings.TrimSpace(doc.Error), backup.ErrCorrupt.Error()) {
+		return fmt.Sprintf(restoreCorruptHelp, server, id)
+	}
+
+	return fmt.Sprintf(restoreRerunHelp, server, id)
+}
+
 // writeRestoreReport prints the ID, the state, the backup taken before it
-// and, when the manifest is present, the SQL size. A check-only restore
+// and, when the manifest is present, the SQL size. A check-only restore that
+// succeeded (a failed one ends with its error line, not with this line)
 // prints that it changed nothing, so the operator knows the live data is
 // untouched.
 //
@@ -578,7 +601,7 @@ func writeRestoreReport(stdout io.Writer, doc RestoreStatusResponse, checkOnly b
 		}
 	}
 
-	if checkOnly {
+	if checkOnly && doc.State == stateSucceeded {
 		if _, err := fmt.Fprintln(stdout, "check only: no data changed"); err != nil {
 			return fmt.Errorf("write output: %w", err)
 		}

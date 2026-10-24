@@ -437,10 +437,10 @@ func (s *Service) Get(ctx context.Context, id ID) (Record, error) {
 }
 
 // Check checks that the configured target holds every object the manifest
-// of backup id names with the recorded size. It returns nil when the backup
-// is complete, else the first missing or short object by key wrapping
-// ErrCorrupt. The installation API answers it, so the command reads no
-// target.
+// of backup id names with the recorded size and checksum. It returns nil when
+// the backup is complete, else the first missing, short or changed object by
+// key wrapping ErrCorrupt. The installation API answers it, so the command
+// reads no target.
 func (s *Service) Check(ctx context.Context, id ID) error {
 	if err := Check(ctx, s.target, id); err != nil {
 		return fmt.Errorf("check backup %s: %w", id, err)
@@ -1306,10 +1306,11 @@ func (s *Service) writeManifest(ctx context.Context, in manifestInput) error {
 }
 
 // Check reads the manifest of backup id from target and checks that the
-// target holds every object it names with the recorded size. The blob port
-// has no Stat and no List, so it Gets each object and counts the bytes. It
-// returns nil when the backup is complete, else the first missing or
-// short object by key.
+// target holds every object it names with the recorded size and checksum: the
+// SHA-256 of a table file and the MD5 of a blob. The blob port has no Stat
+// and no List, so it Gets each object, counts the bytes and hashes them. It
+// returns nil when the backup is complete, else the first object by key that
+// is missing, has another size or has another checksum.
 func Check(ctx context.Context, target blob.Store, id ID) error {
 	if target == nil {
 		return fmt.Errorf("check backup %s: %w", id, ErrMissingDependency)
@@ -1326,7 +1327,7 @@ func Check(ctx context.Context, target blob.Store, id ID) error {
 			return fmt.Errorf("check backup %s: %w", id, err)
 		}
 
-		if err := checkObject(ctx, target, key, file.Size); err != nil {
+		if err := checkObject(ctx, target, key, tableFileWant(file)); err != nil {
 			return err
 		}
 	}
@@ -1337,7 +1338,7 @@ func Check(ctx context.Context, target blob.Store, id ID) error {
 			return fmt.Errorf("check backup %s: %w", id, err)
 		}
 
-		if err := checkObject(ctx, target, key, ref.Size); err != nil {
+		if err := checkObject(ctx, target, key, blobWant(ref)); err != nil {
 			return err
 		}
 	}
@@ -1418,40 +1419,4 @@ func parseManifest(id ID, data []byte) (Manifest, error) {
 	}
 
 	return manifest, nil
-}
-
-// checkObject checks that the target holds key with wantSize bytes. It Gets
-// the object and counts the bytes, because the blob port has no Stat.
-func checkObject(ctx context.Context, target blob.Store, key blob.Key, wantSize int64) error {
-	reader, err := target.Get(ctx, key)
-	if err != nil {
-		if errors.Is(err, blob.ErrNotFound) {
-			return fmt.Errorf("backup is incomplete: object %q is missing: %w", key, ErrCorrupt)
-		}
-
-		return fmt.Errorf("read backup object %q: %w", key, err)
-	}
-
-	size, readErr := io.Copy(io.Discard, reader)
-	closeErr := reader.Close()
-
-	if readErr != nil {
-		return fmt.Errorf("read backup object %q: %w", key, readErr)
-	}
-
-	if closeErr != nil {
-		return fmt.Errorf("close backup object %q: %w", key, closeErr)
-	}
-
-	if size != wantSize {
-		return fmt.Errorf(
-			"backup is incomplete: object %q holds %d bytes, the manifest names %d: %w",
-			key,
-			size,
-			wantSize,
-			ErrCorrupt,
-		)
-	}
-
-	return nil
 }

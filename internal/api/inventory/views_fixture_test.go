@@ -279,6 +279,7 @@ func newViewFixtureWith(t *testing.T, opts viewFixtureOptions) *viewFixture {
 
 	handler, err := newCheckedHandler(t, apiinventory.Config{
 		OutputSharing: nil,
+		Outputs:       nil,
 		Views:         &apiinventory.ViewsConfig{Service: service, Principals: people, Idempotency: idem},
 		Namespaces:    namespaces, Units: reader, Deleted: seededDeleted(), History: nil, Lifecycles: testLifecycles(),
 		ReadScope: fixedScope{err: nil, ids: nil, all: true}, Collections: nil, Locks: nil, Moves: nil, StateGuard: nil,

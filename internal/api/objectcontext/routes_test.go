@@ -517,8 +517,15 @@ func checkRoute(t *testing.T, rc *routeCase, held int) {
 	}
 }
 
+// unknownObjectText is the one message of the 404 of an object that does not
+// exist or that the caller cannot read.
+const unknownObjectText = "not found: no namespace or unit that you can read has this path. " +
+	"A unit path takes the unit ID (stk-... or ws-...), not the name. " +
+	"To list the unit IDs, send GET /api/dustpan/v1/namespaces/{namespace}/units"
+
 // TestUnknownObjectsAnswerAlike proves an unknown namespace and an unknown
-// unit answer 404 before any check of the caller runs for the object.
+// unit answer 404 with one text, which names the unit ID and the list route,
+// before any check of the caller runs for the object.
 func TestUnknownObjectsAnswerAlike(t *testing.T) {
 	t.Parallel()
 
@@ -531,9 +538,11 @@ func TestUnknownObjectsAnswerAlike(t *testing.T) {
 		"/api/dustpan/v1/namespaces/acme/units/ws-absent/context",
 		"/api/dustpan/v1/namespaces/other/units/" + testUnitID + "/context",
 		"/api/dustpan/v1/namespaces/BAD%20NAME/context",
+		"/api/dustpan/v1/namespaces/acme/units/net/context",
 	} {
 		rec := serve(t, handler, request{method: http.MethodGet, path: path, token: testToken, body: ""})
-		if rec.Code != http.StatusNotFound || !strings.Contains(rec.Body.String(), `"message":"not found"`) {
+		want := `"message":"` + unknownObjectText + `"`
+		if rec.Code != http.StatusNotFound || !strings.Contains(rec.Body.String(), want) {
 			t.Errorf("GET %s = %d %s, want the 404 of an unknown object", path, rec.Code, rec.Body.String())
 		}
 	}

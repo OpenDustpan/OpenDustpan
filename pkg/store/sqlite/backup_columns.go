@@ -414,6 +414,7 @@ func sqliteLaterBackupTables() []sqliteBackupTable {
 		sqliteGitHostBackupTables(),
 		sqliteRegistryBackupTables(),
 		sqliteSinkBackupTables(),
+		sqliteTriggerBackupTables(),
 		sqliteItemKeyBackupTables(),
 	)
 }

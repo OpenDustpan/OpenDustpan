@@ -1,18 +1,26 @@
 package notifications
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
+	"net/http"
 
+	"opendustpan.org/opendustpan/internal/api/problem"
 	"opendustpan.org/opendustpan/pkg/notify"
 )
 
 // ClassifyText returns the text that the API answers for err, so the external
 // tests reach the error mapping without a request.
-func ClassifyText(err error) string { return classify(err).Message }
+func ClassifyText(err error) string {
+	return problem.Writer{Logger: nil, Classify: sinkErrors}.Problem(err).Message
+}
 
 // ClassifyCode returns the errorCode that the API answers for err.
-func ClassifyCode(err error) string { return classify(err).Code }
+func ClassifyCode(err error) string {
+	return problem.Writer{Logger: nil, Classify: sinkErrors}.Problem(err).Code
+}
 
 // DocumentJSON returns the JSON that the API answers for s, so the external
 // tests reach the answer of a sink that the store would not read.
@@ -23,4 +31,14 @@ func DocumentJSON(s *notify.Sink) ([]byte, error) {
 	}
 
 	return b, nil
+}
+
+// WriteError writes the answer of err as a handler of the API does, so the
+// external tests check the code and the arguments of an error that no request
+// of the test reaches.
+func WriteError(ctx context.Context, w http.ResponseWriter, err error) {
+	var h Handler
+
+	h.logger = slog.New(slog.DiscardHandler)
+	h.writeError(ctx, w, err)
 }

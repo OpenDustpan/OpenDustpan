@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"strconv"
 
+	"opendustpan.org/opendustpan/internal/api/tofuunit"
 	"opendustpan.org/opendustpan/internal/bodygate"
 	"opendustpan.org/opendustpan/internal/token"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -202,19 +203,14 @@ func (h *Handler) createStateVersion(
 	// failed entry refuses the declare (ADR 41, decision 5).
 	version := strconv.FormatInt(in.Serial, 10)
 	record := func(override workspace.Override) error {
-		action := identity.ActionUnitWriteUnlocked
-		if override == workspace.OverrideForced {
-			action = identity.ActionUnitWriteForced
-		}
-
-		return h.appendOverrideAudit(r, p, obj, action, version)
+		return h.appendOverrideAudit(r, p, obj, tofuunit.OverrideAction(override), version)
 	}
 
 	auth := workspace.Authority{Allow: allow, Record: record}
 
 	pending, err := h.workspaces.BeginState(ctx, id, p.Subject, in, auth)
 	if err != nil {
-		h.recordOverrideRefusal(ctx, r, p, obj, err)
+		h.rules().RecordOverrideRefusal(ctx, r, p, obj, err)
 		h.writeError(ctx, w, h.lineageLockedDetail(ctx, id, p.Subject, err))
 
 		return

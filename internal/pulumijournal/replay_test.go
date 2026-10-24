@@ -54,7 +54,7 @@ func replay(base, entries string) (string, error) {
 	}
 	var out bytes.Buffer
 	err := pulumijournal.NewReplayer(now, cliVersion).
-		Replay(context.Background(), open, strings.NewReader(entries), &out)
+		Replay(context.Background(), open, [][]byte{[]byte(entries)}, &out)
 	return out.String(), err
 }
 

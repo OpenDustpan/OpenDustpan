@@ -1630,3 +1630,87 @@ func TestRevocationConformance(t *testing.T) {
 		return &revocationStore{Store: s, path: path}
 	})
 }
+
+// errNoMarker reports a marker that the live marker suite hook does not know.
+var errNoMarker = errors.New("no such marker")
+
+// errMarkerRows reports a marker write that did not change exactly one row.
+var errMarkerRows = errors.New("marker write did not change one row")
+
+// liveMarkerStore adds to the store the hook of the live marker suite: a
+// write of a marker value that the ports never write.
+type liveMarkerStore struct {
+	*revocationStore
+}
+
+var _ storetest.LiveMarkerStore = (*liveMarkerStore)(nil)
+
+// SetMarker implements storetest.LiveMarkerStore. It writes to the database
+// file with another handle, as a restored backup or another tool could.
+func (s *liveMarkerStore) SetMarker(ctx context.Context, table, column, id string, value *int64) (err error) {
+	statements := map[string]string{
+		"principals/deleted_at_ms": `UPDATE principals SET deleted_at_ms = ? WHERE id = ?`,
+		"grants/revoked_at_ms":     `UPDATE grants SET revoked_at_ms = ? WHERE id = ?`,
+		"roles/deleted_at_ms":      `UPDATE roles SET deleted_at_ms = ? WHERE id = ?`,
+		"workspaces/deleted_at_ms": `UPDATE workspaces SET deleted_at_ms = ? WHERE id = ?`,
+	}
+
+	statement, ok := statements[table+"/"+column]
+	if !ok {
+		return fmt.Errorf("%s.%s: %w", table, column, errNoMarker)
+	}
+
+	raw, err := openRawDB(s.path)
+	if err != nil {
+		return fmt.Errorf("open raw database: %w", err)
+	}
+
+	defer func() {
+		if closeErr := raw.Close(); closeErr != nil {
+			err = errors.Join(err, fmt.Errorf("close raw database: %w", closeErr))
+		}
+	}()
+
+	res, err := raw.ExecContext(ctx, statement, value, id)
+	if err != nil {
+		return fmt.Errorf("set the marker: %w", err)
+	}
+
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("count the changed rows: %w", err)
+	}
+
+	if n != 1 {
+		return fmt.Errorf("set the marker: %d rows changed: %w", n, errMarkerRows)
+	}
+
+	return nil
+}
+
+// TestLiveMarkerConformance runs the suite of the live row checks: only a
+// NULL marker reads as live.
+func TestLiveMarkerConformance(t *testing.T) {
+	t.Parallel()
+
+	storetest.RunLiveMarkers(t, func(t *testing.T) storetest.LiveMarkerStore {
+		t.Helper()
+
+		path := filepath.Join(t.TempDir(), "dustpan.db")
+
+		copyTemplate(t, path)
+
+		s, err := sqlite.Open(t.Context(), path)
+		if err != nil {
+			t.Fatalf("open store: %v", err)
+		}
+
+		t.Cleanup(func() {
+			if err := s.Close(); err != nil {
+				t.Errorf("close store: %v", err)
+			}
+		})
+
+		return &liveMarkerStore{revocationStore: &revocationStore{Store: s, path: path}}
+	})
+}

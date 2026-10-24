@@ -562,14 +562,15 @@ func TestLockedErrorNamesTheHolderAndTheReason(t *testing.T) {
 			t.Parallel()
 
 			l := manuallock.Lock{Since: fixedNow(), Target: tc.target, Holder: "alice", Reason: "change window closed"}
-			err := error(&manuallock.LockedError{Lock: l, Noun: tc.noun, Name: tc.object})
+			locked := &manuallock.LockedError{Lock: l, Noun: tc.noun, Name: tc.object}
+			err := error(locked)
 
-			if err.Error() != tc.want {
-				t.Errorf("text = %q, want %q", err.Error(), tc.want)
+			if locked.Refusal() != tc.want {
+				t.Errorf("refusal = %q, want %q", locked.Refusal(), tc.want)
 			}
 
-			if strings.Contains(err.Error(), "unit") {
-				t.Errorf("text = %q: the word unit is not a word of any tool", err.Error())
+			if strings.Contains(locked.Refusal(), "unit") {
+				t.Errorf("refusal = %q: the word unit is not a word of any tool", locked.Refusal())
 			}
 
 			if !errors.Is(err, manuallock.ErrLocked) {
@@ -846,6 +847,8 @@ func TestSafeText(t *testing.T) {
 		{name: "escape", in: "a\x1bb", want: "a\\u001Bb"},
 		{name: "bidi override", in: "a\u202eb", want: "a\\u202Eb"},
 		{name: "line separator", in: "a\u2028b", want: "a\\u2028b"},
+		{name: "paragraph separator", in: "a\u2029b", want: "a\\u2029b"},
+		{name: "next line control", in: "a\u0085b", want: "a\\u0085b"},
 		{name: "bad bytes", in: "a\xffb", want: "a\ufffdb"},
 	}
 
@@ -1034,5 +1037,123 @@ func TestCoveringForKeepsTheStoreAnswer(t *testing.T) {
 		if _, err := svc.CoveringFor(t.Context(), webUnit(), "job-1"); !errors.Is(err, storeErr) {
 			t.Errorf("CoveringFor err = %v, want %v", err, storeErr)
 		}
+	}
+}
+
+// TestNamespaceLockForLetsAnEarlierPhasePass proves the rule of CoveringFor for
+// a unit that does not exist yet: only the lock of the namespace covers it, and
+// a job whose phase started before that lock passes it. Every other request
+// meets the lock: a phase at or after the lock, another job, no job, a clock
+// that fails, a clock of zero and a service with no clock. PhaseStart gives the
+// same start, or zero where the request meets the lock.
+func TestNamespaceLockForLetsAnEarlierPhasePass(t *testing.T) {
+	t.Parallel()
+
+	since := fixedNow()
+	held := manuallock.Lock{Since: since, Target: acmeTarget(), Holder: "alice", Reason: "freeze"}
+	before := since.Add(-time.Minute)
+
+	cases := []struct {
+		name       string
+		phases     manuallock.PhaseClock
+		jobID      string
+		wantLocked bool
+		wantStart  time.Time
+	}{
+		{
+			"phase started before the lock",
+			fakePhases{jobs: map[string]time.Time{"job-1": before}, err: nil},
+			"job-1", false, before,
+		},
+		{
+			"phase started at the time of the lock",
+			fakePhases{jobs: map[string]time.Time{"job-1": since}, err: nil},
+			"job-1", true, since,
+		},
+		{
+			"phase started after the lock",
+			fakePhases{jobs: map[string]time.Time{"job-1": since.Add(time.Second)}, err: nil},
+			"job-1", true, since.Add(time.Second),
+		},
+		{
+			"job with no live phase on the unit",
+			fakePhases{jobs: map[string]time.Time{"job-1": before}, err: nil},
+			"job-2", true,
+			time.Time{},
+		},
+		{"no job token", fakePhases{jobs: map[string]time.Time{"": before}, err: nil}, "", true, time.Time{}},
+		{"clock fails", fakePhases{jobs: nil, err: errClockDown}, "job-1", true, time.Time{}},
+		{
+			"clock answers zero",
+			fakePhases{jobs: map[string]time.Time{"job-1": {}}, err: nil},
+			"job-1",
+			true,
+			time.Time{},
+		},
+		{"no clock", nil, "job-1", true, time.Time{}},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			store := newStore()
+			store.held = held
+
+			svc, err := manuallock.NewService(manuallock.Config{
+				Store: store, Namespaces: fakeNamespaces{}, Authorizer: allowAll(), Phases: tc.phases, Now: fixedNow,
+			})
+			if err != nil {
+				t.Fatalf("NewService: %v", err)
+			}
+
+			if start := svc.PhaseStart(t.Context(), webUnit(), tc.jobID); !start.Equal(tc.wantStart) {
+				t.Errorf("PhaseStart = %v, want %v", start, tc.wantStart)
+			}
+
+			got, err := svc.NamespaceLockFor(t.Context(), webUnit(), tc.jobID)
+			if tc.wantLocked {
+				wantNamespaceLockHeld(t, got, err, held)
+
+				return
+			}
+
+			wantNamespaceLockPassed(t, got, err)
+		})
+	}
+}
+
+// wantNamespaceLockHeld fails the test unless the answer of NamespaceLockFor is
+// the held lock.
+func wantNamespaceLockHeld(t *testing.T, got manuallock.Lock, err error, held manuallock.Lock) {
+	t.Helper()
+
+	if err != nil || got != held {
+		t.Fatalf("NamespaceLockFor = %+v, %v; want the lock", got, err)
+	}
+}
+
+// wantNamespaceLockPassed fails the test unless NamespaceLockFor answered
+// manuallock.ErrNotLocked.
+func wantNamespaceLockPassed(t *testing.T, got manuallock.Lock, err error) {
+	t.Helper()
+
+	if !errors.Is(err, manuallock.ErrNotLocked) {
+		t.Fatalf("NamespaceLockFor = %+v, %v; want ErrNotLocked", got, err)
+	}
+}
+
+// TestNamespaceLockForWithNoLock proves a namespace with no manual lock covers
+// no new unit, whatever the job.
+func TestNamespaceLockForWithNoLock(t *testing.T) {
+	t.Parallel()
+
+	store := newStore()
+	store.getErr = manuallock.ErrNotLocked
+
+	svc := newService(t, store)
+
+	if _, err := svc.NamespaceLockFor(t.Context(), webUnit(), "job-1"); !errors.Is(err, manuallock.ErrNotLocked) {
+		t.Fatalf("NamespaceLockFor with no lock = %v, want ErrNotLocked", err)
 	}
 }

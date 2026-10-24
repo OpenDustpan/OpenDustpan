@@ -392,6 +392,10 @@ func TestUnknownAndDeletedPrincipals(t *testing.T) {
 
 	f.grant(t, prn("deleted"), access.RoleSiteAdministrator, identity.ServerObject())
 
+	// A second site administrator keeps the delete of the first allowed.
+	f.person(t, "keeper")
+	f.grant(t, prn("keeper"), access.RoleSiteAdministrator, identity.ServerObject())
+
 	err := f.store.DeletePrincipal(
 		t.Context(),
 		"prn-deleted",
@@ -445,7 +449,6 @@ func TestActionsWithoutRoutesAreUnclassified(t *testing.T) {
 	f.grant(t, prn("site"), access.RoleSiteAdministrator, identity.ServerObject())
 
 	for _, a := range []identity.Action{
-		identity.ActionUnitRunPlan,
 		identity.ActionUnitRunApply,
 		identity.ActionUnitRunDestroy,
 		identity.ActionUnitWriteBack,

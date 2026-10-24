@@ -4,10 +4,60 @@ package ident
 
 import (
 	"crypto/rand"
+	"fmt"
+	"strconv"
 	"strings"
+	"unicode/utf8"
 )
 
 const idLength = 20
+
+// MaxEcho is the most characters of a refused value that Echo repeats.
+const MaxEcho = 40
+
+// RuleError reports a value that fails Valid. Its text is the echo of the
+// value and the rule of Valid, so each domain sentinel that wraps it states
+// the same rule.
+type RuleError struct {
+	// Echo is the value as Echo returns it.
+	Echo string
+	// MaxLen is the most characters that the rule allows.
+	MaxLen int
+}
+
+// Error returns the echo of the value and the rule.
+func (e *RuleError) Error() string {
+	return fmt.Sprintf("%s: use 1 to %d ASCII letters, digits, -, _ and ., not starting with - or .", e.Echo, e.MaxLen)
+}
+
+// Check returns nil when Valid(s, maxLen) is true. Else it returns a
+// *RuleError with the echo of s. An empty s gets the same text as an invalid
+// one.
+func Check(s string, maxLen int) error {
+	if Valid(s, maxLen) {
+		return nil
+	}
+
+	return &RuleError{Echo: Echo(s), MaxLen: maxLen}
+}
+
+// Echo returns s quoted, for an error text. A value of more than MaxEcho
+// characters is cut after MaxEcho characters, and the text says that it is
+// cut and gives the count of characters of s. Quoting escapes line breaks
+// and control characters, so the echo cannot add a line to a log.
+func Echo(s string) string {
+	count := 0
+
+	for i := range s {
+		if count == MaxEcho {
+			return fmt.Sprintf("%s... (cut, %d characters)", strconv.Quote(s[:i]), utf8.RuneCountInString(s))
+		}
+
+		count++
+	}
+
+	return strconv.Quote(s)
+}
 
 // Valid reports whether s is 1..maxLen characters of ASCII letters, digits,
 // '-', '_' and '.', and does not start with '.' or '-'.

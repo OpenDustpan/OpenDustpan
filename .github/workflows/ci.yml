@@ -31,6 +31,9 @@ concurrency:
   group: ci-${{ github.event.pull_request.number || github.sha }}-${{ github.event.pull_request.draft == true }}${{ github.event_name == 'schedule' && '-schedule' || '' }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
+# For now, all jobs run on the runners in CI_RUNS_ON (see runs-on-large in
+# the go job). The rest of this note is for the Blacksmith layout.
+#
 # The CPU-bound tests (go, store and e2e) run on paid 8 vCPU Blacksmith
 # runners. They kept all the cores of a 4 vCPU runner busy, and on 8 vCPUs
 # they took about half the time. The other jobs (lint, scan and e2e-light)
@@ -120,7 +123,9 @@ jobs:
   go:
     if: ${{ github.event_name != 'pull_request' || !github.event.pull_request.draft }}
     # The store and e2e jobs use this value through the YAML alias *runs-on-large.
-    runs-on: &runs-on-large blacksmith-8vcpu-ubuntu-2404
+    # For now it is CI_RUNS_ON, not blacksmith-8vcpu-ubuntu-2404, to stop
+    # the paid minutes. The Blacksmith steps below skip on other runners.
+    runs-on: &runs-on-large ${{ fromJSON(vars.CI_RUNS_ON || '"ubuntu-latest"') }}
     services:
       postgres:
         # The Go test cache does not see the image. The digest makes sure that
@@ -132,13 +137,12 @@ jobs:
         # A fixed port keeps DUSTPAN_TEST_POSTGRES_URL the same from job to job,
         # so go test can use cached results. Each machine runs one job at a time.
         ports: [ "5432:5432" ]
-        # The image declares a volume at /var/lib/postgresql. On the
-        # Blacksmith runner, the data stays in memory instead. A parallel
-        # query keeps its shared memory in /dev/shm, and the Docker default of
-        # 64 MiB is too small for the tests.
+        # The image declares a volume at /var/lib/postgresql on the disk of the
+        # runner. The job hooks of each self-hosted runner remove it. A
+        # parallel query keeps its shared memory in /dev/shm, and the Docker
+        # default of 64 MiB is too small for the tests.
         options: >-
           --shm-size=1g
-          --tmpfs /var/lib/postgresql:rw,size=8g
           --health-cmd "pg_isready -U postgres"
           --health-interval 5s --health-timeout 5s --health-retries 10
     steps:
@@ -219,7 +223,6 @@ jobs:
         ports: [ "5432:5432" ]
         options: >-
           --shm-size=1g
-          --tmpfs /var/lib/postgresql:rw,size=8g
           --health-cmd "pg_isready -U postgres"
           --health-interval 5s --health-timeout 5s --health-retries 10
     steps:
@@ -311,13 +314,12 @@ jobs:
         # A fixed port keeps DUSTPAN_TEST_POSTGRES_URL the same from job to job,
         # so go test can use cached results. Each machine runs one job at a time.
         ports: [ "5432:5432" ]
-        # The image declares a volume at /var/lib/postgresql. On the
-        # Blacksmith runner, the data stays in memory instead. A parallel
-        # query keeps its shared memory in /dev/shm, and the Docker default of
-        # 64 MiB is too small for the tests.
+        # The image declares a volume at /var/lib/postgresql on the disk of the
+        # runner. The job hooks of each self-hosted runner remove it. A
+        # parallel query keeps its shared memory in /dev/shm, and the Docker
+        # default of 64 MiB is too small for the tests.
         options: >-
           --shm-size=1g
-          --tmpfs /var/lib/postgresql:rw,size=8g
           --health-cmd "pg_isready -U postgres"
           --health-interval 5s --health-timeout 5s --health-retries 10
     steps:

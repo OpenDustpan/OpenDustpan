@@ -1,8 +1,8 @@
 # Journal corpus
 
-Each folder holds one recorded case. The corpus test replays the batches of
-each case on the base deployment and compares the result with the recorded
-export.
+Each folder holds one recorded case. The conformance suite of the replayer
+port (`pkg/stack/replayertest`) replays the stored batches of each case on
+the base deployment and compares the result with the recorded export.
 
 ## Layout
 
@@ -15,9 +15,9 @@ export.
   journaling off, after the same update. The test normalizes it before the
   comparison.
 
-The test replays each case twice: once with the entries in arrival order
-(file order, body order within each file) and once with the same entries in
-`sequenceID` order. Both results must match the recorded export after
+Each case is replayed twice: the suite replays the stored batches in arrival
+order (file order, body order within each file), and the corpus test of
+`internal/pulumijournal` replays the same entries in `sequenceID` order. Both results must match the recorded export after
 normalization.
 
 ## Normalization

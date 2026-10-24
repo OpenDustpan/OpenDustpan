@@ -4,6 +4,11 @@
 // namespace and maintenance), the headers of an error answer and the log
 // rules: a 500 logs its status only, and a fenced write logs its wrap.
 //
+// Every answer has a code of the catalog. The package writes no code of its
+// own text: a class names the constant of the catalog, and the writer makes
+// the answer with errcode.New. A code or a value that the catalog refuses is a
+// bug of the caller, and the answer is the 500 server.internal.
+//
 // Each API gives its own classifier for the errors of its domain. The
 // refusals of the credential of a request (a rate limit, no sign-in, a CSRF
 // or other-site session request) are answered first, so no classifier can
@@ -17,8 +22,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
-	"maps"
 	"net/http"
 	"strconv"
 	"time"
@@ -32,25 +37,28 @@ import (
 	"opendustpan.org/opendustpan/pkg/namespace"
 )
 
-// Problem is the answer to an error: a status, a stable machine code and a
-// message that is safe to show callers.
+// Problem is the answer to an error: a status, a code of the catalog with
+// the values of its arguments, and a message that is safe to show callers.
 type Problem struct {
 	Status int
-	// Code is the stable machine code, or "" for an answer that has none.
-	Code    string
+	// Code is the code of the catalog.
+	Code string
+	// Values are the arguments that the code declares, or nil.
+	Values  []errcode.Value
 	Message string
-	// Args are the arguments of the code, or nil.
-	Args map[string]any
-	// RetryAfter is the wait that the answer names in the Retry-After header
-	// and in the argument retryAfterSeconds, or 0 for none.
+	// RetryAfter is the wait that the answer names in the Retry-After header,
+	// or 0 for none. The code names the same wait in its own argument.
 	RetryAfter time.Duration
 	// Reauthenticate is the path that starts a new sign-in, for the refusal
 	// of an old sign-in, or "".
 	Reauthenticate string
+	// answer is the finished code and arguments of an error that already
+	// holds them, or the zero Answer.
+	answer errcode.Answer
 }
 
 // Body is the error body of the tool-neutral APIs. Code is the HTTP status;
-// ErrorCode is the stable machine code.
+// ErrorCode is the stable machine code of the catalog.
 type Body struct {
 	Message        string         `json:"message"`
 	Code           int            `json:"code"`
@@ -67,7 +75,8 @@ type Error struct {
 // Error returns the message of the answer.
 func (e *Error) Error() string { return e.Problem.Message }
 
-// Fixed returns an error that answers status with code and message.
+// Fixed returns an error that answers status with code and message. The code
+// takes no argument.
 func Fixed(status int, code, message string) error {
 	return &Error{Problem: answer(status, code, message)}
 }
@@ -97,10 +106,27 @@ type Writer struct {
 
 // Write answers err. A 500 logs its status only, never the error text: the
 // text may hold driver detail, a token or state. A fenced write logs its
-// wrap, which names the write. Every error answer carries
+// wrap, which names the write. A code or a value that the catalog refuses
+// logs the code and answers server.internal. Every error answer carries
 // Cache-Control: no-store.
 func (wr Writer) Write(ctx context.Context, w http.ResponseWriter, err error) {
 	p := wr.Problem(err)
+
+	var (
+		made    errcode.Answer
+		codeErr error
+	)
+
+	made, codeErr = p.made()
+	if codeErr != nil {
+		// A code or a value that the catalog refuses is a bug of the adapter.
+		// The log names the code only.
+		wr.Logger.ErrorContext(ctx, "error code refused", slog.String("error_code", p.Code))
+
+		p = Internal()
+		made = errcode.Internal()
+	}
+
 	if p.Status == http.StatusInternalServerError {
 		wr.Logger.ErrorContext(ctx, "request failed", slog.Int("status", p.Status))
 	}
@@ -111,19 +137,34 @@ func (wr Writer) Write(ctx context.Context, w http.ResponseWriter, err error) {
 
 	w.Header().Set("Cache-Control", "no-store")
 
-	args := p.Args
-
 	if p.RetryAfter > 0 {
-		// The wait is whole seconds, rounded up, and at least 1.
-		wait := max(1, int((p.RetryAfter+time.Second-1)/time.Second))
-		w.Header().Set("Retry-After", strconv.Itoa(wait))
-
-		args = withArg(args, "retryAfterSeconds", wait)
+		w.Header().Set("Retry-After", strconv.FormatInt(RetryAfterSeconds(p.RetryAfter), 10))
 	}
 
 	WriteJSON(ctx, wr.Logger, w, p.Status, Body{
-		Message: p.Message, Code: p.Status, ErrorCode: p.Code, ErrorArgs: args, Reauthenticate: p.Reauthenticate,
+		Message: p.Message, Code: p.Status, ErrorCode: made.Code(), ErrorArgs: made.Args(),
+		Reauthenticate: p.Reauthenticate,
 	})
+}
+
+// RetryAfterSeconds returns wait in whole seconds, rounded up, and at least
+// 1.
+func RetryAfterSeconds(wait time.Duration) int64 {
+	return int64(max(1, (wait+time.Second-1)/time.Second))
+}
+
+// made returns the code and the arguments of p.
+func (p Problem) made() (errcode.Answer, error) {
+	if p.answer.Code() != "" {
+		return p.answer, nil
+	}
+
+	made, err := errcode.New(p.Code, p.Values...)
+	if err != nil {
+		return made, fmt.Errorf("make the answer of %q: %w", p.Code, err)
+	}
+
+	return made, nil
 }
 
 // Problem returns the answer to err. The order is part of the contract:
@@ -156,10 +197,7 @@ func (wr Writer) Problem(err error) Problem {
 
 // Internal returns the answer to an error that no class knows.
 func Internal() Problem {
-	return Problem{
-		Status: http.StatusInternalServerError, Code: "", Message: "internal error",
-		Args: nil, RetryAfter: 0, Reauthenticate: "",
-	}
+	return answer(http.StatusInternalServerError, errcode.ServerInternal, "internal error")
 }
 
 // Shared returns the answer to an error of a class that every tool-neutral
@@ -198,10 +236,10 @@ func Auth(err error) (Problem, bool) {
 func credential(err error) (Problem, bool) {
 	switch {
 	case errors.Is(err, identity.ErrRateLimited):
-		return answer(http.StatusTooManyRequests, "auth.rate-limited",
+		return answer(http.StatusTooManyRequests, errcode.AuthRateLimited,
 			"too many failed sign-ins from this address: try again later"), true
 	case errors.Is(err, identity.ErrUnauthenticated):
-		return answer(http.StatusUnauthorized, "auth.unauthenticated", "unauthenticated"), true
+		return answer(http.StatusUnauthorized, errcode.AuthUnauthenticated, "unauthenticated"), true
 	case errors.Is(err, sessionauth.ErrCSRF), errors.Is(err, sessionauth.ErrOtherSite):
 		return answer(http.StatusForbidden, errcode.Forbidden(err), err.Error()), true
 	default:
@@ -212,13 +250,15 @@ func credential(err error) (Problem, bool) {
 // Idempotency returns the answer to an error of the Idempotency-Key of a
 // request.
 func Idempotency(err error) (Problem, bool) {
-	if ie, ok := errors.AsType[*idempotent.Error](err); ok {
-		return answer(ie.Status, ie.Code, ie.Message), true
+	if errors.Is(err, idempotency.ErrLost) {
+		err = idempotent.Lost()
 	}
 
-	if errors.Is(err, idempotency.ErrLost) {
-		return answer(http.StatusConflict, idempotent.CodeInProgress,
-			"a newer request took this Idempotency-Key before this request ended: retry later"), true
+	if ie, ok := errors.AsType[*idempotent.Error](err); ok {
+		p := answer(ie.Status, ie.Answer.Code(), ie.Message)
+		p.answer = ie.Answer
+
+		return p, true
 	}
 
 	return Pass()
@@ -229,38 +269,31 @@ func Idempotency(err error) (Problem, bool) {
 func Namespace(err error) (Problem, bool) {
 	switch {
 	case errors.Is(err, namespace.ErrInvalidName):
-		return answer(http.StatusBadRequest, "namespace.invalid-name", err.Error()), true
+		return answer(http.StatusBadRequest, errcode.NamespaceInvalidName, err.Error()), true
 	case errors.Is(err, namespace.ErrNotFound):
-		return answer(http.StatusNotFound, "namespace.not-found", "namespace not found"), true
+		return answer(http.StatusNotFound, errcode.NamespaceNotFound, "namespace not found"), true
 	case errors.Is(err, namespace.ErrFenced):
-		return answer(http.StatusConflict, "namespace.fenced", namespace.ErrFenced.Error()), true
+		return answer(http.StatusConflict, errcode.NamespaceFenced, namespace.ErrFenced.Error()), true
 	case errors.Is(err, namespace.ErrNotHome):
 		return answer(
 			http.StatusMisdirectedRequest,
-			"namespace.not-home",
+			errcode.NamespaceNotHome,
 			"namespace is not homed in this region",
 		), true
 	case errors.Is(err, maintenance.ErrInMaintenance):
-		return answer(http.StatusServiceUnavailable, "maintenance.in-maintenance",
+		return answer(http.StatusServiceUnavailable, errcode.MaintenanceInMaintenance,
 			maintenance.ErrInMaintenance.Error()+": try again later"), true
 	default:
 		return Pass()
 	}
 }
 
-// answer returns a Problem with no arguments.
+// answer returns a Problem whose code takes no argument.
 func answer(status int, code, message string) Problem {
-	return Problem{Status: status, Code: code, Message: message, Args: nil, RetryAfter: 0, Reauthenticate: ""}
-}
-
-// withArg returns a copy of args with key set to value.
-func withArg(args map[string]any, key string, value any) map[string]any {
-	out := make(map[string]any, len(args)+1)
-	maps.Copy(out, args)
-
-	out[key] = value
-
-	return out
+	return Problem{
+		Status: status, Code: code, Values: nil, Message: message, RetryAfter: 0, Reauthenticate: "",
+		answer: errcode.Answer{},
+	}
 }
 
 // WriteJSON writes body as JSON with status. A failed write logs a warning:

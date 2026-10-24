@@ -21,7 +21,8 @@ var errTx = errors.New("transaction failed")
 // epoch is the start of the job of the fixtures.
 func epoch() time.Time { return time.UnixMilli(1_800_000_000_000).UTC() }
 
-// fakeTx is a driftstore.Tx over maps. It counts the writes.
+// fakeTx is a driftstore.Tx over maps. It counts the writes. Its Put keeps
+// the rule of the port: it does not replace a row that is not older.
 type fakeTx struct {
 	jobs    map[job.ID]jobstore.Row
 	latest  map[graph.Unit]driftstore.Row
@@ -55,8 +56,13 @@ func (f *fakeTx) Put(_ context.Context, r driftstore.Row) error {
 		return f.putErr
 	}
 
+	u := graph.Unit{Namespace: namespace.Name(r.Namespace), Tool: r.Tool, ID: r.UnitID}
+	if old, ok := f.latest[u]; ok && old.CheckedAtMs >= r.CheckedAtMs {
+		return fmt.Errorf("put: %w", drift.ErrStale)
+	}
+
 	f.puts++
-	f.latest[graph.Unit{Namespace: namespace.Name(r.Namespace), Tool: r.Tool, ID: r.UnitID}] = r
+	f.latest[u] = r
 
 	return nil
 }
@@ -326,14 +332,53 @@ func TestRecordReplacesADamagedRow(t *testing.T) {
 
 	tx := newFakeTx()
 	tx.jobs["job-1"] = goodJob("job-1")
-	tx.latest[unit()] = driftstore.Row{
-		Namespace: "acme", Tool: "opentofu", UnitID: "wsp-1", JobID: "job-9", Status: "drifted",
-		CheckedAtMs: epoch().Add(time.Hour).UnixMilli(), Truncated: false, ResourcesJSON: "[]",
-	}
+	tx.latest[unit()] = damagedRow(epoch())
 
 	tr, err := driftstore.Record(t.Context(), tx, result("job-1", 1, "a"))
 	if err != nil || tr.From != drift.StatusUnknown || tx.puts != 1 {
 		t.Fatalf("Record = %+v, %v with %d writes; want the new result to replace the damaged row", tr, err, tx.puts)
+	}
+}
+
+// TestRecordKeepsADamagedRowThatIsNotOlder proves that a damaged row with a
+// time that is not older than the new result stays, and that Record returns
+// drift.ErrStale for it.
+func TestRecordKeepsADamagedRowThatIsNotOlder(t *testing.T) {
+	t.Parallel()
+
+	for name, at := range map[string]time.Time{
+		"the same time": epoch().Add(time.Minute), "a later time": epoch().Add(time.Hour),
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			tx := newFakeTx()
+			tx.jobs["job-1"] = goodJob("job-1")
+			tx.latest[unit()] = damagedRow(at)
+
+			tr, err := driftstore.Record(t.Context(), tx, result("job-1", 1, "a"))
+			if !errors.Is(err, drift.ErrStale) || tr.JobID != "" || tx.puts != 0 {
+				t.Fatalf(
+					"Record = %+v, %v with %d writes; want drift result is not newer than the stored result and no write",
+					tr,
+					err,
+					tx.puts,
+				)
+			}
+
+			if got := tx.latest[unit()]; got != damagedRow(at) {
+				t.Fatalf("stored row = %+v, want the damaged row", got)
+			}
+		})
+	}
+}
+
+// damagedRow returns a stored row of the unit at the time at that fails its
+// checks: a drifted result with no resource.
+func damagedRow(at time.Time) driftstore.Row {
+	return driftstore.Row{
+		Namespace: "acme", Tool: "opentofu", UnitID: "wsp-1", JobID: "job-9", Status: "drifted",
+		CheckedAtMs: at.UnixMilli(), Truncated: false, ResourcesJSON: "[]",
 	}
 }
 

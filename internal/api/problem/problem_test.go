@@ -32,7 +32,7 @@ func domain(err error) (problem.Problem, bool) {
 	if errors.Is(err, errDomain) {
 		var p problem.Problem
 
-		p.Status, p.Code, p.Message = http.StatusConflict, "domain.refused", "refused"
+		p.Status, p.Code, p.Message = http.StatusConflict, errcode.SinkConflict, "refused"
 
 		return p, true
 	}
@@ -75,28 +75,28 @@ func TestSharedClasses(t *testing.T) {
 		status int
 		code   string
 	}{
-		{"rate limited", identity.ErrRateLimited, http.StatusTooManyRequests, "auth.rate-limited"},
-		{"unauthenticated", identity.ErrUnauthenticated, http.StatusUnauthorized, "auth.unauthenticated"},
+		{"rate limited", identity.ErrRateLimited, http.StatusTooManyRequests, errcode.AuthRateLimited},
+		{"unauthenticated", identity.ErrUnauthenticated, http.StatusUnauthorized, errcode.AuthUnauthenticated},
 		{"csrf", sessionauth.ErrCSRF, http.StatusForbidden, errcode.SessionCSRF},
 		{"denied", identity.ErrDenied, http.StatusForbidden, errcode.AccessDenied},
 		{
 			"fixed",
-			problem.Fixed(http.StatusTeapot, "request.teapot", "short and stout"),
-			http.StatusTeapot,
-			"request.teapot",
+			problem.Fixed(http.StatusPreconditionFailed, errcode.RequestPreconditionFailed, "short and stout"),
+			http.StatusPreconditionFailed,
+			errcode.RequestPreconditionFailed,
 		},
 		{
 			"bad request",
-			problem.BadRequest("request.body-invalid", "bad body"),
+			problem.BadRequest(errcode.RequestBodyInvalid, "bad body"),
 			http.StatusBadRequest,
-			"request.body-invalid",
+			errcode.RequestBodyInvalid,
 		},
-		{"idempotency lost", idempotency.ErrLost, http.StatusConflict, idempotent.CodeInProgress},
-		{"invalid namespace", namespace.ErrInvalidName, http.StatusBadRequest, "namespace.invalid-name"},
-		{"no namespace", namespace.ErrNotFound, http.StatusNotFound, "namespace.not-found"},
-		{"fenced", namespace.ErrFenced, http.StatusConflict, "namespace.fenced"},
-		{"not home", namespace.ErrNotHome, http.StatusMisdirectedRequest, "namespace.not-home"},
-		{"maintenance", maintenance.ErrInMaintenance, http.StatusServiceUnavailable, "maintenance.in-maintenance"},
+		{"idempotency lost", idempotency.ErrLost, http.StatusConflict, idempotent.CodeLost},
+		{"invalid namespace", namespace.ErrInvalidName, http.StatusBadRequest, errcode.NamespaceInvalidName},
+		{"no namespace", namespace.ErrNotFound, http.StatusNotFound, errcode.NamespaceNotFound},
+		{"fenced", namespace.ErrFenced, http.StatusConflict, errcode.NamespaceFenced},
+		{"not home", namespace.ErrNotHome, http.StatusMisdirectedRequest, errcode.NamespaceNotHome},
+		{"maintenance", maintenance.ErrInMaintenance, http.StatusServiceUnavailable, errcode.MaintenanceInMaintenance},
 	}
 
 	for _, tc := range cases {
@@ -149,7 +149,7 @@ func TestClassifierRunsFirst(t *testing.T) {
 		if errors.Is(err, namespace.ErrNotFound) {
 			var p problem.Problem
 
-			p.Status, p.Message = http.StatusNotFound, "not found"
+			p.Status, p.Code, p.Message = http.StatusNotFound, errcode.SinkNotFound, "not found"
 
 			return p, true
 		}
@@ -163,7 +163,7 @@ func TestClassifierRunsFirst(t *testing.T) {
 	}
 
 	rec, _ = write(t, domain, errDomain)
-	if got := body(t, rec); rec.Code != http.StatusConflict || got.ErrorCode != "domain.refused" {
+	if got := body(t, rec); rec.Code != http.StatusConflict || got.ErrorCode != errcode.SinkConflict {
 		t.Fatalf("answer %d %+v, want the domain answer", rec.Code, got)
 	}
 }
@@ -199,8 +199,8 @@ func TestRetryAfter(t *testing.T) {
 		limited := func(error) (problem.Problem, bool) {
 			var p problem.Problem
 
-			p.Status, p.Code, p.Message, p.RetryAfter = http.StatusTooManyRequests, "x.limited", "later", wait
-			p.Args = map[string]any{"limit": 3}
+			p.Status, p.Code, p.Message, p.RetryAfter = http.StatusTooManyRequests, errcode.SinkTestRateLimited, "later", wait
+			p.Values = []errcode.Value{errcode.Quantity("retryAfterSeconds", problem.RetryAfterSeconds(wait))}
 
 			return p, true
 		}
@@ -218,9 +218,6 @@ func TestRetryAfter(t *testing.T) {
 			)
 		}
 
-		if fmt.Sprint(got.ErrorArgs["limit"]) != "3" {
-			t.Fatalf("args %v, want the arguments of the classifier kept", got.ErrorArgs)
-		}
 	}
 }
 
@@ -231,7 +228,7 @@ func TestReauthenticate(t *testing.T) {
 	old := func(error) (problem.Problem, bool) {
 		var p problem.Problem
 
-		p.Status, p.Code, p.Message, p.Reauthenticate = http.StatusUnauthorized, "x.old", "too old", "/sign-in"
+		p.Status, p.Code, p.Message, p.Reauthenticate = http.StatusUnauthorized, errcode.MFAFreshStepRequired, "too old", "/sign-in"
 
 		return p, true
 	}
@@ -251,7 +248,7 @@ func TestCredentialRefusalsComeFirst(t *testing.T) {
 	greedy := func(error) (problem.Problem, bool) {
 		var p problem.Problem
 
-		p.Status, p.Code, p.Message = http.StatusTeapot, "greedy.all", "mine"
+		p.Status, p.Code, p.Message = http.StatusTeapot, errcode.SinkConflict, "mine"
 
 		return p, true
 	}
@@ -266,5 +263,57 @@ func TestCredentialRefusalsComeFirst(t *testing.T) {
 	rec, _ := write(t, greedy, identity.ErrDenied)
 	if rec.Code != http.StatusTeapot {
 		t.Fatalf("denied: answer %d, want the classifier to answer it", rec.Code)
+	}
+}
+
+// TestRefusedCodeIsInternal checks that a code the catalog does not have, and
+// a code with a missing argument, answer 500 server.internal, and that the log
+// names the code and never the message.
+func TestRefusedCodeIsInternal(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		code string
+	}{
+		{"unknown code", "x.not-in-the-catalog"},
+		{"missing argument", errcode.SinkTestRateLimited},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			bad := func(error) (problem.Problem, bool) {
+				var p problem.Problem
+
+				p.Status, p.Code, p.Message = http.StatusConflict, tc.code, "secret hunter2"
+
+				return p, true
+			}
+
+			rec, logged := write(t, bad, errDomain)
+			got := body(t, rec)
+
+			if rec.Code != http.StatusInternalServerError || got.ErrorCode != errcode.ServerInternal ||
+				got.Message != "internal error" {
+				t.Fatalf("answer %d %+v, want 500 %s", rec.Code, got, errcode.ServerInternal)
+			}
+
+			if !strings.Contains(logged, tc.code) || strings.Contains(logged, "hunter2") {
+				t.Fatalf("log %q, want the code and not the message", logged)
+			}
+		})
+	}
+}
+
+// TestInternalHasCode checks that the 500 of an error that no class knows has
+// the code server.internal.
+func TestInternalHasCode(t *testing.T) {
+	t.Parallel()
+
+	rec, _ := write(t, nil, errDriver)
+	if got := body(t, rec); got.ErrorCode != errcode.ServerInternal {
+		t.Fatalf("code = %q, want %q", got.ErrorCode, errcode.ServerInternal)
 	}
 }

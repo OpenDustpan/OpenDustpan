@@ -20,7 +20,7 @@ import (
 type stallReplayer struct{}
 
 func (stallReplayer) Replay(
-	ctx context.Context, _ func(context.Context) (io.ReadCloser, error), _ io.Reader, _ io.Writer,
+	ctx context.Context, _ func(context.Context) (io.ReadCloser, error), _ [][]byte, _ io.Writer,
 ) error {
 	<-ctx.Done()
 	return fmt.Errorf("stall replayer: %w", ctx.Err())

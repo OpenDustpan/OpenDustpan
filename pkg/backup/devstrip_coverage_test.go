@@ -87,6 +87,11 @@ var devColumnDecisions = map[string]devDecision{
 		strip:  false,
 		reason: "ID of a principal, not a subject: a view of a missing principal matches no reader",
 	},
+	"triggers.last_saver_subject": {
+		strip: false,
+		reason: "subject of the last saver; a start checks the current grants of that principal and " +
+			"refuses when the principal is gone",
+	},
 	"registry_keys.added_by": {
 		strip:  false,
 		reason: "ID of a principal, not a subject: history text of who registered the key",

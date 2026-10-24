@@ -106,6 +106,10 @@ Your receiver must:
 2. Refuse a timestamp that is more than 5 minutes from its own clock.
 3. Drop a second request with the same notification ID.
 
+Answer with a 2xx status within 10 seconds. The server stops a request after
+10 seconds and sends the notification again later, with the same notification
+ID, up to 15 attempts in all.
+
 The body is JSON with the fields `schemaVersion`, `id`, `type`, `scope`,
 `object`, `objectId`, `severity`, `summary`, `links`, `attributes`,
 `dedupeKey`, `at` and `sequence`.
