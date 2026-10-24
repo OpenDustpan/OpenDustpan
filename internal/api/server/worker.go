@@ -181,10 +181,10 @@ func (h *Handler) getWorker(w http.ResponseWriter, r *http.Request, _ identity.P
 }
 
 // classifyWorker maps ErrNoWorker to 503 with the command that helps.
-func classifyWorker(err error) (int, string, bool) {
+func classifyWorker(err error) (failure, bool) {
 	if errors.Is(err, ErrNoWorker) {
-		return http.StatusServiceUnavailable, noWorkerMessage, true
+		return fail(http.StatusServiceUnavailable, noWorkerMessage), true
 	}
 
-	return 0, "", false
+	return fail(0, ""), false
 }

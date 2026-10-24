@@ -198,7 +198,7 @@ func (t driftTx) Put(ctx context.Context, r driftstore.Row) error {
 			return drift.ErrStale
 		}
 
-		return fmt.Errorf("%w: unit ID %q belongs to another namespace or another tool", driftstore.ErrCorrupt,
+		return fmt.Errorf("%w: unit ID %q belongs to another namespace or another tool", drift.ErrInvalid,
 			r.UnitID)
 	}
 

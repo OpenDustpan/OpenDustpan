@@ -21,6 +21,19 @@ import (
 // audit.ErrInvalidEntry, and changes nothing, when the entry fails
 // validation or names another scope. The time of the change is e.At: an end
 // time, such as the end of a membership, is e.At too.
+//
+// DeletePrincipal, DisablePrincipal, DeleteGroup and RemoveMember return
+// access.ErrLastSiteAdministrator, and change nothing, when the change would
+// leave the installation with no site administrator. A site administrator is
+// a principal of the installation of the kind KindPerson that is not deleted
+// or disabled and that holds a current grant of the role site-administrator
+// on the installation, directly or through an active membership of a group.
+// An installation with no site administrator before the change refuses
+// nothing. The store counts and changes in one transaction, and it serializes
+// these changes with each other and with access.Store.RevokeGrant: two
+// concurrent changes that each end one of the last two site administrators
+// must not both commit. The store takes the lock that serializes them itself,
+// so a caller does not take it.
 type Store interface {
 	RecordStore
 	NamespaceRecordStore
@@ -50,7 +63,8 @@ type RecordStore interface {
 	UpdatePrincipal(ctx context.Context, p Principal, e audit.Entry) error
 	// DeletePrincipal ends the principal with the ID id and each membership
 	// of it, at e.At. The rows stay for the history. It returns ErrNotFound
-	// when no such principal exists.
+	// when no such principal exists, and access.ErrLastSiteAdministrator when
+	// it ends the last site administrator (see Store).
 	DeletePrincipal(ctx context.Context, id string, e audit.Entry) error
 	// EnablePrincipal clears the disable time of the principal with the ID
 	// id and sets its update time to e.At. It returns ErrNotFound when no
@@ -61,8 +75,9 @@ type RecordStore interface {
 	// grants, memberships and tokens of the principal stay, and the principal
 	// cannot use them until EnablePrincipal clears the disable time. The
 	// write runs in maintenance mode, as a revocation does. It returns
-	// ErrNotFound when no such principal exists, and ErrDisabled when it is
-	// disabled.
+	// ErrNotFound when no such principal exists, ErrDisabled when it is
+	// disabled, and access.ErrLastSiteAdministrator when it disables the last
+	// site administrator (see Store).
 	DisablePrincipal(ctx context.Context, id string, e audit.Entry) error
 }
 
@@ -114,7 +129,9 @@ type GroupStore interface {
 	// regard to case.
 	UpdateGroup(ctx context.Context, g Group, e audit.Entry) error
 	// DeleteGroup ends the group with the ID id and each membership in it,
-	// at e.At. It returns ErrNotFound when no such group exists.
+	// at e.At. It returns ErrNotFound when no such group exists, and
+	// access.ErrLastSiteAdministrator when it ends the last site
+	// administrator (see Store).
 	DeleteGroup(ctx context.Context, id string, e audit.Entry) error
 }
 
@@ -149,8 +166,9 @@ type MemberStore interface {
 	AddMember(ctx context.Context, m Membership, e audit.Entry, more MemberAudit) error
 	// RemoveMember ends the membership of the principal principalID in the
 	// group groupID, at e.At. It returns ErrNotFound when no such
-	// membership exists, and ErrManagedByDirectory when the source of the
-	// group is not SourceLocal.
+	// membership exists, ErrManagedByDirectory when the source of the
+	// group is not SourceLocal, and access.ErrLastSiteAdministrator when it
+	// ends the last site administrator (see Store).
 	RemoveMember(ctx context.Context, groupID, principalID string, e audit.Entry) error
 	// ListMembers returns the members of the group groupID, ordered by
 	// subject: the rows of q, with the subject as the key. It returns

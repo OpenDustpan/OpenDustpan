@@ -100,6 +100,7 @@ func newCheckGateHandler(t *testing.T, ws tfe.WorkspaceService, gate *bodygate.G
 		Logger:         slog.New(slog.DiscardHandler),
 		Namespaces:     newTestNamespaces(t),
 		Workspaces:     ws,
+		OutputChecker:  nil,
 		BaseURL:        baseurl.Resolver{},
 		Audit:          newTestAudit(),
 		Gate:           gate,

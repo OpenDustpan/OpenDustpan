@@ -20,8 +20,15 @@ import (
 	"opendustpan.org/opendustpan/pkg/store/sqlite"
 )
 
-// recoveryLease is the lease period of the recovery test.
-const recoveryLease = 2 * time.Second
+// crashLease is the lease of the claim of the process that crashes. The
+// second process can take over the claim only after it ends, so it is short.
+const crashLease = 2 * time.Second
+
+// recoverLease is the lease of the process that recovers the backup. It is far
+// longer than any stall of a loaded machine, so the claim of that process
+// never ends before the backup ends, and the one crash of the test is the
+// only holder that stops without an end write.
+const recoverLease = time.Hour
 
 // holdTarget is a backup target that holds the first write of a SQL table
 // file until the context of the write ends, as a process that dies in the
@@ -53,9 +60,17 @@ func (h *holdTarget) Put(ctx context.Context, key blob.Key, r io.Reader) error {
 	return h.Store.Put(ctx, key, r)
 }
 
-// backupService builds a backup service over store and the two directories.
+// serviceBlobs holds the live blob store and the backup target of a backup
+// service.
+type serviceBlobs struct {
+	blobs  blob.Store
+	target blob.Store
+}
+
+// backupService builds a backup service over store and the two blob stores,
+// with lease as the lease of its claims.
 func backupService(
-	t *testing.T, store *sqlite.Store, ops durable.Store, blobs, target blob.Store,
+	t *testing.T, store *sqlite.Store, ops durable.Store, stores serviceBlobs, lease time.Duration,
 ) *backup.Service {
 	t.Helper()
 
@@ -63,12 +78,12 @@ func backupService(
 		Exporter:    store,
 		Kinds:       store,
 		Registry:    store,
-		Blobs:       blobs,
-		Target:      target,
+		Blobs:       stores.blobs,
+		Target:      stores.target,
 		TargetName:  "test",
 		Operations:  ops,
 		Owner:       "worker",
-		Lease:       recoveryLease,
+		Lease:       lease,
 		StateOpener: nil,
 		Now:         nil,
 		Version:     "",
@@ -101,7 +116,7 @@ func crashedBackup(t *testing.T, path string, dirs recoveryDirs, id backup.ID) {
 
 	held := &holdTarget{Store: dirs.target, mu: sync.Mutex{}, held: false, entered: make(chan struct{})}
 	dead := &crashOps{Store: first.DurableOperationsPort(), crashed: atomic.Bool{}}
-	svc := backupService(t, first, dead, dirs.blobs, held)
+	svc := backupService(t, first, dead, serviceBlobs{blobs: dirs.blobs, target: held}, crashLease)
 
 	if startErr := svc.Start(ctx, id); startErr != nil {
 		t.Fatalf("start backup: %v", startErr)
@@ -212,7 +227,8 @@ func TestBackupRecoversAfterCrash(t *testing.T) {
 		t.Fatalf("backup after the crash = %+v, %v; want running", row, getErr)
 	}
 
-	again := backupService(t, second, second.DurableOperationsPort(), blobs, target)
+	stores := serviceBlobs{blobs: blobs, target: target}
+	again := backupService(t, second, second.DurableOperationsPort(), stores, recoverLease)
 	recoverCtx, stop := context.WithCancel(ctx)
 
 	var worker sync.WaitGroup
@@ -252,8 +268,9 @@ func checkRecovered(t *testing.T, second *sqlite.Store, target blob.Store, id ba
 		op, err = second.DurableOperationsPort().Get(ctx, opID)
 	}
 
-	if err != nil || op.State != durable.StateSucceeded || op.Attempt < 2 || op.Expiries < 1 {
-		t.Fatalf("operation = %+v, %v; want succeeded after a second attempt that took over an expired claim", op, err)
+	if err != nil || op.State != durable.StateSucceeded || op.Attempt < 2 || op.Expiries != 1 {
+		t.Fatalf("operation = %+v, %v; want succeeded after a second attempt that took over the one expired claim",
+			op, err)
 	}
 
 	if checkErr := backup.Check(ctx, target, id); checkErr != nil {

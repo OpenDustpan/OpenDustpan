@@ -3,7 +3,6 @@ package secret
 import (
 	"context"
 	"crypto/md5" //nolint:gosec // Integrity checksum of the manifest, not security: the AEAD tag authenticates the blob.
-	"crypto/rand"
 	"errors"
 	"fmt"
 	"io"
@@ -165,8 +164,8 @@ func (s *ItemKeySealer) OpenContent(
 
 // openItemKey returns the raw item key of ref. The caller clears it. It reads
 // the record first and returns ErrShredded for a shredded record and
-// ErrKeyNotFound for no record or no blob. A key that does not unwrap for ref
-// gives ErrDecrypt.
+// ErrKeyNotFound for no record or no blob. It reads only the blob version that
+// the record names. A key that does not unwrap for ref gives ErrDecrypt.
 func (s *ItemKeySealer) openItemKey(ctx context.Context, ref ItemRef) ([]byte, error) {
 	if err := checkRef(ref); err != nil {
 		return nil, err
@@ -188,6 +187,8 @@ func (s *ItemKeySealer) openItemKey(ctx context.Context, ref ItemRef) ([]byte, e
 		return nil, fmt.Errorf("item key of %s: %w", ref, ErrKeyNotConfigured)
 	}
 
+	// Defense in depth: unwrapKey checks the wrapper ID too. This check stays
+	// so that a key of another wrapper reads no namespace and no blob.
 	if rec.WrapperID != s.wrapper.ID() {
 		return nil, fmt.Errorf("%w: key of %s is wrapped by %q, server holds %q",
 			ErrDecrypt, ref, rec.WrapperID, s.wrapper.ID())
@@ -198,26 +199,25 @@ func (s *ItemKeySealer) openItemKey(ctx context.Context, ref ItemRef) ([]byte, e
 		return nil, fmt.Errorf("item key of %s: %w", ref, err)
 	}
 
-	keys, err := s.blobs.Versions(ctx, ns.ID, rec.ID)
-	if err != nil {
-		return nil, fmt.Errorf("item key blobs of %s: %w", ref, err)
-	}
-
-	if len(keys) == 0 {
-		return nil, fmt.Errorf("item key blob of %s: %w", ref, ErrKeyNotFound)
-	}
-
-	wrapped, err := s.blobs.Get(ctx, ns.ID, keys[len(keys)-1])
+	// The record names the blob version. A blob of another version, for
+	// example a stray or planted later version, is never read.
+	blobKey, err := s.blobs.Key(ns.ID, rec.ID, rec.Blob.Version)
 	if err != nil {
 		return nil, fmt.Errorf("item key blob of %s: %w", ref, err)
 	}
 
-	key, err := s.wrapper.Unwrap(ctx, wrapped, ref.aad())
+	wrapped, err := s.blobs.Get(ctx, ns.ID, blobKey)
 	if err != nil {
-		return nil, fmt.Errorf("unwrap item key of %s: %w", ref, err)
+		return nil, fmt.Errorf("item key blob of %s: %w", ref, err)
 	}
 
-	return key, nil
+	return unwrapKey(
+		ctx,
+		s.wrapper,
+		sealedKey{wrapperID: rec.WrapperID, ciphertext: wrapped},
+		ref.aad(),
+		"item key of "+ref.String(),
+	)
 }
 
 // createItemKey makes a new item key for ref and stores its blob and, through
@@ -228,16 +228,9 @@ func (s *ItemKeySealer) createItemKey(ctx context.Context, tx ItemKeyTx, ref Ite
 		return ItemKey{}, fmt.Errorf("new item key of %s: %w", ref, err)
 	}
 
-	key := make([]byte, dataKeyBytes)
-	defer clear(key)
-
-	if _, err = rand.Read(key); err != nil {
-		return ItemKey{}, fmt.Errorf("generate item key: %w", err)
-	}
-
-	wrapped, err := s.wrapper.Wrap(ctx, key, ref.aad())
+	wrapped, err := wrapNewKey(ctx, s.wrapper, ref.aad(), "item key of "+ref.String())
 	if err != nil {
-		return ItemKey{}, fmt.Errorf("wrap item key of %s: %w", ref, err)
+		return ItemKey{}, err
 	}
 
 	id := NewItemKeyID()

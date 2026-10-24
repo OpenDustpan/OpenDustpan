@@ -185,7 +185,8 @@ type ItemKeyIndex interface {
 // inside the function that the store gives it to.
 //
 // The transaction holds the fence that the caller gave when it opened the
-// transaction, and every call checks the namespace of its argument against it.
+// transaction. CreateItemKey checks the namespace of its record against it.
+// The reads do not check the fence.
 type ItemKeyTx interface {
 	// CreateItemKey stores the record k unless a record for k.Ref exists,
 	// and returns the stored record either way. It returns ErrShredded with
@@ -198,7 +199,8 @@ type ItemKeyTx interface {
 	GetItemKey(ctx context.Context, ref ItemRef) (ItemKey, error)
 	// GetNamespace reads a namespace inside the transaction. The sealer needs
 	// the ID of the namespace to name the key blob, and a read through the
-	// store could wait for the transaction that the caller holds open.
+	// store could wait for the transaction that the caller holds open. It
+	// returns namespace.ErrNotFound for a name that the store does not hold.
 	GetNamespace(ctx context.Context, name namespace.Name) (namespace.Namespace, error)
 }
 
@@ -226,9 +228,12 @@ type ItemSealer interface {
 	// when ref already has one. It returns ErrShredded when the key of ref is
 	// shredded, ErrKeyNotConfigured when no key-encryption key is configured,
 	// and namespace.ErrFenced when fence is not the namespace of ref or the
-	// fence of tx is stale. When the transaction of the caller rolls back,
-	// the blob stays as an orphan for the orphan cleanup, and no record
-	// stays.
+	// fence of tx is stale. The caller passes the fence that it opened tx
+	// with. tx holds that fence too, but NewItemKey compares the namespace of
+	// ref with fence before it writes the blob, and tx compares the
+	// namespaces only when it writes the record, after the blob. When the
+	// transaction of the caller rolls back, the blob stays as an orphan for
+	// the orphan cleanup, and no record stays.
 	NewItemKey(ctx context.Context, tx ItemKeyTx, ref ItemRef, fence namespace.Fence) (ItemKey, error)
 	// SealContent seals the plaintext in r with the item key of ref. The
 	// caller streams the result. It returns ErrKeyNotFound when ref has no

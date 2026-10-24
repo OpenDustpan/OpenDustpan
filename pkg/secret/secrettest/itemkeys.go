@@ -47,6 +47,7 @@ func RunItemKeys(t *testing.T, newStore ItemKeyFactory) {
 		{name: "a valid fence of another namespace refuses create and shred", test: testItemKeyOtherNamespaceFence},
 		{name: "a record with a bad blob description is refused", test: testItemKeyBadBlobInfo},
 		{name: "a transaction keeps its record on commit and drops it on rollback", test: testItemKeyTx},
+		{name: "the transaction reads a namespace, and a missing one is ErrNotFound", test: testItemKeyTxNamespace},
 		{name: "list pages the records of one scope by ID", test: testItemKeyList},
 		{name: "wrapper IDs leave out shredded records", test: testItemKeyWrapperIDs},
 	}
@@ -526,5 +527,31 @@ func testItemKeyTx(t *testing.T, s ItemKeyStore) {
 
 	if _, err = s.GetItemKey(t.Context(), dropped); !errors.Is(err, secret.ErrKeyNotFound) {
 		t.Errorf("a rolled-back transaction left a record: err = %v", err)
+	}
+}
+
+func testItemKeyTxNamespace(t *testing.T, s ItemKeyStore) {
+	t.Helper()
+	fence := itemKeyNamespace(t, s)
+
+	want, err := s.GetNamespace(t.Context(), "acme")
+	if err != nil {
+		t.Fatalf("get namespace: %v", err)
+	}
+
+	err = s.InItemKeyTx(t.Context(), fence, func(tx secret.ItemKeyTx) error {
+		got, getErr := tx.GetNamespace(t.Context(), "acme")
+		if getErr != nil || got.ID != want.ID || got.Name != want.Name {
+			t.Errorf("namespace inside the transaction = %+v, %v, want %+v", got, getErr, want)
+		}
+
+		if _, getErr = tx.GetNamespace(t.Context(), "absent"); !errors.Is(getErr, namespace.ErrNotFound) {
+			t.Errorf("missing namespace inside the transaction err = %v, want namespace.ErrNotFound", getErr)
+		}
+
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("transaction: %v", err)
 	}
 }

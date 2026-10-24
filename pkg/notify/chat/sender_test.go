@@ -493,14 +493,20 @@ func TestSendSlowAnswerBody(t *testing.T) {
 	t.Cleanup(func() { close(release) })
 
 	s := r.sender(t)
-	s.SetTimeoutForTest(100 * time.Millisecond)
+	s.SetTimeoutForTest(slowBodyDeadline)
 
 	// The platform sent the status and holds the body: the sender cannot say that
 	// Slack took the message, and a second attempt could post it twice.
 	if err := s.Send(t.Context(), message()); !errors.Is(err, notify.ErrPermanent) {
-		t.Fatalf("Send = %v, want ErrPermanent", err)
+		t.Fatalf("Send = %v, want ErrPermanent: the status must arrive before the deadline of %s", err,
+			slowBodyDeadline)
 	}
 }
+
+// slowBodyDeadline is the deadline of the send in TestSendSlowAnswerBody. The
+// handshake, the request and the status must arrive before it, also on a slow
+// machine. The body never arrives, so the send always ends at the deadline.
+const slowBodyDeadline = 2 * time.Second
 
 func TestSendHostileTextIsEncoded(t *testing.T) {
 	t.Parallel()

@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/pkg/collection"
 	"opendustpan.org/opendustpan/pkg/namespace"
 )
@@ -19,6 +20,9 @@ import (
 // own answer and writes no fenced line.
 func TestWriteErrorFencedCopy(t *testing.T) {
 	t.Parallel()
+
+	fencedBody := fmt.Sprintf("{\"message\":%q,\"code\":%d,\"errorCode\":%q}\n",
+		namespace.ErrFenced.Error(), http.StatusConflict, errcode.NamespaceFenced)
 
 	cases := []struct {
 		name   string
@@ -34,11 +38,7 @@ func TestWriteErrorFencedCopy(t *testing.T) {
 			name:   "sentinel",
 			err:    namespace.ErrFenced,
 			status: http.StatusConflict,
-			body: fmt.Sprintf(
-				"{\"message\":%q,\"code\":%d,\"errorCode\":\"namespace.fenced\"}\n",
-				namespace.ErrFenced.Error(),
-				http.StatusConflict,
-			),
+			body:   fencedBody,
 			wrap:   "",
 			fenced: true,
 		},
@@ -46,11 +46,7 @@ func TestWriteErrorFencedCopy(t *testing.T) {
 			name:   "wrapped",
 			err:    fmt.Errorf("record resource changes: %w", namespace.ErrFenced),
 			status: http.StatusConflict,
-			body: fmt.Sprintf(
-				"{\"message\":%q,\"code\":%d,\"errorCode\":\"namespace.fenced\"}\n",
-				namespace.ErrFenced.Error(),
-				http.StatusConflict,
-			),
+			body:   fencedBody,
 			wrap:   "record resource changes",
 			fenced: true,
 		},
@@ -58,11 +54,7 @@ func TestWriteErrorFencedCopy(t *testing.T) {
 			name:   "wrapped twice",
 			err:    fmt.Errorf("update: %w", fmt.Errorf("append: %w", namespace.ErrFenced)),
 			status: http.StatusConflict,
-			body: fmt.Sprintf(
-				"{\"message\":%q,\"code\":%d,\"errorCode\":\"namespace.fenced\"}\n",
-				namespace.ErrFenced.Error(),
-				http.StatusConflict,
-			),
+			body:   fencedBody,
 			wrap:   "append",
 			fenced: true,
 		},
@@ -71,9 +63,10 @@ func TestWriteErrorFencedCopy(t *testing.T) {
 			err:    collection.ErrAlreadyExists,
 			status: http.StatusConflict,
 			body: fmt.Sprintf(
-				"{\"message\":%q,\"code\":%d,\"errorCode\":\"collection.exists\"}\n",
+				"{\"message\":%q,\"code\":%d,\"errorCode\":%q}\n",
 				collection.ErrAlreadyExists.Error(),
 				http.StatusConflict,
+				errcode.CollectionAlreadyExists,
 			),
 			wrap:   "",
 			fenced: false,

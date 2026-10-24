@@ -544,6 +544,12 @@ func (b *Blueprint) validateDelivery() error {
 		}
 	}
 
+	for _, r := range d.Git.Repositories {
+		if err := checkRepository("the git delivery", r); err != nil {
+			return err
+		}
+	}
+
 	return nil
 }
 
@@ -579,7 +585,7 @@ func (m *Module) validate() error {
 		return fmt.Errorf("%w: a module from git needs a repository and a tag or a commit", ErrInvalid)
 	}
 
-	return nil
+	return checkRepository("a module from git", m.Repository)
 }
 
 // exactVersion reports whether v names one version, not a range.

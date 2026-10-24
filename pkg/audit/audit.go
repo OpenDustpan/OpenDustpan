@@ -266,13 +266,20 @@ func (e Entry) validateWho() error {
 	}
 }
 
-// validateWhat checks the action, object and user agent of the entry.
+// validateWhat checks the action, object, object ID and user agent of the entry.
 func (e Entry) validateWhat() error {
 	switch {
 	case e.Action == "":
 		return fmt.Errorf("%w: missing action", ErrInvalidEntry)
 	case e.Object == "":
 		return fmt.Errorf("%w: missing object", ErrInvalidEntry)
+	case strings.ContainsFunc(e.Object, IsHiddenRune):
+		// Defense in depth: the adapters parse and clean the reference before
+		// they build an entry. This check stays so that no caller can store a
+		// reference that looks different from its bytes.
+		return fmt.Errorf("%w: object holds a hidden character", ErrInvalidEntry)
+	case strings.ContainsFunc(e.ObjectID, IsHiddenRune):
+		return fmt.Errorf("%w: object ID holds a hidden character", ErrInvalidEntry)
 	case len(e.UserAgent) > MaxUserAgentLen:
 		return fmt.Errorf("%w: user agent longer than %d bytes", ErrInvalidEntry, MaxUserAgentLen)
 	default:

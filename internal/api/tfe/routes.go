@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"slices"
 
+	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/internal/sessionauth"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -235,8 +236,9 @@ func (h *Handler) lockRoutes() []Route {
 // stateRoutes returns the state read routes: the current state version, one
 // state version, its download, its outputs, the state version list, and the
 // masked resource list with one masked resource (ADR 41 decisions 1 to 3, 8
-// and 9). Every route needs unit:read. The download and the single output
-// route also need unit:read-secrets, as they answer plain secret values.
+// and 9). Every route needs unit:read, except the two outputs routes, which
+// need unit:read-outputs. The download also needs unit:read-secrets, as it
+// answers plain secret values.
 func (h *Handler) stateRoutes() []Route {
 	routes := []Route{
 		{
@@ -286,22 +288,27 @@ func (h *Handler) stateRoutes() []Route {
 		{
 			Method: http.MethodGet,
 			Path:   "/api/v2/workspaces/{id}/current-state-version-outputs",
-			// A state read needs unit:read on opentofu:<namespace>/<name>.
-			// The resolver maps the ID to the unit. A workspace without
-			// state answers 404.
+			// A read of the outputs needs unit:read-outputs on
+			// opentofu:<namespace>/<name>, and unit:read does not imply it.
+			// The handler then asks the output sharing checker. The
+			// resolver maps the ID to the unit. A workspace without state
+			// answers 404.
 			Scope:   ScopeAuthorized,
-			Actions: []identity.Action{identity.ActionUnitRead},
+			Actions: []identity.Action{identity.ActionUnitReadOutputs},
 			Resolve: h.resolveWorkspaceID,
 			Serve:   h.readCurrentOutputs,
 		},
 		{
 			Method: http.MethodGet,
 			Path:   "/api/v2/state-version-outputs/{output_id}",
-			// A single output answers a plain secret value, so it needs
-			// unit:read and unit:read-secrets. The resolver maps the output
-			// to the unit of its workspace. Unknown outputs answer 404.
+			// A single output needs unit:read-outputs. The handler then asks
+			// the output sharing checker for the current state version, which
+			// needs unit:read-secrets for a secret output. An output of an
+			// older state version needs unit:read, and unit:read-secrets for
+			// a secret output. The resolver maps the output to the unit of its
+			// workspace. Unknown outputs answer 404.
 			Scope:   ScopeAuthorized,
-			Actions: []identity.Action{identity.ActionUnitRead, identity.ActionUnitReadSecrets},
+			Actions: []identity.Action{identity.ActionUnitReadOutputs},
 			Resolve: h.resolveStateOutputID,
 			Serve:   h.readStateOutput,
 		},
@@ -352,7 +359,7 @@ func (h *Handler) stateWriteRoutes() []Route {
 			// resolver limit. A caller without the lock gets 409.
 			Scope:   ScopeAuthorized,
 			Actions: []identity.Action{identity.ActionUnitWrite},
-			Resolve: h.resolveStateVersionWorkspace,
+			Resolve: h.workspaceIn("id"),
 			Serve:   h.createStateVersion,
 		},
 		{
@@ -480,26 +487,46 @@ func resolveWorkspace(_ http.ResponseWriter, r *http.Request) (identity.Object, 
 	return unitObject(workspace.Ref{Namespace: ns, Name: name})
 }
 
-// resolveWorkspaceID returns the unit for the workspace ID in the path
+// resolveWorkspaceID returns the unit for the workspace ID in the id path
 // value. It reads the body once with http.MaxBytesReader and restores r.Body
-// before returning, so the handler can read it again. The current GET handler
-// reads no body; the restore keeps the shared shape for future lock POSTs on
-// the same ID. An unknown ID fails with absence, which the wrapper answers as
-// 403 for a caller without rights and 404 otherwise.
+// before returning, so the handler can read it again. An unknown ID fails
+// with absence, which the wrapper answers as 403 for a caller without rights
+// and 404 otherwise.
 func (h *Handler) resolveWorkspaceID(w http.ResponseWriter, r *http.Request) (identity.Object, error) {
-	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxBodyBytes))
-	if err != nil {
-		return identity.Object{}, errInvalidBody
+	return restoreBody(h.workspaceIn("id"))(w, r)
+}
+
+// workspaceIn returns the resolver of the unit of the workspace whose ID is
+// the path value named value. It reads no body. An unknown ID fails with
+// absence, which the wrapper answers as 403 for a caller without rights and
+// 404 otherwise.
+func (h *Handler) workspaceIn(value string) ObjectResolver {
+	return func(_ http.ResponseWriter, r *http.Request) (identity.Object, error) {
+		ws, err := h.workspaces.GetByID(r.Context(), workspace.ID(r.PathValue(value)))
+		if err != nil {
+			return identity.Object{}, err
+		}
+
+		return unitObject(ws.Ref)
 	}
+}
 
-	r.Body = io.NopCloser(bytes.NewReader(body))
+// restoreBody returns next behind a read of the body: it reads the body once
+// with http.MaxBytesReader and the shared resolver limit, and restores r.Body,
+// so the handler can read it again. A route whose body can be larger than the
+// limit, such as a state version create, reads its own body and uses next
+// alone.
+func restoreBody(next ObjectResolver) ObjectResolver {
+	return func(w http.ResponseWriter, r *http.Request) (identity.Object, error) {
+		body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxBodyBytes))
+		if err != nil {
+			return identity.Object{}, errInvalidBody
+		}
 
-	ws, err := h.workspaces.GetByID(r.Context(), workspace.ID(r.PathValue("id")))
-	if err != nil {
-		return identity.Object{}, err
+		r.Body = io.NopCloser(bytes.NewReader(body))
+
+		return next(w, r)
 	}
-
-	return unitObject(ws.Ref)
 }
 
 // stateAtRoute returns the route of the masked state of a workspace at a
@@ -513,38 +540,9 @@ func (h *Handler) stateAtRoute() Route {
 		Path:    "/api/v2/workspaces/{workspace_id}/state-at/{at}",
 		Scope:   ScopeAuthorized,
 		Actions: []identity.Action{identity.ActionUnitRead},
-		Resolve: h.resolveStateAtWorkspace,
+		Resolve: h.workspaceIn("workspace_id"),
 		Serve:   h.readStateAt,
 	}
-}
-
-// resolveStateAtWorkspace returns the unit for the workspace ID in the
-// workspace_id path value. An unknown ID fails with absence, which the
-// wrapper answers as 403 for a caller without rights and 404 otherwise.
-func (h *Handler) resolveStateAtWorkspace(_ http.ResponseWriter, r *http.Request) (identity.Object, error) {
-	ws, err := h.workspaces.GetByID(r.Context(), workspace.ID(r.PathValue("workspace_id")))
-	if err != nil {
-		return identity.Object{}, err
-	}
-
-	return unitObject(ws.Ref)
-}
-
-// resolveStateVersionWorkspace returns the unit for the workspace ID in the
-// path value, without reading the body: the state version create body holds
-// the base64 outputs document and is far larger than the shared resolver
-// limit, so the create handler reads it. An unknown ID fails with absence,
-// which the wrapper answers as 403 for a caller without rights and 404
-// otherwise.
-func (h *Handler) resolveStateVersionWorkspace(
-	_ http.ResponseWriter, r *http.Request,
-) (identity.Object, error) {
-	ws, err := h.workspaces.GetByID(r.Context(), workspace.ID(r.PathValue("id")))
-	if err != nil {
-		return identity.Object{}, err
-	}
-
-	return unitObject(ws.Ref)
 }
 
 // enforce wraps one route table row. Public and upload routes run
@@ -607,7 +605,7 @@ func (h *Handler) enforceAuthorized(route Route) http.HandlerFunc {
 		obj, err := route.Resolve(w, r)
 		if err != nil {
 			if isAbsence(err) {
-				h.writeNotFound(ctx, w, notFoundDetail)
+				h.writeClassError(ctx, w, hiddenNotFound())
 			} else {
 				h.writeError(ctx, w, err)
 			}
@@ -663,40 +661,57 @@ func (h *Handler) writeDenied(ctx context.Context, w http.ResponseWriter, req re
 	}
 
 	if hide {
-		h.writeNotFound(ctx, w, notFoundDetail)
+		h.writeClassError(ctx, w, hiddenNotFound())
 
 		return
 	}
 
-	h.writeForbidden(
-		ctx, w,
-		"forbidden: the action "+string(req.action)+" on "+req.object.String()+" was refused",
-	)
+	h.writeClassError(ctx, w, errorClass{
+		status: http.StatusForbidden, title: titleForbidden,
+		detail: "forbidden: the action " + string(req.action) + " on " + req.object.String() + " was refused",
+		code:   errcode.Forbidden(err), args: nil,
+	})
 }
 
-// hidden reports whether p cannot read obj: a unit without unit:read, or a
-// namespace without namespace:read. Any other object is never hidden. It
-// returns the error of a read check that fails for another reason than a
-// refusal.
-func (h *Handler) hidden(ctx context.Context, p identity.Principal, obj identity.Object) (bool, error) {
-	read := identity.ActionNamespaceRead
-	if obj.IsUnit() {
-		read = identity.ActionUnitRead
+// hiddenNotFound is the 404 of an object that does not exist or that the
+// caller cannot read. The two answers do not differ, also in the code.
+func hiddenNotFound() errorClass {
+	return errorClass{
+		status: http.StatusNotFound, title: notFoundTitle, detail: notFoundDetail,
+		code: errcode.WorkspaceNotFound, args: nil,
 	}
+}
 
+// hidden reports whether p cannot see obj: a unit without unit:read and
+// without unit:read-outputs, or a namespace without namespace:read. A principal
+// that reads the outputs of a unit knows that the unit exists, so a refusal of
+// a route that answers more than the outputs is a 403 for it. Any other object
+// is never hidden. It returns the error of a read check that fails for another
+// reason than a refusal.
+func (h *Handler) hidden(ctx context.Context, p identity.Principal, obj identity.Object) (bool, error) {
 	if obj.IsServer() || obj.IsCaller() || obj.Namespace() == "" {
 		return false, nil
 	}
 
-	err := h.authz.Authorize(ctx, p, read, obj)
-	switch {
-	case err == nil:
-		return false, nil
-	case errors.Is(err, identity.ErrDenied):
-		return true, nil
-	default:
-		return false, fmt.Errorf("authorize %s: %w", read, err)
+	reads := []identity.Action{identity.ActionNamespaceRead}
+	if obj.IsUnit() {
+		reads = []identity.Action{identity.ActionUnitRead, identity.ActionUnitReadOutputs}
 	}
+
+	for _, read := range reads {
+		err := h.authz.Authorize(ctx, p, read, obj)
+
+		switch {
+		case err == nil:
+			return false, nil
+		case errors.Is(err, identity.ErrDenied):
+			continue
+		default:
+			return false, fmt.Errorf("authorize %s: %w", read, err)
+		}
+	}
+
+	return true, nil
 }
 
 // isAbsence reports whether err means the resolver found nothing: an unknown

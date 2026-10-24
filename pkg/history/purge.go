@@ -194,9 +194,18 @@ type TombstoneLog interface {
 // TombstoneObject returns the blob key of the ledger object of the
 // tombstone id in a backup target: tombstones/<id>.json. The shred
 // operation writes it one time in each target before it deletes a blob
-// there. id must be valid.
-func TombstoneObject(id TombstoneID) blob.Key {
-	return blob.Key("tombstones/" + string(id) + ".json")
+// there. It returns an error that wraps blob.ErrInvalidKey when the key is
+// not a valid blob key.
+func TombstoneObject(id TombstoneID) (blob.Key, error) {
+	// Defense in depth: a tombstone ID comes from NewTombstoneID or from the
+	// store; this check stays so that an ID that skipped those layers cannot
+	// build a key that the blob store refuses or that leaves tombstones/.
+	key, err := blob.ParseKey("tombstones/" + string(id) + ".json")
+	if err != nil {
+		return "", fmt.Errorf("ledger object of a tombstone: %w", err)
+	}
+
+	return key, nil
 }
 
 // TombstoneRecord is the content of the ledger object of a tombstone.

@@ -163,12 +163,20 @@ The end-to-end suite drives each version below against the server, on SQLite
 and on PostgreSQL, on Linux in CI. `latest` is the newest release on the day
 of the run.
 
+PostgreSQL 18 is the minimum supported version. CI runs the store tests and
+the end-to-end suite on PostgreSQL 18 only. An earlier version is not tested,
+and the query plans that the store tests check can differ on it.
+
 | Tool | Tested versions | What works | What does not work yet |
 | --- | --- | --- | --- |
 | Pulumi CLI | 3.200.0, 3.250.0, latest | `login`, `up`, `preview`, `refresh`, `destroy`, `cancel`, `stack export`, `stack import`, config secrets, `stack rename`, `stack rm`, `stack tag set` | Pulumi Cloud features outside the state backend |
 | OpenTofu | 1.11.14, 1.12.7, latest | `init`, `plan`, `apply`, `output`, `state pull`, `state push`, `force-unlock`, `workspace new`, `workspace list`, `workspace select`, `workspace delete` (remote backend), `destroy` | Remote runs, `tofu login`, workspace tags, workspace rename |
 
 The list of tested versions is in [`e2e/tool.go`](e2e/tool.go).
+
+The lowest tested version of each tool is the lowest supported version:
+Pulumi CLI 3.200.0 and OpenTofu 1.11.14. An older version may work, but no
+test drives it. Use a supported version, or a later one.
 
 ## What the server stores
 
@@ -216,6 +224,7 @@ List OpenTofu state versions with
 `POST /api/v2/state-versions/{state_version_id}/actions/restore`.
 Restore a Pulumi checkpoint with
 `POST /api/stacks/{namespace}/{project}/{stack}/restore/{version}`.
+The restore answers 400 when the stored checkpoint of that version is not a deployment that the Pulumi CLI can read. It writes no new version.
 
 `opendustpan backup`, `opendustpan backup check`, `opendustpan restore`,
 `opendustpan upgrade check` and `opendustpan namespace create` are API
@@ -309,6 +318,8 @@ How-to guides:
   text and the other context of a namespace and of a unit.
 - [Check a workspace for drift](docs/guides/drift-checks.md): start a drift check
   of an OpenTofu workspace and read its latest drift result.
+- [Run triggers](docs/guides/run-triggers.md): save a trigger on a stack or a
+  workspace, fire it by hand, and see what the server checks.
 - [Output sharing](docs/guides/output-sharing.md): the actions that read
   outputs and manage sharing, and the setting that decides the sharing rule of
   a new stack or workspace.

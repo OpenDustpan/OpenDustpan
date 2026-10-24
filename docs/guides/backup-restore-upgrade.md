@@ -36,7 +36,7 @@ A backup holds OpenTofu state that the server encrypted: protect the target.
 
 The two warnings name two risks. Without the key-encryption key, the backup keeps secrets unreadable. It holds OpenTofu state that the server encrypted, so protect the target. Only one backup runs at a time. A second start while one runs answers 409.
 
-A backup keeps running when you start or restart an instance, or when you update the instances one at a time. If the instance that runs the backup stops, another instance continues the backup after the lease ends. The lease is 30 seconds by default. The backup writes each object to the same key again, so the second run replaces the objects of the first run. Any instance answers the state of the backup. A backup that fails ends as `failed` with the error text.
+A backup keeps running when you start or restart a server process, or when you update the server processes one at a time. If the server process that runs the backup stops, another server process continues the backup after the lease ends. The lease is 30 seconds by default. The backup writes each object to the same key again, so the second run replaces the objects of the first run. Any server process answers the state of the backup. A backup that fails ends as `failed` with the error text.
 
 Keep `DUSTPAN_KEY_ENCRYPTION_KEY` apart from the backup target. A backup never holds the key. A lost key still means lost secrets and lost OpenTofu state. Without the key the server cannot open secret values or OpenTofu state after a restore.
 
@@ -158,9 +158,13 @@ restored data. The restore also releases every OpenTofu workspace lock that
 the backup holds. A client that holds a lock from before the restore must take
 a new lock and read the restored state before it writes.
 
-The command checks the key before the server writes anything. With no key or
-with another key it stops and names `DUSTPAN_KEY_ENCRYPTION_KEY`. A restore
-with a wrong key leaves the live data unchanged.
+The server checks the key that it started with before it writes anything. The
+`opendustpan restore` command does not read `DUSTPAN_KEY_ENCRYPTION_KEY`. When
+the server has no key, or its key does not open the backup, the restore stops,
+names the key settings of the server, and leaves the live data unchanged. To
+restore a backup on a new server, start that server with the key of the server
+that made the backup (`DUSTPAN_KEY_ENCRYPTION_KEY` or
+`DUSTPAN_KEY_ENCRYPTION_KEY_FILE`), then run the restore.
 
 The command refuses a backup of another schema version. The error names both
 versions. Restore into the same schema version only. To change version, upgrade

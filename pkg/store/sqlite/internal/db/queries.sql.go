@@ -1372,6 +1372,33 @@ func (q *Queries) CountSignInProvider(ctx context.Context, providerID string) (i
 	return count, err
 }
 
+const countSiteAdministrators = `-- name: CountSiteAdministrators :one
+SELECT COUNT(*) FROM principals p
+WHERE p.deleted_at_ms IS NULL AND p.disabled_at_ms IS NULL AND p.namespace = '' AND p.kind = 'person'
+  AND EXISTS (
+    SELECT 1 FROM grants g
+    WHERE g.role = ? AND g.object_kind = 'installation' AND g.revoked_at_ms IS NULL
+      AND ((g.subject_kind = 'principal' AND g.subject_id = p.id)
+        OR (g.subject_kind = 'group' AND EXISTS (
+          SELECT 1 FROM group_members m
+          JOIN principal_groups pg ON pg.id = m.group_id
+          WHERE m.group_id = g.subject_id AND m.principal_id = p.id
+            AND m.removed_at_ms IS NULL AND m.state = 'active' AND pg.deleted_at_ms IS NULL))))
+`
+
+// The principals that can act now with the role ?: a current grant of the
+// role on the installation to the principal, or to a group with an active
+// membership of the principal. A principal that was ended, was disabled or
+// belongs to a namespace does not count. Only a person counts: a service
+// principal can hold the role, but every route that makes a site administrator
+// needs a fresh console session, which only a person has.
+func (q *Queries) CountSiteAdministrators(ctx context.Context, role string) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countSiteAdministrators, role)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const countStateVersions = `-- name: CountStateVersions :one
 SELECT COUNT(*)
 FROM state_versions
@@ -3038,6 +3065,25 @@ DELETE FROM temp_admins WHERE principal_id = ?
 
 func (q *Queries) DeleteTempAdmin(ctx context.Context, principalID string) (int64, error) {
 	result, err := q.db.ExecContext(ctx, deleteTempAdmin, principalID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const deleteTrigger = `-- name: DeleteTrigger :execrows
+DELETE FROM triggers
+WHERE triggers.id = ?1
+  AND triggers.namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = ?2)
+`
+
+type DeleteTriggerParams struct {
+	ID        string
+	Namespace string
+}
+
+func (q *Queries) DeleteTrigger(ctx context.Context, arg DeleteTriggerParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, deleteTrigger, arg.ID, arg.Namespace)
 	if err != nil {
 		return 0, err
 	}
@@ -6672,6 +6718,60 @@ func (q *Queries) GetTempAdminBySubject(ctx context.Context, subject string) (Te
 	return i, err
 }
 
+const getTrigger = `-- name: GetTrigger :one
+SELECT n.name AS namespace, t.id, t.unit_tool, t.unit_id, t.kind, t.preset, t.cron, t.source_namespace,
+    t.source_tool, t.source_unit_id, t.enabled, t.last_saver_subject, t.last_saver_id, t.created_at_ms, t.updated_at_ms
+FROM triggers AS t
+JOIN namespaces AS n ON n.id = t.namespace_id
+WHERE n.name = ?1 AND t.id = ?2
+`
+
+type GetTriggerParams struct {
+	Namespace string
+	ID        string
+}
+
+type GetTriggerRow struct {
+	Namespace        string
+	ID               string
+	UnitTool         string
+	UnitID           string
+	Kind             string
+	Preset           string
+	Cron             string
+	SourceNamespace  string
+	SourceTool       string
+	SourceUnitID     string
+	Enabled          int64
+	LastSaverSubject string
+	LastSaverID      string
+	CreatedAtMs      int64
+	UpdatedAtMs      int64
+}
+
+func (q *Queries) GetTrigger(ctx context.Context, arg GetTriggerParams) (GetTriggerRow, error) {
+	row := q.db.QueryRowContext(ctx, getTrigger, arg.Namespace, arg.ID)
+	var i GetTriggerRow
+	err := row.Scan(
+		&i.Namespace,
+		&i.ID,
+		&i.UnitTool,
+		&i.UnitID,
+		&i.Kind,
+		&i.Preset,
+		&i.Cron,
+		&i.SourceNamespace,
+		&i.SourceTool,
+		&i.SourceUnitID,
+		&i.Enabled,
+		&i.LastSaverSubject,
+		&i.LastSaverID,
+		&i.CreatedAtMs,
+		&i.UpdatedAtMs,
+	)
+	return i, err
+}
+
 const getUnitCollection = `-- name: GetUnitCollection :one
 SELECT c.name
 FROM collection_members AS m
@@ -8103,6 +8203,7 @@ type InsertJobLogParams struct {
 	CreatedAtMs int64
 }
 
+// The caller checks the fence and the claim in the same transaction.
 func (q *Queries) InsertJobLog(ctx context.Context, arg InsertJobLogParams) error {
 	_, err := q.db.ExecContext(ctx, insertJobLog,
 		arg.ID,
@@ -9684,6 +9785,72 @@ func (q *Queries) ListDurableSteps(ctx context.Context, operationID string) ([]L
 	for rows.Next() {
 		var i ListDurableStepsRow
 		if err := rows.Scan(&i.Name, &i.Result, &i.DoneAtMs); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listEnabledFollowTriggers = `-- name: ListEnabledFollowTriggers :many
+SELECT n.name AS namespace, t.id, t.unit_tool, t.unit_id, t.kind, t.preset, t.cron, t.source_namespace,
+    t.source_tool, t.source_unit_id, t.enabled, t.last_saver_subject, t.last_saver_id, t.created_at_ms, t.updated_at_ms
+FROM triggers AS t
+JOIN namespaces AS n ON n.id = t.namespace_id
+WHERE n.name = ?1 AND t.kind = 'follows' AND t.enabled = 1
+ORDER BY t.id
+`
+
+type ListEnabledFollowTriggersRow struct {
+	Namespace        string
+	ID               string
+	UnitTool         string
+	UnitID           string
+	Kind             string
+	Preset           string
+	Cron             string
+	SourceNamespace  string
+	SourceTool       string
+	SourceUnitID     string
+	Enabled          int64
+	LastSaverSubject string
+	LastSaverID      string
+	CreatedAtMs      int64
+	UpdatedAtMs      int64
+}
+
+func (q *Queries) ListEnabledFollowTriggers(ctx context.Context, namespace string) ([]ListEnabledFollowTriggersRow, error) {
+	rows, err := q.db.QueryContext(ctx, listEnabledFollowTriggers, namespace)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListEnabledFollowTriggersRow
+	for rows.Next() {
+		var i ListEnabledFollowTriggersRow
+		if err := rows.Scan(
+			&i.Namespace,
+			&i.ID,
+			&i.UnitTool,
+			&i.UnitID,
+			&i.Kind,
+			&i.Preset,
+			&i.Cron,
+			&i.SourceNamespace,
+			&i.SourceTool,
+			&i.SourceUnitID,
+			&i.Enabled,
+			&i.LastSaverSubject,
+			&i.LastSaverID,
+			&i.CreatedAtMs,
+			&i.UpdatedAtMs,
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -12657,18 +12824,25 @@ func (q *Queries) ListSignInProviders(ctx context.Context) ([]SignInProvider, er
 }
 
 const listStackPageInNamespace = `-- name: ListStackPageInNamespace :many
-SELECT namespace, project, name, id, version, created_at_ms, updated_at_ms
-FROM stacks
-WHERE namespace = ?1 AND deleted_at_ms IS NULL
-  AND (project, name) > (?2, ?3)
-ORDER BY project, name
-LIMIT ?4
+SELECT s.namespace, s.project, s.name, s.id, s.version, s.created_at_ms, s.updated_at_ms
+FROM stacks AS s
+WHERE s.namespace = ?1 AND s.deleted_at_ms IS NULL
+  AND (s.project, s.name) > (?2, ?3)
+  AND (CAST(?4 AS TEXT) = '' OR EXISTS (
+    SELECT 1 FROM stack_tags AS t
+    WHERE t.stack_id = s.id AND t.name = ?4
+      AND (CAST(?5 AS INTEGER) = 0 OR t.value = ?6)))
+ORDER BY s.project, s.name
+LIMIT ?7
 `
 
 type ListStackPageInNamespaceParams struct {
 	Namespace    string
 	AfterProject string
 	AfterName    string
+	TagName      string
+	MatchValue   int64
+	TagValue     string
 	PageLimit    int64
 }
 
@@ -12684,12 +12858,16 @@ type ListStackPageInNamespaceRow struct {
 
 // One page of the live stacks of a namespace after a project and a name, in
 // the order of the primary key. The cursor is a range of the key, so the read
-// starts at the cursor.
+// starts at the cursor. A tag_name that is not empty keeps the stacks that have
+// that tag, and match_value also needs the tag to have the value tag_value.
 func (q *Queries) ListStackPageInNamespace(ctx context.Context, arg ListStackPageInNamespaceParams) ([]ListStackPageInNamespaceRow, error) {
 	rows, err := q.db.QueryContext(ctx, listStackPageInNamespace,
 		arg.Namespace,
 		arg.AfterProject,
 		arg.AfterName,
+		arg.TagName,
+		arg.MatchValue,
+		arg.TagValue,
 		arg.PageLimit,
 	)
 	if err != nil {
@@ -12722,19 +12900,26 @@ func (q *Queries) ListStackPageInNamespace(ctx context.Context, arg ListStackPag
 }
 
 const listStackPageInProject = `-- name: ListStackPageInProject :many
-SELECT namespace, project, name, id, version, created_at_ms, updated_at_ms
-FROM stacks
-WHERE namespace = ?1 AND project = ?2 AND deleted_at_ms IS NULL
-  AND name > ?3
-ORDER BY name
-LIMIT ?4
+SELECT s.namespace, s.project, s.name, s.id, s.version, s.created_at_ms, s.updated_at_ms
+FROM stacks AS s
+WHERE s.namespace = ?1 AND s.project = ?2 AND s.deleted_at_ms IS NULL
+  AND s.name > ?3
+  AND (CAST(?4 AS TEXT) = '' OR EXISTS (
+    SELECT 1 FROM stack_tags AS t
+    WHERE t.stack_id = s.id AND t.name = ?4
+      AND (CAST(?5 AS INTEGER) = 0 OR t.value = ?6)))
+ORDER BY s.name
+LIMIT ?7
 `
 
 type ListStackPageInProjectParams struct {
-	Namespace string
-	Project   string
-	AfterName string
-	PageLimit int64
+	Namespace  string
+	Project    string
+	AfterName  string
+	TagName    string
+	MatchValue int64
+	TagValue   string
+	PageLimit  int64
 }
 
 type ListStackPageInProjectRow struct {
@@ -12748,12 +12933,15 @@ type ListStackPageInProjectRow struct {
 }
 
 // One page of the live stacks of a project after a name, in the order of the
-// primary key.
+// primary key, with the tag filter of ListStackPageInNamespace.
 func (q *Queries) ListStackPageInProject(ctx context.Context, arg ListStackPageInProjectParams) ([]ListStackPageInProjectRow, error) {
 	rows, err := q.db.QueryContext(ctx, listStackPageInProject,
 		arg.Namespace,
 		arg.Project,
 		arg.AfterName,
+		arg.TagName,
+		arg.MatchValue,
+		arg.TagValue,
 		arg.PageLimit,
 	)
 	if err != nil {
@@ -13073,6 +13261,158 @@ func (q *Queries) ListTempAdmins(ctx context.Context) ([]TempAdmin, error) {
 			&i.CreatedBy,
 			&i.Reason,
 			&i.EndedAtMs,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listTriggerFollowers = `-- name: ListTriggerFollowers :many
+SELECT n.name AS namespace, t.id, t.unit_tool, t.unit_id, t.kind, t.preset, t.cron, t.source_namespace,
+    t.source_tool, t.source_unit_id, t.enabled, t.last_saver_subject, t.last_saver_id, t.created_at_ms, t.updated_at_ms
+FROM triggers AS t
+JOIN namespaces AS n ON n.id = t.namespace_id
+WHERE n.name = ?1 AND t.kind = 'follows' AND t.enabled = 1
+  AND t.source_namespace = ?2 AND t.source_tool = ?3
+  AND t.source_unit_id = ?4
+ORDER BY t.id
+`
+
+type ListTriggerFollowersParams struct {
+	Namespace       string
+	SourceNamespace string
+	SourceTool      string
+	SourceUnitID    string
+}
+
+type ListTriggerFollowersRow struct {
+	Namespace        string
+	ID               string
+	UnitTool         string
+	UnitID           string
+	Kind             string
+	Preset           string
+	Cron             string
+	SourceNamespace  string
+	SourceTool       string
+	SourceUnitID     string
+	Enabled          int64
+	LastSaverSubject string
+	LastSaverID      string
+	CreatedAtMs      int64
+	UpdatedAtMs      int64
+}
+
+func (q *Queries) ListTriggerFollowers(ctx context.Context, arg ListTriggerFollowersParams) ([]ListTriggerFollowersRow, error) {
+	rows, err := q.db.QueryContext(ctx, listTriggerFollowers,
+		arg.Namespace,
+		arg.SourceNamespace,
+		arg.SourceTool,
+		arg.SourceUnitID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListTriggerFollowersRow
+	for rows.Next() {
+		var i ListTriggerFollowersRow
+		if err := rows.Scan(
+			&i.Namespace,
+			&i.ID,
+			&i.UnitTool,
+			&i.UnitID,
+			&i.Kind,
+			&i.Preset,
+			&i.Cron,
+			&i.SourceNamespace,
+			&i.SourceTool,
+			&i.SourceUnitID,
+			&i.Enabled,
+			&i.LastSaverSubject,
+			&i.LastSaverID,
+			&i.CreatedAtMs,
+			&i.UpdatedAtMs,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listTriggersOfUnit = `-- name: ListTriggersOfUnit :many
+SELECT n.name AS namespace, t.id, t.unit_tool, t.unit_id, t.kind, t.preset, t.cron, t.source_namespace,
+    t.source_tool, t.source_unit_id, t.enabled, t.last_saver_subject, t.last_saver_id, t.created_at_ms, t.updated_at_ms
+FROM triggers AS t
+JOIN namespaces AS n ON n.id = t.namespace_id
+WHERE n.name = ?1 AND t.unit_tool = ?2 AND t.unit_id = ?3
+ORDER BY t.id
+`
+
+type ListTriggersOfUnitParams struct {
+	Namespace string
+	UnitTool  string
+	UnitID    string
+}
+
+type ListTriggersOfUnitRow struct {
+	Namespace        string
+	ID               string
+	UnitTool         string
+	UnitID           string
+	Kind             string
+	Preset           string
+	Cron             string
+	SourceNamespace  string
+	SourceTool       string
+	SourceUnitID     string
+	Enabled          int64
+	LastSaverSubject string
+	LastSaverID      string
+	CreatedAtMs      int64
+	UpdatedAtMs      int64
+}
+
+func (q *Queries) ListTriggersOfUnit(ctx context.Context, arg ListTriggersOfUnitParams) ([]ListTriggersOfUnitRow, error) {
+	rows, err := q.db.QueryContext(ctx, listTriggersOfUnit, arg.Namespace, arg.UnitTool, arg.UnitID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListTriggersOfUnitRow
+	for rows.Next() {
+		var i ListTriggersOfUnitRow
+		if err := rows.Scan(
+			&i.Namespace,
+			&i.ID,
+			&i.UnitTool,
+			&i.UnitID,
+			&i.Kind,
+			&i.Preset,
+			&i.Cron,
+			&i.SourceNamespace,
+			&i.SourceTool,
+			&i.SourceUnitID,
+			&i.Enabled,
+			&i.LastSaverSubject,
+			&i.LastSaverID,
+			&i.CreatedAtMs,
+			&i.UpdatedAtMs,
 		); err != nil {
 			return nil, err
 		}
@@ -14973,18 +15313,20 @@ func (q *Queries) RotateRunnerKey(ctx context.Context, arg RotateRunnerKeyParams
 	return err
 }
 
-const runningMutatingUpdates = `-- name: RunningMutatingUpdates :one
-SELECT COUNT(*)
+const runningMutatingUpdate = `-- name: RunningMutatingUpdate :one
+SELECT id
 FROM updates
 WHERE stack_id = ?
   AND status = 'running' AND dry_run = 0 AND kind <> 'preview'
 `
 
-func (q *Queries) RunningMutatingUpdates(ctx context.Context, stackID string) (int64, error) {
-	row := q.db.QueryRowContext(ctx, runningMutatingUpdates, stackID)
-	var count int64
-	err := row.Scan(&count)
-	return count, err
+// The ID of the mutating update that runs on a stack. The unique index
+// updates_one_running holds at most one such row for each stack.
+func (q *Queries) RunningMutatingUpdate(ctx context.Context, stackID string) (string, error) {
+	row := q.db.QueryRowContext(ctx, runningMutatingUpdate, stackID)
+	var id string
+	err := row.Scan(&id)
+	return id, err
 }
 
 const runningUpdateAt = `-- name: RunningUpdateAt :one
@@ -16829,6 +17171,68 @@ type UpsertPersonPreferencesParams struct {
 func (q *Queries) UpsertPersonPreferences(ctx context.Context, arg UpsertPersonPreferencesParams) error {
 	_, err := q.db.ExecContext(ctx, upsertPersonPreferences, arg.PrincipalID, arg.Document, arg.UpdatedAtMs)
 	return err
+}
+
+const upsertTrigger = `-- name: UpsertTrigger :execrows
+INSERT INTO triggers (
+    namespace_id, id, unit_tool, unit_id, kind, preset, cron, source_namespace, source_tool, source_unit_id, enabled,
+    last_saver_subject, last_saver_id, created_at_ms, updated_at_ms
+)
+SELECT
+    n.id, ?1, ?2, ?3, ?4, ?5, ?6,
+    ?7, ?8, ?9, ?10,
+    ?11, ?12, ?13, ?14
+FROM namespaces AS n
+WHERE n.name = ?15
+ON CONFLICT (namespace_id, id) DO UPDATE SET
+    preset = excluded.preset, cron = excluded.cron, source_namespace = excluded.source_namespace,
+    source_tool = excluded.source_tool, source_unit_id = excluded.source_unit_id, enabled = excluded.enabled,
+    last_saver_subject = excluded.last_saver_subject, last_saver_id = excluded.last_saver_id,
+    updated_at_ms = MAX(triggers.updated_at_ms, excluded.updated_at_ms)
+`
+
+type UpsertTriggerParams struct {
+	ID               string
+	UnitTool         string
+	UnitID           string
+	Kind             string
+	Preset           string
+	Cron             string
+	SourceNamespace  string
+	SourceTool       string
+	SourceUnitID     string
+	Enabled          int64
+	LastSaverSubject string
+	LastSaverID      string
+	CreatedAtMs      int64
+	UpdatedAtMs      int64
+	Namespace        string
+}
+
+// The caller checks the fence in the same transaction. A row that exists keeps
+// its unit, its kind and its creation time.
+func (q *Queries) UpsertTrigger(ctx context.Context, arg UpsertTriggerParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, upsertTrigger,
+		arg.ID,
+		arg.UnitTool,
+		arg.UnitID,
+		arg.Kind,
+		arg.Preset,
+		arg.Cron,
+		arg.SourceNamespace,
+		arg.SourceTool,
+		arg.SourceUnitID,
+		arg.Enabled,
+		arg.LastSaverSubject,
+		arg.LastSaverID,
+		arg.CreatedAtMs,
+		arg.UpdatedAtMs,
+		arg.Namespace,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 const upsertUnitCollection = `-- name: UpsertUnitCollection :exec

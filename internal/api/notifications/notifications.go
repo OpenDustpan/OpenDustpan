@@ -11,13 +11,13 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
-	"time"
 
 	"opendustpan.org/opendustpan/internal/api/apidesc"
 	"opendustpan.org/opendustpan/internal/api/idempotent"
 	"opendustpan.org/opendustpan/internal/api/problem"
 	"opendustpan.org/opendustpan/internal/api/refusal"
 	"opendustpan.org/opendustpan/internal/denylimit"
+	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/internal/sessionauth"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/egress"
@@ -152,56 +152,56 @@ func (h *Handler) authenticate(r *http.Request) (identity.Principal, bool, error
 // writeError answers err through the shared error module of the
 // tool-neutral APIs, with the classes of the sink service.
 func (h *Handler) writeError(ctx context.Context, w http.ResponseWriter, err error) {
-	problem.Writer{Logger: h.logger, Classify: classifySink}.Write(ctx, w, err)
+	problem.Writer{Logger: h.logger, Classify: sinkErrors}.Write(ctx, w, err)
 }
 
-// classify returns the answer to err.
-func classify(err error) problem.Problem {
-	return problem.Writer{Logger: nil, Classify: classifySink}.Problem(err)
-}
-
-// classifySink maps the errors of the sink service. The text of a sink error
+// sinkErrors maps the errors of the sink service. The text of a sink error
 // is fixed: an error of the service can wrap the host of a URL, and a request
 // must never learn more than it sent.
-func classifySink(err error) (problem.Problem, bool) {
-	var wait time.Duration
+func sinkErrors(err error) (problem.Problem, bool) {
 	if limited, ok := errors.AsType[*sinks.RateLimitedError](err); ok {
-		wait = limited.RetryAfter
+		wait := problem.RetryAfterSeconds(limited.RetryAfter)
+
+		return problem.Problem{
+			Status: http.StatusTooManyRequests, Code: errcode.SinkTestRateLimited,
+			Values:  []errcode.Value{errcode.Quantity("retryAfterSeconds", wait)},
+			Message: "too many tests of this notification destination or namespace: try again later",
+			// The header names the same wait as the argument.
+			RetryAfter: limited.RetryAfter, Reauthenticate: "",
+		}, true
 	}
 
 	switch {
 	case errors.Is(err, notify.ErrNotFound):
-		return sinkProblem(http.StatusNotFound, "sink.not-found", "notification destination not found"), true
+		return sinkAnswer(http.StatusNotFound, errcode.SinkNotFound, "notification destination not found"), true
 	case errors.Is(err, notify.ErrConflict):
-		return sinkProblem(
-			http.StatusConflict,
-			"sink.conflict",
+		return sinkAnswer(
+			http.StatusConflict, errcode.SinkConflict,
 			"the notification destination changed since you read it: read it again and send the new version",
 		), true
 	case errors.Is(err, sinks.ErrNoSender):
-		return sinkProblem(
-			http.StatusUnprocessableEntity,
-			"sink.no-sender",
+		return sinkAnswer(
+			http.StatusUnprocessableEntity, errcode.SinkNoSender,
 			"this server cannot send to this kind of notification destination",
 		), true
 	case errors.Is(err, notify.ErrNoURL):
-		return sinkProblem(
-			http.StatusUnprocessableEntity,
-			"sink.no-url",
+		return sinkAnswer(
+			http.StatusUnprocessableEntity, errcode.SinkNoURL,
 			"the notification destination has no URL that the server can use: set the URL again",
 		), true
-	case errors.Is(err, sinks.ErrRateLimited):
-		limited := sinkProblem(http.StatusTooManyRequests, "sink.test-rate-limited",
-			"too many tests of this notification destination or namespace: try again later")
-		limited.RetryAfter = wait
-
-		return limited, true
 	case errors.Is(err, sinks.ErrPlatformHost):
-		return sinkProblem(http.StatusBadRequest, "sink.platform-host", platformHostText(err)), true
+		return sinkAnswer(http.StatusBadRequest, errcode.SinkPlatformHost, platformHostText(err)), true
 	case errors.Is(err, notify.ErrInvalid):
-		return sinkProblem(http.StatusBadRequest, "sink.invalid", invalidText(err)), true
+		return sinkAnswer(http.StatusBadRequest, errcode.SinkInvalid, invalidText(err)), true
 	default:
 		return problem.Pass()
+	}
+}
+
+// sinkAnswer returns the answer of a sink error with no arguments.
+func sinkAnswer(status int, code, message string) problem.Problem {
+	return problem.Problem{
+		Status: status, Code: code, Values: nil, Message: message, RetryAfter: 0, Reauthenticate: "",
 	}
 }
 
@@ -224,11 +224,6 @@ func invalidText(err error) string {
 	}
 
 	return "the notification destination is not valid: check the kind, the platform, the name and the target"
-}
-
-// sinkProblem returns the answer of a sink error with no arguments.
-func sinkProblem(status int, code, message string) problem.Problem {
-	return problem.Problem{Status: status, Code: code, Message: message, Args: nil, RetryAfter: 0, Reauthenticate: ""}
 }
 
 func (h *Handler) writeJSON(ctx context.Context, w http.ResponseWriter, status int, body any) {

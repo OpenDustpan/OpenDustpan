@@ -464,6 +464,43 @@ func TestLargeAnswerIsRead(t *testing.T) {
 	}
 }
 
+// TestSendStopsAtTheDeadline checks that a receiver that does not answer
+// fails the send with ErrTemporary at the deadline of the send, below the
+// timeout of the client.
+func TestSendStopsAtTheDeadline(t *testing.T) {
+	t.Parallel()
+
+	r := newReceiver(t)
+	release := make(chan struct{})
+
+	r.set(func(http.ResponseWriter, *http.Request) { <-release })
+	t.Cleanup(func() { close(release) })
+
+	s := r.sender(t)
+	s.SetTimeoutForTest(100 * time.Millisecond)
+
+	start := time.Now()
+
+	err := s.Send(t.Context(), message([]byte(canary)))
+	if !errors.Is(err, notify.ErrTemporary) || errors.Is(err, notify.ErrPermanent) {
+		t.Fatalf("Send = %v, want ErrTemporary", err)
+	}
+
+	if took := time.Since(start); took > 5*time.Second {
+		t.Errorf("Send took %s, want about the deadline of 100 ms", took)
+	}
+}
+
+// TestSendTimeout checks the deadline of one send: the same as the chat
+// sender.
+func TestSendTimeout(t *testing.T) {
+	t.Parallel()
+
+	if webhook.SendTimeout != 10*time.Second {
+		t.Fatalf("SendTimeout = %s, want 10s", webhook.SendTimeout)
+	}
+}
+
 // TestNoCanaryInErrors sends under each failure and checks that the text
 // of the error repeats no secret, no token of the URL, no address and no
 // text of the answer.
@@ -724,6 +761,8 @@ func TestHostMustBeTheTarget(t *testing.T) {
 		{"host the allowlist refuses", "https://hooks.example.com:/ops", "hooks.example.com:"},
 		{"loopback with its own target", "https://127.0.0.1/ops", "127.0.0.1"},
 		{"does not parse", "https://hooks.example.com/%zz", "hooks.example.com"},
+		{"URL host with a trailing dot", "https://hooks.example.com./ops", "hooks.example.com"},
+		{"URL host and target with a trailing dot", "https://hooks.example.com./ops", "hooks.example.com."},
 	}
 
 	for _, tt := range tests {
@@ -740,6 +779,42 @@ func TestHostMustBeTheTarget(t *testing.T) {
 
 			if n := len(r.requests()); n != 0 {
 				t.Fatalf("the test server got %d requests, want 0", n)
+			}
+		})
+	}
+}
+
+// TestHostInUpperCaseSends checks that the host check of the sender ignores
+// the case of the host in the URL: the target is in lower case, and a URL
+// with the same host in upper case or mixed case sends.
+func TestHostInUpperCaseSends(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		to   string
+	}{
+		{"upper case", "https://HOOKS.EXAMPLE.COM/ops"},
+		{"mixed case", "https://Hooks.Example.com/ops"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			r := newReceiver(t)
+			r.set(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) })
+
+			m := message([]byte(canary))
+			m.To = tt.to
+			m.Sink.Target = "hooks.example.com"
+
+			if err := r.sender(t).Send(t.Context(), m); err != nil {
+				t.Fatalf("Send = %v, want no error", err)
+			}
+
+			if n := len(r.requests()); n != 1 {
+				t.Fatalf("the test server got %d requests, want 1", n)
 			}
 		})
 	}

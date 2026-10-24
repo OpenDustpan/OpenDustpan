@@ -240,7 +240,7 @@ func verifyTargetBlob(ctx context.Context, target blob.Store, ref ManifestBlob) 
 	reader, err := target.Get(ctx, source)
 	if err != nil {
 		if isNotFound(err) {
-			return fmt.Errorf("backup is incomplete: object %q is missing: %w", source, ErrCorrupt)
+			return &MissingObjectError{Key: source}
 		}
 
 		return fmt.Errorf("read backup object %q: %w", source, err)

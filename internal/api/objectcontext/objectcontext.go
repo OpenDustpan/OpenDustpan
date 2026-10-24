@@ -17,10 +17,11 @@ import (
 	"net/http"
 	"strings"
 
-	"opendustpan.org/opendustpan/internal/api/problem"
 	"opendustpan.org/opendustpan/internal/api/apidesc"
+	"opendustpan.org/opendustpan/internal/api/problem"
 	"opendustpan.org/opendustpan/internal/api/refusal"
 	"opendustpan.org/opendustpan/internal/denylimit"
+	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/internal/sessionauth"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/collection"
@@ -175,56 +176,95 @@ func (h *Handler) authenticate(r *http.Request) (identity.Principal, bool, error
 
 // errNotFound is the one answer for an unknown namespace, an unknown unit, a
 // unit of another namespace, a purged unit, and an object that the caller
-// cannot read. The answer never tells that the object exists.
-var errNotFound = errors.New("not found")
+// cannot read. The answer never tells that the object exists, so it names no
+// value of the path. It names the mistake that people make most: a unit name
+// in place of the unit ID.
+var errNotFound = errors.New("not found: no namespace or unit that you can read has this path. " +
+	"A unit path takes the unit ID (stk-... or ws-...), not the name. " +
+	"To list the unit IDs, send GET /api/dustpan/v1/namespaces/{namespace}/units")
 
 // errBody names the body that a context write needs.
 var errBody = errors.New(
 	`invalid request body: send a JSON object with at least one of "summary", "runbook", "owners", "onCall" and "links"`,
 )
 
+// errBodyText is the answer for a body that is not valid UTF-8 or that holds
+// a lone surrogate escape. The server refuses the text and does not change it.
+var errBodyText = errors.New(
+	`invalid request body: send valid UTF-8 text, with no invalid byte and no lone surrogate escape such as \ud800`,
+)
+
 // errInclude names the include value that the read route needs.
 var errInclude = errors.New("invalid include query parameter: send section names separated by commas")
 
 func (h *Handler) writeError(ctx context.Context, w http.ResponseWriter, err error) {
-	problem.Writer{Logger: h.logger, Classify: classify}.Write(ctx, w, err)
+	problem.Writer{Logger: h.logger, Classify: contextErrors}.Write(ctx, w, err)
 }
 
-// classify maps errors to an answer that is safe to show callers. The shared
-// module answers the rest.
-func classify(err error) (problem.Problem, bool) {
+// contextErrors maps the errors of the context routes to an answer that is
+// safe to show callers. The shared module answers the rest.
+func contextErrors(err error) (problem.Problem, bool) {
 	switch {
 	case errors.Is(err, errNotFound), errors.Is(err, namespace.ErrNotFound):
 		// One answer for every object that the caller may not see, so the
 		// answer never tells that it exists.
-		return fail(http.StatusNotFound, "context.object-not-found", errNotFound.Error()), true
+		return fail(http.StatusNotFound, errNotFound.Error(), errcode.ContextObjectNotFound), true
 	case errors.Is(err, objectcontext.ErrInvalidObject):
 		// A purge removed the unit after the route resolved it.
-		return fail(http.StatusNotFound, "context.object-not-found", errNotFound.Error()), true
+		return fail(http.StatusNotFound, errNotFound.Error(), errcode.ContextObjectNotFound), true
 	case errors.Is(err, objectcontext.ErrNotFound):
-		return fail(http.StatusNotFound, "context.not-found", "no API context to clear"), true
-	case errors.Is(err, errBody):
-		return fail(http.StatusBadRequest, "request.body-invalid", err.Error()), true
+		return fail(http.StatusNotFound, "no API context to clear", errcode.ContextNotSet), true
+	case errors.Is(err, errBody), errors.Is(err, errBodyText):
+		return fail(http.StatusBadRequest, err.Error(), errcode.RequestBodyInvalid), true
 	case errors.Is(err, errInclude):
-		return fail(http.StatusBadRequest, "request.invalid-query", err.Error()), true
+		return fail(http.StatusBadRequest, err.Error(), errcode.RequestInvalidQuery), true
 	case errors.Is(err, objectcontext.ErrInvalidContext):
-		return fail(http.StatusBadRequest, "context.invalid", err.Error()), true
+		return fail(http.StatusBadRequest, invalidMessage(err), errcode.ContextInvalid), true
 	case errors.Is(err, objectcontext.ErrUnknownSection):
-		return fail(http.StatusBadRequest, "context.unknown-section", err.Error()), true
+		return fail(http.StatusBadRequest, invalidMessage(err), errcode.ContextUnknownSection), true
 	case errors.Is(err, objectcontext.ErrFieldFromCode):
-		return fail(http.StatusConflict, "context.field-from-code",
-			err.Error()+": change it in the opendustpan output of the unit"), true
+		return fieldFromCodeError(err), true
 	case errors.Is(err, objectcontext.ErrUnitDeleted):
-		return fail(http.StatusConflict, "unit.deleted",
-			"the unit is deleted: restore it before you change its context"), true
+		return fail(http.StatusConflict, "the unit is deleted: restore it before you change its context",
+			errcode.ContextUnitDeleted), true
 	default:
 		return problem.Pass()
 	}
 }
 
-// fail returns an answer with no arguments.
-func fail(status int, code, message string) problem.Problem {
-	return problem.Problem{Status: status, Code: code, Message: message, Args: nil, RetryAfter: 0, Reauthenticate: ""}
+// invalidMessage returns the text of a 400 for an invalid context or section.
+// For a *RuleError it is the text of the rule only, so the call chain of the
+// service and the store, which differs between the store adapters, never
+// reaches the client.
+func invalidMessage(err error) string {
+	if rule, ok := errors.AsType[*objectcontext.RuleError](err); ok {
+		return rule.Error()
+	}
+
+	return err.Error()
+}
+
+// fieldFromCodeError maps the write of a field that the output of the code
+// sets to 409 with the code context.field-from-code and the field. A refusal
+// without the field has no value for the argument, so it answers 500: the
+// service always names the field.
+func fieldFromCodeError(err error) problem.Problem {
+	field, ok := errors.AsType[*objectcontext.FieldFromCodeError](err)
+	if !ok || field == nil {
+		return problem.Internal()
+	}
+
+	return fail(http.StatusConflict, err.Error()+": change it in the opendustpan output of the unit",
+		errcode.ContextFieldFromCode, errcode.Identifier("field", string(field.Field)))
+}
+
+// fail returns the answer of status and message with the catalog code and its
+// values. When the catalog refuses the code or the values, the writer answers
+// 500.
+func fail(status int, message, code string, values ...errcode.Value) problem.Problem {
+	return problem.Problem{
+		Status: status, Code: code, Values: values, Message: message, RetryAfter: 0, Reauthenticate: "",
+	}
 }
 
 func (h *Handler) writeJSON(ctx context.Context, w http.ResponseWriter, status int, body any) {

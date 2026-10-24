@@ -8,15 +8,10 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
-	"strconv"
 	"time"
 
-	"opendustpan.org/opendustpan/internal/clientip"
-	"opendustpan.org/opendustpan/internal/requestid"
-	"opendustpan.org/opendustpan/internal/sessionauth"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
-	"opendustpan.org/opendustpan/pkg/secret"
 	"opendustpan.org/opendustpan/pkg/stack"
 )
 
@@ -63,6 +58,7 @@ func (h *Handler) revealRoute() Route {
 		Actions: []identity.Action{identity.ActionUnitRead, identity.ActionUnitReadSecrets},
 		Resolve: resolveGetStack,
 		Serve:   h.freshReveal(h.revealStateValue),
+		Lease:   nil,
 	}
 }
 
@@ -81,22 +77,17 @@ func (h *Handler) revealStateValue(
 		return
 	}
 
-	target, ok := h.stateTargetOf(w, r)
+	ref, sel, ok := h.stateTargetOf(w, r)
 	if !ok {
 		return
 	}
 
-	current, ok := h.stateCurrent(w, r, target)
+	current, ok := h.stateCurrent(w, r, ref, sel)
 	if !ok {
 		return
 	}
 
-	version := r.PathValue("version")
-	if target.latest {
-		version = checkpointVersion(ctx, h, target, current)
-	}
-
-	cipher, _, err := stack.SecretCiphertextOf(current.Deployment, path)
+	cipher, _, err := stack.SecretCiphertextOf(current.Checkpoint.Deployment, path)
 	if err != nil {
 		// A path outside the masked set answers 404 with no audit entry
 		// and no value, so a caller cannot probe paths.
@@ -109,20 +100,19 @@ func (h *Handler) revealStateValue(
 		request:   r,
 		principal: p,
 		object:    obj,
-		version:   version,
+		version:   current.VersionLabel(),
 		path:      path,
 		outcome:   audit.OutcomeSuccess,
 	}
 
-	provider := stack.SecretsProvider(current.Deployment)
-	if provider != serviceSecretsProviderName() {
+	if err := stack.CheckServiceSecrets(current.Checkpoint.Deployment); err != nil {
 		entry.outcome = audit.OutcomeFailure
 		if !h.appendRevealEntry(ctx, entry) {
 			h.writeNoStore(ctx, w, errAuditFailed)
 
 			return
 		}
-		h.writeNoStore(ctx, w, fmt.Errorf("%w: %q", stack.ErrOtherSecretsProvider, provider))
+		h.writeNoStore(ctx, w, err)
 
 		return
 	}
@@ -138,7 +128,7 @@ func (h *Handler) answerReveal(
 ) {
 	ctx := r.Context()
 
-	scope, ok := h.revealScope(w, r)
+	scope, ok := h.secretScope(w, r)
 	if !ok {
 		return
 	}
@@ -167,11 +157,6 @@ func (h *Handler) answerReveal(
 
 	w.Header().Set("Cache-Control", noStoreValue)
 	h.writeJSON(ctx, w, http.StatusOK, revealResponse{Path: entry.path, Value: stack.PlainValue(plain[0])})
-}
-
-// serviceSecretsProviderName returns the only provider the server decrypts.
-func serviceSecretsProviderName() string {
-	return "service"
 }
 
 // errRevealDecrypt reports a ciphertext of the stored state that does not
@@ -250,28 +235,6 @@ func (h *Handler) revealPath(w http.ResponseWriter, r *http.Request) (string, bo
 	return req.Path, true
 }
 
-// revealScope resolves the stack in the path to the scope its values are
-// encrypted under: the namespace and the stack ID.
-func (h *Handler) revealScope(w http.ResponseWriter, r *http.Request) (secret.Scope, bool) {
-	return h.secretScope(w, r)
-}
-
-// checkpointVersion names the version of current for the audit entry: the
-// explicit version, or the version of the update that saved the latest
-// checkpoint. A lookup failure keeps the path value the request named.
-func checkpointVersion(ctx context.Context, h *Handler, target stateTarget, current stack.Checkpoint) string {
-	if !target.latest {
-		return strconv.FormatInt(target.version, 10)
-	}
-
-	u, err := h.updates.Get(ctx, target.ref, current.Update)
-	if err != nil {
-		return latestVersionName
-	}
-
-	return strconv.FormatInt(u.Version, 10)
-}
-
 // revealAudit holds what the audit entry of a reveal call records: the
 // request, the caller, the unit, the version, the value path and the
 // outcome.
@@ -297,33 +260,15 @@ func (h *Handler) appendRevealEntry(ctx context.Context, a revealAudit) bool {
 		return false
 	}
 
-	entry := audit.Entry{
-		At:            time.Now().UTC(),
-		Namespace:     a.object.Namespace(),
-		Subject:       a.principal.Subject,
-		IDPSubject:    "",
-		TokenID:       a.principal.TokenID,
-		Action:        string(identity.ActionUnitReadSecrets),
-		Object:        a.object.String(),
-		Version:       a.version,
-		ValuePath:     a.path,
-		ValueCount:    nil,
-		Changes:       nil,
-		SourceIP:      clientip.String(a.request),
-		UserAgent:     truncateUserAgent(a.request.UserAgent()),
-		Channel:       sessionauth.AuditChannel(a.request, channelHeader),
-		Kind:          audit.KindReveal,
-		Outcome:       a.outcome,
-		RequestID:     requestid.FromContext(ctx),
-		ObjectID:      a.object.UnitID(),
-		PrevHash:      "",
-		Hash:          "",
-		Sequence:      0,
-		FenceVersion:  0,
-		Reason:        "",
-		PrincipalKind: string(a.principal.Kind),
-		JobID:         a.principal.JobID,
-	}
+	entry := requestEntry(ctx, a.request, a.principal, a.object, auditDetail{
+		at:         time.Now().UTC(),
+		action:     string(identity.ActionUnitReadSecrets),
+		version:    a.version,
+		valuePath:  a.path,
+		valueCount: nil,
+		kind:       audit.KindReveal,
+		outcome:    a.outcome,
+	})
 
 	if _, err := h.audit.Append(ctx, ns.Fence(), entry); err != nil {
 		h.logger.ErrorContext(ctx, "audit append failed", slog.String("path", a.path))
