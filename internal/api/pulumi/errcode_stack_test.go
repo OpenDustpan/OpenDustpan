@@ -26,7 +26,7 @@ func TestStackAndSecretErrorsCarryACode(t *testing.T) {
 		{
 			"no state at a time, first state known", &stack.NoStateAtError{First: first}, http.StatusNotFound,
 			errcode.StackNoStateAtTime,
-			map[string]any{"first": "2026-10-23T07:30:00Z"},
+			map[string]any{"firstAt": "2026-10-23T07:30:00Z"},
 		},
 		{"no state at a time, no checkpoint", stack.ErrNoStateAt, http.StatusNotFound, errcode.StackNoState, nil},
 		{

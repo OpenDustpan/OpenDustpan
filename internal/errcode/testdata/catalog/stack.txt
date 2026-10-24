@@ -2,8 +2,8 @@ stack.already-exists
 stack.has-resources
 stack.invalid-name
 stack.no-state
-stack.no-state-at-time first:time
+stack.no-state-at-time firstAt:time
 stack.not-found
 stack.other-secrets-provider
 stack.resource-not-found
-stack.reveal-path-too-long limit:quantity
+stack.reveal-path-too-long maxBytes:quantity

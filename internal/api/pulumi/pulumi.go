@@ -1080,7 +1080,7 @@ func classifyStack(err error) (failure, bool) {
 		// checkpoint yet has no state at all.
 		if at, ok := errors.AsType[*stack.NoStateAtError](err); ok && !at.First.IsZero() {
 			return coded(http.StatusNotFound, err.Error(), errcode.StackNoStateAtTime,
-				errcode.Time("first", at.First)), true
+				errcode.Time("firstAt", at.First)), true
 		}
 
 		return coded(http.StatusNotFound, err.Error(), errcode.StackNoState), true
@@ -1106,7 +1106,7 @@ func classifyRequest(err error) (failure, bool) {
 		return coded(http.StatusBadRequest, invalidBodyMessage, errcode.RequestBodyInvalid), true
 	case errors.Is(err, errRevealPathTooLong):
 		return coded(http.StatusBadRequest, err.Error(), errcode.StackRevealPathTooLong,
-			errcode.Quantity("limit", maxRevealPathLen)), true
+			errcode.Quantity("maxBytes", maxRevealPathLen)), true
 	case errors.Is(err, errContinuationToken):
 		return coded(http.StatusBadRequest, err.Error(), errcode.RequestPageTokenInvalid), true
 	case errors.Is(err, errStackTagFilter):

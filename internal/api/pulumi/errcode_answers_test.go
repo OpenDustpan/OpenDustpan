@@ -75,7 +75,7 @@ func TestLayerErrorsCarryACode(t *testing.T) {
 		},
 		{
 			"reveal path", pulumi.ErrRevealPathTooLong, http.StatusBadRequest, errcode.StackRevealPathTooLong,
-			map[string]any{"limit": int64(1024)},
+			map[string]any{"maxBytes": int64(1024)},
 		},
 		{"tag filter", pulumi.ErrStackTagFilter, http.StatusBadRequest, errcode.RequestInvalidQuery, nil},
 		{"invalid object", identity.ErrInvalidObject, http.StatusBadRequest, errcode.RequestInvalidObject, nil},
