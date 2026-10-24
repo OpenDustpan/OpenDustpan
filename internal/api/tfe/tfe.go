@@ -32,6 +32,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/outputshare"
 	"opendustpan.org/opendustpan/pkg/workspace"
 )
 
@@ -225,6 +226,11 @@ type Config struct {
 	// Workspaces serves the workspace and state routes. It is required:
 	// routes by ID resolve the ID through it.
 	Workspaces WorkspaceService
+	// OutputChecker decides each read of outputs on the outputs routes. It is
+	// optional so that a store without the output sharing ports still serves
+	// the rest of the API. With nil, the outputs routes answer 500 and no
+	// output: they fail closed.
+	OutputChecker outputshare.Checker
 	// BaseURL reports the external base URL for a request, for absolute
 	// URLs. The zero value derives it from each request.
 	BaseURL baseurl.Resolver
@@ -273,6 +279,7 @@ type Handler struct {
 	logger         *slog.Logger
 	namespaces     *namespace.Service
 	workspaces     WorkspaceService
+	outputs        outputshare.Checker
 	baseURL        baseurl.Resolver
 	audit          audit.Store
 	onAuditFailure func()
@@ -326,6 +333,7 @@ func NewHandler(cfg Config) (*Handler, error) {
 		logger:         cfg.Logger,
 		namespaces:     cfg.Namespaces,
 		workspaces:     cfg.Workspaces,
+		outputs:        cfg.OutputChecker,
 		baseURL:        cfg.BaseURL,
 		audit:          cfg.Audit,
 		onAuditFailure: cfg.OnAuditFailure,

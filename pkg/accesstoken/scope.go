@@ -117,7 +117,8 @@ func (s *Service) targetPrincipal(
 func checkKind(scope Scope, kind Kind) error {
 	switch {
 	case scope == ScopeService && kind != KindService:
-		return fmt.Errorf("%w: a %s token goes through /api/server/tokens", ErrWrongKind, kind)
+		return fmt.Errorf("%w: its owner makes and rotates a %s token through /api/server/caller/tokens",
+			ErrWrongKind, kind)
 	case scope != ScopeService && kind != KindPersonal:
 		return fmt.Errorf("%w: a %s token goes through /api/server/service-tokens", ErrWrongKind, kind)
 	default:
@@ -153,7 +154,8 @@ func (s *Service) authorizeRevoke(ctx context.Context, caller identity.Principal
 	}
 
 	if scope == ScopeService && t.Kind != KindService {
-		return fmt.Errorf("%w: a %s token goes through /api/server/tokens", ErrWrongKind, t.Kind)
+		return fmt.Errorf("%w: revoke a %s token through /api/server/tokens/{id} or, as its owner, through "+
+			"/api/server/caller/tokens/{id}", ErrWrongKind, t.Kind)
 	}
 
 	if t.Kind == KindService {

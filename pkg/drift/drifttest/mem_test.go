@@ -82,6 +82,10 @@ func (m *mem) Record(_ context.Context, r drift.Result, fence namespace.Fence) (
 		return none, err
 	}
 
+	if err := m.checkUnitID(r.Unit); err != nil {
+		return none, err
+	}
+
 	prev, had := m.latest[r.Unit]
 	if m.used[r.JobID] || (had && !r.CheckedAt.After(prev.CheckedAt)) {
 		return none, drift.ErrStale
@@ -240,6 +244,18 @@ func (m *mem) checkJob(r drift.Result) error {
 
 	if w := drifttest.JobWindow(); r.CheckedAt.Before(w.Start) || r.CheckedAt.After(w.End) {
 		return fmt.Errorf("job %s: checked outside the run of the job: %w", r.JobID, drift.ErrJobMismatch)
+	}
+
+	return nil
+}
+
+// checkUnitID refuses a unit whose ID holds the result of another namespace
+// or another tool. It must run with m.mu held.
+func (m *mem) checkUnitID(unit graph.Unit) error {
+	for held := range m.latest {
+		if held.ID == unit.ID && held != unit {
+			return fmt.Errorf("%w: unit ID %q belongs to another namespace or another tool", drift.ErrInvalid, unit.ID)
+		}
 	}
 
 	return nil

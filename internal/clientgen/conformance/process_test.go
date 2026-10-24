@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"opendustpan.org/opendustpan/internal/clientgen/conformance"
 )
@@ -65,6 +66,10 @@ func runFakeAdapter(mode string) {
 	}
 }
 
+// rightToLeftOverride is the format character U+202E in UTF-8. A report
+// that prints it shows the text after it in the other direction.
+const rightToLeftOverride = "\xe2\x80\xae"
+
 // fixedReplies are the modes that answer every request with the same line.
 func fixedReplies() map[string]string {
 	return map[string]string{
@@ -104,6 +109,13 @@ func fakeReply(mode string, id json.RawMessage, method string) (string, bool) {
 		}
 
 		return goodReply(mode, method, ok), false
+	case "rpcerrorhostile":
+		// A message with a false report line, a format character and a long tail
+		// of 2-byte runes. The odd length of the head puts the limit inside a rune.
+		msg := `"no\r\n--- PASS: TestForged` + rightToLeftOverride + `\nx` +
+			strings.Repeat("é", conformance.MaxRPCMessageBytes) + `"`
+
+		return fmt.Sprintf(`{"jsonrpc":"2.0","id":%s,"error":{"code":-32000,"message":%s}}`, id, msg), false
 	default:
 		return goodReply(mode, method, ok), false
 	}
@@ -286,6 +298,39 @@ func TestProcessAdapterRPCErrorFailsOneRequest(t *testing.T) {
 
 	if res, callErr := a.Call(t.Context(), callParams()); callErr != nil || res.Status != 200 {
 		t.Fatalf("the next call: %+v %v", res, callErr)
+	}
+}
+
+// TestProcessAdapterRPCErrorMessageIsSafe checks that the message of a
+// JSON-RPC error from the adapter has no CR, LF or format character, is valid
+// UTF-8, and has at most MaxRPCMessageBytes bytes, so that it cannot add a
+// false line to a test report.
+func TestProcessAdapterRPCErrorMessageIsSafe(t *testing.T) {
+	t.Parallel()
+
+	a := startFake(t, "rpcerrorhostile", 0)
+
+	_, err := a.Paginate(t.Context(), paginateParams("x", 2))
+	if closeErr := a.Close(); closeErr != nil {
+		t.Errorf("Close = %v, want nil: an RPC error does not stop the session", closeErr)
+	}
+
+	var rpc *conformance.RPCError
+	if !errors.As(err, &rpc) || rpc.Code != -32000 {
+		t.Fatalf("want an RPCError with code -32000, got %v", err)
+	}
+
+	if strings.ContainsAny(rpc.Error(), "\r\n"+rightToLeftOverride) {
+		t.Errorf("the error text holds a CR, an LF or a format character: %q", rpc.Error())
+	}
+
+	if !utf8.ValidString(rpc.Message) || len(rpc.Message) > conformance.MaxRPCMessageBytes {
+		t.Errorf("the message has %d bytes (valid UTF-8: %t), want at most %d of valid UTF-8",
+			len(rpc.Message), utf8.ValidString(rpc.Message), conformance.MaxRPCMessageBytes)
+	}
+
+	if !strings.HasPrefix(rpc.Message, "no  --- PASS: TestForged  xé") {
+		t.Errorf("message = %q, want the text with each CR, LF and format character as a space", rpc.Message)
 	}
 }
 

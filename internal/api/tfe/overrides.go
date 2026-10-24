@@ -8,7 +8,7 @@ import (
 	"io"
 	"net/http"
 	"time"
-
+	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/internal/api/tofuunit"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -153,7 +153,10 @@ func (h *Handler) writeOverrideSwitches(
 
 	ov, err := decodeOverrideSwitches(body)
 	if err != nil {
-		h.writeJSONAPIError(ctx, w, http.StatusBadRequest, "bad request", errOverrideBody.Error())
+		h.writeClassError(ctx, w, errorClass{
+			status: http.StatusBadRequest, title: titleBadRequest, detail: errOverrideBody.Error(),
+			code: errcode.RequestBodyInvalid, args: nil,
+		})
 
 		return
 	}

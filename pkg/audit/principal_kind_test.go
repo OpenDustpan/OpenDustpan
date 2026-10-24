@@ -30,3 +30,25 @@ func TestPrincipalKindValuesAgree(t *testing.T) {
 		}
 	}
 }
+
+// TestAuditAcceptsEveryIdentityKind proves that the audit log accepts every
+// kind of identity.Kinds, so that a new kind cannot make the entries of that
+// principal fail to append, and that each audit value is a known kind.
+func TestAuditAcceptsEveryIdentityKind(t *testing.T) {
+	t.Parallel()
+
+	for _, k := range identity.Kinds() {
+		e := testEntry()
+		e.PrincipalKind = string(k)
+
+		if err := e.Validate(); err != nil {
+			t.Errorf("principal kind %q: %v", k, err)
+		}
+	}
+
+	for _, k := range []string{audit.PrincipalKindPerson, audit.PrincipalKindService, audit.PrincipalKindWorkload} {
+		if !identity.Kind(k).Known() {
+			t.Errorf("audit principal kind %q is not a kind of the identity package", k)
+		}
+	}
+}

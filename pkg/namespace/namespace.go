@@ -69,8 +69,8 @@ type Name string
 // ParseName validates s as a namespace name: 1 to 100 characters of ASCII
 // letters, digits, '-', '_' and '.', not starting with '.' or '-'.
 func ParseName(s string) (Name, error) {
-	if !ident.Valid(s, maxNameLength) {
-		return "", fmt.Errorf("%w: %q", ErrInvalidName, s)
+	if err := ident.Check(s, maxNameLength); err != nil {
+		return "", fmt.Errorf("%w: %w", ErrInvalidName, err)
 	}
 
 	return Name(s), nil
@@ -258,11 +258,13 @@ func NewService(cfg Config) (*Service, error) {
 }
 
 // New returns the namespace that Create stores for name: a new ID, homed in
-// the service's region, at failover version 1, created now. It stores nothing,
-// so a caller can store it with other rows in one transaction.
+// the service's region, at failover version 1, created now. The create time is
+// in UTC at millisecond precision, the precision that the store keeps, so the
+// answer of a create equals a later read. It stores nothing, so a caller can
+// store it with other rows in one transaction.
 func (s *Service) New(name Name) Namespace {
 	return Namespace{
-		CreatedAt:       s.now().UTC(),
+		CreatedAt:       s.now().UTC().Truncate(time.Millisecond),
 		ID:              NewID(),
 		Name:            name,
 		HomeRegion:      s.region,

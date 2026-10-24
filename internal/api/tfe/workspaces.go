@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/pkg/gate"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -135,11 +136,12 @@ type workspaceCreateRequest struct {
 
 // createRef reads the workspace reference in a create request: the namespace
 // in organization and the name in the body. A missing or bad name fails with
-// a 422 error.
+// a 422 error. A missing name gets the refusal of workspace.ParseName, as a
+// bad name does.
 func createRef(r *http.Request, body []byte) (workspace.Ref, error) {
 	var req workspaceCreateRequest
 
-	if err := json.Unmarshal(body, &req); err != nil || req.Data.Attributes.Name == "" {
+	if err := json.Unmarshal(body, &req); err != nil {
 		return workspace.Ref{}, errInvalidBody
 	}
 
@@ -291,7 +293,10 @@ func (h *Handler) createWorkspace(
 	ws, err := h.workspaces.Create(ctx, ref)
 	if err != nil {
 		if errors.Is(err, workspace.ErrAlreadyExists) {
-			h.writeUnprocessable(ctx, w, duplicateWorkspaceDetail, duplicateWorkspaceTitle)
+			h.writeClassError(ctx, w, errorClass{
+				status: http.StatusUnprocessableEntity, title: duplicateWorkspaceTitle,
+				detail: duplicateWorkspaceDetail, code: errcode.WorkspaceAlreadyExists, args: nil,
+			})
 
 			return
 		}
@@ -410,6 +415,11 @@ func (h *Handler) readsEveryUnit(ctx context.Context, p identity.Principal, ns n
 		return true, nil
 	}
 
+	// Defense in depth: the check of unit:read on the namespace above allows
+	// ns already. This check of the listed scope stays so that an authorizer
+	// whose Authorize allows ns, but whose scope does not name ns, cannot take
+	// the store path. The count of the store holds every workspace of ns, so
+	// the scope must name all of ns.
 	for i := range scope.Namespaces {
 		if scope.Namespaces[i].Namespace() == ns {
 			return true, nil
@@ -518,12 +528,12 @@ type workspacePage struct {
 // value that is not a positive integer fails with a 422 error. A size above
 // maxPageSize reads as maxPageSize.
 func parseWorkspacePage(r *http.Request) (workspacePage, error) {
-	number, err := workspacePageValue(r.URL.Query().Get("page[number]"), 1)
+	number, err := workspacePageValue(r.URL.Query().Get("page[number]"), "page[number]", 1)
 	if err != nil {
 		return workspacePage{}, err
 	}
 
-	size, err := workspacePageValue(r.URL.Query().Get("page[size]"), defaultPageSize)
+	size, err := workspacePageValue(r.URL.Query().Get("page[size]"), "page[size]", defaultPageSize)
 	if err != nil {
 		return workspacePage{}, err
 	}
@@ -535,16 +545,18 @@ func parseWorkspacePage(r *http.Request) (workspacePage, error) {
 	return workspacePage{search: r.URL.Query().Get("search[name]"), number: number, size: size}, nil
 }
 
-// workspacePageValue parses one page query value, or returns fallback when
-// the value is missing.
-func workspacePageValue(raw string, fallback int) (int, error) {
+// workspacePageValue parses raw, the value of the page query parameter name,
+// or returns fallback when the value is missing. The error names the
+// parameter and its rule, with the largest number that the server reads, and
+// does not repeat the value.
+func workspacePageValue(raw, name string, fallback int) (int, error) {
 	if raw == "" {
 		return fallback, nil
 	}
 
 	n, err := strconv.Atoi(raw)
 	if err != nil || n < 1 {
-		return 0, fmt.Errorf("%w: page value %q", errInvalidBody, raw)
+		return 0, fmt.Errorf("%w: %s must be a whole number from 1 to %d", errInvalidQuery, name, math.MaxInt)
 	}
 
 	return n, nil

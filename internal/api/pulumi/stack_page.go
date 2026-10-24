@@ -2,13 +2,16 @@ package pulumi
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/base64"
-	"encoding/hex"
-	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
+	"net/url"
+	"strconv"
+	"strings"
+	"unicode"
+	"unicode/utf8"
 
+	"opendustpan.org/opendustpan/internal/pagetoken"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/stack"
 )
@@ -34,26 +37,96 @@ type continuationWire struct {
 	Fingerprint string `json:"f"`
 }
 
+// errStackTagFilter reports a tag filter of the stack list that is not valid.
+// classify maps it to 400.
+var errStackTagFilter = errors.New("the tag filter of the stack list is not valid")
+
 // stackListQuery is one request of the stack list: the namespaces to read,
-// the project filter, and the organization query value, which the token
-// fingerprint holds.
+// the project filter, the tag filter, and the organization query value. The
+// token fingerprint holds all but the namespaces.
 type stackListQuery struct {
 	organization string
 	project      stack.ProjectName
+	tag          *stack.TagFilter
 	namespaces   []namespace.Name
 }
 
 // fingerprint returns a short digest of the query values that select the
-// stacks, so a token works only for the query that made it.
+// stacks, so a token works only for the query that made it. A query with no
+// tag filter has the same digest as before the tag filter existed.
 func (q stackListQuery) fingerprint() string {
-	sum := sha256.Sum256([]byte("organization=" + q.organization + "\nproject=" + q.project.String()))
+	in := "organization=" + q.organization + "\nproject=" + q.project.String()
 
-	return hex.EncodeToString(sum[:8])
+	if q.tag != nil {
+		in += "\ntagName=" + strconv.Quote(q.tag.Name)
+
+		if q.tag.HasValue {
+			in += "\ntagValue=" + strconv.Quote(q.tag.Value)
+		}
+	}
+
+	return pagetoken.Fingerprint(in)
+}
+
+// stackTagFilter reads the tag filter of the stack list from query. The
+// Pulumi CLI sends tagName alone for "--tag name" and tagName with tagValue
+// for "--tag name=value". ok is false when query has no tagName: the list then
+// keeps every stack. An empty tagName, a tagValue with no tagName, a tagName
+// or a tagValue that the query holds more than one time, and a value that is
+// not UTF-8 text or that holds a control character give errStackTagFilter.
+// It refuses such a value and never changes it.
+func stackTagFilter(query url.Values) (stack.TagFilter, bool, error) {
+	none := stack.TagFilter{Name: "", Value: "", HasValue: false}
+
+	if err := checkTagFilterValues(query); err != nil {
+		return none, false, err
+	}
+
+	if !query.Has("tagName") {
+		if query.Has("tagValue") {
+			return none, false, fmt.Errorf(
+				"%w: tagValue needs tagName: run pulumi stack ls --tag name=value", errStackTagFilter,
+			)
+		}
+
+		return none, false, nil
+	}
+
+	name := query.Get("tagName")
+	if name == "" {
+		return none, false, fmt.Errorf(
+			"%w: tagName is empty: run pulumi stack ls --tag name=value", errStackTagFilter,
+		)
+	}
+
+	return stack.TagFilter{Name: name, Value: query.Get("tagValue"), HasValue: query.Has("tagValue")}, true, nil
+}
+
+// checkTagFilterValues returns errStackTagFilter when query holds tagName or
+// tagValue more than one time, or a value of them that is not UTF-8 text or
+// that holds a control character.
+func checkTagFilterValues(query url.Values) error {
+	for _, key := range []string{"tagName", "tagValue"} {
+		values := query[key]
+		if len(values) > 1 {
+			return fmt.Errorf("%w: send %s at most one time: run pulumi stack ls --tag name=value",
+				errStackTagFilter, key)
+		}
+
+		for _, v := range values {
+			if !utf8.ValidString(v) || strings.ContainsFunc(v, unicode.IsControl) {
+				return fmt.Errorf("%w: %s must be UTF-8 text with no control character: "+
+					"run pulumi stack ls --tag name=value", errStackTagFilter, key)
+			}
+		}
+	}
+
+	return nil
 }
 
 // encodeContinuation returns the token of the page after the stack st.
 func encodeContinuation(st stack.Stack, fingerprint string) string {
-	raw, err := json.Marshal(continuationWire{
+	token, err := pagetoken.Encode(continuationWire{
 		Namespace:   st.Ref.Namespace.String(),
 		Project:     st.Ref.Project.String(),
 		Stack:       st.Ref.Stack.String(),
@@ -63,7 +136,7 @@ func encodeContinuation(st stack.Stack, fingerprint string) string {
 		return ""
 	}
 
-	return base64.RawURLEncoding.EncodeToString(raw)
+	return token
 }
 
 // decodeContinuation returns the cursor of the token. A token that does not
@@ -72,13 +145,8 @@ func encodeContinuation(st stack.Stack, fingerprint string) string {
 // fingerprint is not keyed, so anyone can compute it; the cursor is bound to
 // the query by its own names as well.
 func decodeContinuation(token string, q stackListQuery) (stack.PageCursor, error) {
-	raw, err := base64.RawURLEncoding.DecodeString(token)
-	if err != nil {
-		return stack.PageCursor{}, errContinuationToken
-	}
-
 	var w continuationWire
-	if jsonErr := json.Unmarshal(raw, &w); jsonErr != nil || w.Fingerprint != q.fingerprint() {
+	if err := pagetoken.Decode(token, &w); err != nil || !pagetoken.SameFingerprint(w.Fingerprint, q.fingerprint()) {
 		return stack.PageCursor{}, errContinuationToken
 	}
 
@@ -101,11 +169,29 @@ func decodeContinuation(token string, q stackListQuery) (stack.PageCursor, error
 	return stack.PageCursor{Namespace: ref.Namespace, Project: ref.Project, Name: ref.Stack}, nil
 }
 
-// serveStackPage answers one page of the stacks of q, after the stack of the
-// continuationToken of r. The answer has a continuationToken while a later
-// page exists, and null on the last page.
+// serveStackPage answers one page of the stacks of q that pass the tag filter
+// of r (see stackTagFilter), after the stack of the continuationToken of r.
+// The answer has a continuationToken while a later page exists, and null on
+// the last page.
 func (h *Handler) serveStackPage(ctx context.Context, w http.ResponseWriter, r *http.Request, q stackListQuery) {
-	page := stack.PageQuery{After: nil, Project: q.project, Namespaces: q.namespaces, Limit: stackPageSize + 1}
+	tag, filtered, tagErr := stackTagFilter(r.URL.Query())
+	if tagErr != nil {
+		h.writeError(ctx, w, tagErr)
+
+		return
+	}
+
+	if filtered {
+		q.tag = &tag
+	}
+
+	page := stack.PageQuery{
+		After:      nil,
+		Project:    q.project,
+		Tag:        q.tag,
+		Namespaces: q.namespaces,
+		Limit:      stackPageSize + 1,
+	}
 
 	if raw := r.URL.Query().Get("continuationToken"); raw != "" {
 		after, err := decodeContinuation(raw, q)

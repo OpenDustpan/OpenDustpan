@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -440,6 +441,113 @@ func TestFlushWritesHeldCounts(t *testing.T) {
 	}
 }
 
+// timedStore is a fakeStore that records the order of each append and the
+// deadline of its context. An append of an entry whose subject is failSubject
+// fails at once, as an append does when its own timeout ends. The test does not
+// wait for a real timeout.
+type timedStore struct {
+	*fakeStore
+
+	failSubject string
+	order       []string
+	deadlines   map[string]time.Time
+}
+
+func (s *timedStore) Append(ctx context.Context, fence namespace.Fence, e audit.Entry) (audit.Entry, error) {
+	if err := s.record(ctx, e); err != nil {
+		return audit.Entry{}, err
+	}
+
+	return s.fakeStore.Append(ctx, fence, e)
+}
+
+func (s *timedStore) AppendServer(ctx context.Context, e audit.Entry) (audit.Entry, error) {
+	if err := s.record(ctx, e); err != nil {
+		return audit.Entry{}, err
+	}
+
+	return s.fakeStore.AppendServer(ctx, e)
+}
+
+func (s *timedStore) record(ctx context.Context, e audit.Entry) error {
+	s.order = append(s.order, e.Subject)
+
+	if d, ok := ctx.Deadline(); ok {
+		s.deadlines[e.Subject] = d
+	}
+
+	if e.Subject == s.failSubject {
+		return fmt.Errorf("append: %w", context.DeadlineExceeded)
+	}
+
+	return nil
+}
+
+// TestSlowFlushKeepsTheEntryOfTheRefusal checks that a flush entry that fails
+// at its timeout cannot make a refusal lose its own entry. The entry of the
+// refusal comes first, and each write has a deadline of its own.
+func TestSlowFlushKeepsTheEntryOfTheRefusal(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 10, 20, 12, 0, 0, 0, time.UTC)
+	lim := denylimit.New(denylimit.Config{
+		Window:              time.Minute,
+		MaxKeys:             0,
+		MaxFlush:            0,
+		Now:                 func() time.Time { return now },
+		MaxKeysPerPrincipal: 0,
+	})
+	store := &timedStore{
+		fakeStore:   newFakeStore(nil),
+		failSubject: "",
+		order:       nil,
+		deadlines:   make(map[string]time.Time),
+	}
+	failures := 0
+	rec := newRecorder(t, store, lim, &failures)
+
+	for range 6 {
+		deny(t, rec, request(t, "/api/x"), person("bo@example.com"), identity.NamespaceObject("team"))
+	}
+
+	now = now.Add(3 * time.Minute)
+	store.failSubject = "bo@example.com"
+	store.order = nil
+
+	deny(t, rec, request(t, "/api/x"), person("ann@example.com"), identity.NamespaceObject("team"))
+
+	want := []string{"ann@example.com", "bo@example.com"}
+	if !slices.Equal(store.order, want) {
+		t.Fatalf("append order = %v, want %v: the flush entry came before the entry of the refusal", store.order, want)
+	}
+
+	ann, bo := store.deadlines["ann@example.com"], store.deadlines["bo@example.com"]
+	if ann.IsZero() || bo.IsZero() {
+		t.Fatalf("an append had no deadline: ann %v, bo %v", ann, bo)
+	}
+
+	if !bo.After(ann) {
+		t.Fatalf("flush deadline %v is not after the deadline of the entry %v: both writes share one budget", bo, ann)
+	}
+
+	if gap := bo.Sub(ann); gap > time.Second {
+		t.Fatalf("flush deadline %v is %v after the deadline of the entry %v, "+
+			"want at most about 1s: the flush has a timeout of its own", bo, gap, ann)
+	}
+
+	if rest := time.Until(ann); rest < 4*time.Second {
+		t.Fatalf("the entry of the refusal has %v left of its write timeout, want about 5s", rest)
+	}
+
+	if failures != 1 {
+		t.Fatalf("counted %d failures, want 1 (the failed flush entry of bo)", failures)
+	}
+
+	if len(store.entries) != 2 || store.entries[len(store.entries)-1].Subject != "ann@example.com" {
+		t.Fatalf("written entries = %+v, want the entry of ann and the first refusal of bo", store.entries)
+	}
+}
+
 // TestCanceledRequestStillWritesTheEntry checks that a request context that is
 // done does not lose the entry of the refusal.
 func TestCanceledRequestStillWritesTheEntry(t *testing.T) {
@@ -609,5 +717,52 @@ func TestSurfacesAreSeparateKeys(t *testing.T) {
 
 	if lim.Len() != 2 || len(store.entries) != 2 {
 		t.Fatalf("tracked keys = %d and entries = %d, want 2 and 2", lim.Len(), len(store.entries))
+	}
+}
+
+// TestUnknownPrincipalKindIsRecordedAsNoKind checks that a refusal of a
+// principal of a kind that the audit log does not know still writes a valid
+// entry, with no kind.
+func TestUnknownPrincipalKindIsRecordedAsNoKind(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		kind identity.Kind
+		want string
+	}{
+		{kind: "robot", want: ""},
+		{kind: "Person", want: ""},
+		{kind: "person\n", want: ""},
+		{kind: "", want: ""},
+		{kind: identity.KindPerson, want: audit.PrincipalKindPerson},
+		{kind: identity.KindService, want: audit.PrincipalKindService},
+		{kind: identity.KindWorkload, want: audit.PrincipalKindWorkload},
+	}
+
+	for _, tc := range cases {
+		t.Run(fmt.Sprintf("%q", tc.kind), func(t *testing.T) {
+			t.Parallel()
+
+			store, failures := newFakeStore(nil), 0
+			rec := newRecorder(t, store, nil, &failures)
+
+			p := person("bo@example.com")
+			p.Kind = tc.kind
+
+			deny(t, rec, request(t, "/api/x"), p, identity.NamespaceObject("team"))
+
+			if len(store.entries) != 1 || failures != 0 {
+				t.Fatalf("wrote %d entries and counted %d failures, want 1 and 0", len(store.entries), failures)
+			}
+
+			e := store.entries[0]
+			if e.PrincipalKind != tc.want {
+				t.Fatalf("principal kind = %q, want %q", e.PrincipalKind, tc.want)
+			}
+
+			if err := e.Validate(); err != nil {
+				t.Fatalf("the denied entry is not valid: %v", err)
+			}
+		})
 	}
 }

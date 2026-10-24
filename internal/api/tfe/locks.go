@@ -10,7 +10,7 @@ import (
 	"log/slog"
 	"net/http"
 	"time"
-
+	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/internal/api/tofuunit"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/gate"
@@ -57,6 +57,27 @@ func lockConflictDetail(id workspace.ID, holder string) string {
 	return fmt.Sprintf("Workspace %s is locked by User %s", id, holder)
 }
 
+// refusingHolder returns the holder of the lock that refused err. The domain
+// names that lock in its refusal, as the refusing revision held it. A
+// refusal without one, such as a lost compare-and-swap of the store, reads
+// the workspace again.
+func (h *Handler) refusingHolder(ctx context.Context, id workspace.ID, err error) string {
+	if lock, ok := workspace.RefusingLock(err); ok {
+		return lock.Holder
+	}
+
+	return h.lockHolder(ctx, id)
+}
+
+// lockConflict returns the 409 of a workspace whose lock holder is another
+// principal, with the detail of lockConflictDetail.
+func lockConflict(id workspace.ID, holder string) errorClass {
+	return errorClass{
+		status: http.StatusConflict, title: titleConflict, detail: lockConflictDetail(id, holder),
+		code: errcode.WorkspaceLocked, args: nil,
+	}
+}
+
 // lockHolder returns the holder of the stored workspace, or "" when the
 // workspace is missing or unlocked.
 func (h *Handler) lockHolder(ctx context.Context, id workspace.ID) string {
@@ -99,7 +120,7 @@ func (h *Handler) lockWorkspace(
 	// retries, so no call takes the lock without the gates. A retry writes no
 	// new decision record.
 	if holder := h.lockHolder(ctx, id); holder != "" {
-		h.writeConflict(ctx, w, lockConflictDetail(id, holder))
+		h.writeClassError(ctx, w, lockConflict(id, holder))
 
 		return
 	}
@@ -112,7 +133,7 @@ func (h *Handler) lockWorkspace(
 	// The compare-and-swap was lost. Read the holder again: a held lock ends the
 	// call with 409, and a free lock goes through the gates again.
 	if holder := h.lockHolder(ctx, id); holder != "" {
-		h.writeConflict(ctx, w, lockConflictDetail(id, holder))
+		h.writeClassError(ctx, w, lockConflict(id, holder))
 
 		return
 	}
@@ -121,7 +142,7 @@ func (h *Handler) lockWorkspace(
 		return
 	}
 
-	h.writeConflict(ctx, w, h.lockRefusalDetail(ctx, id, workspace.ErrConcurrentModification))
+	h.writeLockRefusal(ctx, w, id, workspace.ErrConcurrentModification)
 }
 
 // lockCall holds the parts of one lock request.
@@ -152,7 +173,7 @@ func (h *Handler) lockOnce(ctx context.Context, c lockCall) bool {
 	case err == nil:
 		h.writeWorkspace(ctx, c.w, http.StatusOK, c.p, locked)
 	case errors.Is(err, workspace.ErrLocked):
-		h.writeConflict(ctx, c.w, h.lockRefusalDetail(ctx, c.id, err))
+		h.writeLockRefusal(ctx, c.w, c.id, err)
 	case errors.Is(err, workspace.ErrConcurrentModification):
 		return true
 	default:
@@ -162,15 +183,18 @@ func (h *Handler) lockOnce(ctx context.Context, c lockCall) bool {
 	return false
 }
 
-// lockRefusalDetail returns the detail of a refused lock request. A manual lock
-// names the object, the holder and the reason in its own words. A lock of a
-// tool uses the words go-tfe parses.
-func (h *Handler) lockRefusalDetail(ctx context.Context, id workspace.ID, err error) string {
+// writeLockRefusal answers a refused lock request with 409. A manual lock
+// answers lock.locked and names the object, the holder and the reason in its
+// own words. A lock of a tool answers workspace.locked, with the words that
+// go-tfe parses.
+func (h *Handler) writeLockRefusal(ctx context.Context, w http.ResponseWriter, id workspace.ID, err error) {
 	if manual, ok := errors.AsType[*manuallock.LockedError](err); ok {
-		return manual.Error()
+		h.writeManualLock(ctx, w, manual, manual.Error())
+
+		return
 	}
 
-	return lockConflictDetail(id, h.lockHolder(ctx, id))
+	h.writeClassError(ctx, w, lockConflict(id, h.refusingHolder(ctx, id, err)))
 }
 
 // unlockWorkspace serves POST /api/v2/workspaces/{id}/actions/unlock. The
@@ -185,7 +209,7 @@ func (h *Handler) unlockWorkspace(
 	unlocked, err := h.workspaces.Unlock(ctx, id, p.Subject)
 	if err != nil {
 		if errors.Is(err, workspace.ErrLockedByOther) {
-			h.writeConflict(ctx, w, lockConflictDetail(id, h.lockHolder(ctx, id)))
+			h.writeClassError(ctx, w, lockConflict(id, h.refusingHolder(ctx, id, err)))
 
 			return
 		}

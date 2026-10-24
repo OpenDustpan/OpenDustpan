@@ -2,6 +2,7 @@ package job
 
 import (
 	"fmt"
+	"net/url"
 	"path"
 	"strings"
 	"unicode"
@@ -25,8 +26,8 @@ func (l Location) IsZero() bool {
 // directory is relative and clean and stays in the checkout. The revision is
 // empty or a hex commit ID. No field holds a control character, a space or a
 // backslash, and a repository, a ref or a connection never starts with '-',
-// so that no value reads as an option of git. Validate refuses a value and
-// never changes it.
+// so that no value reads as an option of git. The repository passes
+// CheckRepository. Validate refuses a value and never changes it.
 //
 // Defense in depth: the planner of the server and the runner check the same
 // fields. This check stays so that a new caller of Service.Start cannot hand
@@ -38,6 +39,10 @@ func (l Location) Validate() error {
 		if err := checkLocationField(f.name, f.value, f.name != "connection"); err != nil {
 			return err
 		}
+	}
+
+	if err := CheckRepository(l.Repository); err != nil {
+		return err
 	}
 
 	if err := l.validateDirectory(); err != nil {
@@ -69,6 +74,46 @@ func (l Location) validateDirectory() error {
 	}
 
 	return nil
+}
+
+// CheckRepository returns an error that wraps ErrInvalid for a repository of a
+// code location that is neither a path, such as acme/infra, nor an https URL
+// (the scheme in lower case) with a host and no user name, password, query or
+// fragment. A path holds no ':' and no '@', so that it is not a URL of another
+// scheme or an scp-like address with a user name. The credentials that fetch
+// the code come from the credential helper of the runner pool, never from the
+// repository, so a job record and its answers never hold them. The error never
+// holds the repository.
+func CheckRepository(r string) error {
+	if !strings.Contains(r, "://") {
+		if strings.ContainsAny(r, ":@") {
+			return fmt.Errorf("%w: the repository of the code location is a path such as acme/infra or an https "+
+				"URL, and a path cannot hold ':' or '@'", ErrInvalid)
+		}
+
+		return nil
+	}
+
+	return checkRepositoryURL(r)
+}
+
+// checkRepositoryURL checks a repository that is a URL. See CheckRepository.
+func checkRepositoryURL(r string) error {
+	u, err := url.Parse(r)
+
+	switch {
+	case err != nil || u == nil || !strings.HasPrefix(r, "https://") || u.Host == "" || u.Opaque != "":
+		return fmt.Errorf("%w: the repository URL of the code location must be an https URL with a host",
+			ErrInvalid)
+	case u.User != nil:
+		return fmt.Errorf("%w: the repository URL of the code location cannot hold a user name or a password: "+
+			"the credential helper of the runner pool gives the credentials", ErrInvalid)
+	case u.RawQuery != "" || u.ForceQuery || strings.Contains(r, "#"):
+		return fmt.Errorf("%w: the repository URL of the code location cannot have a query or a fragment",
+			ErrInvalid)
+	default:
+		return nil
+	}
 }
 
 // checkLocationField checks one text field of a location. A required field

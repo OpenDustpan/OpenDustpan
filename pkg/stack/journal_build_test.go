@@ -501,7 +501,7 @@ func (f *buildFixture) startJournaled(t *testing.T) stack.Started {
 func (f *buildFixture) replay(t *testing.T) []byte {
 	t.Helper()
 
-	combined := journalBatch(beginEntry(1, 1), successEntry(2, 1, newResource))
+	batches := [][]byte{journalBatch(beginEntry(1, 1)), journalBatch(successEntry(2, 1, newResource))}
 
 	open := func(context.Context) (io.ReadCloser, error) {
 		return io.NopCloser(bytes.NewReader(f.base)), nil
@@ -510,7 +510,7 @@ func (f *buildFixture) replay(t *testing.T) []byte {
 	var out bytes.Buffer
 
 	replayer := pulumijournal.NewReplayer(f.clock.Now, "")
-	replayErr := replayer.Replay(t.Context(), open, bytes.NewReader(combined), &out)
+	replayErr := replayer.Replay(t.Context(), open, batches, &out)
 	if replayErr != nil {
 		t.Fatalf("replay: %v", replayErr)
 	}
@@ -694,7 +694,7 @@ func TestJournalBuildDeletesBlobs(t *testing.T) {
 type failReplayer struct{ err error }
 
 func (f failReplayer) Replay(
-	_ context.Context, _ func(context.Context) (io.ReadCloser, error), _ io.Reader, _ io.Writer,
+	_ context.Context, _ func(context.Context) (io.ReadCloser, error), _ [][]byte, _ io.Writer,
 ) error {
 	return f.err
 }
