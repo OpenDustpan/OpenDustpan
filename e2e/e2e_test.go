@@ -11696,7 +11696,8 @@ func openServerSQLite(t *testing.T, path string) *sql.DB {
 }
 
 // readServerSQLiteRows returns every schema_migrations row ordered by
-// version. The caller stops the server first.
+// version. The caller stops the server first, except in the before-baseline
+// and fresh cases of the upgrade check, where the server runs during the read.
 func readServerSQLiteRows(ctx context.Context, t *testing.T, path string) []serverMigrationRow {
 	t.Helper()
 
@@ -11739,7 +11740,8 @@ func readServerSQLiteRows(ctx context.Context, t *testing.T, path string) []serv
 }
 
 // execServerSQLite runs one write on the SQLite file at path. The caller
-// stops the server first.
+// stops the server first, except in the before-baseline and fresh cases of
+// the upgrade check, where the server runs during the write.
 func execServerSQLite(ctx context.Context, t *testing.T, path, stmt string, args ...any) {
 	t.Helper()
 
@@ -11757,7 +11759,9 @@ func execServerSQLite(ctx context.Context, t *testing.T, path, stmt string, args
 }
 
 // snapshotServerSQLite returns the schema_migrations rows with the table
-// names of the SQLite file at path. The caller stops the server first.
+// names of the SQLite file at path. The caller stops the server first, except
+// in the before-baseline and fresh cases of the upgrade check, where the
+// server runs during the read.
 func snapshotServerSQLite(ctx context.Context, t *testing.T, path string) serverSchemaSnapshot {
 	t.Helper()
 
