@@ -202,7 +202,9 @@ The harness times each route in four states:
 
 The refused request gets the answer of a route that must not tell that the object exists.
 `refusedStatus` holds that status.
-The refused timing covers the coded error answer and the audit entry of a refusal.
+The refused timing covers the coded 404 answer only.
+The server writes an audit entry only for the first refusal of a principal, action and scope in a window.
+The timed requests therefore write no audit entry.
 
 | Field | Meaning |
 | --- | --- |
