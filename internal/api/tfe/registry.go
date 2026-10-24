@@ -218,12 +218,18 @@ func resolveRegistryNamespace(_ http.ResponseWriter, r *http.Request) (identity.
 const registryMediaType = "application/json"
 
 // registryErrors is the error document of the registry protocol. The protocol
-// fixes only errors. ErrorCode and ErrorArgs hold the code of the catalog and
-// its arguments, with the names of the other tool-neutral answers.
+// fixes only errors, a list of strings. Code and Meta hold the code of the
+// catalog and its arguments, with the member names of the JSON:API errors of
+// the rest of the adapter.
 type registryErrors struct {
-	Errors    []string       `json:"errors"`
-	ErrorCode string         `json:"errorCode"`
-	ErrorArgs map[string]any `json:"errorArgs,omitempty"`
+	Errors []string           `json:"errors"`
+	Code   string             `json:"code"`
+	Meta   *registryErrorMeta `json:"meta,omitempty"`
+}
+
+// registryErrorMeta is the meta member of the registry error document.
+type registryErrorMeta struct {
+	Args map[string]any `json:"args"`
 }
 
 // writeRegistryError answers in the form of the registry protocol, with the
@@ -251,7 +257,11 @@ func (h *Handler) writeRegistryAnswer(
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(status)
 
-	body := registryErrors{Errors: []string{text}, ErrorCode: answer.Code(), ErrorArgs: answer.Args()}
+	body := registryErrors{Errors: []string{text}, Code: answer.Code(), Meta: nil}
+	if args := answer.Args(); args != nil {
+		body.Meta = &registryErrorMeta{Args: args}
+	}
+
 	if err := json.NewEncoder(w).Encode(body); err != nil {
 		h.logger.WarnContext(ctx, "write response failed", slog.String("error", err.Error()))
 	}
