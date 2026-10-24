@@ -88,6 +88,12 @@ rule:
   because the owners or the holders of the approve action are not known when
   you save.
 
+The groups belong to the installation, not to the namespace. When you do not
+hold `server:read-principals`, a group that does not exist and a count above
+the members of the named groups give one answer: 422 with the code
+`gate.approvers-unmet`. The answer does not name the group or the number of
+people. Lower the count, or ask an administrator to check the groups.
+
 `GET` on the same path reads the default. It answers 404 when the namespace sets
 none. The answer has an `ETag` header with the version.
 

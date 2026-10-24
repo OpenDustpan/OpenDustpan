@@ -315,7 +315,7 @@ func (h *Handler) writeApprovalDefault(
 
 	stored, err := h.gates.PutApprovalDefault(ctx, d, prev, gateEntry(r, p))
 	if err != nil {
-		h.writeError(ctx, w, err)
+		h.writeError(ctx, w, h.approversAnswer(ctx, p, d.Approvers, err))
 
 		return
 	}
@@ -468,7 +468,7 @@ func (h *Handler) writeApprovalRule(
 
 	stored, err := h.gates.PutApprovalRule(ctx, rule, prev, gateEntry(r, p))
 	if err != nil {
-		h.writeError(ctx, w, err)
+		h.writeError(ctx, w, h.approversAnswer(ctx, p, rule.Approvers, err))
 
 		return
 	}
@@ -583,6 +583,8 @@ func classifyGateConfig(err error) (failure, bool) {
 		return fail(http.StatusConflict, "the stored version changed: read it again and retry"), true
 	case errors.Is(err, gate.ErrFinal):
 		return fail(http.StatusConflict, err.Error()), true
+	case errors.Is(err, errApproversUnmet):
+		return failCoded(http.StatusUnprocessableEntity, errApproversUnmet.Error(), errcode.GateApproversUnmet), true
 	case errors.Is(err, gate.ErrApprovers):
 		return classifyApprovers(err)
 	case errors.Is(err, gate.ErrInvalid), errors.Is(err, gate.ErrLimit):
@@ -592,6 +594,36 @@ func classifyGateConfig(err error) (failure, bool) {
 	default:
 		return fail(0, ""), false
 	}
+}
+
+// errApproversUnmet is the answer to a caller who may not read the principals
+// when no one can meet an approver list because of a group or the count. It
+// names no group and no number of people.
+var errApproversUnmet = errors.New(
+	"no one can meet the approvers and the count: lower the count, or ask an administrator to check the groups",
+)
+
+// approversAnswer returns the error that the caller p gets for err, the error
+// of a write of the approver list a. A caller who holds server:read-principals
+// gets err. For any other caller, a group that does not exist, and a count
+// above the people who can approve when a names a group, give
+// errApproversUnmet, so that a role of a namespace cannot learn which groups of
+// the installation exist or how many members they have. A failed check gives
+// errApproversUnmet too. A count above the users that a names tells nothing
+// that the caller did not send, so it passes unchanged.
+func (h *Handler) approversAnswer(ctx context.Context, p identity.Principal, a gate.Approvers, err error) error {
+	reason := approvers(err).Reason
+
+	hide := reason == gate.ApproversGroupMissing || (reason == gate.ApproversCountAbove && len(a.Groups) > 0)
+	if !hide {
+		return err
+	}
+
+	if h.authz.Authorize(ctx, p, identity.ActionServerReadPrincipals, identity.ServerObject()) == nil {
+		return err
+	}
+
+	return errApproversUnmet
 }
 
 // approvers returns the *gate.ApproversError in the chain of err, or an
