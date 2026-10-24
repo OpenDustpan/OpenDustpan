@@ -9,6 +9,8 @@ const (
 	GateApproversGroupInvalid = "gate.approvers-group-invalid"
 	// GateApproversGroupMissing means that an approver group does not exist.
 	GateApproversGroupMissing = "gate.approvers-group-missing"
+	// GateApproversUnmet means that no one can meet the approver list, and the caller may not read the principals.
+	GateApproversUnmet = "gate.approvers-unmet"
 	// GateApproversUserInvalid means that an approver user name is not a valid name.
 	GateApproversUserInvalid = "gate.approvers-user-invalid"
 	// GateDenied means that a gate refused the request.
@@ -28,6 +30,11 @@ func gateSpecs() []Spec {
 		},
 		{Code: GateApproversGroupInvalid, Meaning: "an approver group name is not a valid group name", Args: nil},
 		{Code: GateApproversGroupMissing, Meaning: "an approver group does not exist", Args: nil},
+		{
+			Code:    GateApproversUnmet,
+			Meaning: "no one can meet the approver list, and the caller may not read the principals",
+			Args:    nil,
+		},
 		{Code: GateApproversUserInvalid, Meaning: "an approver user name is not a valid name", Args: nil},
 		{Code: GateDenied, Meaning: "a gate refused the request", Args: nil},
 		{Code: GateLimited, Meaning: "an access limit forbids the request", Args: nil},
