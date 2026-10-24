@@ -77,7 +77,22 @@ func (s *OutputStates) Outputs(
 		return nil, fmt.Errorf("read the current state of %q: %w", u, err)
 	case sv.ID.String() != stateID:
 		return nil, fmt.Errorf("%w: workspace %q", outputshare.ErrStateMoved, u)
-	case len(sv.Outputs) == 0:
+	}
+
+	// Defense in depth: the reader of the outputs route refuses a state that
+	// the client encrypted before it calls this port. This check stays so that
+	// a new caller never answers an empty list for such a state, which would
+	// read as a state with no output.
+	encrypted, err := s.svc.StateClientEncrypted(ctx, sv.ID)
+	if err != nil {
+		return nil, fmt.Errorf("read the state marker of %q: %w", u, err)
+	}
+
+	if encrypted {
+		return nil, fmt.Errorf("%w: workspace %q", outputshare.ErrClientEncrypted, u)
+	}
+
+	if len(sv.Outputs) == 0 {
 		return []outputshare.Output{}, nil
 	}
 
