@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/internal/sessionauth"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -44,7 +45,7 @@ var errNoFreshnessCheck = errors.New("a token change from a console session has 
 // authentication when the request has no console session. An access token
 // never gives a fresh authentication.
 var errFreshStepRequired = &codedError{
-	status: http.StatusForbidden, code: freshStepRequiredCode, args: nil,
+	status: http.StatusForbidden, code: errcode.MFAFreshStepRequired, args: nil,
 	message: sessionauth.FreshStepRequiredMessage,
 }
 

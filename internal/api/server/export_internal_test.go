@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"net/http"
 
+	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/pkg/identity"
 )
 
@@ -80,4 +81,11 @@ func ServeEmptyForTest(w http.ResponseWriter, r *http.Request) {
 func DevCodeSignInForTest(h *Handler, w http.ResponseWriter, r *http.Request) {
 	//nolint:exhaustruct_v5 // The handler ignores the caller and the object.
 	h.devCodeSignIn(w, r, identity.Principal{}, identity.Object{})
+}
+
+// CodedErrorForTest returns a coded error with status, code, message and
+// values, so a test can give the answer a code or arguments that the catalog
+// refuses.
+func CodedErrorForTest(status int, code, message string, values ...errcode.Value) error {
+	return &codedError{status: status, code: code, message: message, args: values}
 }
