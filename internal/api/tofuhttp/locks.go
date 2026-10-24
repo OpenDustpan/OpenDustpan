@@ -202,7 +202,7 @@ func (h *Handler) lockWorkspace(w http.ResponseWriter, r *http.Request, c call) 
 		return h.ws.AdmitFirstLock(ctx, c.ref, req)
 	})
 	if err != nil {
-		h.writeLockError(ctx, w, err)
+		h.writeFirstRefusal(ctx, w, err, h.writeLockError)
 
 		return
 	}
@@ -238,6 +238,24 @@ func (h *Handler) writeLockError(ctx context.Context, w http.ResponseWriter, err
 	h.logger.WarnContext(ctx, "write fenced", slog.String("error", err.Error()))
 	bodygate.SetRetryAfterJitter(w)
 	http.Error(w, namespace.ErrFenced.Error(), http.StatusServiceUnavailable)
+}
+
+// writeFirstRefusal answers a first LOCK or POST that workspaceOf refused. A
+// manual lock of the namespace refuses it before the workspace exists, in the
+// admit check or in the create. That refusal answers 423 with the lock info of
+// the manual lock, as for a workspace that exists, because the backend reads
+// the body of a 423 as lock info. Any other error answers with fallback.
+func (h *Handler) writeFirstRefusal(
+	ctx context.Context, w http.ResponseWriter, err error,
+	fallback func(ctx context.Context, w http.ResponseWriter, err error),
+) {
+	if manual, ok := errors.AsType[*manuallock.LockedError](err); ok && manual != nil {
+		h.writeManualLocked(w, manual)
+
+		return
+	}
+
+	fallback(ctx, w, err)
 }
 
 // writeHeld answers a refused LOCK with the lock that holds the workspace now.
