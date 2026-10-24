@@ -241,19 +241,27 @@ func TestDecodeBody(t *testing.T) {
 			}
 
 			if err != nil {
-				rec := httptest.NewRecorder()
-				problem.Writer{Logger: slog.New(slog.DiscardHandler), Classify: nil}.Write(t.Context(), rec, err)
-
-				var answer problem.Body
-				if decodeErr := json.Unmarshal(rec.Body.Bytes(), &answer); decodeErr != nil {
-					t.Fatalf("decode %q: %v", rec.Body, decodeErr)
-				}
-
-				if rec.Code != http.StatusBadRequest || answer.ErrorCode != errcode.RequestBodyInvalid {
-					t.Fatalf("answer %d %+v, want 400 %s", rec.Code, answer, errcode.RequestBodyInvalid)
-				}
+				checkBadBodyCode(t, err)
 			}
 		})
+	}
+}
+
+// checkBadBodyCode checks that err answers 400 with the code of the catalog
+// for a body that is not valid.
+func checkBadBodyCode(t *testing.T, err error) {
+	t.Helper()
+
+	rec := httptest.NewRecorder()
+	problem.Writer{Logger: slog.New(slog.DiscardHandler), Classify: nil}.Write(t.Context(), rec, err)
+
+	var answer problem.Body
+	if decodeErr := json.Unmarshal(rec.Body.Bytes(), &answer); decodeErr != nil {
+		t.Fatalf("decode %q: %v", rec.Body, decodeErr)
+	}
+
+	if rec.Code != http.StatusBadRequest || answer.ErrorCode != errcode.RequestBodyInvalid {
+		t.Fatalf("answer %d %+v, want 400 %s", rec.Code, answer, errcode.RequestBodyInvalid)
 	}
 }
 
