@@ -27,13 +27,14 @@ func TestUpdateErrorsCarryACode(t *testing.T) {
 			Holder: "prn-alice",
 			Reason: "release freeze",
 		},
+		Unit: collection.UnitRef{Namespace: "acme", Tool: "pulumi", Name: "web/dev"},
 		Noun: "stack",
 		Name: "acme/web/dev",
 	}
 
 	lockArgs := map[string]any{
-		"holder": "prn-alice", "since": "2026-10-23T09:30:00Z", "target": "pulumi:acme/web/dev",
-		"targetKind": "unit", "unit": "acme/web/dev",
+		"holder": "prn-alice", "since": "2026-10-23T09:30:00Z", "lockedKind": "stack", "locked": "acme/web/dev",
+		"refusedKind": "stack", "refused": "acme/web/dev",
 	}
 
 	checkErrorAnswers(t, []errorAnswer{

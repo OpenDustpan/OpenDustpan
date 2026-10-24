@@ -759,7 +759,12 @@ func (m *memDB) checkManualLock(j *job.Job) error {
 			return fmt.Errorf(
 				"%w: %w",
 				job.ErrLocked,
-				&manuallock.LockedError{Lock: l, Noun: "unit", Name: unit.String()},
+				&manuallock.LockedError{
+					Lock: l,
+					Unit: collection.UnitRef{Namespace: unit.Namespace(), Tool: unit.Tool(), Name: unit.UnitName()},
+					Noun: "unit",
+					Name: unit.String(),
+				},
 			)
 		}
 	}

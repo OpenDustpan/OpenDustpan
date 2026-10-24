@@ -27,19 +27,30 @@ func TestLockRefusedByAManualLock(t *testing.T) {
 		Reason: "change window closed",
 	}
 
-	refusal := &manuallock.LockedError{Lock: held, Noun: "workspace", Name: "acme/web"}
+	refusal := &manuallock.LockedError{
+		Lock: held,
+		Unit: collection.UnitRef{Namespace: "acme", Tool: "opentofu", Name: "web"},
+		Noun: "workspace",
+		Name: "acme/web",
+	}
 	manual := fmt.Errorf("%w: %w", workspace.ErrLocked, refusal)
 
 	heldUnit := held
 	heldUnit.Target = manuallock.UnitTarget(collection.UnitRef{Namespace: "acme", Tool: "opentofu", Name: "web"})
 	manualUnit := fmt.Errorf("%w: %w", workspace.ErrLocked, &manuallock.LockedError{
-		Lock: heldUnit, Noun: "workspace", Name: "acme/web",
+		Lock: heldUnit,
+		Unit: collection.UnitRef{Namespace: "acme", Tool: "opentofu", Name: "web"},
+		Noun: "workspace",
+		Name: "acme/web",
 	})
 
 	heldNamespace := held
 	heldNamespace.Target = manuallock.NamespaceTarget("acme")
 	manualNamespace := fmt.Errorf("%w: %w", workspace.ErrLocked, &manuallock.LockedError{
-		Lock: heldNamespace, Noun: "workspace", Name: "acme/web",
+		Lock: heldNamespace,
+		Unit: collection.UnitRef{Namespace: "acme", Tool: "opentofu", Name: "web"},
+		Noun: "workspace",
+		Name: "acme/web",
 	})
 
 	cases := []struct {
@@ -198,7 +209,10 @@ func TestStateWriteRefusedByAManualLock(t *testing.T) {
 		Reason: "change window closed",
 	}
 	refusal := fmt.Errorf("%w: %w", workspace.ErrLocked, &manuallock.LockedError{
-		Lock: held, Noun: "workspace", Name: "acme/web",
+		Lock: held,
+		Unit: collection.UnitRef{Namespace: "acme", Tool: "opentofu", Name: "web"},
+		Noun: "workspace",
+		Name: "acme/web",
 	})
 
 	for _, tc := range []struct {
@@ -246,7 +260,8 @@ func TestFirstRequestRefusedByANamespaceLock(t *testing.T) {
 		Reason: "change window closed",
 	}
 	refusal := fmt.Errorf("%w: %w", workspace.ErrLocked, &manuallock.LockedError{
-		Lock: held, Noun: "workspace", Name: "acme/web",
+		Lock: held, Unit: collection.UnitRef{Namespace: "acme", Tool: "opentofu", Name: "web"},
+		Noun: "workspace", Name: "acme/web",
 	})
 
 	cases := []struct {

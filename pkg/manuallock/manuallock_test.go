@@ -562,7 +562,9 @@ func TestLockedErrorNamesTheHolderAndTheReason(t *testing.T) {
 			t.Parallel()
 
 			l := manuallock.Lock{Since: fixedNow(), Target: tc.target, Holder: "alice", Reason: "change window closed"}
-			locked := &manuallock.LockedError{Lock: l, Noun: tc.noun, Name: tc.object}
+			locked := &manuallock.LockedError{
+				Lock: l, Unit: collection.UnitRef{Namespace: "", Tool: "", Name: ""}, Noun: tc.noun, Name: tc.object,
+			}
 			err := error(locked)
 
 			if locked.Refusal() != tc.want {
@@ -812,7 +814,10 @@ func TestLockedTextHasNoTerminalControls(t *testing.T) {
 			t.Parallel()
 
 			l := manuallock.Lock{Since: fixedNow(), Target: tc.target, Holder: hostile, Reason: hostile}
-			locked := &manuallock.LockedError{Lock: l, Noun: "stack" + hostile, Name: "acme/web" + hostile}
+			locked := &manuallock.LockedError{
+				Lock: l, Unit: collection.UnitRef{Namespace: "", Tool: "", Name: ""},
+				Noun: "stack" + hostile, Name: "acme/web" + hostile,
+			}
 
 			checkNoHiddenText(t, "Detail", l.Detail())
 			checkNoHiddenText(t, "LockedError", locked.Error())
