@@ -556,7 +556,7 @@ func deniedEntry(
 		ValueCount:    nil,
 		Changes:       nil,
 		SourceIP:      clientip.String(req),
-		UserAgent:     Clean(truncateUserAgent(userAgent), audit.MaxUserAgentLen),
+		UserAgent:     Clean(audit.TruncateUserAgent(userAgent), audit.MaxUserAgentLen),
 		Channel:       audit.NormalizeChannel(channel),
 		Kind:          kindOf(action),
 		Outcome:       audit.OutcomeDenied,
@@ -599,18 +599,4 @@ func principalKind(k identity.Kind) string {
 	}
 
 	return ""
-}
-
-// truncateUserAgent cuts s to audit.MaxUserAgentLen bytes, at a rune boundary.
-func truncateUserAgent(s string) string {
-	if len(s) <= audit.MaxUserAgentLen {
-		return s
-	}
-
-	cut := audit.MaxUserAgentLen
-	for cut > 0 && s[cut]&0xC0 == 0x80 {
-		cut--
-	}
-
-	return s[:cut]
 }

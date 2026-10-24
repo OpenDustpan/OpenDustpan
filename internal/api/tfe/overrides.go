@@ -141,7 +141,7 @@ func (h *Handler) appendOverrideAudit(
 		ValueCount:    nil,
 		Changes:       nil,
 		SourceIP:      clientip.String(r),
-		UserAgent:     truncateUserAgent(r.UserAgent()),
+		UserAgent:     audit.TruncateUserAgent(r.UserAgent()),
 		Channel:       audit.NormalizeChannel(r.Header.Get(channelHeader)),
 		Kind:          audit.KindOverride,
 		Outcome:       audit.OutcomeSuccess,

@@ -296,24 +296,3 @@ func (h *Handler) writeJSON(ctx context.Context, w http.ResponseWriter, status i
 		h.logger.WarnContext(ctx, "write response failed", slog.String("error", err.Error()))
 	}
 }
-
-// truncateUserAgent caps s at audit.MaxUserAgentLen bytes, at a rune
-// boundary.
-func truncateUserAgent(s string) string {
-	if len(s) <= audit.MaxUserAgentLen {
-		return s
-	}
-
-	cut := audit.MaxUserAgentLen
-	for cut > 0 && !runeStart(s[cut]) {
-		cut--
-	}
-
-	return s[:cut]
-}
-
-func runeStart(b byte) bool {
-	const continuationMask, continuationBits = 0xC0, 0x80
-
-	return b&continuationMask != continuationBits
-}

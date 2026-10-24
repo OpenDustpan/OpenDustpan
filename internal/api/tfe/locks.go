@@ -288,7 +288,7 @@ func forceUnlockEntry(r *http.Request, p identity.Principal, obj identity.Object
 		ValueCount:    nil,
 		Changes:       nil,
 		SourceIP:      clientip.String(r),
-		UserAgent:     truncateUserAgent(r.UserAgent()),
+		UserAgent:     audit.TruncateUserAgent(r.UserAgent()),
 		Channel:       audit.NormalizeChannel(r.Header.Get(channelHeader)),
 		Kind:          audit.KindChange,
 		Outcome:       audit.OutcomeSuccess,
