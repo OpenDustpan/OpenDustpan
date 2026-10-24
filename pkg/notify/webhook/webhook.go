@@ -23,9 +23,9 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/egress/egresshttp"
+	"opendustpan.org/opendustpan/internal/notify/post"
 	"opendustpan.org/opendustpan/pkg/egress"
 	"opendustpan.org/opendustpan/pkg/notify"
-	"opendustpan.org/opendustpan/pkg/notify/internal/post"
 )
 
 // contentType is the media type of the body.
