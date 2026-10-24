@@ -1,2 +1,3 @@
 request.idempotency-key-lost
+request.if-match-invalid
 request.invalid-object
