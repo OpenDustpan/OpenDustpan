@@ -547,7 +547,9 @@ type restoreOutcome struct {
 // sanitizeRestoreError maps a restore failure to the stable text stored in
 // the row and returned by GET and List. Stored text never holds driver detail,
 // a capability path, a token, a scope string, or a key fingerprint: only the
-// sentinel decides the message. The server log keeps the full error.
+// sentinel decides the message. A backup object that is missing adds its key
+// in the backup, as the backup check shows it, so that the operator knows
+// which object to look for. The server log keeps the full error.
 func sanitizeRestoreError(err error) string {
 	if text, ok := secretRestoreMessage(err); ok {
 		return text
@@ -563,6 +565,10 @@ func sanitizeRestoreError(err error) string {
 
 	if errors.Is(err, ErrDevBackupRefused) {
 		return refusalSentence(reasonDevSwap, "")
+	}
+
+	if text, ok := missingObjectText(err); ok {
+		return text
 	}
 
 	for _, sentinel := range storedRestoreSentinels {
