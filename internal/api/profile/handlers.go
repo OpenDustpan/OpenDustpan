@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -16,6 +15,7 @@ import (
 	"opendustpan.org/opendustpan/internal/api/apidesc"
 	"opendustpan.org/opendustpan/internal/api/idempotent"
 	"opendustpan.org/opendustpan/internal/api/problem"
+	"opendustpan.org/opendustpan/internal/api/routekit"
 	"opendustpan.org/opendustpan/internal/clientip"
 	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/internal/pagetoken"
@@ -133,27 +133,6 @@ func actorOf(r *http.Request, p identity.Principal) *profile.Actor {
 	return &profile.Actor{Principal: p, By: by}
 }
 
-// readBody decodes one JSON object into v. It refuses an unknown field, a
-// second value and a body over the limit.
-func readBody(w http.ResponseWriter, r *http.Request, v any) error {
-	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxBodyBytes))
-	if err != nil {
-		return problem.BadRequest(errcode.RequestBodyInvalid, "the request body is not readable or is over 1 MiB")
-	}
-
-	dec := json.NewDecoder(bytes.NewReader(body))
-	dec.DisallowUnknownFields()
-
-	if err = dec.Decode(v); err != nil || dec.More() {
-		return problem.BadRequest(
-			errcode.RequestBodyInvalid,
-			"the request body must be one JSON object with known fields",
-		)
-	}
-
-	return nil
-}
-
 // targetOf reads the profile of the path in the namespace of obj. A name of
 // two segments is one escaped segment (payments%2Faws-prod).
 func targetOf(r *http.Request, obj identity.Object) (profile.Target, error) {
@@ -176,7 +155,7 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request, p identity.Prin
 	ctx := r.Context()
 
 	var body createBody
-	if err := readBody(w, r, &body); err != nil {
+	if err := routekit.DecodeBody(w, r, maxBodyBytes, &body); err != nil {
 		h.writeError(ctx, w, err)
 
 		return
@@ -581,7 +560,7 @@ func (h *Handler) save(w http.ResponseWriter, r *http.Request, p identity.Princi
 	ctx := r.Context()
 
 	var body saveBody
-	if err := readBody(w, r, &body); err != nil {
+	if err := routekit.DecodeBody(w, r, maxBodyBytes, &body); err != nil {
 		h.writeError(ctx, w, err)
 
 		return
