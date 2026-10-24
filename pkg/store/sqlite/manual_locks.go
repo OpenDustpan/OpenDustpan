@@ -449,8 +449,9 @@ func (s *Store) deleteHeldLock(
 // request passes when passFrom, the start of the phase of its job, is not zero
 // and is before the start of the lock: the phase of a job runs to its end.
 //
-// Defense in depth: the workspace service checks the same lock before it calls
-// the store. This check does not rely on that one.
+// Defense in depth: workspace.Service.Create checks the same lock before it
+// calls the store. This check does not rely on that one, and it also refuses
+// a lock that commits between that check and the create.
 func refuseUnderNamespaceLock(ctx context.Context, q *db.Queries, ref workspace.Ref, passFrom time.Time) error {
 	target := manuallock.NamespaceTarget(ref.Namespace)
 

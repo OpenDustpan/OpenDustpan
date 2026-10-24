@@ -145,7 +145,9 @@ func TestAdmitFirstLockAppliesTheJobPhase(t *testing.T) {
 // TestCreatePassesTheJobPhaseToTheStore proves that Create hands the start of
 // the phase of the job to the store, so the store applies the rule of the
 // manual lock in the transaction of the create. A request with no job, and a
-// job with no known phase, hand over the zero time, which passes no lock.
+// job with no known phase, hand over the zero time, which passes no lock. The
+// lock of a collection does not cover a workspace that does not exist yet, so
+// the service lets each create reach the store.
 func TestCreatePassesTheJobPhaseToTheStore(t *testing.T) {
 	t.Parallel()
 
@@ -166,7 +168,7 @@ func TestCreatePassesTheJobPhaseToTheStore(t *testing.T) {
 			t.Parallel()
 
 			f := newFixture(t)
-			locks := answering(heldNamespaceLock())
+			locks := answering(heldCollectionLock())
 			locks.phases = map[string]time.Time{"job-1": lockAt.Add(-time.Hour)}
 			svc := withManualLocks(t, f, locks)
 
