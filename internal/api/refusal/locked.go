@@ -12,7 +12,8 @@ import (
 // the error. The target is the bare name of the object (the namespace name,
 // the collection reference or the unit reference), and targetKind says which
 // of the three it is. It never reads the reason of the lock: a person wrote it, and an argument
-// holds no free text.
+// holds no free text. When the catalog refuses the answer, it returns the
+// answer of an internal failure with the error, never an answer with no code.
 func Locked(e *manuallock.LockedError) (errcode.Answer, error) {
 	a, err := errcode.New(errcode.LockLocked,
 		errcode.Identifier("holder", e.Lock.Holder),
@@ -22,7 +23,7 @@ func Locked(e *manuallock.LockedError) (errcode.Answer, error) {
 		errcode.Identifier("unit", e.Name),
 	)
 	if err != nil {
-		return errcode.Answer{}, fmt.Errorf("answer for a manual lock: %w", err)
+		return errcode.Internal(), fmt.Errorf("answer for a manual lock: %w", err)
 	}
 
 	return a, nil
