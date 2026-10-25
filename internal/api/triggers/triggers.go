@@ -310,7 +310,7 @@ func classifyLocked(manual *manuallock.LockedError) errorResponse {
 		return internal()
 	}
 
-	return coded(http.StatusConflict, a, refusal.Clean(manual.Error(), maxMessageBytes))
+	return coded(http.StatusConflict, a, refusal.Clean(refusal.LockedText(manual), maxMessageBytes))
 }
 
 // classifyJob maps the refusals of the job service to a manual fire.
