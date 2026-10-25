@@ -151,6 +151,11 @@ persons and services.
   the expiry of a temporary administrator are not refused: they are policy, and
   the host command in the host recovery guide makes a new administrator.
 
+The audit entry of each token or account that the inactivity disable turns
+off names the rule and the period of the token policy, for example "access
+token not used for at least 90 days (token policy: inactivity)". A reason that
+a caller gives for a manual sweep is kept.
+
 ## Pulumi secrets
 
 The Pulumi CLI sends each secret config value to the server to encrypt and
