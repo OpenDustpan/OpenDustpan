@@ -50,11 +50,17 @@ func newDeletedSweeper(
 		return nil, fmt.Errorf("inventory reader keeps no blob purge records: %w", ErrMissingOption)
 	}
 
+	lock, ok := cfg.inventoryReader.(inventory.SweepLocker)
+	if !ok {
+		return nil, fmt.Errorf("inventory reader keeps no sweep lock: %w", ErrMissingOption)
+	}
+
 	stacks, workspaces := unitLifecycles(svc, cfg)
 
 	sweeper, err := inventory.NewSweeper(inventory.SweeperConfig{
 		Expired:    expired,
 		BlobPurges: records,
+		Lock:       lock,
 		Tools:      map[string]inventory.SweepTool{pulumiTool: stacks, opentofuTool: workspaces},
 		Logger:     cfg.logger,
 		Now:        cfg.now,
