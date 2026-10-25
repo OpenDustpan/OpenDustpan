@@ -30,6 +30,7 @@ later, OpenSSL, and the Pulumi CLI or OpenTofu.
 go build -o bin/opendustpan ./cmd/opendustpan
 export DUSTPAN_ADMIN_TOKEN=$(openssl rand -hex 32)
 export DUSTPAN_KEY_ENCRYPTION_KEY=$(openssl rand -base64 32)
+export DUSTPAN_DATABASE=sqlite:dustpan.db
 ```
 
 The administrator signs in with the admin token. The key-encryption key
@@ -37,16 +38,14 @@ protects secret values and OpenTofu state. Keep both values outside the server's
 The server keeps its data in `./dustpan.db` and `./blobs`, and listens on
 `:8080`.
 
-Without `DUSTPAN_KEY_ENCRYPTION_KEY`, the server uses a key file. The default
-file is `dustpan.key` next to the database. On a terminal, `serve` asks for an
-explicit yes before it makes the file. Without a terminal, set
-`--generate-key-encryption-key`
-(`DUSTPAN_GENERATE_KEY_ENCRYPTION_KEY=true`) to make the file with no prompt.
-The server never makes a key silently. An operator who loses the key file
-loses every secret and every OpenTofu state that the key encrypts, and nobody can recover them. The
-default key file is in the data directory, so for production set
-`--key-encryption-key-file` to a path outside it, or set
-`DUSTPAN_KEY_ENCRYPTION_KEY`.
+`serve` needs a key-encryption key and a database that you set. It has no
+default for either, and it makes no key. Without a key, or without a
+database, it stops before it opens the database. To use a key file instead
+of `DUSTPAN_KEY_ENCRYPTION_KEY`, set `--key-encryption-key-file`
+(`DUSTPAN_KEY_ENCRYPTION_KEY_FILE`). A key file in the directory of the
+database gives a warning at each start, because a backup of the data holds
+that key too. An operator who loses the key loses every secret and every
+OpenTofu state that the key encrypts, and nobody can recover them.
 
 ### Pulumi CLI
 

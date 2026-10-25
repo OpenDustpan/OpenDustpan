@@ -504,16 +504,15 @@ func startWithoutKeyOnEmptyDatabase(t *testing.T) {
 	dbPath := filepath.Join(dir, "dustpan.db")
 
 	err := serve(t.Context(), []string{"--database", "sqlite:" + dbPath}, io.Discard)
-	if err == nil || !errors.Is(err, errKeyGenerateRequired) {
-		t.Fatalf("serve without a key on an empty database: err = %v, want errKeyGenerateRequired", err)
+	if err == nil || !errors.Is(err, errNoKey) {
+		t.Fatalf("serve without a key on an empty database: err = %v, want errNoKey", err)
 	}
 
 	for _, want := range []string{
-		"--generate-key-encryption-key",
-		"DUSTPAN_GENERATE_KEY_ENCRYPTION_KEY",
 		"--key-encryption-key-file",
 		"DUSTPAN_KEY_ENCRYPTION_KEY_FILE",
 		keyEnvVar,
+		"opendustpan key generate --out",
 	} {
 		if !strings.Contains(err.Error(), want) {
 			t.Fatalf("serve without a key: err = %v, want it to name %s", err, want)
@@ -521,7 +520,7 @@ func startWithoutKeyOnEmptyDatabase(t *testing.T) {
 	}
 
 	if _, statErr := os.Stat(filepath.Join(dir, "dustpan.key")); !os.IsNotExist(statErr) {
-		t.Fatal("serve without a key made the key file, want no file without the prompt or the opt-in")
+		t.Fatal("serve without a key made a key file, want no file")
 	}
 
 	if _, statErr := os.Stat(dbPath); !os.IsNotExist(statErr) {

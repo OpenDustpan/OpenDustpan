@@ -123,9 +123,9 @@ var Settings = []*Setting{
 		referenceNone,
 	),
 	stringSetting(
-		"database", "DUSTPAN_DATABASE", "sqlite:dustpan.db",
-		"sqlite:<path> or postgres://... (DUSTPAN_DATABASE)",
-		"`sqlite:dustpan.db` (or `postgres://...` for PostgreSQL 18 or later)",
+		"database", "DUSTPAN_DATABASE", "",
+		"sqlite:<path> or postgres://..., required (DUSTPAN_DATABASE)",
+		"(none: `serve` stops without it). `sqlite:<path>` or `postgres://...` for PostgreSQL 18 or later",
 	).WithFile("database").WithSensitive().WithNoPasswordInFile(),
 	stringSetting(
 		"region", "DUSTPAN_REGION", "local",
@@ -255,20 +255,13 @@ var Settings = []*Setting{
 	).WithFile("backup-target").WithURL(),
 	stringSetting(
 		"key-encryption-key-file", "DUSTPAN_KEY_ENCRYPTION_KEY_FILE", "",
-		"file holding the base64 key-encryption key, default dustpan.key"+
-			" next to the database (DUSTPAN_KEY_ENCRYPTION_KEY_FILE). An operator who loses the key file "+
+		"file holding the base64 key-encryption key, required without DUSTPAN_KEY_ENCRYPTION_KEY"+
+			" (DUSTPAN_KEY_ENCRYPTION_KEY_FILE). To make a key file, run: opendustpan key generate --out <path>. "+
+			"An operator who loses the key file "+
 			"loses every secret that the key encrypts, and nobody can recover them",
-		"`dustpan.key` next to the SQLite file, or `./dustpan.key` for PostgreSQL",
+		"(none: `serve` stops without a key). Make a file with `opendustpan key generate --out <path>`",
 	).WithFile("key-encryption-key-file").
 		WithDoc("A file that holds that value. Only its owner can read it."),
-	boolSetting(
-		"generate-key-encryption-key", "DUSTPAN_GENERATE_KEY_ENCRYPTION_KEY",
-		"make the key file with no prompt when no key exists, never overwriting a file that exists "+
-			"(DUSTPAN_GENERATE_KEY_ENCRYPTION_KEY=true). A lost key file means lost secrets",
-		"(none: ask on a terminal, else refuse). Set `true` to make the key file with no prompt",
-	).WithFile("generate-key-encryption-key").
-		WithDoc("Set `true` to make the key file with no prompt when no key exists. " +
-			"The server never overwrites a file that exists."),
 	intSetting(
 		"max-checkpoint-bytes", "DUSTPAN_MAX_CHECKPOINT_BYTES", "0",
 		"largest checkpoint in bytes, 0 means the default (DUSTPAN_MAX_CHECKPOINT_BYTES)",

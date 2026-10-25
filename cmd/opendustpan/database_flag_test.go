@@ -29,7 +29,7 @@ func TestServeRefusesPasswordInDatabaseFlag(t *testing.T) {
 	t.Run("flag", func(t *testing.T) {
 		var logs lockedBuffer
 
-		err := serveWithIO(t.Context(), []string{"--database", url}, strings.NewReader(""), &logs, false)
+		err := serveWithIO(t.Context(), []string{"--database", url}, &logs, false)
 
 		requireFlagRefusal(t, err, logs.String(), password)
 	})
@@ -39,7 +39,7 @@ func TestServeRefusesPasswordInDatabaseFlag(t *testing.T) {
 
 		var logs lockedBuffer
 
-		err := serveWithIO(t.Context(), nil, strings.NewReader(""), &logs, false)
+		err := serveWithIO(t.Context(), nil, &logs, false)
 
 		requireLaterFailure(t, err, logs.String(), password)
 	})

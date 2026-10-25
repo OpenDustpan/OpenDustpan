@@ -47,8 +47,7 @@ func TestServeConfigFile(t *testing.T) {
   "database": "`+database+`",
   "region": "from-file",
   "listen": "127.0.0.1:1",
-  "log-format": "text",
-  "generate-key-encryption-key": true
+  "log-format": "text"
 }
 `)
 
@@ -252,7 +251,7 @@ func TestServeAdminTokenFileFromConfig(t *testing.T) {
 	}
 
 	database := "sqlite:" + filepath.Join(t.TempDir(), "dustpan.db")
-	config := writeConfig(t, `{"admin-token-file": "`+tokens+`", "generate-key-encryption-key": true}`)
+	config := writeConfig(t, `{"admin-token-file": "`+tokens+`"}`)
 
 	logs, err := startServerLogs(t, "--config", config, "--database", database, "--listen", "127.0.0.1:0")
 	if err != nil {
