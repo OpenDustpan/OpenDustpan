@@ -2,7 +2,8 @@
 // owns the error body, the classes of error that every tool-neutral API
 // shares (authentication, a fixed answer, the Idempotency-Key, the
 // namespace and maintenance), the headers of an error answer and the log
-// rules: a 500 logs its status only, and a fenced write logs its wrap.
+// rules: a 500 logs its status only, a fenced write logs its wrap, and a
+// refusal whose answer is not its error text logs that text at Debug.
 //
 // Every answer has a code of the catalog. The package writes no code of its
 // own text: a class names the constant of the catalog, and the writer makes
@@ -104,15 +105,24 @@ type Writer struct {
 	Classify Classifier
 }
 
-// Write answers err. A fenced write logs its wrap, which names the write.
-// Every error answer carries Cache-Control: no-store. WriteProblem holds the
-// rest.
+// Write answers err. A fenced write logs its wrap, which names the write. A
+// refusal whose answer is not the text of err logs that text at Debug, so the
+// log names the operation without the answer naming it. Every error answer
+// carries Cache-Control: no-store. WriteProblem holds the rest.
 func (wr Writer) Write(ctx context.Context, w http.ResponseWriter, err error) {
-	if errors.Is(err, namespace.ErrFenced) {
+	p := wr.Problem(err)
+
+	switch {
+	case errors.Is(err, namespace.ErrFenced):
 		wr.Logger.WarnContext(ctx, "write fenced", slog.String("error", err.Error()))
+	case p.Message != err.Error() && p.Status < http.StatusInternalServerError:
+		wr.Logger.DebugContext(ctx, "request refused",
+			slog.Int("status", p.Status), slog.String("code", p.Code), slog.String("error", err.Error()))
+	default:
+		// The answer holds the text of err, or the status is a 500: nothing to add.
 	}
 
-	wr.WriteProblem(ctx, w, wr.Problem(err))
+	wr.WriteProblem(ctx, w, p)
 }
 
 // WriteProblem writes the answer p, for a route that builds its own answer.
@@ -245,8 +255,12 @@ func credential(err error) (Problem, bool) {
 			"too many failed sign-ins from this address: try again later"), true
 	case errors.Is(err, identity.ErrUnauthenticated):
 		return answer(http.StatusUnauthorized, errcode.AuthUnauthenticated, "unauthenticated"), true
-	case errors.Is(err, sessionauth.ErrCSRF), errors.Is(err, sessionauth.ErrOtherSite):
-		return answer(http.StatusForbidden, errcode.Forbidden(err), err.Error()), true
+	// The answer is the text of the sentinel that matched. The wrap text names
+	// the operation, and the log holds it.
+	case errors.Is(err, sessionauth.ErrCSRF):
+		return answer(http.StatusForbidden, errcode.Forbidden(err), sessionauth.ErrCSRF.Error()), true
+	case errors.Is(err, sessionauth.ErrOtherSite):
+		return answer(http.StatusForbidden, errcode.Forbidden(err), sessionauth.ErrOtherSite.Error()), true
 	default:
 		return Pass()
 	}
