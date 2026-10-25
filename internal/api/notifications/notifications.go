@@ -124,7 +124,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // writeError answers err through the shared error module of the
 // tool-neutral APIs, with the classes of the sink service.
 func (h *Handler) writeError(ctx context.Context, w http.ResponseWriter, err error) {
-	problem.Writer{Logger: h.logger, Classify: sinkErrors}.Write(ctx, w, err)
+	problem.Writer{Logger: h.logger, KeepDenied: nil, Classify: sinkErrors}.Write(ctx, w, err)
 }
 
 // sinkErrors maps the errors of the sink service. The text of a sink error

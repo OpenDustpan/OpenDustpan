@@ -19,5 +19,5 @@ func fail(status int, message, code string, values ...errcode.Value) problem.Pro
 
 // writeFailure writes p in the error shape of the tool-neutral APIs.
 func (h *Handler) writeFailure(ctx context.Context, w http.ResponseWriter, p problem.Problem) {
-	problem.Writer{Logger: h.logger, Classify: nil}.WriteProblem(ctx, w, p)
+	problem.Writer{Logger: h.logger, KeepDenied: nil, Classify: nil}.WriteProblem(ctx, w, p)
 }

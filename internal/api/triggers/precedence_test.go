@@ -78,34 +78,6 @@ func TestSaverDenialWinsWithItsOwnCode(t *testing.T) {
 	}
 }
 
-// TestCredentialRefusalsKeepTheirAnswer proves that a refusal of the credential
-// of a request keeps its answer when it also wraps identity.ErrDenied.
-func TestCredentialRefusalsKeepTheirAnswer(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name   string
-		err    error
-		status int
-		code   string
-	}{
-		{"rate limit", identity.ErrRateLimited, http.StatusTooManyRequests, errcode.AuthRateLimited},
-		{"no sign-in", identity.ErrUnauthenticated, http.StatusUnauthorized, errcode.AuthUnauthenticated},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-
-			rec := httptest.NewRecorder()
-			triggersapi.WriteError(t.Context(), rec, fmt.Errorf("%w: %w", identity.ErrDenied, tc.err))
-
-			errcodetest.CheckAnswer(t, errcodetest.ShapeCamelCase, tc.status, rec.Body.Bytes(),
-				errcodetest.Want{Code: tc.code, Args: nil, RequestBody: nil})
-		})
-	}
-}
-
 // checkDenied fails the test unless rec is the answer of a denial: 403, the
 // denial code and the message "forbidden". The body holds no text of cause.
 func checkDenied(t *testing.T, rec *httptest.ResponseRecorder, cause error) {

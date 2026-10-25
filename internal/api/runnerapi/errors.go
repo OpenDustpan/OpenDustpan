@@ -53,7 +53,7 @@ func (h *Handler) writeError(ctx context.Context, w http.ResponseWriter, scope S
 
 // writeManagement answers err in the error shape of the management API.
 func (h *Handler) writeManagement(ctx context.Context, w http.ResponseWriter, err error) {
-	wr := problem.Writer{Logger: h.logger, Classify: classifyManagement}
+	wr := problem.Writer{Logger: h.logger, KeepDenied: nil, Classify: classifyManagement}
 
 	h.logRefused(ctx, err, wr.Problem(err).Message)
 	wr.Write(ctx, w, err)
@@ -188,15 +188,11 @@ func classifyProtocolOther(
 var errBadBody = errors.New("the body is not the JSON object of this path")
 
 // classifyManagement maps the errors of the runner domain to their answer in
-// the management API. The refusals of the credential run before it, and the
-// shared classes of problem.Shared run after it: an error of neither answers
-// 500 with server.internal.
+// the management API. The refusals of the credential and a denial are answered
+// before it, and the shared classes of problem.Shared run after it: an error of
+// none of them answers 500 with server.internal.
 func classifyManagement(err error) (problem.Problem, bool) {
 	switch {
-	// A denial wins over every refusal and conflict below, so a mixed error never
-	// tells the state of an object the caller has no right on.
-	case errors.Is(err, identity.ErrDenied):
-		return answer(http.StatusForbidden, errcode.Forbidden(err), "forbidden")
 	case errors.Is(err, errNotFound), errors.Is(err, runner.ErrNotFound), errors.Is(err, namespace.ErrNotFound):
 		return answer(http.StatusNotFound, errcode.RunnerNotFound, errNotFound.Error())
 	case errors.Is(err, runner.ErrInvalid):

@@ -438,7 +438,7 @@ func parsePage(r *http.Request) (audit.Page, error) {
 // writeError answers err through the shared error module of the
 // tool-neutral APIs, with the classes of the audit routes.
 func (h *Handler) writeError(ctx context.Context, w http.ResponseWriter, err error) {
-	problem.Writer{Logger: h.logger, Classify: requestErrors}.Write(ctx, w, err)
+	problem.Writer{Logger: h.logger, KeepDenied: nil, Classify: requestErrors}.Write(ctx, w, err)
 }
 
 // requestErrors maps the errors of the request and of the read of the audit

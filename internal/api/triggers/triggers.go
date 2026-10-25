@@ -216,7 +216,7 @@ const maxMessageBytes = 300
 // writeError answers err in the error shape of the tool-neutral APIs. The
 // refusal of a cycle has its own body, because it lists the units of the loop.
 func (h *Handler) writeError(ctx context.Context, w http.ResponseWriter, err error) {
-	wr := problem.Writer{Logger: h.logger, Classify: classify}
+	wr := problem.Writer{Logger: h.logger, KeepDenied: keepDenied, Classify: classify}
 
 	// A denial wins over the cycle answer too: a caller with no right on the
 	// loop gets the same 403 as for any other refusal.
@@ -256,22 +256,23 @@ func fail(status int, code, message string) (problem.Problem, bool) {
 	return problem.Built(status, message, code, errcode.Answer{}, nil), true
 }
 
-// classify returns the answer to an error of the triggers API, and false for an
-// error that it does not know. The shared classes of package problem answer
-// the rest.
-func classify(err error) (problem.Problem, bool) {
-	switch {
-	case errors.Is(err, trigger.ErrSaverDenied):
+// keepDenied answers the one class of the triggers API that wraps a denial and
+// keeps its own code: a save whose last saver lost access.
+func keepDenied(err error) (problem.Problem, bool) {
+	if errors.Is(err, trigger.ErrSaverDenied) {
 		return fail(http.StatusForbidden, errcode.TriggerSaverDenied,
 			"the person who saves the trigger needs a stored principal that holds the actions to change "+
 				"the unit and to start a plan on it, and to read the source unit of a follows trigger")
-	case errors.Is(err, identity.ErrDenied):
-		// A denial wins over every refusal below, so a mixed error never tells the
-		// state of an object the caller has no right on.
-		return problem.Problem{
-			Status: http.StatusForbidden, Code: errcode.Forbidden(err), Values: nil, Message: "forbidden",
-			RetryAfter: 0, Reauthenticate: "",
-		}, true
+	}
+
+	return problem.Pass()
+}
+
+// classify returns the answer to an error of the triggers API, and false for an
+// error that it does not know. Package problem answers a denial before this
+// classifier runs, and the shared classes answer the rest.
+func classify(err error) (problem.Problem, bool) {
+	switch {
 	case errors.Is(err, errNotFound), errors.Is(err, namespace.ErrNotFound), errors.Is(err, trigger.ErrNotFound):
 		return fail(http.StatusNotFound, errcode.TriggerNotFound, errNotFound.Error())
 	}

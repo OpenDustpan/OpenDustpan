@@ -162,22 +162,15 @@ const maxMessageBytes = 300
 // classifier of this API answers the errors of a job, and package problem
 // answers the rest.
 func (h *Handler) writeError(ctx context.Context, w http.ResponseWriter, err error) {
-	problem.Writer{Logger: h.logger, Classify: classify}.Write(ctx, w, err)
+	problem.Writer{Logger: h.logger, KeepDenied: nil, Classify: classify}.Write(ctx, w, err)
 }
 
 // classify returns the answer to an error of the jobs API, and false for an
-// error that it does not know. A denied action is answered before the refusals
-// of a job, so an error that wraps both keeps the answer of the denial. Package
-// problem answers the other shared refusals in the same words for every API.
+// error that it does not know. Package problem answers a denial before this
+// classifier runs, and the other shared refusals in the same words for every
+// API.
 func classify(err error) (problem.Problem, bool) {
 	switch {
-	// A denial wins over every refusal and conflict below, so a mixed error never
-	// tells the state of an object the caller has no right on.
-	case errors.Is(err, identity.ErrDenied):
-		return problem.Problem{
-			Status: http.StatusForbidden, Code: errcode.Forbidden(err), Values: nil, Message: "forbidden",
-			RetryAfter: 0, Reauthenticate: "",
-		}, true
 	case errors.Is(err, errNotFound), errors.Is(err, namespace.ErrNotFound), errors.Is(err, job.ErrNotFound):
 		return problem.Problem{
 			Status: http.StatusNotFound, Code: errcode.JobNotFound, Values: nil, Message: errNotFound.Error(),
