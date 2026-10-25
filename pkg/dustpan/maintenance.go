@@ -234,6 +234,7 @@ type maintenanceTFEDocument struct {
 // writeMaintenanceHTTPBackend answers 503 with Retry-After and the message as
 // plain text, the shape that the OpenTofu http backend shows.
 func writeMaintenanceHTTPBackend(w http.ResponseWriter, message string) {
+	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Retry-After", maintenanceRetryAfter)
 	http.Error(w, message, http.StatusServiceUnavailable)
 }
@@ -242,6 +243,7 @@ func writeMaintenanceHTTPBackend(w http.ResponseWriter, message string) {
 // document. The title names maintenance for callers that show only it.
 func writeMaintenanceTFE(ctx context.Context, w http.ResponseWriter, logger *slog.Logger, message string) {
 	w.Header().Set("Content-Type", "application/vnd.api+json")
+	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Retry-After", maintenanceRetryAfter)
 	w.WriteHeader(http.StatusServiceUnavailable)
 
@@ -268,6 +270,7 @@ type maintenanceRunnerError struct {
 // runner protocol.
 func writeMaintenanceRunner(ctx context.Context, w http.ResponseWriter, logger *slog.Logger, message string) {
 	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Retry-After", maintenanceRetryAfter)
 	w.WriteHeader(http.StatusServiceUnavailable)
 
