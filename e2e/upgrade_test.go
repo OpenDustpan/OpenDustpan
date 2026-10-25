@@ -185,10 +185,10 @@ func listReleaseTags(t *testing.T) []string {
 				"`git fetch --tags` (or unshallow the clone first)")
 		}
 
-		return nil
+		return []string{}
 	}
 
-	var tags []string
+	tags := []string{}
 
 	for line := range strings.Lines(strings.TrimSpace(string(out))) {
 		if tag := strings.TrimSpace(line); tag != "" {
