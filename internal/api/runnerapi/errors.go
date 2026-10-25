@@ -194,25 +194,17 @@ var errBadBody = errors.New("the body is not the JSON object of this path")
 func classifyManagement(err error) (problem.Problem, bool) {
 	switch {
 	case errors.Is(err, errNotFound), errors.Is(err, runner.ErrNotFound), errors.Is(err, namespace.ErrNotFound):
-		return answer(http.StatusNotFound, errcode.RunnerNotFound, errNotFound.Error())
+		return problem.New(http.StatusNotFound, errcode.RunnerNotFound, errNotFound.Error()), true
 	case errors.Is(err, runner.ErrInvalid):
-		return answer(
+		return problem.New(
 			http.StatusBadRequest, errcode.RunnerInvalid,
 			sentenceOf(err, []error{runner.ErrInvalidHelper, runner.ErrInvalid}),
-		)
+		), true
 	case errors.Is(err, errBadBody):
-		return answer(http.StatusBadRequest, errcode.RequestBodyInvalid, errBadBody.Error())
+		return problem.New(http.StatusBadRequest, errcode.RequestBodyInvalid, errBadBody.Error()), true
 	default:
 		return classifyManagementConflict(err)
 	}
-}
-
-// answer returns the answer of status, code and message for a code that takes
-// no argument.
-func answer(status int, code, message string) (problem.Problem, bool) {
-	return problem.Problem{
-		Status: status, Code: code, Values: nil, Message: message, RetryAfter: 0, Reauthenticate: "",
-	}, true
 }
 
 // classifyManagementConflict maps the errors of a refused change of the runner
@@ -220,18 +212,18 @@ func answer(status int, code, message string) (problem.Problem, bool) {
 func classifyManagementConflict(err error) (problem.Problem, bool) {
 	switch {
 	case errors.Is(err, runner.ErrAlreadyExists):
-		return answer(http.StatusConflict, errcode.RunnerPoolExists,
-			"a runner pool with this name exists: choose another name")
+		return problem.New(http.StatusConflict, errcode.RunnerPoolExists,
+			"a runner pool with this name exists: choose another name"), true
 	case errors.Is(err, runner.ErrImmutable):
-		return answer(http.StatusConflict, errcode.RunnerImmutable, runner.ErrImmutable.Error())
+		return problem.New(http.StatusConflict, errcode.RunnerImmutable, runner.ErrImmutable.Error()), true
 	case errors.Is(err, runner.ErrPoolInUse):
-		return answer(http.StatusConflict, errcode.RunnerPoolInUse, runner.ErrPoolInUse.Error())
+		return problem.New(http.StatusConflict, errcode.RunnerPoolInUse, runner.ErrPoolInUse.Error()), true
 	case errors.Is(err, runner.ErrTokenUsed):
-		return answer(http.StatusConflict, errcode.RunnerTokenUsed, runner.ErrTokenUsed.Error())
+		return problem.New(http.StatusConflict, errcode.RunnerTokenUsed, runner.ErrTokenUsed.Error()), true
 	case errors.Is(err, runner.ErrLimit):
-		return answer(http.StatusConflict, errcode.RunnerLimit, runner.ErrLimit.Error())
+		return problem.New(http.StatusConflict, errcode.RunnerLimit, runner.ErrLimit.Error()), true
 	case errors.Is(err, runner.ErrRetired):
-		return answer(http.StatusConflict, errcode.RunnerRetired, "the runner is retired")
+		return problem.New(http.StatusConflict, errcode.RunnerRetired, "the runner is retired"), true
 	}
 
 	// The namespace, maintenance and idempotency answers that every API shares

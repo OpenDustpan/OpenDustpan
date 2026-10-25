@@ -53,10 +53,7 @@ func TestErrorAnswerHeaders(t *testing.T) {
 
 // refusedCode answers every error with a code that the catalog refuses.
 func refusedCode(error) (problem.Problem, bool) {
-	return problem.Problem{
-		Status: http.StatusBadRequest, Code: "drift.no-such-code", Values: nil, Message: "secret detail",
-		RetryAfter: 0, Reauthenticate: "",
-	}, true
+	return problem.New(http.StatusBadRequest, "drift.no-such-code", "secret detail"), true
 }
 
 // errDriverDetail is an error whose text must never reach a log.

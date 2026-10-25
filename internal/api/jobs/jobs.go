@@ -155,9 +155,6 @@ func (h *Handler) authenticate(r *http.Request) (identity.Principal, bool, error
 // never tells that the job exists.
 var errNotFound = errors.New("not found")
 
-// maxMessageBytes is the longest refusal text that an answer sends.
-const maxMessageBytes = 300
-
 // writeError answers err in the error shape of the tool-neutral APIs. The
 // classifier of this API answers the errors of a job, and package problem
 // answers the rest.
@@ -172,35 +169,23 @@ func (h *Handler) writeError(ctx context.Context, w http.ResponseWriter, err err
 func classify(err error) (problem.Problem, bool) {
 	switch {
 	case errors.Is(err, errNotFound), errors.Is(err, namespace.ErrNotFound), errors.Is(err, job.ErrNotFound):
-		return problem.Problem{
-			Status: http.StatusNotFound, Code: errcode.JobNotFound, Values: nil, Message: errNotFound.Error(),
-			RetryAfter: 0, Reauthenticate: "",
-		}, true
+		return problem.New(http.StatusNotFound, errcode.JobNotFound, errNotFound.Error()), true
 	default:
 		return classifyStart(err)
 	}
-}
-
-// refused returns the answer to a refusal of the job service: its own text,
-// cut and cleaned, with status and code.
-func refused(err error, status int, code string) (problem.Problem, bool) {
-	return problem.Problem{
-		Status: status, Code: code, Values: nil, Message: refusal.Clean(err.Error(), maxMessageBytes),
-		RetryAfter: 0, Reauthenticate: "",
-	}, true
 }
 
 // classifyStart maps the refusals of a request to start a job.
 func classifyStart(err error) (problem.Problem, bool) {
 	switch {
 	case errors.Is(err, errBody):
-		return refused(err, http.StatusBadRequest, errcode.RequestBodyInvalid)
+		return problem.Refused(err, http.StatusBadRequest, errcode.RequestBodyInvalid), true
 	case errors.Is(err, idempotency.ErrInvalidKey):
-		return refused(err, http.StatusBadRequest, errcode.RequestIdempotencyKeyInvalid)
+		return problem.Refused(err, http.StatusBadRequest, errcode.RequestIdempotencyKeyInvalid), true
 	case errors.Is(err, job.ErrKeyConflict):
-		return refused(err, http.StatusUnprocessableEntity, errcode.RequestIdempotencyKeyReused)
+		return problem.Refused(err, http.StatusUnprocessableEntity, errcode.RequestIdempotencyKeyReused), true
 	case errors.Is(err, namespace.ErrFenced):
-		return refused(err, http.StatusConflict, errcode.NamespaceFenced)
+		return problem.Refused(err, http.StatusConflict, errcode.NamespaceFenced), true
 	default:
 		return classifyJobRefusal(err)
 	}
@@ -211,19 +196,19 @@ func classifyStart(err error) (problem.Problem, bool) {
 func classifyJobRefusal(err error) (problem.Problem, bool) {
 	switch {
 	case errors.Is(err, job.ErrInvalid):
-		return refused(err, http.StatusBadRequest, errcode.JobInvalid)
+		return problem.Refused(err, http.StatusBadRequest, errcode.JobInvalid), true
 	case errors.Is(err, job.ErrUnsupported):
-		return refused(err, http.StatusUnprocessableEntity, errcode.JobUnsupported)
+		return problem.Refused(err, http.StatusUnprocessableEntity, errcode.JobUnsupported), true
 	case errors.Is(err, job.ErrPolicyDenied):
-		return refused(err, http.StatusForbidden, errcode.JobPolicyDenied)
+		return problem.Refused(err, http.StatusForbidden, errcode.JobPolicyDenied), true
 	case errors.Is(err, job.ErrGateEnforced):
-		return refused(err, http.StatusForbidden, errcode.JobGateEnforced)
+		return problem.Refused(err, http.StatusForbidden, errcode.JobGateEnforced), true
 	case errors.Is(err, job.ErrAgentDenied):
-		return refused(err, http.StatusForbidden, errcode.JobAgentDenied)
+		return problem.Refused(err, http.StatusForbidden, errcode.JobAgentDenied), true
 	case errors.Is(err, job.ErrFrozen):
-		return refused(err, http.StatusConflict, errcode.JobFrozen)
+		return problem.Refused(err, http.StatusConflict, errcode.JobFrozen), true
 	case errors.Is(err, job.ErrLimit):
-		return refused(err, http.StatusTooManyRequests, errcode.JobLimit)
+		return problem.Refused(err, http.StatusTooManyRequests, errcode.JobLimit), true
 	}
 
 	// Not a refusal of a job: package problem answers the error.

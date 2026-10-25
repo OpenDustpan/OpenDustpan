@@ -12,9 +12,11 @@ import (
 	"strings"
 
 	"opendustpan.org/opendustpan/internal/api/apidesc"
+	"opendustpan.org/opendustpan/internal/api/problem"
 	"opendustpan.org/opendustpan/internal/api/refusal"
 	"opendustpan.org/opendustpan/internal/clientip"
 	"opendustpan.org/opendustpan/internal/cron"
+	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/internal/requestid"
 	"opendustpan.org/opendustpan/internal/sessionauth"
 	"opendustpan.org/opendustpan/pkg/audit"
@@ -493,18 +495,27 @@ func (h *Handler) sourceResponse(r *http.Request, p identity.Principal, source g
 // Defense in depth: the manager gives no name to a unit that the caller cannot
 // read. This check stays so that a cycle error that did not pass the manager
 // names no unit, and it does not rely on the manager.
-func cycleUnits(cycle *trigger.CycleError) []unitResponse {
-	out := make([]unitResponse, 0, len(cycle.Path))
+func cycleUnits(cycle *trigger.CycleError) []problem.Unit {
+	out := make([]problem.Unit, 0, len(cycle.Path))
 
 	for _, u := range cycle.Path {
 		if !cycle.Readable[u] {
 			continue
 		}
 
-		out = append(out, unitResponse{ID: u.ID, Tool: toolLabel(u.Tool), Name: cycle.Names[u]})
+		out = append(out, problem.Unit{ID: u.ID, Tool: toolLabel(u.Tool), Name: cycle.Names[u]})
 	}
 
 	return out
+}
+
+// cycleProblem is the answer to the refusal of a save that closes a loop of
+// units: 409 trigger.cycle with the units of the loop in order.
+func cycleProblem(cycle *trigger.CycleError) problem.Problem {
+	p := problem.New(http.StatusConflict, errcode.TriggerCycle, cycleMessage(cycle))
+	p.Units = cycleUnits(cycle)
+
+	return p
 }
 
 // cycleMessage is the message of the answer of a refused save that closes a
@@ -518,7 +529,7 @@ func cycleMessage(cycle *trigger.CycleError) string {
 		return trigger.ErrCycle.Error()
 	}
 
-	return refusal.Clean(cycle.Error(), maxMessageBytes)
+	return refusal.Clean(cycle.Error(), problem.MaxMessageBytes)
 }
 
 // toolLabel maps a stored lowercase tool code to the tool label of the

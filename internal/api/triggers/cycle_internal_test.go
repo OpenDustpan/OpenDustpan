@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"opendustpan.org/opendustpan/internal/api/problem"
 	"opendustpan.org/opendustpan/pkg/graph"
 	"opendustpan.org/opendustpan/pkg/trigger"
 )
@@ -38,7 +39,7 @@ func TestCycleAnswerNamesOnlyReadableUnits(t *testing.T) {
 			cycle := &trigger.CycleError{Path: path, Names: names, Readable: tc.readable}
 
 			units := cycleUnits(cycle)
-			if len(units) != tc.wantUnits || slices.ContainsFunc(units, func(u unitResponse) bool {
+			if len(units) != tc.wantUnits || slices.ContainsFunc(units, func(u problem.Unit) bool {
 				return u.ID == hidden.ID || u.Name == "secret-net"
 			}) {
 				t.Errorf("units = %+v, want %d units and none that the caller cannot read", units, tc.wantUnits)
