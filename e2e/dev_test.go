@@ -760,23 +760,32 @@ func devKindRefusals(t *testing.T, bin string) {
 	}
 }
 
-// replaceDatabase replaces the database file of a data directory of dev with
-// the file at source, and removes the files that SQLite keeps next to it.
+// replaceDatabase replaces the database of a data directory of dev with the
+// database at source. A stopped store may leave committed pages in its
+// write-ahead log, so the copy takes the main file and the log, and the next
+// open recovers them. It removes the files that SQLite keeps next to the
+// old database, and the shared-memory file of the source, which is rebuilt.
 func replaceDatabase(dir, source string) error {
-	raw, err := os.ReadFile(source) //nolint:gosec // The test reads the database that serve made.
-	if err != nil {
-		return fmt.Errorf("read the database of serve: %w", err)
-	}
-
 	for _, suffix := range []string{"-wal", "-shm", "-lock"} {
 		if rmErr := os.Remove(filepath.Join(dir, "dev.db"+suffix)); rmErr != nil && !errors.Is(rmErr, os.ErrNotExist) {
 			return fmt.Errorf("remove dev.db%s: %w", suffix, rmErr)
 		}
 	}
 
-	//nolint:gosec // The test writes in the data directory that dev made.
-	if writeErr := os.WriteFile(filepath.Join(dir, "dev.db"), raw, 0o600); writeErr != nil {
-		return fmt.Errorf("write dev.db: %w", writeErr)
+	for _, suffix := range []string{"", "-wal"} {
+		raw, err := os.ReadFile(source + suffix) //nolint:gosec // The test reads the database that serve made.
+		if errors.Is(err, os.ErrNotExist) && suffix != "" {
+			continue
+		}
+
+		if err != nil {
+			return fmt.Errorf("read the database of serve%s: %w", suffix, err)
+		}
+
+		//nolint:gosec // The test writes in the data directory that dev made.
+		if writeErr := os.WriteFile(filepath.Join(dir, "dev.db"+suffix), raw, 0o600); writeErr != nil {
+			return fmt.Errorf("write dev.db%s: %w", suffix, writeErr)
+		}
 	}
 
 	return nil
