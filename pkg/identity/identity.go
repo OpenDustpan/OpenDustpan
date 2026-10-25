@@ -45,7 +45,10 @@ type Principal struct {
 	Subject string
 	// DisplayName is a human-readable name.
 	DisplayName string
-	// Admin grants every action on every object.
+	// Admin grants every action on every object. The flag goes: a stored
+	// grant of the site-administrator role on the installation replaces
+	// it, and the bootstrap administrator becomes a stored principal with
+	// that grant. A new Authorizer does not read the flag.
 	Admin bool
 	// TokenID names the stored access token that authenticated the caller
 	// (ADR 53). It is empty for a bootstrap admin token (ADR 6), which has
@@ -1009,13 +1012,30 @@ type Authenticator interface {
 
 // Authorizer decides whether a principal may perform an action on an object.
 //
-// The server builds a namespace service principal itself (see
-// NamespaceService). It holds one action, ActionUnitRunPlan, on the units of
-// its own namespace. An Authorizer must never allow it more, also with the
-// Admin flag set, and must deny every principal whose subject has the form of
-// such a subject but for which IsNamespaceService does not hold. The server
-// puts NamespaceServiceRule around every Authorizer, so that rule holds also
-// for an Authorizer that does not know it. An Authorizer that decides these
+// The contract has no special principal. An Authorizer allows an action only
+// for a stored grant that the principal holds, directly or through a group,
+// or for a rule of the code-rule catalog whose effect is CodeRuleAllows. A
+// subject, a kind, a credential or a flag of the principal never allows an
+// action by itself. A rule of the catalog with the effect CodeRuleLimits only
+// takes away what a grant gives. An unknown principal, action or object is
+// denied.
+//
+// A server-made principal, of the kind "server" of the principal package, is
+// decided as every other principal: by its stored grants. Only the server
+// process acts as it, always with CredentialServer. A principal of the kind
+// "server" with any other credential than CredentialServer is denied every
+// action. A principal with CredentialServer of any other kind is denied every
+// action too, except the namespace service principal below while it exists.
+// The kind joins Kinds when the server stores the first such principal.
+//
+// Until the stored grants of server-made principals replace it, the server
+// still builds a namespace service principal (see NamespaceService), with
+// one action, ActionUnitRunPlan, on the units of its own namespace. An
+// Authorizer must never allow it more, also with the Admin flag set, and
+// must deny every principal whose subject has the form of such a subject but
+// for which IsNamespaceService does not hold. The server puts
+// NamespaceServiceRule around every Authorizer, so that rule holds also for
+// an Authorizer that does not know it. An Authorizer that decides these
 // principals itself runs identitytest.RunNamespaceService.
 type Authorizer interface {
 	// Authorize returns nil if allowed and an error wrapping ErrDenied otherwise.

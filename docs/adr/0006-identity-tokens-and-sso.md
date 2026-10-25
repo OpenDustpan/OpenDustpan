@@ -1,6 +1,6 @@
 # 6. Identity: OpenDustpan issues tokens; SSO only signs humans in
 
-Status: accepted · 2026-10-08
+Status: accepted · 2026-10-08 · the admin-only default authorizer superseded by ADR 277
 
 Changed by:
 

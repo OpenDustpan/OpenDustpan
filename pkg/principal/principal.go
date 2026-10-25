@@ -97,6 +97,10 @@ func ParseKind(s string) (Kind, error) {
 	switch k := Kind(s); k {
 	case KindPerson, KindService, KindWorkload:
 		return k, nil
+	case KindServer:
+		// Only ServerPrincipalStore makes a principal of this kind, so no
+		// request can name it.
+		return "", fmt.Errorf("%w: kind %q: only the server makes such a principal", ErrInvalid, s)
 	default:
 		return "", fmt.Errorf("%w: unknown kind %q", ErrInvalid, s)
 	}

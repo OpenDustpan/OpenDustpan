@@ -98,7 +98,8 @@ func TestParseKind(t *testing.T) {
 		}
 	}
 
-	for _, s := range []string{"", "Person", "robot", "group"} {
+	// A request can never name the kind of a server-made principal.
+	for _, s := range []string{"", "Person", "robot", "group", "server", "Server", " server"} {
 		if _, err := principal.ParseKind(s); !errors.Is(err, principal.ErrInvalid) {
 			t.Fatalf("ParseKind(%q) = %v, want ErrInvalid", s, err)
 		}

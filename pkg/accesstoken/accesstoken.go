@@ -85,6 +85,10 @@ func KindFor(k principal.Kind) (Kind, error) {
 		return KindService, nil
 	case principal.KindWorkload:
 		return "", fmt.Errorf("%w: a workload uses a trust rule (ADR 54)", ErrNoTokenForKind)
+	case principal.KindServer:
+		// Only the server process acts as a server-made principal, so no
+		// token can name one.
+		return "", fmt.Errorf("%w: only the server acts as a server-made principal", ErrNoTokenForKind)
 	default:
 		return "", fmt.Errorf("%w: unknown kind %q", ErrNoTokenForKind, k)
 	}

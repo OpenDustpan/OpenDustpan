@@ -933,6 +933,39 @@ The built-in principal of a namespace for a start that no person makes. Its subj
 _Avoid_: Trigger user, robot, bot account
 _Copy says_: "namespace service principal".
 
+**Server-made principal**:
+A principal of the kind `server` that the server makes in one namespace for one purpose, for example the scheduled runs of one unit. It holds stored grants that a person can list and revoke. It has an accountable owner and no credential. Only the server process acts as it. ADR 277 replaces the namespace service principal with it.
+_Avoid_: System account, robot, bot account, hidden principal
+_Copy says_: "made by the server".
+
+**Purpose**:
+The work of one server-made principal: a purpose kind, for example `scheduled-runs` or `upstream-runs`, and the unit that it serves. A namespace has at most one server-made principal for each purpose. The purpose kind lists the actions that its principal can hold.
+_Avoid_: Role (a role is a set of actions), job
+
+**Accountable owner**:
+The person or the group that answers for a server-made principal. By default it is the last saver of the trigger. A person can transfer it. Its current grants cap what the server-made principal does at each use.
+_Avoid_: Creator, maker, sponsor
+
+**Code rule**:
+A rule in code that takes part in a decision of access with no stored grant. It allows an action for a credential that is not a principal, limits what a grant gives, or exempts a principal from one check. Each code rule is in the code-rule catalog.
+_Avoid_: Implicit grant, built-in permission, magic
+
+**Code-rule catalog**:
+The one list of every code rule, with its effect and what it decides. The "explain why" answer names a grant or a catalog entry for each allowed action.
+_Avoid_: Rule registry, exceptions list
+
+**Server-runs switch**:
+The setting of a namespace that turns off every run that a server-made principal starts there, for example scheduled and upstream runs. It is on by default. Runs that a person starts do not change.
+_Avoid_: Kill switch, scheduler pause
+
+**Paused trigger**:
+A trigger that starts no plan because its server-made principal lacks a grant that its purpose needs. The pause shows the reason and the missing action. A new save by an owner that holds the action ends the pause. A pause deletes nothing.
+_Avoid_: Disabled trigger (a person turns a trigger off), suspended trigger
+
+**Bootstrap administrator**:
+The stored person that the server makes at the first boot for `DUSTPAN_ADMIN_TOKEN`, with a stored grant of `site-administrator` on the installation. A person can revoke the grant.
+_Avoid_: Root, admin flag, superuser
+
 **Follows trigger**:
 A trigger of the kind `follows`. It names a source unit. After the source applies, a plan of the unit of the trigger starts. A unit of one tool can follow a unit of another tool. The server refuses a cycle of follows triggers when a person saves one. A follows trigger is a declared dependency edge (ADR 153).
 _Avoid_: Downstream run, chained run, pipeline, dependency (an edge that a read of outputs makes is a dependency, ADR 153)
