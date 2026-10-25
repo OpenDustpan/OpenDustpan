@@ -12,7 +12,6 @@ import (
 
 	"opendustpan.org/opendustpan/internal/api/problem"
 	"opendustpan.org/opendustpan/internal/errcode"
-	"opendustpan.org/opendustpan/internal/sessionauth"
 	"opendustpan.org/opendustpan/pkg/durable"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/job"
@@ -52,22 +51,9 @@ func (h *Handler) writeError(ctx context.Context, w http.ResponseWriter, scope S
 	h.writeJSON(ctx, w, status, body)
 }
 
-// writeManagement answers err in the error shape of the management API. A
-// session refusal of CSRF or another site answers the sentence of its sentinel,
-// never the wrap text that problem.Writer would answer: the wrap names the
-// operation, and the log holds it.
+// writeManagement answers err in the error shape of the management API.
 func (h *Handler) writeManagement(ctx context.Context, w http.ResponseWriter, err error) {
 	wr := problem.Writer{Logger: h.logger, Classify: classifyManagement}
-
-	if errors.Is(err, sessionauth.ErrCSRF) || errors.Is(err, sessionauth.ErrOtherSite) {
-		message := sentenceOf(err, []error{sessionauth.ErrCSRF, sessionauth.ErrOtherSite})
-		h.logRefused(ctx, err, message)
-
-		p, _ := answer(http.StatusForbidden, errcode.Forbidden(err), message)
-		wr.WriteProblem(ctx, w, p)
-
-		return
-	}
 
 	h.logRefused(ctx, err, wr.Problem(err).Message)
 	wr.Write(ctx, w, err)
