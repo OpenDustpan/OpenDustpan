@@ -36,15 +36,13 @@ var errLockText = errors.New(
 	`invalid lock body: send the reason as valid UTF-8 text, with no invalid byte and no lone surrogate escape such as \ud800`,
 )
 
-// unitLockPath is the route of the manual lock of one unit. The unit query
-// value names the unit.
-const unitLockPath = "/api/inventory/unit-lock"
-
-// collectionLockPath is the route of the manual lock of one collection.
-const collectionLockPath = v1Prefix + "/namespaces/{namespace}/collections/{collection}/lock"
-
-// namespaceLockPath is the route of the manual lock of a whole namespace.
-const namespaceLockPath = v1Prefix + "/namespaces/{namespace}/lock"
+// The routes of the manual locks. A refusal of a manual lock names the same
+// routes, so both read them from package refusal.
+const (
+	unitLockPath       = refusal.UnitLockPath
+	collectionLockPath = refusal.CollectionLockPath
+	namespaceLockPath  = refusal.NamespaceLockPath
+)
 
 // lockRoutes returns the manual lock rows of the route table. Reading a lock
 // needs read access to the object. Taking a lock and removing your own lock
@@ -388,5 +386,6 @@ func classifyLocked(err error) problem.Problem {
 
 	a, buildErr := refusal.Locked(locked)
 
-	return problem.Built(http.StatusConflict, err.Error(), errcode.LockLocked, a, buildErr)
+	return problem.Built(http.StatusConflict, refusal.WithRemoval(err.Error(), locked.Lock.Target),
+		errcode.LockLocked, a, buildErr)
 }

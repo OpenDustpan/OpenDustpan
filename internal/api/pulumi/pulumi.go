@@ -1161,7 +1161,8 @@ func classifyUpdate(err error) failure {
 		answer, aerr := refusal.Locked(manual)
 
 		return failure{
-			err: aerr, answer: answer, code: errcode.LockLocked, message: manual.Error(), status: http.StatusConflict,
+			err: aerr, answer: answer, code: errcode.LockLocked, message: refusal.LockedText(manual),
+			status: http.StatusConflict,
 		}
 	}
 
