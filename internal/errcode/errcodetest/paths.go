@@ -65,7 +65,8 @@ type Adapter struct {
 //   - a call of http.Error or http.NotFound.
 //
 // Outside a classify function, a case or an if statement is a path only when
-// its body names an HTTP status of 400 or more. A path has a code when its
+// its body names an HTTP status of 400 or more. A status in the expressions of
+// a case does not count. A path has a code when its
 // case, its if statement, its element or its literal names one of coded. A
 // literal in the body of an if statement whose init or condition names one of
 // coded has a code; a literal in its else branch does not. A case or an if
@@ -306,7 +307,7 @@ func (s *scan) ifPath(name string, st *ast.IfStmt) {
 func (s *scan) cases(name string, body *ast.BlockStmt, targets func(*ast.CaseClause) []string) {
 	for _, stmt := range body.List {
 		clause, ok := stmt.(*ast.CaseClause)
-		if !ok || delegates(clause) || (!s.classify && !errorStatus(clause)) {
+		if !ok || delegates(clause) || (!s.classify && !bodyErrorStatus(clause)) {
 			continue
 		}
 
@@ -316,6 +317,13 @@ func (s *scan) cases(name string, body *ast.BlockStmt, targets func(*ast.CaseCla
 			s.add(name, targets(clause))
 		}
 	}
+}
+
+// bodyErrorStatus reports whether the body of clause names an HTTP status of
+// 400 or more. The case expressions do not count: a condition that compares
+// with a status does not write one.
+func bodyErrorStatus(clause *ast.CaseClause) bool {
+	return slices.ContainsFunc(clause.Body, func(st ast.Stmt) bool { return errorStatus(st) })
 }
 
 // tables adds the uncoded elements of each table in n, under the name owner.
