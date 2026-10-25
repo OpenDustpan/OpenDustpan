@@ -5,14 +5,17 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"net/url"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/jackc/pgx/v5"
 
+	"opendustpan.org/opendustpan/internal/pgtest"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/gate"
 	"opendustpan.org/opendustpan/pkg/gate/approverdirectorytest"
@@ -182,10 +185,10 @@ func newGroupSchema(t *testing.T, base string) string {
 	}
 
 	name := "test_" + hex.EncodeToString(suffix)
-	quoted := pgx.Identifier{name}.Sanitize()
 
-	execGroupSQL(t, base, "CREATE SCHEMA "+quoted)
-	t.Cleanup(func() { execGroupSQL(t, base, "DROP SCHEMA "+quoted+" CASCADE") })
+	execGroupSQL(t, base, "CREATE SCHEMA "+pgx.Identifier{name}.Sanitize())
+	recordGroupSchema(name)
+	pgtest.DropSchemaAtCleanup(t, base, name)
 
 	u, err := url.Parse(base)
 	if err != nil {
@@ -217,4 +220,54 @@ func execGroupSQL(t *testing.T, base, statement string) {
 	if _, execErr := conn.Exec(context.Background(), statement); execErr != nil {
 		t.Fatalf("%s: %v", statement, execErr)
 	}
+}
+
+// groupSchemas holds the name of each schema that newGroupSchema made in this
+// test binary. TestMain reads it after the tests to find a schema that stays.
+var groupSchemas struct {
+	mu    sync.Mutex
+	names []string
+}
+
+func recordGroupSchema(name string) {
+	groupSchemas.mu.Lock()
+	defer groupSchemas.mu.Unlock()
+
+	groupSchemas.names = append(groupSchemas.names, name)
+}
+
+// leftGroupSchemas returns the schemas, and the control schemas, that
+// newGroupSchema made and that the database at base still holds.
+func leftGroupSchemas(ctx context.Context, base string) (left []string, err error) {
+	groupSchemas.mu.Lock()
+	names := make([]string, 0, 2*len(groupSchemas.names))
+
+	for _, name := range groupSchemas.names {
+		names = append(names, name, name+"_control")
+	}
+
+	groupSchemas.mu.Unlock()
+
+	conn, err := pgx.Connect(ctx, base)
+	if err != nil {
+		return nil, fmt.Errorf("connect: %w", err)
+	}
+
+	defer func() {
+		if closeErr := conn.Close(ctx); closeErr != nil {
+			err = errors.Join(err, fmt.Errorf("close: %w", closeErr))
+		}
+	}()
+
+	rows, err := conn.Query(ctx, "SELECT nspname FROM pg_namespace WHERE nspname = ANY($1) ORDER BY nspname", names)
+	if err != nil {
+		return nil, fmt.Errorf("list schemas: %w", err)
+	}
+
+	left, err = pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil {
+		return nil, fmt.Errorf("list schemas: %w", err)
+	}
+
+	return left, nil
 }
