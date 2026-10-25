@@ -9,13 +9,18 @@ import (
 // ErrBadBody is the error of a body that is not the JSON object of its path.
 var ErrBadBody = errBadBody
 
-// WriteManagementError answers err as a handler answers a request of the
-// management API, with a logger that discards every line.
-func WriteManagementError(ctx context.Context, w http.ResponseWriter, err error) {
+// WriteError answers err as a route of scope does, with logger.
+func WriteError(ctx context.Context, w http.ResponseWriter, logger *slog.Logger, scope Scope, err error) {
 	var h Handler
 
-	h.logger = slog.New(slog.DiscardHandler)
-	h.writeError(ctx, w, ScopeAuthorized, err)
+	h.logger = logger
+	h.writeError(ctx, w, scope, err)
+}
+
+// WriteManagementError answers err as a route of ScopeAuthorized does, with a
+// logger that discards every line.
+func WriteManagementError(ctx context.Context, w http.ResponseWriter, err error) {
+	WriteError(ctx, w, slog.New(slog.DiscardHandler), ScopeAuthorized, err)
 }
 
 // ErrNotFound is the not-found answer of the management API, for a test of its
