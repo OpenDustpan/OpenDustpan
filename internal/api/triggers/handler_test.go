@@ -19,8 +19,9 @@ type unitRef struct {
 
 // frequencyAnswer is the frequency of a schedule trigger in an answer.
 type frequencyAnswer struct {
-	Preset string `json:"preset"`
-	Cron   string `json:"cron"`
+	Preset     string `json:"preset"`
+	Cron       string `json:"cron"`
+	Expression string `json:"expression"`
 }
 
 // answer is the part of a trigger document that the tests read.

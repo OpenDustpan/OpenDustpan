@@ -89,7 +89,9 @@ to one unit and one kind. `PUT .../triggers/{trigger_id}` replaces the rule, and
 it cannot move the trigger to another stack or workspace or change its kind.
 
 The answer is 201 with the trigger and a `Location` header. A trigger has an ID
-that starts with `trg-`.
+that starts with `trg-`. A schedule answer has `frequency.expression`: the
+cron expression, in UTC, that the schedule runs at. Read it to see the minute
+and the hour of a preset.
 
 ### A loop of units
 
