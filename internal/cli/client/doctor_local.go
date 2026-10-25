@@ -225,6 +225,9 @@ func isLoopbackListen(listen string) bool {
 // httpsPublicURL reports whether rawURL is an https URL.
 func httpsPublicURL(rawURL string) bool {
 	parsed, err := url.Parse(rawURL)
+	if err != nil || parsed == nil {
+		return false
+	}
 
-	return err == nil && parsed.Scheme == "https"
+	return parsed.Scheme == "https"
 }
