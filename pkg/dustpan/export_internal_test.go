@@ -1,11 +1,14 @@
 package dustpan
 
 import (
+	"context"
 	"reflect"
 
 	"opendustpan.org/opendustpan/internal/api/apidesc"
 	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/job"
 	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/runner"
 	"opendustpan.org/opendustpan/pkg/stack"
 	"opendustpan.org/opendustpan/pkg/workspace"
 )
@@ -143,4 +146,12 @@ func NewToolServices(opts ...Option) (ToolServices, error) {
 	return ToolServices{
 		Namespaces: svc.namespaces, Stacks: svc.stacks, Updates: svc.updates, Workspaces: svc.workspaces,
 	}, nil
+}
+
+// PlanJob runs the job planner of the server over the pools, as the job
+// service does at a start.
+func PlanJob(
+	ctx context.Context, pools runner.PoolStore, unit identity.Object, req *job.StartRequest,
+) (job.Spec, error) {
+	return jobPlanner{pools: pools, connections: nil}.Plan(ctx, unit, req)
 }
