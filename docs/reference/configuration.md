@@ -216,6 +216,11 @@ Each client command takes only the flags in its row:
 | `opendustpan audit-chain status` | `--server`, `--ca-file` |
 | `opendustpan audit-chain approve` | (none) |
 | `opendustpan health` | `--listen`, `--tls-cert` |
+| `opendustpan key generate` | `--out` |
+
+`opendustpan key generate` calls no server and opens no database. It writes a
+new key-encryption key file to the path in `--out` and refuses a file that
+exists.
 
 `opendustpan health` reads `--listen`, `--tls-cert` and their variables, as
 `serve` does. The [observe guide](../guides/observe.md) shows the probes.

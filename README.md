@@ -41,8 +41,10 @@ The server keeps its data in `./dustpan.db` and `./blobs`, and listens on
 `serve` needs a key-encryption key and a database that you set. It has no
 default for either, and it makes no key. Without a key, or without a
 database, it stops before it opens the database. To use a key file instead
-of `DUSTPAN_KEY_ENCRYPTION_KEY`, set `--key-encryption-key-file`
-(`DUSTPAN_KEY_ENCRYPTION_KEY_FILE`). A key file in the directory of the
+of `DUSTPAN_KEY_ENCRYPTION_KEY`, make a file with
+`opendustpan key generate --out <path>` and set `--key-encryption-key-file`
+(`DUSTPAN_KEY_ENCRYPTION_KEY_FILE`) to it. The command refuses a file that
+exists, and it needs no `openssl`. A key file in the directory of the
 database gives a warning at each start, because a backup of the data holds
 that key too. An operator who loses the key loses every secret and every
 OpenTofu state that the key encrypts, and nobody can recover them.

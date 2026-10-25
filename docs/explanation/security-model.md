@@ -216,8 +216,10 @@ the first of these:
 1. `DUSTPAN_KEY_ENCRYPTION_KEY`: the base64 text of 32 random bytes. The
    server deletes the variable from its environment after it reads it.
 2. The key file in `--key-encryption-key-file`
-   (`DUSTPAN_KEY_ENCRYPTION_KEY_FILE`). There is no default file. The
-   server refuses a key file that the group or others can read, and a key
+   (`DUSTPAN_KEY_ENCRYPTION_KEY_FILE`). There is no default file. Make one
+   with `opendustpan key generate --out <path>`: it writes 32 random bytes
+   from the system source in base64, with mode 0600, and it refuses a file
+   that exists. The server refuses a key file that the group or others can read, and a key
    file that `opendustpan dev` made.
 3. No key: the server stops with an error that names the settings. It makes
    no key and it asks no question.

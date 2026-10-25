@@ -33,6 +33,7 @@ func commandTable() cli.Table {
 		cli.DevCommand(func(ctx context.Context, args []string, _, stderr io.Writer) error {
 			return dev(ctx, args, stderr)
 		}),
+		cli.KeyGenerateCommand(),
 		cli.HealthCommand(client.RunHealth),
 		cli.BackupCommand(client.BackupCommand),
 		cli.RestoreCommand(client.RestoreCommand),
