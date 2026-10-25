@@ -1005,6 +1005,12 @@ func (o Object) UnitName() string {
 }
 
 // Authenticator turns an access token into a Principal.
+//
+// An Authenticator never gives a principal with CredentialServer, the kind
+// "server" of the principal package, or a subject that starts with
+// "system:" in any letter case: only the server builds such a principal,
+// and it never authenticates one. The server refuses such a principal from
+// every Authenticator, the one of an embedder included.
 type Authenticator interface {
 	// AuthenticateToken returns the principal owning token, or ErrUnauthenticated.
 	AuthenticateToken(ctx context.Context, token string) (Principal, error)
@@ -1018,15 +1024,35 @@ type Authenticator interface {
 // subject, a kind, a credential or a flag of the principal never allows an
 // action by itself. A rule of the catalog with the effect CodeRuleLimits only
 // takes away what a grant gives. An unknown principal, action or object is
-// denied.
+// denied. An Authorizer that cannot name the grant or the rule that allows
+// an action denies the action.
+//
+// A denial wraps ErrDenied, and a DeniedError gives its cause: DenyNoGrant,
+// DenyCodeRule with the ID of the rule, or DenyFailClosed. A caller that
+// acts on the cause, for example to pause a trigger, acts only on a
+// DeniedError, and treats every other denial as a cause it does not know.
 //
 // A server-made principal, of the kind "server" of the principal package, is
 // decided as every other principal: by its stored grants. Only the server
-// process acts as it, always with CredentialServer. A principal of the kind
-// "server" with any other credential than CredentialServer is denied every
-// action. A principal with CredentialServer of any other kind is denied every
-// action too, except the namespace service principal below while it exists.
+// process acts as it, always with CredentialServer. These guards apply
+// before any grant:
+//   - A principal whose subject starts with "system:", in any letter case,
+//     is denied every action unless its kind is "server" and its credential
+//     is CredentialServer, except the namespace service principal below
+//     while it exists.
+//   - A principal of the kind "server" with any other credential than
+//     CredentialServer is denied every action.
+//   - A principal with CredentialServer of any other kind is denied every
+//     action, except the namespace service principal below while it
+//     exists.
+//
 // The kind joins Kinds when the server stores the first such principal.
+//
+// Until the changes that delete them, these parts of the tree allow actions
+// with no stored grant, against this contract: AdminOnly, which allows by
+// the Admin flag; SelfAllowed, which allows the self actions to every
+// principal; and the shortcuts of the Admin flag and of the self family in
+// the authorizer of grants of the access package.
 //
 // Until the stored grants of server-made principals replace it, the server
 // still builds a namespace service principal (see NamespaceService), with

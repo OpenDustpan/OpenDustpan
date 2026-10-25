@@ -934,16 +934,16 @@ _Avoid_: Trigger user, robot, bot account
 _Copy says_: "namespace service principal".
 
 **Server-made principal**:
-A principal of the kind `server` that the server makes in one namespace for one purpose, for example the scheduled runs of one unit. It holds stored grants that a person can list and revoke. It has an accountable owner and no credential. Only the server process acts as it. ADR 277 replaces the namespace service principal with it.
+A principal of the kind `server` that the server makes in one namespace for one purpose: the runs of one trigger. It holds stored grants that a person can list and revoke. It has an accountable owner and no credential. Only the server process acts as it. ADR 277 replaces the namespace service principal with it.
 _Avoid_: System account, robot, bot account, hidden principal
 _Copy says_: "made by the server".
 
 **Purpose**:
-The work of one server-made principal: a purpose kind, for example `scheduled-runs` or `upstream-runs`, and the unit that it serves. A namespace has at most one server-made principal for each purpose. The purpose kind lists the actions that its principal can hold.
+The work of one server-made principal: the runs of one trigger. It has a purpose kind, the ID of the trigger and the unit of the trigger. The purpose kind follows the kind of the trigger: `scheduled-runs`, `upstream-runs` or `review-request-runs`. A namespace has at most one server-made principal for each trigger. The purpose kind lists the actions that its principal can hold.
 _Avoid_: Role (a role is a set of actions), job
 
 **Accountable owner**:
-The person or the group that answers for a server-made principal. By default it is the last saver of the trigger. A person can transfer it. Its current grants cap what the server-made principal does at each use.
+The person or the group that answers for a server-made principal and its trigger. By default it is the last saver of the trigger, and each save changes it. A person can transfer it, and after a transfer a save keeps it. Its current stored grants cap what the server-made principal does at each use. For a group, only the grants that name the group count.
 _Avoid_: Creator, maker, sponsor
 
 **Code rule**:
@@ -959,11 +959,11 @@ The setting of a namespace that turns off every run that a server-made principal
 _Avoid_: Kill switch, scheduler pause
 
 **Paused trigger**:
-A trigger that starts no plan because its server-made principal lacks a grant that its purpose needs. The pause shows the reason and the missing action. A new save by an owner that holds the action ends the pause. A pause deletes nothing.
+A trigger that starts no plan because its server-made principal lacks a grant that its purpose needs. A person revoked the grant, or the Authorizer found no grant at a start. No other refusal pauses a trigger. The pause shows the reason and the missing action. A save of the trigger that makes the grant again ends its pause. A pause deletes nothing.
 _Avoid_: Disabled trigger (a person turns a trigger off), suspended trigger
 
 **Bootstrap administrator**:
-The stored person that the server makes at the first boot for `DUSTPAN_ADMIN_TOKEN`, with a stored grant of `site-administrator` on the installation. A person can revoke the grant.
+The stored person that the server makes once for each subject of `DUSTPAN_ADMIN_TOKEN`, at the first boot that sees the subject. It holds a stored grant of `site-administrator` on the installation. A person can revoke the grant, and no later boot makes it again.
 _Avoid_: Root, admin flag, superuser
 
 **Follows trigger**:

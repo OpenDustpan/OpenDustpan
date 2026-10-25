@@ -11,9 +11,12 @@ type CodeRuleEffect string
 // The effects of a code rule.
 const (
 	// CodeRuleAllows allows an action with no stored grant, for a credential
-	// that is not a principal: for example, a runner key that claims a job of
-	// its pool. An "explain why" answer names the rule for each action that
-	// it allows.
+	// that authenticates no principal: for example, a runner key that claims
+	// a job of its pool. Such a rule names at least one action and at least
+	// one credential. The one rule that allows an action to a credential of
+	// a principal is the revoke of the tokens and the sessions of the
+	// caller, and it names its action and its credentials exactly. An
+	// "explain why" answer names the rule for each action that it allows.
 	CodeRuleAllows CodeRuleEffect = "allows"
 	// CodeRuleLimits takes away an action that a grant gives: for example,
 	// a job token acts on the unit of its job only. A limit never allows an
@@ -36,10 +39,12 @@ const (
 // catalog adds the function that returns it, with its guard test.
 //
 // Summary is one sentence for people to read. Actions holds the actions
-// that the rule decides, and is empty when it decides every action.
-// Credentials and Kinds name the requests that the rule applies to: a
-// request matches when its credential is in Credentials and its kind is in
-// Kinds. An empty list matches every value. Where names the package and the
+// that the rule decides. Credentials and Kinds name the requests that the
+// rule applies to: a request matches when its credential is in Credentials
+// and its kind is in Kinds. For a rule with the effect limits or exempts,
+// an empty list matches every value. A rule with the effect allows never
+// has an empty Actions or Credentials list: it would allow every action or
+// every principal. Where names the package and the
 // symbol that applies the rule, so that a reviewer finds it.
 type CodeRule struct {
 	ID          CodeRuleID
