@@ -94,7 +94,7 @@ func lockInfoOf(l workspace.Lock) lockInfo {
 // the route that removes it, after plain words. The ID is not a tool lock ID:
 // `tofu force-unlock` cannot use it.
 func manualLockInfo(e *manuallock.LockedError) lockInfo {
-	routes := e.Lock.Target.RemovalRoutes()
+	routes := refusal.RemovalRoutes(e.Lock.Target)
 
 	return lockInfo{
 		ID:        "A manual lock blocks this run. To remove it, send `DELETE " + routes.Remove + "`.",

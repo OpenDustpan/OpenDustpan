@@ -1,10 +1,11 @@
-package manuallock_test
+package refusal_test
 
 import (
 	"strings"
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/api/refusal"
 	"opendustpan.org/opendustpan/pkg/collection"
 	"opendustpan.org/opendustpan/pkg/manuallock"
 )
@@ -12,7 +13,8 @@ import (
 // TestRemovalRoutesNameTheLockAPI proves the routes that remove the manual
 // lock of each kind of object: the holder route and the force-unlock route.
 // A reserved character of a name stays escaped, and the colon and the slash of
-// a unit reference stay readable.
+// a unit reference stay readable. LockedText names the holder route after the
+// refusal.
 func TestRemovalRoutesNameTheLockAPI(t *testing.T) {
 	t.Parallel()
 
@@ -52,7 +54,7 @@ func TestRemovalRoutesNameTheLockAPI(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			got := tc.target.RemovalRoutes()
+			got := refusal.RemovalRoutes(tc.target)
 			if got.Remove != tc.remove || got.Force != tc.force {
 				t.Fatalf("RemovalRoutes = %+v, want remove %q and force %q", got, tc.remove, tc.force)
 			}
@@ -67,8 +69,12 @@ func TestRemovalRoutesNameTheLockAPI(t *testing.T) {
 			}
 
 			want := e.Refusal() + ". To remove the lock, the holder sends DELETE " + tc.remove + "."
-			if e.Error() != want {
-				t.Fatalf("Error = %q, want %q", e.Error(), want)
+			if got := refusal.LockedText(e); got != want {
+				t.Fatalf("LockedText = %q, want %q", got, want)
+			}
+
+			if strings.Contains(e.Error(), "/api/") {
+				t.Fatalf("Error = %q, want the domain text with no route", e.Error())
 			}
 
 			if !strings.HasSuffix(e.Refusal(), ": change window closed") {
