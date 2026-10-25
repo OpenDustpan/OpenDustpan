@@ -1,7 +1,7 @@
 # Audit log
 
 This guide shows how to read the audit entries of a namespace, check their chain and send a copy of each entry to a sink.
-Retention and the full catalog of events are not yet settled, so this guide does not describe them.
+This guide does not describe retention settings or the full catalog of events.
 
 ## What the log records
 
@@ -18,7 +18,8 @@ The Pulumi CLI calls them when a person asks it to show secrets, for example
 The routes that answer a secret value to a tool write one entry each with the
 kind `tool-operation`, so a reader never confuses a tool that needed secrets
 with a person who asked to see one. The state download is the exception that
-the principal decides, as the next list says:
+the principal decides. A principal is a person, a service or a workload whose
+identity OpenDustpan checked. The next list says how:
 
 - The Pulumi `decrypt` and `batch-decrypt` routes write one entry each with
   the action `unit:decrypt`, the count of values in `valueCount` and an empty
@@ -817,7 +818,7 @@ OpenTelemetry logs are not a sink yet.
 
 ## What this guide does not cover
 
-These items are not yet settled.
+This guide does not cover these items.
 
 - Retention.
 - The full catalog of events.
