@@ -522,17 +522,17 @@ func (s *Store) CheckpointByUpdate(
 	}, ref)
 }
 
-// ReferencedCheckpointKeys implements stack.CheckpointStore. One statement
+// ReferencedBlobKeys implements stack.CheckpointStore. One statement
 // finds the stack and reads the keys, so the read needs no transaction. A
 // stack that does not exist references no key.
-func (s *Store) ReferencedCheckpointKeys(ctx context.Context, ref stack.Ref) ([]blob.Key, error) {
-	rows, err := s.queries.ListCheckpointBlobKeys(ctx, db.ListCheckpointBlobKeysParams{
+func (s *Store) ReferencedBlobKeys(ctx context.Context, ref stack.Ref) ([]blob.Key, error) {
+	rows, err := s.queries.ListReferencedBlobKeys(ctx, db.ListReferencedBlobKeysParams{
 		Namespace: ref.Namespace.String(),
 		Project:   ref.Project.String(),
 		Name:      ref.Stack.String(),
 	})
 	if err != nil {
-		return nil, fmt.Errorf("select checkpoint blob keys: %w", readConflict(err))
+		return nil, fmt.Errorf("select referenced blob keys: %w", readConflict(err))
 	}
 
 	out := make([]blob.Key, 0, len(rows))
@@ -540,7 +540,7 @@ func (s *Store) ReferencedCheckpointKeys(ctx context.Context, ref stack.Ref) ([]
 	for _, row := range rows {
 		key, err := blob.ParseKey(row)
 		if err != nil {
-			return nil, fmt.Errorf("%w: checkpoint key %q: %w", codec.ErrCorruptRow, row, err)
+			return nil, fmt.Errorf("%w: blob key %q: %w", codec.ErrCorruptRow, row, err)
 		}
 
 		out = append(out, key)
