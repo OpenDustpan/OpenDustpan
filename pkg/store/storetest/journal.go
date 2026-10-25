@@ -1061,3 +1061,65 @@ func testJournalKeysFollowRename(t *testing.T, f fixture) {
 		t.Fatalf("journal after a rename = %v, %v; want one batch", keys, err)
 	}
 }
+
+// testReferencedBlobKeysJournal shows that the keys a sweep must keep hold the blobs
+// of the journal batches next to the blobs of the checkpoints: a running journaled
+// update names its batches, an ended update that still holds journal rows names them
+// too, and the keys of another stack stay out.
+func testReferencedBlobKeysJournal(t *testing.T, f fixture) {
+	t.Helper()
+
+	journaled := f.runJournaled(t, f.ref, "u1")
+	want := make([]blob.Key, 0, 3)
+
+	for i := range byte(2) {
+		row := journalRow(t, f.s, journaled, i+1, int64(i)+1)
+		if _, err := f.s.PutJournalRow(t.Context(), row, f.fence); err != nil {
+			t.Fatalf("batch %s: %v", row.BlobKey, err)
+		}
+
+		want = append(want, row.BlobKey)
+	}
+
+	got, err := f.s.ReferencedBlobKeys(t.Context(), f.ref)
+	if err != nil {
+		t.Fatalf("referenced keys of a running journaled update: %v", err)
+	}
+
+	slices.Sort(want)
+
+	if !slices.Equal(got, want) {
+		t.Fatalf("referenced keys of a running journaled update = %v, want %v", got, want)
+	}
+
+	// An ended update keeps its journal rows until a build removes them.
+	f.end(t, journaled, stack.StatusFailed)
+
+	plain := f.run(t, f.ref, "u2", mutating())
+	plainKey := f.blobKey(t, plain, 0)
+
+	cp := newBlobCheckpoint(plain, plainKey, 0, `{"v":1}`)
+	if putErr := f.s.PutCheckpoint(t.Context(), cp, f.fence); putErr != nil {
+		t.Fatalf("put checkpoint of u2: %v", putErr)
+	}
+
+	// A batch of another stack must not appear.
+	otherRef := f.other(t)
+	otherUpdate := f.runJournaled(t, otherRef, "u3")
+
+	if _, putErr := f.s.PutJournalRow(t.Context(), journalRow(t, f.s, otherUpdate, 3, 1), f.fence); putErr != nil {
+		t.Fatalf("batch of the other stack: %v", putErr)
+	}
+
+	got, err = f.s.ReferencedBlobKeys(t.Context(), f.ref)
+	if err != nil {
+		t.Fatalf("referenced keys with checkpoint and journal: %v", err)
+	}
+
+	want = append(want, plainKey)
+	slices.Sort(want)
+
+	if !slices.Equal(got, want) {
+		t.Fatalf("referenced keys with checkpoint and journal = %v, want %v", got, want)
+	}
+}

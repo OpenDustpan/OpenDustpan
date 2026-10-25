@@ -341,8 +341,8 @@ func (m *memUpdateStore) CheckpointByUpdate(
 	return withTestScope(cp), nil
 }
 
-// ReferencedCheckpointKeys implements stack.CheckpointStore.
-func (m *memUpdateStore) ReferencedCheckpointKeys(
+// ReferencedBlobKeys implements stack.CheckpointStore.
+func (m *memUpdateStore) ReferencedBlobKeys(
 	_ context.Context, ref stack.Ref,
 ) ([]blob.Key, error) {
 	m.mu.Lock()
@@ -356,9 +356,13 @@ func (m *memUpdateStore) ReferencedCheckpointKeys(
 		}
 	}
 
+	for _, keys := range m.journal {
+		out = append(out, keys...)
+	}
+
 	slices.Sort(out)
 
-	return out, nil
+	return slices.Compact(out), nil
 }
 
 func (m *memUpdateStore) AppendEvents(

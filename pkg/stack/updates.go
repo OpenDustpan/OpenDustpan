@@ -107,12 +107,13 @@ type CheckpointStore interface {
 	// the given ID, or ErrNoState when the update saved none. It returns no
 	// sentinel errors for a missing stack or update: both read as no state.
 	CheckpointByUpdate(ctx context.Context, ref Ref, id UpdateID) (Checkpoint, error)
-	// ReferencedCheckpointKeys returns the blob keys every checkpoint of the
-	// stack names, without the empty ones. A stack without checkpoints, or
-	// one that does not exist, yields an empty list. It returns no sentinel
-	// errors. A sweeper compares this set against the stored objects to find
-	// blobs no checkpoint references.
-	ReferencedCheckpointKeys(ctx context.Context, ref Ref) ([]blob.Key, error)
+	// ReferencedBlobKeys returns every blob key that a row of the stack
+	// names, without duplicates: the blob of each checkpoint and the blob of
+	// each journal batch of every update that still holds journal rows. A
+	// stack without such rows, or one that does not exist, yields an empty
+	// list. It returns no sentinel errors. A sweeper compares this set
+	// against the stored objects to find blobs that no row references.
+	ReferencedBlobKeys(ctx context.Context, ref Ref) ([]blob.Key, error)
 }
 
 // EventStore persists engine events.
@@ -1196,12 +1197,13 @@ func (s *Updates) deleteBlobRetried(ctx context.Context, bl *scopedBlobs, key bl
 	return nil
 }
 
-// sweepUpdateBlobs deletes the checkpoint blobs of one update that no
-// checkpoint names and that are older than the grace period: saves whose SQL
-// commit never landed, and previous saves whose delete never ran. The listing
-// covers one update prefix, so it stays small no matter how many updates the
-// stack holds. It is best effort: a cleanup failure never fails the save,
-// and the rows stay for the next sweep. No log line names a blob key.
+// sweepUpdateBlobs deletes the blobs of one update that no row names and that
+// are older than the grace period: saves whose SQL commit never landed,
+// previous saves whose delete never ran, and journal batches of a closed
+// journal. The listing covers one update prefix, so it stays small no matter
+// how many updates the stack holds. It is best effort: a cleanup failure
+// never fails the save, and the rows stay for the next sweep. No log line
+// names a blob key.
 func (s *Updates) sweepUpdateBlobs(ctx context.Context, bl *scopedBlobs, ref Ref, stackID ID, id UpdateID) {
 	listed, err := bl.List(ctx, bl.updatePrefix(stackID, id))
 	if err != nil {
@@ -1210,111 +1212,19 @@ func (s *Updates) sweepUpdateBlobs(ctx context.Context, bl *scopedBlobs, ref Ref
 		return
 	}
 
-	if len(listed) == 0 {
-		return
-	}
-
-	now := s.clock()
-
-	candidates := make([]blob.Object, 0, len(listed))
-
-	for _, obj := range listed {
-		if now.Sub(obj.ModifiedAt) >= sweepGracePeriod {
-			candidates = append(candidates, obj)
-		}
-	}
-
-	if len(candidates) == 0 {
-		return
-	}
-
-	s.sweepCandidates(ctx, bl, ref, id, candidates)
+	s.sweepOrphans(ctx, bl, ref, id, listed)
 }
 
-// sweepCandidates deletes the candidate blobs of one update except the one
-// its checkpoint names. A missing checkpoint keeps none: without a row every
-// blob of the update is an orphan.
-func (s *Updates) sweepCandidates(
-	ctx context.Context, bl *scopedBlobs, ref Ref, id UpdateID, candidates []blob.Object,
+// sweepOrphans deletes the objects of listed that are older than the grace
+// period and that no row names. The keep set is ReferencedBlobKeys: a
+// checkpoint blob and a journal batch blob of a running journaled update both
+// stay, whatever prefix holds them. The sweep reads the keys only when old
+// candidates remain, so a start with only fresh blobs pays for one listing
+// and no row read. A read failure deletes nothing. The update ID is empty for
+// a sweep over the whole stack.
+func (s *Updates) sweepOrphans(
+	ctx context.Context, bl *scopedBlobs, ref Ref, id UpdateID, listed []blob.Object,
 ) {
-	var current Checkpoint
-
-	stored, err := s.checkpoints.CheckpointByUpdate(ctx, ref, id)
-	if err == nil {
-		current = stored
-	} else if !errors.Is(err, ErrNoState) {
-		s.logger.WarnContext(ctx, "sweep checkpoint blobs", slog.String("stack", ref.String()))
-
-		return
-	}
-
-	failed := 0
-
-	for _, obj := range candidates {
-		if obj.Key == current.BlobKey {
-			continue
-		}
-
-		if blobErr := s.deleteBlobRetried(ctx, bl, obj.Key); blobErr != nil {
-			failed++
-		}
-	}
-
-	if failed > 0 {
-		s.logger.WarnContext(
-			ctx,
-			"sweep checkpoint blobs",
-			slog.String("stack", ref.String()),
-			slog.String("update", id.String()),
-			slog.Int("failed", failed),
-		)
-	}
-}
-
-// sweepStackOnStart resolves the stack ID and sweeps its orphan blobs. It is
-// best effort: a cleanup failure never fails the start, and the blobs stay
-// for the next sweep. No log line names a blob key.
-func (s *Updates) sweepStackOnStart(ctx context.Context, ns namespace.ID, ref Ref) {
-	st, err := s.stacks.GetStack(ctx, ref)
-	if err != nil {
-		s.logger.WarnContext(ctx, "sweep checkpoint blobs", slog.String("stack", ref.String()))
-
-		return
-	}
-
-	bl, err := s.blobs.scope(ns, st.ID)
-	if err != nil {
-		s.logger.WarnContext(ctx, "sweep checkpoint blobs", slog.String("stack", ref.String()))
-
-		return
-	}
-
-	s.sweepStackBlobs(ctx, bl, ref, st.ID)
-}
-
-// sweepStackBlobs deletes the checkpoint blobs of one stack that no
-// checkpoint names and that are older than the grace period: orphans of an
-// update that never saves again, such as a crash between the blob write and
-// the SQL commit, a minted-key loser, or a delete race loser. The next update
-// that starts on the stack collects them. Blobs younger than the grace period
-// stay, so a save that still commits is never collected: every new blob is
-// fresh, and the row names it only after the bytes land. The sweep reads the
-// referenced keys only when old candidates remain, so a start with only fresh
-// blobs pays for one listing and no checkpoint read. It is best effort: a
-// cleanup failure never fails the start, and the blobs stay for the next
-// sweep. No log line names a blob key.
-func (s *Updates) sweepStackBlobs(ctx context.Context, bl *scopedBlobs, ref Ref, stackID ID) {
-	listed, err := bl.List(ctx, bl.stackPrefix(stackID))
-	if err != nil {
-		s.logger.WarnContext(ctx, "sweep checkpoint blobs", slog.String("stack", ref.String()))
-
-		return
-	}
-
-	if len(listed) == 0 {
-		return
-	}
-
 	now := s.clock()
 
 	candidates := make([]blob.Object, 0, len(listed))
@@ -1329,7 +1239,7 @@ func (s *Updates) sweepStackBlobs(ctx context.Context, bl *scopedBlobs, ref Ref,
 		return
 	}
 
-	refs, err := s.checkpoints.ReferencedCheckpointKeys(ctx, ref)
+	refs, err := s.checkpoints.ReferencedBlobKeys(ctx, ref)
 	if err != nil {
 		s.logger.WarnContext(ctx, "sweep checkpoint blobs", slog.String("stack", ref.String()))
 
@@ -1355,13 +1265,56 @@ func (s *Updates) sweepStackBlobs(ctx context.Context, bl *scopedBlobs, ref Ref,
 	}
 
 	if failed > 0 {
-		s.logger.WarnContext(
-			ctx,
-			"sweep checkpoint blobs",
-			slog.String("stack", ref.String()),
-			slog.Int("failed", failed),
-		)
+		attrs := []any{slog.String("stack", ref.String()), slog.Int("failed", failed)}
+		if id != "" {
+			attrs = append(attrs, slog.String("update", id.String()))
+		}
+
+		s.logger.WarnContext(ctx, "sweep checkpoint blobs", attrs...)
 	}
+}
+
+// sweepStackOnStart resolves the stack ID and sweeps its orphan blobs. It is
+// best effort: a cleanup failure never fails the start, and the blobs stay
+// for the next sweep. No log line names a blob key.
+func (s *Updates) sweepStackOnStart(ctx context.Context, ns namespace.ID, ref Ref) {
+	st, err := s.stacks.GetStack(ctx, ref)
+	if err != nil {
+		s.logger.WarnContext(ctx, "sweep checkpoint blobs", slog.String("stack", ref.String()))
+
+		return
+	}
+
+	bl, err := s.blobs.scope(ns, st.ID)
+	if err != nil {
+		s.logger.WarnContext(ctx, "sweep checkpoint blobs", slog.String("stack", ref.String()))
+
+		return
+	}
+
+	s.sweepStackBlobs(ctx, bl, ref, st.ID)
+}
+
+// sweepStackBlobs deletes the blobs of one stack that no row names and that
+// are older than the grace period: orphans of an update that never saves
+// again, such as a crash between the blob write and the SQL commit, a
+// minted-key loser, or a delete race loser. The next update that starts on the
+// stack collects them. Blobs younger than the grace period stay, so a save
+// that still commits is never collected: every new blob is fresh, and the row
+// names it only after the bytes land. A blob that a row names stays at any
+// age, also a journal batch of a journaled update that runs for more than the
+// grace period while a preview starts on the stack. It is best effort: a
+// cleanup failure never fails the start, and the blobs stay for the next
+// sweep. No log line names a blob key.
+func (s *Updates) sweepStackBlobs(ctx context.Context, bl *scopedBlobs, ref Ref, stackID ID) {
+	listed, err := bl.List(ctx, bl.stackPrefix(stackID))
+	if err != nil {
+		s.logger.WarnContext(ctx, "sweep checkpoint blobs", slog.String("stack", ref.String()))
+
+		return
+	}
+
+	s.sweepOrphans(ctx, bl, ref, "", listed)
 }
 
 // resolveCheckpoint fills the deployment of a checkpoint row: it reads and

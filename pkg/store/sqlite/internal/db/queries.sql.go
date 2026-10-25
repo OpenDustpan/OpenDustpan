@@ -9653,39 +9653,6 @@ func (q *Queries) ListBlobPurgesAfter(ctx context.Context, arg ListBlobPurgesAft
 	return items, nil
 }
 
-const listCheckpointBlobKeys = `-- name: ListCheckpointBlobKeys :many
-SELECT blob_key
-FROM checkpoints
-WHERE stack_id = ?
-ORDER BY blob_key
-`
-
-// Every blob key the checkpoints of one stack name, ordered. A sweeper
-// compares this set against the stored objects to find blobs no checkpoint
-// references.
-func (q *Queries) ListCheckpointBlobKeys(ctx context.Context, stackID string) ([]string, error) {
-	rows, err := q.db.QueryContext(ctx, listCheckpointBlobKeys, stackID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []string
-	for rows.Next() {
-		var blob_key string
-		if err := rows.Scan(&blob_key); err != nil {
-			return nil, err
-		}
-		items = append(items, blob_key)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
 const listCollections = `-- name: ListCollections :many
 SELECT id, namespace, name, created_at_ms
 FROM collections
@@ -12144,6 +12111,44 @@ func (q *Queries) ListProfileRevisions(ctx context.Context, arg ListProfileRevis
 			return nil, err
 		}
 		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listReferencedBlobKeys = `-- name: ListReferencedBlobKeys :many
+SELECT blob_key
+FROM checkpoints
+WHERE checkpoints.stack_id = ?1
+UNION
+SELECT blob_key
+FROM update_journal
+WHERE update_journal.stack_id = ?1
+ORDER BY blob_key
+`
+
+// Every blob key that a row of one stack names, ordered, without duplicates:
+// the blobs of the checkpoints and the blobs of the journal batches. A
+// sweeper compares this set against the stored objects to find blobs that no
+// row references.
+func (q *Queries) ListReferencedBlobKeys(ctx context.Context, stackID string) ([]string, error) {
+	rows, err := q.db.QueryContext(ctx, listReferencedBlobKeys, stackID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []string
+	for rows.Next() {
+		var blob_key string
+		if err := rows.Scan(&blob_key); err != nil {
+			return nil, err
+		}
+		items = append(items, blob_key)
 	}
 	if err := rows.Close(); err != nil {
 		return nil, err
