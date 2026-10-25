@@ -3089,12 +3089,20 @@ func newManualLockService(cfg *settings) (*manuallock.Service, error) {
 		return nil, nil //nolint:nilnil // No manual lock service: the store holds no manual locks.
 	}
 
+	// The clock of the job store lets a tool lock request with the job token of
+	// a phase that started before a manual lock pass that lock. Without a job
+	// store the clock stays nil, and no job token passes any lock.
+	var phases manuallock.PhaseClock
+	if cfg.jobStore != nil {
+		phases = job.PhaseClock{Jobs: cfg.jobStore}
+	}
+
 	svc, err := manuallock.NewService(manuallock.Config{
 		Store:      store,
 		Namespaces: cfg.namespaceStore,
 		Authorizer: cfg.authorizer,
 		Now:        cfg.now,
-		Phases:     nil,
+		Phases:     phases,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("manual lock service: %w", err)
