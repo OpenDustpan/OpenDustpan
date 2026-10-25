@@ -182,6 +182,7 @@ func seedFixtureJob(ctx context.Context, p ports, unit identity.Object, fence na
 				Directory: "network", Revision: "0123456789abcdef",
 			},
 			Steps: nil, Pool: "rpl-load", Profile: "prf-load", Edits: nil, Delivery: "",
+			Defaulted: nil,
 		},
 		State: job.StateQueued, Wait: job.WaitNone, Reason: "", Phases: phases, Current: 0,
 		StartedBy: loadProject, Source: job.SourceAPI, Agent: "", AgentMode: "", BreakGlass: nil, Trigger: nil,

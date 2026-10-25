@@ -40,7 +40,7 @@ func fullJob(t *testing.T) job.Job {
 				Env: map[string]string{"A": "b"}, Dir: "sub", Timeout: time.Minute, AllowFailure: true,
 				ChangesResources: true, Outputs: []job.Output{{Kind: job.OutputPlanDisplay, Path: "plan.json"}},
 			}},
-			Pool: "pool-1", Profile: "prf-1",
+			Pool: "pool-1", Profile: "prf-1", Defaulted: []string{"pool", "profile"},
 			Edits:    []job.FileEdit{{Path: "a.json", Keys: map[string][]byte{"k": []byte(`"v"`)}}},
 			Delivery: job.DeliveryReviewRequest,
 		},

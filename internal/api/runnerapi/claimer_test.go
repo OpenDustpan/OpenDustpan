@@ -73,6 +73,7 @@ func dispatchPlan(t *testing.T, e *env, pool string, unit identity.Object) job.J
 				Dir: "", Timeout: 0, AllowFailure: false, ChangesResources: false, Outputs: nil,
 			}},
 			Pool: pool, Profile: "prf-default", Edits: nil, Delivery: "",
+			Defaulted: nil,
 		},
 		State:  job.StateQueued,
 		Wait:   job.WaitNone,

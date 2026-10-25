@@ -303,6 +303,7 @@ func runningJob(t *testing.T, id job.ID) job.Job {
 				},
 			},
 			Pool: "pool-1", Profile: "prf-secret-profile", Edits: nil, Delivery: "",
+			Defaulted: nil,
 		},
 		State:          job.StateRunning,
 		Wait:           job.WaitNone,
@@ -621,7 +622,7 @@ func TestJobDocument(t *testing.T) {
 		`"id":"` + testJob + `"`, `"namespace":"acme"`, `"tool":"OpenTofu"`, `"id":"` + testUnit + `"`,
 		`"operation":"apply"`, `"executor":"runner"`, `"state":"running"`, `"current":1`, `"startedBy":"ada"`,
 		`"version":3`, `"source":"schedule"`, `"kind":"plan"`, `"kind":"apply"`, `"stateVersion":"sv-1"`, `"pool":"pool-1"`,
-		`"repository":"acme/infra"`, `"exitCode":0`, `"subject":"bo"`, `"verdict":"approve"`,
+		`"profile":"prf-secret-profile"`, `"repository":"acme/infra"`, `"exitCode":0`, `"subject":"bo"`, `"verdict":"approve"`,
 		`"name":"plan","role":"tool","phase":"plan","changesResources":false`,
 	} {
 		if !strings.Contains(body, want) {
@@ -631,9 +632,9 @@ func TestJobDocument(t *testing.T) {
 
 	// A step answers its name, role and phase only. The server never answers
 	// the arguments or the variables of a step, the internal operation of a
-	// phase, the item key of a plan or a log, or the profile of the job.
+	// phase, or the item key of a plan or a log. The profile answers by name.
 	for _, secret := range []string{
-		"hunter2", "TF_LOG", "dop-internal-operation", "ik-plan-secret", "ik-secret", "prf-secret-profile",
+		"hunter2", "TF_LOG", "dop-internal-operation", "ik-plan-secret", "ik-secret",
 		`"args"`, `"env"`, `"idempotencyKey"`, "key-1",
 	} {
 		if strings.Contains(body, secret) {
@@ -643,6 +644,56 @@ func TestJobDocument(t *testing.T) {
 
 	if strings.Contains(body, "0001-01-01") {
 		t.Errorf("body holds a zero time: %s", body)
+	}
+}
+
+// TestJobDocumentShowsTheDefaultedValues proves that a job document names the
+// values that the request did not give, and leaves the member out when the
+// request gave all of them.
+func TestJobDocumentShowsTheDefaultedValues(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		list    []string
+		profile string
+		want    []string
+		absent  []string
+	}{
+		{"none", nil, "", nil, []string{`"defaulted"`, `"profile"`}},
+		{"the pool", []string{"pool"}, "", []string{`"defaulted":["pool"]`}, []string{`"profile"`}},
+		{
+			"all three",
+			[]string{"pool", "location", "profile"},
+			"prf-ci",
+			[]string{`"defaulted":["pool","location","profile"]`, `"profile":"prf-ci"`},
+			nil,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			j := runningJob(t, testJob)
+			j.Spec.Defaulted, j.Spec.Profile = tt.list, tt.profile
+
+			handler := newHandler(t, newAuthorizer(holdsBoth()...), newFakeJobs(j))
+			rec := serve(t, handler, request{method: http.MethodGet, path: jobPath("acme", testJob), token: testToken})
+			body := rec.Body.String()
+
+			for _, want := range tt.want {
+				if !strings.Contains(body, want) {
+					t.Errorf("body lacks %s: %s", want, body)
+				}
+			}
+
+			for _, absent := range tt.absent {
+				if strings.Contains(body, absent) {
+					t.Errorf("body holds %s: %s", absent, body)
+				}
+			}
+		})
 	}
 }
 

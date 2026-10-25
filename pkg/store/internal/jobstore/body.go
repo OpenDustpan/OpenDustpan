@@ -3,6 +3,7 @@ package jobstore
 import (
 	"encoding/json"
 	"fmt"
+	"slices"
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -66,6 +67,9 @@ type specBody struct {
 	Profile   string       `json:"profile"`
 	Edits     []editBody   `json:"edits"`
 	Delivery  string       `json:"delivery"`
+	// Defaulted is absent from a body that an older server wrote and from a
+	// job whose request gave every value, and both decode to no list.
+	Defaulted []string `json:"defaulted,omitempty"`
 }
 
 type logBody struct {
@@ -219,7 +223,7 @@ func encodeSpec(s *job.Spec) specBody {
 		Unit: encodeUnit(s.Unit), Operation: string(s.Operation), Purpose: string(s.Purpose),
 		Executor: string(s.Executor),
 		Location: locationBody(s.Location), Steps: nil, Pool: s.Pool, Profile: s.Profile, Edits: nil,
-		Delivery: string(s.Delivery),
+		Delivery: string(s.Delivery), Defaulted: slices.Clone(s.Defaulted),
 	}
 
 	for i := range s.Steps {
@@ -254,7 +258,7 @@ func decodeSpec(b *specBody) (job.Spec, error) {
 		Unit: unit, Operation: job.Operation(b.Operation), Purpose: job.Purpose(b.Purpose),
 		Executor: job.ExecutorKind(b.Executor),
 		Location: job.Location(b.Location), Steps: nil, Pool: b.Pool, Profile: b.Profile, Edits: nil,
-		Delivery: job.Delivery(b.Delivery),
+		Delivery: job.Delivery(b.Delivery), Defaulted: slices.Clone(b.Defaulted),
 	}
 
 	for i := range b.Steps {

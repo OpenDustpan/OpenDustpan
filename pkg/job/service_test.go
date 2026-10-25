@@ -346,10 +346,11 @@ func newRig(t *testing.T, opts ...rigOption) *rig {
 							Outputs:          nil,
 						},
 					},
-					Pool:     "pool-1",
-					Profile:  "",
-					Edits:    nil,
-					Delivery: "",
+					Pool:      "pool-1",
+					Profile:   "",
+					Edits:     nil,
+					Delivery:  "",
+					Defaulted: nil,
 				}
 			},
 		},
@@ -717,6 +718,7 @@ func TestStartRefusesWhenPortsFail(t *testing.T) {
 				return job.Spec{
 					Unit: u, Operation: job.OperationDestroy, Purpose: "", Executor: job.ExecutorRunner,
 					Location: emptyLocation(), Steps: nil, Pool: "p", Profile: "", Edits: nil, Delivery: "",
+					Defaulted: nil,
 				}
 			}
 		}},

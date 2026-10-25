@@ -30,6 +30,7 @@ func specOf(op job.Operation, purpose job.Purpose, executor job.ExecutorKind) jo
 	return job.Spec{
 		Unit: identity.Object{}, Operation: op, Purpose: purpose, Executor: executor,
 		Location: emptyLocation(), Steps: nil, Pool: "", Profile: "", Edits: nil, Delivery: "",
+		Defaulted: nil,
 	}
 }
 

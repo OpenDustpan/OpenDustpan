@@ -65,6 +65,37 @@ func testCreateTrigger(t *testing.T, h Harness) {
 	}
 }
 
+// testCreateDefaulted proves that a job keeps the list of the values that the
+// request did not give, and that a job with no list reads back with none.
+func testCreateDefaulted(t *testing.T, h Harness) {
+	t.Helper()
+
+	f := setUp(t, h)
+
+	for _, tt := range []struct {
+		name string
+		list []string
+	}{
+		{"nothing defaulted", nil},
+		{"the pool", []string{"pool"}},
+		{"all three", []string{"pool", "location", "profile"}},
+	} {
+		j := newJob(f.unit, job.OperationPlan, "")
+		j.Spec.Defaulted = tt.list
+
+		stored := create(t, h, f, j, nil)
+
+		got, err := h.Jobs.Get(t.Context(), stored.ID)
+		if err != nil {
+			t.Fatalf("%s: Get = %v", tt.name, err)
+		}
+
+		if !slices.Equal(got.Spec.Defaulted, tt.list) {
+			t.Errorf("%s: Spec.Defaulted = %v, want %v", tt.name, got.Spec.Defaulted, tt.list)
+		}
+	}
+}
+
 func testGetUnknown(t *testing.T, h Harness) {
 	t.Helper()
 
