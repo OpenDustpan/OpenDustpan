@@ -75,10 +75,7 @@ func TestErrorAnswerHeaders(t *testing.T) {
 
 // refusedCode answers every error with a code that the catalog refuses.
 func refusedCode(error) (problem.Problem, bool) {
-	return problem.Problem{
-		Status: http.StatusBadRequest, Code: "trigger.no-such-code", Values: nil, Message: "secret detail",
-		RetryAfter: 0, Reauthenticate: "",
-	}, true
+	return problem.New(http.StatusBadRequest, "trigger.no-such-code", "secret detail"), true
 }
 
 // TestErrorLog fails for an error answer whose log line is not the one of the

@@ -174,19 +174,6 @@ func (h *Handler) authenticate(r *http.Request) (identity.Principal, bool, error
 	return p, false, err
 }
 
-// cycleResponse is the body of the refusal of a save that closes a loop of
-// units. It is the error body of the tool-neutral APIs and lists the units of
-// the loop in order.
-type cycleResponse struct {
-	Message string `json:"message"`
-	Code    int    `json:"code"`
-	// ErrorCode is a stable code for a program. It is a code of the catalog.
-	ErrorCode string `json:"errorCode"`
-	// ErrorArgs are the arguments of the code.
-	ErrorArgs map[string]any `json:"errorArgs,omitempty"`
-	Units     []unitResponse `json:"units,omitempty"`
-}
-
 // errNotFound is the one answer for an unknown namespace, an unknown unit, an
 // unknown trigger, and an object that the caller cannot read. The answer never
 // tells that the object exists.
@@ -210,59 +197,20 @@ var errBody = errors.New("request body is not valid")
 // that takes none. Only the fire route takes the key.
 var errKeyUnsupported = errors.New("this route does not take the Idempotency-Key header: send the request without it")
 
-// maxMessageBytes bounds the text of an error that an answer repeats.
-const maxMessageBytes = 300
-
 // writeError answers err in the error shape of the tool-neutral APIs. The
-// refusal of a cycle has its own body, because it lists the units of the loop.
+// classifier of this API answers the errors of a trigger, and package problem
+// answers the rest.
 func (h *Handler) writeError(ctx context.Context, w http.ResponseWriter, err error) {
-	wr := problem.Writer{Logger: h.logger, KeepDenied: keepDenied, Classify: classify}
-
-	// A denial wins over the cycle answer too: a caller with no right on the
-	// loop gets the same 403 as for any other refusal.
-	if cycle, ok := errors.AsType[*trigger.CycleError](err); ok && !errors.Is(err, identity.ErrDenied) {
-		h.writeCycle(ctx, w, wr, cycle)
-
-		return
-	}
-
-	wr.Write(ctx, w, err)
-}
-
-// writeCycle answers the refusal of a save that closes a loop of units. A code
-// that the catalog refuses goes to the writer, which logs the code and answers
-// 500.
-func (h *Handler) writeCycle(ctx context.Context, w http.ResponseWriter, wr problem.Writer, cycle *trigger.CycleError) {
-	if a, err := errcode.New(errcode.TriggerCycle); err == nil {
-		w.Header().Set("Cache-Control", "no-store")
-
-		problem.WriteJSON(ctx, h.logger, w, http.StatusConflict, cycleResponse{
-			Message: cycleMessage(cycle), Code: http.StatusConflict, ErrorCode: a.Code(), ErrorArgs: a.Args(),
-			Units: cycleUnits(cycle),
-		})
-
-		return
-	}
-
-	wr.WriteProblem(ctx, w, problem.Problem{
-		Status: http.StatusConflict, Code: errcode.TriggerCycle, Values: nil, Message: "",
-		RetryAfter: 0, Reauthenticate: "",
-	})
-}
-
-// fail returns the answer of status and message with a code of the catalog
-// that takes no argument.
-func fail(status int, code, message string) (problem.Problem, bool) {
-	return problem.Built(status, message, code, errcode.Answer{}, nil), true
+	problem.Writer{Logger: h.logger, KeepDenied: keepDenied, Classify: classify}.Write(ctx, w, err)
 }
 
 // keepDenied answers the one class of the triggers API that wraps a denial and
 // keeps its own code: a save whose last saver lost access.
 func keepDenied(err error) (problem.Problem, bool) {
 	if errors.Is(err, trigger.ErrSaverDenied) {
-		return fail(http.StatusForbidden, errcode.TriggerSaverDenied,
+		return problem.New(http.StatusForbidden, errcode.TriggerSaverDenied,
 			"the person who saves the trigger needs a stored principal that holds the actions to change "+
-				"the unit and to start a plan on it, and to read the source unit of a follows trigger")
+				"the unit and to start a plan on it, and to read the source unit of a follows trigger"), true
 	}
 
 	return problem.Pass()
@@ -272,9 +220,19 @@ func keepDenied(err error) (problem.Problem, bool) {
 // error that it does not know. Package problem answers a denial before this
 // classifier runs, and the shared classes answer the rest.
 func classify(err error) (problem.Problem, bool) {
+	// The refusal of a cycle lists the units of the loop. A denial is answered
+	// before this classifier, so a caller with no right on the loop gets the
+	// same 403 as for any other refusal.
+	if cycle, ok := errors.AsType[*trigger.CycleError](err); ok {
+		p := problem.New(http.StatusConflict, errcode.TriggerCycle, cycleMessage(cycle))
+		p.Units = cycleUnits(cycle)
+
+		return p, true
+	}
+
 	switch {
 	case errors.Is(err, errNotFound), errors.Is(err, namespace.ErrNotFound), errors.Is(err, trigger.ErrNotFound):
-		return fail(http.StatusNotFound, errcode.TriggerNotFound, errNotFound.Error())
+		return problem.New(http.StatusNotFound, errcode.TriggerNotFound, errNotFound.Error()), true
 	}
 
 	return classifyRule(err)
@@ -288,16 +246,23 @@ func classifyRule(err error) (problem.Problem, bool) {
 
 	switch {
 	case errors.Is(err, errKeyUnsupported):
-		return fail(http.StatusBadRequest, errcode.RequestIdempotencyKeyUnsupported, errKeyUnsupported.Error())
+		return problem.New(
+			http.StatusBadRequest,
+			errcode.RequestIdempotencyKeyUnsupported,
+			errKeyUnsupported.Error(),
+		), true
 	case errors.Is(err, idempotency.ErrInvalidKey):
-		return fail(http.StatusBadRequest, errcode.RequestIdempotencyKeyInvalid,
-			refusal.Clean(err.Error(), maxMessageBytes))
+		return problem.Refused(err, http.StatusBadRequest, errcode.RequestIdempotencyKeyInvalid), true
 	case errors.Is(err, errBody):
-		return fail(http.StatusBadRequest, errcode.RequestBodyInvalid, refusal.Clean(err.Error(), maxMessageBytes))
+		return problem.Refused(err, http.StatusBadRequest, errcode.RequestBodyInvalid), true
 	case errors.Is(err, trigger.ErrInvalid):
-		return fail(http.StatusBadRequest, errcode.TriggerInvalid, refusal.Clean(err.Error(), maxMessageBytes))
+		return problem.Refused(err, http.StatusBadRequest, errcode.TriggerInvalid), true
 	case errors.Is(err, trigger.ErrDisabled):
-		return fail(http.StatusConflict, errcode.TriggerDisabled, "the trigger is off: switch it on before you fire it")
+		return problem.New(
+			http.StatusConflict,
+			errcode.TriggerDisabled,
+			"the trigger is off: switch it on before you fire it",
+		), true
 	}
 
 	return classifyJob(err)
@@ -309,33 +274,31 @@ func classifyRule(err error) (problem.Problem, bool) {
 func classifyLocked(manual *manuallock.LockedError) problem.Problem {
 	a, err := refusal.Locked(manual)
 
-	return problem.Built(http.StatusConflict, refusal.Clean(refusal.LockedText(manual), maxMessageBytes),
+	return problem.Built(http.StatusConflict, refusal.Clean(refusal.LockedText(manual), problem.MaxMessageBytes),
 		errcode.LockLocked, a, err)
 }
 
 // classifyJob maps the refusals of the job service to a manual fire.
 func classifyJob(err error) (problem.Problem, bool) {
-	message := refusal.Clean(err.Error(), maxMessageBytes)
-
 	switch {
 	case errors.Is(err, job.ErrInvalid):
-		return fail(http.StatusBadRequest, errcode.JobInvalid, message)
+		return problem.Refused(err, http.StatusBadRequest, errcode.JobInvalid), true
 	case errors.Is(err, job.ErrUnsupported):
-		return fail(http.StatusUnprocessableEntity, errcode.JobUnsupported, message)
+		return problem.Refused(err, http.StatusUnprocessableEntity, errcode.JobUnsupported), true
 	case errors.Is(err, job.ErrPolicyDenied):
-		return fail(http.StatusForbidden, errcode.JobPolicyDenied, message)
+		return problem.Refused(err, http.StatusForbidden, errcode.JobPolicyDenied), true
 	case errors.Is(err, job.ErrGateEnforced):
-		return fail(http.StatusForbidden, errcode.JobGateEnforced, message)
+		return problem.Refused(err, http.StatusForbidden, errcode.JobGateEnforced), true
 	case errors.Is(err, job.ErrAgentDenied):
-		return fail(http.StatusForbidden, errcode.JobAgentDenied, message)
+		return problem.Refused(err, http.StatusForbidden, errcode.JobAgentDenied), true
 	case errors.Is(err, job.ErrKeyConflict):
-		return fail(http.StatusConflict, errcode.TriggerFireConflict, message)
+		return problem.Refused(err, http.StatusConflict, errcode.TriggerFireConflict), true
 	case errors.Is(err, job.ErrFrozen):
-		return fail(http.StatusConflict, errcode.JobFrozen, message)
+		return problem.Refused(err, http.StatusConflict, errcode.JobFrozen), true
 	case errors.Is(err, job.ErrLimit):
-		return fail(http.StatusTooManyRequests, errcode.JobLimit, message)
+		return problem.Refused(err, http.StatusTooManyRequests, errcode.JobLimit), true
 	case errors.Is(err, job.ErrNotFound):
-		return fail(http.StatusNotFound, errcode.TriggerNotFound, message)
+		return problem.Refused(err, http.StatusNotFound, errcode.TriggerNotFound), true
 	}
 
 	return problem.Pass()

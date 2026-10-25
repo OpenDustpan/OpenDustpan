@@ -175,25 +175,28 @@ func contextErrors(err error) (problem.Problem, bool) {
 	case errors.Is(err, errNotFound), errors.Is(err, namespace.ErrNotFound):
 		// One answer for every object that the caller may not see, so the
 		// answer never tells that it exists.
-		return fail(http.StatusNotFound, errNotFound.Error(), errcode.ContextObjectNotFound), true
+		return problem.New(http.StatusNotFound, errcode.ContextObjectNotFound, errNotFound.Error()), true
 	case errors.Is(err, objectcontext.ErrInvalidObject):
 		// A purge removed the unit after the route resolved it.
-		return fail(http.StatusNotFound, errNotFound.Error(), errcode.ContextObjectNotFound), true
+		return problem.New(http.StatusNotFound, errcode.ContextObjectNotFound, errNotFound.Error()), true
 	case errors.Is(err, objectcontext.ErrNotFound):
-		return fail(http.StatusNotFound, "no API context to clear", errcode.ContextNotSet), true
+		return problem.New(http.StatusNotFound, errcode.ContextNotSet, "no API context to clear"), true
 	case errors.Is(err, errBody), errors.Is(err, errBodyText):
-		return fail(http.StatusBadRequest, err.Error(), errcode.RequestBodyInvalid), true
+		return problem.New(http.StatusBadRequest, errcode.RequestBodyInvalid, err.Error()), true
 	case errors.Is(err, errInclude):
-		return fail(http.StatusBadRequest, err.Error(), errcode.RequestInvalidQuery), true
+		return problem.New(http.StatusBadRequest, errcode.RequestInvalidQuery, err.Error()), true
 	case errors.Is(err, objectcontext.ErrInvalidContext):
-		return fail(http.StatusBadRequest, invalidMessage(err), errcode.ContextInvalid), true
+		return problem.New(http.StatusBadRequest, errcode.ContextInvalid, invalidMessage(err)), true
 	case errors.Is(err, objectcontext.ErrUnknownSection):
-		return fail(http.StatusBadRequest, invalidMessage(err), errcode.ContextUnknownSection), true
+		return problem.New(http.StatusBadRequest, errcode.ContextUnknownSection, invalidMessage(err)), true
 	case errors.Is(err, objectcontext.ErrFieldFromCode):
 		return fieldFromCodeError(err), true
 	case errors.Is(err, objectcontext.ErrUnitDeleted):
-		return fail(http.StatusConflict, "the unit is deleted: restore it before you change its context",
-			errcode.ContextUnitDeleted), true
+		return problem.New(
+			http.StatusConflict,
+			errcode.ContextUnitDeleted,
+			"the unit is deleted: restore it before you change its context",
+		), true
 	default:
 		return problem.Pass()
 	}
@@ -221,17 +224,12 @@ func fieldFromCodeError(err error) problem.Problem {
 		return problem.Internal()
 	}
 
-	return fail(http.StatusConflict, err.Error()+": change it in the opendustpan output of the unit",
-		errcode.ContextFieldFromCode, errcode.Identifier("field", string(field.Field)))
-}
-
-// fail returns the answer of status and message with the catalog code and its
-// values. When the catalog refuses the code or the values, the writer answers
-// 500.
-func fail(status int, message, code string, values ...errcode.Value) problem.Problem {
-	return problem.Problem{
-		Status: status, Code: code, Values: values, Message: message, RetryAfter: 0, Reauthenticate: "",
-	}
+	return problem.New(
+		http.StatusConflict,
+		errcode.ContextFieldFromCode,
+		err.Error()+": change it in the opendustpan output of the unit",
+		errcode.Identifier("field", string(field.Field)),
+	)
 }
 
 func (h *Handler) writeJSON(ctx context.Context, w http.ResponseWriter, status int, body any) {
