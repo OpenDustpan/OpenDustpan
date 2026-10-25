@@ -239,8 +239,17 @@ func newStartHandler(
 	}
 
 	handler, err := jobsapi.NewHandler(jobsapi.Config{
-		Namespaces: namespaces, Jobs: jobs, Starter: starter, Authenticator: tokenAuthenticator{}, Authorizer: authz,
-		Audit: entries, OnAuditFailure: nil, DenialLimiter: nil, Sessions: nil, Logger: slog.New(slog.DiscardHandler),
+		Namespaces:     namespaces,
+		Jobs:           jobs,
+		Starter:        starter,
+		Pools:          nil,
+		Authenticator:  tokenAuthenticator{},
+		Authorizer:     authz,
+		Audit:          entries,
+		OnAuditFailure: nil,
+		DenialLimiter:  nil,
+		Sessions:       nil,
+		Logger:         slog.New(slog.DiscardHandler),
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -621,7 +630,7 @@ func TestJobDocument(t *testing.T) {
 	for _, want := range []string{
 		`"id":"` + testJob + `"`, `"namespace":"acme"`, `"tool":"OpenTofu"`, `"id":"` + testUnit + `"`,
 		`"operation":"apply"`, `"executor":"runner"`, `"state":"running"`, `"current":1`, `"startedBy":"ada"`,
-		`"version":3`, `"source":"schedule"`, `"kind":"plan"`, `"kind":"apply"`, `"stateVersion":"sv-1"`, `"pool":"pool-1"`,
+		`"version":3`, `"source":"schedule"`, `"kind":"plan"`, `"kind":"apply"`, `"stateVersion":"sv-1"`, `"poolID":"pool-1"`,
 		`"profile":"prf-secret-profile"`, `"repository":"acme/infra"`, `"exitCode":0`, `"subject":"bo"`, `"verdict":"approve"`,
 		`"name":"plan","role":"tool","phase":"plan","changesResources":false`,
 	} {
@@ -741,6 +750,7 @@ func TestNewHandlerNeedsItsDependencies(t *testing.T) {
 		Namespaces:     nil,
 		Jobs:           nil,
 		Starter:        nil,
+		Pools:          nil,
 		Authenticator:  nil,
 		Authorizer:     nil,
 		Audit:          newTestAudit(),

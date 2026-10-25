@@ -1,6 +1,9 @@
 package jobs
 
 import (
+	"context"
+	"errors"
+	"fmt"
 	"net/http"
 	"slices"
 	"strconv"
@@ -8,12 +11,15 @@ import (
 
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/job"
+	"opendustpan.org/opendustpan/pkg/runner"
 )
 
 // jobResponse is the answered document of a job read. A step answers its
 // name, role and phase, and never its arguments or its variables. The name of
 // the unit is the name at the start of the job; the unit ID stays the same
-// after a rename.
+// after a rename. Pool is the name of the runner pool, the value that a start
+// request takes. PoolID is the ID of the pool. A pool that no longer exists, or
+// that belongs to another namespace, has no name in the answer.
 type jobResponse struct {
 	ID           string            `json:"id"`
 	Namespace    string            `json:"namespace"`
@@ -26,6 +32,7 @@ type jobResponse struct {
 	Reason       string            `json:"reason,omitempty"`
 	Location     locationResponse  `json:"location"`
 	Pool         string            `json:"pool,omitempty"`
+	PoolID       string            `json:"poolID,omitempty"`
 	Profile      string            `json:"profile,omitempty"`
 	Defaulted    []string          `json:"defaulted,omitempty"`
 	Steps        []stepResponse    `json:"steps"`
@@ -160,7 +167,52 @@ type closedResponse struct {
 // namespace and job:read on the unit of the job.
 func (h *Handler) getJob(w http.ResponseWriter, r *http.Request, _ identity.Principal, t *target) {
 	setETag(w, &t.job)
-	h.writeJSON(r.Context(), w, http.StatusOK, toJobResponse(&t.job))
+	h.answerJob(r.Context(), w, http.StatusOK, &t.job)
+}
+
+// answerJob writes the document of j with the status. It names the pool of
+// the job. A failed read of the pool answers 500, and never a document with a
+// silent blank in place of the name.
+func (h *Handler) answerJob(ctx context.Context, w http.ResponseWriter, status int, j *job.Job) {
+	out := toJobResponse(j)
+
+	name, err := h.poolName(ctx, j)
+	if err != nil {
+		h.writeError(ctx, w, err)
+
+		return
+	}
+
+	out.Pool = name
+
+	h.writeJSON(ctx, w, status, out)
+}
+
+// poolName returns the name of the runner pool of j, or an empty name when the
+// job has no pool, the pool is gone, or the pool is not in the namespace of
+// the job. The server without a pool reader names no pool.
+func (h *Handler) poolName(ctx context.Context, j *job.Job) (string, error) {
+	if j.Spec.Pool == "" || h.pools == nil {
+		return "", nil
+	}
+
+	pool, err := h.pools.Pool(ctx, j.Spec.Pool)
+	if errors.Is(err, runner.ErrNotFound) {
+		return "", nil
+	}
+
+	if err != nil {
+		return "", fmt.Errorf("pool %s of job %s: %w", j.Spec.Pool, j.ID, err)
+	}
+
+	// Defense in depth: the store reads a pool by its ID, and the start checks
+	// the namespace of the pool. This check stays so that a pool of another
+	// namespace never gives its name to the answer of a job.
+	if pool.Namespace != j.Spec.Unit.Namespace() {
+		return "", nil
+	}
+
+	return pool.Name, nil
 }
 
 // setETag sets the ETag header of j: its version, in quotes. The version grows
@@ -200,7 +252,8 @@ func toJobResponse(j *job.Job) jobResponse {
 		Wait:         string(j.Wait),
 		Reason:       j.Reason,
 		Location:     answerLocation(j.Spec.Location),
-		Pool:         j.Spec.Pool,
+		Pool:         "",
+		PoolID:       j.Spec.Pool,
 		Profile:      j.Spec.Profile,
 		Defaulted:    slices.Clone(j.Spec.Defaulted),
 		Steps:        make([]stepResponse, 0, len(j.Spec.Steps)),
