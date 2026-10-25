@@ -201,9 +201,10 @@ func SafeText(s string) string {
 // LockedError is the error of a request that a manual lock refuses. It
 // matches ErrLocked. The tool that refuses the request sets Noun to its own
 // word for the unit, for example "stack" or "workspace", and Name to the name
-// of the unit in that tool. The text names the unit, the holder, the reason
-// and the route that removes the lock. Unit is the refused unit as a typed
-// reference: the answer of the refusal reads it, never Name. A restore of a
+// of the unit in that tool. The text names the unit, the holder and the
+// reason. It names no route: each adapter adds the route of its own API. Unit
+// is the refused unit as a typed reference: the answer of the refusal reads
+// it, never Name. A restore of a
 // deleted unit by its stable ID sets Unit.Name to that ID, because the unit
 // has no live name yet.
 type LockedError struct {
@@ -213,11 +214,9 @@ type LockedError struct {
 	Name string
 }
 
-// Error returns the text of the refusal (Refusal), then the route of the
-// holder that removes the lock: ". To remove the lock, the holder sends
-// DELETE <route>.".
+// Error returns the text of the refusal (Refusal).
 func (e *LockedError) Error() string {
-	return e.Refusal() + ". To remove the lock, the holder sends DELETE " + e.Lock.Target.RemovalRoutes().Remove + "."
+	return e.Refusal()
 }
 
 // Refusal returns the text of the refusal with no route. A lock on the unit

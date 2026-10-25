@@ -117,7 +117,7 @@ func (h *Handler) writeError(ctx context.Context, w http.ResponseWriter, err err
 	}
 
 	if manual, ok := errors.AsType[*manuallock.LockedError](err); ok {
-		h.writeManualLock(ctx, w, manual, err.Error())
+		h.writeManualLock(ctx, w, manual, refusal.LockedText(manual))
 
 		return
 	}

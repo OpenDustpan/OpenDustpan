@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/api/refusal"
 	"opendustpan.org/opendustpan/internal/api/tofuunit"
 	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/pkg/audit"
@@ -190,7 +191,7 @@ func (h *Handler) lockOnce(ctx context.Context, c lockCall) bool {
 // go-tfe parses.
 func (h *Handler) writeLockRefusal(ctx context.Context, w http.ResponseWriter, id workspace.ID, err error) {
 	if manual, ok := errors.AsType[*manuallock.LockedError](err); ok {
-		h.writeManualLock(ctx, w, manual, manual.Error())
+		h.writeManualLock(ctx, w, manual, refusal.LockedText(manual))
 
 		return
 	}
