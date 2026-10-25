@@ -317,7 +317,15 @@ a conformance test must hold it (see "Conformance tests").
   the checkpoint keys only. The proof below uses "the blob is unnamed" as its
   premise for rows 2 and 3. That premise holds only after the fix of #1923.
   Until then, rows 2 and 3 can delete a named blob, and no guard on the
-  backup side can make that safe.
+  backup side can make that safe. One exception: a retried save that adopts
+  a blob that its failed first attempt left under the same key
+  (`adoptCheckpoint` in `pkg/stack/checkpoint_write.go`) makes an unnamed
+  blob named again, so a sweep can find that blob unnamed before the retry
+  commits. No snapshot names the blob before that commit, so the guard has
+  nothing to protect there and does not change the case. It only makes the
+  sweep delete later. Whether the sweep and the adopt race safely depends on
+  `sweepGracePeriod` and the save, not on this guard, and this RFC does not
+  analyze it.
 
 - **A1. The row commits before the snapshot.** `Registry.StartBackup` stores
   the running row and starts the durable operation in one transaction. The
