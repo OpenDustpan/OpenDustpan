@@ -34,6 +34,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/api/idempotent"
+	"opendustpan.org/opendustpan/internal/api/refusal"
 	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/internal/sessionauth"
 	"opendustpan.org/opendustpan/pkg/idempotency"
@@ -57,9 +58,20 @@ type Problem struct {
 	// Reauthenticate is the path that starts a new sign-in, for the refusal
 	// of an old sign-in, or "".
 	Reauthenticate string
+	// Units are the units that the answer names, in order, or nil. A refusal
+	// that lists the units of a loop sets them.
+	Units []Unit
 	// answer is the finished code and arguments of an error that already
 	// holds them, or the zero Answer.
 	answer errcode.Answer
+}
+
+// Unit is a unit that an answer names: its ID, the label of its tool and its
+// name.
+type Unit struct {
+	ID   string `json:"id"`
+	Tool string `json:"tool"`
+	Name string `json:"name"`
 }
 
 // Body is the error body of the tool-neutral APIs. Code is the HTTP status;
@@ -70,6 +82,7 @@ type Body struct {
 	ErrorCode      string         `json:"errorCode,omitempty"`
 	ErrorArgs      map[string]any `json:"errorArgs,omitempty"`
 	Reauthenticate string         `json:"reauthenticate,omitempty"`
+	Units          []Unit         `json:"units,omitempty"`
 }
 
 // Error is an error with a fixed answer.
@@ -84,6 +97,26 @@ func (e *Error) Error() string { return e.Problem.Message }
 // takes no argument.
 func Fixed(status int, code, message string) error {
 	return &Error{Problem: answer(status, code, message)}
+}
+
+// MaxMessageBytes is the longest refusal text that an answer repeats. Refused
+// cuts the text of an error to this length.
+const MaxMessageBytes = 300
+
+// New returns the answer of status, code and message, with the arguments that
+// the code declares. The order of the arguments is the order of Fixed. A code
+// or a value that the catalog refuses makes the writer answer server.internal.
+func New(status int, code, message string, values ...errcode.Value) Problem {
+	p := answer(status, code, message)
+	p.Values = values
+
+	return p
+}
+
+// Refused returns the answer to a refusal of a service: the text of err, cleaned
+// and cut to MaxMessageBytes, with status and code. The code takes no argument.
+func Refused(err error, status int, code string) Problem {
+	return answer(status, code, refusal.Clean(err.Error(), MaxMessageBytes))
 }
 
 // BadRequest returns an error that answers 400 with code and message.
@@ -171,7 +204,7 @@ func (wr Writer) WriteProblem(ctx context.Context, w http.ResponseWriter, p Prob
 
 	WriteJSON(ctx, wr.Logger, w, p.Status, Body{
 		Message: p.Message, Code: p.Status, ErrorCode: made.Code(), ErrorArgs: made.Args(),
-		Reauthenticate: p.Reauthenticate,
+		Reauthenticate: p.Reauthenticate, Units: p.Units,
 	})
 }
 
@@ -356,7 +389,7 @@ func Built(status int, message, code string, a errcode.Answer, err error) Proble
 func answer(status int, code, message string) Problem {
 	return Problem{
 		Status: status, Code: code, Values: nil, Message: message, RetryAfter: 0, Reauthenticate: "",
-		answer: errcode.Answer{},
+		Units: nil, answer: errcode.Answer{},
 	}
 }
 

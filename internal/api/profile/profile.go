@@ -142,15 +142,15 @@ func profileErrors(err error) (problem.Problem, bool) {
 
 	switch {
 	case errors.Is(err, profile.ErrNotFound):
-		return profileProblem(http.StatusNotFound, errcode.ProfileNotFound, err.Error()), true
+		return problem.New(http.StatusNotFound, errcode.ProfileNotFound, err.Error()), true
 	case errors.Is(err, profile.ErrSchemaVersion):
-		return profileProblem(http.StatusUnprocessableEntity, errcode.ProfileSchemaVersion, err.Error()), true
+		return problem.New(http.StatusUnprocessableEntity, errcode.ProfileSchemaVersion, err.Error()), true
 	case errors.Is(err, profile.ErrLimit):
-		return profileProblem(http.StatusUnprocessableEntity, errcode.ProfileLimit, err.Error()), true
+		return problem.New(http.StatusUnprocessableEntity, errcode.ProfileLimit, err.Error()), true
 	case errors.Is(err, profile.ErrInvalid):
-		return profileProblem(http.StatusBadRequest, errcode.ProfileInvalid, err.Error()), true
+		return problem.New(http.StatusBadRequest, errcode.ProfileInvalid, err.Error()), true
 	case errors.Is(err, profile.ErrConflict):
-		return profileProblem(http.StatusConflict, errcode.ProfileConflict, err.Error()), true
+		return problem.New(http.StatusConflict, errcode.ProfileConflict, err.Error()), true
 	default:
 		return problem.Pass()
 	}
@@ -160,7 +160,7 @@ func profileErrors(err error) (problem.Problem, bool) {
 // keeps its own code: a refused change of the routing of a profile.
 func keepDenied(err error) (problem.Problem, bool) {
 	if routing, ok := errors.AsType[*profile.RoutingError](err); ok {
-		return profileProblem(http.StatusForbidden, errcode.ProfileRoutingChangeNeedsOpen, routing.Error()), true
+		return problem.New(http.StatusForbidden, errcode.ProfileRoutingChangeNeedsOpen, routing.Error()), true
 	}
 
 	return problem.Pass()
@@ -172,13 +172,13 @@ func keepDenied(err error) (problem.Problem, bool) {
 func freshErrors(err error) (problem.Problem, bool) {
 	switch {
 	case errors.Is(err, errFreshStepRequired), errors.Is(err, profile.ErrFreshRequired):
-		return profileProblem(
+		return problem.New(
 			http.StatusForbidden,
 			errcode.MFAFreshStepRequired,
 			sessionauth.FreshStepRequiredMessage,
 		), true
 	case errors.Is(err, errReauthenticate):
-		p := profileProblem(http.StatusUnauthorized, errcode.MFAFreshStepRequired, err.Error())
+		p := problem.New(http.StatusUnauthorized, errcode.MFAFreshStepRequired, err.Error())
 
 		if old, ok := errors.AsType[reauthenticateError](err); ok {
 			p.Reauthenticate = old.path
@@ -187,13 +187,6 @@ func freshErrors(err error) (problem.Problem, bool) {
 		return p, true
 	default:
 		return problem.Pass()
-	}
-}
-
-// profileAnswer returns the answer of a profile error with no arguments.
-func profileProblem(status int, code, message string) problem.Problem {
-	return problem.Problem{
-		Status: status, Code: code, Values: nil, Message: message, RetryAfter: 0, Reauthenticate: "",
 	}
 }
 

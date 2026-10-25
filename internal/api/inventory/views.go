@@ -73,19 +73,19 @@ func newViews(cfg *ViewsConfig) (*views, error) {
 func classifyView(err error) (problem.Problem, bool) {
 	switch {
 	case errors.Is(err, savedview.ErrNotPerson):
-		return fail(http.StatusForbidden, savedview.ErrNotPerson.Error(), errcode.ViewNotPerson), true
+		return problem.New(http.StatusForbidden, errcode.ViewNotPerson, savedview.ErrNotPerson.Error()), true
 	case errors.Is(err, savedview.ErrNotFound):
-		return fail(http.StatusNotFound, savedview.ErrNotFound.Error(), errcode.ViewNotFound), true
+		return problem.New(http.StatusNotFound, errcode.ViewNotFound, savedview.ErrNotFound.Error()), true
 	case errors.Is(err, savedview.ErrInvalid):
-		return fail(http.StatusBadRequest, err.Error(), errcode.ViewInvalid), true
+		return problem.New(http.StatusBadRequest, errcode.ViewInvalid, err.Error()), true
 	case errors.Is(err, errViewBody):
-		return fail(http.StatusBadRequest, err.Error(), errcode.RequestBodyInvalid), true
+		return problem.New(http.StatusBadRequest, errcode.RequestBodyInvalid, err.Error()), true
 	case errors.Is(err, errViewIdempotencyKey):
-		return fail(http.StatusBadRequest, err.Error(), errcode.RequestIdempotencyKeyUnavailable), true
+		return problem.New(http.StatusBadRequest, errcode.RequestIdempotencyKeyUnavailable, err.Error()), true
 	case errors.Is(err, savedview.ErrExists):
-		return fail(http.StatusConflict, err.Error(), errcode.ViewAlreadyExists), true
+		return problem.New(http.StatusConflict, errcode.ViewAlreadyExists, err.Error()), true
 	case errors.Is(err, savedview.ErrLimit):
-		return fail(http.StatusConflict, err.Error(), errcode.ViewLimit), true
+		return problem.New(http.StatusConflict, errcode.ViewLimit, err.Error()), true
 	}
 
 	var none problem.Problem
