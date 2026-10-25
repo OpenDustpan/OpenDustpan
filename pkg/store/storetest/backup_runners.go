@@ -2,6 +2,7 @@ package storetest
 
 import (
 	"bytes"
+	"context"
 	"crypto/ed25519"
 	"crypto/sha256"
 	"encoding/hex"
@@ -23,12 +24,19 @@ type RunnerPorts struct {
 	Members runner.MemberStore
 }
 
-// RunnerSeeder is an optional BackupStore capability: a store that keeps
-// runner pools gives its ports, so the round trip fills and compares the
-// three runner tables. A store with no runner port skips them: the fake of
-// this package's own tests is one.
+// RunnerSeeder is a BackupStore capability for a store that keeps runner
+// pools. The round trip fills and compares the three runner tables through
+// RunnerPorts. The control rows of the runner protocol are not in the backup:
+// SeedRunnerControlRows writes one row in each of them, and
+// CountRunnerControlRows reads the rows of each. A store that has no runner
+// port does not implement this interface, so the suite refuses it at compile
+// time.
 type RunnerSeeder interface {
 	RunnerPorts() RunnerPorts
+	// SeedRunnerControlRows writes one row in each control table.
+	SeedRunnerControlRows(ctx context.Context) error
+	// CountRunnerControlRows returns the rows that each control table holds.
+	CountRunnerControlRows(ctx context.Context) (map[string]int64, error)
 }
 
 // runnerTables returns the runner tables in backup.Tables.
@@ -37,28 +45,29 @@ func runnerTables() []string {
 }
 
 // runnerControlTables returns the tables of the runner protocol that the
-// backup does not hold. A restore leaves them empty.
+// backup does not hold. A restore does not carry their rows.
 func runnerControlTables() []string {
 	return []string{"runner_claims", "runner_handoff_tokens", "runner_sessions", "runner_nonces"}
 }
 
-// seededRunners names what seedBackupRunners wrote.
+// seededRunners holds the pool, the join token and the runner as the store
+// returned them after the join, read back before the backup. The round trip
+// compares the restored rows with these values.
 type seededRunners struct {
-	pool     runner.Pool
-	token    runner.JoinToken
-	runner   runner.Runner
-	key      runner.Key
-	secret   string
-	joinedAt time.Time
+	pool   runner.Pool
+	token  runner.JoinToken
+	runner runner.Runner
 }
 
 // runnerSecret is the join secret of the seeded token. The store keeps only
-// its hash, so the round trip proves that the hash travels byte for byte.
+// its hash.
 const runnerSecret = runner.JoinTokenPrefix + "seed-secret-0123456789"
 
 // seedBackupRunners writes one pool in acme, one join token of the pool, and
-// one runner that joined with that token. It returns nil for a store with no
-// runner port.
+// one runner that joined with that token. It also writes one row in each
+// control table of the runner protocol, so that the restore check can prove
+// that those rows do not arrive. It returns nil for a store with no runner
+// port.
 func seedBackupRunners(t *testing.T, s BackupStore, acme namespace.Namespace) *seededRunners {
 	t.Helper()
 
@@ -82,10 +91,11 @@ func seedBackupRunners(t *testing.T, s BackupStore, acme namespace.Namespace) *s
 		t.Fatalf("create runner pool: %v", err)
 	}
 
-	sum := hashSecret(runnerSecret)
+	digest := sha256.Sum256([]byte(runnerSecret))
+	tokenHash := hex.EncodeToString(digest[:])
 
 	token, err := ports.Pools.CreateJoinToken(ctx, runner.JoinToken{
-		ID: "", Pool: pool.ID, SHA256: sum, CreatedBy: "alice", CreatedAt: now(),
+		ID: "", Pool: pool.ID, SHA256: tokenHash, CreatedBy: "alice", CreatedAt: now(),
 		ExpiresAt: now().Add(time.Hour), UsedAt: time.Time{}, UsedBy: "", RevokedAt: time.Time{},
 	}, fence, entries)
 	if err != nil {
@@ -97,19 +107,15 @@ func seedBackupRunners(t *testing.T, s BackupStore, acme namespace.Namespace) *s
 		t.Fatalf("generate runner key: %v", err)
 	}
 
-	key := runner.Key{Public: pub, CreatedAt: time.Time{}}
-
-	joinedAt := now()
-
 	joined, err := ports.Members.Join(ctx, runner.Joining{
-		TokenSHA256: sum,
+		TokenSHA256: token.SHA256,
 		Request: runner.JoinRequest{
 			Token: "", Name: "linux-1", Kind: runner.KindKubernetes, Isolation: runner.IsolationKubernetes,
 			Labels:  map[string]string{"region": "eu-west-1"},
 			Release: runner.Release{Major: 0, Minor: 14, Patch: 0, Pre: ""},
-			Key:     key, Proof: nil,
+			Key:     runner.Key{Public: pub, CreatedAt: time.Time{}}, Proof: nil,
 		},
-		At: joinedAt,
+		At: now(),
 	}, fence, func(j *runner.Joined) []audit.Entry {
 		e := lifecycleEntry(acme.Name, string(runner.ActionRunnerJoin))
 		e.ObjectID = j.Runner.ID
@@ -120,25 +126,67 @@ func seedBackupRunners(t *testing.T, s BackupStore, acme namespace.Namespace) *s
 		t.Fatalf("join runner: %v", err)
 	}
 
+	if err := seeder.SeedRunnerControlRows(ctx); err != nil {
+		t.Fatalf("seed runner control rows: %v", err)
+	}
+
 	return &seededRunners{
-		pool: pool, token: token, runner: joined.Runner, key: key, secret: runnerSecret, joinedAt: joinedAt,
+		pool:   readBackPool(t, ports, acme, pool.ID),
+		token:  readBackJoinToken(t, ports, pool.ID),
+		runner: readBackRunner(t, ports, joined.Runner.ID),
 	}
 }
 
-// hashSecret returns the hex SHA-256 of a join secret, as the stores keep it.
-func hashSecret(secret string) string {
-	sum := sha256.Sum256([]byte(secret))
+// readBackPool returns the pool id as the store returns it now.
+func readBackPool(t *testing.T, ports RunnerPorts, acme namespace.Namespace, id string) runner.Pool {
+	t.Helper()
 
-	return hex.EncodeToString(sum[:])
+	pool, err := ports.Pools.Pool(t.Context(), id)
+	if err != nil {
+		t.Fatalf("read runner pool %s: %v", id, err)
+	}
+
+	if pool.Namespace != acme.Name {
+		t.Fatalf("runner pool namespace = %q, want %q", pool.Namespace, acme.Name)
+	}
+
+	return pool
 }
 
-// checkRunnerRowCounts checks that sum holds one row in each runner table,
-// and no row of a control table, when the store keeps runner pools. The
-// control tables are not in the backup, so the summary has no count for them.
+// readBackJoinToken returns the one join token of the pool as the store
+// returns it now.
+func readBackJoinToken(t *testing.T, ports RunnerPorts, pool string) runner.JoinToken {
+	t.Helper()
+
+	tokens, err := ports.Pools.JoinTokens(t.Context(), pool)
+	if err != nil || len(tokens) != 1 {
+		t.Fatalf("read join tokens of pool %s = %+v, %v, want one token", pool, tokens, err)
+	}
+
+	return tokens[0]
+}
+
+// readBackRunner returns the runner id as the store returns it now.
+func readBackRunner(t *testing.T, ports RunnerPorts, id string) runner.Runner {
+	t.Helper()
+
+	r, err := ports.Members.Runner(t.Context(), id)
+	if err != nil {
+		t.Fatalf("read runner %s: %v", id, err)
+	}
+
+	return r
+}
+
+// checkRunnerRowCounts checks that sum holds one row in each runner table
+// when the store keeps runner pools, and that the source holds one row in
+// each control table. The control tables are not in the backup, so the
+// summary has no count for them.
 func checkRunnerRowCounts(t *testing.T, s BackupStore, sum backup.Summary) {
 	t.Helper()
 
-	if _, ok := s.(RunnerSeeder); !ok {
+	seeder, ok := s.(RunnerSeeder)
+	if !ok {
 		return
 	}
 
@@ -153,11 +201,22 @@ func checkRunnerRowCounts(t *testing.T, s BackupStore, sum backup.Summary) {
 			t.Errorf("exported rows of control table %q = %d, want none in the backup", table, got)
 		}
 	}
+
+	counts, err := seeder.CountRunnerControlRows(t.Context())
+	if err != nil {
+		t.Fatalf("count runner control rows of the source: %v", err)
+	}
+
+	for _, table := range runnerControlTables() {
+		if counts[table] != 1 {
+			t.Errorf("source rows of control table %q = %d, want 1", table, counts[table])
+		}
+	}
 }
 
 // checkRestoredRunners checks that dst holds the seeded pool, join token and
-// runner after a restore, field by field, and that the key of the runner is
-// the key that was seeded.
+// runner after a restore, field by field, as the source held them before the
+// backup.
 func checkRestoredRunners(t *testing.T, dst RestoreStore, acme namespace.Name, seeded *seededRunners) {
 	t.Helper()
 
@@ -186,25 +245,37 @@ func checkRestoredRunners(t *testing.T, dst RestoreStore, acme namespace.Name, s
 		t.Fatalf("restored join tokens = %+v, %v, want the seeded token", tokens, err)
 	}
 
-	checkRestoredJoinToken(t, seeded, tokens[0])
+	compareJoinToken(t, seeded.token, tokens[0])
 
 	got, err := ports.Members.Runner(ctx, seeded.runner.ID)
 	if err != nil {
 		t.Fatalf("restored runner %s: %v", seeded.runner.ID, err)
 	}
 
-	compareRunner(t, seeded, got)
-	compareRunnerLabels(t, seeded.runner, got)
+	compareRunner(t, seeded.runner, got)
 }
 
-// checkRestoredJoinToken fails the test when tok is not the seeded token, used
-// once by the seeded runner.
-func checkRestoredJoinToken(t *testing.T, seeded *seededRunners, tok runner.JoinToken) {
+// checkRunnerControlRowsAbsent checks that dst holds no row in any control
+// table of the runner protocol. The restore does not carry the rows of the
+// exported store, and dst was empty before the restore.
+func checkRunnerControlRowsAbsent(t *testing.T, dst RestoreStore) {
 	t.Helper()
 
-	if tok.ID != seeded.token.ID || tok.SHA256 != hashSecret(seeded.secret) || tok.UsedBy != seeded.runner.ID ||
-		!tok.UsedAt.Equal(seeded.joinedAt) || tok.CreatedBy != seeded.token.CreatedBy {
-		t.Errorf("restored join token = %+v, want the seeded token used by runner %s", tok, seeded.runner.ID)
+	seeder, ok := dst.(RunnerSeeder)
+	if !ok {
+		return
+	}
+
+	counts, err := seeder.CountRunnerControlRows(t.Context())
+	if err != nil {
+		t.Fatalf("count runner control rows after the restore: %v", err)
+	}
+
+	for _, table := range runnerControlTables() {
+		if counts[table] != 0 {
+			t.Errorf("restored rows of control table %q = %d, want 0: the rows of the exported store must not arrive",
+				table, counts[table])
+		}
 	}
 }
 
@@ -235,12 +306,28 @@ func comparePool(t *testing.T, want, got runner.Pool) {
 	}
 }
 
-// compareRunner fails the test for each field of got that differs from the
-// runner that was seeded.
-func compareRunner(t *testing.T, seeded *seededRunners, got runner.Runner) {
+// compareJoinToken fails the test for each field of got that differs from
+// want.
+func compareJoinToken(t *testing.T, want, got runner.JoinToken) {
 	t.Helper()
 
-	want := seeded.runner
+	if got.ID != want.ID || got.Pool != want.Pool || got.SHA256 != want.SHA256 ||
+		got.CreatedBy != want.CreatedBy || got.UsedBy != want.UsedBy {
+		t.Errorf("restored join token = %+v, want %+v", got, want)
+	}
+
+	if !got.CreatedAt.Equal(want.CreatedAt) || !got.ExpiresAt.Equal(want.ExpiresAt) ||
+		!got.UsedAt.Equal(want.UsedAt) || !got.RevokedAt.Equal(want.RevokedAt) {
+		t.Errorf("restored join token times = %v, %v, %v, %v, want %v, %v, %v, %v",
+			got.CreatedAt, got.ExpiresAt, got.UsedAt, got.RevokedAt,
+			want.CreatedAt, want.ExpiresAt, want.UsedAt, want.RevokedAt)
+	}
+}
+
+// compareRunner fails the test for each field of got that differs from want,
+// the runner as the store returned it before the backup.
+func compareRunner(t *testing.T, want, got runner.Runner) {
+	t.Helper()
 
 	if got.ID != want.ID || got.Pool != want.Pool || got.Namespace != want.Namespace || got.Name != want.Name {
 		t.Errorf("restored runner = %+v, want %+v", got, want)
@@ -251,25 +338,43 @@ func compareRunner(t *testing.T, seeded *seededRunners, got runner.Runner) {
 			got.Kind, got.Isolation, got.Release, want.Kind, want.Isolation, want.Release)
 	}
 
-	// The stores keep the hash of the join secret in JoinedWith. The port
-	// doc calls it the token ID. The round trip checks the stored value.
-	if got.JoinedWith != hashSecret(seeded.secret) || !got.JoinedAt.Equal(seeded.joinedAt) {
-		t.Errorf("restored runner join = %q at %v, want %q at %v",
-			got.JoinedWith, got.JoinedAt, hashSecret(seeded.secret), seeded.joinedAt)
+	if got.JoinedWith != want.JoinedWith || got.Draining != want.Draining {
+		t.Errorf("restored runner join, draining = %q, %t, want %q, %t",
+			got.JoinedWith, got.Draining, want.JoinedWith, want.Draining)
 	}
 
-	if !bytes.Equal(got.Key.Public, seeded.key.Public) || !got.Key.CreatedAt.Equal(seeded.joinedAt) {
-		t.Errorf("restored runner key = %x at %v, want %x at %v",
-			got.Key.Public, got.Key.CreatedAt, seeded.key.Public, seeded.joinedAt)
-	}
-}
-
-// compareRunnerLabels fails the test when the labels of got differ from the
-// labels of the seeded runner.
-func compareRunnerLabels(t *testing.T, want, got runner.Runner) {
-	t.Helper()
+	compareRunnerKeys(t, want, got)
+	compareRunnerTimes(t, want, got)
 
 	if !maps.Equal(got.Labels, want.Labels) {
 		t.Errorf("restored runner labels = %v, want %v", got.Labels, want.Labels)
+	}
+}
+
+// compareRunnerKeys fails the test when a key of got differs from the key of
+// want.
+func compareRunnerKeys(t *testing.T, want, got runner.Runner) {
+	t.Helper()
+
+	if !bytes.Equal(got.Key.Public, want.Key.Public) || !got.Key.CreatedAt.Equal(want.Key.CreatedAt) {
+		t.Errorf("restored runner key = %x at %v, want %x at %v",
+			got.Key.Public, got.Key.CreatedAt, want.Key.Public, want.Key.CreatedAt)
+	}
+
+	if !bytes.Equal(got.PreviousKey.Public, want.PreviousKey.Public) {
+		t.Errorf("restored runner previous key = %x, want %x", got.PreviousKey.Public, want.PreviousKey.Public)
+	}
+}
+
+// compareRunnerTimes fails the test when a time of got differs from the time
+// of want.
+func compareRunnerTimes(t *testing.T, want, got runner.Runner) {
+	t.Helper()
+
+	if !got.JoinedAt.Equal(want.JoinedAt) || !got.LastSeenAt.Equal(want.LastSeenAt) ||
+		!got.RotatedAt.Equal(want.RotatedAt) || !got.RetiredAt.Equal(want.RetiredAt) {
+		t.Errorf("restored runner times = %v, %v, %v, %v, want %v, %v, %v, %v",
+			got.JoinedAt, got.LastSeenAt, got.RotatedAt, got.RetiredAt,
+			want.JoinedAt, want.LastSeenAt, want.RotatedAt, want.RetiredAt)
 	}
 }

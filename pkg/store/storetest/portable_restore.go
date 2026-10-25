@@ -441,6 +441,7 @@ func testRestoreRoundTrip(t *testing.T, newStore RestoreFactory) {
 	})
 	checkRestoredProfiles(t, ps.dst, seed.acme, seed.profiles)
 	checkRestoredRunners(t, ps.dst, seed.acme.Name, seed.runners)
+	checkRunnerControlRowsAbsent(t, ps.dst)
 
 	again, sum2, _ := exportPortable(t, ps.dst)
 	requireSeededGate(t, ps.dst, sum2)
