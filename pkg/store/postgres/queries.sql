@@ -427,16 +427,22 @@ ON CONFLICT (stack_id, update_id) DO UPDATE SET
     blob_size = excluded.blob_size,
     blob_md5 = excluded.blob_md5;
 
--- name: ListCheckpointBlobKeys :many
--- Every blob key the checkpoints of one stack name, ordered. A sweeper
--- compares this set against the stored objects to find blobs no checkpoint
--- references. One statement finds the stack by its reference and reads the
--- keys, so the read needs no transaction. No stack returns no row.
+-- name: ListReferencedBlobKeys :many
+-- Every blob key that a row of one stack names, ordered, without duplicates:
+-- the blobs of the checkpoints and the blobs of the journal batches. A
+-- sweeper compares this set against the stored objects to find blobs that no
+-- row references. One statement finds the stack by its reference and reads
+-- the keys, so the read needs no transaction. No stack returns no row.
 SELECT c.blob_key
 FROM checkpoints AS c
 JOIN stacks AS st ON st.id = c.stack_id
 WHERE st.namespace = @namespace AND st.project = @project AND st.name = @name AND st.deleted_at_ms IS NULL
-ORDER BY c.blob_key;
+UNION
+SELECT j.blob_key
+FROM update_journal AS j
+JOIN stacks AS st ON st.id = j.stack_id
+WHERE st.namespace = @namespace AND st.project = @project AND st.name = @name AND st.deleted_at_ms IS NULL
+ORDER BY blob_key;
 
 -- name: SoftDeleteStack :execrows
 -- Moves the name to deleted_name and frees it (ADR 47). A stack name cannot

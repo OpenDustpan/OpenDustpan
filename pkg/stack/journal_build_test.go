@@ -60,6 +60,30 @@ func (m *journalMemStore) PutJournalRow(
 	return m.storeJournalRow(row)
 }
 
+// ReferencedBlobKeys implements stack.CheckpointStore. It adds the batch blobs
+// of every journal row to the checkpoint blobs, as the stores do.
+func (m *journalMemStore) ReferencedBlobKeys(ctx context.Context, ref stack.Ref) ([]blob.Key, error) {
+	out, err := m.memUpdates.ReferencedBlobKeys(ctx, ref)
+	if err != nil {
+		return nil, err
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	for id, rows := range m.journal {
+		for i := range rows {
+			if rows[i].Ref == ref && id == rows[i].Update {
+				out = append(out, rows[i].BlobKey)
+			}
+		}
+	}
+
+	slices.Sort(out)
+
+	return slices.Compact(out), nil
+}
+
 // JournalKeys implements stack.JournalStore.
 func (m *journalMemStore) JournalKeys(
 	_ context.Context, _ stack.ID, update stack.UpdateID,

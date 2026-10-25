@@ -31,6 +31,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"opendustpan.org/opendustpan/internal/api/idempotent"
@@ -116,7 +117,34 @@ func New(status int, code, message string, values ...errcode.Value) Problem {
 // Refused returns the answer to a refusal of a service: the text of err, cleaned
 // and cut to MaxMessageBytes, with status and code. The code takes no argument.
 func Refused(err error, status int, code string) Problem {
-	return answer(status, code, refusal.Clean(err.Error(), MaxMessageBytes))
+	return RefusedText(err.Error(), status, code)
+}
+
+// RefusedText returns the answer to a refusal whose text is text, cleaned and
+// cut to MaxMessageBytes, with status and code. A caller that cuts the wrap
+// chain of an error with Detail gives its text here.
+func RefusedText(text string, status int, code string) Problem {
+	return answer(status, code, refusal.Clean(text, MaxMessageBytes))
+}
+
+// Detail returns the text that err holds after sentinel: a service puts the
+// sentinel before the detail, so the wrap prefix of the error never returns.
+// It returns the text of sentinel when err holds no detail after it, so the
+// answer never shows the wrap chain.
+func Detail(err, sentinel error) string {
+	marker := sentinel.Error() + ": "
+
+	i := strings.Index(err.Error(), marker)
+	if i < 0 {
+		return sentinel.Error()
+	}
+
+	detail := err.Error()[i+len(marker):]
+	if detail == "" {
+		return sentinel.Error()
+	}
+
+	return detail
 }
 
 // BadRequest returns an error that answers 400 with code and message.
