@@ -130,36 +130,40 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // writeError answers err through the shared error module of the
 // tool-neutral APIs, with the classes of the profile service.
 func (h *Handler) writeError(ctx context.Context, w http.ResponseWriter, err error) {
-	problem.Writer{Logger: h.logger, Classify: profileErrors}.Write(ctx, w, err)
+	problem.Writer{Logger: h.logger, KeepDenied: keepDenied, Classify: profileErrors}.Write(ctx, w, err)
 }
 
 // profileErrors maps the errors of the profile service and of the fresh
-// sign-in that a profile change needs. It runs before the shared classes
-// other than the credential refusals, so a routing refusal, which wraps
-// identity.ErrDenied, keeps its own code.
+// sign-in that a profile change needs.
 func profileErrors(err error) (problem.Problem, bool) {
 	if p, ok := freshErrors(err); ok {
 		return p, true
 	}
 
-	if routing, ok := errors.AsType[*profile.RoutingError](err); ok {
-		return profileProblem(http.StatusForbidden, errcode.ProfileRoutingChangeNeedsOpen, routing.Error()), true
-	}
-
 	switch {
 	case errors.Is(err, profile.ErrNotFound):
-		return profileProblem(http.StatusNotFound, errcode.ProfileNotFound, err.Error()), true
+		return problem.New(http.StatusNotFound, errcode.ProfileNotFound, err.Error()), true
 	case errors.Is(err, profile.ErrSchemaVersion):
-		return profileProblem(http.StatusUnprocessableEntity, errcode.ProfileSchemaVersion, err.Error()), true
+		return problem.New(http.StatusUnprocessableEntity, errcode.ProfileSchemaVersion, err.Error()), true
 	case errors.Is(err, profile.ErrLimit):
-		return profileProblem(http.StatusUnprocessableEntity, errcode.ProfileLimit, err.Error()), true
+		return problem.New(http.StatusUnprocessableEntity, errcode.ProfileLimit, err.Error()), true
 	case errors.Is(err, profile.ErrInvalid):
-		return profileProblem(http.StatusBadRequest, errcode.ProfileInvalid, err.Error()), true
+		return problem.New(http.StatusBadRequest, errcode.ProfileInvalid, err.Error()), true
 	case errors.Is(err, profile.ErrConflict):
-		return profileProblem(http.StatusConflict, errcode.ProfileConflict, err.Error()), true
+		return problem.New(http.StatusConflict, errcode.ProfileConflict, err.Error()), true
 	default:
 		return problem.Pass()
 	}
+}
+
+// keepDenied answers the one class of the profile API that wraps a denial and
+// keeps its own code: a refused change of the routing of a profile.
+func keepDenied(err error) (problem.Problem, bool) {
+	if routing, ok := errors.AsType[*profile.RoutingError](err); ok {
+		return problem.New(http.StatusForbidden, errcode.ProfileRoutingChangeNeedsOpen, routing.Error()), true
+	}
+
+	return problem.Pass()
 }
 
 // freshErrors maps the errors of the fresh sign-in check: a request with no
@@ -168,13 +172,13 @@ func profileErrors(err error) (problem.Problem, bool) {
 func freshErrors(err error) (problem.Problem, bool) {
 	switch {
 	case errors.Is(err, errFreshStepRequired), errors.Is(err, profile.ErrFreshRequired):
-		return profileProblem(
+		return problem.New(
 			http.StatusForbidden,
 			errcode.MFAFreshStepRequired,
 			sessionauth.FreshStepRequiredMessage,
 		), true
 	case errors.Is(err, errReauthenticate):
-		p := profileProblem(http.StatusUnauthorized, errcode.MFAFreshStepRequired, err.Error())
+		p := problem.New(http.StatusUnauthorized, errcode.MFAFreshStepRequired, err.Error())
 
 		if old, ok := errors.AsType[reauthenticateError](err); ok {
 			p.Reauthenticate = old.path
@@ -183,13 +187,6 @@ func freshErrors(err error) (problem.Problem, bool) {
 		return p, true
 	default:
 		return problem.Pass()
-	}
-}
-
-// profileAnswer returns the answer of a profile error with no arguments.
-func profileProblem(status int, code, message string) problem.Problem {
-	return problem.Problem{
-		Status: status, Code: code, Values: nil, Message: message, RetryAfter: 0, Reauthenticate: "",
 	}
 }
 

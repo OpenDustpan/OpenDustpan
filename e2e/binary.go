@@ -53,10 +53,6 @@ const (
 	backendCertLifetime = 24 * time.Hour
 	// certSerialBits sets the size of the generated certificate serial.
 	certSerialBits = 128
-	// databaseFlag names the database flag. Serve reads the database
-	// from DUSTPAN_DATABASE instead, because it refuses a password in
-	// the flag. Other subcommands still take the flag.
-	databaseFlag = "--database"
 	// regionFlag names the region flag serve takes.
 	regionFlag = "--region"
 	// deltaCutoffFlag names the checkpoint delta cutoff flag serve takes.

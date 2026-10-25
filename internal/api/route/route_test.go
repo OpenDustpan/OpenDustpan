@@ -299,7 +299,7 @@ func checkBadBodyCode(t *testing.T, err error) {
 	t.Helper()
 
 	rec := httptest.NewRecorder()
-	problem.Writer{Logger: slog.New(slog.DiscardHandler), Classify: nil}.Write(t.Context(), rec, err)
+	problem.Writer{Logger: slog.New(slog.DiscardHandler), KeepDenied: nil, Classify: nil}.Write(t.Context(), rec, err)
 
 	var answer problem.Body
 	if decodeErr := json.Unmarshal(rec.Body.Bytes(), &answer); decodeErr != nil {

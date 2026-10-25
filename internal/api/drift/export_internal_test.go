@@ -28,7 +28,7 @@ func WriteErrorTo(
 
 	h.logger = logger
 	if classify != nil {
-		problem.Writer{Logger: logger, Classify: classify}.Write(ctx, w, err)
+		problem.Writer{Logger: logger, KeepDenied: nil, Classify: classify}.Write(ctx, w, err)
 
 		return
 	}

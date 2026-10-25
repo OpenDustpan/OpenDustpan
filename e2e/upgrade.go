@@ -140,11 +140,13 @@ func compileTagSource(ctx context.Context, tb testing.TB, srcDir, out string) {
 
 // NewEnvWithBinary starts the server binary at binPath on a fresh database
 // with the Namespace namespace, and prepares an empty home directory and a
-// scratch project. Unlike NewEnv it never opens the database with the
-// current store code, so an older binary migrates the database to its own
-// schema first. The server field stays nil: seed helpers that need a direct
-// store handle do not work on this environment, while CLI steps, API calls,
-// RunBinary, StopServer and StartServer work as usual.
+// scratch project. The namespace is created through the server API, as NewEnv
+// does, so the create flags are those that binPath accepts. Unlike NewEnv it
+// never opens the database with the current store code, so an older binary
+// migrates the database to its own schema first. The server field stays nil:
+// seed helpers that need a direct store handle do not work on this
+// environment, while CLI steps, API calls, RunBinary, StopServer and
+// StartServer work as usual.
 func NewEnvWithBinary(ctx context.Context, tb testing.TB, cli Install, store Store, binPath string) *Env {
 	tb.Helper()
 
@@ -233,15 +235,10 @@ func newBinaryEnvWithBin(ctx context.Context, in envInput, binPath string) *Env 
 	blobDir := filepath.Join(in.dir, "blobs")
 	dbURL := reserveDatabase(ctx, tb, in.store, in.dir)
 
-	runBinary(ctx, tb, binPath, []string{
-		namespaceSubcommand, createSubcommand,
-		databaseFlag, dbURL,
-		regionFlag, region,
-		Namespace,
-	}, os.Environ())
-
 	cfg := plainBackendConfig(binPath, dbURL, blobDir, in.token+","+in.tokenB, cert)
 	handle, backendURL := startBinaryBackend(ctx, tb, cfg)
+	createFirstNamespaceViaBinary(ctx, tb, cfg, backendURL)
+
 	proxy := startRecordingProxy(tb, in.rec, backendURL, nil)
 
 	client := proxy.Client()
@@ -433,4 +430,142 @@ func HasSchemaRefusal(output string) bool {
 		strings.Contains(output, "is newer than binary schema version")
 
 	return minimum || newer
+}
+
+// peerPulumiProject is the scratch program of a peer. It holds no stack
+// reference: the service secrets manager of a stack records the URL of the
+// server that made the stack, so a peer on another address cannot read the
+// stack "other" that the first server made. Behind one public URL the
+// servers share the address, and this limit does not apply.
+const peerPulumiProject = "name: " + Project + "\nruntime: yaml\n"
+
+// StartPeer starts the server binary at binPath next to the server of e, on
+// the same database, blob directory, certificate and tokens, and returns an
+// environment that reaches the peer. Both servers serve at the same time.
+// The peer has its own port, recording proxy, home directory and scratch
+// project, so CLI steps on the peer never touch the files of e. The peer
+// migrates the database at its own start, as the binary does. It needs
+// E2E_SERVER=binary and a running server in e. A peer that the binary
+// refuses fails the test: use TryPeer to check a refusal.
+func (e *Env) StartPeer(ctx context.Context, tb testing.TB, binPath string) *Env {
+	tb.Helper()
+
+	if e.binPath == "" || e.backendCmd == nil {
+		tb.Fatalf("StartPeer needs E2E_SERVER=binary and a running server")
+	}
+
+	cfg := e.backendCfg
+	cfg.bin = binPath
+
+	handle, backendURL := startBinaryBackend(ctx, tb, cfg)
+	rec := &Recorder{step: "", entries: nil, arrived: 0, mu: sync.Mutex{}}
+	proxy := startRecordingProxy(tb, rec, backendURL, nil)
+
+	client := proxy.Client()
+	client.Timeout = commandTimeout
+
+	dir := tb.TempDir()
+	peer := *e
+	peer.URL = proxy.URL
+	peer.Recorder = rec
+	peer.client = client
+	peer.home = filepath.Join(dir, "home")
+	peer.project = filepath.Join(dir, "project")
+	peer.steps = nil
+	peer.binPath = binPath
+	peer.backendCfg = cfg
+	peer.backendPort = handle.port
+	peer.backendCmd = handle.cmd
+	peer.backendLogs = handle.logs
+
+	for _, d := range []string{peer.home, peer.project} {
+		if err := os.MkdirAll(d, dirMode); err != nil {
+			tb.Fatalf("create %s: %v", d, err)
+		}
+	}
+
+	peer.write(tb, filepath.Join(peer.project, "Pulumi.yaml"), peerPulumiProject)
+	peer.writeTofuFiles(tb, proxy)
+
+	return &peer
+}
+
+// TryPeer starts the server binary at binPath next to the server of e, on
+// the same database, and reports how it ended. A refusal exits at once with
+// a non-zero code. A binary that starts answers /health/live; TryPeer then
+// stops it and returns exit code 0. The server of e keeps running. It needs
+// E2E_SERVER=binary.
+func (e *Env) TryPeer(ctx context.Context, tb testing.TB, binPath string) BinaryResult {
+	tb.Helper()
+
+	if e.binPath == "" || e.backendCmd == nil {
+		tb.Fatalf("TryPeer needs E2E_SERVER=binary and a running server")
+	}
+
+	cfg := e.backendCfg
+	cfg.bin = binPath
+
+	//nolint:gosec // The binary is built from this repository by the suite itself.
+	cmd := exec.CommandContext(ctx, binPath, serveArgs(cfg, "0")...)
+	cmd.Env = append(backendServeEnv(cfg.tokens, cfg.dbURL), journalingServeEnv(cfg)...)
+
+	var out lockedBuffer
+
+	cmd.Stdout = &out
+	cmd.Stderr = &out
+
+	if err := cmd.Start(); err != nil {
+		tb.Fatalf("start peer binary: %v", err)
+	}
+
+	done := make(chan error, 1)
+
+	go func() { done <- cmd.Wait() }()
+
+	stop := func() {
+		_ = cmd.Process.Kill() //nolint:errcheck // The probe process ends with the kill signal.
+		killErr := <-done
+		_ = killErr // The kill signal ends the process, so Wait reports it.
+	}
+
+	deadline := time.Now().Add(oldServeTimeout)
+
+	for time.Now().Before(deadline) {
+		select {
+		case err := <-done:
+			return peerResult(out.String(), err)
+		default:
+		}
+
+		if port, ok := listeningPortFromLogs(out.String()); ok && probeHealth(ctx, port) {
+			stop()
+
+			return BinaryResult{Stdout: out.String(), Stderr: "", ExitCode: 0}
+		}
+
+		timer := time.NewTimer(binaryStartPoll)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			stop()
+			tb.Fatalf("context done while probing the peer binary")
+
+			return BinaryResult{Stdout: out.String(), Stderr: "", ExitCode: 1}
+		case <-timer.C:
+		}
+	}
+
+	stop()
+	tb.Fatalf("the peer binary neither exited nor answered /health/live in %s:\n%s", oldServeTimeout, out.String())
+
+	return BinaryResult{Stdout: out.String(), Stderr: "", ExitCode: 1}
+}
+
+// peerResult converts the wait outcome of a peer start into a result: a
+// non-zero exit is a result, not a test failure.
+func peerResult(output string, err error) BinaryResult {
+	res := serveResult(bytes.Buffer{}, bytes.Buffer{}, err)
+	res.Stdout = output
+
+	return res
 }

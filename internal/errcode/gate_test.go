@@ -63,7 +63,7 @@ func gated() []errcodetest.Adapter {
 		// The package writes no error answer: DecodeBody returns an error of
 		// the shared error module to the gated writer of each adapter.
 		api("route", nil, nil),
-		api("triggers", []string{"cycleResponse"}, nil),
+		api("triggers", nil, nil),
 	}
 }
 

@@ -14,12 +14,12 @@ import (
 // ClassifyText returns the text that the API answers for err, so the external
 // tests reach the error mapping without a request.
 func ClassifyText(err error) string {
-	return problem.Writer{Logger: nil, Classify: sinkErrors}.Problem(err).Message
+	return problem.Writer{Logger: nil, KeepDenied: nil, Classify: sinkErrors}.Problem(err).Message
 }
 
 // ClassifyCode returns the errorCode that the API answers for err.
 func ClassifyCode(err error) string {
-	return problem.Writer{Logger: nil, Classify: sinkErrors}.Problem(err).Code
+	return problem.Writer{Logger: nil, KeepDenied: nil, Classify: sinkErrors}.Problem(err).Code
 }
 
 // DocumentJSON returns the JSON that the API answers for s, so the external

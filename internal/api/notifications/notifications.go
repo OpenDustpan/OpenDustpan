@@ -124,7 +124,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // writeError answers err through the shared error module of the
 // tool-neutral APIs, with the classes of the sink service.
 func (h *Handler) writeError(ctx context.Context, w http.ResponseWriter, err error) {
-	problem.Writer{Logger: h.logger, Classify: sinkErrors}.Write(ctx, w, err)
+	problem.Writer{Logger: h.logger, KeepDenied: nil, Classify: sinkErrors}.Write(ctx, w, err)
 }
 
 // sinkErrors maps the errors of the sink service. The text of a sink error
@@ -134,46 +134,42 @@ func sinkErrors(err error) (problem.Problem, bool) {
 	if limited, ok := errors.AsType[*sinks.RateLimitedError](err); ok {
 		wait := problem.RetryAfterSeconds(limited.RetryAfter)
 
-		return problem.Problem{
-			Status: http.StatusTooManyRequests, Code: errcode.SinkTestRateLimited,
-			Values:  []errcode.Value{errcode.Quantity("retryAfterSeconds", wait)},
-			Message: "too many tests of this notification destination or namespace: try again later",
-			// The header names the same wait as the argument.
-			RetryAfter: limited.RetryAfter, Reauthenticate: "",
-		}, true
+		p := problem.New(http.StatusTooManyRequests, errcode.SinkTestRateLimited,
+			"too many tests of this notification destination or namespace: try again later",
+			errcode.Quantity("retryAfterSeconds", wait))
+		// The header names the same wait as the argument.
+		p.RetryAfter = limited.RetryAfter
+
+		return p, true
 	}
 
 	switch {
 	case errors.Is(err, notify.ErrNotFound):
-		return sinkAnswer(http.StatusNotFound, errcode.SinkNotFound, "notification destination not found"), true
+		return problem.New(http.StatusNotFound, errcode.SinkNotFound, "notification destination not found"), true
 	case errors.Is(err, notify.ErrConflict):
-		return sinkAnswer(
-			http.StatusConflict, errcode.SinkConflict,
+		return problem.New(
+			http.StatusConflict,
+			errcode.SinkConflict,
 			"the notification destination changed since you read it: read it again and send the new version",
 		), true
 	case errors.Is(err, sinks.ErrNoSender):
-		return sinkAnswer(
-			http.StatusUnprocessableEntity, errcode.SinkNoSender,
+		return problem.New(
+			http.StatusUnprocessableEntity,
+			errcode.SinkNoSender,
 			"this server cannot send to this kind of notification destination",
 		), true
 	case errors.Is(err, notify.ErrNoURL):
-		return sinkAnswer(
-			http.StatusUnprocessableEntity, errcode.SinkNoURL,
+		return problem.New(
+			http.StatusUnprocessableEntity,
+			errcode.SinkNoURL,
 			"the notification destination has no URL that the server can use: set the URL again",
 		), true
 	case errors.Is(err, sinks.ErrPlatformHost):
-		return sinkAnswer(http.StatusBadRequest, errcode.SinkPlatformHost, platformHostText(err)), true
+		return problem.New(http.StatusBadRequest, errcode.SinkPlatformHost, platformHostText(err)), true
 	case errors.Is(err, notify.ErrInvalid):
-		return sinkAnswer(http.StatusBadRequest, errcode.SinkInvalid, invalidText(err)), true
+		return problem.New(http.StatusBadRequest, errcode.SinkInvalid, invalidText(err)), true
 	default:
 		return problem.Pass()
-	}
-}
-
-// sinkAnswer returns the answer of a sink error with no arguments.
-func sinkAnswer(status int, code, message string) problem.Problem {
-	return problem.Problem{
-		Status: status, Code: code, Values: nil, Message: message, RetryAfter: 0, Reauthenticate: "",
 	}
 }
 

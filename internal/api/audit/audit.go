@@ -438,7 +438,7 @@ func parsePage(r *http.Request) (audit.Page, error) {
 // writeError answers err through the shared error module of the
 // tool-neutral APIs, with the classes of the audit routes.
 func (h *Handler) writeError(ctx context.Context, w http.ResponseWriter, err error) {
-	problem.Writer{Logger: h.logger, Classify: requestErrors}.Write(ctx, w, err)
+	problem.Writer{Logger: h.logger, KeepDenied: nil, Classify: requestErrors}.Write(ctx, w, err)
 }
 
 // requestErrors maps the errors of the request and of the read of the audit
@@ -446,28 +446,21 @@ func (h *Handler) writeError(ctx context.Context, w http.ResponseWriter, err err
 func requestErrors(err error) (problem.Problem, bool) {
 	switch {
 	case errors.Is(err, errMissingOrganization), errors.Is(err, errInvalidPage):
-		return fail(http.StatusBadRequest, errcode.RequestInvalidQuery, err.Error()), true
+		return problem.New(http.StatusBadRequest, errcode.RequestInvalidQuery, err.Error()), true
 	case errors.Is(err, errInvalidSequence):
-		return fail(http.StatusBadRequest, errcode.RequestInvalidPath, err.Error()), true
+		return problem.New(http.StatusBadRequest, errcode.RequestInvalidPath, err.Error()), true
 	case errors.Is(err, namespace.ErrInvalidName):
-		return fail(http.StatusBadRequest, errcode.NamespaceInvalidName, err.Error()), true
+		return problem.New(http.StatusBadRequest, errcode.NamespaceInvalidName, err.Error()), true
 	case errors.Is(err, identity.ErrInvalidObject):
-		return fail(http.StatusBadRequest, errcode.RequestInvalidObject, err.Error()), true
+		return problem.New(http.StatusBadRequest, errcode.RequestInvalidObject, err.Error()), true
 	case errors.Is(err, namespace.ErrNotFound):
-		return fail(http.StatusNotFound, errcode.NamespaceNotFound, err.Error()), true
+		return problem.New(http.StatusNotFound, errcode.NamespaceNotFound, err.Error()), true
 	case errors.Is(err, audit.ErrEntryNotFound):
-		return fail(http.StatusNotFound, errcode.AuditEntryNotFound, err.Error()), true
+		return problem.New(http.StatusNotFound, errcode.AuditEntryNotFound, err.Error()), true
 	case errors.Is(err, errNoEntryReader):
-		return fail(http.StatusNotImplemented, errcode.AuditEntryReadUnavailable, err.Error()), true
+		return problem.New(http.StatusNotImplemented, errcode.AuditEntryReadUnavailable, err.Error()), true
 	default:
 		return problem.Pass()
-	}
-}
-
-// fail returns an answer with no arguments.
-func fail(status int, code, message string) problem.Problem {
-	return problem.Problem{
-		Status: status, Code: code, Values: nil, Message: message, RetryAfter: 0, Reauthenticate: "",
 	}
 }
 

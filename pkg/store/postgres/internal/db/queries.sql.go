@@ -16990,6 +16990,20 @@ func (q *Queries) TouchStack(ctx context.Context, arg TouchStackParams) error {
 	return err
 }
 
+const tryLockSweep = `-- name: TryLockSweep :one
+SELECT pg_try_advisory_lock($1::int, hashtext(current_schema()))::boolean AS held
+`
+
+// Takes the session lock of the retention sweep without a wait. It answers
+// false when a session of any server process holds it. The second key is the
+// schema, so two installations in one database do not wait for each other.
+func (q *Queries) TryLockSweep(ctx context.Context, class int32) (bool, error) {
+	row := q.db.QueryRow(ctx, tryLockSweep, class)
+	var held bool
+	err := row.Scan(&held)
+	return held, err
+}
+
 const unitCollectionID = `-- name: UnitCollectionID :one
 SELECT c.id
 FROM collection_members AS m
@@ -17108,6 +17122,19 @@ func (q *Queries) UnitWorkspacesByIDs(ctx context.Context, ids []string) ([]Unit
 		return nil, err
 	}
 	return items, nil
+}
+
+const unlockSweep = `-- name: UnlockSweep :one
+SELECT pg_advisory_unlock($1::int, hashtext(current_schema()))::boolean AS unlocked
+`
+
+// Gives up the session lock of TryLockSweep. It answers false when the
+// session does not hold the lock.
+func (q *Queries) UnlockSweep(ctx context.Context, class int32) (bool, error) {
+	row := q.db.QueryRow(ctx, unlockSweep, class)
+	var unlocked bool
+	err := row.Scan(&unlocked)
+	return unlocked, err
 }
 
 const updateExists = `-- name: UpdateExists :one

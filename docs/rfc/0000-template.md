@@ -26,6 +26,10 @@ preference yet.
 
 What has to be answered before a decision.
 
+## Checklist
+
+- [ ] Tolerates asynchronous replication between installations: each namespace writes only its own half, under its own fence, and no write waits for another installation (ADR 248 decisions 3, 6 and 9).
+
 ## Outcome
 
 Empty until the RFC is accepted (link the ADR) or dropped (say why).

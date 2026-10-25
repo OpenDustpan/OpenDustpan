@@ -13,10 +13,14 @@
 // Each API gives its own classifier for the errors of its domain. The
 // refusals of the credential of a request (a rate limit, no sign-in, a CSRF
 // or other-site session request) are answered first, so no classifier can
-// answer them in other words. The classifier runs next, before the other
+// answer them in other words. A denial is answered next: an error that wraps
+// identity.ErrDenied is a 403, whatever else it wraps, so no classifier can
+// tell the state of an object that the caller has no right on. An API lists
+// the few classes that wrap a denial and keep their own code in
+// Writer.KeepDenied. The classifier runs after the denial, before the other
 // shared classes, so an API can answer a shared error in its own words, for
 // example a not-found that never tells that an object exists. Writer.Problem
-// holds this order.
+// holds this order, so a new classifier needs no case for a denial.
 package problem
 
 import (
@@ -30,6 +34,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/api/idempotent"
+	"opendustpan.org/opendustpan/internal/api/refusal"
 	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/internal/sessionauth"
 	"opendustpan.org/opendustpan/pkg/idempotency"
@@ -53,9 +58,20 @@ type Problem struct {
 	// Reauthenticate is the path that starts a new sign-in, for the refusal
 	// of an old sign-in, or "".
 	Reauthenticate string
+	// Units are the units that the answer names, in order, or nil. A refusal
+	// that lists the units of a loop sets them.
+	Units []Unit
 	// answer is the finished code and arguments of an error that already
 	// holds them, or the zero Answer.
 	answer errcode.Answer
+}
+
+// Unit is a unit that an answer names: its ID, the label of its tool and its
+// name.
+type Unit struct {
+	ID   string `json:"id"`
+	Tool string `json:"tool"`
+	Name string `json:"name"`
 }
 
 // Body is the error body of the tool-neutral APIs. Code is the HTTP status;
@@ -66,6 +82,7 @@ type Body struct {
 	ErrorCode      string         `json:"errorCode,omitempty"`
 	ErrorArgs      map[string]any `json:"errorArgs,omitempty"`
 	Reauthenticate string         `json:"reauthenticate,omitempty"`
+	Units          []Unit         `json:"units,omitempty"`
 }
 
 // Error is an error with a fixed answer.
@@ -80,6 +97,26 @@ func (e *Error) Error() string { return e.Problem.Message }
 // takes no argument.
 func Fixed(status int, code, message string) error {
 	return &Error{Problem: answer(status, code, message)}
+}
+
+// MaxMessageBytes is the longest refusal text that an answer repeats. Refused
+// cuts the text of an error to this length.
+const MaxMessageBytes = 300
+
+// New returns the answer of status, code and message, with the arguments that
+// the code declares. The order of the arguments is the order of Fixed. A code
+// or a value that the catalog refuses makes the writer answer server.internal.
+func New(status int, code, message string, values ...errcode.Value) Problem {
+	p := answer(status, code, message)
+	p.Values = values
+
+	return p
+}
+
+// Refused returns the answer to a refusal of a service: the text of err, cleaned
+// and cut to MaxMessageBytes, with status and code. The code takes no argument.
+func Refused(err error, status int, code string) Problem {
+	return answer(status, code, refusal.Clean(err.Error(), MaxMessageBytes))
 }
 
 // BadRequest returns an error that answers 400 with code and message.
@@ -101,7 +138,17 @@ func Pass() (Problem, bool) {
 // Writer writes the error answers of one tool-neutral API.
 type Writer struct {
 	Logger *slog.Logger
-	// Classify answers the errors of the domain of the API. It may be nil.
+	// KeepDenied answers the classes of error that wrap identity.ErrDenied and
+	// keep their own code. The writer calls it only for an error that wraps
+	// identity.ErrDenied, so it cannot hide an error that is not a denial. Its
+	// answer must have status 403, or 404 for a class that hides that an object
+	// exists. For any other status the writer ignores the answer and answers the
+	// standard 403 access.denied, so a denial never becomes a success or a
+	// conflict. It may be nil.
+	KeepDenied Classifier
+	// Classify answers the errors of the domain of the API. It never sees an
+	// error that wraps identity.ErrDenied: the writer answers a denial before
+	// it calls Classify. It may be nil.
 	Classify Classifier
 }
 
@@ -157,7 +204,7 @@ func (wr Writer) WriteProblem(ctx context.Context, w http.ResponseWriter, p Prob
 
 	WriteJSON(ctx, wr.Logger, w, p.Status, Body{
 		Message: p.Message, Code: p.Status, ErrorCode: made.Code(), ErrorArgs: made.Args(),
-		Reauthenticate: p.Reauthenticate,
+		Reauthenticate: p.Reauthenticate, Units: p.Units,
 	})
 }
 
@@ -186,15 +233,22 @@ func (p Problem) made() (errcode.Answer, error) {
 //  1. the refusals of the credential of a request (a rate limit, no
 //     sign-in, a CSRF or other-site session request), so no classifier can
 //     answer them in other words;
-//  2. the classifier of the API. It answers identity.ErrDenied first, so a
-//     refusal that wraps a denial keeps the denial's answer. The rest of it
-//     answers the refusals of its domain in its own words;
-//  3. the other shared classes.
+//  2. KeepDenied, for an error that wraps identity.ErrDenied: the classes
+//     of a denial that keep their own code, with status 403 or 404 only;
+//  3. any other error that wraps identity.ErrDenied, as a 403 forbidden, so a
+//     refusal that wraps a denial never tells the state of an object;
+//  4. the classifier of the API, which answers the refusals of its domain in
+//     its own words;
+//  5. the other shared classes.
 //
 // An error that none of them knows is a 500.
 func (wr Writer) Problem(err error) Problem {
 	if p, ok := credential(err); ok {
 		return p
+	}
+
+	if errors.Is(err, identity.ErrDenied) {
+		return wr.denied(err)
 	}
 
 	if wr.Classify != nil {
@@ -208,6 +262,21 @@ func (wr Writer) Problem(err error) Problem {
 	}
 
 	return Internal()
+}
+
+// denied returns the answer to an error that wraps identity.ErrDenied.
+func (wr Writer) denied(err error) Problem {
+	if wr.KeepDenied != nil {
+		// Defense in depth: the adapters list only 403 classes. This check stays
+		// so that a wrong KeepDenied cannot turn a denial into a success or a
+		// conflict, and it does not rely on the review of each adapter.
+		if p, ok := wr.KeepDenied(err); ok &&
+			(p.Status == http.StatusForbidden || p.Status == http.StatusNotFound) {
+			return p
+		}
+	}
+
+	return answer(http.StatusForbidden, errcode.Forbidden(err), "forbidden")
 }
 
 // Internal returns the answer to an error that no class knows.
@@ -320,7 +389,7 @@ func Built(status int, message, code string, a errcode.Answer, err error) Proble
 func answer(status int, code, message string) Problem {
 	return Problem{
 		Status: status, Code: code, Values: nil, Message: message, RetryAfter: 0, Reauthenticate: "",
-		answer: errcode.Answer{},
+		Units: nil, answer: errcode.Answer{},
 	}
 }
 

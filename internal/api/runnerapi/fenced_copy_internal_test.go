@@ -49,7 +49,7 @@ func TestWriteErrorFencedCopy(t *testing.T) {
 	managementBody, err := json.Marshal(
 		problem.Body{
 			Message: namespace.ErrFenced.Error(), Code: http.StatusConflict, ErrorCode: errcode.NamespaceFenced,
-			ErrorArgs: nil, Reauthenticate: "",
+			ErrorArgs: nil, Reauthenticate: "", Units: nil,
 		},
 	)
 	if err != nil {
@@ -70,7 +70,7 @@ func TestWriteErrorFencedCopy(t *testing.T) {
 			Message:   "the runner is retired",
 			Code:      http.StatusConflict,
 			ErrorCode: errcode.RunnerRetired,
-			ErrorArgs: nil, Reauthenticate: "",
+			ErrorArgs: nil, Reauthenticate: "", Units: nil,
 		},
 	)
 	if err != nil {

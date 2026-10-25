@@ -132,7 +132,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // this API answers the errors of the registry first; the shared classes
 // answer the rest, and an error that none of them knows is a 500.
 func (h *Handler) writeError(ctx context.Context, w http.ResponseWriter, err error) {
-	problem.Writer{Logger: h.logger, Classify: classifyRegistry}.Write(ctx, w, err)
+	problem.Writer{Logger: h.logger, KeepDenied: nil, Classify: classifyRegistry}.Write(ctx, w, err)
 }
 
 // registryProblem maps one error of the registry to its answer.
@@ -171,9 +171,7 @@ func classifyRegistry(err error) (problem.Problem, bool) {
 		return problem.Pass()
 	}
 
-	return problem.Problem{
-		Status: rp.status, Code: rp.code, Values: nil, Message: err.Error(), RetryAfter: 0, Reauthenticate: "",
-	}, true
+	return problem.New(rp.status, rp.code, err.Error()), true
 }
 
 // registryProblemOf returns the element of registryProblems for err, or nil

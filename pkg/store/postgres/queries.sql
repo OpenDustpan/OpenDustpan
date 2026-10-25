@@ -1514,6 +1514,17 @@ SELECT pg_advisory_xact_lock_shared(
 SELECT pg_advisory_xact_lock(
   hashtextextended('namespace-creates:' || current_schema() || ':' || sqlc.arg(namespace)::text, 0));
 
+-- name: TryLockSweep :one
+-- Takes the session lock of the retention sweep without a wait. It answers
+-- false when a session of any server process holds it. The second key is the
+-- schema, so two installations in one database do not wait for each other.
+SELECT pg_try_advisory_lock(sqlc.arg(class)::int, hashtext(current_schema()))::boolean AS held;
+
+-- name: UnlockSweep :one
+-- Gives up the session lock of TryLockSweep. It answers false when the
+-- session does not hold the lock.
+SELECT pg_advisory_unlock(sqlc.arg(class)::int, hashtext(current_schema()))::boolean AS unlocked;
+
 -- name: LockServerAuditScope :exec
 -- Orders the appends of the audit scope @server, which has no namespace row
 -- to lock. The key is fixed: 0x6175646974 is "audit" in ASCII.
