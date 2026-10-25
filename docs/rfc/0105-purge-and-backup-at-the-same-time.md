@@ -345,6 +345,10 @@ backup, and any snapshot S of it that names the blob.
 5. A backup whose row commits after T has B > T > C, and by A1 its snapshot
    is after C. It does not name the blob.
 
+The rule takes no lock, so a backup can start after the read at T and
+before D. Step 5 covers that window: C is before T, so the snapshot of that
+backup is after C and does not name the blob. D can delete it safely.
+
 So no holder with the live claim reads the blob after D. This holds for each
 order: delete first (step 5), backup first (steps 1 to 4), and both mid-way
 (steps 1 to 4: a backup that is mid-way at T is running, so D does not
