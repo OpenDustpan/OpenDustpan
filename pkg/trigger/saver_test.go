@@ -48,11 +48,11 @@ func TestSaverCheck(t *testing.T) {
 			name: "a saver with every action", setup: nil, trigger: savedFollows(), wantSave: nil, wantStart: nil,
 		},
 		{
-			name: "a saver without unit:read on the source is refused at save only",
+			name: "a saver without unit:read on the source is refused at save and at start",
 			setup: func(_ *fakeResolver, a *fakeAuthz, _ *fakeUnits) {
 				delete(a.allow, ada+" "+string(identity.ActionUnitRead)+" a")
 			},
-			trigger: savedFollows(), wantSave: trigger.ErrSaverDenied, wantStart: nil,
+			trigger: savedFollows(), wantSave: trigger.ErrSaverDenied, wantStart: trigger.ErrSaverDenied,
 		},
 		{
 			name: "a schedule trigger needs no source read",
@@ -148,11 +148,18 @@ func TestSaverCheck(t *testing.T) {
 			trigger: savedFollows(), wantSave: trigger.ErrSaverDenied, wantStart: trigger.ErrSaverDenied,
 		},
 		{
-			name: "a source that is gone is refused at save only",
+			name: "a source that is gone is refused at save and at start",
 			setup: func(_ *fakeResolver, _ *fakeAuthz, u *fakeUnits) {
 				u.gone["a"] = true
 			},
-			trigger: savedFollows(), wantSave: trigger.ErrSaverDenied, wantStart: nil,
+			trigger: savedFollows(), wantSave: trigger.ErrSaverDenied, wantStart: trigger.ErrSaverDenied,
+		},
+		{
+			name: "an authorizer that fails on the source read",
+			setup: func(_ *fakeResolver, a *fakeAuthz, _ *fakeUnits) {
+				a.fail[ada+" "+string(identity.ActionUnitRead)+" a"] = errGrantDown
+			},
+			trigger: savedFollows(), wantSave: trigger.ErrSaverDenied, wantStart: trigger.ErrSaverDenied,
 		},
 		{
 			name: "a trigger with no saver",

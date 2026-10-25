@@ -82,8 +82,11 @@ type SaverCheck interface {
 	// identity.ErrDenied) when a check fails, and any other error for a failure
 	// of a port, which also denies.
 	CheckSave(ctx context.Context, t Trigger) error
-	// CheckStart checks that the saver of t still holds the settings action
-	// and the start action on t.Unit. It returns the errors of CheckSave.
+	// CheckStart checks that the saver of t still holds the actions that
+	// CheckSave checks: the settings action and the start action on t.Unit,
+	// and, for a follows trigger, unit:read on t.Source. A saver who lost one
+	// of them starts nothing, and the trigger needs a new save. It returns the
+	// errors of CheckSave.
 	CheckStart(ctx context.Context, t Trigger) error
 }
 
@@ -163,11 +166,9 @@ func (c *saverCheck) CheckSave(ctx context.Context, t Trigger) error {
 	return nil
 }
 
-// CheckStart implements SaverCheck.
+// CheckStart implements SaverCheck. A start checks what a save checks.
 func (c *saverCheck) CheckStart(ctx context.Context, t Trigger) error {
-	_, err := c.checkUnitActions(ctx, t)
-
-	return err
+	return c.CheckSave(ctx, t)
 }
 
 // checkUnitActions resolves the last saver of t and checks the settings action
