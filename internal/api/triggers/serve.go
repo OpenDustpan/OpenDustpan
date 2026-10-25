@@ -16,7 +16,6 @@ import (
 	"opendustpan.org/opendustpan/internal/api/refusal"
 	"opendustpan.org/opendustpan/internal/clientip"
 	"opendustpan.org/opendustpan/internal/cron"
-	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/internal/requestid"
 	"opendustpan.org/opendustpan/internal/sessionauth"
 	"opendustpan.org/opendustpan/pkg/audit"
@@ -507,15 +506,6 @@ func cycleUnits(cycle *trigger.CycleError) []problem.Unit {
 	}
 
 	return out
-}
-
-// cycleProblem is the answer to the refusal of a save that closes a loop of
-// units: 409 trigger.cycle with the units of the loop in order.
-func cycleProblem(cycle *trigger.CycleError) problem.Problem {
-	p := problem.New(http.StatusConflict, errcode.TriggerCycle, cycleMessage(cycle))
-	p.Units = cycleUnits(cycle)
-
-	return p
 }
 
 // cycleMessage is the message of the answer of a refused save that closes a

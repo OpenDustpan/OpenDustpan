@@ -224,7 +224,10 @@ func classify(err error) (problem.Problem, bool) {
 	// before this classifier, so a caller with no right on the loop gets the
 	// same 403 as for any other refusal.
 	if cycle, ok := errors.AsType[*trigger.CycleError](err); ok {
-		return cycleProblem(cycle), true
+		p := problem.New(http.StatusConflict, errcode.TriggerCycle, cycleMessage(cycle))
+		p.Units = cycleUnits(cycle)
+
+		return p, true
 	}
 
 	switch {
