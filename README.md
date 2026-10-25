@@ -474,6 +474,13 @@ server. It downloads them first, as `e2e/doc.go` describes. `E2E_BLOBS=s3`
 with the four S3 variables drives the runs with the live blobs on the
 S3-compatible server.
 
+With the race detector, one run of `pkg/store/sqlite` or `pkg/store/postgres`
+takes about 7 to 11 minutes on 4 cores. This is more than the 10-minute
+default of `go test`. `make test` sets `-timeout 20m`, and `make test-ci-store`
+sets `-timeout 30m`. When you run a store package with `go test -race`
+directly, set `-timeout 30m` too. Most of the time goes to the schema
+migrations that each staged restore runs on a new database.
+
 `make checks-agent` syncs the current branch with `main`, then runs
 `make generate`, `make check`, `make e2e`, and a TruffleHog scan of the branch
 commits. It starts a PostgreSQL container when `DUSTPAN_TEST_POSTGRES_URL` is
