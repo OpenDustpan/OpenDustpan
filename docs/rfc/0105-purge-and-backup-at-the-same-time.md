@@ -61,7 +61,7 @@ when the blob can be named by a snapshot that was taken before the delete.
 | --- | --- | --- | --- | --- | --- |
 | 1 | Checkpoint replace | `pkg/stack/updates.go`, `Updates.afterCheckpointSave` | The blob of the previous checkpoint of the same update. `PutCheckpoint` is an upsert on `(stack_id, update_id)`, so the new row replaces the key that the snapshot read. | After each checkpoint save that commits a new key (`SaveCheckpoint`, and `SaveCheckpointDelta` in `delta.go`, both through `commitCheckpoint`), and after a journal build (`journal_build.go`, `commitBuiltRow`) | Yes |
 | 2 | Update sweep | `pkg/stack/updates.go`, `Updates.sweepUpdateBlobs` and `sweepCandidates` | Blobs of one update that the current checkpoint row does not name and that are older than `sweepGracePeriod` (1 hour) | After each checkpoint save, and on a retried save of the same content | Yes |
-| 3 | Stack sweep | `pkg/stack/updates.go`, `Updates.sweepStackOnStart` and `sweepStackBlobs` | Blobs under the stack directory that no checkpoint row names and that are older than 1 hour | At the start of each update of the stack | Yes |
+| 3 | Stack sweep | `pkg/stack/updates.go`, `Updates.sweepStackOnStart` and `sweepStackBlobs` | Blobs under the stack directory that no checkpoint row names and that are older than 1 hour | At the start of each update of the stack, previews and dry runs included (`StartBy` calls it after every `StartUpdate`, and a preview takes no stack lock) | Yes |
 | 4 | Journal build | `pkg/stack/journal_build.go`, `Updates.commitBuiltRow`, then `pkg/stack/journal_entries.go`, `JournalEntries.RemoveBlobs` | The journal batch blobs of the update, after `PutBuiltCheckpoint` removed their `update_journal` rows | When the server builds the checkpoint of a journaled update | Yes |
 | 5 | Pulumi purge | `pkg/dustpan/lifecycle.go`, `pulumiLifecycle.purgeUnit`, then `pkg/stack/updates.go`, `Updates.DeleteStackBlobs` | Every blob of the purged stack | At once after the purge commits (D1). The admin purge of one unit and the retention sweep both take this path. | Yes |
 | 6 | OpenTofu purge | `pkg/dustpan/lifecycle.go`, `opentofuLifecycle.purgeUnit`, then `pkg/workspace/service.go`, `Service.DeletePurgedBlobs` | Every state blob of the purged workspace | As row 5 | Yes |
@@ -76,12 +76,15 @@ when the blob can be named by a snapshot that was taken before the delete.
 Rows 1 to 8 need the guard. Rows 9 to 13 do not, for the reason in the last
 column.
 
+A new deleter must be added to this table, and the conformance tests below
+must cover it.
+
 Rows 2 and 3 have a separate bug that this guard does not fix: issue #1923.
-The stack sweep lists the journal directories too, but keeps only the keys
-that checkpoint rows name. So it can delete journal batch blobs that
-`update_journal` rows still name, with or without a backup. The fix of #1923
-must come first, because it can lose the result of an apply. A new deleter must be added to this table, and the conformance tests
-below must cover it.
+The sweeps list the journal directories too, but keep only the keys that
+checkpoint rows name. So they can delete journal batch blobs that
+`update_journal` rows still name, with or without a backup. The guard of
+this RFC has the fix of #1923 as a precondition (A0 below). The fix of #1923
+must come first, because the bug can lose the result of an apply.
 
 ### The race
 
@@ -303,9 +306,18 @@ sweep runs.
 
 ### Assumptions
 
-Each assumption is a fact of the code on `main` at 94b9669 or of an accepted
-ADR. The implementation must keep each one, and a conformance test must hold
-it (see "Conformance tests").
+A1 to A5 are facts of the code on `main` at 94b9669 or of an accepted ADR.
+A0 is not a fact of the code yet. The implementation must keep each one, and
+a conformance test must hold it (see "Conformance tests").
+
+- **A0. The sweeps keep every blob that a row names, journal batches
+  included (#1923).** Rows 2 and 3 delete a blob only when no committed row
+  of any table that a snapshot reads names it: no `checkpoints` row and no
+  `update_journal` row. On `main` at 94b9669 this is false: the sweeps read
+  the checkpoint keys only. The proof below uses "the blob is unnamed" as its
+  premise for rows 2 and 3. That premise holds only after the fix of #1923.
+  Until then, rows 2 and 3 can delete a named blob, and no guard on the
+  backup side can make that safe.
 
 - **A1. The row commits before the snapshot.** `Registry.StartBackup` stores
   the running row and starts the durable operation in one transaction. The
@@ -360,6 +372,40 @@ order: delete first (step 5), backup first (steps 1 to 4), and both mid-way
 (steps 1 to 4: a backup that is mid-way at T is running, so D does not
 delete).
 
+### Rows 2 and 3: no known commit
+
+Rows 1 and 4 to 8 know their commit C: they run after it, in the same code
+path. Rows 2 and 3 do not. They find a blob unnamed, and the commit that
+removed its last name happened at some earlier time, maybe in another
+process. Call K the read of the named keys (`CheckpointByUpdate` in
+`sweepCandidates`, `ReferencedCheckpointKeys` in `sweepStackBlobs`, and,
+after #1923, the read of the journal keys) that found the blob unnamed. The
+listing of the blobs comes before K in both functions.
+
+If the read K sees no row that names the blob, then by A4 the last such row
+was removed by a commit C < K, or no row ever named the blob. In the second
+case no snapshot names the blob. In the first case, the proof above holds
+with C < K < T, but only if **T comes after K**.
+
+The order matters. This interleaving loses a backup when T comes first:
+
+1. The sweep reads the registry at T and finds no running backup.
+2. A backup commits its row (B) and takes its snapshot (S). S names the blob
+   X, because the checkpoint row of the update still names X.
+3. A checkpoint save of the update commits a new key (C). No row names X now.
+4. The sweep lists the blobs and reads the named keys (K). X is unnamed and
+   older than the grace.
+5. The sweep deletes X. The backup copies X later and fails.
+
+With the order listing, K, T, delete, step 1 moves after step 4. The read at
+T then finds the backup of step 2 running, and the sweep deletes nothing.
+With C < K < T, steps 1 to 5 of the proof above apply.
+
+So for rows 2 and 3, the registry read must come after the listing and after
+every read of named keys that found the blob unnamed. A registry read that a
+sweep made before its listing, for example at the start of a long sweep,
+does not count.
+
 ### A holder that lost its claim
 
 A holder can lose its claim and still run: for example a process that pauses
@@ -406,6 +452,13 @@ Option 3, in the clock-free form above, for rows 1 to 8 of the table.
 3. **Keep the graces.** Row 7 needs both conditions: the record is older
    than `BlobPurgeGrace`, and no backup runs. Rows 2 and 3 keep
    `sweepGracePeriod` and add the backup check.
+4. **The order of reads in rows 2 and 3.** Each sweep lists the blobs, reads
+   the named keys, then reads the registry, and only then deletes. The
+   registry read comes after the listing and after every read of named keys
+   that found a blob unnamed (see "Rows 2 and 3: no known commit"). A
+   registry read from before the listing never allows a delete.
+5. **A precondition.** The fix of #1923 merges before this guard: rows 2 and
+   3 keep every blob that a row names, journal batches included (A0).
 
 ### Where a skipped delete goes
 
@@ -479,6 +532,18 @@ before any adapter implements it):
     nothing, and delete the orphans after the backup ends.
   - A journal build while a backup runs commits the built checkpoint, keeps
     the batch blobs, and counts the skip.
+  - The order of reads in rows 2 and 3: a fake registry and a fake checkpoint
+    store record the order of the calls. Each sweep reads the registry after
+    its listing and after its reads of named keys, and before its first
+    delete.
+  - The interleaving of "Rows 2 and 3: no known commit", for each of rows 2
+    and 3: hooks in the fakes force the order registry read, backup start,
+    checkpoint replace, listing, delete, as a sweep with the wrong order
+    would run it. With the required order, the sweep sees the running backup
+    and deletes nothing, and the blob that the snapshot names stays.
+  - A0, for each of rows 2 and 3: a blob that only an `update_journal` row
+    names is older than the grace, and no backup runs. The sweep keeps it.
+    This test comes with the fix of #1923.
 - `dustpan` lifecycle: a purge while a backup runs commits, does not delete
   the blobs, leaves the record, and logs the backup ID. The admin purge route
   and the sweep both take this path.
