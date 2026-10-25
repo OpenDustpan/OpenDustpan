@@ -132,6 +132,17 @@ func TestKeyGenerate(t *testing.T) {
 		t.Fatalf("key generate over the file: err = %v, output:\n%s", err, out)
 	}
 
+	directory := t.TempDir()
+
+	out, err = runBinary(t, bin, "key", "generate", "--out", directory+"/")
+	if err == nil || !strings.Contains(out, "the key file path names a directory") {
+		t.Fatalf("key generate over a directory: err = %v, output:\n%s", err, out)
+	}
+
+	if entries, readErr := os.ReadDir(directory); readErr != nil || len(entries) != 0 {
+		t.Fatalf("key generate wrote into the directory (read err %v): %v", readErr, entries)
+	}
+
 	out, err = runBinary(t, bin, "key", "generate")
 	if err == nil || !strings.Contains(out, "no key file path is set: set --out <path>") {
 		t.Fatalf("key generate with no path: err = %v, output:\n%s", err, out)

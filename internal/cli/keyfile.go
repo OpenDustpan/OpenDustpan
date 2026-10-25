@@ -32,6 +32,13 @@ func WriteKeyContents(file *os.File, contents string) error {
 // directory of path. On any error after the create, it removes the file, so
 // that no half-written key file stays for the next start to read.
 func WriteKeyFile(path, contents string, write func(*os.File, string) error) error {
+	// Defense in depth: key generate checks the form of the path too. This
+	// check stays so that a new caller cannot write a key into a directory
+	// with the path of the directory. It does not rely on that check.
+	if namesDirectory(path) {
+		return fmt.Errorf("%w: %q", ErrKeyOutDirectory, path)
+	}
+
 	// The root keeps every later step inside the directory of the key file,
 	// also if a link in the name tries to leave it.
 	root, err := os.OpenRoot(filepath.Dir(path))
