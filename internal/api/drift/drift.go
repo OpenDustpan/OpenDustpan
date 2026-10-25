@@ -178,11 +178,17 @@ func (h *Handler) writeError(ctx context.Context, w http.ResponseWriter, err err
 }
 
 // classify returns the answer to an error of the drift API, and false for an
-// error that it does not know. Package problem answers the refusals of the
-// credential, the namespace, the maintenance mode and a denied action in the
-// same words for every API, so this classifier does not repeat them.
+// error that it does not know. A denial wins over every refusal below, so a
+// mixed error never tells the state of an object the caller has no right on.
+// Package problem answers the refusals of the credential, the namespace and the
+// maintenance mode in the same words for every API.
 func classify(err error) (problem.Problem, bool) {
 	switch {
+	case errors.Is(err, identity.ErrDenied):
+		return problem.Problem{
+			Status: http.StatusForbidden, Code: errcode.Forbidden(err), Values: nil, Message: "forbidden",
+			RetryAfter: 0, Reauthenticate: "",
+		}, true
 	case errors.Is(err, errNotFound), errors.Is(err, namespace.ErrNotFound), errors.Is(err, job.ErrNotFound):
 		return problem.Problem{
 			Status: http.StatusNotFound, Code: errcode.UnitNotFound, Values: nil, Message: errNotFound.Error(),
@@ -202,9 +208,9 @@ func refused(err error, status int, code string) (problem.Problem, bool) {
 	}, true
 }
 
-// classifyStart maps the refusals of a request to start a drift check. An
-// error that wraps a refusal of the start and identity.ErrDenied keeps the
-// answer of its refusal, because package problem asks the classifier first.
+// classifyStart maps the refusals of a request to start a drift check. The
+// caller, classify, has already answered identity.ErrDenied, so an error that
+// wraps a refusal of the start and a denial gets the denial's answer.
 func classifyStart(err error) (problem.Problem, bool) {
 	switch {
 	case errors.Is(err, errBody):

@@ -22,3 +22,7 @@ func WriteError(ctx context.Context, w http.ResponseWriter, logger *slog.Logger,
 func WriteManagementError(ctx context.Context, w http.ResponseWriter, err error) {
 	WriteError(ctx, w, slog.New(slog.DiscardHandler), ScopeAuthorized, err)
 }
+
+// ErrNotFound is the not-found answer of the management API, for a test of its
+// precedence.
+var ErrNotFound = errNotFound

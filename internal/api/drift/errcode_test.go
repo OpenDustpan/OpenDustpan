@@ -54,7 +54,7 @@ func TestEveryErrorAnswerHasACode(t *testing.T) {
 		{"limit", job.ErrLimit, http.StatusTooManyRequests, errcode.JobLimit},
 		{
 			"policy and denied", fmt.Errorf("%w: %w", job.ErrPolicyDenied, identity.ErrDenied), http.StatusForbidden,
-			errcode.JobPolicyDenied,
+			errcode.AccessDenied,
 		},
 		{"unknown error", errUnknown, http.StatusInternalServerError, errcode.ServerInternal},
 	}
