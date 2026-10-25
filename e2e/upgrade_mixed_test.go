@@ -4,8 +4,10 @@ package e2e_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
+	"os"
 	"runtime"
 	"strings"
 	"testing"
@@ -27,6 +29,20 @@ const (
 	// mixedBelow is a binary version below mixedMinimum.
 	mixedBelow = "v0.9.0"
 )
+
+// sqliteGuardMessage is the text of the process guard of the SQLite store.
+// A second process on one SQLite file must stop with it.
+var errMixedPeer = errors.New("mixed-version peer result is not allowed")
+
+const sqliteGuardMessage = "another process holds the SQLite database file"
+
+// mixedAllowedRefusals names the peers that the schema may refuse on
+// PostgreSQL, keyed by the label of the peer, with the reason. The rolling
+// window runs the last releases together on one schema, so a refusal of such
+// a peer fails the matrix unless it has a row here. The table is empty.
+func mixedAllowedRefusals() map[string]string {
+	return map[string]string{}
+}
 
 // lastMixedTags returns the newest mixedReleases tags of all, in version
 // order. With fewer tags it returns every tag.
@@ -74,6 +90,13 @@ func TestMixedVersion(t *testing.T) {
 
 	if len(tags) == 0 {
 		t.Log("no v* tag is reachable from HEAD: the peer is a second process of the current binary")
+		// A workflow command at the start of a line, so GitHub shows the warning on the run.
+		const annotation = "::warning title=Mixed-version matrix::ran over 0 tags: " +
+			"no v* tag is reachable from HEAD, so the peer is a second process of the current binary"
+
+		if _, err := fmt.Fprintln(os.Stdout, annotation); err != nil {
+			t.Logf("write the warning annotation: %v", err)
+		}
 	}
 
 	fetcher := &e2e.Fetcher{Client: http.DefaultClient, CacheDir: cacheDir(t)}
@@ -128,27 +151,19 @@ func mixedOnStore(t *testing.T, in mixedRun) {
 	t.Logf("starting %s next to the current binary on the same %s database", in.label, in.store)
 
 	res := env.TryPeer(ctx, t, in.peerBin)
-	if in.store == e2e.StoreSQLite {
-		// A SQLite file serves one process. The second process must not start,
-		// and the first must keep serving.
-		if res.ExitCode == 0 {
-			t.Fatalf("peer %s started on a SQLite file that another process holds:\n%s", in.label, res.Stdout)
-		}
+	if err := peerVerdict(in.store, in.label, res); err != nil {
+		t.Fatal(err)
+	}
 
-		t.Logf("peer %s is refused on SQLite with exit %d, as a SQLite file serves one process", in.label, res.ExitCode)
+	if in.store == e2e.StoreSQLite {
+		t.Logf("peer %s is refused on SQLite, as a SQLite file serves one process", in.label)
 		checkUpgradeSurvived(ctx, t, env, in.tools, wsID)
 
 		return
 	}
 
 	if res.ExitCode != 0 {
-		// The schema minimum may refuse a peer below it. That is the rule, not
-		// a failure, but the refusal must name the versions.
-		if !e2e.HasSchemaRefusal(res.Stdout) {
-			t.Fatalf("peer %s exits with %d and prints no schema refusal:\n%s", in.label, res.ExitCode, res.Stdout)
-		}
-
-		t.Logf("peer %s is below the schema minimum and refused with exit %d", in.label, res.ExitCode)
+		t.Logf("peer %s is refused for a reason in mixedAllowedRefusals", in.label)
 		checkUpgradeSurvived(ctx, t, env, in.tools, wsID)
 
 		return
@@ -235,6 +250,7 @@ func TestMixedVersionBelowMinimum(t *testing.T) {
 			env := e2e.NewEnv(ctx, t, tools.pulumi, db)
 			insertServerFuture(ctx, t, env, db, mixedMinimum)
 			checkMinimumRefusal(t, env, db, below, atMinimum)
+			checkVerdictRows(t, env, db, below)
 
 			env.Step(ctx, t, step("login after refusal", contains(env.URL), "login"))
 		})
@@ -267,5 +283,73 @@ func checkMinimumRefusal(t *testing.T, env *e2e.Env, db e2e.Store, below, atMini
 	if res := try(ctx, t, atMinimum); res.ExitCode != 0 {
 		t.Fatalf("a binary at the minimum %s must start, got exit %d:\n%s%s",
 			mixedMinimum, res.ExitCode, res.Stdout, res.Stderr)
+	}
+}
+
+// peerVerdict judges how a peer ended. On SQLite the peer must stop with the
+// process guard message of the store. On PostgreSQL the peer must start,
+// unless the label has a reason in mixedAllowedRefusals and the peer printed
+// the schema refusal. It returns nil when the result is allowed.
+func peerVerdict(store e2e.Store, label string, res e2e.BinaryResult) error {
+	output := res.Stdout + res.Stderr
+
+	if store == e2e.StoreSQLite {
+		if res.ExitCode == 0 {
+			return fmt.Errorf(
+				"%w: peer %s started on a SQLite file that another process holds:\n%s",
+				errMixedPeer,
+				label,
+				output,
+			)
+		}
+
+		if !strings.Contains(output, sqliteGuardMessage) {
+			return fmt.Errorf("%w: peer %s exits with %d without the message %q:\n%s",
+				errMixedPeer, label, res.ExitCode, sqliteGuardMessage, output)
+		}
+
+		return nil
+	}
+
+	if res.ExitCode == 0 {
+		return nil
+	}
+
+	reason, allowed := mixedAllowedRefusals()[label]
+	if !allowed {
+		return fmt.Errorf("%w: peer %s was refused with exit %d, but the rolling window must run together; "+
+			"add a named exception to mixedAllowedRefusals only with a reason:\n%s", errMixedPeer, label, res.ExitCode, output)
+	}
+
+	if !e2e.HasSchemaRefusal(output) {
+		return fmt.Errorf("%w: peer %s exits with %d (allowed: %s) but prints no schema refusal:\n%s",
+			errMixedPeer, label, res.ExitCode, reason, output)
+	}
+
+	return nil
+}
+
+// checkVerdictRows proves that the matrix fails on the two cases it must
+// catch. On PostgreSQL, a peer below the schema minimum is refused, and
+// peerVerdict must reject that result because the label has no exception.
+// On SQLite, /bin/false stands for any peer that exits non-zero without the
+// process guard message, and peerVerdict must reject it.
+func checkVerdictRows(t *testing.T, env *e2e.Env, db e2e.Store, below string) {
+	t.Helper()
+
+	ctx := t.Context()
+
+	if db == e2e.StoreSQLite {
+		res := env.TryPeer(ctx, t, "/bin/false")
+		if err := peerVerdict(db, "bin-false", res); err == nil {
+			t.Fatalf("the SQLite verdict accepts /bin/false (exit %d): any non-zero exit would pass", res.ExitCode)
+		}
+
+		return
+	}
+
+	res := env.TryPeer(ctx, t, below)
+	if err := peerVerdict(db, mixedBelow, res); err == nil {
+		t.Fatalf("the PostgreSQL verdict accepts the refusal of a peer at %s: a refused peer would pass", mixedBelow)
 	}
 }
