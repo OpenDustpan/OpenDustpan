@@ -1,8 +1,7 @@
 # Audit log
 
 This guide shows how to read the audit entries of a namespace, check their chain and send a copy of each entry to a sink.
-It follows ADR 41 decisions 5 and 13 and ADR 60 decisions 11 to 13.
-Retention and the full catalog of events are RFC 22.
+Retention and the full catalog of events are not yet settled, so this guide does not describe them.
 
 ## What the log records
 
@@ -11,7 +10,7 @@ The reveal call writes one entry with the action `unit:read-secrets`, the
 kind `reveal`, the state version in `version` and the value path, before it
 answers.
 The two Pulumi routes `decrypt/log-decryption` and
-`decrypt/log-batch-decryption` (ADR 23 decision 6) write one entry each with
+`decrypt/log-batch-decryption` write one entry each with
 the action `unit:decrypt` and the kind `reveal`.
 The Pulumi CLI calls them when a person asks it to show secrets, for example
 `pulumi config --show-secrets`.
@@ -58,15 +57,15 @@ secret value, so a value without its entry never reaches the client.
 The two `log-decryption` routes answer no secret value, so they keep
 answering 204 when the append fails.
 
-A restore or a purge of a deleted unit (ADR 47) writes one entry with the
-kind `change` (ADR 60), the action `unit:restore` or `unit:purge`, and the
+A restore or a purge of a deleted unit writes one entry with the
+kind `change`, the action `unit:restore` or `unit:purge`, and the
 stable ID of the unit in `objectID`. The store appends it in the same
 transaction as the change, so a failed append changes nothing.
-A purge of the scheduled retention expiry has the subject `@server`. A purge
-of an expiry run that a person starts through the API has that person as the
-subject.
+A purge of the scheduled retention expiry has the subject `@server`. The subject is the ID of the principal that
+acted: a person, a service or a workload. A purge of an expiry run that a
+person starts through the API has that person as the subject.
 
-Each request for an access-review export (ADR 52, decision 13) writes one
+Each request for an access-review export writes one
 entry with the kind `read-access`, the read-access action of the object and
 the object `access-review <object> <mode>`. The mode is `snapshot
 asOf=<time>`, or `history <from>-<to>`, in Unix milliseconds, followed by
@@ -104,9 +103,8 @@ An entry holds these fields:
   with a person who asked to see one.
 - Outcome: `success`, `failure` or `denied`.
 - `requestID`: the request ID the server mints. The server returns it in
-  the `X-Request-Id` response header and ignores an ID the client sends
-  (ADR 32).
-- `objectID`: the stable ID of the unit that the entry names (ADR 47). The
+  the `X-Request-Id` response header and ignores an ID the client sends.
+- `objectID`: the stable ID of the unit that the entry names. The
   store sets it for each entry on a unit that exists, and for the delete,
   restore and purge of a unit. The list omits it when the entry has none.
 - `prevHash` and `hash`: SHA-256 over a fixed, documented encoding of the
@@ -151,8 +149,7 @@ lock that it finds. Each release writes one `change` entry with the action
 `unit:write-forced`, the subject `maintenance` and the reason
 `maintenance mode started`.
 
-Reads of the audit log itself are not logged yet (RFC 22), because ADR 41
-allows only the two kinds.
+Reads of the audit log itself are not logged yet.
 
 ## Security entries
 
@@ -168,8 +165,8 @@ directory of these blobs:
 - A Pulumi checkpoint blob or a journal batch blob, in the `pulumi` directory
   of the namespace.
 
-The action is `blob:out-of-scope`. The scope is `@server`, the subject is
-`server`, and the object is the ID of the namespace of the call. The reason
+The action is `blob:out-of-scope`. The entry is in the installation log
+(`@server`), the subject is `server`, and the object is the ID of the namespace of the call. The reason
 names the blob, the operation, and whether the key was outside the namespace,
 outside the directory of the blob in the namespace, or outside the directory of
 the unit in the blob directory, for example
@@ -199,7 +196,7 @@ Each request that the server refuses because the principal does not hold the act
 Repeated refusals in a window of 1 minute write one entry and a count (see [The limit on repeated denials](#the-limit-on-repeated-denials)).
 Every API writes it. These are the Pulumi Cloud-compatible API, the TFE-compatible API, the OpenTofu HTTP backend, the inventory, context, audit, profile and runner APIs, and the installation API.
 A list that shows only the items that the principal may read does not write an entry for each item that it leaves out.
-The entry is in the scope of the object. An object with no namespace, or with a namespace that does not exist, writes the entry in the scope `@server`. For a namespace that does not exist, the `reason` ends with `(namespace NAME does not exist)`.
+The entry is in the namespace of the object. An object with no namespace, or with a namespace that does not exist, writes the entry in the installation log (`@server`). For a namespace that does not exist, the `reason` ends with `(namespace NAME does not exist)`.
 A request with no valid credential answers 401 and writes no entry, because it has no principal.
 
 - `subject`, `tokenID`, `principalKind` and `jobID`: the principal that was refused.
@@ -234,7 +231,7 @@ The server writes the entry also when the client closes the connection. A write 
 
 A principal that sends many refused requests must not fill the log.
 All APIs of the server share one limit.
-For each principal, action, API, kind of object and scope, the server writes the first denial in a window of 1 minute.
+For each principal, action, API, kind of object and namespace, the server writes the first denial in a window of 1 minute.
 It counts each other denial of that key in the window and writes nothing for it.
 The count goes out in the `reason` of the first entry of the next window (`N further refusals since the last entry`).
 When the principal stops, the first denial of any principal after the window writes one entry with the action and the count (`N further refusals in the last window were not recorded one by one`).
@@ -242,13 +239,13 @@ The kind of a stack or a workspace includes its tool (`unit:pulumi`, `unit:opent
 A refusal on a workspace does not hide a refusal on a stack in the same namespace.
 The API is part of the key too.
 A refusal on the TFE-compatible API and a refusal on the OpenTofu HTTP backend write one entry each.
-Each namespace that does not exist counts as the same scope, so a principal cannot make keys with names that it invents.
+Each namespace that does not exist counts as the same namespace, so a principal cannot make keys with names that it invents.
 
 The server tracks at most 4096 keys, and at most 64 keys for each principal.
 A new key of a principal that has 64 keys goes to the aggregate key of that principal.
-The entry of this aggregate names the principal, and its flush entry has the action `*` and the scope `@server`.
+The entry of this aggregate names the principal, and its flush entry has the action `*` and is in the installation log (`@server`).
 A denial of a new key beyond the 4096 keys adds to one aggregate for all principals.
-The aggregate writes one entry for each window in the scope `@server`. The entry has the action `denials:suppressed` and the subject `denial-limiter`.
+The aggregate writes one entry for each window in the installation log (`@server`). The entry has the action `denials:suppressed` and the subject `denial-limiter`.
 
 The server starts no background task for the limit, so the count of a quiet key waits for the next denial.
 When the server stops with a signal, it writes the counts that it still holds, within 5 seconds.
@@ -258,7 +255,7 @@ A server that ends in another way loses these counts, and a restart starts with 
 
 A production installation refuses a session or a token of a dev person. A dev person has a subject that starts with `dev:`, in any case.
 Only `opendustpan dev` makes such a person. One on a production installation comes from a restored dev backup.
-Each refusal can write an entry with the outcome `denied`, in the scope `@server`:
+Each refusal can write an entry with the outcome `denied`, in the installation log (`@server`):
 
 - `subject`: the subject of the dev person.
 - `action`: `session:sign-in`.
@@ -282,8 +279,8 @@ A dev installation, and a person whose subject does not start with `dev:`, write
 
 ## Settings entries
 
-Each server process writes entries about its own settings in the scope
-`@server`. The subject is the ID of the server process: a new `ins-` ID at
+Each server process writes entries about its own settings in the installation
+log (`@server`). The subject is the ID of the server process: a new `ins-` ID at
 each start, which the start log shows on the line `instance`.
 The action is `server:manage-settings`, and the kind is `change`.
 
@@ -299,7 +296,7 @@ The action is `server:manage-settings`, and the kind is `change`.
   `next start`: the entry records a change, and the new value applies at
   the next start.
 
-No route of the API reads the scope `@server` yet. These entries become
+No route of the API reads the installation log (`@server`) yet. These entries become
 readable through the API when that route lands.
 
 A sensitive setting (the database URL and each secret) shows only `set` or
@@ -346,7 +343,7 @@ curl -H "Authorization: token $DUSTPAN_ADMIN_TOKEN" \
 ```
 
 The installation writes the entries of an action that is not in a namespace,
-such as a namespace create, to the scope `@server`. Read that scope with
+such as a namespace create, to the installation log (`@server`). Read that log with
 `organization=@server`. It needs the action `server:read-audit` on the
 installation instead, and the same paging. The read of one entry and the
 check work the same way:
@@ -397,11 +394,11 @@ It prints where to approve and ends with an error.
 The approval writes an entry in `@server` with the kind `change`, the action `server:set-audit-chain` and the value path `/audit/chain/on` or `/audit/chain/off`.
 Then the server migrates the log in the background.
 It waits 4 seconds, so every server process refuses requests.
-It writes one entry in each scope that holds entries:
+It writes one entry in each namespace and in the installation log that holds entries:
 
 - **On:** a start entry with the action `server:start-audit-chain`.
   Its hash has an empty `prevHash`.
-  Its changes hold `digest`, a running SHA-256 of every earlier entry of the scope, and `entries`, their count.
+  Its changes hold `digest`, a running SHA-256 of every earlier entry of the same namespace or installation, and `entries`, their count.
   The earlier entries keep their rows.
 - **Off:** an end entry with the action `server:end-audit-chain`, which names the person who approved the change.
   Its hash links to the entry before it, so the chain ends with a chained entry.
@@ -434,16 +431,17 @@ Entries in `@server` hold 0. The hash covers the 0, and the audit API omits the 
 A verifier who kept a digest outside the database can compute it again from the old rows.
 So the verifier can prove that the old rows did not change after the chain started.
 
-The check of a scope starts at its last start entry, or at sequence 1 when the scope holds none.
+The check of a namespace or of the installation starts at its last start entry, or at sequence 1 when it holds none.
 From there, each entry holds a hash that matches its fields and links to the entry before it, with no gap.
 The chain goes up to now, or up to an end entry.
 After an end entry, entries hold no hash.
 A start entry also checks its digest against the earlier entries.
-With the chain on, a scope must not end after an end entry.
-With the chain off, a scope without a chain is valid only when its first entry comes after the time the chain went off.
+With the chain on, a namespace or the installation must not end after an end entry.
+With the chain off, a namespace or the installation without a chain is valid
+only when its first entry comes after the time the chain went off.
 A row below sequence 1 fails the check.
-The store keeps the times of a scope in order.
-An entry whose time is earlier than the last entry of its scope takes the time of that entry.
+The store keeps the times of each namespace and of the installation in order.
+An entry whose time is earlier than the last entry of its namespace or of the installation takes the time of that entry.
 The check answers `entriesUnchained`: the count of entries without a hash.
 The check cannot prove that an entry before a start entry, or after an end entry, is unchanged.
 Signed checkpoints (see below) and the digest cover that case.
@@ -451,9 +449,9 @@ Signed checkpoints (see below) and the digest cover that case.
 A backup does not carry the state of the chain.
 A restore keeps the state of the target installation.
 After the swap, the server compares the restored log with that state.
-With the chain on, each scope must end with a chained entry that is not an end entry.
-With the chain off, each scope must end with an entry without a hash, or with an end entry.
-When the log agrees, the server checks the chain of every scope.
+With the chain on, each namespace and the installation must end with a chained entry that is not an end entry.
+With the chain off, each namespace and the installation must end with an entry without a hash, or with an end entry.
+When the log agrees, the server checks the chain of every namespace and of the installation.
 When that check fails, the restore still succeeds.
 The server then logs an error and adds one to `dustpan_audit_restore_check_failures_total`.
 When the log does not agree, the installation stays in maintenance mode until a person approves the change.
@@ -466,13 +464,13 @@ One server process runs each check, as the schedule `audit-chain-check`.
 The server process stores the result in the database.
 Each server process reads the stored result when Prometheus scrapes it, so all server processes export the same value.
 `dustpan_audit_chain_invalid` holds the larger of two counts.
-The first count is the scopes that do not match in the stored result.
-The second count is the scopes with a stored mark in the current epoch.
+The first count is the namespaces and the installation that do not match in the stored result.
+The second count is the namespaces and the installation with a stored mark in the current epoch.
 A check that ends late cannot clear the alarm while a mark stands.
 When a server process cannot read the stored result, it exports 1, adds one to `dustpan_audit_chain_read_errors_total` and logs a warning at most once each minute.
 A database fault never shows as a good chain.
 When `dustpan_audit_chain_read_errors_total` increases together with `dustpan_audit_chain_invalid`, look for a database fault before you look for tampering.
-When a database read, a blob read or a checkpoint write fails, the server does not check that scope.
+When a database read, a blob read or a checkpoint write fails, the server does not check that namespace or the installation.
 It logs a warning and adds one to `dustpan_audit_chain_check_errors_total`.
 Such a check does not lower `dustpan_audit_chain_invalid`.
 A failed read during the check of a restored log also adds one to `dustpan_audit_chain_check_errors_total`.
@@ -515,34 +513,35 @@ Make a key with this command:
 (umask 077 && openssl rand -base64 32 > audit-signing.key)
 ```
 
-At each check, the server does these steps for each scope whose chain matches:
+At each check, the server does these steps for each namespace and for the installation whose chain matches:
 
-1. It checks the checkpoints of the scope in the current epoch.
+1. It checks the checkpoints of the namespace or the installation in the current epoch.
    It reads every checkpoint that is newer than the last checkpoint that matched, up to 256.
    It also reads a random sample of 8 older checkpoints.
-   It always reads the newest checkpoint of the scope.
+   It always reads the newest checkpoint of the namespace or the installation.
    When the log ends before that checkpoint, the check fails.
    The next check finds a cut at the end of the log.
    For each checkpoint, it checks the key ID, the signature, the epoch, and the hash of the entry at its sequence.
    The epoch in the checkpoint must match the epoch of its directory.
-2. If all of them match, it signs the hash of the last entry of the scope.
-   The checkpoint holds the scope, the sequence, the epoch, the hash, the time, the key ID and the signature.
+2. If all of them match, it signs the hash of the last entry of the namespace or the installation.
+   The checkpoint holds the namespace (`@server` for the installation), the sequence, the epoch, the hash, the time, the key ID and the signature.
    The key ID is the first 16 hexadecimal characters of the SHA-256 hash of the public key.
-3. It writes the checkpoint to the blob store under `audit-checkpoints/<epoch>/<scope in hexadecimal>/<sequence>.json`.
+3. It writes the checkpoint to the blob store under `audit-checkpoints/<epoch>/<namespace in hexadecimal>/<sequence>.json`.
    A key holds one checkpoint and the server never writes it again, so two server processes write it once.
 
-A scope with a checkpoint that does not match counts in `dustpan_audit_chain_invalid`, and the server logs the scope and the sequence.
-The server never signs a scope whose chain or checkpoints do not match.
+A namespace or the installation with a checkpoint that does not match counts in `dustpan_audit_chain_invalid`, and the server logs its name and the sequence.
+The server never signs for a namespace or the installation whose chain or checkpoints do not match.
 Once a checkpoint does not match, later checks fail until a new epoch starts.
 The server process that finds the mismatch stores a mark in the database.
-Every server process reads the mark before it signs, so a mismatch that one server process finds stops signing of that scope. A mark of one scope does not stop the signing of another scope.
-Other scopes keep signing and each gets its own check, so `dustpan_audit_chain_invalid` stays the count of scopes that do not match.
+Every server process reads the mark before it signs, so a mismatch that one server process finds stops signing for that namespace or the installation. A mark of one namespace or the installation does not stop the signing for another.
+Other namespaces and the installation keep signing, and each gets its own check.
+So `dustpan_audit_chain_invalid` stays the count of namespaces and the installation that do not match.
 The mark stays across a restart of any server process, and only a new epoch ends it.
-When a server process cannot read the mark, it signs nothing, counts the scope as invalid and logs the error.
-When a server process cannot store a mark, it keeps the mark in memory and signs nothing for that scope.
+When a server process cannot read the mark, it signs nothing, counts that namespace or the installation as invalid and logs the error.
+When a server process cannot store a mark, it keeps the mark in memory and signs nothing for that namespace or the installation.
 It stores the mark at its next check.
-When a stored checkpoint holds another hash, the write fails and the scope stays invalid.
-The server lists the stored checkpoints of a scope first, and then reads the last entry of the scope.
+When a stored checkpoint holds another hash, the write fails and that namespace or the installation stays invalid.
+The server lists the stored checkpoints of a namespace or the installation first, and then reads the last entry of the namespace or the installation.
 The log only grows.
 So a stored checkpoint above the last entry shows a cut log.
 It never shows a checkpoint that another server process stored a moment ago.
@@ -569,12 +568,12 @@ The signed message holds a fixed context line, the epoch, the time in Unix milli
 The check reads every epoch object and verifies each one.
 It checks the signature, the key ID, and the body number against the key number.
 An unsigned or badly signed epoch object makes the check fail and stops new signatures.
-A bad epoch object counts the scope in `dustpan_audit_chain_invalid`.
+A bad epoch object counts that namespace or the installation in `dustpan_audit_chain_invalid`.
 After an investigation, the operator deletes the bad epoch object.
 The next check then reads the fixed store.
 
 A restore starts a new epoch, because a restore of an older backup deletes entries that older checkpoints sign.
-The restore writes a change entry in the scope `@server` with the value path `/audit/checkpoints/epoch/<number>`.
+The restore writes a change entry in the installation log (`@server`) with the value path `/audit/checkpoints/epoch/<number>`.
 The checkpoints of older epochs stay in the blob store.
 The server does not check them again.
 
@@ -589,8 +588,8 @@ The server does not start when the file holds a line that is not a 32-byte Ed255
 
 ### Clear the alarm
 
-A checkpoint that does not match keeps `dustpan_audit_chain_invalid` above zero, and the stored mark keeps every server process from signing that scope.
-First find the cause: compare the entries of the scope with your audit log sinks and with the backups.
+A checkpoint that does not match keeps `dustpan_audit_chain_invalid` above zero, and the stored mark keeps every server process from signing for that namespace or the installation.
+First find the cause: compare the entries of that namespace or the installation with your audit log sinks and with the backups.
 When you know the cause, start a new epoch.
 The server then checks only the checkpoints that it signs after this time.
 
@@ -600,7 +599,7 @@ curl -X POST -H "Authorization: Bearer $DUSTPAN_ADMIN_TOKEN" \
 ```
 
 The request needs the action `server:manage-audit`.
-It answers 201 with the number of the new epoch, and it writes a change entry in the scope `@server`.
+It answers 201 with the number of the new epoch, and it writes a change entry in the installation log (`@server`).
 It answers 409 when signed checkpoints are off.
 Each server process reads the new epoch at its next check.
 A mark from an older epoch stops nothing in the new epoch.
@@ -680,8 +679,8 @@ A new name starts from the first entry and sends every entry again.
 ### What a sink receives
 
 Each entry is one JSON object with `time`, `level` (`info`), `msg` (`audit entry`) and the fields of the audit API.
-`scope` names the namespace.
-`sequence` numbers the entries of the scope.
+`scope` names the namespace, or `@server` for the installation.
+`sequence` numbers the entries of one namespace or of the installation.
 `valueCount`, `objectID` and `changes` are present only when the entry has them.
 `changes` holds the canonical JSON that the hash covers: a list sorted by `key`.
 `prevHash` and `hash` hold the chain of the entry.
@@ -693,12 +692,12 @@ The full entry stays in the server audit log, and the chain check on the server 
 {"time":"2026-10-13T12:00:00.000Z","level":"info","msg":"audit entry","scope":"acme","sequence":7,"atMs":1791892800000,"subject":"admin","action":"unit:read-secrets","object":"opentofu:acme/prod","kind":"reveal","outcome":"success","prevHash":"9f2c...","hash":"41ab..."}
 ```
 
-The server reads the new entries of each scope in order and writes them to the sink in one batch.
+The server reads the new entries of each namespace and of the installation in order and writes them to the sink in one batch.
 It moves the cursor of the sink only after the sink accepted the batch.
 A failed batch stays, and the server sends it again with a longer wait each time, up to 5 minutes.
 While its lease holds, one server process ships a sink. After the server loses the lease or a round fails, a sink can receive an entry twice. Delivery is at least once.
 Drop duplicates by `scope` and `sequence`.
-A batch in one scope that fails does not stop the other scopes.
+A batch for one namespace or the installation that fails does not stop the others.
 The server sends a batch every 5 seconds to a file, syslog or a webhook, and every minute to object storage.
 
 ### Syslog
@@ -719,7 +718,9 @@ The defaults of both may be below 64 KiB. Check the receiver's limit.
 With syslog-ng set `log-msg-size()`. Its default may be below 64 KiB. Check the receiver's limit.
 The sink never shortens a field and never sends a changed entry.
 The sink refuses an entry above that size and never sends it.
-The server counts it in `dustpan_audit_sink_skipped_total` and in `dustpan_audit_sink_failures_total{reason="size"}`, logs one error line with its scope and sequence, and goes on with the next entry.
+The server counts it in `dustpan_audit_sink_skipped_total` and in
+`dustpan_audit_sink_failures_total{reason="size"}`. It logs one error line with the
+`scope` and the `sequence` of the entry, and goes on with the next entry.
 Read the refused entry by its `scope` and `sequence`, for example `GET /api/audit/entries/7?organization=acme`.
 The full entry stays in the server audit log, and the chain check on the server covers it.
 
@@ -747,10 +748,10 @@ The server does not follow a redirect: a 3xx answer is a failed batch, and the s
 `blob:<prefix>` writes to the blob store of the server: the directory of `--blob-dir` or the bucket of `--blob-store`.
 The prefixes `namespaces` and `pulumi` hold state, so the server refuses them.
 The prefix `audit-checkpoints` holds signed audit checkpoints, so the server refuses it.
-Each object is `<prefix>/<scope>/<yyyy-mm-dd>/<first>-<last>-<random>.jsonl.gz`.
+Each object is `<prefix>/<namespace>/<yyyy-mm-dd>/<first>-<last>-<random>.jsonl.gz`.
 The two times are the first and the last entry of the file in Unix milliseconds.
 A key holds the characters `a-z`, `0-9`, `.` and `-` only.
-Each other character of the scope, and `_`, becomes `_` and two hexadecimal digits: `acme` stays `acme`, and `@server` becomes `_40server`.
+Each other character of the name (the namespace, or `@server` for the installation), and `_`, becomes `_` and two hexadecimal digits: `acme` stays `acme`, and `@server` becomes `_40server`.
 To keep objects that nobody can delete, use a bucket with S3 Object Lock.
 
 ### A file and log rotation
@@ -767,7 +768,7 @@ The reason is `unreachable` when the sink never reached its receiver.
 The reason is `write` for any other failed write.
 The reason is `read` for a failed entry, cursor or namespace read.
 The reason is `lease` for a failed sink lease take.
-A refused entry logs one error line per entry with the sink name, its scope and its sequence.
+A refused entry logs one error line per entry with the sink name, its `scope` and its `sequence`.
 Any other failure logs one error line per round.
 The line has the sink name, the reason, and the sequence of the first entry of the failed batch.
 A round that knows no sequence leaves it out.
@@ -816,8 +817,8 @@ OpenTelemetry logs are not a sink yet.
 
 ## What this guide does not cover
 
-These items are RFC 22.
+These items are not yet settled.
 
 - Retention.
 - The full catalog of events.
-- Export through the API in JSON and CEF (ADR 60 decision 9).
+- Export through the API in JSON and CEF.
