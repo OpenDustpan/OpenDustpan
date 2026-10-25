@@ -71,6 +71,34 @@ func TestUncodedPaths(t *testing.T) {
 			want: []string{"classify: default", "classify: stack.ErrNoState", "classify: stack.ErrNotFound"},
 		},
 		{
+			name: "a case that only logs, with a status in its condition",
+			src: `func write(w http.ResponseWriter, err error, p errorResponse) {
+	switch {
+	case errors.Is(err, stack.ErrFenced):
+		log.Warn("fenced")
+	case p.Message != err.Error() && p.Code < http.StatusInternalServerError:
+		log.Debug("refused")
+	default:
+	}
+}`,
+			skip: nil,
+			want: nil,
+		},
+		{
+			name: "a case with a status in its condition that writes an answer without a code",
+			src: `func write(w http.ResponseWriter, err error, p errorResponse) {
+	switch {
+	case errors.Is(err, stack.ErrFenced):
+		log.Warn("fenced")
+	case p.Message != err.Error() && p.Code < http.StatusInternalServerError:
+		w.WriteHeader(http.StatusBadRequest)
+	default:
+	}
+}`,
+			skip: nil,
+			want: []string{"write: p.Message != err.Error() && p.Code < http.StatusInternalServerError"},
+		},
+		{
 			name: "a case with a code",
 			src: `func classify(err error) (int, string, string) {
 	switch {

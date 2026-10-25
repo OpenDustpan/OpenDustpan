@@ -2,9 +2,12 @@ package dustpan
 
 import (
 	"context"
+	"errors"
 	"reflect"
+	"time"
 
 	"opendustpan.org/opendustpan/internal/api/apidesc"
+	"opendustpan.org/opendustpan/pkg/collection"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/job"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -155,3 +158,31 @@ func PlanJob(
 ) (job.Spec, error) {
 	return jobPlanner{pools: pools, connections: nil}.Plan(ctx, unit, req)
 }
+
+// ManualLockPhaseStart builds the manual lock service from opts as a server
+// does, with an authorizer that only an administrator passes, and returns when
+// the phase of job jobID on unit started. It returns the zero time when the
+// service has no phase clock or the clock has no answer.
+func ManualLockPhaseStart(
+	ctx context.Context, unit collection.UnitRef, jobID string, opts ...Option,
+) (time.Time, error) {
+	cfg := defaultSettings()
+	for _, opt := range opts {
+		opt(cfg)
+	}
+
+	cfg.authorizer = identity.AdminOnly{}
+
+	svc, err := newManualLockService(cfg)
+	if err != nil {
+		return time.Time{}, err
+	}
+
+	if svc == nil {
+		return time.Time{}, errNoManualLockService
+	}
+
+	return svc.PhaseStart(ctx, unit, jobID), nil
+}
+
+var errNoManualLockService = errors.New("no manual lock service")
