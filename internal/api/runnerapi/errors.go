@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"strconv"
 
+	"opendustpan.org/opendustpan/internal/api/problem"
 	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/internal/sessionauth"
 	"opendustpan.org/opendustpan/pkg/durable"
@@ -28,36 +29,12 @@ var errNotFound = errors.New("not found")
 // retryAfterSeconds is the Retry-After value of a 503.
 const retryAfterSeconds = 5
 
-// managementError is the error body of the tool-neutral management API.
-type managementError struct {
-	Message string `json:"message"`
-	Code    int    `json:"code"`
-	// ErrorCode is the stable code of the catalog for a program, and ErrorArgs
-	// holds the values that the message names.
-	ErrorCode string         `json:"errorCode,omitempty"`
-	ErrorArgs map[string]any `json:"errorArgs,omitempty"`
-}
-
-// failure is the answer of the management API to an error before the catalog
-// checks it: the status, the message, the code and the values of the
-// arguments of the code.
-type failure struct {
-	status  int
-	message string
-	code    string
-	args    []errcode.Value
-}
-
 // writeError answers err in the error shape of the scope: the protocol shape
 // for a runner request, and the shape of the tool-neutral API for the
 // management API.
 func (h *Handler) writeError(ctx context.Context, w http.ResponseWriter, scope Scope, err error) {
 	if scope == ScopeAuthorized {
-		f := classifyManagement(err)
-		h.logFailure(ctx, f.status)
-		h.logFenced(ctx, err)
-		h.logRefused(ctx, err, f.message)
-		h.writeManagement(ctx, w, f)
+		h.writeManagement(ctx, w, err)
 
 		return
 	}
@@ -75,39 +52,25 @@ func (h *Handler) writeError(ctx context.Context, w http.ResponseWriter, scope S
 	h.writeJSON(ctx, w, status, body)
 }
 
-// writeManagement writes f in the error shape of the management API. A code or
-// an argument that the catalog refuses is a bug of this adapter: the answer is
-// then 500 with the code of an internal failure, and the log names the code
-// only, never the error text.
-func (h *Handler) writeManagement(ctx context.Context, w http.ResponseWriter, f failure) {
-	answer, err := errcode.New(f.code, f.args...)
-	if err != nil {
-		h.logger.ErrorContext(ctx, "error code refused", slog.String("code", f.code))
+// writeManagement answers err in the error shape of the management API. A
+// session refusal of CSRF or another site answers the sentence of its sentinel,
+// never the wrap text that problem.Writer would answer: the wrap names the
+// operation, and the log holds it.
+func (h *Handler) writeManagement(ctx context.Context, w http.ResponseWriter, err error) {
+	wr := problem.Writer{Logger: h.logger, Classify: classifyManagement}
 
-		f = failure{
-			status:  http.StatusInternalServerError,
-			message: internalMessage,
-			code:    errcode.ServerInternal,
-			args:    nil,
-		}
-		answer = errcode.Internal()
+	if errors.Is(err, sessionauth.ErrCSRF) || errors.Is(err, sessionauth.ErrOtherSite) {
+		message := sentenceOf(err, []error{sessionauth.ErrCSRF, sessionauth.ErrOtherSite})
+		h.logRefused(ctx, err, message)
+
+		p, _ := answer(http.StatusForbidden, errcode.Forbidden(err), message)
+		wr.WriteProblem(ctx, w, p)
+
+		return
 	}
 
-	h.writeAnswer(ctx, w, f.status, f.message, answer)
-}
-
-// writeAnswer writes the error body of the management API for status with
-// message, and with the code and the arguments of answer.
-func (h *Handler) writeAnswer(
-	ctx context.Context,
-	w http.ResponseWriter,
-	status int,
-	message string,
-	answer errcode.Answer,
-) {
-	h.writeJSON(ctx, w, status, managementError{
-		Message: message, Code: status, ErrorCode: answer.Code(), ErrorArgs: answer.Args(),
-	})
+	h.logRefused(ctx, err, wr.Problem(err).Message)
+	wr.Write(ctx, w, err)
 }
 
 // logFenced logs a fenced write with its wrap context, which the answer never
@@ -238,93 +201,56 @@ func classifyProtocolOther(
 // errBadBody reports a body that is not the JSON object of its path.
 var errBadBody = errors.New("the body is not the JSON object of this path")
 
-// classifyManagement maps an error to the status, the message and the code of
-// the management API.
-func classifyManagement(err error) failure {
+// classifyManagement maps the errors of the runner domain to their answer in
+// the management API. The refusals of the credential run before it, and the
+// shared classes of problem.Shared run after it: an error of neither answers
+// 500 with server.internal.
+func classifyManagement(err error) (problem.Problem, bool) {
 	switch {
-	case errors.Is(err, identity.ErrRateLimited):
-		return failure{
-			status:  http.StatusTooManyRequests,
-			message: "too many failed sign-ins from this address: try again later",
-			code:    errcode.AuthRateLimited,
-			args:    nil,
-		}
-	case errors.Is(err, identity.ErrUnauthenticated):
-		return failure{
-			status: http.StatusUnauthorized, message: "unauthenticated", code: errcode.AuthUnauthenticated, args: nil,
-		}
-	case errors.Is(err, sessionauth.ErrCSRF), errors.Is(err, sessionauth.ErrOtherSite):
-		return failure{
-			status:  http.StatusForbidden,
-			message: sentenceOf(err, []error{sessionauth.ErrCSRF, sessionauth.ErrOtherSite}),
-			code:    errcode.Forbidden(err),
-			args:    nil,
-		}
-	case errors.Is(err, identity.ErrDenied):
-		return failure{status: http.StatusForbidden, message: "forbidden", code: errcode.Forbidden(err), args: nil}
 	case errors.Is(err, errNotFound), errors.Is(err, runner.ErrNotFound), errors.Is(err, namespace.ErrNotFound):
-		return failure{
-			status: http.StatusNotFound, message: errNotFound.Error(), code: errcode.RunnerNotFound, args: nil,
-		}
+		return answer(http.StatusNotFound, errcode.RunnerNotFound, errNotFound.Error())
 	case errors.Is(err, runner.ErrInvalid):
-		return failure{
-			status:  http.StatusBadRequest,
-			message: sentenceOf(err, []error{runner.ErrInvalidHelper, runner.ErrInvalid}),
-			code:    errcode.RunnerInvalid,
-			args:    nil,
-		}
+		return answer(
+			http.StatusBadRequest, errcode.RunnerInvalid,
+			sentenceOf(err, []error{runner.ErrInvalidHelper, runner.ErrInvalid}),
+		)
 	case errors.Is(err, errBadBody):
-		return failure{
-			status: http.StatusBadRequest, message: errBadBody.Error(), code: errcode.RequestBodyInvalid, args: nil,
-		}
+		return answer(http.StatusBadRequest, errcode.RequestBodyInvalid, errBadBody.Error())
 	default:
 		return classifyManagementConflict(err)
 	}
 }
 
-// conflict returns the 409 answer of the management API with message and
-// code.
-func conflict(message, code string) failure {
-	return failure{status: http.StatusConflict, message: message, code: code, args: nil}
+// answer returns the answer of status, code and message for a code that takes
+// no argument.
+func answer(status int, code, message string) (problem.Problem, bool) {
+	return problem.Problem{
+		Status: status, Code: code, Values: nil, Message: message, RetryAfter: 0, Reauthenticate: "",
+	}, true
 }
 
-// classifyManagementConflict maps the errors of a refused change. An error
-// that no case knows answers 500 with no text of the error.
-func classifyManagementConflict(err error) failure {
+// classifyManagementConflict maps the errors of a refused change of the runner
+// domain.
+func classifyManagementConflict(err error) (problem.Problem, bool) {
 	switch {
 	case errors.Is(err, runner.ErrAlreadyExists):
-		return conflict("a runner pool with this name exists: choose another name", errcode.RunnerPoolExists)
+		return answer(http.StatusConflict, errcode.RunnerPoolExists,
+			"a runner pool with this name exists: choose another name")
 	case errors.Is(err, runner.ErrImmutable):
-		return conflict(runner.ErrImmutable.Error(), errcode.RunnerImmutable)
+		return answer(http.StatusConflict, errcode.RunnerImmutable, runner.ErrImmutable.Error())
 	case errors.Is(err, runner.ErrPoolInUse):
-		return conflict(runner.ErrPoolInUse.Error(), errcode.RunnerPoolInUse)
+		return answer(http.StatusConflict, errcode.RunnerPoolInUse, runner.ErrPoolInUse.Error())
 	case errors.Is(err, runner.ErrTokenUsed):
-		return conflict(runner.ErrTokenUsed.Error(), errcode.RunnerTokenUsed)
+		return answer(http.StatusConflict, errcode.RunnerTokenUsed, runner.ErrTokenUsed.Error())
 	case errors.Is(err, runner.ErrLimit):
-		return conflict(runner.ErrLimit.Error(), errcode.RunnerLimit)
+		return answer(http.StatusConflict, errcode.RunnerLimit, runner.ErrLimit.Error())
 	case errors.Is(err, runner.ErrRetired):
-		return conflict("the runner is retired", errcode.RunnerRetired)
-	case errors.Is(err, namespace.ErrFenced):
-		return conflict(namespace.ErrFenced.Error(), errcode.NamespaceFenced)
-	case errors.Is(err, namespace.ErrNotHome):
-		return failure{
-			status:  http.StatusMisdirectedRequest,
-			message: "namespace is not homed in this region",
-			code:    errcode.NamespaceNotHome,
-			args:    nil,
-		}
-	case errors.Is(err, maintenance.ErrInMaintenance):
-		return failure{
-			status:  http.StatusServiceUnavailable,
-			message: maintenance.ErrInMaintenance.Error() + ": try again later",
-			code:    errcode.MaintenanceInMaintenance,
-			args:    nil,
-		}
-	default:
-		return failure{
-			status: http.StatusInternalServerError, message: internalMessage, code: errcode.ServerInternal, args: nil,
-		}
+		return answer(http.StatusConflict, errcode.RunnerRetired, "the runner is retired")
 	}
+
+	// The namespace, maintenance and idempotency answers that every API shares
+	// come from problem.Shared, after this classifier.
+	return problem.Pass()
 }
 
 func (h *Handler) writeJSON(ctx context.Context, w http.ResponseWriter, status int, body any) {
