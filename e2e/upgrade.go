@@ -140,11 +140,13 @@ func compileTagSource(ctx context.Context, tb testing.TB, srcDir, out string) {
 
 // NewEnvWithBinary starts the server binary at binPath on a fresh database
 // with the Namespace namespace, and prepares an empty home directory and a
-// scratch project. Unlike NewEnv it never opens the database with the
-// current store code, so an older binary migrates the database to its own
-// schema first. The server field stays nil: seed helpers that need a direct
-// store handle do not work on this environment, while CLI steps, API calls,
-// RunBinary, StopServer and StartServer work as usual.
+// scratch project. The namespace is created through the server API, as NewEnv
+// does, so the create flags are those that binPath accepts. Unlike NewEnv it
+// never opens the database with the current store code, so an older binary
+// migrates the database to its own schema first. The server field stays nil:
+// seed helpers that need a direct store handle do not work on this
+// environment, while CLI steps, API calls, RunBinary, StopServer and
+// StartServer work as usual.
 func NewEnvWithBinary(ctx context.Context, tb testing.TB, cli Install, store Store, binPath string) *Env {
 	tb.Helper()
 
@@ -233,15 +235,10 @@ func newBinaryEnvWithBin(ctx context.Context, in envInput, binPath string) *Env 
 	blobDir := filepath.Join(in.dir, "blobs")
 	dbURL := reserveDatabase(ctx, tb, in.store, in.dir)
 
-	runBinary(ctx, tb, binPath, []string{
-		namespaceSubcommand, createSubcommand,
-		databaseFlag, dbURL,
-		regionFlag, region,
-		Namespace,
-	}, os.Environ())
-
 	cfg := plainBackendConfig(binPath, dbURL, blobDir, in.token+","+in.tokenB, cert)
 	handle, backendURL := startBinaryBackend(ctx, tb, cfg)
+	createFirstNamespaceViaBinary(ctx, tb, cfg, backendURL)
+
 	proxy := startRecordingProxy(tb, in.rec, backendURL, nil)
 
 	client := proxy.Client()
