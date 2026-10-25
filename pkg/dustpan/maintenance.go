@@ -175,6 +175,7 @@ type maintenancePulumiError struct {
 // writeMaintenancePulumi answers 503 with Retry-After in the Pulumi shape.
 func writeMaintenancePulumi(ctx context.Context, w http.ResponseWriter, logger *slog.Logger, message string) {
 	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Retry-After", maintenanceRetryAfter)
 	w.WriteHeader(http.StatusServiceUnavailable)
 
@@ -201,6 +202,7 @@ type maintenanceInventoryError struct {
 // writeMaintenanceInventory answers 503 with Retry-After in the inventory shape.
 func writeMaintenanceInventory(ctx context.Context, w http.ResponseWriter, logger *slog.Logger, message string) {
 	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Retry-After", maintenanceRetryAfter)
 	w.WriteHeader(http.StatusServiceUnavailable)
 
