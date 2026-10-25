@@ -28,7 +28,7 @@ What has to be answered before a decision.
 
 ## Checklist
 
-- [ ] Tolerates asynchronous replication between installations: each namespace writes only its own half, under its own fence, and no write waits for another installation (ADR 248 decisions 9 and 16).
+- [ ] Tolerates asynchronous replication between installations: each namespace writes only its own half, under its own fence, and no write waits for another installation (ADR 248 decisions 3, 6 and 9).
 
 ## Outcome
 
