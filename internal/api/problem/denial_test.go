@@ -211,3 +211,48 @@ func TestKeepDeniedCannotHideACredentialRefusal(t *testing.T) {
 		t.Fatalf("answer = %d %q, want the credential answer", rec.Code, got.ErrorCode)
 	}
 }
+
+// TestKeepDeniedStatusContract checks that a KeepDenied answer keeps its code
+// only with status 403 or 404. Any other status is a hostile or wrong hook, and
+// the writer answers the standard 403 access.denied instead.
+func TestKeepDeniedStatusContract(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		status int
+		want   int
+		code   string
+	}{
+		{"403 is kept", http.StatusForbidden, http.StatusForbidden, errcode.SinkConflict},
+		{"404 is kept", http.StatusNotFound, http.StatusNotFound, errcode.SinkConflict},
+		{"200 becomes 403", http.StatusOK, http.StatusForbidden, errcode.AccessDenied},
+		{"409 becomes 403", http.StatusConflict, http.StatusForbidden, errcode.AccessDenied},
+		{"500 becomes 403", http.StatusInternalServerError, http.StatusForbidden, errcode.AccessDenied},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			keep := func(error) (problem.Problem, bool) {
+				var p problem.Problem
+
+				p.Status, p.Code, p.Message = tc.status, errcode.SinkConflict, "kept"
+
+				return p, true
+			}
+
+			rec := writeWith(t, problem.Writer{Logger: nil, KeepDenied: keep, Classify: nil}, errKept)
+
+			if got := body(t, rec); rec.Code != tc.want || got.ErrorCode != tc.code {
+				t.Errorf("answer = %d %q, want %d %q", rec.Code, got.ErrorCode, tc.want, tc.code)
+			}
+
+			if rec.Code == http.StatusForbidden && body(t, rec).ErrorCode == errcode.AccessDenied &&
+				body(t, rec).Message != "forbidden" {
+				t.Errorf("message = %q, want forbidden", body(t, rec).Message)
+			}
+		})
+	}
+}

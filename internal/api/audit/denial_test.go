@@ -20,18 +20,27 @@ import (
 func TestDenialWinsOverItsOwnRefusal(t *testing.T) {
 	t.Parallel()
 
-	for _, err := range []error{
-		fmt.Errorf("%w: %w", identity.ErrDenied, audit.ErrEntryNotFound),
-		fmt.Errorf("%w: %w", audit.ErrEntryNotFound, identity.ErrDenied),
-	} {
-		rec := httptest.NewRecorder()
-		auditapi.WriteError(t.Context(), rec, err)
+	tests := []struct {
+		name string
+		err  error
+	}{
+		{"denial first", fmt.Errorf("%w: %w", identity.ErrDenied, audit.ErrEntryNotFound)},
+		{"refusal first", fmt.Errorf("%w: %w", audit.ErrEntryNotFound, identity.ErrDenied)},
+	}
 
-		errcodetest.CheckAnswer(t, errcodetest.ShapeCamelCase, http.StatusForbidden, rec.Body.Bytes(),
-			errcodetest.Want{Code: errcode.AccessDenied, Args: nil, RequestBody: nil})
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 
-		if strings.Contains(rec.Body.String(), audit.ErrEntryNotFound.Error()) {
-			t.Errorf("body holds the text of the refusal: %s", rec.Body)
-		}
+			rec := httptest.NewRecorder()
+			auditapi.WriteError(t.Context(), rec, tc.err)
+
+			errcodetest.CheckAnswer(t, errcodetest.ShapeCamelCase, http.StatusForbidden, rec.Body.Bytes(),
+				errcodetest.Want{Code: errcode.AccessDenied, Args: nil, RequestBody: nil})
+
+			if strings.Contains(rec.Body.String(), audit.ErrEntryNotFound.Error()) {
+				t.Errorf("body holds the text of the refusal: %s", rec.Body)
+			}
+		})
 	}
 }

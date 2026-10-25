@@ -20,18 +20,27 @@ import (
 func TestDenialWinsOverItsOwnRefusal(t *testing.T) {
 	t.Parallel()
 
-	for _, err := range []error{
-		fmt.Errorf("%w: %w", identity.ErrDenied, objectcontext.ErrNotFound),
-		fmt.Errorf("%w: %w", objectcontext.ErrNotFound, identity.ErrDenied),
-	} {
-		rec := httptest.NewRecorder()
-		objectcontextapi.WriteError(t.Context(), rec, err)
+	tests := []struct {
+		name string
+		err  error
+	}{
+		{"denial first", fmt.Errorf("%w: %w", identity.ErrDenied, objectcontext.ErrNotFound)},
+		{"refusal first", fmt.Errorf("%w: %w", objectcontext.ErrNotFound, identity.ErrDenied)},
+	}
 
-		errcodetest.CheckAnswer(t, errcodetest.ShapeCamelCase, http.StatusForbidden, rec.Body.Bytes(),
-			errcodetest.Want{Code: errcode.AccessDenied, Args: nil, RequestBody: nil})
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 
-		if strings.Contains(rec.Body.String(), objectcontext.ErrNotFound.Error()) {
-			t.Errorf("body holds the text of the refusal: %s", rec.Body)
-		}
+			rec := httptest.NewRecorder()
+			objectcontextapi.WriteError(t.Context(), rec, tc.err)
+
+			errcodetest.CheckAnswer(t, errcodetest.ShapeCamelCase, http.StatusForbidden, rec.Body.Bytes(),
+				errcodetest.Want{Code: errcode.AccessDenied, Args: nil, RequestBody: nil})
+
+			if strings.Contains(rec.Body.String(), objectcontext.ErrNotFound.Error()) {
+				t.Errorf("body holds the text of the refusal: %s", rec.Body)
+			}
+		})
 	}
 }
