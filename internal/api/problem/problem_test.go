@@ -465,3 +465,96 @@ func TestCredentialBeatsAHostileClassifier(t *testing.T) {
 		t.Errorf("message = %q, want the sentinel text %q", got, sessionauth.ErrCSRF.Error())
 	}
 }
+
+// TestWriteLogsRefusalsAtDebug pins the log rule of Write for each class. A
+// refusal whose answer is not its error text logs that text at Debug. An answer
+// that holds the error text logs nothing more. A 5xx logs no error text, and the
+// body never holds the value that a refusal wraps.
+func TestWriteLogsRefusalsAtDebug(t *testing.T) {
+	t.Parallel()
+
+	tests := []refusalCase{
+		{
+			name:        "wrapped denial logs its wrap",
+			err:         fmt.Errorf("save trigger: %w", identity.ErrDenied),
+			status:      http.StatusForbidden,
+			wantRefused: true,
+			hidden:      "save trigger",
+		},
+		{
+			name:        "answer holds the error text",
+			err:         namespace.ErrInvalidName,
+			status:      http.StatusBadRequest,
+			wantRefused: false,
+			hidden:      "",
+		},
+		{
+			name:        "5xx writes no error text",
+			err:         errDriver,
+			status:      http.StatusInternalServerError,
+			wantRefused: false,
+			hidden:      "hunter2",
+		},
+		{
+			name:        "wrapped secret never reaches the body",
+			err:         fmt.Errorf("pq: password=hunter2: %w", identity.ErrDenied),
+			status:      http.StatusForbidden,
+			wantRefused: true,
+			hidden:      "hunter2",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			var buf bytes.Buffer
+
+			wr := problem.Writer{
+				Logger:   slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})),
+				Classify: nil,
+			}
+			rec := httptest.NewRecorder()
+
+			wr.Write(t.Context(), rec, tc.err)
+
+			if rec.Code != tc.status {
+				t.Fatalf("status = %d, want %d", rec.Code, tc.status)
+			}
+
+			checkRefusalLog(t, tc, buf.String(), rec.Body.String())
+		})
+	}
+}
+
+// refusalCase is one row of TestWriteLogsRefusalsAtDebug.
+type refusalCase struct {
+	name        string
+	err         error
+	status      int
+	wantRefused bool
+	// hidden is a value that the body never holds, and that a 5xx log never holds.
+	hidden string
+}
+
+// checkRefusalLog fails unless the log and the body follow the rule of
+// TestWriteLogsRefusalsAtDebug.
+func checkRefusalLog(t *testing.T, tc refusalCase, logs, body string) {
+	t.Helper()
+
+	if got := strings.Contains(logs, `msg="request refused"`); got != tc.wantRefused {
+		t.Errorf("request refused line = %t, want %t: log %q", got, tc.wantRefused, logs)
+	}
+
+	if tc.wantRefused && !strings.Contains(logs, "level=DEBUG") {
+		t.Errorf("request refused line is not at Debug: log %q", logs)
+	}
+
+	if tc.hidden != "" && strings.Contains(body, tc.hidden) {
+		t.Errorf("body %q holds %q", body, tc.hidden)
+	}
+
+	if tc.status >= http.StatusInternalServerError && tc.hidden != "" && strings.Contains(logs, tc.hidden) {
+		t.Errorf("5xx log %q holds %q", logs, tc.hidden)
+	}
+}
