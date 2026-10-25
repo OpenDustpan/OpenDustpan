@@ -390,14 +390,14 @@ func (s *Store) CheckpointByUpdate(
 	return s.inner.CheckpointByUpdate(ctx, ref, id)
 }
 
-// ReferencedCheckpointKeys returns the blob keys every checkpoint of the
-// stack names, unless a fault fires first.
-func (s *Store) ReferencedCheckpointKeys(ctx context.Context, ref stack.Ref) ([]blob.Key, error) {
-	if err := s.before(ctx, "ReferencedCheckpointKeys"); err != nil {
+// ReferencedBlobKeys returns the blob keys that the rows of the stack name,
+// unless a fault fires first.
+func (s *Store) ReferencedBlobKeys(ctx context.Context, ref stack.Ref) ([]blob.Key, error) {
+	if err := s.before(ctx, "ReferencedBlobKeys"); err != nil {
 		return nil, err
 	}
 
-	return s.inner.ReferencedCheckpointKeys(ctx, ref)
+	return s.inner.ReferencedBlobKeys(ctx, ref)
 }
 
 // StateAt returns the update that held the state of the stack at a time,
