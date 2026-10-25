@@ -74,7 +74,7 @@ mkdir -p "$DEMO_TMP/data/blobs" "$DEMO_TMP/backups"
 
 DEMO_URL="http://127.0.0.1:$DEMO_PORT"
 
-(umask 077 && openssl rand -base64 32 >"$DEMO_TMP/data/dustpan.key")
+./bin/opendustpan key generate --out "$DEMO_TMP/data/dustpan.key" >/dev/null
 
 echo "demo: starting the server on $DEMO_URL"
 DUSTPAN_ADMIN_TOKEN="$ADMIN_TOKEN" ./bin/opendustpan serve \

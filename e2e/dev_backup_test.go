@@ -226,7 +226,7 @@ func startProduction(t *testing.T, bin, dir, targetDir string, extra ...string) 
 
 	addr := freeLoopbackAddr(t)
 
-	writeServeKey(t, filepath.Join(dir, "serve.key"))
+	writeServeKey(t, bin, filepath.Join(dir, "serve.key"))
 
 	base := []string{
 		"serve", "--database", "sqlite:" + filepath.Join(dir, "serve.db"),

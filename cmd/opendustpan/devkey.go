@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"opendustpan.org/opendustpan/internal/cli"
 	"opendustpan.org/opendustpan/internal/cli/client"
 )
 
@@ -34,13 +35,13 @@ var (
 // and its directory before it returns, as the key file of serve does. It
 // returns the key.
 func makeDevKey(path string) ([]byte, error) {
-	key := make([]byte, generatedKeyBytes)
+	key := make([]byte, cli.KeyBytes)
 	if _, err := rand.Read(key); err != nil {
 		return nil, fmt.Errorf("make the key-encryption key of dev: %w", err)
 	}
 
 	contents := devKeyHeader + "\n" + base64.StdEncoding.EncodeToString(key) + "\n"
-	if err := writeKeyFile(path, contents, writeKeyContents); err != nil {
+	if err := cli.WriteKeyFile(path, contents, cli.WriteKeyContents); err != nil {
 		return nil, err
 	}
 
@@ -126,7 +127,7 @@ func loadDevToken(in devTokenInput) (devToken, error) {
 	}
 
 	value := base64.RawURLEncoding.EncodeToString(raw)
-	if err := writeKeyFile(path, value+"\n", writeKeyContents); err != nil {
+	if err := cli.WriteKeyFile(path, value+"\n", cli.WriteKeyContents); err != nil {
 		return devToken{}, err
 	}
 

@@ -5,8 +5,6 @@ package e2e_test
 import (
 	"bytes"
 	"context"
-	"crypto/rand"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -826,18 +824,13 @@ func runBinaryWithEnv(t *testing.T, bin string, env []string, args ...string) (s
 	return string(out), nil
 }
 
-// writeServeKey writes a new key file at path with 32 random bytes in base64
-// and owner-only mode, as the operator makes it for serve.
-func writeServeKey(t *testing.T, path string) {
+// writeServeKey makes a new key file at path with the key generate command of
+// the binary, as the operator makes it for serve.
+func writeServeKey(t *testing.T, bin, path string) {
 	t.Helper()
 
-	key := make([]byte, 32)
-	if _, err := rand.Read(key); err != nil {
-		t.Fatalf("make a key: %v", err)
-	}
-
-	if err := os.WriteFile(path, []byte(base64.StdEncoding.EncodeToString(key)+"\n"), 0o600); err != nil {
-		t.Fatalf("write the key file: %v", err)
+	if out, err := runBinary(t, bin, "key", "generate", "--out", path); err != nil {
+		t.Fatalf("make the key file: %v\n%s", err, out)
 	}
 }
 
@@ -846,7 +839,7 @@ func writeServeKey(t *testing.T, path string) {
 func runServe(t *testing.T, bin, database, keyFile string) (string, error) {
 	t.Helper()
 
-	writeServeKey(t, keyFile)
+	writeServeKey(t, bin, keyFile)
 
 	return runBinary(t, bin, "serve", "--database", database, "--key-encryption-key-file", keyFile,
 		"--listen", "127.0.0.1:0")
@@ -861,7 +854,7 @@ func serveMadeDatabase(t *testing.T, bin string) string {
 	database := filepath.Join(dir, "serve.db")
 	addr := freeLoopbackAddr(t)
 
-	writeServeKey(t, filepath.Join(dir, "serve.key"))
+	writeServeKey(t, bin, filepath.Join(dir, "serve.key"))
 
 	//nolint:gosec // The test runs the binary that it built.
 	cmd := exec.CommandContext(
