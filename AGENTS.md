@@ -157,6 +157,17 @@ The web console lives in its own repository, `OpenDustpan/console` (ADR 8).
   publishes to it in the same transaction as its own writes. User-facing text
   keeps each tool's own words.
 
+## No magic
+
+The platform must be observable and intuitive. A user must be able to see and explain everything that the platform does.
+
+- Every permission is a stored grant. A grant has a holder, a role, an object, a creator and a time. A user can list, audit and revoke it. This includes the grants of the principals that the server makes. Code can define roles and actions. Code must not define who holds them.
+- Each automatic action writes a record of who or what did it and why.
+- Each default shows its effective value in the API.
+- A user can ask why the platform allowed an action or why something happened. The answer names the grant, the rule or the event.
+- Do not add a hidden rule, a silent fallback or an action without a record. If a code rule must stay, put it in the catalog of code rules and document it.
+- Prefer plain, explicit code to clever code.
+
 ## Backend rules (Go)
 
 - Domain packages (the `pkg/` packages that the `domain` rule of `.golangci.yml` lists, for example
