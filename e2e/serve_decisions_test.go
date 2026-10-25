@@ -169,3 +169,75 @@ func checkKeyFile(t *testing.T, path, report string) {
 		t.Fatal("key generate printed the key")
 	}
 }
+
+// TestDoctor proves doctor through the real binary: it prints one line for
+// each check, exits with 0 when no check fails and with 1 when one fails, and
+// with --server it asks a running production server through the REST API.
+func TestDoctor(t *testing.T) {
+	t.Parallel()
+
+	bin := e2e.BuildBinaryWithVersion(t.Context(), t, t.TempDir(), "")
+	dir := t.TempDir()
+	keyFile := filepath.Join(dir, "key")
+	settings := []string{
+		"--database", "sqlite:" + filepath.Join(dir, "serve.db"),
+		"--key-encryption-key-file", keyFile,
+		"--backup-target", "dir:" + t.TempDir(),
+		"--listen", "127.0.0.1:8080",
+	}
+
+	writeServeKey(t, bin, keyFile)
+
+	t.Run("a good install", func(t *testing.T) {
+		t.Parallel()
+
+		out, err := runBinary(t, bin, append([]string{"doctor"}, settings...)...)
+		checkGoodDoctor(t, out, err)
+	})
+
+	t.Run("no key", func(t *testing.T) {
+		t.Parallel()
+
+		out, err := runBinary(t, bin, "doctor", "--database", "sqlite:"+filepath.Join(dir, "none.db"))
+
+		exit, isExit := errors.AsType[*exec.ExitError](err)
+		if !isExit || exit.ExitCode() != 1 || !strings.Contains(out, "fail  key: no key-encryption key is set") {
+			t.Fatalf("doctor with no key: err = %v, output:\n%s", err, out)
+		}
+	})
+
+	t.Run("a running production server", func(t *testing.T) {
+		t.Parallel()
+
+		serverDir := t.TempDir()
+		server := startProduction(t, bin, serverDir, t.TempDir())
+
+		t.Cleanup(func() { server.stop(t) })
+
+		out, err := runBinary(t, bin, append([]string{"doctor", "--server", server.url}, settings...)...)
+		if err != nil ||
+			!strings.Contains(out, "pass  server kind: the server reports the installation kind production") {
+			t.Fatalf("doctor with --server: err = %v, output:\n%s", err, out)
+		}
+	})
+}
+
+// checkGoodDoctor proves that doctor passed a good install: exit code 0, a pass
+// line for each local check, and no admin token in the output.
+func checkGoodDoctor(t *testing.T, out string, err error) {
+	t.Helper()
+
+	if err != nil || strings.Contains(out, "fail ") {
+		t.Fatalf("doctor on a good install: err = %v, output:\n%s", err, out)
+	}
+
+	for _, want := range []string{"pass  key: ", "pass  database: ", "pass  admin token: ", "pass  backup target: "} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("doctor output lacks %q:\n%s", want, out)
+		}
+	}
+
+	if strings.Contains(out, serveToken) {
+		t.Fatalf("doctor printed the admin token:\n%s", out)
+	}
+}

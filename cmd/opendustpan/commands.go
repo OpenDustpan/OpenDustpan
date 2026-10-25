@@ -34,6 +34,9 @@ func commandTable() cli.Table {
 			return dev(ctx, args, stderr)
 		}),
 		cli.KeyGenerateCommand(),
+		cli.DoctorCommand(func(ctx context.Context, args []string, stdout, stderr io.Writer) error {
+			return client.Doctor(ctx, args, stdout, stderr, version)
+		}),
 		cli.HealthCommand(client.RunHealth),
 		cli.BackupCommand(client.BackupCommand),
 		cli.RestoreCommand(client.RestoreCommand),

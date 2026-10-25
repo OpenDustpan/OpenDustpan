@@ -31,6 +31,7 @@ const (
 	commandCreate          = "create"
 	commandCreateTempAdmin = "create-temp-admin"
 	commandDev             = "dev"
+	commandDoctor          = "doctor"
 	commandHealth          = "health"
 	commandGenerate        = "generate"
 	commandHost            = "host"
