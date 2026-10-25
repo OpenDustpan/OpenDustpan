@@ -125,6 +125,11 @@ token. The runner that held the lapsed claim gets `claim-lost` on its next
 renewal, and the claim is in `lost` in its next heartbeat. The runner renews a
 claim after a third of the lease.
 
+The launcher of a claim must open its job session within 30 minutes of the
+claim. After that time, a renewal of a claim with no job session gives the
+claim back through the job service, with the same rules as a release, and
+answers `claim-lost`.
+
 A release gives the claim back through the job service, with the same rules as
 the end of a claim. When no step that changes resources began, the phase waits
 for the next claim. Else the phase fails. A release of a claim that has a job
