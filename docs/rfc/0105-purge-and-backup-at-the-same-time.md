@@ -74,7 +74,13 @@ when the blob can be named by a snapshot that was taken before the delete.
 | 13 | Backup and restore | `pkg/backup/service.go` (`clearPartial`, `copyPlainBlob`), `pkg/backup/restore.go` (`putRestoreBlob`) | Objects in a backup target, or a bad copy that the restore just wrote | Backup, restore | No: not a live blob that a snapshot names |
 
 Rows 1 to 8 need the guard. Rows 9 to 13 do not, for the reason in the last
-column. A new deleter must be added to this table, and the conformance tests
+column.
+
+Rows 2 and 3 have a separate bug that this guard does not fix: issue #1923.
+The stack sweep lists the journal directories too, but keeps only the keys
+that checkpoint rows name. So it can delete journal batch blobs that
+`update_journal` rows still name, with or without a backup. The fix of #1923
+must come first, because it can lose the result of an apply. A new deleter must be added to this table, and the conformance tests
 below must cover it.
 
 ### The race
