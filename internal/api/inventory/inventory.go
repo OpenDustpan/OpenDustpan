@@ -589,7 +589,7 @@ func unitObject(e coreinventory.Entry) (identity.Object, error) {
 // writeError answers err through the shared error module of the
 // tool-neutral APIs, with the classes of the inventory routes.
 func (h *Handler) writeError(ctx context.Context, w http.ResponseWriter, err error) {
-	problem.Writer{Logger: h.logger, Classify: classify}.Write(ctx, w, err)
+	problem.Writer{Logger: h.logger, KeepDenied: nil, Classify: classify}.Write(ctx, w, err)
 }
 
 // classify maps the errors of the inventory routes to an answer that is safe
