@@ -5,11 +5,9 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
-	"fmt"
 	"net/url"
 	"os"
 	"path/filepath"
-	"sync"
 	"testing"
 	"time"
 
@@ -173,6 +171,12 @@ func groupFixture(t *testing.T, st principal.Store) approverdirectorytest.Fixtur
 // PostgreSQL case.
 const groupPostgresEnv = "DUSTPAN_TEST_POSTGRES_URL"
 
+// groupSchemaPrefixEnv names the variable that holds the start of the name of
+// each schema that newGroupSchema makes. TestMain sets it to a value that is
+// unique for the test binary, and lists the schemas with that start after the
+// tests.
+const groupSchemaPrefixEnv = "DUSTPAN_TEST_GROUP_SCHEMA_PREFIX"
+
 // newGroupSchema makes a schema for one case on the database at base, drops it
 // when the case ends, and returns the URL that uses it. The schemas of the
 // cases fill the disk otherwise.
@@ -184,10 +188,9 @@ func newGroupSchema(t *testing.T, base string) string {
 		t.Fatalf("random schema name: %v", err)
 	}
 
-	name := "test_" + hex.EncodeToString(suffix)
+	name := os.Getenv(groupSchemaPrefixEnv) + hex.EncodeToString(suffix)
 
 	execGroupSQL(t, base, "CREATE SCHEMA "+pgx.Identifier{name}.Sanitize())
-	recordGroupSchema(name)
 	pgtest.DropSchemaAtCleanup(t, base, name)
 
 	u, err := url.Parse(base)
@@ -220,54 +223,4 @@ func execGroupSQL(t *testing.T, base, statement string) {
 	if _, execErr := conn.Exec(context.Background(), statement); execErr != nil {
 		t.Fatalf("%s: %v", statement, execErr)
 	}
-}
-
-// groupSchemas holds the name of each schema that newGroupSchema made in this
-// test binary. TestMain reads it after the tests to find a schema that stays.
-var groupSchemas struct {
-	mu    sync.Mutex
-	names []string
-}
-
-func recordGroupSchema(name string) {
-	groupSchemas.mu.Lock()
-	defer groupSchemas.mu.Unlock()
-
-	groupSchemas.names = append(groupSchemas.names, name)
-}
-
-// leftGroupSchemas returns the schemas, and the control schemas, that
-// newGroupSchema made and that the database at base still holds.
-func leftGroupSchemas(ctx context.Context, base string) (left []string, err error) {
-	groupSchemas.mu.Lock()
-	names := make([]string, 0, 2*len(groupSchemas.names))
-
-	for _, name := range groupSchemas.names {
-		names = append(names, name, name+"_control")
-	}
-
-	groupSchemas.mu.Unlock()
-
-	conn, err := pgx.Connect(ctx, base)
-	if err != nil {
-		return nil, fmt.Errorf("connect: %w", err)
-	}
-
-	defer func() {
-		if closeErr := conn.Close(ctx); closeErr != nil {
-			err = errors.Join(err, fmt.Errorf("close: %w", closeErr))
-		}
-	}()
-
-	rows, err := conn.Query(ctx, "SELECT nspname FROM pg_namespace WHERE nspname = ANY($1) ORDER BY nspname", names)
-	if err != nil {
-		return nil, fmt.Errorf("list schemas: %w", err)
-	}
-
-	left, err = pgx.CollectRows(rows, pgx.RowTo[string])
-	if err != nil {
-		return nil, fmt.Errorf("list schemas: %w", err)
-	}
-
-	return left, nil
 }
