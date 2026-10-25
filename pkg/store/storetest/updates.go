@@ -98,7 +98,8 @@ func RunUpdates(t *testing.T, newStore UpdatesFactory) {
 		{name: "checkpoint key must belong to the update", test: testCheckpointKeyBelongsToUpdate},
 		{name: "checkpoint by update returns only that update", test: testCheckpointByUpdate},
 		{name: "history reports the stored size for blob rows", test: testHistoryBlobSize},
-		{name: "referenced checkpoint keys list every key of the stack", test: testReferencedCheckpointKeys},
+		{name: "referenced blob keys list every checkpoint key of the stack", test: testReferencedBlobKeys},
+		{name: "referenced blob keys list the journal keys of the stack", test: testReferencedBlobKeysJournal},
 		{name: "checkpoint needs the running update's lease", test: testCheckpointLease},
 		{name: "checkpoint sequence numbers are idempotent", test: testCheckpointSequence},
 		{name: "latest checkpoint spans updates", test: testCheckpointAcrossUpdates},
@@ -1686,13 +1687,13 @@ func testHistoryBlobSize(t *testing.T, f fixture) {
 	}
 }
 
-// testReferencedCheckpointKeys checks that the referenced keys hold every
+// testReferencedBlobKeys checks that the referenced keys hold every
 // blob key the stack's checkpoints name, ordered. A stack without
 // checkpoints, or one that does not exist, yields an empty list.
-func testReferencedCheckpointKeys(t *testing.T, f fixture) {
+func testReferencedBlobKeys(t *testing.T, f fixture) {
 	t.Helper()
 
-	if keys, err := f.s.ReferencedCheckpointKeys(t.Context(), f.ref); err != nil || len(keys) != 0 {
+	if keys, err := f.s.ReferencedBlobKeys(t.Context(), f.ref); err != nil || len(keys) != 0 {
 		t.Fatalf("referenced keys of a new stack = %v, %v; want empty", keys, err)
 	}
 
@@ -1714,7 +1715,7 @@ func testReferencedCheckpointKeys(t *testing.T, f fixture) {
 
 	f.end(t, second, stack.StatusSucceeded)
 
-	keys, err := f.s.ReferencedCheckpointKeys(t.Context(), f.ref)
+	keys, err := f.s.ReferencedBlobKeys(t.Context(), f.ref)
 	if err != nil {
 		t.Fatalf("referenced keys: %v", err)
 	}
@@ -1723,12 +1724,12 @@ func testReferencedCheckpointKeys(t *testing.T, f fixture) {
 		t.Fatalf("referenced keys = %v, want [%s %s]", keys, firstKey, secondKey)
 	}
 
-	if keys, err := f.s.ReferencedCheckpointKeys(t.Context(), f.other(t)); err != nil || len(keys) != 0 {
+	if keys, err := f.s.ReferencedBlobKeys(t.Context(), f.other(t)); err != nil || len(keys) != 0 {
 		t.Fatalf("referenced keys of another stack = %v, %v; want empty", keys, err)
 	}
 
 	ghost := stack.Ref{Namespace: f.ref.Namespace, Project: f.ref.Project, Stack: "ghost"}
-	if keys, err := f.s.ReferencedCheckpointKeys(t.Context(), ghost); err != nil || len(keys) != 0 {
+	if keys, err := f.s.ReferencedBlobKeys(t.Context(), ghost); err != nil || len(keys) != 0 {
 		t.Fatalf("referenced keys of a missing stack = %v, %v; want empty", keys, err)
 	}
 }

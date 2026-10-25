@@ -280,7 +280,7 @@ func (fakeCheckpoints) CheckpointByUpdate(context.Context, stack.Ref, stack.Upda
 	return stack.Checkpoint{}, stack.ErrNoState
 }
 
-func (fakeCheckpoints) ReferencedCheckpointKeys(context.Context, stack.Ref) ([]blob.Key, error) {
+func (fakeCheckpoints) ReferencedBlobKeys(context.Context, stack.Ref) ([]blob.Key, error) {
 	return nil, nil
 }
 
