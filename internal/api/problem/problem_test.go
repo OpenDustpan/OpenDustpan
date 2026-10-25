@@ -371,3 +371,212 @@ func TestWriteProblem(t *testing.T) {
 		t.Fatalf("log %q, want the 500 status", buf.String())
 	}
 }
+
+// TestCredentialAnswersTheSentinel checks that a refusal of the session cookie
+// answers the text of its sentinel, never the wrap text that names the
+// operation.
+func TestCredentialAnswersTheSentinel(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		err      error
+		sentinel error
+		code     string
+	}{
+		{"csrf", sessionauth.ErrCSRF, sessionauth.ErrCSRF, errcode.SessionCSRF},
+		{"other site", sessionauth.ErrOtherSite, sessionauth.ErrOtherSite, errcode.SessionOtherSite},
+		{
+			"csrf wrapped", fmt.Errorf("save trigger: %w", sessionauth.ErrCSRF),
+			sessionauth.ErrCSRF, errcode.SessionCSRF,
+		},
+		{
+			"other site wrapped", fmt.Errorf("save trigger: %w", sessionauth.ErrOtherSite),
+			sessionauth.ErrOtherSite, errcode.SessionOtherSite,
+		},
+		{
+			"csrf wrapped twice", fmt.Errorf("drift: %w", fmt.Errorf("save: %w", sessionauth.ErrCSRF)),
+			sessionauth.ErrCSRF, errcode.SessionCSRF,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			rec, _ := write(t, nil, tc.err)
+			if rec.Code != http.StatusForbidden {
+				t.Fatalf("status = %d, want %d", rec.Code, http.StatusForbidden)
+			}
+
+			b := body(t, rec)
+			if b.Message != tc.sentinel.Error() {
+				t.Errorf("message = %q, want the sentinel text %q", b.Message, tc.sentinel.Error())
+			}
+
+			if b.ErrorCode != tc.code {
+				t.Errorf("code = %q, want %q", b.ErrorCode, tc.code)
+			}
+		})
+	}
+}
+
+// TestCredentialRefusalLogsTheWrap checks that the log holds the wrap text of
+// a refusal of the session cookie at Debug, and that the answer does not.
+func TestCredentialRefusalLogsTheWrap(t *testing.T) {
+	t.Parallel()
+
+	var buf bytes.Buffer
+
+	wr := problem.Writer{
+		Logger:   slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})),
+		Classify: nil,
+	}
+	rec := httptest.NewRecorder()
+
+	wr.Write(t.Context(), rec, fmt.Errorf("save trigger: %w", sessionauth.ErrCSRF))
+
+	logs := buf.String()
+	for _, want := range []string{"level=DEBUG", `msg="request refused"`, "save trigger"} {
+		if !strings.Contains(logs, want) {
+			t.Errorf("log %q does not hold %q", logs, want)
+		}
+	}
+
+	if strings.Contains(rec.Body.String(), "save trigger") {
+		t.Errorf("answer %q holds the wrap text", rec.Body.String())
+	}
+}
+
+// TestCredentialBeatsAHostileClassifier checks that a refusal of the session
+// cookie keeps its answer when the error also matches a classifier of the API.
+// Defense in depth: the credential check runs before the classifier; this test
+// holds even if that order changes.
+func TestCredentialBeatsAHostileClassifier(t *testing.T) {
+	t.Parallel()
+
+	rec, _ := write(t, domain, fmt.Errorf("%w: %w", sessionauth.ErrCSRF, errDomain))
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusForbidden)
+	}
+
+	if got := body(t, rec).Message; got != sessionauth.ErrCSRF.Error() {
+		t.Errorf("message = %q, want the sentinel text %q", got, sessionauth.ErrCSRF.Error())
+	}
+}
+
+// TestWriteLogsRefusalsAtDebug pins the log rule of Write for each class. A
+// refusal whose answer is not its error text logs that text at Debug. An answer
+// that holds the error text logs nothing more. A 5xx logs no error text, and the
+// body never holds the value that a refusal wraps.
+func TestWriteLogsRefusalsAtDebug(t *testing.T) {
+	t.Parallel()
+
+	tests := []refusalCase{
+		{
+			name:        "wrapped denial logs its wrap",
+			err:         fmt.Errorf("save trigger: %w", identity.ErrDenied),
+			status:      http.StatusForbidden,
+			wantRefused: true,
+			wantLog:     "save trigger",
+			hidden:      "save trigger",
+		},
+		{
+			name:        "answer holds the error text",
+			err:         namespace.ErrInvalidName,
+			status:      http.StatusBadRequest,
+			wantRefused: false,
+			wantLog:     "",
+			hidden:      "",
+		},
+		{
+			name:        "5xx writes no error text",
+			err:         errDriver,
+			status:      http.StatusInternalServerError,
+			wantRefused: false,
+			wantLog:     "",
+			hidden:      "hunter2",
+		},
+		{
+			// The log is not checked for the secret: a test never pins a secret into a log.
+			name:        "wrapped secret never reaches the body",
+			err:         fmt.Errorf("pq: password=hunter2: %w", identity.ErrDenied),
+			status:      http.StatusForbidden,
+			wantRefused: true,
+			wantLog:     "",
+			hidden:      "hunter2",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			var buf bytes.Buffer
+
+			wr := problem.Writer{
+				Logger:   slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})),
+				Classify: nil,
+			}
+			rec := httptest.NewRecorder()
+
+			wr.Write(t.Context(), rec, tc.err)
+
+			if rec.Code != tc.status {
+				t.Fatalf("status = %d, want %d", rec.Code, tc.status)
+			}
+
+			checkRefusalLog(t, tc, buf.String(), rec.Body.String())
+		})
+	}
+}
+
+// refusalCase is one row of TestWriteLogsRefusalsAtDebug.
+type refusalCase struct {
+	name        string
+	err         error
+	status      int
+	wantRefused bool
+	// wantLog is the text that the request refused line holds when wantRefused is true, or "".
+	wantLog string
+	// hidden is a value that the body never holds, and that a 5xx log never holds.
+	hidden string
+}
+
+// refusedLineHolds reports whether the request refused line of logs holds text.
+func refusedLineHolds(logs, text string) bool {
+	for line := range strings.SplitSeq(logs, "\n") {
+		if strings.Contains(line, `msg="request refused"`) {
+			return strings.Contains(line, text)
+		}
+	}
+
+	return false
+}
+
+// checkRefusalLog fails unless the log and the body follow the rule of
+// TestWriteLogsRefusalsAtDebug.
+func checkRefusalLog(t *testing.T, tc refusalCase, logs, body string) {
+	t.Helper()
+
+	if got := strings.Contains(logs, `msg="request refused"`); got != tc.wantRefused {
+		t.Errorf("request refused line = %t, want %t: log %q", got, tc.wantRefused, logs)
+	}
+
+	if tc.wantRefused && !strings.Contains(logs, "level=DEBUG") {
+		t.Errorf("request refused line is not at Debug: log %q", logs)
+	}
+
+	if tc.wantRefused && tc.wantLog != "" && !refusedLineHolds(logs, tc.wantLog) {
+		t.Errorf("request refused line does not hold %q: log %q", tc.wantLog, logs)
+	}
+
+	if tc.hidden != "" && strings.Contains(body, tc.hidden) {
+		t.Errorf("body %q holds %q", body, tc.hidden)
+	}
+
+	if tc.status >= http.StatusInternalServerError && tc.hidden != "" && strings.Contains(logs, tc.hidden) {
+		t.Errorf("5xx log %q holds %q", logs, tc.hidden)
+	}
+}
