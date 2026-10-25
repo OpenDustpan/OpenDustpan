@@ -102,6 +102,7 @@ func input(t *testing.T, executor job.ExecutorKind, op job.Operation) job.Decisi
 				Connection: "", Repository: "", Ref: "", Directory: "", Revision: "",
 			},
 			Steps: nil, Pool: "", Profile: "", Edits: nil, Delivery: "",
+			Defaulted: nil,
 		},
 	}
 }

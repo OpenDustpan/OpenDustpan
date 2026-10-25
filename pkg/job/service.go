@@ -253,6 +253,10 @@ func (s *service) StartOnce(ctx context.Context, a Actor, req StartRequest) (Job
 		return Job{}, false, err
 	}
 
+	// The service sets the list itself, so a planner can neither hide a
+	// default nor invent one.
+	spec.Defaulted = DefaultedValues(&req, &spec)
+
 	err = s.authorize(ctx, a, &spec, &req)
 	if err != nil {
 		return Job{}, false, err

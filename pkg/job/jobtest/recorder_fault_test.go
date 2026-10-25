@@ -112,6 +112,7 @@ func newPlanJob(unit identity.Object) *job.Job {
 			Unit: unit, Operation: job.OperationPlan, Purpose: job.PurposeNone, Executor: job.ExecutorRunner,
 			Location: job.Location{Connection: "", Repository: "", Ref: "", Directory: "", Revision: ""},
 			Steps:    []job.Step{step}, Pool: "rpl-default", Profile: "prf-default", Edits: nil, Delivery: "",
+			Defaulted: nil,
 		},
 		Phases: make([]job.Phase, len(phases)),
 	}

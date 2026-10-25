@@ -138,6 +138,8 @@ The `errorCode` is a stable code for a program.
 | `reason` | Why a job that ended did end. The field is not there for a job that runs. |
 | `location` | Where the program and the config of the stack or workspace are in git: `connection`, `repository`, `ref`, `directory` and `revision`. A stored `repository` that the server does not accept is answered empty, so the answer never holds credentials. |
 | `pool` | The runner pool of a runner job |
+| `profile` | The name of the profile that gives the secrets to a runner job. The field is not there when the job has no profile. |
+| `defaulted` | The values that the request did not give and that the server took from the settings of the unit or from the namespace. The list holds `pool`, `location` or `profile`, in that order. The field is not there when the request gave every value. The server fixes the list when the job starts. A later change of the settings changes neither the values nor the list. |
 | `steps` | The steps of a runner job. Each step has `name`, `role`, `phase` and `changesResources`. |
 | `phases` | The phases of the job, in order (see below) |
 | `current` | The index of the phase that runs or runs next. It equals the number of phases after the last phase. |
@@ -155,7 +157,7 @@ The `unit.name` field keeps the name from the start of the job. A rename does
 not change it. To find the current stack or workspace, use `unit.id`.
 
 A step never shows its arguments or its variables. The document does not show
-the idempotency key, the runner profile, the durable operation of a phase or
+the idempotency key, the durable operation of a phase or
 the item key of a plan or of a log.
 
 ### Phases
