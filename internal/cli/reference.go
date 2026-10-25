@@ -282,6 +282,10 @@ func writeClients(out *strings.Builder) {
 	}
 
 	out.WriteString("\n")
+	out.WriteString("`opendustpan key generate` calls no server and opens no database. It writes a\n")
+	out.WriteString("new key-encryption key file to the path in `--out` and refuses a file that\n")
+	out.WriteString("exists.\n")
+	out.WriteString("\n")
 	out.WriteString("`opendustpan health` reads `--listen`, `--tls-cert` and their variables, as\n")
 	out.WriteString("`serve` does. The [observe guide](../guides/observe.md) shows the probes.\n")
 	out.WriteString("The [backup guide](../guides/backup-restore-upgrade.md) shows the flags of\n")
@@ -311,6 +315,7 @@ func clientRows() []clientRow {
 		{"opendustpan audit-chain status", AuditChainStatusCommand(nil)},
 		{"opendustpan audit-chain approve", AuditChainApproveCommand(nil)},
 		{"opendustpan health", HealthCommand(nil)},
+		{"opendustpan key generate", KeyGenerateCommand()},
 	}
 
 	rows := make([]clientRow, 0, len(specs))

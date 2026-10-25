@@ -319,6 +319,11 @@ var Settings = []*Setting{
 			"restores from a backup, and the host command refuses to run",
 	),
 	stringSetting(
+		"out", "", "",
+		"path of the new key file, required (key generate). The command refuses a file that exists",
+		referenceNone,
+	),
+	stringSetting(
 		"reason", "", "",
 		"reason for the temporary administrator, at most 500 characters, stored in the audit entry of the create",
 		referenceNone,

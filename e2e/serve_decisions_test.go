@@ -3,6 +3,7 @@
 package e2e_test
 
 import (
+	"encoding/base64"
 	"errors"
 	"os"
 	"os/exec"
@@ -29,7 +30,7 @@ func TestServeDecisions(t *testing.T) {
 	keyFile := filepath.Join(dir, "serve.key")
 	devKeyFile := filepath.Join(dir, "dev.key")
 
-	writeServeKey(t, keyFile)
+	writeServeKey(t, bin, keyFile)
 
 	devKey := devKeyFirstLine + "\nAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=\n"
 
@@ -100,5 +101,89 @@ func TestServeDecisions(t *testing.T) {
 				t.Fatalf("a refused serve opened the database (stat err = %v)", statErr)
 			}
 		})
+	}
+}
+
+// TestKeyGenerate proves key generate through the real binary: it writes a
+// key file with 32 random bytes in base64 and mode 0600, prints the path and
+// the warning and never the key, and refuses a file that exists. Serve starts
+// with the file in the other e2e steps.
+func TestKeyGenerate(t *testing.T) {
+	t.Parallel()
+
+	bin := e2e.BuildBinaryWithVersion(t.Context(), t, t.TempDir(), "")
+	path := filepath.Join(t.TempDir(), "dustpan.key")
+
+	out, err := runBinary(t, bin, "key", "generate", "--out", path)
+	if err != nil {
+		t.Fatalf("key generate: %v\n%s", err, out)
+	}
+
+	for _, want := range []string{"key file: " + path, "loses every secret", "Nobody can recover them"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("key generate output lacks %q:\n%s", want, out)
+		}
+	}
+
+	checkKeyFile(t, path, out)
+
+	out, err = runBinary(t, bin, "key", "generate", "--out", path)
+	if err == nil || !strings.Contains(out, "the key file exists: "+path+": set --out to a new path") {
+		t.Fatalf("key generate over the file: err = %v, output:\n%s", err, out)
+	}
+
+	directory := t.TempDir()
+
+	out, err = runBinary(t, bin, "key", "generate", "--out", directory+"/")
+	if err == nil || !strings.Contains(out, "the key file path names a directory") {
+		t.Fatalf("key generate over a directory: err = %v, output:\n%s", err, out)
+	}
+
+	if entries, readErr := os.ReadDir(directory); readErr != nil || len(entries) != 0 {
+		t.Fatalf("key generate wrote into the directory (read err %v): %v", readErr, entries)
+	}
+
+	out, err = runBinary(t, bin, "key", "generate")
+	if err == nil || !strings.Contains(out, "no key file path is set: set --out <path>") {
+		t.Fatalf("key generate with no path: err = %v, output:\n%s", err, out)
+	}
+}
+
+// readKeyFile reads the key file at path.
+func readKeyFile(t *testing.T, path string) []byte {
+	t.Helper()
+
+	root, err := os.OpenRoot(filepath.Dir(path))
+	if err != nil {
+		t.Fatalf("open the directory of the key file: %v", err)
+	}
+
+	raw, readErr := root.ReadFile(filepath.Base(path))
+	if closeErr := root.Close(); readErr != nil || closeErr != nil {
+		t.Fatalf("read the key file: %v %v", readErr, closeErr)
+	}
+
+	return raw
+}
+
+// checkKeyFile proves that the key file at path has mode 0600 and 32 bytes in
+// base64, and that the report of key generate does not hold the key.
+func checkKeyFile(t *testing.T, path, report string) {
+	t.Helper()
+
+	info, err := os.Stat(path)
+	if err != nil || info.Mode().Perm() != 0o600 {
+		t.Fatalf("key file: stat err = %v, mode = %v, want mode 0600", err, info)
+	}
+
+	raw := readKeyFile(t, path)
+
+	key, err := base64.StdEncoding.DecodeString(strings.TrimSpace(string(raw)))
+	if err != nil || len(key) != 32 {
+		t.Fatalf("key file holds %d bytes (decode err = %v), want 32 bytes in base64", len(key), err)
+	}
+
+	if strings.Contains(report, strings.TrimSpace(string(raw))) {
+		t.Fatal("key generate printed the key")
 	}
 }
