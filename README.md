@@ -475,7 +475,7 @@ with the four S3 variables drives the runs with the live blobs on the
 S3-compatible server.
 
 With the race detector, one run of `pkg/store/sqlite` or `pkg/store/postgres`
-can take more than 10 minutes, the default limit of `go test`. On a loaded
+can take more than 10 minutes, the default limit of `go test`. On a
 4-core CI runner, `pkg/store/postgres` alone took more than 20 minutes. `make
 test` sets `-timeout 20m`, and `make test-ci-store` sets `-timeout 30m`. When
 you run a store package with `go test -race` directly, pass `-timeout 60m`.
