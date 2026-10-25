@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"opendustpan.org/opendustpan/internal/api/apidesc"
+	"opendustpan.org/opendustpan/internal/api/problem"
 	"opendustpan.org/opendustpan/internal/api/refusal"
 	"opendustpan.org/opendustpan/internal/denylimit"
 	"opendustpan.org/opendustpan/internal/errcode"
@@ -23,7 +24,6 @@ import (
 	"opendustpan.org/opendustpan/pkg/identity"
 	coreinventory "opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/job"
-	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
 )
 
@@ -159,25 +159,6 @@ func (h *Handler) authenticate(r *http.Request) (identity.Principal, bool, error
 	return p, false, err
 }
 
-// errorResponse is the error body of the tool-neutral APIs.
-type errorResponse struct {
-	Message string `json:"message"`
-	Code    int    `json:"code"`
-	// ErrorCode is the stable code of the catalog for a program, and ErrorArgs
-	// holds the values that the message names.
-	ErrorCode string         `json:"errorCode,omitempty"`
-	ErrorArgs map[string]any `json:"errorArgs,omitempty"`
-}
-
-// failure is the answer to an error before the catalog checks it: the status,
-// the message, the code and the values of the arguments of the code.
-type failure struct {
-	status  int
-	message string
-	code    string
-	args    []errcode.Value
-}
-
 // errNotFound is the one answer for an unknown namespace, an unknown unit, a
 // unit of another namespace, a purged unit, and a unit that the caller cannot
 // read. The answer never tells that the unit exists.
@@ -186,104 +167,45 @@ var errNotFound = errors.New("not found")
 // errBody reports a request body that is not valid.
 var errBody = errors.New("request body is not valid")
 
-const (
-	maxMessageBytes = 300
-	internalMessage = "internal error"
-)
+// maxMessageBytes is the longest refusal text that an answer sends.
+const maxMessageBytes = 300
 
+// writeError answers err in the error shape of the tool-neutral APIs. The
+// classifier of this API answers the errors of a drift check, and package
+// problem answers the rest.
 func (h *Handler) writeError(ctx context.Context, w http.ResponseWriter, err error) {
-	f := classify(err)
-
-	answer, codeErr := errcode.New(f.code, f.args...)
-	if codeErr != nil {
-		// A code outside the catalog or a wrong argument is a bug of this
-		// adapter. The log names the code only, never the error text.
-		h.logger.ErrorContext(ctx, "error code refused", slog.String("code", f.code))
-
-		f = failure{
-			status:  http.StatusInternalServerError,
-			message: internalMessage,
-			code:    errcode.ServerInternal,
-			args:    nil,
-		}
-		answer = errcode.Internal()
-	}
-
-	if f.status == http.StatusInternalServerError {
-		// The log names the status only, never the error text: the text may
-		// hold driver detail, a token, or state.
-		h.logger.ErrorContext(ctx, "request failed", slog.Int("status", f.status))
-	}
-
-	h.writeAnswer(ctx, w, f.status, f.message, answer)
+	problem.Writer{Logger: h.logger, Classify: classify}.Write(ctx, w, err)
 }
 
-// writeAnswer writes the error body of status with message, and with the code
-// and the arguments of answer.
-func (h *Handler) writeAnswer(
-	ctx context.Context,
-	w http.ResponseWriter,
-	status int,
-	message string,
-	answer errcode.Answer,
-) {
-	h.writeJSON(ctx, w, status, errorResponse{
-		Message: message, Code: status, ErrorCode: answer.Code(), ErrorArgs: answer.Args(),
-	})
-}
-
-// classify maps errors to an HTTP status, a code of the catalog and a message
-// safe to show callers. A refusal of the job service shows its own text, which
-// the service and its ports write without detail of a driver or a secret. The
-// text is cut and cleaned before it leaves.
-func classify(err error) failure {
+// classify returns the answer to an error of the drift API, and false for an
+// error that it does not know. Package problem answers the refusals of the
+// credential, the namespace, the maintenance mode and a denied action in the
+// same words for every API, so this classifier does not repeat them.
+func classify(err error) (problem.Problem, bool) {
 	switch {
-	case errors.Is(err, identity.ErrRateLimited):
-		return failure{
-			status:  http.StatusTooManyRequests,
-			message: "too many failed sign-ins from this address: try again later",
-			code:    errcode.AuthRateLimited,
-			args:    nil,
-		}
-	case errors.Is(err, identity.ErrUnauthenticated):
-		return failure{
-			status: http.StatusUnauthorized, message: "unauthenticated", code: errcode.AuthUnauthenticated, args: nil,
-		}
-	case errors.Is(err, sessionauth.ErrCSRF), errors.Is(err, sessionauth.ErrOtherSite):
-		return failure{status: http.StatusForbidden, message: err.Error(), code: errcode.Forbidden(err), args: nil}
 	case errors.Is(err, errNotFound), errors.Is(err, namespace.ErrNotFound), errors.Is(err, job.ErrNotFound):
-		return failure{
-			status: http.StatusNotFound, message: errNotFound.Error(), code: errcode.UnitNotFound, args: nil,
-		}
-	case errors.Is(err, namespace.ErrNotHome):
-		return failure{
-			status:  http.StatusMisdirectedRequest,
-			message: "namespace is not homed in this region",
-			code:    errcode.NamespaceNotHome,
-			args:    nil,
-		}
-	case errors.Is(err, maintenance.ErrInMaintenance):
-		return failure{
-			status:  http.StatusServiceUnavailable,
-			message: maintenance.ErrInMaintenance.Error() + ": try again later",
-			code:    errcode.MaintenanceInMaintenance,
-			args:    nil,
-		}
+		return problem.Problem{
+			Status: http.StatusNotFound, Code: errcode.UnitNotFound, Values: nil, Message: errNotFound.Error(),
+			RetryAfter: 0, Reauthenticate: "",
+		}, true
 	default:
-		// The refusals of a start come before identity.ErrDenied: an error
-		// that wraps both keeps the code of its cause.
 		return classifyStart(err)
 	}
 }
 
 // refused returns the answer to a refusal of the job service: its own text,
 // cut and cleaned, with status and code.
-func refused(err error, status int, code string) failure {
-	return failure{status: status, message: refusal.Clean(err.Error(), maxMessageBytes), code: code, args: nil}
+func refused(err error, status int, code string) (problem.Problem, bool) {
+	return problem.Problem{
+		Status: status, Code: code, Values: nil, Message: refusal.Clean(err.Error(), maxMessageBytes),
+		RetryAfter: 0, Reauthenticate: "",
+	}, true
 }
 
-// classifyStart maps the refusals of a request to start a drift check.
-func classifyStart(err error) failure {
+// classifyStart maps the refusals of a request to start a drift check. An
+// error that wraps a refusal of the start and identity.ErrDenied keeps the
+// answer of its refusal, because package problem asks the classifier first.
+func classifyStart(err error) (problem.Problem, bool) {
 	switch {
 	case errors.Is(err, errBody):
 		return refused(err, http.StatusBadRequest, errcode.RequestBodyInvalid)
@@ -307,21 +229,10 @@ func classifyStart(err error) failure {
 		return refused(err, http.StatusConflict, errcode.JobFrozen)
 	case errors.Is(err, job.ErrLimit):
 		return refused(err, http.StatusTooManyRequests, errcode.JobLimit)
-	default:
-		return classifyOther(err)
-	}
-}
-
-// classifyOther maps an error that is no refusal of a start: a denied action
-// answers 403, and an error that no case knows 500 with no text of the error.
-func classifyOther(err error) failure {
-	if errors.Is(err, identity.ErrDenied) {
-		return failure{status: http.StatusForbidden, message: "forbidden", code: errcode.Forbidden(err), args: nil}
 	}
 
-	return failure{
-		status: http.StatusInternalServerError, message: internalMessage, code: errcode.ServerInternal, args: nil,
-	}
+	// Not a refusal of a start: package problem answers the error.
+	return problem.Pass()
 }
 
 func (h *Handler) writeJSON(ctx context.Context, w http.ResponseWriter, status int, body any) {

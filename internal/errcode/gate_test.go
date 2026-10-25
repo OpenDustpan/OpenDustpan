@@ -29,7 +29,7 @@ const knownDir = "testdata/uncoded"
 func gated() []errcodetest.Adapter {
 	return []errcodetest.Adapter{
 		api("audit", nil, nil),
-		api("drift", []string{"errorResponse"}, nil),
+		api("drift", nil, nil),
 		{
 			Name: "dustpan",
 			Dir:  dustpanDir,
@@ -41,7 +41,7 @@ func gated() []errcodetest.Adapter {
 			Skip: []string{"writeMaintenanceHTTPBackend", "writeMaintenanceRunner"},
 		},
 		api("inventory", nil, nil),
-		api("jobs", []string{"errorResponse"}, nil),
+		api("jobs", nil, nil),
 		api("notifications", nil, nil),
 		api("objectcontext", nil, nil),
 		// The shared error module of the tool-neutral APIs. Its answers have no
