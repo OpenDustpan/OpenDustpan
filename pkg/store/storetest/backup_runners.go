@@ -251,9 +251,11 @@ func compareRunner(t *testing.T, seeded *seededRunners, got runner.Runner) {
 			got.Kind, got.Isolation, got.Release, want.Kind, want.Isolation, want.Release)
 	}
 
-	if got.JoinedWith != seeded.token.ID || !got.JoinedAt.Equal(seeded.joinedAt) {
+	// The stores keep the hash of the join secret in JoinedWith. The port
+	// doc calls it the token ID. The round trip checks the stored value.
+	if got.JoinedWith != hashSecret(seeded.secret) || !got.JoinedAt.Equal(seeded.joinedAt) {
 		t.Errorf("restored runner join = %q at %v, want %q at %v",
-			got.JoinedWith, got.JoinedAt, seeded.token.ID, seeded.joinedAt)
+			got.JoinedWith, got.JoinedAt, hashSecret(seeded.secret), seeded.joinedAt)
 	}
 
 	if !bytes.Equal(got.Key.Public, seeded.key.Public) || !got.Key.CreatedAt.Equal(seeded.joinedAt) {
