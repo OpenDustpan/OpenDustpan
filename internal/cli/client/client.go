@@ -17,7 +17,7 @@ import (
 
 // ErrUsage answers the usage of every subcommand.
 var ErrUsage = errors.New(
-	"usage: opendustpan --version | opendustpan serve | opendustpan dev | opendustpan key generate --out <path> | opendustpan health | opendustpan namespace create <name> | " +
+	"usage: opendustpan --version | opendustpan serve | opendustpan dev | opendustpan key generate --out <path> | opendustpan doctor | opendustpan health | opendustpan namespace create <name> | " +
 		"opendustpan upgrade check | opendustpan backup check | opendustpan backup | opendustpan restore | " +
 		"opendustpan host create-temp-admin <person> | " +
 		"opendustpan audit-chain status | opendustpan audit-chain approve",

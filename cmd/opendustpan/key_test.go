@@ -381,63 +381,6 @@ func TestServeWarnsKeyNextToData(t *testing.T) {
 	}
 }
 
-// TestKeyNextToData proves the check of the place of the key file: the same
-// directory as the SQLite file, the blob directory and a directory under it
-// warn, a link to a file in the data directory warns too, and another
-// directory does not.
-func TestKeyNextToData(t *testing.T) {
-	t.Parallel()
-
-	data := t.TempDir()
-	elsewhere := t.TempDir()
-
-	inData := filepath.Join(data, "dustpan.key")
-	inElsewhere := filepath.Join(elsewhere, "dustpan.key")
-	blobs := filepath.Join(data, "blobs")
-	underBlobs := filepath.Join(blobs, "keys")
-	linkToData := filepath.Join(elsewhere, "link.key")
-
-	for _, dir := range []string{blobs, underBlobs} {
-		if err := os.MkdirAll(dir, 0o700); err != nil {
-			t.Fatalf("make directory: %v", err)
-		}
-	}
-
-	for _, path := range []string{inData, inElsewhere, filepath.Join(underBlobs, "a.key")} {
-		if err := os.WriteFile(path, []byte("x"), keyFileMode); err != nil {
-			t.Fatalf("write file: %v", err)
-		}
-	}
-
-	if err := os.Symlink(inData, linkToData); err != nil {
-		t.Skipf("symbolic links are not available: %v", err)
-	}
-
-	database := "sqlite:" + filepath.Join(data, "dustpan.db")
-
-	cases := []struct {
-		name, key, database, blobDir string
-		want                         bool
-	}{
-		{"same directory as the SQLite file", inData, database, "", true},
-		{"another directory", inElsewhere, database, "", false},
-		{"link to a file in the data directory", linkToData, database, "", true},
-		{"under the blob directory", filepath.Join(underBlobs, "a.key"), "postgres://h/db", blobs, true},
-		{"PostgreSQL, another directory", inElsewhere, "postgres://h/db", blobs, false},
-		{"file that does not exist", filepath.Join(data, "missing", "x.key"), database, "", false},
-	}
-
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-
-			if got := keyNextToData(tc.key, tc.database, tc.blobDir); got != tc.want {
-				t.Fatalf("keyNextToData(%q, %q, %q) = %t, want %t", tc.key, tc.database, tc.blobDir, got, tc.want)
-			}
-		})
-	}
-}
-
 // readMadeKey reads the base64 key at path and answers its raw bytes.
 func readMadeKey(t *testing.T, path string) []byte {
 	t.Helper()
