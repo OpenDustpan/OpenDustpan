@@ -209,6 +209,9 @@ type Store struct {
 	// database file. Lock order: stagingMu, then mu, then enterGate. No path
 	// takes them in another order.
 	mu sync.RWMutex
+	// sweepMu is the sweep lock. One server process uses a SQLite file
+	// (processGuard), so a lock in this store is a lock for every sweep.
+	sweepMu sync.Mutex
 	// enterGate orders an enter of maintenance mode against the checked
 	// writes of this store. A checked write holds it shared for its
 	// transaction (holdWrite). An enter holds it exclusive, so the checked
@@ -398,6 +401,7 @@ func newStore(conn *sql.DB, path string, guard *processGuard) *Store {
 		queries:             db.New(conn),
 		path:                path,
 		mu:                  sync.RWMutex{},
+		sweepMu:             sync.Mutex{},
 		enterGate:           newWriteGate(),
 		enterWait:           maxEnterWait,
 		stagingMu:           sync.Mutex{},

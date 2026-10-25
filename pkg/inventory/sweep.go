@@ -7,7 +7,6 @@ import (
 	"log/slog"
 	"slices"
 	"strings"
-	"sync"
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/audit"
@@ -86,11 +85,23 @@ type SweepResult struct {
 	PendingBlobPurges  int
 }
 
+// SweepLocker makes one retention sweep run at a time on a store, for every
+// server process that uses the store.
+type SweepLocker interface {
+	// TryLockSweep takes the sweep lock of the store without a wait. It
+	// returns ErrSweepRunning when a sweep of any server process holds the
+	// lock. Otherwise it returns a release function. The caller calls it
+	// one time, when its sweep ends, also after its ctx ended. A server
+	// process that stops without a release gives up the lock too.
+	TryLockSweep(ctx context.Context) (release func(), err error)
+}
+
 // SweeperConfig holds the ports of a Sweeper. Tools maps each stored tool
 // code to its port. Now defaults to time.Now.
 type SweeperConfig struct {
 	Expired    ExpiredDeleted
 	BlobPurges BlobPurges
+	Lock       SweepLocker
 	Tools      map[string]SweepTool
 	Logger     *slog.Logger
 	Now        func() time.Time
@@ -100,12 +111,14 @@ type SweeperConfig struct {
 var ErrMissingDependency = errors.New("missing dependency")
 
 // ErrSweepRunning reports a sweep that cannot start because another sweep
-// of this server is running. The caller can try again later.
+// holds the sweep lock of the store. The other sweep can run in this server
+// process or in another one. The caller can try again later.
 var ErrSweepRunning = errors.New("a retention sweep is running")
 
 // Sweeper runs the retention sweep: the final delete of each deleted unit
 // whose retention period has ended, and the finish of the blob purge
-// records. One sweep of a Sweeper runs at a time.
+// records. One sweep runs at a time on a store, across all server processes
+// that use it: the sweep lock of the store (SweepLocker) allows it.
 //
 // The end of a retention period and the age of a record compare with the
 // clock of the server that runs the sweep (Now), not with the database clock.
@@ -114,7 +127,6 @@ var ErrSweepRunning = errors.New("a retention sweep is running")
 // does not matter.
 type Sweeper struct {
 	cfg SweeperConfig
-	mu  sync.Mutex
 }
 
 // NewSweeper returns a Sweeper, or ErrMissingDependency when cfg lacks a port.
@@ -124,6 +136,8 @@ func NewSweeper(cfg SweeperConfig) (*Sweeper, error) {
 		return nil, fmt.Errorf("%w: expired deleted units", ErrMissingDependency)
 	case cfg.BlobPurges == nil:
 		return nil, fmt.Errorf("%w: blob purge records", ErrMissingDependency)
+	case cfg.Lock == nil:
+		return nil, fmt.Errorf("%w: sweep lock", ErrMissingDependency)
 	case len(cfg.Tools) == 0:
 		return nil, fmt.Errorf("%w: sweep tools", ErrMissingDependency)
 	case cfg.Logger == nil:
@@ -134,7 +148,7 @@ func NewSweeper(cfg SweeperConfig) (*Sweeper, error) {
 		cfg.Now = time.Now
 	}
 
-	return &Sweeper{cfg: cfg, mu: sync.Mutex{}}, nil
+	return &Sweeper{cfg: cfg}, nil
 }
 
 // Sweep runs one sweep. It purges each deleted unit whose retention period
@@ -145,15 +159,17 @@ func NewSweeper(cfg SweeperConfig) (*Sweeper, error) {
 // failed purge or blob delete does not stop the sweep: Sweep counts it, logs
 // a warning with its error kind, and the next sweep tries again. When ctx
 // ends, Sweep stops and returns what it did, without an error. Sweep returns
-// ErrSweepRunning at once when another sweep runs, and another error only
-// when it cannot read the units or the records.
+// ErrSweepRunning at once when another sweep holds the sweep lock of the
+// store, also a sweep of another server process, and another error only when
+// it cannot take the lock, or cannot read the units or the records.
 func (s *Sweeper) Sweep(ctx context.Context, e audit.Entry) (SweepResult, error) {
 	res := SweepResult{Purged: []DeletedEntry{}, Failed: 0, Skipped: 0, FinishedBlobPurges: 0, PendingBlobPurges: 0}
 
-	if !s.mu.TryLock() {
-		return res, ErrSweepRunning
+	release, lockErr := s.cfg.Lock.TryLockSweep(ctx)
+	if lockErr != nil {
+		return res, fmt.Errorf("take the sweep lock: %w", lockErr)
 	}
-	defer s.mu.Unlock()
+	defer release()
 
 	now := s.cfg.Now()
 
