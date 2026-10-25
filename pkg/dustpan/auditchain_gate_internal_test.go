@@ -120,6 +120,12 @@ func checkGate(t *testing.T, handler http.Handler, route gateRoute, want int) {
 			t.Fatalf("%s %s media type = %q, want the TFE JSON:API error", route.method, route.path, got)
 		}
 	}
+
+	if want == http.StatusServiceUnavailable {
+		if got := rec.Header().Get("Cache-Control"); got != "no-store" {
+			t.Fatalf("%s %s Cache-Control = %q, want no-store", route.method, route.path, got)
+		}
+	}
 }
 
 // gateRefused answers the routes the gate refuses while a change waits.
@@ -130,6 +136,8 @@ func gateRefused() []gateRoute {
 		{method: http.MethodGet, path: "/api/audit/entries?organization=@server"},
 		{method: http.MethodGet, path: "/api/v2/workspaces/x"},
 		{method: http.MethodGet, path: "/tofu/state/x"},
+		{method: http.MethodGet, path: "/api/inventory/deleted-units/pulumi/unit-1"},
+		{method: http.MethodPost, path: "/runner/v1/claim"},
 		{method: http.MethodPut, path: "/api/server/audit/chain"},
 		{method: http.MethodGet, path: "/api/server/maintenancex"},
 	}
