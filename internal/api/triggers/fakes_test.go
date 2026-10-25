@@ -398,6 +398,13 @@ type rig struct {
 func newRig(t *testing.T, authz identity.Authorizer) *rig {
 	t.Helper()
 
+	return newRigLogged(t, authz, slog.New(slog.DiscardHandler))
+}
+
+// newRigLogged returns a rig whose handler writes its log lines to logger.
+func newRigLogged(t *testing.T, authz identity.Authorizer, logger *slog.Logger) *rig {
+	t.Helper()
+
 	r := &rig{
 		h:      nil,
 		store:  newStore(),
@@ -435,7 +442,7 @@ func newRig(t *testing.T, authz identity.Authorizer) *rig {
 		Namespaces: namespaces, Units: r.inv, Store: r.store, Manager: manager, Authenticator: tokenAuthenticator{},
 		Authorizer: authz, Audit: &recordingAudit{Store: nil, mu: sync.Mutex{}, entries: nil},
 		OnAuditFailure: nil, DenialLimiter: nil, Sessions: nil,
-		Logger: slog.New(slog.DiscardHandler),
+		Logger: logger,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)

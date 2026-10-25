@@ -171,6 +171,8 @@ func (h *Handler) writeError(ctx context.Context, w http.ResponseWriter, err err
 // problem answers the other shared refusals in the same words for every API.
 func classify(err error) (problem.Problem, bool) {
 	switch {
+	// A denial wins over every refusal and conflict below, so a mixed error never
+	// tells the state of an object the caller has no right on.
 	case errors.Is(err, identity.ErrDenied):
 		return problem.Problem{
 			Status: http.StatusForbidden, Code: errcode.Forbidden(err), Values: nil, Message: "forbidden",

@@ -176,8 +176,9 @@ func (p Problem) made() (errcode.Answer, error) {
 //  1. the refusals of the credential of a request (a rate limit, no
 //     sign-in, a CSRF or other-site session request), so no classifier can
 //     answer them in other words;
-//  2. the classifier of the API, so an API can answer a refusal that wraps
-//     identity.ErrDenied, or a shared error, in its own words;
+//  2. the classifier of the API. It answers identity.ErrDenied first, so a
+//     refusal that wraps a denial keeps the denial's answer. The rest of it
+//     answers the refusals of its domain in its own words;
 //  3. the other shared classes.
 //
 // An error that none of them knows is a 500.

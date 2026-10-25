@@ -157,9 +157,12 @@ const (
 func refusalReason(err error) (string, bool) {
 	var gates *job.GateError
 
-	// The specific refusals come first: an error that also wraps
-	// identity.ErrDenied keeps the reason of its cause.
+	// A denial comes first, as in the answer: an error that also wraps a
+	// specific refusal names the policy, and the entry never names the state of
+	// an object the caller has no right on.
 	switch {
+	case errors.Is(err, identity.ErrDenied):
+		return refusal.ReasonPolicy, true
 	case errors.As(err, &gates):
 		ids := make([]string, 0, len(gates.Gates))
 		for _, g := range gates.Gates {
@@ -179,8 +182,6 @@ func refusalReason(err error) (string, bool) {
 		return reasonLimit, true
 	case errors.Is(err, job.ErrUnsupported):
 		return reasonUnsupported, true
-	case errors.Is(err, identity.ErrDenied):
-		return refusal.ReasonPolicy, true
 	default:
 		return "", false
 	}

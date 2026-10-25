@@ -260,6 +260,8 @@ func classifyManagement(err error) failure {
 			code:    errcode.Forbidden(err),
 			args:    nil,
 		}
+	// A denial wins over every refusal and conflict below, so a mixed error never
+	// tells the state of an object the caller has no right on.
 	case errors.Is(err, identity.ErrDenied):
 		return failure{status: http.StatusForbidden, message: "forbidden", code: errcode.Forbidden(err), args: nil}
 	case errors.Is(err, errNotFound), errors.Is(err, runner.ErrNotFound), errors.Is(err, namespace.ErrNotFound):

@@ -35,3 +35,15 @@ func WriteErrorTo(
 
 	h.writeError(ctx, w, err)
 }
+
+// ErrNotFound is the not-found answer of the triggers API, for a test of its
+// precedence.
+var ErrNotFound = errNotFound
+
+// ErrBody is the error of a request body that is not valid, for a test of its
+// precedence.
+var ErrBody = errBody
+
+// ErrKeyUnsupported is the error of a write with an Idempotency-Key header to a
+// route that takes none, for a test of its precedence.
+var ErrKeyUnsupported = errKeyUnsupported
