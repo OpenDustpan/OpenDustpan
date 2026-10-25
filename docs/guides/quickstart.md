@@ -30,6 +30,8 @@ export DUSTPAN_ADMIN_TOKEN=$(openssl rand -hex 32)
 export DUSTPAN_KEY_ENCRYPTION_KEY=$(openssl rand -base64 32)
 ```
 
+`serve` has no default key and no default database. It stops if you set none. The command below sets the database.
+
 The administrator signs in with the admin token. The key-encryption key protects secret values and OpenTofu state. A lost key loses every secret and every OpenTofu state, and nobody can recover them. Save both values in a password manager.
 
 OpenTofu refuses plain HTTP, so make a test certificate and start the server with it:

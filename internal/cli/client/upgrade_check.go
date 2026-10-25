@@ -178,8 +178,8 @@ type UpgradeCheckAnswer struct {
 // to encrypt OpenTofu state, so the operator sets one before the upgrade.
 const KeyWarning = "warning: this release needs a key-encryption key: " +
 	"set DUSTPAN_KEY_ENCRYPTION_KEY or --key-encryption-key-file " +
-	"(DUSTPAN_KEY_ENCRYPTION_KEY_FILE), or start serve once with " +
-	"--generate-key-encryption-key (DUSTPAN_GENERATE_KEY_ENCRYPTION_KEY=true)"
+	"(DUSTPAN_KEY_ENCRYPTION_KEY_FILE). To make a key file, run: " +
+	"opendustpan key generate --out <path>"
 
 // DevBinaryWarning is the upgrade report line for a binary with no release
 // version. A dev build counts as newer than every release, so the minimum

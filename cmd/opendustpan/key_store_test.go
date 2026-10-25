@@ -3,7 +3,6 @@ package main
 import (
 	"crypto/rand"
 	"encoding/hex"
-	"errors"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -113,126 +112,38 @@ func isolatedPostgresURL(t *testing.T, base string) string {
 	return u.String()
 }
 
-// keyMakeMode is one way that serve makes a key file: the terminal yes or
-// the opt-in.
-type keyMakeMode struct {
-	name     string
-	stdin    string
-	terminal bool
-	optIn    bool
-}
-
-func keyMakeModes() []keyMakeMode {
-	return []keyMakeMode{
-		{name: "terminal yes", stdin: "yes\n", terminal: true, optIn: false},
-		{name: "opt-in", stdin: "", terminal: false, optIn: true},
-	}
-}
-
-// TestServeKeyRefusesNewFileOverWrappedKeys proves that serve makes no key
-// file when the store already holds wrapped keys and no key file exists
-// (issue 355): the terminal yes and the opt-in both stop with
-// errKeyFileMissing, the error names the key file path and the setting that
-// helps, and no file exists after the stop. Serve reads process environment,
-// so the cases run one after the other.
-//
-//nolint:paralleltest // serve reads process environment, so the cases set it and run alone.
-func TestServeKeyRefusesNewFileOverWrappedKeys(t *testing.T) {
+// TestServeKeyFileStartsOnEmptyStore proves that serve starts on an empty
+// store with a key file that the operator made, logs the path of the file,
+// and never logs the key. Serve reads process environment, so the cases run
+// one after the other.
+func TestServeKeyFileStartsOnEmptyStore(t *testing.T) {
 	for _, backend := range keyBackends() {
-		for _, mode := range keyMakeModes() {
-			t.Run(backend.name+"/"+mode.name, func(t *testing.T) {
-				checkRefusesNewKeyFile(t, backend, mode)
-			})
-		}
+		t.Run(backend.name, func(t *testing.T) {
+			t.Setenv(keyEnvVar, "")
+			t.Setenv(keyFileEnvVar, "")
+			t.Setenv("DUSTPAN_ADMIN_TOKEN", adminTestToken)
+
+			dir := t.TempDir()
+			keyPath := writeTestKeyFile(t, testKeyBase64()+"\n")
+
+			// A PostgreSQL URL holds a password, and serve refuses a password in
+			// a flag, so the database goes in the variable.
+			t.Setenv("DUSTPAN_DATABASE", backend.database(t, dir))
+
+			args := []string{"--key-encryption-key-file", keyPath, "--listen", "127.0.0.1:0"}
+
+			logs, err := startServerLogs(t, args...)
+			if err != nil {
+				t.Fatalf("serve on an empty store: %v", err)
+			}
+
+			if !strings.Contains(logs, keyPath) {
+				t.Fatalf("serve output lacks the key file path %q:\n%s", keyPath, logs)
+			}
+
+			if strings.Contains(logs, testKeyBase64()) {
+				t.Fatal("serve output holds the key")
+			}
+		})
 	}
-}
-
-// checkRefusesNewKeyFile runs one case of
-// TestServeKeyRefusesNewFileOverWrappedKeys.
-func checkRefusesNewKeyFile(t *testing.T, backend keyBackend, mode keyMakeMode) {
-	t.Helper()
-
-	clearKeyEnv(t)
-
-	if mode.optIn {
-		t.Setenv(generateKeyEnvVar, "true")
-	}
-
-	dir := t.TempDir()
-	database := backend.database(t, dir)
-	keyPath := filepath.Join(dir, "dustpan.key")
-
-	backend.seed(t, database, []byte(otherKeyString))
-
-	// A PostgreSQL URL holds a password, and serve refuses a password in a
-	// flag, so the database goes in the variable.
-	t.Setenv("DUSTPAN_DATABASE", database)
-
-	var logs lockedBuffer
-
-	err := serveWithIO(
-		t.Context(),
-		[]string{"--key-encryption-key-file", keyPath},
-		strings.NewReader(mode.stdin),
-		&logs,
-		mode.terminal,
-	)
-	if err == nil || !errors.Is(err, errKeyFileMissing) {
-		t.Fatalf("serve over wrapped keys: err = %v, want errKeyFileMissing", err)
-	}
-
-	for _, want := range []string{keyPath, keyEnvVar, "restore the original key file"} {
-		if !strings.Contains(err.Error(), want) {
-			t.Fatalf("serve error = %q, want it to name %q", err, want)
-		}
-	}
-
-	if _, statErr := os.Stat(keyPath); !os.IsNotExist(statErr) {
-		t.Fatalf("serve made a key file over wrapped keys (stat err = %v), want no file", statErr)
-	}
-}
-
-// TestServeKeyMakesFileOnEmptyStore proves that a store with no wrapped keys
-// keeps the behavior of #344: the terminal yes and the opt-in make an
-// owner-only key file and the server starts. Serve reads process
-// environment, so the cases run one after the other.
-//
-//nolint:paralleltest // serve reads process environment, so the cases set it and run alone.
-func TestServeKeyMakesFileOnEmptyStore(t *testing.T) {
-	for _, backend := range keyBackends() {
-		for _, mode := range keyMakeModes() {
-			t.Run(backend.name+"/"+mode.name, func(t *testing.T) {
-				checkMakesKeyFile(t, backend, mode)
-			})
-		}
-	}
-}
-
-// checkMakesKeyFile runs one case of TestServeKeyMakesFileOnEmptyStore.
-func checkMakesKeyFile(t *testing.T, backend keyBackend, mode keyMakeMode) {
-	t.Helper()
-
-	clearKeyEnv(t)
-
-	if mode.optIn {
-		t.Setenv(generateKeyEnvVar, "true")
-	}
-
-	dir := t.TempDir()
-	database := backend.database(t, dir)
-	keyPath := filepath.Join(dir, "dustpan.key")
-
-	// A PostgreSQL URL holds a password, and serve refuses a password in a
-	// flag, so the database goes in the variable.
-	t.Setenv("DUSTPAN_DATABASE", database)
-
-	var logs lockedBuffer
-
-	args := []string{"--key-encryption-key-file", keyPath, "--listen", "127.0.0.1:0"}
-
-	if err := startServerWithIO(t, mode.stdin, mode.terminal, &logs, args...); err != nil {
-		t.Fatalf("serve on an empty store: %v", err)
-	}
-
-	checkMadeKeyFile(t, keyPath)
 }

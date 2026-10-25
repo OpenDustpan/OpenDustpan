@@ -187,7 +187,6 @@ var secretSettings = []*Setting{
 	mustEnv("DUSTPAN_ADMIN_TOKEN_FILE"),
 	mustEnv("DUSTPAN_KEY_ENCRYPTION_KEY"),
 	mustEnv("DUSTPAN_KEY_ENCRYPTION_KEY_FILE"),
-	mustEnv("DUSTPAN_GENERATE_KEY_ENCRYPTION_KEY"),
 	mustEnv("DUSTPAN_AUDIT_WEBHOOK_SECRET"),
 	mustEnv("DUSTPAN_AUDIT_WEBHOOK_SECRET_FILE"),
 	mustEnv("DUSTPAN_LOG_WEBHOOK_SECRET"),
@@ -225,22 +224,17 @@ func writeSecrets(out *strings.Builder) {
 	out.WriteString("Make a key-encryption key with this command:\n")
 	out.WriteString("\n")
 	out.WriteString("```sh\n")
-	out.WriteString("openssl rand -base64 32\n")
+	out.WriteString("opendustpan key generate --out <path>\n")
 	out.WriteString("```\n")
 	out.WriteString("\n")
-	out.WriteString("Without the variable, the server uses the key file in\n")
-	out.WriteString("`--key-encryption-key-file` (`DUSTPAN_KEY_ENCRYPTION_KEY_FILE`), by default\n")
-	out.WriteString("`dustpan.key` next to the SQLite database file, or `./dustpan.key` with\n")
-	out.WriteString("PostgreSQL. On a terminal, `serve` asks for an explicit yes before it makes\n")
-	out.WriteString("the file. Without a terminal, it makes the file only with\n")
-	out.WriteString("`--generate-key-encryption-key`\n")
-	out.WriteString("(`DUSTPAN_GENERATE_KEY_ENCRYPTION_KEY=true`). Without the prompt or the\n")
-	out.WriteString("opt-in, `serve` stops before it opens the database and names each setting\n")
-	out.WriteString("that helps. The server never makes a key silently. A made file holds 32\n")
-	out.WriteString("random bytes in base64 with owner-only mode. Each start logs the path of the\n")
-	out.WriteString("key file in use, never the key. An operator who loses the key file loses\n")
-	out.WriteString("every secret that the key encrypts, and nobody can recover them. A key file\n")
-	out.WriteString("next to the data does not protect a backup of that data.\n")
+	out.WriteString("`serve` needs a key from the variable, or from the file in\n")
+	out.WriteString("`--key-encryption-key-file` (`DUSTPAN_KEY_ENCRYPTION_KEY_FILE`). It has\n")
+	out.WriteString("no default key file and makes no key. Without a key, `serve` stops before\n")
+	out.WriteString("it opens the database. Each start logs the path of the key file in use,\n")
+	out.WriteString("never the key. A key file in the directory of the SQLite file or of the\n")
+	out.WriteString("blobs makes `serve` log a warning, because a backup of the data holds that\n")
+	out.WriteString("key too. An operator who loses the key file loses every secret that the\n")
+	out.WriteString("key encrypts, and nobody can recover them.\n")
 	out.WriteString("\n")
 }
 

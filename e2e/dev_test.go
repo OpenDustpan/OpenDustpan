@@ -5,6 +5,8 @@ package e2e_test
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -800,11 +802,21 @@ const serveToken = "0123456789abcdef0123456789abcdef-serve-token"
 func runBinary(t *testing.T, bin string, args ...string) (string, error) {
 	t.Helper()
 
+	return runBinaryWithEnv(t, bin, nil, args...)
+}
+
+// runBinaryWithEnv is runBinary with the variables in env added to the
+// environment of the process.
+func runBinaryWithEnv(t *testing.T, bin string, env []string, args ...string) (string, error) {
+	t.Helper()
+
 	ctx, cancel := context.WithTimeout(t.Context(), devCommandTimeout)
 	defer cancel()
 
 	cmd := exec.CommandContext(ctx, bin, args...) //nolint:gosec // The test runs the binary that it built.
-	cmd.Env = []string{"PATH=" + os.Getenv("PATH"), "HOME=" + t.TempDir(), "DUSTPAN_ADMIN_TOKEN=" + serveToken}
+	cmd.Env = append(
+		[]string{"PATH=" + os.Getenv("PATH"), "HOME=" + t.TempDir(), "DUSTPAN_ADMIN_TOKEN=" + serveToken}, env...,
+	)
 
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -814,13 +826,30 @@ func runBinary(t *testing.T, bin string, args ...string) (string, error) {
 	return string(out), nil
 }
 
-// runServe runs serve on the database with a key file that serve makes, and
+// writeServeKey writes a new key file at path with 32 random bytes in base64
+// and owner-only mode, as the operator makes it for serve.
+func writeServeKey(t *testing.T, path string) {
+	t.Helper()
+
+	key := make([]byte, 32)
+	if _, err := rand.Read(key); err != nil {
+		t.Fatalf("make a key: %v", err)
+	}
+
+	if err := os.WriteFile(path, []byte(base64.StdEncoding.EncodeToString(key)+"\n"), 0o600); err != nil {
+		t.Fatalf("write the key file: %v", err)
+	}
+}
+
+// runServe runs serve on the database with a new key file at keyFile, and
 // answers its output and its error. It is meant for a start that stops.
 func runServe(t *testing.T, bin, database, keyFile string) (string, error) {
 	t.Helper()
 
+	writeServeKey(t, keyFile)
+
 	return runBinary(t, bin, "serve", "--database", database, "--key-encryption-key-file", keyFile,
-		"--generate-key-encryption-key", "--listen", "127.0.0.1:0")
+		"--listen", "127.0.0.1:0")
 }
 
 // serveMadeDatabase runs serve on a new database until it is ready, stops it
@@ -832,6 +861,8 @@ func serveMadeDatabase(t *testing.T, bin string) string {
 	database := filepath.Join(dir, "serve.db")
 	addr := freeLoopbackAddr(t)
 
+	writeServeKey(t, filepath.Join(dir, "serve.key"))
+
 	//nolint:gosec // The test runs the binary that it built.
 	cmd := exec.CommandContext(
 		context.WithoutCancel(t.Context()),
@@ -841,7 +872,6 @@ func serveMadeDatabase(t *testing.T, bin string) string {
 		"sqlite:"+database,
 		"--key-encryption-key-file",
 		filepath.Join(dir, "serve.key"),
-		"--generate-key-encryption-key",
 		"--listen",
 		addr,
 		"--blob-dir",
