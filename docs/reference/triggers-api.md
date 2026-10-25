@@ -45,7 +45,7 @@ and the code `request.idempotency-key-unsupported`.
 | `namespace` | The name of the namespace |
 | `unit` | `id` (the stable ID), `tool` (`Pulumi` or `OpenTofu`) and `name` of the unit that the trigger starts |
 | `kind` | `review-request-push`, `schedule` or `follows` |
-| `frequency` | For `schedule`: `preset` or `cron` |
+| `frequency` | For `schedule`: `preset` or `cron`, and `expression`. `expression` is the five-field cron expression, in UTC, that the schedule runs at. For a preset, the minute and the hour come from an offset that the unit ID sets, so they can differ between units. A cron answer repeats the `cron` value in `expression`. |
 | `source` | For `follows`: `id`, `tool` and `name` of the source unit. `name` is empty when the inventory no longer knows the unit, or when you do not hold `unit:read` on the source. |
 | `enabled` | `false` for a trigger that starts nothing |
 | `lastSaver` | The subject of the person who saved the trigger last |

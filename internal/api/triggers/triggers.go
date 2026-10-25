@@ -17,6 +17,7 @@ import (
 	"strings"
 
 	"opendustpan.org/opendustpan/internal/api/apidesc"
+	"opendustpan.org/opendustpan/internal/api/problem"
 	"opendustpan.org/opendustpan/internal/api/refusal"
 	"opendustpan.org/opendustpan/internal/denylimit"
 	"opendustpan.org/opendustpan/internal/errcode"
@@ -26,7 +27,6 @@ import (
 	"opendustpan.org/opendustpan/pkg/identity"
 	coreinventory "opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/job"
-	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/manuallock"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/trigger"
@@ -174,9 +174,10 @@ func (h *Handler) authenticate(r *http.Request) (identity.Principal, bool, error
 	return p, false, err
 }
 
-// errorResponse is the error body of the tool-neutral APIs. A refusal of a
-// save that closes a loop of units lists the units of the loop in order.
-type errorResponse struct {
+// cycleResponse is the body of the refusal of a save that closes a loop of
+// units. It is the error body of the tool-neutral APIs and lists the units of
+// the loop in order.
+type cycleResponse struct {
 	Message string `json:"message"`
 	Code    int    `json:"code"`
 	// ErrorCode is a stable code for a program. It is a code of the catalog.
@@ -191,6 +192,12 @@ type errorResponse struct {
 // tells that the object exists.
 var errNotFound = errors.New("not found")
 
+// errBrokenFrequency is the error of a stored schedule trigger whose frequency
+// has no expression. The save checks the frequency, so such a record is broken.
+// The text does not wrap trigger.ErrInvalid: the answer is a failure of the
+// server, not a request that the caller must fix.
+var errBrokenFrequency = errors.New("stored schedule frequency has no expression")
+
 // errBody reports a request body that is not valid.
 var errBody = errors.New("request body is not valid")
 
@@ -201,101 +208,81 @@ var errKeyUnsupported = errors.New("this route does not take the Idempotency-Key
 // maxMessageBytes bounds the text of an error that an answer repeats.
 const maxMessageBytes = 300
 
+// writeError answers err in the error shape of the tool-neutral APIs. The
+// refusal of a cycle has its own body, because it lists the units of the loop.
 func (h *Handler) writeError(ctx context.Context, w http.ResponseWriter, err error) {
-	body := h.classify(err)
-	if body.Code == http.StatusInternalServerError {
-		// The log names the status only, never the error text: the text may
-		// hold driver detail, a token, or state.
-		h.logger.ErrorContext(ctx, "request failed", slog.Int("status", body.Code))
+	wr := problem.Writer{Logger: h.logger, Classify: classify}
+
+	if cycle, ok := errors.AsType[*trigger.CycleError](err); ok {
+		h.writeCycle(ctx, w, wr, cycle)
+
+		return
 	}
 
-	h.writeJSON(ctx, w, body.Code, body)
+	wr.Write(ctx, w, err)
 }
 
-// answer returns the error body with the status, the message and the code of
-// the catalog. A code that the catalog refuses, or that declares arguments, is a
-// bug of this package. The body then answers 500 with the code of an internal
-// failure, and the tests of this package find it.
-func answer(status int, code, message string) errorResponse {
-	a, err := errcode.New(code)
-	if err != nil {
-		return internal()
+// writeCycle answers the refusal of a save that closes a loop of units. A code
+// that the catalog refuses goes to the writer, which logs the code and answers
+// 500.
+func (h *Handler) writeCycle(ctx context.Context, w http.ResponseWriter, wr problem.Writer, cycle *trigger.CycleError) {
+	if a, err := errcode.New(errcode.TriggerCycle); err == nil {
+		w.Header().Set("Cache-Control", "no-store")
+
+		problem.WriteJSON(ctx, h.logger, w, http.StatusConflict, cycleResponse{
+			Message: cycleMessage(cycle), Code: http.StatusConflict, ErrorCode: a.Code(), ErrorArgs: a.Args(),
+			Units: cycleUnits(cycle),
+		})
+
+		return
 	}
 
-	return coded(status, a, message)
+	wr.WriteProblem(ctx, w, problem.Problem{
+		Status: http.StatusConflict, Code: errcode.TriggerCycle, Values: nil, Message: "",
+		RetryAfter: 0, Reauthenticate: "",
+	})
 }
 
-// coded returns the error body of the answer a.
-func coded(status int, a errcode.Answer, message string) errorResponse {
-	return errorResponse{Code: status, Message: message, ErrorCode: a.Code(), ErrorArgs: a.Args(), Units: nil}
+// fail returns the answer of status and message with a code of the catalog
+// that takes no argument.
+func fail(status int, code, message string) (problem.Problem, bool) {
+	return problem.Built(status, message, code, errcode.Answer{}, nil), true
 }
 
-// internal returns the body of a failure that no rule maps. It names no detail
-// of the failure.
-func internal() errorResponse {
-	return coded(http.StatusInternalServerError, errcode.Internal(), "internal error")
-}
-
-// classify maps errors to an HTTP status, a code of the catalog and a message
-// safe to show callers.
-func (h *Handler) classify(err error) errorResponse {
+// classify returns the answer to an error of the triggers API, and false for an
+// error that it does not know. The shared classes of package problem answer
+// the rest.
+func classify(err error) (problem.Problem, bool) {
 	switch {
-	case errors.Is(err, identity.ErrRateLimited):
-		return answer(http.StatusTooManyRequests, errcode.AuthRateLimited,
-			"too many failed sign-ins from this address: try again later")
-	case errors.Is(err, identity.ErrUnauthenticated):
-		return answer(http.StatusUnauthorized, errcode.AuthUnauthenticated, "unauthenticated")
-	case errors.Is(err, sessionauth.ErrCSRF), errors.Is(err, sessionauth.ErrOtherSite):
-		return answer(http.StatusForbidden, errcode.Forbidden(err), err.Error())
 	case errors.Is(err, trigger.ErrSaverDenied):
-		return answer(http.StatusForbidden, errcode.TriggerSaverDenied,
+		return fail(http.StatusForbidden, errcode.TriggerSaverDenied,
 			"the person who saves the trigger needs a stored principal that holds the actions to change "+
 				"the unit and to start a plan on it, and to read the source unit of a follows trigger")
-	case errors.Is(err, identity.ErrDenied):
-		return answer(http.StatusForbidden, errcode.Forbidden(err), "forbidden")
 	case errors.Is(err, errNotFound), errors.Is(err, namespace.ErrNotFound), errors.Is(err, trigger.ErrNotFound):
-		return answer(http.StatusNotFound, errcode.TriggerNotFound, errNotFound.Error())
-	case errors.Is(err, namespace.ErrNotHome):
-		return answer(http.StatusMisdirectedRequest, errcode.NamespaceNotHome, "namespace is not homed in this region")
-	case errors.Is(err, maintenance.ErrInMaintenance):
-		return answer(http.StatusServiceUnavailable, errcode.MaintenanceInMaintenance,
-			maintenance.ErrInMaintenance.Error()+": try again later")
+		return fail(http.StatusNotFound, errcode.TriggerNotFound, errNotFound.Error())
 	}
 
 	return classifyRule(err)
 }
 
 // classifyRule maps the refusals of the trigger and job rules.
-func classifyRule(err error) errorResponse {
-	var cycle *trigger.CycleError
-
+func classifyRule(err error) (problem.Problem, bool) {
 	if manual, ok := errors.AsType[*manuallock.LockedError](err); ok {
-		return classifyLocked(manual)
+		return classifyLocked(manual), true
 	}
 
 	switch {
-	case errors.As(err, &cycle):
-		body := answer(http.StatusConflict, errcode.TriggerCycle, cycleMessage(cycle))
-		body.Units = cycleUnits(cycle)
-
-		return body
 	case errors.Is(err, errKeyUnsupported):
-		return answer(http.StatusBadRequest, errcode.RequestIdempotencyKeyUnsupported, errKeyUnsupported.Error())
+		return fail(http.StatusBadRequest, errcode.RequestIdempotencyKeyUnsupported, errKeyUnsupported.Error())
 	case errors.Is(err, idempotency.ErrInvalidKey):
-		return answer(http.StatusBadRequest, errcode.RequestIdempotencyKeyInvalid,
+		return fail(http.StatusBadRequest, errcode.RequestIdempotencyKeyInvalid,
 			refusal.Clean(err.Error(), maxMessageBytes))
 	case errors.Is(err, errBody):
-		return answer(http.StatusBadRequest, errcode.RequestBodyInvalid, refusal.Clean(err.Error(), maxMessageBytes))
+		return fail(http.StatusBadRequest, errcode.RequestBodyInvalid, refusal.Clean(err.Error(), maxMessageBytes))
 	case errors.Is(err, trigger.ErrInvalid):
-		return answer(http.StatusBadRequest, errcode.TriggerInvalid, refusal.Clean(err.Error(), maxMessageBytes))
+		return fail(http.StatusBadRequest, errcode.TriggerInvalid, refusal.Clean(err.Error(), maxMessageBytes))
 	case errors.Is(err, trigger.ErrDisabled):
-		return answer(
-			http.StatusConflict,
-			errcode.TriggerDisabled,
-			"the trigger is off: switch it on before you fire it",
-		)
-	case errors.Is(err, namespace.ErrFenced):
-		return answer(http.StatusConflict, errcode.NamespaceFenced, namespace.ErrFenced.Error())
+		return fail(http.StatusConflict, errcode.TriggerDisabled, "the trigger is off: switch it on before you fire it")
 	}
 
 	return classifyJob(err)
@@ -304,41 +291,39 @@ func classifyRule(err error) errorResponse {
 // classifyLocked maps the refusal of a manual lock. The arguments name the
 // holder, the time and the locked object. They never hold the reason of the
 // lock.
-func classifyLocked(manual *manuallock.LockedError) errorResponse {
+func classifyLocked(manual *manuallock.LockedError) problem.Problem {
 	a, err := refusal.Locked(manual)
-	if err != nil {
-		return internal()
-	}
 
-	return coded(http.StatusConflict, a, refusal.Clean(refusal.LockedText(manual), maxMessageBytes))
+	return problem.Built(http.StatusConflict, refusal.Clean(refusal.LockedText(manual), maxMessageBytes),
+		errcode.LockLocked, a, err)
 }
 
 // classifyJob maps the refusals of the job service to a manual fire.
-func classifyJob(err error) errorResponse {
+func classifyJob(err error) (problem.Problem, bool) {
 	message := refusal.Clean(err.Error(), maxMessageBytes)
 
 	switch {
 	case errors.Is(err, job.ErrInvalid):
-		return answer(http.StatusBadRequest, errcode.JobInvalid, message)
+		return fail(http.StatusBadRequest, errcode.JobInvalid, message)
 	case errors.Is(err, job.ErrUnsupported):
-		return answer(http.StatusUnprocessableEntity, errcode.JobUnsupported, message)
+		return fail(http.StatusUnprocessableEntity, errcode.JobUnsupported, message)
 	case errors.Is(err, job.ErrPolicyDenied):
-		return answer(http.StatusForbidden, errcode.JobPolicyDenied, message)
+		return fail(http.StatusForbidden, errcode.JobPolicyDenied, message)
 	case errors.Is(err, job.ErrGateEnforced):
-		return answer(http.StatusForbidden, errcode.JobGateEnforced, message)
+		return fail(http.StatusForbidden, errcode.JobGateEnforced, message)
 	case errors.Is(err, job.ErrAgentDenied):
-		return answer(http.StatusForbidden, errcode.JobAgentDenied, message)
+		return fail(http.StatusForbidden, errcode.JobAgentDenied, message)
 	case errors.Is(err, job.ErrKeyConflict):
-		return answer(http.StatusConflict, errcode.TriggerFireConflict, message)
+		return fail(http.StatusConflict, errcode.TriggerFireConflict, message)
 	case errors.Is(err, job.ErrFrozen):
-		return answer(http.StatusConflict, errcode.JobFrozen, message)
+		return fail(http.StatusConflict, errcode.JobFrozen, message)
 	case errors.Is(err, job.ErrLimit):
-		return answer(http.StatusTooManyRequests, errcode.JobLimit, message)
+		return fail(http.StatusTooManyRequests, errcode.JobLimit, message)
 	case errors.Is(err, job.ErrNotFound):
-		return answer(http.StatusNotFound, errcode.TriggerNotFound, message)
-	default:
-		return answer(http.StatusInternalServerError, errcode.ServerInternal, "internal error")
+		return fail(http.StatusNotFound, errcode.TriggerNotFound, message)
 	}
+
+	return problem.Pass()
 }
 
 func (h *Handler) writeJSON(ctx context.Context, w http.ResponseWriter, status int, body any) {

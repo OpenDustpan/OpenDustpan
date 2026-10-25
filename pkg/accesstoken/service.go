@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"slices"
 	"strconv"
+	"strings"
 	"time"
 
 	"opendustpan.org/opendustpan/internal/ident"
@@ -569,7 +570,9 @@ func (c PolicyChange) applyTo(p Policy) Policy {
 }
 
 // SweepInactive runs the inactivity disable once (ADR 53, decision 4), with
-// the entry e for each record that it disables. It reads the policy: with
+// the entry e for each record that it disables. The entry of a record with
+// no reason of the caller names the rule and the period of the policy. It
+// reads the policy: with
 // an inactivity period of zero, or with tokens and accounts both off, it
 // changes nothing. The store takes the time of the run from the database
 // clock, and the entries carry that time. The run keeps the temporary
@@ -590,7 +593,12 @@ func (s *Service) SweepInactive(ctx context.Context, e audit.Entry) (SweepResult
 	sweep := Sweep{Inactivity: p.Inactivity, Tokens: p.DisableTokens, Accounts: p.DisableAccounts}
 
 	res, err := s.store.SweepInactive(ctx, sweep, func(at time.Time, object string) audit.Entry {
-		return change(e, at, object)
+		entry := change(e, at, object)
+		if entry.Reason == "" {
+			entry.Reason = sweepReason(object, p.Inactivity)
+		}
+
+		return entry
 	})
 	if err != nil {
 		return SweepResult{}, fmt.Errorf("disable inactive access tokens and accounts: %w", err)
@@ -847,6 +855,45 @@ func policyEntry(e audit.Entry, at time.Time, old, updated Policy) audit.Entry {
 // seconds returns d as a decimal count of whole seconds.
 func seconds(d time.Duration) string {
 	return strconv.FormatInt(int64(d/time.Second), 10)
+}
+
+// sweepReason returns the reason of the audit entry of the record object that
+// the inactivity sweep disables under the period. A token object holds the
+// principal and the token, joined by '#' (TokenRef); a principal object is a
+// person account.
+func sweepReason(object string, period time.Duration) string {
+	kind := "account"
+	if strings.Contains(object, "#") {
+		kind = "access token"
+	}
+
+	return fmt.Sprintf("%s not used for at least %s (token policy: inactivity)", kind, periodText(period))
+}
+
+// periodText returns d in days or in hours when it is a whole number of them,
+// for example "90 days" or "2 hours". Another period keeps the form of
+// time.Duration.
+func periodText(d time.Duration) string {
+	const day = 24 * time.Hour
+
+	switch {
+	case d%day == 0:
+		return countText(int64(d/day), "day")
+	case d%time.Hour == 0:
+		return countText(int64(d/time.Hour), "hour")
+	default:
+		return d.String()
+	}
+}
+
+// countText returns n with the unit in the singular for 1 and in the plural
+// for any other count.
+func countText(n int64, unit string) string {
+	if n == 1 {
+		return "1 " + unit
+	}
+
+	return strconv.FormatInt(n, 10) + " " + unit + "s"
 }
 
 // issued is a new token with its secret and the digest of the secret.
