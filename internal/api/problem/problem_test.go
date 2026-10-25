@@ -428,7 +428,10 @@ func TestCredentialRefusalLogsTheWrap(t *testing.T) {
 
 	var buf bytes.Buffer
 
-	wr := problem.Writer{Logger: slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))}
+	wr := problem.Writer{
+		Logger:   slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})),
+		Classify: nil,
+	}
 	rec := httptest.NewRecorder()
 
 	wr.Write(t.Context(), rec, fmt.Errorf("save trigger: %w", sessionauth.ErrCSRF))
