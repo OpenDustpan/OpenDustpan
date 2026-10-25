@@ -368,7 +368,7 @@ func (s *scan) literals(name string, body ast.Node) {
 			return true
 		}
 
-		if path := s.literal(n); path != "" {
+		if path := s.literal(stack); path != "" {
 			s.add(name, []string{path})
 		}
 
@@ -376,12 +376,13 @@ func (s *scan) literals(name string, body ast.Node) {
 	})
 }
 
-// literal returns the path of n when n is an uncoded error body, a raw JSON
-// error body or a plain text error, and "" when it is none of these.
-func (s *scan) literal(n ast.Node) string {
-	switch x := n.(type) {
+// literal returns the path of the last node of stack when it is an uncoded
+// error body, a raw JSON error body or a plain text error, and "" when it is
+// none of these. The nodes before it are the nodes that hold it.
+func (s *scan) literal(stack []ast.Node) string {
+	switch x := stack[len(stack)-1].(type) {
 	case *ast.CompositeLit:
-		return s.compositeLit(x)
+		return s.compositeLit(x, stack)
 	case *ast.BasicLit:
 		if rawJSONError(x) {
 			return "raw JSON"
@@ -396,13 +397,25 @@ func (s *scan) literal(n ast.Node) string {
 
 // compositeLit returns the path of lit when it is an uncoded error body: a
 // literal of one of the bodies, an anonymous struct with a member that
-// bodyMembers names, or a map with such a key. It returns "" otherwise.
-func (s *scan) compositeLit(lit *ast.CompositeLit) string {
+// bodyMembers names, or a map with such a key. It returns "" otherwise. A
+// literal with no type of its own, such as an element of []errorResponse,
+// has the type that elidedType reads from stack, the nodes that hold it.
+func (s *scan) compositeLit(lit *ast.CompositeLit, stack []ast.Node) string {
 	if s.refers(lit) || s.copiesCode(lit) {
 		return ""
 	}
 
-	switch typ := lit.Type.(type) {
+	litType := lit.Type
+	if litType == nil {
+		elided, ok := elidedType(stack)
+		if !ok {
+			return ""
+		}
+
+		litType = elided
+	}
+
+	switch typ := litType.(type) {
 	case *ast.Ident:
 		if slices.Contains(s.bodies, typ.Name) {
 			return typ.Name + "{}"
@@ -419,6 +432,66 @@ func (s *scan) compositeLit(lit *ast.CompositeLit) string {
 	}
 
 	return ""
+}
+
+// elidedType returns the type of the composite literal at the end of stack,
+// which has no type of its own: the element type of the slice or the array
+// that holds it, or the key or the value type of the map that holds it, with
+// no pointer. An element of a literal that has no type of its own either gets
+// its type from the literal that holds that one. ok is false when the source
+// does not give the type, for example for a named slice type.
+func elidedType(stack []ast.Node) (ast.Expr, bool) {
+	last := len(stack) - 1
+	if last < 1 {
+		return nil, false
+	}
+
+	parent := last - 1
+	isKey := false
+
+	if kv, isPair := stack[parent].(*ast.KeyValueExpr); isPair {
+		isKey = kv.Key == stack[last]
+		parent--
+	}
+
+	if parent < 0 {
+		return nil, false
+	}
+
+	outer, isLit := stack[parent].(*ast.CompositeLit)
+	if !isLit {
+		return nil, false
+	}
+
+	outerType := outer.Type
+	if outerType == nil {
+		elided, ok := elidedType(stack[:parent+1])
+		if !ok {
+			return nil, false
+		}
+
+		outerType = elided
+	}
+
+	var elem ast.Expr
+
+	switch t := outerType.(type) {
+	case *ast.ArrayType:
+		elem = t.Elt
+	case *ast.MapType:
+		elem = t.Value
+		if isKey {
+			elem = t.Key
+		}
+	default:
+		return nil, false
+	}
+
+	if star, isPointer := elem.(*ast.StarExpr); isPointer {
+		elem = star.X
+	}
+
+	return elem, elem != nil
 }
 
 // copiesCode reports whether the code member of the body literal lit
