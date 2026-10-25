@@ -85,6 +85,7 @@ func newSpec(unit identity.Object, op job.Operation, k job.ExecutorKind) job.Spe
 		Pool:      "",
 		Edits:     nil,
 		Delivery:  "",
+		Defaulted: nil,
 	}
 }
 

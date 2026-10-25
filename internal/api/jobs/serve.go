@@ -2,6 +2,7 @@ package jobs
 
 import (
 	"net/http"
+	"slices"
 	"strconv"
 	"time"
 
@@ -25,6 +26,8 @@ type jobResponse struct {
 	Reason       string            `json:"reason,omitempty"`
 	Location     locationResponse  `json:"location"`
 	Pool         string            `json:"pool,omitempty"`
+	Profile      string            `json:"profile,omitempty"`
+	Defaulted    []string          `json:"defaulted,omitempty"`
 	Steps        []stepResponse    `json:"steps"`
 	Phases       []phaseResponse   `json:"phases"`
 	Current      int               `json:"current"`
@@ -198,6 +201,8 @@ func toJobResponse(j *job.Job) jobResponse {
 		Reason:       j.Reason,
 		Location:     answerLocation(j.Spec.Location),
 		Pool:         j.Spec.Pool,
+		Profile:      j.Spec.Profile,
+		Defaulted:    slices.Clone(j.Spec.Defaulted),
 		Steps:        make([]stepResponse, 0, len(j.Spec.Steps)),
 		Phases:       make([]phaseResponse, 0, len(j.Phases)),
 		Current:      j.Current,

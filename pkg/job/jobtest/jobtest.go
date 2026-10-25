@@ -119,6 +119,7 @@ func Run(t *testing.T, newHarness Factory) {
 	cases := slices.Concat([]suiteCase{
 		{"create stores a queued job and get returns it", testCreateGet},
 		{"create keeps the trigger reference of a job, and a job with none reads back with none", testCreateTrigger},
+		{"create keeps the list of defaulted values, and a job with none reads back with none", testCreateDefaulted},
 		{"get of an unknown ID is ErrNotFound", testGetUnknown},
 		{"two creates with one key and one spec give one job", testCreateKeyOnce},
 		{"a key with another spec conflicts", testCreateKeyConflict},
@@ -271,10 +272,11 @@ func spec(unit identity.Object, op job.Operation) job.Spec {
 			Name: "plan", Role: job.RoleTool, Phase: job.PhasePlan, Args: []string{"tofu", "plan"}, Env: nil,
 			Dir: "", Timeout: 0, AllowFailure: false, ChangesResources: false, Outputs: nil,
 		}},
-		Pool:     "rpl-default",
-		Profile:  "prf-default",
-		Edits:    nil,
-		Delivery: "",
+		Pool:      "rpl-default",
+		Profile:   "prf-default",
+		Edits:     nil,
+		Delivery:  "",
+		Defaulted: nil,
 	}
 }
 

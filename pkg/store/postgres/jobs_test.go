@@ -21,6 +21,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/stack"
 	"opendustpan.org/opendustpan/pkg/store/postgres"
+	"opendustpan.org/opendustpan/pkg/store/storetest"
 	"opendustpan.org/opendustpan/pkg/workspace"
 )
 
@@ -293,5 +294,22 @@ func TestRecorderConformance(t *testing.T) {
 			ItemKeys: s,
 			Blobs:    blobs,
 		})
+	})
+}
+
+func TestJobBackupKeepsTheDefaultedValues(t *testing.T) {
+	t.Parallel()
+
+	base := os.Getenv(envURL)
+	if base == "" {
+		t.Skipf("set %s to run the PostgreSQL job backup test", envURL)
+	}
+
+	storetest.RunJobBackup(t, func(t *testing.T) storetest.JobBackup {
+		t.Helper()
+
+		s := open(t, base)
+
+		return storetest.JobBackup{Store: s, Jobs: s.Jobs(), Domain: &jobDomain{s: s}}
 	})
 }

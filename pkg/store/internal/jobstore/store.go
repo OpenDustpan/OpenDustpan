@@ -543,6 +543,7 @@ func emptySpec() job.Spec {
 		Profile:   "",
 		Edits:     nil,
 		Delivery:  "",
+		Defaulted: nil,
 	}
 }
 

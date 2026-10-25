@@ -131,6 +131,7 @@ func storeDriftJob(t *testing.T, b DriftBackend, u graph.Unit, purpose job.Purpo
 				Dir: "", Timeout: 0, AllowFailure: false, ChangesResources: false, Outputs: nil,
 			}},
 			Pool: "rpl-default", Profile: "prf-default", Edits: nil, Delivery: "",
+			Defaulted: nil,
 		},
 		State: job.StateQueued, Wait: job.WaitNone, Reason: "",
 		Phases: []job.Phase{{

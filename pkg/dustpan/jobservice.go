@@ -275,6 +275,7 @@ func (p jobPlanner) Plan(ctx context.Context, unit identity.Object, req *job.Sta
 	return job.Spec{
 		Unit: unit, Operation: req.Operation, Purpose: req.Purpose, Executor: job.ExecutorRunner,
 		Location: req.Location, Steps: steps, Pool: poolID, Profile: "", Edits: nil, Delivery: "",
+		Defaulted: nil,
 	}, nil
 }
 

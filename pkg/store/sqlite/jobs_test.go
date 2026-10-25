@@ -20,6 +20,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/stack"
 	"opendustpan.org/opendustpan/pkg/store/sqlite"
+	"opendustpan.org/opendustpan/pkg/store/storetest"
 	"opendustpan.org/opendustpan/pkg/workspace"
 )
 
@@ -281,5 +282,17 @@ func TestRecorderConformance(t *testing.T) {
 			ItemKeys: s,
 			Blobs:    blobs,
 		})
+	})
+}
+
+func TestJobBackupKeepsTheDefaultedValues(t *testing.T) {
+	t.Parallel()
+
+	storetest.RunJobBackup(t, func(t *testing.T) storetest.JobBackup {
+		t.Helper()
+
+		s, _ := openDrift(t)
+
+		return storetest.JobBackup{Store: s, Jobs: s.Jobs(), Domain: &jobDomain{s: s}}
 	})
 }

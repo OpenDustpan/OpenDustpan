@@ -280,6 +280,42 @@ type Spec struct {
 	Edits []FileEdit
 	// Delivery is the delivery of a write-back job.
 	Delivery Delivery
+	// Defaulted names the values that the request did not give and that the
+	// server took from the settings of the unit or the namespace: some of
+	// DefaultedPool, DefaultedLocation and DefaultedProfile, in that order.
+	// It is empty when the request gave every value. The service sets it at
+	// start, after the planner, and a planner never sets it. It is fixed with
+	// the rest of the spec, so a later change of the settings changes neither
+	// a value nor this list.
+	Defaulted []string
+}
+
+// The names that Spec.Defaulted holds.
+const (
+	DefaultedPool     = "pool"
+	DefaultedLocation = "location"
+	DefaultedProfile  = "profile"
+)
+
+// DefaultedValues returns the names of the values of spec that req did not
+// give. A request has no profile, so a profile in the spec is always a
+// default. It returns nil when req gave every value that the spec holds.
+func DefaultedValues(req *StartRequest, spec *Spec) []string {
+	var out []string
+
+	if req.Pool == "" && spec.Pool != "" {
+		out = append(out, DefaultedPool)
+	}
+
+	if req.Location.IsZero() && !spec.Location.IsZero() {
+		out = append(out, DefaultedLocation)
+	}
+
+	if spec.Profile != "" {
+		out = append(out, DefaultedProfile)
+	}
+
+	return out
 }
 
 // Changes reports whether a job of s can change resources, state or the

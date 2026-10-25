@@ -46,11 +46,12 @@ func planSpec(t *testing.T) job.Spec {
 		Location: job.Location{
 			Connection: "", Repository: "acme/infra", Ref: "main", Directory: "", Revision: "",
 		},
-		Steps:    []job.Step{toolStep("plan", job.PhasePlan, "plan", false)},
-		Pool:     "rpl-1",
-		Profile:  "",
-		Edits:    nil,
-		Delivery: "",
+		Steps:     []job.Step{toolStep("plan", job.PhasePlan, "plan", false)},
+		Pool:      "rpl-1",
+		Profile:   "",
+		Edits:     nil,
+		Delivery:  "",
+		Defaulted: nil,
 	}
 }
 
