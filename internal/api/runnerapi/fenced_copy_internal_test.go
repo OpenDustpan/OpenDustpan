@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"opendustpan.org/opendustpan/internal/api/problem"
 	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/runner"
@@ -46,9 +47,9 @@ func TestWriteErrorFencedCopy(t *testing.T) {
 	}
 
 	managementBody, err := json.Marshal(
-		managementError{
+		problem.Body{
 			Message: namespace.ErrFenced.Error(), Code: http.StatusConflict, ErrorCode: errcode.NamespaceFenced,
-			ErrorArgs: nil,
+			ErrorArgs: nil, Reauthenticate: "",
 		},
 	)
 	if err != nil {
@@ -65,11 +66,11 @@ func TestWriteErrorFencedCopy(t *testing.T) {
 	}
 
 	otherManagementBody, err := json.Marshal(
-		managementError{
+		problem.Body{
 			Message:   "the runner is retired",
 			Code:      http.StatusConflict,
 			ErrorCode: errcode.RunnerRetired,
-			ErrorArgs: nil,
+			ErrorArgs: nil, Reauthenticate: "",
 		},
 	)
 	if err != nil {
