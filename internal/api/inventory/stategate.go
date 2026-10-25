@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strings"
 
+	"opendustpan.org/opendustpan/internal/api/problem"
 	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/pkg/gate"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -86,7 +87,7 @@ func (h *Handler) guardStateWrite(
 	default:
 	}
 
-	h.writeFailure(ctx, w, fail(status, refusalMessage(refusal, code), answerCode))
+	h.writeFailure(ctx, w, problem.New(status, answerCode, refusalMessage(refusal, code)))
 
 	return false
 }

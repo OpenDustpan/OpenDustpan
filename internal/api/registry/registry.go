@@ -171,9 +171,7 @@ func classifyRegistry(err error) (problem.Problem, bool) {
 		return problem.Pass()
 	}
 
-	return problem.Problem{
-		Status: rp.status, Code: rp.code, Values: nil, Message: err.Error(), RetryAfter: 0, Reauthenticate: "",
-	}, true
+	return problem.New(rp.status, rp.code, err.Error()), true
 }
 
 // registryProblemOf returns the element of registryProblems for err, or nil

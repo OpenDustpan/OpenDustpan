@@ -347,25 +347,25 @@ func readLockReason(w http.ResponseWriter, r *http.Request) (string, error) {
 func classifyLock(err error) (problem.Problem, bool) {
 	switch {
 	case errors.Is(err, manuallock.ErrTargetNotFound):
-		return fail(http.StatusNotFound, err.Error(), errcode.LockTargetNotFound), true
+		return problem.New(http.StatusNotFound, errcode.LockTargetNotFound, err.Error()), true
 	case errors.Is(err, manuallock.ErrNotLocked):
-		return fail(http.StatusNotFound, err.Error(), errcode.LockNotLocked), true
+		return problem.New(http.StatusNotFound, errcode.LockNotLocked, err.Error()), true
 	case errors.Is(err, manuallock.ErrAlreadyLocked):
-		return fail(http.StatusConflict, err.Error(), errcode.LockAlreadyLocked), true
+		return problem.New(http.StatusConflict, errcode.LockAlreadyLocked, err.Error()), true
 	case errors.Is(err, manuallock.ErrNotHolder):
-		return fail(http.StatusConflict, err.Error(), errcode.LockNotHolder), true
+		return problem.New(http.StatusConflict, errcode.LockNotHolder, err.Error()), true
 	case errors.Is(err, manuallock.ErrLockChanged):
-		return fail(http.StatusConflict, err.Error(), errcode.LockChanged), true
+		return problem.New(http.StatusConflict, errcode.LockChanged, err.Error()), true
 	case errors.Is(err, manuallock.ErrLocked):
 		return classifyLocked(err), true
 	case errors.Is(err, manuallock.ErrReasonRequired):
-		return fail(http.StatusBadRequest, err.Error(), errcode.LockReasonRequired), true
+		return problem.New(http.StatusBadRequest, errcode.LockReasonRequired, err.Error()), true
 	case errors.Is(err, manuallock.ErrInvalidTarget):
-		return fail(http.StatusBadRequest, err.Error(), errcode.LockInvalidTarget), true
+		return problem.New(http.StatusBadRequest, errcode.LockInvalidTarget, err.Error()), true
 	case errors.Is(err, audit.ErrInvalidReason):
-		return fail(http.StatusBadRequest, err.Error(), errcode.AuditReasonInvalid), true
+		return problem.New(http.StatusBadRequest, errcode.AuditReasonInvalid, err.Error()), true
 	case errors.Is(err, errLockBody), errors.Is(err, errLockText):
-		return fail(http.StatusBadRequest, err.Error(), errcode.RequestBodyInvalid), true
+		return problem.New(http.StatusBadRequest, errcode.RequestBodyInvalid, err.Error()), true
 	}
 
 	var none problem.Problem
@@ -381,7 +381,7 @@ func classifyLock(err error) (problem.Problem, bool) {
 func classifyLocked(err error) problem.Problem {
 	locked, ok := errors.AsType[*manuallock.LockedError](err)
 	if !ok || locked == nil {
-		return fail(http.StatusInternalServerError, "internal error", errcode.ServerInternal)
+		return problem.New(http.StatusInternalServerError, errcode.ServerInternal, "internal error")
 	}
 
 	a, buildErr := refusal.Locked(locked)

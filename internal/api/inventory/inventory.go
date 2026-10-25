@@ -611,19 +611,19 @@ func classify(err error) (problem.Problem, bool) {
 func classifyRequest(err error) (problem.Problem, bool) {
 	switch {
 	case errors.Is(err, errMissingOrganization), errors.Is(err, errMissingUnit):
-		return fail(http.StatusBadRequest, err.Error(), errcode.RequestInvalidQuery), true
+		return problem.New(http.StatusBadRequest, errcode.RequestInvalidQuery, err.Error()), true
 	case errors.Is(err, errOutputSharingBody), errors.Is(err, errCollectionBody), errors.Is(err, errMoveBody):
-		return fail(http.StatusBadRequest, err.Error(), errcode.RequestBodyInvalid), true
+		return problem.New(http.StatusBadRequest, errcode.RequestBodyInvalid, err.Error()), true
 	case errors.Is(err, namespace.ErrInvalidName):
-		return fail(http.StatusBadRequest, err.Error(), errcode.NamespaceInvalidName), true
+		return problem.New(http.StatusBadRequest, errcode.NamespaceInvalidName, err.Error()), true
 	case errors.Is(err, identity.ErrInvalidObject):
-		return fail(http.StatusBadRequest, err.Error(), errcode.RequestInvalidObject), true
+		return problem.New(http.StatusBadRequest, errcode.RequestInvalidObject, err.Error()), true
 	case errors.Is(err, namespace.ErrNotFound):
-		return fail(http.StatusNotFound, err.Error(), errcode.NamespaceNotFound), true
+		return problem.New(http.StatusNotFound, errcode.NamespaceNotFound, err.Error()), true
 	case errors.Is(err, coreinventory.ErrUnitNotFound):
-		return fail(http.StatusNotFound, "unit not found", errcode.UnitNotFound), true
+		return problem.New(http.StatusNotFound, errcode.UnitNotFound, "unit not found"), true
 	case errors.Is(err, collection.ErrUnitNotFound):
-		return fail(http.StatusNotFound, err.Error(), errcode.UnitNotFound), true
+		return problem.New(http.StatusNotFound, errcode.UnitNotFound, err.Error()), true
 	}
 
 	var none problem.Problem
@@ -635,19 +635,19 @@ func classifyRequest(err error) (problem.Problem, bool) {
 func classifyCollection(err error) (problem.Problem, bool) {
 	switch {
 	case errors.Is(err, collection.ErrInvalidName):
-		return fail(http.StatusBadRequest, err.Error(), errcode.CollectionInvalidName), true
+		return problem.New(http.StatusBadRequest, errcode.CollectionInvalidName, err.Error()), true
 	case errors.Is(err, collection.ErrNotFound):
-		return fail(http.StatusNotFound, err.Error(), errcode.CollectionNotFound), true
+		return problem.New(http.StatusNotFound, errcode.CollectionNotFound, err.Error()), true
 	case errors.Is(err, collection.ErrAlreadyExists):
-		return fail(http.StatusConflict, err.Error(), errcode.CollectionAlreadyExists), true
+		return problem.New(http.StatusConflict, errcode.CollectionAlreadyExists, err.Error()), true
 	case errors.Is(err, collection.ErrNotEmpty):
-		return fail(http.StatusConflict, err.Error(), errcode.CollectionNotEmpty), true
+		return problem.New(http.StatusConflict, errcode.CollectionNotEmpty, err.Error()), true
 	case errors.Is(err, collection.ErrCollectionChanged):
-		return fail(http.StatusConflict, err.Error(), errcode.CollectionChanged), true
+		return problem.New(http.StatusConflict, errcode.CollectionChanged, err.Error()), true
 	case errors.Is(err, collection.ErrNoCollection):
-		return fail(http.StatusConflict, err.Error(), errcode.UnitNoCollection), true
+		return problem.New(http.StatusConflict, errcode.UnitNoCollection, err.Error()), true
 	case errors.Is(err, collection.ErrMoveOutOfLockedCollection):
-		return fail(http.StatusConflict, err.Error(), errcode.CollectionMoveOutLocked), true
+		return problem.New(http.StatusConflict, errcode.CollectionMoveOutLocked, err.Error()), true
 	}
 
 	var none problem.Problem
@@ -660,22 +660,25 @@ func classifyCollection(err error) (problem.Problem, bool) {
 func classifyChange(err error) (problem.Problem, bool) {
 	switch {
 	case errors.Is(err, errInvalidQuery):
-		return fail(http.StatusBadRequest, err.Error(), errcode.RequestInvalidQuery), true
+		return problem.New(http.StatusBadRequest, errcode.RequestInvalidQuery, err.Error()), true
 	case errors.Is(err, errInvalidBody):
-		return fail(http.StatusBadRequest, err.Error(), errcode.RequestBodyInvalid), true
+		return problem.New(http.StatusBadRequest, errcode.RequestBodyInvalid, err.Error()), true
 	case errors.Is(err, errNoHistory):
-		return fail(http.StatusNotImplemented, err.Error(), errcode.UnitHistoryUnavailable), true
+		return problem.New(http.StatusNotImplemented, errcode.UnitHistoryUnavailable, err.Error()), true
 	case errors.Is(err, coreinventory.ErrInvalidName):
-		return fail(
+		return problem.New(
 			http.StatusBadRequest,
-			"invalid unit name: use the name rules of the tool",
 			errcode.UnitInvalidName,
+			"invalid unit name: use the name rules of the tool",
 		), true
 	case errors.Is(err, coreinventory.ErrNotFound):
-		return fail(http.StatusNotFound, "deleted unit not found", errcode.UnitDeletedNotFound), true
+		return problem.New(http.StatusNotFound, errcode.UnitDeletedNotFound, "deleted unit not found"), true
 	case errors.Is(err, coreinventory.ErrNameTaken):
-		return fail(http.StatusConflict, "a live unit holds the name: send a new name in the restore body",
-			errcode.UnitNameTaken), true
+		return problem.New(
+			http.StatusConflict,
+			errcode.UnitNameTaken,
+			"a live unit holds the name: send a new name in the restore body",
+		), true
 	}
 
 	var none problem.Problem

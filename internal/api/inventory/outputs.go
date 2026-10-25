@@ -7,6 +7,7 @@ import (
 	"net/http"
 
 	"opendustpan.org/opendustpan/internal/api/apidesc"
+	"opendustpan.org/opendustpan/internal/api/problem"
 	"opendustpan.org/opendustpan/internal/api/route"
 	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/internal/outputsharesvc"
@@ -155,12 +156,20 @@ func (h *Handler) writeOutputsError(
 	case errors.Is(err, outputshare.ErrUnknownProducer):
 		h.writeError(ctx, w, coreinventory.ErrUnitNotFound)
 	case errors.Is(err, outputshare.ErrClientEncrypted):
-		h.writeFailure(ctx, w, fail(http.StatusConflict, clientEncryptedMessage, errcode.UnitClientEncrypted))
+		h.writeFailure(ctx, w, problem.New(http.StatusConflict, errcode.UnitClientEncrypted, clientEncryptedMessage))
 	case errors.Is(err, outputsharesvc.ErrNoState):
-		h.writeFailure(ctx, w, fail(http.StatusNotFound, fmt.Sprintf("the unit %s has no state yet", obj),
-			errcode.UnitNoState, errcode.Identifier("unit", obj.String())))
+		h.writeFailure(
+			ctx,
+			w,
+			problem.New(
+				http.StatusNotFound,
+				errcode.UnitNoState,
+				fmt.Sprintf("the unit %s has no state yet", obj),
+				errcode.Identifier("unit", obj.String()),
+			),
+		)
 	case errors.Is(err, outputshare.ErrStateMoved):
-		h.writeFailure(ctx, w, fail(http.StatusConflict, errOutputsStateMoved, errcode.UnitStateMoved))
+		h.writeFailure(ctx, w, problem.New(http.StatusConflict, errcode.UnitStateMoved, errOutputsStateMoved))
 	default:
 		h.writeError(ctx, w, err)
 	}
