@@ -32,7 +32,7 @@ No line shows a key, a token or a database URL.
 
 | Check | Result when it does not hold |
 | --- | --- |
-| The key-encryption key is set. A key file exists, has mode 0600 or stricter, and has the size of a base64 key of 32 bytes. | `fail` |
+| The key-encryption key is set. A key file exists, has mode 0600 or stricter, the owner can read it, and has the size of a base64 key of 32 bytes. A file with mode 0000 fails, because `serve` cannot read it. | `fail` |
 | The key file is not in the directory of the SQLite file or of the blobs. `doctor` resolves symbolic links first. | `warn` |
 | The database is set. | `fail` |
 | Each bootstrap admin token has at least 32 bytes. With no admin token, the line says so and passes. | `fail` |

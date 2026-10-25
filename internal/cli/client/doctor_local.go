@@ -22,6 +22,9 @@ const (
 	// keyFileLooseBits are the permission bits that a key file must not set:
 	// everything except the read and the write of the owner.
 	keyFileLooseBits = 0o177
+	// keyFileOwnerRead is the read permission of the owner. Serve runs as the
+	// owner and reads the key file, so a file without it stops serve.
+	keyFileOwnerRead = 0o400
 )
 
 // localChecks runs the checks that need the settings only, in the order of
@@ -92,6 +95,12 @@ func checkKeyFile(path string) checkResult {
 		return checkResult{
 			statusFail, nameKey,
 			fmt.Sprintf("the key file %s has mode %04o: run chmod 600 on the file", path, info.Mode().Perm()),
+		}
+	case info.Mode().Perm()&keyFileOwnerRead == 0:
+		return checkResult{
+			statusFail, nameKey,
+			fmt.Sprintf("the key file %s has mode %04o and the owner cannot read it, so serve cannot read it: "+
+				"run chmod 600 on the file", path, info.Mode().Perm()),
 		}
 	case info.Size() < keyFileMinBytes || info.Size() > keyFileMaxBytes:
 		return checkResult{

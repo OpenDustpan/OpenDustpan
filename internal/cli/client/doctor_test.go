@@ -264,6 +264,8 @@ func TestDoctorKeyFile(t *testing.T) {
 	}{
 		{"mode 0600", doctorKey, 0o600, false, "pass  key: "},
 		{"mode 0400", doctorKey, 0o400, false, "pass  key: "},
+		{"mode 0000", doctorKey, 0o000, false, "the owner cannot read it, so serve cannot read it"},
+		{"mode 0200", doctorKey, 0o200, false, "the owner cannot read it, so serve cannot read it"},
 		{"mode 0640", doctorKey, 0o640, false, "fail  key: the key file "},
 		{"mode 0644", doctorKey, 0o644, false, "has mode 0644: run chmod 600"},
 		{"too short", "AAAA\n", 0o600, false, "has 5 bytes"},
@@ -371,6 +373,13 @@ func writeFake(t *testing.T, w http.ResponseWriter, doc any) {
 	}
 }
 
+// backupFailed answers a failed backup that ended age ago.
+func backupFailed(age time.Duration) map[string]string {
+	return map[string]string{
+		"id": "bkp-2", "state": "failed", "endedAt": time.Now().Add(-age).UTC().Format(time.RFC3339Nano),
+	}
+}
+
 // backupEnded answers a succeeded backup that ended age ago.
 func backupEnded(age time.Duration) map[string]string {
 	return map[string]string{
@@ -434,6 +443,27 @@ func TestDoctorServerChecks(t *testing.T) {
 			name: "an old backup", token: doctorToken,
 			fake:    newFake("production", "", []map[string]string{backupEnded(26 * time.Hour)}),
 			want:    []string{"warn  server backup: the last backup ended 26h0m0s ago"},
+			wantErr: nil,
+		},
+		{
+			name: "a failed backup newer than a succeeded one", token: doctorToken,
+			fake: newFake("production", "", []map[string]string{backupFailed(time.Hour), backupEnded(2 * time.Hour)}),
+			want: []string{"pass  server backup: the last backup ended 2h0m0s ago"}, wantErr: nil,
+		},
+		{
+			name: "a failed backup newer than an old succeeded one", token: doctorToken,
+			fake: newFake("production", "", []map[string]string{backupFailed(time.Hour), backupEnded(30 * time.Hour)}),
+			want: []string{"warn  server backup: the last backup ended 30h0m0s ago"}, wantErr: nil,
+		},
+		{
+			name:  "only failed backups",
+			token: doctorToken,
+			fake: newFake(
+				"production",
+				"",
+				[]map[string]string{backupFailed(time.Hour), backupFailed(2 * time.Hour)},
+			),
+			want:    []string{"warn  server backup: the server has no successful backup"},
 			wantErr: nil,
 		},
 		{

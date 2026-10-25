@@ -188,23 +188,44 @@ func checkKeyFile(t *testing.T, path, report string) {
 	}
 }
 
+// doctorRow is one run of doctor that must print a line and exit with a code.
+type doctorRow struct {
+	name string
+	args []string
+	env  []string
+	exit int
+	want string
+}
+
 // TestDoctor proves doctor through the real binary: it prints one line for
 // each check, exits with 0 when no check fails and with 1 when one fails, and
-// with --server it asks a running production server through the REST API.
+// with --server it asks a running server through the REST API. There is a
+// failing row for the checks of the key (missing, loose mode, unreadable),
+// the database, the admin token and the listen address, and a row for a dev
+// server.
 func TestDoctor(t *testing.T) {
 	t.Parallel()
 
 	bin := e2e.BuildBinaryWithVersion(t.Context(), t, t.TempDir(), "")
 	dir := t.TempDir()
 	keyFile := filepath.Join(dir, "key")
+	database := "sqlite:" + filepath.Join(dir, "serve.db")
 	settings := []string{
-		"--database", "sqlite:" + filepath.Join(dir, "serve.db"),
+		"--database", database,
 		"--key-encryption-key-file", keyFile,
 		"--backup-target", "dir:" + t.TempDir(),
 		"--listen", "127.0.0.1:8080",
 	}
 
 	writeServeKey(t, bin, keyFile)
+
+	looseKey := filepath.Join(dir, "loose.key")
+	writeServeKey(t, bin, looseKey)
+	chmodKey(t, looseKey, 0o660)
+
+	unreadableKey := filepath.Join(dir, "unreadable.key")
+	writeServeKey(t, bin, unreadableKey)
+	chmodKey(t, unreadableKey, 0o000)
 
 	t.Run("a good install", func(t *testing.T) {
 		t.Parallel()
@@ -213,16 +234,45 @@ func TestDoctor(t *testing.T) {
 		checkGoodDoctor(t, out, err)
 	})
 
-	t.Run("no key", func(t *testing.T) {
-		t.Parallel()
+	rows := []doctorRow{
+		{
+			name: "no key", args: []string{"doctor", "--database", database}, env: nil, exit: 1,
+			want: "fail  key: no key-encryption key is set",
+		},
+		{
+			name: "a loose key mode",
+			args: []string{"doctor", "--database", database, "--key-encryption-key-file", looseKey},
+			env:  nil,
+			exit: 1,
+			want: "fail  key: the key file " + looseKey + " has mode 0660",
+		},
+		{
+			name: "a key file that serve cannot read",
+			args: []string{"doctor", "--database", database, "--key-encryption-key-file", unreadableKey},
+			env:  nil, exit: 1, want: "the owner cannot read it, so serve cannot read it",
+		},
+		{
+			name: "no database", args: []string{"doctor", "--key-encryption-key-file", keyFile}, env: nil, exit: 1,
+			want: "fail  database: no database is set",
+		},
+		{
+			name: "a short admin token", args: append([]string{"doctor"}, settings...),
+			env: []string{"DUSTPAN_ADMIN_TOKEN=short-token"}, exit: 1,
+			want: "fail  admin token: an admin token has fewer than 32 bytes",
+		},
+		{
+			name: "plain HTTP on a public address",
+			args: []string{"doctor", "--database", database, "--key-encryption-key-file", keyFile, "--listen", ":8080"},
+			env:  nil, exit: 0, want: "warn  listen address: :8080 is not a loopback address and uses plain HTTP",
+		},
+	}
 
-		out, err := runBinary(t, bin, "doctor", "--database", "sqlite:"+filepath.Join(dir, "none.db"))
-
-		exit, isExit := errors.AsType[*exec.ExitError](err)
-		if !isExit || exit.ExitCode() != 1 || !strings.Contains(out, "fail  key: no key-encryption key is set") {
-			t.Fatalf("doctor with no key: err = %v, output:\n%s", err, out)
-		}
-	})
+	for _, row := range rows {
+		t.Run(row.name, func(t *testing.T) {
+			t.Parallel()
+			checkDoctorRow(t, bin, row)
+		})
+	}
 
 	t.Run("a running production server", func(t *testing.T) {
 		t.Parallel()
@@ -238,6 +288,60 @@ func TestDoctor(t *testing.T) {
 			t.Fatalf("doctor with --server: err = %v, output:\n%s", err, out)
 		}
 	})
+
+	t.Run("a dev server", func(t *testing.T) {
+		t.Parallel()
+
+		if _, err := exec.LookPath("script"); err != nil {
+			t.Skip("the dev server needs the script utility for a pseudo terminal")
+		}
+
+		dev := startPlainDev(t, bin)
+		token := strings.TrimSpace(string(mustReadFile(t, filepath.Join(dev.dir, "dev.token"))))
+
+		checkDoctorRow(t, bin, doctorRow{
+			name: "a dev server", args: append([]string{"doctor", "--server", dev.url}, settings...),
+			env: []string{"DUSTPAN_ADMIN_TOKEN=" + token}, exit: 1,
+			want: "fail  server kind: the server reports the installation kind dev, not production",
+		})
+	})
+}
+
+// checkDoctorRow runs doctor for the row and checks the exit code and the line.
+func checkDoctorRow(t *testing.T, bin string, row doctorRow) {
+	t.Helper()
+
+	out, err := runBinaryWithEnv(t, bin, row.env, row.args...)
+
+	code := 0
+
+	if err != nil {
+		exit, isExit := errors.AsType[*exec.ExitError](err)
+		if !isExit {
+			t.Fatalf("doctor %s: %v", row.name, err)
+		}
+
+		code = exit.ExitCode()
+	}
+
+	if code != row.exit || !strings.Contains(out, row.want) {
+		t.Fatalf("doctor %s: exit = %d, want %d; output lacks %q:\n%s", row.name, code, row.exit, row.want, out)
+	}
+}
+
+// chmodKey sets the mode of the key file at path inside its directory.
+func chmodKey(t *testing.T, path string, mode os.FileMode) {
+	t.Helper()
+
+	root, err := os.OpenRoot(filepath.Dir(path))
+	if err != nil {
+		t.Fatalf("open the directory of the key file: %v", err)
+	}
+
+	chmodErr := root.Chmod(filepath.Base(path), mode)
+	if closeErr := root.Close(); chmodErr != nil || closeErr != nil {
+		t.Fatalf("chmod the key file: %v %v", chmodErr, closeErr)
+	}
 }
 
 // checkGoodDoctor proves that doctor passed a good install: exit code 0, a pass
