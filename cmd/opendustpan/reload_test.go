@@ -7,6 +7,7 @@ import (
 	"flag"
 	"io"
 	"log/slog"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -118,6 +119,17 @@ func newReloadFixture(t *testing.T, text string, env map[string]string, args ...
 	args = append([]string{"--config", path}, args...)
 	if err := fs.Parse(args); err != nil {
 		t.Fatalf("parse: %v", err)
+	}
+
+	// Serve has no default database. A test that sets none gets one from the
+	// variables.
+	if !strings.Contains(text, `"database"`) && !slices.Contains(args, "--database") {
+		env = maps.Clone(env)
+		if env == nil {
+			env = map[string]string{}
+		}
+
+		env["DUSTPAN_DATABASE"] = "sqlite:/tmp/reload-test.db"
 	}
 
 	// As serve does: the start resolves against the variables, each
@@ -265,18 +277,21 @@ func TestReloadSignalWithoutChangeWritesNoEntry(t *testing.T) {
 func TestReloadKeepsTheOldConfigurationForABadFile(t *testing.T) {
 	t.Parallel()
 
-	fx := newReloadFixture(t, `{"region": "eu-west"}`, nil)
+	fx := newReloadFixture(t, `{"region": "eu-west", "database": "sqlite:/tmp/x.db"}`, nil)
+
+	// Each bad file keeps a valid database, so it fails for its own defect.
+	const keep = `"database": "sqlite:/tmp/x.db", `
 
 	for _, bad := range []string{
-		`{"region": "us-east", "disable-pulumi-journaling": no}`,
-		`{"region": "us-east", "log-level": "verbose"}`,
+		`{"region": "us-east", ` + keep + `"disable-pulumi-journaling": no}`,
+		`{"region": "us-east", ` + keep + `"log-level": "verbose"}`,
 		// The URL is built in parts, so no commit holds a contiguous URL with
 		// a password: make trufflehog scans every branch of the history.
-		`{"region": "us-east", "public-url": "https://user:` + `pw@dustpan.example"}`,
-		`{"region": "us-east", "tls-cert": "/a.crt"}`,
+		`{"region": "us-east", ` + keep + `"public-url": "https://user:` + `pw@dustpan.example"}`,
+		`{"region": "us-east", ` + keep + `"tls-cert": "/a.crt"}`,
 		`{"region": "us-east", "database": "mysql://x"}`,
-		`{"region": "us-east", "trusted-proxies": "0.0.0.0/0"}`,
-		`{"region": "us-east", "trusted-proxy-header": "x-real-ip"}`,
+		`{"region": "us-east", ` + keep + `"trusted-proxies": "0.0.0.0/0"}`,
+		`{"region": "us-east", ` + keep + `"trusted-proxy-header": "x-real-ip"}`,
 	} {
 		fx.write(t, bad)
 		fx.r.reload(t.Context(), triggerPoll)
@@ -305,7 +320,7 @@ func TestReloadKeepsTheOldConfigurationForABadFile(t *testing.T) {
 		t.Fatalf("a poll of the same bad content reported %v", got)
 	}
 
-	fx.write(t, `{"region": "us-east"}`)
+	fx.write(t, `{"region": "us-east", `+keep+`"log-level": "info"}`)
 	fx.r.reload(t.Context(), triggerPoll)
 
 	if got := fx.region(); got != "us-east" {

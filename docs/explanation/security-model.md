@@ -216,21 +216,20 @@ the first of these:
 1. `DUSTPAN_KEY_ENCRYPTION_KEY`: the base64 text of 32 random bytes. The
    server deletes the variable from its environment after it reads it.
 2. The key file in `--key-encryption-key-file`
-   (`DUSTPAN_KEY_ENCRYPTION_KEY_FILE`). The default is `dustpan.key` next to
-   the SQLite database, or in the working directory for PostgreSQL. The
-   server refuses a key file that the group or others can read.
-3. No key and no key file: on a terminal, the server asks for an explicit
-   yes and then makes the key file. With
-   `--generate-key-encryption-key`, it makes the file with no prompt. Else
-   it stops with an error that names each setting.
+   (`DUSTPAN_KEY_ENCRYPTION_KEY_FILE`). There is no default file. The
+   server refuses a key file that the group or others can read, and a key
+   file that `opendustpan dev` made.
+3. No key: the server stops with an error that names the settings. It makes
+   no key and it asks no question.
 
-A key file that the server makes holds 32 random bytes in base64, with mode
-0600. The server never writes over a key file that exists. Each start logs
-the path of the key file, never the key. No flag takes the key itself.
+The server never writes a key file. Each start logs the path of the key
+file, never the key. When the key file is in the directory of the SQLite file
+or of the blobs, each start also logs a warning, because a backup of the data
+then holds the key. No flag takes the key itself.
 
 The database and the backups hold no copy of the key. A lost key means lost
 secrets and lost OpenTofu state: nobody can decrypt them. A copy of the data directory that holds
-the default key file also holds the key, so keep the backups and the key
+the key file also holds the key, so keep the backups and the key
 apart.
 
 Planned: a command that rotates the key-encryption key (ADR 23), and keys
