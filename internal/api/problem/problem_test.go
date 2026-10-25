@@ -479,6 +479,7 @@ func TestWriteLogsRefusalsAtDebug(t *testing.T) {
 			err:         fmt.Errorf("save trigger: %w", identity.ErrDenied),
 			status:      http.StatusForbidden,
 			wantRefused: true,
+			wantLog:     "save trigger",
 			hidden:      "save trigger",
 		},
 		{
@@ -486,6 +487,7 @@ func TestWriteLogsRefusalsAtDebug(t *testing.T) {
 			err:         namespace.ErrInvalidName,
 			status:      http.StatusBadRequest,
 			wantRefused: false,
+			wantLog:     "",
 			hidden:      "",
 		},
 		{
@@ -493,13 +495,16 @@ func TestWriteLogsRefusalsAtDebug(t *testing.T) {
 			err:         errDriver,
 			status:      http.StatusInternalServerError,
 			wantRefused: false,
+			wantLog:     "",
 			hidden:      "hunter2",
 		},
 		{
+			// The log is not checked for the secret: a test never pins a secret into a log.
 			name:        "wrapped secret never reaches the body",
 			err:         fmt.Errorf("pq: password=hunter2: %w", identity.ErrDenied),
 			status:      http.StatusForbidden,
 			wantRefused: true,
+			wantLog:     "",
 			hidden:      "hunter2",
 		},
 	}
@@ -533,8 +538,21 @@ type refusalCase struct {
 	err         error
 	status      int
 	wantRefused bool
+	// wantLog is the text that the request refused line holds when wantRefused is true, or "".
+	wantLog string
 	// hidden is a value that the body never holds, and that a 5xx log never holds.
 	hidden string
+}
+
+// refusedLineHolds reports whether the request refused line of logs holds text.
+func refusedLineHolds(logs, text string) bool {
+	for line := range strings.SplitSeq(logs, "\n") {
+		if strings.Contains(line, `msg="request refused"`) {
+			return strings.Contains(line, text)
+		}
+	}
+
+	return false
 }
 
 // checkRefusalLog fails unless the log and the body follow the rule of
@@ -548,6 +566,10 @@ func checkRefusalLog(t *testing.T, tc refusalCase, logs, body string) {
 
 	if tc.wantRefused && !strings.Contains(logs, "level=DEBUG") {
 		t.Errorf("request refused line is not at Debug: log %q", logs)
+	}
+
+	if tc.wantRefused && tc.wantLog != "" && !refusedLineHolds(logs, tc.wantLog) {
+		t.Errorf("request refused line does not hold %q: log %q", tc.wantLog, logs)
 	}
 
 	if tc.hidden != "" && strings.Contains(body, tc.hidden) {
