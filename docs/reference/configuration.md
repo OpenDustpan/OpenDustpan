@@ -222,6 +222,10 @@ Each client command takes only the flags in its row:
 new key-encryption key file to the path in `--out` and refuses a file that
 exists.
 
+`opendustpan doctor` takes each flag of `serve`, and `--server` and `--ca-file`.
+It reads them through the same layers, and calls a server only when you set
+`--server`. The [doctor guide](../guides/doctor.md) lists the checks.
+
 `opendustpan health` reads `--listen`, `--tls-cert` and their variables, as
 `serve` does. The [observe guide](../guides/observe.md) shows the probes.
 The [backup guide](../guides/backup-restore-upgrade.md) shows the flags of

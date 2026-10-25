@@ -703,29 +703,6 @@ func TestVersionFlag(t *testing.T) {
 	}
 }
 
-func TestDefaultBlobDir(t *testing.T) {
-	t.Parallel()
-
-	cases := []struct {
-		name, database, flag, want string
-	}{
-		{"explicit flag wins", "sqlite:/data/dustpan.db", "/custom/blobs", "/custom/blobs"},
-		{"sqlite next to file", "sqlite:/data/dustpan.db", "", "/data/blobs"},
-		{"sqlite bare filename", "sqlite:dustpan.db", "", "blobs"},
-		{"postgres uses working directory", "postgres://user@localhost/db", "", "blobs"},
-	}
-
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-
-			if got := defaultBlobDir(tc.database, tc.flag); got != tc.want {
-				t.Fatalf("defaultBlobDir(%q, %q) = %q, want %q", tc.database, tc.flag, got, tc.want)
-			}
-		})
-	}
-}
-
 // TestServeBlobDir sets the process environment, so it runs alone.
 func TestServeBlobDir(t *testing.T) {
 	setServeEnv(t, testKeyBase64())

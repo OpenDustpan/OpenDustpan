@@ -295,6 +295,8 @@ How-to guides:
 - [Run a trial server](docs/guides/dev-server.md) with `opendustpan dev`: no
   setup, a one-time sign-in link and the settings of the Pulumi CLI and
   OpenTofu.
+- [Check an install](docs/guides/doctor.md) with `opendustpan doctor`: the
+  key, the database, the token, the backups and the running server.
 - [Import existing state](docs/guides/import.md) from a Pulumi service
   backend, a file backend, or an OpenTofu backend.
 - [Migrate out](docs/guides/migrate-out.md) to another backend.
