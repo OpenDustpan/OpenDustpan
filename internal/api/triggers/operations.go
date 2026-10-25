@@ -42,12 +42,12 @@ var (
 	)...)
 	triggerSchema = apidesc.Typed[triggerResponse]("Trigger", append(triggerEnums(),
 		apidesc.Named[unitResponse]("TriggerUnit"),
-		apidesc.Named[frequencyBody]("TriggerFrequency"),
+		apidesc.Named[frequencyAnswer]("TriggerFrequencyAnswer"),
 	)...)
 	triggerListSchema = apidesc.Typed[listResponse]("TriggerList", append(triggerEnums(),
 		apidesc.Named[triggerResponse]("Trigger"),
 		apidesc.Named[unitResponse]("TriggerUnit"),
-		apidesc.Named[frequencyBody]("TriggerFrequency"),
+		apidesc.Named[frequencyAnswer]("TriggerFrequencyAnswer"),
 	)...)
 	fireSchema = apidesc.Typed[fireBody]("FireTriggerRequest",
 		apidesc.Named[locationRequest]("TriggerLocationRequest"))

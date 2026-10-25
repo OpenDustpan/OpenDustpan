@@ -191,6 +191,12 @@ type errorResponse struct {
 // tells that the object exists.
 var errNotFound = errors.New("not found")
 
+// errBrokenFrequency is the error of a stored schedule trigger whose frequency
+// has no expression. The save checks the frequency, so such a record is broken.
+// The text does not wrap trigger.ErrInvalid: the answer is a failure of the
+// server, not a request that the caller must fix.
+var errBrokenFrequency = errors.New("stored schedule frequency has no expression")
+
 // errBody reports a request body that is not valid.
 var errBody = errors.New("request body is not valid")
 

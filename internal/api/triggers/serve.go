@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strings"
@@ -41,6 +42,17 @@ type frequencyBody struct {
 	Cron   string      `json:"cron,omitempty"`
 }
 
+// frequencyAnswer is the frequency of a schedule trigger in an answer. The
+// request has no expression: a client cannot set the minute and the hour of a
+// preset. Expression is the five-field cron expression, in UTC, that the
+// frequency means for the unit of the trigger. For a preset, it holds the
+// offset that the unit ID sets.
+type frequencyAnswer struct {
+	Preset     cron.Preset `json:"preset,omitempty"`
+	Cron       string      `json:"cron,omitempty"`
+	Expression string      `json:"expression"`
+}
+
 // sourceBody names the source unit of a follows trigger in a request, by its
 // unit ID.
 type sourceBody struct {
@@ -60,13 +72,13 @@ type saveBody struct {
 
 // triggerResponse is the answered document of a trigger.
 type triggerResponse struct {
-	ID        string         `json:"id"`
-	Namespace string         `json:"namespace"`
-	Unit      unitResponse   `json:"unit"`
-	Kind      trigger.Kind   `json:"kind"`
-	Frequency *frequencyBody `json:"frequency,omitempty"`
-	Source    *unitResponse  `json:"source,omitempty"`
-	Enabled   bool           `json:"enabled"`
+	ID        string           `json:"id"`
+	Namespace string           `json:"namespace"`
+	Unit      unitResponse     `json:"unit"`
+	Kind      trigger.Kind     `json:"kind"`
+	Frequency *frequencyAnswer `json:"frequency,omitempty"`
+	Source    *unitResponse    `json:"source,omitempty"`
+	Enabled   bool             `json:"enabled"`
 	// LastSaver is the subject of the person who saved the trigger last.
 	LastSaver string `json:"lastSaver"`
 	// NeedsNewSave is true when the last saver no longer holds the actions
@@ -117,7 +129,14 @@ func (h *Handler) listTriggers(w http.ResponseWriter, r *http.Request, p identit
 
 	out := listResponse{Triggers: make([]triggerResponse, 0, len(list))}
 	for i := range list {
-		out.Triggers = append(out.Triggers, h.toResponse(r, p, &list[i], t))
+		one, err := h.toResponse(r, p, &list[i], t)
+		if err != nil {
+			h.writeError(ctx, w, err)
+
+			return
+		}
+
+		out.Triggers = append(out.Triggers, one)
 	}
 
 	h.writeJSON(ctx, w, http.StatusOK, out)
@@ -134,7 +153,14 @@ func (h *Handler) getTrigger(w http.ResponseWriter, r *http.Request, p identity.
 		return
 	}
 
-	h.writeJSON(ctx, w, http.StatusOK, h.toResponse(r, p, &got, t))
+	out, err := h.toResponse(r, p, &got, t)
+	if err != nil {
+		h.writeError(ctx, w, err)
+
+		return
+	}
+
+	h.writeJSON(ctx, w, http.StatusOK, out)
 }
 
 // createTrigger answers POST .../units/{unit_id}/triggers with the trigger that
@@ -157,8 +183,15 @@ func (h *Handler) createTrigger(w http.ResponseWriter, r *http.Request, p identi
 		return
 	}
 
+	out, err := h.toResponse(r, p, &got, t)
+	if err != nil {
+		h.writeError(ctx, w, err)
+
+		return
+	}
+
 	w.Header().Set("Location", triggerLocation(t, got.ID))
-	h.writeJSON(ctx, w, http.StatusCreated, h.toResponse(r, p, &got, t))
+	h.writeJSON(ctx, w, http.StatusCreated, out)
 }
 
 // replaceTrigger answers PUT .../triggers/{trigger_id} with the trigger that the
@@ -181,7 +214,14 @@ func (h *Handler) replaceTrigger(w http.ResponseWriter, r *http.Request, p ident
 		return
 	}
 
-	h.writeJSON(ctx, w, http.StatusOK, h.toResponse(r, p, &got, t))
+	out, err := h.toResponse(r, p, &got, t)
+	if err != nil {
+		h.writeError(ctx, w, err)
+
+		return
+	}
+
+	h.writeJSON(ctx, w, http.StatusOK, out)
 }
 
 // deleteTrigger answers DELETE .../triggers/{trigger_id} with 204.
@@ -397,8 +437,12 @@ func (h *Handler) saveInput(w http.ResponseWriter, r *http.Request, t *target) (
 }
 
 // toResponse maps a trigger to its wire shape for the caller p. t is the target
-// of the request: its unit is the unit of the trigger.
-func (h *Handler) toResponse(r *http.Request, p identity.Principal, got *trigger.Trigger, t *target) triggerResponse {
+// of the request: its unit is the unit of the trigger. It returns
+// errBrokenFrequency when the stored frequency of a schedule trigger has no
+// expression. The caller answers it as a failure of the server.
+func (h *Handler) toResponse(
+	r *http.Request, p identity.Principal, got *trigger.Trigger, t *target,
+) (triggerResponse, error) {
 	out := triggerResponse{
 		ID: string(got.ID), Namespace: got.Unit.Namespace.String(),
 		Unit: unitResponse{ID: t.unit.UnitID, Tool: toolLabel(t.unit.Tool), Name: t.unit.Name},
@@ -407,14 +451,22 @@ func (h *Handler) toResponse(r *http.Request, p identity.Principal, got *trigger
 	}
 
 	if got.Kind == trigger.KindSchedule {
-		out.Frequency = &frequencyBody{Preset: got.Frequency.Preset, Cron: got.Frequency.Cron}
+		expr, err := got.Frequency.Expression(got.Unit)
+		if err != nil {
+			h.logger.ErrorContext(r.Context(), "stored frequency has no expression",
+				slog.String("trigger_id", string(got.ID)))
+
+			return triggerResponse{}, errBrokenFrequency
+		}
+
+		out.Frequency = &frequencyAnswer{Preset: got.Frequency.Preset, Cron: got.Frequency.Cron, Expression: expr}
 	}
 
 	if got.Kind == trigger.KindFollows {
 		out.Source = h.sourceResponse(r, p, got.Source)
 	}
 
-	return out
+	return out, nil
 }
 
 // sourceResponse describes the source unit of a follows trigger. A source that
