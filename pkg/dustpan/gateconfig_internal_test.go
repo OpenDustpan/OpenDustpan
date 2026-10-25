@@ -13,6 +13,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"opendustpan.org/opendustpan/internal/pgtest"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/gate"
 	"opendustpan.org/opendustpan/pkg/gate/approverdirectorytest"
@@ -170,6 +171,12 @@ func groupFixture(t *testing.T, st principal.Store) approverdirectorytest.Fixtur
 // PostgreSQL case.
 const groupPostgresEnv = "DUSTPAN_TEST_POSTGRES_URL"
 
+// groupSchemaPrefixEnv names the variable that holds the start of the name of
+// each schema that newGroupSchema makes. TestMain sets it to a value that is
+// unique for the test binary, and lists the schemas with that start after the
+// tests.
+const groupSchemaPrefixEnv = "DUSTPAN_TEST_GROUP_SCHEMA_PREFIX"
+
 // newGroupSchema makes a schema for one case on the database at base, drops it
 // when the case ends, and returns the URL that uses it. The schemas of the
 // cases fill the disk otherwise.
@@ -181,11 +188,10 @@ func newGroupSchema(t *testing.T, base string) string {
 		t.Fatalf("random schema name: %v", err)
 	}
 
-	name := "test_" + hex.EncodeToString(suffix)
-	quoted := pgx.Identifier{name}.Sanitize()
+	name := os.Getenv(groupSchemaPrefixEnv) + hex.EncodeToString(suffix)
 
-	execGroupSQL(t, base, "CREATE SCHEMA "+quoted)
-	t.Cleanup(func() { execGroupSQL(t, base, "DROP SCHEMA "+quoted+" CASCADE") })
+	execGroupSQL(t, base, "CREATE SCHEMA "+pgx.Identifier{name}.Sanitize())
+	pgtest.DropSchemaAtCleanup(t, base, name)
 
 	u, err := url.Parse(base)
 	if err != nil {
