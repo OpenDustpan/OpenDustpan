@@ -165,7 +165,7 @@ var errBodyText = errors.New(
 var errInclude = errors.New("invalid include query parameter: send section names separated by commas")
 
 func (h *Handler) writeError(ctx context.Context, w http.ResponseWriter, err error) {
-	problem.Writer{Logger: h.logger, Classify: contextErrors}.Write(ctx, w, err)
+	problem.Writer{Logger: h.logger, KeepDenied: nil, Classify: contextErrors}.Write(ctx, w, err)
 }
 
 // contextErrors maps the errors of the context routes to an answer that is

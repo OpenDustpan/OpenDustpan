@@ -130,20 +130,14 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // writeError answers err through the shared error module of the
 // tool-neutral APIs, with the classes of the profile service.
 func (h *Handler) writeError(ctx context.Context, w http.ResponseWriter, err error) {
-	problem.Writer{Logger: h.logger, Classify: profileErrors}.Write(ctx, w, err)
+	problem.Writer{Logger: h.logger, KeepDenied: keepDenied, Classify: profileErrors}.Write(ctx, w, err)
 }
 
 // profileErrors maps the errors of the profile service and of the fresh
-// sign-in that a profile change needs. It runs before the shared classes
-// other than the credential refusals, so a routing refusal, which wraps
-// identity.ErrDenied, keeps its own code.
+// sign-in that a profile change needs.
 func profileErrors(err error) (problem.Problem, bool) {
 	if p, ok := freshErrors(err); ok {
 		return p, true
-	}
-
-	if routing, ok := errors.AsType[*profile.RoutingError](err); ok {
-		return profileProblem(http.StatusForbidden, errcode.ProfileRoutingChangeNeedsOpen, routing.Error()), true
 	}
 
 	switch {
@@ -160,6 +154,16 @@ func profileErrors(err error) (problem.Problem, bool) {
 	default:
 		return problem.Pass()
 	}
+}
+
+// keepDenied answers the one class of the profile API that wraps a denial and
+// keeps its own code: a refused change of the routing of a profile.
+func keepDenied(err error) (problem.Problem, bool) {
+	if routing, ok := errors.AsType[*profile.RoutingError](err); ok {
+		return profileProblem(http.StatusForbidden, errcode.ProfileRoutingChangeNeedsOpen, routing.Error()), true
+	}
+
+	return problem.Pass()
 }
 
 // freshErrors maps the errors of the fresh sign-in check: a request with no

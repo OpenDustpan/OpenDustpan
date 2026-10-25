@@ -46,7 +46,7 @@ func write(t *testing.T, classify problem.Classifier, err error) (*httptest.Resp
 
 	var buf bytes.Buffer
 
-	wr := problem.Writer{Logger: slog.New(slog.NewTextHandler(&buf, nil)), Classify: classify}
+	wr := problem.Writer{Logger: slog.New(slog.NewTextHandler(&buf, nil)), KeepDenied: nil, Classify: classify}
 	rec := httptest.NewRecorder()
 
 	wr.Write(t.Context(), rec, err)
@@ -240,7 +240,7 @@ func TestReauthenticate(t *testing.T) {
 
 // TestCredentialRefusalsComeFirst checks that a classifier that claims every
 // error still cannot answer a refusal of the credential, while it can answer
-// a refusal that wraps identity.ErrDenied.
+// a refusal that wraps identity.ErrDenied either.
 func TestCredentialRefusalsComeFirst(t *testing.T) {
 	t.Parallel()
 
@@ -260,8 +260,8 @@ func TestCredentialRefusalsComeFirst(t *testing.T) {
 	}
 
 	rec, _ := write(t, greedy, identity.ErrDenied)
-	if rec.Code != http.StatusTeapot {
-		t.Fatalf("denied: answer %d, want the classifier to answer it", rec.Code)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("denied: answer %d, want the denial", rec.Code)
 	}
 }
 
@@ -329,7 +329,7 @@ func TestEveryAnswerHasACode(t *testing.T) {
 	}
 
 	for _, err := range errs {
-		p := problem.Writer{Logger: nil, Classify: nil}.Problem(err)
+		p := problem.Writer{Logger: nil, KeepDenied: nil, Classify: nil}.Problem(err)
 		if _, ok := errcode.Lookup(p.Code); !ok {
 			t.Errorf("%v: code %q is not in the catalog", err, p.Code)
 		}
@@ -347,7 +347,7 @@ func TestWriteProblem(t *testing.T) {
 
 	var buf bytes.Buffer
 
-	wr := problem.Writer{Logger: slog.New(slog.NewTextHandler(&buf, nil)), Classify: nil}
+	wr := problem.Writer{Logger: slog.New(slog.NewTextHandler(&buf, nil)), KeepDenied: nil, Classify: nil}
 	rec := httptest.NewRecorder()
 
 	var p problem.Problem
@@ -429,8 +429,9 @@ func TestCredentialRefusalLogsTheWrap(t *testing.T) {
 	var buf bytes.Buffer
 
 	wr := problem.Writer{
-		Logger:   slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})),
-		Classify: nil,
+		Logger:     slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})),
+		KeepDenied: nil,
+		Classify:   nil,
 	}
 	rec := httptest.NewRecorder()
 
@@ -516,8 +517,9 @@ func TestWriteLogsRefusalsAtDebug(t *testing.T) {
 			var buf bytes.Buffer
 
 			wr := problem.Writer{
-				Logger:   slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})),
-				Classify: nil,
+				Logger:     slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})),
+				KeepDenied: nil,
+				Classify:   nil,
 			}
 			rec := httptest.NewRecorder()
 

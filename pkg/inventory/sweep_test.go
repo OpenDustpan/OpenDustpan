@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -136,6 +137,7 @@ func newSweepFixture(t *testing.T, entries []inventory.DeletedEntry, records []i
 	sweeper, err := inventory.NewSweeper(inventory.SweeperConfig{
 		Expired:    f.expired,
 		BlobPurges: f.records,
+		Lock:       newMemLock(),
 		Tools:      map[string]inventory.SweepTool{"pulumi": f.tool},
 		Logger:     slog.New(slog.NewTextHandler(f.log, nil)),
 		Now:        sweepNow,
@@ -419,6 +421,7 @@ func TestNewSweeperRefusesMissingPorts(t *testing.T) {
 		return inventory.SweeperConfig{
 			Expired:    &memExpired{entries: nil, calls: 0},
 			BlobPurges: &memRecords{records: nil, finished: nil, finishErr: nil, calls: 0},
+			Lock:       newMemLock(),
 			Tools:      map[string]inventory.SweepTool{"pulumi": newSweepTool()},
 			Logger:     slog.New(slog.DiscardHandler),
 			Now:        nil,
@@ -431,6 +434,7 @@ func TestNewSweeperRefusesMissingPorts(t *testing.T) {
 	}{
 		{name: "expired", drop: func(c *inventory.SweeperConfig) { c.Expired = nil }},
 		{name: "records", drop: func(c *inventory.SweeperConfig) { c.BlobPurges = nil }},
+		{name: "lock", drop: func(c *inventory.SweeperConfig) { c.Lock = nil }},
 		{name: "tools", drop: func(c *inventory.SweeperConfig) { c.Tools = nil }},
 		{name: "logger", drop: func(c *inventory.SweeperConfig) { c.Logger = nil }},
 	}
@@ -545,44 +549,84 @@ func (b *blockingTool) PurgeExpired(
 	return b.sweepTool.PurgeExpired(ctx, ns, unitID, dueBy, e)
 }
 
-// TestSweepRefusesASecondSweep proves that a sweep that starts while another
-// sweep runs returns ErrSweepRunning at once, and that the first sweep goes
-// on.
+// memLock is an inventory.SweepLocker that stands for the sweep lock of one
+// store. Sweepers that share a memLock stand for server processes on one
+// store.
+type memLock struct {
+	held atomic.Bool
+}
+
+func newMemLock() *memLock {
+	return &memLock{held: atomic.Bool{}}
+}
+
+func (m *memLock) TryLockSweep(_ context.Context) (func(), error) {
+	if !m.held.CompareAndSwap(false, true) {
+		return nil, inventory.ErrSweepRunning
+	}
+
+	return func() { m.held.Store(false) }, nil
+}
+
+// TestSweepRefusesASecondSweep proves that a sweep of a second server
+// process on the same store, which starts while a sweep runs, returns
+// ErrSweepRunning at once and does no work, that the first sweep goes on,
+// and that a sweep after the first one can run. The test uses no sleep: the
+// first sweep blocks in its tool until the second one answers.
 func TestSweepRefusesASecondSweep(t *testing.T) {
 	t.Parallel()
+
+	lock := newMemLock()
+	entries := expiredUnits(2)
 
 	tool := &blockingTool{
 		sweepTool: newSweepTool(), started: make(chan struct{}), release: make(chan struct{}), once: sync.Once{},
 	}
+	other := newSweepTool()
 
-	sweeper, err := inventory.NewSweeper(inventory.SweeperConfig{
-		Expired:    &memExpired{entries: expiredUnits(2), calls: 0},
-		BlobPurges: &memRecords{records: nil, finished: nil, finishErr: nil, calls: 0},
-		Tools:      map[string]inventory.SweepTool{"pulumi": tool},
-		Logger:     slog.New(slog.DiscardHandler),
-		Now:        sweepNow,
-	})
-	if err != nil {
-		t.Fatalf("new sweeper: %v", err)
+	newSweeper := func(tl inventory.SweepTool) *inventory.Sweeper {
+		sweeper, err := inventory.NewSweeper(inventory.SweeperConfig{
+			Expired:    &memExpired{entries: entries, calls: 0},
+			BlobPurges: &memRecords{records: nil, finished: nil, finishErr: nil, calls: 0},
+			Lock:       lock,
+			Tools:      map[string]inventory.SweepTool{"pulumi": tl},
+			Logger:     slog.New(slog.DiscardHandler),
+			Now:        sweepNow,
+		})
+		if err != nil {
+			t.Fatalf("new sweeper: %v", err)
+		}
+
+		return sweeper
 	}
 
+	first, second := newSweeper(tool), newSweeper(other)
 	done := make(chan inventory.SweepResult)
 
 	go func() {
-		res, _ := sweeper.Sweep(t.Context(), sweepEntry()) //nolint:errcheck // The test checks the result.
+		res, _ := first.Sweep(t.Context(), sweepEntry()) //nolint:errcheck // The test checks the result.
 		done <- res
 	}()
 
 	<-tool.started
 
-	if _, err := sweeper.Sweep(t.Context(), sweepEntry()); !errors.Is(err, inventory.ErrSweepRunning) {
+	res, err := second.Sweep(t.Context(), sweepEntry())
+	if !errors.Is(err, inventory.ErrSweepRunning) {
 		t.Fatalf("second sweep: err = %v, want ErrSweepRunning", err)
+	}
+
+	if len(res.Purged) != 0 || len(other.entries) != 0 {
+		t.Fatalf("second sweep did work: %d purged, %d tool calls, want none", len(res.Purged), len(other.entries))
 	}
 
 	close(tool.release)
 
 	if res := <-done; len(res.Purged) != 2 {
 		t.Fatalf("first sweep purged %d units, want 2", len(res.Purged))
+	}
+
+	if _, err := second.Sweep(t.Context(), sweepEntry()); err != nil {
+		t.Fatalf("sweep after the first one ended: %v", err)
 	}
 }
 
@@ -602,6 +646,7 @@ func TestSweepStopsWithoutFailures(t *testing.T) {
 	sweeper, err := inventory.NewSweeper(inventory.SweeperConfig{
 		Expired:    f.expired,
 		BlobPurges: f.records,
+		Lock:       newMemLock(),
 		Tools:      map[string]inventory.SweepTool{"pulumi": stopping},
 		Logger:     slog.New(slog.NewTextHandler(f.log, nil)),
 		Now:        sweepNow,

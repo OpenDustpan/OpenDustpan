@@ -13,10 +13,14 @@
 // Each API gives its own classifier for the errors of its domain. The
 // refusals of the credential of a request (a rate limit, no sign-in, a CSRF
 // or other-site session request) are answered first, so no classifier can
-// answer them in other words. The classifier runs next, before the other
+// answer them in other words. A denial is answered next: an error that wraps
+// identity.ErrDenied is a 403, whatever else it wraps, so no classifier can
+// tell the state of an object that the caller has no right on. An API lists
+// the few classes that wrap a denial and keep their own code in
+// Writer.KeepDenied. The classifier runs after the denial, before the other
 // shared classes, so an API can answer a shared error in its own words, for
 // example a not-found that never tells that an object exists. Writer.Problem
-// holds this order.
+// holds this order, so a new classifier needs no case for a denial.
 package problem
 
 import (
@@ -101,7 +105,17 @@ func Pass() (Problem, bool) {
 // Writer writes the error answers of one tool-neutral API.
 type Writer struct {
 	Logger *slog.Logger
-	// Classify answers the errors of the domain of the API. It may be nil.
+	// KeepDenied answers the classes of error that wrap identity.ErrDenied and
+	// keep their own code. The writer calls it only for an error that wraps
+	// identity.ErrDenied, so it cannot hide an error that is not a denial. Its
+	// answer must have status 403, or 404 for a class that hides that an object
+	// exists. For any other status the writer ignores the answer and answers the
+	// standard 403 access.denied, so a denial never becomes a success or a
+	// conflict. It may be nil.
+	KeepDenied Classifier
+	// Classify answers the errors of the domain of the API. It never sees an
+	// error that wraps identity.ErrDenied: the writer answers a denial before
+	// it calls Classify. It may be nil.
 	Classify Classifier
 }
 
@@ -186,15 +200,22 @@ func (p Problem) made() (errcode.Answer, error) {
 //  1. the refusals of the credential of a request (a rate limit, no
 //     sign-in, a CSRF or other-site session request), so no classifier can
 //     answer them in other words;
-//  2. the classifier of the API. It answers identity.ErrDenied first, so a
-//     refusal that wraps a denial keeps the denial's answer. The rest of it
-//     answers the refusals of its domain in its own words;
-//  3. the other shared classes.
+//  2. KeepDenied, for an error that wraps identity.ErrDenied: the classes
+//     of a denial that keep their own code, with status 403 or 404 only;
+//  3. any other error that wraps identity.ErrDenied, as a 403 forbidden, so a
+//     refusal that wraps a denial never tells the state of an object;
+//  4. the classifier of the API, which answers the refusals of its domain in
+//     its own words;
+//  5. the other shared classes.
 //
 // An error that none of them knows is a 500.
 func (wr Writer) Problem(err error) Problem {
 	if p, ok := credential(err); ok {
 		return p
+	}
+
+	if errors.Is(err, identity.ErrDenied) {
+		return wr.denied(err)
 	}
 
 	if wr.Classify != nil {
@@ -208,6 +229,21 @@ func (wr Writer) Problem(err error) Problem {
 	}
 
 	return Internal()
+}
+
+// denied returns the answer to an error that wraps identity.ErrDenied.
+func (wr Writer) denied(err error) Problem {
+	if wr.KeepDenied != nil {
+		// Defense in depth: the adapters list only 403 classes. This check stays
+		// so that a wrong KeepDenied cannot turn a denial into a success or a
+		// conflict, and it does not rely on the review of each adapter.
+		if p, ok := wr.KeepDenied(err); ok &&
+			(p.Status == http.StatusForbidden || p.Status == http.StatusNotFound) {
+			return p
+		}
+	}
+
+	return answer(http.StatusForbidden, errcode.Forbidden(err), "forbidden")
 }
 
 // Internal returns the answer to an error that no class knows.

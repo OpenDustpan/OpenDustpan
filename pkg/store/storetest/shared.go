@@ -4,6 +4,7 @@ import (
 	"errors"
 	"testing"
 
+	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/stack"
@@ -45,6 +46,7 @@ func RunShared(t *testing.T, newPair PairFactory) {
 			name: "a backup and a restore started on both handles at once give one running row each",
 			test: testSharedOneRunning,
 		},
+		{name: "the sweep lock of one handle refuses the other handle", test: testSharedSweepLock},
 	}
 
 	for _, tc := range cases {
@@ -124,4 +126,37 @@ func testSharedMaintenanceState(t *testing.T, a, b Store) {
 	if got, err := a.GetState(ctx); err != nil || got != maintenance.StateNormal {
 		t.Fatalf("get installation state = %q, %v, want normal without error", got, err)
 	}
+}
+
+// testSharedSweepLock proves that a sweep lock that one handle holds refuses
+// the other handle with ErrSweepRunning, and that the other handle can take
+// the lock after the release. The two handles stand for two server
+// processes on one store.
+func testSharedSweepLock(t *testing.T, storeA, storeB Store) {
+	t.Helper()
+
+	a, okA := storeA.(inventory.SweepLocker)
+	b, okB := storeB.(inventory.SweepLocker)
+
+	if !okA || !okB {
+		t.Fatalf("stores %T and %T do not implement inventory.SweepLocker", storeA, storeB)
+	}
+
+	release, err := a.TryLockSweep(t.Context())
+	if err != nil {
+		t.Fatalf("TryLockSweep on the first handle: %v", err)
+	}
+
+	if _, heldErr := b.TryLockSweep(t.Context()); !errors.Is(heldErr, inventory.ErrSweepRunning) {
+		t.Fatalf("TryLockSweep on the other handle while held: err = %v, want ErrSweepRunning", heldErr)
+	}
+
+	release()
+
+	release, err = b.TryLockSweep(t.Context())
+	if err != nil {
+		t.Fatalf("TryLockSweep on the other handle after the release: %v", err)
+	}
+
+	release()
 }
