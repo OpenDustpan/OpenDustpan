@@ -118,6 +118,12 @@ func TestKeyGenerateRefusesBadInput(t *testing.T) {
 		{"carriage return in the path", []string{"--out", dir + "/" + "a\rb.key"}, cli.ErrKeyOutInvalid},
 		{"escape in the path", []string{"--out", dir + "/" + "a\x1bb.key"}, cli.ErrKeyOutInvalid},
 		{"delete in the path", []string{"--out", dir + "/" + "a\x7fb.key"}, cli.ErrKeyOutInvalid},
+		{"a directory with a separator", []string{"--out", dir + "/"}, cli.ErrKeyOutDirectory},
+		{"a directory with two separators", []string{"--out", dir + "//"}, cli.ErrKeyOutDirectory},
+		{"the dot", []string{"--out", "."}, cli.ErrKeyOutDirectory},
+		{"the directory dot", []string{"--out", dir + "/."}, cli.ErrKeyOutDirectory},
+		{"the parent", []string{"--out", dir + "/.."}, cli.ErrKeyOutDirectory},
+		{"the root", []string{"--out", "/"}, cli.ErrKeyOutDirectory},
 		{"an operand", []string{"--out", filepath.Join(dir, "a.key"), "extra"}, cli.ErrKeyGenerateArgs},
 	}
 
@@ -284,5 +290,25 @@ func TestWriteKeyFileWritesContents(t *testing.T) {
 
 	if info.Mode().Perm() != cli.KeyFileMode {
 		t.Fatalf("key file mode = %o, want %o", info.Mode().Perm(), cli.KeyFileMode)
+	}
+}
+
+// TestWriteKeyFileRefusesDirectoryPath sends a path of a directory straight to
+// the writer, as if the check of key generate had failed: it writes no file
+// in the directory and answers ErrKeyOutDirectory.
+func TestWriteKeyFileRefusesDirectoryPath(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+
+	for _, path := range []string{dir + "/", dir + "//", dir + "/.", dir + "/..", "."} {
+		err := cli.WriteKeyFile(path, "AAAA\n", cli.WriteKeyContents)
+		if !errors.Is(err, cli.ErrKeyOutDirectory) {
+			t.Fatalf("WriteKeyFile(%q) error = %v, want ErrKeyOutDirectory", path, err)
+		}
+	}
+
+	if entries, err := os.ReadDir(dir); err != nil || len(entries) != 0 {
+		t.Fatalf("the writer made files in the directory (read err %v): %v", err, entries)
 	}
 }

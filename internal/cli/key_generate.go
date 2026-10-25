@@ -8,6 +8,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"path/filepath"
 	"strings"
 )
 
@@ -22,6 +23,8 @@ var (
 	)
 	// ErrKeyOutInvalid reports a path with a control character.
 	ErrKeyOutInvalid = errors.New("the key file path has a control character: set --out to a plain path")
+	// ErrKeyOutDirectory reports a path that names a directory, not a new file.
+	ErrKeyOutDirectory = errors.New("the key file path names a directory: set --out to the path of a new file")
 	// ErrKeyGenerateArgs reports an argument that key generate does not take.
 	ErrKeyGenerateArgs = errors.New("key generate takes no argument: set --out <path>")
 )
@@ -97,7 +100,24 @@ func checkKeyOut(out string) (string, error) {
 		}
 	}
 
+	if namesDirectory(path) {
+		return "", ErrKeyOutDirectory
+	}
+
 	return path, nil
+}
+
+// namesDirectory reports whether path names a directory by its form: it ends
+// in a separator, or its last element is . or ... Such a path has the base
+// name of the directory, so a write would put the file inside the directory.
+func namesDirectory(path string) bool {
+	if strings.HasSuffix(path, "/") || strings.HasSuffix(path, string(filepath.Separator)) {
+		return true
+	}
+
+	base := filepath.Base(path)
+
+	return base == "." || base == ".." || base == string(filepath.Separator)
 }
 
 // writeNewKey writes a new key to the file at path. The key stays in this
