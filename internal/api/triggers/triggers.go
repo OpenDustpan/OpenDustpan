@@ -284,7 +284,8 @@ func classifyJob(err error) (problem.Problem, bool) {
 	case errors.Is(err, job.ErrInvalid):
 		return problem.Refused(err, http.StatusBadRequest, errcode.JobInvalid), true
 	case errors.Is(err, job.ErrUnsupported):
-		return problem.Refused(err, http.StatusUnprocessableEntity, errcode.JobUnsupported), true
+		return problem.RefusedText(problem.Detail(err, job.ErrUnsupported),
+			http.StatusUnprocessableEntity, errcode.JobUnsupported), true
 	case errors.Is(err, job.ErrPolicyDenied):
 		return problem.Refused(err, http.StatusForbidden, errcode.JobPolicyDenied), true
 	case errors.Is(err, job.ErrGateEnforced):
