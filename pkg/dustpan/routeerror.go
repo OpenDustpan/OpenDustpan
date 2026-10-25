@@ -28,9 +28,12 @@ func routeAnswer(code string) errcode.Answer {
 	return answer
 }
 
-// writeRouteError answers status with message and the code of answer.
+// writeRouteError answers status with message and the code of answer. The
+// answer reports the state of the route at this moment, so a cache must not
+// keep it.
 func writeRouteError(w http.ResponseWriter, status int, message string, answer errcode.Answer) {
 	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(status)
 
 	doc := routeError{Message: message, Code: status, ErrorCode: answer.Code()}

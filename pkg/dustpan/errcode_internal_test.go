@@ -120,9 +120,13 @@ type sdkBody struct {
 }
 
 // checkSDKAnswer fails the test unless rec holds the answer of status with
-// the catalog code, a message and no argument.
+// the catalog code, a message, no argument and Cache-Control: no-store.
 func checkSDKAnswer(t *testing.T, rec *httptest.ResponseRecorder, status int, code string) {
 	t.Helper()
+
+	if got := rec.Header().Get("Cache-Control"); got != "no-store" {
+		t.Errorf("Cache-Control = %q, want no-store", got)
+	}
 
 	var got sdkBody
 
