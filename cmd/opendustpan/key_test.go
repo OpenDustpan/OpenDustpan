@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"opendustpan.org/opendustpan/internal/cli"
 )
 
 // clearKeyEnv clears every key-encryption key setting and sets the admin
@@ -21,68 +23,104 @@ func clearKeyEnv(t *testing.T) {
 	t.Setenv("DUSTPAN_DATABASE", "")
 }
 
+// The texts of the refusals of serve, word for word as the decision records
+// them. The tests compare the text of the error with these strings, so a change
+// of a word fails a test.
+const (
+	wantNoKeyText = "no key-encryption key is set: set --key-encryption-key-file " +
+		"(DUSTPAN_KEY_ENCRYPTION_KEY_FILE) or DUSTPAN_KEY_ENCRYPTION_KEY. " +
+		"To make a key file, run: opendustpan key generate --out <path>"
+	wantNoKeyTrialText = "no key-encryption key is set. For a trial, run: opendustpan dev"
+	wantNoDatabaseText = "no database is set: set --database (DUSTPAN_DATABASE), " +
+		"for example sqlite:/var/lib/opendustpan/dustpan.db"
+	wantNoDatabaseTrialText = "no database is set. For a trial, run: opendustpan dev"
+	wantDevEnvironmentText  = "DUSTPAN_DEV is set. The dev.env file of opendustpan dev sets it. " +
+		"Start serve in a new shell."
+)
+
 // refusalCase is one start of serve that must stop for a missing key or
-// database.
+// database. config is the text of a configuration file, empty for none. The
+// file goes in --config, or in DUSTPAN_CONFIG when configInEnv is true.
 type refusalCase struct {
-	name     string
-	terminal bool
-	args     []string
-	env      map[string]string
-	want     error
-	contains []string
+	name        string
+	terminal    bool
+	args        []string
+	env         map[string]string
+	config      string
+	configInEnv bool
+	want        string
 }
 
 // TestServeRefusesMissingDecisions proves that serve stops before it opens the
 // database when the key or the database is missing, checks the key first,
-// reports only the first, names one command, and gives the trial hint only to
-// a person at a terminal who set no setting of serve. Serve reads process
+// reports only the first, and gives the trial hint only to a person at a
+// terminal who set no setting of serve. A flag, a variable, --config,
+// DUSTPAN_CONFIG and a key of a configuration file each turn the hint off.
+// The text of each error is the text of the decision. Serve reads process
 // environment, so the cases run one after the other.
 func TestServeRefusesMissingDecisions(t *testing.T) {
 	t.Setenv("DUSTPAN_ADMIN_TOKEN", adminTestToken)
 
+	const fileWithKey = `{"region": "other"}`
+
 	cases := []refusalCase{
 		{
-			name: "no key, no terminal", terminal: false, args: nil, env: nil, want: errNoKey,
-			contains: []string{"--key-encryption-key-file", "DUSTPAN_KEY_ENCRYPTION_KEY", "key generate --out"},
+			name: "no key, no terminal", terminal: false, args: nil, env: nil,
+			config: "", configInEnv: false, want: wantNoKeyText,
 		},
 		{
-			name: "no key, terminal, no setting", terminal: true, args: nil, env: nil, want: errNoKeyTrial,
-			contains: []string{"opendustpan dev"},
+			name: "no key, terminal, no setting", terminal: true, args: nil, env: nil,
+			config: "", configInEnv: false, want: wantNoKeyTrialText,
 		},
 		{
 			name: "no key, terminal, a token is no setting", terminal: true, args: nil,
-			env: map[string]string{"DUSTPAN_ADMIN_TOKEN": adminTestToken}, want: errNoKeyTrial, contains: nil,
+			env: map[string]string{"DUSTPAN_ADMIN_TOKEN": adminTestToken}, config: "", configInEnv: false,
+			want: wantNoKeyTrialText,
 		},
 		{
 			name: "no key, terminal, a flag is a setting", terminal: true,
-			args: []string{"--listen", "127.0.0.1:0"}, env: nil, want: errNoKey, contains: nil,
+			args: []string{"--listen", "127.0.0.1:0"}, env: nil, config: "", configInEnv: false,
+			want: wantNoKeyText,
 		},
 		{
 			name: "no key, terminal, a variable is a setting", terminal: true, args: nil,
-			env: map[string]string{"DUSTPAN_REGION": "other"}, want: errNoKey, contains: nil,
+			env: map[string]string{"DUSTPAN_REGION": "other"}, config: "", configInEnv: false, want: wantNoKeyText,
+		},
+		{
+			name: "no key, terminal, --config with a key in the file", terminal: true, args: nil, env: nil,
+			config: fileWithKey, configInEnv: false, want: wantNoKeyText,
+		},
+		{
+			name: "no key, terminal, DUSTPAN_CONFIG with a key in the file", terminal: true, args: nil, env: nil,
+			config: fileWithKey, configInEnv: true, want: wantNoKeyText,
+		},
+		{
+			name: "no key, terminal, --config with an empty file", terminal: true, args: nil, env: nil,
+			config: "{}", configInEnv: false, want: wantNoKeyText,
 		},
 		{
 			name: "no key and no database report the key", terminal: false, args: nil, env: nil,
-			want: errNoKey, contains: nil,
+			config: "", configInEnv: false, want: wantNoKeyText,
 		},
 		{
 			name: "no database, no terminal", terminal: false, args: nil,
-			env: map[string]string{keyEnvVar: testKeyBase64()}, want: errNoDatabase,
-			contains: []string{"--database", "DUSTPAN_DATABASE", "sqlite:/var/lib/opendustpan/dustpan.db"},
+			env: map[string]string{keyEnvVar: testKeyBase64()}, config: "", configInEnv: false,
+			want: wantNoDatabaseText,
 		},
 		{
 			name: "no database, terminal, a key is a setting", terminal: true, args: nil,
-			env: map[string]string{keyEnvVar: testKeyBase64()}, want: errNoDatabase, contains: nil,
+			env: map[string]string{keyEnvVar: testKeyBase64()}, config: "", configInEnv: false,
+			want: wantNoDatabaseText,
 		},
 		{
 			name: "no database, a key file", terminal: false,
-			args: []string{"--key-encryption-key-file", "missing.key"}, env: nil, want: errNoDatabase,
-			contains: nil,
+			args: []string{"--key-encryption-key-file", "missing.key"}, env: nil, config: "", configInEnv: false,
+			want: wantNoDatabaseText,
 		},
 		{
-			name: "no database, terminal, no key setting but a file", terminal: true,
-			args: []string{"--key-encryption-key-file", "missing.key"}, env: nil, want: errNoDatabase,
-			contains: nil,
+			name: "no database, terminal, a key file", terminal: true,
+			args: []string{"--key-encryption-key-file", "missing.key"}, env: nil, config: "", configInEnv: false,
+			want: wantNoDatabaseText,
 		},
 	}
 
@@ -104,17 +142,122 @@ func checkRefusal(t *testing.T, tc refusalCase) {
 		t.Setenv(name, value)
 	}
 
-	var logs lockedBuffer
+	args := tc.args
 
-	err := serveWithIO(t.Context(), tc.args, &logs, tc.terminal)
-	if !errors.Is(err, tc.want) {
-		t.Fatalf("serve error = %v, want %v", err, tc.want)
+	if tc.config != "" {
+		path := writeConfig(t, tc.config)
+
+		if tc.configInEnv {
+			t.Setenv("DUSTPAN_CONFIG", path)
+		} else {
+			args = append([]string{"--config", path}, args...)
+		}
 	}
 
-	for _, want := range tc.contains {
-		if !strings.Contains(err.Error(), want) {
-			t.Fatalf("serve error = %q, want it to name %q", err, want)
-		}
+	var logs lockedBuffer
+
+	err := serveWithIO(t.Context(), args, &logs, tc.terminal)
+	if err == nil || err.Error() != tc.want {
+		t.Fatalf("serve error = %v, want exactly %q", err, tc.want)
+	}
+}
+
+// TestRefusalTextsOfTheDecision pins the texts of the four errors and of the
+// refusal of DUSTPAN_DEV word for word. The trial hint for a missing
+// database is only reachable when the key is set, and a key is a setting
+// that turns the hint off, so a start cannot show it today: this test keeps
+// its text as the decision records it.
+func TestRefusalTextsOfTheDecision(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		err  error
+		want string
+	}{
+		{"no key", errNoKey, wantNoKeyText},
+		{"no key, trial", errNoKeyTrial, wantNoKeyTrialText},
+		{"no database", errNoDatabase, wantNoDatabaseText},
+		{"no database, trial", errNoDatabaseTrial, wantNoDatabaseTrialText},
+		{"DUSTPAN_DEV", errDevEnvironment, wantDevEnvironmentText},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := tc.err.Error(); got != tc.want {
+				t.Fatalf("error text = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestNoSettings proves which layers turn the trial hint off: a flag, a
+// variable and a key of a configuration file each do. A value of the default
+// does not. The two variables that a shell often exports for other tools do
+// not. A key in the variable does. It sets the layers directly, because a
+// configuration file needs --config or DUSTPAN_CONFIG, which are settings
+// too, so a start cannot show the layer of the file alone.
+func TestNoSettings(t *testing.T) {
+	t.Parallel()
+
+	setting := func(env string, source cli.Source) cli.Resolved {
+		return cli.Resolved{Setting: cli.ByEnv(env), Source: source, Value: "", Layers: nil}
+	}
+
+	cases := []struct {
+		name     string
+		resolved []cli.Resolved
+		env      map[string]string
+		want     bool
+	}{
+		{"only defaults", []cli.Resolved{setting("DUSTPAN_REGION", cli.SourceDefault)}, nil, true},
+		{"a flag", []cli.Resolved{setting("DUSTPAN_REGION", cli.SourceFlag)}, nil, false},
+		{"a variable", []cli.Resolved{setting("DUSTPAN_REGION", cli.SourceEnv)}, nil, false},
+		{"a key of a file", []cli.Resolved{setting("DUSTPAN_REGION", cli.SourceFile)}, nil, false},
+		{"an admin token variable", []cli.Resolved{setting("DUSTPAN_ADMIN_TOKEN", cli.SourceEnv)}, nil, true},
+		{"an admin token file variable", []cli.Resolved{setting("DUSTPAN_ADMIN_TOKEN_FILE", cli.SourceEnv)}, nil, true},
+		{
+			"a key in the variable",
+			[]cli.Resolved{setting("DUSTPAN_REGION", cli.SourceDefault)},
+			map[string]string{keyEnvVar: testKeyBase64()},
+			false,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			var f serveFlags
+
+			f.resolved = tc.resolved
+
+			lookup := func(name string) (string, bool) {
+				value, ok := tc.env[name]
+
+				return value, ok
+			}
+
+			if got := f.noSettings(lookup); got != tc.want {
+				t.Fatalf("noSettings = %t, want %t", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestServeRefusesTheRemovedKeyFlag proves that the flag that made a key file
+// is gone: serve does not know it, and it makes no file.
+func TestServeRefusesTheRemovedKeyFlag(t *testing.T) {
+	t.Setenv("DUSTPAN_ADMIN_TOKEN", adminTestToken)
+	clearKeyEnv(t)
+
+	var logs lockedBuffer
+
+	err := serveWithIO(t.Context(), []string{"--generate-key-encryption-key"}, &logs, false)
+	if err == nil || !strings.Contains(logs.String(), "flag provided but not defined: -generate-key-encryption-key") {
+		t.Fatalf("serve with the removed flag: err = %v, output:\n%s", err, logs.String())
 	}
 }
 

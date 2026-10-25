@@ -28,7 +28,6 @@ func TestServeDecisions(t *testing.T) {
 	dir := t.TempDir()
 	keyFile := filepath.Join(dir, "serve.key")
 	devKeyFile := filepath.Join(dir, "dev.key")
-	database := "sqlite:" + filepath.Join(dir, "serve.db")
 
 	writeServeKey(t, keyFile)
 
@@ -40,13 +39,13 @@ func TestServeDecisions(t *testing.T) {
 
 	cases := []struct {
 		name string
-		args []string
+		args func(database string) []string
 		env  []string
 		want string
 	}{
 		{
 			name: "no key",
-			args: []string{"serve", "--database", database},
+			args: func(database string) []string { return []string{"serve", "--database", database} },
 			env:  nil,
 			want: "opendustpan: no key-encryption key is set: set --key-encryption-key-file " +
 				"(DUSTPAN_KEY_ENCRYPTION_KEY_FILE) or DUSTPAN_KEY_ENCRYPTION_KEY. " +
@@ -54,21 +53,25 @@ func TestServeDecisions(t *testing.T) {
 		},
 		{
 			name: "no database",
-			args: []string{"serve", "--key-encryption-key-file", keyFile},
+			args: func(string) []string { return []string{"serve", "--key-encryption-key-file", keyFile} },
 			env:  nil,
 			want: "opendustpan: no database is set: set --database (DUSTPAN_DATABASE), " +
 				"for example sqlite:/var/lib/opendustpan/dustpan.db",
 		},
 		{
 			name: "DUSTPAN_DEV in the shell",
-			args: []string{"serve", "--database", database, "--key-encryption-key-file", keyFile},
-			env:  []string{"DUSTPAN_DEV=1"},
+			args: func(database string) []string {
+				return []string{"serve", "--database", database, "--key-encryption-key-file", keyFile}
+			},
+			env: []string{"DUSTPAN_DEV=1"},
 			want: "opendustpan: DUSTPAN_DEV is set. The dev.env file of opendustpan dev sets it. " +
 				"Start serve in a new shell.",
 		},
 		{
 			name: "key file of dev",
-			args: []string{"serve", "--database", database, "--key-encryption-key-file", devKeyFile},
+			args: func(database string) []string {
+				return []string{"serve", "--database", database, "--key-encryption-key-file", devKeyFile}
+			},
 			env:  nil,
 			want: "the key file was made by opendustpan dev: serve refuses it",
 		},
@@ -78,7 +81,11 @@ func TestServeDecisions(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			out, err := runBinaryWithEnv(t, bin, tc.env, tc.args...)
+			// Each case has its own database path. The check that serve did not
+			// open it runs inside the case, after the binary ended.
+			databaseFile := filepath.Join(t.TempDir(), "serve.db")
+
+			out, err := runBinaryWithEnv(t, bin, tc.env, tc.args("sqlite:"+databaseFile)...)
 
 			exit, isExit := errors.AsType[*exec.ExitError](err)
 			if !isExit || exit.ExitCode() != 1 {
@@ -88,10 +95,10 @@ func TestServeDecisions(t *testing.T) {
 			if !strings.Contains(out, tc.want) {
 				t.Fatalf("serve output lacks %q:\n%s", tc.want, out)
 			}
-		})
-	}
 
-	if _, err := os.Stat(filepath.Join(dir, "serve.db")); !os.IsNotExist(err) {
-		t.Fatalf("a refused serve opened the database (stat err = %v)", err)
+			if _, statErr := os.Stat(databaseFile); !errors.Is(statErr, os.ErrNotExist) {
+				t.Fatalf("a refused serve opened the database (stat err = %v)", statErr)
+			}
+		})
 	}
 }
