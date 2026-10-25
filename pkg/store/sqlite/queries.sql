@@ -352,13 +352,18 @@ ON CONFLICT (stack_id, update_id) DO UPDATE SET
     blob_size = excluded.blob_size,
     blob_md5 = excluded.blob_md5;
 
--- name: ListCheckpointBlobKeys :many
--- Every blob key the checkpoints of one stack name, ordered. A sweeper
--- compares this set against the stored objects to find blobs no checkpoint
--- references.
+-- name: ListReferencedBlobKeys :many
+-- Every blob key that a row of one stack names, ordered, without duplicates:
+-- the blobs of the checkpoints and the blobs of the journal batches. A
+-- sweeper compares this set against the stored objects to find blobs that no
+-- row references.
 SELECT blob_key
 FROM checkpoints
-WHERE stack_id = ?
+WHERE checkpoints.stack_id = sqlc.arg('stack_id')
+UNION
+SELECT blob_key
+FROM update_journal
+WHERE update_journal.stack_id = sqlc.arg('stack_id')
 ORDER BY blob_key;
 
 -- name: SoftDeleteStack :execrows

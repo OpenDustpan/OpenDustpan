@@ -415,8 +415,8 @@ func (m *memUpdates) CheckpointByUpdate(
 	return m.withScope(cp), nil
 }
 
-// ReferencedCheckpointKeys implements stack.CheckpointStore.
-func (m *memUpdates) ReferencedCheckpointKeys(
+// ReferencedBlobKeys implements stack.CheckpointStore.
+func (m *memUpdates) ReferencedBlobKeys(
 	_ context.Context, ref stack.Ref,
 ) ([]blob.Key, error) {
 	m.mu.Lock()
@@ -1631,7 +1631,7 @@ func TestStartKeepsReferencedBlobs(t *testing.T) {
 		t.Fatalf("complete first update: %v", err)
 	}
 
-	refs, err := f.store.ReferencedCheckpointKeys(ctx, f.ref)
+	refs, err := f.store.ReferencedBlobKeys(ctx, f.ref)
 	if err != nil || len(refs) != 1 {
 		t.Fatalf("referenced keys: %v, %v; want one", refs, err)
 	}
