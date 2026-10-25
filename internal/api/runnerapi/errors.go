@@ -207,6 +207,10 @@ var errBadBody = errors.New("the body is not the JSON object of this path")
 // 500 with server.internal.
 func classifyManagement(err error) (problem.Problem, bool) {
 	switch {
+	// A denial wins over every refusal and conflict below, so a mixed error never
+	// tells the state of an object the caller has no right on.
+	case errors.Is(err, identity.ErrDenied):
+		return answer(http.StatusForbidden, errcode.Forbidden(err), "forbidden")
 	case errors.Is(err, errNotFound), errors.Is(err, runner.ErrNotFound), errors.Is(err, namespace.ErrNotFound):
 		return answer(http.StatusNotFound, errcode.RunnerNotFound, errNotFound.Error())
 	case errors.Is(err, runner.ErrInvalid):

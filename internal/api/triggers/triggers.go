@@ -193,9 +193,14 @@ type cycleResponse struct {
 var errNotFound = errors.New("not found")
 
 // errBrokenFrequency is the error of a stored schedule trigger whose frequency
-// has no expression. The save checks the frequency, so such a record is broken.
-// The text does not wrap trigger.ErrInvalid: the answer is a failure of the
-// server, not a request that the caller must fix.
+// has no expression. The save checks the frequency, and the store refuses such
+// a row when it reads it, so the record is broken. The text does not wrap
+// trigger.ErrInvalid: the answer is a failure of the server, not a request that
+// the caller must fix.
+//
+// Defense in depth: the store validates each row on load; this check stays so
+// that a row written outside the store, or by another version, never answers
+// as a valid trigger. It does not rely on the store.
 var errBrokenFrequency = errors.New("stored schedule frequency has no expression")
 
 // errBody reports a request body that is not valid.
@@ -213,7 +218,9 @@ const maxMessageBytes = 300
 func (h *Handler) writeError(ctx context.Context, w http.ResponseWriter, err error) {
 	wr := problem.Writer{Logger: h.logger, Classify: classify}
 
-	if cycle, ok := errors.AsType[*trigger.CycleError](err); ok {
+	// A denial wins over the cycle answer too: a caller with no right on the
+	// loop gets the same 403 as for any other refusal.
+	if cycle, ok := errors.AsType[*trigger.CycleError](err); ok && !errors.Is(err, identity.ErrDenied) {
 		h.writeCycle(ctx, w, wr, cycle)
 
 		return
@@ -258,6 +265,13 @@ func classify(err error) (problem.Problem, bool) {
 		return fail(http.StatusForbidden, errcode.TriggerSaverDenied,
 			"the person who saves the trigger needs a stored principal that holds the actions to change "+
 				"the unit and to start a plan on it, and to read the source unit of a follows trigger")
+	case errors.Is(err, identity.ErrDenied):
+		// A denial wins over every refusal below, so a mixed error never tells the
+		// state of an object the caller has no right on.
+		return problem.Problem{
+			Status: http.StatusForbidden, Code: errcode.Forbidden(err), Values: nil, Message: "forbidden",
+			RetryAfter: 0, Reauthenticate: "",
+		}, true
 	case errors.Is(err, errNotFound), errors.Is(err, namespace.ErrNotFound), errors.Is(err, trigger.ErrNotFound):
 		return fail(http.StatusNotFound, errcode.TriggerNotFound, errNotFound.Error())
 	}

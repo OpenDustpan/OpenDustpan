@@ -35,3 +35,11 @@ func WriteErrorTo(
 
 	h.writeError(ctx, w, err)
 }
+
+// ErrNotFound is the not-found answer of the jobs API, for a test of its
+// precedence.
+var ErrNotFound = errNotFound
+
+// ErrBody is the error of a request body that is not valid, for a test of its
+// precedence.
+var ErrBody = errBody

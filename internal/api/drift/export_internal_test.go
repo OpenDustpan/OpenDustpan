@@ -35,3 +35,17 @@ func WriteErrorTo(
 
 	h.writeError(ctx, w, err)
 }
+
+// ErrNotFound is the not-found answer of the drift API, for a test of its
+// precedence.
+var ErrNotFound = errNotFound
+
+// ErrBody is the error of a request body that is not valid, for a test of its
+// precedence.
+var ErrBody = errBody
+
+// AuditReason returns the audit reason of err for a refused start, and false
+// for an error that writes no entry.
+func AuditReason(err error) (string, bool) {
+	return refusalReason(err)
+}

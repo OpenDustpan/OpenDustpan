@@ -11,6 +11,8 @@ import (
 
 	"opendustpan.org/opendustpan/internal/api/apidesc/headertest"
 	driftapi "opendustpan.org/opendustpan/internal/api/drift"
+	"opendustpan.org/opendustpan/internal/api/refusal"
+	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/drift"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -210,13 +212,13 @@ func TestStartCheckErrors(t *testing.T) {
 			"policy denied that also wraps denied",
 			fmt.Errorf("%w: %w", identity.ErrDenied, job.ErrPolicyDenied),
 			http.StatusForbidden,
-			"job.policy-denied",
+			errcode.AccessDenied,
 		},
 		{
 			"frozen that also wraps denied",
 			fmt.Errorf("%w: %w", identity.ErrDenied, job.ErrFrozen),
-			http.StatusConflict,
-			"job.frozen",
+			http.StatusForbidden,
+			errcode.AccessDenied,
 		},
 		{"job not found", job.ErrNotFound, http.StatusNotFound, ""},
 		{"not home", namespace.ErrNotHome, http.StatusMisdirectedRequest, ""},
@@ -336,13 +338,13 @@ func TestStartWritesADenialForEachRefusal(t *testing.T) {
 		{
 			"policy that also wraps denied",
 			fmt.Errorf("%w: %w: hunter2", identity.ErrDenied, job.ErrPolicyDenied),
-			"policy denied the job",
+			refusal.ReasonPolicy,
 		},
 		{
 			"gate that also wraps denied",
 			fmt.Errorf("%w: %w", identity.ErrDenied,
 				&job.GateError{Gates: []job.EnforcedGate{{Scope: "s", ID: "no-plans", Point: "p"}}}),
-			"no-plans",
+			refusal.ReasonPolicy,
 		},
 	}
 
