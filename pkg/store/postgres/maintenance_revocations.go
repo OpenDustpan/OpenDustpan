@@ -392,7 +392,7 @@ func replayPlan(live, kind string) ([]replayStep, bool) {
 			{sql: "UPDATE " + schema + ".runners SET retired_at_ms = $2 WHERE id = $1 AND retired_at_ms = 0",
 				third: thirdNone},
 			{sql: "UPDATE " + schema + ".durable_operations SET claim_owner = NULL, claim_expires_at_ms = 0 " +
-				"WHERE state = 'running' AND claim_owner = $1::text", third: thirdNone},
+				"WHERE state = 'running' AND claim_owner = $1::text AND $2::bigint > 0", third: thirdNone},
 		}, true
 	default:
 		return nil, false
