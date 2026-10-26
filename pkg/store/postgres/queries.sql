@@ -428,21 +428,22 @@ ON CONFLICT (stack_id, update_id) DO UPDATE SET
     blob_md5 = excluded.blob_md5;
 
 -- name: ListReferencedBlobKeys :many
--- Every blob key that a row of one stack names, ordered, without duplicates:
--- the blobs of the checkpoints and the blobs of the journal batches. A
--- sweeper compares this set against the stored objects to find blobs that no
--- row references. One statement finds the stack by its reference and reads
--- the keys, so the read needs no transaction. No stack returns no row.
-SELECT c.blob_key
-FROM checkpoints AS c
-JOIN stacks AS st ON st.id = c.stack_id
-WHERE st.namespace = @namespace AND st.project = @project AND st.name = @name AND st.deleted_at_ms IS NULL
-UNION
-SELECT j.blob_key
-FROM update_journal AS j
-JOIN stacks AS st ON st.id = j.stack_id
-WHERE st.namespace = @namespace AND st.project = @project AND st.name = @name AND st.deleted_at_ms IS NULL
-ORDER BY blob_key;
+-- Every blob key that a row of one live stack names, ordered, without
+-- duplicates: the blobs of the checkpoints and the blobs of the journal
+-- batches. A sweeper compares this set against the stored objects to find
+-- blobs that no row references. The stack is the driving table, so one
+-- statement tells a stack without keys (one row with an empty key) from a
+-- stack that is missing or soft-deleted (no row), and the read needs no
+-- transaction.
+SELECT CAST(COALESCE(k.blob_key, '') AS TEXT) AS blob_key
+FROM stacks AS st
+LEFT JOIN (
+    SELECT c.stack_id, c.blob_key FROM checkpoints AS c
+    UNION
+    SELECT j.stack_id, j.blob_key FROM update_journal AS j
+) AS k ON k.stack_id = st.id
+WHERE st.id = @stack_id AND st.deleted_at_ms IS NULL
+ORDER BY 1;
 
 -- name: SoftDeleteStack :execrows
 -- Moves the name to deleted_name and frees it (ADR 47). A stack name cannot

@@ -885,7 +885,7 @@ func (s *fakeBackupStore) CheckpointByUpdate(
 
 // ReferencedBlobKeys implements stack.CheckpointStore.
 func (s *fakeBackupStore) ReferencedBlobKeys(
-	_ context.Context, ref stack.Ref,
+	_ context.Context, id stack.ID,
 ) ([]blob.Key, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -894,15 +894,22 @@ func (s *fakeBackupStore) ReferencedBlobKeys(
 		return nil, errFakeClosed
 	}
 
-	stackID, err := s.stackIDOf(ref)
-	if err != nil {
-		return nil, nil
+	stackID := id.String()
+
+	found := false
+
+	for _, st := range s.data.stacks {
+		found = found || st.ID == id
+	}
+
+	if !found {
+		return nil, stack.ErrNotFound
 	}
 
 	var out []blob.Key
 
-	for id := range s.data.checkpoints[stackID] {
-		if cp := s.data.checkpoints[stackID][id]; cp.BlobKey != "" {
+	for cpID := range s.data.checkpoints[stackID] {
+		if cp := s.data.checkpoints[stackID][cpID]; cp.BlobKey != "" {
 			out = append(out, cp.BlobKey)
 		}
 	}
