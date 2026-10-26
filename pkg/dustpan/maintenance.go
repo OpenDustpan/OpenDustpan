@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
-	stdpath "path"
 	"strings"
 
 	"opendustpan.org/opendustpan/internal/errcode"
@@ -84,13 +83,30 @@ func newReducingRunnerRoutes() *http.ServeMux {
 // form, so that a redirect or a rewrite cannot reach a route that the table
 // does not name.
 func isReducingRunnerRoute(routes *http.ServeMux, r *http.Request) bool {
-	if r.URL.Path != stdpath.Clean(r.URL.Path) {
+	if !canonicalPath(r.URL.Path) {
 		return false
 	}
 
 	_, pattern := routes.Handler(r)
 
 	return pattern != ""
+}
+
+// canonicalPath reports whether p is an absolute path with no empty segment
+// and no "." or ".." segment.
+func canonicalPath(p string) bool {
+	rest, ok := strings.CutPrefix(p, "/")
+	if !ok {
+		return false
+	}
+
+	for segment := range strings.SplitSeq(rest, "/") {
+		if segment == "" || segment == "." || segment == ".." {
+			return false
+		}
+	}
+
+	return true
 }
 
 // withRunnerMaintenance is withMaintenance for the runner management API: a
