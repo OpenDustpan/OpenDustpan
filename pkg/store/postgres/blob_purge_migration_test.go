@@ -42,16 +42,44 @@ func TestBlobPurgeNamespaceIDMigration(t *testing.T) {
 	applyTagMigrations(ctx, t, withControlSchema(t, schemaURL), before)
 
 	liveID := namespace.NewID()
+	cases := blobPurgeMigrationCases(liveID)
 
-	cases := []struct {
-		name   string
-		unitID string
-		ns     string
-		want   namespace.ID
-	}{
+	plantBlobPurges(t, schemaURL, liveID, cases)
+
+	s := openURL(t, schemaURL)
+
+	records, err := s.ListBlobPurges(ctx, nil, 100)
+	if err != nil || len(records) != len(cases) {
+		t.Fatalf("blob purge records = %d (%v), want %d", len(records), err, len(cases))
+	}
+
+	checkMigratedBlobPurges(t, records, cases)
+}
+
+// blobPurgeMigrationCase is one planted record and the namespace ID that the
+// migration must give it.
+type blobPurgeMigrationCase struct {
+	name   string
+	unitID string
+	ns     string
+	want   namespace.ID
+}
+
+// blobPurgeMigrationCases returns a record of the live namespace shop and a
+// record of a namespace that does not exist.
+func blobPurgeMigrationCases(liveID namespace.ID) []blobPurgeMigrationCase {
+	return []blobPurgeMigrationCase{
 		{name: "a live namespace gets its ID", unitID: "stk-live", ns: "shop", want: liveID},
 		{name: "a missing namespace gets the empty ID", unitID: "stk-gone", ns: "missing", want: ""},
 	}
+}
+
+// plantBlobPurges inserts the namespace shop and the records of cases in the
+// shape before the migration: the namespace name, no ID.
+func plantBlobPurges(t *testing.T, schemaURL string, liveID namespace.ID, cases []blobPurgeMigrationCase) {
+	t.Helper()
+
+	ctx := t.Context()
 
 	conn, err := pgx.Connect(ctx, schemaURL)
 	if err != nil {
@@ -77,18 +105,16 @@ func TestBlobPurgeNamespaceIDMigration(t *testing.T) {
 	if closeErr := conn.Close(ctx); closeErr != nil {
 		t.Fatalf("close: %v", closeErr)
 	}
+}
 
-	s := openURL(t, schemaURL)
-
-	records, err := s.ListBlobPurges(ctx, nil, 100)
-	if err != nil || len(records) != len(cases) {
-		t.Fatalf("blob purge records = %d (%v), want %d", len(records), err, len(cases))
-	}
+// checkMigratedBlobPurges checks the namespace ID of each record against its case.
+func checkMigratedBlobPurges(t *testing.T, records []inventory.BlobPurge, cases []blobPurgeMigrationCase) {
+	t.Helper()
 
 	for _, tc := range cases {
 		i := slices.IndexFunc(records, func(r inventory.BlobPurge) bool { return r.UnitID == tc.unitID })
 		if i < 0 || records[i].NamespaceID != tc.want {
-			t.Errorf("%s: record = %+v, want namespace ID %q", tc.name, records, tc.want)
+			t.Errorf("%s: records = %+v, want namespace ID %q", tc.name, records, tc.want)
 		}
 	}
 }
