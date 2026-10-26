@@ -15,10 +15,10 @@ import (
 	"strconv"
 	"strings"
 
-	"opendustpan.org/opendustpan/internal/source"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/outputshare"
+	"opendustpan.org/opendustpan/pkg/source"
 )
 
 // PortableOpener opens the file at path of a portable backup for reading. The

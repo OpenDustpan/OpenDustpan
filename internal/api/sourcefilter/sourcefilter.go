@@ -18,10 +18,10 @@ import (
 	"opendustpan.org/opendustpan/internal/api/route"
 	"opendustpan.org/opendustpan/internal/denylimit"
 	"opendustpan.org/opendustpan/internal/sessionauth"
-	"opendustpan.org/opendustpan/internal/source"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/source"
 )
 
 // ErrMissingDependency reports a Config without a required dependency.

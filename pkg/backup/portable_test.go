@@ -12,11 +12,11 @@ import (
 	"testing"
 	"time"
 
-	"opendustpan.org/opendustpan/internal/source"
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/installation"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/outputshare"
+	"opendustpan.org/opendustpan/pkg/source"
 )
 
 // exampleTable has one column of each kind, so the writer's forms are all

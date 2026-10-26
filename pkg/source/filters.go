@@ -56,7 +56,7 @@ type filterDocument struct {
 // EncodeFilter returns the text of f: a JSON object with the keys
 // "submodules", "largeFiles", "failOnDenied" and "protectedBranches", where
 // a list that is empty is []. One filter always gives one text. It returns
-// ErrInvalid when f fails Filter.Validate, and ErrTooLarge when the text has
+// ErrInvalid when f fails Filter.Validate, and ErrFilterTooLarge when the text has
 // more than MaxFilterJSON bytes.
 func EncodeFilter(f Filter) (string, error) {
 	if err := f.Validate(); err != nil {
@@ -76,7 +76,7 @@ func EncodeFilter(f Filter) (string, error) {
 	}
 
 	if len(raw) > MaxFilterJSON {
-		return "", fmt.Errorf("%w: the filter has at most %d bytes", ErrTooLarge, MaxFilterJSON)
+		return "", fmt.Errorf("%w: the filter has at most %d bytes", ErrFilterTooLarge, MaxFilterJSON)
 	}
 
 	return string(raw), nil
@@ -86,7 +86,7 @@ func EncodeFilter(f Filter) (string, error) {
 // empty filter. Any other text must be one JSON object with the keys of
 // EncodeFilter only, at most MaxFilterJSON bytes, and no data after the
 // object, and its value must pass Filter.Validate. It returns ErrInvalid
-// for a text that is not so, and ErrTooLarge above MaxFilterJSON bytes. The
+// for a text that is not so, and ErrFilterTooLarge above MaxFilterJSON bytes. The
 // error does not hold the text.
 func DecodeFilter(text string) (Filter, error) {
 	var none Filter
@@ -96,7 +96,7 @@ func DecodeFilter(text string) (Filter, error) {
 	}
 
 	if len(text) > MaxFilterJSON {
-		return none, fmt.Errorf("%w: the filter has at most %d bytes", ErrTooLarge, MaxFilterJSON)
+		return none, fmt.Errorf("%w: the filter has at most %d bytes", ErrFilterTooLarge, MaxFilterJSON)
 	}
 
 	// A JSON null decodes to an empty document, so the first byte must open an

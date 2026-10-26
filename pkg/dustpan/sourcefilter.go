@@ -5,7 +5,7 @@ import (
 	"net/http"
 
 	"opendustpan.org/opendustpan/internal/api/sourcefilter"
-	"opendustpan.org/opendustpan/internal/source"
+	"opendustpan.org/opendustpan/pkg/source"
 )
 
 // WithSourceFilters sets the store of the source filter of each namespace. With
