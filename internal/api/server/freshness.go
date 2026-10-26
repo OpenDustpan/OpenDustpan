@@ -73,18 +73,6 @@ func requireFresh(r *http.Request) error {
 	return check(r)
 }
 
-// reauthenticateResponse is the error body of a token change from a
-// console session whose sign-in is too old. Reauthenticate is the path
-// that starts a new sign-in; the console adds the query parameter return.
-//
-// Contract: never remove or rename these fields.
-type reauthenticateResponse struct {
-	Message        string `json:"message"`
-	Reauthenticate string `json:"reauthenticate"`
-	Code           int    `json:"code"`
-	ErrorCode      string `json:"errorCode"`
-}
-
 // freshParam reports whether the start of a sign-in asks for a new
 // authentication at the identity provider (fresh=1). Another value of the
 // parameter returns errFreshParam.
