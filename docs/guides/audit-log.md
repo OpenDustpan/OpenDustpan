@@ -632,7 +632,9 @@ On the two `log-decryption` routes the call still answers, so the counter is
 the only record of the lost entry besides the log line.
 On a route that answers a secret value the call answers 500 with no value.
 Alert when the counter is above zero.
-This is the alert for failed logging (PCI DSS 10.7).
+We designed this alert against NIST SP 800-53 AU-5 and PCI DSS v4.0.1
+requirement 10.7, which ask for an alert when audit logging fails. This is not
+a compliance claim.
 
 ```yaml
 groups:

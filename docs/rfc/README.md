@@ -98,7 +98,7 @@ both together.
 | [47](0047-discovery-and-codification.md) | Discovery and codification of unmanaged resources | draft |
 | [48](0048-management-as-code.md) | Managing OpenDustpan as code | draft |
 | [49](0049-run-tasks.md) | Run tasks: external checks with callbacks | accepted (ADR 226) |
-| [50](0050-policy-authoring.md) | Policy authoring, testing and compliance packs | draft; decision records, simulate and starter packs accepted (ADR 229) |
+| [50](0050-policy-authoring.md) | Policy authoring, testing and starter packs | draft; decision records, simulate and starter packs accepted (ADR 229) |
 | [51](0051-change-management-integrations.md) | Change management and portal integrations | draft; Backstage plugin accepted (ADR 247) |
 | [52](0052-console-core.md) | Console core views and navigation | draft; the console reads the capabilities document (ADR 211) |
 | [53](0053-terraform-cli.md) | Terraform CLI support | draft |

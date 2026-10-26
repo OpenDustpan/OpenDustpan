@@ -9,6 +9,7 @@ import (
 	"maps"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -49,8 +50,10 @@ type KindEraser interface {
 func RunDevData(t *testing.T, newStore DevDataFactory) {
 	t.Helper()
 
+	env := &devEnv{newStore: newStore, once: sync.Once{}, seeded: nil}
+
 	cases := []struct {
-		test func(t *testing.T, newStore DevDataFactory)
+		test func(t *testing.T, env *devEnv)
 		name string
 	}{
 		{name: "the kind reader returns the claimed kind and claims none", test: testDevReadKind},
@@ -74,7 +77,7 @@ func RunDevData(t *testing.T, newStore DevDataFactory) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			tc.test(t, newStore)
+			tc.test(t, env)
 		})
 	}
 }
@@ -87,16 +90,35 @@ type devExport struct {
 	sum   backup.Summary
 }
 
-// newDevExport seeds a production store and exports it.
-func newDevExport(t *testing.T, newStore DevDataFactory) *devExport {
+// devEnv is the state that the cases of one run share: the factory of stores,
+// and the export of the seeded production store. The export is plain bytes and
+// no case changes it (with returns a copy), so the cases read one export
+// instead of seeding and exporting a store each.
+type devEnv struct {
+	newStore DevDataFactory
+	once     sync.Once
+	seeded   *devExport
+}
+
+// export returns the portable export of a seeded production store. The first
+// call seeds a store and exports it.
+func (env *devEnv) export(t *testing.T) *devExport {
 	t.Helper()
 
-	src := newStore(t, installation.KindProduction)
-	seedBackupStore(t, src)
+	env.once.Do(func() {
+		src := env.newStore(t, installation.KindProduction)
+		seedBackupStore(t, src)
 
-	files, sum, descs := PortableFiles(t, src)
+		files, sum, descs := PortableFiles(t, src)
 
-	return &devExport{files: files, descs: descs, sum: sum}
+		env.seeded = &devExport{files: files, descs: descs, sum: sum}
+	})
+
+	if env.seeded == nil {
+		t.Fatal("the seeded export is missing: the case that built it failed")
+	}
+
+	return env.seeded
 }
 
 // with returns a copy of e with the rows added to table.
@@ -147,6 +169,21 @@ func tableRows(t *testing.T, s PortableStore, table string) []map[string]any {
 	return readPortableLines(t, table, files[backup.PortablePath(table)])
 }
 
+// tablesOf exports s once and returns a reader of the rows of any table in that
+// one export. A case that reads several tables of one state calls it once
+// instead of exporting the store for each table.
+func tablesOf(t *testing.T, s PortableStore) func(table string) []map[string]any {
+	t.Helper()
+
+	files, _, _ := PortableFiles(t, s)
+
+	return func(table string) []map[string]any {
+		t.Helper()
+
+		return readPortableLines(t, table, files[backup.PortablePath(table)])
+	}
+}
+
 // column returns the string values of one column of rows, sorted.
 func column(rows []map[string]any, name string) []string {
 	out := make([]string, 0, len(rows))
@@ -162,11 +199,11 @@ func column(rows []map[string]any, name string) []string {
 	return out
 }
 
-func testDevReadKind(t *testing.T, newStore DevDataFactory) {
+func testDevReadKind(t *testing.T, env *devEnv) {
 	t.Helper()
 
 	for _, kind := range []installation.Kind{installation.KindDev, installation.KindProduction} {
-		s := newStore(t, kind)
+		s := env.newStore(t, kind)
 
 		got, err := s.ReadKind(t.Context())
 		if err != nil || got != kind {
@@ -176,7 +213,7 @@ func testDevReadKind(t *testing.T, newStore DevDataFactory) {
 
 	// A database with no claimed kind: ReadKind reports ErrUnavailable and
 	// claims nothing, so a later claim still stores its kind.
-	s := newStore(t, "")
+	s := env.newStore(t, "")
 
 	for range 2 {
 		if _, err := s.ReadKind(t.Context()); !errors.Is(err, installation.ErrUnavailable) {
@@ -188,7 +225,7 @@ func testDevReadKind(t *testing.T, newStore DevDataFactory) {
 		t.Fatalf("claim after the reads = %q, %v, want dev", got, err)
 	}
 
-	closed := newStore(t, installation.KindProduction)
+	closed := env.newStore(t, installation.KindProduction)
 	closeStore(t, closed)
 
 	_, err := closed.ReadKind(t.Context())
@@ -208,10 +245,10 @@ func testDevReadKind(t *testing.T, newStore DevDataFactory) {
 // kind that it reads from its own database (layer 1c).
 //
 //nolint:exhaustruct_v5 // Each case names only the fields that it tests.
-func testDevStageKind(t *testing.T, newStore DevDataFactory) {
+func testDevStageKind(t *testing.T, env *devEnv) {
 	t.Helper()
 
-	export := newDevExport(t, newStore)
+	export := env.export(t)
 
 	cases := []struct {
 		name  string
@@ -261,7 +298,7 @@ func testDevStageKind(t *testing.T, newStore DevDataFactory) {
 	}
 
 	for _, tc := range cases {
-		dst := newStore(t, tc.live)
+		dst := env.newStore(t, tc.live)
 
 		_, err := export.stage(t, dst, tc.opts)
 
@@ -544,10 +581,10 @@ func devStripCases() []devStripCase {
 	}
 }
 
-func testDevStrip(t *testing.T, newStore DevDataFactory) {
+func testDevStrip(t *testing.T, env *devEnv) {
 	t.Helper()
 
-	base := newDevExport(t, newStore)
+	base := env.export(t)
 
 	// Each case has its own target store and reads base only, so the cases
 	// run at the same time.
@@ -555,18 +592,18 @@ func testDevStrip(t *testing.T, newStore DevDataFactory) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			checkDevStrip(t, newStore, base, tc)
+			checkDevStrip(t, env, base, tc)
 		})
 	}
 }
 
 // checkDevStrip stages the export of tc into a fresh production store, strips
 // it in both modes, swaps it in and checks the rows that stay.
-func checkDevStrip(t *testing.T, newStore DevDataFactory, base *devExport, tc devStripCase) {
+func checkDevStrip(t *testing.T, env *devEnv, base *devExport, tc devStripCase) {
 	t.Helper()
 
 	export := tc.add(t, base)
-	dst := newStore(t, installation.KindProduction)
+	dst := env.newStore(t, installation.KindProduction)
 
 	export.mustStage(t, dst)
 
@@ -658,30 +695,32 @@ func assertPrincipalCounts(t *testing.T, tc devStripCase, got backup.DevStripRep
 func assertAfterStrip(t *testing.T, tc devStripCase, dst DevDataStore) {
 	t.Helper()
 
-	for _, row := range tableRows(t, dst, "principals") {
+	rowsOf := tablesOf(t, dst)
+
+	for _, row := range rowsOf("principals") {
 		subject := textOf(row, "subject")
 		if len(subject) >= 4 && strings.EqualFold(subject[:4], "dev:") {
 			t.Fatalf("%s: principal %q is live after the strip", tc.name, subject)
 		}
 	}
 
-	for _, id := range column(tableRows(t, dst, "sign_in_providers"), "provider_id") {
+	for _, id := range column(rowsOf("sign_in_providers"), "provider_id") {
 		if strings.EqualFold(id, "dev") {
 			t.Fatalf("%s: provider %q is live after the strip", tc.name, id)
 		}
 	}
 
-	if slices.Contains(column(tableRows(t, dst, "principals"), "id"), "prn-keeper") {
+	if slices.Contains(column(rowsOf("principals"), "id"), "prn-keeper") {
 		for table, id := range map[string]string{
 			"principals": "prn-keeper", "grants": "grt-keeper", "access_tokens": "tok-keeper",
 		} {
-			if !slices.Contains(column(tableRows(t, dst, table), "id"), id) {
+			if !slices.Contains(column(rowsOf(table), "id"), id) {
 				t.Fatalf("%s: row %s of the other person is gone from %s", tc.name, id, table)
 			}
 		}
 	}
 
-	checkAfterBodies(t, tc, dst)
+	checkAfterBodies(t, tc, rowsOf("gate_objects"))
 }
 
 // approversOf is the approvers member of a stored body.
@@ -708,10 +747,8 @@ func textOf(row map[string]any, key string) string {
 }
 
 // checkAfterBodies checks the approvers of the gate objects after the strip.
-func checkAfterBodies(t *testing.T, tc devStripCase, dst DevDataStore) {
+func checkAfterBodies(t *testing.T, tc devStripCase, rows []map[string]any) {
 	t.Helper()
-
-	rows := tableRows(t, dst, "gate_objects")
 
 	for id, want := range tc.bodies {
 		var body string
@@ -739,10 +776,10 @@ func checkAfterBodies(t *testing.T, tc devStripCase, dst DevDataStore) {
 // testDevStripMatchesSharedTable stages one principal for each row of the
 // shared table of subjects and expects the strip to remove exactly the dev
 // subjects. The matcher of principal.IsDevSubject uses the same table.
-func testDevStripMatchesSharedTable(t *testing.T, newStore DevDataFactory) {
+func testDevStripMatchesSharedTable(t *testing.T, env *devEnv) {
 	t.Helper()
 
-	export := newDevExport(t, newStore)
+	export := env.export(t)
 	cases := principaltest.DevSubjectCases()
 	rows := make([]map[string]any, 0, len(cases))
 
@@ -762,7 +799,7 @@ func testDevStripMatchesSharedTable(t *testing.T, newStore DevDataFactory) {
 		}
 	}
 
-	dst := newStore(t, installation.KindProduction)
+	dst := env.newStore(t, installation.KindProduction)
 	export.with(t, "principals", rows...).mustStage(t, dst)
 
 	report, err := dst.StripDevStaged(t.Context(), backup.DevStripRemove)
@@ -796,10 +833,10 @@ func testDevStripMatchesSharedTable(t *testing.T, newStore DevDataFactory) {
 
 // testDevStripBounds checks that the report holds at most MaxAuditedPrincipals
 // principals and sums the rest, and that a hostile subject comes out clean.
-func testDevStripBounds(t *testing.T, newStore DevDataFactory) {
+func testDevStripBounds(t *testing.T, env *devEnv) {
 	t.Helper()
 
-	export := newDevExport(t, newStore)
+	export := env.export(t)
 
 	const total = backup.MaxAuditedPrincipals + 150
 
@@ -816,7 +853,7 @@ func testDevStripBounds(t *testing.T, newStore DevDataFactory) {
 	hostile := "dev:evil\r\nforged\x1b[31m\x07" + strings.Repeat("x", 400)
 	principals = append(principals, DevPrincipalRow("prn-hostile", hostile))
 
-	dst := newStore(t, installation.KindProduction)
+	dst := env.newStore(t, installation.KindProduction)
 	staged := export.with(t, "principals", principals...).with(t, "grants", grants...)
 	staged.mustStage(t, dst)
 
@@ -885,10 +922,10 @@ func assertCleanSubjects(t *testing.T, report backup.DevStripReport) {
 
 // testDevStripModes checks that detect changes nothing, that two detects agree,
 // and that a strip without a staging area reports ErrCorrupt.
-func testDevStripModes(t *testing.T, newStore DevDataFactory) {
+func testDevStripModes(t *testing.T, env *devEnv) {
 	t.Helper()
 
-	dst := newStore(t, installation.KindProduction)
+	dst := env.newStore(t, installation.KindProduction)
 
 	for _, mode := range []backup.DevStripMode{backup.DevStripDetect, backup.DevStripRemove} {
 		if _, err := dst.StripDevStaged(t.Context(), mode); !errors.Is(err, backup.ErrCorrupt) {
@@ -896,7 +933,7 @@ func testDevStripModes(t *testing.T, newStore DevDataFactory) {
 		}
 	}
 
-	export := newDevExport(t, newStore).with(t, "principals", DevPrincipalRow("prn-dev", "dev:admin"))
+	export := env.export(t).with(t, "principals", DevPrincipalRow("prn-dev", "dev:admin"))
 	export.mustStage(t, dst)
 
 	first, err := dst.StripDevStaged(t.Context(), backup.DevStripDetect)
@@ -1019,10 +1056,10 @@ func hostileApproverBodies() map[string]string {
 // testDevStripHostileBodies checks that the strip fails closed on a body that
 // the gate codec would read differently from an exact read of the key names,
 // and that the check of the swap refuses it on its own.
-func testDevStripHostileBodies(t *testing.T, newStore DevDataFactory) {
+func testDevStripHostileBodies(t *testing.T, env *devEnv) {
 	t.Helper()
 
-	base := newDevExport(t, newStore)
+	base := env.export(t)
 
 	for name, body := range hostileApproverBodies() {
 		for _, kind := range []string{kindRule, kindDefault, kindOwnerRle} {
@@ -1037,7 +1074,7 @@ func testDevStripHostileBodies(t *testing.T, newStore DevDataFactory) {
 
 				checkHostileApproversBody(
 					t,
-					newStore,
+					env,
 					base.with(t, "gate_objects", DevGateObjectRow(kind, "hostile", body)),
 					label,
 				)
@@ -1049,11 +1086,11 @@ func testDevStripHostileBodies(t *testing.T, newStore DevDataFactory) {
 // checkHostileApproversBody expects the strip to fail closed in both modes and
 // both swap paths to refuse the staged export, which holds one hostile
 // gate object.
-func checkHostileApproversBody(t *testing.T, newStore DevDataFactory, export *devExport, label string) {
+func checkHostileApproversBody(t *testing.T, env *devEnv, export *devExport, label string) {
 	t.Helper()
 
 	for _, mode := range []backup.DevStripMode{backup.DevStripDetect, backup.DevStripRemove} {
-		dst := newStore(t, installation.KindProduction)
+		dst := env.newStore(t, installation.KindProduction)
 		export.mustStage(t, dst)
 
 		if _, err := dst.StripDevStaged(t.Context(), mode); !errors.Is(err, backup.ErrDevStripIncomplete) {
@@ -1065,17 +1102,17 @@ func checkHostileApproversBody(t *testing.T, newStore DevDataFactory, export *de
 		"plain": func(dst DevDataStore) error { return applyPlain(t, dst) },
 		"keep":  func(dst DevDataStore) error { return applyKeeping(t, dst) },
 	} {
-		checkSwapRefused(t, label+" ("+swapKind+")", newStore(t, installation.KindProduction), export, swap)
+		checkSwapRefused(t, label+" ("+swapKind+")", env.newStore(t, installation.KindProduction), export, swap)
 	}
 }
 
 // testDevSwapRefuses stages dev data into a production store with no strip
 // run, and expects both swap paths to refuse and to leave the live data as it
 // was (layer 3a).
-func testDevSwapRefuses(t *testing.T, newStore DevDataFactory) {
+func testDevSwapRefuses(t *testing.T, env *devEnv) {
 	t.Helper()
 
-	base := newDevExport(t, newStore)
+	base := env.export(t)
 
 	swaps := map[string]func(*testing.T, DevDataStore) error{
 		"plain": applyPlain,
@@ -1091,7 +1128,7 @@ func testDevSwapRefuses(t *testing.T, newStore DevDataFactory) {
 			t.Run(name, func(t *testing.T) {
 				t.Parallel()
 
-				dst := newStore(t, installation.KindProduction)
+				dst := env.newStore(t, installation.KindProduction)
 				checkSwapRefused(t, name, dst, tc.add(t, base), func(dst DevDataStore) error { return swap(t, dst) })
 			})
 		}
@@ -1140,11 +1177,11 @@ func checkSwapRefused(t *testing.T, name string, dst DevDataStore, e *devExport,
 }
 
 // testDevSwapDevInstallation checks that a dev installation takes dev data.
-func testDevSwapDevInstallation(t *testing.T, newStore DevDataFactory) {
+func testDevSwapDevInstallation(t *testing.T, env *devEnv) {
 	t.Helper()
 
-	export := newDevExport(t, newStore).with(t, "principals", DevPrincipalRow("prn-dev", "dev:admin"))
-	dst := newStore(t, installation.KindDev)
+	export := env.export(t).with(t, "principals", DevPrincipalRow("prn-dev", "dev:admin"))
+	dst := env.newStore(t, installation.KindDev)
 
 	opts := backup.StageOptions{BackupKind: installation.KindDev, AllowDev: false}
 	if _, err := export.stage(t, dst, opts); err != nil {
@@ -1162,17 +1199,17 @@ func testDevSwapDevInstallation(t *testing.T, newStore DevDataFactory) {
 
 // testDevSwapUnreadableKind checks that a store whose live kind cannot be read
 // refuses the swap.
-func testDevSwapUnreadableKind(t *testing.T, newStore DevDataFactory) {
+func testDevSwapUnreadableKind(t *testing.T, env *devEnv) {
 	t.Helper()
 
-	dst := newStore(t, installation.KindProduction)
+	dst := env.newStore(t, installation.KindProduction)
 
 	eraser, ok := dst.(KindEraser)
 	if !ok {
 		t.Skip("the store cannot erase its kind behind the port")
 	}
 
-	newDevExport(t, newStore).mustStage(t, dst)
+	env.export(t).mustStage(t, dst)
 
 	if err := eraser.EraseKindForTest(t.Context()); err != nil {
 		t.Fatalf("erase the kind: %v", err)
@@ -1197,16 +1234,16 @@ func testDevSwapUnreadableKind(t *testing.T, newStore DevDataFactory) {
 // drops the staged temp admins that name a principal that the live principals
 // do not hold, counts them, and keeps the rows of live principals. The strip
 // removes the row with a dev subject.
-func testDevKeepDropsTempAdmins(t *testing.T, newStore DevDataFactory) {
+func testDevKeepDropsTempAdmins(t *testing.T, env *devEnv) {
 	t.Helper()
 
-	dst := newStore(t, installation.KindProduction)
+	dst := env.newStore(t, installation.KindProduction)
 
 	// Give the live data a principal: a swap of a first backup brings it.
 	// Both backups come from one export, so they name the same namespaces: the
 	// kept installation rows of the live data name a namespace that the second
 	// backup holds.
-	base := newDevExport(t, newStore)
+	base := env.export(t)
 	first := base.with(t, "principals", DevPrincipalRow("prn-live", "alice"))
 	first.mustStage(t, dst)
 
@@ -1249,11 +1286,11 @@ func testDevKeepDropsTempAdmins(t *testing.T, newStore DevDataFactory) {
 
 // testDevKeepWholeArea checks that the strip and the swap look at the staged
 // access tables on the keep path too, although the swap does not take them.
-func testDevKeepWholeArea(t *testing.T, newStore DevDataFactory) {
+func testDevKeepWholeArea(t *testing.T, env *devEnv) {
 	t.Helper()
 
-	dst := newStore(t, installation.KindProduction)
-	newDevExport(t, newStore).
+	dst := env.newStore(t, installation.KindProduction)
+	env.export(t).
 		with(t, "principals", DevPrincipalRow("prn-dev", "dev:admin")).
 		mustStage(t, dst)
 
@@ -1276,10 +1313,10 @@ func testDevKeepWholeArea(t *testing.T, newStore DevDataFactory) {
 }
 
 // testDevRecordReport checks the report in the restore record.
-func testDevRecordReport(t *testing.T, newStore DevDataFactory) {
+func testDevRecordReport(t *testing.T, env *devEnv) {
 	t.Helper()
 
-	dst := newStore(t, installation.KindProduction)
+	dst := env.newStore(t, installation.KindProduction)
 	ctx := t.Context()
 
 	record := mustCreateRestore(t, dst, newRestoreRecord("rst-dev-report", "bkp-1", time.Unix(1_700_000_000, 0).UTC()))
@@ -1317,7 +1354,7 @@ func testDevRecordReport(t *testing.T, newStore DevDataFactory) {
 	}
 
 	// The record is the place where the report outlives the swap.
-	newDevExport(t, newStore).mustStage(t, dst)
+	env.export(t).mustStage(t, dst)
 
 	if applyErr := dst.ApplyStaging(ctx); applyErr != nil {
 		t.Fatalf("apply: %v", applyErr)

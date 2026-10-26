@@ -268,8 +268,9 @@ Lead decisions under owner delegation, 2026-10-13:
   - Audit. Each export request writes one audit entry of the kind
     `read-access`, with the object, the mode, the time of a snapshot and the
     filters (ADR 52, decision 13), because an export of the authorization map
-    is compliance evidence. The installation API needs an audit store when it
-    serves the export.
+    can serve as evidence for an access review (for example NIST SP 800-53
+    AC-2 j). The installation API needs an audit store when it serves the
+    export.
   - Count. The first page answers the total, and the next pages do not.
 - The access of the caller. `GET /api/server/caller/access` needs
   `caller:read` only. It answers the actions and grants on one object, or
