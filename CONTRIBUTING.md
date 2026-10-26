@@ -42,6 +42,11 @@ make check
 versions to install. Set `DUSTPAN_TEST_POSTGRES_URL` to include the
 PostgreSQL tests.
 
+With the race detector, one run of `pkg/store/sqlite` or `pkg/store/postgres`
+takes more than 10 minutes, the default limit of `go test`. `make test` and
+`make test-ci-store` set a longer limit. When you run a store package with
+`go test -race` directly, pass `-timeout 60m`.
+
 A change to an endpoint must also pass the end-to-end suite, which drives
 the real Pulumi CLI and OpenTofu against the server:
 
