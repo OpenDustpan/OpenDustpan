@@ -93,3 +93,24 @@ func CodedErrorForTest(status int, code, message string, values ...errcode.Value
 // SignInRefusalForTest returns the refusal of a sign-in with reason, as the
 // sign-in handler builds it.
 func SignInRefusalForTest(reason string) error { return signInRefusalError{reason: reason} }
+
+// The body, query and store errors of the token and principal routes, for the
+// test of their answers.
+var (
+	ErrTokenBodyForTest              = errTokenBody
+	ErrRotateBodyForTest             = errRotateBody
+	ErrTokenQueryForTest             = errTokenQuery
+	ErrPolicyBodyForTest             = errPolicyBody
+	ErrBreakGlassGoneForTest         = errBreakGlassGone
+	ErrPrincipalTokenBodyForTest     = errPrincipalTokenBody
+	ErrNoTokenStoreForTest           = errNoTokenStore
+	ErrPrincipalBodyForTest          = errPrincipalBody
+	ErrPrincipalChangeBodyForTest    = errPrincipalChangeBody
+	ErrGroupBodyForTest              = errGroupBody
+	ErrGroupChangeBodyForTest        = errGroupChangeBody
+	ErrMemberBodyForTest             = errMemberBody
+	ErrNamespacePrincipalBodyForTest = errNamespacePrincipalBody
+	ErrBodyTooLargeForTest           = errBodyTooLarge
+	ErrPageQueryForTest              = errPageQuery
+	ErrNoPrincipalStoreForTest       = errNoPrincipalStore
+)

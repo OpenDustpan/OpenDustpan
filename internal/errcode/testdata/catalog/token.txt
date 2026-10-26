@@ -1,1 +1,9 @@
+token.already-exists
+token.caller-not-person
+token.ended
 token.invalid
+token.kind-has-none
+token.not-found
+token.requires-sign-in
+token.unsupported
+token.wrong-kind

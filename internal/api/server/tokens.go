@@ -45,6 +45,7 @@ import (
 	"strconv"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/pkg/accesstoken"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -782,24 +783,55 @@ func tokenObject(r *http.Request, svc *accesstoken.Service) string {
 // 409; and a store with no token port 501. The domain wraps each sentinel
 // with the ID or the value it acted on, never with driver text or a secret.
 func classifyToken(err error) (failure, bool) {
+	if f, ok := classifyTokenRequest(err); ok {
+		return f, true
+	}
+
+	return classifyTokenState(err)
+}
+
+// classifyTokenRequest maps the errors of a refused credential, body, query
+// or token to 429 and 400.
+func classifyTokenRequest(err error) (failure, bool) {
 	switch {
 	case errors.Is(err, identity.ErrRateLimited):
-		return fail(http.StatusTooManyRequests, "too many failed sign-ins from this address: try again later"), true
-	case errors.Is(err, errTokenBody), errors.Is(err, errRotateBody), errors.Is(err, errTokenQuery),
-		errors.Is(err, errPolicyBody), errors.Is(err, errBreakGlassGone), errors.Is(err, errPrincipalTokenBody),
-		errors.Is(err, accesstoken.ErrInvalid), errors.Is(err, accesstoken.ErrNoTokenForKind):
-		return fail(http.StatusBadRequest, err.Error()), true
-	case errors.Is(err, accesstoken.ErrNotFound), errors.Is(err, accesstoken.ErrPrincipalNotFound):
-		return fail(http.StatusNotFound, err.Error()), true
-	case errors.Is(err, accesstoken.ErrWrongKind):
-		return fail(http.StatusBadRequest, err.Error()), true
-	case errors.Is(err, accesstoken.ErrNoOwnPrincipal), errors.Is(err, accesstoken.ErrSignInRequired):
-		return fail(http.StatusForbidden, err.Error()), true
-	case errors.Is(err, accesstoken.ErrEnded), errors.Is(err, accesstoken.ErrAlreadyExists):
-		return fail(http.StatusConflict, err.Error()), true
-	case errors.Is(err, errNoTokenStore):
-		return fail(http.StatusNotImplemented, err.Error()), true
-	default:
-		return fail(0, ""), false
+		return failCoded(http.StatusTooManyRequests, "too many failed sign-ins from this address: try again later",
+			errcode.AuthRateLimited), true
+	case errors.Is(err, errTokenBody), errors.Is(err, errRotateBody), errors.Is(err, errPolicyBody),
+		errors.Is(err, errBreakGlassGone), errors.Is(err, errPrincipalTokenBody):
+		return failCoded(http.StatusBadRequest, err.Error(), errcode.RequestBodyInvalid), true
+	case errors.Is(err, errTokenQuery):
+		return failCoded(http.StatusBadRequest, err.Error(), errcode.RequestInvalidQuery), true
+	case errors.Is(err, accesstoken.ErrInvalid):
+		return failCoded(http.StatusBadRequest, err.Error(), errcode.TokenInvalid), true
+	case errors.Is(err, accesstoken.ErrNoTokenForKind):
+		return failCoded(http.StatusBadRequest, err.Error(), errcode.TokenKindHasNone), true
 	}
+
+	return fail(0, ""), false
+}
+
+// classifyTokenState maps the errors of an unknown, wrong, ended or taken
+// token, and of a store with no token port.
+func classifyTokenState(err error) (failure, bool) {
+	switch {
+	case errors.Is(err, accesstoken.ErrNotFound):
+		return failCoded(http.StatusNotFound, err.Error(), errcode.TokenNotFound), true
+	case errors.Is(err, accesstoken.ErrPrincipalNotFound):
+		return failCoded(http.StatusNotFound, err.Error(), errcode.PrincipalNotFound), true
+	case errors.Is(err, accesstoken.ErrWrongKind):
+		return failCoded(http.StatusBadRequest, err.Error(), errcode.TokenWrongKind), true
+	case errors.Is(err, accesstoken.ErrNoOwnPrincipal):
+		return failCoded(http.StatusForbidden, err.Error(), errcode.TokenCallerNotPerson), true
+	case errors.Is(err, accesstoken.ErrSignInRequired):
+		return failCoded(http.StatusForbidden, err.Error(), errcode.TokenRequiresSignIn), true
+	case errors.Is(err, accesstoken.ErrEnded):
+		return failCoded(http.StatusConflict, err.Error(), errcode.TokenEnded), true
+	case errors.Is(err, accesstoken.ErrAlreadyExists):
+		return failCoded(http.StatusConflict, err.Error(), errcode.TokenAlreadyExists), true
+	case errors.Is(err, errNoTokenStore):
+		return failCoded(http.StatusNotImplemented, err.Error(), errcode.TokenUnsupported), true
+	}
+
+	return fail(0, ""), false
 }

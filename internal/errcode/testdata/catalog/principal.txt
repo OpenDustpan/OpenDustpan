@@ -1,0 +1,8 @@
+principal.already-exists
+principal.disabled
+principal.invalid
+principal.managed-by-directory
+principal.not-disabled
+principal.not-found
+principal.reserved-subject
+principal.unsupported
