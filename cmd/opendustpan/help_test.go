@@ -74,6 +74,22 @@ func TestUsageGroupsByIntent(t *testing.T) {
 	}
 }
 
+// commandPath answers the path of the command in a usage line, without the
+// program name and without the flags and the operands.
+func commandPath(line string) string {
+	path := []string{}
+
+	for word := range strings.FieldsSeq(strings.TrimPrefix(line, "  opendustpan ")) {
+		if strings.HasPrefix(word, "-") || strings.HasPrefix(word, "<") {
+			break
+		}
+
+		path = append(path, word)
+	}
+
+	return strings.Join(path, " ")
+}
+
 // parseUsage splits the usage text into its groups. A group starts with a line
 // that ends in a colon and has no indent. A command line has two spaces of
 // indent and starts with the program name. The command is its path, with no
@@ -84,25 +100,17 @@ func parseUsage(t *testing.T, text string) []usageGroup {
 	var groups []usageGroup
 
 	for line := range strings.SplitSeq(text, "\n") {
-		switch {
-		case strings.HasPrefix(line, "  opendustpan "):
+		if strings.HasPrefix(line, "  opendustpan ") {
 			if len(groups) == 0 {
 				t.Fatalf("command line %q is before the first group", line)
 			}
 
-			words := strings.Fields(strings.TrimPrefix(line, "  opendustpan "))
-			path := []string{}
+			groups[len(groups)-1].commands = append(groups[len(groups)-1].commands, commandPath(line))
 
-			for _, word := range words {
-				if strings.HasPrefix(word, "-") || strings.HasPrefix(word, "<") {
-					break
-				}
+			continue
+		}
 
-				path = append(path, word)
-			}
-
-			groups[len(groups)-1].commands = append(groups[len(groups)-1].commands, strings.Join(path, " "))
-		case strings.HasSuffix(line, ":") && !strings.HasPrefix(line, " ") && !strings.HasPrefix(line, "usage"):
+		if strings.HasSuffix(line, ":") && !strings.HasPrefix(line, " ") && !strings.HasPrefix(line, "usage") {
 			groups = append(groups, usageGroup{name: strings.TrimSuffix(line, ":"), commands: nil})
 		}
 	}
