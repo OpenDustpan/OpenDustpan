@@ -64,6 +64,17 @@ UPDATE namespaces
 SET output_sharing_default = $1
 WHERE name = $2;
 
+-- name: GetNamespaceSourceFilter :one
+SELECT source_filter
+FROM namespaces
+WHERE name = $1;
+
+-- name: SetNamespaceSourceFilter :execrows
+-- Replaces the source filter of one namespace.
+UPDATE namespaces
+SET source_filter = $1
+WHERE name = $2;
+
 -- name: GetNamespaceForShare :one
 -- Reads the namespace row with a shared lock. A switch change waits for the
 -- transaction that reads it, so the switch it reads is the one that commits.

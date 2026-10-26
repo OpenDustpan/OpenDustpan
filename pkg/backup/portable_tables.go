@@ -76,6 +76,7 @@ func portableSpec() []PortableTable {
 				{Name: "ip_allowlist", Kind: KindText},
 				{Name: "id", Kind: KindText},
 				{Name: portColOutputSharingDefault, Kind: KindText},
+				{Name: portColSourceFilter, Kind: KindText},
 			},
 		},
 		{

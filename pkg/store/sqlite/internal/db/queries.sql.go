@@ -5628,6 +5628,19 @@ func (q *Queries) GetNamespaceOutputSharingDefault(ctx context.Context, name str
 	return output_sharing_default, err
 }
 
+const getNamespaceSourceFilter = `-- name: GetNamespaceSourceFilter :one
+SELECT source_filter
+FROM namespaces
+WHERE name = ?
+`
+
+func (q *Queries) GetNamespaceSourceFilter(ctx context.Context, name string) (string, error) {
+	row := q.db.QueryRowContext(ctx, getNamespaceSourceFilter, name)
+	var source_filter string
+	err := row.Scan(&source_filter)
+	return source_filter, err
+}
+
 const getNotificationSink = `-- name: GetNotificationSink :one
 SELECT k.id, n.name AS namespace, k.kind, k.name, k.platform, k.target, k.created_by, k.version
 FROM notification_sinks AS k
@@ -15900,6 +15913,26 @@ type SetNamespaceOverridesParams struct {
 // Replaces the override switches of one namespace (ADR 44, decision 6).
 func (q *Queries) SetNamespaceOverrides(ctx context.Context, arg SetNamespaceOverridesParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, setNamespaceOverrides, arg.AllowForcedWrites, arg.AllowUnlockedWrites, arg.Name)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const setNamespaceSourceFilter = `-- name: SetNamespaceSourceFilter :execrows
+UPDATE namespaces
+SET source_filter = ?
+WHERE name = ?
+`
+
+type SetNamespaceSourceFilterParams struct {
+	SourceFilter string
+	Name         string
+}
+
+// Replaces the source filter of one namespace.
+func (q *Queries) SetNamespaceSourceFilter(ctx context.Context, arg SetNamespaceSourceFilterParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, setNamespaceSourceFilter, arg.SourceFilter, arg.Name)
 	if err != nil {
 		return 0, err
 	}
