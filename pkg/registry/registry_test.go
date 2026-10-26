@@ -47,6 +47,7 @@ func provider() registry.Release {
 				Size:     10,
 			},
 		},
+		Files: nil,
 	}
 }
 
@@ -228,6 +229,14 @@ func TestValidateVersionPreReleaseBits(t *testing.T) {
 	}
 }
 
+// md5Sum is an MD5 in lowercase hexadecimal.
+const md5Sum = "0123456789abcdef0123456789abcdef"
+
+// storedFile returns the digests of one file.
+func storedFile(hash string, size int64, md5 string) registry.StoredFile {
+	return registry.StoredFile{SHA256: hash, Size: size, MD5: md5}
+}
+
 // signed adds a verified signature to a provider release.
 func signed(r *registry.Release) {
 	r.SignatureFile = r.SumsFile + ".sig"
@@ -251,6 +260,7 @@ func TestReleaseValidate(t *testing.T) {
 			PublishedBy:     "user-1",
 			PublishedAt:     time.UnixMilli(1_800_000_000_000).UTC(),
 			Archives:        []registry.Archive{{Platform: "", FileName: "vpc-1.0.0.zip", SHA256: sum, Size: 5}},
+			Files:           nil,
 		}
 	}
 
@@ -304,6 +314,47 @@ func TestReleaseValidate(t *testing.T) {
 			false,
 		},
 		{func(r *registry.Release) { *r = mod(); r.SumsFile = "x" }, "module with sums", false},
+		{
+			func(r *registry.Release) { *r = mod(); r.Files = []registry.StoredFile{storedFile(sum, 5, md5Sum)} },
+			"module with the digests of its file",
+			true,
+		},
+		{
+			func(r *registry.Release) { r.Files = []registry.StoredFile{storedFile(sum, 5, md5Sum)} },
+			"provider with the digests of a file",
+			true,
+		},
+		{
+			func(r *registry.Release) {
+				r.Files = []registry.StoredFile{storedFile(strings.Repeat("e", 64), 5, md5Sum)}
+			},
+			"digests of a file that the release does not hold",
+			false,
+		},
+		{
+			func(r *registry.Release) {
+				r.Files = []registry.StoredFile{storedFile(sum, 5, md5Sum), storedFile(sum, 5, md5Sum)}
+			},
+			"digests of one file twice",
+			false,
+		},
+		{
+			func(r *registry.Release) { r.Files = []registry.StoredFile{storedFile(sum, 0, md5Sum)} },
+			"digests with no size",
+			false,
+		},
+		{
+			func(r *registry.Release) {
+				r.Files = []registry.StoredFile{storedFile(sum, 5, strings.ToUpper(md5Sum))}
+			},
+			"digests with an upper case MD5",
+			false,
+		},
+		{
+			func(r *registry.Release) { r.Files = []registry.StoredFile{storedFile(sum, 5, md5Sum[:30])} },
+			"digests with a short MD5",
+			false,
+		},
 		{func(r *registry.Release) { *r = mod(); r.Protocols = []string{"5.0"} }, "module with protocols", false},
 		{func(r *registry.Release) { r.Protocols = nil }, "provider with no protocols", false},
 		{func(r *registry.Release) { r.Protocols = []string{"5.0", "6.0"} }, "provider with two protocols", true},

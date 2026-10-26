@@ -253,6 +253,7 @@ func restoreWant(manifest Manifest, wantBlobs []BlobRef) Summary {
 		WrapperIDs:    manifest.WrapperIDs,
 		RowCounts:     manifest.RowCounts,
 		Blobs:         wantBlobs,
+		Unverified:    manifest.Unverified,
 		SchemaVersion: manifest.SchemaVersion,
 	}
 }

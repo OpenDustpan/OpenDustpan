@@ -495,6 +495,8 @@ type JobLogChunk struct {
 	Sha256      string
 	Size        int64
 	Confirmed   int64
+	StoredSize  int64
+	StoredMd5   []byte
 }
 
 type JobPlan struct {
@@ -671,6 +673,7 @@ type RegistryRelease struct {
 	PublishedBy     string
 	ArchivesJson    string
 	PublishedAtMs   int64
+	StoredFilesJson string
 }
 
 type Restore struct {

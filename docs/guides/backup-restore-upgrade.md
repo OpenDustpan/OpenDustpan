@@ -54,11 +54,13 @@ A backup is a set of objects under the target:
 
 - `backups/<id>/manifest.json` describes the backup. It is the last object that the server writes. A backup without it is not complete.
 - `backups/<id>/sql/<table>.jsonl.gz` holds the SQL data. There is one file for each table of the installation. Each file is gzip-compressed JSON Lines: one row for each line, with one member for each column.
-- `blobs/<key>` holds each blob that the SQL data names, such as an OpenTofu state version or a Pulumi checkpoint.
+- `blobs/<key>` holds each blob that the SQL data names. These are the content of an OpenTofu state version or a Pulumi checkpoint, the parts of a stored job plan, the chunks of a job log, and the files of a registry release.
 
 The manifest records the backup format (`format`: 3) and the SQL format (`sqlFormat`: `portable`). It records the database that wrote the backup (`dialect`) and the schema version. It also records the home regions and the wrapper IDs. It records the kind of the installation that wrote the backup (`installationKind`: `dev` or `production`). The server reads the kind from its own database. A backup of another format number is not valid, and neither is a manifest with no kind or with an unknown kind.
 
 For each table file, the manifest has one entry in `sqlFiles`. The entry names the file, its columns, its row count, its size and its SHA-256. The manifest also records each blob with its key, size and MD5.
+
+The server copies a blob only when the SQL data holds its size and its MD5, and it checks the copy against them. A row can name a blob without these values, for example a row that an earlier version of the server wrote. The server does not copy that blob. It lists the key in the optional `unverified` list of the manifest, and it writes a warning to the server log. A restore accepts a backup only when its `unverified` list names every blob that the SQL data names without these values. A backup that does not list such a blob has lost its content, and the restore stops with the text `backup is incomplete: the data names <number> blobs that the backup does not hold`. The live data stays as it was.
 
 The table files use one encoding for both databases. A backup of SQLite restores into PostgreSQL, and a backup of PostgreSQL restores into SQLite.
 

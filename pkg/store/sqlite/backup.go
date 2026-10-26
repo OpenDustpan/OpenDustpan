@@ -17,6 +17,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/durable"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/secret"
+	"opendustpan.org/opendustpan/pkg/store/internal/blobrefs"
 	"opendustpan.org/opendustpan/pkg/store/internal/codec"
 	"opendustpan.org/opendustpan/pkg/store/sqlite/internal/db"
 	"opendustpan.org/opendustpan/pkg/workspace"
@@ -957,7 +958,7 @@ func summarizeConn(ctx context.Context, conn *sql.DB) (backup.Summary, error) {
 		counts[table] = n
 	}
 
-	blobs, err := blobRefs(ctx, conn)
+	blobs, unverified, err := blobRefs(ctx, conn)
 	if err != nil {
 		return backup.Summary{}, err
 	}
@@ -968,6 +969,7 @@ func summarizeConn(ctx context.Context, conn *sql.DB) (backup.Summary, error) {
 		WrapperIDs:    wrappers,
 		RowCounts:     counts,
 		Blobs:         blobs,
+		Unverified:    unverified,
 		SchemaVersion: int(version),
 	}, nil
 }
@@ -1033,12 +1035,13 @@ func countRows(ctx context.Context, conn *sql.DB, table string) (int64, error) {
 // blobRefs reads the blob references of a snapshot: the content key, size and
 // MD5 of every finalized state version that names content, with the blob key, size and
 // MD5 of every checkpoint kept in blobs and every journal batch, and the wrapped key blob of every item key that is not
-// shredded, ordered by key. Size and MD5 stay
+// shredded, with the blobs of job plans, of job log chunks and of registry
+// releases (see addStoredBlobRefs), ordered by key. Size and MD5 stay
 // those of the plain bytes, as the state version stores them; sealed versions
 // mark their references sealed, so the backup opens them to check and stores
 // the sealed bytes. A pending version has no committed content, so the backup
 // leaves pending rows out.
-func blobRefs(ctx context.Context, conn *sql.DB) ([]backup.BlobRef, error) {
+func blobRefs(ctx context.Context, conn *sql.DB) ([]backup.BlobRef, []string, error) {
 	const query = `SELECT content_key, size, md5, sealed FROM state_versions WHERE content_key <> '' AND status = 'finalized'
 		UNION ALL
 		SELECT blob_key AS content_key, blob_size AS size, blob_md5 AS md5, 0 AS sealed FROM checkpoints
@@ -1051,7 +1054,7 @@ func blobRefs(ctx context.Context, conn *sql.DB) ([]backup.BlobRef, error) {
 
 	rows, err := conn.QueryContext(ctx, query)
 	if err != nil {
-		return nil, fmt.Errorf("read backup blob references: %w", err)
+		return nil, nil, fmt.Errorf("read backup blob references: %w", err)
 	}
 
 	defer func() {
@@ -1071,11 +1074,11 @@ func blobRefs(ctx context.Context, conn *sql.DB) ([]backup.BlobRef, error) {
 		)
 
 		if scanErr := rows.Scan(&key, &size, &raw, &sealed); scanErr != nil {
-			return nil, fmt.Errorf("read backup blob references: %w", scanErr)
+			return nil, nil, fmt.Errorf("read backup blob references: %w", scanErr)
 		}
 
 		if len(raw) != md5.Size {
-			return nil, fmt.Errorf(
+			return nil, nil, fmt.Errorf(
 				"%w: blob with key %q has an MD5 of %d bytes",
 				codec.ErrCorruptRow,
 				key,
@@ -1090,10 +1093,18 @@ func blobRefs(ctx context.Context, conn *sql.DB) ([]backup.BlobRef, error) {
 	}
 
 	if iterErr := rows.Err(); iterErr != nil {
-		return nil, fmt.Errorf("read backup blob references: %w", iterErr)
+		return nil, nil, fmt.Errorf("read backup blob references: %w", iterErr)
 	}
 
-	return out, nil
+	collector := &blobrefs.Collector{}
+	if addErr := addStoredBlobRefs(ctx, conn, collector); addErr != nil {
+		return nil, nil, addErr
+	}
+
+	out = append(out, collector.Refs()...)
+	slices.SortFunc(out, func(a, b backup.BlobRef) int { return strings.Compare(a.Key, b.Key) })
+
+	return out, collector.Unverified(), nil
 }
 
 // snapshotPath reserves a new file name for a VACUUM INTO target in dir: it

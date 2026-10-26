@@ -154,6 +154,7 @@ func newCheckSetup(t *testing.T) *checkSetup {
 			RowCounts:     map[string]int64{},
 			Blobs:         nil,
 			SchemaVersion: backup.BaselineSchemaVersion,
+			Unverified:    nil,
 		},
 		key:          testWrappedKey(t),
 		keyErr:       nil,
@@ -193,6 +194,7 @@ func stagedSummary(t *testing.T, manifest backup.Manifest) backup.Summary {
 		RowCounts:     maps.Clone(manifest.RowCounts),
 		Blobs:         refs,
 		SchemaVersion: manifest.SchemaVersion,
+		Unverified:    nil,
 	}
 }
 

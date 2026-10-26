@@ -101,6 +101,9 @@ type planPartBody struct {
 	Size   int64  `json:"size"`
 	SHA256 string `json:"sha256"`
 	Secret bool   `json:"secret"`
+	// StoredSize and StoredMD5 are those of the sealed bytes in the blob store.
+	StoredSize int64  `json:"storedSize"`
+	StoredMD5  string `json:"storedMd5"`
 }
 
 type planBody struct {
@@ -320,6 +323,7 @@ func encodePlan(p *job.PlanRef) *planBody {
 	for _, part := range p.Parts {
 		out.Parts = append(out.Parts, planPartBody{
 			Kind: string(part.Kind), Size: part.Size, SHA256: part.SHA256, Secret: part.Secret,
+			StoredSize: part.StoredSize, StoredMD5: part.StoredMD5,
 		})
 	}
 
@@ -339,6 +343,7 @@ func decodePlan(b *planBody) *job.PlanRef {
 	for _, part := range b.Parts {
 		out.Parts = append(out.Parts, job.PlanPart{
 			Kind: job.OutputKind(part.Kind), Size: part.Size, SHA256: part.SHA256, Secret: part.Secret,
+			StoredSize: part.StoredSize, StoredMD5: part.StoredMD5,
 		})
 	}
 

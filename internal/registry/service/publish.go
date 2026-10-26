@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -168,6 +169,7 @@ type measured struct {
 	key   blob.Key
 	sum   string
 	size  int64
+	md5   string
 	bytes []byte
 }
 
@@ -198,8 +200,8 @@ func (s *Service) Publish(ctx context.Context, c *Caller, req PublishRequest) (r
 	// The staged files go away whatever happens. A caller who retries uploads
 	// them again, or replays the answer through the Idempotency-Key.
 	defer func() {
-		for _, f := range p.files {
-			s.dropStaged(ctx, p.view, f.key)
+		for i := range p.files {
+			s.dropStaged(ctx, p.view, p.files[i].key)
 		}
 	}()
 
@@ -363,7 +365,7 @@ func stagedKeys(id namespace.ID, files []StagedFile) ([]measured, error) {
 			return nil, fmt.Errorf("%w: the token of file %s is not valid", ErrBadRequest, f.Name)
 		}
 
-		out = append(out, measured{StagedFile: f, key: key, sum: "", size: 0, bytes: nil})
+		out = append(out, measured{StagedFile: f, key: key, sum: "", size: 0, md5: "", bytes: nil})
 	}
 
 	return out, nil
@@ -416,7 +418,8 @@ func (s *Service) measureOne(ctx context.Context, view *blob.Scoped, f *measured
 		return fmt.Errorf("open the staged file %s: %w", f.Name, err)
 	}
 
-	m := newMeasure(r, s.limitOf(f.Role))
+	digest := blob.NewDigestReader(r)
+	m := newMeasure(digest, s.limitOf(f.Role))
 
 	if f.Role == RoleArchive {
 		_, err = io.Copy(io.Discard, m)
@@ -435,6 +438,8 @@ func (s *Service) measureOne(ctx context.Context, view *blob.Scoped, f *measured
 	}
 
 	f.sum, f.size = m.sum(), m.n
+	sum := digest.Digest().MD5
+	f.md5 = hex.EncodeToString(sum[:])
 
 	return nil
 }
@@ -519,6 +524,7 @@ func (s *Service) check(
 
 	rel.KeyFingerprint = fingerprint
 	rel.Protocols = slices.Clone(req.Protocols)
+	rel.Files = storedFiles(files)
 
 	return rel, nil
 }
@@ -527,7 +533,9 @@ func (s *Service) check(
 // copy checks the SHA-256 and the size again, and fails at the end when they
 // differ, so a content key never holds bytes that were not checked.
 func (s *Service) promote(ctx context.Context, view *blob.Scoped, id namespace.ID, files []measured) error {
-	for _, f := range files {
+	for i := range files {
+		f := &files[i]
+
 		dst, err := registry.BlobKey(id, f.sum)
 		if err != nil {
 			return fmt.Errorf("make the content key: %w", err)
@@ -592,4 +600,23 @@ func (s *Service) releaseEntry(c *Caller, rel registry.Release) audit.Entry {
 	}
 
 	return e
+}
+
+// storedFiles returns the digests of the files of a release: the SHA-256, the
+// size and the MD5 that the measure computed while it read each staged file.
+// A file is stored as it came, so these are the digests of the stored bytes.
+// A file with the same bytes as an earlier one appears once.
+func storedFiles(files []measured) []registry.StoredFile {
+	out := make([]registry.StoredFile, 0, len(files))
+
+	for i := range files {
+		f := &files[i]
+		if slices.ContainsFunc(out, func(o registry.StoredFile) bool { return o.SHA256 == f.sum }) {
+			continue
+		}
+
+		out = append(out, registry.StoredFile{SHA256: f.sum, Size: f.size, MD5: f.md5})
+	}
+
+	return out
 }

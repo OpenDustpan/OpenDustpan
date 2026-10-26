@@ -538,19 +538,27 @@ func (q *Queries) CompleteIdempotencyRecord(ctx context.Context, arg CompleteIde
 
 const confirmJobLogChunk = `-- name: ConfirmJobLogChunk :execrows
 UPDATE job_log_chunks
-SET confirmed = 1
-WHERE job_log_chunks.log_id = ?1 AND job_log_chunks.seq = ?2
-  AND job_log_chunks.namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = ?3)
+SET confirmed = 1, stored_size = ?1, stored_md5 = ?2
+WHERE job_log_chunks.log_id = ?3 AND job_log_chunks.seq = ?4
+  AND job_log_chunks.namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = ?5)
 `
 
 type ConfirmJobLogChunkParams struct {
-	LogID     string
-	Seq       int64
-	Namespace string
+	StoredSize int64
+	StoredMd5  []byte
+	LogID      string
+	Seq        int64
+	Namespace  string
 }
 
 func (q *Queries) ConfirmJobLogChunk(ctx context.Context, arg ConfirmJobLogChunkParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, confirmJobLogChunk, arg.LogID, arg.Seq, arg.Namespace)
+	result, err := q.db.ExecContext(ctx, confirmJobLogChunk,
+		arg.StoredSize,
+		arg.StoredMd5,
+		arg.LogID,
+		arg.Seq,
+		arg.Namespace,
+	)
 	if err != nil {
 		return 0, err
 	}
@@ -5866,7 +5874,8 @@ func (q *Queries) GetRegistryKey(ctx context.Context, arg GetRegistryKeyParams) 
 
 const getRegistryRelease = `-- name: GetRegistryRelease :one
 SELECT n.name AS namespace, r.kind, r.name, r.system, r.version, r.sums_file, r.sums_sha256, r.signature_file,
-    r.signature_sha256, r.key_fingerprint, r.protocols, r.published_by, r.archives_json, r.published_at_ms
+    r.signature_sha256, r.key_fingerprint, r.protocols, r.published_by, r.archives_json, r.published_at_ms,
+    r.stored_files_json
 FROM registry_releases AS r
 JOIN namespaces AS n ON n.id = r.namespace_id
 WHERE n.name = ?1 AND r.kind = ?2 AND r.name = ?3
@@ -5896,6 +5905,7 @@ type GetRegistryReleaseRow struct {
 	PublishedBy     string
 	ArchivesJson    string
 	PublishedAtMs   int64
+	StoredFilesJson string
 }
 
 func (q *Queries) GetRegistryRelease(ctx context.Context, arg GetRegistryReleaseParams) (GetRegistryReleaseRow, error) {
@@ -5922,6 +5932,7 @@ func (q *Queries) GetRegistryRelease(ctx context.Context, arg GetRegistryRelease
 		&i.PublishedBy,
 		&i.ArchivesJson,
 		&i.PublishedAtMs,
+		&i.StoredFilesJson,
 	)
 	return i, err
 }
@@ -8634,13 +8645,13 @@ func (q *Queries) InsertRegistryKey(ctx context.Context, arg InsertRegistryKeyPa
 const insertRegistryRelease = `-- name: InsertRegistryRelease :execrows
 INSERT INTO registry_releases (
     namespace_id, kind, name, system, version, sums_file, sums_sha256, signature_file, signature_sha256,
-    key_fingerprint, protocols, published_by, archives_json, published_at_ms
+    key_fingerprint, protocols, published_by, archives_json, published_at_ms, stored_files_json
 )
 VALUES (
     (SELECT n.id FROM namespaces AS n WHERE n.name = ?1), ?2, ?3,
     ?4, ?5, ?6, ?7, ?8,
     ?9, ?10, ?11, ?12, ?13,
-    ?14
+    ?14, ?15
 )
 ON CONFLICT (namespace_id, kind, name, system, version) DO NOTHING
 `
@@ -8660,6 +8671,7 @@ type InsertRegistryReleaseParams struct {
 	PublishedBy     string
 	ArchivesJson    string
 	PublishedAtMs   int64
+	StoredFilesJson string
 }
 
 // The caller checks the fence in the same transaction. A release of the same
@@ -8680,6 +8692,7 @@ func (q *Queries) InsertRegistryRelease(ctx context.Context, arg InsertRegistryR
 		arg.PublishedBy,
 		arg.ArchivesJson,
 		arg.PublishedAtMs,
+		arg.StoredFilesJson,
 	)
 	if err != nil {
 		return 0, err
@@ -12263,7 +12276,8 @@ func (q *Queries) ListRegistryKeys(ctx context.Context, namespace string) ([]Lis
 
 const listRegistryReleases = `-- name: ListRegistryReleases :many
 SELECT n.name AS namespace, r.kind, r.name, r.system, r.version, r.sums_file, r.sums_sha256, r.signature_file,
-    r.signature_sha256, r.key_fingerprint, r.protocols, r.published_by, r.archives_json, r.published_at_ms
+    r.signature_sha256, r.key_fingerprint, r.protocols, r.published_by, r.archives_json, r.published_at_ms,
+    r.stored_files_json
 FROM registry_releases AS r
 JOIN namespaces AS n ON n.id = r.namespace_id
 WHERE n.name = ?1 AND r.kind = ?2 AND r.name = ?3
@@ -12293,6 +12307,7 @@ type ListRegistryReleasesRow struct {
 	PublishedBy     string
 	ArchivesJson    string
 	PublishedAtMs   int64
+	StoredFilesJson string
 }
 
 // The caller orders the rows by version precedence.
@@ -12325,6 +12340,7 @@ func (q *Queries) ListRegistryReleases(ctx context.Context, arg ListRegistryRele
 			&i.PublishedBy,
 			&i.ArchivesJson,
 			&i.PublishedAtMs,
+			&i.StoredFilesJson,
 		); err != nil {
 			return nil, err
 		}

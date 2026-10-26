@@ -51,6 +51,11 @@ func (r registryStore) Publish(ctx context.Context, rel registry.Release, fence 
 		return err
 	}
 
+	storedFiles, err := registrystore.EncodeFiles(rel.Files)
+	if err != nil {
+		return err
+	}
+
 	// The entry is checked first, as the audited transactions of the other
 	// stores do, so that an invalid entry answers the same error whatever the
 	// fence or the content says.
@@ -63,7 +68,7 @@ func (r registryStore) Publish(ctx context.Context, rel registry.Release, fence 
 	}
 
 	return r.s.inFencedUpdateTx(ctx, fence, func(q *db.Queries) error {
-		result, repeat, pubErr := publishRegistryRelease(ctx, q, rel, archives)
+		result, repeat, pubErr := publishRegistryRelease(ctx, q, rel, archives, storedFiles)
 		if pubErr != nil {
 			return pubErr
 		}
@@ -88,7 +93,7 @@ func (r registryStore) Publish(ctx context.Context, rel registry.Release, fence 
 // It returns the release that the store holds after the write: rel for a new
 // release, or the stored release and true for a repeat of the same content.
 func publishRegistryRelease(
-	ctx context.Context, q *db.Queries, rel registry.Release, archives string,
+	ctx context.Context, q *db.Queries, rel registry.Release, archives, storedFiles string,
 ) (registry.Release, bool, error) {
 	var none registry.Release
 
@@ -122,6 +127,7 @@ func publishRegistryRelease(
 			SumsFile: row.SumsFile, SumsSHA256: row.SumsSha256, SignatureFile: row.SignatureFile,
 			SignatureSHA256: row.SignatureSha256, KeyFingerprint: row.KeyFingerprint, Protocols: row.Protocols,
 			PublishedBy: row.PublishedBy, ArchivesJSON: row.ArchivesJson, PublishedAtMs: row.PublishedAtMs,
+			StoredFilesJSON: row.StoredFilesJson,
 		})
 		// A stored row that fails its checks is never the same content: the
 		// publish does not claim it.
@@ -148,9 +154,10 @@ func publishRegistryRelease(
 		Protocols: registrystore.JoinProtocols(
 			rel.Protocols,
 		),
-		PublishedBy:   rel.PublishedBy,
-		ArchivesJson:  archives,
-		PublishedAtMs: codec.Millis(rel.PublishedAt),
+		PublishedBy:     rel.PublishedBy,
+		ArchivesJson:    archives,
+		PublishedAtMs:   codec.Millis(rel.PublishedAt),
+		StoredFilesJson: storedFiles,
 	})
 	if err != nil {
 		return none, false, fmt.Errorf("insert registry release: %w", err)
@@ -201,6 +208,7 @@ func registryRow(row db.GetRegistryReleaseRow) registrystore.Row {
 		SumsFile: row.SumsFile, SumsSHA256: row.SumsSha256, SignatureFile: row.SignatureFile,
 		SignatureSHA256: row.SignatureSha256, KeyFingerprint: row.KeyFingerprint, Protocols: row.Protocols,
 		PublishedBy: row.PublishedBy, ArchivesJSON: row.ArchivesJson, PublishedAtMs: row.PublishedAtMs,
+		StoredFilesJSON: row.StoredFilesJson,
 	}
 }
 

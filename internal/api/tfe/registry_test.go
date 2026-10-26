@@ -53,6 +53,7 @@ func fixtureRelease() registry.Release {
 				Size:     3,
 			},
 		},
+		Files: nil,
 	}
 }
 

@@ -19,6 +19,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/durable"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/secret"
+	"opendustpan.org/opendustpan/pkg/store/internal/blobrefs"
 	"opendustpan.org/opendustpan/pkg/store/internal/codec"
 	"opendustpan.org/opendustpan/pkg/store/internal/migrate"
 	"opendustpan.org/opendustpan/pkg/store/postgres/internal/db"
@@ -82,6 +83,7 @@ const (
 // backup queries whose table names come from the allowlist backup.Tables.
 type pgQuerier interface {
 	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
 }
 
 // pgCopyTable describes the COPY columns of one backup table: the columns to
@@ -827,7 +829,9 @@ type pgAttrs struct {
 	regions  []string
 	wrappers []string
 	blobs    []backup.BlobRef
-	version  int
+	// unverified holds the keys that rows name and the backup does not copy.
+	unverified []string
+	version    int
 }
 
 // backupAttrs reads the home regions, wrapper IDs, blob references and
@@ -860,6 +864,14 @@ func backupAttrs(ctx context.Context, q *db.Queries, qr pgQuerier) (pgAttrs, err
 		blobs = append(blobs, ref)
 	}
 
+	collector := &blobrefs.Collector{}
+	if addErr := addStoredBlobRefs(ctx, qr, pgIdent, collector); addErr != nil {
+		return pgAttrs{}, addErr
+	}
+
+	blobs = append(blobs, collector.Refs()...)
+	slices.SortFunc(blobs, func(a, b backup.BlobRef) int { return strings.Compare(a.Key, b.Key) })
+
 	var version int64
 
 	// schema_migrations is runtime bookkeeping, not a migration, so no sqlc
@@ -876,7 +888,9 @@ func backupAttrs(ctx context.Context, q *db.Queries, qr pgQuerier) (pgAttrs, err
 		wrappers = []string{}
 	}
 
-	return pgAttrs{regions: regions, wrappers: wrappers, blobs: blobs, version: int(version)}, nil
+	return pgAttrs{
+		regions: regions, wrappers: wrappers, blobs: blobs, unverified: collector.Unverified(), version: int(version),
+	}, nil
 }
 
 // backupBlobRef converts one blob row into a manifest reference. The MD5
@@ -954,7 +968,7 @@ func (s *Store) buildStaging(ctx context.Context, in stagingInput) (backup.Summa
 		return backup.Summary{}, err
 	}
 
-	if blobErr := checkStagedBlobRefs(sum.Blobs, in.want.Blobs); blobErr != nil {
+	if blobErr := checkStagedBlobData(sum, in.want); blobErr != nil {
 		return backup.Summary{}, blobErr
 	}
 
@@ -1007,6 +1021,15 @@ func (s *Store) summarizeStaging(
 		return backup.Summary{}, err
 	}
 
+	stagedTable := func(table string) string { return stagingTable(staging, table) }
+
+	collector := &blobrefs.Collector{}
+	if addErr := addStoredBlobRefs(ctx, s.pool, stagedTable, collector); addErr != nil {
+		return backup.Summary{}, addErr
+	}
+
+	blobs = append(blobs, collector.Refs()...)
+
 	version, err := stagingSchemaVersion(ctx, s.pool, staging)
 	if err != nil {
 		return backup.Summary{}, err
@@ -1027,6 +1050,7 @@ func (s *Store) summarizeStaging(
 		WrapperIDs:    wrappers,
 		RowCounts:     counts,
 		Blobs:         blobs,
+		Unverified:    collector.Unverified(),
 		SchemaVersion: version,
 	}, nil
 }
@@ -1344,6 +1368,22 @@ func stagingBlobRefs(ctx context.Context, pool *pgxpool.Pool, staging string) ([
 	}
 
 	return out, nil
+}
+
+// checkStagedBlobData compares the blobs that the staged data names with the
+// manifest: the references must match, and every blob that the staged data
+// names without a check value must be one that the manifest lists as not
+// copied.
+func checkStagedBlobData(staged, want backup.Summary) error {
+	if err := checkStagedBlobRefs(staged.Blobs, want.Blobs); err != nil {
+		return err
+	}
+
+	if err := backup.CheckUnverified(staged.Unverified, want.Unverified); err != nil {
+		return fmt.Errorf("staged backup: %w", err)
+	}
+
+	return nil
 }
 
 // checkStagedBlobRefs compares the blob references of the staged data with the

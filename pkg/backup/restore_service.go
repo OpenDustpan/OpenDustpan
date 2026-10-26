@@ -568,6 +568,10 @@ func sanitizeRestoreError(err error) string {
 		return text
 	}
 
+	if notBacked, ok := errors.AsType[*BlobsNotBackedError](err); ok && notBacked != nil {
+		return notBacked.Error()
+	}
+
 	for _, sentinel := range storedRestoreSentinels {
 		if errors.Is(err, sentinel) {
 			return sentinel.Error()

@@ -234,41 +234,51 @@ func createLog(ctx context.Context, tx Tx, j *job.Job, lc *logCreate) error {
 }
 
 // ConfirmLogChunk implements job.RecordStore.
-func (s *Store) ConfirmLogChunk(ctx context.Context, pc job.PhaseClaim, step, version string, seq int) error {
+func (s *Store) ConfirmLogChunk(ctx context.Context, pc job.PhaseClaim, c job.ChunkConfirm) error {
+	// A sealed chunk is never empty. A confirm with no stored bytes would leave
+	// a counted chunk that a backup cannot copy.
+	if c.Stored.Size <= 0 {
+		return fmt.Errorf("%w: chunk %d of log %s has no stored size", job.ErrInvalid, c.Seq, c.Version)
+	}
+
 	return s.run.Write(ctx, pc.Fence, func(tx Tx) error {
-		j, err := claimed(ctx, tx, pc)
-		if err != nil {
-			return err
-		}
-
-		ns := pc.Fence.Namespace
-
-		row, ok, err := tx.Chunk(ctx, ns, version, seq)
-		if err != nil {
-			return err
-		}
-
-		if !ok {
-			return fmt.Errorf("%w: chunk %d of log %s was not reserved", job.ErrInvalid, seq, version)
-		}
-
-		changed, err := job.ConfirmChunkRecord(&j, stepKey(&pc, step), version, seq, row)
-		if err != nil {
-			return err
-		}
-
-		if !row.Confirmed {
-			if confirmErr := tx.ConfirmChunk(ctx, ns, version, seq); confirmErr != nil {
-				return confirmErr
-			}
-		}
-
-		if !changed {
-			return nil
-		}
-
-		return save(ctx, tx, &j)
+		return confirmChunk(ctx, tx, &pc, &c)
 	})
+}
+
+// confirmChunk counts the chunk c in the job of pc and marks its row, with the
+// stored size and MD5, in the transaction tx.
+func confirmChunk(ctx context.Context, tx Tx, pc *job.PhaseClaim, c *job.ChunkConfirm) error {
+	j, err := claimed(ctx, tx, *pc)
+	if err != nil {
+		return err
+	}
+
+	row, ok, err := tx.Chunk(ctx, pc.Fence.Namespace, c.Version, c.Seq)
+	if err != nil {
+		return err
+	}
+
+	if !ok {
+		return fmt.Errorf("%w: chunk %d of log %s was not reserved", job.ErrInvalid, c.Seq, c.Version)
+	}
+
+	changed, err := job.ConfirmChunkRecord(&j, stepKey(pc, c.Step), c.Version, c.Seq, row)
+	if err != nil {
+		return err
+	}
+
+	if !row.Confirmed {
+		if confirmErr := tx.ConfirmChunk(ctx, pc.Fence.Namespace, c.Version, c.Seq, c.Stored); confirmErr != nil {
+			return confirmErr
+		}
+	}
+
+	if !changed {
+		return nil
+	}
+
+	return save(ctx, tx, &j)
 }
 
 // gatePlan loads the job of pc and applies the rules of a plan write. For a
@@ -616,19 +626,31 @@ func CheckChunkRow(logID string, seq, size int64, sha string) error {
 	return nil
 }
 
+// ParsePlan returns the plan that the JSON body of the row with the ID id
+// holds. It returns an error that wraps ErrDamaged for a body that is not JSON
+// and for a plan with another ID. It does not check the parts.
+func ParsePlan(id, body string) (*job.PlanRef, error) {
+	var b planBody
+	if err := json.Unmarshal([]byte(body), &b); err != nil {
+		return nil, fmt.Errorf("%w: plan %s: %w", ErrDamaged, id, err)
+	}
+
+	p := decodePlan(&b)
+	if p == nil || p.ID != id {
+		return nil, fmt.Errorf("%w: plan %s does not match its row", ErrDamaged, id)
+	}
+
+	return p, nil
+}
+
 // CheckPlanBody returns an error that wraps ErrDamaged unless body is the JSON
 // of a plan with the ID id and valid parts. A restore uses it on the rows of
 // a staged backup, so that a row that the server would not have written never
 // goes live.
 func CheckPlanBody(id, body string) error {
-	var b planBody
-	if err := json.Unmarshal([]byte(body), &b); err != nil {
-		return fmt.Errorf("%w: plan %s: %w", ErrDamaged, id, err)
-	}
-
-	p := decodePlan(&b)
-	if p == nil || p.ID != id {
-		return fmt.Errorf("%w: plan %s does not match its row", ErrDamaged, id)
+	p, err := ParsePlan(id, body)
+	if err != nil {
+		return err
 	}
 
 	// A reserved plan has no part yet. A filled plan has the parts that PutPlan

@@ -80,6 +80,11 @@ type Manifest struct {
 	// authenticated, so the value is a claim: a restore on a production
 	// installation also decides from the staged data.
 	InstallationKind installation.Kind `json:"installationKind"`
+	// Unverified holds the keys of the blobs that rows of the SQL part name
+	// and that the backup does not hold, because the rows have no size and MD5
+	// of the stored bytes. The key is optional: a backup with no such blob
+	// omits it.
+	Unverified []string `json:"unverified,omitempty"`
 }
 
 // UnmarshalJSON reads a manifest. A value of installationKind that is not a
@@ -721,6 +726,11 @@ func (s *Service) backup(
 		return err
 	}
 
+	if n := len(exported.sum.Unverified); n > 0 {
+		s.logger.WarnContext(ctx, "backup does not copy blobs that the data names without a check value",
+			slog.String("backup", id.String()), slog.Int("blobs", n), slog.String("first", exported.sum.Unverified[0]))
+	}
+
 	ordered := orderBlobs(exported.sum.Blobs)
 
 	stored := make([]ManifestBlob, 0, len(ordered))
@@ -1290,6 +1300,7 @@ func (s *Service) writeManifest(ctx context.Context, in manifestInput) error {
 		SQLFiles:      in.files,
 
 		InstallationKind: in.kind,
+		Unverified:       slices.Clone(in.sum.Unverified),
 	}
 
 	manifest.Blobs = append(manifest.Blobs, in.ordered...)

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/durable"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -77,6 +78,17 @@ type ChunkRow struct {
 	Confirmed bool
 }
 
+// ChunkConfirm names the chunk that ConfirmLogChunk counts: the chunk Seq of
+// the log version Version of the step Step.
+type ChunkConfirm struct {
+	Step    string
+	Version string
+	Seq     int
+	// Stored is the size and the MD5 of the sealed bytes that the blob store
+	// holds for the chunk.
+	Stored blob.Digest
+}
+
 // ChunkPlan is what PlanChunk decides for a reserve of a chunk.
 type ChunkPlan struct {
 	// Version is the ID of the log version that the chunk belongs to.
@@ -138,11 +150,13 @@ type RecordStore interface {
 	// ignored). The key record commits in the same transaction. The
 	// rules are in PlanChunk. It returns the plan, which names the version.
 	ReserveLogChunk(ctx context.Context, pc PhaseClaim, step string, c ChunkReserve, newLog *NewLog) (ChunkPlan, error)
-	// ConfirmLogChunk marks the chunk seq of the log version of the step as
-	// stored, and counts it in LogRef.Chunks and LogRef.Size. A chunk that is
-	// counted already changes nothing. It returns ErrInvalid for a chunk that
-	// no reserve recorded or that is not the next one.
-	ConfirmLogChunk(ctx context.Context, pc PhaseClaim, step, version string, seq int) error
+	// ConfirmLogChunk marks the chunk c as stored, and counts it in
+	// LogRef.Chunks and LogRef.Size. The store keeps c.Stored, the size and the
+	// MD5 of the sealed bytes in the blob store, in the row of the chunk. A
+	// chunk that is counted already changes nothing, and its stored values
+	// stay. It returns ErrInvalid for a chunk that no reserve recorded or that
+	// is not the next one, and for a c.Stored with no size.
+	ConfirmLogChunk(ctx context.Context, pc PhaseClaim, c ChunkConfirm) error
 	// ReservePlan records the plan np before its parts exist, with its item key
 	// in the same transaction, and returns it. A reserved plan has no part and
 	// is not readable. It applies the checks of PutPlan: when the current state
@@ -494,10 +508,48 @@ func CheckPlanParts(parts []PlanPart) error {
 				p.Size)
 		}
 
+		if err := checkStoredPart(p); err != nil {
+			return err
+		}
+
 		seen[p.Kind] = true
 	}
 
 	return nil
+}
+
+// checkStoredPart checks the stored size and the MD5 of a plan part: both or
+// neither. A plan from an earlier version of the server has neither. A part
+// with an MD5 has a stored size above zero and an MD5 of 32 lowercase hex
+// characters.
+func checkStoredPart(p *PlanPart) error {
+	if p.StoredMD5 == "" && p.StoredSize == 0 {
+		return nil
+	}
+
+	if p.StoredSize <= 0 || !ValidMD5(p.StoredMD5) {
+		return fmt.Errorf("%w: plan part %q has no valid stored size and MD5", ErrInvalid, p.Kind)
+	}
+
+	return nil
+}
+
+// md5HexLength is the length of an MD5 in hexadecimal.
+const md5HexLength = 32
+
+// ValidMD5 reports whether h is an MD5 in lowercase hexadecimal.
+func ValidMD5(h string) bool {
+	if len(h) != md5HexLength {
+		return false
+	}
+
+	for _, c := range []byte(h) {
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return false
+		}
+	}
+
+	return true
 }
 
 // CheckDelivered returns the error of the record of d as the delivery of the

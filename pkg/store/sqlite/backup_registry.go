@@ -30,6 +30,7 @@ func sqliteRegistryBackupTables() []sqliteBackupTable {
 				"published_by",
 				"archives_json",
 				"published_at_ms",
+				"stored_files_json",
 			},
 		},
 		{
@@ -48,7 +49,8 @@ func sqliteRegistryBackupTables() []sqliteBackupTable {
 // stays so that a bad row fails the restore and does not wait for a reader.
 func checkStagedRegistryReleases(ctx context.Context, conn *sql.DB) error {
 	const query = `SELECT n.name, r.kind, r.name, r.system, r.version, r.sums_file, r.sums_sha256, r.signature_file,
-r.signature_sha256, r.key_fingerprint, r.protocols, r.published_by, r.archives_json, r.published_at_ms
+r.signature_sha256, r.key_fingerprint, r.protocols, r.published_by, r.archives_json, r.published_at_ms,
+r.stored_files_json
 FROM registry_releases AS r LEFT JOIN namespaces AS n ON n.id = r.namespace_id`
 
 	rows, err := conn.QueryContext(ctx, query)
@@ -81,6 +83,7 @@ FROM registry_releases AS r LEFT JOIN namespaces AS n ON n.id = r.namespace_id`
 			&row.PublishedBy,
 			&row.ArchivesJSON,
 			&row.PublishedAtMs,
+			&row.StoredFilesJSON,
 		)
 		if scanErr != nil {
 			return fmt.Errorf("read staged registry releases: %w", backup.ErrExportRead)

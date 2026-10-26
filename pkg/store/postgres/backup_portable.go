@@ -51,6 +51,7 @@ func (s *Store) ExportPortable(
 			WrapperIDs:    attrs.wrappers,
 			RowCounts:     counts,
 			Blobs:         attrs.blobs,
+			Unverified:    attrs.unverified,
 			SchemaVersion: attrs.version,
 		}
 

@@ -74,6 +74,10 @@ func (s *Store) StagePortable(
 		return backup.Summary{}, err
 	}
 
+	if err := backup.CheckUnverified(sum.Unverified, want.Unverified); err != nil {
+		return backup.Summary{}, fmt.Errorf("staged backup: %w", err)
+	}
+
 	if err := s.keepStaged(temp); err != nil {
 		return backup.Summary{}, err
 	}
