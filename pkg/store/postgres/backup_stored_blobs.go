@@ -135,7 +135,8 @@ func addReleaseBlobRefs(ctx context.Context, q pgQuerier, table func(string) str
 
 		rel, relErr := registrystore.Release(row)
 		if relErr != nil {
-			return fmt.Errorf("registry release %q: %w: %w", row.Name, relErr, backup.ErrCorrupt)
+			return fmt.Errorf("registry release %s/%s %s@%s (%s): %w: %w",
+				row.Namespace, row.Kind, row.Name, row.Version, row.System, relErr, backup.ErrCorrupt)
 		}
 
 		if addErr := c.Release(blobrefs.ReleaseRow{NamespaceID: nsID, Release: rel}); addErr != nil {

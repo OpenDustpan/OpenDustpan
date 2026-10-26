@@ -388,3 +388,71 @@ func assertCollected(t *testing.T, c *blobrefs.Collector, want collected) {
 		t.Errorf("unverified keys = %v, want %v", c.Unverified(), wantUnver)
 	}
 }
+
+// manyChunks is the number of chunks of the scale test and the benchmark.
+const manyChunks = 200_000
+
+// collectChunks adds n confirmed chunks of one log, each with stored values.
+func collectChunks(tb testing.TB, n int) *blobrefs.Collector {
+	tb.Helper()
+
+	sum, err := hex.DecodeString(md5Hex)
+	if err != nil {
+		tb.Fatalf("decode md5: %v", err)
+	}
+
+	c := &blobrefs.Collector{}
+
+	for i := range n {
+		// Several logs, so that the keys differ in the log and in the number.
+		row := chunkRow(int64(i%60_000), true, false, 9, sum)
+		row.LogID = fmt.Sprintf("jlv-%020d", i/60_000)
+
+		if addErr := c.Chunk(row); addErr != nil {
+			tb.Fatalf("Chunk %d = %v", i, addErr)
+		}
+	}
+
+	return c
+}
+
+// TestCollectorScales proves that the collector adds many chunks in time that
+// is linear in their number: with a scan of the earlier keys for each chunk, 200
+// thousand chunks take minutes.
+func TestCollectorScales(t *testing.T) {
+	t.Parallel()
+
+	start := time.Now()
+	c := collectChunks(t, manyChunks)
+
+	if got := len(c.Refs()); got != manyChunks {
+		t.Fatalf("references = %d, want %d", got, manyChunks)
+	}
+
+	if elapsed := time.Since(start); elapsed > 10*time.Second {
+		t.Errorf("collecting %d chunks took %v, want well under 10 s", manyChunks, elapsed)
+	}
+}
+
+func BenchmarkCollectorChunks(b *testing.B) {
+	for range b.N {
+		collectChunks(b, manyChunks)
+	}
+}
+
+// TestCollectorKeepsUnverifiedUnique checks that a key listed twice appears
+// once, in sorted order.
+func TestCollectorKeepsUnverifiedUnique(t *testing.T) {
+	t.Parallel()
+
+	var c blobrefs.Collector
+
+	for _, seq := range []int64{2, 1, 2, 1} {
+		if err := c.Chunk(chunkRow(seq, true, false, 0, nil)); err != nil {
+			t.Fatalf("Chunk = %v", err)
+		}
+	}
+
+	prefix := "namespaces/" + nsID + "/job/" + jobID + "/log/" + logID + "/"
+	assertCollected(t, &c, collected{keys: nil, unverified: []string{prefix + "00000001", prefix + "00000002"}})
+}

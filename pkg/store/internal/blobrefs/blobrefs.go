@@ -73,9 +73,14 @@ type ReleaseRow struct {
 }
 
 // Collector gathers the references of a backup. The zero value is ready.
+//
+// The collector keeps one set of the keys it added and one of the keys it listed
+// as not copied, so that a backup of a million chunks does not compare each key
+// with every earlier key.
 type Collector struct {
 	refs       []backup.BlobRef
-	unverified []string
+	added      map[string]struct{}
+	unverified map[string]struct{}
 }
 
 // Refs returns the references that the backup copies, in the order added.
@@ -87,10 +92,14 @@ func (c *Collector) Refs() []backup.BlobRef {
 // copy, because the rows hold no size and MD5 of the stored bytes. It is
 // sorted and has no key twice.
 func (c *Collector) Unverified() []string {
-	out := slices.Clone(c.unverified)
+	out := make([]string, 0, len(c.unverified))
+	for key := range c.unverified {
+		out = append(out, key)
+	}
+
 	slices.Sort(out)
 
-	return slices.Compact(out)
+	return out
 }
 
 // Chunk adds the blob of a log chunk. A chunk that no writer confirmed has no
@@ -179,7 +188,7 @@ func (c *Collector) Release(row ReleaseRow) error {
 
 		i := slices.IndexFunc(row.Release.Files, func(f registry.StoredFile) bool { return f.SHA256 == hash })
 		if i < 0 {
-			c.unverified = append(c.unverified, key.String())
+			c.list(key.String())
 
 			continue
 		}
@@ -195,20 +204,35 @@ func (c *Collector) Release(row ReleaseRow) error {
 	return nil
 }
 
+// list adds key to the keys that the backup does not copy.
+func (c *Collector) list(key string) {
+	if c.unverified == nil {
+		c.unverified = make(map[string]struct{})
+	}
+
+	c.unverified[key] = struct{}{}
+}
+
 // add adds a reference when the size and the MD5 are those of stored bytes,
 // and lists the key as not copied otherwise. A key that two rows name once is
 // added once: the content is the same, because the key follows the content for
 // a registry file, and a chunk or a plan part belongs to one row.
 func (c *Collector) add(key string, size int64, md5sum []byte) {
 	if size <= 0 || len(md5sum) != md5Size {
-		c.unverified = append(c.unverified, key)
+		c.list(key)
 
 		return
 	}
 
-	if slices.ContainsFunc(c.refs, func(r backup.BlobRef) bool { return r.Key == key }) {
+	if _, dup := c.added[key]; dup {
 		return
 	}
+
+	if c.added == nil {
+		c.added = make(map[string]struct{})
+	}
+
+	c.added[key] = struct{}{}
 
 	var sum [md5Size]byte
 
