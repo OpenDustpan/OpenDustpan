@@ -32,6 +32,8 @@ const (
 	kindClosedEnum
 	// kindOpenEnum is a string with a list of known values and room for new ones.
 	kindOpenEnum
+	// kindUnion is a choice between objects, by the value of one member.
+	kindUnion
 )
 
 type typeView struct {
@@ -45,12 +47,27 @@ type typeView struct {
 	// Record is the TypeScript type and the decoder of the values of a record.
 	RecordType    string
 	RecordDecoder string
+	// Discriminator is the member of a union that selects the variant.
+	Discriminator string
+	// Variants are the choices of a union, in the order of their values.
+	Variants []variantView
+	// Base is the name of the schema for a value that no variant names.
+	Base string
+}
+
+// variantView is one choice of a union.
+type variantView struct {
+	// Value is the TypeScript string literal of the discriminator value.
+	Value string
+	// Name is the name of the schema of the choice.
+	Name string
 }
 
 func (t typeView) IsInterface() bool  { return t.Kind == kindInterface }
 func (t typeView) IsRecord() bool     { return t.Kind == kindRecord }
 func (t typeView) IsClosedEnum() bool { return t.Kind == kindClosedEnum }
 func (t typeView) IsOpenEnum() bool   { return t.Kind == kindOpenEnum }
+func (t typeView) IsUnion() bool      { return t.Kind == kindUnion }
 
 type fieldView struct {
 	// Name is the property key, quoted when it needs quotes.
@@ -85,6 +102,7 @@ func (d *data) addTypes(api *model.API, seen map[string]string) error {
 func typeOf(s *model.Schema) (typeView, error) {
 	tv := typeView{
 		Name: s.Name, Doc: s.Description, Kind: 0, Fields: nil, Values: nil, RecordType: "", RecordDecoder: "",
+		Discriminator: "", Variants: nil, Base: "",
 	}
 
 	switch s.Kind {
@@ -101,6 +119,16 @@ func typeOf(s *model.Schema) (typeView, error) {
 		return tv, nil
 	case model.KindObject:
 		return objectOf(s, tv)
+	case model.KindUnion:
+		tv.Kind = kindUnion
+		tv.Discriminator = tsString(s.Discriminator)
+		tv.Base = s.Base
+
+		for _, v := range s.Variants {
+			tv.Variants = append(tv.Variants, variantView{Value: tsString(v.Value), Name: v.Schema})
+		}
+
+		return tv, nil
 	default:
 		return typeView{}, fmt.Errorf("%w: schema %s has an unknown kind", clientgen.ErrInvalidDescription, s.Name)
 	}
@@ -230,6 +258,10 @@ func walkBase(t model.Type) (walked, error) {
 
 	switch t.Kind {
 	case model.TypeString:
+		if t.Const != "" {
+			return walked{tsString(t.Const), "literal(" + tsString(t.Const) + ")"}, nil
+		}
+
 		if t.Format == "date-time" {
 			return walked{stringType, "dateTime"}, nil
 		}
@@ -426,9 +458,9 @@ func addBodyAndResult(ov *operationView, op *model.Operation) error {
 func addParameters(ov *operationView, op *model.Operation) error {
 	byName := make(map[string]model.Parameter)
 
-	for _, p := range op.Parameters {
-		if p.In == model.InPath {
-			byName[p.Name] = p
+	for i := range op.Parameters {
+		if p := &op.Parameters[i]; p.In == model.InPath {
+			byName[p.Name] = *p
 		}
 	}
 
@@ -479,7 +511,9 @@ type queryNames struct {
 func addQuery(ov *operationView, op *model.Operation) (queryNames, error) {
 	var names queryNames
 
-	for _, p := range op.Parameters {
+	for i := range op.Parameters {
+		p := &op.Parameters[i]
+
 		if p.In != model.InQuery {
 			continue
 		}

@@ -305,6 +305,7 @@ func TestRuntimeExportsAreReserved(t *testing.T) {
 		api := synthetic(t)
 		api.Schemas = append(api.Schemas, model.Schema{
 			Name: name, Kind: model.KindObject, Description: "", Fields: nil, Values: nil, Open: false, Extra: nil,
+			Discriminator: "", Variants: nil, Base: "", Union: "",
 		})
 
 		if _, err := typescript.New().Render(api, options(api.Version)); !errors.Is(err, clientgen.ErrInvalidName) {
@@ -404,7 +405,7 @@ func TestRenderRefusesHostileInput(t *testing.T) {
 			clientgen.ErrVersion,
 		},
 		{"members and additional properties", func(a *model.API, _ *clientgen.Options) {
-			extra := model.Type{Kind: model.TypeString, Format: "", Elem: nil, Ref: "", Nullable: false}
+			extra := model.Type{Kind: model.TypeString, Format: "", Elem: nil, Ref: "", Const: "", Nullable: false}
 			a.Schemas[0].Extra = &extra
 		}, clientgen.ErrUnsupported},
 		{
@@ -493,6 +494,7 @@ func TestRenderRefusesTypesThatItCannotCheck(t *testing.T) {
 					Format:   "",
 					Elem:     nil,
 					Ref:      "",
+					Const:    "",
 					Nullable: false,
 				}
 			},
@@ -506,6 +508,7 @@ func TestRenderRefusesTypesThatItCannotCheck(t *testing.T) {
 					Format:   "",
 					Elem:     nil,
 					Ref:      "",
+					Const:    "",
 					Nullable: false,
 				}
 			},
@@ -514,9 +517,9 @@ func TestRenderRefusesTypesThatItCannotCheck(t *testing.T) {
 		{
 			"unknown kind of an item type",
 			func(a *model.API, _ *clientgen.Options) {
-				elem := model.Type{Kind: 99, Format: "", Elem: nil, Ref: "", Nullable: false}
+				elem := model.Type{Kind: 99, Format: "", Elem: nil, Ref: "", Const: "", Nullable: false}
 				a.Schemas[0].Fields[0].Type = model.Type{
-					Kind: model.TypeArray, Format: "", Elem: &elem, Ref: "", Nullable: false,
+					Kind: model.TypeArray, Format: "", Elem: &elem, Ref: "", Const: "", Nullable: false,
 				}
 			},
 			clientgen.ErrUnsupported,
@@ -524,7 +527,7 @@ func TestRenderRefusesTypesThatItCannotCheck(t *testing.T) {
 		{
 			"unknown kind of the type of an additional property",
 			func(a *model.API, _ *clientgen.Options) {
-				extra := model.Type{Kind: 99, Format: "", Elem: nil, Ref: "", Nullable: false}
+				extra := model.Type{Kind: 99, Format: "", Elem: nil, Ref: "", Const: "", Nullable: false}
 				a.Schemas[0].Fields = nil
 				a.Schemas[0].Extra = &extra
 			},
@@ -549,7 +552,14 @@ func TestRenderRefusesTypesThatItCannotCheck(t *testing.T) {
 			"format of an answer that the set does not check",
 			func(a *model.API, _ *clientgen.Options) {
 				onEachResult(a, func(t *model.Type) {
-					*t = model.Type{Kind: model.TypeString, Format: "uuid", Elem: nil, Ref: "", Nullable: false}
+					*t = model.Type{
+						Kind:     model.TypeString,
+						Format:   "uuid",
+						Elem:     nil,
+						Ref:      "",
+						Const:    "",
+						Nullable: false,
+					}
 				})
 			},
 			clientgen.ErrUnsupported,
@@ -558,7 +568,14 @@ func TestRenderRefusesTypesThatItCannotCheck(t *testing.T) {
 			"format of a body that the set does not check",
 			func(a *model.API, _ *clientgen.Options) {
 				onEachBody(a, func(t *model.Type) {
-					*t = model.Type{Kind: model.TypeInteger, Format: "int32", Elem: nil, Ref: "", Nullable: false}
+					*t = model.Type{
+						Kind:     model.TypeInteger,
+						Format:   "int32",
+						Elem:     nil,
+						Ref:      "",
+						Const:    "",
+						Nullable: false,
+					}
 				})
 			},
 			clientgen.ErrUnsupported,
@@ -567,7 +584,14 @@ func TestRenderRefusesTypesThatItCannotCheck(t *testing.T) {
 			"format of a query parameter that the set does not check",
 			func(a *model.API, _ *clientgen.Options) {
 				onEachQuery(a, func(t *model.Type) {
-					*t = model.Type{Kind: model.TypeString, Format: "date", Elem: nil, Ref: "", Nullable: false}
+					*t = model.Type{
+						Kind:     model.TypeString,
+						Format:   "date",
+						Elem:     nil,
+						Ref:      "",
+						Const:    "",
+						Nullable: false,
+					}
 				})
 			},
 			clientgen.ErrUnsupported,

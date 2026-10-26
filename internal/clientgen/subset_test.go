@@ -106,8 +106,12 @@ func subsetRules() map[string]rule {
 			"required": "", "additionalProperties": "additionalProperties",
 			"items": "schema", "enum": "", "format": "", "description": "",
 			"minLength": "", "maxLength": "", "anyOf": "schemaList",
-			"oneOf": "schemaList",
+			"oneOf": "schemaList", "discriminator": "discriminator",
 		}),
+		// A discriminator names the member and maps its values to schemas.
+		"discriminator": object(map[string]string{"propertyName": "", "mapping": "mapping"}),
+		// The mapping has free keys, the values of the member, and string values.
+		"mapping":    mapOfRule("", nil),
 		"properties": mapOfRule("schema", nil),
 		"schemaList": listOfRule("schema"),
 	}
@@ -166,6 +170,11 @@ func (w *walker) walkAdditional(node any, ptr string) {
 	}
 }
 
+// hasFreeKeys says that the rule is a map with free keys and leaf values.
+func hasFreeKeys(ctx string) bool {
+	return ctx == "securityRequirement" || ctx == "mapping"
+}
+
 func (w *walker) walkObject(ctx string, r rule, v map[string]any, ptr string) {
 	for k, child := range v {
 		p := ptr + "/" + strings.ReplaceAll(strings.ReplaceAll(k, "~", "~0"), "/", "~1")
@@ -189,7 +198,7 @@ func (w *walker) walkObject(ctx string, r rule, v map[string]any, ptr string) {
 			continue
 		}
 
-		if r.listOf != "" || (r.mapOf == "" && ctx != "securityRequirement") {
+		if r.listOf != "" || (r.mapOf == "" && !hasFreeKeys(ctx)) {
 			w.report(p, "key is not in the subset")
 
 			continue
@@ -280,6 +289,16 @@ func TestSubsetRefusesOtherConstructs(t *testing.T) {
 		},
 		{"allOf", `{"components":{"schemas":{"A":{"allOf":[]}}}}`, "/allOf: key"},
 		{"trace", `{"paths":{"/a":{"trace":{}}}}`, "/trace: key"},
+		{
+			"discriminator key",
+			`{"components":{"schemas":{"A":{"discriminator":{"x":1}}}}}`,
+			"/discriminator/x: key",
+		},
+		{
+			"discriminator mapping as a list",
+			`{"components":{"schemas":{"A":{"discriminator":{"mapping":[]}}}}}`,
+			"a list is not in the subset",
+		},
 	}
 
 	for _, tt := range tests {

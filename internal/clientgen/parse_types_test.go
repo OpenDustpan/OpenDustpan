@@ -63,7 +63,7 @@ const typesDocument = `{
 
 // typ makes a type with the fields that the test does not care about empty.
 func typ(kind model.TypeKind) model.Type {
-	return model.Type{Kind: kind, Format: "", Elem: nil, Ref: "", Nullable: false}
+	return model.Type{Kind: kind, Format: "", Elem: nil, Ref: "", Const: "", Nullable: false}
 }
 
 func nullableOf(t model.Type) model.Type {

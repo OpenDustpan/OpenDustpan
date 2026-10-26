@@ -390,6 +390,9 @@ type Service interface {
 	//
 	// Approve records verdicts for the gates of type GateApproval. A
 	// confirmation goes through Confirm.
+	//
+	// This version does not implement the contract below: each call returns
+	// ErrUnsupported and changes nothing.
 	Approve(ctx context.Context, a Actor, id ID, v Verdict, plan PlanBinding, comment string) (Job, error)
 	// Confirm records the verdict of the person who asked the agent, on the
 	// confirmation gate of the current phase. It needs the start action of
@@ -404,6 +407,9 @@ type Service interface {
 	// missing or older than ConfirmFreshness, ErrPlanChanged and
 	// ErrPlanStale as Approve does, and ErrFinished for a job that ended. A
 	// rejection ends the job rejected.
+	//
+	// This version does not implement the contract below: each call returns
+	// ErrUnsupported and changes nothing.
 	Confirm(ctx context.Context, a Actor, id ID, v Verdict, plan PlanBinding) (Job, error)
 	// RedactLog replaces each match of subs in the log version with the ID
 	// version, of the job id, writes the result as the next version with

@@ -50,7 +50,6 @@ func TestKindsWithoutRoute(t *testing.T) {
 
 	withoutRoute := map[string]string{
 		maintenance.RevokedTempAdmin: "a temporary administrator ends by expiry, not by a request",
-		maintenance.RevokedProvider:  "a change of a sign-in provider that only disables it, which depends on the body",
 	}
 
 	routed := map[string]bool{}
