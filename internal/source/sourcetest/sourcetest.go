@@ -42,8 +42,8 @@ type Harness struct {
 	Filters source.Filters
 	// Namespace makes the namespace name and returns its current fence.
 	Namespace func(t *testing.T, name string) namespace.Fence
-	// Audited is an optional hook: it returns the audit entries of the
-	// namespace, oldest first. A case that needs it skips when it is nil.
+	// Audited returns the audit entries of the namespace, oldest first. It is
+	// required: the audit case fails when it is nil.
 	Audited func(t *testing.T, ns string) []audit.Entry
 	// FilterRaw is an optional hook: it writes raw as the stored value of the
 	// filter of the namespace, with no check of the store, as a row of
@@ -436,8 +436,10 @@ func testIsolated(t *testing.T, h Harness) {
 func testAudit(t *testing.T, h Harness) {
 	t.Helper()
 
+	// An adapter that cannot show its audit entries cannot prove that a change
+	// writes one in its transaction, so a missing hook fails the case.
 	if h.Audited == nil {
-		t.Skip("the adapter has no hook that reads the audit entries")
+		t.Fatal("the harness has no Audited hook: the adapter must show its audit entries")
 	}
 
 	fence := h.Namespace(t, acme.String())
