@@ -267,7 +267,7 @@ type settings struct {
 	// protocol. See WithRunners.
 	runners RunnerStores
 	// sourceFilters keeps the source filter of each namespace, or nil without
-	// it. The routes of the source filter need it and the runner stores.
+	// it. See WithSourceFilters.
 	sourceFilters source.Filters
 	// jobClaimer claims the phases of runner jobs for the runners of the
 	// protocol, or is nil. See WithJobClaimer.
@@ -1253,6 +1253,8 @@ type neutralHandlers struct {
 	drift http.Handler
 	// registry is nil when no registry store is set.
 	registry http.Handler
+	// sourceFilter is nil when no store of the source filter is set.
+	sourceFilter http.Handler
 }
 
 // newNeutralHandlers builds the tool-neutral inventory API, audit API and
@@ -1306,12 +1308,23 @@ func newNeutralHandlers(
 		return neutralHandlers{}, err
 	}
 
+	var sourceFilter http.Handler
+
+	if cfg.sourceFilters != nil {
+		sourceFilter, err = newSourceFilterHandler(svc, cfg, onFailure)
+		if err != nil {
+			return neutralHandlers{}, err
+		}
+	}
+
 	return neutralHandlers{
 		inventory: units, audit: entries, context: contexts, runners: runners, profiles: profiles, sinks: sinks,
 		jobs:     jobAPIs.jobs,
 		triggers: triggers,
 		drift:    jobAPIs.drift,
 		registry: registries,
+
+		sourceFilter: sourceFilter,
 	}, nil
 }
 
@@ -3972,10 +3985,7 @@ func mountAPI(mux *rootMux, a adapters, cfg *settings) error {
 	mountV1(mux, a.jobs, wrapV1)
 	mountV1(mux, a.triggers, wrapV1)
 	mountV1(mux, a.drift, wrapV1)
-	// The runner adapter serves the source filter under the prefix. Its other
-	// paths stay under /runner/v1/ and /api/runners/, which the rows above
-	// mount, so mountV1 takes only the patterns under the prefix.
-	mountV1(mux, a.runners, wrapV1)
+	mountV1(mux, a.sourceFilter, wrapV1)
 	// The capabilities document and the dev sign-in belong to the
 	// installation API, so they stay available in maintenance mode like the
 	// rest of it.

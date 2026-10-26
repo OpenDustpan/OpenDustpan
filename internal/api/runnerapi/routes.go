@@ -71,7 +71,7 @@ func (h *Handler) buildRoutes() []Route {
 	join := []identity.Action{identity.ActionRunnerJoin}
 	claim := []identity.Action{identity.ActionRunnerClaim}
 
-	routes := []Route{
+	return []Route{
 		{Method: http.MethodGet, Path: poolsPath, Scope: ScopeAuthorized, Actions: read, Serve: h.listPools},
 		{Method: http.MethodPost, Path: poolsPath, Scope: ScopeAuthorized, Actions: manage, Serve: h.createPool},
 		{Method: http.MethodGet, Path: poolPath, Scope: ScopeAuthorized, Actions: read, Serve: h.getPool},
@@ -122,14 +122,6 @@ func (h *Handler) buildRoutes() []Route {
 			Serve:   h.releaseClaim,
 		},
 	}
-
-	// The source filter routes exist only when the server has a store of the
-	// source filter.
-	if h.sourceFilters != nil {
-		routes = append(routes, h.sourceFilterRoutes()...)
-	}
-
-	return routes
 }
 
 // Routes returns a copy of the route table. The action lists are copied too,

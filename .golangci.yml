@@ -522,7 +522,7 @@ linters:
       # adapters of the tool-neutral REST API and the helpers that they call.
       # The tool-compatible APIs and the runner protocol keep their own wire
       # formats, and apidesc is the one place that reads the raw request.
-      - path-except: ^(internal/api/(audit|drift|idempotent|inventory|jobs|notifications|objectcontext|profile|refusal|registry|route|server|triggers)/|internal/(sessionauth|clientip)/|pkg/dustpan/web\.go$)
+      - path-except: ^(internal/api/(audit|drift|idempotent|inventory|jobs|notifications|objectcontext|profile|refusal|registry|route|server|sourcefilter|triggers)/|internal/(sessionauth|clientip)/|pkg/dustpan/web\.go$)
         linters:
           - forbidigo
         text: through apidesc

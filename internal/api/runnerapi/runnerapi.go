@@ -23,7 +23,6 @@ import (
 	"opendustpan.org/opendustpan/internal/api/refusal"
 	"opendustpan.org/opendustpan/internal/denylimit"
 	"opendustpan.org/opendustpan/internal/sessionauth"
-	"opendustpan.org/opendustpan/internal/source"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/durable"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -66,9 +65,6 @@ type Config struct {
 	// Audit keeps the entries of the requests that the Authorizer refuses. Nil
 	// writes none.
 	Audit audit.Store
-	// SourceFilters keeps the source filter of each namespace. Nil serves no
-	// route of the source filter.
-	SourceFilters source.Filters
 	// OnAuditFailure, when set, runs once for each refusal whose entry could not
 	// be written, so the server can count it.
 	OnAuditFailure func()
@@ -96,26 +92,25 @@ type Config struct {
 // Handler serves the runner protocol and the runner management API. The 429
 // for a second concurrent poll of one runner holds for each server instance.
 type Handler struct {
-	namespaces    *namespace.Service
-	pools         runner.PoolStore
-	members       runner.MemberStore
-	handoffs      runner.SessionStore
-	claimer       job.Claimer
-	sweeps        runner.SweepClaimer
-	operations    durable.Store
-	sourceFilters source.Filters
-	authn         identity.Authenticator
-	authz         identity.Authorizer
-	guard         *refusal.Recorder
-	sessions      *sessionauth.Checker
-	logger        *slog.Logger
-	release       runner.Release
-	serverURL     string
-	now           func() time.Time
-	interval      time.Duration
-	polls         sync.Map
-	mux           *patternMux
-	routes        []Route
+	namespaces *namespace.Service
+	pools      runner.PoolStore
+	members    runner.MemberStore
+	handoffs   runner.SessionStore
+	claimer    job.Claimer
+	sweeps     runner.SweepClaimer
+	operations durable.Store
+	authn      identity.Authenticator
+	authz      identity.Authorizer
+	guard      *refusal.Recorder
+	sessions   *sessionauth.Checker
+	logger     *slog.Logger
+	release    runner.Release
+	serverURL  string
+	now        func() time.Time
+	interval   time.Duration
+	polls      sync.Map
+	mux        *patternMux
+	routes     []Route
 }
 
 // validate returns ErrMissingDependency when cfg lacks a required dependency.
@@ -172,26 +167,25 @@ func NewHandler(cfg Config) (*Handler, error) {
 	}
 
 	h := &Handler{
-		namespaces:    cfg.Namespaces,
-		pools:         cfg.Pools,
-		members:       cfg.Members,
-		handoffs:      cfg.Handoffs,
-		claimer:       cfg.Claimer,
-		sweeps:        cfg.Sweeps,
-		operations:    cfg.Operations,
-		sourceFilters: cfg.SourceFilters,
-		authn:         cfg.Authenticator,
-		authz:         cfg.Authorizer,
-		sessions:      cfg.Sessions,
-		logger:        cfg.Logger,
-		guard:         recorder.WithLimiter(cfg.DenialLimiter).WithSurface("runner"),
-		release:       cfg.Release,
-		serverURL:     cfg.ServerURL,
-		now:           now,
-		interval:      interval,
-		polls:         sync.Map{},
-		mux:           newPatternMux(),
-		routes:        nil,
+		namespaces: cfg.Namespaces,
+		pools:      cfg.Pools,
+		members:    cfg.Members,
+		handoffs:   cfg.Handoffs,
+		claimer:    cfg.Claimer,
+		sweeps:     cfg.Sweeps,
+		operations: cfg.Operations,
+		authn:      cfg.Authenticator,
+		authz:      cfg.Authorizer,
+		sessions:   cfg.Sessions,
+		logger:     cfg.Logger,
+		guard:      recorder.WithLimiter(cfg.DenialLimiter).WithSurface("runner"),
+		release:    cfg.Release,
+		serverURL:  cfg.ServerURL,
+		now:        now,
+		interval:   interval,
+		polls:      sync.Map{},
+		mux:        newPatternMux(),
+		routes:     nil,
 	}
 
 	h.routes = h.buildRoutes()

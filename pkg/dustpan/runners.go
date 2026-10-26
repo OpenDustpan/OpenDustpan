@@ -6,7 +6,6 @@ import (
 	"strings"
 
 	"opendustpan.org/opendustpan/internal/api/runnerapi"
-	"opendustpan.org/opendustpan/internal/source"
 	"opendustpan.org/opendustpan/pkg/job"
 	"opendustpan.org/opendustpan/pkg/runner"
 )
@@ -26,14 +25,6 @@ type RunnerStores interface {
 // server serves neither.
 func WithRunners(s RunnerStores) Option {
 	return func(o *settings) { o.runners = s }
-}
-
-// WithSourceFilters sets the store of the source filter of each namespace.
-// With it and the runner stores (WithRunners), the server serves the source
-// filter under /api/dustpan/v1/namespaces/{namespace}/source-filter. Without
-// it, the server serves no route of the source filter.
-func WithSourceFilters(f source.Filters) Option {
-	return func(o *settings) { o.sourceFilters = f }
 }
 
 // WithJobClaimer sets the claimer that a poll of a runner of a pool for jobs
@@ -70,7 +61,6 @@ func newRunnerHandler(cfg *settings, svc services, onFailure func()) (http.Handl
 		Authorizer: cfg.authorizer, Sessions: cfg.sessionCookies, Logger: cfg.logger, Release: release,
 		ServerURL: publicURL, Now: cfg.now, PollInterval: 0,
 		Audit: neutralAudit, OnAuditFailure: onFailure, DenialLimiter: cfg.denialLimiter,
-		SourceFilters: cfg.sourceFilters,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("runner api: %w", err)

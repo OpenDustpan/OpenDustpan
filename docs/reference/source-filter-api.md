@@ -4,8 +4,9 @@ The source filter of a namespace decides which submodules and which Git LFS
 objects a source snapshot holds. A namespace that never set the filter has the
 empty filter: a snapshot holds no submodule and no Git LFS object.
 
-The server serves the routes of the source filter where it serves the
-[runner API](runner-api.md): it needs the runner stores and a public URL.
+The server serves the routes when it has a store of the source filter. The
+SQLite and PostgreSQL stores have one. The actions are the actions of the
+[runner API](runner-api.md).
 
 ## Routes
 
@@ -74,8 +75,9 @@ Errors have the body `{"message": "...", "code": 400, "errorCode": "..."}`.
 | --- | --- | --- |
 | 400 | `request.body-invalid` | The body is not one JSON object. It has an unknown field, a missing field, a `null` field, or data after the object. |
 | 400 | `source.filter-invalid` | A list has more than 64 entries, a pattern fails its rules, or a branch name fails its rules or is in the list twice. The message names the value. |
+| 401 | | The request has no valid credential. |
 | 403 | | The caller can read the namespace but lacks the action of the route. |
-| 404 | `runner.not-found` | The namespace does not exist, or the caller cannot read it. |
+| 404 | `namespace.not-found` | The namespace does not exist, or the caller cannot read it. The answer is the same for both. |
 | 500 | `source.filter-unreadable` | The filter that the server stored fails the checks of a filter. Send a `PUT` with a valid filter to replace it. |
 
 A refused change stores nothing and writes no audit entry of a change.

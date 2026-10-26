@@ -66,7 +66,7 @@ func TestSourceFilterAPI(t *testing.T) {
 			t.Parallel()
 			skipWithoutStore(t, store)
 
-			// The runner adapter needs the public URL, which the sign-in setup gives.
+			// The sign-in setup gives the token of the administrator.
 			env := e2e.NewEnvWithSignIn(t.Context(), t, e2e.NoCLI(), store)
 
 			sourceFilterScenario(t, env)

@@ -6744,6 +6744,10 @@
         ],
         "x-dustpan-actions": [
           {
+            "action": "namespace:read",
+            "object": "namespace"
+          },
+          {
             "action": "namespace:read-runners",
             "object": "namespace"
           }
@@ -6797,6 +6801,10 @@
           "source-filter"
         ],
         "x-dustpan-actions": [
+          {
+            "action": "namespace:read",
+            "object": "namespace"
+          },
           {
             "action": "namespace:manage-runners",
             "object": "namespace"

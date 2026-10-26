@@ -22,8 +22,8 @@ import (
 	profileapi "opendustpan.org/opendustpan/internal/api/profile"
 	pulumiapi "opendustpan.org/opendustpan/internal/api/pulumi"
 	registryapi "opendustpan.org/opendustpan/internal/api/registry"
-	"opendustpan.org/opendustpan/internal/api/runnerapi"
 	serverapi "opendustpan.org/opendustpan/internal/api/server"
+	sourcefilterapi "opendustpan.org/opendustpan/internal/api/sourcefilter"
 	tfeapi "opendustpan.org/opendustpan/internal/api/tfe"
 	tofuhttpapi "opendustpan.org/opendustpan/internal/api/tofuhttp"
 	triggersapi "opendustpan.org/opendustpan/internal/api/triggers"
@@ -52,7 +52,6 @@ import (
 	"opendustpan.org/opendustpan/pkg/outputshare"
 	"opendustpan.org/opendustpan/pkg/profile"
 	"opendustpan.org/opendustpan/pkg/registry"
-	"opendustpan.org/opendustpan/pkg/runner"
 	"opendustpan.org/opendustpan/pkg/savedview"
 	"opendustpan.org/opendustpan/pkg/secret"
 	"opendustpan.org/opendustpan/pkg/session"
@@ -872,23 +871,13 @@ func coverageJobRoutes(tb testing.TB, namespaces *namespace.Service) []RouteRef 
 	return out
 }
 
-// coverageSourceFilterRoutes returns the routes of the source filter. They sit
-// in the route table of the runner adapter, next to the runner protocol and the
-// management routes of the runner pools. The coverage check holds only the
-// routes under the prefix of the tool-neutral REST API, so it lists no other
-// route of that table.
+// coverageSourceFilterRoutes returns the source filter adapter's route table.
 func coverageSourceFilterRoutes(tb testing.TB, namespaces *namespace.Service) []RouteRef {
 	tb.Helper()
 
-	handler, err := runnerapi.NewHandler(runnerapi.Config{
+	handler, err := sourcefilterapi.NewHandler(sourcefilterapi.Config{
 		Namespaces:     namespaces,
-		Pools:          struct{ runner.PoolStore }{nil},
-		Members:        struct{ runner.MemberStore }{nil},
-		Handoffs:       struct{ runner.SessionStore }{nil},
-		Claimer:        nil,
-		Sweeps:         nil,
-		Operations:     nil,
-		SourceFilters:  struct{ source.Filters }{nil},
+		Filters:        struct{ source.Filters }{nil},
 		Authenticator:  coverageAuthenticator{},
 		Authorizer:     coverageAuthorizer{},
 		Audit:          coverageAuditStore{},
@@ -896,21 +885,17 @@ func coverageSourceFilterRoutes(tb testing.TB, namespaces *namespace.Service) []
 		DenialLimiter:  nil,
 		Sessions:       nil,
 		Logger:         slog.New(slog.DiscardHandler),
-		Release:        runner.Release{Major: 0, Minor: 0, Patch: 0, Pre: ""},
-		ServerURL:      "https://coverage.test",
 		Now:            nil,
-		PollInterval:   0,
 	})
 	if err != nil {
-		tb.Fatalf("runner handler: %v", err)
+		tb.Fatalf("source filter handler: %v", err)
 	}
 
-	var out []RouteRef
+	routes := handler.Routes()
+	out := make([]RouteRef, 0, len(routes))
 
-	for _, route := range handler.Routes() {
-		if strings.HasPrefix(route.Path, "/api/dustpan/v1/") {
-			out = append(out, RouteRef{Method: route.Method, Path: route.Path})
-		}
+	for _, route := range routes {
+		out = append(out, RouteRef{Method: route.Method, Path: route.Path})
 	}
 
 	return out

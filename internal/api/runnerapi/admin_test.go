@@ -78,7 +78,7 @@ func handlerAuthorizing(t *testing.T, authz identity.Authorizer) http.Handler {
 	members := s.Runners()
 
 	h, err := runnerapi.NewHandler(runnerapi.Config{
-		Audit: newTestAudit(), OnAuditFailure: nil, SourceFilters: nil,
+		Audit: newTestAudit(), OnAuditFailure: nil,
 		Namespaces: service, Pools: members, Members: members, Handoffs: members, Claimer: nil, Sweeps: nil,
 		Operations: nil, Authenticator: adminAuthenticator{}, Authorizer: authz, Sessions: nil,
 		Logger: slog.New(slog.DiscardHandler), Release: serverRelease(), ServerURL: serverURL, Now: nil,
@@ -432,7 +432,7 @@ func TestOtherNamespaceIsNotFound(t *testing.T) {
 	}
 
 	// The same stores, behind an authorizer that holds acme only.
-	_, srv, _ := serve(t, e.store, serveOptions{now: nil, authz: onlyIn{ns: "acme"}, claimer: nil, authn: nil})
+	_, srv, _ := serve(t, e.store, serveOptions{now: nil, authz: onlyIn{ns: "acme"}, claimer: nil})
 	acme := &env{t: t, store: e.store, server: srv, handler: nil, claimer: nil, fence: e.fence, clock: nil}
 	acmePool := acme.createPool()
 

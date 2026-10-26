@@ -1107,6 +1107,7 @@ func (f *serveFlags) storeOptions(st store, wrapper secret.Wrapper) ([]dustpan.O
 	opts := append([]dustpan.Option{dustpan.WithComponents(set)}, gitHostOpts...)
 	opts = append(opts, durableStoreOption(st)...)
 	opts = append(opts, runnerStoreOption(st)...)
+	opts = append(opts, sourceFilterStoreOption(st)...)
 	opts = append(opts, jobStoreOption(st)...)
 	opts = append(opts, triggerStoreOption(st)...)
 	opts = append(opts, savedViewStoreOption(st)...)
@@ -1174,9 +1175,22 @@ func durableStoreOption(st store) []dustpan.Option {
 func runnerStoreOption(st store) []dustpan.Option {
 	switch s := st.(type) {
 	case sqliteStore:
-		return []dustpan.Option{dustpan.WithRunners(s.Runners()), dustpan.WithSourceFilters(s.SourceFilters())}
+		return []dustpan.Option{dustpan.WithRunners(s.Runners())}
 	case postgresStore:
-		return []dustpan.Option{dustpan.WithRunners(s.Runners()), dustpan.WithSourceFilters(s.SourceFilters())}
+		return []dustpan.Option{dustpan.WithRunners(s.Runners())}
+	default:
+		return nil
+	}
+}
+
+// sourceFilterStoreOption returns the option of the source filter store for st,
+// or nil when st keeps no source filter.
+func sourceFilterStoreOption(st store) []dustpan.Option {
+	switch s := st.(type) {
+	case sqliteStore:
+		return []dustpan.Option{dustpan.WithSourceFilters(s.SourceFilters())}
+	case postgresStore:
+		return []dustpan.Option{dustpan.WithSourceFilters(s.SourceFilters())}
 	default:
 		return nil
 	}

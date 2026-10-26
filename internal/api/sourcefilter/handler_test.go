@@ -1,25 +1,24 @@
-package runnerapi_test
+package sourcefilter_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"slices"
 	"strconv"
 	"strings"
-	"sync/atomic"
 	"testing"
-	"time"
 
+	"opendustpan.org/opendustpan/internal/api/sourcefilter"
 	"opendustpan.org/opendustpan/internal/source"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
 )
-
-// sourceFilterURL is the path of the source filter of the namespace acme.
-const sourceFilterURL = "/api/dustpan/v1/namespaces/acme/source-filter"
 
 // emptyDocument is the answer for a namespace that never set the filter.
 const emptyDocument = `{"submodules":[],"largeFiles":[],"failOnDenied":false,"protectedBranches":[]}`
@@ -27,42 +26,6 @@ const emptyDocument = `{"submodules":[],"largeFiles":[],"failOnDenied":false,"pr
 // fullFilter is the body of a change that sets each field.
 const fullFilter = `{"submodules":["https://git.example.com/platform/*"],` +
 	`"largeFiles":["https://git.example.com/acme/infra"],"failOnDenied":true,"protectedBranches":["main","release/1"]}`
-
-// sourceEnv is newEnvOn with the authorizer authz, so that a case can hold
-// some actions and not others.
-func sourceEnv(t *testing.T, open func(t *testing.T) stores, authz identity.Authorizer) *env {
-	t.Helper()
-
-	s := open(t)
-
-	ns := namespace.Namespace{
-		ID: namespace.NewID(), CreatedAt: time.UnixMilli(1_700_000_000_000).UTC(), Name: "acme", HomeRegion: region,
-		FailoverVersion: 1, Overrides: namespace.Overrides{Forced: false, Unlocked: false},
-	}
-	if err := s.namespaces.CreateNamespace(t.Context(), ns); err != nil {
-		t.Fatalf("create namespace: %v", err)
-	}
-
-	clock := &skewClock{offset: atomic.Int64{}}
-	h, srv, ops := serve(t, s, serveOptions{now: clock.now, authz: authz, claimer: nil, authn: nil})
-
-	return &env{t: t, store: s, server: srv, handler: h, claimer: ops, fence: ns.Fence(), clock: clock}
-}
-
-// raw sends a request with a body that the test gives as text, as the
-// administrator.
-func (e *env) raw(method, path, body string) (int, []byte) {
-	e.t.Helper()
-
-	req, err := http.NewRequestWithContext(e.t.Context(), method, e.server.URL+path, strings.NewReader(body))
-	if err != nil {
-		e.t.Fatalf("request: %v", err)
-	}
-
-	req.Header.Set("Authorization", "token "+adminToken)
-
-	return e.send(req)
-}
 
 // managementCode returns the code of an error answer of the management API.
 func managementCode(t *testing.T, body []byte) string {
@@ -137,7 +100,7 @@ func TestSourceFilterDefaultAndRoundTrip(t *testing.T) {
 		t.Run(b.name, func(t *testing.T) {
 			t.Parallel()
 
-			e := sourceEnv(t, b.open, identity.AdminOnly{})
+			e := newEnv(t, b.open, identity.AdminOnly{})
 
 			for _, step := range steps {
 				status, body := e.raw(step.method, sourceFilterURL, step.body)
@@ -223,7 +186,7 @@ func TestSourceFilterRefusesABadChange(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			e := newEnv(t)
+			e := newEnv(t, openSQLite, identity.AdminOnly{})
 
 			status, body := e.raw(http.MethodPut, sourceFilterURL, tc.body)
 			if status != http.StatusBadRequest {
@@ -311,7 +274,7 @@ func TestSourceFilterAccess(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			e := sourceEnv(t, openSQLite, holdsOnly{actions: tc.holds})
+			e := newEnv(t, openSQLite, holdsOnly{actions: tc.holds})
 
 			status, body := e.raw(tc.method, tc.path, fullFilter)
 			if status != tc.want {
@@ -354,7 +317,7 @@ func TestSourceFilterChangeWritesOneAuditEntry(t *testing.T) {
 		t.Run(b.name, func(t *testing.T) {
 			t.Parallel()
 
-			e := sourceEnv(t, b.open, identity.AdminOnly{})
+			e := newEnv(t, b.open, identity.AdminOnly{})
 
 			for _, c := range changes {
 				if status, got := e.raw(http.MethodPut, sourceFilterURL, c.body); status != http.StatusOK {
@@ -397,7 +360,7 @@ func checkFilterEntry(t *testing.T, got audit.Entry, wantOld, wantNew string) {
 func TestSourceFilterSnapshotKey(t *testing.T) {
 	t.Parallel()
 
-	e := newEnv(t)
+	e := newEnv(t, openSQLite, identity.AdminOnly{})
 	key := func() string {
 		return source.SnapshotKey(&source.Request{
 			Namespace: "acme", Connection: "github", Repository: "acme/infra", Commit: strings.Repeat("a", 40),
@@ -448,12 +411,12 @@ func (brokenFilters) Filter(context.Context, namespace.Name) (source.Filter, err
 func TestSourceFilterStoredValueIsNotAFilter(t *testing.T) {
 	t.Parallel()
 
-	e := newEnv(t)
+	e := newEnv(t, openSQLite, identity.AdminOnly{})
 
-	_, srv, _ := serve(t, stores{
-		namespaces: e.store.namespaces, operations: e.store.operations, jobs: e.store.jobs, units: e.store.units,
-		runners: e.store.runners, filters: brokenFilters{Filters: e.store.filters}, audit: e.store.audit,
-	}, serveOptions{now: e.clock.now, authz: identity.AdminOnly{}, claimer: nil, authn: nil})
+	broken := e.store
+	broken.filters = brokenFilters{Filters: e.store.filters}
+
+	_, srv := serve(t, broken, identity.AdminOnly{})
 
 	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL+sourceFilterURL, http.NoBody)
 	if err != nil {
@@ -491,18 +454,113 @@ func TestSourceFilterStoredValueIsNotAFilter(t *testing.T) {
 	}
 }
 
-// TestSourceFilterRoutesAreListed proves that the route table lists both
-// routes with their one action, and that a handler with no store of the
-// source filter serves none of them.
-func TestSourceFilterRoutesAreListed(t *testing.T) {
+// TestSourceFilterAnswersTheSame404 proves that a caller who cannot read an
+// existing namespace and a caller who asks for a namespace that does not
+// exist receive the same status and the same body, so the answer tells nothing
+// about the namespace.
+func TestSourceFilterAnswersTheSame404(t *testing.T) {
 	t.Parallel()
 
+	e := newEnv(t, openSQLite, holdsOnly{actions: nil})
+	absent := "/api/dustpan/v1/namespaces/absent/source-filter"
+
+	for _, method := range []string{http.MethodGet, http.MethodPut} {
+		statusA, bodyA := e.raw(method, sourceFilterURL, fullFilter)
+		statusB, bodyB := e.raw(method, absent, fullFilter)
+
+		if statusA != http.StatusNotFound || statusB != http.StatusNotFound || !bytes.Equal(bodyA, bodyB) {
+			t.Fatalf(
+				"%s: unreadable = %d %s, absent = %d %s, want one 404 body",
+				method,
+				statusA,
+				bodyA,
+				statusB,
+				bodyB,
+			)
+		}
+	}
+}
+
+// TestSourceFilterRefusesTheCredential proves that a request with no
+// credential or a wrong one answers 401 and reaches no filter.
+func TestSourceFilterRefusesTheCredential(t *testing.T) {
+	t.Parallel()
+
+	e := newEnv(t, openSQLite, identity.AdminOnly{})
+
+	for _, header := range []string{"", "token wrong", "Bearer wrong", "Basic abc", "token "} {
+		for _, method := range []string{http.MethodGet, http.MethodPut} {
+			req, err := http.NewRequestWithContext(t.Context(), method, e.server.URL+sourceFilterURL,
+				strings.NewReader(fullFilter))
+			if err != nil {
+				t.Fatalf("request: %v", err)
+			}
+
+			if header != "" {
+				req.Header.Set("Authorization", header)
+			}
+
+			if status, body := e.send(req); status != http.StatusUnauthorized {
+				t.Fatalf("%s with %q = %d %s, want 401", method, header, status, body)
+			}
+		}
+	}
+
+	f := storedFilter(t, e)
+	if !isEmptyFilter(&f) || len(filterEntries(t, e)) != 0 {
+		t.Fatalf("a refused request changed the filter or wrote an entry: %+v", f)
+	}
+}
+
+// TestSourceFilterRefusesABadNamespaceName proves that a name that no
+// namespace can have answers 400 before the check of an action.
+func TestSourceFilterRefusesABadNamespaceName(t *testing.T) {
+	t.Parallel()
+
+	e := newEnv(t, openSQLite, identity.AdminOnly{})
+
+	for _, name := range []string{"a%2Fb", "-acme", ".acme", "ac%20me", "acme%00"} {
+		status, body := e.raw(http.MethodGet, "/api/dustpan/v1/namespaces/"+name+"/source-filter", "")
+		if status != http.StatusBadRequest || managementCode(t, body) != "namespace.invalid-name" {
+			t.Fatalf("GET with the name %q = %d %s, want 400 namespace.invalid-name", name, status, body)
+		}
+	}
+}
+
+// sourceFilterActions are the two routes of the source filter of a namespace,
+// with the one action that each declares.
+func sourceFilterActions() map[string]identity.Action {
+	return map[string]identity.Action{
+		http.MethodGet + " " + sourcefilter.Path: identity.ActionNamespaceReadRunners,
+		http.MethodPut + " " + sourcefilter.Path: identity.ActionNamespaceManageRunners,
+	}
+}
+
+// TestRouteTable proves the rules of the route table: the table and the mux
+// list the same patterns, each route is authorized, resolves its target, has a
+// handler, and declares exactly one action, and a route that changes data
+// declares namespace:manage-runners.
+func TestRouteTable(t *testing.T) {
+	t.Parallel()
+
+	e := newEnv(t, openSQLite, identity.AdminOnly{})
 	want := sourceFilterActions()
 	got := map[string]identity.Action{}
+	patterns := make([]string, 0, len(want))
 
-	for _, route := range newEnv(t).handler.Routes() {
-		if _, ok := want[route.Method+" "+route.Path]; ok && len(route.Actions) == 1 {
-			got[route.Method+" "+route.Path] = route.Actions[0]
+	for _, rt := range e.handler.Routes() {
+		patterns = append(patterns, rt.Pattern())
+
+		if rt.Scope == 0 || rt.Resolve == nil || rt.Serve == nil || len(rt.Actions) != 1 {
+			t.Errorf("route %s is not complete: %+v", rt.Pattern(), rt.Actions)
+
+			continue
+		}
+
+		got[rt.Pattern()] = rt.Actions[0]
+
+		if rt.Method != http.MethodGet && rt.Actions[0] != identity.ActionNamespaceManageRunners {
+			t.Errorf("route %s changes data without namespace:manage-runners", rt.Pattern())
 		}
 	}
 
@@ -515,23 +573,73 @@ func TestSourceFilterRoutesAreListed(t *testing.T) {
 			t.Errorf("route %s declares %s, want %s", key, got[key], action)
 		}
 	}
+
+	registered := e.handler.RegisteredPatterns()
+
+	slices.Sort(patterns)
+	slices.Sort(registered)
+
+	if !slices.Equal(patterns, registered) {
+		t.Errorf("table patterns = %v, registered = %v, want equal", patterns, registered)
+	}
 }
 
-// TestSourceFilterRoutesNeedAStore proves that a handler with no store of the
-// source filter serves neither route.
-func TestSourceFilterRoutesNeedAStore(t *testing.T) {
+// TestRoutesDoNotShareActions proves that Routes returns a copy: a change of
+// the copy leaves the actions of the handler as they are.
+func TestRoutesDoNotShareActions(t *testing.T) {
 	t.Parallel()
 
-	h := handlerWith(t, identity.ActionNamespaceRead, identity.ActionNamespaceReadRunners)
+	e := newEnv(t, openSQLite, identity.AdminOnly{})
 
-	lister, ok := h.(interface{ RegisteredPatterns() []string })
-	if !ok {
-		t.Fatal("the handler does not list its patterns")
+	for _, rt := range e.handler.Routes() {
+		rt.Actions[0] = identity.ActionNamespaceRead
 	}
 
-	for _, pattern := range lister.RegisteredPatterns() {
-		if strings.Contains(pattern, "source-filter") {
-			t.Errorf("a handler with no store of the filter serves %s", pattern)
+	for _, rt := range e.handler.Routes() {
+		if rt.Actions[0] == identity.ActionNamespaceRead {
+			t.Fatalf("route %s changed through the copy", rt.Pattern())
+		}
+	}
+}
+
+// TestNewHandlerNeedsItsDependencies proves that a Config without a required
+// field returns ErrMissingDependency and no handler.
+func TestNewHandlerNeedsItsDependencies(t *testing.T) {
+	t.Parallel()
+
+	e := newEnv(t, openSQLite, identity.AdminOnly{})
+	service, err := namespace.NewService(namespace.Config{Store: e.store.namespaces, Now: nil, Region: region})
+	if err != nil {
+		t.Fatalf("namespace service: %v", err)
+	}
+
+	full := func() sourcefilter.Config {
+		return sourcefilter.Config{
+			Namespaces: service, Filters: e.store.filters, Authenticator: adminAuthenticator{},
+			Authorizer: identity.AdminOnly{}, Audit: newTestAudit(), OnAuditFailure: nil, DenialLimiter: nil,
+			Sessions: nil, Logger: slog.New(slog.DiscardHandler), Now: nil,
+		}
+	}
+
+	cases := []struct {
+		name   string
+		change func(c *sourcefilter.Config)
+	}{
+		{"no namespace service", func(c *sourcefilter.Config) { c.Namespaces = nil }},
+		{"no filter store", func(c *sourcefilter.Config) { c.Filters = nil }},
+		{"no authenticator", func(c *sourcefilter.Config) { c.Authenticator = nil }},
+		{"no authorizer", func(c *sourcefilter.Config) { c.Authorizer = nil }},
+		{"no audit store", func(c *sourcefilter.Config) { c.Audit = nil }},
+		{"no logger", func(c *sourcefilter.Config) { c.Logger = nil }},
+	}
+
+	for _, tc := range cases {
+		cfg := full()
+		tc.change(&cfg)
+
+		h, newErr := sourcefilter.NewHandler(cfg)
+		if !errors.Is(newErr, sourcefilter.ErrMissingDependency) || h != nil {
+			t.Errorf("%s: NewHandler = %v, %v, want ErrMissingDependency", tc.name, h, newErr)
 		}
 	}
 }

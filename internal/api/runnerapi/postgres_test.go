@@ -79,13 +79,7 @@ func openPostgresAt(t *testing.T, schemaURL string) stores {
 	t.Cleanup(s.Close)
 
 	return stores{
-		namespaces: s,
-		operations: s.DurableOperations(),
-		jobs:       s.Jobs(),
-		units:      s,
-		runners:    s.Runners(),
-		filters:    s.SourceFilters(),
-		audit:      s,
+		namespaces: s, operations: s.DurableOperations(), jobs: s.Jobs(), units: s, runners: s.Runners(), audit: s,
 	}
 }
 
