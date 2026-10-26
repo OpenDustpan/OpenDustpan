@@ -601,6 +601,9 @@ func WithAllowDevHint(hint string) Option {
 // Server is a configured OpenDustpan server.
 type Server struct {
 	handler http.Handler
+	// started records that Start succeeded. The gate in front of handler
+	// reads it.
+	started *startState
 	// ungated is the handler before the component gate. Only the tests read
 	// it.
 	ungated http.Handler
@@ -1033,9 +1036,13 @@ func assemble(cfg *settings, base baseurl.Resolver, svc services, backups *backu
 		return nil, err
 	}
 
+	started := newStartState()
+
 	srv := &Server{
 		flushDenials: flushDenials,
-		handler:      handlers.served, ungated: handlers.ungated, mounted: &mount, root: handlers.root,
+		handler:      withStartGate(handlers.served, started, cfg.logger),
+		started:      started,
+		ungated:      handlers.ungated, mounted: &mount, root: handlers.root,
 		logger:           cfg.logger,
 		listenAddr:       cfg.listenAddr,
 		listener:         cfg.listener,
@@ -1808,9 +1815,14 @@ func newSessionPolicyService(cfg *settings) (*session.Policies, error) {
 }
 
 // Handler returns the server's root HTTP handler, for embedding in your own server.
-// Handler serves requests only. A backup that a request starts waits for a
-// worker. An SDK user who serves Handler without Run must call Work on the
-// service that Backups returns, or no instance runs the backup.
+// Handler serves requests only. It runs no start-up step: an SDK user who
+// serves Handler without Run must call Start first. Until Start has
+// succeeded, every route answers 503 in the error shape of its adapter,
+// except GET /health/live, which answers 204. GET /health/ready answers 503
+// in this time. A forgotten Start so fails at the first request, and not
+// open. A backup that a request starts waits for a worker. An SDK user who
+// serves Handler without Run must call Work on the service that Backups
+// returns, or no instance runs the backup.
 func (s *Server) Handler() http.Handler {
 	return s.handler
 }
@@ -1846,14 +1858,15 @@ func (s *Server) Metrics() *metrics.ServerMetrics {
 // WithListenAddr itself. Either way it logs the bound address in the
 // listening line, so a server on :0 reports the port it holds. Run first
 // runs the start-up check that refuses a key-encryption key that opens less
-// than every wrapped key in the database (ADR 23), so a program that embeds
+// than every wrapped key in the database, so a program that embeds
 // the server cannot start with the wrong key. It then marks every running
-// backup and every running restore failed: the server stopped during them
-// (ADR 30 decision 9, ADR 38 decision 9). When ctx
+// backup and every running restore failed: the server stopped during them.
+// These are the steps of Start. Run calls Start, and does not repeat the steps
+// when Start has succeeded before. When ctx
 // is done before these start-up steps end, Run returns nil: the caller asked
 // it to stop, and an error caused by that stop is not a failure.
 func (s *Server) Run(ctx context.Context) error {
-	if err := s.runStartUp(ctx); err != nil {
+	if err := s.Start(ctx); err != nil {
 		return startUpResult(ctx, err)
 	}
 
@@ -2249,31 +2262,6 @@ func shutdownServer(ctx context.Context, srv *http.Server, serveErr <-chan error
 
 	if err := <-serveErr; !errors.Is(err, http.ErrServerClosed) {
 		return fmt.Errorf("serve: %w", err)
-	}
-
-	return nil
-}
-
-// runStartUp runs the start-up steps of Run in order: the key check of
-// startUp (ADR 23), then the running restores of failStoppedRestores. A done context during
-// the steps is a stop, not a failure, so it answers nil: the caller asked
-// the server to stop.
-func (s *Server) runStartUp(ctx context.Context) error {
-	startErr := s.startUp(ctx)
-	if startErr == nil {
-		startErr = s.failStoppedRestores(ctx)
-	}
-
-	if startErr == nil {
-		startErr = s.startUpAuditChain(ctx)
-	}
-
-	if startErr == nil {
-		startErr = s.bindSignInProviders(ctx)
-	}
-
-	if startErr != nil && ctx.Err() == nil {
-		return startErr
 	}
 
 	return nil
@@ -3648,7 +3636,7 @@ func debugRoute(pattern string) bool {
 	}
 
 	switch name {
-	case "/health/live", "/health/ready", "/health/ready/{component}", metricsPath:
+	case liveProbePath, "/health/ready", "/health/ready/{component}", metricsPath:
 		return true
 	default:
 		return false

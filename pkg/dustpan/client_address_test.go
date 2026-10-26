@@ -136,7 +136,7 @@ func checkClientIPLog(t *testing.T, tc clientIPCase) {
 	}
 
 	rec := httptest.NewRecorder()
-	srv.Handler().ServeHTTP(rec, req)
+	startedHandler(t, srv).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusNoContent {
 		t.Fatalf("liveness status %d, want %d", rec.Code, http.StatusNoContent)
@@ -304,7 +304,7 @@ func serveLiveness(t *testing.T, srv *dustpan.Server, remote string) {
 	req.RemoteAddr = remote
 
 	rec := httptest.NewRecorder()
-	srv.Handler().ServeHTTP(rec, req)
+	startedHandler(t, srv).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusNoContent {
 		t.Fatalf("liveness status %d, want %d", rec.Code, http.StatusNoContent)
@@ -425,7 +425,7 @@ func TestCollectionAuditSourceIPBehindProxy(t *testing.T) {
 	req.Header.Set("Authorization", "token "+adminToken)
 
 	rec := httptest.NewRecorder()
-	srv.Handler().ServeHTTP(rec, req)
+	startedHandler(t, srv).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("create collection status %d, want %d: %s", rec.Code, http.StatusCreated, rec.Body.String())

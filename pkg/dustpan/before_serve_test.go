@@ -6,6 +6,7 @@ import (
 	"net"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"opendustpan.org/opendustpan/pkg/dustpan"
 )
@@ -35,6 +36,11 @@ func TestBeforeServeRunsBeforeServing(t *testing.T) {
 	done := runServer(ctx, srv)
 
 	waitForTCP(t, addr)
+
+	// The test holds the listener, so the port accepts before Run starts.
+	// Stop only after the function ran: a Run that stops while it starts up
+	// returns before the function.
+	waitUntil(t, func() bool { return calls.Load() == 1 })
 	cancel()
 
 	if err := <-done; err != nil {
@@ -43,6 +49,24 @@ func TestBeforeServeRunsBeforeServing(t *testing.T) {
 
 	if got := calls.Load(); got != 1 {
 		t.Fatalf("the function ran %d times, want 1", got)
+	}
+}
+
+// waitUntil polls cond every 10 ms until it holds, and fails after 10 seconds.
+func waitUntil(t *testing.T, cond func() bool) {
+	t.Helper()
+
+	deadline := time.Now().Add(10 * time.Second)
+	ticker := time.NewTicker(10 * time.Millisecond)
+
+	defer ticker.Stop()
+
+	for !cond() {
+		if time.Now().After(deadline) {
+			t.Fatal("the condition did not hold in time")
+		}
+
+		<-ticker.C
 	}
 }
 

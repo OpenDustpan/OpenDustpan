@@ -411,7 +411,17 @@ docker build -t opendustpan:dev \
   --build-arg CONSOLE_SHA256=<tarball SHA-256> .
 ```
 
-Run it. Mount a data directory and pass the two secrets. The container user
+The image fails closed. Its command is `serve`, and `serve` stops without a
+key-encryption key, so `docker run` with no key exits with the key error. To
+try OpenDustpan in a container, run `dev`. It keeps its data in the directory
+`dev` of the volume `/data` (the image sets `DUSTPAN_DATA_DIR=/data`), and
+`--listen 0.0.0.0:8080` lets the port mapping reach it:
+
+```sh
+docker run -p 127.0.0.1:8080:8080 opendustpan:dev dev --listen 0.0.0.0:8080
+```
+
+Run it for production. Mount a data directory and pass the two secrets. The container user
 must be able to write to the data directory. Start the server first, then
 create a namespace through the API before the first login, as above.
 

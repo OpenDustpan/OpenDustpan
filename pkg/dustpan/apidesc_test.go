@@ -501,7 +501,7 @@ func TestNotMovedSettingsPolicies(t *testing.T) {
 func TestOpenAPIRouteServesTheCheckedInBytes(t *testing.T) {
 	t.Parallel()
 
-	handler := newEveryModuleServer(t).Handler()
+	handler := startedHandler(t, newEveryModuleServer(t))
 
 	for _, target := range []string{openAPIPath, openAPIPath + "?format=yaml&x=%3Cscript%3E"} {
 		rec := serveDescription(t, handler, http.MethodGet, target, nil)
@@ -526,7 +526,7 @@ func TestOpenAPIRouteServesTheCheckedInBytes(t *testing.T) {
 func TestOpenAPIRouteIsTheSameForEveryBuild(t *testing.T) {
 	t.Parallel()
 
-	full := serveDescription(t, newEveryModuleServer(t).Handler(), http.MethodGet, openAPIPath, nil)
+	full := serveDescription(t, startedHandler(t, newEveryModuleServer(t)), http.MethodGet, openAPIPath, nil)
 
 	p := newPorts(t)
 
@@ -535,7 +535,7 @@ func TestOpenAPIRouteIsTheSameForEveryBuild(t *testing.T) {
 		t.Fatalf("new server: %v", err)
 	}
 
-	got := serveDescription(t, bare.Handler(), http.MethodGet, openAPIPath, nil)
+	got := serveDescription(t, startedHandler(t, bare), http.MethodGet, openAPIPath, nil)
 
 	if got.Code != http.StatusOK || !bytes.Equal(got.Body.Bytes(), full.Body.Bytes()) {
 		t.Fatalf("a server without the optional modules serves another document (status %d)", got.Code)
@@ -620,7 +620,7 @@ func TestThreatStep1CheckTheInput(t *testing.T) {
 func TestThreatStep2EncodeOrContain(t *testing.T) {
 	t.Parallel()
 
-	handler := newEveryModuleServer(t).Handler()
+	handler := startedHandler(t, newEveryModuleServer(t))
 	hostile := map[string]string{
 		"X-Forwarded-Host": "evil.example",
 		"Accept":           "text/html",
@@ -656,7 +656,7 @@ func TestThreatStep2EncodeOrContain(t *testing.T) {
 func TestThreatStep3LimitTheEffect(t *testing.T) {
 	t.Parallel()
 
-	handler := newEveryModuleServer(t).Handler()
+	handler := startedHandler(t, newEveryModuleServer(t))
 
 	if size := len(apidesc.Document()); size == 0 || size > 1<<20 {
 		t.Errorf("the document has %d bytes, want 1 to %d", size, 1<<20)
@@ -706,7 +706,7 @@ func TestThreatStep4CheckAuthorization(t *testing.T) {
 		t.Fatalf("public operations = %v, want %v", public, publicOperations())
 	}
 
-	handler := newEveryModuleServer(t).Handler()
+	handler := startedHandler(t, newEveryModuleServer(t))
 
 	// A closed route still asks for a credential, with the description on.
 	closed := serveDescription(t, handler, http.MethodGet, "/api/dustpan/v1/me/preferences", nil)
