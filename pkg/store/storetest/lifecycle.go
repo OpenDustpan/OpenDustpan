@@ -1084,7 +1084,7 @@ func testBlobPurgeNamespaceID(t *testing.T, s Store) {
 
 	purger, ok := storeAs[namespacePurger](s)
 	if !ok {
-		return
+		t.Fatalf("store %T has no PurgeNamespace test hook, which the namespace made again case needs", s)
 	}
 
 	cases := []struct {
