@@ -28,8 +28,9 @@ const (
 // new slice each call. It is the only list: the maintenance gate, the
 // journal kinds and the route tests read it. The gate lets these routes pass
 // in maintenance mode. The kinds of the list are a subset of Kinds: a
-// temporary administrator ends by expiry and a sign-in provider ends through
-// a change of the provider, so neither has a route of its own.
+// temporary administrator ends by expiry, so it has no route of its own. The
+// change of a sign-in provider that only disables it depends on the body, so
+// only the delete of a provider is on the list.
 func ReducingRoutes() []ReducingRoute {
 	return append(runnerReducingRoutes(), serverReducingRoutes()...)
 }
@@ -104,6 +105,12 @@ func serverReducingRoutes() []ReducingRoute {
 			Pattern: "/api/server/principals/{principal}/grants/{id}",
 			Actions: []string{"server:manage-access"},
 			Kind:    RevokedGrant,
+		},
+		{
+			Method:  methodDelete,
+			Pattern: "/api/server/sign-in-providers/{id}",
+			Actions: []string{"server:manage-sign-in"},
+			Kind:    RevokedProvider,
 		},
 		{
 			Method:  methodPost,
