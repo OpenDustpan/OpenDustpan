@@ -1561,6 +1561,11 @@ func (s *revocationStore) RunnerPools() runner.PoolStore {
 	return s.Runners()
 }
 
+// RunnerPorts implements storetest.RevocationStore.
+func (s *revocationStore) RunnerPorts() storetest.RunnerPorts {
+	return storetest.RunnerPorts{Pools: s.Runners(), Members: s.Runners()}
+}
+
 // KeepsUnknownKinds implements storetest.RevocationStore. The restore copies
 // the live journal into the staged file, whose table holds the CHECK on the
 // kind, so a row of an unknown kind fails the copy and the restore.
