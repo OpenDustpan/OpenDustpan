@@ -585,21 +585,12 @@ func (r *DurableRecorder) storeParts(ctx context.Context, at *planAt, parts []Pl
 
 		counted := &countingReader{src: p.Body, sum: sha256.New(), size: 0, limit: MaxPlanPart}
 
-		var measured *blob.DigestReader
-
-		sealed, err := r.sealer.SealContent(ctx, at.item, []byte(key.String()), counted)
-		if err == nil {
-			measured = blob.NewDigestReader(sealed)
-			err = r.blobs.PutPlanPart(ctx, at.part(p.Kind), measured)
-		}
-
+		digest, err := r.putPart(ctx, at, p.Kind, key, counted)
 		if err != nil {
 			r.deleteParts(ctx, at, stored)
 
 			return nil, fmt.Errorf("store plan part %q: %w", p.Kind, err)
 		}
-
-		digest := measured.Digest()
 
 		stored = append(stored, PlanPart{
 			Kind: p.Kind, Size: counted.size, SHA256: hex.EncodeToString(counted.sum.Sum(nil)),
@@ -608,6 +599,24 @@ func (r *DurableRecorder) storeParts(ctx context.Context, at *planAt, parts []Pl
 	}
 
 	return stored, nil
+}
+
+// putPart seals the body of the part k and stores it under key, and returns the
+// size and the MD5 of the sealed bytes that the blob store holds.
+func (r *DurableRecorder) putPart(
+	ctx context.Context, at *planAt, k OutputKind, key blob.Key, body io.Reader,
+) (blob.Digest, error) {
+	sealed, err := r.sealer.SealContent(ctx, at.item, []byte(key.String()), body)
+	if err != nil {
+		return blob.Digest{}, fmt.Errorf("seal plan part: %w", err)
+	}
+
+	measured := blob.NewDigestReader(sealed)
+	if err = r.blobs.PutPlanPart(ctx, at.part(k), measured); err != nil {
+		return blob.Digest{}, fmt.Errorf("put plan part: %w", err)
+	}
+
+	return measured.Digest(), nil
 }
 
 // deleteParts deletes the blobs of the stored parts of a plan that was not
