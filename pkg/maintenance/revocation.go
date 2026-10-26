@@ -37,6 +37,9 @@ const (
 	// RevokedProvider is the disable of an identity provider, which also
 	// ends its sessions. The target is the provider ID.
 	RevokedProvider = "provider"
+	// RevokedRunner is the retire of a runner. The target is the runner ID.
+	// The replay retires the runner and ends its live claims.
+	RevokedRunner = "runner"
 )
 
 // ActionReplayRevocation is the action of the audit entry that a restore
@@ -60,8 +63,8 @@ type Revocation struct {
 	ID int64
 	// Kind is one of the Revoked constants.
 	Kind string
-	// Target is the ID of the session, token, principal, grant, join token or
-	// provider that the write ended.
+	// Target is the ID of the session, token, principal, grant, join token,
+	// provider or runner that the write ended.
 	Target string
 	// EndReason is the end reason of a session. It is empty for other kinds.
 	EndReason string
@@ -82,7 +85,7 @@ type Revocation struct {
 func (r Revocation) Validate() error {
 	switch r.Kind {
 	case RevokedSession, RevokedToken, RevokedPrincipal, RevokedTempAdmin, RevokedGrant, RevokedJoinToken,
-		RevokedProvider:
+		RevokedProvider, RevokedRunner:
 	default:
 		return fmt.Errorf("%w: unknown kind %q", ErrInvalidRevocation, r.Kind)
 	}

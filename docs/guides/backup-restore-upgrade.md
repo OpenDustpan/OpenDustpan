@@ -212,7 +212,12 @@ restore applies. These writes run, each with its audit entry:
   the end of a grant never gives more access. The checks of a
   revocation in normal operation stay in force: the fence of the namespace,
   and the rule that the caller holds every action that the grant gives.
-- the revocation of a join token of a runner pool.
+- the revocation of a join token of a runner pool
+  (`POST /api/runners/{namespace}/pools/{pool}/join-tokens/{id}/revoke`).
+- the retire of a runner
+  (`POST /api/runners/{namespace}/runners/{runner}/retire`), which also ends
+  the live claims of the runner. The other routes of the runner management API
+  answer 503 in maintenance mode.
 - the disable of a sign-in provider, which also ends its sessions. A change of
   the provider that sets one more field, and the enable of the provider, stay
   refused.
@@ -236,7 +241,7 @@ of the backup, so it would bring back a session or a token that you revoked in
 maintenance mode. The server prevents this. It records each revocation that
 it accepts in maintenance mode, and the restore applies the record again
 after it swaps in the backup. The restore ends the restored session, revokes
-the restored token, grant or join token, disables the restored principal or
+the restored token, grant or join token, retires the restored runner, disables the restored principal or
 provider, and repeats the expiry of the restored temporary administrator, with
 the time of the original revocation. A target that the backup does not hold
 needs no change.

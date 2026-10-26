@@ -134,7 +134,7 @@ each, and its reader, as Temporal does.
 | Operate | How-to | Observe the server, probes, metrics, maintenance mode, size limits. |
 | Reference | Reference | Configuration, the installation API from its OpenAPI document, the tested CLI versions, error messages. |
 | Explanation | Explanation | Architecture, the glossary. The security model: sign-in, roles, encryption at rest, where keys live, no telemetry. |
-| Compliance | Reference | For operators: which features support controls of DORA, NIS2, PCI DSS and ISO 27001. Examples: the audit log, backup and restore tests, change records, MFA through the identity provider, export. Each item says "shipped" or "planned". The page says "This is not legal advice" and claims no compliance and no certification. |
+| Designed against: control mapping | Reference | For operators: which features support controls of DORA, NIS2, PCI DSS and ISO 27001. Examples: the audit log, backup and restore tests, change records, MFA through the identity provider, export. Each item says "shipped" or "planned". The page says "This is not legal advice" and claims no compliance and no certification. |
 | Compare | Explanation | OpenDustpan next to other backends, with "When not to use OpenDustpan". |
 
 Each page carries a label for the tool it covers: Pulumi CLI, OpenTofu, or

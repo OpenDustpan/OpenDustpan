@@ -223,6 +223,14 @@ WHERE ended_at_ms IS NULL AND principal_id IN (
 				third: thirdEndReason,
 			},
 		}, true
+	case maintenance.RevokedRunner:
+		// The retire ends the live claims of the runner, as Runners.Retire
+		// does. The first statement tells whether the staged runner was live.
+		return []replayStep{
+			{sql: `UPDATE main.runners SET retired_at_ms = ?2 WHERE id = ?1 AND retired_at_ms = 0`, third: thirdNone},
+			{sql: `UPDATE main.durable_operations SET claim_owner = NULL, claim_expires_at_ms = 0
+WHERE state = 'running' AND claim_owner = ?1`, third: thirdNone},
+		}, true
 	default:
 		return nil, false
 	}

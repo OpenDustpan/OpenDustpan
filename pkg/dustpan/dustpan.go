@@ -3964,7 +3964,7 @@ func mountAPI(mux *rootMux, a adapters, cfg *settings) error {
 		mux.Handle(
 			"/api/runners/",
 			withCORS(
-				withMaintenance(withJSONMethodNotAllowed(a.runners), a.maintenance, shapeInventory, cfg.logger),
+				withRunnerMaintenance(withJSONMethodNotAllowed(a.runners), a.maintenance, shapeInventory, cfg.logger),
 				cfg.allowedOrigins,
 			),
 		)

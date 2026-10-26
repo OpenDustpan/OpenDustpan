@@ -922,6 +922,14 @@ _Avoid_: Isolation level, sandbox type, runtime
 The static binary `dustpan-launcher` that runs the steps of one claim inside the Kubernetes Job or the sandbox (ADR 130 decision 1, ADR 134). Each claim is of one phase or one sweep. It is pure Go with no cgo, for Linux on each `GOARCH` of the release. It needs no shell, no git and no C library from the image of the team. It starts each step as an argument list, with no shell, in its own process group. It opens the job session and checks the source snapshot before the first step. It gives credentials to the steps of the role `tool` only, and masks secret values in each log. It is also the credentials helper of OpenTofu and the git credential helper of the mode `forge`. The runner never holds a credential of a step (ADR 133 decision 13). The release of a runner is the release of its launcher (ADR 132 decision 1).
 _Avoid_: Executor (that is write-back or runners, ADR 100 decision 19), runner binary, shim
 
+**Job proxy**:
+A proxy between one runner job and the network. RFC 16 proposes it, and the owner has not decided its design. In the proposal, a rule for the unit and the operation must match the host, the method and the path of a request. Else the proxy refuses the request. It may add a credential to an allowed request, so that the job never holds that credential. The proposal has it hold the credentials and run apart from the steps. Its outbound connections may go through the outbound guard, and through an upstream proxy when the team has one.
+_Avoid_: Egress proxy, egress gateway, sidecar (as the name of the feature), firewall
+
+**Upstream proxy**:
+A proxy of the team's network that the job proxy sends its outbound connections through, with CONNECT (RFC 16, a proposal). The team runs it, and OpenDustpan does not configure its rules. The job proxy is its only client in a job: the job itself never reaches it. Its proxy credential is a secret of the job proxy, never of the job.
+_Avoid_: Egress proxy, corporate proxy (alone), parent proxy, next hop
+
 **Runner protocol**:
 The HTTP and JSON protocol under `/runner/v1` for runners and launchers (ADR 131). The runner opens every connection over HTTPS, and the server never connects to a runner. The runner calls the paths of the runner with a proof of its runner key. The launcher calls the paths of the session with a proof of its session key. Each request carries the header `Dustpan-Release`. A server accepts a runner or a launcher of its minor release and of the two minor releases before it (ADR 132 decision 2). The paths are not part of the REST API (ADR 138 decision 6).
 _Avoid_: Runner API, agent protocol
@@ -1269,6 +1277,10 @@ _Avoid_: Reply filter, output scrubber, redaction (that is a history action), ma
 **Capability probe**:
 The durable operation that checks a model connection before the document becomes the connection (ADR 129 decision 29). Its checks are the reach, the authentication, a tool call, a tool result, the transport, the token use, the reasoning parts and the cache. A failure of the first five blocks the connect. The connect route answers at once, and a status route gives the result of each check.
 _Avoid_: Health check, connection test, ping
+
+**Outbound guard**:
+The rules of the package `pkg/egress` for each outbound request that the server makes to an address that a principal gives. Examples are the delivery of a notification to a webhook and the read of an iCal feed. The rules apply to the URL when a principal saves or tests it. They also apply to the resolved IP address of each connection. So a DNS answer that changes after the check cannot pass them. The adapter `egresshttp` applies them to each connection. The job proxy can use the same rules for its own outbound connections (RFC 16, a proposal).
+_Avoid_: Egress proxy, egress filter, SSRF filter, firewall
 
 **Egress allowlist**:
 The list of hosts and CIDR ranges that a model call of the installation can reach (ADR 129 decision 25). A private address or an IP literal needs a CIDR entry with one port, and `http` needs an entry with `"http": true`. No entry overrides the always-denied list of link-local, metadata, unspecified, broadcast and multicast addresses. With no entry, no model call goes out.

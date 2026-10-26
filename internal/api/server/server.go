@@ -679,7 +679,9 @@ func classifyNamespace(err error) (failure, bool) {
 		// operation, which the log holds.
 		return failCoded(http.StatusConflict, namespace.ErrFenced.Error(), errcode.NamespaceFenced), true
 	case errors.Is(err, namespace.ErrNotFound):
-		return failCoded(http.StatusNotFound, err.Error(), errcode.NamespaceNotFound), true
+		// The fixed text of problem.Namespace: a wrap names the operation and
+		// might name the object, and the log holds it.
+		return failCoded(http.StatusNotFound, "namespace not found", errcode.NamespaceNotFound), true
 	case errors.Is(err, namespace.ErrNoPaging):
 		return fail(http.StatusNotImplemented, err.Error()), true
 	default:
