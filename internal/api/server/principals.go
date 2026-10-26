@@ -30,6 +30,7 @@ import (
 	"strconv"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -975,25 +976,54 @@ func removeMember(
 // directory keeps answers 409, and the message names the directory. The domain wraps each sentinel with
 // the ID or the name it acted on, never with driver text.
 func classifyPrincipal(err error) (failure, bool) {
+	if f, ok := classifyPrincipalRequest(err); ok {
+		return f, true
+	}
+
+	return classifyPrincipalState(err)
+}
+
+// classifyPrincipalRequest maps the errors of a bad body, subject, page or
+// size to 400 and 413.
+func classifyPrincipalRequest(err error) (failure, bool) {
 	switch {
 	case errors.Is(err, errPrincipalBody), errors.Is(err, errPrincipalChangeBody),
 		errors.Is(err, errGroupBody), errors.Is(err, errGroupChangeBody), errors.Is(err, errMemberBody),
 		errors.Is(err, errNamespacePrincipalBody):
-		return fail(http.StatusBadRequest, err.Error()), true
-	case errors.Is(err, principal.ErrInvalid), errors.Is(err, principal.ErrReservedSubject),
-		errors.Is(err, errPageQuery):
-		return fail(http.StatusBadRequest, err.Error()), true
+		return failCoded(http.StatusBadRequest, err.Error(), errcode.RequestBodyInvalid), true
+	case errors.Is(err, principal.ErrInvalid):
+		return failCoded(http.StatusBadRequest, err.Error(), errcode.PrincipalInvalid), true
+	case errors.Is(err, principal.ErrReservedSubject):
+		return failCoded(http.StatusBadRequest, err.Error(), errcode.PrincipalReservedSubject), true
+	case errors.Is(err, errPageQuery):
+		return failCoded(http.StatusBadRequest, err.Error(), errcode.RequestPageSizeInvalid), true
 	case errors.Is(err, errBodyTooLarge):
-		return fail(http.StatusRequestEntityTooLarge, err.Error()), true
-	case errors.Is(err, principal.ErrAlreadyExists), errors.Is(err, principal.ErrManagedByDirectory),
-		errors.Is(err, principal.ErrNotDisabled), errors.Is(err, principal.ErrDisabled),
-		errors.Is(err, access.ErrLastSiteAdministrator):
-		return fail(http.StatusConflict, err.Error()), true
-	case errors.Is(err, principal.ErrNotFound):
-		return fail(http.StatusNotFound, err.Error()), true
-	case errors.Is(err, errNoPrincipalStore):
-		return fail(http.StatusNotImplemented, err.Error()), true
-	default:
-		return fail(0, ""), false
+		return failCoded(http.StatusRequestEntityTooLarge, err.Error(), errcode.RequestBodyTooLarge,
+			errcode.Quantity("maxBytes", maxPrincipalBodyBytes)), true
 	}
+
+	return fail(0, ""), false
+}
+
+// classifyPrincipalState maps the errors of a taken, disabled, kept or unknown
+// principal, and of a store with no principal port.
+func classifyPrincipalState(err error) (failure, bool) {
+	switch {
+	case errors.Is(err, principal.ErrAlreadyExists):
+		return failCoded(http.StatusConflict, err.Error(), errcode.PrincipalAlreadyExists), true
+	case errors.Is(err, principal.ErrManagedByDirectory):
+		return failCoded(http.StatusConflict, err.Error(), errcode.PrincipalManagedByDirectory), true
+	case errors.Is(err, principal.ErrNotDisabled):
+		return failCoded(http.StatusConflict, err.Error(), errcode.PrincipalNotDisabled), true
+	case errors.Is(err, principal.ErrDisabled):
+		return failCoded(http.StatusConflict, err.Error(), errcode.PrincipalDisabled), true
+	case errors.Is(err, access.ErrLastSiteAdministrator):
+		return failCoded(http.StatusConflict, err.Error(), errcode.AccessLastSiteAdministrator), true
+	case errors.Is(err, principal.ErrNotFound):
+		return failCoded(http.StatusNotFound, err.Error(), errcode.PrincipalNotFound), true
+	case errors.Is(err, errNoPrincipalStore):
+		return failCoded(http.StatusNotImplemented, err.Error(), errcode.PrincipalUnsupported), true
+	}
+
+	return fail(0, ""), false
 }
