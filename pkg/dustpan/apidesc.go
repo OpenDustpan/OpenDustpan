@@ -39,6 +39,7 @@ func (a adapters) allHandlers() []namedHandler {
 		{"triggers", a.triggers},
 		{"drift", a.drift},
 		{"registry", a.registry},
+		{"sourcefilter", a.sourceFilter},
 		{"pulumi", a.pulumi},
 		{"tfe", a.tfe},
 		{"tofuhttp", a.tofuHTTP},
