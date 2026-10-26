@@ -50,14 +50,14 @@ Give each instance the same sign-in providers and client secrets. The browser re
 
 ## The public URL
 
-Every instance serves the same public URL.
+Every instance serves the same public URL (`--public-url`).
 
 The Pulumi CLI records the server URL in the secrets-manager configuration of each stack when the stack is made. A stack cannot read its secrets through a different URL.
 
 To change the URL, use one of these methods:
 
 - Keep the old host name as an alias at the proxy.
-- Run `pulumi stack change-secrets-provider` for each stack.
+- Run `pulumi stack change-secrets-provider` for each stack. This may need the old URL to stay reachable while it runs.
 
 ## Run the components in separate processes
 
