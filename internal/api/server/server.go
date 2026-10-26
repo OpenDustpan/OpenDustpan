@@ -27,7 +27,6 @@ import (
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/forge"
-	"opendustpan.org/opendustpan/pkg/idempotency"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/installation"
 	"opendustpan.org/opendustpan/pkg/ipallow"
@@ -423,89 +422,118 @@ type errorResponse struct {
 	Code    int    `json:"code"`
 }
 
-// maintenanceRetryAfter is the Retry-After value, in seconds, of an
+// maintenanceRetryAfter is the Retry-After wait of an
 // installation API write that maintenance mode refused, and of an enter of
 // maintenance mode that the writes in flight kept waiting.
-const maintenanceRetryAfter = "30"
+const maintenanceRetryAfter = 30 * time.Second
 
+// writeError writes the error answer of err with problem.Writer: the refusals
+// of the credential first, then a denial with keepDenied, then problemFor.
+// A path that has no code of the catalog keeps its own body, the same as before.
+// Every error answer carries Cache-Control: no-store.
 func (h *Handler) writeError(ctx context.Context, w http.ResponseWriter, err error) {
-	// A denial comes first: an error that wraps identity.ErrDenied answers 403
-	// whatever else it wraps, so no refusal tells the state of an object that
-	// the caller has no right on.
-	if f, ok := deniedFailure(err); ok {
-		h.writeCoded(ctx, w, f)
-
-		return
-	}
-
-	if errors.Is(err, idempotency.ErrLost) {
-		err = idempotent.Lost()
-	}
-
-	if ie, ok := errors.AsType[*idempotent.Error](err); ok {
-		h.writeJSON(ctx, w, ie.Status, codedResponse{
-			Message: ie.Message, Code: ie.Status, ErrorCode: ie.Answer.Code(), ErrorArgs: ie.Answer.Args(),
-		})
-
-		return
-	}
-
-	if coded, ok := errors.AsType[*codedError](err); ok {
-		// The catalog checks the code and the arguments. When it refuses,
-		// the bug is in the server and not in the request, so the answer is
-		// the internal error.
-		h.writeCoded(ctx, w, failure{
-			status: coded.status, message: coded.message, code: coded.code, args: coded.args,
-		})
-
-		return
-	}
-
-	f := classify(err)
-	if f.status == http.StatusInternalServerError {
-		// The log names the status, the code and the type of the cause,
-		// never the error text: the text may hold driver detail, a token,
-		// or state.
-		h.logger.ErrorContext(ctx, "request failed", slog.Int("status", f.status),
-			slog.String("error_code", f.code), slog.String("cause", causeType(err)))
-	}
-
-	h.noteRefusal(ctx, w, err)
-
-	if fresh, ok := errors.AsType[reauthenticateError](err); ok {
-		h.writeJSON(ctx, w, f.status, reauthenticateResponse{
-			Code: f.status, Message: f.message, Reauthenticate: fresh.url, ErrorCode: freshStepRequiredCode,
-		})
-
-		return
-	}
-
-	if f.status == http.StatusForbidden && f.code == "" {
-		// A 403 that its classify function gives no code gets the code of
-		// its cause, at least access.denied for a missing permission.
-		f.code = errcode.Forbidden(err)
-	}
-
-	if f.code == "" {
+	if f, ok := uncodedFailure(err); ok {
 		h.writeJSON(ctx, w, f.status, errorResponse{Code: f.status, Message: f.message})
 
 		return
 	}
 
-	status, message, answer := h.answer(ctx, f)
-	h.writeAnswer(ctx, w, status, message, answer)
+	wr := problemWriter(h.logger)
+
+	if wr.Problem(err).Status == http.StatusInternalServerError {
+		// The log names the status, the code and the type of the cause,
+		// never the error text: the text may hold driver detail, a token,
+		// or state.
+		h.logger.ErrorContext(ctx, "request failed", slog.Int("status", http.StatusInternalServerError),
+			slog.String("error_code", errcode.ServerInternal), slog.String("cause", causeType(err)))
+	}
+
+	wr.Write(ctx, w, err)
 }
 
-// noteRefusal sets the Retry-After header of a maintenance refusal and logs a
-// fenced write. The log holds the wrap text, which the answer never holds.
-func (h *Handler) noteRefusal(ctx context.Context, w http.ResponseWriter, err error) {
-	if errors.Is(err, maintenance.ErrInMaintenance) || errors.Is(err, maintenance.ErrBusy) {
-		w.Header().Set("Retry-After", maintenanceRetryAfter)
+// problemWriter returns the writer of the error answers of the installation
+// API.
+func problemWriter(logger *slog.Logger) problem.Writer {
+	return problem.Writer{Logger: logger, KeepDenied: keepDenied, Classify: problemFor}
+}
+
+// uncodedFailure returns the failure of an error that answers without a code
+// of the catalog, and false for any other error. A denial, a refusal of the
+// credential, an idempotency error, a coded error and a refusal that asks for
+// a new sign-in all have a code and answer through problem.Writer.
+func uncodedFailure(err error) (failure, bool) {
+	if _, ok := problem.Auth(err); ok {
+		return fail(0, ""), false
 	}
 
-	if errors.Is(err, namespace.ErrFenced) {
-		h.logger.WarnContext(ctx, "write fenced", slog.String("error", err.Error()))
+	if _, ok := problem.Idempotency(err); ok {
+		return fail(0, ""), false
 	}
+
+	if errors.As(err, new(*codedError)) {
+		return fail(0, ""), false
+	}
+
+	if errors.As(err, new(reauthenticateError)) {
+		return fail(0, ""), false
+	}
+
+	// A 403 gets the code of its cause, and the code of a cause that is not a
+	// denial is empty: that answer has no code either.
+	f := classify(err)
+	if forbiddenCode(f, err) == "" {
+		return f, true
+	}
+
+	return fail(0, ""), false
+}
+
+// problemFor is the classifier of problem.Writer: it answers the errors that
+// have a code. It never sees an error that wraps identity.ErrDenied.
+func problemFor(err error) (problem.Problem, bool) {
+	if p, ok := problem.Idempotency(err); ok {
+		return p, true
+	}
+
+	if coded, ok := errors.AsType[*codedError](err); ok {
+		// The catalog checks the code and the arguments. When it refuses, the
+		// bug is in the server and not in the request, so the writer answers
+		// the internal error.
+		return problem.New(coded.status, coded.code, coded.message, coded.args...), true
+	}
+
+	f := classify(err)
+	p := problem.New(f.status, forbiddenCode(f, err), f.message, f.args...)
+
+	if fresh, ok := errors.AsType[reauthenticateError](err); ok {
+		p = problem.New(f.status, freshStepRequiredCode, f.message)
+		p.Reauthenticate = fresh.url
+	}
+
+	p.RetryAfter = retryAfter(err)
+
+	return p, true
+}
+
+// forbiddenCode returns the code of f. A 403 that its classify function gives
+// no code gets the code of its cause, at least access.denied for a missing
+// permission.
+func forbiddenCode(f failure, err error) string {
+	if f.code == "" && f.status == http.StatusForbidden {
+		return errcode.Forbidden(err)
+	}
+
+	return f.code
+}
+
+// retryAfter returns the wait that the answer to err names in Retry-After: a
+// refusal of maintenance mode names maintenanceRetryAfter, any other error 0.
+func retryAfter(err error) time.Duration {
+	if errors.Is(err, maintenance.ErrInMaintenance) || errors.Is(err, maintenance.ErrBusy) {
+		return maintenanceRetryAfter
+	}
+
+	return 0
 }
 
 // deniedFailure returns the failure of an error that wraps identity.ErrDenied
@@ -669,11 +697,12 @@ func classifyNamespace(err error) (failure, bool) {
 	case errors.Is(err, errInvalidNamespaceBody):
 		return failCoded(http.StatusBadRequest, err.Error(), errcode.RequestBodyInvalid), true
 	case errors.Is(err, namespace.ErrInvalidPage):
-		return failCoded(http.StatusBadRequest, err.Error(), errcode.RequestPageSizeInvalid), true
+		// The sentence of the sentinel only, as for a fenced write.
+		return failCoded(http.StatusBadRequest, namespace.ErrInvalidPage.Error(), errcode.RequestPageSizeInvalid), true
 	case errors.Is(err, errNamespaceCursor):
 		return failCoded(http.StatusBadRequest, err.Error(), errcode.RequestPageTokenInvalid), true
 	case errors.Is(err, namespace.ErrAlreadyExists):
-		return failCoded(http.StatusConflict, err.Error(), errcode.NamespaceAlreadyExists), true
+		return failCoded(http.StatusConflict, namespace.ErrAlreadyExists.Error(), errcode.NamespaceAlreadyExists), true
 	case errors.Is(err, namespace.ErrFenced):
 		// The sentence of the sentinel only: a wrap adds the name of the
 		// operation, which the log holds.
@@ -683,7 +712,7 @@ func classifyNamespace(err error) (failure, bool) {
 		// might name the object, and the log holds it.
 		return failCoded(http.StatusNotFound, "namespace not found", errcode.NamespaceNotFound), true
 	case errors.Is(err, namespace.ErrNoPaging):
-		return fail(http.StatusNotImplemented, err.Error()), true
+		return fail(http.StatusNotImplemented, namespace.ErrNoPaging.Error()), true
 	default:
 		return fail(0, ""), false
 	}
