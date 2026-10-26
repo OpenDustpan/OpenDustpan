@@ -153,3 +153,4 @@ both together.
 | [103](0103-the-public-sdk-surface.md) | The public SDK surface: what stays in `pkg/`, and the CI check | accepted (ADR 272) |
 | [104](0104-dialect-neutral-store-logic.md) | Dialect-neutral store logic, so that a third SQL dialect can come later | accepted (ADR 274) |
 | [105](0105-purge-and-backup-at-the-same-time.md) | Blob deletes while a backup runs, from the purge, the checkpoint replace and the journal build | discussing |
+| [106](0106-the-start-gate-for-the-services-of-the-sdk-server.md) | The start gate for the services of the SDK server, not only for its handler | discussing |
