@@ -140,6 +140,7 @@ reads them as they are. They are renamed in a later version of the API.
 | `components.parameters.IfMatchRequired` | The same header for a route that answers 428 without it. The parameter has `required: true`. |
 | `components.headers.ETag` | The `ETag` answer header. A route that sends it declares it in its success answer. |
 | `components.schemas.ErrorResponse` | The body of an error: `code` (the HTTP status), `message`, and the optional `errorCode` and `errorArgs` |
+| `components.schemas.ErrorCode` | The `errorCode` values that exist today: every code of the error catalog, sorted. `errorCode` is an open enum of it: a client must accept a code that is not in the list, because the list grows. |
 
 ## Values that can grow
 
