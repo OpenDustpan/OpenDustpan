@@ -12,8 +12,10 @@ import (
 	"opendustpan.org/opendustpan/internal/source"
 	"opendustpan.org/opendustpan/internal/source/sourcetest"
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/store/postgres"
+	"opendustpan.org/opendustpan/pkg/store/storetest"
 )
 
 // sourceFilterHarness returns the factory of the source filter suite over
@@ -40,21 +42,29 @@ func sourceFilterHarness(base string) sourcetest.Factory {
 			FilterRaw: func(t *testing.T, ns namespace.Name, raw string) {
 				t.Helper()
 
-				conn := rawSettingConn(t, schemaURL)
-				defer closeSettingConn(t, conn)
-
-				const drop = `ALTER TABLE namespaces DROP CONSTRAINT IF EXISTS namespaces_source_filter_check`
-				if _, err := conn.Exec(t.Context(), drop); err != nil {
-					t.Fatalf("drop the check of the source filter: %v", err)
-				}
-
-				_, err := conn.Exec(t.Context(),
-					`UPDATE namespaces SET source_filter = $1 WHERE name = $2`, raw, ns.String())
-				if err != nil {
-					t.Fatalf("plant the source filter %q: %v", raw, err)
-				}
+				plantSourceFilter(t, schemaURL, ns, raw)
 			},
 		}
+	}
+}
+
+// plantSourceFilter drops the CHECK of the column in the schema that schemaURL
+// names and writes raw as the stored source filter of ns, as a row of another
+// version could hold such a value.
+func plantSourceFilter(t *testing.T, schemaURL string, ns namespace.Name, raw string) {
+	t.Helper()
+
+	conn := rawSettingConn(t, schemaURL)
+	defer closeSettingConn(t, conn)
+
+	const drop = `ALTER TABLE namespaces DROP CONSTRAINT IF EXISTS namespaces_source_filter_check`
+	if _, err := conn.Exec(t.Context(), drop); err != nil {
+		t.Fatalf("drop the check of the source filter: %v", err)
+	}
+
+	_, err := conn.Exec(t.Context(), `UPDATE namespaces SET source_filter = $1 WHERE name = $2`, raw, ns.String())
+	if err != nil {
+		t.Fatalf("plant the source filter %q: %v", raw, err)
 	}
 }
 
@@ -222,4 +232,138 @@ func TestSourceFilterAuditOldValueIsReadInTheTransaction(t *testing.T) {
 	if !slices.Equal(got, want) {
 		t.Fatalf("Old values of the entries = %q, want %q", got, want)
 	}
+}
+
+// fullSourceFilter returns a filter that sets each field.
+func fullSourceFilter() source.Filter {
+	return source.Filter{
+		Submodules:        []source.URLPattern{"https://git.example.com/platform/*"},
+		LargeFiles:        []source.URLPattern{"https://git.example.com/acme/infra"},
+		FailOnDenied:      true,
+		ProtectedBranches: []string{"main", "release/1"},
+	}
+}
+
+// setSourceFilter stores f as the filter of the namespace of fence, and fails
+// the test on an error.
+func setSourceFilter(t *testing.T, s *postgres.Store, fence namespace.Fence, f source.Filter) string {
+	t.Helper()
+
+	text, err := source.EncodeFilter(f)
+	if err != nil {
+		t.Fatalf("encode the filter: %v", err)
+	}
+
+	err = s.SourceFilters().SetFilter(t.Context(), fence.Namespace, f, fence, sourcetest.EntryForFilter(fence, text))
+	if err != nil {
+		t.Fatalf("SetFilter: %v", err)
+	}
+
+	return text
+}
+
+// TestSourceFilterExportsAndStages proves that a filter that is not empty
+// reaches the portable export of the namespace row, with the text that the
+// store keeps, and that the stage of the export accepts it.
+func TestSourceFilterExportsAndStages(t *testing.T) {
+	t.Parallel()
+
+	s := openURL(t, isolatedURL(t, sourceFilterBase(t)))
+	fence := ensureNamespace(t, s, "acme")
+	text := setSourceFilter(t, s, fence, fullSourceFilter())
+
+	rows := storetest.PortableNamespaceRows(t, s)
+
+	got, ok := rows["acme"]["source_filter"].(string)
+	if !ok || got != text {
+		t.Fatalf("the exported source_filter of acme = %v, want %s", rows["acme"]["source_filter"], text)
+	}
+}
+
+// TestSourceFilterStageRefusesAStoredNonFilter proves that the stage of an
+// export that holds a stored value that is not a filter fails with ErrCorrupt,
+// so a restore never brings such a value in.
+func TestSourceFilterStageRefusesAStoredNonFilter(t *testing.T) {
+	t.Parallel()
+
+	base := sourceFilterBase(t)
+
+	for _, raw := range []string{"not json", `{"extra":1}`, `{"protectedBranches":["a/*"]}`} {
+		schemaURL := isolatedURL(t, base)
+		s := openURL(t, schemaURL)
+		ensureNamespace(t, s, "acme")
+		plantSourceFilter(t, schemaURL, "acme", raw)
+
+		err := storetest.StagePortableExport(t, s)
+		if !errors.Is(err, backup.ErrCorrupt) {
+			t.Fatalf("stage of an export with the stored value %q = %v, want ErrCorrupt", raw, err)
+		}
+	}
+}
+
+// TestSourceFilterFailedAuditAppendRollsBackTheWrite proves that a change whose
+// audit entry cannot be appended leaves the filter and the audit log as they
+// were. A trigger on the audit table refuses the append after the write of the
+// filter, so only the transaction can undo the write.
+func TestSourceFilterFailedAuditAppendRollsBackTheWrite(t *testing.T) {
+	t.Parallel()
+
+	schemaURL := isolatedURL(t, sourceFilterBase(t))
+	s := openURL(t, schemaURL)
+	fence := ensureNamespace(t, s, "acme")
+	first := fullSourceFilter()
+	setSourceFilter(t, s, fence, first)
+
+	entries := len(allAuditEntries(t, s, "acme"))
+
+	conn := rawSettingConn(t, schemaURL)
+	defer closeSettingConn(t, conn)
+
+	const trigger = `CREATE FUNCTION refuse_audit() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN RAISE EXCEPTION 'audit append refused'; END $$;
+CREATE TRIGGER refuse_audit BEFORE INSERT ON audit_entries FOR EACH ROW EXECUTE FUNCTION refuse_audit()`
+	if _, err := conn.Exec(t.Context(), trigger); err != nil {
+		t.Fatalf("plant the trigger: %v", err)
+	}
+
+	changed := emptyFilter()
+	changed.FailOnDenied = true
+
+	text, err := source.EncodeFilter(changed)
+	if err != nil {
+		t.Fatalf("encode the filter: %v", err)
+	}
+
+	err = s.SourceFilters().SetFilter(t.Context(), "acme", changed, fence, sourcetest.EntryForFilter(fence, text))
+	if err == nil {
+		t.Fatal("SetFilter succeeded although the audit append failed")
+	}
+
+	got, err := s.SourceFilters().Filter(t.Context(), "acme")
+	if err != nil {
+		t.Fatalf("Filter: %v", err)
+	}
+
+	wantText := encodedFilter(t, &first)
+
+	gotText := encodedFilter(t, &got)
+	if gotText != wantText {
+		t.Fatalf("the filter after the failed change = %s, want %s", gotText, wantText)
+	}
+
+	if n := len(allAuditEntries(t, s, "acme")); n != entries {
+		t.Fatalf("the failed change left %d audit entries, want %d", n, entries)
+	}
+}
+
+// encodedFilter returns the text of f, and fails the test when f is not valid.
+func encodedFilter(t *testing.T, f *source.Filter) string {
+	t.Helper()
+
+	text, err := source.EncodeFilter(*f)
+	if err != nil {
+		t.Fatalf("encode the filter: %v", err)
+	}
+
+	return text
 }
