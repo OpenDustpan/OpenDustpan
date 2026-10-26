@@ -11,6 +11,7 @@ import (
 
 	apiserver "opendustpan.org/opendustpan/internal/api/server"
 	"opendustpan.org/opendustpan/internal/errcode"
+	"opendustpan.org/opendustpan/internal/sessionauth"
 	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/accesstoken"
 	"opendustpan.org/opendustpan/pkg/audit"
@@ -127,12 +128,15 @@ func TestWriteErrorKeepDenied(t *testing.T) {
 		want string
 	}{
 		{"escalation", deniedAround(access.ErrEscalation), access.ErrEscalation.Error()},
-		{"audit chain step", deniedAround(audit.ErrChainStepRequired), audit.ErrChainStepRequired.Error()},
-		{"audit chain person", deniedAround(audit.ErrChainNeedsPerson), audit.ErrChainNeedsPerson.Error()},
 		{
 			"sign-in refused",
-			fmt.Errorf("%w: no principal", errSignInRefused),
+			fmt.Errorf("%s: %w", wrapText, apiserver.SignInRefusalForTest("no principal")),
 			errSignInRefused.Error() + ": no principal",
+		},
+		{
+			"escalation around a not-found",
+			fmt.Errorf("%w: %w: %w", identity.ErrDenied, namespace.ErrNotFound, access.ErrEscalation),
+			access.ErrEscalation.Error(),
 		},
 	}
 
@@ -188,5 +192,71 @@ func TestWriteErrorNoStore(t *testing.T) {
 				t.Errorf("Cache-Control = %q, want %q", got, "no-store")
 			}
 		})
+	}
+}
+
+// TestWriteErrorCredentialBeforeDenial checks that a refusal of the credential
+// of a request keeps its status, as in problem.Writer, whatever else the error
+// wraps.
+func TestWriteErrorCredentialBeforeDenial(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		cause error
+		want  int
+	}{
+		{"csrf", sessionauth.ErrCSRF, http.StatusForbidden},
+		{"other site", sessionauth.ErrOtherSite, http.StatusForbidden},
+		{"unauthenticated", identity.ErrUnauthenticated, http.StatusUnauthorized},
+		{"rate limited", identity.ErrRateLimited, http.StatusTooManyRequests},
+		{
+			"unauthenticated around a not-found",
+			fmt.Errorf("%w: %w", identity.ErrUnauthenticated, namespace.ErrNotFound), http.StatusUnauthorized,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			rec, _ := writeErrorRecorder(t, deniedAround(tc.cause))
+			if rec.Code != tc.want {
+				t.Fatalf("status = %d, want %d; body %s", rec.Code, tc.want, rec.Body.String())
+			}
+
+			if strings.Contains(rec.Body.String(), wrapText) {
+				t.Errorf("body holds the wrap text: %s", rec.Body.String())
+			}
+		})
+	}
+}
+
+// TestWriteEnterErrorDenialComesFirst checks that the answer of a failed enter
+// of maintenance mode answers a denial as 403 with no list of canceled work,
+// and that the answer has no-store.
+func TestWriteEnterErrorDenialComesFirst(t *testing.T) {
+	t.Parallel()
+
+	active := &maintenance.ActiveWorkError{
+		Work: []string{"pulumi/acme/web/prod"}, Canceled: []string{"opentofu/acme/net"},
+	}
+
+	rec := httptest.NewRecorder()
+	apiserver.WriteEnterErrorForTest(rec,
+		httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/", http.NoBody), deniedAround(active))
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want %d; body %s", rec.Code, http.StatusForbidden, rec.Body.String())
+	}
+
+	for _, leak := range []string{wrapText, "opentofu/acme/net", "canceled"} {
+		if strings.Contains(rec.Body.String(), leak) {
+			t.Errorf("body holds %q: %s", leak, rec.Body.String())
+		}
+	}
+
+	if got := rec.Header().Get("Cache-Control"); got != "no-store" {
+		t.Errorf("Cache-Control = %q, want no-store", got)
 	}
 }

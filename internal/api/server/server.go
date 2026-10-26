@@ -432,8 +432,8 @@ func (h *Handler) writeError(ctx context.Context, w http.ResponseWriter, err err
 	// A denial comes first: an error that wraps identity.ErrDenied answers 403
 	// whatever else it wraps, so no refusal tells the state of an object that
 	// the caller has no right on.
-	if errors.Is(err, identity.ErrDenied) {
-		h.writeDenied(ctx, w, err)
+	if f, ok := deniedFailure(err); ok {
+		h.writeCoded(ctx, w, f)
 
 		return
 	}
@@ -508,43 +508,47 @@ func (h *Handler) noteRefusal(ctx context.Context, w http.ResponseWriter, err er
 	}
 }
 
-// writeDenied writes the answer to an error that wraps identity.ErrDenied. The
-// text is fixed and holds no wrap text. keepDenied lists the classes that keep
-// their own text, and problem.Auth answers all other denials, and the refusal
-// of the credential of a request, in the same words as the other APIs.
-func (h *Handler) writeDenied(ctx context.Context, w http.ResponseWriter, err error) {
-	f, ok := keepDenied(err)
-	if !ok {
-		p, _ := problem.Auth(err)
-		f = failCoded(p.Status, p.Message, p.Code)
-	}
-
-	h.writeCoded(ctx, w, f)
-}
-
-// keepDenied maps the classes of a denial that keep their own text. The text
-// is the sentence of the sentinel, never the wrap text, except for a refused
-// sign-in. The status is 403
-// only, as in problem.Writer.KeepDenied.
-func keepDenied(err error) (failure, bool) {
-	var text string
-
-	switch {
-	case errors.Is(err, access.ErrEscalation):
-		text = access.ErrEscalation.Error()
-	case errors.Is(err, audit.ErrChainStepRequired):
-		text = audit.ErrChainStepRequired.Error()
-	case errors.Is(err, audit.ErrChainNeedsPerson):
-		text = audit.ErrChainNeedsPerson.Error()
-	case errors.Is(err, errSignInRefused):
-		// The sign-in handler adds the reason of the refusal to the text on
-		// purpose: the reason names no code, token or state.
-		text = err.Error()
-	default:
+// deniedFailure returns the failure of an error that wraps identity.ErrDenied
+// or that is a refusal of the credential of a request. It uses the order of
+// problem.Writer: the refusals of the credential first, then keepDenied, then
+// the standard 403 with fixed text. It holds no wrap text. The second result
+// is false for any other error.
+func deniedFailure(err error) (failure, bool) {
+	if _, ok := problem.Auth(err); !ok {
 		return fail(0, ""), false
 	}
 
-	return failCoded(http.StatusForbidden, text, errcode.Forbidden(err)), true
+	p := problem.Writer{Logger: nil, KeepDenied: keepDenied, Classify: nil}.Problem(err)
+
+	return failCoded(p.Status, p.Message, p.Code, p.Values...), true
+}
+
+// keepDenied maps the classes of a denial that keep their own text, as
+// problem.Writer.KeepDenied does. The status is 403 only. The text is built
+// from a sentinel, never from the wrap text.
+func keepDenied(err error) (problem.Problem, bool) {
+	switch {
+	case errors.Is(err, access.ErrEscalation):
+		// checkMoveGrant in pkg/access wraps this refusal in identity.ErrDenied
+		// when a grant of a move target gives more than the caller holds.
+		return keptForbidden(err, access.ErrEscalation.Error()), true
+	case errors.Is(err, errSignInRefused):
+		// The reason names no code, token or state: the sign-in handler adds it
+		// on purpose, as a signInRefusalError.
+		text := errSignInRefused.Error()
+		if refusal, ok := errors.AsType[signInRefusalError](err); ok {
+			text += ": " + refusal.reason
+		}
+
+		return keptForbidden(err, text), true
+	default:
+		return problem.Internal(), false
+	}
+}
+
+// keptForbidden returns the 403 of a kept class with text.
+func keptForbidden(err error, text string) problem.Problem {
+	return problem.Built(http.StatusForbidden, text, errcode.Forbidden(err), errcode.Answer{}, nil)
 }
 
 // classifyIdentity maps the errors of the roles, the grants and the access
