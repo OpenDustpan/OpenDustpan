@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/api/runnerapi"
+	"opendustpan.org/opendustpan/internal/source"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/durable"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -146,6 +147,7 @@ type stores struct {
 	jobs       job.Store
 	units      unitStore
 	runners    runnerStores
+	filters    source.Filters
 	audit      interface {
 		List(ctx context.Context, ns namespace.Name, page audit.Page) (audit.Listing, error)
 	}
@@ -189,7 +191,13 @@ func openSQLite(t *testing.T) stores {
 	})
 
 	return stores{
-		namespaces: s, operations: s.DurableOperations(), jobs: s.Jobs(), units: s, runners: s.Runners(), audit: s,
+		namespaces: s,
+		operations: s.DurableOperations(),
+		jobs:       s.Jobs(),
+		units:      s,
+		runners:    s.Runners(),
+		filters:    s.SourceFilters(),
+		audit:      s,
 	}
 }
 
@@ -238,7 +246,7 @@ func newEnvWith(
 	h, srv, ops := serve(
 		t,
 		s,
-		serveOptions{now: clock.now, authz: identity.AdminOnly{}, claimer: claimer},
+		serveOptions{now: clock.now, authz: identity.AdminOnly{}, claimer: claimer, authn: nil},
 	)
 
 	return &env{t: t, store: s, server: srv, handler: h, claimer: ops, fence: ns.Fence(), clock: clock}
@@ -297,6 +305,9 @@ type serveOptions struct {
 	authz identity.Authorizer
 	// claimer replaces the claimer of the test, which has no jobs.
 	claimer job.Claimer
+	// authn replaces the authenticator of the test, which signs in the
+	// administrator for adminToken.
+	authn identity.Authenticator
 }
 
 // serve returns a handler over s on a test server. Two calls with the stores
@@ -316,10 +327,15 @@ func serve(t *testing.T, s stores, opts serveOptions) (*runnerapi.Handler, *http
 		phases = opts.claimer
 	}
 
+	var authn identity.Authenticator = adminAuthenticator{}
+	if opts.authn != nil {
+		authn = opts.authn
+	}
+
 	h, err := runnerapi.NewHandler(runnerapi.Config{
-		Audit: newTestAudit(), OnAuditFailure: nil,
+		Audit: newTestAudit(), OnAuditFailure: nil, SourceFilters: s.filters,
 		Namespaces: service, Pools: s.runners, Members: s.runners, Handoffs: s.runners, Claimer: phases, Sweeps: nil,
-		Operations: s.operations, Authenticator: adminAuthenticator{}, Authorizer: opts.authz,
+		Operations: s.operations, Authenticator: authn, Authorizer: opts.authz,
 		Sessions: nil, Logger: slog.New(slog.DiscardHandler), Release: serverRelease(), ServerURL: serverURL,
 		Now: opts.now, PollInterval: 20 * time.Millisecond,
 		DenialLimiter: nil,

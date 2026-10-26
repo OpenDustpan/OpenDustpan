@@ -12,6 +12,7 @@ import (
 
 	"opendustpan.org/opendustpan/internal/api/problem"
 	"opendustpan.org/opendustpan/internal/errcode"
+	"opendustpan.org/opendustpan/internal/source"
 	"opendustpan.org/opendustpan/pkg/durable"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/job"
@@ -203,12 +204,30 @@ func classifyManagement(err error) (problem.Problem, bool) {
 	case errors.Is(err, errBadBody):
 		return problem.New(http.StatusBadRequest, errcode.RequestBodyInvalid, errBadBody.Error()), true
 	default:
-		return classifyManagementConflict(err)
+		return classifySourceFilter(err)
 	}
 }
 
 // classifyManagementConflict maps the errors of a refused change of the runner
 // domain.
+// classifySourceFilter maps the errors of the source filter routes. A stored
+// filter that fails the checks answers 500: no caller sent it, and a PUT with
+// a valid filter replaces it.
+func classifySourceFilter(err error) (problem.Problem, bool) {
+	switch {
+	case errors.Is(err, errSourceFilterUnreadable):
+		return problem.New(
+			http.StatusInternalServerError, errcode.SourceFilterUnreadable, errSourceFilterUnreadable.Error(),
+		), true
+	case errors.Is(err, source.ErrInvalid), errors.Is(err, source.ErrTooLarge):
+		// The text of the checks names the value that the caller sent. A stored
+		// value never reaches this case: the read marks it first.
+		return problem.New(http.StatusBadRequest, errcode.SourceFilterInvalid, err.Error()), true
+	default:
+		return classifyManagementConflict(err)
+	}
+}
+
 func classifyManagementConflict(err error) (problem.Problem, bool) {
 	switch {
 	case errors.Is(err, runner.ErrAlreadyExists):

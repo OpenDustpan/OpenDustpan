@@ -53,8 +53,15 @@ func TestRouteTable(t *testing.T) {
 			seen[route.Path] = true
 		case strings.HasPrefix(route.Path, "/api/runners/"):
 			checkManagementRoute(t, route)
+		case sourceFilterActions()[route.Method+" "+route.Path] != "":
+			checkManagementRoute(t, route)
+			checkSourceFilterRoute(t, route)
 		default:
-			t.Errorf("route %s %s is outside /runner/v1 and /api/runners", route.Method, route.Path)
+			t.Errorf(
+				"route %s %s is outside /runner/v1, /api/runners and the source filter routes",
+				route.Method,
+				route.Path,
+			)
 		}
 	}
 
@@ -71,6 +78,29 @@ func TestRouteTable(t *testing.T) {
 
 	if !slices.Equal(patterns, registered) {
 		t.Errorf("table patterns = %v, registered = %v, want equal", patterns, registered)
+	}
+}
+
+// sourceFilterActions are the two routes of the source filter of a namespace,
+// with the one action that each declares. A route that is not in the list does
+// not sit under the prefix of the tool-neutral REST API in this adapter.
+func sourceFilterActions() map[string]identity.Action {
+	const path = "/api/dustpan/v1/namespaces/{namespace}/source-filter"
+
+	return map[string]identity.Action{
+		http.MethodGet + " " + path: identity.ActionNamespaceReadRunners,
+		http.MethodPut + " " + path: identity.ActionNamespaceManageRunners,
+	}
+}
+
+// checkSourceFilterRoute proves that a route of the source filter declares
+// the one action of its method.
+func checkSourceFilterRoute(t *testing.T, route *runnerapi.Route) {
+	t.Helper()
+
+	want := sourceFilterActions()[route.Method+" "+route.Path]
+	if len(route.Actions) != 1 || route.Actions[0] != want {
+		t.Errorf("route %s %s declares %v, want [%s]", route.Method, route.Path, route.Actions, want)
 	}
 }
 
