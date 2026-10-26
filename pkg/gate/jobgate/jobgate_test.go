@@ -109,9 +109,14 @@ func input(t *testing.T, executor job.ExecutorKind, op job.Operation) job.Decisi
 
 // def returns an approval default of scope with count and groups.
 func def(scope gate.Scope, count int, groups ...string) gate.ApprovalDefault {
+	ids := make([]string, len(groups))
+	for i, g := range groups {
+		ids[i] = "id-" + g
+	}
+
 	return gate.ApprovalDefault{
 		Scope: scope, Version: 1, Count: count, FreshAuth: gate.NoFreshAuth(),
-		Approvers: gate.Approvers{Groups: groups, Users: nil, UnitOwners: false}, Unless: "", Reads: nil,
+		Approvers: gate.Approvers{Groups: groups, GroupIDs: ids, Users: nil, UnitOwners: false}, Unless: "", Reads: nil,
 	}
 }
 
@@ -281,8 +286,48 @@ func TestDecideNamesTheGroupsAndNeverCountsTheAuthor(t *testing.T) {
 		t.Fatalf("groups = %v, want [platform bo-team]", g.Groups)
 	}
 
+	if !slices.Equal(g.GroupIDs, []string{"id-platform", "id-bo-team"}) {
+		t.Fatalf(
+			"group IDs = %v, want [id-platform id-bo-team]: the gate keeps the IDs, not only the names",
+			g.GroupIDs,
+		)
+	}
+
 	if g.AllowSelf {
 		t.Fatalf("gate = %+v, want no self approval for %s", g, in.Principal.Subject)
+	}
+}
+
+// TestDecideRefusesGroupsWithoutIDs proves that a default that names groups
+// and holds no group IDs, as a default saved before the IDs existed, makes the
+// start fail: the gate never falls back to the group names.
+func TestDecideRefusesGroupsWithoutIDs(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		ids  []string
+		want error
+	}{
+		{"no IDs", nil, gate.ErrUnavailable},
+		// Defense in depth: the validation of the default refuses this too.
+		{"fewer IDs than names", []string{"id-platform"}, gate.ErrInvalid},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			d0 := def(nsScope(), 2, "platform", "bo-team")
+			d0.Approvers.GroupIDs = tt.ids
+
+			d := newDecider(t, withDefaults(d0), inCollection("prod"))
+
+			got, err := d.Decide(t.Context(), input(t, job.ExecutorRunner, job.OperationApply))
+			if !errors.Is(err, tt.want) || got.Allow {
+				t.Fatalf("Decide() = %+v, %v; want %v and no allow", got, err, tt.want)
+			}
+		})
 	}
 }
 

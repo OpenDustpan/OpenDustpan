@@ -181,10 +181,16 @@ func gateOf(reqs []gate.Requirement) (job.Gate, error) {
 			"approval does not enforce it; remove freshAuthSeconds", gate.ErrUnavailable, r.Name)
 	}
 
+	if len(r.Approvers.GroupIDs) != len(r.Approvers.Groups) {
+		return job.Gate{}, fmt.Errorf("%w: the requirement %s names groups that were saved without group IDs, "+
+			"and a job enforces groups by ID; save the rule again", gate.ErrUnavailable, r.Name)
+	}
+
 	return job.Gate{
 		Type:      job.GateApproval,
 		Approvals: r.Count,
 		Groups:    slices.Clone(r.Approvers.Groups),
+		GroupIDs:  slices.Clone(r.Approvers.GroupIDs),
 		AllowSelf: r.AuthorMayApprove,
 		Timeout:   time.Duration(r.TimeoutSeconds) * time.Second,
 		BindPlan:  false,
