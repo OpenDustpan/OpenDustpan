@@ -5,6 +5,8 @@ package errcode
 const (
 	// RequestBodyInvalid means that the request body is not readable or is not one JSON object with known fields.
 	RequestBodyInvalid = "request.body-invalid"
+	// RequestBodyTooLarge means that the request body is longer than the limit of the route.
+	RequestBodyTooLarge = "request.body-too-large"
 	// RequestContentTypeUnsupported means that the content type of the request is not one that the route takes.
 	RequestContentTypeUnsupported = "request.content-type-unsupported"
 	// RequestIdempotencyKeyInProgress means that a request with the same Idempotency-Key is in progress.
@@ -50,6 +52,11 @@ func requestSpecs() []Spec {
 			Code:    RequestBodyInvalid,
 			Meaning: "the request body is not readable or is not one JSON object with known fields",
 			Args:    nil,
+		},
+		{
+			Code:    RequestBodyTooLarge,
+			Meaning: "the request body is longer than the limit of the route",
+			Args:    []Arg{{Name: "limit", Kind: KindQuantity}},
 		},
 		{
 			Code:    RequestContentTypeUnsupported,

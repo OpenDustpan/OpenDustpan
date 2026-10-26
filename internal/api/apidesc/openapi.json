@@ -882,6 +882,7 @@
             "maintenance.active-work": "#/components/schemas/MaintenanceActiveWorkError",
             "preferences.field-invalid": "#/components/schemas/PreferencesFieldInvalidError",
             "preferences.field-read-only": "#/components/schemas/PreferencesFieldReadOnlyError",
+            "request.body-too-large": "#/components/schemas/RequestBodyTooLargeError",
             "request.idempotency-key-replayed-secret": "#/components/schemas/RequestIdempotencyKeyReplayedSecretError",
             "sink.test-rate-limited": "#/components/schemas/SinkTestRateLimitedError",
             "stack.no-state-at-time": "#/components/schemas/StackNoStateAtTimeError",
@@ -915,6 +916,9 @@
             "$ref": "#/components/schemas/PreferencesFieldReadOnlyError"
           },
           {
+            "$ref": "#/components/schemas/RequestBodyTooLargeError"
+          },
+          {
             "$ref": "#/components/schemas/RequestIdempotencyKeyReplayedSecretError"
           },
           {
@@ -944,6 +948,7 @@
         "enum": [
           "access.denied",
           "access.ip-not-allowed",
+          "access.last-site-administrator",
           "access.no-action",
           "audit.entry-not-found",
           "audit.entry-read-unavailable",
@@ -1019,6 +1024,14 @@
           "preferences.person-required",
           "preferences.precondition-failed",
           "preferences.unavailable",
+          "principal.already-exists",
+          "principal.disabled",
+          "principal.invalid",
+          "principal.managed-by-directory",
+          "principal.not-disabled",
+          "principal.not-found",
+          "principal.reserved-subject",
+          "principal.unsupported",
           "profile.conflict",
           "profile.invalid",
           "profile.limit",
@@ -1038,6 +1051,7 @@
           "registry.too-large",
           "registry.version-exists",
           "request.body-invalid",
+          "request.body-too-large",
           "request.content-type-unsupported",
           "request.idempotency-key-in-progress",
           "request.idempotency-key-invalid",
@@ -1103,7 +1117,15 @@
           "state-version.stale-serial",
           "state-version.too-large",
           "state-version.upload-denied",
+          "token.already-exists",
+          "token.ended",
           "token.invalid",
+          "token.kind-unsupported",
+          "token.no-own-principal",
+          "token.not-found",
+          "token.sign-in-required",
+          "token.unsupported",
+          "token.wrong-kind",
           "trigger.cycle",
           "trigger.disabled",
           "trigger.fire-conflict",
@@ -2955,6 +2977,47 @@
         ],
         "type": "object"
       },
+      "RequestBodyTooLargeError": {
+        "description": "The error answer with the code request.body-too-large.",
+        "properties": {
+          "code": {
+            "description": "The HTTP status.",
+            "type": "integer"
+          },
+          "errorArgs": {
+            "$ref": "#/components/schemas/RequestBodyTooLargeErrorArgs"
+          },
+          "errorCode": {
+            "enum": [
+              "request.body-too-large"
+            ],
+            "type": "string"
+          },
+          "message": {
+            "description": "A text for a person.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "message",
+          "errorCode",
+          "errorArgs"
+        ],
+        "type": "object"
+      },
+      "RequestBodyTooLargeErrorArgs": {
+        "description": "The arguments of the text of the error with the code request.body-too-large.",
+        "properties": {
+          "limit": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "limit"
+        ],
+        "type": "object"
+      },
       "RequestIdempotencyKeyReplayedSecretError": {
         "description": "The error answer with the code request.idempotency-key-replayed-secret.",
         "properties": {
@@ -4038,7 +4101,7 @@
   "info": {
     "description": "The tool-neutral REST API of an OpenDustpan server. The description covers the paths under /api/dustpan/v1/ only. A body has the schema of the Go type that the route names.",
     "title": "OpenDustpan REST API",
-    "version": "0.10.0"
+    "version": "0.11.0"
   },
   "openapi": "3.1.0",
   "paths": {

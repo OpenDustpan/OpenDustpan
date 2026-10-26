@@ -30,6 +30,7 @@ import (
 	"strconv"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -979,21 +980,31 @@ func classifyPrincipal(err error) (failure, bool) {
 	case errors.Is(err, errPrincipalBody), errors.Is(err, errPrincipalChangeBody),
 		errors.Is(err, errGroupBody), errors.Is(err, errGroupChangeBody), errors.Is(err, errMemberBody),
 		errors.Is(err, errNamespacePrincipalBody):
-		return fail(http.StatusBadRequest, err.Error()), true
-	case errors.Is(err, principal.ErrInvalid), errors.Is(err, principal.ErrReservedSubject),
-		errors.Is(err, errPageQuery):
-		return fail(http.StatusBadRequest, err.Error()), true
+		return failCoded(http.StatusBadRequest, err.Error(), errcode.RequestBodyInvalid), true
+	case errors.Is(err, principal.ErrInvalid):
+		return failCoded(http.StatusBadRequest, err.Error(), errcode.PrincipalInvalid), true
+	case errors.Is(err, principal.ErrReservedSubject):
+		return failCoded(http.StatusBadRequest, err.Error(), errcode.PrincipalReservedSubject), true
+	case errors.Is(err, errPageQuery):
+		return failCoded(http.StatusBadRequest, err.Error(), errcode.RequestPageSizeInvalid), true
 	case errors.Is(err, errBodyTooLarge):
-		return fail(http.StatusRequestEntityTooLarge, err.Error()), true
-	case errors.Is(err, principal.ErrAlreadyExists), errors.Is(err, principal.ErrManagedByDirectory),
-		errors.Is(err, principal.ErrNotDisabled), errors.Is(err, principal.ErrDisabled),
-		errors.Is(err, access.ErrLastSiteAdministrator):
-		return fail(http.StatusConflict, err.Error()), true
+		return failCoded(http.StatusRequestEntityTooLarge, err.Error(), errcode.RequestBodyTooLarge,
+			errcode.Quantity("limit", maxPrincipalBodyBytes)), true
+	case errors.Is(err, principal.ErrAlreadyExists):
+		return failCoded(http.StatusConflict, err.Error(), errcode.PrincipalAlreadyExists), true
+	case errors.Is(err, principal.ErrManagedByDirectory):
+		return failCoded(http.StatusConflict, err.Error(), errcode.PrincipalManagedByDirectory), true
+	case errors.Is(err, principal.ErrNotDisabled):
+		return failCoded(http.StatusConflict, err.Error(), errcode.PrincipalNotDisabled), true
+	case errors.Is(err, principal.ErrDisabled):
+		return failCoded(http.StatusConflict, err.Error(), errcode.PrincipalDisabled), true
+	case errors.Is(err, access.ErrLastSiteAdministrator):
+		return failCoded(http.StatusConflict, err.Error(), errcode.AccessLastSiteAdministrator), true
 	case errors.Is(err, principal.ErrNotFound):
-		return fail(http.StatusNotFound, err.Error()), true
+		return failCoded(http.StatusNotFound, err.Error(), errcode.PrincipalNotFound), true
 	case errors.Is(err, errNoPrincipalStore):
-		return fail(http.StatusNotImplemented, err.Error()), true
-	default:
-		return fail(0, ""), false
+		return failCoded(http.StatusNotImplemented, err.Error(), errcode.PrincipalUnsupported), true
 	}
+
+	return fail(0, ""), false
 }
