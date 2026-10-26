@@ -88,7 +88,7 @@ func runnerServer(
 		t.Fatalf("new server: %v", err)
 	}
 
-	return srv.Handler()
+	return startedHandler(t, srv)
 }
 
 // withRunnerStores gives the server the runner stores of the SQLite store.

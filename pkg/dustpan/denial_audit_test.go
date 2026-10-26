@@ -170,7 +170,7 @@ func (w *contextWorld) callAs(t *testing.T, c deniedCall, token string) (int, st
 	req.Header.Set("Content-Type", "application/json")
 
 	rec := httptest.NewRecorder()
-	w.srv.Handler().ServeHTTP(rec, req)
+	startedHandler(t, w.srv).ServeHTTP(rec, req)
 
 	return rec.Code, rec.Body.String()
 }

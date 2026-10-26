@@ -77,7 +77,7 @@ func newGateFixture(t *testing.T) fixture {
 		t.Fatalf("new server: %v", err)
 	}
 
-	ts := httptest.NewServer(srv.Handler())
+	ts := httptest.NewServer(startedHandler(t, srv))
 	t.Cleanup(ts.Close)
 
 	return fixture{store: st, server: ts, srv: srv}

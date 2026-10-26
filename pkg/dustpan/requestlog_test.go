@@ -117,7 +117,7 @@ func loggedServer(
 		t.Fatalf("new server: %v", err)
 	}
 
-	ts := httptest.NewServer(srv.Handler())
+	ts := httptest.NewServer(startedHandler(t, srv))
 	t.Cleanup(ts.Close)
 
 	return ts, srv, st
@@ -607,7 +607,7 @@ func TestRequestLogTextFormat(t *testing.T) {
 		t.Fatalf("new server: %v", err)
 	}
 
-	ts := httptest.NewServer(srv.Handler())
+	ts := httptest.NewServer(startedHandler(t, srv))
 	t.Cleanup(ts.Close)
 
 	doLogged(t, ts, logCall{

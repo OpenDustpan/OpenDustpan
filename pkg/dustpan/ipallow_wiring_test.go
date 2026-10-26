@@ -179,7 +179,7 @@ func serveNamespaceRead(t *testing.T, srv *dustpan.Server, remote string) (int, 
 	req.Header.Set("Authorization", "Bearer "+adminToken)
 
 	rec := httptest.NewRecorder()
-	srv.Handler().ServeHTTP(rec, req)
+	startedHandler(t, srv).ServeHTTP(rec, req)
 
 	body, err := io.ReadAll(rec.Result().Body)
 	if err != nil {

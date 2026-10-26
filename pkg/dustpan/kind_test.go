@@ -305,7 +305,7 @@ func answerOnTheMux(t *testing.T, tt mountedRouteCase) *httptest.ResponseRecorde
 	}
 
 	rec := httptest.NewRecorder()
-	srv.Handler().ServeHTTP(rec, req)
+	startedHandler(t, srv).ServeHTTP(rec, req)
 
 	return rec
 }
