@@ -48,6 +48,17 @@ Console sessions live in the database. Each instance accepts a session that anot
 
 Give each instance the same sign-in providers and client secrets. The browser returns from the identity provider to the URL in `--public-url`. The load balancer can send that request to any instance.
 
+## The public URL
+
+Every instance serves the same public URL.
+
+The Pulumi CLI records the server URL in the secrets-manager configuration of each stack when the stack is made. A stack cannot read its secrets through a different URL.
+
+To change the URL, use one of these methods:
+
+- Keep the old host name as an alias at the proxy.
+- Run `pulumi stack change-secrets-provider` for each stack.
+
 ## Run the components in separate processes
 
 A process runs one or more components. The `--components` flag (`DUSTPAN_COMPONENTS`) selects them. The default is `all`.
