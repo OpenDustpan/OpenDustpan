@@ -2,16 +2,19 @@ package dustpan_test
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"flag"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
 
 	"opendustpan.org/opendustpan/internal/api/apidesc"
+	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/pkg/dustpan"
 )
 
@@ -41,7 +44,7 @@ func publicOperations() []string {
 func TestAPIDescriptionGolden(t *testing.T) {
 	t.Parallel()
 
-	got, err := apidesc.Build(newEveryModuleServer(t).Operations())
+	got, err := apidesc.Build(newEveryModuleServer(t).Operations(), apidesc.WithErrorCodes(catalogCodes()))
 	if err != nil {
 		t.Fatalf("build the description: %v", err)
 	}
@@ -745,4 +748,96 @@ func TestThreatStep5FailClosed(t *testing.T) {
 			t.Errorf("Read(%s) = %d operations, %v; want an error and none", name, len(ops), err)
 		}
 	}
+}
+
+// catalogCodes returns the codes of the catalog. The description takes its
+// list of error codes from here and from nowhere else.
+func catalogCodes() []string {
+	specs := errcode.Catalog()
+	codes := make([]string, len(specs))
+
+	for i, spec := range specs {
+		codes[i] = spec.Code
+	}
+
+	return codes
+}
+
+// TestAPIDescriptionErrorCodesMatchTheCatalog proves that the schema ErrorCode
+// of the checked-in description lists the codes of the catalog and no other
+// code, and that errorCode is an open enum of that schema.
+func TestAPIDescriptionErrorCodesMatchTheCatalog(t *testing.T) {
+	t.Parallel()
+
+	var doc descriptionShape
+
+	if err := json.Unmarshal(apidesc.Document(), &doc); err != nil {
+		t.Fatalf("read the description: %v", err)
+	}
+
+	described := map[string]bool{}
+	for _, code := range doc.Components.Schemas["ErrorCode"].Enum {
+		described[code] = true
+	}
+
+	for _, code := range catalogCodes() {
+		if !described[code] {
+			t.Errorf(
+				"code %q is in the catalog and not in the description: run the golden test with the update flag",
+				code,
+			)
+		}
+
+		delete(described, code)
+	}
+
+	for code := range described {
+		t.Errorf("code %q is in the description and not in the catalog", code)
+	}
+
+	anyOf := doc.Components.Schemas["ErrorResponse"].Properties["errorCode"].AnyOf
+	want := []map[string]string{{"$ref": "#/components/schemas/ErrorCode"}, {"type": "string"}}
+
+	if !reflect.DeepEqual(anyOf, want) {
+		t.Errorf("errorCode = anyOf %v, want %v (an open enum)", anyOf, want)
+	}
+}
+
+// TestBuildRefusesBadErrorCodes proves that the writer refuses a list of codes
+// that is not valid, and writes an open enum for a valid list.
+func TestBuildRefusesBadErrorCodes(t *testing.T) {
+	t.Parallel()
+
+	for name, codes := range map[string][]string{
+		"twice":    {"a.b", "a.b"},
+		"no form":  {"A b"},
+		"empty":    {""},
+		"newline":  {"a.b\n"},
+		"slash":    {"a/b"},
+		"space":    {"a.b "},
+		"upper":    {"Access.denied"},
+		"trailing": {"a."},
+	} {
+		if _, err := apidesc.Build(nil, apidesc.WithErrorCodes(codes)); !errors.Is(err, apidesc.ErrInvalidBody) {
+			t.Errorf("%s: Build() = %v, want ErrInvalidBody", name, err)
+		}
+	}
+}
+
+// descriptionShape is the part of the description that the error code test reads.
+type descriptionShape struct {
+	Components componentsShape `json:"components"`
+}
+
+type componentsShape struct {
+	Schemas map[string]schemaShape `json:"schemas"`
+}
+
+type schemaShape struct {
+	Enum       []string               `json:"enum"`
+	Properties map[string]memberShape `json:"properties"`
+}
+
+type memberShape struct {
+	AnyOf []map[string]string `json:"anyOf"`
 }
