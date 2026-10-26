@@ -16,7 +16,7 @@ import (
 // the version of a build. It changes when the description changes, and the
 // test of openapi.pin fails when it does not. It is valid in SemVer and in
 // PEP 440, so each SDK can carry it.
-const DocumentVersion = "0.9.0"
+const DocumentVersion = "0.10.0"
 
 // OpenAPIVersion is the version of the OpenAPI format. The document uses the
 // part of 3.1.0 that maps one to one to 3.0.3: a nullable type is
@@ -33,6 +33,10 @@ const (
 	cookieScheme    = "sessionCookie"
 	csrfScheme      = "csrfHeader"
 	idempotencyName = "IdempotencyKey"
+	keyCode         = "code"
+	keyMessage      = "message"
+	keyErrorCode    = "errorCode"
+	keyErrorArgs    = "errorArgs"
 	ifMatchName     = "IfMatch"
 	ifMatchReqName  = "IfMatchRequired"
 	etagName        = "ETag"
@@ -79,7 +83,8 @@ type Option func(*buildConfig)
 
 // buildConfig is what the options of Build set.
 type buildConfig struct {
-	errorCodes []string
+	errorCodes    []string
+	errorVariants []ErrorVariant
 }
 
 // WithErrorCodes states the codes of the errorCode member of the error shape.
@@ -116,6 +121,11 @@ func Build(ops []Operation, opts ...Option) ([]byte, error) {
 		return nil, err
 	}
 
+	variants, err := checkedErrorVariants(cfg.errorVariants, codes, schemas)
+	if err != nil {
+		return nil, err
+	}
+
 	paths := object{}
 
 	for i := range ops {
@@ -135,7 +145,7 @@ func Build(ops []Operation, opts ...Option) ([]byte, error) {
 			paths[op.Path] = item
 		}
 
-		item[strings.ToLower(op.Method)] = operationObject(*op)
+		item[strings.ToLower(op.Method)] = operationObject(*op, failureSchema(variants))
 	}
 
 	doc := object{
@@ -148,7 +158,7 @@ func Build(ops []Operation, opts ...Option) ([]byte, error) {
 			object{cookieScheme: []any{}, csrfScheme: []any{}},
 		},
 		"paths":      paths,
-		"components": componentsObject(schemas, codes),
+		"components": componentsObject(schemas, codes, variants),
 	}
 
 	var buf bytes.Buffer
@@ -203,7 +213,7 @@ func bodySchemas(ops []Operation) (object, error) {
 // componentsObject returns the parts that the operations share: the security
 // scheme, the two request headers, the ETag answer header, the error shape and
 // the schemas of the bodies.
-func componentsObject(bodies object, codes []string) object {
+func componentsObject(bodies object, codes []string, variants []ErrorVariant) object {
 	return object{
 		"securitySchemes": object{
 			bearerScheme: object{
@@ -249,14 +259,15 @@ func componentsObject(bodies object, codes []string) object {
 				keySchema:      object{keyType: typeString},
 			},
 		},
-		"schemas": withError(bodies, codes),
+		"schemas": withError(bodies, codes, variants),
 	}
 }
 
 // withError returns the schemas of the bodies and the error shape. A body
 // never takes the name of the error shape: the reflector refuses it.
-func withError(bodies object, codes []string) object {
+func withError(bodies object, codes []string, variants []ErrorVariant) object {
 	out := object{errorSchema: errorSchemaObject(codes)}
+	maps.Copy(out, errorVariantSchemas(variants))
 	if len(codes) > 0 {
 		values := make([]any, len(codes))
 		for i, code := range codes {
@@ -296,12 +307,12 @@ func errorSchemaObject(codes []string) object {
 
 	out := object{
 		keyType:     typeObject,
-		keyRequired: []any{"code", "message"},
+		keyRequired: []any{keyCode, keyMessage},
 		"properties": object{
-			"code":      object{keyType: "integer", keyDescription: "The HTTP status."},
-			"message":   object{keyType: typeString, keyDescription: "A text for a person."},
-			"errorCode": errorCode,
-			"errorArgs": object{
+			keyCode:      object{keyType: typeInteger, keyDescription: "The HTTP status."},
+			keyMessage:   object{keyType: typeString, keyDescription: "A text for a person."},
+			keyErrorCode: errorCode,
+			keyErrorArgs: object{
 				keyType:                typeObject,
 				keyDescription:         "The arguments of the text of the error.",
 				"additionalProperties": true,
@@ -340,8 +351,20 @@ func tagList(ops []Operation) []any {
 	return out
 }
 
-// operationObject returns the operation object of one operation.
-func operationObject(op Operation) object {
+// failureSchema returns the name of the schema of the default answer of each
+// operation: the error union when the description holds variants, and the
+// error shape when it does not.
+func failureSchema(variants []ErrorVariant) string {
+	if len(variants) > 0 {
+		return ErrorAnswerSchema
+	}
+
+	return errorSchema
+}
+
+// operationObject returns the operation object of one operation. failure is
+// the name of the schema of its default answer.
+func operationObject(op Operation, failure string) object {
 	params := pathParameters(op.Path)
 
 	for _, p := range sortedQuery(op.Query) {
@@ -372,7 +395,7 @@ func operationObject(op Operation) object {
 	responses := object{
 		"default": object{
 			keyDescription: "The request failed.",
-			keyContent:     object{mediaJSON: object{keySchema: object{keyRef: refSchemas + errorSchema}}},
+			keyContent:     object{mediaJSON: object{keySchema: object{keyRef: refSchemas + failure}}},
 		},
 	}
 

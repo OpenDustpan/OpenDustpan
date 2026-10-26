@@ -144,6 +144,43 @@ export function openEnum<T extends string>(name: string): Decoder<T> {
     typeof value === "string" ? (value as T) : wrong(path, `a string (${name})`, value);
 }
 
+/** The decoder of a string that is one value. */
+export function literal<const V extends string>(want: V): Decoder<V> {
+  return (value, path) => {
+    if (typeof value !== "string") {
+      return wrong(path, `a string (${JSON.stringify(want)})`, value);
+    }
+    if (value !== want) {
+      throw invalidValue(path, `want ${JSON.stringify(want)}, got ${JSON.stringify(value)}`);
+    }
+    return want;
+  };
+}
+
+/**
+ * The decoder of a choice between objects. The string in the member called
+ * member picks the decoder in variants. A value that variants do not name, or
+ * a member that is not a string, gets the decoder base, so an answer with a
+ * value that the description does not know yet still parses. A named variant
+ * refuses an object that does not fit it.
+ */
+export function union<T>(
+  name: string,
+  member: string,
+  variants: Readonly<Record<string, Decoder<T>>>,
+  base: Decoder<T>,
+): Decoder<T> {
+  return (value, path) => {
+    if (typeof value !== "object" || value === null || Array.isArray(value)) {
+      return wrong(path, `an object (${name})`, value);
+    }
+    const tag = (value as Record<string, unknown>)[member];
+    // Object.hasOwn keeps a value such as "__proto__" or "constructor" away from the prototype.
+    const decode = typeof tag === "string" && Object.hasOwn(variants, tag) ? variants[tag] : base;
+    return (decode ?? base)(value, path);
+  };
+}
+
 /** Marks a member as one that can be absent. */
 export function optional<T>(decode: Decoder<T>): OptionalField<T> {
   return new OptionalField(decode);

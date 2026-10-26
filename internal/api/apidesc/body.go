@@ -204,6 +204,8 @@ var legacyFieldNames = map[string]string{
 		"because the tagliatelle goCamel rule of the linter demands it.",
 	"setID": "The Git host API spells the ID of a credential set setID, because the tagliatelle " +
 		"goCamel rule of the linter demands it.",
+	"objectID": "The error argument of the answer for a replayed secret spells the ID of the object objectID, " +
+		"as the catalog of error codes declares it, and the console reads it.",
 }
 
 // LegacyFieldNames returns a copy of the list of wire names that break the

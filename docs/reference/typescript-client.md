@@ -127,3 +127,14 @@ not load the text:
 ```ts
 import { description } from "@opendustpan/client/description";
 ```
+
+## Error answers by code
+
+The package exports the type `ErrorAnswer` and the validator `decodeErrorAnswer`.
+`ErrorAnswer` is the union of one type for each code that has arguments, for
+example `LockLockedError`, and `ErrorResponse`. The validator reads
+`errorCode`. For a code that has its own type, it validates the arguments with
+their types and refuses an answer with an argument that is missing or wrong, as
+it refuses any other answer that does not match the description. For any other
+code, also a code that the description does not list yet, it gives the shape of
+`ErrorResponse`. The validator gives the exact type of each answer. A test of `errorCode` in your code narrows to the variant and to `ErrorResponse`, because `errorCode` is an open enum.

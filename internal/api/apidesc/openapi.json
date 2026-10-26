@@ -153,6 +153,47 @@
         ],
         "type": "object"
       },
+      "BackupCorruptError": {
+        "description": "The error answer with the code backup.corrupt.",
+        "properties": {
+          "code": {
+            "description": "The HTTP status.",
+            "type": "integer"
+          },
+          "errorArgs": {
+            "$ref": "#/components/schemas/BackupCorruptErrorArgs"
+          },
+          "errorCode": {
+            "enum": [
+              "backup.corrupt"
+            ],
+            "type": "string"
+          },
+          "message": {
+            "description": "A text for a person.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "message",
+          "errorCode",
+          "errorArgs"
+        ],
+        "type": "object"
+      },
+      "BackupCorruptErrorArgs": {
+        "description": "The arguments of the text of the error with the code backup.corrupt.",
+        "properties": {
+          "backup": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "backup"
+        ],
+        "type": "object"
+      },
       "Capabilities": {
         "properties": {
           "apiVersion": {
@@ -301,6 +342,47 @@
           "fields",
           "object",
           "source"
+        ],
+        "type": "object"
+      },
+      "ContextFieldFromCodeError": {
+        "description": "The error answer with the code context.field-from-code.",
+        "properties": {
+          "code": {
+            "description": "The HTTP status.",
+            "type": "integer"
+          },
+          "errorArgs": {
+            "$ref": "#/components/schemas/ContextFieldFromCodeErrorArgs"
+          },
+          "errorCode": {
+            "enum": [
+              "context.field-from-code"
+            ],
+            "type": "string"
+          },
+          "message": {
+            "description": "A text for a person.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "message",
+          "errorCode",
+          "errorArgs"
+        ],
+        "type": "object"
+      },
+      "ContextFieldFromCodeErrorArgs": {
+        "description": "The arguments of the text of the error with the code context.field-from-code.",
+        "properties": {
+          "field": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "field"
         ],
         "type": "object"
       },
@@ -789,6 +871,75 @@
         ],
         "type": "object"
       },
+      "ErrorAnswer": {
+        "description": "An error answer, by errorCode. A code that carries arguments has its own schema, with typed errorArgs. Any other code, also a code that a client does not know, has the shape of ErrorResponse.",
+        "discriminator": {
+          "mapping": {
+            "backup.corrupt": "#/components/schemas/BackupCorruptError",
+            "context.field-from-code": "#/components/schemas/ContextFieldFromCodeError",
+            "gate.approvers-count-above": "#/components/schemas/GateApproversCountAboveError",
+            "lock.locked": "#/components/schemas/LockLockedError",
+            "maintenance.active-work": "#/components/schemas/MaintenanceActiveWorkError",
+            "preferences.field-invalid": "#/components/schemas/PreferencesFieldInvalidError",
+            "preferences.field-read-only": "#/components/schemas/PreferencesFieldReadOnlyError",
+            "request.idempotency-key-replayed-secret": "#/components/schemas/RequestIdempotencyKeyReplayedSecretError",
+            "sink.test-rate-limited": "#/components/schemas/SinkTestRateLimitedError",
+            "stack.no-state-at-time": "#/components/schemas/StackNoStateAtTimeError",
+            "stack.reveal-path-too-long": "#/components/schemas/StackRevealPathTooLongError",
+            "state-version.reveal-path-too-long": "#/components/schemas/StateVersionRevealPathTooLongError",
+            "unit.no-state": "#/components/schemas/UnitNoStateError",
+            "workspace.no-state-at": "#/components/schemas/WorkspaceNoStateAtError"
+          },
+          "propertyName": "errorCode"
+        },
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/BackupCorruptError"
+          },
+          {
+            "$ref": "#/components/schemas/ContextFieldFromCodeError"
+          },
+          {
+            "$ref": "#/components/schemas/GateApproversCountAboveError"
+          },
+          {
+            "$ref": "#/components/schemas/LockLockedError"
+          },
+          {
+            "$ref": "#/components/schemas/MaintenanceActiveWorkError"
+          },
+          {
+            "$ref": "#/components/schemas/PreferencesFieldInvalidError"
+          },
+          {
+            "$ref": "#/components/schemas/PreferencesFieldReadOnlyError"
+          },
+          {
+            "$ref": "#/components/schemas/RequestIdempotencyKeyReplayedSecretError"
+          },
+          {
+            "$ref": "#/components/schemas/SinkTestRateLimitedError"
+          },
+          {
+            "$ref": "#/components/schemas/StackNoStateAtTimeError"
+          },
+          {
+            "$ref": "#/components/schemas/StackRevealPathTooLongError"
+          },
+          {
+            "$ref": "#/components/schemas/StateVersionRevealPathTooLongError"
+          },
+          {
+            "$ref": "#/components/schemas/UnitNoStateError"
+          },
+          {
+            "$ref": "#/components/schemas/WorkspaceNoStateAtError"
+          },
+          {
+            "$ref": "#/components/schemas/ErrorResponse"
+          }
+        ]
+      },
       "ErrorCode": {
         "enum": [
           "access.denied",
@@ -1064,6 +1215,47 @@
         },
         "required": [
           "job"
+        ],
+        "type": "object"
+      },
+      "GateApproversCountAboveError": {
+        "description": "The error answer with the code gate.approvers-count-above.",
+        "properties": {
+          "code": {
+            "description": "The HTTP status.",
+            "type": "integer"
+          },
+          "errorArgs": {
+            "$ref": "#/components/schemas/GateApproversCountAboveErrorArgs"
+          },
+          "errorCode": {
+            "enum": [
+              "gate.approvers-count-above"
+            ],
+            "type": "string"
+          },
+          "message": {
+            "description": "A text for a person.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "message",
+          "errorCode",
+          "errorArgs"
+        ],
+        "type": "object"
+      },
+      "GateApproversCountAboveErrorArgs": {
+        "description": "The arguments of the text of the error with the code gate.approvers-count-above.",
+        "properties": {
+          "people": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "people"
         ],
         "type": "object"
       },
@@ -2023,6 +2215,68 @@
         ],
         "type": "object"
       },
+      "LockLockedError": {
+        "description": "The error answer with the code lock.locked.",
+        "properties": {
+          "code": {
+            "description": "The HTTP status.",
+            "type": "integer"
+          },
+          "errorArgs": {
+            "$ref": "#/components/schemas/LockLockedErrorArgs"
+          },
+          "errorCode": {
+            "enum": [
+              "lock.locked"
+            ],
+            "type": "string"
+          },
+          "message": {
+            "description": "A text for a person.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "message",
+          "errorCode",
+          "errorArgs"
+        ],
+        "type": "object"
+      },
+      "LockLockedErrorArgs": {
+        "description": "The arguments of the text of the error with the code lock.locked.",
+        "properties": {
+          "holder": {
+            "type": "string"
+          },
+          "locked": {
+            "type": "string"
+          },
+          "lockedKind": {
+            "type": "string"
+          },
+          "refused": {
+            "type": "string"
+          },
+          "refusedKind": {
+            "type": "string"
+          },
+          "since": {
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "holder",
+          "locked",
+          "lockedKind",
+          "refused",
+          "refusedKind",
+          "since"
+        ],
+        "type": "object"
+      },
       "LockRequest": {
         "properties": {
           "reason": {
@@ -2031,6 +2285,51 @@
         },
         "required": [
           "reason"
+        ],
+        "type": "object"
+      },
+      "MaintenanceActiveWorkError": {
+        "description": "The error answer with the code maintenance.active-work.",
+        "properties": {
+          "code": {
+            "description": "The HTTP status.",
+            "type": "integer"
+          },
+          "errorArgs": {
+            "$ref": "#/components/schemas/MaintenanceActiveWorkErrorArgs"
+          },
+          "errorCode": {
+            "enum": [
+              "maintenance.active-work"
+            ],
+            "type": "string"
+          },
+          "message": {
+            "description": "A text for a person.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "message",
+          "errorCode",
+          "errorArgs"
+        ],
+        "type": "object"
+      },
+      "MaintenanceActiveWorkErrorArgs": {
+        "description": "The arguments of the text of the error with the code maintenance.active-work.",
+        "properties": {
+          "canceledCount": {
+            "type": "integer"
+          },
+          "workCount": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "canceledCount",
+          "workCount"
         ],
         "type": "object"
       },
@@ -2235,6 +2534,88 @@
           "theme",
           "timeZone",
           "updatedAt"
+        ],
+        "type": "object"
+      },
+      "PreferencesFieldInvalidError": {
+        "description": "The error answer with the code preferences.field-invalid.",
+        "properties": {
+          "code": {
+            "description": "The HTTP status.",
+            "type": "integer"
+          },
+          "errorArgs": {
+            "$ref": "#/components/schemas/PreferencesFieldInvalidErrorArgs"
+          },
+          "errorCode": {
+            "enum": [
+              "preferences.field-invalid"
+            ],
+            "type": "string"
+          },
+          "message": {
+            "description": "A text for a person.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "message",
+          "errorCode",
+          "errorArgs"
+        ],
+        "type": "object"
+      },
+      "PreferencesFieldInvalidErrorArgs": {
+        "description": "The arguments of the text of the error with the code preferences.field-invalid.",
+        "properties": {
+          "field": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "field"
+        ],
+        "type": "object"
+      },
+      "PreferencesFieldReadOnlyError": {
+        "description": "The error answer with the code preferences.field-read-only.",
+        "properties": {
+          "code": {
+            "description": "The HTTP status.",
+            "type": "integer"
+          },
+          "errorArgs": {
+            "$ref": "#/components/schemas/PreferencesFieldReadOnlyErrorArgs"
+          },
+          "errorCode": {
+            "enum": [
+              "preferences.field-read-only"
+            ],
+            "type": "string"
+          },
+          "message": {
+            "description": "A text for a person.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "message",
+          "errorCode",
+          "errorArgs"
+        ],
+        "type": "object"
+      },
+      "PreferencesFieldReadOnlyErrorArgs": {
+        "description": "The arguments of the text of the error with the code preferences.field-read-only.",
+        "properties": {
+          "field": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "field"
         ],
         "type": "object"
       },
@@ -2574,6 +2955,47 @@
         ],
         "type": "object"
       },
+      "RequestIdempotencyKeyReplayedSecretError": {
+        "description": "The error answer with the code request.idempotency-key-replayed-secret.",
+        "properties": {
+          "code": {
+            "description": "The HTTP status.",
+            "type": "integer"
+          },
+          "errorArgs": {
+            "$ref": "#/components/schemas/RequestIdempotencyKeyReplayedSecretErrorArgs"
+          },
+          "errorCode": {
+            "enum": [
+              "request.idempotency-key-replayed-secret"
+            ],
+            "type": "string"
+          },
+          "message": {
+            "description": "A text for a person.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "message",
+          "errorCode",
+          "errorArgs"
+        ],
+        "type": "object"
+      },
+      "RequestIdempotencyKeyReplayedSecretErrorArgs": {
+        "description": "The arguments of the text of the error with the code request.idempotency-key-replayed-secret.",
+        "properties": {
+          "objectID": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "objectID"
+        ],
+        "type": "object"
+      },
       "SaveTriggerRequest": {
         "properties": {
           "enabled": {
@@ -2618,6 +3040,47 @@
           "frequency",
           "kind",
           "source"
+        ],
+        "type": "object"
+      },
+      "SinkTestRateLimitedError": {
+        "description": "The error answer with the code sink.test-rate-limited.",
+        "properties": {
+          "code": {
+            "description": "The HTTP status.",
+            "type": "integer"
+          },
+          "errorArgs": {
+            "$ref": "#/components/schemas/SinkTestRateLimitedErrorArgs"
+          },
+          "errorCode": {
+            "enum": [
+              "sink.test-rate-limited"
+            ],
+            "type": "string"
+          },
+          "message": {
+            "description": "A text for a person.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "message",
+          "errorCode",
+          "errorArgs"
+        ],
+        "type": "object"
+      },
+      "SinkTestRateLimitedErrorArgs": {
+        "description": "The arguments of the text of the error with the code sink.test-rate-limited.",
+        "properties": {
+          "retryAfterSeconds": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "retryAfterSeconds"
         ],
         "type": "object"
       },
@@ -2682,6 +3145,89 @@
           "largeFiles",
           "protectedBranches",
           "submodules"
+        ],
+        "type": "object"
+      },
+      "StackNoStateAtTimeError": {
+        "description": "The error answer with the code stack.no-state-at-time.",
+        "properties": {
+          "code": {
+            "description": "The HTTP status.",
+            "type": "integer"
+          },
+          "errorArgs": {
+            "$ref": "#/components/schemas/StackNoStateAtTimeErrorArgs"
+          },
+          "errorCode": {
+            "enum": [
+              "stack.no-state-at-time"
+            ],
+            "type": "string"
+          },
+          "message": {
+            "description": "A text for a person.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "message",
+          "errorCode",
+          "errorArgs"
+        ],
+        "type": "object"
+      },
+      "StackNoStateAtTimeErrorArgs": {
+        "description": "The arguments of the text of the error with the code stack.no-state-at-time.",
+        "properties": {
+          "firstAt": {
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "firstAt"
+        ],
+        "type": "object"
+      },
+      "StackRevealPathTooLongError": {
+        "description": "The error answer with the code stack.reveal-path-too-long.",
+        "properties": {
+          "code": {
+            "description": "The HTTP status.",
+            "type": "integer"
+          },
+          "errorArgs": {
+            "$ref": "#/components/schemas/StackRevealPathTooLongErrorArgs"
+          },
+          "errorCode": {
+            "enum": [
+              "stack.reveal-path-too-long"
+            ],
+            "type": "string"
+          },
+          "message": {
+            "description": "A text for a person.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "message",
+          "errorCode",
+          "errorArgs"
+        ],
+        "type": "object"
+      },
+      "StackRevealPathTooLongErrorArgs": {
+        "description": "The arguments of the text of the error with the code stack.reveal-path-too-long.",
+        "properties": {
+          "maxBytes": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "maxBytes"
         ],
         "type": "object"
       },
@@ -2757,6 +3303,47 @@
           "pool",
           "reason",
           "unit"
+        ],
+        "type": "object"
+      },
+      "StateVersionRevealPathTooLongError": {
+        "description": "The error answer with the code state-version.reveal-path-too-long.",
+        "properties": {
+          "code": {
+            "description": "The HTTP status.",
+            "type": "integer"
+          },
+          "errorArgs": {
+            "$ref": "#/components/schemas/StateVersionRevealPathTooLongErrorArgs"
+          },
+          "errorCode": {
+            "enum": [
+              "state-version.reveal-path-too-long"
+            ],
+            "type": "string"
+          },
+          "message": {
+            "description": "A text for a person.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "message",
+          "errorCode",
+          "errorArgs"
+        ],
+        "type": "object"
+      },
+      "StateVersionRevealPathTooLongErrorArgs": {
+        "description": "The arguments of the text of the error with the code state-version.reveal-path-too-long.",
+        "properties": {
+          "maxBytes": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "maxBytes"
         ],
         "type": "object"
       },
@@ -3103,6 +3690,47 @@
         ],
         "type": "object"
       },
+      "UnitNoStateError": {
+        "description": "The error answer with the code unit.no-state.",
+        "properties": {
+          "code": {
+            "description": "The HTTP status.",
+            "type": "integer"
+          },
+          "errorArgs": {
+            "$ref": "#/components/schemas/UnitNoStateErrorArgs"
+          },
+          "errorCode": {
+            "enum": [
+              "unit.no-state"
+            ],
+            "type": "string"
+          },
+          "message": {
+            "description": "A text for a person.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "message",
+          "errorCode",
+          "errorArgs"
+        ],
+        "type": "object"
+      },
+      "UnitNoStateErrorArgs": {
+        "description": "The arguments of the text of the error with the code unit.no-state.",
+        "properties": {
+          "unit": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "unit"
+        ],
+        "type": "object"
+      },
       "UnitOutputEntry": {
         "properties": {
           "name": {
@@ -3343,6 +3971,48 @@
           "references"
         ],
         "type": "object"
+      },
+      "WorkspaceNoStateAtError": {
+        "description": "The error answer with the code workspace.no-state-at.",
+        "properties": {
+          "code": {
+            "description": "The HTTP status.",
+            "type": "integer"
+          },
+          "errorArgs": {
+            "$ref": "#/components/schemas/WorkspaceNoStateAtErrorArgs"
+          },
+          "errorCode": {
+            "enum": [
+              "workspace.no-state-at"
+            ],
+            "type": "string"
+          },
+          "message": {
+            "description": "A text for a person.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "message",
+          "errorCode",
+          "errorArgs"
+        ],
+        "type": "object"
+      },
+      "WorkspaceNoStateAtErrorArgs": {
+        "description": "The arguments of the text of the error with the code workspace.no-state-at.",
+        "properties": {
+          "firstAt": {
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "firstAt"
+        ],
+        "type": "object"
       }
     },
     "securitySchemes": {
@@ -3368,7 +4038,7 @@
   "info": {
     "description": "The tool-neutral REST API of an OpenDustpan server. The description covers the paths under /api/dustpan/v1/ only. A body has the schema of the Go type that the route names.",
     "title": "OpenDustpan REST API",
-    "version": "0.9.0"
+    "version": "0.10.0"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -3390,7 +4060,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/ErrorAnswer"
                 }
               }
             },
@@ -3431,7 +4101,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/ErrorAnswer"
                 }
               }
             },
@@ -3480,7 +4150,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/ErrorAnswer"
                 }
               }
             },
@@ -3560,7 +4230,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/ErrorAnswer"
                 }
               }
             },
@@ -3596,7 +4266,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/ErrorAnswer"
                 }
               }
             },
@@ -3641,7 +4311,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/ErrorAnswer"
                 }
               }
             },
@@ -3690,7 +4360,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/ErrorAnswer"
                 }
               }
             },
@@ -3770,7 +4440,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/ErrorAnswer"
                 }
               }
             },
@@ -3811,7 +4481,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/ErrorAnswer"
                 }
               }
             },
@@ -3865,7 +4535,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/ErrorAnswer"
                 }
               }
             },
@@ -3907,7 +4577,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/ErrorAnswer"
                 }
               }
             },
@@ -3956,7 +4626,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/ErrorAnswer"
                 }
               }
             },
@@ -4018,7 +4688,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/ErrorAnswer"
                 }
               }
             },
@@ -4064,7 +4734,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/ErrorAnswer"
                 }
               }
             },
@@ -4114,7 +4784,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/ErrorAnswer"
                 }
               }
             },
@@ -4171,7 +4841,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/ErrorAnswer"
                 }
               }
             },
@@ -4241,7 +4911,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/ErrorAnswer"
                 }
               }
             },
@@ -4287,7 +4957,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/ErrorAnswer"
                 }
               }
             },
@@ -4341,7 +5011,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/ErrorAnswer"
                 }
               }
             },
@@ -4388,7 +5058,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/ErrorAnswer"
                 }
               }
             },
@@ -4440,7 +5110,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/ErrorAnswer"
                 }
               }
             },
@@ -4487,7 +5157,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/ErrorAnswer"
                 }
               }
             },
@@ -4539,7 +5209,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/ErrorAnswer"
                 }
               }
             },
@@ -4601,7 +5271,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/ErrorAnswer"
                 }
               }
             },
@@ -4648,7 +5318,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/ErrorAnswer"
                 }
               }
             },
@@ -4687,7 +5357,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/ErrorAnswer"
                 }
               }
             },
@@ -4744,7 +5414,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/ErrorAnswer"
                 }
               }
             },
@@ -4798,7 +5468,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/ErrorAnswer"
                 }
               }
             },
@@ -4895,7 +5565,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/ErrorAnswer"
                 }
               }
             },
@@ -4941,7 +5611,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/ErrorAnswer"
                 }
               }
             },
@@ -5003,7 +5673,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/ErrorAnswer"
                 }
               }
             },
@@ -5056,7 +5726,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/ErrorAnswer"
                 }
               }
             },
@@ -5113,7 +5783,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/ErrorAnswer"
                 }
               }
             },
@@ -5167,7 +5837,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/ErrorAnswer"
                 }
               }
             },
@@ -5232,7 +5902,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/ErrorAnswer"
                 }
               }
             },
@@ -5296,7 +5966,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/ErrorAnswer"
                 }
               }
             },
@@ -5359,7 +6029,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/ErrorAnswer"
                 }
               }
             },
@@ -5402,7 +6072,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/ErrorAnswer"
                 }
               }
             },
@@ -5446,7 +6116,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/ErrorAnswer"
                 }
               }
             },
@@ -5500,7 +6170,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/ErrorAnswer"
                 }
               }
             },
@@ -5539,7 +6209,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/ErrorAnswer"
                 }
               }
             },
@@ -5585,7 +6255,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/ErrorAnswer"
                 }
               }
             },
@@ -5639,7 +6309,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/ErrorAnswer"
                 }
               }
             },
@@ -5713,7 +6383,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/ErrorAnswer"
                 }
               }
             },
@@ -5775,7 +6445,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/ErrorAnswer"
                 }
               }
             },
@@ -5837,7 +6507,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/ErrorAnswer"
                 }
               }
             },
@@ -5903,7 +6573,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/ErrorAnswer"
                 }
               }
             },
@@ -5976,7 +6646,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/ErrorAnswer"
                 }
               }
             },
@@ -6049,7 +6719,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/ErrorAnswer"
                 }
               }
             },
@@ -6125,7 +6795,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/ErrorAnswer"
                 }
               }
             },
@@ -6171,7 +6841,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/ErrorAnswer"
                 }
               }
             },
@@ -6228,7 +6898,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/ErrorAnswer"
                 }
               }
             },
@@ -6278,7 +6948,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/ErrorAnswer"
                 }
               }
             },
@@ -6343,7 +7013,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/ErrorAnswer"
                 }
               }
             },
@@ -6397,7 +7067,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/ErrorAnswer"
                 }
               }
             },
@@ -6459,7 +7129,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/ErrorAnswer"
                 }
               }
             },
@@ -6532,7 +7202,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/ErrorAnswer"
                 }
               }
             },
@@ -6578,7 +7248,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/ErrorAnswer"
                 }
               }
             },
@@ -6624,7 +7294,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/ErrorAnswer"
                 }
               }
             },
@@ -6681,7 +7351,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/ErrorAnswer"
                 }
               }
             },
@@ -6731,7 +7401,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/ErrorAnswer"
                 }
               }
             },
@@ -6783,7 +7453,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/ErrorAnswer"
                 }
               }
             },
@@ -6848,7 +7518,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/ErrorAnswer"
                 }
               }
             },
@@ -6905,7 +7575,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/ErrorAnswer"
                 }
               }
             },
@@ -6951,7 +7621,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/ErrorAnswer"
                 }
               }
             },
@@ -7009,7 +7679,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/ErrorAnswer"
                 }
               }
             },
@@ -7124,7 +7794,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/ErrorAnswer"
                 }
               }
             },
@@ -7171,7 +7841,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/ErrorAnswer"
                 }
               }
             },
@@ -7240,7 +7910,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/ErrorAnswer"
                 }
               }
             },
@@ -7306,7 +7976,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/ErrorAnswer"
                 }
               }
             },
@@ -7368,7 +8038,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/ErrorAnswer"
                 }
               }
             },
@@ -7436,7 +8106,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/ErrorAnswer"
                 }
               }
             },
@@ -7498,7 +8168,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/ErrorAnswer"
                 }
               }
             },
@@ -7552,7 +8222,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/ErrorAnswer"
                 }
               }
             },
@@ -7618,7 +8288,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/ErrorAnswer"
                 }
               }
             },
@@ -7685,7 +8355,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/ErrorAnswer"
                 }
               }
             },
@@ -7753,7 +8423,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/ErrorAnswer"
                 }
               }
             },
@@ -7827,7 +8497,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/ErrorAnswer"
                 }
               }
             },
@@ -7914,7 +8584,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/ErrorAnswer"
                 }
               }
             },
@@ -7968,7 +8638,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/ErrorAnswer"
                 }
               }
             },
@@ -8025,7 +8695,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/ErrorAnswer"
                 }
               }
             },
@@ -8075,7 +8745,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/ErrorAnswer"
                 }
               }
             },
@@ -8127,7 +8797,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/ErrorAnswer"
                 }
               }
             },
@@ -8200,7 +8870,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/ErrorAnswer"
                 }
               }
             },
@@ -8240,7 +8910,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/ErrorAnswer"
                 }
               }
             },
