@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/api/route"
 	"opendustpan.org/opendustpan/internal/sessionauth"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/ipallow"
@@ -42,38 +43,38 @@ type routeHandler func(w http.ResponseWriter, r *http.Request, c *call)
 
 // enforce wraps one route table row: it authenticates, runs the checks of
 // its scope, and only then runs the handler.
-func (h *Handler) enforce(route Route) http.HandlerFunc {
+func (h *Handler) enforce(rt Route) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
 		c := new(call)
 
 		var err error
 
-		switch route.Scope {
+		switch rt.Scope {
 		case ScopeAuthorized:
-			r, err = h.checkAuthorized(r, route, c)
+			r, err = h.checkAuthorized(r, rt, c)
 		case ScopeJoinToken:
 			err = h.checkProtocol(r, c, maxProtocolBody)
 		case ScopeRunnerKey:
-			err = h.checkRunner(r, route, c)
+			err = h.checkRunner(r, rt, c)
 		default:
-			err = fmt.Errorf("%w: route %s has no scope", errNotFound, route.Path)
+			err = fmt.Errorf("%w: route %s has no scope", errNotFound, rt.Path)
 		}
 
 		if err != nil {
-			h.writeError(ctx, w, route.Scope, err)
+			h.writeError(ctx, w, rt.Scope, err)
 
 			return
 		}
 
-		route.Serve(w, r, c)
+		rt.Serve(w, r, c)
 	}
 }
 
 // checkAuthorized authenticates the principal, finds the namespace of the
 // path, and checks the actions of route. It returns the request, which holds
 // the session mark of a request that the console cookie signed in.
-func (h *Handler) checkAuthorized(r *http.Request, route Route, c *call) (*http.Request, error) {
+func (h *Handler) checkAuthorized(r *http.Request, rt Route, c *call) (*http.Request, error) {
 	ctx := r.Context()
 
 	p, session, err := h.authenticate(r)
@@ -100,20 +101,10 @@ func (h *Handler) checkAuthorized(r *http.Request, route Route, c *call) (*http.
 
 	obj := identity.NamespaceObject(ns.Name)
 
-	if err = h.guard.Authorize(ctx, r, p, identity.ActionNamespaceRead, obj); err != nil {
-		// An address outside the IP allowlist answers 403 with its own code,
-		// as on the other routes of the namespace.
-		if errors.Is(err, identity.ErrDenied) && !errors.Is(err, ipallow.ErrAddressNotAllowed) {
-			return r, errNotFound
-		}
-
-		return r, fmt.Errorf("authorize %s: %w", identity.ActionNamespaceRead, err)
-	}
-
-	for _, action := range route.Actions {
-		if err = h.guard.Authorize(ctx, r, p, action, obj); err != nil {
-			return r, fmt.Errorf("authorize %s: %w", action, err)
-		}
+	g := route.Guard{Tokens: nil, Sessions: nil, Refusals: h.guard}
+	checks := route.Checks{Namespace: obj, Reads: nil, Actions: rt.Actions, NotFound: errNotFound}
+	if authErr := g.AuthorizeObject(ctx, r, p, obj, checks); authErr != nil {
+		return r, authErr
 	}
 
 	body, err := readBody(r, maxAdminBody)
@@ -205,7 +196,7 @@ func (h *Handler) checkProtocol(r *http.Request, c *call, limit int64) error {
 // checkRunner checks the release, reads the body, and checks the proof of
 // the runner key. On the paths that are not safe to repeat, it keeps the
 // nonce of the proof.
-func (h *Handler) checkRunner(r *http.Request, route Route, c *call) error {
+func (h *Handler) checkRunner(r *http.Request, rt Route, c *call) error {
 	if err := h.checkProtocol(r, c, maxProtocolBody); err != nil {
 		return err
 	}
@@ -232,7 +223,7 @@ func (h *Handler) checkRunner(r *http.Request, route Route, c *call) error {
 	sum := sha256.Sum256(c.body)
 	signed := runner.Signed{Method: r.Method, PathQuery: r.URL.RequestURI(), BodySHA256: sum[:]}
 
-	signer, err := verifyAny(signingKeys(&rn, route.Path, now), proof, signed, now)
+	signer, err := verifyAny(signingKeys(&rn, rt.Path, now), proof, signed, now)
 	if err != nil {
 		return err
 	}
@@ -244,7 +235,7 @@ func (h *Handler) checkRunner(r *http.Request, route Route, c *call) error {
 		return runner.ErrKeyExpired
 	}
 
-	if protocol.NeedsNonce(route.Path) {
+	if protocol.NeedsNonce(rt.Path) {
 		err = h.handoffs.UseNonce(ctx, proof.Subject, proof.Nonce, runner.NonceExpiry(proof), now)
 		if err != nil {
 			return fmt.Errorf("keep nonce: %w", err)
