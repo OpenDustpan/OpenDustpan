@@ -631,6 +631,8 @@ func TestParseReadsErrorCodeAsAnOpenEnum(t *testing.T) {
 				t.Fatalf("want no error, got %v", err)
 			case !tt.valid && err == nil:
 				t.Fatal("want an error, got none")
+			default:
+				// The result is what the case wants.
 			}
 		})
 	}
