@@ -160,6 +160,7 @@ linters:
             - "**/pkg/runner/**"
             - "**/internal/launcher/**"
             - "**/internal/source/**"
+            - "**/pkg/source/**"
             - "**/pkg/forge/*.go"
             - "**/internal/scopeaudit/**"
             - "**/internal/calendar/**"

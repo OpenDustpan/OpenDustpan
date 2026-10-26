@@ -6,10 +6,10 @@ import (
 	"sync"
 	"testing"
 
-	"opendustpan.org/opendustpan/internal/source"
-	"opendustpan.org/opendustpan/internal/source/sourcetest"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/source"
+	"opendustpan.org/opendustpan/pkg/source/sourcetest"
 )
 
 // memNamespace is one namespace of memFilters: its failover version, its

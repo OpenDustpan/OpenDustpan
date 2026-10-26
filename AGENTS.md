@@ -100,6 +100,7 @@ pkg/                   the public SDK: dustpan, the port packages and the confor
   gate/                domain: gates, access limits, approval rules, facts and decision records
   gate/cedargo/        adapter: the linked Cedar engine (cedar-go) of the gate engine port; gate/gatetest holds its suite
   gate/jobgate/        adapter: the job.Decider that turns approval defaults into the approval gates of a job
+  source/              domain: the source filter of a namespace: the filter, its port, URL patterns, the one parser of repository URLs; source/sourcetest holds its suite
   forge/               domain: the Forge port, forge connections and their errors; forge/forgetest holds the conformance suite
   forge/github/        adapter: the forge for GitHub
   store/               SQL adapters: sqlite/, postgres/; storetest/ conformance suite (the adapters move to internal/store/)
