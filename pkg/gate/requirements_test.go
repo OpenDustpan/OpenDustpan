@@ -11,7 +11,7 @@ import (
 func def(scope gate.Scope, version int64, count int, groups ...string) gate.ApprovalDefault {
 	return gate.ApprovalDefault{
 		Scope: scope, Version: version, Count: count, FreshAuth: gate.NoFreshAuth(),
-		Approvers: gate.Approvers{Groups: groups, Users: nil, UnitOwners: false}, Unless: "", Reads: nil,
+		Approvers: gate.Approvers{Groups: groups, GroupIDs: nil, Users: nil, UnitOwners: false}, Unless: "", Reads: nil,
 	}
 }
 
@@ -25,9 +25,15 @@ func want(
 	groups ...string,
 ) gate.Requirement {
 	return gate.Requirement{
-		Name: name, Version: version, Approvers: gate.Approvers{Groups: groups, Users: nil, UnitOwners: false},
-		Count: count, AuthorMayApprove: false, FreshAuth: fresh, TimeoutSeconds: 604800, Signatures: nil,
-		Evaluate: false,
+		Name:             name,
+		Version:          version,
+		Approvers:        gate.Approvers{Groups: groups, GroupIDs: nil, Users: nil, UnitOwners: false},
+		Count:            count,
+		AuthorMayApprove: false,
+		FreshAuth:        fresh,
+		TimeoutSeconds:   604800,
+		Signatures:       nil,
+		Evaluate:         false,
 	}
 }
 

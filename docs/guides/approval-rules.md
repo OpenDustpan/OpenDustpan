@@ -88,7 +88,13 @@ rule:
   because the owners or the holders of the approve action are not known when
   you save.
 
-The groups belong to the installation, not to the namespace. When you do not
+The groups belong to the installation, not to the namespace. The server
+finds each group by its name when you save, and stores the ID of the group
+with the name. The ID is the identity of the group: the name is a label. When someone renames a group, the rule shows the new name and
+keeps the group as an approver. When someone removes a group, the rule keeps
+the old name and the group counts no one. A new group with the same name has
+another ID, so it does not become an approver of the rule. To make the new
+group an approver, save the rule again with the name of the group. When you do not
 hold `server:read-principals`, a group that does not exist and a count above
 the members of the named groups give one answer: 422 with the code
 `gate.approvers-unmet`. The answer does not name the group or the number of

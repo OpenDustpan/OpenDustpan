@@ -120,6 +120,7 @@ type gateBody struct {
 	Type         string   `json:"type"`
 	Approvals    int      `json:"approvals"`
 	Groups       []string `json:"groups"`
+	GroupIDs     []string `json:"groupIds"`
 	AllowSelf    bool     `json:"allowSelf"`
 	TimeoutNanos int64    `json:"timeoutNanos"`
 	BindPlan     bool     `json:"bindPlan"`
@@ -387,8 +388,8 @@ func encodePhase(p *job.Phase) phaseBody {
 
 	for _, g := range p.Gates {
 		out.Gates = append(out.Gates, gateBody{
-			Type: string(g.Type), Approvals: g.Approvals, Groups: g.Groups, AllowSelf: g.AllowSelf,
-			TimeoutNanos: int64(g.Timeout), BindPlan: g.BindPlan,
+			Type: string(g.Type), Approvals: g.Approvals, Groups: g.Groups, GroupIDs: g.GroupIDs,
+			AllowSelf: g.AllowSelf, TimeoutNanos: int64(g.Timeout), BindPlan: g.BindPlan,
 		})
 	}
 
@@ -420,8 +421,8 @@ func decodePhase(b *phaseBody) job.Phase {
 
 	for _, g := range b.Gates {
 		out.Gates = append(out.Gates, job.Gate{
-			Type: job.GateType(g.Type), Approvals: g.Approvals, Groups: g.Groups, AllowSelf: g.AllowSelf,
-			Timeout: time.Duration(g.TimeoutNanos), BindPlan: g.BindPlan,
+			Type: job.GateType(g.Type), Approvals: g.Approvals, Groups: g.Groups, GroupIDs: g.GroupIDs,
+			AllowSelf: g.AllowSelf, Timeout: time.Duration(g.TimeoutNanos), BindPlan: g.BindPlan,
 		})
 	}
 

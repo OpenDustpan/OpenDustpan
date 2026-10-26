@@ -566,6 +566,25 @@ func seedBackupGate(t *testing.T, s BackupStore, acme namespace.Namespace) {
 		t.Fatalf("put gate: %v", err)
 	}
 
+	rule := gate.ApprovalRule{
+		Scope:     scope,
+		ID:        "net-review",
+		Version:   0,
+		Count:     1,
+		FreshAuth: gate.NoFreshAuth(),
+		Approvers: gate.Approvers{
+			Groups:     []string{"netops"},
+			GroupIDs:   []string{"group-id-1"},
+			Users:      nil,
+			UnitOwners: false,
+		},
+		AuthorMayApprove: false,
+		Timeout:          0,
+	}
+	if _, err := gs.ApprovalRules().Put(ctx, rule, 0, acme.Fence(), e); err != nil {
+		t.Fatalf("put approval rule: %v", err)
+	}
+
 	for _, ns := range []namespace.Name{audit.ServerScope, acme.Name} {
 		fence := namespace.Fence{Namespace: "", FailoverVersion: 0}
 		if ns == acme.Name {
@@ -622,6 +641,8 @@ func requireSeededGate(t *testing.T, s BackupStore, sum backup.Summary) {
 		t.Fatalf("get the restored path set: %v", err)
 	}
 
+	requireSeededApprovalRule(t, gs, scope)
+
 	change := gate.ChangeRef{Kind: gate.ChangeAccess, ID: ""}
 
 	for _, ns := range []namespace.Name{audit.ServerScope, "acme"} {
@@ -635,6 +656,22 @@ func requireSeededGate(t *testing.T, s BackupStore, sum backup.Summary) {
 		}
 
 		requireRefusalFolded(t, s, gs, ns, records[0].ID)
+	}
+}
+
+// requireSeededApprovalRule checks that the restored approval rule still holds
+// the name and the ID of its approver group.
+func requireSeededApprovalRule(t *testing.T, gs gate.Store, scope gate.Scope) {
+	t.Helper()
+
+	rule, err := gs.ApprovalRules().Get(t.Context(), scope, "net-review")
+	if err != nil {
+		t.Fatalf("get the restored approval rule: %v", err)
+	}
+
+	if !slices.Equal(rule.Approvers.Groups, []string{"netops"}) ||
+		!slices.Equal(rule.Approvers.GroupIDs, []string{"group-id-1"}) {
+		t.Fatalf("restored approvers = %+v, want the group netops with the ID group-id-1", rule.Approvers)
 	}
 }
 

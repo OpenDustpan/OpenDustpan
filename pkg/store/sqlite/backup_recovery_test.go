@@ -41,8 +41,15 @@ type holdTarget struct {
 	entered chan struct{}
 }
 
-// Put holds the first write of a table file, then writes through.
+// Put holds the first write of a table file, then writes through. A write
+// whose context already ended is not the hold: the claim of that attempt can
+// have ended before the write, and the hold must stand for a process that
+// dies with a live claim.
 func (h *holdTarget) Put(ctx context.Context, key blob.Key, r io.Reader) error {
+	if ctx.Err() != nil {
+		return fmt.Errorf("write before the hold: %w", ctx.Err())
+	}
+
 	if strings.Contains(key.String(), "/sql/") {
 		h.mu.Lock()
 		first := !h.held
@@ -115,7 +122,12 @@ func crashedBackup(t *testing.T, path string, dirs recoveryDirs, id backup.ID) {
 	}
 
 	held := &holdTarget{Store: dirs.target, mu: sync.Mutex{}, held: false, entered: make(chan struct{})}
+	// The process is dead from the start: it can never end an attempt with
+	// an end write. Under load, the lease of its claim can end before the
+	// write step, and a release then would return the operation to pending
+	// and hide the crash.
 	dead := &crashOps{Store: first.DurableOperationsPort(), crashed: atomic.Bool{}}
+	dead.crashed.Store(true)
 	svc := backupService(t, first, dead, serviceBlobs{blobs: dirs.blobs, target: held}, crashLease)
 
 	if startErr := svc.Start(ctx, id); startErr != nil {
@@ -134,7 +146,6 @@ func crashedBackup(t *testing.T, path string, dirs recoveryDirs, id backup.ID) {
 		t.Fatal("the backup did not reach its write step")
 	}
 
-	dead.crashed.Store(true)
 	crash()
 	worker.Wait()
 
@@ -146,9 +157,9 @@ func crashedBackup(t *testing.T, path string, dirs recoveryDirs, id backup.ID) {
 // errCrashed is the answer of a store after the crash of its process.
 var errCrashed = errors.New("the process crashed")
 
-// crashOps is a durable store whose writes that end an attempt fail once the
-// process crashed, as they do when the process is gone: the claim stays
-// until its lease ends.
+// crashOps is a durable store whose writes that end an attempt fail while
+// crashed is set, as they do when the process is gone: the claim stays until
+// its lease ends.
 type crashOps struct {
 	durable.Store
 
@@ -254,9 +265,12 @@ func checkRecovered(t *testing.T, second *sqlite.Store, target blob.Store, id ba
 		t.Fatalf("backup after the recovery = %+v, want succeeded", row)
 	}
 
-	// The runner completes the operation just after the finish write.
+	// The runner completes the operation just after the finish write. Under
+	// load the lease of the dead process can end before the write step, and
+	// that process then takes its own claim over: the check needs at least one
+	// takeover of an expired claim.
 	opID := durableID(t, second, id)
-	deadline := time.Now().Add(10 * time.Second)
+	deadline := time.Now().Add(30 * time.Second)
 
 	op, err := second.DurableOperationsPort().Get(ctx, opID)
 	for err == nil && !op.State.Terminal() && time.Now().Before(deadline) {
@@ -268,8 +282,8 @@ func checkRecovered(t *testing.T, second *sqlite.Store, target blob.Store, id ba
 		op, err = second.DurableOperationsPort().Get(ctx, opID)
 	}
 
-	if err != nil || op.State != durable.StateSucceeded || op.Attempt < 2 || op.Expiries != 1 {
-		t.Fatalf("operation = %+v, %v; want succeeded after a second attempt that took over the one expired claim",
+	if err != nil || op.State != durable.StateSucceeded || op.Attempt < 2 || op.Expiries < 1 {
+		t.Fatalf("operation = %+v, %v; want succeeded after a second attempt that took over an expired claim",
 			op, err)
 	}
 

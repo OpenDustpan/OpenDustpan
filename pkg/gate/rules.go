@@ -145,8 +145,15 @@ func ParseFreshAuth(seconds int) (FreshAuth, error) {
 // unit in its context. An approver also needs the approve action of the
 // object, and is a person in a session.
 type Approvers struct {
+	// Groups holds the names of the approver groups, for display. The name
+	// is never the identity of a group: GroupIDs is. The config service sets
+	// both at save, so a caller cannot choose the IDs.
 	Groups []string `json:"groups"`
-	Users  []string `json:"users"`
+	// GroupIDs holds the immutable ID of each group in Groups, at the same
+	// index. An entry of Groups with no ID here was saved before the IDs
+	// existed, and it counts no one.
+	GroupIDs []string `json:"groupIds"`
+	Users    []string `json:"users"`
 	// UnitOwners reads the owners of the unit from the context at the
 	// scope of the rule or at a wider scope only.
 	UnitOwners bool `json:"unitOwners"`
@@ -158,8 +165,9 @@ func (a Approvers) Empty() bool {
 }
 
 // Validate returns an error that wraps ErrInvalid for approvers that name an
-// empty or a too long entry, or more than MaxApproverEntries groups or
-// users. It does not check that the approvers are not empty: a default may
+// empty or a too long entry, more than MaxApproverEntries groups or users, or
+// a list of group IDs that is not as long as the list of group names. It does not check that the approvers are not
+// empty: a default may
 // name none.
 func (a Approvers) Validate() error {
 	for _, l := range []struct {
@@ -174,6 +182,23 @@ func (a Approvers) Validate() error {
 			if name == "" || len(name) > MaxApproverBytes || !utf8.ValidString(name) {
 				return fmt.Errorf("%w: a %s name is empty, too long, or not UTF-8", ErrInvalid, l.kind)
 			}
+		}
+	}
+
+	return a.validateGroupIDs()
+}
+
+// validateGroupIDs returns an error that wraps ErrInvalid when GroupIDs is not
+// empty and not as long as Groups, or holds an empty or a too long ID.
+func (a Approvers) validateGroupIDs() error {
+	if len(a.GroupIDs) != 0 && len(a.GroupIDs) != len(a.Groups) {
+		return fmt.Errorf("%w: %d group IDs for %d groups: give one ID for each group, or none",
+			ErrInvalid, len(a.GroupIDs), len(a.Groups))
+	}
+
+	for _, id := range a.GroupIDs {
+		if id == "" || len(id) > MaxApproverBytes || !utf8.ValidString(id) {
+			return fmt.Errorf("%w: a group ID is empty, too long, or not UTF-8", ErrInvalid)
 		}
 	}
 

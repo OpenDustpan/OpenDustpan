@@ -108,6 +108,7 @@ func areas() []func() []Spec {
 		sessionSpecs,
 		signInSpecs,
 		sinkSpecs,
+		sourceSpecs,
 		stackSpecs,
 		stateVersionSpecs,
 		tokenSpecs,

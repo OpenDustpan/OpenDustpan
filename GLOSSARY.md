@@ -971,7 +971,7 @@ The code of one commit of one repository in the blob store (ADR 135 decision 1).
 _Avoid_: Snapshot (alone), source (alone: that is the backend before an import), clone, checkout (the files that the launcher writes from a snapshot)
 
 **Source filter**:
-The setting of a namespace that decides which submodules and Git LFS objects a source snapshot holds (`source.Filter`, ADR 135 decision 6). ADR 226 decision 9 gives the name. It is a fixed control, not a gate. It is empty by default, so a snapshot holds no submodule and no Git LFS object. `submodules` and `largeFiles` list `https` URL patterns, at most 64 in each list. `failOnDenied` fails the `source.fetch` operation when the commit has a submodule or a pointer that the filter does not allow. Its `protectedBranches` give the fact `source.protected` (ADR 213 decision 2). A change of the filter needs `namespace:manage-runners` and makes a new snapshot key. The routes are `GET` and `PUT /api/dustpan/v1/namespaces/{namespace}/source-filter`.
+The setting of a namespace that decides which submodules and Git LFS objects a source snapshot holds (`source.Filter`, ADR 135 decision 6). ADR 226 decision 9 gives the name. It is a fixed control, not a gate. It is empty by default, so a snapshot holds no submodule and no Git LFS object. `submodules` and `largeFiles` list `https` URL patterns, at most 64 in each list. `failOnDenied` fails the `source.fetch` operation when the commit has a submodule or a pointer that the filter does not allow. Its `protectedBranches` give the fact `source.protected` (ADR 213 decision 2). A change of the filter needs `namespace:manage-runners`. A change of `submodules`, `largeFiles` or `failOnDenied` makes a new snapshot key. A change of `protectedBranches` alone does not. The routes are `GET` and `PUT /api/dustpan/v1/namespaces/{namespace}/source-filter`.
 _Avoid_: Source policy, submodule allowlist
 
 ### Gates and approvals
@@ -989,7 +989,7 @@ The facts of one decision point for one unit, in the shape of the fact schema of
 _Avoid_: Policy input
 
 **Approval rule**:
-Data that says who may approve and how many people must approve (ADR 225 decision 1). It names approvers (groups, users and `unitOwners`), a count of 1 to 10, `authorMayApprove` (default `false`), `freshAuthSeconds` and `timeoutSeconds`. A gate names it in its outcome as `approval:<rule>`. The server resolves the rule ID at the scope of the gate, then at each wider scope, never at a narrower one. One rule gives one requirement. `unitOwners` reads only the context at the scope of the rule or at a wider scope. Only a person in a session approves: never an agent, a service principal or a token.
+Data that says who may approve and how many people must approve (ADR 225 decision 1). It names approvers (groups, users and `unitOwners`), a count of 1 to 10, `authorMayApprove` (default `false`), `freshAuthSeconds` and `timeoutSeconds`. A gate names it in its outcome as `approval:<rule>`. The server resolves the rule ID at the scope of the gate, then at each wider scope, never at a narrower one. One rule gives one requirement. `unitOwners` reads only the context at the scope of the rule or at a wider scope. Only a person in a session approves: never an agent, a service principal or a token. The rule stores the ID of each approver group. The group name is only a label.
 _Avoid_: Approval policy, quorum
 
 **Approval default**:
