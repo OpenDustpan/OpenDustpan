@@ -7,12 +7,13 @@ import (
 	"opendustpan.org/opendustpan/pkg/identity"
 )
 
-// wantDuplicate is the message of the 409 of a second create of acme. It
-// names the action and the name one time.
-const wantDuplicate = `create namespace "acme": namespace already exists`
+// wantDuplicate is the message of the 409 of a second create of acme. It is
+// the fixed text of the refusal: the wrap names the operation and the name,
+// and the log holds them.
+const wantDuplicate = `namespace already exists`
 
 // TestNamespaceCreateDuplicateText proves that the 409 of a second create of
-// a name, with no access service, says what failed one time.
+// a name, with no access service, answers the fixed text.
 func TestNamespaceCreateDuplicateText(t *testing.T) {
 	t.Parallel()
 
