@@ -21,7 +21,6 @@ import (
 	"opendustpan.org/opendustpan/internal/source"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
-	"opendustpan.org/opendustpan/pkg/ipallow"
 	"opendustpan.org/opendustpan/pkg/namespace"
 )
 
@@ -199,28 +198,14 @@ func (h *Handler) enforce(rt Route) http.HandlerFunc {
 		Actions: slices.Concat([]identity.Action{identity.ActionNamespaceRead}, rt.Actions),
 		Resolve: rt.Resolve,
 		Authorize: func(r *http.Request, p identity.Principal, obj identity.Object) error {
-			return authorizeRoute(guard, r, p, obj, rt.Actions)
+			return guard.AuthorizeObject(r.Context(), r, p, obj, route.Checks{
+				Namespace:     obj,
+				Reads:         nil,
+				Actions:       rt.Actions,
+				NotFound:      namespace.ErrNotFound,
+				RequireAction: true,
+			})
 		},
 		Serve: rt.Serve,
 	})
-}
-
-// authorizeRoute checks namespace:read on obj, then each of actions. A
-// refusal of namespace:read answers the 404 of an unknown namespace, except
-// the refusal of an address that the IP allowlist of the namespace does not
-// allow: that one answers 403 with its own code, as on the other routes of the
-// namespace.
-func authorizeRoute(
-	guard route.Guard, r *http.Request, p identity.Principal, obj identity.Object, actions []identity.Action,
-) error {
-	err := guard.AuthorizeAll(r, p, obj, []identity.Action{identity.ActionNamespaceRead})
-	if err != nil {
-		if errors.Is(err, identity.ErrDenied) && !errors.Is(err, ipallow.ErrAddressNotAllowed) {
-			return namespace.ErrNotFound
-		}
-
-		return err
-	}
-
-	return guard.AuthorizeAll(r, p, obj, actions)
 }

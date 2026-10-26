@@ -283,7 +283,7 @@ func checkApproverFieldNames(t *testing.T) {
 
 	for field := range reflect.TypeFor[gate.Approvers]().Fields() {
 		switch name := field.Name; name {
-		case "Groups", "Users", "UnitOwners":
+		case "Groups", "GroupIDs", "Users", "UnitOwners":
 		default:
 			t.Errorf("Approvers has the new field %s: decide it in the strip and in this test", name)
 		}

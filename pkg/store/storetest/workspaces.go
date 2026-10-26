@@ -2849,8 +2849,10 @@ func testCreateStateVersionConcurrentCap(t *testing.T, s WorkspaceStore) {
 
 // testReferencedContentKeys proves the referenced set holds every blob key
 // the versions of one workspace name, pending and finalized, without the
-// empty ones: another workspace stays out, and a workspace without versions,
-// or one that does not exist, yields an empty list.
+// empty ones: another workspace stays out, a workspace without versions yields
+// an empty list, and a workspace that does not exist is ErrNotFound with no
+// keys. RunKeepSetRules holds the cases of the rename, the soft delete and the
+// purge.
 func testReferencedContentKeys(t *testing.T, s WorkspaceStore) {
 	t.Helper()
 
@@ -2861,7 +2863,12 @@ func testReferencedContentKeys(t *testing.T, s WorkspaceStore) {
 	lockedOther := lockTestWorkspace(t, s, ns, other, "alice")
 
 	assertReferencedContentKeys(t, s, w.ID)
-	assertReferencedContentKeys(t, s, workspace.ID(ident.NewID("ws-")))
+
+	if keys, err := s.ReferencedContentKeys(t.Context(), workspace.ID(ident.NewID("ws-"))); !errors.Is(
+		err, workspace.ErrNotFound,
+	) || len(keys) != 0 {
+		t.Fatalf("referenced content keys of an unknown workspace = %v, %v; want no keys and ErrNotFound", keys, err)
+	}
 
 	first := createPendingVersion(t, s, ns, newPendingVersion(
 		t, locked, locked.Lock.ID, stateInput("l1", "v1", 1),

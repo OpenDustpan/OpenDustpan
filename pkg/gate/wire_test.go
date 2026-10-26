@@ -146,22 +146,37 @@ func fullRecord(t *testing.T) gate.Record {
 			}},
 			Result: gate.ResultAwaitingApproval,
 		}},
-		Requirements: []gate.Requirement{{
-			Name: gate.RuleRequirement("finance"), Version: 1,
-			Approvers: gate.Approvers{Groups: []string{"finance"}, Users: []string{}, UnitOwners: false},
-			Count:     2, AuthorMayApprove: false, FreshAuth: gate.FreshAuth{Set: true, Seconds: 300},
-			TimeoutSeconds: 604800,
-			Signatures: []gate.Signature{{
-				Subject: "bob", At: at,
-				CarriedFrom: &gate.CarriedFrom{Revision: 1, Digest: "77aa", At: at.Add(-time.Hour), Scope: acme},
-			}},
-			Evaluate: false,
-		}, {
-			Name: gate.ScopedDefaultRequirement(acme), Version: 4,
-			Approvers: gate.Approvers{Groups: []string{}, Users: []string{"carol"}, UnitOwners: true},
-			Count:     1, AuthorMayApprove: false, FreshAuth: gate.NoFreshAuth(), TimeoutSeconds: 3600,
-			Signatures: []gate.Signature{}, Evaluate: false,
-		}},
+		Requirements: []gate.Requirement{
+			{
+				Name: gate.RuleRequirement("finance"), Version: 1,
+				Approvers: gate.Approvers{
+					Groups: []string{"finance"}, GroupIDs: []string{"g-finance"}, Users: []string{}, UnitOwners: false,
+				},
+				Count: 2, AuthorMayApprove: false, FreshAuth: gate.FreshAuth{Set: true, Seconds: 300},
+				TimeoutSeconds: 604800,
+				Signatures: []gate.Signature{{
+					Subject: "bob", At: at,
+					CarriedFrom: &gate.CarriedFrom{Revision: 1, Digest: "77aa", At: at.Add(-time.Hour), Scope: acme},
+				}},
+				Evaluate: false,
+			},
+			{
+				Name:    gate.ScopedDefaultRequirement(acme),
+				Version: 4,
+				Approvers: gate.Approvers{
+					Groups:     []string{},
+					GroupIDs:   []string{},
+					Users:      []string{"carol"},
+					UnitOwners: true,
+				},
+				Count:            1,
+				AuthorMayApprove: false,
+				FreshAuth:        gate.NoFreshAuth(),
+				TimeoutSeconds:   3600,
+				Signatures:       []gate.Signature{},
+				Evaluate:         false,
+			},
+		},
 		Warnings:   []string{"budget at 82 percent"},
 		AutoApply:  false,
 		Controls:   []gate.FixedControl{{Kind: gate.ControlFreeze, Passed: true, Detail: ""}},
