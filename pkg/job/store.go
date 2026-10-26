@@ -378,20 +378,38 @@ type Service interface {
 	// of CheckCancel: ErrFinished for a job that already ended, and
 	// ErrDelivered for a write-back job whose change is in git for good.
 	Cancel(ctx context.Context, a Actor, id ID, reason string) (Job, error)
-	// Approve records the verdict of an approver on the gate of the current
-	// phase. plan is the binding of the plans that the approver saw. This
-	// version does not record approvals: each call returns ErrUnsupported and
-	// changes nothing. No check of the job, the approver or the plans runs in
-	// this version.
+	// Approve records the verdict of a on the gate of the current phase.
+	// plan is the binding of the plans that the approver saw. It returns
+	// ErrTransition when the job does not wait for approval,
+	// ErrAgentDenied for an approval that an agent records (an agent can
+	// record a rejection), ErrSelfApproval for an approval by the starter
+	// that the gate does not allow, also when the starter used an agent,
+	// ErrPlanChanged when plan is not the binding of the stored plans,
+	// ErrPlanStale for plans older than the maximum plan age, and
+	// ErrFinished for a job that ended.
 	//
-	// Approve is for the gates of type GateApproval. A confirmation goes
-	// through Confirm.
+	// Approve records verdicts for the gates of type GateApproval. A
+	// confirmation goes through Confirm.
+	//
+	// This version does not implement the contract below: each call returns
+	// ErrUnsupported and changes nothing.
 	Approve(ctx context.Context, a Actor, id ID, v Verdict, plan PlanBinding, comment string) (Job, error)
 	// Confirm records the verdict of the person who asked the agent, on the
-	// confirmation gate of the current phase. This version does not record
-	// confirmations: each call returns ErrUnsupported and changes nothing. No
-	// check of the person, the agent or the authentication runs in this
-	// version.
+	// confirmation gate of the current phase. It needs the start action of
+	// the job on its unit, not job:approve. The request must come from the
+	// person, with no agent, and with a fresh authentication of the kind
+	// a.ConfirmAuth: a new MFA step, or a new authentication at the SSO
+	// provider with ConfirmFreshness as its maximum age. It records
+	// a.ConfirmAuth in Approval.Auth and a.AuthAt in Approval.AuthAt. It
+	// returns ErrTransition when the job does not wait for a confirmation,
+	// ErrAgentDenied for an agent, ErrNotRequester for a principal that is
+	// not Job.StartedBy, ErrAuthStale when the fresh authentication is
+	// missing or older than ConfirmFreshness, ErrPlanChanged and
+	// ErrPlanStale as Approve does, and ErrFinished for a job that ended. A
+	// rejection ends the job rejected.
+	//
+	// This version does not implement the contract below: each call returns
+	// ErrUnsupported and changes nothing.
 	Confirm(ctx context.Context, a Actor, id ID, v Verdict, plan PlanBinding) (Job, error)
 	// RedactLog replaces each match of subs in the log version with the ID
 	// version, of the job id, writes the result as the next version with

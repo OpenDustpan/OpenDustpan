@@ -96,10 +96,10 @@ type Gate struct {
 	// not record approvals (see Service.Approve).
 	Groups []string
 	// GroupIDs holds the immutable ID of each group in Groups, at the same
-	// index. This version does not check the approvers. A later check must
-	// match a member by these IDs, never by the names: a group that someone
-	// made again with the same name has another ID. Groups is for display
-	// only.
+	// index. No check of the approvers runs in this version. A check of the
+	// approvers must match a member by these IDs, never by the names: a group
+	// that someone made again with the same name has another ID. Groups is for
+	// display only.
 	GroupIDs []string
 	// AllowSelf lets the principal that started the job approve it. It has
 	// no effect on a confirmation gate.
