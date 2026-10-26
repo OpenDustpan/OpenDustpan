@@ -4,10 +4,12 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"slices"
 	"testing"
 
 	"github.com/jackc/pgx/v5"
 
+	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/store/internal/migrate"
 )
 
@@ -239,5 +241,29 @@ func checkKeptSignInFailures(t *testing.T, conn *pgx.Conn, ident string) {
 
 	if source != "live" || end != 5 || count != 5 || rows != 1 {
 		t.Fatalf("restored sign-in failures: source %q end %d count %d rows %d", source, end, count, rows)
+	}
+}
+
+// TestKeptControlTablesCoverControlTables proves that the swap of a restore
+// keeps every table of backup.ControlTables, the ones in the control schema
+// aside, and that each kept table has a column list.
+func TestKeptControlTablesCoverControlTables(t *testing.T) {
+	t.Parallel()
+
+	kept, err := keptControlTables()
+	if err != nil {
+		t.Fatalf("kept control tables: %v", err)
+	}
+
+	for _, table := range backup.ControlTables {
+		inControlSchema := slices.Contains(controlSchemaTables, table)
+		isKept := slices.ContainsFunc(kept, func(spec pgCopyTable) bool {
+			return spec.table == table && len(spec.columns) > 0
+		})
+
+		if inControlSchema == isKept {
+			t.Errorf("control table %s: in the control schema %v, kept %v, want exactly one",
+				table, inControlSchema, isKept)
+		}
 	}
 }
