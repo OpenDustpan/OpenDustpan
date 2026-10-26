@@ -83,7 +83,10 @@ func newReducingRunnerRoutes() *http.ServeMux {
 // form, so that a redirect or a rewrite cannot reach a route that the table
 // does not name.
 func isReducingRunnerRoute(routes *http.ServeMux, r *http.Request) bool {
-	if !canonicalPath(r.URL.Path) {
+	// A RawPath is set only when the request path has an escape that the
+	// default encoding of Path would not write, such as %2F or %2e. A route
+	// of the table has none, so such a request is refused here.
+	if r.URL.RawPath != "" || !canonicalPath(r.URL.Path) {
 		return false
 	}
 

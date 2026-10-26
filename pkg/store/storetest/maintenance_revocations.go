@@ -16,6 +16,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/accesstoken"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/backup"
+	"opendustpan.org/opendustpan/pkg/durable"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -57,6 +58,9 @@ type RevocationStore interface {
 	RunnerPools() runner.PoolStore
 	// RunnerPorts returns the pool and runner ports of the same store.
 	RunnerPorts() RunnerPorts
+	// DurableOperationsPort returns the durable operations of the same store,
+	// where a runner holds its claims.
+	DurableOperationsPort() durable.Store
 	// InsertRawRevocation writes one row of the revocation journal with no
 	// check of the kind, as a write to the database itself would. The hostile
 	// journal case uses it to send a row that the store never writes.
@@ -86,6 +90,7 @@ func RunRevocations(t *testing.T, newStore RevocationFactory) {
 		{name: "a write that grants access is refused in maintenance mode", test: testGrantsRefused},
 		{name: "a revocation refuses hostile input in maintenance mode", test: testRevocationsHostileInput},
 		{name: "a revocation made in maintenance mode survives a restore", test: testRevocationSurvivesRestore},
+		{name: "the replay of a runner retire ends the claim of the runner", test: testRunnerRetireEndsClaim},
 		{name: "a restore applies only the revocations of its own stay", test: testRevocationStayIsBounded},
 		{name: "a restore refuses hostile journal rows and applies the rest", test: testReplayRefusesHostileRows},
 		{name: "the sweep of temporary administrators expires in maintenance mode", test: testTempAdminSweepRuns},
@@ -1516,6 +1521,90 @@ func testRevocationSurvivesRestore(t *testing.T, s RevocationStore) {
 
 	if again := revReplayEntries(t, s); len(again) != len(stay) {
 		t.Fatalf("replay audit entries after the second restore = %d, want %d", len(again), len(stay))
+	}
+}
+
+// revClaimKind is the durable kind of the operation that the claim cases
+// hold for the runner.
+const revClaimKind durable.Kind = "revocation-suite"
+
+// testRunnerRetireEndsClaim proves the second statement of the replay of a
+// runner retire. The claims of the runners are in a control table, which a
+// restore keeps, so the swap does not bring a claim back. The statement is
+// still a layer of its own: a claim that the retired runner holds when the
+// swap runs, for example one that committed just after the retire, ends with
+// the replay. The case claims an operation for the runner after the retire,
+// restores the backup, and expects the claim ended. A second restore changes
+// nothing.
+func testRunnerRetireEndsClaim(t *testing.T, s RevocationStore) {
+	t.Helper()
+
+	f := seedAccess(t, s)
+	ops := s.DurableOperationsPort()
+
+	start := durable.StartRequest{Key: "revocation-suite/claim", Kind: revClaimKind, Version: 0, Input: nil}
+	if _, _, err := ops.Start(t.Context(), start); err != nil {
+		t.Fatalf("start the operation: %v", err)
+	}
+
+	export := revTakeExport(t, s)
+
+	revEnter(t, s)
+	revStayRetireRunner(t, s, f)
+
+	held, err := ops.Claim(t.Context(), durable.ClaimRequest{
+		Owner: f.runnerID, Kinds: []durable.Kind{revClaimKind}, MaxVersions: nil, Lease: time.Hour,
+		TakeCanceled: false,
+	})
+	if err != nil {
+		t.Fatalf("claim the operation for the runner: %v", err)
+	}
+
+	if got := revOperation(t, s, held.ID).Claim.Owner; got != f.runnerID {
+		t.Fatalf("claim owner before the restore = %q, want %q", got, f.runnerID)
+	}
+
+	revStageAndApply(t, s, export)
+
+	revRunnerRetired(t, s, f)
+	revClaimEnded(t, s, held.ID, f.runnerID)
+
+	total := revAuditTotal(t, s)
+	after := revOperation(t, s, held.ID)
+
+	revStageAndApply(t, s, export)
+
+	revRunnerRetired(t, s, f)
+	revClaimEnded(t, s, held.ID, f.runnerID)
+
+	if got := revAuditTotal(t, s); got != total {
+		t.Fatalf("audit entries after the second restore = %d, want %d", got, total)
+	}
+
+	if again := revOperation(t, s, held.ID); again.Claim != after.Claim || again.State != after.State {
+		t.Fatalf("operation after the second restore = %+v, want %+v", again, after)
+	}
+}
+
+// revOperation reads the durable operation id.
+func revOperation(t *testing.T, s RevocationStore, id durable.ID) durable.Operation {
+	t.Helper()
+
+	op, err := s.DurableOperationsPort().Get(t.Context(), id)
+	if err != nil {
+		t.Fatalf("get the operation %s: %v", id, err)
+	}
+
+	return op
+}
+
+// revClaimEnded fails the test when the operation id is still claimed by
+// owner.
+func revClaimEnded(t *testing.T, s RevocationStore, id durable.ID, owner string) {
+	t.Helper()
+
+	if op := revOperation(t, s, id); op.Claim.Owner == owner {
+		t.Fatalf("operation %s is still claimed by the retired runner %s: %+v", id, owner, op.Claim)
 	}
 }
 
