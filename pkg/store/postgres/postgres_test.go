@@ -2149,6 +2149,11 @@ func (s *revocationStore) RunnerPools() runner.PoolStore {
 	return s.Runners()
 }
 
+// RunnerPorts implements storetest.RevocationStore.
+func (s *revocationStore) RunnerPorts() storetest.RunnerPorts {
+	return storetest.RunnerPorts{Pools: s.Runners(), Members: s.Runners()}
+}
+
 // KeepsUnknownKinds implements storetest.RevocationStore. The journal lives in
 // the control schema, which the swap never copies, so a row of an unknown
 // kind reaches the replay.

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"path"
 	"strings"
 
 	"opendustpan.org/opendustpan/internal/errcode"
@@ -60,6 +61,54 @@ func withMaintenance(
 		}
 
 		writeRefusal(r.Context(), w, shape, logger, maintenanceMessage)
+	})
+}
+
+// reducingRunnerRoutes holds the only routes of the runner management API
+// that pass the maintenance gate: the retire of a runner and the revoke of a
+// join token. Both only reduce access, so incident response can cut a runner
+// at any time. Every other route of the API stays refused.
+var reducingRunnerRoutes = func() *http.ServeMux {
+	mux := http.NewServeMux()
+	noop := http.HandlerFunc(func(http.ResponseWriter, *http.Request) {})
+
+	mux.Handle("POST /api/runners/{namespace}/runners/{runner}/retire", noop)
+	mux.Handle("POST /api/runners/{namespace}/pools/{pool}/join-tokens/{id}/revoke", noop)
+
+	return mux
+}()
+
+// isReducingRunnerRoute reports whether r is one of reducingRunnerRoutes.
+// Defense in depth: the store journals the write and the handler checks the
+// grants, so this gate does not rely on them. It refuses a path that is not
+// in canonical form, so that a redirect or a rewrite cannot reach a route
+// that the table does not name.
+func isReducingRunnerRoute(r *http.Request) bool {
+	if r.URL.Path != path.Clean(r.URL.Path) {
+		return false
+	}
+
+	_, pattern := reducingRunnerRoutes.Handler(r)
+
+	return pattern != ""
+}
+
+// withMaintenanceUnlessReducing is withMaintenance for the runner management
+// API: a request for a route of reducingRunnerRoutes passes in maintenance
+// mode, and every other request answers 503.
+func withMaintenanceUnlessReducing(
+	next http.Handler, watcher *maintenance.Watcher, shape errorShape, logger *slog.Logger,
+) http.Handler {
+	gated := withMaintenance(next, watcher, shape, logger)
+
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if isReducingRunnerRoute(r) {
+			next.ServeHTTP(w, r)
+
+			return
+		}
+
+		gated.ServeHTTP(w, r)
 	})
 }
 
