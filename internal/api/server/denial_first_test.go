@@ -44,19 +44,30 @@ func deniedAround(cause error) error {
 func writeErrorRecorder(t *testing.T, err error) (*httptest.ResponseRecorder, string) {
 	t.Helper()
 
+	rec, body := writeErrorBody(t, err)
+
+	return rec, body.Message
+}
+
+type denialBody struct {
+	Message   string `json:"message"`
+	Code      int    `json:"code"`
+	ErrorCode string `json:"errorCode"`
+}
+
+func writeErrorBody(t *testing.T, err error) (*httptest.ResponseRecorder, denialBody) {
+	t.Helper()
+
 	rec := httptest.NewRecorder()
 	apiserver.WriteErrorForTest(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/", nil), err)
 
-	var body struct {
-		Message string `json:"message"`
-		Code    int    `json:"code"`
-	}
+	var body denialBody
 
 	if decodeErr := json.Unmarshal(rec.Body.Bytes(), &body); decodeErr != nil {
 		t.Fatalf("decode body %q: %v", rec.Body.String(), decodeErr)
 	}
 
-	return rec, body.Message
+	return rec, body
 }
 
 // TestWriteErrorDenialComesFirst checks that an error that wraps
@@ -100,9 +111,15 @@ func TestWriteErrorDenialComesFirst(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			rec, message := writeErrorRecorder(t, deniedAround(tc.cause))
+			rec, body := writeErrorBody(t, deniedAround(tc.cause))
+			message := body.Message
+
 			if rec.Code != http.StatusForbidden {
 				t.Fatalf("status = %d, want %d; body %s", rec.Code, http.StatusForbidden, rec.Body.String())
+			}
+
+			if body.ErrorCode != errcode.AccessDenied {
+				t.Errorf("errorCode = %q, want %q", body.ErrorCode, errcode.AccessDenied)
 			}
 
 			if strings.Contains(rec.Body.String(), wrapText) {
@@ -293,5 +310,30 @@ func TestWriteErrorKeepDeniedCannotHideACredentialRefusal(t *testing.T) {
 				t.Fatalf("status = %d, want %d; body %s", rec.Code, tc.want, rec.Body.String())
 			}
 		})
+	}
+}
+
+// TestWriteErrorNamespaceNotFoundFixedText checks that a not-found namespace
+// answers the fixed text and never the wrap text of the error.
+func TestWriteErrorNamespaceNotFoundFixedText(t *testing.T) {
+	t.Parallel()
+
+	err := fmt.Errorf("%s: %w", wrapText, namespace.ErrNotFound)
+
+	rec, body := writeErrorBody(t, err)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusNotFound)
+	}
+
+	if body.ErrorCode != errcode.NamespaceNotFound {
+		t.Errorf("errorCode = %q, want %q", body.ErrorCode, errcode.NamespaceNotFound)
+	}
+
+	if body.Message != "namespace not found" {
+		t.Errorf("message = %q, want %q", body.Message, "namespace not found")
+	}
+
+	if strings.Contains(rec.Body.String(), wrapText) {
+		t.Errorf("body holds the wrap text: %s", rec.Body.String())
 	}
 }
