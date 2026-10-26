@@ -30,26 +30,39 @@ func (fakeNamespaces) Get(_ context.Context, name namespace.Name) (namespace.Nam
 }
 
 // fakeGroups holds the groups platform (5 enabled members, 3 of them persons),
-// ops (1 member, a person) and empty (no member). A name with a character that
-// a group name cannot hold is not valid, and any other name names no group.
+// ops (1 member, a person) and empty (no member). The ID of a group is
+// "id-" and its lower-case name. A name with a character that a group name
+// cannot hold is not valid, and any other name names no group.
 type fakeGroups struct{}
 
-func (fakeGroups) GroupMembers(_ context.Context, name string) (gate.MemberCounts, error) {
-	members := map[string]gate.MemberCounts{
+func fakeGroupCounts() map[string]gate.MemberCounts {
+	return map[string]gate.MemberCounts{
 		"platform": {Enabled: 5, Persons: 3},
 		"ops":      {Enabled: 1, Persons: 1},
 		"empty":    {Enabled: 0, Persons: 0},
 	}
+}
 
+func (fakeGroups) ResolveGroup(_ context.Context, name string) (gate.GroupRef, error) {
 	if strings.ContainsAny(name, "<>/ ") {
-		return gate.MemberCounts{}, gate.ErrInvalid
+		return gate.GroupRef{}, gate.ErrInvalid
 	}
 
-	if n, ok := members[strings.ToLower(name)]; ok {
-		return n, nil
+	lower := strings.ToLower(name)
+	if _, ok := fakeGroupCounts()[lower]; ok {
+		return gate.GroupRef{ID: "id-" + lower, Name: lower}, nil
 	}
 
-	return gate.MemberCounts{}, gate.ErrNotFound
+	return gate.GroupRef{}, gate.ErrNotFound
+}
+
+func (fakeGroups) GroupByID(_ context.Context, id string) (gate.GroupRef, gate.MemberCounts, error) {
+	name := strings.TrimPrefix(id, "id-")
+	if n, ok := fakeGroupCounts()[name]; ok && name != id {
+		return gate.GroupRef{ID: id, Name: name}, n, nil
+	}
+
+	return gate.GroupRef{}, gate.MemberCounts{}, gate.ErrNotFound
 }
 
 // write records the last write that reached a store.
@@ -65,6 +78,9 @@ type recordingStore struct {
 	gate.Store
 
 	writes []write
+	// rule and def are the last object that a put stored.
+	rule *gate.ApprovalRule
+	def  *gate.ApprovalDefault
 }
 
 type recordingSettings struct {
@@ -87,8 +103,9 @@ func (s *recordingStore) ApprovalRules() gate.Objects[gate.ApprovalRule] {
 }
 
 func (s recordingSettings) PutApprovalDefault(
-	_ context.Context, _ gate.ApprovalDefault, prev int64, f namespace.Fence, e audit.Entry,
+	_ context.Context, d gate.ApprovalDefault, prev int64, f namespace.Fence, e audit.Entry,
 ) (int64, error) {
+	s.store.def = &d
 	s.store.writes = append(s.store.writes, write{fence: f, entry: e, prev: prev})
 
 	return prev + 1, nil
@@ -103,11 +120,36 @@ func (s recordingSettings) DeleteApprovalDefault(
 }
 
 func (r recordingRules) Put(
-	_ context.Context, _ gate.ApprovalRule, prev int64, f namespace.Fence, e audit.Entry,
+	_ context.Context, rule gate.ApprovalRule, prev int64, f namespace.Fence, e audit.Entry,
 ) (int64, error) {
+	r.store.rule = &rule
 	r.store.writes = append(r.store.writes, write{fence: f, entry: e, prev: prev})
 
 	return prev + 1, nil
+}
+
+func (s recordingSettings) ApprovalDefault(context.Context, gate.Scope) (gate.ApprovalDefault, error) {
+	if s.store.def == nil {
+		return gate.ApprovalDefault{}, gate.ErrNotFound
+	}
+
+	return *s.store.def, nil
+}
+
+func (r recordingRules) Get(context.Context, gate.Scope, gate.ID) (gate.ApprovalRule, error) {
+	if r.store.rule == nil {
+		return gate.ApprovalRule{}, gate.ErrNotFound
+	}
+
+	return *r.store.rule, nil
+}
+
+func (r recordingRules) List(context.Context, gate.Scope) ([]gate.ApprovalRule, error) {
+	if r.store.rule == nil {
+		return nil, nil
+	}
+
+	return []gate.ApprovalRule{*r.store.rule}, nil
 }
 
 func (r recordingRules) Delete(_ context.Context, ref gate.ObjectRef, f namespace.Fence, e audit.Entry) error {
@@ -119,7 +161,7 @@ func (r recordingRules) Delete(_ context.Context, ref gate.ObjectRef, f namespac
 func newConfigService(t *testing.T) (*gate.ConfigService, *recordingStore) {
 	t.Helper()
 
-	st := &recordingStore{Store: nil, writes: nil}
+	st := &recordingStore{Store: nil, writes: nil, rule: nil, def: nil}
 
 	svc, err := gate.NewConfigService(gate.ConfigServiceConfig{
 		Store: st, Namespaces: fakeNamespaces{}, Approvers: fakeGroups{}, Now: configNow,
@@ -145,15 +187,25 @@ func callerEntry() audit.Entry {
 
 func goodDefault(scope gate.Scope) gate.ApprovalDefault {
 	return gate.ApprovalDefault{
-		Scope: scope, Version: 0, Count: 2, FreshAuth: gate.NoFreshAuth(),
-		Approvers: gate.Approvers{Groups: []string{"platform"}, Users: nil, UnitOwners: false}, Unless: "", Reads: nil,
+		Scope:     scope,
+		Version:   0,
+		Count:     2,
+		FreshAuth: gate.NoFreshAuth(),
+		Approvers: gate.Approvers{
+			Groups:     []string{"platform"},
+			GroupIDs:   nil,
+			Users:      nil,
+			UnitOwners: false,
+		},
+		Unless: "",
+		Reads:  nil,
 	}
 }
 
 func goodRule(scope gate.Scope) gate.ApprovalRule {
 	return gate.ApprovalRule{
 		Scope: scope, ID: "platform", Version: 0,
-		Approvers: gate.Approvers{Groups: []string{"platform"}, Users: nil, UnitOwners: false}, Count: 1,
+		Approvers: gate.Approvers{Groups: []string{"platform"}, GroupIDs: nil, Users: nil, UnitOwners: false}, Count: 1,
 		AuthorMayApprove: false, FreshAuth: gate.NoFreshAuth(), Timeout: 0,
 	}
 }
@@ -290,7 +342,7 @@ func TestConfigServiceRefusesBeforeTheStore(t *testing.T) {
 	badDefault.Count = 0
 
 	badRule := goodRule(scope)
-	badRule.Approvers = gate.Approvers{Groups: nil, Users: nil, UnitOwners: false}
+	badRule.Approvers = gate.Approvers{Groups: nil, GroupIDs: nil, Users: nil, UnitOwners: false}
 
 	tests := []struct {
 		name string
@@ -356,7 +408,7 @@ func TestNewConfigServiceNeedsPorts(t *testing.T) {
 		t.Fatalf("no store = %v, want ErrInvalid", err)
 	}
 
-	st := &recordingStore{Store: nil, writes: nil}
+	st := &recordingStore{Store: nil, writes: nil, rule: nil, def: nil}
 
 	_, err = gate.NewConfigService(
 		gate.ConfigServiceConfig{Store: st, Namespaces: nil, Approvers: fakeGroups{}, Now: nil},
@@ -405,13 +457,15 @@ func TestValidateApprovalFields(t *testing.T) {
 		"reserved ID":    {rule(func(r *gate.ApprovalRule) { r.ID = "default" }), false},
 		"unit owners only": {
 			rule(
-				func(r *gate.ApprovalRule) { r.Approvers = gate.Approvers{Groups: nil, Users: nil, UnitOwners: true} },
+				func(r *gate.ApprovalRule) {
+					r.Approvers = gate.Approvers{Groups: nil, GroupIDs: nil, Users: nil, UnitOwners: true}
+				},
 			),
 			true,
 		},
 		"user only": {
 			rule(func(r *gate.ApprovalRule) {
-				r.Approvers = gate.Approvers{Groups: nil, Users: []string{"bo"}, UnitOwners: false}
+				r.Approvers = gate.Approvers{Groups: nil, GroupIDs: nil, Users: []string{"bo"}, UnitOwners: false}
 			}),
 			true,
 		},
@@ -453,7 +507,7 @@ func TestValidateApprovalFields(t *testing.T) {
 		t.Fatalf("good default: Validate() = %v", err)
 	}
 
-	def.Approvers = gate.Approvers{Groups: nil, Users: nil, UnitOwners: false}
+	def.Approvers = gate.Approvers{Groups: nil, GroupIDs: nil, Users: nil, UnitOwners: false}
 	if err := def.Validate(); err != nil {
 		t.Fatalf("default with no approver: Validate() = %v, want it valid", err)
 	}
@@ -480,58 +534,73 @@ func TestConfigServiceRefusesApproversThatCannotBeMet(t *testing.T) {
 	}{
 		{
 			"group name that is not valid",
-			gate.Approvers{Groups: []string{"<b>x</b>"}, Users: nil, UnitOwners: false},
+			gate.Approvers{Groups: []string{"<b>x</b>"}, GroupIDs: nil, Users: nil, UnitOwners: false},
 			1,
 			true,
 		},
 		{
 			"group that does not exist",
-			gate.Approvers{Groups: []string{"nogroup"}, Users: nil, UnitOwners: false},
+			gate.Approvers{Groups: []string{"nogroup"}, GroupIDs: nil, Users: nil, UnitOwners: false},
 			1,
 			true,
 		},
 		{
 			"user with a control character",
-			gate.Approvers{Groups: nil, Users: []string{"a\x07b"}, UnitOwners: false},
+			gate.Approvers{Groups: nil, GroupIDs: nil, Users: []string{"a\x07b"}, UnitOwners: false},
 			1,
 			true,
 		},
 		{
 			"user with white space around it",
-			gate.Approvers{Groups: nil, Users: []string{" alice"}, UnitOwners: false},
+			gate.Approvers{Groups: nil, GroupIDs: nil, Users: []string{" alice"}, UnitOwners: false},
 			1,
 			true,
 		},
-		{"count above one user", gate.Approvers{Groups: nil, Users: []string{"alice"}, UnitOwners: false}, 2, true},
+		{
+			"count above one user",
+			gate.Approvers{Groups: nil, GroupIDs: nil, Users: []string{"alice"}, UnitOwners: false},
+			2,
+			true,
+		},
 		{
 			"a user named twice counts once",
-			gate.Approvers{Groups: nil, Users: []string{"alice", "alice"}, UnitOwners: false},
+			gate.Approvers{Groups: nil, GroupIDs: nil, Users: []string{"alice", "alice"}, UnitOwners: false},
 			2,
 			true,
 		},
 		{
 			"count above the members of a group",
-			gate.Approvers{Groups: []string{"ops"}, Users: nil, UnitOwners: false},
+			gate.Approvers{Groups: []string{"ops"}, GroupIDs: nil, Users: nil, UnitOwners: false},
 			2,
 			true,
 		},
-		{"a group with no member", gate.Approvers{Groups: []string{"empty"}, Users: nil, UnitOwners: false}, 1, true},
-		{"count within a group", gate.Approvers{Groups: []string{"platform"}, Users: nil, UnitOwners: false}, 5, false},
+		{
+			"a group with no member",
+			gate.Approvers{Groups: []string{"empty"}, GroupIDs: nil, Users: nil, UnitOwners: false},
+			1,
+			true,
+		},
+		{
+			"count within a group",
+			gate.Approvers{Groups: []string{"platform"}, GroupIDs: nil, Users: nil, UnitOwners: false},
+			5,
+			false,
+		},
 		{
 			"a group named in another case counts once",
-			gate.Approvers{Groups: []string{"ops", "OPS"}, Users: nil, UnitOwners: false},
+			gate.Approvers{Groups: []string{"ops", "OPS"}, GroupIDs: nil, Users: nil, UnitOwners: false},
 			2,
 			true,
 		},
 		{
 			"count within users and groups",
-			gate.Approvers{Groups: []string{"ops"}, Users: []string{"a", "b"}, UnitOwners: false},
+			gate.Approvers{Groups: []string{"ops"}, GroupIDs: nil, Users: []string{"a", "b"}, UnitOwners: false},
 			3,
 			false,
 		},
 		{
 			"count above the list with the unit owners",
-			gate.Approvers{Groups: nil, Users: []string{"alice"}, UnitOwners: true},
+			gate.Approvers{Groups: nil, GroupIDs: nil, Users: []string{"alice"}, UnitOwners: true},
 			9,
 			false,
 		},
@@ -595,7 +664,7 @@ func TestConfigServiceAnyApproveHolderHasNoBound(t *testing.T) {
 	svc, _ := newConfigService(t)
 
 	def := goodDefault(gate.NamespaceScope("acme"))
-	def.Approvers, def.Count = gate.Approvers{Groups: nil, Users: nil, UnitOwners: false}, 10
+	def.Approvers, def.Count = gate.Approvers{Groups: nil, GroupIDs: nil, Users: nil, UnitOwners: false}, 10
 
 	if _, err := svc.PutApprovalDefault(t.Context(), def, 0, callerEntry()); err != nil {
 		t.Fatalf("default with no approver and count 10 = %v, want stored", err)
@@ -659,25 +728,25 @@ func TestConfigServiceApproversReasons(t *testing.T) {
 	}{
 		{
 			"group name not valid",
-			gate.Approvers{Groups: []string{"<b>x</b>"}, Users: nil, UnitOwners: false},
+			gate.Approvers{Groups: []string{"<b>x</b>"}, GroupIDs: nil, Users: nil, UnitOwners: false},
 			1,
 			gate.ApproversGroupInvalid, 0,
 		},
 		{
 			"group missing",
-			gate.Approvers{Groups: []string{"nogroup"}, Users: nil, UnitOwners: false},
+			gate.Approvers{Groups: []string{"nogroup"}, GroupIDs: nil, Users: nil, UnitOwners: false},
 			1,
 			gate.ApproversGroupMissing, 0,
 		},
 		{
 			"user not valid",
-			gate.Approvers{Groups: nil, Users: []string{"a\x07b"}, UnitOwners: false},
+			gate.Approvers{Groups: nil, GroupIDs: nil, Users: []string{"a\x07b"}, UnitOwners: false},
 			1,
 			gate.ApproversUserInvalid, 0,
 		},
 		{
 			"count above",
-			gate.Approvers{Groups: nil, Users: []string{"alice", "bob"}, UnitOwners: false},
+			gate.Approvers{Groups: nil, GroupIDs: nil, Users: []string{"alice", "bob"}, UnitOwners: false},
 			3,
 			gate.ApproversCountAbove, 2,
 		},

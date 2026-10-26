@@ -989,7 +989,7 @@ The facts of one decision point for one unit, in the shape of the fact schema of
 _Avoid_: Policy input
 
 **Approval rule**:
-Data that says who may approve and how many people must approve (ADR 225 decision 1). It names approvers (groups, users and `unitOwners`), a count of 1 to 10, `authorMayApprove` (default `false`), `freshAuthSeconds` and `timeoutSeconds`. A gate names it in its outcome as `approval:<rule>`. The server resolves the rule ID at the scope of the gate, then at each wider scope, never at a narrower one. One rule gives one requirement. `unitOwners` reads only the context at the scope of the rule or at a wider scope. Only a person in a session approves: never an agent, a service principal or a token.
+Data that says who may approve and how many people must approve (ADR 225 decision 1). It names approvers (groups, users and `unitOwners`), a count of 1 to 10, `authorMayApprove` (default `false`), `freshAuthSeconds` and `timeoutSeconds`. A gate names it in its outcome as `approval:<rule>`. The server resolves the rule ID at the scope of the gate, then at each wider scope, never at a narrower one. One rule gives one requirement. `unitOwners` reads only the context at the scope of the rule or at a wider scope. Only a person in a session approves: never an agent, a service principal or a token. The rule stores the ID of each approver group. The group name is only a label.
 _Avoid_: Approval policy, quorum
 
 **Approval default**:

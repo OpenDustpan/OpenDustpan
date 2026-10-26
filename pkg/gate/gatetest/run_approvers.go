@@ -19,7 +19,7 @@ type approverWriter struct {
 func approverWriters(e *env) []approverWriter {
 	scope := e.fx.acme
 	approvers := func(users []string) gate.Approvers {
-		return gate.Approvers{Groups: nil, Users: users, UnitOwners: false}
+		return gate.Approvers{Groups: nil, GroupIDs: nil, Users: users, UnitOwners: false}
 	}
 
 	out := make([]approverWriter, 0, 3)

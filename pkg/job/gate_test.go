@@ -77,8 +77,13 @@ func TestGateStatus(t *testing.T) {
 			t.Parallel()
 
 			g := job.Gate{
-				Type: job.GateApproval, Approvals: tt.need, Groups: nil, AllowSelf: tt.allowSelf, Timeout: 0,
-				BindPlan: false,
+				Type:      job.GateApproval,
+				Approvals: tt.need,
+				Groups:    nil,
+				GroupIDs:  nil,
+				AllowSelf: tt.allowSelf,
+				Timeout:   0,
+				BindPlan:  false,
 			}
 			if got := g.Status(tt.approvals, "al"); got != tt.want {
 				t.Fatalf("Status() = %s, want %s", got, tt.want)
@@ -172,7 +177,7 @@ func TestGatesStatus(t *testing.T) {
 	t.Parallel()
 
 	policy := job.Gate{
-		Type: job.GateApproval, Approvals: 1, Groups: nil, AllowSelf: false, Timeout: 0, BindPlan: false,
+		Type: job.GateApproval, Approvals: 1, Groups: nil, GroupIDs: nil, AllowSelf: false, Timeout: 0, BindPlan: false,
 	}
 	both := []job.Gate{policy, job.ConfirmationGate(false)}
 	approved := withGate(confirmation("bo", 0), job.GateApproval)
@@ -216,7 +221,7 @@ func TestGatesStatus(t *testing.T) {
 func TestPhaseGates(t *testing.T) {
 	t.Parallel()
 
-	policy := job.Gate{Type: "", Approvals: 2, Groups: nil, AllowSelf: false, Timeout: 0, BindPlan: true}
+	policy := job.Gate{Type: "", Approvals: 2, Groups: nil, GroupIDs: nil, AllowSelf: false, Timeout: 0, BindPlan: true}
 	none := job.Decision{Allow: true, Reason: "", Gates: nil, PolicyVersion: ""}
 	gated := job.Decision{
 		Allow: true, Reason: "", Gates: map[job.PhaseKind]job.Gate{job.PhaseApply: policy}, PolicyVersion: "v1",

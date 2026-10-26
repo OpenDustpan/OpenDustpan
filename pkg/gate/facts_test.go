@@ -191,11 +191,11 @@ func TestParseCarryOver(t *testing.T) {
 func TestApproversEmpty(t *testing.T) {
 	t.Parallel()
 
-	if !(gate.Approvers{Groups: nil, Users: nil, UnitOwners: false}).Empty() {
+	if !(gate.Approvers{Groups: nil, GroupIDs: nil, Users: nil, UnitOwners: false}).Empty() {
 		t.Fatal("no entry is empty")
 	}
 
-	if (gate.Approvers{Groups: nil, Users: nil, UnitOwners: true}).Empty() {
+	if (gate.Approvers{Groups: nil, GroupIDs: nil, Users: nil, UnitOwners: true}).Empty() {
 		t.Fatal("unitOwners is an entry")
 	}
 }

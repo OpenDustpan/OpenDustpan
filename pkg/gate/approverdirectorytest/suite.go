@@ -22,14 +22,18 @@ import (
 type Fixture struct {
 	// Directory is the adapter under test.
 	Directory gate.ApproverDirectory
-	// Group makes a group called name, with no member.
-	Group func(t *testing.T, name string)
+	// Group makes a group called name, with no member, and returns its ID.
+	Group func(t *testing.T, name string) string
 	// Member makes a principal of kind with the subject, and adds it to the
 	// group. A disabled principal is disabled after it joins. It returns the
 	// ID of the principal.
 	Member func(t *testing.T, group, subject string, kind principal.Kind, disabled bool) string
 	// Remove ends the membership of the principal id in the group.
 	Remove func(t *testing.T, group, id string)
+	// Delete deletes the group with the ID id.
+	Delete func(t *testing.T, id string)
+	// Rename gives the group with the ID id a new name.
+	Rename func(t *testing.T, id, name string)
 }
 
 // tooLong is a group name length above the limit of 100 bytes.
@@ -53,6 +57,9 @@ func Run(t *testing.T, newFixture Factory) {
 		{name: "a group that does not exist is ErrNotFound", test: testUnknown},
 		{name: "a name that is not valid is ErrInvalid", test: testInvalid},
 		{name: "a member that left is not counted", test: testRemoved},
+		{name: "a group made again with the same name is another group", test: testMadeAgain},
+		{name: "a deleted group is not found by its ID", test: testDeleted},
+		{name: "a renamed group keeps its ID and shows its new name", test: testRenamed},
 	}
 
 	for _, tc := range cases {
@@ -63,24 +70,49 @@ func Run(t *testing.T, newFixture Factory) {
 	}
 }
 
-// wantCounts fails the test unless the directory answers want for name.
+// wantCounts fails the test unless the directory answers want for name: it
+// resolves the name, and then counts by the ID that it got.
 func wantCounts(t *testing.T, f Fixture, name string, want gate.MemberCounts) {
 	t.Helper()
 
-	got, err := f.Directory.GroupMembers(t.Context(), name)
-	if err != nil || got != want {
-		t.Fatalf("GroupMembers(%q) = %+v, %v; want %+v", name, got, err, want)
+	ref, err := f.Directory.ResolveGroup(t.Context(), name)
+	if err != nil {
+		t.Fatalf("ResolveGroup(%q) = %+v, %v; want a group", name, ref, err)
+	}
+
+	wantCountsByID(t, f, ref.ID, want)
+}
+
+// wantCountsByID fails the test unless the directory answers want for the
+// group with the ID id.
+func wantCountsByID(t *testing.T, f Fixture, id string, want gate.MemberCounts) {
+	t.Helper()
+
+	ref, got, err := f.Directory.GroupByID(t.Context(), id)
+	if err != nil || got != want || ref.ID != id {
+		t.Fatalf("GroupByID(%q) = %+v, %+v, %v; want ID %q and %+v", id, ref, got, err, id, want)
 	}
 }
 
 // wantError fails the test unless the directory answers an error that matches
-// want for name.
+// want when it resolves name.
 func wantError(t *testing.T, f Fixture, name string, want error) {
 	t.Helper()
 
-	got, err := f.Directory.GroupMembers(t.Context(), name)
+	got, err := f.Directory.ResolveGroup(t.Context(), name)
 	if !errors.Is(err, want) {
-		t.Fatalf("GroupMembers(%q) = %+v, %v; want %v", name, got, err, want)
+		t.Fatalf("ResolveGroup(%q) = %+v, %v; want %v", name, got, err, want)
+	}
+}
+
+// wantIDError fails the test unless the directory answers an error that
+// matches want for the group with the ID id.
+func wantIDError(t *testing.T, f Fixture, id string, want error) {
+	t.Helper()
+
+	ref, counts, err := f.Directory.GroupByID(t.Context(), id)
+	if !errors.Is(err, want) {
+		t.Fatalf("GroupByID(%q) = %+v, %+v, %v; want %v", id, ref, counts, err, want)
 	}
 }
 
@@ -181,4 +213,85 @@ func testRemoved(t *testing.T, f Fixture) {
 
 	f.Remove(t, "platform", leaver)
 	wantCounts(t, f, "platform", gate.MemberCounts{Enabled: 1, Persons: 1})
+}
+
+// testMadeAgain proves that a group that someone deletes and makes again with
+// the same name is another group: the old ID finds nothing, the new ID has its
+// own members, and a name resolves to the new ID only.
+func testMadeAgain(t *testing.T, f Fixture) {
+	t.Helper()
+
+	const remade = 2
+
+	oldID := f.Group(t, "netops")
+	f.Member(t, "netops", "alice", principal.KindPerson, false)
+	wantCountsByID(t, f, oldID, gate.MemberCounts{Enabled: 1, Persons: 1})
+
+	f.Delete(t, oldID)
+
+	newID := f.Group(t, "netops")
+	f.Member(t, "netops", "mallory", principal.KindPerson, false)
+	f.Member(t, "netops", "mallory-bot", principal.KindService, false)
+
+	if newID == oldID {
+		t.Fatalf("the new group has the ID %q of the deleted group", oldID)
+	}
+
+	wantIDError(t, f, oldID, gate.ErrNotFound)
+	wantCountsByID(t, f, newID, gate.MemberCounts{Enabled: remade, Persons: 1})
+
+	ref, err := f.Directory.ResolveGroup(t.Context(), "netops")
+	if err != nil || ref.ID != newID {
+		t.Fatalf("ResolveGroup(netops) = %+v, %v; want the ID %q", ref, err, newID)
+	}
+}
+
+// testDeleted proves that a deleted group, and an ID that no group ever had,
+// answer ErrNotFound, and that the name of the deleted group finds nothing.
+func testDeleted(t *testing.T, f Fixture) {
+	t.Helper()
+
+	tests := []struct {
+		name string
+		id   func() string
+	}{
+		{name: "a group that was deleted", id: func() string {
+			id := f.Group(t, "gone")
+			f.Member(t, "gone", "alice", principal.KindPerson, false)
+			f.Delete(t, id)
+
+			return id
+		}},
+		{name: "an ID that no group had", id: func() string { return "no-such-group-id" }},
+		{name: "an empty ID", id: func() string { return "" }},
+	}
+
+	for _, tt := range tests {
+		wantIDError(t, f, tt.id(), gate.ErrNotFound)
+	}
+
+	wantError(t, f, "gone", gate.ErrNotFound)
+}
+
+// testRenamed proves that a rename keeps the ID and the members, shows the new
+// name, and that the old name finds nothing any more.
+func testRenamed(t *testing.T, f Fixture) {
+	t.Helper()
+
+	id := f.Group(t, "netops")
+	f.Member(t, "netops", "alice", principal.KindPerson, false)
+
+	f.Rename(t, id, "network-ops")
+
+	ref, counts, err := f.Directory.GroupByID(t.Context(), id)
+	if err != nil || ref != (gate.GroupRef{ID: id, Name: "network-ops"}) || counts.Enabled != 1 {
+		t.Fatalf("GroupByID(%q) = %+v, %+v, %v; want the name network-ops and 1 member", id, ref, counts, err)
+	}
+
+	wantError(t, f, "netops", gate.ErrNotFound)
+
+	resolved, err := f.Directory.ResolveGroup(t.Context(), "network-ops")
+	if err != nil || resolved.ID != id {
+		t.Fatalf("ResolveGroup(network-ops) = %+v, %v; want the ID %q", resolved, err, id)
+	}
 }

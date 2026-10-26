@@ -81,12 +81,16 @@ func TestGroupDirectoryWithNoGroups(t *testing.T) {
 
 	dir := groupDirectory{groups: nil}
 
-	if _, err := dir.GroupMembers(t.Context(), "platform"); !errors.Is(err, gate.ErrNotFound) {
-		t.Fatalf("GroupMembers of a valid name = %v, want gate.ErrNotFound", err)
+	if _, err := dir.ResolveGroup(t.Context(), "platform"); !errors.Is(err, gate.ErrNotFound) {
+		t.Fatalf("ResolveGroup of a valid name = %v, want gate.ErrNotFound", err)
 	}
 
-	if _, err := dir.GroupMembers(t.Context(), "<b>x</b>"); !errors.Is(err, gate.ErrInvalid) {
-		t.Fatalf("GroupMembers of a name that is not valid = %v, want gate.ErrInvalid", err)
+	if _, err := dir.ResolveGroup(t.Context(), "<b>x</b>"); !errors.Is(err, gate.ErrInvalid) {
+		t.Fatalf("ResolveGroup of a name that is not valid = %v, want gate.ErrInvalid", err)
+	}
+
+	if _, _, err := dir.GroupByID(t.Context(), "group-1"); !errors.Is(err, gate.ErrNotFound) {
+		t.Fatalf("GroupByID with no groups = %v, want gate.ErrNotFound", err)
 	}
 }
 
@@ -119,10 +123,11 @@ func groupFixture(t *testing.T, st principal.Store) approverdirectorytest.Fixtur
 		return e
 	}
 	groups := map[string]string{}
+	del, rename := groupEditors(svc, entry, admin)
 
 	return approverdirectorytest.Fixture{
 		Directory: groupDirectory{groups: svc},
-		Group: func(t *testing.T, name string) {
+		Group: func(t *testing.T, name string) string {
 			t.Helper()
 
 			g, err := svc.CreateGroup(t.Context(), entry(identity.ActionServerManageGroups),
@@ -132,6 +137,8 @@ func groupFixture(t *testing.T, st principal.Store) approverdirectorytest.Fixtur
 			}
 
 			groups[name] = g.ID
+
+			return g.ID
 		},
 		Member: func(t *testing.T, group, subject string, kind principal.Kind, disabled bool) string {
 			t.Helper()
@@ -164,7 +171,35 @@ func groupFixture(t *testing.T, st principal.Store) approverdirectorytest.Fixtur
 				t.Fatalf("remove %q from %q: %v", id, group, err)
 			}
 		},
+		Delete: del,
+		Rename: rename,
 	}
+}
+
+// groupEditors returns the functions of the fixture that delete and rename a
+// group through the principal service.
+func groupEditors(
+	svc *principal.Service, entry func(identity.Action) audit.Entry, admin identity.Principal,
+) (func(t *testing.T, id string), func(t *testing.T, id, name string)) {
+	del := func(t *testing.T, id string) {
+		t.Helper()
+
+		err := svc.DeleteGroup(t.Context(), entry(identity.ActionServerManageGroups), admin, id)
+		if err != nil {
+			t.Fatalf("delete group %q: %v", id, err)
+		}
+	}
+	rename := func(t *testing.T, id, name string) {
+		t.Helper()
+
+		_, err := svc.UpdateGroup(t.Context(), entry(identity.ActionServerManageGroups), id,
+			principal.GroupChange{Name: &name, Description: nil})
+		if err != nil {
+			t.Fatalf("rename group %q to %q: %v", id, name, err)
+		}
+	}
+
+	return del, rename
 }
 
 // groupPostgresEnv names the variable with a PostgreSQL URL for the
