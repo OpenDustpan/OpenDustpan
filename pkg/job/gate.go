@@ -91,13 +91,15 @@ type Gate struct {
 	// Approvals is the number of approvals that a gate of type GateApproval
 	// needs. Zero needs none. A confirmation gate needs one confirmation.
 	Approvals int
-	// Groups limits the approvers to members of these groups. Empty allows
-	// any principal with the approve action on the unit.
+	// Groups holds the names of the approver groups of the gate. Empty names
+	// no group. This version does not check the groups of an approver: it does
+	// not record approvals (see Service.Approve).
 	Groups []string
 	// GroupIDs holds the immutable ID of each group in Groups, at the same
-	// index. The enforcement of the approvers matches a member by these IDs,
-	// never by the names: a group that someone made again with the same name
-	// has another ID. Groups is for display only.
+	// index. This version does not check the approvers. A later check must
+	// match a member by these IDs, never by the names: a group that someone
+	// made again with the same name has another ID. Groups is for display
+	// only.
 	GroupIDs []string
 	// AllowSelf lets the principal that started the job approve it. It has
 	// no effect on a confirmation gate.
@@ -220,9 +222,9 @@ const (
 //
 // A gate of type GateApproval: each subject counts once, and an approval
 // by startedBy counts only when g allows it. A user who started the job
-// through an agent is the starter too. Status does not check groups: the
-// service checks the groups of each approver when it records the
-// approval.
+// through an agent is the starter too. Status does not check groups. This
+// version does not record approvals, so no code checks the groups of an
+// approver.
 //
 // A gate of type GateConfirmation opens with one confirmation by startedBy
 // with a fresh authentication at most ConfirmFreshness before it.

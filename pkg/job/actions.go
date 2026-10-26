@@ -43,8 +43,9 @@ const (
 	// ActionJobCancel allows canceling a job. Its object is a unit.
 	ActionJobCancel = identity.ActionJobCancel
 	// ActionJobApprove allows approving or rejecting a job that waits for
-	// approval. Its object is a unit. The gate can also limit the approvers
-	// to groups.
+	// approval. Its object is a unit. A gate can also name groups in
+	// Gate.Groups. This version does not check them when an approval is
+	// recorded.
 	ActionJobApprove = identity.ActionJobApprove
 	// ActionNamespaceManageFreezes allows creating and ending the change
 	// freezes of a namespace. Its object is a namespace.
