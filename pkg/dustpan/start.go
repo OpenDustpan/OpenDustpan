@@ -99,7 +99,9 @@ func withStartGate(next http.Handler, state *startState, logger *slog.Logger) ht
 	})
 }
 
-// isLiveProbe reports whether r is the liveness probe.
+// isLiveProbe reports whether r is the liveness probe. It compares the escaped
+// path, the same form that the router matches, so an encoded path such as
+// /health%2Flive does not pass as the probe.
 func isLiveProbe(r *http.Request) bool {
-	return (r.Method == http.MethodGet || r.Method == http.MethodHead) && r.URL.Path == liveProbePath
+	return (r.Method == http.MethodGet || r.Method == http.MethodHead) && r.URL.EscapedPath() == liveProbePath
 }

@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -45,7 +47,14 @@ func serveOnce(t *testing.T, handler http.Handler, method, path string) *httptes
 func TestHandlerRefusesBeforeStart(t *testing.T) {
 	t.Parallel()
 
-	handler := newEveryModuleServer(t).Handler()
+	// The console directory makes the static files reachable, so a request that
+	// slips past the gate reaches index.html and the test sees a 200.
+	consoleDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(consoleDir, "index.html"), []byte("<!doctype html>"), 0o600); err != nil {
+		t.Fatalf("write the console file: %v", err)
+	}
+
+	handler := newModuleServer(t, dustpan.WithConsoleDir(consoleDir)).Handler()
 
 	cases := []startGateCase{
 		{"Pulumi API", http.MethodGet, "/api/stacks/acme", `"code":503`},
@@ -66,6 +75,8 @@ func TestHandlerRefusesBeforeStart(t *testing.T) {
 		{"probe with a double slash", http.MethodGet, "//health/live", `"code":503`},
 		{"probe with a longer path", http.MethodGet, "/health/live/x", `"code":503`},
 		{"probe with another case", http.MethodGet, "/HEALTH/LIVE", `"code":503`},
+		{"probe with an encoded slash", http.MethodGet, "/health%2Flive", `"code":503`},
+		{"probe with a lowercase encoded slash", http.MethodGet, "/health%2flive", `"code":503`},
 	}
 
 	for _, tc := range cases {
