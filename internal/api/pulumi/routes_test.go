@@ -1565,7 +1565,7 @@ func (exportPanicsStore) CheckpointByUpdate(
 
 // ReferencedBlobKeys panics: the delete route must not read state.
 func (exportPanicsStore) ReferencedBlobKeys(
-	_ context.Context, _ stack.Ref,
+	_ context.Context, _ stack.ID,
 ) ([]blob.Key, error) {
 	panic("delete must not read checkpoint keys")
 }
@@ -2053,7 +2053,7 @@ func (emptyCheckpointStore) CheckpointByUpdate(
 }
 
 func (emptyCheckpointStore) ReferencedBlobKeys(
-	_ context.Context, _ stack.Ref,
+	_ context.Context, _ stack.ID,
 ) ([]blob.Key, error) {
 	return nil, nil
 }

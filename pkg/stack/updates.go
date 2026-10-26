@@ -109,11 +109,15 @@ type CheckpointStore interface {
 	CheckpointByUpdate(ctx context.Context, ref Ref, id UpdateID) (Checkpoint, error)
 	// ReferencedBlobKeys returns every blob key that a row of the stack
 	// names, without duplicates: the blob of each checkpoint and the blob of
-	// each journal batch of every update that still holds journal rows. A
-	// stack without such rows, or one that does not exist, yields an empty
-	// list. It returns no sentinel errors. A sweeper compares this set
-	// against the stored objects to find blobs that no row references.
-	ReferencedBlobKeys(ctx context.Context, ref Ref) ([]blob.Key, error)
+	// each journal batch of every update that still holds journal rows. The
+	// stack is named by its ID, the key that a sweep lists the blobs by, so
+	// a rename between the listing and this read changes nothing. A live
+	// stack without such rows yields an empty list. A stack that does not
+	// exist, or that is soft-deleted, returns ErrNotFound: an empty keep set
+	// would let a sweep delete every blob of the stack. A sweeper compares
+	// this set against the stored objects to find blobs that no row
+	// references.
+	ReferencedBlobKeys(ctx context.Context, stackID ID) ([]blob.Key, error)
 }
 
 // EventStore persists engine events.
@@ -1212,7 +1216,16 @@ func (s *Updates) sweepUpdateBlobs(ctx context.Context, bl *scopedBlobs, ref Ref
 		return
 	}
 
-	s.sweepOrphans(ctx, bl, ref, id, listed)
+	s.sweepOrphans(ctx, bl, sweepTarget{ref: ref, stackID: stackID, update: id}, listed)
+}
+
+// sweepTarget names what a sweep covers: the stack by its reference (for log
+// lines) and by its ID (for the keep set), and one update, or none for the
+// whole stack.
+type sweepTarget struct {
+	ref     Ref
+	stackID ID
+	update  UpdateID
 }
 
 // sweepOrphans deletes the objects of listed that are older than the grace
@@ -1220,11 +1233,15 @@ func (s *Updates) sweepUpdateBlobs(ctx context.Context, bl *scopedBlobs, ref Ref
 // checkpoint blob and a journal batch blob of a running journaled update both
 // stay, whatever prefix holds them. The sweep reads the keys only when old
 // candidates remain, so a start with only fresh blobs pays for one listing
-// and no row read. A read failure deletes nothing. The update ID is empty for
-// a sweep over the whole stack.
+// and no row read. A read failure deletes nothing, also when the stack row is
+// gone. The keep set is read by the stack ID that the listing used, so a
+// rename between the two reads cannot empty it. The update ID is empty for a
+// sweep over the whole stack.
 func (s *Updates) sweepOrphans(
-	ctx context.Context, bl *scopedBlobs, ref Ref, id UpdateID, listed []blob.Object,
+	ctx context.Context, bl *scopedBlobs, target sweepTarget, listed []blob.Object,
 ) {
+	ref, stackID, id := target.ref, target.stackID, target.update
+
 	now := s.clock()
 
 	candidates := make([]blob.Object, 0, len(listed))
@@ -1239,7 +1256,7 @@ func (s *Updates) sweepOrphans(
 		return
 	}
 
-	refs, err := s.checkpoints.ReferencedBlobKeys(ctx, ref)
+	refs, err := s.checkpoints.ReferencedBlobKeys(ctx, stackID)
 	if err != nil {
 		s.logger.WarnContext(ctx, "sweep checkpoint blobs", slog.String("stack", ref.String()))
 
@@ -1314,7 +1331,7 @@ func (s *Updates) sweepStackBlobs(ctx context.Context, bl *scopedBlobs, ref Ref,
 		return
 	}
 
-	s.sweepOrphans(ctx, bl, ref, "", listed)
+	s.sweepOrphans(ctx, bl, sweepTarget{ref: ref, stackID: stackID, update: ""}, listed)
 }
 
 // resolveCheckpoint fills the deployment of a checkpoint row: it reads and

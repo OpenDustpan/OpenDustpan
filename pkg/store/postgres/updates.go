@@ -524,20 +524,27 @@ func (s *Store) CheckpointByUpdate(
 
 // ReferencedBlobKeys implements stack.CheckpointStore. One statement
 // finds the stack and reads the keys, so the read needs no transaction. A
-// stack that does not exist references no key.
-func (s *Store) ReferencedBlobKeys(ctx context.Context, ref stack.Ref) ([]blob.Key, error) {
-	rows, err := s.queries.ListReferencedBlobKeys(ctx, db.ListReferencedBlobKeysParams{
-		Namespace: ref.Namespace.String(),
-		Project:   ref.Project.String(),
-		Name:      ref.Stack.String(),
-	})
+// stack that does not exist, or that is soft-deleted, returns ErrNotFound.
+func (s *Store) ReferencedBlobKeys(ctx context.Context, stackID stack.ID) ([]blob.Key, error) {
+	rows, err := s.queries.ListReferencedBlobKeys(ctx, stackID.String())
 	if err != nil {
 		return nil, fmt.Errorf("select referenced blob keys: %w", readConflict(err))
+	}
+
+	// No row means no live stack with this ID: fail closed, so a sweep
+	// deletes nothing.
+	if len(rows) == 0 {
+		return nil, stack.ErrNotFound
 	}
 
 	out := make([]blob.Key, 0, len(rows))
 
 	for _, row := range rows {
+		// A live stack without keys gives one row with an empty key.
+		if row == "" {
+			continue
+		}
+
 		key, err := blob.ParseKey(row)
 		if err != nil {
 			return nil, fmt.Errorf("%w: blob key %q: %w", codec.ErrCorruptRow, row, err)
