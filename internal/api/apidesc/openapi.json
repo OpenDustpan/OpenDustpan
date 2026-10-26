@@ -904,6 +904,7 @@
           "request.page-token-invalid",
           "request.precondition-failed",
           "request.precondition-required",
+          "restore.blobs-missing",
           "runner.immutable",
           "runner.invalid",
           "runner.limit",
