@@ -573,6 +573,70 @@ func TestSignInProviderDeleteWithNoPrincipal(t *testing.T) {
 	}
 }
 
+// TestSignInProviderDeleteRunsInMaintenanceMode proves that the delete of a
+// stored provider answers in maintenance mode, through the route, the service
+// and the store: 204 for a provider that no principal uses, and 409 with the
+// provider kept for a provider that a principal uses.
+func TestSignInProviderDeleteRunsInMaintenanceMode(t *testing.T) {
+	t.Parallel()
+
+	cases := []providerDeleteCase{
+		{name: "a provider with no principal", hasPrincipal: false, want: http.StatusNoContent, gone: true},
+		{name: "a provider with a principal", hasPrincipal: true, want: http.StatusConflict, gone: false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			checkProviderDeleteInMaintenance(t, tc)
+		})
+	}
+}
+
+// providerDeleteCase is one delete of a stored provider in maintenance mode.
+type providerDeleteCase struct {
+	name         string
+	hasPrincipal bool
+	want         int
+	gone         bool
+}
+
+// checkProviderDeleteInMaintenance creates the stored provider beta, enters
+// maintenance mode, deletes beta and checks the status and whether the start
+// of beta still exists.
+func checkProviderDeleteInMaintenance(t *testing.T, tc providerDeleteCase) {
+	t.Helper()
+
+	e := newProviderEnv(t)
+	e.createBeta(t)
+
+	if tc.hasPrincipal {
+		e.signInSession(t, e.beta, "beta")
+	}
+
+	// A sign-in is refused in maintenance mode, so the console
+	// session of the delete exists before it.
+	admin := e.freshSignIn(t)
+
+	if err := e.store.SetState(t.Context(), maintenance.StateMaintenance); err != nil {
+		t.Fatalf("enter maintenance mode: %v", err)
+	}
+
+	rec := e.sendWithSession(t, http.MethodDelete, admin, "/api/server/sign-in-providers/beta", "")
+	if rec.Code != tc.want {
+		t.Fatalf("delete in maintenance mode = %d %s, want %d", rec.Code, rec.Body.String(), tc.want)
+	}
+
+	if err := e.store.SetState(t.Context(), maintenance.StateNormal); err != nil {
+		t.Fatalf("leave maintenance mode: %v", err)
+	}
+
+	if got := e.get(t, "/api/server/sign-in/beta"); (got.Code == http.StatusNotFound) != tc.gone {
+		t.Fatalf("start of the provider after the delete = %d, want not found = %v", got.Code, tc.gone)
+	}
+}
+
 // TestSignInProviderChangeNeedsAFreshSession proves that a console session
 // whose sign-in is older than the token freshness window cannot create a
 // provider.
