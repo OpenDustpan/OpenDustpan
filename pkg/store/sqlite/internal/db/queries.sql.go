@@ -12135,20 +12135,23 @@ func (q *Queries) ListProfileRevisions(ctx context.Context, arg ListProfileRevis
 }
 
 const listReferencedBlobKeys = `-- name: ListReferencedBlobKeys :many
-SELECT blob_key
-FROM checkpoints
-WHERE checkpoints.stack_id = ?1
-UNION
-SELECT blob_key
-FROM update_journal
-WHERE update_journal.stack_id = ?1
-ORDER BY blob_key
+SELECT CAST(COALESCE(k.blob_key, '') AS TEXT) AS blob_key
+FROM stacks AS st
+LEFT JOIN (
+    SELECT checkpoints.stack_id, checkpoints.blob_key FROM checkpoints
+    UNION
+    SELECT update_journal.stack_id, update_journal.blob_key FROM update_journal
+) AS k ON k.stack_id = st.id
+WHERE st.id = ?1 AND st.deleted_at_ms IS NULL
+ORDER BY 1
 `
 
-// Every blob key that a row of one stack names, ordered, without duplicates:
-// the blobs of the checkpoints and the blobs of the journal batches. A
-// sweeper compares this set against the stored objects to find blobs that no
-// row references.
+// Every blob key that a row of one live stack names, ordered, without
+// duplicates: the blobs of the checkpoints and the blobs of the journal
+// batches. A sweeper compares this set against the stored objects to find
+// blobs that no row references. The stack is the driving table, so one
+// statement tells a stack without keys (one row with an empty key) from a
+// stack that is missing or soft-deleted (no row).
 func (q *Queries) ListReferencedBlobKeys(ctx context.Context, stackID string) ([]string, error) {
 	rows, err := q.db.QueryContext(ctx, listReferencedBlobKeys, stackID)
 	if err != nil {

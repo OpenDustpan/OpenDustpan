@@ -1081,7 +1081,7 @@ func testReferencedBlobKeysJournal(t *testing.T, f fixture) {
 		want = append(want, row.BlobKey)
 	}
 
-	got, err := f.s.ReferencedBlobKeys(t.Context(), f.ref)
+	got, err := f.s.ReferencedBlobKeys(t.Context(), f.stackIDOf(t, f.ref))
 	if err != nil {
 		t.Fatalf("referenced keys of a running journaled update: %v", err)
 	}
@@ -1111,7 +1111,7 @@ func testReferencedBlobKeysJournal(t *testing.T, f fixture) {
 		t.Fatalf("batch of the other stack: %v", putErr)
 	}
 
-	got, err = f.s.ReferencedBlobKeys(t.Context(), f.ref)
+	got, err = f.s.ReferencedBlobKeys(t.Context(), f.stackIDOf(t, f.ref))
 	if err != nil {
 		t.Fatalf("referenced keys with checkpoint and journal: %v", err)
 	}
