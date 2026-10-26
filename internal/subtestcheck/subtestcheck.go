@@ -23,6 +23,11 @@
 // which does not call Parallel itself, is not reported either: that t.Run
 // returns only after the parallel subtests inside it end.
 //
+// Known gaps. The check does not see a write through a method call (other than
+// an atomic one), a subtest that is a named function and not a function
+// literal, a helper function that calls t.Error, or a pointer that aliases the
+// variable. Each gap gives a missed finding, not a false one.
+//
 // Variables are matched by name. A name that the subtest declares itself is a
 // different variable and is not a write to the parent variable.
 package subtestcheck

@@ -27,11 +27,14 @@ func TestCheckFile(t *testing.T) {
 		{"an append and a field increment in a loop", "reported_append_field_test.go", []string{"23 seen", "26 r"}},
 		{"an atomic method and an atomic function", "reported_atomic_test.go", []string{"19 calls", "22 legacy"}},
 		{"a delete call", "reported_delete_test.go", []string{"17 m"}},
-		{"a check in t.Cleanup", "clean_cleanup_test.go", nil},
 		{"a group test wrapper", "clean_group_test.go", nil},
 		{"a variable that no subtest writes", "clean_unwritten_test.go", nil},
 		{"a subtest that is not parallel", "clean_serial_test.go", nil},
 		{"a name that the subtest declares itself", "clean_local_name_test.go", nil},
+		{"a t.Cleanup after the t.Run call", "clean_cleanup_test.go", nil},
+		{"a deferred function", "clean_defer_test.go", nil},
+		{"a parameter that shadows the variable", "clean_shadow_param_test.go", nil},
+		{"a var that shadows the variable", "clean_shadow_var_test.go", nil},
 		{"a check before the t.Run call", "clean_before_test.go", nil},
 	}
 	for _, tc := range tests {
