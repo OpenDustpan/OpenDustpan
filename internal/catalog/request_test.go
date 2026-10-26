@@ -311,8 +311,8 @@ func TestGateForKeepsTheGroupThatItResolved(t *testing.T) {
 	}
 
 	before, err := catalog.GateFor(t.Context(), &d, false, groups)
-	if err != nil {
-		t.Fatalf("GateFor() = %v", err)
+	if err != nil || len(before) != 1 {
+		t.Fatalf("GateFor() = %+v, %v; want one gate", before, err)
 	}
 
 	groups.remove("dba")
@@ -323,7 +323,7 @@ func TestGateForKeepsTheGroupThatItResolved(t *testing.T) {
 	}
 
 	after, err := catalog.GateFor(t.Context(), &d, false, groups)
-	if err != nil || !reflect.DeepEqual(after[0].GroupIDs, []string{remade}) {
+	if err != nil || len(after) != 1 || !reflect.DeepEqual(after[0].GroupIDs, []string{remade}) {
 		t.Fatalf("GateFor() = %+v, %v; want the new group %s", after, err, remade)
 	}
 }
