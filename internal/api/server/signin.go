@@ -609,11 +609,20 @@ func (h *Handler) refuseSignIn(w http.ResponseWriter, r *http.Request, rf refusa
 
 	if errors.Is(err, errSignInRefused) {
 		// The reason is safe to show: it names no code, token or state.
-		err = fmt.Errorf("%w: %s", err, reason)
+		err = signInRefusalError{reason: reason}
 	}
 
 	h.writeError(ctx, w, err)
 }
+
+// signInRefusalError is errSignInRefused with the reason of the refusal. The reason
+// is safe to show.
+type signInRefusalError struct{ reason string }
+
+func (e signInRefusalError) Error() string { return errSignInRefused.Error() + ": " + e.reason }
+
+// Unwrap returns errSignInRefused.
+func (signInRefusalError) Unwrap() error { return errSignInRefused }
 
 // signInEntry is the audit entry of a sign-in or a sign-out from the
 // console.
