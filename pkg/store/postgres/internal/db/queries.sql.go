@@ -13559,14 +13559,18 @@ func (q *Queries) ListStacksInProject(ctx context.Context, arg ListStacksInProje
 }
 
 const listStateContentKeys = `-- name: ListStateContentKeys :many
-SELECT content_key
-FROM state_versions
-WHERE workspace_id = $1 AND content_key <> ''
+SELECT CAST(COALESCE(k.content_key, '') AS TEXT) AS content_key
+FROM workspaces AS w
+LEFT JOIN state_versions AS k ON k.workspace_id = w.id AND k.content_key <> ''
+WHERE w.id = $1
 `
 
 // Every blob key the versions of one workspace name, without the empty ones.
-func (q *Queries) ListStateContentKeys(ctx context.Context, workspaceID string) ([]string, error) {
-	rows, err := q.db.Query(ctx, listStateContentKeys, workspaceID)
+// The workspace is the driving table, so one statement tells a workspace
+// without keys (one row with an empty key) from a workspace that does not
+// exist (no row). A soft-deleted workspace still has its row and its keys.
+func (q *Queries) ListStateContentKeys(ctx context.Context, id string) ([]string, error) {
+	rows, err := q.db.Query(ctx, listStateContentKeys, id)
 	if err != nil {
 		return nil, err
 	}

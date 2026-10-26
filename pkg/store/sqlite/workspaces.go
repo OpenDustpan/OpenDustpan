@@ -448,8 +448,9 @@ func (s *Store) CountPendingStateVersions(ctx context.Context, id workspace.ID) 
 
 // ReferencedContentKeys implements workspace.StateStore: every blob key the
 // versions of the workspace name, pending and finalized, without the empty
-// ones. A workspace without versions, or one that does not exist, yields an
-// empty list.
+// ones. A workspace without versions yields an empty list. A workspace that
+// does not exist returns workspace.ErrNotFound. A soft-deleted workspace
+// still returns its keys.
 func (s *Store) ReferencedContentKeys(ctx context.Context, id workspace.ID) ([]blob.Key, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -459,9 +460,20 @@ func (s *Store) ReferencedContentKeys(ctx context.Context, id workspace.ID) ([]b
 		return nil, fmt.Errorf("select state content keys: %w", err)
 	}
 
+	// No row means no workspace with this ID: fail closed, so a sweep
+	// deletes nothing.
+	if len(keys) == 0 {
+		return nil, workspace.ErrNotFound
+	}
+
 	out := make([]blob.Key, 0, len(keys))
 
 	for _, key := range keys {
+		// A workspace without keys gives one row with an empty key.
+		if key == "" {
+			continue
+		}
+
 		parsed, err := blob.ParseKey(key)
 		if err != nil {
 			return nil, fmt.Errorf("parse state content key: %w", err)
