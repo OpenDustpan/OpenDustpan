@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -353,27 +354,6 @@ func fenceRestored(ctx context.Context, tx pgx.Tx, live string) error {
 	return nil
 }
 
-// durableOperationColumns lists the columns of durable_operations.
-const durableOperationColumns = "id, start_key, kind, input, version, state, attempt, expiries, failures, " +
-	"last_error, claim_owner, claim_token, claim_expires_at_ms, cancel_requested, not_before_ms, created_at_ms, " +
-	"updated_at_ms"
-
-// durableScheduleColumns lists every column of durable_schedules, for the
-// copy of the control tables.
-const durableScheduleColumns = "name, interval_ms, next_run_at_ms, last_claimed_at_ms"
-
-// signInFailureColumns lists every column of sign_in_failures, for the copy
-// of the control tables.
-const signInFailureColumns = "source, window_end_ms, count"
-
-// auditChainCheckColumns lists every column of audit_chain_check, for the
-// copy of the control tables.
-const auditChainCheckColumns = "id, checked_at_ms, invalid"
-
-// auditChainMarkColumns lists every column of audit_chain_mark, for the copy
-// of the control tables.
-const auditChainMarkColumns = "scope, epoch, sequence, marked_at_ms"
-
 // keepControlTables replaces the rows of the durable control tables in the
 // restored schema live with the rows of the schema previous, in tx. A
 // restore keeps the control tables of the live installation: the claim
@@ -384,38 +364,82 @@ const auditChainMarkColumns = "scope, epoch, sequence, marked_at_ms"
 // of another instance out until the swap commits, so the copy has the last
 // committed rows.
 func keepControlTables(ctx context.Context, tx pgx.Tx, live, previous string) error {
-	stmts := []string{
-		"LOCK TABLE " + pgIdent(previous) + ".durable_operations, " + pgIdent(previous) +
-			".durable_steps, " + pgIdent(previous) + ".durable_schedules, " + pgIdent(previous) +
-			".sign_in_failures, " + pgIdent(previous) + ".audit_chain_check, " + pgIdent(previous) +
-			".audit_chain_mark IN EXCLUSIVE MODE",
-		"DELETE FROM " + pgIdent(live) + ".durable_steps",
-		"DELETE FROM " + pgIdent(live) + ".durable_operations",
-		"DELETE FROM " + pgIdent(live) + ".durable_schedules",
-		"DELETE FROM " + pgIdent(live) + ".sign_in_failures",
-		"DELETE FROM " + pgIdent(live) + ".audit_chain_check",
-		"DELETE FROM " + pgIdent(live) + ".audit_chain_mark",
-		"INSERT INTO " + pgIdent(live) + ".durable_operations (" + durableOperationColumns + ") SELECT " +
-			durableOperationColumns + " FROM " + pgIdent(previous) + ".durable_operations",
-		"INSERT INTO " + pgIdent(live) + ".durable_steps (operation_id, name, seq, result, done_at_ms)" +
-			" SELECT operation_id, name, seq, result, done_at_ms FROM " + pgIdent(previous) + ".durable_steps",
-		"INSERT INTO " + pgIdent(live) + ".durable_schedules (" + durableScheduleColumns + ") SELECT " +
-			durableScheduleColumns + " FROM " + pgIdent(previous) + ".durable_schedules",
-		"INSERT INTO " + pgIdent(live) + ".sign_in_failures (" + signInFailureColumns + ") SELECT " +
-			signInFailureColumns + " FROM " + pgIdent(previous) + ".sign_in_failures",
-		"INSERT INTO " + pgIdent(live) + ".audit_chain_check (" + auditChainCheckColumns + ") SELECT " +
-			auditChainCheckColumns + " FROM " + pgIdent(previous) + ".audit_chain_check",
-		"INSERT INTO " + pgIdent(live) + ".audit_chain_mark (" + auditChainMarkColumns + ") SELECT " +
-			auditChainMarkColumns + " FROM " + pgIdent(previous) + ".audit_chain_mark",
+	kept, err := keptControlTables()
+	if err != nil {
+		return err
+	}
+
+	locks := make([]string, 0, len(kept))
+	for _, spec := range kept {
+		locks = append(locks, pgIdent(previous)+"."+spec.table)
+	}
+
+	stmts := []string{"LOCK TABLE " + strings.Join(locks, ", ") + " IN EXCLUSIVE MODE"}
+
+	// The deletes run children first, the copies parents first: backup.ControlTables
+	// lists the parents first.
+	for _, spec := range slices.Backward(kept) {
+		stmts = append(stmts, "DELETE FROM "+pgIdent(live)+"."+spec.table)
+	}
+
+	for _, spec := range kept {
+		columns := strings.Join(spec.columns, ", ")
+		stmts = append(stmts, "INSERT INTO "+pgIdent(live)+"."+spec.table+" ("+columns+") SELECT "+
+			columns+" FROM "+pgIdent(previous)+"."+spec.table)
 	}
 
 	for _, stmt := range stmts {
-		if _, err := tx.Exec(ctx, stmt); err != nil {
-			return fmt.Errorf("keep control tables: %w", err)
+		if _, execErr := tx.Exec(ctx, stmt); execErr != nil {
+			return fmt.Errorf("keep control tables: %w", execErr)
 		}
 	}
 
 	return nil
+}
+
+// errNoColumnList reports a control table with no column list in the adapter.
+var errNoColumnList = errors.New("control table has no column list")
+
+// keptControlTables returns the column list of each table of
+// backup.ControlTables that lives in the swapped schema, in the order of
+// backup.ControlTables. The list is the same one that the SQLite adapter
+// keeps, so a new control table cannot reach one dialect only. A control
+// table with no column list is an error: the restore fails closed and does
+// not drop the live rows of the table.
+func keptControlTables() ([]pgCopyTable, error) {
+	specs := make(map[string]pgCopyTable)
+	for _, spec := range pgControlTables() {
+		specs[spec.table] = spec
+	}
+
+	kept := make([]pgCopyTable, 0, len(backup.ControlTables))
+
+	for _, table := range backup.ControlTables {
+		if slices.Contains(controlSchemaTables, table) {
+			continue
+		}
+
+		spec, ok := specs[table]
+		if !ok {
+			return nil, fmt.Errorf("keep control tables: %w: %s", errNoColumnList, table)
+		}
+
+		kept = append(kept, spec)
+	}
+
+	return kept, nil
+}
+
+// controlSchemaTables lists the tables of backup.ControlTables that live in
+// the control schema. The swap never renames that schema, so the live rows
+// stay with no copy.
+//
+//nolint:gochecknoglobals // A fixed table list, as backup.ControlTables is.
+var controlSchemaTables = []string{
+	backup.TableBackups,
+	backup.TableRestores,
+	backup.TableInstallation,
+	backup.TableMaintenanceRevocations,
 }
 
 // keepChainState replaces the audit chain state of the restored schema live
