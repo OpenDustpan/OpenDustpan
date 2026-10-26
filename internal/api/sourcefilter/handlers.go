@@ -217,7 +217,8 @@ func classify(err error) (problem.Problem, bool) {
 		return problem.RefusedText(
 			problem.Detail(err, source.ErrTooLarge), http.StatusBadRequest, errcode.SourceFilterInvalid,
 		), true
-	default:
-		return problem.Pass()
 	}
+
+	// Not an error of the filter: package problem answers it.
+	return problem.Pass()
 }
