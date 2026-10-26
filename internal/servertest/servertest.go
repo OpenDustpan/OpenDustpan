@@ -408,6 +408,7 @@ func serverOptions(
 		dustpan.WithDurableStore(store.DurableOperations()),
 		// The job, trigger and drift routes need their stores, as the binary gives them.
 		dustpan.WithRunners(store.Runners()),
+		dustpan.WithSourceFilters(store.SourceFilters()),
 		dustpan.WithJobStore(store.Jobs()),
 		dustpan.WithJobClaimer(job.NewClaimer(store.Jobs(), store.DurableOperationsPort(), store)),
 		dustpan.WithTriggerStore(store.Triggers()),
