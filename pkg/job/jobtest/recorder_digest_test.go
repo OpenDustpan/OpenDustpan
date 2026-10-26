@@ -37,12 +37,10 @@ func (c *confirmSpy) ConfirmLogChunk(ctx context.Context, pc job.PhaseClaim, cc 
 	return c.RecordStore.ConfirmLogChunk(ctx, pc, cc)
 }
 
-// TestRecorderChunkDigestOfStoredBlob proves that the stored size and MD5 that
-// the recorder gives to the confirm are those of the blob in the blob store,
-// also for a retry. The seal of each attempt differs, and the first blob stays,
-// so the retry must read the digest from the stored blob.
-func TestRecorderChunkDigestOfStoredBlob(t *testing.T) {
-	t.Parallel()
+// newSpyHarness returns a recorder harness over the confirm spy and a blob
+// store in a temporary directory, and returns both.
+func newSpyHarness(t *testing.T) (jobtest.RecorderHarness, *confirmSpy, *blobfs.Store) {
+	t.Helper()
 
 	db := newMemDB()
 	keys := newMemKeyIndex(db)
@@ -71,24 +69,17 @@ func TestRecorderChunkDigestOfStoredBlob(t *testing.T) {
 		Blobs:    inner,
 		Wrapper:  nil,
 	})
-	a := planAssignment(t, &h)
 
-	if beginErr := h.Recorder.BeginStep(t.Context(), a.Claim, "plan"); beginErr != nil {
-		t.Fatalf("BeginStep = %v", beginErr)
-	}
+	return h, spy, inner
+}
 
-	err = h.Recorder.AppendLog(t.Context(), a.Claim, "plan", 0, strings.NewReader("line\n"))
-	if !errors.Is(err, errInjected) {
-		t.Fatalf("AppendLog = %v, want the failure of the confirm", err)
-	}
-
-	if err = h.Recorder.AppendLog(t.Context(), a.Claim, "plan", 0, strings.NewReader("line\n")); err != nil {
-		t.Fatalf("retry of the chunk = %v", err)
-	}
+// digestOfChunkZero returns the digest of the blob of chunk 0 in the store.
+func digestOfChunkZero(t *testing.T, h *jobtest.RecorderHarness, store blob.Store) blob.Digest {
+	t.Helper()
 
 	var chunkKey string
 
-	for _, key := range listJobBlobs(t, &h) {
+	for _, key := range listJobBlobs(t, h) {
 		if strings.HasSuffix(key, "/00000000") {
 			chunkKey = key
 		}
@@ -99,15 +90,43 @@ func TestRecorderChunkDigestOfStoredBlob(t *testing.T) {
 		t.Fatalf("key of the chunk blob %q: %v", chunkKey, err)
 	}
 
-	rc, err := inner.Get(t.Context(), parsed)
+	rc, err := store.Get(t.Context(), parsed)
 	if err != nil {
 		t.Fatalf("get the chunk blob: %v", err)
 	}
 
-	want, digestErr := blob.DigestOf(rc)
+	digest, digestErr := blob.DigestOf(rc)
 	if closeErr := rc.Close(); digestErr != nil || closeErr != nil {
 		t.Fatalf("digest of the chunk blob: %v", errors.Join(digestErr, closeErr))
 	}
+
+	return digest
+}
+
+// TestRecorderChunkDigestOfStoredBlob proves that the stored size and MD5 that
+// the recorder gives to the confirm are those of the blob in the blob store,
+// also for a retry. The seal of each attempt differs, and the first blob stays,
+// so the retry must read the digest from the stored blob.
+func TestRecorderChunkDigestOfStoredBlob(t *testing.T) {
+	t.Parallel()
+
+	h, spy, inner := newSpyHarness(t)
+	a := planAssignment(t, &h)
+
+	if err := h.Recorder.BeginStep(t.Context(), a.Claim, "plan"); err != nil {
+		t.Fatalf("BeginStep = %v", err)
+	}
+
+	err := h.Recorder.AppendLog(t.Context(), a.Claim, "plan", 0, strings.NewReader("line\n"))
+	if !errors.Is(err, errInjected) {
+		t.Fatalf("AppendLog = %v, want the failure of the confirm", err)
+	}
+
+	if err = h.Recorder.AppendLog(t.Context(), a.Claim, "plan", 0, strings.NewReader("line\n")); err != nil {
+		t.Fatalf("retry of the chunk = %v", err)
+	}
+
+	want := digestOfChunkZero(t, &h, inner)
 
 	spy.mu.Lock()
 	defer spy.mu.Unlock()
