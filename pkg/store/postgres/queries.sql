@@ -965,9 +965,13 @@ FOR UPDATE;
 
 -- name: ListStateContentKeys :many
 -- Every blob key the versions of one workspace name, without the empty ones.
-SELECT content_key
-FROM state_versions
-WHERE workspace_id = $1 AND content_key <> '';
+-- The workspace is the driving table, so one statement tells a workspace
+-- without keys (one row with an empty key) from a workspace that does not
+-- exist (no row). A soft-deleted workspace still has its row and its keys.
+SELECT CAST(COALESCE(k.content_key, '') AS TEXT) AS content_key
+FROM workspaces AS w
+LEFT JOIN state_versions AS k ON k.workspace_id = w.id AND k.content_key <> ''
+WHERE w.id = $1;
 
 -- name: ListExpiredPendingStateVersions :many
 -- Expired pending versions of one workspace, oldest expiry first. Ties on
