@@ -64,7 +64,7 @@ both together.
 | [13](0013-policy-and-approvals.md) | Policy and approvals | accepted (ADRs 222 to 230); the points of RFC 77 decided |
 | [14](0014-blueprints.md) | Blueprints, self-service units with validated inputs | accepted |
 | [15](0015-output-sharing.md) | Output sharing between units | accepted (ADRs 213, 273) |
-| [16](0016-egress-proxy.md) | Egress proxy for jobs, with request rules and credential injection | draft |
+| [16](0016-egress-proxy.md) | Job proxy, with request rules and credential injection | draft |
 | [17](0017-unit-lifecycle.md) | Stack and workspace lifecycle: delete, rename, move, tags | draft |
 | [18](0018-state-operations.md) | State operations: history, restore, locks and leases | accepted; the manual lock (ADR 213) |
 | [19](0019-users-teams-roles.md) | Users, teams and roles | discussing; groups, grants and export accepted (ADR 52), the planner role (ADR 212) |
@@ -98,7 +98,7 @@ both together.
 | [47](0047-discovery-and-codification.md) | Discovery and codification of unmanaged resources | draft |
 | [48](0048-management-as-code.md) | Managing OpenDustpan as code | draft |
 | [49](0049-run-tasks.md) | Run tasks: external checks with callbacks | accepted (ADR 226) |
-| [50](0050-policy-authoring.md) | Policy authoring, testing and compliance packs | draft; decision records, simulate and starter packs accepted (ADR 229) |
+| [50](0050-policy-authoring.md) | Policy authoring, testing and starter packs | draft; decision records, simulate and starter packs accepted (ADR 229) |
 | [51](0051-change-management-integrations.md) | Change management and portal integrations | draft; Backstage plugin accepted (ADR 247) |
 | [52](0052-console-core.md) | Console core views and navigation | draft; the console reads the capabilities document (ADR 211) |
 | [53](0053-terraform-cli.md) | Terraform CLI support | draft |
