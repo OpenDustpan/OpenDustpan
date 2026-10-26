@@ -16,7 +16,7 @@ import (
 // the version of a build. It changes when the description changes, and the
 // test of openapi.pin fails when it does not. It is valid in SemVer and in
 // PEP 440, so each SDK can carry it.
-const DocumentVersion = "0.8.0"
+const DocumentVersion = "0.9.0"
 
 // OpenAPIVersion is the version of the OpenAPI format. The document uses the
 // part of 3.1.0 that maps one to one to 3.0.3: a nullable type is
@@ -28,6 +28,7 @@ const OpenAPIVersion = "3.1.0"
 // parameters in an SDK.
 const (
 	errorSchema     = "ErrorResponse"
+	errorCodeSchema = "ErrorCode"
 	bearerScheme    = "bearerAuth"
 	cookieScheme    = "sessionCookie"
 	csrfScheme      = "csrfHeader"
@@ -73,14 +74,41 @@ func Document() []byte {
 // order, so the bytes of a document depend on its content only.
 type object = map[string]any
 
+// Option changes what Build writes.
+type Option func(*buildConfig)
+
+// buildConfig is what the options of Build set.
+type buildConfig struct {
+	errorCodes []string
+}
+
+// WithErrorCodes states the codes of the errorCode member of the error shape.
+// The description then holds the schema ErrorCode with these codes, and
+// errorCode is an open enum of it: a client keeps a code that it does not
+// know. The caller passes the codes because this package cannot import the
+// catalog of codes. Without this option, errorCode is a plain string.
+func WithErrorCodes(codes []string) Option {
+	return func(c *buildConfig) { c.errorCodes = slices.Clone(codes) }
+}
+
 // Build writes the description of the operations as an OpenAPI document. It
 // writes the document with encoding/json, sorts the keys and ends the text
 // with one line feed, so the same operations always give the same bytes. It
 // refuses an operation that Validate refuses and a path that the format
 // cannot hold, and it writes nothing then.
-func Build(ops []Operation) ([]byte, error) {
-	if _, err := index(ops); err != nil {
+func Build(ops []Operation, opts ...Option) ([]byte, error) {
+	var cfg buildConfig
+	for _, opt := range opts {
+		opt(&cfg)
+	}
+
+	codes, err := checkedErrorCodes(cfg.errorCodes)
+	if err != nil {
 		return nil, err
+	}
+
+	if _, indexErr := index(ops); indexErr != nil {
+		return nil, indexErr
 	}
 
 	schemas, err := bodySchemas(ops)
@@ -120,7 +148,7 @@ func Build(ops []Operation) ([]byte, error) {
 			object{cookieScheme: []any{}, csrfScheme: []any{}},
 		},
 		"paths":      paths,
-		"components": componentsObject(schemas),
+		"components": componentsObject(schemas, codes),
 	}
 
 	var buf bytes.Buffer
@@ -175,7 +203,7 @@ func bodySchemas(ops []Operation) (object, error) {
 // componentsObject returns the parts that the operations share: the security
 // scheme, the two request headers, the ETag answer header, the error shape and
 // the schemas of the bodies.
-func componentsObject(bodies object) object {
+func componentsObject(bodies object, codes []string) object {
 	return object{
 		"securitySchemes": object{
 			bearerScheme: object{
@@ -221,14 +249,23 @@ func componentsObject(bodies object) object {
 				keySchema:      object{keyType: typeString},
 			},
 		},
-		"schemas": withError(bodies),
+		"schemas": withError(bodies, codes),
 	}
 }
 
 // withError returns the schemas of the bodies and the error shape. A body
 // never takes the name of the error shape: the reflector refuses it.
-func withError(bodies object) object {
-	out := object{errorSchema: errorSchemaObject()}
+func withError(bodies object, codes []string) object {
+	out := object{errorSchema: errorSchemaObject(codes)}
+	if len(codes) > 0 {
+		values := make([]any, len(codes))
+		for i, code := range codes {
+			values[i] = code
+		}
+
+		out[errorCodeSchema] = object{keyType: typeString, keyEnum: values}
+	}
+
 	maps.Copy(out, bodies)
 
 	return out
@@ -243,17 +280,27 @@ func headerParameter(name, description string, schema object, required bool) obj
 
 // errorSchemaObject returns the schema of an error answer: the shape of the
 // tool-neutral API.
-func errorSchemaObject() object {
-	return object{
+func errorSchemaObject(codes []string) object {
+	withCodes := len(codes) > 0
+
+	errorCode := object{
+		keyType:        typeString,
+		keyDescription: "A stable code for a program. A 403 for a missing permission, an address outside the IP allowlist, a missing CSRF header or a request from another site has one: access.denied, access.ip-not-allowed, session.csrf or session.other-site.",
+	}
+	if withCodes {
+		// The open enum form has no member beside anyOf, so the text sits on the error shape.
+		errorCode = object{
+			keyAnyOf: []any{object{keyRef: refSchemas + errorCodeSchema}, object{keyType: typeString}},
+		}
+	}
+
+	out := object{
 		keyType:     typeObject,
 		keyRequired: []any{"code", "message"},
 		"properties": object{
-			"code":    object{keyType: "integer", keyDescription: "The HTTP status."},
-			"message": object{keyType: typeString, keyDescription: "A text for a person."},
-			"errorCode": object{
-				keyType:        typeString,
-				keyDescription: "A stable code for a program. A 403 for a missing permission, an address outside the IP allowlist, a missing CSRF header or a request from another site has one: access.denied, access.ip-not-allowed, session.csrf or session.other-site.",
-			},
+			"code":      object{keyType: "integer", keyDescription: "The HTTP status."},
+			"message":   object{keyType: typeString, keyDescription: "A text for a person."},
+			"errorCode": errorCode,
 			"errorArgs": object{
 				keyType:                typeObject,
 				keyDescription:         "The arguments of the text of the error.",
@@ -261,6 +308,12 @@ func errorSchemaObject() object {
 			},
 		},
 	}
+	if withCodes {
+		out[keyDescription] = "An error answer. The schema ErrorCode lists the codes that exist today. " +
+			"A client must accept a code that it does not know, because the list only grows."
+	}
+
+	return out
 }
 
 // tagList returns the tags of the operations, each once, in sorted order.
@@ -407,4 +460,23 @@ func stringsAsAny(list []string) []any {
 	}
 
 	return out
+}
+
+// checkedErrorCodes returns the codes sorted. It refuses a code that is not
+// in the form of an enum value and a code that is listed twice.
+func checkedErrorCodes(codes []string) ([]string, error) {
+	out := slices.Clone(codes)
+	slices.Sort(out)
+
+	for i, code := range out {
+		if !enumValue.MatchString(code) {
+			return nil, fmt.Errorf("%w: error code %q is not in the form of an enum value", ErrInvalidBody, code)
+		}
+
+		if i > 0 && out[i-1] == code {
+			return nil, fmt.Errorf("%w: error code %q is listed twice", ErrInvalidBody, code)
+		}
+	}
+
+	return out, nil
 }
