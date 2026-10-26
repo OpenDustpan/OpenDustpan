@@ -394,14 +394,14 @@ func (s *Store) CheckpointByUpdate(
 	return s.inner.CheckpointByUpdate(ctx, ref, id)
 }
 
-// ReferencedBlobKeys returns the blob keys that the rows of the stack name,
+// ReferencedBlobKeys returns the blob keys that the rows of the stack ID name,
 // unless a fault fires first.
-func (s *Store) ReferencedBlobKeys(ctx context.Context, ref stack.Ref) ([]blob.Key, error) {
+func (s *Store) ReferencedBlobKeys(ctx context.Context, stackID stack.ID) ([]blob.Key, error) {
 	if err := s.before(ctx, "ReferencedBlobKeys"); err != nil {
 		return nil, err
 	}
 
-	return s.inner.ReferencedBlobKeys(ctx, ref)
+	return s.inner.ReferencedBlobKeys(ctx, stackID)
 }
 
 // StateAt returns the update that held the state of the stack at a time,

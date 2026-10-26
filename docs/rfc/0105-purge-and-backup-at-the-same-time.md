@@ -86,6 +86,18 @@ checkpoint rows name. So they can delete journal batch blobs that
 this RFC has the fix of #1923 as a precondition (A0 below). The fix of #1923
 must come first, because the bug can lose the result of an apply.
 
+Row 3 has a second bug that this guard does not fix: issue #1941. The stack
+sweep lists the blobs by the stack ID, but it read its keep set by the stack
+name. A preview takes no stack lock, so a rename or a remove of the stack can
+commit between the two reads. The keep set was then empty, and the sweep
+deleted every checkpoint and journal batch blob of the stack that was older
+than 1 hour. A soft-deleted stack, which the deleted-units API can restore,
+lost its state in the same way. The sweep now reads the keep set by the stack
+ID, and a stack row that is missing or soft-deleted is an error that stops the
+sweep. The rule for every deleter: a deleter reads its keep set by the same
+key that it lists by, and a missing owner row is an error, not an empty keep
+set.
+
 ### The race
 
 A backup takes its snapshot at S. A write commits at C after S, and that
