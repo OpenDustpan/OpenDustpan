@@ -133,6 +133,7 @@ func pgCopyStackTables() []pgCopyTable {
 			columns: []string{
 				pgColName, "home_region", "failover_version", pgColCreatedAtMs,
 				"allow_forced_writes", "allow_unlocked_writes", "ip_allowlist", "id", "output_sharing_default",
+				"source_filter",
 			},
 			orderBy: []string{pgColName},
 		},
