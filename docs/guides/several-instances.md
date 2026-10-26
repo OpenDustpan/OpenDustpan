@@ -32,7 +32,7 @@ openssl rand -base64 32
 
 Set the value in `DUSTPAN_KEY_ENCRYPTION_KEY`, or in a file that `DUSTPAN_KEY_ENCRYPTION_KEY_FILE` names on each host. Keep the key outside the database and the backup target.
 
-Do not use `--generate-key-encryption-key` (`DUSTPAN_GENERATE_KEY_ENCRYPTION_KEY`) on more than one instance. Each instance then makes its own key file on its own host. A secret that one instance encrypts can then not be read by the other instances.
+Give each instance the same key. The server makes no key, so an instance with a different key file cannot read a secret that another instance encrypts.
 
 When the database holds secrets, a start with a different key stops with an error that names the `rewrap` command. When the database holds no secrets yet, the start cannot compare the keys. Two keys then stay in use without an error.
 

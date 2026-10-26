@@ -800,11 +800,21 @@ const serveToken = "0123456789abcdef0123456789abcdef-serve-token"
 func runBinary(t *testing.T, bin string, args ...string) (string, error) {
 	t.Helper()
 
+	return runBinaryWithEnv(t, bin, nil, args...)
+}
+
+// runBinaryWithEnv is runBinary with the variables in env added to the
+// environment of the process.
+func runBinaryWithEnv(t *testing.T, bin string, env []string, args ...string) (string, error) {
+	t.Helper()
+
 	ctx, cancel := context.WithTimeout(t.Context(), devCommandTimeout)
 	defer cancel()
 
 	cmd := exec.CommandContext(ctx, bin, args...) //nolint:gosec // The test runs the binary that it built.
-	cmd.Env = []string{"PATH=" + os.Getenv("PATH"), "HOME=" + t.TempDir(), "DUSTPAN_ADMIN_TOKEN=" + serveToken}
+	cmd.Env = append(
+		[]string{"PATH=" + os.Getenv("PATH"), "HOME=" + t.TempDir(), "DUSTPAN_ADMIN_TOKEN=" + serveToken}, env...,
+	)
 
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -814,13 +824,25 @@ func runBinary(t *testing.T, bin string, args ...string) (string, error) {
 	return string(out), nil
 }
 
-// runServe runs serve on the database with a key file that serve makes, and
+// writeServeKey makes a new key file at path with the key generate command of
+// the binary, as the operator makes it for serve.
+func writeServeKey(t *testing.T, bin, path string) {
+	t.Helper()
+
+	if out, err := runBinary(t, bin, "key", "generate", "--out", path); err != nil {
+		t.Fatalf("make the key file: %v\n%s", err, out)
+	}
+}
+
+// runServe runs serve on the database with a new key file at keyFile, and
 // answers its output and its error. It is meant for a start that stops.
 func runServe(t *testing.T, bin, database, keyFile string) (string, error) {
 	t.Helper()
 
+	writeServeKey(t, bin, keyFile)
+
 	return runBinary(t, bin, "serve", "--database", database, "--key-encryption-key-file", keyFile,
-		"--generate-key-encryption-key", "--listen", "127.0.0.1:0")
+		"--listen", "127.0.0.1:0")
 }
 
 // serveMadeDatabase runs serve on a new database until it is ready, stops it
@@ -832,6 +854,8 @@ func serveMadeDatabase(t *testing.T, bin string) string {
 	database := filepath.Join(dir, "serve.db")
 	addr := freeLoopbackAddr(t)
 
+	writeServeKey(t, bin, filepath.Join(dir, "serve.key"))
+
 	//nolint:gosec // The test runs the binary that it built.
 	cmd := exec.CommandContext(
 		context.WithoutCancel(t.Context()),
@@ -841,7 +865,6 @@ func serveMadeDatabase(t *testing.T, bin string) string {
 		"sqlite:"+database,
 		"--key-encryption-key-file",
 		filepath.Join(dir, "serve.key"),
-		"--generate-key-encryption-key",
 		"--listen",
 		addr,
 		"--blob-dir",

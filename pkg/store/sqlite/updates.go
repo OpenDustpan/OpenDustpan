@@ -449,8 +449,8 @@ func (s *Store) CheckpointByUpdate(
 	return codec.FromCheckpointRow(fromCheckpointReadRow(row), ref)
 }
 
-// ReferencedCheckpointKeys implements stack.CheckpointStore.
-func (s *Store) ReferencedCheckpointKeys(ctx context.Context, ref stack.Ref) ([]blob.Key, error) {
+// ReferencedBlobKeys implements stack.CheckpointStore.
+func (s *Store) ReferencedBlobKeys(ctx context.Context, ref stack.Ref) ([]blob.Key, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -463,9 +463,9 @@ func (s *Store) ReferencedCheckpointKeys(ctx context.Context, ref stack.Ref) ([]
 		return nil, err
 	}
 
-	rows, err := s.queries.ListCheckpointBlobKeys(ctx, stackID)
+	rows, err := s.queries.ListReferencedBlobKeys(ctx, stackID)
 	if err != nil {
-		return nil, fmt.Errorf("select checkpoint blob keys: %w", err)
+		return nil, fmt.Errorf("select referenced blob keys: %w", err)
 	}
 
 	out := make([]blob.Key, 0, len(rows))
@@ -473,7 +473,7 @@ func (s *Store) ReferencedCheckpointKeys(ctx context.Context, ref stack.Ref) ([]
 	for _, row := range rows {
 		key, err := blob.ParseKey(row)
 		if err != nil {
-			return nil, fmt.Errorf("%w: checkpoint key %q: %w", codec.ErrCorruptRow, row, err)
+			return nil, fmt.Errorf("%w: blob key %q: %w", codec.ErrCorruptRow, row, err)
 		}
 
 		out = append(out, key)

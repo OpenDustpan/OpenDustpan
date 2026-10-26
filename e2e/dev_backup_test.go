@@ -225,9 +225,12 @@ func startProduction(t *testing.T, bin, dir, targetDir string, extra ...string) 
 	t.Helper()
 
 	addr := freeLoopbackAddr(t)
+
+	writeServeKey(t, bin, filepath.Join(dir, "serve.key"))
+
 	base := []string{
 		"serve", "--database", "sqlite:" + filepath.Join(dir, "serve.db"),
-		"--key-encryption-key-file", filepath.Join(dir, "serve.key"), "--generate-key-encryption-key",
+		"--key-encryption-key-file", filepath.Join(dir, "serve.key"),
 		"--listen", addr, "--blob-dir", filepath.Join(dir, "blobs"), "--backup-target", "dir:" + targetDir,
 	}
 

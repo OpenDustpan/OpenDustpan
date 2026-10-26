@@ -727,8 +727,7 @@ func TestUpgradeCheckKeyWarning(t *testing.T) {
 		}
 
 		for _, name := range []string{
-			"--generate-key-encryption-key",
-			"DUSTPAN_GENERATE_KEY_ENCRYPTION_KEY",
+			"opendustpan key generate --out",
 			"--key-encryption-key-file",
 			keyFileEnvVar,
 			keyEnvVar,

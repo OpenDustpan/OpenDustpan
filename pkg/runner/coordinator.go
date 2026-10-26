@@ -110,8 +110,9 @@ const (
 	// MaxSessionWait is the longest time from the claim time of a claim
 	// (SessionStore) to the job session of its launcher. After it,
 	// SessionStore.OpenSession refuses the session, and
-	// SessionStore.RunnerRenew releases the claim and fails with
-	// ErrClaimLost.
+	// SessionStore.RunnerRenew fails with ErrSessionWaitPassed and changes
+	// nothing. The caller then releases the claim through job.Claimer or
+	// SweepClaimer.
 	MaxSessionWait = 30 * time.Minute
 	// SourceWait is the longest time that the launcher waits for a source
 	// snapshot that is not ready.
@@ -126,8 +127,9 @@ const (
 // claim time claimedAt. It returns ErrSessionOpen when the launcher of the
 // claim opened its session, also after MaxSessionWait: the runner then
 // stops its renewals and leaves the Job or the sandbox alone. It returns
-// ErrClaimLost after MaxSessionWait with no session: the store releases
-// the claim in the same transaction (SessionStore.RunnerRenew).
+// ErrClaimLost after MaxSessionWait with no session. The store changes
+// nothing then: the caller releases the claim through job.Claimer or
+// SweepClaimer (SessionStore.RunnerRenew).
 func CheckRunnerRenew(claimedAt time.Time, sessionOpen bool, now time.Time) error {
 	switch {
 	case sessionOpen:

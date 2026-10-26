@@ -40,6 +40,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/durable"
 	"opendustpan.org/opendustpan/pkg/dustpan"
 	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/job"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/secret"
 	"opendustpan.org/opendustpan/pkg/store/postgres"
@@ -405,6 +406,12 @@ func serverOptions(
 		dustpan.WithLogger(logger),
 		dustpan.WithListener(ln),
 		dustpan.WithDurableStore(store.DurableOperations()),
+		// The job, trigger and drift routes need their stores, as the binary gives them.
+		dustpan.WithRunners(store.Runners()),
+		dustpan.WithJobStore(store.Jobs()),
+		dustpan.WithJobClaimer(job.NewClaimer(store.Jobs(), store.DurableOperationsPort(), store)),
+		dustpan.WithTriggerStore(store.Triggers()),
+		dustpan.WithDriftStore(store.DriftResults()),
 		dustpan.WithInstanceID(InstanceID(i)),
 		dustpan.WithInstallationKindStore(store),
 	}

@@ -883,8 +883,8 @@ func (s *fakeBackupStore) CheckpointByUpdate(
 	return stack.Checkpoint{}, stack.ErrNoState
 }
 
-// ReferencedCheckpointKeys implements stack.CheckpointStore.
-func (s *fakeBackupStore) ReferencedCheckpointKeys(
+// ReferencedBlobKeys implements stack.CheckpointStore.
+func (s *fakeBackupStore) ReferencedBlobKeys(
 	_ context.Context, ref stack.Ref,
 ) ([]blob.Key, error) {
 	s.mu.RLock()

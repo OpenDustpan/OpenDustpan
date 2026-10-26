@@ -173,12 +173,15 @@ func TestServeAdminTokenFile(t *testing.T) {
 		t.Fatalf("serve with a token file: %v", err)
 	}
 
+	// A start clears the key variable after it reads it.
+	t.Setenv(keyEnvVar, testKeyBase64())
 	t.Setenv(adminTokenFileEnvVar, writeTokenFile(t, adminTestToken+"\n", 0o640))
 
 	if err := serve(t.Context(), args, new(lockedBuffer)); !errors.Is(err, errAdminTokenFilePermissions) {
 		t.Fatalf("serve with a group-readable token file: err = %v, want %v", err, errAdminTokenFilePermissions)
 	}
 
+	t.Setenv(keyEnvVar, testKeyBase64())
 	t.Setenv(adminTokenFileEnvVar, "")
 
 	if err := serve(t.Context(), args, new(lockedBuffer)); !errors.Is(err, errAdminTokenMissing) {

@@ -34,7 +34,6 @@ func ServeFlags() []*Setting {
 		"backup-target",
 		UnsafeAllowDevBackupsFlag,
 		"key-encryption-key-file",
-		"generate-key-encryption-key",
 		"max-checkpoint-bytes",
 		"checkpoint-delta-cutoff",
 		"disable-pulumi-journaling",

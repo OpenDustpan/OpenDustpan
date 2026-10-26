@@ -10187,44 +10187,6 @@ func (q *Queries) ListBlobPurgesAfter(ctx context.Context, arg ListBlobPurgesAft
 	return items, nil
 }
 
-const listCheckpointBlobKeys = `-- name: ListCheckpointBlobKeys :many
-SELECT c.blob_key
-FROM checkpoints AS c
-JOIN stacks AS st ON st.id = c.stack_id
-WHERE st.namespace = $1 AND st.project = $2 AND st.name = $3 AND st.deleted_at_ms IS NULL
-ORDER BY c.blob_key
-`
-
-type ListCheckpointBlobKeysParams struct {
-	Namespace string
-	Project   string
-	Name      string
-}
-
-// Every blob key the checkpoints of one stack name, ordered. A sweeper
-// compares this set against the stored objects to find blobs no checkpoint
-// references. One statement finds the stack by its reference and reads the
-// keys, so the read needs no transaction. No stack returns no row.
-func (q *Queries) ListCheckpointBlobKeys(ctx context.Context, arg ListCheckpointBlobKeysParams) ([]string, error) {
-	rows, err := q.db.Query(ctx, listCheckpointBlobKeys, arg.Namespace, arg.Project, arg.Name)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []string
-	for rows.Next() {
-		var blob_key string
-		if err := rows.Scan(&blob_key); err != nil {
-			return nil, err
-		}
-		items = append(items, blob_key)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
 const listCollections = `-- name: ListCollections :many
 SELECT id, namespace, name, created_at_ms
 FROM collections
@@ -12611,6 +12573,50 @@ func (q *Queries) ListProfileRevisions(ctx context.Context, arg ListProfileRevis
 			return nil, err
 		}
 		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listReferencedBlobKeys = `-- name: ListReferencedBlobKeys :many
+SELECT c.blob_key
+FROM checkpoints AS c
+JOIN stacks AS st ON st.id = c.stack_id
+WHERE st.namespace = $1 AND st.project = $2 AND st.name = $3 AND st.deleted_at_ms IS NULL
+UNION
+SELECT j.blob_key
+FROM update_journal AS j
+JOIN stacks AS st ON st.id = j.stack_id
+WHERE st.namespace = $1 AND st.project = $2 AND st.name = $3 AND st.deleted_at_ms IS NULL
+ORDER BY blob_key
+`
+
+type ListReferencedBlobKeysParams struct {
+	Namespace string
+	Project   string
+	Name      string
+}
+
+// Every blob key that a row of one stack names, ordered, without duplicates:
+// the blobs of the checkpoints and the blobs of the journal batches. A
+// sweeper compares this set against the stored objects to find blobs that no
+// row references. One statement finds the stack by its reference and reads
+// the keys, so the read needs no transaction. No stack returns no row.
+func (q *Queries) ListReferencedBlobKeys(ctx context.Context, arg ListReferencedBlobKeysParams) ([]string, error) {
+	rows, err := q.db.Query(ctx, listReferencedBlobKeys, arg.Namespace, arg.Project, arg.Name)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []string
+	for rows.Next() {
+		var blob_key string
+		if err := rows.Scan(&blob_key); err != nil {
+			return nil, err
+		}
+		items = append(items, blob_key)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err

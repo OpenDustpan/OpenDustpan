@@ -3,6 +3,8 @@
 //	opendustpan --version
 //	opendustpan serve [flags]
 //	opendustpan dev [flags]
+//	opendustpan key generate --out <path>
+//	opendustpan doctor [flags]
 //	opendustpan health [flags]
 //	opendustpan namespace create [flags] <name>
 //	opendustpan upgrade check [flags]
@@ -18,15 +20,14 @@
 // not appear in process listings; serve clears DUSTPAN_ADMIN_TOKEN from its
 // environment after the read. The
 // key-encryption key comes from DUSTPAN_KEY_ENCRYPTION_KEY or from the file in
-// DUSTPAN_KEY_ENCRYPTION_KEY_FILE only, never from a flag. Serve makes the
-// key file after a terminal prompt or with --generate-key-encryption-key, and
-// never makes a key silently.
+// DUSTPAN_KEY_ENCRYPTION_KEY_FILE only, never from a flag. Serve needs a key
+// and a database that the operator sets: it has no default for either, it
+// makes no key, and it stops before it opens the database when one is
+// missing.
 package main
 
 import (
-	"bufio"
 	"context"
-	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
 	"errors"
@@ -118,26 +119,30 @@ var (
 	errS3Endpoint = errors.New(
 		"s3 endpoint must be an http(s) URL with a host: set --s3-endpoint (DUSTPAN_S3_ENDPOINT)",
 	)
-	// errKeyGenerateRequired reports serve with no key, no key file, no
-	// terminal and no opt-in. It names each setting that helps, so the
-	// operator knows what to set. Serve returns it before it opens the
-	// database, and never makes a key silently.
-	errKeyGenerateRequired = errors.New(
-		"no key-encryption key is configured: set --generate-key-encryption-key " +
-			"(DUSTPAN_GENERATE_KEY_ENCRYPTION_KEY=true) to make a key file with no prompt, " +
-			"or set --key-encryption-key-file (DUSTPAN_KEY_ENCRYPTION_KEY_FILE) or " +
-			"DUSTPAN_KEY_ENCRYPTION_KEY",
+	// errNoKey reports serve with no key-encryption key. Serve returns it
+	// before it opens the database.
+	errNoKey = errors.New(
+		"no key-encryption key is set: set --key-encryption-key-file (DUSTPAN_KEY_ENCRYPTION_KEY_FILE) " +
+			"or DUSTPAN_KEY_ENCRYPTION_KEY. To make a key file, run: opendustpan key generate --out <path>",
 	)
-	// errKeyPromptDeclined reports serve where the operator did not answer
-	// yes to the key file prompt. Serve made no file.
-	errKeyPromptDeclined = errors.New(
-		"no key-encryption key file was made: the operator did not answer yes",
+	// errNoKeyTrial is errNoKey for a person who most likely wants a trial.
+	errNoKeyTrial = errors.New("no key-encryption key is set. For a trial, run: opendustpan dev")
+	// errNoDatabase reports serve with no database.
+	errNoDatabase = errors.New(
+		"no database is set: set --database (DUSTPAN_DATABASE), for example sqlite:/var/lib/opendustpan/dustpan.db",
 	)
-	// errKeyFileMissing reports serve with no key and no key file while the
-	// database already holds wrapped keys (issue 355). A new key cannot open
-	// them, so serve makes no key file and stops before the database is used.
-	errKeyFileMissing = errors.New(
-		"key-encryption key file does not exist, and the database holds secrets that a new key cannot open",
+	// errNoDatabaseTrial is errNoDatabase for a person who most likely wants a
+	// trial.
+	errNoDatabaseTrial = errors.New("no database is set. For a trial, run: opendustpan dev")
+	// errDevEnvironment reports serve in a shell that holds DUSTPAN_DEV.
+	errDevEnvironment error = &refusalError{
+		text:  "DUSTPAN_DEV is set. The dev.env file of opendustpan dev sets it. Start serve in a new shell.",
+		cause: nil,
+	}
+	// errDevKeyRefused reports a key file that opendustpan dev made.
+	errDevKeyRefused = errors.New(
+		"the key file was made by opendustpan dev: serve refuses it. Set --key-encryption-key-file to a key " +
+			"from: opendustpan key generate --out <path>",
 	)
 )
 
@@ -149,24 +154,16 @@ const (
 	// keyEnvVar holds the base64 key-encryption key. It wins when both key
 	// settings are present.
 	keyEnvVar = "DUSTPAN_KEY_ENCRYPTION_KEY"
+	// devEnvVar is set by the dev.env file of opendustpan dev. Serve refuses a
+	// shell that holds it.
+	devEnvVar = "DUSTPAN_DEV"
 	// keyFileEnvVar names a file holding the base64 key-encryption key.
 	keyFileEnvVar = "DUSTPAN_KEY_ENCRYPTION_KEY_FILE"
-	// generateKeyEnvVar opts in to making the key file with no prompt.
-	generateKeyEnvVar = "DUSTPAN_GENERATE_KEY_ENCRYPTION_KEY"
-	// defaultKeyFileName is the key file name next to the SQLite database, as
-	// --blob-dir defaults, or in the working directory with PostgreSQL.
-	defaultKeyFileName = "dustpan.key"
-	// generatedKeyBytes is the size of a made key-encryption key: 32 random
-	// bytes in base64 (ADR 23 decision 2, ADR 41 decision 12).
-	generatedKeyBytes = 32
-	// keyFileMode is the mode a made key file gets: owner only.
-	keyFileMode = 0o600
+	// keyFileMode is the mode of a key file: owner only.
+	keyFileMode = cli.KeyFileMode
 	// keyFilePrivateBits are the permission bits the key file must not set:
 	// group or other access of any kind.
 	keyFilePrivateBits = 0o077
-	// maxKeyAnswerBytes caps the prompt answer serve reads, so the read never
-	// grows without a bound. A longer answer counts as not yes.
-	maxKeyAnswerBytes = 1024
 	// blobDirPerm is the mode the server creates the blob directory with:
 	// owner only, so state content does not leak through shared directories.
 	blobDirPerm = 0o700
@@ -204,14 +201,12 @@ func (c *common) register(fs *flag.FlagSet) {
 }
 
 func serve(ctx context.Context, args []string, stderr io.Writer) error {
-	return serveWithIO(ctx, args, os.Stdin, stderr, isTerminal(os.Stdin, stderr))
+	return serveWithIO(ctx, args, stderr, isTerminalWriter(stderr))
 }
 
-// serveWithIO runs serve with an explicit standard input and terminal flag,
-// so tests drive the key file prompt with a fake terminal.
-func serveWithIO(
-	ctx context.Context, args []string, stdin io.Reader, stderr io.Writer, terminal bool,
-) error {
+// serveWithIO runs serve with an explicit terminal flag for stderr, so tests
+// drive the trial hint of the refusals with a fake terminal.
+func serveWithIO(ctx context.Context, args []string, stderr io.Writer, terminal bool) error {
 	var f serveFlags
 
 	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
@@ -221,6 +216,10 @@ func serveWithIO(
 
 	if err := fs.Parse(args); err != nil {
 		return fmt.Errorf("parse flags: %w", err)
+	}
+
+	if err := refuseDevEnvironment(os.LookupEnv); err != nil {
+		return err
 	}
 
 	stopHangup := f.catchHangup()
@@ -241,7 +240,11 @@ func serveWithIO(
 		return err
 	}
 
-	return kindRefusal(f.run(ctx, stdin, stderr, terminal), commandServe)
+	if err := f.requireDecisions(terminal, os.LookupEnv); err != nil {
+		return err
+	}
+
+	return kindRefusal(f.run(ctx, stderr), commandServe)
 }
 
 // serveFlags holds the settings of the serve subcommand.
@@ -301,7 +304,6 @@ type serveFlags struct {
 	logFormat                    string
 	components                   string
 	keyFile                      string
-	generateKey                  bool
 	maxCheckpointBytes           int64
 	maxSecretBatchBytes          int64
 	maxStateBytes                int64
@@ -455,7 +457,6 @@ func (f *serveFlags) resolveLayers(fs *flag.FlagSet, lookup cli.LookupFunc) erro
 // file, so it does not show in process listings.
 func (f *serveFlags) registerKey(fs *flag.FlagSet) {
 	cli.ByFlag("key-encryption-key-file").String(fs, &f.keyFile)
-	cli.ByFlag("generate-key-encryption-key").Bool(fs, &f.generateKey)
 }
 
 // registerStorage registers the blob store, S3 and backup target flags.
@@ -519,7 +520,7 @@ func (f *serveFlags) registerLimits(fs *flag.FlagSet) {
 // when serve is about to make a key file does it open the store first: the
 // store must hold no wrapped keys, because a new key cannot open them (issue
 // 355). Serve then uses the same store.
-func (f *serveFlags) run(ctx context.Context, stdin io.Reader, stderr io.Writer, terminal bool) error {
+func (f *serveFlags) run(ctx context.Context, stderr io.Writer) error {
 	app, err := f.appLogFor(stderr) //nolint:contextcheck // The log writers outlive this call; close bounds them.
 	if err != nil {
 		return err
@@ -554,39 +555,28 @@ func (f *serveFlags) run(ctx context.Context, stdin io.Reader, stderr io.Writer,
 		}
 	}()
 
-	open := func() (store, error) {
-		if st == nil {
-			opened, err := openStore(ctx, f.database, logger, openMigrate, installation.KindProduction)
-			if err != nil {
-				return nil, err
-			}
-
-			st = opened
-		}
-
-		return st, nil
-	}
-
-	beforeMake := func(path string) error {
-		keys, err := open()
-		if err != nil {
-			return err
-		}
-
-		return refuseNewKeyFile(ctx, keys, path)
-	}
-
-	wrapper, keyErr := f.loadOrMakeKey(
-		keyPrompt{stdin: stdin, stderr: stderr, terminal: terminal}, beforeMake, logger,
-	)
+	wrapper, keyPresent, keyErr := directKeyWrapper()
 	if keyErr != nil {
 		return keyErr
 	}
 
-	opened, storeErr := open()
+	if !keyPresent {
+		path := strings.TrimSpace(f.keyFile)
+
+		wrapper, keyErr = useKeyFile(path, logger)
+		if keyErr != nil {
+			return keyErr
+		}
+
+		f.warnKeyNextToData(logger, path)
+	}
+
+	opened, storeErr := openStore(ctx, f.database, logger, openMigrate, installation.KindProduction)
 	if storeErr != nil {
 		return storeErr
 	}
+
+	st = opened
 
 	return f.serveWithStores(ctx, opened, authn, wrapper, logger)
 }
@@ -606,30 +596,12 @@ func (f *serveFlags) writeStartEntry(ctx context.Context, entries audit.ServerSt
 	return nil
 }
 
-// refuseNewKeyFile stops serve before it makes a key file at path when the
-// store already holds wrapped keys: a new key cannot open them (issue 355).
-// It reads the wrapper IDs through the secret.KeyStore port, with the ADR 23
-// check and no wrapper, so cmd holds no SQL.
-func refuseNewKeyFile(ctx context.Context, keys secret.KeyStore, path string) error {
-	err := secret.CheckWrapper(ctx, keys, nil)
-
-	switch {
-	case err == nil:
-		return nil
-	case errors.Is(err, secret.ErrKeyNotConfigured):
-		return fmt.Errorf(
-			"%w: restore the original key file at %s, or set %s to the original key",
-			errKeyFileMissing, path, keyEnvVar,
-		)
-	default:
-		return fmt.Errorf("read wrapped keys before making a key file: %w", err)
-	}
-}
-
 // checkDatabaseFlag rejects a --database value with an unknown form before
 // serve resolves the key file, so the backend error keeps its precedence.
 func checkDatabaseFlag(database string) error {
 	switch {
+	case strings.TrimSpace(database) == "":
+		return errNoDatabase
 	case strings.HasPrefix(database, "sqlite:"):
 		return nil
 	case strings.HasPrefix(database, "postgres://"), strings.HasPrefix(database, "postgresql://"):
@@ -637,27 +609,6 @@ func checkDatabaseFlag(database string) error {
 	default:
 		return errUnknownBackend
 	}
-}
-
-// resolveKeyFile returns the key file path in use: the --key-encryption-key-file
-// flag when set, else dustpan.key next to the SQLite database file, as
-// --blob-dir defaults, or dustpan.key in the working directory with
-// PostgreSQL.
-func resolveKeyFile(database, flagFile string) string {
-	if strings.TrimSpace(flagFile) != "" {
-		return strings.TrimSpace(flagFile)
-	}
-
-	if rest, ok := strings.CutPrefix(database, "sqlite:"); ok {
-		path := strings.TrimSpace(rest)
-		if path == "" {
-			return defaultKeyFileName
-		}
-
-		return filepath.Join(filepath.Dir(path), defaultKeyFileName)
-	}
-
-	return defaultKeyFileName
 }
 
 // isTerminal reports whether stdin and stderr are both character devices, so
@@ -686,51 +637,93 @@ func isCharDevice(f *os.File) bool {
 	return info.Mode()&os.ModeCharDevice != 0
 }
 
-// keyPrompt holds the standard input of the key file prompt: the source to
-// read the answer from, where to print the prompt, and whether the source is
-// a terminal that may be prompted.
-type keyPrompt struct {
-	stdin    io.Reader
-	stderr   io.Writer
-	terminal bool
+// refuseDevEnvironment refuses a shell that holds DUSTPAN_DEV: the dev.env
+// file of opendustpan dev sets it, and serve is for production.
+func refuseDevEnvironment(lookup cli.LookupFunc) error {
+	if _, held := lookup(devEnvVar); held {
+		return errDevEnvironment
+	}
+
+	return nil
 }
 
-// loadOrMakeKey resolves the key-encryption key for serve. The direct value
-// wins when set. Else the key file at the resolved path is read with the
-// existing owner-only rules. When no key and no key file exist, the opt-in
-// makes the file with no prompt, a terminal prompts for an explicit yes, and
-// without either serve stops before the database opens. Before it makes a
-// file, it calls beforeMake with the path, and makes no file when beforeMake
-// fails. It logs one line with the path of the key file in use, never the
-// key.
-//
-//nolint:ireturn // The caller keeps the wrapper as a secret.Wrapper port.
-func (f *serveFlags) loadOrMakeKey(
-	in keyPrompt, beforeMake func(path string) error, logger *slog.Logger,
-) (secret.Wrapper, error) {
-	if wrapper, present, err := directKeyWrapper(); present || err != nil {
-		return wrapper, err
+// ignoredForTrial reports whether env is a variable that a shell often exports
+// for other commands or other tools. It does not show that the person set up
+// serve, so it does not turn off the trial hint.
+func ignoredForTrial(env string) bool {
+	return env == adminTokenEnvVar || env == adminTokenFileEnvVar
+}
+
+// noSettings reports whether no setting of serve has a value from a flag, a
+// variable or a configuration file. A key-encryption key in the variable
+// counts as a setting.
+func (f *serveFlags) noSettings(lookup cli.LookupFunc) bool {
+	if hasValue(lookup, keyEnvVar) {
+		return false
 	}
 
-	path := resolveKeyFile(f.database, f.keyFile)
-
-	if keyFileExists(path) {
-		return useKeyFile(path, logger)
-	}
-
-	if f.generateKey {
-		if err := beforeMake(path); err != nil {
-			return nil, err
+	for _, r := range f.resolved {
+		if r.Source == cli.SourceDefault || ignoredForTrial(r.Setting.Env) {
+			continue
 		}
 
-		return makeKeyFile(path, logger)
+		return false
 	}
 
-	if in.terminal {
-		return promptAndMakeKeyFile(in, path, beforeMake, logger)
+	return true
+}
+
+// hasValue reports whether the variable name has a value that is not blank.
+func hasValue(lookup cli.LookupFunc, name string) bool {
+	value, set := lookup(name)
+
+	return set && strings.TrimSpace(value) != ""
+}
+
+// requireDecisions refuses a start with no key-encryption key and a start with
+// no database, in this order, and reports only the first. Serve stops before
+// it opens the database. Each error names one command that helps. A person at
+// a terminal who set no setting of serve most likely wants a trial, so the
+// error names the dev command.
+func (f *serveFlags) requireDecisions(terminal bool, lookup cli.LookupFunc) error {
+	trial := terminal && f.noSettings(lookup)
+
+	if !hasValue(lookup, keyEnvVar) && strings.TrimSpace(f.keyFile) == "" {
+		if trial {
+			return errNoKeyTrial
+		}
+
+		return errNoKey
 	}
 
-	return nil, errKeyGenerateRequired
+	if strings.TrimSpace(f.database) == "" {
+		if trial {
+			return errNoDatabaseTrial
+		}
+
+		return errNoDatabase
+	}
+
+	return nil
+}
+
+// warnKeyNextToData logs a warning when the key file is next to the data: a
+// backup of the data then holds the key too.
+func (f *serveFlags) warnKeyNextToData(logger *slog.Logger, path string) {
+	if cli.KeyNextToData(path, f.database, f.blobDir) {
+		logger.Warn(
+			"the key file is next to the data: a backup of the data holds the key too",
+			slog.String("path", path),
+		)
+	}
+}
+
+// isTerminalWriter reports whether w is a character device, so serve gives
+// the trial hint only to a person at a terminal.
+func isTerminalWriter(w io.Writer) bool {
+	file, ok := w.(*os.File)
+
+	return ok && isCharDevice(file)
 }
 
 // directKeyWrapper returns the wrapper for the direct key-encryption key
@@ -762,13 +755,47 @@ func directKeyWrapper() (secret.Wrapper, bool, error) {
 	return wrapper, true, nil
 }
 
-// keyFileExists reports whether a key file already exists at path. A stat
-// error other than absence is reported by the read, so it counts as existing
-// here.
-func keyFileExists(path string) bool {
-	_, err := os.Stat(path)
+// isDevKeyFile reports whether the file at path starts with the header line
+// of opendustpan dev. It reads only as many bytes as the header has. A file
+// that it cannot read is not a key of dev: the read of the key reports it.
+func isDevKeyFile(path string) bool {
+	head, err := readFileHead(path, len(devKeyHeader))
 
-	return err == nil || !os.IsNotExist(err)
+	return err == nil && string(head) == devKeyHeader
+}
+
+// readFileHead reads at most n bytes from the start of the file at path.
+func readFileHead(path string, n int) ([]byte, error) {
+	root, err := os.OpenRoot(filepath.Dir(path))
+	if err != nil {
+		return nil, fmt.Errorf("open directory: %w", err)
+	}
+
+	head, readErr := readHeadOf(root, filepath.Base(path), n)
+	closeErr := root.Close()
+
+	if err := errors.Join(readErr, closeErr); err != nil {
+		return nil, fmt.Errorf("read the head of the file: %w", err)
+	}
+
+	return head, nil
+}
+
+// readHeadOf reads at most n bytes from the start of the file name in root.
+func readHeadOf(root *os.Root, name string, n int) ([]byte, error) {
+	file, err := root.Open(name)
+	if err != nil {
+		return nil, fmt.Errorf("open file: %w", err)
+	}
+
+	head, readErr := io.ReadAll(io.LimitReader(file, int64(n)))
+	closeErr := file.Close()
+
+	if err := errors.Join(readErr, closeErr); err != nil {
+		return nil, fmt.Errorf("read file: %w", err)
+	}
+
+	return head, nil
 }
 
 // useKeyFile reads the key file at path with the owner-only rules and returns
@@ -778,30 +805,10 @@ func keyFileExists(path string) bool {
 func useKeyFile(path string, logger *slog.Logger) (secret.Wrapper, error) {
 	key, err := readKeyFile(path)
 	if err != nil {
-		return nil, err
-	}
-
-	wrapper, wrapErr := builtinWrapper(key)
-	if wrapErr != nil {
-		return nil, wrapErr
-	}
-
-	logger.Info("using key-encryption key file", slog.String("path", path))
-
-	return wrapper, nil
-}
-
-// makeKeyFile writes a new key file at path and returns its wrapper. It never
-// overwrites a file that exists: a concurrent serve that made the file first
-// wins, and this serve reads that file with the owner-only rules. It logs one
-// line with the path, never the key.
-//
-//nolint:ireturn // The caller keeps the wrapper as a secret.Wrapper port.
-func makeKeyFile(path string, logger *slog.Logger) (secret.Wrapper, error) {
-	key, err := generateKeyFile(path)
-	if err != nil {
-		if errors.Is(err, os.ErrExist) || os.IsExist(err) {
-			return useKeyFile(path, logger)
+		// A key file of dev does not decode: the header line is not base64.
+		// Name the real cause.
+		if isDevKeyFile(path) {
+			return nil, errDevKeyRefused
 		}
 
 		return nil, err
@@ -815,31 +822,6 @@ func makeKeyFile(path string, logger *slog.Logger) (secret.Wrapper, error) {
 	logger.Info("using key-encryption key file", slog.String("path", path))
 
 	return wrapper, nil
-}
-
-// promptAndMakeKeyFile asks for an explicit yes and makes the key file at
-// path on yes, when beforeMake allows it. On anything else serve stops with
-// exit status 1 and makes no file. The prompt comes first, so a declined
-// prompt stops before the database opens.
-//
-//nolint:ireturn // The caller keeps the wrapper as a secret.Wrapper port.
-func promptAndMakeKeyFile(
-	in keyPrompt, path string, beforeMake func(path string) error, logger *slog.Logger,
-) (secret.Wrapper, error) {
-	agreed, err := promptForKeyFile(in.stdin, in.stderr, path)
-	if err != nil {
-		return nil, err
-	}
-
-	if !agreed {
-		return nil, errKeyPromptDeclined
-	}
-
-	if checkErr := beforeMake(path); checkErr != nil {
-		return nil, checkErr
-	}
-
-	return makeKeyFile(path, logger)
 }
 
 // builtinWrapper returns the built-in wrapper for key. Loaders already
@@ -854,148 +836,6 @@ func builtinWrapper(key []byte) (secret.Wrapper, error) {
 	}
 
 	return wrapper, nil
-}
-
-// keyPromptText tells where serve will write the key file, that losing it
-// loses every secret with no recovery, and asks for an explicit yes.
-const keyPromptText = "The server will write a new key-encryption key file to %s.\n" +
-	"An operator who loses this file loses every secret that the key encrypts, " +
-	"and nobody can recover them.\n" +
-	"Make the key file? Type yes to make it: "
-
-// promptForKeyFile prints where serve will write the key file, that an
-// operator who loses the file loses every secret that the key encrypts with
-// no recovery, and asks for an explicit yes. It answers true only on yes.
-// The read is capped, so an over-long answer counts as not yes.
-func promptForKeyFile(stdin io.Reader, stderr io.Writer, path string) (bool, error) {
-	_, printErr := fmt.Fprintf(stderr, keyPromptText, path)
-	if printErr != nil {
-		return false, fmt.Errorf("write key prompt: %w", printErr)
-	}
-
-	line, readErr := bufio.NewReader(io.LimitReader(stdin, maxKeyAnswerBytes+1)).ReadString('\n')
-	if readErr != nil && !errors.Is(readErr, io.EOF) {
-		return false, fmt.Errorf("read key answer: %w", readErr)
-	}
-
-	if len(line) > maxKeyAnswerBytes {
-		return false, nil
-	}
-
-	return strings.EqualFold(strings.TrimSpace(line), "yes"), nil
-}
-
-// generateKeyFile writes 32 random bytes in base64 to a new file at path
-// with owner-only mode. It never overwrites a file that exists.
-func generateKeyFile(path string) ([]byte, error) {
-	key := make([]byte, generatedKeyBytes)
-
-	if _, err := rand.Read(key); err != nil {
-		return nil, fmt.Errorf("generate key-encryption key: %w", err)
-	}
-
-	if dir := filepath.Dir(path); dir != "" && dir != "." {
-		if err := os.MkdirAll(dir, blobDirPerm); err != nil {
-			return nil, fmt.Errorf("create key directory: %w", err)
-		}
-	}
-
-	contents := base64.StdEncoding.EncodeToString(key) + "\n"
-
-	if err := writeKeyFile(path, contents, writeKeyContents); err != nil {
-		return nil, err
-	}
-
-	return key, nil
-}
-
-// writeKeyContents writes contents to file. It is the write step of
-// writeKeyFile; tests give writeKeyFile a step that fails.
-func writeKeyContents(file *os.File, contents string) error {
-	if _, err := file.WriteString(contents); err != nil {
-		return fmt.Errorf("write key file: %w", err)
-	}
-
-	return nil
-}
-
-// writeKeyFile creates a new file at path with owner-only mode, writes
-// contents with write, and syncs the file and its directory before it
-// returns: a server must never wrap secrets with a key that a crash can
-// lose. It never overwrites a file that exists. On any error after the
-// create, it removes the file, so that no half-written key file stays for
-// the next start to read.
-func writeKeyFile(path, contents string, write func(*os.File, string) error) error {
-	//nolint:gosec // The operator chose the key file path; the mode stays owner-only.
-	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, keyFileMode)
-	if err != nil {
-		if os.IsExist(err) {
-			return fmt.Errorf("key file %q already exists: refusing to overwrite: %w", path, err)
-		}
-
-		return fmt.Errorf("write key file: %w", err)
-	}
-
-	err = fillKeyFile(file, path, contents, write)
-	if err == nil {
-		err = syncDir(filepath.Dir(path))
-	}
-
-	if err != nil {
-		_ = os.Remove(path) //nolint:errcheck // The first error is the one that matters.
-
-		return err
-	}
-
-	return nil
-}
-
-// fillKeyFile writes contents with write, then syncs, closes and protects
-// the new key file. It closes file on every path. It returns the error of
-// write as it is.
-func fillKeyFile(file *os.File, path, contents string, write func(*os.File, string) error) error {
-	if err := write(file, contents); err != nil {
-		_ = file.Close() //nolint:errcheck // The write error is the one that matters.
-
-		return err
-	}
-
-	if err := file.Sync(); err != nil {
-		_ = file.Close() //nolint:errcheck // The sync error is the one that matters.
-
-		return fmt.Errorf("sync key file: %w", err)
-	}
-
-	if err := file.Close(); err != nil {
-		return fmt.Errorf("write key file: %w", err)
-	}
-
-	if err := os.Chmod(path, keyFileMode); err != nil {
-		return fmt.Errorf("protect key file: %w", err)
-	}
-
-	return nil
-}
-
-// syncDir syncs the directory dir, so that a new entry in it survives a
-// crash.
-func syncDir(dir string) error {
-	handle, err := os.Open(dir) //nolint:gosec // dir holds the key file that the operator chose.
-	if err != nil {
-		return fmt.Errorf("open key directory: %w", err)
-	}
-
-	if err := handle.Sync(); err != nil {
-		_ = handle.Close() //nolint:errcheck // The sync error is the one that matters.
-
-		return fmt.Errorf("sync key directory: %w", err)
-	}
-
-	if err := handle.Close(); err != nil {
-		return fmt.Errorf("close key directory: %w", err)
-	}
-
-	return nil
 }
 
 // serveWithStores opens the blob stores, wires the server and serves until
@@ -1497,7 +1337,7 @@ func openBlobs(ctx context.Context, cfg blobOpenConfig, logger *slog.Logger) (bl
 //
 //nolint:ireturn // The caller keeps the store as a blob.Store.
 func openFSBlobs(database, flagDir string) (blob.Store, error) {
-	blobDir := defaultBlobDir(database, flagDir)
+	blobDir := cli.DefaultBlobDir(database, flagDir)
 
 	if err := os.MkdirAll(blobDir, blobDirPerm); err != nil {
 		return nil, fmt.Errorf("create blob directory: %w", err)
@@ -1983,26 +1823,6 @@ func checkSizeFlags(limits []int64) error {
 	}
 
 	return nil
-}
-
-// defaultBlobDir returns the state content directory: the --blob-dir flag
-// when set, else a blobs directory next to the SQLite file, or blobs in the
-// working directory for PostgreSQL.
-func defaultBlobDir(database, flagDir string) string {
-	if strings.TrimSpace(flagDir) != "" {
-		return strings.TrimSpace(flagDir)
-	}
-
-	if rest, ok := strings.CutPrefix(database, "sqlite:"); ok {
-		path := strings.TrimSpace(rest)
-		if path == "" {
-			return "blobs"
-		}
-
-		return filepath.Join(filepath.Dir(path), "blobs")
-	}
-
-	return "blobs"
 }
 
 func splitList(s string) []string {
