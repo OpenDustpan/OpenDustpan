@@ -8,6 +8,10 @@ import (
 	"sync/atomic"
 )
 
+// liveProbePath is the path of the liveness probe. It checks nothing, so the gate
+// lets it pass before Start.
+const liveProbePath = "/health/live"
+
 // startMessage is the text of every refusal before Start has succeeded. Each
 // adapter renders it in its own error shape.
 const startMessage = "The server has not started. The program that embeds it must call Start before it serves requests."
@@ -18,6 +22,11 @@ const startMessage = "The server has not started. The program that embeds it mus
 type startState struct {
 	mu   sync.Mutex
 	done atomic.Bool
+}
+
+// newStartState returns a state that records no successful Start.
+func newStartState() *startState {
+	return &startState{mu: sync.Mutex{}, done: atomic.Bool{}}
 }
 
 // Start runs the start-up steps in order: the claim of the installation kind,
@@ -92,5 +101,5 @@ func withStartGate(next http.Handler, state *startState, logger *slog.Logger) ht
 
 // isLiveProbe reports whether r is the liveness probe.
 func isLiveProbe(r *http.Request) bool {
-	return (r.Method == http.MethodGet || r.Method == http.MethodHead) && r.URL.Path == "/health/live"
+	return (r.Method == http.MethodGet || r.Method == http.MethodHead) && r.URL.Path == liveProbePath
 }

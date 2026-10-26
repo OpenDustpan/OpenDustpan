@@ -1036,7 +1036,7 @@ func assemble(cfg *settings, base baseurl.Resolver, svc services, backups *backu
 		return nil, err
 	}
 
-	started := &startState{}
+	started := newStartState()
 
 	srv := &Server{
 		flushDenials: flushDenials,
@@ -2262,31 +2262,6 @@ func shutdownServer(ctx context.Context, srv *http.Server, serveErr <-chan error
 
 	if err := <-serveErr; !errors.Is(err, http.ErrServerClosed) {
 		return fmt.Errorf("serve: %w", err)
-	}
-
-	return nil
-}
-
-// runStartUp runs the start-up steps of Run in order: the key check of
-// startUp (ADR 23), then the running restores of failStoppedRestores. A done context during
-// the steps is a stop, not a failure, so it answers nil: the caller asked
-// the server to stop.
-func (s *Server) runStartUp(ctx context.Context) error {
-	startErr := s.startUp(ctx)
-	if startErr == nil {
-		startErr = s.failStoppedRestores(ctx)
-	}
-
-	if startErr == nil {
-		startErr = s.startUpAuditChain(ctx)
-	}
-
-	if startErr == nil {
-		startErr = s.bindSignInProviders(ctx)
-	}
-
-	if startErr != nil && ctx.Err() == nil {
-		return startErr
 	}
 
 	return nil
@@ -3661,7 +3636,7 @@ func debugRoute(pattern string) bool {
 	}
 
 	switch name {
-	case "/health/live", "/health/ready", "/health/ready/{component}", metricsPath:
+	case liveProbePath, "/health/ready", "/health/ready/{component}", metricsPath:
 		return true
 	default:
 		return false

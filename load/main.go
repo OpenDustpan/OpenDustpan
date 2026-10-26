@@ -300,7 +300,7 @@ func openServers(
 		return onErr(ctx, err)
 	}
 
-	running, serveErr := serveAll(served, wrapper)
+	running, serveErr := serveAll(ctx, served, wrapper)
 	cleanups = append(cleanups, running.closers...)
 
 	if serveErr != nil {
@@ -324,11 +324,11 @@ type running struct {
 // serveAll serves every instance, then the server that checks IP allowlists
 // over the first instance. On an error it answers the servers it started, so
 // the caller closes them.
-func serveAll(served []instance, wrapper *secret.BuiltinWrapper) (running, error) {
+func serveAll(ctx context.Context, served []instance, wrapper *secret.BuiltinWrapper) (running, error) {
 	var out running
 
 	for i := range served {
-		instanceURL, closeServer, err := serveInstance(served[i], wrapper)
+		instanceURL, closeServer, err := serveInstance(ctx, served[i], wrapper)
 		if err != nil {
 			return out, err
 		}
@@ -337,7 +337,7 @@ func serveAll(served []instance, wrapper *secret.BuiltinWrapper) (running, error
 		out.closers = append(out.closers, closeServer)
 	}
 
-	gateURL, closeGate, err := serveInstance(served[0], wrapper, gateOptions(served[0].ports)...)
+	gateURL, closeGate, err := serveInstance(ctx, served[0], wrapper, gateOptions(served[0].ports)...)
 	if err != nil {
 		return out, err
 	}
@@ -556,6 +556,7 @@ func newHarnessWrapper() (*secret.BuiltinWrapper, error) {
 // wrapper is the key-encryption key that all instances share. extra options
 // follow the options every server gets.
 func serveInstance(
+	ctx context.Context,
 	served instance,
 	wrapper *secret.BuiltinWrapper,
 	extra ...dustpan.Option,
@@ -599,7 +600,7 @@ func serveInstance(
 		return "", noop, fmt.Errorf("new server: %w", err)
 	}
 
-	if startErr := srv.Start(context.Background()); startErr != nil {
+	if startErr := srv.Start(ctx); startErr != nil {
 		ts.Close()
 
 		return "", noop, fmt.Errorf("start the server: %w", startErr)

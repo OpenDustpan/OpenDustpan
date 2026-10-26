@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -83,8 +82,15 @@ func TestHandlerRefusesBeforeStart(t *testing.T) {
 				t.Fatalf("%s %s: the refusal has no Retry-After", tc.method, tc.path)
 			}
 
-			if !strings.Contains(rec.Body.String(), tc.want) || !strings.Contains(rec.Body.String(), "has not started") {
-				t.Fatalf("%s %s body = %q, want %q and the text of the refusal", tc.method, tc.path, rec.Body.String(), tc.want)
+			if !strings.Contains(rec.Body.String(), tc.want) ||
+				!strings.Contains(rec.Body.String(), "has not started") {
+				t.Fatalf(
+					"%s %s body = %q, want %q and the text of the refusal",
+					tc.method,
+					tc.path,
+					rec.Body.String(),
+					tc.want,
+				)
 			}
 		})
 	}
@@ -105,7 +111,8 @@ func TestHandlerServesAfterStart(t *testing.T) {
 	srv := newEveryModuleServer(t)
 	handler := srv.Handler()
 
-	if rec := serveOnce(t, handler, http.MethodGet, "/api/dustpan/v1/capabilities"); rec.Code != http.StatusServiceUnavailable {
+	rec := serveOnce(t, handler, http.MethodGet, "/api/dustpan/v1/capabilities")
+	if rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("capabilities before Start = %d, want 503", rec.Code)
 	}
 
@@ -146,12 +153,9 @@ func TestStartRunsTheStepsOnce(t *testing.T) {
 	t.Parallel()
 
 	p := newPorts(t)
-	keys := &countingKeys{KeyStore: p.st}
+	keys := &countingKeys{KeyStore: p.st, lists: atomic.Int32{}}
 
-	ln, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("listen: %v", err)
-	}
+	ln := openTestListener(t)
 
 	opts := append(fullServerOptions(t, p.st, p.blobs, p.authn),
 		dustpan.WithSecretKeyStore(keys), dustpan.WithListener(ln))
@@ -241,7 +245,8 @@ func TestStartFailsClosed(t *testing.T) {
 		}
 	}
 
-	if rec := serveOnce(t, handler, http.MethodGet, "/api/server/namespaces"); rec.Code != http.StatusServiceUnavailable {
+	rec := serveOnce(t, handler, http.MethodGet, "/api/server/namespaces")
+	if rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("a route after a failed Start = %d, want 503", rec.Code)
 	}
 
