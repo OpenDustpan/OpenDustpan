@@ -134,7 +134,7 @@ func (h *Handler) startJob(w http.ResponseWriter, r *http.Request, p identity.Pr
 		w.Header().Set(replayedHeader, "true")
 	}
 
-	h.answerJob(ctx, w, http.StatusCreated, &j)
+	h.answerStartedJob(ctx, w, http.StatusCreated, &j)
 }
 
 // deniedTarget returns the action and the object of the audit entry of the

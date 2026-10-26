@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"slices"
 	"strconv"
@@ -181,6 +182,24 @@ func (h *Handler) answerJob(ctx context.Context, w http.ResponseWriter, status i
 		h.writeError(ctx, w, err)
 
 		return
+	}
+
+	out.Pool = name
+
+	h.writeJSON(ctx, w, status, out)
+}
+
+// answerStartedJob writes the document of a job that the start stored. A
+// failed read of the pool is logged at Warn with the job ID, and the answer
+// keeps the status, with poolID and without pool: a write that committed never
+// gets a failure answer.
+func (h *Handler) answerStartedJob(ctx context.Context, w http.ResponseWriter, status int, j *job.Job) {
+	out := toJobResponse(j)
+
+	name, err := h.poolName(ctx, j)
+	if err != nil {
+		h.logger.WarnContext(ctx, "the pool of a started job has no name in the answer",
+			slog.String("job", string(j.ID)), slog.String("error", err.Error()))
 	}
 
 	out.Pool = name
