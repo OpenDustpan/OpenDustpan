@@ -425,7 +425,7 @@ func casePathSetReadDelete(t *testing.T, e *env) {
 
 	d := gate.ApprovalDefault{
 		Scope: e.fx.acme, Version: 0, Count: 1, FreshAuth: gate.NoFreshAuth(), Approvers: gate.Approvers{
-			Groups: []string{"sre"}, Users: nil, UnitOwners: false,
+			Groups: []string{"sre"}, GroupIDs: nil, Users: nil, UnitOwners: false,
 		},
 		Unless: "", Reads: reads,
 	}
@@ -541,7 +541,12 @@ func caseConcurrentShadow(t *testing.T, e *env) {
 func caseDefaultRoundTrip(t *testing.T, e *env) {
 	t.Helper()
 
-	approvers := gate.Approvers{Groups: []string{"sre", "dba"}, Users: []string{"alice"}, UnitOwners: true}
+	approvers := gate.Approvers{
+		Groups:     []string{"sre", "dba"},
+		GroupIDs:   nil,
+		Users:      []string{"alice"},
+		UnitOwners: true,
+	}
 
 	for _, scope := range []gate.Scope{e.fx.acme, e.fx.prod, e.fx.webProd} {
 		fa, err := gate.ParseFreshAuth(120)
@@ -599,7 +604,7 @@ func caseDefaultResolves(t *testing.T, e *env) {
 
 	d := gate.ApprovalDefault{
 		Scope: e.fx.prod, Version: 0, Count: 1, FreshAuth: gate.NoFreshAuth(), Approvers: gate.Approvers{
-			Groups: nil, Users: nil, UnitOwners: false,
+			Groups: nil, GroupIDs: nil, Users: nil, UnitOwners: false,
 		},
 		Unless: "", Reads: []gate.ID{"network"},
 	}
@@ -624,10 +629,12 @@ func caseRuleFieldsValid(t *testing.T, e *env) {
 		{"count above ten", func(r *gate.ApprovalRule) { r.Count = gate.MaxApprovalCount + 1 }},
 		{
 			"no approver",
-			func(r *gate.ApprovalRule) { r.Approvers = gate.Approvers{Groups: nil, Users: nil, UnitOwners: false} },
+			func(r *gate.ApprovalRule) {
+				r.Approvers = gate.Approvers{Groups: nil, GroupIDs: nil, Users: nil, UnitOwners: false}
+			},
 		},
 		{"empty approver name", func(r *gate.ApprovalRule) {
-			r.Approvers = gate.Approvers{Groups: []string{""}, Users: nil, UnitOwners: false}
+			r.Approvers = gate.Approvers{Groups: []string{""}, GroupIDs: nil, Users: nil, UnitOwners: false}
 		}},
 		{"window below 60", func(r *gate.ApprovalRule) { r.FreshAuth = gate.FreshAuth{Set: true, Seconds: 59} }},
 		{"window above 900", func(r *gate.ApprovalRule) { r.FreshAuth = gate.FreshAuth{Set: true, Seconds: 901} }},

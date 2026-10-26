@@ -16,8 +16,13 @@ import (
 // no adapter can meet shows up here first.
 type memory struct {
 	mu      sync.Mutex
-	groups  map[string]map[string]memberRow
+	groups  map[string]*memoryGroup
 	nextRow int
+}
+
+type memoryGroup struct {
+	name    string
+	members map[string]memberRow
 }
 
 type memberRow struct {
@@ -28,15 +33,19 @@ type memberRow struct {
 // NewMemory returns a fixture over a directory that keeps its groups in
 // memory.
 func NewMemory(_ *testing.T) Fixture {
-	m := &memory{mu: sync.Mutex{}, groups: map[string]map[string]memberRow{}, nextRow: 0}
+	m := &memory{mu: sync.Mutex{}, groups: map[string]*memoryGroup{}, nextRow: 0}
 
 	return Fixture{
 		Directory: m,
-		Group: func(_ *testing.T, name string) {
+		Group: func(_ *testing.T, name string) string {
 			m.mu.Lock()
 			defer m.mu.Unlock()
 
-			m.groups[strings.ToLower(name)] = map[string]memberRow{}
+			m.nextRow++
+			id := fmt.Sprintf("group-%d", m.nextRow)
+			m.groups[id] = &memoryGroup{name: name, members: map[string]memberRow{}}
+
+			return id
 		},
 		Member: func(_ *testing.T, group, subject string, kind principal.Kind, disabled bool) string {
 			m.mu.Lock()
@@ -44,7 +53,7 @@ func NewMemory(_ *testing.T) Fixture {
 
 			m.nextRow++
 			id := fmt.Sprintf("%s#%d", subject, m.nextRow)
-			m.groups[strings.ToLower(group)][id] = memberRow{kind: kind, disabled: disabled}
+			m.byName(group).members[id] = memberRow{kind: kind, disabled: disabled}
 
 			return id
 		},
@@ -52,28 +61,57 @@ func NewMemory(_ *testing.T) Fixture {
 			m.mu.Lock()
 			defer m.mu.Unlock()
 
-			delete(m.groups[strings.ToLower(group)], id)
+			delete(m.byName(group).members, id)
+		},
+		Delete: func(_ *testing.T, id string) {
+			m.mu.Lock()
+			defer m.mu.Unlock()
+
+			delete(m.groups, id)
+		},
+		Rename: func(_ *testing.T, id, name string) {
+			m.mu.Lock()
+			defer m.mu.Unlock()
+
+			m.groups[id].name = name
 		},
 	}
 }
 
-// GroupMembers implements gate.ApproverDirectory.
-func (m *memory) GroupMembers(_ context.Context, name string) (gate.MemberCounts, error) {
+// ResolveGroup implements gate.ApproverDirectory.
+func (m *memory) ResolveGroup(_ context.Context, name string) (gate.GroupRef, error) {
+	none := gate.GroupRef{ID: "", Name: ""}
+
 	if err := principal.ValidateGroupName(name); err != nil {
-		return gate.MemberCounts{Enabled: 0, Persons: 0}, fmt.Errorf("%w: %w", gate.ErrInvalid, err)
+		return none, fmt.Errorf("%w: %w", gate.ErrInvalid, err)
 	}
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	members, ok := m.groups[strings.ToLower(name)]
+	for id, g := range m.groups {
+		if strings.EqualFold(g.name, name) {
+			return gate.GroupRef{ID: id, Name: g.name}, nil
+		}
+	}
+
+	return none, fmt.Errorf("%w: group %q", gate.ErrNotFound, name)
+}
+
+// GroupByID implements gate.ApproverDirectory.
+func (m *memory) GroupByID(_ context.Context, id string) (gate.GroupRef, gate.MemberCounts, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	group, ok := m.groups[id]
 	if !ok {
-		return gate.MemberCounts{Enabled: 0, Persons: 0}, fmt.Errorf("%w: group %q", gate.ErrNotFound, name)
+		return gate.GroupRef{ID: "", Name: ""}, gate.MemberCounts{Enabled: 0, Persons: 0},
+			fmt.Errorf("%w: group %q", gate.ErrNotFound, id)
 	}
 
 	counts := gate.MemberCounts{Enabled: 0, Persons: 0}
 
-	for _, row := range members {
+	for _, row := range group.members {
 		if row.disabled {
 			continue
 		}
@@ -85,5 +123,17 @@ func (m *memory) GroupMembers(_ context.Context, name string) (gate.MemberCounts
 		}
 	}
 
-	return counts, nil
+	return gate.GroupRef{ID: id, Name: group.name}, counts, nil
+}
+
+// byName returns the group called name without regard to case. The caller
+// holds the lock and names a group that exists.
+func (m *memory) byName(name string) *memoryGroup {
+	for _, g := range m.groups {
+		if strings.EqualFold(g.name, name) {
+			return g
+		}
+	}
+
+	return nil
 }

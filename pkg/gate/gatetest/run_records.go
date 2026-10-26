@@ -73,7 +73,7 @@ func record(t *testing.T, ns namespace.Name, change gate.ChangeRef, at time.Time
 		}},
 		Requirements: []gate.Requirement{{
 			Name: gate.RuleRequirement("dba-review"), Version: 2,
-			Approvers: gate.Approvers{Groups: []string{"dba"}, Users: nil, UnitOwners: true}, Count: 2,
+			Approvers: gate.Approvers{Groups: []string{"dba"}, GroupIDs: nil, Users: nil, UnitOwners: true}, Count: 2,
 			AuthorMayApprove: false, FreshAuth: gate.FreshAuth{Set: true, Seconds: 300}, TimeoutSeconds: 3600,
 			Signatures: []gate.Signature{{
 				Subject: "bob", At: at,
