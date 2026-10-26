@@ -39,10 +39,12 @@ Consider a change done only when `make check` passes with zero findings:
 - `make trufflehog` finds no secret in the Git history.
 - `make licenses` finds a license file for each module that the binary links.
   The release archives and the container image ship these files.
-- `go test -race ./...` passes, including the conformance suites. Each test
-  package has a `leak_test.go` file. Its `TestMain` calls
-  `goleak.VerifyTestMain`, which fails the package if a goroutine continues
-  to run after the tests. Add this file to each new test package.
+- `go test -race ./...` passes, including the conformance suites. When you run
+  a store package directly, pass `-timeout 60m`: one run takes more than the
+  default 10 minutes. Each test package has a `leak_test.go` file. Its
+  `TestMain` calls `goleak.VerifyTestMain`, which fails the package if a
+  goroutine continues to run after the tests. Add this file to each new test
+  package.
 - `sqlc diff` is clean (regenerate with `make generate`, never edit `internal/db`).
 - A feature that a user can see has its page in the user documentation in
   the same pull request (ADR 214).
