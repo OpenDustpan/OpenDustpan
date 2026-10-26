@@ -476,15 +476,6 @@ func revRunnerRetired(t *testing.T, s RevocationStore, f revFixture) {
 	}
 }
 
-// revRunnerLive fails the test when the runner of f is retired.
-func revRunnerLive(t *testing.T, s RevocationStore, f revFixture) {
-	t.Helper()
-
-	if got := revRunner(t, s, f).RetiredAt; !got.IsZero() {
-		t.Fatalf("runner was retired at %v, want it live", got)
-	}
-}
-
 // revEnter moves the installation to maintenance mode.
 func revEnter(t *testing.T, s RevocationStore) {
 	t.Helper()
@@ -669,15 +660,12 @@ func revJoinToken(t *testing.T, s RevocationStore, f revFixture) runner.JoinToke
 		t.Fatalf("join tokens: %v", err)
 	}
 
-	for _, tok := range tokens {
-		if tok.ID == f.joinToken.ID {
-			return tok
-		}
+	i := slices.IndexFunc(tokens, func(tok runner.JoinToken) bool { return tok.ID == f.joinToken.ID })
+	if i < 0 {
+		t.Fatalf("join tokens = %+v, want the token %s", tokens, f.joinToken.ID)
 	}
 
-	t.Fatalf("join tokens = %+v, want the token %s", tokens, f.joinToken.ID)
-
-	return runner.JoinToken{}
+	return tokens[i]
 }
 
 // revJoinTokenRevoked fails the test unless the join token of f is revoked.

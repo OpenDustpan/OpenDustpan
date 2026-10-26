@@ -3940,17 +3940,13 @@ func mountAPI(mux *rootMux, a adapters, cfg *settings) error {
 	mux.Handle("/api/audit/", withCORS(withJSONMethodNotAllowed(a.audit), cfg.allowedOrigins))
 	// The runner protocol is outside /api/. A runner sends no cookie and no
 	// Origin header, so it passes no CORS gate. The management API of the
-	// runners is more specific than /api/, so it reaches its own adapter. Its
-	// retire and join token revoke routes only reduce access, so they pass the
-	// maintenance gate; the other routes answer 503.
+	// runners is more specific than /api/, so it reaches its own adapter.
 	if a.runners != nil {
 		mux.Handle("/runner/v1/", withMaintenance(a.runners, a.maintenance, shapeRunner, cfg.logger))
 		mux.Handle(
 			"/api/runners/",
 			withCORS(
-				withMaintenanceUnlessReducing(
-					withJSONMethodNotAllowed(a.runners), a.maintenance, shapeInventory, cfg.logger,
-				),
+				withRunnerMaintenance(withJSONMethodNotAllowed(a.runners), a.maintenance, shapeInventory, cfg.logger),
 				cfg.allowedOrigins,
 			),
 		)

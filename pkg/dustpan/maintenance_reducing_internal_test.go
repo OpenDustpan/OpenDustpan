@@ -12,6 +12,8 @@ import (
 func TestIsReducingRunnerRoute(t *testing.T) {
 	t.Parallel()
 
+	routes := newReducingRunnerRoutes()
+
 	tests := []struct {
 		name   string
 		method string
@@ -36,7 +38,7 @@ func TestIsReducingRunnerRoute(t *testing.T) {
 			req := httptest.NewRequestWithContext(t.Context(), tc.method, "/", nil)
 			req.URL.Path = tc.path
 
-			if got := isReducingRunnerRoute(req); got != tc.want {
+			if got := isReducingRunnerRoute(routes, req); got != tc.want {
 				t.Fatalf("isReducingRunnerRoute(%s %s) = %v, want %v", tc.method, tc.path, got, tc.want)
 			}
 		})

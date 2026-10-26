@@ -30,9 +30,16 @@ func runnerSeedEntry() []audit.Entry {
 	}}
 }
 
+// runnerRows holds the IDs of the rows that seedRunnerRows creates.
+type runnerRows struct {
+	pool   string
+	token  string
+	runner string
+}
+
 // seedRunnerRows creates a pool, an unused join token and a runner of the
-// pool in acme, and returns the pool ID, the token ID and the runner ID.
-func seedRunnerRows(t *testing.T, st *sqlite.Store) (pool, token, rn string) {
+// pool in acme.
+func seedRunnerRows(t *testing.T, st *sqlite.Store) runnerRows {
 	t.Helper()
 
 	ctx := t.Context()
@@ -85,7 +92,7 @@ func seedRunnerRows(t *testing.T, st *sqlite.Store) (pool, token, rn string) {
 		t.Fatalf("join runner: %v", err)
 	}
 
-	return p.ID, unused.ID, joined.Runner.ID
+	return runnerRows{pool: p.ID, token: unused.ID, runner: joined.Runner.ID}
 }
 
 // TestRunnerManagementInMaintenanceMode proves that only the routes which
@@ -98,57 +105,57 @@ func TestRunnerManagementInMaintenanceMode(t *testing.T) {
 	tests := []struct {
 		name   string
 		method string
-		path   func(pool, token, rn string) string
+		path   func(rows runnerRows) string
 		body   string
 		want   int
 	}{
 		{
 			"retire a runner", http.MethodPost,
-			func(_, _, rn string) string { return "/api/runners/acme/runners/" + rn + "/retire" }, "",
+			func(r runnerRows) string { return "/api/runners/acme/runners/" + r.runner + "/retire" }, "",
 			http.StatusNoContent,
 		},
 		{
 			"revoke a join token", http.MethodPost,
-			func(pool, token, _ string) string {
-				return "/api/runners/acme/pools/" + pool + "/join-tokens/" + token + "/revoke"
+			func(r runnerRows) string {
+				return "/api/runners/acme/pools/" + r.pool + "/join-tokens/" + r.token + "/revoke"
 			}, "", http.StatusNoContent,
 		},
 		{
 			"drain a runner", http.MethodPost,
-			func(_, _, rn string) string { return "/api/runners/acme/runners/" + rn + "/drain" }, "",
+			func(r runnerRows) string { return "/api/runners/acme/runners/" + r.runner + "/drain" }, "",
 			http.StatusServiceUnavailable,
 		},
 		{
-			"create a pool", http.MethodPost, func(_, _, _ string) string { return "/api/runners/acme/pools" },
+			"create a pool", http.MethodPost, func(runnerRows) string { return "/api/runners/acme/pools" },
 			`{"name":"other","purpose":"jobs"}`, http.StatusServiceUnavailable,
 		},
 		{
 			"update a pool", http.MethodPatch,
-			func(pool, _, _ string) string { return "/api/runners/acme/pools/" + pool }, `{}`,
+			func(r runnerRows) string { return "/api/runners/acme/pools/" + r.pool }, `{}`,
 			http.StatusServiceUnavailable,
 		},
 		{
 			"delete a pool", http.MethodDelete,
-			func(pool, _, _ string) string { return "/api/runners/acme/pools/" + pool }, "",
+			func(r runnerRows) string { return "/api/runners/acme/pools/" + r.pool }, "",
 			http.StatusServiceUnavailable,
 		},
 		{
 			"create a join token", http.MethodPost,
-			func(pool, _, _ string) string { return "/api/runners/acme/pools/" + pool + "/join-tokens" }, `{}`,
+			func(r runnerRows) string { return "/api/runners/acme/pools/" + r.pool + "/join-tokens" }, `{}`,
 			http.StatusServiceUnavailable,
 		},
 		{
-			"list pools", http.MethodGet, func(_, _, _ string) string { return "/api/runners/acme/pools" }, "",
+			"list pools", http.MethodGet, func(runnerRows) string { return "/api/runners/acme/pools" }, "",
 			http.StatusServiceUnavailable,
 		},
 		{
 			"list runners", http.MethodGet,
-			func(pool, _, _ string) string { return "/api/runners/acme/pools/" + pool + "/runners" }, "",
+			func(r runnerRows) string { return "/api/runners/acme/pools/" + r.pool + "/runners" }, "",
 			http.StatusServiceUnavailable,
 		},
 		{
 			"retire with another method", http.MethodGet,
-			func(_, _, rn string) string { return "/api/runners/acme/runners/" + rn + "/retire" }, "",
+			func(r runnerRows) string { return "/api/runners/acme/runners/" + r.runner + "/retire" }, "",
 			http.StatusServiceUnavailable,
 		},
 	}
@@ -157,10 +164,7 @@ func TestRunnerManagementInMaintenanceMode(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			var (
-				st                *sqlite.Store
-				pool, token, runn string
-			)
+			var st *sqlite.Store
 
 			h := runnerServer(t, "https://dustpan.test/", func(s *sqlite.Store) dustpan.Option {
 				st = s
@@ -168,7 +172,7 @@ func TestRunnerManagementInMaintenanceMode(t *testing.T) {
 				return withRunnerStores(s)
 			})
 
-			pool, token, runn = seedRunnerRows(t, st)
+			rows := seedRunnerRows(t, st)
 
 			if err := st.SetState(t.Context(), maintenance.StateMaintenance); err != nil {
 				t.Fatalf("enter maintenance mode: %v", err)
@@ -177,7 +181,7 @@ func TestRunnerManagementInMaintenanceMode(t *testing.T) {
 			waitForRunnerAPIStatus(t, h, http.StatusServiceUnavailable)
 
 			req := httptest.NewRequestWithContext(
-				t.Context(), tc.method, tc.path(pool, token, runn), strings.NewReader(tc.body),
+				t.Context(), tc.method, tc.path(rows), strings.NewReader(tc.body),
 			)
 			req.Header.Set("Authorization", "token "+runnerAdminToken)
 
