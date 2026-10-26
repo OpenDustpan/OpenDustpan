@@ -267,7 +267,7 @@ func errorOutcome(resp *client.Response, err error) *errorResult {
 	case errors.As(err, &apiErr):
 		e := &errorResult{Code: apiErr.Status, Message: apiErr.Body.Message, ErrorArgs: apiErr.Body.ErrorArgs}
 		if apiErr.Body.ErrorCode != nil {
-			e.ErrorCode = *apiErr.Body.ErrorCode
+			e.ErrorCode = string(*apiErr.Body.ErrorCode)
 		}
 
 		return e
