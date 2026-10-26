@@ -33,6 +33,8 @@ it, but lacks the action of the route, gets 403.
 
 Errors have the body `{"code": 404, "message": "..."}`.
 
+The source filter of a namespace has its own page: [Source filter API](source-filter-api.md).
+
 ### Pools
 
 A pool belongs to one namespace. Its purpose is `jobs` or `sweeps`, and it
