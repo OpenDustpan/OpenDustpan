@@ -550,7 +550,9 @@ func join(ctx context.Context, q *db.Queries, j runner.Joining, fence namespace.
 		return runner.Joined{}, fmt.Errorf("encode labels: %w", err)
 	}
 
-	placed, err := placeRunner(ctx, q, &placement{nsID: nsID, pool: &pool, joining: &j, labels: labels})
+	pl := placement{nsID: nsID, tokenID: tok.ID, pool: &pool, joining: &j, labels: labels}
+
+	placed, err := placeRunner(ctx, q, &pl)
 	if err != nil {
 		return runner.Joined{}, err
 	}
@@ -597,6 +599,7 @@ func usableJoinToken(
 // placement is what placeRunner needs to place the runner of a join.
 type placement struct {
 	nsID    string
+	tokenID string
 	pool    *runner.Pool
 	joining *runner.Joining
 	labels  string
@@ -635,7 +638,7 @@ func placeRunner(ctx context.Context, q *db.Queries, pl *placement) (placed, err
 		err = q.InsertRunner(ctx, db.InsertRunnerParams{
 			ID: id, NamespaceID: nsID, PoolID: pool.ID, Name: req.Name, Kind: string(req.Kind),
 			Isolation: string(req.Isolation), Labels: labels, Release: releaseString(req.Release),
-			KeyPublic: req.Key.Public, KeyCreatedAtMs: j.At.UnixMilli(), JoinedWith: j.TokenSHA256,
+			KeyPublic: req.Key.Public, KeyCreatedAtMs: j.At.UnixMilli(), JoinedWith: pl.tokenID,
 			LastSeenAtMs: j.At.UnixMilli(), JoinedAtMs: j.At.UnixMilli(),
 		})
 		if err != nil {
@@ -672,7 +675,7 @@ func placeRunner(ctx context.Context, q *db.Queries, pl *placement) (placed, err
 	err = q.RejoinRunner(ctx, db.RejoinRunnerParams{
 		ID: known.ID, Kind: string(req.Kind), Isolation: string(req.Isolation), Labels: labels,
 		Release: releaseString(req.Release), KeyPublic: req.Key.Public, KeyCreatedAtMs: j.At.UnixMilli(),
-		JoinedWith: j.TokenSHA256, LastSeenAtMs: j.At.UnixMilli(),
+		JoinedWith: pl.tokenID, LastSeenAtMs: j.At.UnixMilli(),
 	})
 	if err != nil {
 		return none, fmt.Errorf("rejoin runner: %w", err)
