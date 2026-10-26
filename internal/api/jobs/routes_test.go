@@ -354,6 +354,7 @@ func runningJob(t *testing.T, id job.ID) job.Job {
 						Type:      job.GateApproval,
 						Approvals: 1,
 						Groups:    []string{"ops"},
+						GroupIDs:  nil,
 						AllowSelf: false,
 						Timeout:   0,
 						BindPlan:  true,

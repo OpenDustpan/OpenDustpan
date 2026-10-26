@@ -68,7 +68,7 @@ func RuleApprovers(a Approvers) Approvers {
 		return a
 	}
 
-	return Approvers{Groups: a.Groups, Users: []string{NoApprover}, UnitOwners: false}
+	return Approvers{Groups: a.Groups, GroupIDs: nil, Users: []string{NoApprover}, UnitOwners: false}
 }
 
 // NamesNobody reports whether nobody can meet a: it holds no group, does not

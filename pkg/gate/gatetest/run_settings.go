@@ -37,8 +37,18 @@ func settingsRunners() map[string]runner {
 // approvalDefault returns an approval default of scope.
 func approvalDefault(scope gate.Scope, count int) gate.ApprovalDefault {
 	return gate.ApprovalDefault{
-		Scope: scope, Version: 0, Count: count, FreshAuth: gate.NoFreshAuth(),
-		Approvers: gate.Approvers{Groups: []string{"sre"}, Users: nil, UnitOwners: false}, Unless: "", Reads: nil,
+		Scope:     scope,
+		Version:   0,
+		Count:     count,
+		FreshAuth: gate.NoFreshAuth(),
+		Approvers: gate.Approvers{
+			Groups:     []string{"sre"},
+			GroupIDs:   nil,
+			Users:      nil,
+			UnitOwners: false,
+		},
+		Unless: "",
+		Reads:  nil,
 	}
 }
 
@@ -71,7 +81,7 @@ func caseDefaultFieldsValid(t *testing.T, e *env) {
 		{"window below 60", func(d *gate.ApprovalDefault) { d.FreshAuth = gate.FreshAuth{Set: true, Seconds: 59} }},
 		{"window above 900", func(d *gate.ApprovalDefault) { d.FreshAuth = gate.FreshAuth{Set: true, Seconds: 901} }},
 		{"empty approver name", func(d *gate.ApprovalDefault) {
-			d.Approvers = gate.Approvers{Groups: nil, Users: []string{""}, UnitOwners: false}
+			d.Approvers = gate.Approvers{Groups: nil, GroupIDs: nil, Users: []string{""}, UnitOwners: false}
 		}},
 	}
 

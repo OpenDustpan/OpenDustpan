@@ -2,6 +2,7 @@ package dustpan
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -54,11 +55,10 @@ type groupDirectory struct {
 
 var _ gate.ApproverDirectory = groupDirectory{groups: nil}
 
-// GroupMembers implements gate.ApproverDirectory. It reads the members of the
-// group in pages and counts the active memberships of principals that are not
-// disabled, and of those the persons.
-func (d groupDirectory) GroupMembers(ctx context.Context, name string) (gate.MemberCounts, error) {
-	none := gate.MemberCounts{Enabled: 0, Persons: 0}
+// ResolveGroup implements gate.ApproverDirectory. It finds the group that is
+// called name now, and answers its ID.
+func (d groupDirectory) ResolveGroup(ctx context.Context, name string) (gate.GroupRef, error) {
+	none := gate.GroupRef{ID: "", Name: ""}
 
 	if err := principal.ValidateGroupName(name); err != nil {
 		return none, fmt.Errorf("%w: %w", gate.ErrInvalid, err)
@@ -73,7 +73,35 @@ func (d groupDirectory) GroupMembers(ctx context.Context, name string) (gate.Mem
 		return none, err
 	}
 
-	return d.count(ctx, group)
+	return gate.GroupRef{ID: group.ID, Name: group.Name}, nil
+}
+
+// GroupByID implements gate.ApproverDirectory. It reads the group by its ID,
+// and counts the active memberships of principals that are not disabled, and
+// of those the persons.
+func (d groupDirectory) GroupByID(ctx context.Context, id string) (gate.GroupRef, gate.MemberCounts, error) {
+	none, noCounts := gate.GroupRef{ID: "", Name: ""}, gate.MemberCounts{Enabled: 0, Persons: 0}
+
+	if d.groups == nil {
+		return none, noCounts, fmt.Errorf("%w: group %q: this server keeps no groups", gate.ErrNotFound, id)
+	}
+
+	group, err := d.groups.GetGroup(ctx, id)
+
+	switch {
+	case errors.Is(err, principal.ErrNotFound):
+		return none, noCounts, fmt.Errorf("%w: group %q", gate.ErrNotFound, id)
+	case err != nil:
+		return none, noCounts, fmt.Errorf("read the group %q: %w", id, err)
+	default:
+	}
+
+	counts, err := d.count(ctx, group)
+	if err != nil {
+		return none, noCounts, err
+	}
+
+	return gate.GroupRef{ID: group.ID, Name: group.Name}, counts, nil
 }
 
 // count reads the members of group in pages and counts the active memberships

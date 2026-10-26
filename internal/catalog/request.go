@@ -307,6 +307,7 @@ func GateFor(d *policy.Combined, bindPlan bool) []job.Gate {
 	for _, a := range d.Approvals {
 		out = append(out, job.Gate{
 			Type: job.GateApproval, Approvals: a.Count, Groups: slices.Clone(a.Groups),
+			GroupIDs:  nil,
 			AllowSelf: false, Timeout: 0, BindPlan: bindPlan,
 		})
 	}
