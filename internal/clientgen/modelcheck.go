@@ -38,7 +38,9 @@ func checkOperation(op *model.Operation) error {
 		return err
 	}
 
-	for _, p := range op.Parameters {
+	for i := range op.Parameters {
+		p := &op.Parameters[i]
+
 		kind := NameQueryParameter
 		if p.In == model.InPath {
 			kind = NamePathParameter
@@ -87,7 +89,9 @@ func checkOperationTypes(op *model.Operation) error {
 
 	var types []model.Type
 
-	for _, p := range op.Parameters {
+	for i := range op.Parameters {
+		p := &op.Parameters[i]
+
 		types = append(types, p.Type)
 	}
 

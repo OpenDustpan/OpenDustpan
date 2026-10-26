@@ -7,6 +7,7 @@ import {
   closedEnum,
   dateTime,
   int64,
+  literal,
   nullable,
   number,
   object,
@@ -15,6 +16,7 @@ import {
   record,
   ref,
   string,
+  union,
 } from "./decode.js";
 import type { Decoder } from "./decode.js";
 import type {
@@ -35,6 +37,13 @@ export const decode{{$t.Name}}: Decoder<{{$t.Name}}> = object<{{$t.Name}}>({{tsS
   {{.Name}}: {{if .Optional}}optional({{.Decoder}}){{else}}{{.Decoder}}{{end}},
 {{- end}}
 });
+{{- else if $t.IsUnion -}}
+/** The validator of {{$t.Name}}. A value of {{$t.Discriminator}} that no variant names gets the validator of {{$t.Base}}. */
+export const decode{{$t.Name}}: Decoder<{{$t.Name}}> = union<{{$t.Name}}>({{tsString $t.Name}}, {{$t.Discriminator}}, {
+{{- range $t.Variants}}
+  {{.Value}}: ref(() => decode{{.Name}}),
+{{- end}}
+}, ref(() => decode{{$t.Base}}));
 {{- else if $t.IsRecord -}}
 /** The validator of {{$t.Name}}. */
 export const decode{{$t.Name}}: Decoder<{{$t.Name}}> = record({{$t.RecordDecoder}});

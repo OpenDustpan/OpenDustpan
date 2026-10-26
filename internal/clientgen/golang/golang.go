@@ -309,6 +309,12 @@ func (d *data) addTypes(api *model.API) error {
 	for i := range api.Schemas {
 		s := &api.Schemas[i]
 
+		// The Go client reads an error answer as the base error schema. It
+		// writes no union and no schema that only a union uses.
+		if s.Kind == model.KindUnion || s.Union != "" {
+			continue
+		}
+
 		if err := claim(seen, s.Name, "schema "+s.Name); err != nil {
 			return err
 		}
@@ -323,6 +329,11 @@ func (d *data) addTypes(api *model.API) error {
 			tv, err = enumView(s, seen)
 		case model.KindObject:
 			tv, err = objectView(s)
+		case model.KindUnion:
+			// Defense in depth: the check above skips a union. This case stays so that a
+			// change of that check cannot make the set write a type it has no code for.
+			err = fmt.Errorf("%w: schema %s is a union, which the Go template set does not write",
+				clientgen.ErrUnsupported, s.Name)
 		default:
 			err = fmt.Errorf("%w: schema %s has an unknown kind", clientgen.ErrInvalidDescription, s.Name)
 		}
