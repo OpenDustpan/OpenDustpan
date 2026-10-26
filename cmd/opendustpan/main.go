@@ -1174,9 +1174,9 @@ func durableStoreOption(st store) []dustpan.Option {
 func runnerStoreOption(st store) []dustpan.Option {
 	switch s := st.(type) {
 	case sqliteStore:
-		return []dustpan.Option{dustpan.WithRunners(s.Runners())}
+		return []dustpan.Option{dustpan.WithRunners(s.Runners()), dustpan.WithSourceFilters(s.SourceFilters())}
 	case postgresStore:
-		return []dustpan.Option{dustpan.WithRunners(s.Runners())}
+		return []dustpan.Option{dustpan.WithRunners(s.Runners()), dustpan.WithSourceFilters(s.SourceFilters())}
 	default:
 		return nil
 	}
