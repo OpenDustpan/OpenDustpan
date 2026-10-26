@@ -8,9 +8,9 @@ import (
 	"slices"
 	"strconv"
 
-	"opendustpan.org/opendustpan/internal/source"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/source"
 	"opendustpan.org/opendustpan/pkg/store/sqlite/internal/db"
 )
 

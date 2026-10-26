@@ -9,11 +9,11 @@ import (
 	"strings"
 	"testing"
 
-	"opendustpan.org/opendustpan/internal/source"
-	"opendustpan.org/opendustpan/internal/source/sourcetest"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/source"
+	"opendustpan.org/opendustpan/pkg/source/sourcetest"
 	"opendustpan.org/opendustpan/pkg/store/postgres"
 	"opendustpan.org/opendustpan/pkg/store/storetest"
 )

@@ -14,10 +14,11 @@ import (
 	"testing"
 
 	"opendustpan.org/opendustpan/internal/api/sourcefilter"
-	"opendustpan.org/opendustpan/internal/source"
+	fetchsource "opendustpan.org/opendustpan/internal/source"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/source"
 )
 
 // emptyDocument is the answer for a namespace that never set the filter.
@@ -362,9 +363,9 @@ func TestSourceFilterSnapshotKey(t *testing.T) {
 
 	e := newEnv(t, openSQLite, identity.AdminOnly{})
 	key := func() string {
-		return source.SnapshotKey(&source.Request{
+		return fetchsource.SnapshotKey(&fetchsource.Request{
 			Namespace: "acme", Connection: "github", Repository: "acme/infra", Commit: strings.Repeat("a", 40),
-			Format: source.FormatSHA1, Filter: storedFilter(t, e),
+			Format: fetchsource.FormatSHA1, Filter: storedFilter(t, e),
 		})
 	}
 
