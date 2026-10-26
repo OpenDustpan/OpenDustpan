@@ -22,8 +22,8 @@ only when the project owner accepts it in an ADR.
   request. A cache is a requirement, not an option.
 - **A cache decides cost and quota, not the client.** For a workload of 100
   requests a second to one namespace, vendor prices give about $778 a month
-  with no cache and about $0.05 with the refresh of ADR 217 decision 12
-  (section 6).
+  with no cache and about $0.05 before the free tier (so $0) with the refresh of ADR 217
+  decision 12 (section 6).
 - **SDK size varies by 5.8 times.** Added to a `net/http` baseline, the
   Vault client adds 2.0 MB, the AWS SDK 4.2 MB and 15 modules, and the Google
   Cloud SDK 11.6 MB and 32 modules. The four SDKs together add 18.0 MB and 71 modules. The server
@@ -62,10 +62,10 @@ only when the project owner accepts it in an ADR.
   `scripts/trivy-license-gate.py`. That gate passes LOW (MIT, BSD,
   Apache-2.0) and MEDIUM (MPL-2.0).
 - **Vulnerability history:** the Go vulnerability database index
-  (`https://vuln.go.dev/index/modules.json`, read 2026-10-26), and
+  (`https://vuln.go.dev/index/modules.json`, retrieved 2026-10-26), and
   `govulncheck` v1.8.0 (the version the Makefile pins) against the database
   of 2026-10-21.
-- **Limits and prices:** the vendor pages in section 4, read 2026-10-26.
+- **Limits and prices:** the vendor pages in section 4, retrieved 2026-10-26.
   Prices change. Check the page before you rely on a number.
 - **Not done:** any call to a cloud API, and any use of a credential.
 
@@ -160,8 +160,9 @@ Notes on the table:
   links `libc` dynamically and loads the vendor library at run time. The
   release image builds static binaries with `CGO_ENABLED=0`. A PKCS#11 client
   in the server needs a second, cgo build and a different base image.
-- **The SDKs pin old transitive modules.** `govulncheck` v1.8.0 reports
-  findings in modules that the SDKs select, not in the SDK code:
+- **The scratch modules select old transitive modules.** `govulncheck`
+  v1.8.0 reports findings in modules that the scratch modules select, not in
+  the SDK code. The table is for the scratch modules, not for the server:
 
   | Scratch module | Findings | Module and version found | Fixed in |
   | --- | --- | --- | --- |
@@ -172,10 +173,16 @@ Notes on the table:
   | gRPC adapter protocol | 4 (called) | `golang.org/x/net` v0.57.0 | v0.60.0 |
   | All four | 5 (called) | `golang.org/x/net` v0.58.0 | v0.60.0 |
 
-  A bump of the module in our `go.mod` clears these findings. We do not
-  link `x/net` today (`go.mod` lists `x/sync`, `x/sys` and `x/text`). Each
-  SDK adds a module that we must keep current. `make vuln` would fail on the
-  day a new advisory appears, until we bump.
+  The server does not have these findings. Its module graph already selects
+  `golang.org/x/net` v0.60.0 (the fixed version), `golang.org/x/text`
+  v0.43.0 and `go-jose/v4` v4.1.6, because the Go tool takes the highest
+  version in the graph. `go.mod` also lists `x/crypto`, `x/exp`, `x/oauth2`,
+  `x/sync` and `x/sys`. To check this, I added all four SDKs to a clean
+  worktree of commit 1b073cc, ran `go mod tidy`, and ran `govulncheck` on a
+  `main` that calls all four. It reported no vulnerability. The same step
+  raised the `go list -m all` count from 55 to 285 lines, so the module graph
+  grows more than the 71 compiled modules suggest. A future advisory for one
+  of these modules would still fail `make vuln` until we bump the module.
 
 ### Vulnerability history of the modules
 
@@ -231,14 +238,14 @@ Notes:
 
 ## 4. Limits and prices from the vendors
 
-All figures are from the pages named in the last column, read 2026-10-26.
+All figures are from the pages named in the last column, retrieved 2026-10-26.
 "Symmetric" means the operation that wraps a 32-byte key with a symmetric
 key, or with an RSA key for Azure.
 
 | KMS | Payload per wrap call | Request limit | Price of a wrap or unwrap | Price of a key | Source |
 | --- | --- | --- | --- | --- | --- |
-| AWS KMS | 4,096 bytes for a symmetric key. The key supports encryption context. | Shared across Encrypt, Decrypt, ReEncrypt and others: 10,000 requests a second by default, 20,000 in eight Regions, and 100,000 in us-east-1, us-west-2 and eu-west-1. RSA keys: 1,000. | $0.03 for 10,000 requests, after a free tier of 20,000 requests a month | $1.00 a month for a key | [Request quotas](https://docs.aws.amazon.com/kms/latest/developerguide/requests-per-second.html), [Encrypt](https://docs.aws.amazon.com/kms/latest/APIReference/API_Encrypt.html), [Pricing](https://aws.amazon.com/kms/pricing/) |
-| Google Cloud KMS | 64 KiB of plaintext and of additional authenticated data for software keys. 8 KiB combined for HSM keys. | Cryptographic requests: 60,000 a minute for each calling project (soft limit). HSM symmetric: 500 a second for each region. | $0.03 for 10,000 operations | $0.06 a month for a software key version (hourly price $0.000082192) | [Quotas](https://cloud.google.com/kms/quotas), [`encrypt`](https://cloud.google.com/kms/docs/reference/rest/v1/projects.locations.keyRings.cryptoKeys/encrypt), [Pricing](https://cloud.google.com/kms/pricing) |
+| AWS KMS | 4,096 bytes for a symmetric key. The key supports encryption context. | Shared across Encrypt, Decrypt, ReEncrypt and others: 10,000 requests a second by default, 20,000 in seven Regions, and 100,000 in us-east-1, us-west-2 and eu-west-1. RSA keys: 1,000. | $0.03 for 10,000 requests, after a free tier of 20,000 requests a month | $1.00 a month for a key | [Request quotas](https://docs.aws.amazon.com/kms/latest/developerguide/requests-per-second.html), [Encrypt](https://docs.aws.amazon.com/kms/latest/APIReference/API_Encrypt.html), [Pricing](https://aws.amazon.com/kms/pricing/) |
+| Google Cloud KMS | 64 KiB of plaintext and of additional authenticated data for software keys. 8 KiB combined for HSM keys. | Metric `software_usage`: 6,000,000 tokens a minute, soft limit. Metric `hsm_usage`: 3,000,000 tokens a minute, soft limit. A software operation costs 100 tokens, and a symmetric HSM encrypt or decrypt costs 100 tokens. So the limits are 60,000 software operations a minute (1,000 a second) and 30,000 HSM operations a minute (500 a second). The page says the quotas are regional. The metrics apply since 2026-02-16. The old metric `crypto_requests` (60,000 a minute) stops after 2026-08-31, when Google retires it. | $0.03 for 10,000 operations | $0.06 a month for a software key version (hourly price $0.000082192) | [Quotas](https://cloud.google.com/kms/quotas), [`encrypt`](https://cloud.google.com/kms/docs/reference/rest/v1/projects.locations.keyRings.cryptoKeys/encrypt), [Pricing](https://cloud.google.com/kms/pricing) |
 | Azure Key Vault | `wrapkey` with `RSA-OAEP-256`: the key size limits the payload. A 2,048-bit key allows 190 bytes (256 − 2 × 32 − 2, [RFC 8017 section 7.1.1](https://www.rfc-editor.org/rfc/rfc8017#section-7.1.1)). No associated data. | RSA 2,048-bit: 4,000 transactions in 10 seconds for a software key and 2,000 for an HSM key, for each vault and Region. 3,072-bit: 1,000 and 500. 4,096-bit: 500 and 250. | $0.03 for 10,000 operations (Standard, RSA 2,048-bit). $0.15 for "advanced" key operations. | $1 a month for a premium HSM RSA 2,048-bit key | [Service limits](https://learn.microsoft.com/en-us/azure/key-vault/general/service-limits), [`wrapkey`](https://learn.microsoft.com/en-us/rest/api/keyvault/keys/wrap-key/wrap-key), [Retail Prices API](https://learn.microsoft.com/en-us/rest/api/cost-management/retail-prices/azure-retail-prices) (East US, `serviceName eq 'Key Vault'`) |
 | HashiCorp Vault Transit | No limit found in the API page. `batch_input` sends many items in one request. A key with derivation needs a `context` for each call. | Set by the operator's cluster. No fixed vendor figure. | Self-run: the cost of the cluster. A hosted service has its own price list, not read. | not applicable | [Transit API](https://developer.hashicorp.com/vault/api-docs/secret/transit) |
 | PKCS#11 HSM | Set by the device and mechanism. | Set by the device. | The cost of the device or service. | not applicable | [PKCS #11 base specification v3.0](https://docs.oasis-open.org/pkcs11/pkcs11-base/v3.0/os/pkcs11-base-v3.0-os.html) |
@@ -315,12 +322,13 @@ days (2,592,000 seconds), each request needs one unwrap.
 | Case | KMS calls a month | AWS KMS price at $0.03 per 10,000 |
 | --- | --- | --- |
 | No cache, one unwrap for each request | 259,200,000 | $777.60 |
-| Cache with a refresh every 150 seconds (half of 300), for one instance | 17,280 | $0.05 |
+| Cache with a refresh every 150 seconds (half of 300), for one instance | 17,280 | $0.05 before the free tier of 20,000 requests a month, so $0 |
 
 - The no-cache case also uses 100 of the 10,000 requests a second of the AWS
   default quota for the whole Region and account, so one busy namespace can
-  take 1% of a shared quota. It uses 100 of the 1,000 a second of the Google
-  Cloud project limit (60,000 a minute), which is 10%.
+  take 1% of a shared quota. It uses 100 of the 1,000 operations a second of the Google
+  Cloud software limit (6,000,000 tokens a minute at 100 tokens each), which
+  is 10%.
 - On Azure the same load takes 100 of 400 requests a second (4,000 in 10
   seconds) for a software RSA 2,048-bit key. That is 25% of the vault's
   limit, shared with every other key operation in the vault.
@@ -331,7 +339,7 @@ days (2,592,000 seconds), each request needs one unwrap.
 
 1. **Put the cache above the port**, in the service that uses the
    `Wrapper`, not in each adapter. Then an SDK client, a `net/http` client
-   and an adapter process all get the same cache and the same rules. The
+   and an adapter process all share the same cache and the same rules. The
    conformance suite tests the port. A second suite tests the cache.
 2. **Key the cache by what the KMS call needs:** the namespace key ID, the
    version, and the wrapper ID. Never key it by the plaintext.
@@ -437,7 +445,7 @@ Questions for the owner or #954:
 
 ## Sources
 
-Vendor and standard pages (all read 2026-10-26):
+Vendor and standard pages (all retrieved 2026-10-26):
 
 - AWS KMS request quotas: https://docs.aws.amazon.com/kms/latest/developerguide/requests-per-second.html
 - AWS KMS `Encrypt`: https://docs.aws.amazon.com/kms/latest/APIReference/API_Encrypt.html
