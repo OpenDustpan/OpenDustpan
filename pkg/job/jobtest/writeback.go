@@ -218,8 +218,8 @@ func planned(t *testing.T, h Harness, f fixture, sv string, made time.Time) job.
 	j.Phases[0].Plan = &job.PlanRef{
 		ID: "pln-" + string(j.ID), ItemKey: secret.NewItemKeyID(), StateVersion: sv,
 		Parts: []job.PlanPart{
-			{Kind: job.OutputPlanDisplay, Size: planSize, SHA256: "d1", Secret: false},
-			{Kind: job.OutputPlanApply, Size: planSize, SHA256: "a1", Secret: true},
+			{Kind: job.OutputPlanDisplay, Size: planSize, SHA256: "d1", Secret: false, StoredSize: 0, StoredMD5: ""},
+			{Kind: job.OutputPlanApply, Size: planSize, SHA256: "a1", Secret: true, StoredSize: 0, StoredMD5: ""},
 		},
 		CreatedAt: made, ExpiresAt: history.ExpiresAt(made, history.DefaultRetention), RedactedAt: time.Time{},
 	}

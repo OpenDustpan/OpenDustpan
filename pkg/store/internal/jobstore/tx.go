@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/durable"
 	"opendustpan.org/opendustpan/pkg/job"
 	"opendustpan.org/opendustpan/pkg/manuallock"
@@ -250,6 +251,7 @@ type ArtifactTx interface {
 	// InsertChunk stores the row of a chunk that is not confirmed. A row that
 	// exists stays as it is.
 	InsertChunk(ctx context.Context, ns namespace.Name, log string, seq int, c job.ChunkRow) error
-	// ConfirmChunk marks the row of the chunk as confirmed.
-	ConfirmChunk(ctx context.Context, ns namespace.Name, log string, seq int) error
+	// ConfirmChunk marks the row of the chunk as confirmed and keeps the size
+	// and the MD5 of its stored bytes.
+	ConfirmChunk(ctx context.Context, ns namespace.Name, log string, seq int, stored blob.Digest) error
 }

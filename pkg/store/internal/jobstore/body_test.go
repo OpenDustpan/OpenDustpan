@@ -58,9 +58,18 @@ func fullJob(t *testing.T) job.Job {
 			}},
 			StateVersion: "sv-1",
 			Plan: &job.PlanRef{
-				ID: "pln-1", ItemKey: "ik-2", StateVersion: "sv-1",
-				Parts:     []job.PlanPart{{Kind: job.OutputPlanApply, Size: 5, SHA256: "dd", Secret: true}},
-				CreatedAt: at, ExpiresAt: at, RedactedAt: at,
+				ID:           "pln-1",
+				ItemKey:      "ik-2",
+				StateVersion: "sv-1",
+				Parts: []job.PlanPart{
+					{
+						Kind: job.OutputPlanApply, Size: 5, SHA256: "dd", Secret: true, StoredSize: 7,
+						StoredMD5: "00112233445566778899aabbccddeeff",
+					},
+				},
+				CreatedAt:  at,
+				ExpiresAt:  at,
+				RedactedAt: at,
 			},
 			Gates: []job.Gate{
 				{

@@ -246,7 +246,7 @@ func verifyTargetBlob(ctx context.Context, target blob.Store, ref ManifestBlob) 
 		return fmt.Errorf("read backup object %q: %w", source, err)
 	}
 
-	counter := &md5SizeWriter{hash: md5.New(), size: 0} //nolint:gosec // The manifest records MD5, for integrity.
+	counter := &md5SizeWriter{hash: blob.NewMD5(), size: 0}
 
 	_, copyErr := io.Copy(io.Discard, io.TeeReader(reader, counter))
 	closeErr := reader.Close()

@@ -468,7 +468,7 @@ func (j *JournalEntries) Append(ctx context.Context, batch JournalBatch, fence n
 	}
 
 	sum := sha256.Sum256(batch.Content)
-	sumMD5 := md5.Sum(batch.Content) //nolint:gosec // Integrity checksum for the backup manifest, not security.
+	sumMD5 := blob.DigestBytes(batch.Content).MD5
 
 	key, err := journalKey(bl, batch.StackID, batch.Update, lowest(summary.SequenceIDs))
 	if err != nil {

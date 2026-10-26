@@ -62,6 +62,7 @@ func buildRecorderHarness(t *testing.T, db *memDB, keys *memKeyIndex, blobs blob
 		Records:  db,
 		ItemKeys: keys,
 		Blobs:    blobs,
+		Wrapper:  nil,
 	})
 }
 
@@ -428,7 +429,11 @@ func (m *memDB) ReserveLogChunk(
 }
 
 // ConfirmLogChunk implements job.RecordStore.
-func (m *memDB) ConfirmLogChunk(ctx context.Context, pc job.PhaseClaim, step, version string, seq int) error {
+func (m *memDB) ConfirmLogChunk(ctx context.Context, pc job.PhaseClaim, c job.ChunkConfirm) error {
+	if c.Stored.Size <= 0 {
+		return fmt.Errorf("%w: chunk %d of log %s has no stored size", job.ErrInvalid, c.Seq, c.Version)
+	}
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -437,18 +442,18 @@ func (m *memDB) ConfirmLogChunk(ctx context.Context, pc job.PhaseClaim, step, ve
 		return err
 	}
 
-	row, ok := m.records.chunks[version][seq]
+	row, ok := m.records.chunks[c.Version][c.Seq]
 	if !ok {
-		return fmt.Errorf("%w: chunk %d of log %s was not reserved", job.ErrInvalid, seq, version)
+		return fmt.Errorf("%w: chunk %d of log %s was not reserved", job.ErrInvalid, c.Seq, c.Version)
 	}
 
-	changed, err := job.ConfirmChunkRecord(&next, memKey(&pc, step), version, seq, row)
+	changed, err := job.ConfirmChunkRecord(&next, memKey(&pc, c.Step), c.Version, c.Seq, row)
 	if err != nil {
 		return fmt.Errorf("confirm log chunk: %w", err)
 	}
 
 	row.Confirmed = true
-	m.records.chunks[version][seq] = row
+	m.records.chunks[c.Version][c.Seq] = row
 
 	if changed {
 		m.store(&next, time.Now().UTC())

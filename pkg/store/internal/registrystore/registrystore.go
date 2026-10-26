@@ -39,6 +39,62 @@ type Row struct {
 	PublishedBy   string
 	ArchivesJSON  string
 	PublishedAtMs int64
+	// StoredFilesJSON is the JSON of the digests of the stored files, or the
+	// empty text for a release that an earlier version of the server stored.
+	StoredFilesJSON string
+}
+
+type storedFileDoc struct {
+	SHA256 string `json:"sha256"`
+	Size   int64  `json:"size"`
+	MD5    string `json:"md5"`
+}
+
+// EncodeFiles returns the JSON of the digests of the stored files of a
+// release, or the empty text when the release has none.
+func EncodeFiles(in []registry.StoredFile) (string, error) {
+	if len(in) == 0 {
+		return "", nil
+	}
+
+	docs := make([]storedFileDoc, 0, len(in))
+	for _, f := range in {
+		docs = append(docs, storedFileDoc(f))
+	}
+
+	b, err := json.Marshal(docs)
+	if err != nil {
+		return "", fmt.Errorf("encode registry stored files: %w", err)
+	}
+
+	return string(b), nil
+}
+
+// decodeFiles reads the JSON that EncodeFiles wrote. It refuses a field that
+// it does not know and text after the document. The empty text is no digest.
+func decodeFiles(s string) ([]registry.StoredFile, error) {
+	if s == "" {
+		return nil, nil
+	}
+
+	dec := json.NewDecoder(bytes.NewReader([]byte(s)))
+	dec.DisallowUnknownFields()
+
+	var docs []storedFileDoc
+	if err := dec.Decode(&docs); err != nil {
+		return nil, fmt.Errorf("%w: stored files: %w", ErrCorrupt, err)
+	}
+
+	if err := dec.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		return nil, fmt.Errorf("%w: stored files: text after the document", ErrCorrupt)
+	}
+
+	out := make([]registry.StoredFile, 0, len(docs))
+	for _, d := range docs {
+		out = append(out, registry.StoredFile(d))
+	}
+
+	return out, nil
 }
 
 type archiveDoc struct {
@@ -118,6 +174,11 @@ func Release(row Row) (registry.Release, error) {
 		return registry.Release{}, err
 	}
 
+	files, err := decodeFiles(row.StoredFilesJSON)
+	if err != nil {
+		return registry.Release{}, err
+	}
+
 	rel := registry.Release{
 		PublishedAt: time.UnixMilli(row.PublishedAtMs).UTC(),
 		Address: registry.Address{
@@ -132,6 +193,7 @@ func Release(row Row) (registry.Release, error) {
 		Protocols:       splitProtocols(row.Protocols),
 		PublishedBy:     row.PublishedBy,
 		Archives:        archives,
+		Files:           files,
 	}
 
 	if err := rel.Validate(); err != nil {

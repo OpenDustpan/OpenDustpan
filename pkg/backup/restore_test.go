@@ -162,6 +162,7 @@ func writeRestoreManifest(
 		SQLFiles:      files,
 
 		InstallationKind: installation.KindProduction,
+		Unverified:       nil,
 	}
 
 	data, err := json.Marshal(manifest)

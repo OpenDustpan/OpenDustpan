@@ -25,6 +25,7 @@ func portableRegistryTables() []PortableTable {
 				{Name: "published_by", Kind: KindText},
 				{Name: "archives_json", Kind: KindText},
 				{Name: "published_at_ms", Kind: KindTime},
+				{Name: "stored_files_json", Kind: KindText},
 			},
 		},
 		{
