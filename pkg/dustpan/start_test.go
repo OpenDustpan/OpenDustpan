@@ -41,7 +41,7 @@ func serveOnce(t *testing.T, handler http.Handler, method, path string) *httptes
 
 // TestHandlerRefusesBeforeStart proves that a handler that was not started
 // answers 503 on each route in the error shape of its adapter, with
-// Retry-After, and that only GET and HEAD of /health/live pass. The readiness
+// Retry-After, and that only GET of /health/live passes. The readiness
 // probe, the metrics route and the console files answer 503 too. A path that
 // only looks like the probe does not pass.
 func TestHandlerRefusesBeforeStart(t *testing.T) {
@@ -77,6 +77,11 @@ func TestHandlerRefusesBeforeStart(t *testing.T) {
 		{"probe with another case", http.MethodGet, "/HEALTH/LIVE", `"code":503`},
 		{"probe with an encoded slash", http.MethodGet, "/health%2Flive", `"code":503`},
 		{"probe with a lowercase encoded slash", http.MethodGet, "/health%2flive", `"code":503`},
+		{"probe with a double encoded slash", http.MethodGet, "/health%252Flive", `"code":503`},
+		{"probe with a dot segment", http.MethodGet, "/./health/live", `"code":503`},
+		{"probe with a parameter", http.MethodGet, "/health/live;a=b", `"code":503`},
+		{"probe with HEAD", http.MethodHead, "/health/live", `"code":503`},
+		{"probe with OPTIONS", http.MethodOptions, "/health/live", `"code":503`},
 	}
 
 	for _, tc := range cases {
@@ -106,10 +111,8 @@ func TestHandlerRefusesBeforeStart(t *testing.T) {
 		})
 	}
 
-	for _, method := range []string{http.MethodGet, http.MethodHead} {
-		if rec := serveOnce(t, handler, method, "/health/live"); rec.Code != http.StatusNoContent {
-			t.Fatalf("%s /health/live = %d, want 204 before Start", method, rec.Code)
-		}
+	if rec := serveOnce(t, handler, http.MethodGet, "/health/live"); rec.Code != http.StatusNoContent {
+		t.Fatalf("GET /health/live = %d, want 204 before Start", rec.Code)
 	}
 }
 
