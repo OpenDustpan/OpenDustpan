@@ -24,6 +24,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/job"
 	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/runner"
 )
 
 // ErrMissingDependency reports a Config without a required dependency.
@@ -45,7 +46,10 @@ type Config struct {
 	Jobs       job.Store
 	// Starter starts jobs. Nil serves the read route only: a server that lacks
 	// a port of the job service starts no job.
-	Starter       job.Starter
+	Starter job.Starter
+	// Pools names the runner pool of a job in the answer. Nil answers the pool
+	// ID only: a server without runner stores has no pool to name.
+	Pools         runner.PoolReader
 	Authenticator identity.Authenticator
 	Authorizer    identity.Authorizer
 	// Audit keeps the entries of the requests that the Authorizer refuses. Nil
@@ -67,6 +71,7 @@ type Handler struct {
 	namespaces *namespace.Service
 	jobs       job.Store
 	starter    job.Starter
+	pools      runner.PoolReader
 	authn      identity.Authenticator
 	sessions   *sessionauth.Checker
 	guard      *refusal.Recorder
@@ -102,6 +107,7 @@ func NewHandler(cfg Config) (*Handler, error) {
 		namespaces: cfg.Namespaces,
 		jobs:       cfg.Jobs,
 		starter:    cfg.Starter,
+		pools:      cfg.Pools,
 		authn:      cfg.Authenticator,
 		sessions:   cfg.Sessions,
 		guard:      recorder.WithLimiter(cfg.DenialLimiter).WithSurface("jobs"),

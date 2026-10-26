@@ -137,9 +137,10 @@ The `errorCode` is a stable code for a program.
 | `wait` | Why a queued job does not dispatch: `unit-busy`, `frozen` or `locked`. The field is not there when nothing holds the job. |
 | `reason` | Why a job that ended did end. The field is not there for a job that runs. |
 | `location` | Where the program and the config of the stack or workspace are in git: `connection`, `repository`, `ref`, `directory` and `revision`. A stored `repository` that the server does not accept is answered empty, so the answer never holds credentials. |
-| `pool` | The runner pool of a runner job |
+| `pool` | The name of the runner pool of a runner job. A start request takes the same value. The field is not there when the pool no longer exists. It is not there when the pool belongs to another namespace. A `POST` that made the job cannot always read the pool. Then the answer is 201 with no `pool`. The server writes a warning with the job ID to its log. A `GET` that cannot read the pool answers 500. |
+| `poolID` | The ID of the runner pool of a runner job. The field stays when the pool no longer exists. |
 | `profile` | The name of the profile that gives the secrets to a runner job. The field is not there when the job has no profile. |
-| `defaulted` | The values that the request did not give and that the server took from the settings of the unit or from the namespace. The list holds `pool`, `location` or `profile`, in that order. The field is not there when the request gave every value. The server fixes the list when the job starts. A later change of the settings changes neither the values nor the list. |
+| `defaulted` | The values that the request did not give and that the server took by a rule. A `pool` comes from the only pool of the namespace that runs jobs. A `location` and a `profile` come from the settings of the unit. The list holds `pool`, `location` or `profile`, in that order. The field is not there when the request gave every value. The server fixes the list when the job starts. A later change of the settings changes neither the values nor the list. |
 | `steps` | The steps of a runner job. Each step has `name`, `role`, `phase` and `changesResources`. |
 | `phases` | The phases of the job, in order (see below) |
 | `current` | The index of the phase that runs or runs next. It equals the number of phases after the last phase. |
