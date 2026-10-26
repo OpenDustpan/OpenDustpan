@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/source"
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/installation"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -317,6 +318,16 @@ func readNamespaceRow(t *testing.T, id any) (int, error) {
 func readNamespaceRowWith(t *testing.T, id, setting any) (int, error) {
 	t.Helper()
 
+	return readNamespaceRowFilter(t, id, setting, "")
+}
+
+// readNamespaceRowFilter writes one namespaces row with the id value id, the
+// output sharing value setting and the source filter value filter to a
+// table file and reads the file back. It returns the number of rows that
+// reached the caller and the error of the read.
+func readNamespaceRowFilter(t *testing.T, id, setting, filter any) (int, error) {
+	t.Helper()
+
 	table := namespacesTable(t)
 
 	var buf bytes.Buffer
@@ -326,7 +337,7 @@ func readNamespaceRowWith(t *testing.T, id, setting any) (int, error) {
 		t.Fatalf("new table writer: %v", err)
 	}
 
-	row := []any{"acme", "eu-west", int64(1), int64(1000), false, false, "", id, setting}
+	row := []any{"acme", "eu-west", int64(1), int64(1000), false, false, "", id, setting, filter}
 	if writeErr := tw.WriteRow(row); writeErr != nil {
 		t.Fatalf("write row: %v", writeErr)
 	}
@@ -445,5 +456,61 @@ func checkSettingRefused(t *testing.T, rows int, err error) {
 
 	if rows != 0 {
 		t.Fatalf("read: %d rows reached the caller, want none", rows)
+	}
+}
+
+// TestReadPortableSourceFilter proves the check of the restore alone: a
+// portable namespaces table with a source filter that is not the empty text or
+// a filter document that passes the checks of a filter fails with ErrCorrupt
+// and source.ErrInvalid, and does not hold the value. A valid value reaches
+// the caller.
+func TestReadPortableSourceFilter(t *testing.T) {
+	t.Parallel()
+
+	const id = "ns-abcdefghij234567klmn"
+
+	cases := []struct {
+		filter any
+		name   string
+		want   bool
+	}{
+		{name: "empty", filter: "", want: true},
+		{name: "empty document", filter: "{}", want: true},
+		{
+			name:   "full document",
+			filter: `{"submodules":["https://git.example.com/a/*"],"failOnDenied":true,"protectedBranches":["main"]}`,
+			want:   true,
+		},
+		{name: "null value", filter: nil, want: false},
+		{name: "not JSON", filter: "canary not json", want: false},
+		{name: "unknown key", filter: `{"canary":1}`, want: false},
+		{name: "bad pattern", filter: `{"submodules":["http://canary.example.com/a"]}`, want: false},
+		{name: "glob branch", filter: `{"protectedBranches":["canary/*"]}`, want: false},
+		{name: "second document", filter: `{} {}`, want: false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			rows, err := readNamespaceRowFilter(t, id, "nobody", tc.filter)
+			if tc.want {
+				checkSettingKept(t, rows, err)
+
+				return
+			}
+
+			if !errors.Is(err, backup.ErrCorrupt) || !errors.Is(err, source.ErrInvalid) {
+				t.Fatalf("read: err = %v, want ErrCorrupt and source.ErrInvalid", err)
+			}
+
+			if strings.Contains(err.Error(), "canary") {
+				t.Fatalf("the error holds the value of the filter: %v", err)
+			}
+
+			if rows != 0 {
+				t.Fatalf("read: %d rows reached the caller, want none", rows)
+			}
+		})
 	}
 }

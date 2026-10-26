@@ -79,6 +79,7 @@ func sqliteBackupTables() []sqliteBackupTable {
 				"ip_allowlist",
 				"id",
 				"output_sharing_default",
+				"source_filter",
 			},
 		},
 		{
