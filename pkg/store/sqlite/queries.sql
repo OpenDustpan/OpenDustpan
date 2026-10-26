@@ -1935,7 +1935,7 @@ WHERE target = ? AND revoked_at_ms IS NULL;
 -- name: InsertBlobPurge :exec
 -- Records a purged unit whose blobs may still exist (ADR 47). A second
 -- purge of the same unit cannot happen, but the row stays as it is.
-INSERT INTO blob_purges (tool, unit_id, namespace, purged_at_ms)
+INSERT INTO blob_purges (tool, unit_id, namespace_id, purged_at_ms)
 VALUES (?, ?, ?, ?)
 ON CONFLICT (tool, unit_id) DO NOTHING;
 
@@ -1943,19 +1943,18 @@ ON CONFLICT (tool, unit_id) DO NOTHING;
 DELETE FROM blob_purges WHERE tool = ? AND unit_id = ?;
 
 -- name: ListBlobPurges :many
--- The oldest rows first, so the sweep finishes the oldest purges first.
-SELECT bp.tool, bp.unit_id, bp.namespace, COALESCE(n.id, '') AS namespace_id, bp.purged_at_ms
-FROM blob_purges AS bp
-LEFT JOIN namespaces AS n ON n.name = bp.namespace
+-- The oldest rows first, so the sweep finishes the oldest purges first. The
+-- record holds the namespace ID, so the list never joins by name.
+SELECT tool, unit_id, namespace_id, purged_at_ms
+FROM blob_purges
 ORDER BY purged_at_ms, tool, unit_id
 LIMIT ?;
 
 -- name: ListBlobPurgesAfter :many
 -- The page of ListBlobPurges after the cursor (purge time, tool, unit ID).
 -- The lower bound on purged_at_ms lets the index scan start at the cursor.
-SELECT bp.tool, bp.unit_id, bp.namespace, COALESCE(n.id, '') AS namespace_id, bp.purged_at_ms
-FROM blob_purges AS bp
-LEFT JOIN namespaces AS n ON n.name = bp.namespace
+SELECT tool, unit_id, namespace_id, purged_at_ms
+FROM blob_purges
 WHERE purged_at_ms >= sqlc.arg(after_ms)
   AND (purged_at_ms > sqlc.arg(after_ms)
     OR (purged_at_ms = sqlc.arg(after_ms) AND tool > sqlc.arg(after_tool))
