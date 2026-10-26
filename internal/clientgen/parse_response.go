@@ -208,8 +208,9 @@ func (st *parseState) checkErrorResponse(ptr string, node any) error {
 	}
 
 	ref, isObject := schema.(object)
-	if !isObject || len(ref) != 1 || ref["$ref"] != schemaRefPrefix+errorSchemaName {
-		return invalid(ptr, "the default answer must be the schema "+errorSchemaName)
+	if !isObject || len(ref) != 1 ||
+		(ref["$ref"] != schemaRefPrefix+errorSchemaName && ref["$ref"] != schemaRefPrefix+errorAnswerName) {
+		return invalid(ptr, "the default answer must be the schema "+errorSchemaName+" or the schema "+errorAnswerName)
 	}
 
 	return nil

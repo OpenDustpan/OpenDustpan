@@ -173,6 +173,10 @@ const (
 	KindObject SchemaKind = iota + 1
 	// KindEnum is a string with a list of known values.
 	KindEnum
+	// KindUnion is a choice between objects. The value of one member, the
+	// discriminator, says which object it is. A value that no variant names
+	// has the shape of the base.
+	KindUnion
 )
 
 // Schema is one named schema of the description.
@@ -194,6 +198,26 @@ type Schema struct {
 	// for an object that declares none. A client ignores an unknown field in
 	// each case.
 	Extra *Type
+	// Discriminator is the wire name of the member of a union that selects
+	// the variant.
+	Discriminator string
+	// Variants are the choices of a union, in the order of their values.
+	Variants []Variant
+	// Base is the name of the schema that a union uses for a value that no
+	// variant names.
+	Base string
+	// Union is the name of the union that the schema is a variant of, or
+	// the arguments of a variant of. It is empty for any other schema. A
+	// template set that writes no union skips these schemas.
+	Union string
+}
+
+// Variant is one choice of a union.
+type Variant struct {
+	// Value is the value of the discriminator for this choice.
+	Value string
+	// Schema is the name of the object schema of this choice.
+	Schema string
 }
 
 // Field is one field of an object.
@@ -237,6 +261,9 @@ type Type struct {
 	Elem *Type
 	// Ref is the name of the schema of a TypeRef.
 	Ref string
+	// Const is the one value of a string that has only one allowed value, or
+	// empty. A union variant holds its discriminator in it.
+	Const string
 	// Nullable is true for a value that can be JSON null. A client keeps
 	// absent, null and a value apart where the body is a merge patch.
 	Nullable bool

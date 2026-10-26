@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"maps"
 	"net/http"
 	"regexp"
@@ -381,18 +382,66 @@ type walkState struct {
 func TestCheckedInDocumentUsesTheSubsetOf30(t *testing.T) {
 	t.Parallel()
 
-	doc := decoded(t)
+	for _, problem := range subsetFindings(decoded(t)) {
+		t.Error(problem)
+	}
+}
+
+// subsetFindings returns the subset problems of a document, except the two
+// closed enums that the document may hold. The values of an open enum sit in a
+// schema of their own, and the use is anyOf [ref, string]: that schema is not a
+// closed enum. The discriminator member of a branch of a union has one value,
+// the constant of the branch: it is the form of OpenAPI 3.0.3 for a constant.
+// A one-value enum anywhere else stays a problem.
+func subsetFindings(doc map[string]any) []string {
 	allowed := openEnumComponents(doc)
+	constants := unionConstants(doc)
+
+	var out []string
 
 	for _, problem := range subsetProblems("$", doc, walkState{inProperties: false, openEnum: false}) {
-		// The values of an open enum sit in a schema of their own, and the
-		// use is anyOf [ref, string]. That schema is not a closed enum.
-		if name, ok := closedEnumComponent(problem); ok && allowed[name] {
+		if name, ok := closedEnumComponent(problem); ok && (allowed[name] || constants[name]) {
 			continue
 		}
 
-		t.Error(problem)
+		out = append(out, problem)
 	}
+
+	return out
+}
+
+// unionConstants returns the paths schema.properties.member, as closedEnumComponent
+// reads them, of the discriminator member of each branch that the mapping of a
+// discriminator names, when the member is a string with exactly one value.
+func unionConstants(doc map[string]any) map[string]bool {
+	out := map[string]bool{}
+
+	components, _ := optional[map[string]any](doc, "components")
+	schemas, _ := optional[map[string]any](components, "schemas")
+
+	for _, node := range schemas {
+		union := map[string]any{"node": node}
+		union, _ = optional[map[string]any](union, "node")
+		disc, _ := optional[map[string]any](union, "discriminator")
+		member, _ := optional[string](disc, "propertyName")
+		mapping, _ := optional[map[string]any](disc, "mapping")
+
+		for _, target := range mapping {
+			ref, _ := optional[string](map[string]any{"ref": target}, "ref")
+			name := strings.TrimPrefix(ref, "#/components/schemas/")
+
+			branch, _ := optional[map[string]any](schemas, name)
+			props, _ := optional[map[string]any](branch, "properties")
+			prop, _ := optional[map[string]any](props, member)
+			values, _ := optional[[]any](prop, "enum")
+
+			if member != "" && prop["type"] == "string" && len(values) == 1 {
+				out[name+".properties."+member] = true
+			}
+		}
+	}
+
+	return out
 }
 
 // closedEnumComponent returns the name of the component schema that a
@@ -465,24 +514,31 @@ func TestSubsetCheckSeesTheForbiddenForms(t *testing.T) {
 	t.Parallel()
 
 	bad := map[string]string{
-		"multi type":                `{"type":["string","integer"]}`,
-		"null type alone":           `{"type":["null"]}`,
-		"closed enum":               `{"type":"string","enum":["a","b"]}`,
-		"const":                     `{"const":"a"}`,
-		"oneOf of three":            `{"oneOf":[{"$ref":"#/components/schemas/a"},{"$ref":"#/components/schemas/b"},{"type":"null"}]}`,
-		"oneOf with no null":        `{"oneOf":[{"$ref":"#/components/schemas/a"},{"$ref":"#/components/schemas/b"}]}`,
-		"anyOf with no string":      `{"anyOf":[{"enum":["a"]},{"type":"integer"}]}`,
-		"oneOf of two types":        `{"oneOf":[{"type":"string"},{"type":"integer"}]}`,
-		"oneOf inline and null":     `{"oneOf":[{"type":"object"},{"type":"null"}]}`,
-		"oneOf with null first":     `{"oneOf":[{"type":"null"},{"$ref":"#/components/schemas/a"}]}`,
-		"oneOf with a sibling":      `{"oneOf":[{"$ref":"#/components/schemas/a"},{"type":"null"}],"description":"x"}`,
-		"anyOf of two types":        `{"anyOf":[{"type":"string"},{"type":"integer"}]}`,
-		"anyOf with inline enum":    `{"anyOf":[{"type":"string","enum":["a","b"]},{"type":"string"}]}`,
-		"anyOf with string first":   `{"anyOf":[{"type":"string"},{"$ref":"#/components/schemas/a"}]}`,
-		"anyOf with a third type":   `{"anyOf":[{"$ref":"#/components/schemas/a"},{"type":"string"},{"type":"integer"}]}`,
-		"anyOf with two nulls":      `{"anyOf":[{"$ref":"#/components/schemas/a"},{"type":"string"},{"type":"null"},{"type":"null"}]}`,
-		"anyOf with a sibling":      `{"anyOf":[{"$ref":"#/components/schemas/a"},{"type":"string"}],"description":"x"}`,
-		"anyOf with a typed string": `{"anyOf":[{"$ref":"#/components/schemas/a"},{"type":"string","format":"uuid"}]}`,
+		"multi type":                         `{"type":["string","integer"]}`,
+		"null type alone":                    `{"type":["null"]}`,
+		"closed enum":                        `{"type":"string","enum":["a","b"]}`,
+		"const":                              `{"const":"a"}`,
+		"oneOf of three":                     `{"oneOf":[{"$ref":"#/components/schemas/a"},{"$ref":"#/components/schemas/b"},{"type":"null"}]}`,
+		"oneOf with no null":                 `{"oneOf":[{"$ref":"#/components/schemas/a"},{"$ref":"#/components/schemas/b"}]}`,
+		"anyOf with no string":               `{"anyOf":[{"enum":["a"]},{"type":"integer"}]}`,
+		"oneOf of two types":                 `{"oneOf":[{"type":"string"},{"type":"integer"}]}`,
+		"oneOf inline and null":              `{"oneOf":[{"type":"object"},{"type":"null"}]}`,
+		"oneOf with null first":              `{"oneOf":[{"type":"null"},{"$ref":"#/components/schemas/a"}]}`,
+		"oneOf with a sibling":               `{"oneOf":[{"$ref":"#/components/schemas/a"},{"type":"null"}],"description":"x"}`,
+		"anyOf of two types":                 `{"anyOf":[{"type":"string"},{"type":"integer"}]}`,
+		"anyOf with inline enum":             `{"anyOf":[{"type":"string","enum":["a","b"]},{"type":"string"}]}`,
+		"anyOf with string first":            `{"anyOf":[{"type":"string"},{"$ref":"#/components/schemas/a"}]}`,
+		"anyOf with a third type":            `{"anyOf":[{"$ref":"#/components/schemas/a"},{"type":"string"},{"type":"integer"}]}`,
+		"anyOf with two nulls":               `{"anyOf":[{"$ref":"#/components/schemas/a"},{"type":"string"},{"type":"null"},{"type":"null"}]}`,
+		"anyOf with a sibling":               `{"anyOf":[{"$ref":"#/components/schemas/a"},{"type":"string"}],"description":"x"}`,
+		"anyOf with a typed string":          `{"anyOf":[{"$ref":"#/components/schemas/a"},{"type":"string","format":"uuid"}]}`,
+		"one value enum":                     `{"type":"string","enum":["a"]}`,
+		"empty enum":                         `{"type":"string","enum":[]}`,
+		"one integer enum":                   `{"type":"integer","enum":[1]}`,
+		"union with no discriminator":        `{"oneOf":[{"$ref":"#/components/schemas/a"},{"$ref":"#/components/schemas/b"}],"description":"x"}`,
+		"union with an inline branch":        `{"oneOf":[{"$ref":"#/components/schemas/a"},{"type":"object"}],"discriminator":{"propertyName":"k","mapping":{"x":"#/components/schemas/a"}}}`,
+		"union with a mapping to a stranger": `{"oneOf":[{"$ref":"#/components/schemas/a"},{"$ref":"#/components/schemas/b"}],"discriminator":{"propertyName":"k","mapping":{"x":"#/components/schemas/c"}}}`,
+		"union with a sibling":               `{"oneOf":[{"$ref":"#/components/schemas/a"},{"$ref":"#/components/schemas/b"}],"type":"object","discriminator":{"propertyName":"k","mapping":{"x":"#/components/schemas/a"}}}`,
 	}
 
 	good := map[string]string{
@@ -491,6 +547,7 @@ func TestSubsetCheckSeesTheForbiddenForms(t *testing.T) {
 		"open enum":            `{"anyOf":[{"$ref":"#/components/schemas/a"},{"type":"string"}]}`,
 		"open enum or null":    `{"anyOf":[{"$ref":"#/components/schemas/a"},{"type":"string"},{"type":"null"}]}`,
 		"property named const": `{"properties":{"const":{"type":"string"}}}`,
+		"union":                `{"oneOf":[{"$ref":"#/components/schemas/a"},{"$ref":"#/components/schemas/b"}],"discriminator":{"propertyName":"k","mapping":{"x":"#/components/schemas/a"}},"description":"x"}`,
 	}
 
 	for name, text := range bad {
@@ -591,19 +648,103 @@ func schemaProblems(where string, obj map[string]any, state walkState) []string 
 		out = append(out, where+` has a type list that is not [X, "null"]`)
 	}
 
-	if one, ok := obj["oneOf"].([]any); ok && (!isRefOrNull(one) || len(obj) != 1) {
-		out = append(out, where+" has a oneOf that is not [ref, null]")
-	}
-
-	if _, ok := obj["enum"]; ok && !state.openEnum {
-		out = append(out, where+" has a closed enum: an enum that can grow is anyOf [enum, string]")
-	}
+	out = append(out, oneOfAndEnumProblems(where, obj, state)...)
 
 	if anyOf, ok := obj["anyOf"].([]any); ok && (!isOpenEnum(anyOf) || len(obj) != 1) {
 		out = append(out, where+" has an anyOf that is not [ref, string] with an optional null: it is not an open enum")
 	}
 
 	return out
+}
+
+// oneOfAndEnumProblems returns the problems of oneOf and enum in a schema. A
+// oneOf is [ref, null] or a union with a discriminator. An enum is the schema
+// of an open enum. The one-value enum of the discriminator of a union branch is
+// allowed by subsetFindings, which knows the unions of the document.
+func oneOfAndEnumProblems(where string, obj map[string]any, state walkState) []string {
+	var out []string
+
+	if one, ok := obj["oneOf"].([]any); ok {
+		nullableRef := isRefOrNull(one) && len(obj) == 1
+
+		if !nullableRef && !isDiscriminatedUnion(obj, one) {
+			out = append(out, where+" has a oneOf that is not [ref, null] and not a union with a discriminator")
+		}
+	}
+
+	if _, ok := obj["enum"]; ok && !state.openEnum {
+		out = append(out, where+" has a closed enum: an enum that can grow is anyOf [enum, string]")
+	}
+
+	return out
+}
+
+// isDiscriminatedUnion reports whether a schema is a oneOf of references with
+// a discriminator that names a property and a mapping, and with no other key
+// than a description. Each entry of the mapping must be a branch.
+func isDiscriminatedUnion(obj map[string]any, alts []any) bool {
+	disc, ok := obj["discriminator"].(map[string]any)
+	if !ok || len(disc) != 2 || len(alts) < 2 {
+		return false
+	}
+
+	if !hasOnlyKeys(obj, "oneOf", "discriminator", "description") {
+		return false
+	}
+
+	name, isString := disc["propertyName"].(string)
+	mapping, isMap := disc["mapping"].(map[string]any)
+
+	if !isString || name == "" || !isMap || len(mapping) != len(alts)-1 {
+		return false
+	}
+
+	branches, ok := refsOf(alts)
+
+	return ok && mappingNamesBranches(mapping, branches)
+}
+
+// hasOnlyKeys reports whether an object has no key but the listed ones.
+func hasOnlyKeys(obj map[string]any, keys ...string) bool {
+	for key := range obj {
+		if !slices.Contains(keys, key) {
+			return false
+		}
+	}
+
+	return true
+}
+
+// refsOf returns the references of the alternatives, or false when an
+// alternative is more than a reference.
+func refsOf(alts []any) (map[string]bool, bool) {
+	refs := map[string]bool{}
+
+	for _, alt := range alts {
+		m, isMap := alt.(map[string]any)
+		if !isMap || !isOnlyRef(m) {
+			return nil, false
+		}
+
+		if ref, isString := m["$ref"].(string); isString {
+			refs[ref] = true
+		}
+	}
+
+	return refs, true
+}
+
+// mappingNamesBranches reports whether each entry of a discriminator mapping
+// is the reference of a branch.
+func mappingNamesBranches(mapping map[string]any, branches map[string]bool) bool {
+	for _, target := range mapping {
+		ref, isString := target.(string)
+		if !isString || !branches[ref] {
+			return false
+		}
+	}
+
+	return true
 }
 
 // isRefOrNull reports whether a oneOf list is [{$ref}, {type: null}]. Another
@@ -748,5 +889,71 @@ func TestOpenEnumComponentNeedsAnOpenUse(t *testing.T) {
 
 	if !slices.Equal(flagged, []string{"Closed"}) {
 		t.Errorf("closed enums = %v, want [Closed]", flagged)
+	}
+}
+
+// TestOneValueEnumIsAllowedOnlyForTheDiscriminator proves that the exemption
+// of the subset check covers the discriminator member of a branch of a union
+// and nothing else: a one-value enum in another member of the branch, in a
+// schema that no mapping names, in a member with a value that is not a string,
+// and in a branch whose member has two values stays a problem.
+func TestOneValueEnumIsAllowedOnlyForTheDiscriminator(t *testing.T) {
+	t.Parallel()
+
+	const (
+		union  = `"U":{"oneOf":[{"$ref":"#/components/schemas/A"},{"$ref":"#/components/schemas/B"}],"discriminator":{"propertyName":"kind","mapping":{"a":"#/components/schemas/A"}}}`
+		branch = `"A":{"type":"object","properties":{"kind":{"type":"string","enum":["a"]}%s}}`
+	)
+
+	tests := []struct {
+		name, schemas string
+		want          int
+	}{
+		{"the discriminator of a branch", union + `,"B":{"type":"object"},` + fmt.Sprintf(branch, ""), 0},
+		{
+			"another member of the branch",
+			union + `,"B":{"type":"object"},` + fmt.Sprintf(branch, `,"other":{"type":"string","enum":["x"]}`),
+			1,
+		},
+		{
+			"a schema that no mapping names",
+			union + `,"B":{"type":"object"},` + fmt.Sprintf(
+				branch,
+				"",
+			) + `,"C":{"type":"object","properties":{"kind":{"type":"string","enum":["a"]}}}`,
+			1,
+		},
+		{
+			"a branch member with two values",
+			union + `,"B":{"type":"object"},"A":{"type":"object","properties":{"kind":{"type":"string","enum":["a","b"]}}}`,
+			1,
+		},
+		{
+			"a branch member that is not a string",
+			union + `,"B":{"type":"object"},"A":{"type":"object","properties":{"kind":{"type":"integer","enum":[1]}}}`,
+			1,
+		},
+		{
+			"a one-value enum and no union",
+			`"A":{"type":"object","properties":{"kind":{"type":"string","enum":["a"]}}}`,
+			1,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			var doc map[string]any
+
+			text := `{"components":{"schemas":{` + tt.schemas + `}}}`
+			if err := json.Unmarshal([]byte(text), &doc); err != nil {
+				t.Fatal(err)
+			}
+
+			if got := subsetFindings(doc); len(got) != tt.want {
+				t.Errorf("subsetFindings() = %q, want %d problems", got, tt.want)
+			}
+		})
 	}
 }

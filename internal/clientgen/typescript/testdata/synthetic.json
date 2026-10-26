@@ -643,6 +643,65 @@
      "closed"
     ]
    },
+   "ErrorAnswer": {
+    "description": "An error answer, by errorCode.",
+    "discriminator": {
+     "mapping": {
+      "lock.locked": "#/components/schemas/LockLockedError"
+     },
+     "propertyName": "errorCode"
+    },
+    "oneOf": [
+     {
+      "$ref": "#/components/schemas/LockLockedError"
+     },
+     {
+      "$ref": "#/components/schemas/ErrorResponse"
+     }
+    ]
+   },
+   "LockLockedError": {
+    "properties": {
+     "code": {
+      "type": "integer"
+     },
+     "errorArgs": {
+      "$ref": "#/components/schemas/LockLockedErrorArgs"
+     },
+     "errorCode": {
+      "enum": [
+       "lock.locked"
+      ],
+      "type": "string"
+     },
+     "message": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "code",
+     "message",
+     "errorCode",
+     "errorArgs"
+    ],
+    "type": "object"
+   },
+   "LockLockedErrorArgs": {
+    "properties": {
+     "holder": {
+      "type": "string"
+     },
+     "since": {
+      "format": "date-time",
+      "type": "string"
+     }
+    },
+    "required": [
+     "holder",
+     "since"
+    ],
+    "type": "object"
+   },
    "ErrorResponse": {
     "type": "object",
     "required": [

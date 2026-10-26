@@ -44,7 +44,11 @@ func publicOperations() []string {
 func TestAPIDescriptionGolden(t *testing.T) {
 	t.Parallel()
 
-	got, err := apidesc.Build(newEveryModuleServer(t).Operations(), apidesc.WithErrorCodes(catalogCodes()))
+	got, err := apidesc.Build(
+		newEveryModuleServer(t).Operations(),
+		apidesc.WithErrorCodes(catalogCodes()),
+		apidesc.WithErrorVariants(catalogVariants()),
+	)
 	if err != nil {
 		t.Fatalf("build the description: %v", err)
 	}
@@ -763,6 +767,43 @@ func catalogCodes() []string {
 	return codes
 }
 
+// catalogVariants returns the codes of the catalog that have arguments, with
+// the type of each argument. The description takes its variants from here and
+// from nowhere else.
+func catalogVariants() []apidesc.ErrorVariant {
+	var variants []apidesc.ErrorVariant
+
+	for _, spec := range errcode.Catalog() {
+		if len(spec.Args) == 0 {
+			continue
+		}
+
+		args := make([]apidesc.ErrorArg, len(spec.Args))
+		for i, arg := range spec.Args {
+			args[i] = apidesc.ErrorArg{Name: arg.Name, Type: argType(arg.Kind)}
+		}
+
+		variants = append(variants, apidesc.ErrorVariant{Code: spec.Code, Args: args})
+	}
+
+	return variants
+}
+
+// argType returns the type that the description gives to an argument kind. A
+// kind that is not known gives the zero type, which the writer refuses.
+func argType(kind errcode.Kind) apidesc.ArgType {
+	switch kind {
+	case errcode.KindIdentifier:
+		return apidesc.ArgString
+	case errcode.KindQuantity:
+		return apidesc.ArgInteger
+	case errcode.KindTime:
+		return apidesc.ArgTime
+	default:
+		return 0
+	}
+}
+
 // TestAPIDescriptionErrorCodesMatchTheCatalog proves that the schema ErrorCode
 // of the checked-in description lists the codes of the catalog and no other
 // code, and that errorCode is an open enum of that schema.
@@ -834,10 +875,179 @@ type componentsShape struct {
 }
 
 type schemaShape struct {
-	Enum       []string               `json:"enum"`
-	Properties map[string]memberShape `json:"properties"`
+	Enum          []string               `json:"enum"`
+	Properties    map[string]memberShape `json:"properties"`
+	Required      []string               `json:"required"`
+	OneOf         []map[string]string    `json:"oneOf"`
+	Discriminator discriminatorShape     `json:"discriminator"`
+}
+
+type discriminatorShape struct {
+	PropertyName string            `json:"propertyName"`
+	Mapping      map[string]string `json:"mapping"`
 }
 
 type memberShape struct {
-	AnyOf []map[string]string `json:"anyOf"`
+	AnyOf      []map[string]string    `json:"anyOf"`
+	Ref        string                 `json:"$ref"`
+	Type       any                    `json:"type"`
+	Format     string                 `json:"format"`
+	Enum       []string               `json:"enum"`
+	Required   []string               `json:"required"`
+	Properties map[string]memberShape `json:"properties"`
+}
+
+// wantArgType returns the type and the format that the description gives to an
+// argument kind. It is written out here, and not taken from the writer, so
+// that a change of the writer fails this test.
+func wantArgType(t *testing.T, kind errcode.Kind) argTypeShape {
+	t.Helper()
+
+	switch kind {
+	case errcode.KindIdentifier:
+		return argTypeShape{Type: "string", Format: ""}
+	case errcode.KindQuantity:
+		return argTypeShape{Type: "integer", Format: ""}
+	case errcode.KindTime:
+		return argTypeShape{Type: "string", Format: "date-time"}
+	default:
+		t.Fatalf("kind %d has no type", kind)
+
+		return argTypeShape{Type: "", Format: ""}
+	}
+}
+
+// argTypeShape is the type and the format of an argument in the description.
+type argTypeShape struct{ Type, Format string }
+
+// TestAPIDescriptionErrorVariantsMatchTheCatalog proves that each code of the
+// catalog that has arguments has a variant in the checked-in description with
+// the same arguments, that a code with no arguments has none, and that
+// ErrorAnswer selects the variants by errorCode.
+func TestAPIDescriptionErrorVariantsMatchTheCatalog(t *testing.T) {
+	t.Parallel()
+
+	var doc descriptionShape
+
+	if err := json.Unmarshal(apidesc.Document(), &doc); err != nil {
+		t.Fatalf("read the description: %v", err)
+	}
+
+	answer := doc.Components.Schemas[apidesc.ErrorAnswerSchema]
+	wantMapping := map[string]string{}
+
+	for _, spec := range errcode.Catalog() {
+		name := variantName(spec.Code)
+		variant, described := doc.Components.Schemas[name]
+
+		if len(spec.Args) == 0 {
+			if described {
+				t.Errorf("code %q has no arguments and has the schema %q", spec.Code, name)
+			}
+
+			continue
+		}
+
+		if !described {
+			t.Errorf(
+				"code %q has arguments and no schema %q: run the golden test with the update flag",
+				spec.Code,
+				name,
+			)
+
+			continue
+		}
+
+		wantMapping[spec.Code] = "#/components/schemas/" + name
+
+		checkVariant(t, spec, variant, doc.Components.Schemas[name+"Args"])
+	}
+
+	if !reflect.DeepEqual(answer.Discriminator.Mapping, wantMapping) {
+		t.Errorf("ErrorAnswer mapping = %v, want %v", answer.Discriminator.Mapping, wantMapping)
+	}
+
+	if answer.Discriminator.PropertyName != "errorCode" {
+		t.Errorf("ErrorAnswer discriminator = %q, want errorCode", answer.Discriminator.PropertyName)
+	}
+
+	last := len(answer.OneOf) - 1
+	if last < 0 || answer.OneOf[last]["$ref"] != "#/components/schemas/ErrorResponse" {
+		t.Errorf("ErrorAnswer oneOf = %v, want the base ErrorResponse as the last branch", answer.OneOf)
+	}
+
+	if len(answer.OneOf) != len(wantMapping)+1 {
+		t.Errorf("ErrorAnswer has %d branches, want %d", len(answer.OneOf), len(wantMapping)+1)
+	}
+}
+
+// variantName returns the schema name of a code: the parts of the code in
+// UpperCamelCase, then Error. It is written out here, and not taken from the
+// writer, so that a rename of the writer fails this test.
+func variantName(code string) string {
+	var name strings.Builder
+
+	for _, part := range strings.FieldsFunc(code, func(r rune) bool { return r == '.' || r == '-' }) {
+		name.WriteString(strings.ToUpper(part[:1]) + part[1:])
+	}
+
+	return name.String() + "Error"
+}
+
+// checkVariant proves that the schema of a code has the arguments of its spec.
+func checkVariant(t *testing.T, spec errcode.Spec, variant, args schemaShape) {
+	t.Helper()
+
+	if got := variant.Properties["errorCode"].Enum; !reflect.DeepEqual(got, []string{spec.Code}) {
+		t.Errorf("%s: errorCode enum = %v, want only the code", spec.Code, got)
+	}
+
+	if got := variant.Properties["errorArgs"].Ref; got != "#/components/schemas/"+variantName(spec.Code)+"Args" {
+		t.Errorf("%s: errorArgs refers to %q", spec.Code, got)
+	}
+
+	if len(args.Properties) != len(spec.Args) {
+		t.Errorf(
+			"%s: the description has %d arguments, the catalog has %d",
+			spec.Code,
+			len(args.Properties),
+			len(spec.Args),
+		)
+	}
+
+	want := make([]string, 0, len(spec.Args))
+
+	for _, arg := range spec.Args {
+		want = append(want, arg.Name)
+
+		shape := wantArgType(t, arg.Kind)
+
+		got, ok := args.Properties[arg.Name]
+		if !ok {
+			t.Errorf("%s: argument %q is in the catalog and not in the description", spec.Code, arg.Name)
+
+			continue
+		}
+
+		if got.Type != shape.Type || got.Format != shape.Format {
+			t.Errorf(
+				"%s: argument %q = %v %q, want %s %q",
+				spec.Code,
+				arg.Name,
+				got.Type,
+				got.Format,
+				shape.Type,
+				shape.Format,
+			)
+		}
+	}
+
+	slices.Sort(want)
+
+	gotRequired := slices.Clone(args.Required)
+	slices.Sort(gotRequired)
+
+	if !reflect.DeepEqual(gotRequired, want) {
+		t.Errorf("%s: required arguments = %v, want %v", spec.Code, gotRequired, want)
+	}
 }
