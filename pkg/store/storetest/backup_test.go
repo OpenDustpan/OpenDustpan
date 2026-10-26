@@ -898,8 +898,8 @@ func (s *fakeBackupStore) ReferencedBlobKeys(
 
 	found := false
 
-	for _, st := range s.data.stacks {
-		found = found || st.ID == id
+	for key := range s.data.stacks {
+		found = found || s.data.stacks[key].ID == id
 	}
 
 	if !found {

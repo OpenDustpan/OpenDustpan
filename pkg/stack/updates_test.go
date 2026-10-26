@@ -1898,7 +1898,7 @@ func (m *memUpdates) refOfLocked(id stack.ID) (stack.Ref, bool) {
 		}
 	}
 
-	return stack.Ref{}, false
+	return stack.Ref{Namespace: "", Project: "", Stack: ""}, false
 }
 
 // refOf returns the current reference of the stack with the given ID.
@@ -2002,6 +2002,7 @@ func TestHistoryOfMissingStack(t *testing.T) {
 // the stack between the listing of the blobs and that read.
 type hookedKeepSet struct {
 	*memUpdates
+
 	before func()
 }
 
@@ -2018,6 +2019,58 @@ func (m *memUpdates) dropStack(ref stack.Ref) {
 	defer m.mu.Unlock()
 
 	delete(m.stacks, ref)
+}
+
+// completedWithBlob saves one checkpoint, completes the update and returns
+// the blob key that the row names, with the blob aged past the grace period.
+func (f updatesFixture) completedWithBlob(t *testing.T) (blob.Key, *memBlob) {
+	t.Helper()
+
+	ctx := t.Context()
+	first := f.started(t, stack.KindUpdate)
+
+	err := f.svc.SaveCheckpoint(ctx, f.ref, first.Update.ID, first.Token, checkpoint(1, `{"a":1}`))
+	if err != nil {
+		t.Fatalf("save checkpoint: %v", err)
+	}
+
+	_, err = f.svc.Complete(ctx, f.ref, first.Update.ID, first.Token, stack.StatusSucceeded)
+	if err != nil {
+		t.Fatalf("complete first update: %v", err)
+	}
+
+	named, err := f.store.ReferencedBlobKeys(ctx, "stk-test")
+	if err != nil || len(named) != 1 {
+		t.Fatalf("referenced keys: %v, %v; want one", named, err)
+	}
+
+	mem, ok := f.blobs.(*memBlob)
+	if !ok {
+		t.Fatalf("fixture blobs = %T, want *memBlob", f.blobs)
+	}
+
+	mem.ageAll(90 * time.Minute)
+
+	return named[0], mem
+}
+
+// withKeepSetHook returns an Updates service whose keep-set read runs before
+// first.
+func (f updatesFixture) withKeepSetHook(t *testing.T, before func()) *stack.Updates {
+	t.Helper()
+
+	svc, err := stack.NewUpdates(stack.UpdatesConfig{
+		ManualLocks: nil, Updates: f.store, Tokens: nil,
+		Checkpoints: hookedKeepSet{memUpdates: f.store, before: before},
+		Events:      f.store, Namespaces: f.namespaces, Stacks: f.store, Blobs: f.blobs,
+		Now: f.clock.Now, Logger: nil, MaxCheckpointBytes: 1024,
+		Journal: nil, Replayer: nil, Refusals: f.refusals,
+	})
+	if err != nil {
+		t.Fatalf("new updates: %v", err)
+	}
+
+	return svc
 }
 
 // TestStartSweepKeepsBlobsWhenTheStackChanges proves that a change of the
@@ -2045,56 +2098,21 @@ func TestStartSweepKeepsBlobsWhenTheStackChanges(t *testing.T) {
 			t.Parallel()
 
 			f := newUpdates(t)
-			ctx := t.Context()
-			first := f.started(t, stack.KindUpdate)
+			key, mem := f.completedWithBlob(t)
+			svc := f.withKeepSetHook(t, func() { tc.change(f.store, f.ref) })
 
-			if saveErr := f.svc.SaveCheckpoint(
-				ctx, f.ref, first.Update.ID, first.Token, checkpoint(1, `{"a":1}`),
-			); saveErr != nil {
-				t.Fatalf("save checkpoint: %v", saveErr)
-			}
-
-			if _, doneErr := f.svc.Complete(
-				ctx, f.ref, first.Update.ID, first.Token, stack.StatusSucceeded,
-			); doneErr != nil {
-				t.Fatalf("complete first update: %v", doneErr)
-			}
-
-			named, keysErr := f.store.ReferencedBlobKeys(ctx, "stk-test")
-			if keysErr != nil || len(named) != 1 {
-				t.Fatalf("referenced keys: %v, %v; want one", named, keysErr)
-			}
-
-			mem, ok := f.blobs.(*memBlob)
-			if !ok {
-				t.Fatalf("fixture blobs = %T, want *memBlob", f.blobs)
-			}
-
-			mem.ageAll(90 * time.Minute)
-
-			next, createErr := f.svc.Create(ctx, f.ref, stack.Plan{
+			preview, createErr := f.svc.Create(t.Context(), f.ref, stack.Plan{
 				Kind: stack.KindUpdate, DryRun: true, CreatedBy: "", RestoredFrom: 0,
 			})
 			if createErr != nil {
 				t.Fatalf("create preview: %v", createErr)
 			}
 
-			svc, svcErr := stack.NewUpdates(stack.UpdatesConfig{
-				ManualLocks: nil, Updates: f.store, Tokens: nil,
-				Checkpoints: hookedKeepSet{memUpdates: f.store, before: func() { tc.change(f.store, f.ref) }},
-				Events:      f.store, Namespaces: f.namespaces, Stacks: f.store, Blobs: f.blobs,
-				Now: f.clock.Now, Logger: nil, MaxCheckpointBytes: 1024,
-				Journal: nil, Replayer: nil, Refusals: f.refusals,
-			})
-			if svcErr != nil {
-				t.Fatalf("new updates: %v", svcErr)
-			}
-
-			if _, startErr := svc.Start(ctx, f.ref, next.ID); startErr != nil {
+			if _, startErr := svc.Start(t.Context(), f.ref, preview.ID); startErr != nil {
 				t.Fatalf("start preview: %v", startErr)
 			}
 
-			if _, getErr := mem.Get(ctx, named[0]); getErr != nil {
+			if _, getErr := mem.Get(t.Context(), key); getErr != nil {
 				t.Fatalf("named blob after a %s during the sweep: %v, want it kept", tc.name, getErr)
 			}
 		})

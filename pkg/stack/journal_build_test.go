@@ -68,7 +68,7 @@ func (m *journalMemStore) ReferencedBlobKeys(ctx context.Context, stackID stack.
 		return nil, err
 	}
 
-	ref, _ := m.memUpdates.refOf(stackID)
+	ref, _ := m.refOf(stackID)
 
 	m.mu.Lock()
 	defer m.mu.Unlock()

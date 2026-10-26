@@ -1216,7 +1216,16 @@ func (s *Updates) sweepUpdateBlobs(ctx context.Context, bl *scopedBlobs, ref Ref
 		return
 	}
 
-	s.sweepOrphans(ctx, bl, ref, stackID, id, listed)
+	s.sweepOrphans(ctx, bl, sweepTarget{ref: ref, stackID: stackID, update: id}, listed)
+}
+
+// sweepTarget names what a sweep covers: the stack by its reference (for log
+// lines) and by its ID (for the keep set), and one update, or none for the
+// whole stack.
+type sweepTarget struct {
+	ref     Ref
+	stackID ID
+	update  UpdateID
 }
 
 // sweepOrphans deletes the objects of listed that are older than the grace
@@ -1229,8 +1238,10 @@ func (s *Updates) sweepUpdateBlobs(ctx context.Context, bl *scopedBlobs, ref Ref
 // rename between the two reads cannot empty it. The update ID is empty for a
 // sweep over the whole stack.
 func (s *Updates) sweepOrphans(
-	ctx context.Context, bl *scopedBlobs, ref Ref, stackID ID, id UpdateID, listed []blob.Object,
+	ctx context.Context, bl *scopedBlobs, target sweepTarget, listed []blob.Object,
 ) {
+	ref, stackID, id := target.ref, target.stackID, target.update
+
 	now := s.clock()
 
 	candidates := make([]blob.Object, 0, len(listed))
@@ -1320,7 +1331,7 @@ func (s *Updates) sweepStackBlobs(ctx context.Context, bl *scopedBlobs, ref Ref,
 		return
 	}
 
-	s.sweepOrphans(ctx, bl, ref, stackID, "", listed)
+	s.sweepOrphans(ctx, bl, sweepTarget{ref: ref, stackID: stackID, update: ""}, listed)
 }
 
 // resolveCheckpoint fills the deployment of a checkpoint row: it reads and
