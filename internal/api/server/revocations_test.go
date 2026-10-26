@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	apiserver "opendustpan.org/opendustpan/internal/api/server"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/maintenance"
 )
@@ -62,10 +63,18 @@ func TestReducingRoutesAnswerInMaintenanceMode(t *testing.T) {
 
 // serverReducingKeys returns "METHOD pattern" of each entry of the list of
 // reducing routes that belongs to the installation API.
+//
+// It leaves out the sign-in provider routes: a handler mounts them only with
+// a provider service, which the handler of these tests has not. A provider
+// test below proves that route in maintenance mode.
 func serverReducingKeys() []string {
 	var keys []string
 
 	for _, r := range maintenance.ReducingRoutes() {
+		if strings.HasPrefix(r.Pattern, "/api/server/sign-in-providers") {
+			continue
+		}
+
 		if strings.HasPrefix(r.Pattern, "/api/server/") {
 			keys = append(keys, r.Method+" "+r.Pattern)
 		}
@@ -77,9 +86,15 @@ func serverReducingKeys() []string {
 // notReductions holds the routes whose shape looks like an access reduction
 // and that the list leaves out on purpose, each with its reason.
 func notReductions() map[string]string {
-	return map[string]string{
-		"DELETE /api/server/sign-in-providers/{id}": "deletes the provider configuration and journals no revocation",
-	}
+	return map[string]string{}
+}
+
+// allServerRoutes returns the routes of the handler of these tests and the
+// routes that only a handler with a provider service mounts.
+func allServerRoutes(t *testing.T) []apiserver.Route {
+	t.Helper()
+
+	return slices.Concat(newTestHandler(t).Routes(), newProviderEnv(t).handler.Routes())
 }
 
 // reductionPathWords are the path segments that name a credential or a
@@ -126,7 +141,7 @@ func TestReductionShapedRoutesAreOnTheList(t *testing.T) {
 		listed[r.Method+" "+r.Pattern] = true
 	}
 
-	for _, route := range newTestHandler(t).Routes() {
+	for _, route := range allServerRoutes(t) {
 		key := route.Method + " " + route.Path
 		if !looksReducing(route.Method, route.Path) || listed[key] {
 			continue
@@ -147,7 +162,7 @@ func TestReducingListMatchesRoutes(t *testing.T) {
 
 	registered := map[string][]string{}
 
-	for _, route := range newTestHandler(t).Routes() {
+	for _, route := range allServerRoutes(t) {
 		actions := make([]string, 0, len(route.Actions))
 		for _, a := range route.Actions {
 			actions = append(actions, string(a))
