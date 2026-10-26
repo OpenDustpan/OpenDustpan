@@ -27,6 +27,7 @@ Consider a change done only when `make check` passes with zero findings:
 - `golangci-lint run ./...` reports nothing. Fix code, do not weaken
   `.golangci.yml`. Allow a `//nolint:<linter> // <reason>` only with a
   specific linter and a real reason. Expect reviewers to question it.
+- `make subtestcheck` reports no check after a parallel `t.Run` that reads a variable that the subtest writes.
 - `make nilaway` reports no possible nil panic. Fix the code. Do not exclude
   a package or a file.
 - `make vuln` (govulncheck) reports no known vulnerability.
@@ -54,6 +55,7 @@ Do not report work as finished if any of these fail. Say what fails instead.
 .agents/skills/        agent skills, installed with `npx skills` (see skills-lock.json); .claude/skills/ links here
 cmd/opendustpan/       the binary: flags, env, built-in adapters. Only place that may exit.
 cmd/clientgen/         the client generator: reads openapi.json and writes a client (make clients-generate)
+cmd/subtestcheck/      the check for a parallel subtest (make subtestcheck); its logic is in internal/subtestcheck
 pkg/                   the public SDK: dustpan, the port packages and the conformance suites (ADR 35, ADR 272)
   dustpan/             the SDK entry point: NewServer + options, routes, probes
   namespace/           domain: namespaces, home region, failover-version fencing
