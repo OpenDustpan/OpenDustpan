@@ -976,6 +976,16 @@ func removeMember(
 // directory keeps answers 409, and the message names the directory. The domain wraps each sentinel with
 // the ID or the name it acted on, never with driver text.
 func classifyPrincipal(err error) (failure, bool) {
+	if f, ok := classifyPrincipalRequest(err); ok {
+		return f, true
+	}
+
+	return classifyPrincipalState(err)
+}
+
+// classifyPrincipalRequest maps the errors of a bad body, subject, page or
+// size to 400 and 413.
+func classifyPrincipalRequest(err error) (failure, bool) {
 	switch {
 	case errors.Is(err, errPrincipalBody), errors.Is(err, errPrincipalChangeBody),
 		errors.Is(err, errGroupBody), errors.Is(err, errGroupChangeBody), errors.Is(err, errMemberBody),
@@ -990,6 +1000,15 @@ func classifyPrincipal(err error) (failure, bool) {
 	case errors.Is(err, errBodyTooLarge):
 		return failCoded(http.StatusRequestEntityTooLarge, err.Error(), errcode.RequestBodyTooLarge,
 			errcode.Quantity("limit", maxPrincipalBodyBytes)), true
+	}
+
+	return fail(0, ""), false
+}
+
+// classifyPrincipalState maps the errors of a taken, disabled, kept or unknown
+// principal, and of a store with no principal port.
+func classifyPrincipalState(err error) (failure, bool) {
+	switch {
 	case errors.Is(err, principal.ErrAlreadyExists):
 		return failCoded(http.StatusConflict, err.Error(), errcode.PrincipalAlreadyExists), true
 	case errors.Is(err, principal.ErrManagedByDirectory):

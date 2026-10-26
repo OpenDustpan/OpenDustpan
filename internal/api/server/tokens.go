@@ -783,6 +783,16 @@ func tokenObject(r *http.Request, svc *accesstoken.Service) string {
 // 409; and a store with no token port 501. The domain wraps each sentinel
 // with the ID or the value it acted on, never with driver text or a secret.
 func classifyToken(err error) (failure, bool) {
+	if f, ok := classifyTokenRequest(err); ok {
+		return f, true
+	}
+
+	return classifyTokenState(err)
+}
+
+// classifyTokenRequest maps the errors of a refused credential, body, query
+// or token to 429 and 400.
+func classifyTokenRequest(err error) (failure, bool) {
 	switch {
 	case errors.Is(err, identity.ErrRateLimited):
 		return failCoded(http.StatusTooManyRequests, "too many failed sign-ins from this address: try again later",
@@ -795,7 +805,16 @@ func classifyToken(err error) (failure, bool) {
 	case errors.Is(err, accesstoken.ErrInvalid):
 		return failCoded(http.StatusBadRequest, err.Error(), errcode.TokenInvalid), true
 	case errors.Is(err, accesstoken.ErrNoTokenForKind):
-		return failCoded(http.StatusBadRequest, err.Error(), errcode.TokenKindUnsupported), true
+		return failCoded(http.StatusBadRequest, err.Error(), errcode.TokenKindNone), true
+	}
+
+	return fail(0, ""), false
+}
+
+// classifyTokenState maps the errors of an unknown, wrong, ended or taken
+// token, and of a store with no token port.
+func classifyTokenState(err error) (failure, bool) {
+	switch {
 	case errors.Is(err, accesstoken.ErrNotFound):
 		return failCoded(http.StatusNotFound, err.Error(), errcode.TokenNotFound), true
 	case errors.Is(err, accesstoken.ErrPrincipalNotFound):
@@ -803,9 +822,9 @@ func classifyToken(err error) (failure, bool) {
 	case errors.Is(err, accesstoken.ErrWrongKind):
 		return failCoded(http.StatusBadRequest, err.Error(), errcode.TokenWrongKind), true
 	case errors.Is(err, accesstoken.ErrNoOwnPrincipal):
-		return failCoded(http.StatusForbidden, err.Error(), errcode.TokenNoOwnPrincipal), true
+		return failCoded(http.StatusForbidden, err.Error(), errcode.TokenNoPerson), true
 	case errors.Is(err, accesstoken.ErrSignInRequired):
-		return failCoded(http.StatusForbidden, err.Error(), errcode.TokenSignInRequired), true
+		return failCoded(http.StatusForbidden, err.Error(), errcode.TokenNeedsSignIn), true
 	case errors.Is(err, accesstoken.ErrEnded):
 		return failCoded(http.StatusConflict, err.Error(), errcode.TokenEnded), true
 	case errors.Is(err, accesstoken.ErrAlreadyExists):

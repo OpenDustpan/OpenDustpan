@@ -42,7 +42,7 @@ func TestWriteErrorTokenAndPrincipalCodes(t *testing.T) {
 		{"token invalid", accesstoken.ErrInvalid, http.StatusBadRequest, errcode.TokenInvalid, nil, ""},
 		{
 			"kind gets no token", accesstoken.ErrNoTokenForKind, http.StatusBadRequest,
-			errcode.TokenKindUnsupported, nil, "",
+			errcode.TokenKindNone, nil, "",
 		},
 		{"token not found", accesstoken.ErrNotFound, http.StatusNotFound, errcode.TokenNotFound, nil, ""},
 		{
@@ -50,12 +50,18 @@ func TestWriteErrorTokenAndPrincipalCodes(t *testing.T) {
 			errcode.PrincipalNotFound, nil, "",
 		},
 		{"wrong kind", accesstoken.ErrWrongKind, http.StatusBadRequest, errcode.TokenWrongKind, nil, ""},
-		{"no own principal", accesstoken.ErrNoOwnPrincipal, http.StatusForbidden, errcode.TokenNoOwnPrincipal, nil, ""},
-		{"sign-in required", accesstoken.ErrSignInRequired, http.StatusForbidden, errcode.TokenSignInRequired, nil, ""},
+		{"no own principal", accesstoken.ErrNoOwnPrincipal, http.StatusForbidden, errcode.TokenNoPerson, nil, ""},
+		{"sign-in required", accesstoken.ErrSignInRequired, http.StatusForbidden, errcode.TokenNeedsSignIn, nil, ""},
 		{"token ended", accesstoken.ErrEnded, http.StatusConflict, errcode.TokenEnded, nil, ""},
 		{"token exists", accesstoken.ErrAlreadyExists, http.StatusConflict, errcode.TokenAlreadyExists, nil, ""},
-		{"no token store", apiserver.ErrNoTokenStoreForTest, http.StatusNotImplemented, errcode.TokenUnsupported, nil, ""},
-		{"principal body", apiserver.ErrPrincipalBodyForTest, http.StatusBadRequest, errcode.RequestBodyInvalid, nil, ""},
+		{
+			"no token store", apiserver.ErrNoTokenStoreForTest, http.StatusNotImplemented,
+			errcode.TokenUnsupported, nil, "",
+		},
+		{
+			"principal body", apiserver.ErrPrincipalBodyForTest, http.StatusBadRequest,
+			errcode.RequestBodyInvalid, nil, "",
+		},
 		{
 			"principal change body", apiserver.ErrPrincipalChangeBodyForTest, http.StatusBadRequest,
 			errcode.RequestBodyInvalid, nil, "",

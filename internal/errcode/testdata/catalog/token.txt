@@ -1,9 +1,9 @@
 token.already-exists
 token.ended
 token.invalid
-token.kind-unsupported
-token.no-own-principal
+token.kind-none
+token.needs-sign-in
+token.no-person
 token.not-found
-token.sign-in-required
 token.unsupported
 token.wrong-kind
