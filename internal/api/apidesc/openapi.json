@@ -1118,12 +1118,12 @@
           "state-version.too-large",
           "state-version.upload-denied",
           "token.already-exists",
+          "token.caller-not-person",
           "token.ended",
           "token.invalid",
-          "token.kind-none",
-          "token.needs-sign-in",
-          "token.no-person",
+          "token.kind-has-none",
           "token.not-found",
+          "token.requires-sign-in",
           "token.unsupported",
           "token.wrong-kind",
           "trigger.cycle",
@@ -3009,12 +3009,12 @@
       "RequestBodyTooLargeErrorArgs": {
         "description": "The arguments of the text of the error with the code request.body-too-large.",
         "properties": {
-          "limit": {
+          "maxBytes": {
             "type": "integer"
           }
         },
         "required": [
-          "limit"
+          "maxBytes"
         ],
         "type": "object"
       },

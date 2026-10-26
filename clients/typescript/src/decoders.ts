@@ -1036,7 +1036,7 @@ export const decodeRequestBodyTooLargeError: Decoder<RequestBodyTooLargeError> =
 
 /** The validator of RequestBodyTooLargeErrorArgs. */
 export const decodeRequestBodyTooLargeErrorArgs: Decoder<RequestBodyTooLargeErrorArgs> = object<RequestBodyTooLargeErrorArgs>("RequestBodyTooLargeErrorArgs", {
-  limit: int64,
+  maxBytes: int64,
 });
 
 /** The validator of RequestIdempotencyKeyReplayedSecretError. */

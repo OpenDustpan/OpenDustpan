@@ -5,7 +5,7 @@ package errcode
 const (
 	// RequestBodyInvalid means that the request body is not readable or is not one JSON object with known fields.
 	RequestBodyInvalid = "request.body-invalid"
-	// RequestBodyTooLarge means that the request body is longer than the limit of the route.
+	// RequestBodyTooLarge means that the request body is longer than maxBytes bytes.
 	RequestBodyTooLarge = "request.body-too-large"
 	// RequestContentTypeUnsupported means that the content type of the request is not one that the route takes.
 	RequestContentTypeUnsupported = "request.content-type-unsupported"
@@ -44,6 +44,10 @@ const (
 	RequestPreconditionRequired = "request.precondition-required"
 )
 
+// argMaxBytes is the name of the argument of a code for a value that is longer
+// than a limit in bytes.
+const argMaxBytes = "maxBytes"
+
 // requestSpecs are the codes of a request that is not valid as a request,
 // before any domain rule.
 func requestSpecs() []Spec {
@@ -55,8 +59,8 @@ func requestSpecs() []Spec {
 		},
 		{
 			Code:    RequestBodyTooLarge,
-			Meaning: "the request body is longer than the limit of the route",
-			Args:    []Arg{{Name: "limit", Kind: KindQuantity}},
+			Meaning: "the request body is longer than maxBytes bytes",
+			Args:    []Arg{{Name: argMaxBytes, Kind: KindQuantity}},
 		},
 		{
 			Code:    RequestContentTypeUnsupported,

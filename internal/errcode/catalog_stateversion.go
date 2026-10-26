@@ -76,7 +76,7 @@ func stateVersionSpecs() []Spec {
 		{
 			Code:    StateVersionRevealPathTooLong,
 			Meaning: "the value path of the reveal is longer than maxBytes bytes",
-			Args:    []Arg{{Name: "maxBytes", Kind: KindQuantity}},
+			Args:    []Arg{{Name: argMaxBytes, Kind: KindQuantity}},
 		},
 		{
 			Code:    StateVersionStaleSerial,

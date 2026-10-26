@@ -805,7 +805,7 @@ func classifyTokenRequest(err error) (failure, bool) {
 	case errors.Is(err, accesstoken.ErrInvalid):
 		return failCoded(http.StatusBadRequest, err.Error(), errcode.TokenInvalid), true
 	case errors.Is(err, accesstoken.ErrNoTokenForKind):
-		return failCoded(http.StatusBadRequest, err.Error(), errcode.TokenKindNone), true
+		return failCoded(http.StatusBadRequest, err.Error(), errcode.TokenKindHasNone), true
 	}
 
 	return fail(0, ""), false
@@ -822,9 +822,9 @@ func classifyTokenState(err error) (failure, bool) {
 	case errors.Is(err, accesstoken.ErrWrongKind):
 		return failCoded(http.StatusBadRequest, err.Error(), errcode.TokenWrongKind), true
 	case errors.Is(err, accesstoken.ErrNoOwnPrincipal):
-		return failCoded(http.StatusForbidden, err.Error(), errcode.TokenNoPerson), true
+		return failCoded(http.StatusForbidden, err.Error(), errcode.TokenCallerNotPerson), true
 	case errors.Is(err, accesstoken.ErrSignInRequired):
-		return failCoded(http.StatusForbidden, err.Error(), errcode.TokenNeedsSignIn), true
+		return failCoded(http.StatusForbidden, err.Error(), errcode.TokenRequiresSignIn), true
 	case errors.Is(err, accesstoken.ErrEnded):
 		return failCoded(http.StatusConflict, err.Error(), errcode.TokenEnded), true
 	case errors.Is(err, accesstoken.ErrAlreadyExists):

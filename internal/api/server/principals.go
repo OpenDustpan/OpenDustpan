@@ -999,7 +999,7 @@ func classifyPrincipalRequest(err error) (failure, bool) {
 		return failCoded(http.StatusBadRequest, err.Error(), errcode.RequestPageSizeInvalid), true
 	case errors.Is(err, errBodyTooLarge):
 		return failCoded(http.StatusRequestEntityTooLarge, err.Error(), errcode.RequestBodyTooLarge,
-			errcode.Quantity("limit", maxPrincipalBodyBytes)), true
+			errcode.Quantity("maxBytes", maxPrincipalBodyBytes)), true
 	}
 
 	return fail(0, ""), false

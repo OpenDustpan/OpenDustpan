@@ -20,7 +20,7 @@ import (
 func TestWriteErrorTokenAndPrincipalCodes(t *testing.T) {
 	t.Parallel()
 
-	bodyLimit := map[string]any{"limit": int64(16384)}
+	bodyLimit := map[string]any{"maxBytes": int64(16384)}
 
 	tests := []writeErrorRow{
 		{
@@ -42,7 +42,7 @@ func TestWriteErrorTokenAndPrincipalCodes(t *testing.T) {
 		{"token invalid", accesstoken.ErrInvalid, http.StatusBadRequest, errcode.TokenInvalid, nil, ""},
 		{
 			"kind gets no token", accesstoken.ErrNoTokenForKind, http.StatusBadRequest,
-			errcode.TokenKindNone, nil, "",
+			errcode.TokenKindHasNone, nil, "",
 		},
 		{"token not found", accesstoken.ErrNotFound, http.StatusNotFound, errcode.TokenNotFound, nil, ""},
 		{
@@ -50,8 +50,11 @@ func TestWriteErrorTokenAndPrincipalCodes(t *testing.T) {
 			errcode.PrincipalNotFound, nil, "",
 		},
 		{"wrong kind", accesstoken.ErrWrongKind, http.StatusBadRequest, errcode.TokenWrongKind, nil, ""},
-		{"no own principal", accesstoken.ErrNoOwnPrincipal, http.StatusForbidden, errcode.TokenNoPerson, nil, ""},
-		{"sign-in required", accesstoken.ErrSignInRequired, http.StatusForbidden, errcode.TokenNeedsSignIn, nil, ""},
+		{
+			"no own principal", accesstoken.ErrNoOwnPrincipal, http.StatusForbidden,
+			errcode.TokenCallerNotPerson, nil, "",
+		},
+		{"sign-in required", accesstoken.ErrSignInRequired, http.StatusForbidden, errcode.TokenRequiresSignIn, nil, ""},
 		{"token ended", accesstoken.ErrEnded, http.StatusConflict, errcode.TokenEnded, nil, ""},
 		{"token exists", accesstoken.ErrAlreadyExists, http.StatusConflict, errcode.TokenAlreadyExists, nil, ""},
 		{
