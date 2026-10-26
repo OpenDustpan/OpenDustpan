@@ -923,7 +923,7 @@ The static binary `dustpan-launcher` that runs the steps of one claim inside the
 _Avoid_: Executor (that is write-back or runners, ADR 100 decision 19), runner binary, shim
 
 **Job proxy**:
-A proxy between one runner job and the network (RFC 16, a proposal). It allows a request of the job only when a rule for the unit and the operation matches the host, the method and the path. It refuses each other request. It can add a credential to an allowed request, so the job never holds that credential. It holds the credentials and runs apart from the steps. Its outbound connections go through the outbound guard, and through an upstream proxy when the team has one.
+A proxy between one runner job and the network. RFC 16 proposes it, and the owner has not decided its design. In the proposal, a rule for the unit and the operation must match the host, the method and the path of a request. Else the proxy refuses the request. It may add a credential to an allowed request, so that the job never holds that credential. The proposal has it hold the credentials and run apart from the steps. Its outbound connections may go through the outbound guard, and through an upstream proxy when the team has one.
 _Avoid_: Egress proxy, egress gateway, sidecar (as the name of the feature), firewall
 
 **Upstream proxy**:

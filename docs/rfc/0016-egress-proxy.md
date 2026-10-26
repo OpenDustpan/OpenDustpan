@@ -562,8 +562,6 @@ The RFC recommends the points below. It does not decide them.
 - The name of a rule of the job proxy: "egress rule", "proxy rule", or
   another word? "Egress" now names the outbound guard and the egress
   allowlist.
-## Open questions
-
 - Which interface for rules: HAProxy-style conditions and actions, plain
   data, a policy engine, or something new? And how do policies apply to
   rules? The spike recommends plain data for the first version.
