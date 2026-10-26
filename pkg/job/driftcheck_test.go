@@ -372,6 +372,7 @@ func TestScheduledDriftCheckNeverWaitsForApproval(t *testing.T) {
 					Type:      job.GateApproval,
 					Approvals: 1,
 					Groups:    nil,
+					GroupIDs:  nil,
 					AllowSelf: false,
 					Timeout:   0,
 					BindPlan:  true,

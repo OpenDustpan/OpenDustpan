@@ -28,16 +28,34 @@ type MemberCounts struct {
 	Persons int64
 }
 
+// GroupRef names one group by its immutable ID. The name is the current name
+// of the group, and a rename changes it. Only the ID is the identity.
+type GroupRef struct {
+	ID   string
+	Name string
+}
+
+// GroupResolver finds a group by its name.
+type GroupResolver interface {
+	// ResolveGroup returns the group that is called name now, without regard
+	// to case. It returns ErrInvalid when name is not a valid group name, and
+	// ErrNotFound when no group has that name.
+	ResolveGroup(ctx context.Context, name string) (GroupRef, error)
+}
+
 // ApproverDirectory reads the groups that approvers name. The config service
-// uses it to refuse an approver list that no one can meet. Package
-// approverdirectorytest holds the conformance suite of an adapter.
+// uses it to resolve a group name to the ID of the group at save, and to
+// refuse an approver list that no one can meet. Package approverdirectorytest
+// holds the conformance suite of an adapter.
 type ApproverDirectory interface {
-	// GroupMembers returns the counts of the current members of the group
-	// called name, without regard to case. A member counts when its membership
-	// is active and its principal is not disabled. It returns ErrInvalid when
-	// name is not a valid group name, and ErrNotFound when no group has that
-	// name. A group with no member answers zero counts and no error.
-	GroupMembers(ctx context.Context, name string) (MemberCounts, error)
+	GroupResolver
+	// GroupByID returns the group with the ID id, with its current name and
+	// the counts of its current members. A member counts when its membership
+	// is active and its principal is not disabled. It returns ErrNotFound
+	// when no group has that ID, also for a group that someone deleted and
+	// made again with the same name: the new group has another ID. A group
+	// with no member answers zero counts and no error.
+	GroupByID(ctx context.Context, id string) (GroupRef, MemberCounts, error)
 }
 
 // ConfigService reads and writes the approval defaults and the approval
@@ -103,6 +121,10 @@ func (s *ConfigService) ApprovalDefault(ctx context.Context, scope Scope) (Appro
 		return ApprovalDefault{}, fmt.Errorf("read the approval default: %w", err)
 	}
 
+	if d.Approvers, err = s.currentNames(ctx, d.Approvers); err != nil {
+		return ApprovalDefault{}, err
+	}
+
 	return d, nil
 }
 
@@ -123,9 +145,12 @@ func (s *ConfigService) PutApprovalDefault(
 		return ApprovalDefault{}, err
 	}
 
-	if err := s.checkApprovers(ctx, d.Approvers, d.Count, d.FreshAuth); err != nil {
+	approvers, err := s.checkApprovers(ctx, d.Approvers, d.Count, d.FreshAuth)
+	if err != nil {
 		return ApprovalDefault{}, err
 	}
+
+	d.Approvers = approvers
 
 	fence, entry, err := s.prepare(ctx, d.Scope, e, d.Scope.Key()+"/approval-default", AuditSetApprovalDefault)
 	if err != nil {
@@ -180,6 +205,12 @@ func (s *ConfigService) ApprovalRules(ctx context.Context, scope Scope) ([]Appro
 		return nil, fmt.Errorf("list the approval rules: %w", err)
 	}
 
+	for i := range rules {
+		if rules[i].Approvers, err = s.currentNames(ctx, rules[i].Approvers); err != nil {
+			return nil, err
+		}
+	}
+
 	return rules, nil
 }
 
@@ -192,6 +223,10 @@ func (s *ConfigService) ApprovalRule(ctx context.Context, scope Scope, id ID) (A
 	r, err := s.store.ApprovalRules().Get(ctx, scope, id)
 	if err != nil {
 		return ApprovalRule{}, fmt.Errorf("read the approval rule: %w", err)
+	}
+
+	if r.Approvers, err = s.currentNames(ctx, r.Approvers); err != nil {
+		return ApprovalRule{}, err
 	}
 
 	return r, nil
@@ -212,9 +247,12 @@ func (s *ConfigService) PutApprovalRule(
 		return ApprovalRule{}, err
 	}
 
-	if err := s.checkApprovers(ctx, r.Approvers, r.Count, r.FreshAuth); err != nil {
+	approvers, err := s.checkApprovers(ctx, r.Approvers, r.Count, r.FreshAuth)
+	if err != nil {
 		return ApprovalRule{}, err
 	}
+
+	r.Approvers = approvers
 
 	object := r.Scope.Key() + "/approval-rules/" + string(r.ID)
 

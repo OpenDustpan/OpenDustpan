@@ -8,6 +8,7 @@ import (
 
 	"opendustpan.org/opendustpan/internal/api/runnerapi"
 	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/runner/protocol"
 )
 
@@ -146,5 +147,57 @@ func TestRoutesRefuseARequestWithNoCredential(t *testing.T) {
 				t.Fatalf("status = %d, want a 4xx refusal", status)
 			}
 		})
+	}
+}
+
+// TestReducingListMatchesRunnerRoutes proves that each entry of
+// maintenance.ReducingRoutes under the runner management prefix is a
+// registered route with the actions that the list names, and that each
+// route of the table that retires or revokes is on the list.
+func TestReducingListMatchesRunnerRoutes(t *testing.T) {
+	t.Parallel()
+
+	e := newEnv(t)
+	registered := map[string][]string{}
+
+	for _, route := range e.handler.Routes() {
+		actions := make([]string, 0, len(route.Actions))
+		for _, a := range route.Actions {
+			actions = append(actions, string(a))
+		}
+
+		registered[route.Method+" "+route.Path] = actions
+	}
+
+	listed := map[string]bool{}
+
+	for _, r := range maintenance.ReducingRoutes() {
+		if !strings.HasPrefix(r.Pattern, "/api/runners/") {
+			continue
+		}
+
+		key := r.Method + " " + r.Pattern
+		listed[key] = true
+
+		got, ok := registered[key]
+		if !ok {
+			t.Errorf("%s is on the list and is not a registered route", key)
+
+			continue
+		}
+
+		if !slices.Equal(slices.Sorted(slices.Values(got)), slices.Sorted(slices.Values(r.Actions))) {
+			t.Errorf("%s declares the actions %v, the list names %v", key, got, r.Actions)
+		}
+	}
+
+	for key := range registered {
+		method, path, _ := strings.Cut(key, " ")
+		shaped := strings.HasSuffix(path, "/revoke") || strings.HasSuffix(path, "/retire") ||
+			strings.HasSuffix(path, "/disable")
+
+		if shaped && !listed[key] {
+			t.Errorf("%s retires or revokes and is not on maintenance.ReducingRoutes (method %s)", key, method)
+		}
 	}
 }

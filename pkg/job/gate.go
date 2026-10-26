@@ -94,6 +94,11 @@ type Gate struct {
 	// Groups limits the approvers to members of these groups. Empty allows
 	// any principal with the approve action on the unit.
 	Groups []string
+	// GroupIDs holds the immutable ID of each group in Groups, at the same
+	// index. The enforcement of the approvers matches a member by these IDs,
+	// never by the names: a group that someone made again with the same name
+	// has another ID. Groups is for display only.
+	GroupIDs []string
 	// AllowSelf lets the principal that started the job approve it. It has
 	// no effect on a confirmation gate.
 	AllowSelf bool
@@ -110,7 +115,8 @@ type Gate struct {
 // one.
 func ConfirmationGate(bindPlan bool) Gate {
 	return Gate{
-		Type: GateConfirmation, Approvals: 1, Groups: nil, AllowSelf: false, Timeout: 0, BindPlan: bindPlan,
+		Type: GateConfirmation, Approvals: 1, Groups: nil, GroupIDs: nil, AllowSelf: false, Timeout: 0,
+		BindPlan: bindPlan,
 	}
 }
 

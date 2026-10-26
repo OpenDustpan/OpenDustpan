@@ -968,8 +968,18 @@ func TestGateConfigDeniedWriteKeepsDefault(t *testing.T) {
 	}
 
 	seed := gate.ApprovalDefault{
-		Scope: gate.NamespaceScope("acme"), Version: 0, Count: 2, FreshAuth: gate.NoFreshAuth(),
-		Approvers: gate.Approvers{Groups: []string{"platform"}, Users: nil, UnitOwners: false}, Unless: "", Reads: nil,
+		Scope:     gate.NamespaceScope("acme"),
+		Version:   0,
+		Count:     2,
+		FreshAuth: gate.NoFreshAuth(),
+		Approvers: gate.Approvers{
+			Groups:     []string{"platform"},
+			GroupIDs:   nil,
+			Users:      nil,
+			UnitOwners: false,
+		},
+		Unless: "",
+		Reads:  nil,
 	}
 
 	_, err = svc.PutApprovalDefault(t.Context(), seed, 0, auditEntryFor("acme"))
@@ -1176,17 +1186,32 @@ func TestApprovalDefaultAcceptsApproversThatCanBeMet(t *testing.T) {
 // that is not valid is refused.
 type testApprovers struct{}
 
-// GroupMembers implements gate.ApproverDirectory.
-func (testApprovers) GroupMembers(_ context.Context, name string) (gate.MemberCounts, error) {
-	members := map[string]int64{"ops": 10, "platform": 5, "finance": 5, "sre": 5, "x": 10}
+// testApproverGroups returns the number of enabled members of each group.
+func testApproverGroups() map[string]int64 {
+	return map[string]int64{"ops": 10, "platform": 5, "finance": 5, "sre": 5, "x": 10}
+}
 
+// ResolveGroup implements gate.ApproverDirectory. The ID of a group is "id-"
+// and its name.
+func (testApprovers) ResolveGroup(_ context.Context, name string) (gate.GroupRef, error) {
 	if err := principal.ValidateGroupName(name); err != nil {
-		return gate.MemberCounts{Enabled: 0, Persons: 0}, fmt.Errorf("%w: %w", gate.ErrInvalid, err)
+		return gate.GroupRef{ID: "", Name: ""}, fmt.Errorf("%w: %w", gate.ErrInvalid, err)
 	}
 
-	if n, ok := members[name]; ok {
-		return gate.MemberCounts{Enabled: n, Persons: n}, nil
+	if _, ok := testApproverGroups()[name]; ok {
+		return gate.GroupRef{ID: "id-" + name, Name: name}, nil
 	}
 
-	return gate.MemberCounts{Enabled: 0, Persons: 0}, fmt.Errorf("%w: group %q", gate.ErrNotFound, name)
+	return gate.GroupRef{ID: "", Name: ""}, fmt.Errorf("%w: group %q", gate.ErrNotFound, name)
+}
+
+// GroupByID implements gate.ApproverDirectory.
+func (testApprovers) GroupByID(_ context.Context, id string) (gate.GroupRef, gate.MemberCounts, error) {
+	name := strings.TrimPrefix(id, "id-")
+	if n, ok := testApproverGroups()[name]; ok && name != id {
+		return gate.GroupRef{ID: id, Name: name}, gate.MemberCounts{Enabled: n, Persons: n}, nil
+	}
+
+	return gate.GroupRef{ID: "", Name: ""}, gate.MemberCounts{Enabled: 0, Persons: 0},
+		fmt.Errorf("%w: group %q", gate.ErrNotFound, id)
 }
