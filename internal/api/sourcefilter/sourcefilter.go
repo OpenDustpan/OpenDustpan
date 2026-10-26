@@ -199,10 +199,11 @@ func (h *Handler) enforce(rt Route) http.HandlerFunc {
 		Resolve: rt.Resolve,
 		Authorize: func(r *http.Request, p identity.Principal, obj identity.Object) error {
 			return guard.AuthorizeObject(r.Context(), r, p, obj, route.Checks{
-				Namespace: obj,
-				Reads:     nil,
-				Actions:   rt.Actions,
-				NotFound:  namespace.ErrNotFound,
+				Namespace:     obj,
+				Reads:         nil,
+				Actions:       rt.Actions,
+				NotFound:      namespace.ErrNotFound,
+				RequireAction: true,
 			})
 		},
 		Serve: rt.Serve,

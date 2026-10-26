@@ -9,6 +9,7 @@ import (
 
 	"opendustpan.org/opendustpan/internal/api/route"
 	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/ipallow"
 	"opendustpan.org/opendustpan/pkg/namespace"
 )
 
@@ -111,6 +112,15 @@ func TestAuthorizeObject(t *testing.T) {
 			wantAsked: []identity.Action{nsRead},
 			wantErr:   errBackend,
 		},
+		{
+			name:      "address outside the allowlist answers its own refusal",
+			allow:     map[identity.Action]bool{},
+			authErr:   ipallow.ErrAddressNotAllowed,
+			reads:     reads,
+			actions:   writes,
+			wantAsked: []identity.Action{nsRead},
+			wantErr:   ipallow.ErrAddressNotAllowed,
+		},
 	}
 
 	for _, tc := range cases {
@@ -126,10 +136,11 @@ func TestAuthorizeObject(t *testing.T) {
 			g := guard(t, &seen, authz)
 			r := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/x", http.NoBody)
 			checks := route.Checks{
-				Namespace: nsObject,
-				Reads:     tc.reads,
-				Actions:   tc.actions,
-				NotFound:  errUnknown,
+				Namespace:     nsObject,
+				Reads:         tc.reads,
+				Actions:       tc.actions,
+				NotFound:      errUnknown,
+				RequireAction: false,
 			}
 
 			err := g.AuthorizeObject(t.Context(), r, p, nsObject, checks)
@@ -154,12 +165,78 @@ func TestAuthorizeObjectNoActionAllowed(t *testing.T) {
 	authz := newAuthorizer(map[identity.Action]bool{identity.ActionNamespaceRead: true}, nil)
 	g := guard(t, new([]string), authz)
 	r := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/x", http.NoBody)
-	checks := route.Checks{Namespace: nsObject, Reads: nil, Actions: nil, NotFound: errUnknown}
+	checks := route.Checks{Namespace: nsObject, Reads: nil, Actions: nil, NotFound: errUnknown, RequireAction: false}
 
 	err := g.AuthorizeObject(t.Context(), r, p, nsObject, checks)
 	checkAnswer(t, err, nil)
 
 	if want := []identity.Action{identity.ActionNamespaceRead}; !slices.Equal(*authz.asked, want) {
 		t.Fatalf("asked = %v, want %v", *authz.asked, want)
+	}
+}
+
+// TestAuthorizeObjectRequireAction checks that an empty action list is refused
+// only when the caller requires an action, and that the refusal is no denial.
+func TestAuthorizeObjectRequireAction(t *testing.T) {
+	t.Parallel()
+
+	nsObject := identity.NamespaceObject(namespace.Name("acme"))
+	writes := []identity.Action{identity.ActionUnitWrite}
+	cases := []struct {
+		name          string
+		requireAction bool
+		actions       []identity.Action
+		wantRefused   bool
+	}{
+		{
+			name:          "empty list is refused when an action is required",
+			requireAction: true,
+			actions:       nil,
+			wantRefused:   true,
+		},
+		{
+			name:          "empty list passes when no action is required",
+			requireAction: false,
+			actions:       nil,
+			wantRefused:   false,
+		},
+		{
+			name:          "list with an action passes when an action is required",
+			requireAction: true,
+			actions:       writes,
+			wantRefused:   false,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			var (
+				seen []string
+				p    identity.Principal
+			)
+
+			allow := map[identity.Action]bool{identity.ActionNamespaceRead: true, identity.ActionUnitWrite: true}
+			g := guard(t, &seen, newAuthorizer(allow, nil))
+			r := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/x", http.NoBody)
+			checks := route.Checks{
+				Namespace:     nsObject,
+				Reads:         nil,
+				Actions:       tc.actions,
+				NotFound:      errUnknown,
+				RequireAction: tc.requireAction,
+			}
+
+			err := g.AuthorizeObject(t.Context(), r, p, nsObject, checks)
+
+			if refused := err != nil; refused != tc.wantRefused {
+				t.Fatalf("err = %v, refused = %v; want refused %v", err, refused, tc.wantRefused)
+			}
+
+			if err != nil && errors.Is(err, identity.ErrDenied) {
+				t.Fatalf("err = %v, want a refusal that is no denial", err)
+			}
+		})
 	}
 }

@@ -102,7 +102,7 @@ func (h *Handler) checkAuthorized(r *http.Request, rt Route, c *call) (*http.Req
 	obj := identity.NamespaceObject(ns.Name)
 
 	g := route.Guard{Tokens: nil, Sessions: nil, Refusals: h.guard}
-	checks := route.Checks{Namespace: obj, Reads: nil, Actions: rt.Actions, NotFound: errNotFound}
+	checks := route.Checks{Namespace: obj, Reads: nil, Actions: rt.Actions, NotFound: errNotFound, RequireAction: true}
 	if authErr := g.AuthorizeObject(ctx, r, p, obj, checks); authErr != nil {
 		return r, authErr
 	}

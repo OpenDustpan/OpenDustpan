@@ -170,10 +170,11 @@ func (h *Handler) enforce(rt Route) http.HandlerFunc {
 
 		g := route.Guard{Tokens: nil, Sessions: nil, Refusals: h.guard}
 		checks := route.Checks{
-			Namespace: identity.NamespaceObject(t.ns.Name),
-			Reads:     rt.Reads,
-			Actions:   rt.Actions,
-			NotFound:  errNotFound,
+			Namespace:     identity.NamespaceObject(t.ns.Name),
+			Reads:         rt.Reads,
+			Actions:       rt.Actions,
+			NotFound:      errNotFound,
+			RequireAction: false,
 		}
 		if err := g.AuthorizeObject(ctx, r, p, t.obj, checks); err != nil {
 			h.writeError(ctx, w, err)

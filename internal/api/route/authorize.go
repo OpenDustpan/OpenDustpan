@@ -25,6 +25,11 @@ type Checks struct {
 	// gets the answer of an unknown object. Each API passes its own not-found
 	// error, which its error writer answers with its own code.
 	NotFound error
+	// RequireAction refuses an empty Actions list with errNoAction, which
+	// answers 500, so that a route with no action never serves. Defense in
+	// depth: the route test of each API refuses such a row too; this check
+	// stays so that a caller that skips the route test fails closed.
+	RequireAction bool
 }
 
 // AuthorizeObject checks the declared actions of a route for p on obj, at the
@@ -65,6 +70,10 @@ func (g Guard) AuthorizeObject(
 		if err != nil {
 			return err
 		}
+	}
+
+	if c.RequireAction && len(c.Actions) == 0 {
+		return errNoAction
 	}
 
 	for _, action := range c.Actions {
