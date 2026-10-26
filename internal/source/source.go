@@ -32,11 +32,10 @@ import (
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/durable"
 	"opendustpan.org/opendustpan/pkg/namespace"
+	portsource "opendustpan.org/opendustpan/pkg/source"
 )
 
 var (
-	// ErrInvalid reports a request or a filter with an empty or bad field.
-	ErrInvalid = errors.New("source request is not valid")
 	// ErrNotFound reports a snapshot that the store does not know.
 	ErrNotFound = errors.New("source snapshot not found")
 	// ErrNotReady reports a snapshot whose fetch has not ended. The
@@ -118,17 +117,17 @@ type Request struct {
 	Repository string
 	Commit     string
 	Format     ObjectFormat
-	Filter     Filter
+	Filter     portsource.Filter
 }
 
-// Validate returns ErrInvalid for an empty field, a commit that is not
+// Validate returns portsource.ErrInvalid for an empty field, a commit that is not
 // valid for the format, or a filter that fails Filter.Validate.
 func (r *Request) Validate() error {
 	switch {
 	case r.Namespace == "" || r.Connection == "" || r.Repository == "":
-		return fmt.Errorf("%w: a snapshot needs a namespace, a connection and a repository", ErrInvalid)
+		return fmt.Errorf("%w: a snapshot needs a namespace, a connection and a repository", portsource.ErrInvalid)
 	case !ValidCommit(r.Format, r.Commit):
-		return fmt.Errorf("%w: commit %q is not a %s commit ID", ErrInvalid, r.Commit, r.Format)
+		return fmt.Errorf("%w: commit %q is not a %s commit ID", portsource.ErrInvalid, r.Commit, r.Format)
 	default:
 		return r.Filter.Validate()
 	}
@@ -336,331 +335,34 @@ func CheckLargeFile(want LargeFile, r io.Reader) error {
 	return nil
 }
 
-// Filter is the source filter of a namespace: which submodules and which
-// Git LFS objects a snapshot may hold. By default a snapshot holds
-// neither.
-type Filter struct {
-	// Submodules lists the URL patterns of the submodules that the server
-	// gets. A submodule whose URL matches no pattern is not in the
-	// snapshot.
-	Submodules []URLPattern
-	// LargeFiles lists the URL patterns of the repositories whose Git LFS
-	// objects the server gets.
-	LargeFiles []URLPattern
-	// FailOnDenied fails the fetch when the commit has a submodule or a Git
-	// LFS pointer that the filter does not allow. With false, the snapshot
-	// holds the gitlink or the pointer file as it is.
-	FailOnDenied bool
-	// ProtectedBranches lists the exact names of the branches whose head a
-	// job may start from with the fact source.protected. A name is not a
-	// pattern. It is empty by default, so no branch is protected. It does
-	// not change the content of a snapshot, so Hash leaves it out.
-	ProtectedBranches []string
-}
-
-// MaxPatterns bounds each list of a filter.
-const MaxPatterns = 64
-
-// MaxBranchName bounds the length of a protected branch name, in bytes.
-const MaxBranchName = 255
-
-// Validate returns ErrInvalid for more than MaxPatterns patterns in a list,
-// a pattern that URLPattern.Validate refuses, more than MaxPatterns
-// protected branches, a protected branch that ValidBranchName refuses, or a
-// protected branch that the list holds twice.
-func (p *Filter) Validate() error {
-	for _, list := range [][]URLPattern{p.Submodules, p.LargeFiles} {
-		if len(list) > MaxPatterns {
-			return fmt.Errorf("%w: a filter list has at most %d patterns", ErrInvalid, MaxPatterns)
-		}
-
-		for _, u := range list {
-			if err := u.Validate(); err != nil {
-				return err
-			}
-		}
-	}
-
-	return validateBranches(p.ProtectedBranches)
-}
-
-// validateBranches returns ErrInvalid for a list of protected branches that
-// is too long, that holds a name that ValidBranchName refuses, or that holds
-// a name twice.
-func validateBranches(list []string) error {
-	if len(list) > MaxPatterns {
-		return fmt.Errorf("%w: the protected branches have at most %d names", ErrInvalid, MaxPatterns)
-	}
-
-	seen := make(map[string]struct{}, len(list))
-
-	for _, b := range list {
-		if !ValidBranchName(b) {
-			return fmt.Errorf("%w: %q is not a valid branch name", ErrInvalid, b)
-		}
-
-		if _, dup := seen[b]; dup {
-			return fmt.Errorf("%w: branch %q is in the protected branches twice", ErrInvalid, b)
-		}
-
-		seen[b] = struct{}{}
-	}
-
-	return nil
-}
-
-// ValidBranchName reports whether b is an exact branch name that a filter
-// may list. It is an allowlist: 1 to MaxBranchName bytes of ASCII letters,
-// digits, '.', '_', '-' and '/'. The first byte is not '-'. No part between
-// '/' is empty, starts with '.', or ends with ".lock", and ".." does not
-// occur. A name that git allows and this check refuses cannot be listed.
-func ValidBranchName(b string) bool {
-	if b == "" || len(b) > MaxBranchName || b[0] == '-' || strings.Contains(b, "..") {
-		return false
-	}
-
-	for _, c := range []byte(b) {
-		if !branchByte(c) {
-			return false
-		}
-	}
-
-	for part := range strings.SplitSeq(b, "/") {
-		if part == "" || part[0] == '.' || strings.HasSuffix(part, ".lock") {
-			return false
-		}
-	}
-
-	return true
-}
-
-// branchByte reports whether c is a byte that a branch name may hold.
-func branchByte(c byte) bool {
-	switch {
-	case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9':
-		return true
-	default:
-		return strings.IndexByte("._-/", c) >= 0
-	}
-}
-
-// Hash returns a text that changes when the filter changes. It is the
-// patterns of each list in order, with the switch. It leaves out the
-// protected branches, because they do not change the content of a snapshot.
-func (p *Filter) Hash() string {
-	parts := make([]string, 0, len(p.Submodules)+len(p.LargeFiles))
-	parts = append(parts, "s")
-
-	for _, u := range p.Submodules {
-		parts = append(parts, string(u))
-	}
-
-	parts = append(parts, "l")
-
-	for _, u := range p.LargeFiles {
-		parts = append(parts, string(u))
-	}
-
-	parts = append(parts, strconv.FormatBool(p.FailOnDenied))
-
-	return strconv.Quote(strings.Join(parts, " "))
-}
-
-// AllowsSubmodule reports whether the filter allows the submodule URL u.
-func (p *Filter) AllowsSubmodule(u string) bool {
-	return matchAny(p.Submodules, u)
-}
-
-// AllowsLargeFiles reports whether the filter allows the Git LFS objects
-// of the repository URL u.
-func (p *Filter) AllowsLargeFiles(u string) bool {
-	return matchAny(p.LargeFiles, u)
-}
-
-// matchAny reports whether a pattern of list matches u.
-func matchAny(list []URLPattern, u string) bool {
-	for _, p := range list {
-		if p.Match(u) {
-			return true
-		}
-	}
-
-	return false
-}
-
-// URLPattern is an https URL of a repository, with an optional "*" as the
-// last path part, which matches one path part. For example
-// "https://git.example.com/platform/*" matches
-// "https://git.example.com/platform/modules" and
-// "https://git.example.com/platform/modules.git", not
-// "https://git.example.com/platform/a/b".
-type URLPattern string
-
-// Validate returns ErrInvalid for a pattern that is not an https URL with a
-// host and a path, that has a user, a query, a fragment, a port or a '%',
-// whose host has a character other than an ASCII letter, a digit, '.' or
-// '-', that has an empty path part, or that has a "*" that is not the
-// whole last path part.
-func (u URLPattern) Validate() error {
-	h, ok := splitHTTPS(string(u))
-	if !ok || h.host == "" || len(h.parts) == 0 {
-		return fmt.Errorf("%w: pattern %q must be an https URL of a repository", ErrInvalid, u)
-	}
-
-	for i, p := range h.parts {
-		if p == "" || (strings.Contains(p, "*") && (p != "*" || i != len(h.parts)-1)) {
-			return fmt.Errorf("%w: in pattern %q, '*' can only be the whole last path part", ErrInvalid, u)
-		}
-	}
-
-	return nil
-}
-
-// Match reports whether the repository URL target matches u. The host
-// matches with no regard to case, the path parts exactly, and a ".git" at
-// the end of the target does not count. A target with a '%' never
-// matches, so an encoded '/' or '.' cannot pass a pattern. A target with
-// a "." or ".." part never matches. The caller resolves a relative URL
-// with ResolveURL first.
-func (u URLPattern) Match(target string) bool {
-	p, ok := splitHTTPS(string(u))
-	t, ok2 := splitHTTPS(target)
-
-	if !ok || !ok2 || !strings.EqualFold(p.host, t.host) || len(p.parts) != len(t.parts) {
-		return false
-	}
-
-	for i, want := range p.parts {
-		got := t.parts[i]
-		if i == len(p.parts)-1 {
-			got = strings.TrimSuffix(got, ".git")
-			want = strings.TrimSuffix(want, ".git")
-		}
-
-		if !matchPart(want, got) {
-			return false
-		}
-	}
-
-	return true
-}
-
-// matchPart reports whether the path part got matches the pattern part
-// want: "*" matches one part that is not empty, "." or "..".
-func matchPart(want, got string) bool {
-	if want == "*" {
-		return got != "" && got != "." && got != ".."
-	}
-
-	return want == got
-}
-
-// httpsURL is an https URL split into its host and its path parts.
-type httpsURL struct {
-	host  string
-	parts []string
-}
-
-// String returns the URL with no '/' at its end.
-func (u httpsURL) String() string {
-	if len(u.parts) == 0 {
-		return "https://" + u.host
-	}
-
-	return "https://" + u.host + "/" + strings.Join(u.parts, "/")
-}
-
-// splitHTTPS splits an https URL with no user, port, query, fragment or
-// '%' into its host and its path parts. It takes one '/' off the end of
-// the path. It refuses a host with a character other than an ASCII letter,
-// a digit, '.' or '-', or with an empty label, and a path part that is
-// empty, "." or "..". So "https://h/a/b/" is "https://h/a/b", and
-// "https://h/a//b" and "https://h/a/b//" are refused.
-func splitHTTPS(s string) (httpsURL, bool) {
-	none := httpsURL{host: "", parts: nil}
-
-	rest, found := strings.CutPrefix(s, "https://")
-	if !found {
-		return none, false
-	}
-
-	host, p, _ := strings.Cut(rest, "/")
-	if !validHost(host) {
-		return none, false
-	}
-
-	p = strings.TrimSuffix(p, "/")
-	if p == "" {
-		return httpsURL{host: host, parts: nil}, true
-	}
-
-	if strings.ContainsAny(p, "@?#:%\\ \t\n\r") || strings.ContainsRune(p, 0) {
-		return none, false
-	}
-
-	parts := strings.Split(p, "/")
-	for _, part := range parts {
-		if part == "" || part == "." || part == ".." {
-			return none, false
-		}
-	}
-
-	return httpsURL{host: host, parts: parts}, true
-}
-
-// validHost reports whether h is empty, or is labels of ASCII letters,
-// digits and '-', with '.' between them. An empty host is for the caller
-// to refuse. A host with any other character, for example a non-ASCII
-// letter that looks like an ASCII one, a '_' or a port, never matches a
-// pattern.
-func validHost(h string) bool {
-	if h == "" {
-		return true
-	}
-
-	for label := range strings.SplitSeq(h, ".") {
-		if label == "" {
-			return false
-		}
-
-		for _, c := range label {
-			if (c < 'a' || c > 'z') && (c < 'A' || c > 'Z') && (c < '0' || c > '9') && c != '-' {
-				return false
-			}
-		}
-	}
-
-	return true
-}
-
 // ResolveURL returns the URL of a submodule whose .gitmodules URL is ref,
 // in the superproject with the repository URL base. A ref that starts with
 // "./" or "../" resolves against base as git does: each "../" takes away
 // one path part of base, and "./" takes away none. Any other ref is the
 // URL as it is. It returns ErrNotAllowed for a ref or a base that is not
-// an https URL that splitHTTPS accepts, and for a ref that leaves the host
+// an https URL that portsource.SplitHTTPS accepts, and for a ref that leaves the host
 // of base. The filter then matches the result.
 func ResolveURL(base, ref string) (string, error) {
-	b, ok := splitHTTPS(base)
-	if !ok || b.host == "" {
+	b, ok := portsource.SplitHTTPS(base)
+	if !ok || b.Host == "" {
 		return "", fmt.Errorf("%w: superproject URL %q", ErrNotAllowed, base)
 	}
 
 	if !strings.HasPrefix(ref, "./") && !strings.HasPrefix(ref, "../") {
-		u, valid := splitHTTPS(ref)
-		if !valid || u.host == "" || len(u.parts) == 0 {
+		u, valid := portsource.SplitHTTPS(ref)
+		if !valid || u.Host == "" || len(u.Parts) == 0 {
 			return "", fmt.Errorf("%w: submodule URL %q", ErrNotAllowed, ref)
 		}
 
 		return u.String(), nil
 	}
 
-	parts, rest, ok := upParts(b.parts, ref)
+	parts, rest, ok := upParts(b.Parts, ref)
 	if !ok {
 		return "", fmt.Errorf("%w: submodule URL %q leaves the host", ErrNotAllowed, ref)
 	}
 
-	out, valid := splitHTTPS("https://" + b.host + "/" + strings.Join(append(parts, rest), "/"))
+	out, valid := portsource.SplitHTTPS("https://" + b.Host + "/" + strings.Join(append(parts, rest), "/"))
 	if !valid || strings.TrimSuffix(rest, "/") == "" {
 		return "", fmt.Errorf("%w: submodule URL %q", ErrNotAllowed, ref)
 	}
@@ -694,24 +396,24 @@ func upParts(parts []string, ref string) ([]string, string, bool) {
 // regard to case. The server sends the credentials of a forge connection
 // only to a URL whose host is the host of the connection.
 func SameHost(a, b string) bool {
-	x, ok := splitHTTPS(a)
-	y, ok2 := splitHTTPS(b)
+	x, ok := portsource.SplitHTTPS(a)
+	y, ok2 := portsource.SplitHTTPS(b)
 
-	return ok && ok2 && x.host != "" && strings.EqualFold(x.host, y.host)
+	return ok && ok2 && x.Host != "" && strings.EqualFold(x.Host, y.Host)
 }
 
 // LFSEndpoint returns the standard Git LFS endpoint of the repository URL
 // repo: the URL with ".git" at its end, and "/info/lfs". The server gets
 // Git LFS objects only from it, never from an lfs.url of a .lfsconfig
-// file. It returns ErrNotAllowed for a URL that splitHTTPS refuses.
+// file. It returns ErrNotAllowed for a URL that portsource.SplitHTTPS refuses.
 func LFSEndpoint(repo string) (string, error) {
-	u, ok := splitHTTPS(repo)
-	if !ok || u.host == "" || len(u.parts) == 0 {
+	u, ok := portsource.SplitHTTPS(repo)
+	if !ok || u.Host == "" || len(u.Parts) == 0 {
 		return "", fmt.Errorf("%w: repository URL %q", ErrNotAllowed, repo)
 	}
 
-	last := len(u.parts) - 1
-	u.parts[last] = strings.TrimSuffix(u.parts[last], ".git") + ".git"
+	last := len(u.Parts) - 1
+	u.Parts[last] = strings.TrimSuffix(u.Parts[last], ".git") + ".git"
 
 	return u.String() + "/info/lfs", nil
 }

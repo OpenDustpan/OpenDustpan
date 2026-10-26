@@ -108,10 +108,10 @@ type Backup struct {
 }
 
 type BlobPurge struct {
-	Tool       string
-	UnitID     string
-	Namespace  string
-	PurgedAtMs int64
+	Tool        string
+	UnitID      string
+	PurgedAtMs  int64
+	NamespaceID string
 }
 
 type Checkpoint struct {
