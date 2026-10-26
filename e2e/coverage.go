@@ -22,6 +22,7 @@ import (
 	profileapi "opendustpan.org/opendustpan/internal/api/profile"
 	pulumiapi "opendustpan.org/opendustpan/internal/api/pulumi"
 	registryapi "opendustpan.org/opendustpan/internal/api/registry"
+	"opendustpan.org/opendustpan/internal/api/runnerapi"
 	serverapi "opendustpan.org/opendustpan/internal/api/server"
 	tfeapi "opendustpan.org/opendustpan/internal/api/tfe"
 	tofuhttpapi "opendustpan.org/opendustpan/internal/api/tofuhttp"
@@ -29,6 +30,7 @@ import (
 	"opendustpan.org/opendustpan/internal/baseurl"
 	"opendustpan.org/opendustpan/internal/outputsharesvc"
 	registryservice "opendustpan.org/opendustpan/internal/registry/service"
+	"opendustpan.org/opendustpan/internal/source"
 	"opendustpan.org/opendustpan/internal/token"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/blob"
@@ -50,6 +52,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/outputshare"
 	"opendustpan.org/opendustpan/pkg/profile"
 	"opendustpan.org/opendustpan/pkg/registry"
+	"opendustpan.org/opendustpan/pkg/runner"
 	"opendustpan.org/opendustpan/pkg/savedview"
 	"opendustpan.org/opendustpan/pkg/secret"
 	"opendustpan.org/opendustpan/pkg/session"
@@ -101,11 +104,12 @@ func ServedRoutes(tb testing.TB) []RouteRef {
 	driftRoutes := coverageDriftRoutes(tb, namespaces)
 	triggerRoutes := coverageTriggerRoutes(tb, namespaces)
 	registryRoutes := coverageRegistryRoutes(tb)
+	sourceFilterRoutes := coverageSourceFilterRoutes(tb, namespaces)
 	server := coverageServerRoutes(tb)
 
 	out := slices.Concat(
 		pulumi, tfe, tofuHTTP, inventory, auditRoutes, contextRoutes, profileRoutes, sinkRoutes, jobRoutes,
-		driftRoutes, triggerRoutes, registryRoutes, server,
+		driftRoutes, triggerRoutes, registryRoutes, sourceFilterRoutes, server,
 	)
 	out = slices.Grow(out, probeRouteCount)
 
@@ -868,6 +872,50 @@ func coverageJobRoutes(tb testing.TB, namespaces *namespace.Service) []RouteRef 
 	return out
 }
 
+// coverageSourceFilterRoutes returns the routes of the source filter. They sit
+// in the route table of the runner adapter, next to the runner protocol and the
+// management routes of the runner pools. The coverage check holds only the
+// routes under the prefix of the tool-neutral REST API, so it lists no other
+// route of that table.
+func coverageSourceFilterRoutes(tb testing.TB, namespaces *namespace.Service) []RouteRef {
+	tb.Helper()
+
+	handler, err := runnerapi.NewHandler(runnerapi.Config{
+		Namespaces:     namespaces,
+		Pools:          struct{ runner.PoolStore }{nil},
+		Members:        struct{ runner.MemberStore }{nil},
+		Handoffs:       struct{ runner.SessionStore }{nil},
+		Claimer:        nil,
+		Sweeps:         nil,
+		Operations:     nil,
+		SourceFilters:  struct{ source.Filters }{nil},
+		Authenticator:  coverageAuthenticator{},
+		Authorizer:     coverageAuthorizer{},
+		Audit:          coverageAuditStore{},
+		OnAuditFailure: nil,
+		DenialLimiter:  nil,
+		Sessions:       nil,
+		Logger:         slog.New(slog.DiscardHandler),
+		Release:        runner.Release{Major: 0, Minor: 0, Patch: 0, Pre: ""},
+		ServerURL:      "https://coverage.test",
+		Now:            nil,
+		PollInterval:   0,
+	})
+	if err != nil {
+		tb.Fatalf("runner handler: %v", err)
+	}
+
+	var out []RouteRef
+
+	for _, route := range handler.Routes() {
+		if strings.HasPrefix(route.Path, "/api/dustpan/v1/") {
+			out = append(out, RouteRef{Method: route.Method, Path: route.Path})
+		}
+	}
+
+	return out
+}
+
 // coverageTriggerRoutes returns the trigger adapter's route table.
 func coverageTriggerRoutes(tb testing.TB, namespaces *namespace.Service) []RouteRef {
 	tb.Helper()
@@ -1530,6 +1578,7 @@ func CoverageAllowlist() []AllowEntry {
 		registryAllowEntries(),
 		savedViewAllowEntries(),
 		sinkAllowEntries(),
+		sourceFilterAllowEntries(),
 		apiDescriptionAllowEntries(),
 	)
 }
@@ -2668,6 +2717,22 @@ func outputSharingAllowEntries() []AllowEntry {
 			CoveringTest: test, Reason: "Console and client route: no CLI calls it. The reader steps of " + test +
 				" read the outputs of a stack and of a workspace through the API.",
 		},
+	}
+}
+
+// sourceFilterAllowEntries covers the routes of the source filter of a
+// namespace. No CLI calls them: the console and the clients of the API do. The
+// steps of TestSourceFilterAPI call both with the token of an administrator.
+func sourceFilterAllowEntries() []AllowEntry {
+	const (
+		path = "/api/dustpan/v1/namespaces/{namespace}/source-filter"
+		test = "TestSourceFilterAPI"
+		why  = "Console and client route: no CLI calls it. The steps of TestSourceFilterAPI call it through the API."
+	)
+
+	return []AllowEntry{
+		{Method: http.MethodGet, Path: path, CoveringTest: test, Reason: why},
+		{Method: http.MethodPut, Path: path, CoveringTest: test, Reason: why},
 	}
 }
 
