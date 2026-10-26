@@ -260,3 +260,38 @@ func TestWriteEnterErrorDenialComesFirst(t *testing.T) {
 		t.Errorf("Cache-Control = %q, want no-store", got)
 	}
 }
+
+// TestWriteErrorKeepDeniedCannotHideACredentialRefusal checks that an error
+// that wraps a kept class and a refusal of the credential at once answers the
+// refusal of the credential, so the keep list cannot hide it.
+func TestWriteErrorKeepDeniedCannotHideACredentialRefusal(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		err  error
+		want int
+	}{
+		{
+			"escalation and unauthenticated",
+			fmt.Errorf("%w: %w: %w", identity.ErrDenied, access.ErrEscalation, identity.ErrUnauthenticated),
+			http.StatusUnauthorized,
+		},
+		{
+			"sign-in refused and rate limited",
+			fmt.Errorf("%w: %w", errSignInRefused, identity.ErrRateLimited),
+			http.StatusTooManyRequests,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			rec, _ := writeErrorRecorder(t, tc.err)
+			if rec.Code != tc.want {
+				t.Fatalf("status = %d, want %d; body %s", rec.Code, tc.want, rec.Body.String())
+			}
+		})
+	}
+}
