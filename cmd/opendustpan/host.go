@@ -10,7 +10,7 @@ package main
 // no token from one either: host access is the credential, and the command
 // prints the new secret once.
 //
-//	opendustpan host create-temp-admin [--database sqlite:dustpan.db] --reason <text> <person>
+//	opendustpan host create-temp-admin --database sqlite:<path> --reason <text> <person>
 //
 // The command refuses when DUSTPAN_DISABLE_HOST_RECOVERY turns it off, when
 // that variable holds a value that is not a bool, and when the recovery mode
@@ -187,6 +187,10 @@ func hostCreateTempAdminWithIO(
 
 	if err := hostAllowed(in.lookup, f.mode); err != nil {
 		return err
+	}
+
+	if strings.TrimSpace(f.database) == "" {
+		return errNoDatabase
 	}
 
 	rest := fs.Args()

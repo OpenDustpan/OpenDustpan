@@ -74,6 +74,8 @@ mkdir -p "$DEMO_TMP/data/blobs" "$DEMO_TMP/backups"
 
 DEMO_URL="http://127.0.0.1:$DEMO_PORT"
 
+./bin/opendustpan key generate --out "$DEMO_TMP/data/dustpan.key" >/dev/null
+
 echo "demo: starting the server on $DEMO_URL"
 DUSTPAN_ADMIN_TOKEN="$ADMIN_TOKEN" ./bin/opendustpan serve \
   --database "sqlite:$DEMO_TMP/data/dustpan.db" \
@@ -82,7 +84,6 @@ DUSTPAN_ADMIN_TOKEN="$ADMIN_TOKEN" ./bin/opendustpan serve \
   --backup-target "dir:$DEMO_TMP/backups" \
   --console-dir "$DEMO_TMP/console/dist" \
   --key-encryption-key-file "$DEMO_TMP/data/dustpan.key" \
-  --generate-key-encryption-key=true \
   >"$SERVER_LOG" 2>&1 &
 server_pid=$!
 

@@ -9,9 +9,9 @@ One `opendustpan serve` process forms the whole installation. It uses a SQLite f
 ### What runs where
 
 - The server process runs on one machine. It serves the Pulumi Cloud-compatible API, the TFE-compatible API, the inventory API, and the installation API.
-- The SQL store is a SQLite file on the same machine. The default path is `dustpan.db` in the working directory. Set another path with `--database` (`DUSTPAN_DATABASE`).
+- The SQL store is a SQLite file on the same machine. There is no default path. Set the path with `--database` (`DUSTPAN_DATABASE`), for example `sqlite:/var/lib/opendustpan/dustpan.db`.
 - The blob store is a directory on the same machine. The default path is `blobs` next to the SQLite file. It holds Pulumi checkpoints and OpenTofu state versions. Set another path with `--blob-dir` (`DUSTPAN_BLOB_DIR`).
-- The key-encryption key comes from `DUSTPAN_KEY_ENCRYPTION_KEY` or from a key file. The default key file is `dustpan.key` next to the SQLite file.
+- The key-encryption key comes from `DUSTPAN_KEY_ENCRYPTION_KEY` or from a key file. There is no default key file. The server makes no key.
 - The backup target is optional. Set a directory or an S3-compatible bucket with `--backup-target` (`DUSTPAN_BACKUP_TARGET`). An empty target means the server takes no backup.
 
 ### What the parts share
