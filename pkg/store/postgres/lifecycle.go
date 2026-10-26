@@ -522,23 +522,8 @@ func (s *Store) purgeUnit(
 			return err
 		}
 
-		nsID, found, err := namespaceID(ctx, q, fence.Namespace)
-		if err != nil {
+		if err := insertBlobPurge(ctx, q, fence.Namespace, u, e.At); err != nil {
 			return err
-		}
-
-		// The fenced transaction holds the namespace row, so a missing row is a
-		// store fault. The purge fails and rolls back, and no record is written
-		// with an empty ID.
-		if !found {
-			return fmt.Errorf("record blob purge: %w", namespace.ErrNotFound)
-		}
-
-		err = q.InsertBlobPurge(ctx, db.InsertBlobPurgeParams{
-			Tool: u.tool, UnitID: u.id, NamespaceID: nsID, PurgedAtMs: codec.Millis(e.At),
-		})
-		if err != nil {
-			return fmt.Errorf("record blob purge: %w", err)
 		}
 
 		if revokeErr := revokeUnitGrants(ctx, q, u.id, e); revokeErr != nil {
@@ -554,6 +539,30 @@ func (s *Store) purgeUnit(
 
 		return appendInventoryChange(ctx, q, purged)
 	})
+}
+
+// insertBlobPurge records the blob purge of the unit u under the ID of the
+// namespace ns. The fenced transaction holds the namespace row, so a missing
+// row is a store fault: the purge fails and rolls back, and no record is
+// written with an empty ID.
+func insertBlobPurge(ctx context.Context, q *db.Queries, ns namespace.Name, u purgedUnit, at time.Time) error {
+	nsID, found, err := namespaceID(ctx, q, ns)
+	if err != nil {
+		return err
+	}
+
+	if !found {
+		return fmt.Errorf("record blob purge: %w", namespace.ErrNotFound)
+	}
+
+	err = q.InsertBlobPurge(ctx, db.InsertBlobPurgeParams{
+		Tool: u.tool, UnitID: u.id, NamespaceID: nsID, PurgedAtMs: codec.Millis(at),
+	})
+	if err != nil {
+		return fmt.Errorf("record blob purge: %w", err)
+	}
+
+	return nil
 }
 
 // deleteUnitLinks deletes the rows that other features keep for the unit unitID

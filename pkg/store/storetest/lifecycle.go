@@ -1099,41 +1099,55 @@ func testBlobPurgeNamespaceID(t *testing.T, s Store) {
 
 	for i, tc := range cases {
 		name := fmt.Sprintf("purgeid%d", i)
-		ns := newNamespace(t, s, name)
-
-		st := newStack(ns.Name, "web", "s")
-		if err := s.CreateStack(t.Context(), st, ns.Fence()); err != nil {
-			t.Fatalf("%s: create stack: %v", tc.name, err)
-		}
-
-		d := inventory.Deletion{Entry: deleteEntry(ns.Name), PurgeAfter: purgeAt()}
-		if err := s.DeleteStack(t.Context(), st.Ref, ns.Fence(), stack.EmptyGuard(), d); err != nil {
-			t.Fatalf("%s: delete stack: %v", tc.name, err)
-		}
-
-		purgeErr := s.PurgeStack(t.Context(), st.ID, ns.Fence(), time.Time{}, lifecycleEntry(ns.Name, "unit:purge"))
-		if purgeErr != nil {
-			t.Fatalf("%s: purge stack: %v", tc.name, purgeErr)
-		}
-
-		want := ns.ID
+		ns := purgeOneStack(t, s, tc.name, name)
 
 		if tc.recreate {
 			if err := purger.PurgeNamespace(t.Context(), ns.Name); err != nil {
 				t.Fatalf("%s: purge namespace: %v", tc.name, err)
 			}
 
-			again := newNamespace(t, s, name)
-			if again.ID == ns.ID {
+			if again := newNamespace(t, s, name); again.ID == ns.ID {
 				t.Fatalf("%s: the new namespace has the old ID %s", tc.name, again.ID)
 			}
 		}
 
-		found := blobPurgesOf(t, purges, "pulumi", st.ID.String())
-		if len(found) != 1 || found[0].NamespaceID != want {
-			t.Fatalf("%s: blob purges = %+v, want one with namespace ID %s", tc.name, found, want)
+		found := blobPurgesOf(t, purges, "pulumi", ns.unitID)
+		if len(found) != 1 || found[0].NamespaceID != ns.ID {
+			t.Fatalf("%s: blob purges = %+v, want one with namespace ID %s", tc.name, found, ns.ID)
 		}
 	}
+}
+
+// purgedIn is a namespace and the ID of the unit that a case purged in it.
+type purgedIn struct {
+	namespace.Namespace
+
+	unitID string
+}
+
+// purgeOneStack makes the namespace name, then creates, deletes and purges one
+// stack in it.
+func purgeOneStack(t *testing.T, s Store, label, name string) purgedIn {
+	t.Helper()
+
+	ns := newNamespace(t, s, name)
+
+	st := newStack(ns.Name, "web", "s")
+	if err := s.CreateStack(t.Context(), st, ns.Fence()); err != nil {
+		t.Fatalf("%s: create stack: %v", label, err)
+	}
+
+	d := inventory.Deletion{Entry: deleteEntry(ns.Name), PurgeAfter: purgeAt()}
+	if err := s.DeleteStack(t.Context(), st.Ref, ns.Fence(), stack.EmptyGuard(), d); err != nil {
+		t.Fatalf("%s: delete stack: %v", label, err)
+	}
+
+	purgeErr := s.PurgeStack(t.Context(), st.ID, ns.Fence(), time.Time{}, lifecycleEntry(ns.Name, "unit:purge"))
+	if purgeErr != nil {
+		t.Fatalf("%s: purge stack: %v", label, purgeErr)
+	}
+
+	return purgedIn{Namespace: ns, unitID: st.ID.String()}
 }
 
 // checkBlobPurgePages walks the blob purge records in pages of two by the
