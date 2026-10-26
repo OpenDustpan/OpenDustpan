@@ -831,7 +831,13 @@ func (r *Runners) SetDraining(
 func (r *Runners) Retire(
 	ctx context.Context, id string, now time.Time, fence namespace.Fence, e []audit.Entry,
 ) error {
-	err := r.inRunnerTx(ctx, fence, e, func(q *db.Queries, nsID string) error {
+	if len(e) == 0 {
+		return fmt.Errorf("%w: a retire needs an audit entry", audit.ErrInvalidEntry)
+	}
+
+	rev := revocation{kind: maintenance.RevokedRunner, target: id, endReason: ""}
+
+	err := r.inRevokingRunnerTx(ctx, fence, e, rev, func(q *db.Queries, nsID string) error {
 		rn, err := loadRunnerOf(ctx, q, id, nsID)
 		if err != nil {
 			return err
