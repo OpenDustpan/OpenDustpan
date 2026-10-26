@@ -101,6 +101,8 @@ func portableJobArtifactTables() []PortableTable {
 				{Name: portColSHA256Text, Kind: KindText},
 				{Name: "size", Kind: KindInteger},
 				{Name: "confirmed", Kind: KindInteger},
+				{Name: "stored_size", Kind: KindInteger},
+				{Name: "stored_md5", Kind: KindBytes},
 			},
 		},
 	}

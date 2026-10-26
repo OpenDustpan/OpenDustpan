@@ -319,6 +319,7 @@ func TestRecorderPutPlanCommitError(t *testing.T) {
 		Records:  commitThenFail{RecordStore: db},
 		ItemKeys: keys,
 		Blobs:    inner,
+		Wrapper:  nil,
 	})
 	a := planAssignment(t, &h)
 

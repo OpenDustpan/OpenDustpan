@@ -345,9 +345,22 @@ func runningJob(t *testing.T, id job.ID) job.Job {
 				}},
 				StateVersion: "sv-1",
 				Plan: &job.PlanRef{
-					ID: "pln-1", ItemKey: "ik-plan-secret", StateVersion: "sv-1",
-					Parts:     []job.PlanPart{{Kind: job.OutputPlanDisplay, Size: 10, SHA256: "ab", Secret: false}},
-					CreatedAt: at, ExpiresAt: at.Add(time.Hour), RedactedAt: time.Time{},
+					ID:           "pln-1",
+					ItemKey:      "ik-plan-secret",
+					StateVersion: "sv-1",
+					Parts: []job.PlanPart{
+						{
+							Kind:       job.OutputPlanDisplay,
+							Size:       10,
+							SHA256:     "ab",
+							Secret:     false,
+							StoredSize: 0,
+							StoredMD5:  "",
+						},
+					},
+					CreatedAt:  at,
+					ExpiresAt:  at.Add(time.Hour),
+					RedactedAt: time.Time{},
 				},
 				Gates: []job.Gate{
 					{

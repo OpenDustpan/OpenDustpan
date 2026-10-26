@@ -25,7 +25,7 @@ func pgCopyRegistryTables() []pgCopyTable {
 			columns: []string{
 				pgColNamespaceID, pgColKind, pgColName, "system", pgColVersion, "sums_file", "sums_sha256",
 				"signature_file", "signature_sha256", "key_fingerprint", "protocols", "published_by", "archives_json",
-				"published_at_ms",
+				"published_at_ms", "stored_files_json",
 			},
 			orderBy: []string{pgColNamespaceID, pgColKind, pgColName, "system", pgColVersion},
 		},
@@ -46,7 +46,7 @@ func pgCopyRegistryTables() []pgCopyTable {
 // stays so that a bad row fails the restore and does not wait for a reader.
 func checkStagedRegistryReleases(ctx context.Context, pool *pgxpool.Pool, staging string) error {
 	query := "SELECT n.name, r.kind, r.name, r.system, r.version, r.sums_file, r.sums_sha256, r.signature_file, " +
-		"r.signature_sha256, r.key_fingerprint, r.protocols, r.published_by, r.archives_json, r.published_at_ms FROM " +
+		"r.signature_sha256, r.key_fingerprint, r.protocols, r.published_by, r.archives_json, r.published_at_ms, r.stored_files_json FROM " +
 		stagingTable(staging, "registry_releases") + " AS r LEFT JOIN " + stagingTable(staging, "namespaces") +
 		" AS n ON n.id = r.namespace_id"
 
@@ -78,6 +78,7 @@ func checkStagedRegistryReleases(ctx context.Context, pool *pgxpool.Pool, stagin
 			&row.PublishedBy,
 			&row.ArchivesJSON,
 			&row.PublishedAtMs,
+			&row.StoredFilesJSON,
 		)
 		if scanErr != nil {
 			return fmt.Errorf("read staged registry releases: %w", backup.ErrExportRead)

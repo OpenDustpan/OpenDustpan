@@ -582,14 +582,53 @@ func TestCheckPlan(t *testing.T) {
 	}
 }
 
+func TestCheckPlanPartsStoredValues(t *testing.T) {
+	t.Parallel()
+
+	const md5Hex = "0123456789abcdef0123456789abcdef"
+
+	hash := strings.Repeat("a", 64)
+	part := func(size int64, md5 string) []job.PlanPart {
+		return []job.PlanPart{{
+			Kind: job.OutputPlanDisplay, Size: 5, SHA256: hash, Secret: false, StoredSize: size, StoredMD5: md5,
+		}}
+	}
+
+	tests := []struct {
+		name  string
+		parts []job.PlanPart
+		ok    bool
+	}{
+		{"a part with stored values", part(40, md5Hex), true},
+		{"a part from an earlier version, with none", part(0, ""), true},
+		{"an MD5 with no size", part(0, md5Hex), false},
+		{"a size with no MD5", part(40, ""), false},
+		{"a negative stored size", part(-1, md5Hex), false},
+		{"an MD5 in upper case", part(40, strings.ToUpper(md5Hex)), false},
+		{"a short MD5", part(40, md5Hex[:30]), false},
+		{"an MD5 with text that is no hex", part(40, strings.Repeat("g", 32)), false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			err := job.CheckPlanParts(tt.parts)
+			if tt.ok != (err == nil) || (err != nil && !errors.Is(err, job.ErrInvalid)) {
+				t.Fatalf("CheckPlanParts = %v, want ok %v", err, tt.ok)
+			}
+		})
+	}
+}
+
 // storedPlan returns a plan that read the state version sv at made, with
 // the hashes display and apply of its two parts.
 func storedPlan(sv string, made time.Time, display, apply string) *job.PlanRef {
 	return &job.PlanRef{
 		ID: "pln-" + display + apply, ItemKey: secret.ItemKeyID("ik-" + display + apply), StateVersion: sv,
 		Parts: []job.PlanPart{
-			{Kind: job.OutputPlanDisplay, Size: 10, SHA256: display, Secret: false},
-			{Kind: job.OutputPlanApply, Size: 20, SHA256: apply, Secret: true},
+			{Kind: job.OutputPlanDisplay, Size: 10, SHA256: display, Secret: false, StoredSize: 0, StoredMD5: ""},
+			{Kind: job.OutputPlanApply, Size: 20, SHA256: apply, Secret: true, StoredSize: 0, StoredMD5: ""},
 		},
 		CreatedAt: made, ExpiresAt: history.ExpiresAt(made, history.DefaultRetention), RedactedAt: time.Time{},
 	}

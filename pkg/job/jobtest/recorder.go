@@ -57,6 +57,10 @@ type RecorderParts struct {
 	ItemKeys secret.ItemKeyIndex
 	// Blobs is an empty blob store.
 	Blobs blob.Store
+	// Wrapper is the key-encryption key of the item keys. A nil Wrapper makes
+	// a random one. A backup suite sets it, because a restore proves the key
+	// against the backup.
+	Wrapper secret.Wrapper
 }
 
 // noRefusals is a scopeaudit.Recorder that drops every refusal: the cases read
@@ -73,14 +77,19 @@ func (noRefusals) RecordOutOfScope(context.Context, namespace.ID, string, scopea
 func NewRecorderHarness(t *testing.T, parts RecorderParts) RecorderHarness {
 	t.Helper()
 
-	key := make([]byte, keyBytes)
-	if _, err := rand.Read(key); err != nil {
-		t.Fatalf("key-encryption key: %v", err)
-	}
+	wrapper := parts.Wrapper
+	if wrapper == nil {
+		key := make([]byte, keyBytes)
+		if _, err := rand.Read(key); err != nil {
+			t.Fatalf("key-encryption key: %v", err)
+		}
 
-	wrapper, err := secret.NewBuiltinWrapper(key)
-	if err != nil {
-		t.Fatalf("wrapper: %v", err)
+		var err error
+
+		wrapper, err = secret.NewBuiltinWrapper(key)
+		if err != nil {
+			t.Fatalf("wrapper: %v", err)
+		}
 	}
 
 	itemBlobs, err := secret.NewItemKeyBlobs(parts.Blobs, noRefusals{})

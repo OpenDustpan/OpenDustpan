@@ -39,10 +39,18 @@ const (
 // key of its plan. Secret is true for a part that holds plain secret
 // values, such as an OpenTofu plan file.
 type PlanPart struct {
-	Kind   OutputKind
+	Kind OutputKind
+	// Size and SHA256 are those of the plain part.
 	Size   int64
 	SHA256 string
 	Secret bool
+	// StoredSize and StoredMD5 are the size and the lowercase hex MD5 of the
+	// sealed bytes that the blob store holds. A backup copies the blob and
+	// checks the copy against them. A plan that an earlier version of the
+	// server stored has neither: StoredMD5 is empty, and a backup lists the
+	// part as not copied.
+	StoredSize int64
+	StoredMD5  string
 }
 
 // PlanRef names the stored plan of a plan phase and what a reader can know

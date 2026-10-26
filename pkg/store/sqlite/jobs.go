@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/durable"
 	"opendustpan.org/opendustpan/pkg/job"
 	"opendustpan.org/opendustpan/pkg/manuallock"
@@ -714,10 +715,14 @@ func (t *jobTx) InsertChunk(ctx context.Context, ns namespace.Name, log string, 
 }
 
 // ConfirmChunk implements jobstore.Tx.
-func (t *jobTx) ConfirmChunk(ctx context.Context, ns namespace.Name, log string, seq int) error {
+func (t *jobTx) ConfirmChunk(
+	ctx context.Context, ns namespace.Name, log string, seq int, stored blob.Digest,
+) error {
 	n, err := t.q.ConfirmJobLogChunk(
 		ctx,
-		db.ConfirmJobLogChunkParams{LogID: log, Seq: int64(seq), Namespace: ns.String()},
+		db.ConfirmJobLogChunkParams{
+			LogID: log, Seq: int64(seq), Namespace: ns.String(), StoredSize: stored.Size, StoredMd5: stored.MD5[:],
+		},
 	)
 	if err != nil {
 		return fmt.Errorf("confirm log chunk: %w", err)

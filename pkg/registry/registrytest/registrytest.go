@@ -95,6 +95,7 @@ func provider(name, version string) registry.Release {
 			SHA256:   sumA,
 			Size:     archiveSize,
 		}},
+		Files: nil,
 	}
 }
 
@@ -352,6 +353,7 @@ func testKinds(t *testing.T, h Harness) {
 		PublishedBy:     publisher,
 		PublishedAt:     time.UnixMilli(fixtureT).UTC(),
 		Archives:        []registry.Archive{{Platform: "", FileName: "vpc.zip", SHA256: sumB, Size: 1}},
+		Files:           nil,
 	}
 	mustPublish(t, h, mod, f)
 

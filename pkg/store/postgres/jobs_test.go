@@ -293,6 +293,7 @@ func TestRecorderConformance(t *testing.T) {
 			Records:  j,
 			ItemKeys: s,
 			Blobs:    blobs,
+			Wrapper:  nil,
 		})
 	})
 }

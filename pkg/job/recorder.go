@@ -194,11 +194,14 @@ func (r *DurableRecorder) AppendLog(ctx context.Context, c PhaseClaim, step stri
 
 	ref := LogChunkRef{Namespace: "", Job: j.ID, Version: plan.Version, Seq: seq}
 
-	if storeErr := r.storeChunk(ctx, c, &j, ref, data); storeErr != nil {
+	stored, storeErr := r.storeChunk(ctx, c, &j, ref, data)
+	if storeErr != nil {
 		return storeErr
 	}
 
-	return r.store.ConfirmLogChunk(ctx, c, step, plan.Version, seq)
+	return r.store.ConfirmLogChunk(
+		ctx, c, ChunkConfirm{Step: step, Version: plan.Version, Seq: seq, Stored: stored},
+	)
 }
 
 // readChunk reads a chunk of at most MaxLogChunk bytes, and returns it with
@@ -491,38 +494,67 @@ func (r *DurableRecorder) newLogVersion(j *Job, c PhaseClaim, step string, seq i
 	}, nil
 }
 
-// storeChunk seals the chunk ref and stores its blob. A blob that exists
-// already is the one that an earlier attempt of the same chunk stored: the
-// reserve proved that the content is the same. ref.Namespace is set here.
-func (r *DurableRecorder) storeChunk(ctx context.Context, c PhaseClaim, j *Job, ref LogChunkRef, data []byte) error {
+// storeChunk seals the chunk ref and stores its blob, and returns the size and
+// the MD5 of the bytes that the blob store holds. A blob that exists already
+// is the one that an earlier attempt of the same chunk stored: the reserve
+// proved that the plain content is the same, but the seal of this attempt
+// differs from the seal of the earlier one. The digest then comes from the
+// stored blob. ref.Namespace is set here.
+func (r *DurableRecorder) storeChunk(
+	ctx context.Context, c PhaseClaim, j *Job, ref LogChunkRef, data []byte,
+) (blob.Digest, error) {
 	art := ArtifactRecord{Job: j.ID, Unit: j.Spec.Unit, Step: "", Plan: nil, Log: nil}
 
 	item, err := itemRef(&art, secret.ItemKindJobLog, ref.Version)
 	if err != nil {
-		return err
+		return blob.Digest{}, err
 	}
 
 	binding, err := chunkBinding(j.ID, ref.Version, ref.Seq)
 	if err != nil {
-		return err
+		return blob.Digest{}, err
 	}
 
 	sealed, err := r.sealer.SealContent(ctx, item, binding, bytes.NewReader(data))
 	if err != nil {
-		return fmt.Errorf("seal log chunk: %w", err)
+		return blob.Digest{}, fmt.Errorf("seal log chunk: %w", err)
 	}
 
 	ref.Namespace, err = namespaceIDOf(ctx, r.namespaces, c.Fence.Namespace)
 	if err != nil {
-		return err
+		return blob.Digest{}, err
 	}
 
-	putErr := r.blobs.PutLogChunk(ctx, ref, sealed)
-	if putErr != nil && !errors.Is(putErr, blob.ErrExists) {
-		return fmt.Errorf("store log chunk: %w", putErr)
+	measured := blob.NewDigestReader(sealed)
+
+	putErr := r.blobs.PutLogChunk(ctx, ref, measured)
+	if errors.Is(putErr, blob.ErrExists) {
+		return r.digestOfChunk(ctx, ref)
 	}
 
-	return nil
+	if putErr != nil {
+		return blob.Digest{}, fmt.Errorf("store log chunk: %w", putErr)
+	}
+
+	return measured.Digest(), nil
+}
+
+// digestOfChunk reads the stored blob of the chunk ref and returns its size
+// and MD5.
+func (r *DurableRecorder) digestOfChunk(ctx context.Context, ref LogChunkRef) (blob.Digest, error) {
+	rc, err := r.blobs.OpenLogChunk(ctx, ref)
+	if err != nil {
+		return blob.Digest{}, fmt.Errorf("read the stored log chunk: %w", err)
+	}
+
+	digest, digestErr := blob.DigestOf(rc)
+	closeErr := rc.Close()
+
+	if digestErr != nil || closeErr != nil {
+		return blob.Digest{}, fmt.Errorf("read the stored log chunk: %w", errors.Join(digestErr, closeErr))
+	}
+
+	return digest, nil
 }
 
 // planAt names the plan whose parts the recorder stores: the namespace and the
@@ -553,11 +585,7 @@ func (r *DurableRecorder) storeParts(ctx context.Context, at *planAt, parts []Pl
 
 		counted := &countingReader{src: p.Body, sum: sha256.New(), size: 0, limit: MaxPlanPart}
 
-		sealed, err := r.sealer.SealContent(ctx, at.item, []byte(key.String()), counted)
-		if err == nil {
-			err = r.blobs.PutPlanPart(ctx, at.part(p.Kind), sealed)
-		}
-
+		digest, err := r.putPart(ctx, at, p.Kind, key, counted)
 		if err != nil {
 			r.deleteParts(ctx, at, stored)
 
@@ -566,11 +594,29 @@ func (r *DurableRecorder) storeParts(ctx context.Context, at *planAt, parts []Pl
 
 		stored = append(stored, PlanPart{
 			Kind: p.Kind, Size: counted.size, SHA256: hex.EncodeToString(counted.sum.Sum(nil)),
-			Secret: p.Kind == OutputPlanApply,
+			Secret: p.Kind == OutputPlanApply, StoredSize: digest.Size, StoredMD5: hex.EncodeToString(digest.MD5[:]),
 		})
 	}
 
 	return stored, nil
+}
+
+// putPart seals the body of the part k and stores it under key, and returns the
+// size and the MD5 of the sealed bytes that the blob store holds.
+func (r *DurableRecorder) putPart(
+	ctx context.Context, at *planAt, k OutputKind, key blob.Key, body io.Reader,
+) (blob.Digest, error) {
+	sealed, err := r.sealer.SealContent(ctx, at.item, []byte(key.String()), body)
+	if err != nil {
+		return blob.Digest{}, fmt.Errorf("seal plan part: %w", err)
+	}
+
+	measured := blob.NewDigestReader(sealed)
+	if err = r.blobs.PutPlanPart(ctx, at.part(k), measured); err != nil {
+		return blob.Digest{}, fmt.Errorf("put plan part: %w", err)
+	}
+
+	return measured.Digest(), nil
 }
 
 // deleteParts deletes the blobs of the stored parts of a plan that was not

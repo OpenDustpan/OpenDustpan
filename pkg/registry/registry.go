@@ -66,6 +66,10 @@ const (
 	MaxVersionLength = 64
 )
 
+// nonArchiveFiles is the number of files of a provider release that are no
+// archive: the checksums file and the signature file.
+const nonArchiveFiles = 2
+
 // Kind is the kind of a published artifact.
 type Kind string
 
@@ -81,6 +85,7 @@ var (
 	)
 	fileNameRE = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
 	sha256RE   = regexp.MustCompile(`^[0-9a-f]{64}$`)
+	md5RE      = regexp.MustCompile(`^[0-9a-f]{32}$`)
 	platformRE = regexp.MustCompile(`^[a-z0-9]+_[a-z0-9]+$`)
 	// slugRE is the registry-safe subset of a name: lowercase letters and
 	// digits, with single dashes inside. A name outside it cannot publish.
@@ -248,6 +253,49 @@ type Release struct {
 	// on a provider and empty on a module.
 	Protocols []string
 	Archives  []Archive
+	// Files holds the digests of the stored bytes of the files of the release:
+	// the checksums file, the signature file and each archive. A backup copies
+	// a file only when Files names it, and checks the copy against these
+	// values. A release that an earlier version of the server stored has none.
+	// SameContent does not compare Files: the digests follow from the hashes.
+	Files []StoredFile
+}
+
+// StoredFile is the SHA-256, the size and the MD5 of the bytes that the blob
+// store holds for one file of a release. A file is stored as it came, so these
+// are the values of the plain file.
+type StoredFile struct {
+	// SHA256 is the lowercase hex SHA-256. It is also the name of the blob.
+	SHA256 string
+	// Size is the size in bytes.
+	Size int64
+	// MD5 is the lowercase hex MD5. The backup uses it to check its copy, as
+	// it does for every other blob. It is not a security check.
+	MD5 string
+}
+
+// FileHashes returns the SHA-256 of each file that the release stores: the
+// checksums file, the signature file and each archive, once each and in that
+// order. A module has the archive only.
+func (r Release) FileHashes() []string {
+	out := make([]string, 0, len(r.Archives)+nonArchiveFiles)
+
+	for _, h := range append([]string{r.SumsSHA256, r.SignatureSHA256}, archiveHashes(r.Archives)...) {
+		if h != "" && !slices.Contains(out, h) {
+			out = append(out, h)
+		}
+	}
+
+	return out
+}
+
+func archiveHashes(in []Archive) []string {
+	out := make([]string, 0, len(in))
+	for _, a := range in {
+		out = append(out, a.SHA256)
+	}
+
+	return out
 }
 
 // Validate reports whether r is complete and allowed. A provider needs at
@@ -271,11 +319,19 @@ func (r Release) Validate() error {
 		return fmt.Errorf("%w: archive count", ErrInvalid)
 	}
 
+	var err error
+
 	if r.Address.Kind == KindModule {
-		return r.validateModule()
+		err = r.validateModule()
+	} else {
+		err = r.validateProvider()
 	}
 
-	return r.validateProvider()
+	if err != nil {
+		return err
+	}
+
+	return r.validateFiles()
 }
 
 // SameContent reports whether r and other hold the same address, version,
@@ -308,6 +364,28 @@ func (r Release) SameContent(other Release) bool {
 	}
 
 	return slices.Equal(sorted(r.Archives), sorted(other.Archives))
+}
+
+// validateFiles checks the digests of r. Each digest names one file of the
+// release, once, with a valid hash, size and MD5.
+func (r Release) validateFiles() error {
+	hashes := r.FileHashes()
+	seen := make(map[string]bool, len(r.Files))
+
+	for _, f := range r.Files {
+		switch {
+		case !sha256RE.MatchString(f.SHA256) || !slices.Contains(hashes, f.SHA256):
+			return fmt.Errorf("%w: stored file %q is not a file of the release", ErrInvalid, f.SHA256)
+		case seen[f.SHA256]:
+			return fmt.Errorf("%w: stored file %q twice", ErrInvalid, f.SHA256)
+		case f.Size <= 0 || !md5RE.MatchString(f.MD5):
+			return fmt.Errorf("%w: stored file %q has no valid size or MD5", ErrInvalid, f.SHA256)
+		}
+
+		seen[f.SHA256] = true
+	}
+
+	return nil
 }
 
 func (r Release) validateModule() error {

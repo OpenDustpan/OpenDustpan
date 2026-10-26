@@ -571,6 +571,7 @@ func testSummary(refs ...backup.BlobRef) backup.Summary {
 		RowCounts:     map[string]int64{"namespaces": 1},
 		Blobs:         refs,
 		SchemaVersion: 7,
+		Unverified:    nil,
 	}
 }
 
@@ -737,6 +738,7 @@ func wantManifest(now time.Time, id backup.ID, sql, first, second []byte) backup
 		SQLFiles:      files,
 
 		InstallationKind: installation.KindProduction,
+		Unverified:       nil,
 	}
 }
 
