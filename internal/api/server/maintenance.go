@@ -140,7 +140,9 @@ func (h *Handler) writeEnterError(ctx context.Context, w http.ResponseWriter, er
 		canceled = failed.Canceled
 	}
 
-	if len(canceled) == 0 {
+	// A denial or a refusal of the credential answers first, as in writeError,
+	// so the list of canceled work never reaches a caller that has no right.
+	if _, denied := deniedFailure(err); denied || len(canceled) == 0 {
 		h.writeError(ctx, w, err)
 
 		return
