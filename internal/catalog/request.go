@@ -1,15 +1,16 @@
 package catalog
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
-	"slices"
 	"time"
 
 	"opendustpan.org/opendustpan/internal/policy"
 	"opendustpan.org/opendustpan/internal/quota"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/durable"
+	"opendustpan.org/opendustpan/pkg/gate"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/job"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -297,22 +298,37 @@ func StartRequestFor(req *Request, rev *Revision, v *Version, reason string) (jo
 // the requester: AllowSelf is false, so a requester cannot approve its own
 // request, also when it is in a group of the gate. bindPlan binds the
 // approvals to the plan of the phase before, when there is one.
-func GateFor(d *policy.Combined, bindPlan bool) []job.Gate {
+//
+// The policy names its groups. GateFor resolves each name to the ID of the
+// group that has the name now, and the gate keeps the IDs, so a group that
+// someone made again with the same name later does not count. It returns an
+// error that wraps gate.ErrApprovers for a group that does not exist or whose
+// name is not valid.
+func GateFor(ctx context.Context, d *policy.Combined, bindPlan bool, groups gate.GroupResolver) ([]job.Gate, error) {
 	if d.Effect != policy.EffectApprove {
-		return nil
+		return nil, nil
 	}
 
 	out := make([]job.Gate, 0, len(d.Approvals))
 
 	for _, a := range d.Approvals {
+		refs, err := gate.ResolveGroups(ctx, groups, a.Groups)
+		if err != nil {
+			return nil, fmt.Errorf("resolve the approver groups of the policy: %w", err)
+		}
+
+		names, ids := make([]string, len(refs)), make([]string, len(refs))
+		for i, ref := range refs {
+			names[i], ids[i] = ref.Name, ref.ID
+		}
+
 		out = append(out, job.Gate{
-			Type: job.GateApproval, Approvals: a.Count, Groups: slices.Clone(a.Groups),
-			GroupIDs:  nil,
+			Type: job.GateApproval, Approvals: a.Count, Groups: names, GroupIDs: ids,
 			AllowSelf: false, Timeout: 0, BindPlan: bindPlan,
 		})
 	}
 
-	return out
+	return out, nil
 }
 
 // EditableRequestFile returns the predicate that the Catalog gives to

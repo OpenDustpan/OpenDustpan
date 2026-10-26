@@ -35,15 +35,20 @@ type GroupRef struct {
 	Name string
 }
 
+// GroupResolver finds a group by its name.
+type GroupResolver interface {
+	// ResolveGroup returns the group that is called name now, without regard
+	// to case. It returns ErrInvalid when name is not a valid group name, and
+	// ErrNotFound when no group has that name.
+	ResolveGroup(ctx context.Context, name string) (GroupRef, error)
+}
+
 // ApproverDirectory reads the groups that approvers name. The config service
 // uses it to resolve a group name to the ID of the group at save, and to
 // refuse an approver list that no one can meet. Package approverdirectorytest
 // holds the conformance suite of an adapter.
 type ApproverDirectory interface {
-	// ResolveGroup returns the group that is called name now, without regard
-	// to case. It returns ErrInvalid when name is not a valid group name, and
-	// ErrNotFound when no group has that name.
-	ResolveGroup(ctx context.Context, name string) (GroupRef, error)
+	GroupResolver
 	// GroupByID returns the group with the ID id, with its current name and
 	// the counts of its current members. A member counts when its membership
 	// is active and its principal is not disabled. It returns ErrNotFound

@@ -114,28 +114,29 @@ func countUsers(users []string) (int64, error) {
 	return int64(len(seen)), nil
 }
 
-// resolveGroups checks that each group name is valid and names a group that
-// exists, and returns the groups, each group once (a name in another case is
-// the same group), and the current members of them. It counts the members by
-// the ID of the group, so a group that someone deleted and made again between
-// the two reads is not counted.
-func (s *ConfigService) resolveGroups(ctx context.Context, names []string, fresh FreshAuth) ([]GroupRef, int64, error) {
+// ResolveGroups resolves each group name to the group with that name now, and
+// returns the groups with their IDs, each group once (a name in another case
+// is the same group). It returns an error that wraps ErrApprovers, with the
+// reason ApproversGroupInvalid for a name that is not valid and
+// ApproversGroupMissing for a group that does not exist. Every code that
+// turns the group names of a rule or a policy into an enforced approver list
+// calls it, so the enforcement matches a member by ID and never by name.
+func ResolveGroups(ctx context.Context, dir GroupResolver, names []string) ([]GroupRef, error) {
 	seen := make(map[string]struct{}, len(names))
 	groups := make([]GroupRef, 0, len(names))
-	people := int64(0)
 
 	for _, name := range names {
-		ref, err := s.groups.ResolveGroup(ctx, name)
+		ref, err := dir.ResolveGroup(ctx, name)
 
 		switch {
 		case errors.Is(err, ErrInvalid):
-			return nil, 0, newApproversError(ApproversGroupInvalid,
+			return nil, newApproversError(ApproversGroupInvalid,
 				fmt.Sprintf("the group name %q is not valid: use letters, digits, '-', '_' and '.'", name))
 		case errors.Is(err, ErrNotFound):
-			return nil, 0, newApproversError(ApproversGroupMissing,
+			return nil, newApproversError(ApproversGroupMissing,
 				fmt.Sprintf("the group %q does not exist: make the group first", name))
 		case err != nil:
-			return nil, 0, fmt.Errorf("read the group %q: %w", name, err)
+			return nil, fmt.Errorf("read the group %q: %w", name, err)
 		default:
 		}
 
@@ -145,18 +146,38 @@ func (s *ConfigService) resolveGroups(ctx context.Context, names []string, fresh
 
 		seen[ref.ID] = struct{}{}
 
-		ref, members, err := s.groups.GroupByID(ctx, ref.ID)
+		groups = append(groups, ref)
+	}
+
+	return groups, nil
+}
+
+// resolveGroups resolves the group names and returns the groups and the
+// current members of them. It counts the members by the ID of the group, so a
+// group that someone deleted and made again between the two reads is not
+// counted.
+func (s *ConfigService) resolveGroups(ctx context.Context, names []string, fresh FreshAuth) ([]GroupRef, int64, error) {
+	resolved, err := ResolveGroups(ctx, s.groups, names)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	groups := make([]GroupRef, 0, len(resolved))
+	people := int64(0)
+
+	for _, ref := range resolved {
+		current, members, err := s.groups.GroupByID(ctx, ref.ID)
 
 		switch {
 		case errors.Is(err, ErrNotFound):
 			return nil, 0, newApproversError(ApproversGroupMissing,
-				fmt.Sprintf("the group %q does not exist: make the group first", name))
+				fmt.Sprintf("the group %q does not exist: make the group first", ref.Name))
 		case err != nil:
-			return nil, 0, fmt.Errorf("read the group %q: %w", name, err)
+			return nil, 0, fmt.Errorf("read the group %q: %w", ref.ID, err)
 		default:
 		}
 
-		groups = append(groups, ref)
+		groups = append(groups, current)
 
 		if fresh.Set {
 			people += members.Persons
