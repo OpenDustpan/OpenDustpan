@@ -319,16 +319,16 @@ func (st *parseState) errorSchema() error {
 		return err
 	}
 
-	return checkErrorShape(ptrJoin("/components/schemas", errorSchemaName), st.schemas[errorSchemaName])
+	return checkErrorShape(ptrJoin("/components/schemas", errorSchemaName), st.schemas[errorSchemaName], st)
 }
 
 // checkErrorShape checks that the error schema has the members that every
 // transport reads: code (integer, required), message (string, required),
-// errorCode (string, optional) and errorArgs (an object with free keys,
+// errorCode (a string or an open enum, optional) and errorArgs (an object with free keys,
 // optional). A client decodes the error answer in the same way for each
 // operation, so a description with another shape is refused here and not at
 // the compile or run time of a client.
-func checkErrorShape(ptr string, s *model.Schema) error {
+func checkErrorShape(ptr string, s *model.Schema, st *parseState) error {
 	if s == nil || s.Kind != model.KindObject || s.Extra != nil {
 		return invalid(ptr, "the error schema must be an object with no additional properties")
 	}
@@ -346,7 +346,7 @@ func checkErrorShape(ptr string, s *model.Schema) error {
 			return invalid(fptr, "the error schema has a member that is not code, message, errorCode or errorArgs")
 		}
 
-		if err := checkErrorMember(fptr, f, w); err != nil {
+		if err := checkErrorMember(fptr, f, w, st); err != nil {
 			return err
 		}
 	}
@@ -371,12 +371,17 @@ func errorMembers() map[string]errorMember {
 }
 
 // checkErrorMember checks the type and the presence of one member.
-func checkErrorMember(ptr string, f model.Field, w errorMember) error {
+func checkErrorMember(ptr string, f model.Field, w errorMember, st *parseState) error {
 	if f.Required != w.required {
 		return invalid(ptr, "the member of the error schema has the wrong required setting")
 	}
 
 	t := f.Type
+
+	if f.Name == "errorCode" && t.Kind == model.TypeRef {
+		return st.checkErrorCodeRef(ptr, t)
+	}
+
 	if t.Kind != w.kind || t.Nullable || t.Format != "" {
 		return invalid(ptr, "the member of the error schema has the wrong type")
 	}
@@ -418,4 +423,16 @@ func (st *parseState) sortedSchemas() ([]model.Schema, error) {
 	}
 
 	return out, nil
+}
+
+// checkErrorCodeRef checks that errorCode, when it is a reference, is an open
+// enum of strings. The wire value is still a string, so a transport reads it
+// as one.
+func (st *parseState) checkErrorCodeRef(ptr string, t model.Type) error {
+	e := st.schemas[t.Ref]
+	if e == nil || e.Kind != model.KindEnum || t.Nullable || !st.openUse[t.Ref] {
+		return invalid(ptr, "errorCode must be a string or an open enum")
+	}
+
+	return nil
 }

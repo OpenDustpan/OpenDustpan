@@ -142,7 +142,9 @@ func reachableSchemas(t *testing.T, doc descriptionSchemas) map[string]bool {
 
 	reached := map[string]bool{"ErrorResponse": true}
 
-	var queue []string
+	// The error shape is the start of a walk too: the schemas that it refers to, such as the
+	// error codes, are reachable through it.
+	queue := []string{"ErrorResponse"}
 
 	visit := func(ref string) {
 		name, ok := strings.CutPrefix(ref, schemaRef)
