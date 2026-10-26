@@ -312,7 +312,7 @@ func sqliteBackupTables() []sqliteBackupTable {
 			columns: []string{
 				backupColTool,
 				backupColUnitID,
-				backupColNamespace,
+				backupColNamespaceID,
 				"purged_at_ms",
 			},
 		},

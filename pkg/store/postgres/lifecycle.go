@@ -522,8 +522,20 @@ func (s *Store) purgeUnit(
 			return err
 		}
 
-		err := q.InsertBlobPurge(ctx, db.InsertBlobPurgeParams{
-			Tool: u.tool, UnitID: u.id, Namespace: fence.Namespace.String(), PurgedAtMs: codec.Millis(e.At),
+		nsID, found, err := namespaceID(ctx, q, fence.Namespace)
+		if err != nil {
+			return err
+		}
+
+		// The fenced transaction holds the namespace row, so a missing row is a
+		// store fault. The purge fails and rolls back, and no record is written
+		// with an empty ID.
+		if !found {
+			return fmt.Errorf("record blob purge: %w", namespace.ErrNotFound)
+		}
+
+		err = q.InsertBlobPurge(ctx, db.InsertBlobPurgeParams{
+			Tool: u.tool, UnitID: u.id, NamespaceID: nsID, PurgedAtMs: codec.Millis(e.At),
 		})
 		if err != nil {
 			return fmt.Errorf("record blob purge: %w", err)
@@ -585,7 +597,7 @@ func (s *Store) ListBlobPurges(
 
 		out := make([]inventory.BlobPurge, 0, len(rows))
 		for _, r := range rows {
-			out = append(out, blobPurgeOf(r.Tool, r.UnitID, r.Namespace, r.NamespaceID, r.PurgedAtMs))
+			out = append(out, blobPurgeOf(r.Tool, r.UnitID, r.NamespaceID, r.PurgedAtMs))
 		}
 
 		return out, nil
@@ -600,18 +612,17 @@ func (s *Store) ListBlobPurges(
 
 	out := make([]inventory.BlobPurge, 0, len(rows))
 	for _, r := range rows {
-		out = append(out, blobPurgeOf(r.Tool, r.UnitID, r.Namespace, r.NamespaceID, r.PurgedAtMs))
+		out = append(out, blobPurgeOf(r.Tool, r.UnitID, r.NamespaceID, r.PurgedAtMs))
 	}
 
 	return out, nil
 }
 
-// blobPurgeOf builds the record of a purged unit. nsID comes from the join with
-// the namespaces table and is empty when the namespace row is gone.
-func blobPurgeOf(tool, unitID, ns, nsID string, purgedAtMs int64) inventory.BlobPurge {
+// blobPurgeOf builds the record of a purged unit from the namespace ID that the
+// row holds.
+func blobPurgeOf(tool, unitID, nsID string, purgedAtMs int64) inventory.BlobPurge {
 	return inventory.BlobPurge{
-		PurgedAt: codec.FromMillis(purgedAtMs), Namespace: namespace.Name(ns), NamespaceID: namespace.ID(nsID),
-		Tool: tool, UnitID: unitID,
+		PurgedAt: codec.FromMillis(purgedAtMs), NamespaceID: namespace.ID(nsID), Tool: tool, UnitID: unitID,
 	}
 }
 
