@@ -152,6 +152,7 @@ type backupSeed struct {
 	audit      []audit.Entry
 	imports    *seededImports
 	profiles   *seededProfiles
+	runners    *seededRunners
 }
 
 // seedBackupStore fills s through the real ports: namespaces, stacks with
@@ -280,6 +281,7 @@ func seedBackupStore(t *testing.T, s BackupStore) backupSeed {
 	imports := seedBackupImports(t, s, acme)
 	seedBlameRows(t, s, blameSeed{ns: acme, w: net, first: current.ID.String(), second: pending.ID.String()})
 	profiles := seedBackupProfiles(t, s, acme)
+	runners := seedBackupRunners(t, s, acme)
 	seedBackupGate(t, s, acme)
 	seedBackupSavedViews(t, s, acme)
 	seedBackupDrift(t, s, acme)
@@ -307,6 +309,7 @@ func seedBackupStore(t *testing.T, s BackupStore) backupSeed {
 		audit:      entries,
 		imports:    imports,
 		profiles:   profiles,
+		runners:    runners,
 	}
 }
 

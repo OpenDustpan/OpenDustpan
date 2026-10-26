@@ -50,3 +50,52 @@ func WriteSettingInTx(ctx context.Context, s *Store, w SettingWrite) error {
 func SetBetweenPageReads(s *Store, hook func(ctx context.Context)) {
 	s.betweenPageReads = hook
 }
+
+// runnerControlStatements write one row in each control table of the runner
+// protocol. The control rows of a live session need a durable operation, so
+// the test writes them through SQL.
+//
+//nolint:gochecknoglobals // Fixed SQL of the test hook, read only.
+var runnerControlStatements = []string{
+	`INSERT INTO runner_claims (operation_id, token, claimed_at_ms, job_id, phase) VALUES ('op-control', 1, 1, '', 0)`,
+	`INSERT INTO runner_handoff_tokens (sha256, operation_id, token, runner_id, issued_at_ms, expires_at_ms, used_at_ms)
+		VALUES ('control-hash', 'op-control', 1, 'rn-control', 1, 2, 0)`,
+	`INSERT INTO runner_sessions (id, operation_id, token, runner_id, key_public, key_created_at_ms, created_at_ms)
+		VALUES ('control-session', 'op-control', 1, 'rn-control', X'00', 1, 1)`,
+	`INSERT INTO runner_nonces (subject, nonce, expires_at_ms) VALUES ('control', 'nonce', 2)`,
+}
+
+// runnerControlTableNames lists the control tables that SeedRunnerControlRows
+// writes and CountRunnerControlRows counts.
+//
+//nolint:gochecknoglobals // Fixed table names of the test hook, read only.
+var runnerControlTableNames = []string{"runner_claims", "runner_handoff_tokens", "runner_sessions", "runner_nonces"}
+
+// SeedRunnerControlRows writes one row in each control table of the runner
+// protocol.
+func SeedRunnerControlRows(ctx context.Context, s *Store) error {
+	for _, stmt := range runnerControlStatements {
+		if _, err := s.conn.ExecContext(ctx, stmt); err != nil {
+			return fmt.Errorf("seed runner control row: %w", err)
+		}
+	}
+
+	return nil
+}
+
+// CountRunnerControlRows returns the number of rows in each control table of
+// the runner protocol.
+func CountRunnerControlRows(ctx context.Context, s *Store) (map[string]int64, error) {
+	counts := make(map[string]int64, len(runnerControlTableNames))
+
+	for _, table := range runnerControlTableNames {
+		var n int64
+		if err := s.conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM "+table).Scan(&n); err != nil {
+			return nil, fmt.Errorf("count rows of %s: %w", table, err)
+		}
+
+		counts[table] = n
+	}
+
+	return counts, nil
+}
