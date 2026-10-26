@@ -52,6 +52,13 @@ service marks the rows of ended operations failed itself (`failEnded` in
 `Work`, and `FailEndedBackups` in `Run`). The race that the issue describes
 is real for restores. For backups, the risk is different (see the table).
 
+The text of ADR 238 does not match the code here either. Decision 14 says
+that `Start` runs "the running backups and restores with the fence". The code
+on `main` fails only the running restores at `Start`, and fences only after a
+restore that stopped. It does not fail the running backups. This RFC does not
+edit ADR 238 (ADR 1 forbids edits). The ADR that follows this RFC can state
+the step as the code runs it.
+
 ### Every exported entry point of `Server`
 
 The table lists every exported method of `*dustpan.Server` and the exported
@@ -68,7 +75,7 @@ data that a start-up step has not checked yet.
 | `Server.Metrics` | Yes | It returns counters in memory. `Write` reads them. It writes no data and reads no row. |
 | `Server.Workspaces` | No | It returns the `*workspace.Service`. Its write methods (`Create`, `Lock`, `BeginState`, `Upload`, `WriteState`, `Restore`, `Delete`, `PurgeDeleted`, `SetOverrides` and the other lock methods) seal state with data keys that the key check has not checked. With a wrong key-encryption key, a write to a new scope can wrap a new data key with that key, before `Start` refuses the key. The writes also can land in a database of the other installation kind before the kind claim refuses it, and can append audit entries before the chain check. Its read methods (`Get`, `List`, `Query`, `Current`, `Open`, `History`, `ReadState`, `ReadResources`, `DiffStates` and others) write nothing, but they can open state with a key that the key check would refuse. |
 | `Server.Backups` | No | It returns the `*backup.Service`, or nil. `Work` starts the durable runner and the `failEnded` loop. It can take over a backup operation from the last process and copy data before the kind claim and the key check. On a fresh database, `readKind` fails before the kind claim, so the backup fails with a misleading error. `Start` and `Run` create a backup row and an operation before the checks. `List`, `Get`, `Check`, `ReadManifest` and `MaxSQLBytes` read only. `PreserveAfterRestore` writes. |
-| `Server.Restores` | No | It returns the `*backup.RestoreService`, or nil. A `Start` of a restore before `Server.Start` creates a row in `checking`. Then `failStoppedRestores` sees that row as a restore that stopped. It fences every namespace and marks the row failed while the restore goroutine still runs on it. This is a race of two writers on the same row. `Get`, `List`, `ReadManifest` and `Running` read only. |
+| `Server.Restores` | No | It returns the `*backup.RestoreService`, or nil. A `Start` of a restore before `Server.Start` first calls the admission check of the audit chain (`admitRestore` in `pkg/dustpan/auditchain.go`). That check refuses the restore with `audit.ErrChainMigrating` while a chain migration runs, and with `audit.ErrChainChangeWaits` while a change of the chain waits for an approval. When neither is true, the restore creates a row in `checking`. Then `failStoppedRestores` sees that row as a restore that stopped. It fences every namespace and marks the row failed while the restore goroutine still runs on it. This is a race of two writers on the same row. `Get`, `List`, `ReadManifest` and `Running` read only. |
 
 The doc of `Server.Handler` tells an embedder to call `Work` on the service
 that `Backups` returns. Nothing tells the embedder that this must come after
@@ -129,11 +136,27 @@ and `Metrics`. A `Start` that fails returns nil and the error. A second
   `started, err := srv.Start(ctx)` and then `started.Backups().Work(ctx)`.
   The order is visible in the code of the embedder.
 - What breaks: the signature of `Start`, and the three accessors move. No
-  embedder exists. In this repository, `e2e/harness.go` (one call site,
-  `startBackupWorker`) and about 31 call sites in 11 test files of
-  `pkg/dustpan` change. `load/main.go` and the e2e harness change the call
-  of `Start` to take the value. The doc of `Handler` changes. The surface
-  check of ADR 272 sees the change.
+  embedder exists. These call sites in this repository change, on `main` at
+  d0f008a:
+  - 31 calls of the accessors in 11 test files of `pkg/dustpan`. Search:
+    `rg -n '\.(Workspaces|Backups|Restores)\(\)' pkg/dustpan -g '*_test.go'`.
+  - 6 calls of `Server.Start` in 4 test files of `pkg/dustpan`
+    (`started_test.go`, `signin_wiring_internal_test.go` and 4 in
+    `start_test.go`). Most tests start the server through the helper
+    `startedHandler` in `started_test.go`, so its one call covers them.
+    Search: `rg -n '\bStart\(' pkg/dustpan -g '*_test.go'`, then only the
+    calls on a `*dustpan.Server`.
+  - `e2e/harness.go`: one call of `Start` (`startServing`) and one call of
+    `Backups` (`startBackupWorker`). `load/main.go`: one call of `Start`.
+
+  The search `rg 'Start\(' pkg/dustpan -g '*_test.go'`, without the calls of
+  `StartUpdate`, `cmd.Start`, `ts.Start` and `Start()`, gives 28 lines in 13
+  files. That count is larger, because it also matches names that only
+  contain `Start(`: test names such as `TestHandlerServesAfterStart`,
+  `CheckStart`, `AdmitStart`, `ManualLockPhaseStart`, and `Start` on other
+  types (the durable operation store, the session service). Those lines do
+  not change. The doc of `Handler` changes. The surface check of ADR 272
+  sees the change.
 - Testability: few tests. The compiler covers the order. Tests cover a
   failed `Start` (nil value), a repeated `Start` (same value) and the
   services on the value.
@@ -196,7 +219,7 @@ This option takes (b), and adds two parts:
 | A future internal caller | Refused | Not covered | Not covered | Refused for writes |
 | Layers (ADR 250) | One | One | None | Two |
 | Signature changes | None | `Start`, three accessors | None | `Start`, three accessors, two `Config` fields |
-| Call sites that change in this repository | None outside the services | About 32 test call sites, `load`, `e2e` | None | The same as (b) |
+| Call sites that change in this repository | None outside the services | 31 accessor calls and 6 `Start` calls in tests, 2 in `e2e`, 1 in `load` | None | The same as (b) |
 | Tests | About 40, one per method | About 3 | None | About 3 plus about 20 |
 | Coded refusal | Yes | Compile error only, plus the HTTP code | No | Yes |
 
