@@ -7,7 +7,31 @@
       "mcp__github__merge_pull_request",
       "mcp__github__add_issue_comment",
       "mcp__github__update_pull_request",
-      "mcp__claude-code-remote__send_message"
+      "mcp__claude-code-remote__send_message",
+      "Bash(git fetch https://github.com/OpenDustpan/OpenDustpan.git *)",
+      "Bash(git fetch origin *)",
+      "Bash(git checkout *)",
+      "Bash(git switch *)",
+      "Bash(git merge origin/main*)",
+      "Bash(git merge FETCH_HEAD*)",
+      "Bash(git merge --no-edit origin/main*)",
+      "Bash(git merge --no-edit FETCH_HEAD*)",
+      "Bash(git push -u https://github.com/OpenDustpan/OpenDustpan.git HEAD:*)"
+    ],
+    "deny": [
+      "Bash(git push *:main)",
+      "Bash(git push *:refs/heads/main)",
+      "Bash(git push * main)",
+      "Bash(git push *--force*)",
+      "Bash(git push * -f *)",
+      "Bash(git push * -f)",
+      "Bash(git push *+*)",
+      "Bash(git push *--delete*)",
+      "Bash(git push *--mirror*)",
+      "Bash(git push *HEAD::*)",
+      "Bash(git reset --hard *)",
+      "Bash(git rebase *)",
+      "Bash(git commit --amend*)"
     ]
   },
   "hooks": {
@@ -24,4 +48,3 @@
     ]
   }
 }
-
