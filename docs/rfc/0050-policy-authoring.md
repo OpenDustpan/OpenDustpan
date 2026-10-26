@@ -1,11 +1,11 @@
 ---
 rfc: 50
-title: Policy authoring, testing and compliance packs
+title: Policy authoring, testing and starter packs
 status: draft
 created: 2026-10-10
 ---
 
-# RFC 50. Policy authoring, testing and compliance packs
+# RFC 50. Policy authoring, testing and starter packs
 
 Status: draft. A stub opened from the competitor review in the research doc
 "IaC and TACOS landscape". It records the gap and first ideas only.

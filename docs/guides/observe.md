@@ -100,7 +100,9 @@ The duration family also writes `_bucket`, `_sum` and `_count` series.
 `dustpan_audit_append_failures_total` counts audit entries lost because the
 append failed.
 Alert when it is above zero. The audit guide shows the rule.
-This is the alert for failed logging (PCI DSS 10.7).
+We designed this alert against NIST SP 800-53 AU-5 and PCI DSS v4.0.1
+requirement 10.7, which ask for an alert when audit logging fails. This is not
+a compliance claim.
 `dustpan_audit_sink_failures_total` counts the failed deliveries of an audit
 sink, with the labels `sink` (the sink name) and `reason` (`size` for an
 entry the sink refused because it cannot hold it, `unreachable` when the
@@ -114,8 +116,9 @@ reason, and the sequence of the first entry of the failed batch when the
 round knows it.
 A round that never read a batch, for example a failed lease take or a failed
 entry, cursor or namespace read, carries no sequence.
-This is the alert for failures of logging (PCI DSS 10.7): the audit log in
-the database keeps every entry, and the sink is its live copy.
+We designed this alert against NIST SP 800-53 AU-5 and PCI DSS v4.0.1
+requirement 10.7. The audit log in the database keeps every entry, and the sink
+is its live copy.
 `dustpan_audit_sink_lag_entries` holds the count of entries a sink has not
 delivered yet, or 0 when the sink is up to date.
 Alert when it keeps growing: the sink falls behind.
