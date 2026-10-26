@@ -140,7 +140,7 @@ and `Metrics`. A `Start` that fails returns nil and the error. A second
   d0f008a:
   - 31 calls of the accessors in 11 test files of `pkg/dustpan`. Search:
     `rg -n '\.(Workspaces|Backups|Restores)\(\)' pkg/dustpan -g '*_test.go'`.
-  - 6 calls of `Server.Start` in 4 test files of `pkg/dustpan`
+  - 6 calls of `Server.Start` in 3 test files of `pkg/dustpan`
     (`started_test.go`, `signin_wiring_internal_test.go` and 4 in
     `start_test.go`). Most tests start the server through the helper
     `startedHandler` in `started_test.go`, so its one call covers them.
