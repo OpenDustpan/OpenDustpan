@@ -119,7 +119,7 @@ func serveIPAllowAPI(t *testing.T, srv *dustpan.Server, req ipAPIRequest) (int, 
 	}
 
 	rec := httptest.NewRecorder()
-	srv.Handler().ServeHTTP(rec, httpReq)
+	startedHandler(t, srv).ServeHTTP(rec, httpReq)
 
 	respBody, err := io.ReadAll(rec.Result().Body)
 	if err != nil {

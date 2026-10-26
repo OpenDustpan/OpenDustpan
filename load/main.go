@@ -599,6 +599,12 @@ func serveInstance(
 		return "", noop, fmt.Errorf("new server: %w", err)
 	}
 
+	if startErr := srv.Start(context.Background()); startErr != nil {
+		ts.Close()
+
+		return "", noop, fmt.Errorf("start the server: %w", startErr)
+	}
+
 	ts.Config.Handler = srv.Handler()
 	ts.Start()
 

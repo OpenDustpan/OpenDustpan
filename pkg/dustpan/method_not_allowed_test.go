@@ -16,7 +16,7 @@ import (
 func TestToolNeutralMethodNotAllowedIsJSON(t *testing.T) {
 	t.Parallel()
 
-	handler := newEveryModuleServer(t).Handler()
+	handler := startedHandler(t, newEveryModuleServer(t))
 
 	for _, tc := range []struct{ method, path string }{
 		{http.MethodPost, "/api/dustpan/v1/namespaces/acme/units/unit-1/outputs"},

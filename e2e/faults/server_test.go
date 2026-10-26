@@ -91,6 +91,10 @@ func startFaultServer(t *testing.T) *faultServer {
 		t.Fatalf("new server: %v", err)
 	}
 
+	if err := srv.Start(t.Context()); err != nil {
+		t.Fatalf("start the server: %v", err)
+	}
+
 	ts := httptest.NewUnstartedServer(srv.Handler())
 	listenForToxiproxy(t, ts)
 	ts.Start()

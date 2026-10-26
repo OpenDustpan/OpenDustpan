@@ -90,7 +90,7 @@ func newBlobAuditWorld(t *testing.T) blobAuditWorld {
 		t.Fatalf("new server: %v", err)
 	}
 
-	ts := httptest.NewServer(srv.Handler())
+	ts := httptest.NewServer(startedHandler(t, srv))
 	t.Cleanup(ts.Close)
 
 	f := fixture{store: st, server: ts, srv: srv}

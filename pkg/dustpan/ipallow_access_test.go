@@ -220,7 +220,7 @@ func serveIPAllowlistAccess(
 	}
 
 	rec := httptest.NewRecorder()
-	srv.Handler().ServeHTTP(rec, req)
+	startedHandler(t, srv).ServeHTTP(rec, req)
 
 	body, err := io.ReadAll(rec.Result().Body)
 	if err != nil {
@@ -266,7 +266,7 @@ func listNamespacesFrom(t *testing.T, srv *dustpan.Server, token, remote string)
 	req.Header.Set("Authorization", "Bearer "+token)
 
 	rec := httptest.NewRecorder()
-	srv.Handler().ServeHTTP(rec, req)
+	startedHandler(t, srv).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("list namespaces from %s answers %d: %s", remote, rec.Code, rec.Body.String())

@@ -166,7 +166,7 @@ func TestNoRouteReservesBeforeAuthentication(t *testing.T) {
 	ctx := t.Context()
 	wsID, svID, wrong := ids.wsID, ids.svID, ids.wrong
 
-	handler := f.srv.Handler()
+	handler := startedHandler(t, f.srv)
 
 	for _, tc := range unauthenticatedCases(wsID, svID, wrong) {
 		t.Run(tc.name, func(t *testing.T) {
