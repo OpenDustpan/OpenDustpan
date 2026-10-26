@@ -176,7 +176,7 @@ func serveDeletedScope(t *testing.T, srv *dustpan.Server, call deletedScopeCall)
 	req.Header.Set("Content-Type", "application/json")
 
 	rec := httptest.NewRecorder()
-	srv.Handler().ServeHTTP(rec, req)
+	startedHandler(t, srv).ServeHTTP(rec, req)
 
 	got, err := io.ReadAll(rec.Result().Body)
 	if err != nil {

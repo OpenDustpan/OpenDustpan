@@ -15,12 +15,35 @@ import (
 	"errors"
 )
 
-// ErrUsage answers the usage of every subcommand.
+// ErrUsage answers the usage of every subcommand. It lists the commands in
+// groups by intent. The names of the commands do not change.
 var ErrUsage = errors.New(
-	"usage: opendustpan --version | opendustpan serve | opendustpan dev | opendustpan key generate --out <path> | opendustpan doctor | opendustpan health | opendustpan namespace create <name> | " +
-		"opendustpan upgrade check | opendustpan backup check | opendustpan backup | opendustpan restore | " +
-		"opendustpan host create-temp-admin <person> | " +
-		"opendustpan audit-chain status | opendustpan audit-chain approve",
+	"usage: opendustpan <command> [flags] | opendustpan --version\n" +
+		"\n" +
+		"Try out:\n" +
+		"  opendustpan dev\n" +
+		"\n" +
+		"Run in production:\n" +
+		"  opendustpan serve\n" +
+		"  opendustpan key generate --out <path>\n" +
+		"  opendustpan doctor\n" +
+		"\n" +
+		"Operate:\n" +
+		"  opendustpan health\n" +
+		"  opendustpan namespace create <name>\n" +
+		"  opendustpan host create-temp-admin <person>\n" +
+		"  opendustpan audit-chain status\n" +
+		"  opendustpan audit-chain approve\n" +
+		"\n" +
+		"Back up:\n" +
+		"  opendustpan backup\n" +
+		"  opendustpan backup check\n" +
+		"  opendustpan restore\n" +
+		"\n" +
+		"Upgrade:\n" +
+		"  opendustpan upgrade check\n" +
+		"\n" +
+		"Run opendustpan <command> --help for the flags of a command",
 )
 
 // KeyEnvVar names the setting that holds the base64 key-encryption key. The

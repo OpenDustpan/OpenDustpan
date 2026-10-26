@@ -39,7 +39,7 @@ done
 WORK="$(mktemp -d)"
 CERT_DIR="$WORK/certs"
 DATA_DIR="$WORK/data"
-trap 'docker rm -f "$CONTAINER" >/dev/null 2>&1 || true; rm -rf "$WORK" 2>/dev/null || true; if [ -n "$STAGED_TARBALL" ]; then rm -f "$STAGED_TARBALL"; fi' EXIT
+trap 'docker rm -f "$CONTAINER" "$CONTAINER-trial" >/dev/null 2>&1 || true; rm -rf "$WORK" 2>/dev/null || true; if [ -n "$STAGED_TARBALL" ]; then rm -f "$STAGED_TARBALL"; fi' EXIT
 
 fail() {
   echo "smoke-image: FAIL: $1" >&2
@@ -98,6 +98,31 @@ export DUSTPAN_ADMIN_TOKEN
 DUSTPAN_ADMIN_TOKEN="$(openssl rand -hex 32)"
 export DUSTPAN_KEY_ENCRYPTION_KEY
 DUSTPAN_KEY_ENCRYPTION_KEY="$(openssl rand -base64 32)"
+
+echo "smoke-image: checking that the image fails closed with no key"
+if docker run --rm "$IMAGE" >"$WORK/nokey.out" 2>&1; then
+  fail "the image started with no key-encryption key"
+fi
+grep -q "no key-encryption key is set" "$WORK/nokey.out" \
+  || fail "the image with no key did not report the missing key: $(cat "$WORK/nokey.out")"
+
+echo "smoke-image: starting the trial command"
+docker run -d --name "$CONTAINER-trial" -p 127.0.0.1::8080 "$IMAGE" dev --listen 0.0.0.0:8080 >/dev/null
+TRIAL_PORT="$(docker port "$CONTAINER-trial" 8080/tcp | head -n 1)"
+TRIAL_PORT="${TRIAL_PORT##*:}"
+trial_ready=""
+for _ in $(seq 1 60); do
+  if curl -sf "http://127.0.0.1:$TRIAL_PORT/health/ready" >/dev/null 2>&1; then
+    trial_ready=yes
+    break
+  fi
+  sleep 0.5
+done
+if [ -z "$trial_ready" ]; then
+  docker logs "$CONTAINER-trial" >&2 || true
+  fail "the trial command did not become ready"
+fi
+docker rm -f "$CONTAINER-trial" >/dev/null
 
 echo "smoke-image: starting $CONTAINER"
 docker run -d --name "$CONTAINER" -p 127.0.0.1::8080 \

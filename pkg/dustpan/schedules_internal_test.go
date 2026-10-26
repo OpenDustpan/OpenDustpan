@@ -127,6 +127,7 @@ func testServer(durableStore DurableStore, owner string) *Server {
 		kind:             kindState{store: nil, principals: nil, kind: ""},
 		tempAdmins:       nil,
 		handler:          nil,
+		started:          nil,
 		ungated:          nil,
 		mounted:          nil,
 		root:             nil,

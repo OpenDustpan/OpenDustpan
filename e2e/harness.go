@@ -761,9 +761,7 @@ func newServer(ctx context.Context, tb testing.TB, args serverArgs) serverBuild 
 		tb.Fatalf("new server: %v", err)
 	}
 
-	// The harness serves the handler directly, so it runs the backup worker
-	// that Server.Run starts. It stops before the stores close.
-	startBackupWorker(ctx, tb, srv)
+	startServing(ctx, tb, srv)
 
 	return serverBuild{
 		handler:   srv.Handler(),
@@ -773,6 +771,19 @@ func newServer(ctx context.Context, tb testing.TB, args serverArgs) serverBuild 
 		dbURL:     dbURL,
 		backupDir: strings.TrimPrefix(targetName, "dir:"),
 	}
+}
+
+// startServing runs what Server.Run does before it serves, because the harness
+// serves the handler directly: the start-up steps, and the backup worker. The
+// worker stops before the stores close.
+func startServing(ctx context.Context, tb testing.TB, srv *dustpan.Server) {
+	tb.Helper()
+
+	if err := srv.Start(ctx); err != nil {
+		tb.Fatalf("start the server: %v", err)
+	}
+
+	startBackupWorker(ctx, tb, srv)
 }
 
 // startBackupWorker runs the backup worker of srv until the test ends.

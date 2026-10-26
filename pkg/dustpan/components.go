@@ -146,7 +146,7 @@ func workerOnlyPath(p string) bool {
 	}
 
 	switch p {
-	case "/health/live", "/health/ready", metricsPath:
+	case liveProbePath, "/health/ready", metricsPath:
 		return true
 	}
 

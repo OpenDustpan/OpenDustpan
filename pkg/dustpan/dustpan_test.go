@@ -98,7 +98,7 @@ func newFixture(t *testing.T) fixture {
 		t.Fatalf("new server: %v", err)
 	}
 
-	ts := httptest.NewServer(srv.Handler())
+	ts := httptest.NewServer(startedHandler(t, srv))
 	t.Cleanup(ts.Close)
 
 	return fixture{store: st, server: ts, srv: srv}
@@ -1126,7 +1126,7 @@ func TestConsoleDir(t *testing.T) {
 		t.Fatalf("new server: %v", err)
 	}
 
-	ts := httptest.NewServer(srv.Handler())
+	ts := httptest.NewServer(startedHandler(t, srv))
 	t.Cleanup(ts.Close)
 
 	f := fixture{store: st, server: ts, srv: srv}
@@ -1266,7 +1266,7 @@ func TestBackupTargetComesOnlyFromTheOption(t *testing.T) {
 		t.Fatal("server with a backup target builds no backup service")
 	}
 
-	ts := httptest.NewServer(srv.Handler())
+	ts := httptest.NewServer(startedHandler(t, srv))
 	t.Cleanup(ts.Close)
 
 	evil := filepath.Join(t.TempDir(), "evil")

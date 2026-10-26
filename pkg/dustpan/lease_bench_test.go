@@ -318,7 +318,7 @@ func leaseBenchHandler(b *testing.B, s leaseStores, blobs *fs.Store) http.Handle
 		b.Fatalf("new server: %v", err)
 	}
 
-	return srv.Handler()
+	return startedHandler(b, srv)
 }
 
 // benchAdmin is the bootstrap administrator that creates the benchmark token.

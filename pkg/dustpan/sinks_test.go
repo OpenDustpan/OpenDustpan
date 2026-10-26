@@ -132,7 +132,7 @@ func startSinkServer(t *testing.T, st *sqlite.Store, extra ...dustpan.Option) fi
 		t.Fatalf("new server: %v", err)
 	}
 
-	ts := httptest.NewServer(srv.Handler())
+	ts := httptest.NewServer(startedHandler(t, srv))
 	t.Cleanup(ts.Close)
 
 	f := fixture{store: st, server: ts, srv: srv}

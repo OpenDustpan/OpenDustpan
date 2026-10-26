@@ -171,6 +171,10 @@ func (w wiredSignIn) readSession(t *testing.T, key session.Secret) int {
 		SameSite: http.SameSiteLaxMode,
 	})
 
+	if err := w.srv.Start(t.Context()); err != nil {
+		t.Fatalf("start the server: %v", err)
+	}
+
 	rec := httptest.NewRecorder()
 	w.srv.Handler().ServeHTTP(rec, req)
 
