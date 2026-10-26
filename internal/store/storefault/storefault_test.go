@@ -2,7 +2,10 @@ package storefault_test
 
 import (
 	"context"
+	"database/sql"
 	"errors"
+	"fmt"
+	"net/url"
 	"path/filepath"
 	"testing"
 	"time"
@@ -22,7 +25,7 @@ func TestTransparency(t *testing.T) {
 	storetest.Run(t, func(t *testing.T) storetest.Store {
 		t.Helper()
 
-		return wrap(t)
+		return wrapWithNamespacePurge(t)
 	})
 }
 
@@ -255,7 +258,62 @@ func TestDelayCallsThroughAfterTheDelay(t *testing.T) {
 func wrap(t *testing.T, faults ...storefault.Fault) *storefault.Store {
 	t.Helper()
 
-	inner, err := sqlite.Open(t.Context(), filepath.Join(t.TempDir(), "dustpan.db"))
+	wrapped, _ := wrapAt(t, faults...)
+
+	return wrapped
+}
+
+// purgingStore is a wrapped store with the test hook that the suite uses to
+// delete a namespace row: the wrapper does not forward it, because the hook
+// exists only in the test build of the adapter.
+type purgingStore struct {
+	*storefault.Store
+
+	path string
+}
+
+// PurgeNamespace deletes the namespace row of ns through a second handle to
+// the database file, and keeps the rows that name it.
+func (p purgingStore) PurgeNamespace(ctx context.Context, ns namespace.Name) error {
+	query := url.Values{}
+	query.Add("_pragma", "busy_timeout(10000)")
+
+	dsn := (&url.URL{Scheme: "file", Path: p.path, RawQuery: query.Encode()}).String()
+
+	conn, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		return fmt.Errorf("open raw database: %w", err)
+	}
+
+	_, execErr := conn.ExecContext(ctx, `DELETE FROM namespaces WHERE name = ?`, ns.String())
+	if closeErr := conn.Close(); closeErr != nil && execErr == nil {
+		return fmt.Errorf("close raw database: %w", closeErr)
+	}
+
+	if execErr != nil {
+		return fmt.Errorf("delete namespace: %w", execErr)
+	}
+
+	return nil
+}
+
+// wrapWithNamespacePurge wraps a store with no faults and adds the hook.
+func wrapWithNamespacePurge(t *testing.T) purgingStore {
+	t.Helper()
+
+	wrapped, path := wrapAt(t)
+
+	return purgingStore{Store: wrapped, path: path}
+}
+
+// wrapAt wraps a new SQLite store and returns the wrapper and the path of its
+// database file.
+func wrapAt(t *testing.T, faults ...storefault.Fault) (*storefault.Store, string) {
+	t.Helper()
+
+	path := filepath.Join(t.TempDir(), "dustpan.db")
+
+	inner, err := sqlite.Open(t.Context(), path)
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
@@ -271,5 +329,5 @@ func wrap(t *testing.T, faults ...storefault.Fault) *storefault.Store {
 		}
 	})
 
-	return wrapped
+	return wrapped, path
 }
