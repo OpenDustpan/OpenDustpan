@@ -209,10 +209,14 @@ type StateStore interface {
 	// sentinel errors.
 	CountPendingStateVersions(ctx context.Context, workspace ID) (int, error)
 	// ReferencedContentKeys returns the blob keys every version of
-	// workspace names, pending and finalized, without the empty ones. A
-	// workspace without versions, or one that does not exist, yields an
-	// empty list. It returns no sentinel errors. A sweeper compares this
-	// set against the stored objects to find blobs no version references.
+	// workspace names, pending and finalized, without the empty ones. The
+	// workspace is named by its ID, the key that a sweep lists the blobs by.
+	// A workspace without versions yields an empty list. A soft-deleted
+	// workspace still returns its keys, because its versions stay until the
+	// final delete. A workspace that does not exist returns ErrNotFound: an
+	// empty keep set would let a sweep delete every blob of the workspace. A
+	// sweeper compares this set against the stored objects to find blobs no
+	// version references.
 	ReferencedContentKeys(ctx context.Context, workspace ID) ([]blob.Key, error)
 	// RecordUploadAttempt notes the blob key of one upload attempt on a
 	// pending version, so a later sweep finds the content even when the
@@ -2301,7 +2305,9 @@ func (s *Service) deleteExpiredBlobs(ctx context.Context, w Workspace, expired [
 // blob is fresh, and the row names it before the bytes land. Blob
 // modification times share the service clock wherever the store runs. The
 // sweep filters by age before reading the referenced keys, so a declare
-// with only fresh blobs pays for one listing and no history read.
+// with only fresh blobs pays for one listing and no history read. The keep
+// set is read by the workspace ID that the listing used. A read failure
+// deletes nothing, also when the workspace row is gone.
 func (s *Service) sweepUnreferenced(ctx context.Context, w Workspace) error {
 	listed, err := s.blobs.list(ctx, w.NamespaceID, w.ID)
 	if err != nil {
