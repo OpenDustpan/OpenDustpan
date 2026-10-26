@@ -63,16 +63,24 @@ func withMaintenance(
 	})
 }
 
-// newReducingRunnerRoutes returns the only routes of the runner management
-// API that pass the maintenance gate: the retire of a runner and the revoke
-// of a join token. Both only reduce access, so incident response can cut a
-// runner at any time. Every other route of the API stays refused.
+// runnerAPIPrefix is the path prefix of the runner management API. The
+// gate of that API lets the routes of the list under this prefix pass.
+const runnerAPIPrefix = "/api/runners/"
+
+// newReducingRunnerRoutes returns the routes of the runner management API
+// that pass the maintenance gate: the routes of maintenance.ReducingRoutes
+// under the prefix of that API, which today are the retire of a runner and
+// the revoke of a join token. They only reduce access, so incident response
+// can cut a runner at any time. Every other route of the API stays refused.
 func newReducingRunnerRoutes() *http.ServeMux {
 	mux := http.NewServeMux()
 	noop := http.HandlerFunc(func(http.ResponseWriter, *http.Request) {})
 
-	mux.Handle("POST /api/runners/{namespace}/runners/{runner}/retire", noop)
-	mux.Handle("POST /api/runners/{namespace}/pools/{pool}/join-tokens/{id}/revoke", noop)
+	for _, route := range maintenance.ReducingRoutes() {
+		if strings.HasPrefix(route.Pattern, runnerAPIPrefix) {
+			mux.Handle(route.Method+" "+route.Pattern, noop)
+		}
+	}
 
 	return mux
 }
