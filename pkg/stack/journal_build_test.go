@@ -62,11 +62,13 @@ func (m *journalMemStore) PutJournalRow(
 
 // ReferencedBlobKeys implements stack.CheckpointStore. It adds the batch blobs
 // of every journal row to the checkpoint blobs, as the stores do.
-func (m *journalMemStore) ReferencedBlobKeys(ctx context.Context, ref stack.Ref) ([]blob.Key, error) {
-	out, err := m.memUpdates.ReferencedBlobKeys(ctx, ref)
+func (m *journalMemStore) ReferencedBlobKeys(ctx context.Context, stackID stack.ID) ([]blob.Key, error) {
+	out, err := m.memUpdates.ReferencedBlobKeys(ctx, stackID)
 	if err != nil {
 		return nil, err
 	}
+
+	ref, _ := m.refOf(stackID)
 
 	m.mu.Lock()
 	defer m.mu.Unlock()

@@ -417,10 +417,15 @@ func (m *memUpdates) CheckpointByUpdate(
 
 // ReferencedBlobKeys implements stack.CheckpointStore.
 func (m *memUpdates) ReferencedBlobKeys(
-	_ context.Context, ref stack.Ref,
+	_ context.Context, stackID stack.ID,
 ) ([]blob.Key, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+
+	ref, ok := m.refOfLocked(stackID)
+	if !ok {
+		return nil, stack.ErrNotFound
+	}
 
 	var out []blob.Key
 
@@ -1631,7 +1636,7 @@ func TestStartKeepsReferencedBlobs(t *testing.T) {
 		t.Fatalf("complete first update: %v", err)
 	}
 
-	refs, err := f.store.ReferencedBlobKeys(ctx, f.ref)
+	refs, err := f.store.ReferencedBlobKeys(ctx, "stk-test")
 	if err != nil || len(refs) != 1 {
 		t.Fatalf("referenced keys: %v, %v; want one", refs, err)
 	}
@@ -1884,6 +1889,47 @@ func (m *memUpdates) withScope(cp stack.Checkpoint) stack.Checkpoint {
 	return cp
 }
 
+// refOfLocked returns the current reference of the stack with the given ID,
+// as the stores resolve it from the stack row. Callers hold mu.
+func (m *memUpdates) refOfLocked(id stack.ID) (stack.Ref, bool) {
+	for ref := range m.stacks {
+		if m.stacks[ref].ID == id {
+			return ref, true
+		}
+	}
+
+	return stack.Ref{Namespace: "", Project: "", Stack: ""}, false
+}
+
+// refOf returns the current reference of the stack with the given ID.
+func (m *memUpdates) refOf(id stack.ID) (stack.Ref, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	return m.refOfLocked(id)
+}
+
+// renameStack moves the stack row and the references of its checkpoints to
+// newRef and keeps the stack ID, as a rename does in the stores.
+func (m *memUpdates) renameStack(oldRef, newRef stack.Ref) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	st := m.stacks[oldRef]
+	st.Ref = newRef
+
+	delete(m.stacks, oldRef)
+
+	m.stacks[newRef] = st
+
+	for id := range m.checkpoints {
+		if cp := m.checkpoints[id]; cp.Ref == oldRef {
+			cp.Ref = newRef
+			m.checkpoints[id] = cp
+		}
+	}
+}
+
 // addStack registers a stack with a stable ID under ref. Callers hold no lock.
 func (m *memUpdates) addStack(ref stack.Ref, id stack.ID) {
 	m.mu.Lock()
@@ -1949,5 +1995,126 @@ func TestHistoryOfMissingStack(t *testing.T) {
 	list, err := f.svc.History(t.Context(), f.ref, stack.Page{Limit: 0, Offset: 0})
 	if err != nil || len(list) != 0 {
 		t.Fatalf("history of a stack with no update = %v, %v, want an empty list", list, err)
+	}
+}
+
+// hookedKeepSet runs before the keep-set read of a sweep, so a test changes
+// the stack between the listing of the blobs and that read.
+type hookedKeepSet struct {
+	*memUpdates
+
+	before func()
+}
+
+// ReferencedBlobKeys implements stack.CheckpointStore.
+func (h hookedKeepSet) ReferencedBlobKeys(ctx context.Context, id stack.ID) ([]blob.Key, error) {
+	h.before()
+
+	return h.memUpdates.ReferencedBlobKeys(ctx, id)
+}
+
+// dropStack removes the stack row, as a remove does for its name.
+func (m *memUpdates) dropStack(ref stack.Ref) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	delete(m.stacks, ref)
+}
+
+// completedWithBlob saves one checkpoint, completes the update and returns
+// the blob key that the row names, with the blob aged past the grace period.
+func (f updatesFixture) completedWithBlob(t *testing.T) (blob.Key, *memBlob) {
+	t.Helper()
+
+	ctx := t.Context()
+	first := f.started(t, stack.KindUpdate)
+
+	err := f.svc.SaveCheckpoint(ctx, f.ref, first.Update.ID, first.Token, checkpoint(1, `{"a":1}`))
+	if err != nil {
+		t.Fatalf("save checkpoint: %v", err)
+	}
+
+	_, err = f.svc.Complete(ctx, f.ref, first.Update.ID, first.Token, stack.StatusSucceeded)
+	if err != nil {
+		t.Fatalf("complete first update: %v", err)
+	}
+
+	named, err := f.store.ReferencedBlobKeys(ctx, "stk-test")
+	if err != nil || len(named) != 1 {
+		t.Fatalf("referenced keys: %v, %v; want one", named, err)
+	}
+
+	mem, ok := f.blobs.(*memBlob)
+	if !ok {
+		t.Fatalf("fixture blobs = %T, want *memBlob", f.blobs)
+	}
+
+	mem.ageAll(90 * time.Minute)
+
+	return named[0], mem
+}
+
+// withKeepSetHook returns an Updates service whose keep-set read runs before
+// first.
+func (f updatesFixture) withKeepSetHook(t *testing.T, before func()) *stack.Updates {
+	t.Helper()
+
+	svc, err := stack.NewUpdates(stack.UpdatesConfig{
+		ManualLocks: nil, Updates: f.store, Tokens: nil,
+		Checkpoints: hookedKeepSet{memUpdates: f.store, before: before},
+		Events:      f.store, Namespaces: f.namespaces, Stacks: f.store, Blobs: f.blobs,
+		Now: f.clock.Now, Logger: nil, MaxCheckpointBytes: 1024,
+		Journal: nil, Replayer: nil, Refusals: f.refusals,
+	})
+	if err != nil {
+		t.Fatalf("new updates: %v", err)
+	}
+
+	return svc
+}
+
+// TestStartSweepKeepsBlobsWhenTheStackChanges proves that a change of the
+// stack between the listing of its blobs and the read of the keep set deletes
+// no blob that a row names. A rename must not empty the keep set, and a stack
+// row that is gone must stop the sweep.
+func TestStartSweepKeepsBlobsWhenTheStackChanges(t *testing.T) {
+	t.Parallel()
+
+	renamed, err := stack.ParseRef("acme", "web", "prod2")
+	if err != nil {
+		t.Fatalf("parse ref: %v", err)
+	}
+
+	tests := []struct {
+		name   string
+		change func(m *memUpdates, ref stack.Ref)
+	}{
+		{name: "rename", change: func(m *memUpdates, ref stack.Ref) { m.renameStack(ref, renamed) }},
+		{name: "remove", change: func(m *memUpdates, ref stack.Ref) { m.dropStack(ref) }},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			f := newUpdates(t)
+			key, mem := f.completedWithBlob(t)
+			svc := f.withKeepSetHook(t, func() { tc.change(f.store, f.ref) })
+
+			preview, createErr := f.svc.Create(t.Context(), f.ref, stack.Plan{
+				Kind: stack.KindUpdate, DryRun: true, CreatedBy: "", RestoredFrom: 0,
+			})
+			if createErr != nil {
+				t.Fatalf("create preview: %v", createErr)
+			}
+
+			if _, startErr := svc.Start(t.Context(), f.ref, preview.ID); startErr != nil {
+				t.Fatalf("start preview: %v", startErr)
+			}
+
+			if _, getErr := mem.Get(t.Context(), key); getErr != nil {
+				t.Fatalf("named blob after a %s during the sweep: %v, want it kept", tc.name, getErr)
+			}
+		})
 	}
 }

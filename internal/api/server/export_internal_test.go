@@ -89,3 +89,7 @@ func DevCodeSignInForTest(h *Handler, w http.ResponseWriter, r *http.Request) {
 func CodedErrorForTest(status int, code, message string, values ...errcode.Value) error {
 	return &codedError{status: status, code: code, message: message, args: values}
 }
+
+// SignInRefusalForTest returns the refusal of a sign-in with reason, as the
+// sign-in handler builds it.
+func SignInRefusalForTest(reason string) error { return signInRefusalError{reason: reason} }

@@ -534,6 +534,7 @@ type Namespace struct {
 	IpAllowlist          string
 	ID                   string
 	OutputSharingDefault string
+	SourceFilter         string
 }
 
 type NotificationSink struct {

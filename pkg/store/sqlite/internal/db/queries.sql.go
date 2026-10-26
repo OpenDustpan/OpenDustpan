@@ -5628,6 +5628,19 @@ func (q *Queries) GetNamespaceOutputSharingDefault(ctx context.Context, name str
 	return output_sharing_default, err
 }
 
+const getNamespaceSourceFilter = `-- name: GetNamespaceSourceFilter :one
+SELECT source_filter
+FROM namespaces
+WHERE name = ?
+`
+
+func (q *Queries) GetNamespaceSourceFilter(ctx context.Context, name string) (string, error) {
+	row := q.db.QueryRowContext(ctx, getNamespaceSourceFilter, name)
+	var source_filter string
+	err := row.Scan(&source_filter)
+	return source_filter, err
+}
+
 const getNotificationSink = `-- name: GetNotificationSink :one
 SELECT k.id, n.name AS namespace, k.kind, k.name, k.platform, k.target, k.created_by, k.version
 FROM notification_sinks AS k
@@ -12122,20 +12135,23 @@ func (q *Queries) ListProfileRevisions(ctx context.Context, arg ListProfileRevis
 }
 
 const listReferencedBlobKeys = `-- name: ListReferencedBlobKeys :many
-SELECT blob_key
-FROM checkpoints
-WHERE checkpoints.stack_id = ?1
-UNION
-SELECT blob_key
-FROM update_journal
-WHERE update_journal.stack_id = ?1
-ORDER BY blob_key
+SELECT CAST(COALESCE(k.blob_key, '') AS TEXT) AS blob_key
+FROM stacks AS st
+LEFT JOIN (
+    SELECT checkpoints.stack_id, checkpoints.blob_key FROM checkpoints
+    UNION
+    SELECT update_journal.stack_id, update_journal.blob_key FROM update_journal
+) AS k ON k.stack_id = st.id
+WHERE st.id = ?1 AND st.deleted_at_ms IS NULL
+ORDER BY 1
 `
 
-// Every blob key that a row of one stack names, ordered, without duplicates:
-// the blobs of the checkpoints and the blobs of the journal batches. A
-// sweeper compares this set against the stored objects to find blobs that no
-// row references.
+// Every blob key that a row of one live stack names, ordered, without
+// duplicates: the blobs of the checkpoints and the blobs of the journal
+// batches. A sweeper compares this set against the stored objects to find
+// blobs that no row references. The stack is the driving table, so one
+// statement tells a stack without keys (one row with an empty key) from a
+// stack that is missing or soft-deleted (no row).
 func (q *Queries) ListReferencedBlobKeys(ctx context.Context, stackID string) ([]string, error) {
 	rows, err := q.db.QueryContext(ctx, listReferencedBlobKeys, stackID)
 	if err != nil {
@@ -15900,6 +15916,26 @@ type SetNamespaceOverridesParams struct {
 // Replaces the override switches of one namespace (ADR 44, decision 6).
 func (q *Queries) SetNamespaceOverrides(ctx context.Context, arg SetNamespaceOverridesParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, setNamespaceOverrides, arg.AllowForcedWrites, arg.AllowUnlockedWrites, arg.Name)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const setNamespaceSourceFilter = `-- name: SetNamespaceSourceFilter :execrows
+UPDATE namespaces
+SET source_filter = ?
+WHERE name = ?
+`
+
+type SetNamespaceSourceFilterParams struct {
+	SourceFilter string
+	Name         string
+}
+
+// Replaces the source filter of one namespace.
+func (q *Queries) SetNamespaceSourceFilter(ctx context.Context, arg SetNamespaceSourceFilterParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, setNamespaceSourceFilter, arg.SourceFilter, arg.Name)
 	if err != nil {
 		return 0, err
 	}

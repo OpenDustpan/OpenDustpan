@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 
+	"opendustpan.org/opendustpan/internal/source"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/outputshare"
@@ -184,8 +185,8 @@ func checkManualLockReason(value any) error {
 	return nil
 }
 
-// checkPortableValue runs the check of the column that has one: the ID and
-// the output sharing setting of a namespace, the reason of a manual lock and
+// checkPortableValue runs the check of the column that has one: the ID, the
+// output sharing setting and the source filter of a namespace, the reason of a manual lock and
 // the document of the preferences of a person.
 func checkPortableValue(table, column string, value any) error {
 	switch {
@@ -193,6 +194,8 @@ func checkPortableValue(table, column string, value any) error {
 		return checkNamespaceID(value)
 	case table == portTableNamespaces && column == portColOutputSharingDefault:
 		return checkOutputSharingDefault(value)
+	case table == portTableNamespaces && column == portColSourceFilter:
+		return checkSourceFilter(value)
 	case table == portTableManualLocks && column == portColReason:
 		return checkManualLockReason(value)
 	case table == TablePersonPreferences && column == portColDocument:
@@ -237,6 +240,31 @@ func checkOutputSharingDefault(value any) error {
 	if err := outputshare.Default(d).Validate(); err != nil {
 		return fmt.Errorf("namespace row has an invalid output sharing setting: %w: %w",
 			outputshare.ErrInvalid, ErrCorrupt)
+	}
+
+	return nil
+}
+
+// portColSourceFilter is the column of the source filter of a namespace.
+const portColSourceFilter = "source_filter"
+
+// checkSourceFilter refuses a namespace row whose source filter is not the
+// empty text or a filter document that passes the checks of a filter. It
+// returns ErrCorrupt, wrapped with source.ErrInvalid. The error does not hold
+// the value.
+//
+// Defense in depth: the CHECK of the column refuses a text that is not JSON
+// at the copy, and the store refuses a document that is not a filter at each
+// read. This check stays so that a restored backup fails before it reaches the
+// database.
+func checkSourceFilter(value any) error {
+	text, isText := value.(string)
+	if !isText {
+		return fmt.Errorf("namespace row has a source filter that is not text: %w: %w", source.ErrInvalid, ErrCorrupt)
+	}
+
+	if _, err := source.DecodeFilter(text); err != nil {
+		return fmt.Errorf("namespace row has an invalid source filter: %w: %w", source.ErrInvalid, ErrCorrupt)
 	}
 
 	return nil

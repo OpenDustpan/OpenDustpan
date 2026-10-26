@@ -343,7 +343,7 @@ func (m *memUpdateStore) CheckpointByUpdate(
 
 // ReferencedBlobKeys implements stack.CheckpointStore.
 func (m *memUpdateStore) ReferencedBlobKeys(
-	_ context.Context, ref stack.Ref,
+	_ context.Context, _ stack.ID,
 ) ([]blob.Key, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -351,7 +351,7 @@ func (m *memUpdateStore) ReferencedBlobKeys(
 	var out []blob.Key
 
 	for id := range m.checkpoints {
-		if cp := m.checkpoints[id]; cp.Ref == ref && cp.BlobKey != "" {
+		if cp := m.checkpoints[id]; cp.BlobKey != "" {
 			out = append(out, cp.BlobKey)
 		}
 	}

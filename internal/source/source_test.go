@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -12,11 +13,15 @@ import (
 
 const commit1 = "0123456789abcdef0123456789abcdef01234567"
 
-// request returns a valid request with an empty policy.
+// request returns a valid request with an empty filter.
 func request() source.Request {
 	return source.Request{
-		Namespace: "acme", Connection: "github", Repository: "acme/infra", Commit: commit1,
-		Format: source.FormatSHA1, Policy: source.Policy{Submodules: nil, LargeFiles: nil, FailOnDenied: false},
+		Namespace:  "acme",
+		Connection: "github",
+		Repository: "acme/infra",
+		Commit:     commit1,
+		Format:     source.FormatSHA1,
+		Filter:     source.Filter{Submodules: nil, LargeFiles: nil, FailOnDenied: false, ProtectedBranches: nil},
 	}
 }
 
@@ -56,7 +61,7 @@ func TestRequestValidate(t *testing.T) {
 		{"no namespace", func(r *source.Request) { r.Namespace = "" }, false},
 		{"no connection", func(r *source.Request) { r.Connection = "" }, false},
 		{"a branch, not a commit", func(r *source.Request) { r.Commit = "main" }, false},
-		{"bad policy", func(r *source.Request) { r.Policy.Submodules = []source.URLPattern{"git@host:a/b"} }, false},
+		{"bad filter", func(r *source.Request) { r.Filter.Submodules = []source.URLPattern{"git@host:a/b"} }, false},
 	}
 
 	for _, tc := range cases {
@@ -70,18 +75,18 @@ func TestRequestValidate(t *testing.T) {
 	}
 }
 
-func TestSnapshotKeyChangesWithThePolicy(t *testing.T) {
+func TestSnapshotKeyChangesWithTheFilter(t *testing.T) {
 	t.Parallel()
 
 	a, b := request(), request()
-	b.Policy.Submodules = []source.URLPattern{"https://git.example.com/modules/*"}
+	b.Filter.Submodules = []source.URLPattern{"https://git.example.com/modules/*"}
 
 	if source.SnapshotKey(&a) == source.SnapshotKey(&b) {
-		t.Fatal("two policies give one snapshot key")
+		t.Fatal("two filters give one snapshot key")
 	}
 
 	c := request()
-	c.Policy.FailOnDenied = true
+	c.Filter.FailOnDenied = true
 
 	if source.SnapshotKey(&a) == source.SnapshotKey(&c) {
 		t.Fatal("the switch does not change the snapshot key")
@@ -175,18 +180,19 @@ func TestURLPattern(t *testing.T) {
 	}
 }
 
-func TestPolicyAllows(t *testing.T) {
+func TestFilterAllows(t *testing.T) {
 	t.Parallel()
 
-	var none source.Policy
+	var none source.Filter
 	if none.AllowsSubmodule("https://git.example.com/a/b") || none.AllowsLargeFiles("https://git.example.com/a/b") {
-		t.Fatal("an empty policy allows a URL")
+		t.Fatal("an empty filter allows a URL")
 	}
 
-	p := source.Policy{
-		Submodules:   []source.URLPattern{"https://git.example.com/platform/*"},
-		LargeFiles:   []source.URLPattern{"https://git.example.com/acme/infra"},
-		FailOnDenied: true,
+	p := source.Filter{
+		Submodules:        []source.URLPattern{"https://git.example.com/platform/*"},
+		LargeFiles:        []source.URLPattern{"https://git.example.com/acme/infra"},
+		FailOnDenied:      true,
+		ProtectedBranches: nil,
 	}
 
 	if err := p.Validate(); err != nil {
@@ -203,10 +209,11 @@ func TestPolicyAllows(t *testing.T) {
 		t.Error("large file allowlist")
 	}
 
-	big := source.Policy{
-		Submodules:   make([]source.URLPattern, source.MaxPatterns+1),
-		LargeFiles:   nil,
-		FailOnDenied: false,
+	big := source.Filter{
+		Submodules:        make([]source.URLPattern, source.MaxPatterns+1),
+		LargeFiles:        nil,
+		FailOnDenied:      false,
+		ProtectedBranches: nil,
 	}
 	for i := range big.Submodules {
 		big.Submodules[i] = "https://git.example.com/a/b"
@@ -312,17 +319,22 @@ func TestResolveURLWithBases(t *testing.T) {
 		}
 	}
 
-	p := source.Policy{
-		Submodules: []source.URLPattern{"https://git.example.com/acme/*"}, LargeFiles: nil, FailOnDenied: true,
+	p := source.Filter{
+		Submodules: []source.URLPattern{
+			"https://git.example.com/acme/*",
+		},
+		LargeFiles:        nil,
+		FailOnDenied:      true,
+		ProtectedBranches: nil,
 	}
 
 	resolved, err := source.ResolveURL(base, "../modules")
 	if err != nil || !p.AllowsSubmodule(resolved) {
-		t.Errorf("the policy does not allow the resolved URL %q, %v", resolved, err)
+		t.Errorf("the filter does not allow the resolved URL %q, %v", resolved, err)
 	}
 
 	if p.AllowsSubmodule("../modules") {
-		t.Error("the policy matches a relative URL that is not resolved")
+		t.Error("the filter matches a relative URL that is not resolved")
 	}
 }
 
@@ -402,5 +414,90 @@ func TestCheckLargeFileAndGitlink(t *testing.T) {
 
 	if err := source.CheckGitlink(&sub, strings.Repeat("f", 40)); !errors.Is(err, source.ErrCorrupt) {
 		t.Errorf("CheckGitlink of another commit = %v, want ErrCorrupt", err)
+	}
+}
+
+func TestValidBranchName(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		in   string
+		want bool
+	}{
+		{"plain", "main", true},
+		{"with a slash", "release/1.2", true},
+		{"with dot, underscore and dash", "feature/a_b-c.d", true},
+		{"longest", strings.Repeat("a", source.MaxBranchName), true},
+		{"empty", "", false},
+		{"too long", strings.Repeat("a", source.MaxBranchName+1), false},
+		{"starts with a dash", "-main", false},
+		{"double dot", "a..b", false},
+		{"empty part", "a//b", false},
+		{"leading slash", "/main", false},
+		{"trailing slash", "main/", false},
+		{"part starts with a dot", "a/.hidden", false},
+		{"part ends with .lock", "a/b.lock", false},
+		{"glob", "release/*", false},
+		{"space", "my branch", false},
+		{"newline", "main\nevil", false},
+		{"NUL", "main\x00", false},
+		{"percent", "a%2Fb", false},
+		{"colon", "refs:heads", false},
+		{"backslash", `a\b`, false},
+		{"non-ASCII", "größe", false},
+	}
+
+	for _, tc := range cases {
+		if got := source.ValidBranchName(tc.in); got != tc.want {
+			t.Errorf("%s: ValidBranchName(%q) = %v, want %v", tc.name, tc.in, got, tc.want)
+		}
+	}
+}
+
+func TestFilterValidateProtectedBranches(t *testing.T) {
+	t.Parallel()
+
+	many := make([]string, source.MaxPatterns+1)
+	for i := range many {
+		many[i] = "b" + strconv.Itoa(i)
+	}
+
+	cases := []struct {
+		name     string
+		branches []string
+		ok       bool
+	}{
+		{"none", nil, true},
+		{"two names", []string{"main", "release/1"}, true},
+		{"at the limit", many[:source.MaxPatterns], true},
+		{"above the limit", many, false},
+		{"a glob", []string{"main", "release/*"}, false},
+		{"a name twice", []string{"main", "main"}, false},
+		{"an empty name", []string{""}, false},
+	}
+
+	for _, tc := range cases {
+		f := source.Filter{Submodules: nil, LargeFiles: nil, FailOnDenied: false, ProtectedBranches: tc.branches}
+
+		err := f.Validate()
+		if tc.ok != (err == nil) || (err != nil && !errors.Is(err, source.ErrInvalid)) {
+			t.Errorf("%s: Validate = %v, want ok %v", tc.name, err, tc.ok)
+		}
+	}
+}
+
+func TestFilterHashIgnoresProtectedBranches(t *testing.T) {
+	t.Parallel()
+
+	a := source.Filter{
+		Submodules: []source.URLPattern{"https://git.example.com/m/*"}, LargeFiles: nil, FailOnDenied: false,
+		ProtectedBranches: nil,
+	}
+	b := a
+	b.ProtectedBranches = []string{"main"}
+
+	if a.Hash() != b.Hash() {
+		t.Error("the protected branches change the hash of the filter")
 	}
 }

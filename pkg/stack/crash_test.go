@@ -283,7 +283,12 @@ func checkpointInput(deployment []byte) stack.CheckpointInput {
 func referencedKeys(t *testing.T, s *storefault.Store, ref stack.Ref) []blob.Key {
 	t.Helper()
 
-	keys, err := s.ReferencedBlobKeys(t.Context(), ref)
+	st, err := s.GetStack(t.Context(), ref)
+	if err != nil {
+		t.Fatalf("get stack %s: %v", ref, err)
+	}
+
+	keys, err := s.ReferencedBlobKeys(t.Context(), st.ID)
 	if err != nil {
 		t.Fatalf("referenced keys of %s: %v", ref, err)
 	}

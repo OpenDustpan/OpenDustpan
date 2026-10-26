@@ -33,6 +33,8 @@ type jobDoc struct {
 	Operation string      `json:"operation"`
 	Executor  string      `json:"executor"`
 	State     string      `json:"state"`
+	Pool      string      `json:"pool"`
+	PoolID    string      `json:"poolID"`
 	Phases    []jobDocRow `json:"phases"`
 	Steps     []jobDocRow `json:"steps"`
 }
@@ -184,6 +186,11 @@ func checkStarted(body string) (jobDoc, error) {
 
 	if doc.Unit.ID == "" || doc.Unit.Tool != "OpenTofu" || doc.Unit.Name != jobsUnit {
 		return doc, fmt.Errorf("%w: unit %+v", errJobDoc, doc.Unit)
+	}
+
+	// The name comes from the pool reader of the server, the ID from the job.
+	if doc.Pool != jobsPool || doc.PoolID == "" {
+		return doc, fmt.Errorf("%w: pool %q, poolID %q, want the pool %s", errJobDoc, doc.Pool, doc.PoolID, jobsPool)
 	}
 
 	// With no runner online the phase waits dispatched: the claim comes later.

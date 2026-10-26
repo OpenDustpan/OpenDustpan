@@ -100,6 +100,7 @@ func RunUpdates(t *testing.T, newStore UpdatesFactory) {
 		{name: "history reports the stored size for blob rows", test: testHistoryBlobSize},
 		{name: "referenced blob keys list every checkpoint key of the stack", test: testReferencedBlobKeys},
 		{name: "referenced blob keys list the journal keys of the stack", test: testReferencedBlobKeysJournal},
+		{name: "referenced blob keys follow the stack ID and refuse a missing stack", test: testReferencedBlobKeysByID},
 		{name: "checkpoint needs the running update's lease", test: testCheckpointLease},
 		{name: "checkpoint sequence numbers are idempotent", test: testCheckpointSequence},
 		{name: "latest checkpoint spans updates", test: testCheckpointAcrossUpdates},
@@ -1693,7 +1694,7 @@ func testHistoryBlobSize(t *testing.T, f fixture) {
 func testReferencedBlobKeys(t *testing.T, f fixture) {
 	t.Helper()
 
-	if keys, err := f.s.ReferencedBlobKeys(t.Context(), f.ref); err != nil || len(keys) != 0 {
+	if keys, err := f.s.ReferencedBlobKeys(t.Context(), f.stackIDOf(t, f.ref)); err != nil || len(keys) != 0 {
 		t.Fatalf("referenced keys of a new stack = %v, %v; want empty", keys, err)
 	}
 
@@ -1715,7 +1716,7 @@ func testReferencedBlobKeys(t *testing.T, f fixture) {
 
 	f.end(t, second, stack.StatusSucceeded)
 
-	keys, err := f.s.ReferencedBlobKeys(t.Context(), f.ref)
+	keys, err := f.s.ReferencedBlobKeys(t.Context(), f.stackIDOf(t, f.ref))
 	if err != nil {
 		t.Fatalf("referenced keys: %v", err)
 	}
@@ -1724,13 +1725,66 @@ func testReferencedBlobKeys(t *testing.T, f fixture) {
 		t.Fatalf("referenced keys = %v, want [%s %s]", keys, firstKey, secondKey)
 	}
 
-	if keys, err := f.s.ReferencedBlobKeys(t.Context(), f.other(t)); err != nil || len(keys) != 0 {
+	if keys, err := f.s.ReferencedBlobKeys(t.Context(), f.stackIDOf(t, f.other(t))); err != nil || len(keys) != 0 {
 		t.Fatalf("referenced keys of another stack = %v, %v; want empty", keys, err)
 	}
+}
 
-	ghost := stack.Ref{Namespace: f.ref.Namespace, Project: f.ref.Project, Stack: "ghost"}
-	if keys, err := f.s.ReferencedBlobKeys(t.Context(), ghost); err != nil || len(keys) != 0 {
-		t.Fatalf("referenced keys of a missing stack = %v, %v; want empty", keys, err)
+// testReferencedBlobKeysByID checks the keep set of a sweep. The set is read
+// by the stack ID, the key that the sweep lists the blobs by, so it survives
+// a rename. A stack that is missing, or soft-deleted, returns ErrNotFound and
+// no keys: an empty set there would let a sweep delete every blob.
+func testReferencedBlobKeysByID(t *testing.T, f fixture) {
+	t.Helper()
+
+	id := f.stackIDOf(t, f.ref)
+
+	u := f.run(t, f.ref, "u1", mutating())
+	key := f.blobKey(t, u, 0)
+
+	if err := f.s.PutCheckpoint(t.Context(), newBlobCheckpoint(u, key, 0, `{"v":1}`), f.fence); err != nil {
+		t.Fatalf("put checkpoint: %v", err)
+	}
+
+	f.end(t, u, stack.StatusSucceeded)
+
+	if err := f.s.RenameStack(t.Context(), f.ref, "renamed", f.fence); err != nil {
+		t.Fatalf("rename stack: %v", err)
+	}
+
+	keys, err := f.s.ReferencedBlobKeys(t.Context(), id)
+	if err != nil || !slices.Equal(keys, []blob.Key{key}) {
+		t.Fatalf("referenced keys after a rename = %v, %v; want [%s]", keys, err, key)
+	}
+
+	empty := f.other(t)
+	deleted := f.stackIDOf(t, empty)
+
+	keys, err = f.s.ReferencedBlobKeys(t.Context(), deleted)
+	if err != nil || len(keys) != 0 {
+		t.Fatalf("referenced keys of a live stack without rows = %v, %v; want empty and no error", keys, err)
+	}
+
+	delErr := f.s.DeleteStack(
+		t.Context(), empty, f.fence, stack.EmptyGuard(),
+		inventory.Deletion{Entry: deleteEntry(empty.Namespace), PurgeAfter: purgeAt()},
+	)
+	if delErr != nil {
+		t.Fatalf("delete stack: %v", delErr)
+	}
+
+	for _, tc := range []struct {
+		name string
+		id   stack.ID
+	}{
+		{name: "soft-deleted stack", id: deleted},
+		{name: "unknown ID", id: "no-such-stack-id"},
+		{name: "empty ID", id: ""},
+	} {
+		keys, err := f.s.ReferencedBlobKeys(t.Context(), tc.id)
+		if !errors.Is(err, stack.ErrNotFound) || len(keys) != 0 {
+			t.Fatalf("referenced keys of %s = %v, %v; want no keys and ErrNotFound", tc.name, keys, err)
+		}
 	}
 }
 
@@ -2791,6 +2845,13 @@ func checkRenamedEvents(
 	if !errors.Is(oldErr, stack.ErrUpdateNotFound) {
 		t.Fatalf("events of old name: err = %v, want ErrUpdateNotFound", oldErr)
 	}
+}
+
+// stackIDOf returns the stable ID of the stack that ref names now.
+func (f fixture) stackIDOf(t *testing.T, ref stack.Ref) stack.ID {
+	t.Helper()
+
+	return stack.ID(f.stackID(t, ref))
 }
 
 func (f fixture) stackID(t *testing.T, ref stack.Ref) string {

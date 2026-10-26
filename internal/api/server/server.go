@@ -18,6 +18,7 @@ import (
 
 	"opendustpan.org/opendustpan/internal/api/apidesc"
 	"opendustpan.org/opendustpan/internal/api/idempotent"
+	"opendustpan.org/opendustpan/internal/api/problem"
 	denials "opendustpan.org/opendustpan/internal/api/refusal"
 	"opendustpan.org/opendustpan/internal/denylimit"
 	"opendustpan.org/opendustpan/internal/errcode"
@@ -428,6 +429,15 @@ type errorResponse struct {
 const maintenanceRetryAfter = "30"
 
 func (h *Handler) writeError(ctx context.Context, w http.ResponseWriter, err error) {
+	// A denial comes first: an error that wraps identity.ErrDenied answers 403
+	// whatever else it wraps, so no refusal tells the state of an object that
+	// the caller has no right on.
+	if f, ok := deniedFailure(err); ok {
+		h.writeCoded(ctx, w, f)
+
+		return
+	}
+
 	if errors.Is(err, idempotency.ErrLost) {
 		err = idempotent.Lost()
 	}
@@ -460,13 +470,7 @@ func (h *Handler) writeError(ctx context.Context, w http.ResponseWriter, err err
 			slog.String("error_code", f.code), slog.String("cause", causeType(err)))
 	}
 
-	if errors.Is(err, maintenance.ErrInMaintenance) || errors.Is(err, maintenance.ErrBusy) {
-		w.Header().Set("Retry-After", maintenanceRetryAfter)
-	}
-
-	if errors.Is(err, namespace.ErrFenced) {
-		h.logger.WarnContext(ctx, "write fenced", slog.String("error", err.Error()))
-	}
+	h.noteRefusal(ctx, w, err)
 
 	if fresh, ok := errors.AsType[reauthenticateError](err); ok {
 		h.writeJSON(ctx, w, f.status, reauthenticateResponse{
@@ -490,6 +494,61 @@ func (h *Handler) writeError(ctx context.Context, w http.ResponseWriter, err err
 
 	status, message, answer := h.answer(ctx, f)
 	h.writeAnswer(ctx, w, status, message, answer)
+}
+
+// noteRefusal sets the Retry-After header of a maintenance refusal and logs a
+// fenced write. The log holds the wrap text, which the answer never holds.
+func (h *Handler) noteRefusal(ctx context.Context, w http.ResponseWriter, err error) {
+	if errors.Is(err, maintenance.ErrInMaintenance) || errors.Is(err, maintenance.ErrBusy) {
+		w.Header().Set("Retry-After", maintenanceRetryAfter)
+	}
+
+	if errors.Is(err, namespace.ErrFenced) {
+		h.logger.WarnContext(ctx, "write fenced", slog.String("error", err.Error()))
+	}
+}
+
+// deniedFailure returns the failure of an error that wraps identity.ErrDenied
+// or that is a refusal of the credential of a request. It uses the order of
+// problem.Writer: the refusals of the credential first, then keepDenied, then
+// the standard 403 with fixed text. It holds no wrap text. The second result
+// is false for any other error.
+func deniedFailure(err error) (failure, bool) {
+	if _, ok := problem.Auth(err); !ok {
+		return fail(0, ""), false
+	}
+
+	p := problem.Writer{Logger: nil, KeepDenied: keepDenied, Classify: nil}.Problem(err)
+
+	return failCoded(p.Status, p.Message, p.Code, p.Values...), true
+}
+
+// keepDenied maps the classes of a denial that keep their own text, as
+// problem.Writer.KeepDenied does. The status is 403 only. The text is built
+// from a sentinel, never from the wrap text.
+func keepDenied(err error) (problem.Problem, bool) {
+	switch {
+	case errors.Is(err, access.ErrEscalation):
+		// checkMoveGrant in pkg/access wraps this refusal in identity.ErrDenied
+		// when a grant of a move target gives more than the caller holds.
+		return keptForbidden(err, access.ErrEscalation.Error()), true
+	case errors.Is(err, errSignInRefused):
+		// The reason names no code, token or state: the sign-in handler adds it
+		// on purpose, as a signInRefusalError.
+		text := errSignInRefused.Error()
+		if refusal, ok := errors.AsType[signInRefusalError](err); ok {
+			text += ": " + refusal.reason
+		}
+
+		return keptForbidden(err, text), true
+	default:
+		return problem.Internal(), false
+	}
+}
+
+// keptForbidden returns the 403 of a kept class with text.
+func keptForbidden(err error, text string) problem.Problem {
+	return problem.Built(http.StatusForbidden, text, errcode.Forbidden(err), errcode.Answer{}, nil)
 }
 
 // classifyIdentity maps the errors of the roles, the grants and the access
@@ -686,6 +745,13 @@ func activeWorkArgs(err error) []errcode.Value {
 
 func (h *Handler) writeJSON(ctx context.Context, w http.ResponseWriter, status int, body any) {
 	w.Header().Set("Content-Type", "application/json")
+
+	if status >= http.StatusBadRequest {
+		// An error answer may tell the state of an object, so no shared cache
+		// keeps it.
+		w.Header().Set("Cache-Control", "no-store")
+	}
+
 	w.WriteHeader(status)
 
 	if err := json.NewEncoder(w).Encode(body); err != nil {
