@@ -28,7 +28,7 @@ came from the Pulumi Cloud console, not from a decision.
 
 ## Constraints
 
-- The namespace is the unit of tenancy, home region and fencing (ADR 4). It
+- The namespace is the unit of tenancy, primary installation and fencing (ADR 4, ADR 248). It
   stays the only hard container. Any level under it is soft: cheap to
   rename, and not replicated or fenced on its own.
 - Tool models stay separate (ADR 13). Views across tools read the inventory.
@@ -65,7 +65,7 @@ navigation go away or become secondary.
 - What does the first screen of a namespace answer?
 - Is environment a concept of its own, or only a tag?
 - Do teams own units directly, or through a group?
-- Can a view span namespaces? Two namespaces can have two home regions, so
+- Can a view span namespaces? Two namespaces can have two primary installations, so
   such a view touches data residency.
 - Which tags does the inventory index: all of them, or a fixed set?
 
@@ -99,7 +99,7 @@ finding and filtering.
 
 - A **group** is a named set of units inside one namespace, from any tool.
   Team leads make and change groups. Operators do not have to.
-- A group is soft (see Constraints): no home region, no fence, cheap to
+- A group is soft (see Constraints): no primary installation, no fence, cheap to
   rename. A unit keeps its own name and URL in its tool. A group is never a
   prefix of a unit name.
 - Groups do not nest (owner input, 2026-10-11). TFE projects are flat, and a
