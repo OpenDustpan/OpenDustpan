@@ -106,6 +106,7 @@ type Inner interface {
 	inventory.DeletedReader
 	inventory.ExpiredDeleted
 	inventory.BlobPurges
+	inventory.SweepLocker
 	maintenance.Store
 
 	CountRunningJournaledUpdates(ctx context.Context) (int64, error)
@@ -120,7 +121,10 @@ type Store struct {
 	calls  map[string]int
 }
 
-var _ Inner = (*Store)(nil)
+var (
+	_ Inner                 = (*Store)(nil)
+	_ inventory.SweepLocker = (*Store)(nil)
+)
 
 // New returns a Store over inner that applies faults in order.
 func New(inner Inner, faults ...Fault) (*Store, error) {
@@ -390,14 +394,14 @@ func (s *Store) CheckpointByUpdate(
 	return s.inner.CheckpointByUpdate(ctx, ref, id)
 }
 
-// ReferencedBlobKeys returns the blob keys that the rows of the stack name,
+// ReferencedBlobKeys returns the blob keys that the rows of the stack ID name,
 // unless a fault fires first.
-func (s *Store) ReferencedBlobKeys(ctx context.Context, ref stack.Ref) ([]blob.Key, error) {
+func (s *Store) ReferencedBlobKeys(ctx context.Context, stackID stack.ID) ([]blob.Key, error) {
 	if err := s.before(ctx, "ReferencedBlobKeys"); err != nil {
 		return nil, err
 	}
 
-	return s.inner.ReferencedBlobKeys(ctx, ref)
+	return s.inner.ReferencedBlobKeys(ctx, stackID)
 }
 
 // StateAt returns the update that held the state of the stack at a time,
@@ -915,6 +919,16 @@ func (s *Store) FinishBlobPurge(ctx context.Context, tool, unitID string) error 
 	}
 
 	return s.inner.FinishBlobPurge(ctx, tool, unitID)
+}
+
+// TryLockSweep takes the sweep lock of the inner store without a wait, unless
+// a fault fires first. A fault answers its error and takes no lock.
+func (s *Store) TryLockSweep(ctx context.Context) (func(), error) {
+	if err := s.before(ctx, "TryLockSweep"); err != nil {
+		return nil, err
+	}
+
+	return s.inner.TryLockSweep(ctx)
 }
 
 // GetState returns the installation state, unless a fault fires first.
