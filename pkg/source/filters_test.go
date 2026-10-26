@@ -134,7 +134,11 @@ func TestDecodeFilterRefusesHostileText(t *testing.T) {
 		{"a bad pattern", `{"submodules":["http://git.example.com/a/b"]}`, source.ErrInvalid},
 		{"a glob branch", `{"protectedBranches":["a/*"]}`, source.ErrInvalid},
 		{"a branch with a newline", `{"protectedBranches":["a\nb"]}`, source.ErrInvalid},
-		{"too long", `{"protectedBranches":["` + strings.Repeat("a", source.MaxFilterJSON) + `"]}`, source.ErrTooLarge},
+		{
+			"too long",
+			`{"protectedBranches":["` + strings.Repeat("a", source.MaxFilterJSON) + `"]}`,
+			source.ErrFilterTooLarge,
+		},
 	}
 
 	for _, tc := range cases {
@@ -370,6 +374,11 @@ func TestSplitHTTPS(t *testing.T) {
 		{"backslash", "https://git.example.com/a\\b", "", "", false},
 		{"underscore host", "https://git_x.example.com/a", "", "", false},
 		{"empty label", "https://git..example.com/a", "", "", false},
+		{"uppercase scheme", "HTTPS://git.example.com/a", "", "", false},
+		{"IPv6 host", "https://[::1]/a", "", "", false},
+		{"trailing dot host", "https://h.example./a", "", "", false},
+		{"user and password", "https://user:pass@git.example.com/a", "", "", false},
+		{"punycode host", "https://xn--gt-9ja.example.com/a", "xn--gt-9ja.example.com", "a", true},
 		{"non-ASCII host", "https://gіt.example.com/a", "", "", false},
 		{"NUL", "https://git.example.com/a\x00b", "", "", false},
 	} {

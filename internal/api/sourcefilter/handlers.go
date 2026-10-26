@@ -213,9 +213,9 @@ func classify(err error) (problem.Problem, bool) {
 		return problem.RefusedText(
 			problem.Detail(err, source.ErrInvalid), http.StatusBadRequest, errcode.SourceFilterInvalid,
 		), true
-	case errors.Is(err, source.ErrTooLarge):
+	case errors.Is(err, source.ErrFilterTooLarge):
 		return problem.RefusedText(
-			problem.Detail(err, source.ErrTooLarge), http.StatusBadRequest, errcode.SourceFilterInvalid,
+			problem.Detail(err, source.ErrFilterTooLarge), http.StatusBadRequest, errcode.SourceFilterInvalid,
 		), true
 	}
 

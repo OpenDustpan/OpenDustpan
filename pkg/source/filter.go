@@ -17,8 +17,8 @@ import (
 var (
 	// ErrInvalid reports a request or a filter with an empty or bad field.
 	ErrInvalid = errors.New("source request is not valid")
-	// ErrTooLarge reports a filter text above MaxFilterJSON bytes.
-	ErrTooLarge = errors.New("source is too large")
+	// ErrFilterTooLarge reports a filter text above MaxFilterJSON bytes.
+	ErrFilterTooLarge = errors.New("source filter is too large")
 )
 
 // Filter is the source filter of a namespace: which submodules and which
