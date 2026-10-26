@@ -678,13 +678,12 @@ func checkBlobPurge(t *testing.T, s any, tool, unitID string, ns namespace.Name)
 	}
 
 	found := blobPurgesOf(t, purges, tool, unitID)
-	if len(found) != 1 || found[0].Namespace != ns || !found[0].PurgedAt.Equal(deletedAt()) {
+	if len(found) != 1 || !found[0].PurgedAt.Equal(deletedAt()) {
 		t.Fatalf("blob purges of %s %s = %+v, want one in %s at %v", tool, unitID, found, ns, deletedAt())
 	}
 
-	// The record carries the ID of the namespace row from the join of the list,
-	// so the sweep deletes the blobs under the prefix of the namespace without
-	// a second read.
+	// The record carries the ID of the namespace row, so the sweep deletes the
+	// blobs under the prefix of the namespace without a read by name.
 	namespaces, ok := storeAs[namespaceReader](s)
 	if !ok {
 		t.Fatalf("store %T cannot read a namespace", s)
@@ -1064,6 +1063,93 @@ func testBlobPurgePages(t *testing.T, s Store) {
 	checkBlobPurgePages(t, purges, all)
 }
 
+// namespacePurger is the test hook that deletes a namespace row and keeps the
+// rows that name it, as a purge of a namespace does.
+type namespacePurger interface {
+	PurgeNamespace(ctx context.Context, ns namespace.Name) error
+}
+
+// testBlobPurgeNamespaceID proves that a blob purge record holds the ID of the
+// namespace that held the unit, not its name. In each case a stack is purged
+// in a namespace, and the case then changes the namespace row. The sweep reads
+// the record by the ID only, so a new namespace of the same name must not get
+// the record.
+func testBlobPurgeNamespaceID(t *testing.T, s Store) {
+	t.Helper()
+
+	purges, ok := storeAs[inventory.BlobPurges](s)
+	if !ok {
+		t.Fatal("store does not implement inventory.BlobPurges, which the retention sweep needs")
+	}
+
+	purger, ok := storeAs[namespacePurger](s)
+	if !ok {
+		t.Fatalf("store %T has no PurgeNamespace test hook, which the namespace made again case needs", s)
+	}
+
+	cases := []struct {
+		name string
+		// recreate says whether the case deletes the namespace and creates
+		// another one of the same name.
+		recreate bool
+	}{
+		{name: "the record holds the ID of the live namespace", recreate: false},
+		{name: "a namespace made again under the same name does not get the record", recreate: true},
+	}
+
+	for i, tc := range cases {
+		name := fmt.Sprintf("purgeid%d", i)
+		ns := purgeOneStack(t, s, tc.name, name)
+
+		if tc.recreate {
+			if err := purger.PurgeNamespace(t.Context(), ns.Name); err != nil {
+				t.Fatalf("%s: purge namespace: %v", tc.name, err)
+			}
+
+			if again := newNamespace(t, s, name); again.ID == ns.ID {
+				t.Fatalf("%s: the new namespace has the old ID %s", tc.name, again.ID)
+			}
+		}
+
+		found := blobPurgesOf(t, purges, "pulumi", ns.unitID)
+		if len(found) != 1 || found[0].NamespaceID != ns.ID {
+			t.Fatalf("%s: blob purges = %+v, want one with namespace ID %s", tc.name, found, ns.ID)
+		}
+	}
+}
+
+// purgedIn is a namespace and the ID of the unit that a case purged in it.
+type purgedIn struct {
+	namespace.Namespace
+
+	unitID string
+}
+
+// purgeOneStack makes the namespace name, then creates, deletes and purges one
+// stack in it.
+func purgeOneStack(t *testing.T, s Store, label, name string) purgedIn {
+	t.Helper()
+
+	ns := newNamespace(t, s, name)
+
+	st := newStack(ns.Name, "web", "s")
+	if err := s.CreateStack(t.Context(), st, ns.Fence()); err != nil {
+		t.Fatalf("%s: create stack: %v", label, err)
+	}
+
+	d := inventory.Deletion{Entry: deleteEntry(ns.Name), PurgeAfter: purgeAt()}
+	if err := s.DeleteStack(t.Context(), st.Ref, ns.Fence(), stack.EmptyGuard(), d); err != nil {
+		t.Fatalf("%s: delete stack: %v", label, err)
+	}
+
+	purgeErr := s.PurgeStack(t.Context(), st.ID, ns.Fence(), time.Time{}, lifecycleEntry(ns.Name, "unit:purge"))
+	if purgeErr != nil {
+		t.Fatalf("%s: purge stack: %v", label, purgeErr)
+	}
+
+	return purgedIn{Namespace: ns, unitID: st.ID.String()}
+}
+
 // checkBlobPurgePages walks the blob purge records in pages of two by the
 // cursor and checks each page against inventory.PageBlobPurges over all.
 func checkBlobPurgePages(t *testing.T, purges inventory.BlobPurges, all []inventory.BlobPurge) {
@@ -1107,7 +1193,7 @@ func sameBlobPurges(a, b []inventory.BlobPurge) bool {
 	}
 
 	for i := range a {
-		if a[i].Tool != b[i].Tool || a[i].UnitID != b[i].UnitID || a[i].Namespace != b[i].Namespace ||
+		if a[i].Tool != b[i].Tool || a[i].UnitID != b[i].UnitID || a[i].NamespaceID != b[i].NamespaceID ||
 			!a[i].PurgedAt.Equal(b[i].PurgedAt) {
 			return false
 		}

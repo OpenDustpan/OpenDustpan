@@ -233,3 +233,18 @@ func (s *Store) UnitNames(
 
 	return inventory.NamesAt(changesOf(ns, rows), tool, unitID, at), nil
 }
+
+// namespaceID returns the stable ID of the namespace called ns, and false
+// when no such namespace exists.
+func namespaceID(ctx context.Context, q *db.Queries, ns namespace.Name) (string, bool, error) {
+	id, err := q.GetNamespaceID(ctx, ns.String())
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", false, nil
+	}
+
+	if err != nil {
+		return "", false, fmt.Errorf("select namespace ID: %w", err)
+	}
+
+	return id, true, nil
+}

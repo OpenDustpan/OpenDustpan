@@ -80,6 +80,8 @@ jobs:
         with:
           version: v2.15.0
           skip-cache: ${{ startsWith(runner.name, 'github-actions-runner') }}
+      - name: No check reads a variable that a parallel subtest writes
+        run: make subtestcheck
       # The journal recording build needs a second lint run, because some
       # files are left out of that build and one run cannot hold both. The
       # make target holds the build tag, so this file never names it and the

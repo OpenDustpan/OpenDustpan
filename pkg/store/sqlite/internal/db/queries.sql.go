@@ -7469,16 +7469,16 @@ func (q *Queries) InsertAuditEntry(ctx context.Context, arg InsertAuditEntryPara
 }
 
 const insertBlobPurge = `-- name: InsertBlobPurge :exec
-INSERT INTO blob_purges (tool, unit_id, namespace, purged_at_ms)
+INSERT INTO blob_purges (tool, unit_id, namespace_id, purged_at_ms)
 VALUES (?, ?, ?, ?)
 ON CONFLICT (tool, unit_id) DO NOTHING
 `
 
 type InsertBlobPurgeParams struct {
-	Tool       string
-	UnitID     string
-	Namespace  string
-	PurgedAtMs int64
+	Tool        string
+	UnitID      string
+	NamespaceID string
+	PurgedAtMs  int64
 }
 
 // Records a purged unit whose blobs may still exist (ADR 47). A second
@@ -7487,7 +7487,7 @@ func (q *Queries) InsertBlobPurge(ctx context.Context, arg InsertBlobPurgeParams
 	_, err := q.db.ExecContext(ctx, insertBlobPurge,
 		arg.Tool,
 		arg.UnitID,
-		arg.Namespace,
+		arg.NamespaceID,
 		arg.PurgedAtMs,
 	)
 	return err
@@ -9558,9 +9558,8 @@ func (q *Queries) ListBackups(ctx context.Context) ([]Backup, error) {
 }
 
 const listBlobPurges = `-- name: ListBlobPurges :many
-SELECT bp.tool, bp.unit_id, bp.namespace, COALESCE(n.id, '') AS namespace_id, bp.purged_at_ms
-FROM blob_purges AS bp
-LEFT JOIN namespaces AS n ON n.name = bp.namespace
+SELECT tool, unit_id, namespace_id, purged_at_ms
+FROM blob_purges
 ORDER BY purged_at_ms, tool, unit_id
 LIMIT ?
 `
@@ -9568,12 +9567,12 @@ LIMIT ?
 type ListBlobPurgesRow struct {
 	Tool        string
 	UnitID      string
-	Namespace   string
 	NamespaceID string
 	PurgedAtMs  int64
 }
 
-// The oldest rows first, so the sweep finishes the oldest purges first.
+// The oldest rows first, so the sweep finishes the oldest purges first. The
+// record holds the namespace ID, so the list never joins by name.
 func (q *Queries) ListBlobPurges(ctx context.Context, limit int64) ([]ListBlobPurgesRow, error) {
 	rows, err := q.db.QueryContext(ctx, listBlobPurges, limit)
 	if err != nil {
@@ -9586,7 +9585,6 @@ func (q *Queries) ListBlobPurges(ctx context.Context, limit int64) ([]ListBlobPu
 		if err := rows.Scan(
 			&i.Tool,
 			&i.UnitID,
-			&i.Namespace,
 			&i.NamespaceID,
 			&i.PurgedAtMs,
 		); err != nil {
@@ -9604,9 +9602,8 @@ func (q *Queries) ListBlobPurges(ctx context.Context, limit int64) ([]ListBlobPu
 }
 
 const listBlobPurgesAfter = `-- name: ListBlobPurgesAfter :many
-SELECT bp.tool, bp.unit_id, bp.namespace, COALESCE(n.id, '') AS namespace_id, bp.purged_at_ms
-FROM blob_purges AS bp
-LEFT JOIN namespaces AS n ON n.name = bp.namespace
+SELECT tool, unit_id, namespace_id, purged_at_ms
+FROM blob_purges
 WHERE purged_at_ms >= ?1
   AND (purged_at_ms > ?1
     OR (purged_at_ms = ?1 AND tool > ?2)
@@ -9625,7 +9622,6 @@ type ListBlobPurgesAfterParams struct {
 type ListBlobPurgesAfterRow struct {
 	Tool        string
 	UnitID      string
-	Namespace   string
 	NamespaceID string
 	PurgedAtMs  int64
 }
@@ -9649,7 +9645,6 @@ func (q *Queries) ListBlobPurgesAfter(ctx context.Context, arg ListBlobPurgesAft
 		if err := rows.Scan(
 			&i.Tool,
 			&i.UnitID,
-			&i.Namespace,
 			&i.NamespaceID,
 			&i.PurgedAtMs,
 		); err != nil {

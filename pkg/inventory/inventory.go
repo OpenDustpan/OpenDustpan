@@ -208,10 +208,11 @@ type Lifecycle interface {
 // (Sweeper) finishes the record: it deletes the blobs again after
 // BlobPurgeGrace, which is longer than any save.
 type BlobPurge struct {
-	PurgedAt  time.Time
-	Namespace namespace.Name
-	// NamespaceID is the ID of the namespace row, which the store joins in the
-	// same read. It is empty when the row is gone.
+	PurgedAt time.Time
+	// NamespaceID is the ID of the namespace that held the unit when the purge
+	// wrote the record. The store keeps the ID, never the name, because a name
+	// can come back for another namespace. It is empty only for a record that
+	// an upgrade could not match to a namespace.
 	NamespaceID namespace.ID
 	Tool        string
 	UnitID      string
