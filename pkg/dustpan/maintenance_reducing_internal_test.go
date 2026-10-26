@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"opendustpan.org/opendustpan/pkg/maintenance"
@@ -50,6 +51,32 @@ func TestIsReducingRunnerRoute(t *testing.T) {
 
 			if got := isReducingRunnerRoute(routes, req); got != tc.want {
 				t.Fatalf("isReducingRunnerRoute(%s %s) = %v, want %v", tc.method, tc.path, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestReducingRunnerRoutesFollowTheList proves that the gate reads the list:
+// each entry under the runner prefix passes with its method and a filled
+// pattern, and no entry of another API passes.
+func TestReducingRunnerRoutesFollowTheList(t *testing.T) {
+	t.Parallel()
+
+	routes := newReducingRunnerRoutes()
+	fill := strings.NewReplacer("{namespace}", "acme", "{runner}", "rn-1", "{pool}", "pool-1", "{id}", "rjt-1",
+		"{principal}", "p-1", "{collection}", "c-1")
+
+	for _, entry := range maintenance.ReducingRoutes() {
+		want := strings.HasPrefix(entry.Pattern, runnerAPIPrefix)
+
+		t.Run(entry.Method+" "+entry.Pattern, func(t *testing.T) {
+			t.Parallel()
+
+			req := httptest.NewRequestWithContext(t.Context(), entry.Method, "/", nil)
+			req.URL.Path = fill.Replace(entry.Pattern)
+
+			if got := isReducingRunnerRoute(routes, req); got != want {
+				t.Fatalf("gate passes %s %s = %v, want %v", entry.Method, req.URL.Path, got, want)
 			}
 		})
 	}
