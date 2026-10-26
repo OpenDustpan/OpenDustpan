@@ -1,14 +1,13 @@
 # The error paths of internal/api/server that answer without a code of the
 # catalog. This list only shrinks: give a path a code, remove its line and
 # lower the limit. A new error path never goes on this list.
-limit 151
+limit 114
 Handler.approveAuditChain: errorResponse{}
 Handler.getAuditChain: errorResponse{}
 Handler.sweepDeletedUnits: errorResponse{}
 Handler.sweepDeletedUnits: inventory.ErrSweepRunning
 Handler.writeEnterError: enterRefusedResponse{}
 Handler.writeError: errorResponse{}
-Handler.writeError: reauthenticateResponse{}
 classifyAccess: access.ErrAlreadyExists
 classifyAccess: access.ErrBuiltIn
 classifyAccess: access.ErrCollectionReview
@@ -80,24 +79,6 @@ classifyMaintenance: audit.ErrNoChainChange
 classifyMaintenance: default
 classifyNamespace: default
 classifyNamespace: namespace.ErrNoPaging
-classifyPrincipal: access.ErrLastSiteAdministrator
-classifyPrincipal: default
-classifyPrincipal: errBodyTooLarge
-classifyPrincipal: errGroupBody
-classifyPrincipal: errGroupChangeBody
-classifyPrincipal: errMemberBody
-classifyPrincipal: errNamespacePrincipalBody
-classifyPrincipal: errNoPrincipalStore
-classifyPrincipal: errPageQuery
-classifyPrincipal: errPrincipalBody
-classifyPrincipal: errPrincipalChangeBody
-classifyPrincipal: principal.ErrAlreadyExists
-classifyPrincipal: principal.ErrDisabled
-classifyPrincipal: principal.ErrInvalid
-classifyPrincipal: principal.ErrManagedByDirectory
-classifyPrincipal: principal.ErrNotDisabled
-classifyPrincipal: principal.ErrNotFound
-classifyPrincipal: principal.ErrReservedSubject
 classifyProviders: default
 classifyProviders: errProviderChangeBody
 classifyProviders: errProviderCreateBody
@@ -134,22 +115,4 @@ classifySignIn: errSignInFailed
 classifySignIn: errSignInRefused
 classifySignIn: errUnknownProvider
 classifySignIn: session.ErrEnded
-classifyToken: accesstoken.ErrAlreadyExists
-classifyToken: accesstoken.ErrEnded
-classifyToken: accesstoken.ErrInvalid
-classifyToken: accesstoken.ErrNoOwnPrincipal
-classifyToken: accesstoken.ErrNoTokenForKind
-classifyToken: accesstoken.ErrNotFound
-classifyToken: accesstoken.ErrPrincipalNotFound
-classifyToken: accesstoken.ErrSignInRequired
-classifyToken: accesstoken.ErrWrongKind
-classifyToken: default
-classifyToken: errBreakGlassGone
-classifyToken: errNoTokenStore
-classifyToken: errPolicyBody
-classifyToken: errPrincipalTokenBody
-classifyToken: errRotateBody
-classifyToken: errTokenBody
-classifyToken: errTokenQuery
-classifyToken: identity.ErrRateLimited
 classifyWorker: ErrNoWorker

@@ -19,7 +19,9 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"strconv"
 
+	"opendustpan.org/opendustpan/internal/api/problem"
 	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/maintenance"
@@ -153,7 +155,7 @@ func (h *Handler) writeEnterError(ctx context.Context, w http.ResponseWriter, er
 	// Defense in depth: writeError sets the same header for the same errors;
 	// this answer uses its own writer, so it sets the header here too.
 	if errors.Is(err, maintenance.ErrInMaintenance) || errors.Is(err, maintenance.ErrBusy) {
-		w.Header().Set("Retry-After", maintenanceRetryAfter)
+		w.Header().Set("Retry-After", strconv.FormatInt(problem.RetryAfterSeconds(maintenanceRetryAfter), 10))
 	}
 
 	if f.code == "" {

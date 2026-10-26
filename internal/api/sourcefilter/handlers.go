@@ -13,9 +13,9 @@ import (
 	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/internal/requestid"
 	"opendustpan.org/opendustpan/internal/sessionauth"
-	"opendustpan.org/opendustpan/internal/source"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/source"
 )
 
 // maxBodyBytes bounds the body of a change. A filter has at most 128 URL
@@ -213,9 +213,9 @@ func classify(err error) (problem.Problem, bool) {
 		return problem.RefusedText(
 			problem.Detail(err, source.ErrInvalid), http.StatusBadRequest, errcode.SourceFilterInvalid,
 		), true
-	case errors.Is(err, source.ErrTooLarge):
+	case errors.Is(err, source.ErrFilterTooLarge):
 		return problem.RefusedText(
-			problem.Detail(err, source.ErrTooLarge), http.StatusBadRequest, errcode.SourceFilterInvalid,
+			problem.Detail(err, source.ErrFilterTooLarge), http.StatusBadRequest, errcode.SourceFilterInvalid,
 		), true
 	}
 

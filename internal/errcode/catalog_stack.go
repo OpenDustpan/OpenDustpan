@@ -60,7 +60,7 @@ func stackSpecs() []Spec {
 		{
 			Code:    StackRevealPathTooLong,
 			Meaning: "the value path of the reveal request is longer than maxBytes bytes",
-			Args:    []Arg{{Name: "maxBytes", Kind: KindQuantity}},
+			Args:    []Arg{{Name: argMaxBytes, Kind: KindQuantity}},
 		},
 	}
 }

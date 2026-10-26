@@ -305,7 +305,7 @@ func pgCopyCollectionTables() []pgCopyTable {
 		},
 		{
 			table:   "blob_purges",
-			columns: []string{pgColTool, pgColUnitID, pgColNamespace, "purged_at_ms"},
+			columns: []string{pgColTool, pgColUnitID, pgColNamespaceID, "purged_at_ms"},
 			orderBy: []string{pgColTool, pgColUnitID},
 		},
 	}

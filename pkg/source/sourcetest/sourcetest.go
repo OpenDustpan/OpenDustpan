@@ -11,9 +11,9 @@ import (
 	"testing"
 	"time"
 
-	"opendustpan.org/opendustpan/internal/source"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/source"
 )
 
 // Values of the cases.

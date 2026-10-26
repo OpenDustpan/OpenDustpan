@@ -282,10 +282,10 @@ func TestSweepFinishesOnlyOldRecords(t *testing.T) {
 
 	old := sweepNow().Add(-inventory.BlobPurgeGrace - time.Minute)
 	records := []inventory.BlobPurge{
-		{PurgedAt: old, Namespace: "acme", NamespaceID: "ns-acme", Tool: "pulumi", UnitID: "stk-gone"},
-		{PurgedAt: old, Namespace: "acme", NamespaceID: "ns-acme", Tool: "pulumi", UnitID: "stk-stuck"},
+		{PurgedAt: old, NamespaceID: "ns-acme", Tool: "pulumi", UnitID: "stk-gone"},
+		{PurgedAt: old, NamespaceID: "ns-acme", Tool: "pulumi", UnitID: "stk-stuck"},
 		{
-			PurgedAt: sweepNow().Add(-time.Hour), Namespace: "acme", NamespaceID: "ns-acme", Tool: "pulumi",
+			PurgedAt: sweepNow().Add(-time.Hour), NamespaceID: "ns-acme", Tool: "pulumi",
 			UnitID: "stk-young",
 		},
 	}
@@ -335,7 +335,7 @@ func TestSweepCountsAFailedFinish(t *testing.T) {
 		t,
 		nil,
 		[]inventory.BlobPurge{
-			{PurgedAt: old, Namespace: "acme", NamespaceID: "ns-acme", Tool: "pulumi", UnitID: "stk-1"},
+			{PurgedAt: old, NamespaceID: "ns-acme", Tool: "pulumi", UnitID: "stk-1"},
 		},
 	)
 	f.records.finishErr = fmt.Errorf("finish: %w", namespace.ErrUnavailable)
@@ -366,7 +366,7 @@ func TestSweepUnknownTool(t *testing.T) {
 	f := newSweepFixture(
 		t,
 		units,
-		[]inventory.BlobPurge{{PurgedAt: old, Namespace: "acme", NamespaceID: "ns-acme", Tool: "other", UnitID: "x"}},
+		[]inventory.BlobPurge{{PurgedAt: old, NamespaceID: "ns-acme", Tool: "other", UnitID: "x"}},
 	)
 
 	res, err := f.sweeper.Sweep(t.Context(), sweepEntry())
@@ -380,35 +380,51 @@ func TestSweepUnknownTool(t *testing.T) {
 }
 
 // TestSweepRecordWithoutNamespaceHasItsOwnKind proves that a blob purge record
-// whose namespace row is gone (an empty namespace ID) never reaches the tool,
+// with no usable namespace ID (empty, or not an ID) never reaches the tool,
 // stays pending, counts as a failure, and logs the kind "namespace_missing"
 // instead of "store".
 func TestSweepRecordWithoutNamespaceHasItsOwnKind(t *testing.T) {
 	t.Parallel()
 
-	old := sweepNow().Add(-inventory.BlobPurgeGrace - time.Minute)
-	f := newSweepFixture(
-		t,
-		nil,
-		[]inventory.BlobPurge{{PurgedAt: old, Namespace: "gone", NamespaceID: "", Tool: "pulumi", UnitID: "x"}},
-	)
-
-	res, err := f.sweeper.Sweep(t.Context(), sweepEntry())
-	if err != nil {
-		t.Fatalf("sweep: %v", err)
+	cases := []struct {
+		name string
+		id   namespace.ID
+	}{
+		{name: "empty ID", id: ""},
+		{name: "a name in place of an ID", id: "acme"},
+		{name: "a path in place of an ID", id: "ns-../other"},
+		{name: "the prefix alone", id: "ns-"},
 	}
 
-	if res.Failed != 1 || res.PendingBlobPurges != 1 || res.FinishedBlobPurges != 0 {
-		t.Fatalf("sweep = %+v, want one failure and one pending record", res)
-	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 
-	if len(f.tool.deleted) != 0 {
-		t.Fatalf("the tool deleted %v, want no call", f.tool.deleted)
-	}
+			old := sweepNow().Add(-inventory.BlobPurgeGrace - time.Minute)
+			f := newSweepFixture(
+				t,
+				nil,
+				[]inventory.BlobPurge{{PurgedAt: old, NamespaceID: tc.id, Tool: "pulumi", UnitID: "x"}},
+			)
 
-	log := f.log.String()
-	if !strings.Contains(log, "error_kind=namespace_missing") || strings.Contains(log, "error_kind=store") {
-		t.Fatalf("log = %q, want error_kind=namespace_missing", log)
+			res, err := f.sweeper.Sweep(t.Context(), sweepEntry())
+			if err != nil {
+				t.Fatalf("sweep: %v", err)
+			}
+
+			if res.Failed != 1 || res.PendingBlobPurges != 1 || res.FinishedBlobPurges != 0 {
+				t.Fatalf("sweep = %+v, want one failure and one pending record", res)
+			}
+
+			if len(f.tool.deleted) != 0 {
+				t.Fatalf("the tool deleted %v, want no call", f.tool.deleted)
+			}
+
+			log := f.log.String()
+			if !strings.Contains(log, "error_kind=namespace_missing") || strings.Contains(log, "error_kind=store") {
+				t.Fatalf("log = %q, want error_kind=namespace_missing", log)
+			}
+		})
 	}
 }
 
@@ -703,7 +719,6 @@ func TestSweepPagesTheRecords(t *testing.T) {
 			PurgedAt: old.Add(
 				time.Duration(i) * time.Second,
 			),
-			Namespace:   "acme",
 			NamespaceID: "ns-acme",
 			Tool:        "pulumi",
 			UnitID:      fmt.Sprintf("stk-%03d", i),

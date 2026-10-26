@@ -387,7 +387,7 @@ func portableSpec() []PortableTable {
 			Columns: []Column{
 				{Name: portColTool, Kind: KindText},
 				{Name: portColUnitID, Kind: KindText},
-				{Name: portColNamespace, Kind: KindText},
+				{Name: portColNamespaceID, Kind: KindText},
 				{Name: "purged_at_ms", Kind: KindTime},
 			},
 		},

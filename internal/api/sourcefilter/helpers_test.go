@@ -16,10 +16,10 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/api/sourcefilter"
-	"opendustpan.org/opendustpan/internal/source"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/source"
 	"opendustpan.org/opendustpan/pkg/store/sqlite"
 )
 
