@@ -56,6 +56,7 @@ func gated() []errcodetest.Adapter {
 		api("server", []string{
 			"errorResponse", "codedResponse", "codedError", "reauthenticateResponse", "enterRefusedResponse",
 		}, nil),
+		api("sourcefilter", nil, nil),
 		api("tfe", []string{"jsonAPIError", "errorClass", "registryErrors"}, nil),
 		// The package writes no error answer. It is gated with no body type
 		// and no known list, so a new answer in it needs a code.

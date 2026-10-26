@@ -67,6 +67,7 @@ import (
 	"opendustpan.org/opendustpan/internal/requestid"
 	"opendustpan.org/opendustpan/internal/scopeaudit"
 	"opendustpan.org/opendustpan/internal/sessionauth"
+	"opendustpan.org/opendustpan/internal/source"
 	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/accesstoken"
 	"opendustpan.org/opendustpan/pkg/audit"
@@ -265,6 +266,9 @@ type settings struct {
 	// runners are the stores of the runner protocol, or nil without the
 	// protocol. See WithRunners.
 	runners RunnerStores
+	// sourceFilters keeps the source filter of each namespace, or nil without
+	// it. See WithSourceFilters.
+	sourceFilters source.Filters
 	// jobClaimer claims the phases of runner jobs for the runners of the
 	// protocol, or is nil. See WithJobClaimer.
 	jobClaimer job.Claimer
@@ -776,6 +780,7 @@ func defaultSettings() *settings {
 		auditSigner:             nil,
 		durableStore:            nil,
 		runners:                 nil,
+		sourceFilters:           nil,
 		jobClaimer:              nil,
 		components:              AllComponents(),
 		operationLease:          0,
@@ -1248,6 +1253,8 @@ type neutralHandlers struct {
 	drift http.Handler
 	// registry is nil when no registry store is set.
 	registry http.Handler
+	// sourceFilter is nil when no store of the source filter is set.
+	sourceFilter http.Handler
 }
 
 // newNeutralHandlers builds the tool-neutral inventory API, audit API and
@@ -1301,12 +1308,23 @@ func newNeutralHandlers(
 		return neutralHandlers{}, err
 	}
 
+	var sourceFilter http.Handler
+
+	if cfg.sourceFilters != nil {
+		sourceFilter, err = newSourceFilterHandler(svc, cfg, onFailure)
+		if err != nil {
+			return neutralHandlers{}, err
+		}
+	}
+
 	return neutralHandlers{
 		inventory: units, audit: entries, context: contexts, runners: runners, profiles: profiles, sinks: sinks,
 		jobs:     jobAPIs.jobs,
 		triggers: triggers,
 		drift:    jobAPIs.drift,
 		registry: registries,
+
+		sourceFilter: sourceFilter,
 	}, nil
 }
 
@@ -3951,33 +3969,23 @@ func mountAPI(mux *rootMux, a adapters, cfg *settings) error {
 			),
 		)
 	}
+	// The adapters below answer in the shape of the inventory API, with CORS
+	// and the maintenance gate.
+	wrapV1 := func(h http.Handler) http.Handler {
+		return withCORS(withMaintenance(h, a.maintenance, shapeInventory, cfg.logger), cfg.allowedOrigins)
+	}
 	// The paths of the inventory and the context API under /api/dustpan/v1/
 	// reach their own handlers by exact path, so another area can take the
 	// rest of the prefix. The tool adapters are refused in maintenance mode.
-	mountV1(mux, a.inventory, func(h http.Handler) http.Handler {
-		return withCORS(withMaintenance(h, a.maintenance, shapeInventory, cfg.logger), cfg.allowedOrigins)
-	})
-	mountV1(mux, a.context, func(h http.Handler) http.Handler {
-		return withCORS(withMaintenance(h, a.maintenance, shapeInventory, cfg.logger), cfg.allowedOrigins)
-	})
-	mountV1(mux, a.profiles, func(h http.Handler) http.Handler {
-		return withCORS(withMaintenance(h, a.maintenance, shapeInventory, cfg.logger), cfg.allowedOrigins)
-	})
-	mountV1(mux, a.sinks, func(h http.Handler) http.Handler {
-		return withCORS(withMaintenance(h, a.maintenance, shapeInventory, cfg.logger), cfg.allowedOrigins)
-	})
-	mountV1(mux, a.registry, func(h http.Handler) http.Handler {
-		return withCORS(withMaintenance(h, a.maintenance, shapeInventory, cfg.logger), cfg.allowedOrigins)
-	})
-	mountV1(mux, a.jobs, func(h http.Handler) http.Handler {
-		return withCORS(withMaintenance(h, a.maintenance, shapeInventory, cfg.logger), cfg.allowedOrigins)
-	})
-	mountV1(mux, a.triggers, func(h http.Handler) http.Handler {
-		return withCORS(withMaintenance(h, a.maintenance, shapeInventory, cfg.logger), cfg.allowedOrigins)
-	})
-	mountV1(mux, a.drift, func(h http.Handler) http.Handler {
-		return withCORS(withMaintenance(h, a.maintenance, shapeInventory, cfg.logger), cfg.allowedOrigins)
-	})
+	mountV1(mux, a.inventory, wrapV1)
+	mountV1(mux, a.context, wrapV1)
+	mountV1(mux, a.profiles, wrapV1)
+	mountV1(mux, a.sinks, wrapV1)
+	mountV1(mux, a.registry, wrapV1)
+	mountV1(mux, a.jobs, wrapV1)
+	mountV1(mux, a.triggers, wrapV1)
+	mountV1(mux, a.drift, wrapV1)
+	mountV1(mux, a.sourceFilter, wrapV1)
 	// The capabilities document and the dev sign-in belong to the
 	// installation API, so they stay available in maintenance mode like the
 	// rest of it.
