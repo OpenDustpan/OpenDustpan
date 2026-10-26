@@ -1,18 +1,21 @@
 ---
 rfc: 16
-title: Egress proxy for jobs, with request rules and credential injection
+title: Job proxy, with request rules and credential injection
 status: draft
 created: 2026-10-10
 ---
 
-# RFC 16. Egress proxy for jobs, with request rules and credential injection
+# RFC 16. Job proxy, with request rules and credential injection
 
-Status: draft. The names and where the proxy runs are proposals. How people
-write rules, and how policies (RFC 13) apply to them, is to be decided.
+Status: draft. The owner decided two points on 2026-10-18: a research spike
+comes first, and the names are "job proxy", "outbound guard" and "upstream
+proxy" (see `GLOSSARY.md`). Where the proxy runs is a proposal. How people
+write rules, and how policies (RFC 13) apply to them, is to be decided. The
+section "Prototype findings" gives the result of the spike.
 
 **This is an escape hatch, not a default.** When a product has native RBAC or
 ABAC and short-lived credentials (OIDC, dynamic credentials), use those first:
-they are safer than any proxy. The egress proxy is for the products that do
+they are safer than any proxy. The job proxy is for the products that do
 not have them. Teams will configure those products with IaC anyway, even if
 it means pasting a root token somewhere. The proxy makes that safer. It does
 not make it safe.
@@ -59,7 +62,7 @@ and the console should say so where a team turns the proxy on.
 
 ## Proposal
 
-An **egress proxy** is an opt-in feature for a unit. It sits between a job and the network. The job can reach only
+A **job proxy** is an opt-in feature for a unit. It sits between a job and the network. The job can reach only
 the proxy, and trusts the proxy's CA for that job. The proxy:
 
 1. allows a request only when an **egress rule** for this unit and this
@@ -221,11 +224,15 @@ and it should be pleasant to write, read and debug. Candidates and ideas:
 
 A path rule is an access control, so it must not be easy to get around:
 
-- **Normalize first.** The proxy decodes and normalizes the path before it
-  matches: percent-encoding, `.` and `..` segments, repeated slashes, and
-  case where the product ignores case. It denies a path that it cannot
-  normalize. It then sends the normalized path, not the original, so that the
-  product sees what the rule checked.
+- **Refuse a path that is not canonical.** The first draft said "normalize,
+  then match, then send the normalized path". The spike recommends a
+  refusal instead (see "Prototype findings"). The proxy refuses a dot
+  segment (also when encoded), an empty segment, an encoded `/` or `\`,
+  `%00`, `%25`, `;`, and a percent-encoding of a character that needs no
+  encoding. So each allowed path has one spelling, and the proxy sends the
+  path that it checked with no change. Case stays exact: a rule allows
+  `/api`, and `/API` matches no rule. Because rules only allow, a case
+  that the rule does not name fails closed.
 - **Templates fill one segment.** A template value is encoded as exactly one
   path segment. An input like `team-a/../team-b` or `team-a/**` cannot widen
   the pattern.
@@ -255,7 +262,7 @@ The proxy records each request: job, unit reference, operation, method, host,
 normalized path, status, the rule that allowed it or "denied". It never
 records bodies or credential values. The console shows these next to the job
 log, and a denied request says which host and path, and that no rule matched.
-A failed plan must say "blocked by the egress proxy", not only show a
+A failed plan must say "blocked by the job proxy", not only show a
 provider timeout.
 
 ## Where the proxy runs
@@ -309,34 +316,268 @@ but it holds admin keys and carries production traffic.
    the rules. Less code of our own, but a large component to ship, and the
    normalization and template rules above must still hold.
 
-## Proposed glossary entries
+## Glossary
 
-**Egress proxy**:
-The proxy between a job and the network. It applies the job's egress rules
-and adds credentials to allowed requests.
-_Avoid_: Gateway (alone), firewall, sidecar (as the name of the feature)
+The owner decided the names "job proxy", "outbound guard" and "upstream
+proxy" on 2026-10-18. `GLOSSARY.md` holds the three entries. Each says
+"Avoid: egress proxy". This RFC used "egress proxy" before that decision.
+
+Two names stay proposals:
 
 **Egress rule**:
 A rule that allows requests from a job, for some units and operations, by
 host, method and path, and can name the credential to add.
 _Avoid_: ACL, network policy (which is Kubernetes' word), permission
 
+The word "egress" now names the server's own outbound rules (the outbound
+guard, `pkg/egress`) and the egress allowlist of model calls. A rule of the
+job proxy with the same word can cause confusion. "Proxy rule" is one
+option (see "Open questions").
+
 **Release mode**:
 Where a credential source in a profile delivers its credential: to the job,
-or to the egress proxy only.
+or to the job proxy only.
 _Avoid_: Exposure, visibility
 
+## Prototype findings
+
+The spike of 2026-10-26 built a throwaway job proxy in Go with the standard
+library only (about 940 lines with its test program), outside the repository. It used fake
+credentials only. A test program started a fake product with one admin
+token and no RBAC, a fake upstream proxy that accepts CONNECT only and
+needs a proxy credential, and a job client that sends a placeholder token.
+Each result below comes from one run on loopback. The prototype is not
+code to keep. It answers the questions below, and nothing more.
+
+### What the prototype did
+
+- A forward proxy. For a CONNECT to a host that has a rule, it ends the
+  TLS of the job with a leaf certificate from a per-job CA. It then reads
+  each request, checks it against the rules, deletes `Authorization`,
+  `Proxy-Authorization` and `Cookie`, adds the credential and sends the
+  request to the real host with its own TLS.
+- A CONNECT to a host with no rule gets 403 before any TLS.
+- A host-only tunnel for hosts on a list: no TLS end, no request check and
+  no credential.
+- The endpoint mode: a loopback port that takes plain HTTP and sends each
+  request with TLS to one fixed host.
+- A chain to an upstream proxy with CONNECT and a proxy credential.
+- A stand-in for the outbound guard on the resolved address of each
+  connection that the proxy opens.
+- An audit record for each request: mode, method, host, path, rule,
+  decision, reason and status. It holds no header, no body and no
+  credential.
+
+### Results
+
+| Case | Result |
+|---|---|
+| `GET` of the team's own folder, plan rule | 200. The product got the real token, not the placeholder. |
+| `DELETE` of the same folder, plan rule | 403, no rule matched |
+| `GET` of the folder of another team | 403 |
+| `**` below the team's own folder | 200 |
+| CONNECT to a host with no rule | 403 at CONNECT, no TLS |
+| `..`, `%2e%2e`, `%2F`, `//`, `;`, `team-%61` in the path | 400, each one refused before the match |
+| `/API/...` where the rule says `/api/...` | 403 (fails closed) |
+| `Host` header that names another host than CONNECT | 403 |
+| SNI that names another host than CONNECT | TLS handshake refused |
+| Template value `team-a/../team-b` | refused when the rule renders |
+| Redirect to another host, which the client follows | 403 at the new CONNECT |
+| Client that does not trust the job CA | TLS error in the client |
+| An allowed path that echoes the `Authorization` header in its body | The job read the real token. With a response scan, the proxy cut the stream. |
+| Plain `http` to a host with a credential rule | 403, unless the rule opts in |
+| Rule host that resolves to a link-local address | 502, the outbound guard refused it |
+| Real host with a certificate that the proxy does not trust | 502 |
+| Host-only tunnel | The job got the product's own certificate. The product got the placeholder and answered 401. Each method and path passed. |
+| Endpoint mode | 200 over plain HTTP on loopback, with no CA in the job |
+| HTTP/2 | h2 from the job to the proxy and from the proxy to the product |
+| Chain through the upstream proxy | 200, one CONNECT at the upstream proxy |
+| Link-local rule host, through the upstream proxy | The upstream proxy opened the connection. Only the certificate check stopped the request. |
+| Upstream proxy refuses the proxy credential | 502 |
+| Upstream proxy down | 502 |
+| A credential in an audit record | none in 1130 records |
+
+Time on loopback (500 sequential requests with keep-alive, one run, not a
+benchmark):
+
+| Path | p50 | p99 |
+|---|---|---|
+| Job to product, direct | 113 µs | 513 µs |
+| Job to job proxy to product | 197 µs | 740 µs |
+| Job to job proxy to upstream proxy to product | 188 µs | 677 µs |
+
+A leaf certificate (ECDSA P-256) took 0.2 to 0.45 ms to make, once for each
+host in a job. A new TLS connection for each request took a p50 of 1.7 ms
+direct and 2.1 ms through the proxy. Against a product on a real network,
+the proxy adds less than 1 ms to a request in this run.
+
+### Findings on the rule shape
+
+1. **Host, method and path cover the example of this RFC.** The rules
+   allowed the team's folder and denied the rest with three fields and
+   two wildcards (`*` and `**`). No case of the spike needed "or" or "not"
+   inside one rule. A list of allow rules gave "or".
+2. **Refuse, do not normalize.** Normalization needs a choice for each
+   product (case, `;` parameters, encoded slashes). A refusal of each
+   path that is not canonical is shorter, and it sends the path that the
+   rule checked with no change. A product that needs one of the refused
+   forms needs a rule option for that form. No case of the spike needed
+   one.
+3. **Render templates when the job starts, not at each request.** A
+   template value that is not exactly one path segment fails the render.
+   The job then fails before it starts, with the rule and the variable in
+   the error. A failure at each request would show only as a denied
+   request in the middle of a plan.
+4. **Bind the request to the CONNECT host.** The proxy checks three names:
+   the CONNECT host, the SNI and the `Host` header (`:authority` in h2).
+   If they differ, the proxy refuses. Else a job can open a tunnel to an
+   allowed host and send a request for another host on the same address.
+5. **A rule that allows a path that echoes headers gives the credential to
+   the job.** Rules cannot know which paths of a product do this. A scan of
+   the response for the plain value of the credential found the echo in
+   the spike. A product that encodes the value (base64, JSON escape)
+   passes the scan. The scan is a second layer, not a guarantee.
+
+### Findings on credential injection
+
+The spike compared four ways:
+
+| Way | Injection for HTTPS | CA in the job | Changes to the tool | Notes |
+|---|---|---|---|---|
+| A. CONNECT and TLS end (forward mode) | Yes | Yes, a per-job CA | `HTTPS_PROXY` and the CA path | Works for each host and each client that honors `HTTPS_PROXY`. Pinned certificates fail. |
+| B. Endpoint mode | Yes | No | The provider's endpoint is the loopback port | Plain HTTP only inside the job's network namespace. A product that sends absolute URLs (pagination links, redirects) sends the job to the real host, which then needs way A or fails closed. |
+| C. Injection for plain HTTP only | Only for `http` | No | None | The credential crosses the network in clear text. The spike refuses it unless a rule opts in. |
+| D. Host-only tunnel | No | No | `HTTPS_PROXY` | No injection is possible: the proxy sees no request. Each method and path passes. It gives an allowlist of hosts, nothing more. |
+
+So "inject only for hosts on an allowlist, with no TLS end" is not
+possible for HTTPS. A proxy can add a header only to a request that it can
+read. The useful mix is: way A for hosts with a credential or a path rule,
+way D for hosts with a host rule only (registries, mirrors), and way B
+where a provider handles a proxy poorly.
+
+### Findings on the upstream proxy
+
+1. **The chain works with CONNECT.** The job proxy opens its outbound
+   connection through the upstream proxy and sends the proxy credential in
+   `Proxy-Authorization`. The upstream proxy sees one CONNECT for each
+   host. It sees no request, no path and no credential of the product.
+2. **The outbound guard then sees only the upstream proxy.** With a chain,
+   the job proxy resolves and checks the address of the upstream proxy,
+   not of the real host. In the spike, a rule host that resolved to a
+   link-local address passed the job proxy, and the upstream proxy opened
+   the connection. The job proxy must therefore also check the resolved
+   address of the rule host before it sends the CONNECT, and must say in
+   its documentation that the upstream proxy applies its own rules to the
+   final address. This check alone does not stop a DNS answer that
+   changes between the two lookups. The upstream proxy is the only layer
+   that sees the final address.
+3. **The proxy credential of the upstream proxy is a secret of the job
+   proxy.** It must follow the same rules as the product credential: never
+   in a log, never in an error text, never in the job. The `net/http`
+   transport of Go puts it in the URL of the proxy, so an error text that
+   prints the URL can leak it. The spike classified errors into a fixed
+   set of reasons and recorded no error text.
+4. **The tool's own `HTTPS_PROXY` is the job proxy, never the upstream
+   proxy.** If the job can reach the upstream proxy, the job can go
+   around the job proxy. The network of the job must reach the job proxy
+   only.
+
+### Failure modes
+
+| Failure | What the job sees | What the record must say |
+|---|---|---|
+| No rule for the host | 403 at CONNECT | Host, "no rule for host" |
+| No rule for the request | 403 with method, host and path | Rule "none", "no rule matched" |
+| Path not canonical | 400 with the reason | The reason, not the path |
+| Client does not trust the job CA | TLS error in the tool, often shown as a provider timeout or an x509 error | "client TLS handshake failed". The console must name the job proxy here. |
+| Client pins a certificate | Same as above | Same as above |
+| Real host certificate not trusted by the proxy | 502 | "endpoint certificate not trusted" |
+| Outbound guard refuses the address | 502 | "outbound guard refused the address" |
+| Upstream proxy refuses the credential, or is down | 502 | A fixed reason, never the URL of the proxy |
+| Credential not available (expired, revoked) | 503 | "credential not available" |
+| Response holds the credential | The stream breaks | "response holds the credential" |
+
+The spike found one trap of the Go standard library: `net/http` speaks
+HTTP/2 only on a `*tls.Conn`. A wrapper around the connection made the
+server answer HTTP/1.1 after ALPN chose h2, and every h2 client
+failed. A production proxy needs a test for each protocol through the TLS
+end.
+
+### Security trade-offs
+
+- **A TLS-ending proxy needs a CA that the job trusts.** The spike used one
+  CA for each job, with a lifetime of the job, a name constraint to the
+  hosts of the job's rules, and a key that only the proxy held. A stolen
+  key then signs certificates only for those hosts and only for that time.
+  A CA for each runner or for each namespace is easier to set up but makes
+  a stolen key worth much more. The job gets the certificate, never the
+  key. Go honored the name constraint in the spike. Other clients may not.
+- **The job must reach the job proxy only.** Without that network rule,
+  every rule is advice. The runner, not the job, sets it (a network
+  namespace, or a NetworkPolicy).
+- **Secrets must never reach logs.** The launcher masks each secret that it
+  got (ADR 134 decision 8). With the release mode "to the job proxy only",
+  the launcher never gets the value, so the launcher cannot mask it. If a
+  product echoes the credential, the value goes to the job log unmasked.
+  The response scan of the job proxy is the layer that covers this case.
+  The audit record holds no header, no body, no credential and no error
+  text from a library.
+- **The job can still use what the rules allow.** The proxy narrows the
+  admin key to the rules. It does not judge intent. This is the limit
+  that the section "Limits" already gives.
+- **The proxy holds the credentials and the CA key.** It must run as its
+  own user, in its own container or process, with no file system or
+  process space in common with the steps.
+- **Plain HTTP with a credential is clear text.** Only endpoint mode on
+  loopback keeps it inside the job's network namespace.
+
+### Recommendation
+
+The RFC recommends the points below. It does not decide them.
+
+1. Build the job proxy in Go with `net/http` and `crypto/tls`, next to each
+   job, as the proposal says. The spike needed no dependency. Generating
+   configuration for Envoy stays an option for later.
+2. Keep plain data rules on host, method and path, with `*`, `**` and
+   templates that render when the job starts. Add conditions with "or" and
+   "not" only when a real case needs them.
+3. Use way A for hosts with a credential or a path rule, way D for hosts
+   with a host rule only, and way B as an opt-in for each rule. Refuse
+   way C unless a rule opts in, and then only to loopback.
+4. Use one CA for each job, with a name constraint and the lifetime of the
+   job. The key stays in the job proxy.
+5. Refuse a path that is not canonical. Do not normalize.
+6. Check the CONNECT host, the SNI and the `Host` header against each
+   other.
+7. Apply the outbound guard to the resolved address of each rule host,
+   also when an upstream proxy carries the connection. Document that the
+   upstream proxy must apply its own rules.
+8. Scan each response of a rule with a credential for the plain value of
+   that credential, and break the stream on a match.
+9. Write each failure as a fixed reason in the audit record, and show
+   "blocked by the job proxy" in the job log with the host and the path.
+
+## Open questions
+
+- The name of a rule of the job proxy: "egress rule", "proxy rule", or
+  another word? "Egress" now names the outbound guard and the egress
+  allowlist.
 ## Open questions
 
 - Which interface for rules: HAProxy-style conditions and actions, plain
   data, a policy engine, or something new? And how do policies apply to
-  rules?
+  rules? The spike recommends plain data for the first version.
 - Which template variables are allowed, and can a template read profile
   values that are secret? (Probably not: a secret in a path ends up in logs.)
 - Our own proxy in Go (`net/http`, `crypto/tls`), or Envoy configured by
-  OpenDustpan?
+  OpenDustpan? The spike recommends our own proxy in Go.
 - Who can read the CA key for TLS interception, and is it per job, per runner
-  or per namespace?
+  or per namespace? The spike recommends one CA for each job, with a name
+  constraint, and a key that only the job proxy holds.
+- Does the response scan also look for common encodings of the credential
+  (base64, JSON escape), and what does it cost for large bodies?
+- How does the job proxy get the proxy credential of the upstream proxy:
+  from the runner pool, or from the profile of the unit?
 - Are client certificates and SPIFFE new credential sources in RFC 5, and who
   decides the SPIFFE ID of a unit: OpenDustpan, or the SPIRE registration?
 - Which body formats come first for body matching, and what is the maximum
