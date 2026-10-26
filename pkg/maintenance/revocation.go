@@ -3,6 +3,7 @@ package maintenance
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"strconv"
 	"time"
 	"unicode"
@@ -83,10 +84,7 @@ type Revocation struct {
 // each row as if those layers failed, and it uses the target only as a bound
 // parameter.
 func (r Revocation) Validate() error {
-	switch r.Kind {
-	case RevokedSession, RevokedToken, RevokedPrincipal, RevokedTempAdmin, RevokedGrant, RevokedJoinToken,
-		RevokedProvider, RevokedRunner:
-	default:
+	if !slices.Contains(Kinds(), r.Kind) {
 		return fmt.Errorf("%w: unknown kind %q", ErrInvalidRevocation, r.Kind)
 	}
 
