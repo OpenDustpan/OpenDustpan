@@ -319,7 +319,45 @@ func (st *parseState) errorSchema() error {
 		return err
 	}
 
-	return checkErrorShape(ptrJoin("/components/schemas", errorSchemaName), st.schemas[errorSchemaName], st)
+	err := checkErrorShape(ptrJoin("/components/schemas", errorSchemaName), st.schemas[errorSchemaName], st)
+	if err != nil {
+		return err
+	}
+
+	return st.errorAnswer()
+}
+
+// errorAnswer reads the union of the error schemas by errorCode, when the
+// description holds it. Its base must be the error schema, because every
+// transport reads that shape.
+func (st *parseState) errorAnswer() error {
+	comps, err := objectAt(st.doc, "", "components")
+	if err != nil {
+		return err
+	}
+
+	all, err := objectAt(comps, "/components", "schemas")
+	if err != nil {
+		return err
+	}
+
+	if _, ok := all[errorAnswerName]; !ok {
+		return nil
+	}
+
+	if err := st.useSchema(ptrJoin("/components/schemas", errorAnswerName), errorAnswerName); err != nil {
+		return err
+	}
+
+	u := st.schemas[errorAnswerName]
+	if u == nil || u.Kind != model.KindUnion || u.Base != errorSchemaName {
+		return invalid(
+			ptrJoin("/components/schemas", errorAnswerName),
+			"the error union must be a union with the error schema as its base",
+		)
+	}
+
+	return nil
 }
 
 // checkErrorShape checks that the error schema has the members that every

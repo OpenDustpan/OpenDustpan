@@ -199,7 +199,7 @@ func controlChars() string {
 }
 
 func typ(kind model.TypeKind) model.Type {
-	return model.Type{Kind: kind, Format: "", Elem: nil, Ref: "", Nullable: false}
+	return model.Type{Kind: kind, Format: "", Elem: nil, Ref: "", Const: "", Nullable: false}
 }
 
 func refTo(name string) model.Type {
@@ -212,12 +212,14 @@ func refTo(name string) model.Type {
 func objectSchema(name, doc string, fields ...model.Field) model.Schema {
 	return model.Schema{
 		Name: name, Kind: model.KindObject, Description: doc, Fields: fields, Values: nil, Open: false, Extra: nil,
+		Discriminator: "", Variants: nil, Base: "", Union: "",
 	}
 }
 
 func enumSchema(name string, values ...string) model.Schema {
 	return model.Schema{
 		Name: name, Kind: model.KindEnum, Description: "", Fields: nil, Values: values, Open: false, Extra: nil,
+		Discriminator: "", Variants: nil, Base: "", Union: "",
 	}
 }
 

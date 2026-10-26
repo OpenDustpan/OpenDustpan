@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { ApiError, decode } from "../dist/index.js";
+import { ApiError, decode, decodeErrorAnswer } from "../dist/index.js";
 
 function invalid(fn, pathPart) {
   assert.throws(fn, (error) => {
@@ -138,4 +138,71 @@ test("ref allows a schema that refers to itself", () => {
   });
   assert.deepEqual(node({ next: { next: null } }, "$"), { next: { next: null } });
   assert.throws(() => node({ next: { next: 1 } }, "$"), /\$\.next\.next/);
+});
+
+test("union picks the decoder of a named value and gives the base the rest", () => {
+  const base = decode.object("Base", { kind: decode.string, n: decode.optional(decode.int64) });
+  const named = decode.object("Named", { kind: decode.literal("a"), n: decode.int64 });
+  const pick = decode.union("Pick", "kind", { a: named }, base);
+  assert.deepEqual(pick({ kind: "a", n: 1 }, "$"), { kind: "a", n: 1 });
+  assert.throws(() => pick({ kind: "a" }, "$"), /\$\.n: the member is missing/);
+  assert.deepEqual(pick({ kind: "b" }, "$"), { kind: "b" });
+  for (const hostile of ["__proto__", "constructor", "toString", "hasOwnProperty"]) {
+    assert.deepEqual(pick({ kind: hostile }, "$"), { kind: hostile });
+  }
+  invalid(() => pick({ kind: 1 }, "$"));
+  invalid(() => pick({}, "$"));
+  for (const bad of [null, [], "a", 1, undefined]) {
+    invalid(() => pick(bad, "$"));
+  }
+});
+
+test("literal accepts its one value and refuses every other value", () => {
+  const one = decode.literal("lock.locked");
+  assert.equal(one("lock.locked", "$"), "lock.locked");
+  for (const bad of ["lock.other", "", "LOCK.LOCKED", null, 1, {}]) {
+    invalid(() => one(bad, "$"));
+  }
+});
+
+const lockedArgs = {
+  holder: "alice",
+  since: "2026-10-22T19:20:44Z",
+  lockedKind: "unit",
+  locked: "u1",
+  refusedKind: "unit",
+  refused: "u1",
+};
+
+test("decodeErrorAnswer gives a code with arguments its own typed shape", () => {
+  const answer = decodeErrorAnswer({
+    code: 423,
+    message: "locked",
+    errorCode: "lock.locked",
+    errorArgs: { ...lockedArgs, extra: 1 },
+  }, "$");
+  assert.deepEqual(answer.errorArgs, lockedArgs);
+  assert.equal(answer.errorCode, "lock.locked");
+});
+
+test("decodeErrorAnswer refuses a known code with malformed arguments", () => {
+  const answer = { code: 423, message: "locked", errorCode: "lock.locked" };
+  invalid(() => decodeErrorAnswer(answer, "$"), "errorArgs");
+  invalid(() => decodeErrorAnswer({ ...answer, errorArgs: {} }, "$"), "holder");
+  invalid(() => decodeErrorAnswer({ ...answer, errorArgs: { ...lockedArgs, holder: 1 } }, "$"), "holder");
+  invalid(() => decodeErrorAnswer({ ...answer, errorArgs: { ...lockedArgs, since: "yesterday" } }, "$"), "since");
+  invalid(() => decodeErrorAnswer({ ...answer, errorArgs: null }, "$"), "errorArgs");
+  invalid(() => decodeErrorAnswer({ ...answer, code: "423", errorArgs: lockedArgs }, "$"), "code");
+});
+
+test("decodeErrorAnswer keeps an unknown code and a code with no arguments as the base shape", () => {
+  const free = { code: 500, message: "m", errorCode: "future.code", errorArgs: { anything: [1, "a"] } };
+  assert.deepEqual(decodeErrorAnswer(free, "$"), free);
+  const none = { code: 404, message: "m", errorCode: "lock.not-locked" };
+  assert.deepEqual(decodeErrorAnswer(none, "$"), none);
+  const plain = { code: 404, message: "m" };
+  assert.deepEqual(decodeErrorAnswer(plain, "$"), plain);
+  const proto = { code: 400, message: "m", errorCode: "__proto__" };
+  assert.deepEqual(decodeErrorAnswer(proto, "$"), proto);
+  invalid(() => decodeErrorAnswer({ code: 400, message: "m", errorCode: 7 }, "$"));
 });

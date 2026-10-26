@@ -15,9 +15,12 @@ const keyDescription = "description"
 func schemaKeys() []string {
 	return []string{
 		"$ref", "type", "properties", "required", "additionalProperties", "items", "enum", "format",
-		keyDescription, "minLength", "maxLength", "anyOf", "oneOf",
+		keyDescription, "minLength", "maxLength", "anyOf", "oneOf", "discriminator",
 	}
 }
+
+// jsonString is the type string of a schema.
+const jsonString = "string"
 
 // schemaRefPrefix starts the one kind of $ref that the parser reads.
 const schemaRefPrefix = "#/components/schemas/"
@@ -93,9 +96,11 @@ func (st *parseState) schemaOfKind(ptr, name string, o object) (*model.Schema, e
 	kind, isString := o["type"].(string)
 
 	switch {
+	case isUnion(o):
+		return st.unionSchema(ptr, name, description, o)
 	case isString && kind == "object" && o["enum"] == nil:
 		return st.objectSchema(ptr, name, description, o)
-	case isString && kind == "string" && o["enum"] != nil:
+	case isString && kind == jsonString && o["enum"] != nil:
 		return enumSchema(ptr, name, description, o)
 	default:
 		return nil, unsupported(ptr, "named schema that is neither an object nor a string enum")
@@ -197,7 +202,7 @@ func (st *parseState) field(ptr, name string, node any) (model.Field, error) {
 
 // anyType is the type of any JSON value.
 func anyType() model.Type {
-	return model.Type{Kind: model.TypeAny, Format: "", Elem: nil, Ref: "", Nullable: false}
+	return model.Type{Kind: model.TypeAny, Format: "", Elem: nil, Ref: "", Const: "", Nullable: false}
 }
 
 // extraType reads additionalProperties of an object: true for any value, or a
@@ -336,7 +341,7 @@ func (st *parseState) namedType(ptr string, ref any, use refUse, nullable bool) 
 		st.recordEnumUse(name, use)
 	}
 
-	return model.Type{Kind: model.TypeRef, Format: "", Elem: nil, Ref: name, Nullable: nullable}, nil
+	return model.Type{Kind: model.TypeRef, Format: "", Elem: nil, Ref: name, Const: "", Nullable: nullable}, nil
 }
 
 // recordEnumUse remembers how a field uses an enum, as an open enum or as a
@@ -473,7 +478,10 @@ func (st *parseState) plainType(ptr string, o object) (model.Type, error) {
 	switch base {
 	case "string", "integer", "number", "boolean":
 		if o["enum"] != nil {
-			return zero, unsupported(ptrJoin(ptr, "enum"), "enum that has no name")
+			t.Const, err = constValue(ptr, base, o)
+			if err != nil {
+				return zero, err
+			}
 		}
 
 		t.Kind = scalarKind(base)
@@ -489,6 +497,31 @@ func (st *parseState) plainType(ptr string, o object) (model.Type, error) {
 	}
 
 	return t, err
+}
+
+// constValue reads a string that has one allowed value and no name. It refuses
+// any other enum that has no name.
+func constValue(ptr, base string, o object) (string, error) {
+	eptr := ptrJoin(ptr, "enum")
+
+	if base != jsonString {
+		return "", unsupported(eptr, "enum that has no name")
+	}
+
+	values, err := stringList(o, ptr, "enum")
+	if err != nil {
+		return "", err
+	}
+
+	if len(values) != 1 {
+		return "", unsupported(eptr, "enum that has no name and not one value")
+	}
+
+	if !enumValueName.MatchString(values[0]) {
+		return "", invalidName(ptrJoin(eptr, "0"), "enum value", values[0])
+	}
+
+	return values[0], nil
 }
 
 // isAnyValue says that a schema holds any JSON value: it has no type and no

@@ -3,8 +3,11 @@
 import { anyValue, array, boolean, dateTime, int64, nullable, number, record, ref, string } from "./decode.js";
 import {
   decodeCreateWidgetRequest,
+  decodeErrorAnswer,
   decodeErrorResponse,
   decodeListWidgetsResponse,
+  decodeLockLockedError,
+  decodeLockLockedErrorArgs,
   decodePatchWidgetRequest,
   decodeSettings,
   decodeState,
@@ -14,8 +17,11 @@ import {
 import { operation } from "./execute.js";
 import type {
   CreateWidgetRequest,
+  ErrorAnswer,
   ErrorResponse,
   ListWidgetsResponse,
+  LockLockedError,
+  LockLockedErrorArgs,
   PatchWidgetRequest,
   Settings,
   State,

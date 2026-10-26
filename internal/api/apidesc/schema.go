@@ -140,7 +140,7 @@ func (r *reflector) reserve(name string, t reflect.Type) error {
 		return fmt.Errorf("%w: schema name %q for %s is not UpperCamelCase", ErrInvalidBody, name, t)
 	}
 
-	if name == errorSchema || name == errorCodeSchema {
+	if name == errorSchema || name == errorCodeSchema || name == ErrorAnswerSchema {
 		return fmt.Errorf("%w: schema name %q belongs to the error shape", ErrInvalidBody, name)
 	}
 

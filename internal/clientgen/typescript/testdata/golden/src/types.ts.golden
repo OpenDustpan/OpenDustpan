@@ -6,6 +6,11 @@ export interface CreateWidgetRequest {
   readonly tags?: ReadonlyArray<string>;
 }
 
+/** An error answer, by errorCode. */
+export type ErrorAnswer =
+  | LockLockedError
+  | ErrorResponse;
+
 export interface ErrorResponse {
   readonly code: number;
   readonly errorArgs?: Readonly<Record<string, unknown>>;
@@ -16,6 +21,18 @@ export interface ErrorResponse {
 export interface ListWidgetsResponse {
   readonly nextPageToken?: string;
   readonly widgets: ReadonlyArray<Widget>;
+}
+
+export interface LockLockedError {
+  readonly code: number;
+  readonly errorArgs: LockLockedErrorArgs;
+  readonly errorCode: "lock.locked";
+  readonly message: string;
+}
+
+export interface LockLockedErrorArgs {
+  readonly holder: string;
+  readonly since: string;
 }
 
 export interface PatchWidgetRequest {

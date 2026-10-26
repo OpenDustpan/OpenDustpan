@@ -107,9 +107,9 @@ func ifMatchConst(m model.IfMatch) string {
 func addParameters(ov *operationView, op *model.Operation) error {
 	pathParams := make(map[string]model.Parameter)
 
-	for _, p := range op.Parameters {
-		if p.In == model.InPath {
-			pathParams[p.Name] = p
+	for i := range op.Parameters {
+		if p := &op.Parameters[i]; p.In == model.InPath {
+			pathParams[p.Name] = *p
 		}
 	}
 
@@ -176,7 +176,9 @@ func pathValue(ident string) string {
 func addQuery(ov *operationView, op *model.Operation) error {
 	seen := map[string]string{}
 
-	for _, p := range op.Parameters {
+	for i := range op.Parameters {
+		p := &op.Parameters[i]
+
 		if p.In != model.InQuery {
 			continue
 		}
@@ -202,7 +204,7 @@ func addQuery(ov *operationView, op *model.Operation) error {
 		tag := p.Name + ",omitempty"
 		ov.QueryFields = append(ov.QueryFields, fieldView{
 			Name: field,
-			Type: typeExpr(p.Type, parameterPresence(p), ""),
+			Type: typeExpr(p.Type, parameterPresence(*p), ""),
 			Tag:  "`json:" + goString(tag) + "`",
 			Doc:  p.Description,
 		})
