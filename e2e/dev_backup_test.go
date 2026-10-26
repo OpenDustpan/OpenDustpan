@@ -219,18 +219,26 @@ type productionServer struct {
 }
 
 // startProduction starts serve on the database, the blob directory and the key
-// file under dir, with the backup target and the extra arguments. It waits
-// until the server is ready.
+// file under dir, with the backup target and the extra arguments. It makes the
+// key file on the first start in dir and reuses it on a later start, because
+// key generate never overwrites a key and the database needs the same key. It
+// waits until the server is ready.
 func startProduction(t *testing.T, bin, dir, targetDir string, extra ...string) *productionServer {
 	t.Helper()
 
 	addr := freeLoopbackAddr(t)
 
-	writeServeKey(t, bin, filepath.Join(dir, "serve.key"))
+	keyFile := filepath.Join(dir, "serve.key")
+
+	if _, err := os.Stat(keyFile); os.IsNotExist(err) {
+		writeServeKey(t, bin, keyFile)
+	} else if err != nil {
+		t.Fatalf("check the key file: %v", err)
+	}
 
 	base := []string{
 		"serve", "--database", "sqlite:" + filepath.Join(dir, "serve.db"),
-		"--key-encryption-key-file", filepath.Join(dir, "serve.key"),
+		"--key-encryption-key-file", keyFile,
 		"--listen", addr, "--blob-dir", filepath.Join(dir, "blobs"), "--backup-target", "dir:" + targetDir,
 	}
 
