@@ -1626,8 +1626,9 @@ func nextBlobKey(prefix string, raw blob.Key) (blob.Key, error) {
 
 // storedAttrs returns the size and MD5 of stored gzip bytes, for backups.
 func storedAttrs(gave []byte) (int64, [md5.Size]byte) {
-	//nolint:gosec // The backup manifest records MD5 of stored bytes, for integrity, not security.
-	return int64(len(gave)), md5.Sum(gave)
+	digest := blob.DigestBytes(gave)
+
+	return digest.Size, digest.MD5
 }
 
 // storedBlobSlack bounds how much larger the stored gzip bytes may be than

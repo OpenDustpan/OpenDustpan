@@ -91,3 +91,33 @@ func TestDigestReaderPassesTheBytes(t *testing.T) {
 		t.Errorf("Digest().Size = %d, want 3", d.Size)
 	}
 }
+
+func TestDigestBytes(t *testing.T) {
+	t.Parallel()
+
+	got := blob.DigestBytes([]byte("sealed bytes"))
+	if got.Size != 12 || hex.EncodeToString(got.MD5[:]) != "409a0970da0518fa46176d372ca3ea99" {
+		t.Errorf(
+			"DigestBytes = %d bytes, MD5 %x; want 12 bytes, MD5 409a0970da0518fa46176d372ca3ea99",
+			got.Size,
+			got.MD5,
+		)
+	}
+
+	h := blob.NewMD5()
+	if h.Size() != len(got.MD5) {
+		t.Errorf("NewMD5().Size() = %d, want %d", h.Size(), len(got.MD5))
+	}
+}
+
+// TestDigestReaderEndOfStream checks that the reader returns io.EOF itself at
+// the end, and wraps another error of its source.
+func TestDigestReaderEndOfStream(t *testing.T) {
+	t.Parallel()
+
+	r := blob.NewDigestReader(strings.NewReader(""))
+	_, err := r.Read(make([]byte, 4))
+	if !errors.Is(err, io.EOF) {
+		t.Errorf("Read at the end = %v, want io.EOF", err)
+	}
+}

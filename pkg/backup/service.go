@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"cmp"
 	"context"
-	"crypto/md5" //nolint:gosec // The manifest records MD5 per ADR 30, for integrity, not security.
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -1127,7 +1126,7 @@ func (s *Service) streamCopy(
 	}
 
 	tracked := &readTracker{reader: reader, err: nil}
-	counter := &md5SizeWriter{hash: md5.New(), size: 0} //nolint:gosec // The manifest records MD5, for integrity.
+	counter := &md5SizeWriter{hash: blob.NewMD5(), size: 0}
 
 	putErr := s.target.Put(ctx, dest, io.TeeReader(tracked, counter))
 	closeErr := reader.Close()
@@ -1209,7 +1208,7 @@ func (s *Service) hashPlainCopy(
 // the size and the checksum. The explicit loop keeps one chunk in flight,
 // whatever the reader implements.
 func countBlob(r io.Reader) (int64, []byte, error) {
-	counter := &md5SizeWriter{hash: md5.New(), size: 0} //nolint:gosec // The manifest records MD5, for integrity.
+	counter := &md5SizeWriter{hash: blob.NewMD5(), size: 0}
 	buf := make([]byte, copyBufferSize)
 
 	for {

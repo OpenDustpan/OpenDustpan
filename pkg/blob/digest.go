@@ -2,6 +2,7 @@ package blob
 
 import (
 	"crypto/md5" //nolint:gosec // The MD5 checks a backup copy of a blob against its source, for integrity, not security.
+	"errors"
 	"fmt"
 	"hash"
 	"io"
@@ -28,10 +29,28 @@ type DigestReader struct {
 	size int64
 }
 
+// NewMD5 returns a new MD5 hash. It is the one place that makes an MD5 hash for
+// the checks of stored bytes.
+func NewMD5() hash.Hash {
+	//nolint:gosec // The MD5 checks a backup copy of a blob against its source, for integrity, not security.
+	return md5.New()
+}
+
 // NewDigestReader returns a DigestReader over src.
 func NewDigestReader(src io.Reader) *DigestReader {
-	//nolint:gosec // The MD5 checks a backup copy of a blob against its source, for integrity, not security.
-	return &DigestReader{src: src, hash: md5.New(), size: 0}
+	return &DigestReader{src: src, hash: NewMD5(), size: 0}
+}
+
+// DigestBytes returns the digest of data.
+func DigestBytes(data []byte) Digest {
+	h := NewMD5()
+	_, _ = h.Write(data) // A hash never fails to write.
+
+	var sum [md5.Size]byte
+
+	copy(sum[:], h.Sum(nil))
+
+	return Digest{Size: int64(len(data)), MD5: sum}
 }
 
 // Read implements io.Reader.
@@ -40,7 +59,14 @@ func (d *DigestReader) Read(p []byte) (int, error) {
 	d.size += int64(n)
 	_, _ = d.hash.Write(p[:n])
 
-	return n, err //nolint:wrapcheck // io.EOF must pass as it is.
+	switch {
+	case err == nil:
+		return n, nil
+	case errors.Is(err, io.EOF):
+		return n, io.EOF
+	default:
+		return n, fmt.Errorf("read blob: %w", err)
+	}
 }
 
 // Digest returns the size and the MD5 of the bytes read so far.
