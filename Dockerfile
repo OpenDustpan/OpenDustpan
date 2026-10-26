@@ -26,6 +26,10 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH="${TARGETARCH}" \
   -o /out/opendustpan ./cmd/opendustpan
 # The license files of the code linked into the binary, for /licenses below.
 RUN ./scripts/third-party-licenses.sh linux "${TARGETARCH}" /out/third_party_licenses
+# The data directory of the image. The final stage has no shell, so this stage
+# makes it. The user nonroot owns it in the final stage, so that opendustpan dev
+# can write its data there with no volume.
+RUN mkdir -p /out/data
 
 # Console stage: static files from a console release tarball. No Node runs
 # here: the tarball is a built release. CONSOLE_URL is https: for a release or
@@ -62,6 +66,13 @@ COPY --from=console /console /console
 # Our license and the licenses of the linked dependencies travel with the image.
 COPY --from=build /src/LICENSE /licenses/LICENSE
 COPY --from=build /out/third_party_licenses /licenses/third_party_licenses
+# The image fails closed: the command below is serve, and serve stops without a
+# key-encryption key. Set DUSTPAN_KEY_ENCRYPTION_KEY or
+# DUSTPAN_KEY_ENCRYPTION_KEY_FILE, or run the trial command:
+#   docker run -p 127.0.0.1:8080:8080 <image> dev --listen 0.0.0.0:8080
+# opendustpan dev keeps its data in the directory dev of DUSTPAN_DATA_DIR.
+COPY --from=build --chown=65532:65532 /out/data /data
+ENV DUSTPAN_DATA_DIR=/data
 VOLUME /data
 # The base image already runs as nonroot. The explicit USER keeps that true if
 # the base changes.

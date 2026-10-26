@@ -16,7 +16,7 @@ import (
 func TestRouteErrorsAreNoStore(t *testing.T) {
 	t.Parallel()
 
-	handler := newEveryModuleServer(t).Handler()
+	handler := startedHandler(t, newEveryModuleServer(t))
 
 	for _, tc := range []struct {
 		name, method, path string

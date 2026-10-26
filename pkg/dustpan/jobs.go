@@ -6,6 +6,7 @@ import (
 
 	jobsapi "opendustpan.org/opendustpan/internal/api/jobs"
 	"opendustpan.org/opendustpan/pkg/job"
+	"opendustpan.org/opendustpan/pkg/runner"
 )
 
 // WithJobStore sets the store of jobs. With it, the server serves the jobs
@@ -31,10 +32,18 @@ func newJobsHandler(svc services, cfg *settings, onFailure func(), starter job.S
 		return nil, err
 	}
 
+	// A nil runner store must stay a nil interface: a typed nil would pass the
+	// nil check of the handler and panic at the first read.
+	var pools runner.PoolReader
+	if cfg.runners != nil {
+		pools = cfg.runners
+	}
+
 	handler, err := jobsapi.NewHandler(jobsapi.Config{
 		Namespaces:     svc.namespaces,
 		Jobs:           cfg.jobStore,
 		Starter:        starter,
+		Pools:          pools,
 		Authenticator:  cfg.authenticator,
 		Authorizer:     cfg.authorizer,
 		Audit:          neutralAudit,

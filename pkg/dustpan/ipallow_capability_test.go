@@ -37,7 +37,7 @@ func serveCap(t *testing.T, srv *dustpan.Server, req capRequest) (int, string) {
 	}
 
 	rec := httptest.NewRecorder()
-	srv.Handler().ServeHTTP(rec, httpReq)
+	startedHandler(t, srv).ServeHTTP(rec, httpReq)
 
 	respBody, err := io.ReadAll(rec.Result().Body)
 	if err != nil {

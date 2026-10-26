@@ -42,6 +42,11 @@ func TestAuditSinks(t *testing.T) {
 	t.Parallel()
 
 	srv := newAuditSinkTestServer(t)
+
+	if err := srv.Start(t.Context()); err != nil {
+		t.Fatalf("start the server: %v", err)
+	}
+
 	ts := httptest.NewServer(srv.Handler())
 
 	t.Cleanup(ts.Close)

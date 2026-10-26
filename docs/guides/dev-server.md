@@ -160,6 +160,20 @@ A clean stop deletes the directory, and with it the state that tracks the cloud 
 A clean stop leaves no file.
 A crash or a kill can leave the directory.
 
+## Run dev in a container
+
+The container image sets `DUSTPAN_DATA_DIR=/data`, so `dev` keeps its data in the directory `dev` of the volume `/data`.
+The default command of the image is `serve`, which stops without a key, so give the command `dev`.
+A container needs a listen address that the port mapping can reach, so pass `--listen 0.0.0.0:8080`.
+Map the port to the loopback address of the host, so that only your machine can reach the server:
+
+```sh
+docker run -p 127.0.0.1:8080:8080 opendustpan:dev dev --listen 0.0.0.0:8080
+```
+
+Add `-v ./trial:/data` to keep the data after the container stops.
+The container user must be able to write to that directory.
+
 `dev` makes the data directory with mode 0700.
 At each start, `dev` refuses to start when the group or others can access the directory, or when another user owns it.
 It does the same for the key file, the token file, the token file of `--admin-token-file` and the files of the certificate.

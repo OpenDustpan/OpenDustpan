@@ -172,7 +172,7 @@ func serveBenchNamespaceRead(b *testing.B, srv *dustpan.Server) int {
 	req.Header.Set("Authorization", "Bearer "+adminToken)
 
 	rec := httptest.NewRecorder()
-	srv.Handler().ServeHTTP(rec, req)
+	startedHandler(b, srv).ServeHTTP(rec, req)
 
 	return rec.Code
 }
