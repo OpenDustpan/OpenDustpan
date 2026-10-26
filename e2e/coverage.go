@@ -845,6 +845,7 @@ func coverageJobRoutes(tb testing.TB, namespaces *namespace.Service) []RouteRef 
 		Namespaces:     namespaces,
 		Jobs:           struct{ job.Store }{nil},
 		Starter:        struct{ job.Starter }{nil},
+		Pools:          nil,
 		Authenticator:  coverageAuthenticator{},
 		Authorizer:     coverageAuthorizer{},
 		Audit:          coverageAuditStore{},
