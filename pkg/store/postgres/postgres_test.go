@@ -1186,6 +1186,8 @@ func (s *backupStore) IdempotencyStore() idempotency.Store { //nolint:ireturn //
 var (
 	_ storetest.Reopener       = (*backupStore)(nil)
 	_ storetest.StagingWitness = (*backupStore)(nil)
+	// Defense in depth: a store with no runner port fails to build here, so the runner round trip cannot be skipped.
+	_ storetest.RunnerSeeder = (*backupStore)(nil)
 )
 
 // openBackup returns a backup store in a fresh schema of the database at base.

@@ -838,6 +838,8 @@ var (
 	_ storetest.Reopener       = (*backupStore)(nil)
 	_ storetest.StagingWitness = (*backupStore)(nil)
 	_ storetest.DurableHolder  = (*backupStore)(nil)
+	// Defense in depth: a store with no runner port fails to build here, so the runner round trip cannot be skipped.
+	_ storetest.RunnerSeeder = (*backupStore)(nil)
 )
 
 // openBackup returns a fresh backup-capable store in a temporary directory,
