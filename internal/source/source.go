@@ -9,7 +9,7 @@
 // launcher reads the pack format.
 //
 // Submodules and Git LFS objects are part of a snapshot only when the
-// source policy of the namespace allows their URL. The server gets them
+// source filter of the namespace allows their URL. The server gets them
 // too.
 //
 // The package is tool-neutral. It never imports a transport, a store
@@ -35,7 +35,7 @@ import (
 )
 
 var (
-	// ErrInvalid reports a request or a policy with an empty or bad field.
+	// ErrInvalid reports a request or a filter with an empty or bad field.
 	ErrInvalid = errors.New("source request is not valid")
 	// ErrNotFound reports a snapshot that the store does not know.
 	ErrNotFound = errors.New("source snapshot not found")
@@ -47,9 +47,9 @@ var (
 	// reason.
 	ErrFetchFailed = errors.New("fetch of the source failed")
 	// ErrNotAllowed reports a submodule or a Git LFS object whose URL the
-	// source policy does not allow. The snapshot does not hold it, and the
-	// fetch fails when the policy says so.
-	ErrNotAllowed = errors.New("the source policy does not allow this URL")
+	// source filter does not allow. The snapshot does not hold it, and the
+	// fetch fails when the filter says so.
+	ErrNotAllowed = errors.New("the source filter does not allow this URL")
 	// ErrCorrupt reports a pack whose hash, objects or commit do not match
 	// the snapshot. The launcher stops before the first step.
 	ErrCorrupt = errors.New("source snapshot does not match its commit")
@@ -61,7 +61,7 @@ var (
 // KindFetch is the durable kind of a fetch. The job store starts one
 // operation of the kind in the transaction of the start of a runner job,
 // with the start key SnapshotKey, so two jobs on one commit with one
-// policy share one fetch.
+// filter share one fetch.
 const KindFetch durable.Kind = "source.fetch"
 
 // Limits of a snapshot. Installation settings can change them later.
@@ -118,11 +118,11 @@ type Request struct {
 	Repository string
 	Commit     string
 	Format     ObjectFormat
-	Policy     Policy
+	Filter     Filter
 }
 
 // Validate returns ErrInvalid for an empty field, a commit that is not
-// valid for the format, or a policy that fails Policy.Validate.
+// valid for the format, or a filter that fails Filter.Validate.
 func (r *Request) Validate() error {
 	switch {
 	case r.Namespace == "" || r.Connection == "" || r.Repository == "":
@@ -130,17 +130,17 @@ func (r *Request) Validate() error {
 	case !ValidCommit(r.Format, r.Commit):
 		return fmt.Errorf("%w: commit %q is not a %s commit ID", ErrInvalid, r.Commit, r.Format)
 	default:
-		return r.Policy.Validate()
+		return r.Filter.Validate()
 	}
 }
 
 // SnapshotKey returns the durable start key of the fetch of r, and the key
 // of its snapshot: the namespace, the connection, the repository, the
-// commit and the hash of the policy. A change of the policy makes a new
+// commit and the hash of the filter. A change of the filter makes a new
 // snapshot.
 func SnapshotKey(r *Request) string {
 	return strings.Join([]string{
-		string(r.Namespace), r.Connection, r.Repository, r.Commit, r.Policy.Hash(),
+		string(r.Namespace), r.Connection, r.Repository, r.Commit, r.Filter.Hash(),
 	}, "/")
 }
 
@@ -220,7 +220,7 @@ type Fetcher interface {
 	// Submodules reads the .gitmodules file and the gitlinks of the commit
 	// of r from the pack in p, and returns the submodules with their URL
 	// and pinned commit. A relative URL resolves against the URL of the
-	// repository of r first (ResolveURL), so the policy matches the URL
+	// repository of r first (ResolveURL), so the filter matches the URL
 	// that the server fetches.
 	//
 	// The adapter that fetches a submodule follows no redirect to another
@@ -336,10 +336,10 @@ func CheckLargeFile(want LargeFile, r io.Reader) error {
 	return nil
 }
 
-// Policy is the source policy of a namespace: which submodules and which
+// Filter is the source filter of a namespace: which submodules and which
 // Git LFS objects a snapshot may hold. By default a snapshot holds
 // neither.
-type Policy struct {
+type Filter struct {
 	// Submodules lists the URL patterns of the submodules that the server
 	// gets. A submodule whose URL matches no pattern is not in the
 	// snapshot.
@@ -348,20 +348,30 @@ type Policy struct {
 	// objects the server gets.
 	LargeFiles []URLPattern
 	// FailOnDenied fails the fetch when the commit has a submodule or a Git
-	// LFS pointer that the policy does not allow. With false, the snapshot
+	// LFS pointer that the filter does not allow. With false, the snapshot
 	// holds the gitlink or the pointer file as it is.
 	FailOnDenied bool
+	// ProtectedBranches lists the exact names of the branches whose head a
+	// job may start from with the fact source.protected. A name is not a
+	// pattern. It is empty by default, so no branch is protected. It does
+	// not change the content of a snapshot, so Hash leaves it out.
+	ProtectedBranches []string
 }
 
-// MaxPatterns bounds each list of a policy.
+// MaxPatterns bounds each list of a filter.
 const MaxPatterns = 64
 
+// MaxBranchName bounds the length of a protected branch name, in bytes.
+const MaxBranchName = 255
+
 // Validate returns ErrInvalid for more than MaxPatterns patterns in a list,
-// or a pattern that URLPattern.Validate refuses.
-func (p *Policy) Validate() error {
+// a pattern that URLPattern.Validate refuses, more than MaxPatterns
+// protected branches, a protected branch that ValidBranchName refuses, or a
+// protected branch that the list holds twice.
+func (p *Filter) Validate() error {
 	for _, list := range [][]URLPattern{p.Submodules, p.LargeFiles} {
 		if len(list) > MaxPatterns {
-			return fmt.Errorf("%w: a policy list has at most %d patterns", ErrInvalid, MaxPatterns)
+			return fmt.Errorf("%w: a filter list has at most %d patterns", ErrInvalid, MaxPatterns)
 		}
 
 		for _, u := range list {
@@ -371,12 +381,73 @@ func (p *Policy) Validate() error {
 		}
 	}
 
+	return validateBranches(p.ProtectedBranches)
+}
+
+// validateBranches returns ErrInvalid for a list of protected branches that
+// is too long, that holds a name that ValidBranchName refuses, or that holds
+// a name twice.
+func validateBranches(list []string) error {
+	if len(list) > MaxPatterns {
+		return fmt.Errorf("%w: the protected branches have at most %d names", ErrInvalid, MaxPatterns)
+	}
+
+	seen := make(map[string]struct{}, len(list))
+
+	for _, b := range list {
+		if !ValidBranchName(b) {
+			return fmt.Errorf("%w: %q is not a valid branch name", ErrInvalid, b)
+		}
+
+		if _, dup := seen[b]; dup {
+			return fmt.Errorf("%w: branch %q is in the protected branches twice", ErrInvalid, b)
+		}
+
+		seen[b] = struct{}{}
+	}
+
 	return nil
 }
 
-// Hash returns a text that changes when the policy changes. It is the
-// patterns of each list in order, with the switch.
-func (p *Policy) Hash() string {
+// ValidBranchName reports whether b is an exact branch name that a filter
+// may list. It is an allowlist: 1 to MaxBranchName bytes of ASCII letters,
+// digits, '.', '_', '-' and '/'. The first byte is not '-'. No part between
+// '/' is empty, starts with '.', or ends with ".lock", and ".." does not
+// occur. A name that git allows and this check refuses cannot be listed.
+func ValidBranchName(b string) bool {
+	if b == "" || len(b) > MaxBranchName || b[0] == '-' || strings.Contains(b, "..") {
+		return false
+	}
+
+	for _, c := range []byte(b) {
+		if !branchByte(c) {
+			return false
+		}
+	}
+
+	for part := range strings.SplitSeq(b, "/") {
+		if part == "" || part[0] == '.' || strings.HasSuffix(part, ".lock") {
+			return false
+		}
+	}
+
+	return true
+}
+
+// branchByte reports whether c is a byte that a branch name may hold.
+func branchByte(c byte) bool {
+	switch {
+	case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9':
+		return true
+	default:
+		return strings.IndexByte("._-/", c) >= 0
+	}
+}
+
+// Hash returns a text that changes when the filter changes. It is the
+// patterns of each list in order, with the switch. It leaves out the
+// protected branches, because they do not change the content of a snapshot.
+func (p *Filter) Hash() string {
 	parts := make([]string, 0, len(p.Submodules)+len(p.LargeFiles))
 	parts = append(parts, "s")
 
@@ -395,14 +466,14 @@ func (p *Policy) Hash() string {
 	return strconv.Quote(strings.Join(parts, " "))
 }
 
-// AllowsSubmodule reports whether the policy allows the submodule URL u.
-func (p *Policy) AllowsSubmodule(u string) bool {
+// AllowsSubmodule reports whether the filter allows the submodule URL u.
+func (p *Filter) AllowsSubmodule(u string) bool {
 	return matchAny(p.Submodules, u)
 }
 
-// AllowsLargeFiles reports whether the policy allows the Git LFS objects
+// AllowsLargeFiles reports whether the filter allows the Git LFS objects
 // of the repository URL u.
-func (p *Policy) AllowsLargeFiles(u string) bool {
+func (p *Filter) AllowsLargeFiles(u string) bool {
 	return matchAny(p.LargeFiles, u)
 }
 
@@ -568,7 +639,7 @@ func validHost(h string) bool {
 // one path part of base, and "./" takes away none. Any other ref is the
 // URL as it is. It returns ErrNotAllowed for a ref or a base that is not
 // an https URL that splitHTTPS accepts, and for a ref that leaves the host
-// of base. The policy then matches the result.
+// of base. The filter then matches the result.
 func ResolveURL(base, ref string) (string, error) {
 	b, ok := splitHTTPS(base)
 	if !ok || b.host == "" {
