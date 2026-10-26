@@ -194,6 +194,8 @@ var (
 var legacyFieldNames = map[string]string{
 	"unitID":    "The inventory, context and job APIs spell the stable ID of a unit unitID, and the console reads it.",
 	"versionID": "The jobs API spells the ID of the closing state version versionID.",
+	"poolID": "The jobs API spells the ID of the runner pool poolID, because the tagliatelle goCamel " +
+		"rule of the linter demands it.",
 	"appID": "The Git host API spells the ID of the GitHub App appID, because the tagliatelle goCamel " +
 		"rule of the linter demands it.",
 	"hookID": "The Git host API spells the ID of the webhook hookID, because the tagliatelle goCamel " +

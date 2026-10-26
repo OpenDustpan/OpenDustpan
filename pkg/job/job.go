@@ -269,7 +269,7 @@ type Spec struct {
 	// tool. The server sets Step.ChangesResources (see MarkCustomSteps). A
 	// caller never gives steps. A write-back job has no steps.
 	Steps []Step
-	// Pool names the runner pool of a runner job. The pool belongs to the
+	// Pool is the ID of the runner pool of a runner job. The pool belongs to the
 	// namespace of the unit.
 	Pool string
 	// Profile names the profile that supplies the secrets of a runner job.
