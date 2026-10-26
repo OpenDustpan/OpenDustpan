@@ -246,6 +246,41 @@ func testJoinIsolation(t *testing.T, h Harness) {
 	}
 }
 
+func testJoinedWithTokenID(t *testing.T, h Harness) {
+	t.Helper()
+
+	f := setUp(t, h)
+	secret := joinToken(t, f, time.Hour)
+
+	tok, _, err := h.Members.LookupJoin(t.Context(), hash(secret))
+	if err != nil || tok.ID == "" {
+		t.Fatalf("LookupJoin = %+v, %v", tok, err)
+	}
+
+	r, err := join(t, f, secret, "cluster-a", now)
+	if err != nil || r.JoinedWith != tok.ID {
+		t.Fatalf("Join = %+v, %v, want JoinedWith %q, the ID of the join token", r, err, tok.ID)
+	}
+
+	later := now.Add(runner.OfflineAfter + time.Second)
+	secret = joinTokenAt(t, f, later, time.Hour)
+
+	tok, _, err = h.Members.LookupJoin(t.Context(), hash(secret))
+	if err != nil || tok.ID == "" {
+		t.Fatalf("LookupJoin of the second token = %+v, %v", tok, err)
+	}
+
+	joined, err := joinWith(t, f, secret, joinRequest(t, secret, "cluster-a"), later)
+	if err != nil || !joined.Rejoined || joined.Runner.JoinedWith != tok.ID {
+		t.Fatalf("Join again = %+v, %v, want JoinedWith %q, the ID of the second join token", joined, err, tok.ID)
+	}
+
+	stored, err := h.Members.Runner(t.Context(), r.ID)
+	if err != nil || stored.JoinedWith != tok.ID {
+		t.Fatalf("Runner = %+v, %v, want JoinedWith %q", stored, err, tok.ID)
+	}
+}
+
 func testRejoinKeepsID(t *testing.T, h Harness) {
 	t.Helper()
 
