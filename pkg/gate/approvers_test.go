@@ -35,11 +35,11 @@ func preset(a gate.Approvers) gate.ApprovalDefault {
 func TestGateRefusesRuleWithoutApprover(t *testing.T) {
 	t.Parallel()
 
-	none := gate.Approvers{Groups: nil, Users: nil, UnitOwners: false}
-	nobody := gate.Approvers{Groups: nil, Users: []string{gate.NoApprover}, UnitOwners: false}
-	mixed := gate.Approvers{Groups: nil, Users: []string{gate.NoApprover, "alice"}, UnitOwners: false}
-	group := gate.Approvers{Groups: []string{"sre"}, Users: []string{gate.NoApprover}, UnitOwners: false}
-	owners := gate.Approvers{Groups: nil, Users: []string{gate.NoApprover}, UnitOwners: true}
+	none := gate.Approvers{Groups: nil, GroupIDs: nil, Users: nil, UnitOwners: false}
+	nobody := gate.Approvers{Groups: nil, GroupIDs: nil, Users: []string{gate.NoApprover}, UnitOwners: false}
+	mixed := gate.Approvers{Groups: nil, GroupIDs: nil, Users: []string{gate.NoApprover, "alice"}, UnitOwners: false}
+	group := gate.Approvers{Groups: []string{"sre"}, GroupIDs: nil, Users: []string{gate.NoApprover}, UnitOwners: false}
+	owners := gate.Approvers{Groups: nil, GroupIDs: nil, Users: []string{gate.NoApprover}, UnitOwners: true}
 
 	tests := []struct {
 		name string
@@ -74,12 +74,12 @@ func TestGateRefusesRuleWithoutApprover(t *testing.T) {
 func TestRuleApproversReadsAnEmptyListAsNoApprover(t *testing.T) {
 	t.Parallel()
 
-	got := gate.RuleApprovers(gate.Approvers{Groups: nil, Users: nil, UnitOwners: false})
+	got := gate.RuleApprovers(gate.Approvers{Groups: nil, GroupIDs: nil, Users: nil, UnitOwners: false})
 	if len(got.Users) != 1 || got.Users[0] != gate.NoApprover || len(got.Groups) != 0 || got.UnitOwners {
 		t.Errorf("RuleApprovers(empty) = %+v, want Users [NoApprover]", got)
 	}
 
-	keep := gate.Approvers{Groups: []string{"sre"}, Users: nil, UnitOwners: false}
+	keep := gate.Approvers{Groups: []string{"sre"}, GroupIDs: nil, Users: nil, UnitOwners: false}
 	if got := gate.RuleApprovers(keep); len(got.Users) != 0 || len(got.Groups) != 1 {
 		t.Errorf("RuleApprovers(groups) = %+v, want unchanged", got)
 	}
@@ -144,7 +144,7 @@ func TestApproverPolicyValidate(t *testing.T) {
 			t.Parallel()
 
 			policy := gate.ApproverPolicy{Production: tc.production, IsDev: principalpkg.IsDevSubject}
-			err := policy.Validate(gate.Approvers{Groups: nil, Users: tc.users, UnitOwners: false})
+			err := policy.Validate(gate.Approvers{Groups: nil, GroupIDs: nil, Users: tc.users, UnitOwners: false})
 			if (err != nil) != tc.wantErr || (err != nil && !errors.Is(err, gate.ErrInvalid)) {
 				t.Errorf("ValidateApprovers(%v) = %v, want error %v wrapping ErrInvalid", tc.users, err, tc.wantErr)
 			}

@@ -522,7 +522,15 @@ func testGateFields(t *testing.T, s GateStore) {
 
 	scope := gate.NamespaceScope("acme")
 	en := gateEntry("acme", "namespace:manage-gates")
-	approvers := gate.Approvers{Groups: []string{"sre", "dba"}, Users: []string{"alice"}, UnitOwners: true}
+	approvers := gate.Approvers{
+		Groups: []string{
+			"sre",
+			"dba",
+		},
+		GroupIDs:   []string{"id-sre", "id-dba"},
+		Users:      []string{"alice"},
+		UnitOwners: true,
+	}
 	fresh := gate.FreshAuth{Set: true, Seconds: 300}
 
 	set := gate.PathSet{Scope: scope, ID: "network", Version: 1, Globs: []string{"modules/net/**", "*.tf"}}
@@ -540,7 +548,7 @@ func testGateFields(t *testing.T, s GateStore) {
 		Mode:      gate.ModeEnforce,
 		Paths:     []string{"modules/net/**"},
 		When:      "context.plan.destroy > 0",
-		Approvers: gate.Approvers{Groups: []string{"net"}, Users: nil, UnitOwners: false},
+		Approvers: gate.Approvers{Groups: []string{"net"}, GroupIDs: []string{"id-net"}, Users: nil, UnitOwners: false},
 		Count:     1,
 		FreshAuth: gate.NoFreshAuth(),
 		Reads:     []gate.ID{"network"},

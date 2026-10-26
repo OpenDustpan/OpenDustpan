@@ -59,6 +59,9 @@ type memStore struct {
 	// failFinalize makes the next finalize report err without writing, as a
 	// store failure with an unknown outcome would.
 	failFinalize error
+	// failReferenced makes ReferencedContentKeys report err, as a store would
+	// for a workspace whose row is gone.
+	failReferenced error
 	// released holds the audit entry of each release, in the order written.
 	released []audit.Entry
 }
@@ -73,19 +76,20 @@ var _ storetest.WorkspaceStore = (*memStore)(nil)
 
 func newMemStore() *memStore {
 	return &memStore{
-		beforeFence:  nil,
-		namespaces:   map[namespace.Name]namespace.Namespace{},
-		workspaces:   map[workspace.ID]workspace.Workspace{},
-		deleted:      map[workspace.ID]inventory.DeletedEntry{},
-		removed:      map[workspace.ID]workspace.Workspace{},
-		versions:     map[workspace.StateVersionID]workspace.StateVersion{},
-		current:      map[workspace.ID]workspace.StateVersionID{},
-		entries:      map[memInventoryKey]inventory.Entry{},
-		mu:           sync.Mutex{},
-		lostAck:      false,
-		failFinalize: nil,
-		released:     nil,
-		lastLockPass: time.Time{},
+		beforeFence:    nil,
+		namespaces:     map[namespace.Name]namespace.Namespace{},
+		workspaces:     map[workspace.ID]workspace.Workspace{},
+		deleted:        map[workspace.ID]inventory.DeletedEntry{},
+		removed:        map[workspace.ID]workspace.Workspace{},
+		versions:       map[workspace.StateVersionID]workspace.StateVersion{},
+		current:        map[workspace.ID]workspace.StateVersionID{},
+		entries:        map[memInventoryKey]inventory.Entry{},
+		mu:             sync.Mutex{},
+		lostAck:        false,
+		failFinalize:   nil,
+		failReferenced: nil,
+		released:       nil,
+		lastLockPass:   time.Time{},
 	}
 }
 
@@ -827,10 +831,22 @@ func (m *memStore) CountPendingStateVersions(_ context.Context, id workspace.ID)
 }
 
 // ReferencedContentKeys implements workspace.StateStore: every blob key the
-// versions of the workspace name, without the empty ones.
+// versions of the workspace name, without the empty ones. A workspace that
+// does not exist is ErrNotFound; a deleted one still gives its keys.
 func (m *memStore) ReferencedContentKeys(_ context.Context, id workspace.ID) ([]blob.Key, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+
+	if m.failReferenced != nil {
+		return nil, m.failReferenced
+	}
+
+	_, live := m.workspaces[id]
+	_, deleted := m.removed[id]
+
+	if !live && !deleted {
+		return nil, workspace.ErrNotFound
+	}
 
 	var out []blob.Key
 
@@ -2908,6 +2924,80 @@ func TestSweepDeletesUnreferencedBlobs(t *testing.T) {
 
 	if after := listBlobDir(t, dir); !slices.Equal(after, want) {
 		t.Fatalf("blob dir = %v, want the current and the fresh blob %v", after, want)
+	}
+}
+
+// errKeepSetDown is the failure of a keep set read that is not a missing
+// workspace.
+var errKeepSetDown = errors.New("keep set read failed")
+
+// TestSweepKeepsBlobsWhenTheKeepSetFails proves the sweep deletes nothing when
+// the store cannot read the keep set, also when the workspace row is gone
+// (workspace.ErrNotFound): an empty keep set would delete every old blob.
+func TestSweepKeepsBlobsWhenTheKeepSetFails(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		err  error
+		name string
+	}{
+		{name: "the workspace row is gone", err: workspace.ErrNotFound},
+		{name: "the read fails", err: errKeepSetDown},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			blobs, dir := openSweepBlobs(t)
+			f := newFixtureWithBlobs(t, blobs)
+
+			stray := putOldStray(t, f, blobs, dir)
+
+			f.store.mu.Lock()
+			f.store.failReferenced = tc.err
+			f.store.mu.Unlock()
+
+			declareOnce(t, f)
+
+			if after := listBlobDir(t, dir); !slices.Contains(after, stray.String()) {
+				t.Fatalf("blob dir = %v, want the old stray blob kept", after)
+			}
+		})
+	}
+}
+
+// putOldStray stores a blob under the state directory of the workspace of f
+// that no version names, older than the grace period, and returns its key.
+func putOldStray(t *testing.T, f fixture, blobs blob.Store, dir string) blob.Key {
+	t.Helper()
+
+	stray, err := blob.ParseKey(f.stateDir(t, f.ws.ID) + "sv-stray/a1")
+	if err != nil {
+		t.Fatalf("stray key: %v", err)
+	}
+
+	if putErr := blobs.Put(t.Context(), stray, strings.NewReader("stray")); putErr != nil {
+		t.Fatalf("put stray: %v", putErr)
+	}
+
+	chtimesBlob(t, dir, stray, f.now.Add(-2*workspace.SweepGracePeriod))
+
+	return stray
+}
+
+// declareOnce locks the workspace of f and declares one state. The declare
+// treats the sweep as best effort, so it succeeds when the sweep fails.
+func declareOnce(t *testing.T, f fixture) {
+	t.Helper()
+
+	if _, err := f.svc.Lock(t.Context(), f.ws.ID, "alice", "apply"); err != nil {
+		t.Fatalf("lock: %v", err)
+	}
+
+	_, err := f.svc.BeginState(
+		t.Context(), f.ws.ID, "alice", newState("l1", 1, "{\"v\":1}"), authority(forcedOnly(), nil),
+	)
+	if err != nil {
+		t.Fatalf("begin: %v", err)
 	}
 }
 

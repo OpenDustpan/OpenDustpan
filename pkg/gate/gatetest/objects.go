@@ -139,7 +139,7 @@ func sample[T gate.Object](t *testing.T, scope gate.Scope, id gate.ID, salt stri
 
 	var obj any
 
-	approvers := gate.Approvers{Groups: []string{"sre"}, Users: nil, UnitOwners: false}
+	approvers := gate.Approvers{Groups: []string{"sre"}, GroupIDs: nil, Users: nil, UnitOwners: false}
 
 	switch any(zero).(type) {
 	case gate.Gate:

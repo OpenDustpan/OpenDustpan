@@ -319,7 +319,7 @@ func (g *gateRun) approvalGate() {
 
 	rule := gate.ApprovalRule{
 		Scope: gate.NamespaceScope(g.ns), ID: "review-e2e", Version: 0,
-		Approvers: gate.Approvers{Groups: []string{"sre"}, Users: nil, UnitOwners: false}, Count: 1,
+		Approvers: gate.Approvers{Groups: []string{"sre"}, GroupIDs: nil, Users: nil, UnitOwners: false}, Count: 1,
 		AuthorMayApprove: false, FreshAuth: gate.NoFreshAuth(), Timeout: 0,
 	}
 
