@@ -7,6 +7,7 @@ import {
   closedEnum,
   dateTime,
   int64,
+  literal,
   nullable,
   number,
   object,
@@ -15,12 +16,16 @@ import {
   record,
   ref,
   string,
+  union,
 } from "./decode.js";
 import type { Decoder } from "./decode.js";
 import type {
   CreateWidgetRequest,
+  ErrorAnswer,
   ErrorResponse,
   ListWidgetsResponse,
+  LockLockedError,
+  LockLockedErrorArgs,
   PatchWidgetRequest,
   Settings,
   State,
@@ -39,6 +44,11 @@ export const decodeCreateWidgetRequest: Decoder<CreateWidgetRequest> = object<Cr
   tags: optional(array(string)),
 });
 
+/** The validator of ErrorAnswer. A value of "errorCode" that no variant names gets the validator of ErrorResponse. */
+export const decodeErrorAnswer: Decoder<ErrorAnswer> = union<ErrorAnswer>("ErrorAnswer", "errorCode", {
+  "lock.locked": ref(() => decodeLockLockedError),
+}, ref(() => decodeErrorResponse));
+
 /** The validator of ErrorResponse. */
 export const decodeErrorResponse: Decoder<ErrorResponse> = object<ErrorResponse>("ErrorResponse", {
   code: int64,
@@ -51,6 +61,20 @@ export const decodeErrorResponse: Decoder<ErrorResponse> = object<ErrorResponse>
 export const decodeListWidgetsResponse: Decoder<ListWidgetsResponse> = object<ListWidgetsResponse>("ListWidgetsResponse", {
   nextPageToken: optional(string),
   widgets: array(ref(() => decodeWidget)),
+});
+
+/** The validator of LockLockedError. */
+export const decodeLockLockedError: Decoder<LockLockedError> = object<LockLockedError>("LockLockedError", {
+  code: int64,
+  errorArgs: ref(() => decodeLockLockedErrorArgs),
+  errorCode: literal("lock.locked"),
+  message: string,
+});
+
+/** The validator of LockLockedErrorArgs. */
+export const decodeLockLockedErrorArgs: Decoder<LockLockedErrorArgs> = object<LockLockedErrorArgs>("LockLockedErrorArgs", {
+  holder: string,
+  since: dateTime,
 });
 
 /** The validator of PatchWidgetRequest. */

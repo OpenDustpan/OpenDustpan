@@ -90,6 +90,7 @@ func RunRevocations(t *testing.T, newStore RevocationFactory) {
 		{name: "a write that grants access is refused in maintenance mode", test: testGrantsRefused},
 		{name: "a revocation refuses hostile input in maintenance mode", test: testRevocationsHostileInput},
 		{name: "a revocation made in maintenance mode survives a restore", test: testRevocationSurvivesRestore},
+		{name: "a refused delete of a provider journals nothing", test: testRefusedProviderDeleteJournalsNothing},
 		{name: "the replay of a runner retire ends the claim of the runner", test: testRunnerRetireEndsClaim},
 		{name: "a restore applies only the revocations of its own stay", test: testRevocationStayIsBounded},
 		{name: "a restore refuses hostile journal rows and applies the rest", test: testReplayRefusesHostileRows},
@@ -125,6 +126,7 @@ const (
 	revIdpPerson     = "prn-idp"
 	revSessionIdp    = "ses-idp"
 	revProvider      = "corp-idp"
+	revSpareProvider = "spare-idp"
 	revNamespace     = namespace.Name("acme")
 	revGrantServer   = "grt-server"
 	revGrantSpace    = "grt-space"
@@ -315,14 +317,13 @@ func revEntryIn(ns namespace.Name, object string, when time.Time) audit.Entry {
 	return e
 }
 
-// revMustProvider creates the sign-in provider revProvider, a person of it and
-// a session of the person.
-func revMustProvider(t *testing.T, s RevocationStore) {
+// revMustProviderConfig creates the enabled sign-in provider id.
+func revMustProviderConfig(t *testing.T, s RevocationStore, id string) {
 	t.Helper()
 
 	p := session.ProviderConfig{
-		CreatedAt: revAt(0), UpdatedAt: revAt(0), ID: revProvider, Mode: session.ModeOIDC,
-		Issuer: "https://corp-idp.idp.example", DisplayName: "Corporate", ClientID: "dustpan-corp",
+		CreatedAt: revAt(0), UpdatedAt: revAt(0), ID: id, Mode: session.ModeOIDC,
+		Issuer: "https://" + id + ".idp.example", DisplayName: "Corporate", ClientID: "dustpan-" + id,
 		SealedSecret: []byte("sealed secret"), Scopes: []string{"profile", "email"},
 		OAuth: session.OAuthSettings{
 			AuthorizationURL: "", TokenURL: "", UserinfoURL: "", SubjectClaim: "", NameClaim: "",
@@ -331,12 +332,22 @@ func revMustProvider(t *testing.T, s RevocationStore) {
 		Version: 1, AutoCreate: true, Enabled: true,
 	}
 
-	e := revEntry("sign-in-provider:"+revProvider, revAt(0))
+	e := revEntry("sign-in-provider:"+id, revAt(0))
 	e.Action = "server:manage-sign-in"
 
 	if err := s.CreateProviderConfig(t.Context(), p, e); err != nil {
-		t.Fatalf("create sign-in provider: %v", err)
+		t.Fatalf("create sign-in provider %q: %v", id, err)
 	}
+}
+
+// revMustProvider creates the sign-in provider revProvider, a person of it and
+// a session of the person. It also creates revSpareProvider, which no person
+// uses, so that a delete of it is allowed.
+func revMustProvider(t *testing.T, s RevocationStore) {
+	t.Helper()
+
+	revMustProviderConfig(t, s, revProvider)
+	revMustProviderConfig(t, s, revSpareProvider)
 
 	person := principal.Principal{
 		CreatedAt: revAt(0), UpdatedAt: revAt(0), DisabledAt: time.Time{}, ID: revIdpPerson,
@@ -691,16 +702,44 @@ func revJoinTokenLive(t *testing.T, s RevocationStore, f revFixture) {
 	}
 }
 
-// revProviderConfig reads the sign-in provider revProvider.
-func revProviderConfig(t *testing.T, s RevocationStore) session.ProviderConfig {
+// revProviderConfigOf reads the sign-in provider id.
+func revProviderConfigOf(t *testing.T, s RevocationStore, id string) session.ProviderConfig {
 	t.Helper()
 
-	p, err := s.GetProviderConfig(t.Context(), revProvider)
+	p, err := s.GetProviderConfig(t.Context(), id)
 	if err != nil {
 		t.Fatalf("get sign-in provider: %v", err)
 	}
 
 	return p
+}
+
+// revProviderConfig reads the sign-in provider revProvider.
+func revProviderConfig(t *testing.T, s RevocationStore) session.ProviderConfig {
+	t.Helper()
+
+	return revProviderConfigOf(t, s, revProvider)
+}
+
+// revSpareProviderGone fails the test unless the provider revSpareProvider
+// does not exist.
+func revSpareProviderGone(t *testing.T, s RevocationStore) {
+	t.Helper()
+
+	_, err := s.GetProviderConfig(t.Context(), revSpareProvider)
+	if !errors.Is(err, session.ErrProviderNotFound) {
+		t.Fatalf("get the deleted provider: err = %v, want ErrProviderNotFound", err)
+	}
+}
+
+// revSpareProviderDisabled fails the test unless the provider
+// revSpareProvider is disabled at version 2.
+func revSpareProviderDisabled(t *testing.T, s RevocationStore) {
+	t.Helper()
+
+	if p := revProviderConfigOf(t, s, revSpareProvider); p.Enabled || p.Version != 2 {
+		t.Fatalf("spare provider = enabled %v at version %d, want disabled at version 2", p.Enabled, p.Version)
+	}
 }
 
 // revProviderDisabled fails the test unless the provider revProvider is
@@ -713,13 +752,13 @@ func revProviderDisabled(t *testing.T, s RevocationStore, version int64) {
 	}
 }
 
-// revProviderEnabledAt fails the test unless the provider revProvider is
-// enabled at the version version.
-func revProviderEnabledAt(t *testing.T, s RevocationStore, version int64) {
+// revProviderUntouched fails the test unless the provider revProvider is
+// enabled at the version 1, as the fixture creates it.
+func revProviderUntouched(t *testing.T, s RevocationStore) {
 	t.Helper()
 
-	if p := revProviderConfig(t, s); !p.Enabled || p.Version != version {
-		t.Fatalf("provider = enabled %v at version %d, want enabled at version %d", p.Enabled, p.Version, version)
+	if p := revProviderConfig(t, s); !p.Enabled || p.Version != 1 {
+		t.Fatalf("provider = enabled %v at version %d, want enabled at version 1", p.Enabled, p.Version)
 	}
 }
 
@@ -892,6 +931,24 @@ func revocationCases() []revocationCase {
 				revProviderDisabled(t, s, 2)
 				revSessionEnded(t, s, revSessionIdp, session.ReasonEnded)
 				revSessionActive(t, s, revSessionOne)
+			},
+		},
+		{
+			name: "deleting an identity provider", scope: audit.ServerScope,
+			run: func(t *testing.T, s RevocationStore, _ revFixture) error {
+				t.Helper()
+
+				e := revEntry("sign-in-provider:"+revSpareProvider, revAt(10))
+				e.Action = "server:manage-sign-in"
+
+				return s.DeleteProviderConfig(t.Context(), revSpareProvider, e)
+			},
+			check: func(t *testing.T, s RevocationStore, _ revFixture) {
+				t.Helper()
+
+				revSpareProviderGone(t, s)
+
+				revProviderUntouched(t, s)
 			},
 		},
 	}
@@ -1076,7 +1133,7 @@ func testGrantsRefused(t *testing.T, s RevocationStore) {
 
 	revPrincipalDisabled(t, s, revTempAdmin)
 	revPrincipalEnabled(t, s, revService)
-	revProviderEnabledAt(t, s, 1)
+	revProviderUntouched(t, s)
 	revJoinTokenLive(t, s, f)
 
 	if got := revAuditTotal(t, s); got != before {
@@ -1271,7 +1328,7 @@ func testRevocationsHostileInput(t *testing.T, s RevocationStore) {
 	revGrantLive(t, s, revGrantServer)
 	revGrantLive(t, s, revGrantSpace)
 	revJoinTokenLive(t, s, f)
-	revProviderEnabledAt(t, s, 1)
+	revProviderUntouched(t, s)
 
 	if got := revAuditTotal(t, s); got != before {
 		t.Fatalf("audit entries after the refused writes = %d, want %d", got, before)
@@ -1368,6 +1425,10 @@ func revStayRevocations() []revJournaled {
 		},
 		{kind: maintenance.RevokedProvider, object: "sign-in-provider:" + revProvider, run: revStayDisableProvider},
 		{kind: maintenance.RevokedRunner, object: "namespace:" + revNamespace.String(), run: revStayRetireRunner},
+		{
+			kind: maintenance.RevokedProvider, object: "sign-in-provider:" + revSpareProvider,
+			run: revStayDeleteProvider,
+		},
 	}
 }
 
@@ -1452,6 +1513,17 @@ func revStayDisableProvider(t *testing.T, s RevocationStore, _ revFixture) {
 	}
 }
 
+func revStayDeleteProvider(t *testing.T, s RevocationStore, _ revFixture) {
+	t.Helper()
+
+	e := revEntry("sign-in-provider:"+revSpareProvider, revAt(38))
+	if err := s.DeleteProviderConfig(t.Context(), revSpareProvider, e); err != nil {
+		t.Fatalf("delete the provider in maintenance mode: %v", err)
+	}
+
+	revSpareProviderGone(t, s)
+}
+
 // revCheckRestored fails the test unless every revocation of the stay shows
 // in the restored rows, and the rows that nobody revoked stay as the backup
 // holds them.
@@ -1473,6 +1545,7 @@ func revCheckRestored(t *testing.T, s RevocationStore, f revFixture) {
 	revRunnerRetired(t, s, f)
 	revProviderDisabled(t, s, 2)
 	revSessionEnded(t, s, revSessionIdp, session.ReasonEnded)
+	revSpareProviderDisabled(t, s)
 }
 
 // testRevocationSurvivesRestore proves the restore interaction. A backup
@@ -1748,6 +1821,53 @@ func testReplayRefusesHostileRows(t *testing.T, s RevocationStore) {
 	if got.applied != 1 || got.denied != denials {
 		t.Fatalf("replay entries: %d applied and %d denied, want 1 and %d", got.applied, got.denied, denials)
 	}
+}
+
+// testRefusedProviderDeleteJournalsNothing proves that the journal row of a
+// delete of a provider is part of the transaction of the delete: a delete
+// that fails writes no audit entry and no journal row. After a restore of
+// the older data, the replay finds no row, so it writes no replay entry and
+// leaves the provider enabled.
+func testRefusedProviderDeleteJournalsNothing(t *testing.T, s RevocationStore) {
+	t.Helper()
+
+	seedAccess(t, s)
+
+	export := revTakeExport(t, s)
+
+	revEnter(t, s)
+
+	cases := []struct {
+		name string
+		id   string
+		want error
+	}{
+		{name: "a provider with a person", id: revProvider, want: session.ErrProviderInUse},
+		{name: "a provider that does not exist", id: "missing-idp", want: session.ErrProviderNotFound},
+	}
+
+	for _, tc := range cases {
+		before := revAuditTotal(t, s)
+
+		e := revEntry("sign-in-provider:"+tc.id, revAt(50))
+		e.Action = "server:manage-sign-in"
+
+		if err := s.DeleteProviderConfig(t.Context(), tc.id, e); !errors.Is(err, tc.want) {
+			t.Fatalf("%s: delete err = %v, want %v", tc.name, err, tc.want)
+		}
+
+		if got := revAuditTotal(t, s); got != before {
+			t.Fatalf("%s: audit entries after the refused delete = %d, want %d", tc.name, got, before)
+		}
+	}
+
+	revStageAndApply(t, s, export)
+
+	if entries := revReplayEntries(t, s); len(entries) != 0 {
+		t.Fatalf("replay audit entries = %d, want none: a refused delete journals nothing", len(entries))
+	}
+
+	revProviderUntouched(t, s)
 }
 
 // testRevocationStayIsBounded proves what the swap applies again: the

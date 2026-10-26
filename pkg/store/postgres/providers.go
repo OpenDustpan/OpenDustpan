@@ -265,7 +265,10 @@ func (s *Store) DisableProviderConfig(
 	})
 }
 
-// DeleteProviderConfig implements session.ProviderConfigStore.
+// DeleteProviderConfig implements session.ProviderConfigStore. It runs on the
+// control path, so it works in maintenance mode, and the transaction journals
+// it there as the disable of the provider: a restore applies that disable
+// again to the restored provider.
 //
 // The count of principals and the delete run at READ COMMITTED, so a first
 // sign-in through the provider that is in progress can create a principal
@@ -275,11 +278,9 @@ func (s *Store) DisableProviderConfig(
 // use the same issuer, so the subject names the same person at the same
 // identity provider, and a delete of the new provider counts it.
 func (s *Store) DeleteProviderConfig(ctx context.Context, id string, e audit.Entry) error {
-	return s.inTx(ctx, func(q *db.Queries) error {
-		if err := validServerEntry(e); err != nil {
-			return err
-		}
+	rev := revocation{kind: maintenance.RevokedProvider, target: id, endReason: string(session.ReasonEnded)}
 
+	return s.inRevokingTxOf(ctx, &e, rev, func(q *db.Queries) error {
 		principals, err := q.CountPrincipalsWithSubjectPrefix(ctx, session.SubjectPrefix(id))
 		if err != nil {
 			return fmt.Errorf("count principals of sign-in provider: %w", err)
@@ -301,7 +302,7 @@ func (s *Store) DeleteProviderConfig(ctx context.Context, id string, e audit.Ent
 			return fmt.Errorf("delete sign-in provider: %w", err)
 		}
 
-		return appendProviderEntry(ctx, q, e)
+		return nil
 	})
 }
 

@@ -6,6 +6,12 @@ export interface {{$t.Name}} {
 {{jsdoc "  " .Doc}}  readonly {{.Name}}{{if .Optional}}?{{end}}: {{.Type}};
 {{- end}}
 }
+{{- else if $t.IsUnion -}}
+export type {{$t.Name}} =
+{{- range $t.Variants}}
+  | {{.Name}}
+{{- end}}
+  | {{$t.Base}};
 {{- else if $t.IsRecord -}}
 export type {{$t.Name}} = Readonly<Record<string, {{$t.RecordType}}>>;
 {{- else -}}

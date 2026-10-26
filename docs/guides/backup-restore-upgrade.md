@@ -225,6 +225,10 @@ restore applies. These writes run, each with its audit entry:
 - the disable of a sign-in provider, which also ends its sessions. A change of
   the provider that sets one more field, and the enable of the provider, stay
   refused.
+- the delete of a sign-in provider that no principal uses
+  (`DELETE /api/server/sign-in-providers/{id}`). A provider that a principal
+  uses answers 409. A restore of older data does not bring the deleted
+  provider back as an active provider: the restore disables it.
 - the disable of a principal (`POST /api/server/principals/{id}/disable`). The
   grants and tokens of the principal stay, and the principal can not use them
   until an administrator enables it again. The check of a disable in normal
