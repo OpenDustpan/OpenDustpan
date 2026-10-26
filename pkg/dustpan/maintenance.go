@@ -63,6 +63,75 @@ func withMaintenance(
 	})
 }
 
+// newReducingRunnerRoutes returns the only routes of the runner management
+// API that pass the maintenance gate: the retire of a runner and the revoke
+// of a join token. Both only reduce access, so incident response can cut a
+// runner at any time. Every other route of the API stays refused.
+func newReducingRunnerRoutes() *http.ServeMux {
+	mux := http.NewServeMux()
+	noop := http.HandlerFunc(func(http.ResponseWriter, *http.Request) {})
+
+	mux.Handle("POST /api/runners/{namespace}/runners/{runner}/retire", noop)
+	mux.Handle("POST /api/runners/{namespace}/pools/{pool}/join-tokens/{id}/revoke", noop)
+
+	return mux
+}
+
+// isReducingRunnerRoute reports whether r is one of routes. Defense in depth:
+// the store journals the write and the handler checks the grants, so this
+// gate does not rely on them. It refuses a path that is not in canonical
+// form, so that a redirect or a rewrite cannot reach a route that the table
+// does not name.
+func isReducingRunnerRoute(routes *http.ServeMux, r *http.Request) bool {
+	// A RawPath is set only when the request path has an escape that the
+	// default encoding of Path would not write, such as %2F or %2e. A route
+	// of the table has none, so such a request is refused here.
+	if r.URL.RawPath != "" || !canonicalPath(r.URL.Path) {
+		return false
+	}
+
+	_, pattern := routes.Handler(r)
+
+	return pattern != ""
+}
+
+// canonicalPath reports whether p is an absolute path with no empty segment
+// and no "." or ".." segment.
+func canonicalPath(p string) bool {
+	rest, ok := strings.CutPrefix(p, "/")
+	if !ok {
+		return false
+	}
+
+	for segment := range strings.SplitSeq(rest, "/") {
+		if segment == "" || segment == "." || segment == ".." {
+			return false
+		}
+	}
+
+	return true
+}
+
+// withRunnerMaintenance is withMaintenance for the runner management API: a
+// request for a reducing route passes in maintenance mode, and every other
+// request answers 503.
+func withRunnerMaintenance(
+	next http.Handler, watcher *maintenance.Watcher, shape errorShape, logger *slog.Logger,
+) http.Handler {
+	gated := withMaintenance(next, watcher, shape, logger)
+	routes := newReducingRunnerRoutes()
+
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if isReducingRunnerRoute(routes, r) {
+			next.ServeHTTP(w, r)
+
+			return
+		}
+
+		gated.ServeHTTP(w, r)
+	})
+}
+
 // writeRefusal answers 503 with Retry-After and message, in the error shape
 // of one adapter.
 func writeRefusal(ctx context.Context, w http.ResponseWriter, shape errorShape, logger *slog.Logger, message string) {

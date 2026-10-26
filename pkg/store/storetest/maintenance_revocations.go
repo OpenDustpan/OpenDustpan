@@ -2,6 +2,7 @@ package storetest
 
 import (
 	"context"
+	"crypto/ed25519"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -15,6 +16,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/accesstoken"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/backup"
+	"opendustpan.org/opendustpan/pkg/durable"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -54,6 +56,11 @@ type RevocationStore interface {
 
 	// RunnerPools returns the pool port of the same store.
 	RunnerPools() runner.PoolStore
+	// RunnerPorts returns the pool and runner ports of the same store.
+	RunnerPorts() RunnerPorts
+	// DurableOperationsPort returns the durable operations of the same store,
+	// where a runner holds its claims.
+	DurableOperationsPort() durable.Store
 	// InsertRawRevocation writes one row of the revocation journal with no
 	// check of the kind, as a write to the database itself would. The hostile
 	// journal case uses it to send a row that the store never writes.
@@ -83,6 +90,7 @@ func RunRevocations(t *testing.T, newStore RevocationFactory) {
 		{name: "a write that grants access is refused in maintenance mode", test: testGrantsRefused},
 		{name: "a revocation refuses hostile input in maintenance mode", test: testRevocationsHostileInput},
 		{name: "a revocation made in maintenance mode survives a restore", test: testRevocationSurvivesRestore},
+		{name: "the replay of a runner retire ends the claim of the runner", test: testRunnerRetireEndsClaim},
 		{name: "a restore applies only the revocations of its own stay", test: testRevocationStayIsBounded},
 		{name: "a restore refuses hostile journal rows and applies the rest", test: testReplayRefusesHostileRows},
 		{name: "the sweep of temporary administrators expires in maintenance mode", test: testTempAdminSweepRuns},
@@ -128,11 +136,13 @@ func revNoFence() namespace.Fence {
 }
 
 // revFixture holds the rows of the suite that the store names: the fence of
-// the namespace, the pool and the join token.
+// the namespace, the pool, the join token and the runner that joined with
+// another join token.
 type revFixture struct {
 	fence     namespace.Fence
 	pool      runner.Pool
 	joinToken runner.JoinToken
+	runnerID  string
 }
 
 // revAt is a fixed, millisecond-precision instant of the suite: stores keep
@@ -294,7 +304,7 @@ func seedAccess(t *testing.T, s RevocationStore) revFixture {
 
 	pool, token := revMustJoinToken(t, s, fence)
 
-	return revFixture{fence: fence, pool: pool, joinToken: token}
+	return revFixture{fence: fence, pool: pool, joinToken: token, runnerID: revMustRunner(t, s, fence, pool)}
 }
 
 // revEntryIn returns revEntry in the audit scope ns.
@@ -403,6 +413,72 @@ func revMustJoinToken(t *testing.T, s RevocationStore, fence namespace.Fence) (r
 	}
 
 	return pool, token
+}
+
+// revMustRunner creates a second join token of pool and joins a runner with
+// it, so that the first token stays unused for the revoke cases. It returns
+// the ID of the runner.
+func revMustRunner(t *testing.T, s RevocationStore, fence namespace.Fence, pool runner.Pool) string {
+	t.Helper()
+
+	ctx := t.Context()
+	entries := []audit.Entry{revEntryIn(fence.Namespace, "namespace:"+fence.Namespace.String(), revAt(3))}
+	sum := sha256.Sum256([]byte(runner.JoinTokenPrefix + "revocation suite runner"))
+
+	token, err := s.RunnerPools().CreateJoinToken(ctx, runner.JoinToken{
+		ID: "", Pool: pool.ID, SHA256: hex.EncodeToString(sum[:]), CreatedBy: "alice", CreatedAt: revAt(3),
+		ExpiresAt: revAt(3).Add(time.Hour), UsedAt: time.Time{}, UsedBy: "", RevokedAt: time.Time{},
+	}, fence, entries)
+	if err != nil {
+		t.Fatalf("create join token of the runner: %v", err)
+	}
+
+	pub, _, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatalf("generate runner key: %v", err)
+	}
+
+	joined, err := s.RunnerPorts().Members.Join(ctx, runner.Joining{
+		TokenSHA256: token.SHA256,
+		Request: runner.JoinRequest{
+			Token: "", Name: "linux-1", Kind: runner.KindKubernetes, Isolation: runner.IsolationKubernetes,
+			Labels:  map[string]string{},
+			Release: runner.Release{Major: 0, Minor: 14, Patch: 0, Pre: ""},
+			Key:     runner.Key{Public: pub, CreatedAt: time.Time{}}, Proof: nil,
+		},
+		At: revAt(4),
+	}, fence, func(j *runner.Joined) []audit.Entry {
+		e := revEntryIn(fence.Namespace, "namespace:"+fence.Namespace.String(), revAt(4))
+		e.ObjectID = j.Runner.ID
+
+		return []audit.Entry{e}
+	})
+	if err != nil {
+		t.Fatalf("join runner: %v", err)
+	}
+
+	return joined.Runner.ID
+}
+
+// revRunner returns the runner of f.
+func revRunner(t *testing.T, s RevocationStore, f revFixture) runner.Runner {
+	t.Helper()
+
+	rn, err := s.RunnerPorts().Members.Runner(t.Context(), f.runnerID)
+	if err != nil {
+		t.Fatalf("read runner %s: %v", f.runnerID, err)
+	}
+
+	return rn
+}
+
+// revRunnerRetired fails the test unless the runner of f is retired.
+func revRunnerRetired(t *testing.T, s RevocationStore, f revFixture) {
+	t.Helper()
+
+	if revRunner(t, s, f).RetiredAt.IsZero() {
+		t.Fatal("runner is live, want it retired")
+	}
 }
 
 // revEnter moves the installation to maintenance mode.
@@ -580,16 +656,21 @@ func revGrantLive(t *testing.T, s RevocationStore, id string) {
 	}
 }
 
-// revJoinToken returns the one join token of the pool of f.
+// revJoinToken returns the join token of f, the one that no runner used.
 func revJoinToken(t *testing.T, s RevocationStore, f revFixture) runner.JoinToken {
 	t.Helper()
 
 	tokens, err := s.RunnerPools().JoinTokens(t.Context(), f.pool.ID)
-	if err != nil || len(tokens) != 1 {
-		t.Fatalf("join tokens = %+v, %v, want one token", tokens, err)
+	if err != nil {
+		t.Fatalf("join tokens: %v", err)
 	}
 
-	return tokens[0]
+	i := slices.IndexFunc(tokens, func(tok runner.JoinToken) bool { return tok.ID == f.joinToken.ID })
+	if i < 0 {
+		t.Fatalf("join tokens = %+v, want the token %s", tokens, f.joinToken.ID)
+	}
+
+	return tokens[i]
 }
 
 // revJoinTokenRevoked fails the test unless the join token of f is revoked.
@@ -780,6 +861,20 @@ func revocationCases() []revocationCase {
 			check: func(t *testing.T, s RevocationStore, f revFixture) {
 				t.Helper()
 				revJoinTokenRevoked(t, s, f)
+			},
+		},
+		{
+			name: "retiring a runner", scope: revNamespace,
+			run: func(t *testing.T, s RevocationStore, f revFixture) error {
+				t.Helper()
+
+				e := []audit.Entry{revEntryIn(revNamespace, "namespace:"+revNamespace.String(), revAt(10))}
+
+				return s.RunnerPorts().Members.Retire(t.Context(), f.runnerID, revAt(10), f.fence, e)
+			},
+			check: func(t *testing.T, s RevocationStore, f revFixture) {
+				t.Helper()
+				revRunnerRetired(t, s, f)
 			},
 		},
 		{
@@ -1120,6 +1215,30 @@ func testRevocationsHostileInput(t *testing.T, s RevocationStore) {
 			want: namespace.ErrFenced,
 		},
 		{
+			name: "a runner that does not exist",
+			run: func() error {
+				e := []audit.Entry{revEntryIn(revNamespace, "namespace:acme", revAt(10))}
+
+				return s.RunnerPorts().Members.Retire(ctx, "rnr-none", revAt(10), f.fence, e)
+			},
+			want: runner.ErrNotFound,
+		},
+		{
+			name: "a runner without an audit entry",
+			run:  func() error { return s.RunnerPorts().Members.Retire(ctx, f.runnerID, revAt(10), f.fence, nil) },
+			want: audit.ErrInvalidEntry,
+		},
+		{
+			name: "a runner through a stale fence",
+			run: func() error {
+				stale := namespace.Fence{Namespace: revNamespace, FailoverVersion: f.fence.FailoverVersion + 1}
+				e := []audit.Entry{revEntryIn(revNamespace, "namespace:acme", revAt(10))}
+
+				return s.RunnerPorts().Members.Retire(ctx, f.runnerID, revAt(10), stale, e)
+			},
+			want: namespace.ErrFenced,
+		},
+		{
 			name: "a provider that does not exist",
 			run: func() error {
 				return s.DisableProviderConfig(ctx, "none", 1, revAt(10), revEntry("sign-in-provider:none", revAt(10)))
@@ -1248,6 +1367,7 @@ func revStayRevocations() []revJournaled {
 			run: revStayRevokeJoinToken,
 		},
 		{kind: maintenance.RevokedProvider, object: "sign-in-provider:" + revProvider, run: revStayDisableProvider},
+		{kind: maintenance.RevokedRunner, object: "namespace:" + revNamespace.String(), run: revStayRetireRunner},
 	}
 }
 
@@ -1314,6 +1434,15 @@ func revStayRevokeJoinToken(t *testing.T, s RevocationStore, f revFixture) {
 	}
 }
 
+func revStayRetireRunner(t *testing.T, s RevocationStore, f revFixture) {
+	t.Helper()
+
+	e := []audit.Entry{revEntryIn(revNamespace, "namespace:"+revNamespace.String(), revAt(38))}
+	if err := s.RunnerPorts().Members.Retire(t.Context(), f.runnerID, revAt(38), f.fence, e); err != nil {
+		t.Fatalf("retire the runner in maintenance mode: %v", err)
+	}
+}
+
 func revStayDisableProvider(t *testing.T, s RevocationStore, _ revFixture) {
 	t.Helper()
 
@@ -1341,6 +1470,7 @@ func revCheckRestored(t *testing.T, s RevocationStore, f revFixture) {
 	revGrantRevoked(t, s, revGrantServer)
 	revGrantRevoked(t, s, revGrantSpace)
 	revJoinTokenRevoked(t, s, f)
+	revRunnerRetired(t, s, f)
 	revProviderDisabled(t, s, 2)
 	revSessionEnded(t, s, revSessionIdp, session.ReasonEnded)
 }
@@ -1391,6 +1521,90 @@ func testRevocationSurvivesRestore(t *testing.T, s RevocationStore) {
 
 	if again := revReplayEntries(t, s); len(again) != len(stay) {
 		t.Fatalf("replay audit entries after the second restore = %d, want %d", len(again), len(stay))
+	}
+}
+
+// revClaimKind is the durable kind of the operation that the claim cases
+// hold for the runner.
+const revClaimKind durable.Kind = "revocation-suite"
+
+// testRunnerRetireEndsClaim proves the second statement of the replay of a
+// runner retire. The claims of the runners are in a control table, which a
+// restore keeps, so the swap does not bring a claim back. The statement is
+// still a layer of its own: a claim that the retired runner holds when the
+// swap runs, for example one that committed just after the retire, ends with
+// the replay. The case claims an operation for the runner after the retire,
+// restores the backup, and expects the claim ended. A second restore changes
+// nothing.
+func testRunnerRetireEndsClaim(t *testing.T, s RevocationStore) {
+	t.Helper()
+
+	f := seedAccess(t, s)
+	ops := s.DurableOperationsPort()
+
+	start := durable.StartRequest{Key: "revocation-suite/claim", Kind: revClaimKind, Version: 0, Input: nil}
+	if _, _, err := ops.Start(t.Context(), start); err != nil {
+		t.Fatalf("start the operation: %v", err)
+	}
+
+	export := revTakeExport(t, s)
+
+	revEnter(t, s)
+	revStayRetireRunner(t, s, f)
+
+	held, err := ops.Claim(t.Context(), durable.ClaimRequest{
+		Owner: f.runnerID, Kinds: []durable.Kind{revClaimKind}, MaxVersions: nil, Lease: time.Hour,
+		TakeCanceled: false,
+	})
+	if err != nil {
+		t.Fatalf("claim the operation for the runner: %v", err)
+	}
+
+	if got := revOperation(t, s, held.ID).Claim.Owner; got != f.runnerID {
+		t.Fatalf("claim owner before the restore = %q, want %q", got, f.runnerID)
+	}
+
+	revStageAndApply(t, s, export)
+
+	revRunnerRetired(t, s, f)
+	revClaimEnded(t, s, held.ID, f.runnerID)
+
+	total := revAuditTotal(t, s)
+	after := revOperation(t, s, held.ID)
+
+	revStageAndApply(t, s, export)
+
+	revRunnerRetired(t, s, f)
+	revClaimEnded(t, s, held.ID, f.runnerID)
+
+	if got := revAuditTotal(t, s); got != total {
+		t.Fatalf("audit entries after the second restore = %d, want %d", got, total)
+	}
+
+	if again := revOperation(t, s, held.ID); again.Claim != after.Claim || again.State != after.State {
+		t.Fatalf("operation after the second restore = %+v, want %+v", again, after)
+	}
+}
+
+// revOperation reads the durable operation id.
+func revOperation(t *testing.T, s RevocationStore, id durable.ID) durable.Operation {
+	t.Helper()
+
+	op, err := s.DurableOperationsPort().Get(t.Context(), id)
+	if err != nil {
+		t.Fatalf("get the operation %s: %v", id, err)
+	}
+
+	return op
+}
+
+// revClaimEnded fails the test when the operation id is still claimed by
+// owner.
+func revClaimEnded(t *testing.T, s RevocationStore, id durable.ID, owner string) {
+	t.Helper()
+
+	if op := revOperation(t, s, id); op.Claim.Owner == owner {
+		t.Fatalf("operation %s is still claimed by the retired runner %s: %+v", id, owner, op.Claim)
 	}
 }
 
