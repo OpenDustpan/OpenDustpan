@@ -588,3 +588,50 @@ func TestParseRefusesAnErrorSchemaOfAnotherShape(t *testing.T) {
 		t.Errorf("code optional: want ErrInvalidDescription, got %v", err)
 	}
 }
+
+// errorCodeDocument returns the base document with an ErrorCode schema and the
+// given form of the errorCode member.
+func errorCodeDocument(t *testing.T, codeSchema, member string) string {
+	t.Helper()
+
+	doc := change(t, `"ErrorResponse": {"type": "object"`, codeSchema+`, "ErrorResponse": {"type": "object"`)
+
+	return strings.Replace(string(doc), `"errorCode": {"type": "string"}`, `"errorCode": `+member, 1)
+}
+
+// TestParseReadsErrorCodeAsAnOpenEnum checks that errorCode may be an open enum
+// of strings, and that no other reference is the error shape.
+func TestParseReadsErrorCodeAsAnOpenEnum(t *testing.T) {
+	t.Parallel()
+
+	const (
+		enum    = `"ErrorCode": {"type": "string", "enum": ["a.b", "c.d"]}`
+		ref     = `{"$ref": "#/components/schemas/ErrorCode"}`
+		openRef = `{"anyOf": [` + ref + `, {"type": "string"}]}`
+	)
+
+	tests := []struct {
+		name, codeSchema, member string
+		valid                    bool
+	}{
+		{"open enum", enum, openRef, true},
+		{"closed enum", enum, ref, false},
+		{"nullable open enum", enum, `{"anyOf": [` + ref + `, {"type": "string"}, {"type": "null"}]}`, false},
+		{"reference to an object", `"ErrorCode": {"type": "object", "properties": {}}`, openRef, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			err := parseErr(errorCodeDocument(t, tt.codeSchema, tt.member))
+
+			switch {
+			case tt.valid && err != nil:
+				t.Fatalf("want no error, got %v", err)
+			case !tt.valid && err == nil:
+				t.Fatal("want an error, got none")
+			}
+		})
+	}
+}
