@@ -91,6 +91,7 @@ func Run(t *testing.T, newHarness Factory) {
 		{"an expired or revoked join token registers nothing", testJoinTokenExpiredRevoked},
 		{"the pool decides the isolation of a runner", testJoinIsolation},
 		{"a join again with one name keeps the runner ID and clears the previous key", testRejoinKeepsID},
+		{"a join stores the ID of the join token in JoinedWith", testJoinedWithTokenID},
 		{"a join again needs an offline runner and ends its claims", testRejoinNeedsOffline},
 		{"a join again keeps the sessions of launchers", testRejoinKeepsSessions},
 		{"a key older than 30 days must join again", testKeyExpired},
