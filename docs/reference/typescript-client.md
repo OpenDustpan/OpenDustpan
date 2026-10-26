@@ -137,4 +137,4 @@ example `LockLockedError`, and `ErrorResponse`. The validator reads
 their types and refuses an answer with an argument that is missing or wrong, as
 it refuses any other answer that does not match the description. For any other
 code, also a code that the description does not list yet, it gives the shape of
-`ErrorResponse`.
+`ErrorResponse`. The validator gives the exact type of each answer. A test of `errorCode` in your code narrows to the variant and to `ErrorResponse`, because `errorCode` is an open enum.
