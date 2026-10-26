@@ -30,6 +30,21 @@ func WriteSettingInTx(ctx context.Context, s *Store, w SettingWrite) error {
 	return outputSharingSettings{s: s}.writeSetting(ctx, w.Namespace, w.Value, w.Fence, w.Entry)
 }
 
+// SourceFilterWrite is the input of WriteSourceFilterInTx.
+type SourceFilterWrite struct {
+	Namespace namespace.Name
+	Text      string
+	Fence     namespace.Fence
+	Entry     audit.Entry
+}
+
+// WriteSourceFilterInTx writes the source filter through the transaction of
+// SetFilter and skips the pre-check, so a test reaches the layer inside the
+// transaction alone.
+func WriteSourceFilterInTx(ctx context.Context, s *Store, w SourceFilterWrite) error {
+	return SourceFilterStore{s: s}.writeFilter(ctx, w.Namespace, w.Text, w.Fence, w.Entry)
+}
+
 // runnerControlStatements write one row in each control table of the runner
 // protocol. The control rows of a live session need a durable operation, so
 // the test writes them through SQL.

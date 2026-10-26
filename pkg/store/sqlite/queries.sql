@@ -64,6 +64,17 @@ UPDATE namespaces
 SET output_sharing_default = ?
 WHERE name = ?;
 
+-- name: GetNamespaceSourceFilter :one
+SELECT source_filter
+FROM namespaces
+WHERE name = ?;
+
+-- name: SetNamespaceSourceFilter :execrows
+-- Replaces the source filter of one namespace.
+UPDATE namespaces
+SET source_filter = ?
+WHERE name = ?;
+
 -- name: GetFailoverVersion :one
 SELECT failover_version
 FROM namespaces
