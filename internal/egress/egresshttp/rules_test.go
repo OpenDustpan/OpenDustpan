@@ -69,7 +69,7 @@ func TestClientWithAllowsAnAllowedRange(t *testing.T) {
 		loopbackRules(t),
 		egress.NoRedirect,
 		egress.HTTPSOnly,
-		egresshttp.Options{RootCAs: pool},
+		egresshttp.Options{RootCAs: pool, Resolver: nil},
 	)
 
 	resp, err := client.Get(srv.URL) //nolint:noctx // a test
@@ -122,7 +122,7 @@ func TestClientWithRedirectLayer(t *testing.T) {
 			loopbackRules(t),
 			redirects,
 			egress.HTTPSOnly,
-			egresshttp.Options{RootCAs: pool},
+			egresshttp.Options{RootCAs: pool, Resolver: nil},
 		)
 
 		resp, err := client.Get(srv.URL) //nolint:noctx // a test
@@ -145,7 +145,7 @@ func TestClientWithURLLayer(t *testing.T) {
 		loopbackRules(t),
 		egress.NoRedirect,
 		egress.HTTPSOnly,
-		egresshttp.Options{RootCAs: nil},
+		egresshttp.Options{RootCAs: nil, Resolver: nil},
 	)
 
 	for _, u := range []string{"http://127.0.0.1/", "https://user@127.0.0.1/", "https://localhost/", "https://2130706433/"} {

@@ -59,7 +59,7 @@ const maxIdleConns = 16
 // proxy from the environment, the redirect policy r, and egress.Timeout
 // for each request. Read a body with ReadBody.
 func Client(r egress.Redirects, s egress.Scheme) *http.Client {
-	return ClientWith(egress.Rules{Allow: nil, LoopbackForTests: false}, r, s, Options{RootCAs: nil})
+	return ClientWith(egress.Rules{Allow: nil, LoopbackForTests: false}, r, s, Options{RootCAs: nil, Resolver: nil})
 }
 
 // Options are the settings of ClientWith that are not egress rules.
@@ -67,14 +67,19 @@ type Options struct {
 	// RootCAs holds the certificate authorities that the client trusts.
 	// Nil means the system roots. A test sets it for a local TLS server.
 	RootCAs *x509.CertPool
+	// Resolver answers the name lookups of the dialer. Nil means the system
+	// resolver. A test sets it to supply the DNS answer for a host name. The
+	// dial guard checks every address it returns.
+	Resolver *net.Resolver
 }
 
 // ClientWith is Client with the allowed ranges of rules. The dial guard,
 // the URL check and the redirect check stay on, and they apply rules.
 func ClientWith(rules egress.Rules, r egress.Redirects, s egress.Scheme, o Options) *http.Client {
 	dialer := &net.Dialer{ //nolint:exhaustruct_v5 // the other fields keep their zero defaults; two of them are deprecated
-		Timeout: egress.Timeout,
-		Control: ControlWith(rules),
+		Timeout:  egress.Timeout,
+		Control:  ControlWith(rules),
+		Resolver: o.Resolver,
 	}
 
 	transport := &http.Transport{
