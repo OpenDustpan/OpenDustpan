@@ -287,13 +287,14 @@ func TestConsoleCSPRefusesHostileOrigins(t *testing.T) {
 	t.Parallel()
 
 	hostile := map[string]string{
-		"directive injection": "https://a.example;script-src *",
-		"two sources":         "https://a.example, https://b.example",
-		"space":               "https://a.example https://b.example",
-		"quote":               "https://a.example'",
-		"double quote":        `https://a.example"`,
-		"comma":               "https://a.example,https://b.example",
-		"line break":          "https://a.example\r\nX-Evil: 1",
+		"directive injection":     "https://a.example;script-src *",
+		"directive without space": "https://a.example;script-src",
+		"two sources":             "https://a.example, https://b.example",
+		"space":                   "https://a.example https://b.example",
+		"quote":                   "https://a.example'",
+		"double quote":            `https://a.example"`,
+		"comma":                   "https://a.example,https://b.example",
+		"line break":              "https://a.example\r\nX-Evil: 1",
 	}
 
 	for name, origin := range hostile {

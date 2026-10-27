@@ -4,11 +4,14 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"math"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"os"
 	"path"
 	"slices"
+	"strconv"
 	"strings"
 	"unicode"
 
@@ -65,6 +68,11 @@ func consoleHandler(dir string, headers []consoleHeader) (http.Handler, error) {
 		files.ServeHTTP(w, r)
 	}), nil
 }
+
+const (
+	schemeHTTP  = "http"
+	schemeHTTPS = "https"
+)
 
 // ConsoleHeaderOff is the value that turns one console response header off.
 const ConsoleHeaderOff = "off"
@@ -257,18 +265,86 @@ func checkAllowedOrigins(origins []string) error {
 // browser: scheme://host[:port] in lower case, ASCII only, with no default
 // port.
 func validAllowedOrigin(o string) bool {
-	const (
-		schemeHTTP  = "http"
-		schemeHTTPS = "https"
-	)
-
 	u, err := url.Parse(o)
-	if err != nil || (u.Scheme != schemeHTTP && u.Scheme != schemeHTTPS) || u.Hostname() == "" ||
+	if err != nil || (u.Scheme != schemeHTTP && u.Scheme != schemeHTTPS) ||
 		o != u.Scheme+"://"+u.Host || o != strings.ToLower(o) ||
 		strings.ContainsFunc(o, func(r rune) bool { return r > unicode.MaxASCII }) ||
 		strings.HasSuffix(u.Host, ":") {
 		return false
 	}
 
-	return (u.Scheme != schemeHTTPS || u.Port() != "443") && (u.Scheme != schemeHTTP || u.Port() != "80")
+	return validOriginHost(u.Hostname()) && validOriginPort(u.Scheme, u.Port())
+}
+
+// validOriginHost reports whether host is an IP literal without a zone, or a
+// DNS name: dot-separated labels of 1 to 63 lower-case letters, digits and
+// hyphens, with no hyphen at either end, and at most 253 characters in all.
+// url.Parse accepts more (for example ";", "," and quotes), and the origin
+// goes into the Content-Security-Policy and into the CORS answer.
+func validOriginHost(host string) bool {
+	if addr, err := netip.ParseAddr(host); err == nil {
+		return addr.Zone() == ""
+	}
+
+	const maxName = 253
+
+	if host == "" || len(host) > maxName {
+		return false
+	}
+
+	numeric := true
+
+	for label := range strings.SplitSeq(host, ".") {
+		kind := dnsLabel(label)
+		if kind == labelInvalid {
+			return false
+		}
+
+		numeric = numeric && kind == labelDigits
+	}
+
+	// A name of digits and dots that is not an IP address is a malformed address.
+	return !numeric
+}
+
+// Kinds of a DNS label, from dnsLabel.
+const (
+	labelInvalid = iota
+	labelDigits
+	labelName
+)
+
+// dnsLabel answers the kind of a label: it has 1 to 63 lower-case letters,
+// digits and hyphens with no hyphen at either end, and it holds digits only
+// or not.
+func dnsLabel(label string) int {
+	const maxLabel = 63
+
+	if label == "" || len(label) > maxLabel || strings.HasPrefix(label, "-") || strings.HasSuffix(label, "-") ||
+		strings.Trim(label, "abcdefghijklmnopqrstuvwxyz0123456789-") != "" {
+		return labelInvalid
+	}
+
+	if strings.Trim(label, "0123456789") == "" {
+		return labelDigits
+	}
+
+	return labelName
+}
+
+// validOriginPort reports whether port is empty or a decimal number from 1
+// to 65535 with no sign and no leading zero, and not the default port of
+// scheme.
+func validOriginPort(scheme, port string) bool {
+	if port == "" {
+		return true
+	}
+
+	if (scheme == schemeHTTPS && port == "443") || (scheme == schemeHTTP && port == "80") {
+		return false
+	}
+
+	n, err := strconv.Atoi(port)
+
+	return err == nil && n >= 1 && n <= math.MaxUint16 && port == strconv.Itoa(n)
 }

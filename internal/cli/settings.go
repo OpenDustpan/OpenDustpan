@@ -155,8 +155,9 @@ var Settings = []*Setting{
 		"allowed-origins", "DUSTPAN_ALLOWED_ORIGINS", "",
 		"comma-separated console origins allowed to call the API (DUSTPAN_ALLOWED_ORIGINS)",
 		referenceNone+". A comma-separated list. Each origin is a scheme (`http` or `https`), a host and an "+
-			"optional port, in lower case with an ASCII (punycode) host. It has no default port, path, query or "+
-			"fragment. The server refuses `null` and `*`. A listed origin gets CORS headers on `/api/`, with "+
+			"optional port, in lower case with an ASCII (punycode) host. The host is an IP address or a DNS name of "+
+			"letters, digits and hyphens. The port is a number from 1 to 65535. It has no default port, user "+
+			"information, path, query or fragment. The server refuses `null` and `*`. A listed origin gets CORS headers on `/api/`, with "+
 			"`Access-Control-Expose-Headers: Retry-After, ETag, Idempotent-Replayed` on answers to requests.",
 	).WithFile("allowed-origins"),
 	stringSetting(
