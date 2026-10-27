@@ -22,7 +22,6 @@ import (
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/audit/audittest"
 	blobfs "opendustpan.org/opendustpan/pkg/blob/fs"
-	"opendustpan.org/opendustpan/pkg/durable"
 	"opendustpan.org/opendustpan/pkg/idempotency"
 	"opendustpan.org/opendustpan/pkg/idempotency/idempotencytest"
 	"opendustpan.org/opendustpan/pkg/installation"
@@ -837,7 +836,6 @@ type backupStore struct {
 var (
 	_ storetest.Reopener       = (*backupStore)(nil)
 	_ storetest.StagingWitness = (*backupStore)(nil)
-	_ storetest.DurableHolder  = (*backupStore)(nil)
 	// Defense in depth: a store with no runner port fails to build here, so the runner round trip cannot be skipped.
 	_ storetest.RunnerSeeder = (*backupStore)(nil)
 )
@@ -903,11 +901,6 @@ func (s *backupStore) Reopen() storetest.BackupStore { //nolint:ireturn // Reope
 	})
 
 	return b
-}
-
-// DurableStore implements storetest.DurableHolder.
-func (s *backupStore) DurableStore() durable.Store { //nolint:ireturn // The capability returns the port.
-	return s.DurableOperations()
 }
 
 // IdempotencyStore implements storetest.IdempotencyHolder.

@@ -28,8 +28,9 @@ import (
 )
 
 // workerLease is the lease of the restore operations in the worker cases. A
-// takeover waits for it to end, so it stays short.
-const workerLease = 2 * time.Second
+// takeover waits for it to end, so it stays short, but long enough for the
+// renewals of a loaded machine under the race detector.
+const workerLease = 10 * time.Second
 
 // laterNamespace is the namespace that a worker rig creates after its backup:
 // a restored store does not hold it, and a store that the restore did not
@@ -304,8 +305,10 @@ func runAsync(t *testing.T, restores *backup.RestoreService, gate *stepGate) <-c
 }
 
 // driveToEnd runs the restore operations of restores until the row of id
-// ends, as the worker of one instance does, and returns the row.
-func driveToEnd(t *testing.T, restores *backup.RestoreService, id backup.RestoreID) backup.RestoreRecord {
+// and its operation end, as the worker of one instance does, and returns the
+// row. A takeover after the finish write ends the row first, and the
+// operation at its next claim.
+func (r *workerRig) driveToEnd(t *testing.T, restores *backup.RestoreService, id backup.RestoreID) backup.RestoreRecord {
 	t.Helper()
 
 	deadline := time.Now().Add(StuckTestLimit)
@@ -316,7 +319,7 @@ func driveToEnd(t *testing.T, restores *backup.RestoreService, id backup.Restore
 			t.Fatalf("get restore %s: %v", id, err)
 		}
 
-		if row.State == backup.RestoreSucceeded || row.State == backup.RestoreFailed {
+		if (row.State == backup.RestoreSucceeded || row.State == backup.RestoreFailed) && r.opOf(t, id).State.Terminal() {
 			return row
 		}
 
@@ -592,13 +595,10 @@ func (g *stepGate) Claim(ctx context.Context, req durable.ClaimRequest) (durable
 		return op, fmt.Errorf("claim: %w", err)
 	}
 
-	if (g.mode == gatePauseStale || g.mode == gatePauseLive) && previous(g.step) == "" {
-		var renew renewal
-		if g.mode == gatePauseLive {
-			renew = g.renewClaim
-		}
-
-		op.Claim = g.pause(ctx, op.Claim, renew)
+	// A live pause before the first step happens in the stage call, with
+	// pausingStage: the runner counts the lease from the start of the claim.
+	if g.mode == gatePauseStale && previous(g.step) == "" {
+		op.Claim = g.pause(ctx, op.Claim)
 	}
 
 	return op, nil
@@ -637,7 +637,7 @@ func (g *stepGate) RecordStep(ctx context.Context, f durable.StepFence, result [
 
 	if (g.mode == gatePauseStale || g.mode == gatePauseLive) && f.Step == previous(g.step) &&
 		(err == nil || errors.Is(err, durable.ErrStepDone)) {
-		g.pause(ctx, durable.Claim{Operation: f.Operation, Owner: "", Token: f.Token, ExpiresAt: time.Time{}}, nil)
+		g.pause(ctx, durable.Claim{Operation: f.Operation, Owner: "", Token: f.Token, ExpiresAt: time.Time{}})
 	}
 
 	if err != nil {
@@ -706,23 +706,9 @@ func (g *stepGate) crash() {
 	g.fire.Do(func() { close(g.reached) })
 }
 
-// renewal renews the claim of a paused holder, and returns the claim.
-type renewal func(ctx context.Context, c durable.Claim) durable.Claim
-
-// renewClaim renews c in the store of g. A failed renewal keeps c: the
-// claim then runs out, as for a holder that stopped.
-func (g *stepGate) renewClaim(ctx context.Context, c durable.Claim) durable.Claim {
-	next, err := g.Store.Extend(ctx, c, workerLease)
-	if err != nil {
-		return c
-	}
-
-	return next
-}
-
 // pause stops the holder of c until the release. A live pause in a claim
 // renews c, because the runner renews only after the claim returns.
-func (g *stepGate) pause(ctx context.Context, c durable.Claim, renew renewal) durable.Claim {
+func (g *stepGate) pause(ctx context.Context, c durable.Claim) durable.Claim {
 	g.fire.Do(func() {
 		if g.mode == gatePauseStale {
 			g.frozen.Store(true)
@@ -730,24 +716,35 @@ func (g *stepGate) pause(ctx context.Context, c durable.Claim, renew renewal) du
 
 		close(g.reached)
 
-		ticker := time.NewTicker(workerLease / 4)
-		defer ticker.Stop()
-
-		for {
-			select {
-			case <-g.release:
-				return
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				if renew != nil {
-					c = renew(ctx, c)
-				}
-			}
+		select {
+		case <-g.release:
+		case <-ctx.Done():
 		}
 	})
 
 	return c
+}
+
+// pausingStage pauses the holder in its stage call, while the runner renews
+// the claim: a live pause during the first step.
+type pausingStage struct {
+	backup.RestoreLive
+
+	gate *stepGate
+}
+
+// StageRestore implements backup.RestoreStaging.
+func (p pausingStage) StageRestore(
+	ctx context.Context, a backup.StagingArea, in backup.RestoreStageInput,
+) (backup.Summary, backup.DevStripReport, error) {
+	p.gate.pause(ctx, durable.Claim{Operation: "", Owner: "", Token: a.Token, ExpiresAt: time.Time{}})
+
+	sum, report, err := p.RestoreLive.StageRestore(ctx, a, in)
+	if err != nil {
+		return sum, report, fmt.Errorf("stage restore: %w", err)
+	}
+
+	return sum, report, nil
 }
 
 // deleteWatch is the live blob store of the services. It records each delete
@@ -836,7 +833,7 @@ func testWorkerTakeover(t *testing.T, newStore RestoreFactory, step string) {
 	<-aDone
 	waitReached(t, gate, aDone)
 
-	driveToEnd(t, b, id)
+	r.driveToEnd(t, b, id)
 	r.mustRestoredOnce(t, id, restoredCheck{areas: true})
 }
 
@@ -855,7 +852,7 @@ func testWorkerStaleHolder(t *testing.T, newStore RestoreFactory, step string) {
 	aDone := runAsync(t, a, gate)
 	waitReached(t, gate, aDone)
 
-	driveToEnd(t, b, id)
+	r.driveToEnd(t, b, id)
 	ended := r.mustRestoredOnce(t, id, restoredCheck{areas: true})
 
 	gate.open()
@@ -875,7 +872,13 @@ func testWorkerOtherStart(t *testing.T, newStore RestoreFactory, step string) {
 
 	r := newWorkerRig(t, newStore)
 	gate := newStepGate(t, r, step, gatePauseLive)
-	a := r.service(t, workerService{owner: "instance-a", ops: gate, live: nil, maint: nil, blobs: nil, lockWait: 0})
+
+	var live backup.RestoreLive
+	if step == backup.RestoreStepStage {
+		live = pausingStage{RestoreLive: r.st, gate: gate}
+	}
+
+	a := r.service(t, workerService{owner: "instance-a", ops: gate, live: live, maint: nil, blobs: nil, lockWait: 0})
 
 	id := r.start(t, a, false, false)
 	aDone := runAsync(t, a, gate)
@@ -958,7 +961,7 @@ func testWorkerSwapKill(t *testing.T, newStore RestoreFactory) {
 
 	// The swap either committed with its step record or changed nothing.
 	// Either way the restore ends once, with one swap.
-	driveToEnd(t, b, id)
+	r.driveToEnd(t, b, id)
 	r.mustRestoredOnce(t, id, restoredCheck{areas: true})
 }
 
@@ -991,7 +994,7 @@ func cancelBefore(
 	gate.open()
 	<-aDone
 
-	row := driveToEnd(t, c, id)
+	row := r.driveToEnd(t, c, id)
 	if row.State != backup.RestoreFailed || row.Error != backup.RestoreCanceledText {
 		t.Fatalf("canceled restore = %q (%s), want failed with %q", row.State, row.Error, backup.RestoreCanceledText)
 	}
@@ -1055,7 +1058,7 @@ func testWorkerNextCleanup(t *testing.T, newStore RestoreFactory) {
 	putBlob(t, r.live.Store, foreignKey, []byte("foreign"))
 
 	second := r.start(t, c, false, false)
-	driveToEnd(t, c, second)
+	r.driveToEnd(t, c, second)
 	r.mustRestoredOnce(t, second, restoredCheck{areas: true})
 
 	if areas := r.areasOf(t, first); len(areas) != 0 {
@@ -1075,14 +1078,22 @@ func testWorkerOverwritingBlobs(t *testing.T, newStore RestoreFactory) {
 	t.Helper()
 
 	r := newWorkerRig(t, newStore)
-	putBlob(t, r.live.Store, r.seed.liveBlob, []byte("bytes that differ from the backup"))
-
+	gate := newStepGate(t, r, backup.RestoreStepCopyBlobs, gatePauseLive)
 	a := r.service(t, workerService{
-		owner: "instance-a", ops: nil, live: nil, maint: nil, blobs: overwritingBlobs{deleteWatch: r.live}, lockWait: 0,
+		owner: "instance-a", ops: gate, live: nil, maint: nil, blobs: overwritingBlobs{deleteWatch: r.live}, lockWait: 0,
 	})
 
 	id := r.start(t, a, false, false)
-	driveToEnd(t, a, id)
+	aDone := runAsync(t, a, gate)
+	waitReached(t, gate, aDone)
+
+	// The live key holds other bytes after the pre-backup took its copy:
+	// the copy step repairs it with the checked bytes of the backup.
+	putBlob(t, r.live.Store, r.seed.liveBlob, []byte("bytes that differ from the backup"))
+
+	gate.open()
+	<-aDone
+
 	r.mustRestoredOnce(t, id, restoredCheck{areas: true})
 
 	repair := "restore " + id.String() + " repaired blob " + strconv.Quote(r.seed.liveBlob.String())
@@ -1101,7 +1112,7 @@ func testWorkerCorruptObject(t *testing.T, newStore RestoreFactory) {
 	a := r.service(t, workerService{owner: "instance-a", ops: nil, live: nil, maint: nil, blobs: nil, lockWait: 0})
 
 	id := r.start(t, a, false, false)
-	if row := driveToEnd(t, a, id); row.State != backup.RestoreFailed {
+	if row := r.driveToEnd(t, a, id); row.State != backup.RestoreFailed {
 		t.Fatalf("restore of a corrupt backup = %q, want failed", row.State)
 	}
 
@@ -1147,7 +1158,7 @@ func testWorkerOperatorMaintenance(t *testing.T, newStore RestoreFactory) {
 	a := r.service(t, workerService{owner: "instance-a", ops: nil, live: nil, maint: nil, blobs: nil, lockWait: 0})
 
 	id := r.start(t, a, false, false)
-	if row := driveToEnd(t, a, id); row.State != backup.RestoreSucceeded {
+	if row := r.driveToEnd(t, a, id); row.State != backup.RestoreSucceeded {
 		t.Fatalf("restore in the maintenance mode of an operator = %q (%s), want succeeded", row.State, row.Error)
 	}
 
@@ -1193,7 +1204,7 @@ func testWorkerCleanupBusy(t *testing.T, newStore RestoreFactory) {
 	})
 
 	id := r.start(t, a, false, false)
-	driveToEnd(t, a, id)
+	r.driveToEnd(t, a, id)
 	r.mustRestoredOnce(t, id, restoredCheck{areas: true})
 
 	if n := calls.Load(); n < 2 {
@@ -1208,7 +1219,7 @@ func testWorkerCheckOnly(t *testing.T, newStore RestoreFactory) {
 	a := r.service(t, workerService{owner: "instance-a", ops: nil, live: nil, maint: nil, blobs: nil, lockWait: 0})
 
 	id := r.start(t, a, true, false)
-	if row := driveToEnd(t, a, id); row.State != backup.RestoreSucceeded || row.PreBackupID != "" {
+	if row := r.driveToEnd(t, a, id); row.State != backup.RestoreSucceeded || row.PreBackupID != "" {
 		t.Fatalf("check-only restore = %q (%s) pre-backup %q, want succeeded with none",
 			row.State, row.Error, row.PreBackupID)
 	}
@@ -1289,7 +1300,7 @@ func testWorkerForceAudit(t *testing.T, newStore RestoreFactory) {
 	a := r.service(t, workerService{owner: "instance-a", ops: nil, live: nil, maint: maint, blobs: nil, lockWait: 0})
 
 	id := r.start(t, a, false, true)
-	driveToEnd(t, a, id)
+	r.driveToEnd(t, a, id)
 	r.mustRestoredOnce(t, id, restoredCheck{areas: true})
 
 	rec, ok := r.opOf(t, id).Step(backup.RestoreStepEnterMaintenance)
