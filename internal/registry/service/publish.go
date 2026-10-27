@@ -551,7 +551,7 @@ func (s *Service) promote(ctx context.Context, view *blob.Scoped, id namespace.I
 		closeErr := src.Close()
 
 		// A content key that exists holds bytes with this hash: the key is the
-		// hash. The copy leaves it alone.
+		// hash. The copy writes the same bytes, or leaves the key alone.
 		if err != nil && !errors.Is(err, blob.ErrExists) {
 			return fmt.Errorf("store the file %s: %w", f.Name, err)
 		}
