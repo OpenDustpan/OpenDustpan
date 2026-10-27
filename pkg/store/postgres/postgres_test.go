@@ -1104,12 +1104,13 @@ func newRestoreAuditServices(
 }
 
 // waitRestoreSucceeded polls the restore id until it succeeds, failing on
-// any other end state or when the wait times out.
+// any other end state. The wait ends on the state change. The limit
+// storetest.StuckTestLimit only ends a stuck test.
 func waitRestoreSucceeded(t *testing.T, restores *backup.RestoreService, id backup.RestoreID) {
 	t.Helper()
 
 	ctx := t.Context()
-	deadline := time.Now().Add(time.Minute)
+	deadline := time.Now().Add(storetest.StuckTestLimit)
 
 	for {
 		row, getErr := restores.Get(ctx, id)
