@@ -291,16 +291,34 @@ func (s *Service) Get(ctx context.Context) (State, error) {
 // writers keep starting work, the last attempt reports an *ActiveWorkError
 // that names the work and every unit that the attempts canceled. A start
 // after the second check meets the tool adapters, which answer 503.
-//
-//nolint:revive // The force flag is the API: it picks the bounded retry, and the route maps it from the request body.
 func (s *Service) Enter(ctx context.Context, force bool) (EnterResult, error) {
+	return s.EnterWith(ctx, EnterOptions{Force: force, Writer: storeWriter{store: s.store}})
+}
+
+// EnterOptions are the options of EnterWith and RecheckWith: whether to
+// cancel the active work, and the writer of each state write.
+type EnterOptions struct {
+	Force  bool
+	Writer StateWriter
+}
+
+// EnterWith runs Enter with opts.Force, and makes each state write through
+// w, which is opts.Writer: the write of
+// maintenance, and the move back to normal when work raced it. It calls
+// w.Check just before each cancel of active work, and cancels nothing when
+// the check fails. Each release of a lock names w.Actor in its audit entry.
+// When the state is already maintenance, it writes nothing, and it does not
+// list the active work: the caller that entered before runs that list.
+func (s *Service) EnterWith(ctx context.Context, opts EnterOptions) (EnterResult, error) {
+	force, w := opts.Force, opts.Writer
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	var canceled []string
 
 	for attempt := 1; ; attempt++ {
-		retry, res, err := s.enterAttempt(ctx, force)
+		retry, res, err := s.enterAttempt(ctx, force, w)
 		canceled = append(canceled, res.Canceled...)
 
 		if retry {
@@ -340,6 +358,12 @@ func (s *Service) Enter(ctx context.Context, force bool) (EnterResult, error) {
 // state is the one the last call wrote, and each caller reports it. While
 // the hold reports true, Leave reports ErrHeld and keeps maintenance mode.
 func (s *Service) Leave(ctx context.Context) error {
+	return s.LeaveWith(ctx, storeWriter{store: s.store})
+}
+
+// LeaveWith runs Leave, and makes the write of normal through w, with a
+// compare-and-set on maintenance.
+func (s *Service) LeaveWith(ctx context.Context, w StateWriter) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -363,8 +387,71 @@ func (s *Service) Leave(ctx context.Context) error {
 		}
 	}
 
-	return s.setState(ctx, StateNormal)
+	// A leave that lost the compare-and-set found normal: another leave
+	// landed first, and the state is what this leave wants.
+	if err := s.setStateIf(ctx, w, StateMaintenance, StateNormal); err != nil && !errors.Is(err, ErrStateChanged) {
+		return err
+	}
+
+	return nil
 }
+
+// RecheckWith lists the active work again while the state is maintenance,
+// as the second list of EnterWith does, and cancels it with opts.Force,
+// through the writer w of opts. It is for
+// a caller that entered maintenance mode, lost its claim before it confirmed
+// the enter, and runs again under a new claim: the write of maintenance is
+// done, so EnterWith would skip the list. Without force it moves back to
+// normal through w and reports ErrActiveWork when work is active. It calls
+// w.Check just before each cancel.
+func (s *Service) RecheckWith(ctx context.Context, opts EnterOptions) (EnterResult, error) {
+	w := opts.Writer
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	active, err := s.activeWork(ctx)
+	if err != nil {
+		return EnterResult{Canceled: nil}, err
+	}
+
+	if len(active) == 0 {
+		return EnterResult{Canceled: nil}, nil
+	}
+
+	if !opts.Force {
+		if setErr := s.setStateIf(ctx, w, StateMaintenance, StateNormal); setErr != nil &&
+			!errors.Is(setErr, ErrStateChanged) {
+			return EnterResult{Canceled: nil}, setErr
+		}
+
+		return EnterResult{Canceled: nil}, activeWorkError(active)
+	}
+
+	canceled, err := s.cancelWork(ctx, w, active)
+	if err != nil {
+		return EnterResult{Canceled: nil}, err
+	}
+
+	return EnterResult{Canceled: canceled}, nil
+}
+
+// storeWriter is the StateWriter of Enter and Leave: the store, with no
+// claim to check.
+type storeWriter struct {
+	store Store
+}
+
+// SetStateIf implements StateWriter.
+func (w storeWriter) SetStateIf(ctx context.Context, expected, next State) error {
+	return w.store.SetStateIf(ctx, expected, next)
+}
+
+// Check implements StateWriter: the store has no claim.
+func (storeWriter) Check(context.Context) error { return nil }
+
+// Actor implements StateWriter: Enter and Leave of a request name no actor.
+func (storeWriter) Actor() string { return "" }
 
 // enterAttempt runs one enter attempt: read the state, check for active
 // work, cancel it with force, and write maintenance with a compare-and-set.
@@ -372,7 +459,7 @@ func (s *Service) Leave(ctx context.Context) error {
 // moved back to normal, so the caller tries again from the fresh state.
 //
 //nolint:revive // The force flag is the API: ADR 38 decision 5 names it, and the route maps it from the request body.
-func (s *Service) enterAttempt(ctx context.Context, force bool) (bool, EnterResult, error) {
+func (s *Service) enterAttempt(ctx context.Context, force bool, w StateWriter) (bool, EnterResult, error) {
 	state, err := s.store.GetState(ctx)
 	if err != nil {
 		return false, EnterResult{Canceled: nil}, fmt.Errorf("get installation state: %w", err)
@@ -396,13 +483,13 @@ func (s *Service) enterAttempt(ctx context.Context, force bool) (bool, EnterResu
 	if force {
 		var cancelErr error
 
-		canceled, cancelErr = s.cancelWork(ctx, active)
+		canceled, cancelErr = s.cancelWork(ctx, w, active)
 		if cancelErr != nil {
 			return false, EnterResult{Canceled: nil}, cancelErr
 		}
 	}
 
-	setErr := s.setStateIf(ctx, StateNormal, StateMaintenance)
+	setErr := s.setStateIf(ctx, w, StateNormal, StateMaintenance)
 	if setErr != nil {
 		if !errors.Is(setErr, ErrStateChanged) {
 			// The cancel stays: the result names it, and Enter attaches it to the error.
@@ -422,7 +509,7 @@ func (s *Service) enterAttempt(ctx context.Context, force bool) (bool, EnterResu
 
 	// The result holds what this attempt canceled also when work raced the
 	// write: a forced Enter that gives up names it in the error.
-	_, racedErr := s.refuseRaced(ctx, already)
+	_, racedErr := s.refuseRaced(ctx, w, already)
 
 	return false, EnterResult{Canceled: canceled}, racedErr
 }
@@ -453,7 +540,7 @@ func (s *Service) enterRaced(ctx context.Context, canceled []string) (bool, Ente
 // reported, but the state is left alone. Work in already is not raced: a
 // forced enter met it before the write and left it (a client-encrypted
 // state keeps its lock).
-func (s *Service) refuseRaced(ctx context.Context, already activeWork) (EnterResult, error) {
+func (s *Service) refuseRaced(ctx context.Context, w StateWriter, already activeWork) (EnterResult, error) {
 	found, err := s.activeWork(ctx)
 	if err != nil {
 		return EnterResult{Canceled: nil}, err
@@ -471,7 +558,7 @@ func (s *Service) refuseRaced(ctx context.Context, already activeWork) (EnterRes
 		return EnterResult{Canceled: nil}, nil
 	}
 
-	if err := s.setStateIf(ctx, StateMaintenance, StateNormal); err != nil {
+	if err := s.setStateIf(ctx, w, StateMaintenance, StateNormal); err != nil {
 		if errors.Is(err, ErrStateChanged) {
 			return EnterResult{Canceled: nil}, activeWorkError(raced)
 		}
@@ -487,19 +574,10 @@ func activeWorkError(work activeWork) error {
 	return &ActiveWorkError{Work: work.names(), Canceled: nil}
 }
 
-// setStateIf stores next only when the stored state is expected.
-func (s *Service) setStateIf(ctx context.Context, expected, next State) error {
-	if err := s.store.SetStateIf(ctx, expected, next); err != nil {
+// setStateIf stores next through w only when the stored state is expected.
+func (*Service) setStateIf(ctx context.Context, w StateWriter, expected, next State) error {
+	if err := w.SetStateIf(ctx, expected, next); err != nil {
 		return fmt.Errorf("set installation state %q: %w", next, err)
-	}
-
-	return nil
-}
-
-// setState stores state.
-func (s *Service) setState(ctx context.Context, state State) error {
-	if err := s.store.SetState(ctx, state); err != nil {
-		return fmt.Errorf("set installation state %q: %w", state, err)
 	}
 
 	return nil
@@ -649,11 +727,16 @@ func (s *Service) lockedWorkspaces(ctx context.Context, ns namespace.Name) (acti
 // cancelWork cancels every active update and releases every held lock,
 // returning the unit references it canceled in a stable order. Work that
 // ended on its own stays out of the result: only canceled work is named.
-func (s *Service) cancelWork(ctx context.Context, work activeWork) ([]string, error) {
+func (s *Service) cancelWork(ctx context.Context, w StateWriter, work activeWork) ([]string, error) {
 	canceled := make([]string, 0, len(work))
 
 	for _, u := range work {
-		name, ok, err := s.cancelOne(ctx, u)
+		// A caller with a claim that it lost cancels nothing more.
+		if err := w.Check(ctx); err != nil {
+			return nil, fmt.Errorf("check the claim before the cancel of %s: %w", u.reference, err)
+		}
+
+		name, ok, err := s.cancelOne(ctx, u, w.Actor())
 		if err != nil {
 			return nil, err
 		}
@@ -670,7 +753,7 @@ func (s *Service) cancelWork(ctx context.Context, work activeWork) ([]string, er
 
 // cancelOne cancels one active update or releases one held lock. It reports
 // whether it canceled anything: work that ended on its own reports false.
-func (s *Service) cancelOne(ctx context.Context, u activeUnit) (string, bool, error) {
+func (s *Service) cancelOne(ctx context.Context, u activeUnit, actor string) (string, bool, error) {
 	if u.isUpdate {
 		if _, err := s.updates.Cancel(ctx, u.updateRef, u.updateID); err != nil {
 			if errors.Is(err, stack.ErrUpdateNotFound) || errors.Is(err, stack.ErrWrongUpdateState) {
@@ -711,7 +794,7 @@ func (s *Service) cancelOne(ctx context.Context, u activeUnit) (string, bool, er
 		Hash:          "",
 		Sequence:      0,
 		FenceVersion:  0,
-		Reason:        maintenanceReason,
+		Reason:        cancelReason(actor),
 		PrincipalKind: "",
 		JobID:         "",
 	}
@@ -796,4 +879,14 @@ func (w *Watcher) State(ctx context.Context) State {
 	w.state, w.at, w.read = state, w.now(), true
 
 	return state
+}
+
+// cancelReason is the reason in the audit entry of a release of a lock: the
+// start of maintenance mode, and the actor of the enter when there is one.
+func cancelReason(actor string) string {
+	if actor == "" {
+		return maintenanceReason
+	}
+
+	return maintenanceReason + " by " + actor
 }
