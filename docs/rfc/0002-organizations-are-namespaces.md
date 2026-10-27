@@ -73,3 +73,5 @@ OpenTofu's `cloud` block names an organization as well (RFC 1).
 ## Outcome
 
 Accepted as ADR 18 on 2026-10-10.
+
+Region terms in this RFC are superseded by [ADR 248](../adr/0248-federation-model.md): the server has no regions, and each namespace has a primary installation and replica installations.

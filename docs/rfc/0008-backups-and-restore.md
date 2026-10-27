@@ -94,3 +94,5 @@ stay open for a later decision.
 On 2026-10-18 the owner decided that one namespace can be backed up and
 restored ([ADR 218](../adr/0218-what-a-namespace-is-for-and-when-to-make-one.md)
 decision 4). Open parts of it are in RFC 76.
+
+Region terms in this RFC are superseded by [ADR 248](../adr/0248-federation-model.md): the server has no regions, and each namespace has a primary installation and replica installations.

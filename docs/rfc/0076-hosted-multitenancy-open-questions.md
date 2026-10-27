@@ -14,8 +14,8 @@ Status: draft.
 ADRs 215 to 221 record the owner decisions of 2026-10-18: OpenDustpan Cloud
 is multitenant, the namespace is the tenant, and each namespace can bring
 its own key. Those ADRs leave these questions open. Each one has options
-and a recommendation. The owner decides. RFC 79 holds the questions of
-federation and geo-replication.
+and a recommendation. The owner decides. ADR 248 and RFC 88 hold the federation model
+and asynchronous geo-replication. RFC 79 is dropped.
 
 ## 1. A path prefix for each namespace in the CLI backend URL
 

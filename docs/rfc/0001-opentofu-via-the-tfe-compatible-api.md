@@ -130,3 +130,5 @@ worked into the proposal above.
 Accepted as ADR 25 on 2026-10-11, for state and locking with local
 execution. Remote runs (RFC 30), `tofu login`, workspace tags and run tasks
 stay outside it.
+
+Region terms in this RFC are superseded by [ADR 248](../adr/0248-federation-model.md): the server has no regions, and each namespace has a primary installation and replica installations.
