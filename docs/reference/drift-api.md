@@ -94,6 +94,31 @@ grow. The result never holds an attribute name or an attribute value.
 The server shows the status `unknown` and no other field for a workspace that no
 check finished. It never shows `in-sync` for such a workspace.
 
+## The drift section of the context document
+
+`GET /namespaces/{namespace}/units/{unit_id}/context?include=drift` answers the
+latest drift result in the section `drift`. The section is not a default
+section. It needs `unit:read` on the workspace, the object `target`. A caller
+who lacks the action gets the 404 of an object that the caller cannot read, as
+for every section of the unit.
+
+The `data` of the section has these fields:
+
+| Field | Content |
+| --- | --- |
+| `status` | `drifted`, `in-sync` or `unknown`. |
+| `checkedAt` | The end of the plan phase of the job that made the result. Absent for the status `unknown`. |
+| `jobID` | The job that made the result. Absent for the status `unknown`. |
+| `addresses` | The addresses of the resources that differ, at most 100. An empty list for a result with no difference and for the status `unknown`. |
+| `truncated` | True when the result has more addresses than the list holds. |
+
+The `status` of the section is `ok`, or `partial` when the list is cut. It is
+`unavailable`, with no `data`, when the server has no drift store. The section
+for a resource of a workspace lists the address of the resource alone, and only
+when the latest result lists it. The section never holds an attribute name or an
+attribute value, and it holds no `kind`. Read the `kind` of each address from the
+drift read above.
+
 ## The jobs API
 
 The job document of the jobs API has the field `purpose`. For a drift check it

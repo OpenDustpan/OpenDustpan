@@ -20,6 +20,7 @@ import (
 	contextapi "opendustpan.org/opendustpan/internal/api/objectcontext"
 	"opendustpan.org/opendustpan/internal/api/route"
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/drift"
 	"opendustpan.org/opendustpan/pkg/identity"
 	coreinventory "opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -256,6 +257,14 @@ func (a *recordingAuthorizer) seen() []string {
 func newHandler(t *testing.T, authz identity.Authorizer, store *fakeStore) testHandler {
 	t.Helper()
 
+	return newHandlerWithDrift(t, authz, store, nil)
+}
+
+// newHandlerWithDrift is newHandler with the drift store results. Nil gives a
+// server with no drift feature.
+func newHandlerWithDrift(t *testing.T, authz identity.Authorizer, store *fakeStore, results drift.Store) testHandler {
+	t.Helper()
+
 	namespaces, err := namespace.NewService(
 		namespace.Config{Store: fakeNamespaces{}, Now: nil, Installation: "test-region"},
 	)
@@ -271,11 +280,20 @@ func newHandler(t *testing.T, authz identity.Authorizer, store *fakeStore) testH
 	}
 
 	handler, err := contextapi.NewHandler(contextapi.Config{
-		Audit: newTestAudit(), OnAuditFailure: nil,
-		Namespaces: namespaces, Units: fakeUnits{}, Deleted: fakeDeleted{}, Collections: nil, Entries: store,
-		Writer: writer, Authenticator: tokenAuthenticator{}, Authorizer: authz, Sessions: nil,
-		Logger:        slog.New(slog.DiscardHandler),
-		DenialLimiter: nil,
+		Audit:          newTestAudit(),
+		OnAuditFailure: nil,
+		Namespaces:     namespaces,
+		Units:          fakeUnits{},
+		Deleted:        fakeDeleted{},
+		Collections:    nil,
+		Drift:          results,
+		Entries:        store,
+		Writer:         writer,
+		Authenticator:  tokenAuthenticator{},
+		Authorizer:     authz,
+		Sessions:       nil,
+		Logger:         slog.New(slog.DiscardHandler),
+		DenialLimiter:  nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -584,10 +602,20 @@ func TestNewHandlerRequiresDependencies(t *testing.T) {
 	t.Parallel()
 
 	none := contextapi.Config{
-		Audit: newTestAudit(), OnAuditFailure: nil,
-		Namespaces: nil, Units: nil, Deleted: nil, Collections: nil, Entries: nil, Writer: nil, Authenticator: nil,
-		Authorizer: nil, Sessions: nil, Logger: nil,
-		DenialLimiter: nil,
+		Audit:          newTestAudit(),
+		OnAuditFailure: nil,
+		Namespaces:     nil,
+		Units:          nil,
+		Deleted:        nil,
+		Collections:    nil,
+		Drift:          nil,
+		Entries:        nil,
+		Writer:         nil,
+		Authenticator:  nil,
+		Authorizer:     nil,
+		Sessions:       nil,
+		Logger:         nil,
+		DenialLimiter:  nil,
 	}
 	if _, err := contextapi.NewHandler(none); !errors.Is(err, contextapi.ErrMissingDependency) {
 		t.Errorf("NewHandler with no dependency: %v, want ErrMissingDependency", err)

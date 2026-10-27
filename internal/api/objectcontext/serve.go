@@ -48,9 +48,15 @@ func (h *Handler) readContext(w http.ResponseWriter, r *http.Request, p identity
 
 	src := &requestSource{h: h, p: p, t: t}
 
+	// A nil port, not a port over a nil store, makes the section unavailable.
+	var driftReader objectcontext.DriftReader
+	if h.drift != nil {
+		driftReader = driftSource{results: h.drift}
+	}
+
 	reader, err := objectcontext.NewReader(objectcontext.Sources{
 		Inventory: src, Context: h.entries, Access: src,
-		Dependencies: nil, History: nil, Jobs: nil, Findings: nil, Audit: nil,
+		Dependencies: nil, History: nil, Jobs: nil, Findings: nil, Drift: driftReader, Audit: nil,
 	})
 	if err != nil {
 		h.writeError(ctx, w, err)

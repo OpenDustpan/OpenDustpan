@@ -216,6 +216,23 @@ func TestPlan(t *testing.T) {
 			want:    nil,
 		},
 		{
+			name: "unit with drift", kind: objectcontext.KindUnit,
+			include: []objectcontext.Section{"drift"},
+			sects:   []objectcontext.Section{"drift"},
+			want:    nil,
+		},
+		{
+			name: "resource with drift", kind: objectcontext.KindResource,
+			include: []objectcontext.Section{"drift"},
+			sects:   []objectcontext.Section{"drift"},
+			want:    nil,
+		},
+		{
+			name: "collection has no drift", kind: objectcontext.KindCollection,
+			include: []objectcontext.Section{"drift"}, want: objectcontext.ErrUnknownSection,
+			sects: nil,
+		},
+		{
 			name: "collection", kind: objectcontext.KindCollection,
 			sects:   []objectcontext.Section{"context"},
 			want:    nil,
