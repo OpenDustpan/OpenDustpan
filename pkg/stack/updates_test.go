@@ -705,6 +705,12 @@ func checkpoint(seq int64, body string) stack.CheckpointInput {
 	}
 }
 
+// envelope wraps inner in the versioned envelope that the CLI sends on a
+// sequenced save. The server refuses an envelope with no deployment member.
+func envelope(inner string) string {
+	return `{"deployment":` + inner + `}`
+}
+
 // TestUpdateHistoryConformance runs the staged history cases of ADR 28
 // decision 4 on the in-memory store, before the SQL adapters grow the
 // matching columns in issues #135 and #136.
@@ -729,7 +735,7 @@ func TestUpdateLifecycle(t *testing.T) {
 		t.Fatalf("started update: status %q version %d, want running version 1", s.Update.Status, s.Update.Version)
 	}
 
-	if err := f.svc.SaveCheckpoint(ctx, f.ref, s.Update.ID, s.Token, checkpoint(1, `{"a":1}`)); err != nil {
+	if err := f.svc.SaveCheckpoint(ctx, f.ref, s.Update.ID, s.Token, checkpoint(1, envelope(`{"a":1}`))); err != nil {
 		t.Fatalf("save checkpoint: %v", err)
 	}
 
@@ -916,7 +922,7 @@ func TestDryRunsDoNotMutate(t *testing.T) {
 		t.Errorf("dry run: mutates %t version %d, want false 0", dry.Update.Mutates(), dry.Update.Version)
 	}
 
-	err := f.svc.SaveCheckpoint(ctx, f.ref, dry.Update.ID, dry.Token, checkpoint(1, "{}"))
+	err := f.svc.SaveCheckpoint(ctx, f.ref, dry.Update.ID, dry.Token, checkpoint(1, envelope("{}")))
 	if !errors.Is(err, stack.ErrWrongUpdateState) {
 		t.Errorf("dry run checkpoint: %v, want ErrWrongUpdateState", err)
 	}
@@ -947,7 +953,7 @@ func TestLeaseRules(t *testing.T) {
 		t.Fatalf("token: %v", err)
 	}
 
-	err = f.svc.SaveCheckpoint(ctx, f.ref, s.Update.ID, other, checkpoint(1, "{}"))
+	err = f.svc.SaveCheckpoint(ctx, f.ref, s.Update.ID, other, checkpoint(1, envelope("{}")))
 	if !errors.Is(err, stack.ErrLeaseInvalid) {
 		t.Errorf("foreign token: %v, want ErrLeaseInvalid", err)
 	}
@@ -967,7 +973,7 @@ func TestLeaseRules(t *testing.T) {
 
 	f.clock.Advance(3 * time.Minute)
 
-	err = f.svc.SaveCheckpoint(ctx, f.ref, s.Update.ID, s.Token, checkpoint(1, "{}"))
+	err = f.svc.SaveCheckpoint(ctx, f.ref, s.Update.ID, s.Token, checkpoint(1, envelope("{}")))
 	if !errors.Is(err, stack.ErrLeaseExpired) {
 		t.Errorf("after expiry: %v, want ErrLeaseExpired", err)
 	}
@@ -993,10 +999,14 @@ func TestCheckpointRules(t *testing.T) {
 		name string
 		in   stack.CheckpointInput
 	}{
-		{name: "first", in: checkpoint(2, `{"v":2}`), want: nil},
-		{name: "retried", in: checkpoint(2, `{"v":2}`), want: nil},
-		{name: "same sequence, other content", in: checkpoint(2, `{"v":3}`), want: stack.ErrCheckpointConflict},
-		{name: "older sequence", in: checkpoint(1, `{}`), want: stack.ErrStaleCheckpoint},
+		{name: "first", in: checkpoint(2, envelope(`{"v":2}`)), want: nil},
+		{name: "retried", in: checkpoint(2, envelope(`{"v":2}`)), want: nil},
+		{
+			name: "same sequence, other content",
+			in:   checkpoint(2, envelope(`{"v":3}`)),
+			want: stack.ErrCheckpointConflict,
+		},
+		{name: "older sequence", in: checkpoint(1, envelope(`{}`)), want: stack.ErrStaleCheckpoint},
 		{name: "too large", in: checkpoint(3, string(make([]byte, 2048))), want: stack.ErrTooLarge},
 		{name: "no schema version", in: stack.CheckpointInput{
 			Features: nil, Deployment: []byte("{}"), SchemaVersion: 0, Sequence: 3, Invalid: false,
@@ -1011,7 +1021,7 @@ func TestCheckpointRules(t *testing.T) {
 
 	preview := f.started(t, stack.KindPreview)
 
-	err := f.svc.SaveCheckpoint(ctx, f.ref, preview.Update.ID, preview.Token, checkpoint(1, "{}"))
+	err := f.svc.SaveCheckpoint(ctx, f.ref, preview.Update.ID, preview.Token, checkpoint(1, envelope("{}")))
 	if !errors.Is(err, stack.ErrWrongUpdateState) {
 		t.Errorf("preview checkpoint: %v, want ErrWrongUpdateState", err)
 	}
@@ -1462,7 +1472,12 @@ func crashLeavesNoRow(t *testing.T, seq int64) {
 	f.store.cancelOnPut = cancel
 	f.store.mu.Unlock()
 
-	in := checkpoint(seq, `{"a":1}`)
+	body := `{"a":1}`
+	if seq > 0 {
+		body = envelope(body)
+	}
+
+	in := checkpoint(seq, body)
 
 	if err := f.svc.SaveCheckpoint(abandoned, f.ref, s.Update.ID, s.Token, in); !errors.Is(err, context.Canceled) {
 		t.Fatalf("abandoned save: %v, want context.Canceled", err)
@@ -1496,7 +1511,7 @@ func TestSweepDeletesUnreferencedBlobs(t *testing.T) {
 	ctx := t.Context()
 	s := f.started(t, stack.KindUpdate)
 
-	if err := f.svc.SaveCheckpoint(ctx, f.ref, s.Update.ID, s.Token, checkpoint(1, `{"a":1}`)); err != nil {
+	if err := f.svc.SaveCheckpoint(ctx, f.ref, s.Update.ID, s.Token, checkpoint(1, envelope(`{"a":1}`))); err != nil {
 		t.Fatalf("save checkpoint: %v", err)
 	}
 
@@ -1516,7 +1531,7 @@ func TestSweepDeletesUnreferencedBlobs(t *testing.T) {
 
 	mem.ageAll(2 * time.Hour)
 
-	if err := f.svc.SaveCheckpoint(ctx, f.ref, s.Update.ID, s.Token, checkpoint(2, `{"a":2}`)); err != nil {
+	if err := f.svc.SaveCheckpoint(ctx, f.ref, s.Update.ID, s.Token, checkpoint(2, envelope(`{"a":2}`))); err != nil {
 		t.Fatalf("second save: %v", err)
 	}
 
@@ -1628,7 +1643,9 @@ func TestStartKeepsReferencedBlobs(t *testing.T) {
 	ctx := t.Context()
 	first := f.started(t, stack.KindUpdate)
 
-	if err := f.svc.SaveCheckpoint(ctx, f.ref, first.Update.ID, first.Token, checkpoint(1, `{"a":1}`)); err != nil {
+	in := checkpoint(1, envelope(`{"a":1}`))
+
+	if err := f.svc.SaveCheckpoint(ctx, f.ref, first.Update.ID, first.Token, in); err != nil {
 		t.Fatalf("save checkpoint: %v", err)
 	}
 
@@ -1729,11 +1746,11 @@ func TestSweepListsOneUpdatePrefix(t *testing.T) {
 	// must list one update prefix only.
 	rec.listed = nil
 
-	if err := f.svc.SaveCheckpoint(ctx, f.ref, s.Update.ID, s.Token, checkpoint(1, `{"a":1}`)); err != nil {
+	if err := f.svc.SaveCheckpoint(ctx, f.ref, s.Update.ID, s.Token, checkpoint(1, envelope(`{"a":1}`))); err != nil {
 		t.Fatalf("save checkpoint: %v", err)
 	}
 
-	if err := f.svc.SaveCheckpoint(ctx, f.ref, s.Update.ID, s.Token, checkpoint(2, `{"a":2}`)); err != nil {
+	if err := f.svc.SaveCheckpoint(ctx, f.ref, s.Update.ID, s.Token, checkpoint(2, envelope(`{"a":2}`))); err != nil {
 		t.Fatalf("second save: %v", err)
 	}
 
@@ -1767,11 +1784,11 @@ func TestCheckpointLogsHoldNoBlobKey(t *testing.T) {
 	ctx := t.Context()
 	s := f.started(t, stack.KindUpdate)
 
-	if err := f.svc.SaveCheckpoint(ctx, f.ref, s.Update.ID, s.Token, checkpoint(1, `{"a":1}`)); err != nil {
+	if err := f.svc.SaveCheckpoint(ctx, f.ref, s.Update.ID, s.Token, checkpoint(1, envelope(`{"a":1}`))); err != nil {
 		t.Fatalf("save checkpoint: %v", err)
 	}
 
-	if err := f.svc.SaveCheckpoint(ctx, f.ref, s.Update.ID, s.Token, checkpoint(2, `{"a":2}`)); err != nil {
+	if err := f.svc.SaveCheckpoint(ctx, f.ref, s.Update.ID, s.Token, checkpoint(2, envelope(`{"a":2}`))); err != nil {
 		t.Fatalf("second save: %v", err)
 	}
 
@@ -2029,7 +2046,7 @@ func (f updatesFixture) completedWithBlob(t *testing.T) (blob.Key, *memBlob) {
 	ctx := t.Context()
 	first := f.started(t, stack.KindUpdate)
 
-	err := f.svc.SaveCheckpoint(ctx, f.ref, first.Update.ID, first.Token, checkpoint(1, `{"a":1}`))
+	err := f.svc.SaveCheckpoint(ctx, f.ref, first.Update.ID, first.Token, checkpoint(1, envelope(`{"a":1}`)))
 	if err != nil {
 		t.Fatalf("save checkpoint: %v", err)
 	}

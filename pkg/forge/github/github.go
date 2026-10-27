@@ -67,7 +67,7 @@ func NewOpener(cfg Config) (*Opener, error) {
 		cfg.Rules,
 		egress.NoRedirect,
 		egress.HTTPSOnly,
-		egresshttp.Options{RootCAs: cfg.RootCAs},
+		egresshttp.Options{RootCAs: cfg.RootCAs, Resolver: nil},
 	)
 
 	return &Opener{rules: cfg.Rules, client: client, now: now}, nil

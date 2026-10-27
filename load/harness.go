@@ -519,6 +519,15 @@ func buildDeployment(targetBytes int) []byte {
 	return []byte(sb.String())
 }
 
+// versionedEnvelope wraps deployment in the envelope of a sequenced save, as
+// the CLI sends it. The server refuses a sequenced save with no deployment
+// member.
+func versionedEnvelope(deployment []byte) []byte {
+	out := append([]byte(`{"version":3,"deployment":`), deployment...)
+
+	return append(out, '}')
+}
+
 // buildState answers a state document of about target bytes with serial and
 // lineage set, shaped like the recorded OpenTofu bodies.
 func buildState(targetBytes int, serial int64, lineage string) []byte {
