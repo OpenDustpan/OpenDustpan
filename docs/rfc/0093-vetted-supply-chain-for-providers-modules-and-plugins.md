@@ -77,6 +77,11 @@ Checked on 2026-10-20 against the docs, and against the source at OpenTofu
 file names and the line numbers are from that check. The lines move, so the
 ADR checks them again when it is written.
 
+Open item: the line numbers of this section are not checked again at the
+pinned upstream commits. The check needs a read of the upstream repositories.
+The owner decides whether this session has that access. Until the check is
+done, a line number in this section is a claim from the earlier review.
+
 **OpenTofu provider network mirror protocol**
 (<https://opentofu.org/docs/internals/provider-network-mirror-protocol/>,
 `internal/getproviders/http_mirror_source.go`)
@@ -207,8 +212,13 @@ ADR checks them again when it is written.
 - ADR 13: cross-tool features do not merge tool models. Shared code names a
   unit by tool, namespace and the tool's own name.
 - ADR 17: every feature has a REST API, and every route declares its
-  actions and objects. A route with no action is on the public list of the
-  route test.
+  actions and objects. The project rules in `CLAUDE.md` add that a route
+  without an action fails the route test, and that a route with no sign-in
+  goes on the explicit public list of that test.
+- ADR 210: the tool-neutral REST routes sit under `/api/dustpan/v1/`
+  (decision 1). A protocol route that a tool stores stays outside that
+  prefix (decision 2). No path holds the word `server` (decision 3). An
+  action name has the form `<area>:<verb>` (decision 7).
 - ADR 220: a namespace never reads a blob of another namespace.
 - ADR 224 decision 2: six fixed decision points. A new decision point is a
   new ADR. Decision 16: `state.write` runs at the lock or at the create of
@@ -309,10 +319,33 @@ refused (section D).
   package is never served by any route. Only the audit and forensic read
   (`namespace:read-packages`) opens it, and that read gives the bytes with no
   signed URL.
+- **Pending storage (proposal).** The fetch runs before the approval
+  (section D). So a holder of `namespace:request-package` could fill the
+  storage before a person approves anything. One request can store up to 16
+  platforms of 512 MiB each. Each namespace therefore has a quota for the
+  bytes of its pending blobs. The server refuses a request that would pass
+  the quota and writes an audit entry. The quota value is question 13.
+- **Retention of refused and expired requests (proposal).** The server
+  deletes the blobs of a refused request when the refusal is recorded. The
+  server deletes the blobs of an expired request at its expiry, and the
+  record says so. The request expiry period is question 13.
+
+**Routes that ADR 210 needs (note for the future ADR).** The two protocol
+routes sit outside `/api/dustpan/v1`, because the tools store them (ADR 210
+decision 2). The ADR that accepts this RFC amends ADR 210 decision 2 with
+two rows:
+
+- `/tofu/mirror/v1/{namespace}/...`, stored in the OpenTofu CLI
+  configuration as the `network_mirror` URL.
+- `/pulumi/plugins/v1/cap/{capability}`, stored in the environment that the
+  launcher gives the Pulumi CLI (`PULUMI_PLUGIN_DOWNLOAD_URL_OVERRIDES`).
+
+The rotation route, the lock-file route, the Pulumi checksums route and the
+admission, list and revoke routes are under `/api/dustpan/v1`. They do not
+change decision 2 (see sections B, C and D).
 
 **The package signing key.** Signed archive URLs and the Pulumi capability
-(see "Pulumi mirror proof") use one MAC key, stored as ADR 129 decision 19
-stores the conversation HMAC key:
+(see "Pulumi mirror proof") use one MAC key. The bullets below describe it:
 
 - One random 32-byte value, sealed in the scope `@server` (ADR 23). It is not
   a secret item, and no route lists or answers it. The server makes it at
@@ -330,7 +363,7 @@ stores the conversation HMAC key:
 - Each key has a **key ID** (one byte, in the table). Each capability and
   each signed URL holds the key ID. The server picks the key by that ID. An
   unknown ID gives 404 and an audit entry.
-- **Rotation.** `POST /api/server/package-keys/rotate` (action
+- **Rotation.** `POST /api/dustpan/v1/package-keys/rotate` (action
   `installation:manage-packages`, a fresh authentication, a reason, an audit
   entry) makes a new key with the next ID. New values use the new key. The
   server accepts the old key for the longest lifetime that a value can have
@@ -346,6 +379,17 @@ stores the conversation HMAC key:
   job step that holds it fails closed and the next phase receives a value that
   the restored key signs. No route rotates the key in the first slice
   except this one.
+  A deleted key is a risk here. A restore of an older backup brings the
+  deleted key back, and its values could become valid again. So the
+  proposal keeps a denylist of the deleted key IDs and of the fingerprints
+  of the deleted keys. The denylist is not in the table list of a backup
+  (ADR 30), so a restore does not replace it. A value with a denied key
+  fails (404) and writes an audit entry. A key ID is one byte. A new key
+  could get the ID of a denied key, so an ID alone is not safe. The
+  fingerprint does not have that problem. A test restores a backup that
+  holds a deleted key and checks the 404. The alternative is to rotate the
+  key at each restore, with the delete-at-once rule for the key of the
+  backup.
 
 **Signed archive URLs.** A signed URL binds the key ID, the namespace, the
 ID of the record, the platform, the SHA-256 of the archive and the expiry.
@@ -625,11 +669,25 @@ admit one that the installation revoked (question 3).
 | `namespace:approve-package` | namespace | approve an admission of the namespace as an eligible approver (ADR 225 decision 7) |
 | `installation:approve-package` | installation | approve an admission of the installation as an eligible approver (ADR 225 decision 7) |
 | `namespace:revoke-package` | namespace | revoke a vetted package, with a fresh authentication and a reason |
-| `namespace:download-packages` | namespace | the mirror routes. A job token of the namespace holds it. The token of a person (a laptop, a team CI) needs it as well |
+| `namespace:download-packages` | namespace | the mirror routes, the lock-file route and the Pulumi checksums route. A job token of the namespace holds it. The token of a person (a laptop, a team CI) needs it as well |
 | `installation:manage-packages` | installation | request and revoke the admissions of the installation, and rotate the package signing key. It does not change gates or the built-in rule (that needs `installation:manage-gates`) |
 
 A revocation needs no approval: it only takes away. It is in the audit log
 with the reason.
+
+**Routes (proposal, ADR 210).** The admission, list and revoke routes sit
+under `/api/dustpan/v1`:
+
+- `POST /api/dustpan/v1/namespaces/{namespace}/package-admissions` asks for an
+  admission (`namespace:request-package`).
+- `GET /api/dustpan/v1/namespaces/{namespace}/packages` lists the vetted
+  packages and their records (`namespace:read-packages`).
+- `POST /api/dustpan/v1/namespaces/{namespace}/packages/{id}/revoke` revokes a
+  vetted package (`namespace:revoke-package`).
+- `POST /api/dustpan/v1/package-admissions` asks for an admission of the
+  installation (`installation:manage-packages`).
+
+This RFC does not name the route that approves an admission.
 
 ### D. Verification, and the lock file gap
 
@@ -671,13 +729,15 @@ source needs a signature (see the facts). The primary path has two parts,
 and both are checked in the e2e suite:
 
 1. **A lock file that the server builds.**
-   `GET /tofu/mirror/v1/{namespace}/_lock-file?providers=...` (in the
-   adapter of OpenTofu, `internal/api/tfe/`) answers the text of a
+   `GET /api/dustpan/v1/namespaces/{namespace}/packages/lock-file?providers=...`
+   answers the text of a
    `.terraform.lock.hcl` for the named providers and versions, with the
    `h1:` and `zh:` hashes of every admitted platform. A team commits it and
-   needs no `tofu init` on each platform. The segment `_lock-file` starts
-   with an underscore, so it cannot be an upstream hostname, which is the
-   segment in that place on the other mirror routes.
+   needs no `tofu init` on each platform. The route checks
+   `namespace:download-packages` (the action) for the namespace in the path.
+   The OpenTofu format is built in `internal/api/tfe/`, as section A says for
+   a format that one tool reads. Question 14 asks whether the route belongs
+   under the tool-neutral prefix.
 2. **`tofu providers lock -net-mirror=<url> -platform=...`.** The
    documentation names this command for each platform that the team uses.
    The mirror answers the hashes of all admitted platforms to it.
@@ -692,7 +752,7 @@ approval. The record keeps the signature, the key ID and the fingerprint, and
 the fact `keyChanged` tells a gate that the key of this address changed. The
 signature result is `not-checked`, so a gate can ask for a stricter
 approval. A later slice can add
-`github.com/ProtonMail/go-crypto` after a review as ADR 7 asks. An upstream
+`github.com/ProtonMail/go-crypto` after the owner reviews it (question 4). An upstream
 that gives no key (the CLI allows this for `registry.opentofu.org` only,
 and a WARN shows it) gives `unsigned`. The CLI of a team that sets
 `OPENTOFU_ENFORCE_GPG_VALIDATION=true` still reads the mirror hashes
@@ -718,7 +778,9 @@ platform (see the facts). So, as for OpenTofu, the server fetches the
 archive of each platform at admission, keeps its SHA-256, and gives the
 `checksums` map for each `packages` entry of `Pulumi.yaml` for every
 admitted platform. The map is keyed by `<goos>-<goarch>`, as the CLI reads
-it. The route lives in `internal/api/pulumi/`. A team commits it, and the
+it. The route is `GET /api/dustpan/v1/namespaces/{namespace}/packages/pulumi-checksums`,
+with the action `namespace:download-packages`, as for the lock file. The
+Pulumi format is built in `internal/api/pulumi/`. A team commits it, and the
 CLI then checks the bytes on each platform. A platform with no entry is not
 checked by the CLI, so the output lists every admitted platform and the
 documentation says that a missing entry gives no check. The launcher does
@@ -759,16 +821,20 @@ has its own limit, and the limits are real.
    a git URL, and a provider that fetches its own plugin. It cannot stop a
    fetch from the server host itself. A pool with egress off has no layer 3.
 4. **The job record.** After `tofu init`, or before `pulumi up`, the
-   launcher reads the lock file, `.terraform/modules/modules.json` and the
-   plugin directory. It **hashes the installed package directories itself**
+   launcher reads the lock file, `.terraform/modules/modules.json`, the
+   provider directories under `.terraform/providers` and the plugin
+   directory. It **hashes the installed package directories itself**
    (the `h1:` hash of each provider directory, the SHA-256 of each Pulumi
    plugin archive or binary) and does not copy a hash from the lock file. It
    reports each address, version and hash. The report is untrusted input,
    because a step in the sandbox could change the launcher's view. The
    server checks that each reported address and version is on the allowlist,
    that each hash equals a hash of the record for the platform of the
-   runner, that the report is complete (one entry for each provider in the
-   lock file), and that its shape is valid. On a mismatch it fails the job
+   runner, that the report is complete, and that its shape is valid. The report is
+   complete when it has one entry for each package directory that the
+   launcher hashed under `.terraform/providers` and in the plugin directory.
+   It also needs one entry for each provider in the lock file. The lock file
+   alone is not the measure, because the sandbox can edit it. On a mismatch it fails the job
    before the plan. This stops a binary from the image or a cache, and a
    hash that is not the admitted one. It cannot stop a binary that the tool
    loads after the check, and it cannot trust a launcher that the sandbox has
@@ -1013,7 +1079,14 @@ step:
 4. Does slice 1 go without an OpenPGP dependency (the recommendation: the
    SHA-256 against the checksums file, the stored hashes, the approval, and
    the key ID, fingerprint and `keyChanged` fact), and a later review of
-   `github.com/ProtonMail/go-crypto` after ADR 7?
+   `github.com/ProtonMail/go-crypto`?
+
+   Status (2026-10-27): not answered. Slice 1 follows the recommendation,
+   because section D says that the standard library has no OpenPGP. The
+   later review needs a human decision. ADR 7 does not state a review rule.
+   It pins dependencies and requires versions at least two weeks old.
+   CLAUDE.md asks for a question before a new dependency. The owner decides
+   the review before the scope of slice 2 is fixed.
 5. Does the server fetch from upstream through `pkg/egress` with its own
    allowlist, off until set (option G.1), with an upload for an air gap soon
    after (G.3), and a fetch by a runner only for git module sources
@@ -1034,6 +1107,19 @@ step:
     (RFC 10 asks the same)?
 12. Does RFC 10 keep private publishing and the version lifecycle, and drop
     its curation part in favor of this RFC?
+13. What quota for pending blobs does a namespace get? How long does a
+    pending request stay before it expires? (section B, pending storage)
+14. Do the lock-file route and the Pulumi checksums route sit under
+    `/api/dustpan/v1/namespaces/{namespace}/packages/`, as section D
+    proposes? Section A says that a format that only one tool reads is built
+    in that tool's adapter.
+15. Is `POST /api/dustpan/v1/package-keys/rotate` the right shape? ADR 210
+    decision 5 gives its custom methods on a resource with an `{id}`. This
+    route acts on the collection.
+16. Section B says that the package signing key is sealed in the scope
+    `@server`, and that it is not a secret item. ADR 129 decision 10 says
+    that a secret item of that scope is a secret item. Which storage is
+    intended?
 
 ## Proposed glossary lines
 
