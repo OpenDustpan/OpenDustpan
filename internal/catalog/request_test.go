@@ -363,11 +363,13 @@ func TestGateForOpensWithApprovals(t *testing.T) {
 		{"a rejection", []job.Approval{approval("alice", job.VerdictReject)}, job.GateRejected},
 	}
 
+	devPolicy := gate.ApproverPolicy{Production: false, IsDev: nil}
+
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			if got := job.GatesStatus(gates, tt.approvals, "requester"); got != tt.want {
+			if got := job.GatesStatus(gates, tt.approvals, "requester", devPolicy); got != tt.want {
 				t.Fatalf("GatesStatus() = %s, want %s", got, tt.want)
 			}
 		})
