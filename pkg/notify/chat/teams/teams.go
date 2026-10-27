@@ -11,20 +11,26 @@
 // that Markdown, so the renderer breaks each token with a zero-width space
 // and does not rely on a backslash:
 //
-//   - a zero-width space on both sides of * and _ (an _ inside a word stays),
-//     so that no text becomes bold or italic;
+//   - a zero-width space on both sides of * and _ (an _ inside a word stays).
+//     This does not stop emphasis: a parser can still make *text* or _text_
+//     italic, because a zero-width space is not white space or punctuation
+//     for it. The result is formatting only. The renderer keeps the visible
+//     character, and the tests pin which tokens stay broken (see below);
 //   - a zero-width space after [ and ], so that [title](url) is no link;
 //   - a zero-width space after < and @, so that <at>name</at> and @name start
 //     no mention, and after : before //, so that no scheme starts a link;
 //   - a zero-width space after the dot of a leading www, so that no automatic
 //     link starts there;
-//   - a zero-width space at the start of a line that starts with -, +, #, >
-//     or a digit, so that no text becomes a list;
+//   - a zero-width space before the first character of a line that is -, +, #,
+//     > or a digit, after any spaces and tabs in front of it, so that no text
+//     becomes a list;
 //   - a line feed becomes two line feeds, the line break of a text block.
 //
-// The card has no mention entity, so no text can mention a person or a
-// channel. A URL goes only in the url field of an action. A text is cut on a
-// character boundary, and never inside a zero-width space.
+// Links, images, mentions, automatic links and list items stay broken. Bold and
+// italic can still render. The card has no mention entity, so no text can
+// mention a person or a channel. A URL goes only in the url field of an
+// action. A text is cut on a character boundary, and never inside a
+// zero-width space.
 package teams
 
 import (
@@ -39,13 +45,14 @@ import (
 	"opendustpan.org/opendustpan/pkg/notify/chat"
 )
 
-// MaxBody is the largest message that a Teams incoming webhook takes, in
-// bytes: 28 KB.
-const MaxBody = 28 * 1024
+// MaxBody is the largest message that the renderer makes, in bytes. Teams takes
+// a message of 28 KB, and Microsoft does not say how it counts that size, so
+// the renderer stays well under 28,000 bytes.
+const MaxBody = 24000
 
 // Limits of the texts of the card, in bytes of encoded text. The fixed parts
 // take at most about 11 KB before the JSON encoder doubles each quote, which
-// leaves room for links inside MaxBody.
+// leaves room for links inside MaxBody. The links that do not fit are left out.
 const (
 	maxProduct     = 200
 	maxTitle       = 600
@@ -226,7 +233,9 @@ func encodeMessage(m message) ([]byte, error) {
 	var buf bytes.Buffer
 
 	enc := json.NewEncoder(&buf)
-	// The texts hold no < and no >, and & is text for Teams.
+	// The texts can hold < and >. The encoder of JSON would write them and & as
+	// escapes of six bytes, and a reader of JSON turns them back, so the
+	// escape only makes the body larger. Teams ignores HTML either way.
 	enc.SetEscapeHTML(false)
 
 	if err := enc.Encode(m); err != nil {
@@ -368,10 +377,11 @@ func encodeRune(rs []rune, i int) string {
 func encodeOther(rs []rune, i int) string {
 	r := rs[i]
 
-	// A line that starts with a list or heading marker gets a zero-width space
-	// in front, so that it is no list item.
+	// A line that starts with a list or heading marker, also after spaces or
+	// tabs, gets a zero-width space in front of the marker, so that it is no
+	// list item.
 	lead := ""
-	if (i == 0 || rs[i-1] == '\n') && strings.ContainsRune("-+#>0123456789", r) {
+	if strings.ContainsRune("-+#>0123456789", r) && atLineStart(rs, i) {
 		lead = zeroWidthSpace
 	}
 
@@ -387,6 +397,17 @@ func encodeOther(rs []rune, i int) string {
 	default:
 		return lead + string(r)
 	}
+}
+
+// atLineStart reports whether only spaces and tabs come before rs[i] on its
+// line.
+func atLineStart(rs []rune, i int) bool {
+	j := i - 1
+	for j >= 0 && (rs[j] == ' ' || rs[j] == '\t') {
+		j--
+	}
+
+	return j < 0 || rs[j] == '\n'
 }
 
 // afterWWW reports whether rs[i] is the dot of a www at the start of a word.

@@ -245,6 +245,10 @@ func TestRenderEncodes(t *testing.T) {
 		{"a quote", "> a", zw + "> a"},
 		{"a line feed", "a\nb", "a\n\nb"},
 		{"a list item after a line feed", "a\n- b", "a\n\n" + zw + "- b"},
+		{"an indented list item", "  - a", "  " + zw + "- a"},
+		{"an indented numbered item", "   1. a", "   " + zw + "1. a"},
+		{"an indented numbered item after a line feed", "a\n  2. b", "a\n\n  " + zw + "2. b"},
+		{"a digit inside a line", "a 1. b", "a 1. b"},
 		{"a name in another script", "名前 ñ", "名前 ñ"},
 	}
 
@@ -425,5 +429,91 @@ func TestCheck(t *testing.T) {
 		if err != nil && strings.Contains(err.Error(), chattest.Canary) {
 			t.Errorf("%s: the error text repeats the body", tt.name)
 		}
+	}
+}
+
+// factValue renders s as the value of a field and returns the value as it is in
+// the card.
+func factValue(t *testing.T, s string) string {
+	t.Helper()
+
+	_, msg := render(t, content(func(c *chat.Content) { c.Fields = []chat.Field{{Label: "Name", Value: s}} }))
+
+	for _, e := range msg.Attachments[0].Content.Body {
+		for _, f := range e.Facts {
+			return f.Value
+		}
+	}
+
+	return ""
+}
+
+// TestRenderKeepsLinksAndMentionsBroken records what the zero-width spaces
+// stop. Microsoft documents no escape character for the Markdown of a text
+// block, so the renderer breaks tokens by position. A link, an image, a
+// mention and an automatic link stay broken: the characters that join them are
+// apart.
+func TestRenderKeepsLinksAndMentionsBroken(t *testing.T) {
+	t.Parallel()
+
+	inline := []struct{ name, in, token string }{
+		{"a link", "[t](https://evil.example)", "]("},
+		{"an image", "![t](https://evil.example/p.png)", "]("},
+		{"a reference link", "[t]: https://evil.example", "]:"},
+		{"a scheme", "https://evil.example", "://"},
+		{"a www link", "www.evil.example", "www.e"},
+		{"a mention tag", "<at>Everyone</at>", "<at>"},
+		{"a mention", "@everyone", "@e"},
+	}
+
+	for _, tt := range inline {
+		if got := factValue(t, tt.in); strings.Contains(got, tt.token) {
+			t.Errorf("%s: %q still holds %q, which joins the markup", tt.name, got, tt.token)
+		}
+	}
+}
+
+// TestRenderKeepsListsBroken checks that no line of a rendered value starts
+// with a list or heading marker, also after spaces.
+func TestRenderKeepsListsBroken(t *testing.T) {
+	t.Parallel()
+
+	for _, in := range []string{"- a", " - a", "   + a", "* a", "1. a", "  12. a", "# a", "> a", "x\n  - a\n2. b"} {
+		for l := range strings.SplitSeq(factValue(t, in), "\n") {
+			first := strings.TrimLeft(l, " ")
+			if first != "" && strings.ContainsRune("-+#>0123456789", rune(first[0])) {
+				t.Errorf("value %q: the line %q starts with a list or heading marker", in, l)
+			}
+		}
+	}
+}
+
+// TestRenderLeavesEmphasisPossible records the limit of the zero-width
+// spaces: the marks of bold and italic stay in the text, with the spaces beside
+// them, and a Markdown parser can still make the words bold or italic. That is
+// formatting only, never a link or a mention. The renderer keeps the visible
+// characters. A reviewer with a Teams flow checks what Teams does.
+func TestRenderLeavesEmphasisPossible(t *testing.T) {
+	t.Parallel()
+
+	for _, in := range []string{"*x*", "_x_", "**x**", "__x__"} {
+		got := factValue(t, in)
+
+		if strings.ReplaceAll(got, zw, "") != in {
+			t.Errorf("value %q rendered as %q, want the same visible characters", in, got)
+		}
+
+		if !strings.Contains(got, zw) {
+			t.Errorf("value %q rendered as %q, want zero-width spaces beside the marks", in, got)
+		}
+	}
+}
+
+func TestMaxBodyIsUnderTheLimitOfTeams(t *testing.T) {
+	t.Parallel()
+
+	// Microsoft names 28 KB and does not say how it counts the size.
+	if teams.MaxBody >= 28000 {
+		t.Errorf("MaxBody = %d, want less than 28,000 bytes", teams.MaxBody)
 	}
 }
