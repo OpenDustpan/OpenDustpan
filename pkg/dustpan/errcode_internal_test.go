@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 
 	"opendustpan.org/opendustpan/internal/errcode"
@@ -42,7 +43,10 @@ func TestSDKAnswersCarryACode(t *testing.T) {
 			"readiness of a component that does not run", http.MethodGet,
 			func(w http.ResponseWriter, r *http.Request) {
 				r.SetPathValue("component", "runner")
-				(&readiness{checks: nil, timeout: 0, failures: nil, logger: nil, parts: nil}).ServeOne(w, r)
+				(&readiness{checks: nil, timeout: 0, failures: nil, logger: nil, parts: nil, draining: atomic.Bool{}}).ServeOne(
+					w,
+					r,
+				)
 			},
 			http.StatusNotFound, errcode.ServerComponentNotFound,
 		},

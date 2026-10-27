@@ -22,6 +22,8 @@ func sweepChainServer(
 
 	return &Server{
 		kind:             kindState{store: nil, principals: nil, kind: ""},
+		ready:            nil,
+		drainPeriod:      0,
 		tempAdmins:       nil,
 		reconciler:       nil,
 		handler:          nil,

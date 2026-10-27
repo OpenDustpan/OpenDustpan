@@ -53,7 +53,8 @@ spreadAcrossNodes: true
 # kube-proxy rules time to stop sending requests to it while it still
 # answers. The readiness probe does not fail in this time. It must be more
 # than probes.readiness.periodSeconds. terminationGracePeriodSeconds must be
-# at least this value + 30, the shutdown timeout of the server. 0 turns the
+# at least this value + 40: the 10 s drain and the 30 s shutdown timeout
+# of the server. 0 turns the
 # hook off, and the chart then refuses replicas above 1.
 preStopSeconds: 15
 

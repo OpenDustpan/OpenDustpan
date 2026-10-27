@@ -895,7 +895,7 @@ func (f *serveFlags) serveWithStores(
 		return optErr
 	}
 	opts = append(opts, f.restoreOptions(ctx, logger, backupTarget)...)
-	opts = append(opts, dustpan.WithAuditSinks(sinks.ship...))
+	opts = append(opts, dustpan.WithAuditSinks(sinks.ship...), dustpan.WithDrainPeriod(dustpan.DefaultDrainPeriod))
 
 	// After the start-up checks and before serving, write the start entry
 	// and only then start the reloader: a start that fails its checks
