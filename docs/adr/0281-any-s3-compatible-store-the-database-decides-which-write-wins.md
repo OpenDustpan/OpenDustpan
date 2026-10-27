@@ -284,6 +284,9 @@ Each item is a separate pull request, unless it says otherwise.
   So each family ships in two steps: first a reader that accepts both forms
   in one tag, then a writer that uses the new key in a later tag. A row
   that a tag shipped keeps its fixed key and stays readable.
+- **The attempt deadline.** The fenced commit of each family checks the
+  attempt deadline of decision 11 inside the commit transaction, against
+  the clock of the database, not the clock of the instance.
 - **The last item waits.** Item 15 (the port and probe change) merges
   only after items 1 to 14 and the benchmark record.
 
@@ -309,16 +312,20 @@ Each item is a separate pull request, unless it says otherwise.
 10. Registry content keys: no change of behavior. The key is the hash, so a
     replace writes the same bytes.
 11. Store check: the service, the durable operation, the routes, the action,
-    the audit entries and the CLI command.
+    the audit entries and the CLI command. The hostile-prefix test uses a
+    real check ID of another check, not only a made-up one.
 12. Paged `List` in every adapter, and every caller moves to it.
-13. The reapers, with `DeleteMany` and the rule of decision 11.
+13. The reapers, with `DeleteMany` and the rule of decision 11. The race
+    between a reaper delete and the start of a backup uses the guard of
+    RFC 105 option 3: the read of the backups registry starts after the
+    commit, and a failed read means no delete.
 14. E2e with Garage: the suite runs on a store that ignores conditional
     writes.
 15. The port and probe change: the new `Put` contract, the minimal start-up
     check, and the changed and new `blobtest` cases. It merges last.
 
-Later, and not before 1.0: the backlog gauge and the write quota. They can
-merge at any time before 1.0.
+Not ordered: the backlog gauge and the write quota. Each can merge at any
+time, and the write quota merges before 1.0.
 
 ## Consequences
 
