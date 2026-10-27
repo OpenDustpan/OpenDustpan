@@ -30,6 +30,8 @@ const (
 	MaxReadNeighbors = 50
 	// MaxReadAudit bounds the entries of SectionAudit.
 	MaxReadAudit = 20
+	// MaxReadDriftAddresses bounds the resource addresses of SectionDrift.
+	MaxReadDriftAddresses = 100
 	// MaxReadOutputsBytes bounds the masked outputs of SectionOutputs.
 	MaxReadOutputsBytes = 1 << 20
 )
@@ -80,7 +82,7 @@ type Document struct {
 // Layers is set for SectionContext only: the status of each object of the
 // chain. Data is nil for StatusDenied and StatusUnavailable. Otherwise it is
 // one of IdentityData, ContextData, ReadmeData, OutputsData,
-// DependenciesData, ChangesData, HealthData and AuditData.
+// DependenciesData, ChangesData, HealthData, DriftData and AuditData.
 type Answer struct {
 	Data   any             `json:"data,omitempty"`
 	Action identity.Action `json:"action"`
@@ -196,6 +198,22 @@ type HealthData struct {
 	Locked       bool             `json:"locked"`
 }
 
+// DriftData is the data of SectionDrift. Status is the drift status of the
+// unit: "unknown" while no check has a result. CheckedAt and JobID are unset
+// for such a unit. Addresses holds the resource addresses that differ, at
+// most MaxReadDriftAddresses. For a resource, it holds the address of the
+// resource alone, and only when the unit lists it. Truncated is true when
+// the latest result lists more addresses than the answer holds, or when the
+// check cut its own list. The data holds no attribute name and no attribute
+// value.
+type DriftData struct {
+	CheckedAt *time.Time `json:"checkedAt,omitempty"`
+	Status    string     `json:"status"`
+	JobID     string     `json:"jobID,omitempty"`
+	Addresses []string   `json:"addresses"`
+	Truncated bool       `json:"truncated,omitempty"`
+}
+
 // AuditData is the data of SectionAudit: the newest audit entries whose
 // object is the unit.
 type AuditData struct {
@@ -279,6 +297,15 @@ type AuditReader interface {
 	Entries(ctx context.Context, unit graph.Unit, limit int) ([]audit.Entry, error)
 }
 
+// DriftReader is the source port of the latest drift result of a unit.
+type DriftReader interface {
+	// Drift returns the latest drift result of unit, with every address that
+	// the result lists. A unit with no check gives the status "unknown" and no
+	// time, not an error. The reader cuts the list. It returns ErrUnavailable
+	// when the server cannot read drift results.
+	Drift(ctx context.Context, unit graph.Unit) (DriftData, error)
+}
+
 // Access is the port of the access rules for one caller.
 type Access interface {
 	// Layers returns, for each object of chain in order, whether the caller
@@ -295,7 +322,7 @@ type Access interface {
 // Sources holds the ports that the read API reads. Inventory, Context and
 // Access are required. A nil feature port makes its sections answer
 // StatusUnavailable: Dependencies for SectionDependencies, History for
-// SectionChanges, Audit for SectionAudit. Jobs and Findings add to
+// SectionChanges, Drift for SectionDrift, Audit for SectionAudit. Jobs and Findings add to
 // SectionChanges and SectionHealth when they are set.
 type Sources struct {
 	Inventory    InventoryReader
@@ -305,6 +332,7 @@ type Sources struct {
 	History      HistoryReader
 	Jobs         JobReader
 	Findings     FindingsReader
+	Drift        DriftReader
 	Audit        AuditReader
 }
 
@@ -431,6 +459,8 @@ func (s *Service) fill(ctx context.Context, a *Answer, sec Section, chain []Ref,
 		return s.fillChanges(ctx, a, target)
 	case SectionHealth:
 		return s.fillHealth(ctx, a, target.Unit)
+	case SectionDrift:
+		return s.fillDrift(ctx, a, target)
 	case SectionAudit:
 		if s.src.Audit == nil {
 			return ErrUnavailable
@@ -670,6 +700,42 @@ func (s *Service) fillHealth(ctx context.Context, a *Answer, unit graph.Unit) er
 	}
 
 	a.Data = h
+
+	return nil
+}
+
+// fillDrift cuts the addresses of the latest drift result at
+// MaxReadDriftAddresses. For a resource it keeps its own address, if the unit
+// lists it.
+func (s *Service) fillDrift(ctx context.Context, a *Answer, target Ref) error {
+	if s.src.Drift == nil {
+		return ErrUnavailable
+	}
+
+	d, err := s.src.Drift.Drift(ctx, target.Unit)
+	if err != nil {
+		return err
+	}
+
+	if target.Kind == KindResource {
+		d.Addresses = slices.DeleteFunc(slices.Clone(d.Addresses), func(addr string) bool {
+			return addr != target.Resource
+		})
+	}
+
+	if len(d.Addresses) > MaxReadDriftAddresses {
+		d.Addresses, d.Truncated = d.Addresses[:MaxReadDriftAddresses], true
+	}
+
+	if d.Addresses == nil {
+		d.Addresses = []string{}
+	}
+
+	if d.Truncated {
+		a.Status = StatusPartial
+	}
+
+	a.Data = d
 
 	return nil
 }

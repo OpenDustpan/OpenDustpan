@@ -15,7 +15,9 @@ import (
 // of a unit under /api/dustpan/v1/namespaces/{namespace}/units/{unit_id}/drift.
 // With the job service too (see WithJobStore), the server also starts a drift
 // check through POST on /api/dustpan/v1/namespaces/{namespace}/units/{unit_id}/drift-checks.
-// Without it, the server serves no drift route.
+// The context API reads the same store for its drift section. Without it, the
+// server serves no drift route, and the drift section of the context API
+// answers unavailable.
 func WithDriftStore(st drift.Store) Option {
 	return func(o *settings) { o.driftStore = st }
 }

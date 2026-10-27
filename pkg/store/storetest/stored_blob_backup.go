@@ -465,11 +465,12 @@ func dropUnverified(t *testing.T, target blob.Store, id backup.ID) {
 }
 
 // waitRestoreEnd waits until the restore leaves checking and applying, and
-// returns its row.
+// returns its row. The wait ends on the state change. StuckTestLimit only ends
+// a stuck test.
 func waitRestoreEnd(t *testing.T, restores *backup.RestoreService, id backup.RestoreID) backup.RestoreRecord {
 	t.Helper()
 
-	deadline := time.Now().Add(time.Minute)
+	deadline := time.Now().Add(StuckTestLimit)
 
 	for {
 		row, err := restores.Get(t.Context(), id)

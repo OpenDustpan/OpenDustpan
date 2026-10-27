@@ -20,6 +20,13 @@ import (
 	"opendustpan.org/opendustpan/pkg/secret"
 )
 
+// StuckTestLimit is the outer limit of each wait in a store test for a state
+// change. The wait ends when the state changes. The limit exists only to end a
+// stuck test, and it is no deadline for the code under test. It is far above
+// the stall of a loaded machine running with the race detector and below the
+// test timeout of a store package.
+const StuckTestLimit = 20 * time.Minute
+
 // ItemKeyBackupRig is everything RunItemKeyBackup needs: a store that keeps
 // item keys, the backup and restore services over it and the live blob store,
 // as the server wires them.
@@ -334,11 +341,12 @@ func openAll(t *testing.T, s secret.ItemSealer, ref secret.ItemRef, binding, sea
 }
 
 // waitItemKeyRestore polls the restore until it succeeds, and fails on any
-// other end state or after a minute.
+// other end state. The wait ends on the state change. StuckTestLimit
+// only ends a stuck test.
 func waitItemKeyRestore(t *testing.T, restores *backup.RestoreService, id backup.RestoreID) {
 	t.Helper()
 
-	deadline := time.Now().Add(time.Minute)
+	deadline := time.Now().Add(StuckTestLimit)
 
 	for {
 		row, err := restores.Get(t.Context(), id)
