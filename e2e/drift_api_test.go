@@ -198,7 +198,8 @@ func checkContextDrift(section, status, jobID string, addresses []string) func(s
 		if doc.Sections["drift"].Status != section || d == nil || d.Status != status || d.JobID != jobID ||
 			(jobID != "") != (d.CheckedAt != nil) || !slices.Equal(d.Addresses, addresses) || d.Truncated ||
 			!strings.Contains(body, `"addresses":[`) {
-			return fmt.Errorf("%w: %s, want the section %s with the drift status %s", errDriftDoc, body, section, status)
+			return fmt.Errorf("%w: %s, want the section %s with the drift status %s",
+				errDriftDoc, body, section, status)
 		}
 
 		return nil
