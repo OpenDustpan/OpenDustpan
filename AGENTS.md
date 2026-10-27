@@ -306,7 +306,7 @@ skill (ADR 14):
 - An agent pastes the output of its checks into the description of each pull
   request that it opens (ADR 76).
 - Keep changes small and reviewable, with one concern per change.
-- Support Linux and macOS only (ADR 278). Do not write a patch that is specific to another platform. Do not add a build tag for one.
+- Support Linux and macOS only (ADR 278). Do not write a patch that is specific to another platform. Do not add a build tag for one. Fixes to generic build bugs on other platforms are accepted.
 - If you are unsure of the intent, ask rather than guess.
 - Manage agent skills with `npx skills@1.7.0` and `DISABLE_TELEMETRY=1`,
   installed for Claude Code and OpenCode. Never edit files under

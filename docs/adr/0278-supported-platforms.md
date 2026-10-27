@@ -49,3 +49,8 @@ platforms.
 - The release build ships only the supported platforms. `scripts/release-build.sh`
   and `RELEASE_PLATFORMS` in the `Makefile` no longer name `windows/amd64`.
   The release has no `.zip` archive.
+- Code for Windows that existed before this decision stays as it is:
+  `devdir_windows.go`, the `case "windows"` branches in `devdir.go` and the
+  Windows lines in `docs/guides/dev-server.md`. The project does not maintain
+  it. When that code breaks or needs a change, the project removes it and does
+  not fix it. This ADR changes none of it.
