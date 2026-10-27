@@ -86,13 +86,16 @@ systems that a follow-up calls. They are not part of OpenDustpan.
   `CheckModelURL`) and the dial guard would also run for the purpose
   `follow-up`, with the target list of the namespace as a second allowlist
   (section C).
-- ADR 130 and ADR 134, as amended by E4 (section C): a runner that makes a
-  follow-up call opens the token outside the sandbox of the launcher and
-  outside the secrets directory of any claim that runs team code. Each ADR
-  gets one paragraph.
+- ADR 130, ADR 134, ADR 136 and ADR 137, as amended by E4 (section C): a
+  runner that makes a follow-up call opens the token outside the sandbox of
+  the launcher and outside the secrets directory of any claim that runs team
+  code. Each ADR gets one paragraph.
 - ADR 145 decision 5: two new notification types, `unit.applied` (section
   A), so subscriptions get the same signal, and `follow-up.failed`
-  (section C).
+  (section C). The catalog `notify.Types()` (`pkg/notify/notify.go`) gets
+  both types. The reference documentation of the notification types gets
+  them too, as ADR 145 decision 5 requires for a new type. The ID prefix
+  `fuc-` joins the prefixes in `GLOSSARY.md` at acceptance (open question 12).
 - ADR 149 decision 10: it seals secrets for a sink only. A follow-up needs
   the same sealing for the AWX credential, bound to the target (section D).
 - ADR 210: the new actions `namespace:read-follow-ups`,
@@ -141,6 +144,13 @@ documentation of Ansible Automation Platform 2.6.
   with no input: `can_start_without_user_input`,
   `variables_needed_to_start`, `passwords_needed_to_start`,
   `inventory_needed_to_start`.
+- The request limit of AWX. At the `devel` commit, the file
+  `tools/ansible/roles/dockerfile/files/uwsgi.ini` sets `harakiri = 115`.
+  Uwsgi stops the worker of a request that runs longer than 115 seconds. The
+  same file at the tag `24.6.1` has no `harakiri` line. The start view creates
+  the job inside the request (`JobTemplateLaunch.post` in
+  `awx/api/views/__init__.py`). The gateway timeouts were not found in the
+  files that were checked (open question 11).
 
 **Job status.** `GET /api/v2/jobs/{id}/`. The `status` values are `new`,
 `pending`, `waiting`, `running`, `successful`, `failed`, `error` and
@@ -290,14 +300,19 @@ does not retry by itself. `egress.ErrRefused` and other `4xx` stop at once
 `unknown` call, the server looks for the job that the first attempt may have
 made. These rules hold together:
 
-- **Minimum wait.** The reconciliation starts no sooner than 90 seconds
-  after the last attempt (the 30 second request timeout plus a 60 second
-  margin), and only after the claim of that attempt has ended. Before that,
-  the redeliver is refused and the answer names the time to wait.
+- **Minimum wait.** The reconciliation starts no sooner than 175 seconds
+  after the last attempt (the AWX request limit of 115 seconds plus a 60
+  second margin), and only after the claim of that attempt has ended. AWX
+  creates the job during the start request, so the job can appear up to the
+  request limit after the send. The queue time before a worker starts the
+  request is not checked (open question 11). Before that, the redeliver is
+  refused and the answer names the time to wait.
 - **Clock skew.** The server reads the `Date` header of the AWX answer and
   measures the skew against its own clock. Above 60 seconds, the
   reconciliation fails closed: the call stays `unknown` and the person
-  checks AWX. Else the window below uses the measured skew.
+  checks AWX. If the `Date` header is missing or does not parse, the
+  reconciliation fails closed in the same way. Else the window below uses the
+  measured skew.
 - **The search.** `GET /job_templates/{id}/jobs/?created__gte=<time of the
   send minus the skew and a 60 second margin>`. At most 100 jobs, in one
   page. For each job, `GET /jobs/{id}/` and read `extra_vars` for the value
@@ -308,8 +323,13 @@ made. These rules hold together:
   results, which costs more reads on a busy template. **Recommendation:
   fail closed.**
 - **Result.** When a job has the call ID, the call records that job ID and
-  the status `started`, and no second start is sent. When no job has it,
-  the second start goes on.
+  the status `started`, and no second start is sent. When every job in the
+  window has a `dustpan_call_id`, and none has the ID of the call, the second
+  start goes on. When a job in the window has no `dustpan_call_id`, the call
+  stays `unknown` and the person checks AWX. Such a job can be the first
+  attempt, when an administrator removed the survey entry after the save.
+  Option: re-check the survey before the second start. **Recommendation: fail
+  closed.**
 - **One durable operation.** The reconciliation and the second start are
   one durable operation under the claim of the call, with a version check
   on the call. A second redeliver at the same time gets a conflict (`409`)
@@ -321,7 +341,9 @@ is not dropped. This limits the AWX jobs that a loop of applies can make.
 
 **Dead letter.** An `abandoned` or `unknown` call stays in the call
 history, sends the notification `follow-up.failed`, and can be redelivered
-by a person. A follow-up whose calls all failed for 24 hours is suspended,
+by a person. Only the states `abandoned` and `unknown` can be redelivered.
+The server refuses a redeliver of any other state. The test route
+(`POST .../follow-ups/{id}/test`) never posts to the start route of section D. A follow-up whose calls all failed for 24 hours is suspended,
 as ADR 145 decision 19 does for a subscription.
 
 **Limits.** Connect 10 seconds, request 30 seconds, answer body at most
@@ -350,8 +372,10 @@ sender refuses. The options:
   request, so it is not in the first slice. Rule for that decision: the
   token never enters a launcher sandbox or the secrets directory of a claim
   that runs team code. The runner opens it for one request in a separate
-  process of the runner, and no step of a claim reads it. ADR 130 and ADR
-  134 would be amended by this rule (one paragraph each).
+  process of the runner, and no step of a claim reads it. ADR 130, ADR 134,
+  ADR 136 and ADR 137 would be amended by this rule (one paragraph each).
+  ADR 136 covers the Kubernetes coordinator. ADR 137 covers the sandboxes and
+  the secrets volume of the machine coordinator.
 
 **Recommendation: E3 in the first slice, and E4 later for installations with
 `--egress-public-only`.** On a multitenant installation, the operator keeps
@@ -379,7 +403,7 @@ filter, the setting `fireOn`, the minimum interval, the API path, and the
 full mapping: each output, variable, type and pattern, and
 the allowed ranges and suffixes of the types `ip-list` and `host-name`. The
 binding is
-part of the sealed item, in the way ADR 145 decision 13 binds the secrets of
+part of the sealed item, in the way ADR 149 decision 10 binds the secrets of
 a sink to the sink. Any change of one of these values deletes the
 credential, and the follow-up stays suspended until a person enters the
 token again. Option: record who sealed the token, and let only a person who
@@ -411,7 +435,12 @@ goes as a JSON object, never as a YAML string.
 **Ranges for host types.** The types `ip-list` and `host-name` need allowed
 CIDR ranges (`ip-list`) or allowed name suffixes (`host-name`), set at the
 save and part of the binding (above). A value outside them ends the call
-`output-refused`. The save refuses a mapping of these types with no range
+`output-refused`. A `host-name` value matches a suffix on a label boundary.
+The value `evil-corp.example` does not match the suffix `corp.example`. A
+value matches a suffix when it equals the suffix, or when it ends with a dot
+and then the suffix. An IP address literal is not a valid `host-name` value,
+so a send ends the call `output-refused`. An address goes in an `ip-list`
+mapping. The save refuses a mapping of these types with no range
 or suffix. So the rule "take no host from a variable that a unit writer can
 set" holds with one exception: a host inside the bound ranges, which the
 token owner chose.
@@ -573,7 +602,7 @@ the gates of its decision points. Option: a fact `followUps` at
 | --- | --- | --- | --- | --- | --- |
 | Follow-up document (API) | Allowlist for each field. URL scheme `https`. Variable name pattern. Reserved names refused | Values stored as typed fields, never as text that a template reads | 100 follow-ups, 50 outputs | `namespace:manage-follow-ups` on the route, the store checks the fence | Unknown field refused (`422`). Denial audited |
 | Target URL and DNS | `egress.CheckURL` at save, and the allowlist check in the way of `CheckModelURL` (ADR 129 decision 26) with the purpose `follow-up` | Dial guard on each resolved address. No redirect. No proxy | Connect 10 s, request 30 s | Installation list and namespace list, both before each attempt | Refusal is `abandoned`, `denied` entry |
-| Output values (from tool state). A unit writer controls them | JSON value types only. The type and the pattern of each mapped variable, with refusal of a non-match. `ip-list` only inside the bound CIDR ranges, `host-name` only inside the bound suffixes (an IP outside the ranges is refused). Size per value. For the AWX kind, refuse a string with `{{`, `{%` or `{#` | `extra_vars` as a JSON object. Webhook body JSON-encoded. Never put in a URL, a header or a log | 16 KiB each, 64 KiB total | Creator holds `unit:read` at send time | Sensitive or missing output: `output-refused`, nothing sent, `denied` entry |
+| Output values (from tool state). A unit writer controls them | JSON value types only. The type and the pattern of each mapped variable, with refusal of a non-match. `ip-list` only inside the bound CIDR ranges, `host-name` only inside the bound suffixes, matched on a label boundary (an IP outside the ranges is refused). Size per value. For the AWX kind, refuse a string with `{{`, `{%` or `{#` | `extra_vars` as a JSON object. Webhook body JSON-encoded. Never put in a URL, a header or a log | 16 KiB each, 64 KiB total | Creator holds `unit:read` at send time | Sensitive or missing output: `output-refused`, nothing sent, `denied` entry |
 | Credential | Length and character set at save | Sealed secret item, opened in memory for one request. Sent only to the origin that the item is bound to at seal time | One credential for each follow-up | Store refuses an item sealed for another follow-up, scope, origin, template, inventory, `limit`, unit filter or mapping | Item that does not open: call fails, nothing sent |
 | AWX answer (start, job and jobs list, from a hostile AWX) | Parse a fixed schema: `job` as a positive integer, `status` from the eight values, `ignored_fields` keys only. In the jobs list: `id`, `status`, `created` and `extra_vars` only, and of `extra_vars` only `dustpan_call_id` as a string | Store parsed fields only, never the raw body or another `extra_vars` key. Strip control characters from names | Body at most `egress.MaxBodyBytes`, 100 names of 64 bytes, 100 jobs, 64 KiB for each `extra_vars` | A job ID is only shown, never used for another call | Unknown status or bad JSON: `unknown`, no retry |
 | Webhook answer | Status code only | No body stored, except an excerpt of at most 512 bytes of a non-`2xx` answer, with no control characters and the secret filter applied | 512 bytes | Shown only with `namespace:read-follow-ups` | Non-`2xx`: retry or `abandoned` |
@@ -679,7 +708,18 @@ at `127.0.0.1`, with the server trusting its certificate. It serves the
    later slice, or never?
 4. When applies come faster than calls end, do older pending calls of the
    same unit become `superseded`, or does each call go out in order?
+   Proposal: each call goes out in order. Option (a): a call waits while an
+   older call of the same pair is not terminal (section C). Option (b): a
+   pending call that a newer call passes becomes `superseded`, and the newer
+   call goes out. **Recommendation: option (a).** It matches the order rule
+   of section C, and it needs no new state. The owner decides before
+   acceptance.
 5. Do ignored AWX fields fail the call (this RFC) or only warn?
+   Proposal: option (a) fails the call, as this RFC states. Option (b)
+   records the field names and ends the call with a warning state that the
+   owner names. That state is not `failed`. **Recommendation: option (a).**
+   The AWX job runs without variables that OpenDustpan sent, so a call that
+   does not show a failure hides that. The owner decides before acceptance.
 6. Does the credential bind the unit filter and the full mapping, so that
    any change deletes it (this RFC), or does the server only record who
    sealed it? Is a wildcard filter out of the first slice? One action for
@@ -687,6 +727,13 @@ at `127.0.0.1`, with the server trusting its certificate. It serves the
    credential? One action is acceptable only with the binding of the
    credential to its target and data (section D). The target list needs its own
    action in either case.
+   Proposal: option (a) binds the unit filter and the full mapping, so any
+   change deletes the credential (this RFC). Option (b) records only who
+   sealed the credential. The stored token then stays valid for changed data.
+   **Recommendation: option (a), with one action for follow-ups and their
+   credentials, and no wildcard filter in the first slice (section D).** The
+   target list has its own action in either case. The owner decides before
+   acceptance.
 7. Which credential types does the AWX kind accept? This RFC recommends
    bearer tokens only: an AWX 24.x personal access token or a gateway token
    of Ansible Automation Platform 2.5 and later, with the scope `write`, for
@@ -699,6 +746,18 @@ at `127.0.0.1`, with the server trusting its certificate. It serves the
    internal CA, or does the server trust store cover it?
 10. How long does the server keep call history: 30 days as for deliveries,
     or 400 days as for stored plans?
+11. Check the AWX request limit and the gateway timeouts before the 175
+    second wait (section C) is final. This check is not done. At the `devel`
+    commit, uwsgi sets `harakiri = 115`. The file at the tag `24.6.1` has no
+    `harakiri` line. The gateway timeouts of an AWX installation (for example
+    nginx) and of the platform gateway of Ansible Automation Platform were not
+    found in the files checked. The check is not done because the AWX files
+    were read through the raw file endpoint only, and the gateway files were
+    not found at the paths tried. The owner must name the deployment that the
+    wait covers.
+12. At acceptance, add the two lines of "Proposed glossary lines" to
+    `GLOSSARY.md`, and add the prefix `fuc-` to the prefix entries there.
+    This is not done, because the RFC is not accepted.
 
 ## Proposed glossary lines
 
