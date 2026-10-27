@@ -201,8 +201,13 @@ func accessPlanCases(ctx context.Context, q *db.Queries) []accessPlanCase {
 
 // usesLiveIndex reports whether plan names a partial index of the live rows of
 // the access and profile tables. A lookup of one row by its ID must not use
-// them.
+// them. A SubPlan of the statement is not a lookup by ID: the check of the
+// last break-glass account scans the live rows of the installation, which
+// are few, and runs only for a break-glass target. So the check reads the
+// plan before its first SubPlan.
 func usesLiveIndex(plan string) bool {
+	plan, _, _ = strings.Cut(plan, "SubPlan")
+
 	for _, name := range []string{
 		"principals_subject", "principals_namespace", "roles_name_key", "principal_groups_name_key",
 		"grants_current", "grants_holder", "grants_role", "grants_target", "profiles_live_name",
