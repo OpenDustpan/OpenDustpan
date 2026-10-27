@@ -10,8 +10,11 @@ package source
 import (
 	"errors"
 	"fmt"
+	"net/netip"
 	"strconv"
 	"strings"
+
+	"opendustpan.org/opendustpan/pkg/egress"
 )
 
 var (
@@ -181,14 +184,25 @@ func matchAny(list []URLPattern, u string) bool {
 // "https://git.example.com/platform/a/b".
 type URLPattern string
 
-// Validate returns ErrInvalid for a pattern that is not an https URL with a
-// host and a path, that has a user, a query, a fragment, a port or a '%',
-// whose host has a character other than an ASCII letter, a digit, '.' or
-// '-', that has an empty path part, or that has a "*" that is not the
-// whole last path part.
+// Validate returns ErrInvalid for a pattern that is not valid.
+// The pattern must be an https URL with a host and a path.
+// It must have no user, query, fragment, port or '%'.
+// The host must be a DNS name of ASCII letters, digits, '.' and '-'.
+// An IP address, a number and localhost are not DNS names.
+// No path part can be empty.
+// A "*" must be the whole last path part.
 func (u URLPattern) Validate() error {
 	h, ok := SplitHTTPS(string(u))
 	if !ok || h.Host == "" || len(h.Parts) == 0 {
+		if hostRefused(string(u)) {
+			return fmt.Errorf(
+				"%w: pattern %q must be an https URL of a repository. "+
+					"The host must be a DNS name, not an IP address, a number or localhost",
+				ErrInvalid,
+				u,
+			)
+		}
+
 		return fmt.Errorf("%w: pattern %q must be an https URL of a repository", ErrInvalid, u)
 	}
 
@@ -295,16 +309,49 @@ func SplitHTTPS(s string) (HTTPSURL, bool) {
 	return HTTPSURL{Host: host, Parts: parts}, true
 }
 
-// validHost reports whether h is empty, or is labels of ASCII letters,
-// digits and '-', with '.' between them. An empty host is for the caller
-// to refuse. A host with any other character, for example a non-ASCII
-// letter that looks like an ASCII one, a '_' or a port, never matches a
-// pattern.
+// validHost reports whether h is empty, or is a host name of labels of
+// ASCII letters, digits and '-', with '.' between them. An empty host is
+// for the caller to refuse. A host with any other character, for example a
+// non-ASCII letter that looks like an ASCII one, a '_', a port or the
+// brackets of an IPv6 address, never matches a pattern. A host that is an
+// IP address, public or not (for example 93.184.216.34 or
+// 169.254.169.254), is refused: a Git host has a DNS name, and an address
+// skips the check of the TLS name. A number that a resolver reads as an
+// IPv4 address (2130706433, 0x7f000001 or 0177.0.0.1), localhost and a
+// name under localhost are refused too, and so is any address in a
+// loopback, private, link-local, unique local, metadata or reserved range.
+// A Git host on a private range needs a DNS name. A host name passes: the
+// connection checks the resolved address of each dial, and the allowed
+// ranges of the operator apply there.
 func validHost(h string) bool {
 	if h == "" {
 		return true
 	}
 
+	// Defense in depth: the egress rules below refuse the same hosts and
+	// more; this label check stays so that a change to the rules cannot
+	// open a host with a character that is not a letter, a digit, '.' or
+	// '-'. Neither layer relies on the other.
+	if !validLabels(h) {
+		return false
+	}
+
+	// Defense in depth: this check refuses every IP literal, also one that
+	// the egress rules below allow, for example a public address. It does
+	// not rely on the egress rules or on the label check.
+	if _, err := netip.ParseAddr(h); err == nil {
+		return false
+	}
+
+	// The one list of refused hosts and addresses is the egress rules. The
+	// label check above does not stop an address in the allowed characters.
+	// The rules refuse a number or localhost that ParseAddr does not read.
+	return egress.CheckURL("https://"+h, egress.HTTPSOnly) == nil
+}
+
+// validLabels reports whether h is labels of ASCII letters, digits and '-',
+// with '.' between them and no empty label.
+func validLabels(h string) bool {
 	for label := range strings.SplitSeq(h, ".") {
 		if label == "" {
 			return false
@@ -318,4 +365,21 @@ func validHost(h string) bool {
 	}
 
 	return true
+}
+
+// hostRefused reports whether s is an https URL whose host part is a bare
+// host that validHost refuses. A host part with a user or a port is not a
+// bare host: another rule refuses it, and the host rule is not the cause.
+func hostRefused(s string) bool {
+	rest, found := strings.CutPrefix(s, "https://")
+	if !found {
+		return false
+	}
+
+	host, _, _ := strings.Cut(rest, "/")
+	if host == "" || strings.Contains(host, "@") || (strings.Contains(host, ":") && !strings.HasPrefix(host, "[")) {
+		return false
+	}
+
+	return !validHost(host)
 }

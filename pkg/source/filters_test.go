@@ -396,6 +396,15 @@ func TestSplitHTTPS(t *testing.T) {
 		{"punycode host", "https://xn--gt-9ja.example.com/a", "xn--gt-9ja.example.com", "a", true},
 		{"non-ASCII host", "https://gіt.example.com/a", "", "", false},
 		{"NUL", "https://git.example.com/a\x00b", "", "", false},
+		{"IPv4 host", "https://169.254.169.254/a", "", "", false},
+		{"loopback host", "https://127.0.0.1/a", "", "", false},
+		{"public IPv4 host", "https://93.184.216.34/a", "", "", false},
+		{"upper-case hexadecimal host", "https://0X7F000001/a", "", "", false},
+		{"decimal host", "https://2130706433/a", "", "", false},
+		{"hexadecimal host", "https://0x7f000001/a", "", "", false},
+		{"localhost host", "https://localhost/a", "", "", false},
+		{"name under localhost", "https://git.localhost/a", "", "", false},
+		{"name that holds an address", "https://127.0.0.1.example.com/a", "127.0.0.1.example.com", "a", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -414,6 +423,42 @@ func TestSplitHTTPS(t *testing.T) {
 					tc.host,
 					tc.path,
 				)
+			}
+		})
+	}
+}
+
+func TestURLPatternValidateNamesTheHostRule(t *testing.T) {
+	t.Parallel()
+
+	const hostSentence = "The host must be a DNS name"
+
+	for _, tc := range []struct {
+		name     string
+		in       string
+		wantHost bool
+	}{
+		{"public IPv4", "https://93.184.216.34/a/b", true},
+		{"loopback", "https://127.0.0.1/a/b", true},
+		{"number", "https://2130706433/a/b", true},
+		{"localhost", "https://localhost/a/b", true},
+		{"bracketed IPv6", "https://[::1]/a/b", true},
+		{"http", "http://git.example.com/a/b", false},
+		{"no path", "https://git.example.com", false},
+		{"user", "https://u@git.example.com/a/b", false},
+		{"port", "https://git.example.com:8443/a/b", false},
+		{"empty host", "https:///a/b", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			err := source.URLPattern(tc.in).Validate()
+			if !errors.Is(err, source.ErrInvalid) {
+				t.Fatalf("Validate(%q) = %v, want ErrInvalid", tc.in, err)
+			}
+
+			if got := strings.Contains(err.Error(), hostSentence); got != tc.wantHost {
+				t.Errorf("Validate(%q) = %q, names the host rule = %v, want %v", tc.in, err, got, tc.wantHost)
 			}
 		})
 	}
