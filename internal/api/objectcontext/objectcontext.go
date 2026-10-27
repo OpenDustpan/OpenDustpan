@@ -24,6 +24,7 @@ import (
 	"opendustpan.org/opendustpan/internal/sessionauth"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/collection"
+	"opendustpan.org/opendustpan/pkg/drift"
 	"opendustpan.org/opendustpan/pkg/identity"
 	coreinventory "opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -40,7 +41,8 @@ const (
 )
 
 // Config holds the dependencies of a Handler. Collections is optional: with
-// no collection service, a unit has no collection layer. Sessions checks the
+// no collection service, a unit has no collection layer. Drift is optional:
+// with no drift store, the drift section answers unavailable. Sessions checks the
 // console session cookie of a request with no Authorization header; nil
 // accepts access tokens only.
 type Config struct {
@@ -48,6 +50,7 @@ type Config struct {
 	Units         coreinventory.Reader
 	Deleted       coreinventory.DeletedReader
 	Collections   *collection.Service
+	Drift         drift.Store
 	Entries       objectcontext.ContextReader
 	Writer        *objectcontext.Writer
 	Authenticator identity.Authenticator
@@ -72,6 +75,7 @@ type Handler struct {
 	units       coreinventory.Reader
 	deleted     coreinventory.DeletedReader
 	collections *collection.Service
+	drift       drift.Store
 	entries     objectcontext.ContextReader
 	writer      *objectcontext.Writer
 	authn       identity.Authenticator
@@ -117,6 +121,7 @@ func NewHandler(cfg Config) (*Handler, error) {
 		units:       cfg.Units,
 		deleted:     cfg.Deleted,
 		collections: cfg.Collections,
+		drift:       cfg.Drift,
 		entries:     cfg.Entries,
 		writer:      cfg.Writer,
 		authn:       cfg.Authenticator,

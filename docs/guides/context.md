@@ -88,8 +88,10 @@ curl -H "Authorization: token $DUSTPAN_TOKEN" \
 
 The document has a section for each kind of fact. `include=` names the
 sections that you need, separated by commas. The sections are `identity`,
-`context`, `readme`, `outputs`, `dependencies`, `changes`, `health` and
-`audit`. Without `include`, the call answers the default sections. A section
+`context`, `readme`, `outputs`, `dependencies`, `changes`, `health`, `drift` and
+`audit`. Without `include`, the call answers the default sections. The sections
+`outputs`, `drift` and `audit` are not default sections: ask for them with
+`include`. A section
 that the caller cannot read, or that the server has no data for, answers with
 the status `denied` or `unavailable`. It does not fail the call.
 
@@ -108,6 +110,14 @@ Each resolved value names the object and the source that it comes from. A
 caller that cannot read the collection of a unit still gets the owners and
 the on-call text from it. The answer names the kind of the object, and not
 its name.
+
+The `drift` section holds the drift status of the unit, the time and the job of
+the latest drift check, and the first 100 resource addresses that differ. A unit
+that no check finished has the status `unknown` and no time. A server without
+the drift store answers the status `unavailable` for the section. For a
+resource, the section lists the address of the resource alone, and only when the
+latest check lists it. The section holds no attribute name and no attribute
+value. It needs `unit:read` on the unit. See `docs/reference/drift-api.md`.
 
 `GET /api/dustpan/v1/namespaces/<namespace>/context` answers the `context` section of a
 namespace.
