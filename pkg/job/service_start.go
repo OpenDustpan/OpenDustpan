@@ -16,6 +16,7 @@ import (
 
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/durable"
+	"opendustpan.org/opendustpan/pkg/gate"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
 )
@@ -636,7 +637,9 @@ func startChanges(a Actor, j *Job) []audit.Change {
 // closed gate, and a retry with the key finds the job as it should be.
 func (s *service) persist(ctx context.Context, j *Job, fence namespace.Fence, e audit.Entry) (Job, bool, error) {
 	entries := []audit.Entry{e}
-	open := len(j.Phases) > 0 && GatesStatus(j.Phases[0].Gates, nil, j.StartedBy) == GateOpen
+	// No approval exists yet, so the policy counts no signature.
+	closedPolicy := gate.ApproverPolicy{Production: true, IsDev: nil}
+	open := len(j.Phases) > 0 && GatesStatus(j.Phases[0].Gates, nil, j.StartedBy, closedPolicy) == GateOpen
 
 	var dispatch *durable.StartRequest
 	if open {
