@@ -65,6 +65,7 @@ var notMoved = map[string]string{
 	"POST /api/server/restores":                                                      "/api/dustpan/v1/restores",
 	"GET /api/server/restores":                                                       "/api/dustpan/v1/restores",
 	"GET /api/server/restores/{id}":                                                  "/api/dustpan/v1/restores/{id}",
+	"POST /api/server/restores/{id}/cancel":                                          "/api/dustpan/v1/restores/{id}/cancel",
 	"GET /api/server/maintenance":                                                    "/api/dustpan/v1/maintenance",
 	"POST /api/server/maintenance/enter":                                             "/api/dustpan/v1/maintenance/enter",
 	"POST /api/server/maintenance/leave":                                             "/api/dustpan/v1/maintenance/leave",

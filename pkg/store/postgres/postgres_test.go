@@ -27,6 +27,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/blob"
 	blobfs "opendustpan.org/opendustpan/pkg/blob/fs"
+	"opendustpan.org/opendustpan/pkg/durable"
 	"opendustpan.org/opendustpan/pkg/idempotency"
 	"opendustpan.org/opendustpan/pkg/idempotency/idempotencytest"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -1103,6 +1104,12 @@ func waitRestoreSucceeded(t *testing.T, restores *backup.RestoreService, id back
 
 		if time.Now().After(deadline) {
 			t.Fatalf("restore %s never succeeded", id)
+		}
+
+		// No worker runs in this test: the wait runs the due step, as a
+		// worker does.
+		if runErr := restores.RunOnce(ctx); runErr != nil && !errors.Is(runErr, durable.ErrNoWork) {
+			t.Logf("run a restore operation: %v", runErr)
 		}
 
 		select {

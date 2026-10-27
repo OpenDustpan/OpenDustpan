@@ -3487,6 +3487,9 @@ func restoreLiveError(store any) error {
 	_, ok = store.(backup.KindReader)
 	check("KindReader", ok)
 
+	_, ok = store.(backup.Fencer)
+	check("Fencer", ok)
+
 	_, ok = store.(backup.RestoreOperations)
 	check("RestoreOperations", ok)
 

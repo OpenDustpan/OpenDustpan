@@ -30,6 +30,7 @@ type RestoreLive interface {
 	PortableExporter
 	KeyPeeker
 	KindReader
+	Fencer
 	RestoreOperations
 	RestoreStaging
 }
@@ -283,6 +284,13 @@ func (s *RestoreService) Start(ctx context.Context, id RestoreID, req RestoreReq
 		}
 	}
 
+	// A restore that runs refuses the start before it reads the target. The
+	// insert of StartRestore checks it again in its transaction: two starts
+	// at the same time pass this read, and only one insert commits.
+	if err := s.refuseWhileRunning(ctx); err != nil {
+		return fmt.Errorf("begin restore %s: %w", id, err)
+	}
+
 	warnings, err := s.startDevCheck(ctx, req.BackupID)
 	if err != nil {
 		return fmt.Errorf("begin restore %s: %w", id, err)
@@ -324,6 +332,23 @@ func (s *RestoreService) Start(ctx context.Context, id RestoreID, req RestoreReq
 
 	if err := s.live.StartRestore(ctx, record, start); err != nil {
 		return fmt.Errorf("create restore %s: %w", id, err)
+	}
+
+	return nil
+}
+
+// refuseWhileRunning returns ErrRestoreRunning when a restore row is
+// checking or applying.
+func (s *RestoreService) refuseWhileRunning(ctx context.Context) error {
+	rows, err := s.live.ListRestores(ctx)
+	if err != nil {
+		return fmt.Errorf("list restores: %w", err)
+	}
+
+	for i := range rows {
+		if rows[i].State == RestoreChecking || rows[i].State == RestoreApplying {
+			return ErrRestoreRunning
+		}
 	}
 
 	return nil
@@ -394,13 +419,18 @@ func (s *RestoreService) Cancel(ctx context.Context, id RestoreID) error {
 		return fmt.Errorf("cancel restore %s: %w", id, err)
 	}
 
-	if record.State != RestoreChecking && record.State != RestoreApplying {
-		return fmt.Errorf("cancel restore %s: %w", id, ErrRestoreNotRunning)
-	}
-
 	op, err := s.operationOf(ctx, id)
 	if err != nil {
 		return fmt.Errorf("cancel restore %s: %w", id, err)
+	}
+
+	if record.State != RestoreChecking && record.State != RestoreApplying {
+		// A cancel that a cancel already stopped is accepted again.
+		if record.State == RestoreFailed && op.State == durable.StateCanceled {
+			return nil
+		}
+
+		return fmt.Errorf("cancel restore %s: %w", id, ErrRestoreNotRunning)
 	}
 
 	err = s.canceler.CancelBefore(ctx, op.ID, RestoreStepSwap)
@@ -492,6 +522,17 @@ func (s *RestoreService) failEndedOnce(ctx context.Context) {
 		held = true
 	}
 
+	// The fence comes before the rows fail: when it fails, the next round
+	// still sees the ended restore and fences again.
+	if err := s.fenceEnded(ctx); err != nil {
+		if ctx.Err() == nil {
+			s.logger.WarnContext(ctx, "namespaces were not fenced after a restore that stopped",
+				slog.String("error", durable.ErrorClass(err)))
+		}
+
+		return
+	}
+
 	rows, err := s.live.FailEndedRestores(ctx, s.now().UTC(), !held)
 	if err != nil && ctx.Err() == nil {
 		s.logger.WarnContext(ctx, "restore rows of ended operations were not marked failed",
@@ -502,6 +543,47 @@ func (s *RestoreService) failEndedOnce(ctx context.Context) {
 		s.logger.WarnContext(ctx, "restore ended with no end write and was marked failed",
 			slog.String("restore_id", rows[i].ID.String()), slog.String("error", rows[i].Error))
 	}
+}
+
+// fenceEnded increments the failover version of every namespace when a
+// checking or applying restore row has an operation that ended: the restore
+// stopped with no end write. A stop before the swap leaves the live data
+// unchanged, and the swap fences in its own transaction, but the fence keeps
+// leases from before the restore from working after any stop of a restore.
+func (s *RestoreService) fenceEnded(ctx context.Context) error {
+	rows, err := s.live.ListRestores(ctx)
+	if err != nil {
+		return fmt.Errorf("list restores: %w", err)
+	}
+
+	running := make(map[string]bool)
+
+	for i := range rows {
+		if rows[i].State == RestoreChecking || rows[i].State == RestoreApplying {
+			running[RestoreOperationKey(rows[i].ID)] = true
+		}
+	}
+
+	if len(running) == 0 {
+		return nil
+	}
+
+	ops, err := s.operations.List(ctx, durable.Filter{Kind: RestoreOperationKind, States: nil, Limit: 0})
+	if err != nil {
+		return fmt.Errorf("list restore operations: %w", err)
+	}
+
+	for i := range ops {
+		if running[ops[i].Key] && ops[i].State.Terminal() {
+			if _, err := s.live.BumpFailoverVersions(ctx); err != nil {
+				return fmt.Errorf("fence namespaces after a stopped restore: %w", err)
+			}
+
+			return nil
+		}
+	}
+
+	return nil
 }
 
 // storedRestoreSentinels lists the sentinels whose own text a restore row
