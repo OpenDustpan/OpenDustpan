@@ -135,7 +135,13 @@ type workerRig struct {
 func newWorkerRig(t *testing.T, newStore RestoreFactory) *workerRig {
 	t.Helper()
 
-	st, ok := newStore(t).(restoreWorkerStore)
+	store := newStore(t)
+
+	// A store without the restore operation ports skips, as for the port
+	// cases: the ports land together.
+	restorePortsOf(t, store)
+
+	st, ok := store.(restoreWorkerStore)
 	if !ok {
 		t.Fatal("the store does not implement every port of a restore that a worker runs")
 	}
