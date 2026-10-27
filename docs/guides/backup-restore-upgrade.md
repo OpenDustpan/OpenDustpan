@@ -233,7 +233,10 @@ restore applies. These writes run, each with its audit entry:
   grants and tokens of the principal stay, and the principal can not use them
   until an administrator enables it again. The check of a disable in normal
   operation stays in force: the caller holds every action that the grants of
-  the principal give.
+  the principal give. The server refuses the disable of the last enabled
+  break-glass account with 409 and the error code `principal.last-break-glass`,
+  also in maintenance mode. Keep a second enabled break-glass account first
+  (see [Keep a break-glass account](break-glass-accounts.md)).
 - the expiry of a temporary administrator, which ends the record, disables the
   principal, revokes its grants and tokens and ends its group memberships.
 
@@ -261,7 +264,11 @@ For each revocation that it applies again, the restore writes one entry in
 subject and the object of the original revocation and has the time of the
 original revocation. A record in the journal that the restore can not apply (a
 kind that the server does not know, or a target that is not an ID) changes
-nothing and gets an entry with the outcome `denied`.
+nothing and gets an entry with the outcome `denied`. The restore skips a
+disable that would leave the restored data with no enabled break-glass
+account. It keeps that account enabled and writes an entry with the outcome
+`denied` and the reason `principal.last-break-glass` (see
+[Keep a break-glass account](break-glass-accounts.md)).
 
 The server records only the revocations of the current stay in maintenance mode. A
 new enter starts a new stay. A revocation that you made in normal

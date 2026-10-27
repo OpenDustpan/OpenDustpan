@@ -58,6 +58,12 @@ var (
 	// ErrBreakGlassKind reports a break-glass account that is not a person.
 	// Only a person can be a break-glass account.
 	ErrBreakGlassKind = errors.New("break-glass account must be a person")
+	// ErrLastBreakGlass reports a disable or a delete of the last enabled
+	// break-glass account of the installation. An installation keeps one
+	// enabled break-glass account at least, as an emergency way in.
+	ErrLastBreakGlass = errors.New(
+		"cannot remove the last enabled break-glass account: keep a second enabled break-glass account first",
+	)
 	// ErrDisabled reports a principal that is disabled.
 	ErrDisabled = errors.New("principal is disabled")
 	// ErrNotSignInTarget reports a principal that a sign-in through an

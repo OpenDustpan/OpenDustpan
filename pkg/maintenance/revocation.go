@@ -199,6 +199,25 @@ func (r Revocation) ReplayEntry(invalid error) audit.Entry {
 	return e
 }
 
+// ReasonLastBreakGlass is the reason of the audit entry of a replayed disable
+// that the restore skipped, because it would leave the installation with no
+// enabled break-glass account. It is the catalog code principal.last-break-glass.
+const ReasonLastBreakGlass = "principal.last-break-glass"
+
+// KeptEntry returns the audit entry of a replayed revocation that the restore
+// skipped on purpose and that left its target as the restored data holds it:
+// the ReplayEntry of r with the outcome denied and the reason that names why.
+// The entry names the revocation, so a person can read which disable did not
+// apply and decide what to do.
+func (r Revocation) KeptEntry(reason string) audit.Entry {
+	e := r.ReplayEntry(nil)
+	e.Outcome = audit.OutcomeDenied
+	e.Reason = reason
+	e.ValuePath = "/maintenance/revocations/kept/" + r.Kind
+
+	return e
+}
+
 // CheckedReplayEntry returns ReplayEntry(invalid), after validate accepts it.
 // Defense in depth: Validate and the checks of the replay do not look at the
 // whole audit entry, so a row can pass them and still make an entry that the

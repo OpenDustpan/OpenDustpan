@@ -78,6 +78,14 @@ func Run(t *testing.T, newStore Factory) {
 		{name: "a membership with a bad source or state is ErrInvalid", test: testInvalidMembership},
 		{name: "a break-glass person round trips", test: testBreakGlassRoundTrip},
 		{name: "a break-glass account must be a person", test: testBreakGlassKind},
+		{name: "the last enabled break-glass account stays", test: testLastBreakGlassRefused},
+		{name: "a disabled or ended break-glass account does not count", test: testBreakGlassDisabledOrEndedDoNotCount},
+		{name: "the break-glass rule leaves other persons alone", test: testBreakGlassRuleIsForBreakGlassOnly},
+		{name: "two disables of the last two break-glass accounts leave one", test: testBreakGlassParallel},
+		{
+			name: "a disable and a delete of the last two break-glass accounts leave one",
+			test: testBreakGlassParallelDelete,
+		},
 	}
 
 	for _, tc := range cases {

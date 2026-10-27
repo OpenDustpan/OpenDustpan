@@ -39,7 +39,8 @@ func TestAccessByIDReadsUseThePrimaryKey(t *testing.T) {
 			t.Fatalf("%s: %v", tc.name, planErr)
 		}
 
-		if !strings.Contains(plan, tc.pkey) || usesLiveIndex(plan) {
+		lookup := lookupPlan(plan, tc.name)
+		if !strings.Contains(lookup, tc.pkey) || usesLiveIndex(lookup) {
 			t.Errorf("%s: the generic plan does not use %s:\n%s", tc.name, tc.pkey, plan)
 		}
 	}
@@ -77,7 +78,8 @@ func TestReplayByIDStatementsUseThePrimaryKey(t *testing.T) {
 			t.Fatalf("%s: %v", tc.kind, err)
 		}
 
-		if !strings.Contains(plan, tc.pkey) || usesLiveIndex(plan) {
+		lookup := lookupPlan(plan, "replay "+tc.kind)
+		if !strings.Contains(lookup, tc.pkey) || usesLiveIndex(lookup) {
 			t.Errorf("%s step %d: the generic plan does not use %s:\n%s", tc.kind, tc.step, tc.pkey, plan)
 		}
 	}
@@ -119,6 +121,20 @@ type accessPlanCase struct {
 	pkey string
 }
 
+// lookupPlan returns the part of plan that is the lookup of the row by its ID:
+// the whole plan, or the plan before its first SubPlan for a statement that
+// carries the check of the last break-glass account. That check is a SubPlan
+// over the few live rows of the installation, not a lookup by ID.
+func lookupPlan(plan, statement string) string {
+	if statement != "DeletePrincipal" && statement != "replay "+maintenance.RevokedPrincipal {
+		return plan
+	}
+
+	lookup, _, _ := strings.Cut(plan, "SubPlan")
+
+	return lookup
+}
+
 // accessPlanCases returns the statements that look up one live row of the
 // access and profile tables by its ID, sent through q.
 func accessPlanCases(ctx context.Context, q *db.Queries) []accessPlanCase {
@@ -142,13 +158,18 @@ func accessPlanCases(ctx context.Context, q *db.Queries) []accessPlanCase {
 
 			return err
 		}},
-		{name: "DeletePrincipal", args: "('1', 'p-x', 'acme')", pkey: "principals_pkey", send: func() error {
-			_, err := q.DeletePrincipal(ctx, db.DeletePrincipalParams{
-				DeletedAtMs: pgtype.Int8{Int64: 1, Valid: true}, ID: "p-x", Namespace: "acme",
-			})
+		{
+			name: "DeletePrincipal",
+			args: "('1', 'p-x', 'acme')",
+			pkey: "principals_pkey",
+			send: func() error {
+				_, err := q.DeletePrincipal(ctx, db.DeletePrincipalParams{
+					DeletedAtMs: pgtype.Int8{Int64: 1, Valid: true}, ID: "p-x", Namespace: "acme",
+				})
 
-			return err
-		}},
+				return err
+			},
+		},
 		{
 			name: "CreateFirstHostToken",
 			args: "('t-x', 'x', 'x', 'x', '1', '2', 'x', 'p-x', '1')",
