@@ -18,6 +18,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/durable"
 	"opendustpan.org/opendustpan/pkg/installation"
 	"opendustpan.org/opendustpan/pkg/store/sqlite"
+	"opendustpan.org/opendustpan/pkg/store/storetest"
 )
 
 // crashLease is the lease of the claim of the process that crashes. The
@@ -140,9 +141,10 @@ func crashedBackup(t *testing.T, path string, dirs recoveryDirs, id backup.ID) {
 
 	worker.Go(func() { svc.Work(workCtx) })
 
+	// The wait ends when the write step starts. The limit only ends a stuck test.
 	select {
 	case <-held.entered:
-	case <-time.After(30 * time.Second):
+	case <-time.After(storetest.StuckTestLimit):
 		t.Fatal("the backup did not reach its write step")
 	}
 
@@ -269,8 +271,9 @@ func checkRecovered(t *testing.T, second *sqlite.Store, target blob.Store, id ba
 	// load the lease of the dead process can end before the write step, and
 	// that process then takes its own claim over: the check needs at least one
 	// takeover of an expired claim.
+	// The wait ends when the operation ends. The limit only ends a stuck test.
 	opID := durableID(t, second, id)
-	deadline := time.Now().Add(30 * time.Second)
+	deadline := time.Now().Add(storetest.StuckTestLimit)
 
 	op, err := second.DurableOperationsPort().Get(ctx, opID)
 	for err == nil && !op.State.Terminal() && time.Now().Before(deadline) {
@@ -292,11 +295,12 @@ func checkRecovered(t *testing.T, second *sqlite.Store, target blob.Store, id ba
 	}
 }
 
-// waitBackupEnd polls the row of backup id until it leaves running.
+// waitBackupEnd polls the row of backup id until it leaves running. The wait
+// ends on the state change. storetest.StuckTestLimit only ends a stuck test.
 func waitBackupEnd(t *testing.T, store *sqlite.Store, id backup.ID) backup.Record {
 	t.Helper()
 
-	deadline := time.Now().Add(30 * time.Second)
+	deadline := time.Now().Add(storetest.StuckTestLimit)
 
 	for {
 		row, err := store.GetBackup(t.Context(), id)
@@ -309,7 +313,7 @@ func waitBackupEnd(t *testing.T, store *sqlite.Store, id backup.ID) backup.Recor
 		}
 
 		if time.Now().After(deadline) {
-			t.Fatalf("backup %s still running after 30s", id)
+			t.Fatalf("backup %s still running after %s", id, storetest.StuckTestLimit)
 		}
 
 		select {
