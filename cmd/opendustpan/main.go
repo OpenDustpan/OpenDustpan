@@ -280,6 +280,10 @@ type serveFlags struct {
 	listen                       string
 	consoleDir                   string
 	origins                      string
+	consoleContentTypeOptions    string
+	consoleFrameOptions          string
+	consoleCSP                   string
+	consoleHSTS                  string
 	tlsCert                      string
 	tlsKey                       string
 	publicURL                    string
@@ -477,12 +481,26 @@ func (f *serveFlags) registerStorage(fs *flag.FlagSet) {
 	cli.ByFlag("audit-verify-keys-file").String(fs, &f.auditVerifyKeysFile)
 }
 
+// consoleHeaders answers the console header settings of the flags.
+func (f *serveFlags) consoleHeaders() dustpan.ConsoleHeaders {
+	return dustpan.ConsoleHeaders{
+		ContentTypeOptions:      f.consoleContentTypeOptions,
+		FrameOptions:            f.consoleFrameOptions,
+		ContentSecurityPolicy:   f.consoleCSP,
+		StrictTransportSecurity: f.consoleHSTS,
+	}
+}
+
 // registerNet registers the network and console flags.
 func (f *serveFlags) registerNet(fs *flag.FlagSet) {
 	cli.ByFlag("components").String(fs, &f.components)
 	cli.ByFlag("listen").String(fs, &f.listen)
 	cli.ByFlag("console-dir").String(fs, &f.consoleDir)
 	cli.ByFlag("allowed-origins").String(fs, &f.origins)
+	cli.ByFlag("console-content-type-options").String(fs, &f.consoleContentTypeOptions)
+	cli.ByFlag("console-frame-options").String(fs, &f.consoleFrameOptions)
+	cli.ByFlag("console-csp").String(fs, &f.consoleCSP)
+	cli.ByFlag("console-hsts").String(fs, &f.consoleHSTS)
 	cli.ByFlag("tls-cert").String(fs, &f.tlsCert)
 	cli.ByFlag("tls-key").String(fs, &f.tlsKey)
 	cli.ByFlag("public-url").String(fs, &f.publicURL)
@@ -1053,6 +1071,7 @@ func (f *serveFlags) serverOptions(
 		dustpan.WithListenAddr(f.listen),
 		dustpan.WithConsoleDir(f.consoleDir),
 		dustpan.WithAllowedOrigins(splitList(f.origins)...),
+		dustpan.WithConsoleHeaders(f.consoleHeaders()),
 		dustpan.WithTrustedProxies(proxies...),
 		dustpan.WithTrustedProxyHeader(f.trustedProxyHeader),
 		dustpan.WithTLS(f.tlsCert, f.tlsKey),

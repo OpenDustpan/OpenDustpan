@@ -690,6 +690,22 @@ func TestNewServerRefusesBadAllowedOrigins(t *testing.T) {
 		{"https://console.example.com?x=1", false},
 		{"https://console.example.com#top", false},
 		{"https://user@console.example.com", false},
+		{"https://a.example;script-src", false},
+		{"https://a.example,b.example", false},
+		{"https://a.example b.example", false},
+		{"https://a'.example", false},
+		{"https://-a.example", false},
+		{"https://a-.example", false},
+		{"https://a..example", false},
+		{"https://a_b.example", false},
+		{"https://999.1.1.1", false},
+		{"https://a.example:99999", false},
+		{"https://a.example:0", false},
+		{"https://a.example:080", false},
+		{"https://a.example:8a", false},
+		{"http://[::1%25eth0]:8080", false},
+		{"https://xn--bcher-kva.example", true},
+		{"https://a-b.example1:8443", true},
 	} {
 		t.Run(tc.origin, func(t *testing.T) {
 			t.Parallel()
