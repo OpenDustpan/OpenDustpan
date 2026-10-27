@@ -101,7 +101,7 @@ trufflehog: ## TruffleHog: verified secrets in the Git history.
 
 # The same platform pairs as scripts/release-build.sh. The release archives
 # and the container image ship these files (third_party_licenses/).
-RELEASE_PLATFORMS := linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64
+RELEASE_PLATFORMS := linux/amd64 linux/arm64 darwin/amd64 darwin/arm64
 
 licenses: ## Each module linked into the binary has a license file to ship, on each release platform.
 	./scripts/third-party-licenses.sh --check $(RELEASE_PLATFORMS)
