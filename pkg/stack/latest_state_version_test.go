@@ -24,7 +24,7 @@ func TestLatestStateVersionReadsNoBlob(t *testing.T) {
 	for want := int64(1); want <= 2; want++ {
 		s := f.started(t, stack.KindUpdate)
 
-		if err = f.svc.SaveCheckpoint(t.Context(), f.ref, s.Update.ID, s.Token, checkpoint(1, `{"a":1}`)); err != nil {
+		if err = f.svc.SaveCheckpoint(t.Context(), f.ref, s.Update.ID, s.Token, checkpoint(1, envelope(`{"a":1}`))); err != nil {
 			t.Fatalf("save checkpoint: %v", err)
 		}
 

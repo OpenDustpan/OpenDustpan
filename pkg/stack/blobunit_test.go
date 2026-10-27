@@ -47,7 +47,7 @@ func TestSupersedeDeleteStaysInTheUpdate(t *testing.T) {
 			putAll(t, f.blobs, []string{victim})
 			putForeignCheckpoint(t, f, s, victim, 5)
 
-			saveErr := f.svc.SaveCheckpoint(t.Context(), f.ref, s.Update.ID, s.Token, checkpoint(6, `{"n":6}`))
+			saveErr := f.svc.SaveCheckpoint(t.Context(), f.ref, s.Update.ID, s.Token, checkpoint(6, envelope(`{"n":6}`)))
 			if saveErr != nil {
 				t.Fatalf("save: %v", saveErr)
 			}
@@ -115,7 +115,7 @@ func listingRuns() map[string]listingRun {
 			s := f.started(t, stack.KindUpdate)
 			f.clock.Advance(2 * time.Hour)
 
-			return f.svc.SaveCheckpoint(t.Context(), f.ref, s.Update.ID, s.Token, checkpoint(1, `{"n":1}`))
+			return f.svc.SaveCheckpoint(t.Context(), f.ref, s.Update.ID, s.Token, checkpoint(1, envelope(`{"n":1}`)))
 		}},
 	}
 }
@@ -271,7 +271,7 @@ func TestBlobCallsMakeNoExtraNamespaceReads(t *testing.T) {
 
 	before := f.nsStore.reads.Load()
 
-	if err := f.svc.SaveCheckpoint(ctx, f.ref, s.Update.ID, s.Token, checkpoint(1, `{"a":1}`)); err != nil {
+	if err := f.svc.SaveCheckpoint(ctx, f.ref, s.Update.ID, s.Token, checkpoint(1, envelope(`{"a":1}`))); err != nil {
 		t.Fatalf("save: %v", err)
 	}
 
