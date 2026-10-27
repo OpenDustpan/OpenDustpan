@@ -43,6 +43,12 @@ func (s *Store) ApplyStagingKeepingAccess(ctx context.Context) (backup.KeepAcces
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	// A binary below the minimum of the live database must not swap in a
+	// file that it built.
+	if minErr := s.checkSwapMinimumLocked(ctx); minErr != nil {
+		return backup.KeepAccessResult{}, minErr
+	}
+
 	// The check covers the whole staging area, also the access tables that
 	// the swap does not take, and runs before any write to the staged file.
 	if checkErr := s.checkSwapDevLocked(ctx, staged); checkErr != nil {

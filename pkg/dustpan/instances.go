@@ -106,3 +106,50 @@ func (s *Server) unregisterInstance(ctx context.Context) {
 
 	s.logger.InfoContext(ctx, "instance version row deleted at stop", slog.String("instance_id", s.instances.id))
 }
+
+// minimumChecker is the check that both SQL adapters make of the binary
+// version against the minimum binary version of the live schema.
+type minimumChecker interface {
+	// CheckBinaryMinimum returns a *schema.MinimumError when the binary of the
+	// store is below the highest minimum of the schema.
+	CheckBinaryMinimum(ctx context.Context) error
+}
+
+// restoreMinimumAdmit returns the start check of a restore: it refuses a
+// restore on a binary below the minimum binary version of the live schema. The
+// swap checks the minimum again in its own transaction. The store of a server
+// without the check admits every restore, as before.
+func restoreMinimumAdmit(store any) func(context.Context) error {
+	checker, ok := store.(minimumChecker)
+	if !ok {
+		return nil
+	}
+
+	return func(ctx context.Context) error {
+		if err := checker.CheckBinaryMinimum(ctx); err != nil {
+			return fmt.Errorf("restore start: %w", err)
+		}
+
+		return nil
+	}
+}
+
+// admitBoth returns the check that passes only when first and second pass. A
+// nil check admits.
+func admitBoth(first, second func(context.Context) error) func(context.Context) error {
+	if first == nil {
+		return second
+	}
+
+	if second == nil {
+		return first
+	}
+
+	return func(ctx context.Context) error {
+		if err := first(ctx); err != nil {
+			return err
+		}
+
+		return second(ctx)
+	}
+}

@@ -125,10 +125,14 @@ Each instance writes one row at start-up: its instance ID, the version of its bi
 
 `DELETE /api/server/instances/{id}` deletes one row and answers 204. It needs the action `server:delete-instance`. It writes one entry in the audit log of the installation (the scope `@server`), with the action and the ID in the value path `/instances/{id}`. It does not stop the instance. Use it for the row of an instance that died.
 
-Two checks use the minimum:
+The request needs a running instance. A binary below the minimum cannot write. When a dead instance blocks a migration, the new instance fails to start, and no instance answers the request. Start one instance of the old binary, at or above the current minimum. Delete the row, stop that instance, and start the new instance again.
+
+These checks use the minimum:
 
 - **Writes.** Each write of an instance compares the version of its binary with the highest minimum in the schema. A binary below the minimum fails the write in its own transaction. The Pulumi CLI, OpenTofu and the API get 503. The error code is `schema.binary-below-minimum`, and the text names both versions: `binary version v0.3.0 is below v0.4.0, the minimum binary version of the database schema, so this instance cannot write: stop this instance and run version v0.4.0 or later`. Reads still work. The row delete at a clean stop still works.
 - **Migrations.** A migration that sets a new minimum does not run while a row below that minimum exists. The new instance fails to start with an error that names the migration, the new minimum and each row: `migration 0200_example.sql sets the minimum binary version v0.4.0 while 1 instance rows are below it: ins-4q2n7xk5b6d3m1p0a8wz (v0.3.0): stop these instances, or delete the row of an instance that no longer runs (DELETE /api/server/instances/{id}), and start again`. Stop the old instances, or delete the rows of the instances that no longer run, and start the new instance again.
+- **Readiness.** An instance with a binary below the minimum answers 503 on the readiness probe. The `failed` list names the check `binary-minimum`, so a load balancer takes the instance out of the pool. The body holds no version text.
+- **Restore.** A restore on a binary below the minimum fails when it starts and again in the swap. The error names both versions. The live data and the minimum stay as they were. Start the restore on an instance of the new binary.
 
 A dev build passes each minimum. A restore never replaces the rows, and a backup does not hold them.
 

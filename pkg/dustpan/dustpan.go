@@ -1393,12 +1393,19 @@ func newReadiness(cfg *settings, observed *metrics.ServerMetrics, chain *auditCh
 		admits = chain.admits
 	}
 
+	// A store without the check leaves minimum nil: the probe skips the check.
+	var minimum minimumChecker
+	if checker, ok := cfg.namespaceStore.(minimumChecker); ok {
+		minimum = checker
+	}
+
 	return newComponentReadiness(readinessSettings{
 		components:  cfg.components,
 		store:       cfg.namespaceStore,
 		blobs:       cfg.blobStore,
 		watch:       cfg.watch,
 		chainAdmits: admits,
+		minimum:     minimum,
 		timeout:     readinessTimeout,
 		failures:    observed.ReadinessFailures(),
 		logger:      cfg.logger,
@@ -3511,11 +3518,11 @@ func newRestoreService(
 		return nil, errRestoreNeedsRegistry
 	}
 
-	var admit func(ctx context.Context) error
+	admit := restoreMinimumAdmit(cfg.namespaceStore)
 
 	var steps []restoreStep
 	if deps.chain != nil {
-		admit = deps.chain.admitRestore
+		admit = admitBoth(admit, deps.chain.admitRestore)
 		steps = append(steps, deps.chain.afterRestore)
 
 		if deps.chain.checkpoints != nil {

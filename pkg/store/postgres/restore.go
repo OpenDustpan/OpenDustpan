@@ -251,9 +251,11 @@ func (s *Store) swapStagingSchema(ctx context.Context, staging string) error {
 			return err
 		}
 
-		// The check covers the whole staging area, in the swap transaction,
-		// before the first rename.
-		if err := checkSwapDev(ctx, tx, staging); err != nil {
+		// The checks cover the minimum binary version of the live schema, so
+		// that a binary below it cannot swap in a schema that it built, and
+		// the whole staging area, in the swap transaction, before the first
+		// rename.
+		if err := s.checkSwap(ctx, tx, staging); err != nil {
 			return err
 		}
 

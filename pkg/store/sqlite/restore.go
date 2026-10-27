@@ -228,6 +228,12 @@ func (s *Store) ApplyStaging(ctx context.Context) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	// A binary below the minimum of the live database must not swap in a
+	// file that it built.
+	if err := s.checkSwapMinimumLocked(ctx); err != nil {
+		return err
+	}
+
 	if err := s.checkSwapDevLocked(ctx, staged); err != nil {
 		return err
 	}
