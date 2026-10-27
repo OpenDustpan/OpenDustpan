@@ -295,7 +295,7 @@ func checkApproverFieldNames(t *testing.T) {
 // principal or hold a decision of one. The coverage test fails for a field that
 // matches and has no decision.
 var jobSubjectField = regexp.MustCompile(
-	`(?i)(subject|by$|saver|starter|approv|author|owner|holder|user|actor|principal|agent|auth)`,
+	`(?i)(subject|by$|saver|starter|approv|author|owner|holder|user|actor|principal|agent|auth|requester|creator|signer)`,
 )
 
 // devJobFieldDecisions lists the fields of a job record that can name a
