@@ -141,7 +141,7 @@ attacker runs. This is the risk class of the backup target in RFC 68.
 Recommendation: the static layer only, or an API that can choose only an
 address from an allowlist that the static layer sets.
 
-### 2. How a request reaches its home
+### 2. How a request reaches its primary installation
 
 - **Option A. Refuse with 421.** The state today, in the Pulumi adapter
   only. The CLIs show an error. The person must find the right URL.
@@ -156,7 +156,7 @@ address from an allowlist that the static layer sets.
   here.
 
 **Recommendation: option C, with A when the primary installation cannot answer.** When the
-home does not answer, the router answers 503 with `Retry-After` and the
+primary installation does not answer, the router answers 503 with `Retry-After` and the
 name of the primary installation. It never serves a write in a place that is not the primary installation,
 because the fence (ADR 4) would refuse it anyway. Every adapter, not only
 the Pulumi adapter, maps `ErrNotHome` to the same answer.
@@ -169,20 +169,20 @@ Rules for forwarding:
   already carries it is never forwarded again. Two placement maps that
   disagree then give an error, not a loop.
 - **Pass the token unchanged.** The router does not sign in the caller. The
-  home authenticates and authorizes the request (ADR 17). See design point 3.
+  primary installation authenticates and authorizes the request (ADR 17). See design point 3.
 - **The client address.** The router passes the client IP in a header. The
-  home trusts that header only from an address in its placement map or its
+  primary installation trusts that header only from an address in its placement map or its
   instance registry. RFC 22 keeps trusted proxies open. This RFC needs the
   same answer.
 - **Absolute URLs.** Upload URLs and discovery documents hold the public
   URL (ADR 27). After a forward, they must hold the front door, not the
-  home, because the client may not reach the primary installation. Open: the router
+  primary installation, because the client may not reach the primary installation. Open: the router
   rewrites them, or the primary installation builds them from a forwarded host that it
   trusts.
 
 ### 3. Trust between installations
 
-The home must accept the token of the caller.
+The primary installation must accept the token of the caller.
 
 - **One identity database (open).** ADR 248 decision 4 says a replica
   installation holds an asynchronous copy. ADR 248 decision 13 says the primary
@@ -259,15 +259,15 @@ failover.
 
 - A promotion moves the primary installation and increments the failover version of
   the namespace. The router reads the new primary installation from the namespace row and
-  forwards there. The fence refuses late writes to the old home.
+  forwards there. The fence refuses late writes to the old primary installation.
 - **Reads at a replica installation.** Options: serve them from the replica (fast,
   but they can be stale by the replication lag), or forward them to the
-  home (always current). A tool CLI reads what it just wrote, for example a
+  primary installation (always current). A tool CLI reads what it just wrote, for example a
   checkpoint and then the stack. Recommendation: forward every request of a
   tool API. Allow replica reads only for the console inventory, with the
   lag shown.
-- Backups continue on their schedule. A bad change that replication copied
-  to the replica installation. Recover it from a backup, not from the replica installation.
+- Backups continue on their schedule. Recover a bad change that replication
+  copied to the replica installation from a backup, not from the replica installation.
 
 #### Without replication
 
