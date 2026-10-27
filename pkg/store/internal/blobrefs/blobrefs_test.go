@@ -466,8 +466,15 @@ func TestCollectorScales(t *testing.T) {
 	small = max(small, time.Microsecond)
 
 	if ratio := float64(large) / float64(small); ratio > scaleRatioLimit {
-		t.Errorf("collecting %d chunks took %v and %d chunks took %v (ratio %.1f), want a ratio of at most %d for linear work",
-			manyChunks/4, small, manyChunks, large, ratio, scaleRatioLimit)
+		t.Errorf(
+			"collecting %d chunks took %v and %d chunks took %v (ratio %.1f), want a ratio of at most %d for linear work",
+			manyChunks/4,
+			small,
+			manyChunks,
+			large,
+			ratio,
+			scaleRatioLimit,
+		)
 	}
 }
 
