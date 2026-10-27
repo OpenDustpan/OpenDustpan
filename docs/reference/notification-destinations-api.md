@@ -54,6 +54,12 @@ The body has at most 64 KiB.
 | `chat` | `kind`, `platform`, `name`, `url` (the incoming webhook URL, on the same ports), and `accessToken` for a platform that needs one |
 | `email` | `kind`, `name`, `target` (one address) |
 
+The server sends the path of a chat `url` as you write it, with its encoded
+bytes. A path segment that decodes to a slash, a backslash, a dot, two dots, a
+question mark, a number sign or a control character answers 400
+`sink.invalid`, so that the server never sends a token to another path on the
+host.
+
 `accessToken` is write-only. The server seals it like the URL as a second
 secret item, and no answer, audit entry or log holds it. It has 1 to 4096
 printable ASCII characters and no space. A platform that takes no access token
@@ -105,10 +111,15 @@ the webhook URL of a Workflows flow. Its host is one or more names before
 `logic.azure.com` or `api.powerplatform.com` (or a Microsoft cloud for
 government or China domain from the Power Automate list), with no port or with
 the port 443. The flow answers 202 when it got the card. That answer does not
-prove that Teams showed the card. A destination whose sealed URL is missing,
-does not open, or has another host than the `target` answers 422
-`sink.no-url`, and the server sends nothing. Set the URL again with a change.
-See `docs/guides/slack-notifications.md` for the message.
+prove that Teams showed the card. The platform `matrix` has a sender. Its `url`
+is the room, `https://<homeserver>/_matrix/client/v3/rooms/<room ID>` with the
+room ID percent-encoded (`!` is `%21` and `:` is `%3A`). The server sends the
+room in that form and then adds `/send/m.room.message/<notification ID>`. The
+`accessToken` is the access token of the account that posts. The host is any
+host that the outbound rules allow. A destination whose sealed URL is missing,
+does not open, or has another host than the `target` answers 422 `sink.no-url`,
+and the server sends nothing. Set the URL again with a change. See
+`docs/guides/slack-notifications.md` for the message.
 
 A name that resolves to an address that the outbound rules refuse gives the
 class `temporary`, the same as a name that does not resolve. The class

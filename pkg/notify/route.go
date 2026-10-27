@@ -317,7 +317,58 @@ func (s Sink) validHost() error {
 // name or an IP literal, with an optional numeric port. The API stores the
 // URL as the secret item of the sink and the host as its Target. The chat
 // adapter sends only when the host of the URL in the item is the Target.
-func ChatHost(raw string) (string, error) { return hostOf(raw, "chat webhook") }
+//
+// It also returns an error that matches ErrInvalid for a URL with a path
+// segment that leaves its place once the sender decodes it: a segment that
+// holds an encoded slash, backslash, question mark or number sign or a control
+// character, or that is a dot or two dots (also as %2e). The sender sends the
+// access token of a platform to the path of the URL and adds a path to it, so
+// a segment such as %2F..%2F must not reach another path on the host. The error
+// never holds the URL.
+func ChatHost(raw string) (string, error) {
+	host, err := hostOf(raw, "chat webhook")
+	if err != nil {
+		return "", err
+	}
+
+	if pathErr := checkChatPath(raw); pathErr != nil {
+		return "", pathErr
+	}
+
+	return host, nil
+}
+
+// outOfPlace reports whether r, in a decoded path segment, lets the segment
+// leave its place: a slash, a backslash, a question mark, a number sign or a
+// control character.
+func outOfPlace(r rune) bool {
+	return r == '/' || r == '\\' || r == '?' || r == '#' || r < 0x20 || r == 0x7f
+}
+
+// checkChatPath returns ErrInvalid for a URL whose path has a segment that
+// decodes to a dot, to two dots, or to text with a slash, a backslash, a
+// question mark, a number sign or a control character.
+//
+// Defense in depth: the sender builds the request path from the same URL and
+// keeps the encoded bytes, and the sink service checks the URL when a person
+// saves it. This check stays so that the URL of a sink that a restore left
+// behind cannot lead a request to another path on the host.
+func checkChatPath(raw string) error {
+	u, err := url.Parse(raw)
+	if err != nil || u == nil {
+		return fmt.Errorf("chat webhook: %w: the URL does not parse", ErrInvalid)
+	}
+
+	for segment := range strings.SplitSeq(u.EscapedPath(), "/") {
+		decoded, decodeErr := url.PathUnescape(segment)
+
+		if decodeErr != nil || decoded == "." || decoded == ".." || strings.ContainsFunc(decoded, outOfPlace) {
+			return fmt.Errorf("chat webhook: %w: a segment of the path of the URL leaves its place", ErrInvalid)
+		}
+	}
+
+	return nil
+}
 
 // WebhookHost returns the host of the URL of a webhook, in the shape that
 // ChatHost gives for a chat webhook. The API stores the URL as the first
