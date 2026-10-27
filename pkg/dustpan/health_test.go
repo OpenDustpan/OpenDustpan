@@ -355,3 +355,35 @@ func TestHealthReadySlowCheck(t *testing.T) {
 		})
 	}
 }
+
+// TestDrainPeriodIsChecked proves that NewServer refuses a drain that is
+// negative or that, with the shutdown, passes the grace period of the pod.
+func TestDrainPeriodIsChecked(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		period  time.Duration
+		wantErr bool
+	}{
+		{name: "negative", period: -time.Second, wantErr: true},
+		{name: "none", period: 0, wantErr: false},
+		{name: "default", period: dustpan.DefaultDrainPeriod, wantErr: false},
+		{name: "longest", period: 15 * time.Second, wantErr: false},
+		{name: "too long", period: 15*time.Second + time.Nanosecond, wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			st, blobs, authn := requireServerPorts(t)
+			opts := append(fullServerOptions(t, st, blobs, authn), dustpan.WithDrainPeriod(tt.period))
+
+			_, err := dustpan.NewServer(opts...)
+			if tt.wantErr != errors.Is(err, dustpan.ErrInvalidOption) || (!tt.wantErr && err != nil) {
+				t.Fatalf("NewServer with drain %s: err = %v, want invalid option = %t", tt.period, err, tt.wantErr)
+			}
+		})
+	}
+}

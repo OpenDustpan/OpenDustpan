@@ -226,13 +226,13 @@ func TestTemplateRefused(t *testing.T) {
 			wantText: [][]string{{"the preStop wait must be longer than probes.readiness.periodSeconds"}},
 		},
 		{
-			name:    "grace period below the preStop wait and the shutdown timeout",
+			name:    "grace period below the preStop wait, the drain and the shutdown timeout",
 			useBase: true,
 			set: append(s3Blob(),
 				"--set", "replicas=2",
 				"--set", "terminationGracePeriodSeconds=40",
 			),
-			wantText: [][]string{{"must be at least preStopSeconds (15) + 30"}},
+			wantText: [][]string{{"must be at least preStopSeconds (15) + 40"}},
 		},
 		{
 			name:    "minAvailable not less than replicas",

@@ -130,7 +130,7 @@ The chart can run several replicas of one installation. The [several instances g
 - The Deployment uses `RollingUpdate` with `maxUnavailable` 0 and `maxSurge` 1. A new pod must be ready before Kubernetes stops an old pod.
 - The chart makes a PodDisruptionBudget with `minAvailable` 1. Set `podDisruptionBudget.enabled: false` to leave it out.
 - With `spreadAcrossNodes: true`, the chart adds a soft topology spread constraint over `kubernetes.io/hostname`. The scheduler prefers a different node for each pod, and it still schedules a pod when it cannot.
-- A `preStop` hook waits `preStopSeconds` (15 by default) before the pod gets SIGTERM. At the start of termination the pod leaves the Service endpoints. The wait gives load balancers time to stop sending requests while the pod still answers. The wait is longer than the readiness period. The server needs up to 30 s to finish its requests, so `terminationGracePeriodSeconds` must be at least `preStopSeconds` + 30. The default is 60.
+- A `preStop` hook waits `preStopSeconds` (15 by default) before the pod gets SIGTERM. At the start of termination the pod leaves the Service endpoints. The wait gives load balancers time to stop sending requests while the pod still answers. The wait is longer than the readiness period. After SIGTERM the server drains for 10 s and needs up to 30 s to finish its requests, so `terminationGracePeriodSeconds` must be at least `preStopSeconds` + 40. The default is 60.
 - The chart refuses these settings with a message that names the setting:
   - `blobStore.type: fs`
   - `backup.target.type: dir`
