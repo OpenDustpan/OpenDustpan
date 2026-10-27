@@ -70,12 +70,12 @@ func TestWALGuardBoundsLogUnderLoad(t *testing.T) {
 	})
 
 	ns := namespace.Namespace{
-		ID:              namespace.NewID(),
-		CreatedAt:       time.Now(),
-		Name:            "acme",
-		HomeRegion:      "eu-west",
-		FailoverVersion: 1,
-		Overrides:       namespace.Overrides{Forced: false, Unlocked: false},
+		ID:                  namespace.NewID(),
+		CreatedAt:           time.Now(),
+		Name:                "acme",
+		PrimaryInstallation: "eu-west",
+		FailoverVersion:     1,
+		Overrides:           namespace.Overrides{Forced: false, Unlocked: false},
 	}
 	if err := s.CreateNamespace(ctx, ns); err != nil {
 		t.Fatalf("create namespace: %v", err)
@@ -411,12 +411,12 @@ func openWALBackupSource(ctx context.Context, t *testing.T, dir string) walBacku
 	})
 
 	ns := namespace.Namespace{
-		ID:              namespace.NewID(),
-		CreatedAt:       time.Now(),
-		Name:            "acme",
-		HomeRegion:      "eu-west",
-		FailoverVersion: 1,
-		Overrides:       namespace.Overrides{Forced: false, Unlocked: false},
+		ID:                  namespace.NewID(),
+		CreatedAt:           time.Now(),
+		Name:                "acme",
+		PrimaryInstallation: "eu-west",
+		FailoverVersion:     1,
+		Overrides:           namespace.Overrides{Forced: false, Unlocked: false},
 	}
 
 	if nsErr := src.CreateNamespace(ctx, ns); nsErr != nil {
@@ -1332,12 +1332,12 @@ func openWALBusyStore(
 	})
 
 	ns := namespace.Namespace{
-		ID:              namespace.NewID(),
-		CreatedAt:       time.Now(),
-		Name:            "acme",
-		HomeRegion:      "eu-west",
-		FailoverVersion: 1,
-		Overrides:       namespace.Overrides{Forced: false, Unlocked: false},
+		ID:                  namespace.NewID(),
+		CreatedAt:           time.Now(),
+		Name:                "acme",
+		PrimaryInstallation: "eu-west",
+		FailoverVersion:     1,
+		Overrides:           namespace.Overrides{Forced: false, Unlocked: false},
 	}
 
 	if err := s.CreateNamespace(ctx, ns); err != nil {

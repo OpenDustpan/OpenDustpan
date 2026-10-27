@@ -368,7 +368,7 @@ func newMemBase(tb testing.TB) memBase {
 		}
 	})
 
-	namespaces, nsErr := namespace.NewService(namespace.Config{Store: store, Now: nil, Region: "local"})
+	namespaces, nsErr := namespace.NewService(namespace.Config{Store: store, Now: nil, Installation: "local"})
 	if nsErr != nil {
 		tb.Fatalf("namespaces: %v", nsErr)
 	}

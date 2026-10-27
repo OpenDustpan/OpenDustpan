@@ -135,7 +135,7 @@ func seedItemKeyBackup(t *testing.T, source *ItemKeyBackupRig, wrapper secret.Wr
 
 	ctx := t.Context()
 	ns := namespace.Namespace{
-		ID: namespace.NewID(), CreatedAt: now(), Name: "acme", HomeRegion: "local", FailoverVersion: 1,
+		ID: namespace.NewID(), CreatedAt: now(), Name: "acme", PrimaryInstallation: "local", FailoverVersion: 1,
 		Overrides: namespace.Overrides{Forced: false, Unlocked: false},
 	}
 
@@ -150,7 +150,7 @@ func seedItemKeyBackup(t *testing.T, source *ItemKeyBackupRig, wrapper secret.Wr
 
 	// The restore proves the key-encryption key with a data key that the same
 	// wrapper wrapped, so the backup needs one next to the item keys.
-	namespaces, err := namespace.NewService(namespace.Config{Store: source.Store, Now: nil, Region: "local"})
+	namespaces, err := namespace.NewService(namespace.Config{Store: source.Store, Now: nil, Installation: "local"})
 	if err != nil {
 		t.Fatalf("namespace service: %v", err)
 	}

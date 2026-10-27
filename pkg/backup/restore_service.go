@@ -81,9 +81,10 @@ type RestoreConfig struct {
 	Target blob.Store
 	// Key is the key-encryption key the checks prove against the backup.
 	Key secret.Wrapper
-	// Region is the region of this installation for the region warning. A
-	// blank region disables the warning.
-	Region string
+	// Installation is the installation name of this server, for the warning
+	// that the backup holds no namespace with it as primary installation. A
+	// blank name disables the warning.
+	Installation string
 	// AfterApply runs after the swap with the rows preserved, while the
 	// server still holds maintenance mode, so a restore of data that
 	// predates a later change converges to it: for example, the server
@@ -114,22 +115,22 @@ type RestoreConfig struct {
 // version of every namespace, and leaves maintenance mode, also after a
 // failure. A check-only request runs the same checks and applies nothing.
 type RestoreService struct {
-	live        RestoreLive
-	registry    RestoreRegistry
-	backups     *Service
-	maintenance RestoreMaintenance
-	blobs       blob.Store
-	target      blob.Store
-	key         secret.Wrapper
-	region      string
-	afterApply  func(ctx context.Context) error
-	admit       func(ctx context.Context) error
-	allowDev    bool
-	devHint     string
-	now         func() time.Time
-	logger      *slog.Logger
-	mu          sync.Mutex
-	running     bool
+	live         RestoreLive
+	registry     RestoreRegistry
+	backups      *Service
+	maintenance  RestoreMaintenance
+	blobs        blob.Store
+	target       blob.Store
+	key          secret.Wrapper
+	installation string
+	afterApply   func(ctx context.Context) error
+	admit        func(ctx context.Context) error
+	allowDev     bool
+	devHint      string
+	now          func() time.Time
+	logger       *slog.Logger
+	mu           sync.Mutex
+	running      bool
 	// inflight holds the latest known row of each restore this process
 	// started and has not finished yet. The swap in applyPinned replaces
 	// the live data with staged data that predates the restore row, so
@@ -170,24 +171,24 @@ func NewRestoreService(cfg RestoreConfig) (*RestoreService, error) {
 	}
 
 	return &RestoreService{
-		live:        cfg.Live,
-		registry:    cfg.Registry,
-		backups:     cfg.Backups,
-		maintenance: cfg.Maintenance,
-		blobs:       cfg.Blobs,
-		target:      cfg.Target,
-		key:         cfg.Key,
-		region:      cfg.Region,
-		afterApply:  cfg.AfterApply,
-		admit:       cfg.Admit,
-		allowDev:    cfg.AllowDevBackups,
-		devHint:     cfg.AllowDevHint,
-		now:         now,
-		logger:      logger,
-		mu:          sync.Mutex{},
-		running:     false,
-		inflightMu:  sync.RWMutex{},
-		inflight:    map[RestoreID]RestoreRecord{},
+		live:         cfg.Live,
+		registry:     cfg.Registry,
+		backups:      cfg.Backups,
+		maintenance:  cfg.Maintenance,
+		blobs:        cfg.Blobs,
+		target:       cfg.Target,
+		key:          cfg.Key,
+		installation: cfg.Installation,
+		afterApply:   cfg.AfterApply,
+		admit:        cfg.Admit,
+		allowDev:     cfg.AllowDevBackups,
+		devHint:      cfg.AllowDevHint,
+		now:          now,
+		logger:       logger,
+		mu:           sync.Mutex{},
+		running:      false,
+		inflightMu:   sync.RWMutex{},
+		inflight:     map[RestoreID]RestoreRecord{},
 	}, nil
 }
 
@@ -858,13 +859,13 @@ func (s *RestoreService) restore(ctx context.Context, id RestoreID, req RestoreR
 	}
 
 	checkInput := CheckInput{
-		Target:     s.target,
-		Live:       s.live,
-		Key:        s.key,
-		ID:         req.BackupID,
-		Region:     s.region,
-		Stage:      StageOptions{BackupKind: pinned.kind, AllowDev: s.allowDev},
-		AfterStage: nil,
+		Target:       s.target,
+		Live:         s.live,
+		Key:          s.key,
+		ID:           req.BackupID,
+		Installation: s.installation,
+		Stage:        StageOptions{BackupKind: pinned.kind, AllowDev: s.allowDev},
+		AfterStage:   nil,
 	}
 
 	if dev.production() {

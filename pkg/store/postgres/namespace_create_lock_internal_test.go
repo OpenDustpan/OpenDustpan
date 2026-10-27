@@ -89,8 +89,12 @@ func TestCreateAndNamespaceLockRaceLeaveNoWorkspaceUnderALock(t *testing.T) {
 
 	for round := range raceRounds {
 		ns := namespace.Namespace{
-			ID: namespace.NewID(), CreatedAt: time.Now(), Name: namespace.Name(fmt.Sprintf("race-%d", round)),
-			HomeRegion: "eu-west", FailoverVersion: 1, Overrides: namespace.Overrides{Forced: false, Unlocked: false},
+			ID:                  namespace.NewID(),
+			CreatedAt:           time.Now(),
+			Name:                namespace.Name(fmt.Sprintf("race-%d", round)),
+			PrimaryInstallation: "eu-west",
+			FailoverVersion:     1,
+			Overrides:           namespace.Overrides{Forced: false, Unlocked: false},
 		}
 		if err := s.CreateNamespace(t.Context(), ns); err != nil {
 			t.Fatalf("create namespace: %v", err)
@@ -182,7 +186,7 @@ func createLockSetup(t *testing.T, name string) (*Store, namespace.Namespace) {
 	t.Cleanup(s.Close)
 
 	ns := namespace.Namespace{
-		ID: namespace.NewID(), CreatedAt: time.Now(), Name: namespace.Name(name), HomeRegion: "eu-west",
+		ID: namespace.NewID(), CreatedAt: time.Now(), Name: namespace.Name(name), PrimaryInstallation: "eu-west",
 		FailoverVersion: 1, Overrides: namespace.Overrides{Forced: false, Unlocked: false},
 	}
 	if err := s.CreateNamespace(t.Context(), ns); err != nil {

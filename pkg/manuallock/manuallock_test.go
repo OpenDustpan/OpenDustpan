@@ -33,7 +33,7 @@ func (fakeNamespaces) GetNamespace(_ context.Context, name namespace.Name) (name
 	}
 
 	return namespace.Namespace{
-		ID: namespace.NewID(), CreatedAt: fixedNow(), Name: name, HomeRegion: "r", FailoverVersion: 3,
+		ID: namespace.NewID(), CreatedAt: fixedNow(), Name: name, PrimaryInstallation: "r", FailoverVersion: 3,
 		Overrides: namespace.Overrides{Forced: false, Unlocked: false},
 	}, nil
 }

@@ -54,12 +54,12 @@ func TestCollectionWritesAreAudited(t *testing.T) {
 	ctx := t.Context()
 
 	ns := namespace.Namespace{
-		ID:              namespace.NewID(),
-		CreatedAt:       time.UnixMilli(1_700_000_000_000).UTC(),
-		Name:            "acme",
-		HomeRegion:      "eu-west",
-		FailoverVersion: 1,
-		Overrides:       namespace.Overrides{Forced: false, Unlocked: false},
+		ID:                  namespace.NewID(),
+		CreatedAt:           time.UnixMilli(1_700_000_000_000).UTC(),
+		Name:                "acme",
+		PrimaryInstallation: "eu-west",
+		FailoverVersion:     1,
+		Overrides:           namespace.Overrides{Forced: false, Unlocked: false},
 	}
 	if err := s.CreateNamespace(ctx, ns); err != nil {
 		t.Fatalf("create namespace: %v", err)

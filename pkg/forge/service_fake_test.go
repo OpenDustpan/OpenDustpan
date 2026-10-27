@@ -247,8 +247,12 @@ func newNamespaces(names ...namespace.Name) memNamespaces {
 
 	for _, n := range names {
 		out[n] = namespace.Namespace{
-			ID: namespace.NewID(), CreatedAt: time.UnixMilli(1_700_000_000_000).UTC(), Name: n,
-			HomeRegion: "eu-west", FailoverVersion: 1, Overrides: namespace.Overrides{Forced: false, Unlocked: false},
+			ID:                  namespace.NewID(),
+			CreatedAt:           time.UnixMilli(1_700_000_000_000).UTC(),
+			Name:                n,
+			PrimaryInstallation: "eu-west",
+			FailoverVersion:     1,
+			Overrides:           namespace.Overrides{Forced: false, Unlocked: false},
 		}
 	}
 

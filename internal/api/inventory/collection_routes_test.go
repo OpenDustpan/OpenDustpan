@@ -45,7 +45,7 @@ func newCollectionRouteHandler(t *testing.T, authz identity.Authorizer) testHand
 		t.Fatalf("collection service: %v", err)
 	}
 
-	nsSvc, err := namespace.NewService(namespace.Config{Store: nsStore, Now: nil, Region: "test-region"})
+	nsSvc, err := namespace.NewService(namespace.Config{Store: nsStore, Now: nil, Installation: "test-region"})
 	if err != nil {
 		t.Fatalf("namespace service: %v", err)
 	}

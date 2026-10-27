@@ -1,7 +1,7 @@
 // Package collection models collections: named sets of units in one
 // namespace (ADR 51).
 //
-// A collection is soft. It has no home region and no fence of its own. Its
+// A collection is soft. It has no primary installation and no fence of its own. Its
 // writes carry the fence of its namespace. Each unit is in exactly one
 // collection, collections do not nest, and no default collection exists. A
 // unit with no collection is readable. The refusal of a write to such a unit

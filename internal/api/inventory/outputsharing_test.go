@@ -110,7 +110,7 @@ func newSharingFixture(t *testing.T, routeAuthz, serviceAuthz identity.Authorize
 	nsStore := &memNamespaceStore{namespaces: map[namespace.Name]namespace.Namespace{}}
 	seedNamespace(t, nsStore)
 
-	nsSvc, err := namespace.NewService(namespace.Config{Store: nsStore, Now: nil, Region: "test-region"})
+	nsSvc, err := namespace.NewService(namespace.Config{Store: nsStore, Now: nil, Installation: "test-region"})
 	if err != nil {
 		t.Fatalf("namespace service: %v", err)
 	}
@@ -467,7 +467,7 @@ func TestOutputSharingFailsClosedOnABadStoredValue(t *testing.T) {
 func mustNamespaces(t *testing.T, nsStore namespace.Store) *namespace.Service {
 	t.Helper()
 
-	svc, err := namespace.NewService(namespace.Config{Store: nsStore, Now: nil, Region: "test-region"})
+	svc, err := namespace.NewService(namespace.Config{Store: nsStore, Now: nil, Installation: "test-region"})
 	if err != nil {
 		t.Fatalf("namespace service: %v", err)
 	}

@@ -1,27 +1,27 @@
 -- name: CreateNamespace :execrows
-INSERT INTO namespaces (name, home_region, failover_version, created_at_ms, id)
+INSERT INTO namespaces (name, primary_installation, failover_version, created_at_ms, id)
 VALUES ($1, $2, $3, $4, $5)
 ON CONFLICT DO NOTHING;
 
 -- name: GetNamespace :one
-SELECT name, home_region, failover_version, created_at_ms, allow_forced_writes, allow_unlocked_writes, id
+SELECT name, primary_installation, failover_version, created_at_ms, allow_forced_writes, allow_unlocked_writes, id
 FROM namespaces
 WHERE name = $1;
 
 -- name: ListNamespaces :many
-SELECT name, home_region, failover_version, created_at_ms, allow_forced_writes, allow_unlocked_writes, id
+SELECT name, primary_installation, failover_version, created_at_ms, allow_forced_writes, allow_unlocked_writes, id
 FROM namespaces
 ORDER BY name;
 
 -- name: PageNamespaces :many
-SELECT name, home_region, failover_version, created_at_ms, allow_forced_writes, allow_unlocked_writes, id
+SELECT name, primary_installation, failover_version, created_at_ms, allow_forced_writes, allow_unlocked_writes, id
 FROM namespaces
 WHERE name > sqlc.arg('after')
 ORDER BY name
 LIMIT sqlc.arg('lim');
 
 -- name: PageNamespacesByNames :many
-SELECT name, home_region, failover_version, created_at_ms, allow_forced_writes, allow_unlocked_writes, id
+SELECT name, primary_installation, failover_version, created_at_ms, allow_forced_writes, allow_unlocked_writes, id
 FROM namespaces
 WHERE name > sqlc.arg('after') AND name = ANY(sqlc.arg('names')::text[])
 ORDER BY name
@@ -78,7 +78,7 @@ WHERE name = $2;
 -- name: GetNamespaceForShare :one
 -- Reads the namespace row with a shared lock. A switch change waits for the
 -- transaction that reads it, so the switch it reads is the one that commits.
-SELECT name, home_region, failover_version, created_at_ms, allow_forced_writes, allow_unlocked_writes, id
+SELECT name, primary_installation, failover_version, created_at_ms, allow_forced_writes, allow_unlocked_writes, id
 FROM namespaces
 WHERE name = $1
 FOR SHARE;
@@ -1178,10 +1178,10 @@ WHERE state IN ('checking', 'applying');
 UPDATE namespaces
 SET failover_version = failover_version + 1;
 
--- name: BackupHomeRegions :many
-SELECT DISTINCT home_region
+-- name: BackupPrimaryInstallations :many
+SELECT DISTINCT primary_installation
 FROM namespaces
-ORDER BY home_region;
+ORDER BY primary_installation;
 
 -- name: BackupWrapperIDs :many
 -- The wrapper IDs of the namespace keys and of the installation keys, so the

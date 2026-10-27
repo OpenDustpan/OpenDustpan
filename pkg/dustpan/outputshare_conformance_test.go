@@ -93,7 +93,7 @@ func outputShareOptions(t *testing.T, dialect string) ([]dustpan.Option, outputS
 	}
 
 	common := []dustpan.Option{
-		dustpan.WithRegion("test"), dustpan.WithSecretWrapper(wrapper), dustpan.WithBlobStore(blobs),
+		dustpan.WithInstallation("test"), dustpan.WithSecretWrapper(wrapper), dustpan.WithBlobStore(blobs),
 		dustpan.WithClock(time.Now), dustpan.WithLogger(slog.New(slog.NewTextHandler(t.Output(), nil))),
 	}
 

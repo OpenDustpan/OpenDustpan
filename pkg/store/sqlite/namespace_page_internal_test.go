@@ -87,7 +87,7 @@ func seedPlanNamespaces(t *testing.T, s *Store, n int) {
 func planSeedBatch(start, end int, createdAtMs int64) (string, []any) {
 	var stmt strings.Builder
 
-	stmt.WriteString("INSERT INTO namespaces (name, home_region, failover_version, created_at_ms, id) VALUES ")
+	stmt.WriteString("INSERT INTO namespaces (name, primary_installation, failover_version, created_at_ms, id) VALUES ")
 
 	args := make([]any, 0, (end-start)*5)
 
@@ -246,7 +246,7 @@ var indexSearch = regexp.MustCompile(`SEARCH namespaces USING (INTEGER PRIMARY K
 func checkAllPlan(t *testing.T, s *Store) {
 	t.Helper()
 
-	const stmt = `EXPLAIN QUERY PLAN SELECT name, home_region, failover_version,
+	const stmt = `EXPLAIN QUERY PLAN SELECT name, primary_installation, failover_version,
 		created_at_ms, allow_forced_writes, allow_unlocked_writes
 		FROM namespaces WHERE name > ? ORDER BY name LIMIT ?`
 
@@ -280,7 +280,7 @@ func checkSubsetPlan(t *testing.T, s *Store, subset []namespace.Name) {
 		t.Fatalf("encode subset names: %v", err)
 	}
 
-	const stmt = `EXPLAIN QUERY PLAN SELECT name, home_region, failover_version,
+	const stmt = `EXPLAIN QUERY PLAN SELECT name, primary_installation, failover_version,
 		created_at_ms, allow_forced_writes, allow_unlocked_writes
 		FROM namespaces WHERE name > ? AND name IN (SELECT value FROM json_each(?)) ORDER BY name LIMIT ?`
 

@@ -46,10 +46,14 @@ func createNamespace(t *testing.T, srv *httptest.Server) (string, error) {
 //
 //nolint:paralleltest // The test sets the admin token, so it cannot run in parallel.
 func TestCreateNamespacePrintsTheNamespace(t *testing.T) {
-	srv := serveNamespaceCreate(t, http.StatusCreated, `{"name":"acme","homeRegion":"local","failoverVersion":1}`)
+	srv := serveNamespaceCreate(
+		t,
+		http.StatusCreated,
+		`{"name":"acme","primaryInstallation":"local","failoverVersion":1}`,
+	)
 
 	out, err := createNamespace(t, srv)
-	if err != nil || !strings.Contains(out, "created namespace acme in region local") {
+	if err != nil || !strings.Contains(out, "created namespace acme, primary installation local") {
 		t.Fatalf("namespace create = %q, %v; want the created namespace", out, err)
 	}
 }
@@ -61,7 +65,7 @@ func TestCreateNamespacePrintsTheNamespace(t *testing.T) {
 //
 //nolint:paralleltest // The test sets the admin token, so it cannot run in parallel.
 func TestCreateNamespaceReadsTheAnswerWithACap(t *testing.T) {
-	const head = `{"name":"acme","homeRegion":"local","pad":"`
+	const head = `{"name":"acme","primaryInstallation":"local","pad":"`
 
 	// padTo makes a success body of exactly size bytes.
 	padTo := func(size int) string {
@@ -78,8 +82,13 @@ func TestCreateNamespaceReadsTheAnswerWithACap(t *testing.T) {
 		avoidText  string
 	}{
 		{
-			name: "body of exactly the cap", status: http.StatusCreated, body: padTo(client.MaxClientBodyBytes),
-			wantOutput: "created namespace acme in region local", wantErrs: nil, wantText: "", avoidText: "",
+			name:       "body of exactly the cap",
+			status:     http.StatusCreated,
+			body:       padTo(client.MaxClientBodyBytes),
+			wantOutput: "created namespace acme, primary installation local",
+			wantErrs:   nil,
+			wantText:   "",
+			avoidText:  "",
 		},
 		{
 			name:       "body of the cap plus one byte",

@@ -20,7 +20,7 @@ const installationLabel = "@server"
 // scopes: keys for values that belong to the installation and to no
 // namespace, for example the client secret of a sign-in provider. The Scope
 // of each key has an empty Namespace. A write carries no fence: the
-// installation has no home region.
+// installation has no primary installation.
 type InstallationKeyStore interface {
 	// CreateInstallationKey stores k unless a key for k.Scope.ID exists, and
 	// returns the stored key either way, so concurrent first seals agree on

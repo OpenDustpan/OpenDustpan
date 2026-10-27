@@ -63,12 +63,12 @@ func newDeletedScopeServer(t *testing.T) *dustpan.Server {
 
 	for _, name := range []namespace.Name{"acme", "other"} {
 		ns := namespace.Namespace{
-			ID:              namespace.NewID(),
-			CreatedAt:       time.Unix(0, 0),
-			Name:            name,
-			HomeRegion:      region,
-			FailoverVersion: 1,
-			Overrides:       namespace.Overrides{Forced: false, Unlocked: false},
+			ID:                  namespace.NewID(),
+			CreatedAt:           time.Unix(0, 0),
+			Name:                name,
+			PrimaryInstallation: installationName,
+			FailoverVersion:     1,
+			Overrides:           namespace.Overrides{Forced: false, Unlocked: false},
 		}
 
 		if nsErr := st.CreateNamespace(t.Context(), ns); nsErr != nil {
@@ -128,7 +128,7 @@ func newDeletedScopeServer(t *testing.T) *dustpan.Server {
 	}
 
 	srv, err := dustpan.NewServer(
-		dustpan.WithRegion(region),
+		dustpan.WithInstallation(installationName),
 		dustpan.WithNamespaceStore(st),
 		dustpan.WithStackStore(st),
 		dustpan.WithUpdateStore(st),

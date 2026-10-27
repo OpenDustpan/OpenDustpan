@@ -72,7 +72,7 @@ func newDevRefusalWorld(t *testing.T, kind installation.Kind) *devRefusalWorld {
 func (w *devRefusalWorld) bind(t *testing.T) {
 	t.Helper()
 
-	namespaces, err := namespace.NewService(namespace.Config{Store: w.st, Now: nil, Region: "local"})
+	namespaces, err := namespace.NewService(namespace.Config{Store: w.st, Now: nil, Installation: "local"})
 	if err != nil {
 		t.Fatalf("namespace service: %v", err)
 	}
@@ -417,14 +417,14 @@ func TestDevRefusalFlushesNamespaceKey(t *testing.T) {
 	w := newDevRefusalWorld(t, installation.KindProduction)
 
 	err := w.st.CreateNamespace(t.Context(), namespace.Namespace{
-		ID: namespace.NewID(), CreatedAt: w.now, Name: "team", HomeRegion: "local", FailoverVersion: 1,
+		ID: namespace.NewID(), CreatedAt: w.now, Name: "team", PrimaryInstallation: "local", FailoverVersion: 1,
 		Overrides: namespace.Overrides{Forced: false, Unlocked: false},
 	})
 	if err != nil {
 		t.Fatalf("create namespace: %v", err)
 	}
 
-	namespaces, err := namespace.NewService(namespace.Config{Store: w.st, Now: nil, Region: "local"})
+	namespaces, err := namespace.NewService(namespace.Config{Store: w.st, Now: nil, Installation: "local"})
 	if err != nil {
 		t.Fatalf("namespace service: %v", err)
 	}

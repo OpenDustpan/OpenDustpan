@@ -116,7 +116,7 @@ func TestNamespaceIDTriggers(t *testing.T) {
 		}
 	})
 
-	const insert = `INSERT INTO namespaces (name, home_region, failover_version, created_at_ms, id)
+	const insert = `INSERT INTO namespaces (name, primary_installation, failover_version, created_at_ms, id)
 		VALUES (?, 'eu-west', 1, 0, ?)`
 
 	if _, execErr := conn.ExecContext(ctx, insert, "good", "ns-abc"); execErr != nil {

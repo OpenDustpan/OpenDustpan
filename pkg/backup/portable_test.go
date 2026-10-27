@@ -248,19 +248,19 @@ func TestPortableManifestFormat(t *testing.T) {
 	t.Parallel()
 
 	manifest := backup.Manifest{
-		CreatedAt:     time.Time{},
-		ID:            "bkp-1",
-		Dialect:       backup.DialectSQLite,
-		HomeRegions:   []string{"eu-west"},
-		WrapperIDs:    []string{"kek-1"},
-		Blobs:         nil,
-		Version:       "test",
-		SQLSHA256:     "00",
-		Format:        backup.FormatVersion,
-		SchemaVersion: 26,
-		SQLSize:       9,
-		RowCounts:     map[string]int64{"namespaces": 1},
-		SQLFormat:     backup.PortableFormat,
+		CreatedAt:            time.Time{},
+		ID:                   "bkp-1",
+		Dialect:              backup.DialectSQLite,
+		PrimaryInstallations: []string{"eu-west"},
+		WrapperIDs:           []string{"kek-1"},
+		Blobs:                nil,
+		Version:              "test",
+		SQLSHA256:            "00",
+		Format:               backup.FormatVersion,
+		SchemaVersion:        26,
+		SQLSize:              9,
+		RowCounts:            map[string]int64{"namespaces": 1},
+		SQLFormat:            backup.PortableFormat,
 		SQLFiles: []backup.PortableFile{
 			{
 				Table:   "namespaces",

@@ -104,12 +104,12 @@ func newScopeEnv(t *testing.T) *scopeEnv {
 	}
 
 	other := namespace.Namespace{
-		ID:              namespace.NewID(),
-		CreatedAt:       acme.CreatedAt,
-		Name:            "other",
-		HomeRegion:      "local",
-		FailoverVersion: 1,
-		Overrides:       noOverrides(),
+		ID:                  namespace.NewID(),
+		CreatedAt:           acme.CreatedAt,
+		Name:                "other",
+		PrimaryInstallation: "local",
+		FailoverVersion:     1,
+		Overrides:           noOverrides(),
 	}
 
 	if createErr := f.store.CreateNamespace(ctx, other); createErr != nil {

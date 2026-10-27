@@ -74,7 +74,7 @@ func newClientAddrServerOn(
 
 	opts := make([]dustpan.Option, 0, baseOptionCount+len(extra))
 	opts = append(opts,
-		dustpan.WithRegion(region),
+		dustpan.WithInstallation(installationName),
 		dustpan.WithNamespaceStore(st),
 		dustpan.WithStackStore(st),
 		dustpan.WithUpdateStore(st),

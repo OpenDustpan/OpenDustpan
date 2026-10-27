@@ -133,7 +133,7 @@ func newCheckpointServer(
 	ln := openTestListener(t)
 
 	opts := []dustpan.Option{
-		dustpan.WithRegion(region),
+		dustpan.WithInstallation(installationName),
 		dustpan.WithNamespaceStore(st),
 		dustpan.WithStackStore(st),
 		dustpan.WithUpdateStore(st),

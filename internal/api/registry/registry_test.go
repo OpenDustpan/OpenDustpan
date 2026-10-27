@@ -134,7 +134,7 @@ func newFixtureWithAuthorizer(t *testing.T, override identity.Authorizer, deny .
 		}
 	})
 
-	namespaces, err := namespace.NewService(namespace.Config{Store: store, Now: nil, Region: "test-region"})
+	namespaces, err := namespace.NewService(namespace.Config{Store: store, Now: nil, Installation: "test-region"})
 	if err != nil {
 		t.Fatalf("namespace service: %v", err)
 	}

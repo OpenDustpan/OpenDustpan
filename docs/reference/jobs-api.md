@@ -119,7 +119,7 @@ The `errorCode` is a stable code for a program.
 | 403 | `job.gate-enforced` | An enforced gate at `change.propose` or `state.write` covers the workspace, or the server cannot read the gates |
 | 404 | | The namespace does not exist, or the caller cannot read it |
 | 409 | `job.frozen` | A change freeze refuses the start |
-| 409 | `namespace.fenced` | The home region of the namespace changed while the request ran: send the request again |
+| 409 | `namespace.fenced` | The primary installation of the namespace changed while the request ran: send the request again |
 | 422 | `request.idempotency-key-reused` | The key names a job with another request |
 | 422 | `job.unsupported` | The operation or the tool is not available in this version. The namespace has no default pool, or has more than one. The request names no code location. |
 | 429 | `job.limit` | The workspace has 16 open jobs, or the namespace has 1,000 |

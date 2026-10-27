@@ -315,7 +315,9 @@ func makeDataKey(t *testing.T, rig *StoredBlobBackupRig, ns namespace.Namespace,
 		t.Fatalf("scope: %v", err)
 	}
 
-	namespaces, err := namespace.NewService(namespace.Config{Store: rig.Keys, Now: nil, Region: ns.HomeRegion})
+	namespaces, err := namespace.NewService(
+		namespace.Config{Store: rig.Keys, Now: nil, Installation: ns.PrimaryInstallation},
+	)
 	if err != nil {
 		t.Fatalf("namespace service: %v", err)
 	}

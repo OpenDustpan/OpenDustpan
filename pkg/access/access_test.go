@@ -96,7 +96,7 @@ func (f *fixture) namespace(tb testing.TB, ns namespace.Name) {
 
 	err := f.store.CreateNamespace(tb.Context(), namespace.Namespace{
 		ID:        namespace.NewID(),
-		CreatedAt: time.Unix(0, 0), Name: ns, HomeRegion: "",
+		CreatedAt: time.Unix(0, 0), Name: ns, PrimaryInstallation: "",
 		Overrides: namespace.Overrides{Forced: false, Unlocked: false}, FailoverVersion: 1,
 	})
 	if err != nil {
@@ -967,7 +967,7 @@ func TestCreateNamespaceGrantsTheCreator(t *testing.T) {
 
 	ns := namespace.Namespace{
 		ID:        namespace.NewID(),
-		CreatedAt: time.Unix(0, 0), Name: "gamma", HomeRegion: "",
+		CreatedAt: time.Unix(0, 0), Name: "gamma", PrimaryInstallation: "",
 		Overrides: namespace.Overrides{Forced: false, Unlocked: false}, FailoverVersion: 1,
 	}
 

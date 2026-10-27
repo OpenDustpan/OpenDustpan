@@ -1142,8 +1142,8 @@ func checkNamespaceCreateThroughAPI(t *testing.T, env *e2e.Env, org string) {
 }
 
 // createSecondNamespaceThroughAPI creates name through POST
-// /api/server/namespaces and proves it answers 201 with the namespace homed
-// in the test region, then that a duplicate answers 409.
+// /api/server/namespaces and proves it answers 201 with the namespace on
+// the test installation, then that a duplicate answers 409.
 func createSecondNamespaceThroughAPI(t *testing.T, env *e2e.Env, name string) {
 	t.Helper()
 
@@ -1164,17 +1164,17 @@ func createSecondNamespaceThroughAPI(t *testing.T, env *e2e.Env, name string) {
 	}
 
 	var doc struct {
-		ID              string `json:"id"`
-		Name            string `json:"name"`
-		HomeRegion      string `json:"homeRegion"`
-		FailoverVersion int64  `json:"failoverVersion"`
+		ID                  string `json:"id"`
+		Name                string `json:"name"`
+		PrimaryInstallation string `json:"primaryInstallation"`
+		FailoverVersion     int64  `json:"failoverVersion"`
 	}
 
 	if decodeErr := json.Unmarshal([]byte(body), &doc); decodeErr != nil {
 		t.Fatalf("decode namespace %q %q: %v", name, body, decodeErr)
 	}
 
-	if doc.Name != name || doc.FailoverVersion != 1 || doc.HomeRegion == "" {
+	if doc.Name != name || doc.FailoverVersion != 1 || doc.PrimaryInstallation == "" {
 		t.Fatalf("namespace answers %+v, want %q at version 1 with a region", doc, name)
 	}
 
@@ -12898,17 +12898,17 @@ type backupDoc struct {
 
 // backupManifestDoc holds the manifest fields the backup steps check.
 type backupManifestDoc struct {
-	ID            string               `json:"id"`
-	Format        int                  `json:"format"`
-	Dialect       string               `json:"dialect"`
-	HomeRegions   []string             `json:"homeRegions"`
-	WrapperIDs    []string             `json:"wrapperIds"`
-	Blobs         []backupManifestBlob `json:"blobs"`
-	SQLSize       int64                `json:"sqlSize"`
-	SQLSHA256     string               `json:"sqlSha256"`
-	SQLFormat     string               `json:"sqlFormat"`
-	SQLFiles      []backupSQLFileDoc   `json:"sqlFiles"`
-	SchemaVersion int                  `json:"schemaVersion"`
+	ID                   string               `json:"id"`
+	Format               int                  `json:"format"`
+	Dialect              string               `json:"dialect"`
+	PrimaryInstallations []string             `json:"primaryInstallations"`
+	WrapperIDs           []string             `json:"wrapperIds"`
+	Blobs                []backupManifestBlob `json:"blobs"`
+	SQLSize              int64                `json:"sqlSize"`
+	SQLSHA256            string               `json:"sqlSha256"`
+	SQLFormat            string               `json:"sqlFormat"`
+	SQLFiles             []backupSQLFileDoc   `json:"sqlFiles"`
+	SchemaVersion        int                  `json:"schemaVersion"`
 }
 
 // backupSQLFileDoc holds one table file descriptor of the manifest.
@@ -13027,7 +13027,7 @@ func pollBackupState(ctx context.Context, t *testing.T, env *e2e.Env, id string)
 
 // checkBackupManifest proves the manifest of a succeeded backup holds the
 // Pulumi data: the store dialect, the SQL part, the padded checkpoint blob,
-// the wrapper of the config secret and the home region.
+// the wrapper of the config secret and the primary installation.
 func checkBackupManifest(t *testing.T, store e2e.Store, doc backupDoc) {
 	t.Helper()
 
@@ -13071,8 +13071,8 @@ func checkBackupManifest(t *testing.T, store e2e.Store, doc backupDoc) {
 		t.Fatal("manifest holds no wrapper ID, want the key of the config secret")
 	}
 
-	if len(manifest.HomeRegions) == 0 {
-		t.Fatal("manifest holds no home region")
+	if len(manifest.PrimaryInstallations) == 0 {
+		t.Fatal("manifest holds no primary installation")
 	}
 }
 

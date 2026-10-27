@@ -51,8 +51,8 @@ func assertSameSummary(t *testing.T, got, want backup.Summary) {
 			got.Dialect, got.SchemaVersion, want.Dialect, want.SchemaVersion)
 	}
 
-	if !slices.Equal(got.HomeRegions, want.HomeRegions) {
-		t.Fatalf("summary home regions = %v, want %v", got.HomeRegions, want.HomeRegions)
+	if !slices.Equal(got.PrimaryInstallations, want.PrimaryInstallations) {
+		t.Fatalf("summary primary installations = %v, want %v", got.PrimaryInstallations, want.PrimaryInstallations)
 	}
 
 	if !slices.Equal(got.WrapperIDs, want.WrapperIDs) {

@@ -68,7 +68,7 @@ func portableSpec() []PortableTable {
 			OrderBy: []string{portColName},
 			Columns: []Column{
 				{Name: portColName, Kind: KindText},
-				{Name: "home_region", Kind: KindText},
+				{Name: "primary_installation", Kind: KindText},
 				{Name: "failover_version", Kind: KindInteger},
 				{Name: portColCreatedAtMs, Kind: KindTime},
 				{Name: "allow_forced_writes", Kind: KindBool},

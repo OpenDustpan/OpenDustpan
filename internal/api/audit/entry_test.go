@@ -133,7 +133,7 @@ func TestReadOneEntryWithoutReader(t *testing.T) {
 	entries := &memAuditStore{entries: map[namespace.Name][]audit.Entry{}, err: nil}
 
 	namespaces, err := namespace.NewService(
-		namespace.Config{Store: &homedNamespaceStore{}, Now: nil, Region: "test-region"},
+		namespace.Config{Store: &homedNamespaceStore{}, Now: nil, Installation: "test-region"},
 	)
 	if err != nil {
 		t.Fatalf("namespace service: %v", err)
@@ -211,7 +211,7 @@ func TestReadOneEntryOfAnUnknownNamespaceAnswers404(t *testing.T) {
 	seedEntry(t, entries, "ghost", "alice")
 
 	namespaces, err := namespace.NewService(
-		namespace.Config{Store: nsStore, Now: nil, Region: "test-region"},
+		namespace.Config{Store: nsStore, Now: nil, Installation: "test-region"},
 	)
 	if err != nil {
 		t.Fatalf("namespace service: %v", err)
@@ -243,7 +243,7 @@ func newReaderHandler(t *testing.T, reader audit.EntryReader) http.Handler {
 	t.Helper()
 
 	namespaces, err := namespace.NewService(
-		namespace.Config{Store: &homedNamespaceStore{}, Now: nil, Region: "test-region"},
+		namespace.Config{Store: &homedNamespaceStore{}, Now: nil, Installation: "test-region"},
 	)
 	if err != nil {
 		t.Fatalf("namespace service: %v", err)

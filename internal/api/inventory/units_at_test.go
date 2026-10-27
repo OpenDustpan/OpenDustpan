@@ -107,7 +107,7 @@ func newHistoryHandlerWithURL(
 	nsStore := &memNamespaceStore{namespaces: map[namespace.Name]namespace.Namespace{}}
 	seedNamespace(t, nsStore)
 
-	namespaces, err := namespace.NewService(namespace.Config{Store: nsStore, Now: nil, Region: "test-region"})
+	namespaces, err := namespace.NewService(namespace.Config{Store: nsStore, Now: nil, Installation: "test-region"})
 	if err != nil {
 		t.Fatalf("namespace service: %v", err)
 	}

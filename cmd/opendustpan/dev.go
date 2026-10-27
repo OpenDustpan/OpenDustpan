@@ -760,9 +760,11 @@ func (r *devRun) beforeServe(in runInputs, instanceID string) func(context.Conte
 
 // ensureNamespace makes the namespace dev when it does not exist.
 func (r *devRun) ensureNamespace(ctx context.Context, st store) error {
-	region := cli.ByFlag("region").Default
+	name := cli.ByFlag("installation").Default
 
-	svc, err := namespace.NewService(namespace.Config{Store: st, Now: nil, Region: namespace.Region(region)})
+	svc, err := namespace.NewService(
+		namespace.Config{Store: st, Now: nil, Installation: namespace.InstallationName(name)},
+	)
 	if err != nil {
 		return fmt.Errorf("namespace service: %w", err)
 	}
@@ -810,7 +812,7 @@ func (r *devRun) serveFlags(serverURL string, cert devCert, instanceID string) (
 
 	f.installationKind = installation.KindDev
 	f.instanceID = instanceID
-	f.region = cli.ByFlag("region").Default
+	f.installation = cli.ByFlag("installation").Default
 	f.database = "sqlite:" + filepath.Join(r.dir, devDBName)
 	f.listen = r.flags.listen
 	f.consoleDir = r.flags.consoleDir

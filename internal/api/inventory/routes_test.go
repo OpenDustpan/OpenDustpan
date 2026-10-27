@@ -30,8 +30,8 @@ func publicPatterns() []string {
 	return nil
 }
 
-// homedNamespaceStore answers every namespace homed in the test region, so
-// the enforcement tests reach the reader instead of failing on the region.
+// homedNamespaceStore answers every namespace whose primary installation is the test installation, so
+// the enforcement tests reach the reader instead of failing on the primary installation.
 type homedNamespaceStore struct{}
 
 func (homedNamespaceStore) CreateNamespace(_ context.Context, _ namespace.Namespace) error {
@@ -42,7 +42,7 @@ func (homedNamespaceStore) GetNamespace(_ context.Context, name namespace.Name) 
 	var out namespace.Namespace
 
 	out.Name = name
-	out.HomeRegion = "test-region"
+	out.PrimaryInstallation = "test-region"
 	out.FailoverVersion = 1
 
 	return out, nil
@@ -50,12 +50,12 @@ func (homedNamespaceStore) GetNamespace(_ context.Context, name namespace.Name) 
 
 func (homedNamespaceStore) ListNamespaces(_ context.Context) ([]namespace.Namespace, error) {
 	ns := namespace.Namespace{
-		ID:              namespace.NewID(),
-		CreatedAt:       changeTime(),
-		Name:            "acme",
-		HomeRegion:      "test-region",
-		FailoverVersion: 1,
-		Overrides:       namespace.Overrides{Forced: false, Unlocked: false},
+		ID:                  namespace.NewID(),
+		CreatedAt:           changeTime(),
+		Name:                "acme",
+		PrimaryInstallation: "test-region",
+		FailoverVersion:     1,
+		Overrides:           namespace.Overrides{Forced: false, Unlocked: false},
 	}
 
 	return []namespace.Namespace{ns}, nil
@@ -72,9 +72,9 @@ func newTestHandler(t *testing.T) testHandler {
 
 	namespaces, err := namespace.NewService(
 		namespace.Config{
-			Store:  nsStore,
-			Now:    nil,
-			Region: "test-region",
+			Store:        nsStore,
+			Now:          nil,
+			Installation: "test-region",
 		},
 	)
 	if err != nil {
@@ -115,7 +115,7 @@ func newEnforcingHandler(t *testing.T, authz identity.Authorizer) testHandler {
 	t.Helper()
 
 	namespaces, err := namespace.NewService(
-		namespace.Config{Store: homedNamespaceStore{}, Now: nil, Region: "test-region"},
+		namespace.Config{Store: homedNamespaceStore{}, Now: nil, Installation: "test-region"},
 	)
 	if err != nil {
 		t.Fatalf("namespace service: %v", err)

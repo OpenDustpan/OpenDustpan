@@ -52,7 +52,7 @@ func TestFireErrorsCarryTheirCode(t *testing.T) {
 		{"a trigger that is gone", trigger.ErrNotFound, http.StatusNotFound, wantCode(errcode.TriggerNotFound)},
 		{"a job that is gone", job.ErrNotFound, http.StatusNotFound, wantCode(errcode.TriggerNotFound)},
 		{
-			"another home region", namespace.ErrNotHome, http.StatusMisdirectedRequest,
+			"another primary installation", namespace.ErrNotHome, http.StatusMisdirectedRequest,
 			wantCode(errcode.NamespaceNotHome),
 		},
 		{

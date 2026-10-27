@@ -76,7 +76,7 @@ func newFixture(t *testing.T) fixture {
 
 	m := newMem()
 	m.namespaces["acme"] = namespace.Namespace{
-		ID: "", CreatedAt: epochTime(), Name: "acme", HomeRegion: "", FailoverVersion: 1,
+		ID: "", CreatedAt: epochTime(), Name: "acme", PrimaryInstallation: "", FailoverVersion: 1,
 		Overrides: namespace.Overrides{Forced: false, Unlocked: false},
 	}
 

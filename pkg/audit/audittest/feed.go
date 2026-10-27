@@ -614,17 +614,17 @@ func testClaimOfAnotherSinkCannotAdvance(t *testing.T, s FeedStore) {
 	}
 }
 
-// otherNamespace creates the namespace globex homed in eu-west.
+// otherNamespace creates the namespace globex with primary installation eu-west.
 func otherNamespace(t *testing.T, s Store) namespace.Namespace {
 	t.Helper()
 
 	ns := namespace.Namespace{
-		ID:              namespace.NewID(),
-		CreatedAt:       now(),
-		Name:            "globex",
-		HomeRegion:      "eu-west",
-		FailoverVersion: 1,
-		Overrides:       namespace.Overrides{Forced: false, Unlocked: false},
+		ID:                  namespace.NewID(),
+		CreatedAt:           now(),
+		Name:                "globex",
+		PrimaryInstallation: "eu-west",
+		FailoverVersion:     1,
+		Overrides:           namespace.Overrides{Forced: false, Unlocked: false},
 	}
 
 	if err := s.CreateNamespace(t.Context(), ns); err != nil {

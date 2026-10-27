@@ -154,7 +154,7 @@ func createCollectionNamespace(
 
 	ns := namespace.Namespace{
 		ID:        namespace.NewID(),
-		CreatedAt: at, Name: "acme", HomeRegion: "eu-west", FailoverVersion: 1,
+		CreatedAt: at, Name: "acme", PrimaryInstallation: "eu-west", FailoverVersion: 1,
 		Overrides: namespace.Overrides{Forced: false, Unlocked: false},
 	}
 	if err := st.CreateNamespace(t.Context(), ns); err != nil {

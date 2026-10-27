@@ -125,7 +125,7 @@ func newServerWithOptions(t *testing.T, addr string, opts ...dustpan.Option) *du
 	})
 
 	base := []dustpan.Option{
-		dustpan.WithRegion(region),
+		dustpan.WithInstallation(installationName),
 		dustpan.WithNamespaceStore(st),
 		dustpan.WithStackStore(st),
 		dustpan.WithUpdateStore(st),
@@ -481,7 +481,7 @@ func TestNewServerRejectsSingleTLSFile(t *testing.T) {
 	})
 
 	base := []dustpan.Option{
-		dustpan.WithRegion(region),
+		dustpan.WithInstallation(installationName),
 		dustpan.WithNamespaceStore(st),
 		dustpan.WithStackStore(st),
 		dustpan.WithUpdateStore(st),
@@ -540,7 +540,7 @@ func TestNewServerRejectsBadPublicURL(t *testing.T) {
 	})
 
 	_, err = dustpan.NewServer(
-		dustpan.WithRegion(region),
+		dustpan.WithInstallation(installationName),
 		dustpan.WithNamespaceStore(st),
 		dustpan.WithStackStore(st),
 		dustpan.WithUpdateStore(st),

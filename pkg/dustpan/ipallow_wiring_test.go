@@ -84,12 +84,12 @@ func newIPAllowlistServerWith(t *testing.T, includeBootstrap bool, extra ...dust
 	nsName := namespace.Name("acme")
 
 	created := namespace.Namespace{
-		ID:              namespace.NewID(),
-		CreatedAt:       time.Date(2026, time.October, 8, 21, 0, 0, 0, time.UTC),
-		Name:            nsName,
-		HomeRegion:      region,
-		FailoverVersion: 1,
-		Overrides:       namespace.Overrides{Forced: false, Unlocked: false},
+		ID:                  namespace.NewID(),
+		CreatedAt:           time.Date(2026, time.October, 8, 21, 0, 0, 0, time.UTC),
+		Name:                nsName,
+		PrimaryInstallation: installationName,
+		FailoverVersion:     1,
+		Overrides:           namespace.Overrides{Forced: false, Unlocked: false},
 	}
 
 	if createErr := st.CreateNamespace(ctx, created); createErr != nil {
@@ -136,7 +136,7 @@ func newIPAllowlistServerWith(t *testing.T, includeBootstrap bool, extra ...dust
 	}
 
 	opts := append(signInOptions(t, st),
-		dustpan.WithRegion(region),
+		dustpan.WithInstallation(installationName),
 		dustpan.WithNamespaceStore(st),
 		dustpan.WithStackStore(st),
 		dustpan.WithUpdateStore(st),

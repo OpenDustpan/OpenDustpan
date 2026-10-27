@@ -53,8 +53,8 @@ const (
 	backendCertLifetime = 24 * time.Hour
 	// certSerialBits sets the size of the generated certificate serial.
 	certSerialBits = 128
-	// regionFlag names the region flag serve takes.
-	regionFlag = "--region"
+	// installationFlag names the installation flag serve takes.
+	installationFlag = "--installation"
 	// deltaCutoffFlag names the checkpoint delta cutoff flag serve takes.
 	deltaCutoffFlag = "--checkpoint-delta-cutoff"
 	// disableJournalingFlag names the flag that turns Pulumi journaling off.
@@ -505,7 +505,7 @@ func serveArgs(cfg backendConfig, port string) []string {
 		"--listen", "127.0.0.1:" + port,
 		"--tls-cert", cfg.certFile,
 		"--tls-key", cfg.keyFile,
-		regionFlag, region,
+		installationFlag, installationName,
 		deltaCutoffFlag, strconv.Itoa(cfg.deltaCutoff),
 	}
 

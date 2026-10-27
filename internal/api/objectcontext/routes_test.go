@@ -37,8 +37,8 @@ const (
 	testUnitID = "ws-1"
 )
 
-// fakeNamespaces answers every namespace except "absent", homed in the test
-// region.
+// fakeNamespaces answers every namespace except "absent", whose primary installation is the test
+// installation.
 type fakeNamespaces struct{}
 
 func (fakeNamespaces) CreateNamespace(context.Context, namespace.Namespace) error { return nil }
@@ -49,8 +49,12 @@ func (fakeNamespaces) GetNamespace(_ context.Context, name namespace.Name) (name
 	}
 
 	return namespace.Namespace{
-		ID: namespace.NewID(), CreatedAt: time.Unix(0, 0), Name: name, HomeRegion: "test-region", FailoverVersion: 1,
-		Overrides: namespace.Overrides{Forced: false, Unlocked: false},
+		ID:                  namespace.NewID(),
+		CreatedAt:           time.Unix(0, 0),
+		Name:                name,
+		PrimaryInstallation: "test-region",
+		FailoverVersion:     1,
+		Overrides:           namespace.Overrides{Forced: false, Unlocked: false},
 	}, nil
 }
 
@@ -252,7 +256,9 @@ func (a *recordingAuthorizer) seen() []string {
 func newHandler(t *testing.T, authz identity.Authorizer, store *fakeStore) testHandler {
 	t.Helper()
 
-	namespaces, err := namespace.NewService(namespace.Config{Store: fakeNamespaces{}, Now: nil, Region: "test-region"})
+	namespaces, err := namespace.NewService(
+		namespace.Config{Store: fakeNamespaces{}, Now: nil, Installation: "test-region"},
+	)
 	if err != nil {
 		t.Fatalf("namespace service: %v", err)
 	}

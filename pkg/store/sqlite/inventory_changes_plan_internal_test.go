@@ -40,7 +40,7 @@ func TestInventoryChangeBoundsPlan(t *testing.T) {
 	})
 
 	statements := []string{
-		`INSERT INTO namespaces (name, home_region, failover_version, created_at_ms, id)
+		`INSERT INTO namespaces (name, primary_installation, failover_version, created_at_ms, id)
 			VALUES ('acme', 'eu-west', 1, 0, 'ns-plan')`,
 		fmt.Sprintf(`WITH RECURSIVE u(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM u WHERE n < %[1]d),
 			k(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM k WHERE n < %[2]d)

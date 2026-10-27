@@ -18,7 +18,7 @@ import (
 )
 
 // savedViewHarness returns a harness over a fresh store. The namespaces it
-// makes are homed with failover version 1.
+// makes have failover version 1.
 func savedViewHarness(base string) savedviewtest.Factory {
 	return func(t *testing.T) savedviewtest.Harness {
 		t.Helper()
@@ -112,8 +112,12 @@ func ensureNamespace(t *testing.T, s *postgres.Store, name namespace.Name) names
 	}
 
 	ns := namespace.Namespace{
-		ID: namespace.NewID(), CreatedAt: time.UnixMilli(1_700_000_000_000).UTC(), Name: name, HomeRegion: "eu-west",
-		FailoverVersion: 1, Overrides: namespace.Overrides{Forced: false, Unlocked: false},
+		ID:                  namespace.NewID(),
+		CreatedAt:           time.UnixMilli(1_700_000_000_000).UTC(),
+		Name:                name,
+		PrimaryInstallation: "eu-west",
+		FailoverVersion:     1,
+		Overrides:           namespace.Overrides{Forced: false, Unlocked: false},
 	}
 	if err := s.CreateNamespace(t.Context(), ns); err != nil {
 		t.Fatalf("create namespace %s: %v", name, err)

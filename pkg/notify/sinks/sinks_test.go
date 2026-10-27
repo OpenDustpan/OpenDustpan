@@ -147,8 +147,8 @@ func (f *fakeStore) RecordSinkTest(_ context.Context, id string, _ namespace.Fen
 	return nil
 }
 
-// fakeNamespaces knows the namespace shop. With notHome set, shop is homed in
-// another region.
+// fakeNamespaces knows the namespace shop. With notHome set, the primary installation of
+// shop is another installation.
 type fakeNamespaces struct {
 	notHome bool
 }
@@ -172,7 +172,7 @@ func (fakeNamespaces) Get(_ context.Context, name namespace.Name) (namespace.Nam
 	}
 
 	return namespace.Namespace{
-		ID: "ns-1", CreatedAt: time.Time{}, Name: shop, HomeRegion: "eu-west", FailoverVersion: 1,
+		ID: "ns-1", CreatedAt: time.Time{}, Name: shop, PrimaryInstallation: "eu-west", FailoverVersion: 1,
 		Overrides: namespace.Overrides{Forced: false, Unlocked: false},
 	}, nil
 }

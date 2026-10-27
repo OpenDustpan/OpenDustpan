@@ -60,7 +60,7 @@ func (m *memNamespaceStore) Ping(_ context.Context) error {
 	return nil
 }
 
-// seedNamespace creates the acme namespace homed in the test region.
+// seedNamespace creates the acme namespace whose primary installation is the test installation.
 func seedNamespace(t *testing.T, nsStore *memNamespaceStore) {
 	t.Helper()
 
@@ -70,12 +70,12 @@ func seedNamespace(t *testing.T, nsStore *memNamespaceStore) {
 	}
 
 	ns := namespace.Namespace{
-		ID:              namespace.NewID(),
-		CreatedAt:       time.Now(),
-		Name:            n,
-		HomeRegion:      "test-region",
-		FailoverVersion: 1,
-		Overrides:       namespace.Overrides{Forced: false, Unlocked: false},
+		ID:                  namespace.NewID(),
+		CreatedAt:           time.Now(),
+		Name:                n,
+		PrimaryInstallation: "test-region",
+		FailoverVersion:     1,
+		Overrides:           namespace.Overrides{Forced: false, Unlocked: false},
 	}
 	if err := nsStore.CreateNamespace(t.Context(), ns); err != nil {
 		t.Fatalf("create namespace: %v", err)
@@ -267,7 +267,7 @@ func newBehaviorHandlerWith(
 	t.Helper()
 
 	namespaces, err := namespace.NewService(
-		namespace.Config{Store: nsStore, Now: nil, Region: "test-region"},
+		namespace.Config{Store: nsStore, Now: nil, Installation: "test-region"},
 	)
 	if err != nil {
 		t.Fatalf("namespace service: %v", err)
@@ -381,12 +381,12 @@ func changeTime() time.Time {
 func seedEntries(nsStore *memNamespaceStore, reader *memReader) {
 	ns := namespace.Name("acme")
 	nsStore.namespaces[ns] = namespace.Namespace{
-		ID:              namespace.NewID(),
-		CreatedAt:       changeTime(),
-		Name:            ns,
-		HomeRegion:      "test-region",
-		FailoverVersion: 1,
-		Overrides:       namespace.Overrides{Forced: false, Unlocked: false},
+		ID:                  namespace.NewID(),
+		CreatedAt:           changeTime(),
+		Name:                ns,
+		PrimaryInstallation: "test-region",
+		FailoverVersion:     1,
+		Overrides:           namespace.Overrides{Forced: false, Unlocked: false},
 	}
 
 	var count int64 = 3
@@ -962,7 +962,7 @@ func TestNewHandlerRequiresDependencies(t *testing.T) {
 	reader := &memReader{entries: map[namespace.Name][]coreinventory.Entry{}, err: nil}
 
 	namespaces, err := namespace.NewService(
-		namespace.Config{Store: nsStore, Now: nil, Region: "test-region"},
+		namespace.Config{Store: nsStore, Now: nil, Installation: "test-region"},
 	)
 	if err != nil {
 		t.Fatalf("namespace service: %v", err)

@@ -13,7 +13,7 @@ import (
 
 // TestWriteErrorNamespaceSentinels proves each namespace sentinel answers its
 // own status, never a 500: a fenced write answers 409, a namespace homed in
-// another region 421, and a database that does not answer 503 with a
+// another installation 421, and a database that does not answer 503 with a
 // Retry-After time.
 func TestWriteErrorNamespaceSentinels(t *testing.T) {
 	t.Parallel()

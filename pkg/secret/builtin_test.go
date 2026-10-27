@@ -92,7 +92,7 @@ func TestBuiltinWrapperRejectsWrongSize(t *testing.T) {
 func unconfiguredService(t *testing.T) *secret.Service {
 	t.Helper()
 
-	namespaces, err := namespace.NewService(namespace.Config{Store: oneNamespace{}, Now: nil, Region: "local"})
+	namespaces, err := namespace.NewService(namespace.Config{Store: oneNamespace{}, Now: nil, Installation: "local"})
 	if err != nil {
 		t.Fatalf("namespaces: %v", err)
 	}

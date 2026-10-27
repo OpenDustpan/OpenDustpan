@@ -52,7 +52,7 @@ func (fakeNamespaces) CreateNamespace(_ context.Context, _ namespace.Namespace) 
 
 func (fakeNamespaces) GetNamespace(_ context.Context, name namespace.Name) (namespace.Namespace, error) {
 	return namespace.Namespace{
-		ID: namespace.NewID(), CreatedAt: time.UnixMilli(1).UTC(), Name: name, HomeRegion: "eu-west",
+		ID: namespace.NewID(), CreatedAt: time.UnixMilli(1).UTC(), Name: name, PrimaryInstallation: "eu-west",
 		FailoverVersion: 7, Overrides: namespace.Overrides{Forced: false, Unlocked: false},
 	}, nil
 }

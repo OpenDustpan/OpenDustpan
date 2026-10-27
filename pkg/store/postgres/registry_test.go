@@ -11,7 +11,7 @@ import (
 )
 
 // registryHarness returns a harness over a fresh store. The namespaces it makes
-// are homed with failover version 1.
+// have failover version 1.
 func registryHarness(base string) registrytest.StoreFactory {
 	return func(t *testing.T) registrytest.Harness {
 		t.Helper()

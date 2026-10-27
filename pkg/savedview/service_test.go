@@ -152,7 +152,7 @@ func (m memNamespaces) ListNamespaces(context.Context) ([]namespace.Namespace, e
 func testNamespaces() memNamespaces {
 	mk := func(name namespace.Name, version int64) namespace.Namespace {
 		return namespace.Namespace{
-			ID: namespace.NewID(), CreatedAt: time.UnixMilli(1), Name: name, HomeRegion: "eu-west",
+			ID: namespace.NewID(), CreatedAt: time.UnixMilli(1), Name: name, PrimaryInstallation: "eu-west",
 			FailoverVersion: version, Overrides: namespace.Overrides{Forced: false, Unlocked: false},
 		}
 	}

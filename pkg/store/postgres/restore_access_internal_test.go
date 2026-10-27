@@ -88,12 +88,12 @@ func TestKeepAccessHoldsShareLocksAcrossSwap(t *testing.T) {
 	s := openKeepLockStore(t, testPostgresURL(t))
 
 	seed := namespace.Namespace{
-		ID:              namespace.NewID(),
-		CreatedAt:       time.Now().UTC(),
-		Name:            "acme",
-		HomeRegion:      "eu-west",
-		FailoverVersion: 1,
-		Overrides:       namespace.Overrides{Forced: false, Unlocked: false},
+		ID:                  namespace.NewID(),
+		CreatedAt:           time.Now().UTC(),
+		Name:                "acme",
+		PrimaryInstallation: "eu-west",
+		FailoverVersion:     1,
+		Overrides:           namespace.Overrides{Forced: false, Unlocked: false},
 	}
 
 	if err := s.CreateNamespace(ctx, seed); err != nil {

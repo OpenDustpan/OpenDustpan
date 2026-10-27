@@ -103,7 +103,7 @@ func (n *scriptedNamespaces) Get(_ context.Context, name namespace.Name) (namesp
 	}
 
 	return namespace.Namespace{
-		ID: namespace.NewID(), CreatedAt: time.UnixMilli(1).UTC(), Name: name, HomeRegion: "eu-west",
+		ID: namespace.NewID(), CreatedAt: time.UnixMilli(1).UTC(), Name: name, PrimaryInstallation: "eu-west",
 		FailoverVersion: 7, Overrides: namespace.Overrides{Forced: false, Unlocked: false},
 	}, nil
 }

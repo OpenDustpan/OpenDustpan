@@ -38,14 +38,14 @@ func writeConfig(t *testing.T, text string) string {
 // process environment, so the test sets it and does not run in parallel.
 func TestServeConfigFile(t *testing.T) {
 	setServeEnv(t, testKeyBase64())
-	t.Setenv("DUSTPAN_REGION", "from-env")
+	t.Setenv("DUSTPAN_INSTALLATION", "from-env")
 
 	database := "sqlite:" + filepath.Join(t.TempDir(), "dustpan.db")
 
 	config := writeConfig(t, `{
   # every value of this file is a test value
   "database": "`+database+`",
-  "region": "from-file",
+  "installation": "from-file",
   "listen": "127.0.0.1:1",
   "log-format": "text"
 }
@@ -59,13 +59,13 @@ func TestServeConfigFile(t *testing.T) {
 	for _, want := range []string{
 		"msg=setting key=config value=" + config + " layer=flag",
 		"msg=setting key=database value=set layer=file",
-		"msg=setting key=region value=from-env layer=env",
+		"msg=setting key=installation value=from-env layer=env",
 		"msg=setting key=listen value=127.0.0.1:0 layer=flag",
 		"msg=setting key=log-format value=text layer=file",
 		"msg=setting key=log-level value=info layer=default",
 		"msg=setting key=DUSTPAN_ADMIN_TOKEN value=set layer=env",
 		"msg=setting key=DUSTPAN_KEY_ENCRYPTION_KEY value=set layer=env",
-		`level=WARN msg="setting has a value in more than one layer" key=region layer=env overridden=file`,
+		`level=WARN msg="setting has a value in more than one layer" key=installation layer=env overridden=file`,
 		`level=WARN msg="setting has a value in more than one layer" key=listen layer=flag overridden=file`,
 	} {
 		if !strings.Contains(logs, want) {
@@ -136,7 +136,7 @@ func checkStartSettings(t *testing.T, settings []audit.Change, secrets []string)
 	}
 
 	for key, want := range map[string]string{
-		"database": "set@file", "region": "from-env@env", "listen": "127.0.0.1:0@flag",
+		"database": "set@file", "installation": "from-env@env", "listen": "127.0.0.1:0@flag",
 		"log-level": "info@default", "DUSTPAN_ADMIN_TOKEN": "set@env",
 	} {
 		if got[key] != want {

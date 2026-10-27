@@ -67,8 +67,8 @@ func writeServeSettings(out *strings.Builder) {
 // test decodes it with ParseConfig.
 const ConfigExample = `# opendustpan serve --config /etc/opendustpan/config.yaml
 {
-  # The region that this server is authoritative for.
-  "region": "eu-west",
+  # The name of this installation.
+  "installation": "eu-west",
   "listen": ":8443",
   "public-url": "https://dustpan.example",
   "tls-cert": "/etc/opendustpan/tls.crt",

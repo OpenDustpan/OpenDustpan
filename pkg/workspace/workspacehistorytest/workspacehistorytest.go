@@ -99,7 +99,7 @@ func makeNamespaceNamed(t *testing.T, s Store, name namespace.Name) namespace.Fe
 
 	err := s.CreateNamespace(t.Context(), namespace.Namespace{
 		ID:        namespace.NewID(),
-		CreatedAt: suiteTime(), Name: name, HomeRegion: "local", FailoverVersion: fenceVersion,
+		CreatedAt: suiteTime(), Name: name, PrimaryInstallation: "local", FailoverVersion: fenceVersion,
 		Overrides: namespace.Overrides{Forced: false, Unlocked: false},
 	})
 	if err != nil {

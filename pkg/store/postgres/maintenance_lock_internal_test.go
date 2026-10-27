@@ -102,7 +102,7 @@ func TestWriteWaitsForEnterAndReadsItsState(t *testing.T) {
 func newLockNamespace() namespace.Namespace {
 	return namespace.Namespace{
 		CreatedAt: time.Date(2026, time.October, 8, 21, 0, 0, 0, time.UTC), ID: namespace.NewID(),
-		Name: "locked", HomeRegion: "eu-west", FailoverVersion: 1,
+		Name: "locked", PrimaryInstallation: "eu-west", FailoverVersion: 1,
 		Overrides: namespace.Overrides{Forced: false, Unlocked: false},
 	}
 }

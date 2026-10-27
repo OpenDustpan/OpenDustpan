@@ -51,7 +51,7 @@ type Config struct {
 	Authenticator identity.Authenticator
 	Authorizer    identity.Authorizer
 	Logger        *slog.Logger
-	// Namespaces creates namespaces homed in the region of the server.
+	// Namespaces creates namespaces whose primary installation is the installation of the server.
 	Namespaces *namespace.Service
 	// Backups runs installation backups against the configured target. Nil
 	// means no backup target is configured. The target comes only from this

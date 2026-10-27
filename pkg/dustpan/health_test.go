@@ -111,7 +111,7 @@ func newReadinessServer(
 	}
 
 	srv, err := dustpan.NewServer(
-		dustpan.WithRegion(region),
+		dustpan.WithInstallation(installationName),
 		dustpan.WithNamespaceStore(pingStore{Store: st, ping: orPing(storePing)}),
 		dustpan.WithStackStore(st),
 		dustpan.WithUpdateStore(st),

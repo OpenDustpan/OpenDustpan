@@ -108,12 +108,12 @@ func newNamespace(t *testing.T, s Store) namespace.Namespace {
 	t.Helper()
 
 	ns := namespace.Namespace{
-		ID:              namespace.NewID(),
-		CreatedAt:       now(),
-		Name:            "acme",
-		HomeRegion:      "eu-west",
-		FailoverVersion: 1,
-		Overrides:       namespace.Overrides{Forced: false, Unlocked: false},
+		ID:                  namespace.NewID(),
+		CreatedAt:           now(),
+		Name:                "acme",
+		PrimaryInstallation: "eu-west",
+		FailoverVersion:     1,
+		Overrides:           namespace.Overrides{Forced: false, Unlocked: false},
 	}
 
 	if err := s.CreateNamespace(t.Context(), ns); err != nil {

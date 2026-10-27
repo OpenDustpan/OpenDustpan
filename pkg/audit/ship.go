@@ -282,12 +282,12 @@ func applyLeaseDefaults(cfg *ShipperConfig) error {
 // failover version, so the store moves its cursor with no fence check.
 func serverScope() namespace.Namespace {
 	return namespace.Namespace{
-		CreatedAt:       time.Time{},
-		ID:              "",
-		Name:            ServerScope,
-		HomeRegion:      "",
-		FailoverVersion: 0,
-		Overrides:       namespace.Overrides{Forced: false, Unlocked: false},
+		CreatedAt:           time.Time{},
+		ID:                  "",
+		Name:                ServerScope,
+		PrimaryInstallation: "",
+		FailoverVersion:     0,
+		Overrides:           namespace.Overrides{Forced: false, Unlocked: false},
 	}
 }
 

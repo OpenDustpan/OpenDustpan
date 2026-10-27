@@ -97,7 +97,7 @@ func loggedServer(
 	logger := slog.New(slog.NewJSONHandler(sink, &slog.HandlerOptions{Level: level}))
 
 	srv, err := dustpan.NewServer(
-		dustpan.WithRegion(region),
+		dustpan.WithInstallation(installationName),
 		dustpan.WithNamespaceStore(st),
 		dustpan.WithStackStore(st),
 		dustpan.WithUpdateStore(st),
@@ -210,12 +210,12 @@ func seedNamespace(t *testing.T, st *sqlite.Store, name string) {
 	t.Helper()
 
 	err := st.CreateNamespace(t.Context(), namespace.Namespace{
-		ID:              namespace.NewID(),
-		CreatedAt:       time.Now(),
-		Name:            namespace.Name(name),
-		HomeRegion:      namespace.Region(region),
-		FailoverVersion: 1,
-		Overrides:       namespace.Overrides{Forced: false, Unlocked: false},
+		ID:                  namespace.NewID(),
+		CreatedAt:           time.Now(),
+		Name:                namespace.Name(name),
+		PrimaryInstallation: namespace.InstallationName(installationName),
+		FailoverVersion:     1,
+		Overrides:           namespace.Overrides{Forced: false, Unlocked: false},
 	})
 	if err != nil {
 		t.Fatalf("create namespace: %v", err)
@@ -588,7 +588,7 @@ func TestRequestLogTextFormat(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(&sink, &slog.HandlerOptions{Level: slog.LevelDebug}))
 
 	srv, err := dustpan.NewServer(
-		dustpan.WithRegion(region),
+		dustpan.WithInstallation(installationName),
 		dustpan.WithNamespaceStore(st),
 		dustpan.WithStackStore(st),
 		dustpan.WithUpdateStore(st),

@@ -77,12 +77,12 @@ func itemKeyNamespace(t *testing.T, s ItemKeyStore) namespace.Fence {
 	t.Helper()
 
 	ns := namespace.Namespace{
-		ID:              namespace.NewID(),
-		CreatedAt:       itemKeyTime(),
-		Name:            "acme",
-		HomeRegion:      "local",
-		FailoverVersion: itemKeyFenceVersion,
-		Overrides:       namespace.Overrides{Forced: false, Unlocked: false},
+		ID:                  namespace.NewID(),
+		CreatedAt:           itemKeyTime(),
+		Name:                "acme",
+		PrimaryInstallation: "local",
+		FailoverVersion:     itemKeyFenceVersion,
+		Overrides:           namespace.Overrides{Forced: false, Unlocked: false},
 	}
 
 	if err := s.CreateNamespace(t.Context(), ns); err != nil {
@@ -417,7 +417,7 @@ func otherItemKeyFence(t *testing.T, s ItemKeyStore) namespace.Fence {
 	t.Helper()
 
 	ns := namespace.Namespace{
-		ID: namespace.NewID(), CreatedAt: itemKeyTime(), Name: "other", HomeRegion: "local",
+		ID: namespace.NewID(), CreatedAt: itemKeyTime(), Name: "other", PrimaryInstallation: "local",
 		FailoverVersion: itemKeyFenceVersion, Overrides: namespace.Overrides{Forced: false, Unlocked: false},
 	}
 

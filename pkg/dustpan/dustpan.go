@@ -6,7 +6,7 @@
 // Temporal's server SDK:
 //
 //	srv, err := dustpan.NewServer(
-//		dustpan.WithRegion("eu-west"),
+//		dustpan.WithInstallation("eu-west"),
 //		dustpan.WithNamespaceStore(myStore),
 //		dustpan.WithStackStore(myStore),
 //		dustpan.WithUpdateStore(myStore),
@@ -192,7 +192,7 @@ type settings struct {
 	authorizer           identity.Authorizer
 	logger               *slog.Logger
 	now                  func() time.Time
-	region               namespace.Region
+	installation         namespace.InstallationName
 	listenAddr           string
 	listener             net.Listener
 	consoleDir           string
@@ -404,9 +404,10 @@ func WithAuthorizer(a identity.Authorizer) Option {
 	return func(o *settings) { o.authorizer = a }
 }
 
-// WithRegion sets the region this server is authoritative for. Required.
-func WithRegion(r namespace.Region) Option {
-	return func(o *settings) { o.region = r }
+// WithInstallation sets the name of this installation. Required. It is the
+// primary installation of each namespace that this server creates.
+func WithInstallation(r namespace.InstallationName) Option {
+	return func(o *settings) { o.installation = r }
 }
 
 // WithLogger sets the structured logger. Defaults to discarding logs.
@@ -744,7 +745,7 @@ func defaultSettings() *settings {
 		authorizer:              nil,
 		logger:                  slog.New(slog.DiscardHandler),
 		now:                     time.Now,
-		region:                  "",
+		installation:            "",
 		listenAddr:              defaultListenAddr,
 		listener:                nil,
 		consoleDir:              "",
@@ -1726,7 +1727,7 @@ func checkTLSAndAllowlist(cfg *settings) error {
 // with its own context.
 func newServices(cfg *settings, tokens *accesstoken.Service) (services, error) {
 	namespaces, err := namespace.NewService(
-		namespace.Config{Store: cfg.namespaceStore, Now: cfg.now, Region: cfg.region},
+		namespace.Config{Store: cfg.namespaceStore, Now: cfg.now, Installation: cfg.installation},
 	)
 	if err != nil {
 		return services{}, fmt.Errorf("namespace service: %w", err)
@@ -3491,16 +3492,16 @@ func newRestoreService(
 	}
 
 	service, err := backup.NewRestoreService(backup.RestoreConfig{
-		Live:        live,
-		Registry:    registry,
-		Backups:     deps.backups,
-		Maintenance: maint,
-		Blobs:       cfg.blobStore,
-		Target:      cfg.backupTarget,
-		Key:         cfg.secretWrapper,
-		Region:      cfg.region.String(),
-		AfterApply:  afterRestore(steps...),
-		Admit:       admit,
+		Live:         live,
+		Registry:     registry,
+		Backups:      deps.backups,
+		Maintenance:  maint,
+		Blobs:        cfg.blobStore,
+		Target:       cfg.backupTarget,
+		Key:          cfg.secretWrapper,
+		Installation: cfg.installation.String(),
+		AfterApply:   afterRestore(steps...),
+		Admit:        admit,
 
 		AllowDevBackups: cfg.allowDevBackups,
 		AllowDevHint:    cfg.allowDevHint,

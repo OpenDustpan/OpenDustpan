@@ -42,12 +42,12 @@ func makeNamespace(t *testing.T, s namespace.Store) namespace.Fence {
 	const name namespace.Name = "acme"
 
 	ns := namespace.Namespace{
-		ID:              namespace.NewID(),
-		CreatedAt:       suiteTime(),
-		Name:            name,
-		HomeRegion:      "local",
-		FailoverVersion: suiteFenceVersion,
-		Overrides:       namespace.Overrides{Forced: false, Unlocked: false},
+		ID:                  namespace.NewID(),
+		CreatedAt:           suiteTime(),
+		Name:                name,
+		PrimaryInstallation: "local",
+		FailoverVersion:     suiteFenceVersion,
+		Overrides:           namespace.Overrides{Forced: false, Unlocked: false},
 	}
 
 	if err := s.CreateNamespace(t.Context(), ns); err != nil {

@@ -251,12 +251,12 @@ type fakeNamespaces struct{}
 // Get returns the namespace with both switches on.
 func (fakeNamespaces) Get(context.Context, namespace.Name) (namespace.Namespace, error) {
 	return namespace.Namespace{
-		ID:              namespace.NewID(),
-		CreatedAt:       time.Time{},
-		Name:            "acme",
-		HomeRegion:      "",
-		FailoverVersion: 0,
-		Overrides:       namespace.Overrides{Forced: true, Unlocked: true},
+		ID:                  namespace.NewID(),
+		CreatedAt:           time.Time{},
+		Name:                "acme",
+		PrimaryInstallation: "",
+		FailoverVersion:     0,
+		Overrides:           namespace.Overrides{Forced: true, Unlocked: true},
 	}, nil
 }
 

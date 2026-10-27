@@ -50,7 +50,7 @@ func testResult(err error) TestResult {
 
 // SendTest sends the test message of the sink id in ns and returns the result.
 // It sends only after these steps, and a step that fails sends nothing: the
-// sink and its sender exist; the namespace is homed in this region; the
+// sink and its sender exist; the namespace is primary on this installation; the
 // limits take the test; the secrets open and the address passes the outbound
 // rules, which refuses with a result and not an error; and the audit entry
 // that says the test started is appended under the fence of the namespace.

@@ -364,7 +364,7 @@ func gateTime() time.Time {
 // CreateNamespace implements gatetest.Domain.
 func (d gateDomain) CreateNamespace(ctx context.Context, name namespace.Name) (namespace.Fence, error) {
 	ns := namespace.Namespace{
-		ID: namespace.NewID(), CreatedAt: gateTime(), Name: name, HomeRegion: "eu-west", FailoverVersion: 1,
+		ID: namespace.NewID(), CreatedAt: gateTime(), Name: name, PrimaryInstallation: "eu-west", FailoverVersion: 1,
 		Overrides: namespace.Overrides{Forced: false, Unlocked: false},
 	}
 	if err := d.s.CreateNamespace(ctx, ns); err != nil {

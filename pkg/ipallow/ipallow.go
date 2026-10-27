@@ -82,7 +82,7 @@ func (s *Service) Get(ctx context.Context, ns namespace.Name) (List, error) {
 // Set replaces the list of ns with the parsed items; a list of zero items is
 // refused with ErrInvalidList (use Remove to opt out). When the feature is off
 // it returns ErrDisabled. The write needs the namespace to be writable in this
-// region and is fenced. e is the audit entry of the caller; Set stamps e.At
+// installation and is fenced. e is the audit entry of the caller; Set stamps e.At
 // with the time in UTC and sets e.Namespace to ns.
 func (s *Service) Set(ctx context.Context, ns namespace.Name, items []string, e audit.Entry) (List, error) {
 	if !s.enabled {

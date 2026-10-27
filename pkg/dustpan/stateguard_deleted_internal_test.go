@@ -97,7 +97,7 @@ func newDeletedGuard(t *testing.T) deletedGuard {
 		}
 	})
 
-	nss, err := namespace.NewService(namespace.Config{Store: st, Now: nil, Region: "test"})
+	nss, err := namespace.NewService(namespace.Config{Store: st, Now: nil, Installation: "test"})
 	if err != nil {
 		t.Fatalf("namespace service: %v", err)
 	}

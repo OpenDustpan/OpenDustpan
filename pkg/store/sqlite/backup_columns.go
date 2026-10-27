@@ -71,7 +71,7 @@ func sqliteBackupTables() []sqliteBackupTable {
 			table: "namespaces",
 			columns: []string{
 				backupColName,
-				"home_region",
+				"primary_installation",
 				"failover_version",
 				backupColCreatedAtMs,
 				"allow_forced_writes",

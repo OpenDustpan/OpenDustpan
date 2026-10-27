@@ -122,7 +122,7 @@ func (f *fakeStateStore) SetStateIf(_ context.Context, expected, next maintenanc
 	return nil
 }
 
-// fakeNamespaces answers one namespace homed in the test region.
+// fakeNamespaces answers one namespace whose primary installation is the test installation.
 type fakeNamespaces struct{}
 
 func (fakeNamespaces) CreateNamespace(_ context.Context, _ namespace.Namespace) error {
@@ -131,12 +131,12 @@ func (fakeNamespaces) CreateNamespace(_ context.Context, _ namespace.Namespace) 
 
 func (fakeNamespaces) GetNamespace(_ context.Context, name namespace.Name) (namespace.Namespace, error) {
 	return namespace.Namespace{
-		ID:              testNamespaceID,
-		CreatedAt:       time.Now(),
-		Name:            name,
-		HomeRegion:      testRegion,
-		FailoverVersion: 1,
-		Overrides:       namespace.Overrides{Forced: false, Unlocked: false},
+		ID:                  testNamespaceID,
+		CreatedAt:           time.Now(),
+		Name:                name,
+		PrimaryInstallation: testRegion,
+		FailoverVersion:     1,
+		Overrides:           namespace.Overrides{Forced: false, Unlocked: false},
 	}, nil
 }
 
@@ -477,7 +477,7 @@ func (fakeBlobs) List(context.Context, string) ([]blob.Object, error) { return n
 func (fakeBlobs) Ping(context.Context) error { return nil }
 
 const (
-	testRegion    = namespace.Region("eu-west")
+	testRegion    = namespace.InstallationName("eu-west")
 	testNamespace = namespace.Name("acme")
 	// testNamespaceID is the stable ID of the namespace that fakeNamespaces serves.
 	testNamespaceID = namespace.ID("ns-abcdefghijklmnopqrst")
@@ -518,7 +518,7 @@ func newFixtureWith(
 	t.Helper()
 
 	namespaces, err := namespace.NewService(
-		namespace.Config{Store: namespacesStore, Now: nil, Region: testRegion},
+		namespace.Config{Store: namespacesStore, Now: nil, Installation: testRegion},
 	)
 	if err != nil {
 		t.Fatalf("namespace service: %v", err)
@@ -685,7 +685,9 @@ func TestNewServiceRequiresDependencies(t *testing.T) {
 
 	f := newFixture(t)
 
-	namespaces, err := namespace.NewService(namespace.Config{Store: fakeNamespaces{}, Now: nil, Region: testRegion})
+	namespaces, err := namespace.NewService(
+		namespace.Config{Store: fakeNamespaces{}, Now: nil, Installation: testRegion},
+	)
 	if err != nil {
 		t.Fatalf("namespace service: %v", err)
 	}

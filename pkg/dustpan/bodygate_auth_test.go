@@ -74,7 +74,7 @@ func newFullGateFixture(t *testing.T) fixture {
 	}
 
 	srv, err := dustpan.NewServer(
-		dustpan.WithRegion(region),
+		dustpan.WithInstallation(installationName),
 		dustpan.WithNamespaceStore(st),
 		dustpan.WithStackStore(st),
 		dustpan.WithUpdateStore(st),
@@ -109,7 +109,7 @@ type authFixtureIDs struct {
 func prepareAuthFixture(t *testing.T, f fixture) authFixtureIDs {
 	t.Helper()
 
-	f.createNamespace(t, "acme", region)
+	f.createNamespace(t, "acme", installationName)
 
 	ctx := t.Context()
 

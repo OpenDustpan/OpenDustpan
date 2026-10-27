@@ -50,7 +50,7 @@ func TestForceUnlockKeepsManualLock(t *testing.T) {
 				t.Parallel()
 
 				f := newFixture(t)
-				f.createNamespace(t, "acme", region)
+				f.createNamespace(t, "acme", installationName)
 
 				lockID := tool.hold(t, f)
 				target.lock(t, f, tool.unit)

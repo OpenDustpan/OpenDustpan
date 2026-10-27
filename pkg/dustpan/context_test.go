@@ -87,8 +87,12 @@ func newContextWorld(t *testing.T, extra ...dustpan.Option) contextWorld {
 
 	for _, name := range []namespace.Name{"acme", "other"} {
 		ns := namespace.Namespace{
-			ID: namespace.NewID(), CreatedAt: time.Unix(0, 0), Name: name, HomeRegion: region, FailoverVersion: 1,
-			Overrides: namespace.Overrides{Forced: false, Unlocked: false},
+			ID:                  namespace.NewID(),
+			CreatedAt:           time.Unix(0, 0),
+			Name:                name,
+			PrimaryInstallation: installationName,
+			FailoverVersion:     1,
+			Overrides:           namespace.Overrides{Forced: false, Unlocked: false},
 		}
 		if nsErr := st.CreateNamespace(t.Context(), ns); nsErr != nil {
 			t.Fatalf("create namespace %s: %v", name, nsErr)
@@ -171,7 +175,7 @@ func newContextWorld(t *testing.T, extra ...dustpan.Option) contextWorld {
 	}
 
 	srv, err := dustpan.NewServer(append([]dustpan.Option{
-		dustpan.WithRegion(region),
+		dustpan.WithInstallation(installationName),
 		dustpan.WithNamespaceStore(st),
 		dustpan.WithStackStore(st),
 		dustpan.WithUpdateStore(st),

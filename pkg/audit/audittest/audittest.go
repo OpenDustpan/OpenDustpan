@@ -115,18 +115,18 @@ func now() time.Time {
 	return time.Date(2026, time.October, 12, 12, 0, 0, 0, time.UTC).UTC()
 }
 
-// newNamespace creates the namespace acme homed in eu-west at failover
+// newNamespace creates the namespace acme with primary installation eu-west at failover
 // version 1.
 func newNamespace(t *testing.T, s Store) namespace.Namespace {
 	t.Helper()
 
 	ns := namespace.Namespace{
-		ID:              namespace.NewID(),
-		CreatedAt:       now(),
-		Name:            "acme",
-		HomeRegion:      "eu-west",
-		FailoverVersion: 1,
-		Overrides:       namespace.Overrides{Forced: false, Unlocked: false},
+		ID:                  namespace.NewID(),
+		CreatedAt:           now(),
+		Name:                "acme",
+		PrimaryInstallation: "eu-west",
+		FailoverVersion:     1,
+		Overrides:           namespace.Overrides{Forced: false, Unlocked: false},
 	}
 
 	if err := s.CreateNamespace(t.Context(), ns); err != nil {
@@ -406,12 +406,12 @@ func testIsolation(t *testing.T, ts TestStore) {
 	ns := newNamespace(t, s)
 
 	other := namespace.Namespace{
-		ID:              namespace.NewID(),
-		CreatedAt:       now(),
-		Name:            "other",
-		HomeRegion:      "eu-west",
-		FailoverVersion: 1,
-		Overrides:       namespace.Overrides{Forced: false, Unlocked: false},
+		ID:                  namespace.NewID(),
+		CreatedAt:           now(),
+		Name:                "other",
+		PrimaryInstallation: "eu-west",
+		FailoverVersion:     1,
+		Overrides:           namespace.Overrides{Forced: false, Unlocked: false},
 	}
 
 	if err := s.CreateNamespace(t.Context(), other); err != nil {

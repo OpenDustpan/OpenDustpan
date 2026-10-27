@@ -235,7 +235,7 @@ func (s *countingNamespaces) GetNamespace(_ context.Context, name namespace.Name
 	s.reads.Add(1)
 
 	return namespace.Namespace{
-		CreatedAt: time.Time{}, ID: acmeID, Name: name, HomeRegion: "local",
+		CreatedAt: time.Time{}, ID: acmeID, Name: name, PrimaryInstallation: "local",
 		Overrides: namespace.Overrides{Forced: false, Unlocked: false}, FailoverVersion: 1,
 	}, nil
 }
@@ -260,7 +260,7 @@ func TestStateBlobCallsReadNoNamespace(t *testing.T) {
 
 	nsStore := &countingNamespaces{reads: atomic.Int32{}}
 
-	namespaces, err := namespace.NewService(namespace.Config{Store: nsStore, Now: nil, Region: "local"})
+	namespaces, err := namespace.NewService(namespace.Config{Store: nsStore, Now: nil, Installation: "local"})
 	if err != nil {
 		t.Fatalf("namespace service: %v", err)
 	}

@@ -38,9 +38,9 @@ func TestNewTruncatesTheCreateTime(t *testing.T) {
 			t.Parallel()
 
 			svc, err := namespace.NewService(namespace.Config{
-				Store:  &storeOnly{},
-				Now:    func() time.Time { return tc.now },
-				Region: namespace.Region("eu-west"),
+				Store:        &storeOnly{},
+				Now:          func() time.Time { return tc.now },
+				Installation: namespace.InstallationName("eu-west"),
 			})
 			if err != nil {
 				t.Fatalf("new service: %v", err)

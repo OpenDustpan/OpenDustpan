@@ -61,7 +61,7 @@ type refusalCase struct {
 func TestServeRefusesMissingDecisions(t *testing.T) {
 	t.Setenv("DUSTPAN_ADMIN_TOKEN", adminTestToken)
 
-	const fileWithKey = `{"region": "other"}`
+	const fileWithKey = `{"installation": "other"}`
 
 	cases := []refusalCase{
 		{
@@ -83,8 +83,15 @@ func TestServeRefusesMissingDecisions(t *testing.T) {
 			want: wantNoKeyText,
 		},
 		{
-			name: "no key, terminal, a variable is a setting", terminal: true, args: nil,
-			env: map[string]string{"DUSTPAN_REGION": "other"}, config: "", configInEnv: false, want: wantNoKeyText,
+			name:     "no key, terminal, a variable is a setting",
+			terminal: true,
+			args:     nil,
+			env: map[string]string{
+				"DUSTPAN_INSTALLATION": "other",
+			},
+			config:      "",
+			configInEnv: false,
+			want:        wantNoKeyText,
 		},
 		{
 			name: "no key, terminal, --config with a key in the file", terminal: true, args: nil, env: nil,
@@ -212,15 +219,15 @@ func TestNoSettings(t *testing.T) {
 		env      map[string]string
 		want     bool
 	}{
-		{"only defaults", []cli.Resolved{setting("DUSTPAN_REGION", cli.SourceDefault)}, nil, true},
-		{"a flag", []cli.Resolved{setting("DUSTPAN_REGION", cli.SourceFlag)}, nil, false},
-		{"a variable", []cli.Resolved{setting("DUSTPAN_REGION", cli.SourceEnv)}, nil, false},
-		{"a key of a file", []cli.Resolved{setting("DUSTPAN_REGION", cli.SourceFile)}, nil, false},
+		{"only defaults", []cli.Resolved{setting("DUSTPAN_INSTALLATION", cli.SourceDefault)}, nil, true},
+		{"a flag", []cli.Resolved{setting("DUSTPAN_INSTALLATION", cli.SourceFlag)}, nil, false},
+		{"a variable", []cli.Resolved{setting("DUSTPAN_INSTALLATION", cli.SourceEnv)}, nil, false},
+		{"a key of a file", []cli.Resolved{setting("DUSTPAN_INSTALLATION", cli.SourceFile)}, nil, false},
 		{"an admin token variable", []cli.Resolved{setting("DUSTPAN_ADMIN_TOKEN", cli.SourceEnv)}, nil, true},
 		{"an admin token file variable", []cli.Resolved{setting("DUSTPAN_ADMIN_TOKEN_FILE", cli.SourceEnv)}, nil, true},
 		{
 			"a key in the variable",
-			[]cli.Resolved{setting("DUSTPAN_REGION", cli.SourceDefault)},
+			[]cli.Resolved{setting("DUSTPAN_INSTALLATION", cli.SourceDefault)},
 			map[string]string{keyEnvVar: testKeyBase64()},
 			false,
 		},

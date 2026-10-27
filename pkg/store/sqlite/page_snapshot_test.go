@@ -21,7 +21,7 @@ func snapshotStack(t *testing.T) (*sqlite.Store, namespace.Namespace, stack.Ref)
 	s := open(t)
 
 	ns := namespace.Namespace{
-		ID: namespace.NewID(), CreatedAt: time.Now(), Name: "acme", HomeRegion: "eu-west", FailoverVersion: 1,
+		ID: namespace.NewID(), CreatedAt: time.Now(), Name: "acme", PrimaryInstallation: "eu-west", FailoverVersion: 1,
 		Overrides: namespace.Overrides{Forced: false, Unlocked: false},
 	}
 	if err := s.CreateNamespace(t.Context(), ns); err != nil {

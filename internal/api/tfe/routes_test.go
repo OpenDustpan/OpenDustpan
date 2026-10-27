@@ -986,12 +986,12 @@ func (stubNamespaceStore) GetNamespace(_ context.Context, name namespace.Name) (
 	}
 
 	return namespace.Namespace{
-		ID:              namespace.NewID(),
-		CreatedAt:       time.Time{},
-		Name:            name,
-		HomeRegion:      "test-region",
-		FailoverVersion: 1,
-		Overrides:       namespace.Overrides{Forced: false, Unlocked: false},
+		ID:                  namespace.NewID(),
+		CreatedAt:           time.Time{},
+		Name:                name,
+		PrimaryInstallation: "test-region",
+		FailoverVersion:     1,
+		Overrides:           namespace.Overrides{Forced: false, Unlocked: false},
 	}, nil
 }
 
@@ -1013,7 +1013,7 @@ func newTestNamespaces(t *testing.T) *namespace.Service {
 	t.Helper()
 
 	svc, err := namespace.NewService(
-		namespace.Config{Store: stubNamespaceStore{}, Now: nil, Region: "test-region"},
+		namespace.Config{Store: stubNamespaceStore{}, Now: nil, Installation: "test-region"},
 	)
 	if err != nil {
 		t.Fatalf("namespace service: %v", err)

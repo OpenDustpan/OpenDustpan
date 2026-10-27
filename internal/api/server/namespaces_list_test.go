@@ -195,7 +195,7 @@ func nextListPath(doc namespaceListDoc) string {
 }
 
 // checkListFirstPage fails unless the first page holds two namespaces with
-// region and time, and names a next page.
+// primary installation and time, and names a next page.
 func checkListFirstPage(t *testing.T, f accessFixture) {
 	t.Helper()
 
@@ -204,8 +204,9 @@ func checkListFirstPage(t *testing.T, f accessFixture) {
 		t.Fatal("first page has no next cursor, want one")
 	}
 
-	if len(first.Namespaces) != 2 || first.Namespaces[0].HomeRegion == "" || first.Namespaces[0].CreatedAt == "" {
-		t.Fatalf("first page = %+v, want two namespaces with region and time", first)
+	if len(first.Namespaces) != 2 || first.Namespaces[0].PrimaryInstallation == "" ||
+		first.Namespaces[0].CreatedAt == "" {
+		t.Fatalf("first page = %+v, want two namespaces with primary installation and time", first)
 	}
 
 	if first.Namespaces[0].ID == "" || first.Namespaces[0].ID == first.Namespaces[1].ID {
@@ -365,7 +366,7 @@ func newListNoAccessHandler(t *testing.T, authn identity.Authenticator, names []
 
 	st := openServerTemplateStore(t, filepath.Join(t.TempDir(), "dustpan.db"))
 
-	namespaces, err := namespace.NewService(namespace.Config{Store: st, Now: nil, Region: "test"})
+	namespaces, err := namespace.NewService(namespace.Config{Store: st, Now: nil, Installation: "test"})
 	if err != nil {
 		t.Fatalf("namespace service: %v", err)
 	}
@@ -567,7 +568,7 @@ func decodeListBody(t *testing.T, body string) namespaceListDoc {
 func newNoPagerNamespaces(t *testing.T) *namespace.Service {
 	t.Helper()
 
-	svc, err := namespace.NewService(namespace.Config{Store: stubNamespaceStore{}, Now: nil, Region: "test"})
+	svc, err := namespace.NewService(namespace.Config{Store: stubNamespaceStore{}, Now: nil, Installation: "test"})
 	if err != nil {
 		t.Fatalf("namespace service: %v", err)
 	}

@@ -11,7 +11,7 @@ import (
 )
 
 // gitHostHarness returns a harness over a fresh store. The namespaces it makes
-// are homed with failover version 1.
+// have failover version 1.
 func gitHostHarness(base string) connectiontest.Factory {
 	return func(t *testing.T) connectiontest.Harness {
 		t.Helper()
