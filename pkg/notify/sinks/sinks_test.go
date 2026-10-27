@@ -448,6 +448,9 @@ func TestCreateRefused(t *testing.T) {
 		{"a chat URL in a number host", chat("https://2130706433/" + canary), true},
 		{"a chat URL that does not parse", chat("https://hooks.slack.com/%zz" + canary), true},
 		{"no chat URL", chat(""), true},
+		{"a chat URL with an encoded slash", chat("https://hooks.slack.com/services/x%2F..%2F" + canary), false},
+		{"a chat URL with encoded dots", chat("https://hooks.slack.com/services/%2e%2e/" + canary), false},
+		{"a chat URL with a dot segment", chat("https://hooks.slack.com/services/../" + canary), false},
 		{"a chat URL over the bound", chat("https://hooks.slack.com/" + strings.Repeat("a", egress.MaxURLBytes)), true},
 		{"a chat target", sinks.New{
 			Kind: notify.SinkChat, Platform: "slack", Name: "Chat", Target: "hooks.slack.com",

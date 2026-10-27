@@ -41,6 +41,15 @@ var ErrUnknownStore = errors.New("unknown store")
 // comma-separated list (sqlite, postgres), or the default when it is unset.
 // The default is SQLite, plus PostgreSQL when DUSTPAN_TEST_POSTGRES_URL is set.
 func Databases() ([]Store, error) {
+	instances, err := Instances()
+	if err != nil {
+		return nil, err
+	}
+
+	if instances > 1 {
+		return haDatabases()
+	}
+
 	if strings.TrimSpace(os.Getenv(databasesEnv)) == "" {
 		stores := []Store{StoreSQLite}
 		if PostgresURL() != "" {
@@ -51,6 +60,30 @@ func Databases() ([]Store, error) {
 	}
 
 	return ParseDatabases(os.Getenv(databasesEnv))
+}
+
+// haDatabases returns the stores of a run with several instances: PostgreSQL
+// only, because SQLite holds one instance only. It fails when E2E_DATABASES
+// names SQLite.
+func haDatabases() ([]Store, error) {
+	if strings.TrimSpace(os.Getenv(databasesEnv)) == "" {
+		return []Store{StorePostgres}, nil
+	}
+
+	stores, err := ParseDatabases(os.Getenv(databasesEnv))
+	if err != nil {
+		return nil, err
+	}
+
+	if slices.Contains(stores, StoreSQLite) {
+		return nil, fmt.Errorf(
+			"%w: SQLite holds one instance, so %s above 1 runs on PostgreSQL only",
+			ErrInstances,
+			instancesEnv,
+		)
+	}
+
+	return stores, nil
 }
 
 // ParseDatabases parses raw as a comma-separated store list. "postgresql" is

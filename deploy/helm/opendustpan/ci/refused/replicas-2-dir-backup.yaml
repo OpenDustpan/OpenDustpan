@@ -1,0 +1,16 @@
+# Refused: several replicas with a dir backup target.
+# want: replicas is 2 and backup.target.type is dir
+database:
+  existingSecret:
+    name: opendustpan-database
+keyEncryptionKey:
+  existingSecret:
+    name: opendustpan-key-encryption-key
+replicas: 2
+blobStore:
+  type: s3
+  s3:
+    bucket: dustpan-state
+backup:
+  target:
+    type: dir

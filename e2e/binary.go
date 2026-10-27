@@ -71,9 +71,10 @@ const (
 )
 
 // UseBinaryServer reports whether the suite runs the real server binary.
-// Set E2E_SERVER=binary for the proof run of the exit test.
+// Set E2E_SERVER=binary for the proof run of the exit test. Several instances
+// (E2E_INSTANCES above 1) are server binaries too.
 func UseBinaryServer() bool {
-	return os.Getenv(serverEnv) == binaryServer
+	return os.Getenv(serverEnv) == binaryServer || instanceCount() > 1
 }
 
 // envInput groups what one environment needs, so the constructors take one
@@ -551,6 +552,32 @@ func serveArgs(cfg backendConfig, port string) []string {
 func launchBinaryBackend(ctx context.Context, tb testing.TB, cfg backendConfig, port string) *binaryHandle {
 	tb.Helper()
 
+	cmd, out, err := spawnBinaryBackend(ctx, cfg, port)
+	if err != nil {
+		tb.Fatalf("%v", err)
+	}
+
+	tb.Cleanup(func() {
+		_ = cmd.Process.Kill() //nolint:errcheck // The serve process ends with the kill signal.
+		_ = cmd.Wait()         //nolint:errcheck // The killed process always reports an error.
+		tb.Logf("server binary output:\n%s", out.String())
+	})
+
+	if port == "0" {
+		port = boundPortFromLogs(ctx, tb, out)
+	}
+
+	backendURL := "https://127.0.0.1:" + port
+
+	waitForBackend(ctx, tb, backendURL, out)
+
+	return &binaryHandle{cmd: cmd, port: port, logs: out, url: backendURL}
+}
+
+// spawnBinaryBackend starts `opendustpan serve` for cfg on port and returns
+// the running process with its combined output. It does not wait for the
+// server to listen.
+func spawnBinaryBackend(ctx context.Context, cfg backendConfig, port string) (*exec.Cmd, *lockedBuffer, error) {
 	//nolint:gosec // The binary is built from this repository by the suite itself.
 	cmd := exec.CommandContext(ctx, cfg.bin, serveArgs(cfg, port)...)
 	cmd.Env = append(backendServeEnv(cfg.tokens, cfg.dbURL), cfg.signIn.env()...)
@@ -562,24 +589,10 @@ func launchBinaryBackend(ctx context.Context, tb testing.TB, cfg backendConfig, 
 	cmd.Stderr = &out
 
 	if err := cmd.Start(); err != nil {
-		tb.Fatalf("start server binary: %v", err)
+		return nil, nil, fmt.Errorf("start server binary: %w", err)
 	}
 
-	tb.Cleanup(func() {
-		_ = cmd.Process.Kill() //nolint:errcheck // The serve process ends with the kill signal.
-		_ = cmd.Wait()         //nolint:errcheck // The killed process always reports an error.
-		tb.Logf("server binary output:\n%s", out.String())
-	})
-
-	if port == "0" {
-		port = boundPortFromLogs(ctx, tb, &out)
-	}
-
-	backendURL := "https://127.0.0.1:" + port
-
-	waitForBackend(ctx, tb, backendURL, &out)
-
-	return &binaryHandle{cmd: cmd, port: port, logs: &out, url: backendURL}
+	return cmd, &out, nil
 }
 
 // startBinaryBackend starts `opendustpan serve` with TLS on an ephemeral
@@ -848,6 +861,14 @@ func (e *Env) StopServer(ctx context.Context, tb testing.TB) {
 		tb.Fatalf("StopServer needs E2E_SERVER=binary")
 	}
 
+	// With several instances the whole installation stops: a test that stops
+	// the server does it to use the database alone.
+	if e.ha != nil {
+		e.ha.StopAll(tb)
+
+		return
+	}
+
 	if e.backendCmd == nil || e.backendCmd.Process == nil {
 		tb.Fatalf("StopServer: the server is not running")
 	}
@@ -884,6 +905,12 @@ func (e *Env) StartServer(ctx context.Context, tb testing.TB) {
 
 	if e.binPath == "" {
 		tb.Fatalf("StartServer needs E2E_SERVER=binary")
+	}
+
+	if e.ha != nil {
+		e.ha.StartAll(ctx, tb)
+
+		return
 	}
 
 	if e.backendCmd != nil {
@@ -1128,6 +1155,10 @@ func newBinaryEnv(ctx context.Context, in envInput) *Env {
 	tb := in.tb
 	tb.Helper()
 
+	if n := instanceCount(); n > 1 {
+		return newHABinaryEnv(ctx, in, n)
+	}
+
 	bin := serverBinary(ctx, tb, in.dir)
 	dbURL, dbProxy := binaryDatabase(ctx, tb, in.store, in.dir)
 	setup := newBlobSetup(ctx, tb, in.dir)
@@ -1170,6 +1201,7 @@ func newBinaryEnv(ctx context.Context, in envInput) *Env {
 		backendPort:   handle.port,
 		backendCmd:    handle.cmd,
 		backendLogs:   handle.logs,
+		ha:            nil,
 		certBundle:    "",
 		dbProxy:       dbProxy,
 		dbURL:         cfg.dbURL,
@@ -1185,6 +1217,84 @@ func newBinaryEnv(ctx context.Context, in envInput) *Env {
 		// binary still serves: it catches a handle that a step opened.
 		tb.Cleanup(func() { checkNoOwnSQLiteHandle(tb, dbPath) })
 	}
+
+	return env
+}
+
+// newHABinaryEnv starts n server binaries of one installation on one
+// database and one blob store, behind a round-robin TLS proxy that records
+// the instance of each request, and returns the environment. The first
+// instance migrates the database and creates the first namespace through the
+// installation API.
+func newHABinaryEnv(ctx context.Context, in envInput, n int) *Env {
+	tb := in.tb
+	tb.Helper()
+
+	if in.store != StorePostgres {
+		tb.Fatalf("E2E_INSTANCES above 1 needs PostgreSQL: SQLite holds one instance only")
+	}
+
+	bin := serverBinary(ctx, tb, in.dir)
+	dbURL, dbProxy := binaryDatabase(ctx, tb, in.store, in.dir)
+	setup := newBlobSetup(ctx, tb, in.dir)
+	cfg := binaryBackendConfig(in, bin, dbURL, setup, writeBackendCert(tb, in.dir))
+
+	cluster := registerHACluster(tb, cfg, n)
+	proxy := reserveHAProxy(tb, in.rec, in.journalRefuser, in.journalCap, cluster)
+	reserved := &recordingProxy{server: proxy, target: &url.URL{}}
+	signIn := binarySignInSetup(tb, in, reserved, &cfg)
+
+	// Every instance serves the public URL of the proxy, as the instances
+	// behind one load balancer do.
+	if signIn == nil {
+		cfg.publicURL = reserved.publicURL()
+	}
+
+	cluster.cfg = cfg
+
+	if err := cluster.bootAll(ctx); err != nil {
+		tb.Fatalf("start the HA cluster: %v", err)
+	}
+
+	createFirstNamespaceViaBinary(ctx, tb, cfg, cluster.URL(0))
+
+	proxy.StartTLS()
+
+	client := proxy.Client()
+	client.Timeout = commandTimeout
+
+	env := &Env{
+		URL:           proxy.URL,
+		Recorder:      in.rec,
+		cli:           in.cli,
+		store:         in.store,
+		client:        client,
+		inprocess:     nil,
+		blobs:         setup.blobs,
+		blobName:      setup.blobName,
+		s3Endpoint:    setup.s3Endpoint,
+		token:         in.token,
+		tokenB:        in.tokenB,
+		memberToken:   "",
+		home:          filepath.Join(in.dir, "home"),
+		project:       filepath.Join(in.dir, "project"),
+		remoteProject: "",
+		steps:         nil,
+		tls:           true,
+		binPath:       bin,
+		backupDir:     "",
+		backendCfg:    cfg,
+		backendPort:   "",
+		backendCmd:    nil,
+		backendLogs:   nil,
+		ha:            cluster,
+		certBundle:    "",
+		dbProxy:       dbProxy,
+		dbURL:         cfg.dbURL,
+		signIn:        signIn,
+	}
+
+	prepareBinaryEnvDirs(tb, env, proxy)
 
 	return env
 }

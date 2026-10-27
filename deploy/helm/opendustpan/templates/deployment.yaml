@@ -9,8 +9,16 @@ metadata:
     {{- include "opendustpan.labels" . | nindent 4 }}
 spec:
   replicas: {{ .Values.replicas }}
+  {{- if gt (int .Values.replicas) 1 }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  {{- else }}
   strategy:
     type: Recreate
+  {{- end }}
   selector:
     matchLabels:
       {{- include "opendustpan.selectorLabels" . | nindent 6 }}
@@ -49,6 +57,9 @@ spec:
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           args:
             - serve
+            {{- if .Values.worker.enabled }}
+            - --components=api
+            {{- end }}
             - {{ printf "--log-level=%s" .Values.server.logLevel | quote }}
             - {{ printf "--log-format=%s" .Values.server.logFormat | quote }}
             {{- if .Values.console.enabled }}
@@ -81,50 +92,7 @@ spec:
             - {{ printf "--trusted-proxy-header=%s" .Values.server.trustedProxyHeader | quote }}
             {{- end }}
           env:
-            - name: DUSTPAN_LISTEN
-              value: ":8080"
-            - name: DUSTPAN_DATABASE
-              valueFrom:
-                secretKeyRef:
-                  name: {{ .Values.database.existingSecret.name | quote }}
-                  key: {{ .Values.database.existingSecret.key | quote }}
-            - name: DUSTPAN_KEY_ENCRYPTION_KEY
-              valueFrom:
-                secretKeyRef:
-                  name: {{ .Values.keyEncryptionKey.existingSecret.name | quote }}
-                  key: {{ .Values.keyEncryptionKey.existingSecret.key | quote }}
-            {{- with .Values.adminToken.existingSecret }}
-            {{- if .name }}
-            - name: DUSTPAN_ADMIN_TOKEN
-              valueFrom:
-                secretKeyRef:
-                  name: {{ .name | quote }}
-                  key: {{ .key | quote }}
-            {{- end }}
-            {{- end }}
-            {{- with .Values.s3.credentials.existingSecret }}
-            {{- if .name }}
-            - name: AWS_ACCESS_KEY_ID
-              valueFrom:
-                secretKeyRef:
-                  name: {{ .name | quote }}
-                  key: {{ .accessKeyIDKey | quote }}
-            - name: AWS_SECRET_ACCESS_KEY
-              valueFrom:
-                secretKeyRef:
-                  name: {{ .name | quote }}
-                  key: {{ .secretAccessKeyKey | quote }}
-            {{- end }}
-            {{- end }}
-            {{- if $tls }}
-            - name: DUSTPAN_TLS_CERT
-              value: /tls/tls.crt
-            - name: DUSTPAN_TLS_KEY
-              value: /tls/tls.key
-            {{- end }}
-            {{- with .Values.server.extraEnv }}
-            {{- toYaml . | nindent 12 }}
-            {{- end }}
+            {{- include "opendustpan.env" . | nindent 12 }}
           ports:
             - name: http
               containerPort: 8080
@@ -147,6 +115,12 @@ spec:
               port: http
               scheme: {{ include "opendustpan.scheme" . }}
             {{- toYaml .Values.probes.readiness | nindent 12 }}
+          {{- if and (gt (int .Values.replicas) 1) (gt (int .Values.preStopSeconds) 0) }}
+          lifecycle:
+            preStop:
+              sleep:
+                seconds: {{ .Values.preStopSeconds }}
+          {{- end }}
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
           securityContext:
@@ -209,7 +183,18 @@ spec:
       tolerations:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-      {{- with .Values.topologySpreadConstraints }}
+      {{- $spread := and .Values.spreadAcrossNodes (gt (int .Values.replicas) 1) }}
+      {{- if or $spread .Values.topologySpreadConstraints }}
       topologySpreadConstraints:
+        {{- if $spread }}
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              {{- include "opendustpan.selectorLabels" . | nindent 14 }}
+        {{- end }}
+        {{- with .Values.topologySpreadConstraints }}
         {{- toYaml . | nindent 8 }}
+        {{- end }}
       {{- end }}

@@ -245,8 +245,12 @@ func (s *Sender) request(ctx context.Context, base *url.URL, req Request) (*http
 
 	u := *base
 	if req.PathSuffix != "" {
+		// Keep the encoded bytes of the path of the URL: a segment such as
+		// %21room%3Aexample.org is sent as it is, and %2F stays one segment.
+		// The suffix is a path in decoded form, so it is encoded here.
+		suffix := (&url.URL{Path: req.PathSuffix}).EscapedPath()
+		u.RawPath = strings.TrimSuffix(u.EscapedPath(), "/") + suffix
 		u.Path = strings.TrimSuffix(u.Path, "/") + req.PathSuffix
-		u.RawPath = ""
 	}
 
 	httpReq, err := http.NewRequestWithContext(ctx, req.Method, u.String(), bytes.NewReader(req.Body))
@@ -303,6 +307,7 @@ func checkRequest(req Request) error {
 		len(suffix) > MaxPathSuffixLen,
 		suffix != "" && (suffix[0] != '/' || strings.HasPrefix(suffix, "//") ||
 			strings.ContainsAny(suffix, "?#\\:") || strings.Contains(suffix, "..") ||
+			strings.HasSuffix(suffix, "/.") || strings.Contains(suffix, "/./") ||
 			strings.ContainsFunc(suffix, func(r rune) bool { return r < 0x21 || r == 0x7f })):
 		return fmt.Errorf("%w: the renderer made a request that breaks the contract", notify.ErrPermanent)
 	default:
