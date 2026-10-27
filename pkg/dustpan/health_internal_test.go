@@ -260,8 +260,11 @@ func TestReadinessDrains(t *testing.T) {
 				assertDrainingAnswer(t, probe, path)
 			}
 
-			if got := counterText(t, registry); !strings.Contains(got, "dustpan_readiness_failures_total 0\n") {
-				t.Errorf("a drain counted as a failure:\n%s", got)
+			// The counter writes no sample line until it counts a failure.
+			for line := range strings.Lines(counterText(t, registry)) {
+				if strings.HasPrefix(line, readinessFailuresName+" ") {
+					t.Errorf("a drain counted as a failure: %s", line)
+				}
 			}
 		})
 	}
