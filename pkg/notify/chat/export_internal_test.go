@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"time"
 
 	"opendustpan.org/opendustpan/internal/egress/egresshttp"
@@ -86,3 +87,10 @@ func (s *Sender) SetPortsForTest(p egress.Ports) { s.ports = p }
 
 // SetTimeoutForTest sets the deadline of one send.
 func (s *Sender) SetTimeoutForTest(d time.Duration) { s.timeout = d }
+
+// RequestForTest builds the HTTP request of req for the URL base, as Send does
+// after its checks. A test uses it to send a hostile URL to the builder of the
+// path, as if the checks before it had failed.
+func RequestForTest(base *url.URL, req Request) (*http.Request, error) {
+	return new(Sender).request(context.Background(), base, req)
+}

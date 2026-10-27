@@ -37,6 +37,9 @@ func now() time.Time { return fixedNow }
 type request struct {
 	method string
 	path   string
+	// uri is the request target as it came over the wire, with its encoded
+	// bytes.
+	uri    string
 	header http.Header
 	body   []byte
 }
@@ -70,7 +73,9 @@ func newReceiver(t *testing.T) *receiver {
 		}
 
 		r.mu.Lock()
-		r.reqs = append(r.reqs, request{method: req.Method, path: req.URL.Path, header: req.Header.Clone(), body: b})
+		r.reqs = append(r.reqs, request{
+			method: req.Method, path: req.URL.Path, uri: req.RequestURI, header: req.Header.Clone(), body: b,
+		})
 		r.mu.Unlock()
 
 		(*r.handler.Load())(w, req)
