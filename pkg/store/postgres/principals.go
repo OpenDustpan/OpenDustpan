@@ -217,8 +217,24 @@ func (s *Store) DeletePrincipal(ctx context.Context, id string, e audit.Entry) e
 // with the same subject is not the old temporary administrator.
 func endInstallationPrincipal(ctx context.Context, q *db.Queries, id string, at int64) (int64, error) {
 	n, err := endPrincipal(ctx, q, id, "", at)
-	if err != nil || n == 0 {
+	if err != nil {
 		return n, err
+	}
+
+	if n == 0 {
+		// The write changed no row. When the principal is an enabled
+		// break-glass account of the installation, the conditional update
+		// kept it as the last one.
+		enabledBreakGlass, countErr := q.CountEnabledBreakGlassPrincipal(ctx, id)
+		if countErr != nil {
+			return 0, fmt.Errorf("select break-glass principal: %w", countErr)
+		}
+
+		if enabledBreakGlass > 0 {
+			return 0, principal.ErrLastBreakGlass
+		}
+
+		return 0, nil
 	}
 
 	if _, err := q.DeleteTempAdmin(ctx, id); err != nil {
@@ -275,6 +291,18 @@ func (s *Store) DisablePrincipal(ctx context.Context, id string, e audit.Entry) 
 
 		if live == 0 {
 			return principal.ErrNotFound
+		}
+
+		// The write changed no row of a principal that exists. It is either
+		// disabled already, or the conditional update kept the last enabled
+		// break-glass account.
+		enabledBreakGlass, err := q.CountEnabledBreakGlassPrincipal(ctx, id)
+		if err != nil {
+			return fmt.Errorf("select break-glass principal: %w", err)
+		}
+
+		if enabledBreakGlass > 0 {
+			return principal.ErrLastBreakGlass
 		}
 
 		return principal.ErrDisabled

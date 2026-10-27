@@ -721,7 +721,7 @@ func changePrincipal(
 
 // deletePrincipal serves DELETE /api/server/principals/{id}: it ends the
 // principal and its memberships, and answers 204. The rows stay for the
-// access-review history.
+// access-review history. The last enabled break-glass account answers 409.
 func deletePrincipal(
 	_ http.ResponseWriter, r *http.Request, svc *principal.Service, e audit.Entry, caller identity.Principal,
 ) (principalResult, error) {
@@ -761,7 +761,7 @@ func enablePrincipal(
 // disables a principal and answers 200 with the principal. The write only
 // narrows access, so it works in maintenance mode. The caller must hold every
 // action that the grants of the principal give. A principal that is disabled
-// answers 409.
+// answers 409, and so does the last enabled break-glass account.
 func disablePrincipal(
 	_ http.ResponseWriter, r *http.Request, svc *principal.Service, e audit.Entry, caller identity.Principal,
 ) (principalResult, error) {
@@ -978,6 +978,10 @@ func removeMember(
 func classifyPrincipal(err error) (failure, bool) {
 	if f, ok := classifyPrincipalRequest(err); ok {
 		return f, true
+	}
+
+	if errors.Is(err, principal.ErrLastBreakGlass) {
+		return failCoded(http.StatusConflict, err.Error(), errcode.PrincipalLastBreakGlass), true
 	}
 
 	return classifyPrincipalState(err)

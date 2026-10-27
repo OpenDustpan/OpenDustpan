@@ -195,8 +195,16 @@ func replayPlan(kind string) ([]replayStep, bool) {
 		}, true
 	case maintenance.RevokedPrincipal:
 		return []replayStep{
+			// The last enabled break-glass account stays enabled, as in
+			// DisablePrincipal: a restore must not leave the installation with
+			// no way in.
 			{sql: `UPDATE main.principals SET disabled_at_ms = ?2, updated_at_ms = ?2
-WHERE id = ?1 AND deleted_at_ms IS NULL AND disabled_at_ms IS NULL`, third: thirdNone},
+WHERE id = ?1 AND deleted_at_ms IS NULL AND disabled_at_ms IS NULL
+  AND (break_glass = 0 OR EXISTS (
+    SELECT 1 FROM main.principals o
+    WHERE o.id <> principals.id AND o.break_glass = 1 AND o.kind = 'person' AND o.namespace = ''
+      AND o.deleted_at_ms IS NULL AND o.disabled_at_ms IS NULL
+  ))`, third: thirdNone},
 		}, true
 	case maintenance.RevokedTempAdmin:
 		return tempAdminPlan(), true
@@ -349,21 +357,19 @@ func replayRevocation(ctx context.Context, tx *sql.Tx, r maintenance.Revocation)
 		return checkedReplayEntry(r, fmt.Errorf("%w: unknown kind %q", maintenance.ErrInvalidRevocation, r.Kind))
 	}
 
-	applied := false
+	applied, err := applyReplayPlan(ctx, tx, r, plan)
+	if err != nil {
+		return nil, err
+	}
 
-	for i, step := range plan {
-		res, err := tx.ExecContext(ctx, step.sql, step.args(r)...)
+	if !applied && r.Kind == maintenance.RevokedPrincipal {
+		entry, kept, err := keptBreakGlassEntry(ctx, tx, r)
 		if err != nil {
-			return nil, fmt.Errorf("replay revocation %d (%s): %w", r.ID, r.Kind, err)
+			return nil, err
 		}
 
-		n, err := res.RowsAffected()
-		if err != nil {
-			return nil, fmt.Errorf("replay revocation %d (%s): %w", r.ID, r.Kind, err)
-		}
-
-		if i == 0 && n > 0 {
-			applied = true
+		if kept {
+			return &entry, nil
 		}
 	}
 
@@ -372,6 +378,55 @@ func replayRevocation(ctx context.Context, tx *sql.Tx, r maintenance.Revocation)
 	}
 
 	return checkedReplayEntry(r, nil)
+}
+
+// applyReplayPlan runs the statements of plan for r and reports whether the
+// first one changed a staged row.
+func applyReplayPlan(ctx context.Context, tx *sql.Tx, r maintenance.Revocation, plan []replayStep) (bool, error) {
+	applied := false
+
+	for i, step := range plan {
+		res, err := tx.ExecContext(ctx, step.sql, step.args(r)...)
+		if err != nil {
+			return false, fmt.Errorf("replay revocation %d (%s): %w", r.ID, r.Kind, err)
+		}
+
+		n, err := res.RowsAffected()
+		if err != nil {
+			return false, fmt.Errorf("replay revocation %d (%s): %w", r.ID, r.Kind, err)
+		}
+
+		if i == 0 && n > 0 {
+			applied = true
+		}
+	}
+
+	return applied, nil
+}
+
+// keptBreakGlassEntry returns the entry of a replayed disable that changed no
+// row. When the target is an enabled break-glass account of the staged data,
+// the conditional update kept it as the last one: the entry has the outcome
+// denied and the reason principal.last-break-glass. Otherwise the target was
+// disabled, ended or not in the staged data, and kept is false.
+func keptBreakGlassEntry(ctx context.Context, tx *sql.Tx, r maintenance.Revocation) (audit.Entry, bool, error) {
+	var none audit.Entry
+
+	n, err := db.New(tx).CountEnabledBreakGlassPrincipal(ctx, r.Target)
+	if err != nil {
+		return none, false, fmt.Errorf("replay revocation %d (%s): %w", r.ID, r.Kind, err)
+	}
+
+	if n == 0 {
+		return none, false, nil
+	}
+
+	entry := r.KeptEntry(maintenance.ReasonLastBreakGlass)
+	if err = entry.Validate(); err != nil {
+		return none, false, fmt.Errorf("replay revocation %d: %w", r.ID, err)
+	}
+
+	return entry, true, nil
 }
 
 // checkedReplayEntry returns the replay entry of r after Validate accepts it,

@@ -103,6 +103,11 @@ func (s *Store) inAuditedTxOf(ctx context.Context, e *audit.Entry, fn func(q *db
 	}
 
 	return s.inTx(ctx, func(q *db.Queries) error {
+		// This lock comes before fn on purpose. It also serializes the writes
+		// that count other rows in the same transaction: the delete of a
+		// principal checks the last site administrator and the last enabled
+		// break-glass account. Under READ COMMITTED, two such writes without
+		// it both pass the check. Do not move it after fn.
 		if err := q.LockServerAuditScope(ctx); err != nil {
 			return fmt.Errorf("lock server audit scope: %w", err)
 		}
