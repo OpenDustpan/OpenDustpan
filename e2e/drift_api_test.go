@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -143,6 +144,7 @@ func driftScenario(t *testing.T, env *e2e.Env) {
 	routes := driftRoutes{read: base + "/drift", checks: base + "/drift-checks"}
 
 	readsUnknownBeforeAnyCheck(ctx, t, env, &routes)
+	contextReadsUnknown(ctx, t, env, base)
 
 	started := startsACheck(ctx, t, env, &routes)
 
@@ -152,6 +154,109 @@ func driftScenario(t *testing.T, env *e2e.Env) {
 	refusesBadChecks(ctx, t, env, &routes)
 	unknownUnitsAnswerNotFound(ctx, t, env)
 	memberReadsNothing(ctx, t, env, &routes)
+	contextReadsDrift(ctx, t, env, &driftContextCase{unitID: unitID, jobID: started, base: base})
+}
+
+// driftContextCase names the unit and the job of the context steps.
+type driftContextCase struct {
+	unitID string
+	jobID  string
+	base   string
+}
+
+// driftContextData is the data of the drift section of a context document.
+type driftContextData struct {
+	CheckedAt *time.Time `json:"checkedAt"`
+	Status    string     `json:"status"`
+	JobID     string     `json:"jobID"`
+	Addresses []string   `json:"addresses"`
+	Truncated bool       `json:"truncated"`
+}
+
+// driftContextSection is the drift section of a context document.
+type driftContextSection struct {
+	Data   *driftContextData `json:"data"`
+	Status string            `json:"status"`
+}
+
+// driftContextDoc is the part of the context document that the drift steps
+// read.
+type driftContextDoc struct {
+	Sections map[string]driftContextSection `json:"sections"`
+}
+
+// checkContextDrift returns a check of the drift section of a context document:
+// the status of the section, the drift status, and the addresses.
+func checkContextDrift(section, status, jobID string, addresses []string) func(string) error {
+	return func(body string) error {
+		var doc driftContextDoc
+		if err := json.Unmarshal([]byte(body), &doc); err != nil {
+			return fmt.Errorf("decode context document: %w", err)
+		}
+
+		d := doc.Sections["drift"].Data
+		if doc.Sections["drift"].Status != section || d == nil || d.Status != status || d.JobID != jobID ||
+			(jobID != "") != (d.CheckedAt != nil) || !slices.Equal(d.Addresses, addresses) || d.Truncated ||
+			!strings.Contains(body, `"addresses":[`) {
+			return fmt.Errorf("%w: %s, want the section %s with the drift status %s", errDriftDoc, body, section, status)
+		}
+
+		return nil
+	}
+}
+
+// contextReadsUnknown proves that the drift section of a unit that no check
+// finished answers the status unknown with no time, no job and no address.
+func contextReadsUnknown(ctx context.Context, t *testing.T, env *e2e.Env, base string) {
+	t.Helper()
+
+	env.APIStepA(ctx, t, e2e.APIStepSpec{
+		UserAgent: driftAgent, Name: "read the drift section of a unit with no check", Method: http.MethodGet,
+		Path: base + "/context?include=drift", Body: "", Want: http.StatusOK, Scheme: "token",
+		Check: checkContextDrift("ok", "unknown", "", []string{}),
+	})
+	env.APIStepA(ctx, t, e2e.APIStepSpec{
+		UserAgent: driftAgent, Name: "the default sections hold no drift section", Method: http.MethodGet,
+		Path: base + "/context", Body: "", Want: http.StatusOK, Scheme: "token",
+		Check: func(body string) error {
+			if strings.Contains(body, `"drift"`) {
+				return fmt.Errorf("%w: %s, want no drift section without include", errDriftDoc, body)
+			}
+
+			return nil
+		},
+	})
+}
+
+// contextReadsDrift records a drift result through the store, because no runner
+// reports drift yet, and proves that the drift section of the context document
+// shows it: the status, the time, the job and the addresses. A member who
+// cannot read the unit gets the 404 of an unknown unit.
+func contextReadsDrift(ctx context.Context, t *testing.T, env *e2e.Env, c *driftContextCase) {
+	t.Helper()
+
+	addresses := []string{"aws_s3_bucket.logs", "aws_instance.web"}
+	env.RecordDrift(ctx, t, c.unitID, c.jobID, addresses...)
+
+	env.APIStepA(ctx, t, e2e.APIStepSpec{
+		UserAgent: driftAgent, Name: "read the drift section of a drifted unit", Method: http.MethodGet,
+		Path: c.base + "/context?include=drift,health", Body: "", Want: http.StatusOK, Scheme: "token",
+		Check: checkContextDrift("ok", "drifted", c.jobID, addresses),
+	})
+
+	token, ok := env.MemberToken()
+	if !ok {
+		return
+	}
+
+	status, body, err := env.ServerAPIStatusAs(ctx, token, http.MethodGet, c.base+"/context?include=drift", "")
+	if err != nil {
+		t.Fatalf("read the drift section as a member: %v", err)
+	}
+
+	if status != http.StatusNotFound || strings.Contains(body, "aws_s3_bucket") {
+		t.Fatalf("drift section as a member = %d %s, want the 404 of an unknown unit", status, body)
+	}
 }
 
 // checkUnknown checks a drift read of a unit with no result: the status

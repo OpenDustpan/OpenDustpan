@@ -26,8 +26,8 @@ The status `unknown` means that no check reported on the workspace. The server
 never shows `in-sync` for a workspace that no check finished.
 
 The drift check does not start on its own. The drift schedule, the `drifted`
-badge in the inventory, the drift section of the context API and the
-notification of a change of the drift status come in later versions.
+badge in the inventory and the notification of a change of the drift status
+come in later versions.
 
 ## Who can start a drift check
 
@@ -133,6 +133,10 @@ found more.
 
 The server sets the time of the result from the end of the plan phase of the
 job. It does not take the time from the runner.
+
+The context document of the workspace holds the same result in its `drift`
+section. Send `GET /namespaces/{namespace}/units/{unit_id}/context?include=drift`
+(see `docs/guides/context.md`). The section lists the first 100 addresses.
 
 ## What happens when a check fails
 
