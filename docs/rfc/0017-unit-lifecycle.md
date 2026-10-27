@@ -49,8 +49,8 @@ decides nothing. An ADR records a decision (ADR 15).
   "Configurable, default to 30 days or something reasonable." And: "As with
   most questions - `who can` is usually answered with \"a user with permission
   by our FGA model\"."
-- Question "Is moving a unit between namespaces allowed, given home regions
-  (ADR 4)?": "No. Namespaces can obviously be moved between instances for
+- Question "Is moving a unit between namespaces allowed, given primary installations
+  (ADR 248)?": "No. Namespaces can obviously be moved between instances for
   failover or DR, but they own their contents."
   - The owner says that users can export their units and import them again
     where they want. The owner says that a unit is too bound to its namespace
