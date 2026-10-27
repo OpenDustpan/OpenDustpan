@@ -146,8 +146,8 @@ documentation of Ansible Automation Platform 2.6.
   `inventory_needed_to_start`.
 - The request limit of AWX. This RFC does not state a value for it. The AWX
   source was not read in the review that wrote this RFC, so the limit and the
-  gateway timeouts are open (question 11). The start view is reported to
-  create the job inside the request. That report is not checked.
+  gateway timeouts are open (question 11). A report says that the start view creates the job
+  inside the request. That report is not checked.
 
 **Job status.** `GET /api/v2/jobs/{id}/`. The `status` values are `new`,
 `pending`, `waiting`, `running`, `successful`, `failed`, `error` and
@@ -301,7 +301,7 @@ made. These rules hold together:
   after the last attempt. This value is a proposal. It assumes a request
   limit of AWX of about 115 seconds, plus a 60 second margin. That limit is
   not checked (open question 11). The reconciliation starts only after the
-  claim of that attempt has ended. AWX may create the job during the start
+  claim of that attempt ended. AWX may create the job during the start
   request, so the job can appear after the send, up to that limit. The queue
   time before a worker starts the request is not checked (open question 11). Before that, the redeliver is
   refused and the answer names the time to wait.
@@ -321,11 +321,11 @@ made. These rules hold together:
   results, which costs more reads on a busy template. **Recommendation:
   fail closed.**
 - **Result.** When a job has the call ID, the call records that job ID and
-  the status `started`, and no second start is sent. When every job in the
+  the status `started`, and the server sends no second start. When every job in the
   window has a `dustpan_call_id`, and none has the ID of the call, the second
   start goes on. When a job in the window has no `dustpan_call_id`, the call
   stays `unknown` and the person checks AWX. Such a job can be the first
-  attempt, when an administrator removed the survey entry after the save.
+  attempt, when an administrator deleted the survey entry after the save.
   Option: re-check the survey before the second start. **Recommendation: fail
   closed.**
 - **One durable operation.** The reconciliation and the second start are
@@ -341,7 +341,7 @@ is not dropped. This limits the AWX jobs that a loop of applies can make.
 history, sends the notification `follow-up.failed`, and can be redelivered
 by a person. Only the states `abandoned` and `unknown` can be redelivered.
 The server refuses a redeliver of any other state. The test route
-(`POST .../follow-ups/{id}/test`) never posts to the start route of section D. A follow-up whose calls all failed for 24 hours is suspended,
+(`POST .../follow-ups/{id}/test`) never posts to the start route of section D. The server suspends a follow-up whose calls all failed for 24 hours,
 as ADR 145 decision 19 does for a subscription.
 
 **Limits.** Connect 10 seconds, request 30 seconds, answer body at most
@@ -600,7 +600,7 @@ the gates of its decision points. Option: a fact `followUps` at
 | --- | --- | --- | --- | --- | --- |
 | Follow-up document (API) | Allowlist for each field. URL scheme `https`. Variable name pattern. Reserved names refused | Values stored as typed fields, never as text that a template reads | 100 follow-ups, 50 outputs | `namespace:manage-follow-ups` on the route, the store checks the fence | Unknown field refused (`422`). Denial audited |
 | Target URL and DNS | `egress.CheckURL` at save, and the allowlist check in the way of `CheckModelURL` (ADR 129 decision 26) with the purpose `follow-up` | Dial guard on each resolved address. No redirect. No proxy | Connect 10 s, request 30 s | Installation list and namespace list, both before each attempt | Refusal is `abandoned`, `denied` entry |
-| Output values (from tool state). A unit writer controls them | JSON value types only. The type and the pattern of each mapped variable, with refusal of a non-match. `ip-list` only inside the bound CIDR ranges, `host-name` only inside the bound suffixes, matched on a label boundary (an IP outside the ranges is refused). Size per value. For the AWX kind, refuse a string with `{{`, `{%` or `{#` | `extra_vars` as a JSON object. Webhook body JSON-encoded. Never put in a URL, a header or a log | 16 KiB each, 64 KiB total | Creator holds `unit:read` at send time | Sensitive or missing output: `output-refused`, nothing sent, `denied` entry |
+| Output values (from tool state). A unit writer controls them | JSON value types only. The type and the pattern of each mapped variable, with refusal of a non-match. `ip-list` only inside the bound CIDR ranges, `host-name` only inside the bound suffixes, matched on a label boundary (the server refuses an IP outside the ranges). Size per value. For the AWX kind, refuse a string with `{{`, `{%` or `{#` | `extra_vars` as a JSON object. Webhook body JSON-encoded. Never put in a URL, a header or a log | 16 KiB each, 64 KiB total | Creator holds `unit:read` at send time | Sensitive or missing output: `output-refused`, nothing sent, `denied` entry |
 | Credential | Length and character set at save | Sealed secret item, opened in memory for one request. Sent only to the origin that the item is bound to at seal time | One credential for each follow-up | Store refuses an item sealed for another follow-up, scope, origin, template, inventory, `limit`, unit filter or mapping | Item that does not open: call fails, nothing sent |
 | AWX answer (start, job and jobs list, from a hostile AWX) | Parse a fixed schema: `job` as a positive integer, `status` from the eight values, `ignored_fields` keys only. In the jobs list: `id`, `status`, `created` and `extra_vars` only, and of `extra_vars` only `dustpan_call_id` as a string | Store parsed fields only, never the raw body or another `extra_vars` key. Strip control characters from names | Body at most `egress.MaxBodyBytes`, 100 names of 64 bytes, 100 jobs, 64 KiB for each `extra_vars` | A job ID is only shown, never used for another call | Unknown status or bad JSON: `unknown`, no retry |
 | Webhook answer | Status code only | No body stored, except an excerpt of at most 512 bytes of a non-`2xx` answer, with no control characters and the secret filter applied | 512 bytes | Shown only with `namespace:read-follow-ups` | Non-`2xx`: retry or `abandoned` |

@@ -441,7 +441,7 @@ that are the same for each platform:
   backup list: after a restore the server refuses each CI token with an
   `iat` before the time of the restore.
 - **Namespace export and import.** Proposal: the `jti` table is not part of
-  them. It is keyed by issuer and `jti`, not by namespace. The ADRs read for
+  them. The server keys it by issuer and `jti`, not by namespace. The ADRs read for
   this RFC define no export of one namespace. ADR 42 exports tables.
 - **The counter of the exchange rate limit** (G1) is a windowed counter in
   the database, shared by all instances, as the sign-in failure budget is
@@ -548,7 +548,7 @@ ADR 203 names ADR 210 decision 6 as the amendment of its decision 12 in its
 status line, so ADR 210 decision 6 is the newer decision on this point. This
 RFC follows it: `ci-runs/open` declares that it takes no key, and a request
 with the key answers 400. The body text of ADR 203 decision 12 still says that
-it ignores the key. The owner confirms this reading.
+it ignores the key. The owner must check this reading.
 
 **B4. The scope of a trust rule.** ADR 54 gives the matched principal all
 its grants. A CI token for one repository then reaches every unit that the
@@ -682,7 +682,7 @@ approvals in a team's own CI (I).
 | `exports.files`, and each credential file of a block | files of mode 0600 under a directory of mode 0700, on a memory-backed directory when one exists. The shim deletes them when the tool ends, also on a signal. | yes |
 | `exports.variables`, plain | variables of the tool process | yes |
 | `exports.variables`, secret | refused in slice 1 (question 5) | yes |
-| `exports.opentofu` | a variables file in the same directory, passed as `-var-file=<path>` (see below). A secret leaf is refused in slice 1 (see the proposal below). | yes |
+| `exports.opentofu` | a variables file in the same directory, passed as `-var-file=<path>` (see below). Slice 1 refuses a secret leaf (see the proposal below). | yes |
 | `exports.pulumi` | a stack settings file with `environment` entries, with the planned `launcher.PulumiConfigFile` (it does not exist yet) | yes |
 
 - **How the variables file reaches the tool.** The shim must add
@@ -770,7 +770,7 @@ record (G1). So the tool holds more rights than it needs. Options:
    the shim. This design does not say how the server issues the second token.
 
 **Proposal:** option 2. The e2e suite checks that each step of the tool works
-with the narrow token, and that the narrow token is refused on the open and
+with the narrow token, and that the server refuses the narrow token on the open and
 record routes.
 
 ### D. Secrets out of state: what can stay out, what cannot
@@ -888,8 +888,8 @@ makes no CI run record. It makes a **token family**: the ID of the `jti`
 row (B3). The record stores the family ID.
 
 A CI run is closed only by the **current trust token of the CI run**: the
-trust token that is the newest of its family. After a nonce retry (B3), each
-earlier token is revoked, so only the token of the last answer can update the
+trust token that is the newest of its family. After a nonce retry (B3), the server revokes each
+earlier token, so only the token of the last answer can update the
 record. The shim sends the record when the tool ends, also on a failure.
 A CI run that dies still has its open record. A record that is not closed
 after its trust token ends gets the outcome `unknown`. A second open with

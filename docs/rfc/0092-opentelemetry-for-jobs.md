@@ -343,7 +343,7 @@ phase that wrote it.
    - Test: one test for each of the three checks. The test of the open
      starts a FIFO with no writer, and it checks that the open returns at
      once. The test of `fstat` gives a FIFO with a writer, and it checks
-     that no span is read. The test of the deadline writes a regular file
+     that the launcher reads no span. The test of the deadline writes a regular file
      slowly, so that the read reaches the deadline before the size limit,
      and it checks that the read stops.
    - A size limit of 64 MiB for the file. The launcher checks it while it
@@ -471,11 +471,11 @@ secrets-out-of-state theme starts the tool. Options:
    **client trace ID**. The server never trusts it: it is a link, not a
    parent of a server span. The server checks the header at the boundary.
    The value must be 32 lowercase hex characters, and it must not be all
-   zeros. A value that fails the check is rejected. The state write then
-   answers `invalid`, and nothing is stored. Test: one test of the check. It
+   zeros. The server rejects a value that fails the check. The state write then
+   answers `invalid`, and the server stores nothing. Test: one test of the check. It
    sends values of 31 and of 33 characters, uppercase hex, a character that
    is not hex, the all-zero ID, and a value with CR or LF. Each value gets
-   `invalid`, and no history entry is written.
+   `invalid`, and the server writes no history entry.
 2. The shim relays spans to the server, as the launcher does in A1.2.
 3. Do nothing for the CI shim in v1.
 
@@ -590,7 +590,7 @@ because a collection label has no bound.
 
 | Metric | Definition from data we hold | What we lack |
 | --- | --- | --- |
-| Lead time from merge to apply | the end of the apply phase that wrote a final state version, minus the time of the merge of its commit | the merge time. A job holds the commit, not the merge. Options: the push event of the Git host (RFC 89, accepted by ADR 271, where push events are not yet returned), or the commit time from the source snapshot. A commit time is set by the author, so it is untrusted and can be wrong. |
+| Lead time from merge to apply | the end of the apply phase that wrote a final state version, minus the time of the merge of its commit | the merge time. A job holds the commit, not the merge. Options: the push event of the Git host (RFC 89, accepted by ADR 271, where push events are not yet returned). Or the commit time from the source snapshot. The author sets a commit time, so the server cannot rely on it, and it can be wrong. |
 | Change failure rate | apply jobs that a person linked to an incident as `cause` (ADR 147 decision 12), divided by all succeeded apply jobs | links only exist where people make them. Option: also count an apply that failed after it wrote state. |
 | Time to restore | for an incident linked to a unit of the collection: resolved time minus detection time (ADR 147 decision 1) | nothing for incidents. Option: also the time from a failed apply to the next succeeded apply of the same unit, with no incident. |
 | Deployment frequency | succeeded apply jobs, and state writes with no job | nothing |
@@ -654,7 +654,7 @@ RFC 46 owns how these values look.
   no table and no blob. A restart drops the spans in the queue, as section B
   describes for the delivery of at most once. When export is off, the server
   drops each span at once and counts it. The other option is a blob for each
-  job. Its retention period is set by the owner, and it has an entry in the
+  job. The owner sets its retention period, and it has an entry in the
   table list of the backup domain (`pkg/backup`), so that a backup holds the
   spans. This option keeps the spans across a restart. It adds a second store
   for data that is only observability.
@@ -713,8 +713,8 @@ sends hostile input to that layer with the other layers skipped.
      It drops the `dropped_*` counts of attributes, events and links.
    - The check keeps the kind of a span only when it is one of the six kinds
      of OpenTelemetry: `unspecified`, `internal`, `server`, `client`,
-     `producer` or `consumer`. A span with another kind fails the check and
-     is dropped.
+     `producer` or `consumer`. A span with another kind fails the check, and the
+     launcher drops it.
    - Test: one test sends a span with a status message, a link, a
      `trace_state`, a `dropped_*` count and a kind outside the six. The
      exported span has the status code. It has no status message, link,
@@ -873,8 +873,7 @@ The owner keeps these. Each recommendation is the author's.
    wants. Recommendation: IDs by default, names behind a setting.
 7. Lead time: the merge time from the push event of the Git host only, or
    also the commit time as a fallback? Recommendation: the push event only.
-   No lead time is shown until a push event is recorded (RFC 89 is accepted
-   by ADR 271, but its push events are not yet returned).
+   The server shows no lead time until it records a push event. ADR 271 accepts RFC 89, but the Git host does not yet return its push events.
 8. Trace export for each namespace (a tenant of a hosted installation sends
    its own job traces to its own collector)? Recommendation: not in v1. The
    installation target only.

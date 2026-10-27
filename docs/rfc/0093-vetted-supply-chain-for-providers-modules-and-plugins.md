@@ -326,7 +326,7 @@ refused (section D).
   bytes of its pending blobs. The server refuses a request that would pass
   the quota and writes an audit entry. The quota value is question 13.
 - **Retention of refused and expired requests (proposal).** The server
-  deletes the blobs of a refused request when the refusal is recorded. The
+  deletes the blobs of a refused request when it records the refusal. The
   server deletes the blobs of an expired request at its expiry, and the
   record says so. The request expiry period is question 13.
 
@@ -385,7 +385,7 @@ change decision 2 (see sections B, C and D).
   of the deleted keys. The denylist is not in the table list of a backup
   (ADR 30), so a restore does not replace it. A value with a denied key
   fails (404) and writes an audit entry. A key ID is one byte. A new key
-  could get the ID of a denied key, so an ID alone is not safe. The
+  could receive the ID of a denied key, so an ID alone is not safe. The
   fingerprint does not have that problem. A test restores a backup that
   holds a deleted key and checks the 404. The alternative is to rotate the
   key at each restore, with the delete-at-once rule for the key of the
@@ -735,7 +735,7 @@ and both are checked in the e2e suite:
    `h1:` and `zh:` hashes of every admitted platform. A team commits it and
    needs no `tofu init` on each platform. The route checks
    `namespace:download-packages` (the action) for the namespace in the path.
-   The OpenTofu format is built in `internal/api/tfe/`, as section A says for
+   The OpenTofu format is in `internal/api/tfe/`, as section A says for
    a format that one tool reads. Question 14 asks whether the route belongs
    under the tool-neutral prefix.
 2. **`tofu providers lock -net-mirror=<url> -platform=...`.** The
@@ -780,7 +780,7 @@ archive of each platform at admission, keeps its SHA-256, and gives the
 admitted platform. The map is keyed by `<goos>-<goarch>`, as the CLI reads
 it. The route is `GET /api/dustpan/v1/namespaces/{namespace}/packages/pulumi-checksums`,
 with the action `namespace:download-packages`, as for the lock file. The
-Pulumi format is built in `internal/api/pulumi/`. A team commits it, and the
+Pulumi format is in `internal/api/pulumi/`. A team commits it, and the
 CLI then checks the bytes on each platform. A platform with no entry is not
 checked by the CLI, so the output lists every admitted platform and the
 documentation says that a missing entry gives no check. The launcher does
@@ -1086,7 +1086,7 @@ step:
    later review needs a human decision. ADR 7 does not state a review rule.
    It pins dependencies and requires versions at least two weeks old.
    CLAUDE.md asks for a question before a new dependency. The owner decides
-   the review before the scope of slice 2 is fixed.
+   the review before the owner fixes the scope of slice 2.
 5. Does the server fetch from upstream through `pkg/egress` with its own
    allowlist, off until set (option G.1), with an upload for an air gap soon
    after (G.3), and a fetch by a runner only for git module sources
@@ -1107,16 +1107,16 @@ step:
     (RFC 10 asks the same)?
 12. Does RFC 10 keep private publishing and the version lifecycle, and drop
     its curation part in favor of this RFC?
-13. What quota for pending blobs does a namespace get? How long does a
+13. What quota for pending blobs does a namespace receive? How long does a
     pending request stay before it expires? (section B, pending storage)
 14. Do the lock-file route and the Pulumi checksums route sit under
     `/api/dustpan/v1/namespaces/{namespace}/packages/`, as section D
-    proposes? Section A says that a format that only one tool reads is built
+    proposes? Section A says that a format that only one tool reads lives
     in that tool's adapter.
 15. Is `POST /api/dustpan/v1/package-keys/rotate` the right shape? ADR 210
     decision 5 gives its custom methods on a resource with an `{id}`. This
     route acts on the collection.
-16. Section B says that the package signing key is sealed in the scope
+16. Section B says that the server seals the package signing key in the scope
     `@server`, and that it is not a secret item. ADR 129 decision 10 says
     that a secret item of that scope is a secret item. Which storage is
     intended?

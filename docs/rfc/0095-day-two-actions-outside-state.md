@@ -469,8 +469,8 @@ input to that layer alone, with the other two layers skipped:
 
 - Layer 1: a `refresh` spec with `-invoke=...` in its argument list is
   refused by the spec check.
-- Layer 2: a `refresh` spec with `TF_CLI_ARGS` or `TF_CLI_ARGS_apply` in its
-  step environment is refused by the spec check. The launcher refuses the
+- Layer 2: the spec check refuses a `refresh` spec with `TF_CLI_ARGS` or
+  `TF_CLI_ARGS_apply` in its step environment. The launcher refuses the
   same variables at start.
 - Layer 3: a plan with a planned invocation fails the drift check.
 

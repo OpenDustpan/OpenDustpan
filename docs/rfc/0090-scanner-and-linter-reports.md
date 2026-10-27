@@ -344,12 +344,12 @@ its SARIF, and no mask can remove it. Rules:
   SARIF result, and the parser drops them.
 - For a plan-bound finding, the message text, the file path, the line and
   the raw report need `job:read-plans` and `unit:read-secrets` on the unit,
-  and so does the address, unless the tool package confirms it (see below).
+  and so does the address, unless the tool package checks it (see below).
   A read of them by a person writes an audit entry of the kind `reveal`,
   with the rules of ADR 240. With `unit:read` only, a reader gets the
-  scanner, the rule ID, the mapped severity and the fingerprint. The address
-  of a plan-bound finding is shown with `unit:read` only when the tool
-  package confirms that the plan holds that address. Otherwise the address
+  scanner, the rule ID, the mapped severity and the fingerprint. The server shows the address
+  of a plan-bound finding with `unit:read` only when the tool
+  package checks that the plan holds that address. Otherwise the address
   needs `job:read-plans` and `unit:read-secrets`, as the message text does.
   The address can be written in a free-form logical location of the SARIF
   result. A commit-bound finding scans source code, not plan JSON, and a
@@ -506,7 +506,7 @@ OpenTofu version:
    output as a recorded file for the parser tests of the first slice.
 
 Proposal: the spike passes for a scanner when both outputs have the same
-rule IDs and the same counts. A difference is recorded as an answer to
+rule IDs and the same counts. The spike records a difference as an answer to
 question 9.
 
 ### The first slice
