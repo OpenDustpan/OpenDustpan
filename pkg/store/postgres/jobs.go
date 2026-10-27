@@ -170,7 +170,7 @@ func (t *jobTx) InsertJob(ctx context.Context, r jobstore.Row) error {
 		ID: string(r.ID), Namespace: r.Namespace.String(), UnitID: r.UnitID, Seq: seq, State: string(r.State),
 		Wait: string(r.Wait), CurrentPhase: int64(r.Phase), CurrentChanges: r.Changes,
 		CurrentOperation: r.Operation, IdempotencyKey: r.Key, Version: r.Version, Body: r.Body,
-		CreatedAtMs: r.CreatedMs, UpdatedAtMs: r.UpdatedMs,
+		CreatedAtMs: r.CreatedMs, UpdatedAtMs: r.UpdatedMs, StateChangedAtMs: r.StateChangedMs,
 	})
 
 	return jobIndexError("insert job", err)
@@ -180,8 +180,8 @@ func (t *jobTx) InsertJob(ctx context.Context, r jobstore.Row) error {
 func (t *jobTx) UpdateJob(ctx context.Context, r jobstore.Row, prev int64) (bool, error) {
 	n, err := t.q.UpdateJob(ctx, db.UpdateJobParams{
 		State: string(r.State), Wait: string(r.Wait), CurrentPhase: int64(r.Phase), CurrentChanges: r.Changes,
-		CurrentOperation: r.Operation, Version: r.Version, Body: r.Body, UpdatedAtMs: r.UpdatedMs, ID: string(r.ID),
-		PrevVersion: prev,
+		CurrentOperation: r.Operation, Version: r.Version, Body: r.Body, UpdatedAtMs: r.UpdatedMs,
+		StateChangedAtMs: r.StateChangedMs, ID: string(r.ID), PrevVersion: prev,
 	})
 	if err != nil {
 		return false, jobIndexError("update job", err)
@@ -309,8 +309,13 @@ func (t *jobTx) List(ctx context.Context, q jobstore.Query) ([]jobstore.Row, err
 		)
 	}
 
+	if q.StateChangedBeforeMs > 0 {
+		where = append(where, "j.state_changed_at_ms < "+arg(q.StateChangedBeforeMs))
+	}
+
 	query := `SELECT j.id, n.name, j.unit_id, j.seq, j.state, j.wait, j.current_phase, j.current_changes,
-		j.current_operation, j.idempotency_key, j.version, j.body, j.created_at_ms, j.updated_at_ms
+		j.current_operation, j.idempotency_key, j.version, j.body, j.created_at_ms, j.updated_at_ms,
+		j.state_changed_at_ms
 		FROM jobs AS j JOIN namespaces AS n ON n.id = j.namespace_id`
 	if len(where) > 0 {
 		query += " WHERE " + strings.Join(where, " AND ")
@@ -337,7 +342,7 @@ func scanJobRows(rows pgx.Rows) ([]jobstore.Row, error) {
 
 		err := rows.Scan(&g.ID, &g.Namespace, &g.UnitID, &g.Seq, &g.State, &g.Wait, &g.CurrentPhase,
 			&g.CurrentChanges, &g.CurrentOperation, &g.IdempotencyKey, &g.Version, &g.Body, &g.CreatedAtMs,
-			&g.UpdatedAtMs)
+			&g.UpdatedAtMs, &g.StateChangedAtMs)
 		if err != nil {
 			return nil, fmt.Errorf("scan job: %w", err)
 		}
@@ -371,7 +376,7 @@ func (t *jobTx) Orphans(ctx context.Context, limit int) ([]jobstore.OrphanRow, e
 				ID: r.ID, Namespace: r.Namespace, UnitID: r.UnitID, Seq: r.Seq, State: r.State, Wait: r.Wait,
 				CurrentPhase: r.CurrentPhase, CurrentChanges: r.CurrentChanges, CurrentOperation: r.CurrentOperation,
 				IdempotencyKey: r.IdempotencyKey, Version: r.Version, Body: r.Body, CreatedAtMs: r.CreatedAtMs,
-				UpdatedAtMs: r.UpdatedAtMs,
+				UpdatedAtMs: r.UpdatedAtMs, StateChangedAtMs: r.StateChangedAtMs,
 			}),
 			Missing: !r.OpState.Valid,
 		}
@@ -385,7 +390,7 @@ func jobRow(r db.GetJobRow) jobstore.Row {
 		ID: job.ID(r.ID), Namespace: namespace.Name(r.Namespace), UnitID: r.UnitID, Seq: r.Seq,
 		State: job.State(r.State), Wait: job.WaitReason(r.Wait), Phase: int(r.CurrentPhase), Changes: r.CurrentChanges,
 		Operation: r.CurrentOperation, Key: r.IdempotencyKey, Version: r.Version, Body: r.Body,
-		CreatedMs: r.CreatedAtMs, UpdatedMs: r.UpdatedAtMs,
+		CreatedMs: r.CreatedAtMs, UpdatedMs: r.UpdatedAtMs, StateChangedMs: r.StateChangedAtMs,
 	}
 }
 

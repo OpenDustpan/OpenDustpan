@@ -22,6 +22,7 @@ func sqliteJobBackupTables() []sqliteBackupTable {
 				"body",
 				backupColCreatedAtMs,
 				backupColUpdatedAtMs,
+				"state_changed_at_ms",
 			},
 		},
 		{

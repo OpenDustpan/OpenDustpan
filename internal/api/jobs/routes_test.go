@@ -391,6 +391,7 @@ func runningJob(t *testing.T, id job.ID) job.Job {
 				StartedAt: time.Time{}, FinishedAt: time.Time{},
 			},
 		},
+		StateChangedAt: time.Time{},
 	}
 }
 

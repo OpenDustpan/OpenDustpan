@@ -411,7 +411,9 @@ func (r ClaimRequest) Validate() error {
 
 // Message is what a Sender delivers: the notification, the sink, its
 // active secrets and the address. Secrets is empty for a sink with no
-// secret, and holds one or two signing keys for a webhook. To is the
+// secret, and holds one or two signing keys for a webhook. For a chat sink
+// that has an access token, it holds the token as its one value. Every value
+// is a secret: no log, no error and no audit entry holds it. To is the
 // target of the sink, or the personal contact of a recipient. For a chat
 // sink, To is the webhook URL from the secret item of the sink, whose host
 // is the Target of the sink (see ChatHost).

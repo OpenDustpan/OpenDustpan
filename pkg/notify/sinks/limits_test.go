@@ -124,11 +124,11 @@ func TestPortIsCheckedWhenASinkIsSaved(t *testing.T) {
 }
 
 func hook(target string) sinks.New {
-	return sinks.New{Kind: notify.SinkWebhook, Platform: "", Name: "Hook", Target: target, URL: ""}
+	return sinks.New{Kind: notify.SinkWebhook, Platform: "", Name: "Hook", Target: target, URL: "", AccessToken: ""}
 }
 
 func chat(url string) sinks.New {
-	return sinks.New{Kind: notify.SinkChat, Platform: "mattermost", Name: "Chat", Target: "", URL: url}
+	return sinks.New{Kind: notify.SinkChat, Platform: "mattermost", Name: "Chat", Target: "", URL: url, AccessToken: ""}
 }
 
 func TestPortIsCheckedWhenASinkIsReplaced(t *testing.T) {
@@ -142,6 +142,7 @@ func TestPortIsCheckedWhenASinkIsReplaced(t *testing.T) {
 
 		_, err := f.svc.Replace(t.Context(), f.caller, shop, created.Sink.ID, sinks.Change{
 			Version: created.Sink.Version, Name: "Hook", Target: &to, URL: nil,
+			AccessToken: nil,
 		})
 		if !errors.Is(err, notify.ErrInvalid) || !errors.Is(err, egress.ErrRefused) {
 			t.Fatalf("Replace to %s = %v, want notify.ErrInvalid and egress.ErrRefused", target, err)
@@ -158,6 +159,7 @@ func TestPortIsCheckedWhenASinkIsReplaced(t *testing.T) {
 
 	_, err := f.svc.Replace(t.Context(), f.caller, shop, c.ID, sinks.Change{
 		Version: c.Version, Name: "Chat", Target: nil, URL: &url,
+		AccessToken: nil,
 	})
 	if !errors.Is(err, egress.ErrRefused) {
 		t.Fatalf("Replace chat URL on 6379 = %v, want egress.ErrRefused", err)
@@ -301,6 +303,7 @@ func TestTestIsLimitedForEachNamespace(t *testing.T) {
 		got, err := f.svc.Create(t.Context(), f.caller, shop, sinks.New{
 			Kind: notify.SinkWebhook, Platform: "", Name: fmt.Sprintf("Hook %d", i),
 			Target: "https://hooks.example.com/ops", URL: "",
+			AccessToken: "",
 		})
 		if err != nil {
 			t.Fatalf("Create %d: %v", i, err)

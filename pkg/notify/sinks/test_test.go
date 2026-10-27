@@ -226,6 +226,7 @@ func TestTestRefusals(t *testing.T) {
 
 			got, err := f.svc.Create(t.Context(), f.caller, shop, sinks.New{
 				Kind: notify.SinkEmail, Platform: "", Name: "Mail", Target: "ops@example.com", URL: "",
+				AccessToken: "",
 			})
 			if err != nil {
 				t.Fatalf("Create: %v", err)
@@ -592,6 +593,7 @@ func TestChatHostIsCheckedWhenAPersonSavesTheSink(t *testing.T) {
 	} {
 		_, createErr := f.svc.Create(t.Context(), f.caller, shop, sinks.New{
 			Kind: notify.SinkChat, Platform: tc.platform, Name: "Chat", Target: "", URL: tc.url,
+			AccessToken: "",
 		})
 		if tc.ok {
 			if createErr != nil {
@@ -609,7 +611,7 @@ func TestChatHostIsCheckedWhenAPersonSavesTheSink(t *testing.T) {
 
 	url := "https://hooks.example.com/services/T0/B0/" + canary
 	_, err = f.svc.Replace(t.Context(), f.caller, shop, made.ID,
-		sinks.Change{Version: made.Version, Name: "Chat", Target: nil, URL: &url})
+		sinks.Change{Version: made.Version, Name: "Chat", Target: nil, URL: &url, AccessToken: nil})
 	if !errors.Is(err, notify.ErrInvalid) {
 		t.Errorf("Replace with another host = %v, want ErrInvalid", err)
 	}

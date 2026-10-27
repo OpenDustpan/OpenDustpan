@@ -22,6 +22,7 @@ func pgCopyJobTables() []pgCopyTable {
 				"body",
 				pgColCreatedAtMs,
 				pgColUpdatedAtMs,
+				"state_changed_at_ms",
 			},
 			orderBy: []string{pgColSeq, "id"},
 		},

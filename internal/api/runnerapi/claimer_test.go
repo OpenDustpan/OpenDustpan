@@ -97,6 +97,7 @@ func dispatchPlan(t *testing.T, e *env, pool string, unit identity.Object) job.J
 		Version:        0,
 		CreatedAt:      time.Time{},
 		UpdatedAt:      time.Time{},
+		StateChangedAt: time.Time{},
 	}
 
 	start := &durable.StartRequest{Key: job.PhaseKey(j.ID, 0), Kind: job.RunnerKind(pool), Version: 1, Input: nil}

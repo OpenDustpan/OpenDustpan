@@ -419,6 +419,11 @@ type Job struct {
 	Version   int64
 	CreatedAt time.Time
 	UpdatedAt time.Time
+	// StateChangedAt is the time of the last change of State. UpdatedAt also
+	// moves for a write that keeps the state, so only this time tells how long
+	// the job has been in its state. The reconcile schedule reads it for the
+	// queue, dispatch and state timeouts.
+	StateChangedAt time.Time
 }
 
 // Phase is one phase of a job and its record.
