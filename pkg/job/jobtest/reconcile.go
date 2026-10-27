@@ -38,8 +38,6 @@ func reconcileCases() []suiteCase {
 		{"a second run of the reconcile changes nothing", testReconcileTwice},
 		{"two reconcilers at the same time dispatch each queued job once", testReconcileConcurrent},
 		{"a failed read of the orphans does not stop the expiry and the dispatch", testReconcileOrphanReadFails},
-		{"two reconcilers at the same time dispatch each queued job once", testReconcileConcurrent},
-		{"a failed read of the orphans does not stop the expiry and the dispatch", testReconcileOrphanReadFails},
 	}
 }
 
@@ -485,8 +483,15 @@ func testReconcileConcurrent(t *testing.T, h Harness) {
 		failure error
 	)
 
+	// Both reconcilers wait at a barrier, so that they begin together. The
+	// second dispatch of a job loses on the version or the state of the job
+	// (ErrConflict or ErrTransition), and the reconcile counts it as skipped.
+	start := make(chan struct{})
+
 	for range 2 {
 		wg.Go(func() {
+			<-start
+
 			res, err := reconciler(t, h, 0).Reconcile(t.Context())
 
 			mu.Lock()
@@ -497,8 +502,11 @@ func testReconcileConcurrent(t *testing.T, h Harness) {
 		})
 	}
 
+	close(start)
 	wg.Wait()
 
+	// The property: each job is dispatched once and has one audit entry of the
+	// reconcile, whichever reconciler won.
 	if failure != nil || total != concurrentJobs {
 		t.Fatalf("two parallel reconciles dispatched %d jobs, error %v; want %d dispatches, one for each job",
 			total, failure, concurrentJobs)
