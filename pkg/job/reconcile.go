@@ -223,7 +223,11 @@ func (run *reconcileRun) endOrphans(ctx context.Context) error {
 			// The expiry and the dispatch do not need the orphans. They run in
 			// this tick, and the next tick reads the orphans again.
 			run.res.Failed++
-			run.r.cfg.Log.Warn("job reconcile could not read the orphans", slog.String("error", err.Error()))
+			run.r.cfg.Log.WarnContext(
+				ctx,
+				"job reconcile could not read the orphans",
+				slog.String("error", err.Error()),
+			)
 
 			return nil
 		}
