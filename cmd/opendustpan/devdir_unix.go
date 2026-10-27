@@ -3,10 +3,14 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"syscall"
 )
+
+// errDevOwner names a path that another user owns.
+var errDevOwner = errors.New("the path belongs to another user")
 
 // checkDevOwner refuses a path that another user owns. The error names the
 // path, its owner and the one command that helps.

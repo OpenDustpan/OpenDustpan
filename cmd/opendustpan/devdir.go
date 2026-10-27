@@ -41,7 +41,6 @@ var (
 	// dev. dev opens no file in it.
 	errDevForeign = errors.New("the directory holds files but no key file of opendustpan dev")
 	errDevPrivate = errors.New("another user can access the path")
-	errDevOwner   = errors.New("the path belongs to another user")
 )
 
 // devDirInput holds what the choice of the data directory reads. The fields
