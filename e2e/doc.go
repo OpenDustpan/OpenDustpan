@@ -38,6 +38,17 @@
 // proxy target and the saved CLI logins stay valid. RunBinary, StopServer
 // and StartServer need E2E_SERVER=binary and fail the test otherwise.
 //
+// With E2E_INSTANCES=N (N above 1) every binary environment starts N server
+// binaries of one installation on one PostgreSQL database and one blob store
+// (the blob directory, or the S3-compatible bucket of E2E_BLOBS=s3), behind a
+// round-robin TLS proxy of the suite. The proxy checks /health/ready of each
+// instance every 250 ms, sends each request to the next healthy instance,
+// sends a request again to another instance only when that is safe, and
+// records the instance of each request (Entry.Backend). Env.HA gives a test
+// the cluster, with Kill, Stop, Start and the logs of each instance.
+// TestHighAvailability uses it (make e2e-ha). A test that stops the server to
+// write to the database stops and starts every instance.
+//
 // Environment variables:
 //
 //	E2E_PULUMI_VERSIONS  comma-separated versions, or "latest" (default: see Pulumi)
@@ -52,6 +63,10 @@
 //	DUSTPAN_TEST_S3_SECRET_KEY  S3-compatible server for E2E_BLOBS=s3; each run
 //	                           gets its own key prefix that is removed at the end
 //	                           (default: S3 runs are skipped)
+//	E2E_INSTANCES        number of server binaries of one installation, 1 to 9 (default 1);
+//	                     more than 1 needs PostgreSQL and runs the server binary
+//	E2E_HA_BACKUP_MB     megabytes of checkpoint data that the backup step of
+//	                     TestHighAvailability writes before the kill (default 500)
 //	E2E_CACHE_DIR        where CLI archives are cached (default: user cache dir)
 //	E2E_REPORT_DIR       where the request log and summary are written (default: ./report)
 //	E2E_SERVER           "binary" runs the real server binary with TLS flags (default:

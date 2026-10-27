@@ -4,6 +4,7 @@ package e2e
 
 import (
 	"cmp"
+	"context"
 	"io"
 	"net/http"
 	"slices"
@@ -20,12 +21,15 @@ const maxCapturedBody = 4096
 // directory is therefore git-ignored and must not be published for scenarios
 // that carry real secrets.
 type Entry struct {
-	Step          string `json:"step"`
-	Method        string `json:"method"`
-	Host          string `json:"host,omitempty"`
-	Path          string `json:"path"`
-	Query         string `json:"query,omitempty"`
-	UserAgent     string `json:"userAgent,omitempty"`
+	Step      string `json:"step"`
+	Method    string `json:"method"`
+	Host      string `json:"host,omitempty"`
+	Path      string `json:"path"`
+	Query     string `json:"query,omitempty"`
+	UserAgent string `json:"userAgent,omitempty"`
+	// Backend names the server instance that served the request, when more
+	// than one instance runs behind the proxy. It is empty for one server.
+	Backend       string `json:"backend,omitempty"`
 	Accept        string `json:"accept,omitempty"`
 	ContentType   string `json:"contentType,omitempty"`
 	RequestBody   string `json:"requestBody,omitempty"`
@@ -63,10 +67,39 @@ func (r *Recorder) Entries() []Entry {
 	return out
 }
 
+// backendKey is the context key of the backendNote that Middleware puts on
+// each request.
+type backendKey struct{}
+
+// backendNote carries the name of the instance that served a request from
+// the proxy handler back to the recorder. The handler that sets it runs in
+// the goroutine of the request, before ServeHTTP returns, so it needs no lock.
+type backendNote struct{ name string }
+
+// noteBackend names the instance that serves req. It does nothing for a
+// request that did not pass through Middleware.
+func noteBackend(req *http.Request, name string) {
+	if note, ok := req.Context().Value(backendKey{}).(*backendNote); ok {
+		note.name = name
+	}
+}
+
+// backendOf returns the name of the instance that served req, or "" when none
+// is noted.
+func backendOf(req *http.Request) string {
+	if note, ok := req.Context().Value(backendKey{}).(*backendNote); ok {
+		return note.name
+	}
+
+	return ""
+}
+
 // Middleware records each request handled by next.
 func (r *Recorder) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		seq, step := r.arrive()
+		note := &backendNote{name: ""}
+		req = req.WithContext(context.WithValue(req.Context(), backendKey{}, note))
 		in := &capture{inner: req.Body, kept: nil, n: 0}
 		req.Body = in
 		out := &captureWriter{ResponseWriter: w, kept: nil, n: 0, status: http.StatusOK}
@@ -113,6 +146,7 @@ func (r *Recorder) record(seq int, step string, req *http.Request, in *capture, 
 		Path:          req.URL.Path,
 		Query:         req.URL.RawQuery,
 		UserAgent:     req.UserAgent(),
+		Backend:       backendOf(req),
 		Accept:        req.Header.Get("Accept"),
 		ContentType:   req.Header.Get("Content-Type"),
 		RequestBody:   string(in.kept),
