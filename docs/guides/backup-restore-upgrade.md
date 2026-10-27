@@ -264,7 +264,11 @@ For each revocation that it applies again, the restore writes one entry in
 subject and the object of the original revocation and has the time of the
 original revocation. A record in the journal that the restore can not apply (a
 kind that the server does not know, or a target that is not an ID) changes
-nothing and gets an entry with the outcome `denied`.
+nothing and gets an entry with the outcome `denied`. The restore skips a
+disable that would leave the restored data with no enabled break-glass
+account. It keeps that account enabled and writes an entry with the outcome
+`denied` and the reason `principal.last-break-glass` (see
+[Keep a break-glass account](break-glass-accounts.md)).
 
 The server records only the revocations of the current stay in maintenance mode. A
 new enter starts a new stay. A revocation that you made in normal

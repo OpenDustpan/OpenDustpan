@@ -143,14 +143,29 @@ func testBreakGlassRuleIsForBreakGlassOnly(t *testing.T, s principal.Store) {
 	wantEnabled(t, s, "prn-3")
 }
 
-// testBreakGlassParallel proves that two writes at the same time that each
-// take one of the last two enabled break-glass accounts leave one enabled:
-// exactly one write is refused.
-func testBreakGlassParallel(t *testing.T, s principal.Store) {
-	t.Helper()
+// WriteHolder is an optional capability of a store for the parallel cases of
+// the break-glass rule. A store that runs one write at a time does not
+// implement it. storetest.AuditWriteHolder has the same methods.
+type WriteHolder interface {
+	// HoldAuditWrites makes each audit append of the store wait until release
+	// runs. Reads of the store do not wait. release can run more than once.
+	HoldAuditWrites(t *testing.T) (release func())
+	// WaitForLockWaiters returns when n transactions of the store wait for a
+	// lock.
+	WaitForLockWaiters(t *testing.T, n int)
+}
 
-	breakGlassPerson(t, s, "prn-1", "first")
-	breakGlassPerson(t, s, "prn-2", "second")
+// runParallel runs the two writes at the same time and returns their errors.
+//
+// When the store is a WriteHolder, the case holds the audit appends until both
+// writes wait for a lock. A write appends its audit entry after its statement.
+// So when the store does not serialize the two writes, both statements see the
+// other account as enabled before either one commits, and both succeed: the
+// case fails every time, not only on a lucky interleaving. When the store
+// serializes them, one write waits for the lock of the other and the case
+// passes.
+func runParallel(t *testing.T, s principal.Store, writes [2]func() error) []error {
+	t.Helper()
 
 	var (
 		wg      sync.WaitGroup
@@ -158,9 +173,11 @@ func testBreakGlassParallel(t *testing.T, s principal.Store) {
 		start   = make(chan struct{})
 	)
 
-	writes := [2]func() error{
-		func() error { return s.DisablePrincipal(t.Context(), "prn-1", entry()) },
-		func() error { return s.DisablePrincipal(t.Context(), "prn-2", entry()) },
+	release := func() {}
+
+	holder, holds := s.(WriteHolder)
+	if holds {
+		release = holder.HoldAuditWrites(t)
 	}
 
 	for i := range writes {
@@ -172,9 +189,32 @@ func testBreakGlassParallel(t *testing.T, s principal.Store) {
 	}
 
 	close(start)
+
+	if holds {
+		holder.WaitForLockWaiters(t, len(writes))
+	}
+
+	release()
 	wg.Wait()
 
-	assertOneRefused(t, "parallel disables of the last two break-glass accounts", results[:])
+	return results[:]
+}
+
+// testBreakGlassParallel proves that two writes at the same time that each
+// take one of the last two enabled break-glass accounts leave one enabled:
+// exactly one write is refused.
+func testBreakGlassParallel(t *testing.T, s principal.Store) {
+	t.Helper()
+
+	breakGlassPerson(t, s, "prn-1", "first")
+	breakGlassPerson(t, s, "prn-2", "second")
+
+	results := runParallel(t, s, [2]func() error{
+		func() error { return s.DisablePrincipal(t.Context(), "prn-1", entry()) },
+		func() error { return s.DisablePrincipal(t.Context(), "prn-2", entry()) },
+	})
+
+	assertOneRefused(t, "parallel disables of the last two break-glass accounts", results)
 
 	if got := countEnabled(t, s, "prn-1", "prn-2"); got != 1 {
 		t.Fatalf("enabled break-glass accounts after the parallel disables = %d, want 1", got)
@@ -189,29 +229,12 @@ func testBreakGlassParallelDelete(t *testing.T, s principal.Store) {
 	breakGlassPerson(t, s, "prn-1", "first")
 	breakGlassPerson(t, s, "prn-2", "second")
 
-	var (
-		wg      sync.WaitGroup
-		results [2]error
-		start   = make(chan struct{})
-	)
-
-	writes := [2]func() error{
+	results := runParallel(t, s, [2]func() error{
 		func() error { return s.DisablePrincipal(t.Context(), "prn-1", entry()) },
 		func() error { return s.DeletePrincipal(t.Context(), "prn-2", entry()) },
-	}
+	})
 
-	for i := range writes {
-		wg.Go(func() {
-			<-start
-
-			results[i] = writes[i]()
-		})
-	}
-
-	close(start)
-	wg.Wait()
-
-	assertOneRefused(t, "a disable and a delete of the last two break-glass accounts", results[:])
+	assertOneRefused(t, "a disable and a delete of the last two break-glass accounts", results)
 
 	if got := countEnabled(t, s, "prn-1", "prn-2"); got != 1 {
 		t.Fatalf("enabled break-glass accounts after the parallel writes = %d, want 1", got)

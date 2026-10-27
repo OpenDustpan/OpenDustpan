@@ -2,8 +2,9 @@
 
 A break-glass account is an account of one named person that does not
 depend on the identity provider. It is the way in when the identity
-provider is not available. Each installation keeps at least two, unless a
-self-hosted operator sets the recovery mode `none`.
+provider is not available. Keep two enabled accounts, unless a self-hosted
+operator sets the recovery mode `none`. The server enforces a lower bound
+only: at least one enabled account stays.
 
 ## The rule
 
@@ -50,5 +51,14 @@ The enable of a disabled account is not a revocation. It stays refused with
 
 The inactivity disable never disables a break-glass account. The expiry of a
 temporary administrator ends a temporary administrator only, and a temporary
-administrator is never a break-glass account. The two routes above are the
-other ways to disable or delete a principal, and both follow the rule.
+administrator is never a break-glass account.
+
+A restore applies again the disables that you made in maintenance mode.
+This can disable more accounts than the backup allows, for example when you
+add a third account after the backup and then disable the first two. The
+restore keeps the last enabled break-glass account of the restored data
+enabled. It skips the disable that would leave none, and it writes an audit
+entry in the scope `@server` with the action `maintenance:replay-revocation`,
+the outcome `denied` and the reason `principal.last-break-glass`. Read this
+entry after a restore, then disable the account again when a second account
+exists.

@@ -3151,9 +3151,12 @@ type DeletePrincipalParams struct {
 // partial index of the live rows can serve this lookup by ID.
 // Only NULL reads as live: a stored -1 or 0 does not, as with IS NULL.
 // An enabled break-glass account stays while no other enabled break-glass
-// account exists: the condition is in the write, so the check and the change
-// are one statement. A disabled account is not the last enabled one, so its
-// end is allowed.
+// account exists. A disabled account is not the last enabled one, so its end
+// is allowed. The condition alone does not stop two writes at the same time:
+// under READ COMMITTED each statement sees the other account as enabled, and
+// both succeed. The caller must hold the advisory lock of the server audit
+// scope (LockServerAuditScope) first. The lock serializes the writes, and the
+// statement of the second one reads the commit of the first.
 func (q *Queries) DeletePrincipal(ctx context.Context, arg DeletePrincipalParams) (int64, error) {
 	result, err := q.db.Exec(ctx, deletePrincipal, arg.DeletedAtMs, arg.ID, arg.Namespace)
 	if err != nil {
@@ -3579,8 +3582,12 @@ type DisablePrincipalParams struct {
 
 // Disables the principal. A principal that is disabled or ended stays as it
 // is. The write only narrows access. An enabled break-glass account stays
-// enabled while no other enabled break-glass account exists: the condition is
-// in the write, so the check and the change are one statement.
+// enabled while no other enabled break-glass account exists. The condition
+// alone does not stop two writes at the same time: under READ COMMITTED each
+// statement sees the other account as enabled, and both succeed. The caller
+// must hold the advisory lock of the server audit scope
+// (LockServerAuditScope) first. The lock serializes the writes, and the
+// statement of the second one reads the commit of the first.
 func (q *Queries) DisablePrincipal(ctx context.Context, arg DisablePrincipalParams) (int64, error) {
 	result, err := q.db.Exec(ctx, disablePrincipal, arg.DisabledAtMs, arg.ID)
 	if err != nil {

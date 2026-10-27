@@ -1413,9 +1413,12 @@ WHERE id = $3 AND namespace = $4 AND num_nulls(deleted_at_ms) = 1;
 -- partial index of the live rows can serve this lookup by ID.
 -- Only NULL reads as live: a stored -1 or 0 does not, as with IS NULL.
 -- An enabled break-glass account stays while no other enabled break-glass
--- account exists: the condition is in the write, so the check and the change
--- are one statement. A disabled account is not the last enabled one, so its
--- end is allowed.
+-- account exists. A disabled account is not the last enabled one, so its end
+-- is allowed. The condition alone does not stop two writes at the same time:
+-- under READ COMMITTED each statement sees the other account as enabled, and
+-- both succeed. The caller must hold the advisory lock of the server audit
+-- scope (LockServerAuditScope) first. The lock serializes the writes, and the
+-- statement of the second one reads the commit of the first.
 UPDATE principals SET deleted_at_ms = $1
 WHERE principals.id = $2 AND principals.namespace = $3 AND num_nulls(principals.deleted_at_ms) = 1
   AND (NOT principals.break_glass OR principals.disabled_at_ms IS NOT NULL OR EXISTS (
@@ -2458,8 +2461,12 @@ WHERE principal_id = $2 AND ended_at_ms IS NULL;
 -- name: DisablePrincipal :execrows
 -- Disables the principal. A principal that is disabled or ended stays as it
 -- is. The write only narrows access. An enabled break-glass account stays
--- enabled while no other enabled break-glass account exists: the condition is
--- in the write, so the check and the change are one statement.
+-- enabled while no other enabled break-glass account exists. The condition
+-- alone does not stop two writes at the same time: under READ COMMITTED each
+-- statement sees the other account as enabled, and both succeed. The caller
+-- must hold the advisory lock of the server audit scope
+-- (LockServerAuditScope) first. The lock serializes the writes, and the
+-- statement of the second one reads the commit of the first.
 UPDATE principals SET disabled_at_ms = sqlc.arg('disabled_at_ms')::bigint,
   updated_at_ms = sqlc.arg('disabled_at_ms')::bigint
 WHERE principals.id = sqlc.arg('id') AND principals.deleted_at_ms IS NULL AND principals.disabled_at_ms IS NULL

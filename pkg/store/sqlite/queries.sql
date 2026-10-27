@@ -1234,9 +1234,10 @@ WHERE id = ? AND namespace = ? AND deleted_at_ms IS NULL;
 
 -- name: DeletePrincipal :execrows
 -- Ends the principal. An enabled break-glass account stays while no other
--- enabled break-glass account exists: the condition is in the write, so the
--- check and the change are one statement. A disabled account is not the
--- last enabled one, so its end is allowed.
+-- enabled break-glass account exists. A disabled account is not the last
+-- enabled one, so its end is allowed. SQLite runs one write transaction at a
+-- time, so the check and the change see one state: the second of two writes
+-- at the same time reads the commit of the first.
 UPDATE principals SET deleted_at_ms = ?
 WHERE principals.id = ? AND principals.namespace = ? AND principals.deleted_at_ms IS NULL
   AND (principals.break_glass = 0 OR principals.disabled_at_ms IS NOT NULL OR EXISTS (
@@ -2231,8 +2232,9 @@ WHERE principal_id = ? AND ended_at_ms IS NULL;
 -- name: DisablePrincipal :execrows
 -- Disables the principal. A principal that is disabled or ended stays as it
 -- is. The write only narrows access. An enabled break-glass account stays
--- enabled while no other enabled break-glass account exists: the condition is
--- in the write, so the check and the change are one statement.
+-- enabled while no other enabled break-glass account exists. SQLite runs one
+-- write transaction at a time, so the check and the change see one state: the
+-- second of two writes at the same time reads the commit of the first.
 UPDATE principals SET disabled_at_ms = CAST(sqlc.arg('disabled_at_ms') AS INTEGER),
   updated_at_ms = CAST(sqlc.arg('disabled_at_ms') AS INTEGER)
 WHERE principals.id = sqlc.arg('id') AND principals.deleted_at_ms IS NULL AND principals.disabled_at_ms IS NULL

@@ -96,6 +96,7 @@ func RunRevocations(t *testing.T, newStore RevocationFactory) {
 		{name: "a restore refuses hostile journal rows and applies the rest", test: testReplayRefusesHostileRows},
 		{name: "the sweep of temporary administrators expires in maintenance mode", test: testTempAdminSweepRuns},
 		{name: "the last break-glass account stays in maintenance mode", test: testBreakGlassInMaintenance},
+		{name: "a restore replays a disable but keeps one break-glass account", test: testRestoreKeepsOneBreakGlass},
 	}
 
 	for _, tc := range cases {

@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/principal"
 )
@@ -61,4 +62,81 @@ func testBreakGlassInMaintenance(t *testing.T, s RevocationStore) {
 	if err != nil || !got.DisabledAt.IsZero() {
 		t.Fatalf("last break-glass account after the refused disable = %+v, %v; want present and enabled", got, err)
 	}
+}
+
+// testRestoreKeepsOneBreakGlass proves that the replay of a disable never
+// leaves the installation with no enabled break-glass account. The backup
+// holds the accounts A and B. Later the live data gets C, and in maintenance
+// mode A and B are disabled, which the store allows while C is enabled. The
+// restore replaces the data with the backup, which holds no C, and replays
+// both disables. The replay skips the second one: B stays enabled, and the
+// audit log holds one entry with the outcome denied and the reason
+// principal.last-break-glass.
+func testRestoreKeepsOneBreakGlass(t *testing.T, s RevocationStore) {
+	t.Helper()
+
+	ctx := t.Context()
+
+	revBreakGlass(t, s, "prn-bg-a")
+	revBreakGlass(t, s, "prn-bg-b")
+
+	export := revTakeExport(t, s)
+
+	revBreakGlass(t, s, "prn-bg-c")
+	revEnter(t, s)
+
+	for i, id := range []string{"prn-bg-a", "prn-bg-b"} {
+		err := s.DisablePrincipal(ctx, id, revEntry(principal.Ref(id), revAt(10+i)))
+		if err != nil {
+			t.Fatalf("disable of %s in maintenance mode: %v", id, err)
+		}
+	}
+
+	revStageAndApply(t, s, export)
+
+	if countEnabledBreakGlass(t, s, "prn-bg-a", "prn-bg-b") != 1 {
+		t.Fatal("enabled break-glass accounts after the restore, want exactly one")
+	}
+
+	entries := revReplayEntries(t, s)
+	if len(entries) != 2 {
+		t.Fatalf(
+			"replay audit entries = %d, want 2: the disable that applied and the one that was skipped",
+			len(entries),
+		)
+	}
+
+	applied, kept := entries[0], entries[1]
+	if applied.Outcome != audit.OutcomeSuccess || applied.Reason != "" {
+		t.Fatalf("entry of the disable that applied = %+v, want success with no reason", applied)
+	}
+
+	if kept.Outcome != audit.OutcomeDenied || kept.Reason != maintenance.ReasonLastBreakGlass ||
+		kept.Object != principal.Ref("prn-bg-b") {
+		t.Fatalf("entry of the skipped disable = outcome %q, reason %q, object %q; want denied, %q, %q",
+			kept.Outcome, kept.Reason, kept.Object, maintenance.ReasonLastBreakGlass, principal.Ref("prn-bg-b"))
+	}
+}
+
+// countEnabledBreakGlass returns how many of the principals ids exist and are
+// enabled.
+func countEnabledBreakGlass(t *testing.T, s RevocationStore, ids ...string) int {
+	t.Helper()
+
+	n := 0
+
+	for _, id := range ids {
+		got, err := s.GetPrincipal(t.Context(), id)
+
+		switch {
+		case errors.Is(err, principal.ErrNotFound):
+		case err != nil:
+			t.Fatalf("get principal %q: %v", id, err)
+		case got.DisabledAt.IsZero():
+			n++
+		default:
+		}
+	}
+
+	return n
 }

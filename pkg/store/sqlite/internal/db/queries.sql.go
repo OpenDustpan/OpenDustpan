@@ -2899,9 +2899,10 @@ type DeletePrincipalParams struct {
 }
 
 // Ends the principal. An enabled break-glass account stays while no other
-// enabled break-glass account exists: the condition is in the write, so the
-// check and the change are one statement. A disabled account is not the
-// last enabled one, so its end is allowed.
+// enabled break-glass account exists. A disabled account is not the last
+// enabled one, so its end is allowed. SQLite runs one write transaction at a
+// time, so the check and the change see one state: the second of two writes
+// at the same time reads the commit of the first.
 func (q *Queries) DeletePrincipal(ctx context.Context, arg DeletePrincipalParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, deletePrincipal, arg.DeletedAtMs, arg.ID, arg.Namespace)
 	if err != nil {
@@ -3333,8 +3334,9 @@ type DisablePrincipalParams struct {
 
 // Disables the principal. A principal that is disabled or ended stays as it
 // is. The write only narrows access. An enabled break-glass account stays
-// enabled while no other enabled break-glass account exists: the condition is
-// in the write, so the check and the change are one statement.
+// enabled while no other enabled break-glass account exists. SQLite runs one
+// write transaction at a time, so the check and the change see one state: the
+// second of two writes at the same time reads the commit of the first.
 func (q *Queries) DisablePrincipal(ctx context.Context, arg DisablePrincipalParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, disablePrincipal, arg.DisabledAtMs, arg.ID)
 	if err != nil {
