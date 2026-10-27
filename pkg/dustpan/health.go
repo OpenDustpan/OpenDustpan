@@ -3,10 +3,12 @@ package dustpan
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"opendustpan.org/opendustpan/internal/errcode"
@@ -44,6 +46,10 @@ type readiness struct {
 	// parts hold the checks of each component of the process. With none, the
 	// probe answers for the store and the blob store only.
 	parts []componentChecks
+	// draining is true from the start of the drain on. A draining process
+	// answers 503 and runs no check, so a load balancer stops its requests
+	// while the requests in flight complete.
+	draining atomic.Bool
 }
 
 // The names of the checks and the states in the readiness body.
@@ -51,6 +57,7 @@ const (
 	checkStore        = "store"
 	checkBlob         = "blob"
 	checkClaimLoop    = "claim-loop"
+	checkDraining     = "draining"
 	infoAuditChain    = "audit-chain"
 	chainAdmits       = "admits"
 	chainWaits        = "waiting"
@@ -108,6 +115,7 @@ func newReadinessHandler(
 		failures: failures,
 		logger:   logger,
 		parts:    nil,
+		draining: atomic.Bool{},
 	}
 }
 
@@ -122,7 +130,12 @@ func newReadinessHandler(
 // processes to stay in the pool of the Service.
 func newComponentReadiness(cfg readinessSettings) *readiness {
 	rd := &readiness{
-		checks: nil, timeout: cfg.timeout, failures: cfg.failures, logger: cfg.logger, parts: nil,
+		checks:   nil,
+		timeout:  cfg.timeout,
+		failures: cfg.failures,
+		logger:   cfg.logger,
+		parts:    nil,
+		draining: atomic.Bool{},
 	}
 
 	if cfg.components.Has(ComponentAPI) {
@@ -161,6 +174,12 @@ func newComponentReadiness(cfg readinessSettings) *readiness {
 
 // ServeHTTP implements http.Handler.
 func (rd *readiness) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if rd.draining.Load() {
+		rd.writeDraining(w, r)
+
+		return
+	}
+
 	if len(rd.parts) > 0 {
 		rd.serveComponents(w, r, rd.parts)
 
@@ -181,6 +200,12 @@ func (rd *readiness) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // ServeOne serves GET /health/ready/{component}. A component that the
 // process does not run answers 404.
 func (rd *readiness) ServeOne(w http.ResponseWriter, r *http.Request) {
+	if rd.draining.Load() {
+		rd.writeDraining(w, r)
+
+		return
+	}
+
 	name := Component(r.PathValue("component"))
 
 	for _, part := range rd.parts {
@@ -195,6 +220,18 @@ func (rd *readiness) ServeOne(w http.ResponseWriter, r *http.Request) {
 		w, http.StatusNotFound, "not found: this process does not run this component",
 		routeAnswer(errcode.ServerComponentNotFound),
 	)
+}
+
+// drain makes every later probe answer 503 with the failed check "draining".
+func (rd *readiness) drain() {
+	rd.draining.Store(true)
+}
+
+// writeDraining answers a probe of a draining process. It is not a failure of
+// a dependency, so it does not count on the failure counter.
+func (rd *readiness) writeDraining(w http.ResponseWriter, r *http.Request) {
+	rd.writeJSON(r.Context(), w, http.StatusServiceUnavailable,
+		readinessDoc{Status: statusUnavailable, Failed: []string{checkDraining}})
 }
 
 // readinessDoc is the body of the readiness probe. Failed names the checks
@@ -316,4 +353,26 @@ func pingAll(ctx context.Context, checks []readinessCheck, timeout time.Duration
 	}
 
 	return failed
+}
+
+// WithDrainPeriod sets the drain: the time between the stop signal and the
+// start of the shutdown. In it, GET /health/ready answers 503 and the server
+// serves all other requests. The default is 0: the server shuts down at
+// once, and GET /health/ready still answers 503 from the stop signal on. The
+// binary sets DefaultDrainPeriod and has no flag for it. NewServer fails with
+// ErrInvalidOption for a value below 0 or above 15 seconds: the drain and the
+// shutdown together must stay inside the grace period of the pod.
+func WithDrainPeriod(period time.Duration) Option {
+	return func(o *settings) { o.drainPeriod = period }
+}
+
+// checkDrainPeriod refuses a drain that is negative or that, with the
+// shutdown, passes maxStopTime.
+func checkDrainPeriod(period time.Duration) error {
+	if period < 0 || period+shutdownTimeout > maxStopTime {
+		return fmt.Errorf("%w: WithDrainPeriod needs 0 to %s, got %s",
+			ErrInvalidOption, maxStopTime-shutdownTimeout, period)
+	}
+
+	return nil
 }

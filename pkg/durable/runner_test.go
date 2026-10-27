@@ -1157,3 +1157,34 @@ func stepNames(op durable.Operation) []string {
 
 	return names
 }
+
+// TestRunnerDoesNotReleaseAClaimAnotherInstanceTook proves the fence at a
+// stop: when the stop signal arrives together with the answer that the claim
+// is lost, the runner writes nothing, so the instance that took the operation
+// keeps its claim.
+func TestRunnerDoesNotReleaseAClaimAnotherInstanceTook(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	store := newCountingStore(durabletest.NewMem().Store())
+	store.extend = func(context.Context, durable.Claim, time.Duration) (durable.Claim, error) {
+		cancel()
+
+		return durable.Claim{Operation: "", Owner: "", Token: 0, ExpiresAt: time.Time{}}, durable.ErrClaimLost
+	}
+
+	started := make(chan struct{})
+	op := start(t, store, "k")
+
+	if err := newTestRunner(t, store, "a", blockUntilDone("two", started)).RunOnce(ctx); err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
+
+	got := mustGet(t, store, op.ID)
+	if store.ends() != 0 || got.Claim.Owner != "a" || got.State != durable.StateRunning {
+		t.Fatalf("after a stop with a lost claim: %d end writes, operation %+v; want no write and the claim untouched",
+			store.ends(), got)
+	}
+}

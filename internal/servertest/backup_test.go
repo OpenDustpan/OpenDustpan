@@ -353,3 +353,57 @@ func TestBackupTakeoverAfterKill(t *testing.T) {
 		t.Fatalf("check backup after the takeover: %v", err)
 	}
 }
+
+// TestBackupTakeoverAfterGracefulStop proves that a stop signal on the
+// instance that runs a backup gives the claim to the other instance at
+// once. The lease is far longer than the limit, so only the release of the
+// claim at the stop can explain the time. The release does not count as an
+// expiry, and the target holds one complete backup.
+func TestBackupTakeoverAfterGracefulStop(t *testing.T) {
+	t.Parallel()
+
+	const (
+		longLease = 30 * time.Second
+		limit     = 5 * time.Second
+	)
+
+	target := newGatedTarget(t)
+	c := servertest.Start(t, 2, dustpan.WithBackupTarget(target, "test"), dustpan.WithOperationLease(longLease))
+
+	id := startBackup(t, c, 0)
+	target.waitEntered(t, c)
+
+	holder := backupOperation(t, c, 0)
+	if holder.State != durable.StateRunning {
+		t.Fatalf("operation state = %s while the backup runs, want running", holder.State)
+	}
+
+	victim, survivor := 0, 1
+	if holder.Claim.Owner == servertest.InstanceID(1) {
+		victim, survivor = 1, 0
+	}
+
+	signaledAt := time.Now()
+	wait := c.Signal(t, victim)
+
+	claimedAfter := waitSurvivorClaim(t, c, survivor, signaledAt)
+	if claimedAfter > limit {
+		t.Fatalf("the survivor claimed the operation %v after the stop signal, want within %v", claimedAfter, limit)
+	}
+
+	wait()
+	target.release()
+
+	if got := waitBackup(t, c, survivor, id, 30*time.Second); got.State != string(backup.StateSucceeded) {
+		t.Fatalf("backup ended %q (%s) after the takeover, want succeeded", got.State, got.Error)
+	}
+
+	op := endedBackupOperation(t, c, survivor)
+	if op.State != durable.StateSucceeded || op.Attempt < 2 || op.Expiries != 0 {
+		t.Fatalf("operation = %+v, want succeeded after a release with no expiry", op)
+	}
+
+	if err := backup.Check(t.Context(), target.Store, backup.ID(id)); err != nil {
+		t.Fatalf("check backup after the takeover: %v", err)
+	}
+}
