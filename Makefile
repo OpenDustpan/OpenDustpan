@@ -184,7 +184,7 @@ test-s3: ## Go tests in pkg/blob/s3 against a live S3-compatible server (needs D
 e2e: ## Drive real Pulumi CLI and OpenTofu versions against the server (downloads CLIs; see e2e/doc.go). Not part of check; CI runs it as its own job.
 	go test -tags e2e $(RACE_TEST_FLAGS) -count=1 -parallel 16 -timeout 60m ./e2e/...
 
-e2e-ha: ## Drive three server binaries of one installation behind a round-robin proxy on PostgreSQL (needs DUSTPAN_TEST_POSTGRES_URL; E2E_HA_BACKUP_MB sets the backup size; see e2e/doc.go). Not part of check; the e2e-ha-nightly workflow runs it.
+e2e-ha: ## Drive three server binaries of one installation behind a round-robin proxy on PostgreSQL (needs DUSTPAN_TEST_POSTGRES_URL; E2E_HA_BACKUP_MB sets the backup size; see e2e/doc.go). Not part of check; the e2e-ha-nightly workflow (e2e/e2e-ha-nightly.workflow.yml) runs it.
 	E2E_INSTANCES=3 go test -tags e2e $(RACE_TEST_FLAGS) -count=1 -parallel 16 -timeout 60m -run '^TestHighAvailability$$' ./e2e/
 
 CLIENTGEN := go run ./cmd/clientgen -target typescript -description internal/api/apidesc/openapi.json -out clients/typescript
