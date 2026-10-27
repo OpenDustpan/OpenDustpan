@@ -841,8 +841,12 @@ The owner keeps these. Each recommendation is the author's.
 1. Accept a tracing feature at all, and so supersede ADR 32 decision 1?
    Recommendation: yes, traces only, export off by default.
 2. The code: B1 (OpenTelemetry Go SDK), B2 (our own OTLP/HTTP JSON
-   exporter) or B3 (none)? A measure of the binary size with B1 is the
-   first step if the owner considers B1. Recommendation: B2, and so
+   exporter) or B3 (none)? Measured on 2026-10-27 with Go 1.27.3 and
+   OpenTelemetry v1.47.0, a small server program with `otlptracehttp` and
+   `sdk/trace` grew from 5.4 MB to 21.2 MB (stripped: from 3.6 MB to 14.5
+   MB). The package count of the build grew from 190 to 395. The program is
+   not the server, and it has no `otel/metric` package. A measure of the
+   server itself is still open. Recommendation: B2, and so
    supersede ADR 32 decision 1, with a stdlib exporter as in ADR 60
    decision 12.
 3. Spans of the tool: through the launcher relay (A1.2) and the Pulumi
@@ -887,7 +891,9 @@ The owner keeps these. Each recommendation is the author's.
     resources? We found no span for each resource in the OpenTofu source,
     but each provider call and each HTTP request may have one, and the
     Pulumi CLI also gets spans from each provider plugin. Recommendation:
-    measure in e2e with a fixture of 10,000 resources before the ADR.
+    add an e2e fixture with 10,000 resources. It counts the spans of each job
+    and of each step. The owner sets the bounds from that count before the
+    ADR. Until then, the bounds of section F are proposals.
 
 ## Proposed glossary lines
 

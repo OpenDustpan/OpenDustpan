@@ -95,7 +95,7 @@ is not a job: the server schedules no work and holds no claim.
   with no shell, and masks each secret in its output with `[masked]`.
 - **ADR 213 decision 10 and ADR 224 decision 16.** Manual locks exist. The
   gates of `state.write` run before a write from a team's own CLI or CI.
-- **ADR 223 decisions 4 and 6.** An access limit is one Cedar `forbid`
+- **ADR 223 decisions 1 and 6.** An access limit is one Cedar `forbid`
   policy. It holds for a token that a trust rule issued (credential kind
   `trust-token`). A trust rule still decides whether the server issues a
   token, and never passes a limit. So an installation can already narrow
@@ -138,7 +138,7 @@ is not a job: the server schedules no work and holds no claim.
   recommendation needs none: the route declares that it takes no key.
 - **ADR 203 decision 1**, to add the consumer `ci` (C1). The consumer `ci`
   takes trust tokens only.
-- **ADR 205 decision 3**, only if the owner accepts the `ci_*` claims (B6).
+- **ADR 205 decision 3**, only if the owner picks B6.2 (the `ci_*` claims, and the unit claims when the scope holds one unit).
   The claim set is a one-way door, so this is an open question, not a
   recommendation for slice 1.
 
@@ -434,6 +434,9 @@ that are the same for each platform:
   the table stays small. Fallback if the owner wants these tables in the
   backup list: after a restore the server refuses each CI token with an
   `iat` before the time of the restore.
+- **Namespace export and import.** Proposal: the `jti` table is not part of
+  them. It is keyed by issuer and `jti`, not by namespace. The ADRs read for
+  this RFC define no export of one namespace. ADR 42 exports tables.
 - **The counter of the exchange rate limit** (G1) is a windowed counter in
   the database, shared by all instances, as the sign-in failure budget is
   (ADR 72 decision 8). A counter in the memory of one instance would give
@@ -452,8 +455,14 @@ break a GitLab job that starts the shim three times (`init`, `plan -out`,
 1. **One start runs a command list.** `dustpan-ci run --unit U -- tofu init
    -- tofu plan -out=p -- tofu apply p` (the exact form is for the design).
    One exchange, one open, one CI run record. The commands run in order, and
-   the shim stops at the first failure. The trust token never leaves the
-   memory of the shim, and no later start reads it. Against: the team must
+   the shim stops at the first failure. The trust token stays in the memory
+   of the shim. The OpenTofu credentials helper answers it from that memory
+   (C3). For Pulumi, the shim writes it to the credentials file of a new
+   `PULUMI_HOME`, on a memory-backed directory when one exists. The shim
+   deletes that file when the tool ends, also on a signal (C3). No later start
+   reads the token. This differs from B3.3, which keeps the token on disk
+   between the starts. The Pulumi file exists only while the tool runs.
+   Against: the team must
    write the steps of the job as one call.
 2. **An `iat` window for each platform.** 10 minutes for GitHub Actions. For
    GitLab CI, the window is the `exp` of the token (at most 6 hours). The
@@ -482,7 +491,7 @@ stores the SHA-256 of the nonce with the `jti` row. The rules:
 - A second exchange with the same `jti` and the same nonce, in 5 minutes
   from the first, is the **one exception** to "each `jti` exchanges once".
   It gets a new trust token for the same principal and the same token
-  family, and the server revokes the trust token of the first answer. The
+  family, and the server revokes each earlier trust token of the family. The
   token family is the ID of the `jti` row. The server stores no token.
 - **At most 3 retries** for each `jti`. A fourth is refused with an audit
   entry, as is a retry after the 5 minutes.
@@ -525,10 +534,20 @@ makes a new CI run record and writes its own audit entry (ADR 203 decision
 outcome `unknown` when the trust token ends (F). The e2e suite tests a lost
 answer of the exchange and of the open with a proxy that drops it.
 
+**Which rule wins for consumer `ci`.** Two ADRs answer an open with no
+session in two ways. ADR 203 decision 12 says that such an open ignores the
+`Idempotency-Key`. ADR 210 decision 6 says that a route that does not take the
+key answers 400, and that the server never ignores the key without an error.
+ADR 203 names ADR 210 decision 6 as the amendment of its decision 12 in its
+status line, so ADR 210 decision 6 is the newer decision on this point. This
+RFC follows it: `ci-runs/open` declares that it takes no key, and a request
+with the key answers 400. The body text of ADR 203 decision 12 still says that
+it ignores the key. The owner confirms this reading.
+
 **B4. The scope of a trust rule.** ADR 54 gives the matched principal all
 its grants. A CI token for one repository then reaches every unit that the
 principal can reach. ADR 223 already lets an installation narrow every
-trust token with an access limit (decisions 4 and 6). Options:
+trust token with an access limit (decisions 1 and 6). Options:
 
 1. No scope in the rule. One principal for each repository and its grants.
    An administrator can add access limits.
@@ -546,7 +565,7 @@ trust token with an access limit (decisions 4 and 6). Options:
 the scope of the rule travels with the rule, so the person who makes the
 rule in the console sets the scope in the same form and cannot forget it. An
 access limit is a separate object with its own scope and its own action
-(ADR 223 decision 9), so it suits an administrator who wants one ceiling
+(ADR 223 decisions 2 and 9), so it suits an administrator who wants one ceiling
 for many rules. Each stops the attack alone (ADR 250). If the owner wants
 one mechanism only, B4.3 is smaller (no amendment of ADR 54) but a rule with
 no limit has no scope. B4.2 is still recommended as the default, because a
@@ -653,11 +672,11 @@ approvals in a team's own CI (I).
 
 | Kind of value | How the shim gives it | Out of the CI job's environment |
 | --- | --- | --- |
-| The OpenDustpan token for the tool and the provider | OpenTofu: a CLI configuration that names the credentials helper `dustpan`, which answers the trust token for the server host only (as `launcher.OpenTofuAnswer`). Pulumi: the credentials file of a new `PULUMI_HOME`. | yes |
+| The OpenDustpan token for the tool and the provider | OpenTofu: a CLI configuration that names the credentials helper `dustpan`, which answers the trust token for the server host only (as `launcher.OpenTofuAnswer`), from memory. Pulumi: the credentials file of a new `PULUMI_HOME`, on a memory-backed directory when one exists, deleted when the tool ends, also on a signal. | yes |
 | `exports.files`, and each credential file of a block | files of mode 0600 under a directory of mode 0700, on a memory-backed directory when one exists. The shim deletes them when the tool ends, also on a signal. | yes |
 | `exports.variables`, plain | variables of the tool process | yes |
 | `exports.variables`, secret | refused in slice 1 (question 5) | yes |
-| `exports.opentofu` | a variables file in the same directory, passed as `-var-file=<path>` (see below) | yes |
+| `exports.opentofu` | a variables file in the same directory, passed as `-var-file=<path>` (see below). A secret leaf is refused in slice 1 (see the proposal below). | yes |
 | `exports.pulumi` | a stack settings file with `environment` entries, with the planned `launcher.PulumiConfigFile` (it does not exist yet) | yes |
 
 - **How the variables file reaches the tool.** The shim must add
@@ -672,10 +691,11 @@ approvals in a team's own CI (I).
      accepts a directory name only from an allowlist (`[A-Za-z0-9._/-]`),
      else it stops (exit code 2). A hostile path then cannot add an
      argument.
-  2. **Append, never replace.** If the CI job already sets
-     `TF_CLI_ARGS_<command>`, the shim appends its flag after the existing
-     value. It never drops a flag of the team. The shim places its flag
-     first, so a flag of the team or on the command line comes later (see 6).
+  2. **Keep the existing value.** If the CI job already sets
+     `TF_CLI_ARGS_<command>`, the shim keeps that value and places its flag
+     first, before the existing value. It never drops a flag of the team.
+     A flag of the team in that value comes later, so it takes precedence
+     over the flag of the shim (see 6).
   3. **Which commands.** The shim sets the variable for each command that
      reads variables: `plan`, `apply`, `destroy`, `refresh`, `import`,
      `console` and `test`. The e2e suite checks each one. A command that
@@ -701,7 +721,9 @@ approvals in a team's own CI (I).
      the arguments to find the subcommand in the fallback way, and (a)
      is only a documented limit, not a promise. The docs say that the shim
      is not a boundary (H): a team that edits its own command line can also
-     skip the shim.
+     skip the shim. Option (b) reads `-var` and `-var-file` and parses the
+     team's var files. That parsing reads an untrusted format, so it is
+     security code (H). It needs its own tests, one for each step (ADR 250).
   E2e item: the OpenTofu docs say that an ephemeral variable "must also be
   set when running tofu apply" with a saved plan file. They do not say
   whether `tofu apply <saved plan>` refuses `-var-file` for a variable that
@@ -722,6 +744,28 @@ approvals in a team's own CI (I).
   209 decision 5, which this RFC amends for CI-run trust tokens only). The
   shim already wrote them, and the CLI would write the files to a
   temporary directory that it does not delete.
+- **Secret leaves in `exports.opentofu` (proposal).** A non-ephemeral
+  variable goes to the plan and to the state in plain text (D). A plan that a
+  CI job saves stays in the team's CI, and the server does not seal that plan
+  file. The shim cannot see whether a variable is ephemeral (question 5).
+  **Proposal:** in slice 1, the server refuses a value that the profile marks
+  secret in `exports.opentofu` for a CI run. The open fails closed and names
+  the profile entry, and the shim stops before the tool starts. The cost: a
+  team with ephemeral variables cannot use this path in slice 1. The owner
+  can accept that cost, or accept a documented limit instead.
+
+**C4. The token of the tool (proposal).** The tool gets the trust token that
+the shim gets. The same token can call `ci-runs/open` and update the CI run
+record (G1). So the tool holds more rights than it needs. Options:
+
+1. **One token for the shim and the tool.** The design of B3 and C3.
+2. **A second, narrower token for the tool.** It covers the state and lock
+   actions of the unit only. The open and record token stays in the memory of
+   the shim. This design does not say how the server issues the second token.
+
+**Proposal:** option 2. The e2e suite checks that each step of the tool works
+with the narrow token, and that the narrow token is refused on the open and
+record routes.
 
 ### D. Secrets out of state: what can stay out, what cannot
 
@@ -838,8 +882,8 @@ makes no CI run record. It makes a **token family**: the ID of the `jti`
 row (B3). The record stores the family ID.
 
 A CI run is closed only by the **current trust token of the CI run**: the
-trust token that is the newest of its family. After a nonce retry (B3) the
-first token is revoked, so only the token of the last answer can update the
+trust token that is the newest of its family. After a nonce retry (B3), each
+earlier token is revoked, so only the token of the last answer can update the
 record. The shim sends the record when the tool ends, also on a failure.
 A CI run that dies still has its open record. A record that is not closed
 after its trust token ends gets the outcome `unknown`. A second open with
@@ -901,7 +945,7 @@ and the variable named by `--id-token-env` from the environment of the tool,
 by name. That limits one path for the tool process. It is not a boundary. The
 boundary is the trust rule (its claim conditions, B5) and its scope (B4.2),
 what the trust token can open, and what the cloud trust policy accepts (ADR
-203 decision 4). The security docs say so in their first lines.
+205 decision 4). The security docs say so in their first lines.
 
 **Blast radius of slice 1.** Slice 1 moves a long-lived cloud key from the
 CI settings into a profile. Each CI run that matches the rule, and the
@@ -920,7 +964,7 @@ warning at the top.
 | Check at the boundary (shim) | The server URL is `https`. The name in `--id-token-env` matches `[A-Z_][A-Z0-9_]*`. The unit name has the rules of the server. Each answered file name is one path segment from an allowlist. Each variable name passes the step variable rules of `pkg/job`. | a hostile answer of the server with the server checks skipped |
 | Encode or contain | The tool starts with `exec.Command` and an argument list, never a shell. No value goes on a command line. Files go under `os.Root` of the directory of the CI run. The shim drops CR and LF from each log value. SQL uses placeholders only. | a value with a shell character, a path with `..`, a value with CR and LF |
 | Limit the effect | The scope of the trust rule (B4.2). The trust token is for one namespace, for at most 1 hour. One exchange for each `jti` (and at most 3 nonce retries). The credentials helper answers the server host only. Values stay in memory and on a memory-backed directory, and the shim deletes them at the end. | a second exchange of one `jti` with another nonce, a fourth retry, and the helper asked for another host |
-| Authorize at use | Each open checks `profile:open` and the scope for the unit. Each state write and each record update checks the token. It must be the newest token of its family, the current trust token of the CI run. | a trust token of unit A that writes the record of unit B. A revoked first token that updates the record after a nonce retry. |
+| Authorize at use | Each open checks `profile:open` and the scope for the unit. Each state write and each record update checks the token. It must be the newest token of its family, the current trust token of the CI run. | a trust token of unit A that writes the record of unit B. A revoked earlier token that updates the record after a nonce retry. |
 | Fail closed and record | Each error of the exchange, of an open or of a check stops the shim before the tool starts. The shim exits with code 2 and one line that names the failure. It never starts the tool with a part of the values. Each denial writes an audit entry (G4). | an open that fails for one profile of three: the tool does not start, an audit entry exists |
 
 **Masks.** The shim masks each secret value of 4 bytes or more in the
@@ -983,7 +1027,10 @@ as a shared credentials file.
    warning: the server refuses a CI token whose lifetime (`exp - iat`) is
    more than 6 hours (B3), so a GitLab job with a timeout above 6 hours
    cannot use the shim. The page says to split such a job or to use a job
-   on a runner.
+   on a runner. A third warning: the trust token lives 1 hour by default (B3,
+   ADR 69 decision 6). A state write after the trust token ends fails. A job
+   that runs longer than 1 hour can fail in the middle of an apply. The
+   renewal is later (question 3).
 4. **The e2e step.** The test starts a test OIDC issuer (a discovery
    document and a JWKS on loopback with TLS and its own CA) and a stub of
    `ACTIONS_ID_TOKEN_REQUEST_URL` that signs GitHub-shaped tokens. It
@@ -1046,6 +1093,19 @@ as a shared credentials file.
    reads the checkpoint of the bridge version under test, to show what
    issue 3201 describes today (facts).
 
+**Open e2e items.** Each item is also named where it arises.
+
+- Real GitHub claims: whether a token holds `ref_protected` and `sha`, and the
+  value of `GITHUB_SHA` (facts, B5, F).
+- The fork pull request token: whether GitHub withholds an OIDC token from a
+  workflow that a fork pull request starts (B5).
+- Provider environment credentials in Pulumi state: whether a variable that a
+  provider reads by itself reaches the state (D).
+- Apply of a saved plan with `-var-file`: whether `tofu apply` refuses the
+  file for a variable that is not ephemeral (C3).
+- Bridge write-only behavior per version: how the bridge version under test
+  stores a write-only value (facts, the third case above).
+
 Later: the leak check (slice 2), login blocks with B6, the other uses of
 section I.
 
@@ -1066,7 +1126,8 @@ The owner keeps these. Each recommendation is the author's.
    trust token (B3.3), or the limit of the trust token lifetime (1 hour by
    default) with a renewal through the CI run record later, at most until
    the `exp` of the CI token? Recommendation: B3.1 with the limit, and the
-   renewal later.
+   renewal later. Until a renewal exists, a state write after the trust
+   token ends fails (J.3).
 4. Do issued cloud tokens get `ci_*` claims and the unit claims for a
    trust rule scoped to one unit (B6.2)? It changes the claim set, a
    one-way door. Recommendation: no unit claims from a CI run, and `ci_*`
@@ -1078,7 +1139,8 @@ The owner keeps these. Each recommendation is the author's.
    secret in `TF_VAR_` of a non-ephemeral variable goes to the plan and the
    state. Recommendation: files only in slice 1. Later, an opt-in mark on
    the profile entry, with `job.IsCredentialEnv` deciding which names need
-   it.
+   it. The same open question applies to the refusal of secret leaves in
+   `exports.opentofu` (C3).
 6. `::add-mask::` on GitHub Actions: never, opt-in, or on by default when
    the shim detects the runner? Recommendation: opt-in, only when the
    standard output is the runner, and always with the shim mask too.
