@@ -94,21 +94,28 @@ words of each tool. Question 1 asks for the glossary lines.
   that reads `count` or `types` of the group `actions` must also read
   `complete`.
 - **ADR 101 decision 7**, so that `job.ValidateSteps` refuses `TF_CLI_ARGS`
-  and each `TF_CLI_ARGS_*` variable for a `refresh` job (D).
+  and each `TF_CLI_ARGS_*` variable for a `refresh` job (D). ADR 101 decision
+  7 does not name these variables today. A test in `pkg/job/driftcheck_test.go`
+  already names `TF_CLI_ARGS` for a drift check, so the code has this rule
+  without an ADR. The amendment documents it.
 - **ADR 101 decision 8**, so that a `refresh` job takes no custom step (D).
   Today custom steps come from a blueprint or from the settings of a unit.
 - **ADR 134 decision 5**, only if B2a option (a) needs a separate file
   descriptor for the `-json` stream, because decision 5 merges standard
   output and standard error into one log.
 - **ADR 134 decision 6**, so that the launcher refuses `TF_CLI_ARGS` and
-  each `TF_CLI_ARGS_*` variable at start of a `refresh` step (D).
+  each `TF_CLI_ARGS_*` variable at start of a `refresh` step (D). ADR 134
+  decision 6 names the variables that the launcher refuses, and `TF_CLI_ARGS`
+  is not one of them.
 - **ADR 194 decision 4**, to add each planned action invocation to "Needs
   attention" (C3).
-- **ADR 100 decision 4**, so that a `refresh` job plans first (D). Today the
-  `refresh` job of a runner has the one phase `apply`, and so it has no plan
-  phase for a check. The proposal: the phases `plan` and `apply`, where the
-  plan phase runs `plan -refresh-only -out` and the apply phase applies that
-  plan. Question 9 asks for this.
+- **ADR 100 decision 4**, so that a `refresh` job plans first (D). ADR 100
+  decision 4 lists the `refresh` job of a runner with the one phase `apply`.
+  ADR 258 and ADR 263 already give a drift check and a remediation of the
+  operation `refresh` a plan phase. The proposal changes the default row of
+  ADR 100 decision 4: the phases `plan` and `apply`, where the plan phase runs
+  `plan -refresh-only -out` and the apply phase applies that plan. Question 9
+  asks for this.
 - **ADR 100 decision 3**, only if the owner picks a fifth job operation
   `invoke` (F, question 4). The recommendation adds no operation in
   slice 1.
@@ -291,7 +298,8 @@ stream on a separate file descriptor that only the tool writes. Or (b): no
 such channel, so each invocation stays `not-reported` and the plan is the only
 record. **Recommendation: (a). The spike checks that the tool writes its
 stream to a channel that user code cannot reach.** Until then, a row never
-moves to `completed` from a merged log.
+moves to `completed` from a merged log. The owner decides between (a) and (b)
+(question 10).
 
 **B3. Audit.** One audit entry for each invocation that starts, with the
 principal of the job, the unit, the address and the result. Not one entry
@@ -299,23 +307,31 @@ for each progress message. The audit log keeps its own retention (ADR 68).
 
 **B4. Retention, backup, redaction.** The rows follow the history policy of
 job artifacts (ADR 152), as the stored plan does. The table goes in the
-table list of the backup domain. A redaction of a plan or a log (ADR 151)
-also redacts the `error` text of its rows.
+table list of the backup domain, which is `Tables` in `pkg/backup/backup.go`,
+next to `job_plans` and `job_logs`. A redaction of a plan or a log (ADR 151
+decision 11, ADR 152 decision 10) also redacts the `error` text of its rows.
+ADR 151 and ADR 152 name plans and logs as the redacted items only. A future
+ADR needs to name the `error` text of the rows, and the period of the rows.
+ADR 152 decision 3 gives the periods of plans and logs only.
 
-**B5. Reads.** `GET /api/units/.../action-invocations` and a filter on the
-job record. Action names (proposal): `job:read` for the metadata,
+**B5. Reads.** `GET /api/dustpan/v1/namespaces/{namespace}/units/{unit_id}/action-invocations`
+and a filter on the job record. The path follows ADR 210 decisions 1 and 3. Action names (proposal): `job:read` for the metadata,
 `job:read-logs` for the progress log (ADR 152 decision 10), because the
 log holds free text of the provider, as a job log does. The `error` field
 comes from the log, so it follows the log: **recommendation: `job:read-logs`
-for `error` too.** A reader of plans only then does not see `error`. The action names must be checked against ADR 210 when
-an ADR records them.
+for `error` too.** A reader of plans only then does not see `error`. Both names match the
+grammar of ADR 210 decision 7 (`<area>:<verb>`). Proposal: the route joins the
+route test that ADR 17 requires, `TestRoutesDeclareActions` in
+`internal/api/jobs/routes_test.go`, with the action and the object of each of
+its methods.
 
 ### C. Control
 
-**C1. A fact group `actions`** at `change.planned` and `change.apply`
-(proposal, a new minor schema version): `available`, `complete`, `count`,
-`types` (a set of `actionType`), `triggers` (a set of `invoke` and lifecycle
-events), `providers`.
+**C1. A fact group `actions`** (proposal): it is in `change.planned/1.1`, and
+`change.apply` holds it too (ADR 226 decision 4). A new group adds fields, and
+a new field is a new minor schema version (ADR 226 decision 2). The group has
+`available`, `complete`, `count`, `types` (a set of `actionType`), `triggers`
+(a set of `invoke` and lifecycle events), `providers`.
 
 The group must tell "known none" from "unknown":
 
@@ -335,6 +351,14 @@ that reads `count` or `types` of the group `actions` and does not also read
 `complete`. This amends ADR 226 decision 3. The alternative is that Pulumi
 gives `available == false`. Then each built-in gate that fails closed on a
 missing fact would fire on every Pulumi plan, so we do not recommend it.
+
+**Tests (proposal).** The save check of ADR 226 decision 3 has a test with
+`gate.ErrInvalid`. A gate that reads `actions.count` or `actions.types` and
+not `actions.complete` gets `gate.ErrInvalid` at save. A gate that reads both
+saves. The parser has two tests. A plan with no action keys gives
+`available == true`, `complete == true` and `count == 0`: known none. A plan
+with an unknown top-level key, or a plan that the parser fails to read, gives
+`available == false`: unknown.
 
 A gate "an action of type X in collection prod needs an approval" then reads:
 
@@ -430,13 +454,29 @@ fails closed (E). An allowlist in two places drifts.
      `plan -refresh-only -out`, the server reads the plan with the strict
      parser (E), the job fails when the plan has a planned invocation, and
      the apply phase applies that stored plan only. This layer does not
-     depend on the argument list or on the environment. It needs the
-     amendment of ADR 100 decision 4 (question 9). Without it, a drift run
-     has no independent layer, because its one phase is `apply`.
+     depend on the argument list or on the environment. For a drift check
+     (ADR 263), the one phase is `plan`, so this layer already holds. For a
+     `refresh` job with the one phase `apply`, the layer needs the amendment
+     of ADR 100 decision 4 (question 9). Without it, that job has no plan
+     check.
   For the Pulumi CLI, `pulumi refresh` runs no hook and no `command` create
   or update on a custom resource, as we read the docs. A component hook
   under `refresh --run-program` is not ruled out. Question 7 asks for an e2e
   step that proves both.
+
+**Tests (proposal).** Each layer has its own test. The test sends hostile
+input to that layer alone, with the other two layers skipped:
+
+- Layer 1: a `refresh` spec with `-invoke=...` in its argument list is
+  refused by the spec check.
+- Layer 2: the spec check refuses a `refresh` spec with `TF_CLI_ARGS` or
+  `TF_CLI_ARGS_apply` in its step environment. The launcher refuses the
+  same variables at start.
+- Layer 3: a plan with a planned invocation fails the drift check.
+
+RFC 25 holds these three layers in its section "Fixed steps of a drift run".
+RFC 25 cites question 6 for the proof of the Pulumi facts. This RFC asks for
+that proof in question 7, so the owner of RFC 25 must fix the reference.
 
 ### E. Defense in depth (ADR 250)
 
@@ -503,9 +543,13 @@ The owner keeps these. Each recommendation is the author's.
 
 1. The words: "provider action" and "action invocation" (`aci-`) in the
    glossary, because "action" is the authorization action? Recommendation:
-   yes, and keep the prefix `aci-`.
-2. One tool-neutral record (A2) or no core concept (A1)? Recommendation: A1
-   now, and decide after the spike.
+   yes, and keep the prefix `aci-`. The glossary entry of "action" calls an
+   action "a tool-neutral operation". "Operation" is also the name of the
+   four job operations (ADR 100 decision 3). The owner decides whether
+   "operation" stays in the _Avoid_ list of "provider action".
+2. One tool-neutral record (A2) or no core concept (A1)? This is the choice of
+   section A. Question 1 does not decide it. Recommendation: A1 now, and
+   decide after the spike.
 3. Wait for OpenTofu, or ship a Pulumi part first? Recommendation: wait.
    `plan.resourceTypes` covers the `command` gates today. Slice 1 is no code.
 4. A fifth job operation `invoke` for an operation run of `-invoke`, with
@@ -513,8 +557,12 @@ The owner keeps these. Each recommendation is the author's.
    Decide after the spike, when the real shape is known.
 5. Does a plan with a planned invocation turn off auto-apply by default,
    as a warning does (ADR 229 decision 3)? Recommendation: yes, a built-in
-   gate in `enforce` mode with outcome `warn`. A namespace can change the
-   outcome to an approval or to `deny` (ADR 224 decision 7, ADR 229 decision 3).
+   gate in `enforce` mode with outcome `warn`. A gate in a namespace can have
+   the outcome `approval:<rule>` or `deny` (ADR 224 decision 1). If the owner
+   accepts this, the built-in `warn` gate joins the starter packs. A pack
+   installs in `evaluate` mode (ADR 229 decision 7), so the gate of a pack has
+   no effect until a person sets `enforce`. The owner decides whether the pack
+   keeps `evaluate` mode for this gate.
 6. CLI-driven OpenTofu runs show no action to the server, and `-lock=false`
    skips the manual lock (C4). Is a plan upload from the CI shim (RFC 94) the
    answer, or do the docs only state the limit? Recommendation: state the
@@ -530,6 +578,12 @@ The owner keeps these. Each recommendation is the author's.
 9. Amend ADR 100 decision 4 so that a `refresh` job plans first (D, layer 3)?
    Recommendation: yes. Another independent layer would need a second source
    of truth about the plan, and none exists.
+10. B2a: which channel carries the `-json` stream of an apply step? (a) A
+    separate file descriptor that only the tool writes. This needs the
+    amendment of ADR 134 decision 5, which merges standard output and
+    standard error into one pipe. (b) No such channel. Each invocation stays
+    `not-reported`, and the plan is the only record. Recommendation: (a), and
+    the spike checks it (B2a). The owner decides.
 
 ## Proposed glossary lines
 
@@ -541,6 +595,51 @@ The owner keeps these. Each recommendation is the author's.
   "invoke" only for the flag).
 - **Action invocation**: one run of one provider action in one phase of a
   job, recorded with the ID prefix `aci-`. _Avoid_: action run, call.
+
+## Open items for the same pull request
+
+### User documentation page (ADR 214)
+
+The user documentation (ADR 66) needs a page that states these limits in
+plain words. The page ships in the same pull request as the feature it
+describes (ADR 214). The page is not part of this pull request.
+
+- A CLI-driven OpenTofu run is invisible to the server. The server sees no
+  action, no plan and no log of it.
+- `-lock=false` skips the manual lock (C4).
+- A wrapper binary in the runner image is outside the reach of the server (D).
+- Pulumi coverage is partial. Hooks and invokes are not seen, and the group
+  `actions` has `complete == false` for Pulumi (C1).
+
+### Issue for the e2e spike (proposed text)
+
+Title: E2E spike: OpenTofu provider actions, and Pulumi refresh with hooks
+
+Start this spike when an OpenTofu release or a prerelease supports actions.
+The plan is in RFC 95, section F.
+
+1. Add the version to the e2e matrix.
+2. Write a test provider with one action. The action writes a file in the
+   test directory. Build it from the protocol 6.10 calls.
+3. Record `tofu show -json` and `tofu apply -json` for each of these: an
+   invoke, each lifecycle event, each `on_failure` value, a failed action and
+   a deferred action. Write the differences from the upstream design into
+   RFC 95.
+4. Prove C4 of RFC 95. A manual lock refuses the lock request of
+   `tofu apply -invoke=...` from a person's own CLI. Show that `-lock=false`
+   skips the lock. Show that no state version exists after an invoke that
+   changes nothing.
+5. Prove that `apply -refresh-only` without `-invoke` triggers nothing.
+6. Prove that `tofu apply` with a saved plan rejects or ignores `-invoke`
+   from `TF_CLI_ARGS_apply`.
+7. Prove the channel of the `-json` stream (RFC 95, section B2a). The stream
+   must reach a channel that user code cannot write to.
+8. Pulumi (RFC 95, question 7): add an e2e step that runs
+   `pulumi refresh --run-program` with a resource hook and with a component
+   hook. Record whether each hook runs. Record whether a `command` resource
+   runs a create or an update.
+
+Done when each step has a recorded result in RFC 95.
 
 ## Outcome
 

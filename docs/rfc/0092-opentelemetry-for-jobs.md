@@ -86,7 +86,9 @@ alone), or a state write from a team's own CI with no job.
 ## ADRs this RFC would amend
 
 - ADR 32 decision 1 ("The server does not use OpenTelemetry now"). An ADR
-  that accepts this RFC supersedes that sentence.
+  that accepts this RFC supersedes that sentence. The same ADR adds the
+  `other` value to the label rule of ADR 32 decision 5 (section F, cardinality
+  caps). It also closes the tracing item of RFC 34.
 - ADR 134 decision 6 and ADR 101 decision 7: the **reserved variable set**.
   A step variable fails the step (the server at start, and the launcher
   again) when its name, compared with the case ignored, starts with
@@ -108,6 +110,12 @@ alone), or a state write from a team's own CI with no job.
   option of F1 (a protobuf library in the launcher). The launcher then
   links a module outside the standard library, which decision 1 forbids.
   The recommended option (a reader of our own) needs no amendment.
+- ADR 131 decisions 3, 4, 12 and 14. The session path table (decision 3)
+  gets the span route of A1.2. The port table (decision 4) gets the port
+  method `AppendStepSpans`. The caps and the rate budget (decision 14) get
+  the span limits and the span budget of A1.2 and F3. Decision 12 needs a
+  note, because the span route does not stop the claim on `conflict` or
+  `invalid` (A1.2, "Errors on the span route").
 - ADR 132 decisions 5 and 7: **no amendment.** A new path inside
   `/runner/v1` is an addition, and an ignorable field in the assignment
   ("trace this step") does not change what a step does: it only adds
@@ -298,23 +306,46 @@ phase that wrote it.
    same `seq` and the same hash changes nothing and answers 204. The same
    `seq` with another hash fails with `conflict`. The limits are in the
    style of ADR 131 decision 14. One step has at most 2,000 spans, 256
-   requests and 8 MiB. One phase has at most 10,000 spans, 1,024 requests
-   and 32 MiB. A
-   request above a cap fails with `invalid` and changes nothing, and the
-   server answers `rate-limited` to a session above 50 requests each
-   second.
+   requests and 8 MiB. One job has at most 10,000 spans, 1,024 requests
+   and 32 MiB. The job is the unit of this budget, not the phase. This is a
+   proposal for the owner. A request above a cap fails with `invalid` and
+   changes nothing.
+
+   The span uploads of a session have their own budget of 10 requests each
+   second. This value is a proposal for the owner. The budget sits inside
+   the 50 requests each second of ADR 131 decision 14. The server answers
+   `rate-limited` to a span upload above 10 requests each second, and to a
+   session above 50 requests each second. The lower budget keeps a burst of
+   spans from using the requests of the log chunks, the renewals and the
+   finish.
 3. **To a file.** Only for a tool that writes spans to a file: the Pulumi
    CLI with `--otel-traces file://...` writes OTLP JSON. The launcher
    reads the file after the step and sends the spans as in 2. Nothing
    listens on a port. The reader is a security reader (section F):
    - The file is in `spans/` under the scratch directory of the step, on
      the disk of the runner. It is not in the memory-backed volume of the
-     secrets. That directory has a quota of 64 MiB, or the launcher
-     passes a limit that stops the growth of the file. If the tool cannot
+     secrets. That directory has a quota of 64 MiB. The launcher also passes a
+     limit that stops the growth of the file. Each layer has its own test: a
+     file that grows past 64 MiB with the quota in place, and the same file
+     with the quota removed in the test, where the limit of the launcher
+     must stop the growth. If the tool cannot
      write the file (the path is not writable, or the quota is full), the
      step still succeeds and gets no tool spans.
    - The launcher opens the file with `os.Root`, never by a path string
      that the step could replace with a link.
+   - It opens the file with `O_NONBLOCK`. An open of a FIFO with no writer
+     returns at once. It does not wait for a writer.
+   - It calls `fstat` on the open file, and it requires a regular file. A
+     FIFO, a device, a socket or a directory gets no tool spans.
+   - It sets one deadline for the whole read, of 10 seconds. This value is a
+     proposal for the owner. It is the export timeout of F3. A read that
+     reaches the deadline stops, and the step is not affected.
+   - Test: one test for each of the three checks. The test of the open
+     starts a FIFO with no writer, and it checks that the open returns at
+     once. The test of `fstat` gives a FIFO with a writer, and it checks
+     that the launcher reads no span. The test of the deadline writes a regular file
+     slowly, so that the read reaches the deadline before the size limit,
+     and it checks that the read stops.
    - A size limit of 64 MiB for the file. The launcher checks it while it
      reads, not from the file size alone. A file over the limit is read
      up to the limit, the rest is dropped and counted, and the step is not
@@ -379,6 +410,15 @@ CLI from 3.226.0, because the file is JSON and needs no listener. Both come
 after the first slice (G). A1.4 for
 a tool or a version with no OTLP (see "When the tool has no OTLP" below).
 
+**Errors on the span route.** The launcher treats each error of the span
+route as a drop and counts it (section F). The exceptions are `claim-lost`
+and `canceled`. A `claim-lost` stops the step at once. A `canceled` stops
+the step with its grace period. So the span route does not stop the claim
+on `conflict` or `invalid`, as ADR 131 decision 12 does for the other
+routes. It also does not wait on `rate-limited` or `unavailable`. Test: one
+test for each code of the span route. The step continues after each code,
+except `claim-lost` and `canceled`, and the drop counter goes up by one.
+
 **The relay has no authentication.** The step is the only process that
 can reach it, and a request with a token would put the token in a
 variable of the step. This is acceptable for four reasons:
@@ -429,7 +469,13 @@ secrets-out-of-state theme starts the tool. Options:
    the CI configures. The shim sends the trace ID with its state write in
    a header, and the history entry of the state write keeps it as a
    **client trace ID**. The server never trusts it: it is a link, not a
-   parent of a server span.
+   parent of a server span. The server checks the header at the boundary.
+   The value must be 32 lowercase hex characters, and it must not be all
+   zeros. The server rejects a value that fails the check. The state write then
+   answers `invalid`, and the server stores nothing. Test: one test of the check. It
+   sends values of 31 and of 33 characters, uppercase hex, a character that
+   is not hex, the all-zero ID, and a value with CR or LF. Each value gets
+   `invalid`, and the server writes no history entry.
 2. The shim relays spans to the server, as the launcher does in A1.2.
 3. Do nothing for the CI shim in v1.
 
@@ -544,7 +590,7 @@ because a collection label has no bound.
 
 | Metric | Definition from data we hold | What we lack |
 | --- | --- | --- |
-| Lead time from merge to apply | the end of the apply phase that wrote a final state version, minus the time of the merge of its commit | the merge time. A job holds the commit, not the merge. Options: the push event of the Git host (RFC 89, a draft pull request), or the commit time from the source snapshot. A commit time is set by the author, so it is untrusted and can be wrong. |
+| Lead time from merge to apply | the end of the apply phase that wrote a final state version, minus the time of the merge of its commit | the merge time. A job holds the commit, not the merge. Options: the push event of the Git host (RFC 89, accepted by ADR 271). Or the commit time from the source snapshot. The author sets a commit time, so the server cannot rely on it, and it can be wrong. |
 | Change failure rate | apply jobs that a person linked to an incident as `cause` (ADR 147 decision 12), divided by all succeeded apply jobs | links only exist where people make them. Option: also count an apply that failed after it wrote state. |
 | Time to restore | for an incident linked to a unit of the collection: resolved time minus detection time (ADR 147 decision 1) | nothing for incidents. Option: also the time from a failed apply to the next succeeded apply of the same unit, with no incident. |
 | Deployment frequency | succeeded apply jobs, and state writes with no job | nothing |
@@ -603,6 +649,15 @@ RFC 46 owns how these values look.
   of dropped spans.
 - **Sampling.** A ratio from 0 to 1, by trace ID, so a job is kept whole
   or dropped whole. Default 1.
+- **Span storage.** This is a proposal: a memory queue. The server holds the
+  accepted spans in the bounded export queue of section F. It writes them to
+  no table and no blob. A restart drops the spans in the queue, as section B
+  describes for the delivery of at most once. When export is off, the server
+  drops each span at once and counts it. The other option is a blob for each
+  job. The owner sets its retention period, and it has an entry in the
+  table list of the backup domain (`pkg/backup`), so that a backup holds the
+  spans. This option keeps the spans across a restart. It adds a second store
+  for data that is only observability.
 
 **Recommendation.** As above.
 
@@ -633,8 +688,18 @@ sends hostile input to that layer with the other layers skipped.
      same step. Other parents drop the span.
    - A span ID that equals a span ID of the server or of the launcher, or
      that repeats a span ID already received for the job, drops the span.
+     The set of received span IDs of a job is in the store, not in the
+     memory of one instance, so each instance checks the same set. The write
+     of a span ID runs in the same transaction as the span, with the
+     namespace fence that every write in a namespace carries.
    - A span with a start or end time outside the window of the step (with
-     a tolerance of 5 seconds) drops the span.
+     a tolerance of 5 seconds) drops the span. A span that arrives before
+     the step ends has no known end of the step. The server checks its start
+     time against the start of the step. It checks its end time against the
+     time of arrival plus the tolerance. The server does not export a span of
+     a running step. When the step ends, it checks each held span against the
+     end of the step, with the same tolerance, and it drops each span that
+     ends after that point.
    - No key that starts with `dustpan.` is ever on the allowlist of a
      tool. The server sets `dustpan.span.source` after the filter, so a
      tool cannot forge it.
@@ -643,12 +708,26 @@ sends hostile input to that layer with the other layers skipped.
    - An attribute must be on the allowlist of keys of the tool, with its
      type and a limit of 256 bytes. The check drops all other attributes
      and all span events.
+   - The check keeps the status code of a span (`unset`, `ok` or `error`).
+     It drops the status message. It drops every link and the `trace_state`.
+     It drops the `dropped_*` counts of attributes, events and links.
+   - The check keeps the kind of a span only when it is one of the six kinds
+     of OpenTelemetry: `unspecified`, `internal`, `server`, `client`,
+     `producer` or `consumer`. A span with another kind fails the check, and the
+     launcher drops it.
+   - Test: one test sends a span with a status message, a link, a
+     `trace_state`, a `dropped_*` count and a kind outside the six. The
+     exported span has the status code. It has no status message, link,
+     `trace_state` or `dropped_*` count. The span with the other kind is
+     dropped.
    - Our own OTel resource replaces the resource of the tool.
    - Test: one test for each rule. For the rules above: a span with the ID
      of a server span, a repeated span ID, a parent in another step, a
      parent that is a server span, a time before the step starts and after
      it ends, a `dustpan.span.source=server` attribute from a tool, and a
-     `dustpan.` key of any other name. And a fuzz test of the whole path:
+     `dustpan.` key of any other name, a repeated span ID that reaches a second
+     instance, a span that ends after the step ends, and a span with a kind
+     outside the six. And a fuzz test of the whole path:
      decompress, then parse, then check. The fuzz test includes a gzip
      bomb, a deep nest and a huge repeated count.
 2. **Encode or contain at use.**
@@ -660,9 +739,10 @@ sends hostile input to that layer with the other layers skipped.
 3. **Limit the effect.**
    - At most 10,000 spans for each job, 2,000 for each step and 32
      attributes for each span.
-   - A total budget of 32 MiB of span bytes for each job, and a rate limit
-     of 50 requests for each second for each relay (and 200 for each
-     second for each job on the server). Over a limit: drop and count.
+   - A total budget of 32 MiB of span bytes for each job, and the rate
+     limits of A1.2: 10 span requests for each second for each session,
+     inside the 50 requests for each second of the session. Over a limit:
+     drop and count.
    - The export queue has a bound. When it is full, it drops the oldest
      batch.
    - An export request has a timeout of 10 seconds.
@@ -745,7 +825,9 @@ after.
    `http://` on a host that is not loopback refuses to start without
    `insecure`. When the relay comes (A1.2), the same step runs with a relay
    that has stopped and with a bad `OTEL_EXPORTER_OTLP_ENDPOINT`, and plan
-   and apply still succeed.
+   and apply still succeed. When the Pulumi file comes (A1.3), the same step
+   also runs with a spans file that cannot be written, and with a spans file
+   over its size limit. The step succeeds in both cases, with no tool spans.
 
 Later: job traces from the job record (section A, and item 2 of "What the
 server traces"), the launcher relay with its new path in `/runner/v1`
@@ -759,8 +841,14 @@ The owner keeps these. Each recommendation is the author's.
 1. Accept a tracing feature at all, and so supersede ADR 32 decision 1?
    Recommendation: yes, traces only, export off by default.
 2. The code: B1 (OpenTelemetry Go SDK), B2 (our own OTLP/HTTP JSON
-   exporter) or B3 (none)? A measure of the binary size with B1 is the
-   first step if the owner considers B1. Recommendation: B2, and so
+   exporter) or B3 (none)? Measured on 2026-10-27 with Go 1.27.3 and
+   OpenTelemetry v1.47.0, a small server program with `otlptracehttp` and
+   `sdk/trace` grew from 5.4 MB to 21.2 MB (stripped: from 3.6 MB to 14.5
+   MB). The package count of the build grew from 190 to 395. The baseline
+   figures (5.4 MB, 3.6 MB stripped, 190 packages) are not reproduced, and the
+   contents of the baseline program are not recorded here. The program is
+   not the server, and it has no `otel/metric` package. A measure of the
+   server itself is still open. Recommendation: B2, and so
    supersede ADR 32 decision 1, with a stdlib exporter as in ADR 60
    decision 12.
 3. Spans of the tool: through the launcher relay (A1.2) and the Pulumi
@@ -787,8 +875,7 @@ The owner keeps these. Each recommendation is the author's.
    wants. Recommendation: IDs by default, names behind a setting.
 7. Lead time: the merge time from the push event of the Git host only, or
    also the commit time as a fallback? Recommendation: the push event only.
-   No lead time is shown until a push event is recorded (RFC 89 is a draft
-   pull request while this RFC is a draft).
+   The server shows no lead time until it records a push event. ADR 271 accepts RFC 89. Whether the Git host returns push events is not checked.
 8. Trace export for each namespace (a tenant of a hosted installation sends
    its own job traces to its own collector)? Recommendation: not in v1. The
    installation target only.
@@ -805,7 +892,9 @@ The owner keeps these. Each recommendation is the author's.
     resources? We found no span for each resource in the OpenTofu source,
     but each provider call and each HTTP request may have one, and the
     Pulumi CLI also gets spans from each provider plugin. Recommendation:
-    measure in e2e with a fixture of 10,000 resources before the ADR.
+    add an e2e fixture with 10,000 resources. It counts the spans of each job
+    and of each step. The owner sets the bounds from that count before the
+    ADR. Until then, the bounds of section F are proposals.
 
 ## Proposed glossary lines
 
