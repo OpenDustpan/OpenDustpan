@@ -217,3 +217,77 @@ func TestReadinessCountsFailures(t *testing.T) {
 		t.Fatalf("metrics output lacks two failures:\n%s", got)
 	}
 }
+
+// TestReadinessDrains proves that a draining probe answers 503 with the
+// check "draining" at once, with no ping of a dependency, and does not count
+// as a failure of a dependency.
+func TestReadinessDrains(t *testing.T) {
+	t.Parallel()
+
+	api, err := ParseComponents("api")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	blocked := stubPinger{err: nil, block: true}
+	logger := slog.New(slog.DiscardHandler)
+	builders := map[string]func(failures *metrics.Counter) *readiness{
+		"without components": func(failures *metrics.Counter) *readiness {
+			rd, ok := newReadinessHandler(blocked, blocked, time.Minute, failures, logger).(*readiness)
+			if !ok {
+				t.Fatal("newReadinessHandler does not return a readiness")
+			}
+
+			return rd
+		},
+		"with components": func(failures *metrics.Counter) *readiness {
+			return newComponentReadiness(readinessSettings{
+				components: api, store: blocked, blobs: blocked, watch: nil, chainAdmits: nil,
+				timeout: time.Minute, failures: failures, logger: logger,
+			})
+		},
+	}
+
+	for name, build := range builders {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			registry := metrics.NewRegistry()
+			probe := build(registry.NewCounter(readinessFailuresName, "Failed readiness probes.", nil, 0))
+			probe.drain()
+
+			for _, path := range []string{"/health/ready", "/health/ready/api"} {
+				assertDrainingAnswer(t, probe, path)
+			}
+
+			// The counter writes no sample line until it counts a failure.
+			for line := range strings.Lines(counterText(t, registry)) {
+				if strings.HasPrefix(line, readinessFailuresName+" ") {
+					t.Errorf("a drain counted as a failure: %s", line)
+				}
+			}
+		})
+	}
+}
+
+// assertDrainingAnswer sends one GET to probe and fails the test unless the
+// answer is the 503 of a draining process.
+func assertDrainingAnswer(t *testing.T, probe *readiness, path string) {
+	t.Helper()
+
+	const want = `{"status":"unavailable","failed":["draining"]}`
+
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, path, http.NoBody)
+	req.SetPathValue("component", "api")
+
+	rec := httptest.NewRecorder()
+	if path == "/health/ready" {
+		probe.ServeHTTP(rec, req)
+	} else {
+		probe.ServeOne(rec, req)
+	}
+
+	if got := strings.TrimSpace(rec.Body.String()); rec.Code != http.StatusServiceUnavailable || got != want {
+		t.Errorf("GET %s while draining = %d %s, want 503 %s", path, rec.Code, got, want)
+	}
+}
