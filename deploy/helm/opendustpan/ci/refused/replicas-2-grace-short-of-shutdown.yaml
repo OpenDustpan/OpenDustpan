@@ -1,5 +1,5 @@
-# Refused: a grace period below the preStop wait + 30 s of server shutdown.
-# want: must be at least preStopSeconds (15) + 30
+# Refused: a grace period below the preStop wait + 10 s of drain + 30 s of server shutdown.
+# want: must be at least preStopSeconds (15) + 40
 database:
   existingSecret:
     name: opendustpan-database

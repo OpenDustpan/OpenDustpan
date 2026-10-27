@@ -94,6 +94,17 @@ The state of the audit chain is information only. While a change of the audit ch
 
 `/health/live` is the same for each component: it answers when the process runs, and it does not check the claim loop.
 
+### Stop an instance
+
+When an instance gets SIGTERM, it does these steps in this order:
+
+1. `/health/ready` and `/health/ready/{component}` answer 503 at once. The body names the failed check `draining`. `/health/live` still answers 204.
+2. The `worker` component gives back the claim of each durable operation that it runs, and it stops the work. Another `worker` process then claims the operation at its next poll, with no wait for the end of the lease. The give-back checks the claim token in the database. It never gives back a claim that another instance took.
+3. The instance keeps serving all other requests for a drain of 10 seconds. A load balancer with a health check on `/health/ready` takes the instance out of its pool in this time. The drain has a fixed length and no flag.
+4. The instance closes the listener and waits at most 30 seconds for the requests in flight. A request that began before the signal gets its answer.
+
+The drain and the wait together are at most 40 seconds. The Helm chart waits 15 seconds in `preStop` before the signal, and it gives the pod 60 seconds. If you run the instance in another way, give it at least 50 seconds between SIGTERM and SIGKILL. The drain and the wait take 40 seconds, and 10 seconds are margin.
+
 ### No worker
 
 With `api` processes only, nobody runs the background work. Four signs show that:
@@ -109,7 +120,7 @@ Each worker records a heartbeat in the store when it claims work or renews a cla
 
 A restore runs in the process that took the request, so it needs no worker. Send the request to an `api` process that has enough time and memory for it.
 
-A backup is a durable operation. The `api` process that took the request stores it. A `worker` process runs it and renews its claim while it works. A start, a restart or a rolling update of an instance never fails a backup that another instance runs. When the instance that runs a backup stops, another `worker` process continues the backup after the lease ends. The lease is 30 seconds by default. Run at least one `worker` process, or the backup waits. Any instance answers the state of a backup, because the state is in the database.
+A backup is a durable operation. The `api` process that took the request stores it. A `worker` process runs it and renews its claim while it works. A start, a restart or a rolling update of an instance never fails a backup that another instance runs. When the instance that runs a backup stops with SIGTERM, it gives the claim back, and another `worker` process continues the backup at once. When the instance dies with no clean stop, another `worker` process continues the backup after the lease ends. The lease is 30 seconds by default. Run at least one `worker` process, or the backup waits. Any instance answers the state of a backup, because the state is in the database.
 
 ## Roll out a new release
 
