@@ -1326,7 +1326,7 @@ func testDevRecordReport(t *testing.T, env *devEnv) {
 	dst := env.newStore(t, installation.KindProduction)
 	ctx := t.Context()
 
-	record := mustCreateRestore(t, dst, newRestoreRecord("rst-dev-report", "bkp-1", time.Unix(1_700_000_000, 0).UTC()))
+	record := mustCreateRestore(t, dst, newRestoreRecord(backup.MintRestoreID(), "bkp-1", time.Unix(1_700_000_000, 0).UTC()))
 
 	if got := mustGetRestore(t, dst, record.ID); got.DevReport != nil {
 		t.Fatalf("report of a new restore = %+v, want none", got.DevReport)

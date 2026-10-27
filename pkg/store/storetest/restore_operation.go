@@ -111,10 +111,8 @@ type restorePorts struct {
 func restorePortsOf(t *testing.T, s RestoreStore) restorePorts {
 	t.Helper()
 
-	// RestoreStore still holds backup.RestoreRegistry, whose methods have the
-	// same names with other signatures, so the assertions start from any.
-	ops, opsOK := any(s).(backup.RestoreOperations)
-	staging, stagingOK := any(s).(backup.RestoreStaging)
+	ops, opsOK := s.(backup.RestoreOperations)
+	staging, stagingOK := s.(backup.RestoreStaging)
 
 	if !opsOK || !stagingOK {
 		t.Skip("the store does not implement the restore operation ports")

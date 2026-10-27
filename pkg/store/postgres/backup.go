@@ -407,7 +407,7 @@ func pgControlTables() []pgCopyTable {
 			table: backup.TableRestores,
 			columns: []string{
 				"id", pgColState, "backup_id", "pre_backup_id", "requested_by",
-				pgColStartedAtMs, pgColEndedAtMs, "error", "dev_report",
+				pgColStartedAtMs, pgColEndedAtMs, "error", "dev_report", "maintenance_entered",
 			},
 			orderBy: []string{pgColStartedAtMs, "id"},
 		},
@@ -934,6 +934,30 @@ type stagingInput struct {
 // the schema as the staging area. A failure drops the schema: the live tables
 // stay unchanged.
 func (s *Store) buildStaging(ctx context.Context, in stagingInput) (backup.Summary, error) {
+	sum, err := s.buildChecked(ctx, in)
+	if err != nil {
+		return backup.Summary{}, err
+	}
+
+	s.stagingMu.Lock()
+	defer s.stagingMu.Unlock()
+
+	if s.stagingSchema != "" {
+		if dropErr := s.dropStagingSchema(context.WithoutCancel(ctx), s.stagingSchema); dropErr != nil {
+			// The new schema is not kept, so it goes too.
+			return backup.Summary{}, errors.Join(dropErr, s.dropStagingSchema(context.WithoutCancel(ctx), in.staging))
+		}
+	}
+
+	s.stagingSchema = in.staging
+
+	return sum, nil
+}
+
+// buildChecked creates the staging schema in.staging, loads and checks the
+// dump, and returns its summary. A failure drops the schema: the live tables
+// stay unchanged.
+func (s *Store) buildChecked(ctx context.Context, in stagingInput) (backup.Summary, error) {
 	kept := false
 
 	defer func() {
@@ -976,16 +1000,6 @@ func (s *Store) buildStaging(ctx context.Context, in stagingInput) (backup.Summa
 		return backup.Summary{}, blobErr
 	}
 
-	s.stagingMu.Lock()
-	defer s.stagingMu.Unlock()
-
-	if s.stagingSchema != "" {
-		if dropErr := s.dropStagingSchema(context.WithoutCancel(ctx), s.stagingSchema); dropErr != nil {
-			return backup.Summary{}, dropErr
-		}
-	}
-
-	s.stagingSchema = in.staging
 	kept = true
 
 	return sum, nil
@@ -1767,22 +1781,6 @@ func backupConflict(ctx context.Context, q *db.Queries, id backup.ID) error {
 	}
 
 	return fmt.Errorf("select backup: %w", err)
-}
-
-// createRestoreConflict answers why CreateRestore inserted no row: the ID is
-// taken (ErrRestoreExists), or the unique index on running restores refused a
-// second running restore (ErrRestoreRunning).
-func (s *Store) createRestoreConflict(ctx context.Context, id backup.RestoreID) error {
-	_, err := s.GetRestore(ctx, id)
-	if err == nil {
-		return backup.ErrRestoreExists
-	}
-
-	if errors.Is(err, backup.ErrRestoreNotFound) {
-		return backup.ErrRestoreRunning
-	}
-
-	return err
 }
 
 // checkStagedFeatureRows checks the rows of the staged features that have rules

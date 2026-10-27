@@ -678,15 +678,16 @@ type RegistryRelease struct {
 }
 
 type Restore struct {
-	ID          string
-	State       string
-	BackupID    string
-	PreBackupID string
-	RequestedBy string
-	StartedAtMs int64
-	EndedAtMs   int64
-	Error       string
-	DevReport   string
+	ID                 string
+	State              string
+	BackupID           string
+	PreBackupID        string
+	RequestedBy        string
+	StartedAtMs        int64
+	EndedAtMs          int64
+	Error              string
+	DevReport          string
+	MaintenanceEntered int64
 }
 
 type Role struct {

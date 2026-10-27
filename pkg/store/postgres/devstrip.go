@@ -117,14 +117,22 @@ func (s *Store) StripDevStaged(ctx context.Context, mode backup.DevStripMode) (b
 		return backup.DevStripReport{}, backup.ErrCorrupt
 	}
 
-	if !hasStagingPrefix(s.stagingSchema) {
-		return backup.DevStripReport{}, fmt.Errorf("strip staging schema %q: %w", s.stagingSchema, backup.ErrCorrupt)
+	return s.stripSchema(ctx, s.stagingSchema, mode)
+}
+
+// stripSchema runs the dev data strip of StripDevStaged on the staging
+// schema staging.
+func (s *Store) stripSchema(
+	ctx context.Context, staging string, mode backup.DevStripMode,
+) (backup.DevStripReport, error) {
+	if !hasStagingPrefix(staging) {
+		return backup.DevStripReport{}, fmt.Errorf("strip staging schema %q: %w", staging, backup.ErrCorrupt)
 	}
 
 	var report backup.DevStripReport
 
 	err := inBackupTx(ctx, s.pool, readWriteOpts(), func(tx pgx.Tx) error {
-		if _, err := setSearchPath(ctx, tx, s.stagingSchema); err != nil {
+		if _, err := setSearchPath(ctx, tx, staging); err != nil {
 			return err
 		}
 

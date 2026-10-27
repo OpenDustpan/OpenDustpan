@@ -311,24 +311,46 @@ func (d *DurableOperations) RecordStep(ctx context.Context, f durable.StepFence,
 // step record commit together. The time of the expiry check is the database
 // clock when recordStep runs, not when the transaction started.
 func recordStep(ctx context.Context, q *db.Queries, f durable.StepFence, result []byte) error {
-	row, now, err := lockLive(ctx, q, f.Operation, f.Token)
+	row, now, err := checkStep(ctx, q, f)
 	if err != nil {
 		return err
 	}
 
+	return insertStep(ctx, q, row, f, result, now)
+}
+
+// checkStep checks f with the rules of durable.Store.RecordStep in the
+// transaction of q, and records nothing. It locks the operation row, so the
+// fence holds until the transaction ends: a write that checks the fence and
+// records no step, or records it later in the transaction, calls it. It
+// returns the locked row and the time of the database clock.
+func checkStep(ctx context.Context, q *db.Queries, f durable.StepFence) (db.DurableOperation, int64, error) {
+	row, now, err := lockLive(ctx, q, f.Operation, f.Token)
+	if err != nil {
+		return db.DurableOperation{}, 0, err
+	}
+
 	if row.CancelRequested {
-		return durable.ErrCanceled
+		return db.DurableOperation{}, 0, durable.ErrCanceled
 	}
 
 	done, err := q.DurableStepExists(ctx, db.DurableStepExistsParams{OperationID: row.ID, Name: f.Step})
 	if err != nil {
-		return fmt.Errorf("read step: %w", err)
+		return db.DurableOperation{}, 0, fmt.Errorf("read step: %w", err)
 	}
 
 	if done {
-		return durable.ErrStepDone
+		return db.DurableOperation{}, 0, durable.ErrStepDone
 	}
 
+	return row, now, nil
+}
+
+// insertStep records the step of f with result on row, which checkStep
+// returned in the same transaction, at the time now.
+func insertStep(
+	ctx context.Context, q *db.Queries, row db.DurableOperation, f durable.StepFence, result []byte, now int64,
+) error {
 	step := db.InsertDurableStepParams{OperationID: row.ID, Name: f.Step, Result: nonNilBytes(result), NowMs: now}
 	if err := q.InsertDurableStep(ctx, step); err != nil {
 		return fmt.Errorf("insert step: %w", err)

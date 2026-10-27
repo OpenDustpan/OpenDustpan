@@ -738,31 +738,52 @@ func startDurable(ctx context.Context, q *db.Queries, req durable.StartRequest) 
 // long transaction cannot write. A domain write that carries a StepFence
 // calls it in its own transaction.
 func recordStep(ctx context.Context, q *db.Queries, f durable.StepFence, result []byte) error {
-	row, now, err := liveDurable(ctx, q, f.Operation, f.Token)
+	row, now, err := checkStep(ctx, q, f)
 	if err != nil {
 		return err
 	}
 
+	return insertStep(ctx, q, row, f, result, now)
+}
+
+// checkStep checks f with the rules of durable.Store.RecordStep in the
+// transaction of q, and records nothing. A write transaction of SQLite holds
+// the database, so the fence holds until the transaction ends. It returns
+// the row and the time of the store clock.
+func checkStep(ctx context.Context, q *db.Queries, f durable.StepFence) (db.DurableOperation, int64, error) {
+	row, now, err := liveDurable(ctx, q, f.Operation, f.Token)
+	if err != nil {
+		return db.DurableOperation{}, 0, err
+	}
+
 	if row.CancelRequested {
-		return durable.ErrCanceled
+		return db.DurableOperation{}, 0, durable.ErrCanceled
 	}
 
 	done, err := q.CountDurableStep(ctx, db.CountDurableStepParams{OperationID: row.ID, Name: f.Step})
 	if err != nil {
-		return fmt.Errorf("read durable step: %w", err)
+		return db.DurableOperation{}, 0, fmt.Errorf("read durable step: %w", err)
 	}
 
 	if done > 0 {
-		return durable.ErrStepDone
+		return db.DurableOperation{}, 0, durable.ErrStepDone
 	}
 
+	return row, now, nil
+}
+
+// insertStep records the step of f with result on row, which checkStep
+// returned in the same transaction, at the time now.
+func insertStep(
+	ctx context.Context, q *db.Queries, row db.DurableOperation, f durable.StepFence, result []byte, now int64,
+) error {
 	if result == nil {
 		// The column is NOT NULL in both dialects; an empty value stands
 		// for a step without a result.
 		result = []byte{}
 	}
 
-	err = q.InsertDurableStep(ctx, db.InsertDurableStepParams{
+	err := q.InsertDurableStep(ctx, db.InsertDurableStepParams{
 		OperationID: row.ID,
 		Name:        f.Step,
 		Result:      result,

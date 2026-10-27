@@ -94,6 +94,27 @@ func (s *Store) SetStateIf(ctx context.Context, expected, next maintenance.State
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
+	return s.setStateIfWithin(ctx, expected, next, nil)
+}
+
+// errWithin carries an error of the within function of setStateIfWithin
+// past the mapping to maintenance.ErrUnavailable.
+type errWithin struct {
+	err error
+}
+
+func (e errWithin) Error() string { return e.err.Error() }
+
+func (e errWithin) Unwrap() error { return e.err }
+
+// setStateIfWithin runs SetStateIf, and runs within in its transaction
+// before any change. An error of within rolls back and returns as it is.
+// With within, a state that is not expected rolls back too, so the writes of
+// within never commit without the state change. The caller holds the read
+// lock of the store.
+func (s *Store) setStateIfWithin(
+	ctx context.Context, expected, next maintenance.State, within func(q *db.Queries) error,
+) error {
 	if expected != maintenance.StateNormal && expected != maintenance.StateMaintenance {
 		return fmt.Errorf("%w: expected %q", maintenance.ErrInvalidState, expected)
 	}
@@ -104,6 +125,8 @@ func (s *Store) SetStateIf(ctx context.Context, expected, next maintenance.State
 
 	var changed int64
 
+	errChanged := fmt.Errorf("installation state is not %q: %w", expected, maintenance.ErrStateChanged)
+
 	unlock, lockErr := s.lockEnter(ctx, next)
 	if lockErr != nil {
 		return lockErr
@@ -111,6 +134,12 @@ func (s *Store) SetStateIf(ctx context.Context, expected, next maintenance.State
 	defer unlock()
 
 	err := s.inControlTx(ctx, func(q *db.Queries) error {
+		if within != nil {
+			if err := within(q); err != nil {
+				return errWithin{err: err}
+			}
+		}
+
 		if err := clearJournalOnEnter(ctx, q, next); err != nil {
 			return err
 		}
@@ -123,23 +152,29 @@ func (s *Store) SetStateIf(ctx context.Context, expected, next maintenance.State
 			return fmt.Errorf("store installation state sqlite database: %w", maintenance.ErrUnavailable)
 		}
 
+		if n == 0 && within != nil {
+			return errChanged
+		}
+
 		changed = n
 
 		return nil
 	})
-	if err != nil {
-		if errors.Is(err, maintenance.ErrUnavailable) {
-			return err
-		}
 
+	switch inner, ok := errors.AsType[errWithin](err); {
+	case ok:
+		return inner.err
+	case errors.Is(err, maintenance.ErrStateChanged):
+		return errChanged
+	case errors.Is(err, maintenance.ErrUnavailable):
+		return err
+	case err != nil:
 		return fmt.Errorf("store installation state sqlite database: %w", maintenance.ErrUnavailable)
+	case changed == 0:
+		return errChanged
+	default:
+		return nil
 	}
-
-	if changed == 0 {
-		return fmt.Errorf("installation state is not %q: %w", expected, maintenance.ErrStateChanged)
-	}
-
-	return nil
 }
 
 // maxEnterWait bounds the wait of an enter of maintenance mode for the

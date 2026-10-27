@@ -53,7 +53,11 @@ type BackupStore interface { //nolint:interfacebloat // A whole-store round trip
 	workspace.StateStore
 	backup.KeyPeeker
 	backup.Registry
-	backup.RestoreRegistry
+	// GetRestore and ListRestores read the restores table, as
+	// backup.RestoreOperations does. The cases that write restore rows
+	// assert the store to the restore operation ports.
+	GetRestore(ctx context.Context, id backup.RestoreID) (backup.RestoreRecord, error)
+	ListRestores(ctx context.Context) ([]backup.RestoreRecord, error)
 	backup.Inspector
 	backup.Coverage
 	maintenance.Store

@@ -189,7 +189,9 @@ package backup
 // operation ended.
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"regexp"
@@ -524,3 +526,34 @@ type RestoreStaging interface {
 // ErrRestoreBusy reports a drop of the cleanup that waited for its locks
 // longer than the limit. The cleanup step tries again with backoff.
 var ErrRestoreBusy = errors.New("restore cleanup waits for a lock on the old data")
+
+// restoreMaintenanceResult is the result that ConfirmRestoreMaintenance
+// records with the step: whether this restore entered maintenance mode.
+type restoreMaintenanceResult struct {
+	Entered bool `json:"entered"`
+}
+
+// EncodeRestoreMaintenance returns the step result that
+// ConfirmRestoreMaintenance records for entered.
+func EncodeRestoreMaintenance(entered bool) []byte {
+	if entered {
+		return []byte(`{"entered":true}`)
+	}
+
+	return []byte(`{"entered":false}`)
+}
+
+// DecodeRestoreMaintenance returns the flag of a step result that
+// EncodeRestoreMaintenance made. It returns ErrCorrupt for any other result.
+func DecodeRestoreMaintenance(result []byte) (bool, error) {
+	var out restoreMaintenanceResult
+
+	decoder := json.NewDecoder(bytes.NewReader(result))
+	decoder.DisallowUnknownFields()
+
+	if err := decoder.Decode(&out); err != nil {
+		return false, fmt.Errorf("%w: the result of the maintenance step does not decode", ErrCorrupt)
+	}
+
+	return out.Entered, nil
+}
