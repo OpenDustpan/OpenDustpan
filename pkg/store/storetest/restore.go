@@ -112,6 +112,13 @@ func RunRestore(t *testing.T, newStore RestoreFactory) {
 			tc.test(t, newStore)
 		})
 	}
+
+	for _, tc := range restoreOperationCases() {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			tc.test(t, newStore)
+		})
+	}
 }
 
 // newRestoreRecord returns a running restore record with the given start time.

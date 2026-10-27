@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/durable"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/stack"
@@ -126,6 +127,21 @@ type Store interface {
 	// or next value, and ErrUnavailable when the state cannot be stored. It
 	// reports ErrBusy as SetState does.
 	SetStateIf(ctx context.Context, expected, next State) error
+}
+
+// FencedStore is the part of the installation state port that a durable
+// operation uses: a change of the state under the claim of the operation. A
+// holder that lost its claim can then never enter or leave maintenance mode.
+// Each SQL store adapter implements it on the database of its durable.Store,
+// and runs the conformance cases of package storetest.
+type FencedStore interface {
+	// SetStateIfFenced stores next only when the stored state is expected,
+	// as SetStateIf does, and checks and records the step of f with the
+	// rules of durable.Store.RecordStep, in one transaction. It checks the
+	// fence first, and returns the errors of RecordStep. Then it returns the
+	// errors of SetStateIf. On an error it changes nothing: a changed state
+	// records no step.
+	SetStateIfFenced(ctx context.Context, expected, next State, f durable.StepFence) error
 }
 
 // Service enters and leaves maintenance mode. The zero value is not usable:

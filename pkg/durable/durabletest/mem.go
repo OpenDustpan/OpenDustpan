@@ -505,8 +505,38 @@ func (s memStore) Cancel(_ context.Context, id durable.ID) error {
 		return durable.ErrNotFound
 	}
 
-	now := s.db.clock(s.skew)
+	return cancelOp(op, s.db.clock(s.skew))
+}
 
+// CancelBefore implements durable.StepCanceler. The lock of the database
+// makes the check of the step and the cancel one step.
+func (s memStore) CancelBefore(_ context.Context, id durable.ID, step string) error {
+	if step == "" {
+		return durable.ErrInvalid
+	}
+
+	s.db.mu.Lock()
+	defer s.db.mu.Unlock()
+
+	op := s.db.ops[id]
+	if op == nil {
+		return durable.ErrNotFound
+	}
+
+	if op.State == durable.StateSucceeded || op.State == durable.StateFailed {
+		return durable.ErrFinished
+	}
+
+	if _, done := op.Step(step); done {
+		return durable.ErrStepDone
+	}
+
+	return cancelOp(op, s.db.clock(s.skew))
+}
+
+// cancelOp applies a cancel to op at now, with the rules of Cancel. The
+// caller holds the lock of the database.
+func cancelOp(op *durable.Operation, now time.Time) error {
 	switch op.State {
 	case durable.StatePending:
 		op.State = durable.StateCanceled
@@ -518,7 +548,7 @@ func (s memStore) Cancel(_ context.Context, id durable.ID) error {
 		return durable.ErrFinished
 	case durable.StateCanceled:
 	default:
-		return fmt.Errorf("operation %s: %w: %q", id, errUnknownState, op.State)
+		return fmt.Errorf("operation %s: %w: %q", op.ID, errUnknownState, op.State)
 	}
 
 	return nil
