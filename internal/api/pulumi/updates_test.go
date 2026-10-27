@@ -1219,17 +1219,19 @@ func leaseBodies() map[string]string {
 		"POST /api/stacks/{namespace}/{project}/{stack}/update/{update}/events/batch": `{"events":[]}`,
 		"PATCH /api/stacks/{namespace}/{project}/{stack}/update/{update}/checkpoint":  `{"version":3,"deployment":{}}`,
 		"PATCH /api/stacks/{namespace}/{project}/{stack}/update/{update}/checkpointverbatim": `{"version":3,` +
-			`"untypedDeployment":{},"sequenceNumber":1}`,
+			`"untypedDeployment":{"deployment":{}},"sequenceNumber":1}`,
 		"PATCH /api/stacks/{namespace}/{project}/{stack}/update/{update}/checkpointdelta": deltaLeaseBody(),
 		"POST /api/stacks/{namespace}/{project}/{stack}/update/{update}/complete":         `{"status":"succeeded"}`,
 	}
 }
 
 // deltaLeaseBody returns a valid delta for the seeded save of mintForLease:
-// it replaces the seeded `{}` with itself under sequence 2.
+// it replaces the seeded envelope with itself under sequence 2.
 func deltaLeaseBody() string {
-	return `{"version":3,"checkpointHash":` + strconv.Quote(deltaHash(`{}`)) +
-		`,"sequenceNumber":2,"deploymentDelta":[` + deltaEditJSON(0, 2, "{}") + `]}`
+	const seeded = `{"deployment":{}}`
+
+	return `{"version":3,"checkpointHash":` + strconv.Quote(deltaHash(seeded)) +
+		`,"sequenceNumber":2,"deploymentDelta":[` + deltaEditJSON(0, len(seeded), seeded) + `]}`
 }
 
 // leaseTargets returns the renew, event, checkpoint and complete paths for one update.
@@ -1266,7 +1268,7 @@ func mintForLease(t *testing.T, f updateFixture, pattern string) (stack.UpdateID
 		}
 
 		base := stack.CheckpointInput{
-			Features: nil, Deployment: []byte(`{}`), SchemaVersion: 3, Sequence: 1, Invalid: false,
+			Features: nil, Deployment: []byte(`{"deployment":{}}`), SchemaVersion: 3, Sequence: 1, Invalid: false,
 		}
 
 		if err := f.updates.SaveCheckpoint(t.Context(), f.ref, id, tok, base); err != nil {
@@ -2862,11 +2864,11 @@ func TestCheckpointDeltaCycle(t *testing.T) {
 	f := newUpdateFixture(t, allowAll())
 	paths, lease := verbatimPaths(t, f)
 
-	const base = `{"a":1,"b":2}`
-	const result = `{"a":1,"b":3}`
+	const base = `{"deployment":{"a":1,"b":2}}`
+	const result = `{"deployment":{"a":1,"b":3}}`
 
-	// The digit 2 sits at byte offset 11 of the base.
-	edits := "[" + deltaEditJSON(11, 12, "3") + "]"
+	// The digit 2 sits at byte offset 25 of the base.
+	edits := "[" + deltaEditJSON(25, 26, "3") + "]"
 
 	verbatim := `{"version":3,"untypedDeployment":` + base + `,"sequenceNumber":1}`
 	status, body := f.doUpdate(t, leaseRequest(http.MethodPatch, paths.Verbatim, lease, verbatim))
@@ -2889,8 +2891,8 @@ func TestCheckpointDeltaCycle(t *testing.T) {
 		t.Fatalf("delta retry answers %d, want %d (%s)", status, http.StatusOK, body)
 	}
 
-	if got := exportDeployment(t, f); got != result {
-		t.Fatalf("export = %q, want the patched result %q", got, result)
+	if got, want := exportDeployment(t, f), `{"a":1,"b":3}`; got != want {
+		t.Fatalf("export = %q, want the patched result %q", got, want)
 	}
 
 	invalid := []struct {
@@ -2943,8 +2945,8 @@ func TestCheckpointDeltaCycle(t *testing.T) {
 		checkErrorShape(t, http.StatusConflict, body)
 	}
 
-	if got := exportDeployment(t, f); got != result {
-		t.Fatalf("export = %q, want the patched result %q after rejected deltas", got, result)
+	if got, want := exportDeployment(t, f), `{"a":1,"b":3}`; got != want {
+		t.Fatalf("export = %q, want the patched result %q after rejected deltas", got, want)
 	}
 }
 
@@ -3017,7 +3019,7 @@ func TestCheckpointDeltaOverLimit(t *testing.T) {
 
 	// The base nearly fills the limit, so the verbatim save fits while a
 	// delta that grows it past the limit does not.
-	base := `{"a":"` + strings.Repeat("a", 1890) + `"}`
+	base := `{"deployment":{"a":"` + strings.Repeat("a", 1890) + `"}}`
 	verbatim := `{"version":3,"untypedDeployment":` + base + `,"sequenceNumber":1}`
 	status, body := f.doUpdate(t, leaseRequest(http.MethodPatch, paths.Verbatim, lease, verbatim))
 
@@ -3025,8 +3027,8 @@ func TestCheckpointDeltaOverLimit(t *testing.T) {
 		t.Fatalf("verbatim answers %d, want %d (%s)", status, http.StatusOK, body)
 	}
 
-	grown := `{"a":"` + strings.Repeat("b", 200) + strings.Repeat("a", 1880) + `"}`
-	edits := `[` + deltaEditJSON(6, 16, strings.Repeat("b", 200)) + `]`
+	grown := `{"deployment":{"a":"` + strings.Repeat("b", 200) + strings.Repeat("a", 1880) + `"}}`
+	edits := `[` + deltaEditJSON(20, 30, strings.Repeat("b", 200)) + `]`
 	delta := `{"version":3,"checkpointHash":` + strconv.Quote(deltaHash(grown)) +
 		`,"sequenceNumber":2,"deploymentDelta":` + edits + `}`
 	status, body = f.doUpdate(t, leaseRequest(http.MethodPatch, paths.Delta, lease, delta))
@@ -3037,7 +3039,7 @@ func TestCheckpointDeltaOverLimit(t *testing.T) {
 
 	checkErrorShape(t, http.StatusConflict, body)
 
-	if got := exportDeployment(t, f); got != base {
+	if got := exportDeployment(t, f); got != `{"a":"`+strings.Repeat("a", 1890)+`"}` {
 		t.Fatal("export changed after a rejected delta")
 	}
 }
@@ -3311,11 +3313,29 @@ func TestCheckpointSaveRefusesADeploymentThatIsNotAnObject(t *testing.T) {
 		t.Run("verbatim save/"+tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			request := strings.TrimSuffix(bodyWithDeployment("untypedDeployment", "version", tc.deployment), "}") +
+			inner := tc.deployment
+			if inner != "" {
+				inner = `{"deployment":` + inner + `}`
+			}
+
+			request := strings.TrimSuffix(bodyWithDeployment("untypedDeployment", "version", inner), "}") +
 				`,"sequenceNumber":2}`
 
 			checkRefusedSave(t, func(p updatePaths) string { return p.Verbatim }, request)
 		})
+	}
+}
+
+// TestVerbatimSaveRefusesAnEnvelopeWithNoDeployment proves that a sequenced
+// save whose envelope has no deployment member answers 400 in the error shape
+// of the Pulumi Cloud-compatible API, and that the stack keeps the last good
+// checkpoint, so a client with a defect cannot wipe the state of a stack.
+func TestVerbatimSaveRefusesAnEnvelopeWithNoDeployment(t *testing.T) {
+	t.Parallel()
+
+	for _, envelope := range []string{`{}`, `{"version":3}`, `{"resources":[]}`} {
+		checkRefusedSave(t, func(p updatePaths) string { return p.Verbatim },
+			`{"version":3,"untypedDeployment":`+envelope+`,"sequenceNumber":2}`)
 	}
 }
 
@@ -3327,7 +3347,7 @@ func checkRefusedSave(t *testing.T, path func(updatePaths) string, request strin
 	f := newUpdateFixture(t, allowAll())
 	paths, lease := verbatimPaths(t, f)
 
-	good := `{"version":3,"untypedDeployment":{"resources":[]},"sequenceNumber":1}`
+	good := `{"version":3,"untypedDeployment":{"deployment":{"resources":[]}},"sequenceNumber":1}`
 
 	status, body := f.doUpdate(t, leaseRequest(http.MethodPatch, paths.Verbatim, lease, good))
 	if status != http.StatusOK {

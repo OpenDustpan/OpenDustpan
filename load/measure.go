@@ -406,7 +406,7 @@ func (t *target) measureCheckpoints(ctx context.Context, sizes []int) ([]Checkpo
 	out := make([]CheckpointResult, 0, len(sizes))
 
 	for i, size := range sizes {
-		deployment := buildDeployment(size)
+		deployment := versionedEnvelope(buildDeployment(size))
 		made, deltaErr := makeDelta(deployment)
 
 		if deltaErr != nil {
