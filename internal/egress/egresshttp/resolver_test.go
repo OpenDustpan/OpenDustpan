@@ -272,6 +272,46 @@ func hasIPv6(t *testing.T, answers []netip.Addr) bool {
 	return true
 }
 
+// TestResolvedAddressAllowedConnects is the positive control of the refusal
+// tests: with the loopback rule of the test, the same name and the answer
+// 127.0.0.1 passes the dial guard, and the listener accepts exactly one
+// connection. It shows that the zero-accept checks above can fail.
+func TestResolvedAddressAllowedConnects(t *testing.T) {
+	t.Parallel()
+
+	port, accepts := countingListener(t)
+
+	c := egresshttp.ClientWith(
+		egress.Rules{Allow: nil, LoopbackForTests: true},
+		egress.NoRedirect, egress.HTTPOrHTTPS,
+		egresshttp.Options{RootCAs: nil, Resolver: fakeResolver(t, []netip.Addr{netip.MustParseAddr("127.0.0.1")})},
+	)
+	t.Cleanup(c.CloseIdleConnections)
+
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://rebind.example.test:"+port+"/", http.NoBody)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// The listener closes the connection without an answer, so the request
+	// fails after the connection opens. The failure must not be a refusal.
+	resp, err := c.Do(req)
+	if err == nil {
+		if cerr := resp.Body.Close(); cerr != nil {
+			t.Error(cerr)
+		}
+	} else if errors.Is(err, egress.ErrRefused) {
+		t.Fatalf("Do = %v, want no refusal", err)
+	}
+
+	if n := accepts.Load(); n != 1 {
+		t.Fatalf("the listener accepted %d connections, want 1", n)
+	}
+}
+
 // dialHost sends a request to a host name that the fake resolver
 // answers with answers, and checks that the request fails and that the
 // listener on loopback accepts no connection. It returns the error of the
