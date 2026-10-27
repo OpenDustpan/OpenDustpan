@@ -92,6 +92,10 @@ func applyIn(ctx context.Context, tx Tx, c *job.Change, ns namespace.Name) (job.
 		return job.Job{}, err
 	}
 
+	if next.State != cur.State {
+		next.StateChangedAt = now
+	}
+
 	if err := update(ctx, tx, &next, cur.Version); err != nil {
 		return job.Job{}, err
 	}
@@ -312,7 +316,7 @@ func closeAwaiting(
 
 		prev := j.Version
 		j.Version++
-		j.UpdatedAt = now
+		j.UpdatedAt, j.StateChangedAt = now, now
 
 		if err := update(ctx, tx, &j, prev); err != nil {
 			return nil, err

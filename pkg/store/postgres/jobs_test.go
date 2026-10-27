@@ -315,6 +315,25 @@ func TestJobBackupKeepsTheDefaultedValues(t *testing.T) {
 
 		s := open(t, base)
 
-		return storetest.JobBackup{Store: s, Jobs: s.Jobs(), Domain: &jobDomain{s: s}}
+		return storetest.JobBackup{Store: s, Jobs: s.Jobs(), Domain: &jobDomain{s: s}, Namespaces: s}
+	})
+}
+
+func TestJobRestoreIsReconciled(t *testing.T) {
+	t.Parallel()
+
+	base := os.Getenv(envURL)
+	if base == "" {
+		t.Skipf("set %s to run the PostgreSQL job restore test", envURL)
+	}
+
+	storetest.RunJobRestoreReconcile(t, func(t *testing.T) (storetest.JobBackup, storetest.JobBackup) {
+		t.Helper()
+
+		src := open(t, base)
+		dst := open(t, base)
+
+		return storetest.JobBackup{Store: src, Jobs: src.Jobs(), Domain: &jobDomain{s: src}, Namespaces: src},
+			storetest.JobBackup{Store: dst, Jobs: dst.Jobs(), Domain: &jobDomain{s: dst}, Namespaces: dst}
 	})
 }

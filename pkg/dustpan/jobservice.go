@@ -10,9 +10,11 @@ import (
 	"opendustpan.org/opendustpan/pkg/gate"
 	"opendustpan.org/opendustpan/pkg/gate/jobgate"
 	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/installation"
 	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/job"
 	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/runner"
 )
 
@@ -69,6 +71,57 @@ func newJobService(svc services, cfg *settings) (job.Starter, error) {
 	}
 
 	return starter, nil
+}
+
+// newJobReconciler builds the reconcile of the job model, or returns nil when
+// the server lacks the job store or the namespace service. A server without a
+// durable store runs no reconcile, because the schedule job.reconcile is a
+// durable schedule.
+func newJobReconciler(svc services, cfg *settings) (*job.Reconciler, error) {
+	if cfg.jobStore == nil || svc.namespaces == nil || cfg.durableStore == nil {
+		return nil, nil //nolint:nilnil // No reconcile: the server lacks a port that it needs.
+	}
+
+	log := cfg.logger
+	if log == nil {
+		log = slog.Default()
+	}
+
+	r, err := job.NewReconciler(job.ReconcilerConfig{
+		Store:           cfg.jobStore,
+		Namespaces:      jobNamespaces{namespaces: svc.namespaces},
+		QueueTimeout:    0,
+		DispatchTimeout: 0,
+		StateTimeout:    0,
+		MaxPlanAge:      0,
+		Approvers: gate.ApproverPolicy{
+			Production: cfg.installationKind != installation.KindDev,
+			IsDev:      principal.IsDevSubject,
+		},
+		Batch: 0,
+		Now:   cfg.now,
+		Log:   log,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("job reconcile: %w", err)
+	}
+
+	return r, nil
+}
+
+// jobNamespaces is the job.NamespaceReader over the namespace service.
+type jobNamespaces struct {
+	namespaces *namespace.Service
+}
+
+// GetNamespace implements job.NamespaceReader.
+func (n jobNamespaces) GetNamespace(ctx context.Context, name namespace.Name) (namespace.Namespace, error) {
+	got, err := n.namespaces.Get(ctx, name)
+	if err != nil {
+		return namespace.Namespace{}, fmt.Errorf("namespace %s: %w", name, err)
+	}
+
+	return got, nil
 }
 
 // lacksJobPorts reports whether the server lacks a port that the job service
