@@ -32,6 +32,10 @@ const (
 //nolint:gochecknoglobals // The table is a fixed declaration list; callers never mutate it.
 var componentOnly = map[string]string{
 	"console-dir":                     ComponentAPI,
+	"console-content-type-options":    ComponentAPI,
+	"console-frame-options":           ComponentAPI,
+	"console-csp":                     ComponentAPI,
+	"console-hsts":                    ComponentAPI,
 	"public-url":                      ComponentAPI,
 	"ip-allowlists":                   ComponentAPI,
 	"ip-allowlists-include-bootstrap": ComponentAPI,

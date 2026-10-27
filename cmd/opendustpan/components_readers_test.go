@@ -20,6 +20,10 @@ import (
 var settingFields = map[string]string{ //nolint:gochecknoglobals // A fixed declaration table.
 	"console-dir":                     "consoleDir",
 	"allowed-origins":                 "allowedOrigins",
+	"console-content-type-options":    "consoleHeaders",
+	"console-frame-options":           "consoleHeaders",
+	"console-csp":                     "consoleHeaders",
+	"console-hsts":                    "consoleHeaders",
 	"public-url":                      "publicURL",
 	"trusted-proxies":                 "proxies",
 	"trusted-proxy-header":            "proxies",
@@ -60,6 +64,7 @@ var settingFields = map[string]string{ //nolint:gochecknoglobals // A fixed decl
 // object, and the metrics route has none, so wireTokens stays "api".
 var readerComponent = map[string]map[string]string{ //nolint:gochecknoglobals // A fixed declaration table.
 	"consoleDir":     {"mountAPI": "api"},
+	"consoleHeaders": {"checkSettings": "api", "mountAPI": "api"},
 	"allowedOrigins": {"buildMux": "all", "checkSettings": "api", "mountAPI": "api", "newSignIn": "api"},
 	"publicURL": {
 		"checkSettings": "api", "newInventoryHandler": "api", "newRunnerHandler": "api", "newSignIn": "api",

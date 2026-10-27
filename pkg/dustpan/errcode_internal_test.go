@@ -22,7 +22,7 @@ func TestSDKAnswersCarryACode(t *testing.T) {
 		t.Fatalf("write index: %v", err)
 	}
 
-	files, err := consoleHandler(console)
+	files, err := consoleHandler(console, nil)
 	if err != nil {
 		t.Fatalf("console handler: %v", err)
 	}
