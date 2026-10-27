@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/durable"
+	"opendustpan.org/opendustpan/pkg/gate"
 	"opendustpan.org/opendustpan/pkg/job"
 )
 
@@ -313,7 +314,10 @@ func testConfirmationStored(t *testing.T, h Harness) {
 			a.Auth, a.AuthAt, confirm.Approval.AuthAt)
 	}
 
-	if s := job.GatesStatus(got.Phases[0].Gates, got.Phases[0].Approvals, got.StartedBy); s != job.GateOpen {
+	policy := gate.ApproverPolicy{Production: false, IsDev: nil}
+
+	s := job.GatesStatus(got.Phases[0].Gates, got.Phases[0].Approvals, got.StartedBy, policy)
+	if s != job.GateOpen {
 		t.Fatalf("GatesStatus of the stored job = %s, want open", s)
 	}
 }
