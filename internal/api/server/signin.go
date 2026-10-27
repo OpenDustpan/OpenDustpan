@@ -753,13 +753,19 @@ func browserCookie(name, value string, maxAge time.Duration, sameSite http.SameS
 		seconds = -1
 	}
 
-	c := &http.Cookie{
+	// Each mode is a constant in its own cookie, so the cookie never gets a
+	// mode that the code does not name, and the mode is set once.
+	if sameSite == http.SameSiteStrictMode {
+		return &http.Cookie{
+			Name: name, Value: value, Path: "/", MaxAge: seconds, Secure: true, HttpOnly: true,
+			SameSite: http.SameSiteStrictMode,
+		}
+	}
+
+	return &http.Cookie{
 		Name: name, Value: value, Path: "/", MaxAge: seconds, Secure: true, HttpOnly: true,
 		SameSite: http.SameSiteLaxMode,
 	}
-	c.SameSite = sameSite
-
-	return c
 }
 
 // sessionCookie returns the session cookie of the console. It is SameSite=Strict,

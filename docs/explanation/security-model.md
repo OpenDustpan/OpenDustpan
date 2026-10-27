@@ -29,7 +29,8 @@ OpenDustpan is pre-alpha. Do not keep production state on it.
   may finish. An update that a bootstrap administrator token started has no
   such token, so no check runs.
 - **The console session cookie is `SameSite=Strict`.** A request with the
-  session cookie and no `Origin` header must be a read, or must carry
+  session cookie and no `Origin` header is refused when it is a read that the
+  browser marks cross-site, and when it can change state without
   `Sec-Fetch-Site: same-origin`. A method that can change state also needs
   the `X-Dustpan-CSRF` header. The sign-in cookie stays `SameSite=Lax`, so
   the return from the identity provider works.
