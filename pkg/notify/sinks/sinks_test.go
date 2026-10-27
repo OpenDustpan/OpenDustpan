@@ -308,6 +308,7 @@ func TestCreate(t *testing.T) {
 			sinks.New{
 				Kind: notify.SinkWebhook, Platform: "", Name: "Ops",
 				Target: "https://hooks.example.com/ops/" + canary, URL: "",
+				AccessToken: "",
 			},
 			"hooks.example.com", true, true,
 		},
@@ -315,6 +316,7 @@ func TestCreate(t *testing.T) {
 			"a chat webhook",
 			sinks.New{
 				Kind: notify.SinkChat, Platform: "slack", Name: "Ops chat", Target: "", URL: chatURL,
+				AccessToken: "",
 			},
 			"hooks.slack.com", false, true,
 		},
@@ -322,7 +324,8 @@ func TestCreate(t *testing.T) {
 			"a chat webhook in upper case",
 			sinks.New{
 				Kind: notify.SinkChat, Platform: "mattermost", Name: "Ops chat", Target: "",
-				URL: "https://Chat.Example.com/hooks/" + canary,
+				URL:         "https://Chat.Example.com/hooks/" + canary,
+				AccessToken: "",
 			},
 			"chat.example.com", false, true,
 		},
@@ -330,6 +333,7 @@ func TestCreate(t *testing.T) {
 			"an email sink",
 			sinks.New{
 				Kind: notify.SinkEmail, Platform: "", Name: "Mail", Target: "ops@example.com", URL: "",
+				AccessToken: "",
 			},
 			"ops@example.com", false, false,
 		},
@@ -422,10 +426,10 @@ func TestCreateRefused(t *testing.T) {
 	t.Parallel()
 
 	chat := func(url string) sinks.New {
-		return sinks.New{Kind: notify.SinkChat, Platform: "slack", Name: "Chat", Target: "", URL: url}
+		return sinks.New{Kind: notify.SinkChat, Platform: "slack", Name: "Chat", Target: "", URL: url, AccessToken: ""}
 	}
 	hook := func(target string) sinks.New {
-		return sinks.New{Kind: notify.SinkWebhook, Platform: "", Name: "Hook", Target: target, URL: ""}
+		return sinks.New{Kind: notify.SinkWebhook, Platform: "", Name: "Hook", Target: target, URL: "", AccessToken: ""}
 	}
 
 	cases := []struct {
@@ -447,27 +451,32 @@ func TestCreateRefused(t *testing.T) {
 		{"a chat URL over the bound", chat("https://hooks.slack.com/" + strings.Repeat("a", egress.MaxURLBytes)), true},
 		{"a chat target", sinks.New{
 			Kind: notify.SinkChat, Platform: "slack", Name: "Chat", Target: "hooks.slack.com",
-			URL: "https://hooks.slack.com/x",
+			URL:         "https://hooks.slack.com/x",
+			AccessToken: "",
 		}, false},
 		{"a chat sink with no platform", sinks.New{
 			Kind: notify.SinkChat, Platform: "", Name: "Chat", Target: "", URL: "https://hooks.slack.com/x",
+			AccessToken: "",
 		}, false},
 		{"a chat sink with an unknown platform", sinks.New{
 			Kind: notify.SinkChat, Platform: "irc", Name: "Chat", Target: "", URL: "https://hooks.slack.com/x",
+			AccessToken: "",
 		}, false},
 		{
 			"a webhook with a url",
 			sinks.New{
-				Kind:     notify.SinkWebhook,
-				Platform: "",
-				Name:     "Hook",
-				Target:   "https://hooks.example.com/",
-				URL:      "https://x.example.com",
+				Kind:        notify.SinkWebhook,
+				Platform:    "",
+				Name:        "Hook",
+				Target:      "https://hooks.example.com/",
+				URL:         "https://x.example.com",
+				AccessToken: "",
 			},
 			false,
 		},
 		{"a webhook with a platform", sinks.New{
 			Kind: notify.SinkWebhook, Platform: "slack", Name: "Hook", Target: "https://hooks.example.com/", URL: "",
+			AccessToken: "",
 		}, false},
 		{"a webhook over http", hook("http://hooks.example.com/" + canary), true},
 		{"a webhook on loopback", hook("https://127.0.0.1:8443/" + canary), true},
@@ -478,24 +487,32 @@ func TestCreateRefused(t *testing.T) {
 		{
 			"an email sink with a url",
 			sinks.New{
-				Kind:     notify.SinkEmail,
-				Platform: "",
-				Name:     "Mail",
-				Target:   "ops@example.com",
-				URL:      "https://hooks.example.com",
+				Kind:        notify.SinkEmail,
+				Platform:    "",
+				Name:        "Mail",
+				Target:      "ops@example.com",
+				URL:         "https://hooks.example.com",
+				AccessToken: "",
 			},
 			false,
 		},
 		{"an email sink with a name in the address", sinks.New{
 			Kind: notify.SinkEmail, Platform: "", Name: "Mail", Target: "Ops <ops@example.com>", URL: "",
+			AccessToken: "",
 		}, false},
-		{"an unknown kind", sinks.New{Kind: "pager", Platform: "", Name: "P", Target: "x", URL: ""}, false},
+		{
+			"an unknown kind",
+			sinks.New{Kind: "pager", Platform: "", Name: "P", Target: "x", URL: "", AccessToken: ""},
+			false,
+		},
 		{"no name", sinks.New{
 			Kind: notify.SinkWebhook, Platform: "", Name: "", Target: "https://hooks.example.com/", URL: "",
+			AccessToken: "",
 		}, false},
 		{"a name over the bound", sinks.New{
 			Kind: notify.SinkWebhook, Platform: "", Name: strings.Repeat("n", notify.MaxNameLen+1),
 			Target: "https://hooks.example.com/", URL: "",
+			AccessToken: "",
 		}, false},
 	}
 
@@ -528,6 +545,7 @@ func TestCreateInUnknownNamespace(t *testing.T) {
 
 	_, err := f.svc.Create(t.Context(), f.caller, "nowhere", sinks.New{
 		Kind: notify.SinkWebhook, Platform: "", Name: "Hook", Target: "https://hooks.example.com/", URL: "",
+		AccessToken: "",
 	})
 	if !errors.Is(err, namespace.ErrNotFound) {
 		t.Fatalf("Create = %v, want namespace.ErrNotFound", err)
@@ -558,7 +576,8 @@ func makeChat(t *testing.T, f fixture) notify.Sink {
 
 	got, err := f.svc.Create(t.Context(), f.caller, shop, sinks.New{
 		Kind: notify.SinkChat, Platform: "slack", Name: "Chat", Target: "",
-		URL: "https://hooks.slack.com/services/T0/B0/" + canary,
+		URL:         "https://hooks.slack.com/services/T0/B0/" + canary,
+		AccessToken: "",
 	})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
@@ -572,6 +591,7 @@ func makeHook(t *testing.T, f fixture) sinks.Created {
 
 	got, err := f.svc.Create(t.Context(), f.caller, shop, sinks.New{
 		Kind: notify.SinkWebhook, Platform: "", Name: "Hook", Target: "https://hooks.example.com/ops", URL: "",
+		AccessToken: "",
 	})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
@@ -599,7 +619,7 @@ type refusedReplace struct {
 
 // change returns a Change with the version, the name and no other field.
 func change(version int64, name string) sinks.Change {
-	return sinks.Change{Version: version, Name: name, Target: nil, URL: nil}
+	return sinks.Change{Version: version, Name: name, Target: nil, URL: nil, AccessToken: nil}
 }
 
 // seedChat makes a chat sink.

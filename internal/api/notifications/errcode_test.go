@@ -58,6 +58,7 @@ func TestErrorsHaveCodes(t *testing.T) {
 			http.StatusTooManyRequests, errcode.SinkTestRateLimited,
 			map[string]any{"retryAfterSeconds": int64(2)},
 		},
+		{"access token", sinks.ErrAccessToken, http.StatusBadRequest, errcode.SinkAccessToken, nil},
 		{"platform host", sinks.ErrPlatformHost, http.StatusBadRequest, errcode.SinkPlatformHost, nil},
 		{"invalid sink", notify.ErrInvalid, http.StatusBadRequest, errcode.SinkInvalid, nil},
 		{"unknown error", errDiskFull, http.StatusInternalServerError, errcode.ServerInternal, nil},

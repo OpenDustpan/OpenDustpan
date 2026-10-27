@@ -642,6 +642,9 @@
       },
       "CreateNotificationSinkRequest": {
         "properties": {
+          "accessToken": {
+            "type": "string"
+          },
           "kind": {
             "type": "string"
           },
@@ -1090,6 +1093,7 @@
           "session.csrf",
           "session.other-site",
           "sign-in.refused",
+          "sink.access-token",
           "sink.conflict",
           "sink.invalid",
           "sink.no-sender",
@@ -2959,6 +2963,9 @@
       },
       "ReplaceNotificationSinkRequest": {
         "properties": {
+          "accessToken": {
+            "type": "string"
+          },
           "name": {
             "type": "string"
           },
@@ -4103,7 +4110,7 @@
   "info": {
     "description": "The tool-neutral REST API of an OpenDustpan server. The description covers the paths under /api/dustpan/v1/ only. A body has the schema of the Go type that the route names.",
     "title": "OpenDustpan REST API",
-    "version": "0.13.0"
+    "version": "0.14.0"
   },
   "openapi": "3.1.0",
   "paths": {

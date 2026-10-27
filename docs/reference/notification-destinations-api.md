@@ -51,8 +51,14 @@ The body has at most 64 KiB.
 | Kind | Fields |
 | --- | --- |
 | `webhook` | `kind`, `name`, `target` (an `https` URL on port 443, or on a port that the operator allows). The host is an ASCII DNS name or an IP address, with an optional numeric port. The URL is a secret: the server seals it, and the answer shows only its host. |
-| `chat` | `kind`, `platform`, `name`, `url` (the incoming webhook URL, on the same ports) |
+| `chat` | `kind`, `platform`, `name`, `url` (the incoming webhook URL, on the same ports), and `accessToken` for a platform that needs one |
 | `email` | `kind`, `name`, `target` (one address) |
+
+`accessToken` is write-only. The server seals it like the URL as a second
+secret item, and no answer, audit entry or log holds it. It has 1 to 4096
+printable ASCII characters and no space. A platform that takes no access token
+refuses the field, and a platform that needs one refuses a create without it.
+Both answer 400 `sink.access-token`.
 
 A field that a kind does not take, for example `url` for a `webhook`, answers
 400. The answer has the header `Cache-Control: no-store` and the header
@@ -70,8 +76,10 @@ port answers 400 `sink.invalid`.
 ## Change
 
 The body has `version` and `name`, and may have `target` (a `webhook` or an
-`email` destination) or `url` (a `chat` destination). A `target` of a `webhook`
-and a `url` are new secrets under a new reference. The signing keys of a
+`email` destination), or `url` and `accessToken` (a `chat` destination). A
+`target` of a `webhook`, a `url` and an `accessToken` are new secrets under a
+new reference. A new `url` keeps the access token, and a new `accessToken`
+keeps the URL. The signing keys of a
 `webhook` keep their references. The kind and the platform of a destination do not
 change. A `version` that is not the stored version answers 409 `sink.conflict`.
 
@@ -125,6 +133,7 @@ answers 409 `namespace.fenced`.
 | Status | `errorCode` | Cause |
 | --- | --- | --- |
 | 400 | `sink.invalid` | A field is not valid, or the outbound address rules refuse the URL or its port |
+| 400 | `sink.access-token` | The platform takes no access token, needs one and got none, or the token is not valid |
 | 400 | `sink.platform-host` | The host of the chat URL is not a webhook host of the platform |
 | 400 | `request.body-invalid` | The body is not one JSON object with known fields |
 | 403 | `access.denied`, `access.ip-not-allowed`, `session.csrf`, `session.other-site` | See the error codes of a 403 answer |

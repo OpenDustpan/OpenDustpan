@@ -263,6 +263,9 @@ type createBody struct {
 	Name     *string `dustpan:"required" json:"name"`
 	Target   *string `dustpan:"optional" json:"target"`
 	URL      *string `dustpan:"optional" json:"url"`
+	// AccessToken is the access token of a chat destination for a platform
+	// that needs one. It is write-only: no answer holds it.
+	AccessToken *string `dustpan:"optional" json:"accessToken"`
 }
 
 func orEmpty(s *string) string {
@@ -294,7 +297,7 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request, p identity.Prin
 
 	made, err := h.sinks.Create(ctx, caller(r, p), obj.Namespace(), sinks.New{
 		Kind: notify.SinkKind(*body.Kind), Platform: orEmpty(body.Platform), Name: *body.Name,
-		Target: orEmpty(body.Target), URL: orEmpty(body.URL),
+		Target: orEmpty(body.Target), URL: orEmpty(body.URL), AccessToken: orEmpty(body.AccessToken),
 	})
 	if err != nil {
 		h.writeError(ctx, w, err)
@@ -313,6 +316,9 @@ type replaceBody struct {
 	Name    *string `dustpan:"required" json:"name"`
 	Target  *string `dustpan:"optional" json:"target"`
 	URL     *string `dustpan:"optional" json:"url"`
+	// AccessToken is the new access token of a chat destination for a platform
+	// that needs one. It is write-only: no answer holds it.
+	AccessToken *string `dustpan:"optional" json:"accessToken"`
 }
 
 // replace serves PUT /sinks/{sink_id}.
@@ -333,7 +339,7 @@ func (h *Handler) replace(w http.ResponseWriter, r *http.Request, p identity.Pri
 	}
 
 	next, err := h.sinks.Replace(ctx, caller(r, p), obj.Namespace(), r.PathValue("sink_id"), sinks.Change{
-		Version: *body.Version, Name: *body.Name, Target: body.Target, URL: body.URL,
+		Version: *body.Version, Name: *body.Name, Target: body.Target, URL: body.URL, AccessToken: body.AccessToken,
 	})
 	if err != nil {
 		h.writeError(ctx, w, err)
