@@ -29,6 +29,11 @@ var ErrDialRefused = errors.New("the connection was refused by the address rules
 // egress.CheckAddr refuses. It runs after name resolution, on the address of
 // each connection, so a DNS answer that changes after a URL check cannot pass
 // it.
+//
+// The guard checks each address on its own. A name with several answers is
+// not refused as a whole: the dialer skips an address that the guard
+// refuses and may connect to another answer that the rules allow. No
+// connection opens to a refused address.
 func Control(_, address string, _ syscall.RawConn) error {
 	return ControlWith(egress.Rules{Allow: nil, LoopbackForTests: false})("", address, nil)
 }

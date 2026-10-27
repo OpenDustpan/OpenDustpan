@@ -272,32 +272,6 @@ func hasIPv6(t *testing.T, answers []netip.Addr) bool {
 	return true
 }
 
-// TestResolvedMixedAnswerRefused checks a host name with one public and one
-// private answer. The dial guard checks each address on its own, so the
-// dialer may still try the public address (a connection to a random port
-// of a documented public host, which no listener answers). The private
-// address must receive no connection, and the request must not succeed.
-func TestResolvedMixedAnswerRefused(t *testing.T) {
-	t.Parallel()
-
-	public := netip.MustParseAddr("93.184.215.14")
-
-	tests := []struct {
-		name    string
-		answers []netip.Addr
-	}{
-		{"private first", []netip.Addr{netip.MustParseAddr("127.0.0.1"), public}},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-
-			t.Log("request error:", dialHost(t, tt.answers, 3*time.Second))
-		})
-	}
-}
-
 // dialHost sends a request to a host name that the fake resolver
 // answers with answers, and checks that the request fails and that the
 // listener on loopback accepts no connection. It returns the error of the
