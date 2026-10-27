@@ -85,9 +85,12 @@ dropped from the RFC.
 - **ADR 194 decision 1.** The order of the sections gets one new section,
   the error diagnostics, after "Needs attention" (section A).
 - **ADR 194 decision 3.** The change kinds get `forget`, `import` and
-  `refresh`. A resource change gets the field `movedFrom` (section A).
+  `refresh`. A resource change gets the field `movedFrom` and the flag
+  `importing` (section A).
 - **ADR 194 decision 4.** "Needs attention" also holds each `forget`, each
   `import` and each move.
+- **ADR 225 decision 12.** A carried signature also keeps the view basis of
+  the signature that it carries from (section F, **recommendation**).
 
 The resume of a multi-unit apply (ADR 190 decision 8) is not in this
 list. It is an open question (question 8).
@@ -212,7 +215,8 @@ sorts.
    - OpenTofu: `forcesReplace` from `replace_paths`, `unknownAfter` from
      `after_unknown`, `secret` from `before_sensitive` or
      `after_sensitive`, `toolReason` from `action_reason`, `movedFrom`
-     from `previous_address`.
+     from `previous_address`, `importing`, true when `change.importing` is
+     present.
    - Pulumi: `forcesReplace` from `replaceReasons` and the `*-replace` diff
      kinds, `unknownAfter` from the placeholder string, `secret` from
      `[secret]`, `toolAction` from `op`, `movedFrom` from an `oldState`
@@ -224,7 +228,7 @@ sorts.
 and the core gets only flags and kinds it can act on. `movedFrom` and the
 kind `forget` are tool-neutral, so no field in the core exists for one tool
 only (ADR 12). User-facing text keeps the words of each tool: "preview" and
-"replace" for Pulumi, "plan" and "must be replaced" for OpenTofu (ADR 195).
+"replace" for Pulumi, "plan" and "must be replaced" for OpenTofu. ADR 195 gives only "preview" and "plan".
 `toolAction` and `toolReason` are labels, never input to a rule.
 An unknown `action_reason` shows as "unrecognized reason", with the raw
 string escaped. It is never an error.
@@ -244,7 +248,10 @@ different from an unknown `action_reason`, which is only a hint.
 | OpenTofu `["forget"]` | `forget` | Needs attention |
 | OpenTofu `["delete", "create"]` and `["create", "delete"]` | `replace` | Needs attention |
 | OpenTofu `["no-op"]` with `previous_address` | `move` | Needs attention |
-| OpenTofu any actions with `change.importing` present, also `["no-op"]` | `import` | Needs attention |
+| OpenTofu `change.importing` present, with `["delete"]`, `["delete", "create"]` or `["create", "delete"]` | `delete` or `replace`, with the flag `importing` | Needs attention |
+| OpenTofu `change.importing` present, with any other actions, also `["no-op"]` | `import` | Needs attention |
+| OpenTofu `previous_address` present, with `["delete"]`, `["delete", "create"]` or `["create", "delete"]` | `delete` or `replace`, with the flag `movedFrom` | Needs attention |
+| OpenTofu `previous_address` present, with `["update"]` | `move`, with the paths of the update | Needs attention |
 | OpenTofu `["no-op"]` without `previous_address` and without `importing` | none | not in the summary |
 | Pulumi `same` with `movedFrom` (an alias rename: the URN of `oldState` differs from the URN of the step) | `move` | Needs attention |
 | Pulumi `same` without `movedFrom` | none | not in the summary |
@@ -265,9 +272,18 @@ different from an unknown `action_reason`, which is only a hint.
   `replace` in the view like any other replace.
 - A resource change that has `movedFrom`, with any action, goes to
   "Needs attention" and never joins a change group.
-- An OpenTofu change with `importing` present has the kind `import`, also
-  when its actions are `["update"]`. The row keeps the paths of the update.
-  It is in "Needs attention" and never joins a change group.
+- An OpenTofu change with `importing` present and the actions `["delete"]`,
+  `["delete", "create"]` or `["create", "delete"]` has the kind `delete` or
+  `replace`, and the flag `importing`. The row keeps the value paths of its
+  actions. It is in "Needs attention" and never joins a change group.
+- An OpenTofu change with `importing` present and other actions has the kind
+  `import`, also when its actions are `["update"]`. The row keeps the paths of
+  the update. It is in "Needs attention" and never joins a change group.
+- An OpenTofu move (`previous_address` present) with the actions `["delete"]`,
+  `["delete", "create"]` or `["create", "delete"]` has the kind `delete` or
+  `replace`, with `movedFrom` set. An OpenTofu move with the action
+  `["update"]` has the kind `move`, and the row keeps the value paths of the
+  update. Both are in "Needs attention".
 
 **Needs attention keys on actions, not on paths.** The section holds each
 change of kind `delete`, `replace`, `forget` or `import` (also an import with the actions
@@ -436,10 +452,10 @@ text:
 A **noise rule** is data of a namespace that collapses a part of the view.
 It never changes the plan, the apply, the digest or a fact.
 
-**Fields** (proposal): `id`, `scope` (namespace, collection or unit),
-`tool`, `match`, `owner` (a person or a group), `reason` (required),
+**Fields** (proposal): `id`, `tool`, `match`, `owner` (a person or a group), `reason` (required),
 `expiresAt` (required, at most 90 days after the create or the last
-renewal), `createdBy`, `createdAt`, `version`.
+renewal), `createdBy`, `createdAt`, `version`. The scope of a rule is in its route
+path, not in a field (section H).
 
 **What a rule can never collapse.** The server refuses a rule at save that
 can match only these, and the reader ignores a match on these at render:
@@ -500,7 +516,7 @@ own, in every output:
 unit, resource, path, the rule ID and version, its owner, its reason and
 its expiry. It needs the same actions as the view, and the rule above for
 values: for a unit that the reader may not read values of, it holds the
-count of collapsed paths and the rule ID, with no path and no value. It also lists each path that a Pulumi `hideDiffs` option names
+count of collapsed paths. It has no rule ID, no path and no value. It also lists each path that a Pulumi `hideDiffs` option names
 (section "Pulumi CLI preview JSON"). The view does not apply `hideDiffs`:
 the author of the change controls it, so it is not a rule of the reviewer.
 The explain view lists it as "hidden by the program" and the path shows.
@@ -519,7 +535,9 @@ A noise rule can make a reviewer read less. So:
   write the rule.
 - A rule created or changed after a revision was attached collapses
   nothing in that revision. The view marks it "new since attach". The
-  author can attach a new revision to use it.
+  author can attach a new revision to use it. A renewal is a change of the
+  rule. So a renewal after an attach collapses nothing in that revision
+  (**recommendation**).
 - A person whose own rule collapses at least one row of a revision cannot
   sign that revision. "Own rule" has the same meaning as above: the person
   is in the write history of the rule (create, change or renewal). The
@@ -531,7 +549,8 @@ A noise rule can make a reviewer read less. So:
 - One action for the write of noise rules, as ADR 230 has one action,
   `namespace:manage-gates`, for all writes of gate configuration. Proposal,
   with the namespace as the object: `namespace:manage-noise-rules`. A
-  collection scope or a unit scope is a field of the rule. A read of the
+  collection scope or a unit scope is part of the route path, as for gates
+  (ADR 230 decision 3). A read of the
   rules needs `namespace:read-noise-rules`. The action names follow the
   style of ADR 210 and must be checked against the action lists of ADR 210
   and ADR 230 when an ADR records them. A read of the view needs
@@ -628,6 +647,9 @@ for the basis:
   for a rule change, a new built-in set version, or a reader upgrade.
 - The signature keeps the basis that it accepted, and the audit entry
   shows it.
+- A carried signature (ADR 225 decision 12) keeps the view basis of the
+  signature that it carries from (**recommendation**). A carry-over happens
+  at the attach, so no approve request names a basis for it.
 
 **The apply runs exactly that stored plan.** Nothing new: the apply job
 names its stored plan, `job.CheckPlan` runs at the dispatch, and the runner
@@ -671,9 +693,12 @@ proposals:
   largest comment that a forge accepts, and it ends with "truncated" and
   the link when the view is longer. Markdown is a rendering. It is never a
   basis of a signature.
-- `GET`, `POST .../namespaces/{namespace}/noise-rules`, and `GET`, `PATCH`,
-  `DELETE .../noise-rules/{id}`. A collection scope or a unit scope is a
-  field of the rule, as for gates (ADR 230).
+- `GET {scope}/noise-rules`, `GET`, `PUT` and `DELETE {scope}/noise-rules/{id}`,
+  as for gates (ADR 230 decision 3). `{scope}` is one of
+  `.../namespaces/{namespace}`, `.../namespaces/{namespace}/collections/{collection}`
+  and `.../namespaces/{namespace}/units/{tool}/{name}`. Each variable segment
+  is percent-encoded, as ADR 230 decision 3 says. A `PUT` names no scope in
+  its body.
 
 The console shows the view in the order of section A, with "collapsed by
 rule X" on each collapsed row and a switch "show collapsed changes".
@@ -783,10 +808,12 @@ _Avoid_: Suppression, filter, fold (that is of the focus view), ignore rule
 scanner finding)
 
 **View basis**:
-The SHA-256 of the list of active noise rules, the built-in rule sets, and the
-view encoding and reader versions that rendered the review view that a signer
-saw. The server computes it again at the approve request. A signature holds
-it.
+The SHA-256 of a canonical list. The list holds the sorted pairs (rule ID,
+rule version, unit) that apply to the revision, the ID and version of each
+built-in rule set that a scope of the revision turned on, and the version name
+of the view encoding and the version of each tool reader. It describes the
+review view that a signer saw. The server computes it again at the approve
+request. A signature holds it.
 _Avoid_: Render hash, view hash
 
 ## Outcome
