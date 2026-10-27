@@ -1455,6 +1455,7 @@ func checkRouteAuthenticationUnauthorized(t *testing.T, route tfe.Route) {
 			SameSite: http.SameSiteLaxMode,
 		})
 		req.Header.Set(sessionauth.CSRFHeader, "csrf-value")
+		req.Header.Set("Sec-Fetch-Site", "same-origin")
 
 		rec := httptest.NewRecorder()
 		allowed.ServeHTTP(rec, req)

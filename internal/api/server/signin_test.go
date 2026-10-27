@@ -444,15 +444,16 @@ func (e signInEnv) refusedReason(t *testing.T) (string, audit.Outcome) {
 }
 
 // checkBrowserCookie fails the test when c is not a cookie of the console:
-// Secure, HttpOnly, SameSite=Lax, Path=/, no Domain, and a lifetime.
-func checkBrowserCookie(t *testing.T, name string, c *http.Cookie) {
+// Secure, HttpOnly, the SameSite mode wantSameSite, Path=/, no Domain, and a
+// lifetime.
+func checkBrowserCookie(t *testing.T, name string, c *http.Cookie, wantSameSite http.SameSite) {
 	t.Helper()
 
 	switch {
 	case c == nil:
 		t.Fatalf("no %s cookie", name)
-	case !c.Secure, !c.HttpOnly, c.SameSite != http.SameSiteLaxMode:
-		t.Errorf("%s cookie = %+v, want Secure, HttpOnly and SameSite=Lax", name, c)
+	case !c.Secure, !c.HttpOnly, c.SameSite != wantSameSite:
+		t.Errorf("%s cookie = %+v, want Secure, HttpOnly and SameSite mode %d", name, c, wantSameSite)
 	case c.Path != "/", c.Domain != "", c.MaxAge <= 0:
 		t.Errorf("%s cookie = %+v, want Path=/, no Domain and a Max-Age", name, c)
 	default:
@@ -476,7 +477,7 @@ func TestSignInFlow(t *testing.T) {
 	e := newSignInEnv(t, true)
 
 	binding, authURL := e.start(t, "/console/tokens")
-	checkBrowserCookie(t, "sign-in", binding)
+	checkBrowserCookie(t, "sign-in", binding, http.SameSiteLaxMode)
 
 	q := e.authorize(t, authURL)
 
@@ -499,7 +500,7 @@ func TestSignInFlow(t *testing.T) {
 		t.Fatal("the callback set no session cookie")
 	}
 
-	checkBrowserCookie(t, "session", sess)
+	checkBrowserCookie(t, "session", sess, http.SameSiteStrictMode)
 
 	if !strings.HasPrefix(sess.Value, session.SecretPrefix) {
 		t.Errorf("session cookie value does not start with %q", session.SecretPrefix)
@@ -570,8 +571,16 @@ func TestSignInSessionRequests(t *testing.T) {
 		headers map[string]string
 		want    int
 	}{
-		{name: "no CSRF header", headers: nil, want: http.StatusForbidden},
-		{name: "wrong CSRF header", headers: map[string]string{apiserver.CSRFHeader: "wrong"}, want: http.StatusForbidden},
+		{name: "no CSRF header", headers: map[string]string{"Origin": consoleOrigin}, want: http.StatusForbidden},
+		{name: "wrong CSRF header", headers: map[string]string{
+			apiserver.CSRFHeader: "wrong", "Origin": consoleOrigin,
+		}, want: http.StatusForbidden},
+		{name: "no origin and no Fetch Metadata", headers: map[string]string{
+			apiserver.CSRFHeader: body.CSRFToken,
+		}, want: http.StatusForbidden},
+		{name: "no origin and same-site Fetch Metadata", headers: map[string]string{
+			apiserver.CSRFHeader: body.CSRFToken, "Sec-Fetch-Site": "same-site",
+		}, want: http.StatusForbidden},
 		{name: "other origin", headers: map[string]string{
 			apiserver.CSRFHeader: body.CSRFToken, "Origin": "https://evil.example",
 		}, want: http.StatusForbidden},
@@ -612,6 +621,7 @@ func TestSignOutRunsInMaintenanceMode(t *testing.T) {
 	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/server/sign-out", http.NoBody)
 	req.AddCookie(sess)
 	req.Header.Set(apiserver.CSRFHeader, body.CSRFToken)
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
 	req.Header.Set("Origin", consoleOrigin)
 
 	rec := httptest.NewRecorder()
@@ -693,6 +703,7 @@ func (e signInEnv) sendWithSession(
 	req := httptest.NewRequestWithContext(t.Context(), method, target, strings.NewReader(body))
 	req.AddCookie(sess)
 	req.Header.Set(apiserver.CSRFHeader, s.CSRFToken)
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
 
 	rec := httptest.NewRecorder()
 	e.handler.ServeHTTP(rec, req)
@@ -1179,6 +1190,7 @@ func TestSignInSessionChangeRecordsTheConsoleChannel(t *testing.T) {
 		strings.NewReader(`{"name":"laptop"}`))
 	req.AddCookie(sess)
 	req.Header.Set(apiserver.CSRFHeader, body.CSRFToken)
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
 	req.Header.Set("Dustpan-Channel", "api")
 
 	rec := httptest.NewRecorder()

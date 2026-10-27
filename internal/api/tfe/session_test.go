@@ -67,6 +67,7 @@ func sessionPost(t *testing.T, target, body string) *http.Request {
 		SameSite: http.SameSiteLaxMode,
 	})
 	req.Header.Set(sessionauth.CSRFHeader, session.CSRFValue(secret))
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
 
 	return req
 }

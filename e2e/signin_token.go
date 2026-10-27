@@ -438,5 +438,7 @@ func freshAdminEntry(at time.Time, object string) audit.Entry {
 // sessionHeader returns the headers of an installation API request from a
 // console session with the CSRF value csrf.
 func sessionHeader(csrf string) http.Header {
-	return http.Header{"X-Dustpan-Csrf": {csrf}, "Content-Type": {"application/json"}}
+	return http.Header{
+		"X-Dustpan-Csrf": {csrf}, "Content-Type": {"application/json"}, "Sec-Fetch-Site": {"same-origin"},
+	}
 }

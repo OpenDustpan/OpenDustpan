@@ -130,6 +130,7 @@ func registerConsole(t *testing.T, addr string, st consoleBackend) {
 	consoles.Store(addr, func(_ *testing.T, req *http.Request) {
 		req.AddCookie(login.cookie)
 		req.Header.Set(dustpanCSRFHeader, login.csrf)
+		req.Header.Set("Sec-Fetch-Site", "same-origin")
 		req.Header.Del("Authorization")
 	})
 }
@@ -227,6 +228,7 @@ func addConsole(t *testing.T, srv *dustpan.Server, req *http.Request, person str
 
 	req.AddCookie(login.cookie)
 	req.Header.Set(dustpanCSRFHeader, login.csrf)
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
 	req.Header.Del("Authorization")
 }
 
