@@ -1,6 +1,8 @@
 package sqlite_test
 
 import (
+	"time"
+
 	"testing"
 
 	"opendustpan.org/opendustpan/pkg/backup"
@@ -46,7 +48,7 @@ func TestItemKeyBackupRestore(t *testing.T) {
 			Live: st, Operations: st.DurableOperationsPort(), Backups: backups,
 			Maintenance: storetest.StateMaintenance{State: st, Hold: false},
 			Blobs:       live, Target: in.Target, Key: in.Key, Installation: "test", AfterApply: nil, Admit: nil,
-			AllowDevBackups: false, AllowDevHint: "", Owner: "", Lease: 0, CleanupLockWait: 0, Now: nil, Logger: nil,
+			AllowDevBackups: false, AllowDevHint: "", Owner: "", Lease: 0, CleanupLockWait: 0, RetryBase: time.Millisecond, Now: nil, Logger: nil,
 		})
 		if err != nil {
 			t.Fatalf("new restore service: %v", err)

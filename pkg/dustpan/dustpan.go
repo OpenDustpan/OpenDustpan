@@ -619,21 +619,21 @@ type Server struct {
 	// description read it.
 	mounted *adapters
 	// root is the root mux. Only the tests of the API description read it.
-	root            *rootMux
-	logger          *slog.Logger
-	listenAddr      string
-	listener        net.Listener
-	secrets         *secret.Service
-	secretKeys      secret.KeyStore
-	secretWrapper   secret.Wrapper
-	workspaces      *workspace.Service
-	backups         *backup.Service
-	restores        *backup.RestoreService
-	now             func() time.Time
-	registry        *metrics.Registry
-	tlsCertFile     string
-	tlsKeyFile      string
-	observed        *metrics.ServerMetrics
+	root          *rootMux
+	logger        *slog.Logger
+	listenAddr    string
+	listener      net.Listener
+	secrets       *secret.Service
+	secretKeys    secret.KeyStore
+	secretWrapper secret.Wrapper
+	workspaces    *workspace.Service
+	backups       *backup.Service
+	restores      *backup.RestoreService
+	now           func() time.Time
+	registry      *metrics.Registry
+	tlsCertFile   string
+	tlsKeyFile    string
+	observed      *metrics.ServerMetrics
 	// chain is the audit chain of the store, or nil when the store keeps
 	// its own chain.
 	chain *auditChain
@@ -3456,6 +3456,7 @@ func newRestoreService(
 		Owner:           durableOwner(cfg),
 		Lease:           0,
 		CleanupLockWait: 0,
+		RetryBase:       0,
 		Now:             cfg.now,
 		Logger:          cfg.logger,
 	})

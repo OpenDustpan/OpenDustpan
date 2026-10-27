@@ -124,8 +124,12 @@ type RestoreConfig struct {
 	// CleanupLockWait bounds the wait of each drop of the cleanup step for
 	// its locks. Zero means DefaultCleanupLockWait.
 	CleanupLockWait time.Duration
-	Now             func() time.Time
-	Logger          *slog.Logger
+	// RetryBase is the delay before the first retry of a failed step. Each
+	// next retry doubles it, up to durable.DefaultBackoffMax. Zero means
+	// durable.DefaultBackoffBase.
+	RetryBase time.Duration
+	Now       func() time.Time
+	Logger    *slog.Logger
 }
 
 // DefaultCleanupLockWait bounds the wait of each drop of the cleanup step for
@@ -238,7 +242,7 @@ func (s *RestoreService) newRunner(cfg RestoreConfig) (*durable.Runner, error) {
 		PollEvery:          0,
 		MaxAttempts:        0,
 		ExpiryLimit:        0,
-		Backoff:            durable.Backoff{Base: 0, Max: 0},
+		Backoff:            durable.Backoff{Base: cmp.Or(cfg.RetryBase, durable.DefaultBackoffBase), Max: durable.DefaultBackoffMax},
 		ClaimBackoff:       durable.Backoff{Base: 0, Max: 0},
 		WriteTimeout:       0,
 		Deferred:           nil,

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -227,6 +228,8 @@ func (s *RestoreService) failRestore(ctx context.Context, sc durable.StepContext
 		ID: in.ID, State: RestoreFailed, Error: text, EndedAt: s.now().UTC(), DevReport: nil, LeaveMaintenance: !held,
 	}
 
+	s.cleanAfterFailure(ctx, sc, in)
+
 	fence := sc.Operation.Claim.Step(RestoreStepFinish)
 
 	_, finishErr := s.live.FinishRestore(ctx, fence, end)
@@ -241,6 +244,25 @@ func (s *RestoreService) failRestore(ctx context.Context, sc durable.StepContext
 		return finishErr
 	default:
 		return durable.Permanent(errors.Join(cause, fmt.Errorf("mark restore %s failed: %w", in.ID, finishErr)))
+	}
+}
+
+// cleanAfterFailure deletes the temporary blob keys and drops the staging
+// areas of a restore that fails, under the fence of the cleanup step, so that
+// the staged data of a refused backup does not stay until the next restore.
+// It does not return its error: the cleanup of the next restore drops what
+// stays.
+func (s *RestoreService) cleanAfterFailure(ctx context.Context, sc durable.StepContext, in restoreInput) {
+	if err := s.deleteTempKeys(ctx, in.ID); err != nil {
+		s.logger.WarnContext(ctx, "temporary restore blobs of a failed restore were not deleted",
+			slog.String("restore_id", in.ID.String()))
+	}
+
+	fence := sc.Operation.Claim.Step(RestoreStepCleanup)
+	if _, err := s.live.CleanRestoreAreas(ctx, fence, in.ID, s.lockWait); err != nil &&
+		!errors.Is(err, durable.ErrStepDone) {
+		s.logger.WarnContext(ctx, "staging areas of a failed restore were not dropped",
+			slog.String("restore_id", in.ID.String()))
 	}
 }
 
@@ -520,11 +542,57 @@ func (s *RestoreService) stepAfterApply(ctx context.Context, sc durable.StepCont
 		entries = append(entries, s.restoreAuditEntry(in, object))
 	}
 
-	if _, err := s.live.AppendRestoreAudit(ctx, sc.Fence, in.ID, entries); err != nil {
+	_, err = s.live.AppendRestoreAudit(ctx, sc.Fence, in.ID, entries)
+
+	switch {
+	case err == nil:
+		return nil, nil
+	case ctx.Err() != nil, errors.Is(err, durable.ErrClaimLost), errors.Is(err, durable.ErrCanceled),
+		errors.Is(err, durable.ErrStepDone):
+		return nil, err
+	case sc.Operation.Failures+1 < durable.DefaultMaxAttempts:
 		return nil, fmt.Errorf("append the audit entries of restore %s: %w", in.ID, err)
+	default:
+		// The swap already happened, and the report is in the restore
+		// record. The restore ends finished with a warning, and the error
+		// goes to the log.
+		s.logger.ErrorContext(ctx, "audit append failed", slog.String("restore_id", in.ID.String()))
+
+		return encodeAfterApply(afterApplyResult{AuditFailed: true}), nil
+	}
+}
+
+// afterApplyResult is the result of the after-apply step.
+type afterApplyResult struct {
+	// AuditFailed is true when the audit entries of the restore were not
+	// written on the last attempt of the step.
+	AuditFailed bool `json:"auditFailed"`
+}
+
+// encodeAfterApply encodes r as the result of the after-apply step.
+func encodeAfterApply(r afterApplyResult) []byte {
+	if r.AuditFailed {
+		return []byte(`{"auditFailed":true}`)
 	}
 
-	return nil, nil
+	return []byte(`{"auditFailed":false}`)
+}
+
+// auditFailedOf reports whether the after-apply step of op recorded that the
+// audit entries were not written. A result that does not decode reports a
+// failure: the warning then shows instead of a silent gap.
+func auditFailedOf(op durable.Operation) bool {
+	rec, ok := op.Step(RestoreStepAfterApply)
+	if !ok || len(rec.Result) == 0 {
+		return false
+	}
+
+	var r afterApplyResult
+	if err := json.Unmarshal(rec.Result, &r); err != nil {
+		return true
+	}
+
+	return r.AuditFailed
 }
 
 // stepLeave leaves the maintenance mode that this restore entered, and
@@ -615,6 +683,10 @@ func (s *RestoreService) stepFinish(ctx context.Context, sc durable.StepContext,
 		if kept.DroppedTempAdmins > 0 {
 			report.Classes = withClass(report.Classes, RemovedTempAdmins, kept.DroppedTempAdmins)
 		}
+	}
+
+	if auditFailedOf(sc.Operation) {
+		report.Warnings = append(slices.Clone(report.Warnings), WarnAuditAppendFailed)
 	}
 
 	end := RestoreEnd{

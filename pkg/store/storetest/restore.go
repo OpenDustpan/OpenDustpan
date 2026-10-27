@@ -187,6 +187,7 @@ func mustMarkApplying(t *testing.T, s RestoreStore, id backup.RestoreID, pre bac
 		t.Fatalf("mark restore %s applying: %v", id, err)
 	}
 }
+
 // mustGetRestore reads one restore row, failing on error.
 func mustGetRestore(t *testing.T, s RestoreStore, id backup.RestoreID) backup.RestoreRecord {
 	t.Helper()
@@ -230,6 +231,7 @@ func mustFinishRestore(t *testing.T, s RestoreStore, finish restoreFinish) backu
 
 	return got
 }
+
 // testRestoreRegistry covers the restores table: create a running row, finish
 // it succeeded or failed with the error text, get it, and list newest first.
 func testRestoreRegistry(t *testing.T, newStore RestoreFactory) {
@@ -274,6 +276,7 @@ func checkRestoreCreateAndGet(t *testing.T, s RestoreStore) backup.RestoreRecord
 
 	return first
 }
+
 // checkRestoreFinishPaths finishes the first row succeeded, then proves a
 // second finish fails, and that a fence of another restore cannot finish it.
 func checkRestoreFinishPaths(t *testing.T, s RestoreStore, first backup.RestoreRecord) {
@@ -314,6 +317,7 @@ func checkRestoreFinishPaths(t *testing.T, s RestoreStore, first backup.RestoreR
 		t.Fatalf("complete the operation: %v", err)
 	}
 }
+
 // checkRestoreApplying moves a second row to applying with the pre-backup ID,
 // proves a second mark fails, finishes it, and returns it.
 func checkRestoreApplying(t *testing.T, s RestoreStore, first backup.RestoreRecord) backup.RestoreRecord {
@@ -351,6 +355,7 @@ func checkRestoreApplying(t *testing.T, s RestoreStore, first backup.RestoreReco
 
 	return applied
 }
+
 // checkRestoreFailedAndListed finishes a third row failed with the error text,
 // creates a fourth, and proves the list holds all four newest first.
 func checkRestoreFailedAndListed(
@@ -442,6 +447,7 @@ func testRestoreOneRunning(t *testing.T, newStore RestoreFactory) {
 	mustFinishRestore(t, s, restoreFinish{ID: first.ID, State: backup.RestoreSucceeded, Error: "", EndedAt: now()})
 	mustCreateRestore(t, s, second)
 }
+
 // testRestoreThenBackup restores a snapshot while the target holds no control
 // rows: a backup leaves the control tables out, so the running backup and
 // the checking restore of the source never reach the target. The target

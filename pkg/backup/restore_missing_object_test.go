@@ -57,10 +57,10 @@ func TestRestoreOfAMissingObjectNamesTheObject(t *testing.T) {
 		lost      []string
 		wantKey   string
 	}{
-		{"blob, restore", "rst-missingobject0001", false, []string{lostBlob}, lostBlob},
-		{"blob, check only", "rst-missingobject0002", true, []string{lostBlob}, lostBlob},
-		{"table files, restore", "rst-missingobject0003", false, tableFiles, "backups/bkp-restore/"},
-		{"table files, check only", "rst-missingobject0004", true, tableFiles, "backups/bkp-restore/"},
+		{"blob, restore", "rst-missingobjectaaaaaaa", false, []string{lostBlob}, lostBlob},
+		{"blob, check only", "rst-missingobjectbbbbbbb", true, []string{lostBlob}, lostBlob},
+		{"table files, restore", "rst-missingobjectccccccc", false, tableFiles, "backups/bkp-restore/"},
+		{"table files, check only", "rst-missingobjectddddddd", true, tableFiles, "backups/bkp-restore/"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()

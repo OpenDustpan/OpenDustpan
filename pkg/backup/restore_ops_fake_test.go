@@ -462,3 +462,13 @@ func (m *restoreServiceMaintenance) Held(context.Context) (bool, error) {
 
 	return m.held, nil
 }
+
+// GetRestore implements backup.RestoreOperations.
+func (l *restoreServiceLive) GetRestore(ctx context.Context, id backup.RestoreID) (backup.RestoreRecord, error) {
+	return l.registry.GetRestore(ctx, id)
+}
+
+// ListRestores implements backup.RestoreOperations.
+func (l *restoreServiceLive) ListRestores(ctx context.Context) ([]backup.RestoreRecord, error) {
+	return l.registry.ListRestores(ctx)
+}

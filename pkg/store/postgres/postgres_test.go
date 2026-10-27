@@ -1067,6 +1067,7 @@ func newRestoreAuditServices(
 		Owner:           "",
 		Lease:           0,
 		CleanupLockWait: 0,
+		RetryBase:       time.Millisecond,
 		Now:             nil,
 		Logger:          nil,
 	})
