@@ -3,6 +3,7 @@ package backup
 import (
 	"bytes"
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -85,10 +86,17 @@ type stageResult struct {
 	Report   DevStripReport    `json:"report"`
 }
 
-// pinned returns the pinned manifest of r.
+// pinned returns the pinned manifest of r. A checksum that does not decode
+// pins nothing that a manifest can match, so the repin fails closed.
 func (r stageResult) pinned() pinnedManifest {
+	sum, err := hex.DecodeString(r.SQLSHA)
+	if err != nil {
+		sum = nil
+	}
+
 	return pinnedManifest{
-		sqlSize: r.SQLSize, sqlSHA: r.SQLSHA, schema: r.Schema, dialect: r.Dialect, kind: r.Kind, wrappers: r.Wrappers,
+		sqlSize: r.SQLSize, sqlSHA: string(sum), schema: r.Schema, dialect: r.Dialect, kind: r.Kind,
+		wrappers: r.Wrappers,
 	}
 }
 
@@ -311,7 +319,8 @@ func (s *RestoreService) stepStage(ctx context.Context, sc durable.StepContext, 
 	dev.report.Warnings = dev.warnings()
 
 	out, err := json.Marshal(stageResult{
-		Area: area.String(), SQLSize: pinned.sqlSize, SQLSHA: pinned.sqlSHA, Schema: pinned.schema,
+		Area: area.String(), SQLSize: pinned.sqlSize, SQLSHA: hex.EncodeToString([]byte(pinned.sqlSHA)),
+		Schema:  pinned.schema,
 		Dialect: pinned.dialect, Kind: pinned.kind, Wrappers: pinned.wrappers, Live: dev.live, Report: dev.report,
 	})
 	if err != nil {

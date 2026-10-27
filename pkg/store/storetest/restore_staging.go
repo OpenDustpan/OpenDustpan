@@ -200,9 +200,7 @@ func testRestoreAreaSwapFenced(t *testing.T, newStore RestoreFactory) {
 	area := r.stage(t, r.held.Claim.Token)
 
 	// A takeover: the first holder releases, and a second holder claims.
-	replaceClaim(t, durableOps, r.held)
-
-	taken := mustClaimRestoreOp(t, durableOps, "instance-c")
+	taken := replaceClaim(t, durableOps, r.held)
 
 	_, err := r.staging.ApplyRestoreArea(t.Context(), r.held.Claim.Step(backup.RestoreStepSwap), area, false)
 	if !errors.Is(err, durable.ErrClaimLost) {

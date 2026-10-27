@@ -141,7 +141,6 @@ var (
 	_ backup.KeyPeeker         = (*fakeBackupStore)(nil)
 	_ backup.Applier           = (*fakeBackupStore)(nil)
 	_ backup.Fencer            = (*fakeBackupStore)(nil)
-	_ backup.RestoreRegistry   = (*fakeBackupStore)(nil)
 )
 
 // newFakeBackupStore returns a fresh, empty fake of the SQLite dialect at
@@ -2187,64 +2186,6 @@ func (s *fakeBackupStore) FailEndedBackups(ctx context.Context, endedAt time.Tim
 	return changed, nil
 }
 
-// CreateRestore implements backup.RestoreRegistry.
-func (s *fakeBackupStore) CreateRestore(_ context.Context, r backup.RestoreRecord) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	if s.closed {
-		return errFakeClosed
-	}
-
-	if _, ok := s.data.restores[r.ID.String()]; ok {
-		return backup.ErrRestoreExists
-	}
-
-	if r.State == backup.RestoreChecking || r.State == backup.RestoreApplying {
-		for id := range s.data.restores {
-			if st := s.data.restores[id].State; st == backup.RestoreChecking || st == backup.RestoreApplying {
-				return backup.ErrRestoreRunning
-			}
-		}
-	}
-
-	s.data.restores[r.ID.String()] = r
-
-	return nil
-}
-
-// FinishRestore implements backup.RestoreRegistry.
-func (s *fakeBackupStore) FinishRestore(
-	_ context.Context, id backup.RestoreID, state backup.RestoreState, errText string, endedAt time.Time,
-) (backup.RestoreRecord, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	if s.closed {
-		return backup.RestoreRecord{}, errFakeClosed
-	}
-
-	r, ok := s.data.restores[id.String()]
-	if !ok {
-		return backup.RestoreRecord{}, backup.ErrRestoreNotFound
-	}
-
-	if state != backup.RestoreSucceeded && state != backup.RestoreFailed {
-		return backup.RestoreRecord{}, backup.ErrRestoreNotRunning
-	}
-
-	if r.State != backup.RestoreChecking && r.State != backup.RestoreApplying {
-		return backup.RestoreRecord{}, backup.ErrRestoreNotRunning
-	}
-
-	r.State = state
-	r.Error = errText
-	r.EndedAt = endedAt
-	s.data.restores[id.String()] = r
-
-	return r, nil
-}
-
 // GetRestore implements backup.RestoreRegistry.
 func (s *fakeBackupStore) GetRestore(_ context.Context, id backup.RestoreID) (backup.RestoreRecord, error) {
 	s.mu.RLock()
@@ -2296,55 +2237,6 @@ func (s *fakeBackupStore) ListRestores(_ context.Context) ([]backup.RestoreRecor
 	})
 
 	return out, nil
-}
-
-// FailRunningRestores implements backup.RestoreRegistry.
-func (s *fakeBackupStore) FailRunningRestores(_ context.Context, endedAt time.Time, errText string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	if s.closed {
-		return errFakeClosed
-	}
-
-	for _, id := range slices.Sorted(maps.Keys(s.data.restores)) {
-		r := s.data.restores[id]
-		if r.State == backup.RestoreChecking || r.State == backup.RestoreApplying {
-			r.State = backup.RestoreFailed
-			r.Error = errText
-			r.EndedAt = endedAt
-			s.data.restores[id] = r
-		}
-	}
-
-	return nil
-}
-
-// MarkRestoreApplying implements backup.RestoreRegistry.
-func (s *fakeBackupStore) MarkRestoreApplying(
-	_ context.Context, id backup.RestoreID, preBackupID backup.ID,
-) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	if s.closed {
-		return errFakeClosed
-	}
-
-	r, ok := s.data.restores[id.String()]
-	if !ok {
-		return backup.ErrRestoreNotFound
-	}
-
-	if r.State != backup.RestoreChecking {
-		return backup.ErrRestoreNotRunning
-	}
-
-	r.State = backup.RestoreApplying
-	r.PreBackupID = preBackupID
-	s.data.restores[id.String()] = r
-
-	return nil
 }
 
 // ApplyStaging implements backup.Applier: it swaps the staged copy into the

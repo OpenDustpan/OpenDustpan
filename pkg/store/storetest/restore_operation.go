@@ -793,7 +793,7 @@ func testRestoreOpEnterRefused(t *testing.T, newStore RestoreFactory) {
 		end  func(t *testing.T, s durable.Store, held durable.Operation)
 		want error
 	}{
-		{name: "replaced", end: replaceClaim, want: durable.ErrClaimLost},
+		{name: "replaced", end: replaceAndForget, want: durable.ErrClaimLost},
 		{name: "canceled", end: cancelOnly, want: durable.ErrCanceled},
 	}
 
@@ -909,15 +909,22 @@ func mustState(t *testing.T, s RestoreStore, want maintenance.State) {
 }
 
 // replaceClaim releases the claim of held, and a second instance claims the
-// operation again with a new token.
-func replaceClaim(t *testing.T, s durable.Store, held durable.Operation) {
+// operation again with a new token. It returns the operation of the new
+// claim.
+func replaceClaim(t *testing.T, s durable.Store, held durable.Operation) durable.Operation {
 	t.Helper()
 
 	if err := s.Release(t.Context(), held.Claim); err != nil {
 		t.Fatalf("release: %v", err)
 	}
 
-	mustClaimRestoreOp(t, s, "instance-b")
+	return mustClaimRestoreOp(t, s, "instance-b")
+}
+
+// replaceAndForget runs replaceClaim for a case that needs no new claim.
+func replaceAndForget(t *testing.T, s durable.Store, held durable.Operation) {
+	t.Helper()
+	replaceClaim(t, s, held)
 }
 
 // cancelOnly asks for the cancel of the operation of held.

@@ -920,35 +920,6 @@ func TestItemKeyBackupRestore(t *testing.T) {
 	})
 }
 
-// restoreAuditMaintenance enters and leaves maintenance mode in the stored
-// installation state, as the maintenance service does for a restore: the
-// restore then runs with the real state check, and the audit entry after the
-// swap must pass it.
-type restoreAuditMaintenance struct {
-	state maintenance.Store
-}
-
-// Enter implements backup.RestoreMaintenance.
-func (m restoreAuditMaintenance) Enter(
-	ctx context.Context, _ bool,
-) (maintenance.EnterResult, error) {
-	err := m.state.SetStateIf(ctx, maintenance.StateNormal, maintenance.StateMaintenance)
-	if err != nil {
-		return maintenance.EnterResult{Canceled: nil}, fmt.Errorf("enter maintenance mode: %w", err)
-	}
-
-	return maintenance.EnterResult{Canceled: nil}, nil
-}
-
-// Leave implements backup.RestoreMaintenance.
-func (m restoreAuditMaintenance) Leave(ctx context.Context) error {
-	if err := m.state.SetState(ctx, maintenance.StateNormal); err != nil {
-		return fmt.Errorf("leave maintenance mode: %w", err)
-	}
-
-	return nil
-}
-
 // TestRestoreLeavesAuditEntryAfterSwap proves a restore that runs through the
 // swap leaves the restore audit entry, with the access mode, in the restored
 // audit log: an entry written before the swap would go away with the old
@@ -1081,9 +1052,9 @@ func newRestoreAuditServices(
 
 	restores, err := backup.NewRestoreService(backup.RestoreConfig{
 		Live:         st,
-		Registry:     st,
+		Operations:   st.DurableOperationsPort(),
 		Backups:      backups,
-		Maintenance:  restoreAuditMaintenance{state: st},
+		Maintenance:  storetest.StateMaintenance{State: st, Hold: false},
 		Blobs:        live,
 		Target:       target,
 		Key:          key,
@@ -1093,6 +1064,9 @@ func newRestoreAuditServices(
 
 		AllowDevBackups: false,
 		AllowDevHint:    "",
+		Owner:           "",
+		Lease:           0,
+		CleanupLockWait: 0,
 		Now:             nil,
 		Logger:          nil,
 	})

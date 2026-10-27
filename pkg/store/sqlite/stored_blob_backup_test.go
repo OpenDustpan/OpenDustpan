@@ -77,9 +77,10 @@ func newStoredBlobRig(t *testing.T, in storetest.StoredBlobBackupInput) *storete
 	}
 
 	restores, err := backup.NewRestoreService(backup.RestoreConfig{
-		Live: st, Registry: st, Backups: backups, Maintenance: itemKeyMaintenance{state: st}, Blobs: live,
+		Live: st, Operations: st.DurableOperationsPort(), Backups: backups,
+		Maintenance: storetest.StateMaintenance{State: st, Hold: false}, Blobs: live,
 		Target: in.Target, Key: in.Key, Installation: "test", AfterApply: nil, Admit: nil, AllowDevBackups: false,
-		AllowDevHint: "", Now: nil, Logger: nil,
+		AllowDevHint: "", Owner: "", Lease: 0, CleanupLockWait: 0, Now: nil, Logger: nil,
 	})
 	if err != nil {
 		t.Fatalf("new restore service: %v", err)
