@@ -155,10 +155,39 @@ var Settings = []*Setting{
 		"allowed-origins", "DUSTPAN_ALLOWED_ORIGINS", "",
 		"comma-separated console origins allowed to call the API (DUSTPAN_ALLOWED_ORIGINS)",
 		referenceNone+". A comma-separated list. Each origin is a scheme (`http` or `https`), a host and an "+
-			"optional port, in lower case with an ASCII (punycode) host. It has no default port, path, query or "+
-			"fragment. The server refuses `null` and `*`. A listed origin gets CORS headers on `/api/`, with "+
+			"optional port, in lower case with an ASCII (punycode) host. The host is an IP address or a DNS name of "+
+			"letters, digits and hyphens. The port is a number from 1 to 65535. It has no default port, user "+
+			"information, path, query or fragment. The server refuses `null` and `*`. A listed origin gets CORS headers on `/api/`, with "+
 			"`Access-Control-Expose-Headers: Retry-After, ETag, Idempotent-Replayed` on answers to requests.",
 	).WithFile("allowed-origins"),
+	stringSetting(
+		"console-content-type-options",
+		"DUSTPAN_CONSOLE_CONTENT_TYPE_OPTIONS",
+		"",
+		"X-Content-Type-Options header of the console files: a value, or off (see the reference) (DUSTPAN_CONSOLE_CONTENT_TYPE_OPTIONS)",
+		"(none: the server sends `nosniff`). A value is sent as given. `off` (in any case) sends no header. It applies to the console files only.",
+	).WithFile("console-content-type-options"),
+	stringSetting(
+		"console-frame-options",
+		"DUSTPAN_CONSOLE_FRAME_OPTIONS",
+		"",
+		"X-Frame-Options header of the console files: a value, or off (see the reference) (DUSTPAN_CONSOLE_FRAME_OPTIONS)",
+		"(none: the server sends `DENY`). A value is sent as given. `off` (in any case) sends no header. It applies to the console files only.",
+	).WithFile("console-frame-options"),
+	stringSetting(
+		"console-csp",
+		"DUSTPAN_CONSOLE_CSP",
+		"",
+		"Content-Security-Policy header of the console files: a value, or off (see the reference) (DUSTPAN_CONSOLE_CSP)",
+		"(none: the server sends `default-src 'self'; connect-src 'self' <each allowed origin>; img-src 'self' data:; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'`). `connect-src` follows `--allowed-origins`: a console that calls another API origin needs that origin listed there. A value is sent as given. `off` (in any case) sends no header. It applies to the console files only.",
+	).WithFile("console-csp"),
+	stringSetting(
+		"console-hsts",
+		"DUSTPAN_CONSOLE_HSTS",
+		"",
+		"Strict-Transport-Security header of the console files: a value, or off (see the reference) (DUSTPAN_CONSOLE_HSTS)",
+		"(none: the server sends `max-age=31536000` when it serves TLS, and nothing without TLS). A value is sent as given. `off` (in any case) sends no header. The server never sends it without `--tls-cert`. It applies to the console files only.",
+	).WithFile("console-hsts"),
 	stringSetting(
 		"tls-cert", "DUSTPAN_TLS_CERT", "",
 		"certificate file for HTTPS, with --tls-key; the health probe uses HTTPS when it is set "+
