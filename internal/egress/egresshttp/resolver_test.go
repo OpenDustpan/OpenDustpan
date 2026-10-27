@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"net"
 	"net/http"
 	"net/netip"
@@ -27,7 +28,9 @@ const (
 func fakeResolver(t *testing.T, answers []netip.Addr) *net.Resolver {
 	t.Helper()
 
-	pc, err := (&net.ListenConfig{}).ListenPacket(t.Context(), "udp", "127.0.0.1:0")
+	var lc net.ListenConfig
+
+	pc, err := lc.ListenPacket(t.Context(), "udp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -54,7 +57,9 @@ func fakeResolver(t *testing.T, answers []netip.Addr) *net.Resolver {
 		PreferGo:     true,
 		StrictErrors: false,
 		Dial: func(ctx context.Context, _, _ string) (net.Conn, error) {
-			return (&net.Dialer{}).DialContext(ctx, "udp", server)
+			var d net.Dialer
+
+			return d.DialContext(ctx, "udp", server)
 		},
 	}
 }
@@ -100,22 +105,34 @@ func dnsAnswer(q []byte, answers []netip.Addr) []byte {
 
 	qtype := binary.BigEndian.Uint16(q[end-4:])
 
-	var rdata [][]byte
+	type record struct {
+		data []byte
+		size uint16
+	}
+
+	var (
+		rdata []record
+		count uint16
+	)
 
 	for _, a := range answers {
 		switch {
 		case qtype == dnsTypeA && a.Is4():
 			b := a.As4()
-			rdata = append(rdata, b[:])
+			rdata = append(rdata, record{b[:], net.IPv4len})
+			count++
 		case qtype == dnsTypeAAAA && a.Is6():
 			b := a.As16()
-			rdata = append(rdata, b[:])
+			rdata = append(rdata, record{b[:], net.IPv6len})
+			count++
+		default:
+			continue
 		}
 	}
 
 	resp := append([]byte{}, q[:end]...)
 	resp[2], resp[3] = 0x81, 0x80 // a response, recursion available, no error
-	binary.BigEndian.PutUint16(resp[6:], uint16(len(rdata)))
+	binary.BigEndian.PutUint16(resp[6:], count)
 	resp[8], resp[9], resp[10], resp[11] = 0, 0, 0, 0
 
 	for _, r := range rdata {
@@ -123,8 +140,8 @@ func dnsAnswer(q []byte, answers []netip.Addr) []byte {
 		resp = binary.BigEndian.AppendUint16(resp, qtype)
 		resp = binary.BigEndian.AppendUint16(resp, 1) // class IN
 		resp = binary.BigEndian.AppendUint32(resp, 0) // time to live
-		resp = binary.BigEndian.AppendUint16(resp, uint16(len(r)))
-		resp = append(resp, r...)
+		resp = binary.BigEndian.AppendUint16(resp, r.size)
+		resp = append(resp, r.data...)
 	}
 
 	return resp
@@ -132,15 +149,17 @@ func dnsAnswer(q []byte, answers []netip.Addr) []byte {
 
 // countingListener listens on loopback and counts the connections that it
 // accepts. A request that passes the dial guard connects to it.
-func countingListener(t *testing.T) (port string, accepts *atomic.Int64) {
+func countingListener(t *testing.T) (string, *atomic.Int64) {
 	t.Helper()
 
-	ln, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
+	var lc net.ListenConfig
+
+	ln, err := lc.Listen(t.Context(), "tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	accepts = new(atomic.Int64)
+	accepts := new(atomic.Int64)
 	done := make(chan struct{})
 
 	go func() {
@@ -168,7 +187,7 @@ func countingListener(t *testing.T) (port string, accepts *atomic.Int64) {
 		<-done
 	})
 
-	_, port, err = net.SplitHostPort(ln.Addr().String())
+	_, port, err := net.SplitHostPort(ln.Addr().String())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -217,7 +236,10 @@ func TestResolvedAddressRefused(t *testing.T) {
 				t.Skip("the host has no IPv6 support: the socket fails before the dial guard runs")
 			}
 
-			assertRefused(t, answers, 10*time.Second, true)
+			err := dialHost(t, answers, 10*time.Second)
+			if !errors.Is(err, egress.ErrRefused) || !errors.Is(err, egresshttp.ErrDialRefused) {
+				t.Fatalf("Do = %v, want ErrDialRefused and ErrRefused", err)
+			}
 		})
 	}
 }
@@ -233,7 +255,9 @@ func hasIPv6(t *testing.T, answers []netip.Addr) bool {
 			continue
 		}
 
-		pc, err := (&net.ListenConfig{}).ListenPacket(t.Context(), "udp6", "[::1]:0")
+		var lc net.ListenConfig
+
+		pc, err := lc.ListenPacket(t.Context(), "udp6", "[::1]:0")
 		if err != nil {
 			return false
 		}
@@ -269,16 +293,16 @@ func TestResolvedMixedAnswerRefused(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			assertRefused(t, tt.answers, 3*time.Second, false)
+			t.Log("request error:", dialHost(t, tt.answers, 3*time.Second))
 		})
 	}
 }
 
-// assertRefused sends a request to a host name that the fake resolver
-// answers with answers, and checks that the request fails with a refusal
-// and that the listener on loopback accepts no connection. With wantRefusal
-// it also checks the class of the error.
-func assertRefused(t *testing.T, answers []netip.Addr, timeout time.Duration, wantRefusal bool) {
+// dialHost sends a request to a host name that the fake resolver
+// answers with answers, and checks that the request fails and that the
+// listener on loopback accepts no connection. It returns the error of the
+// request.
+func dialHost(t *testing.T, answers []netip.Addr, timeout time.Duration) error {
 	t.Helper()
 
 	port, accepts := countingListener(t)
@@ -307,11 +331,9 @@ func assertRefused(t *testing.T, answers []netip.Addr, timeout time.Duration, wa
 		t.Fatal("Do = nil error, want a refusal")
 	}
 
-	if wantRefusal && (!errors.Is(err, egress.ErrRefused) || !errors.Is(err, egresshttp.ErrDialRefused)) {
-		t.Fatalf("Do = %v, want ErrDialRefused and ErrRefused", err)
-	}
-
 	if n := accepts.Load(); n != 0 {
 		t.Fatalf("the listener accepted %d connections, want 0", n)
 	}
+
+	return fmt.Errorf("do: %w", err)
 }
