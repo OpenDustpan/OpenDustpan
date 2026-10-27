@@ -184,19 +184,26 @@ func matchAny(list []URLPattern, u string) bool {
 // "https://git.example.com/platform/a/b".
 type URLPattern string
 
-// Validate returns ErrInvalid for a pattern that is not an https URL with a
-// host and a path, that has a user, a query, a fragment, a port or a '%',
-// whose host has a character other than an ASCII letter, a digit, '.' or
-// '-', or is an IP address, a number or localhost, that has an empty path part, or that has a "*" that is not the
-// whole last path part.
+// Validate returns ErrInvalid for a pattern that is not valid.
+// The pattern must be an https URL with a host and a path.
+// It must have no user, query, fragment, port or '%'.
+// The host must be a DNS name of ASCII letters, digits, '.' and '-'.
+// An IP address, a number and localhost are not DNS names.
+// No path part can be empty.
+// A "*" must be the whole last path part.
 func (u URLPattern) Validate() error {
 	h, ok := SplitHTTPS(string(u))
 	if !ok || h.Host == "" || len(h.Parts) == 0 {
-		return fmt.Errorf(
-			"%w: pattern %q must be an https URL of a repository; the host must be a DNS name, not an IP address, a number or localhost",
-			ErrInvalid,
-			u,
-		)
+		if hostRefused(string(u)) {
+			return fmt.Errorf(
+				"%w: pattern %q must be an https URL of a repository. "+
+					"The host must be a DNS name, not an IP address, a number or localhost",
+				ErrInvalid,
+				u,
+			)
+		}
+
+		return fmt.Errorf("%w: pattern %q must be an https URL of a repository", ErrInvalid, u)
 	}
 
 	for i, p := range h.Parts {
@@ -358,4 +365,21 @@ func validLabels(h string) bool {
 	}
 
 	return true
+}
+
+// hostRefused reports whether s is an https URL whose host part is a bare
+// host that validHost refuses. A host part with a user or a port is not a
+// bare host: another rule refuses it, and the host rule is not the cause.
+func hostRefused(s string) bool {
+	rest, found := strings.CutPrefix(s, "https://")
+	if !found {
+		return false
+	}
+
+	host, _, _ := strings.Cut(rest, "/")
+	if host == "" || strings.Contains(host, "@") || (strings.Contains(host, ":") && !strings.HasPrefix(host, "[")) {
+		return false
+	}
+
+	return !validHost(host)
 }
