@@ -398,6 +398,8 @@ func TestSplitHTTPS(t *testing.T) {
 		{"NUL", "https://git.example.com/a\x00b", "", "", false},
 		{"IPv4 host", "https://169.254.169.254/a", "", "", false},
 		{"loopback host", "https://127.0.0.1/a", "", "", false},
+		{"public IPv4 host", "https://93.184.216.34/a", "", "", false},
+		{"upper-case hexadecimal host", "https://0X7F000001/a", "", "", false},
 		{"decimal host", "https://2130706433/a", "", "", false},
 		{"hexadecimal host", "https://0x7f000001/a", "", "", false},
 		{"localhost host", "https://localhost/a", "", "", false},

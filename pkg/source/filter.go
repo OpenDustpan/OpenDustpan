@@ -10,6 +10,7 @@ package source
 import (
 	"errors"
 	"fmt"
+	"net/netip"
 	"strconv"
 	"strings"
 
@@ -186,12 +187,16 @@ type URLPattern string
 // Validate returns ErrInvalid for a pattern that is not an https URL with a
 // host and a path, that has a user, a query, a fragment, a port or a '%',
 // whose host has a character other than an ASCII letter, a digit, '.' or
-// '-', that has an empty path part, or that has a "*" that is not the
+// '-', or is an IP address, a number or localhost, that has an empty path part, or that has a "*" that is not the
 // whole last path part.
 func (u URLPattern) Validate() error {
 	h, ok := SplitHTTPS(string(u))
 	if !ok || h.Host == "" || len(h.Parts) == 0 {
-		return fmt.Errorf("%w: pattern %q must be an https URL of a repository", ErrInvalid, u)
+		return fmt.Errorf(
+			"%w: pattern %q must be an https URL of a repository; the host must be a DNS name, not an IP address, a number or localhost",
+			ErrInvalid,
+			u,
+		)
 	}
 
 	for i, p := range h.Parts {
@@ -302,11 +307,15 @@ func SplitHTTPS(s string) (HTTPSURL, bool) {
 // for the caller to refuse. A host with any other character, for example a
 // non-ASCII letter that looks like an ASCII one, a '_', a port or the
 // brackets of an IPv6 address, never matches a pattern. A host that is an
-// IP address (for example 169.254.169.254), a number that a resolver reads
-// as an IPv4 address (2130706433, 0x7f000001 or 0177.0.0.1), localhost, or
-// a name under localhost is refused, as is any address in a loopback,
-// private, link-local, unique local, metadata or reserved range. A host
-// name passes: the connection checks the resolved address of each dial.
+// IP address, public or not (for example 93.184.216.34 or
+// 169.254.169.254), is refused: a Git host has a DNS name, and an address
+// skips the check of the TLS name. A number that a resolver reads as an
+// IPv4 address (2130706433, 0x7f000001 or 0177.0.0.1), localhost and a
+// name under localhost are refused too, and so is any address in a
+// loopback, private, link-local, unique local, metadata or reserved range.
+// A Git host on a private range needs a DNS name. A host name passes: the
+// connection checks the resolved address of each dial, and the allowed
+// ranges of the operator apply there.
 func validHost(h string) bool {
 	if h == "" {
 		return true
@@ -316,6 +325,26 @@ func validHost(h string) bool {
 	// more; this label check stays so that a change to the rules cannot
 	// open a host with a character that is not a letter, a digit, '.' or
 	// '-'. Neither layer relies on the other.
+	if !validLabels(h) {
+		return false
+	}
+
+	// Defense in depth: this check refuses every IP literal, also one that
+	// the egress rules below allow, for example a public address. It does
+	// not rely on the egress rules or on the label check.
+	if _, err := netip.ParseAddr(h); err == nil {
+		return false
+	}
+
+	// The one list of refused hosts and addresses is the egress rules. The
+	// label check above does not stop an address in the allowed characters.
+	// The rules refuse a number or localhost that ParseAddr does not read.
+	return egress.CheckURL("https://"+h, egress.HTTPSOnly) == nil
+}
+
+// validLabels reports whether h is labels of ASCII letters, digits and '-',
+// with '.' between them and no empty label.
+func validLabels(h string) bool {
 	for label := range strings.SplitSeq(h, ".") {
 		if label == "" {
 			return false
@@ -328,7 +357,5 @@ func validHost(h string) bool {
 		}
 	}
 
-	// The one list of refused hosts and addresses is the egress rules. The
-	// label check above does not stop an address in the allowed characters.
-	return egress.CheckURL("https://"+h, egress.HTTPSOnly) == nil
+	return true
 }
