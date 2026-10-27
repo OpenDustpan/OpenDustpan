@@ -2194,6 +2194,8 @@ FROM temp_admins ORDER BY expires_at_ms, principal_id;
 
 -- name: ListTempAdminsAwaitingReview :many
 -- Answers the records that ended and whose review is not marked as opened.
+-- The table stays small (one row for each recovery), so the query has no
+-- index: a scan costs less than the upkeep of a partial index.
 SELECT principal_id, subject, expires_at_ms, created_at_ms, created_by, reason, ended_at_ms, review_opened_at_ms
 FROM temp_admins
 WHERE ended_at_ms IS NOT NULL AND review_opened_at_ms IS NULL

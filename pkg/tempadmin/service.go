@@ -161,6 +161,10 @@ func (s *Service) Sweep(ctx context.Context, e audit.Entry) ([]string, error) {
 
 	failed := 0
 
+	// tried holds the principal IDs that this sweep tried to end or to
+	// review, so the count in ErrSweepIncomplete names each record once.
+	tried := map[string]struct{}{}
+
 	for i := range expired {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return done, fmt.Errorf("sweep temporary administrators: %w", ctxErr)
@@ -170,6 +174,8 @@ func (s *Service) Sweep(ctx context.Context, e audit.Entry) ([]string, error) {
 		if !r.EndedAt.IsZero() {
 			continue
 		}
+
+		tried[r.PrincipalID] = struct{}{}
 
 		err := s.store.ExpireTempAdmin(ctx, r.PrincipalID, expireEntry(e, now, Ref(r.PrincipalID)))
 
@@ -190,10 +196,16 @@ func (s *Service) Sweep(ctx context.Context, e audit.Entry) ([]string, error) {
 		}
 	}
 
-	failed += s.retryReviews(ctx)
+	retryFailed, listFailed := s.retryReviews(ctx, tried)
+	failed += retryFailed
+
+	if listFailed {
+		return done, fmt.Errorf("%w: %d of %d records, and the list of records that await a review failed",
+			ErrSweepIncomplete, failed, len(tried))
+	}
 
 	if failed > 0 {
-		return done, fmt.Errorf("%w: %d of %d records", ErrSweepIncomplete, failed, len(expired))
+		return done, fmt.Errorf("%w: %d of %d records", ErrSweepIncomplete, failed, len(tried))
 	}
 
 	return done, nil
@@ -202,27 +214,30 @@ func (s *Service) Sweep(ctx context.Context, e audit.Entry) ([]string, error) {
 // retryReviews opens the review of each ended record whose review is not
 // marked as opened, and marks the record after each open. It returns the
 // count of records whose open or mark failed: the next sweep tries them
-// again. With no Reviews it does nothing, because no review can open.
-func (s *Service) retryReviews(ctx context.Context) int {
+// again. It adds each record that it tries to tried, and it reports a failed
+// list of the records as listFailed, not as a record. With no Reviews it
+// does nothing, because no review can open.
+func (s *Service) retryReviews(ctx context.Context, tried map[string]struct{}) (int, bool) {
 	if s.reviews == nil {
-		return 0
+		return 0, false
 	}
 
 	pending, err := s.store.ListTempAdminsAwaitingReview(ctx)
 	if err != nil {
 		s.logger.WarnContext(ctx, "list the temporary administrators that await a break-glass review failed")
 
-		return 1
+		return 0, true
 	}
 
 	failed := 0
 
 	for i := range pending {
 		if ctx.Err() != nil {
-			return failed
+			return failed, false
 		}
 
 		r := &pending[i]
+		tried[r.PrincipalID] = struct{}{}
 
 		if err := s.reviews.OpenReview(ctx, r.ReviewUse(r.ExpiresAt)); err != nil {
 			failed++
@@ -242,7 +257,7 @@ func (s *Service) retryReviews(ctx context.Context) int {
 		}
 	}
 
-	return failed
+	return failed, false
 }
 
 // warnNoReview logs that a temporary administrator ended and that no

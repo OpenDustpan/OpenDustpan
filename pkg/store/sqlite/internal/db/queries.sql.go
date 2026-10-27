@@ -13355,6 +13355,8 @@ ORDER BY expires_at_ms, principal_id
 `
 
 // Answers the records that ended and whose review is not marked as opened.
+// The table stays small (one row for each recovery), so the query has no
+// index: a scan costs less than the upkeep of a partial index.
 func (q *Queries) ListTempAdminsAwaitingReview(ctx context.Context) ([]TempAdmin, error) {
 	rows, err := q.db.QueryContext(ctx, listTempAdminsAwaitingReview)
 	if err != nil {

@@ -1337,3 +1337,26 @@ func expiredUseLog(t *testing.T, fail error) string {
 
 	return logs.String()
 }
+
+// TestSweepIncompleteCountsEachRecordOnce proves that a sweep which only
+// retries a review names the record in the count of ErrSweepIncomplete,
+// and that a record ended and reviewed in the same sweep counts once.
+func TestSweepIncompleteCountsEachRecordOnce(t *testing.T) {
+	t.Parallel()
+
+	store := newFakeStore()
+	createSweepRecord(t, testService(store), "prn-a", "alice")
+
+	reviews := &fakeReviews{uses: nil, calls: 0, failNext: 2}
+	svc := reviewService(t, store, reviews, &bytes.Buffer{})
+
+	_, err := svc.Sweep(t.Context(), serverEntry())
+	if !errors.Is(err, tempadmin.ErrSweepIncomplete) || !strings.Contains(err.Error(), "1 of 1 records") {
+		t.Fatalf("sweep that ends and fails to review one record: err = %v, want \"1 of 1 records\"", err)
+	}
+
+	_, err = svc.Sweep(t.Context(), serverEntry())
+	if !errors.Is(err, tempadmin.ErrSweepIncomplete) || !strings.Contains(err.Error(), "1 of 1 records") {
+		t.Fatalf("sweep that only retries one review: err = %v, want \"1 of 1 records\", not \"of 0\"", err)
+	}
+}
