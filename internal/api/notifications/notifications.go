@@ -164,6 +164,8 @@ func sinkErrors(err error) (problem.Problem, bool) {
 			errcode.SinkNoURL,
 			"the notification destination has no URL that the server can use: set the URL again",
 		), true
+	case errors.Is(err, sinks.ErrAccessToken):
+		return problem.New(http.StatusBadRequest, errcode.SinkAccessToken, accessTokenText(err)), true
 	case errors.Is(err, sinks.ErrPlatformHost):
 		return problem.New(http.StatusBadRequest, errcode.SinkPlatformHost, platformHostText(err)), true
 	case errors.Is(err, notify.ErrInvalid):
@@ -181,6 +183,16 @@ func platformHostText(err error) string {
 	}
 
 	return "The URL is not a webhook URL of this platform: copy the incoming webhook URL from the platform."
+}
+
+// accessTokenText returns the rule for a refused access token. The rule is a
+// fixed sentence and never holds the token.
+func accessTokenText(err error) string {
+	if rule := sinks.AccessTokenRule(err); rule != "" {
+		return rule
+	}
+
+	return "The access token is not valid for this platform."
 }
 
 // invalidText returns the text for a sink that the service refused. A URL

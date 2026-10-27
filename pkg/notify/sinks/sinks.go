@@ -26,6 +26,47 @@ import (
 // ErrMissingDependency reports a Config without a required port.
 var ErrMissingDependency = errors.New("missing dependency")
 
+// ErrAccessToken reports an access token that the platform of the sink does
+// not take, that the platform needs and the request lacks, or that is not a
+// valid header value. It also matches notify.ErrInvalid. The error never holds
+// the token.
+var ErrAccessToken = errors.New("the access token is not valid for this notification destination")
+
+// maxChatItems is the most new secret items of one change of a chat sink: the
+// URL and the access token.
+const maxChatItems = 2
+
+// The fixed rules of ErrAccessToken, for a person.
+const (
+	accessRuleNone    = "This platform takes no access token: leave out accessToken."
+	accessRuleNeeded  = "This platform needs an access token: send accessToken."
+	accessRuleInvalid = "The access token has 1 to 4096 printable ASCII characters and no space."
+	accessRuleKind    = "Only a chat destination takes an access token."
+)
+
+// accessTokenError is the error of a refused access token. It matches
+// ErrAccessToken and notify.ErrInvalid, and it holds a fixed rule.
+type accessTokenError struct{ rule string }
+
+func (e accessTokenError) Error() string {
+	return notify.ErrInvalid.Error() + ": " + ErrAccessToken.Error()
+}
+
+func (accessTokenError) Is(target error) bool {
+	return target == ErrAccessToken || target == notify.ErrInvalid
+}
+
+// AccessTokenRule returns the fixed rule that err carries when err matches
+// ErrAccessToken, and an empty string otherwise. The rule never holds the
+// token.
+func AccessTokenRule(err error) string {
+	if te, ok := errors.AsType[accessTokenError](err); ok {
+		return te.rule
+	}
+
+	return ""
+}
+
 // ErrNoSender reports a test of a sink whose kind has no sender on this
 // server.
 var ErrNoSender = errors.New("this server cannot send to this kind of notification destination")
@@ -107,12 +148,18 @@ type Caller struct {
 // derives it from the URL. For a webhook sink, Target is the https URL of the
 // receiver: the service seals it as a secret item and keeps only its host as
 // the target of the sink. For an email sink, Target is the address.
+//
+// AccessToken is the access token of a chat sink for a platform that needs
+// one (see chat.AuthRenderer), and empty for every other sink. The service
+// refuses a token for a platform that takes none, and no token for a platform
+// that needs one.
 type New struct {
-	Kind     notify.SinkKind
-	Platform string
-	Name     string
-	Target   string
-	URL      string
+	Kind        notify.SinkKind
+	Platform    string
+	Name        string
+	Target      string
+	URL         string
+	AccessToken string
 }
 
 // Created is a sink that Create made. SigningKey is the signing key of a
@@ -190,12 +237,15 @@ func NewSigningKey() ([]byte, error) {
 // sink, or the new https URL of a webhook sink: the service stores that URL
 // as a new secret item under a new ref, and the signing keys stay. URL, when
 // set, is the new incoming webhook URL of a chat sink: the service stores it
-// as a new secret item under a new ref.
+// as a new secret item under a new ref, and the access token stays.
+// AccessToken, when set, is the new access token of a chat sink for a platform that needs
+// one: the service stores it as a new secret item under a new ref.
 type Change struct {
-	Version int64
-	Name    string
-	Target  *string
-	URL     *string
+	Version     int64
+	Name        string
+	Target      *string
+	URL         *string
+	AccessToken *string
 }
 
 // Replace changes the sink id in ns. It returns notify.ErrNotFound,
@@ -298,20 +348,17 @@ func (s *Service) changed(old notify.Sink, ch Change) (notify.Sink, []notify.Sin
 
 	next.SecretRefs = slices.Clone(old.SecretRefs)
 
+	if err := refuseField(old.Kind, ch); err != nil {
+		return notify.Sink{}, nil, err
+	}
+
 	switch {
-	case ch.Target != nil && old.Kind == notify.SinkChat:
-		return notify.Sink{}, nil, fmt.Errorf(
-			"%w: the target of a chat sink follows its URL: send the url",
-			notify.ErrInvalid,
-		)
-	case ch.URL != nil && old.Kind != notify.SinkChat:
-		return notify.Sink{}, nil, fmt.Errorf("%w: only a chat sink takes a url", notify.ErrInvalid)
 	case ch.Target != nil && old.Kind == notify.SinkWebhook:
 		return s.withNewURL(next, *ch.Target, notify.WebhookHost, old.SecretRefs[min(1, len(old.SecretRefs)):])
 	case ch.Target != nil:
 		next.Target = *ch.Target
-	case ch.URL != nil:
-		return s.withNewURL(next, *ch.URL, notify.ChatHost, nil)
+	case old.Kind == notify.SinkChat && (ch.URL != nil || ch.AccessToken != nil):
+		return s.changedChat(next, old, ch)
 	default:
 		// A change of the name has no new URL.
 	}
@@ -321,10 +368,91 @@ func (s *Service) changed(old notify.Sink, ch Change) (notify.Sink, []notify.Sin
 	return next, nil, nil
 }
 
+// refuseField returns notify.ErrInvalid for a field of ch that the kind of the
+// sink does not take.
+func refuseField(kind notify.SinkKind, ch Change) error {
+	switch {
+	case ch.Target != nil && kind == notify.SinkChat:
+		return fmt.Errorf("%w: the target of a chat sink follows its URL: send the url", notify.ErrInvalid)
+	case ch.URL != nil && kind != notify.SinkChat:
+		return fmt.Errorf("%w: only a chat sink takes a url", notify.ErrInvalid)
+	case ch.AccessToken != nil && kind != notify.SinkChat:
+		return accessTokenError{rule: accessRuleKind}
+	default:
+		return nil
+	}
+}
+
+// changedChat applies a new URL and a new access token of ch to the chat sink
+// next, which is old with the new name and version. A new URL keeps the access
+// token of old, and a new access token keeps the URL of old. It returns the
+// new items.
+func (s *Service) changedChat(next, old notify.Sink, ch Change) (notify.Sink, []notify.SinkSecret, error) {
+	secrets := make([]notify.SinkSecret, 0, maxChatItems)
+
+	if ch.URL != nil {
+		var err error
+
+		next, secrets, err = s.withNewURL(next, *ch.URL, notify.ChatHost, old.SecretRefs[min(1, len(old.SecretRefs)):])
+		if err != nil {
+			return notify.Sink{}, nil, err
+		}
+	}
+
+	if ch.AccessToken == nil {
+		return next, secrets, nil
+	}
+
+	token, err := s.accessToken(next.Platform, *ch.AccessToken, true)
+	if err != nil {
+		return notify.Sink{}, nil, err
+	}
+
+	ref := ident.NewID("itm-")
+	next.SecretRefs = []string{next.SecretRefs[0], ref}
+
+	return next, append(secrets, notify.SinkSecret{Ref: ref, Value: token}), nil
+}
+
+// takesAccessToken reports whether the chat sender of this server needs an
+// access token for platform. A server whose chat sender does not say, for
+// example a test double, takes none: it fails closed.
+func (s *Service) takesAccessToken(platform string) bool {
+	t, ok := s.senders[notify.SinkChat].(interface{ TakesAuthSecret(platform string) bool })
+
+	return ok && t.TakesAuthSecret(platform)
+}
+
+// accessToken checks the access token raw for platform and returns its bytes.
+// given tells that the request sent an access token, so that an empty one is
+// an invalid token and not a missing one. It returns an error that matches
+// ErrAccessToken for a platform that takes no token, for a platform that needs
+// one and got none, and for a token that is not a valid header value.
+//
+// Defense in depth: the sender checks the token again before each send, with
+// the same function. This check stays so that a refused token is a refused
+// write and not a sink that fails at the first message.
+func (s *Service) accessToken(platform, raw string, given bool) ([]byte, error) {
+	takes := s.takesAccessToken(platform)
+
+	switch {
+	case !takes && given:
+		return nil, accessTokenError{rule: accessRuleNone}
+	case takes && !given:
+		return nil, accessTokenError{rule: accessRuleNeeded}
+	case !takes:
+		return nil, nil
+	case !notify.ValidAccessToken([]byte(raw)):
+		return nil, accessTokenError{rule: accessRuleInvalid}
+	default:
+		return []byte(raw), nil
+	}
+}
+
 // withNewURL returns next with the URL raw as its new first secret item, then
 // the refs keys of the items that stay, and the host of the URL as the target.
 // hostOf reads the host. A webhook sink keeps its signing keys, so a receiver
-// keeps its key when the URL changes. A chat sink keeps no other item. It
+// keeps its key when the URL changes. A chat sink keeps its access token. It
 // returns the new item, and notify.ErrInvalid when the port rule or hostOf
 // refuses the URL.
 func (s *Service) withNewURL(
@@ -368,11 +496,15 @@ func (s *Service) newSecrets(sink *notify.Sink, in New) ([]notify.SinkSecret, er
 		return nil, fmt.Errorf("%w: a chat sink takes a url, not a target", notify.ErrInvalid)
 	}
 
+	if sink.Kind != notify.SinkChat && in.AccessToken != "" {
+		return nil, accessTokenError{rule: accessRuleKind}
+	}
+
 	switch sink.Kind {
 	case notify.SinkWebhook:
 		return webhookSecrets(sink, in.Target)
 	case notify.SinkChat:
-		return s.chatSecrets(sink, in.URL)
+		return s.chatSecrets(sink, in.URL, in.AccessToken)
 	case notify.SinkEmail:
 		return nil, nil
 	default:
@@ -402,9 +534,9 @@ func webhookSecrets(sink *notify.Sink, raw string) ([]notify.SinkSecret, error) 
 	}, nil
 }
 
-// chatSecrets sets the target and the ref of a new chat sink and returns its
-// URL item.
-func (s *Service) chatSecrets(sink *notify.Sink, raw string) ([]notify.SinkSecret, error) {
+// chatSecrets sets the target and the refs of a new chat sink and returns its
+// URL item, and its access token item for a platform that needs one.
+func (s *Service) chatSecrets(sink *notify.Sink, raw, token string) ([]notify.SinkSecret, error) {
 	host, err := notify.ChatHost(raw)
 	if err != nil {
 		if !errors.Is(err, notify.ErrInvalid) {
@@ -418,10 +550,21 @@ func (s *Service) chatSecrets(sink *notify.Sink, raw string) ([]notify.SinkSecre
 		return nil, hostErr
 	}
 
+	tokenValue, err := s.accessToken(sink.Platform, token, token != "")
+	if err != nil {
+		return nil, err
+	}
+
 	sink.Target = host
 	sink.SecretRefs = []string{ident.NewID("itm-")}
+	secrets := []notify.SinkSecret{{Ref: sink.SecretRefs[0], Value: []byte(raw)}}
 
-	return []notify.SinkSecret{{Ref: sink.SecretRefs[0], Value: []byte(raw)}}, nil
+	if tokenValue != nil {
+		sink.SecretRefs = append(sink.SecretRefs, ident.NewID("itm-"))
+		secrets = append(secrets, notify.SinkSecret{Ref: sink.SecretRefs[1], Value: tokenValue})
+	}
+
+	return secrets, nil
 }
 
 // ErrPlatformHost reports a chat URL whose host the platform of the sink does

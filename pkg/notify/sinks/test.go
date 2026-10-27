@@ -107,7 +107,7 @@ func (s *Service) SendTest(ctx context.Context, c *Caller, ns namespace.Name, id
 		return TestResult{}, fmt.Errorf("test sink: %w", err)
 	}
 
-	return s.send(ctx, sender, sink, to, dest.Keys), nil
+	return s.send(ctx, sender, sink, to, dest), nil
 }
 
 // serves reports whether sender sends to sink. A sender that serves some
@@ -179,15 +179,21 @@ func (s *Service) open(ctx context.Context, sink notify.Sink) (string, notify.De
 // send sends the test message. A failure of the send is a result: notify.Class
 // sorts it, and a timeout is temporary.
 func (s *Service) send(
-	ctx context.Context, sender notify.Sender, sink notify.Sink, to string, keys [][]byte,
+	ctx context.Context, sender notify.Sender, sink notify.Sink, to string, dest notify.Destination,
 ) TestResult {
 	ctx, cancel := context.WithTimeout(ctx, SendTimeout)
 	defer cancel()
 
 	n := notify.SinkTestNotification(sink, ident.NewID(notify.IDPrefix), s.now())
 
+	// A webhook gets its signing keys, and a chat sink its access token.
+	secrets := dest.Keys
+	if dest.AuthSecret != nil {
+		secrets = [][]byte{dest.AuthSecret}
+	}
+
 	err := sender.Send(ctx, notify.Message{
-		Notification: n, Sink: sink, Secrets: keys, To: to, Actions: nil,
+		Notification: n, Sink: sink, Secrets: secrets, To: to, Actions: nil,
 	})
 
 	return testResult(err)
