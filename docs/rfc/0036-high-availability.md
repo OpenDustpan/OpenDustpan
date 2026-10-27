@@ -810,3 +810,5 @@ None. The owner decided every question on 2026-10-16.
 
 Accepted on 2026-10-16 by the project owner. The decisions are in
 [ADR 72](../adr/0072-scale-out-on-one-database.md) (#699).
+
+Region terms in this RFC are superseded by [ADR 248](../adr/0248-federation-model.md): the server has no regions, and each namespace has a primary installation and replica installations.

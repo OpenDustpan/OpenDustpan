@@ -282,8 +282,11 @@ when { context.document.truncated.contains("scannerFindings.trustedScanners") ||
 
 Cedar has no open map (ADR 226), so the fact holds sets of strings and no
 map from a scanner to its uploaders. Both `scanners` and `trustedScanners`
-join the list of sets in ADR 226 decision 14, and are emptied last. A gate
-that reads them fails closed when their path is in `document.truncated`.
+join the list of sets in ADR 226 decision 14. That decision empties the
+largest set first. Emptying these two sets last changes that order. The
+ADR that accepts this RFC must amend ADR 226 decision 14. Gates still fail
+closed on truncation. A gate that reads either set fails closed when its
+path is in `document.truncated`.
 Because a document holds at most 32 scanner names of 64 bytes each, this
 is rare, but the rule holds. Options for the built-in gates: none (a starter pack in
 `evaluate` mode), or a built-in gate like
@@ -313,7 +316,7 @@ The upload names its subject in query parameters: `plan=<pln-ID>` with
 check of ADR 17. A job token never holds `unit:upload-scanner-report`: ADR
 133 decision 12 gives the job token to the tool, so the scanned IaC code
 can use it. The action is open to the credential kinds `session`,
-`access-token` and `trust-token` (ADR 226 decision 5). A trusted report
+`access-token` and `trust-token` (ADR 226 decision 4). A trusted report
 (see "Trust model") does not use this route. An external check or a server
 phase writes it through the `scanreport` port, under its own producer kind.
 
@@ -340,16 +343,29 @@ its SARIF, and no mask can remove it. Rules:
 - Rows never store `snippet`, `contextRegion`, `codeFlows` or `fixes` of a
   SARIF result, and the parser drops them.
 - For a plan-bound finding, the message text, the file path, the line and
-  the raw report need `job:read-plans` and `unit:read-secrets` on the unit.
+  the raw report need `job:read-plans` and `unit:read-secrets` on the unit,
+  and so does the address, unless the tool package checks it (see below).
   A read of them by a person writes an audit entry of the kind `reveal`,
   with the rules of ADR 240. With `unit:read` only, a reader gets the
-  scanner, the rule ID, the mapped severity, the fingerprint and the
-  address. A commit-bound finding scans source code, not plan JSON, and a
+  scanner, the rule ID, the mapped severity and the fingerprint. The server shows the address
+  of a plan-bound finding with `unit:read` only when the tool
+  package checks that the plan holds that address. Otherwise the address
+  needs `job:read-plans` and `unit:read-secrets`, as the message text does.
+  The address can be written in a free-form logical location of the SARIF
+  result. A commit-bound finding scans source code, not plan JSON, and a
   reader with `unit:read` gets its message text.
 - ADR 151 applies only as item-key sealing and shredding of whole items.
   The raw report and the message texts of a report are sealed with the item
   key of the report. A shred of the item removes them all. There is no
   text masking, and no job that masks stored rows later.
+
+A fingerprint is a SHA-256 over its fingerprint input (see D). That input
+holds the `partialFingerprints` values when the report has them. If a
+scanner derives them from plan content, a low-entropy secret could be
+guessed from the hash. A reader with `unit:read` sees the fingerprint (see
+above). Two options, not decided (question 17): an HMAC with a per-unit key,
+so that a guess needs the key, or the fingerprint gated like the message
+text.
 
 ### Limits and rules at the boundary (proposal)
 
@@ -381,6 +397,18 @@ to fit, with one named exception: the locations of a result (the row for
 | Address and URN strings (from a logical location or from plan JSON): valid UTF-8, 1 to 1,024 bytes, no control character (C0, DEL), so no CR and no LF. They are stored as opaque text. | `TestParseRefusesBadAddress` |
 | `partialFingerprints`: at most 16 keys; each key at most 64 bytes and each value at most 256 bytes, valid UTF-8 without control characters. They feed the fingerprint (D). | `TestParseRefusesBadPartialFingerprints` |
 
+### Caps by producer kind (proposal)
+
+The cap is 1,000 stored reports per unit. The rate limit is at most 100
+uploads per unit per hour. A holder of the upload action can fill the cap
+with plan-bound CI reports. At 100 uploads an hour, that takes about 10
+hours. If the cap also applies to the writes of external checks and server
+phases, the trusted report cannot be stored, and the gate denies. This
+fails closed, but it blocks a change.
+
+Proposal: keep a cap for each producer kind, or exempt the trusted writes
+from the cap of the CI uploads.
+
 ### Trust model
 
 A report from a team's CI checks for mistakes. It does not protect against
@@ -405,6 +433,10 @@ with stored plans. Self-declared scanner names in the report are stored as
 given and are shown as "declared by the uploader". For a trusted producer,
 the server sets the scanner name, not the report.
 
+A `ci-upload` report can add findings that raise a count and block a
+change. This fails closed, because the gate denies. The console must show
+the producer kind of each finding that adds to a count.
+
 ### Defense in depth: one line per layer (ADR 250)
 
 | Layer | What it does | Its test |
@@ -417,8 +449,9 @@ the server sets the scanner name, not the report.
 
 Finding text (message, rule ID, help URI, file path) comes from a scanner
 that read untrusted code, so it is untrusted data wherever it goes: the
-console, the logs, and the output of Dusty and the MCP endpoint. It is added
-to the ADR 250 list of untrusted inputs in the ADR that accepts this RFC.
+console, the logs, and the output of Dusty and the MCP endpoint. The ADR
+that accepts this RFC adds finding text to the list of untrusted inputs in
+ADR 250 decision 5.
 
 ### Storage
 
@@ -455,6 +488,26 @@ to the ADR 250 list of untrusted inputs in the ADR that accepts this RFC.
 A plan-bound report can feed a gate; a commit-bound report cannot. Checkov,
 Trivy, KICS and Snyk IaC scan plan JSON. So the author recommends plan-JSON
 scans first, and commit-bound uploads only as display data.
+
+### Spike for question 9 (proposal)
+
+The e2e step covers Trivy only. Checkov, KICS and Snyk IaC are not checked
+against OpenTofu plan JSON. A spike checks each of them for each supported
+OpenTofu version:
+
+1. Run `tofu plan -out` and `tofu show -json` on a fixture with one known
+   misconfiguration.
+2. Run each scanner in its plan JSON mode on that file. The spike records
+   the flag or the input type that each scanner needs. The flag names are
+   not checked yet.
+3. Run the same scanner on the Terraform plan JSON of the same
+   configuration.
+4. Compare the rule IDs and the counts of the two outputs. Keep each SARIF
+   output as a recorded file for the parser tests of the first slice.
+
+Proposal: the spike passes for a scanner when both outputs have the same
+rule IDs and the same counts. The spike records a difference as an answer to
+question 9.
 
 ### The first slice
 
@@ -535,6 +588,8 @@ questions have none yet.
     API enough?
 16. Option A5 (the report as a part of the stored plan) against A1 and A3:
     which one first for runner jobs?
+17. Fingerprint of a plan-bound finding: an HMAC with a per-unit key, or the
+    fingerprint gated like the message text?
 
 ## Proposed glossary lines
 
