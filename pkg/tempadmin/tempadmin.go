@@ -58,15 +58,19 @@ const maxIDLength = 64
 // Lifetime after CreatedAt. CreatedBy names the host operator that made it,
 // and Reason holds the text that the host operator gave for the create.
 // EndedAt is the time the expiry ended the record, or the zero time while
-// it did not end.
+// it did not end. ReviewOpenedAt is the time the sweep opened the
+// break-glass review of the ended record, or the zero time while no review
+// opened.
 type TempAdmin struct {
-	CreatedAt   time.Time
-	ExpiresAt   time.Time
-	EndedAt     time.Time
-	PrincipalID string
-	Subject     string
-	CreatedBy   string
-	Reason      string
+	CreatedAt time.Time
+	ExpiresAt time.Time
+	EndedAt   time.Time
+	// ReviewOpenedAt is the zero time while no review opened for the record.
+	ReviewOpenedAt time.Time
+	PrincipalID    string
+	Subject        string
+	CreatedBy      string
+	Reason         string
 }
 
 // ActiveAt reports whether r works at now: now holds a time before the
@@ -227,6 +231,19 @@ type Store interface {
 	// It returns ErrNotFound when no record exists, and ErrExpired when
 	// the record already ended: a repeated expiry writes no second entry.
 	ExpireTempAdmin(ctx context.Context, principalID string, e audit.Entry) error
+	// ListTempAdminsAwaitingReview returns the records that ended and whose
+	// review is not marked as opened, ordered by expiry and then by
+	// principal ID. A record that did not end is never in the list, and a
+	// record that MarkTempAdminReviewOpened marked leaves it.
+	ListTempAdminsAwaitingReview(ctx context.Context) ([]TempAdmin, error)
+	// MarkTempAdminReviewOpened sets ReviewOpenedAt of the record of the
+	// principal principalID to at, after the review of its use opened. A
+	// record that already has a mark keeps the first mark, and the call
+	// succeeds. It returns ErrNotFound when no record exists, and
+	// ErrInvalid when the record did not end. It writes no audit entry:
+	// the open of the review writes its own, and the mark only records
+	// that the open happened.
+	MarkTempAdminReviewOpened(ctx context.Context, principalID string, at time.Time) error
 }
 
 // Reader reads temporary administrator records. Store implements it. The

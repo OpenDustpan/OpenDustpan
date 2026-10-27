@@ -1226,13 +1226,14 @@ func mustTempAdmin(t *testing.T, s Store, id, subject string, created time.Time)
 	t.Helper()
 
 	r := tempadmin.TempAdmin{
-		CreatedAt:   created,
-		ExpiresAt:   created.Add(tempadmin.Lifetime),
-		EndedAt:     time.Time{},
-		PrincipalID: id,
-		Subject:     subject,
-		CreatedBy:   tempadmin.HostSubject,
-		Reason:      "recovery test",
+		CreatedAt:      created,
+		ExpiresAt:      created.Add(tempadmin.Lifetime),
+		EndedAt:        time.Time{},
+		ReviewOpenedAt: time.Time{},
+		PrincipalID:    id,
+		Subject:        subject,
+		CreatedBy:      tempadmin.HostSubject,
+		Reason:         "recovery test",
 	}
 
 	e := entryAt("tok-x", created)

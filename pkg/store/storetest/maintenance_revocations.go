@@ -286,13 +286,14 @@ func seedAccess(t *testing.T, s RevocationStore) revFixture {
 	revMustToken(t, s, revToken(revTempToken, revTempAdmin, accesstoken.KindPersonal), 6)
 
 	record := tempadmin.TempAdmin{
-		CreatedAt:   revAt(2),
-		ExpiresAt:   revAt(2).Add(tempadmin.Lifetime),
-		EndedAt:     time.Time{},
-		PrincipalID: revTempAdmin,
-		Subject:     "subject-" + revTempAdmin,
-		CreatedBy:   "admin",
-		Reason:      "every administrator lost access",
+		CreatedAt:      revAt(2),
+		ExpiresAt:      revAt(2).Add(tempadmin.Lifetime),
+		EndedAt:        time.Time{},
+		ReviewOpenedAt: time.Time{},
+		PrincipalID:    revTempAdmin,
+		Subject:        "subject-" + revTempAdmin,
+		CreatedBy:      "admin",
+		Reason:         "every administrator lost access",
 	}
 
 	if err := s.CreateTempAdmin(t.Context(), record, revEntry(tempadmin.Ref(revTempAdmin), revAt(2))); err != nil {

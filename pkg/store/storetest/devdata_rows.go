@@ -183,6 +183,7 @@ func DevTempAdminRow(principalID, subject string) map[string]any {
 	return map[string]any{
 		"principal_id": principalID, "subject": subject, "expires_at_ms": 4_000_000_000_000,
 		"created_at_ms": 1, "created_by": "host", "reason": "recovery", "ended_at_ms": nil,
+		"review_opened_at_ms": nil,
 	}
 }
 

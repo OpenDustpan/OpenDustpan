@@ -1132,7 +1132,7 @@ func TestTempAdminFlagFollowsThePrincipalID(t *testing.T) {
 		created := time.Now().UTC().Truncate(time.Millisecond)
 
 		return tempadmin.TempAdmin{
-			CreatedAt: created, ExpiresAt: created.Add(time.Hour), EndedAt: time.Time{},
+			CreatedAt: created, ExpiresAt: created.Add(time.Hour), EndedAt: time.Time{}, ReviewOpenedAt: time.Time{},
 			PrincipalID: principalID, Subject: "alice@example.com", CreatedBy: "operator", Reason: "lost access",
 		}
 	}

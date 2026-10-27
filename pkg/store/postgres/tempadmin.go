@@ -84,6 +84,47 @@ func (s *Store) ListTempAdmins(ctx context.Context) ([]tempadmin.TempAdmin, erro
 	return out, nil
 }
 
+// ListTempAdminsAwaitingReview implements tempadmin.Store.
+func (s *Store) ListTempAdminsAwaitingReview(ctx context.Context) ([]tempadmin.TempAdmin, error) {
+	rows, err := s.queries.ListTempAdminsAwaitingReview(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list temporary administrators awaiting review: %w", err)
+	}
+
+	out := make([]tempadmin.TempAdmin, 0, len(rows))
+
+	for _, row := range rows {
+		out = append(out, tempAdminOf(row))
+	}
+
+	return out, nil
+}
+
+// MarkTempAdminReviewOpened implements tempadmin.Store. The write checks
+// the installation state, as every write does, and appends no audit entry:
+// the open of the review wrote its own.
+func (s *Store) MarkTempAdminReviewOpened(ctx context.Context, principalID string, at time.Time) error {
+	return s.inTx(ctx, func(q *db.Queries) error {
+		rec, err := q.GetTempAdmin(ctx, principalID)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return tempadmin.ErrNotFound
+		} else if err != nil {
+			return fmt.Errorf("read temporary administrator: %w", err)
+		}
+
+		if !rec.EndedAtMs.Valid {
+			return fmt.Errorf("%w: the record of %q did not end", tempadmin.ErrInvalid, principalID)
+		}
+
+		mark := db.MarkTempAdminReviewOpenedParams{ReviewOpenedAtMs: codec.Millis(at), PrincipalID: principalID}
+		if _, err := q.MarkTempAdminReviewOpened(ctx, mark); err != nil {
+			return fmt.Errorf("mark review of temporary administrator %q opened: %w", principalID, err)
+		}
+
+		return nil
+	})
+}
+
 // ExpireTempAdmin implements tempadmin.Store: at e.At it marks the record
 // ended, disables the principal, ends every grant and every group
 // membership of the principal and ends its live tokens, with the entry e in
@@ -143,13 +184,14 @@ func expireTempAdminTx(ctx context.Context, q *db.Queries, principalID string, e
 // tempAdminOf converts a row into its domain record.
 func tempAdminOf(row db.TempAdmin) tempadmin.TempAdmin {
 	return tempadmin.TempAdmin{
-		CreatedAt:   codec.FromMillis(row.CreatedAtMs),
-		ExpiresAt:   codec.FromMillis(row.ExpiresAtMs),
-		PrincipalID: row.PrincipalID,
-		Subject:     row.Subject,
-		CreatedBy:   row.CreatedBy,
-		Reason:      row.Reason,
-		EndedAt:     endedAt(row.EndedAtMs),
+		CreatedAt:      codec.FromMillis(row.CreatedAtMs),
+		ExpiresAt:      codec.FromMillis(row.ExpiresAtMs),
+		PrincipalID:    row.PrincipalID,
+		Subject:        row.Subject,
+		CreatedBy:      row.CreatedBy,
+		Reason:         row.Reason,
+		EndedAt:        endedAt(row.EndedAtMs),
+		ReviewOpenedAt: endedAt(row.ReviewOpenedAtMs),
 	}
 }
 
