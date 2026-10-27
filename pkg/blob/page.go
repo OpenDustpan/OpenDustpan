@@ -12,7 +12,10 @@ type PageRequest struct {
 	// trailing slash. A prefix that names no directory gives an empty page.
 	Prefix string
 	// After is the last key of the previous page. The page starts at the
-	// first key after it. An empty After starts at the first key.
+	// first key after it. An empty After starts at the first key. An After
+	// outside Prefix fails with ErrInvalidKey. The S3 adapter sends it as the
+	// StartAfter parameter of ListObjectsV2, so it is a key, not an opaque
+	// token.
 	After Key
 	// Limit is the largest number of objects in the page, from 1 to
 	// MaxPageLimit. A limit outside that range fails with ErrInvalidPage.
@@ -39,6 +42,7 @@ type Page struct {
 type PagedLister interface {
 	// ListPage returns one page of the objects under req.Prefix, ordered by
 	// key. It returns ErrInvalidPage for a limit out of range, and
-	// ErrInvalidKey for an After that is not a valid key.
+	// ErrInvalidKey for an After that is not a valid key or that is outside
+	// req.Prefix.
 	ListPage(ctx context.Context, req PageRequest) (Page, error)
 }

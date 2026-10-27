@@ -38,11 +38,6 @@ var (
 	ErrInvalidPage = errors.New("invalid blob list page")
 )
 
-// DeleteConcurrency is the number of Delete calls that one caller runs in
-// parallel when it deletes many objects. It is fixed: no flag and no setting
-// changes it.
-const DeleteConcurrency = 8
-
 const maxKeyLength = 512
 
 // Key is a validated object key: '/'-separated segments of [a-z0-9._-],
@@ -86,9 +81,9 @@ type Object struct {
 // correctness of a caller never depends on a store capability, for example
 // on conditional writes.
 //
-// A caller that deletes many objects calls Delete in parallel, with a fixed
-// concurrency of DeleteConcurrency, and backs off on ErrThrottled. The port
-// has no batch delete.
+// Every method can return ErrThrottled. The port has no batch delete: a
+// caller deletes many objects with parallel single Delete calls, at a fixed
+// concurrency, and backs off on ErrThrottled.
 type Store interface {
 	// Put stores the contents of r under key. Put on a key that already
 	// holds an object can replace the object, or fail with ErrExists and

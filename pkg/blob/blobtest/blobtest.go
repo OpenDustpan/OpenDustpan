@@ -117,7 +117,8 @@ func pendingCases() []string {
 		"list page with a limit out of range is ErrInvalidPage",
 		"list page with an invalid after key is ErrInvalidKey",
 		"list page stays inside its prefix",
-		"parallel deletes at the fixed concurrency remove every key",
+		"list page with an after key outside the prefix is ErrInvalidKey",
+		"delete many removes every key and backs off on ErrThrottled",
 	}
 }
 
