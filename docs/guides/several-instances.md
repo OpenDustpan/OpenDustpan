@@ -103,7 +103,7 @@ When an instance gets SIGTERM, it does these steps in this order:
 3. The instance keeps serving all other requests for a drain of 10 seconds. A load balancer with a health check on `/health/ready` takes the instance out of its pool in this time. The drain has a fixed length and no flag.
 4. The instance closes the listener and waits at most 30 seconds for the requests in flight. A request that began before the signal gets its answer.
 
-The drain and the wait together are at most 40 seconds. The Helm chart waits 15 seconds in `preStop` before the signal, and it gives the pod 60 seconds. If you run the instance in another way, give it at least 45 seconds between SIGTERM and SIGKILL.
+The drain and the wait together are at most 40 seconds. The Helm chart waits 15 seconds in `preStop` before the signal, and it gives the pod 60 seconds. If you run the instance in another way, give it at least 50 seconds between SIGTERM and SIGKILL. The drain and the wait take 40 seconds, and 10 seconds are margin.
 
 ### No worker
 

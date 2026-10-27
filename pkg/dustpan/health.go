@@ -360,8 +360,10 @@ func pingAll(ctx context.Context, checks []readinessCheck, timeout time.Duration
 // serves all other requests. The default is 0: the server shuts down at
 // once, and GET /health/ready still answers 503 from the stop signal on. The
 // binary sets DefaultDrainPeriod and has no flag for it. NewServer fails with
-// ErrInvalidOption for a value below 0 or above 15 seconds: the drain and the
-// shutdown together must stay inside the grace period of the pod.
+// ErrInvalidOption for a value below 0 or above 15 seconds. The upper bound
+// keeps the drain and the 30 second shutdown together at 45 seconds or less:
+// the pod grace period of the Helm chart is 60 seconds, and its preStop wait
+// takes 15 of them.
 func WithDrainPeriod(period time.Duration) Option {
 	return func(o *settings) { o.drainPeriod = period }
 }

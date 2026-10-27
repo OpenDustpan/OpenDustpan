@@ -13,7 +13,7 @@ import (
 
 // drainTestPeriod is the drain of the drain test: long enough to send
 // requests in it, short enough to keep the test fast.
-const drainTestPeriod = 3 * time.Second
+const drainTestPeriod = 5 * time.Second
 
 // TestReadinessDuringDrain proves the stop order: after the stop signal the
 // readiness probe answers 503 while the process still serves other requests,
