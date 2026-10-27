@@ -411,10 +411,19 @@ type RestoreOperations interface {
 	// records the pre-backup ID and the step of f.
 	MarkRestoreApplying(ctx context.Context, f durable.StepFence, id RestoreID, preBackupID ID) error
 
-	// AppendRestoreAudit appends e to the audit log of the installation and
-	// records the step of f, in one transaction, so the entry commits once.
-	// It returns the stored entry. The restore id must be applying.
-	AppendRestoreAudit(ctx context.Context, f durable.StepFence, id RestoreID, e audit.Entry) (audit.Entry, error)
+	// AppendRestoreAudit appends entries, in order, to the audit log of the
+	// installation and records the step of f, in one transaction, so the
+	// entries commit once. It returns the stored entries. The restore id must
+	// be applying. It returns the error of an entry that is not valid, with
+	// no change.
+	AppendRestoreAudit(
+		ctx context.Context, f durable.StepFence, id RestoreID, entries []audit.Entry,
+	) ([]audit.Entry, error)
+
+	// RestoreMaintenanceEntered returns the maintenance flag of the restore
+	// id, with no fence: true while the restore holds the maintenance mode
+	// that it entered. It returns ErrRestoreNotFound when id does not exist.
+	RestoreMaintenanceEntered(ctx context.Context, id RestoreID) (bool, error)
 
 	// FinishRestore moves the checking or applying restore end.ID to
 	// end.State, with the error text, the end time and end.DevReport, and
@@ -489,10 +498,10 @@ type RestoreStaging interface {
 
 	// ApplyRestoreArea swaps the area a into the live data, as
 	// Applier.ApplyStaging does, or as AccessKeepingApplier does when
-	// keepAccess is true. It checks f and records its step in the swap
-	// transaction, before the first change, with the rules of
-	// durable.Store.RecordStep, so a cancel with CancelBefore and the swap
-	// have one winner. On PostgreSQL the old live data stays as the previous
+	// keepAccess is true. It checks f in the swap transaction, before the
+	// first change, with the rules of durable.Store.RecordStep, so a cancel
+	// with CancelBefore and the swap have one winner, and records the step in
+	// the same transaction with EncodeRestoreSwap of its result. On PostgreSQL the old live data stays as the previous
 	// schema of the restore of a, for CleanRestoreAreas. It returns
 	// ErrInvalidRestoreID for an area that is not valid, ErrCorrupt when a does
 	// not exist, the errors of the fence, ErrDevBackupRefused and
@@ -556,4 +565,38 @@ func DecodeRestoreMaintenance(result []byte) (bool, error) {
 	}
 
 	return out.Entered, nil
+}
+
+// restoreSwapResult is the result that ApplyRestoreArea records with the
+// swap step.
+type restoreSwapResult struct {
+	DroppedTempAdmins int64 `json:"droppedTempAdmins"`
+}
+
+// EncodeRestoreSwap returns the step result that ApplyRestoreArea records
+// for kept.
+func EncodeRestoreSwap(kept KeepAccessResult) []byte {
+	out, err := json.Marshal(restoreSwapResult{DroppedTempAdmins: kept.DroppedTempAdmins})
+	if err != nil {
+		// A struct of one integer always encodes.
+		return []byte(`{"droppedTempAdmins":0}`)
+	}
+
+	return out
+}
+
+// DecodeRestoreSwap returns the result of a step result that
+// EncodeRestoreSwap made. It returns ErrCorrupt for any other result.
+func DecodeRestoreSwap(result []byte) (KeepAccessResult, error) {
+	var out restoreSwapResult
+
+	decoder := json.NewDecoder(bytes.NewReader(result))
+	decoder.DisallowUnknownFields()
+
+	if err := decoder.Decode(&out); err != nil || out.DroppedTempAdmins < 0 {
+		return KeepAccessResult{DroppedTempAdmins: 0}, fmt.Errorf("%w: the result of the swap step does not decode",
+			ErrCorrupt)
+	}
+
+	return KeepAccessResult{DroppedTempAdmins: out.DroppedTempAdmins}, nil
 }

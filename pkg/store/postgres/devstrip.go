@@ -10,14 +10,11 @@ import (
 
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/installation"
-	"opendustpan.org/opendustpan/pkg/store/internal/codec"
 	"opendustpan.org/opendustpan/pkg/store/internal/devstrip"
-	"opendustpan.org/opendustpan/pkg/store/postgres/internal/db"
 )
 
 var (
-	_ backup.DevStripper       = (*Store)(nil)
-	_ backup.DevReportRecorder = (*Store)(nil)
+	_ backup.DevStripper = (*Store)(nil)
 )
 
 // pgDevDialect matches in PostgreSQL. lower() depends on the collation of the
@@ -235,23 +232,4 @@ func dropDanglingTempAdmins(ctx context.Context, tx pgx.Tx, staging string) (int
 	}
 
 	return tag.RowsAffected(), nil
-}
-
-// RecordDevReport implements backup.DevReportRecorder.
-func (s *Store) RecordDevReport(ctx context.Context, id backup.RestoreID, report backup.DevStripReport) error {
-	text, err := codec.EncodeDevReport(report)
-	if err != nil {
-		return err
-	}
-
-	n, err := s.queries.SetRestoreDevReport(ctx, db.SetRestoreDevReportParams{DevReport: text, ID: id.String()})
-	if err != nil {
-		return fmt.Errorf("store restore dev report: %w", err)
-	}
-
-	if n == 0 {
-		return backup.ErrRestoreNotFound
-	}
-
-	return nil
 }

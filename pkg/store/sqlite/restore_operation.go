@@ -317,18 +317,37 @@ func (s *Store) MarkRestoreApplying(
 	})
 }
 
+// RestoreMaintenanceEntered implements backup.RestoreOperations.
+func (s *Store) RestoreMaintenanceEntered(ctx context.Context, id backup.RestoreID) (bool, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	row, err := s.queries.GetRestoreMaintenance(ctx, id.String())
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, backup.ErrRestoreNotFound
+	}
+
+	if err != nil {
+		return false, fmt.Errorf("select restore: %w", err)
+	}
+
+	return row.MaintenanceEntered != 0, nil
+}
+
 // AppendRestoreAudit implements backup.RestoreOperations.
 func (s *Store) AppendRestoreAudit(
-	ctx context.Context, f durable.StepFence, id backup.RestoreID, e audit.Entry,
-) (audit.Entry, error) {
-	if err := validServerEntry(e); err != nil {
-		return audit.Entry{}, err
+	ctx context.Context, f durable.StepFence, id backup.RestoreID, entries []audit.Entry,
+) ([]audit.Entry, error) {
+	for _, e := range entries {
+		if err := validServerEntry(e); err != nil {
+			return nil, err
+		}
 	}
 
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	var stored audit.Entry
+	stored := make([]audit.Entry, 0, len(entries))
 
 	err := s.inControlTx(ctx, func(q *db.Queries) error {
 		if _, _, err := fencedRestore(ctx, q, f, id, nil, true); err != nil {
@@ -344,12 +363,19 @@ func (s *Store) AppendRestoreAudit(
 			return backup.ErrRestoreNotRunning
 		}
 
-		stored, err = appendAuditEntry(ctx, q, e)
+		for _, e := range entries {
+			got, err := appendAuditEntry(ctx, q, e)
+			if err != nil {
+				return err
+			}
 
-		return err
+			stored = append(stored, got)
+		}
+
+		return nil
 	})
 	if err != nil {
-		return audit.Entry{}, err
+		return nil, err
 	}
 
 	return stored, nil
@@ -641,8 +667,8 @@ func (s *Store) ApplyRestoreArea(
 				return nil
 			}, nil)
 		},
-		after: func(ctx context.Context, tx *sql.Tx) error {
-			return insertStep(ctx, db.New(tx), row, f, nil, now)
+		after: func(ctx context.Context, tx *sql.Tx, kept backup.KeepAccessResult) error {
+			return insertStep(ctx, db.New(tx), row, f, backup.EncodeRestoreSwap(kept), now)
 		},
 	}
 

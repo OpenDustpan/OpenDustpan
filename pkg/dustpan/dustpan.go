@@ -127,9 +127,9 @@ var (
 	// errRestoreNeedsLive reports a backup target with a namespace store
 	// that cannot check, apply or fence a restore.
 	errRestoreNeedsLive = errors.New("backup target needs a namespace store that restores")
-	// errRestoreNeedsRegistry reports a backup target with a namespace store
+	// errRestoreNeedsOperations reports a backup target with a namespace store
 	// that cannot track restores.
-	errRestoreNeedsRegistry = errors.New("backup target needs a namespace store that tracks restores")
+	errRestoreNeedsOperations = errors.New("backup target needs a namespace store with durable operations that cancel before a step")
 	// errMaintenanceNeedsStore reports a namespace store that cannot keep
 	// the installation state. Every SQL adapter serves it from the same
 	// database connection; a custom store must serve it too, so every
@@ -147,11 +147,6 @@ const (
 	// through headers.
 	maxHeaderBytes = 65536
 )
-
-// restoreStoppedText marks a restore that was running when the server
-// stopped. FailRunningRestores writes it at the next start (ADR 38 decision
-// 9).
-const restoreStoppedText = "server stopped during restore"
 
 // settings collects every option before NewServer validates them.
 type settings struct {
@@ -634,7 +629,6 @@ type Server struct {
 	workspaces      *workspace.Service
 	backups         *backup.Service
 	restores        *backup.RestoreService
-	restoreRegistry backup.RestoreRegistry
 	now             func() time.Time
 	registry        *metrics.Registry
 	tlsCertFile     string
@@ -1073,7 +1067,6 @@ func assemble(cfg *settings, base baseurl.Resolver, svc services, backups *backu
 		workspaces:       svc.workspaces,
 		backups:          backups,
 		restores:         mount.restores,
-		restoreRegistry:  restoreRegistryOf(cfg.namespaceStore),
 		now:              cfg.now,
 		registry:         observed.Registry(),
 		tlsCertFile:      cfg.tlsCertFile,
@@ -1130,18 +1123,6 @@ func prepareBackground(cfg *settings, svc *services) (*metrics.ServerMetrics, *a
 	cfg.auditShipper = shipper
 
 	return observed, shipper, nil
-}
-
-// restoreRegistryOf returns the restore registry that the namespace store
-// keeps, or nil for a store that keeps none.
-//
-//nolint:ireturn // The two SQL adapters share no concrete store type, so the caller keeps the port.
-func restoreRegistryOf(store namespace.Store) backup.RestoreRegistry {
-	if reg, ok := store.(backup.RestoreRegistry); ok {
-		return reg
-	}
-
-	return nil
 }
 
 // adapters holds the HTTP adapters that routes mounts.
@@ -1992,9 +1973,9 @@ func (s *Server) newHTTPServer(ln net.Listener, tlsCfg *tls.Config) *http.Server
 	}
 }
 
-// startBackupWorker claims and runs backup operations until ctx is done. The
-// returned function waits until the worker stopped. Without a backup service
-// there is nothing to run.
+// startBackupWorker claims and runs backup and restore operations until ctx
+// is done. The returned function waits until the workers stopped. Without a
+// backup service there is nothing to run.
 func (s *Server) startBackupWorker(ctx context.Context) func() {
 	if s.backups == nil {
 		return func() {}
@@ -2003,6 +1984,10 @@ func (s *Server) startBackupWorker(ctx context.Context) func() {
 	var wg sync.WaitGroup
 
 	wg.Go(func() { s.backups.Work(ctx) })
+
+	if s.restores != nil {
+		wg.Go(func() { s.restores.Work(ctx) })
+	}
 
 	return wg.Wait
 }
@@ -2301,68 +2286,6 @@ func shutdownServer(ctx context.Context, srv *http.Server, serveErr <-chan error
 
 	if err := <-serveErr; !errors.Is(err, http.ErrServerClosed) {
 		return fmt.Errorf("serve: %w", err)
-	}
-
-	return nil
-}
-
-// failStoppedRestores marks every running restore failed: the server stopped
-// during it (ADR 38 decision 9). When a restore was running, it fences every
-// namespace again before serving tool APIs: a stop during the checks or the
-// apply may leave live data that a later restore cannot fence, so leases
-// from before the restore still stop working (ADR 38 decision 7). Both
-// adapters fence with the swap (PostgreSQL in the same transaction, SQLite in
-// the staged file before the rename), so a crash after the swap already lands
-// fenced; this is the crash recovery for a stop before it.
-//
-// Only a process that runs the api component takes backups and restores
-// today, so only that process fails them at start: a worker-only process
-// that restarts leaves the backups and restores of the api processes alone,
-// and fences no namespace.
-func (s *Server) failStoppedRestores(ctx context.Context) error {
-	if s.restoreRegistry == nil || !s.components.Has(ComponentAPI) {
-		return nil
-	}
-
-	running, err := s.restoreRegistry.ListRestores(ctx)
-	if err != nil {
-		return fmt.Errorf("list running restores: %w", err)
-	}
-
-	crashed := false
-
-	for i := range running {
-		state := running[i].State
-		if state == backup.RestoreChecking || state == backup.RestoreApplying {
-			crashed = true
-		}
-	}
-
-	// The fence comes before the rows fail: when it fails, the next start
-	// still sees the stopped restore and fences again.
-	if crashed {
-		if err := s.fenceStoppedRestore(ctx); err != nil {
-			return err
-		}
-	}
-
-	if err := s.restoreRegistry.FailRunningRestores(ctx, s.now().UTC(), restoreStoppedText); err != nil {
-		return fmt.Errorf("fail running restores: %w", err)
-	}
-
-	return nil
-}
-
-// fenceStoppedRestore increments the failover version of every namespace
-// after a restore that stopped while it ran.
-func (s *Server) fenceStoppedRestore(ctx context.Context) error {
-	fencer, ok := s.restoreRegistry.(backup.Fencer)
-	if !ok {
-		return nil
-	}
-
-	if _, err := fencer.BumpFailoverVersions(ctx); err != nil {
-		return fmt.Errorf("fence namespaces after a killed restore: %w", err)
 	}
 
 	return nil
@@ -3490,9 +3413,13 @@ func newRestoreService(
 		return nil, restoreLiveError(cfg.namespaceStore)
 	}
 
-	registry, ok := cfg.namespaceStore.(backup.RestoreRegistry)
-	if !ok {
-		return nil, errRestoreNeedsRegistry
+	ops, err := backupOperations(cfg)
+	if err != nil {
+		return nil, err
+	}
+
+	if _, ok := ops.(durable.StepCanceler); !ok {
+		return nil, errRestoreNeedsOperations
 	}
 
 	var admit func(ctx context.Context) error
@@ -3514,7 +3441,7 @@ func newRestoreService(
 
 	service, err := backup.NewRestoreService(backup.RestoreConfig{
 		Live:         live,
-		Registry:     registry,
+		Operations:   ops,
 		Backups:      deps.backups,
 		Maintenance:  maint,
 		Blobs:        cfg.blobStore,
@@ -3526,6 +3453,9 @@ func newRestoreService(
 
 		AllowDevBackups: cfg.allowDevBackups,
 		AllowDevHint:    cfg.allowDevHint,
+		Owner:           durableOwner(cfg),
+		Lease:           0,
+		CleanupLockWait: 0,
 		Now:             cfg.now,
 		Logger:          cfg.logger,
 	})
@@ -3547,23 +3477,20 @@ func restoreLiveError(store any) error {
 		}
 	}
 
-	_, ok := store.(backup.CheckStore)
-	check("CheckStore", ok)
+	_, ok := store.(backup.PortableExporter)
+	check("PortableExporter", ok)
 
-	_, ok = store.(backup.Applier)
-	check("Applier", ok)
-
-	_, ok = store.(backup.Fencer)
-	check("Fencer", ok)
+	_, ok = store.(backup.KeyPeeker)
+	check("KeyPeeker", ok)
 
 	_, ok = store.(backup.KindReader)
 	check("KindReader", ok)
 
-	_, ok = store.(backup.DevStripper)
-	check("DevStripper", ok)
+	_, ok = store.(backup.RestoreOperations)
+	check("RestoreOperations", ok)
 
-	_, ok = store.(backup.DevReportRecorder)
-	check("DevReportRecorder", ok)
+	_, ok = store.(backup.RestoreStaging)
+	check("RestoreStaging", ok)
 
 	return fmt.Errorf("%w: the store lacks %s", errRestoreNeedsLive, strings.Join(missing, ", "))
 }

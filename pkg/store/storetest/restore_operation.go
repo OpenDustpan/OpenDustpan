@@ -674,7 +674,19 @@ func testRestoreOpEnter(t *testing.T, newStore RestoreFactory) {
 	held := mustClaimRestoreOp(t, durableOps, "instance-a")
 	ctx := t.Context()
 
+	if entered, err := ops.RestoreMaintenanceEntered(ctx, id); err != nil || entered {
+		t.Fatalf("maintenance flag before the enter = %t, %v, want false", entered, err)
+	}
+
 	enterByRestore(t, ops, held, id)
+
+	if entered, err := ops.RestoreMaintenanceEntered(ctx, id); err != nil || !entered {
+		t.Fatalf("maintenance flag after the enter = %t, %v, want true", entered, err)
+	}
+
+	if _, err := ops.RestoreMaintenanceEntered(ctx, backup.MintRestoreID()); !errors.Is(err, backup.ErrRestoreNotFound) {
+		t.Fatalf("maintenance flag of an unknown restore: error = %v, want ErrRestoreNotFound", err)
+	}
 
 	// The state change records no step: only the confirm does.
 	mustLackStep(t, durableOps, held.ID, backup.RestoreStepEnterMaintenance)
@@ -832,35 +844,39 @@ func testRestoreOpAudit(t *testing.T, newStore RestoreFactory) {
 	}
 
 	after := held.Claim.Step(backup.RestoreStepAfterApply)
-	entry := ServerChange(now(), "restore "+id.String())
+	entries := []audit.Entry{
+		ServerChange(now(), "restore "+id.String()),
+		ServerChange(now(), "restore "+id.String()+" removed dev principal"),
+	}
 
-	stored, err := ops.AppendRestoreAudit(ctx, after, id, entry)
-	if err != nil {
-		t.Fatalf("append the audit entry: %v", err)
+	stored, err := ops.AppendRestoreAudit(ctx, after, id, entries)
+	if err != nil || len(stored) != len(entries) || stored[1].Sequence != stored[0].Sequence+1 {
+		t.Fatalf("append the audit entries = %+v, %v, want two entries in order", stored, err)
 	}
 
 	mustHaveStep(t, durableOps, held.ID, backup.RestoreStepAfterApply)
 
+	last := stored[len(stored)-1]
+
 	// A second append of the same step, as after a takeover, adds no entry.
-	if _, err := ops.AppendRestoreAudit(ctx, after, id, entry); !errors.Is(err, durable.ErrStepDone) {
+	if _, err := ops.AppendRestoreAudit(ctx, after, id, entries); !errors.Is(err, durable.ErrStepDone) {
 		t.Fatalf("second append: error = %v, want ErrStepDone", err)
 	}
 
-	if last := lastServerEntry(t, s); last.Sequence != stored.Sequence || last.Hash != stored.Hash {
-		t.Fatalf("last server entry = %+v, want the one entry of the restore %+v", last, stored)
+	if got := lastServerEntry(t, s); got.Sequence != last.Sequence || got.Hash != last.Hash {
+		t.Fatalf("last server entry = %+v, want the last entry of the restore %+v", got, last)
 	}
 
 	// A stale holder appends nothing.
 	replaceClaim(t, durableOps, held)
 
-	if _, err := ops.AppendRestoreAudit(ctx, held.Claim.Step("after-apply-stale"), id, entry); !errors.Is(
-		err, durable.ErrClaimLost,
-	) {
+	stale := held.Claim.Step("after-apply-stale")
+	if _, err := ops.AppendRestoreAudit(ctx, stale, id, entries); !errors.Is(err, durable.ErrClaimLost) {
 		t.Fatalf("append by a stale holder: error = %v, want ErrClaimLost", err)
 	}
 
-	if again := lastServerEntry(t, s); again.Sequence != stored.Sequence {
-		t.Fatalf("last server entry after a stale append = %+v, want sequence %d", again, stored.Sequence)
+	if again := lastServerEntry(t, s); again.Sequence != last.Sequence {
+		t.Fatalf("last server entry after a stale append = %+v, want sequence %d", again, last.Sequence)
 	}
 }
 

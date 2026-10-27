@@ -396,6 +396,21 @@ func (s *Service) LeaveWith(ctx context.Context, w StateWriter) error {
 	return nil
 }
 
+// Held reports whether the hold of the server keeps maintenance mode, so
+// that a leave would answer ErrHeld. With no hold it reports false.
+func (s *Service) Held(ctx context.Context) (bool, error) {
+	if s.hold == nil {
+		return false, nil
+	}
+
+	held, err := s.hold(ctx)
+	if err != nil {
+		return false, fmt.Errorf("read the maintenance hold: %w", err)
+	}
+
+	return held, nil
+}
+
 // RecheckWith lists the active work again while the state is maintenance,
 // as the second list of EnterWith does, and cancels it with opts.Force,
 // through the writer w of opts. It is for

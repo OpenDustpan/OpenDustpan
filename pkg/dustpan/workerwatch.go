@@ -425,6 +425,25 @@ func (t trackingStore) Claim(ctx context.Context, req durable.ClaimRequest) (dur
 	return t.ops().Claim(ctx, req)
 }
 
+// errNoStepCanceler reports a wrapped store of durable operations that
+// cannot cancel before a step.
+var errNoStepCanceler = errors.New("the store of durable operations cannot cancel before a step")
+
+// CancelBefore cancels through the wrapped store, which must implement
+// durable.StepCanceler. A restore cancels through it.
+func (t trackingOps) CancelBefore(ctx context.Context, id durable.ID, step string) error {
+	canceler, ok := t.Store.(durable.StepCanceler)
+	if !ok {
+		return fmt.Errorf("cancel durable operation %s: %w", id, errNoStepCanceler)
+	}
+
+	if err := canceler.CancelBefore(ctx, id, step); err != nil {
+		return fmt.Errorf("cancel before step %q: %w", step, err)
+	}
+
+	return nil
+}
+
 // Extend records the renewal and extends through the wrapped store.
 func (t trackingStore) Extend(ctx context.Context, c durable.Claim, lease time.Duration) (durable.Claim, error) {
 	return t.ops().Extend(ctx, c, lease)

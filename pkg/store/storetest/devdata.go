@@ -26,7 +26,6 @@ type DevDataStore interface {
 	backup.AccessKeepingApplier
 	backup.KindReader
 	backup.DevStripper
-	backup.DevReportRecorder
 	installation.KindStore
 }
 
@@ -1346,7 +1345,8 @@ func testDevRecordReport(t *testing.T, env *devEnv) {
 		Warnings: []backup.RestoreWarningCode{backup.WarnDevBackupIntoProduction},
 	}
 
-	if err := dst.RecordDevReport(ctx, record.ID, report); err != nil {
+	fence := restoreClaim(t, dst, record.ID).Step(backup.RestoreStepCheck)
+	if err := restorePortsOf(t, dst).ops.RecordRestoreReport(ctx, fence, record.ID, report); err != nil {
 		t.Fatalf("record the report: %v", err)
 	}
 
@@ -1370,10 +1370,6 @@ func testDevRecordReport(t *testing.T, env *devEnv) {
 	after := mustGetRestore(t, dst, record.ID)
 	if after.DevReport == nil || !reportsEqual(*after.DevReport, report) {
 		t.Fatalf("report of the restore after the swap = %+v, want %+v", after.DevReport, report)
-	}
-
-	if err := dst.RecordDevReport(ctx, "rst-unknown", report); !errors.Is(err, backup.ErrRestoreNotFound) {
-		t.Fatalf("record a report for an unknown restore: err = %v, want ErrRestoreNotFound", err)
 	}
 }
 

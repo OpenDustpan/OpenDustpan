@@ -324,15 +324,31 @@ func (s *Store) MarkRestoreApplying(
 	})
 }
 
-// AppendRestoreAudit implements backup.RestoreOperations.
-func (s *Store) AppendRestoreAudit(
-	ctx context.Context, f durable.StepFence, id backup.RestoreID, e audit.Entry,
-) (audit.Entry, error) {
-	if err := validServerEntry(e); err != nil {
-		return audit.Entry{}, err
+// RestoreMaintenanceEntered implements backup.RestoreOperations.
+func (s *Store) RestoreMaintenanceEntered(ctx context.Context, id backup.RestoreID) (bool, error) {
+	row, err := s.queries.GetRestoreMaintenance(ctx, id.String())
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, backup.ErrRestoreNotFound
 	}
 
-	var stored audit.Entry
+	if err != nil {
+		return false, fmt.Errorf("select restore: %w", err)
+	}
+
+	return row.MaintenanceEntered, nil
+}
+
+// AppendRestoreAudit implements backup.RestoreOperations.
+func (s *Store) AppendRestoreAudit(
+	ctx context.Context, f durable.StepFence, id backup.RestoreID, entries []audit.Entry,
+) ([]audit.Entry, error) {
+	for _, e := range entries {
+		if err := validServerEntry(e); err != nil {
+			return nil, err
+		}
+	}
+
+	stored := make([]audit.Entry, 0, len(entries))
 
 	err := s.inControlTx(ctx, func(q *db.Queries) error {
 		// The scope lock comes first, as in every append of the scope, so
@@ -354,12 +370,19 @@ func (s *Store) AppendRestoreAudit(
 			return backup.ErrRestoreNotRunning
 		}
 
-		stored, err = appendAuditEntry(ctx, q, e)
+		for _, e := range entries {
+			got, err := appendAuditEntry(ctx, q, e)
+			if err != nil {
+				return err
+			}
 
-		return err
+			stored = append(stored, got)
+		}
+
+		return nil
 	})
 	if err != nil {
-		return audit.Entry{}, err
+		return nil, err
 	}
 
 	return stored, nil
@@ -626,12 +649,27 @@ func (s *Store) ApplyRestoreArea(
 		return backup.KeepAccessResult{}, err
 	}
 
+	var (
+		row db.DurableOperation
+		now int64
+	)
+
 	plan := swapPlan{
 		staging: schema, previous: previous, keepAccess: keepAccess,
 		before: func(tx pgx.Tx) error {
-			// The fence and its record come first in the swap transaction,
-			// so a cancel before the swap and the swap have one winner.
-			if err := fencedRestore(ctx, s.queries.WithTx(tx), f, a.Restore, nil, true); err != nil {
+			// The fence comes first in the swap transaction and locks the row
+			// of the operation, so a cancel before the swap and the swap have
+			// one winner. The record of the step follows at the end of the
+			// same transaction, with the result of the swap.
+			q := s.queries.WithTx(tx)
+
+			var err error
+
+			if row, now, err = checkStep(ctx, q, f); err != nil {
+				return err
+			}
+
+			if err := ownsRestore(ctx, q, f, a.Restore); err != nil {
 				return err
 			}
 
@@ -640,6 +678,9 @@ func (s *Store) ApplyRestoreArea(
 			}
 
 			return nil
+		},
+		after: func(tx pgx.Tx, kept backup.KeepAccessResult) error {
+			return insertStep(ctx, s.queries.WithTx(tx), row, f, backup.EncodeRestoreSwap(kept), now)
 		},
 	}
 

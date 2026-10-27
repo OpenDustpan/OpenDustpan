@@ -126,7 +126,7 @@ type swapPlan struct {
 	// after runs in the fence transaction of the staged file, after the copy
 	// of the control tables: the record of the step in the staged file, so
 	// the rename makes it live with the restored data.
-	after func(ctx context.Context, tx *sql.Tx) error
+	after func(ctx context.Context, tx *sql.Tx, kept backup.KeepAccessResult) error
 }
 
 // swapStaged fences the staged file of plan, copies the control tables of
@@ -184,7 +184,14 @@ func (s *Store) swapStaged(ctx context.Context, plan swapPlan) (int64, error) {
 		}
 	}
 
-	if err := fenceStagedFile(ctx, plan.staged, s.path, keep, plan.after); err != nil {
+	var after func(context.Context, *sql.Tx) error
+
+	if plan.after != nil {
+		kept := backup.KeepAccessResult{DroppedTempAdmins: dropped}
+		after = func(ctx context.Context, tx *sql.Tx) error { return plan.after(ctx, tx, kept) }
+	}
+
+	if err := fenceStagedFile(ctx, plan.staged, s.path, keep, after); err != nil {
 		return 0, err
 	}
 

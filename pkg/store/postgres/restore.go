@@ -99,7 +99,7 @@ func (s *Store) ApplyStaging(ctx context.Context) error {
 
 	staging := s.stagingSchema
 
-	if _, err := s.swapStaging(ctx, swapPlan{staging: staging, previous: "", keepAccess: false, before: nil}); err != nil {
+	if _, err := s.swapStaging(ctx, swapPlan{staging: staging, previous: "", keepAccess: false, before: nil, after: nil}); err != nil {
 		return err
 	}
 
@@ -120,8 +120,11 @@ type swapPlan struct {
 	// keepAccess keeps the current rows of the access tables.
 	keepAccess bool
 	// before runs in the swap transaction after the swap lock and before
-	// the first change: the check and the record of the step fence.
+	// the first change: the check of the step fence.
 	before func(tx pgx.Tx) error
+	// after runs at the end of the swap transaction with the result of the
+	// swap: the record of the step.
+	after func(tx pgx.Tx, kept backup.KeepAccessResult) error
 }
 
 // swapStaging renames the live schema aside, renames the staging schema to
@@ -183,28 +186,43 @@ func (s *Store) swapStaging(ctx context.Context, plan swapPlan) (int64, error) {
 			return err
 		}
 
-		if plan.keepAccess {
-			n, err := s.keepAccessTx(ctx, tx, live, plan)
-
-			dropped = n
-
+		if err := s.swapIn(ctx, tx, live, plan, &dropped); err != nil {
 			return err
 		}
 
-		previous, drop := previousSchema(live, plan.previous)
-
-		if _, err := tx.Exec(ctx, "ALTER SCHEMA "+pgIdent(live)+" RENAME TO "+pgIdent(previous)); err != nil {
-			return fmt.Errorf("move live schema aside: %w", err)
+		if plan.after != nil {
+			return plan.after(tx, backup.KeepAccessResult{DroppedTempAdmins: dropped})
 		}
 
-		if _, err := tx.Exec(ctx, "ALTER SCHEMA "+pgIdent(plan.staging)+" RENAME TO "+pgIdent(live)); err != nil {
-			return fmt.Errorf("move staged schema live: %w", err)
-		}
-
-		return s.finishSwap(ctx, tx, swapNames{live: live, previous: previous, staging: plan.staging, drop: drop})
+		return nil
 	})
 
 	return dropped, err
+}
+
+// swapIn swaps plan.staging in for live in tx, after the swap lock and the
+// checks, and sets dropped to the count of the dropped temp_admins rows of a
+// swap that keeps the access tables.
+func (s *Store) swapIn(ctx context.Context, tx pgx.Tx, live string, plan swapPlan, dropped *int64) error {
+	if plan.keepAccess {
+		n, err := s.keepAccessTx(ctx, tx, live, plan)
+
+		*dropped = n
+
+		return err
+	}
+
+	previous, drop := previousSchema(live, plan.previous)
+
+	if _, err := tx.Exec(ctx, "ALTER SCHEMA "+pgIdent(live)+" RENAME TO "+pgIdent(previous)); err != nil {
+		return fmt.Errorf("move live schema aside: %w", err)
+	}
+
+	if _, err := tx.Exec(ctx, "ALTER SCHEMA "+pgIdent(plan.staging)+" RENAME TO "+pgIdent(live)); err != nil {
+		return fmt.Errorf("move staged schema live: %w", err)
+	}
+
+	return s.finishSwap(ctx, tx, swapNames{live: live, previous: previous, staging: plan.staging, drop: drop})
 }
 
 // previousSchema returns the name of the old live schema after a swap, and
