@@ -71,17 +71,8 @@ server (issue #99).
 | server  | [RFC 65](rfc/0065-opentofu-http-backend.md) OpenTofu through the http backend too            | follow-up after the exit test: all                                       | accepted (ADR 49) |
 | console | [RFC 52](rfc/0052-console-core.md) Console core views                                        | unit list across both tools, "connect your CLI" snippet                  | draft             |
 
-**First tagged release: `v0.1.0`** ([ADR 21](adr/0021-the-first-tagged-release.md)).
-Its gate:
-
-- [x] A `LICENSE` in this repository ([ADR 22](adr/0022-apache-2-license.md)).
-- [ ] A `LICENSE` in the Console repository.
-- [x] A `--version` flag that the build stamps.
-- [x] An upgrade test from the previous tag (for `v0.1.0`, an empty database).
-- [x] The binary refuses to start on a database schema that is newer than it
-  knows ([ADR 33](adr/0033-upgrade-checks.md), amendment to ADR 21).
-- [ ] Install docs, with TLS ([RFC 35](rfc/0035-packaging.md) accepted first).
-- [x] The e2e suite passes for both tools on SQLite and on PostgreSQL.
+The first tagged release comes after milestone 7, not here
+([ADR 279](adr/0279-no-release-before-milestone-7.md)).
 
 ## Milestone 3. Move in and run it for real
 
@@ -181,6 +172,130 @@ promote units from them, inside guard rails.
 | server  | [RFC 16](rfc/0016-egress-proxy.md) Egress proxy                                 | all                     | draft |
 | console | [RFC 14](rfc/0014-blueprints.md) Blueprints                                     | catalog and create form | draft |
 
+## Milestone 7. High availability on one database
+
+**Goal.** An operator can run two or more `opendustpan serve` instances of
+one installation behind one load balancer, on one PostgreSQL database and one
+S3-compatible bucket. A team can then lose an instance, or deploy a new
+release instance by instance, while the Pulumi CLI and OpenTofu keep working.
+Background work, backups and restores continue on another instance with no
+operator action. High availability of the database and of the object store
+stays with the operator, and the docs say what each one must provide
+([ADR 280](adr/0280-milestone-7-high-availability-on-one-database.md)).
+
+Out of scope: replication between installations, promotion and forwarding
+(ADR 248); active-active across sites; SQLite with more than one instance; the
+shared cache (ADR 72 decision 9); a flag for the lease period.
+
+**Minimum supported topology.** Two or more instances; PostgreSQL 16 or
+later; an S3-compatible object store, with no requirement for conditional
+writes; a backup target on an S3-compatible store. The Helm chart refuses the
+`fs`, `dir:` and `file:` settings when `replicas` is more than 1. A later
+decision defines how the server works with stores that do not enforce
+conditional writes.
+
+**Exit test.** On Linux, on PostgreSQL, with the blobs and the backup target
+on an S3-compatible server, the e2e suite starts three `opendustpan serve`
+binaries of one installation behind a round-robin TLS proxy in the suite. The
+proxy has active health checks on `/health/ready` and sends each request to
+the next healthy instance. For each Pulumi CLI and OpenTofu version in the
+matrix, the suite does these steps:
+
+1. **Alternation.** It runs the full milestone 1 Pulumi scenario and the full
+   milestone 2 OpenTofu scenario through the proxy. The proxy record shows
+   that each instance served requests of each tool.
+2. **Kill during work.** It starts `pulumi up` and `tofu apply`, each with a
+   resource that waits 30 s. It sends SIGKILL to one instance while both run.
+   Both commands end with exit 0. The next `pulumi preview` and `tofu plan`
+   show no changes, and the secret decrypts.
+3. **Kill during a backup.** It starts a backup of at least 500 MB of blobs,
+   finds the instance that holds the claim (`GET /api/server/operations` or
+   the backup status), and sends it SIGKILL. The backup ends `succeeded`
+   within the lease period + 60 s. `opendustpan backup check` reports it
+   complete. The operation shows one expiry.
+4. **Restart during a restore.** It starts a restore, and restarts each
+   instance that does not hold the restore, one after another. The restore
+   ends `succeeded`. Then it sends SIGKILL to the instance that holds the
+   restore, and starts a new restore. That restore ends `succeeded` on
+   another instance with no operator action. Both CLIs read the restored
+   state.
+5. **Rolling deploy.** It replaces each instance with a binary of a newer
+   build, one at a time, while a loop of `tofu apply` and `pulumi up` runs. No
+   command fails. While an old binary is in the pool, the schema minimum
+   version prevents its writes, with a clear error. For this step only, the
+   test fakes a contract migration with a test-only schema. When a `v*` tag
+   exists, `make mixed-version-test` passes with the last 2 tags.
+6. **Schedules.** It sets each job schedule to a 10 s interval through the
+   test settings, runs for 60 s, and checks that each tick ran on exactly one
+   instance (`durable_operations` start keys).
+7. **Database outage.** It stops PostgreSQL for 60 s while `tofu apply` and
+   `pulumi up` run. Every instance answers 503 on `/health/ready` and 503
+   (not 500) on API writes, with `Retry-After`. After the database returns,
+   the instances turn ready with no restart and both commands complete.
+8. **No worker.** With only `api` instances, a backup request and an audit
+   chain approval answer 503 with the text that names `--components worker`.
+
+The full Pulumi and OpenTofu scenarios still pass on one instance on SQLite
+and on PostgreSQL. The Helm chart CI profile `ci/ha.yaml` installs 3 replicas
+with a PodDisruptionBudget and passes `make chart-lint`.
+
+The docs give the recovery figures that this test measures, each with the
+date of the measurement. They give no service level agreement and no
+compliance claim.
+
+| Where   | Item                                                                                                     | Part                                              | State             |
+|---------|----------------------------------------------------------------------------------------------------------|---------------------------------------------------|-------------------|
+| server  | [RFC 36](rfc/0036-high-availability.md) High availability                                                | the rest of the scale-out on one database         | accepted (ADR 72) |
+| server  | [RFC 105](rfc/0105-purge-and-backup-at-the-same-time.md) Blob deletes while a backup runs                | all: option 3                                     | accepted (ADR 280) |
+| server  | High availability on one database (no RFC)                                                               | scope, topology, 503 on store loss, fixed lease   | accepted (ADR 280) |
+
+Work items, in order:
+
+- W1. A restore is a durable operation that a `worker` process runs, with
+  fenced steps that can run again after a takeover.
+- W2. Version rows of each instance and the minimum version check on the
+  write path (ADR 72 decision 11).
+- W3. 503 with `Retry-After` when the store is not available, in the error
+  shape of each API, and an e2e check that each CLI version retries it.
+- W4. The worker check on every route that starts a durable operation.
+- W5. Blob deletes wait for a running backup (RFC 105 option 3).
+- W6. Limits that each instance counts move into the shared store.
+- W7. The Helm chart for several replicas, with the refusal of `fs`, `dir:`
+  and `file:` when `replicas` is more than 1, and the `ci/ha.yaml` profile.
+- W8. A graceful stop: readiness answers 503 during a drain, and the worker
+  releases its claims.
+- W9. Readiness for a PostgreSQL failover, and a guide section for the
+  settings of a database with high availability.
+- W10. The e2e suite for high availability (`make e2e-ha`), with exit-test
+  steps 1 to 8.
+- W11. Docs: the supported layout, the minimum topology and the measured
+  figures, and an explanation page of what OpenDustpan does and what the
+  operator does.
+- W12. Measured sizing with two and three instances (`make load` and
+  `make soak`), with the takeover time and the error count during a kill.
+
+W1, then W4, then W10 is the critical path. W11 closes the milestone.
+
+**First tagged release: `v0.1.0`** ([ADR 21](adr/0021-the-first-tagged-release.md),
+timing from [ADR 279](adr/0279-no-release-before-milestone-7.md)). No release
+comes before the exit test of each of milestones 1 to 7 passes. Its gate:
+
+- [x] Milestone 1 met.
+- [x] Milestone 2 met.
+- [x] Milestone 3 met.
+- [ ] Milestone 4 met.
+- [ ] Milestone 5 met.
+- [ ] Milestone 6 met.
+- [ ] Milestone 7 met.
+- [x] A `LICENSE` in this repository ([ADR 22](adr/0022-apache-2-license.md)).
+- [ ] A `LICENSE` in the Console repository.
+- [x] A `--version` flag that the build stamps.
+- [x] An upgrade test from the previous tag (for `v0.1.0`, an empty database).
+- [x] The binary refuses to start on a database schema that is newer than it
+  knows ([ADR 33](adr/0033-upgrade-checks.md), amendment to ADR 21).
+- [ ] Install docs, with TLS ([RFC 35](rfc/0035-packaging.md) accepted first).
+- [x] The e2e suite passes for both tools on SQLite and on PostgreSQL.
+
 ## Accepted designs that wait for adapters
 
 The owner accepted these designs on 17 and 18 October 2026. Each has its
@@ -209,7 +324,6 @@ Wanted, but not in an ordered milestone yet. Each row says what it waits on.
 | [RFC 29](rfc/0029-existing-ci.md) Existing CI as the executor                                      | runs (milestone 5)                                              |
 | [RFC 31](rfc/0031-kubernetes.md) Kubernetes                                                        | runners (RFC 6)                                                 |
 | [RFC 33](rfc/0033-customer-managed-keys.md) Customer-managed keys                                  | secrets (RFC 3, part 2)                                         |
-| [RFC 36](rfc/0036-high-availability.md) High availability                                          | primary installations and fencing in use (ADR 4)                         |
 | [RFC 37](rfc/0037-federation.md) Namespace placement and routing                                   | installation settings (RFC 68); replication (ADR 4) for installations |
 | [RFC 39](rfc/0039-reading-state.md) Reading state contents                                         | accepted (ADR 41); a milestone to place it in                   |
 | [RFC 40](rfc/0040-inventory-queries.md) Inventory queries                                          | the inventory projection (ADR 13) at scale                      |

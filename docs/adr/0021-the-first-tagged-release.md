@@ -1,6 +1,6 @@
 # 21. The first tagged release
 
-Status: accepted · 2026-10-10 · gate extended by ADR 33 · the API rules of "Version" superseded in part by ADR 73
+Status: accepted · 2026-10-10 · gate extended by ADR 33 · the API rules of "Version" superseded in part by ADR 73. "When" superseded by ADR 279
 
 ## Context
 
