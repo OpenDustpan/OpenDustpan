@@ -148,16 +148,21 @@ func (h *Handler) appendInstanceEntry(r *http.Request, p identity.Principal, id 
 // refusal of a write by a binary below the minimum of the schema, which any
 // route can meet.
 func classifyInstance(err error) (failure, bool) {
-	switch {
-	case errors.Is(err, schema.ErrBinaryBelowMinimum):
-		return classifyBelowMinimum(err), true
-	case errors.Is(err, installation.ErrInvalidInstance):
+	if errors.Is(err, schema.ErrBinaryBelowMinimum) {
+		text, args := belowMinimumText(err)
+
+		return failCoded(http.StatusServiceUnavailable, text, errcode.SchemaBinaryBelowMinimum, args...), true
+	}
+
+	if errors.Is(err, installation.ErrInvalidInstance) {
 		return failCoded(http.StatusBadRequest, "invalid instance ID: use the ID that GET /api/server/instances lists",
 			errcode.InstanceInvalidID), true
-	case errors.Is(err, installation.ErrInstanceNotFound):
+	}
+
+	if errors.Is(err, installation.ErrInstanceNotFound) {
 		return failCoded(http.StatusNotFound, "instance not found: GET /api/server/instances lists the IDs",
 			errcode.InstanceNotFound), true
-	default:
-		return fail(0, ""), false
 	}
+
+	return fail(0, ""), false
 }

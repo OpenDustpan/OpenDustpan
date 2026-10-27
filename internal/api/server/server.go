@@ -764,18 +764,19 @@ func classifyMaintenance(err error) (failure, bool) {
 	}
 }
 
-// classifyBelowMinimum answers a write that this binary is too old to make:
-// 503 with the text that names both versions, and the code that carries them.
-func classifyBelowMinimum(err error) failure {
+// belowMinimumText returns the text of the answer to a write that this binary
+// is too old to make, and the versions as the arguments of the code. The text
+// names both versions.
+func belowMinimumText(err error) (string, []errcode.Value) {
 	below, ok := errors.AsType[*schema.MinimumError](err)
 	if !ok {
-		return failCoded(http.StatusServiceUnavailable, schema.ErrBinaryBelowMinimum.Error(),
-			errcode.SchemaBinaryBelowMinimum)
+		return schema.ErrBinaryBelowMinimum.Error(), nil
 	}
 
-	return failCoded(http.StatusServiceUnavailable, below.WriteText(), errcode.SchemaBinaryBelowMinimum,
+	return below.WriteText(), []errcode.Value{
 		errcode.Identifier("binaryVersion", below.BinaryVersion),
-		errcode.Identifier("minimumVersion", below.SchemaMinimum))
+		errcode.Identifier("minimumVersion", below.SchemaMinimum),
+	}
 }
 
 // activeWorkArgs returns the arguments of maintenance.active-work: the number

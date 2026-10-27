@@ -1051,19 +1051,28 @@ func classify(err error) failure {
 // the text that names both versions, and the versions as the arguments of the
 // code. ok is false for any other error.
 func classifyMinimum(err error) (failure, bool) {
-	if !errors.Is(err, schema.ErrBinaryBelowMinimum) {
-		return unmatched(), false
+	if errors.Is(err, schema.ErrBinaryBelowMinimum) {
+		text, args := belowMinimumText(err)
+
+		return coded(http.StatusServiceUnavailable, text, errcode.SchemaBinaryBelowMinimum, args...), true
 	}
 
+	return unmatched(), false
+}
+
+// belowMinimumText returns the message of the answer to a write that this
+// binary is too old to make, and the versions as the arguments of the code.
+// The message names both versions.
+func belowMinimumText(err error) (string, []errcode.Value) {
 	below, ok := errors.AsType[*schema.MinimumError](err)
 	if !ok {
-		return coded(http.StatusServiceUnavailable, schema.ErrBinaryBelowMinimum.Error(),
-			errcode.SchemaBinaryBelowMinimum), true
+		return schema.ErrBinaryBelowMinimum.Error(), nil
 	}
 
-	return coded(http.StatusServiceUnavailable, below.WriteText(), errcode.SchemaBinaryBelowMinimum,
+	return below.WriteText(), []errcode.Value{
 		errcode.Identifier("binaryVersion", below.BinaryVersion),
-		errcode.Identifier("minimumVersion", below.SchemaMinimum)), true
+		errcode.Identifier("minimumVersion", below.SchemaMinimum),
+	}
 }
 
 // classifyNamespace maps the errors of the namespaces. ok is false for any
