@@ -133,7 +133,7 @@ and _instance_ when each process can hold its own value.
 | Setting | Flag / environment | Source today | Why it stays static |
 | --- | --- | --- | --- |
 | Database | `--database` / `DUSTPAN_DATABASE` | flag, env | The server needs it to open the database. The value can hold a credential. |
-| Installation name | `--installation` / `DUSTPAN_INSTALLATION` | flag, env | ADR 248 decision 5: a namespace accepts writes only in its primary installation. The name must match the name that the namespace rows hold. A change can move write authority and the fence. |
+| Installation name | `--installation` / `DUSTPAN_INSTALLATION` | flag, env | ADR 248 decisions 3 and 5: a namespace accepts writes only in its primary installation. The name must match the name that the namespace rows hold. A change can move write authority and the fence. |
 | Listen address | `--listen` / `DUSTPAN_LISTEN` | flag, env | The server binds it before it opens the database. |
 | TLS certificate and key paths | `--tls-cert`, `--tls-key` / `DUSTPAN_TLS_CERT`, `DUSTPAN_TLS_KEY` | flag, env | The trust root of the server. ADR 27 reads the files once at start. See "TLS files" for a reload of the file content with static paths. |
 | Key-encryption key | `DUSTPAN_KEY_ENCRYPTION_KEY`, `--key-encryption-key-file` / `DUSTPAN_KEY_ENCRYPTION_KEY_FILE` | env, file | ADR 23: the key protects the database. A key in the database protects nothing. |

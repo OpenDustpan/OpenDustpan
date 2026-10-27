@@ -97,7 +97,7 @@ backup".
 - **Placement map**: the record that answers "where is namespace X".
 - **Router**: the code in the server that reads the placement map for a
   request and serves it, forwards it, or refuses it.
-- **Forward**: the router sends the request to the home and streams the
+- **Forward**: the router sends the request to the primary installation and streams the
   answer back to the client.
 - **Front door**: the address that a client uses, for example
   `https://dustpan.example`. A front door can serve namespaces of more than
@@ -150,14 +150,14 @@ address from an allowlist that the static layer sets.
   redirect to another host, so the request can arrive with no token. A
   redirect also changes the URL that the CLI keeps for later calls in some
   cases. `make e2e` must show what each CLI does.
-- **Option C. Forward.** The router streams the request to the home and the
+- **Option C. Forward.** The router streams the request to the primary installation and the
   answer back, with `net/http/httputil.ReverseProxy` from the standard
   library. The client sees one host. The owner answer of 2026-10-12 points
   here.
 
-**Recommendation: option C, with A when the home cannot answer.** When the
+**Recommendation: option C, with A when the primary installation cannot answer.** When the
 home does not answer, the router answers 503 with `Retry-After` and the
-name of the home. It never serves a write in a place that is not the home,
+name of the primary installation. It never serves a write in a place that is not the primary installation,
 because the fence (ADR 4) would refuse it anyway. Every adapter, not only
 the Pulumi adapter, maps `ErrNotHome` to the same answer.
 
@@ -176,18 +176,18 @@ Rules for forwarding:
   same answer.
 - **Absolute URLs.** Upload URLs and discovery documents hold the public
   URL (ADR 27). After a forward, they must hold the front door, not the
-  home, because the client may not reach the home. Open: the router
-  rewrites them, or the home builds them from a forwarded host that it
+  home, because the client may not reach the primary installation. Open: the router
+  rewrites them, or the primary installation builds them from a forwarded host that it
   trusts.
 
 ### 3. Trust between installations
 
 The home must accept the token of the caller.
 
-- **Installations that share one database.** The identity data is in the same
-  database, or a replica of it. The token works in every installation that reads
-  it. Nothing
-  more is needed.
+- **One identity database (open).** ADR 248 decision 4 says a replica
+  installation holds an asynchronous copy. ADR 248 decision 13 says the primary
+  installation refuses a token of another installation. Whether one token works
+  at more than one installation is open. This RFC does not decide it.
 - **Several installations.** Each installation keeps its own tokens in its
   own database, so a token works only at the installation that made it.
   Options:
@@ -239,7 +239,7 @@ other.
 - **Replication** copies every change to the replica installation, also a bad
   state write, a delete or a corruption. It reduces downtime when a primary
   installation fails. It does not recover data that a bad change destroyed, because the
-  standby holds the same bad change.
+  replica installation holds the same bad change.
 - **A backup** is a separate copy of one point in time, which a later bad
   change cannot reach. It recovers data. ADR 30 and ADR 42 test the
   restores.
@@ -267,7 +267,7 @@ failover.
   tool API. Allow replica reads only for the console inventory, with the
   lag shown.
 - Backups continue on their schedule. A bad change that replication copied
-  to the standby is recovered from a backup, not from the standby.
+  to the replica installation. Recover it from a backup, not from the replica installation.
 
 #### Without replication
 
@@ -283,7 +283,7 @@ there). This RFC gives no numbers.
 
 - **Failover by promotion (with replication).** The RPO is the replication
   lag at the time of the failure. The RTO is the time to detect the failure,
-  promote the standby and route to it.
+  promote the replica installation and route to it.
 - **Recovery by restore (every setup).** The RPO is the time since the last
   backup that succeeded. A backup schedule is deferred (ADR 30). Until it
   exists, the RPO is whatever the operator schedules outside the server.
@@ -374,8 +374,9 @@ proposals for its inventory:
 | Installation name | installation | static | Names this installation in the placement map and in forward headers. |
 | Placement map | installation | static, or API with an allowlist from the static layer | See the security note of design point 1. |
 | Forwarding on or off | installation | API, live | Off means 421 for every adapter, as today for the Pulumi adapter. A default, not a gate: every build has it. |
-| Forward timeout | installation | API, live | How long the router waits for the home before 503. |
+| Forward timeout | installation | API, live | How long the router waits for the primary installation before 503. |
 | Trusted router addresses | installation | static | Which addresses may set the client IP header. Same class as trusted proxies (RFC 22). |
+| Installation name | instance | static (bootstrap) | Already in RFC 68 (ADR 248 decision 5). |
 | Advertised address | instance | static | Already in RFC 68 (ADR 48). |
 
 Each row passes the "No setting gates a feature" check of RFC 68: none reads
@@ -383,7 +384,7 @@ a license, an edition or a hosted flag, and each exists in every build.
 
 ## Open questions
 
-1. Which status does every adapter answer when the home cannot answer: 503
+1. Which status does every adapter answer when the primary installation cannot answer: 503
    with `Retry-After`, or 421 as the Pulumi adapter does today?
 2. What does each CLI do with a 307 or 308 to another host? (`make e2e`)
 3. How do absolute URLs (upload URLs, discovery) hold the front door after a
@@ -413,10 +414,13 @@ Decided in part on 2026-10-18 (owner decisions):
   keeps a namespace name unique in the installation.
 - Routing, forwarding and replication between installations are allowed as
   an opt-in capability. [RFC 79](0079-opt-in-federation-routing-and-geo-replication.md)
-  designs it from design points 1 to 6 of this RFC. An earlier draft of
+  designs it from design points 1 to 6 of this RFC. ADR 248 drops RFC 79 (below). An earlier draft of
   ADR 221 that said "no routing across installations" is reversed.
+
+Decided on 2026-10-19 (owner decision in ADR 248):
+
 - [ADR 248](../adr/0248-federation-model.md): the server has no regions. Each namespace
   has one primary installation, and replica installations hold asynchronous copies.
   RFC 79 is dropped.
 
-The other design points and open questions stay open, here and in RFC 79.
+The other design points and open questions stay open.
