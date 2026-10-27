@@ -267,6 +267,7 @@ func newBinaryEnvWithBin(ctx context.Context, in envInput, binPath string) *Env 
 		backendPort:   handle.port,
 		backendCmd:    handle.cmd,
 		backendLogs:   handle.logs,
+		ha:            nil,
 		certBundle:    "",
 		dbProxy:       nil,
 		signIn:        nil,
