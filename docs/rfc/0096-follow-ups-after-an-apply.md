@@ -144,13 +144,10 @@ documentation of Ansible Automation Platform 2.6.
   with no input: `can_start_without_user_input`,
   `variables_needed_to_start`, `passwords_needed_to_start`,
   `inventory_needed_to_start`.
-- The request limit of AWX. At the `devel` commit, the file
-  `tools/ansible/roles/dockerfile/files/uwsgi.ini` sets `harakiri = 115`.
-  Uwsgi stops the worker of a request that runs longer than 115 seconds. The
-  same file at the tag `24.6.1` has no `harakiri` line. The start view creates
-  the job inside the request (`JobTemplateLaunch.post` in
-  `awx/api/views/__init__.py`). The gateway timeouts were not found in the
-  files that were checked (open question 11).
+- The request limit of AWX. This RFC does not state a value for it. The AWX
+  source was not read in the review that wrote this RFC, so the limit and the
+  gateway timeouts are open (question 11). The start view is reported to
+  create the job inside the request. That report is not checked.
 
 **Job status.** `GET /api/v2/jobs/{id}/`. The `status` values are `new`,
 `pending`, `waiting`, `running`, `successful`, `failed`, `error` and
@@ -301,11 +298,12 @@ does not retry by itself. `egress.ErrRefused` and other `4xx` stop at once
 made. These rules hold together:
 
 - **Minimum wait.** The reconciliation starts no sooner than 175 seconds
-  after the last attempt (the AWX request limit of 115 seconds plus a 60
-  second margin), and only after the claim of that attempt has ended. AWX
-  creates the job during the start request, so the job can appear up to the
-  request limit after the send. The queue time before a worker starts the
-  request is not checked (open question 11). Before that, the redeliver is
+  after the last attempt. This value is a proposal. It assumes a request
+  limit of AWX of about 115 seconds, plus a 60 second margin. That limit is
+  not checked (open question 11). The reconciliation starts only after the
+  claim of that attempt has ended. AWX may create the job during the start
+  request, so the job can appear after the send, up to that limit. The queue
+  time before a worker starts the request is not checked (open question 11). Before that, the redeliver is
   refused and the answer names the time to wait.
 - **Clock skew.** The server reads the `Date` header of the AWX answer and
   measures the skew against its own clock. Above 60 seconds, the
@@ -747,14 +745,10 @@ at `127.0.0.1`, with the server trusting its certificate. It serves the
 10. How long does the server keep call history: 30 days as for deliveries,
     or 400 days as for stored plans?
 11. Check the AWX request limit and the gateway timeouts before the 175
-    second wait (section C) is final. This check is not done. At the `devel`
-    commit, uwsgi sets `harakiri = 115`. The file at the tag `24.6.1` has no
-    `harakiri` line. The gateway timeouts of an AWX installation (for example
-    nginx) and of the platform gateway of Ansible Automation Platform were not
-    found in the files checked. The check is not done because the AWX files
-    were read through the raw file endpoint only, and the gateway files were
-    not found at the paths tried. The owner must name the deployment that the
-    wait covers.
+    second wait (section C) is final. This check is not done. The AWX source
+    and the gateway settings of an AWX installation (for example nginx) or of
+    Ansible Automation Platform were not read for this RFC. The owner must name
+    the deployment that the wait covers, and the check must read its settings.
 12. At acceptance, add the two lines of "Proposed glossary lines" to
     `GLOSSARY.md`, and add the prefix `fuc-` to the prefix entries there.
     This is not done, because the RFC is not accepted.
