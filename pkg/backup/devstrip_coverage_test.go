@@ -9,6 +9,7 @@ import (
 
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/gate"
+	"opendustpan.org/opendustpan/pkg/job"
 )
 
 // devDecision says what the strip does with a column or a field that names a
@@ -288,4 +289,103 @@ func checkApproverFieldNames(t *testing.T) {
 			t.Errorf("Approvers has the new field %s: decide it in the strip and in this test", name)
 		}
 	}
+}
+
+// jobSubjectField matches the name of a field of a job record that can name a
+// principal or hold a decision of one. The coverage test fails for a field that
+// matches and has no decision.
+var jobSubjectField = regexp.MustCompile(
+	`(?i)(subject|by$|saver|starter|approv|author|owner|holder|user|actor|principal|agent|auth)`,
+)
+
+// devJobFieldDecisions lists the fields of a job record that can name a
+// principal. The table jobs keeps them in the JSON column body, so the
+// column check does not see them. The strip does not edit the body: the
+// subjects of the starter and the approvers stay as history text, like
+// job_freezes.created_by. Gate.Status counts an approval only when
+// ApproverPolicy.CountsAsSignature allows its subject, so a dev subject fills
+// no slot of a gate on a production installation, also when the body holds it.
+//
+//nolint:gochecknoglobals // A frozen decision table shared by the coverage tests.
+var devJobFieldDecisions = map[string]devDecision{
+	"Job.StartedBy": {
+		strip:  false,
+		reason: "history text of who started the job; a confirmation by it counts only when CountsAsSignature allows it",
+	},
+	"Job.Agent":         {strip: false, reason: "name of an agent, not of a person"},
+	"Job.AgentMode":     {strip: false, reason: "a mode word, not a subject"},
+	"LogRef.ReplacedBy": {strip: false, reason: "ID of a log version, not of a person"},
+	"Gate.Approvals":    {strip: false, reason: "the number of approvals that the gate needs, not a subject"},
+	"Phase.Approvals": {
+		strip:  false,
+		reason: "history of the verdicts; Gate.Status counts no signature that CountsAsSignature refuses",
+	},
+	"Approval.Subject": {
+		strip:  false,
+		reason: "history text of who gave the verdict; CountsAsSignature refuses a dev subject on production",
+	},
+	"Approval.Agent":  {strip: false, reason: "name of an agent, not of a person; an agent verdict never counts"},
+	"Approval.Auth":   {strip: false, reason: "kind of fresh authentication, not a subject"},
+	"Approval.AuthAt": {strip: false, reason: "time of a fresh authentication, not a subject"},
+	"TriggerRef.Saver": {
+		strip:  false,
+		reason: "subject of the last saver of the trigger at the start; history text, as triggers.last_saver_subject",
+	},
+}
+
+// TestDevStripCoversEveryJobSubjectField walks the types of a job record and
+// fails for a field that can name a principal and has no decision, and for a
+// decision with no field. A new subject field in the body of a job forces its
+// author to decide what the strip does with it.
+func TestDevStripCoversEveryJobSubjectField(t *testing.T) {
+	t.Parallel()
+
+	found := map[string]bool{}
+
+	for _, typ := range jobRecordStructs(reflect.TypeFor[job.Job](), map[reflect.Type]bool{}) {
+		for field := range typ.Fields() {
+			if !jobSubjectField.MatchString(field.Name) {
+				continue
+			}
+
+			key := typ.Name() + "." + field.Name
+			found[key] = true
+
+			decision, listed := devJobFieldDecisions[key]
+			if !listed {
+				t.Errorf("field %s of a job record can name a principal and has no decision: add it to "+
+					"devJobFieldDecisions", key)
+			} else if strings.TrimSpace(decision.reason) == "" {
+				t.Errorf("field %s has a decision with no reason", key)
+			}
+		}
+	}
+
+	for key := range devJobFieldDecisions {
+		if !found[key] {
+			t.Errorf("devJobFieldDecisions lists %s, which is no such field of a job record", key)
+		}
+	}
+}
+
+// jobRecordStructs returns the struct types of package job that a record of
+// typ reaches through fields, slices, arrays, maps and pointers.
+func jobRecordStructs(typ reflect.Type, seen map[reflect.Type]bool) []reflect.Type {
+	for typ.Kind() == reflect.Pointer || typ.Kind() == reflect.Slice || typ.Kind() == reflect.Array ||
+		typ.Kind() == reflect.Map {
+		typ = typ.Elem()
+	}
+
+	if typ.Kind() != reflect.Struct || seen[typ] || typ.PkgPath() != reflect.TypeFor[job.Job]().PkgPath() {
+		return nil
+	}
+
+	seen[typ] = true
+	out := []reflect.Type{typ}
+
+	for field := range typ.Fields() {
+		out = append(out, jobRecordStructs(field.Type, seen)...)
+	}
+
+	return out
 }
