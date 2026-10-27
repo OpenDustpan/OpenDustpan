@@ -3492,16 +3492,16 @@ func newRestoreService(
 	}
 
 	service, err := backup.NewRestoreService(backup.RestoreConfig{
-		Live:        live,
-		Registry:    registry,
-		Backups:     deps.backups,
-		Maintenance: maint,
-		Blobs:       cfg.blobStore,
-		Target:      cfg.backupTarget,
-		Key:         cfg.secretWrapper,
-		Region:      cfg.installation.String(),
-		AfterApply:  afterRestore(steps...),
-		Admit:       admit,
+		Live:         live,
+		Registry:     registry,
+		Backups:      deps.backups,
+		Maintenance:  maint,
+		Blobs:        cfg.blobStore,
+		Target:       cfg.backupTarget,
+		Key:          cfg.secretWrapper,
+		Installation: cfg.installation.String(),
+		AfterApply:   afterRestore(steps...),
+		Admit:        admit,
 
 		AllowDevBackups: cfg.allowDevBackups,
 		AllowDevHint:    cfg.allowDevHint,

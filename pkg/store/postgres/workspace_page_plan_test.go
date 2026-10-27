@@ -47,7 +47,7 @@ func seedWorkspaces(t *testing.T, conn *pgx.Conn) {
 	t.Helper()
 
 	statements := []string{
-		`INSERT INTO namespaces (name, home_region, failover_version, created_at_ms, id)
+		`INSERT INTO namespaces (name, primary_installation, failover_version, created_at_ms, id)
 			VALUES ('acme', 'eu-west', 1, 0, 'ns-plan')`,
 		`INSERT INTO workspaces (id, namespace, name, revision, created_at_ms, updated_at_ms)
 			SELECT 'ws-' || lpad(i::text, 5, '0'), 'acme', 'web-' || lpad(i::text, 5, '0'), 1, 0, 0

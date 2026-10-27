@@ -55,17 +55,17 @@ var (
 // JSON keys are stable: Check and restore parse them, so a new field needs a
 // new optional key, never a rename.
 type Manifest struct {
-	CreatedAt     time.Time      `json:"createdAt"`
-	ID            ID             `json:"id"`
-	Dialect       Dialect        `json:"dialect"`
-	HomeRegions   []string       `json:"homeRegions"`
-	WrapperIDs    []string       `json:"wrapperIds"`
-	Blobs         []ManifestBlob `json:"blobs"`
-	Version       string         `json:"version"`
-	SQLSHA256     string         `json:"sqlSha256"`
-	Format        int            `json:"format"`
-	SchemaVersion int            `json:"schemaVersion"`
-	SQLSize       int64          `json:"sqlSize"`
+	CreatedAt            time.Time      `json:"createdAt"`
+	ID                   ID             `json:"id"`
+	Dialect              Dialect        `json:"dialect"`
+	PrimaryInstallations []string       `json:"primaryInstallations"`
+	WrapperIDs           []string       `json:"wrapperIds"`
+	Blobs                []ManifestBlob `json:"blobs"`
+	Version              string         `json:"version"`
+	SQLSHA256            string         `json:"sqlSha256"`
+	Format               int            `json:"format"`
+	SchemaVersion        int            `json:"schemaVersion"`
+	SQLSize              int64          `json:"sqlSize"`
 	// RowCounts holds the row count of each table in Tables. Restore compares
 	// the loaded counts with it after the SQL load.
 	RowCounts map[string]int64 `json:"rowCounts"`
@@ -1283,20 +1283,20 @@ type manifestInput struct {
 // and every blob, so a backup without a manifest never counts as complete.
 func (s *Service) writeManifest(ctx context.Context, in manifestInput) error {
 	manifest := Manifest{
-		CreatedAt:     in.startedAt,
-		ID:            in.id,
-		Dialect:       in.sum.Dialect,
-		HomeRegions:   in.sum.HomeRegions,
-		WrapperIDs:    in.sum.WrapperIDs,
-		Blobs:         make([]ManifestBlob, 0, len(in.ordered)),
-		Version:       s.version,
-		SQLSHA256:     hex.EncodeToString(in.sha[:]),
-		Format:        FormatVersion,
-		SchemaVersion: in.sum.SchemaVersion,
-		SQLSize:       in.size,
-		RowCounts:     in.sum.RowCounts,
-		SQLFormat:     PortableFormat,
-		SQLFiles:      in.files,
+		CreatedAt:            in.startedAt,
+		ID:                   in.id,
+		Dialect:              in.sum.Dialect,
+		PrimaryInstallations: in.sum.PrimaryInstallations,
+		WrapperIDs:           in.sum.WrapperIDs,
+		Blobs:                make([]ManifestBlob, 0, len(in.ordered)),
+		Version:              s.version,
+		SQLSHA256:            hex.EncodeToString(in.sha[:]),
+		Format:               FormatVersion,
+		SchemaVersion:        in.sum.SchemaVersion,
+		SQLSize:              in.size,
+		RowCounts:            in.sum.RowCounts,
+		SQLFormat:            PortableFormat,
+		SQLFiles:             in.files,
 
 		InstallationKind: in.kind,
 		Unverified:       slices.Clone(in.sum.Unverified),

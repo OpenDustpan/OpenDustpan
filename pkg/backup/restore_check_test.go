@@ -140,21 +140,21 @@ func newCheckSetup(t *testing.T) *checkSetup {
 	}
 	db := encodeRestoreDump(t, dump)
 	manifest := writeRestoreManifest(t, target, blobs, restoreBlobsInput{
-		db:      db,
-		dump:    dump,
-		regions: []string{"eu-west"},
+		db:            db,
+		dump:          dump,
+		installations: []string{"eu-west"},
 	})
 
 	live := &checkLiveStore{
 		mu: sync.Mutex{},
 		live: backup.Summary{
-			Dialect:       backup.DialectSQLite,
-			HomeRegions:   []string{"eu-west"},
-			WrapperIDs:    nil,
-			RowCounts:     map[string]int64{},
-			Blobs:         nil,
-			SchemaVersion: backup.BaselineSchemaVersion,
-			Unverified:    nil,
+			Dialect:              backup.DialectSQLite,
+			PrimaryInstallations: []string{"eu-west"},
+			WrapperIDs:           nil,
+			RowCounts:            map[string]int64{},
+			Blobs:                nil,
+			SchemaVersion:        backup.BaselineSchemaVersion,
+			Unverified:           nil,
 		},
 		key:          testWrappedKey(t),
 		keyErr:       nil,
@@ -188,13 +188,13 @@ func stagedSummary(t *testing.T, manifest backup.Manifest) backup.Summary {
 	}
 
 	return backup.Summary{
-		Dialect:       manifest.Dialect,
-		HomeRegions:   manifest.HomeRegions,
-		WrapperIDs:    manifest.WrapperIDs,
-		RowCounts:     maps.Clone(manifest.RowCounts),
-		Blobs:         refs,
-		SchemaVersion: manifest.SchemaVersion,
-		Unverified:    nil,
+		Dialect:              manifest.Dialect,
+		PrimaryInstallations: manifest.PrimaryInstallations,
+		WrapperIDs:           manifest.WrapperIDs,
+		RowCounts:            maps.Clone(manifest.RowCounts),
+		Blobs:                refs,
+		SchemaVersion:        manifest.SchemaVersion,
+		Unverified:           nil,
 	}
 }
 
@@ -215,18 +215,18 @@ func (s *checkSetup) rewriteCheckManifest(t *testing.T) {
 	s.live.staged = stagedSummary(t, s.manifest)
 }
 
-// check runs a server-side restore check with the given key and region.
-func (s *checkSetup) check(t *testing.T, key secret.Wrapper, region string) (backup.Summary, string, error) {
+// check runs a server-side restore check with the given key and installation.
+func (s *checkSetup) check(t *testing.T, key secret.Wrapper, installation string) (backup.Summary, string, error) {
 	t.Helper()
 
 	return backup.CheckRestore(t.Context(), backup.CheckInput{
-		Target:     s.target,
-		Live:       s.live,
-		Key:        key,
-		ID:         s.id,
-		Region:     region,
-		Stage:      backup.StageOptions{BackupKind: "", AllowDev: false},
-		AfterStage: nil,
+		Target:       s.target,
+		Live:         s.live,
+		Key:          key,
+		ID:           s.id,
+		Installation: installation,
+		Stage:        backup.StageOptions{BackupKind: "", AllowDev: false},
+		AfterStage:   nil,
 	})
 }
 
@@ -236,7 +236,7 @@ func assertCheckSummary(t *testing.T, got, want backup.Summary) {
 
 	if got.Dialect != want.Dialect || got.SchemaVersion != want.SchemaVersion ||
 		!maps.Equal(got.RowCounts, want.RowCounts) || !equalCheckBlobs(got.Blobs, want.Blobs) ||
-		!maps.Equal(sliceSet(got.HomeRegions), sliceSet(want.HomeRegions)) ||
+		!maps.Equal(sliceSet(got.PrimaryInstallations), sliceSet(want.PrimaryInstallations)) ||
 		!maps.Equal(sliceSet(got.WrapperIDs), sliceSet(want.WrapperIDs)) {
 		t.Fatalf("staged summary = %+v, want %+v", got, want)
 	}
@@ -323,7 +323,7 @@ func TestCheckRestoreGood(t *testing.T) {
 	}
 
 	if warning != "" {
-		t.Fatalf("warning = %q, want empty for a home region", warning)
+		t.Fatalf("warning = %q, want empty for a primary installation", warning)
 	}
 
 	assertCheckSummary(t, staged, s.live.staged)
@@ -342,7 +342,7 @@ func TestCheckRestoreRegionWarning(t *testing.T) {
 	}
 
 	if !strings.Contains(warning, "us-east") {
-		t.Fatalf("warning = %q, want it to name the region", warning)
+		t.Fatalf("warning = %q, want it to name the installation", warning)
 	}
 
 	s.assertStagedOnce(t)

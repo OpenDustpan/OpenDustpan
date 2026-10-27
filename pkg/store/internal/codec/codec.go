@@ -16,7 +16,7 @@ import (
 // NamespaceRow is the column representation of a namespace.
 type NamespaceRow struct {
 	Name                string
-	HomeRegion          string
+	PrimaryInstallation string
 	FailoverVersion     int64
 	CreatedAtMs         int64
 	AllowForcedWrites   bool
@@ -88,7 +88,7 @@ func FromNamespaceRow(row NamespaceRow) namespace.Namespace {
 		CreatedAt:           FromMillis(row.CreatedAtMs),
 		ID:                  namespace.ID(row.ID),
 		Name:                namespace.Name(row.Name),
-		PrimaryInstallation: namespace.InstallationName(row.HomeRegion),
+		PrimaryInstallation: namespace.InstallationName(row.PrimaryInstallation),
 		Overrides:           namespace.Overrides{Forced: row.AllowForcedWrites, Unlocked: row.AllowUnlockedWrites},
 		FailoverVersion:     row.FailoverVersion,
 	}
@@ -98,7 +98,7 @@ func FromNamespaceRow(row NamespaceRow) namespace.Namespace {
 func ToNamespaceRow(ns namespace.Namespace) NamespaceRow {
 	return NamespaceRow{
 		Name:                ns.Name.String(),
-		HomeRegion:          ns.PrimaryInstallation.String(),
+		PrimaryInstallation: ns.PrimaryInstallation.String(),
 		FailoverVersion:     ns.FailoverVersion,
 		CreatedAtMs:         Millis(ns.CreatedAt),
 		AllowForcedWrites:   ns.Overrides.Forced,

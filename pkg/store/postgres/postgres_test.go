@@ -1080,16 +1080,16 @@ func newRestoreAuditServices(
 	}
 
 	restores, err := backup.NewRestoreService(backup.RestoreConfig{
-		Live:        st,
-		Registry:    st,
-		Backups:     backups,
-		Maintenance: restoreAuditMaintenance{state: st},
-		Blobs:       live,
-		Target:      target,
-		Key:         key,
-		Region:      "test",
-		AfterApply:  nil,
-		Admit:       nil,
+		Live:         st,
+		Registry:     st,
+		Backups:      backups,
+		Maintenance:  restoreAuditMaintenance{state: st},
+		Blobs:        live,
+		Target:       target,
+		Key:          key,
+		Installation: "test",
+		AfterApply:   nil,
+		Admit:        nil,
 
 		AllowDevBackups: false,
 		AllowDevHint:    "",

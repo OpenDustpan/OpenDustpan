@@ -56,7 +56,7 @@ A backup is a set of objects under the target:
 - `backups/<id>/sql/<table>.jsonl.gz` holds the SQL data. There is one file for each table of the installation. Each file is gzip-compressed JSON Lines: one row for each line, with one member for each column.
 - `blobs/<key>` holds each blob that the SQL data names. Examples are OpenTofu state versions and Pulumi checkpoints. Other examples are job plan parts, job log chunks and registry release files.
 
-The manifest records the backup format (`format`: 3) and the SQL format (`sqlFormat`: `portable`). It records the database that wrote the backup (`dialect`) and the schema version. It also records the home regions and the wrapper IDs. It records the kind of the installation that wrote the backup (`installationKind`: `dev` or `production`). The server reads the kind from its own database. A backup of another format number is not valid, and neither is a manifest with no kind or with an unknown kind.
+The manifest records the backup format (`format`: 3) and the SQL format (`sqlFormat`: `portable`). It records the database that wrote the backup (`dialect`) and the schema version. It also records the primary installations and the wrapper IDs. It records the kind of the installation that wrote the backup (`installationKind`: `dev` or `production`). The server reads the kind from its own database. A backup of another format number is not valid, and neither is a manifest with no kind or with an unknown kind.
 
 For each table file, the manifest has one entry in `sqlFiles`. The entry names the file, its columns, its row count, its size and its SHA-256. The manifest also records each blob with its key, size and MD5.
 
@@ -382,4 +382,4 @@ These items are not in milestone 3.
 - A public backup format.
 - Encryption of the whole backup.
 - Restore of one unit.
-- Restore into another region.
+- Restore into another installation.

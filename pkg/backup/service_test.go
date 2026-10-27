@@ -565,13 +565,13 @@ func blobRef(key string, data []byte) backup.BlobRef {
 
 func testSummary(refs ...backup.BlobRef) backup.Summary {
 	return backup.Summary{
-		Dialect:       backup.DialectSQLite,
-		HomeRegions:   []string{"eu-west"},
-		WrapperIDs:    []string{"kek-1"},
-		RowCounts:     map[string]int64{"namespaces": 1},
-		Blobs:         refs,
-		SchemaVersion: 7,
-		Unverified:    nil,
+		Dialect:              backup.DialectSQLite,
+		PrimaryInstallations: []string{"eu-west"},
+		WrapperIDs:           []string{"kek-1"},
+		RowCounts:            map[string]int64{"namespaces": 1},
+		Blobs:                refs,
+		SchemaVersion:        7,
+		Unverified:           nil,
 	}
 }
 
@@ -709,11 +709,11 @@ func wantManifest(now time.Time, id backup.ID, sql, first, second []byte) backup
 	secondMD5 := md5.Sum(second) //nolint:gosec // The test recomputes the MD5 the manifest records.
 
 	return backup.Manifest{
-		CreatedAt:   now,
-		ID:          id,
-		Dialect:     backup.DialectSQLite,
-		HomeRegions: []string{"eu-west"},
-		WrapperIDs:  []string{"kek-1"},
+		CreatedAt:            now,
+		ID:                   id,
+		Dialect:              backup.DialectSQLite,
+		PrimaryInstallations: []string{"eu-west"},
+		WrapperIDs:           []string{"kek-1"},
 		Blobs: []backup.ManifestBlob{
 			{
 				Key:    "namespaces/ns-aaaaaaaaaaaaaaaaaaaa/tofu/ws1/sv1/a1",
@@ -782,7 +782,7 @@ func assertManifestKeys(t *testing.T, target *memStore, id backup.ID) {
 		"createdAt",
 		"dialect",
 		"format",
-		"homeRegions",
+		"primaryInstallations",
 		"id",
 		"installationKind",
 		"rowCounts",

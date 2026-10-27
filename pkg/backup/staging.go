@@ -29,14 +29,14 @@ type CheckStore interface {
 
 // CheckInput holds one server-side restore check: the backup target to read
 // from, the live store to stage in, the key-encryption key, the backup ID, and
-// the region of this installation for the region warning. A blank Region
+// the installation name of this server, for the warning. A blank Installation
 // disables the warning.
 type CheckInput struct {
-	Target blob.Store
-	Live   CheckStore
-	Key    secret.Wrapper
-	ID     ID
-	Region string
+	Target       blob.Store
+	Live         CheckStore
+	Key          secret.Wrapper
+	ID           ID
+	Installation string
 	// Stage is passed to the stage call: the kind that the manifest claims
 	// and whether a dev backup is allowed. The store adapter compares it with
 	// the live kind that it reads from its own database.
@@ -55,9 +55,9 @@ type CheckInput struct {
 // loads the SQL part into the staging area only, then removes the staging
 // area and applies nothing. The live data stays unchanged, also after a
 // failed check. When the final discard fails, the staging area may remain:
-// discard it again. It returns the Summary of the staged data with the region
-// warning, which is empty when the region is blank or among the home regions
-// of the manifest.
+// discard it again. It returns the Summary of the staged data with the
+// warning, which is empty when the installation name is blank or among the
+// primary installations of the manifest.
 func CheckRestore(ctx context.Context, in CheckInput) (Summary, string, error) {
 	var none Summary
 
@@ -121,7 +121,7 @@ func CheckRestore(ctx context.Context, in CheckInput) (Summary, string, error) {
 		)
 	}
 
-	return staged, restoreWarning(plan.manifest, in.Region), nil
+	return staged, restoreWarning(plan.manifest, in.Installation), nil
 }
 
 // checkPlan carries the checked manifest of one restore check with the decoded

@@ -244,17 +244,17 @@ type BlobRef struct {
 
 // Summary is the manifest subset that the SQL data alone determines. The
 // backup writes the full manifest last; restore checks it before writing
-// anything. HomeRegions holds the distinct home regions of the namespaces,
+// anything. PrimaryInstallations holds the distinct primary installations of the namespaces,
 // ordered. WrapperIDs holds the distinct wrapper IDs of the stored data keys
 // from secret.KeyStore.ListWrapperIDs, ordered. RowCounts holds the row
 // count of each table in Tables. Blobs holds the blob references of the SQL
 // data, ordered by key.
 type Summary struct {
-	Dialect     Dialect
-	HomeRegions []string
-	WrapperIDs  []string
-	RowCounts   map[string]int64
-	Blobs       []BlobRef
+	Dialect              Dialect
+	PrimaryInstallations []string
+	WrapperIDs           []string
+	RowCounts            map[string]int64
+	Blobs                []BlobRef
 	// Unverified holds the keys of the blobs that rows name and that the
 	// backup does not copy, because the rows hold no size and MD5 of the
 	// stored bytes (a row from an earlier version of the server). It is

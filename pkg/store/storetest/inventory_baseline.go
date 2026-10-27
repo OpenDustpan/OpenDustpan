@@ -23,7 +23,7 @@ const BaselineSeed = `
 	VALUES ('col-web', 'acme', 'web', 'Web', 500);
 	INSERT INTO collection_members (unit_id, namespace, collection_key, assigned_at_ms)
 	VALUES ('stk-live', 'acme', 'web', 600);
-	INSERT INTO namespaces (name, home_region, failover_version, created_at_ms, id)
+	INSERT INTO namespaces (name, primary_installation, failover_version, created_at_ms, id)
 	VALUES ('beta', 'eu-west', 1, 0, 'ns-beta');
 	INSERT INTO inventory (namespace, tool, name, unit_id, display_name, last_changed_ms)
 	VALUES ('beta', 'pulumi', 'api/prod', 'stk-beta', 'api/prod', 1500)`

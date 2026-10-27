@@ -93,9 +93,9 @@ func encodeRestoreDump(t *testing.T, dump restoreDump) []byte {
 
 // restoreBlobsInput groups what writeManifest stores alongside the SQL part.
 type restoreBlobsInput struct {
-	db      []byte
-	dump    restoreDump
-	regions []string
+	db            []byte
+	dump          restoreDump
+	installations []string
 }
 
 // writeRestoreManifest stores the SQL part, the blobs and the manifest in the
@@ -146,20 +146,20 @@ func writeRestoreManifest(
 	slices.Sort(wrappers)
 
 	manifest := backup.Manifest{
-		CreatedAt:     time.Date(2026, time.October, 11, 12, 0, 0, 0, time.UTC),
-		ID:            id,
-		Dialect:       backup.DialectSQLite,
-		HomeRegions:   in.regions,
-		WrapperIDs:    wrappers,
-		Blobs:         entries,
-		Version:       "test-1.0",
-		SQLSHA256:     sqlSHA,
-		Format:        backup.FormatVersion,
-		SchemaVersion: backup.BaselineSchemaVersion,
-		SQLSize:       sqlSize,
-		RowCounts:     maps.Clone(in.dump.Rows),
-		SQLFormat:     backup.PortableFormat,
-		SQLFiles:      files,
+		CreatedAt:            time.Date(2026, time.October, 11, 12, 0, 0, 0, time.UTC),
+		ID:                   id,
+		Dialect:              backup.DialectSQLite,
+		PrimaryInstallations: in.installations,
+		WrapperIDs:           wrappers,
+		Blobs:                entries,
+		Version:              "test-1.0",
+		SQLSHA256:            sqlSHA,
+		Format:               backup.FormatVersion,
+		SchemaVersion:        backup.BaselineSchemaVersion,
+		SQLSize:              sqlSize,
+		RowCounts:            maps.Clone(in.dump.Rows),
+		SQLFormat:            backup.PortableFormat,
+		SQLFiles:             files,
 
 		InstallationKind: installation.KindProduction,
 		Unverified:       nil,

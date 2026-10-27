@@ -12898,17 +12898,17 @@ type backupDoc struct {
 
 // backupManifestDoc holds the manifest fields the backup steps check.
 type backupManifestDoc struct {
-	ID            string               `json:"id"`
-	Format        int                  `json:"format"`
-	Dialect       string               `json:"dialect"`
-	HomeRegions   []string             `json:"homeRegions"`
-	WrapperIDs    []string             `json:"wrapperIds"`
-	Blobs         []backupManifestBlob `json:"blobs"`
-	SQLSize       int64                `json:"sqlSize"`
-	SQLSHA256     string               `json:"sqlSha256"`
-	SQLFormat     string               `json:"sqlFormat"`
-	SQLFiles      []backupSQLFileDoc   `json:"sqlFiles"`
-	SchemaVersion int                  `json:"schemaVersion"`
+	ID                   string               `json:"id"`
+	Format               int                  `json:"format"`
+	Dialect              string               `json:"dialect"`
+	PrimaryInstallations []string             `json:"primaryInstallations"`
+	WrapperIDs           []string             `json:"wrapperIds"`
+	Blobs                []backupManifestBlob `json:"blobs"`
+	SQLSize              int64                `json:"sqlSize"`
+	SQLSHA256            string               `json:"sqlSha256"`
+	SQLFormat            string               `json:"sqlFormat"`
+	SQLFiles             []backupSQLFileDoc   `json:"sqlFiles"`
+	SchemaVersion        int                  `json:"schemaVersion"`
 }
 
 // backupSQLFileDoc holds one table file descriptor of the manifest.
@@ -13071,7 +13071,7 @@ func checkBackupManifest(t *testing.T, store e2e.Store, doc backupDoc) {
 		t.Fatal("manifest holds no wrapper ID, want the key of the config secret")
 	}
 
-	if len(manifest.HomeRegions) == 0 {
+	if len(manifest.PrimaryInstallations) == 0 {
 		t.Fatal("manifest holds no primary installation")
 	}
 }

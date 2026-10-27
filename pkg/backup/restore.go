@@ -248,24 +248,28 @@ func putRestoreBlob(ctx context.Context, dest blob.Store, ref ManifestBlob, read
 // restoreWant builds the Import want Summary from the manifest.
 func restoreWant(manifest Manifest, wantBlobs []BlobRef) Summary {
 	return Summary{
-		Dialect:       manifest.Dialect,
-		HomeRegions:   manifest.HomeRegions,
-		WrapperIDs:    manifest.WrapperIDs,
-		RowCounts:     manifest.RowCounts,
-		Blobs:         wantBlobs,
-		Unverified:    manifest.Unverified,
-		SchemaVersion: manifest.SchemaVersion,
+		Dialect:              manifest.Dialect,
+		PrimaryInstallations: manifest.PrimaryInstallations,
+		WrapperIDs:           manifest.WrapperIDs,
+		RowCounts:            manifest.RowCounts,
+		Blobs:                wantBlobs,
+		Unverified:           manifest.Unverified,
+		SchemaVersion:        manifest.SchemaVersion,
 	}
 }
 
-// restoreWarning warns when Region is not among the home regions of the
-// manifest. Restore still keeps the home region of each namespace.
-func restoreWarning(manifest Manifest, region string) string {
-	if region == "" || slices.Contains(manifest.HomeRegions, region) {
+// restoreWarning warns when Installation is not among the primary installations of the
+// manifest. Restore still keeps the primary installation of each namespace.
+func restoreWarning(manifest Manifest, installation string) string {
+	if installation == "" || slices.Contains(manifest.PrimaryInstallations, installation) {
 		return ""
 	}
 
-	return fmt.Sprintf("region %q is not among the backup regions %q", region, manifest.HomeRegions)
+	return fmt.Sprintf(
+		"installation %q is not among the primary installations of the backup: %q",
+		installation,
+		manifest.PrimaryInstallations,
+	)
 }
 
 // hashStream counts the bytes of reader through SHA-256.

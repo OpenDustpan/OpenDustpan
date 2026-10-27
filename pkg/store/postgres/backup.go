@@ -133,7 +133,7 @@ func pgCopyStackTables() []pgCopyTable {
 		{
 			table: "namespaces",
 			columns: []string{
-				pgColName, "home_region", "failover_version", pgColCreatedAtMs,
+				pgColName, "primary_installation", "failover_version", pgColCreatedAtMs,
 				"allow_forced_writes", "allow_unlocked_writes", "ip_allowlist", "id", "output_sharing_default",
 				"source_filter",
 			},
@@ -826,21 +826,21 @@ func inBackupTx(ctx context.Context, pool *pgxpool.Pool, opts pgx.TxOptions, fn 
 
 // pgAttrs is the manifest subset the SQL data determines, without row counts.
 type pgAttrs struct {
-	regions  []string
-	wrappers []string
-	blobs    []backup.BlobRef
+	installations []string
+	wrappers      []string
+	blobs         []backup.BlobRef
 	// unverified holds the keys that rows name and the backup does not copy.
 	unverified []string
 	version    int
 }
 
-// backupAttrs reads the home regions, wrapper IDs, blob references and
+// backupAttrs reads the primary installations, wrapper IDs, blob references and
 // schema version. Export calls it in the capture transaction, so the values
 // match the captured rows; summarize calls it after the load.
 func backupAttrs(ctx context.Context, q *db.Queries, qr pgQuerier) (pgAttrs, error) {
-	regions, err := q.BackupHomeRegions(ctx)
+	installations, err := q.BackupPrimaryInstallations(ctx)
 	if err != nil {
-		return pgAttrs{}, fmt.Errorf("select backup regions: %w", err)
+		return pgAttrs{}, fmt.Errorf("select backup installations: %w", err)
 	}
 
 	wrappers, err := q.BackupWrapperIDs(ctx)
@@ -880,8 +880,8 @@ func backupAttrs(ctx context.Context, q *db.Queries, qr pgQuerier) (pgAttrs, err
 		return pgAttrs{}, fmt.Errorf("read schema version: %w", err)
 	}
 
-	if regions == nil {
-		regions = []string{}
+	if installations == nil {
+		installations = []string{}
 	}
 
 	if wrappers == nil {
@@ -889,7 +889,11 @@ func backupAttrs(ctx context.Context, q *db.Queries, qr pgQuerier) (pgAttrs, err
 	}
 
 	return pgAttrs{
-		regions: regions, wrappers: wrappers, blobs: blobs, unverified: collector.Unverified(), version: int(version),
+		installations: installations,
+		wrappers:      wrappers,
+		blobs:         blobs,
+		unverified:    collector.Unverified(),
+		version:       int(version),
 	}, nil
 }
 
@@ -988,14 +992,14 @@ func (s *Store) buildStaging(ctx context.Context, in stagingInput) (backup.Summa
 }
 
 // summarizeStaging reads the summary of the staging schema: the dialect, the
-// schema version the staging schema_migrations records, the home regions, the
+// schema version the staging schema_migrations records, the primary installations, the
 // wrapper IDs, the row count of each table, and the blob references. The live
 // tables stay out of every query: each one names the staging schema. A staged
 // version that differs from the manifest reports ErrCorrupt.
 func (s *Store) summarizeStaging(
 	ctx context.Context, staging string, want backup.Summary,
 ) (backup.Summary, error) {
-	regions, err := stagingStrings(ctx, s.pool, staging, "namespaces", "home_region")
+	installations, err := stagingStrings(ctx, s.pool, staging, "namespaces", "primary_installation")
 	if err != nil {
 		return backup.Summary{}, err
 	}
@@ -1045,13 +1049,13 @@ func (s *Store) summarizeStaging(
 	}
 
 	return backup.Summary{
-		Dialect:       backup.DialectPostgres,
-		HomeRegions:   regions,
-		WrapperIDs:    wrappers,
-		RowCounts:     counts,
-		Blobs:         blobs,
-		Unverified:    collector.Unverified(),
-		SchemaVersion: version,
+		Dialect:              backup.DialectPostgres,
+		PrimaryInstallations: installations,
+		WrapperIDs:           wrappers,
+		RowCounts:            counts,
+		Blobs:                blobs,
+		Unverified:           collector.Unverified(),
+		SchemaVersion:        version,
 	}, nil
 }
 

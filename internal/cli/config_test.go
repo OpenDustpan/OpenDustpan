@@ -132,7 +132,11 @@ func TestParseConfigRefuses(t *testing.T) {
 		{"anchor on a value", "installation: &r " + canaryValue + "\n", cli.ErrConfigAlias},
 		{"alias of a value", "installation: &r " + canaryValue + "\nlisten: *r\n", cli.ErrConfigAlias},
 		{"merge key", "base: &b {installation: x}\n<<: *b\n", cli.ErrConfigAlias},
-		{"duplicate key", "installation: " + canaryValue + "\ninstallation: " + canaryValue + "\n", cli.ErrConfigDuplicate},
+		{
+			"duplicate key",
+			"installation: " + canaryValue + "\ninstallation: " + canaryValue + "\n",
+			cli.ErrConfigDuplicate,
+		},
 		{"duplicate key with equal value", "installation: a\ninstallation: a\n", cli.ErrConfigDuplicate},
 		{"unknown key", "regoin: " + canaryValue + "\n", cli.ErrConfigUnknown},
 		{"flag without a file key", "server: " + canaryValue + "\n", cli.ErrConfigUnknown},

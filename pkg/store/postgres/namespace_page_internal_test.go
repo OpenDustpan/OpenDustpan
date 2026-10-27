@@ -267,7 +267,7 @@ func explain(t *testing.T, s *Store, stmt string) string {
 func checkAllPlan(t *testing.T, s *Store) {
 	t.Helper()
 
-	const stmt = `EXPLAIN SELECT name, home_region, failover_version,
+	const stmt = `EXPLAIN SELECT name, primary_installation, failover_version,
 		created_at_ms, allow_forced_writes, allow_unlocked_writes
 		FROM namespaces WHERE name > '' ORDER BY name LIMIT 50`
 
@@ -302,7 +302,7 @@ func subsetArray(names []namespace.Name) string {
 func checkSubsetPlan(t *testing.T, s *Store, subset []namespace.Name) {
 	t.Helper()
 
-	stmt := `EXPLAIN SELECT name, home_region, failover_version,
+	stmt := `EXPLAIN SELECT name, primary_installation, failover_version,
 		created_at_ms, allow_forced_writes, allow_unlocked_writes
 		FROM namespaces WHERE name > '' AND name = ANY('` + subsetArray(subset) + `'::text[])
 		ORDER BY name LIMIT 50`

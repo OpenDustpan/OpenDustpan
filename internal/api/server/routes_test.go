@@ -796,16 +796,16 @@ func newRouteTestRestores(
 	t.Helper()
 
 	restores, err := backup.NewRestoreService(backup.RestoreConfig{
-		Live:        st,
-		Registry:    st,
-		Backups:     service,
-		Maintenance: newFakeMaintenance(maintenance.StateNormal),
-		Blobs:       live,
-		Target:      target,
-		Key:         nil,
-		Region:      "test",
-		AfterApply:  nil,
-		Admit:       nil,
+		Live:         st,
+		Registry:     st,
+		Backups:      service,
+		Maintenance:  newFakeMaintenance(maintenance.StateNormal),
+		Blobs:        live,
+		Target:       target,
+		Key:          nil,
+		Installation: "test",
+		AfterApply:   nil,
+		Admit:        nil,
 
 		AllowDevBackups: false,
 		AllowDevHint:    "",

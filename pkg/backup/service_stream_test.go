@@ -62,13 +62,13 @@ func largeStreamBytes(size int) []byte {
 // dialect with the baseline schema version, so the restore checks pass it.
 func streamSummary(refs ...backup.BlobRef) backup.Summary {
 	return backup.Summary{
-		Dialect:       backup.DialectSQLite,
-		HomeRegions:   []string{"eu-west"},
-		WrapperIDs:    []string{"kek-1"},
-		RowCounts:     map[string]int64{"namespaces": 1},
-		Blobs:         refs,
-		SchemaVersion: backup.BaselineSchemaVersion,
-		Unverified:    nil,
+		Dialect:              backup.DialectSQLite,
+		PrimaryInstallations: []string{"eu-west"},
+		WrapperIDs:           []string{"kek-1"},
+		RowCounts:            map[string]int64{"namespaces": 1},
+		Blobs:                refs,
+		SchemaVersion:        backup.BaselineSchemaVersion,
+		Unverified:           nil,
 	}
 }
 
@@ -135,13 +135,13 @@ func restoreStreamedBackup(
 	liveChecks := &checkLiveStore{
 		mu: sync.Mutex{},
 		live: backup.Summary{
-			Dialect:       backup.DialectSQLite,
-			HomeRegions:   []string{"eu-west"},
-			WrapperIDs:    nil,
-			RowCounts:     map[string]int64{},
-			Blobs:         nil,
-			SchemaVersion: backup.BaselineSchemaVersion,
-			Unverified:    nil,
+			Dialect:              backup.DialectSQLite,
+			PrimaryInstallations: []string{"eu-west"},
+			WrapperIDs:           nil,
+			RowCounts:            map[string]int64{},
+			Blobs:                nil,
+			SchemaVersion:        backup.BaselineSchemaVersion,
+			Unverified:           nil,
 		},
 		key:          testWrappedKey(t),
 		keyErr:       nil,
@@ -185,7 +185,7 @@ func restoreStreamedBackup(
 		Blobs:           blobs,
 		Target:          target,
 		Key:             testWrapper(),
-		Region:          "eu-west",
+		Installation:    "eu-west",
 		AfterApply:      nil,
 		Admit:           nil,
 		Now:             nil,

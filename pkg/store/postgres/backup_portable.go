@@ -46,13 +46,13 @@ func (s *Store) ExportPortable(
 		}
 
 		sum = backup.Summary{
-			Dialect:       backup.DialectPostgres,
-			HomeRegions:   attrs.regions,
-			WrapperIDs:    attrs.wrappers,
-			RowCounts:     counts,
-			Blobs:         attrs.blobs,
-			Unverified:    attrs.unverified,
-			SchemaVersion: attrs.version,
+			Dialect:              backup.DialectPostgres,
+			PrimaryInstallations: attrs.installations,
+			WrapperIDs:           attrs.wrappers,
+			RowCounts:            counts,
+			Blobs:                attrs.blobs,
+			Unverified:           attrs.unverified,
+			SchemaVersion:        attrs.version,
 		}
 
 		return nil
