@@ -191,13 +191,21 @@ func (c *Checker) refuseOwner(ctx context.Context, subject string) error {
 
 // sameSite reports whether a request with the session cookie may come from
 // where it comes from: its Origin header, when present, must be an allowed
-// origin; without one, the browser must not mark it as cross-site.
+// origin. Without one, a method that can change state must have
+// Sec-Fetch-Site: same-origin, so a request with no Fetch Metadata is
+// refused. Without one, a method that cannot change state passes unless the
+// browser marks it as cross-site.
 func (c *Checker) sameSite(r *http.Request) bool {
 	if origin := apidesc.Header(r, "Origin"); origin != "" {
 		return slices.Contains(c.origins, origin)
 	}
 
-	return apidesc.Header(r, "Sec-Fetch-Site") != "cross-site"
+	site := apidesc.Header(r, "Sec-Fetch-Site")
+	if changesState(r.Method) {
+		return site == "same-origin"
+	}
+
+	return site != "cross-site"
 }
 
 // changesState reports whether a request with method can change state:

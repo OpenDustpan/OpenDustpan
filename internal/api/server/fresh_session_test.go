@@ -84,6 +84,7 @@ func (f accessFixture) asSession(t *testing.T, subject string, authTime time.Tim
 	req := httptest.NewRequestWithContext(t.Context(), c.method, c.path, strings.NewReader(c.body))
 	req.AddCookie(cookie)
 	req.Header.Set(apiserver.CSRFHeader, csrf)
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
 
 	rec := httptest.NewRecorder()
 	f.handler.ServeHTTP(rec, req)
@@ -210,6 +211,7 @@ func (s storeSessions) start(t *testing.T, req *http.Request, age time.Duration)
 	cookie := &http.Cookie{Name: apiserver.SessionCookie, Value: secret.Reveal()}
 	req.AddCookie(cookie)
 	req.Header.Set(apiserver.CSRFHeader, session.CSRFValue(secret))
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
 }
 
 // handlerSessions maps a Handler of a test to the sessions of its store.

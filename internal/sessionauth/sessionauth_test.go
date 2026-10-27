@@ -157,12 +157,47 @@ func authCases(secret session.Secret) []authCase {
 			want: sessionauth.ErrOtherSite, wantStore: false,
 		},
 		{
-			name: "POST with no CSRF value", method: http.MethodPost, cookie: raw, headers: none, storeErr: nil,
+			name: "POST with the CSRF value and same-origin Fetch Metadata, no origin", method: http.MethodPost,
+			cookie: raw, headers: map[string]string{sessionauth.CSRFHeader: csrf, "Sec-Fetch-Site": "same-origin"},
+			storeErr: nil, want: nil, wantStore: true,
+		},
+		{
+			name: "POST with the CSRF value and no origin and no Fetch Metadata", method: http.MethodPost, cookie: raw,
+			headers: map[string]string{sessionauth.CSRFHeader: csrf}, storeErr: nil,
+			want: sessionauth.ErrOtherSite, wantStore: false,
+		},
+		{
+			name: "POST with the CSRF value and a same-site Fetch Metadata, no origin", method: http.MethodPost,
+			cookie: raw, headers: map[string]string{sessionauth.CSRFHeader: csrf, "Sec-Fetch-Site": "same-site"},
+			storeErr: nil, want: sessionauth.ErrOtherSite, wantStore: false,
+		},
+		{
+			name: "POST with the CSRF value and a none Fetch Metadata, no origin", method: http.MethodPost,
+			cookie: raw, headers: map[string]string{sessionauth.CSRFHeader: csrf, "Sec-Fetch-Site": "none"},
+			storeErr: nil, want: sessionauth.ErrOtherSite, wantStore: false,
+		},
+		{
+			name: "POST with the CSRF value and a cross-site request, no origin", method: http.MethodPost, cookie: raw,
+			headers: map[string]string{sessionauth.CSRFHeader: csrf, "Sec-Fetch-Site": "cross-site"}, storeErr: nil,
+			want: sessionauth.ErrOtherSite, wantStore: false,
+		},
+		{
+			name: "DELETE with the CSRF value and no origin and no Fetch Metadata", method: http.MethodDelete,
+			cookie: raw, headers: map[string]string{sessionauth.CSRFHeader: csrf}, storeErr: nil,
+			want: sessionauth.ErrOtherSite, wantStore: false,
+		},
+		{
+			name: "HEAD with no origin and no Fetch Metadata", method: http.MethodHead, cookie: raw, headers: none,
+			storeErr: nil, want: nil, wantStore: true,
+		},
+		{
+			name: "POST with no CSRF value", method: http.MethodPost, cookie: raw,
+			headers: map[string]string{"Origin": consoleOrigin}, storeErr: nil,
 			want: sessionauth.ErrCSRF, wantStore: false,
 		},
 		{
 			name: "DELETE with a wrong CSRF value", method: http.MethodDelete, cookie: raw,
-			headers: map[string]string{sessionauth.CSRFHeader: "wrong"}, storeErr: nil,
+			headers: map[string]string{sessionauth.CSRFHeader: "wrong", "Origin": consoleOrigin}, storeErr: nil,
 			want: sessionauth.ErrCSRF, wantStore: false,
 		},
 		{

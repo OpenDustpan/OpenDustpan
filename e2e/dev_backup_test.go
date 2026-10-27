@@ -325,8 +325,10 @@ func serverCall(t *testing.T, base string, call serverRequest) (int, string) {
 	if call.session != nil {
 		req.AddCookie(&http.Cookie{
 			Name: call.session.Name, Value: call.session.Value, Secure: true, HttpOnly: true,
-			SameSite: http.SameSiteLaxMode,
+			SameSite: http.SameSiteStrictMode,
 		})
+		// A browser marks a request to the server that sent the page.
+		req.Header.Set("Sec-Fetch-Site", "same-origin")
 	} else {
 		// The audit API takes the credential of the tool APIs, and the
 		// installation API takes a bearer credential.

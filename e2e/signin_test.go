@@ -106,6 +106,9 @@ func (b browser) do(t *testing.T, client *http.Client, method, target string, he
 		t.Fatalf("request %s %s: %v", method, target, err)
 	}
 
+	// A browser marks a request to the server that sent the page; a caller
+	// can replace the value.
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
 	maps.Copy(req.Header, header)
 
 	resp, err := client.Do(req)
@@ -238,6 +241,7 @@ func (b browser) doBody(t *testing.T, method, target, body string, header http.H
 		t.Fatalf("request %s %s: %v", method, target, err)
 	}
 
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
 	maps.Copy(req.Header, header)
 	req.Header.Set("Content-Type", "application/json")
 
@@ -424,6 +428,17 @@ func checkConsoleAPIsTakeTheCookie(t *testing.T, b browser) {
 		!strings.Contains(a.body, "X-Dustpan-CSRF") {
 		t.Errorf("POST with the session cookie and no CSRF value = %d %s, want 403 that names the header",
 			a.status, a.body)
+	}
+
+	// A request with the cookie and no Fetch Metadata, or marked cross-site,
+	// is refused before the CSRF check.
+	for _, site := range []string{"", "cross-site", "same-site"} {
+		header := http.Header{"Sec-Fetch-Site": {site}}
+		if a := b.do(t, b.server, http.MethodPost, rename, header); a.status != http.StatusForbidden ||
+			!strings.Contains(a.body, "another site") {
+			t.Errorf("POST with the session cookie and Sec-Fetch-Site %q = %d %s, want 403 from another site",
+				site, a.status, a.body)
+		}
 	}
 
 	tfe := "/api/v2/organizations/" + e2e.Namespace + "/workspaces"
