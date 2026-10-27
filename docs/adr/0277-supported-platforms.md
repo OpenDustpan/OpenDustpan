@@ -31,7 +31,12 @@ platforms.
 4. The project fixes a generic bug that stops a build or a `go vet` run on
    another platform. The project does not accept a platform-specific patch,
    for example code in a file that only one other platform builds. (owner)
-5. The project does not own code for another platform. It does not test that
+5. FreeBSD, OpenBSD and NetBSD are not supported targets. The project does not
+   test them and does not release them. The code uses the `unix` build
+   constraint and the standard library, so it is likely to work there. Bug
+   reports and contributions are welcome under the rule of decisions 3 and 4:
+   no regression on Linux or macOS, and no new build tag. (owner)
+6. The project does not own code for another platform. It does not test that
    code in CI and does not promise to keep it. (owner)
 
 ## Consequences
