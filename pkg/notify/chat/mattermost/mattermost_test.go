@@ -85,7 +85,7 @@ func TestCheckHostRuleNeverHoldsTheHost(t *testing.T) {
 	t.Parallel()
 
 	err := mattermost.New().CheckHost("user:secret-9f3b@chat.example.com")
-	if !errors.Is(err, notify.ErrInvalid) {
+	if err == nil || !errors.Is(err, notify.ErrInvalid) {
 		t.Fatalf("CheckHost = %v, want ErrInvalid", err)
 	}
 
