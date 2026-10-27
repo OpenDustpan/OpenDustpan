@@ -227,8 +227,10 @@ a service principal.
 4. The server sets the `__Host-dustpan_session` cookie and sends the
    browser to the return path.
 
-Both cookies are `Secure`, `HttpOnly` and `SameSite=Lax`, with the path `/`
-and no domain.
+Both cookies are `Secure` and `HttpOnly`, with the path `/` and no domain.
+The `__Host-dustpan_signin` cookie is `SameSite=Lax`, so the browser sends it
+when the provider sends the browser back. The `__Host-dustpan_session`
+cookie is `SameSite=Strict`.
 
 ## The session
 

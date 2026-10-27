@@ -143,7 +143,7 @@ func (h *Handler) devCodeSignIn(w http.ResponseWriter, r *http.Request, _ identi
 		return
 	}
 
-	http.SetCookie(w, browserCookie(SessionCookie, secret.Reveal(), h.sessionLength(ctx, sess)))
+	http.SetCookie(w, sessionCookie(secret.Reveal(), h.sessionLength(ctx, sess)))
 	w.WriteHeader(http.StatusNoContent)
 }
 

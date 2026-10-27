@@ -121,7 +121,10 @@ func TestSessionCookieNeedsCSRF(t *testing.T) {
 	h, secret := cookieHandler(t, aliceChecker(t))
 	target := "/api/stacks/acme/proj/dev/rename"
 
-	rec := serve(h, cookieRequest(t, http.MethodPost, target, secret))
+	first := cookieRequest(t, http.MethodPost, target, secret)
+	first.Header.Set("Sec-Fetch-Site", "same-origin")
+
+	rec := serve(h, first)
 	if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "X-Dustpan-CSRF") {
 		t.Fatalf("POST with the cookie and no CSRF value = %d %s, want 403 that names the header",
 			rec.Code, rec.Body.String())
@@ -129,6 +132,7 @@ func TestSessionCookieNeedsCSRF(t *testing.T) {
 
 	req := cookieRequest(t, http.MethodPost, target, secret)
 	req.Header.Set(sessionauth.CSRFHeader, session.CSRFValue(secret))
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
 
 	if rec := serve(h, req); rec.Code == http.StatusForbidden || rec.Code == http.StatusUnauthorized {
 		t.Fatalf("POST with the cookie and the CSRF value = %d %s, want past the sign-in", rec.Code, rec.Body.String())
@@ -177,6 +181,7 @@ func sessionPost(t *testing.T, target string, secret session.Secret, body string
 		SameSite: http.SameSiteLaxMode,
 	})
 	req.Header.Set(sessionauth.CSRFHeader, session.CSRFValue(secret))
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
 	req.Header.Set("Content-Type", "application/json")
 
 	return req

@@ -28,6 +28,11 @@ OpenDustpan is pre-alpha. Do not keep production state on it.
   each later request answers 401. A request in flight when the revoke commits
   may finish. An update that a bootstrap administrator token started has no
   such token, so no check runs.
+- **The console session cookie is `SameSite=Strict`.** A request with the
+  session cookie and no `Origin` header must be a read, or must carry
+  `Sec-Fetch-Site: same-origin`. A method that can change state also needs
+  the `X-Dustpan-CSRF` header. The sign-in cookie stays `SameSite=Lax`, so
+  the return from the identity provider works.
 
 Planned: users, teams and roles (RFC 19), scoped access tokens (RFC 20), and
 single sign-on with directory sync (RFC 21).

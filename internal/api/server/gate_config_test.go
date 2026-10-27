@@ -76,6 +76,7 @@ func (g gateEnv) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		r.Header.Del("Authorization")
 		r.AddCookie(g.session)
 		r.Header.Set(apiserver.CSRFHeader, g.csrf)
+		r.Header.Set("Sec-Fetch-Site", "same-origin")
 	}
 
 	g.env.handler.ServeHTTP(w, r)

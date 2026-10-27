@@ -354,7 +354,7 @@ func (h *Handler) startSignIn(w http.ResponseWriter, r *http.Request, _ identity
 	}
 
 	noStore(w)
-	http.SetCookie(w, browserCookie(SignInCookie, state.Reveal(), session.RequestLifetime))
+	http.SetCookie(w, browserCookie(SignInCookie, state.Reveal(), session.RequestLifetime, http.SameSiteLaxMode))
 	http.Redirect(w, r, authURL, http.StatusFound)
 }
 
@@ -366,7 +366,7 @@ func (h *Handler) finishSignIn(w http.ResponseWriter, r *http.Request, _ identit
 	ctx := r.Context()
 
 	noStore(w)
-	http.SetCookie(w, browserCookie(SignInCookie, "", -1))
+	http.SetCookie(w, browserCookie(SignInCookie, "", -1, http.SameSiteLaxMode))
 
 	if err := h.admitSignIn(ctx); err != nil {
 		h.writeError(ctx, w, err)
@@ -528,7 +528,7 @@ func (h *Handler) startSession(
 		return
 	}
 
-	http.SetCookie(w, browserCookie(SessionCookie, secret.Reveal(), h.sessionLength(ctx, sess)))
+	http.SetCookie(w, sessionCookie(secret.Reveal(), h.sessionLength(ctx, sess)))
 	// The return path passed session.ValidReturnPath when the request was
 	// stored: it is a path of this server.
 	http.Redirect(w, r, returnPath, http.StatusSeeOther)
@@ -711,7 +711,7 @@ func (h *Handler) signOut(w http.ResponseWriter, r *http.Request, p identity.Pri
 		return
 	}
 
-	http.SetCookie(w, browserCookie(SessionCookie, "", -1))
+	http.SetCookie(w, sessionCookie("", -1))
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -744,19 +744,30 @@ func (h *Handler) authenticateSession(r *http.Request) (identity.Principal, *ses
 	return p, &caller, nil
 }
 
-// browserCookie returns a cookie of the console: Secure, HttpOnly,
-// SameSite=Lax and Path=/, as the prefix __Host- needs. A negative maxAge
-// deletes the cookie.
-func browserCookie(name, value string, maxAge time.Duration) *http.Cookie {
+// browserCookie returns a cookie of the console: Secure, HttpOnly, the
+// SameSite mode that the caller gives, and Path=/, as the prefix __Host-
+// needs. A negative maxAge deletes the cookie.
+func browserCookie(name, value string, maxAge time.Duration, sameSite http.SameSite) *http.Cookie {
 	seconds := int(maxAge / time.Second)
 	if maxAge < 0 {
 		seconds = -1
 	}
 
-	return &http.Cookie{
+	c := &http.Cookie{
 		Name: name, Value: value, Path: "/", MaxAge: seconds, Secure: true, HttpOnly: true,
 		SameSite: http.SameSiteLaxMode,
 	}
+	c.SameSite = sameSite
+
+	return c
+}
+
+// sessionCookie returns the session cookie of the console. It is SameSite=Strict,
+// so the browser never sends it with a request that a page of another site
+// starts. The sign-in cookie stays Lax: the return from the identity provider
+// is a cross-site navigation that must carry it.
+func sessionCookie(value string, maxAge time.Duration) *http.Cookie {
+	return browserCookie(SessionCookie, value, maxAge, http.SameSiteStrictMode)
 }
 
 // noStore keeps a browser and a proxy from storing the answer.
