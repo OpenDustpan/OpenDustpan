@@ -20,6 +20,12 @@ import (
 	"opendustpan.org/opendustpan/pkg/secret"
 )
 
+// restoreWaitLimit is the outer limit of the wait for the end of a restore. A
+// restore ends in a few seconds on an idle machine, and a full-suite run with
+// the race detector slows it by an order of magnitude, so the limit is far
+// above both and below the test timeout of a store package.
+const restoreWaitLimit = 20 * time.Minute
+
 // ItemKeyBackupRig is everything RunItemKeyBackup needs: a store that keeps
 // item keys, the backup and restore services over it and the live blob store,
 // as the server wires them.
@@ -334,11 +340,13 @@ func openAll(t *testing.T, s secret.ItemSealer, ref secret.ItemRef, binding, sea
 }
 
 // waitItemKeyRestore polls the restore until it succeeds, and fails on any
-// other end state or after a minute.
+// other end state. The wait is for the state change. The outer limit is far
+// longer than any stall of a loaded machine and only stops a restore that
+// never moves.
 func waitItemKeyRestore(t *testing.T, restores *backup.RestoreService, id backup.RestoreID) {
 	t.Helper()
 
-	deadline := time.Now().Add(time.Minute)
+	deadline := time.Now().Add(restoreWaitLimit)
 
 	for {
 		row, err := restores.Get(t.Context(), id)

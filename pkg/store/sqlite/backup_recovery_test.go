@@ -30,6 +30,11 @@ const crashLease = 2 * time.Second
 // only holder that stops without an end write.
 const recoverLease = time.Hour
 
+// waitLimit is the outer limit of each wait for a state change in these tests.
+// The tests wait for the change itself. The limit is far above the stall of a
+// loaded machine and only stops a backup that never moves.
+const waitLimit = 20 * time.Minute
+
 // holdTarget is a backup target that holds the first write of a SQL table
 // file until the context of the write ends, as a process that dies in the
 // write step holds it.
@@ -142,7 +147,7 @@ func crashedBackup(t *testing.T, path string, dirs recoveryDirs, id backup.ID) {
 
 	select {
 	case <-held.entered:
-	case <-time.After(30 * time.Second):
+	case <-time.After(waitLimit):
 		t.Fatal("the backup did not reach its write step")
 	}
 
@@ -270,7 +275,7 @@ func checkRecovered(t *testing.T, second *sqlite.Store, target blob.Store, id ba
 	// that process then takes its own claim over: the check needs at least one
 	// takeover of an expired claim.
 	opID := durableID(t, second, id)
-	deadline := time.Now().Add(30 * time.Second)
+	deadline := time.Now().Add(waitLimit)
 
 	op, err := second.DurableOperationsPort().Get(ctx, opID)
 	for err == nil && !op.State.Terminal() && time.Now().Before(deadline) {
@@ -296,7 +301,7 @@ func checkRecovered(t *testing.T, second *sqlite.Store, target blob.Store, id ba
 func waitBackupEnd(t *testing.T, store *sqlite.Store, id backup.ID) backup.Record {
 	t.Helper()
 
-	deadline := time.Now().Add(30 * time.Second)
+	deadline := time.Now().Add(waitLimit)
 
 	for {
 		row, err := store.GetBackup(t.Context(), id)
@@ -309,7 +314,7 @@ func waitBackupEnd(t *testing.T, store *sqlite.Store, id backup.ID) backup.Recor
 		}
 
 		if time.Now().After(deadline) {
-			t.Fatalf("backup %s still running after 30s", id)
+			t.Fatalf("backup %s still running after %s", id, waitLimit)
 		}
 
 		select {

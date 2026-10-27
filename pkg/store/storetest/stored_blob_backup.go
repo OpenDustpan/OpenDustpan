@@ -469,7 +469,7 @@ func dropUnverified(t *testing.T, target blob.Store, id backup.ID) {
 func waitRestoreEnd(t *testing.T, restores *backup.RestoreService, id backup.RestoreID) backup.RestoreRecord {
 	t.Helper()
 
-	deadline := time.Now().Add(time.Minute)
+	deadline := time.Now().Add(restoreWaitLimit)
 
 	for {
 		row, err := restores.Get(t.Context(), id)
