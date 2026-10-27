@@ -170,10 +170,7 @@ func (h *HostIssuer) recovery(
 		Subject: access.Subject{Kind: access.SubjectPrincipal, ID: p.ID},
 	}
 
-	rec := tempadmin.TempAdmin{
-		CreatedAt: at, ExpiresAt: at.Add(min(tempadmin.Lifetime, lifetime)), EndedAt: time.Time{},
-		PrincipalID: p.ID, Subject: in.Subject, CreatedBy: in.CreatedBy, Reason: in.Reason,
-	}
+	rec := hostRecord(in, p.ID, at, lifetime)
 
 	if validErr := rec.Validate(); validErr != nil {
 		return nil, Secret{}, fmt.Errorf("create temporary administrator: %w", validErr)
@@ -219,4 +216,20 @@ func withAction(e audit.Entry, action string) audit.Entry {
 func hostRefusal(why string) error {
 	return fmt.Errorf("%w: %w: the host issues only the first token of a new temporary administrator: %s",
 		identity.ErrDenied, ErrNotOwnToken, why)
+}
+
+// hostRecord returns the temporary administrator record of the principal id,
+// made at the time at. The record ends with the token policy maximum when
+// that is below tempadmin.Lifetime.
+func hostRecord(in HostInput, id string, at time.Time, lifetime time.Duration) tempadmin.TempAdmin {
+	return tempadmin.TempAdmin{
+		CreatedAt:      at,
+		ExpiresAt:      at.Add(min(tempadmin.Lifetime, lifetime)),
+		EndedAt:        time.Time{},
+		ReviewOpenedAt: time.Time{},
+		PrincipalID:    id,
+		Subject:        in.Subject,
+		CreatedBy:      in.CreatedBy,
+		Reason:         in.Reason,
+	}
 }

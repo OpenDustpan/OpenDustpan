@@ -50,8 +50,14 @@ func recovery(id, subject string, when time.Time) accesstoken.HostRecovery {
 	}
 
 	rec := tempadmin.TempAdmin{
-		CreatedAt: when, ExpiresAt: when.Add(time.Hour), EndedAt: time.Time{}, PrincipalID: id, Subject: subject,
-		CreatedBy: "operator", Reason: "every administrator lost access",
+		CreatedAt:      when,
+		ExpiresAt:      when.Add(time.Hour),
+		EndedAt:        time.Time{},
+		ReviewOpenedAt: time.Time{},
+		PrincipalID:    id,
+		Subject:        subject,
+		CreatedBy:      "operator",
+		Reason:         "every administrator lost access",
 	}
 
 	tok := hostToken("tok-"+id, id, when)
