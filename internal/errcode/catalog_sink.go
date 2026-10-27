@@ -3,6 +3,8 @@ package errcode
 // The codes of the area. A code is never removed and never changes its
 // meaning.
 const (
+	// SinkAccessToken means that the access token of the notification destination is not valid for its platform.
+	SinkAccessToken = "sink.access-token"
 	// SinkConflict means that the notification destination changed since the caller read it.
 	SinkConflict = "sink.conflict"
 	// SinkInvalid means that the notification destination is not valid.
@@ -23,6 +25,11 @@ const (
 // sinkSpecs are the codes of the notification destinations.
 func sinkSpecs() []Spec {
 	return []Spec{
+		{
+			Code:    SinkAccessToken,
+			Meaning: "the access token of the notification destination is not valid for its platform",
+			Args:    nil,
+		},
 		{Code: SinkConflict, Meaning: "the notification destination changed since the caller read it", Args: nil},
 		{Code: SinkInvalid, Meaning: "the notification destination is not valid", Args: nil},
 		{Code: SinkNoSender, Meaning: "the server cannot send to this kind of notification destination", Args: nil},
