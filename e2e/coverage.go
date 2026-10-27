@@ -818,6 +818,7 @@ func coverageContextRoutes(tb testing.TB, namespaces *namespace.Service) []Route
 		Units:         coverageReader{},
 		Deleted:       coverageReader{},
 		Collections:   nil,
+		Drift:         nil,
 		Entries:       coverageContextStore{},
 		Writer:        writer,
 		Authenticator: coverageAuthenticator{},

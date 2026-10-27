@@ -248,10 +248,20 @@ func writeTargets(t *testing.T, w *contextWorld) []writeTarget {
 	}
 
 	contexts, err := contextapi.NewHandler(contextapi.Config{
-		Audit: st, OnAuditFailure: nil,
-		Namespaces: namespaces, Units: st, Deleted: st, Collections: collections, Entries: st, Writer: writer,
-		Authenticator: authn, Authorizer: identity.AdminOnly{}, Sessions: nil, Logger: logger,
-		DenialLimiter: nil,
+		Audit:          st,
+		OnAuditFailure: nil,
+		Namespaces:     namespaces,
+		Units:          st,
+		Deleted:        st,
+		Collections:    collections,
+		Drift:          nil,
+		Entries:        st,
+		Writer:         writer,
+		Authenticator:  authn,
+		Authorizer:     identity.AdminOnly{},
+		Sessions:       nil,
+		Logger:         logger,
+		DenialLimiter:  nil,
 	})
 	if err != nil {
 		t.Fatalf("context handler: %v", err)

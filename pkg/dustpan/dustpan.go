@@ -2535,6 +2535,7 @@ func newContextHandler(svc services, cfg *settings, onFailure func()) (http.Hand
 		Units:         cfg.inventoryReader,
 		Deleted:       deleted,
 		Collections:   svc.collections,
+		Drift:         cfg.driftStore,
 		Entries:       store,
 		Writer:        writer,
 		Authenticator: cfg.authenticator,
