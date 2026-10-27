@@ -92,10 +92,15 @@ error. A destination of a kind or a chat platform with no sender answers 422
 destination is `hooks.slack.com` or `hooks.slack-gov.com`, and any other host
 answers 400 `sink.platform-host` when you make or change the destination. The
 platform `mattermost` has a sender. Its host is any host that the outbound
-rules allow, because you host the server. A destination whose sealed URL is
-missing, does not open, or has another host than the `target` answers 422 `sink.no-url`, and the server sends nothing. Set
-the URL again with a change. See `docs/guides/slack-notifications.md` for the
-message.
+rules allow, because you host the server. The platform `teams` has a sender for
+the webhook URL of a Workflows flow. Its host is one or more names before
+`logic.azure.com` or `api.powerplatform.com` (or a Microsoft cloud for
+government or China domain from the Power Automate list), with no port or with
+the port 443. The flow answers 202 when it got the card. That answer does not
+prove that Teams showed the card. A destination whose sealed URL is missing,
+does not open, or has another host than the `target` answers 422
+`sink.no-url`, and the server sends nothing. Set the URL again with a change.
+See `docs/guides/slack-notifications.md` for the message.
 
 A name that resolves to an address that the outbound rules refuse gives the
 class `temporary`, the same as a name that does not resolve. The class
