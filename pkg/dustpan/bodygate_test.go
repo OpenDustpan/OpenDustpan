@@ -57,7 +57,7 @@ func newGateFixture(t *testing.T) fixture {
 	}
 
 	srv, err := dustpan.NewServer(
-		dustpan.WithRegion(region),
+		dustpan.WithInstallation(installationName),
 		dustpan.WithNamespaceStore(st),
 		dustpan.WithStackStore(st),
 		dustpan.WithUpdateStore(st),
@@ -133,7 +133,7 @@ func TestSharedBodyGateAcrossAdapters(t *testing.T) {
 	t.Parallel()
 
 	f := newGateFixture(t)
-	f.createNamespace(t, "acme", region)
+	f.createNamespace(t, "acme", installationName)
 
 	name, err := workspace.ParseName("web")
 	if err != nil {

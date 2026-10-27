@@ -99,7 +99,7 @@ func canaryServer(
 	logger := slog.New(slog.NewJSONHandler(sink, &slog.HandlerOptions{Level: slog.LevelDebug}))
 
 	opts := []dustpan.Option{
-		dustpan.WithRegion(region),
+		dustpan.WithInstallation(installationName),
 		dustpan.WithNamespaceStore(st),
 		dustpan.WithStackStore(stacks),
 		dustpan.WithUpdateStore(st),
@@ -133,12 +133,12 @@ func seedCanaryNamespace(t *testing.T, st *sqlite.Store) {
 	t.Helper()
 
 	err := st.CreateNamespace(t.Context(), namespace.Namespace{
-		ID:              namespace.NewID(),
-		CreatedAt:       time.Now(),
-		Name:            namespace.Name("acme"),
-		HomeRegion:      namespace.Region(region),
-		FailoverVersion: 1,
-		Overrides:       namespace.Overrides{Forced: false, Unlocked: false},
+		ID:                  namespace.NewID(),
+		CreatedAt:           time.Now(),
+		Name:                namespace.Name("acme"),
+		PrimaryInstallation: namespace.InstallationName(installationName),
+		FailoverVersion:     1,
+		Overrides:           namespace.Overrides{Forced: false, Unlocked: false},
 	})
 	if err != nil {
 		t.Fatalf("create namespace: %v", err)

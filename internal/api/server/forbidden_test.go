@@ -23,7 +23,9 @@ import (
 func forbiddenHandler(t *testing.T, err error) testHandler {
 	t.Helper()
 
-	namespaces, nsErr := namespace.NewService(namespace.Config{Store: stubNamespaceStore{}, Now: nil, Region: "test"})
+	namespaces, nsErr := namespace.NewService(
+		namespace.Config{Store: stubNamespaceStore{}, Now: nil, Installation: "test"},
+	)
 	if nsErr != nil {
 		t.Fatalf("namespace service: %v", nsErr)
 	}

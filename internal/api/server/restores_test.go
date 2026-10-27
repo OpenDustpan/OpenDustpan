@@ -71,16 +71,16 @@ func newRestoreFixtureOver(t *testing.T, stores backupStores, target blob.Store)
 	}
 
 	restores, err := backup.NewRestoreService(backup.RestoreConfig{
-		Live:        stores.registry,
-		Registry:    stores.registry,
-		Backups:     backups,
-		Maintenance: newFakeMaintenance(maintenance.StateNormal),
-		Blobs:       stores.live,
-		Target:      target,
-		Key:         nil,
-		Region:      "test",
-		AfterApply:  nil,
-		Admit:       nil,
+		Live:         stores.registry,
+		Registry:     stores.registry,
+		Backups:      backups,
+		Maintenance:  newFakeMaintenance(maintenance.StateNormal),
+		Blobs:        stores.live,
+		Target:       target,
+		Key:          nil,
+		Installation: "test",
+		AfterApply:   nil,
+		Admit:        nil,
 
 		AllowDevBackups: false,
 		AllowDevHint:    "",
@@ -91,7 +91,7 @@ func newRestoreFixtureOver(t *testing.T, stores backupStores, target blob.Store)
 		t.Fatalf("new restore service: %v", err)
 	}
 
-	namespaces, err := namespace.NewService(namespace.Config{Store: stores.registry, Now: nil, Region: "test"})
+	namespaces, err := namespace.NewService(namespace.Config{Store: stores.registry, Now: nil, Installation: "test"})
 	if err != nil {
 		t.Fatalf("namespace service: %v", err)
 	}
@@ -768,7 +768,7 @@ func TestRestoreWithoutTargetAnswers503(t *testing.T) {
 
 	stores := openBackupDeps(t)
 
-	namespaces, err := namespace.NewService(namespace.Config{Store: stores.registry, Now: nil, Region: "test"})
+	namespaces, err := namespace.NewService(namespace.Config{Store: stores.registry, Now: nil, Installation: "test"})
 	if err != nil {
 		t.Fatalf("namespace service: %v", err)
 	}
@@ -882,16 +882,16 @@ func checkAccessModeAuditEntry(t *testing.T, deny map[identity.Action]bool, want
 	}
 
 	restores, err := backup.NewRestoreService(backup.RestoreConfig{
-		Live:        stores.registry,
-		Registry:    stores.registry,
-		Backups:     backups,
-		Maintenance: newFakeMaintenance(maintenance.StateNormal),
-		Blobs:       stores.live,
-		Target:      stores.target,
-		Key:         nil,
-		Region:      "test",
-		AfterApply:  nil,
-		Admit:       nil,
+		Live:         stores.registry,
+		Registry:     stores.registry,
+		Backups:      backups,
+		Maintenance:  newFakeMaintenance(maintenance.StateNormal),
+		Blobs:        stores.live,
+		Target:       stores.target,
+		Key:          nil,
+		Installation: "test",
+		AfterApply:   nil,
+		Admit:        nil,
 
 		AllowDevBackups: false,
 		AllowDevHint:    "",
@@ -902,7 +902,7 @@ func checkAccessModeAuditEntry(t *testing.T, deny map[identity.Action]bool, want
 		t.Fatalf("new restore service: %v", err)
 	}
 
-	namespaces, err := namespace.NewService(namespace.Config{Store: stores.registry, Now: nil, Region: "test"})
+	namespaces, err := namespace.NewService(namespace.Config{Store: stores.registry, Now: nil, Installation: "test"})
 	if err != nil {
 		t.Fatalf("namespace service: %v", err)
 	}
@@ -1007,16 +1007,16 @@ func checkRestoreAuditSurvivesSwap(t *testing.T, deny map[identity.Action]bool, 
 	}
 
 	restores, err := backup.NewRestoreService(backup.RestoreConfig{
-		Live:        stores.registry,
-		Registry:    stores.registry,
-		Backups:     backups,
-		Maintenance: newFakeMaintenance(maintenance.StateNormal),
-		Blobs:       stores.live,
-		Target:      stores.target,
-		Key:         nil,
-		Region:      "test",
-		AfterApply:  nil,
-		Admit:       nil,
+		Live:         stores.registry,
+		Registry:     stores.registry,
+		Backups:      backups,
+		Maintenance:  newFakeMaintenance(maintenance.StateNormal),
+		Blobs:        stores.live,
+		Target:       stores.target,
+		Key:          nil,
+		Installation: "test",
+		AfterApply:   nil,
+		Admit:        nil,
 
 		AllowDevBackups: false,
 		AllowDevHint:    "",
@@ -1027,7 +1027,7 @@ func checkRestoreAuditSurvivesSwap(t *testing.T, deny map[identity.Action]bool, 
 		t.Fatalf("new restore service: %v", err)
 	}
 
-	namespaces, err := namespace.NewService(namespace.Config{Store: stores.registry, Now: nil, Region: "test"})
+	namespaces, err := namespace.NewService(namespace.Config{Store: stores.registry, Now: nil, Installation: "test"})
 	if err != nil {
 		t.Fatalf("namespace service: %v", err)
 	}

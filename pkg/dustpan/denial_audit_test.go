@@ -238,14 +238,18 @@ func checkLimiterEntries(t *testing.T, st chainStore) {
 	ctx := t.Context()
 
 	ns := namespace.Namespace{
-		ID: namespace.NewID(), CreatedAt: time.Now(), Name: "acme", HomeRegion: region, FailoverVersion: 1,
-		Overrides: namespace.Overrides{Forced: false, Unlocked: false},
+		ID:                  namespace.NewID(),
+		CreatedAt:           time.Now(),
+		Name:                "acme",
+		PrimaryInstallation: installationName,
+		FailoverVersion:     1,
+		Overrides:           namespace.Overrides{Forced: false, Unlocked: false},
 	}
 	if err := st.CreateNamespace(ctx, ns); err != nil {
 		t.Fatalf("create namespace: %v", err)
 	}
 
-	svc, err := namespace.NewService(namespace.Config{Store: st, Now: nil, Region: region})
+	svc, err := namespace.NewService(namespace.Config{Store: st, Now: nil, Installation: installationName})
 	if err != nil {
 		t.Fatalf("namespace service: %v", err)
 	}

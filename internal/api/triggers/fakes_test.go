@@ -60,8 +60,12 @@ func (fakeNamespaces) GetNamespace(_ context.Context, name namespace.Name) (name
 	}
 
 	return namespace.Namespace{
-		ID: namespace.NewID(), CreatedAt: time.Unix(0, 0), Name: name, HomeRegion: "test-region", FailoverVersion: 1,
-		Overrides: namespace.Overrides{Forced: false, Unlocked: false},
+		ID:                  namespace.NewID(),
+		CreatedAt:           time.Unix(0, 0),
+		Name:                name,
+		PrimaryInstallation: "test-region",
+		FailoverVersion:     1,
+		Overrides:           namespace.Overrides{Forced: false, Unlocked: false},
 	}, nil
 }
 
@@ -418,7 +422,9 @@ func newRigLogged(t *testing.T, authz identity.Authorizer, logger *slog.Logger) 
 		inv: fakeInventory{gone: map[string]bool{}},
 	}
 
-	namespaces, err := namespace.NewService(namespace.Config{Store: fakeNamespaces{}, Now: nil, Region: "test-region"})
+	namespaces, err := namespace.NewService(
+		namespace.Config{Store: fakeNamespaces{}, Now: nil, Installation: "test-region"},
+	)
 	if err != nil {
 		t.Fatalf("namespace service: %v", err)
 	}

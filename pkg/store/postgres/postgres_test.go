@@ -1080,16 +1080,16 @@ func newRestoreAuditServices(
 	}
 
 	restores, err := backup.NewRestoreService(backup.RestoreConfig{
-		Live:        st,
-		Registry:    st,
-		Backups:     backups,
-		Maintenance: restoreAuditMaintenance{state: st},
-		Blobs:       live,
-		Target:      target,
-		Key:         key,
-		Region:      "test",
-		AfterApply:  nil,
-		Admit:       nil,
+		Live:         st,
+		Registry:     st,
+		Backups:      backups,
+		Maintenance:  restoreAuditMaintenance{state: st},
+		Blobs:        live,
+		Target:       target,
+		Key:          key,
+		Installation: "test",
+		AfterApply:   nil,
+		Admit:        nil,
 
 		AllowDevBackups: false,
 		AllowDevHint:    "",
@@ -1627,12 +1627,12 @@ func TestRenameKeepsTags(t *testing.T) {
 	now := time.Date(2026, time.October, 11, 12, 0, 0, 0, time.UTC)
 
 	ns := namespace.Namespace{
-		ID:              namespace.NewID(),
-		CreatedAt:       now,
-		Name:            "acme",
-		HomeRegion:      "eu-west",
-		FailoverVersion: 1,
-		Overrides:       namespace.Overrides{Forced: false, Unlocked: false},
+		ID:                  namespace.NewID(),
+		CreatedAt:           now,
+		Name:                "acme",
+		PrimaryInstallation: "eu-west",
+		FailoverVersion:     1,
+		Overrides:           namespace.Overrides{Forced: false, Unlocked: false},
 	}
 	if err := s.CreateNamespace(ctx, ns); err != nil {
 		t.Fatalf("create namespace: %v", err)

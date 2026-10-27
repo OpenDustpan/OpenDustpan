@@ -47,7 +47,7 @@ func seedChangeLog(t *testing.T, conn *pgx.Conn) {
 	t.Helper()
 
 	statements := []string{
-		`INSERT INTO namespaces (name, home_region, failover_version, created_at_ms, id)
+		`INSERT INTO namespaces (name, primary_installation, failover_version, created_at_ms, id)
 			VALUES ('acme', 'eu-west', 1, 0, 'ns-plan')`,
 		`INSERT INTO inventory_changes
 			(namespace_id, seq, at_ms, tool, unit_id, name, display_name, status, collection, kind, resource_count)

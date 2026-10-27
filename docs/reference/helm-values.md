@@ -123,7 +123,7 @@ Settings of `opendustpan serve`.
 | `server.publicURL` | `""` | The external base URL, for example https://dustpan.example. Set it when an ingress or a load balancer is in front of the server. Console sign-in needs it. |
 | `server.trustedProxies` | `[]` | The addresses (CIDRs) of the proxies that may set the client address header, for example the pod CIDR of the ingress controller. |
 | `server.trustedProxyHeader` | `x-forwarded-for` | The header that holds the client address. It applies when `trustedProxies` is not empty. |
-| `server.region` | `""` | Empty means the server default. |
+| `server.installation` | `""` | The name of this installation. Empty means the server default, `local`. |
 | `server.logLevel` | `info` | The log level of the server. |
 | `server.logFormat` | `json` | The log format of the server. |
 | `server.tls.existingSecret` | `""` | The name of a Secret of type `kubernetes.io/tls`. Empty means plain HTTP in the cluster. |

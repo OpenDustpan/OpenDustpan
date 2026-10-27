@@ -394,18 +394,18 @@ func newBuildFixtureWith(
 	blobs := newMemBlob(clk)
 
 	ns := namespace.Namespace{
-		ID:              namespace.NewID(),
-		CreatedAt:       clk.now,
-		Name:            "acme",
-		HomeRegion:      "local",
-		FailoverVersion: 1,
-		Overrides:       namespace.Overrides{Forced: false, Unlocked: false},
+		ID:                  namespace.NewID(),
+		CreatedAt:           clk.now,
+		Name:                "acme",
+		PrimaryInstallation: "local",
+		FailoverVersion:     1,
+		Overrides:           namespace.Overrides{Forced: false, Unlocked: false},
 	}
 
 	nsStore := &memNamespaces{ns: ns, reads: atomic.Int64{}}
 
 	namespaces, err := namespace.NewService(
-		namespace.Config{Store: nsStore, Now: clk.Now, Region: "local"},
+		namespace.Config{Store: nsStore, Now: clk.Now, Installation: "local"},
 	)
 	if err != nil {
 		t.Fatalf("namespace service: %v", err)

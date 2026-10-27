@@ -1714,23 +1714,23 @@ func (q *Queries) CreateInstallationSecretKey(ctx context.Context, arg CreateIns
 }
 
 const createNamespace = `-- name: CreateNamespace :execrows
-INSERT INTO namespaces (name, home_region, failover_version, created_at_ms, id)
+INSERT INTO namespaces (name, primary_installation, failover_version, created_at_ms, id)
 VALUES (?, ?, ?, ?, ?)
 ON CONFLICT DO NOTHING
 `
 
 type CreateNamespaceParams struct {
-	Name            string
-	HomeRegion      string
-	FailoverVersion int64
-	CreatedAtMs     int64
-	ID              string
+	Name                string
+	PrimaryInstallation string
+	FailoverVersion     int64
+	CreatedAtMs         int64
+	ID                  string
 }
 
 func (q *Queries) CreateNamespace(ctx context.Context, arg CreateNamespaceParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, createNamespace,
 		arg.Name,
-		arg.HomeRegion,
+		arg.PrimaryInstallation,
 		arg.FailoverVersion,
 		arg.CreatedAtMs,
 		arg.ID,
@@ -5566,14 +5566,14 @@ func (q *Queries) GetManualLock(ctx context.Context, arg GetManualLockParams) (G
 }
 
 const getNamespace = `-- name: GetNamespace :one
-SELECT name, home_region, failover_version, created_at_ms, allow_forced_writes, allow_unlocked_writes, id
+SELECT name, primary_installation, failover_version, created_at_ms, allow_forced_writes, allow_unlocked_writes, id
 FROM namespaces
 WHERE name = ?
 `
 
 type GetNamespaceRow struct {
 	Name                string
-	HomeRegion          string
+	PrimaryInstallation string
 	FailoverVersion     int64
 	CreatedAtMs         int64
 	AllowForcedWrites   bool
@@ -5586,7 +5586,7 @@ func (q *Queries) GetNamespace(ctx context.Context, name string) (GetNamespaceRo
 	var i GetNamespaceRow
 	err := row.Scan(
 		&i.Name,
-		&i.HomeRegion,
+		&i.PrimaryInstallation,
 		&i.FailoverVersion,
 		&i.CreatedAtMs,
 		&i.AllowForcedWrites,
@@ -11626,14 +11626,14 @@ func (q *Queries) ListLiveProfiles(ctx context.Context, arg ListLiveProfilesPara
 }
 
 const listNamespaces = `-- name: ListNamespaces :many
-SELECT name, home_region, failover_version, created_at_ms, allow_forced_writes, allow_unlocked_writes, id
+SELECT name, primary_installation, failover_version, created_at_ms, allow_forced_writes, allow_unlocked_writes, id
 FROM namespaces
 ORDER BY name
 `
 
 type ListNamespacesRow struct {
 	Name                string
-	HomeRegion          string
+	PrimaryInstallation string
 	FailoverVersion     int64
 	CreatedAtMs         int64
 	AllowForcedWrites   bool
@@ -11652,7 +11652,7 @@ func (q *Queries) ListNamespaces(ctx context.Context) ([]ListNamespacesRow, erro
 		var i ListNamespacesRow
 		if err := rows.Scan(
 			&i.Name,
-			&i.HomeRegion,
+			&i.PrimaryInstallation,
 			&i.FailoverVersion,
 			&i.CreatedAtMs,
 			&i.AllowForcedWrites,
@@ -14034,7 +14034,7 @@ func (q *Queries) NextRefusalArrival(ctx context.Context, arg NextRefusalArrival
 }
 
 const pageNamespaces = `-- name: PageNamespaces :many
-SELECT name, home_region, failover_version, created_at_ms, allow_forced_writes, allow_unlocked_writes, id
+SELECT name, primary_installation, failover_version, created_at_ms, allow_forced_writes, allow_unlocked_writes, id
 FROM namespaces
 WHERE name > ?1
 ORDER BY name
@@ -14048,7 +14048,7 @@ type PageNamespacesParams struct {
 
 type PageNamespacesRow struct {
 	Name                string
-	HomeRegion          string
+	PrimaryInstallation string
 	FailoverVersion     int64
 	CreatedAtMs         int64
 	AllowForcedWrites   bool
@@ -14067,7 +14067,7 @@ func (q *Queries) PageNamespaces(ctx context.Context, arg PageNamespacesParams) 
 		var i PageNamespacesRow
 		if err := rows.Scan(
 			&i.Name,
-			&i.HomeRegion,
+			&i.PrimaryInstallation,
 			&i.FailoverVersion,
 			&i.CreatedAtMs,
 			&i.AllowForcedWrites,
@@ -14088,7 +14088,7 @@ func (q *Queries) PageNamespaces(ctx context.Context, arg PageNamespacesParams) 
 }
 
 const pageNamespacesByNames = `-- name: PageNamespacesByNames :many
-SELECT name, home_region, failover_version, created_at_ms, allow_forced_writes, allow_unlocked_writes, id
+SELECT name, primary_installation, failover_version, created_at_ms, allow_forced_writes, allow_unlocked_writes, id
 FROM namespaces
 WHERE name > ?1 AND name IN (SELECT value FROM json_each(?2))
 ORDER BY name
@@ -14103,7 +14103,7 @@ type PageNamespacesByNamesParams struct {
 
 type PageNamespacesByNamesRow struct {
 	Name                string
-	HomeRegion          string
+	PrimaryInstallation string
 	FailoverVersion     int64
 	CreatedAtMs         int64
 	AllowForcedWrites   bool
@@ -14122,7 +14122,7 @@ func (q *Queries) PageNamespacesByNames(ctx context.Context, arg PageNamespacesB
 		var i PageNamespacesByNamesRow
 		if err := rows.Scan(
 			&i.Name,
-			&i.HomeRegion,
+			&i.PrimaryInstallation,
 			&i.FailoverVersion,
 			&i.CreatedAtMs,
 			&i.AllowForcedWrites,

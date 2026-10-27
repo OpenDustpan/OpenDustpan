@@ -127,7 +127,7 @@ func (h *Handler) getPool(w http.ResponseWriter, r *http.Request, c *call) {
 }
 
 // writable returns the fence of the namespace of the call, or an error when
-// this region does not home the namespace.
+// this installation does not home the namespace.
 func (h *Handler) writable(r *http.Request, c *call) (namespace.Fence, error) {
 	ns, err := h.namespaces.WritableHere(r.Context(), c.ns.Name)
 	if err != nil {

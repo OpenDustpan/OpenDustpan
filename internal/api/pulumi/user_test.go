@@ -197,7 +197,7 @@ func newUserHandlerWithSessions(
 	t.Helper()
 
 	namespaces, err := namespace.NewService(
-		namespace.Config{Store: nsStore, Now: nil, Region: "test-region"},
+		namespace.Config{Store: nsStore, Now: nil, Installation: "test-region"},
 	)
 	if err != nil {
 		t.Fatalf("namespace service: %v", err)
@@ -245,7 +245,7 @@ func seedNamespaces(t *testing.T, nsStore *memNamespaceStore, names ...string) {
 	}
 }
 
-// seedNamespace creates one namespace homed in the test region.
+// seedNamespace creates one namespace whose primary installation is the test installation.
 func seedNamespace(t *testing.T, nsStore *memNamespaceStore, name string) {
 	t.Helper()
 
@@ -255,12 +255,12 @@ func seedNamespace(t *testing.T, nsStore *memNamespaceStore, name string) {
 	}
 
 	ns := namespace.Namespace{
-		ID:              namespace.NewID(),
-		CreatedAt:       time.Now(),
-		Name:            n,
-		HomeRegion:      "test-region",
-		FailoverVersion: 1,
-		Overrides:       namespace.Overrides{Forced: false, Unlocked: false},
+		ID:                  namespace.NewID(),
+		CreatedAt:           time.Now(),
+		Name:                n,
+		PrimaryInstallation: "test-region",
+		FailoverVersion:     1,
+		Overrides:           namespace.Overrides{Forced: false, Unlocked: false},
 	}
 	if err := nsStore.CreateNamespace(t.Context(), ns); err != nil {
 		t.Fatalf("create namespace: %v", err)

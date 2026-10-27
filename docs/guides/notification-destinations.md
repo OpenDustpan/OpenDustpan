@@ -147,8 +147,8 @@ sends no message and writes no audit entry. The header `Retry-After` and the
 field `errorArgs.retryAfterSeconds` give the wait in seconds. A new
 `Idempotency-Key` does not change this.
 
-The server also refuses to send a test when the namespace has another home
-region, or when a failover moves the namespace during the request. It writes
+The server also refuses to send a test when the namespace has another primary
+installation, or when a failover moves the namespace during the request. It writes
 the first audit entry of the test before it sends the message. If that write
 fails, the server sends nothing.
 

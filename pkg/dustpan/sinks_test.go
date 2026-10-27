@@ -112,7 +112,7 @@ func startSinkServer(t *testing.T, st *sqlite.Store, extra ...dustpan.Option) fi
 	}
 
 	opts := []dustpan.Option{
-		dustpan.WithRegion(region),
+		dustpan.WithInstallation(installationName),
 		dustpan.WithNamespaceStore(st),
 		dustpan.WithStackStore(st),
 		dustpan.WithUpdateStore(st),
@@ -136,7 +136,7 @@ func startSinkServer(t *testing.T, st *sqlite.Store, extra ...dustpan.Option) fi
 	t.Cleanup(ts.Close)
 
 	f := fixture{store: st, server: ts, srv: srv}
-	f.createNamespace(t, "acme", region)
+	f.createNamespace(t, "acme", installationName)
 
 	return f
 }

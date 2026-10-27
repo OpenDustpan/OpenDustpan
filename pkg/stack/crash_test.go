@@ -255,7 +255,7 @@ func wrapCrashBlobs(t *testing.T, faults []blobfault.Fault) *blobfault.Store {
 func crashNamespaces(t *testing.T, store *storefault.Store) *namespace.Service {
 	t.Helper()
 
-	namespaces, err := namespace.NewService(namespace.Config{Store: store, Now: nil, Region: "local"})
+	namespaces, err := namespace.NewService(namespace.Config{Store: store, Now: nil, Installation: "local"})
 	if err != nil {
 		t.Fatalf("namespaces: %v", err)
 	}

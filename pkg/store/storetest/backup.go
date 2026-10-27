@@ -173,12 +173,12 @@ func seedBackupStore(t *testing.T, s BackupStore) backupSeed {
 	prod := mustGetStack(t, s, f.ref)
 
 	other := namespace.Namespace{
-		ID:              namespace.NewID(),
-		CreatedAt:       now(),
-		Name:            "other",
-		HomeRegion:      "us-east",
-		FailoverVersion: 1,
-		Overrides:       namespace.Overrides{Forced: false, Unlocked: false},
+		ID:                  namespace.NewID(),
+		CreatedAt:           now(),
+		Name:                "other",
+		PrimaryInstallation: "us-east",
+		FailoverVersion:     1,
+		Overrides:           namespace.Overrides{Forced: false, Unlocked: false},
 	}
 
 	if err := s.CreateNamespace(ctx, other); err != nil {

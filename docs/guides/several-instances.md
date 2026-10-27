@@ -12,7 +12,7 @@ Give each instance the same values for these settings.
 | --- | --- |
 | `DUSTPAN_DATABASE` | One PostgreSQL database. SQLite holds one instance only. |
 | `--blob-store` (`DUSTPAN_BLOB_STORE`) | One S3-compatible bucket and prefix, `s3://<bucket>[/<prefix>]`. The `fs` store is on the disk of one host. The [S3 guide](s3-blobs.md) shows the endpoint, region and credential settings. |
-| `--region` (`DUSTPAN_REGION`) | One region. |
+| `--installation` (`DUSTPAN_INSTALLATION`) | One installation name. |
 | `DUSTPAN_KEY_ENCRYPTION_KEY` or `DUSTPAN_KEY_ENCRYPTION_KEY_FILE` | One key-encryption key. |
 | `DUSTPAN_ADMIN_TOKEN` or `DUSTPAN_ADMIN_TOKEN_FILE` | One list of bootstrap admin tokens, in the same order. |
 | `--backup-target` (`DUSTPAN_BACKUP_TARGET`) | One S3-compatible bucket, `s3://<bucket>[/<prefix>]`. |

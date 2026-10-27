@@ -573,7 +573,7 @@
           "type": "string",
           "minLength": 1
         },
-        "region": {
+        "installation": {
           "type": "string"
         },
         "logLevel": {
@@ -645,7 +645,7 @@
                         "DUSTPAN_PUBLIC_URL",
                         "DUSTPAN_TRUSTED_PROXIES",
                         "DUSTPAN_TRUSTED_PROXY_HEADER",
-                        "DUSTPAN_REGION",
+                        "DUSTPAN_INSTALLATION",
                         "DUSTPAN_LOG_LEVEL",
                         "DUSTPAN_LOG_FORMAT",
                         "AWS_ACCESS_KEY_ID",
@@ -734,7 +734,7 @@
         "publicURL",
         "trustedProxies",
         "trustedProxyHeader",
-        "region",
+        "installation",
         "logLevel",
         "logFormat",
         "tls",

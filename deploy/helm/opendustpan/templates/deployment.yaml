@@ -70,8 +70,8 @@ spec:
             {{- if .Values.s3.region }}
             - {{ printf "--s3-region=%s" .Values.s3.region | quote }}
             {{- end }}
-            {{- if .Values.server.region }}
-            - {{ printf "--region=%s" .Values.server.region | quote }}
+            {{- if .Values.server.installation }}
+            - {{ printf "--installation=%s" .Values.server.installation | quote }}
             {{- end }}
             {{- if .Values.server.publicURL }}
             - {{ printf "--public-url=%s" .Values.server.publicURL | quote }}

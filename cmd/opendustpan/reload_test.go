@@ -179,10 +179,10 @@ func (fx *reloadFixture) write(t *testing.T, text string) {
 	}
 }
 
-// region answers the effective region in the current configuration.
-func (fx *reloadFixture) region() string {
+// installation answers the effective installation in the current configuration.
+func (fx *reloadFixture) installation() string {
 	for _, r := range fx.r.current {
-		if r.Setting.Name() == "region" {
+		if r.Setting.Name() == "installation" {
 			return r.Value
 		}
 	}
@@ -193,7 +193,7 @@ func (fx *reloadFixture) region() string {
 func TestReloadAppliesAChangeWithAnAuditEntry(t *testing.T) {
 	t.Parallel()
 
-	fx := newReloadFixture(t, `{"region": "eu-west", "log-level": "info"}`, nil)
+	fx := newReloadFixture(t, `{"installation": "eu-west", "log-level": "info"}`, nil)
 
 	fx.r.reload(t.Context(), triggerPoll)
 
@@ -201,22 +201,22 @@ func TestReloadAppliesAChangeWithAnAuditEntry(t *testing.T) {
 		t.Fatalf("a poll of the same content reported %v, want nothing", got)
 	}
 
-	fx.write(t, `{"region": "us-east", "log-level": "info"}`)
+	fx.write(t, `{"installation": "us-east", "log-level": "info"}`)
 	fx.r.reload(t.Context(), triggerPoll)
 
 	if got := fx.results.list(); len(got) != 1 || !got[0] {
 		t.Fatalf("results = %v, want one success", got)
 	}
 
-	if got := fx.region(); got != "us-east" {
-		t.Fatalf("region = %q, want us-east", got)
+	if got := fx.installation(); got != "us-east" {
+		t.Fatalf("installation = %q, want us-east", got)
 	}
 
-	checkRegionEntry(t, fx.store.appended())
+	checkInstallationEntry(t, fx.store.appended())
 
 	logs := fx.logs.String()
 	for _, want := range []string{
-		`msg="setting changed" key=region old=eu-west value=us-east layer=file takes_effect="next start"`,
+		`msg="setting changed" key=installation old=eu-west value=us-east layer=file takes_effect="next start"`,
 		`msg="config file reloaded" changed=1 takes_effect="next start"`,
 	} {
 		if !strings.Contains(logs, want) {
@@ -225,9 +225,9 @@ func TestReloadAppliesAChangeWithAnAuditEntry(t *testing.T) {
 	}
 }
 
-// checkRegionEntry proves entries hold one config-file entry of the
-// instance with one change: the region from eu-west to us-east.
-func checkRegionEntry(t *testing.T, entries []audit.Entry) {
+// checkInstallationEntry proves entries hold one config-file entry of the
+// instance with one change: the installation from eu-west to us-east.
+func checkInstallationEntry(t *testing.T, entries []audit.Entry) {
 	t.Helper()
 
 	if len(entries) != 1 {
@@ -240,7 +240,7 @@ func checkRegionEntry(t *testing.T, entries []audit.Entry) {
 		t.Fatalf("entry = %+v", e)
 	}
 
-	want := "region:eu-west>us-east@file next start"
+	want := "installation:eu-west>us-east@file next start"
 	if len(e.Changes) != 1 || e.Changes[0].Old == nil {
 		t.Fatalf("settings = %+v, want %s", e.Changes, want)
 	}
@@ -254,7 +254,7 @@ func checkRegionEntry(t *testing.T, entries []audit.Entry) {
 func TestReloadSignalWithoutChangeWritesNoEntry(t *testing.T) {
 	t.Parallel()
 
-	fx := newReloadFixture(t, `{"region": "eu-west"}`, map[string]string{"DUSTPAN_REGION": "from-env"})
+	fx := newReloadFixture(t, `{"installation": "eu-west"}`, map[string]string{"DUSTPAN_INSTALLATION": "from-env"})
 
 	fx.r.reload(t.Context(), triggerSignal)
 
@@ -267,7 +267,7 @@ func TestReloadSignalWithoutChangeWritesNoEntry(t *testing.T) {
 	}
 
 	// The override of decision 8 is logged again after each applied reload.
-	if want := `level=WARN msg="setting has a value in more than one layer" key=region`; !strings.Contains(
+	if want := `level=WARN msg="setting has a value in more than one layer" key=installation`; !strings.Contains(
 		fx.logs.String(), want,
 	) {
 		t.Errorf("logs do not hold %q:\n%s", want, fx.logs.String())
@@ -277,21 +277,21 @@ func TestReloadSignalWithoutChangeWritesNoEntry(t *testing.T) {
 func TestReloadKeepsTheOldConfigurationForABadFile(t *testing.T) {
 	t.Parallel()
 
-	fx := newReloadFixture(t, `{"region": "eu-west", "database": "sqlite:/tmp/x.db"}`, nil)
+	fx := newReloadFixture(t, `{"installation": "eu-west", "database": "sqlite:/tmp/x.db"}`, nil)
 
 	// Each bad file keeps a valid database, so it fails for its own defect.
 	const keep = `"database": "sqlite:/tmp/x.db", `
 
 	for _, bad := range []string{
-		`{"region": "us-east", ` + keep + `"disable-pulumi-journaling": no}`,
-		`{"region": "us-east", ` + keep + `"log-level": "verbose"}`,
+		`{"installation": "us-east", ` + keep + `"disable-pulumi-journaling": no}`,
+		`{"installation": "us-east", ` + keep + `"log-level": "verbose"}`,
 		// The URL is built in parts, so no commit holds a contiguous URL with
 		// a password: make trufflehog scans every branch of the history.
-		`{"region": "us-east", ` + keep + `"public-url": "https://user:` + `pw@dustpan.example"}`,
-		`{"region": "us-east", ` + keep + `"tls-cert": "/a.crt"}`,
-		`{"region": "us-east", "database": "mysql://x"}`,
-		`{"region": "us-east", ` + keep + `"trusted-proxies": "0.0.0.0/0"}`,
-		`{"region": "us-east", ` + keep + `"trusted-proxy-header": "x-real-ip"}`,
+		`{"installation": "us-east", ` + keep + `"public-url": "https://user:` + `pw@dustpan.example"}`,
+		`{"installation": "us-east", ` + keep + `"tls-cert": "/a.crt"}`,
+		`{"installation": "us-east", "database": "mysql://x"}`,
+		`{"installation": "us-east", ` + keep + `"trusted-proxies": "0.0.0.0/0"}`,
+		`{"installation": "us-east", ` + keep + `"trusted-proxy-header": "x-real-ip"}`,
 	} {
 		fx.write(t, bad)
 		fx.r.reload(t.Context(), triggerPoll)
@@ -301,8 +301,8 @@ func TestReloadKeepsTheOldConfigurationForABadFile(t *testing.T) {
 		t.Fatalf("results = %v, want seven failures", got)
 	}
 
-	if got := fx.region(); got != "eu-west" {
-		t.Fatalf("region = %q after bad files, want eu-west", got)
+	if got := fx.installation(); got != "eu-west" {
+		t.Fatalf("installation = %q after bad files, want eu-west", got)
 	}
 
 	if got := fx.store.appended(); len(got) != 0 {
@@ -320,37 +320,37 @@ func TestReloadKeepsTheOldConfigurationForABadFile(t *testing.T) {
 		t.Fatalf("a poll of the same bad content reported %v", got)
 	}
 
-	fx.write(t, `{"region": "us-east", `+keep+`"log-level": "info"}`)
+	fx.write(t, `{"installation": "us-east", `+keep+`"log-level": "info"}`)
 	fx.r.reload(t.Context(), triggerPoll)
 
-	if got := fx.region(); got != "us-east" {
-		t.Fatalf("region = %q after a good file, want us-east", got)
+	if got := fx.installation(); got != "us-east" {
+		t.Fatalf("installation = %q after a good file, want us-east", got)
 	}
 }
 
 func TestReloadFailsClosedWhenTheAuditEntryFails(t *testing.T) {
 	t.Parallel()
 
-	fx := newReloadFixture(t, `{"region": "eu-west"}`, nil)
+	fx := newReloadFixture(t, `{"installation": "eu-west"}`, nil)
 	fx.store.setFail(true)
 
-	fx.write(t, `{"region": "us-east"}`)
+	fx.write(t, `{"installation": "us-east"}`)
 	fx.r.reload(t.Context(), triggerPoll)
 
 	if got := fx.results.list(); len(got) != 1 || got[0] {
 		t.Fatalf("results = %v, want one failure", got)
 	}
 
-	if got := fx.region(); got != "eu-west" {
-		t.Fatalf("region = %q after a failed audit entry, want eu-west", got)
+	if got := fx.installation(); got != "eu-west" {
+		t.Fatalf("installation = %q after a failed audit entry, want eu-west", got)
 	}
 
 	// The next poll tries again with the same content.
 	fx.store.setFail(false)
 	fx.r.reload(t.Context(), triggerPoll)
 
-	if got := fx.region(); got != "us-east" {
-		t.Fatalf("region = %q after the retry, want us-east", got)
+	if got := fx.installation(); got != "us-east" {
+		t.Fatalf("installation = %q after the retry, want us-east", got)
 	}
 
 	if got := fx.store.appended(); len(got) != 1 {
@@ -390,7 +390,7 @@ func TestReloadOfASensitiveSettingShowsOnlySet(t *testing.T) {
 func TestReloadOfAMissingFileFailsOnce(t *testing.T) {
 	t.Parallel()
 
-	fx := newReloadFixture(t, `{"region": "eu-west"}`, nil)
+	fx := newReloadFixture(t, `{"installation": "eu-west"}`, nil)
 
 	if err := os.Remove(fx.path); err != nil {
 		t.Fatalf("remove: %v", err)
@@ -411,7 +411,7 @@ func TestReloadOfAMissingFileFailsOnce(t *testing.T) {
 
 	// The file comes back with the same content: the gauge must go back
 	// to 1, so the poll applies it.
-	fx.write(t, `{"region": "eu-west"}`)
+	fx.write(t, `{"installation": "eu-west"}`)
 	fx.r.reload(t.Context(), triggerPoll)
 
 	if got := fx.results.list(); len(got) != 3 || !got[2] {
@@ -422,7 +422,7 @@ func TestReloadOfAMissingFileFailsOnce(t *testing.T) {
 func TestReloaderRunsOnSignalAndTickAndStops(t *testing.T) {
 	t.Parallel()
 
-	fx := newReloadFixture(t, `{"region": "eu-west"}`, nil)
+	fx := newReloadFixture(t, `{"installation": "eu-west"}`, nil)
 
 	hup := make(chan os.Signal, 1)
 	tick := make(chan time.Time, 1)
@@ -436,7 +436,7 @@ func TestReloaderRunsOnSignalAndTickAndStops(t *testing.T) {
 		fx.r.run(ctx, hup, tick)
 	}()
 
-	fx.write(t, `{"region": "us-east"}`)
+	fx.write(t, `{"installation": "us-east"}`)
 	tick <- time.Now()
 
 	waitFor(t, func() bool { return len(fx.results.list()) == 1 })
@@ -458,12 +458,12 @@ func TestReloaderRunsOnSignalAndTickAndStops(t *testing.T) {
 //
 //nolint:paralleltest // The test sends SIGHUP to its own process; no other test may stop the handler meanwhile.
 func TestServeReloadsOnSIGHUP(t *testing.T) {
-	fx := newReloadFixture(t, `{"region": "eu-west"}`, nil)
+	fx := newReloadFixture(t, `{"installation": "eu-west"}`, nil)
 
 	stop := fx.r.flags.startReloader(t.Context(), fx.store, fx.results.observe, fx.r.logger)
 	defer stop()
 
-	fx.write(t, `{"region": "us-east"}`)
+	fx.write(t, `{"installation": "us-east"}`)
 
 	if err := syscall.Kill(os.Getpid(), syscall.SIGHUP); err != nil {
 		t.Fatalf("send SIGHUP: %v", err)
@@ -529,12 +529,12 @@ func TestReloadOfAnUnchangedSecretVariableIsNoChange(t *testing.T) {
 		"DUSTPAN_ADMIN_TOKEN": "admin-" + reloadCanary,
 	}
 
-	fx := newReloadFixture(t, `{"region": "eu-west"}`, env)
+	fx := newReloadFixture(t, `{"installation": "eu-west"}`, env)
 
-	fx.write(t, `{"region": "us-east"}`)
+	fx.write(t, `{"installation": "us-east"}`)
 	fx.r.reload(t.Context(), triggerPoll)
 
-	checkRegionEntry(t, fx.store.appended())
+	checkInstallationEntry(t, fx.store.appended())
 }
 
 // TestReloadSeesASymlinkSwap proves the poll sees the update of a Kubernetes
@@ -543,13 +543,13 @@ func TestReloadOfAnUnchangedSecretVariableIsNoChange(t *testing.T) {
 func TestReloadSeesASymlinkSwap(t *testing.T) {
 	t.Parallel()
 
-	fx := newReloadFixture(t, `{"region": "eu-west"}`, nil)
+	fx := newReloadFixture(t, `{"installation": "eu-west"}`, nil)
 
 	volume := t.TempDir()
 	first := filepath.Join(volume, "..2026_10_14_12_00_00.1")
 	second := filepath.Join(volume, "..2026_10_14_12_05_00.2")
 
-	for dir, text := range map[string]string{first: `{"region": "eu-west"}`, second: `{"region": "us-east"}`} {
+	for dir, text := range map[string]string{first: `{"installation": "eu-west"}`, second: `{"installation": "us-east"}`} {
 		if err := os.Mkdir(dir, 0o700); err != nil {
 			t.Fatalf("mkdir: %v", err)
 		}
@@ -589,7 +589,7 @@ func TestReloadSeesASymlinkSwap(t *testing.T) {
 
 	fx.r.reload(t.Context(), triggerPoll)
 
-	checkRegionEntry(t, fx.store.appended())
+	checkInstallationEntry(t, fx.store.appended())
 }
 
 // TestCatchHangupQueuesTheSignal proves serve catches SIGHUP as soon as it

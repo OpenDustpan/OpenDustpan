@@ -97,12 +97,12 @@ func (fakeNamespaces) Get(_ context.Context, name namespace.Name) (namespace.Nam
 	}
 
 	return namespace.Namespace{
-		CreatedAt:       time.Time{},
-		ID:              "",
-		Name:            name,
-		HomeRegion:      "",
-		FailoverVersion: 3,
-		Overrides:       namespace.Overrides{Forced: false, Unlocked: false},
+		CreatedAt:           time.Time{},
+		ID:                  "",
+		Name:                name,
+		PrimaryInstallation: "",
+		FailoverVersion:     3,
+		Overrides:           namespace.Overrides{Forced: false, Unlocked: false},
 	}, nil
 }
 

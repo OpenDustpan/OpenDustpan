@@ -448,11 +448,11 @@ func insertNamespaceRow(ctx context.Context, q *db.Queries, row codec.NamespaceR
 	}
 
 	n, err := q.CreateNamespace(ctx, db.CreateNamespaceParams{
-		Name:            row.Name,
-		HomeRegion:      row.HomeRegion,
-		FailoverVersion: row.FailoverVersion,
-		CreatedAtMs:     row.CreatedAtMs,
-		ID:              row.ID,
+		Name:                row.Name,
+		PrimaryInstallation: row.PrimaryInstallation,
+		FailoverVersion:     row.FailoverVersion,
+		CreatedAtMs:         row.CreatedAtMs,
+		ID:                  row.ID,
 	})
 	if err != nil {
 		return fmt.Errorf("insert namespace: %w", err)

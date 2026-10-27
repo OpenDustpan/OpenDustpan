@@ -49,7 +49,7 @@ func (namespaceStore) GetNamespace(_ context.Context, name namespace.Name) (name
 	}
 
 	return namespace.Namespace{
-		ID: "ns-aaaaaaaaaaaaaaaaaaaa", CreatedAt: time.Time{}, Name: name, HomeRegion: "test-region",
+		ID: "ns-aaaaaaaaaaaaaaaaaaaa", CreatedAt: time.Time{}, Name: name, PrimaryInstallation: "test-region",
 		FailoverVersion: 4, Overrides: namespace.Overrides{Forced: false, Unlocked: false},
 	}, nil
 }

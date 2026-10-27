@@ -59,7 +59,7 @@ func newRealStack(t *testing.T) *realStack {
 		}
 	})
 
-	namespaces, err := namespace.NewService(namespace.Config{Store: st, Now: nil, Region: testRegion})
+	namespaces, err := namespace.NewService(namespace.Config{Store: st, Now: nil, Installation: testRegion})
 	if err != nil {
 		t.Fatalf("namespace service: %v", err)
 	}

@@ -304,7 +304,7 @@ func buildSecretFixture(
 	t.Helper()
 
 	namespaces, err := namespace.NewService(
-		namespace.Config{Store: homedNamespaceStore{}, Now: nil, Region: "test-region"},
+		namespace.Config{Store: homedNamespaceStore{}, Now: nil, Installation: "test-region"},
 	)
 	if err != nil {
 		t.Fatalf("namespace service: %v", err)
@@ -1087,7 +1087,7 @@ func TestSecretsMissingKey(t *testing.T) {
 	t.Parallel()
 
 	namespaces, nsErr := namespace.NewService(
-		namespace.Config{Store: homedNamespaceStore{}, Now: nil, Region: "test-region"},
+		namespace.Config{Store: homedNamespaceStore{}, Now: nil, Installation: "test-region"},
 	)
 	if nsErr != nil {
 		t.Fatalf("namespace service: %v", nsErr)
@@ -1516,7 +1516,7 @@ func newKeylessSecretFixture(t *testing.T) (secretFixture, string) {
 	t.Helper()
 
 	namespaces, nsErr := namespace.NewService(
-		namespace.Config{Store: homedNamespaceStore{}, Now: nil, Region: "test-region"},
+		namespace.Config{Store: homedNamespaceStore{}, Now: nil, Installation: "test-region"},
 	)
 	if nsErr != nil {
 		t.Fatalf("namespace service: %v", nsErr)
@@ -1672,7 +1672,7 @@ func newTwoStackServices(t *testing.T) twoStackServices {
 	t.Helper()
 
 	namespaces, err := namespace.NewService(
-		namespace.Config{Store: homedNamespaceStore{}, Now: nil, Region: "test-region"},
+		namespace.Config{Store: homedNamespaceStore{}, Now: nil, Installation: "test-region"},
 	)
 	if err != nil {
 		t.Fatalf("namespace service: %v", err)
@@ -1905,7 +1905,7 @@ func newSecretFixtureWithLogger(t *testing.T, logged *bytes.Buffer) secretFixtur
 	t.Helper()
 
 	namespaces, err := namespace.NewService(
-		namespace.Config{Store: homedNamespaceStore{}, Now: nil, Region: "test-region"},
+		namespace.Config{Store: homedNamespaceStore{}, Now: nil, Installation: "test-region"},
 	)
 	if err != nil {
 		t.Fatalf("namespace service: %v", err)
@@ -1985,7 +1985,7 @@ func newFailingHandler(t *testing.T, err error) *pulumi.Handler {
 	t.Helper()
 
 	namespaces, nsErr := namespace.NewService(
-		namespace.Config{Store: homedNamespaceStore{}, Now: nil, Region: "test-region"},
+		namespace.Config{Store: homedNamespaceStore{}, Now: nil, Installation: "test-region"},
 	)
 	if nsErr != nil {
 		t.Fatalf("namespace service: %v", nsErr)

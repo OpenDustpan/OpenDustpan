@@ -51,8 +51,12 @@ func runnerServer(
 	})
 
 	ns := namespace.Namespace{
-		ID: namespace.NewID(), CreatedAt: time.Unix(0, 0), Name: "acme", HomeRegion: region, FailoverVersion: 1,
-		Overrides: namespace.Overrides{Forced: false, Unlocked: false},
+		ID:                  namespace.NewID(),
+		CreatedAt:           time.Unix(0, 0),
+		Name:                "acme",
+		PrimaryInstallation: installationName,
+		FailoverVersion:     1,
+		Overrides:           namespace.Overrides{Forced: false, Unlocked: false},
 	}
 	if err = st.CreateNamespace(t.Context(), ns); err != nil {
 		t.Fatalf("create namespace: %v", err)
@@ -71,7 +75,7 @@ func runnerServer(
 	}}
 
 	base := []dustpan.Option{
-		dustpan.WithRegion(region), dustpan.WithNamespaceStore(st), dustpan.WithStackStore(st),
+		dustpan.WithInstallation(installationName), dustpan.WithNamespaceStore(st), dustpan.WithStackStore(st),
 		dustpan.WithUpdateStore(st), dustpan.WithCheckpointStore(st), dustpan.WithEventStore(st),
 		dustpan.WithSecretKeyStore(st), dustpan.WithSecretWrapper(wrapper), dustpan.WithWorkspaceStore(st),
 		dustpan.WithStateStore(st), dustpan.WithBlobStore(blobs), dustpan.WithInventoryReader(st),

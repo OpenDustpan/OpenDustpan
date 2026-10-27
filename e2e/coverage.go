@@ -130,13 +130,13 @@ func ServedRoutes(tb testing.TB) []RouteRef {
 }
 
 // coverageNamespaces returns a namespace service over a stub store that
-// homes every namespace in the test region, so handler construction passes
-// the home-region check.
+// homes every namespace on the test installation, so handler construction passes
+// the primary-installation check.
 func coverageNamespaces(tb testing.TB) *namespace.Service {
 	tb.Helper()
 
 	svc, err := namespace.NewService(
-		namespace.Config{Store: coverageNamespaceStore{}, Now: nil, Region: "test-region"},
+		namespace.Config{Store: coverageNamespaceStore{}, Now: nil, Installation: "test-region"},
 	)
 	if err != nil {
 		tb.Fatalf("namespace service: %v", err)
@@ -145,7 +145,7 @@ func coverageNamespaces(tb testing.TB) *namespace.Service {
 	return svc
 }
 
-// coverageNamespaceStore homes every namespace in the test region. It
+// coverageNamespaceStore homes every namespace on the test installation. It
 // exists only to build handlers for their route tables; no request is
 // ever served.
 type coverageNamespaceStore struct{}
@@ -156,12 +156,12 @@ func (coverageNamespaceStore) CreateNamespace(_ context.Context, _ namespace.Nam
 
 func (coverageNamespaceStore) GetNamespace(_ context.Context, name namespace.Name) (namespace.Namespace, error) {
 	return namespace.Namespace{
-		CreatedAt:       time.Time{},
-		ID:              namespace.NewID(),
-		Name:            name,
-		HomeRegion:      "test-region",
-		FailoverVersion: 1,
-		Overrides:       namespace.Overrides{Forced: false, Unlocked: false},
+		CreatedAt:           time.Time{},
+		ID:                  namespace.NewID(),
+		Name:                name,
+		PrimaryInstallation: "test-region",
+		FailoverVersion:     1,
+		Overrides:           namespace.Overrides{Forced: false, Unlocked: false},
 	}, nil
 }
 

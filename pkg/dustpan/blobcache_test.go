@@ -55,12 +55,12 @@ func TestBlobCacheServesRepeatReads(t *testing.T) {
 	}
 
 	err = st.CreateNamespace(t.Context(), namespace.Namespace{
-		ID:              namespace.NewID(),
-		CreatedAt:       time.Now(),
-		Name:            "acme",
-		HomeRegion:      region,
-		FailoverVersion: 1,
-		Overrides:       namespace.Overrides{Forced: false, Unlocked: false},
+		ID:                  namespace.NewID(),
+		CreatedAt:           time.Now(),
+		Name:                "acme",
+		PrimaryInstallation: installationName,
+		FailoverVersion:     1,
+		Overrides:           namespace.Overrides{Forced: false, Unlocked: false},
 	})
 	if err != nil {
 		t.Fatalf("create namespace: %v", err)
@@ -159,7 +159,7 @@ func TestBlobCacheLeavesOtherReadsUncached(t *testing.T) {
 	t.Cleanup(ts.Close)
 
 	f := fixture{store: st, server: ts, srv: srv}
-	f.createNamespace(t, "acme", region)
+	f.createNamespace(t, "acme", installationName)
 
 	savePulumiCheckpoint(t, f)
 

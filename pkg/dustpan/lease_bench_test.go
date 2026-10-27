@@ -109,7 +109,7 @@ func benchLeaseCheck(b *testing.B, s leaseStores) {
 	ctx := b.Context()
 	now := time.Now
 
-	nsSvc, err := namespace.NewService(namespace.Config{Store: s.namespaces, Now: now, Region: region})
+	nsSvc, err := namespace.NewService(namespace.Config{Store: s.namespaces, Now: now, Installation: installationName})
 	if err != nil {
 		b.Fatalf("namespace service: %v", err)
 	}
@@ -299,7 +299,7 @@ func leaseBenchHandler(b *testing.B, s leaseStores, blobs *fs.Store) http.Handle
 	}
 
 	srv, err := dustpan.NewServer(
-		dustpan.WithRegion(region),
+		dustpan.WithInstallation(installationName),
 		dustpan.WithNamespaceStore(s.namespaces),
 		dustpan.WithStackStore(s.stacks),
 		dustpan.WithUpdateStore(s.updates),

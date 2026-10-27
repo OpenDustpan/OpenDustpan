@@ -1112,19 +1112,19 @@ func newFixtureWithBlobs(t *testing.T, blobs blob.Store) fixture {
 	now := time.Date(2026, time.October, 9, 12, 0, 0, 0, time.UTC)
 	store := newMemStore()
 	acme := namespace.Namespace{
-		ID:              namespace.NewID(),
-		CreatedAt:       now,
-		Name:            "acme",
-		HomeRegion:      "local",
-		FailoverVersion: 1,
-		Overrides:       noOverrides(),
+		ID:                  namespace.NewID(),
+		CreatedAt:           now,
+		Name:                "acme",
+		PrimaryInstallation: "local",
+		FailoverVersion:     1,
+		Overrides:           noOverrides(),
 	}
 
 	if err := store.CreateNamespace(t.Context(), acme); err != nil {
 		t.Fatalf("create namespace: %v", err)
 	}
 
-	namespaces, err := namespace.NewService(namespace.Config{Store: store, Now: nil, Region: "local"})
+	namespaces, err := namespace.NewService(namespace.Config{Store: store, Now: nil, Installation: "local"})
 	if err != nil {
 		t.Fatalf("namespaces: %v", err)
 	}
@@ -1387,7 +1387,7 @@ func newStuckBackupFixture(ctx context.Context, t *testing.T) stuckBackupFixture
 
 	var namespaces *namespace.Service
 
-	namespaces, err = namespace.NewService(namespace.Config{Store: store, Now: nil, Region: "local"})
+	namespaces, err = namespace.NewService(namespace.Config{Store: store, Now: nil, Installation: "local"})
 	if err != nil {
 		t.Fatalf("namespaces: %v", err)
 	}
@@ -4260,7 +4260,7 @@ func TestRestoreStaleFenceWritesNothing(t *testing.T) {
 
 	mustUnlock(t, f)
 
-	namespaces, err := namespace.NewService(namespace.Config{Store: f.store, Now: nil, Region: "local"})
+	namespaces, err := namespace.NewService(namespace.Config{Store: f.store, Now: nil, Installation: "local"})
 	if err != nil {
 		t.Fatalf("namespaces: %v", err)
 	}
@@ -4422,7 +4422,7 @@ func TestRestoreLockRaceNamesHolder(t *testing.T) {
 
 	mustUnlock(t, f)
 
-	namespaces, err := namespace.NewService(namespace.Config{Store: f.store, Now: nil, Region: "local"})
+	namespaces, err := namespace.NewService(namespace.Config{Store: f.store, Now: nil, Installation: "local"})
 	if err != nil {
 		t.Fatalf("namespaces: %v", err)
 	}
@@ -4579,19 +4579,19 @@ func newSealedFixture(t *testing.T) fixture {
 	now := time.Date(2026, time.October, 9, 12, 0, 0, 0, time.UTC)
 	store := newMemStore()
 	acme := namespace.Namespace{
-		ID:              namespace.NewID(),
-		CreatedAt:       now,
-		Name:            "acme",
-		HomeRegion:      "local",
-		FailoverVersion: 1,
-		Overrides:       noOverrides(),
+		ID:                  namespace.NewID(),
+		CreatedAt:           now,
+		Name:                "acme",
+		PrimaryInstallation: "local",
+		FailoverVersion:     1,
+		Overrides:           noOverrides(),
 	}
 
 	if err := store.CreateNamespace(t.Context(), acme); err != nil {
 		t.Fatalf("create namespace: %v", err)
 	}
 
-	namespaces, err := namespace.NewService(namespace.Config{Store: store, Now: nil, Region: "local"})
+	namespaces, err := namespace.NewService(namespace.Config{Store: store, Now: nil, Installation: "local"})
 	if err != nil {
 		t.Fatalf("namespaces: %v", err)
 	}
@@ -4679,7 +4679,7 @@ func TestNewServiceWithoutSealerFails(t *testing.T) {
 
 	store := newMemStore()
 
-	namespaces, err := namespace.NewService(namespace.Config{Store: store, Now: nil, Region: "local"})
+	namespaces, err := namespace.NewService(namespace.Config{Store: store, Now: nil, Installation: "local"})
 	if err != nil {
 		t.Fatalf("namespaces: %v", err)
 	}

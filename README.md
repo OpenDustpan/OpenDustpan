@@ -380,7 +380,7 @@ Explanation:
 ## Concepts
 
 - **Namespace**: the unit of tenancy, what each tool calls an organization.
-  Each namespace has one home region.
+  Each namespace has one primary installation.
 - **Stacks and workspaces**: each tool keeps its own model of deployable units
   and their state (Pulumi stacks, OpenTofu workspaces). They share
   namespaces, identity, storage and locking rules, not data models.

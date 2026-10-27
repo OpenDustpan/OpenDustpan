@@ -69,7 +69,7 @@ func TestItemKeyBackupRestore(t *testing.T) {
 
 		restores, err := backup.NewRestoreService(backup.RestoreConfig{
 			Live: st, Registry: st, Backups: backups, Maintenance: itemKeyMaintenance{state: st},
-			Blobs: live, Target: in.Target, Key: in.Key, Region: "test", AfterApply: nil, Admit: nil,
+			Blobs: live, Target: in.Target, Key: in.Key, Installation: "test", AfterApply: nil, Admit: nil,
 			AllowDevBackups: false, AllowDevHint: "", Now: nil, Logger: nil,
 		})
 		if err != nil {

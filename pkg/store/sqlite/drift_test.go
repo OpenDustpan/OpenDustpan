@@ -14,7 +14,7 @@ import (
 )
 
 // driftBackend returns the backend of the drift suite over a fresh store. The
-// namespaces it makes are homed with failover version 1.
+// namespaces it makes have failover version 1.
 func driftBackend(t *testing.T) storetest.DriftBackend {
 	t.Helper()
 

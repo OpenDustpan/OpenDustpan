@@ -85,7 +85,7 @@ func newSweepFixture(t *testing.T) sweepFixture {
 
 	cfg := defaultSettings()
 	for _, opt := range []Option{
-		WithRegion("test"), WithNamespaceStore(st), WithStackStore(st), WithUpdateStore(st),
+		WithInstallation("test"), WithNamespaceStore(st), WithStackStore(st), WithUpdateStore(st),
 		WithCheckpointStore(st), WithEventStore(st), WithSecretKeyStore(st), WithSecretWrapper(wrapper),
 		WithWorkspaceStore(st), WithStateStore(st), WithBlobStore(blobs), WithInventoryReader(st),
 		WithClock(clock.Now), WithSoftDeleteRetention(time.Hour), WithLogger(slog.New(slog.NewTextHandler(log, nil))),

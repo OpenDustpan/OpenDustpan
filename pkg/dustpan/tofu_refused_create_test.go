@@ -39,7 +39,7 @@ func TestRefusedTofuRequestCreatesNoWorkspace(t *testing.T) {
 			t.Parallel()
 
 			f := newFixture(t)
-			f.createNamespace(t, "acme", region)
+			f.createNamespace(t, "acme", installationName)
 
 			if tc.lockNamespace {
 				lockNamespace(t, f)
@@ -77,7 +77,7 @@ func TestFirstTofuLockCreatesTheWorkspace(t *testing.T) {
 	t.Parallel()
 
 	f := newFixture(t)
-	f.createNamespace(t, "acme", region)
+	f.createNamespace(t, "acme", installationName)
 
 	status, body := tofuDoPath(t, f, "LOCK", "/tofu/state/acme/se1", `{"ID":"z"}`)
 	if status != http.StatusOK {

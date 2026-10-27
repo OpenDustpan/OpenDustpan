@@ -134,7 +134,7 @@ func newStoreMoveFixture(t *testing.T) storeMoveFixture {
 	})
 
 	ns := namespace.Namespace{
-		ID: namespace.NewID(), CreatedAt: time.Now(), Name: "acme", HomeRegion: "test-region",
+		ID: namespace.NewID(), CreatedAt: time.Now(), Name: "acme", PrimaryInstallation: "test-region",
 		FailoverVersion: 1, Overrides: namespace.Overrides{Forced: false, Unlocked: false},
 	}
 	if createErr := store.CreateNamespace(ctx, ns); createErr != nil {
@@ -227,7 +227,7 @@ func storeAudit(ns namespace.Namespace) audit.Entry {
 func (f storeMoveFixture) move(t *testing.T, authz identity.Authorizer) *httptest.ResponseRecorder {
 	t.Helper()
 
-	nsSvc, err := namespace.NewService(namespace.Config{Store: f.store, Now: nil, Region: "test-region"})
+	nsSvc, err := namespace.NewService(namespace.Config{Store: f.store, Now: nil, Installation: "test-region"})
 	if err != nil {
 		t.Fatalf("namespace service: %v", err)
 	}

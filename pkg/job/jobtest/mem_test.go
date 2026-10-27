@@ -635,7 +635,7 @@ func (m *memDB) namespaceLocked(name namespace.Name) (namespace.Namespace, error
 	}
 
 	return namespace.Namespace{
-		ID: m.nsIDs[name], CreatedAt: time.Time{}, Name: name, HomeRegion: "", FailoverVersion: v,
+		ID: m.nsIDs[name], CreatedAt: time.Time{}, Name: name, PrimaryInstallation: "", FailoverVersion: v,
 		Overrides: namespace.Overrides{Forced: false, Unlocked: false},
 	}, nil
 }

@@ -18,8 +18,8 @@ import (
 	"opendustpan.org/opendustpan/pkg/store/sqlite/internal/db"
 )
 
-// durableTestRegion is the home region of the namespaces of the domain.
-const durableTestRegion = namespace.Region("test-region")
+// durableTestInstallation is the primary installation of the namespaces of the domain.
+const durableTestInstallation = namespace.InstallationName("test-region")
 
 // createDurableValues creates the domain table of the suite.
 const createDurableValues = `CREATE TABLE IF NOT EXISTS durabletest_values (value TEXT NOT NULL) STRICT`
@@ -43,12 +43,12 @@ func DurableDomainForTest(ctx context.Context, s *Store) (durabletest.Domain, er
 
 func (d durableDomain) CreateNamespace(ctx context.Context, name namespace.Name) (namespace.Fence, error) {
 	err := d.s.CreateNamespace(ctx, namespace.Namespace{
-		ID:              namespace.NewID(),
-		CreatedAt:       time.Now(),
-		Name:            name,
-		HomeRegion:      durableTestRegion,
-		FailoverVersion: 1,
-		Overrides:       namespace.Overrides{Forced: false, Unlocked: false},
+		ID:                  namespace.NewID(),
+		CreatedAt:           time.Now(),
+		Name:                name,
+		PrimaryInstallation: durableTestInstallation,
+		FailoverVersion:     1,
+		Overrides:           namespace.Overrides{Forced: false, Unlocked: false},
 	})
 	if err != nil {
 		return namespace.Fence{}, err

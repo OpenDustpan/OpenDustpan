@@ -106,22 +106,22 @@ func listBlobs(t *testing.T, blobs *fs.Store) []blob.Object {
 	return listed
 }
 
-// seedNamespaces returns a namespace service holding acme homed here.
+// seedNamespaces returns a namespace service holding acme whose primary installation is this installation.
 func seedNamespaces(t *testing.T, st *sqlite.Store) *namespace.Service {
 	t.Helper()
 
-	namespaces, err := namespace.NewService(namespace.Config{Store: st, Now: nil, Region: region})
+	namespaces, err := namespace.NewService(namespace.Config{Store: st, Now: nil, Installation: installationName})
 	if err != nil {
 		t.Fatalf("namespace service: %v", err)
 	}
 
 	ns := namespace.Namespace{
-		ID:              namespace.NewID(),
-		CreatedAt:       time.Now(),
-		Name:            "acme",
-		HomeRegion:      region,
-		FailoverVersion: 1,
-		Overrides:       namespace.Overrides{Forced: false, Unlocked: false},
+		ID:                  namespace.NewID(),
+		CreatedAt:           time.Now(),
+		Name:                "acme",
+		PrimaryInstallation: installationName,
+		FailoverVersion:     1,
+		Overrides:           namespace.Overrides{Forced: false, Unlocked: false},
 	}
 
 	err = st.CreateNamespace(t.Context(), ns)

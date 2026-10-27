@@ -51,12 +51,12 @@ func testInvalidNamespaceID(t *testing.T, s Store) {
 
 	for _, tc := range cases {
 		ns := namespace.Namespace{
-			CreatedAt:       now(),
-			ID:              tc.id,
-			Name:            "acme",
-			HomeRegion:      "eu-west",
-			FailoverVersion: 1,
-			Overrides:       namespace.Overrides{Forced: false, Unlocked: false},
+			CreatedAt:           now(),
+			ID:                  tc.id,
+			Name:                "acme",
+			PrimaryInstallation: "eu-west",
+			FailoverVersion:     1,
+			Overrides:           namespace.Overrides{Forced: false, Unlocked: false},
 		}
 
 		if err := s.CreateNamespace(t.Context(), ns); !errors.Is(err, namespace.ErrInvalidID) {

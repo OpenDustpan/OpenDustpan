@@ -42,7 +42,9 @@ func newPoolHandler(
 ) http.Handler {
 	t.Helper()
 
-	namespaces, err := namespace.NewService(namespace.Config{Store: fakeNamespaces{}, Now: nil, Region: "test-region"})
+	namespaces, err := namespace.NewService(
+		namespace.Config{Store: fakeNamespaces{}, Now: nil, Installation: "test-region"},
+	)
 	if err != nil {
 		t.Fatalf("namespace service: %v", err)
 	}

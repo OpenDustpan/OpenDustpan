@@ -5,7 +5,7 @@ package client
 //
 //	opendustpan namespace create --server https://dustpan.example [--ca-file ca.pem] <name>
 //
-// The command creates a namespace homed in the region of the server. The
+// The command creates a namespace with the installation of the server as primary installation. The
 // bootstrap admin token calls it on an empty installation for the first
 // namespace. The access token comes from DUSTPAN_ADMIN_TOKEN or from the file
 // in DUSTPAN_ADMIN_TOKEN_FILE, never from a flag. When the setting holds
@@ -59,12 +59,12 @@ type namespaceCreateRequest struct {
 	Name string `json:"name"`
 }
 
-// namespaceCreateResponse answers a created namespace: its name and home
-// region with the failover version. The creation time is not printed.
+// namespaceCreateResponse answers a created namespace: its name and primary
+// installation with the failover version. The creation time is not printed.
 type namespaceCreateResponse struct {
-	Name            string `json:"name"`
-	HomeRegion      string `json:"homeRegion"`
-	FailoverVersion int64  `json:"failoverVersion"`
+	Name                string `json:"name"`
+	PrimaryInstallation string `json:"primaryInstallation"`
+	FailoverVersion     int64  `json:"failoverVersion"`
 }
 
 // CreateNamespace runs `opendustpan namespace create --server <url> <name>`:
@@ -118,7 +118,8 @@ func CreateNamespace(ctx context.Context, args []string, stdout, stderr io.Write
 		return err
 	}
 
-	if _, err := fmt.Fprintf(stdout, "created namespace %s in region %s\n", doc.Name, doc.HomeRegion); err != nil {
+	_, err = fmt.Fprintf(stdout, "created namespace %s, primary installation %s\n", doc.Name, doc.PrimaryInstallation)
+	if err != nil {
 		return fmt.Errorf("write output: %w", err)
 	}
 
@@ -239,7 +240,7 @@ func decodeNamespaceResponse(
 		)
 	}
 
-	if strings.TrimSpace(doc.Name) == "" || strings.TrimSpace(doc.HomeRegion) == "" {
+	if strings.TrimSpace(doc.Name) == "" || strings.TrimSpace(doc.PrimaryInstallation) == "" {
 		return namespaceCreateResponse{}, fmt.Errorf(
 			"%w %q: the server answered no namespace: check the server log",
 			ErrNamespaceCreate,

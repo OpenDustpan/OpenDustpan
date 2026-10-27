@@ -28,9 +28,9 @@ import (
 )
 
 const (
-	adminToken = "test-token-0123456789abcdef0123456789"
-	region     = "eu-west"
-	origin     = "https://dustpan.acme.internal"
+	adminToken       = "test-token-0123456789abcdef0123456789"
+	installationName = "eu-west"
+	origin           = "https://dustpan.acme.internal"
 )
 
 // fixture is a running server backed by a fresh SQLite database.
@@ -78,7 +78,7 @@ func newFixture(t *testing.T) fixture {
 	}
 
 	srv, err := dustpan.NewServer(
-		dustpan.WithRegion(region),
+		dustpan.WithInstallation(installationName),
 		dustpan.WithNamespaceStore(st),
 		dustpan.WithStackStore(st),
 		dustpan.WithUpdateStore(st),
@@ -108,12 +108,12 @@ func (f fixture) createNamespace(t *testing.T, name, home string) {
 	t.Helper()
 
 	err := f.store.CreateNamespace(t.Context(), namespace.Namespace{
-		ID:              namespace.NewID(),
-		CreatedAt:       time.Now(),
-		Name:            namespace.Name(name),
-		HomeRegion:      namespace.Region(home),
-		FailoverVersion: 1,
-		Overrides:       namespace.Overrides{Forced: false, Unlocked: false},
+		ID:                  namespace.NewID(),
+		CreatedAt:           time.Now(),
+		Name:                namespace.Name(name),
+		PrimaryInstallation: namespace.InstallationName(home),
+		FailoverVersion:     1,
+		Overrides:           namespace.Overrides{Forced: false, Unlocked: false},
 	})
 	if err != nil {
 		t.Fatalf("create namespace: %v", err)
@@ -153,7 +153,7 @@ func TestStackLifecycle(t *testing.T) {
 	t.Parallel()
 
 	f := newFixture(t)
-	f.createNamespace(t, "acme", region)
+	f.createNamespace(t, "acme", installationName)
 
 	status, body := f.do(t, http.MethodPost, "/api/stacks/acme/web", adminToken, `{"stackName":"prod"}`)
 	if status != http.StatusOK {
@@ -198,7 +198,7 @@ func TestInventoryRouting(t *testing.T) {
 	t.Parallel()
 
 	f := newFixture(t)
-	f.createNamespace(t, "acme", region)
+	f.createNamespace(t, "acme", installationName)
 
 	status, body := f.do(t, http.MethodGet, "/api/dustpan/v1/namespaces/acme/units", adminToken, "")
 	if status != http.StatusOK || !strings.Contains(body, `"units":[]`) {
@@ -267,7 +267,7 @@ func TestWorkspaceLifecycle(t *testing.T) {
 	t.Parallel()
 
 	f := newFixture(t)
-	f.createNamespace(t, "acme", region)
+	f.createNamespace(t, "acme", installationName)
 
 	svc := f.srv.Workspaces()
 	if svc == nil {
@@ -374,7 +374,7 @@ func TestErrorStatuses(t *testing.T) {
 	t.Parallel()
 
 	f := newFixture(t)
-	f.createNamespace(t, "acme", region)
+	f.createNamespace(t, "acme", installationName)
 	f.createNamespace(t, "faraway", "us-east")
 
 	status, body := f.do(t, http.MethodPost, "/api/stacks/acme/web", adminToken, `{"stackName":"prod"}`)
@@ -407,7 +407,7 @@ func TestErrorStatuses(t *testing.T) {
 			http.StatusNotFound,
 		},
 		{
-			"other region",
+			"other installation",
 			http.MethodPost,
 			"/api/stacks/faraway/web",
 			adminToken,
@@ -714,7 +714,7 @@ func TestNewServerRefusesBadAllowedOrigins(t *testing.T) {
 func TestNewServerRequiresPorts(t *testing.T) {
 	t.Parallel()
 
-	if _, err := dustpan.NewServer(dustpan.WithRegion(region)); err == nil {
+	if _, err := dustpan.NewServer(dustpan.WithInstallation(installationName)); err == nil {
 		t.Fatal("NewServer without stores or authenticator succeeded")
 	}
 
@@ -902,7 +902,7 @@ func fullServerOptions(
 	t.Helper()
 
 	return []dustpan.Option{
-		dustpan.WithRegion(region),
+		dustpan.WithInstallation(installationName),
 		dustpan.WithNamespaceStore(st),
 		dustpan.WithStackStore(st),
 		dustpan.WithUpdateStore(st),
@@ -972,7 +972,7 @@ func seedRunCheckStore(t *testing.T) *sqlite.Store {
 		}
 	})
 
-	namespaces, nsErr := namespace.NewService(namespace.Config{Store: st, Now: nil, Region: region})
+	namespaces, nsErr := namespace.NewService(namespace.Config{Store: st, Now: nil, Installation: installationName})
 	if nsErr != nil {
 		t.Fatalf("namespace service: %v", nsErr)
 	}
@@ -980,12 +980,12 @@ func seedRunCheckStore(t *testing.T) *sqlite.Store {
 	createErr := st.CreateNamespace(
 		t.Context(),
 		namespace.Namespace{
-			ID:              namespace.NewID(),
-			CreatedAt:       time.Now(),
-			Name:            "acme",
-			HomeRegion:      region,
-			FailoverVersion: 1,
-			Overrides:       namespace.Overrides{Forced: false, Unlocked: false},
+			ID:                  namespace.NewID(),
+			CreatedAt:           time.Now(),
+			Name:                "acme",
+			PrimaryInstallation: installationName,
+			FailoverVersion:     1,
+			Overrides:           namespace.Overrides{Forced: false, Unlocked: false},
 		},
 	)
 	if createErr != nil {
@@ -1047,7 +1047,7 @@ func newRunCheckServer(t *testing.T, st *sqlite.Store, extra ...dustpan.Option) 
 	}
 
 	opts := []dustpan.Option{
-		dustpan.WithRegion(region),
+		dustpan.WithInstallation(installationName),
 		dustpan.WithNamespaceStore(st),
 		dustpan.WithStackStore(st),
 		dustpan.WithUpdateStore(st),
@@ -1107,7 +1107,7 @@ func TestConsoleDir(t *testing.T) {
 	})
 
 	srv, err := dustpan.NewServer(
-		dustpan.WithRegion(region),
+		dustpan.WithInstallation(installationName),
 		dustpan.WithNamespaceStore(st),
 		dustpan.WithStackStore(st),
 		dustpan.WithUpdateStore(st),

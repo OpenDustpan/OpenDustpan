@@ -99,9 +99,9 @@ func newSwitchedHandler(
 
 	svc, err := namespace.NewService(
 		namespace.Config{
-			Store:  switchedNamespaceStore{stubNamespaceStore: stubNamespaceStore{}},
-			Now:    nil,
-			Region: "test-region",
+			Store:        switchedNamespaceStore{stubNamespaceStore: stubNamespaceStore{}},
+			Now:          nil,
+			Installation: "test-region",
 		},
 	)
 	if err != nil {

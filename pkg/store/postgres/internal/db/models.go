@@ -528,7 +528,7 @@ type ManualLock struct {
 
 type Namespace struct {
 	Name                 string
-	HomeRegion           string
+	PrimaryInstallation  string
 	FailoverVersion      int64
 	CreatedAtMs          int64
 	AllowForcedWrites    bool

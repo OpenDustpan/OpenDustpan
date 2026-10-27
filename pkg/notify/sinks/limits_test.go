@@ -371,7 +371,7 @@ func TestRefusedTestDoesNotUseTheLimit(t *testing.T) {
 }
 
 // TestNothingIsSentWhenAStepBeforeTheSendFails proves the order of the steps:
-// a namespace of another region, a stale fence and a failed audit append each
+// a namespace of another installation, a stale fence and a failed audit append each
 // end the test before the sender gets a message.
 func TestNothingIsSentWhenAStepBeforeTheSendFails(t *testing.T) {
 	t.Parallel()
@@ -382,7 +382,7 @@ func TestNothingIsSentWhenAStepBeforeTheSendFails(t *testing.T) {
 		testErr error
 		want    error
 	}{
-		{"namespace of another region", true, nil, namespace.ErrNotHome},
+		{"namespace of another installation", true, nil, namespace.ErrNotHome},
 		{"stale fence", false, namespace.ErrFenced, namespace.ErrFenced},
 		{"failed audit append", false, errAuditAppend, errAuditAppend},
 	}

@@ -1,8 +1,8 @@
 // Package namespace models namespaces, the unit of tenancy in OpenDustpan.
 //
 // A namespace is what Pulumi Cloud calls an organization. Every namespace is
-// authoritative in exactly one region, its home region, and carries a failover
-// version that increases each time a promotion or a restore changes the namespace.
+// owned by exactly one installation, its primary installation, and carries a
+// failover version that increases each time a promotion or a restore changes the namespace.
 // Writes are fenced on that version so a write that started before the change
 // cannot commit after it.
 package namespace
@@ -27,10 +27,11 @@ var (
 	ErrInvalidName = errors.New("invalid namespace name")
 	// ErrInvalidID reports a namespace ID that fails validation.
 	ErrInvalidID = errors.New("invalid namespace ID")
-	// ErrInvalidRegion reports a region that fails validation.
-	ErrInvalidRegion = errors.New("invalid region")
-	// ErrNotHome reports a write attempted outside the namespace's home region.
-	ErrNotHome = errors.New("namespace is not homed in this region")
+	// ErrInvalidInstallationName reports an installation name that fails validation.
+	ErrInvalidInstallationName = errors.New("invalid installation name")
+	// ErrNotHome reports a write attempted on an installation that is not the
+	// primary installation of the namespace.
+	ErrNotHome = errors.New("this installation is not the primary installation of the namespace")
 	// ErrFenced reports a write rejected because its fence carries a stale
 	// failover version: a promotion or a restore changed the namespace after the
 	// write began.
@@ -85,7 +86,7 @@ func (n Name) String() string {
 const idPrefix = "ns-"
 
 // ID is the stable, opaque identifier of a namespace ("ns-..."). The server
-// makes it when it creates the namespace, in the home region, and it never
+// makes it when it creates the namespace, on the primary installation, and it never
 // changes. A namespace that is created later under the name of a purged
 // namespace gets a new ID, so rows that hold the old ID never reach the new
 // namespace. The ID is not a secret, and it does not sort by time.
@@ -112,31 +113,32 @@ func (id ID) String() string {
 	return string(id)
 }
 
-// Region identifies a deployment region, for example "eu-west".
-type Region string
+// InstallationName identifies an installation, for example "eu-west". An
+// operator sets it, and it is "local" by default.
+type InstallationName string
 
-// ParseRegion validates s as a region identifier.
-func ParseRegion(s string) (Region, error) {
+// ParseInstallationName validates s as an installation name.
+func ParseInstallationName(s string) (InstallationName, error) {
 	if !ident.Valid(s, maxNameLength) {
-		return "", fmt.Errorf("%w: %q", ErrInvalidRegion, s)
+		return "", fmt.Errorf("%w: %q", ErrInvalidInstallationName, s)
 	}
 
-	return Region(s), nil
+	return InstallationName(s), nil
 }
 
-// String returns the region as a plain string.
-func (r Region) String() string {
+// String returns the installation name as a plain string.
+func (r InstallationName) String() string {
 	return string(r)
 }
 
 // Namespace is the aggregate root for tenancy.
 type Namespace struct {
-	CreatedAt       time.Time
-	ID              ID
-	Name            Name
-	HomeRegion      Region
-	Overrides       Overrides
-	FailoverVersion int64
+	CreatedAt           time.Time
+	ID                  ID
+	Name                Name
+	PrimaryInstallation InstallationName
+	Overrides           Overrides
+	FailoverVersion     int64
 }
 
 // Overrides are the switches that allow the overrides of ADR 44. Both are
@@ -227,25 +229,25 @@ type Pager interface {
 
 // Config holds the dependencies of a Service.
 type Config struct {
-	Store  Store
-	Now    func() time.Time
-	Region Region
+	Store        Store
+	Now          func() time.Time
+	Installation InstallationName
 }
 
 // Service implements the namespace use cases.
 type Service struct {
-	store  Store
-	now    func() time.Time
-	region Region
+	store        Store
+	now          func() time.Time
+	installation InstallationName
 }
 
-// NewService returns a Service. Store and Region are required; Now defaults to time.Now.
+// NewService returns a Service. Store and Installation are required; Now defaults to time.Now.
 func NewService(cfg Config) (*Service, error) {
 	if cfg.Store == nil {
 		return nil, fmt.Errorf("%w: namespace store", ErrMissingDependency)
 	}
 
-	if _, err := ParseRegion(cfg.Region.String()); err != nil {
+	if _, err := ParseInstallationName(cfg.Installation.String()); err != nil {
 		return nil, err
 	}
 
@@ -254,26 +256,26 @@ func NewService(cfg Config) (*Service, error) {
 		now = time.Now
 	}
 
-	return &Service{store: cfg.Store, now: now, region: cfg.Region}, nil
+	return &Service{store: cfg.Store, now: now, installation: cfg.Installation}, nil
 }
 
-// New returns the namespace that Create stores for name: a new ID, homed in
-// the service's region, at failover version 1, created now. The create time is
-// in UTC at millisecond precision, the precision that the store keeps, so the
+// New returns the namespace that Create stores for name: a new ID, with the
+// service's installation as primary installation, at failover version 1,
+// created now. The create time is in UTC at millisecond precision, the precision that the store keeps, so the
 // answer of a create equals a later read. It stores nothing, so a caller can
 // store it with other rows in one transaction.
 func (s *Service) New(name Name) Namespace {
 	return Namespace{
-		CreatedAt:       s.now().UTC().Truncate(time.Millisecond),
-		ID:              NewID(),
-		Name:            name,
-		HomeRegion:      s.region,
-		FailoverVersion: 1,
-		Overrides:       Overrides{Forced: false, Unlocked: false},
+		CreatedAt:           s.now().UTC().Truncate(time.Millisecond),
+		ID:                  NewID(),
+		Name:                name,
+		PrimaryInstallation: s.installation,
+		FailoverVersion:     1,
+		Overrides:           Overrides{Forced: false, Unlocked: false},
 	}
 }
 
-// Create creates a namespace homed in the service's region, at failover version 1.
+// Create creates a namespace whose primary installation is the service's installation, at failover version 1.
 func (s *Service) Create(ctx context.Context, name Name) (Namespace, error) {
 	ns := s.New(name)
 
@@ -381,16 +383,16 @@ func dedupNames(in []Name) []Name {
 	return out
 }
 
-// WritableHere returns the namespace if this region may write to it. It returns
-// ErrNotHome when the namespace is authoritative in another region.
+// WritableHere returns the namespace if this installation may write to it. It returns
+// ErrNotHome when another installation is the primary installation of the namespace.
 func (s *Service) WritableHere(ctx context.Context, name Name) (Namespace, error) {
 	ns, err := s.Get(ctx, name)
 	if err != nil {
 		return Namespace{}, err
 	}
 
-	if ns.HomeRegion != s.region {
-		return Namespace{}, fmt.Errorf("%w: %q is homed in %q", ErrNotHome, name, ns.HomeRegion)
+	if ns.PrimaryInstallation != s.installation {
+		return Namespace{}, fmt.Errorf("%w: %q has primary installation %q", ErrNotHome, name, ns.PrimaryInstallation)
 	}
 
 	return ns, nil

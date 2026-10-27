@@ -24,7 +24,7 @@ func (fakeNamespaces) Get(_ context.Context, name namespace.Name) (namespace.Nam
 	}
 
 	return namespace.Namespace{
-		CreatedAt: configNow(), ID: "", Name: "acme", HomeRegion: "test",
+		CreatedAt: configNow(), ID: "", Name: "acme", PrimaryInstallation: "test",
 		Overrides: namespace.Overrides{Forced: false, Unlocked: false}, FailoverVersion: 4,
 	}, nil
 }

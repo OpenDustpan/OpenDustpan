@@ -34,8 +34,12 @@ var _ jobtest.Domain = (*jobDomain)(nil)
 
 func (d *jobDomain) CreateNamespace(ctx context.Context, name namespace.Name) (namespace.Fence, error) {
 	ns := namespace.Namespace{
-		ID: namespace.NewID(), CreatedAt: time.UnixMilli(1_700_000_000_000).UTC(), Name: name, HomeRegion: "eu-west",
-		FailoverVersion: 1, Overrides: namespace.Overrides{Forced: false, Unlocked: false},
+		ID:                  namespace.NewID(),
+		CreatedAt:           time.UnixMilli(1_700_000_000_000).UTC(),
+		Name:                name,
+		PrimaryInstallation: "eu-west",
+		FailoverVersion:     1,
+		Overrides:           namespace.Overrides{Forced: false, Unlocked: false},
 	}
 
 	if err := d.s.CreateNamespace(ctx, ns); err != nil {

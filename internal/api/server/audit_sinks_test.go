@@ -34,7 +34,9 @@ func (s stubAuditSinks) ListAuditSinks(context.Context) ([]audit.SinkStatus, err
 func newAuditSinkHandler(t *testing.T, source apiserver.AuditSinkSource) testHandler {
 	t.Helper()
 
-	namespaces, err := namespace.NewService(namespace.Config{Store: stubNamespaceStore{}, Now: nil, Region: "test"})
+	namespaces, err := namespace.NewService(
+		namespace.Config{Store: stubNamespaceStore{}, Now: nil, Installation: "test"},
+	)
 	if err != nil {
 		t.Fatalf("namespace service: %v", err)
 	}

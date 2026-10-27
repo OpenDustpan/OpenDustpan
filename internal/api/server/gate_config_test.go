@@ -955,7 +955,7 @@ func TestGateConfigDeniedWriteKeepsDefault(t *testing.T) {
 	authz := gateAuthorizer{allow: map[identity.Action]namespace.Name{read: "acme", manage: "beta"}}
 	handler := newGateEnv(t, authz)
 
-	nss, err := namespace.NewService(namespace.Config{Store: handler.env.store, Now: nil, Region: "test"})
+	nss, err := namespace.NewService(namespace.Config{Store: handler.env.store, Now: nil, Installation: "test"})
 	if err != nil {
 		t.Fatalf("namespace service: %v", err)
 	}

@@ -209,8 +209,8 @@ Wanted, but not in an ordered milestone yet. Each row says what it waits on.
 | [RFC 29](rfc/0029-existing-ci.md) Existing CI as the executor                                      | runs (milestone 5)                                              |
 | [RFC 31](rfc/0031-kubernetes.md) Kubernetes                                                        | runners (RFC 6)                                                 |
 | [RFC 33](rfc/0033-customer-managed-keys.md) Customer-managed keys                                  | secrets (RFC 3, part 2)                                         |
-| [RFC 36](rfc/0036-high-availability.md) High availability                                          | home regions and fencing in use (ADR 4)                         |
-| [RFC 37](rfc/0037-federation.md) Namespace placement and routing                                   | installation settings (RFC 68); replication (ADR 4) for regions |
+| [RFC 36](rfc/0036-high-availability.md) High availability                                          | primary installations and fencing in use (ADR 4)                         |
+| [RFC 37](rfc/0037-federation.md) Namespace placement and routing                                   | installation settings (RFC 68); replication (ADR 4) for installations |
 | [RFC 39](rfc/0039-reading-state.md) Reading state contents                                         | accepted (ADR 41); a milestone to place it in                   |
 | [RFC 40](rfc/0040-inventory-queries.md) Inventory queries                                          | the inventory projection (ADR 13) at scale                      |
 | [RFC 41](rfc/0041-agent-interface.md) Interface for AI agents                                      | read-only tokens (RFC 20)                                       |

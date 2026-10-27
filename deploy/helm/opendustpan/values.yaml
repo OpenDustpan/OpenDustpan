@@ -163,8 +163,8 @@ server:
   # header, for example the pod CIDR of the ingress controller.
   trustedProxies: []
   trustedProxyHeader: x-forwarded-for
-  # Empty means the server default.
-  region: ""
+  # The name of this installation. Empty means the server default, local.
+  installation: ""
   logLevel: info
   logFormat: json
   # Built-in TLS. The name of a Secret of type kubernetes.io/tls. Empty means

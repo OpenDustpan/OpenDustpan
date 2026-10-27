@@ -27,8 +27,12 @@ func (d sinkDomain) CreateNamespace(ctx context.Context, name namespace.Name) (n
 	}
 
 	ns := namespace.Namespace{
-		ID: namespace.NewID(), CreatedAt: time.UnixMilli(1_700_000_000_000).UTC(), Name: name, HomeRegion: "eu-west",
-		FailoverVersion: 1, Overrides: namespace.Overrides{Forced: false, Unlocked: false},
+		ID:                  namespace.NewID(),
+		CreatedAt:           time.UnixMilli(1_700_000_000_000).UTC(),
+		Name:                name,
+		PrimaryInstallation: "eu-west",
+		FailoverVersion:     1,
+		Overrides:           namespace.Overrides{Forced: false, Unlocked: false},
 	}
 	if err := d.s.CreateNamespace(ctx, ns); err != nil {
 		return namespace.Fence{}, fmt.Errorf("create namespace %s: %w", name, err)

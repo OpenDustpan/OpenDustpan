@@ -273,7 +273,7 @@ func newSigner(tb testing.TB) pgpfixture.Signer {
 // namespaceOf returns the namespace record of name with the given ID.
 func namespaceOf(name namespace.Name, id namespace.ID, now time.Time) namespace.Namespace {
 	return namespace.Namespace{
-		CreatedAt: now, ID: id, Name: name, HomeRegion: "eu-west", FailoverVersion: 1,
+		CreatedAt: now, ID: id, Name: name, PrimaryInstallation: "eu-west", FailoverVersion: 1,
 		Overrides: namespace.Overrides{Forced: false, Unlocked: false},
 	}
 }

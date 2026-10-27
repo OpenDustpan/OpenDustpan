@@ -122,7 +122,7 @@ func newAuditSinkTestServer(t *testing.T) *dustpan.Server {
 	}
 
 	srv, err := dustpan.NewServer(
-		dustpan.WithRegion("e2e"),
+		dustpan.WithInstallation("e2e"),
 		dustpan.WithNamespaceStore(st),
 		dustpan.WithStackStore(st),
 		dustpan.WithUpdateStore(st),

@@ -165,7 +165,7 @@ func newDriftChecker(t *testing.T, b checkerBackend, now func() time.Time) *drif
 	cfg.authorizer = identity.AdminOnly{}
 	cfg.now = now
 
-	namespaces, err := namespace.NewService(namespace.Config{Store: b.store, Now: now, Region: "eu-west"})
+	namespaces, err := namespace.NewService(namespace.Config{Store: b.store, Now: now, Installation: "eu-west"})
 	if err != nil {
 		t.Fatalf("namespace service: %v", err)
 	}

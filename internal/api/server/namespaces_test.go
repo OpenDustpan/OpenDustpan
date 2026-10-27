@@ -17,15 +17,15 @@ import (
 
 // namespaceDoc decodes a created namespace in tests.
 type namespaceDoc struct {
-	ID              string `json:"id"`
-	Name            string `json:"name"`
-	HomeRegion      string `json:"homeRegion"`
-	FailoverVersion int64  `json:"failoverVersion"`
-	CreatedAt       string `json:"createdAt"`
+	ID                  string `json:"id"`
+	Name                string `json:"name"`
+	PrimaryInstallation string `json:"primaryInstallation"`
+	FailoverVersion     int64  `json:"failoverVersion"`
+	CreatedAt           string `json:"createdAt"`
 }
 
 // newNamespaceHandler builds a Handler with a SQLite-backed namespace service
-// over a fresh store in region test. The store starts empty, so the first
+// over a fresh store on installation test. The store starts empty, so the first
 // create proves the bootstrap call on an empty installation.
 func newNamespaceHandler(t *testing.T, authz identity.Authorizer) testHandler {
 	t.Helper()
@@ -71,14 +71,14 @@ func newNamespaceHandler(t *testing.T, authz identity.Authorizer) testHandler {
 	return handler
 }
 
-// newTestNamespaces returns a namespace service in region test over a fresh
+// newTestNamespaces returns a namespace service on installation test over a fresh
 // SQLite store that the test closes at cleanup.
 func newTestNamespaces(t *testing.T) *namespace.Service {
 	t.Helper()
 
 	st := openServerTemplateStore(t, filepath.Join(t.TempDir(), "dustpan.db"))
 
-	namespaces, err := namespace.NewService(namespace.Config{Store: st, Now: nil, Region: "test"})
+	namespaces, err := namespace.NewService(namespace.Config{Store: st, Now: nil, Installation: "test"})
 	if err != nil {
 		t.Fatalf("namespace service: %v", err)
 	}
@@ -173,7 +173,7 @@ func checkNamespaceRouteCreate(t *testing.T, route apiserver.Route) {
 }
 
 // TestNamespaceCreateOnEmpty proves the bootstrap call on an empty
-// installation creates a namespace homed in the region of the server and
+// installation creates a namespace with the installation of the server as primary installation and
 // answers 201 with it.
 func TestNamespaceCreateOnEmpty(t *testing.T) {
 	t.Parallel()
@@ -191,7 +191,7 @@ func TestNamespaceCreateOnEmpty(t *testing.T) {
 		t.Fatalf("decode namespace %q: %v", body, err)
 	}
 
-	if doc.Name != "acme" || doc.HomeRegion != "test" || doc.FailoverVersion != 1 || doc.CreatedAt == "" {
+	if doc.Name != "acme" || doc.PrimaryInstallation != "test" || doc.FailoverVersion != 1 || doc.CreatedAt == "" {
 		t.Fatalf("namespace answers %+v, want acme in test at version 1 with a time", doc)
 	}
 

@@ -338,12 +338,12 @@ func newWorkspaceNamespace(t *testing.T, s WorkspaceStore, name string) namespac
 	t.Helper()
 
 	ns := namespace.Namespace{
-		ID:              namespace.NewID(),
-		CreatedAt:       now(),
-		Name:            namespace.Name(name),
-		HomeRegion:      "eu-west",
-		FailoverVersion: 1,
-		Overrides:       namespace.Overrides{Forced: false, Unlocked: false},
+		ID:                  namespace.NewID(),
+		CreatedAt:           now(),
+		Name:                namespace.Name(name),
+		PrimaryInstallation: "eu-west",
+		FailoverVersion:     1,
+		Overrides:           namespace.Overrides{Forced: false, Unlocked: false},
 	}
 
 	if err := s.CreateNamespace(t.Context(), ns); err != nil {
@@ -677,12 +677,12 @@ func testWorkspaceMissingNamespace(t *testing.T, s WorkspaceStore) {
 	t.Helper()
 
 	ghost := namespace.Namespace{
-		ID:              namespace.NewID(),
-		CreatedAt:       now(),
-		Name:            "ghost",
-		HomeRegion:      "eu-west",
-		FailoverVersion: 1,
-		Overrides:       namespace.Overrides{Forced: false, Unlocked: false},
+		ID:                  namespace.NewID(),
+		CreatedAt:           now(),
+		Name:                "ghost",
+		PrimaryInstallation: "eu-west",
+		FailoverVersion:     1,
+		Overrides:           namespace.Overrides{Forced: false, Unlocked: false},
 	}
 	w := newTestWorkspace(ghost, mustWorkspaceName(t, "network"))
 
@@ -4038,7 +4038,7 @@ func serviceOver(t *testing.T, s WorkspaceStore) *workspace.Service {
 func servicesOver(t *testing.T, s WorkspaceStore, n int) []*workspace.Service {
 	t.Helper()
 
-	nsSvc, err := namespace.NewService(namespace.Config{Store: s, Now: nil, Region: "eu-west"})
+	nsSvc, err := namespace.NewService(namespace.Config{Store: s, Now: nil, Installation: "eu-west"})
 	if err != nil {
 		t.Fatalf("namespace service: %v", err)
 	}

@@ -337,7 +337,7 @@ func NewService(cfg Config) (*Service, error) {
 }
 
 // Create creates the stack identified by ref with the given tags. The write is
-// fenced on the namespace's failover version and only allowed in its home region.
+// fenced on the namespace's failover version and only allowed in its primary installation.
 func (s *Service) Create(ctx context.Context, ref Ref, tags map[string]string) (Stack, error) {
 	if len(tags) > maxTags {
 		return Stack{}, fmt.Errorf("%w: more than %d tags", ErrInvalidName, maxTags)
@@ -414,7 +414,7 @@ func (s *Service) Page(ctx context.Context, q PageQuery) ([]Stack, error) {
 // (reading and gunzipping its blob) and the store checks it is still the
 // latest in the delete transaction, retrying the count once on a concurrent
 // save. The write is fenced on the namespace's failover version and only
-// allowed in its home region. The delete and the audit entry e, stamped with
+// allowed in its primary installation. The delete and the audit entry e, stamped with
 // the time of the delete, commit together or not at all (ADR 60, fail
 // closed). It returns ErrNotFound if the stack does not exist, and
 // ErrUpdateConflict while a mutating update of the stack runs or while a
@@ -475,7 +475,7 @@ func (s *Service) Delete(ctx context.Context, ref Ref, e audit.Entry) error {
 
 // ForceDelete soft-deletes the stack identified by ref, as Delete does, even
 // when the stack still manages resources. The write is fenced on the
-// namespace's failover version and only allowed in its home region. It
+// namespace's failover version and only allowed in its primary installation. It
 // writes the audit entry e as Delete does. It returns ErrNotFound if the
 // stack does not exist, and ErrUpdateConflict while a mutating update of the
 // stack runs or while a manual lock covers the stack.
@@ -561,7 +561,7 @@ func (s *Service) PurgeExpired(
 // UpdateTags replaces the tags of the stack identified by ref with tags, as
 // the Pulumi CLI sends them on PATCH, and returns the updated stack. An empty
 // or nil map clears every tag. The write is fenced on the namespace's
-// failover version and only allowed in its home region.
+// failover version and only allowed in its primary installation.
 func (s *Service) UpdateTags(
 	ctx context.Context, ref Ref, tags map[string]string,
 ) (Stack, error) {
@@ -591,7 +591,7 @@ func (s *Service) UpdateTags(
 
 // Rename changes the stack name of oldRef to newName and returns the renamed
 // stack. The stack ID stays the same. The write is fenced on the namespace's
-// failover version and only allowed in its home region. It returns
+// failover version and only allowed in its primary installation. It returns
 // ErrUpdateConflict while a mutating update of the stack runs (a
 // *UpdateConflictError that names that update), and ErrUpdateConflict,
 // matching manuallock.ErrLocked, while a manual lock covers the stack.

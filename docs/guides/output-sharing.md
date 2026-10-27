@@ -175,7 +175,7 @@ The answer is 200 with the setting as stored:
 | 400 | The body is not one JSON object with the field `newUnitDefault`, the value is not `nobody` or `namespace`, or the body has another field. The setting does not change. |
 | 403 | The caller does not hold the action of the route on the namespace. The setting does not change. |
 | 404 | The namespace does not exist. |
-| 409 | The namespace moved to another region during the change. Send the request again. |
+| 409 | The namespace moved to another installation during the change. Send the request again. |
 
 ## Audit
 

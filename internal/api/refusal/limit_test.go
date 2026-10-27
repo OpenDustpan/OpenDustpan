@@ -339,7 +339,7 @@ type everyNamespace struct{}
 
 func (everyNamespace) Get(_ context.Context, name namespace.Name) (namespace.Namespace, error) {
 	return namespace.Namespace{
-		CreatedAt: time.Time{}, ID: "", Name: name, HomeRegion: "", FailoverVersion: 1,
+		CreatedAt: time.Time{}, ID: "", Name: name, PrimaryInstallation: "", FailoverVersion: 1,
 		Overrides: namespace.Overrides{Forced: false, Unlocked: false},
 	}, nil
 }

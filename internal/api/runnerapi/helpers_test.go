@@ -38,9 +38,9 @@ import (
 const phaseKey = "job-1/0"
 
 const (
-	serverURL  = "https://dustpan.test"
-	adminToken = "admin-token"
-	region     = "eu-west"
+	serverURL        = "https://dustpan.test"
+	adminToken       = "admin-token"
+	installationName = "eu-west"
 )
 
 // serverRelease is the release of the server in the tests; a runner of
@@ -222,8 +222,12 @@ func newEnvWith(
 	s := open(t)
 
 	ns := namespace.Namespace{
-		ID: namespace.NewID(), CreatedAt: time.UnixMilli(1_700_000_000_000).UTC(), Name: "acme", HomeRegion: region,
-		FailoverVersion: 1, Overrides: namespace.Overrides{Forced: false, Unlocked: false},
+		ID:                  namespace.NewID(),
+		CreatedAt:           time.UnixMilli(1_700_000_000_000).UTC(),
+		Name:                "acme",
+		PrimaryInstallation: installationName,
+		FailoverVersion:     1,
+		Overrides:           namespace.Overrides{Forced: false, Unlocked: false},
 	}
 	if err := s.namespaces.CreateNamespace(t.Context(), ns); err != nil {
 		t.Fatalf("create namespace: %v", err)
@@ -304,7 +308,9 @@ type serveOptions struct {
 func serve(t *testing.T, s stores, opts serveOptions) (*runnerapi.Handler, *httptest.Server, *opsClaimer) {
 	t.Helper()
 
-	service, err := namespace.NewService(namespace.Config{Store: s.namespaces, Now: nil, Region: region})
+	service, err := namespace.NewService(
+		namespace.Config{Store: s.namespaces, Now: nil, Installation: installationName},
+	)
 	if err != nil {
 		t.Fatalf("namespace service: %v", err)
 	}

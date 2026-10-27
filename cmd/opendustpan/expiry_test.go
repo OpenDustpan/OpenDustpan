@@ -25,7 +25,7 @@ func expiryServer(t *testing.T, expiresAt string) *httptest.Server {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusCreated)
 
-		body := `{"name":"acme","homeRegion":"test","failoverVersion":1,"createdAt":"2026-10-11T12:00:00Z"}`
+		body := `{"name":"acme","primaryInstallation":"test","failoverVersion":1,"createdAt":"2026-10-11T12:00:00Z"}`
 		if _, err := w.Write([]byte(body)); err != nil {
 			t.Errorf("write body: %v", err)
 		}

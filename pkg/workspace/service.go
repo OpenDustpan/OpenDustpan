@@ -487,7 +487,7 @@ func newWorkspaceOf(ref Ref) Workspace {
 // rows. It returns ErrLocked while the workspace is locked, ErrPendingState
 // while it has a pending state version, and ErrNotFound if no live workspace
 // has ref. The write is fenced on the namespace's failover version
-// and only allowed in its home region. The delete and the audit entry e,
+// and only allowed in its primary installation. The delete and the audit entry e,
 // stamped with the time of the delete, commit together or not at all (ADR 60,
 // fail closed).
 func (s *Service) Delete(ctx context.Context, ref Ref, e audit.Entry) error {
@@ -2677,7 +2677,7 @@ func (s *Service) fence(ctx context.Context, ns namespace.Name) (namespace.Fence
 	return n.Fence(), nil
 }
 
-// writable returns the namespace ns when this region may write to it.
+// writable returns the namespace ns when this installation may write to it.
 func (s *Service) writable(ctx context.Context, ns namespace.Name) (namespace.Namespace, error) {
 	n, err := s.namespaces.WritableHere(ctx, ns)
 	if err != nil {

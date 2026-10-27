@@ -918,7 +918,7 @@ func openSnapshot(ctx context.Context, path string) (*sql.DB, error) {
 }
 
 // summarizeConn reads the backup summary of an open database: the dialect,
-// the schema version, the home regions, the wrapper IDs, the row count of
+// the schema version, the primary installations, the wrapper IDs, the row count of
 // each table in backup.Tables, and the blob references. Callers pass a
 // snapshot, never the live database, so the counts and the references
 // describe one consistent view.
@@ -928,10 +928,10 @@ func summarizeConn(ctx context.Context, conn *sql.DB) (backup.Summary, error) {
 		return backup.Summary{}, err
 	}
 
-	regions, err := stringColumn(
+	installations, err := stringColumn(
 		ctx,
 		conn,
-		`SELECT DISTINCT home_region FROM namespaces ORDER BY home_region`,
+		`SELECT DISTINCT primary_installation FROM namespaces ORDER BY primary_installation`,
 	)
 	if err != nil {
 		return backup.Summary{}, err
@@ -964,13 +964,13 @@ func summarizeConn(ctx context.Context, conn *sql.DB) (backup.Summary, error) {
 	}
 
 	return backup.Summary{
-		Dialect:       backup.DialectSQLite,
-		HomeRegions:   regions,
-		WrapperIDs:    wrappers,
-		RowCounts:     counts,
-		Blobs:         blobs,
-		Unverified:    unverified,
-		SchemaVersion: int(version),
+		Dialect:              backup.DialectSQLite,
+		PrimaryInstallations: installations,
+		WrapperIDs:           wrappers,
+		RowCounts:            counts,
+		Blobs:                blobs,
+		Unverified:           unverified,
+		SchemaVersion:        int(version),
 	}, nil
 }
 

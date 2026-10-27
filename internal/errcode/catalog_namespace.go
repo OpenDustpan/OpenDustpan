@@ -13,7 +13,7 @@ const (
 	NamespaceNotFound = "namespace.not-found"
 	// NamespaceUnavailable means that the database does not answer.
 	NamespaceUnavailable = "namespace.unavailable"
-	// NamespaceNotHome means that the namespace is not homed in the region of the server.
+	// NamespaceNotHome means that this installation is not the primary installation of the namespace.
 	NamespaceNotHome = "namespace.not-home"
 )
 
@@ -24,7 +24,11 @@ func namespaceSpecs() []Spec {
 		{Code: NamespaceFenced, Meaning: "a newer failover version fences the write in the namespace", Args: nil},
 		{Code: NamespaceInvalidName, Meaning: "the name of the namespace is not valid", Args: nil},
 		{Code: NamespaceNotFound, Meaning: "the namespace does not exist", Args: nil},
-		{Code: NamespaceNotHome, Meaning: "the namespace is not homed in the region of the server", Args: nil},
+		{
+			Code:    NamespaceNotHome,
+			Meaning: "this installation is not the primary installation of the namespace",
+			Args:    nil,
+		},
 		{Code: NamespaceUnavailable, Meaning: "the database does not answer", Args: nil},
 	}
 }
