@@ -215,8 +215,8 @@ func portsOfPostgres(store *postgres.Store) ports {
 	}
 }
 
-// harnessRegion is the region the harness servers are authoritative for.
-const harnessRegion = namespace.InstallationName("eu-west")
+// harnessInstallation is the installation name of the harness servers.
+const harnessInstallation = namespace.InstallationName("eu-west")
 
 // servers is what openServers starts: the URLs of the instances, the URL of
 // the server that checks IP allowlists, and the fixtures that the access
@@ -511,7 +511,7 @@ func createLoadNamespace(ctx context.Context, stores namespace.Store, ns string)
 		ID:                  namespace.NewID(),
 		CreatedAt:           time.Now(),
 		Name:                name,
-		PrimaryInstallation: harnessRegion,
+		PrimaryInstallation: harnessInstallation,
 		FailoverVersion:     1,
 		Overrides:           namespace.Overrides{Forced: false, Unlocked: false},
 	}
@@ -574,7 +574,7 @@ func serveInstance(
 	ts := httptest.NewUnstartedServer(nil)
 
 	opts := []dustpan.Option{
-		dustpan.WithInstallation(harnessRegion),
+		dustpan.WithInstallation(harnessInstallation),
 		dustpan.WithNamespaceStore(served.ports.namespaces),
 		dustpan.WithStackStore(served.ports.stacks),
 		dustpan.WithUpdateStore(served.ports.updates),

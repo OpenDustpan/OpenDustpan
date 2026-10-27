@@ -331,7 +331,7 @@ func TestCheckRestoreGood(t *testing.T) {
 	s.assertTargetIntact(t)
 }
 
-func TestCheckRestoreRegionWarning(t *testing.T) {
+func TestCheckRestoreInstallationWarning(t *testing.T) {
 	t.Parallel()
 
 	s := newCheckSetup(t)
