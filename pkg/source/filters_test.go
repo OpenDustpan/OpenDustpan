@@ -2,12 +2,27 @@ package source_test
 
 import (
 	"errors"
+	"net/url"
 	"strconv"
 	"strings"
 	"testing"
 
 	"opendustpan.org/opendustpan/pkg/source"
 )
+
+// withUserInfo returns an HTTPS URL of git.example.com with a user name and a
+// password. The test builds it at run time, so that no file holds a literal URL
+// with user info.
+func withUserInfo(path string) string {
+	u := url.URL{
+		Scheme: "https",
+		User:   url.UserPassword("user", "pass"),
+		Host:   "git.example.com",
+		Path:   "/" + path,
+	}
+
+	return u.String()
+}
 
 func TestEncodeFilterIsCanonical(t *testing.T) {
 	t.Parallel()
@@ -377,7 +392,7 @@ func TestSplitHTTPS(t *testing.T) {
 		{"uppercase scheme", "HTTPS://git.example.com/a", "", "", false},
 		{"IPv6 host", "https://[::1]/a", "", "", false},
 		{"trailing dot host", "https://h.example./a", "", "", false},
-		{"user and password", "https://user:pass@git.example.com/a", "", "", false},
+		{"user and password", withUserInfo("a"), "", "", false},
 		{"punycode host", "https://xn--gt-9ja.example.com/a", "xn--gt-9ja.example.com", "a", true},
 		{"non-ASCII host", "https://gіt.example.com/a", "", "", false},
 		{"NUL", "https://git.example.com/a\x00b", "", "", false},

@@ -12,3 +12,5 @@
 ^internal/api/jobs/location_answer_test\.go$
 ^internal/api/jobs/location_credentials_test\.go$
 ^pkg/job/location_test\.go$
+# test fixture that holds a fake HTTPS URL with a user name and a password to show that the repository URL parser refuses it; the current file builds the URL at run time, but an earlier commit in the history holds it as a literal
+^pkg/source/filters_test\.go$

@@ -416,21 +416,58 @@ func collectChunks(tb testing.TB, n int) *blobrefs.Collector {
 	return c
 }
 
+// scaleRuns is the number of runs for each size in TestCollectorScales. The
+// test keeps the fastest run of each size, so that a pause from load on the
+// machine does not change the result.
+const scaleRuns = 3
+
+// scaleRatioLimit is the largest accepted ratio between the time for the large
+// input and the time for the small input. The large input is four times the
+// small input: linear work gives a ratio near 4, and quadratic work gives a
+// ratio near 16.
+const scaleRatioLimit = 10
+
+// fastestCollect returns the shortest time of scaleRuns runs that add n chunks.
+func fastestCollect(t *testing.T, n int) time.Duration {
+	t.Helper()
+
+	var fastest time.Duration
+
+	for run := range scaleRuns {
+		start := time.Now()
+		c := collectChunks(t, n)
+		elapsed := time.Since(start)
+
+		if got := len(c.Refs()); got != n {
+			t.Fatalf("references = %d, want %d", got, n)
+		}
+
+		if run == 0 || elapsed < fastest {
+			fastest = elapsed
+		}
+	}
+
+	return fastest
+}
+
 // TestCollectorScales proves that the collector adds many chunks in time that
 // is linear in their number: with a scan of the earlier keys for each chunk, 200
-// thousand chunks take minutes.
+// thousand chunks take minutes. The test compares two input sizes in the same
+// run and checks the ratio of their times, not an absolute time, so that a slow
+// or loaded machine does not change the result.
 func TestCollectorScales(t *testing.T) {
 	t.Parallel()
 
-	start := time.Now()
-	c := collectChunks(t, manyChunks)
+	small := fastestCollect(t, manyChunks/4)
+	large := fastestCollect(t, manyChunks)
 
-	if got := len(c.Refs()); got != manyChunks {
-		t.Fatalf("references = %d, want %d", got, manyChunks)
-	}
+	// A zero small time cannot happen for this many chunks; the guard keeps the
+	// division safe on a coarse clock.
+	small = max(small, time.Microsecond)
 
-	if elapsed := time.Since(start); elapsed > 10*time.Second {
-		t.Errorf("collecting %d chunks took %v, want well under 10 s", manyChunks, elapsed)
+	if ratio := float64(large) / float64(small); ratio > scaleRatioLimit {
+		t.Errorf("collecting %d chunks took %v and %d chunks took %v (ratio %.1f), want a ratio of at most %d for linear work",
+			manyChunks/4, small, manyChunks, large, ratio, scaleRatioLimit)
 	}
 }
 
