@@ -188,10 +188,11 @@ Out of scope: replication between installations, promotion and forwarding
 shared cache (ADR 72 decision 9); a flag for the lease period.
 
 **Minimum supported topology.** Two or more instances; PostgreSQL 16 or
-later; an S3-compatible object store that enforces `If-None-Match: *` on
-`PutObject` (the server probes for it at start-up and does not start without
-it); a backup target on an S3-compatible store. The Helm chart refuses the
-`fs`, `dir:` and `file:` settings when `replicas` is more than 1.
+later; an S3-compatible object store, with no requirement for conditional
+writes; a backup target on an S3-compatible store. The Helm chart refuses the
+`fs`, `dir:` and `file:` settings when `replicas` is more than 1. A later
+decision defines how the server works with stores that do not enforce
+conditional writes.
 
 **Exit test.** On Linux, on PostgreSQL, with the blobs and the backup target
 on an S3-compatible server, the e2e suite starts three `opendustpan serve`

@@ -59,16 +59,16 @@ high availability. Each decision below has the label "(owner)".
 5. **The minimum supported topology (owner).**
    - Two or more instances of one installation.
    - PostgreSQL 16 or later.
-   - An S3-compatible object store that enforces `If-None-Match: *` on
-     `PutObject`. The server probes the store for this at start-up, and it
-     does not start when the store does not enforce it.
+   - An S3-compatible object store. The topology has no requirement for
+     conditional writes.
    - A backup target on an S3-compatible store.
    - The Helm chart refuses the `fs`, `dir:` and `file:` settings when
      `replicas` is more than 1.
 
-   The docs do not say that a named third-party store works. A store without
-   conditional writes is not supported. This ADR does not decide whether the
-   project will support one later.
+   OpenDustpan must work with any S3-compatible store, also with a store
+   that does not enforce conditional writes. A later decision defines how
+   the server works with such a store. The docs do not say that a named
+   third-party store works.
 6. **Measured figures, no SLA, no compliance claim (owner).** The docs give
    the recovery figures that the exit test of milestone 7 measures. Each
    figure says that the e2e suite measured it, and on which date. The
