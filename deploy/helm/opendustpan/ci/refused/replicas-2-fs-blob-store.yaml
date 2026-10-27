@@ -1,0 +1,9 @@
+# Refused: several replicas with the fs blob store.
+# want: replicas is 2 and blobStore.type is fs
+database:
+  existingSecret:
+    name: opendustpan-database
+keyEncryptionKey:
+  existingSecret:
+    name: opendustpan-key-encryption-key
+replicas: 2

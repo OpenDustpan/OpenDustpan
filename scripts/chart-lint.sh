@@ -6,8 +6,10 @@
 #   schema needs a database and a key-encryption key. The error must name
 #   the setting.
 # - `helm lint --strict` with each file in ci/ must pass.
-# - `helm lint --strict` with each file in ci/refused/ must fail. Each file
-#   has a line `# want: <text>`, and the output of helm must hold the text.
+# - `helm template` with each file in ci/refused/ must fail. Each file has a
+#   line `# want: <text>`, and the output of helm must hold the text. It is
+#   `helm template`, not `helm lint`, because lint reports a `fail` call of a
+#   template as information and exits 0.
 # - `helm template` with each file in ci/ goes through `kubeconform -strict`
 #   for each Kubernetes version in KUBE_VERSIONS: the oldest and the newest
 #   minor version that the Kubernetes project supports. The ServiceMonitor
@@ -58,11 +60,11 @@ for f in "$chart"/ci/refused/*.yaml; do
     fail=1
     continue
   fi
-  if out=$(helm lint --strict --kube-version "$lint_version" "$chart" -f "$f" 2>&1); then
-    echo "FAIL: helm lint passed $f, but it must fail" >&2
+  if out=$(helm template release "$chart" --namespace dustpan --kube-version "$lint_version" -f "$f" 2>&1); then
+    echo "FAIL: helm template passed $f, but it must fail" >&2
     fail=1
   elif ! printf '%s\n' "$out" | grep -qF -- "$want"; then
-    echo "FAIL: helm lint of $f did not print: $want" >&2
+    echo "FAIL: helm template of $f did not print: $want" >&2
     fail=1
   fi
 done

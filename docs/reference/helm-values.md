@@ -23,7 +23,36 @@ A test compares this page with `values.yaml`. The test fails when a key is not o
 
 | Key | Default | Description |
 | --- | --- | --- |
-| `replicas` | `1` | The number of server instances. The schema accepts 1 only in this release, because the server work for several instances is not complete. |
+| `replicas` | `1` | The number of server instances of one installation. With 1, the Deployment uses the `Recreate` strategy. With more than 1, it uses `RollingUpdate` with `maxUnavailable` 0 and `maxSurge` 1, and the chart refuses settings that keep state on one pod. See [Install with Helm](../guides/kubernetes.md#several-instances). |
+
+## `podDisruptionBudget`
+
+| Key | Default | Description |
+| --- | --- | --- |
+| `podDisruptionBudget.enabled` | `true` | Make a PodDisruptionBudget for the server pods. The chart makes it only when `replicas` is above 1. |
+| `podDisruptionBudget.minAvailable` | `1` | The number of server pods that must stay available during a voluntary disruption. It must be less than `replicas`, or the chart refuses the install. |
+
+## `spreadAcrossNodes`
+
+| Key | Default | Description |
+| --- | --- | --- |
+| `spreadAcrossNodes` | `true` | When `replicas` is above 1, add a soft topology spread constraint (`maxSkew` 1, `ScheduleAnyway`, key `kubernetes.io/hostname`) to the server pods. It adds to `topologySpreadConstraints` and does not replace it. |
+
+## `preStopSeconds`
+
+| Key | Default | Description |
+| --- | --- | --- |
+| `preStopSeconds` | `15` | When `replicas` is above 1, the seconds that a server pod waits in a `preStop` hook before it gets SIGTERM. At the start of termination the pod leaves the Service endpoints. The wait gives load balancers time to stop sending requests while the pod still answers. The readiness probe does not fail in this time. It must be more than `probes.readiness.periodSeconds`. `terminationGracePeriodSeconds` must be at least this value + 30. The chart refuses the install otherwise. |
+
+## `worker`
+
+| Key | Default | Description |
+| --- | --- | --- |
+| `worker.enabled` | `false` | Make a second Deployment that runs `opendustpan serve --components worker`. The server Deployment then runs `--components api`. The worker pods get no Service. It needs `blobStore.type: s3` and a backup target that is not `dir`. |
+| `worker.replicas` | `1` | The number of worker pods. The Deployment uses `RollingUpdate` with `maxUnavailable` 0 and `maxSurge` 1. |
+| `worker.resources.requests.cpu` | `100m` | The CPU request of the worker container. |
+| `worker.resources.requests.memory` | `256Mi` | The memory request of the worker container. |
+| `worker.resources.limits.memory` | `1Gi` | The memory limit of the worker container. |
 
 ## `database`
 
@@ -282,7 +311,7 @@ The container security context. The schema holds each value fixed. The root file
 
 | Key | Default | Description |
 | --- | --- | --- |
-| `terminationGracePeriodSeconds` | `30` | The time in seconds that the pod has to stop. |
+| `terminationGracePeriodSeconds` | `60` | The time in seconds that the pod has to stop. The server needs up to 30 s to finish its requests. With `replicas` above 1, it must be at least `preStopSeconds` + 30. |
 
 ## Notes on nested keys
 

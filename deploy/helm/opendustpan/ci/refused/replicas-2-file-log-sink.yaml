@@ -1,0 +1,17 @@
+# Refused: several replicas with a file: log sink.
+# want: server.extraEnv DUSTPAN_LOG_SINK has a file: sink
+database:
+  existingSecret:
+    name: opendustpan-database
+keyEncryptionKey:
+  existingSecret:
+    name: opendustpan-key-encryption-key
+replicas: 2
+blobStore:
+  type: s3
+  s3:
+    bucket: dustpan-state
+server:
+  extraEnv:
+    - name: DUSTPAN_LOG_SINK
+      value: stderr file:/var/log/server.log

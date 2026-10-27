@@ -1,0 +1,11 @@
+# Refused: a worker Deployment with the fs blob store.
+# want: worker.enabled is true and blobStore.type is fs
+database:
+  existingSecret:
+    name: opendustpan-database
+keyEncryptionKey:
+  existingSecret:
+    name: opendustpan-key-encryption-key
+worker:
+  enabled: true
+  replicas: 1

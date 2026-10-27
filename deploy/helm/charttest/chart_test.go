@@ -44,6 +44,7 @@ func TestTemplateGolden(t *testing.T) {
 		{name: "s3", values: "ci/s3-values.yaml"},
 		{name: "tls-dir-backup", values: "ci/tls-dir-backup-values.yaml"},
 		{name: "numeric-secret-key", values: "ci/numeric-secret-key-values.yaml"},
+		{name: "ha", values: "ci/ha.yaml"},
 	}
 
 	for _, tc := range tests {
@@ -69,6 +70,38 @@ func TestTemplateGolden(t *testing.T) {
 
 			compareGolden(t, filepath.Join("testdata", tc.name+".golden.yaml"), res.stdout)
 		})
+	}
+}
+
+// TestNetworkPolicySelector checks that the NetworkPolicy selects the server
+// and worker pods by component, and that no part of it selects the backup
+// CronJob pods as its subject, because the backup client must reach the
+// server and the policy limits egress of the pods it selects.
+func TestNetworkPolicySelector(t *testing.T) {
+	t.Parallel()
+
+	helm := requireHelm(t)
+
+	res := run(t, helm, []string{
+		"template", "release", chartDir, "--kube-version", kubeVersion,
+		"--namespace", "dustpan",
+		"--values", filepath.Join(chartDir, "ci", "ha.yaml"),
+		"--show-only", "templates/networkpolicy.yaml",
+	})
+	if res.err != nil {
+		t.Fatalf("helm template: %v\n%s", res.err, res.stderr)
+	}
+
+	want := "  podSelector:\n    matchLabels:\n      app.kubernetes.io/name: opendustpan\n" +
+		"      app.kubernetes.io/instance: release\n    matchExpressions:\n" +
+		"      - key: app.kubernetes.io/component\n        operator: In\n        values:\n" +
+		"          - server\n          - worker\n"
+	if !strings.Contains(res.stdout, want) {
+		t.Errorf("NetworkPolicy podSelector does not select component In [server, worker]:\n%s", res.stdout)
+	}
+
+	if !strings.Contains(res.stdout, "app.kubernetes.io/component: backup") {
+		t.Errorf("NetworkPolicy ingress has no rule for the backup pods:\n%s", res.stdout)
 	}
 }
 
@@ -138,6 +171,93 @@ func TestTemplateRefused(t *testing.T) {
 			},
 			wantText: [][]string{{"metrics.serviceMonitor.tokenSecret names the same Secret and key"}},
 		},
+		{
+			name:     "several replicas with the fs blob store",
+			useBase:  true,
+			set:      []string{"--set", "replicas=2"},
+			wantText: [][]string{{"replicas is 2 and blobStore.type is fs"}},
+		},
+		{
+			name:    "several replicas with a dir backup target",
+			useBase: true,
+			set: append(s3Blob(),
+				"--set", "replicas=3",
+				"--set", "backup.target.type=dir",
+			),
+			wantText: [][]string{{"replicas is 3 and backup.target.type is dir"}},
+		},
+		{
+			name:    "several replicas with a file audit sink",
+			useBase: true,
+			set: append(s3Blob(),
+				"--set", "replicas=2",
+				"--set", "server.extraEnv[0].name=DUSTPAN_AUDIT_SINK",
+				"--set-string", "server.extraEnv[0].value=blob:audit siem=file:/var/log/audit.log",
+			),
+			wantText: [][]string{{"server.extraEnv DUSTPAN_AUDIT_SINK has a file: sink"}},
+		},
+		{
+			name:    "several replicas with a file log sink",
+			useBase: true,
+			set: append(s3Blob(),
+				"--set", "replicas=2",
+				"--set", "server.extraEnv[0].name=DUSTPAN_LOG_SINK",
+				"--set-string", "server.extraEnv[0].value=file:/var/log/server.log",
+			),
+			wantText: [][]string{{"server.extraEnv DUSTPAN_LOG_SINK has a file: sink"}},
+		},
+		{
+			name:    "several replicas with SQLite",
+			useBase: true,
+			set: append(s3Blob(),
+				"--set", "replicas=2",
+				"--set", "server.extraEnv[0].name=DUSTPAN_STATE_DATABASE",
+				"--set-string", "server.extraEnv[0].value=sqlite:/data/state.db",
+			),
+			wantText: [][]string{{"starts with sqlite:"}},
+		},
+		{
+			name:    "preStop wait not longer than the readiness period",
+			useBase: true,
+			set: append(s3Blob(),
+				"--set", "replicas=2",
+				"--set", "preStopSeconds=10",
+			),
+			wantText: [][]string{{"the preStop wait must be longer than probes.readiness.periodSeconds"}},
+		},
+		{
+			name:    "grace period below the preStop wait and the shutdown timeout",
+			useBase: true,
+			set: append(s3Blob(),
+				"--set", "replicas=2",
+				"--set", "terminationGracePeriodSeconds=40",
+			),
+			wantText: [][]string{{"must be at least preStopSeconds (15) + 30"}},
+		},
+		{
+			name:    "minAvailable not less than replicas",
+			useBase: true,
+			set: append(s3Blob(),
+				"--set", "replicas=2",
+				"--set", "podDisruptionBudget.minAvailable=2",
+			),
+			wantText: [][]string{{"podDisruptionBudget.minAvailable (2) must be less than replicas (2)"}},
+		},
+		{
+			name:     "worker with the fs blob store",
+			useBase:  true,
+			set:      []string{"--set", "worker.enabled=true"},
+			wantText: [][]string{{"worker.enabled is true and blobStore.type is fs"}},
+		},
+		{
+			name:    "worker with a dir backup target",
+			useBase: true,
+			set: append(s3Blob(),
+				"--set", "worker.enabled=true",
+				"--set", "backup.target.type=dir",
+			),
+			wantText: [][]string{{"worker.enabled is true and backup.target.type is dir"}},
+		},
 	}
 
 	for _, tc := range tests {
@@ -162,6 +282,15 @@ func TestTemplateRefused(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// s3Blob returns the settings that move the blob store to a bucket, so that a
+// case tests one refusal at a time.
+func s3Blob() []string {
+	return []string{
+		"--set", "blobStore.type=s3",
+		"--set", "blobStore.s3.bucket=state-bucket",
 	}
 }
 

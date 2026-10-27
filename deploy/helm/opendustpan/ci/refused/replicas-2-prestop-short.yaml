@@ -1,0 +1,14 @@
+# Refused: a preStop wait that is not longer than the readiness period.
+# want: the preStop wait must be longer than probes.readiness.periodSeconds
+database:
+  existingSecret:
+    name: opendustpan-database
+keyEncryptionKey:
+  existingSecret:
+    name: opendustpan-key-encryption-key
+replicas: 2
+preStopSeconds: 10
+blobStore:
+  type: s3
+  s3:
+    bucket: dustpan-state

@@ -1,0 +1,17 @@
+# Refused: several replicas with a sqlite: database in the environment.
+# want: starts with sqlite:
+database:
+  existingSecret:
+    name: opendustpan-database
+keyEncryptionKey:
+  existingSecret:
+    name: opendustpan-key-encryption-key
+replicas: 2
+blobStore:
+  type: s3
+  s3:
+    bucket: dustpan-state
+server:
+  extraEnv:
+    - name: DUSTPAN_STATE_DATABASE
+      value: sqlite:/data/state.db

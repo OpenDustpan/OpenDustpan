@@ -1,0 +1,18 @@
+# Refused: a worker Deployment with a dir backup target.
+# want: worker.enabled is true and backup.target.type is dir
+database:
+  existingSecret:
+    name: opendustpan-database
+keyEncryptionKey:
+  existingSecret:
+    name: opendustpan-key-encryption-key
+worker:
+  enabled: true
+  replicas: 1
+blobStore:
+  type: s3
+  s3:
+    bucket: dustpan-state
+backup:
+  target:
+    type: dir
