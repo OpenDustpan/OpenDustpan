@@ -116,9 +116,9 @@ is the room, `https://<homeserver>/_matrix/client/v3/rooms/<room ID>` with the
 room ID percent-encoded (`!` is `%21` and `:` is `%3A`). The server sends the
 room in that form and then adds `/send/m.room.message/<notification ID>`. The
 `accessToken` is the access token of the account that posts. The host is any
-host that the outbound rules allow. A destination whose sealed URL is missing, does not open,
-or has another host than the `target` answers 422 `sink.no-url`, and the server
-sends nothing. Set the URL again with a change. See
+host that the outbound rules allow. A destination whose sealed URL is missing,
+does not open, or has another host than the `target` answers 422 `sink.no-url`,
+and the server sends nothing. Set the URL again with a change. See
 `docs/guides/slack-notifications.md` for the message.
 
 A name that resolves to an address that the outbound rules refuse gives the
