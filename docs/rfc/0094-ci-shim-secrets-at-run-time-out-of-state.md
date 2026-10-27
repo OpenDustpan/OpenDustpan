@@ -138,14 +138,20 @@ is not a job: the server schedules no work and holds no claim.
   recommendation needs none: the route declares that it takes no key.
 - **ADR 203 decision 1**, to add the consumer `ci` (C1). The consumer `ci`
   takes trust tokens only.
-- **ADR 205 decision 3**, only if the owner picks B6.2 (the `ci_*` claims, and the unit claims when the scope holds one unit).
-  The claim set is a one-way door, so this is an open question, not a
-  recommendation for slice 1.
+- **ADR 205 decision 3**, only if the owner picks B6.2 (the `ci_*` claims,
+  and the unit claims when the scope holds one unit). The claim set is a
+  one-way door, so this is an open question, not a recommendation for slice 1.
+- **ADR 72 decision 5**, a note for the future ADR: the control list gets the
+  `jti` table (B3), the table of the fingerprints and the table of the CI run
+  keys (E1). The coverage test of ADR 72 decision 5 reads that list.
+- **ADR 203 decision 12**, a note for the future ADR: its body text says that
+  an open with no session ignores the key. ADR 210 decision 6 amends it, and
+  B3 says which reading this RFC follows.
 
 ## New dependency
 
-The server must check JWTs of other issuers and read their JWKS. The
-standard library has no JWS or JWK code. Options: a maintained JWT and JWK
+**Status: needs owner approval.** The server must check JWTs of other
+issuers and read their JWKS. The standard library has no JWS or JWK code. Options: a maintained JWT and JWK
 library, or about 300 lines of our own code on `crypto/rsa` and
 `crypto/ecdsa`. Both are a new dependency or new security code. CLAUDE.md
 says to ask before a new dependency. **The owner must approve the choice
