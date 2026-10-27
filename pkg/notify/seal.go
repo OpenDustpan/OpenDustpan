@@ -182,23 +182,31 @@ func (b SinkSealer) Open(ctx context.Context, s Sink, sealed []SealedSecret) ([]
 }
 
 // Destination is what a send to a sink needs from its secret items, opened
-// for that one send: the URL of a chat sink or of a webhook sink, and the
-// signing keys of a webhook sink. URL is empty for an email sink. Only the
-// dispatcher and the test of a sink hold one, in memory, and never log it.
+// for that one send: the URL of a chat sink or of a webhook sink, the
+// signing keys of a webhook sink, and the access token of a chat sink that
+// has one. URL is empty for an email sink. Only the dispatcher and the test
+// of a sink hold one, in memory, and never log it.
 type Destination struct {
 	URL  string
 	Keys [][]byte
+	// AuthSecret is the access token of a chat sink, or nil when the sink has
+	// none.
+	AuthSecret []byte
 }
 
-// Clear overwrites the signing keys. The caller calls it after the send.
+// Clear overwrites the signing keys and the access token. The caller calls it
+// after the send.
 func (d *Destination) Clear() {
 	for _, k := range d.Keys {
 		clear(k)
 	}
+
+	clear(d.AuthSecret)
 }
 
 // OpenDestination opens the sealed secret items of s, for a send. A chat
-// sink gives its URL, and a webhook sink its URL and its signing keys. The
+// sink gives its URL and its access token, when it has one, and a webhook sink
+// its URL and its signing keys. The
 // URL must have the host s.Target: the host is what a person approved. An
 // email sink has no secret item and gives an empty Destination.
 //
@@ -208,12 +216,12 @@ func (d *Destination) Clear() {
 // another host than the target. The error never holds a value.
 func (b SinkSealer) OpenDestination(ctx context.Context, s Sink, sealed []SealedSecret) (Destination, error) {
 	if s.Kind == SinkEmail {
-		return Destination{URL: "", Keys: nil}, nil
+		return Destination{URL: "", Keys: nil, AuthSecret: nil}, nil
 	}
 
 	values, err := b.Open(ctx, s, sealed)
 	if err != nil {
-		return Destination{URL: "", Keys: nil}, fmt.Errorf("%w: %w", ErrNoURL, err)
+		return Destination{URL: "", Keys: nil, AuthSecret: nil}, fmt.Errorf("%w: %w", ErrNoURL, err)
 	}
 
 	// Defense in depth: Sink.Validate keeps one URL item and, for a webhook, at
@@ -224,20 +232,39 @@ func (b SinkSealer) OpenDestination(ctx context.Context, s Sink, sealed []Sealed
 			clear(v)
 		}
 
-		return Destination{URL: "", Keys: nil}, fmt.Errorf("%w: sink %s lacks a secret item", ErrNoURL, s.ID)
+		return Destination{
+			URL:        "",
+			Keys:       nil,
+			AuthSecret: nil,
+		}, fmt.Errorf(
+			"%w: sink %s lacks a secret item",
+			ErrNoURL,
+			s.ID,
+		)
 	}
 
-	d := Destination{URL: string(values[0]), Keys: values[1:]}
+	d := Destination{URL: string(values[0]), Keys: values[1:], AuthSecret: nil}
 	clear(values[0])
 
 	if s.Kind == SinkChat {
+		// The second item of a chat sink is its access token, not a signing key.
+		// Defense in depth: Sink.Validate allows two items at most. This code
+		// stays so that a sink that skipped it never sends a third item.
 		d.Keys = nil
+
+		if len(values) > 1 {
+			d.AuthSecret = values[1]
+		}
+
+		for _, extra := range values[min(maxChatSecrets, len(values)):] {
+			clear(extra)
+		}
 	}
 
 	if err = checkDestination(s, d.URL); err != nil {
 		d.Clear()
 
-		return Destination{URL: "", Keys: nil}, err
+		return Destination{URL: "", Keys: nil, AuthSecret: nil}, err
 	}
 
 	return d, nil

@@ -106,6 +106,20 @@ func (s *Sender) Serves(sink notify.Sink) bool {
 	return sink.Kind == notify.SinkChat && ok
 }
 
+// TakesAuthSecret reports whether the renderer of platform needs an access
+// token besides the URL (see AuthRenderer). It reports false for a platform
+// with no renderer. The sink service asks it when a person saves a sink.
+func (s *Sender) TakesAuthSecret(platform string) bool {
+	r, ok := s.renderers[Platform(platform)]
+	if !ok {
+		return false
+	}
+
+	a, ok := r.(AuthRenderer)
+
+	return ok && a.AuthSecret()
+}
+
 // CheckHost returns an error that matches notify.ErrInvalid when the renderer
 // of platform does not take host as a webhook host. It returns nil for a
 // platform with no renderer: the sender cannot judge it. The sink service calls
@@ -119,7 +133,8 @@ func (s *Sender) CheckHost(platform, host string) error {
 	return r.CheckHost(host)
 }
 
-// Send posts m.Notification to the webhook URL m.To. A 2xx answer that the
+// Send posts m.Notification to the webhook URL m.To. For a platform with an
+// AuthRenderer, the first value of m.Secrets is the access token. A 2xx answer that the
 // renderer accepts means the platform holds the message. It makes one attempt.
 // Send returns an error that matches:
 //   - egress.ErrRefused for a URL, a port or a host that the rules refuse, for
@@ -157,6 +172,10 @@ func (s *Sender) Send(ctx context.Context, m notify.Message) error {
 	httpReq, err := s.request(ctx, target, req)
 	if err != nil {
 		return err
+	}
+
+	if authErr := authorize(r, httpReq, m.Secrets); authErr != nil {
+		return authErr
 	}
 
 	ctx, cancel := context.WithTimeout(ctx, s.timeout)
@@ -238,6 +257,36 @@ func (s *Sender) request(ctx context.Context, base *url.URL, req Request) (*http
 	httpReq.Header.Set("Content-Type", req.ContentType)
 
 	return httpReq, nil
+}
+
+// authorize sets the header Authorization of httpReq to the access token, when
+// the renderer needs one (see AuthRenderer). It returns ErrPermanent when the
+// renderer needs a token and the sink has none, or has one that is not a
+// valid header value. For a renderer that needs none it sends no token, also
+// when the message holds one. The error text is fixed and never holds the
+// token.
+//
+// Defense in depth: the sink service checks the token when a person saves it.
+// This check stays so that a sink that a restore left behind, or a caller
+// that skips the service, cannot make the sender write a line break or a
+// space into a header, or send a token to a platform that does not take one.
+func authorize(r Renderer, httpReq *http.Request, secrets [][]byte) error {
+	if a, ok := r.(AuthRenderer); !ok || !a.AuthSecret() {
+		return nil
+	}
+
+	var token []byte
+	if len(secrets) > 0 {
+		token = secrets[0]
+	}
+
+	if !notify.ValidAccessToken(token) {
+		return fmt.Errorf("%s: %w: the sink has no usable access token", op, notify.ErrPermanent)
+	}
+
+	httpReq.Header.Set("Authorization", "Bearer "+string(token))
+
+	return nil
 }
 
 // checkRequest returns ErrPermanent for a request of a renderer that breaks

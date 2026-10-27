@@ -372,3 +372,66 @@ func TestValidateSealed(t *testing.T) {
 		})
 	}
 }
+
+// chatSink returns a chat sink with the refs.
+func chatSink(refs ...string) notify.Sink {
+	s := sealSink("snk-1", "shop", refs...)
+	s.Kind, s.Platform, s.Target = notify.SinkChat, "matrix", "chat.example.com"
+
+	return s
+}
+
+// TestOpenDestinationOfAChatSinkKeepsItsAccessToken checks that the second
+// item of a chat sink is its access token and not a signing key, and that a
+// chat sink with only a URL has no token.
+func TestOpenDestinationOfAChatSinkKeepsItsAccessToken(t *testing.T) {
+	t.Parallel()
+
+	const url = "https://chat.example.com/_matrix/client/v3/rooms/room"
+
+	b := newSinkSealer(t)
+
+	t.Run("a URL and an access token", func(t *testing.T) {
+		t.Parallel()
+
+		s := chatSink("itm-1", "itm-2")
+
+		sealed, err := b.Seal(t.Context(), s, []notify.SinkSecret{plain("itm-1", url), plain("itm-2", "token-9")})
+		if err != nil {
+			t.Fatalf("Seal: %v", err)
+		}
+
+		d, err := b.OpenDestination(t.Context(), s, sealed)
+		if err != nil {
+			t.Fatalf("OpenDestination: %v", err)
+		}
+
+		if d.URL != url || string(d.AuthSecret) != "token-9" || len(d.Keys) != 0 {
+			t.Fatalf("destination = %q, token %q, %d keys; want the URL, the token and no key", d.URL, d.AuthSecret,
+				len(d.Keys))
+		}
+
+		token := d.AuthSecret
+		d.Clear()
+
+		if !bytes.Equal(token, make([]byte, len(token))) {
+			t.Error("Clear leaves the access token in memory")
+		}
+	})
+
+	t.Run("a URL only", func(t *testing.T) {
+		t.Parallel()
+
+		s := chatSink("itm-1")
+
+		sealed, err := b.Seal(t.Context(), s, []notify.SinkSecret{plain("itm-1", url)})
+		if err != nil {
+			t.Fatalf("Seal: %v", err)
+		}
+
+		d, err := b.OpenDestination(t.Context(), s, sealed)
+		if err != nil || d.URL != url || d.AuthSecret != nil || d.Keys != nil {
+			t.Fatalf("destination = %+v (%v), want the URL only", d, err)
+		}
+	})
+}

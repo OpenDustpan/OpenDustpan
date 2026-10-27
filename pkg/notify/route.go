@@ -50,9 +50,10 @@ const (
 	// contacts of the recipients of a notice.
 	SinkEmail SinkKind = "email"
 	// SinkChat posts a message to the incoming webhook URL of a chat tool.
-	// The URL holds the token of the webhook, so it is the one secret item
-	// of the sink. Target holds only the host of the URL (see ChatHost), so
-	// a read of the sink shows the host and never the URL.
+	// The URL holds the token of the webhook, so it is the first secret item
+	// of the sink. A platform that needs an access token besides the URL has
+	// it as the second item. Target holds only the host of the URL (see
+	// ChatHost), so a read of the sink shows the host and never the URL.
 	SinkChat SinkKind = "chat"
 	// SinkWebhook posts the notification as JSON to an https URL, signed
 	// with each active signing key of the sink (see Sign). The URL can hold
@@ -98,7 +99,7 @@ type Sink struct {
 // Validate returns ErrInvalid for a sink that breaks a bound, for a chat
 // sink with no known platform, for a sink of another kind with a platform,
 // for a webhook that has not a URL item and one or two signing keys, for a
-// chat sink that has not exactly one secret, and for a target that does
+// chat sink that has not a URL item and at most one access token item, and for a target that does
 // not fit the kind. The host of a webhook sink or of a chat sink must pass
 // egress.CheckURL for https only: the error then also matches
 // egress.ErrRefused.
@@ -177,6 +178,28 @@ func badRef(ref string) bool {
 // not change it.
 const NoURLRefPrefix = "itm-nourl-"
 
+// maxChatSecrets is the most secret items of a chat sink: the URL and an
+// access token.
+const maxChatSecrets = 2
+
+// ValidAccessToken reports whether token can be the access token of a chat
+// sink: 1 to MaxSecretLen bytes, each a printable ASCII character other than
+// a space, so that it holds no line break, no space and no control
+// character. The sink service and the chat sender both call it.
+func ValidAccessToken(token []byte) bool {
+	if len(token) == 0 || len(token) > MaxSecretLen {
+		return false
+	}
+
+	for _, b := range token {
+		if b <= ' ' || b >= 0x7f {
+			return false
+		}
+	}
+
+	return true
+}
+
 // MaxSecretLen caps the value of a secret item of a sink, in bytes.
 const MaxSecretLen = 4096
 
@@ -250,12 +273,15 @@ func (s Sink) validWebhook() error {
 }
 
 // validChat returns ErrInvalid for a chat sink whose target is not a host
-// that the egress rules accept, or that has not exactly one secret item,
-// which holds the URL of the webhook. It does not apply the host allowlist:
-// see ValidateWrite.
+// that the egress rules accept, or that has not a URL item and at most one
+// access token item. The first item holds the URL of the webhook, and the
+// second item, when there is one, holds the access token that the sender
+// sends in a header. Whether a platform takes a token is not a rule of this
+// package: the service that writes the sink asks the renderer of the
+// platform. It does not apply the host allowlist: see ValidateWrite.
 func (s Sink) validChat() error {
-	if len(s.SecretRefs) != 1 {
-		return fmt.Errorf("%w: a chat sink has one secret item, which holds the URL of the webhook", ErrInvalid)
+	if n := len(s.SecretRefs); n < 1 || n > maxChatSecrets {
+		return fmt.Errorf("%w: a chat sink has a URL item and at most one access token item", ErrInvalid)
 	}
 
 	return s.validHost()

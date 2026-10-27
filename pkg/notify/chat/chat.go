@@ -231,8 +231,9 @@ func checkLink(l notify.Link) error {
 }
 
 // Request is one request to a chat platform. The sender adds the base URL
-// and the timeout. It adds any authentication header from a named secret
-// item too, so a Renderer never sees a secret and cannot set a header.
+// and the timeout. For a platform with an AuthRenderer it adds the
+// authentication header from the access token of the sink too, so a Renderer
+// never sees a secret and cannot set a header.
 type Request struct {
 	// Method is POST or PUT.
 	Method string
@@ -276,6 +277,21 @@ type Renderer interface {
 	// for a platform that answers 2xx with a refusal in the body. The error text
 	// never holds the body.
 	Check(status int, body []byte) error
+}
+
+// AuthRenderer is a Renderer for a platform whose API needs an access token
+// besides the URL of the sink, for example a platform with no incoming
+// webhook. A Renderer that does not implement it takes no token: the service
+// that writes a sink refuses a token for its platform, and the Sender sends
+// none.
+type AuthRenderer interface {
+	Renderer
+	// AuthSecret reports that the platform needs an access token. The sink
+	// then has the token as its second secret item, sealed like the URL, and
+	// the Sender sends it as the header "Authorization: Bearer <token>" after
+	// it checked that the token holds only printable ASCII characters other
+	// than a space. A Renderer never sees the token.
+	AuthSecret() bool
 }
 
 // HostRuleError is the error of Renderer.CheckHost. It matches

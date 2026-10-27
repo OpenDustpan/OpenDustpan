@@ -290,6 +290,24 @@ func buildFixtureWith(
 ) fixture {
 	t.Helper()
 
+	return buildFixtureFull(t, middleware, wrap, nil, deny...)
+}
+
+// newFixtureWithSenders is newFixture with the senders extra, besides the
+// recording sender of the webhook kind.
+func newFixtureWithSenders(t *testing.T, extra ...notify.Sender) fixture {
+	t.Helper()
+
+	return buildFixtureFull(t, keyMiddleware, nil, extra)
+}
+
+// buildFixtureFull is buildFixtureWith with the senders extra.
+func buildFixtureFull(
+	t *testing.T, middleware func(*testing.T, *sqlite.Store, *testClock) *idempotent.Middleware,
+	wrap func(*sqlite.Store, notify.SinkStore) notify.SinkStore, extra []notify.Sender, deny ...identity.Action,
+) fixture {
+	t.Helper()
+
 	store, secrets, namespaces := openStore(t)
 	hook := &recordingSender{kind: notify.SinkWebhook, mu: sync.Mutex{}, err: nil, sent: nil}
 
@@ -300,7 +318,7 @@ func buildFixtureWith(
 
 	svc, err := sinks.NewService(sinks.Config{
 		Store: sinkStore, Sealer: notify.SinkSealer{Namespaces: secrets, Installation: nil},
-		Namespaces: namespaces, Senders: []notify.Sender{hook}, Ports: egress.Ports{}, Now: nil,
+		Namespaces: namespaces, Senders: append([]notify.Sender{hook}, extra...), Ports: egress.Ports{}, Now: nil,
 	})
 	if err != nil {
 		t.Fatalf("sink service: %v", err)
