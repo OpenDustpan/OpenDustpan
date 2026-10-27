@@ -19,7 +19,7 @@ make bench-s3
 
 `scripts/bench-s3.sh` starts four containers on a private Docker network.
 It publishes their ports on 127.0.0.1 only.
-It writes throwaway credentials to a temporary directory with mode 0700 and removes the directory, the containers and the network at the end.
+It writes throwaway credentials to a temporary directory with mode 0700 and deletes the directory, the containers and the network at the end.
 The results go to `bench-s3-out/`: `results.json`, `results.md`, `images.txt`, and one report and one log of the load harness for each step in `load/`.
 
 | Variable | Default | Meaning |
@@ -51,11 +51,26 @@ This is the case that costs the database-arbitrated design the most, because tha
 
 | Part | What runs | Code or model |
 | --- | --- | --- |
-| Blob PUT | 10 KiB, 1 MiB and 100 MiB. Three modes take turns, one write each: the `blob/s3` adapter `Put` (it stages the body in a file, hashes it and sends `If-None-Match: *`), one signed raw PUT with the header, and one signed raw PUT without the header under a unique key | Adapter: code. Raw plain PUT: model of the new write |
-| Modeled sequences | The requests of each design in their order, with PostgreSQL model tables: a fence row and a row that names each blob key. A fenced transaction is BEGIN, a `SELECT ... FOR SHARE` of the fence row, an INSERT and COMMIT: 4 round trips | Model |
-| Orphan sweep | 1,000 objects under one unit directory. The timed part is one LIST, one read of the keep set, and one DELETE for each orphan, one after the other, as the stack and workspace services sweep | Adapter calls: code. Keep-set read: model |
-| CLI flows | `go run ./load -flows blobs` on S3 and PostgreSQL through the proxies: the OpenTofu state upload and the Pulumi checkpoint save, and a backup and a restore of a fixed data set through the server API. MinIO opens with the conditional-write probe, as the server binary does. Garage opens without it, because the server binary refuses a store that ignores `If-None-Match` | Code |
-| Limit sweep (`-limits`) | The CLI flows on MinIO while the S3 round trip rises with the database at loopback, then while the database round trip rises with S3 at loopback | Code |
+| Blob PUT | 10 KiB, 1 MiB and 100 MiB in three modes. The modes take turns, one write each. See the list below | Adapter: code. Raw plain PUT: model of the new write |
+| Modeled sequences | The requests of each design in their order, against PostgreSQL model tables. One table holds a fence row. One table holds a row that names each blob key | Model |
+| Orphan sweep | 1,000 objects under one unit directory. The timed part is one LIST, one read of the keep set, and one delete request for each orphan. The deletes run one after the other, as in the stack and workspace services | Adapter calls: code. Keep-set read: model |
+| CLI flows | `go run ./load -flows blobs` on S3 and PostgreSQL through the proxies. See the list below | Code |
+| Limit sweep (`-limits`) | The CLI flows on MinIO at each step. First the S3 round trip rises with the database at loopback. Then the database round trip rises with S3 at loopback | Code |
+
+The three PUT modes:
+
+- The `blob/s3` adapter `Put`. It stages the body in a file, hashes it and sends `If-None-Match: *`.
+- One signed raw PUT with the header.
+- One signed raw PUT without the header, under a unique key.
+
+A fenced transaction of the model is 4 round trips.
+They are the transaction start, a read of the fence row with a share lock, the insert, and the commit.
+
+The CLI flows are the OpenTofu state upload and the Pulumi checkpoint save.
+They also include a backup and a restore of a fixed data set through the server API.
+MinIO opens with the conditional-write probe, as the server binary does.
+Garage opens without the probe.
+The server binary refuses a store that ignores `If-None-Match`, so Garage runs only without the probe.
 
 The three modeled flows follow the request sequences of the database-arbitrated design:
 
@@ -79,7 +94,8 @@ A bound j on each direction gives a standard deviation of j × √(2/3) over the
 | `continent` | 65 | 4 | US East to US West 56 to 73 ms, Singapore to Tokyo 68 to 72 ms, standard deviation about 3 ms |
 | `intercontinental` | 150 | 6 | Virginia to Tokyo 145 to 162 ms, Frankfurt to Singapore 153 to 167 ms, standard deviation about 5 ms |
 
-Shorter pairs outside Europe fit `eu-metro`: Ashburn to New York 6 ms, Tokyo to Osaka 10 to 12 ms, Virginia to Ohio 13 ms.
+Some shorter pairs outside Europe fit `eu-metro`.
+Examples are Ashburn to New York (6 ms), Tokyo to Osaka (10 to 12 ms) and Virginia to Ohio (13 ms).
 Frankfurt to Virginia is 81 to 94 ms and Frankfurt to Sydney is 255 to 301 ms.
 The limit sweep covers these values.
 
@@ -102,7 +118,8 @@ The limit sweep covers these values.
 | [Hats Network latency pairs](https://hatsnet.io/docs/network/latency/pairs) | ISP backbone, 50 ICMP probes for each pair: mean, standard deviation and jitter | 2026-10-20 | fetched |
 | [Verizon IP latency statistics](https://www.verizon.com/business/terms/latency/) | Monthly mean between Verizon backbone hubs | 2026-09 | fetched |
 
-No source gave measured inter-region values for GCP, or measured p50 and p99 across AZs in AWS us-east-1 or eu-central-1, Azure West Europe or GCP europe-west.
+No source gave measured inter-region values for GCP.
+No source gave measured p50 and p99 across AZs in AWS us-east-1 or eu-central-1, Azure West Europe or GCP europe-west.
 
 ## Limits of the method
 
@@ -117,9 +134,10 @@ No source gave measured inter-region values for GCP, or measured p50 and p99 acr
 This benchmark does not test partitions.
 A partition test needs these parts:
 
-- A Toxiproxy `timeout` or `reset_peer` toxic on the S3 path, on the database path, and on both, for a set time during each flow: the PUT, the fenced transaction, the commit, and the sweep.
+- A Toxiproxy `timeout` or `reset_peer` toxic for a set time during each flow. Apply it on the S3 path, on the database path, and on both.
+- Partitions at each step of a write: the PUT, the fenced transaction, the commit, and the sweep.
 - Two or more server instances on one database, so that one instance loses S3 while the other keeps it.
-- An oracle for each flow: after the partition heals, each unit reads back the last committed state, no row names a missing blob, and the sweep removes each orphan after the grace period.
-- Checks of the durable operations: a backup or a restore that loses the database for longer than the lease (30 seconds) must end as failed, with an audit record, and another instance must be able to take it over.
-- A store that answers 503 or `SlowDown` during the partition, to test the retry bound of the S3 adapter (5 attempts).
-- Runs of the real CLIs through the e2e suite, because the CLI retry rules decide what a person sees: the OpenTofu `cloud` backend retries a 5xx 30 times, the `http` backend 2 times, and the Pulumi CLI does not retry `CreateUpdate` and `StartUpdate`.
+- An oracle for each flow after the partition heals. Each unit reads back the last committed state. No row names a missing blob. The sweep deletes each orphan after the grace period.
+- Checks of the durable operations. A backup or a restore that loses the database for longer than the lease (30 seconds) must end as failed, with an audit record. Another instance must be able to take it over.
+- A store that answers 503 or `SlowDown` during the partition. This tests the retry bound of the S3 adapter (5 attempts).
+- Runs of the real CLIs through the e2e suite, because the retry rules of each CLI decide what a person sees. The OpenTofu `cloud` backend retries a 5xx 30 times and the `http` backend 2 times. The Pulumi CLI does not retry `CreateUpdate` and `StartUpdate`.
