@@ -61,6 +61,8 @@ type Row struct {
 	Body      string
 	CreatedMs int64
 	UpdatedMs int64
+	// StateChangedMs is the time of the last change of State.
+	StateChangedMs int64
 }
 
 // FreezeRow is one stored change freeze. A zero EndsMs means no end.
@@ -99,6 +101,9 @@ type Query struct {
 	States    []job.State
 	Limit     int
 	After     job.ID
+	// StateChangedBeforeMs selects the jobs whose state last changed before
+	// this time. 0 selects every job.
+	StateChangedBeforeMs int64
 }
 
 // Tx reads and writes the rows of one transaction. An adapter implements it

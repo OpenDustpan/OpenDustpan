@@ -308,6 +308,7 @@ func testList(t *testing.T, h Harness) {
 
 	all, err := h.Jobs.List(t.Context(), job.Filter{
 		Namespace: f.fence.Namespace, UnitID: "", States: nil, Limit: 0, After: "",
+		StateChangedBefore: time.Time{},
 	})
 	if err != nil || len(all) != 2 || all[0].ID != newer.ID || all[1].ID != older.ID {
 		t.Fatalf("List = %v, %v; want %s then %s", ids(all), err, newer.ID, older.ID)
@@ -315,7 +316,8 @@ func testList(t *testing.T, h Harness) {
 
 	queued, err := h.Jobs.List(t.Context(), job.Filter{
 		Namespace: f.fence.Namespace, UnitID: f.unit.UnitID(), States: []job.State{job.StateQueued}, Limit: 0,
-		After: "",
+		After:              "",
+		StateChangedBefore: time.Time{},
 	})
 	if err != nil || !slices.Equal(ids(queued), []job.ID{older.ID}) {
 		t.Fatalf("List(queued) = %v, %v; want %s", ids(queued), err, older.ID)

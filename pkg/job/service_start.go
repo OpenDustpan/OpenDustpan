@@ -463,6 +463,7 @@ func (s *service) newJob(a Actor, c *decided) Job {
 		Closed:       nil,
 		Verification: VerificationNone, IdempotencyKey: scopedKey(a.Principal.Subject, c.req.IdempotencyKey),
 		RequestHash: requestHash(c.req), Version: 0, CreatedAt: time.Time{}, UpdatedAt: time.Time{},
+		StateChangedAt: time.Time{},
 	}
 
 	for i, k := range c.kinds {

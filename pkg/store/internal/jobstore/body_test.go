@@ -108,6 +108,7 @@ func fullJob(t *testing.T) job.Job {
 		Version:        7,
 		CreatedAt:      at,
 		UpdatedAt:      at,
+		StateChangedAt: time.Time{},
 	}
 }
 
@@ -182,6 +183,7 @@ func TestRowMustAgreeWithItsBody(t *testing.T) {
 			ID: j.ID, Namespace: namespace.Name(ns), UnitID: unit, Seq: 1, State: j.State, Wait: j.Wait,
 			Phase: j.Current, Changes: false, Operation: "", Key: j.IdempotencyKey, Version: j.Version, Body: body,
 			CreatedMs: j.CreatedAt.UnixMilli(), UpdatedMs: j.UpdatedAt.UnixMilli(),
+			StateChangedMs: 0,
 		}
 	}
 

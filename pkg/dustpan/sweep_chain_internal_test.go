@@ -23,6 +23,7 @@ func sweepChainServer(
 	return &Server{
 		kind:             kindState{store: nil, principals: nil, kind: ""},
 		tempAdmins:       nil,
+		reconciler:       nil,
 		handler:          nil,
 		started:          nil,
 		ungated:          nil,

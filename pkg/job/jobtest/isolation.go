@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"testing"
+	"time"
 
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/job"
@@ -104,6 +105,7 @@ func testParallelCreatesOneKey(t *testing.T, h Harness) {
 
 	all, err := h.Jobs.List(t.Context(), job.Filter{
 		Namespace: f.fence.Namespace, UnitID: "", States: nil, Limit: 0, After: "",
+		StateChangedBefore: time.Time{},
 	})
 	if err != nil || len(all) != 1 {
 		t.Fatalf("List = %d jobs, %v; want 1", len(all), err)

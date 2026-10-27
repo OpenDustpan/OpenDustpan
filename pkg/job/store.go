@@ -135,6 +135,9 @@ type Filter struct {
 	Limit  int
 	// After is the ID of the last job of the previous page.
 	After ID
+	// StateChangedBefore selects the jobs whose state last changed before this
+	// time. The zero time selects every job.
+	StateChangedBefore time.Time
 }
 
 // Store is the persistence port for jobs. Each SQL store adapter implements
@@ -143,10 +146,10 @@ type Filter struct {
 // A job is data of its namespace: the backup of the namespace holds it, and
 // every write checks fence and appends its audit entries in its
 // transaction. The durable operations of its phases are control data, which
-// a restore keeps. A later change adds a reconcile schedule that applies
-// AfterOperationEnded to each job that Orphans returns. Until then, nothing
-// in the server calls Orphans. A phase that changes resources never
-// dispatches again on its own.
+// a restore keeps. The reconcile schedule (Reconciler) applies
+// AfterOperationEnded to each job that Orphans returns, expires the jobs past
+// a timeout (Filter.StateChangedBefore) and dispatches the queued jobs. A phase
+// that changes resources never dispatches again on its own.
 //
 // One change at a time on a unit: a SQL adapter holds the rule with a
 // partial unique index on the unit ID of the jobs table, over the rows
@@ -269,8 +272,8 @@ type Store interface {
 	// a cancel does not: the claimer takes such an operation and ends the
 	// phase (durable.ClaimRequest.TakeCanceled). The claimer never leaves a
 	// job with an operation that ended and no event, because it ends the
-	// operation and applies the event in one transaction (Change.End). A later change adds a reconcile
-	// schedule that applies the event of AfterOperationEnded to each job that
+	// operation and applies the event in one transaction (Change.End). The reconcile schedule
+	// (Reconciler) applies the event of AfterOperationEnded to each job that
 	// this method returns: a change that began fails the job,
 	// and a canceling job with no change ends canceled.
 	Orphans(ctx context.Context, limit int) ([]Orphan, error)

@@ -676,8 +676,11 @@ type Server struct {
 	kind kindState
 	// durable keeps the job schedules, or is nil without them. inactivityEvery
 	// and deletedEvery are the periods of those schedules.
-	durable         DurableStore
-	durableOwner    string
+	durable      DurableStore
+	durableOwner string
+	// reconciler does the periodic work of the job model: the schedule
+	// job.reconcile. It is nil without a job store or a namespace service.
+	reconciler      *job.Reconciler
 	inactivityEvery time.Duration
 	deletedEvery    time.Duration
 	// components are the components this process runs. watch reads the
@@ -1044,9 +1047,12 @@ func assemble(cfg *settings, base baseurl.Resolver, svc services, backups *backu
 		return nil, err
 	}
 
-	restoreRegistry := restoreRegistryOf(cfg.namespaceStore)
-
 	flushDenials, err := denialFlusher(cfg, svc, observed)
+	if err != nil {
+		return nil, err
+	}
+
+	reconciler, err := newJobReconciler(svc, cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -1067,7 +1073,7 @@ func assemble(cfg *settings, base baseurl.Resolver, svc services, backups *backu
 		workspaces:       svc.workspaces,
 		backups:          backups,
 		restores:         mount.restores,
-		restoreRegistry:  restoreRegistry,
+		restoreRegistry:  restoreRegistryOf(cfg.namespaceStore),
 		now:              cfg.now,
 		registry:         observed.Registry(),
 		tlsCertFile:      cfg.tlsCertFile,
@@ -1085,6 +1091,7 @@ func assemble(cfg *settings, base baseurl.Resolver, svc services, backups *backu
 		kind:             newKindState(cfg),
 		durable:          cfg.durableStore,
 		durableOwner:     durableOwner(cfg),
+		reconciler:       reconciler,
 		inactivityEvery:  sweepEvery, deletedEvery: deletedSweepEvery,
 		idempotency: cfg.idempotencyStore, idempotencyEvery: idempotencySweepEvery,
 		components: cfg.components,

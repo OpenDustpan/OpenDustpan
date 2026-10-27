@@ -1,0 +1,415 @@
+package jobtest
+
+import (
+	"strings"
+	"testing"
+	"time"
+
+	"opendustpan.org/opendustpan/pkg/durable"
+	"opendustpan.org/opendustpan/pkg/job"
+)
+
+// The pause that lets the clock of a store pass a millisecond, and the number
+// of jobs that the expiry case makes.
+const (
+	clockStep    = 2 * time.Millisecond
+	expiryJobs   = 3
+	smallestStep = time.Millisecond
+)
+
+// reconcileCases returns the cases of the reconcile and of the time of the last
+// state change that it reads.
+func reconcileCases() []suiteCase {
+	return []suiteCase{
+		{"a job keeps the time of its last state change, and List filters by it", testStateChangedAt},
+		{"the reconcile leaves a locked job queued and dispatches it after the unlock", testReconcileLocked},
+		{"the reconcile dispatches a queued job when the unit is free again", testReconcileUnitBusy},
+		{"the reconcile moves a queued job with a closed gate to awaiting-approval", testReconcileGate},
+		{"the reconcile sends a queued job with a stale plan back to its plan phase", testReconcileStalePlan},
+		{"the reconcile expires the jobs past their queue, dispatch and state timeouts", testReconcileExpires},
+		{"the reconcile expires nothing before a timeout", testReconcileNotYet},
+		{"the reconcile ends the orphans and no other job", testReconcileOrphans},
+		{"a second run of the reconcile changes nothing", testReconcileTwice},
+	}
+}
+
+// reconciler returns the reconciler over the stores of h, with a clock that is
+// ahead of the real time by ahead.
+func reconciler(t *testing.T, h Harness, ahead time.Duration) *job.Reconciler {
+	t.Helper()
+
+	r, err := job.NewReconciler(job.ReconcilerConfig{
+		Store: h.Jobs, Namespaces: h.Namespaces, QueueTimeout: 0, DispatchTimeout: 0, StateTimeout: 0,
+		MaxPlanAge: 0, Batch: 0, Now: func() time.Time { return time.Now().Add(ahead) }, Log: nil,
+	})
+	if err != nil {
+		t.Fatalf("NewReconciler = %v", err)
+	}
+
+	return r
+}
+
+// runReconcile runs one reconcile of h and fails t on an error.
+func runReconcile(t *testing.T, h Harness, ahead time.Duration) job.ReconcileResult {
+	t.Helper()
+
+	res, err := reconciler(t, h, ahead).Reconcile(t.Context())
+	if err != nil {
+		t.Fatalf("Reconcile = %v", err)
+	}
+
+	return res
+}
+
+// reconcileEntries returns the audit entries that the reconcile wrote for the
+// job id.
+func reconcileEntries(t *testing.T, h Harness, f fixture, id job.ID) int {
+	t.Helper()
+
+	entries, err := h.Domain.AuditEntries(t.Context(), f.fence.Namespace)
+	if err != nil {
+		t.Fatalf("AuditEntries = %v", err)
+	}
+
+	n := 0
+
+	for i := range entries {
+		e := &entries[i]
+		if e.Subject == job.ReconcileSubject && e.JobID == string(id) && e.PrincipalKind == "service" &&
+			e.Reason != "" {
+			n++
+		}
+	}
+
+	return n
+}
+
+// checkStateChangedFilter proves that the filter is strict: it selects the jobs
+// whose state changed before the time, so the time of the change itself
+// selects none.
+func checkStateChangedFilter(t *testing.T, h Harness, j *job.Job) {
+	t.Helper()
+
+	queued := job.Filter{
+		Namespace: "", UnitID: "", States: []job.State{job.StateQueued}, Limit: 0, After: "",
+		StateChangedBefore: j.StateChangedAt,
+	}
+	if got, err := h.Jobs.List(t.Context(), queued); err != nil || len(got) != 0 {
+		t.Fatalf("List before the state change = %v, %v; want none", ids(got), err)
+	}
+
+	queued.StateChangedBefore = j.StateChangedAt.Add(smallestStep)
+	if got, err := h.Jobs.List(t.Context(), queued); err != nil || len(got) != 1 || got[0].ID != j.ID {
+		t.Fatalf("List after the state change = %v, %v; want %s", ids(got), err, j.ID)
+	}
+}
+
+func testStateChangedAt(t *testing.T, h Harness) {
+	t.Helper()
+
+	f := setUp(t, h)
+	j := create(t, h, f, newJob(f.unit, job.OperationRefresh, ""), nil)
+
+	if j.StateChangedAt.IsZero() || j.StateChangedAt.After(j.UpdatedAt) {
+		t.Fatalf("a new job has the state change time %v and the update time %v", j.StateChangedAt, j.UpdatedAt)
+	}
+
+	checkStateChangedFilter(t, h, &j)
+
+	pause(t, clockStep)
+
+	// A write that keeps the state moves the update time and not the time of
+	// the state change: the replan of a queued job is such a write.
+	stale := planned(t, h, f, svOne, time.Now())
+	again := apply(t, h, f, change(&stale, job.EventReplan))
+
+	if !again.StateChangedAt.Equal(stale.StateChangedAt) || !again.UpdatedAt.After(stale.UpdatedAt) {
+		t.Fatalf("replan of a queued job: state change time %v then %v, update time %v then %v; want the state "+
+			"change time kept and the update time moved", stale.StateChangedAt, again.StateChangedAt,
+			stale.UpdatedAt, again.UpdatedAt)
+	}
+
+	moved := apply(t, h, f, dispatch(&j))
+	if moved.State != job.StateDispatched || !moved.StateChangedAt.After(j.StateChangedAt) {
+		t.Fatalf("dispatch = %s with the state change time %v after %v; want a later time", moved.State,
+			moved.StateChangedAt, j.StateChangedAt)
+	}
+
+	got, err := h.Jobs.Get(t.Context(), j.ID)
+	if err != nil || !got.StateChangedAt.Equal(moved.StateChangedAt) {
+		t.Fatalf("Get = state change time %v, %v; want %v", got.StateChangedAt, err, moved.StateChangedAt)
+	}
+}
+
+func testReconcileLocked(t *testing.T, h Harness) {
+	t.Helper()
+
+	f := setUp(t, h)
+	lockUnit(t, h, f)
+
+	j := newJob(f.unit, job.OperationRefresh, "")
+	j.Wait = job.WaitLocked
+	queued := create(t, h, f, j, nil)
+
+	res := runReconcile(t, h, 0)
+	if res.Waiting != 1 || res.Dispatched != 0 {
+		t.Fatalf("reconcile under a manual lock = %+v; want one waiting job", res)
+	}
+
+	assertState(t, h, queued.ID, job.StateQueued)
+
+	if n := reconcileEntries(t, h, f, queued.ID); n != 0 {
+		t.Fatalf("a refused dispatch wrote %d audit entries, want none", n)
+	}
+
+	unlockUnit(t, h, f)
+
+	res = runReconcile(t, h, 0)
+	if res.Dispatched != 1 {
+		t.Fatalf("reconcile after the unlock = %+v; want one dispatch", res)
+	}
+
+	got, err := h.Jobs.Get(t.Context(), queued.ID)
+	if err != nil || got.State != job.StateDispatched || got.Phases[0].Operation == "" {
+		t.Fatalf("job after the dispatch = %s, operation %q, %v; want dispatched with an operation", got.State,
+			got.Phases[0].Operation, err)
+	}
+
+	if n := reconcileEntries(t, h, f, queued.ID); n != 1 {
+		t.Fatalf("the dispatch wrote %d audit entries of the reconcile, want 1", n)
+	}
+}
+
+func testReconcileUnitBusy(t *testing.T, h Harness) {
+	t.Helper()
+
+	f := setUp(t, h)
+	holder := runApplyPhase(t, h, f)
+	waiting := create(t, h, f, newJob(f.unit, job.OperationRefresh, ""), nil)
+
+	if res := runReconcile(t, h, 0); res.Waiting != 1 || res.Dispatched != 0 {
+		t.Fatalf("reconcile while %s holds the unit = %+v; want one waiting job", holder.ID, res)
+	}
+
+	assertState(t, h, waiting.ID, job.StateQueued)
+
+	apply(t, h, f, change(&holder, job.EventCancel))
+
+	if res := runReconcile(t, h, 0); res.Dispatched != 1 {
+		t.Fatalf("reconcile after the unit is free = %+v; want one dispatch", res)
+	}
+
+	assertState(t, h, waiting.ID, job.StateDispatched)
+}
+
+func testReconcileGate(t *testing.T, h Harness) {
+	t.Helper()
+
+	f := setUp(t, h)
+	j := newJob(f.unit, job.OperationRefresh, "")
+	j.Phases[0].Gates = []job.Gate{{
+		Type: job.GateApproval, Approvals: 1, Groups: nil, GroupIDs: nil, AllowSelf: false, Timeout: 0,
+		BindPlan: false,
+	}}
+	queued := create(t, h, f, j, nil)
+
+	if res := runReconcile(t, h, 0); res.Gated != 1 || res.Dispatched != 0 {
+		t.Fatalf("reconcile of a queued job with a closed gate = %+v; want one gated job", res)
+	}
+
+	assertState(t, h, queued.ID, job.StateAwaitingApproval)
+}
+
+func testReconcileStalePlan(t *testing.T, h Harness) {
+	t.Helper()
+
+	f := setUp(t, h)
+
+	if err := h.Domain.SetStateVersion(t.Context(), f.fence, f.unit, svTwo); err != nil {
+		t.Fatalf("SetStateVersion = %v", err)
+	}
+
+	stale := planned(t, h, f, svOne, time.Now())
+
+	if res := runReconcile(t, h, 0); res.Replanned != 1 || res.Dispatched != 0 {
+		t.Fatalf("reconcile of a job with a stale plan = %+v; want one replan", res)
+	}
+
+	got, err := h.Jobs.Get(t.Context(), stale.ID)
+	if err != nil || got.State != job.StateQueued || got.Current != 0 || got.Phases[0].Plan != nil {
+		t.Fatalf("job after the replan = %s, phase %d, plan %+v, %v; want queued at the plan phase with no plan",
+			got.State, got.Current, got.Phases[0].Plan, err)
+	}
+
+	apply(t, h, f, change(&got, job.EventCancel))
+
+	fresh := planned(t, h, f, svTwo, time.Now())
+
+	if res := runReconcile(t, h, 0); res.Dispatched != 1 {
+		t.Fatalf("reconcile of a job with a fresh plan = %+v; want one dispatch", res)
+	}
+
+	assertState(t, h, fresh.ID, job.StateDispatched)
+}
+
+// expiryFixture holds one job for each timeout of the reconcile, each on its
+// own unit.
+type expiryFixture struct {
+	queued     job.Job
+	dispatched job.Job
+	awaiting   job.Job
+}
+
+// newExpiryFixture makes a locked queued job, a dispatched job that no runner
+// claimed and a delivered write-back job that waits for its state version.
+func newExpiryFixture(t *testing.T, h Harness, f fixture) expiryFixture {
+	t.Helper()
+
+	dns, err := h.Domain.CreateUnit(t.Context(), f.fence, "opentofu", "dns")
+	if err != nil {
+		t.Fatalf("CreateUnit = %v", err)
+	}
+
+	db, err := h.Domain.CreateUnit(t.Context(), f.fence, "opentofu", "db")
+	if err != nil {
+		t.Fatalf("CreateUnit = %v", err)
+	}
+
+	lockUnit(t, h, f)
+
+	q := newJob(f.unit, job.OperationRefresh, "")
+	q.Wait = job.WaitLocked
+
+	d := newJob(dns, job.OperationRefresh, "")
+
+	return expiryFixture{
+		queued:     create(t, h, f, q, nil),
+		dispatched: create(t, h, f, d, dispatchOf(d)),
+		awaiting:   deliver(t, h, f, db, job.DeliveryReviewRequest),
+	}
+}
+
+func testReconcileExpires(t *testing.T, h Harness) {
+	t.Helper()
+
+	f := setUp(t, h)
+	fx := newExpiryFixture(t, h, f)
+
+	// Past the longest timeout, every job is past its own.
+	res := runReconcile(t, h, job.DefaultStateTimeout+time.Hour)
+	if res.Expired != expiryJobs {
+		t.Fatalf("reconcile past every timeout = %+v; want three expired jobs", res)
+	}
+
+	for _, id := range []job.ID{fx.queued.ID, fx.dispatched.ID, fx.awaiting.ID} {
+		got, err := h.Jobs.Get(t.Context(), id)
+		if err != nil || got.State != job.StateExpired || !strings.Contains(got.Reason, "more than") {
+			t.Fatalf("job %s after the reconcile = %s, %q, %v; want expired with the reason", id, got.State,
+				got.Reason, err)
+		}
+
+		if n := reconcileEntries(t, h, f, id); n != 1 {
+			t.Fatalf("the expiry of %s wrote %d audit entries of the reconcile, want 1", id, n)
+		}
+	}
+
+	// The operation of the expired dispatched job stays pending: the claimer
+	// that takes it ends it, as the case of the claimer proves.
+	op, err := h.Durable.Get(t.Context(), durable.ID(fx.dispatched.Phases[0].Operation))
+	if err != nil || op.State != durable.StatePending {
+		t.Fatalf("operation of the expired dispatched job = %s, %v; want pending", op.State, err)
+	}
+
+	if !followUp(t, h, fx.awaiting.ID, job.KindAbandon) {
+		t.Fatalf("expiry of a delivered job started no %s operation", job.KindAbandon)
+	}
+}
+
+func testReconcileNotYet(t *testing.T, h Harness) {
+	t.Helper()
+
+	f := setUp(t, h)
+	fx := newExpiryFixture(t, h, f)
+
+	// A little less than the shortest timeout (the dispatch timeout): no job is
+	// past a timeout.
+	if res := runReconcile(t, h, job.DefaultDispatchTimeout-time.Hour); res.Expired != 0 {
+		t.Fatalf("reconcile before every timeout = %+v; want no expired job", res)
+	}
+
+	assertState(t, h, fx.queued.ID, job.StateQueued)
+	assertState(t, h, fx.dispatched.ID, job.StateDispatched)
+	assertState(t, h, fx.awaiting.ID, job.StateAwaitingState)
+
+	// Past the dispatch timeout and before the queue timeout: only the
+	// dispatched job expires.
+	if res := runReconcile(t, h, job.DefaultDispatchTimeout+time.Hour); res.Expired != 1 {
+		t.Fatalf("reconcile past the dispatch timeout = %+v; want one expired job", res)
+	}
+
+	assertState(t, h, fx.queued.ID, job.StateQueued)
+	assertState(t, h, fx.dispatched.ID, job.StateExpired)
+	assertState(t, h, fx.awaiting.ID, job.StateAwaitingState)
+}
+
+func testReconcileOrphans(t *testing.T, h Harness) {
+	t.Helper()
+
+	f := setUp(t, h)
+	live := runApplyPhase(t, h, f)
+	claimOp(t, h, "runner-1", job.RunnerKind(live.Spec.Pool), time.Minute)
+	live = claimed(t, h, f, &live, "runner-1")
+
+	other, err := h.Domain.CreateUnit(t.Context(), f.fence, "opentofu", "dns")
+	if err != nil {
+		t.Fatalf("CreateUnit = %v", err)
+	}
+
+	lost := newJob(other, job.OperationRefresh, "")
+	lost = new(create(t, h, f, lost, dispatchOf(lost)))
+
+	// The operation of lost ends with no change of its job, as after a durable
+	// failure at the limit of expired claims.
+	if err = h.Durable.Cancel(t.Context(), durable.ID(lost.Phases[0].Operation)); err != nil {
+		t.Fatalf("durable Cancel = %v", err)
+	}
+
+	if res := runReconcile(t, h, 0); res.Ended != 1 || res.Expired != 0 {
+		t.Fatalf("reconcile with one orphan = %+v; want one ended job", res)
+	}
+
+	got, err := h.Jobs.Get(t.Context(), lost.ID)
+	if err != nil || got.State != job.StateFailed || got.Reason == "" {
+		t.Fatalf("orphan after the reconcile = %s, %q, %v; want failed with a reason", got.State, got.Reason, err)
+	}
+
+	if n := reconcileEntries(t, h, f, lost.ID); n != 1 {
+		t.Fatalf("the end of the orphan wrote %d audit entries of the reconcile, want 1", n)
+	}
+
+	assertState(t, h, live.ID, job.StateRunning)
+
+	if orphans, err := h.Jobs.Orphans(t.Context(), orphanPage); err != nil || len(orphans) != 0 {
+		t.Fatalf("Orphans after the reconcile = %v, %v; want none", orphanIDs(orphans), err)
+	}
+}
+
+func testReconcileTwice(t *testing.T, h Harness) {
+	t.Helper()
+
+	f := setUp(t, h)
+	lockUnit(t, h, f)
+
+	j := newJob(f.unit, job.OperationRefresh, "")
+	j.Wait = job.WaitLocked
+	queued := create(t, h, f, j, nil)
+
+	runReconcile(t, h, job.DefaultQueueTimeout+time.Hour)
+	assertState(t, h, queued.ID, job.StateExpired)
+
+	var none job.ReconcileResult
+
+	if res := runReconcile(t, h, job.DefaultQueueTimeout+time.Hour); res != none {
+		t.Fatalf("second reconcile = %+v; want no change", res)
+	}
+}

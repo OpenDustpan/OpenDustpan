@@ -298,6 +298,20 @@ func TestJobBackupKeepsTheDefaultedValues(t *testing.T) {
 
 		s, _ := openDrift(t)
 
-		return storetest.JobBackup{Store: s, Jobs: s.Jobs(), Domain: &jobDomain{s: s}}
+		return storetest.JobBackup{Store: s, Jobs: s.Jobs(), Domain: &jobDomain{s: s}, Namespaces: s}
+	})
+}
+
+func TestJobRestoreIsReconciled(t *testing.T) {
+	t.Parallel()
+
+	storetest.RunJobRestoreReconcile(t, func(t *testing.T) (storetest.JobBackup, storetest.JobBackup) {
+		t.Helper()
+
+		src, _ := openDrift(t)
+		dst, _ := openDrift(t)
+
+		return storetest.JobBackup{Store: src, Jobs: src.Jobs(), Domain: &jobDomain{s: src}, Namespaces: src},
+			storetest.JobBackup{Store: dst, Jobs: dst.Jobs(), Domain: &jobDomain{s: dst}, Namespaces: dst}
 	})
 }

@@ -107,7 +107,7 @@ func newPlanJob(unit identity.Object) *job.Job {
 		Current: 0, StartedBy: "al", Source: job.SourceAPI, Agent: "", AgentMode: "", BreakGlass: nil,
 		Delivery: nil, Closed: nil, Verification: job.VerificationNone, IdempotencyKey: "", RequestHash: "",
 		Trigger: nil,
-		Version: 0, CreatedAt: time.Time{}, UpdatedAt: time.Time{},
+		Version: 0, CreatedAt: time.Time{}, UpdatedAt: time.Time{}, StateChangedAt: time.Time{},
 		Spec: job.Spec{
 			Unit: unit, Operation: job.OperationPlan, Purpose: job.PurposeNone, Executor: job.ExecutorRunner,
 			Location: job.Location{Connection: "", Repository: "", Ref: "", Directory: "", Revision: ""},

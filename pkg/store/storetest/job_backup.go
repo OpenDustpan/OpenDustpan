@@ -23,6 +23,9 @@ type JobBackup struct {
 	}
 	Jobs   job.Store
 	Domain jobtest.Domain
+	// Namespaces reads the namespaces of the database, for the fence of a
+	// reconcile of its jobs.
+	Namespaces job.NamespaceReader
 }
 
 // RunJobBackup proves that the values a job took by default survive a
@@ -70,6 +73,7 @@ func RunJobBackup(t *testing.T, newBackup func(t *testing.T) JobBackup) {
 			Current: 0, StartedBy: "al", Source: job.SourceAPI, Agent: "", AgentMode: "", BreakGlass: nil,
 			Delivery: nil, Closed: nil, Verification: job.VerificationNone, IdempotencyKey: "", RequestHash: "",
 			Version: 0, Trigger: nil, CreatedAt: time.Time{}, UpdatedAt: time.Time{},
+			StateChangedAt: time.Time{},
 		}
 
 		entry := audit.Entry{

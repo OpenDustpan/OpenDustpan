@@ -44,6 +44,7 @@ func startedJob() job.Job {
 		Closed: nil, Verification: job.VerificationNone, IdempotencyKey: "", RequestHash: "", Version: 1,
 		Trigger:   nil,
 		CreatedAt: time.Time{}, UpdatedAt: time.Time{},
+		StateChangedAt: time.Time{},
 	}
 }
 
