@@ -73,12 +73,13 @@ func harness(t *testing.T) chattest.Harness {
 	t.Helper()
 
 	return chattest.Harness{
-		Renderer:   slack.New(),
-		Platform:   chat.Slack,
-		Host:       slack.HostPublic,
-		SingleHost: true,
-		MaxBody:    0,
-		Decode:     decode,
+		Renderer:     slack.New(),
+		Platform:     chat.Slack,
+		Host:         slack.HostPublic,
+		SingleHost:   true,
+		OperatorHost: false,
+		MaxBody:      0,
+		Decode:       decode,
 		RefusedHosts: []string{
 			"hooks.slack.com.evil.example",
 			"slack.com",
