@@ -196,7 +196,7 @@ func TestStackBlobsLiveUnderTheNamespacePrefix(t *testing.T) {
 			s := f.started(t, stack.KindUpdate)
 
 			for i, seq := range tc.saves {
-				in := checkpoint(seq, `{"n":`+strconv.Itoa(i)+`}`)
+				in := checkpoint(seq, envelope(`{"n":`+strconv.Itoa(i)+`}`))
 				if err := f.svc.SaveCheckpoint(t.Context(), f.ref, s.Update.ID, s.Token, in); err != nil {
 					t.Fatalf("save %d: %v", i, err)
 				}
@@ -553,7 +553,7 @@ func TestDeleteStackBlobsStaysInTheNamespace(t *testing.T) {
 	ctx := t.Context()
 	s := f.started(t, stack.KindUpdate)
 
-	if err := f.svc.SaveCheckpoint(ctx, f.ref, s.Update.ID, s.Token, checkpoint(1, `{"a":1}`)); err != nil {
+	if err := f.svc.SaveCheckpoint(ctx, f.ref, s.Update.ID, s.Token, checkpoint(1, envelope(`{"a":1}`))); err != nil {
 		t.Fatalf("save: %v", err)
 	}
 
