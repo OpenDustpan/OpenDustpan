@@ -129,7 +129,9 @@ var (
 	errRestoreNeedsLive = errors.New("backup target needs a namespace store that restores")
 	// errRestoreNeedsOperations reports a backup target with a namespace store
 	// that cannot track restores.
-	errRestoreNeedsOperations = errors.New("backup target needs a namespace store with durable operations that cancel before a step")
+	errRestoreNeedsOperations = errors.New(
+		"backup target needs a namespace store with durable operations that cancel before a step",
+	)
 	// errMaintenanceNeedsStore reports a namespace store that cannot keep
 	// the installation state. Every SQL adapter serves it from the same
 	// database connection; a custom store must serve it too, so every
@@ -3430,9 +3432,9 @@ func newRestoreService(
 		steps = append(steps, deps.chain.afterRestore)
 
 		if deps.chain.checkpoints != nil {
-			serverAudit, err := serverAuditOf(cfg.namespaceStore)
-			if err != nil {
-				return nil, err
+			serverAudit, auditErr := serverAuditOf(cfg.namespaceStore)
+			if auditErr != nil {
+				return nil, auditErr
 			}
 
 			steps = append(steps, newEpochAfterRestore(deps.chain.checkpoints, serverAudit, cfg.now))

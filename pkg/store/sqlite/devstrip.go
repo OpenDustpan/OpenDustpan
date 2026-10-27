@@ -11,9 +11,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/store/internal/devstrip"
 )
 
-var (
-	_ backup.DevStripper = (*Store)(nil)
-)
+var _ backup.DevStripper = (*Store)(nil)
 
 // sqliteDevDialect matches in SQLite. lower() of SQLite folds the ASCII
 // letters only, and substr counts characters, which are the 4 ASCII bytes of

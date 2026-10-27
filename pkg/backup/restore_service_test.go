@@ -342,15 +342,6 @@ func (l *restoreServiceLive) setStageBlock(block chan struct{}) {
 	l.stageBlock = block
 }
 
-// setApplyGate sets the apply gate under the lock: StageRestore reads it on
-// the restore goroutine.
-func (l *restoreServiceLive) setApplyGate(gate chan struct{}) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-
-	l.applyGate = gate
-}
-
 // stageCallCount answers how many StageRestore calls started, under the lock.
 func (l *restoreServiceLive) stageCallCount() int {
 	l.mu.Lock()
@@ -382,34 +373,6 @@ func newRestoreServiceRegistry() *restoreServiceRegistry {
 	}
 }
 
-// setWorker sets the service whose restore operations waitRestoreEnd runs:
-// no worker runs in these tests.
-func (r *restoreServiceRegistry) setWorker(service *backup.RestoreService) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	r.worker = service
-}
-
-// runWorker runs one restore operation of the worker, when set.
-func (r *restoreServiceRegistry) runWorker(ctx context.Context) {
-	r.mu.Lock()
-	worker := r.worker
-	r.mu.Unlock()
-
-	if worker == nil {
-		return
-	}
-
-	// The wait reads the row, not the run: a run that found no work or
-	// failed an attempt leaves its record in the row or in the operation.
-	err := worker.RunOnce(ctx)
-
-	r.mu.Lock()
-	r.runErr = err
-	r.mu.Unlock()
-}
-
 func (r *restoreServiceRegistry) CreateRestore(_ context.Context, row backup.RestoreRecord) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -418,8 +381,8 @@ func (r *restoreServiceRegistry) CreateRestore(_ context.Context, row backup.Res
 		return backup.ErrRestoreExists
 	}
 
-	for _, other := range r.rows {
-		if other.State == backup.RestoreChecking || other.State == backup.RestoreApplying {
+	for key := range r.rows {
+		if other := r.rows[key]; other.State == backup.RestoreChecking || other.State == backup.RestoreApplying {
 			return backup.ErrRestoreRunning
 		}
 	}
@@ -524,6 +487,34 @@ func (r *restoreServiceRegistry) MarkRestoreApplying(
 	return nil
 }
 
+// setWorker sets the service whose restore operations waitRestoreEnd runs:
+// no worker runs in these tests.
+func (r *restoreServiceRegistry) setWorker(service *backup.RestoreService) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	r.worker = service
+}
+
+// runWorker runs one restore operation of the worker, when set.
+func (r *restoreServiceRegistry) runWorker(ctx context.Context) {
+	r.mu.Lock()
+	worker := r.worker
+	r.mu.Unlock()
+
+	if worker == nil {
+		return
+	}
+
+	// The wait reads the row, not the run: a run that found no work or
+	// failed an attempt leaves its record in the row or in the operation.
+	err := worker.RunOnce(ctx)
+
+	r.mu.Lock()
+	r.runErr = err
+	r.mu.Unlock()
+}
+
 // dropAll removes every restore row, emulating the swap that replaces the
 // live data with staged data predating the rows.
 // setDevReport stores the report in the row, like RecordDevReport of an
@@ -545,23 +536,6 @@ func (r *restoreServiceRegistry) setDevReport(
 	r.rows[id] = row
 
 	return nil
-}
-
-func (r *restoreServiceRegistry) dropAll() {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	r.rows = map[backup.RestoreID]backup.RestoreRecord{}
-}
-
-// setFinishBlock sets the FinishRestore gate under the lock: FinishRestore
-// reads it on the restore goroutine, which can still run when a test clears
-// the gate (issue 379).
-func (r *restoreServiceRegistry) setFinishBlock(block chan struct{}) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	r.finishBlock = block
 }
 
 func sortedRestoreIDs(rows map[backup.RestoreID]backup.RestoreRecord) []backup.RestoreID {
@@ -1403,164 +1377,6 @@ func TestRestorePreservesPreBackupAcrossSwap(t *testing.T) {
 
 	if !found {
 		t.Fatalf("pre-backup %s missing from the backups list %+v", row.PreBackupID, listed)
-	}
-}
-
-// holdRestoreApplyStage holds the second StageRestore call (the apply stage)
-// open and returns the gate to close to let the apply proceed. The first
-// call serves the checks, so the restore parks after it left checking for
-// the pre-backup.
-func holdRestoreApplyStage(setup *restoreServiceSetup) chan struct{} {
-	gate := make(chan struct{})
-
-	setup.live.setApplyGate(gate)
-
-	return gate
-}
-
-// waitApplyStageParked polls until the second StageRestore call (the apply
-// stage) started, so the restore waits at the apply gate. The registry row
-// reads applying a moment before the service holds the applying row: a drop
-// in that window would leave the service with the row of the start, which
-// the real swap never meets, because it runs after the apply stage (issue
-// 379).
-func waitApplyStageParked(t *testing.T, setup *restoreServiceSetup) {
-	t.Helper()
-
-	deadline := time.Now().Add(10 * time.Second)
-
-	for setup.live.stageCallCount() < 2 {
-		if time.Now().After(deadline) {
-			t.Fatal("restore never reached the apply stage")
-		}
-
-		select {
-		case <-t.Context().Done():
-			t.Fatalf("wait for the apply stage: %v", t.Context().Err())
-		case <-time.After(10 * time.Millisecond):
-		}
-	}
-}
-
-// startSwapWindowRestore starts id for the setup backup and fails on error.
-func startSwapWindowRestore(t *testing.T, setup *restoreServiceSetup, id backup.RestoreID) {
-	t.Helper()
-
-	req := backup.RestoreRequest{
-		BackupID:         setup.id,
-		PreBackupID:      "",
-		CheckOnly:        false,
-		Force:            false,
-		RequestedBy:      "tester",
-		KeepAccessTables: false,
-	}
-
-	if err := setup.service.Start(t.Context(), id, req); err != nil {
-		t.Fatalf("start restore: %v", err)
-	}
-}
-
-// waitServiceRestoreApplying polls the service Get until id reads applying
-// and answers the applying row, which already names the pre-backup.
-func waitServiceRestoreApplying(
-	t *testing.T, service *backup.RestoreService, id backup.RestoreID,
-) backup.RestoreRecord {
-	t.Helper()
-
-	deadline := time.Now().Add(10 * time.Second)
-
-	for {
-		row, err := service.Get(t.Context(), id)
-		if err != nil {
-			t.Fatalf("get restore %s: %v", id, err)
-		}
-
-		if row.State == backup.RestoreApplying {
-			if row.PreBackupID == "" {
-				t.Fatal("held applying row names no pre-backup")
-			}
-
-			return row
-		}
-
-		if time.Now().After(deadline) {
-			t.Fatalf("restore %s never reached applying (state %q)", id, row.State)
-		}
-
-		select {
-		case <-t.Context().Done():
-			t.Fatalf("restore %s: %v", id, t.Context().Err())
-		case <-time.After(10 * time.Millisecond):
-		}
-	}
-}
-
-// emulateRestoreSwapDrop drops every registry row to emulate the swap, whose
-// staged data predates the restore row, and proves the service Get still
-// answers the held applying row instead of ErrRestoreNotFound.
-func emulateRestoreSwapDrop(
-	t *testing.T, setup *restoreServiceSetup, id backup.RestoreID, held backup.RestoreRecord,
-) {
-	t.Helper()
-
-	setup.regs.dropAll()
-
-	_, regErr := setup.regs.GetRestore(t.Context(), id)
-	if !errors.Is(regErr, backup.ErrRestoreNotFound) {
-		t.Fatalf("registry get after the emulated swap = %v, want %v", regErr, backup.ErrRestoreNotFound)
-	}
-
-	got, err := setup.service.Get(t.Context(), id)
-	if err != nil {
-		t.Fatalf("service get across the swap window: %v", err)
-	}
-
-	if got.ID != id || got.State != backup.RestoreApplying || got.BackupID != held.BackupID ||
-		got.PreBackupID != held.PreBackupID {
-		t.Fatalf("service get across the swap = %+v, want the held row %+v", got, held)
-	}
-}
-
-// recreateDroppedRestore re-records the row the emulated swap dropped, so
-// the parked restore reads it before its own swap and runs to its end state.
-func recreateDroppedRestore(t *testing.T, setup *restoreServiceSetup, held backup.RestoreRecord) {
-	t.Helper()
-
-	if err := setup.regs.CreateRestore(t.Context(), held); err != nil {
-		t.Fatalf("recreate the dropped row: %v", err)
-	}
-}
-
-// waitServiceRestoreSucceeded polls the service Get to the end state and
-// fails unless the restore succeeded.
-func waitServiceRestoreSucceeded(t *testing.T, service *backup.RestoreService, id backup.RestoreID) {
-	t.Helper()
-
-	deadline := time.Now().Add(10 * time.Second)
-
-	for {
-		row, err := service.Get(t.Context(), id)
-		if err != nil {
-			t.Fatalf("get restore %s after the swap: %v", id, err)
-		}
-
-		if row.State != backup.RestoreChecking && row.State != backup.RestoreApplying {
-			if row.State != backup.RestoreSucceeded {
-				t.Fatalf("restore state = %q, want succeeded (%q)", row.State, row.Error)
-			}
-
-			return
-		}
-
-		if time.Now().After(deadline) {
-			t.Fatalf("restore %s never finished", id)
-		}
-
-		select {
-		case <-t.Context().Done():
-			t.Fatalf("restore %s: %v", id, t.Context().Err())
-		case <-time.After(10 * time.Millisecond):
-		}
 	}
 }
 

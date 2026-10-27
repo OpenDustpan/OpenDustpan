@@ -17,23 +17,12 @@ import (
 // of its registry, the durable operations of its store, and the staging
 // areas, with the fence rules of the SQL adapters.
 
-// fenced checks f against the store of durable operations of l, and that its
-// operation runs restore id. With record it records the step of f with
-// result, as the domain write of an adapter does.
-func (l *restoreServiceLive) fenced(
-	ctx context.Context, f durable.StepFence, id backup.RestoreID, result []byte, record bool,
-) error {
+// checkFence checks f against the store of durable operations of l, and
+// that its operation runs restore id, with the fence rules of the adapters.
+func (l *restoreServiceLive) checkFence(ctx context.Context, f durable.StepFence, id backup.RestoreID) error {
 	op, err := l.ops.Get(ctx, f.Operation)
 	if err != nil || op.Key != backup.RestoreOperationKey(id) {
 		return durable.ErrClaimLost
-	}
-
-	if record {
-		if err := l.ops.RecordStep(ctx, f, result); err != nil {
-			return fmt.Errorf("record step %q: %w", f.Step, err)
-		}
-
-		return nil
 	}
 
 	_, done := op.Step(f.Step)
@@ -50,22 +39,43 @@ func (l *restoreServiceLive) fenced(
 	}
 }
 
-// running returns the row of the running restore id.
-func (l *restoreServiceLive) running(ctx context.Context, id backup.RestoreID) (backup.RestoreRecord, error) {
+// recordFence records the step of f with result, as the domain write of an
+// adapter does, after the check that its operation runs restore id.
+func (l *restoreServiceLive) recordFence(
+	ctx context.Context, f durable.StepFence, id backup.RestoreID, result []byte,
+) error {
+	op, err := l.ops.Get(ctx, f.Operation)
+	if err != nil || op.Key != backup.RestoreOperationKey(id) {
+		return durable.ErrClaimLost
+	}
+
+	if err := l.ops.RecordStep(ctx, f, result); err != nil {
+		return fmt.Errorf("record step %q: %w", f.Step, err)
+	}
+
+	return nil
+}
+
+// requireRunning returns ErrRestoreNotRunning unless restore id runs.
+func (l *restoreServiceLive) requireRunning(ctx context.Context, id backup.RestoreID) error {
 	row, err := l.registry.GetRestore(ctx, id)
 	if err != nil {
-		return backup.RestoreRecord{}, err
+		return err
 	}
 
 	if row.State != backup.RestoreChecking && row.State != backup.RestoreApplying {
-		return backup.RestoreRecord{}, backup.ErrRestoreNotRunning
+		return backup.ErrRestoreNotRunning
 	}
 
-	return row, nil
+	return nil
 }
 
 // StartRestore implements backup.RestoreOperations.
-func (l *restoreServiceLive) StartRestore(ctx context.Context, r backup.RestoreRecord, start durable.StartRequest) error {
+func (l *restoreServiceLive) StartRestore(
+	ctx context.Context,
+	r backup.RestoreRecord,
+	start durable.StartRequest,
+) error {
 	if err := l.registry.CreateRestore(ctx, r); err != nil {
 		return err
 	}
@@ -81,7 +91,7 @@ func (l *restoreServiceLive) StartRestore(ctx context.Context, r backup.RestoreR
 func (l *restoreServiceLive) RecordRestoreReport(
 	ctx context.Context, f durable.StepFence, id backup.RestoreID, report backup.DevStripReport,
 ) error {
-	if err := l.fenced(ctx, f, id, nil, true); err != nil {
+	if err := l.recordFence(ctx, f, id, nil); err != nil {
 		return err
 	}
 
@@ -100,11 +110,11 @@ func (l *restoreServiceLive) RecordRestoreReport(
 func (l *restoreServiceLive) SetRestoreMaintenance(
 	ctx context.Context, f durable.StepFence, id backup.RestoreID, expected, next maintenance.State,
 ) error {
-	if err := l.fenced(ctx, f, id, nil, false); err != nil {
+	if err := l.checkFence(ctx, f, id); err != nil {
 		return err
 	}
 
-	if _, err := l.running(ctx, id); err != nil {
+	if err := l.requireRunning(ctx, id); err != nil {
 		return err
 	}
 
@@ -121,13 +131,13 @@ func (l *restoreServiceLive) SetRestoreMaintenance(
 
 // ConfirmRestoreMaintenance implements backup.RestoreOperations.
 func (l *restoreServiceLive) ConfirmRestoreMaintenance(
-	ctx context.Context, f durable.StepFence, id backup.RestoreID, want maintenance.State,
+	ctx context.Context, f durable.StepFence, id backup.RestoreID, want maintenance.State, canceled []string,
 ) (bool, error) {
-	if err := l.fenced(ctx, f, id, nil, false); err != nil {
+	if err := l.checkFence(ctx, f, id); err != nil {
 		return false, err
 	}
 
-	if _, err := l.running(ctx, id); err != nil {
+	if err := l.requireRunning(ctx, id); err != nil {
 		return false, err
 	}
 
@@ -139,7 +149,14 @@ func (l *restoreServiceLive) ConfirmRestoreMaintenance(
 	entered := l.entered[id]
 	l.mu.Unlock()
 
-	return entered, l.fenced(ctx, f, id, backup.EncodeRestoreMaintenance(entered), true)
+	result, err := backup.EncodeRestoreMaintenance(backup.RestoreMaintenanceResult{
+		Entered: entered, Canceled: canceled, Token: f.Token,
+	})
+	if err != nil {
+		return false, err
+	}
+
+	return entered, l.recordFence(ctx, f, id, result)
 }
 
 // RestoreMaintenanceEntered implements backup.RestoreOperations.
@@ -158,7 +175,7 @@ func (l *restoreServiceLive) RestoreMaintenanceEntered(ctx context.Context, id b
 func (l *restoreServiceLive) MarkRestoreApplying(
 	ctx context.Context, f durable.StepFence, id backup.RestoreID, pre backup.ID,
 ) error {
-	if err := l.fenced(ctx, f, id, nil, true); err != nil {
+	if err := l.recordFence(ctx, f, id, nil); err != nil {
 		return err
 	}
 
@@ -177,7 +194,7 @@ func (l *restoreServiceLive) AppendRestoreAudit(
 		return nil, appendErr
 	}
 
-	if err := l.fenced(ctx, f, id, nil, true); err != nil {
+	if err := l.recordFence(ctx, f, id, nil); err != nil {
 		return nil, err
 	}
 
@@ -193,7 +210,7 @@ func (l *restoreServiceLive) AppendRestoreAudit(
 func (l *restoreServiceLive) FinishRestore(
 	ctx context.Context, f durable.StepFence, end backup.RestoreEnd,
 ) (backup.RestoreRecord, error) {
-	if err := l.fenced(ctx, f, end.ID, nil, true); err != nil {
+	if err := l.recordFence(ctx, f, end.ID, nil); err != nil {
 		return backup.RestoreRecord{}, err
 	}
 
@@ -235,42 +252,45 @@ func (l *restoreServiceLive) FailEndedRestores(
 		return nil, fmt.Errorf("list operations: %w", err)
 	}
 
-	var failed []backup.RestoreRecord
+	texts := make(map[string]string, len(ops))
 
-	for i := range rows {
-		if rows[i].State != backup.RestoreChecking && rows[i].State != backup.RestoreApplying {
-			continue
-		}
-
-		for _, op := range ops {
-			if op.Key != backup.RestoreOperationKey(rows[i].ID) {
-				continue
-			}
-
-			text := ""
-
-			switch op.State {
-			case durable.StateCanceled:
-				text = backup.RestoreCanceledText
-			case durable.StateFailed:
-				text = backup.RestoreStoppedText
-			default:
-				continue
-			}
-
-			row, err := l.end(ctx, backup.RestoreEnd{
-				ID: rows[i].ID, State: backup.RestoreFailed, Error: text, EndedAt: endedAt, DevReport: nil,
-				LeaveMaintenance: leave,
-			})
-			if err != nil {
-				return failed, err
-			}
-
-			failed = append(failed, row)
+	for i := range ops {
+		if text, ended := endedText(ops[i].State); ended {
+			texts[ops[i].Key] = text
 		}
 	}
 
+	var failed []backup.RestoreRecord
+
+	for i := range rows {
+		text, ended := texts[backup.RestoreOperationKey(rows[i].ID)]
+		if !ended || (rows[i].State != backup.RestoreChecking && rows[i].State != backup.RestoreApplying) {
+			continue
+		}
+
+		row, err := l.end(ctx, backup.RestoreEnd{
+			ID: rows[i].ID, State: backup.RestoreFailed, Error: text, EndedAt: endedAt, DevReport: nil,
+			LeaveMaintenance: leave,
+		})
+		if err != nil {
+			return failed, err
+		}
+
+		failed = append(failed, row)
+	}
+
 	return failed, nil
+}
+
+// endedText returns the error text of a restore whose operation is in
+// state, and whether the operation ended with no finish write.
+func endedText(state durable.State) (string, bool) {
+	text, ended := map[durable.State]string{
+		durable.StateCanceled: backup.RestoreCanceledText,
+		durable.StateFailed:   backup.RestoreStoppedText,
+	}[state]
+
+	return text, ended
 }
 
 // StageRestore implements backup.RestoreStaging over the check store of the
@@ -305,38 +325,42 @@ func (l *restoreServiceLive) StageRestore(
 	return sum, report, nil
 }
 
+// applyMode says how the fake swaps a staging area.
+type applyMode struct {
+	keepAccess bool
+}
+
+// apply swaps the staging area of l into its live data, with the mode m.
+func (m applyMode) apply(ctx context.Context, l *restoreServiceLive) (backup.KeepAccessResult, error) {
+	if m.keepAccess {
+		return l.ApplyStagingKeepingAccess(ctx)
+	}
+
+	return backup.KeepAccessResult{DroppedTempAdmins: 0}, l.ApplyStaging(ctx)
+}
+
 // ApplyRestoreArea implements backup.RestoreStaging over the applies of the
 // fake.
 func (l *restoreServiceLive) ApplyRestoreArea(
 	ctx context.Context, f durable.StepFence, a backup.StagingArea, keepAccess bool,
 ) (backup.KeepAccessResult, error) {
-	if err := l.fenced(ctx, f, a.Restore, nil, false); err != nil {
+	if err := l.checkFence(ctx, f, a.Restore); err != nil {
 		return backup.KeepAccessResult{}, err
 	}
 
-	var (
-		kept backup.KeepAccessResult
-		err  error
-	)
-
-	if keepAccess {
-		kept, err = l.ApplyStagingKeepingAccess(ctx)
-	} else {
-		err = l.ApplyStaging(ctx)
-	}
-
+	kept, err := applyMode{keepAccess: keepAccess}.apply(ctx, l)
 	if err != nil {
 		return backup.KeepAccessResult{}, err
 	}
 
-	return kept, l.fenced(ctx, f, a.Restore, backup.EncodeRestoreSwap(kept), true)
+	return kept, l.recordFence(ctx, f, a.Restore, backup.EncodeRestoreSwap(kept))
 }
 
 // CleanRestoreAreas implements backup.RestoreStaging.
 func (l *restoreServiceLive) CleanRestoreAreas(
 	ctx context.Context, f durable.StepFence, id backup.RestoreID, _ time.Duration,
 ) ([]backup.StagingArea, error) {
-	if err := l.fenced(ctx, f, id, nil, true); err != nil {
+	if err := l.recordFence(ctx, f, id, nil); err != nil {
 		return nil, err
 	}
 

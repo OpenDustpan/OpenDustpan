@@ -99,7 +99,8 @@ func (s *Store) ApplyStaging(ctx context.Context) error {
 
 	staging := s.stagingSchema
 
-	if _, err := s.swapStaging(ctx, swapPlan{staging: staging, previous: "", keepAccess: false, before: nil, after: nil}); err != nil {
+	plan := swapPlan{staging: staging, previous: "", keepAccess: false, before: nil, after: nil}
+	if _, err := s.swapStaging(ctx, plan); err != nil {
 		return err
 	}
 
@@ -157,47 +158,53 @@ func (s *Store) swapStaging(ctx context.Context, plan swapPlan) (int64, error) {
 	var dropped int64
 
 	err := inBackupTx(ctx, s.pool, opts, func(tx pgx.Tx) error {
-		var live string
-
-		if err := tx.QueryRow(ctx, "SELECT current_schema()").Scan(&live); err != nil {
-			return fmt.Errorf("read live schema: %w", err)
-		}
-
-		if live == "" || live == plan.staging {
-			return fmt.Errorf("apply staging schema %q over %q: %w", plan.staging, live, backup.ErrCorrupt)
-		}
-
-		// The swap lock comes first, before the swap touches a live table, so
-		// that no snapshot read overlaps the swap.
-		if err := lockSwap(ctx, tx, live); err != nil {
-			return err
-		}
-
-		if plan.before != nil {
-			if err := plan.before(tx); err != nil {
-				return err
-			}
-		}
-
-		// The check covers the whole staging area, in the swap transaction,
-		// before the first rename, also the access tables that a swap that
-		// keeps them does not take.
-		if err := checkSwapDev(ctx, tx, plan.staging); err != nil {
-			return err
-		}
-
-		if err := s.swapIn(ctx, tx, live, plan, &dropped); err != nil {
-			return err
-		}
-
-		if plan.after != nil {
-			return plan.after(tx, backup.KeepAccessResult{DroppedTempAdmins: dropped})
-		}
-
-		return nil
+		return s.swapTx(ctx, tx, plan, &dropped)
 	})
 
 	return dropped, err
+}
+
+// swapTx is the transaction of swapStaging on tx. It sets dropped as swapIn
+// does.
+func (s *Store) swapTx(ctx context.Context, tx pgx.Tx, plan swapPlan, dropped *int64) error {
+	var live string
+
+	if err := tx.QueryRow(ctx, "SELECT current_schema()").Scan(&live); err != nil {
+		return fmt.Errorf("read live schema: %w", err)
+	}
+
+	if live == "" || live == plan.staging {
+		return fmt.Errorf("apply staging schema %q over %q: %w", plan.staging, live, backup.ErrCorrupt)
+	}
+
+	// The swap lock comes first, before the swap touches a live table, so
+	// that no snapshot read overlaps the swap.
+	if err := lockSwap(ctx, tx, live); err != nil {
+		return err
+	}
+
+	if plan.before != nil {
+		if err := plan.before(tx); err != nil {
+			return err
+		}
+	}
+
+	// The check covers the whole staging area, in the swap transaction,
+	// before the first rename, also the access tables that a swap that
+	// keeps them does not take.
+	if err := checkSwapDev(ctx, tx, plan.staging); err != nil {
+		return err
+	}
+
+	if err := s.swapIn(ctx, tx, live, plan, dropped); err != nil {
+		return err
+	}
+
+	if plan.after != nil {
+		return plan.after(tx, backup.KeepAccessResult{DroppedTempAdmins: *dropped})
+	}
+
+	return nil
 }
 
 // swapIn swaps plan.staging in for live in tx, after the swap lock and the

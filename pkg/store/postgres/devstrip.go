@@ -13,9 +13,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/store/internal/devstrip"
 )
 
-var (
-	_ backup.DevStripper = (*Store)(nil)
-)
+var _ backup.DevStripper = (*Store)(nil)
 
 // pgDevDialect matches in PostgreSQL. lower() depends on the collation of the
 // database and can fold a non-ASCII letter, so the match uses translate() with

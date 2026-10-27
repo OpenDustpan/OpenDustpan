@@ -146,23 +146,19 @@ func (s *Store) SetStateIf(ctx context.Context, expected, next maintenance.State
 	return s.setStateIfWithin(ctx, expected, next, nil)
 }
 
-// errWithin carries an error of the within function of setStateIfWithin
+// withinError carries an error of the within function of setStateIfWithin
 // past the mapping to maintenance.ErrUnavailable.
-type errWithin struct {
+type withinError struct {
 	err error
 }
 
-func (e errWithin) Error() string { return e.err.Error() }
+func (e withinError) Error() string { return e.err.Error() }
 
-func (e errWithin) Unwrap() error { return e.err }
+func (e withinError) Unwrap() error { return e.err }
 
-// setStateIfWithin runs SetStateIf, and runs within in its transaction after
-// the write lock and before any change. An error of within rolls back and
-// returns as it is. With within, a state that is not expected rolls back
-// too, so the writes of within never commit without the state change.
-func (s *Store) setStateIfWithin(
-	ctx context.Context, expected, next maintenance.State, within func(q *db.Queries) error,
-) error {
+// checkStatePair returns ErrInvalidState unless expected and next are known
+// states.
+func checkStatePair(expected, next maintenance.State) error {
 	if expected != maintenance.StateNormal && expected != maintenance.StateMaintenance {
 		return fmt.Errorf("%w: expected %q", maintenance.ErrInvalidState, expected)
 	}
@@ -171,31 +167,28 @@ func (s *Store) setStateIfWithin(
 		return fmt.Errorf("%w: %q", maintenance.ErrInvalidState, next)
 	}
 
+	return nil
+}
+
+// setStateIfWithin runs SetStateIf, and runs within in its transaction after
+// the write lock and before any change. An error of within rolls back and
+// returns as it is. With within, a state that is not expected rolls back
+// too, so the writes of within never commit without the state change.
+func (s *Store) setStateIfWithin(
+	ctx context.Context, expected, next maintenance.State, within func(q *db.Queries) error,
+) error {
+	if err := checkStatePair(expected, next); err != nil {
+		return err
+	}
+
 	var changed int64
 
 	errChanged := fmt.Errorf("installation state is not %q: %w", expected, maintenance.ErrStateChanged)
 
 	err := s.inControlTx(ctx, func(q *db.Queries) error {
-		if err := lockWritesExclusive(ctx, q, s.stateLockWait, lockTimeoutError(next)); err != nil {
-			return err
-		}
-
-		if within != nil {
-			if err := within(q); err != nil {
-				return errWithin{err: err}
-			}
-		}
-
-		if err := clearJournalOnEnter(ctx, q, next); err != nil {
-			return err
-		}
-
-		n, err := q.SetInstallationStateIf(ctx, db.SetInstallationStateIfParams{
-			State:   string(next),
-			State_2: string(expected),
-		})
-		if err != nil {
-			return fmt.Errorf("store installation state postgres database: %w", maintenance.ErrUnavailable)
+		n, txErr := s.setStateIn(ctx, q, expected, next, within)
+		if txErr != nil {
+			return txErr
 		}
 
 		if n == 0 && within != nil {
@@ -206,7 +199,7 @@ func (s *Store) setStateIfWithin(
 
 		return nil
 	})
-	if inner, ok := errors.AsType[errWithin](err); ok {
+	if inner, ok := errors.AsType[withinError](err); ok {
 		return inner.err
 	}
 
@@ -223,6 +216,36 @@ func (s *Store) setStateIfWithin(
 	}
 
 	return nil
+}
+
+// setStateIn is the transaction of setStateIfWithin on q. It returns the
+// count of changed rows.
+func (s *Store) setStateIn(
+	ctx context.Context, q *db.Queries, expected, next maintenance.State, within func(q *db.Queries) error,
+) (int64, error) {
+	if err := lockWritesExclusive(ctx, q, s.stateLockWait, lockTimeoutError(next)); err != nil {
+		return 0, err
+	}
+
+	if within != nil {
+		if err := within(q); err != nil {
+			return 0, withinError{err: err}
+		}
+	}
+
+	if err := clearJournalOnEnter(ctx, q, next); err != nil {
+		return 0, err
+	}
+
+	n, err := q.SetInstallationStateIf(ctx, db.SetInstallationStateIfParams{
+		State:   string(next),
+		State_2: string(expected),
+	})
+	if err != nil {
+		return 0, fmt.Errorf("store installation state postgres database: %w", maintenance.ErrUnavailable)
+	}
+
+	return n, nil
 }
 
 // clearJournalOnEnter starts a new stay in maintenance mode when next is

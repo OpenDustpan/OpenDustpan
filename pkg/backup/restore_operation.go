@@ -400,11 +400,13 @@ type RestoreOperations interface {
 	) error
 
 	// ConfirmRestoreMaintenance checks that the installation state is want,
-	// and records the step of f with the maintenance flag of the checking or
-	// applying restore id as the result, in one transaction. It returns the
-	// flag. It returns maintenance.ErrStateChanged when the state is not want.
+	// and records the step of f in one transaction. The result is
+	// EncodeRestoreMaintenance of the maintenance flag of the checking or
+	// applying restore id, of canceled, the units that the enter canceled,
+	// and of the token of f. It returns the flag. It returns
+	// maintenance.ErrStateChanged when the state is not want.
 	ConfirmRestoreMaintenance(
-		ctx context.Context, f durable.StepFence, id RestoreID, want maintenance.State,
+		ctx context.Context, f durable.StepFence, id RestoreID, want maintenance.State, canceled []string,
 	) (entered bool, err error)
 
 	// MarkRestoreApplying moves the restore id from checking to applying,
@@ -536,35 +538,54 @@ type RestoreStaging interface {
 // longer than the limit. The cleanup step tries again with backoff.
 var ErrRestoreBusy = errors.New("restore cleanup waits for a lock on the old data")
 
-// restoreMaintenanceResult is the result that ConfirmRestoreMaintenance
-// records with the step: whether this restore entered maintenance mode.
-type restoreMaintenanceResult struct {
-	Entered bool `json:"entered"`
+// RestoreMaintenanceResult is the result that ConfirmRestoreMaintenance
+// records with the step: whether this restore entered maintenance mode, the
+// units that the enter canceled, and the claim token of the step. The swap
+// replaces the audit log, so the after-apply step writes the audit entry of
+// the canceled units again from this result.
+type RestoreMaintenanceResult struct {
+	Entered  bool     `json:"entered"`
+	Canceled []string `json:"canceled"`
+	Token    int64    `json:"token"`
 }
+
+// maxCanceledUnits bounds the units that one maintenance result names.
+const maxCanceledUnits = 10000
 
 // EncodeRestoreMaintenance returns the step result that
-// ConfirmRestoreMaintenance records for entered.
-func EncodeRestoreMaintenance(entered bool) []byte {
-	if entered {
-		return []byte(`{"entered":true}`)
+// ConfirmRestoreMaintenance records for r.
+func EncodeRestoreMaintenance(r RestoreMaintenanceResult) ([]byte, error) {
+	if r.Canceled == nil {
+		r.Canceled = []string{}
 	}
 
-	return []byte(`{"entered":false}`)
+	if len(r.Canceled) > maxCanceledUnits {
+		return nil, fmt.Errorf("%w: the maintenance result names %d canceled units, more than %d",
+			ErrCorrupt, len(r.Canceled), maxCanceledUnits)
+	}
+
+	out, err := json.Marshal(r)
+	if err != nil {
+		return nil, fmt.Errorf("encode the result of the maintenance step: %w", err)
+	}
+
+	return out, nil
 }
 
-// DecodeRestoreMaintenance returns the flag of a step result that
-// EncodeRestoreMaintenance made. It returns ErrCorrupt for any other result.
-func DecodeRestoreMaintenance(result []byte) (bool, error) {
-	var out restoreMaintenanceResult
+// DecodeRestoreMaintenance returns the result that EncodeRestoreMaintenance
+// made. It returns ErrCorrupt for any other result.
+func DecodeRestoreMaintenance(result []byte) (RestoreMaintenanceResult, error) {
+	var out RestoreMaintenanceResult
 
 	decoder := json.NewDecoder(bytes.NewReader(result))
 	decoder.DisallowUnknownFields()
 
-	if err := decoder.Decode(&out); err != nil {
-		return false, fmt.Errorf("%w: the result of the maintenance step does not decode", ErrCorrupt)
+	if err := decoder.Decode(&out); err != nil || len(out.Canceled) > maxCanceledUnits || out.Token < 0 {
+		return RestoreMaintenanceResult{Entered: false, Canceled: nil, Token: 0},
+			fmt.Errorf("%w: the result of the maintenance step does not decode", ErrCorrupt)
 	}
 
-	return out.Entered, nil
+	return out, nil
 }
 
 // restoreSwapResult is the result that ApplyRestoreArea records with the
@@ -576,7 +597,7 @@ type restoreSwapResult struct {
 // EncodeRestoreSwap returns the step result that ApplyRestoreArea records
 // for kept.
 func EncodeRestoreSwap(kept KeepAccessResult) []byte {
-	out, err := json.Marshal(restoreSwapResult{DroppedTempAdmins: kept.DroppedTempAdmins})
+	out, err := json.Marshal(restoreSwapResult(kept))
 	if err != nil {
 		// A struct of one integer always encodes.
 		return []byte(`{"droppedTempAdmins":0}`)
@@ -598,5 +619,5 @@ func DecodeRestoreSwap(result []byte) (KeepAccessResult, error) {
 			ErrCorrupt)
 	}
 
-	return KeepAccessResult{DroppedTempAdmins: out.DroppedTempAdmins}, nil
+	return KeepAccessResult(out), nil
 }

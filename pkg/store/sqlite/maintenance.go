@@ -97,15 +97,29 @@ func (s *Store) SetStateIf(ctx context.Context, expected, next maintenance.State
 	return s.setStateIfWithin(ctx, expected, next, nil)
 }
 
-// errWithin carries an error of the within function of setStateIfWithin
+// withinError carries an error of the within function of setStateIfWithin
 // past the mapping to maintenance.ErrUnavailable.
-type errWithin struct {
+type withinError struct {
 	err error
 }
 
-func (e errWithin) Error() string { return e.err.Error() }
+func (e withinError) Error() string { return e.err.Error() }
 
-func (e errWithin) Unwrap() error { return e.err }
+func (e withinError) Unwrap() error { return e.err }
+
+// checkStatePair returns ErrInvalidState unless expected and next are known
+// states.
+func checkStatePair(expected, next maintenance.State) error {
+	if expected != maintenance.StateNormal && expected != maintenance.StateMaintenance {
+		return fmt.Errorf("%w: expected %q", maintenance.ErrInvalidState, expected)
+	}
+
+	if next != maintenance.StateNormal && next != maintenance.StateMaintenance {
+		return fmt.Errorf("%w: %q", maintenance.ErrInvalidState, next)
+	}
+
+	return nil
+}
 
 // setStateIfWithin runs SetStateIf, and runs within in its transaction
 // before any change. An error of within rolls back and returns as it is.
@@ -115,12 +129,8 @@ func (e errWithin) Unwrap() error { return e.err }
 func (s *Store) setStateIfWithin(
 	ctx context.Context, expected, next maintenance.State, within func(q *db.Queries) error,
 ) error {
-	if expected != maintenance.StateNormal && expected != maintenance.StateMaintenance {
-		return fmt.Errorf("%w: expected %q", maintenance.ErrInvalidState, expected)
-	}
-
-	if next != maintenance.StateNormal && next != maintenance.StateMaintenance {
-		return fmt.Errorf("%w: %q", maintenance.ErrInvalidState, next)
+	if err := checkStatePair(expected, next); err != nil {
+		return err
 	}
 
 	var changed int64
@@ -134,22 +144,9 @@ func (s *Store) setStateIfWithin(
 	defer unlock()
 
 	err := s.inControlTx(ctx, func(q *db.Queries) error {
-		if within != nil {
-			if err := within(q); err != nil {
-				return errWithin{err: err}
-			}
-		}
-
-		if err := clearJournalOnEnter(ctx, q, next); err != nil {
-			return err
-		}
-
-		n, err := q.SetInstallationStateIf(ctx, db.SetInstallationStateIfParams{
-			State:   string(next),
-			State_2: string(expected),
-		})
-		if err != nil {
-			return fmt.Errorf("store installation state sqlite database: %w", maintenance.ErrUnavailable)
+		n, txErr := setStateIn(ctx, q, expected, next, within)
+		if txErr != nil {
+			return txErr
 		}
 
 		if n == 0 && within != nil {
@@ -161,7 +158,7 @@ func (s *Store) setStateIfWithin(
 		return nil
 	})
 
-	switch inner, ok := errors.AsType[errWithin](err); {
+	switch inner, ok := errors.AsType[withinError](err); {
 	case ok:
 		return inner.err
 	case errors.Is(err, maintenance.ErrStateChanged):
@@ -175,6 +172,32 @@ func (s *Store) setStateIfWithin(
 	default:
 		return nil
 	}
+}
+
+// setStateIn is the transaction of setStateIfWithin on q. It returns the
+// count of changed rows.
+func setStateIn(
+	ctx context.Context, q *db.Queries, expected, next maintenance.State, within func(q *db.Queries) error,
+) (int64, error) {
+	if within != nil {
+		if err := within(q); err != nil {
+			return 0, withinError{err: err}
+		}
+	}
+
+	if err := clearJournalOnEnter(ctx, q, next); err != nil {
+		return 0, err
+	}
+
+	n, err := q.SetInstallationStateIf(ctx, db.SetInstallationStateIfParams{
+		State:   string(next),
+		State_2: string(expected),
+	})
+	if err != nil {
+		return 0, fmt.Errorf("store installation state sqlite database: %w", maintenance.ErrUnavailable)
+	}
+
+	return n, nil
 }
 
 // maxEnterWait bounds the wait of an enter of maintenance mode for the

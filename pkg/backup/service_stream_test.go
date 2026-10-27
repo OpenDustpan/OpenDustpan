@@ -155,7 +155,13 @@ func restoreStreamedBackup(
 	regs := newRestoreServiceRegistry()
 	order := &orderLog{mu: sync.Mutex{}, events: nil}
 	maint := &restoreServiceMaintenance{
-		mu: sync.Mutex{}, enterErr: nil, enters: 0, leaves: 0, order: order, state: maintenance.StateNormal, held: false,
+		mu:       sync.Mutex{},
+		enterErr: nil,
+		enters:   0,
+		leaves:   0,
+		order:    order,
+		state:    maintenance.StateNormal,
+		held:     false,
 	}
 	backupRegs := newFakeRegistry()
 	blobs := newMemStore()

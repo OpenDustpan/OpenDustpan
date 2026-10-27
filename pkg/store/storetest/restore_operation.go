@@ -2,6 +2,7 @@ package storetest
 
 import (
 	"errors"
+	"slices"
 	"testing"
 	"time"
 
@@ -40,58 +41,6 @@ func restoreOperationCases() []restoreCase {
 	cases = append(cases, restoreStagingCases()...)
 
 	return append(cases, restoreWorkerCases()...)
-}
-
-// restoreWorkerCases are the cases of a whole restore that the workers of
-// two instances run on one database. For each step: a takeover after a holder
-// stopped, a takeover while the stale holder continues its work, and a start
-// of another instance. Then the cases of a stop in the swap transaction, a
-// cancel, the blob store and the maintenance mode. Each case runs the
-// restore service with the ports of the store, so the cases wait for the
-// steps of the worker.
-func restoreWorkerCases() []restoreCase {
-	steps := backup.RestoreSteps()
-	cases := make([]restoreCase, 0, 3*len(steps)+12)
-
-	for _, step := range steps {
-		cases = append(cases,
-			restoreCase{name: "a takeover in the " + step + " step ends the restore once", test: pendingRestoreWorker},
-			restoreCase{
-				name: "a stale holder that continues the " + step + " step after a takeover changes nothing fenced",
-				test: pendingRestoreWorker,
-			},
-			restoreCase{
-				name: "a start of another instance during the " + step + " step changes nothing",
-				test: pendingRestoreWorker,
-			},
-		)
-	}
-
-	for _, name := range []string{
-		"a holder stopped in the swap transaction cannot swap after a takeover",
-		"a cancel before the swap ends the restore failed and leaves maintenance mode",
-		"a cancel after the swap is refused and the restore succeeds",
-		"the cleanup of the next restore drops an area of an ended restore",
-		"a restore on a blob store with no conditional writes never deletes a live key",
-		"a corrupt backup object fails the restore and deletes no live key",
-		"a blob deleter in flight across the restore loses no blob that the restored data names",
-		"a restore that starts in the maintenance mode of an operator leaves it in maintenance mode",
-		"a cleanup that waits past its lock limit tries again and ends",
-		"a check-only restore runs stage and check and changes no live data",
-		"an ended restore under the maintenance hold keeps maintenance mode",
-		"a restore with force audits each canceled unit with the restore ID and the token",
-	} {
-		cases = append(cases, restoreCase{name: name, test: pendingRestoreWorker})
-	}
-
-	return cases
-}
-
-// pendingRestoreWorker skips a case of restoreWorkerCases until the restore
-// service runs its steps on a worker.
-func pendingRestoreWorker(t *testing.T, _ RestoreFactory) {
-	t.Helper()
-	t.Skip("the restore service does not run its steps on a worker yet")
 }
 
 // restoreCase is one case of RunRestore.
@@ -684,7 +633,11 @@ func testRestoreOpEnter(t *testing.T, newStore RestoreFactory) {
 		t.Fatalf("maintenance flag after the enter = %t, %v, want true", entered, err)
 	}
 
-	if _, err := ops.RestoreMaintenanceEntered(ctx, backup.MintRestoreID()); !errors.Is(err, backup.ErrRestoreNotFound) {
+	_, err := ops.RestoreMaintenanceEntered(
+		ctx,
+		backup.MintRestoreID(),
+	)
+	if !errors.Is(err, backup.ErrRestoreNotFound) {
 		t.Fatalf("maintenance flag of an unknown restore: error = %v, want ErrRestoreNotFound", err)
 	}
 
@@ -694,20 +647,22 @@ func testRestoreOpEnter(t *testing.T, newStore RestoreFactory) {
 
 	enter := held.Claim.Step(backup.RestoreStepEnterMaintenance)
 
-	if _, err := ops.ConfirmRestoreMaintenance(ctx, enter, id, maintenance.StateNormal); !errors.Is(
-		err, maintenance.ErrStateChanged,
-	) {
+	_, err = ops.ConfirmRestoreMaintenance(ctx, enter, id, maintenance.StateNormal, nil)
+	if !errors.Is(err, maintenance.ErrStateChanged) {
 		t.Fatalf("confirm of a state that is not stored: error = %v, want ErrStateChanged", err)
 	}
 
 	mustLackStep(t, durableOps, held.ID, backup.RestoreStepEnterMaintenance)
 
-	entered, err := ops.ConfirmRestoreMaintenance(ctx, enter, id, maintenance.StateMaintenance)
+	canceled := []string{"stack acme/web", "workspace acme/net"}
+
+	entered, err := ops.ConfirmRestoreMaintenance(ctx, enter, id, maintenance.StateMaintenance, canceled)
 	if err != nil || !entered {
 		t.Fatalf("confirm after the enter = %t, %v, want entered", entered, err)
 	}
 
 	mustHaveStep(t, durableOps, held.ID, backup.RestoreStepEnterMaintenance)
+	mustEnterResult(t, durableOps, held, canceled)
 
 	// The leave clears the flag, and its confirm records the leave step.
 	leave := held.Claim.Step(backup.RestoreStepLeaveMaintenance)
@@ -717,12 +672,45 @@ func testRestoreOpEnter(t *testing.T, newStore RestoreFactory) {
 		t.Fatalf("leave under the fence: %v", err)
 	}
 
-	if entered, err = ops.ConfirmRestoreMaintenance(ctx, leave, id, maintenance.StateNormal); err != nil || entered {
+	entered, err = ops.ConfirmRestoreMaintenance(
+		ctx,
+		leave,
+		id,
+		maintenance.StateNormal,
+		nil,
+	)
+	if err != nil ||
+		entered {
 		t.Fatalf("confirm after the leave = %t, %v, want not entered", entered, err)
 	}
 
 	mustHaveStep(t, durableOps, held.ID, backup.RestoreStepLeaveMaintenance)
 	mustState(t, s, maintenance.StateNormal)
+}
+
+// mustEnterResult proves that the enter step of held records the flag, the
+// canceled units and the claim token, as EncodeRestoreMaintenance makes them.
+func mustEnterResult(t *testing.T, ops durable.Store, held durable.Operation, canceled []string) {
+	t.Helper()
+
+	op, err := ops.Get(t.Context(), held.ID)
+	if err != nil {
+		t.Fatalf("get operation %s: %v", held.ID, err)
+	}
+
+	rec, ok := op.Step(backup.RestoreStepEnterMaintenance)
+	if !ok {
+		t.Fatalf("operation %s has no enter step", held.ID)
+	}
+
+	got, err := backup.DecodeRestoreMaintenance(rec.Result)
+	if err != nil {
+		t.Fatalf("decode the enter result %q: %v", rec.Result, err)
+	}
+
+	if !got.Entered || got.Token != held.Claim.Token || !slices.Equal(got.Canceled, canceled) {
+		t.Fatalf("enter result = %+v, want entered, token %d and the units %v", got, held.Claim.Token, canceled)
+	}
 }
 
 func testRestoreOpEnterRaced(t *testing.T, newStore RestoreFactory) {
@@ -777,7 +765,7 @@ func testRestoreOpEnterOperator(t *testing.T, newStore RestoreFactory) {
 		t.Fatalf("enter in the maintenance mode of an operator: error = %v, want ErrStateChanged", err)
 	}
 
-	entered, err := ops.ConfirmRestoreMaintenance(t.Context(), enter, id, maintenance.StateMaintenance)
+	entered, err := ops.ConfirmRestoreMaintenance(t.Context(), enter, id, maintenance.StateMaintenance, nil)
 	if err != nil || entered {
 		t.Fatalf("confirm in the maintenance mode of an operator = %t, %v, want not entered", entered, err)
 	}
@@ -817,9 +805,14 @@ func testRestoreOpEnterRefused(t *testing.T, newStore RestoreFactory) {
 				t.Fatalf("enter by a %s claim: error = %v, want %v", tc.name, err, tc.want)
 			}
 
-			if _, err := ops.ConfirmRestoreMaintenance(t.Context(), enter, id, maintenance.StateNormal); !errors.Is(
-				err, tc.want,
-			) {
+			_, err = ops.ConfirmRestoreMaintenance(
+				t.Context(),
+				enter,
+				id,
+				maintenance.StateNormal,
+				nil,
+			)
+			if !errors.Is(err, tc.want) {
 				t.Fatalf("confirm by a %s claim: error = %v, want %v", tc.name, err, tc.want)
 			}
 

@@ -155,7 +155,9 @@ func restoreClaim(t *testing.T, s RestoreStore, id backup.RestoreID) durable.Cla
 
 	ops := s.DurableOperationsPort()
 
-	for _, op := range restoreOps(t, ops) {
+	all := restoreOps(t, ops)
+	for i := range all {
+		op := &all[i]
 		if op.Key != backup.RestoreOperationKey(id) {
 			continue
 		}
@@ -430,13 +432,23 @@ func testRestoreOneRunning(t *testing.T, newStore RestoreFactory) {
 		now().Add(time.Minute),
 	)
 
-	if err := ops.StartRestore(t.Context(), second, restoreOpStart(second.ID)); !errors.Is(err, backup.ErrRestoreRunning) {
+	err := ops.StartRestore(
+		t.Context(),
+		second,
+		restoreOpStart(second.ID),
+	)
+	if !errors.Is(err, backup.ErrRestoreRunning) {
 		t.Fatalf("second restore while one checks: err = %v, want ErrRestoreRunning", err)
 	}
 
 	mustMarkApplying(t, s, first.ID, backup.ID(ident.NewID("bkp-")))
 
-	if err := ops.StartRestore(t.Context(), second, restoreOpStart(second.ID)); !errors.Is(err, backup.ErrRestoreRunning) {
+	err = ops.StartRestore(
+		t.Context(),
+		second,
+		restoreOpStart(second.ID),
+	)
+	if !errors.Is(err, backup.ErrRestoreRunning) {
 		t.Fatalf("second restore while one applies: err = %v, want ErrRestoreRunning", err)
 	}
 

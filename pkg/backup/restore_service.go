@@ -224,40 +224,6 @@ func NewRestoreService(cfg RestoreConfig) (*RestoreService, error) {
 	return s, nil
 }
 
-// newRunner builds the runner that claims and runs the restore operations.
-// It stops a step at the first renewal that fails, because the steps change
-// things outside the fence: blob copies and, with force, the cancel of
-// active work.
-func (s *RestoreService) newRunner(cfg RestoreConfig) (*durable.Runner, error) {
-	runner, err := durable.NewRunner(durable.RunnerConfig{
-		Store: cfg.Operations,
-		Owner: cmp.Or(cfg.Owner, "restore"),
-		Kinds: []durable.KindSpec{{
-			Kind:       RestoreOperationKind,
-			Version:    RestoreOperationVersion,
-			MinVersion: RestoreOperationVersion,
-			Steps:      s.steps(),
-		}},
-		Lease:              cfg.Lease,
-		RenewEvery:         0,
-		PollEvery:          0,
-		MaxAttempts:        0,
-		ExpiryLimit:        0,
-		Backoff:            durable.Backoff{Base: cmp.Or(cfg.RetryBase, durable.DefaultBackoffBase), Max: durable.DefaultBackoffMax},
-		ClaimBackoff:       durable.Backoff{Base: 0, Max: 0},
-		WriteTimeout:       0,
-		Deferred:           nil,
-		StopOnRenewalError: true,
-		Logger:             cfg.Logger,
-		Rand:               nil,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("restore runner: %w", err)
-	}
-
-	return runner, nil
-}
-
 // Start records restore id and starts its durable operation, in one
 // transaction, and returns at once, so an HTTP handler answers 202 before
 // the restore ends. It does not run the restore: a worker of any instance
@@ -266,52 +232,14 @@ func (s *RestoreService) newRunner(cfg RestoreConfig) (*durable.Runner, error) {
 // stops the restore. A dev backup into a production installation is refused
 // here, before the row exists.
 func (s *RestoreService) Start(ctx context.Context, id RestoreID, req RestoreRequest) error {
-	if err := ctx.Err(); err != nil {
-		return fmt.Errorf("begin restore %s: %w", id, err)
-	}
-
-	if _, err := ParseRestoreID(id.String()); err != nil {
-		return fmt.Errorf("begin restore: %w", err)
-	}
-
-	if _, err := ParseID(req.BackupID.String()); err != nil {
-		return fmt.Errorf("begin restore %s: %w", id, err)
-	}
-
-	if s.admit != nil {
-		if err := s.admit(ctx); err != nil {
-			return fmt.Errorf("begin restore %s: %w", id, err)
-		}
-	}
-
-	// A restore that runs refuses the start before it reads the target. The
-	// insert of StartRestore checks it again in its transaction: two starts
-	// at the same time pass this read, and only one insert commits.
-	if err := s.refuseWhileRunning(ctx); err != nil {
-		return fmt.Errorf("begin restore %s: %w", id, err)
-	}
-
-	warnings, err := s.startDevCheck(ctx, req.BackupID)
+	warnings, err := s.admitStart(ctx, id, req)
 	if err != nil {
-		return fmt.Errorf("begin restore %s: %w", id, err)
+		return err
 	}
 
-	in := restoreInput{
-		ID: id, BackupID: req.BackupID, PreBackupID: req.PreBackupID, CheckOnly: req.CheckOnly, Force: req.Force,
-		RequestedBy: req.RequestedBy, KeepAccessTables: req.KeepAccessTables,
-	}
-
-	if in.PreBackupID == "" {
-		in.PreBackupID = ID(ident.NewID("bkp-"))
-	}
-
-	if _, err := ParseID(in.PreBackupID.String()); err != nil {
-		return fmt.Errorf("begin restore %s: %w", id, err)
-	}
-
-	input, err := json.Marshal(in)
+	input, err := startInput(id, req)
 	if err != nil {
-		return fmt.Errorf("encode input of restore %s: %w", id, err)
+		return err
 	}
 
 	start, err := s.runner.StartRequest(RestoreOperationKind, RestoreOperationKey(id), input)
@@ -332,23 +260,6 @@ func (s *RestoreService) Start(ctx context.Context, id RestoreID, req RestoreReq
 
 	if err := s.live.StartRestore(ctx, record, start); err != nil {
 		return fmt.Errorf("create restore %s: %w", id, err)
-	}
-
-	return nil
-}
-
-// refuseWhileRunning returns ErrRestoreRunning when a restore row is
-// checking or applying.
-func (s *RestoreService) refuseWhileRunning(ctx context.Context) error {
-	rows, err := s.live.ListRestores(ctx)
-	if err != nil {
-		return fmt.Errorf("list restores: %w", err)
-	}
-
-	for i := range rows {
-		if rows[i].State == RestoreChecking || rows[i].State == RestoreApplying {
-			return ErrRestoreRunning
-		}
 	}
 
 	return nil
@@ -439,6 +350,14 @@ func (s *RestoreService) Cancel(ctx context.Context, id RestoreID) error {
 	case errors.Is(err, durable.ErrStepDone):
 		return fmt.Errorf("cancel restore %s: %w", id, ErrRestoreSwapped)
 	case errors.Is(err, durable.ErrFinished):
+		// An operation that a cancel already ended accepts the cancel again,
+		// also before the row is marked failed.
+		if ended, getErr := s.operations.Get(ctx, op.ID); getErr == nil && ended.State == durable.StateCanceled {
+			s.failEndedOnce(ctx)
+
+			return nil
+		}
+
 		return fmt.Errorf("cancel restore %s: %w", id, ErrRestoreNotRunning)
 	case err != nil:
 		return fmt.Errorf("cancel restore %s: %w", id, err)
@@ -447,22 +366,6 @@ func (s *RestoreService) Cancel(ctx context.Context, id RestoreID) error {
 	s.failEndedOnce(ctx)
 
 	return nil
-}
-
-// operationOf returns the durable operation of restore id.
-func (s *RestoreService) operationOf(ctx context.Context, id RestoreID) (durable.Operation, error) {
-	ops, err := s.operations.List(ctx, durable.Filter{Kind: RestoreOperationKind, States: nil, Limit: 0})
-	if err != nil {
-		return durable.Operation{}, fmt.Errorf("list restore operations: %w", err)
-	}
-
-	for i := range ops {
-		if ops[i].Key == RestoreOperationKey(id) {
-			return ops[i], nil
-		}
-	}
-
-	return durable.Operation{}, ErrRestoreNotFound
 }
 
 // Work claims and runs restore operations until ctx ends, and marks failed
@@ -495,6 +398,141 @@ func (s *RestoreService) RunOnce(ctx context.Context) error {
 	return nil
 }
 
+// newRunner builds the runner that claims and runs the restore operations.
+// It stops a step at the first renewal that fails, because the steps change
+// things outside the fence: blob copies and, with force, the cancel of
+// active work.
+func (s *RestoreService) newRunner(cfg RestoreConfig) (*durable.Runner, error) {
+	runner, err := durable.NewRunner(durable.RunnerConfig{
+		Store: cfg.Operations,
+		Owner: cmp.Or(cfg.Owner, "restore"),
+		Kinds: []durable.KindSpec{{
+			Kind:       RestoreOperationKind,
+			Version:    RestoreOperationVersion,
+			MinVersion: RestoreOperationVersion,
+			Steps:      s.steps(),
+		}},
+		Lease:       cfg.Lease,
+		RenewEvery:  0,
+		PollEvery:   0,
+		MaxAttempts: 0,
+		ExpiryLimit: 0,
+		Backoff: durable.Backoff{
+			Base: cmp.Or(cfg.RetryBase, durable.DefaultBackoffBase),
+			Max:  durable.DefaultBackoffMax,
+		},
+		ClaimBackoff:       durable.Backoff{Base: 0, Max: 0},
+		WriteTimeout:       0,
+		Deferred:           nil,
+		StopOnRenewalError: true,
+		Logger:             cfg.Logger,
+		Rand:               nil,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("restore runner: %w", err)
+	}
+
+	return runner, nil
+}
+
+// refuseWhileRunning returns ErrRestoreRunning when a restore row is
+// checking or applying.
+func (s *RestoreService) refuseWhileRunning(ctx context.Context) error {
+	rows, err := s.live.ListRestores(ctx)
+	if err != nil {
+		return fmt.Errorf("list restores: %w", err)
+	}
+
+	for i := range rows {
+		if rows[i].State == RestoreChecking || rows[i].State == RestoreApplying {
+			return ErrRestoreRunning
+		}
+	}
+
+	return nil
+}
+
+// operationOf returns the durable operation of restore id.
+func (s *RestoreService) operationOf(ctx context.Context, id RestoreID) (durable.Operation, error) {
+	ops, err := s.operations.List(ctx, durable.Filter{Kind: RestoreOperationKind, States: nil, Limit: 0})
+	if err != nil {
+		return durable.Operation{}, fmt.Errorf("list restore operations: %w", err)
+	}
+
+	for i := range ops {
+		if ops[i].Key == RestoreOperationKey(id) {
+			return ops[i], nil
+		}
+	}
+
+	return durable.Operation{}, ErrRestoreNotFound
+}
+
+// admitStart checks the IDs of a start, runs the admit hook, refuses the
+// start while a restore runs, and compares the kinds of the backup and the
+// installation. It returns the warnings of the kinds.
+func (s *RestoreService) admitStart(
+	ctx context.Context,
+	id RestoreID,
+	req RestoreRequest,
+) ([]RestoreWarningCode, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("begin restore %s: %w", id, err)
+	}
+
+	if _, err := ParseRestoreID(id.String()); err != nil {
+		return nil, fmt.Errorf("begin restore: %w", err)
+	}
+
+	if _, err := ParseID(req.BackupID.String()); err != nil {
+		return nil, fmt.Errorf("begin restore %s: %w", id, err)
+	}
+
+	if s.admit != nil {
+		if err := s.admit(ctx); err != nil {
+			return nil, fmt.Errorf("begin restore %s: %w", id, err)
+		}
+	}
+
+	// A restore that runs refuses the start before it reads the target. The
+	// insert of StartRestore checks it again in its transaction: two starts
+	// at the same time pass this read, and only one insert commits.
+	if err := s.refuseWhileRunning(ctx); err != nil {
+		return nil, fmt.Errorf("begin restore %s: %w", id, err)
+	}
+
+	warnings, err := s.startDevCheck(ctx, req.BackupID)
+	if err != nil {
+		return nil, fmt.Errorf("begin restore %s: %w", id, err)
+	}
+
+	return warnings, nil
+}
+
+// startInput returns the input of the operation of restore id, with a new
+// pre-backup ID when req names none.
+func startInput(id RestoreID, req RestoreRequest) ([]byte, error) {
+	in := restoreInput{
+		ID: id, BackupID: req.BackupID, PreBackupID: req.PreBackupID, CheckOnly: req.CheckOnly, Force: req.Force,
+		RequestedBy: req.RequestedBy, KeepAccessTables: req.KeepAccessTables,
+	}
+
+	if in.PreBackupID == "" {
+		in.PreBackupID = ID(ident.NewID("bkp-"))
+	}
+
+	if _, err := ParseID(in.PreBackupID.String()); err != nil {
+		return nil, fmt.Errorf("begin restore %s: %w", id, err)
+	}
+
+	input, err := json.Marshal(in)
+	if err != nil {
+		return nil, fmt.Errorf("encode input of restore %s: %w", id, err)
+	}
+
+	return input, nil
+}
+
 // failEnded marks failed the rows of restores whose operation ended failed
 // or canceled, once in each lease period, until ctx ends.
 func (s *RestoreService) failEnded(ctx context.Context) {
@@ -524,10 +562,10 @@ func (s *RestoreService) failEndedOnce(ctx context.Context) {
 
 	// The fence comes before the rows fail: when it fails, the next round
 	// still sees the ended restore and fences again.
-	if err := s.fenceEnded(ctx); err != nil {
+	if fenceErr := s.fenceEnded(ctx); fenceErr != nil {
 		if ctx.Err() == nil {
 			s.logger.WarnContext(ctx, "namespaces were not fenced after a restore that stopped",
-				slog.String("error", durable.ErrorClass(err)))
+				slog.String("error", durable.ErrorClass(fenceErr)))
 		}
 
 		return

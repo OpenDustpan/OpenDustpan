@@ -37,7 +37,11 @@ func TestCancelRestoreBeforeTheSwap(t *testing.T) {
 	}()
 
 	// The gate holds the restore in its stage step, before the swap.
-	fix := newRestoreFixtureOver(t, stores, &gatedRestoreTarget{inner: stores.target, gate: gate, reads: atomic.Int32{}})
+	fix := newRestoreFixtureOver(
+		t,
+		stores,
+		&gatedRestoreTarget{inner: stores.target, gate: gate, reads: atomic.Int32{}},
+	)
 	doc := startRestore(t, fix.handler, `{"backupID":"bkp-missing000000000001"}`)
 
 	for range 2 {
@@ -162,14 +166,14 @@ func TestCancelRestoreUnknownAnswers404(t *testing.T) {
 		}
 	}
 
-	listing, err := fix.audit.List(t.Context(), audit.ServerScope, audit.Page{})
+	listing, err := fix.audit.List(t.Context(), audit.ServerScope, audit.Page{Number: 1, Size: audit.MaxPageSize})
 	if err != nil {
 		t.Fatalf("list audit entries: %v", err)
 	}
 
-	for _, entry := range listing.Entries {
-		if strings.HasPrefix(entry.Object, "cancel of restore") {
-			t.Fatalf("audit entry %q for an unknown restore", entry.Object)
+	for i := range listing.Entries {
+		if object := listing.Entries[i].Object; strings.HasPrefix(object, "cancel of restore") {
+			t.Fatalf("audit entry %q for an unknown restore", object)
 		}
 	}
 }
@@ -179,15 +183,15 @@ func TestCancelRestoreUnknownAnswers404(t *testing.T) {
 func cancelEntries(t *testing.T, fix restoreFixture, id string, want audit.Outcome) int {
 	t.Helper()
 
-	listing, err := fix.audit.List(t.Context(), audit.ServerScope, audit.Page{})
+	listing, err := fix.audit.List(t.Context(), audit.ServerScope, audit.Page{Number: 1, Size: audit.MaxPageSize})
 	if err != nil {
 		t.Fatalf("list audit entries: %v", err)
 	}
 
 	n := 0
 
-	for _, entry := range listing.Entries {
-		if entry.Object == "cancel of restore "+id && entry.Outcome == want {
+	for i := range listing.Entries {
+		if entry := &listing.Entries[i]; entry.Object == "cancel of restore "+id && entry.Outcome == want {
 			n++
 		}
 	}

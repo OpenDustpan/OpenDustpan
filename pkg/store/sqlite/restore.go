@@ -105,7 +105,8 @@ func (s *Store) ApplyStaging(ctx context.Context) error {
 		return backup.ErrCorrupt
 	}
 
-	if _, err := s.swapStaged(ctx, swapPlan{staged: s.stagingPath, keepAccess: false, before: nil, after: nil}); err != nil {
+	plan := swapPlan{staged: s.stagingPath, keepAccess: false, before: nil, after: nil}
+	if _, err := s.swapStaged(ctx, plan); err != nil {
 		return err
 	}
 
@@ -157,23 +158,23 @@ func (s *Store) swapStaged(ctx context.Context, plan swapPlan) (int64, error) {
 	defer s.mu.Unlock()
 
 	if plan.before != nil {
-		if err := plan.before(ctx); err != nil {
-			return 0, err
+		if beforeErr := plan.before(ctx); beforeErr != nil {
+			return 0, beforeErr
 		}
 	}
 
 	// The check covers the whole staging area, also the access tables that
 	// a swap that keeps them does not take, and runs before any write to the
 	// staged file.
-	if err := s.checkSwapDevLocked(ctx, plan.staged); err != nil {
-		return 0, err
+	if checkErr := s.checkSwapDevLocked(ctx, plan.staged); checkErr != nil {
+		return 0, checkErr
 	}
 
 	var dropped int64
 
 	if plan.keepAccess {
-		if err := s.keepLiveAccessTables(ctx, plan.staged); err != nil {
-			return 0, err
+		if keepErr := s.keepLiveAccessTables(ctx, plan.staged); keepErr != nil {
+			return 0, keepErr
 		}
 
 		// The swap takes temp_admins from the backup and keeps the live

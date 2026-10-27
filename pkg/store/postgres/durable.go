@@ -316,7 +316,7 @@ func recordStep(ctx context.Context, q *db.Queries, f durable.StepFence, result 
 		return err
 	}
 
-	return insertStep(ctx, q, row, f, result, now)
+	return insertStep(ctx, q, stepAt{row: row, now: now}, f, result)
 }
 
 // checkStep checks f with the rules of durable.Store.RecordStep in the
@@ -346,11 +346,18 @@ func checkStep(ctx context.Context, q *db.Queries, f durable.StepFence) (db.Dura
 	return row, now, nil
 }
 
-// insertStep records the step of f with result on row, which checkStep
-// returned in the same transaction, at the time now.
-func insertStep(
-	ctx context.Context, q *db.Queries, row db.DurableOperation, f durable.StepFence, result []byte, now int64,
-) error {
+// stepAt is the row of an operation that checkStep returned, and the time of
+// the store clock that it read, in one transaction.
+type stepAt struct {
+	row db.DurableOperation
+	now int64
+}
+
+// insertStep records the step of f with result on the row of at, which
+// checkStep returned in the same transaction, at the time of at.
+func insertStep(ctx context.Context, q *db.Queries, at stepAt, f durable.StepFence, result []byte) error {
+	row, now := at.row, at.now
+
 	step := db.InsertDurableStepParams{OperationID: row.ID, Name: f.Step, Result: nonNilBytes(result), NowMs: now}
 	if err := q.InsertDurableStep(ctx, step); err != nil {
 		return fmt.Errorf("insert step: %w", err)

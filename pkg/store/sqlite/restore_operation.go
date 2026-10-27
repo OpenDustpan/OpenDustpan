@@ -28,7 +28,7 @@ const areaInfix = ".stage-"
 
 // areaSuffixPattern matches the part of a staging file name after the name
 // of the live database file and areaInfix.
-var areaSuffixPattern = regexp.MustCompile(`^(rst-[a-z2-7]{20})-([1-9][0-9]{0,18})$`)
+var areaSuffixPattern = regexp.MustCompile(`^(rst-[a-z2-7]{20})-([1-9]\d{0,18})$`)
 
 // areaPath returns the path of the staging file of the area a. It checks a
 // again, so a value that the service did not build never reaches a path.
@@ -72,10 +72,10 @@ func ownsRestore(ctx context.Context, q *db.Queries, f durable.StepFence, id bac
 }
 
 // fencedRestore checks f, and that its operation runs restore id, in the
-// transaction of q. With record it also records the step of f with result.
-// It returns the row of the operation and the time of the store clock.
+// transaction of q. It returns the row of the operation and the time of the
+// store clock.
 func fencedRestore(
-	ctx context.Context, q *db.Queries, f durable.StepFence, id backup.RestoreID, result []byte, record bool,
+	ctx context.Context, q *db.Queries, f durable.StepFence, id backup.RestoreID,
 ) (db.DurableOperation, int64, error) {
 	row, now, err := checkStep(ctx, q, f)
 	if err != nil {
@@ -86,17 +86,22 @@ func fencedRestore(
 	// to the operation of this restore. The service passes the right fence;
 	// this check stays so that no caller can write the row of one restore
 	// under the claim of another operation.
-	if err := ownsRestore(ctx, q, f, id); err != nil {
-		return db.DurableOperation{}, 0, err
-	}
-
-	if record {
-		if err := insertStep(ctx, q, row, f, result, now); err != nil {
-			return db.DurableOperation{}, 0, err
-		}
+	if ownErr := ownsRestore(ctx, q, f, id); ownErr != nil {
+		return db.DurableOperation{}, 0, ownErr
 	}
 
 	return row, now, nil
+}
+
+// recordedRestore checks f as fencedRestore does, and records the step of f
+// with no result, in the transaction of q.
+func recordedRestore(ctx context.Context, q *db.Queries, f durable.StepFence, id backup.RestoreID) error {
+	row, now, err := fencedRestore(ctx, q, f, id)
+	if err != nil {
+		return err
+	}
+
+	return insertStep(ctx, q, stepAt{row: row, now: now}, f, nil)
 }
 
 // runningRestore returns the state and the maintenance flag of the running
@@ -121,69 +126,81 @@ func runningRestore(ctx context.Context, q *db.Queries, id backup.RestoreID) (db
 
 // StartRestore implements backup.RestoreOperations.
 func (s *Store) StartRestore(ctx context.Context, r backup.RestoreRecord, start durable.StartRequest) error {
-	if err := start.Validate(); err != nil {
-		return fmt.Errorf("start restore %s: %w", r.ID, err)
-	}
-
-	if _, err := backup.ParseRestoreID(r.ID.String()); err != nil {
-		return fmt.Errorf("start restore: %w", err)
-	}
-
-	// Defense in depth: the service builds the request from the restore ID.
-	// This check stays so that no caller can start the row of one restore
-	// with the operation of another kind or key.
-	if start.Key != backup.RestoreOperationKey(r.ID) || start.Kind != backup.RestoreOperationKind {
-		return fmt.Errorf("start restore %s: operation %q of kind %q: %w",
-			r.ID, start.Key, start.Kind, durable.ErrKeyConflict)
-	}
-
-	report := ""
-
-	if r.DevReport != nil {
-		text, err := codec.EncodeDevReport(*r.DevReport)
-		if err != nil {
-			return err
-		}
-
-		report = text
+	report, err := restoreStartReport(r, start)
+	if err != nil {
+		return err
 	}
 
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
 	return s.inControlTx(ctx, func(q *db.Queries) error {
-		n, err := q.InsertRestore(ctx, db.InsertRestoreParams{
-			ID:          r.ID.String(),
-			BackupID:    r.BackupID.String(),
-			RequestedBy: r.RequestedBy,
-			StartedAtMs: codec.Millis(r.StartedAt),
-			DevReport:   report,
-		})
-		if err != nil {
-			return fmt.Errorf("insert restore: %w", err)
-		}
-
-		if n == 0 {
-			if _, getErr := q.GetRestoreMaintenance(ctx, r.ID.String()); getErr == nil {
-				return backup.ErrRestoreExists
-			}
-
-			return backup.ErrRestoreRunning
-		}
-
-		_, created, err := startDurable(ctx, q, start)
-		if err != nil {
-			return err
-		}
-
-		if !created {
-			// A new row needs a new operation: a taken key is a start of
-			// another restore.
-			return fmt.Errorf("start restore operation %q: %w", start.Key, durable.ErrKeyConflict)
-		}
-
-		return nil
+		return insertRestoreWithOperation(ctx, q, r, start, report)
 	})
+}
+
+// restoreStartReport checks the start of restore r with its operation start,
+// and returns the encoded dev report of r.
+func restoreStartReport(r backup.RestoreRecord, start durable.StartRequest) (string, error) {
+	if err := start.Validate(); err != nil {
+		return "", fmt.Errorf("start restore %s: %w", r.ID, err)
+	}
+
+	if _, err := backup.ParseRestoreID(r.ID.String()); err != nil {
+		return "", fmt.Errorf("start restore: %w", err)
+	}
+
+	// Defense in depth: the service builds the request from the restore ID.
+	// This check stays so that no caller can start the row of one restore
+	// with the operation of another kind or key.
+	if start.Key != backup.RestoreOperationKey(r.ID) || start.Kind != backup.RestoreOperationKind {
+		return "", fmt.Errorf("start restore %s: operation %q of kind %q: %w",
+			r.ID, start.Key, start.Kind, durable.ErrKeyConflict)
+	}
+
+	if r.DevReport == nil {
+		return "", nil
+	}
+
+	return codec.EncodeDevReport(*r.DevReport)
+}
+
+// insertRestoreWithOperation inserts the row of restore r and its operation
+// start in the transaction of q.
+func insertRestoreWithOperation(
+	ctx context.Context, q *db.Queries, r backup.RestoreRecord, start durable.StartRequest, report string,
+) error {
+	n, err := q.InsertRestore(ctx, db.InsertRestoreParams{
+		ID:          r.ID.String(),
+		BackupID:    r.BackupID.String(),
+		RequestedBy: r.RequestedBy,
+		StartedAtMs: codec.Millis(r.StartedAt),
+		DevReport:   report,
+	})
+	if err != nil {
+		return fmt.Errorf("insert restore: %w", err)
+	}
+
+	if n == 0 {
+		if _, getErr := q.GetRestoreMaintenance(ctx, r.ID.String()); getErr == nil {
+			return backup.ErrRestoreExists
+		}
+
+		return backup.ErrRestoreRunning
+	}
+
+	_, created, err := startDurable(ctx, q, start)
+	if err != nil {
+		return err
+	}
+
+	if !created {
+		// A new row needs a new operation: a taken key is a start of
+		// another restore.
+		return fmt.Errorf("start restore operation %q: %w", start.Key, durable.ErrKeyConflict)
+	}
+
+	return nil
 }
 
 // RecordRestoreReport implements backup.RestoreOperations.
@@ -199,7 +216,7 @@ func (s *Store) RecordRestoreReport(
 	defer s.mu.RUnlock()
 
 	return s.inControlTx(ctx, func(q *db.Queries) error {
-		if _, _, err := fencedRestore(ctx, q, f, id, nil, true); err != nil {
+		if err := recordedRestore(ctx, q, f, id); err != nil {
 			return err
 		}
 
@@ -207,7 +224,8 @@ func (s *Store) RecordRestoreReport(
 			return err
 		}
 
-		if _, err := q.SetRestoreDevReport(ctx, db.SetRestoreDevReportParams{DevReport: text, ID: id.String()}); err != nil {
+		params := db.SetRestoreDevReportParams{DevReport: text, ID: id.String()}
+		if _, err := q.SetRestoreDevReport(ctx, params); err != nil {
 			return fmt.Errorf("store restore dev report: %w", err)
 		}
 
@@ -223,7 +241,7 @@ func (s *Store) SetRestoreMaintenance(
 	defer s.mu.RUnlock()
 
 	return s.setStateIfWithin(ctx, expected, next, func(q *db.Queries) error {
-		if _, _, err := fencedRestore(ctx, q, f, id, nil, false); err != nil {
+		if _, _, err := fencedRestore(ctx, q, f, id); err != nil {
 			return err
 		}
 
@@ -247,7 +265,7 @@ func (s *Store) SetRestoreMaintenance(
 
 // ConfirmRestoreMaintenance implements backup.RestoreOperations.
 func (s *Store) ConfirmRestoreMaintenance(
-	ctx context.Context, f durable.StepFence, id backup.RestoreID, want maintenance.State,
+	ctx context.Context, f durable.StepFence, id backup.RestoreID, want maintenance.State, canceled []string,
 ) (bool, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -255,7 +273,7 @@ func (s *Store) ConfirmRestoreMaintenance(
 	var entered bool
 
 	err := s.inControlTx(ctx, func(q *db.Queries) error {
-		row, now, err := fencedRestore(ctx, q, f, id, nil, false)
+		row, now, err := fencedRestore(ctx, q, f, id)
 		if err != nil {
 			return err
 		}
@@ -276,7 +294,14 @@ func (s *Store) ConfirmRestoreMaintenance(
 
 		entered = restore.MaintenanceEntered != 0
 
-		return insertStep(ctx, q, row, f, backup.EncodeRestoreMaintenance(entered), now)
+		result, err := backup.EncodeRestoreMaintenance(backup.RestoreMaintenanceResult{
+			Entered: entered, Canceled: canceled, Token: f.Token,
+		})
+		if err != nil {
+			return err
+		}
+
+		return insertStep(ctx, q, stepAt{row: row, now: now}, f, result)
 	})
 	if err != nil {
 		return false, err
@@ -293,7 +318,7 @@ func (s *Store) MarkRestoreApplying(
 	defer s.mu.RUnlock()
 
 	return s.inControlTx(ctx, func(q *db.Queries) error {
-		if _, _, err := fencedRestore(ctx, q, f, id, nil, true); err != nil {
+		if err := recordedRestore(ctx, q, f, id); err != nil {
 			return err
 		}
 
@@ -338,8 +363,8 @@ func (s *Store) RestoreMaintenanceEntered(ctx context.Context, id backup.Restore
 func (s *Store) AppendRestoreAudit(
 	ctx context.Context, f durable.StepFence, id backup.RestoreID, entries []audit.Entry,
 ) ([]audit.Entry, error) {
-	for _, e := range entries {
-		if err := validServerEntry(e); err != nil {
+	for i := range entries {
+		if err := validServerEntry(entries[i]); err != nil {
 			return nil, err
 		}
 	}
@@ -347,35 +372,49 @@ func (s *Store) AppendRestoreAudit(
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	stored := make([]audit.Entry, 0, len(entries))
+	var stored []audit.Entry
 
 	err := s.inControlTx(ctx, func(q *db.Queries) error {
-		if _, _, err := fencedRestore(ctx, q, f, id, nil, true); err != nil {
-			return err
-		}
+		var appendErr error
 
-		row, err := runningRestore(ctx, q, id)
-		if err != nil {
-			return err
-		}
+		stored, appendErr = appendRestoreEntries(ctx, q, f, id, entries)
 
-		if row.State != string(backup.RestoreApplying) {
-			return backup.ErrRestoreNotRunning
-		}
-
-		for _, e := range entries {
-			got, err := appendAuditEntry(ctx, q, e)
-			if err != nil {
-				return err
-			}
-
-			stored = append(stored, got)
-		}
-
-		return nil
+		return appendErr
 	})
 	if err != nil {
 		return nil, err
+	}
+
+	return stored, nil
+}
+
+// appendRestoreEntries appends entries to the audit log of the installation
+// and records the step of f, in the transaction of q.
+func appendRestoreEntries(
+	ctx context.Context, q *db.Queries, f durable.StepFence, id backup.RestoreID, entries []audit.Entry,
+) ([]audit.Entry, error) {
+	if err := recordedRestore(ctx, q, f, id); err != nil {
+		return nil, err
+	}
+
+	row, err := runningRestore(ctx, q, id)
+	if err != nil {
+		return nil, err
+	}
+
+	if row.State != string(backup.RestoreApplying) {
+		return nil, backup.ErrRestoreNotRunning
+	}
+
+	stored := make([]audit.Entry, 0, len(entries))
+
+	for i := range entries {
+		got, appendErr := appendAuditEntry(ctx, q, entries[i])
+		if appendErr != nil {
+			return nil, appendErr
+		}
+
+		stored = append(stored, got)
 	}
 
 	return stored, nil
@@ -395,7 +434,7 @@ func (s *Store) FinishRestore(
 	var out backup.RestoreRecord
 
 	err := s.inControlTx(ctx, func(q *db.Queries) error {
-		if _, _, err := fencedRestore(ctx, q, f, end.ID, nil, true); err != nil {
+		if err := recordedRestore(ctx, q, f, end.ID); err != nil {
 			return err
 		}
 
@@ -404,8 +443,8 @@ func (s *Store) FinishRestore(
 			return err
 		}
 
-		if err := endRestore(ctx, q, end, row.MaintenanceEntered != 0 && end.LeaveMaintenance); err != nil {
-			return err
+		if endErr := closeRestore(ctx, q, end, row); endErr != nil {
+			return endErr
 		}
 
 		got, err := q.GetRestore(ctx, end.ID.String())
@@ -424,18 +463,35 @@ func (s *Store) FinishRestore(
 	return out, nil
 }
 
-// endRestore ends the running restore end.ID in the transaction of q. With
-// leave, it moves the installation from maintenance to normal operation
-// first, with a compare-and-set: a state that is already normal stays.
-func endRestore(ctx context.Context, q *db.Queries, end backup.RestoreEnd, leave bool) error {
-	if leave {
-		if _, err := q.SetInstallationStateIf(ctx, db.SetInstallationStateIfParams{
-			State: string(maintenance.StateNormal), State_2: string(maintenance.StateMaintenance),
-		}); err != nil {
-			return fmt.Errorf("leave maintenance mode at the end of restore %s: %w", end.ID, maintenance.ErrUnavailable)
+// closeRestore ends the running restore end.ID in the transaction of q. With
+// end.LeaveMaintenance, and when row says that the restore entered
+// maintenance mode, it leaves maintenance mode first.
+func closeRestore(ctx context.Context, q *db.Queries, end backup.RestoreEnd, row db.GetRestoreMaintenanceRow) error {
+	if row.MaintenanceEntered != 0 && end.LeaveMaintenance {
+		if err := leaveAtRestoreEnd(ctx, q, end.ID); err != nil {
+			return err
 		}
 	}
 
+	return endRestore(ctx, q, end)
+}
+
+// leaveAtRestoreEnd moves the installation from maintenance to normal
+// operation at the end of restore id, in the transaction of q, with a
+// compare-and-set: a state that is already normal stays.
+func leaveAtRestoreEnd(ctx context.Context, q *db.Queries, id backup.RestoreID) error {
+	params := db.SetInstallationStateIfParams{
+		State: string(maintenance.StateNormal), State_2: string(maintenance.StateMaintenance),
+	}
+	if _, err := q.SetInstallationStateIf(ctx, params); err != nil {
+		return fmt.Errorf("leave maintenance mode at the end of restore %s: %w", id, maintenance.ErrUnavailable)
+	}
+
+	return nil
+}
+
+// endRestore ends the running restore end.ID in the transaction of q.
+func endRestore(ctx context.Context, q *db.Queries, end backup.RestoreEnd) error {
 	current, err := q.GetRestore(ctx, end.ID.String())
 	if err != nil {
 		return fmt.Errorf("select restore: %w", err)
@@ -494,6 +550,22 @@ func (s *Store) FailEndedRestores(ctx context.Context, endedAt time.Time, leave 
 	return failed, nil
 }
 
+// endedRestoreText returns the error text of a restore whose operation is in
+// state, and false while the operation has not ended canceled or failed.
+func endedRestoreText(id backup.RestoreID, state string) (string, bool, error) {
+	switch durable.State(state) {
+	case durable.StateCanceled:
+		return backup.RestoreCanceledText, true, nil
+	case durable.StateFailed:
+		return backup.RestoreStoppedText, true, nil
+	case durable.StatePending, durable.StateRunning, durable.StateSucceeded:
+		return "", false, nil
+	default:
+		return "", false, fmt.Errorf("durable operation of restore %s has the unknown state %q: %w", id, state,
+			errUnknownDurableState)
+	}
+}
+
 // failEndedRestore marks the running restore id failed when its operation
 // ended canceled or failed, in one transaction. It reports whether it did.
 func (s *Store) failEndedRestore(
@@ -508,58 +580,67 @@ func (s *Store) failEndedRestore(
 	)
 
 	err := s.inControlTx(ctx, func(q *db.Queries) error {
-		op, err := q.GetDurableOperationByKey(ctx, backup.RestoreOperationKey(id))
-		if errors.Is(err, sql.ErrNoRows) {
-			return nil
-		}
-
-		if err != nil {
-			return fmt.Errorf("select the operation of restore %s: %w", id, err)
-		}
-
-		text := ""
-
-		switch durable.State(op.State) {
-		case durable.StateCanceled:
-			text = backup.RestoreCanceledText
-		case durable.StateFailed:
-			text = backup.RestoreStoppedText
-		case durable.StatePending, durable.StateRunning, durable.StateSucceeded:
-			return nil
-		default:
-			return fmt.Errorf("durable operation of restore %s has the unknown state %q: %w", id, op.State,
-				errUnknownDurableState)
-		}
-
-		row, err := runningRestore(ctx, q, id)
-		if errors.Is(err, backup.ErrRestoreNotRunning) || errors.Is(err, backup.ErrRestoreNotFound) {
-			return nil
-		}
-
-		if err != nil {
-			return err
-		}
+		var failErr error
 
 		end := backup.RestoreEnd{
-			ID: id, State: backup.RestoreFailed, Error: text, EndedAt: endedAt, DevReport: nil, LeaveMaintenance: leave,
+			ID: id, State: backup.RestoreFailed, Error: "", EndedAt: endedAt, DevReport: nil, LeaveMaintenance: leave,
 		}
 
-		if err := endRestore(ctx, q, end, leave && row.MaintenanceEntered != 0); err != nil {
-			return err
-		}
+		out, ended, failErr = failEndedRestoreIn(ctx, q, end)
 
-		got, err := q.GetRestore(ctx, id.String())
-		if err != nil {
-			return fmt.Errorf("select failed restore: %w", err)
-		}
-
-		out, err = restoreFromRow(got)
-		ended = err == nil
-
-		return err
+		return failErr
 	})
 
 	return out, ended, err
+}
+
+// failEndedRestoreIn is failEndedRestore in the transaction of q, for the
+// end of the restore end.ID with the error text of its operation.
+func failEndedRestoreIn(ctx context.Context, q *db.Queries, end backup.RestoreEnd) (backup.RestoreRecord, bool, error) {
+	var none backup.RestoreRecord
+
+	id := end.ID
+
+	op, err := q.GetDurableOperationByKey(ctx, backup.RestoreOperationKey(id))
+	if errors.Is(err, sql.ErrNoRows) {
+		return none, false, nil
+	}
+
+	if err != nil {
+		return none, false, fmt.Errorf("select the operation of restore %s: %w", id, err)
+	}
+
+	text, ended, err := endedRestoreText(id, op.State)
+	if err != nil || !ended {
+		return none, false, err
+	}
+
+	row, err := runningRestore(ctx, q, id)
+	if errors.Is(err, backup.ErrRestoreNotRunning) || errors.Is(err, backup.ErrRestoreNotFound) {
+		return none, false, nil
+	}
+
+	if err != nil {
+		return none, false, err
+	}
+
+	end.Error = text
+
+	if endErr := closeRestore(ctx, q, end, row); endErr != nil {
+		return none, false, endErr
+	}
+
+	got, err := q.GetRestore(ctx, id.String())
+	if err != nil {
+		return none, false, fmt.Errorf("select failed restore: %w", err)
+	}
+
+	out, err := restoreFromRow(got)
+	if err != nil {
+		return none, false, err
+	}
+
+	return out, true, nil
 }
 
 // StageRestore implements backup.RestoreStaging.
@@ -580,10 +661,9 @@ func (s *Store) StageRestore(
 
 	// The areas of the earlier tokens of this restore, and a itself, go
 	// first. An area of a higher token belongs to a newer holder.
-	if err := s.removeAreas(func(b backup.StagingArea) bool {
-		return b.Restore == a.Restore && b.Token <= a.Token
-	}); err != nil {
-		return backup.Summary{}, none, err
+	earlier := func(b backup.StagingArea) bool { return b.Restore == a.Restore && b.Token <= a.Token }
+	if removeErr := s.removeAreas(earlier); removeErr != nil {
+		return backup.Summary{}, none, removeErr
 	}
 
 	sum, err := s.buildCheckedStaging(ctx, path, in.Open, index, in.Want)
@@ -655,7 +735,7 @@ func (s *Store) ApplyRestoreArea(
 			return s.runTx(ctx, func(q *db.Queries) error {
 				var fenceErr error
 
-				row, now, fenceErr = fencedRestore(ctx, q, f, a.Restore, nil, false)
+				row, now, fenceErr = fencedRestore(ctx, q, f, a.Restore)
 				if fenceErr != nil {
 					return fenceErr
 				}
@@ -668,7 +748,7 @@ func (s *Store) ApplyRestoreArea(
 			}, nil)
 		},
 		after: func(ctx context.Context, tx *sql.Tx, kept backup.KeepAccessResult) error {
-			return insertStep(ctx, db.New(tx), row, f, backup.EncodeRestoreSwap(kept), now)
+			return insertStep(ctx, db.New(tx), stepAt{row: row, now: now}, f, backup.EncodeRestoreSwap(kept))
 		},
 	}
 
@@ -696,7 +776,7 @@ func (s *Store) CleanRestoreAreas(
 		defer s.mu.RUnlock()
 
 		return s.runTx(ctx, func(q *db.Queries) error {
-			_, _, fenceErr := fencedRestore(ctx, q, f, id, nil, false)
+			_, _, fenceErr := fencedRestore(ctx, q, f, id)
 
 			return fenceErr
 		}, nil)
@@ -705,6 +785,29 @@ func (s *Store) CleanRestoreAreas(
 		return nil, err
 	}
 
+	dropped, err := s.removeEndedAreas(ctx, id)
+	if err != nil {
+		return dropped, err
+	}
+
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	recordErr := s.inControlTx(ctx, func(q *db.Queries) error {
+		return recordedRestore(ctx, q, f, id)
+	})
+	if recordErr != nil {
+		return dropped, recordErr
+	}
+
+	return dropped, nil
+}
+
+// removeEndedAreas removes the file of each staging area of restore id and of
+// each restore whose row ended. An area of a restore with no row here stays:
+// another installation can share the directory. It returns the areas that it
+// removed.
+func (s *Store) removeEndedAreas(ctx context.Context, id backup.RestoreID) ([]backup.StagingArea, error) {
 	rows, err := s.ListRestores(ctx)
 	if err != nil {
 		return nil, err
@@ -726,33 +829,20 @@ func (s *Store) CleanRestoreAreas(
 	var dropped []backup.StagingArea
 
 	for _, a := range areas {
-		// An area of a restore with no row here stays: another installation
-		// can share the directory.
 		if !ended[a.Restore] {
 			continue
 		}
 
-		path, err := s.areaPath(a)
-		if err != nil {
-			return dropped, err
+		path, pathErr := s.areaPath(a)
+		if pathErr != nil {
+			return dropped, pathErr
 		}
 
-		if err := removeSnapshotErr(path); err != nil {
-			return dropped, fmt.Errorf("remove staging area %s: %w", a, err)
+		if removeErr := removeSnapshotErr(path); removeErr != nil {
+			return dropped, fmt.Errorf("remove staging area %s: %w", a, removeErr)
 		}
 
 		dropped = append(dropped, a)
-	}
-
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	if err := s.inControlTx(ctx, func(q *db.Queries) error {
-		_, _, recordErr := fencedRestore(ctx, q, f, id, nil, true)
-
-		return recordErr
-	}); err != nil {
-		return dropped, err
 	}
 
 	return dropped, nil
