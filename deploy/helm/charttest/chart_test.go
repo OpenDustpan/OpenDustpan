@@ -44,6 +44,7 @@ func TestTemplateGolden(t *testing.T) {
 		{name: "s3", values: "ci/s3-values.yaml"},
 		{name: "tls-dir-backup", values: "ci/tls-dir-backup-values.yaml"},
 		{name: "numeric-secret-key", values: "ci/numeric-secret-key-values.yaml"},
+		{name: "ha", values: "ci/ha.yaml"},
 	}
 
 	for _, tc := range tests {
@@ -138,6 +139,84 @@ func TestTemplateRefused(t *testing.T) {
 			},
 			wantText: [][]string{{"metrics.serviceMonitor.tokenSecret names the same Secret and key"}},
 		},
+		{
+			name:     "several replicas with the fs blob store",
+			useBase:  true,
+			set:      []string{"--set", "replicas=2"},
+			wantText: [][]string{{"replicas is 2 and blobStore.type is fs"}},
+		},
+		{
+			name:    "several replicas with a dir backup target",
+			useBase: true,
+			set: append(s3Blob(),
+				"--set", "replicas=3",
+				"--set", "backup.target.type=dir",
+			),
+			wantText: [][]string{{"replicas is 3 and backup.target.type is dir"}},
+		},
+		{
+			name:    "several replicas with a file audit sink",
+			useBase: true,
+			set: append(s3Blob(),
+				"--set", "replicas=2",
+				"--set", "server.extraEnv[0].name=DUSTPAN_AUDIT_SINK",
+				"--set-string", "server.extraEnv[0].value=blob:audit siem=file:/var/log/audit.log",
+			),
+			wantText: [][]string{{"server.extraEnv DUSTPAN_AUDIT_SINK has a file: sink"}},
+		},
+		{
+			name:    "several replicas with a file log sink",
+			useBase: true,
+			set: append(s3Blob(),
+				"--set", "replicas=2",
+				"--set", "server.extraEnv[0].name=DUSTPAN_LOG_SINK",
+				"--set-string", "server.extraEnv[0].value=file:/var/log/server.log",
+			),
+			wantText: [][]string{{"server.extraEnv DUSTPAN_LOG_SINK has a file: sink"}},
+		},
+		{
+			name:    "several replicas with SQLite",
+			useBase: true,
+			set: append(s3Blob(),
+				"--set", "replicas=2",
+				"--set", "server.extraEnv[0].name=DUSTPAN_STATE_DATABASE",
+				"--set-string", "server.extraEnv[0].value=sqlite:/data/state.db",
+			),
+			wantText: [][]string{{"starts with sqlite:"}},
+		},
+		{
+			name:    "preStop wait not longer than the readiness period",
+			useBase: true,
+			set: append(s3Blob(),
+				"--set", "replicas=2",
+				"--set", "preStopSeconds=10",
+			),
+			wantText: [][]string{{"the preStop wait must be longer than probes.readiness.periodSeconds"}},
+		},
+		{
+			name:    "grace period not longer than the preStop wait",
+			useBase: true,
+			set: append(s3Blob(),
+				"--set", "replicas=2",
+				"--set", "terminationGracePeriodSeconds=15",
+			),
+			wantText: [][]string{{"must be longer than preStopSeconds"}},
+		},
+		{
+			name:     "worker with the fs blob store",
+			useBase:  true,
+			set:      []string{"--set", "worker.enabled=true"},
+			wantText: [][]string{{"worker.enabled is true and blobStore.type is fs"}},
+		},
+		{
+			name:    "worker with a dir backup target",
+			useBase: true,
+			set: append(s3Blob(),
+				"--set", "worker.enabled=true",
+				"--set", "backup.target.type=dir",
+			),
+			wantText: [][]string{{"worker.enabled is true and backup.target.type is dir"}},
+		},
 	}
 
 	for _, tc := range tests {
@@ -162,6 +241,15 @@ func TestTemplateRefused(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// s3Blob returns the settings that move the blob store to a bucket, so that a
+// case tests one refusal at a time.
+func s3Blob() []string {
+	return []string{
+		"--set", "blobStore.type=s3",
+		"--set", "blobStore.s3.bucket=state-bucket",
 	}
 }
 

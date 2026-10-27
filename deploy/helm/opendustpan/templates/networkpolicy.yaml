@@ -9,7 +9,7 @@ metadata:
 spec:
   podSelector:
     matchLabels:
-      {{- include "opendustpan.selectorLabels" . | nindent 6 }}
+      {{- include "opendustpan.podSelectorLabels" . | nindent 6 }}
   policyTypes:
     - Ingress
     - Egress

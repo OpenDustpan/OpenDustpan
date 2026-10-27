@@ -7,6 +7,10 @@
     "image",
     "imagePullSecrets",
     "replicas",
+    "podDisruptionBudget",
+    "spreadAcrossNodes",
+    "preStopSeconds",
+    "worker",
     "database",
     "keyEncryptionKey",
     "adminToken",
@@ -229,8 +233,52 @@
     },
     "replicas": {
       "type": "integer",
-      "minimum": 1,
-      "maximum": 1
+      "minimum": 1
+    },
+    "podDisruptionBudget": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "enabled",
+        "minAvailable"
+      ],
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "minAvailable": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "spreadAcrossNodes": {
+      "type": "boolean"
+    },
+    "preStopSeconds": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "worker": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "enabled",
+        "replicas",
+        "resources"
+      ],
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "replicas": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "resources": {
+          "type": "object"
+        }
+      }
     },
     "database": {
       "type": "object",

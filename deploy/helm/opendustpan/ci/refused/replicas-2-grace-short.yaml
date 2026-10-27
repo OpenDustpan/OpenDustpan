@@ -1,0 +1,14 @@
+# Refused: a grace period that is not longer than the preStop wait.
+# want: must be longer than preStopSeconds
+database:
+  existingSecret:
+    name: opendustpan-database
+keyEncryptionKey:
+  existingSecret:
+    name: opendustpan-key-encryption-key
+replicas: 2
+terminationGracePeriodSeconds: 15
+blobStore:
+  type: s3
+  s3:
+    bucket: dustpan-state
