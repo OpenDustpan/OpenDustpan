@@ -908,13 +908,14 @@ type StateVersion struct {
 }
 
 type TempAdmin struct {
-	PrincipalID string
-	Subject     string
-	ExpiresAtMs int64
-	CreatedAtMs int64
-	CreatedBy   string
-	Reason      string
-	EndedAtMs   sql.NullInt64
+	PrincipalID      string
+	Subject          string
+	ExpiresAtMs      int64
+	CreatedAtMs      int64
+	CreatedBy        string
+	Reason           string
+	EndedAtMs        sql.NullInt64
+	ReviewOpenedAtMs sql.NullInt64
 }
 
 type Trigger struct {

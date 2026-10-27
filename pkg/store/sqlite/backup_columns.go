@@ -664,6 +664,7 @@ func sqliteIdentityBackupTables() []sqliteBackupTable {
 				backupColCreatedBy,
 				backupColReason,
 				"ended_at_ms",
+				"review_opened_at_ms",
 			},
 		},
 		{

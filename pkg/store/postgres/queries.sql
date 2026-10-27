@@ -2402,21 +2402,34 @@ VALUES ($1, $2, $3, $4, $5, $6)
 ON CONFLICT DO NOTHING;
 
 -- name: GetTempAdmin :one
-SELECT principal_id, subject, expires_at_ms, created_at_ms, created_by, reason, ended_at_ms
+SELECT principal_id, subject, expires_at_ms, created_at_ms, created_by, reason, ended_at_ms, review_opened_at_ms
 FROM temp_admins WHERE principal_id = $1;
 
 -- name: GetTempAdminBySubject :one
 -- Answers the record of the live principal with the subject. A record of a
 -- deleted principal never answers, so a new person with a reused subject
 -- is not the old temporary administrator.
-SELECT t.principal_id, t.subject, t.expires_at_ms, t.created_at_ms, t.created_by, t.reason, t.ended_at_ms
+SELECT t.principal_id, t.subject, t.expires_at_ms, t.created_at_ms, t.created_by, t.reason, t.ended_at_ms, t.review_opened_at_ms
 FROM temp_admins t
 JOIN principals p ON p.id = t.principal_id
 WHERE p.subject = $1 AND p.deleted_at_ms IS NULL;
 
 -- name: ListTempAdmins :many
-SELECT principal_id, subject, expires_at_ms, created_at_ms, created_by, reason, ended_at_ms
+SELECT principal_id, subject, expires_at_ms, created_at_ms, created_by, reason, ended_at_ms, review_opened_at_ms
 FROM temp_admins ORDER BY expires_at_ms, principal_id;
+
+-- name: ListTempAdminsAwaitingReview :many
+-- Answers the records that ended and whose review is not marked as opened.
+SELECT principal_id, subject, expires_at_ms, created_at_ms, created_by, reason, ended_at_ms, review_opened_at_ms
+FROM temp_admins
+WHERE ended_at_ms IS NOT NULL AND review_opened_at_ms IS NULL
+ORDER BY expires_at_ms, principal_id;
+
+-- name: MarkTempAdminReviewOpened :execrows
+-- Marks the review of an ended record as opened. A record with a mark keeps
+-- its first mark, and a record that did not end gets none.
+UPDATE temp_admins SET review_opened_at_ms = sqlc.arg('review_opened_at_ms')::bigint
+WHERE principal_id = sqlc.arg('principal_id') AND ended_at_ms IS NOT NULL AND review_opened_at_ms IS NULL;
 
 -- name: CreateFirstHostToken :execrows
 -- Inserts the first token of a temporary administrator that the host

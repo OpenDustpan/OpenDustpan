@@ -6731,7 +6731,7 @@ func (q *Queries) GetStateVersion(ctx context.Context, id string) (StateVersion,
 }
 
 const getTempAdmin = `-- name: GetTempAdmin :one
-SELECT principal_id, subject, expires_at_ms, created_at_ms, created_by, reason, ended_at_ms
+SELECT principal_id, subject, expires_at_ms, created_at_ms, created_by, reason, ended_at_ms, review_opened_at_ms
 FROM temp_admins WHERE principal_id = ?
 `
 
@@ -6746,12 +6746,13 @@ func (q *Queries) GetTempAdmin(ctx context.Context, principalID string) (TempAdm
 		&i.CreatedBy,
 		&i.Reason,
 		&i.EndedAtMs,
+		&i.ReviewOpenedAtMs,
 	)
 	return i, err
 }
 
 const getTempAdminBySubject = `-- name: GetTempAdminBySubject :one
-SELECT t.principal_id, t.subject, t.expires_at_ms, t.created_at_ms, t.created_by, t.reason, t.ended_at_ms
+SELECT t.principal_id, t.subject, t.expires_at_ms, t.created_at_ms, t.created_by, t.reason, t.ended_at_ms, t.review_opened_at_ms
 FROM temp_admins t
 JOIN principals p ON p.id = t.principal_id
 WHERE p.subject = ? AND p.deleted_at_ms IS NULL
@@ -6771,6 +6772,7 @@ func (q *Queries) GetTempAdminBySubject(ctx context.Context, subject string) (Te
 		&i.CreatedBy,
 		&i.Reason,
 		&i.EndedAtMs,
+		&i.ReviewOpenedAtMs,
 	)
 	return i, err
 }
@@ -13309,7 +13311,7 @@ func (q *Queries) ListStateVersions(ctx context.Context, arg ListStateVersionsPa
 }
 
 const listTempAdmins = `-- name: ListTempAdmins :many
-SELECT principal_id, subject, expires_at_ms, created_at_ms, created_by, reason, ended_at_ms
+SELECT principal_id, subject, expires_at_ms, created_at_ms, created_by, reason, ended_at_ms, review_opened_at_ms
 FROM temp_admins ORDER BY expires_at_ms, principal_id
 `
 
@@ -13330,6 +13332,47 @@ func (q *Queries) ListTempAdmins(ctx context.Context) ([]TempAdmin, error) {
 			&i.CreatedBy,
 			&i.Reason,
 			&i.EndedAtMs,
+			&i.ReviewOpenedAtMs,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listTempAdminsAwaitingReview = `-- name: ListTempAdminsAwaitingReview :many
+SELECT principal_id, subject, expires_at_ms, created_at_ms, created_by, reason, ended_at_ms, review_opened_at_ms
+FROM temp_admins
+WHERE ended_at_ms IS NOT NULL AND review_opened_at_ms IS NULL
+ORDER BY expires_at_ms, principal_id
+`
+
+// Answers the records that ended and whose review is not marked as opened.
+func (q *Queries) ListTempAdminsAwaitingReview(ctx context.Context) ([]TempAdmin, error) {
+	rows, err := q.db.QueryContext(ctx, listTempAdminsAwaitingReview)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []TempAdmin
+	for rows.Next() {
+		var i TempAdmin
+		if err := rows.Scan(
+			&i.PrincipalID,
+			&i.Subject,
+			&i.ExpiresAtMs,
+			&i.CreatedAtMs,
+			&i.CreatedBy,
+			&i.Reason,
+			&i.EndedAtMs,
+			&i.ReviewOpenedAtMs,
 		); err != nil {
 			return nil, err
 		}
@@ -13923,6 +13966,26 @@ type MarkRestoreApplyingParams struct {
 // apply. Any other state matches no row, so a retry reports no change.
 func (q *Queries) MarkRestoreApplying(ctx context.Context, arg MarkRestoreApplyingParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, markRestoreApplying, arg.PreBackupID, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const markTempAdminReviewOpened = `-- name: MarkTempAdminReviewOpened :execrows
+UPDATE temp_admins SET review_opened_at_ms = CAST(?1 AS INTEGER)
+WHERE principal_id = ?2 AND ended_at_ms IS NOT NULL AND review_opened_at_ms IS NULL
+`
+
+type MarkTempAdminReviewOpenedParams struct {
+	ReviewOpenedAtMs int64
+	PrincipalID      string
+}
+
+// Marks the review of an ended record as opened. A record with a mark keeps
+// its first mark, and a record that did not end gets none.
+func (q *Queries) MarkTempAdminReviewOpened(ctx context.Context, arg MarkTempAdminReviewOpenedParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, markTempAdminReviewOpened, arg.ReviewOpenedAtMs, arg.PrincipalID)
 	if err != nil {
 		return 0, err
 	}

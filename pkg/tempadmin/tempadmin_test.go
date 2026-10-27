@@ -142,6 +142,40 @@ func (f *fakeStore) ExpireTempAdmin(_ context.Context, id string, e audit.Entry)
 	return nil
 }
 
+func (f *fakeStore) ListTempAdminsAwaitingReview(_ context.Context) ([]tempadmin.TempAdmin, error) {
+	var out []tempadmin.TempAdmin
+
+	for key := range f.records {
+		if r := f.records[key]; !r.EndedAt.IsZero() && r.ReviewOpenedAt.IsZero() {
+			out = append(out, r)
+		}
+	}
+
+	slices.SortFunc(out, func(a, b tempadmin.TempAdmin) int {
+		return strings.Compare(a.PrincipalID, b.PrincipalID)
+	})
+
+	return out, nil
+}
+
+func (f *fakeStore) MarkTempAdminReviewOpened(_ context.Context, id string, at time.Time) error {
+	r, ok := f.records[id]
+	if !ok {
+		return tempadmin.ErrNotFound
+	}
+
+	if r.EndedAt.IsZero() {
+		return tempadmin.ErrInvalid
+	}
+
+	if r.ReviewOpenedAt.IsZero() {
+		r.ReviewOpenedAt = at
+		f.records[id] = r
+	}
+
+	return nil
+}
+
 // fakeAudit is an audit.ServerStore that keeps the entries it appends.
 type fakeAudit struct {
 	entries []audit.Entry
@@ -803,13 +837,14 @@ func TestValidateSubjectKeepsBootstrapNamesOut(t *testing.T) {
 	t.Parallel()
 
 	r := tempadmin.TempAdmin{
-		CreatedAt:   baseTime(),
-		ExpiresAt:   baseTime().Add(tempadmin.Lifetime),
-		EndedAt:     time.Time{},
-		PrincipalID: "prn-alice",
-		Subject:     "alice",
-		CreatedBy:   "host",
-		Reason:      testReason,
+		CreatedAt:      baseTime(),
+		ExpiresAt:      baseTime().Add(tempadmin.Lifetime),
+		EndedAt:        time.Time{},
+		ReviewOpenedAt: time.Time{},
+		PrincipalID:    "prn-alice",
+		Subject:        "alice",
+		CreatedBy:      "host",
+		Reason:         testReason,
 	}
 
 	if err := r.Validate(); err != nil {
@@ -859,14 +894,32 @@ func TestDecoratorReusedSubjectNotLockedOut(t *testing.T) {
 	}
 }
 
-// fakeReviews keeps the uses of the reviews it opens.
+// fakeReviews keeps the reviews it opens. Like the review store it makes
+// one review for each use, however often the same use opens. It counts
+// every call, and fails the next failNext calls.
 type fakeReviews struct {
-	uses []breakglass.Use
+	uses     []breakglass.Use
+	calls    int
+	failNext int
 }
 
 func (f *fakeReviews) OpenReview(_ context.Context, u breakglass.Use) error {
+	f.calls++
+
+	if f.failNext > 0 {
+		f.failNext--
+
+		return errDriver
+	}
+
 	if err := u.Validate(); err != nil {
 		return err
+	}
+
+	for i := range f.uses {
+		if f.uses[i].Kind == u.Kind && f.uses[i].Ref == u.Ref {
+			return nil
+		}
 	}
 
 	f.uses = append(f.uses, u)
@@ -874,14 +927,152 @@ func (f *fakeReviews) OpenReview(_ context.Context, u breakglass.Use) error {
 	return nil
 }
 
+// reviewService returns a Service over store with reviews and the clock
+// fixed at the expiry of a record made at baseTime.
+func reviewService(t *testing.T, store *fakeStore, reviews tempadmin.Reviews, logs *bytes.Buffer) *tempadmin.Service {
+	t.Helper()
+
+	svc, err := tempadmin.NewService(tempadmin.Config{
+		Store: store, Reviews: reviews, Now: func() time.Time { return baseTime().Add(tempadmin.Lifetime) },
+		Logger: testLogger(logs),
+	})
+	if err != nil {
+		t.Fatalf("service: %v", err)
+	}
+
+	return svc
+}
+
+// TestSweepRetriesAFailedReview proves that a failed open of a review
+// makes the sweep incomplete, and that the next sweep opens the review of
+// the record that already ended, with no second expiry entry.
+func TestSweepRetriesAFailedReview(t *testing.T) {
+	t.Parallel()
+
+	store := newFakeStore()
+	createSweepRecord(t, testService(store), "prn-a", "alice")
+
+	reviews := &fakeReviews{uses: nil, calls: 0, failNext: 1}
+
+	var logs bytes.Buffer
+
+	svc := reviewService(t, store, reviews, &logs)
+
+	done, err := svc.Sweep(t.Context(), serverEntry())
+	if !errors.Is(err, tempadmin.ErrSweepIncomplete) || !slices.Equal(done, []string{"prn-a"}) {
+		t.Fatalf("first sweep = %v, %v; want prn-a ended and ErrSweepIncomplete", done, err)
+	}
+
+	if len(reviews.uses) != 0 || !store.records["prn-a"].ReviewOpenedAt.IsZero() {
+		t.Fatalf("after the failed open: %d reviews, mark %s; want none", len(reviews.uses),
+			store.records["prn-a"].ReviewOpenedAt)
+	}
+
+	if strings.Contains(logs.String(), "pq:") {
+		t.Fatalf("log = %q, want no driver text", logs.String())
+	}
+
+	entries := len(store.entries)
+
+	done, err = svc.Sweep(t.Context(), serverEntry())
+	if err != nil || len(done) != 0 {
+		t.Fatalf("second sweep = %v, %v; want no new expiry and no error", done, err)
+	}
+
+	if len(reviews.uses) != 1 || store.records["prn-a"].ReviewOpenedAt.IsZero() || len(store.entries) != entries {
+		t.Fatalf("after the retry: %d reviews, mark %s, entries %d -> %d; want 1 review, a mark, no new entry",
+			len(reviews.uses), store.records["prn-a"].ReviewOpenedAt, entries, len(store.entries))
+	}
+}
+
+// TestSweepOpensOneReviewPerUse proves that a record leaves the retry once
+// its review opened: later sweeps do not call OpenReview again.
+func TestSweepOpensOneReviewPerUse(t *testing.T) {
+	t.Parallel()
+
+	store := newFakeStore()
+	createSweepRecord(t, testService(store), "prn-a", "alice")
+
+	reviews := &fakeReviews{uses: nil, calls: 0, failNext: 0}
+	svc := reviewService(t, store, reviews, &bytes.Buffer{})
+
+	for range 3 {
+		if _, err := svc.Sweep(t.Context(), serverEntry()); err != nil {
+			t.Fatalf("sweep: %v", err)
+		}
+	}
+
+	if reviews.calls != 1 || len(reviews.uses) != 1 {
+		t.Fatalf("OpenReview calls = %d, reviews = %d; want 1 and 1", reviews.calls, len(reviews.uses))
+	}
+}
+
+// TestSweepNeverReopensAReviewOfAMarkedRecord proves that a record with a
+// mark is not in the retry, and that the same use never gets a second
+// review even when the mark is missing and OpenReview runs again.
+func TestSweepNeverReopensAReviewOfAMarkedRecord(t *testing.T) {
+	t.Parallel()
+
+	store := newFakeStore()
+	createSweepRecord(t, testService(store), "prn-a", "alice")
+
+	reviews := &fakeReviews{uses: nil, calls: 0, failNext: 0}
+	svc := reviewService(t, store, reviews, &bytes.Buffer{})
+
+	if _, err := svc.Sweep(t.Context(), serverEntry()); err != nil {
+		t.Fatalf("sweep: %v", err)
+	}
+
+	// A crash between the open and the mark leaves no mark.
+	r := store.records["prn-a"]
+	r.ReviewOpenedAt = time.Time{}
+	store.records["prn-a"] = r
+
+	if _, err := svc.Sweep(t.Context(), serverEntry()); err != nil {
+		t.Fatalf("sweep after the lost mark: %v", err)
+	}
+
+	if reviews.calls != 2 || len(reviews.uses) != 1 {
+		t.Fatalf("calls = %d, reviews = %d; want the open to repeat and still 1 review",
+			reviews.calls, len(reviews.uses))
+	}
+}
+
+// TestSweepWithNoReviewsRetriesNothing proves that with Reviews nil the
+// sweep only warns once for a record it ends, and sets no mark.
+func TestSweepWithNoReviewsRetriesNothing(t *testing.T) {
+	t.Parallel()
+
+	store := newFakeStore()
+	createSweepRecord(t, testService(store), "prn-a", "alice")
+
+	var logs bytes.Buffer
+
+	svc := reviewService(t, store, nil, &logs)
+
+	for range 3 {
+		if _, err := svc.Sweep(t.Context(), serverEntry()); err != nil {
+			t.Fatalf("sweep: %v", err)
+		}
+	}
+
+	if got := strings.Count(logs.String(), "no break-glass review opens"); got != 1 {
+		t.Fatalf("warnings = %d, want 1; log = %q", got, logs.String())
+	}
+
+	if !store.records["prn-a"].ReviewOpenedAt.IsZero() {
+		t.Fatal("record has a review mark with no review store")
+	}
+}
+
 // TestSweepOpensReviews proves that the sweep opens a review for each
 // record that it ends, with the reason and the end of the record, and
-// skips a record that a sign-in ended first.
+// for a record that a sign-in ended first, which has no review yet.
 func TestSweepOpensReviews(t *testing.T) {
 	t.Parallel()
 
 	store := newFakeStore()
-	reviews := &fakeReviews{uses: nil}
+	reviews := &fakeReviews{uses: nil, calls: 0, failNext: 0}
 
 	for _, id := range []string{"prn-a", "prn-b"} {
 		in := tempadmin.Input{Subject: id, PrincipalID: id, CreatedBy: "host", Reason: testReason}
@@ -909,8 +1100,8 @@ func TestSweepOpensReviews(t *testing.T) {
 		t.Fatalf("sweep: %v", err)
 	}
 
-	if !slices.Equal(done, []string{"prn-a"}) || len(reviews.uses) != 1 {
-		t.Fatalf("sweep ended %v and opened %d reviews; want prn-a and 1", done, len(reviews.uses))
+	if !slices.Equal(done, []string{"prn-a"}) || len(reviews.uses) != 2 {
+		t.Fatalf("sweep ended %v and opened %d reviews; want prn-a and 2", done, len(reviews.uses))
 	}
 
 	for _, u := range reviews.uses {
@@ -924,8 +1115,14 @@ func TestValidateNeedsReason(t *testing.T) {
 	t.Parallel()
 
 	r := tempadmin.TempAdmin{
-		CreatedAt: baseTime(), ExpiresAt: baseTime().Add(time.Hour), EndedAt: time.Time{}, PrincipalID: "prn-alice",
-		Subject: "alice", CreatedBy: "host", Reason: " ",
+		CreatedAt:      baseTime(),
+		ExpiresAt:      baseTime().Add(time.Hour),
+		EndedAt:        time.Time{},
+		ReviewOpenedAt: time.Time{},
+		PrincipalID:    "prn-alice",
+		Subject:        "alice",
+		CreatedBy:      "host",
+		Reason:         " ",
 	}
 
 	if err := r.Validate(); !errors.Is(err, tempadmin.ErrInvalid) {
@@ -1038,8 +1235,14 @@ func TestValidateRefusesHiddenRunes(t *testing.T) {
 	t.Parallel()
 
 	base := tempadmin.TempAdmin{
-		CreatedAt: baseTime(), ExpiresAt: baseTime().Add(time.Hour), EndedAt: time.Time{}, PrincipalID: "prn-alice",
-		Subject: "alice", CreatedBy: "host", Reason: testReason,
+		CreatedAt:      baseTime(),
+		ExpiresAt:      baseTime().Add(time.Hour),
+		EndedAt:        time.Time{},
+		ReviewOpenedAt: time.Time{},
+		PrincipalID:    "prn-alice",
+		Subject:        "alice",
+		CreatedBy:      "host",
+		Reason:         testReason,
 	}
 
 	if err := base.Validate(); err != nil {

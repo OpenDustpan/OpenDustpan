@@ -135,9 +135,13 @@ func (s *Service) ExpiredAt(ctx context.Context, now time.Time) ([]TempAdmin, er
 // Sweep ends every record that ends at or before the time of the Service
 // clock and that did not end yet, each with an entry from e, and returns
 // the principal IDs it ended, ordered by expiry. The entry names the
-// subject of e, or SweepSubject when e names none. It opens the review of
-// each record that it ends when the Service has Reviews, and logs a warning
-// for each one when it has none. A failed expiry of one record does not
+// subject of e, or SweepSubject when e names none. When the Service has
+// Reviews, it opens the review of each record that it ends, and then of
+// each earlier ended record whose review is not marked as opened, so a
+// failed open retries at the next sweep. OpenReview makes no second review
+// for a use, and a record leaves the retry once its mark is set. When the
+// Service has no Reviews, it logs a warning for each record that it ends
+// and retries nothing. A failed expiry or review of one record does not
 // stop the sweep: Sweep logs it with no driver text, continues with the
 // next record, and at the end returns ErrSweepIncomplete with the IDs it
 // ended.
@@ -180,11 +184,13 @@ func (s *Service) Sweep(ctx context.Context, e audit.Entry) ([]string, error) {
 		default:
 			done = append(done, r.PrincipalID)
 
-			if !s.openReview(ctx, r) {
-				failed++
+			if s.reviews == nil {
+				warnNoReview(ctx, s.logger, r.PrincipalID)
 			}
 		}
 	}
+
+	failed += s.retryReviews(ctx)
 
 	if failed > 0 {
 		return done, fmt.Errorf("%w: %d of %d records", ErrSweepIncomplete, failed, len(expired))
@@ -193,24 +199,50 @@ func (s *Service) Sweep(ctx context.Context, e audit.Entry) ([]string, error) {
 	return done, nil
 }
 
-// openReview opens the review of the ended record r and reports whether
-// that worked. With no Reviews, it logs a warning that no review opens, so
-// an operator reviews the audit entries by hand.
-func (s *Service) openReview(ctx context.Context, r *TempAdmin) bool {
+// retryReviews opens the review of each ended record whose review is not
+// marked as opened, and marks the record after each open. It returns the
+// count of records whose open or mark failed: the next sweep tries them
+// again. With no Reviews it does nothing, because no review can open.
+func (s *Service) retryReviews(ctx context.Context) int {
 	if s.reviews == nil {
-		warnNoReview(ctx, s.logger, r.PrincipalID)
-
-		return true
+		return 0
 	}
 
-	if err := s.reviews.OpenReview(ctx, r.ReviewUse(r.ExpiresAt)); err != nil {
-		s.logger.WarnContext(ctx, "open the break-glass review of a temporary administrator failed",
-			slog.String("principal", r.PrincipalID))
+	pending, err := s.store.ListTempAdminsAwaitingReview(ctx)
+	if err != nil {
+		s.logger.WarnContext(ctx, "list the temporary administrators that await a break-glass review failed")
 
-		return false
+		return 1
 	}
 
-	return true
+	failed := 0
+
+	for i := range pending {
+		if ctx.Err() != nil {
+			return failed
+		}
+
+		r := &pending[i]
+
+		if err := s.reviews.OpenReview(ctx, r.ReviewUse(r.ExpiresAt)); err != nil {
+			failed++
+
+			s.logger.WarnContext(ctx, "open the break-glass review of a temporary administrator failed",
+				slog.String("principal", r.PrincipalID))
+
+			continue
+		}
+
+		if err := s.store.MarkTempAdminReviewOpened(ctx, r.PrincipalID, s.Now()); err != nil &&
+			!errors.Is(err, ErrNotFound) {
+			failed++
+
+			s.logger.WarnContext(ctx, "mark the break-glass review of a temporary administrator as opened failed",
+				slog.String("principal", r.PrincipalID))
+		}
+	}
+
+	return failed
 }
 
 // warnNoReview logs that a temporary administrator ended and that no
@@ -246,13 +278,14 @@ func (s *Service) insertRecord(
 	at := s.Now()
 
 	r := TempAdmin{
-		CreatedAt:   at,
-		ExpiresAt:   at.Add(lifetime),
-		EndedAt:     time.Time{},
-		PrincipalID: in.PrincipalID,
-		Subject:     in.Subject,
-		CreatedBy:   in.CreatedBy,
-		Reason:      in.Reason,
+		CreatedAt:      at,
+		ExpiresAt:      at.Add(lifetime),
+		EndedAt:        time.Time{},
+		ReviewOpenedAt: time.Time{},
+		PrincipalID:    in.PrincipalID,
+		Subject:        in.Subject,
+		CreatedBy:      in.CreatedBy,
+		Reason:         in.Reason,
 	}
 
 	if err := r.Validate(); err != nil {
