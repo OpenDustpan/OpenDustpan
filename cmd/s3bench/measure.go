@@ -106,7 +106,9 @@ type putResult struct {
 }
 
 // measurePuts times reps writes of each size in each mode, each under a new
-// key, and deletes the keys after each series.
+// key. Within one size the modes take turns, one write each, so a drift of
+// the host or the store hits every mode alike. The keys of each size are
+// deleted after its series.
 func (t *s3Target) measurePuts(ctx context.Context, prefix string, sizes []sizeReps) ([]putResult, error) {
 	var out []putResult
 
@@ -116,48 +118,56 @@ func (t *s3Target) measurePuts(ctx context.Context, prefix string, sizes []sizeR
 			return nil, err
 		}
 
+		res, err := t.putRound(ctx, prefix+"/put-"+strconv.Itoa(sr.Bytes), p, sr.Reps)
+		if err != nil {
+			return nil, err
+		}
+
 		for _, mode := range putModes() {
-			seriesPrefix := prefix + "/put-" + strconv.Itoa(sr.Bytes) + "-" + mode
-
-			res, seriesErr := t.putSeries(ctx, mode, seriesPrefix, p, sr.Reps)
-			if seriesErr != nil {
-				return nil, seriesErr
-			}
-
-			out = append(out, putResult{SizeBytes: sr.Bytes, Mode: mode, Stats: res})
+			out = append(out, putResult{SizeBytes: sr.Bytes, Mode: mode, Stats: res[mode].stats()})
 		}
 	}
 
 	return out, nil
 }
 
-// putSeries writes p warmupPuts times untimed, then reps times timed, each
-// under a new key of prefix, and deletes the keys.
-func (t *s3Target) putSeries(ctx context.Context, mode, prefix string, p payload, reps int) (stats, error) {
-	keys := make([]string, 0, warmupPuts+reps)
+// putRound writes p warmupPuts times untimed, then reps times timed, in
+// each mode in turn, each under a new key of prefix, and deletes the keys.
+func (t *s3Target) putRound(ctx context.Context, prefix string, p payload, reps int) (map[string]*tally, error) {
+	modes := putModes()
+	keys := make([]string, 0, (warmupPuts+reps)*len(modes))
+	series := map[string]*tally{}
 
-	var series tally
+	for _, mode := range modes {
+		series[mode] = &tally{samples: nil, errors: 0, first: ""}
+	}
 
 	for i := range warmupPuts + reps {
-		key, err := newKey(prefix, i)
-		if err != nil {
-			return stats{}, err
+		if err := ctx.Err(); err != nil {
+			return nil, fmt.Errorf("put series: %w", err)
 		}
 
-		keys = append(keys, key)
+		for _, mode := range modes {
+			key, err := newKey(prefix+"-"+mode, i)
+			if err != nil {
+				return nil, err
+			}
 
-		if i >= warmupPuts {
-			series.time(func() error { return t.putOnce(ctx, mode, key, p) })
+			keys = append(keys, key)
 
-			continue
-		}
+			if i >= warmupPuts {
+				series[mode].time(func() error { return t.putOnce(ctx, mode, key, p) })
 
-		if err := t.putOnce(ctx, mode, key, p); err != nil {
-			return stats{}, fmt.Errorf("%s warm-up put: %w", t.name, err)
+				continue
+			}
+
+			if err := t.putOnce(ctx, mode, key, p); err != nil {
+				return nil, fmt.Errorf("%s warm-up put: %w", t.name, err)
+			}
 		}
 	}
 
-	return series.stats(), t.deleteAll(ctx, keys)
+	return series, t.deleteAll(ctx, keys)
 }
 
 // maxParallel is the count of parallel requests of the untimed seeding and
@@ -425,6 +435,10 @@ func (r sequenceRun) series(ctx context.Context, s sequence) (sequenceResult, er
 	var cond, arb tally
 
 	for i := range warmupPuts + r.reps {
+		if err := ctx.Err(); err != nil {
+			return sequenceResult{}, fmt.Errorf("%s: %w", s.flow, err)
+		}
+
 		n := i * designs
 		if i < warmupPuts {
 			if err := errors.Join(s.conditional(ctx, n), s.arbitrated(ctx, n+1)); err != nil {

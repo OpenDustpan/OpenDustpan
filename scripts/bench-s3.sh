@@ -71,6 +71,9 @@ cleanup() {
 	rm -rf "$WORK"
 }
 trap cleanup EXIT
+# Exit on a signal too, so that the EXIT trap removes the containers.
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 # random_hex prints n random bytes as hex. The value goes to a file, never
 # to the terminal.
