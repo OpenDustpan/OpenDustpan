@@ -132,13 +132,14 @@ func openLargeCheckpointFixture(t *testing.T) *largeCheckpointFixture {
 	return &largeCheckpointFixture{svc: svc, blobs: blobs, ref: ref, id: u.ID, token: started.Token}
 }
 
-// saveLargeCheckpoint saves deployment as sequence 1 of the fixture update.
+// saveLargeCheckpoint saves deployment, in a versioned envelope, as sequence 1
+// of the fixture update.
 func saveLargeCheckpoint(t *testing.T, f *largeCheckpointFixture, deployment []byte) {
 	t.Helper()
 
 	saveErr := f.svc.SaveCheckpoint(t.Context(), f.ref, f.id, f.token, stack.CheckpointInput{
 		Features:      nil,
-		Deployment:    deployment,
+		Deployment:    append(append([]byte(`{"deployment":`), deployment...), '}'),
 		SchemaVersion: 3,
 		Sequence:      1,
 		Invalid:       false,

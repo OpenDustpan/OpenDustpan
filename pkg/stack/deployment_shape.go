@@ -56,10 +56,11 @@ const envelopeMember = "deployment"
 // builds no tree, and reads no secret value. It does not refuse a repeated
 // member, because the CLI accepts one.
 //
-// A sequenced save can wrap its deployment in a versioned envelope. The same
-// pass then checks each deployment that the envelope holds: the reads serve
-// one of them (see innerDeploymentBytes), or the envelope itself when it holds
-// none.
+// A sequenced save (seq above 0) is a versioned envelope. The same pass then
+// checks each deployment that the envelope holds: the reads serve one of them
+// (see innerDeploymentBytes). An envelope with no deployment member is
+// refused, because the reads would serve it as an empty deployment and a
+// client with a defect could wipe the state of a stack without an error.
 //
 // The caller checks the size first, so the scan reads at most the size limit.
 func checkDeploymentShape(deployment []byte, seq int64) error {
@@ -75,12 +76,24 @@ func checkDeploymentShape(deployment []byte, seq int64) error {
 	dec := jsontext.NewDecoder(bytes.NewBuffer(deployment), jsontext.AllowDuplicateNames(true))
 
 	check := checkDeploymentMember
+	hasDeployment := false
+
 	if seq > 0 {
-		check = checkEnvelopeMember
+		check = func(dec *jsontext.Decoder, name string) error {
+			if strings.EqualFold(name, envelopeMember) {
+				hasDeployment = true
+			}
+
+			return checkEnvelopeMember(dec, name)
+		}
 	}
 
 	if err := checkObjectMembers(dec, check); err != nil {
 		return err
+	}
+
+	if seq > 0 && !hasDeployment {
+		return deploymentShapeError("the envelope has no deployment member")
 	}
 
 	if _, err := dec.ReadToken(); !errors.Is(err, io.EOF) {
@@ -123,8 +136,7 @@ func checkObjectMembers(dec *jsontext.Decoder, check func(*jsontext.Decoder, str
 // member with the name of envelopeMember, in any case, must be a deployment
 // object: encoding/json matches that name in any case, so innerDeploymentBytes
 // can serve any of these members. Any other member gets the check of a member
-// of a deployment, because the reads serve the envelope itself when it holds
-// no deployment.
+// of a deployment.
 func checkEnvelopeMember(dec *jsontext.Decoder, name string) error {
 	if strings.EqualFold(name, envelopeMember) {
 		return checkObjectMembers(dec, checkDeploymentMember)

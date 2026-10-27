@@ -165,7 +165,7 @@ func saveFirstCheckpoint(t *testing.T, f updatesFixture) {
 
 	ctx := t.Context()
 	s := f.started(t, stack.KindUpdate)
-	body := checkpoint(1, string(rootDeployment(`{"url":"u"}`)))
+	body := checkpoint(1, envelope(string(rootDeployment(`{"url":"u"}`))))
 
 	if err := f.svc.SaveCheckpoint(ctx, f.ref, s.Update.ID, s.Token, body); err != nil {
 		t.Fatalf("save checkpoint: %v", err)

@@ -99,8 +99,9 @@ func shapeCases() []shapeCase {
 			sequence:   1,
 			valid:      false,
 		},
-		{name: "an envelope with no deployment member", deployment: `{"version":3}`, sequence: 1, valid: true},
-		{name: "a sequenced save with no envelope", deployment: `{"resources":[]}`, sequence: 1, valid: true},
+		{name: "an envelope with no deployment member", deployment: `{"version":3}`, sequence: 1, valid: false},
+		{name: "an empty envelope", deployment: `{}`, sequence: 1, valid: false},
+		{name: "a sequenced save with no envelope", deployment: `{"resources":[]}`, sequence: 1, valid: false},
 		{
 			name:       "a sequenced save of resources that are numbers",
 			deployment: `{"resources":[1]}`,
