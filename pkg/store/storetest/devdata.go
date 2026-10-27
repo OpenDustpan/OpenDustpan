@@ -341,6 +341,8 @@ type devStripCase struct {
 	noDev bool
 	// bodies is the want body of the gate objects after the strip, by ID.
 	bodies map[string]approverWant
+	// after, when set, checks the live store after the swap.
+	after func(t *testing.T, dst DevDataStore)
 }
 
 // approverWant is the want approvers of a gate object after the strip.
@@ -578,6 +580,7 @@ func devStripCases() []devStripCase {
 			noDev:  true,
 			bodies: map[string]approverWant{"rule-c": {users: []string{"alice"}, groups: []string{"ops"}}},
 		},
+		devJobCase(),
 	}
 }
 
@@ -721,6 +724,10 @@ func assertAfterStrip(t *testing.T, tc devStripCase, dst DevDataStore) {
 	}
 
 	checkAfterBodies(t, tc, rowsOf("gate_objects"))
+
+	if tc.after != nil {
+		tc.after(t, dst)
+	}
 }
 
 // approversOf is the approvers member of a stored body.

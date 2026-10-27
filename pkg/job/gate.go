@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/gate"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
 )
@@ -216,7 +217,11 @@ const (
 )
 
 // Status returns the result of approvals for g, for a job that startedBy
-// started. One rejection of any gate rejects. Only the verdicts for the
+// started. policy decides which signatures count: an approval or a
+// confirmation of a subject that policy.CountsAsSignature refuses never
+// counts, so a dev subject that a backup carried into a production
+// installation fills no slot. A rejection counts for every subject.
+// One rejection of any gate rejects. Only the verdicts for the
 // type of g count. A verdict that an agent records never counts as an
 // approval or a confirmation.
 //
@@ -228,7 +233,7 @@ const (
 //
 // A gate of type GateConfirmation opens with one confirmation by startedBy
 // with a fresh authentication at most ConfirmFreshness before it.
-func (g Gate) Status(approvals []Approval, startedBy string) GateStatus {
+func (g Gate) Status(approvals []Approval, startedBy string, policy gate.ApproverPolicy) GateStatus {
 	passed := 0
 	seen := make(map[string]bool, len(approvals))
 
@@ -238,7 +243,7 @@ func (g Gate) Status(approvals []Approval, startedBy string) GateStatus {
 			return GateRejected
 		}
 
-		if g.counts(a, startedBy) && !seen[a.Subject] {
+		if g.counts(a, startedBy, policy) && !seen[a.Subject] {
 			seen[a.Subject] = true
 			passed++
 		}
@@ -258,8 +263,15 @@ func (g Gate) Status(approvals []Approval, startedBy string) GateStatus {
 
 // counts reports whether the approval a counts for g, in a job that
 // startedBy started.
-func (g Gate) counts(a *Approval, startedBy string) bool {
+func (g Gate) counts(a *Approval, startedBy string, policy gate.ApproverPolicy) bool {
 	if a.Agent != "" || a.Verdict != VerdictApprove || typeOf(a.Gate) != typeOf(g.Type) {
+		return false
+	}
+
+	// Defense in depth: the strip of a restore removes dev subjects from the
+	// rules, and the write paths refuse them. This check stays so that a
+	// signature that a backup already holds fills no slot on production.
+	if !policy.CountsAsSignature(a.Subject) {
 		return false
 	}
 
@@ -280,11 +292,11 @@ func freshAuth(a *Approval) bool {
 // GatesStatus returns the result of approvals for all gates of one
 // phase: rejected when a verdict rejects, open when every gate is open,
 // and waiting otherwise. A phase with no gate is open.
-func GatesStatus(gates []Gate, approvals []Approval, startedBy string) GateStatus {
+func GatesStatus(gates []Gate, approvals []Approval, startedBy string, policy gate.ApproverPolicy) GateStatus {
 	status := GateOpen
 
 	for _, g := range gates {
-		st := g.Status(approvals, startedBy)
+		st := g.Status(approvals, startedBy, policy)
 		if st == GateRejected {
 			return GateRejected
 		}
